@@ -144,13 +144,33 @@ fn bv_ops() → Tac<BVOps> {
 // The atoms, in order of first appearance: words with their widths, then
 // Booleans. The reader numbers them; the layout gives them offsets.
 
-record BVWord { x: LocalRef, w: Nat }
+// A word atom: a local (`x`), or a term the reader takes whole (`x` is
+// `None`), a call whose arguments the bit-blaster cannot model (a byte read
+// from a list, `s.byte_within(n, i)`). `t` is the atom as a term.
+record BVWord { t: Expr, x: Option<LocalRef>, w: Nat }
 record BVAtoms { words: List<BVWord>, bools: List<LocalRef> }
 
 fn bv_word_index(ws: List<BVWord>, x: LocalRef, i: Nat) → Option<Nat> {
     match ws {
         Nil => None,
-        Cons(a, rest) => match a.x.id.same(x.id) { True => Some(i), False => bv_word_index(rest, x, i + 1) },
+        Cons(a, rest) => match a.x {
+            Some(y) => match y.id.same(x.id) { True => Some(i), False => bv_word_index(rest, x, i + 1) },
+            None => bv_word_index(rest, x, i + 1),
+        },
+    }
+}
+
+// The index of a term atom the same as `h` (by conversion), if one is held.
+fn bv_term_index(ws: List<BVWord>, h: Handle, i: Nat) → Tac<Option<Nat>> {
+    match ws {
+        Nil => pure(None),
+        Cons(a, rest) => match a.x {
+            Some(_) => bv_term_index(rest, h, i + 1),
+            None => {
+                let same <- defeq(a.t, Hd(h));
+                match same { True => pure(Some(i)), False => bv_term_index(rest, h, i + 1) }
+            },
+        },
     }
 }
 
@@ -286,6 +306,41 @@ fn bv_unfolded(rec: Handle → BVWant → BVAtoms → Tac<BVRead>, h: Handle, wa
     }
 }
 
+// `h`, a word the reader takes whole, as an atom of width `n`.
+fn bv_term_atom(h: Handle, n: Nat, st: BVAtoms) → Tac<BVRead> {
+    let found <- bv_term_index(st.words, h, 0);
+    match found {
+        Some(i) => pure(BVRead(OWord(BVar(i, n)), st)),
+        None => pure(BVRead(OWord(BVar(st.words.len(), n)), BVAtoms(st.words ++ [BVWord(Hd(h), None, n)], st.bools))),
+    }
+}
+
+// Does a call take an argument that is not a word, a Boolean or a number
+// (a list)? The bit-blaster could not model what it computes from it, so
+// such a call is a word the reader takes whole.
+fn bv_foreign_args(ops: BVOps, args: List<Handle>) → Tac<Bool> {
+    match args {
+        Nil => pure(False),
+        Cons(a, rest) => {
+            let t <- infer(Hd(a));
+            match t {
+                Accepted(ty) => {
+                    let v <- view(ty);
+                    match v {
+                        HGlobal(g, _, _) => match g.id.same(ops.word) || g.id.same(ops.bool) || g.id.same(ops.nat) {
+                            True => bv_foreign_args(ops, rest),
+                            False => pure(True),
+                        },
+                        // A type (an implicit argument) or a function.
+                        _ => bv_foreign_args(ops, rest),
+                    }
+                },
+                Refused(_) => bv_foreign_args(ops, rest),
+            }
+        },
+    }
+}
+
 fn bv_read_word_call(ops: BVOps, rec: Handle → BVWant → BVAtoms → Tac<BVRead>, h: Handle, g: Nat, args: List<Handle>, n: Nat, st: BVAtoms) → Tac<BVRead> {
     let a = bv_arg(args, 0);
     let b = bv_arg(args, 1);
@@ -335,7 +390,10 @@ fn bv_read_word_call(ops: BVOps, rec: Handle → BVWant → BVAtoms → Tac<BVRe
         let skip <- bv_numeral(a, "a count of dropped bits");
         bv_at_width(ops, rec, bv_arg(args, 2), st, λ m r => BVRead(OWord(BFrom(r.word(), m, skip)), r.st))
     }
-    else { bv_unfolded(rec, h, WWord(n), st) }
+    else {
+        let foreign <- bv_foreign_args(ops, args);
+        match foreign { True => bv_term_atom(h, n, st), False => bv_unfolded(rec, h, WWord(n), st) }
+    }
 }
 
 // A comparison of two words at their width.
@@ -457,7 +515,7 @@ fn bv_read_step(ops: BVOps, rec: Handle → BVWant → BVAtoms → Tac<BVRead>, 
         HLocal(x, Nil) => match want {
             WWord(n) => match bv_word_index(st.words, x, 0) {
                 Some(i) => pure(BVRead(OWord(BVar(i, n)), st)),
-                None => pure(BVRead(OWord(BVar(st.words.len(), n)), BVAtoms(st.words ++ [BVWord(x, n)], st.bools))),
+                None => pure(BVRead(OWord(BVar(st.words.len(), n)), BVAtoms(st.words ++ [BVWord(Local(x), Some(x), n)], st.bools))),
             },
             WBool => match bv_bool_index(st.bools, x, 0) {
                 Some(i) => pure(BVRead(OBool(PVar(i)), st)),
@@ -708,22 +766,23 @@ fn bv_lay_bools(l: BVLemmas, bs: List<LocalRef>, o: Nat) → Expr {
 fn bv_lay(l: BVLemmas, ws: List<BVWord>, o: Nat, bools: Expr) → Expr {
     match ws {
         Nil => bools,
-        Cons(w, rest) => bv_app(l.lay_word, [NatLit(w.w), Local(w.x), NatLit(o), bv_lay(l, rest, o + w.w, bools)]),
+        Cons(w, rest) => bv_app(l.lay_word, [NatLit(w.w), w.t, NatLit(o), bv_lay(l, rest, o + w.w, bools)]),
     }
 }
 
 // Word `x` (width `w`, offset `o`) read back from the stream `ws` lays out
 // from offset `at`: `window(…, o, w) = x`.
-fn bv_read_back(l: BVLemmas, k: Nat, ws: List<BVWord>, at: Nat, bools: Expr, x: LocalRef, w: Nat, o: Nat) → Expr {
+// `j` counts the words before `x` still to pass.
+fn bv_read_back(l: BVLemmas, k: Nat, ws: List<BVWord>, at: Nat, bools: Expr, j: Nat, x: Expr, w: Nat, o: Nat) → Expr {
     match ws {
         Nil => Blank,
         Cons(a, rest) => {
             let tail = bv_lay(l, rest, at + a.w, bools);
-            match a.x.id.same(x.id) {
-                True => bv_app(l.here, [NatLit(k), NatLit(w), Local(x), NatLit(o), tail, Hd(l.ok)]),
-                False => bv_app(l.trans, [Blank, Blank, Blank, Blank,
-                    bv_app(l.past, [NatLit(k), NatLit(a.w), Local(a.x), NatLit(at), tail, NatLit(w), NatLit(o), Hd(l.ok)]),
-                    bv_read_back(l, k, rest, at + a.w, bools, x, w, o)]),
+            match j {
+                Zero => bv_app(l.here, [NatLit(k), NatLit(w), x, NatLit(o), tail, Hd(l.ok)]),
+                Succ(j2) => bv_app(l.trans, [Blank, Blank, Blank, Blank,
+                    bv_app(l.past, [NatLit(k), NatLit(a.w), a.t, NatLit(at), tail, NatLit(w), NatLit(o), Hd(l.ok)]),
+                    bv_read_back(l, k, rest, at + a.w, bools, j2, x, w, o)]),
             }
         },
     }
@@ -735,28 +794,28 @@ fn bv_abstracted(t: Handle, ws: List<BVWord>) → Tac<Handle> {
         Nil => pure(t),
         Cons(w, rest) => {
             let inner <- bv_abstracted(t, rest);
-            abstract_over(inner, Local(w.x)).or_fail("bv_decide: the claim over an atom: ")
+            abstract_over(inner, w.t).or_fail("bv_decide: the claim over an atom: ")
         },
     }
 }
 
-fn bv_replaced_from(l: BVLemmas, k: Nat, all, ws: List<BVWord>, o: Nat, bools: Expr, f: Expr, acc: Option<Expr>, side: Handle) → Expr {
+fn bv_replaced_from(l: BVLemmas, k: Nat, all, ws: List<BVWord>, j: Nat, o: Nat, bools: Expr, f: Expr, acc: Option<Expr>, side: Handle) → Expr {
     match ws {
         Nil => match acc { None => bv_app(l.same, [Blank, Hd(side)]), Some(e) => e },
         Cons(w, rest) => {
-            let back = bv_read_back(l, k, all, 0, bools, w.x, w.w, o);
+            let back = bv_read_back(l, k, all, 0, bools, j, w.t, w.w, o);
             let next = match acc {
                 None => bv_app(l.cong, [Blank, Blank, f, Blank, Blank, back]),
                 Some(e) => bv_app(l.congr, [Blank, Blank, Blank, Blank, Blank, Blank, e, back]),
             };
-            bv_replaced_from(l, k, all, rest, o + w.w, bools, f, Some(next), side)
+            bv_replaced_from(l, k, all, rest, j + 1, o + w.w, bools, f, Some(next), side)
         },
     }
 }
 
 // `side[windows] = side`, by congruence one word at a time.
 fn bv_replaced(l: BVLemmas, k: Nat, all: List<BVWord>, bools: Expr, f: Handle, side: Handle) → Expr {
-    bv_replaced_from(l, k, all, all, 0, bools, Hd(f), None, side)
+    bv_replaced_from(l, k, all, all, 0, 0, bools, Hd(f), None, side)
 }
 
 // ---------------------------------------------------------------------------
@@ -788,7 +847,7 @@ fn bv_name(locals: List<LocalInfo>, x: LocalRef) → String {
 fn bv_show_words(locals: List<LocalInfo>, ws: List<BVWord>, o: Nat, model: List<Bool>) → List<String> {
     match ws {
         Nil => [],
-        Cons(w, rest) => Cons(bv_name(locals, w.x) ++ " = " ++ bv_decimal(40, bv_model_word(model, o, w.w)), bv_show_words(locals, rest, o + w.w, model)),
+        Cons(w, rest) => Cons(match w.x { Some(x) => bv_name(locals, x), None => "a word read whole" } ++ " = " ++ bv_decimal(40, bv_model_word(model, o, w.w)), bv_show_words(locals, rest, o + w.w, model)),
     }
 }
 
@@ -999,6 +1058,11 @@ inductive BVStmt {
     SNot(a: BVStmt, ta: Handle),
     SIff(a: BVStmt, b: BVStmt, ta: Handle, tb: Handle),
     SFalse,
+    // `x = k` where `x` is a word chosen by a test, `if test { xa } else {
+    // xb }`: read as `(c ∧ a) ∨ (¬c ∧ b)`, `c` the claim `test = True`, `a`
+    // and `b` the arms' equations `xa = k`, `xb = k`; `ty` the sides' type
+    // and `tc`, `ta`, `tb` the three claims' statements.
+    SIte(c: BVStmt, a: BVStmt, b: BVStmt, ty: Handle, test: Handle, xa: Handle, xb: Handle, k: Handle, tc: Handle, ta: Handle, tb: Handle),
 }
 
 fn BVStmt::pred(self s: BVStmt) → BVPred {
@@ -1009,6 +1073,7 @@ fn BVStmt::pred(self s: BVStmt) → BVPred {
         SNot(a, _) => PNot(a.pred()),
         SIff(a, b, _, _) => PIff(a.pred(), b.pred()),
         SFalse => PConst(False),
+        SIte(c, a, b, _, _, _, _, _, _, _, _) => POr(PAnd(c.pred(), a.pred()), PAnd(PNot(c.pred()), b.pred())),
     }
 }
 
@@ -1020,9 +1085,9 @@ fn bv_stmt_claim(ops: BVOps, t: Handle, st: BVAtoms) → Tac<Pair<BVStmt, BVAtom
 
 // `¬p`'s claim, when `bv_negated` reads one (a refuted comparison).
 fn bv_stmt_refuted(ops: BVOps, p: Handle, st: BVAtoms) → Tac<Option<Pair<BVStmt, BVAtoms>>> {
-    let tried <- attempt(bv_negated(ops, p));
+    let tried <- attempt(bv_negated(ops, p).bind(λ c => bv_read_claim(ops, c, st).bind(λ r => pure(Pair(SClaim(c, r.bool()), r.st)))));
     match tried {
-        Done(c) => bv_read_claim(ops, c, st).bind(λ r => pure(Some(Pair(SClaim(c, r.bool()), r.st)))),
+        Done(done) => pure(Some(done)),
         Failed(_, _) => pure(None),
     }
 }
@@ -1090,6 +1155,150 @@ fn bv_is_false(ops: BVOps, t: Handle) → Tac<Bool> {
     match v { HGlobal(g, _, Nil) => pure(g.id.same(ops.false_ty)), _ => pure(False) }
 }
 
+// `h`, a match on `sc`, when `sc` is a `Bool`.
+fn bv_ite_on(ops: BVOps, h: Handle, sc: Handle) → Tac<Option<Pair<Handle, Pair<Handle, Pair<Handle, Handle>>>>> {
+    let ty <- infer(Hd(sc));
+    match ty {
+        Accepted(t) => {
+            let tv <- view(t);
+            let cs <- ctors(t);
+            match tv {
+                HGlobal(g, _, Nil) => match g.id.same(ops.bool) {
+                    // The constructors in order: `False`, then `True`.
+                    True => match cs {
+                        Accepted(infos) => match infos {
+                            Cons(fls, more) => match more {
+                                Cons(tru, Nil) => match tru.ctor {
+                                    Some(t1) => match fls.ctor { Some(f1) => pure(Some(Pair(sc, Pair(h, Pair(t1, f1))))), None => pure(None) },
+                                    None => pure(None),
+                                },
+                                _ => pure(None),
+                            },
+                            Nil => pure(None),
+                        },
+                        Refused(_) => pure(None),
+                    },
+                    False => pure(None),
+                },
+                _ => pure(None),
+            }
+        },
+        Refused(_) => pure(None),
+    }
+}
+
+// The test of `h` when it is, or unfolds to, a `match` on a `Bool`
+// (`if c { a } else { b }`): the test, the term it is found in, and the
+// type's constructors `True` and `False`.
+fn bv_ite_of(ops: BVOps, h: Handle, fuel: Nat) → Tac<Option<Pair<Handle, Pair<Handle, Pair<Handle, Handle>>>>> {
+    match fuel {
+        Zero => pure(None),
+        Succ(f) => {
+            let v <- view(h);
+            match v {
+                HMatch(sc) => {
+                    let vs <- view(sc);
+                    match vs {
+                        // A match a split has decided: the arm it selects.
+                        HCtor(_, _, _, Nil) => unfold(h).bind(λ w => match w { Accepted(h2) => bv_ite_of(ops, h2, f), Refused(_) => pure(None) }),
+                        _ => bv_ite_on(ops, h, sc),
+                    }
+                },
+                // A call, or a `let` (a β-redex): one step on.
+                _ => unfold(h).bind(λ u => match u { Accepted(h2) => bv_ite_of(ops, h2, f), Refused(_) => pure(None) }),
+            }
+        },
+    }
+}
+
+// The arm a match on a test selects at the test's outcome `v`: `f`, the
+// match abstracted over its test, applied to `v` and reduced by β and ι
+// only, so the arm is the term written there.
+fn bv_ite_arm(f: Handle, v: Handle, k: Handle) → Tac<Option<Handle>> {
+    let st <- as_type(Equation(App(Hd(f), Hd(v)), Hd(k)));
+    match st {
+        Accepted(s) => {
+            let sv <- view(s);
+            match sv {
+                HEq(l, _) => unfold(l).bind(λ u => match u { Accepted(arm) => pure(Some(arm)), Refused(_) => pure(None) }),
+                _ => pure(None),
+            }
+        },
+        Refused(_) => pure(None),
+    }
+}
+
+// `t` as `x = k` with `x` a word chosen by a test (`bv_ite_of`): the test
+// and the two arms, its parts read by `inner`. `x` converts with
+// `test.select(a, b)`, which is how the bridge states it.
+fn bv_stmt_ite(ops: BVOps, t: Handle, st: BVAtoms, inner: Handle → BVAtoms → Tac<Pair<BVStmt, BVAtoms>>) → Tac<Option<Pair<BVStmt, BVAtoms>>> {
+    let v <- view(t);
+    match v {
+        HEq(x, k) => {
+            let found <- bv_ite_of(ops, x, 8);
+            match found {
+                None => pure(None),
+                Some(parts) => {
+                    let scrut = parts.fst;
+                    let fc <- abstract_over(parts.snd.fst, Hd(scrut));
+                    let tyc <- infer(Hd(x));
+                    match fc {
+                        Accepted(f) => match tyc {
+                            Accepted(ty) => {
+                                let xa <- bv_ite_arm(f, parts.snd.snd.fst, k);
+                                let xb <- bv_ite_arm(f, parts.snd.snd.snd, k);
+                                match xa {
+                                    Some(a) => match xb {
+                                        Some(b) => {
+                                            let tcc <- as_type(Equation(Hd(scrut), Hd(parts.snd.snd.fst)));
+                                            let tac <- as_type(Equation(Hd(a), Hd(k)));
+                                            let tbc <- as_type(Equation(Hd(b), Hd(k)));
+                                            match tcc {
+                                                Accepted(tc) => match tac {
+                                                    Accepted(ta) => match tbc {
+                                                        Accepted(tb) => {
+                                                            let rc <- inner(tc, st);
+                                                            let ra <- inner(ta, rc.snd);
+                                                            let rb <- inner(tb, ra.snd);
+                                                            pure(Some(Pair(SIte(rc.fst, ra.fst, rb.fst, ty, scrut, a, b, k, tc, ta, tb), rb.snd)))
+                                                        },
+                                                        Refused(_) => pure(None),
+                                                    },
+                                                    Refused(_) => pure(None),
+                                                },
+                                                Refused(_) => pure(None),
+                                            }
+                                        },
+                                        None => pure(None),
+                                    },
+                                    None => pure(None),
+                                }
+                            },
+                            Refused(_) => pure(None),
+                        },
+                        Refused(_) => pure(None),
+                    }
+                },
+            }
+        },
+        _ => pure(None),
+    }
+}
+
+// Is `t` an equation whose left side is a call the reader would take whole
+// (it reads a list)? Such a call may still compute its word by tests on
+// words it can read, so that reading is tried first.
+fn bv_takes_whole(ops: BVOps, t: Handle) → Tac<Bool> {
+    let v <- view(t);
+    match v {
+        HEq(x, _) => {
+            let xv <- view(x);
+            match xv { HGlobal(_, _, args) => bv_foreign_args(ops, args), _ => pure(False) }
+        },
+        _ => pure(False),
+    }
+}
+
 // The statement `t`, its atoms added to `st`. `fuel` bounds its depth.
 fn bv_stmt(ops: BVOps, t: Handle, st: BVAtoms, fuel: Nat) → Tac<Pair<BVStmt, BVAtoms>> {
     match fuel {
@@ -1110,7 +1319,36 @@ fn bv_stmt(ops: BVOps, t: Handle, st: BVAtoms, fuel: Nat) → Tac<Pair<BVStmt, B
                         True => pure(Pair(SFalse, st)),
                         False => {
                             let p <- bv_negand(ops, t);
-                            bv_stmt_negation(ops, t, p, st, λ q st2 => bv_stmt(ops, q, st2, f))
+                            match p {
+                                Some(_) => bv_stmt_negation(ops, t, p, st, λ q st2 => bv_stmt(ops, q, st2, f)),
+                                // A word chosen by a test first: a call the
+                                // reader would take whole (it reads a list)
+                                // may still compute its word by tests on
+                                // words it can read.
+                                None => {
+                                    let first <- bv_takes_whole(ops, t);
+                                    let ite = λ (q: Handle) (st2: BVAtoms) => bv_stmt(ops, q, st2, f);
+                                    match first {
+                                        True => {
+                                            let tried <- attempt(bv_stmt_ite(ops, t, st, ite));
+                                            match tried {
+                                                Done(o) => match o { Some(r) => pure(r), None => bv_stmt_claim(ops, t, st) },
+                                                Failed(_, _) => bv_stmt_claim(ops, t, st),
+                                            }
+                                        },
+                                        False => {
+                                            let read <- attempt(bv_stmt_claim(ops, t, st));
+                                            match read {
+                                                Done(r) => pure(r),
+                                                Failed(_, _) => {
+                                                    let o <- bv_stmt_ite(ops, t, st, ite);
+                                                    match o { Some(r) => pure(r), None => bv_stmt_claim(ops, t, st) }
+                                                },
+                                            }
+                                        },
+                                    }
+                                },
+                            }
                         },
                     }
                 },
@@ -1187,11 +1425,31 @@ record BVCx {
     l: BVLemmas, q: BVQuote, k: Nat, ws: List<BVWord>, bools: Expr, offs: List<Nat>, wbits: Nat, bits: Handle,
     eval: Handle, and_i: Handle, and_l: Handle, and_r: Handle, band_l: Handle, band_r: Handle, band: Handle,
     or_g: Handle, or_h: Handle, not_g: Handle, not_h: Handle, iff_g: Handle, iff_h: Handle, false_g: Handle, false_h: Handle,
+    ite_g: Handle, ite_h: Handle,
+}
+
+// A part's predicate, placed at the stream and quoted.
+fn BVCx::placed(self cx: BVCx, s: BVStmt) → Expr {
+    s.pred().placed(cx.offs, cx.wbits).quote(cx.q)
 }
 
 // A part's verdict: its placed predicate at the stream.
 fn BVCx::verdict(self cx: BVCx, s: BVStmt) → Expr {
-    bv_app(cx.eval, [s.pred().placed(cx.offs, cx.wbits).quote(cx.q), Hd(cx.bits)])
+    bv_app(cx.eval, [cx.placed(s), Hd(cx.bits)])
+}
+
+// `e` as a handle to the term it elaborates to, so that a large term
+// several parts of a proof mention is written once; `e` itself when it
+// does not elaborate alone.
+fn bv_held(e: Expr) → Tac<Expr> {
+    let t <- as_type(Equation(e, e));
+    match t {
+        Accepted(h) => {
+            let v <- view(h);
+            match v { HEq(l, _) => pure(Hd(l)), _ => pure(e) }
+        },
+        Refused(_) => pure(e),
+    }
 }
 
 // `λ (x: ty) => body(x)`, its binder under `under` (an enclosing
@@ -1210,7 +1468,9 @@ fn bv_lam(ty: Expr, under: Option<LocalRef>, body: LocalRef → Tac<Expr>) → T
 // to the part, `from` back.
 fn BVCx::bridge(self cx: BVCx, s: BVStmt, as_goal: Bool, e: Expr, under: Option<LocalRef>) → Tac<Expr> {
     match s {
-        SClaim(c, _) => bv_bridge(cx.l, cx.k, cx.ws, cx.bools, c, as_goal, e),
+        // Held: a claim's proof reads every word back from the stream, and
+        // a statement of many claims would otherwise be one large `Expr`.
+        SClaim(c, _) => bv_bridge(cx.l, cx.k, cx.ws, cx.bools, c, as_goal, e).bind(bv_held),
         SAnd(a, b, ta, tb) => match as_goal {
             True => {
                 let ga <- cx.bridge(a, True, bv_app(cx.band_l, [cx.verdict(a), cx.verdict(b), e]), under);
@@ -1247,6 +1507,25 @@ fn BVCx::bridge(self cx: BVCx, s: BVStmt, as_goal: Bool, e: Expr, under: Option<
             pure(bv_app(as_goal.select(cx.iff_g, cx.iff_h), [cx.verdict(a), cx.verdict(b), Hd(ta), Hd(tb), fa, ga, fb, gb, e]))
         },
         SFalse => pure(bv_app(as_goal.select(cx.false_g, cx.false_h), [e])),
+        SIte(c, a, b, ty, test, xa, xb, k, tc, ta, tb) => {
+            let fc <- bv_lam(Equation(cx.verdict(c), Hd(cx.q.tru)), under, λ v => cx.bridge(c, True, Local(v), Some(v)));
+            let gc <- bv_lam(Hd(tc), under, λ v => cx.bridge(c, False, Local(v), Some(v)));
+            let fa <- match as_goal {
+                True => bv_lam(Equation(cx.verdict(a), Hd(cx.q.tru)), under, λ v => cx.bridge(a, True, Local(v), Some(v))),
+                False => bv_lam(Hd(ta), under, λ v => cx.bridge(a, False, Local(v), Some(v))),
+            };
+            let fb <- match as_goal {
+                True => bv_lam(Equation(cx.verdict(b), Hd(cx.q.tru)), under, λ v => cx.bridge(b, True, Local(v), Some(v))),
+                False => bv_lam(Hd(tb), under, λ v => cx.bridge(b, False, Local(v), Some(v))),
+            };
+            // The parts' predicates are held, not written out: a nested
+            // `if` would otherwise spell each subtree again at every level.
+            let qc <- bv_held(cx.placed(c));
+            let qa <- bv_held(cx.placed(a));
+            let qb <- bv_held(cx.placed(b));
+            pure(bv_app(as_goal.select(cx.ite_g, cx.ite_h),
+                [Hd(ty), Hd(test), Hd(xa), Hd(xb), Hd(k), qc, qa, qb, Hd(cx.bits), fc, gc, fa, fb, e]))
+        },
     }
 }
 
@@ -1298,7 +1577,9 @@ fn bv_cx(l: BVLemmas, q: BVQuote, k: Nat, ws: List<BVWord>, bools: Expr, offs: L
     let iff_h <- bv_resolve("bitblast::layout_iff_p_hyp");
     let false_g <- bv_resolve("bitblast::layout_false");
     let false_h <- bv_resolve("bitblast::layout_false_hyp");
-    pure(BVCx(l, q, k, ws, bools, offs, wbits, bits, eval, and_i, and_l, and_r, band_l, band_r, band, or_g, or_h, not_g, not_h, iff_g, iff_h, false_g, false_h))
+    let ite_g <- bv_resolve("bitblast::layout_ite_p");
+    let ite_h <- bv_resolve("bitblast::layout_ite_p_hyp");
+    pure(BVCx(l, q, k, ws, bools, offs, wbits, bits, eval, and_i, and_l, and_r, band_l, band_r, band, or_g, or_h, not_g, not_h, iff_g, iff_h, false_g, false_h, ite_g, ite_h))
 }
 
 fn bv_decide_once() → Tac<Expr> {
@@ -1320,7 +1601,8 @@ fn bv_decide_once() → Tac<Expr> {
     match verdict {
         Satisfiable(model) => fail(bv_counterexample(g.locals, ws, bs, wbits, model), []),
         Unsatisfiable(r) => {
-            let bools = bv_lay_bools(l, bs, wbits);
+            // Held: every claim's bridge reads the words back through it.
+            let bools <- bv_held(bv_lay_bools(l, bs, wbits));
             let lay = bv_lay(l, ws, 0, bools);
             let all = bv_app(l.unsat, [pe, NatLit(k), Hd(r), lay]);
             let bits <- bv_stream_of(all);

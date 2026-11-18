@@ -73,23 +73,45 @@ generator made of `main`. Two theorems say what that program does:
 ## The program
 
 The validator is ordinary code over a span of bytes, `s` with its length `n`
-(`runtime fn` marks a function the compiler turns into machine code):
+(`runtime fn` marks a function the compiler turns into machine code). Its
+heart is Unicode's own table of well-formed byte sequences (The Unicode
+Standard, Table 3-7), written as it is printed:
 
 ```text
+runtime fn sequence_length(lead, next1, next2, next3: u64) → u64 {
+    let b = lead.truncate(8, 56);
+    let c1 = next1.truncate(8, 56);
+    …
+    if b < 0x80 {
+        1
+    } else if b < 0xC2 {
+        0
+    } else if b < 0xE0 {
+        if c1 & 0xC0 = 0x80 { 2 } else { 0 }
+    } else if b < 0xF0 {
+        if c1 & 0xC0 = 0x80 ∧ c2 & 0xC0 = 0x80 ∧ (b ≠ 0xE0 ∨ 0xA0 <= c1) ∧ (b ≠ 0xED ∨ c1 < 0xA0) { 3 } else { 0 }
+    } else if b < 0xF5 {
+        if … ∧ (b ≠ 0xF0 ∨ 0x90 <= c1) ∧ (b ≠ 0xF4 ∨ c1 < 0x90) { 4 } else { 0 }
+    } else {
+        0
+    }
+}
+
+runtime fn sequence_at(s: List<u8>, n, i: u64) → u64 {
+    sequence_length(↑s.byte_within(n, i), ↑s.byte_within(n, i + 1), ↑s.byte_within(n, i + 2), ↑s.byte_within(n, i + 3))
+}
+
 runtime fn utf8_valid_from(s: List<u8>, n, i, left: u64) → u64 decreases left.toNat() {
     if h: 0 < left {
-        let b = s.byte_within(n, i).zero_extend(56);
-        if b < 0x80 {
+        let k = sequence_at(s, n, i);
+        if k = 1 {
             utf8_valid_from(s, n, i + 1, left - 1)
-        } else if b < 0xC0 {
-            i
-        } else if b < 0xE0 {
-            if h2: 1 < left {
-                if utf8_two_at(s, n, i) = 0 { i } else { utf8_valid_from(s, n, i + 2, left - 2) }
-            } else {
-                i
-            }
+        } else if k = 2 {
+            if room: 1 < left { utf8_valid_from(s, n, i + 2, left - 2) } else { i }
         } else if …            // three and four bytes, the same shape
+        } else {
+            i
+        }
     } else {
         i
     }
@@ -98,12 +120,13 @@ runtime fn utf8_valid_from(s: List<u8>, n, i, left: u64) → u64 decreases left.
 runtime fn utf8_valid_up_to(s: List<u8>, n: u64) → u64 { utf8_valid_from(s, n, 0, n) }
 ```
 
-It looks at the lead byte, checks that enough bytes are left, and hands the
-sequence to `utf8_two`, `utf8_three` or `utf8_four`. Those check the
-continuation bytes' `10xxxxxx` headers, assemble the scalar value with shifts
-and masks, and refuse what a strict decoder refuses: overlong forms (`C0 80`
-for NUL), the surrogates `D800`–`DFFF`, and values above `10FFFF`. The answer
-is the offset where the first bad sequence starts, or `n` when there is none.
+The table answers how long the sequence at a byte is, or 0 when none starts
+there. The narrow ranges after `E0`, `ED`, `F0` and `F4` are where the
+strict decoder's rules live: they rule out overlong forms (`E0 80 80`), the
+surrogates `D800`–`DFFF` (`ED A0 80`) and values above `10FFFF`. The loop
+steps over each sequence the table takes, while enough bytes are left. The
+answer is the offset where the first bad sequence starts, or `n` when there
+is none.
 
 `left` counts the bytes still to read, so every recursive call visibly
 shrinks it; that is the loop's termination proof, found automatically.
@@ -135,28 +158,33 @@ theorem valid_from_decides(s: List<u8>, n, i, left: u64,
 ## How the proof goes
 
 The program and the decoder are written differently on purpose. The program
-compares words against bounds (`b < 0xE0`, `code < 0x800`); the decoder reads
-header bits and joins payloads with `concat`. Three tools do the meeting, and
-the proof is mostly the statements.
+is the table of byte ranges; the decoder reads header bits, joins payloads
+with `concat` and checks the scalar value it assembled (not overlong, not a
+surrogate, at most `10FFFF`). Three tools do the meeting, and the proof is
+mostly the statements.
 
-1. **Sequences, by `bv_decide`.** `two_decides`, `three_decides` and
-   `four_decides` say a helper refuses exactly when the decoder's step for
-   that class fails. `split_all` turns the decoder's step into its tests
-   (`seq2_is_some`: every continuation header, then the scalar value's
-   checks), and `bv_decide` proves the rest: it reads the helper's `if`s by
-   splitting on their tests, and the decoder's number comparisons
-   (`code.toNat() < 0x800`) as comparisons of words.
+1. **The table against the decoder, by `bv_decide`.** For each length,
+   `two_takes` says the decoder takes a sequence the table takes, and
+   `two_refuses` that after a lead byte of that length it refuses one the
+   table refuses; `length_two` says which lead bytes the table answers 2
+   for. `split_all` first turns the decoder's step into its tests
+   (`seq2_is_some`), and `bv_decide` proves the rest as one circuit on four
+   bytes: it reads the table's `if`s without splitting them, and the
+   decoder's number comparisons (`code.toNat() < 0x800`) as comparisons of
+   words.
 2. **Bytes, by their class.** `class_two` and its kin say which class the
-   decoder gives a lead byte under the program's tests, each one line:
-   `simp_only` takes the decoder's equations and `bv_decide` discharges the
-   tests. `ascii`, `two`, `cut_two` and so on then say what the decoder does
-   on a byte list that starts with such a byte.
+   decoder gives a lead byte, each one line: `simp_only` takes the
+   decoder's equations and `bv_decide` discharges the tests. `ascii`,
+   `valid_two`, `cut_two` and so on then say what the decoder does on a
+   byte list that starts with such a byte.
 3. **The loop, by its own induction.** `valid_window_decides` goes by
    `induct utf8_valid_from`: one case per branch of the loop, each with the
    loop's tests as hypotheses and the step already taken. A case is one
-   `rewrite`: the window's read rule (`win.two(i, …)` spells the next bytes),
-   the class's lemma (its tests are found among the hypotheses), and the
-   induction hypothesis for the bytes after the sequence.
+   `rewrite`: the window's lemma for what the table answered
+   (`win.takes_two(i, …)`, its answer found by `assumption`: the decoder goes on
+   after the two bytes the table took; `win.short_two`: the bytes end inside
+   the sequence; `win.refused`: the table took nothing), and the induction
+   hypothesis for the bytes after the sequence.
 
 The loop lemma is stated over a window (`Window`): the bytes it reads may
 come from a longer buffer. `valid_window` and `valid_prefix` say what the

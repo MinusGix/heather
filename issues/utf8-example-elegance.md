@@ -92,3 +92,27 @@ classify a lead byte separately).
   ranges, `Result<(), Utf8Error>`), and reading `∧ ∨ ↔ ¬` in `bv_decide`
   is built for the shapes those statements take rather than for today's
   `is_some()` equations, which item 4 replaces.
+- 2026-11-18: item 4, first half: the program is the table
+  (`sequence_length`, its tests as Table 3-7 prints them), `sequence_at`
+  reads the four bytes at an offset, and the loop steps by what the table
+  answers. `utf8_two`/`_three`/`_four`, their `_at` readers, `four_bits`
+  and the `*_decides` theorems are gone; the native program is 1488
+  certified bytes. Built for it in `bv_decide` (PR #803): a word chosen by
+  an `if` is read as an `ite` without splitting the goal, and a word call
+  with a list argument (`s.byte_within(n, i)`) is an atom. The proof is one
+  `takes`/`refuses` lemma per length over four byte variables, each by
+  `bv_decide` in a few seconds, and the induction's arms find the table's
+  answer with `by assumption()` rather than by a hypothesis's position.
+  What the round found: naming those tests in the program (`if two: k = 2`)
+  makes the kernel run out of fuel on `utf8_valid_from::compile`, though
+  the unnamed program compiles; a `runtime fn`'s parameters must be
+  64-bit words, so the table takes words and truncates them to bytes
+  (`issues/function-ir-multi-word-calls.md`); the same table compared at
+  64 bits makes the kernel's `bv_decide` certificate check run out of fuel
+  (more than eight times the budget), at 8 bits it is seconds; and stating
+  the per-length lemmas about `sequence_at(s, n, x)` with the reads as
+  atoms gave a false counterexample (the reads were partly unfolded),
+  which byte variables avoid. Left for the second half: a `Lead`
+  classification shared with the decoder (today the decoder's
+  `class_of` and the table each test the lead byte), `↔` statements, and
+  the result as `Result<(), Utf8Error { valid_up_to }>`.

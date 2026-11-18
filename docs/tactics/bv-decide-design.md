@@ -160,8 +160,14 @@ Words: `+ - *`, negation, `& | bxor`, `complement`, `<< >>` by a numeral,
 numerals, `zero_extend`, `truncate`, `take_low`, `drop_low`,
 `sign_extend`, `concat`. Booleans: `&& || !`, `xor`, `bool_eq`, `eq_bit`,
 `unsigned_lt_bit`, `signed_lt_bit`, `bit_at` at a numeral, `head_bit`.
-Atoms must be locals; anything else is unfolded, and refused when it
-cannot be.
+Atoms are locals, and a word-valued call that takes an argument the
+bit-blaster cannot model (a list: `s.byte_within(n, i)`), taken whole: one
+atom per call, two calls the same by conversion being one atom
+(`bv_term_atom`), abstracted out of a claim's sides by the host's
+`Abstract`, which takes any term. An equation whose left side is such a
+call is first read as a word chosen by its tests (below), so a byte table
+over a list's bytes reads its tests and takes only the reads whole.
+Anything else is unfolded, and refused when it cannot be.
 
 A claim is `a = b` between words, `p = q` between Booleans, `p = True`, or
 `a < b`, `a <= b`, `a ≠ b` between words (`BVClaim`): `<` reads as
@@ -204,6 +210,32 @@ was a case of. `examples/utf8/utf8_check.hthr`'s `two_decides` relates the
 decoder to the program's `utf8_two` this way, with no lemma restating the
 program's tests as one Boolean.
 
+**A word chosen by a test, without splitting** (2026-11-18). An
+equation `x = k` whose `x` unfolds to a `match` on a Boolean test is read
+as the statement `(c ∧ a = k) ∨ (¬c ∧ b = k)` (`SIte`), `a` and `b` the
+arms, each read again, so nested `if`s become one predicate and one SAT
+call instead of `2^k` cases. The arms are found by abstracting the match
+over its test (the host's `Abstract` takes any term now, every occurrence
+as written becoming the parameter) and taking that function at `True` and
+`False` by β and ι alone (`Unfold` reduces a head that computes without a
+definition): the transparent `whnf` gives up spelling an arm that is stuck
+on a call that unfolds far, and goes on into a word's representation when
+it does not. The bridge states the word as `c.select(a, b)`, which converts
+with the program's `if` (both are one `match` on `c`), so no function of
+the test enters the proof, and passes each part's predicate as held terms
+(`layout_ite_p`): its verdict is then written as the statement's own and
+the kernel meets the two without evaluating either. A claim's proof is held
+too (`bv_held`), or a table of tests is one returned `Expr` past the host's
+read budget. When this reading fails the split above is still tried.
+
+Cost: `lib/_tests/std/tactic/bv_decide_tests.hthr`'s `table_*` (Unicode's
+Table 3-7 over four bytes, five levels and two five-way conjunctions)
+decide in a few seconds at `u8`. The same table over 64-bit words widened
+from bytes is past one conversion: the tactic's clause list is computed by
+evaluation once per piece (`reaches_piece`), and a 64-bit comparison's
+circuit is eight times a byte's. Narrowing a comparison of zero-extended
+words to the width that holds them would retire that.
+
 **Statements joined by connectives** (2026-11-18). A goal or hypothesis
 is a tree of `∧ ∨ ↔ ¬` and `False` over claims (`BVStmt`), read to the
 Boolean tree of its claims' predicates (`&& || bool_eq !`, `False`), so a
@@ -220,9 +252,13 @@ can read; `P → False` with `P` a claim keeps its claim reading.
 
 ## Open
 
-- Non-local atoms (a field, a call the reader cannot unfold) could be
-  abstracted as fresh words instead of refused. A Boolean call on both
-  sides (`is_utf8(r)` beside the claim) is the common case: today the
-  proof rewrites it away first.
-- The split is per test, so `k` independent tests make `2^k` cases; a
-  test could instead be read as `ite` on the words it chooses between.
+- A Boolean call the reader takes whole (`is_utf8(r)` beside the claim)
+  is still refused: word calls are atoms now (below), Boolean ones not yet.
+- The split is per test, so `k` independent tests make `2^k` cases; an
+  equation on a chosen word is read as `ite` now, the split remaining for
+  the shapes that reading does not take (a chosen word inside a word
+  operation).
+- Comparisons of zero-extended words at the wide width: their circuits
+  cost the width, and the clause list is computed in one conversion per
+  piece. A normalizer rule narrowing them would let a byte table over
+  64-bit parameters decide.

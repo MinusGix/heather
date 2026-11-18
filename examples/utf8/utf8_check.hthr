@@ -25,96 +25,54 @@ import fintype;
 import bitvec_fintype;
 import bv_decide;
 
-// Whether a lead byte and the continuation bytes after it are one UTF-8
-// sequence: 1 when they are, 0 when not. Each byte is a word, read from the
-// span by the loop below; the scalar value they spell is assembled from their
-// payloads and checked as the strict decoder checks it: not overlong (at
-// least the least value of its length), and a Unicode scalar value (not a
-// surrogate, at most 0x10FFFF).
-
-// `110xxxxx 10xxxxxx`, at least 0x80.
-runtime fn utf8_two(b, c1: u64) → u64 {
-    if c1 & 0xC0 = 0x80 {
-        let code = ((b & 0x1F) << 6) + (c1 & 0x3F);
-        if code < 0x80 { 0 } else { 1 }
+// The length of the UTF-8 sequence that begins with the byte `lead` and
+// goes on with `next1`, `next2` and `next3`, by Unicode's table of
+// well-formed byte sequences (Table 3-7), or 0 when they begin none. After
+// a lead byte each byte is a continuation `80..BF`, except the second
+// after `E0` (`A0..BF`), `ED` (`80..9F`), `F0` (`90..BF`) and `F4`
+// (`80..8F`): those narrower ranges rule out overlong values, surrogates
+// and values past 0x10FFFF. The bytes come in as words, the only thing a
+// compiled function takes yet, and are compared as bytes.
+runtime fn sequence_length(lead, next1, next2, next3: u64) → u64 {
+    let b = lead.truncate(8, 56);
+    let c1 = next1.truncate(8, 56);
+    let c2 = next2.truncate(8, 56);
+    let c3 = next3.truncate(8, 56);
+    if b < 0x80 {
+        1
+    } else if b < 0xC2 {
+        0
+    } else if b < 0xE0 {
+        if c1 & 0xC0 = 0x80 { 2 } else { 0 }
+    } else if b < 0xF0 {
+        if c1 & 0xC0 = 0x80 ∧ c2 & 0xC0 = 0x80 ∧ (b ≠ 0xE0 ∨ 0xA0 <= c1) ∧ (b ≠ 0xED ∨ c1 < 0xA0) { 3 } else { 0 }
+    } else if b < 0xF5 {
+        if c1 & 0xC0 = 0x80 ∧ c2 & 0xC0 = 0x80 ∧ c3 & 0xC0 = 0x80 ∧ (b ≠ 0xF0 ∨ 0x90 <= c1) ∧ (b ≠ 0xF4 ∨ c1 < 0x90) { 4 } else { 0 }
     } else {
         0
     }
 }
 
-// `1110xxxx 10xxxxxx 10xxxxxx`, at least 0x800, not a surrogate.
-runtime fn utf8_three(b, c1, c2: u64) → u64 {
-    if c1 & 0xC0 = 0x80 {
-        if c2 & 0xC0 = 0x80 {
-            let code = ((b & 0x0F) << 12) + ((c1 & 0x3F) << 6) + (c2 & 0x3F);
-            if code < 0x800 { 0 } else if code < 0xD800 { 1 } else if code < 0xE000 { 0 } else { 1 }
-        } else {
-            0
-        }
-    } else {
-        0
-    }
+// The length of the sequence the `n` bytes of `s` begin at offset `i`. A
+// read past the end is 0, which continues no sequence.
+runtime fn sequence_at(s: List<u8>, n, i: u64) → u64 {
+    sequence_length(↑s.byte_within(n, i), ↑s.byte_within(n, i + 1), ↑s.byte_within(n, i + 2), ↑s.byte_within(n, i + 3))
 }
 
-// `11110xxx` and three continuations, from 0x10000 to 0x10FFFF.
-runtime fn utf8_four(b, c1, c2, c3: u64) → u64 {
-    if c1 & 0xC0 = 0x80 {
-        if c2 & 0xC0 = 0x80 {
-            if c3 & 0xC0 = 0x80 {
-                let code = ((b & 0x07) << 18) + ((c1 & 0x3F) << 12) + ((c2 & 0x3F) << 6) + (c3 & 0x3F);
-                if code < 0x10000 { 0 } else if code < 0x110000 { 1 } else { 0 }
-            } else {
-                0
-            }
-        } else {
-            0
-        }
-    } else {
-        0
-    }
-}
-
-// The same tests on the bytes from offset `i` of the span. The loop calls
-// these rather than reading the bytes itself, which keeps it small enough
-// for the compiler's certificate to scan in one step.
-runtime fn utf8_two_at(s: List<u8>, n, i: u64) → u64 {
-    utf8_two(↑s.byte_within(n, i), ↑s.byte_within(n, i + 1))
-}
-runtime fn utf8_three_at(s: List<u8>, n, i: u64) → u64 {
-    utf8_three(↑s.byte_within(n, i), ↑s.byte_within(n, i + 1), ↑s.byte_within(n, i + 2))
-}
-runtime fn utf8_four_at(s: List<u8>, n, i: u64) → u64 {
-    utf8_four(↑s.byte_within(n, i), ↑s.byte_within(n, i + 1), ↑s.byte_within(n, i + 2), ↑s.byte_within(n, i + 3))
-}
-
-// The offset of the first byte from `i` where no sequence starts, or `n`
-// when the bytes from `i` are UTF-8 to the end; `left` is the number of
-// bytes from `i`, `n - i`.
+// The offset of the first byte from `i` that begins no UTF-8 sequence, or
+// `n` when the bytes from `i` are UTF-8 to the end; `left` is `n - i`. A
+// sequence the bytes end inside of is not one.
 runtime fn utf8_valid_from(s: List<u8>, n, i, left: u64) → u64 decreases left.toNat() {
     if h: 0 < left {
-        let b: u8 = s.byte_within(n, i);
-        if b < 0x80 {
+        let k = sequence_at(s, n, i);
+        if k = 1 {
             utf8_valid_from(s, n, i + 1, left - 1)
-        } else if b < 0xC0 {
-            i
-        } else if b < 0xE0 {
-            if h2: 1 < left {
-                if utf8_two_at(s, n, i) = 0 { i } else { utf8_valid_from(s, n, i + 2, left - 2) }
-            } else {
-                i
-            }
-        } else if b < 0xF0 {
-            if h3: 2 < left {
-                if utf8_three_at(s, n, i) = 0 { i } else { utf8_valid_from(s, n, i + 3, left - 3) }
-            } else {
-                i
-            }
-        } else if b < 0xF8 {
-            if h4: 3 < left {
-                if utf8_four_at(s, n, i) = 0 { i } else { utf8_valid_from(s, n, i + 4, left - 4) }
-            } else {
-                i
-            }
+        } else if k = 2 {
+            if room: 1 < left { utf8_valid_from(s, n, i + 2, left - 2) } else { i }
+        } else if k = 3 {
+            if room: 2 < left { utf8_valid_from(s, n, i + 3, left - 3) } else { i }
+        } else if k = 4 {
+            if room: 3 < left { utf8_valid_from(s, n, i + 4, left - 4) } else { i }
         } else {
             i
         }
@@ -128,16 +86,13 @@ runtime fn utf8_valid_from(s: List<u8>, n, i, left: u64) → u64 decreases left.
 runtime fn utf8_valid_up_to(s: List<u8>, n: u64) → u64 { utf8_valid_from(s, n, 0, n) }
 
 // ---------------------------------------------------------------------------
-// Why it is right
+// Why it is right: the table against the strict decoder `utf8::decode`
 
 // The decoder emits a character exactly when the value is not overlong and
 // is a scalar value.
 theorem emit_is_some(min, code: Nat, r: List<u8>): utf8::emit(min, code, r).is_some() = (min.leb(code) && char::is_scalar(code)) {
     split_all; all_goals { refl }
 }
-
-// ---------------------------------------------------------------------------
-// One sequence: the program's test is the decoder's
 
 // The scalar value a sequence spells, as the decoder assembles it.
 fn code2(b, c1: u8) → Nat { utf8::cont_payload(c1).concat(utf8::lead2_payload(b)).toNat() }
@@ -165,33 +120,42 @@ theorem seq4_is_some(b, c1, c2, c3: u8, r: List<u8>):
     split_all; all_goals { refl }
 }
 
-// The program refuses a sequence exactly when the decoder does.
-theorem two_decides(b, c1: u8, r: List<u8>): utf8::decode_seq(utf8::C2, b, [c1, ..r]).is_some() = !utf8_two(↑b, ↑c1).eq_bit(0) {
+// A sequence the table takes the decoder takes, and one the table refuses
+// after a lead of that length the decoder refuses: `bv_decide` reads the
+// table's tests and the decoder's arithmetic as one circuit on the four
+// bytes.
+theorem two_takes(b, c1, c2, c3: u8, r: List<u8>, k: sequence_length(↑b, ↑c1, ↑c2, ↑c3) = 2): utf8::decode_seq(utf8::C2, b, [c1, ..r]).is_some() = True {
     rewrite(seq2_is_some, emit_is_some, by bv_decide())
 }
-theorem three_decides(b, c1, c2: u8, r: List<u8>):
-    utf8::decode_seq(utf8::C3, b, [c1, c2, ..r]).is_some() = !utf8_three(↑b, ↑c1, ↑c2).eq_bit(0) {
+theorem two_refuses(b, c1, c2, c3: u8, r: List<u8>, t: ¬(b < 0xC0), u: b < 0xE0, k: sequence_length(↑b, ↑c1, ↑c2, ↑c3) ≠ 2):
+    utf8::decode_seq(utf8::C2, b, [c1, ..r]).is_some() = False {
+    rewrite(seq2_is_some, emit_is_some, by bv_decide())
+}
+theorem three_takes(b, c1, c2, c3: u8, r: List<u8>, k: sequence_length(↑b, ↑c1, ↑c2, ↑c3) = 3): utf8::decode_seq(utf8::C3, b, [c1, c2, ..r]).is_some() = True {
     rewrite(seq3_is_some, emit_is_some, by bv_decide())
 }
-// utf8_four's verdict as one Boolean formula. bv_decide could split the
-// program's ifs itself, but four nested tests over a 21-bit code point peak
-// near three times the memory of reading this formula (the native gate's
-// 6 GiB rail; issues/utf8-example-elegance.md). The range-table program
-// (item 4 there) retires it.
-theorem four_bits(b, c1, c2, c3: u64): utf8_four(b, c1, c2, c3).eq_bit(0)
-    = !(((((c1 & 0xC0).eq_bit(0x80) && (c2 & 0xC0).eq_bit(0x80)) && (c3 & 0xC0).eq_bit(0x80))
-        && !(((b & 0x07) << 18) + ((c1 & 0x3F) << 12) + ((c2 & 0x3F) << 6) + (c3 & 0x3F)).unsigned_lt_bit(0x10000))
-        && (((b & 0x07) << 18) + ((c1 & 0x3F) << 12) + ((c2 & 0x3F) << 6) + (c3 & 0x3F)).unsigned_lt_bit(0x110000)) {
-    split_all; all_goals { refl }
+theorem three_refuses(b, c1, c2, c3: u8, r: List<u8>, t: ¬(b < 0xE0), u: b < 0xF0, k: sequence_length(↑b, ↑c1, ↑c2, ↑c3) ≠ 3):
+    utf8::decode_seq(utf8::C3, b, [c1, c2, ..r]).is_some() = False {
+    rewrite(seq3_is_some, emit_is_some, by bv_decide())
 }
-theorem four_decides(b, c1, c2, c3: u8, r: List<u8>):
-    utf8::decode_seq(utf8::C4, b, [c1, c2, c3, ..r]).is_some() = !utf8_four(↑b, ↑c1, ↑c2, ↑c3).eq_bit(0) {
-    rewrite(four_bits, seq4_is_some, emit_is_some, by bv_decide())
+theorem four_takes(b, c1, c2, c3: u8, r: List<u8>, k: sequence_length(↑b, ↑c1, ↑c2, ↑c3) = 4): utf8::decode_seq(utf8::C4, b, [c1, c2, c3, ..r]).is_some() = True {
+    rewrite(seq4_is_some, emit_is_some, by bv_decide())
+}
+theorem four_refuses(b, c1, c2, c3: u8, r: List<u8>, t: ¬(b < 0xF0), u: b < 0xF8, k: sequence_length(↑b, ↑c1, ↑c2, ↑c3) ≠ 4):
+    utf8::decode_seq(utf8::C4, b, [c1, c2, c3, ..r]).is_some() = False {
+    rewrite(seq4_is_some, emit_is_some, by bv_decide())
 }
 
+// The length the table answers says which lead byte it read.
+theorem length_one(b, c1, c2, c3: u8, k: sequence_length(↑b, ↑c1, ↑c2, ↑c3) = 1): b < 0x80 { by bv_decide() }
+theorem length_two(b, c1, c2, c3: u8, k: sequence_length(↑b, ↑c1, ↑c2, ↑c3) = 2): ¬(b < 0xC0) ∧ b < 0xE0 { by bv_decide() }
+theorem length_three(b, c1, c2, c3: u8, k: sequence_length(↑b, ↑c1, ↑c2, ↑c3) = 3): ¬(b < 0xE0) ∧ b < 0xF0 { by bv_decide() }
+theorem length_four(b, c1, c2, c3: u8, k: sequence_length(↑b, ↑c1, ↑c2, ↑c3) = 4): ¬(b < 0xF0) ∧ b < 0xF8 { by bv_decide() }
+theorem length_ascii(b, c1, c2, c3: u8, t: b < 0x80): sequence_length(↑b, ↑c1, ↑c2, ↑c3) = 1 { by bv_decide() }
+
 // ---------------------------------------------------------------------------
-// The lead byte's class, from the loop's tests on it: the decoder reads the
-// top bits, and `bv_decide` proves each from the tests.
+// The lead byte's class, from tests on it: the decoder reads the top bits,
+// and `bv_decide` proves each from the tests.
 
 theorem class_one(b: u8, t: b < 0x80): utf8::class_of(b) = utf8::C1 {
     simp_only(utf8::class_of, discharge := by bv_decide())
@@ -213,7 +177,7 @@ theorem class_past(b: u8, t: ¬(b < 0xF8)): utf8::class_of(b) = utf8::CBad {
 }
 
 // ---------------------------------------------------------------------------
-// The decoder at a lead byte, by the loop's tests on it
+// The decoder at a lead byte
 
 theorem decode_cons(b: u8, r: List<u8>): utf8::decode([b, ..r]) = utf8::decode_class(utf8::class_of(b), b, r) {
     match r { [] => refl, [c1] => refl, [c1, c2] => refl, [c1, c2, c3, ..r3] => refl }
@@ -248,19 +212,38 @@ theorem stray(b: u8, r: List<u8>, t: ¬(b < 0x80), u: b < 0xC0): utf8::is_utf8([
 theorem past(b: u8, r: List<u8>, t: ¬(b < 0xF8)): utf8::is_utf8([b, ..r]) = False {
     rewrite(valid_by_class(b, r, utf8::CBad, class_past(b, t)), refl)
 }
-theorem two(b, c1: u8, r: List<u8>, t: ¬(b < 0xC0), u: b < 0xE0):
-    utf8::is_utf8([b, c1, ..r]) = (!utf8_two(↑b, ↑c1).eq_bit(0) && utf8::is_utf8(r)) {
-    rewrite(valid_by_class(b, [c1, ..r], utf8::C2, class_two(b, t, u)), push_is_some(utf8::decode_seq(utf8::C2, b, [c1, ..r]), utf8::decode(r)), two_decides(b, c1, r), refl)
+
+// A sequence of each length, by the decoder: its value, then the bytes after
+// it.
+theorem valid_two(b, c1: u8, r: List<u8>, t: ¬(b < 0xC0), u: b < 0xE0):
+    utf8::is_utf8([b, c1, ..r]) = (utf8::decode_seq(utf8::C2, b, [c1, ..r]).is_some() && utf8::is_utf8(r)) {
+    rewrite(valid_by_class(b, [c1, ..r], utf8::C2, class_two(b, t, u)), push_is_some(utf8::decode_seq(utf8::C2, b, [c1, ..r]), utf8::decode(r)), refl)
 }
-theorem three(b, c1, c2: u8, r: List<u8>, t: ¬(b < 0xE0), u: b < 0xF0):
-    utf8::is_utf8([b, c1, c2, ..r]) = (!utf8_three(↑b, ↑c1, ↑c2).eq_bit(0) && utf8::is_utf8(r)) {
-    rewrite(valid_by_class(b, [c1, c2, ..r], utf8::C3, class_three(b, t, u)),
-        push_is_some(utf8::decode_seq(utf8::C3, b, [c1, c2, ..r]), utf8::decode(r)), three_decides(b, c1, c2, r), refl)
+theorem valid_three(b, c1, c2: u8, r: List<u8>, t: ¬(b < 0xE0), u: b < 0xF0):
+    utf8::is_utf8([b, c1, c2, ..r]) = (utf8::decode_seq(utf8::C3, b, [c1, c2, ..r]).is_some() && utf8::is_utf8(r)) {
+    rewrite(valid_by_class(b, [c1, c2, ..r], utf8::C3, class_three(b, t, u)), push_is_some(utf8::decode_seq(utf8::C3, b, [c1, c2, ..r]), utf8::decode(r)), refl)
 }
-theorem four(b, c1, c2, c3: u8, r: List<u8>, t: ¬(b < 0xF0), u: b < 0xF8):
-    utf8::is_utf8([b, c1, c2, c3, ..r]) = (!utf8_four(↑b, ↑c1, ↑c2, ↑c3).eq_bit(0) && utf8::is_utf8(r)) {
+theorem valid_four(b, c1, c2, c3: u8, r: List<u8>, t: ¬(b < 0xF0), u: b < 0xF8):
+    utf8::is_utf8([b, c1, c2, c3, ..r]) = (utf8::decode_seq(utf8::C4, b, [c1, c2, c3, ..r]).is_some() && utf8::is_utf8(r)) {
     rewrite(valid_by_class(b, [c1, c2, c3, ..r], utf8::C4, class_four(b, t, u)),
-        push_is_some(utf8::decode_seq(utf8::C4, b, [c1, c2, c3, ..r]), utf8::decode(r)), four_decides(b, c1, c2, c3, r), refl)
+        push_is_some(utf8::decode_seq(utf8::C4, b, [c1, c2, c3, ..r]), utf8::decode(r)), refl)
+}
+
+// A sequence the table takes: the decoder takes it too, and goes on after it.
+theorem one_taken(b, c1, c2, c3: u8, r: List<u8>, k: sequence_length(↑b, ↑c1, ↑c2, ↑c3) = 1): utf8::is_utf8([b, ..r]) = utf8::is_utf8(r) {
+    ascii(b, r, length_one(b, c1, c2, c3, k))
+}
+theorem two_taken(b, c1, c2, c3: u8, r: List<u8>, k: sequence_length(↑b, ↑c1, ↑c2, ↑c3) = 2): utf8::is_utf8([b, c1, ..r]) = utf8::is_utf8(r) {
+    let lead = length_two(b, c1, c2, c3, k);
+    rewrite(valid_two(b, c1, r, lead.left, lead.right), two_takes(b, c1, c2, c3, r, k), refl)
+}
+theorem three_taken(b, c1, c2, c3: u8, r: List<u8>, k: sequence_length(↑b, ↑c1, ↑c2, ↑c3) = 3): utf8::is_utf8([b, c1, c2, ..r]) = utf8::is_utf8(r) {
+    let lead = length_three(b, c1, c2, c3, k);
+    rewrite(valid_three(b, c1, c2, r, lead.left, lead.right), three_takes(b, c1, c2, c3, r, k), refl)
+}
+theorem four_taken(b, c1, c2, c3: u8, r: List<u8>, k: sequence_length(↑b, ↑c1, ↑c2, ↑c3) = 4): utf8::is_utf8([b, c1, c2, c3, ..r]) = utf8::is_utf8(r) {
+    let lead = length_four(b, c1, c2, c3, k);
+    rewrite(valid_four(b, c1, c2, c3, r, lead.left, lead.right), four_takes(b, c1, c2, c3, r, k), refl)
 }
 
 // A sequence the bytes end inside of.
@@ -340,31 +323,90 @@ theorem Window::ends({s: List<u8>}, {n: u64}, {w: List<u8>}, {m: u64}, self win:
 // The loop stops at `x` before the window's end.
 theorem stops(x, m: u64, before: x.toNat() < m.toNat()): x.eq_bit(m) = False { by bv_decide() }
 
+// The bytes the table reads at offset `x`, as the window holds them, and
+// what the decoder makes of them.
+theorem Window::takes_one({s: List<u8>}, {n: u64}, {w: List<u8>}, {m: u64}, self win: Window(s, n, w, m), x: u64, inside: x.toNat() < m.toNat(), k: sequence_at(s, n, x) = 1):
+    utf8::is_utf8(w.drop(x.toNat())) = utf8::is_utf8(w.drop((x + 1).toNat())) {
+    rewrite(win.one(x, inside), one_taken(s.byte_within(n, x), s.byte_within(n, x + 1), s.byte_within(n, x + 2), s.byte_within(n, x + 3), w.drop((x + 1).toNat()), k))
+}
+theorem Window::takes_two({s: List<u8>}, {n: u64}, {w: List<u8>}, {m: u64}, self win: Window(s, n, w, m), x: u64, inside: x.toNat() + 1 < m.toNat(), k: sequence_at(s, n, x) = 2):
+    utf8::is_utf8(w.drop(x.toNat())) = utf8::is_utf8(w.drop((x + 2).toNat())) {
+    rewrite(win.two(x, inside), two_taken(s.byte_within(n, x), s.byte_within(n, x + 1), s.byte_within(n, x + 2), s.byte_within(n, x + 3), w.drop((x + 2).toNat()), k))
+}
+theorem Window::takes_three({s: List<u8>}, {n: u64}, {w: List<u8>}, {m: u64}, self win: Window(s, n, w, m), x: u64, inside: x.toNat() + 2 < m.toNat(), k: sequence_at(s, n, x) = 3):
+    utf8::is_utf8(w.drop(x.toNat())) = utf8::is_utf8(w.drop((x + 3).toNat())) {
+    rewrite(win.three(x, inside), three_taken(s.byte_within(n, x), s.byte_within(n, x + 1), s.byte_within(n, x + 2), s.byte_within(n, x + 3), w.drop((x + 3).toNat()), k))
+}
+theorem Window::takes_four({s: List<u8>}, {n: u64}, {w: List<u8>}, {m: u64}, self win: Window(s, n, w, m), x: u64, inside: x.toNat() + 3 < m.toNat(), k: sequence_at(s, n, x) = 4):
+    utf8::is_utf8(w.drop(x.toNat())) = utf8::is_utf8(w.drop((x + 4).toNat())) {
+    rewrite(win.four(x, inside), four_taken(s.byte_within(n, x), s.byte_within(n, x + 1), s.byte_within(n, x + 2), s.byte_within(n, x + 3), w.drop((x + 4).toNat()), k))
+}
+
+// A sequence the window ends inside of.
+theorem Window::short_two({s: List<u8>}, {n: u64}, {w: List<u8>}, {m: u64}, self win: Window(s, n, w, m), x: u64, inside: x.toNat() < m.toNat(),
+    k: sequence_at(s, n, x) = 2, short: ¬(x.toNat() + 1 < m.toNat())): utf8::is_utf8(w.drop(x.toNat())) = False {
+    let lead = length_two(s.byte_within(n, x), s.byte_within(n, x + 1), s.byte_within(n, x + 2), s.byte_within(n, x + 3), k);
+    rewrite(win.one(x, inside), cut_two(s.byte_within(n, x), w.drop((x + 1).toNat()), lead.left, lead.right, rewrite(win.left(x + 1), bv_omega)))
+}
+theorem Window::short_three({s: List<u8>}, {n: u64}, {w: List<u8>}, {m: u64}, self win: Window(s, n, w, m), x: u64, inside: x.toNat() < m.toNat(),
+    k: sequence_at(s, n, x) = 3, short: ¬(x.toNat() + 2 < m.toNat())): utf8::is_utf8(w.drop(x.toNat())) = False {
+    let lead = length_three(s.byte_within(n, x), s.byte_within(n, x + 1), s.byte_within(n, x + 2), s.byte_within(n, x + 3), k);
+    rewrite(win.one(x, inside), cut_three(s.byte_within(n, x), w.drop((x + 1).toNat()), lead.left, lead.right, rewrite(win.left(x + 1), bv_omega)))
+}
+theorem Window::short_four({s: List<u8>}, {n: u64}, {w: List<u8>}, {m: u64}, self win: Window(s, n, w, m), x: u64, inside: x.toNat() < m.toNat(),
+    k: sequence_at(s, n, x) = 4, short: ¬(x.toNat() + 3 < m.toNat())): utf8::is_utf8(w.drop(x.toNat())) = False {
+    let lead = length_four(s.byte_within(n, x), s.byte_within(n, x + 1), s.byte_within(n, x + 2), s.byte_within(n, x + 3), k);
+    rewrite(win.one(x, inside), cut_four(s.byte_within(n, x), w.drop((x + 1).toNat()), lead.left, lead.right, rewrite(win.left(x + 1), bv_omega)))
+}
+
+// A lead byte the table refuses: whatever the bytes after it, the decoder
+// refuses the window from it.
+theorem Window::refused({s: List<u8>}, {n: u64}, {w: List<u8>}, {m: u64}, self win: Window(s, n, w, m), x: u64, inside: x.toNat() < m.toNat(),
+    k1: sequence_at(s, n, x) ≠ 1, k2: sequence_at(s, n, x) ≠ 2, k3: sequence_at(s, n, x) ≠ 3, k4: sequence_at(s, n, x) ≠ 4):
+    utf8::is_utf8(w.drop(x.toNat())) = False {
+    let b = s.byte_within(n, x);
+    let c1 = s.byte_within(n, x + 1);
+    let c2 = s.byte_within(n, x + 2);
+    let c3 = s.byte_within(n, x + 3);
+    let r = w.drop((x + 1).toNat());
+    if t: b < 0x80 {
+        false_elim(k1(length_ascii(b, c1, c2, c3, t)))
+    } else if u: b < 0xC0 {
+        rewrite(win.one(x, inside), stray(b, r, t, u))
+    } else if v: b < 0xE0 {
+        if room: x.toNat() + 1 < m.toNat() {
+            rewrite(win.two(x, room), valid_two(b, c1, w.drop((x + 2).toNat()), u, v), two_refuses(b, c1, c2, c3, w.drop((x + 2).toNat()), u, v, k2), refl)
+        } else {
+            rewrite(win.one(x, inside), cut_two(b, r, u, v, rewrite(win.left(x + 1), bv_omega)))
+        }
+    } else if v3: b < 0xF0 {
+        if room: x.toNat() + 2 < m.toNat() {
+            rewrite(win.three(x, room), valid_three(b, c1, c2, w.drop((x + 3).toNat()), v, v3), three_refuses(b, c1, c2, c3, w.drop((x + 3).toNat()), v, v3, k3), refl)
+        } else {
+            rewrite(win.one(x, inside), cut_three(b, r, v, v3, rewrite(win.left(x + 1), bv_omega)))
+        }
+    } else if v4: b < 0xF8 {
+        if room: x.toNat() + 3 < m.toNat() {
+            rewrite(win.four(x, room), valid_four(b, c1, c2, c3, w.drop((x + 4).toNat()), v3, v4), four_refuses(b, c1, c2, c3, w.drop((x + 4).toNat()), v3, v4, k4), refl)
+        } else {
+            rewrite(win.one(x, inside), cut_four(b, r, v3, v4, rewrite(win.left(x + 1), bv_omega)))
+        }
+    } else {
+        rewrite(win.one(x, inside), past(b, r, v4))
+    }
+}
+
 theorem valid_window_decides(s: List<u8>, n, i, left: u64, w: List<u8>, m: u64, win: Window(s, n, w, m), here: i.toNat() + left.toNat() = m.toNat()):
     utf8_valid_from(s, n, i, left).eq_bit(m) = utf8::is_utf8(w.drop(i.toNat())) {
     induct utf8_valid_from(s, n, i, left) {
-        // ASCII: one byte, and on.
-        True::True => rewrite(ih(w, m, win, bv_omega), win.one(i, bv_omega), ascii, refl),
-        // A continuation byte where a sequence should start.
-        True::False::True => rewrite(stops(i, m, bv_omega), win.one(i, bv_omega), stray, refl),
-        // Two bytes: refused, accepted, or cut off by the end.
-        True::False::False::True::True::True => rewrite(stops(i, m, bv_omega), win.two(i, bv_omega), two, BitVec::eq_bit_of_eq, refl),
-        True::False::False::True::True::False => rewrite(ih(w, m, win, bv_omega), win.two(i, bv_omega), two, BitVec::eq_bit_of_ne, refl),
-        True::False::False::True::False => rewrite(stops(i, m, bv_omega), win.one(i, bv_omega),
-            cut_two(s.byte_within(n, i), w.drop((i + 1).toNat()), h3, h4, rewrite(win.left(i + 1), bv_omega)), refl),
-        // Three bytes.
-        True::False::False::False::True::True::True => rewrite(stops(i, m, bv_omega), win.three(i, bv_omega), three, BitVec::eq_bit_of_eq, refl),
-        True::False::False::False::True::True::False => rewrite(ih(w, m, win, bv_omega), win.three(i, bv_omega), three, BitVec::eq_bit_of_ne, refl),
-        True::False::False::False::True::False => rewrite(stops(i, m, bv_omega), win.one(i, bv_omega),
-            cut_three(s.byte_within(n, i), w.drop((i + 1).toNat()), h4, h5, rewrite(win.left(i + 1), bv_omega)), refl),
-        // Four bytes.
-        True::False::False::False::False::True::True::True => rewrite(stops(i, m, bv_omega), win.four(i, bv_omega), four, BitVec::eq_bit_of_eq, refl),
-        True::False::False::False::False::True::True::False => rewrite(ih(w, m, win, bv_omega), win.four(i, bv_omega), four, BitVec::eq_bit_of_ne, refl),
-        True::False::False::False::False::True::False => rewrite(stops(i, m, bv_omega), win.one(i, bv_omega),
-            cut_four(s.byte_within(n, i), w.drop((i + 1).toNat()), h5, h6, rewrite(win.left(i + 1), bv_omega)), refl),
-        // A lead byte past 0xF7.
-        True::False::False::False::False::False => rewrite(stops(i, m, bv_omega), win.one(i, bv_omega), past, refl),
-        // The end of the window: every byte was a character.
+        True::True => rewrite(ih(w, m, win, bv_omega), win.takes_one(i, bv_omega, by assumption()), refl),
+        True::False::True::True => rewrite(ih(w, m, win, bv_omega), win.takes_two(i, bv_omega, by assumption()), refl),
+        True::False::True::False => rewrite(stops(i, m, bv_omega), win.short_two(i, bv_omega, by assumption(), bv_omega), refl),
+        True::False::False::True::True => rewrite(ih(w, m, win, bv_omega), win.takes_three(i, bv_omega, by assumption()), refl),
+        True::False::False::True::False => rewrite(stops(i, m, bv_omega), win.short_three(i, bv_omega, by assumption(), bv_omega), refl),
+        True::False::False::False::True::True => rewrite(ih(w, m, win, bv_omega), win.takes_four(i, bv_omega, by assumption()), refl),
+        True::False::False::False::True::False => rewrite(stops(i, m, bv_omega), win.short_four(i, bv_omega, by assumption(), bv_omega), refl),
+        True::False::False::False::False => rewrite(stops(i, m, bv_omega), win.refused(i, bv_omega, by assumption(), by assumption(), by assumption(), by assumption()), refl),
         False => rewrite(BitVec::eq_bit_of_eq(64, i, m, bitvec_omega::word_eq(64, i, m, bv_omega)), win.ends(i, bv_omega), refl),
     }
 }

@@ -2355,6 +2355,53 @@ theorem layout_iff_p_hyp(p, q: Bool, P, Q: Type, fp: p = True → P, gp: P → p
 theorem layout_false(h: False = True): False { absurd(h) }
 theorem layout_false_hyp(h: False): False = True { false_elim(h) }
 
+// A word chosen by a test, `c.select(a, b) = k` (an `if c { a } else { b }`
+// converts with it: both are one `match` on `c`), is the statement
+// `(c ∧ a = k) ∨ (¬c ∧ b = k)`: `pc`, `pa`, `pb` are the verdicts of
+// `c = True`, `a = k` and `b = k`, each bridged as the parts of a
+// connective are. The arms are passed as terms, never as a function of the
+// test, so a nested `if` is checked once and not once per level.
+theorem layout_ite(T: Type, c: Bool, a, b, k: T, pc, pa, pb: Bool, fc: pc = True → c = True, gc: c = True → pc = True,
+    fa: pa = True → a = k, fb: pb = True → b = k, h: ((pc && pa) || (!pc && pb)) = True): c.select(a, b) = k {
+    let parts: ((pc && pa) = True) ∨ ((!pc && pb) = True) = layout_or(pc && pa, !pc && pb, (pc && pa) = True, (!pc && pb) = True, λ e => e, λ e => e, h);
+    match parts {
+        Inl(l) => rewrite(fc(layout_bool_and_l(pc, pa, l)), fa(layout_bool_and_r(pc, pa, l))),
+        Inr(r) => match e: c {
+            True => false_elim(layout_false(rewrite(gc(e), in := layout_bool_and_l(!pc, pb, r)))),
+            False => fb(layout_bool_and_r(!pc, pb, r)),
+        },
+    }
+}
+
+theorem layout_ite_hyp(T: Type, c: Bool, a, b, k: T, pc, pa, pb: Bool, fc: pc = True → c = True, gc: c = True → pc = True,
+    ga: a = k → pa = True, gb: b = k → pb = True, h: c.select(a, b) = k): ((pc && pa) || (!pc && pb)) = True {
+    match e: c {
+        True => rewrite(gc(e), ga(h), refl),
+        False => match ep: pc {
+            True => false_elim(layout_false(rewrite(e, in := fc(ep)))),
+            False => rewrite(gb(h), refl),
+        },
+    }
+}
+
+// `layout_ite` and its converse at the verdicts as the tactic holds them,
+// each part's predicate evaluated on the stream: the disjunction's verdict
+// is then written exactly as the statement's own, and the kernel meets
+// the two without evaluating either.
+theorem layout_ite_p(T: Type, c: Bool, a, b, k: T, cq, aq, bq: BVPred, bits: Nat → Bool,
+    fc: cq.eval(bits) = True → c = True, gc: c = True → cq.eval(bits) = True,
+    fa: aq.eval(bits) = True → a = k, fb: bq.eval(bits) = True → b = k,
+    h: POr(PAnd(cq, aq), PAnd(PNot(cq), bq)).eval(bits) = True): c.select(a, b) = k {
+    layout_ite(T, c, a, b, k, cq.eval(bits), aq.eval(bits), bq.eval(bits), fc, gc, fa, fb, h)
+}
+
+theorem layout_ite_p_hyp(T: Type, c: Bool, a, b, k: T, cq, aq, bq: BVPred, bits: Nat → Bool,
+    fc: cq.eval(bits) = True → c = True, gc: c = True → cq.eval(bits) = True,
+    ga: a = k → aq.eval(bits) = True, gb: b = k → bq.eval(bits) = True,
+    h: c.select(a, b) = k): POr(PAnd(cq, aq), PAnd(PNot(cq), bq)).eval(bits) = True {
+    layout_ite_hyp(T, c, a, b, k, cq.eval(bits), aq.eval(bits), bq.eval(bits), fc, gc, ga, gb, h)
+}
+
 // A closed side condition, `(o + w).leb(K) = True` at numerals, by evaluation.
 theorem layout_ok(): True = True { refl }
 

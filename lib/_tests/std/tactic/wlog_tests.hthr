@@ -75,8 +75,7 @@ theorem swap_not_symmetric(m, n: Nat): m + n = n + m {
     by wlog(m, n, λ a b h => h, λ a b le => a.add_comm(b))
 }
 
-// Only a local of the goal's context is abstracted.
-// expect-error: only a local of the goal's context
-theorem not_a_local(m, n: Nat): (m + 1) + n = n + (m + 1) {
+// A point may be a term: its occurrences in the goal are abstracted.
+theorem term_point(m, n: Nat): (m + 1) + n = n + (m + 1) {
     by wlog(m + 1, n, λ a b h => sym(h), λ a b le => a.add_comm(b))
 }

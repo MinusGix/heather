@@ -5798,6 +5798,12 @@ fn check_index_expr(c: &CtorDecl, e: &Expr, ity: &IdxTy) -> R<()> {
 pub(crate) fn ty_mentions(t: &Ty, v: &str) -> bool {
     match &t.kind {
         TyKind::Eq(a, b) => expr_mentions(a, v) || expr_mentions(b, v),
+        // `occurs` reads no equation (a positivity walk has none to read), so
+        // one inside a type is looked through here: `c & 0xC0 = 0x80 ∧ …`
+        // is `And` over two equations.
+        TyKind::Named { name: n, args } => n == v || args.iter().any(|a| ty_mentions(a, v)),
+        TyKind::Fn { dom, cod, .. } => ty_mentions(dom, v) || ty_mentions(cod, v),
+        TyKind::Squash(inner) => ty_mentions(inner, v),
         _ => occurs(t, v).is_some(),
     }
 }
