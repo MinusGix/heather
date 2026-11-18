@@ -39,6 +39,9 @@ import bytes;
 // ---------------------------------------------------------------------------
 // The meaning over a record
 
+// A record's bytes, as a function a generator applies.
+fn Bytes::own({n: u64}, self s: Bytes(n)) → List<BitVec(8)> { s.bytes }
+
 // A computation's words after its span's place and its length word, which
 // the meaning over the record takes from the record.
 fn Sig::words(self s: Sig) → List<Ty> {
@@ -64,6 +67,10 @@ fn FTm::get_over(tys: Nat → RecInfo, sigs: List<Sig>) → FTm::OverSems(tys, s
 
 // The byte world, and each computation's meaning over a record.
 record BWorld { fw: FWorld, overs: FTm::OverSems(fw.w.tys, fw.fsigs) }
+
+// The byte world with the callees' meanings over a record, as a function a
+// generator applies.
+fn BWorld::of(fw: FWorld, overs: FTm::OverSems(fw.w.tys, fw.fsigs)) → BWorld { BWorld(fw, overs) }
 
 // A record answer read at another code.
 fn FTm::over_recast(tys: Nat → RecInfo, a, b: Ty, n: BitVec(64), m: Mutated<Bytes(n), a.sem(tys)>) → Mutated<Bytes(n), b.sem(tys)> {
@@ -241,4 +248,26 @@ theorem FTm::over_runs(self t: FTm, bw: BWorld, world: bw.Agrees()): (len: Nat) 
         Again(_) => λ len ok => false_elim(ok),
         Lend(_, _, _, _) => λ len ok => false_elim(ok),
     }
+}
+
+// What a generator publishes for a function of a `Bytes(n)`: the function
+// (`spec`) is its reflection's meaning over the record (`pin`, by
+// conversion), the code's function (`code`) is its byte meaning
+// (`reflects`, by conversion), and so the two agree at the record's bytes.
+theorem FTm::over_spec(self t: FTm, bw: BWorld, world: bw.Agrees(), len: Nat, ok: t.over_ok(len).IsTrue(), g: List<Ty>, env: Env(bw.fw.w.tys, g),
+    n: BitVec(64), known: FTm::word(bw.fw.w.tys, g, env, len) = n, s: Bytes(n),
+    spec: Mutated<Bytes(n), t.ty(bw.fw.w, bw.fw.fsigs, g).sem(bw.fw.w.tys)>, pin: t.over(bw, g, env, n, s) = spec,
+    code: Mutated<List<BitVec(8)>, t.ty(bw.fw.w, bw.fw.fsigs, g).sem(bw.fw.w.tys)>, reflects: t.sem(bw.fw, g, env, s.bytes) = code):
+    Over<t.ty(bw.fw.w, bw.fw.fsigs, g).sem(bw.fw.w.tys)>(n, spec, code) {
+    let ran = t.over_runs(bw, world, len, ok, g, env, n, known, s);
+    let at_spec = j(pin, λ m _ => Over<t.ty(bw.fw.w, bw.fw.fsigs, g).sem(bw.fw.w.tys)>(n, m, t.sem(bw.fw, g, env, s.bytes)), ran);
+    j(reflects, λ k _ => Over<t.ty(bw.fw.w, bw.fw.fsigs, g).sem(bw.fw.w.tys)>(n, spec, k), at_spec)
+}
+
+
+// A world whose program calls nothing that writes keeps its promise.
+theorem BWorld::agrees_alone(w: World, callees: (b: List<List<BitVec(8)>>) → Sig::Sems(w.tys, w.sigs),
+    writers: (rest: List<List<BitVec(8)>>) → FTm::Sems(w.tys, []), rest: List<List<BitVec(8)>>):
+    BWorld(FWorld(w, callees, [], writers, rest), trivial).Agrees() {
+    λ g env f place l more n known s => Over(refl, refl)
 }

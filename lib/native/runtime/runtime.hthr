@@ -2362,7 +2362,7 @@ fn runtime_held_refused<A>(name: String, why: String) → Tac<A> {
 // many spans it is lent, and the names it applies.
 record SpanWriting { name: String, q: RtQ, tys: Expr, world: World, reads: List<Expr>, read_lents: List<Nat>, writes: List<Expr>, write_sigs: List<Pair<Nat, Sig>>,
     word: Handle, bytes: Handle, ty_sem: Expr, lit: Expr, op_sem: Expr, once: Expr, answer: Expr, after: Expr, either: Expr, again: Option<Expr>,
-    byte_within: Option<Expr> }
+    byte_within: Option<Expr>, with_byte: Option<Expr> }
 
 // A code's type: a 64-bit word's by its name, any other as the code's
 // meaning.
@@ -2437,7 +2437,16 @@ fn SpanWriting::value(self cx: SpanWriting, span: Expr, env: List<Expr>, g: List
         // word: the span is the variable its place is, the outermost but
         // `2j`.
         Byte(j, i, length) => match j {
-            Zero => runtime_held_refused(cx.name, "it reads a byte of the span that holds its record"),
+            // A byte of the written span as it is: the function of a
+            // `Bytes(n)` reads its record's (a laid record's is read
+            // through its fields' accessors).
+            Zero => match cx.with_byte {
+                None => runtime_held_refused(cx.name, "it reads a byte of the span that holds its record"),
+                Some(_) => match cx.byte_within {
+                    None => runtime_held_refused(cx.name, "`List::byte_within` is not in scope (import `rt`)"),
+                    Some(within) => cx.vars(env, [length, i]).bind(λ es => pure(ap(within, Cons(span, es)))),
+                },
+            },
             Succ(_) => match env.nth(env.len() - Succ(j + j)) {
                 None => runtime_fail("`" ++ cx.name ++ "`'s reflection reads a span it is not lent"),
                 Some(s) => match cx.byte_within {
@@ -2487,6 +2496,17 @@ fn SpanWriting::written(self cx: SpanWriting, span: Expr, env: List<Expr>, g: Li
                 let x <- assume(cx.sem(sig.snd.result), "x", Some(left.ref)).or_fail("runtime: a word answered: ");
                 let rest <- cx.written(Local(left.ref), Cons(Local(x.ref), env), Cons(sig.snd.result, g), x.ref, body);
                 pure(ap(cx.after, [Blank, Blank, Blank, ap(w, es), Lam(left.ref, Lam(x.ref, rest))]))
+            },
+        },
+        // A byte stored into the written span, by a function of a
+        // `Bytes(n)`: the span after it is the store.
+        Put(i, length, v, body) => match cx.with_byte {
+            None => runtime_held_refused(cx.name, "its reflection stores a byte by itself"),
+            Some(store) => {
+                let es <- cx.vars(env, [length, i, v]);
+                let left <- assume(Hd(cx.bytes), "span", Some(under)).or_fail("runtime: a span: ");
+                let rest <- cx.written(Local(left.ref), env, g, left.ref, body);
+                pure(ap(cx.once, [Blank, Blank, ap(store, Cons(span, es)), Lam(left.ref, rest)]))
             },
         },
         // A loop's next pass: what the passes after this one are, at the
@@ -2582,7 +2602,7 @@ record SpanCounted { ty: Expr, tys: Expr, at: Expr, pass: Expr, stop: Expr, pass
 // for a function written out, its callees, with that world and that
 // function at any list of them.
 record SpanParts { rt: Expr, params: Expr, body: Expr, no_tys: Expr, world: Expr → Expr, compiled: Expr, callees: List<SpanCallee>, world_of: List<Expr> → Expr → Expr,
-    compiled_of: List<Expr> → Expr, counted: Option<SpanCounted> }
+    compiled_of: List<Expr> → Expr, counted: Option<SpanCounted>, world_parts: List<Expr> }
 
 // What a function written out is published from: its callees' tables, its
 // world and itself, each a function of the callees, its type, and the
@@ -2594,7 +2614,7 @@ record SpanWritten { reads: Expr, world: Expr, writes: Expr, compiled: List<Expr
 // that only read (each with how many spans it is lent) and the ones that
 // write, as its reflection numbers them.
 fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, reads: List<Nat>, read_sigs: List<Pair<Nat, Sig>>, writes: List<Nat>,
-    write_sigs: List<Pair<Nat, Sig>>, l: Linking, meant: Bool, more: SpanParts → Tac<List<Decl>>) → Tac<List<Decl>> {
+    write_sigs: List<Pair<Nat, Sig>>, l: Linking, meant: Bool, raw: Bool, more: SpanParts → Tac<List<Decl>>) → Tac<List<Decl>> {
     let ts <- runtime_type_handles();
     let q <- runtime_quoting(ts);
     let ftms <- runtime_file_quoting();
@@ -2634,6 +2654,12 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
     // one is (`rt_held` is then in scope).
     let held_name: String → Tac<Expr> = λ n => match meant { True => runtime_held_ref(n), False => pure(Blank) };
     let byte_within <- lookup(name_of(List::byte_within)).bind(λ c => pure(match c { Accepted(g) => Some(Global(g)), Refused(_) => None }));
+    // A function of a `Bytes(n)` stores and reads its own span's bytes.
+    let with_byte_t: Tac<Option<Expr>> = match raw {
+        False => pure(None),
+        True => lookup(name_of(List::with_byte_within)).bind(λ c => pure(match c { Accepted(g) => Some(Global(g)), Refused(_) => None })),
+    };
+    let with_byte <- with_byte_t;
     let once <- held_name("rt_held::HWorld::once");
     let answer <- held_name("rt_held::HWorld::answer");
     let after <- held_name("rt_held::HWorld::after");
@@ -2662,7 +2688,7 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
             let n = reads.len();
             let at <- runtime_held_ref("rt_held::HWorld::at");
             let cx: Option<Expr> → List<Expr> → SpanWriting = λ again es => SpanWriting(name, q, tys_e, World(RecInfo::none, sigs, Sig::sems_default(RecInfo::none, sigs)), es.take(n),
-                read_sigs.map(λ p => p.fst), es.drop(n), write_sigs, ts.word, bytes_h, ty_sem, lit, op_sem, once, answer, after, either, again, byte_within);
+                read_sigs.map(λ p => p.fst), es.drop(n), write_sigs, ts.word, bytes_h, ty_sem, lit, op_sem, once, answer, after, either, again, byte_within, with_byte);
             let reads_of: List<Expr> → Expr = λ es => runtime_file_callees_of(lent_callees, typed_once, callees_nil, tys_e, q, es.take(n), sigs, read_sigs.map(λ p => p.fst));
             let reads_t <- runtime_over_callees(cs, "`" ++ name ++ "`'s reading callees", λ es _ => pure(reads_of(es)));
             let world_t <- runtime_over_callees(cs, "`" ++ name ++ "`'s world", λ es _ => pure(ap(world_of, [tys_e, sigs_e, ap(reads_of(es), [no_file])])));
@@ -2942,7 +2968,7 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
     let beside <- more(SpanParts(rt_e, params_e, body_e, Ty::quotes([], q), λ rest => ap(fworld, [world_e, reads_e, fsigs_e, writes_e, rest]), fe,
         match out { None => [], Some(o) => o.callees },
         λ es rest => match out { None => Blank, Some(o) => ap(fworld, [ap(o.world, es), ap(o.reads, es), fsigs_e, ap(o.writes, es), rest]) },
-        λ es => match out { None => fe, Some(o) => o.compiled(es) }, counted_e));
+        λ es => match out { None => fe, Some(o) => o.compiled(es) }, counted_e, [world_e, reads_e, writes_e]));
     pure(written.append(head).append(pin).append(made).append(tail).append(beside))
 }
 
@@ -2964,7 +2990,7 @@ fn runtime_span(name: String, f: GlobalRef) → Tac<List<Decl>> {
         True => match measured.and(rfun.params.len().leb(rfun.lent + rfun.lent)) {
             True => runtime_span_refused(name, "a loop over a span moves at least one word from pass to pass"),
             False => runtime_link(4096, k, [LinkFrame(f.id, name, table, table, Some(r.funs.len()))], Linking([], [], [], [])).bind(λ l =>
-                runtime_span_publish(name, f, rfun, measured, r.funs, read_sigs, r.cfuns, write_sigs, l, False, λ _ => pure([]))),
+                runtime_span_publish(name, f, rfun, measured, r.funs, read_sigs, r.cfuns, write_sigs, l, False, False, λ _ => pure([]))),
         },
     }
 }
@@ -3608,8 +3634,126 @@ fn runtime_record(name: String, f: GlobalRef) → Tac<List<Decl>> {
         True => match r.measured.and(r.operands.leb(r.spans + r.spans)) {
             True => runtime_held_refused(name, "a loop moves at least one word from pass to pass"),
             False => runtime_link(4096, k, [LinkFrame(f.id, name, table, table, Some(r.funs.len()))], Linking([], [], [], [])).bind(λ l =>
-                runtime_span_publish(name, f, rfun, r.measured, r.funs, read_sigs, r.cfuns, write_sigs, l, True, λ parts => runtime_held_more(name, f, r, parts))),
+                runtime_span_publish(name, f, rfun, r.measured, r.funs, read_sigs, r.cfuns, write_sigs, l, True, False, λ parts => runtime_held_more(name, f, r, parts))),
         },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A function of a `Bytes(n)` (docs/native/span-record-design.md)
+
+fn runtime_bytes_ref(name: String) → Tac<Expr> {
+    lookup(name).or_fail("runtime: `" ++ name ++ "` is not in scope (a runtime fn of a `Bytes(n)` needs `import rt_bytes; import rt_held;` and the modules they import): ")
+        .bind(λ g => pure(Global(g)))
+}
+
+fn runtime_bytes_refused<A>(name: String, why: String) → Tac<A> {
+    fail("`" ++ name ++ "` cannot be a runtime fn of a `Bytes(n)`: " ++ why, [])
+}
+
+// Whether a function's parameters begin `{n: u64}, s: Bytes(n)`.
+fn runtime_of_bytes(f: GlobalRef) → Tac<Bool> {
+    let bytes <- lookup("bytes::Bytes");
+    match bytes {
+        Refused(_) => pure(False),
+        Accepted(bt) => infer(Global(f)).bind(λ c => match c {
+            Refused(_) => pure(False),
+            Accepted(t) => view(t).bind(λ v => match v {
+                HPi(_) => open(t, "n").bind(λ oc => match oc {
+                    Refused(_) => pure(False),
+                    Accepted(o) => view(o.body).bind(λ v2 => match v2 {
+                        HPi(dom) => view(dom).bind(λ dv => match dv { HGlobal(g, _, _) => pure(g.id.same(bt.id)), _ => pure(False) }),
+                        _ => pure(False),
+                    }),
+                }),
+                _ => pure(False),
+            }),
+        }),
+    }
+}
+
+// The parameters of a function's type that are words, by their locals:
+// the others are proofs (squashed conditions), which the code does not take.
+fn runtime_bytes_words(xs: List<LocalRef>) → Tac<List<LocalRef>> {
+    match xs {
+        Nil => pure([]),
+        Cons(x, rest) => infer(Local(x)).or_fail("runtime: a parameter's type: ").bind(λ t => view(t).bind(λ v =>
+            runtime_bytes_words(rest).bind(λ more => pure(match v { HOther => more, _ => Cons(x, more) })))),
+    }
+}
+
+// The theorem of a function of a `Bytes(n)`: at every record, the function
+// and the code's function at the record's bytes and the length word `n`
+// agree (`FTm::over_spec`): the function is
+// its reflection's meaning over the record, by conversion.
+fn runtime_bytes_more(name: String, f: GlobalRef, rfun: FFun, measured: Bool, parts: SpanParts) → Tac<List<Decl>> {
+    let callees_none: Tac<True> = match parts.callees {
+        Nil => pure(trivial),
+        Cons(_, _) => runtime_bytes_refused(name, "it calls another runtime fn, which is not taken over a `Bytes(n)` yet"),
+    };
+    let _ <- callees_none;
+    let straight: Tac<True> = match measured { False => pure(trivial), True => runtime_bytes_refused(name, "a loop's theorem over the record is not generated yet") };
+    let _ <- straight;
+    let ts <- runtime_type_handles();
+    let over_spec <- runtime_bytes_ref("rt_bytes::FTm::over_spec");
+    let agrees_alone <- runtime_bytes_ref("rt_bytes::BWorld::agrees_alone");
+    let bound <- runtime_bytes_ref("rt_held::HWorld::bound");
+    let bind_onto <- runtime_global(name_of(Ty::bind_onto));
+    let bytes_of <- runtime_bytes_ref("rt_bytes::Bytes::own");
+    let rfl <- runtime_global("tactic::rfl");
+    let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
+    let buffers_h <- runtime_type_of(name_of(runtime_w_buffers));
+    let bworld_of <- runtime_bytes_ref("rt_bytes::BWorld::of");
+    let ft <- infer(Global(f)).or_fail("runtime: `" ++ name ++ "`'s type: ");
+    let arity <- rt_arity(64, ft);
+    // The function's own binders, then the rest of the file and the
+    // span's place.
+    let names: List<String> = List::range(arity).map(λ i => "p".append(decimal_name(2, i)));
+    let opened <- runtime_open_n(64, ft, names);
+    let ps = opened.fst;
+    let first = ps.head_or(LocalRef(0));
+    let n = first;
+    let s = ps.nth(1).unwrap_or(first);
+    let words <- runtime_bytes_words(ps.drop(2));
+    let last = ps.rev().head_or(first);
+    let rest <- assume(Hd(buffers_h), "rest", Some(last)).or_fail("runtime: the rest of a file: ");
+    // The span's place, which nothing reads.
+    let zero <- runtime_global(name_of(runtime_w_word));
+    let counted: Tac<True> = match rfun.params.len().same(words.len() + 2) {
+        True => pure(trivial),
+        False => runtime_bytes_refused(name, "its reflection takes other words than its parameters"),
+    };
+    let _ <- counted;
+    let fw = parts.world(Local(rest.ref));
+    let bw = ap(bworld_of, [fw, Hd(trivial_h)]);
+    let world = ap(agrees_alone, parts.world_parts.append([Local(rest.ref)]));
+    let g = ap(bind_onto, [parts.params, parts.no_tys]);
+    let env = Cons(n, words).foldl(λ acc x => ap(bound, [Blank, Blank, Local(x), acc]), ap(bound, [Blank, Blank, zero, Hd(trivial_h)]));
+    let spec = ap(Global(f), runtime_locals(ps));
+    let own = ap(bytes_of, [Local(n), Local(s)]);
+    let code = ap(parts.compiled, Cons(own, runtime_locals(Cons(n, words))));
+    let proof = ap(over_spec, [parts.body, bw, world, NatLit(words.len()), Hd(trivial_h), g, env, Local(n), ap(rfl, [Blank, Local(n)]), Local(s),
+        spec, ap(rfl, [Blank, spec]), code, ap(rfl, [Blank, code])]);
+    let stmt <- infer(proof).or_fail("runtime: `" ++ name ++ "`'s theorem over its record: ");
+    pure([Decl(AsTheorem, name ++ "::runs_bytes", runtime_params_of(ps.append([rest.ref])), Hd(stmt), proof)])
+}
+
+// A function of a `Bytes(n)`: compiled as the function of its bytes and
+// `n` that its reflection writes out, with the theorem that the two agree.
+fn runtime_bytes(name: String, f: GlobalRef) → Tac<List<Decl>> {
+    let k <- rt_known_in([], [], True);
+    let names <- rt_file_names();
+    let r <- rt_file_reflect_one(k, names, [], f.id, name);
+    let rfun = r.reflected;
+    let read_sigs <- runtime_sigs(k, r.funs);
+    let write_sigs <- runtime_span_sigs(k, names, r.cfuns);
+    let step <- lookup(name ++ "::body");
+    let measured: Bool = match step { Accepted(_) => True, Refused(_) => False };
+    let table = r.funs ++ r.cfuns;
+    match Ty::all_word64(rfun.params).and(rfun.result.is_word64()) {
+        False => runtime_bytes_refused(name, "it takes and returns 64-bit words for now, beside its record"),
+        True => runtime_link(4096, k, [LinkFrame(f.id, name, table, table, Some(r.funs.len()))], Linking([], [], [], [])).bind(λ l =>
+            runtime_span_publish(name, f, rfun, measured, r.funs, read_sigs, r.cfuns, write_sigs, l, True, True, λ parts => runtime_bytes_more(name, f, rfun, measured, parts))),
     }
 }
 
@@ -3638,5 +3782,9 @@ fn runtime(name: String) → Tac<List<Decl>> {
     let f <- runtime_ref(name);
     let writes <- runtime_writes(f);
     let laid <- runtime_of_laid(f);
-    match laid { True => runtime_record(name, f), False => match writes { True => runtime_span(name, f), False => runtime_reads(name, f) } }
+    let of_bytes <- runtime_of_bytes(f);
+    match of_bytes {
+        True => runtime_bytes(name, f),
+        False => match laid { True => runtime_record(name, f), False => match writes { True => runtime_span(name, f), False => runtime_reads(name, f) } },
+    }
 }

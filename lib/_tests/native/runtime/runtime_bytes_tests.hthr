@@ -1,0 +1,71 @@
+// Probes for `runtime fn`s of a `Bytes(n)` (lib/native/runtime/bytes.hthr,
+// docs/native/span-record-design.md): the function is compiled as the
+// function of its bytes and `n` that its reflection writes out, and
+// `f::runs_bytes` says the two agree at every record, with nothing proved
+// by hand.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import algebra;
+import omega;
+import vector;
+import bitvec_bytes;
+import nat_map;
+import list_window;
+import layout;
+import stored;
+import part;
+import laid;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import rt_file_reflect;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_run;
+import function_ir_writes;
+import function_ir_link;
+import function_ir_placeless;
+import function_ir_lower;
+import function_ir_lower_calls;
+import x86_64_asm;
+import runtime;
+import runtime_file;
+import stored_words;
+import stored_accessor;
+import rt_held;
+import rt_held_fields;
+import rt_held_reflect;
+import bytes;
+import rt_bytes;
+import rt_bytes_loop;
+
+// ---------------------------------------------------------------------------
+// Stores and reads at found indices
+
+runtime fn Bytes::copy_first({n: u64}, mut self s: Bytes(n), inside: ∥2 < s.len()∥ := bv_omega) → u64 {
+    s[2] := s[0];
+    s[1] := s[0];
+    s.len()
+}
+
+// The record's bytes after the function are the code's span after it.
+theorem copy_first_after({n: u64}, s: Bytes(n), inside: ∥2 < s.len()∥):
+    (Bytes::copy_first(s, inside := inside).after).bytes = (Bytes::copy_first::bytes(s.bytes, n)).after {
+    Bytes::copy_first::runs_bytes(n, s, inside, []).after
+}
