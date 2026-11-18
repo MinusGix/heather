@@ -33,6 +33,7 @@ import native_compile_segments;
 import native_compile_steps;
 import native_compile_frames;
 import native_compile_structured;
+import native_compile_claims;
 import function_ir_eval;
 import function_ir;
 import function_ir_lend;
@@ -784,22 +785,9 @@ theorem Target::goes_count_up(self t: Target, env: Env, d: Nat, small: Succ(d) <
     let so = layout.stack_offset();
     let ro = so + 8;
     let slots: (so + 16 <= t.r.size) = t.fits;
-    let r1 = then(p, Block([MovRI(Rbx, layout.room_at())]));
-    let r2 = then(r1, Load(WordLoad(R11, Rbx)));
-    let r3 = then(r2, Block([AddRI8(R11, BitVec::ofNat(1))]));
-    let w_r3 = r3.within_before(0, Store(WordStore(Rbx, R11)), t.program, within);
-    let w_r2 = r2.within_before(0, Block([AddRI8(R11, BitVec::ofNat(1))]), t.program, w_r3);
-    let w_r1 = r1.within_before(0, Load(WordLoad(R11, Rbx)), t.program, w_r2);
+    let run = Run(t, [], [], [], env);
+    let code = layout.build().point(Rbx, layout.room_at()).load(R11, Rbx).next(R11).store(Rbx, R11).cut().code;
     let final_post = λ (s: MachineState<X86Memory(t.r.profile)>) => Exists<Nat → BitVec(8)>(λ v => t.Based(env, Succ(d), v, s.memory)) ∧ r(s.gprs, s.memory);
-    let st2 = t.goes_store(r3, 0, WordStore(Rbx, R11), within, tree, final_post, next);
-    let a3 = λ (s: MachineState<X86Memory(t.r.profile)>) => (store_base_plain(Rbx) = True) ∧ (t.writes().writable(s.memory, read_gpr(Rbx, s.gprs), 8) ∧
-        (t.site().Resident(word_store_after(t.writes(), WordStore(Rbx, R11), s).memory) ∧ final_post(word_store_after(t.writes(), WordStore(Rbx, R11), s))));
-    let add = t.goes_block(r2, 0, [AddRI8(R11, BitVec::ofNat(1))], w_r3, tree, a3, st2);
-    let a2 = λ (s: MachineState<X86Memory(t.r.profile)>) => a3(execute_block_normal([AddRI8(R11, BitVec::ofNat(1))], s));
-    let ld = t.goes_load(r1, 0, WordLoad(R11, Rbx), w_r2, tree, a2, add);
-    let a1: MachineState<X86Memory(t.r.profile)> → Type = λ s => Exists<BitVec(64)>(λ word => (read_gpr(Rbx, s.gprs).toNat() + 8 <= Nat::pow(2, 47)) ∧
-        ((read_word(t.site().data, s.memory, read_gpr(Rbx, s.gprs)) = Some(word)) ∧ a2(word_load_after(WordLoad(R11, Rbx), word, s))));
-    let mv2 = t.goes_block(p, 0, [MovRI(Rbx, layout.room_at())], w_r1, tree, a1, ld);
     λ s here resident held => {
         let g = s.gprs;
         let m = s.memory;
@@ -820,10 +808,11 @@ theorem Target::goes_count_up(self t: Target, env: Env, d: Nat, small: Succ(d) <
         let r5: r(g5, m) = keep_g(g, g5, m, held.right, λ x not_rbx not_r11 =>
             trans(read_gpr_other(R11, x, word2, g4, not_r11), trans(read_gpr_other(R11, x, word, g3, not_r11), read_gpr_other(Rbx, x, layout.room_at(), g, not_rbx))));
         let resident3 = j(rip_r, λ a _ => t.site().Resident(t.r.profile.store(m, a, bytes)), t.store_resident(m, ro, bytes, omega(slots), resident));
-        mv2(s, here, resident, Exists(word, ⟨j(rip_r, λ a _ => a.toNat() + 8 <= Nat::pow(2, 47), read.left),
-            ⟨j(rip_r, λ a _ => read_word(t.site().data, m, a) = Some(word), read.right),
-                ⟨refl, ⟨j(rip_r, λ a _ => t.writes().writable(m, a, 8), t.writable(m, ro, 8, omega(slots))),
-                    ⟨resident3, ⟨more, keep_m(g5, m, word2, r5)⟩⟩⟩⟩⟩⟩))
+        code.goes(run, p, within, tree, final_post, next)(s, here, resident,
+            LoadsWord(word := word, low := j(rip_r, λ a _ => a.toNat() + 8 <= Nat::pow(2, 47), read.left),
+                read := j(rip_r, λ a _ => read_word(t.site().data, m, a) = Some(word), read.right),
+                after := StoresWord(plain := refl, writable := j(rip_r, λ a _ => t.writes().writable(m, a, 8), t.writable(m, ro, 8, omega(slots))),
+                    resident := resident3, after := ⟨more, keep_m(g5, m, word2, r5)⟩)))
     }
 }
 

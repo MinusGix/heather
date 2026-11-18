@@ -556,6 +556,9 @@ record Build { cx: Emission, code: Fragment, block: List<Instruction>, names: Na
 
 fn Emission::from(self cx: Emission, names: Nat) → Build { Build(cx, Skip, [], names) }
 
+// Code that reads no word and takes no label name.
+fn Layout::build(self layout: Layout) → Build { Emission(layout, [], []).from(0) }
+
 // The block being written closed.
 fn Build::cut(self b: Build) → Build {
     match b.block {
@@ -583,6 +586,7 @@ fn Build::next(self b: Build, register: Gpr) → Build { b.step(register, 1) }
 fn Build::load(self b: Build, to, at: Gpr) → Build { b.item(Load(WordLoad(to, at))) }
 fn Build::load_byte(self b: Build, to, at: Gpr) → Build { b.item(LoadByte(ByteLoad(to, at))) }
 fn Build::store_byte(self b: Build, at, from: Gpr) → Build { b.item(StoreByte(ByteStore(at, from))) }
+fn Build::store(self b: Build, at, from: Gpr) → Build { b.item(Store(WordStore(at, from))) }
 
 // A word in a register, and a register in its word's home.
 fn Build::word(self b: Build, id: Nat, register: Gpr) → Build { b.add(Fetch(id, register)) }
@@ -1084,8 +1088,7 @@ fn Prog::count_down(self p: Prog, layout: Layout) → Prog {
 // …and where it leaves, the results already in their registers: the room
 // as it was, through RBX and R11.
 fn Prog::count_up(self p: Prog, layout: Layout) → Prog {
-    then(then(then(then(p, Block([MovRI(Rbx, layout.room_at())])), Load(WordLoad(R11, Rbx))), Block([AddRI8(R11, BitVec::ofNat(1))])),
-        Store(WordStore(Rbx, R11)))
+    layout.build().point(Rbx, layout.room_at()).load(R11, Rbx).next(R11).store(Rbx, R11).onto(p).prog
 }
 
 // A call, of a procedure or of a function
