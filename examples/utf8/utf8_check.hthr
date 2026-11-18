@@ -186,9 +186,20 @@ theorem three_decides(b, c1, c2: u8, r: List<u8>):
     utf8::decode_seq(utf8::C3, b, [c1, c2, ..r]).is_some() = !utf8_three(↑b, ↑c1, ↑c2).eq_bit(0) {
     rewrite(seq3_is_some, emit_is_some, by bv_decide())
 }
+// utf8_four's verdict as one Boolean formula. bv_decide could split the
+// program's ifs itself, but four nested tests over a 21-bit code point peak
+// near three times the memory of reading this formula (the native gate's
+// 6 GiB rail; issues/utf8-example-elegance.md). The range-table program
+// (item 4 there) retires it.
+theorem four_bits(b, c1, c2, c3: u64): utf8_four(b, c1, c2, c3).eq_bit(0)
+    = !(((((c1 & 0xC0).eq_bit(0x80) && (c2 & 0xC0).eq_bit(0x80)) && (c3 & 0xC0).eq_bit(0x80))
+        && !(((b & 0x07) << 18) + ((c1 & 0x3F) << 12) + ((c2 & 0x3F) << 6) + (c3 & 0x3F)).unsigned_lt_bit(0x10000))
+        && (((b & 0x07) << 18) + ((c1 & 0x3F) << 12) + ((c2 & 0x3F) << 6) + (c3 & 0x3F)).unsigned_lt_bit(0x110000)) {
+    split_all; all_goals { refl }
+}
 theorem four_decides(b, c1, c2, c3: u8, r: List<u8>):
     utf8::decode_seq(utf8::C4, b, [c1, c2, c3, ..r]).is_some() = !utf8_four(↑b, ↑c1, ↑c2, ↑c3).eq_bit(0) {
-    rewrite(seq4_is_some, emit_is_some, by bv_decide())
+    rewrite(four_bits, seq4_is_some, emit_is_some, by bv_decide())
 }
 
 // ---------------------------------------------------------------------------

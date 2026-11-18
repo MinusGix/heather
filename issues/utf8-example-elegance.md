@@ -75,3 +75,12 @@ classify a lead byte separately).
   binder `short: r3.len() + 3 < 3`), and a block in a deep-pattern arm turns
   the match into one the termination guard refuses ("a deep pattern is not
   available in this `match`") though the function does not recurse.
+- 2026-11-18: `by bv_decide()` splitting `utf8_four`'s four nested ifs over a
+  21-bit code point peaked at 6.4 GiB in `compile-x86` (the native gate's
+  rail is 6 GiB; latent since #787, where the native test was not re-run).
+  Stating the verdict as one Boolean formula first (`four_bits`, by
+  `split_all; all_goals { refl }`) brings it to the file's 2.2 GiB
+  baseline; `three_decides` alone peaks at 5.3 GiB. The split is the cost,
+  not the bit-blast: a bv_decide that reads a program's ifs as
+  `ite` without splitting them would retire `four_bits` (item 2), and the
+  range-table program (item 4) has no nested arithmetic tests to split.

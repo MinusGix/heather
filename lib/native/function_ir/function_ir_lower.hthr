@@ -355,7 +355,6 @@ fn Option::All<A>(self o: Option<A>, P: A → Type) → Type {
     match o { None => True, Some(a) => P(a) }
 }
 
-
 // An option known to be `Some` is `Some` of what it holds: how a value is
 // named once and its equation had without evaluating it twice.
 theorem Option::some_get<A>(self o: Option<A>): (present: o.is_some().IsTrue()) → o = Some(o.get(present)) {

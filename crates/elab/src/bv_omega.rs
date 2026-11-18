@@ -429,12 +429,12 @@ impl<'a> Walk<'a> {
                 return Ok(());
             };
             let ns = self.literal(n).map(|n| n.to_string()).unwrap_or(ns);
-            (ns, es, x.clone())
+            (ns, es, (*x).clone())
         } else if let Some((args, n, extra)) =
             WIDENINGS.iter().find_map(|(name, n, extra)| named_args(self.elab, word, name).map(|args| (args, *n, *extra)))
         {
             let [x] = args.as_slice() else { return Ok(()) };
-            (n.to_string(), extra.to_string(), x.clone())
+            (n.to_string(), extra.to_string(), (*x).clone())
         } else {
             return Ok(());
         };
