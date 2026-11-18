@@ -1537,9 +1537,10 @@ member is checked).
 ### 23.4 A test of several conjuncts, and invariants
 
 The insertion sort's inner loop is
-`while 0 < j && key < s[j - 1] invariant j <= i ∧ i < s.len() decreases
+`while 0 < j && key < s[j - 1] invariant j <= i decreases
 j.toNat() { s[j] := s[j - 1]; j := j - 1; }`
-(`docs/native/span-record-design.md`).
+(`docs/native/span-record-design.md`); its `i < s.len()` is a fact it is
+given (§23.5).
 
 - **`&&` and `||` bind looser than the relations** (`<`, `<=`, `≈`, `≠`)
   and tighter than `=` (Minus, 2026-11-17): `0 < j && key < b` is a
@@ -1575,7 +1576,44 @@ j.toNat() { s[j] := s[j - 1]; j := j - 1; }`
   replaces (`at_result`): one span for every read made the dot-receiver
   cache answer a `.len()` with the wrong receiver.
 
-### 23.5 Not built
+### 23.5 Facts a loop cannot change are given to it
+
+A loop is given, beside its invariant, each fact known where it starts
+that it cannot change (Minus, 2026-11-17: invariants implicit where they
+can be, layer 1 of three; the second, guessed facts kept where one round
+preserves them, is not planned yet). `Lift::free_facts` collects them:
+
+- **What is known**: the test of each `True` arm the loop sits under (an
+  outer loop's `i < s.len()`, an `if`'s test; `Lift::known`, pushed by
+  `Lift::expr` at a match on `decide_bit<P>()`, conjunct by conjunct), and
+  each fact in scope, a local or parameter of type `∥P∥` (an outer
+  loop's invariant, a fact an earlier loop keeps, a hypothesis).
+- **What it cannot change**: a fact naming no local the loop assigns,
+  none rebound since the fact became known, and only locals whose type
+  the lifter recovers. The receiver of a `mut self` loop is named only as
+  `r.len()`, and only where its type takes a value index (`Bytes(n)`): a
+  record carrying its length answers it from the index, which a store
+  does not change, as the receiver keeps its type.
+- **How it is given**: as a squashed parameter `__freeN_k: ∥P∥` after the
+  invariant's (after the count, for a `for` over words), found by
+  `bv_omega` at the entry. At the recursion it is passed by name, or,
+  where it names the receiver's length, found again by a `have` at the
+  end of the body (the store's receiver is a new term). No `#keeps`
+  theorem is made for it: the code after the loop knows it already.
+- **Not under a prefix generator** (`runtime fn`): the generator reflects
+  the lifted loops as programs and has no parameter that is a proof yet,
+  so a `runtime fn`'s loops are given nothing they do not state
+  (`Elaborator::elab_loop_family`, from `scope.loop_methods`).
+
+A test about a local the loop assigns is not given even where it stays
+true (`j < s.len()` while `j` counts down): the loop states it as an
+invariant. The probes (`runtime_lifted_loops_tests.hthr`): the sort with
+`invariant j <= i` alone; `Bytes::add_earlier`, a `for` in a `for`
+reading `s[i]` and `s[j]` with no invariant at all; and
+`Bytes::clear_below`, refused for want of `j < s.len()`, beside
+`clear_below_kept`, which states it.
+
+### 23.6 Not built
 
 - The negated test after the loop (`¬(0 < j && key < s[j - 1])`), and an
   invariant that is not about words (the stopping case is closed by
@@ -1586,6 +1624,10 @@ j.toNat() { s[j] := s[j - 1]; j := j - 1; }`
 - A loop's state of two locals besides the receiver, or of two locals in
   a plain loop: `f#State` is a record, which the generator has no layout
   for (refused with that reason).
+- An `if` whose arm stores into the receiver inside a lifted loop
+  checks, but slowly (a running maximum over `Bytes(n)` in tens of
+  seconds, where the same loops without the `if` take a few):
+  `issues/store-under-if-in-lifted-loop-cost.md`.
 - A byte (`u8`) local captured by a loop in a function that writes a
   span: such a function's code takes 64-bit words
   (`issues/runtime-repr-narrow-words.md`), so the probes carry the key

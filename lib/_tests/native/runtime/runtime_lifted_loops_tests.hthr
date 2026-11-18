@@ -106,7 +106,9 @@ theorem sum_below_5(): sum_below(5) = 10 { refl }
 // A span that carries its length (docs/native/span-record-design.md): an
 // element is read and stored with a found proof that its index is inside,
 // and a loop states what it keeps (`invariant`), which its body reads and
-// the code after it reads at the loop's result. Not yet a `runtime fn`.
+// the code after it reads at the loop's result; what a loop cannot change
+// (an outer loop's test, a fact in scope) it is given without stating it.
+// Not yet a `runtime fn`.
 
 record Bytes(n: u64) { bytes: List<u8>, sized: bytes.len() = n.toNat() }
 
@@ -124,7 +126,7 @@ fn Bytes::sort({n: u64}, mut self s: Bytes(n)) → u64 {
     for i in 0..s.len() {
         let key: u8 = s[i];
         let mut j = i;
-        while 0 < j && key < s[j - 1] invariant j <= i ∧ i < s.len() decreases j.toNat() {
+        while 0 < j && key < s[j - 1] invariant j <= i decreases j.toNat() {
             s[j] := s[j - 1];
             j := j - 1;
         }
@@ -135,6 +137,22 @@ fn Bytes::sort({n: u64}, mut self s: Bytes(n)) → u64 {
 
 theorem sort_sorts(): Bytes::sort(Bytes([3, 1, 2, 0, 2], refl), n := 5).after.bytes = [0, 1, 2, 2, 3] { refl }
 
+// Each byte plus all those before it, as they are when it is reached. The
+// inner loop reads and stores `s[i]`, which is inside by the outer loop's
+// test `i < s.len()`, and reads `s[j]`, by its own test `j < i` beside
+// that one: a loop is given the facts it cannot change, with no
+// `invariant` naming them.
+fn Bytes::add_earlier({n: u64}, mut self s: Bytes(n)) → u64 {
+    for i in 0..s.len() {
+        for j in 0..i {
+            s[i] := s[i] + s[j];
+        }
+    }
+    n
+}
+
+theorem add_earlier_runs(): Bytes::add_earlier(Bytes([1, 2, 3, 4], refl), n := 4).after.bytes = [1, 3, 7, 15] { refl }
+
 // Without `j <= i` kept, the store after the loop has no proof that `j` is
 // inside.
 // expect-error: did not give
@@ -142,7 +160,7 @@ fn Bytes::sort_unkept({n: u64}, mut self s: Bytes(n)) → u64 {
     for i in 0..s.len() {
         let key: u8 = s[i];
         let mut j = i;
-        while 0 < j && key < s[j - 1] invariant j <= i ∧ i < s.len() decreases j.toNat() {
+        while 0 < j && key < s[j - 1] invariant j <= i decreases j.toNat() {
             s[j] := s[j - 1];
             j := j - 1;
         }
@@ -150,6 +168,27 @@ fn Bytes::sort_unkept({n: u64}, mut self s: Bytes(n)) → u64 {
     }
     n
 }
+
+// A test about a local the loop assigns is not passed on: `j < s.len()`
+// holds where the loop starts, but only the loop can say that it keeps it.
+// expect-error: did not give
+fn Bytes::clear_below({n: u64}, mut self s: Bytes(n), k: u64) → u64 {
+    let mut j = k;
+    if j < s.len() {
+        while 0 < j decreases j.toNat() { s[j] := 0; j := j - 1; }
+    }
+    j
+}
+
+fn Bytes::clear_below_kept({n: u64}, mut self s: Bytes(n), k: u64) → u64 {
+    let mut j = k;
+    if j < s.len() {
+        while 0 < j invariant j < s.len() decreases j.toNat() { s[j] := 0; j := j - 1; }
+    }
+    j
+}
+
+theorem clear_below_runs(): Bytes::clear_below_kept(Bytes([1, 2, 3, 4], refl), 2, n := 4).after.bytes = [1, 0, 0, 4] { refl }
 
 // ---------------------------------------------------------------------------
 // Refused, each by its reason.
