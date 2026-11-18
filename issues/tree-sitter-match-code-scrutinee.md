@@ -1,10 +1,10 @@
 ---
 title: Parse an ordinary match on a variable named code in Tree-sitter
-status: open
+status: closed
 labels: [tooling,editor,syntax]
 area: language
 created: 2026-09-14
-updated: 2026-09-14
+updated: 2026-11-18
 ---
 
 The whole-library Tree-sitter corpus reports an ERROR at zero-based rows
@@ -22,3 +22,7 @@ Reproduce from `tree-sitter-heather`:
 
 Resolve the head-expression/quotation ambiguity while preserving actual
 `code { expression }` quotations. Add this ordinary scrutinee as a corpus case.
+
+## Log
+
+- 2026-11-18: Done 2026-11-18: x86_64_call_summary.hthr parses with the current grammar (the whole-library parse in scripts/check-tree-sitter is clean), and the ordinary `match code { … }` scrutinee is the corpus case "Contextual names in head position".

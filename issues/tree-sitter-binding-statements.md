@@ -1,10 +1,10 @@
 ---
 title: Regenerate the tree-sitter parser for binding statements and `varies`
-status: open
+status: closed
 labels: [tooling,editor]
 area: infrastructure
 created: 2026-11-01
-updated: 2026-11-06
+updated: 2026-11-18
 ---
 
 `tree-sitter-heather/grammar.js` and `syntax-inventory.json` learned
@@ -26,3 +26,4 @@ regeneration; add a corpus case for it too.
 
 - 2026-11-02: `⊓` (the meet, multiplicative rung) joined `grammar.js`, the inventory and both `highlights.scm` on 2026-11-02 and waits on the same regeneration. `tree-sitter-cli` installs in the cloud container now (`npm install` in `tree-sitter-heather/` succeeded), but `tree-sitter generate` stops on the current `grammar.js` before reaching the new symbol: `Unresolved conflict for symbol sequence: 'generate' '{' if_expression • '}'`, between `statement_form` and `_expression` (the statement `if` the imperative-statements round added). That conflict needs a precedence or a `conflicts` entry first.
 - 2026-11-06: `src/parser.c` regenerated with the integer-operator-symbols round: the `generate { if … }` conflict is a `conflicts` entry plus `prec.dynamic(-1)` on `statement_form`, so a block's last `if`/`match` is its value as in the compiler (the corpus case "Explicit calls and records in types" passes again). `<-`/`←` joined both `highlights.scm`. Still open: corpus cases for binding statements and `varies`, and 13 library files that do not parse with the regenerated grammar (unchanged by that round): native_compile_correct, function_ir_pass, native_compile_segments, native_compile_pass, rt_io, rt_reflect, linux_world, mono, and the tests imperative_statements, binding_statements, recursion_binder, rt_io, linux_world.
+- 2026-11-18: Done 2026-11-18: corpus cases for binding statements, the nested bind (also as a `match <-` scrutinee) and `varies` are in test/corpus/statements.txt, with a differential fixture the compiler parses (test/fixtures/positive/statements-and-places.hthr). The same round taught the grammar `mut` parameters, place assignments (`x.f := e`, `x.f[i] := e`), statement bodies ending in a statement, relations in `let` annotations, parenthesized scrutinees, record members, unnamed constructor fields, qualified constructor patterns, operator defaults and `let code`; every checked `.hthr` under lib/, crates/ and the showcase parses again.

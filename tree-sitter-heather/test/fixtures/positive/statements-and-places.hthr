@@ -1,0 +1,16 @@
+fn f() -> M<Nat> { let x <- get(); let y ← get(); put(x); match <- view(y) { Some(z) => pure(z), None => pure(0) } }
+runtime fn List::put(mut self span: List<u8>, i: u64, mut io: Io, mut s: S, mut j: u64) -> u64 {
+  s.hash := [0x6a09e667, 0xbb67ae85];
+  s.working[7 - i] := s.working[6 - i];
+  j := j - 1;
+  span := span.put_at(i)
+}
+fn g(mut n: Nat, mut c: C) -> Nat { for i in 0..n { c.say(i); } while n < 3 { n := n + 1; } n }
+theorem t(n: Nat): X { let p: n <= n + 1 = omega; let q: (k: Nat) → k < n → P(k) = λ k h => h; q }
+fn h(b: Bool, n: Nat) -> Nat { match (match n { Zero => True, Succ(_) => False }) { True => 0, False => if b → n = 0 { 1 } else { 2 } } }
+record Target::ArgAt(self t: Target, cap: Nat) { fits: cap = cap }
+inductive Tree { Leaf, Node(Tree, Nat, Tree), Given(j: Nat) }
+record Hom<A>(map: A → A, lt: A → A → Type := <, add: A → A → A := +) { }
+fn k(s: Step) -> Nat { match s { Step::True => 0, Step::False => 1 } }
+inductive Wrap<F> varies F { Mk(F) }
+meta fn depth(x: Code(g |- Nat)) -> Code(g |- Nat) { let code k = x; let code = x; x }

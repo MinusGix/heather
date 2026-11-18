@@ -144,7 +144,7 @@ module.exports = grammar({
     ),
 
     record_declaration: $ => seq(
-      'record', field('name', $.identifier), optional($.type_parameters),
+      'record', field('name', $._qualified_name), optional($.type_parameters),
       optional($.value_parameters), optional($.varies_clause), field('body', $.field_list),
     ),
 
@@ -256,12 +256,15 @@ module.exports = grammar({
     ),
     parameter_run: $ => seq(
       commaSep1($.parameter_name), ':', field('type', $._expression),
-      optional(seq(':=', choice('infer', field('default', $._expression)))),
+      // A lone operator symbol is a designation reference, as in an argument list.
+      optional(seq(':=', choice('infer', field('default', choice($.operator, $._expression))))),
     ),
     // A binder's name is a plain identifier even when it is a contextual
     // word: after `(` in a type, `(j: Nat) →` could still begin `j(…)`, so
     // the lexer reads the word and the name has to accept it.
-    parameter_name: $ => seq(optional('self'), field('name', choice($.identifier, ...contextualWords($))), optional(seq('as', $.operator))),
+    // `mut x: T`, `mut self x: T` (docs/language/sequencing-surface-design.md
+    // §8.2): the body may reassign `x`.
+    parameter_name: $ => seq(optional('mut'), optional('self'), field('name', choice($.identifier, ...contextualWords($))), optional(seq('as', $.operator))),
     binder_group: $ => seq('(', commaSep1($.parameter_run), ')'),
     implicit_binder_group: $ => seq('{', commaSep1($.parameter_run), '}'),
 
@@ -286,11 +289,12 @@ module.exports = grammar({
       field('name', $.identifier), optional($.field_parameters),
       optional(seq(':', field('result', $._expression))),
     ),
-    field_parameters: $ => seq('(', commaSep($.field), optional(','), ')'),
+    // A constructor's fields may be unnamed: `TNode(TopTree, Nat, TopTree)`.
+    field_parameters: $ => seq('(', commaSep(choice($.field, field('type', $._expression))), optional(','), ')'),
     field_list: $ => seq('{', commaSep($.field), optional(','), '}'),
     field: $ => seq(
-      field('name', $.identifier), ':', field('type', $._expression),
-      optional(seq(':=', field('default', $._expression))),
+      field('name', choice($.identifier, ...contextualWords($))), ':', field('type', $._expression),
+      optional(seq(':=', field('default', choice($.operator, $._expression)))),
     ),
 
     instance_body: $ => seq('{', choice(
@@ -301,26 +305,29 @@ module.exports = grammar({
     repr_clause_block: $ => seq('{', commaSep($.repr_clause), optional(','), '}'),
     repr_clause: $ => seq(optional('mk'), field('name', $.identifier), ':=', field('value', $._expression)),
 
-    block: $ => choice(
-      seq('{', '}'),
-      seq('{', repeat(choice($.let_statement, $.have_statement, $.cases_statement, $.expression_statement, $.assignment_statement, $.statement_form, $.exit_statement)), choice(
+    block: $ => seq('{',
+      repeat(choice($.let_statement, $.have_statement, $.cases_statement, $.expression_statement, $.assignment_statement, $.statement_form, $.exit_statement)),
+      optional(choice(
         $.goal_combinators,
         seq(choice($.split_statement, field('result', $._expression)), repeat($.on_statement)),
-      ), '}'),
-      // A statement body ends in a statement and has no result
-      // (docs/language/sequencing-surface-design.md §4).
-      seq('{', repeat(choice($.let_statement, $.have_statement, $.cases_statement, $.expression_statement, $.assignment_statement, $.statement_form, $.exit_statement)),
-        choice(seq(field('name', $.identifier), ':=', field('value', $._expression)), $.statement_form,
-          'break', 'continue', seq('return', field('value', $._expression))), '}'),
-    ),
+        // A statement body ends in a statement and has no result
+        // (docs/language/sequencing-surface-design.md §4); its last
+        // assignment may leave off the `;`.
+        seq(field('name', $._place), ':=', field('value', $._expression)),
+        'break', 'continue', seq('return', field('value', $._expression)),
+      )),
+      '}'),
     // `let x = e;`, and the binding statement `let x <- e;` (`←` too,
     // docs/language/sequencing-surface-design.md §3.1).
     let_statement: $ => seq(
-      'let', optional('mut'), choice(field('name', $.identifier), $.destructure_pattern),
+      // `let code x = e;` is the surface letbox (surface-v0 §4).
+      'let', optional(choice('mut', 'code')), choice(field('name', choice($.identifier, ...contextualWords($))), $.destructure_pattern),
       optional(seq(':', field('type', $._annotation_type))), choice('=', '<-', '←'), field('value', $._expression), ';',
     ),
     // `x := e;` reassigns a `let mut` local (§4).
-    assignment_statement: $ => seq(field('name', $.identifier), ':=', field('value', $._expression), ';'),
+    // `x.f := e` and `x.f[i] := e` assign a field or an element of one (§20, §21).
+    assignment_statement: $ => seq(field('name', $._place), ':=', field('value', $._expression), ';'),
+    _place: $ => choice($.identifier, $.contextual_identifier, $.member_expression, $.index_expression),
     // A statement `if`/`match`: its bodies are statements, and it needs no
     // `;` (§5.1). A block's *last* `if`/`match` reads both ways; the
     // compiler takes it as the block's value, so the statement reading loses
@@ -385,7 +392,7 @@ module.exports = grammar({
       // words have to be ordinary names here too — `match code { … }` is an
       // ordinary match on a variable named `code`.
       $.identifier, $.contextual_identifier, $.qualified_identifier, $.number, $.character, $.string, $.byte_string, $.byte_character, $.hole, $.argument_slot,
-      $.builtin_type, $.universe, seq('(', $._head_expression, ')'), $.vector_expression,
+      $.builtin_type, $.universe, $.parenthesized_expression, $.vector_expression,
       $.anonymous_constructor_expression,
       $.boolean_reflection_expression,
       $.explicit_call_expression,
@@ -394,7 +401,10 @@ module.exports = grammar({
       $.head_propagation_expression,
       $.head_inverse_expression,
       $.head_prefix_expression, $.head_binary_expression,
+      alias($.head_bind_expression, $.bind_expression),
     ),
+    // `match <- view(w) { … }`: a nested bind as the scrutinee.
+    head_bind_expression: $ => prec.right(0, seq(choice('<-', '←'), field('value', $._head_expression))),
     head_propagation_expression: $ => prec.left(PREC.POSTFIX, seq($._head_expression, token.immediate('?'))),
     head_inverse_expression: $ => prec.left(PREC.POSTFIX, seq($._head_expression, '⁻¹')),
     head_call_expression: $ => prec.left(PREC.POSTFIX, seq($._head_expression, $.argument_list)),
@@ -406,6 +416,8 @@ module.exports = grammar({
     head_prefix_expression: $ => prec(PREC.PREFIX, seq(choice('-', '!', '~', '¬', '↑'), $._head_expression)),
     head_binary_expression: $ => choice(
       ...headBinary($, ['↔', '<->'], PREC.IFF, 'right'),
+      // `if b → n = 0 { … }`: an implication as a test.
+      ...headBinary($, ['->', '→'], PREC.ARROW, 'right'),
       ...headBinary($, ['∨'], PREC.OR, 'right'),
       ...headBinary($, ['∧'], PREC.AND, 'right'),
       ...headBinary($, ['='], PREC.COMPARE, 'left'),
@@ -473,7 +485,7 @@ module.exports = grammar({
       field('value', $._type_atom), '[', field('index', $._expression), ']',
     )),
     declaration_function_type: $ => prec.right(PREC.ARROW, seq(
-      choice($.binder_group, $.implicit_binder_group, $._type_atom), choice('->', '→'), $._declaration_type,
+      choice($.binder_group, $.implicit_binder_group, $._declaration_type), choice('->', '→'), $._declaration_type,
     )),
     declaration_binary_type: $ => choice(
       ...typeBinary($, ['↔', '<->'], PREC.IFF, 'right'),
@@ -514,12 +526,15 @@ module.exports = grammar({
       $.match_expression,
     ),
     annotation_function_type: $ => prec.right(PREC.ARROW, seq(
-      choice($.binder_group, $.implicit_binder_group, $._type_atom), choice('->', '→'), $._annotation_type,
+      choice($.binder_group, $.implicit_binder_group, $._annotation_type), choice('->', '→'), $._annotation_type,
     )),
     annotation_binary_type: $ => choice(
       ...typeBinary($, ['↔', '<->'], PREC.IFF, 'right', $._annotation_type),
       ...typeBinary($, ['∨'], PREC.OR, 'right', $._annotation_type),
       ...typeBinary($, ['∧'], PREC.AND, 'right', $._annotation_type),
+      // Only `=` ends the annotation; the other relations stay in it
+      // (`let p: a <= b = omega;`).
+      ...typeBinary($, ['≠', '≈', '<=', '<'], PREC.RELATION, 'left', $._annotation_type),
       ...typeBinary($, ['||'], PREC.BOOL_OR, 'left', $._annotation_type),
       ...typeBinary($, ['&&'], PREC.BOOL_AND, 'left', $._annotation_type),
       ...typeBinary($, ['|'], PREC.BIT_OR, 'left', $._annotation_type),
@@ -661,7 +676,7 @@ module.exports = grammar({
     )),
     match_body: $ => seq('{', commaSep($.match_arm), optional(','), '}'),
     match_arm: $ => seq(field('pattern', $._pattern), '=>', field('body', $._expression)),
-    _pattern: $ => choice($.identifier, $.constructor_pattern, $.anonymous_constructor_pattern),
+    _pattern: $ => choice($.identifier, $.qualified_identifier, $.constructor_pattern, $.anonymous_constructor_pattern),
     constructor_pattern: $ => seq(field('constructor', choice($.identifier, $.qualified_identifier)), '(', commaSep(choice($.named_pattern, $._pattern)), optional(','), ')'),
     anonymous_constructor_pattern: $ => choice(
       seq('⟨', commaSep(choice($.named_pattern, $._pattern)), optional(','), '⟩'),
@@ -692,7 +707,8 @@ module.exports = grammar({
     )),
     j_expression: $ => seq('j', '(', $._expression, ',', $._expression, ',', $._expression, ')'),
     squash_ind_expression: $ => seq('squash_ind', '(', $._expression, ',', $._expression, ',', $._expression, ')'),
-    refl_expression: _ => 'refl',
+    // A lone `refl` is the proof term; the name reading loses the tie.
+    refl_expression: _ => prec.dynamic(1, 'refl'),
 
     // `by t` runs the tactic `t` (docs/metaprogramming/host-elaboration-interface-design.md §7);
     // the compiler reads it only when a name follows, so `by` stays a name.

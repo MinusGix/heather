@@ -25,7 +25,7 @@ theorem id_eq<A>(x: A): id(x) = x { refl }
             (identifier)
             (identifier))))))
   (record_declaration
-    (identifier)
+    (qualified_identifier)
     (type_parameters
       (type_parameter
         (identifier))
@@ -560,7 +560,7 @@ theorem uses(n: Nat, h: 0 < n := infer): 0 < n { h }
 
 (source_file
   (record_declaration
-    (identifier)
+    (qualified_identifier)
     (field_list
       (field
         (identifier)

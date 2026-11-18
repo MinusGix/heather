@@ -9,7 +9,7 @@
 
 [
   (inductive_declaration name: (identifier) @name)
-  (record_declaration name: (identifier) @name)
+  (record_declaration name: (qualified_identifier) @name)
   (class_declaration name: (identifier) @name)
   (instance_declaration class: (class_reference name: (_) @name))
   (datarepr_declaration name: (identifier) @name)

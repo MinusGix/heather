@@ -1,0 +1,448 @@
+==================
+Binding statements and nested binds
+==================
+
+fn f() -> M<Nat> { let x <- get(); let y ← get(); put(x); match <- view(y) { Some(z) => pure(z), None => pure(0) } }
+
+---
+
+(source_file
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list)
+    (declaration_type_application
+      (identifier)
+      (type_arguments
+        (identifier)))
+    (block
+      (let_statement
+        (identifier)
+        (call_expression
+          (identifier)
+          (argument_list)))
+      (let_statement
+        (identifier)
+        (call_expression
+          (identifier)
+          (argument_list)))
+      (expression_statement
+        (call_expression
+          (identifier)
+          (argument_list
+            (identifier))))
+      (match_expression
+        (bind_expression
+          (head_call_expression
+            (identifier)
+            (argument_list
+              (identifier))))
+        (match_body
+          (match_arm
+            (constructor_pattern
+              (identifier)
+              (identifier))
+            (call_expression
+              (identifier)
+              (argument_list
+                (identifier))))
+          (match_arm
+            (identifier)
+            (call_expression
+              (identifier)
+              (argument_list
+                (number)))))))))
+
+==================
+Mutable parameters and places
+==================
+
+runtime fn List::put(mut self span: List<u8>, i: u64, mut io: Io, mut s: S, mut j: u64) -> u64 {
+  s.hash := [0x6a09e667, 0xbb67ae85];
+  s.working[7 - i] := s.working[6 - i];
+  j := j - 1;
+  span := span.put_at(i)
+}
+
+---
+
+(source_file
+  (prefixed_declaration
+    (identifier)
+    (function_declaration
+      (qualified_identifier)
+      (parameter_list
+        (parameter
+          (parameter_run
+            (parameter_name
+              (identifier))
+            (type_application_expression
+              (identifier)
+              (type_arguments
+                (identifier)))))
+        (parameter
+          (parameter_run
+            (parameter_name
+              (identifier))
+            (identifier)))
+        (parameter
+          (parameter_run
+            (parameter_name
+              (identifier))
+            (identifier)))
+        (parameter
+          (parameter_run
+            (parameter_name
+              (identifier))
+            (identifier)))
+        (parameter
+          (parameter_run
+            (parameter_name
+              (identifier))
+            (identifier))))
+      (identifier)
+      (block
+        (assignment_statement
+          (member_expression
+            (identifier)
+            (identifier))
+          (vector_expression
+            (number)
+            (number)))
+        (assignment_statement
+          (index_expression
+            (member_expression
+              (identifier)
+              (identifier))
+            (binary_expression
+              (number)
+              (identifier)))
+          (index_expression
+            (member_expression
+              (identifier)
+              (identifier))
+            (binary_expression
+              (number)
+              (identifier))))
+        (assignment_statement
+          (contextual_identifier
+            (identifier))
+          (binary_expression
+            (contextual_identifier
+              (identifier))
+            (number)))
+        (identifier)
+        (call_expression
+          (member_expression
+            (identifier)
+            (identifier))
+          (argument_list
+            (identifier)))))))
+
+==================
+Statement bodies end in a statement
+==================
+
+fn g(mut n: Nat, mut c: C) -> Nat { for i in 0..n { c.say(i); } while n < 3 { n := n + 1; } n }
+
+---
+
+(source_file
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (identifier)))
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (identifier))))
+    (identifier)
+    (block
+      (statement_form
+        (for_statement
+          (identifier)
+          (number)
+          (identifier)
+          (block
+            (expression_statement
+              (call_expression
+                (member_expression
+                  (identifier)
+                  (identifier))
+                (argument_list
+                  (identifier)))))))
+      (statement_form
+        (while_statement
+          (head_binary_expression
+            (identifier)
+            (number))
+          (block
+            (assignment_statement
+              (identifier)
+              (binary_expression
+                (identifier)
+                (number))))))
+      (identifier))))
+
+==================
+Relations in let annotations
+==================
+
+theorem t(n: Nat): X { let p: n <= n + 1 = omega; let q: (k: Nat) → k < n → P(k) = λ k h => h; q }
+
+---
+
+(source_file
+  (theorem_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (identifier))))
+    (identifier)
+    (block
+      (let_statement
+        (identifier)
+        (declaration_binary_type
+          (identifier)
+          (declaration_binary_type
+            (identifier)
+            (number)))
+        (identifier))
+      (let_statement
+        (identifier)
+        (declaration_function_type
+          (binder_group
+            (parameter_run
+              (parameter_name
+                (identifier))
+              (identifier)))
+          (declaration_function_type
+            (declaration_binary_type
+              (identifier)
+              (identifier))
+            (declaration_call_type
+              (identifier)
+              (argument_list
+                (identifier)))))
+        (lambda_expression
+          (lambda_binder
+            (identifier))
+          (lambda_binder
+            (identifier))
+          (identifier)))
+      (identifier))))
+
+==================
+Parenthesized scrutinees and implication tests
+==================
+
+fn h(b: Bool, n: Nat) -> Nat { match (match n { Zero => True, Succ(_) => False }) { True => 0, False => if b → n = 0 { 1 } else { 2 } } }
+
+---
+
+(source_file
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (identifier)))
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (identifier))))
+    (identifier)
+    (block
+      (match_expression
+        (parenthesized_expression
+          (match_expression
+            (identifier)
+            (match_body
+              (match_arm
+                (identifier)
+                (identifier))
+              (match_arm
+                (constructor_pattern
+                  (identifier)
+                  (identifier))
+                (identifier)))))
+        (match_body
+          (match_arm
+            (identifier)
+            (number))
+          (match_arm
+            (identifier)
+            (if_expression
+              (head_binary_expression
+                (identifier)
+                (head_binary_expression
+                  (identifier)
+                  (number)))
+              (block
+                (number))
+              (block
+                (number)))))))))
+
+==================
+Record members, unnamed constructor fields and qualified patterns
+==================
+
+record Target::ArgAt(self t: Target, cap: Nat) { fits: cap = cap }
+inductive Tree { Leaf, Node(Tree, Nat, Tree), Given(j: Nat) }
+record Hom<A>(map: A → A, lt: A → A → Type := <, add: A → A → A := +) { }
+fn k(s: Step) -> Nat { match s { Step::True => 0, Step::False => 1 } }
+
+---
+
+(source_file
+  (record_declaration
+    (qualified_identifier)
+    (value_parameters
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (identifier)))
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (identifier))))
+    (field_list
+      (field
+        (identifier)
+        (binary_expression
+          (identifier)
+          (identifier)))))
+  (inductive_declaration
+    (identifier)
+    (constructor_list
+      (constructor
+        (identifier))
+      (constructor
+        (identifier)
+        (field_parameters
+          (identifier)
+          (identifier)
+          (identifier)))
+      (constructor
+        (identifier)
+        (field_parameters
+          (field
+            (identifier)
+            (identifier))))))
+  (record_declaration
+    (qualified_identifier)
+    (type_parameters
+      (type_parameter
+        (identifier)))
+    (value_parameters
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (function_type
+            (identifier)
+            (identifier))))
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (function_type
+            (identifier)
+            (function_type
+              (identifier)
+              (universe)))
+          (operator)))
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (function_type
+            (identifier)
+            (function_type
+              (identifier)
+              (identifier)))
+          (operator))))
+    (field_list))
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (identifier))))
+    (identifier)
+    (block
+      (match_expression
+        (identifier)
+        (match_body
+          (match_arm
+            (qualified_identifier)
+            (number))
+          (match_arm
+            (qualified_identifier)
+            (number)))))))
+
+==================
+Varies clause and let code
+==================
+
+inductive Wrap<F> varies F { Mk(F) }
+meta fn depth(x: Code(g |- Nat)) -> Code(g |- Nat) { let code k = x; let code = x; x }
+
+---
+
+(source_file
+  (inductive_declaration
+    (identifier)
+    (type_parameters
+      (type_parameter
+        (identifier)))
+    (varies_clause
+      (identifier))
+    (constructor_list
+      (constructor
+        (identifier)
+        (field_parameters
+          (identifier)))))
+  (function_declaration
+    (qualified_identifier)
+    (parameter_list
+      (parameter
+        (parameter_run
+          (parameter_name
+            (identifier))
+          (call_expression
+            (builtin_type)
+            (argument_list
+              (sequent_expression
+                (lambda_binder
+                  (identifier))
+                (identifier)))))))
+    (declaration_call_type
+      (builtin_type)
+      (argument_list
+        (sequent_expression
+          (lambda_binder
+            (identifier))
+          (identifier))))
+    (block
+      (let_statement
+        (identifier)
+        (identifier))
+      (let_statement
+        (identifier)
+        (identifier))
+      (identifier))))
