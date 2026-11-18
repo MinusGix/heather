@@ -195,3 +195,13 @@ theorem halving_some(n, acc, k: Nat, h: 0 < n, e: half_even(n) = Some(k)): halvi
 fn tally(b: Bool, n: Nat) → Nat { if b { 0 } else { match n { Zero => 0, Succ(m) => tally(b, m) } } }
 // expect-error: no branch equation `tally::True`
 theorem tally_true(n: Nat): tally(True, n) = 0 { tally::True(True, n, refl) }
+
+// A test that is a conjunction of equations over two `let`s: the hypothesis
+// states it with both values put in (an equation inside `∧` mentions them).
+fn both_low(x, y: Nat) → Nat {
+    let a = x + 1;
+    let b = y + 1;
+    if a % 2 = 0 ∧ b % 2 = 0 { 1 } else { 0 }
+}
+theorem both_low_even(x, y: Nat, h: (x + 1) % 2 = 0 ∧ (y + 1) % 2 = 0): both_low(x, y) = 1 { both_low::True(x, y, h) }
+theorem both_low_odd(x, y: Nat, h: ¬((x + 1) % 2 = 0 ∧ (y + 1) % 2 = 0)): both_low(x, y) = 0 { both_low::False(x, y, h) }
