@@ -204,6 +204,20 @@ was a case of. `examples/utf8/utf8_check.hthr`'s `two_decides` relates the
 decoder to the program's `utf8_two` this way, with no lemma restating the
 program's tests as one Boolean.
 
+**Statements joined by connectives** (2026-11-18). A goal or hypothesis
+is a tree of `∧ ∨ ↔ ¬` and `False` over claims (`BVStmt`), read to the
+Boolean tree of its claims' predicates (`&& || bool_eq !`, `False`), so a
+loop's condition written as one Prop (`c & 0xC0 = 0x80 ∧ (b ≠ 0xE0 ∨ 0xA0
+<= c)`) and its negation in the refused arm read as they stand. One
+structurally recursive bridge (`BVCx::bridge`) carries a proof across each
+connective in either direction with `layout_and`/`_or`/`_not`/`_iff_p`/
+`_false` and their `_hyp` converses (lib/std/tactic/bitblast.hthr). `∨` and
+`¬` as goals, and `∨`, `¬` and `↔` as hypotheses, take their parts' bridges
+as functions, so a part nested under another is a λ whose binder the host
+places under the enclosing part's (`assume(…, under)`); placed at the root
+it is not in scope there. `¬P` reads only as a negation of a statement it
+can read; `P → False` with `P` a claim keeps its claim reading.
+
 ## Open
 
 - Non-local atoms (a field, a call the reader cannot unfold) could be
