@@ -193,7 +193,7 @@ record Pathed(t: Target, env: Env, name: List<BitVec(8)>, i: Nat, m: X86Memory(t
 // At the loop's head: `i` no further than the NUL, R8 the count, RCX the
 // path's length, RSI and RDI past the count in the buffer and the scratch
 // range, and the home registers as they were (`vals`).
-record PathAt(t: Target, env: Env, buf: Nat, path: List<BitVec(8)>, vals: List<BitVec(64)>, i: Nat, g: Gprs, m: X86Memory(t.r.profile)) {
+record Target::PathAt(self t: Target, env: Env, buf: Nat, path: List<BitVec(8)>, vals: List<BitVec(64)>, i: Nat, g: Gprs, m: X86Memory(t.r.profile)) {
     within: i <= path.before_nul().len(),
     count: read_gpr(R8, g) = word_of_nat(64, i),
     length: read_gpr(Rcx, g) = word_of_nat(64, path.len()),
@@ -266,7 +266,7 @@ fn PathOf(env: Env, buf: Nat, path: List<BitVec(8)>) → Type {
 
 // The path's byte at `i`, read where RSI points.
 theorem Target::path_byte(self t: Target, env: Env, buf, cap: Nat, found: t.caps.nth(buf) = Some(cap), path: List<BitVec(8)>, vals: List<BitVec(64)>, of: PathOf(env, buf, path),
-    i: Nat, below: i < path.len(), g: Gprs, m: X86Memory(t.r.profile), at: PathAt(t, env, buf, path, vals, i, g, m)):
+    i: Nat, below: i < path.len(), g: Gprs, m: X86Memory(t.r.profile), at: t.PathAt(env, buf, path, vals, i, g, m)):
     Exists<BitVec(8)>(λ byte => (read_gpr(Rsi, g).toNat() < Nat::pow(2, 47)) ∧
         ((t.site().data.read(m, read_gpr(Rsi, g)) = Some(byte)) ∧ (path.nth(i) = Some(byte)))) {
     let layout = t.layout();
@@ -300,7 +300,7 @@ theorem Target::path_room(self t: Target, env: Env, buf, cap: Nat, found: t.caps
 
 // CMP R8, RCX: ZF set exactly at the path's end.
 theorem Target::path_counted(self t: Target, env: Env, buf: Nat, path: List<BitVec(8)>, vals: List<BitVec(64)>, i: Nat, small: path.len() < Nat::pow(2, 64),
-    g: Gprs, m: X86Memory(t.r.profile), at: PathAt(t, env, buf, path, vals, i, g, m)):
+    g: Gprs, m: X86Memory(t.r.profile), at: t.PathAt(env, buf, path, vals, i, g, m)):
     ((is_zero_bits(64, read_gpr(R8, g).sub(read_gpr(Rcx, g))) = True) → i = path.len()) ∧
     (i = path.len() → is_zero_bits(64, read_gpr(R8, g).sub(read_gpr(Rcx, g))) = True) {
     let i_small: (i < Nat::pow(2, 64)) = Nat::le_trans(Succ(i), Succ(path.len()), Nat::pow(2, 64),
@@ -324,11 +324,11 @@ theorem Target::path_step(self t: Target, env: Env, buf: Nat, path: List<BitVec(
     source: read_gpr(Rsi, s.gprs) = next_rip(t.r.low, t.layout().buffer_offset(buf) + i),
     dest: read_gpr(Rdi, s.gprs) = next_rip(t.r.low, t.layout().scratch_offset() + i),
     pathed: Pathed(t, env, path.before_nul(), Succ(i), s.memory), homes: home_values(s.gprs) = vals):
-    PathAt(t, env, buf, path, vals, Succ(i),
+    t.PathAt(env, buf, path, vals, Succ(i),
         execute_block_normal([AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))], s).gprs,
         execute_block_normal([AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))], s).memory) {
     let one = λ (x: BitVec(64)) (y: BitVec(64)) (same: x = y) => cong_fn<BitVec(64), BitVec(64)>(λ z => z.add(BitVec::ofNat(1)), same);
-    PathAt(within := ahead,
+    Target::PathAt(within := ahead,
         count := trans(one(read_gpr(R8, s.gprs), word_of_nat(64, i), count), sym(word_of_nat_succ(i))),
         length := length,
         source := trans(one(read_gpr(Rsi, s.gprs), next_rip(t.r.low, t.layout().buffer_offset(buf) + i), source),
@@ -351,22 +351,22 @@ fn Fragment::path_copy(out: Nat) → Fragment {
 // it leaves with the whole path copied, or comes round with one more.
 theorem Run::path_round(self r: Run, env: Env, buf, cap: Nat, found: r.t.caps.nth(buf) = Some(cap), path: List<BitVec(8)>, vals: List<BitVec(64)>,
     of: PathOf(env, buf, path), small: path.len() < Nat::pow(2, 64), o, n: Nat, s: r.State(), resident: r.t.site().Resident(s.memory),
-    i: Nat, left: i + n = path.before_nul().len(), at: PathAt(r.t, env, buf, path, vals, i, s.gprs, s.memory)):
-    Fragment::path_copy(Succ(o)).inside(r, λ _ _ _ _ => False, Some(o), λ u => PathAt(r.t, env, buf, path, vals, path.before_nul().len(), u.gprs, u.memory),
-        λ u => Exists<Nat>(λ k => (k < n) ∧ Exists<Nat>(λ i2 => (i2 + k = path.before_nul().len()) ∧ PathAt(r.t, env, buf, path, vals, i2, u.gprs, u.memory))))(s) {
+    i: Nat, left: i + n = path.before_nul().len(), at: r.t.PathAt(env, buf, path, vals, i, s.gprs, s.memory)):
+    Fragment::path_copy(Succ(o)).inside(r, λ _ _ _ _ => False, Some(o), λ u => r.t.PathAt(env, buf, path, vals, path.before_nul().len(), u.gprs, u.memory),
+        λ u => Exists<Nat>(λ k => (k < n) ∧ Exists<Nat>(λ i2 => (i2 + k = path.before_nul().len()) ∧ r.t.PathAt(env, buf, path, vals, i2, u.gprs, u.memory))))(s) {
     let t = r.t;
     let g = s.gprs;
     let m = s.memory;
     let so = t.layout().scratch_offset();
     let name = path.before_nul();
     let adds: List<Instruction> = [AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))];
-    let again: r.State() → Type = λ u => Exists<Nat>(λ k => (k < n) ∧ Exists<Nat>(λ i2 => (i2 + k = name.len()) ∧ PathAt(t, env, buf, path, vals, i2, u.gprs, u.memory)));
+    let again: r.State() → Type = λ u => Exists<Nat>(λ k => (k < n) ∧ Exists<Nat>(λ i2 => (i2 + k = name.len()) ∧ t.PathAt(env, buf, path, vals, i2, u.gprs, u.memory)));
     let counted = t.path_counted(env, buf, path, vals, i, small, g, m, at);
     Leaves(out := refl,
         // At the count: the whole path is copied.
         taken := λ at_count rip => {
             let all: (i = name.len()) = Nat::le_antisym(i, name.len(), at.within, j(sym(counted.left(at_count)), λ k _ => name.len() <= k, path.before_nul_len()));
-            j(all, λ k _ => PathAt(t, env, buf, path, vals, k, g, m), at)
+            j(all, λ k _ => t.PathAt(env, buf, path, vals, k, g, m), at)
         },
         straight := λ before_count rip => {
             let short: (i < path.len()) = match i.lt_or_ge(path.len()) {
@@ -383,7 +383,7 @@ theorem Run::path_round(self r: Run, env: Env, buf, cap: Nat, found: r.t.caps.nt
             LoadsByte(byte := byte, low := b.proof.left, read := b.proof.right.left, after := Leaves(out := refl,
                 // At a NUL: the path ends here.
                 taken := λ at_nul rip => match is_nul {
-                    Inl(zero) => j(sym(path.before_nul_stops(i, byte, b.proof.right.right, zero, at.within)), λ k _ => PathAt(t, env, buf, path, vals, k, g, m), at),
+                    Inl(zero) => j(sym(path.before_nul_stops(i, byte, b.proof.right.right, zero, at.within)), λ k _ => t.PathAt(env, buf, path, vals, k, g, m), at),
                     Inr(nonzero) => absurd(trans(sym(at_nul), byte_tests_nonzero(byte, nonzero))),
                 },
                 // Otherwise the byte stored, and one further.
@@ -543,7 +543,7 @@ theorem Target::goes_opens(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
         let nul = imm_byte0(BitVec::ofNat(0, n := 64));
         let one: List<BitVec(8)> = [nul];
         // The whole path copied: the NUL stored after it, and the call.
-        let copied_all: r.State() → Type = λ u => PathAt(t, placed_env, path, bytes, vals, name.len(), u.gprs, u.memory);
+        let copied_all: r.State() → Type = λ u => t.PathAt(placed_env, path, bytes, vals, name.len(), u.gprs, u.memory);
         let fin: t.Goes(prog_len(copied), Vis(c, tree), copied_all) =
             λ u here resident held => {
                 let m = u.memory;
@@ -564,13 +564,13 @@ theorem Target::goes_opens(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
                 at_copied(u, here, resident, ⟨refl, j(sym(held.dest), λ a _ => landing(a), landed)⟩)
             };
         // The copy: `i` bytes copied and `n` to go, round its loop.
-        let copying: Nat → Gprs → X86Memory(t.r.profile) → Type = λ n g m => Exists<Nat>(λ i => (i + n = name.len()) ∧ PathAt(t, placed_env, path, bytes, vals, i, g, m));
+        let copying: Nat → Gprs → X86Memory(t.r.profile) → Type = λ n g m => Exists<Nat>(λ i => (i + n = name.len()) ∧ t.PathAt(placed_env, path, bytes, vals, i, g, m));
         let looped = Fragment::goes_loop(r, set0, names + 1, Skip, Fragment::path_copy(names + 3), Vis(c, tree), copied_all, copying, w_copied, fin,
             λ n s resident at => r.path_round(placed_env, path, cap, found, bytes, vals, of, small, names + 2, n, s, resident, at.witness, at.proof.left, at.proof.right));
         let setting = t.goes_block(clamped, 0, sets, w_set0, Vis(c, tree), λ w => Exists<Nat>(λ n => copying(n, w.gprs, w.memory)), looped);
         let rcx: (read_gpr(Rcx, u0.gprs) = word_of_nat(64, bytes.len())) = trans(sym(word_of_nat_toNat(64, read_gpr(Rcx, u0.gprs))),
             cong_fn<Nat, BitVec(64)>(λ n => word_of_nat(64, n), trans(held0.right, sym(bytes_len))));
-        setting(u0, here0, resident0, Exists(name.len(), Exists(0, ⟨name.len().add_left_zero(), PathAt(within := Nat::nonneg(name.len()), count := refl, length := rcx,
+        setting(u0, here0, resident0, Exists(name.len(), Exists(0, ⟨name.len().add_left_zero(), Target::PathAt(within := Nat::nonneg(name.len()), count := refl, length := rcx,
             source := t.buffer_rip(path), dest := t.scratch_rip(),
             pathed := Pathed(cells := v, holds := placed.holds, keeps := placed.keeps, stacked := placed.stacked,
                 copied := λ k b early => false_elim(Nat::not_succ_le_zero(k, early))),
