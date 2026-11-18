@@ -2920,6 +2920,15 @@ impl Host<'_> {
         }
         let (head, args) = crate::spelling::app_spine(&t);
         let Term::GlobalTm { var, .. } = head else {
+            // A head that computes without a definition, a β-redex or a
+            // `match` on a constructor (a word chosen by a test, at the
+            // test's outcome): its β and ι steps, no global unfolded, so the
+            // arm it selects is read as written.
+            let gamma = run.cx(at)?.gamma;
+            let w = self.goal_oracle().whnf_term_opaque(&gamma, &t).map_err(|_| Fault::Ill("ran out of fuel reducing it".into()))?;
+            if w != t {
+                return Ok(run.issue(at, Held::Term(w, ty, level)));
+            }
             return Err(Fault::Ill("its head is not a global, so there is no definition to unfold".into()));
         };
         let abs = self.global_abs_of(*var).ok_or_else(|| Fault::Ill("its head is not a global this run can read".into()))?;
@@ -3051,6 +3060,27 @@ impl Host<'_> {
             }
             Held::Term(t, ty, l) => (run.committed_tm(&t).ok_or_else(unsolved)?, run.committed_ty(&ty).ok_or_else(unsolved)?, l),
         };
+        // A term that is not a local (a test `b < 0x80` in an `if`): every
+        // occurrence of it, as written, a mention of the parameter, which
+        // `bv_decide` reads a word chosen by a test through. The body is
+        // abstracted inside a type wrapper, the one form the abstraction
+        // walks; the wrapper is not a type the result is ever read as.
+        if !matches!(x, RExpr::Local(_)) && self.root_local_position(run, x).is_err() {
+            let mark = run.trail.len();
+            let r = self.reify(run, x, at).inspect_err(|_| run.restore(mark))?;
+            let pat = run.committed_tm(&run.partial_tm(&r.term)).ok_or_else(unsolved)?;
+            let dom = Rc::new(run.committed_ty(&run.partial_ty(&r.ty)).ok_or_else(unsolved)?);
+            let wrapped = Type::El { level: level.clone(), tm: Rc::new(term) };
+            let body = match wrapped.abstract_local(&pat) {
+                Some(Type::El { tm, .. }) => (*tm).clone(),
+                Some(_) => unreachable!("abstraction keeps the wrapper"),
+                None => return Err(Fault::Ill("it does not mention the term to abstract".into())),
+            };
+            let cod = ty.abstract_local(&pat).unwrap_or_else(|| ty.shift_local(1));
+            let lam = Term::Lam { dom_level: r.level.clone(), cod_level: level.clone(), dom: Rc::clone(&dom), body: Rc::new(body) };
+            let pi = Type::Pi { dom_level: r.level.clone(), cod_level: level.clone(), dom, cod: Rc::new(cod) };
+            return Ok(run.issue(at, Held::Term(lam, pi, Level::max(r.level, level))));
+        }
         let p = self.root_local_position(run, x)?;
         let gamma = run.cx(at)?.gamma;
         let n = gamma.len();
