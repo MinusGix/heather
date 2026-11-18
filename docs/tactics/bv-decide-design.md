@@ -160,8 +160,14 @@ Words: `+ - *`, negation, `& | bxor`, `complement`, `<< >>` by a numeral,
 numerals, `zero_extend`, `truncate`, `take_low`, `drop_low`,
 `sign_extend`, `concat`. Booleans: `&& || !`, `xor`, `bool_eq`, `eq_bit`,
 `unsigned_lt_bit`, `signed_lt_bit`, `bit_at` at a numeral, `head_bit`.
-Atoms must be locals; anything else is unfolded, and refused when it
-cannot be.
+Atoms are locals, and a word-valued call that takes an argument the
+bit-blaster cannot model (a list: `s.byte_within(n, i)`), taken whole: one
+atom per call, two calls the same by conversion being one atom
+(`bv_term_atom`), abstracted out of a claim's sides by the host's
+`Abstract`, which takes any term. An equation whose left side is such a
+call is first read as a word chosen by its tests (below), so a byte table
+over a list's bytes reads its tests and takes only the reads whole.
+Anything else is unfolded, and refused when it cannot be.
 
 A claim is `a = b` between words, `p = q` between Booleans, `p = True`, or
 `a < b`, `a <= b`, `a ≠ b` between words (`BVClaim`): `<` reads as
@@ -246,10 +252,8 @@ can read; `P → False` with `P` a claim keeps its claim reading.
 
 ## Open
 
-- Non-local atoms (a field, a call the reader cannot unfold) could be
-  abstracted as fresh words instead of refused. A Boolean call on both
-  sides (`is_utf8(r)` beside the claim) is the common case: today the
-  proof rewrites it away first.
+- A Boolean call the reader takes whole (`is_utf8(r)` beside the claim)
+  is still refused: word calls are atoms now (below), Boolean ones not yet.
 - The split is per test, so `k` independent tests make `2^k` cases; an
   equation on a chosen word is read as `ite` now, the split remaining for
   the shapes that reading does not take (a chosen word inside a word

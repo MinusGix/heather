@@ -3066,15 +3066,24 @@ impl Host<'_> {
         // abstracted inside a type wrapper, the one form the abstraction
         // walks; the wrapper is not a type the result is ever read as.
         if !matches!(x, RExpr::Local(_)) && self.root_local_position(run, x).is_err() {
+            // `x` may live under more binders than `h` (an atom found inside
+            // the goal, `h` a hypothesis's statement): both are read in the
+            // deeper scope.
+            let to = run.join(run.scope_of(x)?, at)?;
+            let term = run.lift(at, to, |k| term.shift_local(k))?;
+            let ty = run.lift(at, to, |k| ty.shift_local(k))?;
+            let at = to;
             let mark = run.trail.len();
             let r = self.reify(run, x, at).inspect_err(|_| run.restore(mark))?;
             let pat = run.committed_tm(&run.partial_tm(&r.term)).ok_or_else(unsolved)?;
             let dom = Rc::new(run.committed_ty(&run.partial_ty(&r.ty)).ok_or_else(unsolved)?);
-            let wrapped = Type::El { level: level.clone(), tm: Rc::new(term) };
+            // No occurrence is the constant function, as for a local `h`
+            // does not mention.
+            let wrapped = Type::El { level: level.clone(), tm: Rc::new(term.clone()) };
             let body = match wrapped.abstract_local(&pat) {
                 Some(Type::El { tm, .. }) => (*tm).clone(),
                 Some(_) => unreachable!("abstraction keeps the wrapper"),
-                None => return Err(Fault::Ill("it does not mention the term to abstract".into())),
+                None => term.shift_local(1),
             };
             let cod = ty.abstract_local(&pat).unwrap_or_else(|| ty.shift_local(1));
             let lam = Term::Lam { dom_level: r.level.clone(), cod_level: level.clone(), dom: Rc::clone(&dom), body: Rc::new(body) };
