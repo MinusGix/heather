@@ -529,7 +529,11 @@ fn tree(eqs: &[BranchEquation], cases: &[Case], group: &[usize], depth: usize, s
                 let evidence = match prop {
                     Some(p) => {
                         let p = subst_ty_all(p, sigma);
-                        let side = if arm == "True" { "decide_true" } else { "decide_false" };
+                        // By its module: `bool` is often reached only
+                        // through an import's imports, where a bare
+                        // `decide_true` names nothing, and the principle was
+                        // refused (issues/word-loop-induct-principle-decide-names.md).
+                        let side = if arm == "True" { "bool::decide_true" } else { "bool::decide_false" };
                         let head = Expr { kind: ExprKind::TyApp { head: Box::new(var(side, p.span)), args: vec![p.clone()] }, span: p.span };
                         app(head, vec![var(&e, span)], span)
                     }

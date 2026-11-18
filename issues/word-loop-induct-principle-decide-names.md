@@ -1,6 +1,6 @@
 ---
 title: A loop over words gets no induction principle: `decide_true` unresolved
-status: open
+status: closed
 labels: [elab,loops,function-induction]
 area: language
 created: 2026-11-18
@@ -17,3 +17,7 @@ The refusals, read with a temporary trace around `elab_decl_one` on master f4a3b
 `function_induction::tree` spells each test's evidence as `decide_true<P>(e)` / `decide_false<P>(e)` by bare name (`crates/elab/src/function_induction.rs`, the `side` in `tree`). Both live in `lib/std/core/bool.hthr`, which the file reaches only through `bitvec_omega`'s imports, so the bare name probably resolves to nothing the way the principle needs. Not checked: whether `import bool;` in the user's file makes the principle check.
 
 Until this is fixed, a proof by functional induction over such a loop has no principle to cite. The fix is likely the principle naming the two by their module (as the loop lowering names `bitvec_omega::found_fact`) and a probe in `lib/_tests` that cites `#induct` of a word loop without importing `bool`.
+
+## Log
+
+- 2026-11-18: Fixed. Confirmed first: the same file with `import bool;` checks the principle, without it both cases are refused. `function_induction::tree` now names `bool::decide_true`/`bool::decide_false`, which resolve wherever `bool` is loaded (it is, wherever a test's `decide_bit` is). Probe `lib/_tests/std/tactic/induct_word_loop_tests.hthr`, which imports no `bool`: `R::f(r).value = r.b` for a loop that only assigns `a`, by `R::f_loop::induct`, and a negative control claiming the loop keeps `a`. It fails on master 30c0522e with the refusal above.
