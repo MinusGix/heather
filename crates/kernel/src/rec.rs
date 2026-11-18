@@ -1,5 +1,5 @@
 //! The code-recursor telescopes of ch. 04 (§More Typing and Equivalence
-//! Judgments): the two motive scopes `G_M` and the 65 branch telescopes
+//! Judgments): the two motive scopes `G_M` and the 66 branch telescopes
 //! `G_Typ G_Trm` (13 from ch. 04, the rest the extension formers' —
 //! `docs/kernel/delam-extensions.md`), each with its expected
 //! (motive-instantiated) type.
@@ -210,12 +210,12 @@ pub(crate) fn motive_types(m: &Motives) -> [&Rc<Type>; 2] {
     [&m.ty_motive, &m.tm_motive]
 }
 
-/// The 65 branch names, in [`branch_specs`] order — for diagnostics that
+/// The 66 branch names, in [`branch_specs`] order — for diagnostics that
 /// must name a branch without printing a term, and for the surface
 /// `match code`, whose arms are **keyed to these names**: the table below is
 /// the single source of truth for what branches exist and in what order, and
 /// the elaborator reads it rather than restating it.
-pub const BRANCH_NAMES: [&str; 65] = [
+pub const BRANCH_NAMES: [&str; 66] = [
     "ty_nat",
     "ty_pi",
     "ty_ty",
@@ -271,6 +271,7 @@ pub const BRANCH_NAMES: [&str; 65] = [
     "tm_squash",
     "tm_squash_in",
     "tm_elim_squash",
+    "tm_unsquash_empty",
     "ty_m",
     "tm_m",
     "tm_corec",
@@ -290,7 +291,7 @@ pub const BRANCH_NAMES: [&str; 65] = [
 /// `branches_use`) read their binder depths here, and
 /// `branch_depths_match_the_telescopes` holds the table to
 /// [`branch_specs`].
-pub(crate) const BRANCH_DEPTHS: [(u32, u32, u32); 65] = [
+pub(crate) const BRANCH_DEPTHS: [(u32, u32, u32); 66] = [
     (0, 1, 0), // ty_nat
     (2, 3, 2), // ty_pi
     (1, 1, 0), // ty_ty
@@ -346,6 +347,7 @@ pub(crate) const BRANCH_DEPTHS: [(u32, u32, u32); 65] = [
     (1, 2, 1), // tm_squash
     (1, 3, 2), // tm_squash_in
     (2, 5, 4), // tm_elim_squash
+    (1, 2, 1), // tm_unsquash_empty
     (3, 6, 5), // ty_m
     (3, 6, 5), // tm_m
     (4, 9, 8), // tm_corec
@@ -358,8 +360,8 @@ pub(crate) const BRANCH_DEPTHS: [(u32, u32, u32); 65] = [
     (3, 10, 9), // tm_elim_iwf
 ];
 
-/// The 65 branches, in [`branch_specs`] order (= `Branches` field order).
-pub(crate) fn branch_terms(b: &Branches) -> [&Rc<Term>; 65] {
+/// The 66 branches, in [`branch_specs`] order (= `Branches` field order).
+pub(crate) fn branch_terms(b: &Branches) -> [&Rc<Term>; 66] {
     [
         &b.ty_nat,
         &b.ty_pi,
@@ -416,6 +418,7 @@ pub(crate) fn branch_terms(b: &Branches) -> [&Rc<Term>; 65] {
         &b.tm_squash,
         &b.tm_squash_in,
         &b.tm_elim_squash,
+        &b.tm_unsquash_empty,
         &b.ty_m,
         &b.tm_m,
         &b.tm_corec,
@@ -453,7 +456,7 @@ pub struct BranchShape {
     pub level: Level,
 }
 
-/// The 65 branch shapes at the given motives, in [`BRANCH_NAMES`] order.
+/// The 66 branch shapes at the given motives, in [`BRANCH_NAMES`] order.
 ///
 /// Derived from [`branch_specs`], never restated: a client that binds arm
 /// variables by position stays correct when a branch's telescope changes,
@@ -478,9 +481,9 @@ pub fn branch_shapes(
         .collect()
 }
 
-/// [`Branches`] from 65 terms in [`BRANCH_NAMES`] order — the inverse of
+/// [`Branches`] from 66 terms in [`BRANCH_NAMES`] order — the inverse of
 /// [`branch_terms`], for clients that build the table by index.
-pub fn branches_from(t: [Rc<Term>; 65]) -> Branches {
+pub fn branches_from(t: [Rc<Term>; 66]) -> Branches {
     let [
         ty_nat, ty_pi, ty_ty, ty_el, ty_id, ty_sigma, ty_unit, ty_empty, tm_var, tm_nat,
         tm_pi, tm_ty, tm_zero, tm_succ, tm_elim_nat, tm_lam, tm_app, tm_id, tm_refl, tm_j,
@@ -488,7 +491,7 @@ pub fn branches_from(t: [Rc<Term>; 65]) -> Branches {
         tm_sum, tm_inl, tm_inr, tm_case, ty_w, tm_w, tm_sup, tm_elim_w, ty_vec, tm_vec,
         ty_fin, tm_fin, ty_wf, tm_wf, tm_supf, tm_elim_wf, ty_seq, tm_seq, ty_sempty,
         tm_sempty, tm_srefl, tm_elim_sempty,
-        ty_squash, tm_squash, tm_squash_in, tm_elim_squash,
+        ty_squash, tm_squash, tm_squash_in, tm_elim_squash, tm_unsquash_empty,
         ty_m, tm_m, tm_corec, tm_out,
         ty_dvec, tm_dvec, ty_iwf, tm_iwf, tm_sup_i, tm_elim_iwf,
     ] = t;
@@ -499,7 +502,7 @@ pub fn branches_from(t: [Rc<Term>; 65]) -> Branches {
         tm_sum, tm_inl, tm_inr, tm_case, ty_w, tm_w, tm_sup, tm_elim_w, ty_vec, tm_vec,
         ty_fin, tm_fin, ty_wf, tm_wf, tm_supf, tm_elim_wf, ty_seq, tm_seq, ty_sempty,
         tm_sempty, tm_srefl, tm_elim_sempty,
-        ty_squash, tm_squash, tm_squash_in, tm_elim_squash,
+        ty_squash, tm_squash, tm_squash_in, tm_elim_squash, tm_unsquash_empty,
         ty_m, tm_m, tm_corec, tm_out,
         ty_dvec, tm_dvec, ty_iwf, tm_iwf, tm_sup_i, tm_elim_iwf,
     }
@@ -680,7 +683,7 @@ fn iwf_sig_globals(coded: bool, l: &Level, li: &Level) -> Vec<GlobalBinding> {
     ]
 }
 
-/// The 65 branch telescopes `G_Typ G_Trm` with their expected types, built
+/// The 66 branch telescopes `G_Typ G_Trm` with their expected types, built
 /// from the given motives (for conversion: the *left* side's, matching its
 /// left-biased inference). `gamma` is the ambient local context (before any
 /// telescope), used only for the shape of the identity substitutions in the
@@ -691,7 +694,7 @@ pub(crate) fn branch_specs(
     l1: &Level,
     l2: &Level,
     gamma: impl Into<CtxShape>,
-) -> [BranchSpec; 65] {
+) -> [BranchSpec; 66] {
     let m_ty = &*motives.ty_motive;
     let m_tm = &*motives.tm_motive;
     let gamma: CtxShape = gamma.into();
@@ -4684,6 +4687,51 @@ pub(crate) fn branch_specs(
         }
     };
 
+    // (ℓ, g, u_q, x_q. t_unsquash_empty), u_q : ∥Empty^ℓ∥ — metatheory ch. 07 §29.
+    let tm_unsquash_empty = {
+        let gt = gt(1, 2);
+        let sq_empty = |l: Level| Type::Squash {
+            level: l.clone(),
+            ty: Rc::new(Type::Empty { level: l }),
+        };
+        let x_q = inst_tm_motive(
+            m_tm,
+            (1, 2, 0),
+            lvar(0),
+            g_ctx(1),
+            sq_empty(lvar(0)),
+            Term::BoxTm(Rc::new(gtm(0, &g_ctx(1)))),
+            &gt,
+        );
+        let code = Term::UnsquashEmpty { level: lvar(0), scrut: Rc::new(gtm(0, &g_ctx(1))) };
+        BranchSpec {
+            tele: Tele {
+                univs: 1,
+                globals: vec![
+                    GlobalBinding::Ctx,
+                    GlobalBinding::Tm {
+                        ctx: g_ctx(0),
+                        layer: Layer::Code,
+                        ty: Rc::new(sq_empty(lvar(0))),
+                        level: lvar(0),
+                        body: None,
+                    },
+                ],
+                locals: vec![(Rc::new(x_q), l2.shift(1, 0))],
+            },
+            ty: Rc::new(inst_tm_motive(
+                m_tm,
+                (1, 2, 1),
+                lvar(0),
+                g_ctx(1),
+                Type::Empty { level: lvar(0) },
+                Term::BoxTm(Rc::new(code)),
+                &gt,
+            )),
+            level: l2.shift(1, 0),
+        }
+    };
+
     // -- M (docs/kernel/kernel-m-codes-design.md §2) -------------------------------
     //
     // Univs `l, l', li` (and `k` for corec) are pushed in that order, so the
@@ -5406,7 +5454,7 @@ pub(crate) fn branch_specs(
         tm_sum, tm_inl, tm_inr, tm_case, ty_w, tm_w, tm_sup, tm_elim_w, ty_vec, tm_vec,
         ty_fin, tm_fin, ty_wf, tm_wf, tm_supf, tm_elim_wf, ty_seq, tm_seq, ty_sempty,
         tm_sempty, tm_srefl, tm_elim_sempty,
-        ty_squash, tm_squash, tm_squash_in, tm_elim_squash,
+        ty_squash, tm_squash, tm_squash_in, tm_elim_squash, tm_unsquash_empty,
         ty_m, tm_m, tm_corec, tm_out,
         ty_dvec, tm_dvec, ty_iwf, tm_iwf, tm_sup_i, tm_elim_iwf,
     ]
@@ -5422,7 +5470,7 @@ mod tests {
     use crate::term::Motives;
     use crate::typing::{check_global_ctx, check_type};
 
-    /// Enough for the whole 65-branch walk: every judgment here is a small
+    /// Enough for the whole 66-branch walk: every judgment here is a small
     /// contextual type, and the walk is linear in the tables.
     const FUEL: u64 = 1 << 16;
 
@@ -5444,7 +5492,7 @@ mod tests {
     /// as a type at its declared level under the prefix that precedes it.
     /// `label` names the site; failures report the label and the entry index
     /// only — never a term (the kernel's `Debug` is bounded, but a
-    /// 65-telescope walk is no place to exercise it).
+    /// 66-telescope walk is no place to exercise it).
     fn check_tele(label: &str, tele: &Tele) -> (GlobalCtx, LocalCtx) {
         // The ambient scope is `(L; Ψ; Γ) = (0; ·; ·)` at layer `m`: `rec_ga`
         // runs under `meta_layer`, and `push_spec` keeps the layer, so this
@@ -5594,7 +5642,7 @@ mod tests {
     /// independently hand-written halves of each branch spec — its
     /// `globals:` list and its `inst_ty_motive` arguments — must agree.
     ///
-    /// The correspondence is the identity on order and, in all 65 branches,
+    /// The correspondence is the identity on order and, in all 66 branches,
     /// a **bijection**: `n` layer-c `Ty` globals ⟺ `n` type-motive calls, in
     /// the same order. Layer-**p** `Ty` globals are the exception that
     /// explains the rule, and it is the paper's own

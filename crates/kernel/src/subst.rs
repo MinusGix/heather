@@ -1061,6 +1061,10 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
                 scrut: sub_tm(scrut, m, at),
             }
         }
+        Term::UnsquashEmpty { level, scrut } => Term::UnsquashEmpty {
+            level: m.level(level, at),
+            scrut: sub_tm(scrut, m, at),
+        },
         Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst, snd } => Term::Pair {
             fst_level: m.level(fst_level, at),
             snd_level: m.level(snd_level, at),

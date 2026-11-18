@@ -1332,6 +1332,7 @@ impl<'a, 'v> Eval<'a, 'v> {
             | Term::ElimEmpty { scrut, .. }
             | Term::ElimSEmpty { scrut, .. }
             | Term::ElimSquash { scrut, .. }
+            | Term::UnsquashEmpty { scrut, .. }
             | Term::Case { scrut, .. }
             | Term::ElimW { scrut, .. }
             | Term::ElimWf { scrut, .. }
@@ -1812,6 +1813,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                 };
                 e
             }
+            Term::UnsquashEmpty { level, .. } => Elim::UnsquashEmpty { level: level.clone() },
             Term::Case {
                 lhs_level,
                 rhs_level,
@@ -2229,6 +2231,11 @@ impl<'a, 'v> Eval<'a, 'v> {
             (Val::Squash { tm, .. }, Elim::ElimSquash { case, .. }) => {
                 self.spend()?;
                 Ok(Work::Apply1(*case, *tm))
+            }
+            // `unsquash_empty(squash a) ⇝ a` (metatheory ch. 07 §29).
+            (Val::Squash { tm, .. }, Elim::UnsquashEmpty { .. }) => {
+                self.spend()?;
+                Ok(Work::Force(*tm))
             }
             // A run's one-step view is the Σ-chain it stands for
             // (`docs/kernel/native-bitvector-values-design.md` §3.3): unpack its

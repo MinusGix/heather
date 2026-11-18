@@ -291,6 +291,7 @@ fn elimination<'v>(e: &Elim<'v>, o: Outer<'v>) -> Elim<'v> {
                 case: tm_clo(case, o),
             }
         }
+        Elim::UnsquashEmpty { level: l } => Elim::UnsquashEmpty { level: level(l, o) },
         Elim::Case {
             lhs_level,
             rhs_level,

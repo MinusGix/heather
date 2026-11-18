@@ -1093,6 +1093,7 @@ fn delta_head_in(t: &Term, defs: Defs<'_>, eliminated: bool) -> Option<GlobalVar
         }
         Term::ElimNat { scrut, .. }
         | Term::ElimEmpty { scrut, .. }
+        | Term::UnsquashEmpty { scrut, .. }
         | Term::Case { scrut, .. }
         | Term::ElimW { scrut, .. }
         | Term::ElimWf { scrut, .. }
@@ -3030,6 +3031,16 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             // motive instances agree for the same reason.
             (TmView::ElimSEmpty { .. }, TmView::ElimSEmpty { .. },) => self.tm_ne_elim_s_empty(env, &va, &vb),
             (TmView::ElimSquash { .. }, TmView::ElimSquash { .. },) => self.tm_ne_elim_squash(env, &va, &vb),
+            // unsquash_empty neutral congruence — the arguments are skipped,
+            // as elim_Empty's are: they sit at ∥Empty∥, which accepts any
+            // two terms (metatheory ch. 07 §29).
+            (
+                TmView::UnsquashEmpty { level: v1, .. },
+                TmView::UnsquashEmpty { level: v2, .. },
+            ) => {
+                self.lev_eq(v1, v2)?;
+                Ok((D::empty(env, v1), (*v1).clone()))
+            }
             // case neutral congruence (extension); typed like ElimNat — the
             // motive's level, the motive, the branches (at M[inl x/z] /
             // M[inr y/z]) and then the scrutinees via tm_nee; result

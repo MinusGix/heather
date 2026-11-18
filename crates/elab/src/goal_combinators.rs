@@ -1340,6 +1340,7 @@ fn eliminator_headed(term: &Term) -> bool {
         head,
         Term::Case { .. } | Term::ElimNat { .. } | Term::ElimW { .. } | Term::ElimWf { .. } | Term::J { .. }
             | Term::ElimEmpty { .. } | Term::ElimSEmpty { .. } | Term::ElimSquash { .. }
+            | Term::UnsquashEmpty { .. }
             | Term::ElimCodeTy { .. } | Term::ElimCodeTm { .. }
     )
 }

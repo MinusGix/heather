@@ -760,6 +760,15 @@ pub enum Term {
         case: Rc<Term>,
         scrut: Rc<Term>,
     },
+    /// `unsquash_empty^l(q) : Empty^l` where `q : ∥Empty^l∥` — the release of
+    /// a squashed absurdity (docs/language/strict-conditions-design.md §4.2,
+    /// docs/kernel/metatheory-ch07-extensions.md §29). β sends
+    /// `squash(A; a)` to `a`; neutral on a neutral argument, and neutral
+    /// congruence skips the arguments, as [`Term::ElimEmpty`]'s does.
+    UnsquashEmpty {
+        level: Level,
+        scrut: Rc<Term>,
+    },
 
     /// `[b₀, …, b_{w-1}]^l(T; zero, one)` — a closed prefix of a `Vec`
     /// whose every element is one of two terms, held as a machine word
@@ -1510,6 +1519,9 @@ pub struct Branches {
     /// scoped over `z : ∥U_A∥`; `u_b` over `x : U_A` and returns
     /// `∥U_B[squash x/z]∥`; `u_q : ∥U_A∥`.
     pub tm_elim_squash: Rc<Term>,
+    /// `(ℓ, g, u_q, x_q. t_unsquash_empty)` — code of
+    /// `unsquash_empty^ℓ(u_q^id)`, `u_q : Trm_c(g ⊢ ∥Empty^ℓ∥ @ ℓ)`.
+    pub tm_unsquash_empty: Rc<Term>,
 
     // -- M-types (docs/kernel/kernel-m-codes-design.md §2) --
     /// `(ℓ, ℓ', ℓi, g, U_I, U_S, U_P, u_o, u_j, x_I, x_S, x_P, x_o, x_j.
