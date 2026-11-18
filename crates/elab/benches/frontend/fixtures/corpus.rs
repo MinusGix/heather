@@ -24,7 +24,7 @@ use super::{fresh_closure_runner, validate_closure};
 const VEC_CODE: &str = include_str!("../../../../../lib/lang/vec_code.hthr");
 const IR_V1: &str = include_str!("../../../tests/fixtures/ir_v1.hthr");
 
-fn lib_dir() -> PathBuf {
+pub(super) fn lib_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../lib")
 }
 
@@ -46,7 +46,7 @@ fn ir_v1() -> PathBuf {
 /// it is read from the library.
 ///
 /// `-L lib/std` matches `crates/cli/src/main.rs`'s `DEFAULT_LIB`.
-fn closure(file: &Path) -> Vec<(String, String)> {
+pub(super) fn closure(file: &Path) -> Vec<(String, String)> {
     let root = file;
     // A root that imports nothing is loaded with no search path: it is timed
     // alone, as `vec_code.hthr` always was, and not over the common prelude

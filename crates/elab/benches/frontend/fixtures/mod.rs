@@ -37,6 +37,7 @@ pub mod intricate;
 pub mod meta;
 pub mod rewriting;
 pub mod scale;
+pub mod survey;
 
 /// Every family, in report order. Constructing them does all the setup —
 /// source generation, prelude construction, and one validating run each — so
@@ -51,6 +52,7 @@ pub fn all() -> Vec<Family> {
     v.extend(intricate::families());
     v.extend(meta::families());
     v.extend(rewriting::families());
+    v.extend(survey::families());
     v
 }
 
