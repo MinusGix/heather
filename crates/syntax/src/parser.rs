@@ -258,6 +258,9 @@ struct Parser {
     mutables: Vec<String>,
     /// Parsing a `for` header, where `a..b` is a range (§5.2).
     range_header: bool,
+    /// Inside a `record`'s value-parameter list, where `self t: T` marks the
+    /// receiver (issues/record-in-type-namespace.md).
+    record_self: bool,
     /// Suppress the record literal `D { … }` (docs/language/surface-records.md §6.1).
     ///
     /// `{` after an expression is ambiguous exactly where a *block* follows
@@ -740,6 +743,7 @@ impl Parser {
             defer_binds: false,
             mutables: Vec::new(),
             range_header: false,
+            record_self: false,
         }
     }
 
@@ -2458,7 +2462,22 @@ impl Parser {
     fn record(&mut self) -> R<InductiveDecl> {
         let start = self.peek_span();
         self.bump(); // `record`
-        let (name, _) = self.ident("record name")?;
+        // `record Target::Held(self t: Target, …) { … }`: a record may be
+        // declared in a type's namespace, as a `fn Target::m` is, and is then
+        // applied as `t.Held(…)` (issues/record-in-type-namespace.md,
+        // docs/language/modules-design.md §4). As at a declaration head, the
+        // parser lets one qualifier through and the elaborator checks that it
+        // names a type.
+        let (name, name_span) = self.qual_ident("record name")?;
+        if name.matches("::").count() > 1 {
+            return Err(ParseError {
+                msg: format!(
+                    "`{name}` has more than one qualifier: a record is declared in \
+                     exactly one type's namespace, `Type::Name`"
+                ),
+                span: name_span,
+            });
+        }
         // `record R<A: Type<1>, X>`: a parameter declared at a universe is a
         // type the record's own type parameters (which live at `Type<0>`)
         // cannot hold, so it becomes a leading value parameter at that
@@ -2506,7 +2525,24 @@ impl Parser {
                 }
             }
         }
-        valparams.extend(self.valparam_list(false, true)?);
+        self.record_self = true;
+        let written = self.valparam_list(false, true);
+        self.record_self = false;
+        let written = written?;
+        // A method call puts its receiver in the first positional argument
+        // of a record's type, so `self` is that one: what a `fn` reads off
+        // its parameter metadata, a record's type former does not keep.
+        if let Some(p) = written.iter().skip(1).find(|p| p.is_self) {
+            return Err(ParseError {
+                msg: format!(
+                    "a record's `self` is its first value parameter, which is where a \
+                     method call puts the receiver: write `self {}` first",
+                    p.name
+                ),
+                span: p.span,
+            });
+        }
+        valparams.extend(written);
         let varies = self.varies_clause()?;
         self.expect(&TokKind::LBrace, "`{` (field list)")?;
         let mut fields = Vec::new();
@@ -2702,9 +2738,28 @@ impl Parser {
             // is strictly additive; it is shared because a reader who has
             // written `fn f(n, m: Nat)` has no way to know this list is a
             // different production.
-            let mut names: Vec<(String, Span, Option<String>)> = Vec::new();
+            let mut names: Vec<(String, Span, Option<String>, bool)> = Vec::new();
             loop {
+                // `self t: Target`: a record's value parameter a method call's
+                // receiver fills, as at a `fn` (issues/record-in-type-namespace.md).
+                // Only a record's list reads it; elsewhere `self` stays a name.
+                let is_self = self.record_self
+                    && self.at_kw("self")
+                    && matches!(self.nth(1), TokKind::Ident(_));
+                let self_sp = self.peek_span();
+                if is_self {
+                    self.bump();
+                }
                 let (n, span) = self.binder_ident("value parameter name")?;
+                if is_self
+                    && let Some(prev) = params.iter().find(|p: &&Param| p.is_self).map(|p| p.name.clone())
+                        .or_else(|| names.iter().find(|(.., s)| *s).map(|(n, ..)| n.clone()))
+                {
+                    return Err(ParseError {
+                        msg: format!("a record has at most one `self`, and `{prev}` is already it"),
+                        span: self_sp.join(span),
+                    });
+                }
                 let asp = self.peek_span();
                 let symbol = self.binder_symbol(&n)?;
                 if symbol.is_some() && !symbols {
@@ -2718,7 +2773,7 @@ impl Parser {
                         span: asp.join(self.peek_span()),
                     });
                 }
-                names.push((n, span, symbol));
+                names.push((n, span, symbol, is_self));
                 if !(matches!(self.peek(), TokKind::Comma)
                     && matches!(self.nth(1), TokKind::Ident(_)))
                 {
@@ -2758,12 +2813,12 @@ impl Parser {
                     span: names[0].1.join(ty.span),
                 });
             }
-            for (n, nsp, symbol) in names {
+            for (n, nsp, symbol, is_self) in names {
                 params.push(Param {
                     name: n,
                     ty: ty.clone(),
                     implicit: false,
-                    is_self: false,
+                    is_self,
                     solver: None,
                     default: default.clone(),
                     origin: ParamOrigin::Written,
@@ -9851,6 +9906,29 @@ mod tests {
         assert!(middle.msg.contains("follows a defaulted value parameter"), "{}", middle.msg);
         let class = parse_file("class C<A>(op: A -> A -> A := +) { }").unwrap_err();
         assert!(class.msg.contains("only a `record`"), "{}", class.msg);
+    }
+
+    /// `record Target::Held(self t: Target, …)` (issues/record-in-type-namespace.md):
+    /// one qualifier, and a `self` that is the first value parameter.
+    #[test]
+    fn record_in_a_type_namespace() {
+        let ok = parse_file("record T::Held(self t: T, n: Nat) { f: Nat }").expect("parses");
+        let Item::Inductive(d) = &ok.items[0] else { panic!("a record") };
+        assert_eq!(d.name, "T::Held");
+        assert!(d.valparams[0].is_self && !d.valparams[1].is_self);
+        let late = parse_file("record T::Held(n: Nat, self t: T) { f: Nat }").unwrap_err();
+        assert!(late.msg.contains("its first value parameter"), "{}", late.msg);
+        let two = parse_file("record T::A::Held(self t: T) { f: Nat }").unwrap_err();
+        assert!(two.msg.contains("more than one qualifier"), "{}", two.msg);
+        // Elsewhere `self` is still an ordinary name.
+        let named = parse_file("record R(self: Nat) { f: Nat }").expect("parses");
+        let Item::Inductive(d) = &named.items[0] else { panic!("a record") };
+        assert!(d.valparams[0].name == "self" && !d.valparams[0].is_self);
+        let class = parse_file("class C<A>(self x: A) { }").unwrap_err();
+        assert!(!class.msg.is_empty());
+        // An inductive still declares no qualified name.
+        let ind = parse_file("inductive T::D { A }").unwrap_err();
+        assert!(ind.msg.contains("qualified name"), "{}", ind.msg);
     }
 
     #[test]
