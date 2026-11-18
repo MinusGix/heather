@@ -133,20 +133,7 @@ runtime fn utf8_valid_up_to(s: List<u8>, n: u64) → u64 { utf8_valid_from(s, n,
 // The decoder emits a character exactly when the value is not overlong and
 // is a scalar value.
 theorem emit_is_some(min, code: Nat, r: List<u8>): utf8::emit(min, code, r).is_some() = (min.leb(code) && char::is_scalar(code)) {
-    match low: min.leb(code) {
-        False => calc {
-            utf8::emit(min, code, r).is_some() = utf8::emit_min(min.leb(code), code, r).is_some() := refl,
-            = False && char::is_scalar(code) := rewrite(low, refl),
-        },
-        True => calc {
-            utf8::emit(min, code, r).is_some() = utf8::emit_min(min.leb(code), code, r).is_some() := refl,
-            = utf8::emit_dec(code, char::is_scalar(code).is_true_dec(), r).is_some() := rewrite(low, refl),
-            = True && char::is_scalar(code) := match d: char::is_scalar(code).is_true_dec() {
-                Inl(p) => sym(cong_fn(λ (x: Bool) => True && x, eq_true_of_is_true(char::is_scalar(code), p))),
-                Inr(np) => sym(cong_fn(λ (x: Bool) => True && x, eq_false_of_not_is_true(char::is_scalar(code), np))),
-            },
-        },
-    }
+    split_all; all_goals { refl }
 }
 
 // ---------------------------------------------------------------------------

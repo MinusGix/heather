@@ -5,7 +5,7 @@
 // hypothesis), a case taken twice, and what a failing leaf reports. Tests,
 // not library: nothing outside lib/_tests imports this module
 // (docs/test-value-audit.md §4.5).
-import logic; import bool; import nat; import omega; import bitvec; import bitvec_nat; import bitvec_omega;
+import logic; import bool; import nat; import option; import omega; import bitvec; import bitvec_nat; import bitvec_omega;
 
 fn clamp(x, lo, hi: u64) → u64 {
     if x < lo {
@@ -93,4 +93,34 @@ theorem clamp_twice_unordered(x, lo, hi: u64): clamp(clamp(x, lo, hi), lo, hi) =
 // expect-error: in the `split_all` case `48 <= c`, `c <= 57`
 theorem digit_five(c: u8, h: is_digit(c) = True): c.toNat() = 53 {
     split_all; all_goals { bv_omega }
+}
+
+// ---- A decision computed from a Boolean ----
+
+// `keep` takes the proof the decision carries, as `utf8::emit_dec` hands
+// `char::ofNat` its scalar proof: the split is on the decision, and each
+// case rewrites the Boolean to its verdict
+// (issues/split-all-decided-proof-scrutinee.md).
+fn small(n: Nat) → Bool { n.leb(9) && !n.same(3) }
+fn Small(n: Nat) → Type { small(n).IsTrue() }
+fn keep<A>(x: A, n: Nat, p: Small(n)) → A { x }
+fn pick<A>(x: A, n: Nat, d: Small(n) ∨ ¬Small(n)) → Option<A> {
+    match d { Inl(p) => Some(keep(x, n, p)), Inr(_) => None }
+}
+fn pick_small<A>(x: A, n: Nat) → Option<A> { pick(x, n, small(n).is_true_dec()) }
+
+theorem pick_small_is_some<A>(x: A, n: Nat): pick_small(x, n).is_some() = small(n) {
+    split_all; all_goals { refl }
+}
+// At a literal the decision computes and no split is taken.
+theorem pick_small_four(): pick_small(True, 4).is_some() = True {
+    split_all; all_goals { refl }
+}
+// Under a test of the goal's own: the decision is split inside the case.
+theorem pick_small_below(x: Nat, n: Nat): (n.leb(20) && pick_small(x, n).is_some()) = (n.leb(20) && small(n)) {
+    split_all; all_goals { refl }
+}
+// expect-error: which `refl` does not prove
+theorem pick_small_negated(n: Nat): pick_small(0, n).is_some() = !small(n) {
+    split_all; all_goals { refl }
 }

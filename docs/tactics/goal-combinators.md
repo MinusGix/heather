@@ -187,6 +187,17 @@ Programs call programs, and take preconditions that are calls
   closes the case the same way
   (`issues/constructor-equations-in-context.md`).
 
+- **A decision computed from a Boolean** (`b.is_true_dec()`, which
+  `utf8::emit_dec` matches on to hand `char::ofNat` its proof) is split as
+  the decision, `Inl(p)` and `Inr(no)`, never at `b`'s own tests inside it:
+  the arms' proofs are typed by `b`, so a motive that abstracted one of its
+  tests is no type. Once a case's goal is simplified the proof has gone from
+  it (`is_some(Some(…))` is `True`), and the case equation rewrites `b`
+  where it still stands (`Bool::decided`: `b = Bool::verdict(d)`, which
+  computes at a constructor). `examples/utf8/utf8_check.hthr`'s
+  `emit_is_some` is `split_all; all_goals { refl }`
+  (`issues/split-all-decided-proof-scrutinee.md`).
+
 What it does not do yet: revise a hypothesis that a split substitutes into
 when the hypothesis has no test of its own to split (only the root reverts,
 and only what it can split); and
