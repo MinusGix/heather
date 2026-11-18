@@ -1062,6 +1062,25 @@ impl InductivesMut<'_> {
             return err(format!("duplicate name `{}`", d.name), d.span);
         }
         NameLookup(self).check_declarable(&d.name, d.span)?;
+        // `record Target::Held(…)`: the owner has to name a type here, as a
+        // `fn Target::m`'s does (`declarations.rs`), or the record attaches to
+        // nothing (issues/record-in-type-namespace.md).
+        if let Some((owner, base)) = crate::names::split_qual(&d.name) {
+            if base.is_empty() {
+                return err("a record in a type's namespace needs a name after `::`", d.span);
+            }
+            if !crate::dispatch::Carriers(self).names_a_carrier(owner) {
+                return err(
+                    format!(
+                        "`{owner}` is not a type in scope, so `{}` attaches to nothing — a \
+                         record in a type's namespace is `record <Type>::{base}(…)`, and the \
+                         type must be declared (or be a kernel type) before it",
+                        d.name
+                    ),
+                    d.span,
+                );
+            }
+        }
         if d.name == "Nat" {
             return err("`Nat` is built in", d.span);
         }

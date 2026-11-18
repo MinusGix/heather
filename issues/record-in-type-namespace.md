@@ -1,6 +1,6 @@
 ---
 title: A record declared in a type's namespace, written t.Held(...)
-status: open
+status: closed
 thread: Make compiler correctness proofs elegant
 labels: [language,records,proofs]
 area: language
@@ -37,3 +37,7 @@ A record cannot be declared in a type's namespace. `record Target::Held(self t: 
 ## Exit
 
 The five alias pairs in `native_compile_region.hthr`, `native_compile_homes.hthr` and `native_compile_calls.hthr` are each one record declaration, with no use site respelled.
+
+## Resolution (2026-11-18)
+
+Built: `record Target::Held(self t: Target, …)` parses (one qualifier; `self` on the first value parameter only), the owner is checked as at a `fn` member, the base name enters the member table off the inductive's name (live and on image replay, no format change), and `t.Held(…)` resolves to the record's *type* (`dispatch/member.rs`), never its constructor. Spellings and limits: `docs/language/surface-records.md` §1.3. Probes: `lib/_tests/lang/record_member_tests.hthr`. `inductive`/`enum` stay unqualified: nothing asked.
