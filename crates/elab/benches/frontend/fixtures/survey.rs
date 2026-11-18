@@ -17,7 +17,8 @@
 //! between the two is the question's price.
 //!
 //! `loops/word-body` is a `for` over words whose body assigns a word field
-//! `k` times, the shape of SHA-256's rounds. It is exponential in `k` today
+//! `k` times, the shape of SHA-256's rounds. It was exponential in `k` until
+//! the loop's companions stopped spelling a `let`'s value once per read
 //! ([[word-loop-body-exponential]]).
 
 use heather_elab::Elaborator;
@@ -107,20 +108,19 @@ fn words_base() -> Elaborator {
 
 /// `k` assignments `r.a := r.a + i` in the body of `for i in 0..8`, `r` a
 /// record of two `u64`s. **Lower bound: linear in k**, as the same body over
-/// `Nat` is. Today it is exponential: the loop is read with its range at
-/// `Nat` first, refused, and read again counting words, and each operator's
-/// carrier probe elaborates its left operand, whose spelling holds the
-/// statements before it, so the probes nest one level per statement
-/// (2026-11-18: 2,166 probes at k = 4 and 25,290 at k = 6, nested up to
-/// k − 1 deep). Its band is the fit over exactly these sizes, as the
-/// rewriting suite's exponential families' are.
+/// `Nat` is. It was exponential (slope 3.47 over 4..7, 2026-11-18): the
+/// measured loop's companions (`#ext`, `_unfold`, `#induct`) substitute each
+/// `let` into the next, and `r := r with { a = r.a + i }` reads `r` twice, so
+/// the spelled body doubled per statement and every operator's carrier probe
+/// re-elaborated it. A value read twice is now bound once
+/// (`measure::subst_shared`).
 fn loops_word_body() -> Family {
     let base = words_base();
     let src = |k: u64| {
         let body = "        r.a := r.a + i;\n".repeat(k as usize);
         format!("import logic;\nimport bitvec;\nimport bitvec_omega;\nrecord R {{ a: u64, b: u64 }}\nfn R::f(mut self r: R) -> u64 {{\n    for i in 0..8 {{\n{body}    }}\n    r.a\n}}\n")
     };
-    let sizes: &[u64] = if crate::harness::smoke() { &[2] } else { &[4, 5, 6, 7] };
+    let sizes: &[u64] = if crate::harness::smoke() { &[2] } else { &[8, 16, 32, 64] };
     let cases = sizes
         .iter()
         .map(|&k| {
@@ -133,12 +133,11 @@ fn loops_word_body() -> Family {
         .collect();
     Family {
         name: "loops/word-body",
-        what: "k word-field assignments in a `for` over words (exponential today)",
+        what: "k word-field assignments in a `for` over words",
         unit: "statements",
-        // Recorded, not claimed: 3.47 over 4..7 on the cloud box,
-        // 2026-11-18, each statement past five doubling the time. A fix
-        // leaves the band from below, towards 1.
-        expect_slope: Some((2.9, 4.1)),
+        // Recorded: 0.75 over 8..64 on the cloud box, 2026-11-18, under a
+        // fixed second of setup; the last doubling alone is 1.2.
+        expect_slope: Some((0.4, 1.1)),
         cases,
     }
 }
