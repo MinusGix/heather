@@ -1,0 +1,77 @@
+---
+title: The UTF-8 example reads as logic, not plumbing
+status: open
+labels: [examples,tactics,library,language]
+area: tactics
+created: 2026-11-18
+updated: 2026-11-18
+---
+
+After PR #787 (`examples/utf8/utf8_check.hthr`, 856 → 448 lines), Minus's
+review (2026-11-18) of what still reads badly, and the plan agreed for it,
+worked down in this order and merged as each lands.
+
+## What reads badly, and why
+
+Three causes account for most of it:
+
+1. **The span is a bare `List<u8>` and a length word.** `byte_within` (0
+   past the end), `at` (a default of 0 that only dodges a proof), `Window`
+   and its read rules, the `drop((i + 1).toNat())` arithmetic and most
+   `Cons` spellings exist for this. `Bytes(n)`
+   (`lib/native/runtime/bytes.hthr`) reads `s[i]` under a found proof.
+2. **The program mimics the decoder in word arithmetic**: it assembles a
+   code point and compares it with bounds, through `utf8_two/three/four`
+   and the `_at` helpers (which exist only so the certificate scan of the
+   loop fits one step), returning `0`/`1` words tested by `.eq_bit(0)`.
+3. **Statements are Bool equations** (`holds() = …`) because `rewrite` and
+   `bv_decide` read those, where a reader wants `↔`.
+
+And the proof: `valid_window_decides` is thirteen induction arms of
+positional plumbing (`h3`, `h4`, `rewrite(win.left(i + 1), bv_omega)`);
+names like `two`, `cut_two`, `stops`; theorems that should not need to
+exist (`valid_is_decoded` is `refl`; `decode_cons` exists because `decode`
+matches three conses deep; `class_*` because the program and the decoder
+classify a lead byte separately).
+
+## The list
+
+1. Library and language pieces:
+   - [x] `Option::is_some` in `option.hthr` (the example's `Option::holds`;
+     one definition also ends the compile-x86 clash of two modules each
+     defining it).
+   - [x] Widening casts between words (`u8 → u64`), in the cast graph
+     (docs/language/casting-design.md), read by `bv_decide`/`bv_omega`;
+     the example's `word` goes.
+   - [x] List patterns and literals with a rest (`[b, c, ..r]`).
+   - [x] A rule in docs/proof-patterns.md: an induction's cases each name
+     the fact of the specification they are; a chain of rewrites every case
+     repeats is a lemma or a tactic; never thread hypotheses by position.
+2. Tools: `bv_decide` reads `∧ ∨ ↔ ¬` over what it reads; `↔` lemmas
+   rewrite, so statements stop being Bool equations. `split_all` through a
+   decision ([[split-all-decided-proof-scrutinee]]) so `emit_is_some` goes.
+3. The example over `Bytes(n)`: `byte_within`, `at`, `Window` go
+   (needs loops taking facts in `runtime fn`, the span-loops thread).
+4. The program as Unicode's well-formed byte table (Table 3-7: the second
+   byte's range depends on the lead, `E0 → A0..BF`, `ED → 80..9F`,
+   `F0 → 90..BF`, `F4 → 80..8F`, else `80..BF`; later bytes `80..BF`), with
+   a `Lead` classification shared by the program and the decoder; the proof
+   one lemma per sequence length and a `match` on the lead's class; the
+   result in Rust's shape, `Result<(), Utf8Error { valid_up_to }>`, which
+   also states the bad byte's offset the README lists as unproved.
+
+## Log
+
+- 2026-11-18: filed with the plan.
+- 2026-11-18: item 1 built. `Option::is_some`/`is_none`/`is_some_and`/`get`
+  in option.hthr (from function_ir_lower and regex_table; utf8's
+  `is_some_string` is `.is_some()`). Word widening edges
+  (`BitVec::widen_8_64` and kin, `Casts::indexed_edge` for one carrier at two
+  indices), compiled by `runtime fn` (`PWiden`) and read by `bv_omega`; the
+  example's loop compares its byte at `u8` and widens with `↑`, so `word`
+  is gone. `[a, b, ..rest]` patterns and values; the example's nested length
+  matches are one match each. The proof-patterns rule. Found on the way:
+  `omega` does not unfold `len` three conses deep (`cut_four` annotates the
+  binder `short: r3.len() + 3 < 3`), and a block in a deep-pattern arm turns
+  the match into one the termination guard refuses ("a deep pattern is not
+  available in this `match`") though the function does not recurse.

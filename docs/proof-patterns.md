@@ -313,6 +313,21 @@ should read is `docs/library/program-and-proof-style.md`.
   … }`) when the cases need different proofs; a `for` loop is
   `List::foldl_invariant` over its step
   (`docs/tactics/functional-induction-design.md`).
+- **Each case of an induction says which fact of the specification it is;
+  shared work is a lemma or a tactic, never repeated plumbing.** An
+  `induct` whose arms each restate the same chain of rewrites, threading
+  hypotheses by position (`cut_two(…, h3, h4, rewrite(win.left(i + 1),
+  bv_omega))` beside `cut_three(…, h5, h6, …)`), tells a reader nothing the
+  function's own tests did not, and breaks when a test moves. Split on
+  readable logic instead: one lemma per kind of case (a sequence of length
+  `k` accepted, refused, or cut off by the end), stated once for every `k`,
+  so each arm is a citation of the fact it is; or close arms alike with one
+  shared tactic under `all_goals`. Hypotheses reach a lemma by their type
+  (`rewrite` finds a side condition among them,
+  `docs/tactics/equation-rewrite-design.md` §6.1), not by their generated
+  names. Minus, 2026-11-18, on the UTF-8 example's thirteen-arm window
+  proof: "We shouldn't be doing such manual manipulation except by logical
+  means" (`issues/utf8-example-elegance.md`).
 - **A loop counting a word up to a closed bound, run to its value, is
   `BitVec::loop_up`, not unfolding.** A `decreases` function whose
   body is one test with an equation (`if h: P { … } else { … }`, `match h:
