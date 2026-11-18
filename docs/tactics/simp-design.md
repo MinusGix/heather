@@ -436,7 +436,10 @@ Round 1, with relations (2026-11-11). `simp_only(r₁, …, rₙ)` and
 - **Side conditions.** A law's non-dependent hypothesis is found among the
   hypotheses in scope (parameters and `let`s), or proved by
   `discharge := e`. A law whose condition is unmet is reported as blocked,
-  with the condition.
+  with the condition. A tactic discharges as a term, `discharge := by
+  bv_decide()` (the UTF-8 example's byte classes: the decoder's branch
+  equations, each condition a test on the byte); a bare `bv_decide()` is a
+  `Tac` value, not a proof, and discharges nothing.
 - **Relations.** The relation walk crosses calls with registered
   `PreservesRelation`/`Respects2` evidence, and now inductive constructor
   values of one or two fields, with evidence at `T::C`.

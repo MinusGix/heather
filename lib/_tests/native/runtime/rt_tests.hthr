@@ -195,7 +195,7 @@ fn sum(xs: List<BitVec(8)>, start: BitVec(64)) → BitVec(64) { xs.foldl(sum_ste
 
 fn sum_step_rt() → Fun { Fun([Word(64), Word(8)], Word(64), Let(Prim(Zext(8, 56), [0]), Prim(Add(64), [2, 0]))) }
 
-fn sum_rt() → Fun { Fun([Bytes(0), Word(64)], Word(64), Fold(1, 0, 0)) }
+fn sum_rt() → Fun { Fun([ByteList(0), Word(64)], Word(64), Fold(1, 0, 0)) }
 
 fn sum_world() → World { World(RecInfo::none, [sum_step_rt().sig(), sum_rt().sig()], Pair(sum_step, Pair(sum, trivial))) }
 
@@ -270,7 +270,7 @@ fn bump(xs: List<BitVec(8)>, i: BitVec(64)) → BitVec(8) {
 }
 
 fn bump_rt() → Fun {
-    Fun([Bytes(0), Word(64)], Word(8),
+    Fun([ByteList(0), Word(64)], Word(8),
         Let(Prim(Get(0), [1, 0]),
         Let(Lit(Word(8), 1),
         Let(Prim(Add(8), [1, 0]),
@@ -301,13 +301,13 @@ fn keep_step(acc: List<List<BitVec(8)>>, line: List<BitVec(8)>) → List<List<Bi
 
 fn reversed(lines: List<List<BitVec(8)>>) → List<List<BitVec(8)>> { lines.foldl(keep_step, List::Nil) }
 
-fn push_line_rt() → Fun { Fun([Lines, Bytes(0)], Lines, Prim(ConsLine(0), [0, 1])) }
+fn push_line_rt() → Fun { Fun([Lines, ByteList(0)], Lines, Prim(ConsLine(0), [0, 1])) }
 
-fn count_step_rt() → Fun { Fun([Word(64), Bytes(0)], Word(64), Let(Lit(Word(64), 1), Prim(Add(64), [2, 0]))) }
+fn count_step_rt() → Fun { Fun([Word(64), ByteList(0)], Word(64), Let(Lit(Word(64), 1), Prim(Add(64), [2, 0]))) }
 
 fn count_lines_rt() → Fun { Fun([Lines, Word(64)], Word(64), Fold(1, 0, 1)) }
 
-fn keep_step_rt() → Fun { Fun([Lines, Bytes(0)], Lines, Prim(ConsLine(0), [0, 1])) }
+fn keep_step_rt() → Fun { Fun([Lines, ByteList(0)], Lines, Prim(ConsLine(0), [0, 1])) }
 
 fn reversed_rt() → Fun { Fun([Lines], Lines, Let(Lit(Lines, 0), Fold(1, 0, 3))) }
 
@@ -331,7 +331,7 @@ theorem reversed_reflects(xs: List<List<BitVec(8)>>): reversed_rt().meaning(line
 // where a list is expected, which means the default, not the function.
 // expect-error(kernel): the kernel rejected `push_line_misreflects`: NotConvertible
 theorem push_line_misreflects(xs: List<List<BitVec(8)>>, x: List<BitVec(8)>):
-    Fun([Lines, Bytes(0)], Lines, Prim(ConsLine(0), [1, 0])).meaning(lines_world())(xs, x) = push_line(xs, x) { refl }
+    Fun([Lines, ByteList(0)], Lines, Prim(ConsLine(0), [1, 0])).meaning(lines_world())(xs, x) = push_line(xs, x) { refl }
 
 // A byte buffer is written in place, never consed onto.
 fn cons_byte(x: BitVec(8), xs: List<BitVec(8)>) → List<BitVec(8)> { List::Cons(x, xs) }

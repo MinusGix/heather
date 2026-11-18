@@ -137,7 +137,7 @@ fn tr_prog() → ELoop {
         ELoop::While(going(), pass_body(), [6, 4], ELoop::Done(ETm::Pure(Var(0)))))
 }
 
-fn tr_g() → List<Ty> { [Bytes(0)] }
+fn tr_g() → List<Ty> { [ByteList(0)] }
 fn tr_locs() → List<Loc> { [InBuffer(0)] }
 
 fn lowers(o: Option<ELowered>) → Bool { match o { None => False, Some(_) => True } }
@@ -250,11 +250,11 @@ theorem stale_control(): lowers_at(with_pass(pass_body(), [6, 4])) = True { refl
 // The buffer lent is the file's second: a program lends a prefix of its
 // file, so refused (issues/source-buffers-as-views.md).
 theorem second_buffer_refused(): lowers(ETm::Let(Lit(Word(64), 7), ETm::Let(Lit(Word(64), 0), ETm::Lend(0, 0, 2, [1, 0], ETm::Pure(Var(0)))))
-    .lower(tr_world(), tr_lents(), [Bytes(0), Bytes(0)], [InBuffer(1), InBuffer(0)], 1)) = False { refl }
+    .lower(tr_world(), tr_lents(), [ByteList(0), ByteList(0)], [InBuffer(1), InBuffer(0)], 1)) = False { refl }
 
 // Its control: the first buffer lowers.
 theorem first_buffer_control(): lowers(ETm::Let(Lit(Word(64), 7), ETm::Let(Lit(Word(64), 0), ETm::Lend(0, 0, 2, [1, 0], ETm::Pure(Var(0)))))
-    .lower(tr_world(), tr_lents(), [Bytes(0), Bytes(0)], [InBuffer(0), InBuffer(1)], 1)) = True { refl }
+    .lower(tr_world(), tr_lents(), [ByteList(0), ByteList(0)], [InBuffer(0), InBuffer(1)], 1)) = True { refl }
 
 // One word where the function takes two.
 theorem arity_refused(): lowers(ETm::Let(Lit(Word(64), 7), ETm::Lend(0, 0, 1, [0], ETm::Pure(Var(0))))
@@ -269,7 +269,7 @@ theorem unknown_refused(): lowers(ETm::Let(Lit(Word(64), 7), ETm::Let(Lit(Word(6
 // wrote, since the compiler takes no one-bit move; a word is moved to a
 // fresh word.
 
-fn cond_g() → List<Ty> { [Word(64), Bytes(0)] }
+fn cond_g() → List<Ty> { [Word(64), ByteList(0)] }
 fn cond_locs() → List<Loc> { [InWord(1), InBuffer(0)] }
 
 fn same_place(a: Option<Lowered>, b: Option<Lowered>) → Bool {
@@ -291,7 +291,7 @@ theorem word_moved(): placed_at(Tm::Prim(Add(64), [0, 0])) = False { refl }
 // The reflector reads the surface method into the program written above,
 // the call of `raise_span` a `Lend` of the table's function 0.
 theorem tr_reflected(): True {
-    by reflects_io_loop_as(["Io::tr_upper"], [], [], ["raise_span"], [LoopFun([Bytes(0)], Word(64), tr_prog())])
+    by reflects_io_loop_as(["Io::tr_upper"], [], [], ["raise_span"], [LoopFun([ByteList(0)], Word(64), tr_prog())])
 }
 
 // The surface method is the program's meaning at every world and every

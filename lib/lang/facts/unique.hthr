@@ -28,7 +28,7 @@
 // Both are proved from one definition, so neither is trusted: what the
 // lowering sees is a proof of `Unique`. What `Unique` buys is the lowering's
 // to prove: a store of buffers in which every live name reads its slot
-// (issues/runtime-default-setup-soundness.md, which lowers `Bytes`).
+// (issues/runtime-default-setup-soundness.md, which lowers `ByteList`).
 import logic;
 import bool;
 import nat;
@@ -49,7 +49,7 @@ import rt;
 
 // Whether a value of the code may hold a buffer. A list of lines holds
 // none: its cells are copies, written once and never in place.
-fn Ty::holds_bytes(self t: Ty) → Bool { match t { Word(_) => False, Bit => False, Bytes(_) => True, Lines => False, Named(_) => True, Count => False } }
+fn Ty::holds_bytes(self t: Ty) → Bool { match t { Word(_) => False, Bit => False, ByteList(_) => True, Lines => False, Named(_) => True, Count => False } }
 
 fn Nat::among(self n: Nat, xs: List<Nat>) → Bool {
     match xs { Nil => False, Cons(x, rest) => n.same(x) || n.among(rest) }

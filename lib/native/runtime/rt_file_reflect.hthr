@@ -61,7 +61,7 @@ import rt_reflect;
 // two spellings of a store, a window and its putting back. The last two
 // are absent where the body's module does not import `list_window`: it
 // then writes no window, and none is read.
-record FileNames { mutated: Nat, put: Nat, with_byte: Nat, window: Option<Nat>, put_window: Option<Nat> }
+record FileNames { mutated: Nat, put: Nat, with_byte: Nat, window: Option<Nat>, put_window: Option<Nat>, bytes: Option<Nat>, bytes_put: Option<Nat> }
 
 fn rt_global_here(name: String) → Tac<Option<Nat>> {
     lookup(name).bind(λ c => match c { Accepted(g) => pure(Some(g.id)), Refused(_) => pure(None) })
@@ -75,7 +75,11 @@ fn rt_file_names() → Tac<FileNames> {
     let with_byte <- rt_global(name_of(List::with_byte_within));
     let window <- rt_global_here(name_of(List::window));
     let put_window <- rt_global_here(name_of(List::put_window));
-    pure(FileNames(mutated, put, with_byte, window, put_window))
+    // `Bytes(n)` and its store, where the module imports `bytes`: a
+    // function of a `Bytes(n)` is read as one of its bytes and `n`.
+    let bytes <- rt_global_here("bytes::Bytes");
+    let bytes_put <- rt_global_here("bytes::Bytes::put");
+    pure(FileNames(mutated, put, with_byte, window, put_window, bytes, bytes_put))
 }
 
 // ---------------------------------------------------------------------------
@@ -119,6 +123,37 @@ fn RSt::written(self st: RSt, depth: Nat) → RSt {
 // program's computations so far, a `Call`'s index.
 record FWalk { st: RSt, segs: List<FSeg>, fk: FileKnown, done: Nat, cfuns: List<Nat> }
 
+// The length a `Bytes(n)` is of, read off the type of `h`.
+fn rt_file_bytes_n(names: FileNames, h: Handle) → Tac<Option<Handle>> {
+    match names.bytes {
+        None => pure(None),
+        Some(bt) => infer(Hd(h)).bind(λ c => match c {
+            Refused(_) => pure(None),
+            Accepted(t) => view(t).bind(λ tv => match tv {
+                HGlobal(tg, _, targs) => match tg.id.same(bt) {
+                    True => match targs { Cons(n, _) => pure(Some(n)), Nil => pure(None) },
+                    False => pure(None),
+                },
+                _ => pure(None),
+            }),
+        }),
+    }
+}
+
+// A call's arguments from the span it threads: a lifted loop over a
+// `Bytes(n)` takes `n` before the record, as a capture
+// (crates/elab/src/loops.rs, `implicit_captures`), and the record's type
+// says it again.
+fn rt_file_threaded(names: FileNames, args: List<Handle>) → Tac<List<Handle>> {
+    match args {
+        Cons(_, more) => match more {
+            Cons(a1, _) => rt_file_bytes_n(names, a1).bind(λ o => match o { Some(_) => pure(more), None => pure(args) }),
+            Nil => pure(args),
+        },
+        Nil => pure(args),
+    }
+}
+
 // The stores and calls a span has been through, the first first: the
 // parameter has been through none.
 fn rt_file_chain(fuel: Nat, names: FileNames, span: Nat, h: Handle) → Tac<List<Handle>> {
@@ -131,15 +166,15 @@ fn rt_file_chain(fuel: Nat, names: FileNames, span: Nat, h: Handle) → Tac<List
             },
             HField(c, name, _) => match Known::str_same(name, "after") {
                 True => view(c).bind(λ cv => match cv {
-                    HGlobal(_, cname, args) => match args {
+                    HGlobal(_, cname, args) => rt_file_threaded(names, args).bind(λ targs => match targs {
                         Cons(prev, _) => rt_file_chain(f, names, span, prev).bind(λ ls => pure(ls ++ [h])),
                         Nil => rt_refuse("`" ++ cname ++ "` without its span"),
-                    },
+                    }),
                     _ => rt_refuse("the span after something other than a call"),
                 }),
                 False => rt_refuse("a span read out of a record (`." ++ name ++ "`)"),
             },
-            HGlobal(g, name, args) => match g.id.same(names.with_byte) {
+            HGlobal(g, name, args) => match g.id.same(names.with_byte).or(FileNames::names(names.bytes_put, g.id)) {
                 True => match args {
                     Cons(prev, _) => rt_file_chain(f, names, span, prev).bind(λ ls => pure(ls ++ [h])),
                     Nil => rt_refuse("`" ++ name ++ "` without its span"),
@@ -218,9 +253,25 @@ fn rt_record_of(g: GlobalRef) → Tac<Option<String>> {
     })
 }
 
+// The code a called function of a `Bytes(n)` is compiled as: the function
+// of its bytes and `n` that its reflection writes out (`f::bytes`,
+// published as `HWorld::of_record(f, …)`), as the program's tables name it.
+fn rt_file_code_of(g: GlobalRef, name: String) → Tac<GlobalRef> {
+    let n <- rt_name_of(g, name);
+    let found <- lookup(n ++ "::bytes");
+    match found {
+        Refused(_) => pure(g),
+        Accepted(code) => rt_record_of(code).bind(λ source => match source {
+            Some(s) => match Known::str_same(s, n) { True => pure(code), False => pure(g) },
+            None => pure(g),
+        }),
+    }
+}
+
 // The program index of a called computation: its place among those so far
 // or, in the generator's mode, a runtime fn not met before, appended.
-fn rt_file_callee(k: Known, cfuns: List<Nat>, g: GlobalRef, name: String) → Tac<Pair<List<Nat>, Nat>> {
+fn rt_file_callee(k: Known, cfuns: List<Nat>, called: GlobalRef, name: String) → Tac<Pair<List<Nat>, Nat>> {
+    let g <- rt_file_code_of(called, name);
     match Known::index(cfuns, g.id, 0) {
         Some(i) => pure(Pair(cfuns, i)),
         None => match k.discover {
@@ -440,17 +491,39 @@ fn rt_file_lend(fuel: Nat, k: Known, names: FileNames, w: FWalk, link: Handle, a
     }
 }
 
+// The operands of a store or a call after the span it threads: its
+// length word, then the rest. A `Bytes(n)`'s length word is `n`, read off
+// its type, and a store of one is `s.put(i, v)`, its proof not read.
+fn rt_file_ops(names: FileNames, args: List<Handle>) → Tac<List<Handle>> {
+    match args {
+        Nil => pure([]),
+        Cons(a0, rest) => match names.bytes {
+            None => pure(rest),
+            Some(bt) => infer(Hd(a0)).bind(λ c => match c {
+                Refused(_) => pure(rest),
+                Accepted(t) => view(t).bind(λ tv => match tv {
+                    HGlobal(tg, _, targs) => match tg.id.same(bt) {
+                        True => match targs { Cons(n, _) => pure(Cons(n, rest)), Nil => pure(rest) },
+                        False => pure(rest),
+                    },
+                    _ => pure(rest),
+                }),
+            }),
+        },
+    }
+}
+
 fn rt_file_link(fuel: Nat, k: Known, names: FileNames, w: FWalk, link: Handle) → Tac<FWalk> {
     let v <- view(link);
     match v {
         HGlobal(g, _, args) => match FileNames::names(names.put_window, g.id) {
             True => rt_file_lend(fuel, k, names, w, link, args),
-            False => rt_file_store(fuel, k, w, link, args.drop(1)),
+            False => rt_file_ops(names, args).bind(λ ops => rt_file_store(fuel, k, w, link, ops)),
         },
         HField(c, _, _) => view(c).bind(λ cv => match cv {
             HGlobal(g, name, args) => match g.id.same(names.put) {
                 True => rt_file_store(fuel, k, w, link, args.drop(1)),
-                False => rt_file_call(fuel, k, w, link, c, g, name, args.drop(1)),
+                False => rt_file_threaded(names, args).bind(λ targs => rt_file_ops(names, targs)).bind(λ ops => rt_file_call(fuel, k, w, link, c, g, name, ops)),
             },
             _ => rt_refuse("the span after something other than a call"),
         }),
@@ -673,6 +746,41 @@ fn rt_file_ends<A>() → Tac<A> {
     rt_refuse("a function over a span ends in `Mutated(span, value)`, in a `match` on a `Bool` whose arms do, or (where it `decreases`) in its own call")
 }
 
+// The words a value list holds, its proofs (squashed conditions) left out.
+fn rt_file_words(hs: List<Handle>) → Tac<List<Handle>> {
+    match hs {
+        Nil => pure([]),
+        Cons(h, rest) => infer(Hd(h)).bind(λ c => rt_file_words(rest).bind(λ more => match c {
+            Refused(_) => pure(Cons(h, more)),
+            Accepted(t) => view(t).bind(λ v => pure(match v { HOther => more, _ => Cons(h, more) })),
+        })),
+    }
+}
+
+// A loop's own call as the span, its length word and the words: a function
+// of a `Bytes(n)` calls itself on `n`, the record and its words and proofs.
+fn rt_file_again(names: FileNames, args: List<Handle>) → Tac<List<Handle>> {
+    match names.bytes {
+        None => pure(args),
+        Some(bt) => match args {
+            Nil => pure(args),
+            Cons(n, more) => match more {
+                Nil => pure(args),
+                Cons(s, rest) => infer(Hd(s)).bind(λ c => match c {
+                    Refused(_) => pure(args),
+                    Accepted(t) => view(t).bind(λ v => match v {
+                        HGlobal(g, _, _) => match g.id.same(bt) {
+                            True => rt_file_words(rest).bind(λ ws => pure(Cons(s, Cons(n, ws)))),
+                            False => pure(args),
+                        },
+                        _ => pure(args),
+                    }),
+                }),
+            },
+        },
+    }
+}
+
 // A body in tail position. `ih` is the local a measured step calls itself
 // through and `arity` the words that call passes, the span and its length
 // word first.
@@ -711,7 +819,7 @@ fn rt_file_tail(fuel: Nat, k: Known, names: FileNames, ih: Option<Nat>, arity: N
             },
             HLocal(x, args) => match ih.map(λ i => i.same(x.id)).unwrap_or(False) {
                 False => rt_file_ends(),
-                True => match args.take(arity) {
+                True => rt_file_again(names, args.take(arity)).bind(λ again => match again {
                     Cons(after, Cons(length, rest)) => {
                         let w1 <- rt_file_upto(f, k, names, w, after, rest);
                         let kk = k.at_file(w1.fk);
@@ -727,7 +835,7 @@ fn rt_file_tail(fuel: Nat, k: Known, names: FileNames, ih: Option<Nat>, arity: N
                         }
                     },
                     _ => rt_refuse("a loop's own call without its span and length word"),
-                },
+                }),
             },
             _ => rt_file_ends(),
         }),
@@ -764,6 +872,59 @@ fn rt_file_span(locals: List<Pair<Nat, Nat>>) → Tac<Nat> {
     }
 }
 
+// `rt_params`, past a parameter that is a proof (a squashed condition,
+// `inside: ∥i < s.len()∥`): it is bound to no variable, and a use of it
+// outside a proof is refused where the walk meets it. With a count, that
+// many parameters and no more.
+fn rt_params_proved(fuel: Nat, count: Option<Nat>, k: Known, st: RSt, tys: List<Ty>, b: Handle) → Tac<Pair<Pair<RSt, List<Ty>>, Handle>> {
+    match fuel {
+        Zero => rt_refuse("more parameters than the reflector's fuel"),
+        Succ(f) => match count.map(λ c => c.same(0)).unwrap_or(False) {
+            True => pure(Pair(Pair(st, tys), b)),
+            False => view(b).bind(λ v => match v {
+                HLam(dom) => view(dom).bind(λ dv => open(b, "x").bind(λ c => rt_accepted("a parameter", c)).bind(λ o => match dv {
+                    HOther => rt_params_proved(f, count.map(λ c => c.pred()), k, st, tys, o.body),
+                    _ => k.ty(dom).bind(λ t => rt_params_proved(f, count.map(λ c => c.pred()), k,
+                        RSt(Succ(st.depth), st.lets, st.memo, st.handles, Cons(Pair(o.local.ref.id, st.depth), st.locals), st.funs), tys ++ [t], o.body)),
+                })),
+                _ => match count {
+                    None => pure(Pair(Pair(st, tys), b)),
+                    Some(_) => rt_refuse("a step with fewer parameters than its function"),
+                },
+            }),
+        },
+    }
+}
+
+// A function's parameters, as `rt_params` reads them (with a count, as
+// `rt_params_n` does); a function of a `Bytes(n)`, `λ n s x…`, is read as
+// one of a span and its length word: `s` is the span, at level 0, and `n`
+// its length word, at level 1.
+fn rt_file_params(fuel: Nat, count: Option<Nat>, k: Known, names: FileNames, b: Handle) → Tac<Pair<Pair<RSt, List<Ty>>, Handle>> {
+    let plain = match count {
+        None => rt_params(fuel, k, RSt(0, [], [], [], [], k.funs), [], b),
+        Some(c) => rt_params_n(c, k, RSt(0, [], [], [], [], k.funs), [], b),
+    };
+    match names.bytes {
+        None => plain,
+        Some(bt) => view(b).bind(λ v => match v {
+            HLam(_) => open(b, "n").bind(λ c => rt_accepted("a parameter", c)).bind(λ o1 => view(o1.body).bind(λ v2 => match v2 {
+                HLam(dom) => view(dom).bind(λ dv => match dv {
+                    HGlobal(g, _, _) => match g.id.same(bt) {
+                        True => open(o1.body, "s").bind(λ c => rt_accepted("a parameter", c)).bind(λ o2 =>
+                            rt_params_proved(fuel, count.map(λ c => c - 2), k, RSt(2, [], [], [], [Pair(o2.local.ref.id, 0), Pair(o1.local.ref.id, 1)], k.funs),
+                                [ByteList(0), Word(64)], o2.body)),
+                        False => plain,
+                    },
+                    _ => plain,
+                }),
+                _ => plain,
+            })),
+            _ => plain,
+        }),
+    }
+}
+
 // How many spans the function is lent and the codes its code takes: two
 // words for each span and its length word, then the function's own words.
 // The first span is the written one; the spans after it are only read.
@@ -784,7 +945,7 @@ fn rt_file_reflect_plain(fuel: Nat, k: Known, names: FileNames, cfuns: List<Nat>
     let t <- infer(Global(GlobalRef(g))).bind(λ c => rt_accepted("its type", c));
     let result <- rt_file_result(fuel, k, names, t);
     let b <- body(GlobalRef(g)).bind(λ c => rt_accepted("its body", c));
-    let p <- rt_params(fuel, k, RSt(0, [], [], [], [], k.funs), [], b);
+    let p <- rt_file_params(fuel, None, k, names, b);
     let codes <- rt_file_codes(p.fst.snd);
     let span <- rt_file_span(p.fst.fst.locals);
     let r <- rt_file_tail(fuel, k.lending(codes.fst), names, None, 0, FWalk(p.fst.fst, [], FileKnown::start(span, []), 0, cfuns), p.snd);
@@ -801,7 +962,7 @@ fn rt_file_reflect_measured(fuel: Nat, k: Known, names: FileNames, cfuns: List<N
     let b <- body(GlobalRef(step)).bind(λ c => rt_accepted("its step's body", c));
     let o1 <- open(b, "k").bind(λ c => rt_accepted("its step's bound", c));
     let o2 <- open(o1.body, "g").bind(λ c => rt_accepted("its step's recursion", c));
-    let p <- rt_params_n(n, k, RSt(0, [], [], [], [], k.funs), [], o2.body);
+    let p <- rt_file_params(fuel, Some(n), k, names, o2.body);
     let codes <- rt_file_codes(p.fst.snd);
     let span <- rt_file_span(p.fst.fst.locals);
     let o3 <- open(p.snd, "h").bind(λ c => rt_accepted("its step's measure proof", c));

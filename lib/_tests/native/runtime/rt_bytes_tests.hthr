@@ -1,0 +1,86 @@
+// Probes for the meaning of span computations over a `Bytes(n)`
+// (lib/native/runtime/rt_bytes.hthr): a function of the record is the
+// meaning over the record of its reflection by conversion, a store for a
+// `put` and a read of the record's bytes for an `at`.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import omega;
+import nat_map;
+import list_window;
+import rt;
+import rt_file;
+import bytes;
+import rt_bytes;
+import tactic;
+import rt_reflect;
+import rt_file_reflect;
+
+fn alone() → BWorld { BWorld(FWorld::alone(RecInfo::none, []), trivial) }
+
+// The store of `v` at 0 and of the byte at 1 at 2: `s[0] := v; s[2] := s[1]`.
+fn Bytes::stores({n: u64}, self s: Bytes(n), v: u8, inside: ∥2 < s.len()∥ := bv_omega) → Bytes(n) {
+    let s1 = s.put(0, v);
+    s1.put(2, s1[1])
+}
+
+// The parameters are the length word and `v`; at the last store the
+// variables are, the most recent first, the index 2, the byte at 1, the
+// index 1, the index 0, the length word and `v`.
+fn stores_body() → FTm {
+    Let(Lit(Word(64), 0), Put(0, 1, 2,
+        Let(Lit(Word(64), 1), Let(Byte(0, 0, 2), Let(Lit(Word(64), 2), Put(0, 4, 1, Pure(Var(0))))))))
+}
+
+fn stores_env(n: BitVec(64), v: BitVec(8)) → Env(RecInfo::none, [Word(64), Word(8)]) { Pair(n, Pair(v, trivial)) }
+
+theorem stores_pinned({n: u64}, s: Bytes(n), v: u8, inside: ∥2 < s.len()∥):
+    stores_body().over(alone(), [Word(64), Word(8)], stores_env(n, v), n, s).after = s.stores(v, inside := inside) { refl }
+
+// A store at the wrong index is not the function's.
+fn misplaced_body() → FTm {
+    Let(Lit(Word(64), 0), Put(0, 1, 2,
+        Let(Lit(Word(64), 1), Let(Byte(0, 0, 2), Let(Lit(Word(64), 1), Put(0, 4, 1, Pure(Var(0))))))))
+}
+
+// expect-error: NotConvertible
+theorem stores_misplaced({n: u64}, s: Bytes(n), v: u8, inside: ∥2 < s.len()∥):
+    misplaced_body().over(alone(), [Word(64), Word(8)], stores_env(n, v), n, s).after = s.stores(v, inside := inside) { refl }
+
+// A program with no callees keeps the world's promise.
+theorem alone_agrees(): alone().Agrees() { λ g env f place l rest n known s => Over(refl, refl) }
+
+// The agreement read at the probe: the bytes the function leaves are the
+// bytes the byte meaning leaves, at any record.
+theorem stores_runs({n: u64}, s: Bytes(n), v: u8, inside: ∥2 < s.len()∥):
+    s.stores(v, inside := inside).bytes = stores_body().sem(alone().fw, [Word(64), Word(8)], stores_env(n, v), s.bytes).after {
+    stores_body().over_runs(alone(), alone_agrees(), 0, trivial, [Word(64), Word(8)], stores_env(n, v), n, refl, s).after
+}
+
+// ---------------------------------------------------------------------------
+// The reflection of a function of a `Bytes(n)`: its record is the span and
+// `n` the span's length word.
+
+fn Bytes::stored({n: u64}, mut self s: Bytes(n), v: u8, inside: ∥2 < s.len()∥ := bv_omega) → u64 {
+    s[0] := v;
+    s[2] := s[1];
+    s.len()
+}
+
+fn stored_rt() → FFun {
+    FFun([Word(64), Word(64), Word(8)], Word(64),
+        Let(Lit(Word(64), 0), Put(0, 2, 1, Let(Lit(Word(64), 2), Let(Lit(Word(64), 1), Let(Byte(0, 0, 4), Put(2, 5, 0, Pure(Var(5)))))))), 1)
+}
+
+theorem stored_reflected(): True { by reflects_file_as(["Bytes::stored"], [], [stored_rt()]) }
+
+// The function is its reflection's meaning over the record, by conversion,
+// with the span's place any word.
+theorem stored_pinned({n: u64}, s: Bytes(n), v: u8, place: u64, inside: ∥2 < s.len()∥):
+    stored_rt().body.over(alone(), [Word(8), Word(64), Word(64)], Pair(v, Pair(n, Pair(place, trivial))), n, s) = Bytes::stored(s, v, inside := inside) { refl }

@@ -249,11 +249,12 @@ fn an_index_of_another_vectors_length_is_rejected() {
     assert!(!msg.is_empty(), "an index at the wrong length must be rejected");
 }
 
-/// Negative control (e): a non-vector receiver.
+/// Negative control (e): a non-vector receiver. A numeral index is read
+/// as the receiver's `at` (a `Bytes(n)`'s `s[0]`), which `Nat` has not.
 #[test]
 fn indexing_a_non_vector_is_rejected() {
     let msg = bad("fn f(n: Nat) -> Nat { n[0] }");
-    assert!(msg.contains("an index needs a vector receiver"), "{msg}");
+    assert!(msg.contains("is the receiver's `at` method") && msg.contains("`at`"), "{msg}");
 }
 
 /// **Axis 4**, the control a positive test cannot supply: a type is not

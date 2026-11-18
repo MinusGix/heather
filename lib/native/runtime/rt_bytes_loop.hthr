@@ -1,0 +1,388 @@
+// A loop in a function of a `Bytes(n)` (docs/native/span-record-design.md),
+// as rt_held_loop.hthr is a loop in a function of a laid record.
+//
+// A loop's code runs to the body iterated as often as it counts
+// (`FFun::rounds`, rt_file_loop.hthr), at every span. This module proves,
+// once, that at a record's bytes, with the record's length as the length
+// word, that iteration is the function of the record: `FFun::rounds_over`,
+// from the function's own equation over records (its body's meaning over
+// the record, `FTm::tail_over`, with the self-call answered by anything
+// that agrees with it below the measure, is the function), and
+// `FFun::counted_over` at the count the code has.
+//
+// The proof goes a pass at a time, as rt_held_loop.hthr's does: a pass
+// over the record and a pass over its bytes agree (`FTm::tail_over_runs`,
+// `FTm::over_runs` with a self-call that hands on the length word), and a
+// pass that goes round goes to a smaller measure (`FFun::falls`).
+//
+// The length word is the record's `n` all the way round: a self-call
+// hands on the length word it was given, so every state is
+// `Cons(place, Cons(n, words))`, and the function's equation is stated at
+// such a state (`FTm::with_length`), where a store's length word is `n`
+// by conversion, as the record's `put` stores.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import bitvec_nat;
+import nat_map;
+import list_window;
+import layout;
+import stored;
+import rt;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
+import function_ir_compile;
+import rt_file_loop;
+import rt_held;
+import rt_held_loop;
+import bytes;
+import rt_bytes;
+
+// ---------------------------------------------------------------------------
+// A pass over a record
+
+// `FTm::over` for a body that may call itself last: an end goes to `done`
+// read at the function's result, and a self-call to `again` on its words
+// and the record as it then is. With `done` the identity this is what a
+// function of the record is pinned to; with `Ends` and `Goes` it is the
+// body's pass.
+fn FTm::tail_over<S>(self t: FTm, bw: BWorld, res: Ty, n: BitVec(64), done: Mutated<Bytes(n), res.sem(bw.fw.w.tys)> → S,
+    again: List<BitVec(64)> → Bytes(n) → S) → (g: List<Ty>) → Env(bw.fw.w.tys, g) → Bytes(n) → S {
+    match t {
+        Pure(v) => λ g env s => done(Mutated(s, Ty::cast(bw.fw.w.tys, v.ty(bw.fw.w, g), res, FTm::value(bw.fw, s.bytes, v, g, env)))),
+        Let(e, body) => λ g env s => body.tail_over(bw, res, n, done, again, Cons(e.ty(bw.fw.w, g), g), Pair(FTm::value(bw.fw, s.bytes, e, g, env), env), s),
+        If(c, yes, no) => λ g env s => match Ty::cast(bw.fw.w.tys, Ty::at(g, c), Bit, Env::get(bw.fw.w.tys, g, env, c)) {
+            False => no.tail_over(bw, res, n, done, again, g, env, s),
+            True => yes.tail_over(bw, res, n, done, again, g, env, s),
+        },
+        IfEq(c, yes, no) => λ g env s => Tm::convoy(S, Ty::cast(bw.fw.w.tys, Ty::at(g, c), Bit, Env::get(bw.fw.w.tys, g, env, c)),
+            yes.tail_over(bw, res, n, done, again, g, env, s), no.tail_over(bw, res, n, done, again, g, env, s)),
+        Put(i, length, v, body) => λ g env s => body.tail_over(bw, res, n, done, again, g, env, FTm::over_put(bw.fw.w.tys, g, env, i, length, v, n, s)),
+        Call(f, args, body) => λ g env s => shared(FTm::over_called(bw, g, env, f, args, n, s), λ m =>
+            body.tail_over(bw, res, n, done, again, Cons(Sig::at(bw.fw.fsigs, f).result, g), Pair(m.value, env), m.after)),
+        Again(args) => λ g env s => again(Tm::words(bw.fw.w, g, env, args), s),
+        Lend(f, _, _, body) => λ g env s =>
+            body.tail_over(bw, res, n, done, again, Cons(Sig::at(bw.fw.fsigs, f).result, g), Pair(Sig::at(bw.fw.fsigs, f).result.default(bw.fw.w.tys), env), s),
+    }
+}
+
+// The body's pass over the record.
+fn FTm::over_pass(self t: FTm, bw: BWorld, res: Ty, n: BitVec(64), g: List<Ty>, env: Env(bw.fw.w.tys, g), s: Bytes(n)) → Pass<Bytes(n), res.sem(bw.fw.w.tys)> {
+    let done: Mutated<Bytes(n), res.sem(bw.fw.w.tys)> → Pass<Bytes(n), res.sem(bw.fw.w.tys)> = λ m => Ends(m);
+    let again: List<BitVec(64)> → Bytes(n) → Pass<Bytes(n), res.sem(bw.fw.w.tys)> = λ ys b => Goes(ys, b);
+    t.tail_over(bw, res, n, done, again, g, env, s)
+}
+
+theorem FTm::tail_over_pass<S>(self t: FTm, bw: BWorld, res: Ty, n: BitVec(64), done: Mutated<Bytes(n), res.sem(bw.fw.w.tys)> → S,
+    again: List<BitVec(64)> → Bytes(n) → S): (g: List<Ty>) → (env: Env(bw.fw.w.tys, g)) → (s: Bytes(n)) →
+    t.tail_over(bw, res, n, done, again, g, env, s) = t.over_pass(bw, res, n, g, env, s).fold(done, again) {
+    match t {
+        Pure(_) => λ g env s => refl,
+        Let(e, body) => λ g env s =>
+            FTm::tail_over_pass(body, bw, res, n, done, again, Cons(e.ty(bw.fw.w, g), g), Pair(FTm::value(bw.fw, s.bytes, e, g, env), env), s),
+        If(c, yes, no) => λ g env s => match Ty::cast(bw.fw.w.tys, Ty::at(g, c), Bit, Env::get(bw.fw.w.tys, g, env, c)) as λ bit =>
+            (match bit { False => no.tail_over(bw, res, n, done, again, g, env, s), True => yes.tail_over(bw, res, n, done, again, g, env, s) }) =
+                (match bit { False => no.over_pass(bw, res, n, g, env, s), True => yes.over_pass(bw, res, n, g, env, s) }).fold(done, again) {
+            False => FTm::tail_over_pass(no, bw, res, n, done, again, g, env, s),
+            True => FTm::tail_over_pass(yes, bw, res, n, done, again, g, env, s),
+        },
+        IfEq(c, yes, no) => λ g env s => trans(
+            eq2(λ (y: S) (o: S) => Tm::convoy(S, Ty::cast(bw.fw.w.tys, Ty::at(g, c), Bit, Env::get(bw.fw.w.tys, g, env, c)), y, o),
+                FTm::tail_over_pass(yes, bw, res, n, done, again, g, env, s), FTm::tail_over_pass(no, bw, res, n, done, again, g, env, s)),
+            Tm::convoy_map(Ty::cast(bw.fw.w.tys, Ty::at(g, c), Bit, Env::get(bw.fw.w.tys, g, env, c)), yes.over_pass(bw, res, n, g, env, s),
+                no.over_pass(bw, res, n, g, env, s), λ (p: Pass<Bytes(n), res.sem(bw.fw.w.tys)>) => p.fold(done, again))),
+        Put(i, length, v, body) => λ g env s =>
+            FTm::tail_over_pass(body, bw, res, n, done, again, g, env, FTm::over_put(bw.fw.w.tys, g, env, i, length, v, n, s)),
+        Call(f, args, body) => λ g env s => FTm::tail_over_pass(body, bw, res, n, done, again, Cons(Sig::at(bw.fw.fsigs, f).result, g),
+            Pair(FTm::over_called(bw, g, env, f, args, n, s).value, env), FTm::over_called(bw, g, env, f, args, n, s).after),
+        Again(_) => λ g env s => refl,
+        Lend(f, _, _, body) => λ g env s => FTm::tail_over_pass(body, bw, res, n, done, again, Cons(Sig::at(bw.fw.fsigs, f).result, g),
+            Pair(Sig::at(bw.fw.fsigs, f).result.default(bw.fw.w.tys), env), s),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The two passes agree
+
+// What the pass over a record reads as the byte pass does: `FTm::over_ok`'s
+// terms, and a self-call on a place, the length word it was given and
+// `words` operands.
+fn FTm::tail_over_ok(self t: FTm, words: Nat) → Nat → Bool {
+    match t {
+        Pure(_) => λ len => True,
+        Let(_, body) => λ len => body.tail_over_ok(words, Succ(len)),
+        If(_, yes, no) => λ len => yes.tail_over_ok(words, len) && no.tail_over_ok(words, len),
+        IfEq(_, yes, no) => λ len => yes.tail_over_ok(words, len) && no.tail_over_ok(words, len),
+        Put(_, _, _, body) => λ len => body.tail_over_ok(words, len),
+        Call(_, args, body) => λ len => FTm::hands_on(args, len) && body.tail_over_ok(words, Succ(len)),
+        Again(args) => λ len => FTm::run_args(args, len, words),
+        Lend(_, _, _, _) => λ len => False,
+    }
+}
+
+// The operands of a state: its words after the place and the length word.
+fn FTm::after_length(xs: List<BitVec(64)>) → List<BitVec(64)> {
+    match xs { Nil => Nil, Cons(_, more) => match more { Nil => Nil, Cons(_, rest) => rest } }
+}
+
+// A state whose length word is `n`.
+fn FTm::with_length(xs: List<BitVec(64)>, n: BitVec(64)) → List<BitVec(64)> { Cons(FTm::operand(xs, 0), Cons(n, FTm::after_length(xs))) }
+
+// Two passes agree: both end and the ends agree, or both go round on the
+// same words, a place, the length word `n` and `words` operands, and the
+// bytes the one goes round with are the other's record's.
+fn Pass::OverAgrees<R>(n: BitVec(64), words: Nat, h: Pass<Bytes(n), R>, b: Pass<List<BitVec(8)>, R>) → Type {
+    match h {
+        Ends(mh) => match b { Ends(mb) => Over<R>(n, mh, mb), Goes(_, _) => False },
+        Goes(ys, s) => match b {
+            Ends(_) => False,
+            Goes(zs, o) => (ys = zs) ∧ ((FTm::after_length(zs).len() = words) ∧ ((zs = FTm::with_length(zs, n)) ∧ (s.bytes = o))),
+        },
+    }
+}
+
+theorem FTm::tail_over_runs(self t: FTm, bw: BWorld, world: bw.Agrees(), res: Ty, words: Nat): (len: Nat) → t.tail_over_ok(words, len).IsTrue() →
+    (g: List<Ty>) → (env: Env(bw.fw.w.tys, g)) → (n: BitVec(64)) → FTm::word(bw.fw.w.tys, g, env, len) = n → (s: Bytes(n)) →
+    Pass::OverAgrees<res.sem(bw.fw.w.tys)>(n, words, t.over_pass(bw, res, n, g, env, s), t.tail_pass(bw.fw, res, g, env, s.bytes)) {
+    match t {
+        Pure(_) => λ len ok g env n known s => Over(refl, refl),
+        Let(e, body) => λ len ok g env n known s =>
+            body.tail_over_runs(bw, world, res, words, Succ(len), ok, Cons(e.ty(bw.fw.w, g), g), Pair(FTm::value(bw.fw, s.bytes, e, g, env), env), n, known, s),
+        If(c, yes, no) => λ len ok g env n known s => {
+            let both = yes.tail_over_ok(words, len).is_true_and(no.tail_over_ok(words, len), ok);
+            let by_case: ((b: Bool) → Pass::OverAgrees<res.sem(bw.fw.w.tys)>(n, words,
+                match b { False => no.over_pass(bw, res, n, g, env, s), True => yes.over_pass(bw, res, n, g, env, s) },
+                match b { False => no.tail_pass(bw.fw, res, g, env, s.bytes), True => yes.tail_pass(bw.fw, res, g, env, s.bytes) })) =
+                λ b => match b {
+                    False => no.tail_over_runs(bw, world, res, words, len, both.right, g, env, n, known, s),
+                    True => yes.tail_over_runs(bw, world, res, words, len, both.left, g, env, n, known, s),
+                };
+            by_case(Ty::cast(bw.fw.w.tys, Ty::at(g, c), Bit, Env::get(bw.fw.w.tys, g, env, c)))
+        },
+        IfEq(c, yes, no) => λ len ok g env n known s => {
+            let both = yes.tail_over_ok(words, len).is_true_and(no.tail_over_ok(words, len), ok);
+            let by_case: ((b: Bool) → Pass::OverAgrees<res.sem(bw.fw.w.tys)>(n, words,
+                Tm::convoy(Pass<Bytes(n), res.sem(bw.fw.w.tys)>, b, yes.over_pass(bw, res, n, g, env, s), no.over_pass(bw, res, n, g, env, s)),
+                Tm::convoy(Pass<List<BitVec(8)>, res.sem(bw.fw.w.tys)>, b, yes.tail_pass(bw.fw, res, g, env, s.bytes), no.tail_pass(bw.fw, res, g, env, s.bytes)))) =
+                λ b => match b {
+                    False => no.tail_over_runs(bw, world, res, words, len, both.right, g, env, n, known, s),
+                    True => yes.tail_over_runs(bw, world, res, words, len, both.left, g, env, n, known, s),
+                };
+            by_case(Ty::cast(bw.fw.w.tys, Ty::at(g, c), Bit, Env::get(bw.fw.w.tys, g, env, c)))
+        },
+        Put(i, length, v, body) => λ len ok g env n known s =>
+            body.tail_over_runs(bw, world, res, words, len, ok, g, env, n, known, FTm::over_put(bw.fw.w.tys, g, env, i, length, v, n, s)),
+        Call(f, args, body) => λ len ok g env n known s => {
+            let both = FTm::hands_on(args, len).is_true_and(body.tail_over_ok(words, Succ(len)), ok);
+            let ctx = Cons(Sig::at(bw.fw.fsigs, f).result, g);
+            let oc = FTm::over_called(bw, g, env, f, args, n, s);
+            let called: Over<Sig::at(bw.fw.fsigs, f).result.sem(bw.fw.w.tys)>(n, oc, FTm::called(bw.fw, g, env, f, args, s.bytes)) =
+                FTm::hands_on_elim(args, len,
+                    λ (xs: List<Nat>) => Over<Sig::at(bw.fw.fsigs, f).result.sem(bw.fw.w.tys)>(n, FTm::over_called(bw, g, env, f, xs, n, s),
+                        FTm::called(bw.fw, g, env, f, xs, s.bytes)),
+                    λ place rest => world(g, env, f, place, len, rest, n, known, s), both.left);
+            let ran = body.tail_over_runs(bw, world, res, words, Succ(len), both.right, ctx, Pair(oc.value, env), n, known, oc.after);
+            let at_after = j(called.after, λ y _ => Pass::OverAgrees<res.sem(bw.fw.w.tys)>(n, words,
+                body.over_pass(bw, res, n, ctx, Pair(oc.value, env), oc.after), body.tail_pass(bw.fw, res, ctx, Pair(oc.value, env), y)), ran);
+            j(called.value, λ x _ => Pass::OverAgrees<res.sem(bw.fw.w.tys)>(n, words,
+                body.over_pass(bw, res, n, ctx, Pair(oc.value, env), oc.after),
+                body.tail_pass(bw.fw, res, ctx, Pair(x, env), FTm::called(bw.fw, g, env, f, args, s.bytes).after)), at_after)
+        },
+        Again(args) => λ len ok g env n known s =>
+            FTm::run_args_elim(args, len, words,
+                λ (xs: List<Nat>) => Pass::OverAgrees<res.sem(bw.fw.w.tys)>(n, words,
+                    Goes(Tm::words(bw.fw.w, g, env, xs), s), Goes(Tm::words(bw.fw.w, g, env, xs), s.bytes)),
+                λ place rest long => And(refl, And(
+                    trans(Tm::words_len(bw.fw.w, g, env, rest), Nat::same_sound(rest.len(), words, eq_true_of_is_true(rest.len().same(words), long))),
+                    And(cong_fn(λ (k: BitVec(64)) => Cons(FTm::word(bw.fw.w.tys, g, env, place), Cons(k, Tm::words(bw.fw.w, g, env, rest))), known),
+                        refl))),
+                ok),
+        Lend(_, _, _, _) => λ len ok => false_elim(ok),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The loop
+
+// A function of the record's own equation: its body's pass over the
+// record, the self-call answered by anything that agrees with it below the
+// measure, is the function, at a state whose length word is the record's
+// `n`. The function and the measure are of the record and the operands,
+// the words after the span's place and its length word.
+// A function of a record and its operands' words, at every length.
+fn FFun::OverRun() → Type { (k: BitVec(64)) → Bytes(k) → List<BitVec(64)> → Mutated<Bytes(k), BitVec(64)> }
+
+// A measure of a record and its operands' words, at every length.
+fn FFun::OverMeasure() → Type { (k: BitVec(64)) → Bytes(k) → List<BitVec(64)> → Nat }
+
+fn FFun::OverGuarded(bw: BWorld, ws: List<Ty>, body: FTm, n: BitVec(64), run: FFun::OverRun(), m: FFun::OverMeasure()) → Type {
+    Ty::ForWords(ws, λ (xs: List<BitVec(64)>) => (s: Bytes(n)) → (again: FFun::OverRun()) →
+        ((k: BitVec(64)) → (b: Bytes(k)) → (zs: List<BitVec(64)>) → m(k, b, zs) < m(n, s, FTm::after_length(xs)) → again(k, b, zs) = run(k, b, zs)) →
+        body.tail_over(bw, Word(64), n, λ (e: Mutated<Bytes(n), BitVec(64)>) => e, λ (ys: List<BitVec(64)>) (b: Bytes(n)) => again(n, b, FTm::after_length(ys)),
+            Ty::bind_onto(ws, Nil), Ty::extend(bw.fw.w.tys, ws, Nil, trivial, FTm::with_length(xs, n)), s) = run(n, s, FTm::after_length(xs)))
+}
+
+// A pass that goes round goes to a smaller measure: were it not below,
+// an `again` that answers anything there would change what the body
+// answers (`FFun::falls`, at every length).
+theorem FFun::falls_over(run: FFun::OverRun(), m: FFun::OverMeasure(), bound: Nat, n: BitVec(64), b: Bytes(n), zs: List<BitVec(64)>,
+    result: Mutated<Bytes(n), BitVec(64)>,
+    all: (again: FFun::OverRun()) → ((k: BitVec(64)) → (c: Bytes(k)) → (us: List<BitVec(64)>) → m(k, c, us) < bound → again(k, c, us) = run(k, c, us)) →
+        result = again(n, b, zs)): m(n, b, zs) < bound {
+    let below = λ (k: BitVec(64)) (c: Bytes(k)) (us: List<BitVec(64)>) => (m(k, c, us) + 1).leb(bound);
+    let other = λ (v: BitVec(64)) (k: BitVec(64)) (c: Bytes(k)) (us: List<BitVec(64)>) =>
+        match below(k, c, us) { False => Mutated(c, v), True => run(k, c, us) };
+    let agrees = λ (v: BitVec(64)) (k: BitVec(64)) (c: Bytes(k)) (us: List<BitVec(64)>) (lt: m(k, c, us) < bound) =>
+        cong_fn(λ (t: Bool) => match t { False => Mutated(c, v), True => run(k, c, us) }, Nat::leb_true(m(k, c, us) + 1, bound, lt));
+    let zero: BitVec(64) = BitVec::ofNat(0);
+    let one: BitVec(64) = BitVec::ofNat(1);
+    (match below(n, b, zs) as λ t => (below(n, b, zs) = t) → m(n, b, zs) < bound {
+        False => λ e => {
+            let at = λ (v: BitVec(64)) => trans(all(other(v), agrees(v)),
+                cong_fn(λ (t: Bool) => match t { False => Mutated(b, v), True => run(n, b, zs) }, e));
+            let same: (Mutated(b, zero) = Mutated(b, one)) = trans(sym(at(zero)), at(one));
+            let words: (zero.toNat() = one.toNat()) = cong_fn(λ (x: Mutated<Bytes(n), BitVec(64)>) => x.value.toNat(), same);
+            false_elim(Nat::zero_ne_succ(0, trans(sym(BitVec::toNat_ofNat(64, 0, trivial)), trans(words, BitVec::toNat_ofNat(64, 1, trivial)))))
+        },
+        True => λ e => Nat::leb_sound(m(n, b, zs) + 1, bound, Bool::is_true_of_eq(e)),
+    })(refl)
+}
+
+// One pass: where the passes after it agree with the function below this
+// state's measure, the pass before them agrees with it here.
+theorem FFun::round_over<F>(bw: BWorld, world: bw.Agrees(), ws: List<Ty>, body: FTm, words, len: Nat,
+    arity: ws.len() = words + 2, kept: body.tail_over_ok(words, len).IsTrue(),
+    at: F → FTm::Sem(bw.fw.w.tys, Sig(ws, Word(64))), pass: F → F, passes: FFun::Passes(ws, Word(64), body, bw.fw, at, pass),
+    lengthy: Ty::ForWords(ws, λ (xs: List<BitVec(64)>) =>
+        FTm::word(bw.fw.w.tys, Ty::bind_onto(ws, Nil), Ty::extend(bw.fw.w.tys, ws, Nil, trivial, xs), len) = FTm::operand(xs, 1)),
+    n: BitVec(64), run: FFun::OverRun(), m: FFun::OverMeasure(),
+    guarded: FFun::OverGuarded(bw, ws, body, n, run, m),
+    later: F, p: BitVec(64), zs: List<BitVec(64)>, zlen: zs.len() = words, s: Bytes(n),
+    earlier: (q: BitVec(64)) → (us: List<BitVec(64)>) → us.len() = words → (b: Bytes(n)) → m(n, b, us) < m(n, s, zs) →
+        Over<BitVec(64)>(n, run(n, b, us), FFun::uncurry(bw.fw.w.tys, ws, Word(64), at(later), Cons(q, Cons(n, us)), b.bytes))):
+    Over<BitVec(64)>(n, run(n, s, zs), FFun::uncurry(bw.fw.w.tys, ws, Word(64), at(pass(later)), Cons(p, Cons(n, zs)), s.bytes)) {
+    let tys = bw.fw.w.tys;
+    let ctx = Ty::bind_onto(ws, Nil);
+    let xs = Cons(p, Cons(n, zs));
+    let fits: (xs.len() = ws.len()) = trans(cong_fn(λ (k: Nat) => k + 2, zlen), sym(arity));
+    let env = Ty::extend(tys, ws, Nil, trivial, xs);
+    let length_at: (FTm::word(tys, ctx, env, len) = n) = Ty::for_words_at(ws, λ (ys: List<BitVec(64)>) =>
+        FTm::word(tys, ctx, Ty::extend(tys, ws, Nil, trivial, ys), len) = FTm::operand(ys, 1), lengthy, xs, fits);
+    let known = λ (us: List<BitVec(64)>) (o: List<BitVec(8)>) => FFun::uncurry(tys, ws, Word(64), at(later), us, o);
+    let answer: FTm::Round(tys, Word(64)) = λ ys o => FTm::recast(tys, Word(64), Word(64), FFun::pick(ws.len(), known, known, ys, o));
+    // The bytes: the pass, then the answer.
+    let passed = Ty::for_words_at(ws, λ (us: List<BitVec(64)>) => (o: List<BitVec(8)>) →
+        (again: List<BitVec(64)> → List<BitVec(8)> → Mutated<List<BitVec(8)>, BitVec(64)>) →
+        FTm::recast(tys, Word(64), Word(64), body.tail_sem(bw.fw, Word(64), λ (ys: List<BitVec(64)>) (o1: List<BitVec(8)>) =>
+                FTm::recast(tys, Word(64), Word(64), FFun::pick(ws.len(), again,
+                    λ (vs: List<BitVec(64)>) (q: List<BitVec(8)>) => FFun::uncurry(tys, ws, Word(64), at(later), vs, q), ys, o1)),
+            ctx, Ty::extend(tys, ws, Nil, trivial, us), o)) =
+            FFun::uncurry(tys, ws, Word(64), at(pass(later)), us, o), passes(later), xs, fits, s.bytes, known);
+    let folded = FTm::tail_sem_pass(body, bw.fw, Word(64), answer, ctx, env, s.bytes);
+    // The record: the function's equation, and the pass it is of.
+    let equation = Ty::for_words_at(ws, λ (us: List<BitVec(64)>) => (c: Bytes(n)) → (again: FFun::OverRun()) →
+        ((k: BitVec(64)) → (b: Bytes(k)) → (vs: List<BitVec(64)>) → m(k, b, vs) < m(n, c, FTm::after_length(us)) → again(k, b, vs) = run(k, b, vs)) →
+        body.tail_over(bw, Word(64), n, λ (e: Mutated<Bytes(n), BitVec(64)>) => e, λ (ys: List<BitVec(64)>) (b: Bytes(n)) => again(n, b, FTm::after_length(ys)),
+            ctx, Ty::extend(tys, ws, Nil, trivial, FTm::with_length(us, n)), c) = run(n, c, FTm::after_length(us)), guarded, xs, fits, s);
+    let sh = body.over_pass(bw, Word(64), n, ctx, env, s);
+    let sb = body.tail_pass(bw.fw, Word(64), ctx, env, s.bytes);
+    let here = run(n, s, zs);
+    let Below = λ (again: FFun::OverRun()) =>
+        (k: BitVec(64)) → (b: Bytes(k)) → (vs: List<BitVec(64)>) → m(k, b, vs) < m(n, s, zs) → again(k, b, vs) = run(k, b, vs);
+    let of_pass = λ (q: Pass<Bytes(n), BitVec(64)>) (again: Bytes(n) → List<BitVec(64)> → Mutated<Bytes(n), BitVec(64)>) =>
+        q.fold(λ (e: Mutated<Bytes(n), BitVec(64)>) => e, λ (ys: List<BitVec(64)>) (b: Bytes(n)) => again(b, FTm::after_length(ys)));
+    let eqn: ((again: FFun::OverRun()) → Below(again) → here = of_pass(sh, again(n))) = λ again hyp =>
+        trans(sym(equation(again, hyp)), FTm::tail_over_pass(body, bw, Word(64), n, λ (e: Mutated<Bytes(n), BitVec(64)>) => e,
+            λ (ys: List<BitVec(64)>) (b: Bytes(n)) => again(n, b, FTm::after_length(ys)), ctx, env, s));
+    let agreed: Pass::OverAgrees<BitVec(64)>(n, words, sh, sb) = FTm::tail_over_runs(body, bw, world, Word(64), words, len, kept, ctx, env, n, length_at, s);
+    let Goal: Pass<List<BitVec(8)>, BitVec(64)> → Type = λ q => Over<BitVec(64)>(n, here,
+        FTm::recast(tys, Word(64), Word(64), q.fold(λ (e: Mutated<List<BitVec(8)>, BitVec(64)>) => e, answer)));
+    let cases = λ (ph: Pass<Bytes(n), BitVec(64)>) => match ph as λ p2 => (q: Pass<List<BitVec(8)>, BitVec(64)>) → Pass::OverAgrees<BitVec(64)>(n, words, p2, q) →
+        ((again: FFun::OverRun()) → Below(again) → here = of_pass(p2, again(n))) → Goal(q) {
+        Ends(mh) => λ q => match q as λ q2 => Pass::OverAgrees<BitVec(64)>(n, words, Ends(mh), q2) →
+            ((again: FFun::OverRun()) → Below(again) → here = mh) → Goal(q2) {
+            Ends(mb) => λ ag eq_of => {
+                let base: Over<BitVec(64)>(n, mh, FTm::recast(tys, Word(64), Word(64), mb)) = Over(ag.after, ag.value);
+                j(sym(eq_of(run, λ k b vs _ => refl)), λ x _ => Over<BitVec(64)>(n, x, FTm::recast(tys, Word(64), Word(64), mb)), base)
+            },
+            Goes(_, _) => λ never _ => false_elim(never),
+        },
+        Goes(ys, s2) => λ q => match q as λ q2 => Pass::OverAgrees<BitVec(64)>(n, words, Goes(ys, s2), q2) →
+            ((again: FFun::OverRun()) → Below(again) → here = again(n, s2, FTm::after_length(ys))) → Goal(q2) {
+            Ends(_) => λ never _ => false_elim(never),
+            Goes(vs, o2) => λ ag eq_of => {
+                let lt = FFun::falls_over(run, m, m(n, s, zs), n, s2, FTm::after_length(ys), here, eq_of);
+                let lt_v = j(ag.left, λ l _ => m(n, s2, FTm::after_length(l)) < m(n, s, zs), lt);
+                let here_v = j(ag.left, λ l _ => here = run(n, s2, FTm::after_length(l)), eq_of(run, λ k b us _ => refl));
+                let shaped: (vs = FTm::with_length(vs, n)) = ag.right.right.left;
+                let len_v: (vs.len() = ws.len()) = trans(sym(j(sym(shaped), λ l _ => FTm::with_length(vs, n).len() = l.len(), refl)),
+                    trans(cong_fn(λ (k: Nat) => k + 2, ag.right.left), sym(arity)));
+                let prior = earlier(FTm::operand(vs, 0), FTm::after_length(vs), ag.right.left, s2, lt_v);
+                let at_vs = j(sym(shaped), λ l _ => Over<BitVec(64)>(n, run(n, s2, FTm::after_length(vs)), known(l, s2.bytes)), prior);
+                let at_o = j(ag.right.right.right, λ o _ => Over<BitVec(64)>(n, run(n, s2, FTm::after_length(vs)), known(vs, o)), at_vs);
+                let at_here = j(sym(here_v), λ x _ => Over<BitVec(64)>(n, x, known(vs, o2)), at_o);
+                let picked = j(sym(FFun::pick_at(ws.len(), known, known, vs, o2, len_v)), λ u _ => Over<BitVec(64)>(n, here, u), at_here);
+                let out: Over<BitVec(64)>(n, here, FTm::recast(tys, Word(64), Word(64),
+                    FTm::recast(tys, Word(64), Word(64), FFun::pick(ws.len(), known, known, vs, o2)))) = Over(picked.after, picked.value);
+                out
+            },
+        },
+    };
+    j(trans(cong_fn(λ (u: Mutated<List<BitVec(8)>, BitVec(64)>) => FTm::recast(tys, Word(64), Word(64), u), sym(folded)), passed),
+        λ u _ => Over<BitVec(64)>(n, here, u), cases(sh, sb, agreed, eqn))
+}
+
+// As deep as the measure: the iteration `depth` passes deep is the
+// function of the record at its bytes wherever the measure is at most
+// `depth`.
+theorem FFun::rounds_over<F>(bw: BWorld, world: bw.Agrees(), ws: List<Ty>, body: FTm, words, len: Nat,
+    arity: ws.len() = words + 2, kept: body.tail_over_ok(words, len).IsTrue(),
+    at: F → FTm::Sem(bw.fw.w.tys, Sig(ws, Word(64))), pass: F → F, stop: F, passes: FFun::Passes(ws, Word(64), body, bw.fw, at, pass),
+    lengthy: Ty::ForWords(ws, λ (xs: List<BitVec(64)>) =>
+        FTm::word(bw.fw.w.tys, Ty::bind_onto(ws, Nil), Ty::extend(bw.fw.w.tys, ws, Nil, trivial, xs), len) = FTm::operand(xs, 1)),
+    n: BitVec(64), run: FFun::OverRun(), m: FFun::OverMeasure(),
+    guarded: FFun::OverGuarded(bw, ws, body, n, run, m), depth: Nat):
+    (p: BitVec(64)) → (zs: List<BitVec(64)>) → zs.len() = words → (s: Bytes(n)) → m(n, s, zs) < depth + 1 →
+    Over<BitVec(64)>(n, run(n, s, zs), FFun::uncurry(bw.fw.w.tys, ws, Word(64), at(FFun::rounds(depth, pass, stop)), Cons(p, Cons(n, zs)), s.bytes)) {
+    match depth {
+        Zero => λ p zs zlen s below =>
+            FFun::round_over(bw, world, ws, body, words, len, arity, kept, at, pass, passes, lengthy, n, run, m, guarded, stop, p, zs, zlen, s,
+                λ q us _ b lt => false_elim(Nat::lt_of_lt_of_le(m(n, b, us), m(n, s, zs), 0, lt, below))),
+        Succ(k) => λ p zs zlen s below =>
+            FFun::round_over(bw, world, ws, body, words, len, arity, kept, at, pass, passes, lengthy, n, run, m, guarded,
+                FFun::rounds(k, pass, stop), p, zs, zlen, s,
+                λ q us ulen b lt => FFun::rounds_over(bw, world, ws, body, words, len, arity, kept, at, pass, stop, passes, lengthy, n, run, m,
+                    guarded, k, q, us, ulen, b, Nat::lt_of_lt_of_le(m(n, b, us), m(n, s, zs), k + 1, lt, below))),
+    }
+}
+
+// At the count the code has: a measure that is a word's is below it.
+theorem FFun::counted_over<F>(bw: BWorld, world: bw.Agrees(), ws: List<Ty>, body: FTm, words, len: Nat,
+    arity: ws.len() = words + 2, kept: body.tail_over_ok(words, len).IsTrue(),
+    at: F → FTm::Sem(bw.fw.w.tys, Sig(ws, Word(64))), pass: F → F, stop: F, passes: FFun::Passes(ws, Word(64), body, bw.fw, at, pass),
+    lengthy: Ty::ForWords(ws, λ (xs: List<BitVec(64)>) =>
+        FTm::word(bw.fw.w.tys, Ty::bind_onto(ws, Nil), Ty::extend(bw.fw.w.tys, ws, Nil, trivial, xs), len) = FTm::operand(xs, 1)),
+    n: BitVec(64), run: FFun::OverRun(), m: FFun::OverMeasure(),
+    guarded: FFun::OverGuarded(bw, ws, body, n, run, m), bounded: (s: Bytes(n)) → (zs: List<BitVec(64)>) → m(n, s, zs) < Nat::pow(2, 64),
+    p: BitVec(64), zs: List<BitVec(64)>, zlen: zs.len() = words, s: Bytes(n)):
+    Over<BitVec(64)>(n, run(n, s, zs), FFun::uncurry(bw.fw.w.tys, ws, Word(64), at(FFun::rounds(Fun::meas_passes(), pass, stop)), Cons(p, Cons(n, zs)), s.bytes)) {
+    FFun::rounds_over(bw, world, ws, body, words, len, arity, kept, at, pass, stop, passes, lengthy, n, run, m, guarded, Fun::meas_passes(), p, zs, zlen, s,
+        bounded(s, zs))
+}
+
+// An agreement with a word's answer read as a word is one with the answer.
+theorem Over::bare(tys: Nat → RecInfo, n: BitVec(64), h: Mutated<Bytes(n), BitVec(64)>, m: Mutated<List<BitVec(8)>, BitVec(64)>,
+    ag: Over<BitVec(64)>(n, h, FTm::recast(tys, Word(64), Word(64), m))): Over<BitVec(64)>(n, h, m) {
+    Over(ag.after, ag.value)
+}

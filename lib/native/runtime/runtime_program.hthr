@@ -118,7 +118,7 @@ fn Program::source(p: ELoop, ls: List<Lent>, g: List<Ty>, functions: List<Functi
 theorem Program::held_nil(tys: Nat → RecInfo, env: native_source::Env): LocsHold(tys, env, Nil, Nil, trivial) { trivial }
 
 theorem Program::held_cons(tys: Nat → RecInfo, env: native_source::Env, g: List<Ty>, i: Nat, v: List<BitVec(8)>, locs: List<Loc>, vals: rt::Env(tys, g),
-    e: env.buffers.nth(i) = Some(v), h: LocsHold(tys, env, g, locs, vals)): LocsHold(tys, env, Cons(Bytes(0), g), Cons(InBuffer(i), locs), Pair(v, vals)) {
+    e: env.buffers.nth(i) = Some(v), h: LocsHold(tys, env, g, locs, vals)): LocsHold(tys, env, Cons(ByteList(0), g), Cons(InBuffer(i), locs), Pair(v, vals)) {
     ⟨e, h⟩
 }
 

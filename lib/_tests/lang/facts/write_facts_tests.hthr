@@ -35,21 +35,21 @@ fn peek_after(xs: List<BitVec(8)>) → BitVec(8) {
 }
 
 fn bump_rt() → Fun {
-    Fun([Bytes(0), Word(64)], Bytes(0),
+    Fun([ByteList(0), Word(64)], ByteList(0),
         Let(Prim(Get(0), [1, 0]), Let(Lit(Word(8), 1), Let(Prim(Add(8), [1, 0]), Prim(Set(0), [4, 3, 0])))))
 }
 
 fn keep_old_rt() → Fun {
-    Fun([Bytes(0), Word(64)], Word(8),
+    Fun([ByteList(0), Word(64)], Word(8),
         Let(Lit(Word(8), 0), Let(Prim(Set(0), [2, 1, 0]), Let(Prim(Get(0), [0, 2]), Let(Prim(Get(0), [4, 3]), Prim(Add(8), [1, 0]))))))
 }
 
 fn twice_rt() → Fun {
-    Fun([Bytes(0)], Bytes(0), Let(Lit(Word(64), 0), Let(Call(0, [1, 0]), Let(Lit(Word(64), 1), Call(0, [1, 0])))))
+    Fun([ByteList(0)], ByteList(0), Let(Lit(Word(64), 0), Let(Call(0, [1, 0]), Let(Lit(Word(64), 1), Call(0, [1, 0])))))
 }
 
 fn peek_after_rt() → Fun {
-    Fun([Bytes(0)], Word(8),
+    Fun([ByteList(0)], Word(8),
         Let(Lit(Word(64), 0), Let(Call(0, [1, 0]), Let(Lit(Word(64), 0), Let(Prim(Get(0), [1, 0]),
         Let(Lit(Word(64), 0), Let(Prim(Get(0), [5, 0]), Prim(Add(8), [2, 0]))))))))
 }
@@ -112,7 +112,7 @@ theorem leaky_bump_copied(): WritePlan::modes(leaky(), 0, leaky_bump()) = [Copie
 // name sharing the old storage (the verdict is `False`) or the new buffer
 // (its control, `True`). A one-function program owns its parameters.
 
-fn one(body: Tm) → Program { Program([Fun([Bytes(0), Bit], Word(8), body)], 0) }
+fn one(body: Tm) → Program { Program([Fun([ByteList(0), Bit], Word(8), body)], 0) }
 
 // A `let` alias: `a = xs` (variable 1 at depth 2), then `xs` written.
 fn via_alias(read: Nat) → Tm {
@@ -159,8 +159,8 @@ theorem second_write_reused(): one(two_writes()).unique_at(0, 1) = True { refl }
 
 // A call passed the same buffer twice does not own either.
 fn twin() → Program {
-    Program([Fun([Bytes(0), Bytes(0)], Bytes(0), Let(Lit(Word(64), 0), Let(Lit(Word(8), 1), Prim(Set(0), [3, 1, 0])))),
-             Fun([Bytes(0)], Bytes(0), Call(0, [0, 0]))], 1)
+    Program([Fun([ByteList(0), ByteList(0)], ByteList(0), Let(Lit(Word(64), 0), Let(Lit(Word(8), 1), Prim(Set(0), [3, 1, 0])))),
+             Fun([ByteList(0)], ByteList(0), Call(0, [0, 0]))], 1)
 }
 
 theorem twin_unowned(): twin().owns(0) = False { refl }

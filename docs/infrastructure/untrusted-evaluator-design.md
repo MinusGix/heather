@@ -46,7 +46,9 @@ an interpreter.
 - **Numbers.** Core `Nat` functions are recursors, which the kernel runs
   fast by classifying their folds. Here a number is a machine integer and
   the library's arithmetic is named by the caller (`Prims`: `Nat::add`,
-  `sub`, `mul`, `half`, `div`, `mod`, `same`, `leb`). A named definition is
+  `sub`, `mul`, `half`, `twice`, `low_bit`, `div`, `mod`, `same`, `leb`,
+  `BitVec::odd_bit`). One the library recurses through over a whole number
+  must be named, or a run nests as deep as the number. A named definition is
   not believed: the first time one is called, its body is run as written on
   a handful of small numbers and compared with the direct operation, and one
   that disagrees is run as written from then on. A two-valued definition's
@@ -65,6 +67,35 @@ evaluator only, and `HEATHER_READS=check` runs both and refuses a read they
 disagree on, which is how a change to either is tested against the other.
 `HEATHER_READ_TRACE=1` reports each read's steps and time on whichever ran
 it, and says why a read was left to the kernel.
+
+### 3.1 A session: one machine for a compile's reads
+
+`compile-x86` reads hundreds of programs from one forked elaborator that
+only ever defines more modules (`native::answers::Reading`). It keeps one
+machine for all of them (`heather_run::Session`, `RunSession` in the
+elaborator): what was erased stays erased, and a definition of no arguments
+that one read evaluated is a value the next reads have. Constants are
+positions from the start of Ψ, so what the machine kept reads the same as Ψ
+grows.
+
+That is what lets the optimizer's stages be values. A stage used to end by
+spelling the function it made as text, and the next stage began by
+elaborating that text; the elaboration was a fifth of a large compile. Now a
+stage's module says
+
+    fn stage_found() → Option<Found> { before().search }
+    fn stage() → Function { found_made(stage_found(), before()) }
+
+and the next stage's `before` is `stage`. The driver reads one small answer
+(`found_kind`: nothing found, the function unchanged, or a new one) and reads
+the spelling only of the stages the certificate keeps. The read's own name
+is forgotten after each read (`Machine::forget`), so only the stage values
+stay.
+
+The kernel's evaluator has no such memory: a read it is left with evaluates
+the whole chain of stages before it. Its fallback is therefore for the rare
+stuck read, and a compile whose reads are mostly stuck is slower than it was
+with literals; `HEATHER_READ_TRACE=1` shows each one and why.
 
 ## 4. What it does not change
 

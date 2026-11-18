@@ -31,7 +31,7 @@ fn Io::echo_once(mut self io: Io, buf: List<BitVec(8)>) → BitVec(64) {
 
 // Its computation. Variables, innermost first, are noted at each node.
 fn echo_rt() → EFun {
-    EFun([Bytes(0)], Word(64),
+    EFun([ByteList(0)], Word(64),
         // buf
         Let(Lit(Word(64), 0),
         // stdin, buf
@@ -72,7 +72,7 @@ theorem echo_result(): echo_rt().meaning(ETm::plain_world(), [])(piped())(zeros(
 // A computation whose write names the buffer before the read filled it is
 // another program: the pin refuses it.
 fn echo_stale_rt() → EFun {
-    EFun([Bytes(64)], Word(64),
+    EFun([ByteList(64)], Word(64),
         Let(Lit(Word(64), 0), Let(Lit(Word(64), 0), Let(Lit(Word(64), 64), Invoke(Reads(0), [2, 3, 1, 0],
         Let(Lit(Word(64), 1), Let(Lit(Word(64), 0), Invoke(Writes(64), [1, 8, 0, 2], Pure(Var(0))))))))))
 }
@@ -94,7 +94,7 @@ fn Io::read_file(mut self io: Io, path: List<BitVec(8)>, buf: List<BitVec(8)>) �
 }
 
 fn read_file_rt() → EFun {
-    EFun([Bytes(0), Bytes(0)], Word(64),
+    EFun([ByteList(0), ByteList(0)], Word(64),
         // buf, path
         Let(Lit(Word(64), 16),
         // sixteen, buf, path
@@ -144,7 +144,7 @@ fn Io::write_if(mut self io: Io, buf: List<BitVec(8)>, n: BitVec(64)) → BitVec
 
 fn write_if_rt() → EFun {
     // n, buf; the test is one `Tm`, its lets inside it.
-    EFun([Bytes(0), Word(64)], Word(64),
+    EFun([ByteList(0), Word(64)], Word(64),
         If(Let(Lit(Word(64), 0), Prim(Ult(64), [0, 1])),
             Let(Lit(Word(64), 1), Let(Lit(Word(64), 0), Invoke(Writes(0), [1, 3, 0, 2], Pure(Lit(Word(64), 0))))),
             Pure(Lit(Word(64), 0)),
@@ -166,7 +166,7 @@ theorem write_if_quiet(): write_if_rt().meaning(ETm::plain_world(), [])(piped())
 // The negative control: the arms the other way round, which the reflector
 // does not give, write nothing when `n` is 2.
 fn write_if_swapped() → EFun {
-    EFun([Bytes(0), Word(64)], Word(64),
+    EFun([ByteList(0), Word(64)], Word(64),
         If(Let(Lit(Word(64), 0), Prim(Ult(64), [0, 1])),
             Pure(Lit(Word(64), 0)),
             Let(Lit(Word(64), 1), Let(Lit(Word(64), 0), Invoke(Writes(0), [1, 3, 0, 2], Pure(Lit(Word(64), 0))))),
@@ -191,7 +191,7 @@ fn Io::write_twice(mut self io: Io, buf: List<BitVec(8)>, n: BitVec(64)) → Bit
 }
 
 fn write_twice_rt() → EFun {
-    EFun([Bytes(0), Word(64)], Word(64),
+    EFun([ByteList(0), Word(64)], Word(64),
         If(Let(Lit(Word(64), 0), Prim(Ult(64), [0, 1])),
             Let(Lit(Word(64), 1), Let(Lit(Word(64), 0), Invoke(Writes(0), [1, 3, 0, 2], Pure(Lit(Word(64), 0))))),
             Let(Lit(Word(64), 0), Let(Lit(Word(64), 0), Invoke(Reads(0), [1, 3, 0, 2], Pure(Lit(Word(64), 0))))),
