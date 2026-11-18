@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/numeral", "crates/sat", "crates/kernel", "crates/kernel-lib", "crates/syntax", "crates/elab", "crates/elab-lib", "crates/elab-unit", "crates/cache", "crates/linked", "crates/cli", "crates/lsp", "crates/export"]
+members = ["crates/numeral", "crates/sat", "crates/kernel", "crates/kernel-lib", "crates/run", "crates/syntax", "crates/elab", "crates/elab-lib", "crates/elab-unit", "crates/cache", "crates/linked", "crates/cli", "crates/lsp", "crates/export"]
 
 [workspace.package]
 version = "0.0.1"
@@ -40,6 +40,11 @@ opt-level = 3
 opt-level = 3
 
 [profile.dev.package.heather-syntax]
+opt-level = 3
+
+# The untrusted evaluator runs whole optimizer walks: an interpreter loop,
+# which unoptimized costs many times its release speed.
+[profile.dev.package.heather-run]
 opt-level = 3
 
 # The allocator's C sources: at the dev profile's opt-level 0 every `malloc`

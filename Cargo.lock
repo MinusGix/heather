@@ -118,6 +118,7 @@ dependencies = [
  "heather-elab-lib",
  "heather-kernel-lib",
  "heather-numeral",
+ "heather-run",
  "heather-syntax",
 ]
 
@@ -127,6 +128,7 @@ version = "0.0.1"
 dependencies = [
  "heather-kernel-lib",
  "heather-numeral",
+ "heather-run",
  "heather-sat",
  "heather-syntax",
  "mimalloc",
@@ -138,6 +140,7 @@ version = "0.0.1"
 dependencies = [
  "heather-kernel-lib",
  "heather-numeral",
+ "heather-run",
  "heather-sat",
  "heather-syntax",
  "mimalloc",
@@ -188,6 +191,13 @@ dependencies = [
 [[package]]
 name = "heather-numeral"
 version = "0.0.1"
+
+[[package]]
+name = "heather-run"
+version = "0.0.1"
+dependencies = [
+ "heather-kernel-lib",
+]
 
 [[package]]
 name = "heather-sat"

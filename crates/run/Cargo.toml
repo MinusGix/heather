@@ -1,0 +1,17 @@
+[package]
+name = "heather-run"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The untrusted evaluator: core terms with their types erased, run by a
+# machine that frees what it no longer reads (`src/lib.rs`). Nothing the
+# kernel checks depends on it.
+[lib]
+name = "heather_run"
+
+[dependencies]
+heather-kernel-lib = { path = "../kernel-lib" }
+
+[lints]
+workspace = true

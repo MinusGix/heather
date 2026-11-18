@@ -226,3 +226,39 @@ counters! {
     /// quadratic term.
     reduce_frames,
 }
+
+/// How often each global was read by the evaluator on this thread, by its
+/// place in Ψ, while a profile is on: which definitions an evaluation
+/// spends its references in (`HEATHER_READ_PROFILE`, a compile's reads).
+/// Off, a reference pays one relaxed load.
+static PROFILING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+thread_local! {
+    static PROFILE: std::cell::RefCell<Vec<u64>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Start counting global references, from zero.
+pub fn profile_start() {
+    PROFILE.with(|p| p.borrow_mut().clear());
+    PROFILING.store(true, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// Count one reference to the global at `place`, where a profile is on.
+#[inline]
+pub fn profile_global(place: impl FnOnce() -> Option<usize>) {
+    if !PROFILING.load(std::sync::atomic::Ordering::Relaxed) { return; }
+    let Some(place) = place() else { return };
+    PROFILE.with(|p| {
+        let mut counts = p.borrow_mut();
+        if counts.len() <= place { counts.resize(place + 1, 0); }
+        counts[place] += 1;
+    });
+}
+
+/// Stop counting, and the counts: each global referenced, most first.
+pub fn profile_take() -> Vec<(usize, u64)> {
+    PROFILING.store(false, std::sync::atomic::Ordering::Relaxed);
+    let mut counts: Vec<(usize, u64)> = PROFILE.with(|p| p.borrow().iter().copied().enumerate().filter(|(_, n)| *n > 0).collect());
+    counts.sort_by(|a, b| b.1.cmp(&a.1));
+    counts
+}
