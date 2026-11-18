@@ -80,6 +80,8 @@ Inductive Unit@{l} : Type@{l} := tt_.
 Definition tt@{l} : Unit@{l} := tt_.
 Inductive Empty@{l} : Type@{l} := .
 Definition elimEmpty@{l l'} (M : Empty@{l'} -> Type@{l}) (e : Empty@{l'}) : M e := match e with end.
+Definition unsquashEmpty@{l} (s : Squash@{l} Empty@{l}) : Empty@{l} :=
+  match (match spf s with sintro _ e => match e return sFalse with end end) return Empty@{l} with end.
 
 Inductive Sum@{l l'} (A : Type@{l}) (B : Type@{l'}) : Type@{max(l,l')} := inl_ : A -> Sum A B | inr_ : B -> Sum A B.
 Definition inl@{l l'} (A : Type@{l}) (B : Type@{l'}) (a : A) : Sum A B := inl_ A B a.

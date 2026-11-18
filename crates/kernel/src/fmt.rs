@@ -326,6 +326,9 @@ impl fmt::Debug for Term {
                 f,
                 "elim_Squash[{src_level:?},{dst_level:?}]({src_ty:?}; z.{motive:?}; x.{case:?}; {scrut:?})"
             ),
+            Term::UnsquashEmpty { level, scrut } => {
+                write!(f, "unsquash_empty[{level:?}]({scrut:?})")
+            }
             Term::J { ty_level, motive_level, ty, lhs, motive, case, rhs, proof } => write!(
                 f,
                 "J[{ty_level:?},{motive_level:?}]({ty:?}; a {lhs:?}; M {motive:?}; c {case:?}; {rhs:?}; {proof:?})"
@@ -563,7 +566,7 @@ impl fmt::Debug for Motives {
     }
 }
 
-/// All 65 branches, labelled and in declaration order — the same order and
+/// All 66 branches, labelled and in declaration order — the same order and
 /// the same no-`..` destructuring as the cache's structural walker
 /// (`heather_cache::merkle`), so the printed form and the content hash cannot
 /// disagree about what a recursor *is*.
@@ -626,6 +629,7 @@ impl fmt::Debug for Branches {
             tm_squash,
             tm_squash_in,
             tm_elim_squash,
+            tm_unsquash_empty,
             ty_m,
             tm_m,
             tm_corec,
@@ -696,6 +700,7 @@ impl fmt::Debug for Branches {
                 ("«Squash»", tm_squash),
                 ("squash", tm_squash_in),
                 ("elim_Squash", tm_elim_squash),
+                ("unsquash_empty", tm_unsquash_empty),
                 ("M", ty_m),
                 ("«M»", tm_m),
                 ("corec", tm_corec),

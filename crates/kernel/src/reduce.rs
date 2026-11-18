@@ -969,6 +969,13 @@ fn step_term_frame(t: &Term, gamma: &CtxShape, defs: Defs<'_>, frames: &Frames) 
                 }),
             }
         }
+        // unsquash_empty(squash a) ⇝ a (metatheory ch. 07 §29); otherwise
+        // step the argument, neutral when it is.
+        Term::UnsquashEmpty { level, scrut } => match &**scrut {
+            Term::Squash { tm, .. } => Some((**tm).clone()),
+            _ => step_scrut(scrut, gamma, defs, frames)
+                .map(|s| Term::UnsquashEmpty { level: level.clone(), scrut: Rc::new(s) }),
+        },
         // case (inl a) ⇝ c_l[a/x]; case (inr b) ⇝ c_r[b/y]; else reduce the
         // scrutinee, staying neutral when it is.   (extension)
         Term::Case {
@@ -2402,6 +2409,21 @@ pub(crate) fn beta_elim_tm(
                 gamma,
             ))
         }
+        // (ℓ, g, u_q, x_q. t_unsquash_empty)
+        Term::UnsquashEmpty { level, scrut } => {
+            let sq_empty = Rc::new(Type::Squash {
+                level: level.clone(),
+                ty: Rc::new(Type::Empty { level: level.clone() }),
+            });
+            let s_scrut = rec.elim_tm(level.clone(), delta.clone(), sq_empty, Rc::clone(scrut));
+            Some(fire(
+                &b.tm_unsquash_empty,
+                std::slice::from_ref(level),
+                vec![GlobalEntry::Ctx(delta.clone()), GlobalEntry::Tm(Rc::clone(scrut))],
+                vec![s_scrut],
+                gamma,
+            ))
+        }
         // (ℓ, ℓ', g, u_a, u_b, x_a, x_b. t'_+) — the encoding; mirrors
         // tm_sigma minus the binder extension.   (extension)
         Term::TmSum { lhs_level, rhs_level, lhs, rhs } => {
@@ -3098,6 +3120,7 @@ pub fn is_neutral_term(t: &Term) -> bool {
         Term::J { proof, .. } => is_neutral_term(proof),
         Term::ElimSEmpty { scrut, .. } => is_neutral_term(scrut),
         Term::ElimSquash { scrut, .. } => is_neutral_term(scrut),
+        Term::UnsquashEmpty { scrut, .. } => is_neutral_term(scrut),
         Term::Fst { pair, .. }
         | Term::Snd { pair, .. }
         | Term::FstAt { pair, .. }

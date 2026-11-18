@@ -1333,7 +1333,7 @@ impl Quotation<'_> {
             terms[idx] = Rc::new(arm_t?);
         }
 
-        let branches: [Rc<Term>; 65] = terms.try_into().expect("one term per branch name");
+        let branches: [Rc<Term>; 66] = terms.try_into().expect("one term per branch name");
         let branches = Rc::new(rec::branches_from(branches));
         let term = match scrutinee {
             Scrutinee::Tm { ctx, ty, level } => Term::ElimCodeTm {

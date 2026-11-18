@@ -585,6 +585,7 @@ impl Walk {
                 .join(self.type_use(motive).under(1))
                 .join(self.term_use(case).under(1))
                 .join(self.term_use(scrut)),
+            Term::UnsquashEmpty { scrut, .. } => self.term_use(scrut),
             Term::Pair {
                 fst_ty,
                 snd_ty,

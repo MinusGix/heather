@@ -386,6 +386,7 @@ fn term_head_may_compute(t: &Term) -> bool {
             | Term::ElimWf { scrut, .. }
             | Term::ElimSEmpty { scrut, .. }
             | Term::ElimSquash { scrut, .. }
+            | Term::UnsquashEmpty { scrut, .. }
             | Term::LetBoxTy { scrut, .. }
             | Term::LetBoxTm { scrut, .. }
             | Term::ElimCodeTy { scrut, .. }

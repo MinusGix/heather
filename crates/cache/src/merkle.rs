@@ -295,6 +295,7 @@ mod tag {
     pub const E_TMIWF: u8 = 0x83;
     pub const E_VECLIT: u8 = 0x84;
     pub const E_VECITEMS: u8 = 0x85;
+    pub const E_UNSQUASH_EMPTY: u8 = 0x86;
 
     // A node digest, in place of a term's or a type's encoding.
     pub const DIGEST: u8 = 0x1f;
@@ -956,6 +957,11 @@ impl<'a> Walk<'a> {
                 self.term(case);
                 self.term(scrut);
             }
+            Term::UnsquashEmpty { level, scrut } => {
+                self.tag(tag::E_UNSQUASH_EMPTY);
+                self.level(level);
+                self.term(scrut);
+            }
             // The intros' annotation is optional (design §2.1), so its
             // presence is hashed before it: an annotated and an unannotated
             // spelling of the same fields are different terms and must not
@@ -1297,7 +1303,7 @@ impl<'a> Walk<'a> {
         self.ty(tm_motive);
     }
 
-    /// All 65 branches of the mutual code recursors, in declaration order.
+    /// All 66 branches of the mutual code recursors, in declaration order.
     ///
     /// Destructured without `..` deliberately: `fmt`'s `Debug` for this struct
     /// prints only 37 of the fields, which is precisely the defect the v1
@@ -1360,6 +1366,7 @@ impl<'a> Walk<'a> {
             tm_squash,
             tm_squash_in,
             tm_elim_squash,
+            tm_unsquash_empty,
             ty_m,
             tm_m,
             tm_corec,
@@ -1428,6 +1435,7 @@ impl<'a> Walk<'a> {
             tm_squash,
             tm_squash_in,
             tm_elim_squash,
+            tm_unsquash_empty,
             ty_m,
             tm_m,
             tm_corec,

@@ -1,8 +1,7 @@
 # Conditions whose proofs are interchangeable
 
 Status: **prototype, 2026-11-14.** The elaborator half is built (§3, §5);
-the kernel half it would want next (§4.2) is a proposal for Minus and is not
-built. Brief: section 1 of the 2026-11-14 language-feature threads ("Proofs a
+the kernel half (§4.2, the release of `∥Empty∥`) was built 2026-11-18. Brief: section 1 of the 2026-11-14 language-feature threads ("Proofs a
 search finds are interchangeable"). Related: `docs/kernel/sprop-design.md` (the
 strict formers), `issues/sprop-squash.md` (the squash former as landed),
 `issues/sprop-inductives-and-squash-bridges.md` (the deferred bridges),
@@ -106,7 +105,7 @@ From `inside: ∥i < 0∥` a body cannot reach `False`: `squash_map` gives
 uses its condition to rule a case out (`vector_index`'s `Zero` arm,
 `false_elim(inside)`) cannot take it squashed.
 
-**Proposal (kernel; for Minus):** the release bridge
+**Built 2026-11-18 (Minus chose it the same day).** The release bridge
 `issues/sprop-inductives-and-squash-bridges.md` names as scope point (b),
 at `Empty`, which has been irrelevant since Empty η
 (`docs/kernel/metatheory-ch07-extensions.md` §28):
@@ -117,24 +116,38 @@ at `Empty`, which has been irrelevant since Empty η
 Γ ⊢ unsquash_empty(q) : Empty^l
 ```
 
-A fixed former whose result shape the kernel checks; no classifier, no
-sort. No β is needed (a closed `∥Empty∥` has no canonical inhabitant), and
-neutral congruence skips the argument as `elim_Empty`'s does. Its
-metatheory cost is the one real question: the squash relation is
-"normalizing-total" (§27 there), which ignores payloads, so it does not
-know a `squash(t)` at `∥Empty∥` has a `t` in `Empty`'s relation. The
-relation at `∥A∥` would have to carry that the payload is related at `A`
-(still ignoring which payload), and §27's case be re-read for it. That is
-the abort criterion's place: if the relation cannot carry it without
-relevance marks, the bridge does not land.
+It is a fixed former whose result shape the kernel checks. There is no
+classifier and no sort. Neutral congruence skips the argument, as
+`elim_Empty`'s does.
+
+It does need a β rule, `unsquash_empty(squash a) ⇝ a`, which this
+proposal first said it would not. In an open context `squash(x)` with
+`x : Empty` is canonical, and without β the release of it would be a
+whnf that `Empty`'s relation cannot hold.
+
+The metatheory (§29 of the ch. 07 extensions) makes the squash relation
+carry that each side's payload is related to itself at `A`. It still never
+compares two payloads, and it needs no relevance marks, so the abort
+criterion is not met. The edit also closes a gap in §27's own β case.
+
+The surface is `unsquash_empty(q)`, for `q : ∥P∥` whose `P` unfolds to
+`False` (`crates/elab/src/inference.rs`). The probes are in
+`lib/_tests/std/core/squash_recover_tests.hthr`.
 
 With the bridge, **every decidable condition is recoverable**, as a
 library theorem:
 
 ```heather
-theorem Squash::recover<P>(q: ∥P∥) requires Decide<P>: P
-    // decide P; on ¬P, squash_map(q, ¬P) : ∥Empty∥, released
+fn Squash::recover<P: Decide>(q: ∥P∥) → P {
+    match P.dec {
+        Inl(p) => p,
+        Inr(no) => false_elim(unsquash_empty(squash_map(q, no))),
+    }
+}
 ```
+
+(`lib/std/core/bool.hthr`; `∥A∥` owns the `Squash` namespace, so
+`q.recover()` reads it.)
 
 and a condition defined by recursion into `True`/`False` (`Nat::Le`)
 recovers by the same recursion. Then `vector_index` can take
@@ -188,7 +201,8 @@ recursion.
 - **Elaboration:** a non-search expression checked against a `∥P∥` is
   inferred once more in a probe. Squash positions are rare (conditions,
   `BoundedList`'s `fit`), so this is not on a hot path.
-- **Kernel trust base:** unchanged by §3 and §5. §4.2 would add one former.
+- **Kernel trust base:** unchanged by §3 and §5. §4.2 added one former,
+  `unsquash_empty`, and one code-recursor branch.
 
 ## 7. Native code and `When`
 
@@ -202,6 +216,7 @@ not stay transient.
 ## 8. Open, for Minus
 
 1. The surface: the type `∥P∥` alone, or a binder marker as sugar.
-2. The bridge of §4.2 (kernel, with its metatheory re-read).
+2. ~~The bridge of §4.2~~ built 2026-11-18. Moving `vector_index`/`Vec::at`
+   to taking `∥i < n∥` and recovering it is open.
 3. Retiring the lifting (§5), and what to say about a relevant condition
    defaulted to a search.

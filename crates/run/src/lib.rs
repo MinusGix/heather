@@ -472,7 +472,9 @@ impl Machine {
             | Term::TmDVec { .. }
             | Term::TmIWf { .. }
             | Term::TmM { .. } => Code::Unit,
-            Term::ElimEmpty { .. } | Term::ElimSEmpty { .. } => Code::Stuck("a case that cannot happen was reached"),
+            Term::ElimEmpty { .. } | Term::ElimSEmpty { .. } | Term::UnsquashEmpty { .. } => {
+                Code::Stuck("a case that cannot happen was reached")
+            }
             Term::Corec { .. } | Term::Out { .. } => Code::Stuck("codata"),
             Term::BoxTy(_)
             | Term::BoxTm(_)
