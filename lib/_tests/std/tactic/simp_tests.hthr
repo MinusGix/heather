@@ -536,3 +536,13 @@ theorem staged_by_parts<A>(s: Staged<A>, is: s.is_seq().IsTrue(), out, mid, l: L
 theorem staged_undecided<A>(f, r: Staged<A>, out, l: List<A>): Seq(f, r).checked(out) = Some(l) {
     simp_only(Staged::checked)
 }
+
+// ---------------------------------------------------------------------------
+// `rewrite` with an unapplied law whose premise matching leaves open: the
+// premise is found among the hypotheses (docs/tactics/equation-rewrite-design.md
+// §6.1), and refused, naming its position, when none meets it.
+fn choose(b: Bool, x, y: Nat) → Nat { match b { True => x, False => y } }
+theorem choose_true(b: Bool, x, y: Nat, h: b = True): choose(b, x, y) = x { rewrite(h, refl) }
+theorem premise_from_scope(b: Bool, k: Nat, h: b = True): choose(b, k, 0) + 1 = k + 1 { rewrite(choose_true, refl) }
+// expect-error: matching the left side does not determine this equation's argument 4
+theorem premise_missing(b: Bool, k: Nat): choose(b, k, 0) + 1 = k + 1 { rewrite(choose_true, refl) }

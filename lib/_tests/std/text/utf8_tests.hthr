@@ -7,7 +7,7 @@
 // (docs/test-value-audit.md §4.5). Moved from
 // crates/elab/tests/lib_std_utf8.rs; the refusals stay there.
 import logic; import bool; import nat; import option; import pair;
-import list; import bitvec; import char; import string; import utf8; import omega;
+import list; import bitvec; import char; import string; import utf8; import omega; import tactic;
 
 // The encoder at a literal of every byte width.
 // One byte per class boundary: ASCII, Latin-1, the BMP, and an astral plane.
@@ -196,3 +196,24 @@ theorem stray_is_nothing(): ¬(utf8::decode([@bitvec::BitVec::ofNat(8, 0x80)]) =
 // A byte list that does not decode has no witness, so no `Utf8` value.
 theorem stray_has_no_witness(p: utf8::utf8_valid([@bitvec::BitVec::ofNat(8, 0x80)])): False { p }
 theorem byte_length_is_not_char_length(): ¬(utf8::ofString("h\u{E9}").len() = 2) { decide }
+
+// The decoder's sequence steps by `split_all`
+// (crates/elab/src/goal_combinators.rs): a continuation byte's test is
+// `bit7(c1)` read through the list's encoding, and is abstracted on both
+// sides only once read through it (`settled`); a four-byte sequence takes a
+// test per continuation byte, past a split budget of 512.
+fn holds<A>(o: Option<A>) → Bool { match o { None => False, Some(_) => True } }
+fn cont(c: u8) → Bool { utf8::bit7(c) && !utf8::bit6(c) }
+theorem cont_lead_holds(c1: u8, r: List<u8>): holds(utf8::cont_lead(c1, r)) = cont(c1) {
+    split_all; all_goals { refl }
+}
+theorem seq4_holds(b, c1, c2, c3: u8, r: List<u8>):
+    holds(utf8::decode_seq(utf8::C4, b, Cons(c1, Cons(c2, Cons(c3, r)))))
+        = (((cont(c1) && cont(c2)) && cont(c3)) && holds(utf8::emit(0x10000, utf8::cont_payload(c3).concat(utf8::cont_payload(c2).concat(utf8::cont_payload(c1).concat(utf8::lead4_payload(b)))).toNat(), r))) {
+    split_all; all_goals { refl }
+}
+// The decoder's check, said of strings: a byte list passes exactly when it
+// is some string's encoding.
+theorem ascii_is_utf8(): ∃ s: String, utf8::encode(s) = [@bitvec::BitVec::ofNat(8, 0x61)] {
+    utf8::is_utf8_iff([@bitvec::BitVec::ofNat(8, 0x61)]).mp(refl)
+}

@@ -136,37 +136,33 @@ theorem valid_from_decides(s: List<u8>, n, i, left: u64,
 
 The program and the decoder are written differently on purpose. The program
 compares words against bounds (`b < 0xE0`, `code < 0x800`); the decoder reads
-header bits and joins payloads with `concat`. The proof meets them in three
-layers.
+header bits and joins payloads with `concat`. Three tools do the meeting, and
+the proof is mostly the statements.
 
-1. **Bytes.** A claim about one byte is checked at all 256 by evaluation
-   (`Fintype::all<u8>`), so `cont_word` (the program's `c & 0xC0 = 0x80` is
-   the decoder's continuation header) and the payload facts (`c & 0x3F` is
-   the decoder's six payload bits) are each one line.
-2. **Sequences.** `two_decides`, `three_decides` and `four_decides` say the
-   helper refuses exactly when the decoder's step for that class fails. Each
-   rewrites the helper into its tests (`split_all; all_goals { refl }`),
-   turns the assembled word into the decoder's number (`code2_word`: a `calc`
-   through `bv_omega`), and turns the word comparisons into the decoder's
-   (`at_least_word`, `below_word`).
-3. **The loop.** `valid_from_decides` goes by induction on `left`, one case
-   per branch of the loop. Each case takes one step of the loop: Heather
-   generates an equation per branch of a function, measured loops included,
-   and `simp_only(utf8_valid_from, discharge := bv_omega)` picks the one
-   the facts in scope decide (bytes left, not ASCII, a continuation byte:
-   the answer is `i`). The five deepest branches (a three- or four-byte
-   sequence checked, a four-byte one cut off) still cite their equation by
-   name, `utf8_valid_from::True::False::False::False::True::True::True` and
-   so on: `simp_only` does not reach a branch seven tests deep yet
-   (`issues/simp-only-deep-branch-equations.md`). The decoder side of the case is one of `valid_one`,
-   `valid_two`, …, which say what the decoder does on a lead byte of each
-   class.
+1. **Sequences, by `bv_decide`.** `two_decides`, `three_decides` and
+   `four_decides` say a helper refuses exactly when the decoder's step for
+   that class fails. `split_all` turns the decoder's step into its tests
+   (`seq2_is_some`: every continuation header, then the scalar value's
+   checks), and `bv_decide` proves the rest: it reads the helper's `if`s by
+   splitting on their tests, and the decoder's number comparisons
+   (`code.toNat() < 0x800`) as comparisons of words.
+2. **Bytes, by their class.** `class_two` and its kin say which class the
+   decoder gives a lead byte under the program's tests, each one line:
+   `simp_only` takes the decoder's equations and `bv_decide` discharges the
+   tests. `ascii`, `two`, `cut_two` and so on then say what the decoder does
+   on a byte list that starts with such a byte.
+3. **The loop, by its own induction.** `valid_window_decides` goes by
+   `induct utf8_valid_from`: one case per branch of the loop, each with the
+   loop's tests as hypotheses and the step already taken. A case is one
+   `rewrite`: the window's read rule (`win.two(i, …)` spells the next bytes),
+   the class's lemma (its tests are found among the hypotheses), and the
+   induction hypothesis for the bytes after the sequence.
 
-The loop lemma is stated over a window (`valid_window_decides`): the
-bytes it reads may come from a longer buffer. `valid_window` and
-`valid_prefix` say what the loop answers for the first `filled` bytes of a
-buffer of `n`, which is what a program that reads into a buffer and lends it
-to the loop asks.
+The loop lemma is stated over a window (`Window`): the bytes it reads may
+come from a longer buffer. `valid_window` and `valid_prefix` say what the
+loop answers for the first `filled` bytes of a buffer of `n`, which is what a
+program that reads into a buffer and lends it to the loop asks. The last step
+to strings is the library's `utf8::is_utf8_iff`.
 
 The theorems are checked with the rest of the file: `heather check
 examples/utf8/utf8_check.hthr`.
