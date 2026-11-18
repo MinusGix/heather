@@ -202,14 +202,13 @@ theorem byte_length_is_not_char_length(): ¬(utf8::ofString("h\u{E9}").len() = 2
 // `bit7(c1)` read through the list's encoding, and is abstracted on both
 // sides only once read through it (`settled`); a four-byte sequence takes a
 // test per continuation byte, past a split budget of 512.
-fn holds<A>(o: Option<A>) → Bool { match o { None => False, Some(_) => True } }
 fn cont(c: u8) → Bool { utf8::bit7(c) && !utf8::bit6(c) }
-theorem cont_lead_holds(c1: u8, r: List<u8>): holds(utf8::cont_lead(c1, r)) = cont(c1) {
+theorem cont_lead_is_some(c1: u8, r: List<u8>): utf8::cont_lead(c1, r).is_some() = cont(c1) {
     split_all; all_goals { refl }
 }
-theorem seq4_holds(b, c1, c2, c3: u8, r: List<u8>):
-    holds(utf8::decode_seq(utf8::C4, b, Cons(c1, Cons(c2, Cons(c3, r)))))
-        = (((cont(c1) && cont(c2)) && cont(c3)) && holds(utf8::emit(0x10000, utf8::cont_payload(c3).concat(utf8::cont_payload(c2).concat(utf8::cont_payload(c1).concat(utf8::lead4_payload(b)))).toNat(), r))) {
+theorem seq4_is_some(b, c1, c2, c3: u8, r: List<u8>):
+    utf8::decode_seq(utf8::C4, b, Cons(c1, Cons(c2, Cons(c3, r)))).is_some()
+        = (((cont(c1) && cont(c2)) && cont(c3)) && utf8::emit(0x10000, utf8::cont_payload(c3).concat(utf8::cont_payload(c2).concat(utf8::cont_payload(c1).concat(utf8::lead4_payload(b)))).toNat(), r).is_some()) {
     split_all; all_goals { refl }
 }
 // The decoder's check, said of strings: a byte list passes exactly when it
