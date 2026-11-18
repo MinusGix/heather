@@ -264,7 +264,6 @@ theorem FTm::over_spec(self t: FTm, bw: BWorld, world: bw.Agrees(), len: Nat, ok
     j(reflects, λ k _ => Over<t.ty(bw.fw.w, bw.fw.fsigs, g).sem(bw.fw.w.tys)>(n, spec, k), at_spec)
 }
 
-
 // ---------------------------------------------------------------------------
 // A world whose writing callees are functions of a `Bytes(n)`
 
