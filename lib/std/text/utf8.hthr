@@ -1122,11 +1122,7 @@ theorem encode_decode(bytes: List<BitVec(8)>, s: String, p: decode(bytes) = Some
 // witness. The seal is `bool::IsTrue` for `Char`'s reason — a consumer has to
 // USE the witness, and `toString` below is exactly that use.
 
-fn is_some_string(o: Option<String>) → Bool {
-    match o { None => False, Some(_) => True }
-}
-
-fn is_utf8(bytes: List<BitVec(8)>) → Bool { is_some_string(decode(bytes)) }
+fn is_utf8(bytes: List<BitVec(8)>) → Bool { decode(bytes).is_some() }
 
 fn utf8_valid(bytes: List<BitVec(8)>) → Type { is_utf8(bytes).IsTrue() }
 
@@ -1138,7 +1134,7 @@ theorem is_utf8_iff(bytes: List<BitVec(8)>): (is_utf8(bytes) = True) ↔ (∃ s:
             None => absurd(ok),
             Some(s) => Exists(witness := s, proof := encode_decode(bytes, s, d)),
         },
-        mpr := λ e => rewrite(sym(e.proof), j(sym(decode_encode(e.witness)), λ y _ => is_some_string(y) = True, refl)),
+        mpr := λ e => rewrite(sym(e.proof), j(sym(decode_encode(e.witness)), λ y _ => y.is_some() = True, refl)),
     )
 }
 
@@ -1153,13 +1149,13 @@ fn Utf8::len(self u: Utf8) → Nat { u.bytes.len() }
 
 fn ofString(s: String) → Utf8 {
     Utf8(bytes := encode(s),
-        valid := j(sym(decode_encode(s)), λ y _ => is_some_string(y).IsTrue(), trivial))
+        valid := j(sym(decode_encode(s)), λ y _ => y.is_some().IsTrue(), trivial))
 }
 
 // The witness refutes the `None` branch, so the read is total with no
 // fallback string anywhere in the specification.
-fn force_string(o: Option<String>, w: is_some_string(o).IsTrue()) → String {
-    match o as λ y => is_some_string(y).IsTrue() → String {
+fn force_string(o: Option<String>, w: o.is_some().IsTrue()) → String {
+    match o as λ y => y.is_some().IsTrue() → String {
         None => λ bad => false_elim(bad),
         Some(z) => λ _ => z,
     }(w)
@@ -1169,7 +1165,7 @@ fn Utf8::toString(self u: Utf8) → String { force_string(decode(u.bytes), u.val
 
 theorem toString_of_decode(u: Utf8, s: String, p: decode(u.bytes) = Some(s)):
         u.toString() = s {
-    j(sym(p), λ y _ => (w: is_some_string(y).IsTrue()) → force_string(y, w) = s,
+    j(sym(p), λ y _ => (w: y.is_some().IsTrue()) → force_string(y, w) = s,
         λ w => refl)(u.valid)
 }
 
@@ -1184,7 +1180,7 @@ theorem toString_ofString(s: String): ofString(s).toString() = s {
 // `Utf8` is determined by its bytes exactly as a `Char` is by its code.
 
 theorem decode_toString(u: Utf8): decode(u.bytes) = Some(u.toString()) {
-    match decode(u.bytes) as λ y => (w: is_some_string(y).IsTrue()) → y = Some(force_string(y, w)) {
+    match decode(u.bytes) as λ y => (w: y.is_some().IsTrue()) → y = Some(force_string(y, w)) {
         None => λ w => false_elim(w),
         Some(_) => λ _ => refl,
     }(u.valid)

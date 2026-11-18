@@ -181,12 +181,6 @@ theorem Regex::deriv_simp_class(self r: Regex, bs: List<Nat>, c, d: Nat, side: R
 // ---------------------------------------------------------------------------
 // The table.
 
-fn Option::holds<A>(self o: Option<A>, f: A → Bool) → Bool { match o { None => False, Some(a) => f(a) } }
-
-theorem Option::holds_sound<A>(self o: Option<A>, f: A → Bool): o.holds(f) = True → Exists<A>(λ a => o = Some(a) ∧ f(a) = True) {
-    match o { None => λ h => absurd(h), Some(a) => λ h => ⟨a, ⟨refl, h⟩⟩ }
-}
-
 fn Regex::bit_same(a, b: Bool) → Bool { match a { True => b, False => !b } }
 
 theorem Regex::bit_same_sound(a, b: Bool): Regex::bit_same(a, b) = True → a = b {
@@ -219,7 +213,7 @@ fn Table::Label(self T: Table, s: Nat, w: List<Nat>) → Type {
 // The check. From the representative `p` of a class, the row's entry is a
 // row whose expression is the derivative by `p`.
 fn Table::entry_ok(self T: Table, row: Row, p: Nat) → Bool {
-    row.next.nth(Regex::class(T.cuts, p)).holds(λ t => T.rows.nth(t).holds(λ target => target.expr.eqb(row.expr.deriv_simp(p))))
+    row.next.nth(Regex::class(T.cuts, p)).is_some_and(λ t => T.rows.nth(t).is_some_and(λ target => target.expr.eqb(row.expr.deriv_simp(p))))
 }
 
 fn Table::row_ok(self T: Table, row: Row) → Bool {
@@ -228,7 +222,7 @@ fn Table::row_ok(self T: Table, row: Row) → Bool {
 }
 
 fn Table::check(self T: Table, r: Regex) → Bool {
-    T.rows.nth(0).holds(λ row => row.expr.eqb(r.simplify())) && T.rows.all_bit(λ row => T.row_ok(row))
+    T.rows.nth(0).is_some_and(λ row => row.expr.eqb(r.simplify())) && T.rows.all_bit(λ row => T.row_ok(row))
 }
 
 // What a row number says about its state, by the row found there.
@@ -281,8 +275,8 @@ theorem Table::step_label(self T: Table, ok: T.rows.all_bit(λ row => T.row_ok(r
             let parts = row.expr.cut_by(T.cuts).and_true_parts(Cons(0, T.cuts).all_bit(λ p => T.entry_ok(row, p)), rest);
             let p = Regex::rep(T.cuts, c);
             let entry: (T.entry_ok(row, p) = True) = Cons(0, T.cuts).all_bit_sound(λ x => T.entry_ok(row, x), parts.right, p, Regex::rep_mem(T.cuts, c));
-            match row.next.nth(Regex::class(T.cuts, p)).holds_sound(λ t => T.rows.nth(t).holds(λ target => target.expr.eqb(row.expr.deriv_simp(p))), entry) {
-                ⟨t, ⟨e1, h2⟩⟩ => match T.rows.nth(t).holds_sound(λ target => target.expr.eqb(row.expr.deriv_simp(p)), h2) {
+            match row.next.nth(Regex::class(T.cuts, p)).is_some_and_sound(λ t => T.rows.nth(t).is_some_and(λ target => target.expr.eqb(row.expr.deriv_simp(p))), entry) {
+                ⟨t, ⟨e1, h2⟩⟩ => match T.rows.nth(t).is_some_and_sound(λ target => target.expr.eqb(row.expr.deriv_simp(p)), h2) {
                     ⟨target, ⟨e2, h3⟩⟩ => {
                         let side = Regex::rep_side(T.cuts, c);
                         let lands: (T.next(s, c) = t) = trans(
@@ -305,8 +299,8 @@ theorem Table::step_label(self T: Table, ok: T.rows.all_bit(λ row => T.row_ok(r
 
 // A table that passes the check accepts the expression's language.
 theorem Table::check_accepts(self T: Table, r: Regex, ok: T.check(r) = True, w: List<Nat>): T.dfa().run(w) = True ↔ r.Denotes(w) {
-    let parts = T.rows.nth(0).holds(λ row => row.expr.eqb(r.simplify())).and_true_parts(T.rows.all_bit(λ row => T.row_ok(row)), ok);
-    match T.rows.nth(0).holds_sound(λ row => row.expr.eqb(r.simplify()), parts.left) {
+    let parts = T.rows.nth(0).is_some_and(λ row => row.expr.eqb(r.simplify())).and_true_parts(T.rows.all_bit(λ row => T.row_ok(row)), ok);
+    match T.rows.nth(0).is_some_and_sound(λ row => row.expr.eqb(r.simplify()), parts.left) {
         ⟨row, ⟨e0, h0⟩⟩ => iff_trans(
             T.dfa().residual(λ s u => T.Label(s, u),
                 λ s => T.accept_label(parts.right, s, T.rows.nth(s), refl),

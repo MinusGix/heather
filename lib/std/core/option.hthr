@@ -28,6 +28,29 @@ fn Option::unwrap_or<A>(self o: Option<A>, d: A) → A {
     if let Some(v) = o { v } else { d }
 }
 
+// Whether an option holds a value (Rust's `is_some`/`is_none`), and whether
+// it holds one that `f` accepts (`is_some_and`).
+fn Option::is_some<A>(self o: Option<A>) → Bool {
+    match o { None => False, Some(_) => True }
+}
+
+fn Option::is_none<A>(self o: Option<A>) → Bool {
+    match o { None => True, Some(_) => False }
+}
+
+fn Option::is_some_and<A>(self o: Option<A>, f: A → Bool) → Bool {
+    match o { None => False, Some(a) => f(a) }
+}
+
+theorem Option::is_some_and_sound<A>(self o: Option<A>, f: A → Bool): o.is_some_and(f) = True → Exists<A>(λ a => o = Some(a) ∧ f(a) = True) {
+    match o { None => λ h => absurd(h), Some(a) => λ h => ⟨a, ⟨refl, h⟩⟩ }
+}
+
+// The value an option known to be `Some` holds.
+fn Option::get<A>(self o: Option<A>) → o.is_some().IsTrue() → A {
+    match o { None => λ absent => false_elim(absent), Some(v) => λ _ => v }
+}
+
 theorem Option::some_inj<A>(a, b: A, p: Some(a) = Some(b)): a = b {
     j(p, λ y q => a = y.unwrap_or(a), refl)
 }

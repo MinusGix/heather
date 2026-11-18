@@ -1,0 +1,27 @@
+// Probes of the widening casts between machine words (lib/std/bitvec/bitvec.hthr,
+// docs/language/casting-design.md §5.1): `↑` from a narrower word to a wider
+// one at every pair, through `cast<…>`, read by `bv_decide` and `bv_omega`,
+// and refused the other way. Tests, not library: nothing outside lib/_tests
+// imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import int; import morphism; import bitvec; import bitvec_nat; import bitvec_omega; import bv_decide;
+
+// Every pair is one edge: one carrier at two widths.
+fn to16(b: u8) → u16 { ↑b }
+fn to32(b: u8) → u32 { ↑b }
+fn to64(b: u8) → u64 { ↑b }
+fn from16(b: u16) → u64 { ↑b }
+fn from32(b: u32) → u64 { ↑b }
+fn named(b: u8) → u64 { cast<u64>(b) }
+fn summed(b, c: u8) → u64 { ↑b + ↑c }
+theorem to64_is_zero_extend(b: u8): to64(b) = b.zero_extend(56) { refl }
+
+// The tactics read a cast as the zero extension it is.
+theorem widened_below(b: u8): to64(b) < 256 { by bv_decide() }
+theorem widened_value(b: u8): (↑b: u32).toNat() = b.toNat() { by bv_decide() }
+theorem widened_sum(b: u16, c: u8): (↑b: u64) + ↑c < 0x20000 { by bv_decide() }
+theorem widened_test(b: u8, h: (↑b: u64) < 0x80): b.toNat() < 128 { bv_omega }
+theorem widened_bound(b: u8): (↑b: u64).toNat() < 256 { bv_omega }
+
+// Narrowing loses bits: no edge, a named function (`truncate`) instead.
+// expect-error: no cast from `u64` to `u8`
+fn narrowed(b: u64) → u8 { ↑b }

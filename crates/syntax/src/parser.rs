@@ -6400,6 +6400,25 @@ impl Parser {
                     if matches!(p.peek(), TokKind::RBracket) {
                         break;
                     }
+                    // `[a, b, ..rest]`: a list that goes on as `rest`, the
+                    // conses written out (`Cons(a, Cons(b, rest))`).
+                    if p.at_list_rest() {
+                        p.bump();
+                        p.bump();
+                        let rest = p.expr()?;
+                        let close = p.expect(&TokKind::RBracket, "`]` after a list's `..rest`")?;
+                        let span = open.join(close);
+                        return Ok(elems.into_iter().rev().fold(rest, |tail, head| Expr {
+                            kind: ExprKind::App {
+                                head: Box::new(Expr { kind: ExprKind::Var("Cons".into()), span }),
+                                args: vec![head, tail],
+                                named: Vec::new(),
+                                explicit: false,
+                                goal_oriented: false,
+                            },
+                            span,
+                        }));
+                    }
                     elems.push(p.expr()?);
                 }
                 let close = p.expect(&TokKind::RBracket, "`]` (collection literal)")?;
@@ -7062,6 +7081,12 @@ impl Parser {
         while !matches!(self.peek(), TokKind::RBrace) {
             let (ctor, cspan, binders) = if matches!(self.peek(), TokKind::LAngle) {
                 self.anonymous_constructor_pat()?
+            } else if matches!(self.peek(), TokKind::LBracket) {
+                match self.list_pat()? {
+                    Pat::Ctor { name, args, span } => (name, span, args),
+                    Pat::Var { name, span } => (name, span, Vec::new()),
+                    Pat::Named { span, .. } => return Err(ParseError { msg: "a list pattern is not a field".into(), span }),
+                }
             } else {
                 let (ctor, cspan) = self.qual_ident("constructor name in a `match` arm")?;
                 let binders = self.pat_args(&ctor, cspan)?;
@@ -7187,6 +7212,9 @@ impl Parser {
     /// (§3.5). So the *only* thing that distinguishes a deep pattern here is a
     /// following `(`.
     fn pat(&mut self) -> R<Pat> {
+        if matches!(self.peek(), TokKind::LBracket) {
+            return self.list_pat();
+        }
         if matches!(self.peek(), TokKind::LAngle) {
             let (name, span, args) = self.anonymous_constructor_pat()?;
             return Ok(Pat::Ctor { name, args, span });
@@ -7212,6 +7240,40 @@ impl Parser {
         }
         let end = self.expect(&TokKind::RParen, "`)` (pattern arguments)")?;
         Ok(Pat::Ctor { name, args, span: span.join(end) })
+    }
+
+    /// `..` inside a list's brackets: the rest of the list follows.
+    fn at_list_rest(&self) -> bool {
+        matches!(self.peek(), TokKind::Dot) && matches!(self.nth(1), TokKind::Dot)
+    }
+
+    /// A list pattern: `[]`, `[p, q]`, or `[p, q, ..rest]`, the conses
+    /// written out (`Cons(p, Cons(q, rest))`; `Nil` where no rest is
+    /// named), so the pattern matrix sees nothing new.
+    fn list_pat(&mut self) -> R<Pat> {
+        let open = self.expect(&TokKind::LBracket, "`[`")?;
+        let mut elems = Vec::new();
+        let mut rest = None;
+        while !matches!(self.peek(), TokKind::RBracket) {
+            if self.at_list_rest() {
+                if elems.is_empty() {
+                    return self.err("a list pattern names an element before `..rest`: `[x, ..rest]`; a whole list is a plain binder");
+                }
+                self.bump();
+                self.bump();
+                rest = Some(self.pat()?);
+                break;
+            }
+            elems.push(self.pat()?);
+            if !matches!(self.peek(), TokKind::Comma) {
+                break;
+            }
+            self.bump();
+        }
+        let close = self.expect(&TokKind::RBracket, "`]` to close the list pattern")?;
+        let span = open.join(close);
+        let tail = rest.unwrap_or(Pat::Var { name: "Nil".into(), span });
+        Ok(elems.into_iter().rev().fold(tail, |tail, head| Pat::Ctor { name: "Cons".into(), args: vec![head, tail], span }))
     }
 
     /// A constructor field pattern, positional or `field := pattern`.
@@ -8666,6 +8728,14 @@ mod tests {
         // A symbol with an operand is no section: `(-x)` is still negation.
         let k = body("(-x)");
         assert!(matches!(&k, ExprKind::App { head, .. } if matches!(head.kind, ExprKind::OpSymbol { fixity: OpFixity::Prefix, .. })));
+    }
+
+    #[test]
+    fn a_list_pattern_with_only_a_rest_is_refused() {
+        // `[..r]` is the whole list: a plain binder says that.
+        let e = parse_file("fn f(xs: List<Nat>) -> Nat { match xs { [..r] => 0 } }").unwrap_err();
+        assert!(e.msg.contains("names an element before `..rest`"), "{}", e.msg);
+        assert!(parse_file("fn f(xs: List<Nat>) -> Nat { match xs { [a, ..r] => a, [] => 0 } }").is_ok());
     }
 
     #[test]
