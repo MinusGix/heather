@@ -1,0 +1,23 @@
+// Probes of list patterns and literals with a rest (crates/syntax/src/parser.rs,
+// `list_pat` and the collection literal): `[]`, `[a]`, `[a, b, ..rest]` as a
+// match arm and nested in one, and `[a, b, ..r]` as a value, each the conses
+// written out. Tests, not library: nothing outside lib/_tests imports this
+// module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list;
+
+// As arms: the empty list, one element, and two with the rest.
+fn first_two(xs: List<Nat>) → Nat {
+    match xs { [] => 0, [a] => a, [a, b, ..rest] => a + b }
+}
+theorem first_two_long(): first_two([3, 4, 5]) = 7 { refl }
+theorem first_two_one(): first_two([3]) = 3 { refl }
+theorem first_two_none(): first_two([]) = 0 { refl }
+
+// Nested in a field, beside a default arm.
+fn head_of_head(xs: List<List<Nat>>) → Nat { match xs { [[a, ..r], ..rest] => a, _ => 0 } }
+theorem head_of_head_value(): head_of_head([[9, 1], [2]]) = 9 { refl }
+
+// As a value: the conses, at a neutral rest.
+fn pushed(a, b: Nat, r: List<Nat>) → List<Nat> { [a, b, ..r] }
+theorem pushed_is_conses(r: List<Nat>): pushed(1, 2, r) = Cons(1, Cons(2, r)) { refl }
+theorem pushed_length(a: Nat, r: List<Nat>): [a, ..r].len() = r.len() + 1 { refl }

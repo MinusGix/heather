@@ -678,3 +678,17 @@ inner levels it just emitted.
   a *deep* fallthrough row: a surface `_` binds nothing by grammar, and the
   bindings a generated `_` needs are emitted as `let` aliases *inside* its
   body, where they are the same at every arm it expands to.
+
+## 14. List patterns (2026-11-18)
+
+`[]`, `[p, q]` and `[p, q, ..rest]` are patterns wherever a constructor
+pattern is (a whole arm, or a field of one), and `[a, b, ..r]` is a value
+beside the collection literal `[a, b]`. The parser writes the conses out
+(`Cons(p, Cons(q, rest))`, with `Nil` where no rest is named:
+`list_pat` in `crates/syntax/src/parser.rs`), so the pattern matrix,
+exhaustiveness and the printed terms see nothing new. A pattern of only a
+rest, `[..r]`, is refused: the whole list is a plain binder. A four-way
+split by length reads as one match,
+`match r { [] => …, [c1] => …, [c1, c2] => …, [c1, c2, c3, ..r3] => … }`,
+where it used to be three nested ones (`examples/utf8/utf8_check.hthr`'s
+`decode_cons` and `cut_four`). Probes: `lib/_tests/lang/list_pattern_tests.hthr`.
