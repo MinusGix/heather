@@ -265,9 +265,112 @@ theorem FTm::over_spec(self t: FTm, bw: BWorld, world: bw.Agrees(), len: Nat, ok
 }
 
 
-// A world whose program calls nothing that writes keeps its promise.
-theorem BWorld::agrees_alone(w: World, callees: (b: List<List<BitVec(8)>>) → Sig::Sems(w.tys, w.sigs),
-    writers: (rest: List<List<BitVec(8)>>) → FTm::Sems(w.tys, []), rest: List<List<BitVec(8)>>):
-    BWorld(FWorld(w, callees, [], writers, rest), trivial).Agrees() {
-    λ g env f place l more n known s => Over(refl, refl)
+// ---------------------------------------------------------------------------
+// A world whose writing callees are functions of a `Bytes(n)`
+
+// A callee's meaning over a record and its byte meaning, after the words
+// both have taken, agree at every word after.
+fn FTm::OverArrows(tys: Nat → RecInfo, n: BitVec(64), R: Type, ps: List<Ty>) →
+    Ty::ArrowsTo(tys, ps, Mutated<Bytes(n), R>) → Ty::ArrowsTo(tys, ps, Mutated<List<BitVec(8)>, R>) → Type {
+    match ps {
+        Nil => λ a b => Over<R>(n, a, b),
+        Cons(p, rest) => λ a b => (x: p.sem(tys)) → FTm::OverArrows(tys, n, R, rest, a(x), b(x)),
+    }
 }
+
+// A callee's two meanings agree: at a record, its bytes, any place and a
+// length word that is the record's `n`, at every word after them.
+fn FTm::EntryAgrees(tys: Nat → RecInfo, sg: Sig) → FTm::OverSem(tys, sg) → FTm::Sem(tys, sg) → Type {
+    match sg {
+        Sig(params, result) => match params {
+            Nil => λ o e => (n: BitVec(64)) → (s: Bytes(n)) → Over<result.sem(tys)>(n, o(n, s), e(s.bytes)),
+            Cons(p0, more) => match more {
+                Nil => λ o e => (n: BitVec(64)) → (s: Bytes(n)) → (x0: p0.sem(tys)) → Over<result.sem(tys)>(n, o(n, s), e(s.bytes, x0)),
+                Cons(p1, words) => λ o e => (n: BitVec(64)) → (s: Bytes(n)) → (x0: p0.sem(tys)) → (t: Ty) → (v: t.sem(tys)) →
+                    Ty::cast(tys, t, Word(64), v) = n → FTm::OverArrows(tys, n, result.sem(tys), words, o(n, s), e(s.bytes, x0, Ty::cast(tys, t, p1, v))),
+            },
+        },
+    }
+}
+
+// Every callee's two meanings agree.
+fn BWorld::Each(tys: Nat → RecInfo, sigs: List<Sig>) → FTm::OverSems(tys, sigs) → FTm::Sems(tys, sigs) → Type {
+    match sigs {
+        Nil => λ _ _ => True,
+        Cons(sg, rest) => λ os es => Pair<FTm::EntryAgrees(tys, sg, os.fst, es.fst), BWorld::Each(tys, rest, os.snd, es.snd)>,
+    }
+}
+
+theorem BWorld::each_at(tys: Nat → RecInfo, sigs: List<Sig>): (os: FTm::OverSems(tys, sigs)) → (es: FTm::Sems(tys, sigs)) → BWorld::Each(tys, sigs, os, es) →
+    (f: Nat) → FTm::EntryAgrees(tys, Sig::at(sigs, f), FTm::get_over(tys, sigs, os, f), FTm::get(tys, sigs, es, f)) {
+    match sigs {
+        Nil => λ os es each f => λ n s => Over(refl, refl),
+        Cons(sg, rest) => λ os es each f => match f {
+            Zero => each.fst,
+            Succ(k) => BWorld::each_at(tys, rest, os.snd, es.snd, each.snd, k),
+        },
+    }
+}
+
+// Applied to the same variables, two meanings that agree at every word
+// answer alike.
+theorem FTm::apply_over(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), n: BitVec(64), R: Type, d: Mutated<Bytes(n), R>,
+    d2: Mutated<List<BitVec(8)>, R>, base: Over<R>(n, d, d2), ps: List<Ty>): (a: Ty::ArrowsTo(tys, ps, Mutated<Bytes(n), R>)) →
+    (b: Ty::ArrowsTo(tys, ps, Mutated<List<BitVec(8)>, R>)) → FTm::OverArrows(tys, n, R, ps, a, b) → (vs: List<Nat>) →
+    Over<R>(n, FTm::apply(tys, g, env, Mutated<Bytes(n), R>, d, ps, a, vs), FTm::apply(tys, g, env, Mutated<List<BitVec(8)>, R>, d2, ps, b, vs)) {
+    match ps {
+        Nil => λ a b ok vs => ok,
+        Cons(p, rest) => λ a b ok vs => match vs {
+            Nil => base,
+            Cons(v, more) => {
+                let x = Ty::cast(tys, Ty::at(g, v), p, Env::get(tys, g, env, v));
+                FTm::apply_over(tys, g, env, n, R, d, d2, base, rest, a(x), b(x), ok(x), more)
+            },
+        },
+    }
+}
+
+// A call of a callee whose two meanings agree answers alike over the
+// record and over its bytes.
+theorem FTm::entry_over(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), place, l: Nat, rest: List<Nat>, n: BitVec(64),
+    known: FTm::word(tys, g, env, l) = n, s: Bytes(n)): (sg: Sig) → (o: FTm::OverSem(tys, sg)) → (e: FTm::Sem(tys, sg)) → FTm::EntryAgrees(tys, sg, o, e) →
+    Over<sg.result.sem(tys)>(n,
+        FTm::apply(tys, g, env, Mutated<Bytes(n), sg.result.sem(tys)>, Mutated(s, sg.result.default(tys)), sg.words(), o(n, s), rest),
+        FTm::apply(tys, g, env, Mutated<List<BitVec(8)>, sg.result.sem(tys)>, Mutated(s.bytes, sg.result.default(tys)), sg.params, e(s.bytes),
+            Cons(place, Cons(l, rest)))) {
+    λ sg => match sg {
+        Sig(params, result) => match params {
+            Nil => λ o e ok => ok(n, s),
+            Cons(p0, more) => match more {
+                Nil => λ o e ok => ok(n, s, Ty::cast(tys, Ty::at(g, place), p0, Env::get(tys, g, env, place))),
+                Cons(p1, words) => λ o e ok => {
+                    let x0 = Ty::cast(tys, Ty::at(g, place), p0, Env::get(tys, g, env, place));
+                    FTm::apply_over(tys, g, env, n, result.sem(tys), Mutated(s, result.default(tys)), Mutated(s.bytes, result.default(tys)), Over(refl, refl),
+                        words, o(n, s), e(s.bytes, x0, Ty::cast(tys, Ty::at(g, l), p1, Env::get(tys, g, env, l))),
+                        ok(n, s, x0, Ty::at(g, l), Env::get(tys, g, env, l), known), rest)
+                },
+            },
+        },
+    }
+}
+
+// A world whose writing callees' two meanings each agree keeps its
+// promise.
+theorem BWorld::agrees_each(bw: BWorld, each: BWorld::Each(bw.fw.w.tys, bw.fw.fsigs, bw.overs, bw.fw.writers(bw.fw.rest))): bw.Agrees() {
+    λ g env f place l more n known s => FTm::entry_over(bw.fw.w.tys, g, env, place, l, more, n, known, s, Sig::at(bw.fw.fsigs, f),
+        FTm::get_over(bw.fw.w.tys, bw.fw.fsigs, bw.overs, f), FTm::get(bw.fw.w.tys, bw.fw.fsigs, bw.fw.writers(bw.fw.rest), f),
+        BWorld::each_at(bw.fw.w.tys, bw.fw.fsigs, bw.overs, bw.fw.writers(bw.fw.rest), each, f))
+}
+
+// A callee that takes a place, a length word and words, whose two meanings
+// agree wherever the length word is the record's `n`: they agree at any
+// length word whose value is `n`.
+theorem FTm::entry_of(tys: Nat → RecInfo, p0: Ty, words: List<Ty>, result: Ty, o: FTm::OverSem(tys, Sig(Cons(p0, Cons(Word(64), words)), result)),
+    e: FTm::Sem(tys, Sig(Cons(p0, Cons(Word(64), words)), result)),
+    at_n: (n: BitVec(64)) → (s: Bytes(n)) → (x0: p0.sem(tys)) → FTm::OverArrows(tys, n, result.sem(tys), words, o(n, s), e(s.bytes, x0, n))):
+    FTm::EntryAgrees(tys, Sig(Cons(p0, Cons(Word(64), words)), result), o, e) {
+    λ n s x0 t v known => j(sym(known), λ m _ => FTm::OverArrows(tys, n, result.sem(tys), words, o(n, s), e(s.bytes, x0, m)), at_n(n, s, x0))
+}
+
+// Two entries of a table, as a function a generator applies.
+fn BWorld::both<A, B>(a: A, b: B) → Pair<A, B> { Pair(a, b) }

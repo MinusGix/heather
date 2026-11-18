@@ -1126,6 +1126,39 @@ fn rt_designed(cs: List<Char>) → List<Char> {
     }
 }
 
+// `owner::shown` (or its designed spelling) when it is `g`.
+fn rt_name_owned(g: GlobalRef, owner, shown, designed: String) → Tac<Option<String>> {
+    let is_g = λ (c: Checked<GlobalRef>) => match c { Accepted(r) => r.id.same(g.id), Refused(_) => False };
+    lookup(owner ++ "::" ++ shown).bind(λ c2 => match is_g(c2) {
+        True => pure(Some(owner ++ "::" ++ shown)),
+        False => lookup(owner ++ "::" ++ designed).bind(λ c3 => match is_g(c3) {
+            True => pure(Some(owner ++ "::" ++ designed)),
+            False => pure(None),
+        }),
+    })
+}
+
+// A method's name by the type of one of its first `fuel` parameters: its
+// receiver's, which a lifted loop over a `Bytes(n)` takes after `n`.
+fn rt_name_by_owner(g: GlobalRef, shown, designed: String, t: Handle, fuel: Nat) → Tac<Option<String>> {
+    match fuel {
+        Zero => pure(None),
+        Succ(f) => view(t).bind(λ v => match v {
+            HPi(dom) => view(dom).bind(λ dv => match dv {
+                HGlobal(_, owner, _) => rt_name_owned(g, owner, shown, designed),
+                _ => pure(None),
+            }).bind(λ found => match found {
+                Some(nm) => pure(Some(nm)),
+                None => open(t, "x").bind(λ oc => match oc {
+                    Refused(_) => pure(None),
+                    Accepted(o) => rt_name_by_owner(g, shown, designed, o.body, f),
+                }),
+            }),
+            _ => pure(None),
+        }),
+    }
+}
+
 fn rt_name_of(g: GlobalRef, shown: String) → Tac<String> {
     let is_g = λ (c: Checked<GlobalRef>) => match c { Accepted(r) => r.id.same(g.id), Refused(_) => False };
     let designed = String(rt_designed(shown.chars));
@@ -1133,19 +1166,7 @@ fn rt_name_of(g: GlobalRef, shown: String) → Tac<String> {
         True => pure(shown),
         False => lookup(designed).bind(λ cd => match is_g(cd) { True => pure(designed), False => infer(Global(g)).bind(λ ct => match ct {
             Refused(_) => pure(shown),
-            Accepted(t) => view(t).bind(λ v => match v {
-                HPi(dom) => view(dom).bind(λ dv => match dv {
-                    HGlobal(_, owner, _) => lookup(owner ++ "::" ++ shown).bind(λ c2 => match is_g(c2) {
-                        True => pure(owner ++ "::" ++ shown),
-                        False => lookup(owner ++ "::" ++ designed).bind(λ c3 => match is_g(c3) {
-                            True => pure(owner ++ "::" ++ designed),
-                            False => pure(shown),
-                        }),
-                    }),
-                    _ => pure(shown),
-                }),
-                _ => pure(shown),
-            }),
+            Accepted(t) => rt_name_by_owner(g, shown, designed, t, 2).bind(λ o => pure(o.unwrap_or(shown))),
         }) }),
     })
 }

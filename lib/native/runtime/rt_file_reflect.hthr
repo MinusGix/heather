@@ -123,6 +123,37 @@ fn RSt::written(self st: RSt, depth: Nat) → RSt {
 // program's computations so far, a `Call`'s index.
 record FWalk { st: RSt, segs: List<FSeg>, fk: FileKnown, done: Nat, cfuns: List<Nat> }
 
+// The length a `Bytes(n)` is of, read off the type of `h`.
+fn rt_file_bytes_n(names: FileNames, h: Handle) → Tac<Option<Handle>> {
+    match names.bytes {
+        None => pure(None),
+        Some(bt) => infer(Hd(h)).bind(λ c => match c {
+            Refused(_) => pure(None),
+            Accepted(t) => view(t).bind(λ tv => match tv {
+                HGlobal(tg, _, targs) => match tg.id.same(bt) {
+                    True => match targs { Cons(n, _) => pure(Some(n)), Nil => pure(None) },
+                    False => pure(None),
+                },
+                _ => pure(None),
+            }),
+        }),
+    }
+}
+
+// A call's arguments from the span it threads: a lifted loop over a
+// `Bytes(n)` takes `n` before the record, as a capture
+// (crates/elab/src/loops.rs, `implicit_captures`), and the record's type
+// says it again.
+fn rt_file_threaded(names: FileNames, args: List<Handle>) → Tac<List<Handle>> {
+    match args {
+        Cons(_, more) => match more {
+            Cons(a1, _) => rt_file_bytes_n(names, a1).bind(λ o => match o { Some(_) => pure(more), None => pure(args) }),
+            Nil => pure(args),
+        },
+        Nil => pure(args),
+    }
+}
+
 // The stores and calls a span has been through, the first first: the
 // parameter has been through none.
 fn rt_file_chain(fuel: Nat, names: FileNames, span: Nat, h: Handle) → Tac<List<Handle>> {
@@ -135,10 +166,10 @@ fn rt_file_chain(fuel: Nat, names: FileNames, span: Nat, h: Handle) → Tac<List
             },
             HField(c, name, _) => match Known::str_same(name, "after") {
                 True => view(c).bind(λ cv => match cv {
-                    HGlobal(_, cname, args) => match args {
+                    HGlobal(_, cname, args) => rt_file_threaded(names, args).bind(λ targs => match targs {
                         Cons(prev, _) => rt_file_chain(f, names, span, prev).bind(λ ls => pure(ls ++ [h])),
                         Nil => rt_refuse("`" ++ cname ++ "` without its span"),
-                    },
+                    }),
                     _ => rt_refuse("the span after something other than a call"),
                 }),
                 False => rt_refuse("a span read out of a record (`." ++ name ++ "`)"),
@@ -222,9 +253,25 @@ fn rt_record_of(g: GlobalRef) → Tac<Option<String>> {
     })
 }
 
+// The code a called function of a `Bytes(n)` is compiled as: the function
+// of its bytes and `n` that its reflection writes out (`f::bytes`,
+// published as `HWorld::of_record(f, …)`), as the program's tables name it.
+fn rt_file_code_of(g: GlobalRef, name: String) → Tac<GlobalRef> {
+    let n <- rt_name_of(g, name);
+    let found <- lookup(n ++ "::bytes");
+    match found {
+        Refused(_) => pure(g),
+        Accepted(code) => rt_record_of(code).bind(λ source => match source {
+            Some(s) => match Known::str_same(s, n) { True => pure(code), False => pure(g) },
+            None => pure(g),
+        }),
+    }
+}
+
 // The program index of a called computation: its place among those so far
 // or, in the generator's mode, a runtime fn not met before, appended.
-fn rt_file_callee(k: Known, cfuns: List<Nat>, g: GlobalRef, name: String) → Tac<Pair<List<Nat>, Nat>> {
+fn rt_file_callee(k: Known, cfuns: List<Nat>, called: GlobalRef, name: String) → Tac<Pair<List<Nat>, Nat>> {
+    let g <- rt_file_code_of(called, name);
     match Known::index(cfuns, g.id, 0) {
         Some(i) => pure(Pair(cfuns, i)),
         None => match k.discover {
@@ -476,7 +523,7 @@ fn rt_file_link(fuel: Nat, k: Known, names: FileNames, w: FWalk, link: Handle) �
         HField(c, _, _) => view(c).bind(λ cv => match cv {
             HGlobal(g, name, args) => match g.id.same(names.put) {
                 True => rt_file_store(fuel, k, w, link, args.drop(1)),
-                False => rt_file_ops(names, args).bind(λ ops => rt_file_call(fuel, k, w, link, c, g, name, ops)),
+                False => rt_file_threaded(names, args).bind(λ targs => rt_file_ops(names, targs)).bind(λ ops => rt_file_call(fuel, k, w, link, c, g, name, ops)),
             },
             _ => rt_refuse("the span after something other than a call"),
         }),

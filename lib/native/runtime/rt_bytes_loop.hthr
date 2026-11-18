@@ -220,12 +220,43 @@ theorem FTm::tail_over_runs(self t: FTm, bw: BWorld, world: bw.Agrees(), res: Ty
 // measure, is the function, at a state whose length word is the record's
 // `n`. The function and the measure are of the record and the operands,
 // the words after the span's place and its length word.
-fn FFun::OverGuarded(bw: BWorld, ws: List<Ty>, body: FTm, n: BitVec(64), run: Bytes(n) → List<BitVec(64)> → Mutated<Bytes(n), BitVec(64)>,
-    m: Bytes(n) → List<BitVec(64)> → Nat) → Type {
-    Ty::ForWords(ws, λ (xs: List<BitVec(64)>) => (s: Bytes(n)) → (again: Bytes(n) → List<BitVec(64)> → Mutated<Bytes(n), BitVec(64)>) →
-        ((b: Bytes(n)) → (zs: List<BitVec(64)>) → m(b, zs) < m(s, FTm::after_length(xs)) → again(b, zs) = run(b, zs)) →
-        body.tail_over(bw, Word(64), n, λ (e: Mutated<Bytes(n), BitVec(64)>) => e, λ (ys: List<BitVec(64)>) (b: Bytes(n)) => again(b, FTm::after_length(ys)),
-            Ty::bind_onto(ws, Nil), Ty::extend(bw.fw.w.tys, ws, Nil, trivial, FTm::with_length(xs, n)), s) = run(s, FTm::after_length(xs)))
+// A function of a record and its operands' words, at every length.
+fn FFun::OverRun() → Type { (k: BitVec(64)) → Bytes(k) → List<BitVec(64)> → Mutated<Bytes(k), BitVec(64)> }
+
+// A measure of a record and its operands' words, at every length.
+fn FFun::OverMeasure() → Type { (k: BitVec(64)) → Bytes(k) → List<BitVec(64)> → Nat }
+
+fn FFun::OverGuarded(bw: BWorld, ws: List<Ty>, body: FTm, n: BitVec(64), run: FFun::OverRun(), m: FFun::OverMeasure()) → Type {
+    Ty::ForWords(ws, λ (xs: List<BitVec(64)>) => (s: Bytes(n)) → (again: FFun::OverRun()) →
+        ((k: BitVec(64)) → (b: Bytes(k)) → (zs: List<BitVec(64)>) → m(k, b, zs) < m(n, s, FTm::after_length(xs)) → again(k, b, zs) = run(k, b, zs)) →
+        body.tail_over(bw, Word(64), n, λ (e: Mutated<Bytes(n), BitVec(64)>) => e, λ (ys: List<BitVec(64)>) (b: Bytes(n)) => again(n, b, FTm::after_length(ys)),
+            Ty::bind_onto(ws, Nil), Ty::extend(bw.fw.w.tys, ws, Nil, trivial, FTm::with_length(xs, n)), s) = run(n, s, FTm::after_length(xs)))
+}
+
+// A pass that goes round goes to a smaller measure: were it not below,
+// an `again` that answers anything there would change what the body
+// answers (`FFun::falls`, at every length).
+theorem FFun::falls_over(run: FFun::OverRun(), m: FFun::OverMeasure(), bound: Nat, n: BitVec(64), b: Bytes(n), zs: List<BitVec(64)>,
+    result: Mutated<Bytes(n), BitVec(64)>,
+    all: (again: FFun::OverRun()) → ((k: BitVec(64)) → (c: Bytes(k)) → (us: List<BitVec(64)>) → m(k, c, us) < bound → again(k, c, us) = run(k, c, us)) →
+        result = again(n, b, zs)): m(n, b, zs) < bound {
+    let below = λ (k: BitVec(64)) (c: Bytes(k)) (us: List<BitVec(64)>) => (m(k, c, us) + 1).leb(bound);
+    let other = λ (v: BitVec(64)) (k: BitVec(64)) (c: Bytes(k)) (us: List<BitVec(64)>) =>
+        match below(k, c, us) { False => Mutated(c, v), True => run(k, c, us) };
+    let agrees = λ (v: BitVec(64)) (k: BitVec(64)) (c: Bytes(k)) (us: List<BitVec(64)>) (lt: m(k, c, us) < bound) =>
+        cong_fn(λ (t: Bool) => match t { False => Mutated(c, v), True => run(k, c, us) }, Nat::leb_true(m(k, c, us) + 1, bound, lt));
+    let zero: BitVec(64) = BitVec::ofNat(0);
+    let one: BitVec(64) = BitVec::ofNat(1);
+    (match below(n, b, zs) as λ t => (below(n, b, zs) = t) → m(n, b, zs) < bound {
+        False => λ e => {
+            let at = λ (v: BitVec(64)) => trans(all(other(v), agrees(v)),
+                cong_fn(λ (t: Bool) => match t { False => Mutated(b, v), True => run(n, b, zs) }, e));
+            let same: (Mutated(b, zero) = Mutated(b, one)) = trans(sym(at(zero)), at(one));
+            let words: (zero.toNat() = one.toNat()) = cong_fn(λ (x: Mutated<Bytes(n), BitVec(64)>) => x.value.toNat(), same);
+            false_elim(Nat::zero_ne_succ(0, trans(sym(BitVec::toNat_ofNat(64, 0, trivial)), trans(words, BitVec::toNat_ofNat(64, 1, trivial)))))
+        },
+        True => λ e => Nat::leb_sound(m(n, b, zs) + 1, bound, Bool::is_true_of_eq(e)),
+    })(refl)
 }
 
 // One pass: where the passes after it agree with the function below this
@@ -235,12 +266,12 @@ theorem FFun::round_over<F>(bw: BWorld, world: bw.Agrees(), ws: List<Ty>, body: 
     at: F → FTm::Sem(bw.fw.w.tys, Sig(ws, Word(64))), pass: F → F, passes: FFun::Passes(ws, Word(64), body, bw.fw, at, pass),
     lengthy: Ty::ForWords(ws, λ (xs: List<BitVec(64)>) =>
         FTm::word(bw.fw.w.tys, Ty::bind_onto(ws, Nil), Ty::extend(bw.fw.w.tys, ws, Nil, trivial, xs), len) = FTm::operand(xs, 1)),
-    n: BitVec(64), run: Bytes(n) → List<BitVec(64)> → Mutated<Bytes(n), BitVec(64)>, m: Bytes(n) → List<BitVec(64)> → Nat,
+    n: BitVec(64), run: FFun::OverRun(), m: FFun::OverMeasure(),
     guarded: FFun::OverGuarded(bw, ws, body, n, run, m),
     later: F, p: BitVec(64), zs: List<BitVec(64)>, zlen: zs.len() = words, s: Bytes(n),
-    earlier: (q: BitVec(64)) → (us: List<BitVec(64)>) → us.len() = words → (b: Bytes(n)) → m(b, us) < m(s, zs) →
-        Over<BitVec(64)>(n, run(b, us), FFun::uncurry(bw.fw.w.tys, ws, Word(64), at(later), Cons(q, Cons(n, us)), b.bytes))):
-    Over<BitVec(64)>(n, run(s, zs), FFun::uncurry(bw.fw.w.tys, ws, Word(64), at(pass(later)), Cons(p, Cons(n, zs)), s.bytes)) {
+    earlier: (q: BitVec(64)) → (us: List<BitVec(64)>) → us.len() = words → (b: Bytes(n)) → m(n, b, us) < m(n, s, zs) →
+        Over<BitVec(64)>(n, run(n, b, us), FFun::uncurry(bw.fw.w.tys, ws, Word(64), at(later), Cons(q, Cons(n, us)), b.bytes))):
+    Over<BitVec(64)>(n, run(n, s, zs), FFun::uncurry(bw.fw.w.tys, ws, Word(64), at(pass(later)), Cons(p, Cons(n, zs)), s.bytes)) {
     let tys = bw.fw.w.tys;
     let ctx = Ty::bind_onto(ws, Nil);
     let xs = Cons(p, Cons(n, zs));
@@ -260,46 +291,46 @@ theorem FFun::round_over<F>(bw: BWorld, world: bw.Agrees(), ws: List<Ty>, body: 
             FFun::uncurry(tys, ws, Word(64), at(pass(later)), us, o), passes(later), xs, fits, s.bytes, known);
     let folded = FTm::tail_sem_pass(body, bw.fw, Word(64), answer, ctx, env, s.bytes);
     // The record: the function's equation, and the pass it is of.
-    let equation = Ty::for_words_at(ws, λ (us: List<BitVec(64)>) => (c: Bytes(n)) → (again: Bytes(n) → List<BitVec(64)> → Mutated<Bytes(n), BitVec(64)>) →
-        ((b: Bytes(n)) → (vs: List<BitVec(64)>) → m(b, vs) < m(c, FTm::after_length(us)) → again(b, vs) = run(b, vs)) →
-        body.tail_over(bw, Word(64), n, λ (e: Mutated<Bytes(n), BitVec(64)>) => e, λ (ys: List<BitVec(64)>) (b: Bytes(n)) => again(b, FTm::after_length(ys)),
-            ctx, Ty::extend(tys, ws, Nil, trivial, FTm::with_length(us, n)), c) = run(c, FTm::after_length(us)), guarded, xs, fits, s);
+    let equation = Ty::for_words_at(ws, λ (us: List<BitVec(64)>) => (c: Bytes(n)) → (again: FFun::OverRun()) →
+        ((k: BitVec(64)) → (b: Bytes(k)) → (vs: List<BitVec(64)>) → m(k, b, vs) < m(n, c, FTm::after_length(us)) → again(k, b, vs) = run(k, b, vs)) →
+        body.tail_over(bw, Word(64), n, λ (e: Mutated<Bytes(n), BitVec(64)>) => e, λ (ys: List<BitVec(64)>) (b: Bytes(n)) => again(n, b, FTm::after_length(ys)),
+            ctx, Ty::extend(tys, ws, Nil, trivial, FTm::with_length(us, n)), c) = run(n, c, FTm::after_length(us)), guarded, xs, fits, s);
     let sh = body.over_pass(bw, Word(64), n, ctx, env, s);
     let sb = body.tail_pass(bw.fw, Word(64), ctx, env, s.bytes);
-    let here = run(s, zs);
-    let Below = λ (again: Bytes(n) → List<BitVec(64)> → Mutated<Bytes(n), BitVec(64)>) =>
-        (b: Bytes(n)) → (vs: List<BitVec(64)>) → m(b, vs) < m(s, zs) → again(b, vs) = run(b, vs);
+    let here = run(n, s, zs);
+    let Below = λ (again: FFun::OverRun()) =>
+        (k: BitVec(64)) → (b: Bytes(k)) → (vs: List<BitVec(64)>) → m(k, b, vs) < m(n, s, zs) → again(k, b, vs) = run(k, b, vs);
     let of_pass = λ (q: Pass<Bytes(n), BitVec(64)>) (again: Bytes(n) → List<BitVec(64)> → Mutated<Bytes(n), BitVec(64)>) =>
         q.fold(λ (e: Mutated<Bytes(n), BitVec(64)>) => e, λ (ys: List<BitVec(64)>) (b: Bytes(n)) => again(b, FTm::after_length(ys)));
-    let eqn: ((again: Bytes(n) → List<BitVec(64)> → Mutated<Bytes(n), BitVec(64)>) → Below(again) → here = of_pass(sh, again)) = λ again hyp =>
+    let eqn: ((again: FFun::OverRun()) → Below(again) → here = of_pass(sh, again(n))) = λ again hyp =>
         trans(sym(equation(again, hyp)), FTm::tail_over_pass(body, bw, Word(64), n, λ (e: Mutated<Bytes(n), BitVec(64)>) => e,
-            λ (ys: List<BitVec(64)>) (b: Bytes(n)) => again(b, FTm::after_length(ys)), ctx, env, s));
+            λ (ys: List<BitVec(64)>) (b: Bytes(n)) => again(n, b, FTm::after_length(ys)), ctx, env, s));
     let agreed: Pass::OverAgrees<BitVec(64)>(n, words, sh, sb) = FTm::tail_over_runs(body, bw, world, Word(64), words, len, kept, ctx, env, n, length_at, s);
     let Goal: Pass<List<BitVec(8)>, BitVec(64)> → Type = λ q => Over<BitVec(64)>(n, here,
         FTm::recast(tys, Word(64), Word(64), q.fold(λ (e: Mutated<List<BitVec(8)>, BitVec(64)>) => e, answer)));
     let cases = λ (ph: Pass<Bytes(n), BitVec(64)>) => match ph as λ p2 => (q: Pass<List<BitVec(8)>, BitVec(64)>) → Pass::OverAgrees<BitVec(64)>(n, words, p2, q) →
-        ((again: Bytes(n) → List<BitVec(64)> → Mutated<Bytes(n), BitVec(64)>) → Below(again) → here = of_pass(p2, again)) → Goal(q) {
+        ((again: FFun::OverRun()) → Below(again) → here = of_pass(p2, again(n))) → Goal(q) {
         Ends(mh) => λ q => match q as λ q2 => Pass::OverAgrees<BitVec(64)>(n, words, Ends(mh), q2) →
-            ((again: Bytes(n) → List<BitVec(64)> → Mutated<Bytes(n), BitVec(64)>) → Below(again) → here = mh) → Goal(q2) {
+            ((again: FFun::OverRun()) → Below(again) → here = mh) → Goal(q2) {
             Ends(mb) => λ ag eq_of => {
                 let base: Over<BitVec(64)>(n, mh, FTm::recast(tys, Word(64), Word(64), mb)) = Over(ag.after, ag.value);
-                j(sym(eq_of(run, λ b vs _ => refl)), λ x _ => Over<BitVec(64)>(n, x, FTm::recast(tys, Word(64), Word(64), mb)), base)
+                j(sym(eq_of(run, λ k b vs _ => refl)), λ x _ => Over<BitVec(64)>(n, x, FTm::recast(tys, Word(64), Word(64), mb)), base)
             },
             Goes(_, _) => λ never _ => false_elim(never),
         },
         Goes(ys, s2) => λ q => match q as λ q2 => Pass::OverAgrees<BitVec(64)>(n, words, Goes(ys, s2), q2) →
-            ((again: Bytes(n) → List<BitVec(64)> → Mutated<Bytes(n), BitVec(64)>) → Below(again) → here = again(s2, FTm::after_length(ys))) → Goal(q2) {
+            ((again: FFun::OverRun()) → Below(again) → here = again(n, s2, FTm::after_length(ys))) → Goal(q2) {
             Ends(_) => λ never _ => false_elim(never),
             Goes(vs, o2) => λ ag eq_of => {
-                let lt = FFun::falls(run, m, m(s, zs), s2, FTm::after_length(ys), here, eq_of);
-                let lt_v = j(ag.left, λ l _ => m(s2, FTm::after_length(l)) < m(s, zs), lt);
-                let here_v = j(ag.left, λ l _ => here = run(s2, FTm::after_length(l)), eq_of(run, λ b us _ => refl));
+                let lt = FFun::falls_over(run, m, m(n, s, zs), n, s2, FTm::after_length(ys), here, eq_of);
+                let lt_v = j(ag.left, λ l _ => m(n, s2, FTm::after_length(l)) < m(n, s, zs), lt);
+                let here_v = j(ag.left, λ l _ => here = run(n, s2, FTm::after_length(l)), eq_of(run, λ k b us _ => refl));
                 let shaped: (vs = FTm::with_length(vs, n)) = ag.right.right.left;
                 let len_v: (vs.len() = ws.len()) = trans(sym(j(sym(shaped), λ l _ => FTm::with_length(vs, n).len() = l.len(), refl)),
                     trans(cong_fn(λ (k: Nat) => k + 2, ag.right.left), sym(arity)));
                 let prior = earlier(FTm::operand(vs, 0), FTm::after_length(vs), ag.right.left, s2, lt_v);
-                let at_vs = j(sym(shaped), λ l _ => Over<BitVec(64)>(n, run(s2, FTm::after_length(vs)), known(l, s2.bytes)), prior);
-                let at_o = j(ag.right.right.right, λ o _ => Over<BitVec(64)>(n, run(s2, FTm::after_length(vs)), known(vs, o)), at_vs);
+                let at_vs = j(sym(shaped), λ l _ => Over<BitVec(64)>(n, run(n, s2, FTm::after_length(vs)), known(l, s2.bytes)), prior);
+                let at_o = j(ag.right.right.right, λ o _ => Over<BitVec(64)>(n, run(n, s2, FTm::after_length(vs)), known(vs, o)), at_vs);
                 let at_here = j(sym(here_v), λ x _ => Over<BitVec(64)>(n, x, known(vs, o2)), at_o);
                 let picked = j(sym(FFun::pick_at(ws.len(), known, known, vs, o2, len_v)), λ u _ => Over<BitVec(64)>(n, here, u), at_here);
                 let out: Over<BitVec(64)>(n, here, FTm::recast(tys, Word(64), Word(64),
@@ -320,19 +351,19 @@ theorem FFun::rounds_over<F>(bw: BWorld, world: bw.Agrees(), ws: List<Ty>, body:
     at: F → FTm::Sem(bw.fw.w.tys, Sig(ws, Word(64))), pass: F → F, stop: F, passes: FFun::Passes(ws, Word(64), body, bw.fw, at, pass),
     lengthy: Ty::ForWords(ws, λ (xs: List<BitVec(64)>) =>
         FTm::word(bw.fw.w.tys, Ty::bind_onto(ws, Nil), Ty::extend(bw.fw.w.tys, ws, Nil, trivial, xs), len) = FTm::operand(xs, 1)),
-    n: BitVec(64), run: Bytes(n) → List<BitVec(64)> → Mutated<Bytes(n), BitVec(64)>, m: Bytes(n) → List<BitVec(64)> → Nat,
+    n: BitVec(64), run: FFun::OverRun(), m: FFun::OverMeasure(),
     guarded: FFun::OverGuarded(bw, ws, body, n, run, m), depth: Nat):
-    (p: BitVec(64)) → (zs: List<BitVec(64)>) → zs.len() = words → (s: Bytes(n)) → m(s, zs) < depth + 1 →
-    Over<BitVec(64)>(n, run(s, zs), FFun::uncurry(bw.fw.w.tys, ws, Word(64), at(FFun::rounds(depth, pass, stop)), Cons(p, Cons(n, zs)), s.bytes)) {
+    (p: BitVec(64)) → (zs: List<BitVec(64)>) → zs.len() = words → (s: Bytes(n)) → m(n, s, zs) < depth + 1 →
+    Over<BitVec(64)>(n, run(n, s, zs), FFun::uncurry(bw.fw.w.tys, ws, Word(64), at(FFun::rounds(depth, pass, stop)), Cons(p, Cons(n, zs)), s.bytes)) {
     match depth {
         Zero => λ p zs zlen s below =>
             FFun::round_over(bw, world, ws, body, words, len, arity, kept, at, pass, passes, lengthy, n, run, m, guarded, stop, p, zs, zlen, s,
-                λ q us _ b lt => false_elim(Nat::lt_of_lt_of_le(m(b, us), m(s, zs), 0, lt, below))),
+                λ q us _ b lt => false_elim(Nat::lt_of_lt_of_le(m(n, b, us), m(n, s, zs), 0, lt, below))),
         Succ(k) => λ p zs zlen s below =>
             FFun::round_over(bw, world, ws, body, words, len, arity, kept, at, pass, passes, lengthy, n, run, m, guarded,
                 FFun::rounds(k, pass, stop), p, zs, zlen, s,
                 λ q us ulen b lt => FFun::rounds_over(bw, world, ws, body, words, len, arity, kept, at, pass, stop, passes, lengthy, n, run, m,
-                    guarded, k, q, us, ulen, b, Nat::lt_of_lt_of_le(m(b, us), m(s, zs), k + 1, lt, below))),
+                    guarded, k, q, us, ulen, b, Nat::lt_of_lt_of_le(m(n, b, us), m(n, s, zs), k + 1, lt, below))),
     }
 }
 
@@ -342,10 +373,16 @@ theorem FFun::counted_over<F>(bw: BWorld, world: bw.Agrees(), ws: List<Ty>, body
     at: F → FTm::Sem(bw.fw.w.tys, Sig(ws, Word(64))), pass: F → F, stop: F, passes: FFun::Passes(ws, Word(64), body, bw.fw, at, pass),
     lengthy: Ty::ForWords(ws, λ (xs: List<BitVec(64)>) =>
         FTm::word(bw.fw.w.tys, Ty::bind_onto(ws, Nil), Ty::extend(bw.fw.w.tys, ws, Nil, trivial, xs), len) = FTm::operand(xs, 1)),
-    n: BitVec(64), run: Bytes(n) → List<BitVec(64)> → Mutated<Bytes(n), BitVec(64)>, m: Bytes(n) → List<BitVec(64)> → Nat,
-    guarded: FFun::OverGuarded(bw, ws, body, n, run, m), bounded: (s: Bytes(n)) → (zs: List<BitVec(64)>) → m(s, zs) < Nat::pow(2, 64),
+    n: BitVec(64), run: FFun::OverRun(), m: FFun::OverMeasure(),
+    guarded: FFun::OverGuarded(bw, ws, body, n, run, m), bounded: (s: Bytes(n)) → (zs: List<BitVec(64)>) → m(n, s, zs) < Nat::pow(2, 64),
     p: BitVec(64), zs: List<BitVec(64)>, zlen: zs.len() = words, s: Bytes(n)):
-    Over<BitVec(64)>(n, run(s, zs), FFun::uncurry(bw.fw.w.tys, ws, Word(64), at(FFun::rounds(Fun::meas_passes(), pass, stop)), Cons(p, Cons(n, zs)), s.bytes)) {
+    Over<BitVec(64)>(n, run(n, s, zs), FFun::uncurry(bw.fw.w.tys, ws, Word(64), at(FFun::rounds(Fun::meas_passes(), pass, stop)), Cons(p, Cons(n, zs)), s.bytes)) {
     FFun::rounds_over(bw, world, ws, body, words, len, arity, kept, at, pass, stop, passes, lengthy, n, run, m, guarded, Fun::meas_passes(), p, zs, zlen, s,
         bounded(s, zs))
+}
+
+// An agreement with a word's answer read as a word is one with the answer.
+theorem Over::bare(tys: Nat → RecInfo, n: BitVec(64), h: Mutated<Bytes(n), BitVec(64)>, m: Mutated<List<BitVec(8)>, BitVec(64)>,
+    ag: Over<BitVec(64)>(n, h, FTm::recast(tys, Word(64), Word(64), m))): Over<BitVec(64)>(n, h, m) {
+    Over(ag.after, ag.value)
 }

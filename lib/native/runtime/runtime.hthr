@@ -1425,6 +1425,8 @@ fn runtime_name_codes(names: List<String>) → List<Nat> {
 // Abstractions over locals, the first outermost.
 fn runtime_lams(xs: List<LocalRef>, body: Expr) → Expr { xs.foldr(λ x acc => Lam(x, acc), body) }
 
+fn runtime_pis(xs: List<LocalRef>, body: Expr) → Expr { xs.foldr(λ x acc => Pi(x, acc), body) }
+
 // `Succ(n)` and `w.toNat()` as functions a generator can apply.
 fn runtime_succ(n: Nat) → Nat { Succ(n) }
 
@@ -2098,6 +2100,29 @@ fn FTm::quote(self t: FTm, q: RtQ, cs: FtQ) → Expr {
     }
 }
 
+// A callee's type past `(n: u64) → Bytes(n) →`, where it begins so.
+fn runtime_bytes_sig_at(k: Known, names: FileNames, t: Handle, ps: List<Ty>) → Tac<Option<Handle>> {
+    match ps {
+        Cons(_, _) => pure(None),
+        Nil => match names.bytes {
+            None => pure(None),
+            Some(bt) => open(t, "n").bind(λ c1 => match c1 {
+                Refused(_) => pure(None),
+                Accepted(o1) => view(o1.body).bind(λ v2 => match v2 {
+                    HPi(dom) => view(dom).bind(λ dv => match dv {
+                        HGlobal(g, _, _) => match g.id.same(bt) {
+                            True => open(o1.body, "s").bind(λ c2 => match c2 { Refused(_) => pure(None), Accepted(o2) => pure(Some(o2.body)) }),
+                            False => pure(None),
+                        },
+                        _ => pure(None),
+                    }),
+                    _ => pure(None),
+                }),
+            }),
+        },
+    }
+}
+
 // The signature of a callee that writes, read off its type: how many
 // spans it is lent, the words its code takes (two for each span) and the
 // code of the word it returns beside the span.
@@ -2105,8 +2130,17 @@ fn runtime_span_sig_from(fuel: Nat, k: Known, names: FileNames, t: Handle, ps: L
     match fuel {
         Zero => runtime_fail("a callee with more parameters than the generator reads"),
         Succ(f) => view(t).bind(λ v => match v {
-            HPi(dom) => k.ty(dom).bind(λ p => open(t, "x").or_fail("runtime: a callee's type: ").bind(λ o =>
-                runtime_span_sig_from(f, k, names, o.body, ps ++ [p]))),
+            HPi(dom) => view(dom).bind(λ dv => match dv {
+                // A proof (a squashed condition): the code does not take it.
+                HOther => open(t, "x").or_fail("runtime: a callee's type: ").bind(λ o => runtime_span_sig_from(f, k, names, o.body, ps)),
+                _ => runtime_bytes_sig_at(k, names, t, ps).bind(λ at_bytes => match at_bytes {
+                    // A function of a `Bytes(n)`: its code takes the
+                    // record's bytes and `n`.
+                    Some(after) => runtime_span_sig_from(f, k, names, after, [ByteList(0), Word(64)]),
+                    None => k.ty(dom).bind(λ p => open(t, "x").or_fail("runtime: a callee's type: ").bind(λ o =>
+                        runtime_span_sig_from(f, k, names, o.body, ps ++ [p]))),
+                }),
+            }),
             _ => rt_file_result(4, k, names, t).bind(λ r => rt_file_codes(ps).bind(λ codes => pure(Pair(codes.fst, Sig(codes.snd, r))))),
         }),
     }
@@ -2602,7 +2636,7 @@ record SpanCounted { ty: Expr, tys: Expr, at: Expr, pass: Expr, stop: Expr, pass
 // for a function written out, its callees, with that world and that
 // function at any list of them.
 record SpanParts { rt: Expr, params: Expr, body: Expr, no_tys: Expr, world: Expr → Expr, compiled: Expr, callees: List<SpanCallee>, world_of: List<Expr> → Expr → Expr,
-    compiled_of: List<Expr> → Expr, counted: Option<SpanCounted>, world_parts: List<Expr> }
+    compiled_of: List<Expr> → Expr, counted: Option<SpanCounted>, world_parts: List<Expr>, writes_of: List<Expr> → Expr }
 
 // What a function written out is published from: its callees' tables, its
 // world and itself, each a function of the callees, its type, and the
@@ -2968,7 +3002,8 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
     let beside <- more(SpanParts(rt_e, params_e, body_e, Ty::quotes([], q), λ rest => ap(fworld, [world_e, reads_e, fsigs_e, writes_e, rest]), fe,
         match out { None => [], Some(o) => o.callees },
         λ es rest => match out { None => Blank, Some(o) => ap(fworld, [ap(o.world, es), ap(o.reads, es), fsigs_e, ap(o.writes, es), rest]) },
-        λ es => match out { None => fe, Some(o) => o.compiled(es) }, counted_e, [world_e, reads_e, writes_e]));
+        λ es => match out { None => fe, Some(o) => o.compiled(es) }, counted_e, [world_e, reads_e, writes_e],
+        λ es => match out { None => writes_e, Some(o) => ap(o.writes, es) }));
     pure(written.append(head).append(pin).append(made).append(tail).append(beside))
 }
 
@@ -3682,21 +3717,103 @@ fn runtime_bytes_words(xs: List<LocalRef>) → Tac<List<LocalRef>> {
     }
 }
 
+// The world a function of a `Bytes(n)` is stated in, and that it keeps its
+// promise, each a function of a rest of a file: each writing callee is a
+// function of a `Bytes(n)` (its code `g::bytes`, its meaning over the
+// record the function itself), and its two meanings agree by its own
+// theorem (`g::runs_bytes`, read by `FTm::entry_of`).
+// The world at a rest of a file, that it keeps its promise there, and the
+// callees' meanings over a record.
+record BytesWorld { bw: Expr, kept: Expr, overs: Expr }
+
+fn runtime_bytes_world(name: String, parts: SpanParts, cfuns: List<Nat>, write_sigs: List<Pair<Nat, Sig>>) → Tac<BytesWorld> {
+    let ts <- runtime_type_handles();
+    let q <- runtime_quoting(ts);
+    let tys_e <- runtime_global(name_of(RecInfo::none));
+    let pair <- runtime_bytes_ref("rt_bytes::BWorld::both");
+    let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
+    let buffers_h <- runtime_type_of(name_of(runtime_w_buffers));
+    let bworld_of <- runtime_bytes_ref("rt_bytes::BWorld::of");
+    let agrees_each <- runtime_bytes_ref("rt_bytes::BWorld::agrees_each");
+    let entry_of <- runtime_bytes_ref("rt_bytes::FTm::entry_of");
+    let get_g <- runtime_bytes_ref("rt_file::FTm::get");
+    let bytes_t <- runtime_bytes_ref("bytes::Bytes");
+    let rest_w <- assume(Hd(buffers_h), "rest", None).or_fail("runtime: the rest of a file: ");
+    let fsigs_e = RtQ::seq(q.sigs, write_sigs.map(λ p => Sig::quote(p.snd, q)));
+    let writes_e = parts.world_parts.nth(2).unwrap_or(Blank);
+    let w64 = Ty::quote(Word(64), q);
+    let own_es: List<Expr> = parts.callees.map(λ c => c.global);
+    let reads_n = parts.callees.len() - cfuns.len();
+    let entry_agrees <- runtime_bytes_ref("rt_bytes::FTm::EntryAgrees");
+    let over_t <- runtime_bytes_ref("rt_bytes::Over");
+    let at <- runtime_bytes_ref("rt_held::HWorld::at");
+    let bytes_of <- runtime_bytes_ref("rt_bytes::Bytes::own");
+    // A record, its length and the words after them, under `under`.
+    let point: List<Ty> → LocalRef → Tac<List<LocalRef>> = λ words under => {
+        let n_e <- assume(Hd(ts.word), "n", Some(under)).or_fail("runtime: a length: ");
+        let s_e <- assume(ap(bytes_t, [Local(n_e.ref)]), "s", Some(n_e.ref)).or_fail("runtime: a record: ");
+        let ws <- runtime_params(ts.word, words, Some(s_e.ref), 0);
+        pure(Cons(n_e.ref, Cons(s_e.ref, ws)))
+    };
+    // The callee's agreement is read off its theorem at its code, and
+    // the table's entry is read at the code as a parameter
+    // (`HWorld::at`): compared at the code itself, the kernel would
+    // unfold its passes before the table arrives at it.
+    let entry: Nat → Nat → Tac<Pair<Expr, Expr>> = λ i c => {
+        let source <- rt_record_of(GlobalRef(c));
+        let callee <- match source {
+            Some(nm) => pure(nm),
+            None => runtime_bytes_refused(name, "it calls a runtime fn that writes a span and is not a function of a `Bytes(n)`"),
+        };
+        let rec_g <- runtime_global(callee);
+        let runs <- runtime_global(callee ++ "::runs_bytes");
+        let sig = write_sigs.nth(i).map(λ p => p.snd).unwrap_or(Sig([], Bit));
+        let words = sig.params.drop(2);
+        let at_i = reads_n + i;
+        let code_c = parts.callees.nth(at_i).unwrap_or(SpanCallee(ts.word, Blank));
+        let x <- assume(Hd(code_c.ty), "code", Some(rest_w.ref)).or_fail("runtime: a callee's code: ");
+        let es_x = List::range(own_es.len()).map(λ j => match j.same(at_i) { True => Local(x.ref), False => own_es.nth(j).unwrap_or(Blank) });
+        let e_x = ap(get_g, [tys_e, fsigs_e, ap(parts.writes_of(es_x), [Local(rest_w.ref)]), NatLit(i)]);
+        // The hypothesis: at every record, the function and the code agree.
+        let p1 <- point(words, x.ref);
+        let own1 = ap(bytes_of, [Local(p1.head_or(x.ref)), Local(p1.nth(1).unwrap_or(x.ref))]);
+        let hyp_t = runtime_pis(p1, ap(over_t, [Hd(ts.word), Local(p1.head_or(x.ref)), ap(rec_g, runtime_locals(p1)),
+            ap(Local(x.ref), Cons(own1, runtime_locals(Cons(p1.head_or(x.ref), p1.drop(2)))))]));
+        let hyp_h <- as_type(hyp_t).or_fail("runtime: a callee's agreement: ");
+        let h <- assume(Hd(hyp_h), "agrees", Some(x.ref)).or_fail("runtime: a callee's agreement: ");
+        let n2 <- assume(Hd(ts.word), "n", Some(h.ref)).or_fail("runtime: a length: ");
+        let s2 <- assume(ap(bytes_t, [Local(n2.ref)]), "s", Some(n2.ref)).or_fail("runtime: a record: ");
+        let x0 <- assume(Hd(ts.word), "place", Some(s2.ref)).or_fail("runtime: a place: ");
+        let ws2 <- runtime_params(ts.word, words, Some(x0.ref), 0);
+        let at_n = runtime_lams(Cons(n2.ref, Cons(s2.ref, Cons(x0.ref, ws2))), ap(Local(h.ref), runtime_locals(Cons(n2.ref, Cons(s2.ref, ws2)))));
+        let one = ap(entry_of, [tys_e, w64, Ty::quotes(words, q), Ty::quote(sig.result, q), rec_g, e_x, at_n]);
+        let stated = ap(entry_agrees, [tys_e, Sig::quote(sig, q), rec_g, e_x]);
+        let fam_h <- as_type(Pi(h.ref, stated)).or_fail("runtime: a callee's entry: ");
+        let fam = Lam(x.ref, Hd(fam_h));
+        let all = Lam(x.ref, Lam(h.ref, one));
+        // The callee's theorem at its own code.
+        let p3 <- point(words, rest_w.ref);
+        let agrees = runtime_lams(p3, ap(runs, runtime_locals(p3).append([Local(rest_w.ref)])));
+        pure(Pair(rec_g, ap(ap(at, [Hd(code_c.ty), fam, code_c.global, all]), [agrees])))
+    };
+    let entries: Nat → List<Nat> → Tac<List<Pair<Expr, Expr>>> = λ i cs => List::range(cs.len()).foldr(λ j acc =>
+        acc.bind(λ more => entry(j, cs.nth(j).unwrap_or(0)).bind(λ one => pure(Cons(one, more)))), pure([]));
+    let es <- entries(0, cfuns);
+    let overs = es.foldr(λ x acc => ap(pair, [Blank, Blank, x.fst, acc]), Hd(trivial_h));
+    let each = es.foldr(λ x acc => ap(pair, [Blank, Blank, x.snd, acc]), Hd(trivial_h));
+    let bw = ap(bworld_of, [parts.world(Local(rest_w.ref)), overs]);
+    let bw_of <- runtime_held(Lam(rest_w.ref, bw), "`" ++ name ++ "`'s world over records");
+    let world_of <- runtime_held(Lam(rest_w.ref, ap(agrees_each, [ap(bw_of, [Local(rest_w.ref)]), each])), "`" ++ name ++ "`'s world keeping its promise");
+    pure(BytesWorld(bw_of, world_of, overs))
+}
+
 // The theorem of a function of a `Bytes(n)`: at every record, the function
 // and the code's function at the record's bytes and the length word `n`
 // agree (`FTm::over_spec`): the function is
 // its reflection's meaning over the record, by conversion.
-fn runtime_bytes_more(name: String, f: GlobalRef, rfun: FFun, measured: Bool, parts: SpanParts) → Tac<List<Decl>> {
-    let callees_none: Tac<True> = match parts.callees {
-        Nil => pure(trivial),
-        Cons(_, _) => runtime_bytes_refused(name, "it calls another runtime fn, which is not taken over a `Bytes(n)` yet"),
-    };
-    let _ <- callees_none;
-    let straight: Tac<True> = match measured { False => pure(trivial), True => runtime_bytes_refused(name, "a loop's theorem over the record is not generated yet") };
-    let _ <- straight;
+fn runtime_bytes_straight(name: String, f: GlobalRef, rfun: FFun, parts: SpanParts, worlds: BytesWorld) → Tac<List<Decl>> {
     let ts <- runtime_type_handles();
     let over_spec <- runtime_bytes_ref("rt_bytes::FTm::over_spec");
-    let agrees_alone <- runtime_bytes_ref("rt_bytes::BWorld::agrees_alone");
     let bound <- runtime_bytes_ref("rt_held::HWorld::bound");
     let bind_onto <- runtime_global(name_of(Ty::bind_onto));
     let bytes_of <- runtime_bytes_ref("rt_bytes::Bytes::own");
@@ -3724,18 +3841,195 @@ fn runtime_bytes_more(name: String, f: GlobalRef, rfun: FFun, measured: Bool, pa
         False => runtime_bytes_refused(name, "its reflection takes other words than its parameters"),
     };
     let _ <- counted;
-    let fw = parts.world(Local(rest.ref));
-    let bw = ap(bworld_of, [fw, Hd(trivial_h)]);
-    let world = ap(agrees_alone, parts.world_parts.append([Local(rest.ref)]));
+    let world = ap(worlds.kept, [Local(rest.ref)]);
     let g = ap(bind_onto, [parts.params, parts.no_tys]);
     let env = Cons(n, words).foldl(λ acc x => ap(bound, [Blank, Blank, Local(x), acc]), ap(bound, [Blank, Blank, zero, Hd(trivial_h)]));
     let spec = ap(Global(f), runtime_locals(ps));
     let own = ap(bytes_of, [Local(n), Local(s)]);
-    let code = ap(parts.compiled, Cons(own, runtime_locals(Cons(n, words))));
-    let proof = ap(over_spec, [parts.body, bw, world, NatLit(words.len()), Hd(trivial_h), g, env, Local(n), ap(rfl, [Blank, Local(n)]), Local(s),
-        spec, ap(rfl, [Blank, spec]), code, ap(rfl, [Blank, code])]);
+    // At each callee's code as a parameter (`HWorld::at`), the world at
+    // those callees given as kept: the code is then compared with the
+    // reflection's meaning at the callees, which are not unfolded.
+    let agrees_t <- runtime_bytes_ref("rt_bytes::BWorld::Agrees");
+    let at <- runtime_bytes_ref("rt_held::HWorld::at");
+    let bw_at: List<Expr> → Expr = λ es => ap(bworld_of, [parts.world_of(es, Local(rest.ref)), worlds.overs]);
+    let leaf: List<Expr> → Option<LocalRef> → Tac<Expr> = λ es under => {
+        let wx <- assume(ap(agrees_t, [bw_at(es)]), "world", under).or_fail("runtime: a world kept: ");
+        let code = ap(parts.compiled_of(es), Cons(own, runtime_locals(Cons(n, words))));
+        pure(Lam(wx.ref, ap(over_spec, [parts.body, bw_at(es), Local(wx.ref), NatLit(words.len()), Hd(trivial_h), g, env, Local(n), ap(rfl, [Blank, Local(n)]),
+            Local(s), spec, ap(rfl, [Blank, spec]), code, ap(rfl, [Blank, code])])))
+    };
+    let stmt: List<Expr> → LocalRef → Tac<Expr> = λ es under => {
+        let pr <- leaf(es, Some(under));
+        let t <- infer(pr).or_fail("runtime: `" ++ name ++ "`'s theorem at its callees: ");
+        pure(Hd(t))
+    };
+    let at_callees <- runtime_at_each_under(at, parts.callees, [], Some(rest.ref), stmt, leaf);
+    let proof = ap(at_callees, [world]);
     let stmt <- infer(proof).or_fail("runtime: `" ++ name ++ "`'s theorem over its record: ");
     pure([Decl(AsTheorem, name ++ "::runs_bytes", runtime_params_of(ps.append([rest.ref])), Hd(stmt), proof)])
+}
+
+// A length, a record of it and `k` words after them, each bound under the
+// one before: a point the function of a `Bytes(n)` is at.
+fn runtime_bytes_point(word: Handle, bytes_t: Expr, k: Nat, under: Option<LocalRef>) → Tac<List<LocalRef>> {
+    let l <- assume(Hd(word), "k", under).or_fail("runtime: a length: ");
+    let b <- assume(ap(bytes_t, [Local(l.ref)]), "b", Some(l.ref)).or_fail("runtime: a record: ");
+    let ys <- runtime_params(word, List::range(k).map(λ _ => Word(64)), Some(b.ref), 0);
+    pure(Cons(l.ref, Cons(b.ref, ys)))
+}
+
+// The theorem of a loop over a `Bytes(n)`: the code's passes, counted, are
+// the function of the record (`FFun::counted_over`), from the function's
+// own equation: its body at a bound, with the recursion answered by
+// anything that agrees with the function below the measure, is the
+// function (`f::ext` between the recursion and that answer, `f::irrel`).
+fn runtime_bytes_counted(name: String, f: GlobalRef, parts: SpanParts, c: SpanCounted, worlds: BytesWorld) → Tac<List<Decl>> {
+    let ts <- runtime_type_handles();
+    let counted <- runtime_bytes_ref("rt_bytes_loop::FFun::counted_over");
+    let guarded_t <- runtime_bytes_ref("rt_bytes_loop::FFun::OverGuarded");
+    let bare <- runtime_bytes_ref("rt_bytes_loop::Over::bare");
+    let along <- runtime_bytes_ref("rt_bytes::Over::along");
+    let bworld_of <- runtime_bytes_ref("rt_bytes::BWorld::of");
+    let bytes_of <- runtime_bytes_ref("rt_bytes::Bytes::own");
+    let bytes_t <- runtime_bytes_ref("bytes::Bytes");
+    let operand <- runtime_bytes_ref("rt_held::FTm::operand");
+    let at <- runtime_bytes_ref("rt_held::HWorld::at");
+    let uncurry <- runtime_bytes_ref("rt_file_loop::FFun::uncurry");
+    let rounds <- runtime_bytes_ref("rt_file_loop::FFun::rounds");
+    let recast <- runtime_bytes_ref(name_of(FTm::recast));
+    let passes_n <- runtime_global(name_of(Fun::meas_passes));
+    let sym_g <- runtime_global(name_of(Setup::eq_sym));
+    let trans_g <- runtime_global(name_of(Setup::eq_trans));
+    let lt_succ <- runtime_global(name_of(Setup::lt_succ));
+    let lt_pow <- runtime_global(name_of(Setup::below_pow));
+    let rfl <- runtime_global("tactic::rfl");
+    let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
+    let buffers_h <- runtime_type_of(name_of(runtime_w_buffers));
+    let zero <- runtime_global(name_of(runtime_w_word));
+    let word_list <- runtime_ctors_at(ts.words);
+    let rec <- runtime_global(name ++ "::rec");
+    let irrel <- runtime_global(name ++ "::irrel");
+    let companion <- lookup(name ++ "::ext");
+    let found: Tac<Expr> = match companion {
+        Accepted(g) => pure(Global(g)),
+        Refused(_) => runtime_bytes_refused(name, "it has no `ext` companion, which a loop's theorem is built from (a `decreases` function whose ending arm stores into the record gets none yet: store before the test, or in a caller)"),
+    };
+    let ext <- found;
+    let ft <- infer(Global(f)).or_fail("runtime: `" ++ name ++ "`'s type: ");
+    let arity <- rt_arity(64, ft);
+    let opened_f <- runtime_open_n(64, ft, List::range(arity).map(λ i => "p".append(decimal_name(2, i))));
+    let ps = opened_f.fst;
+    let words_f <- runtime_bytes_words(ps.drop(2));
+    let k = words_f.len();
+    let fact_free: Tac<True> = match k.same(arity - 2) {
+        True => pure(trivial),
+        False => runtime_bytes_refused(name, "a loop that takes a fact is not taken yet"),
+    };
+    let _ <- fact_free;
+    let len = NatLit(k);
+    let arity_e = NatLit(Succ(Succ(k)));
+    let ops: LocalRef → List<Expr> = λ w => List::range(k).map(λ i => ap(operand, [Local(w), NatLit(i)]));
+    // The function and its measure at a length, a record and a list of
+    // the operands' words.
+    let k_r <- assume(Hd(ts.word), "k", None).or_fail("runtime: a length: ");
+    let b_r <- assume(ap(bytes_t, [Local(k_r.ref)]), "b", Some(k_r.ref)).or_fail("runtime: a record: ");
+    let ws_r <- assume(Hd(ts.words), "words", Some(b_r.ref)).or_fail("runtime: a loop's words: ");
+    let at_words = Cons(Local(k_r.ref), Cons(Local(b_r.ref), ops(ws_r.ref)));
+    let run_of <- runtime_held(Lam(k_r.ref, Lam(b_r.ref, Lam(ws_r.ref, ap(Global(f), at_words)))), "`" ++ name ++ "` at a list of words");
+    let mu_r <- runtime_measure_at(rec, at_words);
+    let m_of <- runtime_held(Lam(k_r.ref, Lam(b_r.ref, Lam(ws_r.ref, Hd(mu_r)))), "`" ++ name ++ "`'s measure");
+    // Below `2^64`: the measure is a word's `toNat`.
+    let k_b <- assume(Hd(ts.word), "k", None).or_fail("runtime: a length: ");
+    let b_b <- assume(ap(bytes_t, [Local(k_b.ref)]), "b", Some(k_b.ref)).or_fail("runtime: a record: ");
+    let ws_b <- assume(Hd(ts.words), "words", Some(b_b.ref)).or_fail("runtime: a loop's words: ");
+    let mu_b <- runtime_measure_at(rec, Cons(Local(k_b.ref), Cons(Local(b_b.ref), ops(ws_b.ref))));
+    let word_b <- runtime_measured_word(mu_b);
+    let bounded_of <- runtime_held(Lam(k_b.ref, Lam(b_b.ref, Lam(ws_b.ref, ap(lt_pow, [Hd(word_b)])))), "`" ++ name ++ "`'s measure below `2^64`");
+    // The length word is the second of the code's words.
+    let ls <- runtime_params(ts.word, List::range(Succ(Succ(k))).map(λ _ => Word(64)), None, 0);
+    let lengthy <- runtime_held(runtime_lams(ls, ap(rfl, [Blank, Local(ls.nth(1).unwrap_or(LocalRef(0)))])), "a loop's length word");
+    // The function's equation, at a rest of a file and a length: its
+    // binders opened off its statement (the code's words, the record, the
+    // recursion `again` and what `again` agrees with below the measure).
+    let rest_r <- assume(Hd(buffers_h), "rest", None).or_fail("runtime: the rest of a file: ");
+    let n_g <- assume(Hd(ts.word), "n", Some(rest_r.ref)).or_fail("runtime: a length: ");
+    let bw_r = ap(worlds.bw, [Local(rest_r.ref)]);
+    let g_t <- as_type(ap(guarded_t, [bw_r, parts.params, parts.body, Local(n_g.ref), run_of, m_of])).or_fail("runtime: `" ++ name ++ "`'s equation over records: ");
+    let xnames: List<String> = List::range(Succ(Succ(k))).map(λ i => "x".append(decimal_name(2, i)));
+    let opened <- runtime_open_n(64, g_t, xnames.append(["s", "again", "hyp"]));
+    let xs = opened.fst.take(Succ(Succ(k))).drop(2);
+    let s_g = opened.fst.nth(k + 2).unwrap_or(LocalRef(0));
+    let again = opened.fst.nth(k + 3).unwrap_or(LocalRef(0));
+    let hyp = opened.fst.nth(k + 4).unwrap_or(LocalRef(0));
+    let list = λ (ys: List<LocalRef>) => RtQ::seq(word_list, runtime_locals(ys));
+    let mu_x <- runtime_measure_at(rec, Cons(Local(n_g.ref), Cons(Local(s_g), runtime_locals(xs))));
+    let n_e = Hd(mu_x);
+    // `g1 = λ k b y… p => f::rec(N, k, b, y…, p)`.
+    let pt1 <- runtime_bytes_point(ts.word, bytes_t, k, Some(hyp));
+    let d1 <- runtime_bound_dom(rec, n_e, runtime_locals(pt1));
+    let p1 <- assume(Hd(d1), "p", Some(pt1.rev().head_or(hyp))).or_fail("runtime: a bound proof: ");
+    let g1 = runtime_lams(pt1.append([p1.ref]), ap(rec, Cons(n_e, runtime_locals(pt1).append([Local(p1.ref)]))));
+    // `g2 = λ k b y… _ => again(k, b, [y…])`.
+    let pt2 <- runtime_bytes_point(ts.word, bytes_t, k, Some(hyp));
+    let d2 <- runtime_bound_dom(rec, n_e, runtime_locals(pt2));
+    let p2 <- assume(Hd(d2), "q", Some(pt2.rev().head_or(hyp))).or_fail("runtime: a bound proof: ");
+    let g2 = runtime_lams(pt2.append([p2.ref]), ap(Local(again), [Local(pt2.head_or(hyp)), Local(pt2.nth(1).unwrap_or(hyp)), list(pt2.drop(2))]));
+    // They agree: `f::irrel` on the left, the hypothesis on the right.
+    let pt3 <- runtime_bytes_point(ts.word, bytes_t, k, Some(hyp));
+    let d3 <- runtime_bound_dom(rec, n_e, runtime_locals(pt3));
+    let mu_y <- runtime_measure_of(d3);
+    let p3 <- assume(Hd(d3), "p", Some(pt3.rev().head_or(hyp))).or_fail("runtime: a bound proof: ");
+    let q3 <- assume(Hd(d3), "q", Some(p3.ref)).or_fail("runtime: a bound proof: ");
+    let irr = ap(irrel, Cons(n_e, Cons(Blank, runtime_locals(pt3).append([Local(p3.ref), ap(lt_succ, [Hd(mu_y)])]))));
+    let hy = ap(Local(hyp), [Local(pt3.head_or(hyp)), Local(pt3.nth(1).unwrap_or(hyp)), list(pt3.drop(2)), Local(p3.ref)]);
+    let hg = runtime_lams(pt3.append([p3.ref, q3.ref]), ap(trans_g, [Blank, Blank, Blank, Blank, irr, ap(sym_g, [Blank, Blank, Blank, hy])]));
+    let lt_n = ap(lt_succ, [n_e]);
+    let guarded_of <- runtime_held(Lam(rest_r.ref, Lam(n_g.ref, runtime_lams(opened.fst, ap(sym_g, [Blank, Blank, Blank,
+        ap(ext, Cons(n_e, Cons(n_e, Cons(g1, Cons(g2, Cons(hg, Cons(Local(n_g.ref), Cons(Local(s_g), runtime_locals(xs).append([lt_n, lt_n])))))))))])))),
+        "`" ++ name ++ "`'s equation over records");
+    // The theorem: at every record, its bytes and `n`, the code's passes
+    // counted are the function.
+    let n = ps.head_or(LocalRef(0));
+    let s = ps.nth(1).unwrap_or(n);
+    let rest <- assume(Hd(buffers_h), "rest", Some(ps.rev().head_or(n))).or_fail("runtime: the rest of a file: ");
+    let file = Local(rest.ref);
+    let bw = ap(worlds.bw, [file]);
+    let world = ap(worlds.kept, [file]);
+    let zs = list(words_f);
+    let agreed = ap(counted, [c.ty, bw, world, parts.params, parts.body, len, len, ap(rfl, [Blank, arity_e]), Hd(trivial_h),
+        ap(c.at, [file]), c.pass, c.stop, ap(c.passes, [file]), lengthy, Local(n), run_of, m_of, ap(guarded_of, [file, Local(n)]),
+        ap(bounded_of, [Local(n)]), zero, zs, ap(rfl, [Blank, len]), Local(s)]);
+    // The iteration read as a meaning is the iteration applied
+    // (`HWorld::at`, as `runtime_held_counted` reads it).
+    let own = ap(bytes_of, [Local(n), Local(s)]);
+    let at_words_code = Cons(own, runtime_locals(Cons(n, words_f)));
+    let at_code = RtQ::seq(word_list, Cons(zero, runtime_locals(Cons(n, words_f))));
+    let q <- runtime_quoting(ts);
+    let w64 = Ty::quote(Word(64), q);
+    let g <- assume(c.ty, "g", Some(rest.ref)).or_fail("runtime: a function over a span: ");
+    let coded_g = ap(recast, [c.tys, w64, w64, ap(Local(g.ref), at_words_code)]);
+    let read_t <- as_type(Equation(ap(uncurry, [c.tys, parts.params, w64, ap(c.at, [file, Local(g.ref)]), at_code, own]), coded_g))
+        .or_fail("runtime: `" ++ name ++ "`'s passes read as a meaning: ");
+    let reflects = ap(at, [c.ty, Lam(g.ref, Hd(read_t)), ap(rounds, [c.ty, passes_n, c.pass, c.stop]), Lam(g.ref, ap(rfl, [Blank, coded_g]))]);
+    let spec = ap(Global(f), runtime_locals(ps));
+    let code = ap(parts.compiled, at_words_code);
+    let proof = ap(bare, [c.tys, Local(n), spec, code,
+        ap(along, [Hd(ts.word), Local(n), spec, Blank, ap(recast, [c.tys, w64, w64, code]), reflects, agreed])]);
+    let stmt <- infer(proof).or_fail("runtime: `" ++ name ++ "`'s theorem over its record: ");
+    pure([Decl(AsTheorem, name ++ "::runs_bytes", runtime_params_of(ps.append([rest.ref])), Hd(stmt), proof)])
+}
+
+// The theorem of a function of a `Bytes(n)`, with a loop or none.
+fn runtime_bytes_more(name: String, f: GlobalRef, rfun: FFun, measured: Bool, parts: SpanParts, cfuns: List<Nat>, write_sigs: List<Pair<Nat, Sig>>)
+    → Tac<List<Decl>> {
+    let worlds <- runtime_bytes_world(name, parts, cfuns, write_sigs);
+    match measured {
+        True => match parts.counted {
+            Some(c) => runtime_bytes_counted(name, f, parts, c, worlds),
+            None => runtime_bytes_refused(name, "its loop was not written out as the passes its code counts"),
+        },
+        False => runtime_bytes_straight(name, f, rfun, parts, worlds),
+    }
 }
 
 // A function of a `Bytes(n)`: compiled as the function of its bytes and
@@ -3753,7 +4047,7 @@ fn runtime_bytes(name: String, f: GlobalRef) → Tac<List<Decl>> {
     match Ty::all_word64(rfun.params).and(rfun.result.is_word64()) {
         False => runtime_bytes_refused(name, "it takes and returns 64-bit words for now, beside its record"),
         True => runtime_link(4096, k, [LinkFrame(f.id, name, table, table, Some(r.funs.len()))], Linking([], [], [], [])).bind(λ l =>
-            runtime_span_publish(name, f, rfun, measured, r.funs, read_sigs, r.cfuns, write_sigs, l, True, True, λ parts => runtime_bytes_more(name, f, rfun, measured, parts))),
+            runtime_span_publish(name, f, rfun, measured, r.funs, read_sigs, r.cfuns, write_sigs, l, True, True, λ parts => runtime_bytes_more(name, f, rfun, measured, parts, r.cfuns, write_sigs))),
     }
 }
 

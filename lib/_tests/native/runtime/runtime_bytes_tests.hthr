@@ -69,3 +69,25 @@ theorem copy_first_after({n: u64}, s: Bytes(n), inside: ∥2 < s.len()∥):
     (Bytes::copy_first(s, inside := inside).after).bytes = (Bytes::copy_first::bytes(s.bytes, n)).after {
     Bytes::copy_first::runs_bytes(n, s, inside, []).after
 }
+
+// ---------------------------------------------------------------------------
+// A loop
+
+runtime fn Bytes::clear({n: u64}, mut self s: Bytes(n)) → u64 {
+    for i in 0..s.len() {
+        s[i] := 0;
+    }
+    n
+}
+
+// The lifted loop and the function that calls it each agree with their
+// code at every record.
+theorem clear_loop_after({n: u64}, s: Bytes(n), i: u64):
+    (Bytes::clear_loop(n, s, i).after).bytes = (Bytes::clear_loop::bytes(s.bytes, n, i)).after {
+    Bytes::clear_loop::runs_bytes(n, s, i, []).after
+}
+
+theorem clear_after({n: u64}, s: Bytes(n)):
+    (Bytes::clear(s).after).bytes = (Bytes::clear::bytes(s.bytes, n)).after {
+    Bytes::clear::runs_bytes(n, s, []).after
+}
