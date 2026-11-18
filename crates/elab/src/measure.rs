@@ -446,6 +446,7 @@ pub(crate) fn lift_found(decl: &Decl, name: &str, measure: &Expr, tys: &dyn Bind
         obls: Vec::new(),
         found_only: true,
         found: Vec::new(),
+        found_values: Vec::new(),
         known: &[],
         error: None,
     };
@@ -764,6 +765,7 @@ pub(crate) fn lower(
         obls: Vec::new(),
         found_only: false,
         found: Vec::new(),
+        found_values: Vec::new(),
         known: &[],
         error: None,
     };
@@ -1133,6 +1135,7 @@ pub(crate) fn lower_group(
             obls: Vec::new(),
             found_only: false,
             found: Vec::new(),
+            found_values: Vec::new(),
             known: &[],
             error: None,
         };
@@ -1788,6 +1791,12 @@ struct Rewrite<'a> {
     /// `found`.
     found_only: bool,
     found: Vec<Lowered>,
+    /// [`lift_found`]'s walk: each `let` alias in scope with its value as
+    /// the walk rewrote it, its reads given their lifted proofs —
+    /// `(scope index, name, the written value's span, rewritten value)`. A
+    /// later `f#found_N` binds the alias to this value, so it does not
+    /// search for those proofs again.
+    found_values: Vec<(usize, String, Span, Expr)>,
     /// The body's own lifted `f#obl_N`, where this walk is a companion's:
     /// its reference passes the binders the body's declaration quantified,
     /// so the two spellings are one term even where the companion's walk
@@ -2346,7 +2355,23 @@ impl<'a> Rewrite<'a> {
         }
         let search = Block { stmts: facts, result: Box::new(g.default.clone()), ons: Vec::new(), span };
         let evidence = Expr { kind: ExprKind::Block(Box::new(search.clone())), span };
-        let selected = select_scope(&self.scope, &g.goal, Some(&evidence))?;
+        // The aliases in scope at their rewritten values, whose reads name
+        // the proofs lifted before this one.
+        let view: Vec<Binder> = self
+            .scope
+            .iter()
+            .enumerate()
+            .map(|(i, b)| {
+                let rewritten = b.value.as_ref().and_then(|v| {
+                    self.found_values.iter().rev().find(|(at, n, sp, _)| *at == i && *n == b.name && *sp == v.span)
+                });
+                match rewritten {
+                    Some((.., v)) => Binder { value: Some(v.clone()), ..b.clone() },
+                    None => b.clone(),
+                }
+            })
+            .collect();
+        let selected = select_scope(&view, &g.goal, Some(&evidence))?;
         let mut params = Vec::new();
         let mut args = Vec::new();
         let mut aliases: Vec<(String, Expr)> = Vec::new();
@@ -2520,6 +2545,7 @@ impl<'a> Rewrite<'a> {
             obls: self.obls.iter().map(|_| None).collect(),
             found_only: self.found_only,
             found: Vec::new(),
+            found_values: self.found_values.clone(),
             known: self.known,
             error: None,
         }
@@ -2653,9 +2679,24 @@ impl<'a> Rewrite<'a> {
                     goal_oriented: *goal_oriented,
                 }
             }
+            // A statement `if`'s test is a proposition handed to
+            // `decide_bit<s[i] < s[j]>()`: the reads in it leave their
+            // proofs to searches as any read does, so they are lifted too.
+            // Left in place, every copy of the body the companions
+            // elaborate searches for them again
+            // (issues/store-under-if-in-lifted-loop-cost.md).
             ExprKind::TyApp { head, args } => ExprKind::TyApp {
                 head: Box::new(self.expr(head)),
-                args: args.clone(),
+                args: if self.found_only {
+                    args.iter()
+                        .map(|t| match &t.kind {
+                            TyKind::OfExpr(x) => Ty { kind: TyKind::OfExpr(Box::new(self.expr(x))), span: t.span },
+                            _ => t.clone(),
+                        })
+                        .collect()
+                } else {
+                    args.clone()
+                },
             },
             ExprKind::Lam { binders, body } => {
                 let n = self.scope.len();
@@ -2969,7 +3010,13 @@ impl<'a> Rewrite<'a> {
                 // Query the source before replacing recursive calls by IH
                 // applications. The result is only a telescope annotation.
                 let binder = self.let_binder(name, ty, expr, *opaque);
+                let written = expr.span;
                 let expr = self.expr(expr);
+                if self.found_only && binder.value.is_some() {
+                    let at = self.scope.len();
+                    self.found_values.retain(|(i, ..)| *i < at);
+                    self.found_values.push((at, name.clone(), written, expr.clone()));
+                }
                 self.scope.push(binder);
                 Stmt::Let {
                     name: name.clone(),
@@ -4729,6 +4776,7 @@ pub(crate) fn companions(
         obls: Vec::new(),
         found_only: false,
         found: Vec::new(),
+        found_values: Vec::new(),
         known: lifted,
         error: None,
     };
