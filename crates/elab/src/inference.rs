@@ -2136,70 +2136,120 @@ impl Inference<'_> {
         let respelled = GeneratedDefs(self).respell_ty(cx, expected);
         let expected = respelled.as_ref().unwrap_or(expected);
         let length = inductive::nat_lit(elems.len());
-        let targs = [(expected.clone(), expected_level.clone())];
-        let vargs = [(length.clone(), Type::Nat, Level::Zero)];
-        let (goal, goal_level) = self.lower_instance(cx, &ind, &targs, &vargs, span)?;
-        let carrier = self.display_type(cx, expected);
-        let display = format!("CollectionLiteral<{carrier}>({})", elems.len());
-        let mut trace = Vec::new();
-        let Some(dict) = self.resolve_goal(cx, &goal, &goal_level, &display, None, span, &mut trace)
-        else {
-            return Err(ElabError::Resolution { goal: display, span, trace });
-        };
-        let dict = Rc::new(dict);
+        // The protocol's answers for this container and length, asked once
+        // per scope: a term of nested literals (a generated program, a
+        // table) asks the same few questions at every `[…]`, and each is a
+        // resolution, two projections and their reductions.
+        let psi = self.psi.bindings.len() as u32;
+        let pad = self.global_padding();
+        let known = self.memos.collection_memo.borrow().iter().position(|m| {
+            m.len == elems.len()
+                && m.psi == psi
+                && m.pad == pad
+                && m.aliases.same(&cx.aliases)
+                && m.dicts.same(&cx.dicts)
+                && m.gamma == cx.gamma
+                && m.carrier == *expected
+                && m.carrier_level == *expected_level
+        });
+        let known = match known {
+            Some(at) => at,
+            None => {
+                let targs = [(expected.clone(), expected_level.clone())];
+                let vargs = [(length.clone(), Type::Nat, Level::Zero)];
+                let (goal, goal_level) = self.lower_instance(cx, &ind, &targs, &vargs, span)?;
+                let carrier = self.display_type(cx, expected);
+                let display = format!("CollectionLiteral<{carrier}>({})", elems.len());
+                let mut trace = Vec::new();
+                let Some(dict) = self.resolve_goal(cx, &goal, &goal_level, &display, None, span, &mut trace)
+                else {
+                    return Err(ElabError::Resolution { goal: display, span, trace });
+                };
+                let dict = Rc::new(dict);
 
-        let (element, element_universe, _) =
-            self.project_field(cx, &ind, &goal, Rc::clone(&dict), element_field, span)?;
-        // Projection from a resolved dictionary can retain the whole
-        // dependent dictionary term. Normalize the field value before it is
-        // embedded in every vector-element annotation below.
-        let element = (*self.whnf_tm(cx, &element, span)?).clone();
-        let Type::Ty(element_level) = self.whnf(cx, &element_universe, span)? else {
-            return err(
-                "internal: collection-literal `element` is not a type code",
-                span,
-            );
+                let (element, element_universe, _) =
+                    self.project_field(cx, &ind, &goal, Rc::clone(&dict), element_field, span)?;
+                // Projection from a resolved dictionary can retain the whole
+                // dependent dictionary term. Normalize the field value before it is
+                // embedded in every vector-element annotation below.
+                let element = (*self.whnf_tm(cx, &element, span)?).clone();
+                let Type::Ty(element_level) = self.whnf(cx, &element_universe, span)? else {
+                    return err(
+                        "internal: collection-literal `element` is not a type code",
+                        span,
+                    );
+                };
+                let element_ty = Type::El {
+                    level: element_level.clone(),
+                    tm: Rc::new(element),
+                };
+
+                let (from, from_ty, _) =
+                    self.project_field(cx, &ind, &goal, dict, from_field, span)?;
+                let from = (*self.whnf_tm(cx, &from, span)?).clone();
+                let Type::Pi {
+                    dom_level: _,
+                    cod_level,
+                    dom,
+                    cod,
+                } = self.whnf(cx, &from_ty, span)?
+                else {
+                    return err(
+                        "internal: collection-literal `fromLiteral` is not a function",
+                        span,
+                    );
+                };
+                let Type::Vec { elem: vector_element, .. } = &*inductive::decoded(&dom) else {
+                    return err(
+                        "internal: collection-literal `fromLiteral` does not accept a vector",
+                        span,
+                    );
+                };
+                if !self.conv_types(cx, vector_element, &element_ty, &element_level) {
+                    return err(
+                        "internal: collection-literal element and conversion domain disagree",
+                        span,
+                    );
+                }
+                const KEEP: usize = 32;
+                let mut memo = self.memos.collection_memo.borrow_mut();
+                if memo.len() >= KEEP {
+                    memo.remove(0);
+                }
+                memo.push(crate::lifetimes::CollectionMemo {
+                    psi,
+                    pad,
+                    gamma: cx.gamma.clone(),
+                    aliases: cx.aliases.clone(),
+                    dicts: cx.dicts.clone(),
+                    carrier: expected.clone(),
+                    carrier_level: expected_level.clone(),
+                    len: elems.len(),
+                    element: match &element_ty { Type::El { tm, .. } => (**tm).clone(), _ => unreachable!("built as a code's type above") },
+                    element_level: element_level.clone(),
+                    from,
+                    cod,
+                    cod_level,
+                    empty: None,
+                });
+                memo.len() - 1
+            }
         };
-        let element_ty = Type::El {
-            level: element_level.clone(),
-            tm: Rc::new(element),
+        let (element_ty, element_level, from, cod, cod_level, empty) = {
+            let memo = self.memos.collection_memo.borrow();
+            let m = &memo[known];
+            (Type::El { level: m.element_level.clone(), tm: Rc::new(m.element.clone()) }, m.element_level.clone(), m.from.clone(), m.cod.clone(), m.cod_level.clone(), m.empty.clone())
         };
-        // Build the compact domain before projecting `fromLiteral`: keeping
-        // this independently rooted prevents the later dependent projection
-        // from becoming part of the vector's annotations.
+        if let Some(value) = empty {
+            return Ok(value);
+        }
+        // The compact domain is rooted on its own, so the dependent
+        // projection of `fromLiteral` is no part of the vector's annotations.
         let literal_dom = Type::Vec {
             level: element_level.clone(),
             elem: Rc::new(element_ty.clone()),
             len: Rc::new(length),
         };
-
-        let (from, from_ty, _) =
-            self.project_field(cx, &ind, &goal, dict, from_field, span)?;
-        let from = (*self.whnf_tm(cx, &from, span)?).clone();
-        let Type::Pi {
-            dom_level: _,
-            cod_level,
-            dom,
-            cod,
-        } = self.whnf(cx, &from_ty, span)?
-        else {
-            return err(
-                "internal: collection-literal `fromLiteral` is not a function",
-                span,
-            );
-        };
-        let Type::Vec { elem: vector_element, .. } = &*inductive::decoded(&dom) else {
-            return err(
-                "internal: collection-literal `fromLiteral` does not accept a vector",
-                span,
-            );
-        };
-        if !self.conv_types(cx, vector_element, &element_ty, &element_level) {
-            return err(
-                "internal: collection-literal element and conversion domain disagree",
-                span,
-            );
-        }
         // Checking the same surface node directly through ExprElab is the
         // bootstrap boundary: it constructs the primitive vector and cannot
         // re-enter this protocol route.
@@ -2224,7 +2274,18 @@ impl Inference<'_> {
             vector,
         );
         let value = (*self.whnf_tm(cx, &converted, span)?).clone();
-        Ok(Literals(self).collection_literal_spine(cx, value, elems.len()))
+        let value = Literals(self).collection_literal_spine(cx, value, elems.len());
+        if elems.is_empty() {
+            // Found again: nothing was elaborated in between that the memo
+            // could have been moved by, but a nested literal may have pushed.
+            if let Some(m) = self.memos.collection_memo.borrow_mut().iter_mut().find(|m| {
+                m.len == 0 && m.psi == psi && m.pad == pad && m.aliases.same(&cx.aliases) && m.dicts.same(&cx.dicts)
+                    && m.gamma == cx.gamma && m.carrier == *expected && m.carrier_level == *expected_level
+            }) {
+                m.empty = Some(value.clone());
+            }
+        }
+        Ok(value)
     }
 }
 
