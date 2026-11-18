@@ -51,8 +51,16 @@
 //! built from the library's builders the same way. Each step is a pending
 //! application over the previous tree's closure, so nothing is read back into
 //! syntax and re-evaluated, and the force cache shares the tree's spine
-//! between steps. The one exception is [`Interpreted::pin`], which looks at
+//! between steps. The one exception is [`KernelValues::pin`], which looks at
 //! a resumed tree's outer pair to keep its proof from chaining.
+//!
+//! **Which evaluator.** That reading is written once over [`Values`], and a
+//! run uses the untrusted machine (`crates/run`, [`MachineValues`]) on a
+//! thread of its own, with the kernel's evaluator behind it: where the
+//! machine stops, the kernel's is replayed the answers given so far and the
+//! run continues there ([`Remote`], [`Host::speak`],
+//! docs/infrastructure/untrusted-evaluator-design.md §4). The tree's answers
+//! are untrusted either way.
 
 use heather_kernel::rc::Rc;
 
@@ -627,20 +635,41 @@ impl Speaker for Box<dyn NativeTactic> {
     }
 }
 
-/// A Heather `Tac<Expr>`, evaluated in the value domain over `world`.
-struct Interpreted<'a, 'w, 'v> {
+/// What reading the protocol needs of an evaluator: calls of the
+/// `tactic::host_*` functions over values it holds, numerals, and a
+/// numeral's value. The kernel's evaluator ([`KernelValues`]) and the
+/// untrusted one ([`MachineValues`], `crates/run`) both read a tree this
+/// way, so the protocol's reading is written once ([`Interpreted`]).
+trait Values {
+    type V: Copy;
+    fn call(&self, name: &'static str, args: Vec<Self::V>) -> Result<Self::V, String>;
+    fn lit(&self, n: u64) -> Self::V;
+    fn nat(&self, v: Self::V) -> Result<u64, String>;
+    /// The tree after a resumption, as the evaluator wants to keep it.
+    fn pin(&self, tree: Self::V) -> Result<Self::V, String> {
+        Ok(tree)
+    }
+}
+
+/// A Heather `Tac<Expr>`, read through an evaluator's values.
+struct Interpreted<B: Values> {
+    values: B,
+    tree: B::V,
+}
+
+/// The kernel's evaluator, in the value domain over `world`.
+struct KernelValues<'a, 'w, 'v> {
     elab: &'a Elaborator,
     world: &'w GlobalCtx,
     reader: Reader<'w, 'v>,
     arena: &'v ValueArena<'v>,
-    tree: &'v TmClo<'v>,
     /// Each `host_*` function's head and rescoped type, looked up once per
     /// run: rescoping a signature is a walk of it, and the loop calls the
     /// same few functions at every step.
     globals: std::cell::RefCell<std::collections::HashMap<&'static str, (Term, Rc<Type>)>>,
 }
 
-impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
+impl<'a, 'w, 'v> KernelValues<'a, 'w, 'v> {
     /// `tactic::name(args…)` as a pending application over closures. The
     /// `host_*` functions are first-order, so each codomain is used as is.
     fn global(&self, name: &'static str) -> Result<(Term, Rc<Type>), String> {
@@ -665,7 +694,7 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
         Ok((head, ty))
     }
 
-    fn call(&self, name: &'static str, args: Vec<&'v TmClo<'v>>) -> Result<&'v TmClo<'v>, String> {
+    fn apply(&self, name: &'static str, args: Vec<&'v TmClo<'v>>) -> Result<&'v TmClo<'v>, String> {
         let (head, ty) = self.global(name)?;
         let key = name;
         let mut ty: &Type = &ty;
@@ -688,24 +717,73 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
         }
         Ok(out)
     }
+}
+
+impl<'v> Values for KernelValues<'_, '_, 'v> {
+    type V = &'v TmClo<'v>;
+
+    fn call(&self, name: &'static str, args: Vec<&'v TmClo<'v>>) -> Result<&'v TmClo<'v>, String> {
+        self.apply(name, args)
+    }
 
     fn lit(&self, n: u64) -> &'v TmClo<'v> {
         self.reader.root(crate::inductive::nat_lit(n as usize))
     }
 
-    fn nat_of(&self, name: &'static str, args: Vec<&'v TmClo<'v>>) -> Result<u64, String> {
-        self.reader
-            .nat(self.call(name, args)?)
-            .map_err(|e| {
-                if e.contains("fuel") {
-                    "evaluating the tactic ran out of fuel or nesting depth".to_string()
-                } else {
-                    e
-                }
-            })
+    fn nat(&self, v: &'v TmClo<'v>) -> Result<u64, String> {
+        self.reader.nat(v).map_err(|e| {
+            if e.contains("fuel") {
+                "evaluating the tactic ran out of fuel or nesting depth".to_string()
+            } else {
+                e
+            }
+        })
     }
 
-    fn expr(&self, e: &'v TmClo<'v>, budget: &mut usize) -> Result<RExpr, String> {
+    /// The tree as a value whose two components are values too.
+    ///
+    /// `Tac` is tier 2, `Σ(t : W). canon t` (docs/inductives/inductive-tier2-w-lowering.md
+    /// §5), and `host_resume`'s `match` rebuilds the continuation as
+    /// `k := λy. ⟨f' y, c y⟩` with `c` the scrutinee's *proof*, `snd t`
+    /// (§7). So the resumed tree's proof is the previous tree's proof
+    /// applied, and nothing forces it until a leaf arm's `J` does: left
+    /// pending, the proof of the n-th tree is a chain of n projections, and
+    /// forcing it at the final `Pure` stood on one native frame per answered
+    /// request, which capped a run near `NATIVE_DEPTH_LIMIT` requests
+    /// (issues/tactic-run-continuation-chain.md). Forcing both components here,
+    /// one step at a time, and handing the next `host_resume` closures that
+    /// *are* values, keeps every chain one link long whatever the cache keeps.
+    ///
+    /// This is the only place the host looks at the lowering, and only at its
+    /// outer pair; a value of any other shape is left as it is.
+    fn pin(&self, tree: &'v TmClo<'v>) -> Result<&'v TmClo<'v>, String> {
+        let force = |c| {
+            self.reader.force(c).map_err(|_| "evaluating the tactic ran out of fuel or nesting depth".to_string())
+        };
+        let v = force(tree)?;
+        let Val::Pair { ann, fst, snd } = &*v else {
+            return Ok(tree);
+        };
+        let fst = self.arena.tm(TmClo::val(force(fst)?));
+        let snd = self.arena.tm(TmClo::val(force(snd)?));
+        Ok(self.arena.tm(TmClo::val(self.arena.val(Val::Pair { ann: ann.clone(), fst, snd }))))
+    }
+}
+
+impl<B: Values> Interpreted<B> {
+    fn call(&self, name: &'static str, args: Vec<B::V>) -> Result<B::V, String> {
+        self.values.call(name, args)
+    }
+
+    fn lit(&self, n: u64) -> B::V {
+        self.values.lit(n)
+    }
+
+    fn nat_of(&self, name: &'static str, args: Vec<B::V>) -> Result<u64, String> {
+        self.values.nat(self.call(name, args)?)
+    }
+
+    fn expr(&self, e: B::V, budget: &mut usize) -> Result<RExpr, String> {
         if *budget == 0 {
             return Err("the tactic returned an implausibly large `Expr`".into());
         }
@@ -740,7 +818,7 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
         }
     }
 
-    fn note(&self, n: &'v TmClo<'v>, budget: &mut usize) -> Result<NoteView, String> {
+    fn note(&self, n: B::V, budget: &mut usize) -> Result<NoteView, String> {
         if *budget == 0 {
             return Err("the tactic failed with an implausibly large note".into());
         }
@@ -814,7 +892,7 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
         Ok(Request::Publish(decls))
     }
 
-    fn string(&self, s: &'v TmClo<'v>) -> Result<String, String> {
+    fn string(&self, s: B::V) -> Result<String, String> {
         let len = self.nat_of("str_len", vec![s])?;
         let shown = (len as usize).min(READ_BUDGET);
         let mut out = String::with_capacity(shown);
@@ -828,7 +906,7 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
         Ok(out)
     }
 
-    fn string_value(&self, s: &str) -> Result<&'v TmClo<'v>, String> {
+    fn string_value(&self, s: &str) -> Result<B::V, String> {
         let mut out = self.call("str_empty", vec![])?;
         for c in s.chars() {
             out = self.call("str_push", vec![out, self.lit(c as u64)])?;
@@ -836,7 +914,7 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
         Ok(out)
     }
 
-    fn answer(&self, a: &Answer) -> Result<&'v TmClo<'v>, String> {
+    fn answer(&self, a: &Answer) -> Result<B::V, String> {
         match a {
             Answer::Bool(b) => self.call("host_bool", vec![self.lit(*b as u64)]),
             Answer::Goal(g) => {
@@ -1123,46 +1201,272 @@ impl<'a, 'w, 'v> Interpreted<'a, 'w, 'v> {
     }
 }
 
-impl Speaker for Interpreted<'_, '_, '_> {
+impl<B: Values> Speaker for Interpreted<B> {
     fn start(&mut self) -> Result<Step, String> {
         self.step()
     }
 
     fn resume(&mut self, answer: Answer) -> Result<Step, String> {
         let a = self.answer(&answer)?;
-        self.tree = self.pin(self.call("host_resume", vec![self.tree, a])?)?;
+        self.tree = self.values.pin(self.call("host_resume", vec![self.tree, a])?)?;
         self.step()
     }
 }
 
-impl<'v> Interpreted<'_, '_, 'v> {
-    /// The tree as a value whose two components are values too.
-    ///
-    /// `Tac` is tier 2, `Σ(t : W). canon t` (docs/inductives/inductive-tier2-w-lowering.md
-    /// §5), and `host_resume`'s `match` rebuilds the continuation as
-    /// `k := λy. ⟨f' y, c y⟩` with `c` the scrutinee's *proof*, `snd t`
-    /// (§7). So the resumed tree's proof is the previous tree's proof
-    /// applied, and nothing forces it until a leaf arm's `J` does: left
-    /// pending, the proof of the n-th tree is a chain of n projections, and
-    /// forcing it at the final `Pure` stood on one native frame per answered
-    /// request, which capped a run near `NATIVE_DEPTH_LIMIT` requests
-    /// (issues/tactic-run-continuation-chain.md). Forcing both components here,
-    /// one step at a time, and handing the next `host_resume` closures that
-    /// *are* values, keeps every chain one link long whatever the cache keeps.
-    ///
-    /// This is the only place the host looks at the lowering, and only at its
-    /// outer pair; a value of any other shape is left as it is.
-    fn pin(&self, tree: &'v TmClo<'v>) -> Result<&'v TmClo<'v>, String> {
-        let force = |c| {
-            self.reader.force(c).map_err(|_| "evaluating the tactic ran out of fuel or nesting depth".to_string())
+/// What the machine's thread sends the host: the tree's next step, or a
+/// protocol function's name to look up (the elaborator stays on its own
+/// thread, so the machine asks for each name the first time it calls it).
+enum ToHost {
+    Step(Result<Step, String>),
+    Resolve(&'static str),
+}
+
+/// What the host sends the machine's thread.
+enum ToMachine {
+    Answer(Answer),
+    Resolved(Option<usize>),
+}
+
+/// The untrusted evaluator (`crates/run`), on its own thread. A value is
+/// held by its position in `held` for the run, as the kernel's arena holds
+/// what a run forces.
+struct MachineValues<'m> {
+    machine: &'m heather_run::Machine<'m>,
+    held: RefCell<Vec<heather_run::Thunk>>,
+    globals: RefCell<std::collections::HashMap<&'static str, usize>>,
+    to_host: std::sync::mpsc::Sender<ToHost>,
+    from_host: std::sync::mpsc::Receiver<ToMachine>,
+}
+
+impl MachineValues<'_> {
+    fn hold(&self, thunk: heather_run::Thunk) -> usize {
+        let mut held = self.held.borrow_mut();
+        held.push(thunk);
+        held.len() - 1
+    }
+
+    fn held(&self, v: usize) -> heather_run::Thunk {
+        self.held.borrow()[v].clone()
+    }
+
+    fn global(&self, name: &'static str) -> Result<usize, String> {
+        if let Some(&at) = self.globals.borrow().get(name) {
+            return Ok(at);
+        }
+        let asked = self.to_host.send(ToHost::Resolve(name)).is_ok();
+        let at = match self.from_host.recv() {
+            Ok(ToMachine::Resolved(Some(at))) if asked => at,
+            _ => return Err(format!("`tactic::{name}` is not declared")),
         };
-        let v = force(tree)?;
-        let Val::Pair { ann, fst, snd } = &*v else {
-            return Ok(tree);
+        self.globals.borrow_mut().insert(name, at);
+        Ok(at)
+    }
+}
+
+impl Values for MachineValues<'_> {
+    type V = usize;
+
+    fn call(&self, name: &'static str, args: Vec<usize>) -> Result<usize, String> {
+        let mut out = self.machine.global(self.global(name)?);
+        for arg in args {
+            out = self.machine.apply(&out, &self.held(arg));
+        }
+        Ok(self.hold(out))
+    }
+
+    fn lit(&self, n: u64) -> usize {
+        self.hold(self.machine.number(n))
+    }
+
+    fn nat(&self, v: usize) -> Result<u64, String> {
+        self.machine.nat(&self.held(v)).map_err(|heather_run::Stuck(why)| why)
+    }
+}
+
+/// The machine's thread: read the tree's steps and resume it with the
+/// host's answers until the host hangs up or a step fails.
+fn machine_run(machine: &heather_run::Machine<'_>, tree: Term, to_host: std::sync::mpsc::Sender<ToHost>, from_host: std::sync::mpsc::Receiver<ToMachine>) {
+    let values = MachineValues { machine, held: RefCell::default(), globals: RefCell::default(), to_host, from_host };
+    let tree = values.hold(machine.term(tree));
+    let mut speaker = Interpreted { values, tree };
+    machine.allow(MACHINE_STEP_FUEL);
+    let mut step = speaker.start();
+    loop {
+        let failed = step.is_err();
+        if speaker.values.to_host.send(ToHost::Step(step)).is_err() || failed {
+            return;
+        }
+        step = match speaker.values.from_host.recv() {
+            Ok(ToMachine::Answer(a)) => {
+                machine.allow(MACHINE_STEP_FUEL);
+                speaker.resume(a)
+            }
+            _ => return,
         };
-        let fst = self.arena.tm(TmClo::val(force(fst)?));
-        let snd = self.arena.tm(TmClo::val(force(snd)?));
-        Ok(self.arena.tm(TmClo::val(self.arena.val(Val::Pair { ann: ann.clone(), fst, snd }))))
+    }
+}
+
+/// What the machine may spend producing one step: a runaway's bound, not a
+/// verdict, since a step it cannot finish is handed to the kernel's
+/// evaluator, whose per-force fuel then decides.
+const MACHINE_STEP_FUEL: u64 = 1 << 30;
+
+impl Host<'_> {
+    /// `tree`, a closed `Tac` of `world`, run by `with` through a speaker
+    /// on the evaluator [`Evaluation::chosen`] names.
+    fn speak<T>(&self, world: &GlobalCtx, tree: Term, with: impl FnOnce(&mut dyn Speaker) -> T) -> T {
+        // One arena for the whole run, which keeps what it forces: each
+        // resumed tree is built from closures the earlier ones forced
+        // (`ValueArena::cache_tm`).
+        let arena = ValueArena::new();
+        let reader = Reader::new(world, &arena);
+        let root = reader.root(tree.clone());
+        let mut kernel = Interpreted { values: KernelValues { elab: self, world, reader, arena: &arena, globals: Default::default() }, tree: root };
+        let how = Evaluation::chosen();
+        if how == Evaluation::Kernel {
+            return with(&mut kernel);
+        }
+        let prims = crate::function_ir_source::run_prims(self);
+        let (to_machine, from_host) = std::sync::mpsc::channel();
+        let (to_host, from_machine) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            scope.spawn(move || {
+                let failed = to_host.clone();
+                let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    heather_run::with_machine(world, &prims, MACHINE_STEP_FUEL, move |m| machine_run(m, tree, to_host, from_host))
+                }));
+                let why = match ran {
+                    Ok(Ok(())) => return,
+                    Ok(Err(heather_run::Stuck(why))) => why,
+                    Err(_) => "the machine panicked".to_string(),
+                };
+                let _ = failed.send(ToHost::Step(Err(why)));
+            });
+            let mut remote = Remote {
+                elab: self,
+                to_machine,
+                from_machine,
+                answers: Vec::new(),
+                kernel,
+                on_kernel: false,
+                check: how == Evaluation::Check,
+            };
+            let out = with(&mut remote);
+            drop(remote);
+            out
+        })
+    }
+}
+
+/// How a tactic or generator tree is evaluated (`HEATHER_READS`, as for
+/// a compile's reads): on the untrusted machine by default, `kernel` on the
+/// kernel's evaluator only, `check` on both in step, refusing a run where
+/// they differ.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Evaluation {
+    Machine,
+    Kernel,
+    Check,
+}
+
+impl Evaluation {
+    fn chosen() -> Evaluation {
+        match std::env::var("HEATHER_READS").as_deref() {
+            Ok("kernel") => Evaluation::Kernel,
+            Ok("check") => Evaluation::Check,
+            _ => Evaluation::Machine,
+        }
+    }
+}
+
+/// A tree run on the untrusted machine, with the kernel's evaluator behind
+/// it. Nothing the machine answers is trusted any more than the kernel's
+/// answer was: every request is the host's to grant, and what a run
+/// produces is elaborated and checked. Where the machine fails (a form it
+/// does not run, its step or nesting bound), the kernel's evaluator is
+/// started on the same tree and handed the answers given so far, which
+/// brings it to the same step, and the run goes on there: a failure costs
+/// the run again on the kernel's evaluator, never a different outcome.
+struct Remote<'h, K: Speaker> {
+    elab: &'h Elaborator,
+    to_machine: std::sync::mpsc::Sender<ToMachine>,
+    from_machine: std::sync::mpsc::Receiver<ToHost>,
+    answers: Vec<Answer>,
+    kernel: K,
+    /// The machine failed and the kernel's evaluator has taken over.
+    on_kernel: bool,
+    /// `Check`: the kernel's evaluator runs in step and each step is compared.
+    check: bool,
+}
+
+impl<K: Speaker> Remote<'_, K> {
+    /// The machine's next step, or the kernel's from where the machine
+    /// stopped.
+    fn next(&mut self) -> Result<Step, String> {
+        let why = loop {
+            match self.from_machine.recv() {
+                Ok(ToHost::Resolve(name)) => {
+                    let _ = self.to_machine.send(ToMachine::Resolved(Host(self.elab).protocol_abs(name)));
+                }
+                Ok(ToHost::Step(Ok(step))) => return Ok(step),
+                Ok(ToHost::Step(Err(why))) => break why,
+                Err(_) => break "the machine's thread ended".to_string(),
+            }
+        };
+        self.fallback(why)
+    }
+
+    /// The kernel's evaluator, brought to the machine's step by the answers
+    /// given so far. In `check`, where it already runs in step, the
+    /// machine's failure is the run's.
+    fn fallback(&mut self, why: String) -> Result<Step, String> {
+        if std::env::var_os("HEATHER_READ_TRACE").is_some() {
+            eprintln!("tactic run: left to the kernel's evaluator after {} answers ({why})", self.answers.len());
+        }
+        self.on_kernel = true;
+        if self.check {
+            return Err(format!("the untrusted evaluator stopped where the kernel's did not ({why})"));
+        }
+        let mut step = self.kernel.start();
+        for a in std::mem::take(&mut self.answers) {
+            step?;
+            step = self.kernel.resume(a);
+        }
+        step
+    }
+
+    /// The machine's step, compared with the kernel's in `check`.
+    fn checked(&mut self, machine: Result<Step, String>, kernel: impl FnOnce(&mut K) -> Result<Step, String>) -> Result<Step, String> {
+        if !self.check || self.on_kernel {
+            return machine;
+        }
+        let machine = machine?;
+        let kernel = kernel(&mut self.kernel)?;
+        if format!("{machine:?}") != format!("{kernel:?}") {
+            return Err(format!("the untrusted evaluator and the kernel's disagree on a step: {machine:?} against {kernel:?}"));
+        }
+        Ok(machine)
+    }
+}
+
+impl<K: Speaker> Speaker for Remote<'_, K> {
+    fn start(&mut self) -> Result<Step, String> {
+        let machine = self.next();
+        self.checked(machine, |k| k.start())
+    }
+
+    fn resume(&mut self, answer: Answer) -> Result<Step, String> {
+        if self.on_kernel {
+            return self.kernel.resume(answer);
+        }
+        if !self.check {
+            self.answers.push(answer.clone());
+        }
+        let machine = match self.to_machine.send(ToMachine::Answer(answer.clone())) {
+            Ok(()) => self.next(),
+            Err(_) => self.fallback("the machine's thread ended".into()),
+        };
+        self.checked(machine, |k| k.resume(answer))
     }
 }
 
@@ -1247,6 +1551,10 @@ struct Run {
     /// Each introduced local's scope and position there.
     opened: Vec<(usize, usize)>,
     holes: Vec<Hole>,
+    /// The substitutions over every hole, built once per state of the holes
+    /// ([`HoleSubsts`]); every change to `holes` goes through
+    /// [`Run::add_hole`] or [`Run::set_solution`], which drop them.
+    substs: RefCell<HoleSubsts>,
     /// Holes in the order they were solved; a mark is a length of it.
     trail: Vec<usize>,
     globals: Vec<GlobalKey>,
@@ -1275,6 +1583,22 @@ struct Run {
     /// The first surface term that failed to check, reported as itself if
     /// the run fails.
     surface_error: Option<crate::ElabError>,
+}
+
+/// [`Run::sigma`]'s three substitutions, each built the first time it is
+/// asked for after the holes last changed. `partial_ty` is asked for at
+/// every application node a reading meets, and the committed tests twice
+/// per declaration and request; each built its substitution afresh, a copy
+/// (and for `partial_ty` a shift) of every solved hole's solution, so a
+/// reading cost its nodes times the run's holes
+/// (issues/runtime-generator-link-cost.md, 2026-11-12 and 2026-11-18).
+#[derive(Default)]
+struct HoleSubsts {
+    /// Solutions shifted past the world, unsolved holes as their occurrences.
+    partial: Option<Rc<GlobalSubst>>,
+    /// Unsolved holes as `0`, and as `1`: the two markers of `committed_*`.
+    zero: Option<Rc<GlobalSubst>>,
+    one: Option<Rc<GlobalSubst>>,
 }
 
 /// A remembered reification: the world it was made in (its terms are
@@ -1379,6 +1703,7 @@ impl Run {
             lets: Vec::new(),
             opened: Vec::new(),
             holes: Vec::new(),
+            substs: RefCell::default(),
             trail: Vec::new(),
             globals: Vec::new(),
             splits: Vec::new(),
@@ -1634,22 +1959,53 @@ impl Run {
         GlobalSubst { entries }
     }
 
+    /// A new hole.
+    fn add_hole(&mut self, hole: Hole) {
+        self.holes.push(hole);
+        *self.substs.get_mut() = HoleSubsts::default();
+    }
+
+    /// Hole `j`'s solution, found or forgotten.
+    fn set_solution(&mut self, j: usize, sol: Option<Rc<Term>>) {
+        self.holes[j].sol = sol;
+        *self.substs.get_mut() = HoleSubsts::default();
+    }
+
+    /// The committed tests' two substitutions: unsolved holes as `0`, and
+    /// as `1`.
+    fn markers(&self) -> (Rc<GlobalSubst>, Rc<GlobalSubst>) {
+        let mut memo = self.substs.borrow_mut();
+        let zero = Rc::clone(memo.zero.get_or_insert_with(|| Rc::new(self.sigma(0, |_| Term::Zero))));
+        let one = Rc::clone(memo.one.get_or_insert_with(|| Rc::new(self.sigma(0, |_| Term::Succ(Rc::new(Term::Zero))))));
+        (zero, one)
+    }
+
+    /// `partial_*`'s substitution: solutions shifted past the world, the
+    /// unsolved holes kept as their occurrences.
+    fn partial_sigma(&self) -> Rc<GlobalSubst> {
+        let m = self.world() as u32;
+        let mut memo = self.substs.borrow_mut();
+        Rc::clone(memo.partial.get_or_insert_with(|| Rc::new(self.sigma(m, |j| self.occurrence(j)))))
+    }
+
     /// `t` in the committed world, if every hole it mentions is solved: the
     /// two-marker test of `unification::zonked`.
     fn committed_ty(&self, t: &Type) -> Option<Type> {
         if self.holes.is_empty() {
             return Some(t.clone());
         }
-        let a = t.apply_global(&self.sigma(0, |_| Term::Zero));
-        (a == t.apply_global(&self.sigma(0, |_| Term::Succ(Rc::new(Term::Zero))))).then_some(a)
+        let (zero, one) = self.markers();
+        let a = t.apply_global(&zero);
+        (a == t.apply_global(&one)).then_some(a)
     }
 
     fn committed_tm(&self, t: &Term) -> Option<Term> {
         if self.holes.is_empty() {
             return Some(t.clone());
         }
-        let a = t.apply_global(&self.sigma(0, |_| Term::Zero));
-        (a == t.apply_global(&self.sigma(0, |_| Term::Succ(Rc::new(Term::Zero))))).then_some(a)
+        let (zero, one) = self.markers();
+        let a = t.apply_global(&zero);
+        (a == t.apply_global(&one)).then_some(a)
     }
 
     /// Hole `j`'s occurrence at its home, in the current world.
@@ -1667,7 +2023,7 @@ impl Run {
         if m == 0 {
             return t.clone();
         }
-        t.shift_global_above(m, m).apply_global(&self.sigma(m, |j| self.occurrence(j)))
+        t.shift_global_above(m, m).apply_global(&self.partial_sigma())
     }
 
     fn partial_tm(&self, t: &Term) -> Term {
@@ -1675,7 +2031,7 @@ impl Run {
         if m == 0 {
             return t.clone();
         }
-        t.shift_global_above(m, m).apply_global(&self.sigma(m, |j| self.occurrence(j)))
+        t.shift_global_above(m, m).apply_global(&self.partial_sigma())
     }
 
     /// Scope `s`'s context in the committed world, if no unsolved hole is
@@ -1686,8 +2042,9 @@ impl Run {
             return Ok(scope.cx.clone());
         }
         let gamma = scope.cx.gamma.shift_global((self.world() - scope.world) as u32);
-        let a = gamma.apply_global(&self.sigma(0, |_| Term::Zero));
-        if a != gamma.apply_global(&self.sigma(0, |_| Term::Succ(Rc::new(Term::Zero)))) {
+        let (zero, one) = self.markers();
+        let a = gamma.apply_global(&zero);
+        if a != gamma.apply_global(&one) {
             return Err(Fault::Ill("a local's type mentions a hole nothing has solved".into()));
         }
         let mut cx = scope.cx.clone();
@@ -1702,7 +2059,7 @@ impl Run {
         }
         while self.trail.len() > mark {
             let j = self.trail.pop().expect("a solved hole");
-            self.holes[j].sol = None;
+            self.set_solution(j, None);
         }
     }
 }
@@ -1803,14 +2160,7 @@ impl Host<'_> {
         }
         let world = self.goal_psi();
         let (closed, quoted) = self.protocol_value(cx, &world, tactic, "host_tag", "by", span)?;
-        // One arena for the whole run, which keeps what it forces: each
-        // resumed tree is built from closures the earlier ones forced
-        // (`ValueArena::cache_tm`).
-        let arena = ValueArena::new();
-        let reader = Reader::new(&world, &arena);
-        let tree = reader.root(closed);
-        let mut speaker = Interpreted { elab: self, world: &world, reader, arena: &arena, tree, globals: Default::default() };
-        self.run_tactic(cx, &mut speaker, &shown, goal, lvl, quoted, span)
+        self.speak(&world, closed, |speaker| self.run_tactic(cx, speaker, &shown, goal, lvl, quoted, span))
     }
 
     /// `tactic::name`'s head and type in `world`.
@@ -2377,7 +2727,7 @@ impl Host<'_> {
         for (k, s) in sols.into_iter().enumerate() {
             let j = m - 1 - k;
             if let (Sol::Solved(t), None) = (s, &run.holes[j].sol) {
-                run.holes[j].sol = Some(t);
+                run.set_solution(j, Some(t));
                 run.trail.push(j);
             }
         }
@@ -3297,7 +3647,7 @@ impl Host<'_> {
         // past them once, not once per hole.
         let first = run.world();
         for _ in 0..n {
-            run.holes.push(Hole { home: at, sol: None });
+            run.add_hole(Hole { home: at, sol: None });
         }
         let k = n as u32;
         let mut term = r.term.shift_global(k);
@@ -3357,7 +3707,7 @@ impl Host<'_> {
             (s, Held::Type(t, l)) => (s, run.partial_ty(&t), l),
             (_, Held::Term(..)) => return Err(Fault::Ill(format!("handle {h} stands for a term, not a type"))),
         };
-        run.holes.push(Hole { home, sol: None });
+        run.add_hole(Hole { home, sol: None });
         let occurrence = run.occurrence(run.world() - 1);
         Ok(run.issue_in(home, run.world(), Held::Term(occurrence, ty.shift_global(1), level)))
     }
@@ -4009,7 +4359,7 @@ impl Host<'_> {
         } else if matches!(a, RExpr::Blank) {
             // An argument left to inference: a hole at the domain,
             // at this scope, which the rest of the `Expr` solves.
-            run.holes.push(Hole { home: at, sol: None });
+            run.add_hole(Hole { home: at, sol: None });
             let hole = run.occurrence(run.world() - 1);
             (f.term.shift_global(1), Rc::new(dom.shift_global(1)), Rc::new(cod.shift_global(1)), hole)
         } else {
@@ -4780,13 +5130,9 @@ impl Host<'_> {
             ));
         }
         let tree = Term::App { fun: Rc::new(head), dom_level, cod_level, dom, cod, arg: Rc::new(closed) };
-        let arena = ValueArena::new();
-        let reader = Reader::new(&world, &arena);
-        let tree = reader.root(tree);
-        let mut speaker = Interpreted { elab: self, world: &world, reader, arena: &arena, tree, globals: Default::default() };
         let mut run = Run::new(&cx, span, true);
         run.issue_quoted(quoted);
-        match self.drive(&mut run, &mut speaker) {
+        match self.speak(&world, tree, |speaker| self.drive(&mut run, speaker)) {
             Ok(Ended::Published(decls)) => {
                 let members = decls.iter().map(|d| self.member(&mut run, d)).collect::<Result<Vec<_>, String>>();
                 members.map(|m| (m, world.bindings.len())).or_else(fail)

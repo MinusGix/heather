@@ -97,18 +97,52 @@ the whole chain of stages before it. Its fallback is therefore for the rare
 stuck read, and a compile whose reads are mostly stuck is slower than it was
 with literals; `HEATHER_READ_TRACE=1` shows each one and why.
 
-## 4. What it does not change
+## 4. Tactic and generator runs
+
+A `by` tactic and a `generate`'s generator are `Tac` trees the host reads
+one request at a time (docs/metaprogramming/host-elaboration-interface-design.md):
+it calls the protocol's `host_*` functions on the tree to read the request,
+answers it, and calls `host_resume` with the answer. Those calls are
+untrusted in the same way as a read: whatever a tree asks, the host grants or
+refuses, and whatever it ends with is elaborated and kernel-checked. So a run
+reads its tree on this machine (`host.rs`, `Host::speak`).
+
+- **One reading, two evaluators.** The protocol's reading is written once
+  over a small trait (`Values`: call a `host_*` function, make a numeral, read
+  one); `KernelValues` is the kernel's value domain and `MachineValues` this
+  machine.
+- **Its own thread.** The machine runs on a thread of its own stack
+  (`with_machine`), and the elaborator stays on its thread, so the two speak
+  over channels: the machine sends each step, and asks for a protocol
+  function's position by name the first time it calls it; the host sends
+  answers.
+- **The kernel behind it.** Each step may spend a bounded number of machine
+  steps. Where the machine fails (a form it does not run, that bound, its
+  nesting bound), the kernel's evaluator is started on the same tree and
+  handed every answer given so far, which brings it to the same step, and
+  the run continues there. A failure costs the run again on the kernel's
+  evaluator, never a different outcome. `HEATHER_READ_TRACE=1` reports each
+  such hand-over.
+- `HEATHER_READS=kernel` runs trees on the kernel's evaluator only, and
+  `HEATHER_READS=check` runs both in step and refuses a run whose steps
+  differ, as for reads.
+
+What it bought: the generator's own evaluation was most of the kernel steps a
+`runtime fn` declaration took (about two thirds of `Sha256::rounds`'s); what
+is left is the gate's and the host's own work, which is then most of such a
+declaration's time (issues/runtime-generator-link-cost.md).
+
+## 5. What it does not change
 
 No checked statement depends on this crate. The kernel still evaluates
-everything in a certificate, every `refl`, every tactic's proof term. If the
-machine were wrong, an optimizer would propose a plan the replayer refuses,
-or a certificate would state bytes the kernel rejects: a failed compile, and
-never a wrong accepted one.
+everything in a certificate, every `refl`, every tactic's proof term (a
+tactic's run only proposes it). If the machine were wrong, an optimizer
+would propose a plan the replayer refuses, a certificate would state bytes
+the kernel rejects, or a tactic would propose a proof the kernel refuses: a
+failed check, and never a wrong accepted one.
 
-## 5. Left
+## 6. Left
 
-- Tactics and generators run on the kernel's evaluator and are untrusted in
-  the same way; they read richer values than lists of numbers.
 - The machine is a tree walker over linked environments. Resolved variable
   slots, unboxed numbers in environments and a flat code array are the usual
   next steps if its own speed starts to matter.
