@@ -179,7 +179,7 @@ bridge.
 `≠`, either side a word's number or a numeral, and `Nat::leb` and
 `Nat::same` of them as Booleans, read as a comparison of the two words'
 numbers in a circuit wide enough for both (`PNatLe`, `PNatLt`, `PNatEq`,
-bridged by `layout_nat_*`). `Succ(n)` and `ofNat` at either arity are
+bridged by `layout_nat_*`). `Succ(n)`, `n + 1` and `ofNat` at either arity are
 read.
 
 **Negations** come in both spellings a proof meets: `¬(a < b)` and

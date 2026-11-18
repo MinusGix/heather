@@ -82,7 +82,7 @@ record BVOps {
     shl: Nat, shr: Nat, of_nat: Nat, zext: Nat, trunc: Nat, sext: Nat, concat: Nat,
     eq_bit: Nat, ult: Nat, slt: Nat, bit_at: Nat, and: Nat, or: Nat, not: Nat, iff: Nat, bool: Nat,
     take: Nat, drop: Nat, head: Nat, xor: Nat, lt: Nat, le: Nat, not_p: Nat,
-    nat: Nat, to_nat: Nat, leb: Nat, same: Nat, succ: Nat, nat_le: Nat, nat_lt: Nat, false_ty: Nat,
+    nat: Nat, to_nat: Nat, leb: Nat, same: Nat, succ: Nat, nat_le: Nat, nat_lt: Nat, false_ty: Nat, nat_add: Nat,
 }
 
 fn bv_ref(name: String) → Tac<Nat> {
@@ -131,8 +131,9 @@ fn bv_ops() → Tac<BVOps> {
     let nat_le <- bv_ref("nat::Nat::Le");
     let nat_lt <- bv_ref("nat::Nat::Lt");
     let false_ty <- bv_ref("False");
+    let nat_add <- bv_ref("nat::Nat::add");
     pure(BVOps(word, add, sub, mul, neg, band, bor, bxor, compl, shl, shr, of_nat, zext, trunc, sext, concat, eq_bit, ult, slt, bit_at, and, or, not, iff, bool,
-        take, drop, head, xor, lt, le, not_p, nat, to_nat, leb, same, succ, nat_le, nat_lt, false_ty))
+        take, drop, head, xor, lt, le, not_p, nat, to_nat, leb, same, succ, nat_le, nat_lt, false_ty, nat_add))
 }
 
 // ---------------------------------------------------------------------------
@@ -399,15 +400,28 @@ fn bv_nat_compare(ops: BVOps, rec: Handle → BVWant → BVAtoms → Tac<BVRead>
     pure(BVRead(OBool(k(ra.w, ra.e, rb.w, rb.e)), rb.st))
 }
 
-// `a.leb(b)`, or `Succ(a).leb(b)`: `a <= b`, or `a < b`.
-fn bv_nat_leb(ops: BVOps, rec: Handle → BVWant → BVAtoms → Tac<BVRead>, a, b: Handle, st: BVAtoms) → Tac<BVRead> {
+// `x` when a natural is `Succ(x)` or `x + 1`, which is `Succ(x)` by
+// computation.
+fn bv_pred_of(ops: BVOps, a: Handle) → Tac<Option<Handle>> {
     let va <- view(a);
     match va {
-        HGlobal(s, _, sargs) => match s.id.same(ops.succ) && sargs.len().same(1) {
-            True => bv_nat_compare(ops, rec, bv_arg(sargs, 0), b, st, λ m x n y => PNatLt(m, x, n, y)),
-            False => bv_nat_compare(ops, rec, a, b, st, λ m x n y => PNatLe(m, x, n, y)),
-        },
-        _ => bv_nat_compare(ops, rec, a, b, st, λ m x n y => PNatLe(m, x, n, y)),
+        HGlobal(s, _, sargs) =>
+            if s.id.same(ops.succ) && sargs.len().same(1) { pure(Some(bv_arg(sargs, 0))) }
+            else if s.id.same(ops.nat_add) && sargs.len().same(2) {
+                let one <- view(bv_arg(sargs, 1));
+                match one { HLit(k) => pure(if k.same(1) { Some(bv_arg(sargs, 0)) } else { None }), _ => pure(None) }
+            }
+            else { pure(None) },
+        _ => pure(None),
+    }
+}
+
+// `a.leb(b)`, or `Succ(a).leb(b)` (or `(a + 1).leb(b)`): `a <= b`, or `a < b`.
+fn bv_nat_leb(ops: BVOps, rec: Handle → BVWant → BVAtoms → Tac<BVRead>, a, b: Handle, st: BVAtoms) → Tac<BVRead> {
+    let p <- bv_pred_of(ops, a);
+    match p {
+        Some(x) => bv_nat_compare(ops, rec, x, b, st, λ m x n y => PNatLt(m, x, n, y)),
+        None => bv_nat_compare(ops, rec, a, b, st, λ m x n y => PNatLe(m, x, n, y)),
     }
 }
 
