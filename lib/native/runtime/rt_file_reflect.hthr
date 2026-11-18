@@ -699,6 +699,41 @@ fn rt_file_ends<A>() → Tac<A> {
     rt_refuse("a function over a span ends in `Mutated(span, value)`, in a `match` on a `Bool` whose arms do, or (where it `decreases`) in its own call")
 }
 
+// The words a value list holds, its proofs (squashed conditions) left out.
+fn rt_file_words(hs: List<Handle>) → Tac<List<Handle>> {
+    match hs {
+        Nil => pure([]),
+        Cons(h, rest) => infer(Hd(h)).bind(λ c => rt_file_words(rest).bind(λ more => match c {
+            Refused(_) => pure(Cons(h, more)),
+            Accepted(t) => view(t).bind(λ v => pure(match v { HOther => more, _ => Cons(h, more) })),
+        })),
+    }
+}
+
+// A loop's own call as the span, its length word and the words: a function
+// of a `Bytes(n)` calls itself on `n`, the record and its words and proofs.
+fn rt_file_again(names: FileNames, args: List<Handle>) → Tac<List<Handle>> {
+    match names.bytes {
+        None => pure(args),
+        Some(bt) => match args {
+            Nil => pure(args),
+            Cons(n, more) => match more {
+                Nil => pure(args),
+                Cons(s, rest) => infer(Hd(s)).bind(λ c => match c {
+                    Refused(_) => pure(args),
+                    Accepted(t) => view(t).bind(λ v => match v {
+                        HGlobal(g, _, _) => match g.id.same(bt) {
+                            True => rt_file_words(rest).bind(λ ws => pure(Cons(s, Cons(n, ws)))),
+                            False => pure(args),
+                        },
+                        _ => pure(args),
+                    }),
+                }),
+            },
+        },
+    }
+}
+
 // A body in tail position. `ih` is the local a measured step calls itself
 // through and `arity` the words that call passes, the span and its length
 // word first.
@@ -737,7 +772,7 @@ fn rt_file_tail(fuel: Nat, k: Known, names: FileNames, ih: Option<Nat>, arity: N
             },
             HLocal(x, args) => match ih.map(λ i => i.same(x.id)).unwrap_or(False) {
                 False => rt_file_ends(),
-                True => match args.take(arity) {
+                True => rt_file_again(names, args.take(arity)).bind(λ again => match again {
                     Cons(after, Cons(length, rest)) => {
                         let w1 <- rt_file_upto(f, k, names, w, after, rest);
                         let kk = k.at_file(w1.fk);
@@ -753,7 +788,7 @@ fn rt_file_tail(fuel: Nat, k: Known, names: FileNames, ih: Option<Nat>, arity: N
                         }
                     },
                     _ => rt_refuse("a loop's own call without its span and length word"),
-                },
+                }),
             },
             _ => rt_file_ends(),
         }),
@@ -792,26 +827,37 @@ fn rt_file_span(locals: List<Pair<Nat, Nat>>) → Tac<Nat> {
 
 // `rt_params`, past a parameter that is a proof (a squashed condition,
 // `inside: ∥i < s.len()∥`): it is bound to no variable, and a use of it
-// outside a proof is refused where the walk meets it.
-fn rt_params_proved(fuel: Nat, k: Known, st: RSt, tys: List<Ty>, b: Handle) → Tac<Pair<Pair<RSt, List<Ty>>, Handle>> {
+// outside a proof is refused where the walk meets it. With a count, that
+// many parameters and no more.
+fn rt_params_proved(fuel: Nat, count: Option<Nat>, k: Known, st: RSt, tys: List<Ty>, b: Handle) → Tac<Pair<Pair<RSt, List<Ty>>, Handle>> {
     match fuel {
         Zero => rt_refuse("more parameters than the reflector's fuel"),
-        Succ(f) => view(b).bind(λ v => match v {
-            HLam(dom) => view(dom).bind(λ dv => open(b, "x").bind(λ c => rt_accepted("a parameter", c)).bind(λ o => match dv {
-                HOther => rt_params_proved(f, k, st, tys, o.body),
-                _ => k.ty(dom).bind(λ t => rt_params_proved(f, k,
-                    RSt(Succ(st.depth), st.lets, st.memo, st.handles, Cons(Pair(o.local.ref.id, st.depth), st.locals), st.funs), tys ++ [t], o.body)),
-            })),
-            _ => pure(Pair(Pair(st, tys), b)),
-        }),
+        Succ(f) => match count.map(λ c => c.same(0)).unwrap_or(False) {
+            True => pure(Pair(Pair(st, tys), b)),
+            False => view(b).bind(λ v => match v {
+                HLam(dom) => view(dom).bind(λ dv => open(b, "x").bind(λ c => rt_accepted("a parameter", c)).bind(λ o => match dv {
+                    HOther => rt_params_proved(f, count.map(λ c => c.pred()), k, st, tys, o.body),
+                    _ => k.ty(dom).bind(λ t => rt_params_proved(f, count.map(λ c => c.pred()), k,
+                        RSt(Succ(st.depth), st.lets, st.memo, st.handles, Cons(Pair(o.local.ref.id, st.depth), st.locals), st.funs), tys ++ [t], o.body)),
+                })),
+                _ => match count {
+                    None => pure(Pair(Pair(st, tys), b)),
+                    Some(_) => rt_refuse("a step with fewer parameters than its function"),
+                },
+            }),
+        },
     }
 }
 
-// A function's parameters, as `rt_params` reads them; a function of a
-// `Bytes(n)`, `λ n s x…`, is read as one of a span and its length word:
-// `s` is the span, at level 0, and `n` its length word, at level 1.
-fn rt_file_params(fuel: Nat, k: Known, names: FileNames, b: Handle) → Tac<Pair<Pair<RSt, List<Ty>>, Handle>> {
-    let plain = rt_params(fuel, k, RSt(0, [], [], [], [], k.funs), [], b);
+// A function's parameters, as `rt_params` reads them (with a count, as
+// `rt_params_n` does); a function of a `Bytes(n)`, `λ n s x…`, is read as
+// one of a span and its length word: `s` is the span, at level 0, and `n`
+// its length word, at level 1.
+fn rt_file_params(fuel: Nat, count: Option<Nat>, k: Known, names: FileNames, b: Handle) → Tac<Pair<Pair<RSt, List<Ty>>, Handle>> {
+    let plain = match count {
+        None => rt_params(fuel, k, RSt(0, [], [], [], [], k.funs), [], b),
+        Some(c) => rt_params_n(c, k, RSt(0, [], [], [], [], k.funs), [], b),
+    };
     match names.bytes {
         None => plain,
         Some(bt) => view(b).bind(λ v => match v {
@@ -819,7 +865,8 @@ fn rt_file_params(fuel: Nat, k: Known, names: FileNames, b: Handle) → Tac<Pair
                 HLam(dom) => view(dom).bind(λ dv => match dv {
                     HGlobal(g, _, _) => match g.id.same(bt) {
                         True => open(o1.body, "s").bind(λ c => rt_accepted("a parameter", c)).bind(λ o2 =>
-                            rt_params_proved(fuel, k, RSt(2, [], [], [], [Pair(o2.local.ref.id, 0), Pair(o1.local.ref.id, 1)], k.funs), [ByteList(0), Word(64)], o2.body)),
+                            rt_params_proved(fuel, count.map(λ c => c - 2), k, RSt(2, [], [], [], [Pair(o2.local.ref.id, 0), Pair(o1.local.ref.id, 1)], k.funs),
+                                [ByteList(0), Word(64)], o2.body)),
                         False => plain,
                     },
                     _ => plain,
@@ -851,7 +898,7 @@ fn rt_file_reflect_plain(fuel: Nat, k: Known, names: FileNames, cfuns: List<Nat>
     let t <- infer(Global(GlobalRef(g))).bind(λ c => rt_accepted("its type", c));
     let result <- rt_file_result(fuel, k, names, t);
     let b <- body(GlobalRef(g)).bind(λ c => rt_accepted("its body", c));
-    let p <- rt_file_params(fuel, k, names, b);
+    let p <- rt_file_params(fuel, None, k, names, b);
     let codes <- rt_file_codes(p.fst.snd);
     let span <- rt_file_span(p.fst.fst.locals);
     let r <- rt_file_tail(fuel, k.lending(codes.fst), names, None, 0, FWalk(p.fst.fst, [], FileKnown::start(span, []), 0, cfuns), p.snd);
@@ -868,7 +915,7 @@ fn rt_file_reflect_measured(fuel: Nat, k: Known, names: FileNames, cfuns: List<N
     let b <- body(GlobalRef(step)).bind(λ c => rt_accepted("its step's body", c));
     let o1 <- open(b, "k").bind(λ c => rt_accepted("its step's bound", c));
     let o2 <- open(o1.body, "g").bind(λ c => rt_accepted("its step's recursion", c));
-    let p <- rt_params_n(n, k, RSt(0, [], [], [], [], k.funs), [], o2.body);
+    let p <- rt_file_params(fuel, Some(n), k, names, o2.body);
     let codes <- rt_file_codes(p.fst.snd);
     let span <- rt_file_span(p.fst.fst.locals);
     let o3 <- open(p.snd, "h").bind(λ c => rt_accepted("its step's measure proof", c));
