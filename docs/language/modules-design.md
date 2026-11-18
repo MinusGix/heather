@@ -285,7 +285,12 @@ and the constructor, and it races neither: a function shares a module's
 lower-case spelling, so where a visible module `f` declares `pos` and a
 visible member `f::pos` exists too, `f::pos` is **ambiguous** and
 `m::f::pos` names the member. A function named like a module its own file
-sees is refused as an owner at the declaration.
+sees is refused as an owner at the declaration. A `record` may be a type's
+member too (`record Target::Held(self t: Target, …)`, 2026-11-18,
+`issues/record-in-type-namespace.md`, `docs/language/surface-records.md`
+§1.3): its type former and its constructor are both the whole string, so
+`Target::Held` resolves as any member does and `t.Held(…)` reaches it
+through the receiver.
 
 Constructors and record fields ride the same rule: a constructor name is
 ambiguous only if two visible inductives declare it, and then either

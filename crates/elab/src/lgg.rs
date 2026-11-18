@@ -291,7 +291,7 @@ fn former_tm(t: &Term) -> &'static str {
         Term::Sup { .. } | Term::Supf { .. } => "constructor value",
         Term::ElimW { .. } | Term::ElimWf { .. } => "recursor",
         Term::ElimNat { .. } => "Nat eliminator",
-        Term::ElimEmpty { .. } | Term::ElimSEmpty { .. } => "absurd",
+        Term::ElimEmpty { .. } | Term::ElimSEmpty { .. } | Term::UnsquashEmpty { .. } => "absurd",
         Term::ElimSquash { .. } => "squash eliminator",
         Term::Triv { .. } => "trivial",
         Term::Refl { .. } | Term::SRefl { .. } => "refl",

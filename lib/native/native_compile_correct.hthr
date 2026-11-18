@@ -77,35 +77,12 @@ theorem Prog::within_exits(self p: Prog, layout: Layout, known: List<Fact>, stat
     }
 }
 
-// The calls' code from its start: a builder's code is added after the
+// An argument's code from its start: a builder's code is added after the
 // program it is put onto (`Fragment::extends`).
-theorem Prog::within_reads(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, buf, at, len, result, capacity, names: Nat):
-    p.Within(p.reads(layout, known, out, fd, buf, at, len, result, capacity, names).prog) {
-    let cx = Emission(layout, known, out);
-    cx.from(names).read(fd, buf, at, len, result, capacity).cut().code.extends(cx, p)
-}
-
-theorem Prog::within_writes(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, buf, from, len, result, capacity, names: Nat):
-    p.Within(p.writes(layout, known, out, fd, buf, from, len, result, capacity, names).prog) {
-    let cx = Emission(layout, known, out);
-    cx.from(names).write(fd, buf, from, len, result, capacity).cut().code.extends(cx, p)
-}
-
 theorem Prog::within_args(self p: Prog, layout: Layout, out: List<Nat>, index, buf, len, capacity, names: Nat):
     p.Within(p.args(layout, out, index, buf, len, capacity, names).prog) {
     let cx = Emission(layout, [], out);
     cx.from(names).arg(index, buf, len, capacity).cut().code.extends(cx, p)
-}
-
-theorem Prog::within_opens(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, path, len, result, capacity, names: Nat):
-    p.Within(p.opens(layout, known, out, path, len, result, capacity, names).prog) {
-    let cx = Emission(layout, known, out);
-    cx.from(names).open(path, len, result, capacity).cut().code.extends(cx, p)
-}
-
-theorem Prog::within_closes(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, result: Nat): p.Within(p.closes(layout, known, out, fd, result)) {
-    let cx = Emission(layout, known, out);
-    cx.from(0).close(fd, result).cut().code.extends(cx, p)
 }
 
 // What a statement compiles to starts where it was given its start.
@@ -123,25 +100,9 @@ theorem Stmt::emits_extends(self s: Stmt, layout: Layout): (p: Prog) → (out: L
             Dataflow(body) => λ p out known names c emitted => p.within_computes_best(layout, out, body.nodes, names, c, emitted),
             _ => λ p out known names c emitted => region.region_extends(layout, p, out, names, c, emitted),
         },
-        Invoke(shape) => λ p out known names c => match shape {
-            Reads(fd, buf, at, len, result) => λ emitted => {
-                cases emitted as fit, found(capacity);
-                p.within_reads(layout, known, out, fd, buf, at, len, result, capacity, names)
-            },
-            Writes(fd, buf, from, len, result) => λ emitted => {
-                cases emitted as fit, found(capacity);
-                p.within_writes(layout, known, out, fd, buf, from, len, result, capacity, names)
-            },
-            Opens(path, len, result) => λ emitted => {
-                cases emitted as fit, found(capacity);
-                p.within_opens(layout, known, out, path, len, result, capacity, names)
-            },
-            Closes(fd, result) => λ emitted => {
-                cases emitted;
-                p.within_closes(layout, known, out, fd, result)
-            },
-            StatsPath(_, _, _, _) => λ none => absurd(none),
-            StatsFd(_, _, _) => λ none => absurd(none),
+        Invoke(shape) => λ p out known names c emitted => {
+            cases emitted as fit, found(capacity);
+            p.within_asks(Emission(layout, known, out), shape, capacity, names)
         },
         Then(first, rest) => λ p out known names c emitted => {
             let carried = first.carried(rest, layout.homes, out);
@@ -491,46 +452,26 @@ theorem Target::then_pair(self t: Target, body: Region, rest: Stmt, call: Writer
     }
 }
 
+// Each call the compiler emits runs as its claim says.
+theorem Target::goes_asks(self t: Target, shape: CallShape, capacity: Nat, found: t.layout().call_room(shape) = Some(capacity)): t.CallRuns(shape, capacity) {
+    match shape {
+        Reads(fd, buf, at, len, result) => t.goes_reads(fd, buf, at, len, result, capacity),
+        Writes(fd, buf, from, len, result) => t.goes_writes(fd, buf, from, len, result, capacity),
+        Opens(path, len, result) => t.goes_opens(path, len, result, capacity),
+        Closes(fd, result) => j(Option::some_inj(0, capacity, found), λ room _ => t.CallRuns(Closes(fd, result), room), t.goes_closes(fd, result)),
+        StatsPath(_, _, _, _) => absurd(found),
+        StatsFd(_, _, _) => absurd(found),
+    }
+}
+
 // A system call's code runs as the call's tree, from what `Prog::call`
 // emitted for it.
 theorem Target::call_runs(self t: Target, shape: CallShape, call: Writers(), perform: Performs(), p: Prog, out: List<Nat>, facts: List<Fact>, names: Nat, c: Compiled,
     emitted: p.call(t.layout(), facts, out, shape, names) = Some(c)):
     c.prog.Within(t.program) → t.homes.apart(shape.result(), out).IsTrue() → t.RunsK(Invoke(shape), facts, call, perform, out, p, c.prog) {
-    let layout = t.layout();
-    match shape {
-        Reads(fd, buf, at, len, result) => {
-            cases emitted as fit, found(capacity);
-            λ within apart n env k knows exits next => t.goes_reads(out, env, p, facts, knows, fd, buf, at, len, result, capacity, names,
-                layout.word_inside(fd, known), layout.word_inside(at, known), layout.word_inside(len, known),
-                layout.word_inside(result, known), found, apart, within,
-                λ a => k(Onward(Reads(fd, buf, at, len, result).answer(env, a))),
-                λ a answers => next(Reads(fd, buf, at, len, result).answer(env, a)))
-        },
-        Writes(fd, buf, from, len, result) => {
-            cases emitted as fit, found(capacity);
-            λ within apart n env k knows exits next => t.goes_writes(out, env, p, facts, knows, fd, buf, from, len, result, capacity, names,
-                layout.word_inside(fd, known), layout.word_inside(from, known), layout.word_inside(len, known),
-                layout.word_inside(result, known), found, apart, within,
-                λ a => k(Onward(Writes(fd, buf, from, len, result).answer(env, a))),
-                λ a answers => next(Writes(fd, buf, from, len, result).answer(env, a)))
-        },
-        Opens(path, len, result) => {
-            cases emitted as fit, found(capacity);
-            λ within apart n env k knows exits next => t.goes_opens(out, env, p, facts, knows, path, len, result, capacity, names,
-                layout.word_inside(len, known), layout.word_inside(result, known), found, apart, within,
-                λ a => k(Onward(Opens(path, len, result).answer(env, a))),
-                λ a answers => next(Opens(path, len, result).answer(env, a)))
-        },
-        Closes(fd, result) => {
-            cases emitted;
-            λ within apart n env k knows exits next => t.goes_closes(out, env, p, facts, knows, fd, result, layout.word_inside(fd, known), layout.word_inside(result, known),
-                apart, within,
-                λ a => k(Onward(Closes(fd, result).answer(env, a))),
-                λ a answers => next(Closes(fd, result).answer(env, a)))
-        },
-        StatsPath(_, _, _, _) => absurd(emitted),
-        StatsFd(_, _, _) => absurd(emitted),
-    }
+    cases emitted as fit, found(capacity);
+    λ within apart n env k knows exits next => t.goes_asks(shape, capacity, found)(out, env, p, facts, knows, names, Bool::is_true_of_eq(fit), found, apart, within,
+        λ a => k(Onward(shape.answer(env, a))), λ a answers => next(shape.answer(env, a)))
 }
 
 theorem Stmt::emits_runs(self s: Stmt, t: Target, call: Writers(), perform: Performs(), calls: t.Calls(call, perform), fns: t.Functions(call)):

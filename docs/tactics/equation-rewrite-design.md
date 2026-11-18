@@ -180,6 +180,16 @@ Refused: a left side that is itself one of the arguments (it would match
 every subterm), and an argument only the right side mentions (nothing in the
 goal determines it — the error names it and asks for it explicitly).
 
+**A premise matching leaves open is a hypothesis** (2026-11-18). A proof
+argument neither side mentions — a side condition such as
+`ascii(b, r, t: word(b) < 0x80): is_utf8(Cons(b, r)) = …` — is looked up
+among the locals once the instance is fixed, innermost first, up to
+conversion at its instantiated type (`Rewrites::hypothesis_of`, the lookup
+`simp_only`'s default discharger makes). In an `induct` arm whose tests are
+hypotheses, `rewrite(ascii, …)` then needs no arguments at all
+(`examples/utf8/utf8_check.hthr`). A premise no hypothesis meets is still
+refused, naming it.
+
 **A law about a class's operation** (`issues/rewrite-class-law-instantiation.md`,
 2026-10-28). A theorem stated in a class's section takes the section's
 operations and dictionary as arguments, so `Semiring::mul_range_l`'s left

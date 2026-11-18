@@ -67,6 +67,8 @@ structure Unit : Type u where
 abbrev tt : Unit.{u} := ⟨⟩
 inductive Empty : Type u
 abbrev elimEmpty (M : Empty.{v} → Type u) (e : Empty.{v}) : M e := @Empty.rec M e
+abbrev unsquashEmpty (s : Squash Empty.{u}) : Empty.{u} :=
+  False.elim (s.pf.elim (fun e => nomatch e))
 
 inductive Sum (A : Type u) (B : Type v) : Type (max u v)
   | inl : A → Sum A B

@@ -630,7 +630,7 @@ anywhere in these: apartness is the lender's `apart` law at offset indices.
   pays when a statement holds a home as a word. V4 makes that true of a
   function; of a statement it is V5c. Built before it, the bridge is
   written for the layout's literal addresses and is longer than the two
-  proofs it replaces (`goes_byte_to`, `goes_byte_from`). Not built:
+  proofs it replaces (`Target::byte_before`, `Target::put_byte_before`). Not built:
   `issues/statement-byte-nodes-on-shared-leaf.md`.
 
 ## 4. The theorem

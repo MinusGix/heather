@@ -638,6 +638,32 @@ pub(crate) struct Memos {
     /// spines in scope, which can bring another dictionary for the same
     /// carrier. Nothing here is semantic.
     pub(crate) scope_memo: RefCell<Vec<ScopeMemo>>,
+    /// What the collection-literal protocol answered for a container and a
+    /// length in a scope ([`Inference::check_collection_literal`](crate::inference::Inference::check_collection_literal)):
+    /// a term of nested `[…]` asks the same few questions at every one.
+    /// Keyed as [`Memos::scope_memo`] is, and by the length. Nothing here is
+    /// semantic.
+    pub(crate) collection_memo: RefCell<Vec<CollectionMemo>>,
+}
+
+/// One [`Memos::collection_memo`] entry: the dictionary's two fields read
+/// and reduced, and for the empty literal the value itself.
+#[derive(Clone)]
+pub(crate) struct CollectionMemo {
+    pub(crate) psi: u32,
+    pub(crate) pad: u32,
+    pub(crate) gamma: LocalCtx,
+    pub(crate) aliases: crate::spine::Spine<Rc<Alias>>,
+    pub(crate) dicts: crate::spine::Spine<Rc<crate::context::DictBinder>>,
+    pub(crate) carrier: Type,
+    pub(crate) carrier_level: Level,
+    pub(crate) len: usize,
+    pub(crate) element: Term,
+    pub(crate) element_level: Level,
+    pub(crate) from: Term,
+    pub(crate) cod: Rc<Type>,
+    pub(crate) cod_level: Level,
+    pub(crate) empty: Option<Term>,
 }
 
 /// One [`Memos::scope_memo`] entry.
@@ -671,8 +697,11 @@ impl Memos {
             // Keyed by the Ψ length, but a rollback can rebuild Ψ to the
             // same length with other declarations.
             scope_memo,
+            // As `scope_memo`.
+            collection_memo,
         } = self;
         scope_memo.borrow_mut().clear();
+        collection_memo.borrow_mut().clear();
         result_only_memo.borrow_mut().clear();
         named_type_memo.borrow_mut().clear();
         type_names.borrow_mut().clear();

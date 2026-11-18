@@ -33,6 +33,7 @@ import native_compile_segments;
 import native_compile_steps;
 import native_compile_frames;
 import native_compile_structured;
+import native_compile_claims;
 import function_ir_eval;
 import function_ir;
 import function_ir_lend;
@@ -83,15 +84,6 @@ fn Target::callee(self t: Target, p: Nat, homed: t.bodies.frame(p).homes(t.homes
     Target(t.r, t.reserved, t.bodies.frame(p).words, t.caps, t.bodies.frame(p).homes(t.homes.places, t.homes.rooms), homed, t.fits, t.program, t.origin, t.laid, t.args,
         t.procedures, t.functions, t.stack, t.stack_writes, t.stack_above, t.stack_canonical, t.bodies, t.procedures.performed_by(p), t.procedures.called_by(p),
         t.checks, t.ranks, t.ranks.deep_at(p), index, frames, pinned, room, t.floor, framed, roomy, ranked)
-}
-
-// Its layout is the procedure's.
-theorem Target::callee_layout(self t: Target, p: Nat, homed: t.bodies.frame(p).homes(t.homes.places, t.homes.rooms).fits().IsTrue(), index: Nat, frames: List<BitVec(64)>,
-    pinned: List<BitVec(64)>, room: Nat, framed: index + 8 * (t.bodies.frame(p).words + frames.len()) <= t.stack.size,
-    roomy: t.floor + t.procedures.performed_by(p).below(t.procedures.called_by(p), t.procedures, t.bodies, t.homes.places, t.homes.room_table(t.functions), t.checks, room) + 8 <= index,
-    ranked: t.ranks.deep_at(p) <= room):
-    t.callee(p, homed, index, frames, pinned, room, framed, roomy, ranked).layout() = t.layout().body(p) {
-    refl
 }
 
 // The frames and the slots, read off the claim.
@@ -313,77 +305,6 @@ theorem Target::goes_words_to(self t: Target, live: List<Nat>, env: Env, tree: I
     }
 }
 
-// A CALL to label `Succ(n)` lands where that label's item starts.
-theorem Prog::lands_call(self p: Prog, laid: p.laid_out().IsTrue(), k: Nat, before: Prog, name: Nat, n: Nat,
-    at: asm_back(p, k) = At(before, name, CallTo(Succ(n))), label_k: Nat, label: Prog, item: Asm,
-    label_at: asm_back(p, label_k) = At(label, Succ(n), item)):
-    NearLands(prog_len(before), asm_jump_of(asm_labels(p), prog_len(before), CallTo(Succ(n))), prog_len(label)) {
-    let lands = call_lands(asm_labels(p), k, p, before, name, Succ(n), p.laid_out_lands(laid), at);
-    j(label_target(label_k, p, label, n, item, p.laid_out_unique(laid), label_at),
-        λ to _ => NearLands(prog_len(before), asm_jump_of(asm_labels(p), prog_len(before), CallTo(Succ(n))), to), lands)
-}
-
-// ---------------------------------------------------------------------------
-// Words sharing a home
-
-// Two live words in one register hold one number.
-theorem Target::held_shared(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
-    x, y: Nat, mx: Mem(x, live), my: Mem(y, live), k: Nat, at_x: t.homes.home(x) = InReg(k), at_y: t.homes.home(y) = InReg(k)): env.number(x) = env.number(y) {
-    let words = held.words;
-    let values = home_values(g);
-    let read: ((i: Nat) → Mem(i, live) → t.homes.home(i) = InReg(k) → (values.get_or(k, BitVec::zero()).toNat() = env.number(i))) = λ i mi at =>
-        j(at, λ h _ => (match h { InSlot(sk) => words.get_or(sk, 0), InReg(r) => values.get_or(r, BitVec::zero()).toNat() }) = env.number(i), held.agreeing.homes(i, mi));
-    trans(sym(read(x, mx, at_x)), read(y, my, at_y))
-}
-
-// Into its register, where every other word of `out` in that register holds
-// the same number.
-theorem Target::held_reg_shared(self t: Target, live, out: List<Nat>, env: Env, id: Nat, w: BitVec(64), g: Gprs, m: X86Memory(t.r.profile),
-    held: t.Held(live, env, g, m), sub: (i: Nat) → Mem(i, out) → i ≠ id → Mem(i, live), k: Nat, at: t.homes.home(id) = InReg(k),
-    shared: (i: Nat) → Mem(i, out) → i ≠ id → t.homes.home(i) = InReg(k) → env.number(i) = w.toNat()):
-    t.Held(out, env.set_word(id, w), write_gpr(home_register(k), w, g), m) {
-    let words = held.words;
-    let inside = t.homes.in_pool(t.homed, id, k, at);
-    let values = home_values(g).put(k, w, BitVec::zero());
-    let written: (home_values(write_gpr(home_register(k), w, g)) = values) = home_values_write(w, g, k, inside);
-    let before: ((i: Nat) → Mem(i, out) → i ≠ id → (h: Home) → t.homes.home(i) = h →
-        ((match h { InSlot(sk) => words.get_or(sk, 0), InReg(r) => home_values(g).get_or(r, BitVec::zero()).toNat() }) = env.number(i))) =
-        λ i m2 ne h at_i => j(at_i, λ x _ => (match x { InSlot(sk) => words.get_or(sk, 0), InReg(r) => home_values(g).get_or(r, BitVec::zero()).toNat() }) = env.number(i),
-            held.agreeing.homes(i, sub(i, m2, ne)));
-    let agrees: t.homes.Agrees(out, env.set_word(id, w), words, values) = λ i m2 => match i.eq_dec(id) {
-        Inl(e) => j(sym(e), λ x _ => t.homes.number(x, words, values) = env.set_word(id, w).number(x),
-            j(sym(at), λ h _ => (match h { InSlot(sk) => words.get_or(sk, 0), InReg(r) => values.get_or(r, BitVec::zero()).toNat() }) =
-                env.set_word(id, w).number(id),
-                trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), values.get_or_some(k, BitVec::zero(), w,
-                    List::put_here(k, home_values(g), w, BitVec::zero()))), sym(env.number_set_here(id, w))))),
-        Inr(ne) => match at_i: t.homes.home(i) {
-            InSlot(sk) => trans(before(i, m2, ne, InSlot(sk), at_i), sym(env.number_set_other(id, w, i, ne))),
-            InReg(r) => match r.eq_dec(k) {
-                Inl(e) => trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), values.get_or_some(r, BitVec::zero(), w,
-                        j(sym(e), λ x _ => values.nth(x) = Some(w), List::put_here(k, home_values(g), w, BitVec::zero())))),
-                    trans(sym(shared(i, m2, ne, j(e, λ x _ => t.homes.home(i) = InReg(x), at_i))), sym(env.number_set_other(id, w, i, ne)))),
-                Inr(apart) => trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), List::put_other(k, home_values(g), w, BitVec::zero(), r, apart)),
-                    trans(before(i, m2, ne, InReg(r), at_i), sym(env.number_set_other(id, w, i, ne)))),
-            },
-        },
-    };
-    let rsp: (values.get_or(6, BitVec::zero()) = t.frame()) =
-        trans(List::put_other(k, home_values(g), w, BitVec::zero(), 6, λ e => false_elim(omega(e, inside))), held.agreeing.frame);
-    let pins: t.Pins(values) = λ r within pinned => trans(List::put_other(k, home_values(g), w, BitVec::zero(), r,
-        λ e => absurd(trans(sym(t.homes.pinned_unlived(home_register(k), j(e, λ x _ => t.homes.pinned(home_register(x)) = True, pinned))),
-            t.homes.lived(id, k, at)))), held.agreeing.pins(r, within, pinned));
-    Hold(words := words, placed := held.placed,
-        agreeing := j(sym(written), λ vs _ => t.Agreeing(out, env.set_word(id, w), words, vs), Agreement(homes := agrees, frame := rsp, pins := pins)))
-}
-
-// A word set to the number it had: alike everywhere.
-theorem Env::like_set_same(self env: Env, id: Nat, w: BitVec(64), value: w.toNat() = env.number(id), live: List<Nat>): env.set_word(id, w).Like(env, live) {
-    ⟨λ i _ => match i.eq_dec(id) {
-        Inl(e) => j(sym(e), λ x _ => env.set_word(id, w).number(x) = env.number(x), trans(env.number_set_here(id, w), value)),
-        Inr(ne) => env.number_set_other(id, w, i, ne),
-    }, ⟨refl, refl⟩⟩
-}
-
 // ---------------------------------------------------------------------------
 // The shared exit of a call too deep
 
@@ -531,11 +452,6 @@ theorem Gprs::holding_write(self g: Gprs, register: Gpr, value: BitVec(64), valu
                 g.holding_write(register, value, vs, more, register.absent_rest(r, more, absent), holding.right)⟩,
         },
     }
-}
-
-// The command line, read off the claim.
-theorem Target::held_args(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m)): env.args = t.args {
-    held.placed.stacked.same
 }
 
 // ---------------------------------------------------------------------------
@@ -847,11 +763,11 @@ theorem Target::held_fresh(self t: Target, live: List<Nat>, env: Env, g: Gprs, m
     let ws = fresh.proof.witness;
     let facts = fresh.proof.proof;
     let based_w = t.based_agree(env, v, w, m, based.proof, λ p low => facts.left(p, omega(low, layout.frame_cell_at(0))));
-    let placed: t.Placed(env.with_words(ws), m) = Placement(cells := w, holds := based_w.left,
+    let placed: t.Placed(env.with_words(ws), m) = Target::Placed(cells := w, holds := based_w.left,
         keeps := ⟨λ i inside => facts.right.left(i, inside).right, based_w.right.left⟩,
-        stacked := ActivationOf(same := based_w.right.right.left, stacking := Activation(argv := based_w.right.right.right.left,
+        stacked := Target::Stacked(same := based_w.right.right.left, stacking := Target::Stacking(argv := based_w.right.right.right.left,
             room := based_w.right.right.right.right, slots := λ i inside => facts.right.left(i, inside).left, frames := frames)));
-    Hold(words := ws, placed := placed, agreeing := Agreement(homes := λ i mem => {
+    Target::Held(words := ws, placed := placed, agreeing := Target::Agreeing(homes := λ i mem => {
         let b = beyond(i, mem);
         j(sym(b.proof.right.left), λ h _ => (match h { InSlot(sk) => ws.get_or(sk, 0), InReg(k) => home_values(g).get_or(k, BitVec::zero()).toNat() }) = env.number(i),
             trans(facts.right.right(b.witness, b.proof.left), sym(b.proof.right.right)))
@@ -902,11 +818,11 @@ theorem Target::bare_caller(self t: Target, live: List<Nat>, env: Env, g0: Gprs,
     let based = t.based_agree(other, v1, w, m, bare.left.proof, λ p low => splice_low(v1, v0, p, low));
     let slots: t.Slots(w, m) = λ i inside => trans(t.slots_of_frames(v0, m, t.words, 0, own, i, omega(), omega(inside, fits)),
         cong_fn<BitVec(64), Option<BitVec(64)>>(λ x => Some(x), sym(high(i))));
-    let placed: t.Placed(Env(env.words, other.buffers, env.args).with_words(ws), m) = Placement(cells := w, holds := based.left,
+    let placed: t.Placed(Env(env.words, other.buffers, env.args).with_words(ws), m) = Target::Placed(cells := w, holds := based.left,
         keeps := ⟨λ i inside => trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), high(i)), held.placed.keeps.left(i, inside)), based.right.left⟩,
-        stacked := ActivationOf(same := held.placed.stacked.same, stacking := Activation(argv := based.right.right.right.left,
+        stacked := Target::Stacked(same := held.placed.stacked.same, stacking := Target::Stacking(argv := based.right.right.right.left,
             room := based.right.right.right.right, slots := slots, frames := frames)));
-    Hold(words := ws, placed := placed, agreeing := Agreement(homes := t.agrees_regs(live, env, ws, g0, g, held.agreeing.homes, kept),
+    Target::Held(words := ws, placed := placed, agreeing := Target::Agreeing(homes := t.agrees_regs(live, env, ws, g0, g, held.agreeing.homes, kept),
         frame := bare.right.right,
         pins := t.pins_regs(g0, g, held.agreeing.pins, λ k inside pinned => kept(k, inside, t.homes.pinned_used(home_register(k), pinned)))))
 }

@@ -195,11 +195,6 @@ theorem Target::stack_toNat(self t: Target, i: Nat, inside: i <= t.stack.size): 
     BitVec::offset_toNat(64, t.stack.low, i, fits)
 }
 
-theorem Target::frame_toNat(self t: Target): t.frame().toNat() = t.stack.low.toNat() + t.index {
-    let inside: (t.index <= t.stack.size) = omega(t.framed);
-    t.stack_toNat(t.index, inside)
-}
-
 // Words of the stack in order from offset `i` up.
 fn Target::FramesAt(self t: Target, m: X86Memory(t.r.profile), words: List<BitVec(64)>) → Nat → Type {
     match words {
@@ -232,33 +227,27 @@ fn Target::Slots(self t: Target, v: Nat → BitVec(8), m: X86Memory(t.r.profile)
 // its frames from the frame's end up. Where the frame is has no slot: it is
 // RSP between statements (`Target::Held`).
 // With them, the command line at the RSP its slot holds.
-record Activation(t: Target, v: Nat → BitVec(8), m: X86Memory(t.r.profile)) {
+record Target::Stacking(self t: Target, v: Nat → BitVec(8), m: X86Memory(t.r.profile)) {
     argv: ArgvAt(t.argv(), m, word_in(v, t.layout().stack_offset()), t.args),
     room: word_in(v, t.layout().room_offset()) = t.stack.at(t.floor),
     slots: t.Slots(v, m),
     frames: t.FramesAt(m, t.frames, t.index + 8 * t.words),
 }
 
-fn Target::Stacking(self t: Target, v: Nat → BitVec(8), m: X86Memory(t.r.profile)) → Type { Activation(t, v, m) }
-
 // …and it is the environment's.
-record ActivationOf(t: Target, env: Env, v: Nat → BitVec(8), m: X86Memory(t.r.profile)) {
+record Target::Stacked(self t: Target, env: Env, v: Nat → BitVec(8), m: X86Memory(t.r.profile)) {
     same: env.args = t.args,
     stacking: t.Stacking(v, m),
 }
 
-fn Target::Stacked(self t: Target, env: Env, v: Nat → BitVec(8), m: X86Memory(t.r.profile)) → Type { ActivationOf(t, env, v, m) }
-
 // The region's cells: the memory holds them, they keep the environment, and
 // the activation is the environment's.
-record Placement(t: Target, env: Env, m: X86Memory(t.r.profile)) {
+record Target::Placed(self t: Target, env: Env, m: X86Memory(t.r.profile)) {
     cells: Nat → BitVec(8),
     holds: t.r.Holds(cells, m),
     keeps: t.layout().Keeps(env, cells),
     stacked: t.Stacked(env, cells, m),
 }
-
-fn Target::Placed(self t: Target, env: Env, m: X86Memory(t.r.profile)) → Type { Placement(t, env, m) }
 
 // The word in slot `i`, as the environment reads it.
 theorem Layout::keeps_word_at(self layout: Layout, env: Env, v: Nat → BitVec(8), keeps: layout.Keeps(env, v), i: Nat, inside: i < layout.words):
@@ -281,20 +270,6 @@ theorem Layout::keeps_buffer_len(self layout: Layout, env: Env, v: Nat → BitVe
 // ---------------------------------------------------------------------------
 // The layout's ranges
 
-theorem Layout::word_below_buffers(self layout: Layout, i, t: Nat, inside: i < layout.words, short: t < 8): 8 * i + t < 8 * layout.words {
-    omega(inside, short)
-}
-
-theorem Layout::buffers_after_words(self layout: Layout, b: Nat): 8 * layout.reserved <= layout.buffer_offset(b) {
-    let after: (8 * layout.reserved <= 8 * layout.reserved + layout.capacities.take(b).total()) = omega();
-    after
-}
-
-theorem Layout::scratch_after_words(self layout: Layout): 8 * layout.reserved <= layout.scratch_offset() {
-    let after: (8 * layout.reserved <= 8 * layout.reserved + layout.capacities.total()) = omega();
-    after
-}
-
 theorem Layout::buffer_end(self layout: Layout, b, cap: Nat, found: layout.capacities.nth(b) = Some(cap)):
     layout.buffer_offset(b) + cap <= layout.scratch_offset() {
     let ends: ((8 * layout.reserved + layout.capacities.take(b).total()) + cap <= 8 * layout.reserved + layout.capacities.total()) =
@@ -304,17 +279,9 @@ theorem Layout::buffer_end(self layout: Layout, b, cap: Nat, found: layout.capac
 
 // A buffer's range is the `b`th piece of the capacities packed after the
 // words, so the packing lemma places it.
-fn Layout::buffer_span(self layout: Layout, b, cap: Nat) → Span { Span::packed(8 * layout.reserved, layout.capacities, b, cap) }
-
 theorem Layout::buffer_apart(self layout: Layout, b, cap, other: Nat, found: layout.capacities.nth(b) = Some(cap), below: b < other):
     layout.buffer_offset(b) + cap <= layout.buffer_offset(other) {
     Span::packed_before(8 * layout.reserved, layout.capacities, b, cap, other, found, below)
-}
-
-// Two different buffers share no byte.
-theorem Layout::buffers_disjoint(self layout: Layout, b, cap, c, cap2: Nat, found: layout.capacities.nth(b) = Some(cap),
-    found2: layout.capacities.nth(c) = Some(cap2), differ: b ≠ c): layout.buffer_span(b, cap).Disjoint(layout.buffer_span(c, cap2)) {
-    Span::packed_disjoint(8 * layout.reserved, layout.capacities, b, cap, c, cap2, found, found2, differ)
 }
 
 // The scratch range is one byte longer than the largest buffer, so a path
@@ -634,7 +601,7 @@ theorem Target::stacking_store(self t: Target, v: Nat → BitVec(8), m: X86Memor
         trans(stacking.slots(i, inside), cong_fn<BitVec(64), Option<BitVec(64)>>(λ x => Some(x),
             sym(word_in_agree(w, v, layout.frame_cell(i), λ k _ => t.r.cells_outside(v, q, bytes, layout.frame_cell(i) + k,
                 Inr(omega(fits, layout.stack_below_size(), layout.frame_cell_at(i)))))))));
-    Activation(argv := j(sym(slot), λ rsp _ => ArgvAt(t.argv(), after, rsp, t.args),
+    Target::Stacking(argv := j(sym(slot), λ rsp _ => ArgvAt(t.argv(), after, rsp, t.args),
             argv_at_kept(t.argv(), m, t.argv(), after, kept, word_in(v, so), t.args, stacking.argv)),
         room := trans(room, stacking.room),
         slots := slots,
@@ -644,7 +611,7 @@ theorem Target::stacking_store(self t: Target, v: Nat → BitVec(8), m: X86Memor
 theorem Target::stacked_store(self t: Target, env: Env, v: Nat → BitVec(8), m: X86Memory(t.r.profile), q: Nat, bytes: List<BitVec(8)>,
     fits: q + bytes.len() <= t.layout().stack_offset(), stacked: t.Stacked(env, v, m)):
     t.Stacked(env, t.r.buffer(v).set_span(q, bytes.to_vector()).cells, t.r.profile.store(m, next_rip(t.r.low, q), bytes)) {
-    ActivationOf(same := stacked.same, stacking := t.stacking_store(v, m, q, bytes, fits, stacked.stacking))
+    Target::Stacked(same := stacked.same, stacking := t.stacking_store(v, m, q, bytes, fits, stacked.stacking))
 }
 
 // ---------------------------------------------------------------------------
@@ -766,7 +733,7 @@ theorem Target::stacking_slot(self t: Target, v: Nat → BitVec(8), m: X86Memory
                 sym(word_in_agree(w, v, layout.frame_cell(n), λ b short => t.r.cells_outside(v, fc, bytes, layout.frame_cell(n) + b,
                     layout.frame_cells_apart(i, n, b, other, short))))))),
     };
-    Activation(argv := argv, room := trans(room, stacking.room), slots := slots,
+    Target::Stacking(argv := argv, room := trans(room, stacking.room), slots := slots,
         frames := t.frames_stack_store(m, k, fits, word, t.frames, t.index + 8 * t.words, omega(inside), stacking.frames))
 }
 
@@ -782,12 +749,6 @@ theorem Target::placed_word(self t: Target, env: Env, m: X86Memory(t.r.profile),
     let held = t.stack_store_holds(v, m, placed.holds, t.index + 8 * i, fits, word);
     let holds: t.r.Holds(w, t.r.profile.store(m, t.slot(i), word_bytes(word))) = λ p under => trans(held(p, under),
         sym(t.r.cells_outside(v, fc, word_bytes(word), p, Inl(omega(under, t.size_canonical(), layout.frame_cell_at(i))))));
-    Placement(cells := w, holds := holds, keeps := layout.keeps_word(t.r, env, v, placed.keeps, i, word),
-        stacked := ActivationOf(same := placed.stacked.same, stacking := t.stacking_slot(v, m, i, inside, word, placed.stacked.stacking)))
-}
-
-// The environment is the same, so is where it is placed.
-theorem Target::placed_same(self t: Target, env, other: Env, m: X86Memory(t.r.profile), placed: t.Placed(env, m), same: env = other):
-    t.Placed(other, m) {
-    j(same, λ e _ => t.Placed(e, m), placed)
+    Target::Placed(cells := w, holds := holds, keeps := layout.keeps_word(t.r, env, v, placed.keeps, i, word),
+        stacked := Target::Stacked(same := placed.stacked.same, stacking := t.stacking_slot(v, m, i, inside, word, placed.stacked.stacking)))
 }

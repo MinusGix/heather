@@ -139,7 +139,11 @@ Shapes the walk handles, and what it refuses:
   re-applied (probed — an un-generalized `h2` is refused with
   ``this has type `Lt(n, w)`, but `False` is expected here``);
   a `let` whose right-hand side holds no self-call ⇒ substituted (`let` is
-  zeta-transparent).
+  zeta-transparent). A value the expression reads more than once is
+  substituted through one `let` of its own instead
+  (`measure::subst_shared`, 2026-11-18): `r.a := r.a + i` reads `r` twice,
+  so `k` such statements substituted in full spell the first value 2^k
+  times (issues/word-loop-body-exponential.md).
 - **a self-call under a `λ` is refused** — that is funext again — as is a
   self-call in a `match` scrutinee or a `let` right-hand side, in this round.
 

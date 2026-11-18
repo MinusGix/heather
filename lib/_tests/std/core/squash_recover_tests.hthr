@@ -1,0 +1,34 @@
+// Probes of the release of a squashed absurdity, `unsquash_empty(q) : False`
+// for `q : ∥False∥` (docs/kernel/metatheory-ch07-extensions.md §29), and of
+// `Squash::recover` through `Decide`
+// (docs/language/strict-conditions-design.md §4.2). Each at a literal and a
+// neutral argument, with negative controls. Tests, not library: nothing
+// outside lib/_tests imports this module.
+import logic; import bool; import nat; import bitvec; import omega;
+
+// The release itself, at a neutral squash.
+fn squash_absurd<A>(q: ∥False∥) → A { false_elim(unsquash_empty(q)) }
+
+// β: at a constructor the release is its payload.
+theorem unsquash_empty_squash(e: False): unsquash_empty(squash(e)) = e { refl }
+
+// A squashed `0 < 0` is absurd: map it to `∥False∥` and release it.
+fn zero_lt_zero_absurd<A>(q: ∥0 < 0∥) → A {
+    false_elim(unsquash_empty(squash_map(q, Nat::lt_irrefl(0))))
+}
+
+// Recovering a decidable condition, at a neutral and at a literal.
+theorem lt_recovered(n: Nat, q: ∥0 < n∥): 0 < n { Squash::recover(q) }
+theorem lt_recovered_by_method(n: Nat, q: ∥0 < n∥): 0 < n { q.recover() }
+theorem word_lt_recovered(i, n: u64, q: ∥i < n∥): i < n { q.recover() }
+theorem lt_recovered_literal(): 2 < 3 {
+    let below: (2 < 3) = omega;
+    let q: ∥2 < 3∥ = squash(below);
+    q.recover()
+}
+
+// expect-error: needs an argument of type `∥False∥`
+fn not_squashed(e: False) → False { unsquash_empty(e) }
+
+// expect-error: its type does not unfold to `False`
+fn squashed_but_inhabited(q: ∥Nat∥) → False { unsquash_empty(q) }

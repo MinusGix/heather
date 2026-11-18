@@ -69,6 +69,8 @@ pub enum Prim {
     Mul,
     Half,
     Twice,
+    /// The number's last binary digit.
+    LowBit,
     /// Zero where the divisor is.
     Div,
     /// The number itself where the divisor is zero.
@@ -86,7 +88,7 @@ pub enum Prim {
 impl Prim {
     fn arity(self) -> usize {
         match self {
-            Prim::Half | Prim::Twice | Prim::Odd => 1,
+            Prim::Half | Prim::Twice | Prim::LowBit | Prim::Odd => 1,
             _ => 2,
         }
     }
@@ -102,6 +104,7 @@ impl Prim {
             Prim::Mul => a.checked_mul(b),
             Prim::Half => Some(a / 2),
             Prim::Twice => a.checked_mul(2),
+            Prim::LowBit => Some(a % 2),
             Prim::Div => Some(a.checked_div(b).unwrap_or(0)),
             Prim::Mod => Some(a.checked_rem(b).unwrap_or(a)),
             Prim::Min => Some(a.min(b)),
@@ -225,9 +228,9 @@ const LEVEL: usize = 2048;
 
 /// A run over one Ψ: what it erased, and the closed definitions it has
 /// evaluated, kept for the reads that follow.
-pub struct Machine<'a> {
-    psi: &'a GlobalCtx,
-    prims: &'a Prims,
+pub struct Machine {
+    psi: GlobalCtx,
+    prims: Prims,
     codes: RefCell<HashMap<usize, Rc<Code>>>,
     closed: RefCell<HashMap<usize, Thunk>>,
     erased: RefCell<HashMap<(usize, usize), Rc<Code>>>,
@@ -249,18 +252,29 @@ pub struct Machine<'a> {
     deepest: u32,
 }
 
-/// `run` on a machine over `psi`, on a thread with the stack deep recursion
-/// needs. Values do not leave: `run` reads what it wants out of them.
-pub fn with_machine<R: Send>(psi: &GlobalCtx, prims: &Prims, fuel: u64, run: impl FnOnce(&Machine<'_>) -> R + Send) -> Result<R, Stuck> {
-    let mut run = Some(run);
-    let mut stack = STACK;
-    loop {
-        let spawned = std::thread::scope(|scope| {
-            let run = &mut run;
-            let handle = std::thread::Builder::new().stack_size(stack).spawn_scoped(scope, move || {
-                let run = run.take().expect("a run is taken by the one thread that starts");
-                let machine = Machine {
-                    psi,
+type Job = Box<dyn FnOnce(&mut Machine) + Send>;
+
+/// A machine kept between runs, on a thread of its own with the stack deep
+/// recursion needs: what it erased and the closed definitions it evaluated
+/// stay for the next run. Its runs must be over one Ψ as it grows: each
+/// run's Ψ the one before with bindings added at the end, which is what a
+/// forked elaborator defining modules gives. Constants are addressed from
+/// the start of Ψ, so what was kept reads the same in the longer one.
+pub struct Session {
+    jobs: Option<std::sync::mpsc::Sender<Job>>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Session {
+    /// A session whose runs take at most `fuel` steps each.
+    pub fn new(prims: Prims, fuel: u64) -> Result<Session, Stuck> {
+        let mut stack = STACK;
+        loop {
+            let (jobs, queue) = std::sync::mpsc::channel::<Job>();
+            let prims = prims.clone();
+            let spawned = std::thread::Builder::new().stack_size(stack).spawn(move || {
+                let mut machine = Machine {
+                    psi: GlobalCtx::new(Vec::new()),
                     prims,
                     codes: RefCell::default(),
                     closed: RefCell::default(),
@@ -275,19 +289,53 @@ pub fn with_machine<R: Send>(psi: &GlobalCtx, prims: &Prims, fuel: u64, run: imp
                     deep: RefCell::default(),
                     deepest: (stack / LEVEL) as u32,
                 };
-                run(&machine)
+                for job in queue {
+                    job(&mut machine);
+                }
             });
-            handle.ok().map(|handle| handle.join().unwrap_or_else(|panic| std::panic::resume_unwind(panic)))
+            match spawned {
+                Ok(thread) => return Ok(Session { jobs: Some(jobs), thread: Some(thread) }),
+                Err(_) if stack > LEAST_STACK => stack /= 2,
+                Err(_) => return stuck("no stack for the run"),
+            }
+        }
+    }
+
+    /// `run` on the machine over `psi`. Values do not leave: `run` reads
+    /// what it wants out of them.
+    pub fn run<R: Send + 'static>(&self, psi: GlobalCtx, run: impl FnOnce(&Machine) -> R + Send + 'static) -> Result<R, Stuck> {
+        let (answer, answered) = std::sync::mpsc::channel();
+        let job: Job = Box::new(move |machine| {
+            machine.psi = psi;
+            machine.steps.set(0);
+            machine.depth.set(0);
+            machine.last.set(usize::MAX);
+            machine.deep.borrow_mut().clear();
+            let _ = answer.send(run(machine));
         });
-        match spawned {
-            Some(out) => return Ok(out),
-            None if stack > LEAST_STACK => stack /= 2,
-            None => return stuck("no stack for the run"),
+        let sent = self.jobs.as_ref().is_some_and(|jobs| jobs.send(job).is_ok());
+        match sent.then(|| answered.recv().ok()).flatten() {
+            Some(out) => Ok(out),
+            None => stuck("the machine's thread ended"),
         }
     }
 }
 
-impl<'a> Machine<'a> {
+impl Drop for Session {
+    fn drop(&mut self) {
+        drop(self.jobs.take());
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+/// `run` on a machine of its own over `psi`.
+pub fn with_machine<R: Send + 'static>(psi: &GlobalCtx, prims: &Prims, fuel: u64, run: impl FnOnce(&Machine) -> R + Send + 'static) -> Result<R, Stuck> {
+    Session::new(prims.clone(), fuel)?.run(psi.clone(), run)
+}
+
+impl Machine {
     /// The position in Ψ of the definition the run entered last: where a
     /// stuck run was, near enough to name.
     pub fn last_entered(&self) -> Option<usize> {
@@ -424,7 +472,9 @@ impl<'a> Machine<'a> {
             | Term::TmDVec { .. }
             | Term::TmIWf { .. }
             | Term::TmM { .. } => Code::Unit,
-            Term::ElimEmpty { .. } | Term::ElimSEmpty { .. } => Code::Stuck("a case that cannot happen was reached"),
+            Term::ElimEmpty { .. } | Term::ElimSEmpty { .. } | Term::UnsquashEmpty { .. } => {
+                Code::Stuck("a case that cannot happen was reached")
+            }
             Term::Corec { .. } | Term::Out { .. } => Code::Stuck("codata"),
             Term::BoxTy(_)
             | Term::BoxTm(_)
@@ -488,18 +538,31 @@ impl<'a> Machine<'a> {
             }
             std::mem::replace(&mut *cell, State::Busy)
         };
-        let value = match state {
-            State::Lazy(code, env) => match &*code {
-                // A closed definition's thunk is the call itself: run its body.
-                Code::Global(at, args, _) if args.is_empty() => self.eval(self.body(*at)?, None)?,
-                _ => self.eval(code, env)?,
-            },
-            State::NatRec(node, env, n) => self.elim_nat(&node, env, n)?,
+        // A run that stops leaves the thunk as it was: a session's later
+        // runs may read it again.
+        let (value, again) = match state {
+            State::Lazy(code, env) => {
+                let value = match &*code {
+                    // A closed definition's thunk is the call itself: run its body.
+                    Code::Global(at, args, _) if args.is_empty() => self.body(*at).and_then(|body| self.eval(body, None)),
+                    _ => self.eval(code.clone(), env.clone()),
+                };
+                (value, State::Lazy(code, env))
+            }
+            State::NatRec(node, env, n) => (self.elim_nat(&node, env.clone(), n), State::NatRec(node, env, n)),
             State::Busy => return stuck("a value that reads itself"),
             State::Done(_) => unreachable!("returned above"),
         };
-        *thunk.0.borrow_mut() = State::Done(value.clone());
-        Ok(value)
+        match value {
+            Ok(value) => {
+                *thunk.0.borrow_mut() = State::Done(value.clone());
+                Ok(value)
+            }
+            Err(why) => {
+                *thunk.0.borrow_mut() = again;
+                Err(why)
+            }
+        }
     }
 
     fn elim_nat(&self, node: &Rc<Code>, env: Env, n: u128) -> Res<Val> {
@@ -778,6 +841,13 @@ impl<'a> Machine<'a> {
     }
 
     // ---- reading answers --------------------------------------------------
+
+    /// Drops the value kept for the definition at `at`: for an answer that
+    /// was read out and that nothing later reads, so that it is not held
+    /// for the session.
+    pub fn forget(&self, at: usize) {
+        self.closed.borrow_mut().remove(&at);
+    }
 
     /// The definition at position `at` of Ψ, taking no arguments.
     pub fn global(&self, at: usize) -> Thunk {

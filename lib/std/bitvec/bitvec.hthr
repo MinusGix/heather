@@ -2669,6 +2669,33 @@ fn BitVec::choose_bit(c, a, b: Bool) → Bool { match c { True => a, False => b 
 // truncation or a zero extension.
 fn BitVec::bits_from({m, n: Nat}, self x: BitVec(m), skip: Nat) → BitVec(n) { BitVec::tabulate(λ k => x.bit_at(skip + k)) }
 
+// A word of zeros, given bit by bit, is zero.
+theorem BitVec::tabulate_false_toNat(n: Nat): BitVec::tabulate(λ (_: Nat) => False, n := n).toNat() = 0 {
+    match n {
+        Zero => refl,
+        Succ(k) => Nat::cong(λ (v: Nat) => Nat::of_bit(False) + v.twice(), BitVec::tabulate_false_toNat(k)),
+    }
+}
+
+// `x`'s own bits at a width at least its own: the same value.
+theorem BitVec::tabulate_bits_toNat(m: Nat): (x: BitVec(m)) → (n: Nat) → m <= n → BitVec::tabulate(λ k => x.bit_at(k), n := n).toNat() = x.toNat() {
+    match m {
+        Zero => λ x n _ => BitVec::tabulate_false_toNat(n),
+        Succ(j, ih) => λ x n => match n {
+            Zero => λ le => false_elim(le),
+            Succ(k) => λ le => Nat::cong(λ (v: Nat) => Nat::of_bit(x.head_bit()) + v.twice(), ih(x.tail_bits(), k, le)),
+        },
+    }
+}
+
+// Reading a word from bit 0 at a width at least its own keeps its value:
+// a zero extension.
+theorem BitVec::bits_from_zero_toNat(m, n: Nat, x: BitVec(m), le: m <= n): x.bits_from(0, n := n).toNat() = x.toNat() {
+    trans(@cong(λ (v: BitVec(n)) => v.toNat(), x.bits_from(0, n := n), BitVec::tabulate(λ k => x.bit_at(k), n := n),
+            BitVec::tabulate_cong(n, λ k => x.bit_at(0 + k), λ k => x.bit_at(k), λ k => @cong(λ (i: Nat) => x.bit_at(i), 0 + k, k, k.add_left_zero()))),
+        BitVec::tabulate_bits_toNat(m, x, n, le))
+}
+
 // `x` read in two's complement at width `n`: its bits, then its sign.
 fn BitVec::sign_bits({m, n: Nat}, self x: BitVec(m)) → BitVec(n) {
     BitVec::tabulate(λ k => BitVec::choose_bit((k + 1).leb(m), x.bit_at(k), x.bit_at(m.pred())))

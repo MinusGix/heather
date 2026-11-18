@@ -164,8 +164,8 @@ theorem Target::held_agree(self t: Target, live: List<Nat>, env, other: Env, g: 
     buffers: env.buffers = other.buffers, args: env.args = other.args, numbers: (i: Nat) → Mem(i, live) → env.number(i) = other.number(i)):
     t.Held(live, other, g, m) {
     let words = held.words;
-    Hold(words := words, placed := j(eq2(λ (b: Buffers()) (a: List<List<BitVec(8)>>) => Env(words, b, a), buffers, args), λ e _ => t.Placed(e, m), held.placed),
-        agreeing := Agreement(homes := λ i mm => trans(held.agreeing.homes(i, mm), numbers(i, mm)), frame := held.agreeing.frame, pins := held.agreeing.pins))
+    Target::Held(words := words, placed := j(eq2(λ (b: Buffers()) (a: List<List<BitVec(8)>>) => Env(words, b, a), buffers, args), λ e _ => t.Placed(e, m), held.placed),
+        agreeing := Target::Agreeing(homes := λ i mm => trans(held.agreeing.homes(i, mm), numbers(i, mm)), frame := held.agreeing.frame, pins := held.agreeing.pins))
 }
 
 // ---------------------------------------------------------------------------

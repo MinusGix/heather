@@ -260,7 +260,7 @@ loads, which is the honest width of an absolute time here.
 | `match/arm-checks` | *k* checking fallbacks (`mk(e) : T(e)` where `Nat` is expected) inside a plain `match`'s arm. **Lower bound linear, at the control's per-check cost** | debt: linear, above the control per check (each asks whether the test occurs by rebuilding both types, `issues/match-arm-coercion-abstracts-both-types.md`) |
 | `match/plain-checks` | the same *k* checks with no `match` around them: `match/arm-checks`'s control | met |
 | `match/arm-type-size` | 32 such checks in an arm, over types of size *s*. **Lower bound linear** (the comparison reads the types) | met in slope; the price is per node |
-| `loops/word-body` | *k* assignments `r.a := r.a + i` to a `u64` field in the body of a `for` over words, over `bitvec_omega`'s closure. **Lower bound linear** | debt: exponential, each statement past five doubling (`issues/word-loop-body-exponential.md`) |
+| `loops/word-body` | *k* assignments `r.a := r.a + i` to a `u64` field in the body of a `for` over words, over `bitvec_omega`'s closure. **Lower bound linear** | met (0.75 over 8..64; it was 2^k while the loop's companions spelled a `let`'s value once per read, `issues/word-loop-body-exponential.md`) |
 | `inductive/isa-declaration` | an *n*-form instruction type with register/immediate/memory operand fields, declared. **Lower bound linear** | met (~1.0) |
 | `inductive/isa-constructor-use` | four constructor values of that type. **Lower bound linear** (the declaration) | debt: ~1.7, Θ(n²) elaboration per mention |
 | `inductive/isa-opcode-match` | an *n*-arm `match` into `Nat`, payloads ignored. **Lower bound linear** | debt: ~1.6, mostly elaboration |

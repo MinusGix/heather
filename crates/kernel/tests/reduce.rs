@@ -196,6 +196,7 @@ fn dummy_branches() -> Branches {
         tm_squash: z(),
         tm_squash_in: z(),
         tm_elim_squash: z(),
+        tm_unsquash_empty: z(),
         ty_m: z(),
         tm_m: z(),
         tm_corec: z(),

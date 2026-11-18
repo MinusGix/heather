@@ -319,3 +319,16 @@ theorem List::reach_call(self callees: List<Nat>, procedures: List<Procedure>, b
         j(step, λ x _ => x <= callees.reach(procedures, bodies, places, table, checks, Succ(d)),
             callees.deepest_mem(bodies, places, checks, row, index, callees.holds_mem(index, held))))
 }
+
+// Every word a fitting list names is in the file.
+theorem Layout::words_fit_mem(self layout: Layout, ids: List<Nat>): (i: Nat) → layout.words_fit(ids).IsTrue() → Mem(i, ids) → layout.word_fits(i).IsTrue() {
+    match ids {
+        Nil => λ i _ never => false_elim(never),
+        Cons(id, rest) => λ i fit m => {
+            match m {
+                Inl(e) => j(sym(e), λ x _ => layout.word_fits(x).IsTrue(), Bool::both(fit).left),
+                Inr(later) => layout.words_fit_mem(rest, i, known, later),
+            }
+        },
+    }
+}

@@ -1494,6 +1494,7 @@ fn infer_memoized(t: &Term) -> bool {
             | Term::J { .. }
             | Term::ElimSEmpty { .. }
             | Term::ElimSquash { .. }
+            | Term::UnsquashEmpty { .. }
             | Term::ElimEmpty { .. }
             | Term::Case { .. }
             | Term::ElimW { .. }
@@ -4016,6 +4017,17 @@ impl Tc {
                     dst_level.clone(),
                 ))
             }
+            // unsquash_empty^l(q) : Empty^l @ l, q : ∥Empty^l∥ checked by
+            // conversion, so a `∥False∥` that unfolds to it is accepted
+            // (metatheory ch. 07 §29).
+            Term::UnsquashEmpty { level, scrut } => {
+                self.not_var_layer(env)?;
+                self.level_wf(env, level)?;
+                let empty = Rc::new(Type::Empty { level: level.clone() });
+                let sq_empty = Type::Squash { level: level.clone(), ty: Rc::clone(&empty) };
+                self.tm_check_ty(env, scrut, &sq_empty, level)?;
+                Ok(((*empty).clone(), level.clone()))
+            }
 
             // -- dependent pairs (extension beyond ch. 04) ------------------
             // pair^{l,l'}(x:S.T; a; b) : Σ^{l,l'}(x:S).T @ l⊔l'.
@@ -4872,6 +4884,7 @@ fn term_head(t: &Term) -> &'static str {
         Term::Squash { .. } => "Squash",
         Term::ElimSEmpty { .. } => "ElimSEmpty",
         Term::ElimSquash { .. } => "ElimSquash",
+        Term::UnsquashEmpty { .. } => "UnsquashEmpty",
         Term::Pair { .. } => "Pair",
         Term::VecLit { .. } => "VecLit",
         Term::VecItems { .. } => "VecItems",

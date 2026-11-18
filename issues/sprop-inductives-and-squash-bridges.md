@@ -4,7 +4,7 @@ status: open
 labels: [kernel,delam,design,sprop]
 area: kernel
 created: 2026-08-25
-updated: 2026-11-14
+updated: 2026-11-18
 ---
 
 The narrow former in [[sprop-squash]] intentionally stopped before a generic
@@ -49,3 +49,4 @@ larger design bill.
   types for `math-specific-choice`. It is not a customer for `sEq` or
   `sEmpty`, and it waits on a CCobs-style `cast` before its β rule is usable.
 - 2026-11-14: 2026-11-14: A customer for the atomic `∥Empty∥ → Empty` release (scope point (b), at `Empty`, irrelevant since Empty η): conditions taken squashed ([[strict-conditions]], docs/language/strict-conditions-design.md §4.2). Without it a body cannot use a squashed condition to rule a case out (`vector_index`'s `Zero` arm), and with it every decidable condition is recoverable from its squash. Proposal and its metatheory question (the squash relation must carry that the payload is related) are in the note; nothing built.
+- 2026-11-18: The atomic release at Empty is built: `unsquash_empty : ∥Empty∥ → Empty` with β on `squash`, neutral congruence skipping its argument, and one code-recursor branch (docs/kernel/metatheory-ch07-extensions.md §29, where the squash relation now keeps each side's payload related to itself). `Squash::recover` through `Decide` is in lib/std/core/bool.hthr. Release into `sEq`, and user SProp inductives, stay open.

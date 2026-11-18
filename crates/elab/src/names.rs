@@ -567,9 +567,17 @@ impl Names {
     }
 
     pub(crate) fn insert_current(&mut self, name: &str, kind: NameKind) {
-        self.tables.current_mut()
-            .index
-            .insert(&self.scope.module, name, kind);
+        let current = self.tables.current_mut();
+        current.index.insert(&self.scope.module, name, kind);
+        // A record declared in a type's namespace, `record Target::Held(…)`,
+        // is reached through a receiver as a `fn Target::m` is
+        // (issues/record-in-type-namespace.md). Read off the name, so a module
+        // image replaying this event restores it with no field of its own.
+        if kind == NameKind::Inductive
+            && let Some((_, base)) = split_qual(name)
+        {
+            current.member_bases.insert(base.to_string());
+        }
     }
 
     pub(crate) fn resolve_kinds(

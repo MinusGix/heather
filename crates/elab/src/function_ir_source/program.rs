@@ -721,9 +721,14 @@ impl Reads<'_, '_> {
     /// it is read, so nothing past the cap is evaluated (`heather eval`'s
     /// bound on what it prints).
     pub fn numbers_up_to(&self, name: &str, cap: usize) -> Result<(Vec<u64>, bool), SourceError> {
+        self.numbers_by(None, name, cap)
+    }
+
+    /// [`Self::numbers_up_to`], on `session`'s machine where one is given.
+    fn numbers_by(&self, session: Option<&RunSession>, name: &str, cap: usize) -> Result<(Vec<u64>, bool), SourceError> {
         let how = std::env::var("HEATHER_READS").unwrap_or_default();
         if how == "kernel" { return self.numbers_checked(name, cap); }
-        match run_numbers(self.elaborator, name, cap) {
+        match run_numbers(session, self.elaborator, name, cap) {
             Ok(fast) => {
                 if how == "check" {
                     let slow = self.numbers_checked(name, cap)?;
@@ -765,7 +770,7 @@ impl Reads<'_, '_> {
 /// name here that means something else is only run as written.
 fn run_prims(elaborator: &Elaborator) -> heather_run::Prims {
     use heather_run::Prim;
-    let named = [("Nat::add", Prim::Add), ("Nat::sub", Prim::Sub), ("Nat::mul", Prim::Mul), ("Nat::half", Prim::Half), ("Nat::twice", Prim::Twice),
+    let named = [("Nat::add", Prim::Add), ("Nat::sub", Prim::Sub), ("Nat::mul", Prim::Mul), ("Nat::half", Prim::Half), ("Nat::twice", Prim::Twice), ("Nat::low_bit", Prim::LowBit),
         ("Nat::div", Prim::Div), ("Nat::mod", Prim::Mod), ("Nat::same", Prim::Equal), ("Nat::leb", Prim::LessOrEqual), ("BitVec::odd_bit", Prim::Odd)];
     named.iter().filter_map(|(name, prim)| Some((elaborator.global_abs(name).or_else(|| elaborator.global_abs(&format!("nat::{name}")).or_else(|| elaborator.global_abs(&format!("bitvec::{name}"))))?, *prim))).collect()
 }
@@ -774,12 +779,36 @@ fn run_prims(elaborator: &Elaborator) -> heather_run::Prims {
 /// fraction of a kernel step's cost, and this only stops a runaway.
 const RUN_FUEL: u64 = 1 << 36;
 
-/// [`Reads::numbers_up_to`] on the untrusted machine (`heather_run`).
-fn run_numbers(elaborator: &Elaborator, name: &str, cap: usize) -> Result<(Vec<u64>, bool), heather_run::Stuck> {
+/// The untrusted machine kept between the reads of one forked elaborator
+/// (`heather_run::Session`): a definition of no arguments one read
+/// evaluated is a value the next reads have, so reads spelled from one
+/// another cost each their own step. **Every read of one session must be
+/// of the same elaborator, which between them only defines more modules**:
+/// what the machine kept is by position in Ψ.
+pub struct RunSession(Option<heather_run::Session>);
+
+impl RunSession {
+    /// A session for `elaborator`'s reads; without a machine, where none
+    /// could start, and its reads are then the kernel's evaluator's.
+    pub fn new(elaborator: &Elaborator) -> RunSession {
+        RunSession(heather_run::Session::new(run_prims(elaborator), RUN_FUEL).ok())
+    }
+}
+
+/// [`evaluate_numbers`] in a session.
+pub fn evaluate_numbers_in(session: &RunSession, elaborator: &Elaborator, name: &str) -> Result<Vec<u64>, SourceError> {
+    traced(elaborator, name, || match with_reads(elaborator, |reads| reads.numbers_by(Some(session), name, 1 << 20))? {
+        (numbers, false) => Ok(numbers),
+        (_, true) => unsupported("an implausibly long list"),
+    })
+}
+
+/// [`Reads::numbers_up_to`] on the untrusted machine (`heather_run`): the
+/// session's where there is one, or one of its own.
+fn run_numbers(session: Option<&RunSession>, elaborator: &Elaborator, name: &str, cap: usize) -> Result<(Vec<u64>, bool), heather_run::Stuck> {
     let Some(at) = elaborator.global_abs(name) else { return Err(heather_run::Stuck(format!("`{name}` is not declared"))) };
-    let prims = run_prims(elaborator);
     let started = std::time::Instant::now();
-    let (out, steps) = heather_run::with_machine(elaborator.psi(), &prims, RUN_FUEL, |machine| {
+    let read = move |machine: &heather_run::Machine| {
         let read = || {
             let mut cell = machine.global(at);
             let mut numbers = Vec::new();
@@ -797,9 +826,16 @@ fn run_numbers(elaborator: &Elaborator, name: &str, cap: usize) -> Result<(Vec<u
             }
         };
         let out: Result<_, heather_run::Stuck> = read();
+        // The answer is read out: nothing reads the list again.
+        machine.forget(at);
         let out = out.map_err(|heather_run::Stuck(why)| (why, machine.last_entered()));
         (out, machine.steps())
-    })?;
+    };
+    let (out, steps) = match session {
+        Some(RunSession(Some(session))) => session.run(elaborator.psi().clone(), read)?,
+        Some(RunSession(None)) => return Err(heather_run::Stuck("no machine could start".into())),
+        None => heather_run::with_machine(elaborator.psi(), &run_prims(elaborator), RUN_FUEL, read)?,
+    };
     let out = out.map_err(|(why, last)| heather_run::Stuck(match last.and_then(|at| NameLookup(elaborator).global_qualified_name_at(at)) {
         Some(name) => format!("{why}, in or after `{name}`"),
         None => why,
