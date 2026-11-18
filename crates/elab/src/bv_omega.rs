@@ -417,12 +417,32 @@ impl<'a> Walk<'a> {
     /// the byte's own comparison. Its leaf gets that equation, and `x` is a
     /// word of its own at its width.
     fn zero_extend_value(&mut self, word: &Rc<Term>, spelled: &str) -> Result<(), String> {
-        let Some(args) = named_args(self.elab, word, "bitvec::BitVec::zero_extend") else { return Ok(()) };
-        let [n, extra, x] = args.as_slice() else { return Ok(()) };
-        let (Ok(ns), Ok(es), Some(xs)) = (nat_term_source(self.elab, self.cx, n), nat_term_source(self.elab, self.cx, extra), self.elab.spell_term_source(self.cx, x)) else {
+        // A widening cast (`↑b`, `BitVec::widen_8_64(b)`) is a zero
+        // extension by its edge's fixed width.
+        const WIDENINGS: [(&str, u32, u32); 6] = [
+            ("bitvec::BitVec::widen_8_16", 8, 8), ("bitvec::BitVec::widen_8_32", 8, 24), ("bitvec::BitVec::widen_8_64", 8, 56),
+            ("bitvec::BitVec::widen_16_32", 16, 16), ("bitvec::BitVec::widen_16_64", 16, 48), ("bitvec::BitVec::widen_32_64", 32, 32),
+        ];
+        let (ns, es, x) = if let Some(args) = named_args(self.elab, word, "bitvec::BitVec::zero_extend") {
+            let [n, extra, x] = args.as_slice() else { return Ok(()) };
+            let (Ok(ns), Ok(es)) = (nat_term_source(self.elab, self.cx, n), nat_term_source(self.elab, self.cx, extra)) else {
+                return Ok(());
+            };
+            let ns = self.literal(n).map(|n| n.to_string()).unwrap_or(ns);
+            (ns, es, x.clone())
+        } else if let Some((args, n, extra)) =
+            WIDENINGS.iter().find_map(|(name, n, extra)| named_args(self.elab, word, name).map(|args| (args, *n, *extra)))
+        {
+            let [x] = args.as_slice() else { return Ok(()) };
+            (n.to_string(), extra.to_string(), x.clone())
+        } else {
             return Ok(());
         };
-        let width = self.literal(n).map(|n| n.to_string()).unwrap_or_else(|| ns.clone());
+        let Some(xs) = self.elab.spell_term_source(self.cx, &x) else {
+            return Ok(());
+        };
+        let width = ns.clone();
+        let x = &x;
         if self.word_at(width, x)?.is_none() {
             return Ok(());
         }

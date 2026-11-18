@@ -53,7 +53,7 @@ import rt;
 // the right it would be stuck on the neutral bit), and `PRotate(kind)` is
 // `x.rotr(k)` (`kind` 0) or `x.rotl(k)` (1) read as the shift pair it is
 // defined as (`bitvec_rotate.hthr`), the other count `w - k` computed here.
-inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PFoldl, PGet, PSet, PToNat, PTrunc, PShift(kind: Nat), PSext, PWithin, PComplement, PRotate(kind: Nat), PAt, PLen }
+inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PWiden(extra: Nat), PFoldl, PGet, PSet, PToNat, PTrunc, PShift(kind: Nat), PSext, PWithin, PComplement, PRotate(kind: Nat), PAt, PLen }
 
 record PrimEntry { g: Nat, p: Prim }
 
@@ -1897,6 +1897,15 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                             Cons(n, _) => rt_literal(n).bind(λ value => k.ty_of(h).bind(λ t => pure(st.finish(h, operand, Lit(t, value))))),
                             Nil => rt_refuse("`BitVec::ofNat` without its numeral"),
                         },
+                        // A widening cast (`↑b`, `BitVec::widen_8_64(b)`): a
+                        // zero extension by the edge's fixed width.
+                        PWiden(e) => match args {
+                            Cons(x, _) => k.ty_of(x).bind(λ t => match t {
+                                Word(w) => rt_go(f, k, st, x, True).bind(λ r => pure(r.fst.finish(h, operand, Prim(Zext(w, e), [RSt::level(r.snd)])))),
+                                _ => rt_refuse("`" ++ name ++ "` of something other than a word"),
+                            }),
+                            Nil => rt_refuse("`" ++ name ++ "` without its operand"),
+                        },
                         PZext => match args {
                             Cons(extra, rest) => rt_literal(extra).bind(λ e => match rest {
                                 Cons(x, _) => k.ty_of(x).bind(λ t => match t {
@@ -2259,7 +2268,9 @@ fn rt_prim_names() → List<Pair<String, Prim>> {
      Pair("bitvec::BitVec::bor", PWord(3)), Pair("bitvec::BitVec::bxor", PWord(4)), Pair("bitvec::BitVec::eq_bit", PWord(5)),
      Pair("bitvec::BitVec::unsigned_lt_bit", PWord(6)), Pair("bitvec::BitVec::signed_lt_bit", PWord(7)),
      Pair(name_of(Bool::and), PConj), Pair(name_of(Bool::or), PDisj), Pair(name_of(Bool::not), PNeg),
-     Pair("bitvec::BitVec::ofNat", POfNat), Pair("bitvec::BitVec::zero_extend", PZext), Pair("bitvec::BitVec::sign_extend", PSext), Pair(name_of(List::foldl), PFoldl),
+     Pair("bitvec::BitVec::ofNat", POfNat), Pair("bitvec::BitVec::zero_extend", PZext),
+     Pair("bitvec::BitVec::widen_8_16", PWiden(8)), Pair("bitvec::BitVec::widen_8_32", PWiden(24)), Pair("bitvec::BitVec::widen_8_64", PWiden(56)),
+     Pair("bitvec::BitVec::widen_16_32", PWiden(16)), Pair("bitvec::BitVec::widen_16_64", PWiden(48)), Pair("bitvec::BitVec::widen_32_64", PWiden(32)), Pair("bitvec::BitVec::sign_extend", PSext), Pair(name_of(List::foldl), PFoldl),
      Pair(name_of(List::byte_at), PGet), Pair(name_of(List::with_byte), PSet), Pair("bitvec::BitVec::toNat", PToNat),
      Pair("bitvec::BitVec::truncate", PTrunc), Pair("bitvec::BitVec::shift_left", PShift(0)), Pair("bitvec::BitVec::shift_right", PShift(1)),
      Pair("bitvec::BitVec::arithmetic_shift_right", PShift(2)), Pair(name_of(List::byte_within), PWithin)]

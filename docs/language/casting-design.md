@@ -933,3 +933,27 @@ carrier spelling or morphism parameter is handed to them.
 Pinned in `lib/_tests/std/tactic/ring_tests.hthr` and `linarith_tests.hthr`
 (the `class_…` sections) and `cast_tests.hthr` (`local_ring_…`,
 `local_linarith_…`).
+
+## 17. Words at two widths (2026-11-18)
+
+Zero extension between the machine widths is lossless, so it is an edge:
+`↑b` at a `u64` is a byte read as a word, Rust's `u64::from(b)`. Each pair
+(`8 → 16`, `8 → 32`, `8 → 64`, `16 → 32`, `16 → 64`, `32 → 64`) is its own
+named map in `bitvec.hthr` (`BitVec::widen_8_64(x) = x.zero_extend(56)`)
+and its own `Cast` instance, since an instance's index must be a global
+(§15): a direct edge per pair is the shortest path, so no composite is ever
+built.
+
+`BitVec(8)` and `BitVec(64)` are one carrier to the carrier graph, which
+keys a type by its head. A cast between two indices of one carrier is
+therefore resolved apart from the path search: the edge whose map has
+exactly the operand's type as its domain and the position's as its
+codomain (`Casts::indexed_edge`, `crates/elab/src/dispatch/cast.rs`). None
+is a refusal naming both types; narrowing stays the named `truncate`.
+
+The tools read the edges as the zero extensions they are: a `runtime fn`
+lowers `↑b` as `Zext` (`PWiden` in `rt_reflect.hthr`), `bv_omega` gives
+the widened word its operand's value (`zero_extend_value`), and `bv_decide`
+unfolds the map. `examples/utf8/utf8_check.hthr` reads its bytes as `u8`
+and widens them with `↑` where a word is wanted. Pinned in
+`lib/_tests/std/bitvec/bitvec_widen_tests.hthr`.

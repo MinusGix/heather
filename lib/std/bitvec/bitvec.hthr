@@ -20,6 +20,7 @@ import nat;
 import int;
 import pair;
 import algebra;
+import morphism;
 
 record BitVec(n: Nat) { bits: [Bool; n] }
 
@@ -164,6 +165,23 @@ fn BitVec::truncate(n, extra: Nat, self x: BitVec(extra + n)) → BitVec(n) {
 fn BitVec::zero_extend({n: Nat}, extra: Nat, self x: BitVec(n)) → BitVec(extra + n) {
     x.concat(BitVec::zero())
 }
+
+// Widening between the machine widths: lossless, so each is a cast edge
+// (docs/language/casting-design.md §5.1), and `↑b` at a wider word is the
+// byte zero-extended (`let w: u64 = ↑b;`). Every pair is its own edge, so
+// the shortest path between two widths is the one direct map.
+fn BitVec::widen_8_16(x: BitVec(8)) → BitVec(16) { x.zero_extend(8) }
+fn BitVec::widen_8_32(x: BitVec(8)) → BitVec(32) { x.zero_extend(24) }
+fn BitVec::widen_8_64(x: BitVec(8)) → BitVec(64) { x.zero_extend(56) }
+fn BitVec::widen_16_32(x: BitVec(16)) → BitVec(32) { x.zero_extend(16) }
+fn BitVec::widen_16_64(x: BitVec(16)) → BitVec(64) { x.zero_extend(48) }
+fn BitVec::widen_32_64(x: BitVec(32)) → BitVec(64) { x.zero_extend(32) }
+instance Cast<BitVec(8), BitVec(16)>(BitVec::widen_8_16) { }
+instance Cast<BitVec(8), BitVec(32)>(BitVec::widen_8_32) { }
+instance Cast<BitVec(8), BitVec(64)>(BitVec::widen_8_64) { }
+instance Cast<BitVec(16), BitVec(32)>(BitVec::widen_16_32) { }
+instance Cast<BitVec(16), BitVec(64)>(BitVec::widen_16_64) { }
+instance Cast<BitVec(32), BitVec(64)>(BitVec::widen_32_64) { }
 
 // Sign extension is defined separately at width zero because an empty vector
 // has no sign bit. The canonical policy maps it to zero at every larger width.

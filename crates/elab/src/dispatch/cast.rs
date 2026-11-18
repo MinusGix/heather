@@ -121,6 +121,23 @@ impl Casts<'_> {
         }
     }
 
+    /// The edge whose map is `source → target` exactly, between two
+    /// indices of one carrier (the widening of a word): edges between
+    /// indexed carriers are declared for every pair, so there is no path to
+    /// compose.
+    fn indexed_edge(&self, cx: &Cx, source: &Type, target: &Type, level: &heather_kernel::level::Level, span: Span) -> Option<String> {
+        for (_, map) in self.traits.instances_of_class(&Self::cast_class_key()) {
+            let head = Expr { kind: ExprKind::Var(map.clone()), span };
+            let Ok((_, ty, _)) = self.elab_infer(cx, &head) else { continue };
+            let Ok(Type::Pi { dom, cod, cod_level, .. }) = self.whnf(cx, &ty, span) else { continue };
+            let Some(cod) = crate::strengthen_ty(&cx.gamma, &cod, 1) else { continue };
+            if self.conv_types(cx, &dom, source, level) && self.conv_types(cx, &cod, target, &cod_level) {
+                return Some(map);
+            }
+        }
+        None
+    }
+
     /// `↑e` at `target`: the path's maps applied to `e`, or `e` itself when
     /// it is already at the target.
     fn cast_to_type(&self, cx: &Cx, operand: &Expr, target: &Type, span: Span) -> R<Expr> {
@@ -144,7 +161,31 @@ impl Casts<'_> {
             return err("`↑`'s operand has no named carrier to cast from", operand.span);
         };
         if from.key == to.key {
-            return Ok(operand.clone());
+            // One carrier at two indices (`BitVec(8)` and `BitVec(64)`): the
+            // carrier graph cannot tell them apart, so the edge is the one
+            // map between exactly these two types.
+            return match self.indexed_edge(cx, &source_ty, target, &level, span) {
+                Some(map) => Ok(Expr {
+                    kind: ExprKind::App {
+                        head: Box::new(Expr { kind: ExprKind::Var(map), span }),
+                        args: vec![operand.clone()],
+                        named: Vec::new(),
+                        explicit: false,
+                        goal_oriented: false,
+                    },
+                    span,
+                }),
+                None => err(
+                    format!(
+                        "no cast from `{}` to `{}`: they are one carrier at two indices, and no \
+                         edge maps the one to the other; a lossy conversion is a named function, \
+                         never `↑`",
+                        self.display_type(cx, &source_ty),
+                        self.display_type(cx, target)
+                    ),
+                    span,
+                ),
+            };
         }
         let path = self.cast_path(cx, &from.key, &to.key, (&from.written, &to.written), span)?;
         Ok(path.into_iter().fold(operand.clone(), |inner, (map, _)| Expr {
