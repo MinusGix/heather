@@ -92,15 +92,7 @@ record Target {
     stack_canonical: stack.low.toNat() + stack.size <= Nat::pow(2, 47),
     // The running activation: its frame at offset `index` of the stack, a
     // word a word of the file; the words above the frame (the registers
-    // it saved, its return address, then its caller's frame and so on up);
-    // and how many calls deeper it may go. Below the frame is what the
-    // deepest of its calls takes with that room (`List::reach`: each level
-    // a return address, the registers the callee saves and the callee's
-    // own frame), or the room of a function the body calls
-    // (`List::functions_room`: its room under the homes' table and the
-    // CALL's word), whichever is more (`List::below`); then one return
-    // address more: a call with no room left is refused in the callee's
-    // entry, after its CALL.
+    // it saved, its return address, then its caller's frame and so on up).
     // `main`'s frame is the stack's top, with nothing above it.
     // The procedures' placements (`Layout::body`): a callee's activation is
     // this target with the callee's frame and homes.
@@ -109,19 +101,36 @@ record Target {
     callees: List<Nat>,
     // The functions the running body may call (`Layout.called`).
     called: List<Nat>,
+    // Which procedures are checked at their entry, their ranks and the
+    // running body's (`Layout.checks`, `Layout.ranks`, `Layout.rank`).
+    checks: List<Bool>,
+    ranks: List<Nat>,
+    rank: Nat,
     index: Nat,
     frames: List<BitVec(64)>,
     // What the registers the homes pin held when the activation was entered,
     // by their places in the home pool: it never writes them, so they hold
     // it still, unsaved.
     pinned: List<BitVec(64)>,
+    // The levels of calls without a check the body may still make, at
+    // least its rank, and the stack's limit, the offset the region's room
+    // slot points at (docs/native/native-procedure-frames-design.md §7.2).
     room: Nat,
+    floor: Nat,
     framed: index + 8 * (words + frames.len()) <= stack.size,
-    roomy: callees.below(called, procedures, bodies, homes.places, homes.room_table(functions), room) + 8 <= index,
+    // Between the limit and the frame is what the deepest of the body's
+    // calls takes with that room (`List::reach`: each level a return
+    // address, the registers the callee saves and the callee's own frame,
+    // a checked callee nothing), or the room of a function the body calls
+    // (`List::functions_room`: its room under the homes' table and the
+    // CALL's word), whichever is more (`List::below`); then one return
+    // address more, a checked callee's CALL.
+    roomy: floor + callees.below(called, procedures, bodies, homes.places, homes.room_table(functions), checks, room) + 8 <= index,
+    ranked: rank <= room,
 }
 
 fn Target::layout(self t: Target) → Layout {
-    Layout::tabled(t.r.low, t.reserved, t.words, t.caps, t.homes, t.procedures, t.functions, t.bodies, t.callees, t.called)
+    Layout::tabled(t.r.low, t.reserved, t.words, t.caps, t.homes, t.procedures, t.functions, t.bodies, t.callees, t.called, t.checks, t.ranks, t.rank)
 }
 fn Target::io(self t: Target) → LinuxIo<X86Memory(t.r.profile)> { t.r.profile.linux() }
 fn Target::site(self t: Target) → Site<X86Memory(t.r.profile)> { t.io().site(t.program, t.origin) }
@@ -219,13 +228,13 @@ fn Target::Slots(self t: Target, v: Nat → BitVec(8), m: X86Memory(t.r.profile)
     (i: Nat) → i < t.words → read_word(t.io().data, m, t.slot(i)) = Some(word_in(v, t.layout().frame_cell(i)))
 }
 
-// The activation: its room in the region's slot, its frame's words, and
+// The activation: the stack's limit in the region's slot, its frame's words, and
 // its frames from the frame's end up. Where the frame is has no slot: it is
 // RSP between statements (`Target::Held`).
 // With them, the command line at the RSP its slot holds.
 record Activation(t: Target, v: Nat → BitVec(8), m: X86Memory(t.r.profile)) {
     argv: ArgvAt(t.argv(), m, word_in(v, t.layout().stack_offset()), t.args),
-    room: word_in(v, t.layout().room_offset()).toNat() = t.room,
+    room: word_in(v, t.layout().room_offset()) = t.stack.at(t.floor),
     slots: t.Slots(v, m),
     frames: t.FramesAt(m, t.frames, t.index + 8 * t.words),
 }
@@ -627,7 +636,7 @@ theorem Target::stacking_store(self t: Target, v: Nat → BitVec(8), m: X86Memor
                 Inr(omega(fits, layout.stack_below_size(), layout.frame_cell_at(i)))))))));
     Activation(argv := j(sym(slot), λ rsp _ => ArgvAt(t.argv(), after, rsp, t.args),
             argv_at_kept(t.argv(), m, t.argv(), after, kept, word_in(v, so), t.args, stacking.argv)),
-        room := trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), room), stacking.room),
+        room := trans(room, stacking.room),
         slots := slots,
         frames := t.frames_store(m, q, bytes, size, t.frames, t.index + 8 * t.words, stacking.frames))
 }
@@ -757,7 +766,7 @@ theorem Target::stacking_slot(self t: Target, v: Nat → BitVec(8), m: X86Memory
                 sym(word_in_agree(w, v, layout.frame_cell(n), λ b short => t.r.cells_outside(v, fc, bytes, layout.frame_cell(n) + b,
                     layout.frame_cells_apart(i, n, b, other, short))))))),
     };
-    Activation(argv := argv, room := trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), room), stacking.room), slots := slots,
+    Activation(argv := argv, room := trans(room, stacking.room), slots := slots,
         frames := t.frames_stack_store(m, k, fits, word, t.frames, t.index + 8 * t.words, omega(inside), stacking.frames))
 }
 

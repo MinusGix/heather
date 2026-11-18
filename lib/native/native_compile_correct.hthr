@@ -1364,9 +1364,9 @@ theorem Target::goes_counted(self t: Target, env: Env, index: Nat, pre_i: Prog,
     zero: t.room = 0 → t.Goes(prog_len(deep_before), tree, λ _ => True),
     more: (d: Nat) → t.room = Succ(d) →
         t.Goes(prog_len(pre_i.label(t.layout().procedure_label(index)).count_down(t.layout())), tree, λ v =>
-            t.Bare(env, d, t.index - 8, top, v.gprs, v.memory) ∧ v.gprs.Outside(g0, [Rax, R11, Rsp]))):
+            t.Bare(env, t.index - 8, top, v.gprs, v.memory) ∧ v.gprs.Outside(g0, [Rax, R11, Rsp]))):
     t.Goes(asm_labels(t.program, t.layout().procedure_label(index)), tree, λ s =>
-        t.Bare(env, t.room, t.index - 8, top, s.gprs, s.memory) ∧ (s.gprs = g0)) {
+        t.Bare(env, t.index - 8, top, s.gprs, s.memory) ∧ (s.gprs = g0)) {
     let layout = t.layout();
     let label = layout.procedure_label(index);
     let lbl = Prog::At(pre_i, label, Block([]));
@@ -1375,7 +1375,7 @@ theorem Target::goes_counted(self t: Target, env: Env, index: Nat, pre_i: Prog,
     let i1 = t.index - 8;
     let so = layout.stack_offset();
     let slots: (so + 16 <= t.r.size) = t.fits;
-    let based: Nat → X86Memory(t.r.profile) → Type = λ n m => Exists<Nat → BitVec(8)>(λ v => t.Based(env, n, v, m));
+    let based: Nat → X86Memory(t.r.profile) → Type = λ n m => Exists<Nat → BitVec(8)>(λ v => t.Based(env, v, m));
     // What the count keeps: the stack's words, RSP, and the registers it
     // does not write.
     let r = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.FramesAt(m, top, i1) ∧ ((read_gpr(Rsp, g) = t.stack.at(i1)) ∧ g.Outside(g0, [Rax, R11, Rsp]));
@@ -1397,10 +1397,10 @@ theorem Target::goes_counted(self t: Target, env: Env, index: Nat, pre_i: Prog,
         zero, after);
     let labelled = t.goes_block(pre_i, label, [], w_lbl, tree,
         λ v => based(t.room, v.memory) ∧ r(v.gprs, v.memory), count);
-    let entered: t.Goes(prog_len(pre_i), tree, λ s => t.Bare(env, t.room, i1, top, s.gprs, s.memory) ∧ (s.gprs = g0)) = t.goes_weaken(labelled, λ s h => ⟨h.left.left, ⟨h.left.right.left, ⟨h.left.right.right,
+    let entered: t.Goes(prog_len(pre_i), tree, λ s => t.Bare(env, i1, top, s.gprs, s.memory) ∧ (s.gprs = g0)) = t.goes_weaken(labelled, λ s h => ⟨h.left.left, ⟨h.left.right.left, ⟨h.left.right.right,
             λ x _ => cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(x, g), h.right)⟩⟩⟩);
     j(sym(label_target(w_lbl.witness, t.program, pre_i, index + t.functions.len(), Block([]), t.program.laid_out_unique(t.laid), w_lbl.proof)),
-        λ at _ => t.Goes(at, tree, λ s => t.Bare(env, t.room, i1, top, s.gprs, s.memory) ∧ (s.gprs = g0)), entered)
+        λ at _ => t.Goes(at, tree, λ s => t.Bare(env, i1, top, s.gprs, s.memory) ∧ (s.gprs = g0)), entered)
 }
 
 // No room: every procedure's count goes to the shared exit, as the
@@ -1496,9 +1496,9 @@ theorem Target::procedures_body(self t: Target, src: Source, call: Writers(), n,
             let returned = λ (after: Env) => c.goes_callee_return(after, b_i.prog, proc.results, k(Onward(after)), w_exit, inside_results, g0, ret, above, refl,
                 at_entry, j(sym(d_eq), λ x _ => Succ(x) < Nat::pow(2, 64), small),
                 λ s2 rip_s resident_s bare_s kept_s holding_s => {
-                    let bare_i: t.Bare(after, t.room, t.index, above, s2.gprs, s2.memory) = j(sym(eq), λ r _ => t.Bare(after, r, t.index, above, s2.gprs, s2.memory),
-                        j(back_i, λ x _ => t.Bare(after, Succ(d2), x, above, s2.gprs, s2.memory), bare_s));
-                    ends(Onward(after))(s2, rip_s, resident_s, t.bare_file(env, after, t.room, t.index, above, s2.gprs, s2.memory, bare_i, args_eq),
+                    let bare_i: t.Bare(after, t.index, above, s2.gprs, s2.memory) = j(sym(eq), λ r _ => t.Bare(after, t.index, above, s2.gprs, s2.memory),
+                        j(back_i, λ x _ => t.Bare(after, x, above, s2.gprs, s2.memory), bare_s));
+                    ends(Onward(after))(s2, rip_s, resident_s, t.bare_file(env, after, t.index, above, s2.gprs, s2.memory, bare_i, args_eq),
                         kept_s, holding_s)
                 });
             let body = proc.body.emit_runs(c, call, src.performs(call, n, d), ih(c, tp, hosts, answers, d_eq), c.functions_run(call, answers))(entry, proc.results, names_i, b_i, emitted_i, w_b, pf.checks)(
@@ -1508,7 +1508,7 @@ theorem Target::procedures_body(self t: Target, src: Source, call: Writers(), n,
             let entered = c.goes_callee_entry(env, pre_i, proc, index, values, g0, top, refl, at_entry, passed,
                 tree, w_entry, inside_params, pf.entry_apart, pf.entry_within, pf.params_few, long, next_c);
             j(at_i, λ x _ => t.Goes(prog_len(counted), tree, λ v =>
-                t.Bare(env, d2, x, top, v.gprs, v.memory) ∧ v.gprs.Outside(g0, [Rax, R11, Rsp])), entered)
+                t.Bare(env, x, top, v.gprs, v.memory) ∧ v.gprs.Outside(g0, [Rax, R11, Rsp])), entered)
         };
         t.goes_counted(env, index, pre_i, hw.left, w_dl.witness, dp, Block([]), w_dl.proof, tree, g0, top,
             λ zero => absurd(trans(sym(room), zero)), more)(s, here, resident, pre)

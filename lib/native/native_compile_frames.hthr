@@ -34,11 +34,26 @@ theorem LinuxIo::steps_of_stack<M>(self io: LinuxIo<M>, stack: Stack<M>(io.fetch
     linux_steps_of_machine(io, before, after, j(writes, λ w _ => MachineSteps(io.fetch, io.data, w, before, after), steps))
 }
 
+// A tree after a step that is silent where `silent` says: a procedure's
+// call is a silent step of its meaning (`Source::performs`), a function's
+// call none.
+fn ITree::after_step<R>(E: Events, silent: Bool, t: ITree<R>(E)) → ITree<R>(E) { match silent { True => Tau(t), False => t } }
+
+// One machine step pays for it.
+theorem paid_after_step<M>(io: LinuxIo<M>, silent: Bool, t: ITree<BitVec(64)>(Events::linux()), before, after: MachineState<M>,
+    step: LinuxStep(io, before, after), sim: SimPaid(io, t, after)): SimPaid(io, ITree::after_step(Events::linux(), silent, t), before) {
+    match silent as λ b => SimPaid(io, ITree::after_step(Events::linux(), b, t), before) {
+        True => paid_tau_step(io, t, before, after, step, sim),
+        False => paid_back(io, t, before, after, linux_steps_cons(io, before, after, after, step, Exists(Zero, refl)), sim),
+    }
+}
+
 // A CALL to the label at `entry`, where the stack pointer is at offset
 // `index(s) + 8` of the stack: the return address (the item after the
 // CALL) is pushed at `index(s)` and the callee goes from its label with the
-// stack pointer there and the address on top.
-theorem LinuxIo::goes_callto<M>(self io: LinuxIo<M>, program: Prog, origin: BitVec(64), stack: Stack<M>(io.fetch, io.data),
+// stack pointer there and the address on top. The CALL pays for a silent
+// step where `silent` says.
+theorem LinuxIo::goes_callto<M>(self io: LinuxIo<M>, silent: Bool, program: Prog, origin: BitVec(64), stack: Stack<M>(io.fetch, io.data),
     writes: stack.writes = linux_writes(io), fits: FillsFit(program, no_fills()),
     k: Nat, before: Prog, name, target: Nat, at: asm_back(program, k) = At(before, name, CallTo(target)),
     entry: Nat, lands: NearLands(prog_len(before), asm_jump_of(asm_labels(program), prog_len(before), CallTo(target)), entry),
@@ -49,7 +64,7 @@ theorem LinuxIo::goes_callto<M>(self io: LinuxIo<M>, program: Prog, origin: BitV
             (u = call_near_after(stack.writes, asm_jump_of(asm_labels(program), prog_len(before), CallTo(target)), s)) ∧
             ((read_gpr(Rsp, u.gprs) = stack.at(index(s))) ∧
              (read_word(io.data, u.memory, stack.at(index(s))) = Some(next_rip(origin, prog_len(before) + 5)))))):
-    io.site(program, origin).Goes(io, prog_len(before), t, pre) {
+    io.site(program, origin).Goes(io, prog_len(before), ITree::after_step(Events::linux(), silent, t), pre) {
     let site = io.site(program, origin);
     λ s here resident holds => {
         let displacement = asm_jump_of(asm_labels(program), prog_len(before), CallTo(target));
@@ -63,8 +78,8 @@ theorem LinuxIo::goes_callto<M>(self io: LinuxIo<M>, program: Prog, origin: BitV
         let executes: CallNear(displacement).Executes(io.data, stack.writes, s, u) =
             ⟨j(sym(pushed), λ a _ => WordCanonical(a), stack.canonical(i, space)),
              ⟨j(sym(pushed), λ a _ => stack.writes.writable(s.memory, a, 8), stack.writable(s.memory, i, space)), refl⟩⟩;
-        let call = stack_step_machine(io.fetch, io.data, stack.writes, CallNear(displacement), s, u,
-            site.item_fetched(fits, s, resident, k, before, name, CallTo(target), at, here), executes);
+        let call: LinuxStep(io, s, u) = j(writes, λ w _ => MachineStep(io.fetch, io.data, w, s, u),
+            Inr(Inr(Exists(CallNear(displacement), ⟨site.item_fetched(fits, s, resident, k, before, name, CallTo(target), at, here), executes⟩))));
         let u_rip: (u.rip = next_rip(origin, entry)) =
             trans(cong_fn<BitVec(64), BitVec(64)>(λ a => near_branch_target(a, 5, displacement), here),
                 near_lands_target(origin, prog_len(before), displacement, entry, lands));
@@ -76,7 +91,7 @@ theorem LinuxIo::goes_callto<M>(self io: LinuxIo<M>, program: Prog, origin: BitV
             j(sym(pushed), λ a _ => read_word(io.data, stack.writes.store(s.memory, a, word_bytes(ret)), stack.at(i)) = Some(ret),
                 stack.stored(s.memory, i, space, ret));
         let ret_is: (ret = next_rip(origin, prog_len(before) + 5)) = site.rip_after(s, prog_len(before), 5, here);
-        paid_back(io, t, s, u, io.steps_of_stack(stack, writes, s, u, call),
+        paid_after_step(io, silent, t, s, u, call,
             callee(s, holds, u, u_rip, u_resident,
                 ⟨refl, ⟨u_rsp, j(ret_is, λ r _ => read_word(io.data, u.memory, stack.at(i)) = Some(r), u_ret)⟩⟩))
     }

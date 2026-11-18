@@ -1184,7 +1184,7 @@ fn frame_up(words: Nat) → List<Instruction> { [MovRI(Rbx, BitVec::ofNat(8 * wo
 // `need` is the callee's charge (`List::need`), capped at what no stack
 // holds. RAX and R11 hold nothing here (the arguments are in their
 // registers, and RBX is not saved yet).
-fn check_bound(need: Nat) → Nat { Nat::min(need - 8, Nat::pow(2, 47)) }
+fn check_bound(need: Nat) → Nat { Nat::min(need - 8, Nat::pow(2, 48)) }
 
 fn Prog::checks_room(self p: Prog, layout: Layout, need: Nat) → Prog {
     let left = then(then(p, Block([MovRI(R11, layout.room_at())])), Load(WordLoad(Rax, R11)));

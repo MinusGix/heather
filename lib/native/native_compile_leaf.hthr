@@ -488,8 +488,16 @@ theorem Target::goes_ports_from(self t: Target, values: Valuation(), tree: ITree
             Cons(register, later) => match words {
                 Nil => λ p q env none => absurd(none),
                 Cons(word, others) => λ p q env => (match fits: t.layout().word_fits(word) {
-                    False => λ none => absurd(none),
-                    True => λ more within rbx unused apart next => {
+                    False => λ none => absurd(trans(sym(none), j(sym(fits), λ b _ => (match b {
+                            False => None,
+                            True => p.word_from(t.layout(), out, word, register).ports_from(t.layout(), out, rest, others, later),
+                        }) = None, refl))),
+                    True => λ found within rbx unused apart next => {
+                        let more: (p.word_from(t.layout(), out, word, register).ports_from(t.layout(), out, rest, others, later) = Some(q)) =
+                            trans(sym(j(sym(fits), λ b _ => (match b {
+                                False => None,
+                                True => p.word_from(t.layout(), out, word, register).ports_from(t.layout(), out, rest, others, later),
+                            }) = p.word_from(t.layout(), out, word, register).ports_from(t.layout(), out, rest, others, later), refl)), found);
                         let inside = t.layout().word_inside(word, j(sym(fits), λ b _ => b.IsTrue(), trivial));
                         let layout = t.layout();
                         let stored = p.word_from(layout, out, word, register);
