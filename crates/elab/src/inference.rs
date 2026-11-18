@@ -50,6 +50,30 @@ impl std::ops::Deref for Inference<'_> {
 }
 
 impl Inference<'_> {
+    /// `unsquash_empty(q) : Empty` for `q : ∥Empty∥` (or a `∥P∥` whose `P`
+    /// unfolds to it, such as `∥False∥`): the kernel's release of a squashed
+    /// absurdity (docs/kernel/metatheory-ch07-extensions.md §29).
+    fn elab_unsquash_empty(&self, cx: &Cx, scrut: &Expr) -> R<(Term, Type, Level)> {
+        let (scrut_t, scrut_ty, _) = self.elab_infer(cx, scrut)?;
+        let head = self.whnf(cx, &scrut_ty, scrut.span)?;
+        let Type::Squash { level, ty } = head else {
+            return err("`unsquash_empty` needs an argument of type `∥False∥`", scrut.span);
+        };
+        let inner = self.whnf(cx, &ty, scrut.span)?;
+        if !matches!(&inner, Type::Empty { level: l } if *l == level) {
+            return err(
+                "`unsquash_empty` needs an argument of type `∥False∥`; this one is \
+                 squashed but its type does not unfold to `False`",
+                scrut.span,
+            );
+        }
+        Ok((
+            Term::UnsquashEmpty { level: level.clone(), scrut: Rc::new(scrut_t) },
+            Type::Empty { level: level.clone() },
+            level,
+        ))
+    }
+
     fn elab_squash_ind(
         &self,
         cx: &Cx,
@@ -545,6 +569,20 @@ impl Inference<'_> {
             && !self.shadowed(cx, "squash_ind")
         {
             return self.elab_squash_ind(cx, &args[0], &args[1], &args[2]);
+        }
+        if let ExprKind::App {
+            head,
+            args,
+            named,
+            explicit: false,
+            goal_oriented: false,
+        } = &e.kind
+            && matches!(&head.kind, ExprKind::Var(name) if name == "unsquash_empty")
+            && args.len() == 1
+            && named.is_empty()
+            && !self.shadowed(cx, "unsquash_empty")
+        {
+            return self.elab_unsquash_empty(cx, &args[0]);
         }
         match &e.kind {
             ExprKind::ArgSlot(_)

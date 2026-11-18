@@ -463,6 +463,12 @@ impl SharedEq for Term {
                     && src_ty.shared_eq(o_src_ty, m) && motive.shared_eq(o_motive, m)
                     && case.shared_eq(o_case, m) && scrut.shared_eq(o_scrut, m)
             }
+            Term::UnsquashEmpty { level, scrut } => {
+                let Term::UnsquashEmpty { level: o_level, scrut: o_scrut } = other else {
+                    return false;
+                };
+                level.shared_eq(o_level, m) && scrut.shared_eq(o_scrut, m)
+            }
             Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst, snd } => {
                 let Term::Pair {
                     fst_level: o_fst_level, snd_level: o_snd_level, fst_ty: o_fst_ty,
@@ -773,8 +779,8 @@ impl SharedEq for Branches {
             tm_pair, tm_fst, tm_snd, tm_unit, tm_empty, tm_triv, tm_elim_empty, ty_sum, tm_sum,
             tm_inl, tm_inr, tm_case, ty_w, tm_w, tm_sup, tm_elim_w, ty_vec, tm_vec, ty_fin, tm_fin,
             ty_wf, tm_wf, tm_supf, tm_elim_wf, ty_seq, tm_seq, ty_sempty, tm_sempty, tm_srefl,
-            tm_elim_sempty, ty_squash, tm_squash, tm_squash_in, tm_elim_squash, ty_m, tm_m,
-            tm_corec, tm_out, ty_dvec, tm_dvec, ty_iwf, tm_iwf, tm_sup_i, tm_elim_iwf,
+            tm_elim_sempty, ty_squash, tm_squash, tm_squash_in, tm_elim_squash, tm_unsquash_empty,
+            ty_m, tm_m, tm_corec, tm_out, ty_dvec, tm_dvec, ty_iwf, tm_iwf, tm_sup_i, tm_elim_iwf,
         } = self;
         let Branches {
             ty_nat: o_ty_nat, ty_pi: o_ty_pi, ty_ty: o_ty_ty, ty_el: o_ty_el, ty_id: o_ty_id,
@@ -791,7 +797,8 @@ impl SharedEq for Branches {
             tm_elim_wf: o_tm_elim_wf, ty_seq: o_ty_seq, tm_seq: o_tm_seq, ty_sempty: o_ty_sempty,
             tm_sempty: o_tm_sempty, tm_srefl: o_tm_srefl, tm_elim_sempty: o_tm_elim_sempty,
             ty_squash: o_ty_squash, tm_squash: o_tm_squash, tm_squash_in: o_tm_squash_in,
-            tm_elim_squash: o_tm_elim_squash, ty_m: o_ty_m, tm_m: o_tm_m, tm_corec: o_tm_corec,
+            tm_elim_squash: o_tm_elim_squash,
+            tm_unsquash_empty: o_tm_unsquash_empty, ty_m: o_ty_m, tm_m: o_tm_m, tm_corec: o_tm_corec,
             tm_out: o_tm_out, ty_dvec: o_ty_dvec, tm_dvec: o_tm_dvec, ty_iwf: o_ty_iwf,
             tm_iwf: o_tm_iwf, tm_sup_i: o_tm_sup_i, tm_elim_iwf: o_tm_elim_iwf,
         } = other;
@@ -822,7 +829,8 @@ impl SharedEq for Branches {
             && tm_srefl.shared_eq(o_tm_srefl, m) && tm_elim_sempty.shared_eq(o_tm_elim_sempty, m)
             && ty_squash.shared_eq(o_ty_squash, m) && tm_squash.shared_eq(o_tm_squash, m)
             && tm_squash_in.shared_eq(o_tm_squash_in, m)
-            && tm_elim_squash.shared_eq(o_tm_elim_squash, m) && ty_m.shared_eq(o_ty_m, m)
+            && tm_elim_squash.shared_eq(o_tm_elim_squash, m)
+            && tm_unsquash_empty.shared_eq(o_tm_unsquash_empty, m) && ty_m.shared_eq(o_ty_m, m)
             && tm_m.shared_eq(o_tm_m, m) && tm_corec.shared_eq(o_tm_corec, m)
             && tm_out.shared_eq(o_tm_out, m) && ty_dvec.shared_eq(o_ty_dvec, m)
             && tm_dvec.shared_eq(o_tm_dvec, m) && ty_iwf.shared_eq(o_ty_iwf, m)

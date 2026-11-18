@@ -199,6 +199,8 @@ pub(super) enum TmView<'a, 'v, D: Dom<'v>> {
         motive: D::TyC,
         scrut: D::TmC,
     },
+    /// The argument is not viewed: congruence skips it (ch. 07 §29).
+    UnsquashEmpty { level: &'a Level },
     Case {
         lhs_level: &'a Level,
         rhs_level: &'a Level,
@@ -330,6 +332,7 @@ impl<'v, D: Dom<'v>> TmView<'_, 'v, D> {
                 | TmView::ElimEmpty { .. }
                 | TmView::ElimSEmpty { .. }
                 | TmView::ElimSquash { .. }
+                | TmView::UnsquashEmpty { .. }
                 | TmView::Case { .. }
                 | TmView::ElimW { .. }
                 | TmView::ElimWf { .. }
@@ -1361,6 +1364,7 @@ impl<'v> Dom<'v> for Syn {
                     scrut: Rc::clone(scrut),
                 }
             }
+            Term::UnsquashEmpty { level, .. } => TmView::UnsquashEmpty { level },
             Term::Case {
                 lhs_level,
                 rhs_level,

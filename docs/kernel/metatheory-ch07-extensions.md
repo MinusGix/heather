@@ -2138,3 +2138,106 @@ compared functions are both absurdity eliminations.
 its layer-c admission and its role under `transp` (`docs/kernel/sprop-design.md`
 §2.2), so dropping it is a separate decision.
 
+
+## 29. `unsquash_empty`: releasing `∥Empty∥`
+
+Added 2026-11-18, for `docs/language/strict-conditions-design.md` §4.2 (Minus
+chose it the same day). The rules:
+
+```text
+   Ψ; Γ ⊢_i q : ∥Empty^l∥ @ l
+  ──────────────────────────────────  (unsquash-Empty)
+   Ψ; Γ ⊢_i unsquash_empty^l(q) : Empty^l @ l
+
+   unsquash_empty^l(squash^l(A; a))  ⇝  a                    (β)
+```
+
+at the computing layers, `ElimSquash`'s admission. The result is neutral
+when `q`'s whnf is neutral. The β rule is needed, unlike `elim_Empty`'s: in
+an open context `squash(x)` with `x : Empty` is a canonical inhabitant of
+`∥Empty∥`, and without β `unsquash_empty(squash x)` would be a whnf that is
+neither neutral nor canonical, which `Empty`'s relation (§28, "both reduce
+to neutrals") cannot hold.
+
+**The one change: §27's relation keeps each side's payload.** As §27 wrote
+it, `t ~ t' : ∥A∥` asks only that both sides normalize, so a `squash(a)`
+at `∥Empty^l∥` says nothing about `a`, and the arm below could not reach
+`a ~ a : Empty^l`. The relation becomes
+
+```text
+t ~ t' : ∥A∥  iff  t ⇓ w and t' ⇓ w', and
+                   w = squash(a)  implies  a ~ a : A, and
+                   w' = squash(a') implies a' ~ a' : A.
+```
+
+Each payload is related **to itself**. `w` and `w'` are still not
+compared, and neither are `a` and `a'`, so the relation still accepts any two
+normalizing inhabitants that are each well-formed. This is the "carry that
+the payload is related at `A`, still ignoring which payload" that the
+proposal named as the abort criterion's place. It needs no relevance marks.
+`A` is a component of `∥A∥`, so the clause refers to a relation already
+defined, as `Σ`'s does. What it disturbs, case by case:
+
+- **PER.** Symmetry swaps the two side conditions. Transitivity of
+  `t ~ t'` and `t' ~ t''` keeps `t`'s condition from the first and `t''`'s
+  from the second; `t'`'s is dropped. Determinacy of `⇓` (§19.3) is what
+  makes "the" whnf of `t'` the same on both sides.
+- **Expansion** (closure under `⇝` backwards): the whnf is unchanged.
+- **Reflection of neutrals:** a neutral whnf carries no condition, so a
+  related neutral pair is in the relation as before.
+- **Kripke monotonicity:** weakening keeps a whnf's shape and `A`'s
+  relation is monotone.
+- **Escape** is unchanged. The algorithm's squash arm accepts any two
+  well-typed terms at `∥A∥` (`conv.rs`, the type-directed arm), which is
+  complete for a relation that never compares the two sides.
+- **§27's fundamental-theorem arms.** `squash(A; a)`: `a ~ a : A` is the
+  induction hypothesis for `a`, so the new condition is met where it is
+  introduced. `ind_∥∥` on a scrutinee whose whnf is `squash(a)`: the β case
+  substitutes `a` for `x` in `b`, which §27 waved through as "semantic
+  substitution"; it needs exactly `a ~ a : A`, which only the new relation
+  supplies. So the edit closes a gap §27 left rather than opening one.
+
+**Fundamental theorem, the `unsquash_empty` arm.** Given `q ~ q' :
+∥Empty^l∥`, show `unsquash_empty(q) ~ unsquash_empty(q') : Empty^l`, that
+is, both sides reduce to neutrals (§28, which does not compare them).
+Normalize `q ⇓ w`.
+
+- `w` neutral: `unsquash_empty(w)` is neutral, and is related to itself by
+  the neutral law below.
+- `w = squash(a)`: one β step gives `a`, and `a ~ a : Empty^l` by the
+  relation's new condition, so `a` reduces to a neutral. Expansion carries
+  that back to `unsquash_empty(q)`.
+
+There is no other whnf at `∥Empty^l∥`, by canonical forms. The same for
+`q'`. The two sides are never compared, which is what `Empty`'s relation asks.
+
+**The neutral law skips the argument**, as §28 and §21.4 do for
+`elim_Empty`/`elim_sEmpty`: `unsquash_empty(ν) ≈ unsquash_empty(ν')` for
+any two neutrals at `∥Empty^l∥`. It is forced for the same reason. The
+arguments are irrelevant, and a law that compared them would be
+incomplete. In practice the law rarely fires, because the result's type is
+always `Empty^l` and §28's type-directed arm accepts first. It is there
+for the neutral spine walk, where the type is not consulted.
+
+**Consistency.** In the empty context the relation has no neutrals, so a
+closed `q : ∥Empty^l∥` would reduce to `squash(a)` with `a ~ a : Empty^l`
+closed, which has no inhabitant. That is §2's argument, now reaching
+through the squash. Without the edited relation the bridge would let a
+closed `∥Empty∥` that is related only by normalization produce an `Empty`,
+so the edit is load-bearing for consistency and is not bookkeeping.
+
+**Code layer.** One new branch `tm_unsquash_empty` with the shape
+`(ℓ, g, u_q, x_q. t)`, `u_q : Trm_c(g ⊢ ∥Empty^ℓ∥ @ ℓ)`. §8's count
+becomes one more former, matched one-for-one. Quotation sees the argument;
+live conversion skips it, as for `squash`'s witness (§27).
+
+**Cross-check against the algorithm.** There are three kernel pieces, and
+each is one of the laws above:
+
+1. The typing rule checks `q` against `∥Empty^l∥` by conversion. So a
+   `∥False∥` whose `False` unfolds to `Empty` is accepted.
+2. `whnf` fires β on a `squash`, and is otherwise neutral on a neutral
+   argument. The value machine applies the same rule.
+3. `tm_ne` congruence ignores the arguments.
+
+The comparison at `Empty^l` stays the `Ok(())` arm of §28.

@@ -1632,7 +1632,7 @@ fn gen_letbox_ty(env: &WtEnv, r: &mut Rng, b: u32) -> (Rc<Term>, Rc<Type>, Level
 /// recursive-call entry has that same motive (so `Var(0)` inhabits the
 /// branch type). Order = `Branches` field order. Independent transcription
 /// of docs/delam/04 — a disagreement with `src/rec.rs` is a test failure.
-const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 65] = [
+const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 66] = [
     (0, 1, 0, false, false), // ty_nat
     (2, 3, 2, false, true),  // ty_pi
     (1, 1, 0, false, false), // ty_ty
@@ -1688,6 +1688,7 @@ const BRANCH_DIMS: [(u32, u32, u32, bool, bool); 65] = [
     (1, 2, 1, true, true),   // tm_squash
     (1, 3, 2, true, true),   // tm_squash_in
     (2, 5, 4, true, true),   // tm_elim_squash
+    (1, 2, 1, true, true),   // tm_unsquash_empty
     (3, 6, 5, false, false), // ty_m (innermost local is a term-motive call)
     (3, 6, 5, true, true),   // tm_m
     (4, 9, 8, true, true),   // tm_corec
@@ -1753,7 +1754,7 @@ fn gen_const_rec(
         ty_motive: rty(m1ty.shift_univ(1).shift_global(1).shift_local(1)),
         tm_motive: rty(m2ty.shift_univ(1).shift_global(2).shift_local(1)),
     });
-    let mut bs: Vec<Rc<Term>> = Vec::with_capacity(65);
+    let mut bs: Vec<Rc<Term>> = Vec::with_capacity(66);
     for &(tu, tg, tl, tm_kind, var_ok) in &BRANCH_DIMS {
         if var_ok && r.below(3) == 0 {
             bs.push(rt(v(0)));
@@ -1818,16 +1819,17 @@ fn gen_const_rec(
         tm_squash: bs[52].clone(),
         tm_squash_in: bs[53].clone(),
         tm_elim_squash: bs[54].clone(),
-        ty_m: bs[55].clone(),
-        tm_m: bs[56].clone(),
-        tm_corec: bs[57].clone(),
-        tm_out: bs[58].clone(),
-        ty_dvec: bs[59].clone(),
-        tm_dvec: bs[60].clone(),
-        ty_iwf: bs[61].clone(),
-        tm_iwf: bs[62].clone(),
-        tm_sup_i: bs[63].clone(),
-        tm_elim_iwf: bs[64].clone(),
+        tm_unsquash_empty: bs[55].clone(),
+        ty_m: bs[56].clone(),
+        tm_m: bs[57].clone(),
+        tm_corec: bs[58].clone(),
+        tm_out: bs[59].clone(),
+        ty_dvec: bs[60].clone(),
+        tm_dvec: bs[61].clone(),
+        ty_iwf: bs[62].clone(),
+        tm_iwf: bs[63].clone(),
+        tm_sup_i: bs[64].clone(),
+        tm_elim_iwf: bs[65].clone(),
     });
     if tm_variant {
         let (scrut, delta, cty, cl) = match neutral {
@@ -2068,7 +2070,7 @@ pub fn gen_nat_rec(base: &WtEnv, r: &mut Rng, tm_variant: bool) -> NatRec {
 impl NatRec {
     /// The recursor over `Var 0` with the given branch bodies, in
     /// [`Branches`] field order. Checks at `Nat @ 0` in `self.env`.
-    pub fn build(&self, bs: &[Rc<Term>; 65]) -> Rc<Term> {
+    pub fn build(&self, bs: &[Rc<Term>; 66]) -> Rc<Term> {
         let motives = Rc::new(Motives {
             ty_motive: rty(Type::Nat),
             tm_motive: rty(Type::Nat),
@@ -2129,16 +2131,17 @@ impl NatRec {
             tm_squash: bs[52].clone(),
             tm_squash_in: bs[53].clone(),
             tm_elim_squash: bs[54].clone(),
-            ty_m: bs[55].clone(),
-            tm_m: bs[56].clone(),
-            tm_corec: bs[57].clone(),
-            tm_out: bs[58].clone(),
-            ty_dvec: bs[59].clone(),
-            tm_dvec: bs[60].clone(),
-            ty_iwf: bs[61].clone(),
-            tm_iwf: bs[62].clone(),
-            tm_sup_i: bs[63].clone(),
-            tm_elim_iwf: bs[64].clone(),
+            tm_unsquash_empty: bs[55].clone(),
+            ty_m: bs[56].clone(),
+            tm_m: bs[57].clone(),
+            tm_corec: bs[58].clone(),
+            tm_out: bs[59].clone(),
+            ty_dvec: bs[60].clone(),
+            tm_dvec: bs[61].clone(),
+            ty_iwf: bs[62].clone(),
+            tm_iwf: bs[63].clone(),
+            tm_sup_i: bs[64].clone(),
+            tm_elim_iwf: bs[65].clone(),
         });
         rt(if self.tm_variant {
             Term::ElimCodeTm {
@@ -2634,6 +2637,10 @@ pub fn identity_branches() -> Rc<Branches> {
                 scrut: rt(gtm(0, &g4s)),
             })))
         },
+        tm_unsquash_empty: rt(Term::BoxTm(rt(Term::UnsquashEmpty {
+            level: lv(0),
+            scrut: rt(gtm(0, &g1)),
+        }))),
         // box (M(U_I; U_S; U_P; u_o)(u_j)) — g = 5, U_I = 4, U_S = 3, U_P =
         // 2, u_o = 1, u_j = 0; ℓ = lv(2), ℓ' = lv(1), ℓi = lv(0).
         ty_m: {

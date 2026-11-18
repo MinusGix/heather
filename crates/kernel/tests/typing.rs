@@ -4,7 +4,7 @@
 //! disciplines, global contexts and local substitutions, universe
 //! polymorphism, contextual types (box/letbox, checking-only box under
 //! binders), and the code recursors, including a full *identity recursor*
-//! whose 65 branches re-box their telescopes' code — an end-to-end exercise
+//! whose 66 branches re-box their telescopes' code — an end-to-end exercise
 //! of every `G_Typ`/`G_Trm` telescope.
 //!
 //! No generator-based properties: the generators produce ill-typed terms,
@@ -607,6 +607,7 @@ fn constant_branches() -> Rc<Branches> {
         tm_squash: z(),
         tm_squash_in: z(),
         tm_elim_squash: z(),
+        tm_unsquash_empty: z(),
         ty_m: z(),
         tm_m: z(),
         tm_corec: z(),
@@ -1151,6 +1152,10 @@ fn identity_branches() -> Rc<Branches> {
                 scrut: rt(gtm(0, &g4s)),
             })))
         },
+        tm_unsquash_empty: rt(Term::BoxTm(rt(Term::UnsquashEmpty {
+            level: lv(0),
+            scrut: rt(gtm(0, &g1)),
+        }))),
         // box (M(U_I; U_S; U_P; u_o)(u_j)) — g = 5, U_I = 4, U_S = 3, U_P =
         // 2, u_o = 1, u_j = 0; ℓ = lv(2), ℓ' = lv(1), ℓi = lv(0).
         ty_m: {
@@ -1560,7 +1565,7 @@ fn elim_empty_branch_recursive_call_is_at_the_scrutinee_level() {
 /// The pattern is `elim_empty_branch_recursive_call_is_at_the_scrutinee_level`
 /// generalised: the identity body is routed through `λ(z : claim). <body>`
 /// applied to the entry under test, so only `claim` varies. The harness
-/// recursor is `elim^Typ` on `box Nat`: `rec_ga` checks all 65 branches
+/// recursor is `elim^Typ` on `box Nat`: `rec_ga` checks all 66 branches
 /// whatever the scrutinee is, so a single trivial scrutinee observes any
 /// branch's telescope.
 #[test]
@@ -1599,7 +1604,7 @@ fn type_motive_branch_entries_are_usable_at_their_declared_context_and_level() {
         })
     };
     // `elim^Typ` over `box Nat`, whose only job is to make `rec_ga` walk the
-    // 65 branches; it fires `ty_nat`, which no probe touches.
+    // 66 branches; it fires `ty_nat`, which no probe touches.
     let harness = |branches: Rc<Branches>| Term::ElimCodeTy {
         ty_motive_level: Level::Zero,
         tm_motive_level: Level::Zero,
@@ -2057,7 +2062,7 @@ fn pair_projections_and_dependency() {
 /// 4. the guard is §2.3's box side condition, not a layer: layer v refuses
 ///    them, layer **c** admits them (every body is checked there), and the
 ///    payload of a `box` refuses them, which is what leaves the code grammar
-///    and the 65 recursor branches alone;
+///    and the 66 recursor branches alone;
 /// 5. without an annotation an intro checks against the expected type and
 ///    does not infer (design §2.1).
 #[test]
