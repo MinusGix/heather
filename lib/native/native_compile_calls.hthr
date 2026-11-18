@@ -355,19 +355,15 @@ theorem Target::byte_below_stack(self t: Target, buf, cap: Nat, found: t.caps.nt
 theorem Target::copy_again(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, found: t.caps.nth(buf) = Some(cap), a: Nat,
     bytes: List<BitVec(8)>, short: a + bytes.len() <= cap,
     landed: (k: Nat) → (c: BitVec(8)) → bytes.nth(k) = Some(c) → v(t.layout().scratch_offset() + k) = c,
-    i: Nat, below: i < bytes.len(), g: Gprs, f: Flags, rip: BitVec(64), m: X86Memory(t.r.profile),
-    w: Nat → BitVec(8), holds: t.r.Holds(w, m),
-    outside: (q: Nat) → ((q < t.layout().buffer_offset(buf) + a) ∨ ((t.layout().buffer_offset(buf) + a) + i <= q)) → w(q) = v(q),
-    inside: (k: Nat) → (c: BitVec(8)) → k < i → bytes.nth(k) = Some(c) → w((t.layout().buffer_offset(buf) + a) + k) = c,
-    stacking: t.Stacking(w, m),
-    r8: read_gpr(R8, g) = word_of_nat(64, i), rsi: read_gpr(Rsi, g) = next_rip(t.r.low, t.layout().scratch_offset() + i),
-    rdi: read_gpr(Rdi, g) = next_rip(t.r.low, (t.layout().buffer_offset(buf) + a) + i), rax: read_gpr(Rax, g) = word_of_nat(64, bytes.len()),
-    vals: List<BitVec(64)>, homes_at: home_values(g) = vals):
+    i: Nat, below: i < bytes.len(), vals: List<BitVec(64)>, g: Gprs, f: Flags, rip: BitVec(64), m: X86Memory(t.r.profile),
+    at: CopyAt(t, v, buf, a, bytes, i, vals, g, m)):
     CopyAt(t, v, buf, a, bytes, Succ(i), vals, execute_block_normal([AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))],
-        MachineState(write_gpr(Rdx, w(t.layout().scratch_offset() + i).zero_extend(56), g), f, rip,
-            t.r.profile.store(m, next_rip(t.r.low, (t.layout().buffer_offset(buf) + a) + i), [imm_byte0(w(t.layout().scratch_offset() + i).zero_extend(56))]))).gprs,
-        t.r.profile.store(m, next_rip(t.r.low, (t.layout().buffer_offset(buf) + a) + i), [imm_byte0(w(t.layout().scratch_offset() + i).zero_extend(56))])) {
+        MachineState(write_gpr(Rdx, at.copying.cells(t.layout().scratch_offset() + i).zero_extend(56), g), f, rip,
+            t.r.profile.store(m, next_rip(t.r.low, (t.layout().buffer_offset(buf) + a) + i), [imm_byte0(at.copying.cells(t.layout().scratch_offset() + i).zero_extend(56))]))).gprs,
+        t.r.profile.store(m, next_rip(t.r.low, (t.layout().buffer_offset(buf) + a) + i), [imm_byte0(at.copying.cells(t.layout().scratch_offset() + i).zero_extend(56))])) {
     let layout = t.layout();
+    let was = at.copying;
+    let w = was.cells;
     let bo = layout.buffer_offset(buf) + a;
     let so = layout.scratch_offset();
     let ends = layout.buffer_end(buf, cap, found);
@@ -378,26 +374,26 @@ theorem Target::copy_again(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, 
     let one: List<BitVec(8)> = [stored_byte];
     let fits_one: ((bo + i) + 1 <= t.r.size) = t.byte_fits(buf, cap, found, a, bytes, short, i, below);
     let w2 = t.r.buffer(w).set_span(bo + i, one.to_vector()).cells;
-    let from_scratch: (byte = v(so + i)) = outside(so + i, Inr(omega(ends, short)));
+    let from_scratch: (byte = v(so + i)) = was.outside(so + i, Inr(omega(ends, short)));
     CopyAt(within := below,
-        count := trans(cong_fn<BitVec(64), BitVec(64)>(λ x => x.add(BitVec::ofNat(1)), r8), sym(word_of_nat_succ(i))),
-        source := trans(cong_fn<BitVec(64), BitVec(64)>(λ x => x.add(BitVec::ofNat(1)), rsi), sym(next_rip_succ(t.r.low, so + i))),
-        dest := trans(cong_fn<BitVec(64), BitVec(64)>(λ x => x.add(BitVec::ofNat(1)), rdi), sym(next_rip_succ(t.r.low, bo + i))),
-        total := rax, homes := homes_at,
-        copying := Copying(cells := w2, holds := t.r.store_holds(w, m, holds, bo + i, one, fits_one),
+        count := trans(cong_fn<BitVec(64), BitVec(64)>(λ x => x.add(BitVec::ofNat(1)), at.count), sym(word_of_nat_succ(i))),
+        source := trans(cong_fn<BitVec(64), BitVec(64)>(λ x => x.add(BitVec::ofNat(1)), at.source), sym(next_rip_succ(t.r.low, so + i))),
+        dest := trans(cong_fn<BitVec(64), BitVec(64)>(λ x => x.add(BitVec::ofNat(1)), at.dest), sym(next_rip_succ(t.r.low, bo + i))),
+        total := at.total, homes := at.homes,
+        copying := Copying(cells := w2, holds := t.r.store_holds(w, m, was.holds, bo + i, one, fits_one),
             outside := λ q away => trans(t.r.cells_outside(w, bo + i, one, q, match away {
                     Inl(under) => Inl(Nat::le_trans(Succ(q), bo, bo + i, under, bo.le_add_l(i))),
                     Inr(over) => {
                         let past: ((bo + i) + 1 <= q) = over;
                         Inr(past)
                     },
-                }), outside(q, match away {
+                }), was.outside(q, match away {
                     Inl(under) => Inl(under),
                     Inr(over) => Inr(Nat::le_trans(bo + i, Succ(bo + i), q, Nat::le_succ_r(bo + i, bo + i, (bo + i).le_refl()), over)),
                 })),
              inside := λ k c early got => match k.lt_or_ge(i) {
                 Inl(before) => trans(t.r.cells_outside(w, bo + i, one, bo + k, Inl(bo.add_le_mono_l(Succ(k), i, before))),
-                    inside(k, c, before, got)),
+                    was.inside(k, c, before, got)),
                 Inr(late) => {
                     let here_k: (i = k) = Nat::le_antisym(i, k, late, Nat::le_of_succ_succ(k, i, early));
                     let got_i: (bytes.nth(i) = Some(c)) = j(sym(here_k), λ x _ => bytes.nth(x) = Some(c), got);
@@ -405,7 +401,7 @@ theorem Target::copy_again(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, 
                         trans(byte_back, trans(from_scratch, landed(i, c, got_i))));
                     j(here_k, λ x _ => w2(bo + x) = c, at_i)
                 },
-             }, stacking := t.stacking_store(w, m, bo + i, one, t.byte_below_stack(buf, cap, found, a, bytes, short, i, below), stacking)))
+             }, stacking := t.stacking_store(w, m, bo + i, one, t.byte_below_stack(buf, cap, found, a, bytes, short, i, below), was.stacking)))
 }
 
 // One byte of the copy: from the invariant with bytes left, the byte the
@@ -441,9 +437,7 @@ theorem Target::copy_byte(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, f
     let g1 = write_gpr(Rdx, byte.zero_extend(56), g);
     let fits_one: ((bo + i) + 1 <= t.r.size) = t.byte_fits(buf, cap, found, a, bytes, short, i, below);
     let rip2 = next_rip(next_rip(u.rip, byte_load_bytes(ByteLoad(Rdx, Rsi)).len()), 3);
-    let again = t.copy_again(v, buf, cap, found, a, bytes, short, landed, i, below, g, u.flags, rip2, m, w, holds,
-        copying.outside, copying.inside, copying.stacking, at.count, rsi, rdi, at.total,
-        vals, at.homes);
+    let again = t.copy_again(v, buf, cap, found, a, bytes, short, landed, i, below, vals, g, u.flags, rip2, m, at);
     let target = next_rip(t.r.low, bo + i);
     let landing = λ (x: BitVec(64)) => t.writes().writable(m, x, 1) ∧
         (t.site().Resident(t.r.profile.store(m, x, one)) ∧
