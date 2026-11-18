@@ -269,7 +269,18 @@ fn inline_ty(lets: &[Stmt], ty: &Ty) -> Option<Ty> {
         match st {
             Stmt::Let { name, expr, opaque: false, .. } => {
                 if crate::inductive::ty_mentions(&ty, name) {
-                    ty = subst_surface_ty(&ty, name, expr);
+                    // An expression is inlined sharing a value it reads more
+                    // than once: the lets run backwards here, so `r := r
+                    // with { a = r.a + i }` repeated `k` times would
+                    // otherwise spell `r`'s first value 2^k times
+                    // (issues/word-loop-body-exponential.md).
+                    ty = match &ty.kind {
+                        TyKind::OfExpr(e) => Ty {
+                            kind: TyKind::OfExpr(Box::new(crate::measure::subst_shared(e, &[(name.as_str(), expr)]))),
+                            span: ty.span,
+                        },
+                        _ => subst_surface_ty(&ty, name, expr),
+                    };
                 }
             }
             Stmt::Let { name, .. } | Stmt::LetCode { name, .. } => {

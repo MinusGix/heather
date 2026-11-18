@@ -132,13 +132,20 @@ record LoadsByte(r: Run, load: ByteLoad, post: r.State() → Type, s: r.State())
     after: post(byte_load_after(load, byte, s)),
 }
 
-// A byte stored: its place is writable, the code is still resident after,
+// A byte (or word) stored: its place is writable, the code is still resident after,
 // and `post` with it stored.
 record StoresByte(r: Run, store: ByteStore, post: r.State() → Type, s: r.State()) {
     plain: store_base_plain(store.base) = True,
     writable: r.t.writes().writable(s.memory, read_gpr(store.base, s.gprs), 1),
     resident: r.t.site().Resident(byte_store_after(r.t.writes(), store, s).memory),
     after: post(byte_store_after(r.t.writes(), store, s)),
+}
+
+record StoresWord(r: Run, store: WordStore, post: r.State() → Type, s: r.State()) {
+    plain: store_base_plain(store.base) = True,
+    writable: r.t.writes().writable(s.memory, read_gpr(store.base, s.gprs), 8),
+    resident: r.t.site().Resident(word_store_after(r.t.writes(), store, s).memory),
+    after: post(word_store_after(r.t.writes(), store, s)),
 }
 
 // A conditional jump: `hit` where the flags meet `cc`, `miss` where they do
@@ -175,6 +182,7 @@ fn Fragment::inside(self code: Fragment, r: Run, loops: Nat → Nat → Gprs →
             Load(load) => λ s => LoadsWord(r, load, post, s),
             LoadByte(load) => λ s => LoadsByte(r, load, post, s),
             StoreByte(store) => λ s => StoresByte(r, store, post, s),
+            Store(store) => λ s => StoresWord(r, store, post, s),
             _ => λ _ => False,
         },
         Fetch(id, register) => λ s => Fetches(r, id, register, post, s),
@@ -226,6 +234,8 @@ theorem Fragment::goes_inside(self code: Fragment, r: Run, loops: Nat → Nat �
             LoadByte(load) => λ _ within next s here resident holds => t.goes_load_byte(p, name, load, within, tree, post, next)(s, here, resident,
                 Exists(holds.byte, ⟨holds.low, ⟨holds.read, holds.after⟩⟩)),
             StoreByte(store) => λ _ within next s here resident holds => t.goes_store_byte(p, name, store, within, tree, post, next)(s, here, resident,
+                ⟨holds.plain, ⟨holds.writable, ⟨holds.resident, holds.after⟩⟩⟩),
+            Store(store) => λ _ within next s here resident holds => t.goes_store(p, name, store, within, tree, post, next)(s, here, resident,
                 ⟨holds.plain, ⟨holds.writable, ⟨holds.resident, holds.after⟩⟩⟩),
             _ => λ _ _ _ s here resident holds => false_elim(holds),
         },
@@ -453,6 +463,24 @@ theorem Run::goes_asked(self r: Run, code: Fragment, p: Prog, shape: CallShape, 
         λ a u here resident held => t.goes_result(r.live, r.out, r.env, shape.answer(r.env, a), asked, result, inside, sub, apart, within, tree(a), next(a, held.left),
             u, here, resident, held.right));
     code.goes(r, p, ready.within_before(0, Syscall, t.program, w_asked), Vis(shape.cmd(r.env), tree), r.Asks(shape, result), called)
+}
+
+// What a call's code claims, for any call: from the statement's start the
+// call the source makes, and on from its end with each answer decoded into
+// the environment. `capacity` is the room of the buffer it works on.
+fn Target::CallRuns(self t: Target, shape: CallShape, capacity: Nat) → Type {
+    (out: List<Nat>) → (env: Env) → (p: Prog) → (known: List<Fact>) → env.Knows(known) → (names: Nat) →
+    t.layout().words_fit(shape.words()).IsTrue() → t.layout().call_room(shape) = Some(capacity) → t.homes.apart(shape.result(), out).IsTrue() →
+    p.asks(Emission(t.layout(), known, out), shape, capacity, names).prog.Within(t.program) →
+    (tree: shape.cmd(env).Resp() → ITree<BitVec(64)>(Events::linux())) →
+    ((a: shape.cmd(env).Resp()) → LinuxCmd::Answers(shape.cmd(env), a) →
+        t.At(prog_len(p.asks(Emission(t.layout(), known, out), shape, capacity, names).prog), out, tree(a), shape.answer(env, a))) →
+    t.At(prog_len(p), live_before(known.unknown(shape.reads()), shape.result(), out), Vis(shape.cmd(env), tree), env)
+}
+
+// A call's code is added after the program it is put onto.
+theorem Prog::within_asks(self p: Prog, cx: Emission, shape: CallShape, capacity, names: Nat): p.Within(p.asks(cx, shape, capacity, names).prog) {
+    match shape { _ => cx.from(names).call(shape, capacity).cut().code.extends(cx, p) }
 }
 
 // One step fewer to go: from `i + n` bytes in all and `i` short of them, a

@@ -768,7 +768,7 @@ impl Reads<'_, '_> {
 /// The library's arithmetic the untrusted machine runs on machine numbers
 /// (`heather_run::Prim`): it compares each with its definition first, so a
 /// name here that means something else is only run as written.
-fn run_prims(elaborator: &Elaborator) -> heather_run::Prims {
+pub(crate) fn run_prims(elaborator: &Elaborator) -> heather_run::Prims {
     use heather_run::Prim;
     let named = [("Nat::add", Prim::Add), ("Nat::sub", Prim::Sub), ("Nat::mul", Prim::Mul), ("Nat::half", Prim::Half), ("Nat::twice", Prim::Twice), ("Nat::low_bit", Prim::LowBit),
         ("Nat::div", Prim::Div), ("Nat::mod", Prim::Mod), ("Nat::same", Prim::Equal), ("Nat::leb", Prim::LessOrEqual), ("BitVec::odd_bit", Prim::Odd)];

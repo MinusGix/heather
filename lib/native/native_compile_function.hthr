@@ -94,19 +94,6 @@ import omega;
 // ---------------------------------------------------------------------------
 // What a call's proof reads off the compile's checks and the machine
 
-// Every word a fitting list names is in the file.
-theorem Layout::words_fit_mem(self layout: Layout, ids: List<Nat>): (i: Nat) → layout.words_fit(ids).IsTrue() → Mem(i, ids) → layout.word_fits(i).IsTrue() {
-    match ids {
-        Nil => λ i _ never => false_elim(never),
-        Cons(id, rest) => λ i fit m => {
-            match m {
-                Inl(e) => j(sym(e), λ x _ => layout.word_fits(x).IsTrue(), Bool::both(fit).left),
-                Inr(later) => layout.words_fit_mem(rest, i, known, later),
-            }
-        },
-    }
-}
-
 // A near call's push, as a store to the stack.
 theorem Target::call_pushed(self t: Target, s: MachineState<X86Memory(t.r.profile)>, displacement: BitVec(32), i: Nat,
     rsp: read_gpr(Rsp, s.gprs) = t.stack.at(i + 8)):
