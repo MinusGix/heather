@@ -3769,6 +3769,15 @@ fn runtime_bytes_world(name: String, parts: SpanParts, cfuns: List<Nat>, write_s
         let runs <- runtime_global(callee ++ "::runs_bytes");
         let sig = write_sigs.nth(i).map(λ p => p.snd).unwrap_or(Sig([], Bit));
         let words = sig.params.drop(2);
+        // A callee that takes facts agrees with its code only where they
+        // hold, which the world's agreement at every record cannot say.
+        let rec_t <- infer(rec_g).or_fail("runtime: a callee's type: ");
+        let rec_arity <- rt_arity(64, rec_t);
+        let factless: Tac<True> = match rec_arity.same(words.len() + 2) {
+            True => pure(trivial),
+            False => runtime_bytes_refused(name, "it calls `" ++ callee ++ "`, which takes facts: a caller's theorem would need them at the call, which is not built yet (docs/native/span-record-design.md, \"Loops that take facts\")"),
+        };
+        let _ <- factless;
         let at_i = reads_n + i;
         let code_c = parts.callees.nth(at_i).unwrap_or(SpanCallee(ts.word, Blank));
         let x <- assume(Hd(code_c.ty), "code", Some(rest_w.ref)).or_fail("runtime: a callee's code: ");
@@ -3878,17 +3887,117 @@ fn runtime_bytes_point(word: Handle, bytes_t: Expr, k: Nat, under: Option<LocalR
     pure(Cons(l.ref, Cons(b.ref, ys)))
 }
 
+// A loop's facts' types at a point: each the domain of the function's type
+// at the point and the facts before it, which it does not read (so they
+// are left to inference). Read off the type at the point, each lives
+// where the point does.
+fn runtime_bytes_fact_tys(f: Expr, args: List<Expr>, count: Nat) → Tac<List<Handle>> {
+    match count {
+        Zero => pure([]),
+        Succ(c) => {
+            let t <- infer(ap(f, args)).or_fail("runtime: a loop's type at a point: ");
+            let w <- whnf_or(t);
+            let v <- view(w);
+            let dom <- match v { HPi(d) => pure(d), _ => runtime_fail("a loop's fact is not a binder of its type") };
+            let more <- runtime_bytes_fact_tys(f, args.append([Blank]), c);
+            pure(Cons(dom, more))
+        },
+    }
+}
+
+// Locals of the facts' types, each under the one before.
+fn runtime_bytes_assume_facts(tys: List<Handle>, under: LocalRef) → Tac<List<LocalRef>> {
+    match tys {
+        Nil => pure([]),
+        Cons(t, rest) => {
+            let x <- assume(Hd(t), "fact", Some(under)).or_fail("runtime: a loop's fact: ");
+            let more <- runtime_bytes_assume_facts(rest, x.ref);
+            pure(Cons(x.ref, more))
+        },
+    }
+}
+
+// Each fact's type and its decision (`Decide<P>`, found by the search an
+// instance argument runs).
+fn runtime_bytes_decided(cls: Expr, tys: List<Handle>) → Tac<List<Pair<Expr, Expr>>> {
+    match tys {
+        Nil => pure([]),
+        Cons(d, rest) => {
+            let goal <- as_type(ap(cls, [Hd(d)])).or_fail("runtime: a fact's decision: ");
+            let found <- synth(goal);
+            let inst <- match found {
+                Accepted(i) => pure(Hd(i)),
+                Refused(_) => runtime_fail("a loop's fact has no `Decide` instance, so it cannot be found again at each pass"),
+            };
+            let more <- runtime_bytes_decided(cls, rest);
+            pure(Cons(Pair(Hd(d), inst), more))
+        },
+    }
+}
+
+// The helpers a loop's facts are spelled with (rt_bytes_loop.hthr).
+record FactKit { bit: Expr, all_true: Expr, cons: Expr, nil: Expr, fact_of: Expr, rest_of: Expr, bit_of: Expr, bools: List<Expr>,
+    when: Expr, when_true: Expr, test: Expr, squashed: Expr, idle: Expr }
+
+// A point's facts decided: their decisions and bits, and the test that
+// they all hold.
+record FactsAt { facts: List<LocalRef>, decided: List<Pair<Expr, Expr>>, bits: List<Expr>, ok: Expr }
+
+fn FactKit::at(self kit: FactKit, cls: Expr, f: Expr, args: List<Expr>, count: Nat, under: LocalRef) → Tac<FactsAt> {
+    let tys <- runtime_bytes_fact_tys(f, args, count);
+    let facts <- runtime_bytes_assume_facts(tys, under);
+    let decided <- runtime_bytes_decided(cls, tys);
+    let bits = decided.map(λ p => ap(kit.bit, [p.fst, p.snd]));
+    pure(FactsAt(facts, decided, bits, ap(kit.all_true, [RtQ::seq(kit.bools, bits)])))
+}
+
+// The facts found again from a passed test `h: ∥all_true(bits) = True∥`.
+fn FactKit::found(self kit: FactKit, decided: List<Pair<Expr, Expr>>, bits: List<Expr>, h: Expr) → List<Expr> {
+    match decided {
+        Nil => [],
+        Cons(p, more) => {
+            let rest = bits.drop(1);
+            Cons(ap(kit.fact_of, [p.fst, p.snd, RtQ::seq(kit.bools, rest), h]),
+                kit.found(more, rest, ap(kit.rest_of, [bits.head_or(Blank), RtQ::seq(kit.bools, rest), h])))
+        },
+    }
+}
+
+// The test passed by facts in hand.
+fn FactKit::passes(self kit: FactKit, decided: List<Pair<Expr, Expr>>, bits: List<Expr>, facts: List<Expr>) → Expr {
+    match decided {
+        Nil => ap(kit.nil, []),
+        Cons(p, more) => {
+            let rest = bits.drop(1);
+            ap(kit.cons, [bits.head_or(Blank), RtQ::seq(kit.bools, rest), ap(kit.bit_of, [p.fst, p.snd, facts.head_or(Blank)]),
+                kit.passes(more, rest, facts.drop(1))])
+        },
+    }
+}
+
+// `λ h => f(args…, facts found from h)`, `h` assumed under `under`.
+fn FactKit::yes(self kit: FactKit, f: Expr, args: List<Expr>, at: FactsAt, under: LocalRef) → Tac<Expr> {
+    let h <- assume(ap(kit.test, [at.ok]), "passed", Some(under)).or_fail("runtime: a loop's test passed: ");
+    pure(Lam(h.ref, ap(f, args.append(kit.found(at.decided, at.bits, Local(h.ref))))))
+}
+
 // The theorem of a loop over a `Bytes(n)`: the code's passes, counted, are
 // the function of the record (`FFun::counted_over`), from the function's
 // own equation: its body at a bound, with the recursion answered by
 // anything that agrees with the function below the measure, is the
 // function (`f::ext` between the recursion and that answer, `f::irrel`).
+// A loop that takes facts (squashed conditions after its words) is run
+// where its facts' decisions all pass, and given the facts found again
+// from that test; the theorems hold where it passes, which the facts in
+// hand show at the loop's own call (docs/native/span-record-design.md,
+// "Loops that take facts").
 fn runtime_bytes_counted(name: String, f: GlobalRef, parts: SpanParts, c: SpanCounted, worlds: BytesWorld) → Tac<List<Decl>> {
     let ts <- runtime_type_handles();
     let counted <- runtime_bytes_ref("rt_bytes_loop::FFun::counted_over");
     let guarded_t <- runtime_bytes_ref("rt_bytes_loop::FFun::OverGuarded");
     let bare <- runtime_bytes_ref("rt_bytes_loop::Over::bare");
     let along <- runtime_bytes_ref("rt_bytes::Over::along");
+    let along_left <- runtime_bytes_ref("rt_bytes_loop::Over::along_left");
     let bworld_of <- runtime_bytes_ref("rt_bytes::BWorld::of");
     let bytes_of <- runtime_bytes_ref("rt_bytes::Bytes::own");
     let bytes_t <- runtime_bytes_ref("bytes::Bytes");
@@ -3896,6 +4005,16 @@ fn runtime_bytes_counted(name: String, f: GlobalRef, parts: SpanParts, c: SpanCo
     let at <- runtime_bytes_ref("rt_held::HWorld::at");
     let uncurry <- runtime_bytes_ref("rt_file_loop::FFun::uncurry");
     let rounds <- runtime_bytes_ref("rt_file_loop::FFun::rounds");
+    let decide_cls <- runtime_bytes_ref("bool::Decide");
+    let bools_h <- runtime_type_of("rt_bytes_loop::FFun::w_bits");
+    let bools <- runtime_ctors_at(bools_h);
+    let kit = FactKit(<- runtime_bytes_ref("bool::decide_bit"), <- runtime_bytes_ref("rt_bytes_loop::FFun::all_true"),
+        <- runtime_bytes_ref("rt_bytes_loop::FFun::all_true_cons"), <- runtime_bytes_ref("rt_bytes_loop::FFun::all_true_nil"),
+        <- runtime_bytes_ref("rt_bytes_loop::FFun::fact_of"), <- runtime_bytes_ref("rt_bytes_loop::FFun::rest_of"),
+        <- runtime_bytes_ref("rt_bytes_loop::FFun::bit_of"), bools,
+        <- runtime_bytes_ref("rt_bytes_loop::FFun::when"), <- runtime_bytes_ref("rt_bytes_loop::FFun::when_true"),
+        <- runtime_bytes_ref("rt_bytes_loop::FFun::Test"), <- runtime_bytes_ref("rt_bytes_loop::FFun::squashed"),
+        <- runtime_bytes_ref("rt_bytes_loop::FFun::idle"));
     let recast <- runtime_bytes_ref(name_of(FTm::recast));
     let passes_n <- runtime_global(name_of(Fun::meas_passes));
     let sym_g <- runtime_global(name_of(Setup::eq_sym));
@@ -3915,90 +4034,141 @@ fn runtime_bytes_counted(name: String, f: GlobalRef, parts: SpanParts, c: SpanCo
         Refused(_) => runtime_bytes_refused(name, "it has no `ext` companion, which a loop's theorem is built from (a `decreases` function whose ending arm stores into the record gets none yet: store before the test, or in a caller)"),
     };
     let ext <- found;
-    let ft <- infer(Global(f)).or_fail("runtime: `" ++ name ++ "`'s type: ");
+    let fe = Global(f);
+    let ft <- infer(fe).or_fail("runtime: `" ++ name ++ "`'s type: ");
     let arity <- rt_arity(64, ft);
     let opened_f <- runtime_open_n(64, ft, List::range(arity).map(λ i => "p".append(decimal_name(2, i))));
     let ps = opened_f.fst;
     let words_f <- runtime_bytes_words(ps.drop(2));
     let k = words_f.len();
-    let fact_free: Tac<True> = match k.same(arity - 2) {
+    // The facts trail the words.
+    let leading <- runtime_bytes_words(ps.drop(2).take(k));
+    let trailing: Tac<True> = match leading.len().same(k) {
         True => pure(trivial),
-        False => runtime_bytes_refused(name, "a loop that takes a fact is not taken yet"),
+        False => runtime_bytes_refused(name, "a loop's facts come after its words"),
     };
-    let _ <- fact_free;
+    let _ <- trailing;
+    let nf = arity - 2 - k;
+    let facts_at = λ (args: List<Expr>) (under: LocalRef) => kit.at(decide_cls, fe, args, nf, under);
     let len = NatLit(k);
     let arity_e = NatLit(Succ(Succ(k)));
     let ops: LocalRef → List<Expr> = λ w => List::range(k).map(λ i => ap(operand, [Local(w), NatLit(i)]));
-    // The function and its measure at a length, a record and a list of
-    // the operands' words.
+    let when_at = λ (ok: Expr) (yes: Expr) (kk: Expr) (b: Expr) => ap(kit.when, [Blank, ok, yes, ap(kit.idle, [kk, b])]);
+    // `when(ok, yes, idle) = yes(·)` where the test passes by `e`.
+    let when_true_at = λ (ok: Expr) (yes: Expr) (kk: Expr) (b: Expr) (e: Expr) =>
+        ap(kit.when_true, [Blank, ok, yes, ap(kit.idle, [kk, b]), e, ap(kit.squashed, [ok, e])]);
+    // The function, its test and its measure at a length, a record and a
+    // list of the operands' words.
     let k_r <- assume(Hd(ts.word), "k", None).or_fail("runtime: a length: ");
     let b_r <- assume(ap(bytes_t, [Local(k_r.ref)]), "b", Some(k_r.ref)).or_fail("runtime: a record: ");
     let ws_r <- assume(Hd(ts.words), "words", Some(b_r.ref)).or_fail("runtime: a loop's words: ");
     let at_words = Cons(Local(k_r.ref), Cons(Local(b_r.ref), ops(ws_r.ref)));
-    let run_of <- runtime_held(Lam(k_r.ref, Lam(b_r.ref, Lam(ws_r.ref, ap(Global(f), at_words)))), "`" ++ name ++ "` at a list of words");
-    let mu_r <- runtime_measure_at(rec, at_words);
-    let m_of <- runtime_held(Lam(k_r.ref, Lam(b_r.ref, Lam(ws_r.ref, Hd(mu_r)))), "`" ++ name ++ "`'s measure");
+    let fr <- facts_at(at_words, ws_r.ref);
+    let ok_of <- runtime_held(Lam(k_r.ref, Lam(b_r.ref, Lam(ws_r.ref, fr.ok))), "`" ++ name ++ "`'s facts tested");
+    let yes_r <- kit.yes(fe, at_words, fr, ws_r.ref);
+    let run_of <- runtime_held(Lam(k_r.ref, Lam(b_r.ref, Lam(ws_r.ref, when_at(fr.ok, yes_r, Local(k_r.ref), Local(b_r.ref))))),
+        "`" ++ name ++ "` at a list of words");
+    let mu_r <- runtime_measure_at(rec, at_words.append(runtime_locals(fr.facts)));
+    let m_of <- runtime_held(Lam(k_r.ref, Lam(b_r.ref, Lam(ws_r.ref, Hd(mu_r)))), "`" ++ name ++ "`'s measure (which must not read its facts)");
     // Below `2^64`: the measure is a word's `toNat`.
     let k_b <- assume(Hd(ts.word), "k", None).or_fail("runtime: a length: ");
     let b_b <- assume(ap(bytes_t, [Local(k_b.ref)]), "b", Some(k_b.ref)).or_fail("runtime: a record: ");
     let ws_b <- assume(Hd(ts.words), "words", Some(b_b.ref)).or_fail("runtime: a loop's words: ");
-    let mu_b <- runtime_measure_at(rec, Cons(Local(k_b.ref), Cons(Local(b_b.ref), ops(ws_b.ref))));
+    let at_b = Cons(Local(k_b.ref), Cons(Local(b_b.ref), ops(ws_b.ref)));
+    let fb <- facts_at(at_b, ws_b.ref);
+    let mu_b <- runtime_measure_at(rec, at_b.append(runtime_locals(fb.facts)));
     let word_b <- runtime_measured_word(mu_b);
     let bounded_of <- runtime_held(Lam(k_b.ref, Lam(b_b.ref, Lam(ws_b.ref, ap(lt_pow, [Hd(word_b)])))), "`" ++ name ++ "`'s measure below `2^64`");
     // The length word is the second of the code's words.
     let ls <- runtime_params(ts.word, List::range(Succ(Succ(k))).map(λ _ => Word(64)), None, 0);
     let lengthy <- runtime_held(runtime_lams(ls, ap(rfl, [Blank, Local(ls.nth(1).unwrap_or(LocalRef(0)))])), "a loop's length word");
     // The function's equation, at a rest of a file and a length: its
-    // binders opened off its statement (the code's words, the record, the
-    // recursion `again` and what `again` agrees with below the measure).
+    // binders opened off its statement (the code's words, the record, its
+    // test passed, the recursion `again` and what `again` agrees with
+    // below the measure where the test passes).
     let rest_r <- assume(Hd(buffers_h), "rest", None).or_fail("runtime: the rest of a file: ");
     let n_g <- assume(Hd(ts.word), "n", Some(rest_r.ref)).or_fail("runtime: a length: ");
     let bw_r = ap(worlds.bw, [Local(rest_r.ref)]);
-    let g_t <- as_type(ap(guarded_t, [bw_r, parts.params, parts.body, Local(n_g.ref), run_of, m_of])).or_fail("runtime: `" ++ name ++ "`'s equation over records: ");
+    let g_t <- as_type(ap(guarded_t, [bw_r, parts.params, parts.body, Local(n_g.ref), run_of, m_of, ok_of])).or_fail("runtime: `" ++ name ++ "`'s equation over records: ");
     let xnames: List<String> = List::range(Succ(Succ(k))).map(λ i => "x".append(decimal_name(2, i)));
-    let opened <- runtime_open_n(64, g_t, xnames.append(["s", "again", "hyp"]));
+    let opened <- runtime_open_n(64, g_t, xnames.append(["s", "holds", "again", "hyp"]));
     let xs = opened.fst.take(Succ(Succ(k))).drop(2);
     let s_g = opened.fst.nth(k + 2).unwrap_or(LocalRef(0));
-    let again = opened.fst.nth(k + 3).unwrap_or(LocalRef(0));
-    let hyp = opened.fst.nth(k + 4).unwrap_or(LocalRef(0));
+    let holds = opened.fst.nth(k + 3).unwrap_or(LocalRef(0));
+    let again = opened.fst.nth(k + 4).unwrap_or(LocalRef(0));
+    let hyp = opened.fst.nth(k + 5).unwrap_or(LocalRef(0));
     let list = λ (ys: List<LocalRef>) => RtQ::seq(word_list, runtime_locals(ys));
-    let mu_x <- runtime_measure_at(rec, Cons(Local(n_g.ref), Cons(Local(s_g), runtime_locals(xs))));
+    // The facts at the equation's state, found again from its test.
+    let at_g = Cons(Local(n_g.ref), Cons(Local(s_g), runtime_locals(xs)));
+    let fg <- facts_at(at_g, hyp);
+    let facts_g = kit.found(fg.decided, fg.bits, ap(kit.squashed, [fg.ok, Local(holds)]));
+    let mu_x <- runtime_measure_at(rec, at_g.append(facts_g));
     let n_e = Hd(mu_x);
-    // `g1 = λ k b y… p => f::rec(N, k, b, y…, p)`.
+    // `g1 = λ k b y… fact… p => f::rec(N, k, b, y…, fact…, p)`.
     let pt1 <- runtime_bytes_point(ts.word, bytes_t, k, Some(hyp));
-    let d1 <- runtime_bound_dom(rec, n_e, runtime_locals(pt1));
-    let p1 <- assume(Hd(d1), "p", Some(pt1.rev().head_or(hyp))).or_fail("runtime: a bound proof: ");
-    let g1 = runtime_lams(pt1.append([p1.ref]), ap(rec, Cons(n_e, runtime_locals(pt1).append([Local(p1.ref)]))));
-    // `g2 = λ k b y… _ => again(k, b, [y…])`.
+    let f1 <- facts_at(runtime_locals(pt1), pt1.rev().head_or(hyp));
+    let at1 = pt1.append(f1.facts);
+    let d1 <- runtime_bound_dom(rec, n_e, runtime_locals(at1));
+    let p1 <- assume(Hd(d1), "p", Some(at1.rev().head_or(hyp))).or_fail("runtime: a bound proof: ");
+    let g1 = runtime_lams(at1.append([p1.ref]), ap(rec, Cons(n_e, runtime_locals(at1).append([Local(p1.ref)]))));
+    // `g2 = λ k b y… fact… _ => again(k, b, [y…])`.
     let pt2 <- runtime_bytes_point(ts.word, bytes_t, k, Some(hyp));
-    let d2 <- runtime_bound_dom(rec, n_e, runtime_locals(pt2));
-    let p2 <- assume(Hd(d2), "q", Some(pt2.rev().head_or(hyp))).or_fail("runtime: a bound proof: ");
-    let g2 = runtime_lams(pt2.append([p2.ref]), ap(Local(again), [Local(pt2.head_or(hyp)), Local(pt2.nth(1).unwrap_or(hyp)), list(pt2.drop(2))]));
-    // They agree: `f::irrel` on the left, the hypothesis on the right.
+    let f2 <- facts_at(runtime_locals(pt2), pt2.rev().head_or(hyp));
+    let at2 = pt2.append(f2.facts);
+    let d2 <- runtime_bound_dom(rec, n_e, runtime_locals(at2));
+    let p2 <- assume(Hd(d2), "q", Some(at2.rev().head_or(hyp))).or_fail("runtime: a bound proof: ");
+    let g2 = runtime_lams(at2.append([p2.ref]), ap(Local(again), [Local(pt2.head_or(hyp)), Local(pt2.nth(1).unwrap_or(hyp)), list(pt2.drop(2))]));
+    // They agree: `f::irrel` on the left, then the run where the facts in
+    // hand pass the test, then the hypothesis on the right.
     let pt3 <- runtime_bytes_point(ts.word, bytes_t, k, Some(hyp));
-    let d3 <- runtime_bound_dom(rec, n_e, runtime_locals(pt3));
+    let f3 <- facts_at(runtime_locals(pt3), pt3.rev().head_or(hyp));
+    let at3 = pt3.append(f3.facts);
+    let d3 <- runtime_bound_dom(rec, n_e, runtime_locals(at3));
     let mu_y <- runtime_measure_of(d3);
-    let p3 <- assume(Hd(d3), "p", Some(pt3.rev().head_or(hyp))).or_fail("runtime: a bound proof: ");
+    let p3 <- assume(Hd(d3), "p", Some(at3.rev().head_or(hyp))).or_fail("runtime: a bound proof: ");
     let q3 <- assume(Hd(d3), "q", Some(p3.ref)).or_fail("runtime: a bound proof: ");
-    let irr = ap(irrel, Cons(n_e, Cons(Blank, runtime_locals(pt3).append([Local(p3.ref), ap(lt_succ, [Hd(mu_y)])]))));
-    let hy = ap(Local(hyp), [Local(pt3.head_or(hyp)), Local(pt3.nth(1).unwrap_or(hyp)), list(pt3.drop(2)), Local(p3.ref)]);
-    let hg = runtime_lams(pt3.append([p3.ref, q3.ref]), ap(trans_g, [Blank, Blank, Blank, Blank, irr, ap(sym_g, [Blank, Blank, Blank, hy])]));
+    let k3 = Local(pt3.head_or(hyp));
+    let b3 = Local(pt3.nth(1).unwrap_or(hyp));
+    let irr = ap(irrel, Cons(n_e, Cons(Blank, runtime_locals(at3).append([Local(p3.ref), ap(lt_succ, [Hd(mu_y)])]))));
+    let passed3 = kit.passes(f3.decided, f3.bits, runtime_locals(f3.facts));
+    let hy = ap(Local(hyp), [k3, b3, list(pt3.drop(2)), Local(p3.ref), passed3]);
+    let yes3 <- kit.yes(fe, runtime_locals(pt3), f3, q3.ref);
+    let ran3 = when_true_at(f3.ok, yes3, k3, b3, passed3);
+    let hg = runtime_lams(at3.append([p3.ref, q3.ref]), ap(trans_g, [Blank, Blank, Blank, Blank, irr,
+        ap(trans_g, [Blank, Blank, Blank, Blank, ap(sym_g, [Blank, Blank, Blank, ran3]), ap(sym_g, [Blank, Blank, Blank, hy])])]));
     let lt_n = ap(lt_succ, [n_e]);
-    let guarded_of <- runtime_held(Lam(rest_r.ref, Lam(n_g.ref, runtime_lams(opened.fst, ap(sym_g, [Blank, Blank, Blank,
-        ap(ext, Cons(n_e, Cons(n_e, Cons(g1, Cons(g2, Cons(hg, Cons(Local(n_g.ref), Cons(Local(s_g), runtime_locals(xs).append([lt_n, lt_n])))))))))])))),
+    let yes_g <- kit.yes(fe, at_g, fg, hyp);
+    let ran_g = when_true_at(fg.ok, yes_g, Local(n_g.ref), Local(s_g), Local(holds));
+    let unfolded = ap(ext, Cons(n_e, Cons(n_e, Cons(g1, Cons(g2, Cons(hg, at_g.append(facts_g).append([lt_n, lt_n])))))));
+    let guarded_of <- runtime_held(Lam(rest_r.ref, Lam(n_g.ref, runtime_lams(opened.fst, ap(trans_g, [Blank, Blank, Blank, Blank,
+        ap(sym_g, [Blank, Blank, Blank, unfolded]), ap(sym_g, [Blank, Blank, Blank, ran_g])])))),
         "`" ++ name ++ "`'s equation over records");
-    // The theorem: at every record, its bytes and `n`, the code's passes
-    // counted are the function.
+    // The theorem: at every record, its bytes and `n`, and facts that
+    // pass the test, the code's passes counted are the function.
     let n = ps.head_or(LocalRef(0));
     let s = ps.nth(1).unwrap_or(n);
+    let facts_f = ps.drop(2 + k);
     let rest <- assume(Hd(buffers_h), "rest", Some(ps.rev().head_or(n))).or_fail("runtime: the rest of a file: ");
+    let tys_f <- runtime_bytes_fact_tys(fe, runtime_locals(ps.take(2 + k)), nf);
+    let decided_f <- runtime_bytes_decided(decide_cls, tys_f);
+    let bits_f = decided_f.map(λ p => ap(kit.bit, [p.fst, p.snd]));
+    let ok_f = ap(kit.all_true, [RtQ::seq(kit.bools, bits_f)]);
+    let passed_f = kit.passes(decided_f, bits_f, runtime_locals(facts_f));
+    let at_f = runtime_locals(Cons(n, Cons(s, words_f)));
+    let ff = FactsAt(facts_f, decided_f, bits_f, ok_f);
+    let yes_f <- kit.yes(fe, at_f, ff, rest.ref);
     let file = Local(rest.ref);
     let bw = ap(worlds.bw, [file]);
     let world = ap(worlds.kept, [file]);
     let zs = list(words_f);
     let agreed = ap(counted, [c.ty, bw, world, parts.params, parts.body, len, len, ap(rfl, [Blank, arity_e]), Hd(trivial_h),
-        ap(c.at, [file]), c.pass, c.stop, ap(c.passes, [file]), lengthy, Local(n), run_of, m_of, ap(guarded_of, [file, Local(n)]),
-        ap(bounded_of, [Local(n)]), zero, zs, ap(rfl, [Blank, len]), Local(s)]);
+        ap(c.at, [file]), c.pass, c.stop, ap(c.passes, [file]), lengthy, Local(n), run_of, m_of, ok_of, ap(guarded_of, [file, Local(n)]),
+        ap(bounded_of, [Local(n)]), zero, zs, ap(rfl, [Blank, len]), Local(s), passed_f]);
+    let spec = ap(fe, runtime_locals(ps));
+    // The run where the facts in hand pass is the function.
+    let ran_f = when_true_at(ok_f, yes_f, Local(n), Local(s), passed_f);
+    let run_here = ap(run_of, [Local(n), Local(s), zs]);
+    let when_f = when_at(ok_f, yes_f, Local(n), Local(s));
     // The iteration read as a meaning is the iteration applied
     // (`HWorld::at`, as `runtime_held_counted` reads it).
     let own = ap(bytes_of, [Local(n), Local(s)]);
@@ -4011,10 +4181,13 @@ fn runtime_bytes_counted(name: String, f: GlobalRef, parts: SpanParts, c: SpanCo
     let read_t <- as_type(Equation(ap(uncurry, [c.tys, parts.params, w64, ap(c.at, [file, Local(g.ref)]), at_code, own]), coded_g))
         .or_fail("runtime: `" ++ name ++ "`'s passes read as a meaning: ");
     let reflects = ap(at, [c.ty, Lam(g.ref, Hd(read_t)), ap(rounds, [c.ty, passes_n, c.pass, c.stop]), Lam(g.ref, ap(rfl, [Blank, coded_g]))]);
-    let spec = ap(Global(f), runtime_locals(ps));
     let code = ap(parts.compiled, at_words_code);
-    let proof = ap(bare, [c.tys, Local(n), spec, code,
-        ap(along, [Hd(ts.word), Local(n), spec, Blank, ap(recast, [c.tys, w64, w64, code]), reflects, agreed])]);
+    // The code's side read as the code, then the record's side as the
+    // function where the facts in hand pass.
+    let run_here = ap(run_of, [Local(n), Local(s), zs]);
+    let recoded = ap(recast, [c.tys, w64, w64, code]);
+    let read = ap(along, [Hd(ts.word), Local(n), run_here, Blank, recoded, reflects, agreed]);
+    let proof = ap(bare, [c.tys, Local(n), spec, code, ap(along_left, [Hd(ts.word), Local(n), run_here, spec, recoded, ran_f, read])]);
     let stmt <- infer(proof).or_fail("runtime: `" ++ name ++ "`'s theorem over its record: ");
     pure([Decl(AsTheorem, name ++ "::runs_bytes", runtime_params_of(ps.append([rest.ref])), Hd(stmt), proof)])
 }

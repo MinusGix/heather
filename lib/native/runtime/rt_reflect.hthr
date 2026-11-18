@@ -1801,6 +1801,25 @@ fn rt_span(k: Known, st: RSt, h: Handle) → Tac<Nat> {
 // callee's span `j` (a loop keeps a span's home in place, and a call reads
 // its callee over the caller's file), and the words after them are
 // operands.
+// A call's arguments that are runtime data: the facts a callee takes after
+// its words (squashed conditions, whose types `View` shows no layer of)
+// are proofs the code does not pass.
+// The arguments, last first, with the trailing proofs dropped.
+fn rt_data_rev(rev: List<Handle>) → Tac<List<Handle>> {
+    match rev {
+        Nil => pure([]),
+        Cons(last, before) => infer(Hd(last)).bind(λ c => match c {
+            Refused(_) => pure(rev),
+            Accepted(t) => view(t).bind(λ v => match v {
+                HOther => rt_data_rev(before),
+                _ => pure(rev),
+            }),
+        }),
+    }
+}
+
+fn rt_data_args(args: List<Handle>) → Tac<List<Handle>> { rt_data_rev(args.rev()).bind(λ kept => pure(kept.rev())) }
+
 fn rt_lent_args(step: RSt → Handle → Tac<Pair<RSt, Tm>>, k: Known, st: RSt, j: Nat, lent: Nat, args: List<Handle>) → Tac<Pair<RSt, List<Nat>>> {
     match lent {
         Zero => RSt::operands(step, st, args),
@@ -2021,9 +2040,9 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                     None => rt_callee(k, st, g, name).bind(λ found => match found {
                         // In the generator's mode a callee may be lent the
                         // caller's spans.
-                        Some(si) => (match k.discover { True => rt_call_lent(f, k, args), False => pure(0) }).bind(λ lent =>
-                            rt_lent_args(λ s a => rt_go(f, k, s, a, True), k, si.fst, 0, lent, args).bind(λ r =>
-                                pure(r.fst.finish(h, operand, Call(si.snd, r.snd))))),
+                        Some(si) => rt_data_args(args).bind(λ data => (match k.discover { True => rt_call_lent(f, k, data), False => pure(0) }).bind(λ lent =>
+                            rt_lent_args(λ s a => rt_go(f, k, s, a, True), k, si.fst, 0, lent, data).bind(λ r =>
+                                pure(r.fst.finish(h, operand, Call(si.snd, r.snd)))))),
                         None => rt_transfer(k, g, h, name, args).bind(λ moved => match moved {
                             Some(u) => rt_go(f, k, st, u, operand),
                             None => match args {

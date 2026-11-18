@@ -32,3 +32,20 @@ fn not_squashed(e: False) → False { unsquash_empty(e) }
 
 // expect-error: its type does not unfold to `False`
 fn squashed_but_inhabited(q: ∥Nat∥) → False { unsquash_empty(q) }
+
+// A squashed condition decides as the condition does: the instance is
+// found for a neutral and a literal condition, and its bit is the
+// condition's.
+theorem squashed_decides_as_word(i, n: u64): decide_bit<∥(i < n)∥>() = decide_bit<(i < n)>() { refl }
+theorem squashed_decides_literal(): decide_bit<∥((2: u64) < 3)∥>() = True { refl }
+theorem squashed_decides_false(): decide_bit<∥((3: u64) < 2)∥>() = False { refl }
+
+// A squashed fact in hand passes its decision, and the decision gives it
+// back.
+theorem squash_bit(i, n: u64, q: ∥i < n∥): decide_bit<∥(i < n)∥>() = True {
+    (match decide_bit<∥(i < n)∥>() as λ c => (decide_bit<∥(i < n)∥>() = c) → c = True {
+        True => λ _ => refl,
+        False => λ e => false_elim(decide_false<∥(i < n)∥>(e, q)),
+    })(refl)
+}
+theorem squashed_fact_passes(i, n: u64, q: ∥i < n∥): i < n { decide_true<∥(i < n)∥>(squash_bit(i, n, q)).recover() }

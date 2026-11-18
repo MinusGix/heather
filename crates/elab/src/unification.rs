@@ -699,6 +699,10 @@ pub(super) fn unify_ty(
         (Type::Fin { len: k1 }, Type::Fin { len: k2 }) => {
             unify_tm(u, k1, k2, n, d, sols);
         }
+        // `∥A∥`: the payload type is learned from (`Decide<∥P∥>`'s `P`).
+        (Type::Squash { ty: a1, .. }, Type::Squash { ty: a2, .. }) => {
+            unify_ty(u, a1, a2, n, d, sols);
+        }
         // A codata instance `M(I; S; P; next)(j)`: the shape binds the index,
         // the positions index and shape, `next` all three
         // (docs/inductives/codata-elaborator-design.md §2) — so a type argument read off
@@ -1341,6 +1345,9 @@ fn unify_tm(u: &U<'_>, pat: &Term, subj: &Term, n: u32, d: u32, sols: &mut [Sol]
         ) => {
             unify_tm(u, a1, a2, n, d, sols);
             unify_tm(u, b1, b2, n, d, sols);
+        }
+        (Term::TmSquash { ty: a1, .. }, Term::TmSquash { ty: a2, .. }) => {
+            unify_tm(u, a1, a2, n, d, sols);
         }
         (
             Term::TmVec {
