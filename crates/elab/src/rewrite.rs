@@ -362,7 +362,28 @@ impl Rewrites<'_> {
         goal: &Type,
         what: &str,
     ) -> R<(Term, Equation)> {
-        self.rewrite_instance_or(cx, h, proof, proof_ty, goal, None).map_err(|miss| miss.into_error(self, cx, goal, what, "equation", h.span))
+        // A side condition matching leaves open is found among the
+        // hypotheses, as `simp_only`'s default discharger finds one: a
+        // lemma about the decoder at a lead byte the loop's tests classed
+        // (`ascii(b, r, t: word(b) < 0x80)`) is written `ascii` and its test
+        // is the arm's.
+        let hypothesis = |cx: &Cx, ty: &Type, level: &Level, _dependent: bool| self.hypothesis_of(cx, ty, level);
+        self.rewrite_instance_or(cx, h, proof, proof_ty, goal, Some(&hypothesis)).map_err(|miss| miss.into_error(self, cx, goal, what, "equation", h.span))
+    }
+
+    /// A local, or a `let`'s alias, whose type is `ty`: the innermost.
+    fn hypothesis_of(&self, cx: &Cx, ty: &Type, level: &Level) -> Option<Term> {
+        let n = cx.gamma.len();
+        for i in (0..n).rev() {
+            let entry = cx.gamma.entries.get(i)?;
+            if entry.level != *level {
+                continue;
+            }
+            if self.conv_types(cx, &entry.ty.shift_local((n - i) as u32), ty, level) {
+                return Some(Term::Var(heather_kernel::term::LocalVar((n - 1 - i) as u32)));
+            }
+        }
+        None
     }
 
     /// [`Self::rewrite_instance`], with the ways an unapplied equation fails
