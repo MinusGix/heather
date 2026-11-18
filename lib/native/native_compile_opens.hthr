@@ -1,6 +1,6 @@
 // An open and a close, compiled (issues/native-compile-other-calls.md,
-// round 7 of docs/native/native-real-programs-plan.md): what `Prog::opens` and
-// `Prog::closes` ask Linux, and how each answer lands in the environment as
+// round 7 of docs/native/native-real-programs-plan.md): what an open's and a
+// close's code (`Build::open`, `Build::close`) ask Linux, and how each answer lands in the environment as
 // the source decodes it (`CallShape::answer`), as native_compile_calls does
 // for a read and a write.
 //
@@ -53,13 +53,11 @@ import omega;
 
 // What a close's code claims: from the statement's start, close(fd), and on
 // from its end with each answer decoded into the environment.
-theorem Target::goes_closes(self t: Target, out: List<Nat>, env: Env, p: Prog, known: List<Fact>, knows: env.Knows(known), fd, result: Nat,
-    in_fd: t.layout().word_fits(fd).IsTrue(), in_result: t.layout().word_fits(result).IsTrue(), apart: t.homes.apart(result, out).IsTrue(),
-    within: p.closes(t.layout(), known, out, fd, result).Within(t.program),
-    tree: CloseResult → ITree<BitVec(64)>(Events::linux()),
-    next: (a: CloseResult) → LinuxCmd::Answers(Closes(fd, result).cmd(env), a) →
-        t.At(prog_len(p.closes(t.layout(), known, out, fd, result)), out, tree(a), Closes(fd, result).answer(env, a))):
-    t.At(prog_len(p), live_before(known.unknown([fd]), result, out), Vis(Closes(fd, result).cmd(env), tree), env) {
+theorem Target::goes_closes(self t: Target, fd, result: Nat): t.CallRuns(Closes(fd, result), 0) {
+    λ out env p known knows names fits found apart within tree next => {
+    let fit = λ (id: Nat) (m: Mem(id, [fd, result])) => t.layout().words_fit_mem([fd, result], id, fits, m);
+    let in_fd = fit(fd, Inl(refl));
+    let in_result = fit(result, Inr(Inl(refl)));
     let ids: List<Nat> = [fd];
     let r = t.calling(known, out, env, ids, result);
     let fetched = t.calling_reads(known, out, env, knows, ids, result, fd, Inl(refl));
@@ -71,6 +69,7 @@ theorem Target::goes_closes(self t: Target, out: List<Nat>, env: Env, p: Prog, k
                 CloseFailed(errno) => λ answers junk leaves rcx r11 => ⟨resident, ⟨answers, ⟨held,
                     cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w), sym(source_errno_word(errno, answers)))⟩⟩⟩,
             }⟩))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -458,14 +457,11 @@ theorem Target::path_ended(self t: Target, env: Env, name: List<BitVec(8)>, m: X
 // What an open's code claims: from the statement's start, the path copied
 // with its NUL and openat(AT_FDCWD, scratch, O_RDONLY), and on from its end
 // with each answer decoded into the environment.
-theorem Target::goes_opens(self t: Target, out: List<Nat>, env: Env, p: Prog, known: List<Fact>, knows: env.Knows(known), path, len, result, cap, names: Nat,
-    in_len: t.layout().word_fits(len).IsTrue(), in_result: t.layout().word_fits(result).IsTrue(), found: t.caps.nth(path) = Some(cap),
-    apart: t.homes.apart(result, out).IsTrue(),
-    within: p.opens(t.layout(), known, out, path, len, result, cap, names).prog.Within(t.program),
-    tree: OpenResult → ITree<BitVec(64)>(Events::linux()),
-    next: (a: OpenResult) → LinuxCmd::Answers(Opens(path, len, result).cmd(env), a) →
-        t.At(prog_len(p.opens(t.layout(), known, out, path, len, result, cap, names).prog), out, tree(a), Opens(path, len, result).answer(env, a))):
-    t.At(prog_len(p), live_before(known.unknown([len]), result, out), Vis(Opens(path, len, result).cmd(env), tree), env) {
+theorem Target::goes_opens(self t: Target, path, len, result, cap: Nat): t.CallRuns(Opens(path, len, result), cap) {
+    λ out env p known knows names fits found apart within tree next => {
+    let fit = λ (id: Nat) (m: Mem(id, [len, result])) => t.layout().words_fit_mem([len, result], id, fits, m);
+    let in_len = fit(len, Inl(refl));
+    let in_result = fit(result, Inr(Inl(refl)));
     let layout = t.layout();
     let live = live_before(known.unknown([len]), result, out);
     let m_len: env.Reads(known, live, len) = env.reads_of(known, knows, [len], live, len, Inl(refl),
@@ -585,4 +581,5 @@ theorem Target::goes_opens(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
             Fragment::clamp_before(r, Rcx, R9, names, λ s => q_cl(s.gprs, s.memory), MachineState(fetched, f, rip, s.memory), λ w is_w f rip =>
                 ⟨held, trans(is_w, eq2(λ (x: Nat) (y: Nat) => x.min(y), len_is, BitVec::toNat_ofNat(64, cap, room_cap)))⟩))
     })
+    }
 }

@@ -455,6 +455,24 @@ theorem Run::goes_asked(self r: Run, code: Fragment, p: Prog, shape: CallShape, 
     code.goes(r, p, ready.within_before(0, Syscall, t.program, w_asked), Vis(shape.cmd(r.env), tree), r.Asks(shape, result), called)
 }
 
+// What a call's code claims, for any call: from the statement's start the
+// call the source makes, and on from its end with each answer decoded into
+// the environment. `capacity` is the room of the buffer it works on.
+fn Target::CallRuns(self t: Target, shape: CallShape, capacity: Nat) → Type {
+    (out: List<Nat>) → (env: Env) → (p: Prog) → (known: List<Fact>) → env.Knows(known) → (names: Nat) →
+    t.layout().words_fit(shape.words()).IsTrue() → t.layout().call_room(shape) = Some(capacity) → t.homes.apart(shape.result(), out).IsTrue() →
+    p.asks(Emission(t.layout(), known, out), shape, capacity, names).prog.Within(t.program) →
+    (tree: shape.cmd(env).Resp() → ITree<BitVec(64)>(Events::linux())) →
+    ((a: shape.cmd(env).Resp()) → LinuxCmd::Answers(shape.cmd(env), a) →
+        t.At(prog_len(p.asks(Emission(t.layout(), known, out), shape, capacity, names).prog), out, tree(a), shape.answer(env, a))) →
+    t.At(prog_len(p), live_before(known.unknown(shape.reads()), shape.result(), out), Vis(shape.cmd(env), tree), env)
+}
+
+// A call's code is added after the program it is put onto.
+theorem Prog::within_asks(self p: Prog, cx: Emission, shape: CallShape, capacity, names: Nat): p.Within(p.asks(cx, shape, capacity, names).prog) {
+    match shape { _ => cx.from(names).call(shape, capacity).cut().code.extends(cx, p) }
+}
+
 // One step fewer to go: from `i + n` bytes in all and `i` short of them, a
 // number below `n` with one more byte counted.
 theorem Nat::one_fewer(i, n, all: Nat, left: i + n = all, below: i < all): Exists<Nat>(λ k => (k < n) ∧ (Succ(i) + k = all)) {

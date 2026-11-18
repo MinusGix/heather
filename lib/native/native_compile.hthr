@@ -734,60 +734,42 @@ fn Build::open(self b: Build, path, len, result, capacity: Nat) → Build {
      .keep(result, openat.result)
 }
 
-// read(fd, scratch, min(len, capacity - min(at, capacity))), the clamped
-// offset kept in R9; the result stored; on success the bytes copied into
-// the buffer from the offset.
-fn Prog::reads(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, buf, at, len, result: Nat, capacity: Nat, names: Nat) → Compiled {
-    Emission(layout, known, out).from(names).read(fd, buf, at, len, result, capacity).onto(p)
-}
-
-// write(fd, buffer + min(from, capacity), min(len, capacity - that)); the
-// result stored.
-fn Prog::writes(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, buf, from, len, result: Nat, capacity: Nat, names: Nat) → Compiled {
-    Emission(layout, known, out).from(names).write(fd, buf, from, len, result, capacity).onto(p)
-}
-
-// close(fd); the result put in its word's home.
-fn Prog::closes(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, result: Nat) → Prog {
-    Emission(layout, known, out).from(0).close(fd, result).onto(p).prog
-}
-
-// openat(AT_FDCWD, scratch, O_RDONLY) of the path, its first min(len,
-// capacity) bytes up to its NUL copied to the scratch range and a NUL put
-// after them (RDI is past them); the result put in its word's home.
-fn Prog::opens(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, path, len, result: Nat, capacity: Nat, names: Nat) → Compiled {
-    Emission(layout, known, out).from(names).open(path, len, result, capacity).onto(p)
-}
-
-fn Prog::call(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, shape: CallShape, names: Nat) → Option<Compiled> {
+// The code of any call the compiler emits. A call with no buffer takes no
+// capacity.
+fn Build::call(self b: Build, shape: CallShape, capacity: Nat) → Build {
     match shape {
-        Reads(fd, buf, at, len, result) => match layout.words_fit([fd, at, len, result]) {
-            False => None,
-            True => match layout.capacities.nth(buf) {
-                None => None,
-                Some(capacity) => Some(p.reads(layout, known, out, fd, buf, at, len, result, capacity, names)),
-            },
-        },
-        Writes(fd, buf, from, len, result) => match layout.words_fit([fd, from, len, result]) {
-            False => None,
-            True => match layout.capacities.nth(buf) {
-                None => None,
-                Some(capacity) => Some(p.writes(layout, known, out, fd, buf, from, len, result, capacity, names)),
-            },
-        },
-        Opens(path, len, result) => match layout.words_fit([len, result]) {
-            False => None,
-            True => match layout.capacities.nth(path) {
-                None => None,
-                Some(capacity) => Some(p.opens(layout, known, out, path, len, result, capacity, names)),
-            },
-        },
-        Closes(fd, result) => match layout.words_fit([fd, result]) {
-            False => None,
-            True => Some(Compiled(p.closes(layout, known, out, fd, result), names)),
-        },
+        Reads(fd, buf, at, len, result) => b.read(fd, buf, at, len, result, capacity),
+        Writes(fd, buf, from, len, result) => b.write(fd, buf, from, len, result, capacity),
+        Opens(path, len, result) => b.open(path, len, result, capacity),
+        Closes(fd, result) => b.close(fd, result),
+        StatsPath(_, _, _, _) => b,
+        StatsFd(_, _, _) => b,
+    }
+}
+
+// The room of the buffer a call works on: none where the file has no such
+// buffer, or the compiler does not emit the call.
+fn Layout::call_room(self layout: Layout, shape: CallShape) → Option<Nat> {
+    match shape {
+        Reads(_, buf, _, _, _) => layout.capacities.nth(buf),
+        Writes(_, buf, _, _, _) => layout.capacities.nth(buf),
+        Opens(path, _, _) => layout.capacities.nth(path),
+        Closes(_, _) => Some(0),
         StatsPath(_, _, _, _) => None,
         StatsFd(_, _, _) => None,
+    }
+}
+
+// A call's code after `p`.
+fn Prog::asks(self p: Prog, cx: Emission, shape: CallShape, capacity, names: Nat) → Compiled { cx.from(names).call(shape, capacity).onto(p) }
+
+fn Prog::call(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, shape: CallShape, names: Nat) → Option<Compiled> {
+    match layout.words_fit(shape.words()) {
+        False => None,
+        True => match layout.call_room(shape) {
+            None => None,
+            Some(capacity) => Some(p.asks(Emission(layout, known, out), shape, capacity, names)),
+        },
     }
 }
 
