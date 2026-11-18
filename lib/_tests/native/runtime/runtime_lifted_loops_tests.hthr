@@ -168,6 +168,17 @@ fn Bytes::running_max({n: u64}, mut self s: Bytes(n)) → u64 {
 
 theorem running_max_runs(): Bytes::running_max(Bytes([1, 3, 2, 0, 5], refl), n := 5).after.bytes = [1, 3, 3, 3, 5] { refl }
 
+// The outer loop has its unfolding and branch equations too. The inner
+// loop's fact `i < s.len()` is passed as `found_fact<…>(fact := bv_omega)`,
+// which the outer loop's lowering finds once as `#found_1`; a bare
+// `bv_omega` there was searched again in every companion, and the decrease
+// hypothesis naming the call held a search `bv_omega` could not spell, so
+// the outer `#ext` was refused
+// (issues/bv-omega-unspellable-fact-refuses-outer-loop-ext.md).
+theorem running_max_outer_stops({n: u64}, s: Bytes(n), i: u64, h: ¬(i < s.len())):
+    Bytes::running_max_loop(n, s, i) = Mutated(s, i)
+{ Bytes::running_max_loop::done(n, s, i, h) }
+
 // The same with the inner loop a `while`, which states that the outer
 // loop's index stays inside.
 fn Bytes::running_max_while({n: u64}, mut self s: Bytes(n)) → u64 {

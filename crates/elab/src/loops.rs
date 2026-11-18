@@ -172,6 +172,29 @@ fn call(head: Expr, args: Vec<Expr>, span: Span) -> Expr {
 
 fn named_ty(name: &str, args: Vec<Ty>, span: Span) -> Ty { Ty { kind: TyKind::Named { name: name.into(), args }, span } }
 
+/// The proof of a loop's fact `∥P∥` passed where the loop starts:
+/// `bitvec_omega::found_fact<P>(fact := bv_omega)`, the search written in
+/// the caller's scope with its goal named. The caller's own lowering finds
+/// it once as a proof of its own (`measure::lift_found`), so every copy of
+/// the caller's body names that one proof: a bare `bv_omega` argument was
+/// searched again in each copy, and a decrease hypothesis naming the call
+/// held a search no tactic could spell
+/// (issues/bv-omega-unspellable-fact-refuses-outer-loop-ext.md).
+fn found_at_entry(fact: &Param, at: Span) -> Expr {
+    let inner = match &fact.ty.kind { TyKind::Squash(p) => (**p).clone(), _ => fact.ty.clone() };
+    let head = Expr { kind: ExprKind::TyApp { head: Box::new(var(measure::FOUND_FACT, at)), args: vec![inner] }, span: at };
+    Expr {
+        kind: ExprKind::App {
+            head: Box::new(head),
+            args: vec![],
+            named: vec![heather_syntax::NamedArg { name: "fact".into(), name_span: at, expr: var("bv_omega", at), span: at }],
+            explicit: false,
+            goal_oriented: false,
+        },
+        span: at,
+    }
+}
+
 fn param(name: &str, ty: Ty, span: Span) -> Param {
     Param {
         name: name.into(),
@@ -877,7 +900,13 @@ impl Lift<'_> {
         // proofs cite too (§7.3).
         self.designations.push((measure::unfold_name(&run_designed), measure::unfold_name(&run)));
         self.designations.push((run_designed, run.clone()));
-        Ok((call(var(&run, span), args(span), span), Shape::of(single), None))
+        let entry: Vec<Expr> = captures
+            .iter()
+            .map(|(n, _)| var(n, span))
+            .chain(vars.iter().map(|v| var(v, span)))
+            .chain(facts.iter().map(|f| found_at_entry(f, span)))
+            .collect();
+        Ok((call(var(&run, span), entry, span), Shape::of(single), None))
     }
 
     /// A `while` whose state is the receiver `r` of a `mut self` method and
@@ -922,7 +951,7 @@ impl Lift<'_> {
                 .iter()
                 .map(|(n, _)| var(n, at))
                 .chain(std::iter::once(var(o, at)))
-                .chain(facts.iter().map(|_| var("bv_omega", at)))
+                .chain(facts.iter().map(|f| found_at_entry(f, at)))
                 .collect()
         };
         // At the recursion, each invariant fact is a `let` of its own at the
@@ -1428,7 +1457,7 @@ impl Lift<'_> {
         if !facts.is_empty() {
             params.extend(facts.iter().cloned());
             add_args(&mut again.result, passed);
-            add_args(&mut entry, facts.iter().map(|_| var("bv_omega", span)).collect());
+            add_args(&mut entry, facts.iter().map(|f| found_at_entry(f, span)).collect());
         }
         // `if i < hi { body; again } else { done }`, spelled as the parser
         // spells an `if` whose branches do not name its evidence: a match on

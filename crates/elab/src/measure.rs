@@ -459,6 +459,11 @@ pub(crate) fn lift_found(decl: &Decl, name: &str, measure: &Expr, tys: &dyn Bind
     Some((lifted, state.found))
 }
 
+/// `bitvec_omega::found_fact<P>(fact: ∥P∥ := bv_omega) → ∥P∥`: a loop
+/// passes its facts through it, with the search written, so a caller's
+/// lowering lifts each into a found proof of its own (`Rewrite::found_fact`).
+pub(crate) const FOUND_FACT: &str = "bitvec_omega::found_fact";
+
 /// `f#rec` — the eliminator on the bound, lifted out of `f`.
 pub(crate) fn rec_name(name: &str) -> String {
     format!("{name}#rec")
@@ -2339,6 +2344,24 @@ impl<'a> Rewrite<'a> {
         }).collect()
     }
 
+    /// The named arguments of `found_fact<P>(fact := search)` (`head` is
+    /// `found_fact<P>`) with the search lifted into `f#found_N`, whose goal
+    /// is `∥P∥` as written: no query is needed to find it. `None` for any
+    /// other call, or where the lift declines.
+    fn found_fact(&mut self, head: &Expr, named: &[heather_syntax::NamedArg], span: Span) -> Option<Vec<heather_syntax::NamedArg>> {
+        let ExprKind::TyApp { head: callee, args } = &head.kind else { return None };
+        let (ExprKind::Var(n), [p]) = (&callee.kind, args.as_slice()) else { return None };
+        if n != FOUND_FACT {
+            return None;
+        }
+        let k = named.iter().position(|a| a.name == "fact" && crate::defaults::is_context_search(&a.expr))?;
+        let goal = FoundGoal { name: "fact".into(), goal: Ty { kind: TyKind::Squash(Box::new(p.clone())), span }, default: named[k].expr.clone() };
+        let proof = self.lift_found_proof(&goal, span)?;
+        let mut named = named.to_vec();
+        named[k].expr = proof;
+        Some(named)
+    }
+
     /// `theorem f#found_N(ȳ): goal { let fact… = …; default }` over the
     /// binders the goal and the facts in scope about them name, and the
     /// reference `f#found_N(ȳ)`. The facts are bound in the body so the
@@ -2630,7 +2653,12 @@ impl<'a> Rewrite<'a> {
                 // separate self-call route.
                 if self.found_only {
                     let mut named = named;
-                    if let ExprKind::Var(n) = callee
+                    // `found_fact<P>(fact := search)`, a loop's fact where the
+                    // loop starts: the search, with its goal `∥P∥` written,
+                    // found once like a default's.
+                    if let Some(found) = self.found_fact(head, &named, span) {
+                        named = found;
+                    } else if let ExprKind::Var(n) = callee
                         && !self.scope.iter().any(|b| b.name == *n)
                         && !self.members.iter().any(|m| m.name == *n)
                         && self.tys.has_context_default(n)

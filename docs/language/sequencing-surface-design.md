@@ -1602,7 +1602,14 @@ preserves them, is not planned yet). `Lift::free_facts` collects them:
   does not change, as the receiver keeps its type.
 - **How it is given**: as a squashed parameter `__freeN_k: ∥P∥` after the
   invariant's (after the count, for a `for` over words), found by
-  `bv_omega` at the entry. At the recursion it is passed by name, or,
+  `bv_omega` at the entry, written there as
+  `bitvec_omega::found_fact<P>(fact := bv_omega)` (an invariant's fact
+  too). The caller's own `decreases` lowering lifts that search into a
+  found proof of its own, `f#found_N` (`Rewrite::found_fact`), as it lifts
+  a read's: a bare `bv_omega` argument was searched again in every copy of
+  an outer loop's body, and its decrease hypothesis, naming the inner call
+  with the search still in it, had no spelling, so `bv_omega` refused the
+  outer `#ext` (issues/bv-omega-unspellable-fact-refuses-outer-loop-ext.md). At the recursion it is passed by name, or,
   where it names the receiver's length, found again by a `have` at the
   end of the body (the store's receiver is a new term). No `#keeps`
   theorem is made for it: the code after the loop knows it already.
@@ -1630,11 +1637,6 @@ reading `s[i]` and `s[j]` with no invariant at all; and
 - A loop's state of two locals besides the receiver, or of two locals in
   a plain loop: `f#State` is a record, which the generator has no layout
   for (refused with that reason).
-- The outer loop's `#ext` of a loop in a loop is refused (and its
-  `_unfold` never attempted): a read's `bv_omega` inside it meets the
-  lifted decrease hypothesis, which names the inner loop's call with its
-  squashed fact still a search, cannot spell it, and refuses
-  (`issues/bv-omega-unspellable-fact-refuses-outer-loop-ext.md`).
 - A byte (`u8`) local captured by a loop in a function that writes a
   span: such a function's code takes 64-bit words
   (`issues/runtime-repr-narrow-words.md`), so the probes carry the key
