@@ -1130,6 +1130,18 @@ fn is_utf8(bytes: List<BitVec(8)>) → Bool { is_some_string(decode(bytes)) }
 
 fn utf8_valid(bytes: List<BitVec(8)>) → Type { is_utf8(bytes).IsTrue() }
 
+// The bytes are UTF-8 exactly when they are some string's encoding: the
+// decision, read through theorems 4 and 7.
+theorem is_utf8_iff(bytes: List<BitVec(8)>): (is_utf8(bytes) = True) ↔ (∃ s: String, encode(s) = bytes) {
+    Iff(
+        mp := λ ok => match d: decode(bytes) {
+            None => absurd(ok),
+            Some(s) => Exists(witness := s, proof := encode_decode(bytes, s, d)),
+        },
+        mpr := λ e => rewrite(sym(e.proof), j(sym(decode_encode(e.witness)), λ y _ => is_some_string(y) = True, refl)),
+    )
+}
+
 record Utf8 {
     bytes: List<BitVec(8)>,
     valid: utf8_valid(bytes),
