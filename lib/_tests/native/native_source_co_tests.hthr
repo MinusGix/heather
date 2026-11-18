@@ -64,12 +64,12 @@ theorem calls_too_deep(): status_after(calls(3), 20) = ORet(139) { refl }
 // The bridge at a source, both ways: the fuelled program and the fuel-free
 // tree have the same traces.
 theorem countdown_refines(k: Nat):
-    Program::Refines(Events::linux(), countdown(k).denote([]), CoTree::program(Events::linux(), countdown(k).tree_co([])))
+    Program::Refines(Events::linux(), countdown(k).bounded([]), CoTree::program(Events::linux(), countdown(k).tree_co([])))
 {
     countdown(k).tree_co_refines([])
 }
 theorem countdown_refined(k: Nat):
-    Program::Refines(Events::linux(), CoTree::program(Events::linux(), countdown(k).tree_co([])), countdown(k).denote([]))
+    Program::Refines(Events::linux(), CoTree::program(Events::linux(), countdown(k).tree_co([])), countdown(k).bounded([]))
 {
     countdown(k).tree_co_refined([])
 }

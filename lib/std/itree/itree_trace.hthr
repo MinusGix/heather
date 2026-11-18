@@ -323,6 +323,174 @@ theorem ITree::iter_body_below<A, B>(E: Events, n: Nat, body: A → ITree<Step<A
 }
 
 // ---------------------------------------------------------------------------
+// Refusal
+//
+// `Refuses(E, stop, t, u)`: `t` is `u` with some subtrees ended early at a
+// return `stop` holds of (where `t` returns such a value, `u` may be
+// anything), and with some of `u`'s subtrees not yet grown (a `Cut` of `t`
+// is below anything, as in `Below`). A compiled program that may refuse to
+// go on, a call past its stack, is its source's tree with the refused
+// subtrees ended at the refusal.
+
+fn ITree::Refuses<R>(E: Events, stop: R → Type, t: ITree<R>(E), u: ITree<R>(E)) → Type {
+    match t {
+        Ret(r) => Or<stop(r), u = Ret(r)>,
+        Tau(s) => SameTau<R>(E, u, λ v => ITree::Refuses(E, stop, s, v)),
+        Vis(c, k) => SameVis<R>(E, c, u, λ a v => ITree::Refuses(E, stop, k(a), v)),
+        Cut => True,
+    }
+}
+
+// Growing is refusing nothing.
+theorem ITree::refuses_of_below<R>(E: Events, stop: R → Type, t: ITree<R>(E), u: ITree<R>(E), h: ITree::Below(E, t, u)):
+    ITree::Refuses(E, stop, t, u)
+{
+    match t {
+        Ret(_) => Inr(h),
+        Tau(s) => {
+            let g: SameTau<R>(E, u, λ v => ITree::Below(E, s, v)) = h;
+            SameTau(g.t, g.at, ITree::refuses_of_below(E, stop, s, g.t, g.sub))
+        },
+        Vis(c, k) => {
+            let g: SameVis<R>(E, c, u, λ a v => ITree::Below(E, k(a), v)) = h;
+            SameVis(g.k, g.at, λ a => ITree::refuses_of_below(E, stop, k(a), g.k(a), g.sub(a)))
+        },
+        Cut => trivial,
+    }
+}
+
+// …and refusing where nothing stops is growing.
+theorem ITree::below_of_refuses<R>(E: Events, t: ITree<R>(E), u: ITree<R>(E), h: ITree::Refuses(E, λ (_: R) => False, t, u)):
+    ITree::Below(E, t, u)
+{
+    match t {
+        Ret(_) => match h { Inl(never) => false_elim(never), Inr(e) => e },
+        Tau(s) => {
+            let g: SameTau<R>(E, u, λ v => ITree::Refuses(E, λ (_: R) => False, s, v)) = h;
+            SameTau(g.t, g.at, ITree::below_of_refuses(E, s, g.t, g.sub))
+        },
+        Vis(c, k) => {
+            let g: SameVis<R>(E, c, u, λ a v => ITree::Refuses(E, λ (_: R) => False, k(a), v)) = h;
+            SameVis(g.k, g.at, λ a => ITree::below_of_refuses(E, k(a), g.k(a), g.sub(a)))
+        },
+        Cut => trivial,
+    }
+}
+
+// `bind` refuses where either side does, a stop going on to a stop.
+theorem ITree::refuses_bind<A, B>(E: Events, stop: A → Type, stop2: B → Type, t: ITree<A>(E), t2: ITree<A>(E), h: A → ITree<B>(E),
+    h2: A → ITree<B>(E), bt: ITree::Refuses(E, stop, t, t2), bh: (a: A) → ITree::Refuses(E, stop2, h(a), h2(a)),
+    stopped: (a: A) → stop(a) → (v: ITree<B>(E)) → ITree::Refuses(E, stop2, h(a), v)):
+    ITree::Refuses(E, stop2, ITree::bind(E, t, h), ITree::bind(E, t2, h2))
+{
+    match t {
+        Ret(r) => match bt {
+            Inl(stops) => stopped(r, stops, ITree::bind(E, t2, h2)),
+            Inr(e) => j(@sym<ITree<A>(E)>(t2, Ret(r), e), λ y q => ITree::Refuses(E, stop2, h(r), ITree::bind(E, y, h2)), bh(r)),
+        },
+        Tau(s) => {
+            let g: SameTau<A>(E, t2, λ v => ITree::Refuses(E, stop, s, v)) = bt;
+            SameTau(ITree::bind(E, g.t, h2), @cong<ITree<A>(E), ITree<B>(E)>(λ y => ITree::bind(E, y, h2), t2, Tau(g.t), g.at),
+                ITree::refuses_bind(E, stop, stop2, s, g.t, h, h2, g.sub, bh, stopped))
+        },
+        Vis(c, k) => {
+            let g: SameVis<A>(E, c, t2, λ a v => ITree::Refuses(E, stop, k(a), v)) = bt;
+            SameVis(λ a => ITree::bind(E, g.k(a), h2), @cong<ITree<A>(E), ITree<B>(E)>(λ y => ITree::bind(E, y, h2), t2, Vis(c, g.k), g.at),
+                λ a => ITree::refuses_bind(E, stop, stop2, k(a), g.k(a), h, h2, g.sub(a), bh, stopped))
+        },
+        Cut => trivial,
+    }
+}
+
+// `map` refuses where its tree does, when `f` takes a stop to a stop.
+theorem ITree::refuses_map<A, B>(E: Events, stop: A → Type, stop2: B → Type, t: ITree<A>(E), t2: ITree<A>(E), f: A → B,
+    bt: ITree::Refuses(E, stop, t, t2), stops: (a: A) → stop(a) → stop2(f(a))):
+    ITree::Refuses(E, stop2, ITree::map(E, t, f), ITree::map(E, t2, f))
+{
+    ITree::refuses_bind(E, stop, stop2, t, t2, λ r => Ret(f(r)), λ r => Ret(f(r)), bt, λ a => Inr(refl), λ a s v => Inl(stops(a, s)))
+}
+
+// What stops a loop's pass: leaving it at a stop.
+fn Step::stops<A, B>(stop: B → Type) → Step<A, B> → Type {
+    λ x => match x { Continue(_) => False, Break(b) => stop(b) }
+}
+
+// A loop with at least as much fuel, whose body refuses where its pass
+// leaves at a stop, refuses where it does.
+theorem ITree::iter_refuses<A, B>(E: Events, stop: B → Type, body: A → ITree<Step<A, B>>(E), body2: A → ITree<Step<A, B>>(E),
+    each: (a: A) → ITree::Refuses(E, Step::stops<A, B>(stop), body(a), body2(a)), n, m: Nat, le: n <= m): (a: A) →
+    ITree::Refuses(E, stop, ITree::iter(E, n, body, a), ITree::iter(E, m, body2, a))
+{
+    match n {
+        Zero => λ a => trivial,
+        Succ(k) => match m {
+            Zero => false_elim(le),
+            Succ(l) => λ a => {
+                let step: (x: Step<A, B>) → ITree::Refuses(E, stop, ITree::iter_next(E, k, body, x), ITree::iter_next(E, l, body2, x)) =
+                    λ x => match x {
+                        Continue(a2) => SameTau(ITree::iter(E, l, body2, a2), refl, ITree::iter_refuses(E, stop, body, body2, each, k, l, le, a2)),
+                        Break(b) => Inr(refl),
+                    };
+                let stopped: (x: Step<A, B>) → Step::stops<A, B>(stop)(x) → (v: ITree<B>(E)) → ITree::Refuses(E, stop, ITree::iter_next(E, k, body, x), v) =
+                    λ x => match x {
+                        Continue(_) => λ never v => false_elim(never),
+                        Break(b) => λ stops v => Inl(stops),
+                    };
+                ITree::refuses_bind(E, Step::stops<A, B>(stop), stop, body(a), body2(a), λ x => ITree::iter_next(E, k, body, x),
+                    λ x => ITree::iter_next(E, l, body2, x), each(a), step, stopped)
+            },
+        },
+    }
+}
+
+// Whether a trace ends in a return `stop` holds of.
+fn Trace::Stops<R>(E: Events, tr: Trace<R>(E), stop: R → Type) → Type {
+    match tr { TEnd => False, TRet(r) => stop(r), TCall(_) => False, TAns(_, _, rest) => Trace::Stops(E, rest, stop) }
+}
+
+// The trace with its return taken off: the prefix that came before it.
+fn Trace::opened<R>(E: Events, tr: Trace<R>(E)) → Trace<R>(E) {
+    match tr { TEnd => TEnd, TRet(_) => TEnd, TCall(c) => TCall(c), TAns(c, a, rest) => TAns(c, a, Trace::opened(E, rest)) }
+}
+
+// Every trace of a refusing tree is the full tree's, or ends at a stop
+// after a prefix the full tree produces: a refusal ends a run, and what
+// came before it is the full tree's own.
+theorem IsTrace::of_refuses<R>(E: Events, stop: R → Type, t: ITree<R>(E), u: ITree<R>(E), tr: Trace<R>(E),
+    h: ITree::Refuses(E, stop, t, u), it: IsTrace(E, t, tr)):
+    Or<IsTrace(E, u, tr), Trace::Stops(E, tr, stop) ∧ IsTrace(E, u, Trace::opened(E, tr))>
+{
+    match t {
+        Ret(r) => match h {
+            Inl(stops) => match it {
+                Stopped(e) => Inl(j(sym(e), λ y _ => IsTrace(E, u, y), IsTrace::nil(E, u))),
+                Returned(e) => Inr(j(sym(e), λ y _ => Trace::Stops(E, y, stop) ∧ IsTrace(E, u, Trace::opened(E, y)), ⟨stops, IsTrace::nil(E, u)⟩)),
+            },
+            Inr(e) => Inl(j(@sym<ITree<R>(E)>(u, Ret(r), e), λ y q => IsTrace(E, y, tr), it)),
+        },
+        Tau(s) => {
+            let g: SameTau<R>(E, u, λ v => ITree::Refuses(E, stop, s, v)) = h;
+            j(sym(g.at), λ y _ => Or<IsTrace(E, y, tr), Trace::Stops(E, tr, stop) ∧ IsTrace(E, y, Trace::opened(E, tr))>,
+                IsTrace::of_refuses(E, stop, s, g.t, tr, g.sub, it))
+        },
+        Vis(c, k) => {
+            let g: SameVis<R>(E, c, u, λ a v => ITree::Refuses(E, stop, k(a), v)) = h;
+            let w: VisTrace<R>(E, c, tr, λ a rest => IsTrace(E, k(a), rest)) = it;
+            j(sym(g.at), λ y _ => Or<IsTrace(E, y, tr), Trace::Stops(E, tr, stop) ∧ IsTrace(E, y, Trace::opened(E, tr))>, match w {
+                Prefix(e) => Inl(Prefix(e)),
+                Pending(e) => Inl(Pending(e)),
+                Answered(a, rest, e, sub) => match IsTrace::of_refuses(E, stop, k(a), g.k(a), rest, g.sub(a), sub) {
+                    Inl(full) => Inl(Answered(a, rest, e, full)),
+                    Inr(both) => Inr(j(sym(e), λ y _ => Trace::Stops(E, y, stop) ∧ IsTrace(E, Vis(c, g.k), Trace::opened(E, y)),
+                        ⟨both.left, Answered(a, Trace::opened(E, rest), refl, both.right)⟩)),
+                },
+            })
+        },
+        Cut => Inl(j(sym(CutTrace::ended(E, tr, it)), λ y _ => IsTrace(E, u, y), IsTrace::nil(E, u))),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Programs: families of trees indexed by fuel
 
 // A family that only grows with fuel: what `iter` and `mrec` produce.

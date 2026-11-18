@@ -380,8 +380,12 @@ theorem alternating_allocated(): alternating().allocation_ok(alternating().homes
 theorem alternating_homed(): alternating().refusal(low(), alternating().homes(), alternating().bodies()) = [] { refl }
 theorem alternating_two_bodies(): compiled_or_start(alternating()).named(1) + compiled_or_start(alternating()).named(2) = 2 { refl }
 theorem alternating_calls(): compiled_or_start(alternating()).calls_of(1) + compiled_or_start(alternating()).calls_of(2) = 3 { refl }
-theorem alternating_exits(): ITree::next(Events::linux(), alternating().tree([], 4)) = Exits(BitVec::ofNat(23)) { refl }
-theorem alternating_shallow_exits(): ITree::next(Events::linux(), alternating_shallow().tree([], 4)) = Exits(call_depth_status()) { refl }
+theorem alternating_exits(): ITree::next(Events::linux(), alternating().tree([], 8)) = Exits(BitVec::ofNat(23)) { refl }
+theorem alternating_compiled_exits(): ITree::next(Events::linux(), alternating().bounded_tree([], 4)) = Exits(BitVec::ofNat(23)) { refl }
+// The source with any depth exits 23; the compiled program one level short
+// refuses the sixth call.
+theorem alternating_shallow_source_exits(): ITree::next(Events::linux(), alternating_shallow().tree([], 8)) = Exits(BitVec::ofNat(23)) { refl }
+theorem alternating_shallow_exits(): ITree::next(Events::linux(), alternating_shallow().bounded_tree([], 4)) = Exits(call_depth_status()) { refl }
 
 // A call of no procedure, and one with an argument too many, are refused
 // at the call; a procedure whose body reads a word not its parameter, at

@@ -185,7 +185,7 @@ fn every_written_program_gets_its_theorem() {
     // leave at those stores (`Contract::Runs`). Where the stack is, a page
     // and the room above the segment, is what stays taken on trust.
     for statement in ["theorem head10_elf_fits()", "theorem head10_elf_runs(", "start: head10_elf_contract().Start(head10_elf_file(), top, args)(s)",
-        "head10_elf_contract().Runs(top, head10().denote(args))(s)", "fn head10_elf_from() → StackFrom { FromSystem }",
+        "head10_elf_contract().Runs(top, head10().bounded(args))(s)", "fn head10_elf_from() → StackFrom { FromSystem }",
         "fn head10_elf_stack() → List<BitVec(8)> {",
         "theorem head10_elf_presumes(): head10_elf_contract().lines() = [Processor, FileLoaded(4096), EntryAddress, CommandLine, StackAbove(4280), StackRoom(184), StackGrowth, CallsAnswered, NoFatalSignal]"] {
         assert!(certificate.contains(statement), "the certificate states `{statement}`");
