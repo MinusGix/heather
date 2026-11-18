@@ -54,7 +54,7 @@ theorem Nat::add_comm(self x, y: Nat): x + y = y + x {
 // for proofs that consume one binary digit at a time. `twice` exposes two
 // successors per input successor, so order cancellation remains structural.
 fn Nat::twice(self n: Nat) → Nat {
-    match n { Zero => 0, Succ(k) => Succ(Succ(k.twice())) }
+    match n { Zero => 0, Succ(k) => k.twice() + 2 }
 }
 
 theorem Nat::twice_add_self(self n: Nat): n.twice() = n + n {
@@ -226,7 +226,7 @@ fn Nat::Le(self n, m: Nat) → Type {
 // `Le(Succ(n), m)`, so everything `Le` computes `Lt` computes, and the two
 // facts a reader most wants — `lt_succ_iff_le` and `lt_succ_self` — are
 // definitional (see below).
-fn Nat::Lt(self n, m: Nat) → Type { Succ(n).Le(m) }
+fn Nat::Lt(self n, m: Nat) → Type { (n + 1).Le(m) }
 
 designation <= at Nat := Nat::Le
 designation < at Nat := Nat::Lt
@@ -315,7 +315,7 @@ theorem Nat::nonneg(self m: Nat): 0 <= m { trivial }
 // change the comparison. Both proofs are just the two-successor recursion of
 // `twice` read alongside the one-successor recursion of `Le`.
 fn Nat::TwiceLeTwice(self n, m: Nat) → Type { n.twice() <= m.twice() }
-fn Nat::TwiceLeOdd(self n, m: Nat) → Type { n.twice() <= Succ(m.twice()) }
+fn Nat::TwiceLeOdd(self n, m: Nat) → Type { n.twice() <= m.twice() + 1 }
 
 theorem Nat::twice_le_twice_iff_curried(n: Nat): (m: Nat) →
     (n.TwiceLeTwice(m) ↔ n <= m)
@@ -356,7 +356,7 @@ theorem Nat::twice_le_succ_twice_iff(n, m: Nat):
 }
 
 fn Nat::TwiceLtTwice(self n, m: Nat) → Type { n.twice() < m.twice() }
-fn Nat::TwiceLtOdd(self n, m: Nat) → Type { n.twice() < Succ(m.twice()) }
+fn Nat::TwiceLtOdd(self n, m: Nat) → Type { n.twice() < m.twice() + 1 }
 
 theorem Nat::twice_lt_twice_iff_curried(n: Nat): (m: Nat) →
     (n.TwiceLtTwice(m) ↔ n < m)
@@ -506,9 +506,9 @@ inductive DivMod { MkDivMod(quotient: Nat, remainder: Nat) }
 fn Nat::divmod_step(divisor_pred: Nat, state: DivMod) → DivMod {
     match state {
         MkDivMod(quotient, remainder) =>
-            match Succ(divisor_pred).le_dec(Succ(remainder)) {
-                Inl(_) => MkDivMod(Succ(quotient), 0),
-                Inr(_) => MkDivMod(quotient, Succ(remainder)),
+            match (divisor_pred + 1).le_dec(remainder + 1) {
+                Inl(_) => MkDivMod(quotient + 1, 0),
+                Inr(_) => MkDivMod(quotient, remainder + 1),
             },
     }
 }
@@ -517,8 +517,8 @@ fn Nat::divmod(self n: Nat) → Nat → DivMod {
     match n {
         Zero => λ divisor => MkDivMod(0, 0),
         Succ(k) => λ divisor => match divisor {
-            Zero => MkDivMod(0, Succ(k)),
-            Succ(d) => Nat::divmod_step(d, k.divmod(Succ(d))),
+            Zero => MkDivMod(0, k + 1),
+            Succ(d) => Nat::divmod_step(d, k.divmod(d + 1)),
         },
     }
 }
@@ -898,7 +898,7 @@ fn Nat::equation(self n: Nat) → (m: Nat) → (n = m) ∨ True {
         Zero => λ m => match m { Zero => Inl(refl), Succ(_) => Inr(trivial) },
         Succ(k, ih) => λ m => match m {
             Zero => Inr(trivial),
-            Succ(m2) => match ih(m2) { Inr(_) => Inr(trivial), Inl(e) => Inl(j(e, λ x _ => Succ(k) = Succ(x), refl)) },
+            Succ(m2) => match ih(m2) { Inr(_) => Inr(trivial), Inl(e) => Inl(j(e, λ x _ => k + 1 = x + 1, refl)) },
         },
     }
 }
@@ -1401,14 +1401,14 @@ theorem Nat::modeq_add_mul(self a: Nat, m: Pos<Nat>, k: Nat): Nat::ModEq(m, a + 
 fn Nat::max(self a: Nat) → Nat → Nat {
     match a {
         Zero => λ (b: Nat) => b,
-        Succ(k) => λ (b: Nat) => match b { Zero => Succ(k), Succ(l) => Succ(k.max(l)) },
+        Succ(k) => λ (b: Nat) => match b { Zero => k + 1, Succ(l) => k.max(l) + 1 },
     }
 }
 
 fn Nat::min(self a: Nat) → Nat → Nat {
     match a {
         Zero => λ (b: Nat) => 0,
-        Succ(k) => λ (b: Nat) => match b { Zero => 0, Succ(l) => Succ(k.min(l)) },
+        Succ(k) => λ (b: Nat) => match b { Zero => 0, Succ(l) => k.min(l) + 1 },
     }
 }
 
@@ -1786,7 +1786,7 @@ theorem Nat::pow_le_pow_r(self a, i, k: Nat, ha: 1 <= a, h: i <= k): a.pow(i) <=
     j(i.le_add(k, h), λ y _ => a.pow(i) <= a.pow(y), a.pow_le_pow_add(i, ha, k - i))
 }
 
-fn Nat::fact(self n: Nat) → Nat { match n { Zero => 1, Succ(k) => Succ(k) * k.fact() } }
+fn Nat::fact(self n: Nat) → Nat { match n { Zero => 1, Succ(k) => (k + 1) * k.fact() } }
 
 theorem Nat::fact_zero(): (0).fact() = 1 { refl }
 
@@ -1805,7 +1805,7 @@ theorem Nat::fact_pos(n: Nat): 0 < n.fact() {
 fn Nat::choose(self n, k: Nat) → Nat {
     match n {
         Zero => match k { Zero => 1, Succ(_) => 0 },
-        Succ(m) => match k { Zero => 1, Succ(j) => m.choose(j) + m.choose(Succ(j)) },
+        Succ(m) => match k { Zero => 1, Succ(j) => m.choose(j) + m.choose(j + 1) },
     }
 }
 
@@ -1897,7 +1897,7 @@ theorem Nat::fact_le_succ(self n: Nat): n.fact() <= (n + 1).fact() {
 fn Nat::half(self n: Nat) → Nat {
     match n {
         Zero => 0,
-        Succ(k) => match k { Zero => 0, Succ(l) => Succ(l.half()) },
+        Succ(k) => match k { Zero => 0, Succ(l) => l.half() + 1 },
     }
 }
 
@@ -2015,7 +2015,7 @@ theorem Nat::shr_succ_half(self k: Nat): (n: Nat) → n.shr(k + 1) = n.shr(k).ha
 
 // The number of binary digits: the least `w` with `n < 2^w`.
 fn Nat::width_fuel(n, fuel: Nat) → Nat {
-    match fuel { Zero => 0, Succ(f) => match n { Zero => 0, Succ(k) => Succ(Nat::width_fuel(Succ(k).half(), f)) } }
+    match fuel { Zero => 0, Succ(f) => match n { Zero => 0, Succ(k) => Nat::width_fuel((k + 1).half(), f) + 1 } }
 }
 
 fn Nat::width(self n: Nat) → Nat { Nat::width_fuel(n, n) }
@@ -2139,11 +2139,11 @@ fn DivMod::rem(self s: DivMod) → Nat { match s { MkDivMod(_, r) => r } }
 // The next bit of the quotient: `r` is what is left of `n` after twice the
 // quotient so far.
 fn Nat::ldiv_pick(d, q, r: Nat, c: d <= r ∨ ¬(d <= r)) → DivMod {
-    match c { Inl(_) => MkDivMod(Succ(q * 2), r - d), Inr(_) => MkDivMod(q * 2, r) }
+    match c { Inl(_) => MkDivMod(q * 2 + 1, r - d), Inr(_) => MkDivMod(q * 2, r) }
 }
 
 // The bit halving drops: `n = 2·h + bit` when `h = ⌊n/2⌋`.
-fn Nat::ldiv_bit(n, h: Nat) → Nat { match Succ(h + h).le_dec(n) { Inl(_) => 1, Inr(_) => 0 } }
+fn Nat::ldiv_bit(n, h: Nat) → Nat { match (h + h + 1).le_dec(n) { Inl(_) => 1, Inr(_) => 0 } }
 
 // The low bit, by recursion two at a time as `half` is: the kernel runs a
 // numeral through it in a few steps, where `n - 2·⌊n/2⌋` (`low_bit_sub`)
@@ -2184,7 +2184,7 @@ fn Nat::ldiv_fuel(self n, d, fuel: Nat) → DivMod {
         Zero => MkDivMod(0, n),
         Succ(f) => match n {
             Zero => MkDivMod(0, 0),
-            Succ(k) => Nat::ldiv_step(Succ(k), d, Succ(k).half().ldiv_fuel(d, f)),
+            Succ(k) => Nat::ldiv_step(k + 1, d, (k + 1).half().ldiv_fuel(d, f)),
         },
     }
 }
@@ -2497,7 +2497,7 @@ fn Nat::pow_sq_fuel(a, n, fuel: Nat) → Nat {
         Zero => 1,
         Succ(f) => match n {
             Zero => 1,
-            Succ(k) => Nat::pow_sq_step(a, Nat::pow_sq_fuel(a, Succ(k).half(), f), Succ(k).low_bit()),
+            Succ(k) => Nat::pow_sq_step(a, Nat::pow_sq_fuel(a, (k + 1).half(), f), (k + 1).low_bit()),
         },
     }
 }
@@ -2569,7 +2569,7 @@ theorem Nat::ldiv_mod(self n: Nat, d: Pos<Nat>): n.ldiv(d).rem() = n.mod(d) {
 // whichever way the check goes.
 fn Nat::div_checked(n, d, g: Nat) → DivMod {
     match Nat::leb(g * d, n) {
-        True => match Nat::leb(Succ(n - g * d), d) { True => MkDivMod(g, n - g * d), False => n.ldiv(d) },
+        True => match Nat::leb(n - g * d + 1, d) { True => MkDivMod(g, n - g * d), False => n.ldiv(d) },
         False => n.ldiv(d),
     }
 }
@@ -2610,7 +2610,7 @@ theorem Nat::div_checked_rem_lt(n: Nat, d: Pos<Nat>, g: Nat): Nat::div_checked(n
 fn Nat::recip_bits(d: Nat, s: DivMod, steps: Nat) → DivMod {
     match steps {
         Zero => s,
-        Succ(k) => match s { MkDivMod(q, r) => Nat::recip_bits(d, match Nat::leb(d, r * 2) { True => MkDivMod(Succ(q * 2), r * 2 - d), False => MkDivMod(q * 2, r * 2) }, k) },
+        Succ(k) => match s { MkDivMod(q, r) => Nat::recip_bits(d, match Nat::leb(d, r * 2) { True => MkDivMod(q * 2 + 1, r * 2 - d), False => MkDivMod(q * 2, r * 2) }, k) },
     }
 }
 
@@ -2641,22 +2641,22 @@ theorem Nat::pow2_div_rem_lt(K: Nat, d: Pos<Nat>): Nat::pow2_div(K, d).rem() < d
 // `ldiv` costs one per quotient bit. The numerator is the fuel. The
 // specification is `IsRoot`, `r² <= n < (r + 1)²` (`isqrt_spec`).
 
-fn Nat::IsRoot(n, r: Nat) → Type { r * r <= n ∧ n < Succ(r) * Succ(r) }
+fn Nat::IsRoot(n, r: Nat) → Type { r * r <= n ∧ n < (r + 1) * (r + 1) }
 
 fn Nat::quarter(self n: Nat) → Nat { n.half().half() }
 
 fn Nat::isqrt_pick(n, r: Nat, c: (r * 2 + 1) * (r * 2 + 1) <= n ∨ ¬((r * 2 + 1) * (r * 2 + 1) <= n)) → Nat {
-    match c { Inl(_) => Succ(r * 2), Inr(_) => r * 2 }
+    match c { Inl(_) => r * 2 + 1, Inr(_) => r * 2 }
 }
 
-fn Nat::isqrt_step(n, r: Nat) → Nat { Nat::isqrt_pick(n, r, (Succ(r * 2) * Succ(r * 2)).le_dec(n)) }
+fn Nat::isqrt_step(n, r: Nat) → Nat { Nat::isqrt_pick(n, r, ((r * 2 + 1) * (r * 2 + 1)).le_dec(n)) }
 
 fn Nat::isqrt_fuel(self n, fuel: Nat) → Nat {
     match fuel {
         Zero => 0,
         Succ(f) => match n {
             Zero => 0,
-            Succ(k) => Nat::isqrt_step(Succ(k), Succ(k).quarter().isqrt_fuel(f)),
+            Succ(k) => Nat::isqrt_step(k + 1, (k + 1).quarter().isqrt_fuel(f)),
         },
     }
 }

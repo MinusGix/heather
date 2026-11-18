@@ -210,7 +210,7 @@ fn directory_count(directory: PortDirectory) → Nat {
     match directory {
         DirectoryEmpty => 0,
         DirectoryBranch(left, _, right) =>
-            Succ(directory_count(left) + directory_count(right)),
+            directory_count(left) + directory_count(right) + 1,
     }
 }
 
@@ -305,7 +305,7 @@ fn InputEntriesIndexed(directory: PortDirectory,
         Cons(port, rest) => λ index =>
             HasDirectoryPortAt(directory, port.id, port.width,
                 InputAt(index)) ∧
-            InputEntriesIndexed(directory, rest, Succ(index)),
+            InputEntriesIndexed(directory, rest, index + 1),
     }
 }
 
@@ -585,7 +585,7 @@ fn NodesIndexed(directory: PortDirectory, nodes: List<Node>) → Nat → Type {
         Nil => λ _ => True,
         Cons(node, rest) => λ index =>
             NodeIndexedIn(directory, index, node) ∧
-            NodesIndexed(directory, rest, Succ(index)),
+            NodesIndexed(directory, rest, index + 1),
     }
 }
 
@@ -1184,7 +1184,7 @@ fn LoopRuns(pass: Valuation() → Type, parameters: List<Nat>, count, exit: Nat,
     match remaining {
         Zero => λ state final exhausted => (final = state) ∧ (exhausted = True),
         Succ(rest) => λ state final exhausted => Exists<Valuation()>(λ values =>
-            (words_of(values, parameters) = state) ∧ ((values(64, count) = BitVec::ofNat(Succ(rest))) ∧ (pass(values) ∧
+            (words_of(values, parameters) = state) ∧ ((values(64, count) = BitVec::ofNat(rest + 1)) ∧ (pass(values) ∧
                 match values(1, exit).head_bit() {
                     False => LoopRuns(pass, parameters, count, exit, next, rest, words_of(values, next), final, exhausted),
                     True => (final = words_of(values, next)) ∧ (exhausted = False),

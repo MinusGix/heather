@@ -129,7 +129,7 @@ fn Words::all_at(ws: List<BitVec(64)>) → (k: Nat) → (P: List<BitVec(64)> →
             Zero => λ P h _ => h,
             Succ(m) => λ P h e => false_elim(Nat::zero_ne_succ(m, e)),
         },
-        Cons(w, rest) => λ k => match k as λ n => (P: List<BitVec(64)> → Type) → Words::All(n, P) → Succ(rest.len()) = n → P(Cons(w, rest)) {
+        Cons(w, rest) => λ k => match k as λ n => (P: List<BitVec(64)> → Type) → Words::All(n, P) → rest.len() + 1 = n → P(Cons(w, rest)) {
             Zero => λ P h e => false_elim(Nat::succ_ne_zero(rest.len(), e)),
             Succ(m) => λ P h e => Words::all_at(rest, m, λ (ws: List<BitVec(64)>) => P(Cons(w, ws)), h(w), Nat::succ_inj(rest.len(), m, e)),
         },

@@ -356,10 +356,10 @@ fn neighbours<J>(es: List<Edge<J>>, k: Nat, fr: Frame<J>, stack: List<Frame<J>>)
     match es {
         Nil => stack,
         Cons(e, rest) => match k.same(fr.came) {
-            True => neighbours(rest, Succ(k), fr, stack),
+            True => neighbours(rest, k + 1, fr, stack),
             False => match step_from(e, fr.at) {
-                Some(s) => neighbours(rest, Succ(k), fr, Cons(Frame(s.to(), Cons(s, fr.path), k), stack)),
-                None => neighbours(rest, Succ(k), fr, stack),
+                Some(s) => neighbours(rest, k + 1, fr, Cons(Frame(s.to(), Cons(s, fr.path), k), stack)),
+                None => neighbours(rest, k + 1, fr, stack),
             },
         },
     }
@@ -381,7 +381,7 @@ fn path_search<J>(fuel: Nat, es: List<Edge<J>>, stack: List<Frame<J>>, to: Nat) 
 // The path from `a` to `b` along the edges, if they are in one class.
 fn EGraph::path<Op, J>(self g: EGraph<Op, J>, a: Nat, b: Nat) → Option<List<Step<J>>> {
     let n = g.edges.len();
-    path_search(Succ(Succ(n + n)), g.edges, [Frame(a, [], n)], b)
+    path_search(n + n + 2, g.edges, [Frame(a, [], n)], b)
 }
 
 // Evidence that child `from` equals child `to`.
@@ -465,7 +465,7 @@ fn EGraph::explain_go<Op, J, P>(self g: EGraph<Op, J>, alg: PathAlg<J, P>, fuel:
 // are in one class.
 fn EGraph::explain<Op, J, P>(self g: EGraph<Op, J>, alg: PathAlg<J, P>, a: Nat, b: Nat) → Option<P> {
     let n = g.nodes.len();
-    first_proof(g.explain_go(alg, Succ(Succ(n * (g.edges.len() + 2))), Equal(a, b)))
+    first_proof(g.explain_go(alg, n * (g.edges.len() + 2) + 2, Equal(a, b)))
 }
 
 // The nodes of class `c`.
@@ -571,7 +571,7 @@ fn EGraph::ematch_go<Op, J, Q>(self g: EGraph<Op, J>, test: Q → Op → Subst �
 
 // The matches of `p` with its root at node `n`.
 fn EGraph::ematch_at<Op, J, Q>(self g: EGraph<Op, J>, test: Q → Op → Subst → Option<Subst>, table: Array<List<Nat>>, p: Pattern<Q>, n: Nat) → List<Subst> {
-    g.ematch_go(test, p, table, Succ(Succ(4 * p.items.len())), MNode(p.root, n), Subst::empty(p.vars))
+    g.ematch_go(test, p, table, 4 * p.items.len() + 2, MNode(p.root, n), Subst::empty(p.vars))
 }
 
 // A match, with the node its root met.
@@ -650,7 +650,7 @@ record LooseMatched { root: Nat, l: Loose }
 // The matches and near matches of `p` with its root at node `n`; a match
 // is one whose `slack` is `None`, and those are exactly `ematch_at`'s.
 fn EGraph::ematch_loose_at<Op, J, Q>(self g: EGraph<Op, J>, test: Q → Op → Subst → Option<Subst>, slack: Nat → Bool, table: Array<List<Nat>>, p: Pattern<Q>, n: Nat) → List<LooseMatched> {
-    g.loose_go(test, slack, p, table, Succ(Succ(4 * p.items.len())), MNode(p.root, n), Loose(Subst::empty(p.vars), None)).map(λ l => LooseMatched(n, l))
+    g.loose_go(test, slack, p, table, 4 * p.items.len() + 2, MNode(p.root, n), Loose(Subst::empty(p.vars), None)).map(λ l => LooseMatched(n, l))
 }
 
 // Every match and near match of `p`, root by root.

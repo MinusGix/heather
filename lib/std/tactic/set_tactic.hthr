@@ -343,7 +343,7 @@ fn sets_find(hs: List<Handle>, h: Handle, k: Nat) → Tac<Option<Nat>> {
         Nil => pure(None),
         Cons(g, rest) => defeq(Hd(g), Hd(h)).bind(λ same => match same {
             True => pure(Some(k)),
-            False => sets_find(rest, h, Succ(k)),
+            False => sets_find(rest, h, k + 1),
         }),
     }
 }
@@ -362,7 +362,7 @@ fn sets_op_find(os: List<SetOpRead>, op: Expr, k: Nat) → Tac<Option<SetOpFound
         Nil => pure(None),
         Cons(o, rest) => defeq(o.op, op).bind(λ same => match same {
             True => pure(Some(SetOpFound(o, k))),
-            False => sets_op_find(rest, op, Succ(k)),
+            False => sets_op_find(rest, op, k + 1),
         }),
     }
 }
@@ -783,7 +783,7 @@ fn sets_arity(t: Handle, fuel: Nat) → Tac<Nat> {
         Succ(n) => view(t).bind(λ v => match v {
             HPi(_) => open(t, "p").bind(λ c => match c {
                 Refused(_) => pure(0),
-                Accepted(o) => sets_arity(o.body, n).bind(λ k => pure(Succ(k))),
+                Accepted(o) => sets_arity(o.body, n).bind(λ k => pure(k + 1)),
             }),
             _ => pure(0),
         }),
@@ -1372,8 +1372,8 @@ fn sets_self_facts(H: SetHeads, T: Expr, x: Handle, es: List<Handle>, k: Nat, ac
     match es {
         Nil => pure(acc),
         Cons(e, rest) => sets_same_elt(e, x).bind(λ same => match same {
-            False => sets_self_facts(H, T, x, rest, Succ(k), acc),
-            True => sets_self_facts(H, T, x, rest, Succ(k),
+            False => sets_self_facts(H, T, x, rest, k + 1, acc),
+            True => sets_self_facts(H, T, x, rest, k + 1,
                 acc.add(acc.leaves, FEq(k), sets_app(H.lem.eq_self, [T, Hd(x)]), At(Hd(e), Tried("an element", "x is it")))),
         }),
     }

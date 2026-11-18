@@ -23,7 +23,7 @@ fn fail<T, A>(expected: Nat) → Parser<T, A> {
 
 // Try pick on the next token; Some consumes one token and None fails retryably.
 fn recognize_at<T, A>(pick: T → Option<A>, expected: Nat, source: List<T>, begin: Cursor<T>(source)) → Reply<T, A>(source, begin) {
-    match Succ(begin.offset).le_dec(source.len()) {
+    match (begin.offset + 1).le_dec(source.len()) {
         Inl(room) => match rest(source, begin) {
             Nil => fail_at(source, begin, [expected]),
             Cons(head, _) => match pick(head) {
@@ -93,7 +93,7 @@ fn Selects<T, A>(pick: T → Option<A>, input: List<T>, value: A) → Type {
 
 // Recognition advanced one offset and selected value from the original remainder's head.
 fn Recognized<T, A>(pick: T → Option<A>, source: List<T>, begin, end: Cursor<T>(source), value: A) → Type {
-    end.offset = Succ(begin.offset) ∧ Selects(pick, rest(source, begin), value)
+    end.offset = begin.offset + 1 ∧ Selects(pick, rest(source, begin), value)
 }
 
 // Establish the recognition relation for a single recognition reply.

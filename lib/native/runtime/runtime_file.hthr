@@ -85,11 +85,11 @@ fn FTm::read_at(tys: Nat → RecInfo, R: Type, rest: List<List<BitVec(8)>>, n: N
     Ty::ArrowsTo(tys, ps, R) {
     match n {
         Zero => λ k ps v => v,
-        Succ(m) => λ k ps => match ps as λ qs => FTm::Reads(tys, Succ(m), qs, R) → Ty::ArrowsTo(tys, qs, R) {
+        Succ(m) => λ k ps => match ps as λ qs => FTm::Reads(tys, m + 1, qs, R) → Ty::ArrowsTo(tys, qs, R) {
             Nil => λ v => v,
-            Cons(length, more) => match more as λ qs => FTm::Reads(tys, Succ(m), Cons(length, qs), R) → Ty::ArrowsTo(tys, Cons(length, qs), R) {
+            Cons(length, more) => match more as λ qs => FTm::Reads(tys, m + 1, Cons(length, qs), R) → Ty::ArrowsTo(tys, Cons(length, qs), R) {
                 Nil => λ v => v,
-                Cons(_, later) => λ v => λ len _ => FTm::read_at(tys, R, rest, m, Succ(k), later, v(len, List::span(rest, k))),
+                Cons(_, later) => λ v => λ len _ => FTm::read_at(tys, R, rest, m, k + 1, later, v(len, List::span(rest, k))),
             },
         },
     }

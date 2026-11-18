@@ -174,7 +174,7 @@ theorem overlong2_holds(bits: Nat → Bool): BVPred::eval(overlong2(), λ (k: Na
 // From the predicate to the words: lay `x` and `y` out as the input bits and
 // read each `BVar` back.
 
-fn lay8(x, y: BitVec(8)) → Nat → Bool { λ k => Succ(k).leb(16) && BitVec::pair_bits(x, y)(k) }
+fn lay8(x, y: BitVec(8)) → Nat → Bool { λ k => (k + 1).leb(16) && BitVec::pair_bits(x, y)(k) }
 
 theorem addcomm8_word(x, y: BitVec(8)): x + y = y + x {
     let wx = window(lay8(x, y), 0, 8, n := 8);
@@ -264,7 +264,7 @@ theorem sub_add8_refuted(v: Nat → Bool): all_true(sub_add8_cnf(), v) = False {
     }
 }
 theorem sub_add8_cnf_is(): BVPred::clauses(sub_add8(), 16) = sub_add8_cnf() { refl }
-theorem sub_add8_holds(bits: Nat → Bool): BVPred::eval(sub_add8(), λ (k: Nat) => Succ(k).leb(16) && bits(k)) = True {
+theorem sub_add8_holds(bits: Nat → Bool): BVPred::eval(sub_add8(), λ (k: Nat) => (k + 1).leb(16) && bits(k)) = True {
     BVPred::unsat_sound(sub_add8(), 16, λ v => j(sym(sub_add8_cnf_is()), λ g _ => all_true(g, v) = False, sub_add8_refuted(v)), bits)
 }
 
@@ -289,7 +289,7 @@ theorem neg8_refuted(v: Nat → Bool): all_true(neg8_cnf(), v) = False {
     }
 }
 theorem neg8_cnf_is(): BVPred::clauses(neg8(), 8) = neg8_cnf() { refl }
-theorem neg8_holds(bits: Nat → Bool): BVPred::eval(neg8(), λ (k: Nat) => Succ(k).leb(8) && bits(k)) = True {
+theorem neg8_holds(bits: Nat → Bool): BVPred::eval(neg8(), λ (k: Nat) => (k + 1).leb(8) && bits(k)) = True {
     BVPred::unsat_sound(neg8(), 8, λ v => j(sym(neg8_cnf_is()), λ g _ => all_true(g, v) = False, neg8_refuted(v)), bits)
 }
 
@@ -351,7 +351,7 @@ theorem mulcomm4_refuted(v: Nat → Bool): all_true(mulcomm4_cnf(), v) = False {
     }
 }
 theorem mulcomm4_cnf_is(): BVPred::clauses(mulcomm4(), 8) = mulcomm4_cnf() { refl }
-theorem mulcomm4_holds(bits: Nat → Bool): BVPred::eval(mulcomm4(), λ (k: Nat) => Succ(k).leb(8) && bits(k)) = True {
+theorem mulcomm4_holds(bits: Nat → Bool): BVPred::eval(mulcomm4(), λ (k: Nat) => (k + 1).leb(8) && bits(k)) = True {
     BVPred::unsat_sound(mulcomm4(), 8, λ v => j(sym(mulcomm4_cnf_is()), λ g _ => all_true(g, v) = False, mulcomm4_refuted(v)), bits)
 }
 
@@ -372,7 +372,7 @@ theorem mul_shift8_refuted(v: Nat → Bool): all_true(mul_shift8_cnf(), v) = Fal
     }
 }
 theorem mul_shift8_cnf_is(): BVPred::clauses(mul_shift8(), 8) = mul_shift8_cnf() { refl }
-theorem mul_shift8_holds(bits: Nat → Bool): BVPred::eval(mul_shift8(), λ (k: Nat) => Succ(k).leb(8) && bits(k)) = True {
+theorem mul_shift8_holds(bits: Nat → Bool): BVPred::eval(mul_shift8(), λ (k: Nat) => (k + 1).leb(8) && bits(k)) = True {
     BVPred::unsat_sound(mul_shift8(), 8, λ v => j(sym(mul_shift8_cnf_is()), λ g _ => all_true(g, v) = False, mul_shift8_refuted(v)), bits)
 }
 
@@ -397,7 +397,7 @@ theorem slt_flip8_refuted(v: Nat → Bool): all_true(slt_flip8_cnf(), v) = False
     }
 }
 theorem slt_flip8_cnf_is(): BVPred::clauses(slt_flip8(), 16) = slt_flip8_cnf() { refl }
-theorem slt_flip8_holds(bits: Nat → Bool): BVPred::eval(slt_flip8(), λ (k: Nat) => Succ(k).leb(16) && bits(k)) = True {
+theorem slt_flip8_holds(bits: Nat → Bool): BVPred::eval(slt_flip8(), λ (k: Nat) => (k + 1).leb(16) && bits(k)) = True {
     BVPred::unsat_sound(slt_flip8(), 16, λ v => j(sym(slt_flip8_cnf_is()), λ g _ => all_true(g, v) = False, slt_flip8_refuted(v)), bits)
 }
 
@@ -418,7 +418,7 @@ theorem concat8_refuted(v: Nat → Bool): all_true(concat8_cnf(), v) = False {
     }
 }
 theorem concat8_cnf_is(): BVPred::clauses(concat8(), 16) = concat8_cnf() { refl }
-theorem concat8_holds(bits: Nat → Bool): BVPred::eval(concat8(), λ (k: Nat) => Succ(k).leb(16) && bits(k)) = True {
+theorem concat8_holds(bits: Nat → Bool): BVPred::eval(concat8(), λ (k: Nat) => (k + 1).leb(16) && bits(k)) = True {
     BVPred::unsat_sound(concat8(), 16, λ v => j(sym(concat8_cnf_is()), λ g _ => all_true(g, v) = False, concat8_refuted(v)), bits)
 }
 
@@ -439,7 +439,7 @@ theorem sext_top8_refuted(v: Nat → Bool): all_true(sext_top8_cnf(), v) = False
     }
 }
 theorem sext_top8_cnf_is(): BVPred::clauses(sext_top8(), 8) = sext_top8_cnf() { refl }
-theorem sext_top8_holds(bits: Nat → Bool): BVPred::eval(sext_top8(), λ (k: Nat) => Succ(k).leb(8) && bits(k)) = True {
+theorem sext_top8_holds(bits: Nat → Bool): BVPred::eval(sext_top8(), λ (k: Nat) => (k + 1).leb(8) && bits(k)) = True {
     BVPred::unsat_sound(sext_top8(), 8, λ v => j(sym(sext_top8_cnf_is()), λ g _ => all_true(g, v) = False, sext_top8_refuted(v)), bits)
 }
 
@@ -460,7 +460,7 @@ theorem high_byte8_refuted(v: Nat → Bool): all_true(high_byte8_cnf(), v) = Fal
     }
 }
 theorem high_byte8_cnf_is(): BVPred::clauses(high_byte8(), 16) = high_byte8_cnf() { refl }
-theorem high_byte8_holds(bits: Nat → Bool): BVPred::eval(high_byte8(), λ (k: Nat) => Succ(k).leb(16) && bits(k)) = True {
+theorem high_byte8_holds(bits: Nat → Bool): BVPred::eval(high_byte8(), λ (k: Nat) => (k + 1).leb(16) && bits(k)) = True {
     BVPred::unsat_sound(high_byte8(), 16, λ v => j(sym(high_byte8_cnf_is()), λ g _ => all_true(g, v) = False, high_byte8_refuted(v)), bits)
 }
 
@@ -481,7 +481,7 @@ theorem excluded_middle_refuted(v: Nat → Bool): all_true(excluded_middle_cnf()
     }
 }
 theorem excluded_middle_cnf_is(): BVPred::clauses(excluded_middle(), 17) = excluded_middle_cnf() { refl }
-theorem excluded_middle_holds(bits: Nat → Bool): BVPred::eval(excluded_middle(), λ (k: Nat) => Succ(k).leb(17) && bits(k)) = True {
+theorem excluded_middle_holds(bits: Nat → Bool): BVPred::eval(excluded_middle(), λ (k: Nat) => (k + 1).leb(17) && bits(k)) = True {
     BVPred::unsat_sound(excluded_middle(), 17, λ v => j(sym(excluded_middle_cnf_is()), λ g _ => all_true(g, v) = False, excluded_middle_refuted(v)), bits)
 }
 

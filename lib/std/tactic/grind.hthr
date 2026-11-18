@@ -523,7 +523,7 @@ fn with_motives(l: GrindLaws, e: Expr) → Tac<Expr> { dep_motives(l, 4096, e) }
 // ---------------------------------------------------------------------------
 // The report when the sides are not in one class.
 
-fn grind_num(n: Nat) → String { "#" ++ decimal_name(Succ(n), n) }
+fn grind_num(n: Nat) → String { "#" ++ decimal_name(n + 1, n) }
 
 // The whole terms among nodes `ms`, as cited.
 fn whole_of(g: Graph, ms: List<Nat>) → List<Expr> {
@@ -543,7 +543,7 @@ fn member_notes(es: List<Expr>, c: String) → List<Note> {
     }
 }
 
-fn exprs_count(es: List<Expr>) → Nat { match es { Nil => 0, Cons(_, rest) => Succ(exprs_count(rest)) } }
+fn exprs_count(es: List<Expr>) → Nat { match es { Nil => 0, Cons(_, rest) => exprs_count(rest) + 1 } }
 
 // Every class of more than one whole term, by its representative, from the
 // graph's class table (`rows`, class `c` first): one pass, where reading
@@ -555,11 +555,11 @@ fn class_notes(g: Graph, rows: List<List<Nat>>, c: Nat) → List<Note> {
             let ws = whole_of(g, ms);
             let n = exprs_count(ws);
             match n {
-                Zero => class_notes(g, rest, Succ(c)),
+                Zero => class_notes(g, rest, c + 1),
                 Succ(k) => match k {
-                    Zero => class_notes(g, rest, Succ(c)),
-                    Succ(_) => Cons(Tried("class " ++ grind_num(c), decimal_name(Succ(n), n) ++ " terms"), member_notes(ws, grind_num(c)))
-                        ++ class_notes(g, rest, Succ(c)),
+                    Zero => class_notes(g, rest, c + 1),
+                    Succ(_) => Cons(Tried("class " ++ grind_num(c), decimal_name(n + 1, n) ++ " terms"), member_notes(ws, grind_num(c)))
+                        ++ class_notes(g, rest, c + 1),
                 },
             }
         },
@@ -789,13 +789,13 @@ record PB { items: List<PItem<GQ>>, vars: Nat, at: Nat, terms: List<Option<Handl
 fn pb_push(b: PB, it: PItem<GQ>) → PB { PB(b.items ++ [it], b.vars, b.items.len(), b.terms ++ [None]) }
 
 // A variable no binder is: what the pattern does not read.
-fn pb_wild(b: PB) → PB { PB(b.items ++ [PVar(b.vars)], Succ(b.vars), b.items.len(), b.terms ++ [None]) }
+fn pb_wild(b: PB) → PB { PB(b.items ++ [PVar(b.vars)], b.vars + 1, b.items.len(), b.terms ++ [None]) }
 
 // The item just read is the whole term `h`.
 fn pb_term(b: PB, h: Handle) → PB { PB(b.items, b.vars, b.at, b.terms.update(b.at, λ _ => Some(h))) }
 
 fn binder_index(xs: List<Nat>, id: Nat, i: Nat) → Option<Nat> {
-    match xs { Nil => None, Cons(x, rest) => match x.same(id) { True => Some(i), False => binder_index(rest, id, Succ(i)) } }
+    match xs { Nil => None, Cons(x, rest) => match x.same(id) { True => Some(i), False => binder_index(rest, id, i + 1) } }
 }
 
 fn pb_key(b: PB, k: AtomKey) → PB {
@@ -818,7 +818,7 @@ fn pat_leaf(b: PB, binders: List<Nat>, v: Head) → PB {
 record DepVar { b: PB, v: Nat }
 
 fn dep_var(b: PB, binders: List<Nat>, v: Head) → DepVar {
-    let wild = DepVar(PB(b.items, Succ(b.vars), b.at, b.terms), b.vars);
+    let wild = DepVar(PB(b.items, b.vars + 1, b.at, b.terms), b.vars);
     match v {
         HLocal(x, args) => match args {
             Nil => match binder_index(binders, x.id, 0) { Some(k) => DepVar(b, k), None => wild },
@@ -892,12 +892,12 @@ fn binds_below(is: List<PItem<GQ>>, n: Nat) → Bool {
 // instance rather than matched. A binder only a premise mentions (`∃`-like)
 // is depended on and unbound, so the side is no pattern.
 fn binds_needed(is: List<PItem<GQ>>, deps: List<Bool>, k: Nat) → Bool {
-    match deps { Nil => True, Cons(d, rest) => d.not().or(binds(is, k)).and(binds_needed(is, rest, Succ(k))) }
+    match deps { Nil => True, Cons(d, rest) => d.not().or(binds(is, k)).and(binds_needed(is, rest, k + 1)) }
 }
 
 // How many of the first `n` binders the items leave unbound: the premises.
 fn unbound_count(is: List<PItem<GQ>>, n: Nat) → Nat {
-    match n { Zero => 0, Succ(k) => match binds(is, k) { True => unbound_count(is, k), False => Succ(unbound_count(is, k)) } }
+    match n { Zero => 0, Succ(k) => match binds(is, k) { True => unbound_count(is, k), False => unbound_count(is, k) + 1 } }
 }
 
 // A side is a pattern when it binds every binder something depends on and
@@ -990,14 +990,14 @@ fn facts_note(acc: Facts, n: Note) → Facts { Facts(acc.g, acc.read ++ [n], acc
 
 // `n` things, as a count with its noun.
 fn counted(n: Nat, one: String, many: String) → String {
-    decimal_name(Succ(n), n) ++ " " ++ match n { Succ(Zero) => one, _ => many }
+    decimal_name(n + 1, n) ++ " " ++ match n { Succ(Zero) => one, _ => many }
 }
 
 fn lemma_read(lm: Lemma) → String {
     match lm.premises {
         Zero => "a lemma, instantiated by matching",
         Succ(Zero) => "a lemma, instantiated by matching, its premise proved at each instance",
-        Succ(_) => "a lemma, instantiated by matching, its " ++ decimal_name(Succ(lm.premises), lm.premises) ++ " premises proved at each instance",
+        Succ(_) => "a lemma, instantiated by matching, its " ++ decimal_name(lm.premises + 1, lm.premises) ++ " premises proved at each instance",
     }
 }
 
@@ -1299,10 +1299,10 @@ fn read_hints(acc: Facts, hs: List<Expr>, k: Nat) → Tac<Facts> {
     match hs {
         Nil => pure(acc),
         Cons(e, rest) => {
-            let name = "hint " ++ decimal_name(Succ(k), k);
+            let name = "hint " ++ decimal_name(k + 1, k);
             infer(e).bind(λ c => match c {
                 Refused(why) => fail("grind: " ++ name ++ " does not elaborate: " ++ why, []),
-                Accepted(ty) => read_fact(offer(acc, name), e, name, ty, False).bind(λ a => read_hints(a, rest, Succ(k))),
+                Accepted(ty) => read_fact(offer(acc, name), e, name, ty, False).bind(λ a => read_hints(a, rest, k + 1)),
             })
         },
     }
@@ -1501,7 +1501,7 @@ fn spine_up(g: Graph, uses: NatMap<List<Nat>>, cs: List<Nat>, depth: Nat) → Li
 fn nats_sorted(xs: List<Nat>) → List<Nat> { match xs { Nil => [], Cons(x, rest) => nat_insert(x, nats_sorted(rest)) } }
 
 fn pattern_roots(g: Graph, uses: NatMap<List<Nat>>, p: Pattern<GQ>) → List<Nat> {
-    match pattern_spine(p.items, p.root, 0, Succ(p.items.len())) {
+    match pattern_spine(p.items, p.root, 0, p.items.len() + 1) {
         None => List::count_from(0, g.eg.size()),
         Some(kd) => {
             let atoms = g.atoms.bucket(kd.fst).filter(λ e => key_same(kd.fst, e.key)).map(λ e => e.node);
@@ -1517,7 +1517,7 @@ fn pats_insts(g: Graph, table: Array<List<Nat>>, uses: NatMap<List<Nat>>, k: Nat
     match ps {
         Nil => pure(PatFound([], 0, [])),
         Cons(lp, rest) => on_pat(root_insts(g, table, k, n, lp, j, pattern_roots(g, uses, lp.pat), seen, cap, PatFound([], 0, [])), λ here =>
-            on_pat(pats_insts(g, table, uses, k, n, rest, Succ(j), here.insts ++ seen, cap.sub(here.insts.len())), λ tail =>
+            on_pat(pats_insts(g, table, uses, k, n, rest, j + 1, here.insts ++ seen, cap.sub(here.insts.len())), λ tail =>
                 pure(PatFound(here.insts ++ tail.insts, here.matched + tail.matched, here.nears ++ tail.nears)))),
     }
 }
@@ -1530,13 +1530,13 @@ fn round_insts(g: Graph, table: Array<List<Nat>>, uses: NatMap<List<Nat>>, ls: L
     match ls {
         Nil => pure(Found([], [], [])),
         Cons(lm, rest) => pats_insts(g, table, uses, k, lm.binders, lm.pats, 0, seen, cap).bind(λ pf =>
-            round_insts(g, table, uses, rest, Succ(k), pf.insts ++ seen, cap.sub(pf.insts.len())).bind(λ tail =>
+            round_insts(g, table, uses, rest, k + 1, pf.insts ++ seen, cap.sub(pf.insts.len())).bind(λ tail =>
                 pure(Found(pf.insts ++ tail.insts, Cons(with_matched(lm, pf.matched), tail.lemmas), pf.nears ++ tail.nears)))),
     }
 }
 
 fn bump_added(lm: Lemma, def: Bool) → Lemma {
-    Lemma(lm.name, lm.proof, lm.binders, lm.premises, lm.pats, lm.refs, lm.matched, Succ(lm.added), match def { True => Succ(lm.defined), False => lm.defined }, lm.tried)
+    Lemma(lm.name, lm.proof, lm.binders, lm.premises, lm.pats, lm.refs, lm.matched, lm.added + 1, match def { True => lm.defined + 1, False => lm.defined }, lm.tried)
 }
 
 // ---------------------------------------------------------------------------
@@ -1579,7 +1579,7 @@ fn item_vars(is: List<PItem<GQ>>, fuel: Nat, i: Nat) → List<Nat> {
 
 // Items to visit, each with the kid positions that lead to it.
 fn kids_with(ks: List<Nat>, j: Nat, path: List<Nat>) → List<Pair<Nat, List<Nat>>> {
-    match ks { Nil => [], Cons(c, rest) => Cons(Pair(c, path ++ [j]), kids_with(rest, Succ(j), path)) }
+    match ks { Nil => [], Cons(c, rest) => Cons(Pair(c, path ++ [j]), kids_with(rest, j + 1, path)) }
 }
 
 // The kid positions from an item in `todo` down to item `to`.
@@ -1646,8 +1646,8 @@ fn pick_candidate(g: Graph, lm: Lemma, h: Handle, s: Subst, u: Nat, target: Expr
         Cons(c, rest) => match budget {
             Zero => pure(Pick(None, 0, c)),
             Succ(b) => defeq_undone(sub_instance(g, lm, h, s, u, expr_at(g, c)), target).bind(λ same => match same {
-                True => pure(Pick(Some(c), b, Succ(c))),
-                False => pick_candidate(g, lm, h, s, u, target, rest, b, Succ(c)),
+                True => pure(Pick(Some(c), b, c + 1)),
+                False => pick_candidate(g, lm, h, s, u, target, rest, b, c + 1),
             }),
         },
     }
@@ -1743,7 +1743,7 @@ fn by_holes(g: Graph, lm: Lemma, h: Handle, s: Subst, args: List<Option<Nat>>, f
     match budget {
         Zero => pure(Solutions(None, 0)),
         Succ(b) => mark().bind(λ m => holes(lm.proof, lm.binders).bind(λ c => match c {
-            Refused(_) => restore(m).bind(λ _ => pure(Solutions(None, Succ(b)))),
+            Refused(_) => restore(m).bind(λ _ => pure(Solutions(None, b + 1))),
             Accepted(hs) => defeq(apps(lams(lm.refs, Hd(h)), List::range(lm.binders).map(λ i => hole_arg(g, s, hs, i))), target).bind(λ same => match same {
                 False => restore(m).bind(λ _ => pure(Solutions(None, b))),
                 True => solutions(g, hs, free, solution_candidates(g), args, b).bind(λ sol => restore(m).bind(λ _ => match sol.args {
@@ -1793,8 +1793,8 @@ fn resolve_at(g: Graph, lm: Lemma, nr: Near, lp: LPat, h: Handle, path: List<Nat
     let item = nr.slack.item;
     let node = nr.slack.node;
     let args = nr.s.at.take(lm.binders);
-    let vars = nats_once(item_vars(lp.pat.items, Succ(lp.pat.items.len()), item), []);
-    let free = vars.filter(λ v => Succ(v).leb(lm.binders).and(match nr.s.get(v) { None => True, Some(_) => False }));
+    let vars = nats_once(item_vars(lp.pat.items, lp.pat.items.len() + 1, item), []);
+    let free = vars.filter(λ v => (v + 1).leb(lm.binders).and(match nr.s.get(v) { None => True, Some(_) => False }));
     let before = tried_at(lm.tried, nr.pat, item, node, args);
     let from = upto_of(before);
     let skip: Tac<Resolved> = pure(Resolved(None, lm, budget));
@@ -1835,7 +1835,7 @@ fn resolve_near(g: Graph, lm: Lemma, nr: Near, seen: List<Inst>, budget: Nat) �
         None => pure(Resolved(None, lm, budget)),
         Some(lp) => match opt_handle(lp.terms.nth(nr.slack.item)) {
             None => pure(Resolved(None, lm, budget)),
-            Some(h) => match path_to(lp.pat.items, Succ(lp.pat.items.len()), [Pair(lp.pat.root, [])], nr.slack.item) {
+            Some(h) => match path_to(lp.pat.items, lp.pat.items.len() + 1, [Pair(lp.pat.root, [])], nr.slack.item) {
                 None => pure(Resolved(None, lm, budget)),
                 Some(path) => resolve_at(g, lm, nr, lp, h, path, seen, budget),
             },
@@ -1853,8 +1853,8 @@ fn resolve_nears(g: Graph, ls: List<Lemma>, ns: List<Near>, seen: List<Inst>, bu
         Cons(nr, rest) => match budget {
             Zero => pure(Found(out, ls, [])),
             Succ(b) => match ls.nth(nr.lemma) {
-                None => resolve_nears(g, ls, rest, seen, Succ(b), out),
-                Some(lm) => on_resolved(settled(rest.len(), resolve_near(g, lm, nr, seen, Succ(b))), λ r => {
+                None => resolve_nears(g, ls, rest, seen, b + 1, out),
+                Some(lm) => on_resolved(settled(rest.len(), resolve_near(g, lm, nr, seen, b + 1)), λ r => {
                     let ls2 = ls.update(nr.lemma, λ _ => r.lemma);
                     match r.inst {
                         None => resolve_nears(g, ls2, rest, seen, r.left, out),
@@ -1918,7 +1918,7 @@ fn names_once(ns: List<String>, done: List<String>) → List<String> {
 
 // How many instances a near match found, up to a definitional step.
 fn defined_note(n: Nat) → String {
-    match n { Zero => "", Succ(_) => ", " ++ decimal_name(Succ(n), n) ++ " of them up to a definitional step" }
+    match n { Zero => "", Succ(_) => ", " ++ decimal_name(n + 1, n) ++ " of them up to a definitional step" }
 }
 
 fn lemma_notes(ls: List<Lemma>) → List<Note> {
@@ -1926,7 +1926,7 @@ fn lemma_notes(ls: List<Lemma>) → List<Note> {
         Nil => [],
         Cons(lm, rest) => Cons(match lm.matched + lm.added {
             Zero => Tried(lm.name, "its patterns never matched a term of the graph"),
-            Succ(_) => Tried(lm.name, decimal_name(Succ(lm.matched), lm.matched) ++ " matches, " ++ decimal_name(Succ(lm.added), lm.added) ++ " instances added" ++ defined_note(lm.defined)),
+            Succ(_) => Tried(lm.name, decimal_name(lm.matched + 1, lm.matched) ++ " matches, " ++ decimal_name(lm.added + 1, lm.added) ++ " instances added" ++ defined_note(lm.defined)),
         }, lemma_notes(rest)),
     }
 }
@@ -1963,7 +1963,7 @@ fn pending_notes(ps: List<Pend>) → List<Note> {
         Cons(_, _) => {
             let n = ps.len();
             let shown = ps.take(4).map(λ p => p.note);
-            let more: List<Note> = match n.sub(4) { Zero => [], Succ(k) => [Tried("premises", "and " ++ counted(Succ(k), "more instance", "more instances") ++ " waiting on one")] };
+            let more: List<Note> = match n.sub(4) { Zero => [], Succ(k) => [Tried("premises", "and " ++ counted(k + 1, "more instance", "more instances") ++ " waiting on one")] };
             Cons(Tried("premises", counted(n, "instance", "instances") ++ " not added: a premise was not proved"), shown ++ more)
         },
     }
@@ -2141,14 +2141,14 @@ fn inject_fields(l: GrindLaws, fs: Facts, pf: Expr, uses: List<String>, found: L
         Cons(x, xr) => match ys {
             Nil => pure(fs),
             Cons(y, yr) => match fs.g.eg.same_class(x, y) {
-                True => inject_fields(l, fs, pf, uses, found, xr, yr, Succ(k)),
+                True => inject_fields(l, fs, pf, uses, found, xr, yr, k + 1),
                 False => inj_field(pf, k).bind(λ c => match c {
-                    Refused(_) => inject_fields(l, fs, pf, uses, found, xr, yr, Succ(k)),
+                    Refused(_) => inject_fields(l, fs, pf, uses, found, xr, yr, k + 1),
                     Accepted(h) => {
                         let g = fs.g;
                         let cf = fs.cf;
                         let g2 = Graph(g.eg.union(x, y, Fact(cast_of(l, expr_at(g, x), expr_at(g, y), Hd(h)), "", uses, found)), g.info, g.atoms);
-                        inject_fields(l, with_cf(with_graph(fs, g2), CState(cf.laws, cf.succ, cf.target, cf.diseqs, cf.done, Succ(cf.injected), cf.contra, cf.sources, cf.stuck, cf.unreduced)), pf, uses, found, xr, yr, Succ(k))
+                        inject_fields(l, with_cf(with_graph(fs, g2), CState(cf.laws, cf.succ, cf.target, cf.diseqs, cf.done, cf.injected + 1, cf.contra, cf.sources, cf.stuck, cf.unreduced)), pf, uses, found, xr, yr, k + 1)
                     },
                 }),
             },
@@ -2170,7 +2170,7 @@ fn inject_succ(l: GrindLaws, fs: Facts, pf: Expr, uses: List<String>, found: Lis
                     let g = fs.g;
                     let cf = fs.cf;
                     let g2 = Graph(g.eg.union(x, y, Fact(apps(Global(l.succ_inj), [expr_at(g, x), expr_at(g, y), pf]), "", uses, found)), g.info, g.atoms);
-                    with_cf(with_graph(fs, g2), CState(cf.laws, cf.succ, cf.target, cf.diseqs, cf.done, Succ(cf.injected), cf.contra, cf.sources, cf.stuck, cf.unreduced))
+                    with_cf(with_graph(fs, g2), CState(cf.laws, cf.succ, cf.target, cf.diseqs, cf.done, cf.injected + 1, cf.contra, cf.sources, cf.stuck, cf.unreduced))
                 },
             },
         },
@@ -2431,7 +2431,7 @@ inductive Built { BProof(proof: Expr, uses: List<String>, found: List<String>), 
 
 record Building { fs: Facts, b: Built }
 
-fn premise_name(name: String, k: Nat) → String { name ++ ", premise " ++ decimal_name(Succ(Succ(k)), Succ(k)) }
+fn premise_name(name: String, k: Nat) → String { name ++ ", premise " ++ decimal_name(k + 2, k + 1) }
 
 // `pr` applied to the rest of an instance's arguments: a matched node's
 // term, or a premise's proof (the `k`th premise next).
@@ -2446,7 +2446,7 @@ fn build(l: GrindLaws, fs: Facts, name: String, pr: Expr, uses: List<String>, fo
                     None => pure(Building(fs, BDrop)),
                     Some(dom) => prove_premise(l, fs, dom).bind(λ pm => match pm.proof {
                         None => pure(Building(pm.fs, BMiss(At(Hd(dom), Tried(premise_name(name, k), "not proved: its sides are not in one class, no local or hint is it, and the instance search finds none"))))),
-                        Some(pp) => build(l, pm.fs, name, App(pr, pp), uses ++ pm.uses, found ++ pm.found, rest, Succ(k)),
+                        Some(pp) => build(l, pm.fs, name, App(pr, pp), uses ++ pm.uses, found ++ pm.found, rest, k + 1),
                     }),
                 }),
             }),
@@ -2714,7 +2714,7 @@ fn spelled(l: GrindLaws, fs: Facts, sp: SpellState) → Tac<SpellOut> {
 // together.
 fn saturate(fuel: Nat, rounds: Nat, spells: Nat, done: Nat, report: Bool, l: GrindLaws, fs0: Facts, gt: GoalAt, sp: SpellState) → Tac<Expr> {
     match fuel {
-        Zero => on_closed(ctor_closed(l, fs0, grind_ctor_fuel()), λ fs => settle(report, l, fs, gt, "stopped after " ++ decimal_name(Succ(done), done) ++ " rounds")),
+        Zero => on_closed(ctor_closed(l, fs0, grind_ctor_fuel()), λ fs => settle(report, l, fs, gt, "stopped after " ++ decimal_name(done + 1, done) ++ " rounds")),
         Succ(f) => on_closed(ctor_closed(l, fs0, grind_ctor_fuel()), λ fs => {
             let g = fs.g;
             // Stuck as written: spelled further, and the graph matched
@@ -2739,7 +2739,7 @@ fn saturate(fuel: Nat, rounds: Nat, spells: Nat, done: Nat, report: Bool, l: Gri
             match concluded(report, l, fs, gt) {
                 Some(t) => t,
                 None => match rounds {
-                    Zero => settle(report, l, fs, gt, "stopped after " ++ decimal_name(Succ(done), done) ++ " rounds"),
+                    Zero => settle(report, l, fs, gt, "stopped after " ++ decimal_name(done + 1, done) ++ " rounds"),
                     Succ(r) => match fs.lemmas {
                         Nil => give_up(fs, ""),
                         Cons(_, _) => {
@@ -2750,8 +2750,8 @@ fn saturate(fuel: Nat, rounds: Nat, spells: Nat, done: Nat, report: Bool, l: Gri
                                 shared(strict.insts ++ near.insts, λ insts =>
                                 shared(Facts(g, fs.read, fs.skipped, near.lemmas, fs.seen ++ insts, fs.offered, fs.locals, fs.givens, fs.pending, fs.cf), λ next =>
                                 match insts {
-                                    Nil => give_up(next, match done { Zero => "no instance in the graph", Succ(_) => "no new instance after " ++ decimal_name(Succ(done), done) ++ " rounds" }),
-                                    Cons(_, _) => add_insts(l, with_pending(next, []), insts ++ next.pending.map(λ p => p.inst)).bind(λ fs2 => saturate(f, r, spells, Succ(done), report, l, fs2, gt, sp)),
+                                    Nil => give_up(next, match done { Zero => "no instance in the graph", Succ(_) => "no new instance after " ++ decimal_name(done + 1, done) ++ " rounds" }),
+                                    Cons(_, _) => add_insts(l, with_pending(next, []), insts ++ next.pending.map(λ p => p.inst)).bind(λ fs2 => saturate(f, r, spells, done + 1, report, l, fs2, gt, sp)),
                                 }))
                             })))))
                         },

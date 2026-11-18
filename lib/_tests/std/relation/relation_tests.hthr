@@ -63,7 +63,7 @@ inductive TinyInstr { Increment, Clear }
 
 fn eval_tiny(instruction: TinyInstr, register: Nat) → Nat {
     match instruction {
-        Increment => Succ(register),
+        Increment => register + 1,
         Clear => Zero,
     }
 }

@@ -72,7 +72,7 @@ fn dictionary_among(name: String, count: Nat, ls: List<LocalInfo>) → Tac<Expr>
     match ls {
         Nil => fail("no dictionary of the class in scope", []),
         Cons(l, rest) => view(l.ty).bind(λ v => match v {
-            HGlobal(_, n, args) => match same_name(n, name) && args.len().same(Succ(count)) { True => assumption(), False => dictionary_among(name, count, rest) },
+            HGlobal(_, n, args) => match same_name(n, name) && args.len().same(count + 1) { True => assumption(), False => dictionary_among(name, count, rest) },
             _ => dictionary_among(name, count, rest),
         }),
     }

@@ -149,7 +149,7 @@ theorem Format::rec_sum_of(self F: Format, mode: Mode, xs: List<Finite(F)>):
             let nn = Rat::mul_nonneg(F.gamma_nonneg(mode, 0), Rat::le_trans(a.val().abs_nonneg(), Rat::le_of_same(Rat::same_sym((a.val().abs()).add_zero()))));
             Rat::le_respects(Rat::same_sym(z), (F.gamma(mode, 0) * (a.val().abs() + 0)).same_refl(), nn)
         },
-        Cons(y, t) => λ a s h okc => match h as λ _ => (s.val() - (a.val() + (y.val() + t.val_sum()))).abs() <= F.gamma(mode, Succ(t.len())) * (a.val().abs() + (y.val().abs() + t.abs_sum())) {
+        Cons(y, t) => λ a s h okc => match h as λ _ => (s.val() - (a.val() + (y.val() + t.val_sum()))).abs() <= F.gamma(mode, t.len() + 1) * (a.val().abs() + (y.val().abs() + t.abs_sum())) {
             Exists(r, hr) => {
                 let X = a.val() + y.val();
                 let V = t.val_sum();

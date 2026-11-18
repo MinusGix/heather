@@ -25,7 +25,7 @@ fn Walk::small(self p: Walk) → Bool {
 // A control: a `Nat` result, the recursive call under a successor, which
 // read as a literal tree and was cheap before too.
 fn Walk::count(self p: Walk) → Nat {
-    match p { Start => 0, At(before, name) => match name { Zero => before.count(), Succ(_) => Succ(before.count()) } }
+    match p { Start => 0, At(before, name) => match name { Zero => before.count(), Succ(_) => before.count() + 1 } }
 }
 
 fn Walk::named(n, name: Nat) → Walk { match n { Zero => Start, Succ(k) => At(Walk::named(k, name), name) } }
@@ -53,15 +53,15 @@ theorem div_symbols_open(a, b: Nat): a / b = a.div(b) ∧ a % b = a.mod(b) { And
 // before its end. The counter is a written successor of the one before,
 // and one read off a record a call returns.
 fn climbs(steps, at: Nat) → Bool {
-    match steps { Zero => True, Succ(rest) => at.same(at) && climbs(rest, Succ(at)) }
+    match steps { Zero => True, Succ(rest) => at.same(at) && climbs(rest, at + 1) }
 }
 
 record Counter { seen: Nat, next: Nat }
 
-fn Counter::step(self c: Counter) → Counter { Counter(c.next, Succ(c.next)) }
+fn Counter::step(self c: Counter) → Counter { Counter(c.next, c.next + 1) }
 
 fn climbs_through(steps: Nat, c: Counter) → Bool {
-    match steps { Zero => True, Succ(rest) => c.next.same(Succ(c.seen)) && climbs_through(rest, c.step()) }
+    match steps { Zero => True, Succ(rest) => c.next.same(c.seen + 1) && climbs_through(rest, c.step()) }
 }
 
 theorem climbs_far(): climbs(4000, 0) = True { refl }

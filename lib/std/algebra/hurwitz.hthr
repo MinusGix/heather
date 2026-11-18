@@ -87,7 +87,7 @@ fn Hurwitz::neg(f: Hurwitz<A>) → Hurwitz<A> { Hurwitz { coeff: λ n => A.inv(f
 fn Hurwitz::scale(c: A, f: Hurwitz<A>) → Hurwitz<A> { Hurwitz { coeff: λ n => c * f.coeff(n) } }
 
 // The derivative is the shift.
-fn Hurwitz::d(f: Hurwitz<A>) → Hurwitz<A> { Hurwitz { coeff: λ n => f.coeff(Succ(n)) } }
+fn Hurwitz::d(f: Hurwitz<A>) → Hurwitz<A> { Hurwitz { coeff: λ n => f.coeff(n + 1) } }
 
 // The antiderivative of `f` with value `c` at the point.
 fn Hurwitz::cons(c: A, f: Hurwitz<A>) → Hurwitz<A> { Hurwitz { coeff: λ n => match n { Zero => c, Succ(m) => f.coeff(m) } } }

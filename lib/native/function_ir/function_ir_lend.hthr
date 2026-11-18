@@ -32,13 +32,13 @@ import omega;
 fn placed_homes(at: Nat → BitVec(64), size: Nat → Nat, from, count: Nat) → List<BitVec(64)> {
     match count {
         Zero => [],
-        Succ(k) => Cons(at(from), Cons(BitVec::ofNat(size(from)), placed_homes(at, size, Succ(from), k))),
+        Succ(k) => Cons(at(from), Cons(BitVec::ofNat(size(from)), placed_homes(at, size, from + 1, k))),
     }
 }
 
 // Where they lie, by buffer: the lending's table of addresses.
 fn placed_addresses(at: Nat → BitVec(64), from, count: Nat) → List<BitVec(64)> {
-    match count { Zero => [], Succ(k) => Cons(at(from), placed_addresses(at, Succ(from), k)) }
+    match count { Zero => [], Succ(k) => Cons(at(from), placed_addresses(at, from + 1, k)) }
 }
 
 theorem placed_homes_len(at: Nat → BitVec(64), size: Nat → Nat, count: Nat): (from: Nat) →

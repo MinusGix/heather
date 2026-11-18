@@ -172,7 +172,7 @@ fn bridge_component(nm: BridgeNames, z: Expr, i: Nat, n: Nat) → Expr {
 }
 
 fn bridge_index_of(ls: List<Nat>, l: Nat, i: Nat) → Option<Nat> {
-    match ls { Nil => None, Cons(x, rest) => match x.same(l) { True => Some(i), False => bridge_index_of(rest, l, Succ(i)) } }
+    match ls { Nil => None, Cons(x, rest) => match x.same(l) { True => Some(i), False => bridge_index_of(rest, l, i + 1) } }
 }
 
 fn bridge_pairs(nm: BridgeNames, xs: List<Expr>) → Expr {
@@ -182,7 +182,7 @@ fn bridge_pairs(nm: BridgeNames, xs: List<Expr>) → Expr {
 // Variable `j` of the loop's `d`, read off a surface state `z`: the local
 // the loop threads there, or what it was before the loop.
 fn bridge_var(nm: BridgeNames, wE: Expr, gE: Expr, before: Expr, z: Expr, comps: List<Nat>, d: Nat, j: Nat) → Expr {
-    match bridge_index_of(comps, d - Succ(j), 0) {
+    match bridge_index_of(comps, d - (j + 1), 0) {
         Some(i) => bridge_component(nm, z, i, comps.len()),
         None => ap(nm.env_at, [wE, gE, before, NatLit(j)]),
     }

@@ -15,7 +15,7 @@ theorem refine_each_step<A>(R, S: A → A → Type, h: Included(R, S),
 // ---------------------------------------------------------------------------
 // A counter: one step adds one.
 
-fn Tick(a, b: Nat) → Type { b = Succ(a) }
+fn Tick(a, b: Nat) → Type { b = a + 1 }
 
 theorem tick_det(): Deterministic(Tick) {
     λ a b c left right => trans(left, sym(right))
@@ -31,7 +31,7 @@ theorem ticks_end_together(b: Nat, run: StarN(Tick, 3, 0, b)): b = 3 {
 }
 
 // Even numbers are an invariant of the double tick.
-fn TickTwice(a, b: Nat) → Type { b = Succ(Succ(a)) }
+fn TickTwice(a, b: Nat) → Type { b = a + 2 }
 fn Even(n: Nat) → Type { ∃ k: Nat, n = k + k }
 
 theorem even_kept(): Invariant(TickTwice, Even) {
@@ -49,7 +49,7 @@ theorem reached_even(n: Nat, reached: Reachable(TickTwice, λ a => a = 0, n)): E
 }
 
 // A countdown stops only at zero, so any two stopped runs agree.
-fn Down(a, b: Nat) → Type { a = Succ(b) }
+fn Down(a, b: Nat) → Type { a = b + 1 }
 
 theorem down_det(): Deterministic(Down) {
     λ a b c left right => Nat::succ_inj(b, c, trans(sym(left), right))
@@ -71,12 +71,12 @@ theorem stops_at_zero(a, b: Nat, run: Star(Down, a, b), stopped: Stuck(Down, b),
 
 fn Skip(a, b: Pair<Nat, Nat>) → Type {
     match a.fst {
-        Zero => b = Pair(0, Succ(a.snd)),
+        Zero => b = Pair(0, a.snd + 1),
         Succ(k) => b = Pair(k, a.snd),
     }
 }
 
-fn Below(i, j: Nat) → Type { Succ(i) = j }
+fn Below(i, j: Nat) → Type { i + 1 = j }
 
 fn Drops(i: Nat, a: Pair<Nat, Nat>, b: Nat) → Type { (a.fst = i) ∧ (a.snd = b) }
 
@@ -135,14 +135,14 @@ theorem drops_backward(i: Nat, a, a2: Pair<Nat, Nat>, b: Nat, matched: Drops(i, 
 
 // The counter never stops.
 fn tick_forever(n: Nat) → Forever<Nat>(Tick, n) {
-    Again(Succ(n), refl, tick_forever(Succ(n)))
+    Again(n + 1, refl, tick_forever(n + 1))
 }
 
 // Neither does the source with no-ops: a no-op, or a count.
 fn skip_forever(a: Pair<Nat, Nat>) → Forever<Pair<Nat, Nat>>(Skip, a) {
     match a {
         Pair(pending, count) => match pending {
-            Zero => Again(Pair(0, Succ(count)), refl, skip_forever(Pair(0, Succ(count)))),
+            Zero => Again(Pair(0, count + 1), refl, skip_forever(Pair(0, count + 1))),
             Succ(k) => Again(Pair(k, count), refl, skip_forever(Pair(k, count))),
         },
     }

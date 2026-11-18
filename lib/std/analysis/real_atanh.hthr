@@ -41,7 +41,7 @@ theorem Nat::atanh_zero_add(n: Nat): 0 + n = n { omega }
 section<K: OrderedField(≈, <, <=, +, *)> {
 
 fn OrderedField::atanh_poly(c: Nat → K, n: Nat, t: K) → K {
-    match n { Zero => K.unit, Succ(m) => OrderedField::atanh_poly(c, m, t) + c(m) * OrderedField::npow(t, Succ(m.add(m))) }
+    match n { Zero => K.unit, Succ(m) => OrderedField::atanh_poly(c, m, t) + c(m) * OrderedField::npow(t, m.add(m) + 1) }
 }
 
 fn OrderedField::geom_sq_poly(n: Nat, t: K) → K {

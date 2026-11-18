@@ -118,7 +118,7 @@ theorem tree_fold_fusion<A, B, C>(src: TreeAlg<A, B>, dst: TreeAlg<A, C>,
 fn tree_size<A>(tree: Tree<A>) → Nat {
     tree_fold(TreeAlg<A, Nat> {
         leaf: λ (a: A) => 1,
-        node: λ (left: Nat) (right: Nat) => Succ(left.add(right)),
+        node: λ (left: Nat) (right: Nat) => left.add(right) + 1,
     }, tree)
 }
 

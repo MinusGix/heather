@@ -192,7 +192,7 @@ fn lex_before(a, b: List<Nat>) → Bool {
         Nil => match b { Nil => False, Cons(_, _) => True },
         Cons(x, r) => match b {
             Nil => False,
-            Cons(y, s) => Succ(x).leb(y) || (x.same(y) && lex_before(r, s)),
+            Cons(y, s) => (x + 1).leb(y) || (x.same(y) && lex_before(r, s)),
         },
     }
 }
@@ -822,6 +822,6 @@ theorem BVPred::norm_eval(self p: BVPred, bits: Nat → Bool): p.norm().eval(bit
 // What a refutation of the normalized predicate's clauses proves: the
 // predicate itself at every input of `K` bits.
 theorem BVPred::norm_unsat_sound(self p: BVPred, K: Nat, unsat: (v: Nat → Bool) → all_true(p.norm().clauses(K), v) = False, bits: Nat → Bool):
-    p.eval(λ k => Succ(k).leb(K) && bits(k)) = True {
-    trans(sym(p.norm_eval(λ k => Succ(k).leb(K) && bits(k))), p.norm().unsat_sound(K, unsat, bits))
+    p.eval(λ k => (k + 1).leb(K) && bits(k)) = True {
+    trans(sym(p.norm_eval(λ k => (k + 1).leb(K) && bits(k))), p.norm().unsat_sound(K, unsat, bits))
 }

@@ -88,7 +88,7 @@ fn Ty::FlatHolds(self t: Ty, values: Valuation(), port: Nat) → t.Flat() → Ty
 fn Ty::FieldsHold(fs: List<Ty>, values: Valuation()) → Nat → Ty::Flats(fs) → Type {
     match fs {
         Nil => λ port _ => True,
-        Cons(f, rest) => λ port t => f.FlatHolds(values, port, t.fst) ∧ Ty::FieldsHold(rest, values, Succ(port), t.snd),
+        Cons(f, rest) => λ port t => f.FlatHolds(values, port, t.fst) ∧ Ty::FieldsHold(rest, values, port + 1, t.snd),
     }
 }
 
@@ -135,7 +135,7 @@ fn Ty::check_ones(fs: List<Ty>) → Option<Ty::OnePorts(fs)> {
 
 // Field `k`'s port, from the record's.
 fn Ty::field_port(k: Nat) → Nat → Nat {
-    match k { Zero => λ port => port, Succ(j) => λ port => Ty::field_port(j, Succ(port)) }
+    match k { Zero => λ port => port, Succ(j) => λ port => Ty::field_port(j, port + 1) }
 }
 
 fn Ty::has_field(fs: List<Ty>, k: Nat) → Bool {
@@ -144,11 +144,11 @@ fn Ty::has_field(fs: List<Ty>, k: Nat) → Bool {
 
 // The first port after a record's fields from `port`, and after a value's.
 fn Ty::fields_past(fs: List<Ty>) → Nat → Nat {
-    match fs { Nil => λ port => port, Cons(_, rest) => λ port => Ty::fields_past(rest, Succ(port)) }
+    match fs { Nil => λ port => port, Cons(_, rest) => λ port => Ty::fields_past(rest, port + 1) }
 }
 
 fn Ty::past(self t: Ty, tys: Nat → RecInfo, port: Nat) → Nat {
-    match t { Word(_) => Succ(port), Bit => Succ(port), Bytes(_) => Succ(port), Lines => Succ(port), Named(i) => Ty::fields_past(tys(i).fields, port), Count => Succ(port) }
+    match t { Word(_) => port + 1, Bit => port + 1, Bytes(_) => port + 1, Lines => port + 1, Named(i) => Ty::fields_past(tys(i).fields, port), Count => port + 1 }
 }
 
 // The equation between two codes, when they agree.
@@ -191,7 +191,7 @@ theorem Ty::cast_holds(tys: Nat → RecInfo, values: Valuation(), port: Nat, a, 
 fn Ty::SameFields(fs: List<Ty>, values, after: Valuation()) → Nat → Nat → Type {
     match fs {
         Nil => λ from to => True,
-        Cons(_, rest) => λ from to => ((wd: Nat) → after(wd, to) = values(wd, from)) ∧ Ty::SameFields(rest, values, after, Succ(from), Succ(to)),
+        Cons(_, rest) => λ from to => ((wd: Nat) → after(wd, to) = values(wd, from)) ∧ Ty::SameFields(rest, values, after, from + 1, to + 1),
     }
 }
 
@@ -298,7 +298,7 @@ theorem Ty::fields_hold_at(fs: List<Ty>, values: Valuation()): (port, k: Nat) �
 // Spans below a bound.
 
 fn Ty::FieldsBelow(fs: List<Ty>) → Nat → Nat → Type {
-    match fs { Nil => λ port next => True, Cons(_, rest) => λ port next => (port < next) ∧ Ty::FieldsBelow(rest, Succ(port), next) }
+    match fs { Nil => λ port next => True, Cons(_, rest) => λ port next => (port < next) ∧ Ty::FieldsBelow(rest, port + 1, next) }
 }
 
 // Every port the value spans is below `next`.
@@ -530,7 +530,7 @@ theorem branch_holds(t: Ty, tys: Nat → RecInfo, values: Valuation(), condition
 
 // A value moved from `src` to fresh ports from `out`, a field at a time.
 fn Ty::field_moves(fs: List<Ty>) → Nat → Nat → List<Node> {
-    match fs { Nil => λ out src => Nil, Cons(f, rest) => λ out src => Cons(Move(f.width(), out, src), Ty::field_moves(rest, Succ(out), Succ(src))) }
+    match fs { Nil => λ out src => Nil, Cons(f, rest) => λ out src => Cons(Move(f.width(), out, src), Ty::field_moves(rest, out + 1, src + 1)) }
 }
 
 fn Ty::moves(self t: Ty, tys: Nat → RecInfo, out, src: Nat) → List<Node> {
@@ -858,7 +858,7 @@ fn Tm::check_true(b: Bool) → Option<b.IsTrue()> {
 }
 
 // One node writing `next`, the result there.
-fn Tm::one_node(node: Node, next: Nat) → Lowered { Lowered(nodes_region([node]), next, Succ(next)) }
+fn Tm::one_node(node: Node, next: Nat) → Lowered { Lowered(nodes_region([node]), next, next + 1) }
 
 // A literal: a constant node, a bit as the one-bit 0 or 1.
 fn Tm::bit_code(n: Nat) → Nat { match n { Zero => 0, Succ(_) => 1 } }
@@ -912,7 +912,7 @@ fn Tm::prim2(op: Op, g: List<Ty>, next, a, b, pa, pb: Nat) → Option<Lowered> {
 
 // `!x`: the bit against a constant one.
 fn Tm::neg_lowered(next, pa: Nat) → Lowered {
-    Lowered(nodes_region([Const(1, next, 1), BitXor(1, Succ(next), pa, next)]), Succ(next), Succ(Succ(next)))
+    Lowered(nodes_region([Const(1, next, 1), BitXor(1, next + 1, pa, next)]), next + 1, next + 2)
 }
 
 // A unary node on a variable of the code `t`, once it is at `t`.
@@ -931,7 +931,7 @@ fn Tm::prim1(op: Op, g: List<Ty>, next, a, pa: Nat) → Option<Lowered> {
         Lshr(width, k) => Tm::unary(g, a, Word(width), Tm::one_node(LogicalShiftRight(width, next, pa, k), next)),
         Ashr(width, k) => Tm::unary(g, a, Word(width), Tm::one_node(ArithmeticShiftRight(width, next, pa, k), next)),
         // A sign extension is one `SignResize`, `Resize`'s signed twin.
-        Sext(n, extra) => Tm::unary(g, a, Word(Succ(n)), Tm::one_node(SignResize(Succ(n), extra + Succ(n), next, pa), next)),
+        Sext(n, extra) => Tm::unary(g, a, Word(n + 1), Tm::one_node(SignResize(n + 1, extra + (n + 1), next, pa), next)),
         // A count is held as the word it is the `toNat` of: no code.
         ToNat => Ty::at(g, a).check(Word(64)).and_then(λ _ => Some(Lowered(nodes_region(Nil), pa, next))),
         _ => None,
@@ -987,7 +987,7 @@ fn Tm::make_args(g: List<Ty>, ports: List<Nat>, fs: List<Ty>, args: List<Nat>, o
         Cons(f, rest) => match args {
             Nil => None,
             Cons(a, more) => port_at(ports, a).and_then(λ q =>
-                Ty::at(g, a).check(f).and_then(λ _ => Tm::make_args(g, ports, rest, more, Succ(out)).and_then(λ ns => Some(Cons(Move(f.width(), out, q), ns))))),
+                Ty::at(g, a).check(f).and_then(λ _ => Tm::make_args(g, ports, rest, more, out + 1).and_then(λ ns => Some(Cons(Move(f.width(), out, q), ns))))),
         },
     }
 }
@@ -1038,7 +1038,7 @@ fn Tm::call_args(tys: Nat → RecInfo, g: List<Ty>, ports: List<Nat>, ps: List<T
 // `Move` gives the result a port the planner places (as the Rust reflector's
 // programs do).
 fn Tm::called(f: Nat, qs: List<Nat>, next: Nat) → Lowered {
-    Lowered(Compose(Call(f, qs, next), nodes_region([Move(64, Succ(next), next)])), Succ(next), Succ(Succ(next)))
+    Lowered(Compose(Call(f, qs, next), nodes_region([Move(64, next + 1, next)])), next + 1, next + 2)
 }
 
 fn Tm::lower_call_args(w: World, g: List<Ty>, ports: List<Nat>, next, f: Nat, args: List<Nat>) → Option<Lowered> {
@@ -1065,10 +1065,10 @@ fn Tm::lower_call(w: World, g: List<Ty>, ports: List<Nat>, next, f: Nat, args: L
 // the byte is the low eight bits of the word it leaves.
 fn Tm::byte_lowered(k, pi, pl, next: Nat) → Lowered {
     Lowered(Compose(nodes_region([UnsignedLessThan(64, next, pi, pl)]),
-            branch(next, Ports([Port(Succ(Succ(next)), 8)]),
-                Compose(nodes_region([BufferLoad(Succ(next), k, pi)]), nodes_region([Resize(64, 8, Succ(Succ(next)), Succ(next))])),
-                nodes_region([Const(8, Succ(Succ(next)), 0)]))),
-        Succ(Succ(next)), Succ(Succ(Succ(next))))
+            branch(next, Ports([Port(next + 2, 8)]),
+                Compose(nodes_region([BufferLoad(next + 1, k, pi)]), nodes_region([Resize(64, 8, next + 2, next + 1)])),
+                nodes_region([Const(8, next + 2, 0)]))),
+        next + 2, next + 3)
 }
 
 fn Tm::byte_port_l(g: List<Ty>, ports: List<Nat>, next, k, i, length, pi: Nat) → Option<Lowered> {
@@ -1811,15 +1811,15 @@ theorem Tm::lower_sound(self t: Tm, w: World): (g: List<Ty>) → (ports: List<Na
 // reversed, and the body takes fresh ids above them.
 
 fn Fun::param_ids(ps: List<Ty>, m: Nat) → List<Nat> {
-    match ps { Nil => Nil, Cons(_, rest) => Cons(m, Fun::param_ids(rest, Succ(m))) }
+    match ps { Nil => Nil, Cons(_, rest) => Cons(m, Fun::param_ids(rest, m + 1)) }
 }
 
 fn Fun::ports_onto(ps: List<Ty>, m: Nat, ports: List<Nat>) → List<Nat> {
-    match ps { Nil => ports, Cons(_, rest) => Fun::ports_onto(rest, Succ(m), Cons(m, ports)) }
+    match ps { Nil => ports, Cons(_, rest) => Fun::ports_onto(rest, m + 1, Cons(m, ports)) }
 }
 
 fn Fun::past(ps: List<Ty>, m: Nat) → Nat {
-    match ps { Nil => m, Cons(_, rest) => Fun::past(rest, Succ(m)) }
+    match ps { Nil => m, Cons(_, rest) => Fun::past(rest, m + 1) }
 }
 
 fn Fun::context(self f: Fun) → List<Ty> { Ty::bind_onto(f.params, Nil) }

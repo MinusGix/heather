@@ -601,7 +601,7 @@ fn Dyadic::recip_quot(self d: Dyadic, p: Nat) → Nat { Nat::pow2_div(d.recip_cu
 
 fn Dyadic::recip_down(self d: Dyadic, p: Nat) → Dyadic { Dyadic(d.recip_quot(p).int(), -d.exp - d.recip_cut(p).int()) }
 
-fn Dyadic::recip_up(self d: Dyadic, p: Nat) → Dyadic { Dyadic(Succ(d.recip_quot(p)).int(), -d.exp - d.recip_cut(p).int()) }
+fn Dyadic::recip_up(self d: Dyadic, p: Nat) → Dyadic { Dyadic((d.recip_quot(p) + 1).int(), -d.exp - d.recip_cut(p).int()) }
 
 // `c · 2^(-e-K)` times `m · 2^e` is `c·m / 2^K`.
 theorem Dyadic::recip_scale(c, m, e: Int, K: Nat): (Dyadic(c, -e - K.int()) * Dyadic(m, e)).rat() ≈ Rat((c * m) * 1, Nat::pow(2, K)) {
@@ -895,7 +895,7 @@ theorem Dyadic::trim_nat_same(k: Nat): (m: Nat) → (e: Int) → Dyadic::trim_na
 fn Dyadic::trim(self d: Dyadic) → Dyadic {
     match d.mant {
         OfNat(m) => Dyadic::trim_nat(m.width(), m, d.exp),
-        NegSucc(m) => -Dyadic::trim_nat(Succ(m).width(), Succ(m), d.exp),
+        NegSucc(m) => -Dyadic::trim_nat((m + 1).width(), m + 1, d.exp),
     }
 }
 

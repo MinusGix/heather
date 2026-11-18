@@ -89,7 +89,7 @@ fn Space::put<A, C>(self space: Space<A>, cells: A → C, a: A, c: C) → A → 
 fn Space::put_from<A, C>(self space: Space<A>, cells: A → C, a: A, i: Nat, {k: Nat}, cs: [C; k]) → A → C {
     (match k as λ j => (A → C) → Nat → [C; j] → A → C {
         Zero => λ cells i cs => cells,
-        Succ(_, ih) => λ cells i cs => ih(space.put(cells, space.offset(a, i), head(cs)), Succ(i), tail(cs)),
+        Succ(_, ih) => λ cells i cs => ih(space.put(cells, space.offset(a, i), head(cs)), i + 1, tail(cs)),
     })(cells, i, cs)
 }
 
@@ -101,7 +101,7 @@ fn Memory::set<A, C>(self m: Memory<A, C>, a: A, c: C) → Memory<A, C> {
 fn Memory::get_from<A, C>(self m: Memory<A, C>, a: A, i, k: Nat) → [C; k] {
     (match k as λ j => Nat → [C; j] {
         Zero => λ i => [],
-        Succ(_, ih) => λ i => cons(m.get(m.space.offset(a, i)), ih(Succ(i))),
+        Succ(_, ih) => λ i => cons(m.get(m.space.offset(a, i)), ih(i + 1)),
     })(i)
 }
 
@@ -400,7 +400,7 @@ fn Memory::refused_from<A, C>(self m: Memory<A, C>, allowed: Perm → Bool, a: A
     (match k as λ j => Nat → Option<A> {
         Zero => λ i => None,
         Succ(_, ih) => λ i => match allowed(m.perms(m.space.offset(a, i))) {
-            True => ih(Succ(i)),
+            True => ih(i + 1),
             False => Some(m.space.offset(a, i)),
         },
     })(i)
@@ -772,7 +772,7 @@ fn Perm::code() → Perm { Perm(True, False, True) }
 
 // Read and write below `cap`, nothing at or above it.
 fn Perm::below(cap: Nat) → Nat → Perm {
-    λ (i: Nat) => match Succ(i).leb(cap) { True => Perm::data(), False => Perm::none() }
+    λ (i: Nat) => match (i + 1).leb(cap) { True => Perm::data(), False => Perm::none() }
 }
 
 // A buffer of `cap` cells, each `fill`. Stores keep the shape
