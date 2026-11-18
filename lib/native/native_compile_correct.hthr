@@ -215,7 +215,7 @@ fn Target::Runs(self t: Target, s: Stmt, call: Writers(), perform: Performs(), o
 
 // Every call the compile emits runs as the call: the hypothesis a
 // statement's claim takes for its `Perform`s, proved for a source's own
-// procedures by induction on the depth (`Target::calls`).
+// procedures by induction on the fuel (`Source::calls_at`).
 fn Target::Calls(self t: Target, call: Writers(), perform: Performs()) → Type {
     (p: Prog) → (out: List<Nat>) → (index: Nat) → (args, results: List<Nat>) → t.layout().call_fits(out, index, args, results).IsTrue() →
         p.performs(t.layout(), out, index, args, results).Within(t.program) → t.homes.all_apart(results, out).IsTrue() →
@@ -228,7 +228,8 @@ theorem Target::calls_bare(self t: Target, bare: t.procedures = Nil, call: Write
         None => False,
         Some(proc) => args.len().same_as(proc.params.len()) && (results.len().same_as(proc.results.len()) &&
             (args.len().leb(6) && (results.len().leb(6) && (t.layout().words_fit(args ++ (results ++ out.minus(results))) &&
-            (t.layout().homes.moves_apart(out, results) && t.layout().callees.holds(index)))))),
+            (t.layout().homes.moves_apart(out, results) && (t.layout().callees.holds(index) &&
+            (t.layout().checks.checked(index) || Succ(t.layout().ranks.deep_at(index)).leb(t.layout().rank)))))))),
     }), fit))
 }
 
@@ -995,18 +996,18 @@ theorem Prog::inits_of(layout: Layout, b: Buffer, rest: List<Buffer>, buf: Nat, 
 }
 
 theorem Source::entry_of(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>, l: List<Nat>, p, q: Prog, checked: src.main.checked(homes, []) = Some(l),
-    saved: Start.saves_rsp(src.layout(low, homes, bodies), src.depth).frames_main(src.layout(low, homes, bodies), l) = p,
+    saved: Start.saves_rsp(src.layout(low, homes, bodies), src.need(homes, bodies)).frames_main(src.layout(low, homes, bodies), l) = p,
     filled: p.inits(src.layout(low, homes, bodies), src.buffers, 0) = q): src.entry(low, homes, bodies) = q {
     j(src.main.checked_sound(homes)([], l, checked).left,
-        λ x _ => Start.saves_rsp(src.layout(low, homes, bodies), src.depth).frames_main(src.layout(low, homes, bodies), x).inits(src.layout(low, homes, bodies), src.buffers, 0) = q,
+        λ x _ => Start.saves_rsp(src.layout(low, homes, bodies), src.need(homes, bodies)).frames_main(src.layout(low, homes, bodies), x).inits(src.layout(low, homes, bodies), src.buffers, 0) = q,
         j(sym(saved), λ x _ => x.inits(src.layout(low, homes, bodies), src.buffers, 0) = q, filled))
 }
 
 // The same in one step, for an entry spelled whole.
 theorem Source::entry_at(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>, l: List<Nat>, q: Prog, checked: src.main.checked(homes, []) = Some(l),
-    spelled: Start.saves_rsp(src.layout(low, homes, bodies), src.depth).frames_main(src.layout(low, homes, bodies), l).inits(src.layout(low, homes, bodies), src.buffers, 0) = q):
+    spelled: Start.saves_rsp(src.layout(low, homes, bodies), src.need(homes, bodies)).frames_main(src.layout(low, homes, bodies), l).inits(src.layout(low, homes, bodies), src.buffers, 0) = q):
     src.entry(low, homes, bodies) = q {
-    src.entry_of(low, homes, bodies, l, Start.saves_rsp(src.layout(low, homes, bodies), src.depth).frames_main(src.layout(low, homes, bodies), l), q, checked, refl, spelled)
+    src.entry_of(low, homes, bodies, l, Start.saves_rsp(src.layout(low, homes, bodies), src.need(homes, bodies)).frames_main(src.layout(low, homes, bodies), l), q, checked, refl, spelled)
 }
 
 // A source without procedures: `main` from label 0, no call fitting.
@@ -1017,16 +1018,16 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, bo
     zero: r.Holds(λ _ => zero_byte(), s.memory),
     stack: Stack<X86Memory(r.profile)>(r.profile.linux().fetch, r.profile.linux().data), stack_writes: stack.writes = linux_writes(r.profile.linux()),
     stack_above: r.low.toNat() + r.size <= stack.low.toNat(), stack_canonical: stack.low.toNat() + stack.size <= Nat::pow(2, 47),
-    top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: src.need(homes, bodies) <= stack.size, small: src.depth < Nat::pow(2, 64),
+    top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: src.need(homes, bodies) <= stack.size,
     args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rdi, s.gprs), args)):
-    SimPaidProgram(r.profile.linux(), src.bounded(args), s) {
+    SimPaidProgram(r.profile.linux(), src.bounded(args, src.charges(homes, bodies), src.left(homes, bodies)), s) {
     let call = program_writers(src.functions);
     let layout = src.layout(r.low, homes, bodies);
     let entry = src.entry(r.low, homes, bodies);
     (match src.allocation_ok(homes) as λ a => src.allocation_ok(homes) = a → (match a {
             False => None,
             True => match src.main.emit(entry, layout, [], 0) { None => None, Some(c) => c.prog.finish() },
-        }) = Some(program) → SimPaidProgram(r.profile.linux(), src.bounded(args), s) {
+        }) = Some(program) → SimPaidProgram(r.profile.linux(), src.bounded(args, src.charges(homes, bodies), src.left(homes, bodies)), s) {
         False => λ _ none => absurd(none),
         True => λ allocated => {
             let ok = src.allocation_sound(homes, j(sym(allocated), λ v _ => v.IsTrue(), trivial));
@@ -1038,19 +1039,29 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, bo
                     (match laid: whole.laid_out() {
                         False => λ none => absurd(none),
                         True => λ same => (j(Option::some_inj(whole, program, same),
-                            λ x _ => r.profile.linux().site(x, origin).Resident(s.memory) → SimPaidProgram(r.profile.linux(), src.bounded(args), s),
+                            λ x _ => r.profile.linux().site(x, origin).Resident(s.memory) → SimPaidProgram(r.profile.linux(), src.bounded(args, src.charges(homes, bodies), src.left(homes, bodies)), s),
                             λ at_whole => {
-                                // `main`'s frame: the stack's top words.
+                                // `main`'s frame: the stack's top words, and the limit `left`
+                                // bytes below it.
                                 let index = stack.size - 8 * src.words;
-                                let needed: (src.main.performed().below(src.main.called(), src.procedures, bodies, homes.places, homes.room_table(src.functions), src.depth) + 8 * (src.words + 1) <= stack.size) = deep;
-                                let top_i: (stack.size = index + 8 * src.words) = omega(needed);
+                                let left = src.left(homes, bodies);
+                                let checks = src.procedures.checks();
+                                let rank = src.procedures.len();
+                                let below = src.main.performed().below(src.main.called(), src.procedures, bodies, homes.places, homes.room_table(src.functions), checks, rank);
+                                let need_is: (src.need(homes, bodies) = 8 * src.words + left) = refl;
+                                let below_le: (below + 8 <= left) = Nat::le_max_r(src.room, below + 8);
+                                let top_i: (stack.size = index + 8 * src.words) = omega(deep, need_is);
                                 let framed: (index + 8 * (src.words + 0) <= stack.size) = omega(top_i);
-                                let roomy: (src.main.performed().below(src.main.called(), src.procedures, bodies, homes.places, homes.room_table(src.functions), src.depth) + 8 <= index) = omega(top_i, needed);
+                                let floor = index - left;
+                                let roomy: (floor + below + 8 <= index) = omega(deep, need_is, below_le);
+                                let limit: (floor + src.need(homes, bodies) = index + 8 * src.words) = omega(deep, need_is);
                                 let t = Target(r, src.words, src.words, src.capacities(), homes, ok.left, fits, whole, origin, j(sym(laid), λ b _ => b.IsTrue(), trivial), args,
-                                    src.procedures, src.functions, stack, stack_writes, stack_above, stack_canonical, bodies, src.main.performed(), src.main.called(), index, [], home_values(s.gprs), src.depth, framed, roomy);
+                                    src.procedures, src.functions, stack, stack_writes, stack_above, stack_canonical, bodies, src.main.performed(), src.main.called(),
+                                    checks, src.procedures.ranks(checks), rank, index, [], home_values(s.gprs), rank, floor, framed, roomy, Nat::le_refl(rank));
                                 let live = src.main.live_in(homes, []);
-                                let saved = Start.saves_rsp(layout, src.depth).frames_main(layout, live);
-                                let runs = λ (n: Nat) => src.main.emit_runs(t, call, src.performs(call, n, src.depth), t.calls_bare(bare, call, src.performs(call, n, src.depth)),
+                                let ch = src.charges(homes, bodies);
+                                let saved = Start.saves_rsp(layout, src.need(homes, bodies)).frames_main(layout, live);
+                                let runs = λ (n: Nat) => src.main.emit_runs(t, call, src.performs(call, n, n, ch, left), t.calls_bare(bare, call, src.performs(call, n, n, ch, left)),
                                     t.functions_run(call, t.answers_none(none, call)), entry, [], 0, c, emitted, Exists(2, refl), ok2.right);
                                 let w_entry = calc { entry <= c.prog := src.main.emits_extends(layout, entry, [], Nil, 0, c, emitted), <= whole := Exists(2, refl), };
                                 let w_saved = Prog::within_trans(Prog::within_inits(layout, src.buffers, 0, saved), w_entry);
@@ -1063,8 +1074,8 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, bo
                                 let after = λ (end: Env) => t.goes_finish(c.prog, whole.within_self(), Ret(BitVec::zero()),
                                     λ u => t.Held([], end, u.gprs, u.memory),
                                     λ u at exited => paid_ret(t.io(), BitVec::zero(), u, u, Exists(Zero, refl), at, exited));
-                                let tree = λ (n: Nat) => { let d: ITree<BitVec(64)>(Events::linux()) = ITree::bind(Events::linux(), src.main.denote(call, src.performs(call, n, src.depth), n, src.start(args)), λ (flow: Flow) => Ret(flow.status())); d };
-                                λ n => t.goes_start(live, ok2.left, refl, src.depth, refl, small, Start, w_saved, tree(n),
+                                let tree = λ (n: Nat) => { let d: ITree<BitVec(64)>(Events::linux()) = ITree::bind(Events::linux(), src.main.denote(call, src.performs(call, n, n, ch, left), n, src.start(args)), λ (flow: Flow) => Ret(flow.status())); d };
+                                λ n => t.goes_start(live, ok2.left, refl, src.need(homes, bodies), limit, Start, w_saved, tree(n),
                                     t.goes_inits(live, tree(n), src.buffers, 0, saved, t.start_env(), caps, w_entry,
                                         runs(n)(n, src.start(args), λ (flow: Flow) => Ret(flow.status()), exits, after)),
                                     s, here, at_whole, ⟨zero, ⟨argv, ⟨trans(sym(top), cong_fn<Nat, BitVec(64)>(λ n => stack.at(n), top_i)), λ k _ _ => refl⟩⟩⟩)
@@ -1090,8 +1101,16 @@ record Hosted(proc: Procedure, layout: Layout, index: Nat, whole: Prog) {
     within: proc.exit_code(b.prog, layout).Within(whole),
 }
 
+// The code before a procedure's frame: its check, where it has one.
+theorem Prog::within_checks_entry(self p: Prog, layout: Layout, index: Nat): p.Within(p.checks_entry(layout, index)) {
+    match layout.checks.checked(index) as λ b => p.Within(match b as λ _ => Prog { False => p, True => p.checks_room(layout, layout.need(index)) }) {
+        False => p.within_self(),
+        True => Exists(4, refl),
+    }
+}
+
 // The program holds every procedure of the target, and the shared exit of
-// a call too deep.
+// a call refused.
 record Hosts(t: Target) {
     hosted: (i: Nat) → (proc: Procedure) → t.procedures.nth(i) = Some(proc) → Hosted(proc, t.layout().body(i), i, t.program),
     deep: Prog,
@@ -1114,20 +1133,20 @@ theorem Procedure::code_hosted(self proc: Procedure, p: Prog, layout: Layout, in
                 λ whole w => {
                     let labelled = p.label(layout.procedure_label(index));
                     let entry = proc.entry_code(p, layout, index);
-                    let counted = labelled.count_down(layout);
+                    let counted = labelled.checks_entry(layout, index);
                     let saved = counted.saves(layout.kept());
                     let framed = then(saved, Block(frame_down(layout.words)));
                     let moved = b.prog.words_to(layout, proc.results, result_registers());
-                    let lowered = then(moved.count_up(layout), Block(frame_up(layout.words)));
+                    let lowered = then(moved, Block(frame_up(layout.words)));
                     ⟨Hosted(p, names, b, fits, emitted, w), calc {
                         p <= labelled := Exists(1, refl),
-                        <= counted := Exists(6, refl),
+                        <= counted := labelled.within_checks_entry(layout, index),
                         <= saved := Prog::within_saves(layout.kept(), counted),
                         <= framed := Exists(1, refl),
                         <= entry := Prog::within_words_from(layout, proc.body.live_in(layout.homes, proc.results), proc.params, call_registers(), framed),
                         <= b.prog := proc.body.emit_extends(layout, entry, proc.results, names, b, emitted),
                         <= moved := Prog::within_words_to(layout, proc.results, result_registers(), b.prog),
-                        <= lowered := Exists(5, refl),
+                        <= lowered := Exists(1, refl),
                         <= lowered.restores(layout.kept()) := Prog::within_restores(layout.kept(), lowered),
                         <= proc.exit_code(b.prog, layout) := Exists(1, refl),
                     }⟩
@@ -1136,21 +1155,21 @@ theorem Procedure::code_hosted(self proc: Procedure, p: Prog, layout: Layout, in
     })(refl, code)
 }
 
-// A hosted procedure's code in the program: its label and count, its way
+// A hosted procedure's code in the program: its label and check, its way
 // in, and its body.
 theorem Procedure::hosted_within(self proc: Procedure, layout: Layout, index: Nat, whole: Prog, pre: Prog, names: Nat, b: Compiled,
     emitted: proc.body.emit(proc.entry_code(pre, layout, index), layout, proc.results, names) = Some(b),
     w_exit: proc.exit_code(b.prog, layout).Within(whole)):
-    pre.label(layout.procedure_label(index)).count_down(layout).Within(whole) ∧ (proc.entry_code(pre, layout, index).Within(whole) ∧ b.prog.Within(whole)) {
+    pre.label(layout.procedure_label(index)).checks_entry(layout, index).Within(whole) ∧ (proc.entry_code(pre, layout, index).Within(whole) ∧ b.prog.Within(whole)) {
     let entry = proc.entry_code(pre, layout, index);
-    let counted = pre.label(layout.procedure_label(index)).count_down(layout);
+    let counted = pre.label(layout.procedure_label(index)).checks_entry(layout, index);
     let saved = counted.saves(layout.kept());
     let framed = then(saved, Block(frame_down(layout.words)));
     let moved = b.prog.words_to(layout, proc.results, result_registers());
-    let lowered = then(moved.count_up(layout), Block(frame_up(layout.words)));
+    let lowered = then(moved, Block(frame_up(layout.words)));
     let w_b: b.prog.Within(whole) = calc {
         b.prog <= moved := Prog::within_words_to(layout, proc.results, result_registers(), b.prog),
-        <= lowered := Exists(5, refl),
+        <= lowered := Exists(1, refl),
         <= lowered.restores(layout.kept()) := Prog::within_restores(layout.kept(), lowered),
         <= proc.exit_code(b.prog, layout) := Exists(1, refl),
         <= whole := w_exit,
@@ -1251,6 +1270,7 @@ record CallFits(layout: Layout, out: List<Nat>, index: Nat, args, results: List<
     words: layout.words_fit(args ++ (results ++ out.minus(results))).IsTrue(),
     apart: layout.homes.moves_apart(out, results).IsTrue(),
     allowed: layout.callees.holds(index) = True,
+    ranked: (layout.checks.checked(index) || Succ(layout.ranks.deep_at(index)).leb(layout.rank)) = True,
 }
 
 theorem Layout::call_fits_parts(self layout: Layout, out: List<Nat>, index: Nat, args, results: List<Nat>, fit: layout.call_fits(out, index, args, results).IsTrue()):
@@ -1259,12 +1279,13 @@ theorem Layout::call_fits_parts(self layout: Layout, out: List<Nat>, index: Nat,
             None => False,
             Some(proc) => args.len().same_as(proc.params.len()) && (results.len().same_as(proc.results.len()) &&
                 (args.len().leb(6) && (results.len().leb(6) && (layout.words_fit(args ++ (results ++ out.minus(results))) &&
-                (layout.homes.moves_apart(out, results) && layout.callees.holds(index)))))),
+                (layout.homes.moves_apart(out, results) && (layout.callees.holds(index) &&
+                (layout.checks.checked(index) || Succ(layout.ranks.deep_at(index)).leb(layout.rank)))))))),
         }) → CallFits(layout, out, index, args, results) {
         None => λ _ no => false_elim(no),
         Some(proc) => λ found f => {
             CallFits(proc, found, args.len().same_as_eq(proc.params.len(), known), results.len().same_as_eq(proc.results.len(), known),
-                Nat::leb_sound(args.len(), 6, known), Nat::leb_sound(results.len(), 6, known), known, known, known)
+                Nat::leb_sound(args.len(), 6, known), Nat::leb_sound(results.len(), 6, known), known, known, known, known)
         },
     })(refl, fit)
 }
@@ -1293,15 +1314,55 @@ theorem Procedure::fits_parts(self proc: Procedure, layout: Layout, fits: proc.f
     }
 }
 
-// A call's tree, its procedure found.
-theorem Source::performs_found(self src: Source, call: Writers(), n, d, index: Nat, proc: Procedure, found: src.procedures.nth(index) = Some(proc),
-    args, results: List<Nat>, env: Env):
-    src.performs(call, n, Succ(d))(index, args, results, env) =
-        ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, n, d), n, proc.enter(env, args)), λ flow => proc.leave(env, results, flow)) {
-    j(sym(found), λ o _ => (match o as λ _ => ITree<Flow>(Events::linux()) {
+// What the target charges a call (`charges_of`): a callee's charges are
+// its caller's.
+fn Target::charges(self t: Target) → Charges {
+    charges_of(t.procedures, t.bodies, t.homes.places, t.homes.room_table(t.functions), t.checks, t.ranks)
+}
+
+// What the check at procedure `index`'s entry asks to be left.
+fn Target::need(self t: Target, index: Nat) → Nat {
+    t.procedures.need(index, t.bodies, t.homes.places, t.homes.room_table(t.functions), t.checks, t.ranks)
+}
+
+// A procedure without a check refuses no call…
+theorem Target::refuses_unchecked(self t: Target, index, left: Nat, no: t.checks.checked(index) = False): t.charges().refuses(index, left) = False {
+    j(sym(no), λ b _ => (match (match b as λ _ => Option<Nat> { False => None, True => Some(t.need(index)) }) as λ _ => Bool {
+            None => False,
+            Some(need) => Succ(left).leb(need),
+        }) = False, refl)
+}
+
+// …and one with a check refuses one with fewer bytes left than it asks.
+theorem Target::refuses_checked(self t: Target, index, left: Nat, yes: t.checks.checked(index) = True):
+    t.charges().refuses(index, left) = Succ(left).leb(t.need(index)) {
+    j(sym(yes), λ b _ => (match (match b as λ _ => Option<Nat> { False => None, True => Some(t.need(index)) }) as λ _ => Bool {
+            None => False,
+            Some(need) => Succ(left).leb(need),
+        }) = Succ(left).leb(t.need(index)), refl)
+}
+
+// A call's tree, its procedure found: a silent step, then the refusal or
+// the body.
+theorem Source::performs_found(self src: Source, call: Writers(), n, k, index: Nat, ch: Charges, left: Nat, proc: Procedure,
+    found: src.procedures.nth(index) = Some(proc), args, results: List<Nat>, env: Env):
+    src.performs(call, n, Succ(k), ch, left)(index, args, results, env) = Tau(match ch.refuses(index, left) as λ _ => ITree<Flow>(Events::linux()) {
+        True => Ret(Exited(call_depth_status())),
+        False => ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, n, k, ch, left - ch.cost(index)), n, proc.enter(env, args)),
+            λ flow => proc.leave(env, results, flow)),
+    }) {
+    j(sym(found), λ o _ => Tau(match o as λ _ => ITree<Flow>(Events::linux()) {
             None => Ret(Onward(env)),
-            Some(p) => ITree::map(Events::linux(), p.body.denote(call, src.performs(call, n, d), n, p.enter(env, args)), λ flow => p.leave(env, results, flow)),
-        }) = ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, n, d), n, proc.enter(env, args)), λ flow => proc.leave(env, results, flow)),
+            Some(p) => match ch.refuses(index, left) as λ _ => ITree<Flow>(Events::linux()) {
+                True => Ret(Exited(call_depth_status())),
+                False => ITree::map(Events::linux(), p.body.denote(call, src.performs(call, n, k, ch, left - ch.cost(index)), n, p.enter(env, args)),
+                    λ flow => p.leave(env, results, flow)),
+            },
+        }) = Tau(match ch.refuses(index, left) as λ _ => ITree<Flow>(Events::linux()) {
+            True => Ret(Exited(call_depth_status())),
+            False => ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, n, k, ch, left - ch.cost(index)), n, proc.enter(env, args)),
+                λ flow => proc.leave(env, results, flow)),
+        }),
         refl)
 }
 
@@ -1314,133 +1375,80 @@ fn Procedure::answer(self proc: Procedure, flow: Flow) → Answer {
     match flow { Onward(after) => Returned(after.words_at(proc.results), after.buffers), Exited(status) => Gone(status) }
 }
 
-// What a procedure runs as when entered with `values` for its parameters,
-// `depth` calls of room left: none, the exit of a call too deep; otherwise
-// its body from the environment it enters (`Procedure::enter`'s, at the
-// values), its own calls one deeper.
-fn Source::procedure_tree(self src: Source, call: Writers(), n, depth: Nat, proc: Procedure) → List<BitVec(64)> → Env → ITree<Flow>(Events::linux()) {
-    λ values env => match depth {
-        Zero => Ret(Exited(call_depth_status())),
-        Succ(d) => proc.body.denote(call, src.performs(call, n, d), n, Env(Nil, env.buffers, env.args).set_words(proc.params, values)),
+// What procedure `index` runs as when entered with `values` for its
+// parameters and `left` bytes of stack: refused, the exit of a call the
+// stack has no room for; otherwise its body from the environment it enters
+// (`Procedure::enter`'s, at the values), its own calls at fuel `k` with the
+// call's cost taken.
+fn Source::procedure_tree(self src: Source, call: Writers(), n, k: Nat, ch: Charges, left, index: Nat, proc: Procedure) →
+    List<BitVec(64)> → Env → ITree<Flow>(Events::linux()) {
+    λ values env => match ch.refuses(index, left) as λ _ => ITree<Flow>(Events::linux()) {
+        True => Ret(Exited(call_depth_status())),
+        False => proc.body.denote(call, src.performs(call, n, k, ch, left - ch.cost(index)), n, Env(Nil, env.buffers, env.args).set_words(proc.params, values)),
     }
 }
 
-// Every procedure of the target meets the contract of a callee
-// (`Target::Callable`) at its label, lent nothing, with `depth` calls of
-// room: given a value for each parameter it runs as its tree, each flow of
-// it read as its answer.
-fn Target::Procedures(self t: Target, src: Source, call: Writers(), n, depth: Nat) → Type {
+// Every procedure the running body may call meets the contract of a callee
+// (`Target::Callable`) at its label, lent nothing, with the bytes from the
+// limit to the caller's frame left: given a value for each parameter it
+// runs as its tree, each flow of it read as its answer.
+fn Target::Procedures(self t: Target, src: Source, call: Writers(), n, k: Nat, ch: Charges) → Type {
     (index: Nat) → (proc: Procedure) → t.procedures.nth(index) = Some(proc) → t.callees.holds(index) = True →
+        (t.checks.checked(index) || Succ(t.ranks.deep_at(index)).leb(t.rank)) = True →
         t.Callable(t.layout().procedure_label(index), 0, λ (values: List<BitVec(64)>) (_: Env) => proc.params.len() <= values.len(),
-            src.procedure_tree(call, n, depth, proc), λ (_: List<BitVec(64)>) (_: Env) (flow: Flow) => proc.answer(flow))
+            src.procedure_tree(call, n, k, ch, t.index - t.floor, index, proc), λ (_: List<BitVec(64)>) (_: Env) (flow: Flow) => proc.answer(flow))
 }
 
-// A source's call is its procedure's tree, left as the procedure leaves.
-theorem Source::performs_tree(self src: Source, call: Writers(), n, d, index: Nat, proc: Procedure, found: src.procedures.nth(index) = Some(proc),
-    args, results: List<Nat>, env: Env, k: Flow → ITree<BitVec(64)>(Events::linux())):
-    ITree::Same(Events::linux(), ITree::bind(Events::linux(), src.performs(call, n, d)(index, args, results, env), k),
-        ITree::bind(Events::linux(), src.procedure_tree(call, n, d, proc)(env.words_at(args), env), λ (flow: Flow) => k(proc.leave(env, results, flow)))) {
-    match d {
-        Zero => ITree::same_refl(Events::linux(), k(Exited(call_depth_status()))),
-        Succ(d1) => {
-            let body = proc.body.denote(call, src.performs(call, n, d1), n, proc.enter(env, args));
-            j(sym(src.performs_found(call, n, d1, index, proc, found, args, results, env)),
-                λ tr _ => ITree::Same(Events::linux(), ITree::bind(Events::linux(), tr, k),
-                    ITree::bind(Events::linux(), body, λ (flow: Flow) => k(proc.leave(env, results, flow)))),
-                ITree::bind_assoc(Events::linux(), body, λ (flow: Flow) => Ret(proc.leave(env, results, flow)), k))
-        },
-    }
-}
-
-// A procedure from its label through its count (`Prog::count_down`),
-// entered with the return address on top of the stack's words `top`. No
-// room left, the shared exit. Otherwise it goes on from past its count with
-// one call less of room, and but for RAX, R11 and RSP the registers as it
-// was entered with.
-theorem Target::goes_counted(self t: Target, env: Env, index: Nat, pre_i: Prog,
-    w_count: pre_i.label(t.layout().procedure_label(index)).count_down(t.layout()).Within(t.program),
-    deep_k: Nat, deep_before: Prog, deep_item: Asm, deep_at: asm_back(t.program, deep_k) = Prog::At(deep_before, t.layout().deep_label(), deep_item),
-    tree: ITree<BitVec(64)>(Events::linux()), g0: Gprs, top: List<BitVec(64)>,
-    zero: t.room = 0 → t.Goes(prog_len(deep_before), tree, λ _ => True),
-    more: (d: Nat) → t.room = Succ(d) →
-        t.Goes(prog_len(pre_i.label(t.layout().procedure_label(index)).count_down(t.layout())), tree, λ v =>
-            t.Bare(env, t.index - 8, top, v.gprs, v.memory) ∧ v.gprs.Outside(g0, [Rax, R11, Rsp]))):
-    t.Goes(asm_labels(t.program, t.layout().procedure_label(index)), tree, λ s =>
-        t.Bare(env, t.index - 8, top, s.gprs, s.memory) ∧ (s.gprs = g0)) {
-    let layout = t.layout();
-    let label = layout.procedure_label(index);
-    let lbl = Prog::At(pre_i, label, Block([]));
-    let counted = lbl.count_down(layout);
-    let w_lbl: lbl.Within(t.program) = calc { lbl <= counted := Exists(6, refl), <= t.program := w_count, };
-    let i1 = t.index - 8;
-    let so = layout.stack_offset();
-    let slots: (so + 16 <= t.r.size) = t.fits;
-    let based: Nat → X86Memory(t.r.profile) → Type = λ n m => Exists<Nat → BitVec(8)>(λ v => t.Based(env, v, m));
-    // What the count keeps: the stack's words, RSP, and the registers it
-    // does not write.
-    let r = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.FramesAt(m, top, i1) ∧ ((read_gpr(Rsp, g) = t.stack.at(i1)) ∧ g.Outside(g0, [Rax, R11, Rsp]));
-    let after = λ (d: Nat) (eq: t.room = Succ(d)) => {
-        let weak: t.Goes(prog_len(counted), tree, λ v => based(d, v.memory) ∧ r(v.gprs, v.memory)) =
-            t.goes_weaken(more(d, eq), λ v h => ⟨⟨h.left, ⟨h.right.left, h.right.right.left⟩⟩, h.right.right.right⟩);
-        weak
+// A source's call is a silent step and then its procedure's tree, left as
+// the procedure leaves.
+theorem Source::performs_tree(self src: Source, call: Writers(), n, k, index: Nat, ch: Charges, left: Nat, proc: Procedure,
+    found: src.procedures.nth(index) = Some(proc), args, results: List<Nat>, env: Env, kk: Flow → ITree<BitVec(64)>(Events::linux())):
+    ITree::Same(Events::linux(), ITree::bind(Events::linux(), src.performs(call, n, Succ(k), ch, left)(index, args, results, env), kk),
+        Tau(ITree::bind(Events::linux(), src.procedure_tree(call, n, k, ch, left, index, proc)(env.words_at(args), env),
+            λ (flow: Flow) => kk(proc.leave(env, results, flow))))) {
+    let k2 = λ (flow: Flow) => kk(proc.leave(env, results, flow));
+    let body = proc.body.denote(call, src.performs(call, n, k, ch, left - ch.cost(index)), n, proc.enter(env, args));
+    let inner = match ch.refuses(index, left) as λ b => ITree::Same(Events::linux(),
+            ITree::bind(Events::linux(), match b as λ _ => ITree<Flow>(Events::linux()) {
+                True => Ret(Exited(call_depth_status())),
+                False => ITree::map(Events::linux(), body, λ flow => proc.leave(env, results, flow)),
+            }, kk),
+            ITree::bind(Events::linux(), match b as λ _ => ITree<Flow>(Events::linux()) { True => Ret(Exited(call_depth_status())), False => body }, k2)) {
+        True => ITree::same_refl(Events::linux(), kk(Exited(call_depth_status()))),
+        False => ITree::bind_assoc(Events::linux(), body, λ (flow: Flow) => Ret(proc.leave(env, results, flow)), kk),
     };
-    let count = t.goes_count_down(env, t.room, lbl, w_count, deep_k, deep_before, deep_item, deep_at, tree, r,
-        λ g g2 m h same => ⟨h.left, ⟨trans(same(Rsp, refl, refl), h.right.left),
-            λ x absent => trans(same(x, x.absent_head(Rax, [R11, Rsp], absent), x.absent_head(R11, [Rsp], x.absent_rest(Rax, [R11, Rsp], absent))),
-                h.right.right(x, absent))⟩⟩,
-        λ g m word h => {
-            let eight: (word_bytes(word).len() = 8) = refl;
-            let fits: ((so + 8) + word_bytes(word).len() <= t.r.size) = omega(slots, eight);
-            ⟨j(sym(t.at_rip(so + 8)), λ a _ => t.FramesAt(t.r.profile.store(m, a, word_bytes(word)), top, i1),
-                t.frames_store(m, so + 8, word_bytes(word), fits, top, i1, h.left)), h.right⟩
-        },
-        zero, after);
-    let labelled = t.goes_block(pre_i, label, [], w_lbl, tree,
-        λ v => based(t.room, v.memory) ∧ r(v.gprs, v.memory), count);
-    let entered: t.Goes(prog_len(pre_i), tree, λ s => t.Bare(env, i1, top, s.gprs, s.memory) ∧ (s.gprs = g0)) = t.goes_weaken(labelled, λ s h => ⟨h.left.left, ⟨h.left.right.left, ⟨h.left.right.right,
-            λ x _ => cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(x, g), h.right)⟩⟩⟩);
-    j(sym(label_target(w_lbl.witness, t.program, pre_i, index + t.functions.len(), Block([]), t.program.laid_out_unique(t.laid), w_lbl.proof)),
-        λ at _ => t.Goes(at, tree, λ s => t.Bare(env, i1, top, s.gprs, s.memory) ∧ (s.gprs = g0)), entered)
+    let after = ITree::bind(Events::linux(), src.procedure_tree(call, n, k, ch, left, index, proc)(env.words_at(args), env), k2);
+    j(sym(src.performs_found(call, n, k, index, ch, left, proc, found, args, results, env)),
+        λ tr _ => ITree::Same(Events::linux(), ITree::bind(Events::linux(), tr, kk), Tau(after)),
+        SameTau(after, refl, inner))
 }
 
-// No room: every procedure's count goes to the shared exit, as the
-// source's call past the depth.
-theorem Target::procedures_deep(self t: Target, src: Source, call: Writers(), n: Nat, room: t.room = 0, hosts: Hosts(t)):
-    t.Procedures(src, call, n, 0) {
-    let layout = t.layout();
-    λ index proc found _ env values long g0 passed ret above fits_above k ends => {
-        let hosted = hosts.hosted(index, proc, found);
-        let pre_i = hosted.pre;
-        let hw = proc.hosted_within(layout.body(index), index, t.program, pre_i, hosted.names, hosted.b, hosted.emitted, hosted.within);
-        let dp = hosts.deep;
-        let w_deep = hosts.deep_within;
-        let w_dl: Prog::At(dp, layout.deep_label(), Block([])).Within(t.program) =
-            calc { Prog::At(dp, layout.deep_label(), Block([])) <= dp.deep_exit(layout) := Exists(2, refl), <= t.program := w_deep, };
-        let tree: ITree<BitVec(64)>(Events::linux()) = k(Exited(call_depth_status()));
-        t.goes_counted(env, index, pre_i, hw.left, w_dl.witness, dp, Block([]), w_dl.proof, tree, g0, Cons(ret, above),
-            λ _ => t.goes_deep(dp, w_deep, tree, λ _ => True, λ s at exited => ends(Exited(call_depth_status()))(s, at, exited)),
-            λ d2 more => absurd(trans(sym(room), more)))
-    }
-}
-
-// Room for one more: the procedure's count and its way in (the registers
-// it keeps pushed, its frame opened), its body with its own calls by the
-// depth below, and its way out (the room given back, the registers popped,
-// the return). Each flow of the body ends where the contract says its
-// answer does: an exit at the exit, and a return with the stack's words
-// from past the return address up as they were, no code of the procedure
-// storing above its own activation.
-theorem Target::procedures_body(self t: Target, src: Source, call: Writers(), n, d: Nat, room: t.room = Succ(d), small: Succ(d) < Nat::pow(2, 64),
+// A procedure is callable: from its label, its check where it has one (too
+// few bytes left, the shared exit), its way in (the registers it keeps
+// pushed, its frame opened) as an activation of its own, its body with its
+// own calls at the fuel below, and its way out (the registers popped, the
+// return). Each flow of the body ends where the contract says its answer
+// does: an exit at the exit, and a return with the stack's words from past
+// the return address up as they were, no code of the procedure storing
+// above its own activation. A callee without a check is ranked below the
+// running body, so the body's room has a level for it
+// (`Layout::call_fits`); one with a check is entered at its own rank once
+// the check finds the bytes it charges.
+theorem Target::procedures_at(self t: Target, src: Source, call: Writers(), n, k: Nat,
     tp: t.procedures = src.procedures, hosts: Hosts(t), answers: t.Answered(call),
-    ih: (c: Target) → c.procedures = src.procedures → Hosts(c) → c.Answered(call) → c.room = d → c.Calls(call, src.performs(call, n, d))):
-    t.Procedures(src, call, n, Succ(d)) {
-    λ index proc found allowed env values long g0 passed ret above fits_above k ends s here resident pre => {
+    ih: (c: Target) → c.procedures = src.procedures → Hosts(c) → c.Answered(call) → c.Calls(call, src.performs(call, n, k, c.charges(), c.index - c.floor))):
+    t.Procedures(src, call, n, k, t.charges()) {
+    λ index proc found allowed ranked env values long g0 passed ret above fits_above kk ends s here resident pre => {
         // The procedure in the program, under its own layout: its frame
         // and its homes.
         let layout = t.layout().body(index);
         let frame = t.bodies.frame(index);
         let homes = frame.homes(t.homes.places, t.homes.rooms);
         let kept = homes.kept();
+        let places = t.homes.places;
+        let table = t.homes.room_table(t.functions);
+        let ch = t.charges();
+        let left = t.index - t.floor;
         let hosted = hosts.hosted(index, proc, found);
         let pre_i = hosted.pre;
         let names_i = hosted.names;
@@ -1450,10 +1458,13 @@ theorem Target::procedures_body(self t: Target, src: Source, call: Writers(), n,
         let pf = proc.fits_parts(layout, hosted.fits);
         let entry_live = proc.body.live_in(homes, proc.results);
         let entry = proc.entry_code(pre_i, layout, index);
-        let counted = pre_i.label(layout.procedure_label(index)).count_down(layout);
+        let label = layout.procedure_label(index);
+        let lbl = Prog::At(pre_i, label, Block([]));
+        let checked_code = lbl.checks_entry(layout, index);
         let hw = proc.hosted_within(layout, index, t.program, pre_i, names_i, b_i, emitted_i, w_exit);
         let w_entry = hw.right.left;
         let w_b = hw.right.right;
+        let w_lbl: lbl.Within(t.program) = Prog::within_trans(lbl.within_checks_entry(layout, index), hw.left);
         let inside_params = λ (i: Nat) (m: Mem(i, proc.params)) => layout.words_fit_mem(proc.params ++ proc.results, i, pf.words,
             proc.params.mem_append_l(proc.results, i, m));
         let inside_results = λ (i: Nat) (m: Mem(i, proc.results)) => layout.words_fit_mem(proc.params ++ proc.results, i, pf.words,
@@ -1462,68 +1473,131 @@ theorem Target::procedures_body(self t: Target, src: Source, call: Writers(), n,
         let w_dl: Prog::At(dp, layout.deep_label(), Block([])).Within(t.program) =
             calc { Prog::At(dp, layout.deep_label(), Block([])) <= dp.deep_exit(layout) := Exists(2, refl), <= t.program := hosts.deep_within, };
         let start = Env(Nil, env.buffers, env.args).set_words(proc.params, values);
-        let tree: ITree<BitVec(64)>(Events::linux()) = ITree::bind(Events::linux(), proc.body.denote(call, src.performs(call, n, d), n, start), k);
-        let few: (kept.len() <= 6) = homes.kept_few();
-        let under: (frame.words <= t.reserved) = pf.under;
+        let rest_left = left - ch.cost(index);
+        let body_tree: ITree<BitVec(64)>(Events::linux()) = ITree::bind(Events::linux(), proc.body.denote(call, src.performs(call, n, k, ch, rest_left), n, start), kk);
+        let tree: ITree<BitVec(64)>(Events::linux()) = ITree::bind(Events::linux(), src.procedure_tree(call, n, k, ch, left, index, proc)(values, env), kk);
         let top = Cons(ret, above);
         let args_eq: (env.args = t.args) = pre.left.left.proof.right.right.left;
-        // Past the count: the callee's activation, its frames the registers
-        // it is about to push, the return address and what was above it.
-        let more = λ (d2: Nat) (eq: t.room = Succ(d2)) => {
-            let d_eq: (d2 = d) = omega(eq, room);
-            let places = t.homes.places;
-            let table = t.homes.room_table(t.functions);
-            let was: (t.callees.below(t.called, t.procedures, t.bodies, places, table, Succ(d2)) + 8 <= t.index) =
-                j(eq, λ r _ => t.callees.below(t.called, t.procedures, t.bodies, places, table, r) + 8 <= t.index, t.roomy);
-            let reach_le: (t.callees.reach(t.procedures, t.bodies, places, table, Succ(d2)) <= t.callees.below(t.called, t.procedures, t.bodies, places, table, Succ(d2))) =
-                Nat::le_max_l(t.callees.reach(t.procedures, t.bodies, places, table, Succ(d2)), t.called.functions_room(table));
-            // The call's level and what the callee's body takes below its
-            // frame are within what this body's calls take.
-            let below = t.procedures.performed_by(index).below(t.procedures.called_by(index), t.procedures, t.bodies, places, table, d2);
-            let level: (((8 * frame.words + 8 * kept.len()) + 8) + below <= t.callees.reach(t.procedures, t.bodies, places, table, Succ(d2))) =
-                t.callees.reach_call(t.procedures, t.bodies, places, table, d2, index, allowed);
-            // Where the callee's frame is: below the return address and
-            // the registers it pushes. `i2` is where the return address is.
-            let ic = ((t.index - 8) - 8 * kept.len()) - 8 * frame.words;
+        let i1 = t.index - 8;
+        let back: (i1 + 8 = t.index) = omega(t.roomy);
+        let ic = ((t.index - 8) - 8 * kept.len()) - 8 * frame.words;
+        let past = λ (v: MachineState<X86Memory(t.r.profile)>) => t.Bare(env, i1, top, v.gprs, v.memory) ∧ v.gprs.Outside(g0, [Rax, R11, Rsp]);
+        // The body, from past the entry's check, as an activation of the
+        // callee with `room_c` levels of room: its frame below the return
+        // address and the registers it pushes.
+        let run = λ (room_c: Nat) (roomy_c: t.floor + t.procedures.performed_by(index).below(t.procedures.called_by(index), t.procedures, t.bodies, places, table, t.checks, room_c) + 8 <= ic) (ranked_c: t.ranks.deep_at(index) <= room_c) => {
             let i2 = (ic + 8 * frame.words) + 8 * kept.len();
-            let at_i: (i2 = t.index - 8) = omega(was, reach_le, level);
-            let back_i: (i2 + 8 = t.index) = omega(was, reach_le, level);
-            let roomy_c: (below + 8 <= ic) = omega(was, reach_le, level);
+            let at_i: (i2 = t.index - 8) = omega(roomy_c, back);
+            let back_i: (i2 + 8 = t.index) = omega(roomy_c, back);
             let saved_len: (g0.saved(kept, top).len() = kept.len() + Succ(above.len())) = g0.saved_len(kept, top);
             let framed_c: (ic + 8 * (frame.words + g0.saved(kept, top).len()) <= t.stack.size) = omega(saved_len, back_i, fits_above);
-            let c = t.callee(index, pf.homed, ic, g0.saved(kept, top), home_values(g0), d2, framed_c, roomy_c);
+            let c = t.callee(index, pf.homed, ic, g0.saved(kept, top), home_values(g0), room_c, framed_c, roomy_c, ranked_c);
+            let same_left0: (ic - t.floor = (t.index - t.floor) - ((8 * frame.words + 8 * kept.len()) + 8)) = omega(roomy_c, back);
+            let same_left: (c.index - c.floor = rest_left) = same_left0;
+            let calls_c: c.Calls(call, src.performs(call, n, k, ch, rest_left)) =
+                j(same_left, λ x _ => c.Calls(call, src.performs(call, n, k, ch, x)), ih(c, tp, hosts, answers));
             let at_entry = λ (r: Nat) (inside: r < 6) (_: homes.pinned(home_register(r)) = True) => sym(home_value(g0, r, inside));
-            let returned = λ (after: Env) => c.goes_callee_return(after, b_i.prog, proc.results, k(Onward(after)), w_exit, inside_results, g0, ret, above, refl,
-                at_entry, j(sym(d_eq), λ x _ => Succ(x) < Nat::pow(2, 64), small),
+            let returned = λ (after: Env) => c.goes_callee_return(after, b_i.prog, proc.results, kk(Onward(after)), w_exit, inside_results, g0, ret, above, refl,
+                at_entry,
                 λ s2 rip_s resident_s bare_s kept_s holding_s => {
-                    let bare_i: t.Bare(after, t.index, above, s2.gprs, s2.memory) = j(sym(eq), λ r _ => t.Bare(after, t.index, above, s2.gprs, s2.memory),
-                        j(back_i, λ x _ => t.Bare(after, x, above, s2.gprs, s2.memory), bare_s));
+                    let bare_i: t.Bare(after, t.index, above, s2.gprs, s2.memory) = j(back_i, λ x _ => t.Bare(after, x, above, s2.gprs, s2.memory), bare_s);
                     ends(Onward(after))(s2, rip_s, resident_s, t.bare_file(env, after, t.index, above, s2.gprs, s2.memory, bare_i, args_eq),
                         kept_s, holding_s)
                 });
-            let body = proc.body.emit_runs(c, call, src.performs(call, n, d), ih(c, tp, hosts, answers, d_eq), c.functions_run(call, answers))(entry, proc.results, names_i, b_i, emitted_i, w_b, pf.checks)(
-                n, start, k, λ status u at exited => ends(Exited(status))(u, at, exited), returned);
-            let next_c = c.at_like(prog_len(entry), entry_live, tree, start, env.set_words(proc.params, values),
+            let body = proc.body.emit_runs(c, call, src.performs(call, n, k, ch, rest_left), calls_c, c.functions_run(call, answers))(entry, proc.results, names_i, b_i, emitted_i, w_b, pf.checks)(
+                n, start, kk, λ status u at exited => ends(Exited(status))(u, at, exited), returned);
+            let next_c = c.at_like(prog_len(entry), entry_live, body_tree, start, env.set_words(proc.params, values),
                 env.entered_like(proc.params, entry_live, values, long, entry_live.within_mem(proc.params, pf.entry_within)), body);
             let entered = c.goes_callee_entry(env, pre_i, proc, index, values, g0, top, refl, at_entry, passed,
-                tree, w_entry, inside_params, pf.entry_apart, pf.entry_within, pf.params_few, long, next_c);
-            j(at_i, λ x _ => t.Goes(prog_len(counted), tree, λ v =>
-                t.Bare(env, x, top, v.gprs, v.memory) ∧ v.gprs.Outside(g0, [Rax, R11, Rsp])), entered)
+                body_tree, w_entry, inside_params, pf.entry_apart, pf.entry_within, pf.params_few, long, next_c);
+            let ran: t.Goes(prog_len(checked_code), body_tree, past) =
+                j(at_i, λ x _ => t.Goes(prog_len(checked_code), body_tree, λ v => t.Bare(env, x, top, v.gprs, v.memory) ∧ v.gprs.Outside(g0, [Rax, R11, Rsp])), entered);
+            ran
         };
-        t.goes_counted(env, index, pre_i, hw.left, w_dl.witness, dp, Block([]), w_dl.proof, tree, g0, top,
-            λ zero => absurd(trans(sym(room), zero)), more)(s, here, resident, pre)
+        // The body's tree is the procedure's where the call is not refused.
+        let unrefused = λ (none: ch.refuses(index, left) = False) (at: Nat) (q: MachineState<X86Memory(t.r.profile)> → Type) (goes: t.Goes(at, body_tree, q)) =>
+            j(sym(none), λ b _ => t.Goes(at, ITree::bind(Events::linux(), match b as λ _ => ITree<Flow>(Events::linux()) {
+                    True => Ret(Exited(call_depth_status())),
+                    False => proc.body.denote(call, src.performs(call, n, k, ch, rest_left), n, start),
+                }, kk), q), goes);
+        // From the label to past the check, by whether the procedure has one.
+        let checking: t.Goes(prog_len(lbl), tree, past) = (match t.checks.checked(index) as λ b => t.checks.checked(index) = b → t.Goes(prog_len(lbl), tree, past) {
+            False => λ no => {
+                // Ranked below the running body: a level of its room.
+                let rank_lt: (Succ(t.ranks.deep_at(index)) <= t.rank) =
+                    Nat::leb_sound(Succ(t.ranks.deep_at(index)), t.rank, Bool::is_true_of_eq(j(no, λ b _ => (b || Succ(t.ranks.deep_at(index)).leb(t.rank)) = True, ranked)));
+                let room_is: (t.room = Succ(t.room - 1)) = omega(rank_lt, t.ranked);
+                let was: (t.floor + t.callees.below(t.called, t.procedures, t.bodies, places, table, t.checks, Succ(t.room - 1)) + 8 <= t.index) =
+                    j(room_is, λ r _ => t.floor + t.callees.below(t.called, t.procedures, t.bodies, places, table, t.checks, r) + 8 <= t.index, t.roomy);
+                let reach_le: (t.callees.reach(t.procedures, t.bodies, places, table, t.checks, Succ(t.room - 1)) <=
+                        t.callees.below(t.called, t.procedures, t.bodies, places, table, t.checks, Succ(t.room - 1))) =
+                    Nat::le_max_l(t.callees.reach(t.procedures, t.bodies, places, table, t.checks, Succ(t.room - 1)), t.called.functions_room(table));
+                let level: (((8 * frame.words + 8 * kept.len()) + 8) + t.procedures.performed_by(index).below(t.procedures.called_by(index), t.procedures, t.bodies, places, table, t.checks, t.room - 1) <= t.callees.reach(t.procedures, t.bodies, places, table, t.checks, Succ(t.room - 1))) =
+                    t.callees.reach_call(t.procedures, t.bodies, places, table, t.checks, t.room - 1, index, allowed, no);
+                let ran = run(t.room - 1, omega(was, reach_le, level), omega(rank_lt, t.ranked));
+                let code: t.Goes(prog_len(lbl), body_tree, past) = j(no, λ b _ => t.Goes(prog_len(match b as λ _ => Prog {
+                        False => lbl,
+                        True => lbl.checks_room(layout, layout.need(index)),
+                    }), body_tree, past), ran);
+                unrefused(t.refuses_unchecked(index, left, no), prog_len(lbl), past, code)
+            },
+            True => λ yes => {
+                let need = t.need(index);
+                let need_is: (need = (((8 * frame.words + 8 * kept.len()) + 8) + t.procedures.performed_by(index).below(t.procedures.called_by(index), t.procedures, t.bodies, places, table, t.checks, t.ranks.deep_at(index))) + 8) = refl;
+                let refuses_is = t.refuses_checked(index, left, yes);
+                let w_check: lbl.checks_room(layout, need).Within(t.program) =
+                    j(yes, λ b _ => (match b as λ _ => Prog { False => lbl, True => lbl.checks_room(layout, layout.need(index)) }).Within(t.program), hw.left);
+                let r = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.FramesAt(m, top, i1) ∧ ((read_gpr(Rsp, g) = t.stack.at(i1)) ∧ g.Outside(g0, [Rax, R11, Rsp]));
+                let based: X86Memory(t.r.profile) → Type = λ m => Exists<Nat → BitVec(8)>(λ v => t.Based(env, v, m));
+                let checked: t.Goes(prog_len(lbl), tree, λ v => based(v.memory) ∧ r(v.gprs, v.memory)) =
+                    t.goes_check(env, i1, left, need, omega(back, t.roomy), omega(t.roomy), omega(back, fits_above), lbl, w_check,
+                        w_dl.witness, dp, Block([]), w_dl.proof, tree, r,
+                        λ g m h => h.right.left,
+                        λ g g2 m h same => ⟨h.left, ⟨trans(same(Rsp, refl, refl), h.right.left),
+                            λ x absent => trans(same(x, x.absent_head(Rax, [R11, Rsp], absent), x.absent_head(R11, [Rsp], x.absent_rest(Rax, [R11, Rsp], absent))),
+                                h.right.right(x, absent))⟩⟩,
+                        λ short => {
+                            let refused: (ch.refuses(index, left) = True) = trans(refuses_is, Nat::leb_true(Succ(left), need, short));
+                            let exit_tree = kk(Exited(call_depth_status()));
+                            j(sym(refused), λ b _ => t.Goes(prog_len(dp), ITree::bind(Events::linux(), match b as λ _ => ITree<Flow>(Events::linux()) {
+                                    True => Ret(Exited(call_depth_status())),
+                                    False => proc.body.denote(call, src.performs(call, n, k, ch, rest_left), n, start),
+                                }, kk), λ _ => True),
+                                t.goes_deep(dp, hosts.deep_within, exit_tree, λ _ => True, λ u at exited => ends(Exited(call_depth_status()))(u, at, exited)))
+                        },
+                        λ enough => {
+                            let ran = run(t.ranks.deep_at(index), omega(enough, need_is, back, t.roomy), Nat::le_refl(t.ranks.deep_at(index)));
+                            let code: t.Goes(prog_len(lbl.checks_room(layout, need)), body_tree, past) = j(yes, λ b _ => t.Goes(prog_len(match b as λ _ => Prog {
+                                    False => lbl,
+                                    True => lbl.checks_room(layout, layout.need(index)),
+                                }), body_tree, past), ran);
+                            let none: (ch.refuses(index, left) = False) = trans(refuses_is, Nat::leb_false(Succ(left), need, omega(enough)));
+                            t.goes_weaken(unrefused(none, prog_len(lbl.checks_room(layout, need)), past, code),
+                                λ v h => ⟨⟨h.left, ⟨h.right.left, h.right.right.left⟩⟩, h.right.right.right⟩)
+                        });
+                t.goes_weaken(checked, λ v h => ⟨h.left.left, ⟨h.left.right.left, ⟨h.left.right.right, h.right⟩⟩⟩)
+            },
+        })(refl);
+        let labelled = t.goes_block(pre_i, label, [], w_lbl, tree, past, checking);
+        let entered: t.Goes(prog_len(pre_i), tree, λ v => t.Bare(env, i1, top, v.gprs, v.memory) ∧ (v.gprs = g0)) = t.goes_weaken(labelled, λ v h => ⟨h.left,
+            λ x _ => cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(x, g), h.right)⟩);
+        j(sym(label_target(w_lbl.witness, t.program, pre_i, index + t.functions.len(), Block([]), t.program.laid_out_unique(t.laid), w_lbl.proof)),
+            λ at _ => t.Goes(at, tree, λ v => t.Bare(env, i1, top, v.gprs, v.memory) ∧ (v.gprs = g0)), entered)(s, here, resident, pre)
     }
 }
 
 // Every call the compile emits runs as the call, its procedures callable:
-// the one call site (`Target::goes_calls`), the procedure by its contract,
-// and each answer taken as the procedure leaves, a return's results from
-// their registers into the caller's words over the buffers the callee left.
-theorem Target::calls_of(self t: Target, src: Source, call: Writers(), n, d: Nat, tp: t.procedures = src.procedures,
-    callable: t.Procedures(src, call, n, d)): t.Calls(call, src.performs(call, n, d)) {
+// the one call site (`Target::goes_calls`), its CALL paying for the call's
+// silent step, the procedure by its contract, and each answer taken as the
+// procedure leaves, a return's results from their registers into the
+// caller's words over the buffers the callee left.
+theorem Target::calls_of(self t: Target, src: Source, call: Writers(), n, k: Nat, tp: t.procedures = src.procedures,
+    callable: t.Procedures(src, call, n, k, t.charges())): t.Calls(call, src.performs(call, n, Succ(k), t.charges(), t.index - t.floor)) {
     let layout = t.layout();
     let rets = result_registers();
-    λ p out index args results fit within apart n2 env k exits next => {
+    let ch = t.charges();
+    let left = t.index - t.floor;
+    λ p out index args results fit within apart n2 env kk exits next => {
         let fp = layout.call_fits_parts(out, index, args, results, fit);
         let proc = fp.proc;
         let found = fp.found;
@@ -1539,7 +1613,7 @@ theorem Target::calls_of(self t: Target, src: Source, call: Writers(), n, d: Nat
         let va = env.words_at(args);
         let long: (proc.params.len() <= va.len()) = omega(env.words_at_len(args), fp.args_len);
         let none: (0 <= 3) = omega();
-        let k2 = λ (flow: Flow) => k(proc.leave(env, results, flow));
+        let k2 = λ (flow: Flow) => kk(proc.leave(env, results, flow));
         // Each answer taken: the results from their registers, or the exit.
         let taken = λ (flow: Flow) => match flow as λ f => t.Taken(live, env, prog_len(cb), proc.answer(f), k2(f)) {
             Onward(after) => {
@@ -1556,26 +1630,30 @@ theorem Target::calls_of(self t: Target, src: Source, call: Writers(), n, d: Nat
             },
             Exited(status) => λ u at exited => exits(status, u, at, exited),
         };
-        let main = t.goes_calls<Flow>(live, env, p, layout.procedure_label(index), 0, none, args,
+        let main = t.goes_calls<Flow>(True, live, env, p, layout.procedure_label(index), 0, none, args,
             λ i m => ⟨inside_args(i, m), args.union_left(saved, i, m)⟩, w_cb,
-            λ (values: List<BitVec(64)>) (_: Env) => proc.params.len() <= values.len(), src.procedure_tree(call, n, d, proc),
-            λ (_: List<BitVec(64)>) (_: Env) (flow: Flow) => proc.answer(flow), callable(index, proc, found, fp.allowed), long, k2, taken);
-        t.site().goes_same(t.io(), prog_len(p), ITree::bind(Events::linux(), src.performs(call, n, d)(index, args, results, env), k),
-            ITree::bind(Events::linux(), src.procedure_tree(call, n, d, proc)(va, env), k2),
+            λ (values: List<BitVec(64)>) (_: Env) => proc.params.len() <= values.len(), src.procedure_tree(call, n, k, ch, left, index, proc),
+            λ (_: List<BitVec(64)>) (_: Env) (flow: Flow) => proc.answer(flow), callable(index, proc, found, fp.allowed, fp.ranked), long, k2, taken);
+        t.site().goes_same(t.io(), prog_len(p), ITree::bind(Events::linux(), src.performs(call, n, Succ(k), ch, left)(index, args, results, env), kk),
+            Tau(ITree::bind(Events::linux(), src.procedure_tree(call, n, k, ch, left, index, proc)(va, env), k2)),
             λ s => t.Held(live, env, s.gprs, s.memory),
-            src.performs_tree(call, n, d, index, proc, found_src, args, results, env, k), main)
+            src.performs_tree(call, n, k, index, ch, left, proc, found_src, args, results, env, kk), main)
     }
 }
 
-// Every call at depth `d` runs as the call, by induction on the depth: the
-// procedures are callable with `d` calls of room, their bodies' calls by
-// the depth below.
-theorem Source::calls_at(self src: Source, call: Writers(), n: Nat, d: Nat): d < Nat::pow(2, 64) →
-    (t: Target) → t.procedures = src.procedures → Hosts(t) → t.Answered(call) → t.room = d → t.Calls(call, src.performs(call, n, d)) {
+// At no fuel a call claims nothing.
+theorem Target::calls_zero(self t: Target, src: Source, call: Writers(), n: Nat, ch: Charges, left: Nat): t.Calls(call, src.performs(call, n, 0, ch, left)) {
+    λ p out index args results fit within apart n2 env kk exits next => λ s here resident held => trivial
+}
+
+// Every call at fuel `d` runs as the call, by induction on the fuel: the
+// procedures are callable, their bodies' calls at the fuel below.
+theorem Source::calls_at(self src: Source, call: Writers(), n: Nat, d: Nat):
+    (t: Target) → t.procedures = src.procedures → Hosts(t) → t.Answered(call) → t.Calls(call, src.performs(call, n, d, t.charges(), t.index - t.floor)) {
     match d {
-        Zero => λ _ t tp hosts _ room => t.calls_of(src, call, n, 0, tp, t.procedures_deep(src, call, n, room, hosts)),
-        Succ(d1) => λ small t tp hosts answers room => t.calls_of(src, call, n, Succ(d1), tp,
-            t.procedures_body(src, call, n, d1, room, small, tp, hosts, answers, src.calls_at(call, n, d1, omega(small)))),
+        Zero => λ t tp hosts answers => t.calls_zero(src, call, n, t.charges(), t.index - t.floor),
+        Succ(k) => λ t tp hosts answers => t.calls_of(src, call, n, k, tp,
+            t.procedures_at(src, call, n, k, tp, hosts, answers, src.calls_at(call, n, k))),
     }
 }
 
@@ -1588,9 +1666,9 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, b
     zero: r.Holds(λ _ => zero_byte(), s.memory),
     stack: Stack<X86Memory(r.profile)>(r.profile.linux().fetch, r.profile.linux().data), stack_writes: stack.writes = linux_writes(r.profile.linux()),
     stack_above: r.low.toNat() + r.size <= stack.low.toNat(), stack_canonical: stack.low.toNat() + stack.size <= Nat::pow(2, 47),
-    top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: src.need(homes, bodies) <= stack.size, small: src.depth < Nat::pow(2, 64),
+    top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: src.need(homes, bodies) <= stack.size,
     args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rdi, s.gprs), args)):
-    SimPaidProgram(r.profile.linux(), src.bounded(args), s) {
+    SimPaidProgram(r.profile.linux(), src.bounded(args, src.charges(homes, bodies), src.left(homes, bodies)), s) {
     let call = program_writers(src.functions);
     let layout = src.layout(r.low, homes, bodies);
     let entry = src.entry(r.low, homes, bodies);
@@ -1600,23 +1678,35 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, b
     let c = built.c;
     let emitted = built.emitted;
     let w_whole = built.exit_within;
-    // `main`'s frame: the stack's top words.
+    // `main`'s frame: the stack's top words, and the limit `left` bytes
+    // below it.
     let index = stack.size - 8 * src.words;
-    let needed: (src.main.performed().below(src.main.called(), src.procedures, bodies, homes.places, homes.room_table(src.functions), src.depth) + 8 * (src.words + 1) <= stack.size) = deep;
-    let top_i: (stack.size = index + 8 * src.words) = omega(needed);
+    let left = src.left(homes, bodies);
+    let checks = src.procedures.checks();
+    let rank = src.procedures.len();
+    let below = src.main.performed().below(src.main.called(), src.procedures, bodies, homes.places, homes.room_table(src.functions), checks, rank);
+    let need_is: (src.need(homes, bodies) = 8 * src.words + left) = refl;
+    let below_le: (below + 8 <= left) = Nat::le_max_r(src.room, below + 8);
+    let top_i: (stack.size = index + 8 * src.words) = omega(deep, need_is);
     let framed: (index + 8 * (src.words + 0) <= stack.size) = omega(top_i);
-    let roomy: (src.main.performed().below(src.main.called(), src.procedures, bodies, homes.places, homes.room_table(src.functions), src.depth) + 8 <= index) = omega(top_i, needed);
+    let floor = index - left;
+    let roomy: (floor + below + 8 <= index) = omega(deep, need_is, below_le);
+    let limit: (floor + src.need(homes, bodies) = index + 8 * src.words) = omega(deep, need_is);
+    let left_is: (index - floor = left) = omega(deep, need_is);
     let t = Target(r, src.words, src.words, src.capacities(), homes, ok.left, fits, program, origin, built.laid, args,
-        src.procedures, src.functions, stack, stack_writes, stack_above, stack_canonical, bodies, src.main.performed(), src.main.called(), index, [], home_values(s.gprs), src.depth, framed, roomy);
+        src.procedures, src.functions, stack, stack_writes, stack_above, stack_canonical, bodies, src.main.performed(), src.main.called(),
+        checks, src.procedures.ranks(checks), rank, index, [], home_values(s.gprs), rank, floor, framed, roomy, Nat::le_refl(rank));
+    let ch = src.charges(homes, bodies);
     let hosts: Hosts(t) = Hosts(built.hosted, built.deep, built.deep_within);
     let meets = built.base.links_calls<X86Memory(r.profile)>(homes.places, homes.room_table(src.functions), built.names, program, t.site(), t.laid, stack, program.within_self(),
         src.functions, built.linked);
     let answers: t.Answered(call) = t.answers_of(known, known, meets.right);
     let fns = t.functions_run(call, answers);
     let live = src.main.live_in(homes, []);
-    let saved = Start.saves_rsp(layout, src.depth).frames_main(layout, live);
+    let saved = Start.saves_rsp(layout, src.need(homes, bodies)).frames_main(layout, live);
     let w_c: c.prog.Within(program) = calc { c.prog <= then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall) := Exists(2, refl), <= program := w_whole, };
-    let runs = λ (n: Nat) => src.main.emit_runs(t, call, src.performs(call, n, src.depth), src.calls_at(call, n, src.depth, small, t, refl, hosts, answers, refl), fns,
+    let runs = λ (n: Nat) => src.main.emit_runs(t, call, src.performs(call, n, n, ch, left),
+        j(left_is, λ x _ => t.Calls(call, src.performs(call, n, n, ch, x)), src.calls_at(call, n, n, t, refl, hosts, answers)), fns,
         entry, [], layout.deep_label(), c, emitted, w_c, ok2.right);
     let w_entry = Prog::within_trans(src.main.emit_extends(layout, entry, [], layout.deep_label(), c, emitted), w_c);
     let w_saved = Prog::within_trans(Prog::within_inits(layout, src.buffers, 0, saved), w_entry);
@@ -1629,8 +1719,8 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, b
     let after = λ (end: Env) => t.goes_finish(c.prog, w_whole, Ret(BitVec::zero()),
         λ u => t.Held([], end, u.gprs, u.memory),
         λ u at exited => paid_ret(t.io(), BitVec::zero(), u, u, Exists(Zero, refl), at, exited));
-    let tree = λ (n: Nat) => { let d: ITree<BitVec(64)>(Events::linux()) = ITree::bind(Events::linux(), src.main.denote(call, src.performs(call, n, src.depth), n, src.start(args)), λ (flow: Flow) => Ret(flow.status())); d };
-    λ n => t.goes_start(live, ok2.left, refl, src.depth, refl, small, Start, w_saved, tree(n),
+    let tree = λ (n: Nat) => { let d: ITree<BitVec(64)>(Events::linux()) = ITree::bind(Events::linux(), src.main.denote(call, src.performs(call, n, n, ch, left), n, src.start(args)), λ (flow: Flow) => Ret(flow.status())); d };
+    λ n => t.goes_start(live, ok2.left, refl, src.need(homes, bodies), limit, Start, w_saved, tree(n),
         t.goes_inits(live, tree(n), src.buffers, 0, saved, t.start_env(), caps, w_entry,
             runs(n, n, src.start(args), λ (flow: Flow) => Ret(flow.status()), exits, after)),
         s, here, resident, ⟨zero, ⟨argv, ⟨trans(sym(top), cong_fn<Nat, BitVec(64)>(λ n => stack.at(n), top_i)), λ k _ _ => refl⟩⟩⟩)
@@ -1647,9 +1737,9 @@ theorem native_compile_correct(src: Source, r: DataRegion, homes: Homes, bodies:
     zero: r.Holds(λ _ => zero_byte(), s.memory),
     stack: Stack<X86Memory(r.profile)>(r.profile.linux().fetch, r.profile.linux().data), stack_writes: stack.writes = linux_writes(r.profile.linux()),
     stack_above: r.low.toNat() + r.size <= stack.low.toNat(), stack_canonical: stack.low.toNat() + stack.size <= Nat::pow(2, 47),
-    top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: src.need(homes, bodies) <= stack.size, small: src.depth < Nat::pow(2, 64),
+    top: stack.at(stack.size) = read_gpr(Rsp, s.gprs), deep: src.need(homes, bodies) <= stack.size,
     args: List<List<BitVec(8)>>, argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rdi, s.gprs), args)):
-    SimPaidProgram(r.profile.linux(), src.bounded(args), s) {
+    SimPaidProgram(r.profile.linux(), src.bounded(args, src.charges(homes, bodies), src.left(homes, bodies)), s) {
     let bare: Option<Prog> = match src.main.emit(src.entry(r.low, homes, bodies), src.layout(r.low, homes, bodies), [], 0) { None => None, Some(c) => c.prog.finish() };
     (match src.allocation_ok(homes) as λ a => src.allocation_ok(homes) = a → (match a {
             False => None,
@@ -1657,17 +1747,17 @@ theorem native_compile_correct(src: Source, r: DataRegion, homes: Homes, bodies:
                 Nil => match src.functions { Nil => bare, Cons(_, _) => src.compile_calls(r.low, homes, bodies) },
                 Cons(_, _) => src.compile_calls(r.low, homes, bodies),
             },
-        }) = Some(program) → SimPaidProgram(r.profile.linux(), src.bounded(args), s) {
+        }) = Some(program) → SimPaidProgram(r.profile.linux(), src.bounded(args, src.charges(homes, bodies), src.left(homes, bodies)), s) {
         False => λ _ none => absurd(none),
         True => λ allocated => (match no_procedures: src.procedures {
             Nil => (match no_functions: src.functions {
                 Nil => λ _ => native_compile_correct_bare(src, r, homes, bodies, fits, program, compiled, no_procedures, no_functions, origin, s, here, resident, zero,
-                    stack, stack_writes, stack_above, stack_canonical, top, deep, small, args, argv),
+                    stack, stack_writes, stack_above, stack_canonical, top, deep, args, argv),
                 Cons(_, _) => λ calls => native_compile_correct_calls(src, r, homes, bodies, fits, program, j(sym(allocated), λ v _ => v.IsTrue(), trivial), calls,
-                    origin, s, here, resident, zero, stack, stack_writes, stack_above, stack_canonical, top, deep, small, args, argv),
+                    origin, s, here, resident, zero, stack, stack_writes, stack_above, stack_canonical, top, deep, args, argv),
             }),
             Cons(_, _) => λ calls => native_compile_correct_calls(src, r, homes, bodies, fits, program, j(sym(allocated), λ v _ => v.IsTrue(), trivial), calls,
-                origin, s, here, resident, zero, stack, stack_writes, stack_above, stack_canonical, top, deep, small, args, argv),
+                origin, s, here, resident, zero, stack, stack_writes, stack_above, stack_canonical, top, deep, args, argv),
         }),
     })(refl, compiled)
 }
