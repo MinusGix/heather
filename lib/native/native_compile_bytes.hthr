@@ -264,46 +264,48 @@ theorem Layout::keeps_byte(self layout: Layout, r: DataRegion, env: Env, v: Nat 
 theorem Target::placed_byte(self t: Target, env: Env, m: X86Memory(t.r.profile), placed: t.Placed(env, m), buf, cap: Nat,
     found: t.caps.nth(buf) = Some(cap), i: Nat, below: i < cap, c: BitVec(8)):
     t.Placed(Env(env.words, store_byte(env.buffers, buf, i, c), env.args), t.r.profile.store(m, next_rip(t.r.low, t.layout().buffer_offset(buf) + i), [c])) {
-    let v = placed.witness;
+    let v = placed.cells;
     let o = t.layout().buffer_offset(buf);
     let fits: (o + i + 1 <= t.r.size) = omega(t.layout().buffer_end(buf, cap, found), t.scratch_fits(), below);
     let stack: (t.layout().stack_offset() = t.layout().scratch_offset() + (t.caps.largest() + 1)) = refl;
     let under: (o + i + 1 <= t.layout().stack_offset()) = omega(t.layout().buffer_end(buf, cap, found), stack, below);
-    Exists(t.r.stored_cells(v, o + i, [c]),
-        ⟨t.r.store_holds(v, m, placed.proof.left, o + i, [c], fits),
-         ⟨t.layout().keeps_byte(t.r, env, v, placed.proof.right.left, buf, cap, found, i, below, c),
-          t.stacked_store(env, v, m, o + i, [c], under, placed.proof.right.right)⟩⟩)
+    Placement(cells := t.r.stored_cells(v, o + i, [c]),
+        holds := t.r.store_holds(v, m, placed.holds, o + i, [c], fits),
+        keeps := t.layout().keeps_byte(t.r, env, v, placed.keeps, buf, cap, found, i, below, c),
+        stacked := t.stacked_store(env, v, m, o + i, [c], under, placed.stacked))
 }
 
 // A store past the buffer's end leaves the environment placed as it was.
 theorem Target::placed_past(self t: Target, env: Env, m: X86Memory(t.r.profile), placed: t.Placed(env, m), buf, cap: Nat,
     found: t.caps.nth(buf) = Some(cap), i: Nat, past: cap <= i, c: BitVec(8)):
     t.Placed(Env(env.words, store_byte(env.buffers, buf, i, c), env.args), m) {
-    let v = placed.witness;
-    let keeps = placed.proof.right.left;
+    let v = placed.cells;
+    let keeps = placed.keeps;
     let layout = t.layout();
     let after = Env(env.words, store_byte(env.buffers, buf, i, c), env.args);
     let len = layout.keeps_buffer_len(env, v, keeps, buf, cap, found);
     let same: (after.buffer(buf) = env.buffer(buf)) = trans(env.buffer_stored_here(buf, i, c),
         env.buffer(buf).update_past(i, λ _ => c, j(sym(len), λ n _ => n <= i, past)));
-    Exists(v, ⟨placed.proof.left, ⟨⟨λ k inside => keeps.left(k, inside), λ b cb found_b => match b.eq_dec(buf) {
+    Placement(cells := v, holds := placed.holds, keeps := ⟨λ k inside => keeps.left(k, inside), λ b cb found_b => match b.eq_dec(buf) {
         Inl(here) => (j(sym(here), λ x _ => layout.capacities.nth(x) = Some(cb) → after.buffer(x) = cells_at(v, layout.buffer_offset(x), cb),
             λ found_here => trans(same, keeps.right(buf, cb, found_here))))(found_b),
         Inr(other) => trans(env.buffer_stored_other(buf, i, c, b, other), keeps.right(b, cb, found_b)),
-    }⟩, placed.proof.right.right⟩⟩)
+    }⟩, stacked := placed.stacked)
 }
 
 // The same over the words held: a byte store leaves every word as it was.
 theorem Target::held_byte(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m), buf, cap: Nat,
     found: t.caps.nth(buf) = Some(cap), i: Nat, below: i < cap, c: BitVec(8)):
     t.Held(live, Env(env.words, store_byte(env.buffers, buf, i, c), env.args), g, t.r.profile.store(m, next_rip(t.r.low, t.layout().buffer_offset(buf) + i), [c])) {
-    Exists(held.witness, ⟨t.placed_byte(env.with_words(held.witness), m, held.proof.left, buf, cap, found, i, below, c), held.proof.right⟩)
+    Hold(words := held.words, placed := t.placed_byte(env.with_words(held.words), m, held.placed, buf, cap, found, i, below, c),
+        agreeing := Agreement(homes := held.agreeing.homes, frame := held.agreeing.frame, pins := held.agreeing.pins))
 }
 
 theorem Target::held_past(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m), buf, cap: Nat,
     found: t.caps.nth(buf) = Some(cap), i: Nat, past: cap <= i, c: BitVec(8)):
     t.Held(live, Env(env.words, store_byte(env.buffers, buf, i, c), env.args), g, m) {
-    Exists(held.witness, ⟨t.placed_past(env.with_words(held.witness), m, held.proof.left, buf, cap, found, i, past, c), held.proof.right⟩)
+    Hold(words := held.words, placed := t.placed_past(env.with_words(held.words), m, held.placed, buf, cap, found, i, past, c),
+        agreeing := Agreement(homes := held.agreeing.homes, frame := held.agreeing.frame, pins := held.agreeing.pins))
 }
 
 // ---------------------------------------------------------------------------
@@ -381,7 +383,7 @@ theorem Target::goes_byte_to(self t: Target, live: List<Nat>, env: Env, p: Prog,
         ((read_gpr(Rax, g) = BitVec::ofNat(0)) ∧ ((f.cf = w.borrow_sub_bit(BitVec::ofNat(cap))) ∧ then_q(m))));
     let cap_is = t.cap_word(buf, cap, found);
     let len = λ (g: Gprs) (m: X86Memory(t.r.profile)) (held: t.Held(live, env, g, m)) =>
-        layout.keeps_buffer_len(env.with_words(held.witness), held.proof.left.witness, held.proof.left.proof.right.left, buf, cap, found);
+        layout.keeps_buffer_len(env.with_words(held.words), held.placed.cells, held.placed.keeps, buf, cap, found);
     let lands = t.program.lands_jcc(t.laid, w_jcc.witness, cmp, 0, AE, n, w_jcc.proof, within.witness, loaded, Block([]), within.proof);
     let jumped = t.io().goes_jcc(t.program, t.origin, t.code_fits(), w_jcc.witness, cmp, 0, AE, Succ(n), w_jcc.proof, prog_len(loaded), lands, tree, pre,
         λ u here resident held => {
@@ -400,8 +402,8 @@ theorem Target::goes_byte_to(self t: Target, live: List<Nat>, env: Env, p: Prog,
         },
         λ u here resident held => {
             let hp = held.left;
-            let placed = hp.left.proof.left;
-            let v = placed.witness;
+            let placed = hp.left.placed;
+            let v = placed.cells;
             let cf: (u.flags.cf = True) = Bool::set_of_not(u.flags.cf, !u.flags.cf, refl, held.right);
             let yes: (w.borrow_sub_bit(BitVec::ofNat(cap)) = True) = trans(sym(hp.right.right.right.left), cf);
             let below: (i < cap) = {
@@ -409,11 +411,11 @@ theorem Target::goes_byte_to(self t: Target, live: List<Nat>, env: Env, p: Prog,
                 omega(lt, cap_is)
             };
             let ends: (o + cap <= t.r.size) = Nat::le_trans(o + cap, layout.scratch_offset(), t.r.size, layout.buffer_end(buf, cap, found), t.scratch_fits());
-            let cell = t.read_cell(v, u.memory, placed.proof.left, o + i, omega(ends, below));
+            let cell = t.read_cell(v, u.memory, placed.holds, o + i, omega(ends, below));
             let at: (layout.buffer_at(buf).add(read_gpr(Rcx, u.gprs)) = next_rip(t.r.low, o + i)) =
                 trans(cong_fn<BitVec(64), BitVec(64)>(λ x => layout.buffer_at(buf).add(x), hp.right.left), t.byte_address(buf, cap, found, w, below));
             let byte_is: (buffer_byte(env.buffers, buf, i) = v(o + i)) = trans(env.buffer_byte_is(buf, i),
-                trans(cong_fn<List<BitVec(8)>, BitVec(8)>(λ bytes => bytes.get_or(i, BitVec::zero()), placed.proof.right.left.right(buf, cap, found)),
+                trans(cong_fn<List<BitVec(8)>, BitVec(8)>(λ bytes => bytes.get_or(i, BitVec::zero()), placed.keeps.right(buf, cap, found)),
                     cells_at(v, o, cap).get_or_some(i, BitVec::zero(), v(o + i), cells_nth(v, cap, o, i, below))));
             let rax: (byte_word(v(o + i)) = wanted) = cong_fn<BitVec(8), BitVec(64)>(λ c => byte_word(c), sym(byte_is));
             let s1 = execute_block_normal(adds, u);

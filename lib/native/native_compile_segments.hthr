@@ -317,9 +317,9 @@ theorem Target::goes_word_to_slot(self t: Target, live: List<Nat>, env: Env, p: 
             ((read_word(t.site().data, u.memory, read_gpr(Rbx, u.gprs)) = Some(word)) ∧ post(word_load_after(WordLoad(register, Rbx), word, u)))), loaded);
     λ s here resident held => {
         let rbx: (t.rbx_word(env, id) = t.slot(k)) = j(sym(slot), λ h _ => (match h { InSlot(sk) => t.slot(sk), InReg(_) => env.word(id) }) = t.slot(k), refl);
-        let words = held.left.witness;
-        let placed = held.left.proof.left;
-        let read = t.read_slot(env.with_words(words), placed.witness, s.memory, placed.proof.right.right.right.right.right.left, placed.proof.right.left, k, inside);
+        let words = held.left.words;
+        let placed = held.left.placed;
+        let read = t.read_slot(env.with_words(words), placed.cells, s.memory, placed.stacked.stacking.slots, placed.keeps, k, inside);
         let word: (env.with_words(words).word(k) = env.word(id)) = t.held_slot_word(live, env, s.gprs, s.memory, held.left, id, holds, k, slot);
         let address: (a0.add(read_gpr(Rsp, s.gprs)) = t.slot(k)) = trans(cong_fn<BitVec(64), BitVec(64)>(λ x => a0.add(x),
             t.held_rsp(live, env, s.gprs, s.memory, held.left)), t.slot_address(k));

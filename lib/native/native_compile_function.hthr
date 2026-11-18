@@ -924,10 +924,10 @@ theorem Target::goes_calls<A>(self t: Target, live: List<Nat>, env: Env, p: Prog
         λ s pre => ⟨trans(t.held_rsp(live, env, s.gprs, s.memory, pre.left), frame_i), fits_i⟩,
         λ s pre => {
             let rsp8: (read_gpr(Rsp, s.gprs) = t.stack.at(i1 + 8)) = trans(t.held_rsp(live, env, s.gprs, s.memory, pre.left), frame_i);
-            let cells = layout.cells_from(pre.left.proof.left.witness, 0, t.words);
+            let cells = layout.cells_from(pre.left.placed.cells, 0, t.words);
             let rest = cells ++ t.frames;
             let g0 = write_gpr(Rsp, push_address(s.gprs), s.gprs);
-            let cells_len: (cells.len() = t.words) = layout.cells_from_len(pre.left.proof.left.witness, t.words, 0);
+            let cells_len: (cells.len() = t.words) = layout.cells_from_len(pre.left.placed.cells, t.words, 0);
             let rest_len: (rest.len() = cells.len() + t.frames.len()) = cells.len_append(t.frames);
             let fits_above: (t.index + 8 * rest.len() <= t.stack.size) = omega(rest_len, cells_len, t.framed);
             let run = performs(env, words, accepted, g0, s.gprs.holding_write(Rsp, push_address(s.gprs), passed, call_registers(), trivial, pre.right.left),

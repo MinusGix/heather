@@ -100,12 +100,12 @@ theorem Target::callee_layout(self t: Target, p: Nat, homed: t.bodies.frame(p).h
 // The frames and the slots, read off the claim.
 theorem Target::held_frames(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m)):
     t.FramesAt(m, t.frames, t.index + 8 * t.words) {
-    held.proof.left.proof.right.right.right.right.right.right
+    held.placed.stacked.stacking.frames
 }
 
 theorem Target::held_slots(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m)):
-    t.Slots(held.proof.left.witness, m) {
-    held.proof.left.proof.right.right.right.right.right.left
+    t.Slots(held.placed.cells, m) {
+    held.placed.stacked.stacking.slots
 }
 
 // The claim reads no proof of the activation's.
@@ -364,10 +364,10 @@ theorem Prog::lands_call(self p: Prog, laid: p.laid_out().IsTrue(), k: Nat, befo
 // Two live words in one register hold one number.
 theorem Target::held_shared(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
     x, y: Nat, mx: Mem(x, live), my: Mem(y, live), k: Nat, at_x: t.homes.home(x) = InReg(k), at_y: t.homes.home(y) = InReg(k)): env.number(x) = env.number(y) {
-    let words = held.witness;
+    let words = held.words;
     let values = home_values(g);
     let read: ((i: Nat) → Mem(i, live) → t.homes.home(i) = InReg(k) → (values.get_or(k, BitVec::zero()).toNat() = env.number(i))) = λ i mi at =>
-        j(at, λ h _ => (match h { InSlot(sk) => words.get_or(sk, 0), InReg(r) => values.get_or(r, BitVec::zero()).toNat() }) = env.number(i), held.proof.right.left(i, mi));
+        j(at, λ h _ => (match h { InSlot(sk) => words.get_or(sk, 0), InReg(r) => values.get_or(r, BitVec::zero()).toNat() }) = env.number(i), held.agreeing.homes(i, mi));
     trans(sym(read(x, mx, at_x)), read(y, my, at_y))
 }
 
@@ -377,14 +377,14 @@ theorem Target::held_reg_shared(self t: Target, live, out: List<Nat>, env: Env, 
     held: t.Held(live, env, g, m), sub: (i: Nat) → Mem(i, out) → i ≠ id → Mem(i, live), k: Nat, at: t.homes.home(id) = InReg(k),
     shared: (i: Nat) → Mem(i, out) → i ≠ id → t.homes.home(i) = InReg(k) → env.number(i) = w.toNat()):
     t.Held(out, env.set_word(id, w), write_gpr(home_register(k), w, g), m) {
-    let words = held.witness;
+    let words = held.words;
     let inside = t.homes.in_pool(t.homed, id, k, at);
     let values = home_values(g).put(k, w, BitVec::zero());
     let written: (home_values(write_gpr(home_register(k), w, g)) = values) = home_values_write(w, g, k, inside);
     let before: ((i: Nat) → Mem(i, out) → i ≠ id → (h: Home) → t.homes.home(i) = h →
         ((match h { InSlot(sk) => words.get_or(sk, 0), InReg(r) => home_values(g).get_or(r, BitVec::zero()).toNat() }) = env.number(i))) =
         λ i m2 ne h at_i => j(at_i, λ x _ => (match x { InSlot(sk) => words.get_or(sk, 0), InReg(r) => home_values(g).get_or(r, BitVec::zero()).toNat() }) = env.number(i),
-            held.proof.right.left(i, sub(i, m2, ne)));
+            held.agreeing.homes(i, sub(i, m2, ne)));
     let agrees: t.homes.Agrees(out, env.set_word(id, w), words, values) = λ i m2 => match i.eq_dec(id) {
         Inl(e) => j(sym(e), λ x _ => t.homes.number(x, words, values) = env.set_word(id, w).number(x),
             j(sym(at), λ h _ => (match h { InSlot(sk) => words.get_or(sk, 0), InReg(r) => values.get_or(r, BitVec::zero()).toNat() }) =
@@ -403,12 +403,12 @@ theorem Target::held_reg_shared(self t: Target, live, out: List<Nat>, env: Env, 
         },
     };
     let rsp: (values.get_or(6, BitVec::zero()) = t.frame()) =
-        trans(List::put_other(k, home_values(g), w, BitVec::zero(), 6, λ e => false_elim(omega(e, inside))), held.proof.right.right.left);
+        trans(List::put_other(k, home_values(g), w, BitVec::zero(), 6, λ e => false_elim(omega(e, inside))), held.agreeing.frame);
     let pins: t.Pins(values) = λ r within pinned => trans(List::put_other(k, home_values(g), w, BitVec::zero(), r,
         λ e => absurd(trans(sym(t.homes.pinned_unlived(home_register(k), j(e, λ x _ => t.homes.pinned(home_register(x)) = True, pinned))),
-            t.homes.lived(id, k, at)))), held.proof.right.right.right(r, within, pinned));
-    j(sym(written), λ vs _ => Exists<List<Nat>>(λ ws => t.Placed(env.set_word(id, w).with_words(ws), m) ∧ t.Agreeing(out, env.set_word(id, w), ws, vs)),
-        Exists(words, ⟨held.proof.left, ⟨agrees, ⟨rsp, pins⟩⟩⟩))
+            t.homes.lived(id, k, at)))), held.agreeing.pins(r, within, pinned));
+    Hold(words := words, placed := held.placed,
+        agreeing := j(sym(written), λ vs _ => t.Agreeing(out, env.set_word(id, w), words, vs), Agreement(homes := agrees, frame := rsp, pins := pins)))
 }
 
 // A word set to the number it had: alike everywhere.
@@ -570,7 +570,7 @@ theorem Gprs::holding_write(self g: Gprs, register: Gpr, value: BitVec(64), valu
 
 // The command line, read off the claim.
 theorem Target::held_args(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m)): env.args = t.args {
-    held.proof.left.proof.right.right.left
+    held.placed.stacked.same
 }
 
 // ---------------------------------------------------------------------------
@@ -589,9 +589,9 @@ fn Target::Based(self t: Target, env: Env, room: Nat, v: Nat → BitVec(8), m: X
 }
 
 theorem Target::held_based(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m)):
-    t.Based(env, t.room, held.proof.left.witness, m) {
-    let pp = held.proof.left.proof;
-    ⟨pp.left, ⟨pp.right.left.right, ⟨pp.right.right.left, ⟨pp.right.right.right.left, pp.right.right.right.right.left⟩⟩⟩⟩
+    t.Based(env, t.room, held.placed.cells, m) {
+    let placed = held.placed;
+    ⟨placed.holds, ⟨placed.keeps.right, ⟨placed.stacked.same, ⟨placed.stacked.stacking.argv, placed.stacked.stacking.room⟩⟩⟩⟩
 }
 
 theorem Target::based_agree(self t: Target, env: Env, room: Nat, v, w: Nat → BitVec(8), m: X86Memory(t.r.profile), based: t.Based(env, room, v, m),
@@ -712,8 +712,8 @@ theorem Target::frames_drop(self t: Target, m: X86Memory(t.r.profile), xs: List<
 // The claim between statements, as the stack's words from the frame up:
 // the frame's own, then its frames.
 theorem Target::held_bare(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m)):
-    t.Bare(env, t.room, t.index, t.layout().cells_from(held.proof.left.witness, 0, t.words) ++ t.frames, g, m) {
-    let v = held.proof.left.witness;
+    t.Bare(env, t.room, t.index, t.layout().cells_from(held.placed.cells, 0, t.words) ++ t.frames, g, m) {
+    let v = held.placed.cells;
     let cells = t.layout().cells_from(v, 0, t.words);
     let zero: (t.index + 8 * 0 = t.index) = omega();
     let fits: (0 + t.words <= t.words) = omega();
@@ -989,14 +989,15 @@ theorem Target::held_fresh(self t: Target, live: List<Nat>, env: Env, g: Gprs, m
     let ws = fresh.proof.witness;
     let facts = fresh.proof.proof;
     let based_w = t.based_agree(env, t.room, v, w, m, based.proof, λ p low => facts.left(p, omega(low, layout.frame_cell_at(0))));
-    let placed: t.Placed(env.with_words(ws), m) = Exists(w, ⟨based_w.left, ⟨⟨λ i inside => facts.right.left(i, inside).right, based_w.right.left⟩,
-        ⟨based_w.right.right.left, ⟨based_w.right.right.right.left, ⟨based_w.right.right.right.right,
-        ⟨λ i inside => facts.right.left(i, inside).left, frames⟩⟩⟩⟩⟩⟩);
-    Exists(ws, ⟨placed, ⟨λ i mem => {
+    let placed: t.Placed(env.with_words(ws), m) = Placement(cells := w, holds := based_w.left,
+        keeps := ⟨λ i inside => facts.right.left(i, inside).right, based_w.right.left⟩,
+        stacked := ActivationOf(same := based_w.right.right.left, stacking := Activation(argv := based_w.right.right.right.left,
+            room := based_w.right.right.right.right, slots := λ i inside => facts.right.left(i, inside).left, frames := frames)));
+    Hold(words := ws, placed := placed, agreeing := Agreement(homes := λ i mem => {
         let b = beyond(i, mem);
         j(sym(b.proof.right.left), λ h _ => (match h { InSlot(sk) => ws.get_or(sk, 0), InReg(k) => home_values(g).get_or(k, BitVec::zero()).toNat() }) = env.number(i),
             trans(facts.right.right(b.witness, b.proof.left), sym(b.proof.right.right)))
-    }, ⟨rsp, pins⟩⟩⟩)
+    }, frame := rsp, pins := pins))
 }
 
 // ---------------------------------------------------------------------------
@@ -1020,13 +1021,12 @@ theorem splice_high(low, high: Nat → BitVec(8), p: Nat, above: Nat::pow(2, 47)
 // the region holds now.
 theorem Target::bare_caller(self t: Target, live: List<Nat>, env: Env, g0: Gprs, m0: X86Memory(t.r.profile), held: t.Held(live, env, g0, m0),
     other: Env, g: Gprs, m: X86Memory(t.r.profile),
-    bare: t.Bare(other, t.room, t.index, t.layout().cells_from(held.proof.left.witness, 0, t.words) ++ t.frames, g, m),
+    bare: t.Bare(other, t.room, t.index, t.layout().cells_from(held.placed.cells, 0, t.words) ++ t.frames, g, m),
     kept: (k: Nat) → k < 6 → t.homes.uses(home_register(k)) = True → read_gpr(home_register(k), g) = read_gpr(home_register(k), g0)):
     t.Held(live, Env(env.words, other.buffers, env.args), g, m) {
     let layout = t.layout();
-    let v0 = held.proof.left.witness;
-    let ws = held.witness;
-    let pp = held.proof.left.proof;
+    let v0 = held.placed.cells;
+    let ws = held.words;
     let v1 = bare.left.witness;
     let w = splice(v1, v0);
     let cells = layout.cells_from(v0, 0, t.words);
@@ -1044,11 +1044,13 @@ theorem Target::bare_caller(self t: Target, live: List<Nat>, env: Env, g0: Gprs,
     let based = t.based_agree(other, t.room, v1, w, m, bare.left.proof, λ p low => splice_low(v1, v0, p, low));
     let slots: t.Slots(w, m) = λ i inside => trans(t.slots_of_frames(v0, m, t.words, 0, own, i, omega(), omega(inside, fits)),
         cong_fn<BitVec(64), Option<BitVec(64)>>(λ x => Some(x), sym(high(i))));
-    let placed: t.Placed(Env(env.words, other.buffers, env.args).with_words(ws), m) = Exists(w, ⟨based.left,
-        ⟨⟨λ i inside => trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), high(i)), pp.right.left.left(i, inside)), based.right.left⟩,
-        ⟨pp.right.right.left, ⟨based.right.right.right.left, ⟨based.right.right.right.right, ⟨slots, frames⟩⟩⟩⟩⟩⟩);
-    Exists(ws, ⟨placed, ⟨t.agrees_regs(live, env, ws, g0, g, held.proof.right.left, kept),
-        ⟨bare.right.right, t.pins_regs(g0, g, held.proof.right.right.right, λ k inside pinned => kept(k, inside, t.homes.pinned_used(home_register(k), pinned)))⟩⟩⟩)
+    let placed: t.Placed(Env(env.words, other.buffers, env.args).with_words(ws), m) = Placement(cells := w, holds := based.left,
+        keeps := ⟨λ i inside => trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), high(i)), held.placed.keeps.left(i, inside)), based.right.left⟩,
+        stacked := ActivationOf(same := held.placed.stacked.same, stacking := Activation(argv := based.right.right.right.left,
+            room := based.right.right.right.right, slots := slots, frames := frames)));
+    Hold(words := ws, placed := placed, agreeing := Agreement(homes := t.agrees_regs(live, env, ws, g0, g, held.agreeing.homes, kept),
+        frame := bare.right.right,
+        pins := t.pins_regs(g0, g, held.agreeing.pins, λ k inside pinned => kept(k, inside, t.homes.pinned_used(home_register(k), pinned)))))
 }
 
 // ---------------------------------------------------------------------------
@@ -1521,7 +1523,7 @@ theorem Target::goes_callee_return(self t: Target, after: Env, b: Prog, results:
         w_cu, tree, closing_from);
     let q: Gprs → X86Memory(t.r.profile) → Type = λ g m => t.Held(results, after, g, m) ∧ (g.Holding(regs, aw) ∧ pins(g));
     let leaving: t.Goes(prog_len(p1), tree, λ s => q(s.gprs, s.memory)) = t.goes_weaken(counted, λ s held =>
-            ⟨Exists(held.left.proof.left.witness, t.held_based(results, after, s.gprs, s.memory, held.left)),
+            ⟨Exists(held.left.placed.cells, t.held_based(results, after, s.gprs, s.memory, held.left)),
                 ⟨t.held_frames(results, after, s.gprs, s.memory, held.left), ⟨t.held_rsp(results, after, s.gprs, s.memory, held.left), held.right⟩⟩⟩);
     let words = t.goes_words_to(results, after, tree, q, results, regs, b, λ i m => ⟨inside(i, m), m⟩, trivial, trivial, w_p1, leaving);
     t.goes_weaken(words,
@@ -1602,9 +1604,9 @@ theorem Target::ends_taken(self t: Target, live: List<Nat>, env: Env, called: Pr
     within: then(called, Block([MovRR(R10, Rbx)])).Within(t.program), tree: ITree<BitVec(64)>(Events::linux()), answer: Answer):
     t.Taken(live, env, prog_len(then(called, Block([MovRR(R10, Rbx)]))), answer, tree) →
     t.Ends(answer, env, write_gpr(Rsp, push_address(s.gprs), s.gprs), next_rip(t.origin, prog_len(called)),
-        t.layout().cells_from(held.proof.left.witness, 0, t.words) ++ t.frames, tree) {
+        t.layout().cells_from(held.placed.cells, 0, t.words) ++ t.frames, tree) {
     let rets = result_registers();
-    let rest = t.layout().cells_from(held.proof.left.witness, 0, t.words) ++ t.frames;
+    let rest = t.layout().cells_from(held.placed.cells, 0, t.words) ++ t.frames;
     match answer {
         Returned(results, buffers) => λ taken u rip resident bare kept holding => {
             let other = Env(env.words, buffers, env.args);
