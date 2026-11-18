@@ -318,7 +318,7 @@ impl Members<'_> {
                 span,
             };
         }
-        Ok(DotResolution::Method(Expr {
+        let call = Expr {
             kind: ExprKind::App {
                 head: Box::new(head),
                 args,
@@ -327,7 +327,23 @@ impl Members<'_> {
                 goal_oriented: false,
             },
             span,
-        }))
+        };
+        // `t.Held(live, …)` at `record Target::Held(self t: Target, live: …)`:
+        // the receiver and the arguments are the record's value parameters, so
+        // the call is the record's *type*, never its constructor — which a
+        // bare `Target::Held(…)` in an expression position would read first,
+        // as `Hold(…)` does. Written as the type it is
+        // (issues/record-in-type-namespace.md).
+        if member_selected
+            && tyargs.is_empty()
+            && self.lookup_inductive(name).is_some_and(|ind| ind.is_record && !ind.valparams.is_empty())
+        {
+            return Ok(DotResolution::Method(Expr {
+                kind: ExprKind::TyLit(Box::new(Ty { kind: heather_syntax::TyKind::OfExpr(Box::new(call)), span })),
+                span,
+            }));
+        }
+        Ok(DotResolution::Method(call))
     }
 
     /// A dot call `recv.m(a)` of a `mut self` method that no statement

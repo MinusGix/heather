@@ -129,7 +129,7 @@ record ArgRegs(t: Target, buf, cap: Nat, pointer: BitVec(64), i: Nat, vals: List
     homes: home_values(g) = vals,
 }
 
-record ArgAt(t: Target, v: Nat → BitVec(8), buf, cap: Nat, arg: List<BitVec(8)>, pointer: BitVec(64), i: Nat,
+record Target::ArgAt(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, arg: List<BitVec(8)>, pointer: BitVec(64), i: Nat,
     vals: List<BitVec(64)>, g: Gprs, m: X86Memory(t.r.profile)) {
     within: i <= arg.len(),
     regs: ArgRegs(t, buf, cap, pointer, i, vals, g),
@@ -251,7 +251,7 @@ theorem Target::arg_cells_filled(self t: Target, env: Env, v: Nat → BitVec(8),
     let filled: (fill(env.buffer(buf), arg) = fill(env.buffer(buf), bytes)) = trans(fill_take(env.buffer(buf), arg),
         cong_fn<Nat, List<BitVec(8)>>(λ n => fill(env.buffer(buf), arg.take(n)), len));
     j(sym(filled), λ bs _ => t.Placed(env.set_buffer(buf, bs), m),
-        Placement(cells := w, holds := cells.holds, keeps := kept, stacked := ActivationOf(same := same, stacking := cells.stacking)))
+        Target::Placed(cells := w, holds := cells.holds, keeps := kept, stacked := Target::Stacked(same := same, stacking := cells.stacking)))
 }
 
 // ---------------------------------------------------------------------------
@@ -266,7 +266,7 @@ fn ArgByte(arg: List<BitVec(8)>, i: Nat, byte: BitVec(8)) → Type {
 // The byte RSI points at, read below the canonical boundary.
 theorem Target::arg_byte(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, arg: List<BitVec(8)>, pointer: BitVec(64),
     room: pointer.toNat() + arg.len() + 1 <= Nat::pow(2, 47), i: Nat, vals: List<BitVec(64)>, g: Gprs, m: X86Memory(t.r.profile),
-    at: ArgAt(t, v, buf, cap, arg, pointer, i, vals, g, m)):
+    at: t.ArgAt(v, buf, cap, arg, pointer, i, vals, g, m)):
     Exists<BitVec(8)>(λ byte => (read_gpr(Rsi, g).toNat() < Nat::pow(2, 47)) ∧
         ((t.site().data.read(m, read_gpr(Rsi, g)) = Some(byte)) ∧ ArgByte(arg, i, byte))) {
     let a = word_of_nat(64, pointer.toNat() + i);
@@ -310,12 +310,12 @@ theorem count_borrow(a, b: BitVec(64), i, cap: Nat, value: a.toNat() = i, bound:
 // The adds: the count, RSI and RDI one further.
 theorem Target::arg_step(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, arg: List<BitVec(8)>, pointer: BitVec(64), i: Nat,
     vals: List<BitVec(64)>, s: MachineState<X86Memory(t.r.profile)>, next: ArgNext(t, v, buf, cap, arg, pointer, i, vals, s.gprs, s.memory)):
-    ArgAt(t, v, buf, cap, arg, pointer, Succ(i), vals,
+    t.ArgAt(v, buf, cap, arg, pointer, Succ(i), vals,
         execute_block_normal([AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))], s).gprs,
         execute_block_normal([AddRI8(Rsi, BitVec::ofNat(1)), AddRI8(Rdi, BitVec::ofNat(1)), AddRI8(R8, BitVec::ofNat(1))], s).memory) {
     let regs = next.regs;
     let one = λ (x: BitVec(64)) (y: BitVec(64)) (same: x = y) => cong_fn<BitVec(64), BitVec(64)>(λ z => z.add(BitVec::ofNat(1)), same);
-    ArgAt(within := next.below, cells := next.cells, regs := ArgRegs(
+    Target::ArgAt(within := next.below, cells := next.cells, regs := ArgRegs(
         count := trans(one(read_gpr(R8, s.gprs), word_of_nat(64, i), regs.count), sym(word_of_nat_succ(i))),
         capacity := regs.capacity,
         source := trans(one(read_gpr(Rsi, s.gprs), word_of_nat(64, pointer.toNat() + i), regs.source), sym(word_of_nat_succ(pointer.toNat() + i))),
@@ -330,9 +330,9 @@ theorem Target::arg_step(self t: Target, v: Nat → BitVec(8), buf, cap: Nat, ar
 theorem Run::arg_round(self r: Run, loops: Nat → Nat → Gprs → X86Memory(r.t.r.profile) → Type, v: Nat → BitVec(8), buf, cap: Nat,
     found: r.t.caps.nth(buf) = Some(cap), arg: List<BitVec(8)>, pointer: BitVec(64), room: pointer.toNat() + arg.len() + 1 <= Nat::pow(2, 47),
     vals: List<BitVec(64)>, o: Nat, leave, again: r.State() → Type, s: r.State(), resident: r.t.site().Resident(s.memory), i: Nat,
-    at: ArgAt(r.t, v, buf, cap, arg, pointer, i, vals, s.gprs, s.memory),
-    fin: (g: Gprs) → (f: Flags) → (rip: BitVec(64)) → ArgAt(r.t, v, buf, cap, arg, pointer, arg.len(), vals, g, s.memory) → leave(MachineState(g, f, rip, s.memory)),
-    step: i < arg.len() → (u: r.State()) → ArgAt(r.t, v, buf, cap, arg, pointer, Succ(i), vals, u.gprs, u.memory) → again(u)):
+    at: r.t.ArgAt(v, buf, cap, arg, pointer, i, vals, s.gprs, s.memory),
+    fin: (g: Gprs) → (f: Flags) → (rip: BitVec(64)) → r.t.ArgAt(v, buf, cap, arg, pointer, arg.len(), vals, g, s.memory) → leave(MachineState(g, f, rip, s.memory)),
+    step: i < arg.len() → (u: r.State()) → r.t.ArgAt(v, buf, cap, arg, pointer, Succ(i), vals, u.gprs, u.memory) → again(u)):
     r.cx().from(Succ(o)).arg_byte(Label(Succ(o))).cut().code.inside(r, loops, Some(o), leave, again)(s) {
     let t = r.t;
     let g = s.gprs;
@@ -346,7 +346,7 @@ theorem Run::arg_round(self r: Run, loops: Nat → Nat → Gprs → X86Memory(r.
     LoadsByte(byte := byte, low := b.proof.left, read := b.proof.right.left, after := Leaves(out := refl,
         // At the NUL every byte is copied.
         taken := λ nul rip => match b.proof.right.right {
-            Inl(end) => fin(tested.gprs, tested.flags, rip, j(end.left, λ n _ => ArgAt(t, v, buf, cap, arg, pointer, n, vals, g, m), at)),
+            Inl(end) => fin(tested.gprs, tested.flags, rip, j(end.left, λ n _ => t.ArgAt(v, buf, cap, arg, pointer, n, vals, g, m), at)),
             Inr(more) => absurd(trans(sym(nul), byte_tests_nonzero(byte, more.right))),
         },
         straight := λ not_nul rip => match b.proof.right.right {
@@ -439,7 +439,7 @@ record ArgLeft(t: Target, v: Nat → BitVec(8), buf, cap, k: Nat, vals: List<Bit
     present: t.args.nth(k) = Some(arg),
     room: pointer.toNat() + arg.len() + 1 <= Nat::pow(2, 47),
     left: done + n = arg.len(),
-    at: ArgAt(t, v, buf, cap, arg, pointer, done, vals, g, m),
+    at: t.ArgAt(v, buf, cap, arg, pointer, done, vals, g, m),
 }
 
 // Where the two ways meet: RAX is what `len` is to hold, in an environment
@@ -500,8 +500,8 @@ theorem Target::arg_found(self t: Target, live, out: List<Nat>, env: Env, index,
         let got: (env.args.nth(k) = Some(a)) = j(sym(same), λ xs _ => xs.nth(k) = Some(a), left.present);
         let again: r.State() → Type = λ x => Exists<Nat>(λ fewer => (fewer < n) ∧ ArgLeft(t, v, buf, cap, k, vals, fewer, x.gprs, x.memory));
         r.arg_round(λ _ => ArgLeft(t, v, buf, cap, k, vals), v, buf, cap, found, a, left.pointer, left.room, vals, names + 3, done, again, w, resident, left.done, left.at,
-            λ g f rip all to => Exists(filled, ⟨Hold(words := words, placed := t.arg_cells_filled(env.with_words(words), v, keeps, same, buf, cap, found, a, left.pointer, a.len(), refl, w.memory, all.cells),
-                    agreeing := j(sym(all.regs.homes), λ vs _ => t.Agreeing(live, filled, words, vs), Agreement(homes := agrees.homes, frame := agrees.frame, pins := agrees.pins))),
+            λ g f rip all to => Exists(filled, ⟨Target::Held(words := words, placed := t.arg_cells_filled(env.with_words(words), v, keeps, same, buf, cap, found, a, left.pointer, a.len(), refl, w.memory, all.cells),
+                    agreeing := j(sym(all.regs.homes), λ vs _ => t.Agreeing(live, filled, words, vs), Target::Agreeing(homes := agrees.homes, frame := agrees.frame, pins := agrees.pins))),
                 trans(cong_fn<BitVec(64), Env>(λ y => filled.set_word(len, y), trans(all.regs.count, word_of_nat_eq_ofNat(64, a.len()))),
                     sym(env.arg_present(k, buf, len, a, got)))⟩),
             λ below x next => {
@@ -517,7 +517,7 @@ theorem Target::arg_found(self t: Target, live, out: List<Nat>, env: Env, index,
         read := j(sym(address), λ y _ => read_word(t.site().data, m, y) = Some(pointer), slot_word.right),
         after := Loops(round := round, entered := Exists(arg.len(),
             ArgLeft(arg := arg, pointer := pointer, done := 0, present := present.proof, room := entry.proof.right.left, left := start,
-                at := ArgAt(within := Nat::le_of_lt(0, Succ(arg.len()), omega()), cells := cells,
+                at := Target::ArgAt(within := Nat::le_of_lt(0, Succ(arg.len()), omega()), cells := cells,
                     regs := ArgRegs(count := refl, capacity := refl, source := sym(word_of_nat_toNat(64, pointer)), dest := t.buffer_rip(buf), homes := homes))))))
 }
 

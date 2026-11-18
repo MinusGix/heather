@@ -894,11 +894,11 @@ theorem Target::held_fresh(self t: Target, live: List<Nat>, env: Env, g: Gprs, m
     let ws = fresh.proof.witness;
     let facts = fresh.proof.proof;
     let based_w = t.based_agree(env, t.room, v, w, m, based.proof, λ p low => facts.left(p, omega(low, layout.frame_cell_at(0))));
-    let placed: t.Placed(env.with_words(ws), m) = Placement(cells := w, holds := based_w.left,
+    let placed: t.Placed(env.with_words(ws), m) = Target::Placed(cells := w, holds := based_w.left,
         keeps := ⟨λ i inside => facts.right.left(i, inside).right, based_w.right.left⟩,
-        stacked := ActivationOf(same := based_w.right.right.left, stacking := Activation(argv := based_w.right.right.right.left,
+        stacked := Target::Stacked(same := based_w.right.right.left, stacking := Target::Stacking(argv := based_w.right.right.right.left,
             room := based_w.right.right.right.right, slots := λ i inside => facts.right.left(i, inside).left, frames := frames)));
-    Hold(words := ws, placed := placed, agreeing := Agreement(homes := λ i mem => {
+    Target::Held(words := ws, placed := placed, agreeing := Target::Agreeing(homes := λ i mem => {
         let b = beyond(i, mem);
         j(sym(b.proof.right.left), λ h _ => (match h { InSlot(sk) => ws.get_or(sk, 0), InReg(k) => home_values(g).get_or(k, BitVec::zero()).toNat() }) = env.number(i),
             trans(facts.right.right(b.witness, b.proof.left), sym(b.proof.right.right)))
@@ -949,11 +949,11 @@ theorem Target::bare_caller(self t: Target, live: List<Nat>, env: Env, g0: Gprs,
     let based = t.based_agree(other, t.room, v1, w, m, bare.left.proof, λ p low => splice_low(v1, v0, p, low));
     let slots: t.Slots(w, m) = λ i inside => trans(t.slots_of_frames(v0, m, t.words, 0, own, i, omega(), omega(inside, fits)),
         cong_fn<BitVec(64), Option<BitVec(64)>>(λ x => Some(x), sym(high(i))));
-    let placed: t.Placed(Env(env.words, other.buffers, env.args).with_words(ws), m) = Placement(cells := w, holds := based.left,
+    let placed: t.Placed(Env(env.words, other.buffers, env.args).with_words(ws), m) = Target::Placed(cells := w, holds := based.left,
         keeps := ⟨λ i inside => trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), high(i)), held.placed.keeps.left(i, inside)), based.right.left⟩,
-        stacked := ActivationOf(same := held.placed.stacked.same, stacking := Activation(argv := based.right.right.right.left,
+        stacked := Target::Stacked(same := held.placed.stacked.same, stacking := Target::Stacking(argv := based.right.right.right.left,
             room := based.right.right.right.right, slots := slots, frames := frames)));
-    Hold(words := ws, placed := placed, agreeing := Agreement(homes := t.agrees_regs(live, env, ws, g0, g, held.agreeing.homes, kept),
+    Target::Held(words := ws, placed := placed, agreeing := Target::Agreeing(homes := t.agrees_regs(live, env, ws, g0, g, held.agreeing.homes, kept),
         frame := bare.right.right,
         pins := t.pins_regs(g0, g, held.agreeing.pins, λ k inside pinned => kept(k, inside, t.homes.pinned_used(home_register(k), pinned)))))
 }
