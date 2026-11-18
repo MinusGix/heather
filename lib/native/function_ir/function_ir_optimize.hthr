@@ -817,6 +817,32 @@ fn found_spelled(found: Option<Found>) → List<Nat> {
     }
 }
 
+// The function a search made, or the one it was asked of where it found
+// nothing: what the next search is asked of, with no spelling between.
+fn found_made(found: Option<Found>, otherwise: Function) → Function {
+    match found { None => otherwise, Some(stage) => stage.made }
+}
+
+fn spellings_same(xs, ys: List<Nat>) → Bool {
+    match xs {
+        Nil => match ys { Nil => True, Cons(_, _) => False },
+        Cons(x, rest) => match ys { Nil => False, Cons(y, more) => x.same(y) && spellings_same(rest, more) },
+    }
+}
+
+// What a search answered, as a number the compiler's evaluator reads: 0
+// nothing, 1 the function `before` again (two functions are the same where
+// their spellings are), 2 another function.
+fn found_kind(found: Option<Found>, before: Option<Function>) → List<Nat> {
+    match found {
+        None => [0],
+        Some(stage) => match before {
+            None => [2],
+            Some(function) => match spellings_same(stage.made.spelled()([]), function.spelled()([])) { True => [1], False => [2] },
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // The functions a program's roots reach
 

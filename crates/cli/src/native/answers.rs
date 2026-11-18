@@ -117,13 +117,16 @@ pub(super) struct Reading<'a> {
     chain: Sha256,
     /// Defined and not yet elaborated, in order.
     queued: Vec<(String, String)>,
+    /// The machine the reads that miss run on, started by the first: a
+    /// read spelled from an earlier one's definitions finds them evaluated.
+    machine: Option<function_ir_source::RunSession>,
 }
 
 impl<'a> Reading<'a> {
     pub(super) fn new(elab: &Elaborator, answers: &'a Answers) -> Reading<'a> {
         let mut chain = Sha256::new();
         chain.update(&answers.base);
-        Reading { fork: elab.fork(), answers, chain, queued: Vec::new() }
+        Reading { fork: elab.fork(), answers, chain, queued: Vec::new(), machine: None }
     }
 
     /// Defines a module: elaborated before the first read that misses, and
@@ -157,7 +160,8 @@ impl<'a> Reading<'a> {
         let key = hex(&h.finish());
         if let Some(numbers) = self.answers.get(&key) { return Ok(numbers); }
         self.elaborate()?;
-        let numbers = function_ir_source::evaluate_numbers(&self.fork, name).map_err(|e| e.to_string())?;
+        let machine = self.machine.get_or_insert_with(|| function_ir_source::RunSession::new(&self.fork));
+        let numbers = function_ir_source::evaluate_numbers_in(machine, &self.fork, name).map_err(|e| e.to_string())?;
         self.answers.evaluated.borrow_mut().push((key, numbers.clone()));
         Ok(numbers)
     }
