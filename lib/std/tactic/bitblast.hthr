@@ -2300,6 +2300,61 @@ theorem layout_imp(h, r: BVPred, bits: Nat → Bool, all: POr(PNot(h), r).eval(b
     trans(sym(cong_fn(λ (t: Bool) => !t || r.eval(bits), hh)), all)
 }
 
+// Claims joined by `∧ ∨ ↔ ¬` (docs/tactics/bv-decide-design.md): each
+// connective's Boolean verdict and its statement, in both directions. A
+// part's own bridge is the function argument (`f`: from its verdict to the
+// part, `g`: back), so a connective's read-back is its parts' composed.
+theorem layout_and(P, Q: Type, a: P, b: Q): P ∧ Q { And(a, b) }
+theorem layout_and_l(P, Q: Type, h: P ∧ Q): P { h.left }
+theorem layout_and_r(P, Q: Type, h: P ∧ Q): Q { h.right }
+theorem layout_bool_and_l(p, q: Bool, h: (p && q) = True): p = True { Bool::and_true_parts(p, q, h).left }
+theorem layout_bool_and_r(p, q: Bool, h: (p && q) = True): q = True { Bool::and_true_parts(p, q, h).right }
+theorem layout_bool_and(p, q: Bool, hp: p = True, hq: q = True): (p && q) = True { rewrite(hp, hq, refl) }
+theorem layout_or(p, q: Bool, P, Q: Type, f: p = True → P, g: q = True → Q, h: (p || q) = True): P ∨ Q {
+    match e: p {
+        True => Inl(f(e)),
+        False => Inr(g(h)),
+    }
+}
+theorem layout_or_hyp(p, q: Bool, P, Q: Type, f: P → p = True, g: Q → q = True, h: P ∨ Q): (p || q) = True {
+    match h {
+        Inl(a) => rewrite(f(a), refl),
+        Inr(b) => {
+            let right = g(b);
+            match p { True => refl, False => right }
+        },
+    }
+}
+theorem layout_not(p: Bool, P: Type, g: P → p = True, h: !p = True): ¬P {
+    λ (a: P) => {
+        let wrong: (!True = True) = rewrite(g(a), in := h);
+        absurd(wrong)
+    }
+}
+theorem layout_not_hyp(p: Bool, P: Type, f: p = True → P, h: ¬P): !p = True {
+    match e: p { True => false_elim(h(f(e))), False => refl }
+}
+theorem layout_iff_p(p, q: Bool, P, Q: Type, fp: p = True → P, gp: P → p = True, fq: q = True → Q, gq: Q → q = True,
+    h: BitVec::bool_eq(p, q) = True): P ↔ Q {
+    let same: (p = q) = BitVec::bool_eq_true(p, q, h);
+    Iff(mp := λ (a: P) => fq(trans(sym(same), gp(a))), mpr := λ (b: Q) => fp(trans(same, gq(b))))
+}
+theorem layout_iff_p_hyp(p, q: Bool, P, Q: Type, fp: p = True → P, gp: P → p = True, fq: q = True → Q, gq: Q → q = True,
+    h: P ↔ Q): BitVec::bool_eq(p, q) = True {
+    match ep: p {
+        True => match eq: q {
+            True => refl,
+            False => absurd(gq(h.mp(fp(ep)))),
+        },
+        False => match eq: q {
+            True => absurd(gp(h.mpr(fq(eq)))),
+            False => refl,
+        },
+    }
+}
+theorem layout_false(h: False = True): False { absurd(h) }
+theorem layout_false_hyp(h: False): False = True { false_elim(h) }
+
 // A closed side condition, `(o + w).leb(K) = True` at numerals, by evaluation.
 theorem layout_ok(): True = True { refl }
 

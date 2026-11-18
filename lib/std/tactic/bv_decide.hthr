@@ -83,6 +83,7 @@ record BVOps {
     eq_bit: Nat, ult: Nat, slt: Nat, bit_at: Nat, and: Nat, or: Nat, not: Nat, iff: Nat, bool: Nat,
     take: Nat, drop: Nat, head: Nat, xor: Nat, lt: Nat, le: Nat, not_p: Nat,
     nat: Nat, to_nat: Nat, leb: Nat, same: Nat, succ: Nat, nat_le: Nat, nat_lt: Nat, false_ty: Nat, nat_add: Nat,
+    and_p: Nat, or_p: Nat, iff_p: Nat,
 }
 
 fn bv_ref(name: String) → Tac<Nat> {
@@ -132,8 +133,11 @@ fn bv_ops() → Tac<BVOps> {
     let nat_lt <- bv_ref("nat::Nat::Lt");
     let false_ty <- bv_ref("False");
     let nat_add <- bv_ref("nat::Nat::add");
+    let and_p <- bv_ref("logic::And");
+    let or_p <- bv_ref("logic::Or");
+    let iff_p <- bv_ref("logic::Iff");
     pure(BVOps(word, add, sub, mul, neg, band, bor, bxor, compl, shl, shr, of_nat, zext, trunc, sext, concat, eq_bit, ult, slt, bit_at, and, or, not, iff, bool,
-        take, drop, head, xor, lt, le, not_p, nat, to_nat, leb, same, succ, nat_le, nat_lt, false_ty, nat_add))
+        take, drop, head, xor, lt, le, not_p, nat, to_nat, leb, same, succ, nat_le, nat_lt, false_ty, nat_add, and_p, or_p, iff_p))
 }
 
 // ---------------------------------------------------------------------------
@@ -983,20 +987,152 @@ fn bv_read_claim(ops: BVOps, c: BVClaim, st: BVAtoms) → Tac<BVRead> {
     }
 }
 
-// A hypothesis the tactic reads: its proof and its predicate.
-record BVHyp { proof: LocalRef, claim: BVClaim, pred: BVPred }
+// ---------------------------------------------------------------------------
+// Statements: claims joined by `∧ ∨ ↔ ¬`, and `False`. Each part keeps its
+// own statement (`ta`, `tb`), the binder type of a bridge that takes a
+// proof of it.
 
-// The hypotheses among `locals` that read as claims, their atoms added to
-// `st`; the others are left out.
+inductive BVStmt {
+    SClaim(c: BVClaim, p: BVPred),
+    SAnd(a: BVStmt, b: BVStmt, ta: Handle, tb: Handle),
+    SOr(a: BVStmt, b: BVStmt, ta: Handle, tb: Handle),
+    SNot(a: BVStmt, ta: Handle),
+    SIff(a: BVStmt, b: BVStmt, ta: Handle, tb: Handle),
+    SFalse,
+}
+
+fn BVStmt::pred(self s: BVStmt) → BVPred {
+    match s {
+        SClaim(_, p) => p,
+        SAnd(a, b, _, _) => PAnd(a.pred(), b.pred()),
+        SOr(a, b, _, _) => POr(a.pred(), b.pred()),
+        SNot(a, _) => PNot(a.pred()),
+        SIff(a, b, _, _) => PIff(a.pred(), b.pred()),
+        SFalse => PConst(False),
+    }
+}
+
+fn bv_stmt_claim(ops: BVOps, t: Handle, st: BVAtoms) → Tac<Pair<BVStmt, BVAtoms>> {
+    let c <- bv_claim(ops, t);
+    let r <- bv_read_claim(ops, c, st);
+    pure(Pair(SClaim(c, r.bool()), r.st))
+}
+
+// `¬p`'s claim, when `bv_negated` reads one (a refuted comparison).
+fn bv_stmt_refuted(ops: BVOps, p: Handle, st: BVAtoms) → Tac<Option<Pair<BVStmt, BVAtoms>>> {
+    let tried <- attempt(bv_negated(ops, p));
+    match tried {
+        Done(c) => bv_read_claim(ops, c, st).bind(λ r => pure(Some(Pair(SClaim(c, r.bool()), r.st)))),
+        Failed(_, _) => pure(None),
+    }
+}
+
+// The negation `t` of `p`, or `t` as a claim: `inner` reads it.
+fn bv_stmt_negation(ops: BVOps, t: Handle, p: Option<Handle>, st: BVAtoms, inner: Handle → BVAtoms → Tac<Pair<BVStmt, BVAtoms>>) → Tac<Pair<BVStmt, BVAtoms>> {
+    match p {
+        None => bv_stmt_claim(ops, t, st),
+        Some(p) => bv_stmt_refuted(ops, p, st).bind(λ r => match r {
+            Some(done) => pure(done),
+            None => inner(p, st).bind(λ ri => pure(Pair(SNot(ri.fst, p), ri.snd))),
+        }),
+    }
+}
+
+// The negated statement of `t`, `¬p` or `p → False`.
+fn bv_negand(ops: BVOps, t: Handle) → Tac<Option<Handle>> {
+    let v <- view(t);
+    match v {
+        HGlobal(g, _, args) => match args {
+            // `Not(P)`'s `P` is a type held as a term: read as the type.
+            Cons(p, Nil) => match g.id.same(ops.not_p) {
+                True => as_type(Hd(p)).bind(λ c => match c { Accepted(ty) => pure(Some(ty)), Refused(_) => pure(Some(p)) }),
+                False => pure(None),
+            },
+            _ => pure(None),
+        },
+        HPi(p) => {
+            let o <- open(t, "_");
+            match o {
+                Accepted(op) => view(op.body).bind(λ vb => match vb {
+                    HGlobal(f, _, Nil) => pure(match f.id.same(ops.false_ty) && !op.dependent { True => Some(p), False => None }),
+                    _ => pure(None),
+                }),
+                Refused(_) => pure(None),
+            }
+        },
+        _ => pure(None),
+    }
+}
+
+// Which connective `t` is, with its two parts: 0 for `∧`, 1 `∨`, 2 `↔`.
+fn bv_connective(ops: BVOps, t: Handle) → Tac<Option<Pair<Nat, Pair<Handle, Handle>>>> {
+    let v <- view(t);
+    match v {
+        HGlobal(g, _, args) => match args {
+            Cons(a, rest) => match rest {
+                Cons(b, Nil) => pure(match g.id.same(ops.and_p) {
+                    True => Some(Pair(0, Pair(a, b))),
+                    False => match g.id.same(ops.or_p) {
+                        True => Some(Pair(1, Pair(a, b))),
+                        False => match g.id.same(ops.iff_p) { True => Some(Pair(2, Pair(a, b))), False => None },
+                    },
+                }),
+                _ => pure(None),
+            },
+            Nil => pure(None),
+        },
+        _ => pure(None),
+    }
+}
+
+fn bv_is_false(ops: BVOps, t: Handle) → Tac<Bool> {
+    let v <- view(t);
+    match v { HGlobal(g, _, Nil) => pure(g.id.same(ops.false_ty)), _ => pure(False) }
+}
+
+// The statement `t`, its atoms added to `st`. `fuel` bounds its depth.
+fn bv_stmt(ops: BVOps, t: Handle, st: BVAtoms, fuel: Nat) → Tac<Pair<BVStmt, BVAtoms>> {
+    match fuel {
+        Zero => bv_stmt_claim(ops, t, st),
+        Succ(f) => {
+            let conn <- bv_connective(ops, t);
+            match conn {
+                Some(c) => {
+                    let a = c.snd.fst;
+                    let b = c.snd.snd;
+                    let ra <- bv_stmt(ops, a, st, f);
+                    let rb <- bv_stmt(ops, b, ra.snd, f);
+                    pure(Pair(match c.fst { Zero => SAnd(ra.fst, rb.fst, a, b), Succ(i) => match i { Zero => SOr(ra.fst, rb.fst, a, b), Succ(_) => SIff(ra.fst, rb.fst, a, b) } }, rb.snd))
+                },
+                None => {
+                    let falsum <- bv_is_false(ops, t);
+                    match falsum {
+                        True => pure(Pair(SFalse, st)),
+                        False => {
+                            let p <- bv_negand(ops, t);
+                            bv_stmt_negation(ops, t, p, st, λ q st2 => bv_stmt(ops, q, st2, f))
+                        },
+                    }
+                },
+            }
+        },
+    }
+}
+
+// A hypothesis the tactic reads: its proof and its statement.
+record BVHyp { proof: LocalRef, stmt: BVStmt }
+
+// The hypotheses among `locals` that read as statements, their atoms added
+// to `st`; the others are left out.
 fn bv_hyps(ops: BVOps, locals: List<LocalInfo>, st: BVAtoms) → Tac<Pair<List<BVHyp>, BVAtoms>> {
     match locals {
         Nil => pure(Pair([], st)),
         Cons(h, rest) => {
-            let tried <- attempt(bv_claim(ops, h.ty).bind(λ c => bv_read_claim(ops, c, st).bind(λ r => pure(Pair(c, r)))));
+            let tried <- attempt(bv_stmt(ops, h.ty, st, 16));
             match tried {
-                Done(cr) => {
-                    let more <- bv_hyps(ops, rest, cr.snd.st);
-                    pure(Pair(Cons(BVHyp(h.ref, cr.fst, cr.snd.bool()), more.fst), more.snd))
+                Done(r) => {
+                    let more <- bv_hyps(ops, rest, r.snd);
+                    pure(Pair(Cons(BVHyp(h.ref, r.fst), more.fst), more.snd))
                 },
                 Failed(_, _) => bv_hyps(ops, rest, st),
             }
@@ -1008,7 +1144,7 @@ fn bv_hyps(ops: BVOps, locals: List<LocalInfo>, st: BVAtoms) → Tac<Pair<List<B
 fn bv_under(hs: List<BVHyp>, goal: BVPred) → BVPred {
     match hs {
         Nil => goal,
-        Cons(h, rest) => POr(PNot(h.pred), bv_under(rest, goal)),
+        Cons(h, rest) => POr(PNot(h.stmt.pred()), bv_under(rest, goal)),
     }
 }
 
@@ -1044,17 +1180,87 @@ fn bv_bridge(l: BVLemmas, k: Nat, ws: List<BVWord>, bools: Expr, c: BVClaim, as_
     }
 }
 
+// What a statement's bridges need: the layout, how a part's predicate is
+// placed and quoted, and the bit stream the predicate is true at (`bits`,
+// read off the refutation's statement).
+record BVCx {
+    l: BVLemmas, q: BVQuote, k: Nat, ws: List<BVWord>, bools: Expr, offs: List<Nat>, wbits: Nat, bits: Handle,
+    eval: Handle, and_i: Handle, and_l: Handle, and_r: Handle, band_l: Handle, band_r: Handle, band: Handle,
+    or_g: Handle, or_h: Handle, not_g: Handle, not_h: Handle, iff_g: Handle, iff_h: Handle, false_g: Handle, false_h: Handle,
+}
+
+// A part's verdict: its placed predicate at the stream.
+fn BVCx::verdict(self cx: BVCx, s: BVStmt) → Expr {
+    bv_app(cx.eval, [s.pred().placed(cx.offs, cx.wbits).quote(cx.q), Hd(cx.bits)])
+}
+
+// `λ (x: ty) => body(x)`, its binder under `under` (an enclosing
+// part's λ, whose body this one is in).
+fn bv_lam(ty: Expr, under: Option<LocalRef>, body: LocalRef → Tac<Expr>) → Tac<Expr> {
+    let a <- assume(ty, "_", under);
+    match a {
+        Accepted(x) => body(x.ref).bind(λ e => pure(Lam(x.ref, e))),
+        Refused(_) => fail("bv_decide: a part's bridge", []),
+    }
+}
+
+// As the goal (`as_goal`), the statement from `e`, its predicate's verdict
+// `True` at the stream; as a hypothesis, that verdict from `e`, the
+// statement's proof. A part's bridge is a function: `to` from its verdict
+// to the part, `from` back.
+fn BVCx::bridge(self cx: BVCx, s: BVStmt, as_goal: Bool, e: Expr, under: Option<LocalRef>) → Tac<Expr> {
+    match s {
+        SClaim(c, _) => bv_bridge(cx.l, cx.k, cx.ws, cx.bools, c, as_goal, e),
+        SAnd(a, b, ta, tb) => match as_goal {
+            True => {
+                let ga <- cx.bridge(a, True, bv_app(cx.band_l, [cx.verdict(a), cx.verdict(b), e]), under);
+                let gb <- cx.bridge(b, True, bv_app(cx.band_r, [cx.verdict(a), cx.verdict(b), e]), under);
+                pure(bv_app(cx.and_i, [Hd(ta), Hd(tb), ga, gb]))
+            },
+            False => {
+                let ha <- cx.bridge(a, False, bv_app(cx.and_l, [Hd(ta), Hd(tb), e]), under);
+                let hb <- cx.bridge(b, False, bv_app(cx.and_r, [Hd(ta), Hd(tb), e]), under);
+                pure(bv_app(cx.band, [cx.verdict(a), cx.verdict(b), ha, hb]))
+            },
+        },
+        SOr(a, b, ta, tb) => match as_goal {
+            True => {
+                let fa <- bv_lam(Equation(cx.verdict(a), Hd(cx.q.tru)), under, λ v => cx.bridge(a, True, Local(v), Some(v)));
+                let fb <- bv_lam(Equation(cx.verdict(b), Hd(cx.q.tru)), under, λ v => cx.bridge(b, True, Local(v), Some(v)));
+                pure(bv_app(cx.or_g, [cx.verdict(a), cx.verdict(b), Hd(ta), Hd(tb), fa, fb, e]))
+            },
+            False => {
+                let ga <- bv_lam(Hd(ta), under, λ v => cx.bridge(a, False, Local(v), Some(v)));
+                let gb <- bv_lam(Hd(tb), under, λ v => cx.bridge(b, False, Local(v), Some(v)));
+                pure(bv_app(cx.or_h, [cx.verdict(a), cx.verdict(b), Hd(ta), Hd(tb), ga, gb, e]))
+            },
+        },
+        SNot(a, ta) => match as_goal {
+            True => bv_lam(Hd(ta), under, λ v => cx.bridge(a, False, Local(v), Some(v))).bind(λ ga => pure(bv_app(cx.not_g, [cx.verdict(a), Hd(ta), ga, e]))),
+            False => bv_lam(Equation(cx.verdict(a), Hd(cx.q.tru)), under, λ v => cx.bridge(a, True, Local(v), Some(v))).bind(λ fa => pure(bv_app(cx.not_h, [cx.verdict(a), Hd(ta), fa, e]))),
+        },
+        SIff(a, b, ta, tb) => {
+            let fa <- bv_lam(Equation(cx.verdict(a), Hd(cx.q.tru)), under, λ v => cx.bridge(a, True, Local(v), Some(v)));
+            let ga <- bv_lam(Hd(ta), under, λ v => cx.bridge(a, False, Local(v), Some(v)));
+            let fb <- bv_lam(Equation(cx.verdict(b), Hd(cx.q.tru)), under, λ v => cx.bridge(b, True, Local(v), Some(v)));
+            let gb <- bv_lam(Hd(tb), under, λ v => cx.bridge(b, False, Local(v), Some(v)));
+            pure(bv_app(as_goal.select(cx.iff_g, cx.iff_h), [cx.verdict(a), cx.verdict(b), Hd(ta), Hd(tb), fa, ga, fb, gb, e]))
+        },
+        SFalse => pure(bv_app(as_goal.select(cx.false_g, cx.false_h), [e])),
+    }
+}
+
 // From the whole predicate at the stream (`holds`), each hypothesis
 // discharged in turn (`layout_imp`), to the goal's predicate there. `p` is
 // the placed predicate, `¬h ∨ rest` once per hypothesis.
-fn bv_discharge(l: BVLemmas, q: BVQuote, k: Nat, ws: List<BVWord>, bools: Expr, hs: List<BVHyp>, p: BVPred, holds: Expr) → Tac<Expr> {
+fn bv_discharge(cx: BVCx, hs: List<BVHyp>, p: BVPred, holds: Expr) → Tac<Expr> {
     match hs {
         Nil => pure(holds),
         Cons(h, rest) => match p {
             POr(nh, r) => match nh {
                 PNot(hp) => {
-                    let hh <- bv_bridge(l, k, ws, bools, h.claim, False, Local(h.proof));
-                    bv_discharge(l, q, k, ws, bools, rest, r, bv_app(l.imp, [hp.quote(q), r.quote(q), Blank, holds, hh]))
+                    let hh <- cx.bridge(h.stmt, False, Local(h.proof), None);
+                    bv_discharge(cx, rest, r, bv_app(cx.l.imp, [hp.quote(cx.q), r.quote(cx.q), Blank, holds, hh]))
                 },
                 _ => fail("bv_decide: the hypotheses' layout", []),
             },
@@ -1063,18 +1269,50 @@ fn bv_discharge(l: BVLemmas, q: BVQuote, k: Nat, ws: List<BVWord>, bools: Expr, 
     }
 }
 
+// The stream a refutation's statement `p.eval(bits) = True` holds at.
+fn bv_stream_of(holds: Expr) → Tac<Handle> {
+    let ty <- infer(holds).or_fail("bv_decide: the refutation's statement: ");
+    let v <- view(ty);
+    match v {
+        HEq(lhs, _) => view(lhs).bind(λ lv => match head_args(lv).last() {
+            Some(bits) => pure(bits),
+            None => fail("bv_decide: the refutation's statement is not a verdict", []),
+        }),
+        _ => fail("bv_decide: the refutation's statement is not an equation", []),
+    }
+}
+
+fn bv_cx(l: BVLemmas, q: BVQuote, k: Nat, ws: List<BVWord>, bools: Expr, offs: List<Nat>, wbits: Nat, bits: Handle) → Tac<BVCx> {
+    let eval <- bv_resolve("bitblast::BVPred::eval");
+    let and_i <- bv_resolve("bitblast::layout_and");
+    let and_l <- bv_resolve("bitblast::layout_and_l");
+    let and_r <- bv_resolve("bitblast::layout_and_r");
+    let band_l <- bv_resolve("bitblast::layout_bool_and_l");
+    let band_r <- bv_resolve("bitblast::layout_bool_and_r");
+    let band <- bv_resolve("bitblast::layout_bool_and");
+    let or_g <- bv_resolve("bitblast::layout_or");
+    let or_h <- bv_resolve("bitblast::layout_or_hyp");
+    let not_g <- bv_resolve("bitblast::layout_not");
+    let not_h <- bv_resolve("bitblast::layout_not_hyp");
+    let iff_g <- bv_resolve("bitblast::layout_iff_p");
+    let iff_h <- bv_resolve("bitblast::layout_iff_p_hyp");
+    let false_g <- bv_resolve("bitblast::layout_false");
+    let false_h <- bv_resolve("bitblast::layout_false_hyp");
+    pure(BVCx(l, q, k, ws, bools, offs, wbits, bits, eval, and_i, and_l, and_r, band_l, band_r, band, or_g, or_h, not_g, not_h, iff_g, iff_h, false_g, false_h))
+}
+
 fn bv_decide_once() → Tac<Expr> {
     let g <- goal();
     let ops <- bv_ops();
-    let claim <- bv_claim(ops, g.target);
-    let read <- bv_read_claim(ops, claim, BVAtoms([], []));
-    let under <- bv_hyps(ops, g.locals, read.st);
+    let read <- bv_stmt(ops, g.target, BVAtoms([], []), 16);
+    let under <- bv_hyps(ops, g.locals, read.snd);
     let hs = under.fst;
     let ws = under.snd.words;
     let bs = under.snd.bools;
     let wbits = bv_word_bits(ws);
     let k = wbits + bs.len();
-    let pred = bv_under(hs, read.bool()).placed(bv_offsets(ws, 0), wbits);
+    let offs = bv_offsets(ws, 0);
+    let pred = bv_under(hs, read.fst.pred()).placed(offs, wbits);
     let q <- bv_quotes();
     let l <- bv_lemmas();
     let pe = pred.quote(q);
@@ -1084,8 +1322,11 @@ fn bv_decide_once() → Tac<Expr> {
         Unsatisfiable(r) => {
             let bools = bv_lay_bools(l, bs, wbits);
             let lay = bv_lay(l, ws, 0, bools);
-            let holds <- bv_discharge(l, q, k, ws, bools, hs, pred, bv_app(l.unsat, [pe, NatLit(k), Hd(r), lay]));
-            bv_bridge(l, k, ws, bools, claim, True, holds)
+            let all = bv_app(l.unsat, [pe, NatLit(k), Hd(r), lay]);
+            let bits <- bv_stream_of(all);
+            let cx <- bv_cx(l, q, k, ws, bools, offs, wbits, bits);
+            let holds <- bv_discharge(cx, hs, pred, all);
+            cx.bridge(read.fst, True, holds, None)
         },
     }
 }

@@ -126,3 +126,21 @@ fn as_word(b: u8) → u64 { b.zero_extend(56) }
 theorem pick_bytes(b, c: u8): pick(as_word(b), as_word(c)) <= 1 { by bv_decide() }
 // expect-error: bv_decide: the claim is false at
 theorem pick_false(b, c: u64): pick(b, c) = 0 { by bv_decide() }
+
+// ---- Statements joined by ∧ ∨ ↔ ¬ (goals and hypotheses) ----
+
+theorem conn_and(x: u8): x & 0x0F <= 0x0F ∧ x >> 4 < 0x10 { by bv_decide() }
+theorem conn_or(x: u8): x < 0x80 ∨ 0x80 <= x { by bv_decide() }
+theorem conn_iff(x: u8): (x & 0x80 = 0) ↔ x < 0x80 { by bv_decide() }
+theorem conn_not(x: u8): ¬(x < 0x10 ∧ 0x20 <= x) { by bv_decide() }
+theorem conn_nested(x: u8): ¬(x < 0x10 ∨ 0x20 <= x) ∨ x < 0x10 ∨ ¬(x < 0x20) { by bv_decide() }
+theorem conn_hyp_nested(x: u8, h: ¬(x < 0x10 ∨ (0x20 <= x ∧ x ≠ 0x40))): x = 0x40 ∨ x < 0x20 { by bv_decide() }
+// A range test as the loop's condition reads it, taken and refused.
+theorem conn_hyp_and(b, c: u8, ok: c & 0xC0 = 0x80 ∧ (b ≠ 0xE0 ∨ 0xA0 <= c)): 0x80 <= c { by bv_decide() }
+theorem conn_hyp_or(b, c: u8, h: b = 0xE0 ∨ b = 0xED, t: 0xE0 <= b): b < 0xEE { by bv_decide() }
+theorem conn_hyp_not(c: u8, no: ¬(c & 0xC0 = 0x80 ∧ c < 0xA0), lo: 0x80 <= c, hi: c < 0x90): False { by bv_decide() }
+theorem conn_hyp_iff(x, y: u8, h: (x = 0) ↔ (y = 0), z: x = 0): y = 0 { by bv_decide() }
+// Contradictory hypotheses prove `False`.
+theorem conn_false(x: u8, a: x < 4, b: 8 <= x): False { by bv_decide() }
+// expect-error: the claim is false
+theorem conn_or_false(x: u8): x < 0x80 ∨ 0x90 <= x { by bv_decide() }
