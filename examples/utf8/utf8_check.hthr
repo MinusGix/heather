@@ -5,6 +5,7 @@ import list;
 import option;
 import pair;
 import algebra;
+import morphism;
 import bitvec;
 import bitvec_nat;
 import bitvec_omega;
@@ -77,13 +78,13 @@ runtime fn utf8_four(b, c1, c2, c3: u64) → u64 {
 // these rather than reading the bytes itself, which keeps it small enough
 // for the compiler's certificate to scan in one step.
 runtime fn utf8_two_at(s: List<u8>, n, i: u64) → u64 {
-    utf8_two(s.byte_within(n, i).zero_extend(56), s.byte_within(n, i + 1).zero_extend(56))
+    utf8_two(↑s.byte_within(n, i), ↑s.byte_within(n, i + 1))
 }
 runtime fn utf8_three_at(s: List<u8>, n, i: u64) → u64 {
-    utf8_three(s.byte_within(n, i).zero_extend(56), s.byte_within(n, i + 1).zero_extend(56), s.byte_within(n, i + 2).zero_extend(56))
+    utf8_three(↑s.byte_within(n, i), ↑s.byte_within(n, i + 1), ↑s.byte_within(n, i + 2))
 }
 runtime fn utf8_four_at(s: List<u8>, n, i: u64) → u64 {
-    utf8_four(s.byte_within(n, i).zero_extend(56), s.byte_within(n, i + 1).zero_extend(56), s.byte_within(n, i + 2).zero_extend(56), s.byte_within(n, i + 3).zero_extend(56))
+    utf8_four(↑s.byte_within(n, i), ↑s.byte_within(n, i + 1), ↑s.byte_within(n, i + 2), ↑s.byte_within(n, i + 3))
 }
 
 // The offset of the first byte from `i` where no sequence starts, or `n`
@@ -91,7 +92,7 @@ runtime fn utf8_four_at(s: List<u8>, n, i: u64) → u64 {
 // bytes from `i`, `n - i`.
 runtime fn utf8_valid_from(s: List<u8>, n, i, left: u64) → u64 decreases left.toNat() {
     if h: 0 < left {
-        let b = s.byte_within(n, i).zero_extend(56);
+        let b: u8 = s.byte_within(n, i);
         if b < 0x80 {
             utf8_valid_from(s, n, i + 1, left - 1)
         } else if b < 0xC0 {
@@ -129,23 +130,17 @@ runtime fn utf8_valid_up_to(s: List<u8>, n: u64) → u64 { utf8_valid_from(s, n,
 // ---------------------------------------------------------------------------
 // Why it is right
 
-// A byte as the program reads it: a word.
-fn word(b: u8) → u64 { b.zero_extend(56) }
-
-// Whether an option holds a value.
-fn Option::holds<A>(self o: Option<A>) → Bool { match o { None => False, Some(_) => True } }
-
 // The decoder emits a character exactly when the value is not overlong and
 // is a scalar value.
-theorem emit_is_some(min, code: Nat, r: List<u8>): utf8::emit(min, code, r).holds() = (min.leb(code) && char::is_scalar(code)) {
+theorem emit_is_some(min, code: Nat, r: List<u8>): utf8::emit(min, code, r).is_some() = (min.leb(code) && char::is_scalar(code)) {
     match low: min.leb(code) {
         False => calc {
-            utf8::emit(min, code, r).holds() = utf8::emit_min(min.leb(code), code, r).holds() := refl,
+            utf8::emit(min, code, r).is_some() = utf8::emit_min(min.leb(code), code, r).is_some() := refl,
             = False && char::is_scalar(code) := rewrite(low, refl),
         },
         True => calc {
-            utf8::emit(min, code, r).holds() = utf8::emit_min(min.leb(code), code, r).holds() := refl,
-            = utf8::emit_dec(code, char::is_scalar(code).is_true_dec(), r).holds() := rewrite(low, refl),
+            utf8::emit(min, code, r).is_some() = utf8::emit_min(min.leb(code), code, r).is_some() := refl,
+            = utf8::emit_dec(code, char::is_scalar(code).is_true_dec(), r).is_some() := rewrite(low, refl),
             = True && char::is_scalar(code) := match d: char::is_scalar(code).is_true_dec() {
                 Inl(p) => sym(cong_fn(λ (x: Bool) => True && x, eq_true_of_is_true(char::is_scalar(code), p))),
                 Inr(np) => sym(cong_fn(λ (x: Bool) => True && x, eq_false_of_not_is_true(char::is_scalar(code), np))),
@@ -170,29 +165,29 @@ fn cont(c: u8) → Bool { utf8::bit7(c) && !utf8::bit6(c) }
 // The decoder takes a sequence exactly when each byte after the lead is a
 // continuation and the value they spell is emitted.
 theorem seq2_is_some(b, c1: u8, r: List<u8>):
-    utf8::decode_seq(utf8::C2, b, Cons(c1, r)).holds() = (cont(c1) && utf8::emit(0x80, code2(b, c1), r).holds()) {
+    utf8::decode_seq(utf8::C2, b, [c1, ..r]).is_some() = (cont(c1) && utf8::emit(0x80, code2(b, c1), r).is_some()) {
     split_all; all_goals { refl }
 }
 theorem seq3_is_some(b, c1, c2: u8, r: List<u8>):
-    utf8::decode_seq(utf8::C3, b, Cons(c1, Cons(c2, r))).holds() = ((cont(c1) && cont(c2)) && utf8::emit(0x800, code3(b, c1, c2), r).holds()) {
+    utf8::decode_seq(utf8::C3, b, [c1, c2, ..r]).is_some() = ((cont(c1) && cont(c2)) && utf8::emit(0x800, code3(b, c1, c2), r).is_some()) {
     split_all; all_goals { refl }
 }
 theorem seq4_is_some(b, c1, c2, c3: u8, r: List<u8>):
-    utf8::decode_seq(utf8::C4, b, Cons(c1, Cons(c2, Cons(c3, r)))).holds()
-        = (((cont(c1) && cont(c2)) && cont(c3)) && utf8::emit(0x10000, code4(b, c1, c2, c3), r).holds()) {
+    utf8::decode_seq(utf8::C4, b, [c1, c2, c3, ..r]).is_some()
+        = (((cont(c1) && cont(c2)) && cont(c3)) && utf8::emit(0x10000, code4(b, c1, c2, c3), r).is_some()) {
     split_all; all_goals { refl }
 }
 
 // The program refuses a sequence exactly when the decoder does.
-theorem two_decides(b, c1: u8, r: List<u8>): utf8::decode_seq(utf8::C2, b, Cons(c1, r)).holds() = !utf8_two(word(b), word(c1)).eq_bit(0) {
+theorem two_decides(b, c1: u8, r: List<u8>): utf8::decode_seq(utf8::C2, b, [c1, ..r]).is_some() = !utf8_two(↑b, ↑c1).eq_bit(0) {
     rewrite(seq2_is_some, emit_is_some, by bv_decide())
 }
 theorem three_decides(b, c1, c2: u8, r: List<u8>):
-    utf8::decode_seq(utf8::C3, b, Cons(c1, Cons(c2, r))).holds() = !utf8_three(word(b), word(c1), word(c2)).eq_bit(0) {
+    utf8::decode_seq(utf8::C3, b, [c1, c2, ..r]).is_some() = !utf8_three(↑b, ↑c1, ↑c2).eq_bit(0) {
     rewrite(seq3_is_some, emit_is_some, by bv_decide())
 }
 theorem four_decides(b, c1, c2, c3: u8, r: List<u8>):
-    utf8::decode_seq(utf8::C4, b, Cons(c1, Cons(c2, Cons(c3, r)))).holds() = !utf8_four(word(b), word(c1), word(c2), word(c3)).eq_bit(0) {
+    utf8::decode_seq(utf8::C4, b, [c1, c2, c3, ..r]).is_some() = !utf8_four(↑b, ↑c1, ↑c2, ↑c3).eq_bit(0) {
     rewrite(seq4_is_some, emit_is_some, by bv_decide())
 }
 
@@ -200,114 +195,98 @@ theorem four_decides(b, c1, c2, c3: u8, r: List<u8>):
 // The lead byte's class, from the loop's tests on it: the decoder reads the
 // top bits, and `bv_decide` proves each from the tests.
 
-theorem class_one(b: u8, t: word(b) < 0x80): utf8::class_of(b) = utf8::C1 {
+theorem class_one(b: u8, t: b < 0x80): utf8::class_of(b) = utf8::C1 {
     simp_only(utf8::class_of, discharge := by bv_decide())
 }
-theorem class_cont(b: u8, t: ¬(word(b) < 0x80), u: word(b) < 0xC0): utf8::class_of(b) = utf8::CBad {
+theorem class_cont(b: u8, t: ¬(b < 0x80), u: b < 0xC0): utf8::class_of(b) = utf8::CBad {
     simp_only(utf8::class_of, utf8::class_lead, discharge := by bv_decide())
 }
-theorem class_two(b: u8, t: ¬(word(b) < 0xC0), u: word(b) < 0xE0): utf8::class_of(b) = utf8::C2 {
+theorem class_two(b: u8, t: ¬(b < 0xC0), u: b < 0xE0): utf8::class_of(b) = utf8::C2 {
     simp_only(utf8::class_of, utf8::class_lead, utf8::class_lead2, discharge := by bv_decide())
 }
-theorem class_three(b: u8, t: ¬(word(b) < 0xE0), u: word(b) < 0xF0): utf8::class_of(b) = utf8::C3 {
+theorem class_three(b: u8, t: ¬(b < 0xE0), u: b < 0xF0): utf8::class_of(b) = utf8::C3 {
     simp_only(utf8::class_of, utf8::class_lead, utf8::class_lead2, utf8::class_lead3, discharge := by bv_decide())
 }
-theorem class_four(b: u8, t: ¬(word(b) < 0xF0), u: word(b) < 0xF8): utf8::class_of(b) = utf8::C4 {
+theorem class_four(b: u8, t: ¬(b < 0xF0), u: b < 0xF8): utf8::class_of(b) = utf8::C4 {
     simp_only(utf8::class_of, utf8::class_lead, utf8::class_lead2, utf8::class_lead3, utf8::class_lead4, discharge := by bv_decide())
 }
-theorem class_past(b: u8, t: ¬(word(b) < 0xF8)): utf8::class_of(b) = utf8::CBad {
+theorem class_past(b: u8, t: ¬(b < 0xF8)): utf8::class_of(b) = utf8::CBad {
     simp_only(utf8::class_of, utf8::class_lead, utf8::class_lead2, utf8::class_lead3, utf8::class_lead4, discharge := by bv_decide())
 }
 
 // ---------------------------------------------------------------------------
 // The decoder at a lead byte, by the loop's tests on it
 
-theorem decode_cons(b: u8, r: List<u8>): utf8::decode(Cons(b, r)) = utf8::decode_class(utf8::class_of(b), b, r) {
-    match r {
-        Nil => refl,
-        Cons(c1, r1) => match r1 {
-            Nil => refl,
-            Cons(c2, r2) => match r2 { Nil => refl, Cons(c3, r3) => refl },
-        },
-    }
+theorem decode_cons(b: u8, r: List<u8>): utf8::decode([b, ..r]) = utf8::decode_class(utf8::class_of(b), b, r) {
+    match r { [] => refl, [c1] => refl, [c1, c2] => refl, [c1, c2, c3, ..r3] => refl }
 }
 
 theorem push_is_some(step: Option<Pair<Char, List<u8>>>, tail: Option<String>):
-    utf8::is_some_string(utf8::push_char(step, tail)) = (step.holds() && utf8::is_some_string(tail)) {
+    utf8::push_char(step, tail).is_some() = (step.is_some() && tail.is_some()) {
     match step {
         None => refl,
         Some(st) => match tail { None => refl, Some(t) => refl },
     }
 }
 
-theorem valid_is_decoded(bytes: List<u8>): utf8::is_utf8(bytes) = utf8::is_some_string(utf8::decode(bytes)) { refl }
-
 // What the decoder makes of a byte list, by its lead byte's class.
 theorem valid_by_class(b: u8, r: List<u8>, cl: utf8::Class, class: utf8::class_of(b) = cl):
-    utf8::is_utf8(Cons(b, r)) = utf8::is_some_string(utf8::decode_class(cl, b, r)) {
-    rewrite(valid_is_decoded(Cons(b, r)), decode_cons(b, r), class, refl)
+    utf8::is_utf8([b, ..r]) = utf8::decode_class(cl, b, r).is_some() {
+    let decoded: (utf8::decode([b, ..r]) = utf8::decode_class(cl, b, r)) = rewrite(decode_cons(b, r), class, refl);
+    cong_fn(λ (o: Option<String>) => o.is_some(), decoded)
 }
 
 // An ASCII byte is always a character.
-theorem seq1_is_some(b: u8, r: List<u8>): utf8::decode_seq(utf8::C1, b, r).holds() = True {
+theorem seq1_is_some(b: u8, r: List<u8>): utf8::decode_seq(utf8::C1, b, r).is_some() = True {
     rewrite(emit_is_some(0, utf8::ascii_payload(b).toNat(), r), by bv_decide())
 }
 
-theorem ascii(b: u8, r: List<u8>, t: word(b) < 0x80): utf8::is_utf8(Cons(b, r)) = utf8::is_utf8(r) {
+theorem ascii(b: u8, r: List<u8>, t: b < 0x80): utf8::is_utf8([b, ..r]) = utf8::is_utf8(r) {
     rewrite(valid_by_class(b, r, utf8::C1, class_one(b, t)), push_is_some(utf8::decode_seq(utf8::C1, b, r), utf8::decode(r)), seq1_is_some(b, r), refl)
 }
-theorem stray(b: u8, r: List<u8>, t: ¬(word(b) < 0x80), u: word(b) < 0xC0): utf8::is_utf8(Cons(b, r)) = False {
+theorem stray(b: u8, r: List<u8>, t: ¬(b < 0x80), u: b < 0xC0): utf8::is_utf8([b, ..r]) = False {
     rewrite(valid_by_class(b, r, utf8::CBad, class_cont(b, t, u)), refl)
 }
-theorem past(b: u8, r: List<u8>, t: ¬(word(b) < 0xF8)): utf8::is_utf8(Cons(b, r)) = False {
+theorem past(b: u8, r: List<u8>, t: ¬(b < 0xF8)): utf8::is_utf8([b, ..r]) = False {
     rewrite(valid_by_class(b, r, utf8::CBad, class_past(b, t)), refl)
 }
-theorem two(b, c1: u8, r: List<u8>, t: ¬(word(b) < 0xC0), u: word(b) < 0xE0):
-    utf8::is_utf8(Cons(b, Cons(c1, r))) = (!utf8_two(word(b), word(c1)).eq_bit(0) && utf8::is_utf8(r)) {
-    rewrite(valid_by_class(b, Cons(c1, r), utf8::C2, class_two(b, t, u)), push_is_some(utf8::decode_seq(utf8::C2, b, Cons(c1, r)), utf8::decode(r)), two_decides(b, c1, r), refl)
+theorem two(b, c1: u8, r: List<u8>, t: ¬(b < 0xC0), u: b < 0xE0):
+    utf8::is_utf8([b, c1, ..r]) = (!utf8_two(↑b, ↑c1).eq_bit(0) && utf8::is_utf8(r)) {
+    rewrite(valid_by_class(b, [c1, ..r], utf8::C2, class_two(b, t, u)), push_is_some(utf8::decode_seq(utf8::C2, b, [c1, ..r]), utf8::decode(r)), two_decides(b, c1, r), refl)
 }
-theorem three(b, c1, c2: u8, r: List<u8>, t: ¬(word(b) < 0xE0), u: word(b) < 0xF0):
-    utf8::is_utf8(Cons(b, Cons(c1, Cons(c2, r)))) = (!utf8_three(word(b), word(c1), word(c2)).eq_bit(0) && utf8::is_utf8(r)) {
-    rewrite(valid_by_class(b, Cons(c1, Cons(c2, r)), utf8::C3, class_three(b, t, u)),
-        push_is_some(utf8::decode_seq(utf8::C3, b, Cons(c1, Cons(c2, r))), utf8::decode(r)), three_decides(b, c1, c2, r), refl)
+theorem three(b, c1, c2: u8, r: List<u8>, t: ¬(b < 0xE0), u: b < 0xF0):
+    utf8::is_utf8([b, c1, c2, ..r]) = (!utf8_three(↑b, ↑c1, ↑c2).eq_bit(0) && utf8::is_utf8(r)) {
+    rewrite(valid_by_class(b, [c1, c2, ..r], utf8::C3, class_three(b, t, u)),
+        push_is_some(utf8::decode_seq(utf8::C3, b, [c1, c2, ..r]), utf8::decode(r)), three_decides(b, c1, c2, r), refl)
 }
-theorem four(b, c1, c2, c3: u8, r: List<u8>, t: ¬(word(b) < 0xF0), u: word(b) < 0xF8):
-    utf8::is_utf8(Cons(b, Cons(c1, Cons(c2, Cons(c3, r))))) = (!utf8_four(word(b), word(c1), word(c2), word(c3)).eq_bit(0) && utf8::is_utf8(r)) {
-    rewrite(valid_by_class(b, Cons(c1, Cons(c2, Cons(c3, r))), utf8::C4, class_four(b, t, u)),
-        push_is_some(utf8::decode_seq(utf8::C4, b, Cons(c1, Cons(c2, Cons(c3, r)))), utf8::decode(r)), four_decides(b, c1, c2, c3, r), refl)
+theorem four(b, c1, c2, c3: u8, r: List<u8>, t: ¬(b < 0xF0), u: b < 0xF8):
+    utf8::is_utf8([b, c1, c2, c3, ..r]) = (!utf8_four(↑b, ↑c1, ↑c2, ↑c3).eq_bit(0) && utf8::is_utf8(r)) {
+    rewrite(valid_by_class(b, [c1, c2, c3, ..r], utf8::C4, class_four(b, t, u)),
+        push_is_some(utf8::decode_seq(utf8::C4, b, [c1, c2, c3, ..r]), utf8::decode(r)), four_decides(b, c1, c2, c3, r), refl)
 }
 
 // A sequence the bytes end inside of.
-theorem cut_two(b: u8, r: List<u8>, t: ¬(word(b) < 0xC0), u: word(b) < 0xE0): r.len() < 1 → utf8::is_utf8(Cons(b, r)) = False {
+theorem cut_two(b: u8, r: List<u8>, t: ¬(b < 0xC0), u: b < 0xE0): r.len() < 1 → utf8::is_utf8([b, ..r]) = False {
     match r {
-        Nil => λ _ => rewrite(valid_by_class(b, Nil, utf8::C2, class_two(b, t, u)), refl),
-        Cons(c1, r1) => λ short => false_elim(omega),
+        [] => λ _ => rewrite(valid_by_class(b, [], utf8::C2, class_two(b, t, u)), refl),
+        [c1, ..r1] => λ short => false_elim(omega),
     }
 }
-theorem cut_three(b: u8, r: List<u8>, t: ¬(word(b) < 0xE0), u: word(b) < 0xF0): r.len() < 2 → utf8::is_utf8(Cons(b, r)) = False {
+theorem cut_three(b: u8, r: List<u8>, t: ¬(b < 0xE0), u: b < 0xF0): r.len() < 2 → utf8::is_utf8([b, ..r]) = False {
     let class = class_three(b, t, u);
     match r {
-        Nil => λ _ => rewrite(valid_by_class(b, Nil, utf8::C3, class), refl),
-        Cons(c1, r1) => match r1 {
-            Nil => λ _ => rewrite(valid_by_class(b, [c1], utf8::C3, class), refl),
-            Cons(c2, r2) => λ short => false_elim(omega),
-        },
+        [] => λ _ => rewrite(valid_by_class(b, [], utf8::C3, class), refl),
+        [c1] => λ _ => rewrite(valid_by_class(b, [c1], utf8::C3, class), refl),
+        [c1, c2, ..r2] => λ short => false_elim(omega),
     }
 }
-theorem cut_four(b: u8, r: List<u8>, t: ¬(word(b) < 0xF0), u: word(b) < 0xF8): r.len() < 3 → utf8::is_utf8(Cons(b, r)) = False {
+theorem cut_four(b: u8, r: List<u8>, t: ¬(b < 0xF0), u: b < 0xF8): r.len() < 3 → utf8::is_utf8([b, ..r]) = False {
     let class = class_four(b, t, u);
     match r {
-        Nil => λ _ => rewrite(valid_by_class(b, Nil, utf8::C4, class), refl),
-        Cons(c1, r1) => match r1 {
-            Nil => λ _ => rewrite(valid_by_class(b, [c1], utf8::C4, class), refl),
-            Cons(c2, r2) => match r2 {
-                Nil => λ _ => rewrite(valid_by_class(b, [c1, c2], utf8::C4, class), refl),
-                Cons(c3, r3) => λ short => {
-                    let more: (Cons(c3, r3).len() = Succ(r3.len())) = refl;
-                    false_elim(omega)
-                },
-            },
-        },
+        [] => λ _ => rewrite(valid_by_class(b, [], utf8::C4, class), refl),
+        [c1] => λ _ => rewrite(valid_by_class(b, [c1], utf8::C4, class), refl),
+        [c1, c2] => λ _ => rewrite(valid_by_class(b, [c1, c2], utf8::C4, class), refl),
+        [c1, c2, c3, ..r3] => λ (short: r3.len() + 3 < 3) => false_elim(omega),
     }
 }
 
