@@ -231,7 +231,7 @@ fn raised_twice() → Tool {
         λ raise => run(local(num(0), λ a => local(num(0), λ b =>
             perform(raise, [num(97)], [a]) ++ compute(call(0, [num(98)], b)) ++ exit(a.get() + b.get())))))))
 }
-theorem raised_twice_runs(): raised_twice().source().tree([], 0) = Ret(BitVec::ofNat(131)) { refl }
+theorem raised_twice_runs(): raised_twice().source().tree([], 2) = Ret(BitVec::ofNat(131)) { refl }
 theorem raised_twice_compiles(): raised_twice().source().refusal(region_low(),
     Homes::slots(raised_twice().source()).placed(plan_program(raised_twice().source().functions)), SpillAll().frames(raised_twice().source())) = [] { refl }
 
@@ -471,7 +471,7 @@ fn summed_twice() → Tool {
 // first; `main` calls it twice.
 theorem summed_twice_procedures(): summed_twice().source().procedures.len() = 1 { refl }
 theorem summed_twice_depth(): summed_twice().source().depth = 12 { refl }
-theorem summed_twice_runs(): summed_twice().source().tree([], 0) = Ret(BitVec::ofNat(76)) { refl }
+theorem summed_twice_runs(): summed_twice().source().tree([], 12) = Ret(BitVec::ofNat(76)) { refl }
 theorem summed_twice_compiles(): refused_slots(summed_twice().source()) = [] { refl }
 
 // The sum of 0..n for n the bytes read from standard input, as an exit

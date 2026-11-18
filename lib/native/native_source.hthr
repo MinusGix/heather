@@ -33,13 +33,19 @@
 //
 // A statement may also call one of the source's procedures (`Perform`,
 // docs/native/native-procedures-design.md §2). `denote` takes what a call does as
-// a parameter (`Performs()`), and the source gives it by depth
-// (`Source::performs`): the arguments' numbers copied into the parameters,
-// the body run one call deeper, then the procedure's locals given back as
-// the caller had them and the results copied out. Words are the callee's
-// own and buffers are shared. A call one deeper than the source's depth
-// exits with `call_depth_status`, so the meaning is total without fuel for
-// calls, and a machine with a finite stack can meet it exactly.
+// a parameter (`Performs()`), and the source gives it (`Source::calls`):
+// the arguments' numbers copied into the parameters, the body run one call
+// deeper, then the procedure's locals given back as the caller had them and
+// the results copied out. Words are the callee's own and buffers are
+// shared. Calls nest as deep as the fuel, as loops go round as often: the
+// source has no depth.
+//
+// A machine's stack is finite, so the compiled program refuses a call past
+// a depth, exiting with `call_depth_status` (`Source::performs`,
+// `Source::bounded`). That is the compiled program's meaning, not the
+// source's: its theorems are stated over `bounded`, which is the source's
+// with the refused runs ended at the refusal (`Source::bounded_traces`,
+// docs/native/native-procedure-frames-design.md §7).
 
 import function_ir;
 import function_ir_eval;
@@ -409,8 +415,9 @@ record Buffer { capacity: Nat, initial: List<BitVec(8)> := [] }
 // Total functions its regions call, its buffers (buffer `b` is the `b`-th),
 // how many words it names (word ids below `words`; the compiler gives each
 // a slot and refuses any other), and the statement it runs.
-// Its procedures (procedure `p` is the `p`-th), and how deep calls may nest
-// (`Source::performs`).
+// Its procedures (procedure `p` is the `p`-th), and how deep the compiled
+// program lets calls nest before it refuses one (`Source::bounded`; the
+// source's own meaning has no depth).
 record Source { functions: List<Function>, buffers: List<Buffer>, words: Nat, main: Stmt,
     procedures: List<Procedure> := [], depth: Nat := 0 }
 
@@ -487,10 +494,11 @@ fn Flow::status(self flow: Flow) → BitVec(64) {
     match flow { Onward(_) => BitVec::zero(), Exited(status) => status }
 }
 
-// What a call does at depth `depth`: none past the depth; otherwise the
-// procedure's body, its own calls one deeper, entered and left as the
-// procedure says. A call to no procedure does nothing (the compile refuses
-// it).
+// What a call does in the compiled program, with `depth` levels of calls
+// left: the procedure's body, its own calls one level less, entered and
+// left as the procedure says; past the depth, the call is refused, an exit
+// with `call_depth_status` (`Source::bounded`). A call to no procedure does
+// nothing (the compile refuses it).
 fn Source::performs(self src: Source, call: Writers(), n: Nat, depth: Nat) → Performs() {
     match depth {
         Zero => λ procedure args results env => Ret(Exited(call_depth_status())),
@@ -530,9 +538,52 @@ theorem Source::performs_grows(self src: Source, call: Writers(), n: Nat, depth:
     }
 }
 
-// `main` at fuel `n`, its calls nesting at most the source's depth.
+// What a call does in the source, at fuel `n` with `depth` levels of calls
+// left: as `Source::performs`, but past the depth nothing is claimed, a
+// `Cut`, as a loop past its fuel. The source's meaning lets calls nest as
+// deep as its fuel (`Source::main_tree`), so it has no depth of its own.
+fn Source::calls(self src: Source, call: Writers(), n: Nat, depth: Nat) → Performs() {
+    match depth {
+        Zero => λ procedure args results env => Cut,
+        Succ(d) => λ procedure args results env => match src.procedures.nth(procedure) {
+            None => Ret(Onward(env)),
+            Some(proc) => ITree::map(Events::linux(), proc.body.denote(call, src.calls(call, n, d), n, proc.enter(env, args)),
+                λ flow => proc.leave(env, results, flow)),
+        },
+    }
+}
+
+// More fuel and one more level grow every call's tree.
+theorem Source::calls_grows(self src: Source, call: Writers(), n: Nat, depth: Nat):
+    performs_below(src.calls(call, n, depth), src.calls(call, n + 1, Succ(depth))) {
+    match depth {
+        Zero => λ procedure args results env => trivial,
+        Succ(d) => λ procedure args results env => match src.procedures.nth(procedure) as λ o =>
+                ITree::Below(Events::linux(),
+                    match o as λ _ => ITree<Flow>(Events::linux()) {
+                        None => Ret(Onward(env)),
+                        Some(proc) => ITree::map(Events::linux(), proc.body.denote(call, src.calls(call, n, d), n, proc.enter(env, args)),
+                            λ flow => proc.leave(env, results, flow)),
+                    },
+                    match o {
+                        None => Ret(Onward(env)),
+                        Some(proc) => ITree::map(Events::linux(), proc.body.denote(call, src.calls(call, n + 1, Succ(d)), n + 1, proc.enter(env, args)),
+                            λ flow => proc.leave(env, results, flow)),
+                    }) {
+            None => refl,
+            Some(proc) => ITree::below_bind(Events::linux(),
+                proc.body.denote(call, src.calls(call, n, d), n, proc.enter(env, args)),
+                proc.body.denote(call, src.calls(call, n + 1, Succ(d)), n + 1, proc.enter(env, args)),
+                λ flow => Ret(proc.leave(env, results, flow)), λ flow => Ret(proc.leave(env, results, flow)),
+                proc.body.grows(call, src.calls(call, n, d), src.calls(call, n + 1, Succ(d)), src.calls_grows(call, n, d), n, proc.enter(env, args)),
+                λ flow => refl),
+        },
+    }
+}
+
+// `main` at fuel `n`, its calls nesting as deep as the fuel.
 fn Source::main_tree(self src: Source, args: List<List<BitVec(8)>>, n: Nat) → ITree<Flow>(Events::linux()) {
-    src.main.denote(program_writers(src.functions), src.performs(program_writers(src.functions), n, src.depth), n, src.start(args))
+    src.main.denote(program_writers(src.functions), src.calls(program_writers(src.functions), n, n), n, src.start(args))
 }
 
 fn Source::tree(self src: Source, args: List<List<BitVec(8)>>, n: Nat) → ITree<BitVec(64)>(Events::linux()) {
@@ -543,6 +594,27 @@ fn Source::tree(self src: Source, args: List<List<BitVec(8)>>, n: Nat) → ITree
 fn Source::denote(self src: Source, args: List<List<BitVec(8)>>) → Program<BitVec(64)>(Events::linux()) {
     Program(λ n => src.tree(args, n), λ n => ITree::below_bind(Events::linux(),
         src.main_tree(args, n), src.main_tree(args, Succ(n)),
+        λ flow => Ret(flow.status()), λ flow => Ret(flow.status()),
+        src.main.grows(program_writers(src.functions), src.calls(program_writers(src.functions), n, n),
+            src.calls(program_writers(src.functions), Succ(n), Succ(n)), src.calls_grows(program_writers(src.functions), n, n),
+            n, src.start(args)), λ flow => refl))
+}
+
+// The compiled program's meaning: `main` at fuel `n`, a call past the
+// source's `depth` refused (`Source::performs`). The compiled program's
+// theorems are stated over it, and `Source::bounded_refuses` and
+// `Source::bounded_exact` say how it stands to the source's own.
+fn Source::bounded_main(self src: Source, args: List<List<BitVec(8)>>, n: Nat) → ITree<Flow>(Events::linux()) {
+    src.main.denote(program_writers(src.functions), src.performs(program_writers(src.functions), n, src.depth), n, src.start(args))
+}
+
+fn Source::bounded_tree(self src: Source, args: List<List<BitVec(8)>>, n: Nat) → ITree<BitVec(64)>(Events::linux()) {
+    ITree::map(Events::linux(), src.bounded_main(args, n), λ flow => flow.status())
+}
+
+fn Source::bounded(self src: Source, args: List<List<BitVec(8)>>) → Program<BitVec(64)>(Events::linux()) {
+    Program(λ n => src.bounded_tree(args, n), λ n => ITree::below_bind(Events::linux(),
+        src.bounded_main(args, n), src.bounded_main(args, Succ(n)),
         λ flow => Ret(flow.status()), λ flow => Ret(flow.status()),
         src.main.grows(program_writers(src.functions), src.performs(program_writers(src.functions), n, src.depth),
             src.performs(program_writers(src.functions), Succ(n), src.depth), src.performs_grows(program_writers(src.functions), n, src.depth),
@@ -610,9 +682,230 @@ theorem Source::performs_deep(self src: Source, call: Writers(), n: Nat, depth: 
     }
 }
 
-// The program deepens: at fuel `d` its cuts lie `d` deep.
-theorem Source::deepens(self src: Source, args: List<List<BitVec(8)>>): Program::Deepens(Events::linux(), src.denote(args)) {
-    λ d => Exists(d, ITree::deep_map<Flow, BitVec(64)>(Events::linux(), src.main_tree(args, d), λ flow => flow.status(), d,
+// The compiled program's meaning deepens: at fuel `d` its cuts lie `d` deep.
+theorem Source::bounded_deepens(self src: Source, args: List<List<BitVec(8)>>): Program::Deepens(Events::linux(), src.bounded(args)) {
+    λ d => Exists(d, ITree::deep_map<Flow, BitVec(64)>(Events::linux(), src.bounded_main(args, d), λ flow => flow.status(), d,
         src.main.deep(program_writers(src.functions), src.performs(program_writers(src.functions), d, src.depth), d,
             src.performs_deep(program_writers(src.functions), d, src.depth), src.start(args))))
+}
+
+// ---------------------------------------------------------------------------
+// The compiled meaning against the source's
+// (docs/native/native-procedure-frames-design.md §7)
+//
+// The compiled program refuses a call past the source's `depth`
+// (`Source::bounded`); the source has no depth (`Source::denote`). A
+// compiled tree is the source's at as much fuel, with the runs it refuses
+// ended at the refusal (`Source::bounded_refuses`, `ITree::Refuses`): a
+// refusal is at a call, before the callee does anything, and what came
+// before it is the source's (`Source::bounded_traces`). With a depth at
+// least the fuel nothing is refused (`Source::bounded_exact`), and a source
+// that performs nothing is never refused (`Source::bounded_of_none`).
+
+// The procedures a statement performs, one entry a call.
+fn Stmt::performed(self s: Stmt) → List<Nat> {
+    match s {
+        Then(first, rest) => first.performed() ++ rest.performed(),
+        Branch(_, yes, no) => yes.performed() ++ no.performed(),
+        Repeat(body, _) => body.performed(),
+        Perform(index, _, _) => [index],
+        Compute(_) => [],
+        Invoke(_) => [],
+        Exit(_) => [],
+        Arg(_, _, _) => [],
+    }
+}
+
+// A flow that ends a run at a stop: an exit with a status `stop` holds of.
+fn Flow::stops(stop: BitVec(64) → Type) → Flow → Type {
+    λ flow => match flow { Onward(_) => False, Exited(status) => stop(status) }
+}
+
+// What a refusal exits with.
+fn refused_status() → BitVec(64) → Type { λ status => status = call_depth_status() }
+
+// A statement refuses where its calls do, with as much fuel or more.
+theorem Stmt::refuses(self s: Stmt, call: Writers(), perform, perform2: Performs(), stop: BitVec(64) → Type, n, m: Nat, le: n <= m,
+    hp: (procedure: Nat) → Mem(procedure, s.performed()) → (args, results: List<Nat>) → (env: Env) →
+        ITree::Refuses(Events::linux(), Flow::stops(stop), perform(procedure, args, results, env), perform2(procedure, args, results, env))): (env: Env) →
+    ITree::Refuses(Events::linux(), Flow::stops(stop), s.denote(call, perform, n, env), s.denote(call, perform2, m, env)) {
+    match s {
+        Compute(_) => λ env => Inr(refl),
+        Invoke(shape) => λ env => SameVis(λ a => Ret(Onward(shape.answer(env, a))), refl, λ a => Inr(refl)),
+        Then(first, rest) => λ env => ITree::refuses_bind(Events::linux(), Flow::stops(stop), Flow::stops(stop),
+            first.denote(call, perform, n, env), first.denote(call, perform2, m, env),
+            λ flow => match flow { Onward(next) => rest.denote(call, perform, n, next), Exited(status) => Ret(Exited(status)) },
+            λ flow => match flow { Onward(next) => rest.denote(call, perform2, m, next), Exited(status) => Ret(Exited(status)) },
+            first.refuses(call, perform, perform2, stop, n, m, le, λ procedure mem => hp(procedure, first.performed().mem_append_l(rest.performed(), procedure, mem)), env),
+            λ flow => match flow {
+                Onward(next) => rest.refuses(call, perform, perform2, stop, n, m, le,
+                    λ procedure mem => hp(procedure, first.performed().mem_append_r(rest.performed(), procedure, mem)), next),
+                Exited(_) => Inr(refl),
+            },
+            λ flow => match flow {
+                Onward(_) => λ never v => false_elim(never),
+                Exited(_) => λ stops v => Inl(stops),
+            }),
+        Branch(condition, yes, no) => λ env => match env.bit(condition) as λ b =>
+                ITree::Refuses(Events::linux(), Flow::stops(stop),
+                    match b as λ _ => ITree<Flow>(Events::linux()) { True => yes.denote(call, perform, n, env), False => no.denote(call, perform, n, env) },
+                    match b { True => yes.denote(call, perform2, m, env), False => no.denote(call, perform2, m, env) }) {
+            True => yes.refuses(call, perform, perform2, stop, n, m, le,
+                λ procedure mem => hp(procedure, yes.performed().mem_append_l(no.performed(), procedure, mem)), env),
+            False => no.refuses(call, perform, perform2, stop, n, m, le,
+                λ procedure mem => hp(procedure, yes.performed().mem_append_r(no.performed(), procedure, mem)), env),
+        },
+        Repeat(body, again) => λ env => ITree::iter_refuses(Events::linux(), Flow::stops(stop),
+            λ e => ITree::map(Events::linux(), body.denote(call, perform, n, e), λ flow => flow.pass(again)),
+            λ e => ITree::map(Events::linux(), body.denote(call, perform2, m, e), λ flow => flow.pass(again)),
+            λ e => ITree::refuses_map(Events::linux(), Flow::stops(stop), Step::stops<Env, Flow>(Flow::stops(stop)),
+                body.denote(call, perform, n, e), body.denote(call, perform2, m, e), λ flow => flow.pass(again),
+                body.refuses(call, perform, perform2, stop, n, m, le, hp, e),
+                λ flow => match flow { Onward(_) => λ never => false_elim(never), Exited(_) => λ stops => stops }),
+            n, m, le, env),
+        Exit(_) => λ env => Inr(refl),
+        Arg(_, _, _) => λ env => Inr(refl),
+        Perform(procedure, args, results) => λ env => hp(procedure, Inl(refl), args, results, env),
+    }
+}
+
+// A compiled call refuses where the source's goes on: past its depth, or
+// below a call that does.
+theorem Source::performs_refuses(self src: Source, call: Writers(), n, m: Nat, le: n <= m, depth, depth2: Nat, deeper: depth <= depth2):
+    (procedure: Nat) → (args, results: List<Nat>) → (env: Env) →
+    ITree::Refuses(Events::linux(), Flow::stops(refused_status()), src.performs(call, n, depth)(procedure, args, results, env),
+        src.calls(call, m, depth2)(procedure, args, results, env)) {
+    match depth {
+        Zero => λ procedure args results env => Inl(refl),
+        Succ(d) => match depth2 {
+            Zero => false_elim(deeper),
+            Succ(d2) => λ procedure args results env => match src.procedures.nth(procedure) as λ o =>
+                    ITree::Refuses(Events::linux(), Flow::stops(refused_status()),
+                        match o as λ _ => ITree<Flow>(Events::linux()) {
+                            None => Ret(Onward(env)),
+                            Some(proc) => ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, n, d), n, proc.enter(env, args)),
+                                λ flow => proc.leave(env, results, flow)),
+                        },
+                        match o {
+                            None => Ret(Onward(env)),
+                            Some(proc) => ITree::map(Events::linux(), proc.body.denote(call, src.calls(call, m, d2), m, proc.enter(env, args)),
+                                λ flow => proc.leave(env, results, flow)),
+                        }) {
+                None => Inr(refl),
+                Some(proc) => ITree::refuses_map(Events::linux(), Flow::stops(refused_status()), Flow::stops(refused_status()),
+                    proc.body.denote(call, src.performs(call, n, d), n, proc.enter(env, args)),
+                    proc.body.denote(call, src.calls(call, m, d2), m, proc.enter(env, args)), λ flow => proc.leave(env, results, flow),
+                    proc.body.refuses(call, src.performs(call, n, d), src.calls(call, m, d2), refused_status(), n, m, le,
+                        λ p _ => src.performs_refuses(call, n, m, le, d, d2, deeper, p), proc.enter(env, args)),
+                    λ flow => match flow { Onward(_) => λ never => false_elim(never), Exited(_) => λ stops => stops }),
+            },
+        },
+    }
+}
+
+// A source call, with no more levels than the compiled one's depth, is
+// below it: nothing refused.
+theorem Source::calls_refuses(self src: Source, call: Writers(), n: Nat, depth, depth2: Nat, deeper: depth <= depth2):
+    (procedure: Nat) → (args, results: List<Nat>) → (env: Env) →
+    ITree::Refuses(Events::linux(), Flow::stops(λ _ => False), src.calls(call, n, depth)(procedure, args, results, env),
+        src.performs(call, n, depth2)(procedure, args, results, env)) {
+    match depth {
+        Zero => λ procedure args results env => trivial,
+        Succ(d) => match depth2 {
+            Zero => false_elim(deeper),
+            Succ(d2) => λ procedure args results env => match src.procedures.nth(procedure) as λ o =>
+                    ITree::Refuses(Events::linux(), Flow::stops(λ _ => False),
+                        match o as λ _ => ITree<Flow>(Events::linux()) {
+                            None => Ret(Onward(env)),
+                            Some(proc) => ITree::map(Events::linux(), proc.body.denote(call, src.calls(call, n, d), n, proc.enter(env, args)),
+                                λ flow => proc.leave(env, results, flow)),
+                        },
+                        match o {
+                            None => Ret(Onward(env)),
+                            Some(proc) => ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, n, d2), n, proc.enter(env, args)),
+                                λ flow => proc.leave(env, results, flow)),
+                        }) {
+                None => Inr(refl),
+                Some(proc) => ITree::refuses_map(Events::linux(), Flow::stops(λ _ => False), Flow::stops(λ _ => False),
+                    proc.body.denote(call, src.calls(call, n, d), n, proc.enter(env, args)),
+                    proc.body.denote(call, src.performs(call, n, d2), n, proc.enter(env, args)), λ flow => proc.leave(env, results, flow),
+                    proc.body.refuses(call, src.calls(call, n, d), src.performs(call, n, d2), λ _ => False, n, n, n.le_refl(),
+                        λ p _ => src.calls_refuses(call, n, d, d2, deeper, p), proc.enter(env, args)),
+                    λ flow => match flow { Onward(_) => λ never => false_elim(never), Exited(_) => λ stops => stops }),
+            },
+        },
+    }
+}
+
+// The compiled tree is the source's at fuel `m`, at least its own fuel and
+// the depth, with the runs it refuses ended at the refusal.
+theorem Source::bounded_refuses(self src: Source, args: List<List<BitVec(8)>>, n, m: Nat, le: n <= m, deep: src.depth <= m):
+    ITree::Refuses(Events::linux(), refused_status(), src.bounded_tree(args, n), src.tree(args, m)) {
+    let call = program_writers(src.functions);
+    ITree::refuses_map(Events::linux(), Flow::stops(refused_status()), refused_status(), src.bounded_main(args, n), src.main_tree(args, m), λ flow => flow.status(),
+        src.main.refuses(call, src.performs(call, n, src.depth), src.calls(call, m, m), refused_status(), n, m, le,
+            λ p _ => src.performs_refuses(call, n, m, le, src.depth, m, deep, p), src.start(args)),
+        λ flow => match flow { Onward(_) => λ never => false_elim(never), Exited(_) => λ stops => stops })
+}
+
+// Every trace the compiled program's meaning produces is the source's, or
+// is refused: it exits with `call_depth_status` after a prefix the source
+// produces.
+theorem Source::bounded_traces(self src: Source, args: List<List<BitVec(8)>>, tr: Trace<BitVec(64)>(Events::linux()),
+    produces: Program::Produces(Events::linux(), src.bounded(args), tr)):
+    Or<Program::Produces(Events::linux(), src.denote(args), tr), Trace::Stops(Events::linux(), tr, refused_status()) ∧ Program::Produces(Events::linux(), src.denote(args), Trace::opened(Events::linux(), tr))> {
+    let m = produces.n + src.depth;
+    match IsTrace::of_refuses(Events::linux(), refused_status(), src.bounded_tree(args, produces.n), src.tree(args, m), tr,
+        src.bounded_refuses(args, produces.n, m, produces.n.le_add_l(src.depth), produces.n.le_add_r(src.depth)), produces.h) {
+        Inl(it) => Inl(Converges(m, it)),
+        Inr(both) => Inr(⟨both.left, Converges(m, both.right)⟩),
+    }
+}
+
+// With a depth at least the fuel, the compiled tree grows the source's:
+// every run the source makes with that fuel, the compiled program makes.
+theorem Source::bounded_exact(self src: Source, args: List<List<BitVec(8)>>, n: Nat, deep: n <= src.depth):
+    ITree::Below(Events::linux(), src.tree(args, n), src.bounded_tree(args, n)) {
+    let call = program_writers(src.functions);
+    ITree::below_of_refuses(Events::linux(), src.tree(args, n), src.bounded_tree(args, n),
+        ITree::refuses_map(Events::linux(), Flow::stops(λ _ => False), λ (_: BitVec(64)) => False, src.main_tree(args, n), src.bounded_main(args, n), λ flow => flow.status(),
+            src.main.refuses(call, src.calls(call, n, n), src.performs(call, n, src.depth), λ _ => False, n, n, n.le_refl(),
+                λ p _ => src.calls_refuses(call, n, n, src.depth, deep, p), src.start(args)),
+            λ flow => match flow { Onward(_) => λ never => false_elim(never), Exited(_) => λ never => never }))
+}
+
+// A source whose `main` performs nothing is never refused: the compiled
+// tree grows into the source's at the same fuel.
+theorem Source::bounded_never_refuses(self src: Source, args: List<List<BitVec(8)>>, n: Nat, none: src.main.performed() = []):
+    ITree::Below(Events::linux(), src.bounded_tree(args, n), src.tree(args, n)) {
+    let call = program_writers(src.functions);
+    ITree::below_of_refuses(Events::linux(), src.bounded_tree(args, n), src.tree(args, n),
+        ITree::refuses_map(Events::linux(), Flow::stops(λ _ => False), λ (_: BitVec(64)) => False, src.bounded_main(args, n), src.main_tree(args, n), λ flow => flow.status(),
+            src.main.refuses(call, src.performs(call, n, src.depth), src.calls(call, n, n), λ _ => False, n, n, n.le_refl(),
+                λ p mem => false_elim(j(none, λ l _ => Mem(p, l), mem)), src.start(args)),
+            λ flow => match flow { Onward(_) => λ never => false_elim(never), Exited(_) => λ never => never }))
+}
+
+// …so every trace its compiled meaning produces, the source produces.
+theorem Source::bounded_of_none(self src: Source, args: List<List<BitVec(8)>>, none: src.main.performed() = []):
+    Program::Refines(Events::linux(), src.bounded(args), src.denote(args)) {
+    λ tr c => Converges(c.n, IsTrace::of_below(Events::linux(), src.bounded_tree(args, c.n), src.tree(args, c.n), tr, src.bounded_never_refuses(args, c.n, none), c.h))
+}
+
+// …and the other way: every trace the source produces, its compiled
+// meaning does.
+theorem Source::never_refused_back(self src: Source, args: List<List<BitVec(8)>>, n: Nat, none: src.main.performed() = []):
+    ITree::Below(Events::linux(), src.tree(args, n), src.bounded_tree(args, n)) {
+    let call = program_writers(src.functions);
+    ITree::below_of_refuses(Events::linux(), src.tree(args, n), src.bounded_tree(args, n),
+        ITree::refuses_map(Events::linux(), Flow::stops(λ _ => False), λ (_: BitVec(64)) => False, src.main_tree(args, n), src.bounded_main(args, n),
+            λ flow => flow.status(),
+            src.main.refuses(call, src.calls(call, n, n), src.performs(call, n, src.depth), λ _ => False, n, n, n.le_refl(),
+                λ p mem => false_elim(j(none, λ l _ => Mem(p, l), mem)), src.start(args)),
+            λ flow => match flow { Onward(_) => λ never => false_elim(never), Exited(_) => λ never => never }))
+}
+
+theorem Source::of_none_bounded(self src: Source, args: List<List<BitVec(8)>>, none: src.main.performed() = []):
+    Program::Refines(Events::linux(), src.denote(args), src.bounded(args)) {
+    λ tr c => Converges(c.n, IsTrace::of_below(Events::linux(), src.tree(args, c.n), src.bounded_tree(args, c.n), tr, src.never_refused_back(args, c.n, none), c.h))
 }

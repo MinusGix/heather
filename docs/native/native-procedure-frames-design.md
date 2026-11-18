@@ -531,3 +531,35 @@ work. The refusal outcome is the same shape as the contract's limit-read
 refusal (`docs/native/system-contract-design.md` §4.2), and §4.1 there
 lists where a check goes.
 
+### 7.1 As built: the source without a depth
+
+`Source::denote` is the source's meaning, with no depth: a call is
+`Source::calls`, which nests as deep as the fuel and is a `Cut` past it,
+as a loop is past its fuel. The meaning with a depth is the compiled
+program's, `Source::bounded` (`Source::performs`, a call past `src.depth`
+exiting with `call_depth_status`), and every compiled and ELF theorem is
+stated over it, as is the coinductive tree (`Source::tree_co`). Three
+theorems say how the two stand:
+
+- `Source::bounded_refuses`: the compiled tree at fuel `n` is the source's
+  at any fuel `m` that is at least `n` and the depth, with some subtrees
+  ended early at an exit with `call_depth_status` (`ITree::Refuses`). A
+  refusal is at a call, before the callee does anything, since only
+  `Source::performs` at depth zero makes one. `Source::bounded_traces`
+  reads it off traces: every trace the compiled meaning produces, the
+  source produces, or it ends in the refusal after a prefix the source
+  produces (`IsTrace::of_refuses`, `Trace::opened`). That is guarantee 2.
+- `Source::bounded_exact`: with a depth at least the fuel, the source's
+  tree grows into the compiled one, so every run the source makes at that
+  fuel the compiled program makes. That is guarantee 1 with the depth
+  counted in calls, and the fuel standing in for the run's deepest chain.
+- `Source::bounded_of_none` and `Source::of_none_bounded`: a source whose
+  `main` performs nothing produces exactly the traces its compiled meaning
+  does. cat's compiled theorem reaches its specification through them.
+
+What is left of §7: the depth in calls becomes the check in bytes, made
+only at a call that can close a cycle, with `need` from the call graph
+elsewhere (guarantees 1 in bytes and 5), then tail calls (3) and bounded
+recursion (4). `src.depth` leaves the source then: it is already only the
+compiled program's budget.
+

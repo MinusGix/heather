@@ -6,8 +6,9 @@
 // and the fuel is shared by every loop and every call. Here a `Repeat` is
 // `CoTree::iter`: it goes round for as long as its again-bit says, so a
 // loop that never ends is a tree that never returns, not one that is cut.
-// Procedures nest to the source's depth as before (a call past it exits
-// 139), so depth is still counted, but no fuel is.
+// Procedures nest to the source's depth (a call past it exits 139), so this
+// is the compiled program's meaning (`Source::bounded`): depth is still
+// counted, but no fuel is.
 //
 // The two meanings are the same program (`Program::Refines` both ways):
 // every trace the fuelled tree produces at some fuel, the fuel-free one
@@ -162,13 +163,13 @@ theorem Source::performs_into_co(self src: Source, call: Writers(), n: Nat, dept
 }
 
 // The bridge: every trace the program produces at some fuel, its fuel-free
-// tree produces at some depth. A compiled program refines `src.denote`
+// tree produces at some depth. A compiled program refines `src.bounded`
 // (`native_source_sim`), so through this it refines `src.tree_co`.
 theorem Source::tree_co_refines(self src: Source, args: List<List<BitVec(8)>>):
-    Program::Refines(Events::linux(), src.denote(args), CoTree::program(Events::linux(), src.tree_co(args)))
+    Program::Refines(Events::linux(), src.bounded(args), CoTree::program(Events::linux(), src.tree_co(args)))
 {
-    λ tr (c: Converges<BitVec(64)>(Events::linux(), λ n => src.tree(args, n), tr)) =>
-        ITree::into_map(Events::linux(), src.main_tree(args, c.n), src.main_tree_co(args), λ flow => flow.status(),
+    λ tr (c: Converges<BitVec(64)>(Events::linux(), λ n => src.bounded_tree(args, n), tr)) =>
+        ITree::into_map(Events::linux(), src.bounded_main(args, c.n), src.main_tree_co(args), λ flow => flow.status(),
             src.main.into_co(program_writers(src.functions), src.performs(program_writers(src.functions), c.n, src.depth),
                 src.performs_co(program_writers(src.functions), src.depth),
                 src.performs_into_co(program_writers(src.functions), c.n, src.depth), c.n, src.start(args)),
@@ -269,10 +270,10 @@ theorem Source::performs_onto_co(self src: Source, call: Writers(), depth: Nat):
 // some depth, the program produces at some fuel. With
 // `Source::tree_co_refines`, the two are the same program.
 theorem Source::tree_co_refined(self src: Source, args: List<List<BitVec(8)>>):
-    Program::Refines(Events::linux(), CoTree::program(Events::linux(), src.tree_co(args)), src.denote(args))
+    Program::Refines(Events::linux(), CoTree::program(Events::linux(), src.tree_co(args)), src.bounded(args))
 {
     λ tr (c: Converges<BitVec(64)>(Events::linux(), λ n => CoTree::approx(Events::linux(), n, src.tree_co(args)), tr)) =>
-        CoTree::onto_map(Events::linux(), src.main_tree_co(args), λ n => src.main_tree(args, n),
+        CoTree::onto_map(Events::linux(), src.main_tree_co(args), λ n => src.bounded_main(args, n),
             λ n => src.main.grows(program_writers(src.functions), src.performs(program_writers(src.functions), n, src.depth),
                 src.performs(program_writers(src.functions), n + 1, src.depth), src.performs_grows(program_writers(src.functions), n, src.depth),
                 n, src.start(args)),
