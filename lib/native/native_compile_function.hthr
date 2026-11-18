@@ -595,7 +595,7 @@ theorem Target::based_span(self t: Target, env: Env, v: Nat → BitVec(8), m: X8
         argv_at_kept(t.argv(), m, t.argv(), m2, t.kept_store(m, q, bytes, fits), word_in(v, so), t.args, based.right.right.right.left));
     ⟨t.r.store_holds(v, m, based.left, q, bytes, fits),
      ⟨layout.buffers_span(t.r, env, v, based.right.left, buf, cap, found, i, below, bytes, reach),
-      ⟨based.right.right.left, ⟨argv, trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), counted), based.right.right.right.right)⟩⟩⟩⟩
+      ⟨based.right.right.left, ⟨argv, trans(counted, based.right.right.right.right)⟩⟩⟩⟩
 }
 
 // ---------------------------------------------------------------------------
@@ -887,20 +887,22 @@ theorem Env::call_meaning(self env: Env, call: Writers(), callee: Nat, arguments
 // the return address below the frame, and the callee by its contract. What
 // the contract asks for each answer is what the code after the CALL needs
 // for it (`Target::ends_taken`), so the call runs as the callee's tree and
-// then, from each answer, the tree its site goes on with.
-theorem Target::goes_calls<A>(self t: Target, live: List<Nat>, env: Env, p: Prog, label, lent: Nat, small: lent <= 3, arguments: List<Nat>,
+// then, from each answer, the tree its site goes on with: after a silent
+// step, paid by the CALL, where `silent` says (a procedure's call).
+theorem Target::goes_calls<A>(self t: Target, silent: Bool, live: List<Nat>, env: Env, p: Prog, label, lent: Nat, small: lent <= 3, arguments: List<Nat>,
     inside: (i: Nat) → Mem(i, arguments) → (t.layout().word_fits(i).IsTrue()) ∧ Mem(i, live),
     within: p.calls(t.layout(), label, lent, arguments).Within(t.program),
     accepts: List<BitVec(64)> → Env → Type, callee: List<BitVec(64)> → Env → ITree<A>(Events::linux()), answer: List<BitVec(64)> → Env → A → Answer,
     performs: t.Callable(label, lent, accepts, callee, answer), accepted: accepts(env.words_at(arguments), env),
     k: A → ITree<BitVec(64)>(Events::linux()),
     next: (x: A) → t.Taken(live, env, prog_len(p.calls(t.layout(), label, lent, arguments)), answer(env.words_at(arguments), env, x), k(x))):
-    t.At(prog_len(p), live, ITree::bind(Events::linux(), callee(env.words_at(arguments), env), k), env) {
+    t.At(prog_len(p), live, ITree::after_step(Events::linux(), silent, ITree::bind(Events::linux(), callee(env.words_at(arguments), env), k)), env) {
     let layout = t.layout();
     let regs = call_registers().drop(2 * lent);
     let words = env.words_at(arguments);
     let passed = t.passed_homes(lent) ++ words;
     let tree: ITree<BitVec(64)>(Events::linux()) = ITree::bind(Events::linux(), callee(words, env), k);
+    let called_tree = ITree::after_step(Events::linux(), silent, tree);
     let block = layout.homes_block(0, lent, call_registers()) ++ [MovRR(Rbx, R10)];
     let passes_to = p.words_to(layout, arguments, regs);
     let carried = then(passes_to, Block(block));
@@ -919,7 +921,7 @@ theorem Target::goes_calls<A>(self t: Target, live: List<Nat>, env: Env, p: Prog
         (s.gprs.Holding(call_registers(), passed) ∧ (read_gpr(Rbx, s.gprs) = read_gpr(R10, s.gprs)));
     let displacement = asm_jump_of(asm_labels(t.program), prog_len(carried), CallTo(label));
     let lands = call_lands(asm_labels(t.program), w_called.witness, t.program, carried, 0, label, t.program.laid_out_lands(t.laid), w_called.proof);
-    let did = t.io().goes_callto(t.program, t.origin, t.stack, t.stack_writes, t.code_fits(), w_called.witness, carried, 0, label, w_called.proof,
+    let did = t.io().goes_callto(silent, t.program, t.origin, t.stack, t.stack_writes, t.code_fits(), w_called.witness, carried, 0, label, w_called.proof,
         asm_labels(t.program, label), lands, tree, pre4, λ _ => i1,
         λ s pre => ⟨trans(t.held_rsp(live, env, s.gprs, s.memory, pre.left), frame_i), fits_i⟩,
         λ s pre => {
@@ -952,8 +954,8 @@ theorem Target::goes_calls<A>(self t: Target, live: List<Nat>, env: Env, p: Prog
         });
     // The homes into their registers and R10 into RBX.
     let q3 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ env.InRegisters(g, arguments, regs);
-    let carry = t.goes_block(passes_to, 0, block, w_carried, tree, pre4, did);
-    let carry2: t.GoesR(prog_len(passes_to), tree, q3) = t.goes_weaken(carry, λ s h => {
+    let carry = t.goes_block(passes_to, 0, block, w_carried, called_tree, pre4, did);
+    let carry2: t.GoesR(prog_len(passes_to), called_tree, q3) = t.goes_weaken(carry, λ s h => {
             let u = execute_block_normal(block, s);
             let c = t.homes_carried(s, words, lent, small, h.right);
             let held_u: t.Held(live, env, u.gprs, u.memory) = j(sym(c.left), λ m _ => t.Held(live, env, u.gprs, m),
@@ -962,7 +964,7 @@ theorem Target::goes_calls<A>(self t: Target, live: List<Nat>, env: Env, p: Prog
             ⟨held_u, ⟨c.right.left, c.right.right.left⟩⟩
         });
     // The arguments into their registers: RSP is the frame already.
-    let passes = t.goes_words_to(live, env, tree, q3, arguments)(regs, p, inside, word_registers_outside(lent), word_registers_distinct(lent),
+    let passes = t.goes_words_to(live, env, called_tree, q3, arguments)(regs, p, inside, word_registers_outside(lent), word_registers_distinct(lent),
         w_passed, carry2);
     λ s here resident held => passes(s, here, resident, ⟨held, λ g3 held3 holding keeps => ⟨held3, holding⟩⟩)
 }
@@ -999,8 +1001,8 @@ theorem Target::function_performs(self t: Target, call: Writers(), answers: t.An
         let back_i: (i0 + 8 = t.index) = omega(t.roomy);
         let table = t.homes.room_table(t.functions);
         let callee_room: (rooms_at(table, f) + 8 <= t.called.functions_room(table)) = t.called.functions_room_mem(table, f, listed);
-        let under: (t.called.functions_room(table) <= t.callees.below(t.called, t.procedures, t.bodies, t.homes.places, table, t.room)) =
-            Nat::le_max_r(t.callees.reach(t.procedures, t.bodies, t.homes.places, table, t.room), t.called.functions_room(table));
+        let under: (t.called.functions_room(table) <= t.callees.below(t.called, t.procedures, t.bodies, t.homes.places, table, t.checks, t.room)) =
+            Nat::le_max_r(t.callees.reach(t.procedures, t.bodies, t.homes.places, table, t.checks, t.room), t.called.functions_room(table));
         let room_f: (rooms_at(table, f) <= i0) = omega(t.roomy, callee_room, under);
         let bare = pre.left;
         let v = bare.left.witness;
@@ -1063,7 +1065,7 @@ theorem Target::functions_run(self t: Target, call: Writers(), answers: t.Answer
         // RAX to the result's home.
         let taken = t.goes_result(live, out, left, region.meaning(call, env), back, result, inside(result, Inl(refl)),
             λ i m ne => live_before_keeps(arguments, result, out, i, m, ne), apart, within, tree, next);
-        t.goes_calls<True>(live, env, p, Succ(callee), k, small, arguments,
+        t.goes_calls<True>(False, live, env, p, Succ(callee), k, small, arguments,
             λ i m => ⟨inside(i, Inr(m)), live_before_reads(arguments, result, out, i, m)⟩, w_back,
             t.Lends(callee), λ (_: List<BitVec(64)>) (_: Env) => Ret(trivial), function_answer(call, callee),
             t.function_performs(call, answers, callee, below, listed), ⟨arity, ⟨omega(words_len, few), has⟩⟩, λ (_: True) => tree,
