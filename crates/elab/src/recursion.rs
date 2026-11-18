@@ -1523,7 +1523,7 @@ impl Guard {
         };
         let Some(index) = depth.checked_sub(param + 1) else { return true };
         let var = Term::Var(LocalVar(index as u32));
-        types.iter().any(|ty| ty.abstract_local(&var).is_some())
+        types.iter().any(|ty| ty.mentions_local(&var))
     }
 }
 
