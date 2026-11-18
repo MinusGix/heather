@@ -3368,6 +3368,55 @@ pub(crate) fn subst(e: &Expr, map: &[(&str, &Expr)], bound: &mut Vec<String>) ->
     Expr { kind, span }
 }
 
+/// [`subst`] at once, from the top, except that a value `e` reads more than
+/// once is bound once by a `let` around the result and read through it:
+/// `r with { a = r.a + i }` at `r := v` is `{ let __dec_shared_r = v;
+/// __dec_shared_r with { a = __dec_shared_r.a + i } }`, never `v with { a =
+/// v.a + i }`. The two are equal by ζ, which is all a re-spelling walk needs
+/// of a `let`'s value (§3), and the second doubles in size at every
+/// statement that reads its local twice: a `for` over words assigning a
+/// field `k` times was elaborated at size 2^k (issues/word-loop-body-exponential.md).
+///
+/// A value that is a variable or a literal is substituted as before, as is
+/// one read once. The `let`'s name cannot capture: what is substituted
+/// under it are the map's values, which bind it only inside a block of
+/// their own.
+pub(crate) fn subst_shared(e: &Expr, map: &[(&str, &Expr)]) -> Expr {
+    let atomic = |v: &Expr| matches!(v.kind, ExprKind::Var(_) | ExprKind::Num(_) | ExprKind::SuffixedNum { .. });
+    let reads = |n: &str| {
+        let mut k = 0usize;
+        crate::surface::walk_expr(e, &mut |x| {
+            if matches!(&x.kind, ExprKind::Var(m) if m == n) {
+                k += 1;
+            }
+        });
+        k
+    };
+    let shared: Vec<(&str, &Expr, String)> = map
+        .iter()
+        .filter(|(n, v)| !atomic(v) && reads(n) > 1)
+        .map(|(n, v)| (*n, *v, format!("__dec_shared_{n}")))
+        .collect();
+    if shared.is_empty() {
+        return subst(e, map, &mut Vec::new());
+    }
+    let span = e.span;
+    let reads_of: Vec<Expr> = shared.iter().map(|(_, _, fresh)| var(fresh, span)).collect();
+    let renamed: Vec<(&str, &Expr)> = map
+        .iter()
+        .map(|(n, v)| match shared.iter().position(|(m, _, _)| m == n) {
+            Some(k) => (*n, &reads_of[k]),
+            None => (*n, *v),
+        })
+        .collect();
+    let body = subst(e, &renamed, &mut Vec::new());
+    let stmts = shared
+        .iter()
+        .map(|(_, v, fresh)| Stmt::Let { name: fresh.clone(), ty: None, expr: (*v).clone(), span, opaque: false })
+        .collect();
+    Expr { kind: ExprKind::Block(Box::new(Block { stmts, result: Box::new(body), ons: Vec::new(), span })), span }
+}
+
 /// A block's statements with each claimed method call on a mutable local
 /// (`\0mutated(x.m(a))`, [`heather_syntax::MUTATED`]) spelled as the plain
 /// `let`s it amounts to: `let p = \0mutated_value(x.m(a));` (none for a
@@ -3616,7 +3665,7 @@ impl Respell<'_> {
             .filter(|&i| self.let_visible(i))
             .map(|i| (self.let_env[i].0.as_str(), &self.let_env[i].1))
             .collect();
-        subst(&explicit_rebinds(e), &map, &mut Vec::new())
+        subst_shared(&explicit_rebinds(e), &map)
     }
 
     /// Whether `let_env[i]` is what its name means here.
@@ -3806,7 +3855,7 @@ impl Respell<'_> {
         let mut env: Vec<(String, Expr)> = Vec::new();
         let apply = |env: &[(String, Expr)], e: &Expr| {
             let map: Vec<(&str, &Expr)> = env.iter().map(|(n, v)| (n.as_str(), v)).collect();
-            subst(&explicit_rebinds(e), &map, &mut Vec::new())
+            subst_shared(&explicit_rebinds(e), &map)
         };
         for st in rebind_marked(stmts, self.span, true)? {
             let Stmt::Let { name, expr, .. } = &st else {

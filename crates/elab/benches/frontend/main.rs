@@ -313,7 +313,7 @@ fn fixtures_index() -> Vec<(&'static str, &'static str)> {
         ("match/arm-checks", "k fallback checks inside a plain match's arm (control: match/plain-checks)"),
         ("match/plain-checks", "the same k fallback checks outside any match (the control)"),
         ("match/arm-type-size", "32 fallback checks in a plain match's arm, over types of size s"),
-        ("loops/word-body", "k word-field assignments in a `for` over words (exponential today)"),
+        ("loops/word-body", "k word-field assignments in a `for` over words"),
     ]
 }
 

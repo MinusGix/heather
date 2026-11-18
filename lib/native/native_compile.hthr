@@ -131,18 +131,6 @@ record Layout { low: BitVec(64), reserved: Nat, words: Nat, capacities: List<Nat
     // (`List::functions_room`).
     called: List<Nat> := [] }
 
-fn Layout::with_procedures(self layout: Layout, procedures: List<Procedure>) → Layout {
-    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, procedures, layout.functions, layout.bodies, layout.callees, layout.called)
-}
-
-fn Layout::with_functions(self layout: Layout, functions: List<Function>) → Layout {
-    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, layout.procedures, functions, layout.bodies, layout.callees, layout.called)
-}
-
-fn Layout::with_bodies(self layout: Layout, bodies: List<Frame>) → Layout {
-    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, layout.procedures, layout.functions, bodies, layout.callees, layout.called)
-}
-
 // Word `id`'s slot is in the frame; a word in a register needs none.
 fn Layout::word_fits(self layout: Layout, id: Nat) → Bool {
     match layout.homes.home(id) { InSlot(k) => Succ(k).leb(layout.words), InReg(_) => True }
@@ -515,11 +503,6 @@ record Compiled { prog: Prog, names: Nat }
 // A label, an empty block named `name`.
 fn Prog::label(self p: Prog, name: Nat) → Prog { At(p, name, Block([])) }
 
-// `value` clamped to `bound`, unsigned: unless it is below, the bound.
-fn Prog::clamp(self p: Prog, value, bound: Gpr, skip: Nat) → Prog {
-    then(then(then(p, Block([CmpRR(value, bound)])), Jcc(B, skip)), Block([MovRR(value, bound)])).label(skip)
-}
-
 // AT_FDCWD, minus 100 as a word (`at_fdcwd`, linux_x86_64_io).
 fn fdcwd_word() → BitVec(64) { BitVec::ofNat(Nat::pow(2, 64) - 100) }
 
@@ -573,6 +556,9 @@ record Build { cx: Emission, code: Fragment, block: List<Instruction>, names: Na
 
 fn Emission::from(self cx: Emission, names: Nat) → Build { Build(cx, Skip, [], names) }
 
+// Code that reads no word and takes no label name.
+fn Layout::build(self layout: Layout) → Build { Emission(layout, [], []).from(0) }
+
 // The block being written closed.
 fn Build::cut(self b: Build) → Build {
     match b.block {
@@ -600,6 +586,7 @@ fn Build::next(self b: Build, register: Gpr) → Build { b.step(register, 1) }
 fn Build::load(self b: Build, to, at: Gpr) → Build { b.item(Load(WordLoad(to, at))) }
 fn Build::load_byte(self b: Build, to, at: Gpr) → Build { b.item(LoadByte(ByteLoad(to, at))) }
 fn Build::store_byte(self b: Build, at, from: Gpr) → Build { b.item(StoreByte(ByteStore(at, from))) }
+fn Build::store(self b: Build, at, from: Gpr) → Build { b.item(Store(WordStore(at, from))) }
 
 // A word in a register, and a register in its word's home.
 fn Build::word(self b: Build, id: Nat, register: Gpr) → Build { b.add(Fetch(id, register)) }
@@ -720,60 +707,42 @@ fn Build::open(self b: Build, path, len, result, capacity: Nat) → Build {
      .keep(result, openat.result)
 }
 
-// read(fd, scratch, min(len, capacity - min(at, capacity))), the clamped
-// offset kept in R9; the result stored; on success the bytes copied into
-// the buffer from the offset.
-fn Prog::reads(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, buf, at, len, result: Nat, capacity: Nat, names: Nat) → Compiled {
-    Emission(layout, known, out).from(names).read(fd, buf, at, len, result, capacity).onto(p)
-}
-
-// write(fd, buffer + min(from, capacity), min(len, capacity - that)); the
-// result stored.
-fn Prog::writes(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, buf, from, len, result: Nat, capacity: Nat, names: Nat) → Compiled {
-    Emission(layout, known, out).from(names).write(fd, buf, from, len, result, capacity).onto(p)
-}
-
-// close(fd); the result put in its word's home.
-fn Prog::closes(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, fd, result: Nat) → Prog {
-    Emission(layout, known, out).from(0).close(fd, result).onto(p).prog
-}
-
-// openat(AT_FDCWD, scratch, O_RDONLY) of the path, its first min(len,
-// capacity) bytes up to its NUL copied to the scratch range and a NUL put
-// after them (RDI is past them); the result put in its word's home.
-fn Prog::opens(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, path, len, result: Nat, capacity: Nat, names: Nat) → Compiled {
-    Emission(layout, known, out).from(names).open(path, len, result, capacity).onto(p)
-}
-
-fn Prog::call(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, shape: CallShape, names: Nat) → Option<Compiled> {
+// The code of any call the compiler emits. A call with no buffer takes no
+// capacity.
+fn Build::call(self b: Build, shape: CallShape, capacity: Nat) → Build {
     match shape {
-        Reads(fd, buf, at, len, result) => match layout.words_fit([fd, at, len, result]) {
-            False => None,
-            True => match layout.capacities.nth(buf) {
-                None => None,
-                Some(capacity) => Some(p.reads(layout, known, out, fd, buf, at, len, result, capacity, names)),
-            },
-        },
-        Writes(fd, buf, from, len, result) => match layout.words_fit([fd, from, len, result]) {
-            False => None,
-            True => match layout.capacities.nth(buf) {
-                None => None,
-                Some(capacity) => Some(p.writes(layout, known, out, fd, buf, from, len, result, capacity, names)),
-            },
-        },
-        Opens(path, len, result) => match layout.words_fit([len, result]) {
-            False => None,
-            True => match layout.capacities.nth(path) {
-                None => None,
-                Some(capacity) => Some(p.opens(layout, known, out, path, len, result, capacity, names)),
-            },
-        },
-        Closes(fd, result) => match layout.words_fit([fd, result]) {
-            False => None,
-            True => Some(Compiled(p.closes(layout, known, out, fd, result), names)),
-        },
+        Reads(fd, buf, at, len, result) => b.read(fd, buf, at, len, result, capacity),
+        Writes(fd, buf, from, len, result) => b.write(fd, buf, from, len, result, capacity),
+        Opens(path, len, result) => b.open(path, len, result, capacity),
+        Closes(fd, result) => b.close(fd, result),
+        StatsPath(_, _, _, _) => b,
+        StatsFd(_, _, _) => b,
+    }
+}
+
+// The room of the buffer a call works on: none where the file has no such
+// buffer, or the compiler does not emit the call.
+fn Layout::call_room(self layout: Layout, shape: CallShape) → Option<Nat> {
+    match shape {
+        Reads(_, buf, _, _, _) => layout.capacities.nth(buf),
+        Writes(_, buf, _, _, _) => layout.capacities.nth(buf),
+        Opens(path, _, _) => layout.capacities.nth(path),
+        Closes(_, _) => Some(0),
         StatsPath(_, _, _, _) => None,
         StatsFd(_, _, _) => None,
+    }
+}
+
+// A call's code after `p`.
+fn Prog::asks(self p: Prog, cx: Emission, shape: CallShape, capacity, names: Nat) → Compiled { cx.from(names).call(shape, capacity).onto(p) }
+
+fn Prog::call(self p: Prog, layout: Layout, known: List<Fact>, out: List<Nat>, shape: CallShape, names: Nat) → Option<Compiled> {
+    match layout.words_fit(shape.words()) {
+        False => None,
+        True => match layout.call_room(shape) {
+            None => None,
+            Some(capacity) => Some(p.asks(Emission(layout, known, out), shape, capacity, names)),
+        },
     }
 }
 
@@ -845,26 +814,29 @@ fn Prog::arg(self p: Prog, layout: Layout, out: List<Nat>, index, buf, len, name
 // RAX the byte at the word `index` of buffer `buf`, zero-extended, or zero
 // where the index is not below the capacity `cap`: RCX the index, RDX the
 // capacity, RBX the byte's address.
-fn Prog::byte_to(self p: Prog, layout: Layout, buf, index, cap, skip: Nat) → Prog {
-    let tested = then(then(p.word_to(layout, index, Rcx), Block([MovRI(Rdx, BitVec::ofNat(cap)), MovRI(Rax, BitVec::ofNat(0)), CmpRR(Rcx, Rdx)])),
-        Jcc(AE, skip));
-    then(then(tested, Block([MovRI(Rbx, layout.buffer_at(buf)), AddRR(Rbx, Rcx)])), LoadByte(ByteLoad(Rax, Rbx))).label(skip)
+fn Build::byte(self b: Build, buf, index, cap: Nat) → Build {
+    b.word(index, Rcx).set(Rdx, cap).set(Rax, 0).cmp(Rcx, Rdx)
+        .unless(AE, λ b => b.point(Rbx, b.cx.layout.buffer_at(buf)).plus(Rbx, Rcx).load_byte(Rax, Rbx))
 }
 
 // The word `value`'s low byte stored at the word `index` of buffer `buf`,
 // where the index is below the capacity `cap`.
-fn Prog::byte_from(self p: Prog, layout: Layout, buf, index, value, cap, skip: Nat) → Prog {
-    let tested = then(then(p.word_to(layout, index, Rcx), Block([MovRI(Rdx, BitVec::ofNat(cap)), CmpRR(Rcx, Rdx)])), Jcc(AE, skip));
-    then(then(tested.word_to(layout, value, Rax), Block([MovRI(Rbx, layout.buffer_at(buf)), AddRR(Rbx, Rcx)])), StoreByte(ByteStore(Rbx, Rax))).label(skip)
+fn Build::put_byte(self b: Build, buf, index, value, cap: Nat) → Build {
+    b.word(index, Rcx).set(Rdx, cap).cmp(Rcx, Rdx)
+        .unless(AE, λ b => b.word(value, Rax).point(Rbx, b.cx.layout.buffer_at(buf)).plus(Rbx, Rcx).store_byte(Rbx, Rax))
 }
 
-fn Prog::loads(self p: Prog, layout: Layout, out: List<Nat>, output, buf, index, cap, names: Nat) → Prog {
-    p.byte_to(layout, buf, index, cap, Succ(names)).word_from(layout, out, output, Rax)
+// A byte node's code: the byte loaded to its word, or stored and then read
+// back to it.
+fn Build::node(self b: Build, node: Node, cap: Nat) → Build {
+    match node {
+        BufferLoad(output, buf, index) => b.byte(buf, index, cap).keep(output, Rax),
+        BufferStore(output, buf, index, value) => b.put_byte(buf, index, value, cap).byte(buf, index, cap).keep(output, Rax),
+        _ => b,
+    }
 }
 
-fn Prog::stores(self p: Prog, layout: Layout, out: List<Nat>, output, buf, index, value, cap, names: Nat) → Prog {
-    p.byte_from(layout, buf, index, value, cap, Succ(names)).loads(layout, out, output, buf, index, cap, Succ(names))
-}
+fn Prog::byte(self p: Prog, cx: Emission, node: Node, cap, names: Nat) → Compiled { cx.from(names).node(node, cap).onto(p) }
 
 fn Prog::byte_node(self p: Prog, layout: Layout, out: List<Nat>, node: Node, names: Nat) → Option<Compiled> {
     match node {
@@ -872,14 +844,14 @@ fn Prog::byte_node(self p: Prog, layout: Layout, out: List<Nat>, node: Node, nam
             False => None,
             True => match layout.capacities.nth(buf) {
                 None => None,
-                Some(cap) => Some(Compiled(p.loads(layout, out, output, buf, index, cap, names), Succ(names))),
+                Some(cap) => Some(p.byte(Emission(layout, [], out), BufferLoad(output, buf, index), cap, names)),
             },
         },
         BufferStore(output, buf, index, value) => match layout.words_fit([output, index, value]) {
             False => None,
             True => match layout.capacities.nth(buf) {
                 None => None,
-                Some(cap) => Some(Compiled(p.stores(layout, out, output, buf, index, value, cap, names), Succ(Succ(names)))),
+                Some(cap) => Some(p.byte(Emission(layout, [], out), BufferStore(output, buf, index, value), cap, names)),
             },
         },
         _ => None,
@@ -1116,8 +1088,7 @@ fn Prog::count_down(self p: Prog, layout: Layout) → Prog {
 // …and where it leaves, the results already in their registers: the room
 // as it was, through RBX and R11.
 fn Prog::count_up(self p: Prog, layout: Layout) → Prog {
-    then(then(then(then(p, Block([MovRI(Rbx, layout.room_at())])), Load(WordLoad(R11, Rbx))), Block([AddRI8(R11, BitVec::ofNat(1))])),
-        Store(WordStore(Rbx, R11)))
+    layout.build().point(Rbx, layout.room_at()).load(R11, Rbx).next(R11).store(Rbx, R11).onto(p).prog
 }
 
 // A call, of a procedure or of a function
