@@ -224,7 +224,7 @@ test("a probe releases a prerequisite's readers before it finishes", async () =>
     const runs = await runTargets(targets, 2, [], true, {}, ready, 0.05);
     for (const run of runs) assert.equal(run.result.passed, 1, `${run.target.label}: ${run.output}`);
     assert.ok(asked.length >= 2 && asked.every((name) => name === "library"), asked.join());
-    assert.match(received, /\[ready\] library: lib\/native, lib\/_tests\/native built; native_tools may start/);
+    assert.match(received, /\[ready\] library: lib\/native, lib\/_tests\/native, lib\/lang\/lexer built; native_tools may start/);
     assert.ok(received.indexOf("[ready]") < received.indexOf("library.rs: PASS"), received);
   } finally {
     process.stdout.write = write;
@@ -241,7 +241,7 @@ test("the probe is the manifest's heather asking the gate's store under the lane
   assert.equal(binaryOf(manifest, "other"), null);
   const library = PREREQUISITES.get("library");
   assert.deepEqual(probeArgs(library, {}),
-    ["check", "--cache-dir", "target/cli-check-images", "--unbuilt", "lib/native", "lib/_tests/native"]);
+    ["check", "--cache-dir", "target/cli-check-images", "--unbuilt", "lib/native", "lib/_tests/native", "lib/lang/lexer"]);
   assert.deepEqual(probeArgs(library, { HEATHER_SEMANTIC_IMAGES: "accept-stale" }).slice(3, 4), ["--accept-stale-images"]);
   // A shared cache directory moves the store the probe asks, as it moves the gate's.
   assert.deepEqual(probeArgs(library, { HEATHER_CACHE_DIR: "/lanes/base" }).slice(1, 3), ["--cache-dir", "/lanes/base/cli-check-images"]);

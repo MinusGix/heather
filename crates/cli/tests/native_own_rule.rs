@@ -21,7 +21,7 @@ fn bytes(assembly: &Path) -> Vec<u8> {
 fn compile(root: &Path, source: &Path, function: &str, assembly: &Path, explain: &str) -> (Vec<u8>, String) {
     let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(root)
         .args(["compile-x86"]).arg(source).args([function, "-o"]).arg(assembly).arg(explain)
-        .arg("--cache-dir").arg(heather_cli::showcase::native_test_images()).args(["--kernel-workers", "1"])
+        .args(heather_cli::showcase::native_image_args()).args(["--kernel-workers", "1"])
         .output().unwrap();
     assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
     (bytes(assembly), String::from_utf8(result.stdout).unwrap())
