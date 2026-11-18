@@ -89,3 +89,38 @@ theorem shift_by(x: u8, n: Nat): x << n = x << n { by bv_decide() }
 // them.
 // expect-error: bv_decide: the claim is false at x =
 theorem lt_not_enough(x: u8, h: x < 200): x < x + 100 { by bv_decide() }
+
+// Numbers of words: `toNat` comparisons, `Nat::leb` and `Succ`, at one width
+// and across two.
+theorem tonat_bound(x: u8): x.toNat() < 256 { by bv_decide() }
+theorem tonat_zero_extend(x: u8): x.zero_extend(56).toNat() = x.toNat() { by bv_decide() }
+theorem tonat_succ_under(x: u8, h: x.toNat() < 10): (x + 1).toNat() < 11 { by bv_decide() }
+theorem tonat_leb_or(x, y: u8): Nat::leb(x.toNat(), (x | y).toNat()) = True { by bv_decide() }
+theorem tonat_shifted_payload(x: u64): ((x & 0x3F) << 6).toNat() <= 4032 { by bv_decide() }
+theorem tonat_pred(x: u8, h: x.toNat() ≠ 0): (x - 1).toNat() < x.toNat() { by bv_decide() }
+fn payload2(b, c: u8) → Nat { (((b.zero_extend(56) & 0x1F) << 6) + (c.zero_extend(56) & 0x3F)).toNat() }
+theorem payload2_no_surrogate(b, c: u8): Succ(payload2(b, c)).leb(0xD800) = True { by bv_decide() }
+// expect-error: bv_decide: the claim is false at x =
+theorem tonat_false(x: u8): x.toNat() < 200 { by bv_decide() }
+
+// Negated comparisons in both spellings, as hypotheses and as goals: `¬(…)`
+// and the `→ False` a refuted test reads as in an `induct` arm.
+theorem not_lt_hyp(x: u8, h: ¬(x.zero_extend(56) < 0x80)): x.bit_at(7) = True { by bv_decide() }
+theorem arrow_false_hyp(x: u8, h: x.zero_extend(56) < 0x80 → False): ¬(x.toNat() < 128) { by bv_decide() }
+theorem not_le_nat(x: u8, h: ¬(x.toNat() <= 200)): ¬(x <= 200) { by bv_decide() }
+theorem not_le_word(x: u8, h: ¬(x <= 0xC0)): ¬(x.toNat() < 0xC1) { by bv_decide() }
+// expect-error: bv_decide: the claim is false at x =
+theorem not_le_false(x: u8, h: ¬(x < 0x80)): ¬(x.toNat() <= 0x80) { by bv_decide() }
+
+// A word an `if` chooses: the goal is split on the test, inside the call
+// and on the other side alike, and each case decided. The verdict as a
+// word, as a Boolean against the tests spelled out, and at arguments that
+// are themselves calls (the split unfolds one definition at a time, not
+// into `zero_extend`'s representation).
+fn pick(b, c: u64) → u64 { if c & 0xC0 = 0x80 { let code = ((b & 0x1F) << 6) + (c & 0x3F); if code < 0x80 { 0 } else { 1 } } else { 0 } }
+theorem pick_bool(b, c: u64): pick(b, c).eq_bit(0) = !((c & 0xC0).eq_bit(0x80) && !(((b & 0x1F) << 6) + (c & 0x3F)).unsigned_lt_bit(0x80)) { by bv_decide() }
+theorem pick_le_one(b, c: u64): pick(b, c) <= 1 { by bv_decide() }
+fn as_word(b: u8) → u64 { b.zero_extend(56) }
+theorem pick_bytes(b, c: u8): pick(as_word(b), as_word(c)) <= 1 { by bv_decide() }
+// expect-error: bv_decide: the claim is false at
+theorem pick_false(b, c: u64): pick(b, c) = 0 { by bv_decide() }

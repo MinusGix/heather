@@ -760,6 +760,9 @@ fn BVPred::norm(self p: BVPred) → BVPred {
         PBit(n, a, k) => PBit(n, a.norm(), k),
         PVar(_) => p,
         PXor(q, r) => PXor(q.norm(), r.norm()),
+        PNatLe(m, a, n, b) => PNatLe(m, a.norm(), n, b.norm()),
+        PNatLt(m, a, n, b) => PNatLt(m, a.norm(), n, b.norm()),
+        PNatEq(m, a, n, b) => PNatEq(m, a.norm(), n, b.norm()),
     }
 }
 
@@ -816,6 +819,9 @@ theorem BVPred::norm_eval(self p: BVPred, bits: Nat → Bool): p.norm().eval(bit
         PBit(n, a, k) => cong_fn(λ (x: BitVec(n)) => x.bit_at(k), a.norm_eval(n, bits)),
         PVar(_) => refl,
         PXor(q, r) => cong_args<Bool, Bool, Bool>(λ x y => x.xor(y), q.norm_eval(bits), r.norm_eval(bits)),
+        PNatLe(m, a, n, b) => cong_args<BitVec(m), BitVec(n), Bool>(λ x y => x.toNat().leb(y.toNat()), a.norm_eval(m, bits), b.norm_eval(n, bits)),
+        PNatLt(m, a, n, b) => cong_args<BitVec(m), BitVec(n), Bool>(λ x y => Succ(x.toNat()).leb(y.toNat()), a.norm_eval(m, bits), b.norm_eval(n, bits)),
+        PNatEq(m, a, n, b) => cong_args<BitVec(m), BitVec(n), Bool>(λ x y => Nat::same(x.toNat(), y.toNat()), a.norm_eval(m, bits), b.norm_eval(n, bits)),
     }
 }
 

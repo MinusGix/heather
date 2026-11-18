@@ -175,8 +175,40 @@ the goal's, below `k` uses of `layout_imp`, each fed its hypothesis's proof
 carried to the layout by `layout_*_hyp`, the converse of the goal's
 bridge.
 
+**Numbers of words** (2026-11-18). `a.toNat() < b.toNat()`, `<=`, `=` and
+`≠`, either side a word's number or a numeral, and `Nat::leb` and
+`Nat::same` of them as Booleans, read as a comparison of the two words'
+numbers in a circuit wide enough for both (`PNatLe`, `PNatLt`, `PNatEq`,
+bridged by `layout_nat_*`). `Succ(n)` and `ofNat` at either arity are
+read.
+
+**Negations** come in both spellings a proof meets: `¬(a < b)` and
+`a < b → False` (an arm's refuted test reads the second way). Each
+comparison has its negated claim (`CNLt`, `CNLe`, `CNatNLt`, `CNatNLe`),
+read as the flipped comparison where that is the same claim (`¬(a < b)` as
+`b <= a`), with `layout_nlt`/`layout_nle`/`layout_nat_nlt`/`layout_nat_nle`
+and their `_hyp` converses.
+
+**A word chosen by an `if`** (2026-11-18). A program's verdict is often a
+word that a test picks (`if c & 0xC0 = 0x80 { … 1 } else { 0 }`); the
+reader does not read a `match`. When reading fails, `bv_decide` looks for
+such a word: unfolding a word-typed term one definition at a time, as the
+reader does (the host's `whnf` would go on into the test, where a word's
+own representation is spelled out), to a `match` on a Boolean, inner calls
+first. The goal is split on that test (`cases`, which abstracts it inside a
+call's unfolding too, `goal_combinators::co_occurrences`, even under a word
+operation the search does not unfold), and each case decided again with the
+match now at a constructor, whose selected arm the reader reads. Splits
+along a path are bounded at eight, and a case that fails says which test it
+was a case of. `examples/utf8/utf8_check.hthr`'s `two_decides` relates the
+decoder to the program's `utf8_two` this way, with no lemma restating the
+program's tests as one Boolean.
+
 ## Open
 
 - Non-local atoms (a field, a call the reader cannot unfold) could be
-  abstracted as fresh words instead of refused.
-- `a.toNat() = b.toNat()` and `a.toNat() = n` as claims.
+  abstracted as fresh words instead of refused. A Boolean call on both
+  sides (`is_utf8(r)` beside the claim) is the common case: today the
+  proof rewrites it away first.
+- The split is per test, so `k` independent tests make `2^k` cases; a
+  test could instead be read as `ite` on the words it chooses between.
