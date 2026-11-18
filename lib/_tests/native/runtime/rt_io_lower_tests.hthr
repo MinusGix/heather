@@ -45,7 +45,7 @@ fn echo_body() → ETm {
     ETm::Pure(Var(0)))))))))
 }
 
-fn echo_g() → List<Ty> { [Bytes(0)] }
+fn echo_g() → List<Ty> { [ByteList(0)] }
 
 // The parameter `buf` lives in buffer 0; words are fresh from 1.
 fn echo_locs() → List<Loc> { [InBuffer(0)] }
@@ -114,7 +114,7 @@ fn read_file_body() → ETm {
 
 // `path` (variable 1) in buffer 0, `buf` (variable 0) in buffer 1.
 theorem read_file_lowers():
-    lowers(read_file_body().lower(ETm::plain_world(), [], [Bytes(0), Bytes(0)], [InBuffer(1), InBuffer(0)], 1)) = True { refl }
+    lowers(read_file_body().lower(ETm::plain_world(), [], [ByteList(0), ByteList(0)], [InBuffer(1), InBuffer(0)], 1)) = True { refl }
 
 // ---------------------------------------------------------------------------
 // Refusals: the lowering returns `None`.
@@ -151,7 +151,7 @@ fn write_if_body() → ETm {
 }
 
 // `n` in word 0, the buffer in buffer 0; the next free word is 1.
-fn write_if_g() → List<Ty> { [Word(64), Bytes(0)] }
+fn write_if_g() → List<Ty> { [Word(64), ByteList(0)] }
 fn write_if_locs() → List<Loc> { [InWord(0), InBuffer(0)] }
 fn write_if_lowered() → Option<ELowered> { write_if_body().lower(ETm::plain_world(), [], write_if_g(), write_if_locs(), 1) }
 

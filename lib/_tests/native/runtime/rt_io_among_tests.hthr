@@ -65,7 +65,7 @@ fn read_body() → ETm { ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 64), 
 // The world: one function, `raise_word`, as `tr`'s program numbers it.
 fn tr_world() → rt::World { rt::World(RecInfo::none, [Sig([Word(64)], Word(64))], Pair(λ (x: BitVec(64)) => raise_word(x), trivial)) }
 
-fn read_g() → List<Ty> { [Bytes(0)] }
+fn read_g() → List<Ty> { [ByteList(0)] }
 fn read_locs() → List<Loc> { [InBuffer(0)] }
 fn read_lowered() → Option<ELowered> { read_body().lower(tr_world(), [], read_g(), read_locs(), 1) }
 fn read_stmt() → Stmt { read_lowered().unwrap_or(ELowered(Exit(0), 0, 0, [])).stmt }

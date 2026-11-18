@@ -61,7 +61,7 @@ fn rt_io_capacity(k: Known, i: Nat, ops: List<Handle>) → Tac<Nat> {
         Some(at) => match ops.nth(at) {
             None => rt_refuse("a call on Linux without its buffer"),
             Some(b) => k.ty_of(b).bind(λ t => match t {
-                Bytes(c) => Tac::Pure(c),
+                ByteList(c) => Tac::Pure(c),
                 _ => rt_refuse("a call on Linux whose buffer is not a byte buffer"),
             }),
         },
@@ -187,7 +187,7 @@ fn rt_lend_call(fuel: Nat, k: Known, w: IoWalk, c: Handle) → Tac<IoWalk> {
                     Cons(length, words) => {
                         let kw = k.at_world(w.io);
                         let cap <- kw.ty_of(bytes).bind(λ t => match t {
-                            Bytes(c0) => pure(c0),
+                            ByteList(c0) => pure(c0),
                             _ => rt_refuse("`" ++ name ++ "` lent something other than a byte buffer"),
                         });
                         let own <- rt_lend_length(bytes, length);

@@ -76,7 +76,7 @@ fn Ty::FlatHolds(self t: Ty, values: Valuation(), port: Nat) → t.Flat() → Ty
     match t {
         Word(w) => λ v => values(w, port) = v,
         Bit => λ v => values(1, port) = BitVec::ofBool(v),
-        Bytes(_) => λ _ => True,
+        ByteList(_) => λ _ => True,
         Lines => λ _ => False,
         Named(_) => λ _ => False,
         Count => λ n => values(64, port).toNat() = n,
@@ -100,7 +100,7 @@ fn Ty::Holds(self t: Ty, tys: Nat → RecInfo, values: Valuation(), port: Nat) �
     match t {
         Word(w) => λ v => values(w, port) = v,
         Bit => λ v => values(1, port) = BitVec::ofBool(v),
-        Bytes(_) => λ _ => True,
+        ByteList(_) => λ _ => True,
         Lines => λ _ => False,
         Named(i) => λ v => Ty::FieldsHold(tys(i).fields, values, port, tys(i).get(v)),
         // A count as the word it is the `toNat` of.
@@ -110,16 +110,16 @@ fn Ty::Holds(self t: Ty, tys: Nat → RecInfo, values: Valuation(), port: Nat) �
 
 // The width a value of the code is moved at.
 fn Ty::width(self t: Ty) → Nat {
-    match t { Word(w) => w, Bit => 1, Bytes(_) => 64, Lines => 64, Named(_) => 64, Count => 64 }
+    match t { Word(w) => w, Bit => 1, ByteList(_) => 64, Lines => 64, Named(_) => 64, Count => 64 }
 }
 
 // A code whose value is one port (every code but a record).
 fn Ty::OnePort(self t: Ty) → Type {
-    match t { Word(_) => True, Bit => True, Bytes(_) => True, Lines => True, Named(_) => False, Count => True }
+    match t { Word(_) => True, Bit => True, ByteList(_) => True, Lines => True, Named(_) => False, Count => True }
 }
 
 fn Ty::check_one(self t: Ty) → Option<t.OnePort()> {
-    match t as λ x => Option<x.OnePort()> { Word(_) => Some(trivial), Bit => Some(trivial), Bytes(_) => Some(trivial), Lines => Some(trivial), Named(_) => None, Count => Some(trivial) }
+    match t as λ x => Option<x.OnePort()> { Word(_) => Some(trivial), Bit => Some(trivial), ByteList(_) => Some(trivial), Lines => Some(trivial), Named(_) => None, Count => Some(trivial) }
 }
 
 fn Ty::OnePorts(fs: List<Ty>) → Type {
@@ -148,7 +148,7 @@ fn Ty::fields_past(fs: List<Ty>) → Nat → Nat {
 }
 
 fn Ty::past(self t: Ty, tys: Nat → RecInfo, port: Nat) → Nat {
-    match t { Word(_) => Succ(port), Bit => Succ(port), Bytes(_) => Succ(port), Lines => Succ(port), Named(i) => Ty::fields_past(tys(i).fields, port), Count => Succ(port) }
+    match t { Word(_) => Succ(port), Bit => Succ(port), ByteList(_) => Succ(port), Lines => Succ(port), Named(i) => Ty::fields_past(tys(i).fields, port), Count => Succ(port) }
 }
 
 // The equation between two codes, when they agree.
@@ -162,8 +162,8 @@ theorem Ty::equation_self(self a: Ty): a.equation(a) = Inl(refl) {
         Word(w) => j(sym(w.equation_self()), λ d _ =>
             (match d as λ _ => (Word(w) = Word(w)) ∨ True { Inl(e) => Inl(j(e, λ x _ => Word(w) = Word(x), refl)), Inr(_) => Inr(trivial) }) = Inl(refl), refl),
         Bit => refl,
-        Bytes(c) => j(sym(c.equation_self()), λ d _ =>
-            (match d as λ _ => (Bytes(c) = Bytes(c)) ∨ True { Inl(e) => Inl(j(e, λ x _ => Bytes(c) = Bytes(x), refl)), Inr(_) => Inr(trivial) }) = Inl(refl), refl),
+        ByteList(c) => j(sym(c.equation_self()), λ d _ =>
+            (match d as λ _ => (ByteList(c) = ByteList(c)) ∨ True { Inl(e) => Inl(j(e, λ x _ => ByteList(c) = ByteList(x), refl)), Inr(_) => Inr(trivial) }) = Inl(refl), refl),
         Lines => refl,
         Named(i) => j(sym(i.equation_self()), λ d _ =>
             (match d as λ _ => (Named(i) = Named(i)) ∨ True { Inl(e) => Inl(j(e, λ x _ => Named(i) = Named(x), refl)), Inr(_) => Inr(trivial) }) = Inl(refl), refl),
@@ -199,7 +199,7 @@ fn Ty::Same(self t: Ty, tys: Nat → RecInfo, values, after: Valuation(), from, 
     match t {
         Word(_) => (wd: Nat) → after(wd, to) = values(wd, from),
         Bit => (wd: Nat) → after(wd, to) = values(wd, from),
-        Bytes(_) => (wd: Nat) → after(wd, to) = values(wd, from),
+        ByteList(_) => (wd: Nat) → after(wd, to) = values(wd, from),
         Lines => (wd: Nat) → after(wd, to) = values(wd, from),
         Named(i) => Ty::SameFields(tys(i).fields, values, after, from, to),
         Count => (wd: Nat) → after(wd, to) = values(wd, from),
@@ -211,7 +211,7 @@ theorem Ty::flat_at(self f: Ty, values, after: Valuation(), from, to: Nat, same:
     match f {
         Word(w) => λ v h => trans(same(w), h),
         Bit => λ v h => trans(same(1), h),
-        Bytes(_) => λ v h => h,
+        ByteList(_) => λ v h => h,
         Lines => λ v h => h,
         Named(_) => λ v h => h,
         Count => λ v h => trans(cong_fn(λ (x: BitVec(64)) => x.toNat(), same(64)), h),
@@ -232,7 +232,7 @@ theorem Ty::holds_at(self t: Ty, tys: Nat → RecInfo, values, after: Valuation(
     match t {
         Word(w) => λ same v h => trans(same(w), h),
         Bit => λ same v h => trans(same(1), h),
-        Bytes(_) => λ same v h => h,
+        ByteList(_) => λ same v h => h,
         Lines => λ same v h => h,
         Named(i) => λ same v h => Ty::fields_at(tys(i).fields, values, after, from, to, same, tys(i).get(v), h),
         Count => λ same v h => trans(cong_fn(λ (x: BitVec(64)) => x.toNat(), same(64)), h),
@@ -245,7 +245,7 @@ theorem Ty::same_one(self t: Ty, tys: Nat → RecInfo, values, after: Valuation(
     match t {
         Word(_) => λ _ same => same,
         Bit => λ _ same => same,
-        Bytes(_) => λ _ same => same,
+        ByteList(_) => λ _ same => same,
         Lines => λ _ same => same,
         Named(_) => λ never _ => false_elim(never),
         Count => λ _ same => same,
@@ -263,7 +263,7 @@ theorem Ty::same_everywhere(self t: Ty, tys: Nat → RecInfo, values, after: Val
     match t {
         Word(_) => λ wd => all(wd, p),
         Bit => λ wd => all(wd, p),
-        Bytes(_) => λ wd => all(wd, p),
+        ByteList(_) => λ wd => all(wd, p),
         Lines => λ wd => all(wd, p),
         Named(i) => Ty::fields_everywhere(tys(i).fields, values, after, all, p),
         Count => λ wd => all(wd, p),
@@ -273,13 +273,13 @@ theorem Ty::same_everywhere(self t: Ty, tys: Nat → RecInfo, values, after: Val
 // A port holding a field holds the field read back at its code.
 theorem Ty::holds_of_flat(self t: Ty, tys: Nat → RecInfo, values: Valuation(), port: Nat):
     (v: t.Flat()) → t.FlatHolds(values, port, v) → t.Holds(tys, values, port, t.of_flat(tys, v)) {
-    match t { Word(_) => λ v h => h, Bit => λ v h => h, Bytes(_) => λ v h => h, Lines => λ v h => h, Named(_) => λ v h => false_elim(h), Count => λ v h => h }
+    match t { Word(_) => λ v h => h, Bit => λ v h => h, ByteList(_) => λ v h => h, Lines => λ v h => h, Named(_) => λ v h => false_elim(h), Count => λ v h => h }
 }
 
 // A one-port value's port holds it as a field.
 theorem Ty::flat_of_holds(self t: Ty, tys: Nat → RecInfo, values: Valuation(), port: Nat):
     t.OnePort() → (v: t.sem(tys)) → t.Holds(tys, values, port, v) → t.FlatHolds(values, port, t.to_flat(tys, v)) {
-    match t { Word(_) => λ _ v h => h, Bit => λ _ v h => h, Bytes(_) => λ _ v h => h, Lines => λ _ v h => h, Named(_) => λ never v h => false_elim(never), Count => λ _ v h => h }
+    match t { Word(_) => λ _ v h => h, Bit => λ _ v h => h, ByteList(_) => λ _ v h => h, Lines => λ _ v h => h, Named(_) => λ never v h => false_elim(never), Count => λ _ v h => h }
 }
 
 // Field `k` of a record's fields holds at its port.
@@ -306,7 +306,7 @@ fn Ty::Below(self t: Ty, tys: Nat → RecInfo, port, next: Nat) → Type {
     match t {
         Word(_) => port < next,
         Bit => port < next,
-        Bytes(_) => port < next,
+        ByteList(_) => port < next,
         Lines => port < next,
         Named(i) => Ty::FieldsBelow(tys(i).fields, port, next),
         Count => port < next,
@@ -314,11 +314,11 @@ fn Ty::Below(self t: Ty, tys: Nat → RecInfo, port, next: Nat) → Type {
 }
 
 theorem Ty::one_below(self t: Ty, tys: Nat → RecInfo, port, next: Nat): t.OnePort() → port < next → t.Below(tys, port, next) {
-    match t { Word(_) => λ _ lt => lt, Bit => λ _ lt => lt, Bytes(_) => λ _ lt => lt, Lines => λ _ lt => lt, Named(_) => λ never _ => false_elim(never), Count => λ _ lt => lt }
+    match t { Word(_) => λ _ lt => lt, Bit => λ _ lt => lt, ByteList(_) => λ _ lt => lt, Lines => λ _ lt => lt, Named(_) => λ never _ => false_elim(never), Count => λ _ lt => lt }
 }
 
 theorem Ty::below_one(self t: Ty, tys: Nat → RecInfo, port, next: Nat): t.OnePort() → t.Below(tys, port, next) → port < next {
-    match t { Word(_) => λ _ b => b, Bit => λ _ b => b, Bytes(_) => λ _ b => b, Lines => λ _ b => b, Named(_) => λ never _ => false_elim(never), Count => λ _ b => b }
+    match t { Word(_) => λ _ b => b, Bit => λ _ b => b, ByteList(_) => λ _ b => b, Lines => λ _ b => b, Named(_) => λ never _ => false_elim(never), Count => λ _ b => b }
 }
 
 theorem Ty::below_cast(tys: Nat → RecInfo, a, b: Ty, e: a = b, port, next: Nat, h: a.Below(tys, port, next)): b.Below(tys, port, next) {
@@ -337,7 +337,7 @@ theorem Ty::below_mono(self t: Ty, tys: Nat → RecInfo, port, next, later: Nat,
     match t {
         Word(_) => λ b => Nat::lt_of_lt_of_le(port, next, later, b, le),
         Bit => λ b => Nat::lt_of_lt_of_le(port, next, later, b, le),
-        Bytes(_) => λ b => Nat::lt_of_lt_of_le(port, next, later, b, le),
+        ByteList(_) => λ b => Nat::lt_of_lt_of_le(port, next, later, b, le),
         Lines => λ b => Nat::lt_of_lt_of_le(port, next, later, b, le),
         Named(i) => λ b => Ty::fields_below_mono(tys(i).fields, next, later, le, port, b),
         Count => λ b => Nat::lt_of_lt_of_le(port, next, later, b, le),
@@ -401,7 +401,7 @@ theorem Ty::same_kept(self t: Ty, tys: Nat → RecInfo, values, after: Valuation
     match t {
         Word(_) => λ b wd => keeps(wd, port, b),
         Bit => λ b wd => keeps(wd, port, b),
-        Bytes(_) => λ b wd => keeps(wd, port, b),
+        ByteList(_) => λ b wd => keeps(wd, port, b),
         Lines => λ b wd => keeps(wd, port, b),
         Named(i) => λ b => Ty::fields_kept(tys(i).fields, values, after, next, keeps, port, b),
         Count => λ b wd => keeps(wd, port, b),
@@ -537,7 +537,7 @@ fn Ty::moves(self t: Ty, tys: Nat → RecInfo, out, src: Nat) → List<Node> {
     match t {
         Word(w) => [Move(w, out, src)],
         Bit => [Move(1, out, src)],
-        Bytes(_) => [Move(64, out, src)],
+        ByteList(_) => [Move(64, out, src)],
         Lines => [Move(64, out, src)],
         Named(i) => Ty::field_moves(tys(i).fields, out, src),
         Count => [Move(64, out, src)],
@@ -593,7 +593,7 @@ theorem Ty::moves_sound(self t: Ty, tys: Nat → RecInfo, buffers: Buffers(), va
     match t {
         Word(w) => λ _ v h => Ty::one_move_sound(Word(w), tys, trivial, values, out, src, v, h),
         Bit => λ _ v h => Ty::one_move_sound(Bit, tys, trivial, values, out, src, v, h),
-        Bytes(c) => λ _ v h => Ty::one_move_sound(Bytes(c), tys, trivial, values, out, src, v, h),
+        ByteList(c) => λ _ v h => Ty::one_move_sound(ByteList(c), tys, trivial, values, out, src, v, h),
         Lines => λ _ v h => Ty::one_move_sound(Lines, tys, trivial, values, out, src, v, h),
         Named(i) => λ below v h => Ty::field_moves_sound(tys(i).fields, buffers, values, out, src, below, tys(i).get(v), h),
         Count => λ _ v h => Ty::one_move_sound(Count, tys, trivial, values, out, src, v, h),
@@ -617,7 +617,7 @@ theorem Ty::cast_back(tys: Nat → RecInfo, a, b: Ty, e: a = b, v: a.sem(tys)): 
 
 // `Bit` is not a word: from such an equation anything follows.
 theorem Ty::bit_ne_word(width: Nat, e: Bit = Word(width), T: Type): T {
-    j(e, λ x _ => match x as λ _ => Type { Word(_) => T, Bit => True, Bytes(_) => True, Lines => True, Named(_) => True, Count => True }, trivial)
+    j(e, λ x _ => match x as λ _ => Type { Word(_) => T, Bit => True, ByteList(_) => True, Lines => True, Named(_) => True, Count => True }, trivial)
 }
 
 // ---------------------------------------------------------------------------
@@ -646,7 +646,7 @@ fn Ty::check_words(ps: List<Ty>) → Option<Ty::Words(ps)> {
 // the record is the record built from it (`Ty::convert`), so the record is
 // scalar-replaced into the word's port and its field is the word.
 fn Ty::OneWord(self t: Ty, tys: Nat → RecInfo) → Type {
-    match t { Word(w) => w = 64, Bit => False, Bytes(_) => False, Lines => False, Named(i) => tys(i).fields = [Word(64)], Count => False }
+    match t { Word(w) => w = 64, Bit => False, ByteList(_) => False, Lines => False, Named(i) => tys(i).fields = [Word(64)], Count => False }
 }
 
 fn Ty::check_fields_word(fs: List<Ty>) → Option<fs = [Word(64)]> {
@@ -662,7 +662,7 @@ fn Ty::check_fields_word(fs: List<Ty>) → Option<fs = [Word(64)]> {
 fn Ty::check_one_word(self t: Ty, tys: Nat → RecInfo) → Option<t.OneWord(tys)> {
     match t as λ x => Option<x.OneWord(tys)> {
         Word(w) => match w.equation(64) { Inl(e) => Some(e), Inr(_) => None },
-        Bit => None, Bytes(_) => None, Lines => None,
+        Bit => None, ByteList(_) => None, Lines => None,
         Named(i) => Ty::check_fields_word(tys(i).fields),
         Count => None,
     }
@@ -702,7 +702,7 @@ theorem Ty::one_word_holds(tys: Nat → RecInfo, values: Valuation(), port: Nat,
     match t {
         Word(w) => λ (e: w = 64) x h => Ty::cast_holds(tys, values, port, Word(64), Word(w), j(sym(e), λ n _ => Word(64) = Word(n), refl), x, h),
         Bit => λ never => false_elim(never),
-        Bytes(_) => λ never => false_elim(never),
+        ByteList(_) => λ never => false_elim(never),
         Lines => λ never => false_elim(never),
         Named(i) => λ e x h => Ty::record_word_holds(tys(i).T, tys(i).fields, tys(i).mk, tys(i).get, tys(i).round, e, values, port, x, h),
         Count => λ never => false_elim(never),
@@ -714,7 +714,7 @@ theorem Ty::one_word_below(tys: Nat → RecInfo, t: Ty): t.OneWord(tys) → (m: 
     match t {
         Word(_) => λ _ m => m.lt_succ_self(),
         Bit => λ never => false_elim(never),
-        Bytes(_) => λ never => false_elim(never),
+        ByteList(_) => λ never => false_elim(never),
         Lines => λ never => false_elim(never),
         Named(i) => λ e m => j(sym(e), λ g _ => Ty::FieldsBelow(g, m, m + 1), ⟨m.lt_succ_self(), trivial⟩),
         Count => λ never => false_elim(never),
@@ -735,7 +735,7 @@ theorem Ty::one_word_reads(tys: Nat → RecInfo, values: Valuation(), port: Nat,
     match t {
         Word(w) => λ (e: w = 64) v h => Ty::cast_holds(tys, values, port, Word(w), Word(64), j(e, λ n _ => Word(w) = Word(n), refl), v, h),
         Bit => λ never => false_elim(never),
-        Bytes(_) => λ never => false_elim(never),
+        ByteList(_) => λ never => false_elim(never),
         Lines => λ never => false_elim(never),
         Named(i) => λ e v h => Ty::fields_word_reads(values, port, tys(i).fields, e, tys(i).get(v), h),
         Count => λ never => false_elim(never),
@@ -746,13 +746,13 @@ theorem Ty::one_word_reads(tys: Nat → RecInfo, values: Valuation(), port: Nat,
 // one (`Ty::OneWord`, a type at its repr's word), or a count (a loop's
 // fuel, the word it is the `toNat` of).
 fn Ty::Held(self p: Ty, tys: Nat → RecInfo) → Type {
-    match p { Word(w) => w = 64, Bit => False, Bytes(_) => False, Lines => False, Named(i) => tys(i).fields = [Word(64)], Count => True }
+    match p { Word(w) => w = 64, Bit => False, ByteList(_) => False, Lines => False, Named(i) => tys(i).fields = [Word(64)], Count => True }
 }
 
 fn Ty::check_held(self p: Ty, tys: Nat → RecInfo) → Option<p.Held(tys)> {
     match p as λ x => Option<x.Held(tys)> {
         Word(w) => match w.equation(64) { Inl(e) => Some(e), Inr(_) => None },
-        Bit => None, Bytes(_) => None, Lines => None,
+        Bit => None, ByteList(_) => None, Lines => None,
         Named(i) => Ty::check_fields_word(tys(i).fields),
         Count => Some(trivial),
     }
@@ -788,7 +788,7 @@ theorem Ty::one_word_back(tys: Nat → RecInfo, t: Ty): t.OneWord(tys) → (v: t
     match t {
         Word(w) => λ (e: w = 64) v => Ty::cast_back(tys, Word(w), Word(64), j(e, λ n _ => Word(w) = Word(n), refl), v),
         Bit => λ never => false_elim(never),
-        Bytes(_) => λ never => false_elim(never),
+        ByteList(_) => λ never => false_elim(never),
         Lines => λ never => false_elim(never),
         Named(i) => λ e v => {
             let general = j(sym(e), λ g _ => (mk2: Ty::Flats(g) → tys(i).T) → (get2: tys(i).T → Ty::Flats(g)) →
@@ -808,7 +808,7 @@ theorem Ty::held_reads(tys: Nat → RecInfo, p: Ty, values: Valuation(), port: N
         Word(w) => λ (e: w = 64) => j(sym(e), λ x _ => (v: BitVec(x)) → values(x, port) = v → Ty::cast(tys, Word(64), Word(x), values(64, port)) = v,
             λ v held => trans(Ty::cast_self(tys, Word(64), values(64, port)), held)),
         Bit => λ never => false_elim(never),
-        Bytes(_) => λ never => false_elim(never),
+        ByteList(_) => λ never => false_elim(never),
         Lines => λ never => false_elim(never),
         Named(i) => λ e v held => Ty::record_word_reads(tys(i).T, tys(i).fields, tys(i).mk, tys(i).get, tys(i).back, e, values, port, v, held),
         Count => λ _ n held => held,
@@ -867,7 +867,7 @@ fn Tm::lower_lit(c: Ty, n, next: Nat) → Option<Lowered> {
     match c {
         Word(width) => Some(Tm::one_node(Const(width, next, n), next)),
         Bit => Some(Tm::one_node(Const(1, next, Tm::bit_code(n)), next)),
-        Bytes(_) => None,
+        ByteList(_) => None,
         Lines => None,
         Named(_) => None,
         Count => None,
@@ -1309,7 +1309,7 @@ theorem Tm::lower_lit_sound(w: World, g: List<Ty>, ports: List<Nat>, next: Nat, 
         Bit => λ call agree values env held below =>
             Tm::set_sound(w.tys, values, next, Bit, trivial, λ wd => BitVec::ofNat(Tm::bit_code(n)), Tm::lit(Bit, n, w.tys),
                 trans(Valuation::set_here(values, next, λ wd => BitVec::ofNat(Tm::bit_code(n)), 1), sym(Tm::bit_code_holds(w.tys, n)))),
-        Bytes(_) => trivial,
+        ByteList(_) => trivial,
         Lines => trivial,
         Named(_) => trivial,
         Count => trivial,

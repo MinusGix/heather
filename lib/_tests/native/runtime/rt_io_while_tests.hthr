@@ -59,8 +59,8 @@ fn echo_all_prog() → ELoop {
         ELoop::While(going(), pass_body(), [3, 4], ELoop::Done(ETm::Pure(Var(0)))))
 }
 
-fn echo_g() → List<Ty> { [Bytes(0)] }
-fn loop_g() → List<Ty> { [Word(64), Bytes(0)] }
+fn echo_g() → List<Ty> { [ByteList(0)] }
+fn loop_g() → List<Ty> { [Word(64), ByteList(0)] }
 fn wd() → rt::World { ETm::plain_world() }
 
 fn EchoS() → Type { Mutated<Io, Mutated<List<BitVec(8)>, BitVec(64)>> }
@@ -106,7 +106,7 @@ fn echo_bridge(io: Io, buf: List<BitVec(8)>) →
 
 // The reflector reads the surface method into the program written above.
 theorem echo_reflected(): True {
-    by reflects_io_loop_as(["Io::echo_all"], [], [], [], [LoopFun([Bytes(0)], Word(64), echo_all_prog())])
+    by reflects_io_loop_as(["Io::echo_all"], [], [], [], [LoopFun([ByteList(0)], Word(64), echo_all_prog())])
 }
 
 fn no_lents() → List<Lent> { [] }
@@ -149,7 +149,7 @@ fn twice_prog() → ELoop {
 }
 
 theorem twice_reflected(): True {
-    by reflects_io_loop_as(["Io::write_out_twice"], [], [], [], [LoopFun([Bytes(0), Word(64)], Word(64), twice_prog())])
+    by reflects_io_loop_as(["Io::write_out_twice"], [], [], [], [LoopFun([ByteList(0), Word(64)], Word(64), twice_prog())])
 }
 
 theorem twice_bridged(): (io: Io) → (buf: List<BitVec(8)>) → (k: BitVec(64)) →
@@ -237,5 +237,5 @@ fn echo_stop_prog() → ELoop {
 }
 
 theorem echo_stop_reflected(): True {
-    by reflects_io_loop_as(["Io::echo_stop"], [], [], [], [LoopFun([Bytes(0)], Word(64), echo_stop_prog())])
+    by reflects_io_loop_as(["Io::echo_stop"], [], [], [], [LoopFun([ByteList(0)], Word(64), echo_stop_prog())])
 }

@@ -1,0 +1,39 @@
+// Probes for `Bytes(n)` (lib/native/runtime/bytes.hthr): reads and stores
+// with their proofs found, and the insertion sort over it run by
+// evaluation.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import omega;
+import nat_map;
+import list_window;
+import rt;
+import rt_file;
+import bytes;
+
+fn Bytes::first({n: u64}, self s: Bytes(n), h: ∥0 < s.len()∥ := bv_omega) → u8 { s[0] }
+
+fn seven_eight() → Bytes(2) { Bytes([7, 8], refl) }
+
+theorem first_reads(): seven_eight().first() = 7 { refl }
+
+fn Bytes::sort({n: u64}, mut self s: Bytes(n)) → u64 {
+    for i in 0..s.len() {
+        let key: u8 = s[i];
+        let mut j = i;
+        while 0 < j && key < s[j - 1] invariant j <= i decreases j.toNat() {
+            s[j] := s[j - 1];
+            j := j - 1;
+        }
+        s[j] := key;
+    }
+    n
+}
+
+theorem sort_sorts(): Bytes::sort(Bytes([3, 1, 2, 0, 2], refl), n := 5).after.bytes = [0, 1, 2, 2, 3] { refl }

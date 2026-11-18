@@ -142,7 +142,7 @@ theorem Tm::out_into(tys: Nat → RecInfo, res: Ty, er: res.OneWord(tys), x: Bit
         Word(n) => λ (e: n = 64) => j(sym(e), λ m _ => Tm::out(tys, Word(m), Tm::into(tys, Word(m), x)) = x,
             trans(Ty::cast_self(tys, Word(64), Ty::cast(tys, Word(64), Word(64), x)), Ty::cast_self(tys, Word(64), x))),
         Bit => λ never => false_elim(never),
-        Bytes(_) => λ never => false_elim(never),
+        ByteList(_) => λ never => false_elim(never),
         Lines => λ never => false_elim(never),
         Named(i) => λ e => j(sym(e), λ fs _ => (mk: Ty::Flats(fs) → tys(i).T) → (get: tys(i).T → Ty::Flats(fs)) →
                 ((t: Ty::Flats(fs)) → get(mk(t)) = t) → Ty::flats_head_word(fs, get(mk(Ty::flats_word(fs, x)))) = x,

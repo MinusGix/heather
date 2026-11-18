@@ -129,7 +129,7 @@ fn rt_loop_components(fuel: Nat, k: Known, w: LoopWalk, base: Nat, parts: List<H
             let placed: Tac<Pair<RSt, Nat>> = match fresh {
                 True => pure(Pair(r.fst, l)),
                 False => match t {
-                    Bytes(_) => match rt_has(taken, l) {
+                    ByteList(_) => match rt_has(taken, l) {
                         True => rt_refuse("two locals a loop threads hold one buffer"),
                         False => pure(Pair(r.fst, l)),
                     },

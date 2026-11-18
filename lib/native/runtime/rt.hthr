@@ -48,7 +48,7 @@ inductive Ty {
     // `Bool`.
     Bit,
     // `List<BitVec(8)>`, held in a buffer of the capacity.
-    Bytes(cap: Nat),
+    ByteList(cap: Nat),
     // `List<List<BitVec(8)>>`, a list of byte strings (a file's lines), laid
     // out as the name of its first cell in an arena (N4,
     // docs/native/native-heap-arena-design.md §7; the cells are `native_arena`'s).
@@ -63,7 +63,7 @@ inductive Ty {
 // A record field's type, read without the table: a record's fields are
 // flat, and a `Named` field (refused by every judgment) means `True`.
 fn Ty::Flat(self t: Ty) → Type {
-    match t { Word(w) => BitVec(w), Bit => Bool, Bytes(_) => List<BitVec(8)>, Lines => List<List<BitVec(8)>>, Named(_) => True, Count => Nat }
+    match t { Word(w) => BitVec(w), Bit => Bool, ByteList(_) => List<BitVec(8)>, Lines => List<List<BitVec(8)>>, Named(_) => True, Count => Nat }
 }
 
 // A tuple of flat fields, `True`-terminated.
@@ -72,7 +72,7 @@ fn Ty::Flats(ts: List<Ty>) → Type {
 }
 
 fn Ty::flat_default(self t: Ty) → t.Flat() {
-    match t { Word(_) => BitVec::ofNat(0), Bit => False, Bytes(_) => Nil, Lines => Nil, Named(_) => trivial, Count => 0 }
+    match t { Word(_) => BitVec::ofNat(0), Bit => False, ByteList(_) => Nil, Lines => Nil, Named(_) => trivial, Count => 0 }
 }
 
 fn Ty::flats_default(ts: List<Ty>) → Ty::Flats(ts) {
@@ -99,7 +99,7 @@ fn Ty::at(ts: List<Ty>, i: Nat) → Ty {
 }
 
 fn Ty::sem(self t: Ty, tys: Nat → RecInfo) → Type {
-    match t { Word(w) => BitVec(w), Bit => Bool, Bytes(_) => List<BitVec(8)>, Lines => List<List<BitVec(8)>>, Named(i) => tys(i).T, Count => Nat }
+    match t { Word(w) => BitVec(w), Bit => Bool, ByteList(_) => List<BitVec(8)>, Lines => List<List<BitVec(8)>>, Named(i) => tys(i).T, Count => Nat }
 }
 
 // Every type is inhabited, so a meaning is total: an ill-typed node (which
@@ -108,7 +108,7 @@ fn Ty::default(self t: Ty, tys: Nat → RecInfo) → t.sem(tys) {
     match t {
         Word(_) => BitVec::ofNat(0),
         Bit => False,
-        Bytes(_) => Nil,
+        ByteList(_) => Nil,
         Lines => Nil,
         Named(i) => tys(i).mk(Ty::flats_default(tys(i).fields)),
         Count => 0,
@@ -116,23 +116,23 @@ fn Ty::default(self t: Ty, tys: Nat → RecInfo) → t.sem(tys) {
 }
 
 fn Ty::to_flat(self t: Ty, tys: Nat → RecInfo) → t.sem(tys) → t.Flat() {
-    match t { Word(_) => λ v => v, Bit => λ v => v, Bytes(_) => λ v => v, Lines => λ v => v, Named(_) => λ _ => trivial, Count => λ v => v }
+    match t { Word(_) => λ v => v, Bit => λ v => v, ByteList(_) => λ v => v, Lines => λ v => v, Named(_) => λ _ => trivial, Count => λ v => v }
 }
 
 fn Ty::of_flat(self t: Ty, tys: Nat → RecInfo) → t.Flat() → t.sem(tys) {
-    match t { Word(_) => λ v => v, Bit => λ v => v, Bytes(_) => λ v => v, Lines => λ v => v, Named(i) => λ _ => Named(i).default(tys), Count => λ v => v }
+    match t { Word(_) => λ v => v, Bit => λ v => v, ByteList(_) => λ v => v, Lines => λ v => v, Named(i) => λ _ => Named(i).default(tys), Count => λ v => v }
 }
 
 // The code of a list's elements: a byte for a byte buffer, a byte string
 // for a list of lines (`Bit`, which nothing folds, for the rest).
 fn Ty::elem(self t: Ty) → Ty {
-    match t { Word(_) => Bit, Bit => Bit, Bytes(_) => Word(8), Lines => Bytes(0), Named(_) => Bit, Count => Bit }
+    match t { Word(_) => Bit, Bit => Bit, ByteList(_) => Word(8), Lines => ByteList(0), Named(_) => Bit, Count => Bit }
 }
 
 // A list's elements, at their code (empty for a code that is no list): at
 // a closed code, the value itself.
 fn Ty::items(self t: Ty, tys: Nat → RecInfo) → t.sem(tys) → List<t.elem().sem(tys)> {
-    match t { Word(_) => λ _ => Nil, Bit => λ _ => Nil, Bytes(_) => λ v => v, Lines => λ v => v, Named(_) => λ _ => Nil, Count => λ _ => Nil }
+    match t { Word(_) => λ _ => Nil, Bit => λ _ => Nil, ByteList(_) => λ v => v, Lines => λ v => v, Named(_) => λ _ => Nil, Count => λ _ => Nil }
 }
 
 // The equation between two codes, as data: at two closed codes it
@@ -145,8 +145,8 @@ fn Ty::equation(self a: Ty, b: Ty) → (a = b) ∨ True {
             _ => Inr(trivial),
         },
         Bit => match b { Bit => Inl(refl), _ => Inr(trivial) },
-        Bytes(c) => match b {
-            Bytes(d) => match c.equation(d) { Inl(e) => Inl(j(e, λ x _ => Bytes(c) = Bytes(x), refl)), Inr(_) => Inr(trivial) },
+        ByteList(c) => match b {
+            ByteList(d) => match c.equation(d) { Inl(e) => Inl(j(e, λ x _ => ByteList(c) = ByteList(x), refl)), Inr(_) => Inr(trivial) },
             _ => Inr(trivial),
         },
         Lines => match b { Lines => Inl(refl), _ => Inr(trivial) },
@@ -164,7 +164,7 @@ fn Ty::to_count(tys: Nat → RecInfo, a: Ty) → a.sem(tys) → Nat {
     match a as λ x => x.sem(tys) → Nat {
         Word(_) => λ v => v.toNat(),
         Bit => λ _ => 0,
-        Bytes(_) => λ _ => 0,
+        ByteList(_) => λ _ => 0,
         Lines => λ _ => 0,
         Named(_) => λ _ => 0,
         Count => λ n => n,
@@ -178,7 +178,7 @@ fn Ty::word_at(self f: Ty, x: BitVec(64)) → f.Flat() {
     match f as λ y => y.Flat() {
         Word(w) => match Nat::equation(64, w) { Inl(e) => j(e, λ y _ => BitVec(y), x), Inr(_) => BitVec::ofNat(0) },
         Bit => False,
-        Bytes(_) => Nil,
+        ByteList(_) => Nil,
         Lines => Nil,
         Named(_) => trivial,
         Count => 0,
@@ -189,7 +189,7 @@ fn Ty::flat_word(self f: Ty) → f.Flat() → BitVec(64) {
     match f as λ y => y.Flat() → BitVec(64) {
         Word(w) => λ v => match w.equation(64) { Inl(e) => j(e, λ y _ => BitVec(y), v), Inr(_) => BitVec::ofNat(0) },
         Bit => λ _ => BitVec::ofNat(0),
-        Bytes(_) => λ _ => BitVec::ofNat(0),
+        ByteList(_) => λ _ => BitVec::ofNat(0),
         Lines => λ _ => BitVec::ofNat(0),
         Named(_) => λ _ => BitVec::ofNat(0),
         Count => λ _ => BitVec::ofNat(0),
@@ -213,7 +213,7 @@ fn Ty::word_from(tys: Nat → RecInfo, a: Ty) → a.sem(tys) → BitVec(64) {
     match a as λ x => x.sem(tys) → BitVec(64) {
         Word(w) => λ v => Word(w).flat_word(v),
         Bit => λ _ => BitVec::ofNat(0),
-        Bytes(_) => λ _ => BitVec::ofNat(0),
+        ByteList(_) => λ _ => BitVec::ofNat(0),
         Lines => λ _ => BitVec::ofNat(0),
         Named(i) => λ v => Ty::flats_head_word(tys(i).fields, tys(i).get(v)),
         Count => λ _ => BitVec::ofNat(0),
@@ -230,7 +230,7 @@ fn Ty::convert(tys: Nat → RecInfo, a, b: Ty, v: a.sem(tys)) → b.sem(tys) {
     match b as λ y => y.sem(tys) {
         Word(w) => Word(w).word_at(Ty::word_from(tys, a, v)),
         Bit => False,
-        Bytes(_) => Nil,
+        ByteList(_) => Nil,
         Lines => Nil,
         Named(i) => tys(i).mk(Ty::flats_word(tys(i).fields, Ty::word_from(tys, a, v))),
         Count => Ty::to_count(tys, a, v),
@@ -378,8 +378,8 @@ fn Op::params(self o: Op) → List<Ty> {
         Eq(w) => [Word(w), Word(w)], Ult(w) => [Word(w), Word(w)], Slt(w) => [Word(w), Word(w)],
         Conj => [Bit, Bit], Disj => [Bit, Bit], Neg => [Bit],
         Zext(w, _) => [Word(w)],
-        Get(c) => [Bytes(c), Word(64)], Set(c) => [Bytes(c), Word(64), Word(8)],
-        ConsLine(c) => [Bytes(c), Lines],
+        Get(c) => [ByteList(c), Word(64)], Set(c) => [ByteList(c), Word(64), Word(8)],
+        ConsLine(c) => [ByteList(c), Lines],
         ToNat => [Word(64)],
         Trunc(n, extra) => [Word(extra + n)],
         Shl(w, _) => [Word(w)], Lshr(w, _) => [Word(w)], Ashr(w, _) => [Word(w)],
@@ -393,7 +393,7 @@ fn Op::result(self o: Op) → Ty {
         Eq(_) => Bit, Ult(_) => Bit, Slt(_) => Bit,
         Conj => Bit, Disj => Bit, Neg => Bit,
         Zext(w, extra) => Word(extra + w),
-        Get(_) => Word(8), Set(c) => Bytes(c),
+        Get(_) => Word(8), Set(c) => ByteList(c),
         ConsLine(_) => Lines,
         ToNat => Count,
         Trunc(n, _) => Word(n),
@@ -544,7 +544,7 @@ fn Tm::lit(t: Ty, n: Nat, tys: Nat → RecInfo) → t.sem(tys) {
     match t {
         Word(_) => BitVec::ofNat(n),
         Bit => match n { Zero => False, Succ(_) => True },
-        Bytes(_) => Nil,
+        ByteList(_) => Nil,
         Lines => Nil,
         Named(i) => Named(i).default(tys),
         Count => n,
@@ -659,7 +659,7 @@ fn Ty::same(self a: Ty, b: Ty) → Bool {
     match a {
         Word(w) => match b { Word(v) => w.same(v), _ => False },
         Bit => match b { Bit => True, _ => False },
-        Bytes(c) => match b { Bytes(d) => c.same(d), _ => False },
+        ByteList(c) => match b { ByteList(d) => c.same(d), _ => False },
         Lines => match b { Lines => True, _ => False },
         Named(i) => match b { Named(k) => i.same(k), _ => False },
         Count => match b { Count => True, _ => False },

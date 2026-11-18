@@ -117,15 +117,15 @@ inductive Effect {
 
 fn Effect::params(self e: Effect) → List<Ty> {
     match e {
-        Reads(c) => [Word(64), Bytes(c), Word(64), Word(64)],
-        Writes(c) => [Word(64), Bytes(c), Word(64), Word(64)],
-        Opens(c) => [Bytes(c), Word(64)],
+        Reads(c) => [Word(64), ByteList(c), Word(64), Word(64)],
+        Writes(c) => [Word(64), ByteList(c), Word(64), Word(64)],
+        Opens(c) => [ByteList(c), Word(64)],
         Closes => [Word(64)],
     }
 }
 
 fn Effect::results(self e: Effect) → List<Ty> {
-    match e { Reads(c) => [Bytes(c), Word(64)], Writes(_) => [Word(64)], Opens(_) => [Word(64)], Closes => [Word(64)] }
+    match e { Reads(c) => [ByteList(c), Word(64)], Writes(_) => [Word(64)], Opens(_) => [Word(64)], Closes => [Word(64)] }
 }
 
 // What an effect does, as a world-threading function: the word-level call,
@@ -190,7 +190,7 @@ fn Lent::at(ls: List<Lent>, f: Nat) → Lent {
 
 // What a call binds: the bytes the function left at the buffer's code, then
 // its word, as a read binds its buffer and count (`Effect::results`).
-fn Lent::results(cap: Nat) → List<Ty> { [Bytes(cap), Word(64)] }
+fn Lent::results(cap: Nat) → List<Ty> { [ByteList(cap), Word(64)] }
 
 // Variables read as the words a function takes.
 fn Lent::words(tys: Nat → RecInfo, g: List<Ty>, env: rt::Env(tys, g), args: List<Nat>) → List<BitVec(64)> {
@@ -207,7 +207,7 @@ theorem Lent::words_len(tys: Nat → RecInfo, g: List<Ty>, env: rt::Env(tys, g),
 // What a call of function `f` binds: the function run once on the buffer
 // variable's bytes and the word variables.
 fn Lent::answer(tys: Nat → RecInfo, ls: List<Lent>, g: List<Ty>, env: rt::Env(tys, g), f, cap, buf: Nat, args: List<Nat>) → Ty::Flats(Lent::results(cap)) {
-    shared(Lent::at(ls, f).run(Ty::cast(tys, Ty::at(g, buf), Bytes(cap), Env::get(tys, g, env, buf)), Lent::words(tys, g, env, args)),
+    shared(Lent::at(ls, f).run(Ty::cast(tys, Ty::at(g, buf), ByteList(cap), Env::get(tys, g, env, buf)), Lent::words(tys, g, env, args)),
         λ (m: Mutated<List<BitVec(8)>, BitVec(64)>) => Pair(m.after, Pair(m.value, trivial)))
 }
 
@@ -330,7 +330,7 @@ inductive ETm {
     // One call on variables; `body` sees its results bound in order.
     Invoke(e: Effect, args: List<Nat>, body: ETm),
     // Function `f` of the table lent the buffer variable `buf` (of code
-    // `Bytes(cap)`) and the word variables `args`: `body` sees the bytes it
+    // `ByteList(cap)`) and the word variables `args`: `body` sees the bytes it
     // left as variable 1 and its word as variable 0.
     Lend(f: Nat, cap: Nat, buf: Nat, args: List<Nat>, body: ETm),
     // `if cond { yes } else { no }` over the world: the arm the bit `cond`

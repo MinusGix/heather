@@ -1044,7 +1044,7 @@ fn Ty::quote(self t: Ty, q: RtQ) → Expr {
     match t {
         Word(w) => ap(runtime_at(q.ty, 0), [NatLit(w)]),
         Bit => runtime_at(q.ty, 1),
-        Bytes(c) => ap(runtime_at(q.ty, 2), [NatLit(c)]),
+        ByteList(c) => ap(runtime_at(q.ty, 2), [NatLit(c)]),
         Lines => runtime_at(q.ty, 3),
         Named(i) => ap(runtime_at(q.ty, 4), [NatLit(i)]),
         Count => runtime_at(q.ty, 5),

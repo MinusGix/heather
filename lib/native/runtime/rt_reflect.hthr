@@ -539,7 +539,7 @@ fn Known::ty_within(self k: Known, fuel: Nat, h: Handle) → Tac<Ty> {
                     // setup's to choose; a list of those is a list of lines.
                     True => match args {
                         Cons(a, _) => k.is_byte(a).bind(λ byte => match byte {
-                            True => pure(Bytes(0)),
+                            True => pure(ByteList(0)),
                             False => k.is_bytes(a).bind(λ bytes => match bytes {
                                 True => pure(Lines),
                                 False => rt_refuse("a list of these has no runtime layout under the reflected fragment"),
@@ -1106,7 +1106,7 @@ fn rt_bytes_op(k: Known, st: RSt, h: Handle, operand: Bool, name: String, args: 
     match args {
         Nil => rt_refuse("`" ++ name ++ "` without its buffer"),
         Cons(xs, _) => k.ty_of(xs).bind(λ t => match t {
-            Bytes(c) => RSt::operands(step, st, args).bind(λ r => pure(r.fst.finish(h, operand, Prim(op(c), r.snd)))),
+            ByteList(c) => RSt::operands(step, st, args).bind(λ r => pure(r.fst.finish(h, operand, Prim(op(c), r.snd)))),
             _ => rt_refuse("`" ++ name ++ "` of something other than a byte buffer"),
         }),
     }
@@ -2018,7 +2018,7 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                                 Lines => match fields.rev() {
                                     Cons(tl, more) => match more {
                                         Cons(hd, _) => k.ty_of(hd).bind(λ ht => match ht {
-                                            Bytes(c) => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, [hd, tl]).bind(λ r =>
+                                            ByteList(c) => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, [hd, tl]).bind(λ r =>
                                                 pure(r.fst.finish(h, operand, Prim(ConsLine(c), r.snd)))),
                                             _ => rt_refuse("a line that is not a byte buffer"),
                                         }),
@@ -2113,7 +2113,7 @@ fn rt_lent(tys: List<Ty>) → Pair<Nat, List<Ty>> {
         Cons(bytes, more) => match more {
             Nil => Pair(0, tys),
             Cons(length, rest) => match bytes {
-                Bytes(_) => match (match length { Word(w) => w.same(64), _ => False }) {
+                ByteList(_) => match (match length { Word(w) => w.same(64), _ => False }) {
                     True => { let r = rt_lent(rest); Pair(Succ(r.fst), Cons(Word(64), Cons(Word(64), r.snd))) },
                     False => Pair(0, tys),
                 },
@@ -2124,7 +2124,7 @@ fn rt_lent(tys: List<Ty>) → Pair<Nat, List<Ty>> {
 }
 
 fn rt_has_bytes(tys: List<Ty>) → Bool {
-    match tys { Nil => False, Cons(t, rest) => match t { Bytes(_) => True, _ => rt_has_bytes(rest) } }
+    match tys { Nil => False, Cons(t, rest) => match t { ByteList(_) => True, _ => rt_has_bytes(rest) } }
 }
 
 // In the generator's mode a function may be lent spans; any other byte
@@ -2331,7 +2331,7 @@ fn rt_nats(ns: List<Nat>) → String {
 }
 
 fn Ty::show(self t: Ty) → String {
-    match t { Word(w) => "Word(" ++ rt_nat(w) ++ ")", Bit => "Bit", Bytes(c) => "Bytes(" ++ rt_nat(c) ++ ")", Lines => "Lines", Named(i) => "Named(" ++ rt_nat(i) ++ ")", Count => "Count" }
+    match t { Word(w) => "Word(" ++ rt_nat(w) ++ ")", Bit => "Bit", ByteList(c) => "ByteList(" ++ rt_nat(c) ++ ")", Lines => "Lines", Named(i) => "Named(" ++ rt_nat(i) ++ ")", Count => "Count" }
 }
 
 fn Ty::shows(ts: List<Ty>) → String {

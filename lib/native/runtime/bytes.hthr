@@ -1,0 +1,55 @@
+// A span that carries its length (docs/native/span-record-design.md): its
+// bytes and a proof that there are `n` of them, `n` a word in its type.
+//
+// A read and a store take a proof that the index is inside (`s[i]` is
+// `s.at(i)`, `s[i] := v` is `s := s.put(i, v)`), found by `bv_omega` where
+// they are written, so no read answers a junk value and no store is lost
+// (Minus, 2026-11-17: "junk values as a default API are usually a
+// mistake; they're a sign of needing better automation"). The length is
+// in the type, so a store keeps it by construction and a loop over
+// `0..s.len()` counts to a word no store changes.
+//
+// Both are the reads and stores a function lent a span compiles to
+// (`List::byte_within`, `List::with_byte_within`, rt.hthr, rt_file.hthr)
+// at the span's length word: past the end they would answer 0 and change
+// nothing, which the proof makes unreachable. That is what lets a function
+// of a `Bytes(n)` be compiled as a function of its bytes and its length
+// word (rt_bytes.hthr).
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import nat_map;
+import list_window;
+import rt;
+import rt_file;
+
+// `sized` is a plain equation, not a squash: a record's value parameter is
+// solved from a field whose type mentions it, which a squash never gives
+// up, so `Bytes([1, 2], refl)` would otherwise not know its `n`.
+record Bytes(n: u64) { bytes: List<u8>, sized: bytes.len() = n.toNat() }
+
+fn Bytes::len({n: u64}, self s: Bytes(n)) → u64 { n }
+
+// The byte at `i`.
+fn Bytes::at({n: u64}, self s: Bytes(n), i: u64, inside: ∥i < s.len()∥ := bv_omega) → u8 { s.bytes.byte_within(n, i) }
+
+// The store under a length word, as code lent the span makes it: the store
+// `put` is, and the one a compiled store's meaning over a `Bytes(n)` makes
+// (`FTm::over`), so the two are one term.
+fn Bytes::stored_under({n: u64}, self s: Bytes(n), length, i: u64, v: u8) → Bytes(n) {
+    Bytes(s.bytes.with_byte_within(length, i, v), trans(s.bytes.len_with_byte_within(length, i, v), s.sized))
+}
+
+// `s` with `v` at `i`.
+fn Bytes::put({n: u64}, self s: Bytes(n), i: u64, v: u8, inside: ∥i < s.len()∥ := bv_omega) → Bytes(n) { s.stored_under(n, i, v) }
+
+// ---------------------------------------------------------------------------
+// Reads and stores
+
+theorem Bytes::bytes_len({n: u64}, self s: Bytes(n)): s.bytes.len() = n.toNat() { s.sized }
