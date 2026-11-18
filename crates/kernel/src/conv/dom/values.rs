@@ -2206,6 +2206,7 @@ fn view_neutral<'a, 'v>(env: &Env<'v>, n: &'a VNeutral<'v>) -> TmView<'a, 'v, Va
                 scrut: head,
             }
         }
+        Elim::UnsquashEmpty { level } => TmView::UnsquashEmpty { level },
         Elim::Case {
             lhs_level,
             rhs_level,

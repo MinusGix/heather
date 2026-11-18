@@ -1437,6 +1437,7 @@ fn inert_pattern(p: &Term) -> bool {
         Term::J { .. }
             | Term::ElimSEmpty { .. }
             | Term::ElimSquash { .. }
+            | Term::UnsquashEmpty { .. }
             | Term::ElimEmpty { .. }
             | Term::Case { .. }
             | Term::ElimW { .. }
@@ -1466,6 +1467,7 @@ pub(crate) fn steps_through(h: &Term) -> bool {
             | Term::J { .. }
             | Term::ElimSEmpty { .. }
             | Term::ElimSquash { .. }
+            | Term::UnsquashEmpty { .. }
             | Term::ElimEmpty { .. }
             | Term::Fst { .. }
             | Term::Snd { .. }

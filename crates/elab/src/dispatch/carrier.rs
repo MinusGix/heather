@@ -81,6 +81,7 @@ impl Carriers<'_> {
             || name == "Vec"
             || name == "Type"
             || name == "True"
+            || name == "Squash"
     }
 
     /// Does this name refer to a **type former** — a global whose result, after
@@ -185,6 +186,11 @@ impl Carriers<'_> {
         if matches!(ty, Type::Fin { .. }) {
             return Some(Carrier::constant("Fin"));
         }
+        // `∥A∥` owns the `Squash` namespace (`Squash::recover`), a kernel
+        // type like `Nat` with no declaration behind it.
+        if matches!(ty, Type::Squash { .. }) {
+            return Some(Carrier::constant("Squash"));
+        }
         if let Some(c) = self.member_carrier(ty) {
             return Some(c);
         }
@@ -197,6 +203,9 @@ impl Carriers<'_> {
         let head = self.whnf(cx, ty, span).ok()?;
         if matches!(head, Type::Nat) {
             return Some(Carrier::constant("Nat"));
+        }
+        if matches!(head, Type::Squash { .. }) {
+            return Some(Carrier::constant("Squash"));
         }
         if let Some(c) = self.member_carrier(&head) {
             return Some(c);

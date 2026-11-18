@@ -1061,6 +1061,10 @@ fn map_term<M: Mapper>(t: &Term, m: &mut M, at: Depths) -> Term {
                 scrut: sub_tm(scrut, m, at),
             }
         }
+        Term::UnsquashEmpty { level, scrut } => Term::UnsquashEmpty {
+            level: m.level(level, at),
+            scrut: sub_tm(scrut, m, at),
+        },
         Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst, snd } => Term::Pair {
             fst_level: m.level(fst_level, at),
             snd_level: m.level(snd_level, at),
@@ -2020,6 +2024,15 @@ impl Mapper for AbstractLocal<'_> {
     }
 
     fn pre_tm(&mut self, t: &Rc<Term>, at: Depths) -> Option<Term> {
+        // Most nodes are not an occurrence, and the head of an application
+        // spine says so without weakening anything: the patterns are only
+        // weakened past the binders over a node that could be one. A walk
+        // under `k` binders would otherwise copy every pattern `k` times,
+        // which for a large test deep in a type is the whole cost
+        // (`issues/match-arm-coercion-abstracts-both-types.md`).
+        if !self.pats.iter().any(|(pat, _)| could_be_weakened(t, pat, at)) {
+            return None;
+        }
         let row = if at.global == 0 && at.univ == 0 {
             while self.witness.len() as u32 <= at.local {
                 let i = self.witness.len() as u32;
@@ -2059,6 +2072,76 @@ impl Mapper for AbstractLocal<'_> {
         }
         self.hits += 1;
         Some(hit)
+    }
+}
+
+/// Whether `t` could be `pat` weakened past the binders `at`: a necessary
+/// condition, read off the two application spines' heads. Weakening keeps
+/// every node's form and a spine's length, and keeps a constant or global
+/// head as it is outside global and universe binders (below one it renames
+/// the free global variables, so there only the form is compared).
+fn could_be_weakened(t: &Term, pat: &Term, at: Depths) -> bool {
+    fn spine(mut t: &Term) -> (&Term, usize) {
+        let mut n = 0;
+        while let Term::App { fun, .. } | Term::AppAt { fun, .. } = t {
+            t = fun;
+            n += 1;
+        }
+        (t, n)
+    }
+    if std::mem::discriminant(t) != std::mem::discriminant(pat) {
+        return false;
+    }
+    let ((th, tn), (ph, pn)) = (spine(t), spine(pat));
+    if tn != pn || std::mem::discriminant(th) != std::mem::discriminant(ph) {
+        return false;
+    }
+    match (th, ph) {
+        (Term::GlobalTm { var: a, .. }, Term::GlobalTm { var: b, .. }) if at.global == 0 && at.univ == 0 => a == b,
+        _ => true,
+    }
+}
+
+/// [`Type::mentions_local`]: [`AbstractLocal`]'s walk with nothing built.
+/// It crosses the binders that one crosses and compares the same weakened
+/// patterns at the same nodes ([`AbstractLocal::pre_tm`], whose answer it
+/// drops), so it finds an occurrence exactly when that one would; once it
+/// has, every subtree left is skipped.
+struct OccursLocal<'a> {
+    find: AbstractLocal<'a>,
+    changes: u64,
+    /// Never changes anything, so the memo only records which shared nodes
+    /// were walked: a second path to one at the same depths stops there.
+    memo: NodeMemo,
+}
+
+impl Mapper for OccursLocal<'_> {
+    const LOCAL_OP: bool = true;
+    const NAME: &'static str = "mentions_local";
+    // A skip after the first hit is a stop, not a claim about the subtree;
+    // and the walk changes nothing anywhere, skipped or not.
+    const VERIFY_SKIPS: bool = false;
+
+    fn changes(&mut self) -> &mut u64 {
+        &mut self.changes
+    }
+
+    fn memo(&mut self) -> Option<&mut NodeMemo> {
+        Some(&mut self.memo)
+    }
+
+    fn skip_ty(&mut self, t: &Rc<Type>, at: Depths) -> bool {
+        self.find.hits > 0 || self.find.skip_ty(t, at)
+    }
+    fn skip_tm(&mut self, t: &Rc<Term>, at: Depths) -> bool {
+        self.find.hits > 0 || self.find.skip_tm(t, at)
+    }
+
+    fn pre_tm(&mut self, t: &Rc<Term>, at: Depths) -> Option<Term> {
+        if self.find.hits == 0 {
+            let _ = self.find.pre_tm(t, at);
+        }
+        None
     }
 }
 
@@ -2461,6 +2544,21 @@ impl Type {
         let mut m = RootTerms { out: Vec::new(), changes: 0, memo: NodeMemo::default() };
         map_type(self, &mut m, Depths::default());
         m.out
+    }
+
+    /// Whether [`Self::abstract_local`] would find `pat`: the same
+    /// occurrences, by the same walk, but only read. Nothing is built (the
+    /// abstraction makes room for `z` under every free local, which is a
+    /// copy of most of a type) and the walk stops at the first occurrence.
+    /// For a caller that only wants to abstract when there is something to
+    /// abstract, and usually finds nothing
+    /// (`issues/match-arm-coercion-abstracts-both-types.md`).
+    pub fn mentions_local(&self, pat: &Term) -> bool {
+        let pats = [(pat.clone(), Term::Var(LocalVar(0)))];
+        let mut m = OccursLocal { find: AbstractLocal::new(&pats, None), changes: 0, memo: NodeMemo::default() };
+        let _ = map_type(self, &mut m, Depths::default());
+        debug_assert_eq!(m.changes, 0);
+        m.find.hits > 0
     }
 
     fn abstract_pats(&self, pats: &[(Term, Term)]) -> Option<Type> {

@@ -308,19 +308,31 @@ fn long_runs() {
 /// `2^d` in the depth and `lspin(14)` ran out of fuel. Now the halves share
 /// one evaluation of the child (`shared_apps` counts the kernel's part) and
 /// the run is quadratic: forty levels, two requests each, then the
-/// assumption. A failure at the bottom of the nest is still reported.
+/// assumption. A failure at the bottom of the nest is still reported. Both
+/// on the untrusted machine a run uses first and on the kernel's evaluator
+/// behind it, where the sharing is checked.
 #[test]
 fn left_nested_runs() {
     let tick = "fn tick() → tactic::Tac<tactic::Expr> { defeq(NatLit(0), NatLit(0)).bind(λ g => assumption()) }
          fn lspin(k: Nat) → tactic::Tac<tactic::Expr> {
              match k { Zero => assumption(), Succ(j) => lspin(j).bind(λ e => tick()) }
          }";
+    let deep = format!("import tactic;\nimport nat;\n{tick}\ntheorem deep(n: Nat, h: n = 3): n = 3 {{ by lspin(40) }}");
+    let bad = format!("import tactic;\nimport nat;\n{tick}\ntheorem bad(n: Nat, q: n = 4): n = 3 {{ by lspin(40) }}");
+    let on_kernel = || {
+        let mut e = elaborator();
+        e.run_tactics_on_kernel();
+        e
+    };
+    check_in(elaborator(), &deep);
     let before = heather_kernel::stats::snapshot();
-    check(&format!("{tick}\ntheorem deep(n: Nat, h: n = 3): n = 3 {{ by lspin(40) }}"));
+    check_in(on_kernel(), &deep);
     let shared = heather_kernel::stats::snapshot().since(&before).shared_apps;
     assert!(shared > 0, "the function child's halves did not share an evaluation");
-    let msg = refused(&format!("{tick}\ntheorem bad(n: Nat, q: n = 4): n = 3 {{ by lspin(40) }}"));
-    assert!(msg.contains("the tactic failed: no local's type is the goal"), "{msg}");
+    for e in [elaborator(), on_kernel()] {
+        let msg = refused_in(e, &bad);
+        assert!(msg.contains("the tactic failed: no local's type is the goal"), "{msg}");
+    }
 }
 
 /// `intro` opens the goal's binder, proves the body under the new local, and

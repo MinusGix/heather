@@ -186,11 +186,6 @@ theorem Target::stack_toNat(self t: Target, i: Nat, inside: i <= t.stack.size): 
     BitVec::offset_toNat(64, t.stack.low, i, fits)
 }
 
-theorem Target::frame_toNat(self t: Target): t.frame().toNat() = t.stack.low.toNat() + t.index {
-    let inside: (t.index <= t.stack.size) = omega(t.framed);
-    t.stack_toNat(t.index, inside)
-}
-
 // Words of the stack in order from offset `i` up.
 fn Target::FramesAt(self t: Target, m: X86Memory(t.r.profile), words: List<BitVec(64)>) → Nat → Type {
     match words {
@@ -266,20 +261,6 @@ theorem Layout::keeps_buffer_len(self layout: Layout, env: Env, v: Nat → BitVe
 // ---------------------------------------------------------------------------
 // The layout's ranges
 
-theorem Layout::word_below_buffers(self layout: Layout, i, t: Nat, inside: i < layout.words, short: t < 8): 8 * i + t < 8 * layout.words {
-    omega(inside, short)
-}
-
-theorem Layout::buffers_after_words(self layout: Layout, b: Nat): 8 * layout.reserved <= layout.buffer_offset(b) {
-    let after: (8 * layout.reserved <= 8 * layout.reserved + layout.capacities.take(b).total()) = omega();
-    after
-}
-
-theorem Layout::scratch_after_words(self layout: Layout): 8 * layout.reserved <= layout.scratch_offset() {
-    let after: (8 * layout.reserved <= 8 * layout.reserved + layout.capacities.total()) = omega();
-    after
-}
-
 theorem Layout::buffer_end(self layout: Layout, b, cap: Nat, found: layout.capacities.nth(b) = Some(cap)):
     layout.buffer_offset(b) + cap <= layout.scratch_offset() {
     let ends: ((8 * layout.reserved + layout.capacities.take(b).total()) + cap <= 8 * layout.reserved + layout.capacities.total()) =
@@ -289,17 +270,9 @@ theorem Layout::buffer_end(self layout: Layout, b, cap: Nat, found: layout.capac
 
 // A buffer's range is the `b`th piece of the capacities packed after the
 // words, so the packing lemma places it.
-fn Layout::buffer_span(self layout: Layout, b, cap: Nat) → Span { Span::packed(8 * layout.reserved, layout.capacities, b, cap) }
-
 theorem Layout::buffer_apart(self layout: Layout, b, cap, other: Nat, found: layout.capacities.nth(b) = Some(cap), below: b < other):
     layout.buffer_offset(b) + cap <= layout.buffer_offset(other) {
     Span::packed_before(8 * layout.reserved, layout.capacities, b, cap, other, found, below)
-}
-
-// Two different buffers share no byte.
-theorem Layout::buffers_disjoint(self layout: Layout, b, cap, c, cap2: Nat, found: layout.capacities.nth(b) = Some(cap),
-    found2: layout.capacities.nth(c) = Some(cap2), differ: b ≠ c): layout.buffer_span(b, cap).Disjoint(layout.buffer_span(c, cap2)) {
-    Span::packed_disjoint(8 * layout.reserved, layout.capacities, b, cap, c, cap2, found, found2, differ)
 }
 
 // The scratch range is one byte longer than the largest buffer, so a path
@@ -769,10 +742,4 @@ theorem Target::placed_word(self t: Target, env: Env, m: X86Memory(t.r.profile),
         sym(t.r.cells_outside(v, fc, word_bytes(word), p, Inl(omega(under, t.size_canonical(), layout.frame_cell_at(i))))));
     Target::Placed(cells := w, holds := holds, keeps := layout.keeps_word(t.r, env, v, placed.keeps, i, word),
         stacked := Target::Stacked(same := placed.stacked.same, stacking := t.stacking_slot(v, m, i, inside, word, placed.stacked.stacking)))
-}
-
-// The environment is the same, so is where it is placed.
-theorem Target::placed_same(self t: Target, env, other: Env, m: X86Memory(t.r.profile), placed: t.Placed(env, m), same: env = other):
-    t.Placed(other, m) {
-    j(same, λ e _ => t.Placed(e, m), placed)
 }

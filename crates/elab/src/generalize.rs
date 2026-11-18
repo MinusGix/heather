@@ -689,7 +689,7 @@ impl Generalize<'_> {
             let (term, ty) = alias.at(by);
             // The scrutinee itself, or an alias the scrutinee is built from,
             // is not convoyed: abstracting it is the motive's job.
-            if term == *scrutinee || wrapped.abstract_local(&term).is_some() {
+            if term == *scrutinee || wrapped.mentions_local(&term) {
                 continue;
             }
             if ty.abstract_local(scrutinee).is_some() {

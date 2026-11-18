@@ -85,13 +85,6 @@ fn entered(entry: List<Instruction>, program: Prog) → List<BitVec(8)> {
     canonical_block_bytes(entry) ++ assemble(no_fills(), program, Nil)
 }
 
-// Its length is the two lengths.
-theorem entered_len(entry: List<Instruction>, program: Prog):
-    entered(entry, program).len() = block_length(entry) + assemble(no_fills(), program, Nil).len() {
-    trans(canonical_block_bytes(entry).len_append(assemble(no_fills(), program, Nil)),
-        cong_fn<Nat, Nat>(λ n => n + assemble(no_fills(), program, Nil).len(), block_length_is(entry)))
-}
-
 // The compiler's theorem behind entry code: a state at the entry code, the
 // code and the program resident after it, whose registers after the entry
 // code have RSP at the top of a stack with the source's room and RDI at the

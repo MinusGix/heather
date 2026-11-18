@@ -305,6 +305,7 @@ impl Walk<'_> {
                 self.term(case, d + 1);
                 self.term(scrut, d);
             }
+            Term::UnsquashEmpty { scrut, .. } => self.term(scrut, d),
 
             Term::Pair {
                 fst_ty,

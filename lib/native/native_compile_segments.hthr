@@ -182,29 +182,6 @@ theorem Prog::word_from_within(self p: Prog, layout: Layout, out: List<Nat>, id:
     Prog::within_trans(p.within_word_from(layout, out, id, register), within)
 }
 
-theorem Prog::bit_to_within(self p: Prog, layout: Layout, id: Nat, register: Gpr, program: Prog,
-    within: p.bit_to(layout, id, register).Within(program)): p.Within(program) {
-    p.word_to_within(layout, id, register, program,
-        p.word_to(layout, id, register).within_before(0, Block([MovRI(Rbx, BitVec::ofNat(1)), AndRR(register, Rbx)]), program, within))
-}
-
-theorem Prog::clamp_within(self p: Prog, value, bound: Gpr, skip: Nat, program: Prog,
-    within: p.clamp(value, bound, skip).Within(program)): p.Within(program) {
-    let cmp = then(p, Block([CmpRR(value, bound)]));
-    let jcc = then(cmp, Jcc(B, skip));
-    let moved = then(jcc, Block([MovRR(value, bound)]));
-    p.within_before(0, Block([CmpRR(value, bound)]), program, cmp.within_before(0, Jcc(B, skip), program,
-        jcc.within_before(0, Block([MovRR(value, bound)]), program, moved.within_before(skip, Block([]), program, within))))
-}
-
-theorem Prog::tests_within(self p: Prog, layout: Layout, condition, else_name: Nat, program: Prog,
-    within: p.tests(layout, condition, else_name).Within(program)): p.Within(program) {
-    let bits = p.bit_to(layout, condition, Rax);
-    let tested = bits.test_label(Rax);
-    p.bit_to_within(layout, condition, Rax, program,
-        bits.within_before(0, Block([TestRR(Rax, Rax)]), program, tested.within_before(0, Jcc(E, else_name), program, within)))
-}
-
 // ---------------------------------------------------------------------------
 // Items
 
@@ -442,11 +419,6 @@ theorem Prog::within_known_to(self p: Prog, layout: Layout, known: List<Fact>, i
     })
 }
 
-theorem Prog::known_to_within(self p: Prog, layout: Layout, known: List<Fact>, id: Nat, register: Gpr, program: Prog,
-    within: p.known_to(layout, known, id, register).Within(program)): p.Within(program) {
-    Prog::within_trans(p.within_known_to(layout, known, id, register), within)
-}
-
 // The word in `register`, a word the statement reads: its number put there
 // where it is known, otherwise read from its home (`goes_word_to`).
 theorem Target::goes_known_to(self t: Target, live: List<Nat>, env: Env, p: Prog, known: List<Fact>, id: Nat, register: Gpr, inside: t.layout().word_fits(id).IsTrue(),
@@ -614,32 +586,7 @@ theorem Target::goes_bit_to(self t: Target, live: List<Nat>, env: Env, p: Prog, 
 }
 
 // ---------------------------------------------------------------------------
-// Clamps, tests and exits
-
-// `value` clamped to `bound`: kept where it is below, the bound otherwise
-// (CMP's borrow).
-theorem Target::goes_clamp(self t: Target, p: Prog, value, bound: Gpr, n: Nat, within: p.clamp(value, bound, Succ(n)).Within(t.program),
-    tree: ITree<BitVec(64)>(Events::linux()), q: Gprs → X86Memory(t.r.profile) → Type,
-    next: t.GoesR(prog_len(p.clamp(value, bound, Succ(n))), tree, q)):
-    t.GoesR(prog_len(p), tree, λ (g: Gprs) (m: X86Memory(t.r.profile)) =>
-        ((read_gpr(value, g).borrow_sub_bit(read_gpr(bound, g)) = True) → q(g, m)) ∧
-        ((read_gpr(value, g).borrow_sub_bit(read_gpr(bound, g)) = False) → q(write_gpr(value, read_gpr(bound, g), g), m))) {
-    let cmp = then(p, Block([CmpRR(value, bound)]));
-    let jcc = then(cmp, Jcc(B, Succ(n)));
-    let moved = then(jcc, Block([MovRR(value, bound)]));
-    let w_moved = moved.within_before(Succ(n), Block([]), t.program, within);
-    let w_jcc = jcc.within_before(0, Block([MovRR(value, bound)]), t.program, w_moved);
-    let w_cmp = cmp.within_before(0, Jcc(B, Succ(n)), t.program, w_jcc);
-    let post = λ (u: MachineState<X86Memory(t.r.profile)>) => q(u.gprs, u.memory);
-    let fall = t.goes_block(jcc, 0, [MovRR(value, bound)], w_moved, tree, post, next);
-    let pre = λ (g: Gprs) (f: Flags) (m: X86Memory(t.r.profile)) =>
-        ((f.cf = True) → q(g, m)) ∧ ((f.cf = False) → q(write_gpr(value, read_gpr(bound, g), g), m));
-    let lands = t.program.lands_jcc(t.laid, w_jcc.witness, cmp, 0, B, n, w_jcc.proof, within.witness, moved, Block([]), within.proof);
-    let jumped = t.io().goes_jcc(t.program, t.origin, t.code_fits(), w_jcc.witness, cmp, 0, B, Succ(n), w_jcc.proof, prog_len(moved), lands, tree, pre,
-        λ u here resident held => next(u, here, resident, held.left.left(held.right)),
-        λ u here resident held => fall(u, here, resident, held.left.right(held.right)));
-    t.goes_block_jcc(p, 0, [CmpRR(value, bound)], w_cmp, tree, B, pre, jumped, λ _ => refl)
-}
+// Tests and exits
 
 // TEST's ZF on a masked bit: set where the bit is clear.
 theorem one_bit_tests_zero(b: Bool):

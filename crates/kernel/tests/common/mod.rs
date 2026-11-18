@@ -394,6 +394,7 @@ pub fn gen_branches(sc: &Sc, r: &mut Rng, b: u32) -> Rc<Branches> {
                 GK::Tm(sh(g, 0)),
             ]
         }),
+        tm_unsquash_empty: t(1, 1, &|g| vec![GK::Ctx, GK::Tm(sh(g, 0))]),
         // (ℓ, ℓ', ℓi, g, U_I, U_S : (g, i), U_P : (g, i, s), u_o : (g, i, s,
         // p), u_j, x_I … x_j) — docs/kernel/kernel-m-codes-design.md §2.
         ty_m: t(3, 5, &|g| {
@@ -1425,6 +1426,7 @@ pub fn count_term(t: &Term) -> u64 {
         Term::ElimSquash { src_ty, motive, case, scrut, .. } => {
             count_type(src_ty) + count_type(motive) + count_term(case) + count_term(scrut)
         }
+        Term::UnsquashEmpty { scrut, .. } => count_term(scrut),
         Term::Pair { fst_ty, snd_ty, fst, snd, .. } => {
             count_type(fst_ty) + count_type(snd_ty) + count_term(fst) + count_term(snd)
         }

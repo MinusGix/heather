@@ -728,6 +728,7 @@ impl Tr<'_> {
                     self.tm(scrut)?,
                 ],
             )?,
+            Term::UnsquashEmpty { level, scrut } => konst("unsquashEmpty", &[level], vec![self.tm(scrut)?])?,
             // ---- Σ ----
             Term::Pair { fst_level, snd_level, fst_ty, snd_ty, fst, snd } => konst(
                 "pair",

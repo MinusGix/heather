@@ -2421,6 +2421,10 @@ pub enum Elim<'v> {
         motive: &'v TyClo<'v>,
         case: &'v TmClo<'v>,
     },
+    /// `unsquash_empty^l(·)` — no closure: the result type is `Empty^l`.
+    UnsquashEmpty {
+        level: Level,
+    },
     Case {
         lhs_level: Level,
         rhs_level: Level,
@@ -2549,6 +2553,7 @@ impl Elim<'_> {
             Elim::ElimEmpty { .. } => "elim_Empty",
             Elim::ElimSEmpty { .. } => "elim_sEmpty",
             Elim::ElimSquash { .. } => "elim_Squash",
+            Elim::UnsquashEmpty { .. } => "unsquash_empty",
             Elim::Case { .. } => "case",
             Elim::ElimW { .. } => "elim_W",
             Elim::ElimWf { .. } => "elim_Wf",

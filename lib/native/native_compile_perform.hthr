@@ -33,6 +33,7 @@ import native_compile_segments;
 import native_compile_steps;
 import native_compile_frames;
 import native_compile_structured;
+import native_compile_claims;
 import function_ir_eval;
 import function_ir;
 import function_ir_lend;
@@ -87,14 +88,6 @@ fn Target::callee(self t: Target, p: Nat, homed: t.bodies.frame(p).homes(t.homes
     roomy: t.procedures.performed_by(p).below(t.procedures.called_by(p), t.procedures, t.bodies, t.homes.places, t.homes.room_table(t.functions), room) + 8 <= index) → Target {
     Target(t.r, t.reserved, t.bodies.frame(p).words, t.caps, t.bodies.frame(p).homes(t.homes.places, t.homes.rooms), homed, t.fits, t.program, t.origin, t.laid, t.args,
         t.procedures, t.functions, t.stack, t.stack_writes, t.stack_above, t.stack_canonical, t.bodies, t.procedures.performed_by(p), t.procedures.called_by(p), index, frames, pinned, room, framed, roomy)
-}
-
-// Its layout is the procedure's.
-theorem Target::callee_layout(self t: Target, p: Nat, homed: t.bodies.frame(p).homes(t.homes.places, t.homes.rooms).fits().IsTrue(), index: Nat, frames: List<BitVec(64)>,
-    pinned: List<BitVec(64)>, room: Nat, framed: index + 8 * (t.bodies.frame(p).words + frames.len()) <= t.stack.size,
-    roomy: t.procedures.performed_by(p).below(t.procedures.called_by(p), t.procedures, t.bodies, t.homes.places, t.homes.room_table(t.functions), room) + 8 <= index):
-    t.callee(p, homed, index, frames, pinned, room, framed, roomy).layout() = t.layout().body(p) {
-    refl
 }
 
 // The frames and the slots, read off the claim.
@@ -348,77 +341,6 @@ theorem Target::goes_words_to(self t: Target, live: List<Nat>, env: Env, tree: I
     }
 }
 
-// A CALL to label `Succ(n)` lands where that label's item starts.
-theorem Prog::lands_call(self p: Prog, laid: p.laid_out().IsTrue(), k: Nat, before: Prog, name: Nat, n: Nat,
-    at: asm_back(p, k) = At(before, name, CallTo(Succ(n))), label_k: Nat, label: Prog, item: Asm,
-    label_at: asm_back(p, label_k) = At(label, Succ(n), item)):
-    NearLands(prog_len(before), asm_jump_of(asm_labels(p), prog_len(before), CallTo(Succ(n))), prog_len(label)) {
-    let lands = call_lands(asm_labels(p), k, p, before, name, Succ(n), p.laid_out_lands(laid), at);
-    j(label_target(label_k, p, label, n, item, p.laid_out_unique(laid), label_at),
-        λ to _ => NearLands(prog_len(before), asm_jump_of(asm_labels(p), prog_len(before), CallTo(Succ(n))), to), lands)
-}
-
-// ---------------------------------------------------------------------------
-// Words sharing a home
-
-// Two live words in one register hold one number.
-theorem Target::held_shared(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m),
-    x, y: Nat, mx: Mem(x, live), my: Mem(y, live), k: Nat, at_x: t.homes.home(x) = InReg(k), at_y: t.homes.home(y) = InReg(k)): env.number(x) = env.number(y) {
-    let words = held.words;
-    let values = home_values(g);
-    let read: ((i: Nat) → Mem(i, live) → t.homes.home(i) = InReg(k) → (values.get_or(k, BitVec::zero()).toNat() = env.number(i))) = λ i mi at =>
-        j(at, λ h _ => (match h { InSlot(sk) => words.get_or(sk, 0), InReg(r) => values.get_or(r, BitVec::zero()).toNat() }) = env.number(i), held.agreeing.homes(i, mi));
-    trans(sym(read(x, mx, at_x)), read(y, my, at_y))
-}
-
-// Into its register, where every other word of `out` in that register holds
-// the same number.
-theorem Target::held_reg_shared(self t: Target, live, out: List<Nat>, env: Env, id: Nat, w: BitVec(64), g: Gprs, m: X86Memory(t.r.profile),
-    held: t.Held(live, env, g, m), sub: (i: Nat) → Mem(i, out) → i ≠ id → Mem(i, live), k: Nat, at: t.homes.home(id) = InReg(k),
-    shared: (i: Nat) → Mem(i, out) → i ≠ id → t.homes.home(i) = InReg(k) → env.number(i) = w.toNat()):
-    t.Held(out, env.set_word(id, w), write_gpr(home_register(k), w, g), m) {
-    let words = held.words;
-    let inside = t.homes.in_pool(t.homed, id, k, at);
-    let values = home_values(g).put(k, w, BitVec::zero());
-    let written: (home_values(write_gpr(home_register(k), w, g)) = values) = home_values_write(w, g, k, inside);
-    let before: ((i: Nat) → Mem(i, out) → i ≠ id → (h: Home) → t.homes.home(i) = h →
-        ((match h { InSlot(sk) => words.get_or(sk, 0), InReg(r) => home_values(g).get_or(r, BitVec::zero()).toNat() }) = env.number(i))) =
-        λ i m2 ne h at_i => j(at_i, λ x _ => (match x { InSlot(sk) => words.get_or(sk, 0), InReg(r) => home_values(g).get_or(r, BitVec::zero()).toNat() }) = env.number(i),
-            held.agreeing.homes(i, sub(i, m2, ne)));
-    let agrees: t.homes.Agrees(out, env.set_word(id, w), words, values) = λ i m2 => match i.eq_dec(id) {
-        Inl(e) => j(sym(e), λ x _ => t.homes.number(x, words, values) = env.set_word(id, w).number(x),
-            j(sym(at), λ h _ => (match h { InSlot(sk) => words.get_or(sk, 0), InReg(r) => values.get_or(r, BitVec::zero()).toNat() }) =
-                env.set_word(id, w).number(id),
-                trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), values.get_or_some(k, BitVec::zero(), w,
-                    List::put_here(k, home_values(g), w, BitVec::zero()))), sym(env.number_set_here(id, w))))),
-        Inr(ne) => match at_i: t.homes.home(i) {
-            InSlot(sk) => trans(before(i, m2, ne, InSlot(sk), at_i), sym(env.number_set_other(id, w, i, ne))),
-            InReg(r) => match r.eq_dec(k) {
-                Inl(e) => trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), values.get_or_some(r, BitVec::zero(), w,
-                        j(sym(e), λ x _ => values.nth(x) = Some(w), List::put_here(k, home_values(g), w, BitVec::zero())))),
-                    trans(sym(shared(i, m2, ne, j(e, λ x _ => t.homes.home(i) = InReg(x), at_i))), sym(env.number_set_other(id, w, i, ne)))),
-                Inr(apart) => trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), List::put_other(k, home_values(g), w, BitVec::zero(), r, apart)),
-                    trans(before(i, m2, ne, InReg(r), at_i), sym(env.number_set_other(id, w, i, ne)))),
-            },
-        },
-    };
-    let rsp: (values.get_or(6, BitVec::zero()) = t.frame()) =
-        trans(List::put_other(k, home_values(g), w, BitVec::zero(), 6, λ e => false_elim(omega(e, inside))), held.agreeing.frame);
-    let pins: t.Pins(values) = λ r within pinned => trans(List::put_other(k, home_values(g), w, BitVec::zero(), r,
-        λ e => absurd(trans(sym(t.homes.pinned_unlived(home_register(k), j(e, λ x _ => t.homes.pinned(home_register(x)) = True, pinned))),
-            t.homes.lived(id, k, at)))), held.agreeing.pins(r, within, pinned));
-    Target::Held(words := words, placed := held.placed,
-        agreeing := j(sym(written), λ vs _ => t.Agreeing(out, env.set_word(id, w), words, vs), Target::Agreeing(homes := agrees, frame := rsp, pins := pins)))
-}
-
-// A word set to the number it had: alike everywhere.
-theorem Env::like_set_same(self env: Env, id: Nat, w: BitVec(64), value: w.toNat() = env.number(id), live: List<Nat>): env.set_word(id, w).Like(env, live) {
-    ⟨λ i _ => match i.eq_dec(id) {
-        Inl(e) => j(sym(e), λ x _ => env.set_word(id, w).number(x) = env.number(x), trans(env.number_set_here(id, w), value)),
-        Inr(ne) => env.number_set_other(id, w, i, ne),
-    }, ⟨refl, refl⟩⟩
-}
-
 // ---------------------------------------------------------------------------
 // The shared exit of a call too deep
 
@@ -566,11 +488,6 @@ theorem Gprs::holding_write(self g: Gprs, register: Gpr, value: BitVec(64), valu
                 g.holding_write(register, value, vs, more, register.absent_rest(r, more, absent), holding.right)⟩,
         },
     }
-}
-
-// The command line, read off the claim.
-theorem Target::held_args(self t: Target, live: List<Nat>, env: Env, g: Gprs, m: X86Memory(t.r.profile), held: t.Held(live, env, g, m)): env.args = t.args {
-    held.placed.stacked.same
 }
 
 // ---------------------------------------------------------------------------
@@ -868,22 +785,9 @@ theorem Target::goes_count_up(self t: Target, env: Env, d: Nat, small: Succ(d) <
     let so = layout.stack_offset();
     let ro = so + 8;
     let slots: (so + 16 <= t.r.size) = t.fits;
-    let r1 = then(p, Block([MovRI(Rbx, layout.room_at())]));
-    let r2 = then(r1, Load(WordLoad(R11, Rbx)));
-    let r3 = then(r2, Block([AddRI8(R11, BitVec::ofNat(1))]));
-    let w_r3 = r3.within_before(0, Store(WordStore(Rbx, R11)), t.program, within);
-    let w_r2 = r2.within_before(0, Block([AddRI8(R11, BitVec::ofNat(1))]), t.program, w_r3);
-    let w_r1 = r1.within_before(0, Load(WordLoad(R11, Rbx)), t.program, w_r2);
+    let run = Run(t, [], [], [], env);
+    let code = layout.build().point(Rbx, layout.room_at()).load(R11, Rbx).next(R11).store(Rbx, R11).cut().code;
     let final_post = λ (s: MachineState<X86Memory(t.r.profile)>) => Exists<Nat → BitVec(8)>(λ v => t.Based(env, Succ(d), v, s.memory)) ∧ r(s.gprs, s.memory);
-    let st2 = t.goes_store(r3, 0, WordStore(Rbx, R11), within, tree, final_post, next);
-    let a3 = λ (s: MachineState<X86Memory(t.r.profile)>) => (store_base_plain(Rbx) = True) ∧ (t.writes().writable(s.memory, read_gpr(Rbx, s.gprs), 8) ∧
-        (t.site().Resident(word_store_after(t.writes(), WordStore(Rbx, R11), s).memory) ∧ final_post(word_store_after(t.writes(), WordStore(Rbx, R11), s))));
-    let add = t.goes_block(r2, 0, [AddRI8(R11, BitVec::ofNat(1))], w_r3, tree, a3, st2);
-    let a2 = λ (s: MachineState<X86Memory(t.r.profile)>) => a3(execute_block_normal([AddRI8(R11, BitVec::ofNat(1))], s));
-    let ld = t.goes_load(r1, 0, WordLoad(R11, Rbx), w_r2, tree, a2, add);
-    let a1: MachineState<X86Memory(t.r.profile)> → Type = λ s => Exists<BitVec(64)>(λ word => (read_gpr(Rbx, s.gprs).toNat() + 8 <= Nat::pow(2, 47)) ∧
-        ((read_word(t.site().data, s.memory, read_gpr(Rbx, s.gprs)) = Some(word)) ∧ a2(word_load_after(WordLoad(R11, Rbx), word, s))));
-    let mv2 = t.goes_block(p, 0, [MovRI(Rbx, layout.room_at())], w_r1, tree, a1, ld);
     λ s here resident held => {
         let g = s.gprs;
         let m = s.memory;
@@ -904,10 +808,11 @@ theorem Target::goes_count_up(self t: Target, env: Env, d: Nat, small: Succ(d) <
         let r5: r(g5, m) = keep_g(g, g5, m, held.right, λ x not_rbx not_r11 =>
             trans(read_gpr_other(R11, x, word2, g4, not_r11), trans(read_gpr_other(R11, x, word, g3, not_r11), read_gpr_other(Rbx, x, layout.room_at(), g, not_rbx))));
         let resident3 = j(rip_r, λ a _ => t.site().Resident(t.r.profile.store(m, a, bytes)), t.store_resident(m, ro, bytes, omega(slots), resident));
-        mv2(s, here, resident, Exists(word, ⟨j(rip_r, λ a _ => a.toNat() + 8 <= Nat::pow(2, 47), read.left),
-            ⟨j(rip_r, λ a _ => read_word(t.site().data, m, a) = Some(word), read.right),
-                ⟨refl, ⟨j(rip_r, λ a _ => t.writes().writable(m, a, 8), t.writable(m, ro, 8, omega(slots))),
-                    ⟨resident3, ⟨more, keep_m(g5, m, word2, r5)⟩⟩⟩⟩⟩⟩))
+        code.goes(run, p, within, tree, final_post, next)(s, here, resident,
+            LoadsWord(word := word, low := j(rip_r, λ a _ => a.toNat() + 8 <= Nat::pow(2, 47), read.left),
+                read := j(rip_r, λ a _ => read_word(t.site().data, m, a) = Some(word), read.right),
+                after := StoresWord(plain := refl, writable := j(rip_r, λ a _ => t.writes().writable(m, a, 8), t.writable(m, ro, 8, omega(slots))),
+                    resident := resident3, after := ⟨more, keep_m(g5, m, word2, r5)⟩)))
     }
 }
 

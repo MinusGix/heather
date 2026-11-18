@@ -241,7 +241,7 @@ pub struct Machine {
     checked: RefCell<HashMap<usize, Option<(Val, Val)>>>,
     written: Cell<bool>,
     steps: Cell<u64>,
-    fuel: u64,
+    fuel: Cell<u64>,
     depth: Cell<u32>,
     /// The definition entered last, for a stuck run's report.
     last: Cell<usize>,
@@ -283,7 +283,7 @@ impl Session {
                     checked: RefCell::default(),
                     written: Cell::new(false),
                     steps: Cell::new(0),
-                    fuel,
+                    fuel: Cell::new(fuel),
                     depth: Cell::new(0),
                     last: Cell::new(usize::MAX),
                     deep: RefCell::default(),
@@ -349,6 +349,12 @@ impl Machine {
     /// The steps taken so far.
     pub fn steps(&self) -> u64 {
         self.steps.get()
+    }
+
+    /// From here on, `steps` more steps: a run that answers a host one
+    /// request at a time bounds each answer, not the conversation.
+    pub fn allow(&self, steps: u64) {
+        self.fuel.set(self.steps.get().saturating_add(steps));
     }
 
     // ---- erasure ----------------------------------------------------------
@@ -472,7 +478,9 @@ impl Machine {
             | Term::TmDVec { .. }
             | Term::TmIWf { .. }
             | Term::TmM { .. } => Code::Unit,
-            Term::ElimEmpty { .. } | Term::ElimSEmpty { .. } => Code::Stuck("a case that cannot happen was reached"),
+            Term::ElimEmpty { .. } | Term::ElimSEmpty { .. } | Term::UnsquashEmpty { .. } => {
+                Code::Stuck("a case that cannot happen was reached")
+            }
             Term::Corec { .. } | Term::Out { .. } => Code::Stuck("codata"),
             Term::BoxTy(_)
             | Term::BoxTm(_)
@@ -488,7 +496,7 @@ impl Machine {
     fn tick(&self) -> Res<()> {
         let steps = self.steps.get() + 1;
         self.steps.set(steps);
-        if steps > self.fuel { stuck("the run passed its step bound") } else { Ok(()) }
+        if steps > self.fuel.get() { stuck("the run passed its step bound") } else { Ok(()) }
     }
 
     fn lookup(&self, env: &Env, index: u32) -> Res<Thunk> {
@@ -850,6 +858,27 @@ impl Machine {
     /// The definition at position `at` of Ψ, taking no arguments.
     pub fn global(&self, at: usize) -> Thunk {
         self.closed(at)
+    }
+
+    /// A closed term of Ψ (one built at Ψ's full length, as an elaborator
+    /// builds a call), to be computed when read.
+    pub fn term(&self, t: Term) -> Thunk {
+        let code = self.erase_built(t, self.psi.bindings.len());
+        Rc::new(ThunkCell(RefCell::new(State::Lazy(code, None))))
+    }
+
+    /// `fun` applied to `arg`, computed when read.
+    pub fn apply(&self, fun: &Thunk, arg: &Thunk) -> Thunk {
+        thread_local! {
+            static APPLY: Rc<Code> = Rc::new(Code::App(Rc::new(Code::Var(1)), Rc::new(Code::Var(0))));
+        }
+        let code = APPLY.with(Rc::clone);
+        Rc::new(ThunkCell(RefCell::new(State::Lazy(code, push(&push(&None, fun.clone()), arg.clone())))))
+    }
+
+    /// A number as a value.
+    pub fn number(&self, n: u64) -> Thunk {
+        done(Val::Nat(n as u128))
     }
 
     /// A number, where it fits a word.

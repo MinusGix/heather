@@ -133,36 +133,6 @@ theorem Site::moves_store<M>(self site: Site<M>, writes: ByteWrites<M>, fits: Fi
 // (A register's low byte stored at a label is `Site::moves_store_byte`,
 // x86_64_stack_runs: the function compiler stores through it too.)
 
-// A JCC at a label that lands ahead: on to `to` either way, from where it
-// lands when its condition holds and from past it when not. The condition
-// reads the registers, flags and memory, which the jump keeps.
-theorem Site::moves_jcc<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
-    before: Prog, name: Nat, cc: ConditionCode, target: Nat, at: asm_back(site.program, k) = At(before, name, Jcc(cc, target)),
-    landing: Nat, lands: JumpsForward(prog_len(before), 6, asm_jump_of(asm_labels(site.program), prog_len(before), Jcc(cc, target)), landing),
-    to: Nat, pre: Gprs → Flags → M → Type, post: MachineState<M> → Type,
-    taken: site.Moves(writes, landing, to, λ (t: MachineState<M>) => pre(t.gprs, t.flags, t.memory) ∧ condition_holds(cc, t.flags) = True, post),
-    fall: site.Moves(writes, prog_len(before) + 6, to, λ (t: MachineState<M>) => pre(t.gprs, t.flags, t.memory) ∧ condition_holds(cc, t.flags) = False, post)):
-    site.Moves(writes, prog_len(before), to, λ (s: MachineState<M>) =>
-        pre(s.gprs, s.flags, s.memory) ∧ condition_defined(cc, s.flags.defined) = True, post) {
-    λ s here resident holds => {
-        let displacement = asm_jump_of(asm_labels(site.program), prog_len(before), Jcc(cc, target));
-        let control = JumpIfNear(cc, displacement);
-        let u = execute_near_control(control, s);
-        let jumped = machine_steps_of_fetched(site.fetch, site.data, writes, s, u, fetched_steps_one(site.fetch, site.data, s, u,
-            Exists(EmitNear(control), ⟨site.item_fetched(fits, s, resident, k, before, name, Jcc(cc, target), at, here), ⟨holds.right, refl⟩⟩)));
-        match yes: condition_holds(cc, s.flags) {
-            True => site.arrives_after(writes, s, u, to, post, jumped, taken(u,
-                trans(near_if_taken_rip(cc, displacement, s, yes),
-                    trans(cong_fn<BitVec(64), BitVec(64)>(λ address => near_branch_target(address, 6, displacement), here),
-                        jumps_forward(site.origin, prog_len(before), 6, displacement, landing, lands))),
-                resident, ⟨holds.left, yes⟩)),
-            False => site.arrives_after(writes, s, u, to, post, jumped, fall(u,
-                trans(near_if_not_taken_rip(cc, displacement, s, yes), site.rip_after(s, prog_len(before), 6, here)),
-                resident, ⟨holds.left, yes⟩)),
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // The claim of code: every state at an offset meeting a condition runs as
 // the tree

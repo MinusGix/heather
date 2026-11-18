@@ -247,6 +247,19 @@ fn decide_false<P: Decide>(e: decide_bit<P>() = False) → ¬P { P.reflects.righ
 
 fn decide_pick<P: Decide, A>(x, y: A) → A { or_pick(P.dec, x, y) }
 
+// A decidable condition is recoverable from its squash
+// (docs/language/strict-conditions-design.md §4.2): decide it, and on `¬P`
+// the squash maps to `∥False∥`, which the kernel's `unsquash_empty`
+// releases. So a function may take its condition as `∥P∥`, where found
+// proofs are interchangeable, and still use it. A `fn` so that it unfolds:
+// at a decided `P` it computes to the decision's own proof.
+fn Squash::recover<P: Decide>(q: ∥P∥) → P {
+    match P.dec {
+        Inl(p) => p,
+        Inr(no) => false_elim(unsquash_empty(squash_map(q, no))),
+    }
+}
+
 // The `or_pick_dec` lemma with the dictionary resolved — a proof of `P` makes
 // the decided branch compute, whichever way the decider happened to go.
 theorem decide_pick_yes<P: Decide, A>(x, y: A, p: P): decide_pick<P, A>(x, y) = y {

@@ -43,18 +43,7 @@ import option;
 import omega;
 
 // ---------------------------------------------------------------------------
-// Clamps as `min`
-
-// CMP and a JB: kept where it is below the bound, the bound where not.
-theorem BitVec::clamp_kept(v, b: BitVec(64), borrow: v.borrow_sub_bit(b) = True): v.toNat().min(b.toNat()) = v.toNat() {
-    let below: (v.toNat() < b.toNat()) = BitVec::borrow_sub_of_bit_true(64, v, b, borrow);
-    Nat::min_eq_l(v.toNat(), b.toNat(), Nat::le_of_lt(v.toNat(), b.toNat(), below))
-}
-
-theorem BitVec::clamp_bound(v, b: BitVec(64), no: v.borrow_sub_bit(b) = False): v.toNat().min(b.toNat()) = b.toNat() {
-    Nat::min_eq_r(v.toNat(), b.toNat(), v.toNat().le_of_not_lt(b.toNat(),
-        λ (below: v.toNat() < b.toNat()) => absurd(trans(sym(no), BitVec::borrow_sub_bit_of_borrow(64, v, b, below)))))
-}
+// Words as numbers
 
 // A word's number, as the machine reads the word.
 theorem Target::word_number(self t: Target, env: Env, m: X86Memory(t.r.profile), placed: t.Placed(env, m), i: Nat, inside: i < t.words):
@@ -71,11 +60,6 @@ theorem canonical_lt_word(n: Nat, below: n <= Nat::pow(2, 47)): n < Nat::pow(2, 
 theorem canonical_lt_signed(n: Nat, below: n <= Nat::pow(2, 47)): n < Nat::pow(2, 63) {
     Nat::le_trans(Succ(n), Succ(Nat::pow(2, 47)), Nat::pow(2, 63), Nat::le_succ_succ(n, Nat::pow(2, 47), below),
         Nat::leb_sound(Succ(Nat::pow(2, 47)), Nat::pow(2, 63), trivial))
-}
-
-// A number below the canonical boundary as a word.
-theorem canonical_word(n: Nat, below: n <= Nat::pow(2, 47)): BitVec::ofNat(n, n := 64).toNat() = n {
-    BitVec::toNat_ofNat(64, n, canonical_lt_word(n, below))
 }
 
 // ---------------------------------------------------------------------------
@@ -248,14 +232,13 @@ theorem Run::window_before(self r: Run, at, len, cap, names: Nat, post: r.State(
 // What a write's code claims: from the statement's start, write(fd, buffer
 // + min(from, capacity), min(len, capacity - that)), and on from its end
 // with each answer decoded into the environment.
-theorem Target::goes_writes(self t: Target, out: List<Nat>, env: Env, p: Prog, known: List<Fact>, knows: env.Knows(known), fd, buf, from, len, result, cap, names: Nat,
-    in_fd: t.layout().word_fits(fd).IsTrue(), in_from: t.layout().word_fits(from).IsTrue(), in_len: t.layout().word_fits(len).IsTrue(), in_result: t.layout().word_fits(result).IsTrue(),
-    found: t.caps.nth(buf) = Some(cap), apart: t.homes.apart(result, out).IsTrue(),
-    within: p.writes(t.layout(), known, out, fd, buf, from, len, result, cap, names).prog.Within(t.program),
-    tree: WriteResult → ITree<BitVec(64)>(Events::linux()),
-    next: (a: WriteResult) → LinuxCmd::Answers(Writes(fd, buf, from, len, result).cmd(env), a) →
-        t.At(prog_len(p.writes(t.layout(), known, out, fd, buf, from, len, result, cap, names).prog), out, tree(a), Writes(fd, buf, from, len, result).answer(env, a))):
-    t.At(prog_len(p), live_before(known.unknown([fd, from, len]), result, out), Vis(Writes(fd, buf, from, len, result).cmd(env), tree), env) {
+theorem Target::goes_writes(self t: Target, fd, buf, from, len, result, cap: Nat): t.CallRuns(Writes(fd, buf, from, len, result), cap) {
+    λ out env p known knows names fits found apart within tree next => {
+    let fit = λ (id: Nat) (m: Mem(id, [fd, from, len, result])) => t.layout().words_fit_mem([fd, from, len, result], id, fits, m);
+    let in_fd = fit(fd, Inl(refl));
+    let in_from = fit(from, Inr(Inl(refl)));
+    let in_len = fit(len, Inr(Inr(Inl(refl))));
+    let in_result = fit(result, Inr(Inr(Inr(Inl(refl)))));
     let ids: List<Nat> = [fd, from, len];
     let r = t.calling(known, out, env, ids, result);
     let reads = λ (id: Nat) (m: Mem(id, ids)) => t.calling_reads(known, out, env, knows, ids, result, id, m);
@@ -276,6 +259,7 @@ theorem Target::goes_writes(self t: Target, out: List<Nat>, env: Env, p: Prog, k
                             cong_fn<BitVec(64), Env>(λ w => env.set_word(result, w), sym(source_errno_word(errno, answers)))⟩⟩⟩,
                     }⟩)
             }))
+    }
 }
 
 // The buffer's address past an offset inside it.
@@ -736,14 +720,13 @@ theorem Target::scratch_inside(self t: Target, k: Nat, short: k <= t.caps.larges
 // What a read's code claims: from the statement's start, read(fd, scratch,
 // min(len, capacity - min(at, capacity))), and on from its end with each
 // answer decoded into the environment.
-theorem Target::goes_reads(self t: Target, out: List<Nat>, env: Env, p: Prog, known: List<Fact>, knows: env.Knows(known), fd, buf, at, len, result, cap, names: Nat,
-    in_fd: t.layout().word_fits(fd).IsTrue(), in_at: t.layout().word_fits(at).IsTrue(), in_len: t.layout().word_fits(len).IsTrue(), in_result: t.layout().word_fits(result).IsTrue(),
-    found: t.caps.nth(buf) = Some(cap), apart: t.homes.apart(result, out).IsTrue(),
-    within: p.reads(t.layout(), known, out, fd, buf, at, len, result, cap, names).prog.Within(t.program),
-    tree: ReadResult → ITree<BitVec(64)>(Events::linux()),
-    next: (a: ReadResult) → LinuxCmd::Answers(Reads(fd, buf, at, len, result).cmd(env), a) →
-        t.At(prog_len(p.reads(t.layout(), known, out, fd, buf, at, len, result, cap, names).prog), out, tree(a), Reads(fd, buf, at, len, result).answer(env, a))):
-    t.At(prog_len(p), live_before(known.unknown([fd, at, len]), result, out), Vis(Reads(fd, buf, at, len, result).cmd(env), tree), env) {
+theorem Target::goes_reads(self t: Target, fd, buf, at, len, result, cap: Nat): t.CallRuns(Reads(fd, buf, at, len, result), cap) {
+    λ out env p known knows names fits found apart within tree next => {
+    let fit = λ (id: Nat) (m: Mem(id, [fd, at, len, result])) => t.layout().words_fit_mem([fd, at, len, result], id, fits, m);
+    let in_fd = fit(fd, Inl(refl));
+    let in_at = fit(at, Inr(Inl(refl)));
+    let in_len = fit(len, Inr(Inr(Inl(refl))));
+    let in_result = fit(result, Inr(Inr(Inr(Inl(refl)))));
     let layout = t.layout();
     let ids: List<Nat> = [fd, at, len];
     let r = t.calling(known, out, env, ids, result);
@@ -825,4 +808,5 @@ theorem Target::goes_reads(self t: Target, out: List<Nat>, env: Env, p: Prog, kn
                     },
                 }⟩)
         }))
+    }
 }

@@ -894,6 +894,10 @@ impl<'a, 'v> Agree<'a, 'v> {
                 self.under_ty(motive, m2, gamma, 1, d)?;
                 self.ne(&prefix, scrut, gamma, depth)
             }
+            (Elim::UnsquashEmpty { level: a }, Term::UnsquashEmpty { level: b, scrut }) => {
+                self.lev(a, b, "unsquash_empty level")?;
+                self.ne(&prefix, scrut, gamma, depth)
+            }
             (
                 Elim::Case {
                     lhs_level: a1,
