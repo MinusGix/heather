@@ -112,8 +112,8 @@ fn FTm::over(self t: FTm, bw: BWorld) → (g: List<Ty>) → Env(bw.fw.w.tys, g) 
         Call(f, args, body) => λ g env n s =>
             shared(FTm::over_called(bw, g, env, f, args, n, s), λ m =>
                 body.over(bw, Cons(Sig::at(bw.fw.fsigs, f).result, g), Pair(m.value, env), n, m.after)),
-        Again(args) => λ g env n s => Mutated(s, Sig::at(bw.fw.fsigs, 0).result.default(bw.fw.w.tys)),
-        Lend(f, views, args, body) => λ g env n s => Mutated(s, body.ty(bw.fw.w, bw.fw.fsigs, Cons(Sig::at(bw.fw.fsigs, f).result, g)).default(bw.fw.w.tys)),
+        Again(_) => λ g env n s => Mutated(s, Sig::at(bw.fw.fsigs, 0).result.default(bw.fw.w.tys)),
+        Lend(f, _, _, body) => λ g env n s => Mutated(s, body.ty(bw.fw.w, bw.fw.fsigs, Cons(Sig::at(bw.fw.fsigs, f).result, g)).default(bw.fw.w.tys)),
     }
 }
 
@@ -182,7 +182,7 @@ theorem FTm::over_runs(self t: FTm, bw: BWorld, world: bw.Agrees()): (len: Nat) 
     (g: List<Ty>) → (env: Env(bw.fw.w.tys, g)) → (n: BitVec(64)) → FTm::word(bw.fw.w.tys, g, env, len) = n → (s: Bytes(n)) →
     Over<t.ty(bw.fw.w, bw.fw.fsigs, g).sem(bw.fw.w.tys)>(n, t.over(bw, g, env, n, s), t.sem(bw.fw, g, env, s.bytes)) {
     match t {
-        Pure(v) => λ len ok g env n known s => Over(refl, refl),
+        Pure(_) => λ len ok g env n known s => Over(refl, refl),
         Let(e, body) => λ len ok g env n known s =>
             body.over_runs(bw, world, Succ(len), ok, Cons(e.ty(bw.fw.w, g), g), Pair(FTm::value(bw.fw, s.bytes, e, g, env), env), n, known, s),
         If(c, yes, no) => λ len ok g env n known s => {
