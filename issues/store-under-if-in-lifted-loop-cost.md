@@ -1,10 +1,10 @@
 ---
 title: A store under an `if` in a lifted loop makes the loop's check an order of magnitude slower
-status: open
+status: closed
 labels: [performance,elaborator,loops]
 area: language
 created: 2026-11-17
-updated: 2026-11-17
+updated: 2026-11-18
 ---
 
 A loop over a span whose body stores into the receiver under an `if` checks, but far more slowly than the same loop with the store unconditional (docs/language/sequencing-surface-design.md §23.6). Programs over spans (binary search, the UTF-8 validator, a running maximum) are mostly loops with `if`s in them, so this is in the way of the end-to-end demos.
@@ -22,3 +22,9 @@ The cost is not the facts a loop is given (§23.5): the `while` variant states i
 ## Next
 
 Find where the `whnf` time goes (`--timings` per declaration of the family: `#body`, `#ext`, `_unfold`, `#keeps`, `#found_N`). A guess to check first: the statement `if` at the receiver is a match whose two arms each end in the receiver, and every copy of the body the companions make carries both arms, with each arm's reads searching for their found proofs again ([[squashed-found-proof-searched-per-copy]]).
+
+## Log
+
+- 2026-11-18: Fixed. The reads in the `if`'s test (`s[i] < s[j]`) were the cause, not the store: the test reaches the measure lowering as a type argument, `decide_bit<s[i] < s[j]>()`, and `measure::lift_found`'s walk did not enter type arguments, so those two reads never got a shared `f#found_N` proof. Each copy of the body that the companions elaborate (`#body`, `#ext`, `_unfold`, `#step`, `#True`, `#induct#…`) ran their `bv_omega` defaults again: about 5,000 searches in all, 1,145 of them in the inner `#ext` alone. Binding the reads with `let`s before the `if` brought the check down to 6 s, which confirmed the cause. The walk now lifts the reads inside a `TyKind::OfExpr` type argument. A later found proof that reads a `let` alias (the receiver after the `if`) also binds that alias at its rewritten value, whose reads cite the proofs already lifted, so it does not search for them again (`found_values`).
+
+  Measured with `--cache --timings` on the probes now in `runtime_lifted_loops_tests.hthr`: `Bytes::running_max` (nested `for`) went from 33.4 s to 4.7 s, and `Bytes::running_max_while` from 56.9 s to 7.0 s. The other loop probes stayed within noise. What remains is the outer loop's `#ext`, which is refused after about a second, with or without the `if`: [[bv-omega-unspellable-fact-refuses-outer-loop-ext]].

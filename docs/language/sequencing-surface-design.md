@@ -1403,7 +1403,13 @@ keep the kernel's `nth` at `Fin(n)`.
 `xs[i] := e` is a place (§20 extended): `p[i] := e` is `p := p.put(i,
 e)`, written by the parser (`place_update`), so `x.f[i] := e` nests into
 the record update. A `decreases` body's `xs[i]` has its found proof
-lifted as `xs.at(i)`'s is (`measure::lift_found`).
+lifted as `xs.at(i)`'s is (`measure::lift_found`), in a statement `if`'s
+test too, which reaches the lowering as the type argument of
+`decide_bit<s[i] < s[j]>()`: left there, every companion's copy of the
+body searched for it again. A proof found later that reads a `let` alias
+of such a read binds the alias at its value with the proofs already
+lifted, so it does not search for them again either
+(issues/store-under-if-in-lifted-loop-cost.md).
 
 ### 21.3 Not built
 
@@ -1624,10 +1630,11 @@ reading `s[i]` and `s[j]` with no invariant at all; and
 - A loop's state of two locals besides the receiver, or of two locals in
   a plain loop: `f#State` is a record, which the generator has no layout
   for (refused with that reason).
-- An `if` whose arm stores into the receiver inside a lifted loop
-  checks, but slowly (a running maximum over `Bytes(n)` in tens of
-  seconds, where the same loops without the `if` take a few):
-  `issues/store-under-if-in-lifted-loop-cost.md`.
+- The outer loop's `#ext` of a loop in a loop is refused (and its
+  `_unfold` never attempted): a read's `bv_omega` inside it meets the
+  lifted decrease hypothesis, which names the inner loop's call with its
+  squashed fact still a search, cannot spell it, and refuses
+  (`issues/bv-omega-unspellable-fact-refuses-outer-loop-ext.md`).
 - A byte (`u8`) local captured by a loop in a function that writes a
   span: such a function's code takes 64-bit words
   (`issues/runtime-repr-narrow-words.md`), so the probes carry the key

@@ -153,6 +153,36 @@ fn Bytes::add_earlier({n: u64}, mut self s: Bytes(n)) → u64 {
 
 theorem add_earlier_runs(): Bytes::add_earlier(Bytes([1, 2, 3, 4], refl), n := 4).after.bytes = [1, 3, 7, 15] { refl }
 
+// Each byte raised to the largest before it: a store under an `if` whose
+// test reads the span. The test's reads are given their proofs once, as
+// the store's are, rather than searched for again in each companion's
+// copy of the body (issues/store-under-if-in-lifted-loop-cost.md).
+fn Bytes::running_max({n: u64}, mut self s: Bytes(n)) → u64 {
+    for i in 0..s.len() {
+        for j in 0..i {
+            if s[i] < s[j] { s[i] := s[j]; }
+        }
+    }
+    n
+}
+
+theorem running_max_runs(): Bytes::running_max(Bytes([1, 3, 2, 0, 5], refl), n := 5).after.bytes = [1, 3, 3, 3, 5] { refl }
+
+// The same with the inner loop a `while`, which states that the outer
+// loop's index stays inside.
+fn Bytes::running_max_while({n: u64}, mut self s: Bytes(n)) → u64 {
+    for i in 0..s.len() {
+        let mut j: u64 = 0;
+        while j < i invariant i < s.len() decreases (i - j).toNat() {
+            if s[i] < s[j] { s[i] := s[j]; }
+            j := j + 1;
+        }
+    }
+    n
+}
+
+theorem running_max_while_runs(): Bytes::running_max_while(Bytes([1, 3, 2, 0, 5], refl), n := 5).after.bytes = [1, 3, 3, 3, 5] { refl }
+
 // Without `j <= i` kept, the store after the loop has no proof that `j` is
 // inside.
 // expect-error: did not give
