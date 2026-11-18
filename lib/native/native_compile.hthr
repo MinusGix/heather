@@ -131,18 +131,6 @@ record Layout { low: BitVec(64), reserved: Nat, words: Nat, capacities: List<Nat
     // (`List::functions_room`).
     called: List<Nat> := [] }
 
-fn Layout::with_procedures(self layout: Layout, procedures: List<Procedure>) → Layout {
-    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, procedures, layout.functions, layout.bodies, layout.callees, layout.called)
-}
-
-fn Layout::with_functions(self layout: Layout, functions: List<Function>) → Layout {
-    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, layout.procedures, functions, layout.bodies, layout.callees, layout.called)
-}
-
-fn Layout::with_bodies(self layout: Layout, bodies: List<Frame>) → Layout {
-    Layout(layout.low, layout.reserved, layout.words, layout.capacities, layout.homes, layout.pool, layout.taken, layout.procedures, layout.functions, bodies, layout.callees, layout.called)
-}
-
 // Word `id`'s slot is in the frame; a word in a register needs none.
 fn Layout::word_fits(self layout: Layout, id: Nat) → Bool {
     match layout.homes.home(id) { InSlot(k) => Succ(k).leb(layout.words), InReg(_) => True }
@@ -528,11 +516,6 @@ record Compiled { prog: Prog, names: Nat }
 
 // A label, an empty block named `name`.
 fn Prog::label(self p: Prog, name: Nat) → Prog { At(p, name, Block([])) }
-
-// `value` clamped to `bound`, unsigned: unless it is below, the bound.
-fn Prog::clamp(self p: Prog, value, bound: Gpr, skip: Nat) → Prog {
-    then(then(then(p, Block([CmpRR(value, bound)])), Jcc(B, skip)), Block([MovRR(value, bound)])).label(skip)
-}
 
 // AT_FDCWD, minus 100 as a word (`at_fdcwd`, linux_x86_64_io).
 fn fdcwd_word() → BitVec(64) { BitVec::ofNat(Nat::pow(2, 64) - 100) }

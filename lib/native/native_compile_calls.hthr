@@ -43,18 +43,7 @@ import option;
 import omega;
 
 // ---------------------------------------------------------------------------
-// Clamps as `min`
-
-// CMP and a JB: kept where it is below the bound, the bound where not.
-theorem BitVec::clamp_kept(v, b: BitVec(64), borrow: v.borrow_sub_bit(b) = True): v.toNat().min(b.toNat()) = v.toNat() {
-    let below: (v.toNat() < b.toNat()) = BitVec::borrow_sub_of_bit_true(64, v, b, borrow);
-    Nat::min_eq_l(v.toNat(), b.toNat(), Nat::le_of_lt(v.toNat(), b.toNat(), below))
-}
-
-theorem BitVec::clamp_bound(v, b: BitVec(64), no: v.borrow_sub_bit(b) = False): v.toNat().min(b.toNat()) = b.toNat() {
-    Nat::min_eq_r(v.toNat(), b.toNat(), v.toNat().le_of_not_lt(b.toNat(),
-        λ (below: v.toNat() < b.toNat()) => absurd(trans(sym(no), BitVec::borrow_sub_bit_of_borrow(64, v, b, below)))))
-}
+// Words as numbers
 
 // A word's number, as the machine reads the word.
 theorem Target::word_number(self t: Target, env: Env, m: X86Memory(t.r.profile), placed: t.Placed(env, m), i: Nat, inside: i < t.words):
@@ -71,11 +60,6 @@ theorem canonical_lt_word(n: Nat, below: n <= Nat::pow(2, 47)): n < Nat::pow(2, 
 theorem canonical_lt_signed(n: Nat, below: n <= Nat::pow(2, 47)): n < Nat::pow(2, 63) {
     Nat::le_trans(Succ(n), Succ(Nat::pow(2, 47)), Nat::pow(2, 63), Nat::le_succ_succ(n, Nat::pow(2, 47), below),
         Nat::leb_sound(Succ(Nat::pow(2, 47)), Nat::pow(2, 63), trivial))
-}
-
-// A number below the canonical boundary as a word.
-theorem canonical_word(n: Nat, below: n <= Nat::pow(2, 47)): BitVec::ofNat(n, n := 64).toNat() = n {
-    BitVec::toNat_ofNat(64, n, canonical_lt_word(n, below))
 }
 
 // ---------------------------------------------------------------------------
