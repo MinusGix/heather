@@ -10,7 +10,8 @@
 // as Lean's `wlog h : m ≤ n` does: the main case may assume `m <= n`, and
 // the reduction proves the goal at `(b, a)` from the goal at `(a, b)`.
 // The tactic abstracts `m` and `n` out of the goal into the motive
-// `P = λ a b => goal[a/m, b/n]` (the `Abstract` request) and applies the
+// `P = λ a b => goal[a/m, b/n]` (the `Abstract` request; a point may be a
+// term, every occurrence of which is abstracted) and applies the
 // carrier's lemma `T::wlog_le(P, swap, le, m, n)`, `T` the type `m` has
 // (`Nat`, `Int`, `Rat`, `Dyadic`; any carrier that states one in the same
 // shape is served). The two cases are ordinary terms, written unannotated:
