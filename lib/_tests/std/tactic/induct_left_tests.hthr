@@ -10,5 +10,5 @@ theorem foldl_counts_left(xs: List<Nat>, z: Nat): xs.foldl(λ (k: Nat) (a: Nat) 
 
 // A function of the same name in each module, with a different body: their
 // equations are different theorems.
-fn spread(xs: List<Nat>) → Nat { match xs { Nil => 0, Cons(_, t) => Succ(spread(t)) } }
+fn spread(xs: List<Nat>) → Nat { match xs { Nil => 0, Cons(_, t) => spread(t) + 1 } }
 theorem spread_cons(h: Nat, t: List<Nat>): spread(List::Cons(h, t)) = spread(t) + 1 { spread::Cons(List::Cons(h, t), h, t, refl) }

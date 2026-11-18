@@ -39,7 +39,7 @@ fn within_add_clause(o, l, r, a, b, c, d: Nat) → Clause {
 }
 
 fn below_left_clause(c, l, r, b: Nat) → Clause {
-    Clause([Is(UnsignedLessThan(64, c, l, r)), Is(Const(1, c, 1)), Within(r, 0, Succ(b))], Within(l, 0, b))
+    Clause([Is(UnsignedLessThan(64, c, l, r)), Is(Const(1, c, 1)), Within(r, 0, b + 1)], Within(l, 0, b))
 }
 
 fn join_shift_clause(s, a, c, f, i, n, sh: Nat) → Clause { Clause([Joined(a, f, i, n, sh), Is(ShiftLeft(64, s, a, c))], Joined(s, f, i, n, sh + c)) }

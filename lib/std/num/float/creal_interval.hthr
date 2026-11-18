@@ -390,11 +390,11 @@ fn RealExpr::enclosed(self e: RealExpr, wf: e.Wf()) → Enclosed { Enclosed(e.ev
 // finer, `tries` times. A term's distance to its real halves with each step,
 // and the extra bit keeps the rounding below it.
 fn RealExpr::lt_search(self a, b: RealExpr, n, p, tries: Nat) → Bool {
-    match tries { Zero => False, Succ(t) => match a.enclose(n, p).below(b.enclose(n, p)) { True => True, False => a.lt_search(b, n + 1, Succ(p), t) } }
+    match tries { Zero => False, Succ(t) => match a.enclose(n, p).below(b.enclose(n, p)) { True => True, False => a.lt_search(b, n + 1, p + 1, t) } }
 }
 
 fn RealExpr::le_search(self a, b: RealExpr, n, p, tries: Nat) → Bool {
-    match tries { Zero => False, Succ(t) => match a.enclose(n, p).below_eq(b.enclose(n, p)) { True => True, False => a.le_search(b, n + 1, Succ(p), t) } }
+    match tries { Zero => False, Succ(t) => match a.enclose(n, p).below_eq(b.enclose(n, p)) { True => True, False => a.le_search(b, n + 1, p + 1, t) } }
 }
 
 // Apartness: either side below the other.
@@ -403,7 +403,7 @@ fn RealExpr::apart_search(self a, b: RealExpr, n, p, tries: Nat) → Bool {
         Zero => False,
         Succ(t) => match a.enclose(n, p).below(b.enclose(n, p)) {
             True => True,
-            False => match b.enclose(n, p).below(a.enclose(n, p)) { True => True, False => a.apart_search(b, n + 1, Succ(p), t) },
+            False => match b.enclose(n, p).below(a.enclose(n, p)) { True => True, False => a.apart_search(b, n + 1, p + 1, t) },
         },
     }
 }

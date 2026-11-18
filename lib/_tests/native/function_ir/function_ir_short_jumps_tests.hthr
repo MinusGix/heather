@@ -44,8 +44,8 @@ fn Prog::short_items(self p: Prog) → Nat {
     match p {
         Start => 0,
         At(before, _, item) => match item {
-            JccShort(_, _) => Succ(before.short_items()),
-            JmpShort(_) => Succ(before.short_items()),
+            JccShort(_, _) => before.short_items() + 1,
+            JmpShort(_) => before.short_items() + 1,
             _ => before.short_items(),
         },
     }

@@ -20,7 +20,7 @@ fn committed<T>(source: List<T>, error: Failure<T>(source)) → Failure<T>(sourc
 
 // Add commitment when middle is strictly later than begin; otherwise preserve the failure.
 fn commit_offsets<T>(source: List<T>, begin, middle: Nat, error: Failure<T>(source)) → Failure<T>(source) {
-    match Succ(begin).le_dec(middle) {
+    match (begin + 1).le_dec(middle) {
         Inl(_) => committed(source, error),
         Inr(_) => error,
     }
@@ -74,9 +74,9 @@ fn merge_expected(left, right: List<Nat>) → List<Nat> {
 // Keep the farther diagnostic, merging expectations in left-to-right order on ties.
 // The resulting retry status always comes from the right-hand failure.
 fn merge_error<T>(source: List<T>, left, right: Failure<T>(source)) → Failure<T>(source) {
-    match Succ(left.at.offset).le_dec(right.at.offset) {
+    match (left.at.offset + 1).le_dec(right.at.offset) {
         Inl(_) => right,
-        Inr(_) => match Succ(right.at.offset).le_dec(left.at.offset) {
+        Inr(_) => match (right.at.offset + 1).le_dec(left.at.offset) {
             Inl(_) => Failure(left.at, left.expected, right.retry),
             Inr(_) => Failure(right.at, merge_expected(left.expected, right.expected), right.retry),
         },

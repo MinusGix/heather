@@ -47,8 +47,8 @@ fn taus_both_sides(E: Events) →
     Eutt<Nat>(E, CoTree::bind<Nat, Nat>(E, CTau(CTau(CRet(1))), λ n => CTau(CRet(n + 1))),
         CoTree::bind<Nat, Nat>(E, CRet(1), λ n => CRet(n + 1)))
 {
-    Eutt::bind_cong(E, CTau(CTau(CRet(1))), CRet(1), λ n => CTau(CRet(Succ(n))), λ n => CRet(Succ(n)),
-        two_off(E, CRet(1)), λ n => Eutt::tau_l(E, CRet(Succ(n))))
+    Eutt::bind_cong(E, CTau(CTau(CRet(1))), CRet(1), λ n => CTau(CRet(n + 1)), λ n => CRet(n + 1),
+        two_off(E, CRet(1)), λ n => Eutt::tau_l(E, CRet(n + 1)))
 }
 fn bind_tau_l<A, B>(E: Events, t: CoTree<A>(E), h: A → CoTree<B>(E)) →
     Eutt<B>(E, CoTree::bind(E, CTau(t), h), CoTree::bind(E, t, h))

@@ -151,7 +151,7 @@ fn CStringFrom(path: List<BitVec(8)>) → (Nat → Option<BitVec(8)>) → Type {
     match path {
         Nil => λ source => source(0) = Some(BitVec::ofNat(0)),
         Cons(byte, rest) => λ source => (source(0) = Some(byte)) ∧
-            (Not(byte = BitVec::ofNat(0)) ∧ CStringFrom(rest, λ i => source(Succ(i)))),
+            (Not(byte = BitVec::ofNat(0)) ∧ CStringFrom(rest, λ i => source(i + 1))),
     }
 }
 fn CStringAt<M>(data: ByteReadAccess<M>, memory: M, address: BitVec(64), path: List<BitVec(8)>) → Type {
@@ -179,7 +179,7 @@ fn ArgvFrom<M>(data: ByteReadAccess<M>, memory: M, rsp: BitVec(64), args: List<L
         Nil => λ k => WordBytesAt(data, memory, argv_slot(rsp, k), BitVec::zero()),
         Cons(arg, rest) => λ k => Exists<BitVec(64)>(λ pointer => WordBytesAt(data, memory, argv_slot(rsp, k), pointer) ∧
             ((0 < pointer.toNat()) ∧ ((pointer.toNat() + arg.len() + 1 <= Nat::pow(2, 47)) ∧
-            (CStringAt(data, memory, pointer, arg) ∧ ArgvFrom(data, memory, rsp, rest, Succ(k)))))),
+            (CStringAt(data, memory, pointer, arg) ∧ ArgvFrom(data, memory, rsp, rest, k + 1))))),
     }
 }
 fn ArgvAt<M>(data: ByteReadAccess<M>, memory: M, rsp: BitVec(64), args: List<List<BitVec(8)>>) → Type {

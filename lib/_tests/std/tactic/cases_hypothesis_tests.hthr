@@ -38,8 +38,8 @@ theorem pair_goal(a, b: Nat, p, c: List<Nat>, same: Pair(a, b).emits(p) = Some(c
 }
 
 // A pipeline of `Option` stages, the surviving value named.
-fn st1(n: Nat) → Option<Nat> { match n.leb(5) { False => None, True => Some(Succ(n)) } }
-fn st2(n: Nat) → Option<Nat> { match n.leb(7) { False => None, True => Some(Succ(n)) } }
+fn st1(n: Nat) → Option<Nat> { match n.leb(5) { False => None, True => Some(n + 1) } }
+fn st2(n: Nat) → Option<Nat> { match n.leb(7) { False => None, True => Some(n + 1) } }
 fn pipe(n: Nat) → Option<Nat> {
     match st1(n) { None => None, Some(a) => match st2(a) { None => None, Some(b) => Some(b) } }
 }

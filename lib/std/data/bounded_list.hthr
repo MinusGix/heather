@@ -43,7 +43,7 @@ fn peek<A>(xs: BoundedList<A>) → Outcome<A, BoundedList<A>> {
 fn push<A>(value: A, xs: BoundedList<A>) →
     Outcome<BoundedList<A>, BoundedList<A>>
 {
-    match Succ(xs.contents.len()).le_dec(xs.capacity) {
+    match (xs.contents.len() + 1).le_dec(xs.capacity) {
         Inl(fit) => Success(BoundedList<A>(
             capacity := xs.capacity,
             contents := Cons(value, xs.contents),
@@ -62,7 +62,7 @@ fn bounded_tail<A>(limit: Nat, tail: List<A>,
         capacity := limit,
         contents := tail,
         fit := squash_map(fit,
-            λ (h: Succ(tail.len()) <= limit) => tail.len().le_of_lt(limit, h)),
+            λ (h: tail.len() + 1 <= limit) => tail.len().le_of_lt(limit, h)),
     )
 }
 

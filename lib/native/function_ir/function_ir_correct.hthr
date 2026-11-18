@@ -80,7 +80,7 @@ record Machine<M> {
 // merely end there if it ends.
 fn Prog::Returns<M>(self code: Prog, machine: Machine<M>, origin: BitVec(64), last: List<BitVec(8)>, f, room: Nat,
     arguments: List<BitVec(64)>, answer: BitVec(64)) → Type {
-    Site<M>(machine.fetch, machine.data, code, last, origin).Returns(machine.stack, asm_labels(code, Succ(f)),
+    Site<M>(machine.fetch, machine.data, code, last, origin).Returns(machine.stack, asm_labels(code, f + 1),
         λ (i: Nat) (s: MachineState<M>) => machine.stack.Passed(arguments, i, s) ∧ room <= i,
         machine.stack.CalleePost(answer))
 }
@@ -209,7 +209,7 @@ theorem compiled_implements<M>(functions: List<Function>, placement: List<Place>
 // write (`Stack::AnsweredOver`).
 fn Prog::ReturnsOver<M>(self code: Prog, machine: Machine<M>, origin: BitVec(64), last: List<BitVec(8)>, top: Nat,
     lending: Lending, f, room: Nat, arguments: List<BitVec(64)>, before: Buffers(), answer: Ending) → Type {
-    Site<M>(machine.fetch, machine.data, code, last, origin).Returns(machine.stack, asm_labels(code, Succ(f)),
+    Site<M>(machine.fetch, machine.data, code, last, origin).Returns(machine.stack, asm_labels(code, f + 1),
         λ (i: Nat) (s: MachineState<M>) => (machine.stack.Passed(arguments, i, s) ∧ room <= i) ∧
             machine.stack.LentOver(lending, top, f, arguments, before)(i, s),
         machine.stack.AnsweredOver(lending, answer.word, answer.buffers))

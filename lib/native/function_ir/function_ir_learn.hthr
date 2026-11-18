@@ -384,7 +384,7 @@ fn known_find(known: List<Known>, wanted: Order) → Option<Known> {
 fn known_room(known: List<Known>, base, length, value: Nat) → Option<Known> {
     match known {
         Nil => None,
-        Cons(first, rest) => match first.order.low.same(base) && (first.order.high.same(length) && Succ(value + first.order.more).leb(first.order.add)) {
+        Cons(first, rest) => match first.order.low.same(base) && (first.order.high.same(length) && (value + first.order.more + 1).leb(first.order.add)) {
             True => Some(first),
             False => known_room(rest, base, length, value),
         },
@@ -584,7 +584,7 @@ fn Seen::spanning(self seen: Seen, l, r: Nat) → Seen {
         None => seen,
         Some(parameter) => match parameter.same(r) {
             False => seen,
-            True => match nat_map_get(seen.order.sums, l) { Some(sum) => seen.span(sum.of, Succ(sum.value), r), None => seen.span(l, 1, r) },
+            True => match nat_map_get(seen.order.sums, l) { Some(sum) => seen.span(sum.of, sum.value + 1, r), None => seen.span(l, 1, r) },
         },
     }
 }
@@ -610,7 +610,7 @@ fn Seen::compared(self seen: Seen, c, l, r: Nat, node: Node) → Passed {
             Some(passed) => passed,
             None => match noted.ordered(c, l, r) {
                 Some(passed) => passed,
-                None => shared(seen.of(l), λ a => Passed([], match Succ(a.high).leb(want_most()) { True => noted.want(r, Succ(a.high)), False => noted.spanning(l, r) })),
+                None => shared(seen.of(l), λ a => Passed([], match (a.high + 1).leb(want_most()) { True => noted.want(r, a.high + 1), False => noted.spanning(l, r) })),
             },
         })
 }
@@ -778,7 +778,7 @@ fn made_deepest(fuel: Nat, made: NatMap<Node>, ids: List<Nat>) → Nat {
             Nil => 0,
             Cons(id, rest) => depth_larger(match nat_map_get(made, id) {
                 None => 0,
-                Some(node) => match node { Const(_, _, _) => 0, _ => Succ(made_deepest(less, made, node.reads())) },
+                Some(node) => match node { Const(_, _, _) => 0, _ => made_deepest(less, made, node.reads()) + 1 },
             }, made_deepest(less, made, rest)),
         },
     }
@@ -820,11 +820,11 @@ fn ids_within(ids, among: List<Nat>) → Bool { match ids { Nil => True, Cons(id
 fn Seen::cost(self seen: Seen, node: Node, other: Node) → Nat {
     other.weight() * 64 + match !seen.lends() || ids_within(other.reads(), node.reads()) && ids_within(node.reads(), other.reads()) {
         True => 62,
-        False => match Succ(other.weight()).leb(node.weight()) {
+        False => match (other.weight() + 1).leb(node.weight()) {
             True => 0,
             False => match seen.frees(node, other) {
                 False => 63,
-                True => shared(made_depths(seen.made, other.reads()), λ depth => match Succ(depth).leb(made_depths(seen.made, node.reads())) && depth.leb(61) {
+                True => shared(made_depths(seen.made, other.reads()), λ depth => match (depth + 1).leb(made_depths(seen.made, node.reads())) && depth.leb(61) {
                     True => depth,
                     False => 63,
                 }),
@@ -838,7 +838,7 @@ fn Seen::cost(self seen: Seen, node: Node, other: Node) → Nat {
 fn Seen::lightest(self seen: Seen, node: Node, found: List<Spelling>, most: Nat, best: Option<Spelling>) → Option<Spelling> {
     match found {
         Nil => best,
-        Cons(first, rest) => shared(seen.cost(node, first.node), λ cost => match Succ(cost).leb(most) && !first.node.moves_bit() {
+        Cons(first, rest) => shared(seen.cost(node, first.node), λ cost => match (cost + 1).leb(most) && !first.node.moves_bit() {
             True => seen.lightest(node, rest, cost, Some(first)),
             False => seen.lightest(node, rest, most, best),
         }),
@@ -1323,7 +1323,7 @@ fn StructuredRegion::ends(self region: StructuredRegion, found: NatMap<Nat>) →
 fn reads_counted(ids: List<Nat>, counts: NatMap<Nat>) → NatMap<Nat> {
     match ids {
         Nil => counts,
-        Cons(id, rest) => reads_counted(rest, nat_map_set(counts, id, match nat_map_get(counts, id) { None => 1, Some(n) => Succ(n) })),
+        Cons(id, rest) => reads_counted(rest, nat_map_set(counts, id, match nat_map_get(counts, id) { None => 1, Some(n) => n + 1 })),
     }
 }
 
@@ -1379,7 +1379,7 @@ fn Plan::decided(self plan: Plan) → Nat {
         Then(_, rest) => rest.decided(),
         Both(first, second) => first.decided() + second.decided(),
         Arms(when_true, when_false) => when_true.decided() + when_false.decided(),
-        Arm(_, arm) => Succ(arm.decided()),
+        Arm(_, arm) => arm.decided() + 1,
         Body(body) => body.decided(),
         Derived(_, body) => body.decided(),
         Args(_) => 0,
@@ -1392,7 +1392,7 @@ fn Plan::decided(self plan: Plan) → Nat {
 fn steps_written(steps: List<Step>) → Nat {
     match steps {
         Nil => 0,
-        Cons(step, rest) => match step { Drop => Succ(steps_written(rest)), Emit(_) => Succ(steps_written(rest)), _ => steps_written(rest) },
+        Cons(step, rest) => match step { Drop => steps_written(rest) + 1, Emit(_) => steps_written(rest) + 1, _ => steps_written(rest) },
     }
 }
 
@@ -1457,7 +1457,7 @@ fn cone_renamed(cone: List<Node>, so_far: Renamed) → Renamed {
     match cone {
         Nil => so_far,
         Cons(node, rest) => cone_renamed(rest, Renamed(so_far.nodes ++ [node.renamed(so_far.names, so_far.next)],
-            nat_map_set(so_far.names, node_output(node).id, so_far.next), Succ(so_far.next))),
+            nat_map_set(so_far.names, node_output(node).id, so_far.next), so_far.next + 1)),
     }
 }
 

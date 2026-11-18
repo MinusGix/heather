@@ -392,7 +392,7 @@ theorem List::put_window_nil<A>(self xs: List<A>, at: Nat): xs.put_window(at, Ni
 fn List::update_from<A>(self xs: List<A>, at: Nat, ys: List<A>) → List<A> {
     match ys {
         Nil => xs,
-        Cons(y, rest) => xs.update(at, λ _ => y).update_from(Succ(at), rest),
+        Cons(y, rest) => xs.update(at, λ _ => y).update_from(at + 1, rest),
     }
 }
 

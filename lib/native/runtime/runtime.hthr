@@ -163,7 +163,7 @@ fn Tm::judge_tail(self t: Tm, sigs: List<Sig>, tys: Nat → RecInfo) → Verdict
         Let(e, body) => e.judge(sigs, tys).and(body.judge_tail(sigs, tys)),
         If(_, yes, no) => yes.judge_tail(sigs, tys).and(no.judge_tail(sigs, tys)),
         IfEq(_, yes, no) => yes.judge_tail(sigs, tys).and(no.judge_tail(sigs, tys)),
-        Call(f, args) => match f { Zero => Ok, Succ(g) => Call(Succ(g), args).judge(sigs, tys) },
+        Call(f, args) => match f { Zero => Ok, Succ(g) => Call(g + 1, args).judge(sigs, tys) },
         Var(i) => Var(i).judge(sigs, tys),
         Lit(c, n) => Lit(c, n).judge(sigs, tys),
         Prim(op, args) => Prim(op, args).judge(sigs, tys),
@@ -199,7 +199,7 @@ fn Fun::judge(self f: Fun, w: World) → Verdict {
             Fuel(w0, wrest, zero, succ) => match Ty::all_one_word(Cons(w0, wrest), w.tys) {
                 False => Refused(Fun::loop_words_reason()),
                 True => match f.body {
-                    Case(c, _, _) => match c.same(Succ(wrest.len())) {
+                    Case(c, _, _) => match c.same(wrest.len() + 1) {
                         False => Refused("a `match` on a `Nat` that is not the fuel, its first parameter"),
                         True => zero.judge(w.sigs, w.tys).and(succ.judge_tail(w.sigs, w.tys)),
                     },
@@ -255,7 +255,7 @@ fn Sig::arity(sigs: List<Sig>, k: Nat) → Option<Nat> {
 // is the function itself and is never called by its index (a recursion is
 // a loop in the code).
 fn Sig::callee_arity(sigs: List<Sig>) → Nat → Option<Nat> {
-    λ k => match k { Zero => None, Succ(i) => Sig::arity(sigs, Succ(i)) }
+    λ k => match k { Zero => None, Succ(i) => Sig::arity(sigs, i + 1) }
 }
 
 fn World::callee_arity(self w: World) → Nat → Option<Nat> { Sig::callee_arity(w.sigs) }
@@ -355,11 +355,11 @@ fn Ty::Lent(tys: Nat → RecInfo, lent: Nat, ps: List<Ty>, r: Ty) → Type {
 fn Ty::lend(tys: Nat → RecInfo, r: Ty, b: Buffers(), lent: Nat) → (k: Nat) → (ps: List<Ty>) → Ty::Lent(tys, lent, ps, r) → Ty::Arrows(tys, ps, r) {
     match lent {
         Zero => λ k ps v => v,
-        Succ(n) => λ k ps => match ps as λ qs => Ty::Lent(tys, Succ(n), qs, r) → Ty::Arrows(tys, qs, r) {
+        Succ(n) => λ k ps => match ps as λ qs => Ty::Lent(tys, n + 1, qs, r) → Ty::Arrows(tys, qs, r) {
             Nil => λ v => v,
-            Cons(place, more) => match more as λ qs => Ty::Lent(tys, Succ(n), Cons(place, qs), r) → Ty::Arrows(tys, Cons(place, qs), r) {
+            Cons(place, more) => match more as λ qs => Ty::Lent(tys, n + 1, Cons(place, qs), r) → Ty::Arrows(tys, Cons(place, qs), r) {
                 Nil => λ v => v,
-                Cons(_, rest) => λ v => λ _ len => Ty::lend(tys, r, b, n, Succ(k), rest, v(List::span(b, k), len)),
+                Cons(_, rest) => λ v => λ _ len => Ty::lend(tys, r, b, n, k + 1, rest, v(List::span(b, k), len)),
             },
         },
     }
@@ -556,7 +556,7 @@ fn Setup::Guarded<F>(f: F, lent: Nat, ws: List<Ty>, res: Ty, body: Tm, w: World,
 fn Setup::span_at(b: Buffers(), k: Nat) → List<BitVec(8)> { b.span(k) }
 
 fn Setup::spans_from(lent: Nat, k: Nat, b: Buffers()) → Buffers() {
-    match lent { Zero => Nil, Succ(n) => Cons(Setup::span_at(b, k), Setup::spans_from(n, Succ(k), b)) }
+    match lent { Zero => Nil, Succ(n) => Cons(Setup::span_at(b, k), Setup::spans_from(n, k + 1, b)) }
 }
 
 fn Setup::spans_of(lent: Nat, b: Buffers()) → Buffers() { Setup::spans_from(lent, 0, b) }
@@ -1140,7 +1140,7 @@ fn runtime_params(word: Handle, ps: List<Ty>, under: Option<LocalRef>, i: Nat) �
     match ps {
         Nil => pure([]),
         Cons(_, rest) => assume(Hd(word), "x" ++ decimal_name(2, i), under).or_fail("runtime: a parameter: ").bind(λ x =>
-            runtime_params(word, rest, Some(x.ref), Succ(i)).bind(λ more => pure(Cons(x.ref, more)))),
+            runtime_params(word, rest, Some(x.ref), i + 1).bind(λ more => pure(Cons(x.ref, more)))),
     }
 }
 
@@ -1150,7 +1150,7 @@ fn runtime_locals(xs: List<LocalRef>) → List<Expr> { xs.map(λ x => Local(x)) 
 // that is only read, of a function lent `lent` spans: the words are the
 // written span's length word, then each read span's place and its length
 // word, then the function's own.
-fn runtime_read_place(lent: Nat, i: Nat) → Bool { i.mod(2).same(1).and(Succ(Succ(i)).leb(lent + lent)) }
+fn runtime_read_place(lent: Nat, i: Nat) → Bool { i.mod(2).same(1).and((i + 2).leb(lent + lent)) }
 
 // The parameters of a function over its span after the span, `n` of them,
 // each under the one before: a read span's bytes where the code takes
@@ -1159,7 +1159,7 @@ fn runtime_own_params(word, bytes: Handle, lent: Nat, n: Nat, under: Option<Loca
     match n {
         Zero => pure([]),
         Succ(m) => assume(Hd(match runtime_read_place(lent, i) { True => bytes, False => word }), "x" ++ decimal_name(2, i), under).or_fail("runtime: a parameter: ").bind(λ x =>
-            runtime_own_params(word, bytes, lent, m, Some(x.ref), Succ(i)).bind(λ more => pure(Cons(x.ref, more)))),
+            runtime_own_params(word, bytes, lent, m, Some(x.ref), i + 1).bind(λ more => pure(Cons(x.ref, more)))),
     }
 }
 
@@ -1167,7 +1167,7 @@ fn runtime_own_params(word, bytes: Handle, lent: Nat, n: Nat, under: Option<Loca
 fn runtime_read_spans<A>(lent: Nat, xs: List<A>, i: Nat) → List<A> {
     match xs {
         Nil => xs,
-        Cons(x, rest) => match runtime_read_place(lent, i) { True => Cons(x, runtime_read_spans(lent, rest, Succ(i))), False => runtime_read_spans(lent, rest, Succ(i)) },
+        Cons(x, rest) => match runtime_read_place(lent, i) { True => Cons(x, runtime_read_spans(lent, rest, i + 1)), False => runtime_read_spans(lent, rest, i + 1) },
     }
 }
 
@@ -1176,7 +1176,7 @@ fn runtime_read_spans<A>(lent: Nat, xs: List<A>, i: Nat) → List<A> {
 fn runtime_at_places<A>(lent: Nat, xs: List<A>, i: Nat, at: Nat → A) → List<A> {
     match xs {
         Nil => xs,
-        Cons(x, rest) => Cons(match runtime_read_place(lent, i) { True => at(i.div(2)), False => x }, runtime_at_places(lent, rest, Succ(i), at)),
+        Cons(x, rest) => Cons(match runtime_read_place(lent, i) { True => at(i.div(2)), False => x }, runtime_at_places(lent, rest, i + 1, at)),
     }
 }
 
@@ -1426,7 +1426,7 @@ fn runtime_name_codes(names: List<String>) → List<Nat> {
 fn runtime_lams(xs: List<LocalRef>, body: Expr) → Expr { xs.foldr(λ x acc => Lam(x, acc), body) }
 
 // `Succ(n)` and `w.toNat()` as functions a generator can apply.
-fn runtime_succ(n: Nat) → Nat { Succ(n) }
+fn runtime_succ(n: Nat) → Nat { n + 1 }
 
 fn runtime_count(w: BitVec(64)) → Nat { w.toNat() }
 
@@ -1541,7 +1541,7 @@ fn runtime_params_at(ts: List<Handle>, under: Option<LocalRef>, i: Nat) → Tac<
     match ts {
         Nil => pure([]),
         Cons(t, rest) => assume(Hd(t), "x" ++ decimal_name(2, i), under).or_fail("runtime: a parameter: ").bind(λ x =>
-            runtime_params_at(rest, Some(x.ref), Succ(i)).bind(λ more => pure(Cons(x.ref, more)))),
+            runtime_params_at(rest, Some(x.ref), i + 1).bind(λ more => pure(Cons(x.ref, more)))),
     }
 }
 
@@ -1691,8 +1691,8 @@ fn runtime_measured_instance(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, sh
     let here: List<Expr> = each.map(λ k => ap(span_at, [Local(first), NatLit(k)]));
     let xs = opened.fst.drop(1).take(ws.len());
     let place: List<Expr> = runtime_places(lent, runtime_locals(xs));
-    let again = opened.fst.nth(Succ(ws.len())).unwrap_or(LocalRef(0));
-    let hyp = opened.fst.nth(Succ(Succ(ws.len()))).unwrap_or(LocalRef(0));
+    let again = opened.fst.nth(ws.len() + 1).unwrap_or(LocalRef(0));
+    let hyp = opened.fst.nth(ws.len() + 2).unwrap_or(LocalRef(0));
     let mu_x <- runtime_measure_at(rec, at_codes(here, xs));
     let n_e = Hd(mu_x);
     // `g1 = λ y… p => f::rec(N, y…, p)`.
@@ -1831,7 +1831,7 @@ fn runtime_lent_args(span, file: Expr, j: Nat, lent: Nat, xs: List<Expr>) → Li
             Nil => Nil,
             Cons(_, more) => match more {
                 Nil => Nil,
-                Cons(length, rest) => Cons(ap(span, [file, NatLit(j)]), Cons(length, runtime_lent_args(span, file, Succ(j), n, rest))),
+                Cons(length, rest) => Cons(ap(span, [file, NatLit(j)]), Cons(length, runtime_lent_args(span, file, j + 1, n, rest))),
             },
         },
     }
@@ -2225,9 +2225,9 @@ fn runtime_span_measured(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, e: Spa
     let xs = opened.fst.drop(1).take(ws.len());
     let places: List<Expr> = runtime_places(lent, runtime_locals(xs));
     let here: List<Expr> = reads_at(Local(rest));
-    let own = opened.fst.nth(Succ(ws.len())).unwrap_or(LocalRef(0));
-    let again = opened.fst.nth(Succ(Succ(ws.len()))).unwrap_or(LocalRef(0));
-    let hyp = opened.fst.nth(Succ(Succ(Succ(ws.len())))).unwrap_or(LocalRef(0));
+    let own = opened.fst.nth(ws.len() + 1).unwrap_or(LocalRef(0));
+    let again = opened.fst.nth(ws.len() + 2).unwrap_or(LocalRef(0));
+    let hyp = opened.fst.nth(ws.len() + 3).unwrap_or(LocalRef(0));
     let mu_x <- runtime_measure_at(rec, at_f(Local(own), here, xs));
     let n_e = Hd(mu_x);
     // `g1 = λ s y… p => f::rec(N, s, y…, p)`.
@@ -2373,7 +2373,7 @@ fn SpanWriting::sem(self cx: SpanWriting, t: Ty) → Expr {
 // A variable's term. The outermost variable is the span's place, which a
 // function over the span's bytes does not read.
 fn SpanWriting::var(self cx: SpanWriting, env: List<Expr>, i: Nat) → Tac<Expr> {
-    match Succ(i).same(env.len()) {
+    match (i + 1).same(env.len()) {
         True => runtime_held_refused(cx.name, "it reads where its span lies as a value"),
         False => match env.nth(i) {
             Some(e) => pure(e),
@@ -2394,7 +2394,7 @@ fn SpanWriting::vars(self cx: SpanWriting, env: List<Expr>, is: List<Nat>) → T
 fn SpanWriting::lent(self cx: SpanWriting, span: Expr, env: List<Expr>, args: List<Nat>) → Tac<List<Expr>> {
     match args {
         Nil => runtime_fail("`" ++ cx.name ++ "`'s reflection lends a span to a callee it passes nothing"),
-        Cons(place, rest) => match Succ(place).same(env.len()) {
+        Cons(place, rest) => match (place + 1).same(env.len()) {
             True => cx.vars(env, rest).bind(λ es => pure(Cons(span, es))),
             False => runtime_held_refused(cx.name, "it lends a callee a span that is not its own"),
         },
@@ -2438,7 +2438,7 @@ fn SpanWriting::value(self cx: SpanWriting, span: Expr, env: List<Expr>, g: List
         // `2j`.
         Byte(j, i, length) => match j {
             Zero => runtime_held_refused(cx.name, "it reads a byte of the span that holds its record"),
-            Succ(_) => match env.nth(env.len() - Succ(j + j)) {
+            Succ(_) => match env.nth(env.len() - (j + j + 1)) {
                 None => runtime_fail("`" ++ cx.name ++ "`'s reflection reads a span it is not lent"),
                 Some(s) => match cx.byte_within {
                     None => runtime_held_refused(cx.name, "`List::byte_within` is not in scope (import `rt`)"),
@@ -2516,7 +2516,7 @@ fn runtime_callee_locals(cs: List<SpanCallee>, under: Option<LocalRef>, i: Nat) 
     match cs {
         Nil => pure([]),
         Cons(c, rest) => assume(Hd(c.ty), "callee" ++ decimal_name(2, i), under).or_fail("runtime: a callee as a parameter: ").bind(λ x =>
-            runtime_callee_locals(rest, Some(x.ref), Succ(i)).bind(λ more => pure(Cons(x.ref, more)))),
+            runtime_callee_locals(rest, Some(x.ref), i + 1).bind(λ more => pure(Cons(x.ref, more)))),
     }
 }
 
@@ -2747,7 +2747,7 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
                             let opened <- runtime_open_n(64, p_t, Cons("later", List::range(rfun.params.len()).map(λ i => "x".append(decimal_name(2, i))).append(["own", "again"])));
                             let later = opened.fst.head_or(p.fst);
                             let xs = opened.fst.drop(1).take(rfun.params.len());
-                            let own = opened.fst.nth(Succ(rfun.params.len())).unwrap_or(p.fst);
+                            let own = opened.fst.nth(rfun.params.len() + 1).unwrap_or(p.fst);
                             pure(Lam(p.fst, runtime_lams(opened.fst, ap(rfl, [Blank, ap(uncurry, [tys_e, params_e, res_e,
                                 read_at(es, ap(ap(fe_h, es), [Local(later)]), Local(p.fst)), RtQ::seq(word_list, runtime_locals(xs)), Local(own)])]))))
                         })
@@ -2780,7 +2780,7 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
     let base = NatLit(reads.len());
     let ks_e = Ty::quotes(rfun.params.take(lent + lent), q);
     let w0_e = Ty::quote(rfun.params.drop(lent + lent).head_or(Bit), q);
-    let wrest_e = Ty::quotes(rfun.params.drop(Succ(lent + lent)), q);
+    let wrest_e = Ty::quotes(rfun.params.drop(lent + lent + 1), q);
     // The lowering, checked here so that a refusal names the function: the
     // instance checks it again, by the kernel.
     let lowered: Tac<Expr> = match measured {
@@ -3115,7 +3115,7 @@ fn runtime_held_run(record, words_t: Expr, c: HeldCall, rest: LocalRef, span_of:
     let a <- assume(record, "held", Some(rest)).or_fail("runtime: a record: ");
     let ws <- assume(words_t, "words", Some(a.ref)).or_fail("runtime: a call's words: ");
     pure(ap(runs, [record, NatLit(c.operands), Lam(a.ref, Lam(ws.ref,
-        ap(Global(c.run), Cons(Local(a.ref), runtime_at_places(Succ(c.spans), List::range(c.operands).map(λ i => ap(operand, [Local(ws.ref), NatLit(i)])), 1, span_of)))))]))
+        ap(Global(c.run), Cons(Local(a.ref), runtime_at_places(c.spans + 1, List::range(c.operands).map(λ i => ap(operand, [Local(ws.ref), NatLit(i)])), 1, span_of)))))]))
 }
 
 // The names a held callee's promise is stated with.
@@ -3151,7 +3151,7 @@ fn runtime_held_called(h: HeldRan, record, hw: Expr, j, k: Nat, with_record: Boo
 // each a parameter, by computation, and so at the program's own.
 fn runtime_held_bridge(h: HeldRan, record: Expr, hw_of: List<Expr> → Expr, callees: List<SpanCallee>, at_callee: Nat, j, k: Nat, spans: Nat, rest: LocalRef,
     span_of: Nat → Expr) → Tac<Expr> {
-    let applied: List<Expr> → HeldCalled → Expr = λ es c => ap(runtime_at(es, at_callee), Cons(Local(c.own), Cons(c.length, runtime_at_places(Succ(spans), c.words, 1, span_of))));
+    let applied: List<Expr> → HeldCalled → Expr = λ es c => ap(runtime_at(es, at_callee), Cons(Local(c.own), Cons(c.length, runtime_at_places(spans + 1, c.words, 1, span_of))));
     runtime_at_each_under(h.at, callees, [], Some(rest),
         λ es under => runtime_held_called(h, record, hw_of(es), j, k, False, Some(under)).bind(λ c =>
             as_type(c.locals.foldr(λ x acc => Pi(x, acc), Equation(c.called, applied(es, c)))).or_fail("runtime: a held callee's call at its callees: ").bind(λ t => pure(Hd(t)))),
@@ -3170,13 +3170,13 @@ fn runtime_held_ran(h: HeldRan, record, whole, hw, holds_of, bridge: Expr, j: Na
     let holds <- assume(ap(holds_of, [record, whole, Local(call.own), call.length, Local(a)]), "holds", Some(call.env)).or_fail("runtime: a span that holds a record: ");
     // The callee's own values: a span it only reads where its code takes
     // the span's place.
-    let words = runtime_at_places(Succ(c.spans), call.words, 1, span_of);
+    let words = runtime_at_places(c.spans + 1, call.words, 1, span_of);
     let spec = ap(Global(c.run), Cons(Local(a), words));
     let code = ap(Global(GlobalRef(c.bytes)), Cons(Local(call.own), Cons(call.length, words)));
     let got = ap(agreed, Cons(Local(call.own), Cons(Local(a), Cons(call.length, words ++ [Local(holds.ref)]))));
     let k = c.operands;
     // `HWorld::Runs` takes the span and the record before the scope.
-    let order = call.locals.take(Succ(Succ(Succ(k)))) ++ [a, call.scope, call.env, holds.ref];
+    let order = call.locals.take(k + 3) ++ [a, call.scope, call.env, holds.ref];
     pure(runtime_lams(order, ap(h.ran, [record, whole, call.length, spec, code, got, call.called, ap(bridge, runtime_locals(call.locals))])))
 }
 
@@ -3230,7 +3230,7 @@ fn runtime_held_straight(name: String, f: GlobalRef, r: HeldReflected, parts: Sp
     let whole = s.whole;
     let marked_t = s.marked_t;
     let sound_t = s.sound_t;
-    let lent = Succ(r.spans);
+    let lent = r.spans + 1;
     // The verdict, by evaluation: the length word is the variable under
     // the function's operands.
     let len = NatLit(r.operands);
@@ -3245,7 +3245,7 @@ fn runtime_held_straight(name: String, f: GlobalRef, r: HeldReflected, parts: Sp
     // After the record's span and its length word, each span the function
     // only reads, its bytes, with its length word, and then the words. The
     // file is those spans, and the word in a read span's place is not read.
-    let all0 <- runtime_own_params(ts.word, bytes_h, lent, Succ(r.operands), Some(t0.ref), 0);
+    let all0 <- runtime_own_params(ts.word, bytes_h, lent, r.operands + 1, Some(t0.ref), 0);
     let length0 = all0.head_or(t0.ref);
     let xs0 = all0.drop(1);
     let last0 = all0.rev().head_or(t0.ref);
@@ -3345,7 +3345,7 @@ fn runtime_held_counted(name: String, f: GlobalRef, r: HeldReflected, parts: Spa
     let irrel <- runtime_global(name ++ "::irrel");
     let word_list <- runtime_ctors_at(ts.words);
     let len = NatLit(k);
-    let arity = NatLit(Succ(Succ(k)));
+    let arity = NatLit(k + 2);
     let changes_checked <- match r.changes {
         True => pure(trivial),
         False => runtime_held_refused(name, "a loop that only reads the record is not taken yet (give it `mut self`)"),
@@ -3359,7 +3359,7 @@ fn runtime_held_counted(name: String, f: GlobalRef, r: HeldReflected, parts: Spa
     // a file, the spans the function only reads: the function's own value
     // for a read span is the file's span, and the word its code takes in
     // that span's place is not read.
-    let lent = Succ(r.spans);
+    let lent = r.spans + 1;
     let rest_r <- assume(Hd(s.buffers), "rest", None).or_fail("runtime: the rest of a file: ");
     let span_of: Nat → Expr = λ j => ap(s.span_at, [Local(rest_r.ref), NatLit(j)]);
     let own_values: List<Expr> → List<Expr> = λ es => runtime_at_places(lent, es, 1, span_of);
@@ -3383,15 +3383,15 @@ fn runtime_held_counted(name: String, f: GlobalRef, r: HeldReflected, parts: Spa
     let word_b <- runtime_measured_word(mu_b);
     let bounded_of <- at_rest(Lam(a_b.ref, Lam(ws_b.ref, ap(lt_pow, [Hd(word_b)]))), "`" ++ name ++ "`'s measure below `2^64`");
     // The length word is the second of the code's words.
-    let ls <- runtime_params(ts.word, List::range(Succ(Succ(k))).map(λ _ => Word(64)), None, 0);
+    let ls <- runtime_params(ts.word, List::range(k + 2).map(λ _ => Word(64)), None, 0);
     let lengthy <- runtime_held(runtime_lams(ls, ap(s.rfl, [Blank, Local(ls.nth(1).unwrap_or(LocalRef(0)))])), "a loop's length word");
     // The function's equation: its binders opened off its statement (the
     // code's words, the span, the record, the recursion `again` and what
     // `again` agrees with below the measure).
     let g_t <- as_type(ap(guarded_t, [s.record, hw_r, parts.params, parts.body, run_e, m_e])).or_fail("runtime: `" ++ name ++ "`'s equation at records: ");
-    let words: List<String> = List::range(Succ(Succ(k))).map(λ i => "x".append(decimal_name(2, i)));
+    let words: List<String> = List::range(k + 2).map(λ i => "x".append(decimal_name(2, i)));
     let opened <- runtime_open_n(64, g_t, words.append(["own", "held", "again", "hyp"]));
-    let xs = opened.fst.take(Succ(Succ(k))).drop(2);
+    let xs = opened.fst.take(k + 2).drop(2);
     let a = opened.fst.nth(k + 3).unwrap_or(LocalRef(0));
     let again = opened.fst.nth(k + 4).unwrap_or(LocalRef(0));
     let hyp = opened.fst.nth(k + 5).unwrap_or(LocalRef(0));
@@ -3435,7 +3435,7 @@ fn runtime_held_counted(name: String, f: GlobalRef, r: HeldReflected, parts: Spa
     // length word, and then the words. The file is those spans.
     let own0 <- assume(Hd(s.bytes), "own", None).or_fail("runtime: a span: ");
     let t0 <- assume(s.record, "held", Some(own0.ref)).or_fail("runtime: a record: ");
-    let all0 <- runtime_own_params(ts.word, s.bytes, lent, Succ(k), Some(t0.ref), 0);
+    let all0 <- runtime_own_params(ts.word, s.bytes, lent, k + 1, Some(t0.ref), 0);
     let length0 = all0.head_or(t0.ref);
     let xs0 = all0.drop(1);
     let last0 = all0.rev().head_or(t0.ref);

@@ -10,7 +10,7 @@ import logic; import nat; import list;
 
 // The parameter read inside its own arm by a `let` nothing uses.
 fn unused_read(n: Nat) → Nat {
-    match n { Zero => 0, Succ(k) => { let j = n; Succ(unused_read(k)) } }
+    match n { Zero => 0, Succ(k) => { let j = n; unused_read(k) + 1 } }
 }
 theorem unused_read_lit(): unused_read(3) = 3 { refl }
 theorem unused_read_succ(m: Nat): unused_read(m + 1) = unused_read(m) + 1 { refl }
@@ -67,7 +67,7 @@ fn stuck(n: Nat) → Nat {
 // predecessor carries the window, so a call two (or three) below the
 // parameter is its ih, with the parameter read in the arm.
 fn half_read(n: Nat) → Nat {
-    match n { Zero => 0, Succ(k) => match k { Zero => n, Succ(j) => Succ(half_read(j)) } }
+    match n { Zero => 0, Succ(k) => match k { Zero => n, Succ(j) => half_read(j) + 1 } }
 }
 theorem half_read_lit(): half_read(5) = 3 { refl }
 theorem half_read_step(j: Nat): half_read(j + 2) = half_read(j) + 1 { refl }
@@ -93,12 +93,12 @@ theorem fib_read_step(j: Nat, a: Nat): fib_read(j + 2, a) = fib_read(j + 1, a) +
 // `b` are generalized without being varied and the unfolding shows the
 // order.
 fn sw_varied(a, b: Nat, xs: List<Nat>) → Nat {
-    match xs { Nil => a, Cons(_, t) => sw_varied(Succ(a), Succ(b), t) }
+    match xs { Nil => a, Cons(_, t) => sw_varied(a + 1, b + 1, t) }
 }
 theorem sw_varied_lit(): sw_varied(0, 10, [1]) = 1 { refl }
 
 fn three_varied(a, b, n: Nat) → Nat {
-    match n { Zero => a, Succ(k) => { let j = n; Succ(three_varied(a, b, k)) } }
+    match n { Zero => a, Succ(k) => { let j = n; three_varied(a, b, k) + 1 } }
 }
 theorem three_varied_step(a, b, k: Nat): three_varied(a, b, k + 1) = three_varied(a, b, k) + 1 { refl }
 theorem three_varied_lit(): three_varied(0, 10, 1) = 1 { refl }
@@ -107,7 +107,7 @@ theorem three_varied_lit(): three_varied(0, 10, 1) = 1 { refl }
 // generalizing only what its calls vary: a parameter passed unchanged keeps
 // the step a fold over values, which the kernel folds a run of at once. With
 // `m` generalized this `refl` ran out of fuel.
-fn add_right(m, n: Nat) → Nat { match n { Zero => m, Succ(k) => Succ(add_right(m, k)) } }
+fn add_right(m, n: Nat) → Nat { match n { Zero => m, Succ(k) => add_right(m, k) + 1 } }
 theorem add_right_big(): add_right(1000000, 1000000) = 2000000 { refl }
 theorem add_right_step(m, k: Nat): add_right(m, k + 1) = add_right(m, k) + 1 { refl }
 
@@ -115,7 +115,7 @@ theorem add_right_step(m, k: Nat): add_right(m, k + 1) = add_right(m, k) + 1 { r
 // own `match` is hoisted to the top, each arm rebinding the parameter to
 // its constructor term, so the parameter, and a `let` from it above the
 // `match`, are this level's values.
-fn list_read(xs: List<Nat>) → Nat { match xs { Nil => 0, Cons(h, t) => { let j = xs; Succ(list_read(t)) } } }
+fn list_read(xs: List<Nat>) → Nat { match xs { Nil => 0, Cons(h, t) => { let j = xs; list_read(t) + 1 } } }
 theorem list_read_lit(): list_read([1, 2, 3]) = 3 { refl }
 theorem list_read_step(h: Nat, t: List<Nat>): list_read(Cons(h, t)) = list_read(t) + 1 { refl }
 
@@ -161,7 +161,7 @@ theorem tree_size_lit(): tree_size(TNode(TNode(TLeaf, 1, TLeaf), 2, TLeaf)) = 2 
 theorem tree_size_step(l, r: TopTree, x: Nat): tree_size(TNode(l, x, r)) = tree_size(l) + tree_size(r) + 1 { refl }
 fn tree_self(t: TopTree) → List<TopTree> { match t { TLeaf => [t], TNode(l, _, r) => Cons(t, tree_self(l)) } }
 theorem tree_self_lit(): tree_self(TNode(TLeaf, 1, TLeaf)) = [TNode(TLeaf, 1, TLeaf), TLeaf] { refl }
-fn tree_depths(t: TopTree, d: Nat) → Nat { match t { TLeaf => d, TNode(l, _, r) => tree_depths(l, Succ(d)) + tree_depths(r, Succ(d)) } }
+fn tree_depths(t: TopTree, d: Nat) → Nat { match t { TLeaf => d, TNode(l, _, r) => tree_depths(l, d + 1) + tree_depths(r, d + 1) } }
 theorem tree_depths_lit(): tree_depths(TNode(TLeaf, 1, TLeaf), 0) = 2 { refl }
 
 // Negative control: a call at the list itself does not descend.

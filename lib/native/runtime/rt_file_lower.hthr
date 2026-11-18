@@ -50,7 +50,7 @@ import function_ir_run;
 // What the calls are answered with
 
 // The program's pure functions: those below `base`.
-fn FTm::pure(base: Nat) → Nat → Bool { λ f => Succ(f).leb(base) }
+fn FTm::pure(base: Nat) → Nat → Bool { λ f => (f + 1).leb(base) }
 
 // What a computation's code answers when its meaning ends in `m`: the
 // value as a word, and the file with the span the meaning left.
@@ -326,7 +326,7 @@ theorem FTm::if_sound(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, next
 fn FTm::put_region(pi, pl, pv, next: Nat) → StructuredRegion {
     Compose(nodes_region([UnsignedLessThan(64, next, pi, pl)]),
         branch(next, no_ports(),
-            Compose(nodes_region([Resize(8, 64, Succ(next), pv)]), nodes_region([BufferStore(Succ(Succ(next)), 0, pi, Succ(next))])),
+            Compose(nodes_region([Resize(8, 64, next + 1, pv)]), nodes_region([BufferStore(next + 2, 0, pi, next + 1)])),
             nodes_region(Nil)))
 }
 
@@ -605,7 +605,7 @@ fn FTm::start_port(g: List<Ty>, ports: List<Nat>, start: Option<Nat>, zero: Nat)
 fn FTm::StartPort(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), values: Valuation(), zero: Nat, start: Option<Nat>, r: Option<Nat>) → Type {
     match r {
         None => True,
-        Some(p) => (FTm::zeroed(start, zero, values, 64, p) = FTm::start_word(tys, g, env, start)) ∧ (p < Succ(zero)),
+        Some(p) => (FTm::zeroed(start, zero, values, 64, p) = FTm::start_word(tys, g, env, start)) ∧ (p < zero + 1),
     }
 }
 
@@ -659,7 +659,7 @@ fn FView::PortsHold(self view: FView, tys: Nat → RecInfo, g: List<Ty>, env: En
     match r {
         None => True,
         Some(at) => ((at.buffer = view.span) ∧ ((values(64, at.home) = FTm::word(tys, g, env, view.home)) ∧ (at.home < zero))) ∧
-            (((FTm::zeroed(view.start, zero, values, 64, at.start) = FTm::start_word(tys, g, env, view.start)) ∧ (at.start < Succ(zero))) ∧
+            (((FTm::zeroed(view.start, zero, values, 64, at.start) = FTm::start_word(tys, g, env, view.start)) ∧ (at.start < zero + 1)) ∧
                 ((values(64, at.end) = FTm::word(tys, g, env, view.end)) ∧ (at.end < zero))),
     }
 }
@@ -686,7 +686,7 @@ fn FTm::views_ports(g: List<Ty>, ports: List<Nat>, views: List<FView>, zero: Nat
     match views {
         Nil => Some(Nil),
         Cons(view, rest) => view.ports(g, ports, zero).and_then(λ at =>
-            FTm::views_ports(g, ports, rest, Succ(zero)).and_then(λ more => Some(Cons(at, more)))),
+            FTm::views_ports(g, ports, rest, zero + 1).and_then(λ more => Some(Cons(at, more)))),
     }
 }
 
@@ -696,11 +696,11 @@ fn FTm::zero_node(start: Option<Nat>, zero: Nat, rest: List<Node>) → List<Node
 }
 
 fn FTm::zeros(views: List<FView>, zero: Nat) → List<Node> {
-    match views { Nil => Nil, Cons(view, rest) => FTm::zero_node(view.start, zero, FTm::zeros(rest, Succ(zero))) }
+    match views { Nil => Nil, Cons(view, rest) => FTm::zero_node(view.start, zero, FTm::zeros(rest, zero + 1)) }
 }
 
 fn FTm::zeros_past(views: List<FView>, zero: Nat) → Nat {
-    match views { Nil => zero, Cons(_, rest) => FTm::zeros_past(rest, Succ(zero)) }
+    match views { Nil => zero, Cons(_, rest) => FTm::zeros_past(rest, zero + 1) }
 }
 
 theorem FTm::zeros_past_le(views: List<FView>): (zero: Nat) → zero <= FTm::zeros_past(views, zero) {
@@ -803,12 +803,12 @@ theorem FTm::views_ports_sound(w: World, g: List<Ty>, ports: List<Nat>, env: Env
 fn FTm::views_built(ats: List<ViewPorts>, written: Bool, home: Nat) → List<View> {
     match ats {
         Nil => Nil,
-        Cons(at, rest) => Cons(View(at.buffer, at.home, at.start, at.end, written, home, Succ(home)), FTm::views_built(rest, False, Succ(Succ(home)))),
+        Cons(at, rest) => Cons(View(at.buffer, at.home, at.start, at.end, written, home, home + 1), FTm::views_built(rest, False, home + 2)),
     }
 }
 
 fn FTm::homes_past(ats: List<ViewPorts>, home: Nat) → Nat {
-    match ats { Nil => home, Cons(_, rest) => FTm::homes_past(rest, Succ(Succ(home))) }
+    match ats { Nil => home, Cons(_, rest) => FTm::homes_past(rest, home + 2) }
 }
 
 theorem FTm::homes_past_le(ats: List<ViewPorts>): (home: Nat) → home <= FTm::homes_past(ats, home) {
@@ -936,7 +936,7 @@ fn FTm::own_first(views: List<FView>) → Bool {
 // The zeros, the lend, and its result moved off the port the call writes
 // (`Tm::called`).
 fn FTm::lent_lowered(base, f: Nat, zeros: List<Node>, views: List<View>, qs: List<Nat>, out: Nat) → Lowered {
-    Lowered(Compose(nodes_region(zeros), Compose(Lend(views, base + f, qs, out), nodes_region([Move(64, Succ(out), out)]))), Succ(out), Succ(Succ(out)))
+    Lowered(Compose(nodes_region(zeros), Compose(Lend(views, base + f, qs, out), nodes_region([Move(64, out + 1, out)]))), out + 1, out + 2)
 }
 
 fn FTm::lend_args(w: World, fsigs: List<Sig>, base: Nat, g: List<Ty>, ports: List<Nat>, next, f: Nat, views: List<FView>, args: List<Nat>,
@@ -1108,7 +1108,7 @@ fn FTm::lower(self t: FTm, w: World, fsigs: List<Sig>, base: Nat, g: List<Ty>, p
             FTm::lower(no, w, fsigs, base, g, ports, ly.next).and_then(λ ln =>
                 Tm::lower_branch(w.tys, g, ports, c, yes.ty(w, fsigs, g), no.ty(w, fsigs, g), ly, ln))),
         Put(i, length, v, body) => FTm::put_ports(g, ports, i, length, v).and_then(λ at =>
-            FTm::lower(body, w, fsigs, base, g, ports, Succ(Succ(Succ(next)))).and_then(λ lb => FTm::put_then(at, next, lb))),
+            FTm::lower(body, w, fsigs, base, g, ports, next + 3).and_then(λ lb => FTm::put_then(at, next, lb))),
         // The body sees the callee's value, at the port it was moved to,
         // as variable 0.
         Call(f, args, body) => FTm::lower_call(w, fsigs, base, g, ports, next, f, args).and_then(λ lc =>

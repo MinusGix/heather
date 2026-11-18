@@ -15,7 +15,7 @@ import omega; import relation; import relation_props; import algebra_rel;
 fn big(m: Nat) → Bool { 50.leb(m * m) }
 
 fn search_at(n: Nat, b: Bool) → CoTree<Nat>(Events::sum(Events::calls(Nat, Nat), Events::none())) {
-    match b { True => CRet(n), False => CVis(Inl(Succ(n)), λ r => CRet(r)) }
+    match b { True => CRet(n), False => CVis(Inl(n + 1), λ r => CRet(r)) }
 }
 fn search_body(n: Nat) → CoTree<Nat>(Events::sum(Events::calls(Nat, Nat), Events::none())) { search_at(n, big(n)) }
 fn search(n: Nat) → CoTree<Nat>(Events::none()) {
@@ -135,7 +135,7 @@ fn search_then(n: Nat) → Eutt<Nat>(Events::none(),
     CoTree::bind(Events::none(), CoTree::mrec(Events::calls(Nat, Nat), Events::none(), search_body, search_body(n)),
         λ x => CoTree::mrec(Events::calls(Nat, Nat), Events::none(), search_body, CRet(x + 1))))
 {
-    Eutt::mrec_bind<Nat, Nat>(Events::calls(Nat, Nat), Events::none(), search_body, search_body(n), λ r => CRet(Succ(r)))
+    Eutt::mrec_bind<Nat, Nat>(Events::calls(Nat, Nat), Events::none(), search_body, search_body(n), λ r => CRet(r + 1))
 }
 
 // Rewriting inside a pending tree, through the run: `Eutt::mrec_respects`

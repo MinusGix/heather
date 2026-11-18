@@ -67,7 +67,7 @@ theorem walk_open(a: Nat, b: Nat, r: List<Nat>, m: Nat): walk(Cons(a, Cons(b, r)
 
 // A dependent motive over the generalized parameter, at an open element type.
 fn Shift<A>(xs: List<A>, m: Nat) → Type {
-    match xs { Nil => m = m, Cons(_, r) => match r { Nil => True, Cons(_, r2) => Shift(r2, Succ(m)) } }
+    match xs { Nil => m = m, Cons(_, r) => match r { Nil => True, Cons(_, r2) => Shift(r2, m + 1) } }
 }
 theorem shift_all<A>(xs: List<A>, m: Nat): Shift(xs, m) {
     match xs { Nil => refl, Cons(_, r) => match r { Nil => trivial, Cons(_, r2) => shift_all(r2, m + 1) } }
@@ -87,7 +87,7 @@ theorem shift_lam2<A>(xs: List<A>): (m: Nat) → (k: Nat) → Shift(xs, m + k) {
 
 // Three deep, under the `λ`: the peel is handed down to the second convoy.
 fn Shift3(xs: List<Nat>, m: Nat) → Type {
-    match xs { Nil => m = m, Cons(_, r) => match r { Nil => True, Cons(_, r2) => match r2 { Nil => True, Cons(_, r3) => Shift3(r3, Succ(m)) } } }
+    match xs { Nil => m = m, Cons(_, r) => match r { Nil => True, Cons(_, r2) => match r2 { Nil => True, Cons(_, r3) => Shift3(r3, m + 1) } } }
 }
 theorem shift3_lam(xs: List<Nat>): (m: Nat) → Shift3(xs, m) {
     match xs { Nil => λ m => refl, Cons(_, r) => λ m => match r { Nil => trivial, Cons(_, r2) => match r2 { Nil => trivial, Cons(_, r3) => shift3_lam(r3, m + 1) } } }

@@ -38,7 +38,7 @@ fn writes_apps(f: Expr, args: List<Expr>) → Expr {
 fn write_count_from(count: Expr, i: Nat, fuel: Nat) → Tac<Nat> {
     match fuel {
         Zero => fail_writes("more writes than the walk allows"),
-        Succ(f) => defeq(count, NatLit(i)).bind(λ same => match same { True => pure(i), False => write_count_from(count, Succ(i), f) }),
+        Succ(f) => defeq(count, NatLit(i)).bind(λ same => match same { True => pure(i), False => write_count_from(count, i + 1, f) }),
     }
 }
 
@@ -84,7 +84,7 @@ fn write_sites_for(gs: WriteGlobals, p, f: Expr, k: Nat, n: Nat, fallback: Bool)
     match n {
         Zero => pure(writes_apps(gs.nil, [p, f])),
         Succ(m) => write_site_for(gs, p, f, k, fallback).bind(λ s =>
-            write_sites_for(gs, p, f, Succ(k), m, fallback).bind(λ ss => pure(writes_apps(gs.cons, [p, f, s, ss])))),
+            write_sites_for(gs, p, f, k + 1, m, fallback).bind(λ ss => pure(writes_apps(gs.cons, [p, f, s, ss])))),
     }
 }
 

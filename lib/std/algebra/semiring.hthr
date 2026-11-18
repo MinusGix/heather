@@ -211,7 +211,7 @@ fn Ring::nat_cast(n: Nat) → A {
 fn Ring::int_cast(c: Int) → A {
     match c {
         OfNat(n) => Ring::nat_cast(n),
-        NegSucc(n) => A.inv(Ring::nat_cast(Succ(n))),
+        NegSucc(n) => A.inv(Ring::nat_cast(n + 1)),
     }
 }
 

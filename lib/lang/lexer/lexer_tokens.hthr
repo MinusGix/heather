@@ -82,7 +82,7 @@ fn Accepted::longest(state: u64, rest: List<u8>, at: Nat, last: Cut) → Cut {
             } else if next.eq_bit(DEAD) {
                 last
             } else {
-                Accepted::longest(next, tail, Succ(at), Accepted::after(next, tail, Succ(at), last))
+                Accepted::longest(next, tail, at + 1, Accepted::after(next, tail, at + 1, last))
             }
         },
     }

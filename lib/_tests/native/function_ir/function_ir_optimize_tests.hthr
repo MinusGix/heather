@@ -683,7 +683,7 @@ fn st_copy() → Function {
 }
 
 fn nodes_swaps(ns: List<Node>) → Nat {
-    match ns { Nil => 0, Cons(node, rest) => match node { ByteSwap(_, _, _) => Succ(nodes_swaps(rest)), _ => nodes_swaps(rest) } }
+    match ns { Nil => 0, Cons(node, rest) => match node { ByteSwap(_, _, _) => nodes_swaps(rest) + 1, _ => nodes_swaps(rest) } }
 }
 
 fn swaps(function: Function) → Option<Nat> { function.body.flat().map(nodes_swaps) }

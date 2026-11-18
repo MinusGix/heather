@@ -94,7 +94,7 @@ theorem pick_not_sub(x, y: BitVec(64), call: Answers(), values: Valuation(),
 // node fails the `Add` case's proof, word for word the proof of the right
 // lowering (`Tm::add_node_sound`).
 fn wrong_add_node(next, width, pa, pb: Nat) → Option<Lowered> {
-    Some(Lowered(nodes_region([Sub(width, next, pa, pb)]), next, Succ(next)))
+    Some(Lowered(nodes_region([Sub(width, next, pa, pb)]), next, next + 1))
 }
 
 // expect-error(kernel): the kernel rejected `wrong_add_node_sound`: NotConvertible
@@ -158,7 +158,7 @@ theorem bit_literal_agrees(call: Answers(), values: Valuation()):
 // The negative control on the lowering: `!` against a constant zero is the
 // bit itself, and the `Neg` case's proof fails on it.
 fn wrong_neg_lowered(next, pa: Nat) → Lowered {
-    Lowered(nodes_region([Const(1, next, 0), BitXor(1, Succ(next), pa, next)]), Succ(next), Succ(Succ(next)))
+    Lowered(nodes_region([Const(1, next, 0), BitXor(1, next + 1, pa, next)]), next + 1, next + 2)
 }
 
 // expect-error(mismatch)
@@ -309,7 +309,7 @@ fn Lowered::wc(o: Option<Lowered>, call: Answers(), values: Valuation()) → Pai
     match o {
         None => Pair(BitVec::ofNat(0), Pair(BitVec::ofNat(0), BitVec::ofNat(0))),
         Some(c) => Pair(c.region.eval(call, values)(64, c.result),
-            Pair(c.region.eval(call, values)(64, Succ(c.result)), c.region.eval(call, values)(1, Succ(Succ(c.result))))),
+            Pair(c.region.eval(call, values)(64, c.result + 1), c.region.eval(call, values)(1, c.result + 2))),
     }
 }
 
@@ -452,7 +452,7 @@ theorem widen_not_signed(b: BitVec(8), call: Answers(), values: Valuation(), hel
 // value) fails the `Zext` case's proof, the right lowering's proof word for
 // word but for the node.
 fn wrong_zext_node(next, width, extra, pa: Nat) → Option<Lowered> {
-    Some(Lowered(nodes_region([Move(extra + width, next, pa)]), next, Succ(next)))
+    Some(Lowered(nodes_region([Move(extra + width, next, pa)]), next, next + 1))
 }
 
 // expect-error(mismatch): but `LowerHolds(Prim(Zext(width, extra), [a]), w, g, ports, next, wrong_zext_node(next, width, extra, pa))` is expected here

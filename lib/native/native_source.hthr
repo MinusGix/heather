@@ -427,7 +427,7 @@ fn CallShape::words(self shape: CallShape) → List<Nat> {
 }
 
 // One past the largest id: the words a statement naming `ids` needs.
-fn List::word_bound(self ids: List<Nat>) → Nat { match ids { Nil => 0, Cons(id, rest) => Succ(id).max(rest.word_bound()) } }
+fn List::word_bound(self ids: List<Nat>) → Nat { match ids { Nil => 0, Cons(id, rest) => (id + 1).max(rest.word_bound()) } }
 
 // Every id a region names, a loop's own words and its body's with them.
 fn StructuredRegion::ids(self region: StructuredRegion) → List<Nat> {
@@ -451,10 +451,10 @@ fn Stmt::word_bound(self s: Stmt) → Nat {
         Compute(region) => region.ids().word_bound(),
         Invoke(shape) => shape.words().word_bound(),
         Then(first, rest) => first.word_bound().max(rest.word_bound()),
-        Branch(condition, yes, no) => Succ(condition).max(yes.word_bound().max(no.word_bound())),
-        Repeat(body, again) => Succ(again).max(body.word_bound()),
-        Exit(status) => Succ(status),
-        Arg(index, _, len) => Succ(index).max(Succ(len)),
+        Branch(condition, yes, no) => (condition + 1).max(yes.word_bound().max(no.word_bound())),
+        Repeat(body, again) => (again + 1).max(body.word_bound()),
+        Exit(status) => status + 1,
+        Arg(index, _, len) => (index + 1).max(len + 1),
         Perform(_, args, results) => (args ++ results).word_bound(),
     }
 }
@@ -468,12 +468,12 @@ fn Source::capacities(self src: Source) → List<Nat> { src.buffers.map(λ (b: B
 
 // Bytes stored into buffer `buf` of a file one at a time, from index `i`.
 fn List::stored(self bytes: List<BitVec(8)>, buf, i: Nat, file: Buffers()) → Buffers() {
-    match bytes { Nil => file, Cons(c, rest) => rest.stored(buf, Succ(i), store_byte(file, buf, i, c)) }
+    match bytes { Nil => file, Cons(c, rest) => rest.stored(buf, i + 1, store_byte(file, buf, i, c)) }
 }
 
 // Each buffer's initial bytes stored, buffer `buf` first.
 fn initial_stores(buffers: List<Buffer>, buf: Nat, file: Buffers()) → Buffers() {
-    match buffers { Nil => file, Cons(b, rest) => initial_stores(rest, Succ(buf), b.initial.stored(buf, 0, file)) }
+    match buffers { Nil => file, Cons(b, rest) => initial_stores(rest, buf + 1, b.initial.stored(buf, 0, file)) }
 }
 
 // Words all zero; each buffer its capacity of zero bytes, then its initial
@@ -542,10 +542,10 @@ fn Source::tree(self src: Source, args: List<List<BitVec(8)>>, n: Nat) → ITree
 // The program run with the command line `args`.
 fn Source::denote(self src: Source, args: List<List<BitVec(8)>>) → Program<BitVec(64)>(Events::linux()) {
     Program(λ n => src.tree(args, n), λ n => ITree::below_bind(Events::linux(),
-        src.main_tree(args, n), src.main_tree(args, Succ(n)),
+        src.main_tree(args, n), src.main_tree(args, n + 1),
         λ flow => Ret(flow.status()), λ flow => Ret(flow.status()),
         src.main.grows(program_writers(src.functions), src.performs(program_writers(src.functions), n, src.depth),
-            src.performs(program_writers(src.functions), Succ(n), src.depth), src.performs_grows(program_writers(src.functions), n, src.depth),
+            src.performs(program_writers(src.functions), n + 1, src.depth), src.performs_grows(program_writers(src.functions), n, src.depth),
             n, src.start(args)), λ flow => refl))
 }
 

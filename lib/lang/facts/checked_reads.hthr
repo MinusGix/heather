@@ -58,7 +58,7 @@ record Prog { len: Nat, bounds: List<Nat>, reads: List<Ix> }
 
 // One checked read: the word, or a trap.
 fn read_checked(xs: List<Nat>, len: Nat, i: Nat) → Option<Nat> {
-    match Succ(i).leb(len) { True => Some(word_at(xs, i)), False => None }
+    match (i + 1).leb(len) { True => Some(word_at(xs, i)), False => None }
 }
 
 fn sum_reads(xs: List<Nat>, len: Nat, args: List<Nat>, reads: List<Ix>) → Option<Nat> {

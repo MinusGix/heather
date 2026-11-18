@@ -84,7 +84,7 @@ instance(n: Nat) DecEq<Fin(n)> { eq_dec := Fin::eq_dec(n) }
 fn Fin::to_nat(n: Nat) → Fin(n) → Nat {
     match n {
         Zero => λ i => match i {},
-        Succ(k) => λ i => match i { FZ => Zero, FS(j) => Succ(Fin::to_nat(k, j)) },
+        Succ(k) => λ i => match i { FZ => Zero, FS(j) => Fin::to_nat(k, j) + 1 },
     }
 }
 

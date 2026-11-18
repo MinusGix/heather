@@ -91,10 +91,10 @@ theorem Format::win_up_ok(self F: Format, j, c: Nat, jc: j + c <= F.span, g: Fin
     norm: j = 0 ∨ F.half() <= g.mag): F.canonical(g.mag, g.bexp + j).IsTrue()
 {
     let w = (F.window(j, c)).canonical_elim(g.mag, g.bexp, g.ok);
-    let fits: (Succ(g.mag) <= F.top()) = w.left;
+    let fits: (g.mag + 1 <= F.top()) = w.left;
     let wr: (g.bexp <= c) = w.right.left;
     let wn: (g.bexp = 0 ∨ F.half() <= g.mag) = w.right.right.left;
-    let wf: (F.specials.reserves_top().IsTrue() → c <= g.bexp → Succ(Succ(g.mag)) <= F.top()) = w.right.right.right;
+    let wf: (F.specials.reserves_top().IsTrue() → c <= g.bexp → g.mag + 2 <= F.top()) = w.right.right.right;
     let range: (g.bexp + j <= F.span) = omega;
     let normal: (g.bexp + j = 0 ∨ F.half() <= g.mag) = match norm {
         Inr(le) => Inr(le),
@@ -106,11 +106,11 @@ theorem Format::win_up_ok(self F: Format, j, c: Nat, jc: j + c <= F.span, g: Fin
 // A float of `F` in the window's binades is a window float, unless it is
 // the pattern the window's top binade reserves where `F`'s does not.
 theorem Format::win_down_ok(self F: Format, j, c: Nat, g: Finite(F), jb: j <= g.bexp, inb: g.bexp <= j + c,
-    free: F.specials.reserves_top().IsTrue() → j + c <= g.bexp → Succ(Succ(g.mag)) <= F.top()):
+    free: F.specials.reserves_top().IsTrue() → j + c <= g.bexp → g.mag + 2 <= F.top()):
     (F.window(j, c)).canonical(g.mag, g.bexp - j).IsTrue()
 {
     let f = F.canonical_elim(g.mag, g.bexp, g.ok);
-    let fits: (Succ(g.mag) <= F.top()) = f.left;
+    let fits: (g.mag + 1 <= F.top()) = f.left;
     let fn: (g.bexp = 0 ∨ F.half() <= g.mag) = f.right.right.left;
     let range: (g.bexp - j <= c) = omega;
     let normal: (g.bexp - j = 0 ∨ F.half() <= g.mag) = match fn { Inl(z) => Inl(omega(z)), Inr(le) => Inr(le) };
@@ -144,16 +144,16 @@ theorem Format::win_hi_ok(self F: Format, j, c: Nat, jc: j + c <= F.span): F.can
 // A significand below `2^prec` at binade `b` is below the first float of any
 // higher binade `k`; a normal one at `b` is at least the first of any binade
 // up to `b`.
-theorem Format::units_lt_lead(self F: Format, m, b, k: Nat, fits: Succ(m) <= F.top(), lt: b < k): m * Nat::pow(2, b) < F.half() * Nat::pow(2, k) {
+theorem Format::units_lt_lead(self F: Format, m, b, k: Nat, fits: m + 1 <= F.top(), lt: b < k): m * Nat::pow(2, b) < F.half() * Nat::pow(2, k) {
     let t: (F.top() = F.half() * 2) = F.top_double();
     let p = Nat::pow(2, b);
-    let p1 = Nat::pow(2, Succ(b));
+    let p1 = Nat::pow(2, b + 1);
     let pk = Nat::pow(2, k);
-    let fit: (Succ(m) * p <= F.top() * p) = Nat::mul_le_mono_r(p, Succ(m), F.top(), fits);
-    let unf: (Succ(m) * p = p + m * p) = m.mul_succ_left(p);
+    let fit: ((m + 1) * p <= F.top() * p) = Nat::mul_le_mono_r(p, m + 1, F.top(), fits);
+    let unf: ((m + 1) * p = p + m * p) = m.mul_succ_left(p);
     let pd: (p1 = p * 2) = refl;
     let dbl: (F.top() * p = F.half() * p1) = ring(t, pd);
-    let mono: (p1 <= pk) = Nat::pow_le_pow_r(2, Succ(b), k, trivial, lt);
+    let mono: (p1 <= pk) = Nat::pow_le_pow_r(2, b + 1, k, trivial, lt);
     let up: (F.half() * p1 <= F.half() * pk) = F.half().mul_le_mono_l(p1, pk, mono);
     let pp: (0 < p) = Nat::pow_pos(a := 2, n := b);
     omega
@@ -177,7 +177,7 @@ theorem Finite::le_of_units({F: Format}, g, h: Finite(F), gp: g.neg = False, hp:
 }
 
 // A subnormal significand leaves room below the top.
-theorem Format::room_of_small(self F: Format, m: Nat, lt: m < F.half()): Succ(Succ(m)) <= F.top() {
+theorem Format::room_of_small(self F: Format, m: Nat, lt: m < F.half()): m + 2 <= F.top() {
     let h2 = F.two_le_half();
     let t: (F.top() = F.half() * 2) = F.top_double();
     omega
@@ -234,7 +234,7 @@ theorem Format::win_high_place(self F: Format, j, c: Nat, x: Rat, iw: F.InWindow
 }
 
 theorem Format::win_in_place(self F: Format, j, c: Nat, x: Rat, g: Finite(F), jb: j <= g.bexp, inb: g.bexp <= j + c,
-    free: F.specials.reserves_top().IsTrue() → j + c <= g.bexp → Succ(Succ(g.mag)) <= F.top()): F.WinPlace(j, c, x, g)
+    free: F.specials.reserves_top().IsTrue() → j + c <= g.bexp → g.mag + 2 <= F.top()): F.WinPlace(j, c, x, g)
 {
     let ok = F.win_down_ok(j, c, g, jb, inb, free);
     Inl(Exists(F.win_down(j, c, g, ok), F.win_down_val(j, c, g, jb, ok)))
@@ -246,7 +246,7 @@ theorem Format::win_region(self F: Format, j, c: Nat, x: Rat, iw: F.InWindow(j, 
     let fc = F.canonical_elim(g.mag, g.bexp, g.ok);
     let range: (g.bexp <= F.span) = fc.right.left;
     let fnorm: (g.bexp = 0 ∨ F.half() <= g.mag) = fc.right.right.left;
-    let ffree: (F.specials.reserves_top().IsTrue() → F.span <= g.bexp → Succ(Succ(g.mag)) <= F.top()) = fc.right.right.right;
+    let ffree: (F.specials.reserves_top().IsTrue() → F.span <= g.bexp → g.mag + 2 <= F.top()) = fc.right.right.right;
     match g.neg.eq_dec(True) {
         Inl(ng) => {
             let z = Finite::zero(F.window(j, c), False);
@@ -256,11 +256,11 @@ theorem Format::win_region(self F: Format, j, c: Nat, x: Rat, iw: F.InWindow(j, 
         },
         Inr(nt) => {
             let pos: (g.neg = False) = match g.neg as λ b => b ≠ True → b = False { False => λ _ => refl, True => λ no => false_elim(no(refl)) }(nt);
-            match Succ(g.bexp).le_dec(j) {
+            match (g.bexp + 1).le_dec(j) {
                 Inl(lt) => F.win_low_place(j, c, x, iw, g, pos, lt),
                 Inr(nlt) => {
                     let jb: (j <= g.bexp) = Nat::le_of_not_lt(g.bexp, j, nlt);
-                    match Succ(g.bexp).le_dec(j + c) {
+                    match (g.bexp + 1).le_dec(j + c) {
                         Inl(inner) => F.win_in_place(j, c, x, g, jb, Nat::le_of_lt(g.bexp, j + c, inner), λ _ at => false_elim(omega(inner, at))),
                         Inr(outer) => {
                             let ge: (j + c <= g.bexp) = Nat::le_of_not_lt(g.bexp, j + c, outer);

@@ -228,7 +228,7 @@ fn laid_derive(endian: Endian, field: String, ty: Handle, depth: Nat) → Tac<Ex
                             match laid_bits(wv) {
                                 None => fail("laid: field `" ++ field ++ "`: a word whose width is not a numeral has no codec to derive", []),
                                 Some(bits) => match laid_word(endian, bits) {
-                                    None => fail("laid: field `" ++ field ++ "`: a word of " ++ decimal_name(Succ(bits), bits)
+                                    None => fail("laid: field `" ++ field ++ "`: a word of " ++ decimal_name(bits + 1, bits)
                                         ++ " bits has no codec to derive (8, 16, 32 and 64 have): name the record's codecs, `laid(codecs := […])`", []),
                                     Some(codec) => laid_global(codec),
                                 },
@@ -371,7 +371,7 @@ fn laid_parts(l: LaidLib, name: String, t: Expr, whole: Expr, last: LaidField, o
     match rev {
         Nil => pure([]),
         Cons(f, before) => {
-            let k = all.len() - Succ(before.len());
+            let k = all.len() - (before.len() + 1);
             let part <- laid_held(apps(l.field, [last.upto_ty, t, f.ty, last.upto, laid_path(l, all, k), of, to, back, forth]), "field `" ++ f.name ++ "`");
             let ty <- infer(part).or_fail("laid: field `" ++ f.name ++ "`: ");
             let d = Decl(AsFunction, name ++ "::" ++ f.name ++ "_part", [], Hd(ty), part);
@@ -431,8 +431,8 @@ fn laid(declared: String, endian: Endian := LittleEndian, order: FieldOrder := A
                 Some(mk) => match codecs {
                     Nil => laid_derived(endian, fs.names, fs.tys).bind(λ derived => laid_out(h, name, c, fs, mk, derived)),
                     Cons(_, _) => match fs.names.len().same(codecs.len()) {
-                        False => fail("laid: `" ++ name ++ "` has " ++ decimal_name(Succ(fs.names.len()), fs.names.len()) ++ " fields and "
-                            ++ decimal_name(Succ(codecs.len()), codecs.len()) ++ " codecs are given, one is wanted for each", []),
+                        False => fail("laid: `" ++ name ++ "` has " ++ decimal_name(fs.names.len() + 1, fs.names.len()) ++ " fields and "
+                            ++ decimal_name(codecs.len() + 1, codecs.len()) ++ " codecs are given, one is wanted for each", []),
                         True => laid_out(h, name, c, fs, mk, codecs),
                     },
                 },
