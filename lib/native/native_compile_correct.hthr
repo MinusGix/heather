@@ -1364,6 +1364,83 @@ theorem Source::performs_tree(self src: Source, call: Writers(), n, k, index: Na
         SameTau(after, refl, inner))
 }
 
+// The procedure's body, from past its entry's check, as an activation of
+// the callee with `room_c` levels of room: its frame below the return
+// address and the registers it pushes, its way in and its way out.
+theorem Target::procedure_body_runs(self t: Target, src: Source, call: Writers(), n, k: Nat,
+    tp: t.procedures = src.procedures, hosts: Hosts(t), answers: t.Answered(call),
+    ih: (c: Target) → c.procedures = src.procedures → Hosts(c) → c.Answered(call) → c.Calls(call, src.performs(call, n, k, c.charges(), c.index - c.floor)),
+    index: Nat, proc: Procedure, found: t.procedures.nth(index) = Some(proc), env: Env, values: List<BitVec(64)>, long: proc.params.len() <= values.len(),
+    g0: Gprs, passed: g0.Holding(call_registers(), t.passed_homes(0) ++ values), ret: BitVec(64), above: List<BitVec(64)>,
+    fits_above: t.index + 8 * above.len() <= t.stack.size, kk: Flow → ITree<BitVec(64)>(Events::linux()),
+    ends: (x: Flow) → t.Ends(proc.answer(x), env, g0, ret, above, kk(x)), args_eq: env.args = t.args, room_c: Nat,
+    roomy_c: t.floor + t.procedures.performed_by(index).below(t.procedures.called_by(index), t.procedures, t.bodies, t.homes.places, t.homes.room_table(t.functions), t.checks, room_c) + 8 <=
+        ((t.index - 8) - 8 * t.bodies.frame(index).homes(t.homes.places, t.homes.rooms).kept().len()) - 8 * t.bodies.frame(index).words,
+    ranked_c: t.ranks.deep_at(index) <= room_c):
+    t.Goes(prog_len(Prog::At(hosts.hosted(index, proc, found).pre, t.layout().body(index).procedure_label(index), Block([])).checks_entry(t.layout().body(index), index)),
+        ITree::bind(Events::linux(), proc.body.denote(call, src.performs(call, n, k, t.charges(), (t.index - t.floor) - t.charges().cost(index)), n,
+            Env(Nil, env.buffers, env.args).set_words(proc.params, values)), kk),
+        λ v => t.Bare(env, t.index - 8, Cons(ret, above), v.gprs, v.memory) ∧ v.gprs.Outside(g0, [Rax, R11, Rsp])) {
+    let layout = t.layout().body(index);
+    let frame = t.bodies.frame(index);
+    let homes = frame.homes(t.homes.places, t.homes.rooms);
+    let kept = homes.kept();
+    let ch = t.charges();
+    let left = t.index - t.floor;
+    let hosted = hosts.hosted(index, proc, found);
+    let pre_i = hosted.pre;
+    let names_i = hosted.names;
+    let b_i = hosted.b;
+    let emitted_i = hosted.emitted;
+    let w_exit = hosted.within;
+    let pf = proc.fits_parts(layout, hosted.fits);
+    let entry_live = proc.body.live_in(homes, proc.results);
+    let entry = proc.entry_code(pre_i, layout, index);
+    let hw = proc.hosted_within(layout, index, t.program, pre_i, names_i, b_i, emitted_i, w_exit);
+    let w_entry = hw.right.left;
+    let w_b = hw.right.right;
+    let inside_params = λ (i: Nat) (m: Mem(i, proc.params)) => layout.words_fit_mem(proc.params ++ proc.results, i, pf.words,
+        proc.params.mem_append_l(proc.results, i, m));
+    let inside_results = λ (i: Nat) (m: Mem(i, proc.results)) => layout.words_fit_mem(proc.params ++ proc.results, i, pf.words,
+        proc.params.mem_append_r(proc.results, i, m));
+    let start = Env(Nil, env.buffers, env.args).set_words(proc.params, values);
+    let rest_left = left - ch.cost(index);
+    let body_tree: ITree<BitVec(64)>(Events::linux()) = ITree::bind(Events::linux(), proc.body.denote(call, src.performs(call, n, k, ch, rest_left), n, start), kk);
+    let top = Cons(ret, above);
+    let ic = ((t.index - 8) - 8 * kept.len()) - 8 * frame.words;
+    let back: (t.index - 8 + 8 = t.index) = omega(roomy_c);
+    let lbl = Prog::At(pre_i, layout.procedure_label(index), Block([]));
+    let checked_code = lbl.checks_entry(layout, index);
+    let past = λ (v: MachineState<X86Memory(t.r.profile)>) => t.Bare(env, t.index - 8, top, v.gprs, v.memory) ∧ v.gprs.Outside(g0, [Rax, R11, Rsp]);
+    let i2 = (ic + 8 * frame.words) + 8 * kept.len();
+    let at_i: (i2 = t.index - 8) = omega(roomy_c, back);
+    let back_i: (i2 + 8 = t.index) = omega(roomy_c, back);
+    let saved_len: (g0.saved(kept, top).len() = kept.len() + Succ(above.len())) = g0.saved_len(kept, top);
+    let framed_c: (ic + 8 * (frame.words + g0.saved(kept, top).len()) <= t.stack.size) = omega(saved_len, back_i, fits_above);
+    let c = t.callee(index, pf.homed, ic, g0.saved(kept, top), home_values(g0), room_c, framed_c, roomy_c, ranked_c);
+    let same_left0: (ic - t.floor = (t.index - t.floor) - ((8 * frame.words + 8 * kept.len()) + 8)) = omega(roomy_c, back);
+    let same_left: (c.index - c.floor = rest_left) = same_left0;
+    let calls_c: c.Calls(call, src.performs(call, n, k, ch, rest_left)) =
+        j(same_left, λ x _ => c.Calls(call, src.performs(call, n, k, ch, x)), ih(c, tp, hosts, answers));
+    let at_entry = λ (r: Nat) (inside: r < 6) (_: homes.pinned(home_register(r)) = True) => sym(home_value(g0, r, inside));
+    let returned = λ (after: Env) => c.goes_callee_return(after, b_i.prog, proc.results, kk(Onward(after)), w_exit, inside_results, g0, ret, above, refl,
+        at_entry,
+        λ s2 rip_s resident_s bare_s kept_s holding_s => {
+            let bare_i: t.Bare(after, t.index, above, s2.gprs, s2.memory) = j(back_i, λ x _ => t.Bare(after, x, above, s2.gprs, s2.memory), bare_s);
+            ends(Onward(after))(s2, rip_s, resident_s, t.bare_file(env, after, t.index, above, s2.gprs, s2.memory, bare_i, args_eq),
+                kept_s, holding_s)
+        });
+    let body = proc.body.emit_runs(c, call, src.performs(call, n, k, ch, rest_left), calls_c, c.functions_run(call, answers))(entry, proc.results, names_i, b_i, emitted_i, w_b, pf.checks)(
+        n, start, kk, λ status u at exited => ends(Exited(status))(u, at, exited), returned);
+    let next_c = c.at_like(prog_len(entry), entry_live, body_tree, start, env.set_words(proc.params, values),
+        env.entered_like(proc.params, entry_live, values, long, entry_live.within_mem(proc.params, pf.entry_within)), body);
+    let entered = c.goes_callee_entry(env, pre_i, proc, index, values, g0, top, refl, at_entry, passed,
+        body_tree, w_entry, inside_params, pf.entry_apart, pf.entry_within, pf.params_few, long, next_c);
+    let ran: t.Goes(prog_len(checked_code), body_tree, past) =
+        j(at_i, λ x _ => t.Goes(prog_len(checked_code), body_tree, λ v => t.Bare(env, x, top, v.gprs, v.memory) ∧ v.gprs.Outside(g0, [Rax, R11, Rsp])), entered);
+    ran
+}
+
 // A procedure is callable: from its label, its check where it has one (too
 // few bytes left, the shared exit), its way in (the registers it keeps
 // pushed, its frame opened) as an activation of its own, its body with its
@@ -1426,35 +1503,9 @@ theorem Target::procedures_at(self t: Target, src: Source, call: Writers(), n, k
         // The body, from past the entry's check, as an activation of the
         // callee with `room_c` levels of room: its frame below the return
         // address and the registers it pushes.
-        let run = λ (room_c: Nat) (roomy_c: t.floor + t.procedures.performed_by(index).below(t.procedures.called_by(index), t.procedures, t.bodies, places, table, t.checks, room_c) + 8 <= ic) (ranked_c: t.ranks.deep_at(index) <= room_c) => {
-            let i2 = (ic + 8 * frame.words) + 8 * kept.len();
-            let at_i: (i2 = t.index - 8) = omega(roomy_c, back);
-            let back_i: (i2 + 8 = t.index) = omega(roomy_c, back);
-            let saved_len: (g0.saved(kept, top).len() = kept.len() + Succ(above.len())) = g0.saved_len(kept, top);
-            let framed_c: (ic + 8 * (frame.words + g0.saved(kept, top).len()) <= t.stack.size) = omega(saved_len, back_i, fits_above);
-            let c = t.callee(index, pf.homed, ic, g0.saved(kept, top), home_values(g0), room_c, framed_c, roomy_c, ranked_c);
-            let same_left0: (ic - t.floor = (t.index - t.floor) - ((8 * frame.words + 8 * kept.len()) + 8)) = omega(roomy_c, back);
-            let same_left: (c.index - c.floor = rest_left) = same_left0;
-            let calls_c: c.Calls(call, src.performs(call, n, k, ch, rest_left)) =
-                j(same_left, λ x _ => c.Calls(call, src.performs(call, n, k, ch, x)), ih(c, tp, hosts, answers));
-            let at_entry = λ (r: Nat) (inside: r < 6) (_: homes.pinned(home_register(r)) = True) => sym(home_value(g0, r, inside));
-            let returned = λ (after: Env) => c.goes_callee_return(after, b_i.prog, proc.results, kk(Onward(after)), w_exit, inside_results, g0, ret, above, refl,
-                at_entry,
-                λ s2 rip_s resident_s bare_s kept_s holding_s => {
-                    let bare_i: t.Bare(after, t.index, above, s2.gprs, s2.memory) = j(back_i, λ x _ => t.Bare(after, x, above, s2.gprs, s2.memory), bare_s);
-                    ends(Onward(after))(s2, rip_s, resident_s, t.bare_file(env, after, t.index, above, s2.gprs, s2.memory, bare_i, args_eq),
-                        kept_s, holding_s)
-                });
-            let body = proc.body.emit_runs(c, call, src.performs(call, n, k, ch, rest_left), calls_c, c.functions_run(call, answers))(entry, proc.results, names_i, b_i, emitted_i, w_b, pf.checks)(
-                n, start, kk, λ status u at exited => ends(Exited(status))(u, at, exited), returned);
-            let next_c = c.at_like(prog_len(entry), entry_live, body_tree, start, env.set_words(proc.params, values),
-                env.entered_like(proc.params, entry_live, values, long, entry_live.within_mem(proc.params, pf.entry_within)), body);
-            let entered = c.goes_callee_entry(env, pre_i, proc, index, values, g0, top, refl, at_entry, passed,
-                body_tree, w_entry, inside_params, pf.entry_apart, pf.entry_within, pf.params_few, long, next_c);
-            let ran: t.Goes(prog_len(checked_code), body_tree, past) =
-                j(at_i, λ x _ => t.Goes(prog_len(checked_code), body_tree, λ v => t.Bare(env, x, top, v.gprs, v.memory) ∧ v.gprs.Outside(g0, [Rax, R11, Rsp])), entered);
-            ran
-        };
+        let run = λ (room_c: Nat) (roomy_c: t.floor + t.procedures.performed_by(index).below(t.procedures.called_by(index), t.procedures, t.bodies, places, table, t.checks, room_c) + 8 <= ic) (ranked_c: t.ranks.deep_at(index) <= room_c) =>
+            t.procedure_body_runs(src, call, n, k, tp, hosts, answers, ih, index, proc, found, env, values, long, g0, passed, ret, above, fits_above, kk, ends, args_eq,
+                room_c, roomy_c, ranked_c);
         // The body's tree is the procedure's where the call is not refused.
         let unrefused = λ (none: ch.refuses(index, left) = False) (at: Nat) (q: MachineState<X86Memory(t.r.profile)> → Type) (goes: t.Goes(at, body_tree, q)) =>
             j(sym(none), λ b _ => t.Goes(at, ITree::bind(Events::linux(), match b as λ _ => ITree<Flow>(Events::linux()) {

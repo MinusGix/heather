@@ -1435,7 +1435,6 @@ fn Prog::frames_main(self p: Prog, layout: Layout, live: List<Nat>) → Prog {
     then(p, Block(frame_down(layout.words) ++ [MovRI(Rax, BitVec::ofNat(0))])).zeroes(layout, live)
 }
 
-
 fn Prog::finish(self p: Prog) → Option<Prog> {
     let whole = then(then(p, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall);
     match whole.laid_out() { False => None, True => Some(whole) }
