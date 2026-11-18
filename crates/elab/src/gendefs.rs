@@ -1035,56 +1035,91 @@ thread_local! {
     static INSTANCES: std::cell::RefCell<Instances> = std::cell::RefCell::new(Instances::default());
 }
 
-/// A hash of the outer shape of a template's arguments: the formers,
-/// literals and variables met in the first [`SHAPE_NODES`] nodes of a walk
-/// through the code formers and applications. It is never the answer
-/// ([`Instances::find`] compares the arguments), so a former this does not
-/// descend into costs collisions and nothing else, and it need not learn a
-/// new one.
+/// A hash of a template's arguments, whole: the formers, literals,
+/// variables and global references met in a walk through the code formers,
+/// applications and the substitutions on global references. It is never the
+/// answer ([`Instances::find`] compares the arguments), so a former this
+/// does not descend into costs collisions and nothing else, and it need not
+/// learn a new one.
+///
+/// Whole, because a bucket is scanned with `==`: a hash of the arguments'
+/// first few nodes put up to fifty instances of one template in a bucket
+/// for `x86_64::decode_opcode_reference`, whose arguments are large codes
+/// that agree far down, and the scan was a third of that declaration
+/// (`issues/template-instance-table-deep-compare.md`). A shared node is
+/// hashed once per call, so the walk is linear in the arguments' DAG and
+/// not in their tree.
 fn args_shape(args: &[Rc<Term>]) -> u64 {
     use std::hash::{Hash, Hasher};
-    fn walk(t: &Term, left: &mut u32, h: &mut crate::layered::WordHasher) {
-        if *left == 0 {
-            return;
+    struct Walk {
+        /// The hash of each shared node walked, by address. Every node here
+        /// is reachable from `args`, which the call borrows, so no address
+        /// is reused while the map lives.
+        seen: HashMap<usize, u64>,
+    }
+    impl Walk {
+        fn node(&mut self, t: &Rc<Term>) -> u64 {
+            let shared = Rc::strong_count(t) > 1;
+            let at = Rc::as_ptr(t) as usize;
+            if shared && let Some(&h) = self.seen.get(&at) {
+                return h;
+            }
+            let h = self.hash(t);
+            if shared {
+                self.seen.insert(at, h);
+            }
+            h
         }
-        *left -= 1;
-        std::mem::discriminant(t).hash(h);
-        match t {
-            Term::Var(v) => v.hash(h),
-            Term::NatLit(n) => n.hash(h),
-            Term::GlobalTm { var, .. } => var.hash(h),
-            Term::Succ(a) | Term::TmFin { len: a } | Term::TmSquash { ty: a, .. } => walk(a, left, h),
-            Term::App { fun: a, arg: b, .. }
-            | Term::AppAt { fun: a, arg: b }
-            | Term::TmPi { dom: a, cod: b, .. }
-            | Term::TmSigma { fst: a, snd: b, .. }
-            | Term::TmSum { lhs: a, rhs: b, .. }
-            | Term::TmW { shape: a, pos: b, .. }
-            | Term::TmVec { elem: a, len: b, .. }
-            | Term::TmWf { shape: a, arity: b, .. }
-            | Term::TmDVec { len: a, fam: b, .. } => {
-                walk(a, left, h);
-                walk(b, left, h);
+        fn hash(&mut self, t: &Term) -> u64 {
+            let mut h = crate::layered::WordHasher::default();
+            std::mem::discriminant(t).hash(&mut h);
+            let mut sub = |c: &Rc<Term>, h: &mut crate::layered::WordHasher, w: &mut Walk| w.node(c).hash(h);
+            match t {
+                Term::Var(v) => v.hash(&mut h),
+                Term::NatLit(n) => n.hash(&mut h),
+                Term::GlobalTm { var, subst } => {
+                    var.hash(&mut h);
+                    subst.terms.len().hash(&mut h);
+                    for c in &subst.terms {
+                        sub(c, &mut h, self);
+                    }
+                }
+                Term::Succ(a) | Term::TmFin { len: a } | Term::TmSquash { ty: a, .. } => sub(a, &mut h, self),
+                Term::App { fun: a, arg: b, .. }
+                | Term::AppAt { fun: a, arg: b }
+                | Term::TmPi { dom: a, cod: b, .. }
+                | Term::TmSigma { fst: a, snd: b, .. }
+                | Term::TmSum { lhs: a, rhs: b, .. }
+                | Term::TmW { shape: a, pos: b, .. }
+                | Term::TmVec { elem: a, len: b, .. }
+                | Term::TmWf { shape: a, arity: b, .. }
+                | Term::TmDVec { len: a, fam: b, .. } => {
+                    sub(a, &mut h, self);
+                    sub(b, &mut h, self);
+                }
+                Term::TmId { ty, lhs, rhs, .. } | Term::TmSEq { ty, lhs, rhs, .. } => {
+                    sub(ty, &mut h, self);
+                    sub(lhs, &mut h, self);
+                    sub(rhs, &mut h, self);
+                }
+                Term::Case { case_l, case_r, scrut, .. } => {
+                    sub(case_l, &mut h, self);
+                    sub(case_r, &mut h, self);
+                    sub(scrut, &mut h, self);
+                }
+                _ => {}
             }
-            Term::TmId { ty, lhs, rhs, .. } | Term::TmSEq { ty, lhs, rhs, .. } => {
-                walk(ty, left, h);
-                walk(lhs, left, h);
-                walk(rhs, left, h);
-            }
-            _ => {}
+            h.finish()
         }
     }
+    let mut walk = Walk { seen: HashMap::default() };
     let mut h = crate::layered::WordHasher::default();
     args.len().hash(&mut h);
     for arg in args {
-        let mut left = SHAPE_NODES;
-        walk(arg, &mut left, &mut h);
+        walk.node(arg).hash(&mut h);
     }
     h.finish()
 }
-
-/// How many nodes of one argument [`args_shape`] reads.
-const SHAPE_NODES: u32 = 48;
 
 /// The guard copies of one non-recursive declaration's spine codes
 /// ([`GenDef::PayloadCode`]/[`GenDef::SuffixCode`]): the **inline** spine
@@ -4673,9 +4708,17 @@ mod instance_tests {
         assert!(other != first);
         assert!(other == instance_of_template_built(&e, &[Rc::new(Term::TmNat), lit(8)]));
 
-        // Two lengths that differ past what the shape reads.
-        let deep = |end: Term| [Rc::new(Term::TmNat), succs(SHAPE_NODES + 2, end)];
-        assert_eq!(args_shape(&deep(Term::Zero)), args_shape(&deep(Term::TmNat)));
+        // Two lengths that differ far down are told apart by the hash, and
+        // two that differ only where it does not look share a bucket and
+        // still get their own instances.
+        let deep = |end: Term| [Rc::new(Term::TmNat), succs(200, end)];
+        assert_ne!(args_shape(&deep(Term::Zero)), args_shape(&deep(Term::TmNat)));
+        let unread = |n: u64| [Rc::new(Term::TmNat), Rc::new(Term::Succ(Rc::new(Term::TmUnit { level: Level::constant(n) })))];
+        assert_eq!(args_shape(&unread(1)), args_shape(&unread(2)));
+        let one = instance_of_template(&e, &unread(1));
+        let two = instance_of_template(&e, &unread(2));
+        assert!(one != two);
+        assert!(two == instance_of_template_built(&e, &unread(2)));
         let zero = instance_of_template(&e, &deep(Term::Zero));
         let nat = instance_of_template(&e, &deep(Term::TmNat));
         assert!(zero != nat);

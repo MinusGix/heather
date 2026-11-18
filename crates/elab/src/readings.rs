@@ -152,9 +152,13 @@ impl Readings<'_> {
         let mut decided = false;
         for (proof, level, ty, test, case) in Self::equations(cx) {
             // Syntactic and linear: nothing below runs for a type that
-            // does not spell the test.
-            let from_expected = expected.abstract_local(&test);
-            let from_got = got.abstract_local(&test);
+            // does not spell the test. Asked by a read first, which builds
+            // nothing: almost every check finds no test, and the
+            // abstraction copies most of both types to say so
+            // (issues/match-arm-coercion-abstracts-both-types.md).
+            let abstracted = |ty: &Type| ty.mentions_local(&test).then(|| ty.abstract_local(&test)).flatten();
+            let from_expected = abstracted(expected);
+            let from_got = abstracted(got);
             if from_expected.is_none() && from_got.is_none() {
                 continue;
             }
@@ -225,7 +229,7 @@ impl Readings<'_> {
         let mut retry = false;
         for (id, test, depth) in cx.pending_tests.iter().rev() {
             let test = test.shift_local((len - depth) as u32);
-            if expected.abstract_local(&test).is_none() && got.abstract_local(&test).is_none() {
+            if !expected.mentions_local(&test) && !got.mentions_local(&test) {
                 continue;
             }
             if !decided {

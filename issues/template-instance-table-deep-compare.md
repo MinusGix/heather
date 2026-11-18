@@ -1,6 +1,6 @@
 ---
 title: The type-code template instance table compares arguments structurally on every lookup
-status: open
+status: closed
 labels: [performance,elab,inductive]
 area: language
 created: 2026-11-18
@@ -19,3 +19,7 @@ Key the table by a full structural hash of the arguments, computed once per look
 ## Benchmarks
 
 The probe case `x86/decode-opcode-reference` (`scripts/bench-probes`); its `eq` column is the one that should fall. A synthetic chain of `eq_dec` arms over a small indexed record did not reproduce it (2026-11-18): the arguments have to be large. A fixture that does is still wanted.
+
+## Log
+
+- 2026-11-18: Fixed. `args_shape` now hashes the arguments whole (every code former, application, literal, variable, and a global reference's substitution), hashing a shared node once per call so the walk is linear in the DAG. Measured the scan first: 3.2 s and 230 M of `decode_opcode_reference`'s 250 M syntax-equality nodes. After, release binary, `--only`, width one: 9.0 → 5.5 s, equality nodes 250 M → 50 M. A collision still costs only a comparison (unit test `an_instance_is_built_once_per_template_and_arguments` keeps a pair the hash cannot tell apart).

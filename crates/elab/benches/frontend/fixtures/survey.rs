@@ -61,7 +61,9 @@ fn match_arm_checks() -> Family {
         what: "k fallback checks inside a plain match's arm (control: match/plain-checks)",
         unit: "checks",
         // Recorded, not claimed: 1.03 over 16..128 on the cloud box,
-        // 2026-11-18, at 1.2 to 1.5 times the control's per-check cost.
+        // 2026-11-18, at 1.2 to 1.5 times the control's per-check cost;
+        // 1.1 to 1.2 times once the occurrence test stopped weakening the
+        // test at every node (same day).
         expect_slope: Some((0.68, 1.38)),
         cases: sweep("match/arm-checks", &[16, 32, 64, 128], |k| checks(k, 16, true)),
     }
