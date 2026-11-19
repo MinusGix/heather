@@ -62,6 +62,7 @@ import list;
 import logic;
 import nat;
 import option;
+import omega;
 
 // ---------------------------------------------------------------------------
 // The environment
