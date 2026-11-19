@@ -207,14 +207,19 @@ struct Case {
 /// the branch equations were generated from (`self_name` its base name,
 /// how its body calls it), `eqs` those equations.
 pub(crate) fn induct(decl: &Decl, self_name: &str, eqs: &[BranchEquation], recursion: Recursion) -> Result<Decl, String> {
-    if decl.kind != DeclKind::Fn || recursion == Recursion::None {
-        return Err("only a recursive `fn` has an induction principle".into());
+    if decl.kind != DeclKind::Fn {
+        return Err("only a `fn` has an induction principle".into());
     }
+    // A function that does not recur has one too: its cases, with no
+    // induction hypothesis. It is what a proof about a loop's step follows
+    // (docs/language/loop-combinator-design.md §4): the loop's own
+    // induction is `Loop::rule`, proved once.
+    let cases_only = recursion == Recursion::None;
     let span = decl.body.span;
     let names = [decl.name.as_str(), self_name];
     let body = Expr { kind: ExprKind::Block(Box::new(decl.body.clone())), span };
     let all_calls = calls_in(decl, &body, &names)?;
-    if all_calls.is_empty() {
+    if all_calls.is_empty() && !cases_only {
         return Err("the body makes no recursive call".into());
     }
     // A parameter is fixed where every call passes it unchanged and no test
@@ -232,7 +237,7 @@ pub(crate) fn induct(decl: &Decl, self_name: &str, eqs: &[BranchEquation], recur
             })
     }).collect();
     let varying: Vec<usize> = (0..decl.params.len()).filter(|&i| !fixed[i]).collect();
-    if varying.is_empty() {
+    if varying.is_empty() && !cases_only {
         return Err("every recursive call passes every parameter unchanged".into());
     }
 
@@ -786,7 +791,8 @@ impl FunctionInduction<'_> {
         // The principle's parameters: the fixed ones, the motive, the cases,
         // the varying ones; the varying ones are those named after the
         // function's parameters past the cases.
-        let motive_at = principle.params.iter().position(|p| matches!(&p.ty.kind, TyKind::Fn { .. }) && !p.name.starts_with(CASE_PREFIX)
+        // A case principle's motive takes nothing: no parameter varies.
+        let motive_at = principle.params.iter().position(|p| (matches!(&p.ty.kind, TyKind::Fn { .. }) || (p.name.starts_with("motive") && principle.params.iter().any(|c| c.name.starts_with(CASE_PREFIX)))) && !p.name.starts_with(CASE_PREFIX)
             && { let mut t = &p.ty; while let TyKind::Fn { cod, .. } = &t.kind { t = cod; } matches!(t.kind, TyKind::Univ { .. }) });
         let Some(motive_at) = motive_at else {
             return err(format!("`{designed}` is not an induction principle"), call.span);
@@ -823,7 +829,8 @@ impl FunctionInduction<'_> {
         // a counter indexes) are generalized with them, except what a fixed
         // argument names and what that local's own type needs: those stay,
         // since the principle passes them unchanged.
-        let first = *var_positions.iter().min().expect("a principle has a varying parameter");
+        // A case principle has none: nothing after the last local is reverted.
+        let first = var_positions.iter().min().copied().unwrap_or(m.saturating_sub(1));
         let mut kept: Vec<usize> = Vec::new();
         for f in &fixed {
             let Some(i) = at(f) else { return err(format!("`{designed}` does not match `{head}`"), call.span) };

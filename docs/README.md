@@ -22,7 +22,7 @@ CLAUDE.md says when each one applies.
 | `kernel/` | Formers (sprop, `Wf`, `IWf`, `M`, coinduction), conversion and NbE, metatheory passes, the gate, kernel cost records |
 | `inductives/` | How an inductive or codata declaration becomes kernel terms: the tier 0/1/2 and indexed lowerings, codata, mutual families, type codes |
 | `elaborator/` | Elaborator internals: unifier, intros and applications typed by their head, instance identity, the attribution records behind its costs |
-| `language/` | Surface features: records, function types, universes, `let` and blocks, named arguments, sections, effects, sequencing, numerals, `When` |
+| `language/` | Surface features: records, function types, universes, `let` and blocks, named arguments, sections, effects, sequencing, loops (`loop-combinator-design.md`), numerals, `When` |
 | `language/classes/` | Traits and instances, operator designations, dispatch, `Decide` |
 | `language/matching/` | The dependent match compiler, nested patterns, equation binding, `if let` |
 | `language/recursion/` | `decreases`, course-of-values, mutual recursion, recursion at the top |
