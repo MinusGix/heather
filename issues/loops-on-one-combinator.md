@@ -32,3 +32,6 @@ built. Left, each a PR for Minus (§8 of the design):
 - 2026-11-19: round 1 built; the binary search's theorem re-proved by
   `Loop::rule` at about the example's length (the cost check the design
   asked for).
+- 2026-11-19: round 2's `while` built: outside a `runtime fn` it is
+  `Loop(…).run` over `f::State` with `f::step`; the whole library passes.
+  A `mut self` method's loops and a counted `for` are still lifted (next).
