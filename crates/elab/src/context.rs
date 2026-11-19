@@ -386,7 +386,13 @@ impl Cx {
             friend: None,
             codata_match: None,
             case_splits: Rc::new(Vec::new()),
-            pending_eqs: Rc::new(Vec::new()),
+            // A match's pending equations stay: a default's search under a
+            // plain `if` reads the arm's test as a written search there
+            // does, by asking for the equation (`want_match_equations`),
+            // which binds it in scope under the caller's spelling
+            // (`__caller___match_eq`). Dropped, `if i < s.len() { s[i] }`
+            // left `at`'s proof to a search that could not see `i < n`.
+            pending_eqs: self.pending_eqs.clone(),
             pending_tests: Rc::new(Vec::new()),
             arm_type_probe: None,
             readings: Spine::new(),
