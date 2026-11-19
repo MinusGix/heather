@@ -62,6 +62,7 @@ import list;
 import logic;
 import nat;
 import option;
+import omega;
 
 // ---------------------------------------------------------------------------
 // The environment
@@ -415,12 +416,13 @@ record Buffer { capacity: Nat, initial: List<BitVec(8)> := [] }
 // Total functions its regions call, its buffers (buffer `b` is the `b`-th),
 // how many words it names (word ids below `words`; the compiler gives each
 // a slot and refuses any other), and the statement it runs.
-// Its procedures (procedure `p` is the `p`-th), and the bytes of stack the
-// compiled program asks for below `main`'s frame, past what `main`'s own
-// calls take without a check (`Source::left`; the source's own meaning has
-// no stack).
+// Its procedures (procedure `p` is the `p`-th), and how many levels of
+// calls that can nest without bound (those the compiler checks) the
+// compiled program has room for below `main`'s frame, past what `main`'s
+// own calls take (`Source::left`, §7.4; the source's own meaning has no
+// stack).
 record Source { functions: List<Function>, buffers: List<Buffer>, words: Nat, main: Stmt,
-    procedures: List<Procedure> := [], room: Nat := 0 }
+    procedures: List<Procedure> := [], levels: Nat := 0 }
 
 // The words a call names: every operand but its buffers.
 fn CallShape::words(self shape: CallShape) → List<Nat> {
@@ -1118,4 +1120,336 @@ theorem Source::of_none_bounded(self src: Source, args: List<List<BitVec(8)>>, c
     Program::Refines(Events::linux(), src.denote(args), src.bounded(args, ch, left)) {
     λ tr c => Converges(c.n, IsTrace::of_below(Events::linux(), src.tree(args, c.n), src.bounded_tree(args, ch, left, c.n), tr,
         src.never_refused_back(args, ch, left, c.n, none), c.h))
+}
+
+// ---------------------------------------------------------------------------
+// Room in levels of calls (docs/native/native-procedure-frames-design.md §7.4)
+//
+// A program asks for its stack in levels of the calls that can nest without
+// bound (the compiler's checked calls), not in bytes: the bytes a call takes
+// depend on the frames the compiler picks. Below, the source's runs that
+// keep within `k` such levels (`Source::within`) and the theorem that the
+// compiled program makes every one of them unrefused, wherever the charges
+// fit the levels (`Charges::Levels`, `Source::levels_refines`).
+
+// `k` levels of `per` bytes.
+fn Nat::stacked(self k: Nat, per: Nat) → Nat { match k { Zero => 0, Succ(j) => per + j.stacked(per) } }
+
+// The levels left past a call: as many where it is not counted, one fewer
+// where it is, and none to make it with where none are left.
+fn Nat::spend(self k: Nat, counted: Bool) → Option<Nat> {
+    match counted { False => Some(k), True => match k { Zero => None, Succ(j) => Some(j) } }
+}
+
+// What a call does in the source, at fuel `n` with `d` levels of calls
+// left (`Source::calls`) and at most `k` more of the calls `counted` names:
+// a counted call past them claims nothing, a `Cut`, as one past `d` does.
+fn Source::calls_within(self src: Source, call: Writers(), n, d: Nat, counted: Nat → Bool, k: Nat) → Performs() {
+    match d {
+        Zero => λ procedure args results env => Cut,
+        Succ(e) => λ procedure args results env => Tau(match src.procedures.nth(procedure) {
+            None => Ret(Onward(env)),
+            Some(proc) => match k.spend(counted(procedure)) {
+                None => Cut,
+                Some(j) => ITree::map(Events::linux(), proc.body.denote(call, src.calls_within(call, n, e, counted, j), n, proc.enter(env, args)),
+                    λ flow => proc.leave(env, results, flow)),
+            },
+        }),
+    }
+}
+
+// More fuel and one more level grow every call's tree.
+theorem Source::calls_within_grows(self src: Source, call: Writers(), n, d: Nat, counted: Nat → Bool, k: Nat):
+    performs_below(src.calls_within(call, n, d, counted, k), src.calls_within(call, n + 1, Succ(d), counted, k)) {
+    match d {
+        Zero => λ procedure args results env => trivial,
+        Succ(e) => λ procedure args results env => SameTau(
+            match src.procedures.nth(procedure) {
+                None => Ret(Onward(env)),
+                Some(proc) => match k.spend(counted(procedure)) {
+                    None => Cut,
+                    Some(j) => ITree::map(Events::linux(), proc.body.denote(call, src.calls_within(call, n + 1, Succ(e), counted, j), n + 1, proc.enter(env, args)),
+                        λ flow => proc.leave(env, results, flow)),
+                },
+            }, refl,
+            match src.procedures.nth(procedure) as λ o =>
+                ITree::Below(Events::linux(),
+                    match o as λ _ => ITree<Flow>(Events::linux()) {
+                        None => Ret(Onward(env)),
+                        Some(proc) => match k.spend(counted(procedure)) {
+                            None => Cut,
+                            Some(j) => ITree::map(Events::linux(), proc.body.denote(call, src.calls_within(call, n, e, counted, j), n, proc.enter(env, args)),
+                                λ flow => proc.leave(env, results, flow)),
+                        },
+                    },
+                    match o {
+                        None => Ret(Onward(env)),
+                        Some(proc) => match k.spend(counted(procedure)) {
+                            None => Cut,
+                            Some(j) => ITree::map(Events::linux(), proc.body.denote(call, src.calls_within(call, n + 1, Succ(e), counted, j), n + 1, proc.enter(env, args)),
+                                λ flow => proc.leave(env, results, flow)),
+                        },
+                    }) {
+                None => refl,
+                Some(proc) => match k.spend(counted(procedure)) as λ s =>
+                        ITree::Below(Events::linux(),
+                            match s as λ _ => ITree<Flow>(Events::linux()) {
+                                None => Cut,
+                                Some(j) => ITree::map(Events::linux(), proc.body.denote(call, src.calls_within(call, n, e, counted, j), n, proc.enter(env, args)),
+                                    λ flow => proc.leave(env, results, flow)),
+                            },
+                            match s {
+                                None => Cut,
+                                Some(j) => ITree::map(Events::linux(), proc.body.denote(call, src.calls_within(call, n + 1, Succ(e), counted, j), n + 1, proc.enter(env, args)),
+                                    λ flow => proc.leave(env, results, flow)),
+                            }) {
+                    None => trivial,
+                    Some(j) => ITree::below_bind(Events::linux(),
+                        proc.body.denote(call, src.calls_within(call, n, e, counted, j), n, proc.enter(env, args)),
+                        proc.body.denote(call, src.calls_within(call, n + 1, Succ(e), counted, j), n + 1, proc.enter(env, args)),
+                        λ flow => Ret(proc.leave(env, results, flow)), λ flow => Ret(proc.leave(env, results, flow)),
+                        proc.body.grows(call, src.calls_within(call, n, e, counted, j), src.calls_within(call, n + 1, Succ(e), counted, j),
+                            src.calls_within_grows(call, n, e, counted, j), n, proc.enter(env, args)),
+                        λ flow => refl),
+                },
+            }),
+    }
+}
+
+// `main` at fuel `n`, its calls nesting as deep as the fuel and at most
+// `k` levels of the calls `counted` names.
+fn Source::within_main(self src: Source, args: List<List<BitVec(8)>>, counted: Nat → Bool, k, n: Nat) → ITree<Flow>(Events::linux()) {
+    src.main.denote(program_writers(src.functions), src.calls_within(program_writers(src.functions), n, n, counted, k), n, src.start(args))
+}
+
+fn Source::within_tree(self src: Source, args: List<List<BitVec(8)>>, counted: Nat → Bool, k, n: Nat) → ITree<BitVec(64)>(Events::linux()) {
+    ITree::map(Events::linux(), src.within_main(args, counted, k, n), λ flow => flow.status())
+}
+
+// The source's runs with the command line `args` that nest at most `k`
+// of the calls `counted` names.
+fn Source::within(self src: Source, args: List<List<BitVec(8)>>, counted: Nat → Bool, k: Nat) → Program<BitVec(64)>(Events::linux()) {
+    Program(λ n => src.within_tree(args, counted, k, n), λ n => ITree::below_bind(Events::linux(),
+        src.within_main(args, counted, k, n), src.within_main(args, counted, k, Succ(n)),
+        λ flow => Ret(flow.status()), λ flow => Ret(flow.status()),
+        src.main.grows(program_writers(src.functions), src.calls_within(program_writers(src.functions), n, n, counted, k),
+            src.calls_within(program_writers(src.functions), Succ(n), Succ(n), counted, k), src.calls_within_grows(program_writers(src.functions), n, n, counted, k),
+            n, src.start(args)), λ flow => refl))
+}
+
+// A call kept within the levels is the source's call, with less grown.
+theorem Source::within_calls(self src: Source, call: Writers(), n, d: Nat, counted: Nat → Bool, k: Nat):
+    (procedure: Nat) → (args, results: List<Nat>) → (env: Env) →
+    ITree::Refuses(Events::linux(), Flow::stops(λ _ => False), src.calls_within(call, n, d, counted, k)(procedure, args, results, env),
+        src.calls(call, n, d)(procedure, args, results, env)) {
+    match d {
+        Zero => λ procedure args results env => trivial,
+        Succ(e) => λ procedure args results env => SameTau(
+            match src.procedures.nth(procedure) {
+                None => Ret(Onward(env)),
+                Some(proc) => ITree::map(Events::linux(), proc.body.denote(call, src.calls(call, n, e), n, proc.enter(env, args)),
+                    λ flow => proc.leave(env, results, flow)),
+            }, refl,
+            match src.procedures.nth(procedure) as λ o =>
+                ITree::Refuses(Events::linux(), Flow::stops(λ _ => False),
+                    match o as λ _ => ITree<Flow>(Events::linux()) {
+                        None => Ret(Onward(env)),
+                        Some(proc) => match k.spend(counted(procedure)) {
+                            None => Cut,
+                            Some(j) => ITree::map(Events::linux(), proc.body.denote(call, src.calls_within(call, n, e, counted, j), n, proc.enter(env, args)),
+                                λ flow => proc.leave(env, results, flow)),
+                        },
+                    },
+                    match o {
+                        None => Ret(Onward(env)),
+                        Some(proc) => ITree::map(Events::linux(), proc.body.denote(call, src.calls(call, n, e), n, proc.enter(env, args)),
+                            λ flow => proc.leave(env, results, flow)),
+                    }) {
+                None => Inr(refl),
+                Some(proc) => match k.spend(counted(procedure)) as λ s =>
+                        ITree::Refuses(Events::linux(), Flow::stops(λ _ => False),
+                            match s as λ _ => ITree<Flow>(Events::linux()) {
+                                None => Cut,
+                                Some(j) => ITree::map(Events::linux(), proc.body.denote(call, src.calls_within(call, n, e, counted, j), n, proc.enter(env, args)),
+                                    λ flow => proc.leave(env, results, flow)),
+                            },
+                            ITree::map(Events::linux(), proc.body.denote(call, src.calls(call, n, e), n, proc.enter(env, args)),
+                                λ flow => proc.leave(env, results, flow))) {
+                    None => trivial,
+                    Some(j) => ITree::refuses_map(Events::linux(), Flow::stops(λ _ => False), Flow::stops(λ _ => False),
+                        proc.body.denote(call, src.calls_within(call, n, e, counted, j), n, proc.enter(env, args)),
+                        proc.body.denote(call, src.calls(call, n, e), n, proc.enter(env, args)),
+                        λ flow => proc.leave(env, results, flow),
+                        proc.body.refuses(call, src.calls_within(call, n, e, counted, j), src.calls(call, n, e), λ _ => False, n, n, n.le_refl(),
+                            λ p _ => src.within_calls(call, n, e, counted, j, p), proc.enter(env, args)),
+                        λ flow => match flow { Onward(_) => λ never => false_elim(never), Exited(_) => λ stops => stops }),
+                },
+            }),
+    }
+}
+
+// So every run within the levels is the source's.
+theorem Source::within_refines(self src: Source, args: List<List<BitVec(8)>>, counted: Nat → Bool, k: Nat):
+    Program::Refines(Events::linux(), src.within(args, counted, k), src.denote(args)) {
+    let call = program_writers(src.functions);
+    λ tr c => Converges(c.n, IsTrace::of_below(Events::linux(), src.within_tree(args, counted, k, c.n), src.tree(args, c.n), tr,
+        ITree::below_of_refuses(Events::linux(), src.within_tree(args, counted, k, c.n), src.tree(args, c.n),
+            ITree::refuses_map(Events::linux(), Flow::stops(λ _ => False), λ (_: BitVec(64)) => False, src.within_main(args, counted, k, c.n), src.main_tree(args, c.n),
+                λ flow => flow.status(),
+                src.main.refuses(call, src.calls_within(call, c.n, c.n, counted, k), src.calls(call, c.n, c.n), λ _ => False, c.n, c.n, c.n.le_refl(),
+                    λ p _ => src.within_calls(call, c.n, c.n, counted, k, p), src.start(args)),
+                λ flow => match flow { Onward(_) => λ never => false_elim(never), Exited(_) => λ never => never })), c.h))
+}
+
+// What makes the charges `ch` fit levels of the calls `counted` names,
+// `per` bytes a level: a counted procedure is entered with a check asking
+// for its cost, what its body takes below its frame (`below`), at most
+// `per` together, and one return address; any other is entered with no check,
+// and a body calls one only within what the body itself takes below its
+// frame (`top` for `main`'s).
+record Charges::Levels(self ch: Charges, src: Source, counted: Nat → Bool, below: Nat → Nat, per, top: Nat) {
+    checked: (p: Nat) → counted(p) = True → ch.check(p) = Some((ch.cost(p) + below(p)) + 8),
+    most: (p: Nat) → counted(p) = True → ch.cost(p) + below(p) <= per,
+    unchecked: (p: Nat) → counted(p) = False → ch.check(p) = None,
+    under: (q: Nat) → (proc: Procedure) → src.procedures.nth(q) = Some(proc) → (p: Nat) → Mem(p, proc.body.performed()) → counted(p) = False →
+        ch.cost(p) + below(p) <= below(q),
+    main_under: (p: Nat) → Mem(p, src.main.performed()) → counted(p) = False → ch.cost(p) + below(p) <= top,
+}
+
+// A call the levels allow, made with the room they ask: not refused, and
+// the callee's body entered with its own room and the levels left.
+theorem Charges::levels_enter(self ch: Charges, src: Source, counted: Nat → Bool, below: Nat → Nat, per, top: Nat, lv: ch.Levels(src, counted, below, per, top),
+    k, j, left, procedure: Nat, spent: k.spend(counted(procedure)) = Some(j), fits: k.stacked(per) + 8 <= left,
+    fits_unchecked: counted(procedure) = False → ((ch.cost(procedure) + below(procedure)) + 8) + k.stacked(per) <= left):
+    (ch.refuses(procedure, left) = False) ∧ (((below(procedure) + 8) + j.stacked(per)) + ch.cost(procedure) <= left) {
+    let goal = (ch.refuses(procedure, left) = False) ∧ (((below(procedure) + 8) + j.stacked(per)) + ch.cost(procedure) <= left);
+    (match counted(procedure) as λ b => counted(procedure) = b → k.spend(b) = Some(j) → goal {
+        False => λ unc sp => {
+            let same: (k = j) = cong_fn<Option<Nat>, Nat>(λ o => match o { None => k, Some(x) => x }, sp);
+            let room = fits_unchecked(unc);
+            ⟨j(sym(lv.unchecked(procedure, unc)), λ o _ => (match o { None => False, Some(need) => Succ(left).leb(need) }) = False, refl),
+                j(same, λ x _ => ((below(procedure) + 8) + x.stacked(per)) + ch.cost(procedure) <= left, omega(room))⟩
+        },
+        True => λ cnt sp0 => {
+            let most = lv.most(procedure, cnt);
+            (match k as λ k2 => (match k2 { Zero => None, Succ(i) => Some(i) }) = Some(j) → k2.stacked(per) + 8 <= left → goal {
+                Zero => λ sp _ => false_elim(j(sp, λ o _ => match o as λ _ => Type { None => True, Some(_) => False }, trivial)),
+                Succ(i) => λ sp room => {
+                    let same: (i = j) = cong_fn<Option<Nat>, Nat>(λ o => match o { None => i, Some(x) => x }, sp);
+                    ⟨j(sym(lv.checked(procedure, cnt)), λ o _ => (match o { None => False, Some(need) => Succ(left).leb(need) }) = False,
+                        Nat::leb_false(Succ(left), (ch.cost(procedure) + below(procedure)) + 8, omega(most, room))),
+                        j(same, λ x _ => ((below(procedure) + 8) + x.stacked(per)) + ch.cost(procedure) <= left, omega(most, room))⟩
+                },
+            })(sp0, fits)
+        },
+    })(refl, spent)
+}
+
+// A call kept within `k` levels, made with them in its room (and with its
+// cost and its body's room as well where it is not counted), is never
+// refused, nor any call it makes within them.
+theorem Source::levels_refuses(self src: Source, call: Writers(), n, d: Nat, ch: Charges, counted: Nat → Bool, below: Nat → Nat, per, top: Nat,
+    lv: ch.Levels(src, counted, below, per, top)):
+    (k, left, procedure: Nat) → k.stacked(per) + 8 <= left →
+    (counted(procedure) = False → ((ch.cost(procedure) + below(procedure)) + 8) + k.stacked(per) <= left) →
+    (args, results: List<Nat>) → (env: Env) →
+    ITree::Refuses(Events::linux(), Flow::stops(λ _ => False), src.calls_within(call, n, d, counted, k)(procedure, args, results, env),
+        src.performs(call, n, d, ch, left)(procedure, args, results, env)) {
+    match d {
+        Zero => λ k left procedure fits fits_unchecked args results env => trivial,
+        Succ(e) => λ k left procedure fits fits_unchecked args results env => SameTau(
+            match src.procedures.nth(procedure) {
+                None => Ret(Onward(env)),
+                Some(proc) => match ch.refuses(procedure, left) {
+                    True => Ret(Exited(call_depth_status())),
+                    False => ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, n, e, ch, left - ch.cost(procedure)), n, proc.enter(env, args)),
+                        λ flow => proc.leave(env, results, flow)),
+                },
+            }, refl,
+            (match src.procedures.nth(procedure) as λ o => src.procedures.nth(procedure) = o →
+                ITree::Refuses(Events::linux(), Flow::stops(λ _ => False),
+                    match o as λ _ => ITree<Flow>(Events::linux()) {
+                        None => Ret(Onward(env)),
+                        Some(proc) => match k.spend(counted(procedure)) {
+                            None => Cut,
+                            Some(j) => ITree::map(Events::linux(), proc.body.denote(call, src.calls_within(call, n, e, counted, j), n, proc.enter(env, args)),
+                                λ flow => proc.leave(env, results, flow)),
+                        },
+                    },
+                    match o {
+                        None => Ret(Onward(env)),
+                        Some(proc) => match ch.refuses(procedure, left) {
+                            True => Ret(Exited(call_depth_status())),
+                            False => ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, n, e, ch, left - ch.cost(procedure)), n, proc.enter(env, args)),
+                                λ flow => proc.leave(env, results, flow)),
+                        },
+                    }) {
+                None => λ _ => Inr(refl),
+                Some(proc) => λ found => (match k.spend(counted(procedure)) as λ s => k.spend(counted(procedure)) = s →
+                        ITree::Refuses(Events::linux(), Flow::stops(λ _ => False),
+                            match s as λ _ => ITree<Flow>(Events::linux()) {
+                                None => Cut,
+                                Some(j) => ITree::map(Events::linux(), proc.body.denote(call, src.calls_within(call, n, e, counted, j), n, proc.enter(env, args)),
+                                    λ flow => proc.leave(env, results, flow)),
+                            },
+                            match ch.refuses(procedure, left) as λ _ => ITree<Flow>(Events::linux()) {
+                                True => Ret(Exited(call_depth_status())),
+                                False => ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, n, e, ch, left - ch.cost(procedure)), n, proc.enter(env, args)),
+                                    λ flow => proc.leave(env, results, flow)),
+                            }) {
+                    None => λ _ => trivial,
+                    Some(j) => λ spent => {
+                        let entered = ch.levels_enter(src, counted, below, per, top, lv, k, j, left, procedure, spent, fits, fits_unchecked);
+                        let inside = entered.right;
+                        (match ch.refuses(procedure, left) as λ r => (r = False) →
+                                ITree::Refuses(Events::linux(), Flow::stops(λ _ => False),
+                                    ITree::map(Events::linux(), proc.body.denote(call, src.calls_within(call, n, e, counted, j), n, proc.enter(env, args)),
+                                        λ flow => proc.leave(env, results, flow)),
+                                    match r as λ _ => ITree<Flow>(Events::linux()) {
+                                        True => Ret(Exited(call_depth_status())),
+                                        False => ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, n, e, ch, left - ch.cost(procedure)), n, proc.enter(env, args)),
+                                            λ flow => proc.leave(env, results, flow)),
+                                    }) {
+                            True => λ never => absurd(never),
+                            False => λ _ => ITree::refuses_map(Events::linux(), Flow::stops(λ _ => False), Flow::stops(λ _ => False),
+                                proc.body.denote(call, src.calls_within(call, n, e, counted, j), n, proc.enter(env, args)),
+                                proc.body.denote(call, src.performs(call, n, e, ch, left - ch.cost(procedure)), n, proc.enter(env, args)),
+                                λ flow => proc.leave(env, results, flow),
+                                proc.body.refuses(call, src.calls_within(call, n, e, counted, j), src.performs(call, n, e, ch, left - ch.cost(procedure)),
+                                    λ _ => False, n, n, n.le_refl(),
+                                    λ p mem => src.levels_refuses(call, n, e, ch, counted, below, per, top, lv, j, left - ch.cost(procedure), p, omega(inside),
+                                        λ unc => { let under = lv.under(procedure, proc, found, p, mem, unc); omega(under, inside) }),
+                                    proc.enter(env, args)),
+                                λ flow => match flow { Onward(_) => λ never => false_elim(never), Exited(_) => λ stops => stops }),
+                        })(entered.left)
+                    },
+                })(refl),
+            })(refl)),
+    }
+}
+
+// Where `left` holds what `main`'s own calls take and `k` levels, the
+// compiled tree grows the source's within the levels: every run of the
+// source that nests at most `k` counted calls, the compiled program makes,
+// never refused.
+theorem Source::levels_exact(self src: Source, args: List<List<BitVec(8)>>, ch: Charges, counted: Nat → Bool, below: Nat → Nat, per, top: Nat,
+    lv: ch.Levels(src, counted, below, per, top), k, left, n: Nat, fits: (top + 8) + k.stacked(per) <= left):
+    ITree::Below(Events::linux(), src.within_tree(args, counted, k, n), src.bounded_tree(args, ch, left, n)) {
+    let call = program_writers(src.functions);
+    ITree::below_of_refuses(Events::linux(), src.within_tree(args, counted, k, n), src.bounded_tree(args, ch, left, n),
+        ITree::refuses_map(Events::linux(), Flow::stops(λ _ => False), λ (_: BitVec(64)) => False, src.within_main(args, counted, k, n), src.bounded_main(args, ch, left, n),
+            λ flow => flow.status(),
+            src.main.refuses(call, src.calls_within(call, n, n, counted, k), src.performs(call, n, n, ch, left), λ _ => False, n, n, n.le_refl(),
+                λ p mem => src.levels_refuses(call, n, n, ch, counted, below, per, top, lv, k, left, p, omega(fits),
+                    λ unc => { let under = lv.main_under(p, mem, unc); omega(under, fits) }), src.start(args)),
+            λ flow => match flow { Onward(_) => λ never => false_elim(never), Exited(_) => λ never => never }))
+}
+
+// So with the fuel gone: every trace the source makes within `k` levels,
+// the compiled program makes.
+theorem Source::levels_refines(self src: Source, args: List<List<BitVec(8)>>, ch: Charges, counted: Nat → Bool, below: Nat → Nat, per, top: Nat,
+    lv: ch.Levels(src, counted, below, per, top), k, left: Nat, fits: (top + 8) + k.stacked(per) <= left):
+    Program::Refines(Events::linux(), src.within(args, counted, k), src.bounded(args, ch, left)) {
+    λ tr c => Converges(c.n, IsTrace::of_below(Events::linux(), src.within_tree(args, counted, k, c.n), src.bounded_tree(args, ch, left, c.n), tr,
+        src.levels_exact(args, ch, counted, below, per, top, lv, k, left, c.n, fits), c.h))
 }
