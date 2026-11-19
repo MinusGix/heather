@@ -859,3 +859,285 @@ evidence theorem Eutt::mrec_respects<R>({D: Events}, {E: Events}, {body: (d: D.C
 {
     λ t u e => Eutt::mrec_cong(D, E, body, body, λ d => Eutt::refl(Events::sum(D, E), body(d)), t, u, e)
 }
+
+// ---------------------------------------------------------------------------
+// Step for step
+
+// `mrec` adds a silent step at each call and after each command of `E`, and
+// nothing else, so it commutes with `bind` and with a loop up to strong
+// bisimilarity, not only up to taus: a lemma stated with `Bisim` keeps the
+// depth at which each node sits (`Bisim::approx`), which a bridge to a
+// fuelled meaning counts on.
+
+// One step of two runs at the same command of bisimilar pending trees: a
+// call is a silent step to the bodies bound to the continuations, a command
+// of `E` the same command on both sides.
+inductive MrecSame<R>(D: Events, E: Events, body: (d: D.Cmd) → CoTree<D.Resp(d)>(Events::sum(D, E)), o1: Obs<R>(E), o2: Obs<R>(E)) {
+    SameCall(p1: CoTree<R>(Events::sum(D, E)), p2: CoTree<R>(Events::sum(D, E)),
+        at1: o1 = OTau(CoTree::mrec(D, E, body, p1)), at2: o2 = OTau(CoTree::mrec(D, E, body, p2)),
+        rel: Bisim<R>(Events::sum(D, E), p1, p2)),
+    SameCmd(c: E.Cmd, j1: E.Resp(c) → CoTree<R>(Events::sum(D, E)), j2: E.Resp(c) → CoTree<R>(Events::sum(D, E)),
+        at1: o1 = OVis(c, λ a => CoTree::mrec(D, E, body, CTau(j1(a)))),
+        at2: o2 = OVis(c, λ a => CoTree::mrec(D, E, body, CTau(j2(a)))),
+        rel: (a: E.Resp(c)) → Bisim<R>(Events::sum(D, E), CTau(j1(a)), CTau(j2(a)))),
+}
+
+theorem CoTree::mrec_same_step<R>(D: Events, E: Events, body: (d: D.Cmd) → CoTree<D.Resp(d)>(Events::sum(D, E)), c: Events::sum(D, E).Cmd,
+    k1: Events::sum(D, E).Resp(c) → CoTree<R>(Events::sum(D, E)), k2: Events::sum(D, E).Resp(c) → CoTree<R>(Events::sum(D, E)),
+    n: (a: Events::sum(D, E).Resp(c)) → Bisim<R>(Events::sum(D, E), k1(a), k2(a))):
+    MrecSame<R>(D, E, body, CoTree::mrec_obs(D, E, body, OVis(c, k1)), CoTree::mrec_obs(D, E, body, OVis(c, k2)))
+{
+    (match c as λ c2 => (q1: Events::sum(D, E).Resp(c2) → CoTree<R>(Events::sum(D, E))) →
+            (q2: Events::sum(D, E).Resp(c2) → CoTree<R>(Events::sum(D, E))) →
+            ((a: Events::sum(D, E).Resp(c2)) → Bisim<R>(Events::sum(D, E), q1(a), q2(a))) →
+            MrecSame<R>(D, E, body, CoTree::mrec_obs(D, E, body, OVis(c2, q1)), CoTree::mrec_obs(D, E, body, OVis(c2, q2))) {
+        Inl(d) => λ q1 q2 nq => SameCall(CoTree::bind<D.Resp(d), R>(Events::sum(D, E), body(d), q1),
+            CoTree::bind<D.Resp(d), R>(Events::sum(D, E), body(d), q2), refl, refl,
+            CoTree::bind_cong<D.Resp(d), R>(Events::sum(D, E), body(d), body(d), q1, q2, Bisim::refl(Events::sum(D, E), body(d)), nq)),
+        Inr(e) => λ q1 q2 nq => SameCmd(e, q1, q2, refl, refl, λ a => BTau(q1(a), q2(a), refl, refl, nq(a))),
+    })(k1, k2, n)
+}
+
+// Bisimilar pending trees are bisimilar runs.
+fn Bisim::mrec_cong<R>(D: Events, E: Events, body: (d: D.Cmd) → CoTree<D.Resp(d)>(Events::sum(D, E)),
+    t: CoTree<R>(Events::sum(D, E)), u: CoTree<R>(Events::sum(D, E)), b: Bisim<R>(Events::sum(D, E), t, u)) →
+    Bisim<R>(E, CoTree::mrec(D, E, body, t), CoTree::mrec(D, E, body, u))
+{
+    match b {
+        BRet(r, ht, hu) => BRet(r, CoTree::mrec_at(D, E, body, t, ORet(r), ht), CoTree::mrec_at(D, E, body, u, ORet(r), hu)),
+        BTau(t2, u2, ht, hu, n) => BTau(CoTree::mrec(D, E, body, t2), CoTree::mrec(D, E, body, u2),
+            CoTree::mrec_at(D, E, body, t, OTau(t2), ht), CoTree::mrec_at(D, E, body, u, OTau(u2), hu),
+            Bisim::mrec_cong(D, E, body, t2, u2, n)),
+        BVis(c, k1, k2, ht, hu, n) => match CoTree::mrec_same_step(D, E, body, c, k1, k2, n) {
+            SameCall(p1, p2, at1, at2, rel) => BTau(CoTree::mrec(D, E, body, p1), CoTree::mrec(D, E, body, p2),
+                prelude::trans(CoTree::mrec_at(D, E, body, t, OVis(c, k1), ht), at1),
+                prelude::trans(CoTree::mrec_at(D, E, body, u, OVis(c, k2), hu), at2),
+                Bisim::mrec_cong(D, E, body, p1, p2, rel)),
+            SameCmd(c2, j1, j2, at1, at2, rel) => BVis(c2, λ a => CoTree::mrec(D, E, body, CTau(j1(a))),
+                λ a => CoTree::mrec(D, E, body, CTau(j2(a))),
+                prelude::trans(CoTree::mrec_at(D, E, body, t, OVis(c, k1), ht), at1),
+                prelude::trans(CoTree::mrec_at(D, E, body, u, OVis(c, k2), hu), at2),
+                λ a => Bisim::mrec_cong(D, E, body, CTau(j1(a)), CTau(j2(a)), rel(a))),
+        },
+    }
+}
+
+// [`Eutt::mrec_bind_from`] step for step: its counts were all zero but at a
+// leaf, where a bisimilar pending tree now gives a bisimilar run.
+fn Bisim::mrec_bind_from<A, R>(D: Events, E: Events, body: (d: D.Cmd) → CoTree<D.Resp(d)>(Events::sum(D, E)),
+    k: A → CoTree<R>(Events::sum(D, E)), p: CoTree<R>(Events::sum(D, E)), q: CoTree<A>(Events::sum(D, E)),
+    b: Bisim<R>(Events::sum(D, E), p, CoTree::bind(Events::sum(D, E), q, k))) →
+    Bisim<R>(E, CoTree::mrec(D, E, body, p), CoTree::bind(E, CoTree::mrec(D, E, body, q), λ x => CoTree::mrec(D, E, body, k(x))))
+{
+    match h: CoTree::obs(Events::sum(D, E), q) {
+        ORet(a) => Bisim::trans(E, CoTree::mrec(D, E, body, p), CoTree::mrec(D, E, body, k(a)),
+            CoTree::bind(E, CoTree::mrec(D, E, body, q), λ x => CoTree::mrec(D, E, body, k(x))),
+            Bisim::mrec_cong(D, E, body, p, k(a),
+                Bisim::trans(Events::sum(D, E), p, CoTree::bind(Events::sum(D, E), q, k), k(a), b,
+                    Bisim::of_obs(Events::sum(D, E), CoTree::bind(Events::sum(D, E), q, k), k(a),
+                        CoTree::obs_bind_at(Events::sum(D, E), q, k, ORet(a), h)))),
+            Bisim::of_obs(E, CoTree::mrec(D, E, body, k(a)), CoTree::bind(E, CoTree::mrec(D, E, body, q), λ x => CoTree::mrec(D, E, body, k(x))),
+                prelude::sym(CoTree::obs_bind_at(E, CoTree::mrec(D, E, body, q), λ x => CoTree::mrec(D, E, body, k(x)), ORet(a),
+                    CoTree::mrec_at(D, E, body, q, ORet(a), h))))),
+        OTau(q2) => {
+            let w: TauTo<R>(Events::sum(D, E), CoTree::bind(Events::sum(D, E), q2, k), p) =
+                j(CoTree::obs_bind_at(Events::sum(D, E), q, k, OTau(q2), h), λ y z => Obs::BisimTo(Events::sum(D, E), y, p),
+                    Bisim::step(Events::sum(D, E), CoTree::bind(Events::sum(D, E), q, k), p,
+                        Bisim::sym(Events::sum(D, E), p, CoTree::bind(Events::sum(D, E), q, k), b)));
+            BTau(CoTree::mrec(D, E, body, w.v2), CoTree::bind(E, CoTree::mrec(D, E, body, q2), λ x => CoTree::mrec(D, E, body, k(x))),
+                CoTree::mrec_at(D, E, body, p, OTau(w.v2), w.at),
+                CoTree::obs_bind_at(E, CoTree::mrec(D, E, body, q), λ x => CoTree::mrec(D, E, body, k(x)), OTau(CoTree::mrec(D, E, body, q2)),
+                    CoTree::mrec_at(D, E, body, q, OTau(q2), h)),
+                Bisim::mrec_bind_from(D, E, body, k, w.v2, q2,
+                    Bisim::sym(Events::sum(D, E), CoTree::bind(Events::sum(D, E), q2, k), w.v2, w.next)))
+        },
+        OVis(c, kq) => {
+            let w: VisTo<R>(Events::sum(D, E), c, λ a => CoTree::bind(Events::sum(D, E), kq(a), k), p) =
+                j(CoTree::obs_bind_at(Events::sum(D, E), q, k, OVis(c, kq), h), λ y z => Obs::BisimTo(Events::sum(D, E), y, p),
+                    Bisim::step(Events::sum(D, E), CoTree::bind(Events::sum(D, E), q, k), p,
+                        Bisim::sym(Events::sum(D, E), p, CoTree::bind(Events::sum(D, E), q, k), b)));
+            match CoTree::mrec_bind_step(D, E, body, k, c, w.k2, kq,
+                    λ a => Bisim::sym(Events::sum(D, E), CoTree::bind(Events::sum(D, E), kq(a), k), w.k2(a), w.next(a))) {
+                BindCall(p2, q2, at1, at2, rel) => BTau(CoTree::mrec(D, E, body, p2),
+                    CoTree::bind(E, CoTree::mrec(D, E, body, q2), λ x => CoTree::mrec(D, E, body, k(x))),
+                    prelude::trans(CoTree::mrec_at(D, E, body, p, OVis(c, w.k2), w.at), at1),
+                    prelude::trans(CoTree::obs_bind_at(E, CoTree::mrec(D, E, body, q), λ x => CoTree::mrec(D, E, body, k(x)),
+                        CoTree::mrec_obs(D, E, body, OVis(c, kq)), CoTree::mrec_at(D, E, body, q, OVis(c, kq), h)), at2),
+                    Bisim::mrec_bind_from(D, E, body, k, p2, q2, rel)),
+                BindCmd(e, j1, j2, at1, at2, rel) => BVis(e, λ a => CoTree::mrec(D, E, body, CTau(j1(a))),
+                    λ a => CoTree::bind(E, CoTree::mrec(D, E, body, CTau(j2(a))), λ x => CoTree::mrec(D, E, body, k(x))),
+                    prelude::trans(CoTree::mrec_at(D, E, body, p, OVis(c, w.k2), w.at), at1),
+                    prelude::trans(CoTree::obs_bind_at(E, CoTree::mrec(D, E, body, q), λ x => CoTree::mrec(D, E, body, k(x)),
+                        CoTree::mrec_obs(D, E, body, OVis(c, kq)), CoTree::mrec_at(D, E, body, q, OVis(c, kq), h)), at2),
+                    λ a => Bisim::mrec_bind_from(D, E, body, k, CTau(j1(a)), CTau(j2(a)), rel(a))),
+            }
+        },
+    }
+}
+
+// Running a bind is running its two halves in sequence, step for step.
+fn Bisim::mrec_bind<A, R>(D: Events, E: Events, body: (d: D.Cmd) → CoTree<D.Resp(d)>(Events::sum(D, E)),
+    t: CoTree<A>(Events::sum(D, E)), k: A → CoTree<R>(Events::sum(D, E))) →
+    Bisim<R>(E, CoTree::mrec(D, E, body, CoTree::bind(Events::sum(D, E), t, k)),
+        CoTree::bind(E, CoTree::mrec(D, E, body, t), λ x => CoTree::mrec(D, E, body, k(x))))
+{
+    Bisim::mrec_bind_from(D, E, body, k, CoTree::bind(Events::sum(D, E), t, k), t, Bisim::refl(Events::sum(D, E), CoTree::bind(Events::sum(D, E), t, k)))
+}
+
+// A pass's tree that is a bind: the loop runs the first half, then the rest
+// of the pass and the loop after it.
+fn CoTree::iter_from_bind<X, A, B>(E: Events, body: A → CoTree<Step<A, B>>(E), s: CoTree<X>(E), k: X → CoTree<Step<A, B>>(E)) →
+    Bisim<B>(E, CoTree::bind(E, s, λ x => CoTree::iter_from(E, body, k(x))), CoTree::iter_from(E, body, CoTree::bind(E, s, k)))
+{
+    Bisim::trans(E, CoTree::bind(E, s, λ x => CoTree::iter_from(E, body, k(x))),
+        CoTree::bind(E, s, λ x => CoTree::bind(E, k(x), λ y => CoTree::iter_next(E, body, y))),
+        CoTree::iter_from(E, body, CoTree::bind(E, s, k)),
+        CoTree::bind_cong(E, s, s, λ x => CoTree::iter_from(E, body, k(x)), λ x => CoTree::bind(E, k(x), λ y => CoTree::iter_next(E, body, y)),
+            Bisim::refl(E, s), λ x => CoTree::iter_from_unfold(E, body, k(x))),
+        Bisim::trans(E, CoTree::bind(E, s, λ x => CoTree::bind(E, k(x), λ y => CoTree::iter_next(E, body, y))),
+            CoTree::bind(E, CoTree::bind(E, s, k), λ y => CoTree::iter_next(E, body, y)),
+            CoTree::iter_from(E, body, CoTree::bind(E, s, k)),
+            Bisim::sym(E, CoTree::bind(E, CoTree::bind(E, s, k), λ y => CoTree::iter_next(E, body, y)),
+                CoTree::bind(E, s, λ x => CoTree::bind(E, k(x), λ y => CoTree::iter_next(E, body, y))),
+                CoTree::bind_assoc(E, s, k, λ y => CoTree::iter_next(E, body, y))),
+            Bisim::sym(E, CoTree::iter_from(E, body, CoTree::bind(E, s, k)), CoTree::bind(E, CoTree::bind(E, s, k), λ y => CoTree::iter_next(E, body, y)),
+                CoTree::iter_from_unfold(E, body, CoTree::bind(E, s, k)))))
+}
+
+// One step of a run of a loop's pending pass beside the loop of runs, at a
+// command of the pass: a call is a silent step on both sides, to a run of
+// the body bound to the pass's continuation, which is a loop's pending pass
+// again (`iter_from_bind`); a command of `E` is the same command, its answer
+// a silent step on both sides.
+inductive MrecIterStep<A, B>(D: Events, E: Events, body: (d: D.Cmd) → CoTree<D.Resp(d)>(Events::sum(D, E)),
+    ebody: A → CoTree<Step<A, B>>(Events::sum(D, E)), o1: Obs<B>(E), o2: Obs<B>(E))
+{
+    IterCall(p: CoTree<B>(Events::sum(D, E)), q: CoTree<Step<A, B>>(Events::sum(D, E)),
+        at1: o1 = OTau(CoTree::mrec(D, E, body, p)),
+        at2: o2 = OTau(CoTree::iter_from(E, λ a => CoTree::mrec(D, E, body, ebody(a)), CoTree::mrec(D, E, body, q))),
+        rel: Bisim<B>(Events::sum(D, E), p, CoTree::iter_from(Events::sum(D, E), ebody, q))),
+    IterCmd(c: E.Cmd, j1: E.Resp(c) → CoTree<B>(Events::sum(D, E)), j2: E.Resp(c) → CoTree<Step<A, B>>(Events::sum(D, E)),
+        at1: o1 = OVis(c, λ x => CoTree::mrec(D, E, body, CTau(j1(x)))),
+        at2: o2 = OVis(c, λ x => CoTree::iter_from(E, λ a => CoTree::mrec(D, E, body, ebody(a)), CoTree::mrec(D, E, body, CTau(j2(x))))),
+        rel: (x: E.Resp(c)) → Bisim<B>(Events::sum(D, E), CTau(j1(x)), CoTree::iter_from(Events::sum(D, E), ebody, CTau(j2(x))))),
+}
+
+theorem CoTree::mrec_iter_step<A, B>(D: Events, E: Events, body: (d: D.Cmd) → CoTree<D.Resp(d)>(Events::sum(D, E)),
+    ebody: A → CoTree<Step<A, B>>(Events::sum(D, E)), c: Events::sum(D, E).Cmd,
+    kp: Events::sum(D, E).Resp(c) → CoTree<B>(Events::sum(D, E)), kq: Events::sum(D, E).Resp(c) → CoTree<Step<A, B>>(Events::sum(D, E)),
+    n: (x: Events::sum(D, E).Resp(c)) → Bisim<B>(Events::sum(D, E), kp(x), CoTree::iter_from(Events::sum(D, E), ebody, kq(x)))):
+    MrecIterStep<A, B>(D, E, body, ebody, CoTree::mrec_obs<B>(D, E, body, OVis(c, kp)),
+        Obs::iter(E, λ a => CoTree::mrec(D, E, body, ebody(a)), CoTree::mrec_obs<Step<A, B>>(D, E, body, OVis(c, kq))))
+{
+    (match c as λ c2 => (q1: Events::sum(D, E).Resp(c2) → CoTree<B>(Events::sum(D, E))) →
+            (q2: Events::sum(D, E).Resp(c2) → CoTree<Step<A, B>>(Events::sum(D, E))) →
+            ((x: Events::sum(D, E).Resp(c2)) → Bisim<B>(Events::sum(D, E), q1(x), CoTree::iter_from(Events::sum(D, E), ebody, q2(x)))) →
+            MrecIterStep<A, B>(D, E, body, ebody, CoTree::mrec_obs<B>(D, E, body, OVis(c2, q1)),
+                Obs::iter(E, λ a => CoTree::mrec(D, E, body, ebody(a)), CoTree::mrec_obs<Step<A, B>>(D, E, body, OVis(c2, q2)))) {
+        Inl(d) => λ q1 q2 nq => IterCall(CoTree::bind<D.Resp(d), B>(Events::sum(D, E), body(d), q1),
+            CoTree::bind<D.Resp(d), Step<A, B>>(Events::sum(D, E), body(d), q2), refl, refl,
+            Bisim::trans(Events::sum(D, E), CoTree::bind<D.Resp(d), B>(Events::sum(D, E), body(d), q1),
+                CoTree::bind<D.Resp(d), B>(Events::sum(D, E), body(d), λ x => CoTree::iter_from(Events::sum(D, E), ebody, q2(x))),
+                CoTree::iter_from(Events::sum(D, E), ebody, CoTree::bind<D.Resp(d), Step<A, B>>(Events::sum(D, E), body(d), q2)),
+                CoTree::bind_cong<D.Resp(d), B>(Events::sum(D, E), body(d), body(d), q1, λ x => CoTree::iter_from(Events::sum(D, E), ebody, q2(x)),
+                    Bisim::refl(Events::sum(D, E), body(d)), nq),
+                CoTree::iter_from_bind<D.Resp(d), A, B>(Events::sum(D, E), ebody, body(d), q2))),
+        Inr(e) => λ q1 q2 nq => IterCmd(e, q1, q2, refl, refl,
+            λ x => BTau(q1(x), CoTree::iter_from(Events::sum(D, E), ebody, q2(x)), refl, refl, nq(x))),
+    })(kp, kq, n)
+}
+
+// A run of a loop is the loop of runs of its passes, step for step, from
+// any point of a pass: `p` the run's pending tree, bisimilar to the loop
+// resumed at the pass's remaining tree `q`.
+fn Bisim::mrec_iter_from<A, B>(D: Events, E: Events, body: (d: D.Cmd) → CoTree<D.Resp(d)>(Events::sum(D, E)),
+    ebody: A → CoTree<Step<A, B>>(Events::sum(D, E)), p: CoTree<B>(Events::sum(D, E)), q: CoTree<Step<A, B>>(Events::sum(D, E)),
+    b: Bisim<B>(Events::sum(D, E), p, CoTree::iter_from(Events::sum(D, E), ebody, q))) →
+    Bisim<B>(E, CoTree::mrec(D, E, body, p), CoTree::iter_from(E, λ a => CoTree::mrec(D, E, body, ebody(a)), CoTree::mrec(D, E, body, q)))
+{
+    let mb = λ (a: A) => CoTree::mrec(D, E, body, ebody(a));
+    let back: Bisim<B>(Events::sum(D, E), CoTree::iter_from(Events::sum(D, E), ebody, q), p) =
+        Bisim::sym(Events::sum(D, E), p, CoTree::iter_from(Events::sum(D, E), ebody, q), b);
+    match h: CoTree::obs(Events::sum(D, E), q) {
+        ORet(x) => match hx: x {
+            Continue(a2) => {
+                let h2: (CoTree::obs(Events::sum(D, E), q) = ORet(Continue(a2))) = j(hx, λ y z => CoTree::obs(Events::sum(D, E), q) = ORet(y), h);
+                let w: TauTo<B>(Events::sum(D, E), CoTree::iter(Events::sum(D, E), ebody, a2), p) =
+                    j(CoTree::iter_at(Events::sum(D, E), ebody, q, ORet(Continue(a2)), h2),
+                        λ y z => Obs::BisimTo(Events::sum(D, E), y, p),
+                        Bisim::step(Events::sum(D, E), CoTree::iter_from(Events::sum(D, E), ebody, q), p, back));
+                BTau(CoTree::mrec(D, E, body, w.v2), CoTree::iter_from(E, mb, mb(a2)),
+                    CoTree::mrec_at(D, E, body, p, OTau(w.v2), w.at),
+                    CoTree::iter_at(E, mb, CoTree::mrec(D, E, body, q), ORet(Continue(a2)),
+                        CoTree::mrec_at(D, E, body, q, ORet(Continue(a2)), h2)),
+                    Bisim::mrec_iter_from(D, E, body, ebody, w.v2, ebody(a2),
+                        Bisim::sym(Events::sum(D, E), CoTree::iter(Events::sum(D, E), ebody, a2), w.v2, w.next)))
+            },
+            Break(r) => {
+                let h2: (CoTree::obs(Events::sum(D, E), q) = ORet(Break(r))) = j(hx, λ y z => CoTree::obs(Events::sum(D, E), q) = ORet(y), h);
+                let hp: (CoTree::obs(Events::sum(D, E), p) = ORet(r)) =
+                    j(CoTree::iter_at(Events::sum(D, E), ebody, q, ORet(Break(r)), h2),
+                        λ y z => Obs::BisimTo(Events::sum(D, E), y, p),
+                        Bisim::step(Events::sum(D, E), CoTree::iter_from(Events::sum(D, E), ebody, q), p, back));
+                BRet(r, CoTree::mrec_at(D, E, body, p, ORet(r), hp),
+                    CoTree::iter_at(E, mb, CoTree::mrec(D, E, body, q), ORet(Break(r)),
+                        CoTree::mrec_at(D, E, body, q, ORet(Break(r)), h2)))
+            },
+        },
+        OTau(q2) => {
+            let w: TauTo<B>(Events::sum(D, E), CoTree::iter_from(Events::sum(D, E), ebody, q2), p) =
+                j(CoTree::iter_at(Events::sum(D, E), ebody, q, OTau(q2), h), λ y z => Obs::BisimTo(Events::sum(D, E), y, p),
+                    Bisim::step(Events::sum(D, E), CoTree::iter_from(Events::sum(D, E), ebody, q), p, back));
+            BTau(CoTree::mrec(D, E, body, w.v2), CoTree::iter_from(E, mb, CoTree::mrec(D, E, body, q2)),
+                CoTree::mrec_at(D, E, body, p, OTau(w.v2), w.at),
+                CoTree::iter_at(E, mb, CoTree::mrec(D, E, body, q), OTau(CoTree::mrec(D, E, body, q2)), CoTree::mrec_at(D, E, body, q, OTau(q2), h)),
+                Bisim::mrec_iter_from(D, E, body, ebody, w.v2, q2,
+                    Bisim::sym(Events::sum(D, E), CoTree::iter_from(Events::sum(D, E), ebody, q2), w.v2, w.next)))
+        },
+        OVis(c, kq) => {
+            let w: VisTo<B>(Events::sum(D, E), c, λ a => CoTree::iter_from(Events::sum(D, E), ebody, kq(a)), p) =
+                j(CoTree::iter_at(Events::sum(D, E), ebody, q, OVis(c, kq), h), λ y z => Obs::BisimTo(Events::sum(D, E), y, p),
+                    Bisim::step(Events::sum(D, E), CoTree::iter_from(Events::sum(D, E), ebody, q), p, back));
+            let right: (CoTree::obs(E, CoTree::iter_from(E, mb, CoTree::mrec(D, E, body, q)))
+                    = Obs::iter(E, mb, CoTree::mrec_obs<Step<A, B>>(D, E, body, OVis(c, kq)))) =
+                CoTree::iter_at(E, mb, CoTree::mrec(D, E, body, q), CoTree::mrec_obs<Step<A, B>>(D, E, body, OVis(c, kq)),
+                    CoTree::mrec_at(D, E, body, q, OVis(c, kq), h));
+            match CoTree::mrec_iter_step(D, E, body, ebody, c, w.k2, kq,
+                    λ a => Bisim::sym(Events::sum(D, E), CoTree::iter_from(Events::sum(D, E), ebody, kq(a)), w.k2(a), w.next(a))) {
+                IterCall(p2, q2, at1, at2, rel) => BTau(CoTree::mrec(D, E, body, p2), CoTree::iter_from(E, mb, CoTree::mrec(D, E, body, q2)),
+                    prelude::trans(CoTree::mrec_at(D, E, body, p, OVis(c, w.k2), w.at), at1),
+                    prelude::trans(right, at2),
+                    Bisim::mrec_iter_from(D, E, body, ebody, p2, q2, rel)),
+                IterCmd(e, j1, j2, at1, at2, rel) => BVis(e, λ x => CoTree::mrec(D, E, body, CTau(j1(x))),
+                    λ x => CoTree::iter_from(E, mb, CoTree::mrec(D, E, body, CTau(j2(x)))),
+                    prelude::trans(CoTree::mrec_at(D, E, body, p, OVis(c, w.k2), w.at), at1),
+                    prelude::trans(right, at2),
+                    λ x => Bisim::mrec_iter_from(D, E, body, ebody, CTau(j1(x)), CTau(j2(x)), rel(x))),
+            }
+        },
+    }
+}
+
+// A run of a loop is the loop of runs of its passes, step for step.
+fn Bisim::mrec_iter<A, B>(D: Events, E: Events, body: (d: D.Cmd) → CoTree<D.Resp(d)>(Events::sum(D, E)),
+    ebody: A → CoTree<Step<A, B>>(Events::sum(D, E)), a: A) →
+    Bisim<B>(E, CoTree::mrec(D, E, body, CoTree::iter(Events::sum(D, E), ebody, a)),
+        CoTree::iter(E, λ a2 => CoTree::mrec(D, E, body, ebody(a2)), a))
+{
+    Bisim::mrec_iter_from(D, E, body, ebody, CoTree::iter(Events::sum(D, E), ebody, a), ebody(a),
+        Bisim::refl(Events::sum(D, E), CoTree::iter(Events::sum(D, E), ebody, a)))
+}
+
+// A run of a map is the map of the run, step for step.
+fn Bisim::mrec_map<A, R>(D: Events, E: Events, body: (d: D.Cmd) → CoTree<D.Resp(d)>(Events::sum(D, E)),
+    t: CoTree<A>(Events::sum(D, E)), f: A → R) →
+    Bisim<R>(E, CoTree::mrec(D, E, body, CoTree::map(Events::sum(D, E), t, f)), CoTree::map(E, CoTree::mrec(D, E, body, t), f))
+{
+    Bisim::trans(E, CoTree::mrec(D, E, body, CoTree::map(Events::sum(D, E), t, f)),
+        CoTree::bind(E, CoTree::mrec(D, E, body, t), λ x => CoTree::mrec(D, E, body, CRet(f(x)))),
+        CoTree::map(E, CoTree::mrec(D, E, body, t), f),
+        Bisim::mrec_bind(D, E, body, t, λ x => CRet(f(x))),
+        CoTree::bind_cong(E, CoTree::mrec(D, E, body, t), CoTree::mrec(D, E, body, t), λ x => CoTree::mrec(D, E, body, CRet(f(x))),
+            λ x => CRet(f(x)), Bisim::refl(E, CoTree::mrec(D, E, body, t)),
+            λ x => Bisim::of_obs(E, CoTree::mrec(D, E, body, CRet(f(x))), CRet(f(x)), refl)))
+}

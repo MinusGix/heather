@@ -346,6 +346,22 @@ direct corecursion; none waits on up-to coinduction.
   §11). `Eutt::mrec_respects` is stated, but the rewrite does not find it
   yet (`issues/eutt-rewrite-iteration-evidence.md`).
 
+### 7.10 One tree behind another (2026-11-19)
+
+`lib/std/itree/coitree_lag.hthr`. `Lag(t, u)`: `u` is `t` with finitely
+many more silent steps before each of `t`'s steps. It is `Eutt` with the
+left count fixed at zero (Coq's `euttge`, the sides swapped): `LRet`,
+`LTau` and `LVis` read `t`'s observation at once and `u`'s after `nr`
+drops. `Lag::eutt` gives `Eutt`; `Lag::traces` gives what `Eutt` cannot:
+what `u` produces cut at depth `n`, `t` produces cut at the same depth
+(`CoTree::approx_after`: dropping steps only raises what a depth reaches),
+by induction on the depth. A bridge that counts depths needs that, and a
+tree run by `mrec` is its reading with a step after each command, so it
+lags it (`docs/native/native-procedure-frames-design.md` §7.3). The
+congruences are `Eutt`'s with the left count zero: `Lag::bind_up` (read at
+a leaf one constructor deep, as `Eutt::bind_up`), `Lag::iter_from_cong`,
+`Lag::up_to_bisim`.
+
 ---
 
 ## 8. Against the fuelled programs
@@ -442,6 +458,15 @@ under the constructors, `bind` and loops:
 `IsTrace::bind_at` is `IsTrace::bind` asking for the continuation's trace
 only at the value the first trace returns, which a split supplies.
 
+### 8.4a A tree cut at a depth inside another (2026-11-19)
+
+`ITree::Into(approx(n, c), u)`: what `c` produces cut at depth `n` is
+`u`'s. `ITree::into_approx_bind` (a bind's cut is the bind of the cuts,
+`CoTree::bind_traces`) and `ITree::into_approx_iter` (a loop cut at `n`
+goes round at most `n` times, its passes cut at `n` or less, by induction
+on the depth) make it compositional; `native_source_co`'s
+`Stmt::approx_into` is the denotation's case.
+
 ### 8.4 Testing
 
 `crates/elab/tests/lib_std_coitree_bridge.rs` (the `family_library`
@@ -462,3 +487,16 @@ itself are events, as a loop over the pending tree. It is the fuel-free
 design is in `docs/language/partial-functions-design.md` (§8 says what was built).
 Not yet done: the refinement against `Program::rec`
 (`issues/coitree-rec-program-bridge.md`).
+
+**Step for step** (2026-11-19). `mrec` takes a silent step at each call and
+after each command of `E`, and nothing else, so it commutes with `bind`, a
+loop and `map` up to strong bisimilarity, not only up to taus:
+`Bisim::mrec_cong`, `Bisim::mrec_bind` (`Eutt::mrec_bind_from` with every
+count zero), `Bisim::mrec_map`, and `Bisim::mrec_iter`, a run of a loop is
+the loop of runs of its passes. The last is generalised over a pending tree
+`p` bisimilar to the loop resumed at the pass's remaining tree `q`
+(`mrec_iter_from`); at a call the pass's continuation is bound to the
+body, which is a loop's pending pass again by `CoTree::iter_from_bind`, and
+each case is classified once by a `match c as …` into `MrecIterStep`, as
+`MrecStep` is. Keeping depths is what lets a fuelled meaning be compared
+with a run (§8.4a).
