@@ -1700,6 +1700,96 @@ fn Source::top(self src: Source, homes: Homes, bodies: List<Frame>, k: Nat) → 
         src.procedures.level_row(bodies, homes.places, table, checks, src.procedures.ranks(checks), k), src.procedures.len())
 }
 
+// `main`'s room as `Source::top` reads it, from a row of what each checked
+// call takes.
+fn Source::top_by(self src: Source, homes: Homes, bodies: List<Frame>, row: List<Nat>) → Nat {
+    src.main.performed().below_by(src.main.called(), src.procedures, bodies, homes.places, homes.room_table(src.functions), src.procedures.checks(), row,
+        src.procedures.len())
+}
+
+// The rows from `row` on, `count` more after it, each worked out from the
+// one before as `List::level_row` does.
+fn List::rows_after(self procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, table: List<Nat>, checks: List<Bool>, ranks: List<Nat>,
+    row: List<Nat>, count: Nat) → List<List<Nat>> {
+    match count {
+        Zero => [row],
+        Succ(c) => Cons(row, procedures.rows_after(bodies, places, table, checks, ranks, procedures.calls_from(procedures, bodies, places, table, checks, ranks, row, 0), c)),
+    }
+}
+
+fn List::row_at(self rows: List<List<Nat>>, i: Nat) → List<Nat> { match rows.nth(i) { None => [], Some(row) => row } }
+
+// The most an entry of `a` passes the entry of `b` beside it.
+fn List::gap(self a: List<Nat>, b: List<Nat>) → Nat {
+    match a { Nil => 0, Cons(x, rest) => Nat::max(x - b.head_or(0), rest.gap(b.tail())) }
+}
+
+// Levels in periods (§7.4): past as many levels as there are procedures,
+// what each body takes is read from one period of levels, the period's gain
+// more for each period; the chain of calls by then goes round its heaviest
+// cycle.
+
+// What any body or `main` gains over `period` levels from as many levels as
+// there are procedures.
+fn Source::gain(self src: Source, homes: Homes, bodies: List<Frame>, period: Nat) → Nat {
+    let checks = src.procedures.checks();
+    let ranks = src.procedures.ranks(checks);
+    let table = homes.room_table(src.functions);
+    let from = src.procedures.len();
+    Nat::max(src.procedures.level_row(bodies, homes.places, table, checks, ranks, Succ(from + period))
+            .gap(src.procedures.level_row(bodies, homes.places, table, checks, ranks, Succ(from))),
+        src.top(homes, bodies, from + period) - src.top(homes, bodies, from))
+}
+
+// The gain over `period` levels read from `rows`, the rows from as many
+// levels as there are procedures on.
+fn Source::gain_in(self src: Source, homes: Homes, bodies: List<Frame>, rows: List<List<Nat>>, period: Nat) → Nat {
+    Nat::max(rows.row_at(Succ(period)).gap(rows.row_at(1)), src.top_by(homes, bodies, rows.row_at(period)) - src.top_by(homes, bodies, rows.row_at(0)))
+}
+
+// The period with the least gain a level among `Succ(d)` and the
+// `count` after it, against the best so far, `Succ(best)` with gain `most`.
+fn Source::least_period(self src: Source, homes: Homes, bodies: List<Frame>, rows: List<List<Nat>>, d, count, best, most: Nat) → Nat {
+    match count {
+        Zero => best,
+        Succ(c) => {
+            let gain = src.gain_in(homes, bodies, rows, Succ(d));
+            match Succ(gain * Succ(best)).leb(most * Succ(d)) {
+                True => src.least_period(homes, bodies, rows, Succ(d), c, d, gain),
+                False => src.least_period(homes, bodies, rows, Succ(d), c, best, most),
+            }
+        },
+    }
+}
+
+// The period levels are read in: the one up to as many as there are
+// procedures with the least gain a level, the shortest of those. Any
+// period is sound (`Charges::levels_periodic`); the least gain a level is
+// the heaviest cycle's, which makes the room exact.
+fn Source::period(self src: Source, homes: Homes, bodies: List<Frame>) → Nat {
+    let checks = src.procedures.checks();
+    let ranks = src.procedures.ranks(checks);
+    let table = homes.room_table(src.functions);
+    let from = src.procedures.len();
+    let rows = src.procedures.rows_after(bodies, homes.places, table, checks, ranks, src.procedures.level_row(bodies, homes.places, table, checks, ranks, from), Succ(from));
+    Succ(src.least_period(homes, bodies, rows, 1, from - 1, 0, src.gain_in(homes, bodies, rows, 1)))
+}
+
+// What procedure `p`'s body takes below its frame with `k` levels left,
+// read in periods.
+fn Source::room_total(self src: Source, homes: Homes, bodies: List<Frame>, k, p: Nat) → Nat {
+    let period = src.period(homes, bodies);
+    k.periodic(src.procedures.len(), period, src.gain(homes, bodies, period), λ i => src.total(homes, bodies, i, p))
+}
+
+// What `main`'s body takes below its frame with `k` levels left, read in
+// periods: with many levels, a period's rows and a product, not a row a
+// level.
+fn Source::room_top(self src: Source, homes: Homes, bodies: List<Frame>, k: Nat) → Nat {
+    let period = src.period(homes, bodies);
+    k.periodic(src.procedures.len(), period, src.gain(homes, bodies, period), λ i => src.top(homes, bodies, i))
+}
+
 // Whether every call among `callees` without a check goes to a rank below
 // `rank`.
 fn List::under_rank(self callees: List<Nat>, checks: List<Bool>, ranks: List<Nat>, rank: Nat) → Bool {
@@ -1733,9 +1823,9 @@ fn Source::ranked(self src: Source) → Bool { src.procedures.ranked_with(src.ma
 
 // The bytes `main`'s activation leaves below its frame: what its body
 // takes at its rank, above every procedure's, with the levels of checked
-// calls the source asks for (`Source.levels`) and one return address more
-// (`Target.roomy`).
-fn Source::left(self src: Source, homes: Homes, bodies: List<Frame>) → Nat { src.top(homes, bodies, src.levels) + 8 }
+// calls the source asks for (`Source.levels`, read in periods) and one
+// return address more (`Target.roomy`).
+fn Source::left(self src: Source, homes: Homes, bodies: List<Frame>) → Nat { src.room_top(homes, bodies, src.levels) + 8 }
 
 // What a program needs of its stack: `main`'s frame and the bytes below it.
 fn Source::need(self src: Source, homes: Homes, bodies: List<Frame>) → Nat { 8 * src.words + src.left(homes, bodies) }

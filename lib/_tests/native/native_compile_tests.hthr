@@ -437,6 +437,41 @@ theorem alternating_ranked(): alternating().ranked() = True { refl }
 theorem alternating_shallow_source_exits(): ITree::next(Events::linux(), alternating_shallow().tree([], 8)) = Exits(BitVec::ofNat(23)) { refl }
 theorem alternating_shallow_exits(): compiled_next(alternating_shallow(), 8) = Exits(call_depth_status()) { refl }
 
+// Two procedures of different levels in a cycle: `b` keeps two words more
+// across its call, 56 bytes a level against `a`'s 40. Six levels are
+// three of each, 8 + 3 * 40 + 3 * 56 = 296, seven one more of `a`'s; the
+// room is read in periods of two levels, 96 bytes a period, so it is exact
+// at any number of levels (`Source::period`, `Charges::levels_periodic`).
+fn heavy_body(other: Nat) → Stmt {
+    Then(ops([Const(64, 4, 0), Equal(64, 3, 1, 4)]),
+        Branch(3,
+            ops([Const(64, 2, 0)]),
+            Then(ops([Const(64, 4, 1), Sub(64, 5, 1, 4), Const(64, 8, 3), Const(64, 9, 4)]),
+                Then(Perform(other, [5], [6]), ops([Add(64, 2, 6, 1), Add(64, 2, 2, 8), Add(64, 2, 2, 9)])))))
+}
+fn uneven_to(n, levels: Nat) → Source {
+    Source(functions := [], buffers := [], words := 10,
+        main := Then(ops([Const(64, 0, n)]), Then(Perform(0, [0], [7]), Exit(7))),
+        procedures := [
+            Procedure(params := [1], results := [2], body := alternate_body(1, False)),
+            Procedure(params := [1], results := [2], body := heavy_body(0)),
+        ], levels := levels)
+}
+fn uneven() → Source { uneven_to(5, 6) }
+theorem uneven_level_first(): uneven().cost(0) = 40 { refl }
+theorem uneven_level_second(): uneven().cost(1) = 56 { refl }
+theorem uneven_period(): uneven().period(uneven().homes(), uneven().bodies()) = 2 { refl }
+theorem uneven_left(): uneven().left(uneven().homes(), uneven().bodies()) = 296 { refl }
+theorem uneven_odd_left(): uneven_to(5, 7).left(uneven_to(5, 7).homes(), uneven_to(5, 7).bodies()) = 336 { refl }
+theorem uneven_compiles(): refused(uneven()) = [] { refl }
+theorem uneven_shallow_exits(): compiled_next(uneven_to(5, 5), 8) = Exits(call_depth_status()) { refl }
+
+// Many levels cost the room a period's rows and a long division, not a row
+// a level: 100,000 levels of `sum`, 100,001 of each cycle.
+theorem summing_many_left(): summing_to(20, 100000).left(summing_to(20, 100000).homes(), summing_to(20, 100000).bodies()) = 4000008 { refl }
+theorem alternating_many_left(): alternating_to(5, 100001).left(alternating_to(5, 100001).homes(), alternating_to(5, 100001).bodies()) = 4000048 { refl }
+theorem uneven_many_left(): uneven_to(5, 100001).left(uneven_to(5, 100001).homes(), uneven_to(5, 100001).bodies()) = 4800048 { refl }
+
 // A call of no procedure, and one with an argument too many, are refused
 // at the call; a procedure whose body reads a word not its parameter, at
 // the program.
