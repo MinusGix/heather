@@ -20,6 +20,7 @@
 // and not a pattern's variables, so a recursive result that is read twice
 // is bound with `shared`.
 import function_ir;
+import function_ir_operation;
 import function_ir_eval;
 import function_ir_state;
 import function_ir_writes;
@@ -83,6 +84,7 @@ fn Node::read_through(self node: Node, copies: Copies) → Step {
         ShiftLeft(w, _, v, _) => swap_one(v, copies.read(w, v)),
         LogicalShiftRight(w, _, v, _) => swap_one(v, copies.read(w, v)),
         RotateRight(w, _, v, _) => swap_one(v, copies.read(w, v)),
+        Apply(_, w, _, l, r) => swap_two(l, r, copies.read(w, l), copies.read(w, r)),
         ArithmeticShiftRight(w, _, v, _) => swap_one(v, copies.read(w, v)),
         UnsignedLessThan(w, _, l, r) => swap_two(l, r, copies.read(w, l), copies.read(w, r)),
         SignedLessThan(w, _, l, r) => swap_two(l, r, copies.read(w, l), copies.read(w, r)),

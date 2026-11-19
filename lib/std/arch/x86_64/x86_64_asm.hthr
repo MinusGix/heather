@@ -462,6 +462,9 @@ fn Instruction::numbers(self instruction: Instruction) → List<Nat> {
         MovRI32(d, immediate) => [21, d.index(), immediate.toNat()],
         MovSelf32(d) => [17, d.index()],
         RorRI32(d, immediate) => [18, d.index(), immediate.toNat()],
+        ImulRR(d, s) => [22, d.index(), s.index()],
+        MulR(s) => [23, s.index()],
+        ShiftCl(op, d) => [24, match op { OpShl => 0, OpShr => 1, OpSar => 2 }, d.index()],
     }
 }
 

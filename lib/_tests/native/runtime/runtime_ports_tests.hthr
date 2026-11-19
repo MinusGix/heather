@@ -1,0 +1,227 @@
+// The ledger of ports (docs/native/dogfooding-plan.md §5.1): small pieces of
+// the Rust in Heather's own crates, written as a newcomer to `runtime fn`
+// would write them. A port the generator or the elaborator does not take yet
+// stands under `// expect-error:` with its refusal, so the gate holds the
+// reason; when a round lands the feature, the expectation fails, and that
+// round turns the row into a compiled function with a run by `refl` under it.
+//
+// Each row says what it ports and the rung of the plan's ladder (§4) it
+// waits on: 1 the scalar core, 2 spans of anything, 3 inductive data,
+// 4 functional Heather. Nothing here is imported from outside.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_div;
+import bitvec_omega;
+import algebra;
+import omega;
+import vector;
+import bitvec_bytes;
+import nat_map;
+import list_window;
+import layout;
+import stored;
+import part;
+import laid;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import rt_file_reflect;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_run;
+import function_ir_writes;
+import function_ir_link;
+import function_ir_placeless;
+import function_ir_lower;
+import function_ir_lower_calls;
+import x86_64_asm;
+import runtime;
+import runtime_file;
+import stored_words;
+import stored_accessor;
+import rt_held;
+import rt_held_fields;
+import rt_held_reflect;
+import bytes;
+import rt_bytes;
+import rt_bytes_loop;
+
+// ---------------------------------------------------------------------------
+// Rung 1: operations
+
+// FNV-1a, the shape of a hash in `crates/cache`: a multiply.
+runtime fn List::port_fnv(self s: List<u8>, n, i, h: u64) → u64 decreases (n - i).toNat() {
+    if lt: i < n { s.port_fnv(n, i + 1, h.bxor(↑s.byte_within(n, i)) * 1099511628211) } else { h }
+}
+
+theorem port_fnv_runs(): List::port_fnv(b"hi", 2, 0, 14695981039346656037) = 628919584683901914 { refl }
+
+// A shift by a count that is a word (`Numeral::bit`, a varint's shift).
+runtime fn port_shift(x, k: u64) → u64 { x.shift_left(k.toNat()) }
+
+// Zero from the width up, as `shift_left` is.
+theorem port_shift_runs(): port_shift(3, 4) = 48 ∧ port_shift(1, 63) = 9223372036854775808 ∧ port_shift(1, 64) = 0 ∧ port_shift(5, 1000) = 0 {
+    ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩
+}
+
+// A digit of a number being printed (`Numeral::div_rem` at one limb).
+runtime fn port_tenth(x: u64) → u64 { x / 10 }
+
+theorem port_tenth_runs(): port_tenth(1234) = 123 ∧ port_tenth(9) = 0 { ⟨refl, refl⟩ }
+
+// ---------------------------------------------------------------------------
+// Rung 1: what crosses a function's boundary
+
+// A byte's class in the scanner, the byte a parameter.
+// expect-error: a parameter that is not a 64-bit word
+runtime fn port_classify(b: u8) → u64 {
+    if b = b' ' { 0 } else if b'0' <= b ∧ b <= b'9' { 1 } else if b'a' <= b ∧ b <= b'z' { 2 } else { 3 }
+}
+
+// A token kind as the enum it is in Rust (`TokKind`).
+inductive PortKind { Ident, Number, Space, Other }
+
+// expect-error: `PortKind` has no runtime layout
+runtime fn port_weight(k: PortKind) → u64 { match k { Ident => 3, Number => 2, Space => 0, Other => 1 } }
+
+// Two results at once (a value and whether it fits).
+record PortParsed { value: u64, ok: u64 }
+
+// expect-error: `PortParsed` has no runtime layout
+runtime fn port_split(x: u64) → PortParsed { PortParsed(x + 1, x - 1) }
+
+// ---------------------------------------------------------------------------
+// Rung 1: loops and recursion
+
+// Two words carried round a loop.
+// expect-error: `port_fib#State` has no runtime layout
+runtime fn port_fib(n: u64) → u64 {
+    let mut a: u64 = 0;
+    let mut b: u64 = 1;
+    for i in 0..n { let t = a + b; a := b; b := t; }
+    a
+}
+
+// A loop whose measure halves (`Numeral::bits`).
+// expect-error: was not proved automatically
+runtime fn port_bits(n: u64) → u64 {
+    let mut x = n;
+    let mut c: u64 = 0;
+    while 0 < x decreases x.toNat() { x := x.shift_right(1); c := c + 1; }
+    c
+}
+
+// A read-only loop over a span that carries its length (a checksum).
+// expect-error: a function over a span returns
+runtime fn Bytes::port_sum({n: u64}, self s: Bytes(n)) → u64 {
+    let mut h: u64 = 0;
+    for i in 0..s.len() { h := h + ↑s[i]; }
+    h
+}
+
+// `memchr`: leave the loop where the byte is found.
+// expect-error: has no `break`, `continue` or `return` yet
+runtime fn Bytes::port_find({n: u64}, self s: Bytes(n), b: u8) → u64 {
+    for i in 0..s.len() {
+        if s[i] = b { return i; }
+    }
+    n
+}
+
+// The same as a `while` whose test reads the span.
+// expect-error: a function over a span returns
+runtime fn Bytes::port_find_while({n: u64}, self s: Bytes(n), b: u8) → u64 {
+    let mut i: u64 = 0;
+    while i < s.len() && s[i] ≠ b decreases (n - i).toNat() { i := i + 1; }
+    i
+}
+
+// Count a byte and clear it: a store under an `if`, with code after it.
+// expect-error: the span through a branch that joins again
+runtime fn Bytes::port_count_clear({n: u64}, mut self s: Bytes(n), b: u8) → u64 {
+    let mut c: u64 = 0;
+    for i in 0..s.len() { if s[i] = b { c := c + 1; s[i] := 0; } }
+    c
+}
+
+// Nesting depth, the shape of recursive descent: a call of itself that is
+// not the last thing it does.
+// expect-error: a call of itself that is not the last thing it does
+runtime fn List::port_depth(self s: List<u8>, n, i: u64) → u64 decreases (n - i).toNat() {
+    if h: i < n {
+        let rest = s.port_depth(n, i + 1);
+        if s.byte_within(n, i) = b'(' { rest + 1 } else { rest }
+    } else { 0 }
+}
+
+// ---------------------------------------------------------------------------
+// Rung 2: spans of anything, several at once
+
+// `Numeral::pred`: a borrow walking up the limbs.
+// expect-error: a type with no runtime layout
+runtime fn port_pred_limbs(mut limbs: [u64; 4]) → u64 {
+    let mut borrow: u64 = 1;
+    for i in 0..4 {
+        let old = limbs[i];
+        limbs[i] := old - borrow;
+        borrow := if old < borrow { 1 } else { 0 };
+    }
+    borrow
+}
+
+// `memcpy`: one span read, another written.
+// expect-error: `Bytes` has no runtime layout
+runtime fn Bytes::port_copy_from({n, m: u64}, mut self dst: Bytes(n), src: Bytes(m)) → u64 {
+    let mut i: u64 = 0;
+    while i < dst.len() && i < src.len() decreases (n - i).toNat() {
+        dst[i] := src[i];
+        i := i + 1;
+    }
+    i
+}
+
+// ---------------------------------------------------------------------------
+// Rung 3: inductive data
+
+// Where a byte occurs, as a list.
+// expect-error: a function over a span returns
+runtime fn Bytes::port_positions({n: u64}, self s: Bytes(n), b: u8) → List<u64> {
+    let mut out: List<u64> = [];
+    for i in 0..s.len() { if s[i] = b { out := Cons(i, out); } }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// Rung 4: functional Heather
+
+// A count as the number it is.
+// expect-error: a function over a span returns
+runtime fn Bytes::port_count({n: u64}, self s: Bytes(n), b: u8) → Nat {
+    let mut c: Nat = 0;
+    for i in 0..s.len() { if s[i] = b { c := c + 1; } }
+    c
+}
+
+// A call of an ordinary generic function with a function passed.
+fn port_twice<A>(f: A → A, x: A) → A { f(f(x)) }
+runtime fn port_bump(x: u64) → u64 { x + 3 }
+
+// expect-error: `port_twice` is an ordinary fn
+runtime fn port_bump_twice(x: u64) → u64 { port_twice(port_bump, x) }
+
+theorem port_bump_runs(): port_bump(4) = 7 { refl }

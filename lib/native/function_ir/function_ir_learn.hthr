@@ -79,6 +79,7 @@
 // test a function tested at its entry carries is decided where the
 // function is inlined into a loop whose bound gives the index its range.
 import function_ir;
+import function_ir_operation;
 import function_ir_eval;
 import function_ir_state;
 import function_ir_writes;
@@ -1434,6 +1435,7 @@ fn Node::renamed(self node: Node, names: NatMap<Nat>, output: Nat) → Node {
         ShiftLeft(w, _, v, n) => ShiftLeft(w, output, named(names, v), n),
         LogicalShiftRight(w, _, v, n) => LogicalShiftRight(w, output, named(names, v), n),
         RotateRight(w, _, v, n) => RotateRight(w, output, named(names, v), n),
+        Apply(op, w, _, l, r) => Apply(op, w, output, named(names, l), named(names, r)),
         ArithmeticShiftRight(w, _, v, n) => ArithmeticShiftRight(w, output, named(names, v), n),
         UnsignedLessThan(w, _, l, r) => UnsignedLessThan(w, output, named(names, l), named(names, r)),
         SignedLessThan(w, _, l, r) => SignedLessThan(w, output, named(names, l), named(names, r)),

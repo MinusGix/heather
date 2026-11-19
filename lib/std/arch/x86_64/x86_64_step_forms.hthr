@@ -89,6 +89,21 @@ fn decode_rr_form(opcode: BitVec(8), rm, reg: Gpr) → Option<StepForm> {
     }
 }
 
+// D3 /4, /5 and /7 the shifts of r/m by CL, F7 /4 MUL of RAX by r/m; any
+// other opcode is a two-register form.
+fn decode_digit_form(opcode: BitVec(8), rm, reg: Gpr) → Option<StepForm> {
+    match opcode.eq_dec(BitVec::ofNat(0xd3)) {
+        Inl(_) => match ShiftOp::of_extension(reg) {
+            None => None,
+            Some(op) => emitted_form(ShiftCl(op, rm)),
+        },
+        Inr(_) => match opcode.eq_dec(BitVec::ofNat(0xf7)) {
+            Inl(_) => match reg.same(Rsp) { True => emitted_form(MulR(rm)), False => None },
+            Inr(_) => decode_rr_form(opcode, rm, reg),
+        },
+    }
+}
+
 // 83 /0 ib and 81 /0 id: ADD of a sign-extended immediate into r/m, read
 // from the bytes after ModRM, and 83 /7 ib and 81 /7 id CMP of r/m with
 // one; D1 /4, /5 and /7 the one-bit shifts of r/m; any other opcode is a
@@ -116,7 +131,7 @@ fn decode_register_form(opcode: BitVec(8), rm, reg: Gpr, rest: List<BitVec(8)>) 
                             Some(op) => emitted_form(ShiftImm(op, rm, b0)),
                         },
                     },
-                    Inr(_) => decode_rr_form(opcode, rm, reg),
+                    Inr(_) => decode_digit_form(opcode, rm, reg),
                 },
             },
             Inl(_) => match rest {
@@ -348,14 +363,18 @@ fn decode_mov_ri_form(rex, opcode: BitVec(8), rest: List<BitVec(8)>) → Option<
     }
 }
 
-// REX.W 0F B6 /r: the byte load; its ModRM is the fourth byte.
+// REX.W 0F B6 /r: the byte load; REX.W 0F AF /r: IMUL r64, r/m64. The
+// ModRM is the fourth byte.
 fn decode_load_form(rex: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
     match rest {
         Nil => None,
-        Cons(_, t1) => match t1 {
+        Cons(second, t1) => match t1 {
             Nil => None,
-            Cons(modrm, _) => Some(FormEmitted(EmitLoad(ByteLoad(
-                destination := reg_of(rex, modrm), base := rm_of(rex, modrm))))),
+            Cons(modrm, _) => match second.eq_dec(BitVec::ofNat(0xaf)) {
+                Inl(_) => emitted_form(ImulRR(reg_of(rex, modrm), rm_of(rex, modrm))),
+                Inr(_) => Some(FormEmitted(EmitLoad(ByteLoad(
+                    destination := reg_of(rex, modrm), base := rm_of(rex, modrm))))),
+            },
         },
     }
 }
@@ -384,9 +403,12 @@ fn decode_rex_setcc_form(rex: BitVec(8), rest: List<BitVec(8)>) → Option<StepF
 
 fn decode_rex_form(rex, opcode: BitVec(8), rest: List<BitVec(8)>) → Option<StepForm> {
     match byte_bit7(opcode) {
-        // B8+r, 88, 89 or 85.
+        // B8+r, 88, 89 or 85, or F7 (bit 6 set, which B8+r's is not).
         True => match byte_bit5(opcode) {
-            True => decode_mov_ri_form(rex, opcode, rest),
+            True => match byte_bit6(opcode) {
+                True => decode_modrm_form(rex, opcode, rest),
+                False => decode_mov_ri_form(rex, opcode, rest),
+            },
             False => decode_modrm_form(rex, opcode, rest),
         },
         // 0F: the byte load under REX.W, SETcc under a REX without it.
@@ -601,6 +623,13 @@ theorem ordinary_form_complete(instruction: Instruction, rest: List<BitVec(8)>):
         RorRI32(destination, _) => match destination {
             Rax => refl, Rcx => refl, Rdx => refl, Rbx => refl, Rsp => refl, Rbp => refl, Rsi => refl, Rdi => refl,
             R8 => refl, R9 => refl, R10 => refl, R11 => refl, R12 => refl, R13 => refl, R14 => refl, R15 => refl,
+        },
+        ImulRR(destination, source) => rr_form_back(λ x y => ImulRR(y, x), source, destination),
+        MulR(source) => cong_fn(λ (d: Gpr) => emitted_form(MulR(d)), rm_of_fields(source, Rsp, True, True)),
+        ShiftCl(op, destination) => match op {
+            OpShl => cong_fn(λ (d: Gpr) => emitted_form(ShiftCl(OpShl, d)), rm_of_fields(destination, Rsp, True, True)),
+            OpShr => cong_fn(λ (d: Gpr) => emitted_form(ShiftCl(OpShr, d)), rm_of_fields(destination, Rbp, True, True)),
+            OpSar => cong_fn(λ (d: Gpr) => emitted_form(ShiftCl(OpSar, d)), rm_of_fields(destination, Rdi, True, True)),
         },
     }
 }

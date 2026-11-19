@@ -10,6 +10,7 @@
 // bit of the number it is of, and a function's spelling is mostly numbers.
 // `spelled_text` is what the reader makes of one.
 import function_ir;
+import function_ir_operation;
 import bool;
 import char;
 import list;
@@ -17,6 +18,17 @@ import nat;
 import nat_map;
 import option;
 import string;
+
+// The name a refusal or an explanation shows (here, beside the other
+// spellings: `function_ir_operation` is read where text is not).
+fn Operation::name(self op: Operation) → String {
+    match op { Mul => "mul", ShlBy => "shl", ShrBy => "shr", UDiv => "udiv", URem => "urem" }
+}
+
+// The constructor's name, as a certificate spells the operation back.
+fn Operation::constructor(self op: Operation) → String {
+    match op { Mul => "Mul", ShlBy => "ShlBy", ShrBy => "ShrBy", UDiv => "UDiv", URem => "URem" }
+}
 
 fn spell_codes(chars: List<Char>, after: List<Nat>) → List<Nat> {
     match chars { Nil => after, Cons(c, rest) => Cons(c.code, spell_codes(rest, after)) }
@@ -64,6 +76,7 @@ fn Node::spelled(self node: Node) → List<Nat> → List<Nat> {
         ShiftLeft(w, o, a, b) => spell_of("ShiftLeft", [w, o, a, b]),
         LogicalShiftRight(w, o, a, b) => spell_of("LogicalShiftRight", [w, o, a, b]),
         RotateRight(w, o, a, b) => spell_of("RotateRight", [w, o, a, b]),
+        Apply(op, w, o, a, b) => spell_call("Apply", Cons(spell_text(op.constructor()), [w, o, a, b].map(spell_number))),
         ArithmeticShiftRight(w, o, a, b) => spell_of("ArithmeticShiftRight", [w, o, a, b]),
         UnsignedLessThan(w, o, a, b) => spell_of("UnsignedLessThan", [w, o, a, b]),
         SignedLessThan(w, o, a, b) => spell_of("SignedLessThan", [w, o, a, b]),

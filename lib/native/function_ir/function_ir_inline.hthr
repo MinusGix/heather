@@ -25,6 +25,7 @@
 // `inline_search` is a searcher: every wanted call, with the least bounds.
 // It is not trusted; `inline_function` checks what it proposes.
 import function_ir;
+import function_ir_operation;
 import function_ir_eval;
 import function_ir_state;
 import function_ir_writes;
@@ -61,6 +62,7 @@ fn Node::raised(self node: Node, by: Nat) → Node {
         ShiftLeft(width, output, value, amount) => ShiftLeft(width, output + by, value + by, amount),
         LogicalShiftRight(width, output, value, amount) => LogicalShiftRight(width, output + by, value + by, amount),
         RotateRight(width, output, value, amount) => RotateRight(width, output + by, value + by, amount),
+        Apply(op, width, output, left, right) => Apply(op, width, output + by, left + by, right + by),
         ArithmeticShiftRight(width, output, value, amount) => ArithmeticShiftRight(width, output + by, value + by, amount),
         BufferLoad(output, buffer, index) => BufferLoad(output + by, buffer, index + by),
         BufferStore(output, buffer, index, value) => BufferStore(output + by, buffer, index + by, value + by),
@@ -113,6 +115,7 @@ theorem Node::raised_runs(self node: Node, by: Nat, values: Valuation(), before,
         ShiftLeft(_, _, _, _) => λ ran => ran,
         LogicalShiftRight(_, _, _, _) => λ ran => ran,
         RotateRight(_, _, _, _) => λ ran => ran,
+        Apply(_, _, _, _, _) => λ ran => ran,
         ArithmeticShiftRight(_, _, _, _) => λ ran => ran,
         UnsignedLessThan(_, _, _, _) => λ ran => ran,
         SignedLessThan(_, _, _, _) => λ ran => ran,

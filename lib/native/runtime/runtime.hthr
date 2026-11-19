@@ -63,6 +63,7 @@ import rt;
 import rt_reflect;
 import rt_lower;
 import function_ir;
+import function_ir_operation;
 import function_ir_eval;
 import rt_loop;
 import rt_file;
@@ -998,6 +999,7 @@ fn runtime_ctors_at(h: Handle) → Tac<List<Expr>> { ctors(h).or_fail("runtime: 
 def runtime_w_ty: Ty = Bit;
 def runtime_w_tm: Tm = Var(0);
 def runtime_w_op: Op = Neg;
+def runtime_w_operation: Operation = Mul;
 def runtime_w_fun: Fun = Fun([], Bit, Var(0));
 def runtime_w_sig: Sig = Sig([], Bit);
 def runtime_w_world: World = World(RecInfo::none, [], trivial);
@@ -1016,7 +1018,7 @@ def runtime_w_buffers: List<List<BitVec(8)>> = [];
 def runtime_w_bytes: List<BitVec(8)> = [];
 
 record RtTypes { ty: Handle, tm: Handle, op: Handle, fun_t: Handle, sig: Handle, world: Handle, verdict: Handle, function: Handle,
-    tys: Handle, nats: Handle, sigs: Handle, words: Handle, word: Handle, srcs: Handle, functions: Handle }
+    tys: Handle, nats: Handle, sigs: Handle, words: Handle, word: Handle, srcs: Handle, functions: Handle, operation: Handle }
 
 fn runtime_type_of(name: String) → Tac<Handle> {
     runtime_ref(name).bind(λ g => infer(Global(g)).or_fail("runtime: `" ++ name ++ "`: "))
@@ -1027,14 +1029,16 @@ fn runtime_type_handles() → Tac<RtTypes> {
         <- runtime_type_of(name_of(runtime_w_fun)), <- runtime_type_of(name_of(runtime_w_sig)), <- runtime_type_of(name_of(runtime_w_world)),
         <- runtime_type_of(name_of(runtime_w_verdict)), <- runtime_type_of(name_of(runtime_w_function)), <- runtime_type_of(name_of(runtime_w_tys)),
         <- runtime_type_of(name_of(runtime_w_nats)), <- runtime_type_of(name_of(runtime_w_sigs)), <- runtime_type_of(name_of(runtime_w_words)),
-        <- runtime_type_of(name_of(runtime_w_word)), <- runtime_type_of(name_of(runtime_w_srcs)), <- runtime_type_of(name_of(runtime_w_functions))))
+        <- runtime_type_of(name_of(runtime_w_word)), <- runtime_type_of(name_of(runtime_w_srcs)), <- runtime_type_of(name_of(runtime_w_functions)),
+        <- runtime_type_of(name_of(runtime_w_operation))))
 }
 
 fn runtime_at(es: List<Expr>, i: Nat) → Expr { es.nth(i).unwrap_or(Blank) }
 
 // The constructors quoting reads: `Ty`, `Tm`, `Op`, `Fun`, `Sig`, and the
 // lists of codes, indices and signatures.
-record RtQ { ty: List<Expr>, tm: List<Expr>, op: List<Expr>, tys: List<Expr>, nats: List<Expr>, sigs: List<Expr>, mk_fun: Expr, mk_sig: Expr }
+record RtQ { ty: List<Expr>, tm: List<Expr>, op: List<Expr>, tys: List<Expr>, nats: List<Expr>, sigs: List<Expr>, mk_fun: Expr, mk_sig: Expr,
+    operation: List<Expr> }
 
 fn RtQ::seq(nil_cons: List<Expr>, xs: List<Expr>) → Expr {
     match xs { Nil => runtime_at(nil_cons, 0), Cons(x, rest) => ap(runtime_at(nil_cons, 1), [x, RtQ::seq(nil_cons, rest)]) }
@@ -1065,6 +1069,7 @@ fn Op::quote(self o: Op, q: RtQ) → Expr {
         Lshr(w, k) => ap(c, [NatLit(w), NatLit(k)]),
         Ashr(w, k) => ap(c, [NatLit(w), NatLit(k)]),
         Sext(n, extra) => ap(c, [NatLit(n), NatLit(extra)]),
+        Apply(operation, w) => ap(c, [runtime_at(q.operation, operation.code()), NatLit(w)]),
         _ => ap(c, [NatLit(o.code().snd.fst)]),
     }
 }
@@ -1101,7 +1106,8 @@ fn runtime_quoting(ts: RtTypes) → Tac<RtQ> {
     let sig_list <- runtime_ctors_at(ts.sigs);
     let funs <- runtime_ctors_at(ts.fun_t);
     let sigs <- runtime_ctors_at(ts.sig);
-    pure(RtQ(tys, tms, ops, ty_list, nat_list, sig_list, runtime_at(funs, 0), runtime_at(sigs, 0)))
+    let operations <- runtime_ctors_at(ts.operation);
+    pure(RtQ(tys, tms, ops, ty_list, nat_list, sig_list, runtime_at(funs, 0), runtime_at(sigs, 0), operations))
 }
 
 // A pair, its types left to the elaborator: what the generator spells a

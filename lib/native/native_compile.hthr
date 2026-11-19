@@ -72,6 +72,7 @@ import span_set;
 import native_alloc;
 import native_structured;
 import function_ir;
+import function_ir_operation;
 import function_ir_eval;
 import function_ir_lower;
 import function_ir_lower_calls;
@@ -313,6 +314,7 @@ fn Node::read_ports(self node: Node) → List<Port> {
         ShiftLeft(width, _, value, _) => [Port(value, width)],
         LogicalShiftRight(width, _, value, _) => [Port(value, width)],
         RotateRight(width, _, value, _) => [Port(value, width)],
+        Apply(_, width, _, left, right) => [Port(left, width), Port(right, width)],
         ArithmeticShiftRight(width, _, value, _) => [Port(value, width)],
         UnsignedLessThan(width, _, left, right) => [Port(left, width), Port(right, width)],
         SignedLessThan(width, _, left, right) => [Port(left, width), Port(right, width)],
@@ -957,6 +959,7 @@ fn Node::renamed(self node: Node, output: Nat) → Node {
         ShiftLeft(width, _, value, amount) => ShiftLeft(width, output, value, amount),
         LogicalShiftRight(width, _, value, amount) => LogicalShiftRight(width, output, value, amount),
         RotateRight(width, _, value, amount) => RotateRight(width, output, value, amount),
+        Apply(op, width, _, left, right) => Apply(op, width, output, left, right),
         ArithmeticShiftRight(width, _, value, amount) => ArithmeticShiftRight(width, output, value, amount),
         UnsignedLessThan(width, _, left, right) => UnsignedLessThan(width, output, left, right),
         SignedLessThan(width, _, left, right) => SignedLessThan(width, output, left, right),
