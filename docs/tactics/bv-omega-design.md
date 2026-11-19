@@ -122,6 +122,8 @@ classifies `t` by its head:
 | a definition | its reduct's, under a step budget |
 | `BitVec::band(x, y)` | a leaf, beside its range `toNat(x & y) <= m` when `y` is `ofNat(m)` with `m` a literal, else `<= toNat(y)` with `y` walked (`toNat_band_ofNat_le`, `toNat_band_le_right`; `issues/bv-omega-masked-word-bound.md`) |
 | `BitVec::shift_right(x, k)`, `k` a numeral | a leaf, beside `q * 2^k <= toNat(x) < q * 2^k + 2^k` for its value `q`, with `x` walked (`toNat_shift_right_le`, `toNat_shift_right_lt`, where `bitvec_shift_nat` is loaded): the midpoint `lo + ((hi - lo) >> 1)` |
+| a destructor of a value built in place (`Range(lo := x + 1, …).lo`) | what it projects, under the same budget |
+| a local | a leaf |
 | anything else | a leaf |
 
 A definition (`double`, `times256`, `line_state_start`) is stepped through the
@@ -194,6 +196,16 @@ equating the operand's value with the Nat it was built from.
 - Operations: `add`, `sub`, `ofNat`, `word_of_nat`, `take_low`, `drop_low`,
   and definitions that step to them; `x & y`, `zero_extend` and `x >> k` at
   a numeral `k` as leaves with facts beside them (§3's table).
+- Goals read through their reducts: a defined proposition that mentions no
+  word (`p.Holds()` whose match is on a constructor) is unfolded until one
+  does, as `omega` unfolds one; and a subterm with no source spelling, such
+  as `b.next.lo` where `b` is a constructor's payload after a step like
+  `Pass::Keeps` reduces, is read as its first reduct that spells, one headed
+  by a call where the budget reaches one (`aliased_goal`; a call that steps
+  to a local, `s.put(…).len()` of a `Bytes(n)`, is the first case). The
+  proof is written for the read goal and checked against the original by
+  conversion. A conjunct of an anonymous pair, `⟨bv_omega, …⟩`, meets such
+  goals.
 - Facts in scope: a comparison whose operands have no spelling in the
   context (a binder another one shadows, as in an `induct` case) is left
   out, not a failure of the whole call.

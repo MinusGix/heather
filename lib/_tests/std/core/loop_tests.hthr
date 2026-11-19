@@ -59,16 +59,11 @@ record Range { lo: u64, hi: u64 }
 // The span's byte at `i`, as a word.
 fn at(s: List<u8>, i: u64) → u64 { s.nth(i.toNat()).unwrap_or(0).zero_extend(56) }
 
-theorem midpoint_from(lo, hi: u64, h: lo < hi): lo <= lo + ((hi - lo) >> 1) { bv_omega }
-theorem midpoint_below(lo, hi: u64, h: lo < hi): lo + ((hi - lo) >> 1) < hi { bv_omega }
-
 fn Range::width(self r: Range) → Nat { (r.hi - r.lo).toNat() }
 
 fn Range::search(s: List<u8>, n, key: u64, self r: Range) → Pass<Range, u64>(Range::width, r) {
     if h: r.lo < r.hi {
         let mid = r.lo + ((r.hi - r.lo) >> 1);
-        let from = midpoint_from(r.lo, r.hi, h);
-        let below = midpoint_below(r.lo, r.hi, h);
         if less: at(s, mid) < key {
             let d: ((r.hi - (mid + 1)).toNat() < (r.hi - r.lo).toNat()) = bv_omega;
             Again(Lower(next := Range(lo := mid + 1, hi := r.hi), less := squash(d)))
@@ -115,30 +110,23 @@ theorem Range::search_keeps(s: List<u8>, n, key: u64, asc: Ascending(s, n), self
     induct Range::search(s, n, key, r) {
         True::True => {
             let mid = r.lo + ((r.hi - r.lo) >> 1);
-            let fits_mid = midpoint_below(r.lo, r.hi, h);
             let below2: Under(s, n, key, mid + 1) = λ j before => {
                 let up = asc(j, mid, bv_omega, bv_omega);
                 bv_omega
             };
-            let order2: (mid + 1 <= r.hi) = bv_omega;
-            ⟨order2, ⟨fits, ⟨below2, above⟩⟩⟩
+            ⟨bv_omega, ⟨fits, ⟨below2, above⟩⟩⟩
         },
         True::False => {
             let mid = r.lo + ((r.hi - r.lo) >> 1);
-            let from_mid = midpoint_from(r.lo, r.hi, h);
-            let fits_mid = midpoint_below(r.lo, r.hi, h);
             let above2: Above(s, n, key, mid) = λ j after within reached => {
                 let up = asc(mid, j, after, within);
                 bv_omega
             };
-            let order2: (r.lo <= mid) = bv_omega;
-            let fits2: (mid <= n) = bv_omega;
-            ⟨order2, ⟨fits2, ⟨below, above2⟩⟩⟩
+            ⟨bv_omega, ⟨bv_omega, ⟨below, above2⟩⟩⟩
         },
         False => {
             let same: (r.lo = r.hi) = bv_omega;
-            let fits2: (r.lo <= n) = bv_omega;
-            ⟨fits2, ⟨below, λ (j: u64) (after: r.lo <= j) (within: j < n) => above(j, rewrite(sym(same), after), within)⟩⟩
+            ⟨bv_omega, ⟨below, λ (j: u64) (after: r.lo <= j) (within: j < n) => above(j, rewrite(sym(same), after), within)⟩⟩
         },
     }
 }

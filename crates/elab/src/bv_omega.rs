@@ -468,12 +468,14 @@ impl<'a> Walk<'a> {
     }
 
     /// How a word is taken apart: by its own head, or by the head its
-    /// definition steps to (§3). Anything else is a leaf.
+    /// definition steps to (§3), or a destructor of a value built in place
+    /// (`Span(lo := x + 1, …).lo`, which a goal read through a match on a
+    /// constructor has) by what it projects. A local is a leaf.
     fn shape(&self, word: &Rc<Term>) -> Shape {
         if let Some(shape) = self.known(word) {
             return shape;
         }
-        if !matches!(crate::spelling::app_spine(word).0, Term::GlobalTm { .. }) {
+        if matches!(crate::spelling::app_spine(word).0, Term::Var(_)) {
             return Shape::Leaf;
         }
         let oracle = self.elab.goal_oracle();
@@ -1356,6 +1358,15 @@ fn bridge_goal(elab: &Elaborator, cx: &Cx, expected: &Type) -> Option<String> {
 /// `opaque` are words kept as atoms: an attempt whose side conditions over
 /// them failed is retried with them as leaves (§5.1).
 pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: bool, opaque: &HashSet<String>) -> Result<Generated, String> {
+    // A goal that is a defined proposition (`p.Holds()` of a step whose
+    // match is on a constructor) is read as the word relation it unfolds
+    // to, as `omega` reads one; the proof is checked against the original.
+    let unfolded = if mentions_word(elab, expected) {
+        None
+    } else {
+        crate::omega_cert::unfolded_proposition(elab, cx, expected, |ty| mentions_word(elab, ty))
+    };
+    let expected = unfolded.as_ref().unwrap_or(expected);
     let restated = aliased_goal(elab, cx, expected);
     let expected = restated.as_ref().unwrap_or(expected);
     if let Some(source) = bridge_goal(elab, cx, expected) {
@@ -1881,34 +1892,64 @@ fn hidden_roots(fact_names: &[String], restated: &[(String, Type)]) -> Vec<Strin
     roots
 }
 
-/// The goal with each call that does not spell, and whose definition steps
-/// to a local, read as that local: `s.put(i, v, inside := …).len()` of a
-/// `Bytes(n)` is `n`. The found proof inside such a call has no source
-/// spelling, which would leave the whole goal unspellable; the restated
-/// goal is the same type up to conversion, which is how the proof written
-/// for it is checked against the original.
+/// The goal with each term that does not spell read as a reduct that does:
+/// a call whose definition steps to a local (`s.put(i, v, inside := …).len()`
+/// of a `Bytes(n)` is `n`), or a field of a value built in place (`b.next.lo`
+/// where `b` is a constructor's payload, after `Pass::Keeps` steps: it is
+/// the `lo` the value was built with). The found proof inside such a call,
+/// or the encoding of the payload, has no source spelling, which would leave
+/// the whole goal unspellable; the restated goal is the same type up to
+/// conversion, which is how the proof written for it is checked against the
+/// original.
 pub(crate) fn aliased_goal(elab: &Elaborator, cx: &Cx, expected: &Type) -> Option<Type> {
-    fn collect(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, out: &mut Vec<(Term, Term)>) {
-        let (head, args) = crate::spelling::app_spine(tm);
-        if matches!(head, Term::GlobalTm { .. }) && !args.is_empty() && elab.spell_term_source(cx, tm).is_none() {
-            let local = elab.goal_oracle().unfold_to(&cx.gamma, tm, Unfold::WordShape, |reduct| {
-                matches!(reduct, Term::Var(_)).then_some(reduct)
-            });
-            if let Some(local) = local {
-                out.push(((**tm).clone(), local));
-                return;
-            }
+    // Whether `tm` spells once `out` holds its replacements. Arguments are
+    // read first, so a comparison is never unfolded for an operand's sake:
+    // a call whose every argument spells (or is replaced) spells. Only where
+    // that fails is the term itself followed to a reduct that spells.
+    fn collect(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, out: &mut Vec<(Term, Term)>) -> bool {
+        if elab.spell_term_source(cx, tm).is_some() {
+            return true;
         }
         if let Term::Succ(inner) = &**tm {
             return collect(elab, cx, inner, out);
         }
-        for arg in args {
-            collect(elab, cx, arg, out);
+        let (head, args) = crate::spelling::app_spine(tm);
+        let mark = out.len();
+        let mut all = true;
+        for arg in &args {
+            all &= collect(elab, cx, arg, out);
+        }
+        if all && !args.is_empty() && matches!(head, Term::GlobalTm { .. }) {
+            return true;
+        }
+        // A reduct headed by a call or a local, which the walk takes apart
+        // by its head, over one headed by a destructor (`Range(…).lo` spells
+        // as the field, but its head is a projection the walk does not read).
+        let mut first = None;
+        let reduct = elab.goal_oracle().unfold_to(&cx.gamma, tm, Unfold::WordShape, |reduct| {
+            if elab.spell_term_source(cx, &reduct).is_none() {
+                return None;
+            }
+            if matches!(crate::spelling::app_spine(&reduct).0, Term::GlobalTm { .. } | Term::Var(_) | Term::NatLit(_) | Term::Zero) {
+                return Some(reduct);
+            }
+            first.get_or_insert(reduct);
+            None
+        }).or(first);
+        match reduct {
+            Some(reduct) => {
+                out.truncate(mark);
+                out.push(((**tm).clone(), reduct));
+                true
+            }
+            None => false,
         }
     }
     let mut pairs = Vec::new();
     match expected {
-        Type::El { tm, .. } => collect(elab, cx, tm, &mut pairs),
+        Type::El { tm, .. } => {
+            collect(elab, cx, tm, &mut pairs);
+        }
         Type::Id { lhs, rhs, .. } => {
             collect(elab, cx, lhs, &mut pairs);
             collect(elab, cx, rhs, &mut pairs);
