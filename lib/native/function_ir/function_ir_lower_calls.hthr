@@ -7223,6 +7223,70 @@ theorem emit_functions_after_lent_calls<M>(site: Site<M>, laid: site.program.lai
         names, functions, program_needs_all(functions, λ (b: Nat) => lending.written(b), lendless, allowed)))
 }
 
+// The program's last function under the two-word contract
+// (docs/native/runtime-fn-setups-design.md §16.16): under each lending of
+// `counts` that lets it write what it needs, entered where it runs to
+// `result` and `rest`, it returns with `result` in RAX and `rest` in RDX.
+// A program's caller outside it reads RDX of the function it exports, the
+// last; a call inside the program still reads RAX alone.
+fn LastBoth<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, rooms: Nat → Nat, counts: List<Nat>, needs: Nat → Nat → Bool,
+    last: Function, earlier: List<Function>) → Type {
+    (lending: Lending) → lending.counts = counts → Loan<M>(site.fetch, site.data, stack, top, lending.spans()) →
+        ((b: Nat) → needs(earlier.len(), b).IsTrue() → lending.written(b) = True) →
+        (words: List<BitVec(64)>) → (result: BitVec(64)) → (rest: List<BitVec(64)>) → (before, after: Buffers()) →
+        site.Returns(stack, asm_labels(site.program)(earlier.len() + 1),
+            stack.EnteredBoth(program_effects(earlier), rooms, lending, top, earlier.len(), last, words, result, rest, before, after),
+            stack.AnsweredBoth(lending, result, rest, after))
+}
+
+theorem last_step<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
+    rooms: Nat → Nat, counts: List<Nat>, needs: Nat → Nat → Bool, last: Function, earlier: List<Function>, before: Emitted,
+    earlier_calls: before.prog.Within(site.program) → site.CallsLent(stack, program_effects(earlier), rooms, earlier.len(), counts, needs, top)):
+    (out: Option<Emitted>) → Grows(At(before.prog, earlier.len() + 1, Block([])), out) →
+    ((lending: Lending) → lending.counts = counts → Loan<M>(site.fetch, site.data, stack, top, lending.spans()) →
+        ((b: Nat) → needs(earlier.len(), b).IsTrue() → lending.written(b) = True) →
+        MayReturnBoth<M>(site, stack, top, program_effects(earlier), rooms, earlier.len(), lending, needs, last, before.prog, out)) →
+    out.All(λ (emitted: Emitted) => emitted.prog.Within(site.program) → LastBoth<M>(site, stack, top, rooms, counts, needs, last, earlier)) {
+    λ out => match out {
+        None => λ _ _ => trivial,
+        Some(emitted) => λ labelled returns within lending same loan covers words result rest b a => {
+            let n = earlier.len();
+            let label_in = Prog::within_trans(labelled, within);
+            let lent = earlier_calls(before.prog.within_before(n + 1, Block([]), site.program, label_in));
+            let here: site.CallsLent(stack, program_effects(earlier), rooms, n, lending.counts, needs, top) =
+                j(sym(same), λ c _ => site.CallsLent(stack, program_effects(earlier), rooms, n, c, needs, top), lent);
+            let label: (asm_labels(site.program)(n + 1) = prog_len(before.prog)) =
+                label_target(label_in.witness, site.program, before.prog, n, Block([]), site.program.laid_out_unique(laid), label_in.proof);
+            j(sym(label), λ e _ => site.Returns(stack, e,
+                    stack.EnteredBoth(program_effects(earlier), rooms, lending, top, n, last, words, result, rest, b, a),
+                    stack.AnsweredBoth(lending, result, rest, a)),
+                returns(lending, same, loan, covers).right(within, here, words, result, rest, b, a))
+        },
+    }
+}
+
+theorem emit_functions_last_both<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    top: Nat, rooms: Nat → Nat, counts: List<Nat>, needs: Nat → Nat → Bool, start: Prog, placement: List<Place>, names: Nat,
+    last: Function, earlier: List<Function>, needed: ProgramNeeds(Cons(last, earlier), needs)):
+    emit_functions_after_lent(start, Cons(last, earlier), placement, names, counts, rooms).All(λ (emitted: Emitted) =>
+        emitted.prog.Within(site.program) → LastBoth<M>(site, stack, top, rooms, counts, needs, last, earlier)) {
+    (match emit_functions_after_lent(start, earlier, placement, names, counts, rooms) as λ e =>
+        MayCallLent<M>(site, stack, top, rooms, counts, needs, earlier, e) →
+        (match e { None => None, Some(before) => last.emit_lent(before.prog, earlier.len(), before.placement, before.names, counts, rooms) }).All(
+            λ (emitted: Emitted) => emitted.prog.Within(site.program) → LastBoth<M>(site, stack, top, rooms, counts, needs, last, earlier)) {
+        None => λ _ => trivial,
+        Some(before) => λ earlier_calls => last_step<M>(site, laid, stack, top, rooms, counts, needs, last, earlier, before, earlier_calls,
+            last.emit_lent(before.prog, earlier.len(), before.placement, before.names, counts, rooms),
+            last.emit_lent_labels(before.prog, earlier.len(), before.placement, before.names, counts, rooms),
+            λ lending same loan covers => j(same, λ c _ => MayReturnBoth<M>(site, stack, top, program_effects(earlier), rooms, earlier.len(),
+                    lending, needs, last, before.prog, last.emit_lent(before.prog, earlier.len(), before.placement, before.names, c, rooms)),
+                last.emit_returns(site, laid, stack, top, program_effects(earlier), rooms, earlier.len(), lending, loan, needs, before.prog,
+                    before.placement, before.names,
+                    λ b stores => covers(b, is_true_of_eq(needs(earlier.len(), b), needed.left.left(b, stores))),
+                    last.body.asks_within(needs, λ (b: Nat) => needs(earlier.len(), b), lending.written, covers, needed.left.right)))),
+    })(emit_functions_calls_lent<M>(site, laid, stack, top, rooms, counts, needs, start, placement, names, earlier, needed.right))
+}
+
 // At one lending, of any program: every function under a lending that
 // lets each write what it needs. A program that calls over views is given
 // to a caller outside it so, with the rows of marks its functions need
@@ -7603,6 +7667,40 @@ theorem lower_program_calls<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, l
             })(λ ok => ok),
     })(λ site laid stack loan => emit_functions_after_lent_calls<M>(site, laid, stack, top, lending, loan, Start, placement,
         functions.len(), functions, lendless, rooms, allowed))
+}
+
+// The lowered program's last function under the two-word contract, at
+// one lending, of a program that lends nothing to a function that stores.
+fn ProgramLastBoth<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, bytes: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data),
+    top: Nat, rooms: Nat → Nat, lending: Lending, last: Function, earlier: List<Function>, program: Prog) → Type {
+    LastBoth<M>(Site<M>(fetch, data, program, bytes, origin), stack, top, rooms, lending.counts, λ (_: Nat) (b: Nat) => lending.written(b), last, earlier)
+}
+
+theorem lower_program_last_both<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, bytes: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), top: Nat, rooms: Nat → Nat, lending: Lending, last: Function, earlier: List<Function>, placement: List<Place>,
+    lendless: program_lendless(Cons(last, earlier)).IsTrue(),
+    allowed: (b: Nat) → program_stores(Cons(last, earlier), b).IsTrue() → lending.written(b) = True):
+    lower_program_roomed(Cons(last, earlier), placement, lending.counts, rooms).All(λ (p: Prog) =>
+        ProgramLastBoth<M>(fetch, data, bytes, origin, stack, top, rooms, lending, last, earlier, p)) {
+    let functions = Cons(last, earlier);
+    let needs = λ (_: Nat) (b: Nat) => lending.written(b);
+    (match emit_functions_after_lent(Start, functions, placement, functions.len(), lending.counts, rooms) as λ e =>
+        ((site: Site<M>) → site.program.laid_out().IsTrue() → (stack: Stack<M>(site.fetch, site.data)) →
+            e.All(λ (emitted: Emitted) => emitted.prog.Within(site.program) → LastBoth<M>(site, stack, top, rooms, lending.counts, needs, last, earlier))) →
+        (match e as λ _ => Option<Prog> {
+            None => None,
+            Some(out) => match out.prog.laid_out() { False => None, True => Some(out.prog) },
+        }).All(λ (p: Prog) => ProgramLastBoth<M>(fetch, data, bytes, origin, stack, top, rooms, lending, last, earlier, p)) {
+        None => λ _ => trivial,
+        Some(out) => λ both =>
+            (match out.prog.laid_out() as λ b => (b.IsTrue() → out.prog.laid_out().IsTrue()) →
+                (match b as λ _ => Option<Prog> { False => None, True => Some(out.prog) }).All(λ (p: Prog) =>
+                    ProgramLastBoth<M>(fetch, data, bytes, origin, stack, top, rooms, lending, last, earlier, p)) {
+                False => λ _ => trivial,
+                True => λ laid => both(Site<M>(fetch, data, out.prog, bytes, origin), laid(trivial), stack, out.prog.within_self()),
+            })(λ ok => ok),
+    })(λ site laid stack => emit_functions_last_both<M>(site, laid, stack, top, rooms, lending.counts, needs, Start, placement,
+        functions.len(), last, earlier, program_needs_all(functions, λ (b: Nat) => lending.written(b), lendless, allowed)))
 }
 
 // And at every lending, a function at a time: what a program that calls
