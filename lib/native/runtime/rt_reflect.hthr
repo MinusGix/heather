@@ -62,7 +62,7 @@ record RecEntry { g: Nat }
 // A type the program holds by its `datarepr` (docs/native/runtime-fn-setups-design.md
 // §16.13): the repr's global (what `Repr` answers for the type) and name, the spec
 // type's name (whose own operations the walk reads through), the repr's
-// `abs` and `emb`, and the type itself. Its code is `Named(recs.len() + i)`,
+// `abs` and `emb`, and the type itself. Its code is `Named(i)`,
 // `i` its place among the program's reprs, in the order the walk met them.
 record ReprEntry { repr: Nat, name: String, spec: String, abs: Nat, emb: Nat, ty: Handle }
 
@@ -174,7 +174,8 @@ record Known {
     prims: List<PrimEntry>,
     // The program's functions, in order: a `Call`'s index.
     funs: List<Nat>,
-    // The records the program reads, in order: a `Named` code's index.
+    // The records the program reads, in order: a `Named` code's index,
+    // after the program's reprs (record `i` is `Named(reprs.len() + i)`).
     recs: List<RecEntry>,
     // Whether a call of a global that is not one of `funs` may name another
     // runtime fn (one with a published reflection, `g::rt`): the `runtime`
@@ -250,6 +251,10 @@ fn ConstInit::zeroed_handles(placed: List<Pair<Pair<ConstInit, Handle>, Nat>>) �
 
 fn Known::within(self k: Known, sc: SelfCall) → Known {
     Known(k.prims, k.funs, k.recs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, Some(sc), k.reprs, k.lent, k.file, k.named, k.consts)
+}
+
+fn Known::with_recs(self k: Known, rs: List<RecEntry>) → Known {
+    Known(k.prims, k.funs, rs, k.discover, k.bitvec, k.boolean, k.list, k.io, k.nat, k.recursion, k.reprs, k.lent, k.file, k.named, k.consts)
 }
 
 fn Known::with_reprs(self k: Known, rs: List<ReprEntry>) → Known {
@@ -464,6 +469,22 @@ fn rt_repr_marker() → String { "a repr the walk has not met yet: " }
 
 fn rt_needs_repr<A>(rname: String, spec: String) → Tac<A> { rt_refuse(rt_repr_marker() ++ rname ++ "|" ++ spec) }
 
+// A record the walk has met but was not given, the same way: a type of one
+// constructor with fields, which the program holds as its fields
+// (docs/native/runtime-fn-setups-design.md §16.7, §16.16).
+fn rt_rec_marker() → String { "a record the walk has not met yet: " }
+
+// Whether a type is a record: one constructor, with fields.
+fn rt_is_record(h: Handle) → Tac<Bool> {
+    ctors(h).bind(λ cc => match cc {
+        Refused(_) => pure(False),
+        Accepted(cs) => match cs {
+            Cons(c, more) => match more { Nil => pure(match c.fields { Nil => False, Cons(_, _) => True }), Cons(_, _) => pure(False) },
+            Nil => pure(False),
+        },
+    })
+}
+
 // A type held by its `datarepr`: its place among the program's reprs, after
 // its records.
 fn Known::repr_ty(self k: Known, h: Handle, name: String) → Tac<Ty> {
@@ -471,10 +492,13 @@ fn Known::repr_ty(self k: Known, h: Handle, name: String) → Tac<Ty> {
     match k.reprs_on() {
         False => rt_refuse(none),
         True => repr_of(h).bind(λ c => match c {
-            Refused(_) => rt_refuse(none),
+            Refused(_) => match k.discover {
+                False => rt_refuse(none),
+                True => rt_is_record(h).bind(λ r => match r { True => rt_refuse(rt_rec_marker() ++ name), False => rt_refuse(none) }),
+            },
             Accepted(r) => view(r).bind(λ v => match v {
                 HGlobal(rg, rname, _) => match Known::repr_at(k.reprs, rg.id, 0) {
-                    Some(i) => pure(Named(k.recs.len() + i)),
+                    Some(i) => pure(Named(i)),
                     None => match k.discover {
                         True => rt_needs_repr(rname, name),
                         False => rt_refuse("`" ++ name ++ "` is held by its datarepr `" ++ rname ++ "`, which the program was not given"),
@@ -548,7 +572,7 @@ fn Known::ty_within(self k: Known, fuel: Nat, h: Handle) → Tac<Ty> {
                         Nil => rt_refuse("`List` without its element type"),
                     },
                     False => match Known::rec(k.recs, g.id, 0) {
-                        Some(i) => pure(Named(i)),
+                        Some(i) => pure(Named(k.reprs.len() + i)),
                         None => repr_of(h).bind(λ c => match c {
                             Accepted(_) => k.repr_ty(h, name),
                             Refused(_) => match fuel {
@@ -2386,7 +2410,10 @@ fn rt_with_reprs<A>(fuel: Nat, k: Known, run: Known → Tac<A>) → Tac<Pair<Kno
         Succ(more) => attempt(run(k)).bind(λ o => match o {
             Done(a) => pure(Pair(k, a)),
             Failed(msg, notes) => match rt_needed_repr(msg) {
-                None => fail(msg, notes),
+                None => match rt_strip(("rt: " ++ rt_rec_marker()).chars, msg.chars) {
+                    None => fail(msg, notes),
+                    Some(rest) => rt_global(String(rest)).bind(λ g => rt_with_reprs(more, k.with_recs(k.recs ++ [RecEntry(g)]), run)),
+                },
                 Some(p) => rt_repr_entry(p.fst, p.snd).bind(λ e => rt_with_reprs(more, k.with_reprs(k.reprs ++ [e]), run)),
             },
         }),

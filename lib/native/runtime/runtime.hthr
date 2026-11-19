@@ -1859,17 +1859,111 @@ fn runtime_repr_infos(word: Handle, word_repr, rfl: Expr, reprs: List<ReprEntry>
     }
 }
 
-// The world's type table: none without reprs, else each repr's
-// `RecInfo::word_repr`, its round trips `refl` at each word and each value.
-fn runtime_tys(word: Handle, reprs: List<ReprEntry>) → Tac<Expr> {
-    match reprs {
-        Nil => runtime_global(name_of(RecInfo::none)),
-        Cons(_, _) => {
+// A record the program reads, as the generator holds it
+// (docs/native/runtime-fn-setups-design.md §16.16): its type, its
+// constructor, and its fields' names and codes.
+record RecShape { ty: Handle, ctor: Handle, name: String, fields: List<String>, codes: List<Ty> }
+
+fn runtime_field_codes(k: Known, fs: List<FieldInfo>) → Tac<List<Ty>> {
+    match fs {
+        Nil => pure([]),
+        Cons(fi, rest) => match fi.ty {
+            None => runtime_fail("a record's field without its type"),
+            Some(t) => k.ty(t).bind(λ c => runtime_field_codes(k, rest).bind(λ more => pure(Cons(c, more)))),
+        },
+    }
+}
+
+fn runtime_rec_shapes(k: Known, recs: List<RecEntry>) → Tac<List<RecShape>> {
+    match recs {
+        Nil => pure([]),
+        Cons(e, rest) => {
+            let t <- as_type(Global(GlobalRef(e.g))).or_fail("runtime: a record's type: ");
+            let v <- view(t);
+            let name = match v { HGlobal(_, n, _) => n, _ => "" };
+            let cc <- ctors(t);
+            let cs <- rt_accepted("`" ++ name ++ "`'s constructor", cc);
+            match cs {
+                Cons(c, _) => match c.ctor {
+                    None => runtime_fail("`" ++ name ++ "`'s constructor is not a term"),
+                    Some(ch) => {
+                        let codes <- runtime_field_codes(k, c.fields);
+                        let more <- runtime_rec_shapes(k, rest);
+                        pure(Cons(RecShape(t, ch, name, c.fields.map(λ (fi: FieldInfo) => fi.name), codes), more))
+                    },
+                },
+                Nil => runtime_fail("`" ++ name ++ "` has no constructor"),
+            }
+        },
+    }
+}
+
+// Field `n` of a field tuple: the first of `n` seconds.
+fn runtime_flat_at(fst, snd: Expr, t: Expr, n: Nat) → Expr {
+    match n { Zero => ap(fst, [Blank, Blank, t]), Succ(m) => runtime_flat_at(fst, snd, ap(snd, [Blank, Blank, t]), m) }
+}
+
+fn runtime_flat_fields(fst, snd: Expr, t: Expr, n, count: Nat) → List<Expr> {
+    match count { Zero => [], Succ(c) => Cons(runtime_flat_at(fst, snd, t, n), runtime_flat_fields(fst, snd, t, n + 1, c)) }
+}
+
+// A record's fields as its field tuple.
+fn runtime_tuple_of(pair, unit: Expr, gets: List<Expr>) → Expr {
+    match gets { Nil => unit, Cons(g, rest) => ap(pair, [Blank, Blank, g, runtime_tuple_of(pair, unit, rest)]) }
+}
+
+fn runtime_rec_gets(name: String, fields: List<String>) → Tac<List<Expr>> {
+    match fields {
+        Nil => pure([]),
+        Cons(fname, rest) => runtime_global(name ++ "::" ++ fname).bind(λ g => runtime_rec_gets(name, rest).bind(λ more => pure(Cons(g, more)))),
+    }
+}
+
+// Each record's `RecInfo`: its constructor from the field tuple, its fields
+// as the tuple, both round trips `refl` (η for pairs, `True` and the
+// record's own constructor).
+fn runtime_rec_infos(q: RtQ, rfl: Expr, recs: List<RecShape>) → Tac<List<Expr>> {
+    match recs {
+        Nil => pure([]),
+        Cons(r, rest) => {
+            let info <- runtime_global(name_of(RecInfo));
+            let flats <- runtime_global(name_of(Ty::Flats));
+            let fst <- runtime_global("pair::Pair::fst");
+            let snd <- runtime_global("pair::Pair::snd");
+            let pair <- runtime_global(name_of(Pair::of));
+            let unit <- resolve("trivial").or_fail("runtime: `trivial`: ");
+            let codes_e = Ty::quotes(r.codes, q);
+            let tuple_t <- as_type(ap(flats, [codes_e])).or_fail("runtime: a record's field tuple: ");
+            let t <- assume(Hd(tuple_t), "t", None).or_fail("runtime: a record's fields: ");
+            let mk = Lam(t.ref, ap(Hd(r.ctor), runtime_flat_fields(fst, snd, Local(t.ref), 0, r.codes.len())));
+            let gets <- runtime_rec_gets(r.name, r.fields);
+            let v <- assume(Hd(r.ty), "v", None).or_fail("runtime: a record's value: ");
+            let get = Lam(v.ref, runtime_tuple_of(pair, Hd(unit), gets.map(λ (g: Expr) => App(g, Local(v.ref)))));
+            let t2 <- assume(Hd(tuple_t), "t", None).or_fail("runtime: a record's fields: ");
+            let round = Lam(t2.ref, ap(rfl, [Blank, Local(t2.ref)]));
+            let v2 <- assume(Hd(r.ty), "v", None).or_fail("runtime: a record's value: ");
+            let back = Lam(v2.ref, ap(rfl, [Blank, Local(v2.ref)]));
+            let more <- runtime_rec_infos(q, rfl, rest);
+            pure(Cons(ap(info, [Hd(r.ty), codes_e, mk, get, round, back]), more))
+        },
+    }
+}
+
+
+// The world's type table: none without reprs or records, else each repr's
+// `RecInfo::word_repr`, its round trips `refl` at each word and each value,
+// then each record's own (`runtime_rec_infos`).
+fn runtime_tys(word: Handle, q: RtQ, reprs: List<ReprEntry>, recs: List<RecShape>) → Tac<Expr> {
+    match reprs.len() + recs.len() {
+        Zero => runtime_global(name_of(RecInfo::none)),
+        Succ(_) => {
             let cons <- runtime_global(name_of(RecInfo::cons));
             let none <- runtime_global(name_of(RecInfo::none));
             let word_repr <- runtime_global(name_of(RecInfo::word_repr));
             let rfl <- runtime_global("tactic::rfl");
-            let entries <- runtime_repr_infos(word, word_repr, rfl, reprs);
+            let held_reprs <- runtime_repr_infos(word, word_repr, rfl, reprs);
+            let held_recs <- runtime_rec_infos(q, rfl, recs);
+            let entries = held_reprs ++ held_recs;
             let table = entries.foldr(λ e acc => ap(cons, [e, acc]), none);
             // Held as a hole solved by it: a repr's round trip abstracts a
             // local opened here, and a `Lam` reifies only where its local
@@ -1944,7 +2038,8 @@ fn runtime_file_callees(entry, typed_once, nil, tys_e: Expr, q: RtQ, funs: List<
 
 // `lents` says how many spans each function of `funs` is lent (the function
 // itself first).
-fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs: List<Nat>, lents: List<Nat>, l: Linking, reprs: List<ReprEntry>) → Tac<List<Decl>> {
+fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs: List<Nat>, lents: List<Nat>, l: Linking, reprs: List<ReprEntry>,
+    recs: List<RecShape> := []) → Tac<List<Decl>> {
     let ts <- runtime_type_handles();
     let q <- runtime_quoting(ts);
     // `refl` at a closed term, its type given: checked against a statement
@@ -1955,7 +2050,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
     let pair <- runtime_global(name_of(Pair::of));
     let callees = runtime_callees(pair, Hd(trivial_h), funs);
     let world_of <- runtime_global(name_of(World::of));
-    let tys_e <- runtime_tys(ts.word, reprs);
+    let tys_e <- runtime_tys(ts.word, q, reprs, recs);
     let setup <- runtime_global(name_of(Setup::default));
     let verdicts <- runtime_ctors_at(ts.verdict);
     let judge <- runtime_global(name_of(Fun::judge));
@@ -2089,6 +2184,18 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
 // shape, one 64-bit word (a `RecInfo` is too large for `foldr`'s result).
 fn runtime_shapes(reprs: List<ReprEntry>) → Nat → RecInfo {
     match reprs { Nil => RecInfo::none, Cons(_, rest) => RecInfo::cons(RecInfo::shape([Word(64)]), runtime_shapes(rest)) }
+}
+
+// And each record's after them, its fields' codes.
+fn runtime_rec_table(recs: List<RecShape>) → Nat → RecInfo {
+    match recs { Nil => RecInfo::none, Cons(r, rest) => RecInfo::cons(RecInfo::shape(r.codes), runtime_rec_table(rest)) }
+}
+
+fn runtime_shapes_with(reprs: List<ReprEntry>, recs: List<RecShape>) → Nat → RecInfo {
+    match reprs {
+        Nil => runtime_rec_table(recs),
+        Cons(_, rest) => RecInfo::cons(RecInfo::shape([Word(64)]), runtime_shapes_with(rest, recs)),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3132,15 +3239,16 @@ fn runtime_reads(name: String, f: GlobalRef) → Tac<List<Decl>> {
     let reflected = found.snd.fst;
     let rfun = reflected.fst;
     let checked <- runtime_check_carriers(k, reprs);
+    let recs <- runtime_rec_shapes(k, k.recs);
     let sigs = Cons(rfun.sig(), callee_sigs);
-    let tys = match reprs { Nil => RecInfo::none, Cons(_, _) => runtime_shapes(reprs) };
+    let tys = runtime_shapes_with(reprs, recs);
     let world = World(tys, sigs, Sig::sems_default(tys, sigs));
     match Fun::judge(rfun, world) {
         Refused(why) => fail("`" ++ name ++ "` cannot be a runtime fn under the default setup: " ++ why, []),
         Ok => match Setup::lowers(Fun::lower_any(rfun, world)) {
             False => fail("`" ++ name ++ "`: the default setup's lowering refused it though its judgment accepted it (a gap in `Fun::judge`)", []),
             True => runtime_link(4096, k, [LinkFrame(f.id, name, reflected.snd, reflected.snd.drop(1), None)], Linking([], [], [], [])).bind(λ l =>
-                runtime_publish(name, f, rfun, sigs, reflected.snd, lents, l, reprs)),
+                runtime_publish(name, f, rfun, sigs, reflected.snd, lents, l, reprs, recs := recs)),
         },
     }
 }
