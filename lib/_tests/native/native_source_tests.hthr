@@ -2,7 +2,8 @@
 // says: each probe is a source whose exit status is what its calls
 // computed, evaluated by `Source::tree` and its silent steps stripped. A
 // recursion that uses its own word after the call (not a tail loop), the
-// compiled meaning's refusal one call past its depth (`Source::bounded`),
+// compiled meaning's refusal at the call its check finds too few bytes for
+// (`Source::bounded`),
 // while the source's own calls nest as deep as its fuel, the caller's words given
 // back whatever the callee wrote, a callee that starts from zero, and a
 // buffer the callee writes, which the caller sees.
@@ -18,8 +19,10 @@ fn ops(nodes: List<Node>) → Stmt { Compute(Dataflow(Region(Ports([]), nodes, P
 
 fn exits(src: Source, status: Nat) → Type { ITree::next(Events::linux(), src.tree([], 8)) = Exits(BitVec::ofNat(status)) }
 
-// The compiled program's meaning: a call past the source's depth refused.
-fn compiled_exits(src: Source, status: Nat) → Type { ITree::next(Events::linux(), src.bounded_tree([], 8)) = Exits(BitVec::ofNat(status)) }
+// The compiled program's meaning, each call taking 8 bytes and checking
+// for them, `left` bytes below `main`: a call with fewer refused.
+fn eight() → Charges { Charges(λ _ => 8, λ _ => Some(8)) }
+fn compiled_exits(src: Source, left, status: Nat) → Type { ITree::next(Events::linux(), src.bounded_tree([], eight(), left, 8)) = Exits(BitVec::ofNat(status)) }
 
 // sum(k) = k + sum(k - 1), sum(0) = 0: the parameter `k` (word 1) is read
 // after the recursive call, so the call must give it back.
@@ -34,33 +37,33 @@ fn sum_body() → Stmt {
 fn sum() → Procedure { Procedure(params := [1], results := [2], body := sum_body()) }
 
 // sum(k) into word 7, then exit with `status`.
-fn summing(k, depth, status: Nat) → Source {
+fn summing(k, status: Nat) → Source {
     Source(functions := [], buffers := [], words := 8,
         main := Then(ops([Const(64, 0, k)]), Then(Perform(0, [0], [7]), Exit(status))),
-        procedures := [sum()], depth := depth)
+        procedures := [sum()])
 }
 
 // sum(4) nests five calls deep.
-theorem sum_four(): exits(summing(4, 5, 7), 10) { refl }
-theorem sum_zero(): exits(summing(0, 1, 7), 0) { refl }
-theorem sum_four_compiled(): compiled_exits(summing(4, 5, 7), 10) { refl }
+theorem sum_four(): exits(summing(4, 7), 10) { refl }
+theorem sum_zero(): exits(summing(0, 7), 0) { refl }
+theorem sum_four_compiled(): compiled_exits(summing(4, 7), 40, 10) { refl }
 
-// The source has no depth: whatever the compiled program's, sum(4) is 10,
-// once the fuel lets five calls nest, and nothing is claimed before that.
-theorem sum_four_any_depth(): exits(summing(4, 0, 7), 10) { refl }
-theorem sum_four_short_fuel(): ITree::next(Events::linux(), summing(4, 5, 7).tree([], 4)) = Stops { refl }
+// The source has no stack: sum(4) is 10 once the fuel lets five calls
+// nest, and nothing is claimed before that.
+theorem sum_four_short_fuel(): ITree::next(Events::linux(), summing(4, 7).tree([], 4)) = Stops { refl }
 
-// The compiled program one call short of the depth it needs: the fifth
-// call is refused, an exit with 139.
-theorem sum_too_deep(): compiled_exits(summing(4, 4, 7), 139) { refl }
-theorem sum_no_depth(): compiled_exits(summing(0, 0, 7), 139) { refl }
+// The compiled program 8 bytes short of what it needs: the fifth call is
+// refused, an exit with 139; with 7 bytes the first is.
+theorem sum_too_deep(): compiled_exits(summing(4, 7), 39, 139) { refl }
+theorem sum_no_room(): compiled_exits(summing(0, 7), 7, 139) { refl }
+theorem sum_zero_room(): compiled_exits(summing(0, 7), 8, 0) { refl }
 
 // The caller's words are its own again after the call: word 1 is `sum`'s
 // parameter, and `main` set it first.
 fn kept() → Source {
     Source(functions := [], buffers := [], words := 8,
         main := Then(ops([Const(64, 0, 3), Const(64, 1, 9)]), Then(Perform(0, [0], [7]), Exit(1))),
-        procedures := [sum()], depth := 8)
+        procedures := [sum()])
 }
 
 theorem caller_word_kept(): exits(kept(), 9) { refl }
@@ -70,7 +73,7 @@ fn twice() → Source {
     Source(functions := [], buffers := [], words := 10,
         main := Then(ops([Const(64, 0, 2)]), Then(Perform(0, [0], [7]),
             Then(ops([Const(64, 0, 3)]), Then(Perform(0, [0], [8]), Then(ops([Add(64, 9, 7, 8)]), Exit(9)))))),
-        procedures := [sum()], depth := 8)
+        procedures := [sum()])
 }
 
 theorem helper_twice(): exits(twice(), 9) { refl }
@@ -84,7 +87,7 @@ fn poke() → Procedure {
 fn shared() → Source {
     Source(functions := [], buffers := [Buffer(4)], words := 6,
         main := Then(ops([Const(64, 0, 42)]), Then(Perform(0, [0], []), Then(ops([Const(64, 4, 0), BufferLoad(5, 0, 4)]), Exit(5)))),
-        procedures := [poke()], depth := 1)
+        procedures := [poke()])
 }
 
 theorem buffer_shared(): exits(shared(), 42) { refl }
@@ -96,7 +99,7 @@ fn peek() → Procedure { Procedure(params := [], results := [3], body := ops([]
 fn fresh() → Source {
     Source(functions := [], buffers := [], words := 5,
         main := Then(ops([Const(64, 3, 8)]), Then(Perform(0, [], [4]), Exit(4))),
-        procedures := [peek()], depth := 1)
+        procedures := [peek()])
 }
 
 theorem callee_starts_zero(): exits(fresh(), 0) { refl }
@@ -104,7 +107,7 @@ theorem callee_starts_zero(): exits(fresh(), 0) { refl }
 // A call to no procedure does nothing.
 fn missing() → Source {
     Source(functions := [], buffers := [], words := 2,
-        main := Then(ops([Const(64, 0, 5)]), Then(Perform(3, [0], [0]), Exit(0))), depth := 1)
+        main := Then(ops([Const(64, 0, 5)]), Then(Perform(3, [0], [0]), Exit(0))))
 }
 
 theorem missing_procedure(): exits(missing(), 5) { refl }

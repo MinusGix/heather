@@ -154,20 +154,20 @@ fn List::spell_functions(self functions: List<Function>) → List<Nat> {
 }
 
 // `[1]`, its words, its buffers' count and each buffer, then `main`; with
-// procedures `[2]`, its words, its depth, its buffers, the procedures'
+// procedures `[2]`, its words, its room, its buffers, the procedures'
 // count and each procedure, then `main`; with functions `[3]`, as `[2]`
 // with the functions' count and each function before the procedures'; or
 // `[0]`.
 fn Source::spelled(self src: Source) → List<Nat> {
     match src.functions {
-        Cons(_, _) => match Some(Cons(3, Cons(src.words, Cons(src.depth, Cons(src.buffers.len(), List::append(src.buffers.spell_buffers(),
+        Cons(_, _) => match Some(Cons(3, Cons(src.words, Cons(src.room, Cons(src.buffers.len(), List::append(src.buffers.spell_buffers(),
                     Cons(src.functions.len(), List::append(src.functions.spell_functions(), [src.procedures.len()]))))))))
                 .spell_then(src.procedures.spell_procedures()).spell_then(src.main.spelled_stmt()) {
             None => [0],
             Some(spelled) => spelled,
         },
         Nil => match src.procedures {
-            Cons(_, _) => match Some(Cons(2, Cons(src.words, Cons(src.depth, Cons(src.buffers.len(), List::append(src.buffers.spell_buffers(), [src.procedures.len()]))))))
+            Cons(_, _) => match Some(Cons(2, Cons(src.words, Cons(src.room, Cons(src.buffers.len(), List::append(src.buffers.spell_buffers(), [src.procedures.len()]))))))
                     .spell_then(src.procedures.spell_procedures()).spell_then(src.main.spelled_stmt()) {
                 None => [0],
                 Some(spelled) => spelled,

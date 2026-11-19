@@ -376,7 +376,7 @@ fn head_n_tool() → Tool { head_n(1024) }
 // emitted once (docs/native/native-procedures-design.md).
 fn grep_f(capacity, line_cap, pat_cap: Nat) → Tool {
     buffer(capacity, λ data => buffer(line_cap, λ line => buffer(pat_cap, λ pat => buffer_of([BitVec::ofNat(10)], λ newline =>
-    depth(1, proc(2, 1, λ p =>
+    proc(2, 1, λ p =>
         // The line's first `len` bytes hold the pattern's `plen` at some
         // `i`: the bytes from `i` agree while `j` counts them.
         local(num(0), λ i => loop_while(p.result(0).get().not().and_also((i.get() + p.param(1).get()).below(p.param(0).get() + num(1))),
@@ -399,7 +399,7 @@ fn grep_f(capacity, line_cap, pat_cap: Nat) → Tool {
                 when(len.get().equals(num(line_cap)), exit(num(2))) ++ line.put(len.get(), c.get()) ++ len.set(len.get() + num(1))))),
             n.get()))
         ++ when(len.get(), perform(finish, [len.get(), plen.get()], [found]) ++ any.set(any.get().or_else(found.get())))
-        ++ exit(num(1) - any.get()))))))))))))
+        ++ exit(num(1) - any.get())))))))))))
 }
 
 fn grep_f_tool() → Tool { grep_f(256, 1024, 256) }

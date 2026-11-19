@@ -352,6 +352,10 @@ proofs stop finding it.
 
 ### 6.4 F4: the bound by the call graph
 
+(The depth here is a call count, as F4 built it; §7.2 replaced it with
+ranks for unchecked calls and a check in bytes on cycles. The structure,
+rows by level over the call graph, is the same, indexed by rank.)
+
 `Source::need(homes, bodies)` is what a program needs of its stack under a
 placement, and the `deep` premise of `native_compile_correct` and of the
 ELF theorems is `src.need(homes, bodies) <= stack.size`. It is §2.5's
@@ -383,8 +387,8 @@ level and its own `reach` at one level less are within the caller's.
 **The depth counts in a word, said on its own.** The old bound charged
 every level at least a byte, so `depth * … <= stack.size` kept the depth
 below `2^64` for the counter. The new bound does not grow with the depth
-where nothing recurses, so the theorems take `small: src.depth <
-Nat::pow(2, 64)`; a certificate gives it by evaluation.
+where nothing recurses, so the theorems took `small: src.depth <
+Nat::pow(2, 64)`. Gone with the counter (§7.2).
 
 **What it is not yet.** (The floor that was added and not maxed is
 §6.7's.) A premise free of
@@ -557,9 +561,61 @@ theorems say how the two stand:
   `main` performs nothing produces exactly the traces its compiled meaning
   does. cat's compiled theorem reaches its specification through them.
 
-What is left of §7: the depth in calls becomes the check in bytes, made
-only at a call that can close a cycle, with `need` from the call graph
-elsewhere (guarantees 1 in bytes and 5), then tail calls (3) and bounded
-recursion (4). `src.depth` leaves the source then: it is already only the
-compiled program's budget.
+The depth in calls became the check in bytes (§7.2).
+
+### 7.2 As built: the check in bytes, on cycles only
+
+`src.depth` is gone. A source asks for `room`, bytes of stack below
+`main`'s frame, and the compiled meaning charges each call in bytes:
+
+- **The meaning.** `Charges { cost, check }` says what a call of each
+  procedure takes (its level, `Frame::level`: its frame, the registers it
+  keeps, its return address) and, for a procedure that checks, the bytes
+  its check asks to be left (`Some(need)`). `Source::performs(call, n, d,
+  ch, left)` is a silent step (the CALL), then a refusal where
+  `ch.refuses(p, left)` (`left + 1 <= need`), else the body with
+  `left - cost(p)` left for its own calls. Calls nest as deep as the fuel
+  and are a `Cut` past it, so the only count left is bytes.
+  `Source::bounded(args, ch, left)` is the compiled meaning and
+  `Source::compiled_meaning(homes, bodies, args)` the one the compiler's
+  frames give (`Source::charges`, `Source::left`). The §7.1 theorems carry
+  over with `ch` and `left`; `Source::Roomy(ch, d, left)` replaces the depth
+  in `Source::bounded_exact`: every chain of `d` calls finds its bytes.
+- **Which procedures check.** Those that can reach themselves through the
+  call graph (`List::checks`). Every other call is unchecked, and must go
+  to a callee of lower rank (`List::ranks`, a numbering of the unchecked
+  part; `main` ranks above every procedure): `call_fits` refuses an
+  unchecked call that does not, so a chain of unchecked calls is as long
+  as the ranks at most and its bytes are counted statically. `below` counts
+  a checked callee as nothing, since its own check covers it, so a
+  procedure's `need` is its level, the deepest unchecked chain below it, and
+  a return address.
+- **The machine.** At startup the entry stores RSP − `src.need` in the room
+  slot (`Prog::saves_rsp`): the lowest address the program may use. A
+  checked procedure's entry (`Prog::checks_room`, seven instructions)
+  compares RSP less that limit with `check_bound(need)` (its need less the
+  return address already pushed, capped at 2^48 so the unsigned compare
+  reads as on naturals) and jumps to the refusal exit where it is below.
+  Nothing runs at return, and an unchecked entry runs nothing.
+- **The proof.** The target carries `floor` (the limit), `room` and `rank`;
+  `Target.roomy` says the bytes below the frame cover the unchecked chain
+  below it, and `Target.ranked` that its unchecked callees rank below it.
+  `goes_check` proves the entry check against the meaning's refusal, the
+  CALL pays the meaning's silent step (`goes_callto` with `silent`), and
+  `Target::procedures_at` follows the two branches. `native_compile_correct`
+  concludes `SimPaidProgram(…, src.bounded(args, src.charges(homes,
+  bodies), src.left(homes, bodies)), s)`.
+- **The fuel-free tree** (`native_source_co`) charges and refuses the same
+  way, with a depth `d` for its calls past which a call never returns
+  (claiming nothing, as a cut). The fuelled tree at fuel `n` is inside it
+  at depth `n` (`Source::tree_co_into`), and its traces at any depth are
+  the fuelled program's (`Source::tree_co_refined`). A tree with no bound
+  on its calls is `coitree_rec`'s `mrec`, not done.
+- **Builders** ask with `room(bytes, …)` (`native_build`); a tool whose
+  procedures never reach themselves needs none.
+
+That is guarantee 1 in bytes, 2 as in §7.1, and 5: a program whose
+procedures never reach themselves has no check, its charges refuse nothing
+and `need` is its whole stack. What is left of §7 is tail calls (3) and
+bounded recursion (4).
 

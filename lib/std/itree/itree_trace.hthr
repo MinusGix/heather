@@ -377,6 +377,24 @@ theorem ITree::below_of_refuses<R>(E: Events, t: ITree<R>(E), u: ITree<R>(E), h:
     }
 }
 
+// …and so is refusing at stops that never hold.
+theorem ITree::below_of_refuses_never<R>(E: Events, stop: R → Type, never: (r: R) → stop(r) → False, t: ITree<R>(E), u: ITree<R>(E),
+    h: ITree::Refuses(E, stop, t, u)): ITree::Below(E, t, u)
+{
+    match t {
+        Ret(r) => match h { Inl(s) => false_elim(never(r, s)), Inr(e) => e },
+        Tau(s) => {
+            let g: SameTau<R>(E, u, λ v => ITree::Refuses(E, stop, s, v)) = h;
+            SameTau(g.t, g.at, ITree::below_of_refuses_never(E, stop, never, s, g.t, g.sub))
+        },
+        Vis(c, k) => {
+            let g: SameVis<R>(E, c, u, λ a v => ITree::Refuses(E, stop, k(a), v)) = h;
+            SameVis(g.k, g.at, λ a => ITree::below_of_refuses_never(E, stop, never, k(a), g.k(a), g.sub(a)))
+        },
+        Cut => trivial,
+    }
+}
+
 // `bind` refuses where either side does, a stop going on to a stop.
 theorem ITree::refuses_bind<A, B>(E: Events, stop: A → Type, stop2: B → Type, t: ITree<A>(E), t2: ITree<A>(E), h: A → ITree<B>(E),
     h2: A → ITree<B>(E), bt: ITree::Refuses(E, stop, t, t2), bh: (a: A) → ITree::Refuses(E, stop2, h(a), h2(a)),

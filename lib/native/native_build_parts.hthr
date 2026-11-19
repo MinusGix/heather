@@ -313,13 +313,13 @@ theorem Act::lowered_of(self a: Act, next: Nat, g: List<Node>, f: List<Stmt> →
 theorem Tool::source_of(self t: Tool, buffers: List<Buffer>, main: Stmt, plain: t.opened(0).functions = [], opened: t.opened(0).buffers = buffers,
     lowered: t.opened(0).main.lowered_at(0) = main, bare: t.opened(0).procedures = []):
     t.source() = Source::of(buffers, main) {
-    j(bare, λ ps _ => t.source() = Source(functions := [], buffers := buffers, words := ps.tool_words(main), main := main, procedures := ps, depth := ps.tool_depth(t.opened(0).depth)),
+    j(bare, λ ps _ => t.source() = Source(functions := [], buffers := buffers, words := ps.tool_words(main), main := main, procedures := ps, room := ps.tool_room(t.opened(0).room)),
     j(plain, λ f _ => t.source() = Source(functions := f, buffers := buffers, words := t.opened(0).procedures.tool_words(main), main := main,
-            procedures := t.opened(0).procedures, depth := t.opened(0).procedures.tool_depth(t.opened(0).depth)),
+            procedures := t.opened(0).procedures, room := t.opened(0).procedures.tool_room(t.opened(0).room)),
         j(opened, λ b _ => t.source() = Source(functions := t.opened(0).functions, buffers := b, words := t.opened(0).procedures.tool_words(main), main := main,
-                procedures := t.opened(0).procedures, depth := t.opened(0).procedures.tool_depth(t.opened(0).depth)),
+                procedures := t.opened(0).procedures, room := t.opened(0).procedures.tool_room(t.opened(0).room)),
             j(lowered, λ m _ => t.source() = Source(functions := t.opened(0).functions, buffers := t.opened(0).buffers, words := t.opened(0).procedures.tool_words(m), main := m,
-                    procedures := t.opened(0).procedures, depth := t.opened(0).procedures.tool_depth(t.opened(0).depth)),
+                    procedures := t.opened(0).procedures, room := t.opened(0).procedures.tool_room(t.opened(0).room)),
                 refl))))
 }
 

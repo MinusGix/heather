@@ -36,10 +36,13 @@
 //
 // Compiled calls push their return addresses and their callers' saved words
 // into the stack (docs/native/native-procedures-design.md §5): `main`'s
-// frame; per call of `src.depth` a frame, a return address and the registers
-// a callee keeps (seven words more); the room the functions' table asks; and
-// a word for the return address of a call past the depth, which its callee
-// refuses.
+// frame, and below it what `Source::left` says: the deepest chain of calls
+// that no check guards, the room the functions' table asks, a return
+// address, or the source's `room` where that is more. A procedure that can
+// reach itself checks at its entry that the bytes it needs are left, and
+// refuses the call where they are not (docs/native/native-procedure-frames-design.md
+// §7.2); the theorems are over the meaning that charges calls so
+// (`Source::compiled_meaning`).
 import native_source;
 import native_compile;
 import native_compile_region;
@@ -90,6 +93,12 @@ fn entered(entry: List<Instruction>, program: Prog) → List<BitVec(8)> {
 // code have RSP at the top of a stack with the source's room and RDI at the
 // command line, simulates the source. The entry code is any block that
 // reads no flag it has not set; it touches no memory (`block_steps`).
+// The compiled program's meaning (`Source::bounded`): its calls charged as
+// the compiled frames are, with the bytes `main` leaves below its frame.
+fn Source::compiled_meaning(self src: Source, homes: Homes, bodies: List<Frame>, args: List<List<BitVec(8)>>) → Program<BitVec(64)>(Events::linux()) {
+    src.bounded(args, src.charges(homes, bodies), src.left(homes, bodies))
+}
+
 theorem Source::runs_after(self src: Source, r: DataRegion, homes: Homes, bodies: List<Frame>, fits: Layout::of(r.low, src.words, src.capacities(), homes).size() <= r.size,
     program: Prog, compiled: src.compile(r.low, homes, bodies) = Some(program), entry: List<Instruction>, at: BitVec(64),
     s: MachineState<X86Memory(r.profile)>, here: s.rip = at,
@@ -99,10 +108,10 @@ theorem Source::runs_after(self src: Source, r: DataRegion, homes: Homes, bodies
     stack: Stack<X86Memory(r.profile)>(r.profile.linux().fetch, r.profile.linux().data), stack_writes: stack.writes = linux_writes(r.profile.linux()),
     stack_above: r.low.toNat() + r.size <= stack.low.toNat(), stack_canonical: stack.low.toNat() + stack.size <= Nat::pow(2, 47),
     top: stack.at(stack.size) = read_gpr(Rsp, execute_block_normal<X86Memory(r.profile)>(entry, s).gprs),
-    deep: src.need(homes, bodies) <= stack.size, small: src.depth < Nat::pow(2, 64),
+    deep: src.need(homes, bodies) <= stack.size,
     args: List<List<BitVec(8)>>,
     argv: ArgvAt(r.profile.data().above(stack.low.toNat() + stack.size), s.memory, read_gpr(Rdi, execute_block_normal<X86Memory(r.profile)>(entry, s).gprs), args)):
-    SimPaidProgram(r.profile.linux(), src.bounded(args), s) {
+    SimPaidProgram(r.profile.linux(), src.compiled_meaning(homes, bodies, args), s) {
     let x = r.profile;
     let io = x.linux();
     let bytes = assemble(no_fills(), program, Nil);
@@ -123,8 +132,8 @@ theorem Source::runs_after(self src: Source, r: DataRegion, homes: Homes, bodies
     let zero_u = j(sym(same), λ m _ => r.Holds(λ _ => zero_byte(), m), zero);
     let argv_u = j(sym(same), λ m _ => ArgvAt(x.data().above(stack.low.toNat() + stack.size), m, read_gpr(Rdi, u.gprs), args), argv);
     let correct = native_compile_correct(src, r, homes, bodies, fits, program, compiled, origin, u, there, resident_u, zero_u,
-        stack, stack_writes, stack_above, stack_canonical, top, deep, small, args, argv_u);
-    λ n => paid_back(io, src.bounded(args).at(n), s, u, linux_steps_of_fetched(io, s, u, ran.left), correct(n))
+        stack, stack_writes, stack_above, stack_canonical, top, deep, args, argv_u);
+    λ n => paid_back(io, src.compiled_meaning(homes, bodies, args).at(n), s, u, linux_steps_of_fetched(io, s, u, ran.left), correct(n))
 }
 
 // ---------------------------------------------------------------------------
@@ -151,9 +160,9 @@ theorem Source::elf_simulates_paid(self src: Source, size: Nat, within: size <= 
     header: List<BitVec(8)>, long: header.len() = 288, top, depth: Nat, placed: StackPlaced(size, top, depth),
     s: MachineState<X86Memory(X86Profile::process(size, top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
     loaded: s.memory.LoadedFrom(size, header ++ (entered(stack_from_system(), program) ++ after)),
-    deep: src.need(homes, bodies) <= depth, small: src.depth < Nat::pow(2, 64),
+    deep: src.need(homes, bodies) <= depth,
     args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(size, top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args)):
-    SimPaidProgram(X86Profile::process(size, top, depth).linux(), src.bounded(args), s) {
+    SimPaidProgram(X86Profile::process(size, top, depth).linux(), src.compiled_meaning(homes, bodies, args), s) {
     let x = X86Profile::process(size, top, depth);
     let stack = DataRegion::process_stack(size, top, depth, placed).stack();
     let low = io_stack_low_toNat(size, top, depth, placed);
@@ -171,7 +180,7 @@ theorem Source::elf_simulates_paid(self src: Source, size: Nat, within: size <= 
     };
     src.runs_after(r, homes, bodies, fits, program, compiled, stack_from_system(), io_entry(), s, entry, resident, refl, zero,
         stack, refl, omega(floor, low, placed.above), omega(low, placed.above, placed.canonical),
-        DataRegion::process_stack_entry(size, top, depth, placed, s.gprs, rsp), deep, small, args,
+        DataRegion::process_stack_entry(size, top, depth, placed, s.gprs, rsp), deep, args,
         argv_at_kept(data.above(top), s.memory, data.above(stack.low.toNat() + stack.size), s.memory, above, read_gpr(Rsp, s.gprs), args, argv))
 }
 
@@ -186,14 +195,14 @@ theorem Source::elf_runs_exact(self src: Source, size: Nat, within: size <= io_d
     header: List<BitVec(8)>, long: header.len() = 288, top, depth: Nat, placed: StackPlaced(size, top, depth),
     s: MachineState<X86Memory(X86Profile::process(size, top, depth))>, entry: s.rip = io_entry(), rsp: read_gpr(Rsp, s.gprs).toNat() = top,
     loaded: s.memory.LoadedFrom(size, header ++ (entered(stack_from_system(), program) ++ after)),
-    deep: src.need(homes, bodies) <= depth, small: src.depth < Nat::pow(2, 64),
+    deep: src.need(homes, bodies) <= depth,
     args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::process(size, top, depth).data().above(top), s.memory, read_gpr(Rsp, s.gprs), args),
     run: List<LinuxEvent>, ran: LinuxRun(X86Profile::process(size, top, depth).linux(), run, s),
     valid: LinuxEventsValid(run)):
-    Exists<Trace<BitVec(64)>(Events::linux())>(λ tr => Program::Produces(Events::linux(), src.bounded(args), tr) ∧
+    Exists<Trace<BitVec(64)>(Events::linux())>(λ tr => Program::Produces(Events::linux(), src.compiled_meaning(homes, bodies, args), tr) ∧
         (Trace::Returns(Events::linux(), tr) ∧ (Trace::linux_events(tr) = run))) {
-    Program::paid_run_produces(X86Profile::process(size, top, depth).linux(), src.bounded(args), s,
-        src.elf_simulates_paid(size, within, program, homes, bodies, compiled, fits, after, short, header, long, top, depth, placed, s, entry, rsp, loaded, deep, small, args, argv), src.bounded_deepens(args), run, ran, valid)
+    Program::paid_run_produces(X86Profile::process(size, top, depth).linux(), src.compiled_meaning(homes, bodies, args), s,
+        src.elf_simulates_paid(size, within, program, homes, bodies, compiled, fits, after, short, header, long, top, depth, placed, s, entry, rsp, loaded, deep, args, argv), src.bounded_deepens(args, src.charges(homes, bodies), src.left(homes, bodies)), run, ran, valid)
 }
 
 // ---------------------------------------------------------------------------
@@ -229,12 +238,12 @@ record SegmentStart(size: Nat, file: List<BitVec(8)>, args: List<List<BitVec(8)>
 theorem Source::elf_segment_simulates_paid(self src: Source, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes, bodies: List<Frame>,
     compiled: src.compile(io_data_low(), homes, bodies) = Some(program),
     fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() + src.need(homes, bodies) <= size,
-    after: List<BitVec(8)>, short: 288 + (entered(src.segment_entry(homes, bodies), program).len() + after.len()) <= 65536, small: src.depth < Nat::pow(2, 64),
+    after: List<BitVec(8)>, short: 288 + (entered(src.segment_entry(homes, bodies), program).len() + after.len()) <= 65536,
     header: List<BitVec(8)>, long: header.len() = 288,
     s: MachineState<X86Memory(X86Profile::io(size))>, entry: s.rip = io_entry(),
     loaded: s.memory.LoadedFrom(size, header ++ (entered(src.segment_entry(homes, bodies), program) ++ after)),
     args: List<List<BitVec(8)>>, argv: ArgvAt(X86Profile::io(size).data().above(io_data_end(size)), s.memory, read_gpr(Rsp, s.gprs), args)):
-    SimPaidProgram(X86Profile::io(size).linux(), src.bounded(args), s) {
+    SimPaidProgram(X86Profile::io(size).linux(), src.compiled_meaning(homes, bodies, args), s) {
     let x = X86Profile::io(size);
     let used = Layout::of(io_data_low(), src.words, src.capacities(), homes).size();
     let room = src.need(homes, bodies);
@@ -253,7 +262,7 @@ theorem Source::elf_segment_simulates_paid(self src: Source, size: Nat, within: 
     };
     src.runs_after(r, homes, bodies, Nat::le_refl(used), program, compiled, src.segment_entry(homes, bodies), io_entry(), s, entry, resident, refl, zero,
         stack, refl, DataRegion::own_stack_above(size, within, used, room, fits), region.canonical,
-        DataRegion::own_stack_top(size, within, used, room, fits), Nat::le_refl(room), small, args,
+        DataRegion::own_stack_top(size, within, used, room, fits), Nat::le_refl(room), args,
         argv_at_kept(data.above(io_data_end(size)), s.memory, data.above(stack.low.toNat() + stack.size), s.memory, above, read_gpr(Rsp, s.gprs), args, argv))
 }
 
@@ -262,13 +271,13 @@ theorem Source::elf_segment_simulates_paid(self src: Source, size: Nat, within: 
 theorem Source::elf_segment_file_runs(self src: Source, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes, bodies: List<Frame>,
     compiled: src.compile(io_data_low(), homes, bodies) = Some(program),
     fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() + src.need(homes, bodies) <= size,
-    note: List<BitVec(8)>, short: 288 + (entered(src.segment_entry(homes, bodies), program).len() + note.len()) <= 65535, small: src.depth < Nat::pow(2, 64),
+    note: List<BitVec(8)>, short: 288 + (entered(src.segment_entry(homes, bodies), program).len() + note.len()) <= 65535,
     args: List<List<BitVec(8)>>, s: MachineState<X86Memory(X86Profile::io(size))>,
     start: SegmentStart(size, io_elf_file(entered(src.segment_entry(homes, bodies), program), note, size), args, s)):
-    SimProgram(X86Profile::io(size).linux(), src.bounded(args), s) {
+    SimProgram(X86Profile::io(size).linux(), src.compiled_meaning(homes, bodies, args), s) {
     let length = 288 + (entered(src.segment_entry(homes, bodies), program).len() + note.len());
-    Program::sim_of_paid(X86Profile::io(size).linux(), src.bounded(args), s,
-        src.elf_segment_simulates_paid(size, within, program, homes, bodies, compiled, fits, note, omega(short), small,
+    Program::sim_of_paid(X86Profile::io(size).linux(), src.compiled_meaning(homes, bodies, args), s,
+        src.elf_segment_simulates_paid(size, within, program, homes, bodies, compiled, fits, note, omega(short),
             io_elf_header(BitVec::ofNat(length), BitVec::ofNat(length.shr(8)), size, 288 + entered(src.segment_entry(homes, bodies), program).len(), note.len()),
             io_elf_header_length(BitVec::ofNat(length), BitVec::ofNat(length.shr(8)), size, 288 + entered(src.segment_entry(homes, bodies), program).len(), note.len()), s, start.entry, start.loaded, args, start.argv))
 }
@@ -336,10 +345,10 @@ theorem Source::elf_touched_runs(self src: Source, size: Nat, within: size <= io
     compiled: src.compile(io_data_low(), homes, bodies) = Some(program), fits: Layout::of(io_data_low(), src.words, src.capacities(), homes).size() <= size,
     note: List<BitVec(8)>,
     short: 288 + ((stack_touched_entry(src.need(homes, bodies)) ++ assemble(no_fills(), program, Nil)).len() + note.len()) <= 65535,
-    small: src.depth < Nat::pow(2, 64), top: Nat, args: List<List<BitVec(8)>>, s: MachineState<X86Memory(X86Profile::io(size))>,
+    top: Nat, args: List<List<BitVec(8)>>, s: MachineState<X86Memory(X86Profile::io(size))>,
     start: SystemStart(size, io_elf_file(stack_touched_entry(src.need(homes, bodies)) ++ assemble(no_fills(), program, Nil), note, size), top,
         src.need(homes, bodies), args, s)):
-    TouchedRuns(size, top, src.need(homes, bodies), src.bounded(args), s) {
+    TouchedRuns(size, top, src.need(homes, bodies), src.compiled_meaning(homes, bodies, args), s) {
     let x = X86Profile::io(size);
     let room = src.need(homes, bodies);
     let y = X86Profile::process(size, top, room);
@@ -365,7 +374,7 @@ theorem Source::elf_touched_runs(self src: Source, size: Nat, within: size <= io
             cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ l => canonical_block_bytes(enter) ++ l,
                 stack_touches_bytes_append(deltas, canonical_block_bytes(leave), prog)));
     let then: (MachineState<X86Memory(x)> → Type) = λ at => Exists<MachineState<X86Memory(y)>>(λ u =>
-        Alike(x, y, at, u) ∧ SimProgram(y.linux(), src.bounded(args), u));
+        Alike(x, y, at, u) ∧ SimProgram(y.linux(), src.compiled_meaning(homes, bodies, args), u));
     // The code that enters: RDI the command line, RSP below the room, RBX
     // where the touches start.
     let parts = resident_split(x.fetch(), s.memory, canonical_block_bytes(enter), stack_touches_bytes(deltas, tail), io_entry(),
@@ -429,8 +438,8 @@ theorem Source::elf_touched_runs(self src: Source, size: Nat, within: size <= io
         let paid = src.runs_after(r, homes, bodies, fits, program, compiled, Nil, u.rip, u, refl, resident_u, refl,
             um.loaded_data(size, within, top, room, file, loaded_u),
             stack, refl, over, canonical,
-            DataRegion::process_stack_entry(size, top, room, placed_room, u.gprs, at_top), Nat::le_refl(room), small, args, argv_u);
-        Exists(t2, ⟨linux_steps_of_fetched(io, t, t2, left.left), Exists(u, ⟨alike, Program::sim_of_paid(y.linux(), src.bounded(args), u, paid)⟩)⟩)
+            DataRegion::process_stack_entry(size, top, room, placed_room, u.gprs, at_top), Nat::le_refl(room), args, argv_u);
+        Exists(t2, ⟨linux_steps_of_fetched(io, t, t2, left.left), Exists(u, ⟨alike, Program::sim_of_paid(y.linux(), src.compiled_meaning(homes, bodies, args), u, paid)⟩)⟩)
     };
     let total = stack_strides_total(room, room, Nat::le_refl(room));
     let covers: (0 + stride_total(deltas) = room) = omega(total);
@@ -485,14 +494,14 @@ fn Source::segment_use(self src: Source, stack: StackFrom, homes: Homes, bodies:
 // its command line; with the system's, that it does once it has touched
 // its stack's room.
 theorem Source::elf_runs(self src: Source, stack: StackFrom, size: Nat, within: size <= io_data_limit(), program: Prog, homes: Homes, bodies: List<Frame>,
-    compiled: src.compile(io_data_low(), homes, bodies) = Some(program), small: src.depth < Nat::pow(2, 64), top: Nat, args: List<List<BitVec(8)>>):
+    compiled: src.compile(io_data_low(), homes, bodies) = Some(program), top: Nat, args: List<List<BitVec(8)>>):
     (fits: src.segment_use(stack, homes, bodies) <= size) →
     (short: 288 + (src.code(stack, homes, bodies, program).len() + src.contract(stack, size, homes, bodies).note().len()) <= 65535) →
     (s: MachineState<X86Memory(X86Profile::io(size))>) →
     src.contract(stack, size, homes, bodies).Start(io_elf_file(src.code(stack, homes, bodies, program), src.contract(stack, size, homes, bodies).note(), size), top, args)(s) →
-    src.contract(stack, size, homes, bodies).Runs(top, src.bounded(args))(s) {
+    src.contract(stack, size, homes, bodies).Runs(top, src.compiled_meaning(homes, bodies, args))(s) {
     match stack {
-        FromSystem => λ fits short s start => src.elf_touched_runs(size, within, program, homes, bodies, compiled, fits, src.contract(FromSystem, size, homes, bodies).note(), short, small, top, args, s, start),
-        FromSegment => λ fits short s start => src.elf_segment_file_runs(size, within, program, homes, bodies, compiled, fits, src.contract(FromSegment, size, homes, bodies).note(), short, small, args, s, start),
+        FromSystem => λ fits short s start => src.elf_touched_runs(size, within, program, homes, bodies, compiled, fits, src.contract(FromSystem, size, homes, bodies).note(), short, top, args, s, start),
+        FromSegment => λ fits short s start => src.elf_segment_file_runs(size, within, program, homes, bodies, compiled, fits, src.contract(FromSegment, size, homes, bodies).note(), short, args, s, start),
     }
 }

@@ -495,18 +495,18 @@ theorem Target::stack_stored(self t: Target, m: X86Memory(t.r.profile), a: BitVe
 }
 
 // A buffer of the file is as long as its capacity.
-theorem Target::based_buffer_len(self t: Target, env: Env, room: Nat, v: Nat → BitVec(8), m: X86Memory(t.r.profile), based: t.Based(env, room, v, m),
+theorem Target::based_buffer_len(self t: Target, env: Env, v: Nat → BitVec(8), m: X86Memory(t.r.profile), based: t.Based(env, v, m),
     b, cap: Nat, found: t.caps.nth(b) = Some(cap)): env.buffer(b).len() = cap {
     trans(cong_fn<List<BitVec(8)>, Nat>(λ bytes => bytes.len(), based.right.left(b, cap, found)), cells_len(v, cap, t.layout().buffer_offset(b)))
 }
 
 // A buffer of the file reads its bytes where the layout puts it.
-theorem Target::buffer_readable(self t: Target, env: Env, room: Nat, v: Nat → BitVec(8), m: X86Memory(t.r.profile), based: t.Based(env, room, v, m),
+theorem Target::buffer_readable(self t: Target, env: Env, v: Nat → BitVec(8), m: X86Memory(t.r.profile), based: t.Based(env, v, m),
     b, cap: Nat, found: t.caps.nth(b) = Some(cap)): Readable(t.site().data, m, t.layout().buffer_at(b), env.buffer(b)) {
     let layout = t.layout();
     let bo = layout.buffer_offset(b);
     let bytes: (env.buffer(b) = cells_at(v, bo, cap)) = based.right.left(b, cap, found);
-    let len: (env.buffer(b).len() = cap) = t.based_buffer_len(env, room, v, m, based, b, cap, found);
+    let len: (env.buffer(b).len() = cap) = t.based_buffer_len(env, v, m, based, b, cap, found);
     let inside: (bo + cap <= t.r.size) = Nat::le_trans(bo + cap, layout.scratch_offset(), t.r.size, layout.buffer_end(b, cap, found), t.scratch_fits());
     let rip = t.at_rip(bo);
     let low: (next_rip(t.r.low, bo).toNat() = t.r.low.toNat() + bo) = t.r.toNat_at(bo, omega(inside));
@@ -520,11 +520,11 @@ theorem Target::buffer_readable(self t: Target, env: Env, room: Nat, v: Nat → 
 }
 
 // Each buffer a callee is lent is as long as the layout's capacity for it.
-theorem Target::lent_sized(self t: Target, env: Env, room: Nat, v: Nat → BitVec(8), m: X86Memory(t.r.profile), based: t.Based(env, room, v, m),
+theorem Target::lent_sized(self t: Target, env: Env, v: Nat → BitVec(8), m: X86Memory(t.r.profile), based: t.Based(env, v, m),
     count: Nat, has: count <= t.caps.len()): (b: Nat) → b < count → buffer_bytes(env.buffers, b).len() = t.layout().capacity(b) {
     λ b lent => {
         let found = t.caps.nth_present(b, omega(lent, has));
-        let len: (buffer_bytes(env.buffers, b).len() = found.witness) = t.based_buffer_len(env, room, v, m, based, b, found.witness, found.proof);
+        let len: (buffer_bytes(env.buffers, b).len() = found.witness) = t.based_buffer_len(env, v, m, based, b, found.witness, found.proof);
         let cap: (t.layout().capacity(b) = found.witness) =
             cong_fn<Option<Nat>, Nat>(λ (c: Option<Nat>) => match c { None => 0, Some(n) => n }, found.proof);
         trans(len, sym(cap))
@@ -534,7 +534,7 @@ theorem Target::lent_sized(self t: Target, env: Env, room: Nat, v: Nat → BitVe
 // The buffers a function is lent are in memory where the region holds the
 // file (`Stack::InMemory`): each reads its bytes where the layout puts it.
 // Past the lent ones the lending names no bytes.
-theorem Target::in_memory(self t: Target, env: Env, room: Nat, v: Nat → BitVec(8), m: X86Memory(t.r.profile), based: t.Based(env, room, v, m),
+theorem Target::in_memory(self t: Target, env: Env, v: Nat → BitVec(8), m: X86Memory(t.r.profile), based: t.Based(env, v, m),
     count: Nat, fits: count <= t.caps.len()): t.stack.InMemory(t.lending(env.buffers, count), lent_buffers(count, env.buffers), m) {
     let at = λ (b: Nat) => t.layout().buffer_at(b);
     let none: (BitVec::zero(n := 64).toNat() + 0 <= Nat::pow(2, 47)) =
@@ -543,7 +543,7 @@ theorem Target::in_memory(self t: Target, env: Env, room: Nat, v: Nat → BitVec
         Inl(inside) => {
             let found = t.caps.nth_present(b, omega(inside, fits));
             let readable: Readable(t.site().data, m, at(b), buffer_bytes(env.buffers, b)) =
-                t.buffer_readable(env, room, v, m, based, b, found.witness, found.proof);
+                t.buffer_readable(env, v, m, based, b, found.witness, found.proof);
             j(sym(lent_buffers_bytes(count, env.buffers, b, inside)),
                 λ xs _ => Readable(t.site().data, m, address_of(placed_addresses(at, 0, count), b), xs),
                 j(sym(trans(placed_addresses_at(at, count, 0, b, inside), cong_fn<Nat, BitVec(64)>(λ p => at(p), Nat::add_left_zero(b)))),
@@ -557,9 +557,9 @@ theorem Target::in_memory(self t: Target, env: Env, room: Nat, v: Nat → BitVec
 
 // Bytes stored inside their buffer: the region holds the file with them
 // written over it. The buffers lie below the saved RSP and the room's count.
-theorem Target::based_span(self t: Target, env: Env, room: Nat, v: Nat → BitVec(8), m: X86Memory(t.r.profile), based: t.Based(env, room, v, m),
+theorem Target::based_span(self t: Target, env: Env, v: Nat → BitVec(8), m: X86Memory(t.r.profile), based: t.Based(env, v, m),
     buf, cap: Nat, found: t.caps.nth(buf) = Some(cap), i: Nat, below: i < cap, bytes: List<BitVec(8)>, reach: bytes.len() + i <= cap):
-    t.Based(Env(env.words, store_span(env.buffers, buf, i, bytes), env.args), room, t.r.stored_cells(v, t.layout().buffer_offset(buf) + i, bytes),
+    t.Based(Env(env.words, store_span(env.buffers, buf, i, bytes), env.args), t.r.stored_cells(v, t.layout().buffer_offset(buf) + i, bytes),
         t.r.profile.store(m, next_rip(t.r.low, t.layout().buffer_offset(buf) + i), bytes)) {
     let layout = t.layout();
     let q = layout.buffer_offset(buf) + i;
@@ -582,7 +582,7 @@ theorem Target::based_span(self t: Target, env: Env, room: Nat, v: Nat → BitVe
         argv_at_kept(t.argv(), m, t.argv(), m2, t.kept_store(m, q, bytes, fits), word_in(v, so), t.args, based.right.right.right.left));
     ⟨t.r.store_holds(v, m, based.left, q, bytes, fits),
      ⟨layout.buffers_span(t.r, env, v, based.right.left, buf, cap, found, i, below, bytes, reach),
-      ⟨based.right.right.left, ⟨argv, trans(cong_fn<BitVec(64), Nat>(λ x => x.toNat(), counted), based.right.right.right.right)⟩⟩⟩⟩
+      ⟨based.right.right.left, ⟨argv, trans(counted, based.right.right.right.right)⟩⟩⟩⟩
 }
 
 // ---------------------------------------------------------------------------
@@ -606,17 +606,17 @@ theorem readable_same<M>(data: ByteReadAccess<M>, memory: M, a: BitVec(64), xs, 
 // the buffers lent read in memory both as that file has them and as the
 // function left them (`Stack::InMemory`), so the file is the one the call
 // answers (`relent_is`).
-theorem Target::based_left(self t: Target, env: Env, room: Nat, v: Nat → BitVec(8), m, m2: X86Memory(t.r.profile), based: t.Based(env, room, v, m),
+theorem Target::based_left(self t: Target, env: Env, v: Nat → BitVec(8), m, m2: X86Memory(t.r.profile), based: t.Based(env, v, m),
     i: Nat, inside: i <= t.stack.size, words: List<BitVec(64)>, frames: t.FramesAt(m, words, i), count: Nat, has: count <= t.caps.len(),
     sized: (b: Nat) → b < count → buffer_bytes(env.buffers, b).len() = t.layout().capacity(b), after: Buffers(),
     wrote: t.stack.WroteIn(i, t.lending(env.buffers, count).spans(), m, m2),
     left: t.stack.InMemory(t.lending(env.buffers, count), after, m2)):
-    Exists<Nat → BitVec(8)>(λ w => t.Based(Env(env.words, relent(count, after, env.buffers), env.args), room, w, m2)) ∧ t.FramesAt(m2, words, i) {
+    Exists<Nat → BitVec(8)>(λ w => t.Based(Env(env.words, relent(count, after, env.buffers), env.args), w, m2)) ∧ t.FramesAt(m2, words, i) {
     let layout = t.layout();
     let at = λ (b: Nat) => layout.buffer_at(b);
     let spans = t.lending(env.buffers, count).spans();
     let holding: Buffers() → X86Memory(t.r.profile) → Type = λ file a =>
-        Exists<Nat → BitVec(8)>(λ w => t.Based(Env(env.words, file, env.args), room, w, a)) ∧ t.FramesAt(a, words, i);
+        Exists<Nat → BitVec(8)>(λ w => t.Based(Env(env.words, file, env.args), w, a)) ∧ t.FramesAt(a, words, i);
     let along: X86Memory(t.r.profile) → Type = λ a => Exists<Buffers()>(λ file => holding(file, a) ∧
         ((file.len() = env.buffers.len()) ∧ ((b: Nat) → count <= b → buffer_bytes(file, b) = buffer_bytes(env.buffers, b))));
     let start: along(m) = Exists(env.buffers, ⟨⟨Exists(v, based), frames⟩, ⟨refl, λ b _ => refl⟩⟩);
@@ -625,7 +625,7 @@ theorem Target::based_left(self t: Target, env: Env, room: Nat, v: Nat → BitVe
             ⟨file, ⟨⟨⟨w, held⟩, framed⟩, rest⟩⟩ => {
                 let fits: (k + 8 <= t.stack.size) = omega(below, inside);
                 let there: holding(file, t.r.profile.store(a, t.stack.at(k), word_bytes(word))) =
-                    ⟨Exists(w, t.based_stack_store(Env(env.words, file, env.args), room, w, a, held, k, fits, word)),
+                    ⟨Exists(w, t.based_stack_store(Env(env.words, file, env.args), w, a, held, k, fits, word)),
                      t.frames_stack_store(a, k, fits, word, words, i, below, framed)⟩;
                 Exists(file, ⟨j(sym(t.stack_stored(a, t.stack.at(k), word_bytes(word))), λ x _ => holding(file, x), there), rest⟩)
             },
@@ -645,7 +645,7 @@ theorem Target::based_left(self t: Target, env: Env, room: Nat, v: Nat → BitVe
                 let span: (q + bytes.len() <= t.r.size) = omega(reach, sp.left.right);
                 let there: holding(after_file, t.r.profile.store(a, next_rip(t.r.low, q), bytes)) =
                     ⟨Exists(t.r.stored_cells(w, q, bytes),
-                        t.based_span(Env(env.words, file, env.args), room, w, a, held, b0,
+                        t.based_span(Env(env.words, file, env.args), w, a, held, b0,
                             buffer_bytes(lent_buffers(count, env.buffers), b0).len(), sp.right.left, k0, within, bytes, omega(reach))),
                      t.frames_store(a, q, bytes, span, words, i, framed)⟩;
                 Exists(after_file, ⟨j(sym(stored), λ x _ => holding(after_file, x), there),
@@ -662,8 +662,8 @@ theorem Target::based_left(self t: Target, env: Env, room: Nat, v: Nat → BitVe
     let same: (file = relent(count, after, env.buffers)) = relent_is(count, after, env.buffers, file, ended.proof.right.left,
         λ b lent _ => {
             let found = t.caps.nth_present(b, omega(lent, has));
-            let ours: Readable(t.site().data, m2, at(b), buffer_bytes(file, b)) = t.buffer_readable(env1, room, w2, m2, based2, b, found.witness, found.proof);
-            let ours_len: (buffer_bytes(file, b).len() = found.witness) = t.based_buffer_len(env1, room, w2, m2, based2, b, found.witness, found.proof);
+            let ours: Readable(t.site().data, m2, at(b), buffer_bytes(file, b)) = t.buffer_readable(env1, w2, m2, based2, b, found.witness, found.proof);
+            let ours_len: (buffer_bytes(file, b).len() = found.witness) = t.based_buffer_len(env1, w2, m2, based2, b, found.witness, found.proof);
             let cap: (layout.capacity(b) = found.witness) =
                 cong_fn<Option<Nat>, Nat>(λ (c: Option<Nat>) => match c { None => 0, Some(n) => n }, found.proof);
             let theirs = left(b);
@@ -874,20 +874,22 @@ theorem Env::call_meaning(self env: Env, call: Writers(), callee: Nat, arguments
 // the return address below the frame, and the callee by its contract. What
 // the contract asks for each answer is what the code after the CALL needs
 // for it (`Target::ends_taken`), so the call runs as the callee's tree and
-// then, from each answer, the tree its site goes on with.
-theorem Target::goes_calls<A>(self t: Target, live: List<Nat>, env: Env, p: Prog, label, lent: Nat, small: lent <= 3, arguments: List<Nat>,
+// then, from each answer, the tree its site goes on with: after a silent
+// step, paid by the CALL, where `silent` says (a procedure's call).
+theorem Target::goes_calls<A>(self t: Target, silent: Bool, live: List<Nat>, env: Env, p: Prog, label, lent: Nat, small: lent <= 3, arguments: List<Nat>,
     inside: (i: Nat) → Mem(i, arguments) → (t.layout().word_fits(i).IsTrue()) ∧ Mem(i, live),
     within: p.calls(t.layout(), label, lent, arguments).Within(t.program),
     accepts: List<BitVec(64)> → Env → Type, callee: List<BitVec(64)> → Env → ITree<A>(Events::linux()), answer: List<BitVec(64)> → Env → A → Answer,
     performs: t.Callable(label, lent, accepts, callee, answer), accepted: accepts(env.words_at(arguments), env),
     k: A → ITree<BitVec(64)>(Events::linux()),
     next: (x: A) → t.Taken(live, env, prog_len(p.calls(t.layout(), label, lent, arguments)), answer(env.words_at(arguments), env, x), k(x))):
-    t.At(prog_len(p), live, ITree::bind(Events::linux(), callee(env.words_at(arguments), env), k), env) {
+    t.At(prog_len(p), live, ITree::after_step(Events::linux(), silent, ITree::bind(Events::linux(), callee(env.words_at(arguments), env), k)), env) {
     let layout = t.layout();
     let regs = call_registers().drop(2 * lent);
     let words = env.words_at(arguments);
     let passed = t.passed_homes(lent) ++ words;
     let tree: ITree<BitVec(64)>(Events::linux()) = ITree::bind(Events::linux(), callee(words, env), k);
+    let called_tree = ITree::after_step(Events::linux(), silent, tree);
     let block = layout.homes_block(0, lent, call_registers()) ++ [MovRR(Rbx, R10)];
     let passes_to = p.words_to(layout, arguments, regs);
     let carried = then(passes_to, Block(block));
@@ -906,7 +908,7 @@ theorem Target::goes_calls<A>(self t: Target, live: List<Nat>, env: Env, p: Prog
         (s.gprs.Holding(call_registers(), passed) ∧ (read_gpr(Rbx, s.gprs) = read_gpr(R10, s.gprs)));
     let displacement = asm_jump_of(asm_labels(t.program), prog_len(carried), CallTo(label));
     let lands = call_lands(asm_labels(t.program), w_called.witness, t.program, carried, 0, label, t.program.laid_out_lands(t.laid), w_called.proof);
-    let did = t.io().goes_callto(t.program, t.origin, t.stack, t.stack_writes, t.code_fits(), w_called.witness, carried, 0, label, w_called.proof,
+    let did = t.io().goes_callto(silent, t.program, t.origin, t.stack, t.stack_writes, t.code_fits(), w_called.witness, carried, 0, label, w_called.proof,
         asm_labels(t.program, label), lands, tree, pre4, λ _ => i1,
         λ s pre => ⟨trans(t.held_rsp(live, env, s.gprs, s.memory, pre.left), frame_i), fits_i⟩,
         λ s pre => {
@@ -926,21 +928,21 @@ theorem Target::goes_calls<A>(self t: Target, live: List<Nat>, env: Env, p: Prog
                         t.call_pushed(s, displacement, i1, rsp8));
                 let gprs_eq: (v.gprs = g0) = cong_fn<MachineState<X86Memory(t.r.profile)>, Gprs>(λ x => x.gprs, post.left);
                 let stored_m = t.r.profile.store(s.memory, t.stack.at(i1), word_bytes(next_rip(s.rip, 5)));
-                let bare_8 = j(sym(back_i), λ x _ => t.Bare(env, t.room, x, rest, s.gprs, s.memory), t.held_bare(live, env, s.gprs, s.memory, pre.left));
+                let bare_8 = j(sym(back_i), λ x _ => t.Bare(env, x, rest, s.gprs, s.memory), t.held_bare(live, env, s.gprs, s.memory, pre.left));
                 let rsp_c: (read_gpr(Rsp, g0) = t.stack.at(i1)) = trans(cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(Rsp, g), sym(gprs_eq)), post.right.left);
-                let pushed = t.bare_pushed(env, t.room, i1, rest, s.gprs, s.memory, bare_8, fits_i, next_rip(s.rip, 5), g0, rsp_c);
+                let pushed = t.bare_pushed(env, i1, rest, s.gprs, s.memory, bare_8, fits_i, next_rip(s.rip, 5), g0, rsp_c);
                 let read_ret = j(mem_eq, λ mm _ => read_word(t.io().data, mm, t.stack.at(i1)) = Some(ret), post.right.right);
-                let at_c: t.Bare(env, t.room, i1, Cons(ret, rest), g0, stored_m) =
+                let at_c: t.Bare(env, i1, Cons(ret, rest), g0, stored_m) =
                     ⟨pushed.left, ⟨⟨fits_i, ⟨read_ret, pushed.right.left.right.right⟩⟩, rsp_c⟩⟩;
-                let at_m: t.Bare(env, t.room, i1, Cons(ret, rest), g0, v.memory) =
-                    j(sym(mem_eq), λ mm _ => t.Bare(env, t.room, i1, Cons(ret, rest), g0, mm), at_c);
-                run(v, here, resident, j(sym(gprs_eq), λ g _ => t.Bare(env, t.room, i1, Cons(ret, rest), g, v.memory) ∧ (g = g0), ⟨at_m, refl⟩))
+                let at_m: t.Bare(env, i1, Cons(ret, rest), g0, v.memory) =
+                    j(sym(mem_eq), λ mm _ => t.Bare(env, i1, Cons(ret, rest), g0, mm), at_c);
+                run(v, here, resident, j(sym(gprs_eq), λ g _ => t.Bare(env, i1, Cons(ret, rest), g, v.memory) ∧ (g = g0), ⟨at_m, refl⟩))
             }
         });
     // The homes into their registers and R10 into RBX.
     let q3 = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ env.InRegisters(g, arguments, regs);
-    let carry = t.goes_block(passes_to, 0, block, w_carried, tree, pre4, did);
-    let carry2: t.GoesR(prog_len(passes_to), tree, q3) = t.goes_weaken(carry, λ s h => {
+    let carry = t.goes_block(passes_to, 0, block, w_carried, called_tree, pre4, did);
+    let carry2: t.GoesR(prog_len(passes_to), called_tree, q3) = t.goes_weaken(carry, λ s h => {
             let u = execute_block_normal(block, s);
             let c = t.homes_carried(s, words, lent, small, h.right);
             let held_u: t.Held(live, env, u.gprs, u.memory) = j(sym(c.left), λ m _ => t.Held(live, env, u.gprs, m),
@@ -949,7 +951,7 @@ theorem Target::goes_calls<A>(self t: Target, live: List<Nat>, env: Env, p: Prog
             ⟨held_u, ⟨c.right.left, c.right.right.left⟩⟩
         });
     // The arguments into their registers: RSP is the frame already.
-    let passes = t.goes_words_to(live, env, tree, q3, arguments)(regs, p, inside, word_registers_outside(lent), word_registers_distinct(lent),
+    let passes = t.goes_words_to(live, env, called_tree, q3, arguments)(regs, p, inside, word_registers_outside(lent), word_registers_distinct(lent),
         w_passed, carry2);
     λ s here resident held => passes(s, here, resident, ⟨held, λ g3 held3 holding keeps => ⟨held3, holding⟩⟩)
 }
@@ -986,8 +988,8 @@ theorem Target::function_performs(self t: Target, call: Writers(), answers: t.An
         let back_i: (i0 + 8 = t.index) = omega(t.roomy);
         let table = t.homes.room_table(t.functions);
         let callee_room: (rooms_at(table, f) + 8 <= t.called.functions_room(table)) = t.called.functions_room_mem(table, f, listed);
-        let under: (t.called.functions_room(table) <= t.callees.below(t.called, t.procedures, t.bodies, t.homes.places, table, t.room)) =
-            Nat::le_max_r(t.callees.reach(t.procedures, t.bodies, t.homes.places, table, t.room), t.called.functions_room(table));
+        let under: (t.called.functions_room(table) <= t.callees.below(t.called, t.procedures, t.bodies, t.homes.places, table, t.checks, t.room)) =
+            Nat::le_max_r(t.callees.reach(t.procedures, t.bodies, t.homes.places, table, t.checks, t.room), t.called.functions_room(table));
         let room_f: (rooms_at(table, f) <= i0) = omega(t.roomy, callee_room, under);
         let bare = pre.left;
         let v = bare.left.witness;
@@ -999,20 +1001,20 @@ theorem Target::function_performs(self t: Target, call: Writers(), answers: t.An
             placed_words_len(λ (b: Nat) => layout.buffer_at(b), λ (b: Nat) => layout.capacity(b), k, words);
         let short: (homes.len() <= 6) = omega(homes_len, accepted.right.left);
         let holding: s.gprs.Holding(call_registers(), homes) = j(sym(pre.right), λ g _ => g.Holding(call_registers(), homes), passed);
-        let sized = t.lent_sized(env, t.room, v, s.memory, based, k, has);
+        let sized = t.lent_sized(env, v, s.memory, based, k, has);
         let called: t.CalledWith(env.buffers, f, words)(i0, s) = ⟨t.stack.passes_of_args(homes, argument_registers(), i0 + 8, s.gprs, s.memory,
             s.gprs.holding_args(homes, argument_registers(), short, holding)),
-            ⟨room_f, ⟨t.in_memory(env, t.room, v, s.memory, based, k, has), sized⟩⟩⟩;
+            ⟨room_f, ⟨t.in_memory(env, v, s.memory, based, k, has), sized⟩⟩⟩;
         let got = answers(env.buffers, f, below, words, accepted.left)(s, here, resident, i0, bare.right.right, top.left, called, ret, top.right.left);
         let u = got.witness;
         let left = got.proof.right.right.right.right;
         let over = left.proof.right;
         let file = relent(k, left.witness, env.buffers);
-        let kept = t.based_left(env, t.room, v, s.memory, u.memory, based, i0, omega(top.left), Cons(ret, above), top, k, has, sized, left.witness,
+        let kept = t.based_left(env, v, s.memory, u.memory, based, i0, omega(top.left), Cons(ret, above), top, k, has, sized, left.witness,
             over.right.right.left, over.right.right.right);
-        let bare_u: t.Bare(Env(env.words, a.buffers, env.args), t.room, t.index, above, u.gprs, u.memory) =
-            j(sym(left.proof.left), λ fl _ => t.Bare(Env(env.words, fl, env.args), t.room, t.index, above, u.gprs, u.memory),
-                j(back_i, λ x _ => t.Bare(Env(env.words, file, env.args), t.room, x, above, u.gprs, u.memory),
+        let bare_u: t.Bare(Env(env.words, a.buffers, env.args), t.index, above, u.gprs, u.memory) =
+            j(sym(left.proof.left), λ fl _ => t.Bare(Env(env.words, fl, env.args), t.index, above, u.gprs, u.memory),
+                j(back_i, λ x _ => t.Bare(Env(env.words, file, env.args), x, above, u.gprs, u.memory),
                     ⟨kept.left, ⟨kept.right.right.right, got.proof.right.right.right.left⟩⟩));
         let sim_u = ends(trivial)(u, got.proof.right.left, got.proof.right.right.left, bare_u,
             λ x mem => trans(t.homes.kept_callee(s.gprs, u.gprs, over.right.left, x, mem), cong_fn<Gprs, BitVec(64)>(λ g => read_gpr(x, g), pre.right)),
@@ -1050,7 +1052,7 @@ theorem Target::functions_run(self t: Target, call: Writers(), answers: t.Answer
         // RAX to the result's home.
         let taken = t.goes_result(live, out, left, region.meaning(call, env), back, result, inside(result, Inl(refl)),
             λ i m ne => live_before_keeps(arguments, result, out, i, m, ne), apart, within, tree, next);
-        t.goes_calls<True>(live, env, p, Succ(callee), k, small, arguments,
+        t.goes_calls<True>(False, live, env, p, Succ(callee), k, small, arguments,
             λ i m => ⟨inside(i, Inr(m)), live_before_reads(arguments, result, out, i, m)⟩, w_back,
             t.Lends(callee), λ (_: List<BitVec(64)>) (_: Env) => Ret(trivial), function_answer(call, callee),
             t.function_performs(call, answers, callee, below, listed), ⟨arity, ⟨omega(words_len, few), has⟩⟩, λ (_: True) => tree,
