@@ -253,6 +253,25 @@ instructions" made cheap. The code-quality list of
 `issues/linked-sha256-speed.md` (addressing forms, small immediates, `LEA`)
 is mostly rows.
 
+*Built (2026-11-19), the first rows.* `Operation` (`function_ir_operation`)
+names an operation of two words once with its meaning: the multiply, the
+shifts by a word (zero from the width up), and the unsigned divide and
+remainder (total, `BitVec::udiv`'s). `rt` has one primitive `Apply(op, w)`,
+the reflector maps `*`, `x.shift_left(k.toNat())` and `/`, `%` to it, and
+FunctionIR has one node `Apply(op, width, output, left, right)`. A row
+(`function_ir_operation_x86`) is the code, where it reads its operands and
+where it leaves the result, and its theorem says only that the result
+register holds the meaning: the lowering's one case (`File::apply`) places
+the operands, runs the code, and forgets every register `leaves` says the
+code may write, so a row never proves what it spares. The rows offered:
+`IMUL` in place; a shift by `CL` times whether the count was below 64; and a
+divide or remainder by a known constant as a multiply by its reciprocal
+(`bitvec_reciprocal`, Granlund and Montgomery), the multiplier found by
+evaluation and only its two bounds checked. A divide by a word is not
+offered: x86's `DIV` faults on zero and the model's blocks refuse what may
+fault (`issues/x86-idiv-signed-division.md`). The tactic of §5.4 did not
+exist yet, so the three theorems are written by hand, each a page.
+
 **(b) One control language over the layers that have effects.** The open
 design question's own lean: `FTm` and `ETm` share `let`, `if`, loop and call,
 with pure terms as the leaves of both. Loops, calls and recursion are then

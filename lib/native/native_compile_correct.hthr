@@ -608,8 +608,15 @@ theorem Prog::laid_of(self whole: Prog, program: Prog, same: (match whole.laid_o
 
 theorem Source::calls_laid(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>, program: Prog, compiled: src.compile_calls(low, homes, bodies) = Some(program)):
     program.laid_out().IsTrue() {
-    cases compiled as emitted, coded, linked, laid;
+    cases compiled as ranked, emitted, coded, linked, laid;
     Bool::is_true_of_eq(laid)
+}
+
+// What `compile_calls` builds holds the source's ranks: it checked them.
+theorem Source::calls_ranked(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>, program: Prog, compiled: src.compile_calls(low, homes, bodies) = Some(program)):
+    src.ranked() = True {
+    cases compiled as ranked;
+    refl
 }
 
 // What `compile` builds is laid out: read off the check it made, so a
@@ -626,6 +633,17 @@ theorem Source::compile_laid(self src: Source, low: BitVec(64), homes: Homes, bo
             Cons(_, _) => src.calls_laid(low, homes, bodies, program, compiled),
         },
         Cons(_, _) => src.calls_laid(low, homes, bodies, program, compiled),
+    }
+}
+
+// What `compile` builds holds the source's ranks: with procedures it
+// checked them, and with none there is nothing to hold.
+theorem Source::compile_ranked(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>, program: Prog, compiled: src.compile(low, homes, bodies) = Some(program)):
+    src.ranked() = True {
+    cases compiled as allocated;
+    match none: src.procedures {
+        Nil => j(sym(none), λ ps _ => ps.ranked_with(src.main) = True, refl),
+        Cons(_, _) => src.calls_ranked(low, homes, bodies, program, compiled),
     }
 }
 
@@ -671,23 +689,23 @@ theorem Source::compile_of(self src: Source, low: BitVec(64), homes: Homes, bodi
 // functions' and the shared exit's labels, the procedures after its exit
 // 0, the shared exit, and the functions linked after it, laid out.
 theorem Source::compile_calls_ran(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>, program, main, procs: Prog, names, after: Nat,
-    emitted: src.main.emit(src.entry(low, homes, bodies), src.layout(low, homes, bodies), [], src.layout(low, homes, bodies).deep_label()) = Some(Compiled(main, names)),
+    ranked: src.ranked() = True, emitted: src.main.emit(src.entry(low, homes, bodies), src.layout(low, homes, bodies), [], src.layout(low, homes, bodies).deep_label()) = Some(Compiled(main, names)),
     code: src.procedures.procedures_code(then(then(main, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall), src.layout(low, homes, bodies), 0, names) = Some(Compiled(procs, after)),
     whole: procs.deep_exit(src.layout(low, homes, bodies)).links(src.functions, homes.places, homes.room_table(src.functions), after) = Some(program), laid: program.laid_out().IsTrue()):
     src.compile_calls(low, homes, bodies) = Some(program) {
-    simp_only(Source::compile_calls, emitted, code, whole, eq_true_of_is_true(program.laid_out(), laid))
+    simp_only(Source::compile_calls, ranked, emitted, code, whole, eq_true_of_is_true(program.laid_out(), laid))
 }
 
 // The same with procedures (`Source::compile_calls`): the converse
 // `write-elf` cites for a source that has them.
 theorem Source::compile_calls_of(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>, first: Procedure, rest: List<Procedure>, program, main, procs: Prog, names, after: Nat,
-    allocated: src.allocation_ok(homes).IsTrue(), calls: src.procedures = Cons(first, rest),
+    allocated: src.allocation_ok(homes).IsTrue(), calls: src.procedures = Cons(first, rest), ranked: src.ranked() = True,
     emitted: src.main.emit(src.entry(low, homes, bodies), src.layout(low, homes, bodies), [], src.layout(low, homes, bodies).deep_label()) = Some(Compiled(main, names)),
     code: src.procedures.procedures_code(then(then(main, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall), src.layout(low, homes, bodies), 0, names) = Some(Compiled(procs, after)),
     whole: procs.deep_exit(src.layout(low, homes, bodies)).links(src.functions, homes.places, homes.room_table(src.functions), after) = Some(program), laid: program.laid_out().IsTrue()):
     src.compile(low, homes, bodies) = Some(program) {
     let layout = src.layout(low, homes, bodies);
-    let ran = src.compile_calls_ran(low, homes, bodies, program, main, procs, names, after, emitted, code, whole, laid);
+    let ran = src.compile_calls_ran(low, homes, bodies, program, main, procs, names, after, ranked, emitted, code, whole, laid);
     let plain: Option<Prog> = match src.functions {
         Nil => match src.main.emit(src.entry(low, homes, bodies), layout, [], 0) { None => None, Some(c) => c.prog.finish() },
         Cons(_, _) => src.compile_calls(low, homes, bodies),
@@ -704,13 +722,13 @@ theorem Source::compile_calls_of(self src: Source, low: BitVec(64), homes: Homes
 
 // And with functions and no procedure: the same code, the procedures none.
 theorem Source::compile_functions_of(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>, first: Function, rest: List<Function>, program, main, procs: Prog, names, after: Nat,
-    allocated: src.allocation_ok(homes).IsTrue(), bare: src.procedures = Nil, calls: src.functions = Cons(first, rest),
+    allocated: src.allocation_ok(homes).IsTrue(), bare: src.procedures = Nil, calls: src.functions = Cons(first, rest), ranked: src.ranked() = True,
     emitted: src.main.emit(src.entry(low, homes, bodies), src.layout(low, homes, bodies), [], src.layout(low, homes, bodies).deep_label()) = Some(Compiled(main, names)),
     code: src.procedures.procedures_code(then(then(main, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall), src.layout(low, homes, bodies), 0, names) = Some(Compiled(procs, after)),
     whole: procs.deep_exit(src.layout(low, homes, bodies)).links(src.functions, homes.places, homes.room_table(src.functions), after) = Some(program), laid: program.laid_out().IsTrue()):
     src.compile(low, homes, bodies) = Some(program) {
     let layout = src.layout(low, homes, bodies);
-    let ran = src.compile_calls_ran(low, homes, bodies, program, main, procs, names, after, emitted, code, whole, laid);
+    let ran = src.compile_calls_ran(low, homes, bodies, program, main, procs, names, after, ranked, emitted, code, whole, laid);
     let plain: Option<Prog> = match src.main.emit(src.entry(low, homes, bodies), layout, [], 0) { None => None, Some(c) => c.prog.finish() };
     j(sym(eq_true_of_is_true(src.allocation_ok(homes), allocated)), λ a _ => (match a as λ _ => Option<Prog> {
             False => None,
@@ -990,7 +1008,7 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, bo
                                 let rank = src.procedures.len();
                                 let below = src.main.performed().below(src.main.called(), src.procedures, bodies, homes.places, homes.room_table(src.functions), checks, rank);
                                 let need_is: (src.need(homes, bodies) = 8 * src.words + left) = refl;
-                                let below_le: (below + 8 <= left) = Nat::le_max_r(src.room, below + 8);
+                                let below_le: (below + 8 <= left) = src.main_below_left(homes, bodies);
                                 let top_i: (stack.size = index + 8 * src.words) = omega(deep, need_is);
                                 let framed: (index + 8 * (src.words + 0) <= stack.size) = omega(top_i);
                                 let floor = index - left;
@@ -1168,6 +1186,7 @@ theorem Source::calls_built(self src: Source, low: BitVec(64), homes: Homes, bod
     let layout = src.layout(low, homes, bodies);
     let exit0 = λ (q: Prog) => then(then(q, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall);
     let laid = src.calls_laid(low, homes, bodies, program, compiled);
+    cases compiled as ranked;
     match emitted: src.main.emit(src.entry(low, homes, bodies), layout, [], layout.deep_label()) {
         None => absurd(compiled),
         Some(c) => match coded: src.procedures.procedures_code(exit0(c.prog), layout, 0, c.names) {
@@ -1678,7 +1697,7 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, b
     let rank = src.procedures.len();
     let below = src.main.performed().below(src.main.called(), src.procedures, bodies, homes.places, homes.room_table(src.functions), checks, rank);
     let need_is: (src.need(homes, bodies) = 8 * src.words + left) = refl;
-    let below_le: (below + 8 <= left) = Nat::le_max_r(src.room, below + 8);
+    let below_le: (below + 8 <= left) = src.main_below_left(homes, bodies);
     let top_i: (stack.size = index + 8 * src.words) = omega(deep, need_is);
     let framed: (index + 8 * (src.words + 0) <= stack.size) = omega(top_i);
     let floor = index - left;

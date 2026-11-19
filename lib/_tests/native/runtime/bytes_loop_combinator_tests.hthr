@@ -1,0 +1,62 @@
+// The insertion sort over `Bytes(n)` (bytes_tests' `Bytes::sort`) written
+// on the loop combinator (lib/std/core/loop.hthr,
+// docs/language/loop-combinator-design.md) as the `while` and `for`
+// elaboration will write it: each loop's facts are fields of its state, so
+// its step is a function of states where they hold, and every read and
+// store finds its bound from them. No step answers at a state where a fact
+// fails, and nothing re-finds a fact.
+//
+// Tests, not library: nothing outside lib/_tests imports this module.
+import logic; import bool; import nat; import list; import option; import pair; import bitvec; import bitvec_nat; import bitvec_omega;
+import omega; import nat_map; import list_window; import rt; import rt_file; import bytes; import loop;
+
+// The inner loop: `while 0 < j && key < s[j - 1] invariant j <= i
+// decreases j.toNat() { s[j] := s[j - 1]; j := j - 1; }`. Its state is the
+// span, `j`, and the invariant.
+record Hole(n, i: u64) { s: Bytes(n), j: u64, kept: ∥j <= i∥ }
+
+fn Hole::left({n, i: u64}, self h: Hole(n, i)) → Nat { h.j.toNat() }
+
+// A pass: the facts it reads are the state's (`kept`) and the loop's
+// caller's (`inside`, the outer loop's test), each found where it is used.
+fn Hole::sift({n, i: u64}, key: u8, inside: ∥i < n∥, self h: Hole(n, i)) → Pass<Hole(n, i), Hole(n, i)>(Hole::left, h) {
+    let kept = h.kept;
+    if pos: 0 < h.j {
+        if bigger: key < h.s[h.j - 1] {
+            let less: ((h.j - 1).toNat() < h.j.toNat()) = bv_omega;
+            let moved: Hole(n, i) = Hole(s := h.s.put(h.j, h.s[h.j - 1]), j := h.j - 1, kept := bitvec_omega::found_fact<h.j - 1 <= i>(fact := bv_omega));
+            Again(Lower(next := moved, less := squash(less)))
+        } else {
+            Done(h)
+        }
+    } else {
+        Done(h)
+    }
+}
+
+// The outer loop: `for i in 0..s.len() { let key = s[i]; let mut j = i;
+// <the inner loop>; s[j] := key; }`. The inner loop's answer carries its
+// invariant, which is what lets `s[j] := key` find `j < n`.
+record Sorting(n: u64) { s: Bytes(n), i: u64 }
+
+fn Sorting::left({n: u64}, self t: Sorting(n)) → Nat { (n - t.i).toNat() }
+
+fn Sorting::insert({n: u64}, self t: Sorting(n)) → Pass<Sorting(n), Bytes(n)>(Sorting::left, t) {
+    if inside: t.i < n {
+        let fact: ∥t.i < n∥ = squash(inside);
+        let key = t.s[t.i];
+        let start: Hole(n, t.i) = Hole(s := t.s, j := t.i, kept := bitvec_omega::found_fact<t.i <= t.i>(fact := bv_omega));
+        let h = Loop<Hole(n, t.i), Hole(n, t.i)>(measure := Hole::left, step := λ (h: Hole(n, t.i)) => h.sift(key, fact)).run(start);
+        let kept = h.kept;
+        let less: ((n - (t.i + 1)).toNat() < (n - t.i).toNat()) = bv_omega;
+        Again(Lower(next := Sorting(s := h.s.put(h.j, key), i := t.i + 1), less := squash(less)))
+    } else {
+        Done(t.s)
+    }
+}
+
+fn Bytes::sorted({n: u64}, self s: Bytes(n)) → Bytes(n) {
+    Loop<Sorting(n), Bytes(n)>(measure := Sorting::left, step := λ (t: Sorting(n)) => t.insert()).run(Sorting(s := s, i := 0))
+}
+
+theorem sorted_runs(): Bytes([3, 1, 2, 0, 2], refl).sorted(n := 5).bytes = [0, 1, 2, 2, 3] { refl }

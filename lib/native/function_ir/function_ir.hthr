@@ -10,6 +10,7 @@
 // grow from without inheriting `ir_v1`'s constructor-tree value model.
 
 import bitvec;
+import function_ir_operation;
 import bitvec_bytes;
 import bitvec_resize;
 import bitvec_rotate;
@@ -105,6 +106,9 @@ inductive Node {
     // amount)`, so the node and the pair it replaces mean the same by
     // unfolding: `rotate_right_of_shifts`); the lowering takes `width` 32.
     RotateRight(width: Nat, output: Nat, value: Nat, amount: Nat),
+    // An operation of two words named by its row
+    // (`function_ir_operation`): `op.meaning(left, right)` at `width`.
+    Apply(op: Operation, width: Nat, output: Nat, left: Nat, right: Nat),
 }
 
 record Region {
@@ -137,6 +141,7 @@ fn node_output(node: Node) → Port {
         WideStore(bytes, output, _, _, _) => Port(output, 8 * bytes),
         ByteSwap(width, output, _) => Port(output, width),
         RotateRight(width, output, _, _) => Port(output, width),
+        Apply(_, width, output, _, _) => Port(output, width),
     }
 }
 
@@ -410,6 +415,8 @@ fn NodeIndexedIn(directory: PortDirectory, index: Nat, node: Node) → Type {
             UnaryImmediateNodeIndexed(directory, index, width, output, source),
         RotateRight(width, output, value, _) =>
             UnaryImmediateNodeIndexed(directory, index, width, output, value),
+        Apply(_, width, output, left, right) =>
+            BinaryNodeIndexed(directory, index, width, output, left, right),
     }
 }
 
@@ -862,6 +869,8 @@ fn NodeHolds(values: Valuation(), node: Node, buffers: Buffers() := Nil) → Typ
             values(width, output) = values(width, source).swap_bytes(),
         RotateRight(width, output, value, amount) =>
             values(width, output) = values(width, value).rotr(amount),
+        Apply(op, width, output, left, right) =>
+            values(width, output) = op.meaning(values(width, left), values(width, right)),
     }
 }
 

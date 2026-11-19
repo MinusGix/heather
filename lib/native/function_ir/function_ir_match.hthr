@@ -15,6 +15,7 @@
 // instance again.
 
 import function_ir;
+import function_ir_operation;
 import function_ir_replay;
 import function_ir_rule;
 import bool;
@@ -50,6 +51,7 @@ fn Node::kind(self node: Node) → Nat {
         WideStore(_, _, _, _, _) => 19,
         ByteSwap(_, _, _) => 20,
         RotateRight(_, _, _, _) => 21,
+        Apply(_, _, _, _, _) => 22,
     }
 }
 
@@ -77,6 +79,7 @@ fn Node::numbers(self node: Node) → List<Nat> {
         WideStore(n, o, f, i, v) => [n, o, f, i, v],
         ByteSwap(w, o, s) => [w, o, s],
         RotateRight(w, o, v, n) => [w, o, v, n],
+        Apply(op, w, o, l, r) => [op.code(), w, o, l, r],
     }
 }
 
@@ -542,6 +545,7 @@ fn Node::writing_to(self node: Node, o: Nat) → Node {
         WideStore(n, _, f, i, v) => WideStore(n, o, f, i, v),
         ByteSwap(w, _, x) => ByteSwap(w, o, x),
         RotateRight(w, _, v, n) => RotateRight(w, o, v, n),
+        Apply(op, w, _, l, r) => Apply(op, w, o, l, r),
     }
 }
 

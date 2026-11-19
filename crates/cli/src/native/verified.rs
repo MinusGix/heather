@@ -1917,6 +1917,12 @@ pub(super) fn read_items_with(numbers: &[u64], word: &dyn Fn(u32, u64) -> String
                         21 => format!("MovRI32({}, {})", gpr(take()?)?, word(32, take()?)),
                         17 => format!("MovSelf32({})", gpr(take()?)?),
                         18 => format!("RorRI32({}, {})", gpr(take()?)?, word(8, take()?)),
+                        22 => format!("ImulRR({}, {})", gpr(take()?)?, gpr(take()?)?),
+                        23 => format!("MulR({})", gpr(take()?)?),
+                        24 => {
+                            let op = *["OpShl", "OpShr", "OpSar"].get(take()? as usize).ok_or_else(bad)?;
+                            format!("ShiftCl({op}, {})", gpr(take()?)?)
+                        }
                         _ => return Err(bad()),
                     };
                     instructions.push(instruction);

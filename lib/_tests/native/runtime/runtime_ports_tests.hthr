@@ -20,6 +20,7 @@ import tactic;
 import derive;
 import bitvec;
 import bitvec_nat;
+import bitvec_div;
 import bitvec_omega;
 import algebra;
 import omega;
@@ -64,18 +65,24 @@ import rt_bytes_loop;
 // Rung 1: operations
 
 // FNV-1a, the shape of a hash in `crates/cache`: a multiply.
-// expect-error: `mul` is an ordinary fn
 runtime fn List::port_fnv(self s: List<u8>, n, i, h: u64) → u64 decreases (n - i).toNat() {
     if lt: i < n { s.port_fnv(n, i + 1, h.bxor(↑s.byte_within(n, i)) * 1099511628211) } else { h }
 }
 
+theorem port_fnv_runs(): List::port_fnv(b"hi", 2, 0, 14695981039346656037) = 628919584683901914 { refl }
+
 // A shift by a count that is a word (`Numeral::bit`, a varint's shift).
-// expect-error: expected a numeral
 runtime fn port_shift(x, k: u64) → u64 { x.shift_left(k.toNat()) }
 
+// Zero from the width up, as `shift_left` is.
+theorem port_shift_runs(): port_shift(3, 4) = 48 ∧ port_shift(1, 63) = 9223372036854775808 ∧ port_shift(1, 64) = 0 ∧ port_shift(5, 1000) = 0 {
+    ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩
+}
+
 // A digit of a number being printed (`Numeral::div_rem` at one limb).
-// expect-error: `/` has no meaning here
 runtime fn port_tenth(x: u64) → u64 { x / 10 }
+
+theorem port_tenth_runs(): port_tenth(1234) = 123 ∧ port_tenth(9) = 0 { ⟨refl, refl⟩ }
 
 // ---------------------------------------------------------------------------
 // Rung 1: what crosses a function's boundary

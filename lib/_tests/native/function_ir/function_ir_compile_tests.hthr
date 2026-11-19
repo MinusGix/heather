@@ -209,6 +209,8 @@ inductive Written {
     Status,
     // A general register and the status flags.
     RegisterAndStatus,
+    // RAX, RDX and the status flags: the unsigned multiply's two words.
+    RaxRdxAndStatus,
 }
 
 fn Instruction::written(self instruction: Instruction) → Written {
@@ -238,6 +240,11 @@ fn Instruction::written(self instruction: Instruction) → Written {
         MovSelf32(_) => Register,
         // A rotate writes CF (and leaves OF undefined) at a nonzero count.
         RorRI32(_, _) => RegisterAndStatus,
+        // A multiply writes CF and OF (and leaves SF, ZF, AF, PF undefined).
+        ImulRR(_, _) => RegisterAndStatus,
+        MulR(_) => RaxRdxAndStatus,
+        // A shift by CL writes the flags at a nonzero count.
+        ShiftCl(_, _) => RegisterAndStatus,
     }
 }
 
@@ -248,6 +255,7 @@ fn every_instruction() → List<Instruction> {
         CmpRR(Rax, Rax), SetBelow(Al), SetLess(Al), SetEqual(Al), TestRR(Rax, Rax), AddRI8(Rax, BitVec::ofNat(0)),
         AddRI32(Rax, BitVec::ofNat(0)), ShiftOne(OpShl, Rax), ShiftImm(OpShl, Rax, BitVec::ofNat(0)), Bswap32(Rax),
         MovSelf32(Rax), RorRI32(Rax, BitVec::ofNat(0)),
-        CmpRI8(Rax, BitVec::ofNat(0)), CmpRI32(Rax, BitVec::ofNat(0)), MovRI32(Rax, BitVec::ofNat(0))]
+        CmpRI8(Rax, BitVec::ofNat(0)), CmpRI32(Rax, BitVec::ofNat(0)), MovRI32(Rax, BitVec::ofNat(0)),
+        ImulRR(Rax, Rax), MulR(Rax), ShiftCl(OpShl, Rax)]
 }
-theorem inventory_size(): every_instruction().len() = 22 { refl }
+theorem inventory_size(): every_instruction().len() = 25 { refl }

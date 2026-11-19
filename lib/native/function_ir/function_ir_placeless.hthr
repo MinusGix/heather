@@ -32,6 +32,7 @@
 
 import bitvec_bytes;
 import function_ir;
+import function_ir_operation;
 import function_ir_eval;
 import function_ir_state;
 import function_ir_writes;
@@ -284,6 +285,8 @@ theorem Node::value_reads(self node: Node, buffers: Buffers(), values, other: Va
             agree(w, value, Inl(refl))),
         RotateRight(_, _, value, amount) => λ agree w => cong_fn(λ (x: BitVec(w)) => x.rotr(amount),
             agree(w, value, Inl(refl))),
+        Apply(op, _, _, left, right) => λ agree w => eq2(λ (x: BitVec(w)) (y: BitVec(w)) => op.meaning(x, y), agree(w, left, Inl(refl)),
+            agree(w, right, Inr(Inl(refl)))),
         ArithmeticShiftRight(_, _, value, amount) => λ agree w => cong_fn(λ (x: BitVec(w)) => x.arithmetic_shift_right(amount),
             agree(w, value, Inl(refl))),
         UnsignedLessThan(width, _, left, right) => λ agree w => cong_fn(λ (b: Bool) => bit_value(b, w),

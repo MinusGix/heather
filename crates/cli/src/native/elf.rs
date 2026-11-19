@@ -554,10 +554,10 @@ fn {p}_places() → List<Nat> {{ {p}_plans({src}().functions) }}
 }}
 "), if procedures > 0 {
             format!("{src}().compile_calls_of({LOW}, {homes}, {frames}, {src}().procedures.head_or(Procedure([], [], Exit(0))), {src}().procedures.tail(), {p}_code(), {main}, {procs}, {names}, {after},
-        {p}_allocated(), refl, {p}_emitted(), {p}_procedures(), {p}_deep(), {p}_laid())")
+        {p}_allocated(), refl, refl, {p}_emitted(), {p}_procedures(), {p}_deep(), {p}_laid())")
         } else {
             format!("{src}().compile_functions_of({LOW}, {homes}, {frames}, {src}().functions.head_or(Function([], Call(0, [], 0), 0)), {src}().functions.tail(), {p}_code(), {main}, {procs}, {names}, {after},
-        {p}_allocated(), refl, refl, {p}_emitted(), {p}_procedures(), {p}_deep(), {p}_laid())")
+        {p}_allocated(), refl, refl, refl, {p}_emitted(), {p}_procedures(), {p}_deep(), {p}_laid())")
         }),
     };
     // The program's theorem, over its contract.
