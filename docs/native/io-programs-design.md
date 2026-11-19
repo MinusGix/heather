@@ -252,7 +252,7 @@ takes a plain identifier (`symbol_ok`); it learns `f::source`, and the
 certificate names its members after it (`f::source_elf_runs`, …).
 The certificate then has every link: the file runs as the `Source`
 (`<source>_elf_runs`), the `Source`'s fuelled program and its fuel-free tree
-refine each other (`Source::tree_co_refines`), and the tree reads as `f`
+refine each other (`Source::tree_co_refines`, `tree_co_refined`), and the tree reads as `f`
 (`f::reads`). A last theorem, `Source::elf_reads` in `native_compile_elf`,
 states the composition once, so a program's certificate can cite it
 directly: every trace of the process is a trace the world-threading meaning
