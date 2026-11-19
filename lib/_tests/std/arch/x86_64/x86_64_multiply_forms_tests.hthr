@@ -158,4 +158,3 @@ theorem sar_cl_65_on_the_cpu(): words([after(ShiftCl(OpSar, Rax), state(w(0x0000
 
 theorem sar_cl_255_on_the_cpu(): words([after(ShiftCl(OpSar, Rax), state(w(0x0000000000000000), w(0x0), w(255)), Rax), after(ShiftCl(OpSar, Rax), state(w(0xffffffffffffffff), w(0x0), w(255)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x8000000000000000), w(0x0), w(255)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x00000000ffffffff), w(0x0), w(255)), Rax), after(ShiftCl(OpSar, Rax), state(w(0xffffffff00000000), w(0x0), w(255)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x0123456789abcdef), w(0x0), w(255)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x0000000000000001), w(0x0), w(255)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x8000000000000001), w(0x0), w(255)), Rax)]) =
     [w(0x0000000000000000), w(0xffffffffffffffff), w(0xffffffffffffffff), w(0x0000000000000000), w(0xffffffffffffffff), w(0x0000000000000000), w(0x0000000000000000), w(0xffffffffffffffff)] { refl }
-

@@ -115,7 +115,6 @@ theorem shift_row_reads<M>(op: ShiftOp, destination: Gpr, apart: destination.sam
             cong_fn(λ (b: BitVec(64)) => shifted.mul(b), bit)))
 }
 
-
 // ---------------------------------------------------------------------------
 // Divide by a constant: x86's DIV faults on a zero divisor and is not in the
 // model's blocks (`block_reads` refuses it), so a known divisor

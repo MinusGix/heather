@@ -43,6 +43,11 @@ const MODULES: &[(&str, &str)] = &[
     ("bitvec_resize", include_str!("../../../lib/std/bitvec/bitvec_resize.hthr")),
     ("bitvec_bytes", include_str!("../../../lib/std/bitvec/bitvec_bytes.hthr")),
     ("bitvec_rotate", include_str!("../../../lib/std/bitvec/bitvec_rotate.hthr")),
+    // The operations a node applies (`function_ir_operation`), whose meanings include
+    // `bitvec_div`'s quotient and remainder.
+    ("bitvec_signed", include_str!("../../../lib/std/bitvec/bitvec_signed.hthr")),
+    ("bitvec_div", include_str!("../../../lib/std/bitvec/bitvec_div.hthr")),
+    ("function_ir_operation", include_str!("../../../lib/native/function_ir/function_ir_operation.hthr")),
     ("function_ir", FUNCTION_IR),
 ];
 

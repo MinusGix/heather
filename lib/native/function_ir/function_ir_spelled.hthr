@@ -19,6 +19,17 @@ import nat_map;
 import option;
 import string;
 
+// The name a refusal or an explanation shows (here, beside the other
+// spellings: `function_ir_operation` is read where text is not).
+fn Operation::name(self op: Operation) → String {
+    match op { Mul => "mul", ShlBy => "shl", ShrBy => "shr", UDiv => "udiv", URem => "urem" }
+}
+
+// The constructor's name, as a certificate spells the operation back.
+fn Operation::constructor(self op: Operation) → String {
+    match op { Mul => "Mul", ShlBy => "ShlBy", ShrBy => "ShrBy", UDiv => "UDiv", URem => "URem" }
+}
+
 fn spell_codes(chars: List<Char>, after: List<Nat>) → List<Nat> {
     match chars { Nil => after, Cons(c, rest) => Cons(c.code, spell_codes(rest, after)) }
 }

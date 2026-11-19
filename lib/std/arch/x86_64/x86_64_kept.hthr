@@ -70,7 +70,6 @@ fn Instruction::writes(self instruction: Instruction) → Option<Gpr> {
     }
 }
 
-
 fn spares(written: Option<Gpr>, query: Gpr) → Bool {
     match written { None => True, Some(register) => !register.same(query) }
 }

@@ -3,7 +3,7 @@
 // through one generic case. `rt` has one primitive `Apply(op, w)`,
 // FunctionIR one node `Apply(op, width, output, left, right)`, and the
 // lowering one case that reads the operation's row of machine code
-// (`function_ir_lower_rows`): where the operands go, the instructions, and
+// (`function_ir_operation_x86`, `File::apply`): where the operands go, the instructions, and
 // the theorem that the instructions leave the meaning. The next operation
 // is a constructor here, its meaning, and its row there.
 //
@@ -67,14 +67,4 @@ fn Operation::same(self a, b: Operation) → Bool { a.code().same(b.code()) }
 theorem Operation::same_sound(self a, b: Operation, h: a.same(b) = True): a = b {
     trans(sym(a.of_code_code()),
         trans(cong_fn(λ (n: Nat) => Operation::of_code(n), a.code().same_sound(b.code(), h)), b.of_code_code()))
-}
-
-// The name a refusal or an explanation shows.
-fn Operation::name(self op: Operation) → String {
-    match op { Mul => "mul", ShlBy => "shl", ShrBy => "shr", UDiv => "udiv", URem => "urem" }
-}
-
-// The constructor's name, as a certificate spells the operation back.
-fn Operation::constructor(self op: Operation) → String {
-    match op { Mul => "Mul", ShlBy => "ShlBy", ShrBy => "ShrBy", UDiv => "UDiv", URem => "URem" }
 }
