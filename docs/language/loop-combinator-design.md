@@ -1,7 +1,9 @@
 # One loop combinator
 
 Status: **round 1 built** (the combinator, its rule, a case principle for a
-step, probes). Rounds 2 to 5 (§8) are the migration. Thread "Rebuild loops on
+step, probes); **round 2 in review** (a `while` outside a `runtime fn`
+elaborates to the combinator, §5). Rounds 3 to 5 (§8) are the rest of the
+migration. Thread "Rebuild loops on
 one combinator", 2026-11-19, from the dogfooding review
 (`docs/native/dogfooding-plan.md`, PR #804).
 
@@ -140,6 +142,21 @@ with captures `c̄` (as today):
   sum, which is what the dogfooding probe 6 (`memchr`) needs.
 - A `for x in xs` over a list stays the `foldl` it is: a fold is already a
   loop with a structural measure, and its proofs are list induction.
+
+**As built (round 2).** The names are `f::State` and `f::step` (minted
+`f#State`/`f#step`, designated under the loop's own name with every member
+of the step's family, so a proof writes `induct f::step(s)` and
+`f::step::True`); with several loops in one function they are
+`f::loopK_State`/`f::loopK_step`, numbered in order. The state's fields are the
+assigned locals and then one per invariant conjunct and free fact. The
+decrease and the facts at `Again` are found by the measure closer
+(`omega`, then `bv_omega` over words); when it fails, the error says that
+this pass must decrease the measure, at the `decreases` clause. A module
+with a `while` imports `loop`. A loop's type arguments are not inferred
+from a `Loop(…)` a proof writes: it writes `Loop<f::State, f::State>(…)`.
+Still lifted in round 2: a `mut self` method's loops, a counted `for` over
+words, and every loop of a `runtime fn` (its reflector reads the lifted
+form until round 3).
 
 What disappears: `Lift::lift_while`, `lift_while_method`, `lift_counted`
 and their method-receiver forms; the measure lowering of the lifted loops

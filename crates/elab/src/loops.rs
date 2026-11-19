@@ -1023,10 +1023,16 @@ impl Lift<'_> {
         };
         let measure_fn = |at: Span| lam("__loop_t", &state_ty, measure_at("__loop_t", at), at);
         let found = |ty: &Ty, at: Span| -> Expr {
-            // `{ let __found: ∥P∥ = <closer>; __found }`: the fact stated as
-            // written, where the pass's locals are its new values, and
-            // proved as a `decreases` obligation is (`omega`, then
-            // `bv_omega` over words), the facts in scope released.
+            // `{ let __found: P = <closer>; squash(__found) }`: the fact
+            // stated as written, where the pass's locals are its new
+            // values, and proved as a `decreases` obligation is (`omega`,
+            // then `bv_omega` over words, which it sees only outside the
+            // squash), the facts in scope released.
+            let (ty, squash) = match &ty.kind {
+                TyKind::Squash(p) => (&**p, true),
+                _ => (ty, false),
+            };
+            let result = if squash { call(var("squash", at), vec![var("__found", at)], at) } else { var("__found", at) };
             Expr {
                 kind: ExprKind::Block(Box::new(Block {
                     stmts: vec![Stmt::Let {
@@ -1036,7 +1042,7 @@ impl Lift<'_> {
                         span: at,
                         opaque: true,
                     }],
-                    result: Box::new(var("__found", at)),
+                    result: Box::new(result),
                     ons: vec![],
                     span: at,
                 })),

@@ -903,6 +903,17 @@ impl DeclarationsMut<'_> {
         // loops as programs, a loop is given no fact it did not state.
         let free = self.scope.loop_methods.is_none();
         let family = loops::lower(decl, self.0, ranges, free)?;
+        // A `while` is spelled with the library's loop combinator, which
+        // the module has to import (`Pass` alone would be refused as a
+        // name that takes no type arguments, which says nothing).
+        if let Some((span, _)) = family.decreases.first()
+            && !matches!(NameLookup(self).resolve_declared("Pass"), NameRes::Found(_))
+        {
+            return Err(ElabError::Elab {
+                msg: "a `while` is a loop of the library's combinator (`Loop`, `Pass`): this module needs `import loop;`".into(),
+                span: *span,
+            });
+        }
         for part in &family.parts {
             match part {
                 loops::Part::State(d) => self.elab_inductive(d)?,
