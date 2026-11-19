@@ -32,6 +32,7 @@
 
 import bitvec_bytes;
 import function_ir;
+import function_ir_operation;
 import function_ir_eval;
 import function_ir_state;
 import bitvec;
@@ -244,6 +245,7 @@ fn Node::folded(self node: Node, facts: List<Fact>) → Option<Nat> {
         ShiftLeft(_, _, _, _) => None,
         LogicalShiftRight(_, _, _, _) => None,
         RotateRight(_, _, _, _) => None,
+        Apply(_, _, _, _, _) => None,
         ArithmeticShiftRight(_, _, _, _) => None,
         UnsignedLessThan(width, _, left, right) => facts.compared(left, right, λ a c => BitVec::ofNat(a, n := width).unsigned_lt_bit(BitVec::ofNat(c))),
         SignedLessThan(width, _, left, right) => facts.compared(left, right, λ a c => BitVec::ofNat(a, n := width).signed_lt_bit(BitVec::ofNat(c))),
@@ -320,6 +322,7 @@ theorem Node::folded_value(self node: Node, facts: List<Fact>, values: Valuation
         ShiftLeft(_, _, _, _) => λ none => absurd(none),
         LogicalShiftRight(_, _, _, _) => λ none => absurd(none),
         RotateRight(_, _, _, _) => λ none => absurd(none),
+        Apply(_, _, _, _, _) => λ none => absurd(none),
         ArithmeticShiftRight(_, _, _, _) => λ none => absurd(none),
         UnsignedLessThan(width, _, left, right) => λ found => facts.compared_value(values, held, width, left, right, v,
             λ (a: BitVec(width)) (c: BitVec(width)) => a.unsigned_lt_bit(c), found),
@@ -351,6 +354,7 @@ theorem Node::folded_pure(self node: Node, facts: List<Fact>, v: Nat, folded: no
         ShiftLeft(_, _, _, _) => trivial,
         LogicalShiftRight(_, _, _, _) => trivial,
         RotateRight(_, _, _, _) => trivial,
+        Apply(_, _, _, _, _) => trivial,
         ArithmeticShiftRight(_, _, _, _) => trivial,
         UnsignedLessThan(_, _, _, _) => trivial,
         SignedLessThan(_, _, _, _) => trivial,
@@ -392,6 +396,7 @@ theorem Node::value_agree(self node: Node, values, other: Valuation(), agree: no
         ShiftLeft(_, _, value, amount) => λ agree w => cong_fn(λ (x: BitVec(w)) => x.shift_left(amount), agree(value, Inl(refl), w)),
         LogicalShiftRight(_, _, value, amount) => λ agree w => cong_fn(λ (x: BitVec(w)) => x.shift_right(amount), agree(value, Inl(refl), w)),
         RotateRight(_, _, value, amount) => λ agree w => cong_fn(λ (x: BitVec(w)) => x.rotr(amount), agree(value, Inl(refl), w)),
+        Apply(op, _, _, left, right) => λ agree w => eq2(λ (x: BitVec(w)) (y: BitVec(w)) => op.meaning(x, y), agree(left, Inl(refl), w), agree(right, Inr(Inl(refl)), w)),
         ArithmeticShiftRight(_, _, value, amount) => λ agree w => cong_fn(λ (x: BitVec(w)) => x.arithmetic_shift_right(amount), agree(value, Inl(refl), w)),
         UnsignedLessThan(width, _, left, right) => λ agree w => cong_fn(λ (b: Bool) => bit_value(b, w),
             eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.unsigned_lt_bit(y), agree(left, Inl(refl), width), agree(right, Inr(Inl(refl)), width))),
@@ -444,6 +449,7 @@ theorem Node::runs_alike(self node: Node, values, other: Valuation(), buffers: B
         ShiftLeft(width, output, value, amount) => λ agree => ShiftLeft(width, output, value, amount).runs_alike_pure(values, other, buffers, agree, trivial),
         LogicalShiftRight(width, output, value, amount) => λ agree => LogicalShiftRight(width, output, value, amount).runs_alike_pure(values, other, buffers, agree, trivial),
         RotateRight(width, output, value, amount) => λ agree => RotateRight(width, output, value, amount).runs_alike_pure(values, other, buffers, agree, trivial),
+        Apply(op, width, output, left, right) => λ agree => Apply(op, width, output, left, right).runs_alike_pure(values, other, buffers, agree, trivial),
         ArithmeticShiftRight(width, output, value, amount) => λ agree => ArithmeticShiftRight(width, output, value, amount).runs_alike_pure(values, other, buffers, agree, trivial),
         UnsignedLessThan(width, output, left, right) => λ agree => UnsignedLessThan(width, output, left, right).runs_alike_pure(values, other, buffers, agree, trivial),
         SignedLessThan(width, output, left, right) => λ agree => SignedLessThan(width, output, left, right).runs_alike_pure(values, other, buffers, agree, trivial),
@@ -493,6 +499,7 @@ theorem Node::run_keeps(self node: Node, values: Valuation(), buffers: Buffers()
         ShiftLeft(width, output, value, amount) => Valuation::set_other(values, output, ShiftLeft(width, output, value, amount).value(values), w, id, ne),
         LogicalShiftRight(width, output, value, amount) => Valuation::set_other(values, output, LogicalShiftRight(width, output, value, amount).value(values), w, id, ne),
         RotateRight(width, output, value, amount) => Valuation::set_other(values, output, RotateRight(width, output, value, amount).value(values), w, id, ne),
+        Apply(op, width, output, left, right) => Valuation::set_other(values, output, Apply(op, width, output, left, right).value(values), w, id, ne),
         ArithmeticShiftRight(width, output, value, amount) => Valuation::set_other(values, output, ArithmeticShiftRight(width, output, value, amount).value(values), w, id, ne),
         UnsignedLessThan(width, output, left, right) => Valuation::set_other(values, output, UnsignedLessThan(width, output, left, right).value(values), w, id, ne),
         SignedLessThan(width, output, left, right) => Valuation::set_other(values, output, SignedLessThan(width, output, left, right).value(values), w, id, ne),

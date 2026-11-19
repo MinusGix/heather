@@ -1,0 +1,152 @@
+// One loop combinator (docs/language/loop-combinator-design.md).
+//
+// A loop is a state `S`, a measure `m` on it, and a step that, at each
+// state, either goes round again at a state the measure puts lower, or
+// leaves with an answer. `Loop::run` is that loop; it has one unfolding
+// equation, `Loop::run_unfold`, and one rule, `Loop::rule`: an invariant
+// that every pass keeps goes in, and what every exit establishes comes out.
+//
+// The state is whatever the loop needs, facts included: a loop whose body
+// reads `s[j - 1]` under `0 < j` and `j <= i` carries `∥j <= i∥` in its
+// state, so its step is a total function of states where the fact holds and
+// never has to answer at a state where it fails. A fact is squashed, so it
+// costs nothing at run time and two states differing only in its proof are
+// one state.
+//
+// The decrease is the step's: `Again` carries `∥m(next) < m(s)∥`, found
+// where the step is written, under the tests that lead to it. That is what
+// lets `Loop::run` be defined once, for every step, by `decreases m(s)`.
+import logic;
+import bool;
+import nat;
+
+// A state below `s` by the measure `m`.
+record Lower<S>(m: S → Nat, s: S) { next: S, less: ∥m(next) < m(s)∥ }
+
+// One pass at state `s`: round again at `next`, below `s` by the measure,
+// or leave with `r`.
+inductive Pass<S, R>(m: S → Nat, s: S) {
+    Again(next: Lower<S>(m, s)),
+    Done(r: R),
+}
+
+// A loop over states `S` answering `R`: its measure and its step.
+record Loop<S, R> { measure: S → Nat, step: (s: S) → Pass<S, R>(measure, s) }
+
+// The loop from `s` with at most `k` passes left, which the measure
+// bounds. Structural on `k`: each pass's decrease is what lets it go on.
+fn Loop::within<S, R>(self l: Loop<S, R>, k: Nat, s: S, h: l.measure(s) < k) → R {
+    match k as λ k2 => l.measure(s) < k2 → R {
+        Zero => λ h0 => false_elim(Nat::not_succ_le_zero(l.measure(s), h0)),
+        Succ(j) => λ hj => match l.step(s) {
+            Again(b) => l.within(j, b.next, Nat::lt_of_lt_of_le(l.measure(b.next), l.measure(s), j, b.less.recover(), hj)),
+            Done(r) => r,
+        },
+    }(h)
+}
+
+// The loop from `s`: its passes until one leaves.
+fn Loop::run<S, R>(self l: Loop<S, R>, s: S) → R { l.within(l.measure(s) + 1, s, Nat::lt_succ_self(l.measure(s))) }
+
+// How many passes are allowed does not matter, as long as the measure
+// bounds them.
+theorem Loop::within_irrel<S, R>(self l: Loop<S, R>, k: Nat): (k2: Nat) → (s: S) → (h: l.measure(s) < k) → (h2: l.measure(s) < k2) →
+    l.within(k, s, h) = l.within(k2, s, h2)
+{
+    match k {
+        Zero => λ k2 s h h2 => false_elim(Nat::not_succ_le_zero(l.measure(s), h)),
+        Succ(j) => λ k2 => match k2 {
+            Zero => λ s h h2 => false_elim(Nat::not_succ_le_zero(l.measure(s), h2)),
+            Succ(j2) => λ s h h2 => match l.step(s) as λ p =>
+                (match p {
+                    Again(b) => l.within(j, b.next, Nat::lt_of_lt_of_le(l.measure(b.next), l.measure(s), j, b.less.recover(), h)),
+                    Done(r) => r,
+                }) = (match p {
+                    Again(b) => l.within(j2, b.next, Nat::lt_of_lt_of_le(l.measure(b.next), l.measure(s), j2, b.less.recover(), h2)),
+                    Done(r) => r,
+                }) {
+                Again(b) => Loop::within_irrel(l, j, j2, b.next,
+                    Nat::lt_of_lt_of_le(l.measure(b.next), l.measure(s), j, b.less.recover(), h),
+                    Nat::lt_of_lt_of_le(l.measure(b.next), l.measure(s), j2, b.less.recover(), h2)),
+                Done(_) => refl,
+            },
+        },
+    }
+}
+
+// The loop's one equation: a pass, then the loop again or the answer.
+theorem Loop::run_unfold<S, R>(self l: Loop<S, R>, s: S):
+    l.run(s) = (match l.step(s) { Again(b) => l.run(b.next), Done(r) => r })
+{
+    let h = Nat::lt_succ_self(l.measure(s));
+    match l.step(s) as λ p =>
+        (match p {
+            Again(b) => l.within(l.measure(s), b.next, Nat::lt_of_lt_of_le(l.measure(b.next), l.measure(s), l.measure(s), b.less.recover(), h)),
+            Done(r) => r,
+        }) = (match p { Again(b) => l.run(b.next), Done(r) => r }) {
+        Again(b) => l.within_irrel(l.measure(s), l.measure(b.next) + 1, b.next,
+            Nat::lt_of_lt_of_le(l.measure(b.next), l.measure(s), l.measure(s), b.less.recover(), h), Nat::lt_succ_self(l.measure(b.next))),
+        Done(_) => refl,
+    }
+}
+
+// What a pass hands on: the invariant at the next state, the
+// postcondition at the answer.
+fn Pass::Keeps<S, R>(m: S → Nat, s: S, self p: Pass<S, R>(m, s), I: S → Type, Q: R → Type) → Type {
+    match p { Again(b) => I(b.next), Done(r) => Q(r) }
+}
+
+// The loop rule at a number of passes.
+theorem Loop::rule_within<S, R>(self l: Loop<S, R>, I: S → Type, Q: R → Type,
+    keeps: (s: S) → I(s) → Pass::Keeps(l.measure, s, l.step(s), I, Q), k: Nat): (s: S) → (h: l.measure(s) < k) → I(s) → Q(l.within(k, s, h))
+{
+    match k {
+        Zero => λ s h start => false_elim(Nat::not_succ_le_zero(l.measure(s), h)),
+        Succ(j) => λ s h start => match l.step(s) as λ p => Pass::Keeps(l.measure, s, p, I, Q) →
+            Q(match p {
+                Again(b) => l.within(j, b.next, Nat::lt_of_lt_of_le(l.measure(b.next), l.measure(s), j, b.less.recover(), h)),
+                Done(r) => r,
+            }) {
+            Again(b) => λ (held: I(b.next)) => Loop::rule_within(l, I, Q, keeps, j, b.next,
+                Nat::lt_of_lt_of_le(l.measure(b.next), l.measure(s), j, b.less.recover(), h), held),
+            Done(r) => λ (done: Q(r)) => done,
+        }(keeps(s, start)),
+    }
+}
+
+// The loop rule: an invariant that holds at the start, and that each pass
+// from a state where it holds either keeps or turns into the
+// postcondition, gives the postcondition at the loop's answer. Proved once,
+// here.
+theorem Loop::rule<S, R>(self l: Loop<S, R>, I: S → Type, Q: R → Type,
+    keeps: (s: S) → I(s) → Pass::Keeps(l.measure, s, l.step(s), I, Q), s: S, start: I(s)): Q(l.run(s))
+{
+    l.rule_within(I, Q, keeps, l.measure(s) + 1, s, Nat::lt_succ_self(l.measure(s)), start)
+}
+
+// A function that answers as the loop does at every pass is the loop, at a
+// number of passes.
+theorem Loop::unique_within<S, R>(self l: Loop<S, R>, g: S → R,
+    same: (s: S) → g(s) = (match l.step(s) { Again(b) => g(b.next), Done(r) => r }), k: Nat): (s: S) → (h: l.measure(s) < k) → g(s) = l.within(k, s, h)
+{
+    match k {
+        Zero => λ s h => false_elim(Nat::not_succ_le_zero(l.measure(s), h)),
+        Succ(j) => λ s h => trans(same(s), match l.step(s) as λ p =>
+            (match p { Again(b) => g(b.next), Done(r) => r }) = (match p {
+                Again(b) => l.within(j, b.next, Nat::lt_of_lt_of_le(l.measure(b.next), l.measure(s), j, b.less.recover(), h)),
+                Done(r) => r,
+            }) {
+            Again(b) => Loop::unique_within(l, g, same, j, b.next, Nat::lt_of_lt_of_le(l.measure(b.next), l.measure(s), j, b.less.recover(), h)),
+            Done(_) => refl,
+        }),
+    }
+}
+
+// A function that answers as the loop does at every pass is the loop: how
+// a recursion that calls itself last is read as a loop, from its own
+// unfolding equation.
+theorem Loop::unique<S, R>(self l: Loop<S, R>, g: S → R,
+    same: (s: S) → g(s) = (match l.step(s) { Again(b) => g(b.next), Done(r) => r }), s: S): g(s) = l.run(s)
+{
+    l.unique_within(g, same, l.measure(s) + 1, s, Nat::lt_succ_self(l.measure(s)))
+}

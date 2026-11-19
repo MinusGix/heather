@@ -1,0 +1,207 @@
+// Probes of the loop combinator (lib/std/core/loop.hthr,
+// docs/language/loop-combinator-design.md): loops written by hand as the
+// `while` elaboration will write them, evaluated by `refl`, and proved with
+// `Loop::rule` where the lifted loops used `induct` on their own recursion.
+// Tests, not library: nothing outside lib/_tests imports this module.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import bitvec_shift_nat;
+import omega;
+import tactic;
+import loop;
+
+// ---------------------------------------------------------------------------
+// `count_up_if` of runtime_loop_tests, as a loop:
+//
+//     let mut i = i0; let mut acc = acc0;
+//     while i < 64 { acc := acc + i; i := i + 1; }
+//     acc
+
+record Count { i: u64, acc: u64 }
+
+fn Count::left(self c: Count) → Nat { (64 - c.i).toNat() }
+
+fn Count::step(self c: Count) → Pass<Count, u64>(Count::left, c) {
+    if h: c.i < 64 {
+        let less: ((64 - (c.i + 1)).toNat() < (64 - c.i).toNat()) = bv_omega;
+        Again(Lower(next := Count(i := c.i + 1, acc := c.acc + c.i), less := squash(less)))
+    } else {
+        Done(c.acc)
+    }
+}
+
+fn count_up(i, acc: u64) → u64 { Loop(measure := Count::left, step := Count::step).run(Count(i := i, acc := acc)) }
+
+theorem count_up_lit(): count_up(60, 0) = 246 { refl }
+theorem count_up_past(): count_up(70, 5) = 5 { refl }
+
+// ---------------------------------------------------------------------------
+// The binary search of examples/binary-search, as a loop:
+//
+//     let mut lo = 0; let mut hi = n;
+//     while lo < hi {
+//         let mid = lo + ((hi - lo) >> 1);
+//         if at(s, mid) < key { lo := mid + 1 } else { hi := mid }
+//     }
+//     lo
+//
+// and its theorem proved with `Loop::rule` where the example's used
+// `induct` on the function's own recursion.
+
+record Range { lo: u64, hi: u64 }
+
+// The span's byte at `i`, as a word.
+fn at(s: List<u8>, i: u64) → u64 { s.nth(i.toNat()).unwrap_or(0).zero_extend(56) }
+
+theorem midpoint_from(lo, hi: u64, h: lo < hi): lo <= lo + ((hi - lo) >> 1) { bv_omega }
+theorem midpoint_below(lo, hi: u64, h: lo < hi): lo + ((hi - lo) >> 1) < hi { bv_omega }
+
+fn Range::width(self r: Range) → Nat { (r.hi - r.lo).toNat() }
+
+fn Range::search(s: List<u8>, n, key: u64, self r: Range) → Pass<Range, u64>(Range::width, r) {
+    if h: r.lo < r.hi {
+        let mid = r.lo + ((r.hi - r.lo) >> 1);
+        let from = midpoint_from(r.lo, r.hi, h);
+        let below = midpoint_below(r.lo, r.hi, h);
+        if less: at(s, mid) < key {
+            let d: ((r.hi - (mid + 1)).toNat() < (r.hi - r.lo).toNat()) = bv_omega;
+            Again(Lower(next := Range(lo := mid + 1, hi := r.hi), less := squash(d)))
+        } else {
+            let d: ((mid - r.lo).toNat() < (r.hi - r.lo).toNat()) = bv_omega;
+            Again(Lower(next := Range(lo := r.lo, hi := mid), less := squash(d)))
+        }
+    } else {
+        Done(r.lo)
+    }
+}
+
+fn lower_bound(s: List<u8>, n, key: u64) → u64 {
+    Loop(measure := Range::width, step := λ r => r.search(s, n, key)).run(Range(lo := 0, hi := n))
+}
+
+theorem lower_bound_lit(): lower_bound([1, 3, 3, 7], 4, 3) = 1 { refl }
+theorem lower_bound_end(): lower_bound([1, 3, 3, 7], 4, 9) = 4 { refl }
+
+fn Ascending(s: List<u8>, n: u64) → Type {
+    (i, j: u64) → i <= j → j < n → at(s, i) <= at(s, j)
+}
+fn Under(s: List<u8>, n, key, r: u64) → Type { (j: u64) → j < r → at(s, j) < key }
+fn Above(s: List<u8>, n, key, r: u64) → Type { (j: u64) → r <= j → j < n → ¬(at(s, j) < key) }
+
+// The invariant: what lies below `lo` is below `key`, what lies from `hi`
+// on is not, and the range is in the span.
+fn Range::Splits(self r: Range, s: List<u8>, n, key: u64) → Type {
+    And<r.lo <= r.hi, And<r.hi <= n, And<Under(s, n, key, r.lo), Above(s, n, key, r.hi)>>>
+}
+
+// The answer splits the span.
+fn Answer(s: List<u8>, n, key, x: u64) → Type { And<x <= n, And<Under(s, n, key, x), Above(s, n, key, x)>> }
+
+// One pass keeps the invariant or leaves at an answer that splits: the
+// three ways a pass can go.
+theorem Range::search_keeps(s: List<u8>, n, key: u64, asc: Ascending(s, n), self r: Range, held: r.Splits(s, n, key)):
+    Pass::Keeps(Range::width, r, r.search(s, n, key), λ t => t.Splits(s, n, key), λ x => Answer(s, n, key, x))
+{
+    let order = held.left;
+    let fits = held.right.left;
+    let below = held.right.right.left;
+    let above = held.right.right.right;
+    induct Range::search(s, n, key, r) {
+        True::True => {
+            let mid = r.lo + ((r.hi - r.lo) >> 1);
+            let fits_mid = midpoint_below(r.lo, r.hi, h);
+            let below2: Under(s, n, key, mid + 1) = λ j before => {
+                let up = asc(j, mid, bv_omega, bv_omega);
+                bv_omega
+            };
+            let order2: (mid + 1 <= r.hi) = bv_omega;
+            ⟨order2, ⟨fits, ⟨below2, above⟩⟩⟩
+        },
+        True::False => {
+            let mid = r.lo + ((r.hi - r.lo) >> 1);
+            let from_mid = midpoint_from(r.lo, r.hi, h);
+            let fits_mid = midpoint_below(r.lo, r.hi, h);
+            let above2: Above(s, n, key, mid) = λ j after within reached => {
+                let up = asc(mid, j, after, within);
+                bv_omega
+            };
+            let order2: (r.lo <= mid) = bv_omega;
+            let fits2: (mid <= n) = bv_omega;
+            ⟨order2, ⟨fits2, ⟨below, above2⟩⟩⟩
+        },
+        False => {
+            let same: (r.lo = r.hi) = bv_omega;
+            let fits2: (r.lo <= n) = bv_omega;
+            ⟨fits2, ⟨below, λ (j: u64) (after: r.lo <= j) (within: j < n) => above(j, rewrite(sym(same), after), within)⟩⟩
+        },
+    }
+}
+
+theorem lower_bound_splits(s: List<u8>, n, key: u64, asc: Ascending(s, n)): Answer(s, n, key, lower_bound(s, n, key)) {
+    let none_below: Under(s, n, key, 0) = λ (j: u64) (before: j < 0) => bv_omega;
+    let none_above: Above(s, n, key, n) = λ (j: u64) (after: n <= j) (within: j < n) (lt: at(s, j) < key) => bv_omega;
+    Loop(measure := Range::width, step := λ r => r.search(s, n, key)).rule(λ t => t.Splits(s, n, key), λ x => Answer(s, n, key, x),
+        λ r held => r.search_keeps(s, n, key, asc, held), Range(lo := 0, hi := n), ⟨bv_omega, ⟨n.toNat().le_refl(), ⟨none_below, none_above⟩⟩⟩)
+}
+
+// ---------------------------------------------------------------------------
+// A recursion that calls itself last is a loop: `Loop::unique` reads it as
+// one from its own unfolding equation, so the native side needs no tail
+// mode of its own (docs/language/loop-combinator-design.md §6).
+
+fn count_down(n, acc: u64) → u64 decreases n.toNat() {
+    if h: 0 < n { count_down(n - 1, acc + n) } else { acc }
+}
+
+record Down { n: u64, acc: u64 }
+
+fn Down::left(self d: Down) → Nat { d.n.toNat() }
+
+fn Down::step(self d: Down) → Pass<Down, u64>(Down::left, d) {
+    if h: 0 < d.n {
+        let less: ((d.n - 1).toNat() < d.n.toNat()) = bv_omega;
+        Again(Lower(next := Down(n := d.n - 1, acc := d.acc + d.n), less := squash(less)))
+    } else {
+        Done(d.acc)
+    }
+}
+
+// Each pass answers as the recursion's equation for its arm.
+theorem Down::step_agrees(self d: Down): count_down(d.n, d.acc) = (match d.step() { Again(b) => count_down(b.next.n, b.next.acc), Done(r) => r }) {
+    induct Down::step(d) {
+        True => count_down::True(d.n, d.acc, h),
+        False => count_down::False(d.n, d.acc, h),
+    }
+}
+
+theorem count_down_is_loop(d: Down): count_down(d.n, d.acc) = Loop(measure := Down::left, step := Down::step).run(d) {
+    Loop(measure := Down::left, step := Down::step).unique(λ e => count_down(e.n, e.acc), λ e => e.step_agrees(), d)
+}
+
+// ---------------------------------------------------------------------------
+// Negative controls.
+
+// A pass that goes round at a state the measure does not put lower has no
+// `Again`: its decrease is not found.
+// expect-error: got stuck
+fn Count::stuck(self c: Count) → Pass<Count, u64>(Count::left, c) {
+    let less: ((64 - c.i).toNat() < (64 - c.i).toNat()) = bv_omega;
+    Again(Lower(next := c, less := squash(less)))
+}
+
+// `induct` on a step follows its tests; a case the step does not have is
+// refused.
+// expect-error: has the cases True::True, True::False, False
+theorem search_three_deep(s: List<u8>, n, key: u64, r: Range): r.lo = r.lo {
+    induct Range::search(s, n, key, r) {
+        True::True::True => refl,
+        True::False => refl,
+        False => refl,
+    }
+}

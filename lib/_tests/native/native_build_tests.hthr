@@ -461,30 +461,25 @@ fn sum_of(rest: Nat → Tool) → Tool {
         rest)
 }
 
-// The sum of 0..10, from two sites: 55 and then 55 + 21.
-fn summed_twice_at(bytes: Nat) → Tool {
-    room(bytes, sum_of(λ sum => run(local(num(0), λ a => local(num(0), λ b =>
+// The sum of 0..10, from two sites: 55 and then 55 + 21, with room for
+// the eleven calls the first nests; the compiler works out their bytes.
+fn summed_twice() → Tool {
+    room(11, sum_of(λ sum => run(local(num(0), λ a => local(num(0), λ b =>
         perform(sum, [num(10)], [a]) ++ perform(sum, [num(6)], [b]) ++ exit(a.get() + b.get()))))))
 }
-
-// What one call of the sum takes of the stack, under the homes `write-elf`
-// compiles with; room for eleven, and the last check's word.
-fn summed_level(t: Tool) → Nat { t.source().charges(t.source().homes(), t.source().bodies()).cost(0) }
-fn summed_twice() → Tool { summed_twice_at(11 * summed_level(summed_twice_at(0)) + 8) }
 
 // Lowered: one procedure whose body calls itself, its result set to zero
 // first; `main` calls it twice.
 theorem summed_twice_procedures(): summed_twice().source().procedures.len() = 1 { refl }
-theorem summed_twice_room(): summed_twice().source().room = 11 * summed_level(summed_twice_at(0)) + 8 { refl }
+theorem summed_twice_levels(): summed_twice().source().levels = 11 { refl }
 theorem summed_twice_runs(): ITree::next(Events::linux(), summed_twice().source().tree([], 12)) = Exits(BitVec::ofNat(76)) { refl }
 theorem summed_twice_compiles(): refused_slots(summed_twice().source()) = [] { refl }
 
 // The sum of 0..n for n the bytes read from standard input, as an exit
 // status, with room for 64 calls: the sum of 0..n nests n + 1 calls, so 64
 // bytes or more nest one too deep, and it exits 139.
-fn summed_input_at(bytes: Nat) → Tool {
-    room(bytes, sum_of(λ sum => buffer(80, λ b => run(local(num(0), λ got =>
+fn summed_input() → Tool {
+    room(64, sum_of(λ sum => buffer(80, λ b => run(local(num(0), λ got =>
         read(stdin(), b, num(80), got) ++ local(num(0), λ r => perform(sum, [got.get()], [r]) ++ exit(r.get())))))))
 }
-fn summed_input() → Tool { summed_input_at(64 * summed_level(summed_input_at(0)) + 8) }
 theorem summed_input_compiles(): refused_slots(summed_input().source()) = [] { refl }

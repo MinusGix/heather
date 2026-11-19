@@ -13,6 +13,7 @@
 // A line is a spelling (function_ir_spelled): numbers written in front of
 // what follows them.
 import function_ir;
+import function_ir_operation;
 import function_ir_eval;
 import function_ir_learn;
 import function_ir_match;
@@ -57,6 +58,7 @@ fn Node::computes(self node: Node, nested: Bool, word: Nat → List<Nat> → Lis
         ShiftLeft(_, _, a, n) => say_infix(nested, word(a), " << ", spell_number(n)),
         LogicalShiftRight(_, _, a, n) => say_infix(nested, word(a), " >> ", spell_number(n)),
         RotateRight(_, _, a, n) => say_method(word(a), "rotr", [spell_number(n)]),
+        Apply(op, _, _, a, b) => say_method(word(a), op.name(), [word(b)]),
         ArithmeticShiftRight(_, _, a, n) => say_method(word(a), "arithmetic_shift_right", [spell_number(n)]),
         UnsignedLessThan(_, _, a, b) => say_infix(nested, word(a), " < ", word(b)),
         SignedLessThan(_, _, a, b) => say_method(word(a), "signed_less", [word(b)]),

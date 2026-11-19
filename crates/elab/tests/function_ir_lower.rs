@@ -14,8 +14,9 @@ const EXAMPLES: &str = include_str!("fixtures/function_ir_lower_examples.hthr");
 // leaves (x86_64_kept): what the lowering imports, and nothing B2 burns.
 const PREFIX: &[&str] = &[
     "logic", "bool", "nat", "option", "pair", "list", "relation", "relation_props", "algebra_rel",
-    "algebra", "morphism", "int", "omega", "bitvec", "bitvec_rotate", "location", "certified_lookup", "x86_64", "x86_64_block",
-    "vector", "list_window", "bitvec_nat", "bitvec_resize", "bitvec_bytes", "function_ir",
+    "algebra", "morphism", "int", "order", "semiring", "omega", "bitvec", "bitvec_rotate", "location", "certified_lookup", "x86_64", "x86_64_block",
+    "vector", "list_window", "bitvec_nat", "bitvec_resize", "bitvec_bytes", "bitvec_signed", "bitvec_div",
+    "function_ir_operation", "function_ir",
 ];
 
 #[test]
@@ -30,6 +31,9 @@ fn verified_lowering_checks_and_lowers_the_examples() {
         })
         .collect();
     modules.push(("x86_64_kept", include_str!("../../../lib/std/arch/x86_64/x86_64_kept.hthr")));
+    // The rows read `bitvec_shift_nat`, which the read loop's modules carry.
+    modules.extend(crate::read_loop_fixture::READ_LOOP.iter().copied().filter(|(name, _)| *name == "bitvec_shift_nat"));
+    modules.extend(crate::read_loop_fixture::OPERATION_ROWS.iter().copied());
     modules.push(("function_ir_lower", FUNCTION_IR_LOWER));
     let mut elaborator = support::semantic_test_base(&modules);
     if let Err(error) = elaborator.elab_module_source("function_ir_lower_examples", EXAMPLES) {

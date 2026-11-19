@@ -259,6 +259,22 @@ impl Operators<'_> {
             }
             return Ok(fb.to_string());
         }
+        // No carrier was found because the left operand does not elaborate
+        // at all (an unbound method in it, a missing import): its own
+        // refusal is the one the writer can act on, and "no designation
+        // covers this carrier" would hide it behind a symbol that was never
+        // the problem.
+        // An operand that only checks (a collection literal, `refl`) fails
+        // to infer by design: the carrier is what is missing there, and the
+        // message below says so.
+        if uncovered_carrier.is_none()
+            && let Some(first) = args.first()
+            && !matches!(first.kind, ExprKind::CollectionLit(_))
+            && !AppUnify(self).is_checking_only(cx, first)
+            && let Err(refusal @ crate::ElabError::Elab { .. }) = self.probe(|| self.elab_infer(cx, first).map(|_| ()))
+        {
+            return Err(refusal);
+        }
         // Reporting "unbound name `add`" would name something the writer
         // never typed. Say what *was* typed, and what would have to be
         // true for it to mean something.

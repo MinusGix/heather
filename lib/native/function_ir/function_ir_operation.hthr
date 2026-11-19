@@ -1,0 +1,70 @@
+// Operations as rows (docs/native/dogfooding-plan.md §5.3a): an operation of
+// two words is named once here, with its meaning, and every layer reads it
+// through one generic case. `rt` has one primitive `Apply(op, w)`,
+// FunctionIR one node `Apply(op, width, output, left, right)`, and the
+// lowering one case that reads the operation's row of machine code
+// (`function_ir_operation_x86`, `File::apply`): where the operands go, the instructions, and
+// the theorem that the instructions leave the meaning. The next operation
+// is a constructor here, its meaning, and its row there.
+//
+// The meaning is Heather's, at every width, total: a shift by a word is
+// zero from the width up, and division by zero is `BitVec::udiv`'s and
+// `urem`'s answer. A row whose instructions compute something else at some
+// operands (x86 masks a shift's count, faults on a zero divisor) fixes
+// that up in its own instructions, or is not offered for those operands.
+//
+// Constructors are appended, never reordered: `code` numbers them, and the
+// numbers are written into certificates.
+import bitvec;
+import bitvec_div;
+import bool;
+import logic;
+import list;
+import nat;
+
+inductive Operation {
+    // `x.mul(y)`: the low word of the product.
+    Mul,
+    // `x.shift_left(y.toNat())` and `x.shift_right(y.toNat())`: a shift by a
+    // count that is a word.
+    ShlBy,
+    ShrBy,
+    // `x.udiv(y)` and `x.urem(y)`: unsigned quotient and remainder.
+    UDiv,
+    URem,
+}
+
+fn Operation::meaning(self op: Operation, {w: Nat}, x, y: BitVec(w)) → BitVec(w) {
+    match op {
+        Mul => x.mul(y),
+        ShlBy => x.shift_left(y.toNat()),
+        ShrBy => x.shift_right(y.toNat()),
+        UDiv => x.udiv(y),
+        URem => x.urem(y),
+    }
+}
+
+fn Operation::code(self op: Operation) → Nat {
+    match op { Mul => 0, ShlBy => 1, ShrBy => 2, UDiv => 3, URem => 4 }
+}
+
+fn Operation::of_code(n: Nat) → Operation {
+    match n {
+        Zero => Mul,
+        Succ(a) => match a {
+            Zero => ShlBy,
+            Succ(b) => match b { Zero => ShrBy, Succ(c) => match c { Zero => UDiv, Succ(_) => URem } },
+        },
+    }
+}
+
+theorem Operation::of_code_code(self op: Operation): Operation::of_code(op.code()) = op {
+    match op { Mul => refl, ShlBy => refl, ShrBy => refl, UDiv => refl, URem => refl }
+}
+
+fn Operation::same(self a, b: Operation) → Bool { a.code().same(b.code()) }
+
+theorem Operation::same_sound(self a, b: Operation, h: a.same(b) = True): a = b {
+    trans(sym(a.of_code_code()),
+        trans(cong_fn(λ (n: Nat) => Operation::of_code(n), a.code().same_sound(b.code(), h)), b.of_code_code()))
+}
