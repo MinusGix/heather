@@ -611,11 +611,60 @@ The depth in calls became the check in bytes (§7.2).
   at depth `n` (`Source::tree_co_into`), and its traces at any depth are
   the fuelled program's (`Source::tree_co_refined`). A tree with no bound
   on its calls is `coitree_rec`'s `mrec`, not done.
-- **Builders** ask with `room(bytes, …)` (`native_build`); a tool whose
-  procedures never reach themselves needs none.
+- **Builders** asked with `room(bytes, …)` (`native_build`); since §7.3
+  they ask in levels.
 
 That is guarantee 1 in bytes, 2 as in §7.1, and 5: a program whose
 procedures never reach themselves has no check, its charges refuse nothing
 and `need` is its whole stack. What is left of §7 is tail calls (3) and
 bounded recursion (4).
+
+### 7.3 As built: room asked in levels
+
+A byte count was the wrong thing to ask for. The bytes a call takes are its
+level under the frames and homes the compiler picks, so a writer who wants
+room for 64 calls of `sum` had to compile once to learn the level, then ask
+for `64 * level + 8`: an answer tied to one allocator's choices, with the
+final return address as an internal detail. The meaning stays in bytes,
+since the bytes depend on the placement (§7.2); only the request moves to
+the source's own terms.
+
+- **The request.** `Source.levels`: how many nested calls of procedures
+  that reach themselves (the checked ones) the compiled program has room
+  for. Builders write `room(64, …)`.
+- **The bytes.** `Source::left(homes, bodies)` is `main`'s own calls'
+  room and one return address (`Source::main_below` + 8), then `levels`
+  times a level, `Source::per_level`: the most any checked procedure takes,
+  its level and the unchecked chain below its frame. A checked procedure's
+  check asks for that and one return address. For one procedure recursing,
+  this is exactly the bytes of `levels` calls, so the 139 boundary stays at
+  the call past the levels; for a mixed cycle the most of the cycle's
+  procedures stands for each, so the room is at least what `levels` calls
+  take.
+- **What the source means within the levels.** `Source::within(args,
+  counted, k)` is the source's runs that nest at most `k` of the calls
+  `counted` names: `Source::calls_within` is `Source::calls` with a counted
+  call past the levels a `Cut`, claiming nothing (`Nat::spend`).
+  `Source::within_refines` says it is a part of the source's meaning.
+- **The theorem.** `Source::levels_refines` (native_source): where the
+  charges fit the levels (`Charges::Levels`: a counted procedure's check
+  asks for its cost and its body's room, at most `per`, and a return
+  address; an uncounted one has no check, and a body calls one only within
+  its own room) and `left` holds `main`'s room and `k` levels
+  (`Nat::stacked`), every trace of `src.within(args, counted, k)` is a
+  trace of `src.bounded(args, ch, left)`. Its proof follows the calls,
+  carrying `below(q) + 8 + stacked(k) <= left` inside procedure `q`'s body.
+  `Source::charges_levels` (native_compile_facts) proves `Charges::Levels`
+  of the charges any compile picks, from the ranks holding of the source
+  (`Source::ranked`, what `call_fits` checks a call at a time, here of the
+  whole source) and the rows growing with their depth (`List::reach_le`).
+  `Source::compiled_levels` (native_compile_elf) puts the two together:
+  for any homes and frames, every run of the source whose checked calls
+  nest at most `src.levels` deep is a run of the compiled program, never
+  refused. That is guarantee 1 in the writer's terms.
+
+Guarantee 4 fills this in: the levels stop being a constant and become an
+expression in the input's sizes, proved from the recursion's measure and
+checked once at startup. A request in bytes would have had to be redone for
+it.
 

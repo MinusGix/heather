@@ -990,7 +990,8 @@ theorem native_compile_correct_bare(src: Source, r: DataRegion, homes: Homes, bo
                                 let rank = src.procedures.len();
                                 let below = src.main.performed().below(src.main.called(), src.procedures, bodies, homes.places, homes.room_table(src.functions), checks, rank);
                                 let need_is: (src.need(homes, bodies) = 8 * src.words + left) = refl;
-                                let below_le: (below + 8 <= left) = Nat::le_max_r(src.room, below + 8);
+                                let left_is: (left = (below + 8) + src.levels.stacked(src.per_level(homes, bodies))) = refl;
+                                let below_le: (below + 8 <= left) = omega(left_is);
                                 let top_i: (stack.size = index + 8 * src.words) = omega(deep, need_is);
                                 let framed: (index + 8 * (src.words + 0) <= stack.size) = omega(top_i);
                                 let floor = index - left;
@@ -1678,7 +1679,8 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, b
     let rank = src.procedures.len();
     let below = src.main.performed().below(src.main.called(), src.procedures, bodies, homes.places, homes.room_table(src.functions), checks, rank);
     let need_is: (src.need(homes, bodies) = 8 * src.words + left) = refl;
-    let below_le: (below + 8 <= left) = Nat::le_max_r(src.room, below + 8);
+    let left_is: (left = (below + 8) + src.levels.stacked(src.per_level(homes, bodies))) = refl;
+    let below_le: (below + 8 <= left) = omega(left_is);
     let top_i: (stack.size = index + 8 * src.words) = omega(deep, need_is);
     let framed: (index + 8 * (src.words + 0) <= stack.size) = omega(top_i);
     let floor = index - left;

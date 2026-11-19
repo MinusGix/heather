@@ -48,6 +48,7 @@ import native_compile;
 import native_compile_region;
 import native_compile_steps;
 import native_compile_correct;
+import native_compile_facts;
 import native_alloc;
 import native_contract;
 import linux_x86_64_io;
@@ -97,6 +98,18 @@ fn entered(entry: List<Instruction>, program: Prog) → List<BitVec(8)> {
 // the compiled frames are, with the bytes `main` leaves below its frame.
 fn Source::compiled_meaning(self src: Source, homes: Homes, bodies: List<Frame>, args: List<List<BitVec(8)>>) → Program<BitVec(64)>(Events::linux()) {
     src.bounded(args, src.charges(homes, bodies), src.left(homes, bodies))
+}
+
+// The levels the source asks for, kept (§7.3): every run of the source
+// whose checked calls nest at most `src.levels` deep, the compiled program
+// makes, never refused, whatever frames and homes the compile picked. It
+// rests on the ranks holding of the source (`Source::ranked`), what the
+// compile checks of each call.
+theorem Source::compiled_levels(self src: Source, homes: Homes, bodies: List<Frame>, args: List<List<BitVec(8)>>, ranked: src.ranked() = True):
+    Program::Refines(Events::linux(), src.within(args, λ p => src.checked(p), src.levels), src.compiled_meaning(homes, bodies, args)) {
+    src.levels_refines(args, src.charges(homes, bodies), λ p => src.checked(p), λ p => src.body_below(homes, bodies, p), src.per_level(homes, bodies),
+        src.main_below(homes, bodies), src.charges_levels(homes, bodies, ranked), src.levels, src.left(homes, bodies),
+        Nat::le_refl(src.left(homes, bodies)))
 }
 
 theorem Source::runs_after(self src: Source, r: DataRegion, homes: Homes, bodies: List<Frame>, fits: Layout::of(r.low, src.words, src.capacities(), homes).size() <= r.size,
