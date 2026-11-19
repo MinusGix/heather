@@ -1132,9 +1132,6 @@ theorem Source::of_none_bounded(self src: Source, args: List<List<BitVec(8)>>, c
 // compiled program makes every one of them unrefused, wherever the charges
 // fit the levels (`Charges::Levels`, `Source::levels_refines`).
 
-// `k` levels of `per` bytes.
-fn Nat::stacked(self k: Nat, per: Nat) → Nat { match k { Zero => 0, Succ(j) => per + j.stacked(per) } }
-
 // The levels left past a call: as many where it is not counted, one fewer
 // where it is, and none to make it with where none are left.
 fn Nat::spend(self k: Nat, counted: Bool) → Option<Nat> {
@@ -1301,63 +1298,52 @@ theorem Source::within_refines(self src: Source, args: List<List<BitVec(8)>>, co
                 λ flow => match flow { Onward(_) => λ never => false_elim(never), Exited(_) => λ never => never })), c.h))
 }
 
-// What makes the charges `ch` fit levels of the calls `counted` names,
-// `per` bytes a level: a counted procedure is entered with a check asking
-// for its cost, what its body takes below its frame (`below`), at most
-// `per` together, and one return address; any other is entered with no check,
-// and a body calls one only within what the body itself takes below its
-// frame (`top` for `main`'s).
-record Charges::Levels(self ch: Charges, src: Source, counted: Nat → Bool, below: Nat → Nat, per, top: Nat) {
-    checked: (p: Nat) → counted(p) = True → ch.check(p) = Some((ch.cost(p) + below(p)) + 8),
-    most: (p: Nat) → counted(p) = True → ch.cost(p) + below(p) <= per,
+// What makes the charges `ch` fit levels of the calls `counted` names:
+// `total(k, p)` is the most procedure `p`'s body takes below its frame
+// with `k` levels left, `top(k)` `main`'s. A counted procedure's check asks
+// for no more than its cost, what its body takes with any levels left and a
+// return address; any other is entered with no check; and a call within the
+// levels, with the levels it leaves, takes no more than the caller's body
+// may with the levels it has.
+record Charges::Levels(self ch: Charges, src: Source, counted: Nat → Bool, total: Nat → Nat → Nat, top: Nat → Nat) {
+    checked: (p: Nat) → counted(p) = True → (need: Nat) → ch.check(p) = Some(need) → (j: Nat) → need <= (ch.cost(p) + total(j, p)) + 8,
     unchecked: (p: Nat) → counted(p) = False → ch.check(p) = None,
-    under: (q: Nat) → (proc: Procedure) → src.procedures.nth(q) = Some(proc) → (p: Nat) → Mem(p, proc.body.performed()) → counted(p) = False →
-        ch.cost(p) + below(p) <= below(q),
-    main_under: (p: Nat) → Mem(p, src.main.performed()) → counted(p) = False → ch.cost(p) + below(p) <= top,
+    step: (q: Nat) → (proc: Procedure) → src.procedures.nth(q) = Some(proc) → (p: Nat) → (callee: Procedure) → src.procedures.nth(p) = Some(callee) →
+        Mem(p, proc.body.performed()) → (k, j: Nat) → k.spend(counted(p)) = Some(j) → ch.cost(p) + total(j, p) <= total(k, q),
+    main_step: (p: Nat) → (callee: Procedure) → src.procedures.nth(p) = Some(callee) → Mem(p, src.main.performed()) → (k, j: Nat) → k.spend(counted(p)) = Some(j) →
+        ch.cost(p) + total(j, p) <= top(k),
 }
 
-// A call the levels allow, made with the room they ask: not refused, and
-// the callee's body entered with its own room and the levels left.
-theorem Charges::levels_enter(self ch: Charges, src: Source, counted: Nat → Bool, below: Nat → Nat, per, top: Nat, lv: ch.Levels(src, counted, below, per, top),
-    k, j, left, procedure: Nat, spent: k.spend(counted(procedure)) = Some(j), fits: k.stacked(per) + 8 <= left,
-    fits_unchecked: counted(procedure) = False → ((ch.cost(procedure) + below(procedure)) + 8) + k.stacked(per) <= left):
-    (ch.refuses(procedure, left) = False) ∧ (((below(procedure) + 8) + j.stacked(per)) + ch.cost(procedure) <= left) {
-    let goal = (ch.refuses(procedure, left) = False) ∧ (((below(procedure) + 8) + j.stacked(per)) + ch.cost(procedure) <= left);
-    (match counted(procedure) as λ b => counted(procedure) = b → k.spend(b) = Some(j) → goal {
-        False => λ unc sp => {
-            let same: (k = j) = cong_fn<Option<Nat>, Nat>(λ o => match o { None => k, Some(x) => x }, sp);
-            let room = fits_unchecked(unc);
-            ⟨j(sym(lv.unchecked(procedure, unc)), λ o _ => (match o { None => False, Some(need) => Succ(left).leb(need) }) = False, refl),
-                j(same, λ x _ => ((below(procedure) + 8) + x.stacked(per)) + ch.cost(procedure) <= left, omega(room))⟩
-        },
-        True => λ cnt sp0 => {
-            let most = lv.most(procedure, cnt);
-            (match k as λ k2 => (match k2 { Zero => None, Succ(i) => Some(i) }) = Some(j) → k2.stacked(per) + 8 <= left → goal {
-                Zero => λ sp _ => false_elim(j(sp, λ o _ => match o as λ _ => Type { None => True, Some(_) => False }, trivial)),
-                Succ(i) => λ sp room => {
-                    let same: (i = j) = cong_fn<Option<Nat>, Nat>(λ o => match o { None => i, Some(x) => x }, sp);
-                    ⟨j(sym(lv.checked(procedure, cnt)), λ o _ => (match o { None => False, Some(need) => Succ(left).leb(need) }) = False,
-                        Nat::leb_false(Succ(left), (ch.cost(procedure) + below(procedure)) + 8, omega(most, room))),
-                        j(same, λ x _ => ((below(procedure) + 8) + x.stacked(per)) + ch.cost(procedure) <= left, omega(most, room))⟩
-                },
-            })(sp0, fits)
-        },
-    })(refl, spent)
+// A call with its cost, its body's room and a return address left is not
+// refused.
+theorem Charges::levels_admit(self ch: Charges, src: Source, counted: Nat → Bool, total: Nat → Nat → Nat, top: Nat → Nat, lv: ch.Levels(src, counted, total, top),
+    procedure, j, left: Nat, fits: (ch.cost(procedure) + total(j, procedure)) + 8 <= left): ch.refuses(procedure, left) = False {
+    (match counted(procedure) as λ b => counted(procedure) = b → ch.refuses(procedure, left) = False {
+        False => λ unc => j(sym(lv.unchecked(procedure, unc)), λ o _ => (match o { None => False, Some(need) => Succ(left).leb(need) }) = False, refl),
+        True => λ cnt => (match ch.check(procedure) as λ o => ch.check(procedure) = o → (match o { None => False, Some(need) => Succ(left).leb(need) }) = False {
+            None => λ _ => refl,
+            Some(need) => λ asked => {
+                let most = lv.checked(procedure, cnt, need, asked, j);
+                Nat::leb_false(Succ(left), need, omega(most, fits))
+            },
+        })(refl),
+    })(refl)
 }
 
-// A call kept within `k` levels, made with them in its room (and with its
-// cost and its body's room as well where it is not counted), is never
-// refused, nor any call it makes within them.
-theorem Source::levels_refuses(self src: Source, call: Writers(), n, d: Nat, ch: Charges, counted: Nat → Bool, below: Nat → Nat, per, top: Nat,
-    lv: ch.Levels(src, counted, below, per, top)):
-    (k, left, procedure: Nat) → k.stacked(per) + 8 <= left →
-    (counted(procedure) = False → ((ch.cost(procedure) + below(procedure)) + 8) + k.stacked(per) <= left) →
+// A call kept within `k` levels, made with its cost, its body's room with
+// the levels it leaves and a return address left, is never refused, nor
+// any call it makes within them.
+theorem Source::levels_refuses(self src: Source, call: Writers(), n, d: Nat, ch: Charges, counted: Nat → Bool, total: Nat → Nat → Nat, top: Nat → Nat,
+    lv: ch.Levels(src, counted, total, top)):
+    (k, left, procedure: Nat) →
+    ((callee: Procedure) → src.procedures.nth(procedure) = Some(callee) → (j: Nat) → k.spend(counted(procedure)) = Some(j) →
+        (ch.cost(procedure) + total(j, procedure)) + 8 <= left) →
     (args, results: List<Nat>) → (env: Env) →
     ITree::Refuses(Events::linux(), Flow::stops(λ _ => False), src.calls_within(call, n, d, counted, k)(procedure, args, results, env),
         src.performs(call, n, d, ch, left)(procedure, args, results, env)) {
     match d {
-        Zero => λ k left procedure fits fits_unchecked args results env => trivial,
-        Succ(e) => λ k left procedure fits fits_unchecked args results env => SameTau(
+        Zero => λ k left procedure fits args results env => trivial,
+        Succ(e) => λ k left procedure fits args results env => SameTau(
             match src.procedures.nth(procedure) {
                 None => Ret(Onward(env)),
                 Some(proc) => match ch.refuses(procedure, left) {
@@ -1399,8 +1385,7 @@ theorem Source::levels_refuses(self src: Source, call: Writers(), n, d: Nat, ch:
                             }) {
                     None => λ _ => trivial,
                     Some(j) => λ spent => {
-                        let entered = ch.levels_enter(src, counted, below, per, top, lv, k, j, left, procedure, spent, fits, fits_unchecked);
-                        let inside = entered.right;
+                        let inside = fits(proc, found, j, spent);
                         (match ch.refuses(procedure, left) as λ r => (r = False) →
                                 ITree::Refuses(Events::linux(), Flow::stops(λ _ => False),
                                     ITree::map(Events::linux(), proc.body.denote(call, src.calls_within(call, n, e, counted, j), n, proc.enter(env, args)),
@@ -1417,39 +1402,42 @@ theorem Source::levels_refuses(self src: Source, call: Writers(), n, d: Nat, ch:
                                 λ flow => proc.leave(env, results, flow),
                                 proc.body.refuses(call, src.calls_within(call, n, e, counted, j), src.performs(call, n, e, ch, left - ch.cost(procedure)),
                                     λ _ => False, n, n, n.le_refl(),
-                                    λ p mem => src.levels_refuses(call, n, e, ch, counted, below, per, top, lv, j, left - ch.cost(procedure), p, omega(inside),
-                                        λ unc => { let under = lv.under(procedure, proc, found, p, mem, unc); omega(under, inside) }),
+                                    λ p mem => src.levels_refuses(call, n, e, ch, counted, total, top, lv, j, left - ch.cost(procedure), p,
+                                        λ callee found_p j2 spent2 => {
+                                            let step = lv.step(procedure, proc, found, p, callee, found_p, mem, j, j2, spent2);
+                                            omega(step, inside)
+                                        }),
                                     proc.enter(env, args)),
                                 λ flow => match flow { Onward(_) => λ never => false_elim(never), Exited(_) => λ stops => stops }),
-                        })(entered.left)
+                        })(ch.levels_admit(src, counted, total, top, lv, procedure, j, left, inside))
                     },
                 })(refl),
             })(refl)),
     }
 }
 
-// Where `left` holds what `main`'s own calls take and `k` levels, the
-// compiled tree grows the source's within the levels: every run of the
-// source that nests at most `k` counted calls, the compiled program makes,
-// never refused.
-theorem Source::levels_exact(self src: Source, args: List<List<BitVec(8)>>, ch: Charges, counted: Nat → Bool, below: Nat → Nat, per, top: Nat,
-    lv: ch.Levels(src, counted, below, per, top), k, left, n: Nat, fits: (top + 8) + k.stacked(per) <= left):
+// Where `left` holds what `main`'s body takes with `k` levels and a
+// return address, the compiled tree grows the source's within the levels:
+// every run of the source that nests at most `k` counted calls, the
+// compiled program makes, never refused.
+theorem Source::levels_exact(self src: Source, args: List<List<BitVec(8)>>, ch: Charges, counted: Nat → Bool, total: Nat → Nat → Nat, top: Nat → Nat,
+    lv: ch.Levels(src, counted, total, top), k, left, n: Nat, fits: top(k) + 8 <= left):
     ITree::Below(Events::linux(), src.within_tree(args, counted, k, n), src.bounded_tree(args, ch, left, n)) {
     let call = program_writers(src.functions);
     ITree::below_of_refuses(Events::linux(), src.within_tree(args, counted, k, n), src.bounded_tree(args, ch, left, n),
         ITree::refuses_map(Events::linux(), Flow::stops(λ _ => False), λ (_: BitVec(64)) => False, src.within_main(args, counted, k, n), src.bounded_main(args, ch, left, n),
             λ flow => flow.status(),
             src.main.refuses(call, src.calls_within(call, n, n, counted, k), src.performs(call, n, n, ch, left), λ _ => False, n, n, n.le_refl(),
-                λ p mem => src.levels_refuses(call, n, n, ch, counted, below, per, top, lv, k, left, p, omega(fits),
-                    λ unc => { let under = lv.main_under(p, mem, unc); omega(under, fits) }), src.start(args)),
+                λ p mem => src.levels_refuses(call, n, n, ch, counted, total, top, lv, k, left, p,
+                    λ callee found j spent => { let step = lv.main_step(p, callee, found, mem, k, j, spent); omega(step, fits) }), src.start(args)),
             λ flow => match flow { Onward(_) => λ never => false_elim(never), Exited(_) => λ never => never }))
 }
 
 // So with the fuel gone: every trace the source makes within `k` levels,
 // the compiled program makes.
-theorem Source::levels_refines(self src: Source, args: List<List<BitVec(8)>>, ch: Charges, counted: Nat → Bool, below: Nat → Nat, per, top: Nat,
-    lv: ch.Levels(src, counted, below, per, top), k, left: Nat, fits: (top + 8) + k.stacked(per) <= left):
+theorem Source::levels_refines(self src: Source, args: List<List<BitVec(8)>>, ch: Charges, counted: Nat → Bool, total: Nat → Nat → Nat, top: Nat → Nat,
+    lv: ch.Levels(src, counted, total, top), k, left: Nat, fits: top(k) + 8 <= left):
     Program::Refines(Events::linux(), src.within(args, counted, k), src.bounded(args, ch, left)) {
     λ tr c => Converges(c.n, IsTrace::of_below(Events::linux(), src.within_tree(args, counted, k, c.n), src.bounded_tree(args, ch, left, c.n), tr,
-        src.levels_exact(args, ch, counted, below, per, top, lv, k, left, c.n, fits), c.h))
+        src.levels_exact(args, ch, counted, total, top, lv, k, left, c.n, fits), c.h))
 }

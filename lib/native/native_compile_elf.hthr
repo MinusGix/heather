@@ -102,13 +102,13 @@ fn Source::compiled_meaning(self src: Source, homes: Homes, bodies: List<Frame>,
 
 // The levels the source asks for, kept (§7.4): every run of the source
 // whose checked calls nest at most `src.levels` deep, the compiled program
-// makes, never refused, whatever frames and homes the compile picked. It
-// rests on the ranks holding of the source (`Source::ranked`), what the
-// compile checks of each call.
-theorem Source::compiled_levels(self src: Source, homes: Homes, bodies: List<Frame>, args: List<List<BitVec(8)>>, ranked: src.ranked() = True):
+// makes, never refused, whatever frames and homes the compile picked. The
+// compile checked the ranks it rests on (`Source::compile_ranked`).
+theorem Source::compiled_levels(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>, program: Prog, compiled: src.compile(low, homes, bodies) = Some(program),
+    args: List<List<BitVec(8)>>):
     Program::Refines(Events::linux(), src.within(args, λ p => src.checked(p), src.levels), src.compiled_meaning(homes, bodies, args)) {
-    src.levels_refines(args, src.charges(homes, bodies), λ p => src.checked(p), λ p => src.body_below(homes, bodies, p), src.per_level(homes, bodies),
-        src.main_below(homes, bodies), src.charges_levels(homes, bodies, ranked), src.levels, src.left(homes, bodies),
+    src.levels_refines(args, src.charges(homes, bodies), λ p => src.checked(p), λ k p => src.total(homes, bodies, k, p), λ k => src.top(homes, bodies, k),
+        src.charges_levels(homes, bodies, src.compile_ranked(low, homes, bodies, program, compiled)), src.levels, src.left(homes, bodies),
         Nat::le_refl(src.left(homes, bodies)))
 }
 

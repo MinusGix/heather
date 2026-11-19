@@ -678,36 +678,51 @@ the source's own terms.
 - **The request.** `Source.levels`: how many nested calls of procedures
   that reach themselves (the checked ones) the compiled program has room
   for. Builders write `room(64, …)`.
-- **The bytes.** `Source::left(homes, bodies)` is `main`'s own calls'
-  room and one return address (`Source::main_below` + 8), then `levels`
-  times a level, `Source::per_level`: the most any checked procedure takes,
-  its level and the unchecked chain below its frame. A checked procedure's
-  check asks for that and one return address. For one procedure recursing,
-  this is exactly the bytes of `levels` calls, so the 139 boundary stays at
-  the call past the levels; for a mixed cycle the most of the cycle's
-  procedures stands for each, so the room is at least what `levels` calls
-  take.
+- **The bytes.** `Source::left(homes, bodies)` is `Source::top(levels)`
+  and one return address: what `main`'s body takes below its frame when
+  `levels` checked calls are left. What a checked call takes depends on
+  how many levels are left past it, so the compile works it out level by
+  level over the call graph: `List::level_row(k)` holds, for each
+  procedure, its level and `Source::total(k - 1, p)`, what its body takes
+  below its frame with one level fewer, where a checked callee's step
+  reads the row before it (`List::below_by`, `below` with the row in
+  place of the 0 a checked callee costs at a check). A checked
+  procedure's check asks for its cost, `total` at its levels, and a return
+  address. This is exact: the heaviest chain of `levels` checked calls the
+  call graph has, not `levels` times the heaviest procedure. One procedure
+  recursing takes `8 + levels * level` (the 139 boundary stays at the call
+  past the levels); a cycle `a → b → a` of two procedures takes its own
+  alternation, three levels of each for six
+  (`alternating_left`, `lib/_tests/native/native_compile_tests.hthr`).
 - **What the source means within the levels.** `Source::within(args,
   counted, k)` is the source's runs that nest at most `k` of the calls
   `counted` names: `Source::calls_within` is `Source::calls` with a counted
   call past the levels a `Cut`, claiming nothing (`Nat::spend`).
   `Source::within_refines` says it is a part of the source's meaning.
 - **The theorem.** `Source::levels_refines` (native_source): where the
-  charges fit the levels (`Charges::Levels`: a counted procedure's check
-  asks for its cost and its body's room, at most `per`, and a return
-  address; an uncounted one has no check, and a body calls one only within
-  its own room) and `left` holds `main`'s room and `k` levels
-  (`Nat::stacked`), every trace of `src.within(args, counted, k)` is a
-  trace of `src.bounded(args, ch, left)`. Its proof follows the calls,
-  carrying `below(q) + 8 + stacked(k) <= left` inside procedure `q`'s body.
-  `Source::charges_levels` (native_compile_facts) proves `Charges::Levels`
-  of the charges any compile picks, from the ranks holding of the source
-  (`Source::ranked`, what `call_fits` checks a call at a time, here of the
-  whole source) and the rows growing with their depth (`List::reach_le`).
-  `Source::compiled_levels` (native_compile_elf) puts the two together:
-  for any homes and frames, every run of the source whose checked calls
-  nest at most `src.levels` deep is a run of the compiled program, never
-  refused. That is guarantee 1 in the writer's terms.
+  charges fit the levels and `top(k) + 8 <= left`, every trace of
+  `src.within(args, counted, k)` is a trace of `src.bounded(args, ch,
+  left)`. `Charges::Levels` is what fitting means, for any `total` and
+  `top`: a counted procedure's check asks at most its cost, `total` at any
+  levels and a return address (`checked`); an uncounted one has none
+  (`unchecked`); and a call that spends a level from `k` to `j` costs its
+  callee's cost and `total(j)` within its caller's `total(k)` (`step`, and
+  `main_step` against `top(k)`). The proof follows the calls, carrying the
+  room the current body may still take, `total(k, q) + 8 <= left`, past
+  each call by `step`. `Source::charges_levels` (native_compile_facts)
+  proves `Charges::Levels` of the charges any compile picks, with
+  `level_row`'s own `total` and `top`, from the ranks holding of the source
+  (`Source::ranked`: every unchecked call goes to a lower rank, what
+  `call_fits` checks a call at a time, here of the whole source).
+- **Ranks from the compile.** `Source::compile_calls` checks
+  `Source::ranked` once before it lays out any call, and
+  `Source::compile_ranked` (native_compile_correct) reads it back from
+  `compile = Some(program)`, so the guarantee rests on nothing the writer
+  supplies. `Source::compiled_levels` (native_compile_elf) puts the parts
+  together: for a source that compiles, under any homes and frames, every
+  run whose checked calls nest at most `src.levels` deep is a run of the
+  compiled program, never refused. That is guarantee 1 in the writer's
+  terms.
 
 Guarantee 4 fills this in: the levels stop being a constant and become an
 expression in the input's sizes, proved from the recursion's measure and

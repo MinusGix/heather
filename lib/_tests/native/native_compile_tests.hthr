@@ -315,10 +315,10 @@ theorem summing_exits(): compiled_next(summing(), 8) = Exits(BitVec::ofNat(9)) {
 theorem summing_twenty_exits(): compiled_next(summing_twenty(), 24) = Exits(BitVec::ofNat(210)) { refl }
 theorem summing_shallow_exits(): compiled_next(summing_shallow(), 24) = Exits(call_depth_status()) { refl }
 
-// A level is the most a checked procedure takes: here `sum`'s level, 40
-// bytes under the homes `write-elf` compiles with, so the bytes below
-// `main`'s frame are its call's return address and 21 levels, 8 + 21 * 40:
-// the levels' exact bytes, as one procedure recurses.
+// The bytes below `main`'s frame are what the deepest chain of 21 checked
+// calls takes, and the return address of `main`'s call: here 21 calls of
+// `sum`, whose level is 40 bytes under the homes `write-elf` compiles with,
+// 8 + 21 * 40.
 fn Source::cost(self src: Source, p: Nat) → Nat { src.charges(src.homes(), src.bodies()).cost(p) }
 theorem summing_twenty_level(): summing_twenty().cost(0) = 40 { refl }
 theorem summing_twenty_left(): summing_twenty().left(summing_twenty().homes(), summing_twenty().bodies()) = 848 { refl }
@@ -333,8 +333,8 @@ theorem summing_within(): ITree::next(Events::linux(), summing_twenty().within_t
 theorem summing_past_within(): ITree::next(Events::linux(), summing_shallow().within_tree([], checked_by(summing_shallow()), 20, 24)) = Stops { refl }
 theorem summing_ranked(): summing_twenty().ranked() = True { refl }
 theorem summing_twenty_levels(): summing_twenty().charges(summing_twenty().homes(), summing_twenty().bodies()).Levels(summing_twenty(),
-    checked_by(summing_twenty()), λ p => summing_twenty().body_below(summing_twenty().homes(), summing_twenty().bodies(), p),
-    summing_twenty().per_level(summing_twenty().homes(), summing_twenty().bodies()), summing_twenty().main_below(summing_twenty().homes(), summing_twenty().bodies())) {
+    checked_by(summing_twenty()), λ k p => summing_twenty().total(summing_twenty().homes(), summing_twenty().bodies(), k, p),
+    λ k => summing_twenty().top(summing_twenty().homes(), summing_twenty().bodies(), k)) {
     summing_twenty().charges_levels(summing_twenty().homes(), summing_twenty().bodies(), summing_ranked())
 }
 
@@ -410,9 +410,18 @@ fn alternating_to(n, levels: Nat) → Source {
             Procedure(params := [1], results := [2], body := alternate_body(0, True)),
         ], levels := levels)
 }
-// a(5) calls a, b, a, b, a and b: six levels of checked calls.
+// a(5) calls a, b, a, b, a and b: six levels of checked calls. The room is
+// the chain's own, three levels of each and the return address of `main`'s
+// call, as the call graph alternates them: a level of each is 40 bytes, so
+// 8 + 3 * 40 + 3 * 40 = 248, and 208 with a level fewer. (Written as
+// numerals: a sum on the right has conversion try the two sums argument by
+// argument first.)
 fn alternating() → Source { alternating_to(5, 6) }
 fn alternating_shallow() → Source { alternating_to(5, 5) }
+theorem alternating_level_first(): alternating().cost(0) = 40 { refl }
+theorem alternating_level_second(): alternating().cost(1) = 40 { refl }
+theorem alternating_left(): alternating().left(alternating().homes(), alternating().bodies()) = 248 { refl }
+theorem alternating_shallow_left(): alternating_shallow().left(alternating_shallow().homes(), alternating_shallow().bodies()) = 208 { refl }
 theorem alternating_compiles(): refused(alternating()) = [] { refl }
 theorem alternating_allocated(): alternating().allocation_ok(alternating().homes()) = True { refl }
 theorem alternating_homed(): alternating().refusal(low(), alternating().homes(), alternating().bodies()) = [] { refl }
