@@ -1272,6 +1272,43 @@ theorem Function::relabel_eval(self function: Function, call: Answers(), links: 
     function.relabel_eval_over(Nil, call, links, arguments)
 }
 
+// The same of the words a function returns past its first
+// (`Function::eval_also`): they are read off the same valuation.
+theorem words_of_same(values, other: Valuation(), same: Valuation::Same(values, other), ids: List<Nat>): words_of(other, ids) = words_of(values, ids) {
+    match ids {
+        Nil => refl,
+        Cons(id, rest) => {
+            let tail: (words_of(other, rest) = words_of(values, rest)) = words_of_same(values, other, same, rest);
+            trans(cong_fn(λ (x: BitVec(64)) => Cons(x, words_of(other, rest)), same(64, id)),
+                cong_fn(λ (r: List<BitVec(64)>) => Cons(values(64, id), r), tail))
+        },
+    }
+}
+
+theorem Function::relabel_eval_also_over(self function: Function, buffers: Buffers(), call: Answers(), links: Nat → Nat, arguments: List<BitVec(64)>):
+    function.relabel(links).eval_also(call, arguments, buffers := buffers) = function.eval_also(Answers::relabel(call, links), arguments, buffers := buffers) {
+    let bound = Valuation::bind(Valuation::zero(), function.parameters, arguments);
+    words_of_same(function.body.eval(Answers::relabel(call, links), bound, buffers := buffers), function.relabel(links).body.eval(call, bound, buffers := buffers),
+        function.body.relabel_eval_over(buffers, call, links, bound, bound, λ w id => refl), function.also)
+}
+
+theorem Function::eval_also_answers_over(self function: Function, buffers: Buffers(), call, other: Answers(), arity: Nat → Option<Nat>,
+    answers: (f: Nat) → (words: List<BitVec(64)>) → arity_fits(arity(f), words.len()).IsTrue() → other(f, words) = call(f, words),
+    ok: function.calls_fit(arity).IsTrue(), arguments: List<BitVec(64)>):
+    function.eval_also(other, arguments, buffers := buffers) = function.eval_also(call, arguments, buffers := buffers) {
+    let bound = Valuation::bind(Valuation::zero(), function.parameters, arguments);
+    words_of_same(function.body.eval(call, bound, buffers := buffers), function.body.eval(other, bound, buffers := buffers),
+        StructuredRegion::eval_answers_over(function.body, buffers, call, other, arity, answers, ok, bound, bound, λ w id => refl), function.also)
+}
+
+// A program's last function's words past its first, its calls answered by
+// the functions before it (over no buffers): what a program whose last
+// function returns two words returns in RDX (`compiled_returns_both`,
+// function_ir_compile).
+fn program_eval_also(functions: List<Function>, arguments: List<BitVec(64)>) → List<BitVec(64)> {
+    match functions { Nil => Nil, Cons(last, earlier) => last.eval_also(program_eval(earlier), arguments) }
+}
+
 // Renamed calls fit wherever the renaming carries every arity over: what a
 // linked function's calls are checked by, from the check its own code had
 // against its own table, with nothing read off the code again
@@ -1459,6 +1496,15 @@ theorem program_linked_files_sources(functions: List<Function>): (arities: List<
             })
         },
     }
+}
+
+// A linked program's last function's words past its first are its own,
+// its calls answered by the sources (over no buffers).
+theorem program_linked_also(last: Function, earlier: List<Function>, arities: List<Nat>, sources: Buffers() → Answers(),
+    linked: program_linked_files(Cons(last, earlier), arities, sources), arguments: List<BitVec(64)>):
+    program_eval_also(Cons(last, earlier), arguments) = last.eval_also(sources(Nil), arguments) {
+    last.eval_also_answers_over(Nil, sources(Nil), program_eval_over(Nil, earlier), linked_arity(earlier, arities.tail()),
+        program_linked_files_sources(earlier, arities.tail(), sources, linked.right, Nil), linked.left.left, arguments)
 }
 
 // For a program checked whole (`program_evaluable`).

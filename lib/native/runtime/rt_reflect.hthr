@@ -2412,12 +2412,34 @@ fn rt_with_reprs<A>(fuel: Nat, k: Known, run: Known → Tac<A>) → Tac<Pair<Kno
             Failed(msg, notes) => match rt_needed_repr(msg) {
                 None => match rt_strip(("rt: " ++ rt_rec_marker()).chars, msg.chars) {
                     None => fail(msg, notes),
-                    Some(rest) => rt_global(String(rest)).bind(λ g => rt_with_reprs(more, k.with_recs(k.recs ++ [RecEntry(g)]), run)),
+                    // A record the program cannot hold (one already given,
+                    // so held some other way, or one with no global name)
+                    // is refused as having no layout.
+                    Some(rest) => attempt(rt_global(String(rest))).bind(λ og => match og {
+                        Done(g) => match k.recs.any_bit(λ (e: RecEntry) => e.g.same(g)) {
+                            False => rt_with_reprs(more, k.with_recs(k.recs ++ [RecEntry(g)]), run),
+                            True => rt_refuse("`" ++ String(rest) ++ "` has no runtime layout under the reflected fragment"),
+                        },
+                        Failed(_, _) => rt_refuse("`" ++ String(rest) ++ "` has no runtime layout under the reflected fragment"),
+                    }),
                 },
                 Some(p) => rt_repr_entry(p.fst, p.snd).bind(λ e => rt_with_reprs(more, k.with_reprs(k.reprs ++ [e]), run)),
             },
         }),
     }
+}
+
+// A walk that does not add the records it meets (a function over a file,
+// or a laid record's): one it stops for has no layout there, as before
+// records were discovered.
+fn rt_no_records<A>(run: Tac<A>) → Tac<A> {
+    attempt(run).bind(λ o => match o {
+        Done(a) => pure(a),
+        Failed(msg, notes) => match rt_strip(("rt: " ++ rt_rec_marker()).chars, msg.chars) {
+            None => fail(msg, notes),
+            Some(rest) => rt_refuse("`" ++ String(rest) ++ "` has no runtime layout under the reflected fragment"),
+        },
+    })
 }
 
 // The program's functions, reflected from their elaborated bodies.

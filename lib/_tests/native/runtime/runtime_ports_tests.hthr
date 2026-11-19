@@ -100,8 +100,14 @@ runtime fn port_weight(k: PortKind) → u64 { match k { Ident => 3, Number => 2,
 // Two results at once (a value and whether it fits).
 record PortParsed { value: u64, ok: u64 }
 
-// expect-error: `PortParsed` has no runtime layout
 runtime fn port_split(x: u64) → PortParsed { PortParsed(x + 1, x - 1) }
+
+// The first field comes back as the program's word and the second beside
+// it, the word a compiled call finds in RDX.
+theorem port_split_runs(): program_eval(port_split::program, 0, [BitVec::ofNat(7)]) = 8 ∧
+    program_eval_also(port_split::program, [BitVec::ofNat(7)]) = [6] {
+    ⟨port_split::agrees(BitVec::ofNat(7)), port_split::agrees_also(BitVec::ofNat(7))⟩
+}
 
 // ---------------------------------------------------------------------------
 // Rung 1: loops and recursion

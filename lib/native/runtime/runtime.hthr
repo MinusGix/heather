@@ -117,6 +117,21 @@ fn Ty::is_edge(self t: Ty, tys: Nat → RecInfo) → Bool {
     match t { Word(w) => w.leb(64), _ => t.is_one_word(tys) }
 }
 
+// A code a plain function returns: one it passes in a word, or a record of
+// two 64-bit words, the second returned in RDX (`Ty::check_out`,
+// docs/native/runtime-fn-setups-design.md §16.16).
+fn Ty::is_two_words(self t: Ty, tys: Nat → RecInfo) → Bool {
+    match t {
+        Named(i) => match tys(i).fields {
+            Cons(f, rest) => match rest { Cons(g, more) => f.is_word64().and(g.is_word64()).and(match more { Nil => True, Cons(_, _) => False }), Nil => False },
+            Nil => False,
+        },
+        _ => False,
+    }
+}
+
+fn Ty::is_out(self t: Ty, tys: Nat → RecInfo) → Bool { t.is_edge(tys).or(t.is_two_words(tys)) }
+
 fn Ty::all_edge(ts: List<Ty>, tys: Nat → RecInfo) → Bool {
     match ts { Nil => True, Cons(t, rest) => t.is_edge(tys).and(Ty::all_edge(rest, tys)) }
 }
@@ -199,7 +214,7 @@ fn Fun::words_reason() → String {
 }
 
 fn Fun::result_reason() → String {
-    "a result that is not a word of at most 64 bits: the default setup compiles functions from words to a word (issues/function-ir-multi-word-calls.md)"
+    "a result that is not a word of at most 64 bits or a record of two 64-bit words: the default setup compiles functions from words to a word, or to two (issues/function-ir-multi-word-calls.md)"
 }
 
 fn Fun::loop_words_reason() → String {
@@ -241,7 +256,7 @@ fn Fun::judge(self f: Fun, w: World) → Verdict {
     match f.shape() {
         // A plain function's boundary passes a word narrower than 64 bits
         // too (issues/runtime-repr-narrow-words.md); a loop's does not yet.
-        Plain => match f.result.is_edge(w.tys) {
+        Plain => match f.result.is_out(w.tys) {
             False => Refused(Fun::result_reason()),
             True => match Ty::all_edge(f.params, w.tys) {
                 False => Refused(Fun::words_reason()),
@@ -513,6 +528,43 @@ theorem Setup::plain_agrees<F>(f: F, s: Setup, rt: Fun, w: World, callees: (b: B
                     Setup::lowered_over(s, rt, w, callees(b), b, Setup::checked_lowered(s, rt, w, ok)), plain, call, agree)))
 }
 
+// The words past the first a plain function's code returns
+// (`Function::eval_also`): the meaning's (`Ty::rest_words`, none but for a
+// record of two words), from `Fun::lower_sound_also`. Only the default
+// setup is read here: a function returning two words is the program's
+// entry (docs/native/runtime-fn-setups-design.md §16.16).
+theorem Setup::of_lowered_also(f: Fun, w: World, r: Option<Function>): Setup::lowers(r).IsTrue() → f.LowerAlso(w, r) →
+    (call: Answers()) → Tm::CallsAgree(w, call) →
+    Ty::AnswersAlso(w.tys, f.params, f.result, f.meaning(w), λ xs => Setup::code_of(r).eval_also(call, xs, buffers := w.spans)) {
+    match r {
+        None => λ never _ => false_elim(never),
+        Some(_) => λ _ holds => holds,
+    }
+}
+
+theorem Setup::code_answers_also(f: Fun, w: World, ok: Setup::default().lowered(f, w).IsTrue(), plain: f.shape() = Plain):
+    (call: Answers()) → Tm::CallsAgree(w, call) →
+    Ty::AnswersAlso(w.tys, f.params, f.result, f.meaning(w), λ xs => Setup::default().code(f, w).eval_also(call, xs, buffers := w.spans)) {
+    Setup::of_lowered_also(f, w, Setup::default().lower(f, w), ok,
+        j(sym(plain), λ x _ => f.LowerAlso(w, f.lower_at(w, x)), f.lower_sound_also(w)))
+}
+
+theorem Setup::plain_agrees_also<F>(f: F, rt: Fun, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs),
+    typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(w.at(callees, b).tys, rt.lent, rt.params, rt.result)),
+    pinned: (b: Buffers()) → Ty::lent_at(w.at(callees, b).tys, rt.lent, rt.params, rt.result, typed(b), f, b) = rt.meaning(w.at(callees, b)),
+    ok: Setup::default().checked(rt, w) = True, plain: rt.shape() = Plain):
+    (b: Buffers()) → (call: Answers()) → Tm::CallsAgree(w.at(callees, b), call) →
+    Ty::AnswersAlso(w.at(callees, b).tys, rt.params, rt.result, Ty::lent_at(w.at(callees, b).tys, rt.lent, rt.params, rt.result, typed(b), f, b),
+        λ xs => Setup::default().code(rt, w).eval_also(call, xs, buffers := b)) {
+    let s = Setup::default();
+    λ b call agree =>
+        j(sym(pinned(b)), λ g _ => Ty::AnswersAlso(w.at(callees, b).tys, rt.params, rt.result, g, λ xs => s.code(rt, w).eval_also(call, xs, buffers := b)),
+            j(s.static(rt, w, callees(b), b), λ r _ => Ty::AnswersAlso(w.at(callees, b).tys, rt.params, rt.result, rt.meaning(w.at(callees, b)),
+                    λ xs => Setup::code_of(r).eval_also(call, xs, buffers := b)),
+                Setup::code_answers_also(rt, w.at(callees, b),
+                    Setup::lowered_over(s, rt, w, callees(b), b, Setup::checked_lowered(s, rt, w, ok)), plain, call, agree)))
+}
+
 // `f` comes after the reflection and the table. Two instances met in a link
 // are two applications of this function, which the kernel compares argument
 // by argument before it unfolds either: two different functions are then
@@ -752,6 +804,26 @@ theorem Ty::answers_at(tys: Nat → RecInfo, ps: List<Ty>, r: Ty): (v: Ty::Arrow
     }
 }
 
+// The same of the words past the first: what answers like a meaning's is
+// its applied value's (`Ty::rest_words`), on as many words as parameters.
+theorem Ty::answers_also_at(tys: Nat → RecInfo, ps: List<Ty>, r: Ty): (v: Ty::Arrows(tys, ps, r)) → (ans: List<BitVec(64)> → List<BitVec(64)>) →
+    Ty::AnswersAlso(tys, ps, r, v, ans) → (words: List<BitVec(64)>) → words.len() = ps.len() →
+    ans(words) = Ty::rest_words(tys, r, Ty::apply(tys, ps, r, v, words)) {
+    match ps {
+        Nil => λ v ans held words => match words as λ ws => ws.len() = 0 → ans(ws) = Ty::rest_words(tys, r, Ty::apply(tys, Nil, r, v, ws)) {
+            Nil => λ _ => held,
+            Cons(_, more) => λ (bad: more.len() + 1 = 0) => false_elim(more.len().succ_ne_zero(bad)),
+        },
+        Cons(p, rest) => λ v ans held words => match words as λ ws => ws.len() = rest.len() + 1 →
+            ans(ws) = Ty::rest_words(tys, r, Ty::apply(tys, Cons(p, rest), r, v, ws)) {
+            Nil => λ (bad: 0 = rest.len() + 1) => false_elim(rest.len().zero_ne_succ(bad)),
+            Cons(x, more) => λ (same: more.len() + 1 = rest.len() + 1) =>
+                Ty::answers_also_at(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)), held(x), more,
+                    Nat::succ_inj(more.len(), rest.len(), same)),
+        },
+    }
+}
+
 // The word function at index `k` of a list of them, zero past its end.
 fn link_source(srcs: List<List<BitVec(64)> → BitVec(64)>, k: Nat) → List<BitVec(64)> → BitVec(64) {
     match srcs.nth(k) { None => λ _ => BitVec::zero(), Some(s) => s }
@@ -981,6 +1053,38 @@ theorem Compile::part<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<List<B
                     Sig::callee_fits(c.world.sigs, k, ws.len(), fits)), c.fits, words),
                 answered))
     }⟩
+}
+
+// A program whose last function is an instance's code returning two words:
+// the program's words past the first (`program_eval_also`) are the
+// function's, at no file. `linked` is what `Compile::part` takes, and
+// `also` the instance's agreement on those words
+// (`Setup::plain_agrees_also`); the program is linked
+// (`program_linked_files`), so its earlier functions answer the code's
+// calls with their meanings.
+theorem Compile::root_also<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<List<BitVec(64)> → BitVec(64)>, links: List<Nat>,
+    linked: (b: Buffers()) → links.map(λ (n: Nat) => link_source(srcs(b), n)) = Compile::table(f, c, b),
+    also: (call: Answers()) → Tm::CallsAgree(c.world.at(c.callees, Nil), call) →
+        Ty::AnswersAlso(c.world.at(c.callees, Nil).tys, c.reflected.params, c.reflected.result,
+            Ty::lent_at(c.world.at(c.callees, Nil).tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed(Nil), f, Nil),
+            λ xs => c.code.eval_also(call, xs, buffers := Nil)),
+    earlier: List<Function>, arities: List<Nat>,
+    sourced: program_linked_files(Cons(Compile::linked(f, c, links), earlier), arities, link_sources_at(srcs)),
+    words: List<BitVec(64)>, n: arity_fits(Some(Compile::arity(f, c)), words.len()).IsTrue()):
+    program_eval_also(Cons(Compile::linked(f, c, links), earlier), words) =
+        Ty::rest_words(c.world.at(c.callees, Nil).tys, c.reflected.result, Ty::apply(c.world.at(c.callees, Nil).tys, c.reflected.params, c.reflected.result,
+            Ty::lent_at(c.world.at(c.callees, Nil).tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed(Nil), f, Nil), words)) {
+    let at = c.world.at(c.callees, Nil);
+    let own = link_sources(Compile::table(f, c, Nil));
+    let meaning = Ty::lent_at(at.tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed(Nil), f, Nil);
+    let answered = Ty::answers_also_at(at.tys, c.reflected.params, c.reflected.result, meaning, λ xs => c.code.eval_also(own, xs, buffers := Nil),
+        also(own, at.calls_agree_own()), words, sym(c.reflected.params.len().matches_eq(words.len(), n)));
+    trans(program_linked_also(Compile::linked(f, c, links), earlier, arities, link_sources_at(srcs), sourced, words),
+        trans(c.code.relabel_eval_also_over(Nil, link_sources(srcs(Nil)), link_at(links), words),
+            trans(c.code.eval_also_answers_over(Nil, own, Answers::relabel(link_sources(srcs(Nil)), link_at(links)), c.world.callee_arity(),
+                λ k ws fits => Sig::links_agree(c.world.tys, srcs(Nil), c.world.sigs, c.callees(Nil), links, linked(Nil), k, ws,
+                    Sig::callee_fits(c.world.sigs, k, ws.len(), fits)), c.fits, words),
+                answered)))
 }
 
 // A table of meanings that answers every call with a default: what the
@@ -1383,7 +1487,9 @@ fn runtime_held(e: Expr, what: String) → Tac<Expr> {
 // word functions answering its calls at each file, and the proof each
 // function returns its own over every file (`program_linked_files`), with
 // that statement.
-record Linked { program: Expr, srcs: Expr, arities: Expr, sourced: Expr, statement: Expr }
+// `root`: the last function's arguments to `Compile::part` up to its
+// arity, what `Compile::root_also` takes before its agreement.
+record Linked { program: Expr, srcs: Expr, arities: Expr, sourced: Expr, statement: Expr, root: List<Expr> }
 
 // Each function's type, read once: what `Compile`'s members take first.
 // Spelled, not left to inference (`Blank`), in everything the link applies:
@@ -1446,7 +1552,8 @@ fn runtime_linked(q: RtQ, ts: RtTypes, l: Linking, insts: List<Pair<Expr, Expr>>
     let held <- hole(statement).or_fail("runtime: the program's linking: ");
     let solved <- defeq(Hd(held), proof);
     match solved {
-        True => pure(Linked(program, srcs, arities, Hd(held), Hd(statement))),
+        True => pure(Linked(program, srcs, arities, Hd(held), Hd(statement),
+            of(insts.len() - 1) ++ [srcs, runtime_at(links, insts.len() - 1), ap(every, [ap(table, of(insts.len() - 1))])])),
         False => runtime_fail("the program's linking does not prove its statement"),
     }
 }
@@ -1912,10 +2019,34 @@ fn runtime_tuple_of(pair, unit: Expr, gets: List<Expr>) → Expr {
     match gets { Nil => unit, Cons(g, rest) => ap(pair, [Blank, Blank, g, runtime_tuple_of(pair, unit, rest)]) }
 }
 
-fn runtime_rec_gets(name: String, fields: List<String>) → Tac<List<Expr>> {
-    match fields {
-        Nil => pure([]),
-        Cons(fname, rest) => runtime_global(name ++ "::" ++ fname).bind(λ g => runtime_rec_gets(name, rest).bind(λ more => pure(Cons(g, more)))),
+// A `RecInfo` from its parts, as a function the generator applies.
+fn runtime_rec_info(T: Type, fields: List<Ty>, mk: Ty::Flats(fields) → T, get: T → Ty::Flats(fields),
+    round: (t: Ty::Flats(fields)) → get(mk(t)) = t, back: (v: T) → mk(get(v)) = v) → RecInfo {
+    RecInfo(T, fields, mk, get, round, back)
+}
+
+// A record value's fields, each its projection (`Fields`).
+fn runtime_projections(e: Expr, what: String) → Tac<List<Expr>> {
+    fields(e).bind(λ c => rt_accepted(what, c)).bind(λ (p: Projected) => pure(p.fields.map(λ (fp: FieldProj) => Hd(fp.term))))
+}
+
+// A pair's halves as functions the generator applies (a record's field
+// is not a global).
+fn runtime_fst<A, B>(p: Pair<A, B>) → A { p.fst }
+
+fn runtime_snd<A, B>(p: Pair<A, B>) → B { p.snd }
+
+
+// A record result's fields, each its projection (none for any other
+// result): its first is the word the function returns, the rest those it
+// returns beside it (docs/native/runtime-fn-setups-design.md §16.16).
+fn runtime_result_fields(reprs: List<ReprEntry>, recs: List<RecShape>, r: Ty, e: Expr) → Tac<List<Expr>> {
+    match r {
+        Named(i) => match reprs.nth(i) {
+            Some(_) => pure([]),
+            None => match recs.nth(i - reprs.len()) { Some(_) => runtime_projections(e, "a record result's fields"), None => pure([]) },
+        },
+        _ => pure([]),
     }
 }
 
@@ -1926,19 +2057,19 @@ fn runtime_rec_infos(q: RtQ, rfl: Expr, recs: List<RecShape>) → Tac<List<Expr>
     match recs {
         Nil => pure([]),
         Cons(r, rest) => {
-            let info <- runtime_global(name_of(RecInfo));
+            let info <- runtime_global(name_of(runtime_rec_info));
             let flats <- runtime_global(name_of(Ty::Flats));
-            let fst <- runtime_global("pair::Pair::fst");
-            let snd <- runtime_global("pair::Pair::snd");
+            let fst <- runtime_global(name_of(runtime_fst));
+            let snd <- runtime_global(name_of(runtime_snd));
             let pair <- runtime_global(name_of(Pair::of));
             let unit <- resolve("trivial").or_fail("runtime: `trivial`: ");
             let codes_e = Ty::quotes(r.codes, q);
             let tuple_t <- as_type(ap(flats, [codes_e])).or_fail("runtime: a record's field tuple: ");
             let t <- assume(Hd(tuple_t), "t", None).or_fail("runtime: a record's fields: ");
             let mk = Lam(t.ref, ap(Hd(r.ctor), runtime_flat_fields(fst, snd, Local(t.ref), 0, r.codes.len())));
-            let gets <- runtime_rec_gets(r.name, r.fields);
             let v <- assume(Hd(r.ty), "v", None).or_fail("runtime: a record's value: ");
-            let get = Lam(v.ref, runtime_tuple_of(pair, Hd(unit), gets.map(λ (g: Expr) => App(g, Local(v.ref)))));
+            let gets <- runtime_projections(Local(v.ref), "`" ++ r.name ++ "`'s fields");
+            let get = Lam(v.ref, runtime_tuple_of(pair, Hd(unit), gets));
             let t2 <- assume(Hd(tuple_t), "t", None).or_fail("runtime: a record's fields: ");
             let round = Lam(t2.ref, ap(rfl, [Blank, Local(t2.ref)]));
             let v2 <- assume(Hd(r.ty), "v", None).or_fail("runtime: a record's value: ");
@@ -2034,6 +2165,38 @@ fn runtime_file_callees_of(entry, typed_once, nil, tys_e: Expr, q: RtQ, funs: Li
 
 fn runtime_file_callees(entry, typed_once, nil, tys_e: Expr, q: RtQ, funs: List<Nat>, sigs: List<Sig>, lents: List<Nat>) → Expr {
     runtime_file_callees_of(entry, typed_once, nil, tys_e, q, funs.map(λ g => Global(GlobalRef(g))), sigs, lents)
+}
+
+// A function returning a record of two words, lent nothing:
+// `f::agrees_also`, the program's words past its first against the
+// record's fields past its first (`Compile::root_also`, its agreement
+// `Setup::plain_agrees_also` at no file). None for any other function.
+fn runtime_also_decls(name: String, f: GlobalRef, rfun: Fun, world_e, table_e, rt_e: Expr, linked: Linked, ys: List<Param>, words_e: Expr,
+    word_list: List<Expr>, rest: List<Expr>) → Tac<List<Decl>> {
+    match rest {
+        Nil => pure([]),
+        Cons(_, _) => match rfun.shape() {
+            Plain => {
+                let rfl <- runtime_global("tactic::rfl");
+                let typed_refl <- runtime_global(name_of(Setup::typed_refl));
+                let at_every <- runtime_global(name_of(Setup::at_every));
+                let verdict <- runtime_verdict();
+                let shapes <- runtime_type_of(name_of(runtime_w_shape)).bind(λ h => runtime_ctors_at(h));
+                let plain_also <- runtime_global(name_of(Setup::plain_agrees_also));
+                let root_also <- runtime_global(name_of(Compile::root_also));
+                let eval_also <- runtime_global(name_of(program_eval_also));
+                let tail <- runtime_global(name_of(List::tail));
+                let no_file <- runtime_global(name_of(runtime_w_buffers));
+                let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
+                let agreement = ap(plain_also, [Blank, Global(f), rt_e, world_e, table_e, ap(typed_refl, [Blank, Global(f)]), ap(at_every, [Blank, Global(f)]),
+                    verdict, ap(rfl, [Blank, runtime_at(shapes, 0)]), no_file]);
+                let proof = ap(root_also, linked.root ++ [agreement, ap(tail, [Blank, linked.program]), linked.arities, linked.sourced, words_e, Hd(trivial_h)]);
+                pure([Decl(AsTheorem, name ++ "::agrees_also", ys,
+                    Equation(ap(eval_also, [linked.program, words_e]), RtQ::seq(word_list, rest)), proof)])
+            },
+            _ => pure([]),
+        },
+    }
 }
 
 // `lents` says how many spans each function of `funs` is lent (the function
@@ -2140,13 +2303,18 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
             };
             // A function lent nothing: its program at the empty file, which
             // is `program_eval`.
+            let fx = ap(Global(f), runtime_narrow_args(low, rfun.params, runtime_args(count, reprs, rfun.params, at_ys)));
+            let gets <- runtime_result_fields(reprs, recs, rfun.result, fx);
+            // A record result: its first field is the word returned, and
+            // the rest are returned beside it (`f::agrees_also`).
+            let first: Expr = match gets { Cons(g, _) => g, Nil => runtime_narrow_result(wide, rfun.result, runtime_result(reprs, rfun.result, fx)) };
             let tail: List<Decl> = [
                 Decl(AsTheorem, name ++ "::agrees", runtime_params_of(ys),
-                    Equation(ap(program_eval, [linked.program, root, words_e]), runtime_narrow_result(wide, rfun.result,
-                        runtime_result(reprs, rfun.result, ap(Global(f), runtime_narrow_args(low, rfun.params, runtime_args(count, reprs, rfun.params, at_ys)))))),
+                    Equation(ap(program_eval, [linked.program, root, words_e]), first),
                     ap(eval_sources, [linked.program, linked.arities, ap(sources, [linked.srcs]), linked.sourced, no_file, root, words_e, Hd(trivial_h)])),
             ];
-            pure(head.append(pin).append(made).append(linked_decls).append(tail))
+            let also <- runtime_also_decls(name, f, rfun, world_e, table_e, rt_e, linked, runtime_params_of(ys), words_e, word_list, gets.tail());
+            pure(head.append(pin).append(made).append(linked_decls).append(tail).append(also))
         },
         // A function lent spans: its pin and its program's agreement are at
         // every file (the reflection's meaning in the world there, and the
@@ -3208,7 +3376,7 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
 fn runtime_span(name: String, f: GlobalRef) → Tac<List<Decl>> {
     let k <- rt_known_in([], [], True);
     let names <- rt_file_names();
-    let r <- rt_file_reflect_one(k, names, [], f.id, name);
+    let r <- rt_no_records(rt_file_reflect_one(k, names, [], f.id, name));
     let rfun = r.reflected;
     let read_sigs <- runtime_sigs(k, r.funs);
     let write_sigs <- runtime_span_sigs(k, names, r.cfuns);
@@ -3855,7 +4023,7 @@ fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanPa
 fn runtime_record(name: String, f: GlobalRef) → Tac<List<Decl>> {
     let k <- rt_known_in([], [], True);
     let names <- rt_file_names();
-    let r <- rt_held_reflect_one(k, names, f, name);
+    let r <- rt_no_records(rt_held_reflect_one(k, names, f, name));
     let rfun = r.reflected;
     let read_sigs <- runtime_sigs(k, r.funs);
     let write_sigs <- runtime_span_sigs(k, names, r.cfuns);
@@ -4406,7 +4574,7 @@ fn runtime_bytes_more(name: String, f: GlobalRef, rfun: FFun, measured: Bool, pa
 fn runtime_bytes(name: String, f: GlobalRef) → Tac<List<Decl>> {
     let k <- rt_known_in([], [], True);
     let names <- rt_file_names();
-    let r <- rt_file_reflect_one(k, names, [], f.id, name);
+    let r <- rt_no_records(rt_file_reflect_one(k, names, [], f.id, name));
     let rfun = r.reflected;
     let read_sigs <- runtime_sigs(k, r.funs);
     let write_sigs <- runtime_span_sigs(k, names, r.cfuns);
