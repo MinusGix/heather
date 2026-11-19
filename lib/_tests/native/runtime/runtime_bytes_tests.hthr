@@ -91,3 +91,34 @@ theorem clear_after({n: u64}, s: Bytes(n)):
     (Bytes::clear(s).after).bytes = (Bytes::clear::bytes(s.bytes, n)).after {
     Bytes::clear::runs_bytes(n, s, []).after
 }
+
+// ---------------------------------------------------------------------------
+// A loop that takes a fact (docs/native/span-record-design.md, "Loops that
+// take facts"): its theorem is stated at the fact, which its passes keep
+// without the body's proofs of it being read.
+
+runtime fn Bytes::zero_from({n: u64}, s: Bytes(n), stop: u64, j: u64, inside: ∥stop <= s.len()∥ := bv_omega) → Mutated<Bytes(n), u64>
+    decreases (stop - j).toNat() {
+    if lt: j < stop {
+        @zero_from(n, s.put(j, 0), stop, j + 1, inside)
+    } else {
+        Mutated(s, n)
+    }
+}
+
+theorem zero_from_after({n: u64}, s: Bytes(n), stop, j: u64, inside: ∥stop <= s.len()∥):
+    (Bytes::zero_from(s, stop, j, inside := inside).after).bytes = (Bytes::zero_from::bytes(s.bytes, n, stop, j)).after {
+    Bytes::zero_from::runs_bytes(n, s, stop, j, inside, []).after
+}
+
+// A `while` whose invariant is a fact: the lifted loop takes it, and its
+// caller is refused until a caller's theorem reads the facts at its call.
+// expect-error: which takes facts
+runtime fn Bytes::zero_upto({n: u64}, mut self s: Bytes(n), stop: u64, inside: ∥stop <= s.len()∥ := bv_omega) → u64 {
+    let mut j: u64 = 0;
+    while j < stop invariant stop <= s.len() decreases (stop - j).toNat() {
+        s[j] := 0;
+        j := j + 1;
+    }
+    n
+}

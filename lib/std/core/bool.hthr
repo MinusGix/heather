@@ -260,6 +260,17 @@ fn Squash::recover<P: Decide>(q: ∥P∥) → P {
     }
 }
 
+// A squashed condition decides as the condition does, so a function's
+// squashed facts can be tested for (rt_bytes_loop.hthr's `FFun::when`).
+instance<P: Decide> Decide<∥P∥> {
+    dec := match P.dec {
+        Inl(p) => Inl(squash(p)),
+        Inr(no) => Inr(λ (q: ∥P∥) => no(q.recover())),
+    },
+    bit := P.bit,
+    reflects := And(λ e => squash(P.reflects.left(e)), λ e (q: ∥P∥) => P.reflects.right(e)(q.recover())),
+}
+
 // The `or_pick_dec` lemma with the dictionary resolved — a proof of `P` makes
 // the decided branch compute, whichever way the decider happened to go.
 theorem decide_pick_yes<P: Decide, A>(x, y: A, p: P): decide_pick<P, A>(x, y) = y {

@@ -130,12 +130,63 @@ In a scratch module, before any of it is in the library:
   `let`'s value was searched for at every copy of the body the
   companions make (`issues/squashed-found-proof-searched-per-copy.md`).
 
+## Loops that take facts (built 2026-11-18)
+
+A lifted loop's facts are squashed parameters (`∥j <= i∥`, `∥i < s.len()∥`).
+The loop theorems of `rt_bytes_loop.hthr` read the function at **every**
+state (`FFun::OverRun`: a length, a record and the operands' words), and the
+code carries no facts, so at a state where a fact fails there is nothing to
+pass. Four pieces, none of them a hand proof per function:
+
+1. **A decided test of the facts.** The generator spells
+   `ok(k, b, ws) : Bool`, the `&&` of each fact's `decide_bit`, at the
+   loop's parameters read off the words. Each fact needs a `Decide`
+   instance; the word relations have them.
+2. **The function, guarded.** `run(k, b, ws)` is the loop where `ok` holds,
+   with the facts built from the bit (`decide_true`, then `squash`), and
+   anything where it does not. At a state with the caller's facts `q`, `ok`
+   is `True` (`Squash::recover`, then the instance's `reflects`), and the
+   guarded call is the call at `q`, because squashed arguments convert.
+   This is where the kernel's `unsquash_empty` is needed.
+3. **The theorems relative to `ok`.** `OverGuarded`'s equation, and the
+   hypothesis about `again`, hold only at states where `ok` is `True`. The
+   counted iteration then agrees with `run` at those states.
+4. **Passes keep the facts.** This is `FFun::falls_over`'s argument again.
+   Were `ok` false at the state a pass goes round to, an `again` that
+   answers anything there would meet the hypothesis and change what the
+   body answers. So `ok` is `True` there. The body's own found proofs for
+   its recursive call are never read: the argument only needs that the
+   equation holds.
+
+The function's theorem `f::runs_bytes` then takes the facts as the
+function does, and states agreement at them.
+
+As built (`runtime_bytes_counted`, `rt_bytes_loop.hthr`): `ok` is
+`FFun::all_true` of the facts' `decide_bit`s, each instance found by the
+search an instance argument runs (`Decide<∥P∥>` decides as `P` does);
+`run` is `FFun::when(ok, λ h => f(…, facts from h), idle)`, the facts
+found again from the passed test by `FFun::fact_of`; at facts in hand the
+test passes by `FFun::bit_of`, and `FFun::when_true` turns `run` back into
+the function. The facts' types are read off the function's type at each
+point the generator opens (after the words; a fact after a word is
+refused), and the measure must not read them. A loop with no facts goes
+the same way, its test `all_true([])`, which computes. A call's trailing
+proof arguments are not passed to the code (`rt_data_args`).
+
+**Callers are not built.** A function that calls a fact-taking function
+(a `while` with an `invariant`, lifted) is refused: the world a caller is
+proved in (`BWorld`) holds each callee's agreement at **every** record,
+and the caller's theorem is its reflection's meaning by conversion. A
+fact-taking callee agrees only where its facts hold, and the caller's
+call `c(args, q)` is not the guarded run by conversion (the test is stuck
+on the caller's words). What it needs is the facts at each call:
+`issues/span-caller-of-fact-taking-loop.md`.
+
 ## Not built
 
-- A loop whose parameters include facts (an `invariant`, or a test it runs
-  under, such as the sort's inner loop's `∥j <= i∥` and `∥i < s.len()∥`):
-  the function of the record at a state needs the facts there, which the
-  code does not carry.
+- A caller of a loop that takes facts (the sort's outer loop calls its
+  inner loop, which takes `∥j <= i∥` and `∥i < s.len()∥`):
+  `issues/span-caller-of-fact-taking-loop.md`.
 - `let key = s[i]` unannotated before a loop (the sort writes `: u8`).
 - `u8` parameters across the native boundary (span writers take and return
   64-bit words for now; `issues/runtime-repr-narrow-words.md`).

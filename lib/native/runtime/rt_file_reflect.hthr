@@ -292,13 +292,15 @@ fn rt_file_callee(k: Known, cfuns: List<Nat>, called: GlobalRef, name: String) â
 
 // A call of a computation: it is handed the span as it is and the span's
 // length word, then the spans it only reads, each passed on as it came in
-// with its length word (`rt_lent_args`), then its own words; its word is
-// bound for what follows.
+// with its length word (`rt_lent_args`), then its own words (and not the
+// facts after them, `rt_data_args`); its word is bound for what follows.
 fn rt_file_call(fuel: Nat, k: Known, w: FWalk, link: Handle, c: Handle, g: GlobalRef, name: String, ops: List<Handle>) â†’ Tac<FWalk> {
     match ops {
         Cons(length, rest) => {
             let found <- rt_file_callee(k, w.cfuns, g, name);
             let kk = k.at_file(w.fk);
+            // The facts the callee takes after its words are not passed.
+            let rest <- rt_data_args(rest);
             let rl <- rt_go(fuel, kk, w.st, length, True);
             match RSt::level(rl.snd).same(1) {
                 False => rt_file_length("a call that writes"),

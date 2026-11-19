@@ -500,6 +500,9 @@ fn head_name(t: &Ty) -> Option<&str> {
         // kernel type with none: its instances are `Fin::C`
         // (issues/finite-types-and-enumeration.md).
         TyKind::Fin(_) => Some("Fin"),
+        // `∥A∥` owns the `Squash` namespace, a kernel former as `Fin` is
+        // (`Squash::recover`, and `Decide<∥P∥>` from `Decide<P>`).
+        TyKind::Squash(_) => Some("Squash"),
         TyKind::Named { name, .. } => Some(name),
         // An **applied type former** — `Le(n, m)`, `Not(P)` — whose head is the
         // former's own name (widened 2026-08-17, docs/language/classes/decide-class-design.md §2).
@@ -573,6 +576,7 @@ pub(crate) fn render_ty(t: &Ty) -> String {
         TyKind::Eq(a, b) => format!("{} = {}", render_expr(a), render_expr(b)),
         TyKind::Vec { elem, .. } => format!("[{}; _]", render_ty(elem)),
         TyKind::Fin(_) => "Fin(_)".into(),
+        TyKind::Squash(inner) => format!("∥{}∥", render_ty(inner)),
         // `Monoid<A>(op)` — a class at its index, which arrives applied
         // (docs/language/classes/operation-indexed-classes-design.md §3). Rendering it as `_`
         // would empty out every diagnostic the indexed classes produce.
@@ -1339,6 +1343,7 @@ fn ty_mentions(t: &Ty, name: &str) -> bool {
             TyKind::Eq(a, b) => expr_mentions(a, name) || expr_mentions(b, name),
             TyKind::OfExpr(e) => expr_mentions(e, name),
             TyKind::Fn { dom, cod, .. } => ty_mentions(dom, name) || ty_mentions(cod, name),
+            TyKind::Squash(inner) => ty_mentions(inner, name),
             TyKind::Named { args, .. } => args.iter().any(|a| ty_mentions(a, name)),
             _ => false,
         }
@@ -1379,6 +1384,7 @@ fn ty_size(t: &Ty) -> usize {
         TyKind::Named { args, .. } => 1 + args.iter().map(ty_size).sum::<usize>(),
         TyKind::Vec { elem, .. } => 1 + ty_size(elem),
         TyKind::Fn { dom, cod, .. } => 1 + ty_size(dom) + ty_size(cod),
+        TyKind::Squash(inner) => 1 + ty_size(inner),
         // An equality carrier is measured through both endpoints. Value
         // binders in `instance(n, m: Nat) Decide<n = m>` must be recoverable
         // from the head, and required subgoals must obey the same Paterson
@@ -1422,6 +1428,7 @@ pub(crate) fn ty_var_count(t: &Ty, v: &str) -> usize {
         }
         TyKind::Vec { elem, .. } => ty_var_count(elem, v),
         TyKind::Fn { dom, cod, .. } => ty_var_count(dom, v) + ty_var_count(cod, v),
+        TyKind::Squash(inner) => ty_var_count(inner, v),
         TyKind::Eq(a, b) => expr_var_count(a, v) + expr_var_count(b, v),
         // The occurrence half of the same widening: a parameter of an applied
         // former (`Not(P)`'s `P`) is a bare occurrence exactly as `And<P, Q>`'s
