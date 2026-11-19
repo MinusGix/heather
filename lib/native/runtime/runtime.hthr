@@ -2037,6 +2037,14 @@ fn runtime_fst<A, B>(p: Pair<A, B>) → A { p.fst }
 fn runtime_snd<A, B>(p: Pair<A, B>) → B { p.snd }
 
 
+// And their names.
+fn runtime_result_names(reprs: List<ReprEntry>, recs: List<RecShape>, r: Ty) → List<String> {
+    match r {
+        Named(i) => match reprs.nth(i) { Some(_) => [], None => match recs.nth(i - reprs.len()) { Some(rs) => rs.fields, None => [] } },
+        _ => [],
+    }
+}
+
 // A record result's fields, each its projection (none for any other
 // result): its first is the word the function returns, the rest those it
 // returns beside it (docs/native/runtime-fn-setups-design.md §16.16).
@@ -2171,8 +2179,8 @@ fn runtime_file_callees(entry, typed_once, nil, tys_e: Expr, q: RtQ, funs: List<
 // `f::agrees_also`, the program's words past its first against the
 // record's fields past its first (`Compile::root_also`, its agreement
 // `Setup::plain_agrees_also` at no file). None for any other function.
-fn runtime_also_decls(name: String, f: GlobalRef, rfun: Fun, world_e, table_e, rt_e: Expr, linked: Linked, ys: List<Param>, words_e: Expr,
-    word_list: List<Expr>, rest: List<Expr>) → Tac<List<Decl>> {
+fn runtime_also_decls(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes, world_e, table_e, rt_e: Expr, linked: Linked, ys: List<Param>,
+    words_e: Expr, word_list: List<Expr>, rest: List<Expr>, fields: List<String>) → Tac<List<Decl>> {
     match rest {
         Nil => pure([]),
         Cons(_, _) => match rfun.shape() {
@@ -2191,8 +2199,11 @@ fn runtime_also_decls(name: String, f: GlobalRef, rfun: Fun, world_e, table_e, r
                 let agreement = ap(plain_also, [Blank, Global(f), rt_e, world_e, table_e, ap(typed_refl, [Blank, Global(f)]), ap(at_every, [Blank, Global(f)]),
                     verdict, ap(rfl, [Blank, runtime_at(shapes, 0)]), no_file]);
                 let proof = ap(root_also, linked.root ++ [agreement, ap(tail, [Blank, linked.program]), linked.arities, linked.sourced, words_e, Hd(trivial_h)]);
+                // The record's fields' names, as `f::names` spells names:
+                // what `compile-x86` states the two words as.
                 pure([Decl(AsTheorem, name ++ "::agrees_also", ys,
-                    Equation(ap(eval_also, [linked.program, words_e]), RtQ::seq(word_list, rest)), proof)])
+                    Equation(ap(eval_also, [linked.program, words_e]), RtQ::seq(word_list, rest)), proof),
+                    Decl(AsValue, name ++ "::fields", [], Hd(ts.nats), q.nat_list(runtime_name_codes(fields)))])
             },
             _ => pure([]),
         },
@@ -2313,7 +2324,8 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
                     Equation(ap(program_eval, [linked.program, root, words_e]), first),
                     ap(eval_sources, [linked.program, linked.arities, ap(sources, [linked.srcs]), linked.sourced, no_file, root, words_e, Hd(trivial_h)])),
             ];
-            let also <- runtime_also_decls(name, f, rfun, world_e, table_e, rt_e, linked, runtime_params_of(ys), words_e, word_list, gets.tail());
+            let also <- runtime_also_decls(name, f, rfun, q, ts, world_e, table_e, rt_e, linked, runtime_params_of(ys), words_e, word_list, gets.tail(),
+                runtime_result_names(reprs, recs, rfun.result));
             pure(head.append(pin).append(made).append(linked_decls).append(tail).append(also))
         },
         // A function lent spans: its pin and its program's agreement are at

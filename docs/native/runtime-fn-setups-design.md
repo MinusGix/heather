@@ -1690,6 +1690,27 @@ memory.
   `f::agrees_also` for the second, and `compile-x86` states both in the
   certificate's answer.
 
+**Built (2026-11-19).** As designed, with these names. The closing moves
+the outputs by `File::move_results` (in order, or in reverse where a later
+word sits in an earlier word's register), and the program-level theorem is
+`compiled_returns_both` (function_ir_compile), read by a certificate as
+`Prog::ComputesBoth` through `compiled_computes_both` (function_ir_correct);
+the optimizer is not run over such a program, since its rewrites keep only
+the first word. In rt, a result passes the boundary when it is `Ty::Out`
+(`Ty::Edge`, or a record of two `Word(64)` fields): `Fun::code_of` names the
+second field's port in `also`, `Fun::lower_sound` reads the first word
+(`Ty::out_reads`) and `Fun::lower_sound_also` the rest (`Ty::also_reads`,
+`Ty::AnswersAlso`), both proved once. The reflector meets records as it
+meets reprs (`rt_with_reprs` reruns the walk with the record added, its
+`RecInfo` built from its constructor and its fields' projections, both round
+trips `refl`). Linking: `program_linked_also` and `Compile::root_also`, with
+the instance's agreement on the second word `Setup::plain_agrees_also`. The
+generator publishes `f::agrees` for the first field, `f::agrees_also` for
+the second, and `f::fields`, the fields' names, which `compile-x86` spells
+the answer with. Probes: `lib/_tests/native/runtime/runtime_two_words_tests`
+and `…_refused_tests`; `examples/x86-native/two_words.hthr`, run from C
+(`native_program.rs`).
+
 **An enum as its tag.** A payload-free enum (`PortKind`) is held in one word
 as its constructor's index (§7.2). A `match` on it is a new rt node `Pick`
 whose meaning is the enum's own eliminator over the arms, so the pin stays

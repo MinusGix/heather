@@ -107,6 +107,11 @@ pub(super) struct Shape {
     /// this one ([`optimize`]): its definitions are then `{prefix}_cut_…`,
     /// and the checks the lowering needs are stated of them.
     pub optimize: bool,
+    /// For a function that returns a record of two words
+    /// (docs/native/runtime-fn-setups-design.md §16.16): the words after
+    /// `answer` it returns in RDX, as a list, with `{prefix}_agrees_also`
+    /// in the agreement.
+    pub rest: Option<String>,
 }
 
 /// Whether `compile-x86` runs the optimizer over a program that is lent
@@ -155,6 +160,7 @@ impl Shape {
             tables: None,
             entries: Vec::new(),
             optimize: false,
+            rest: None,
         }
     }
 
@@ -169,12 +175,20 @@ impl Shape {
     /// the low bits of its word (`runtime_low`) and returned zero-extended
     /// (`runtime_wide`), as the generator states its agreement
     /// (issues/runtime-repr-narrow-words.md).
-    pub fn runtime(prefix: &str, owner: &str, source: &str, functions: usize, arity: usize, widths: &[u64]) -> Shape {
+    ///
+    /// `fields`, for a function returning a record of two words, are the
+    /// record's fields' names: the first is the word it returns in RAX and
+    /// the second the one in RDX (`{source}::agrees_also`).
+    pub fn runtime(prefix: &str, owner: &str, source: &str, functions: usize, arity: usize, widths: &[u64], fields: Option<&[String]>) -> Shape {
         let parameters = arguments(arity);
         let narrowed: Vec<String> = parameters.iter().enumerate()
             .map(|(i, a)| match widths.get(i + 1) { Some(&w) if w != 64 => format!("runtime_low({w}, {a})"), _ => a.clone() }).collect();
         let called = format!("{source}({})", narrowed.join(", "));
-        let answer = match widths.first() { Some(&w) if w != 64 => format!("runtime_wide({w}, {called})"), _ => called };
+        let (answer, rest) = match fields {
+            Some([first, others @ ..]) => (format!("{called}.{first}"),
+                Some(format!("[{}]", others.iter().map(|field| format!("{called}.{field}")).collect::<Vec<_>>().join(", ")))),
+            _ => (match widths.first() { Some(&w) if w != 64 => format!("runtime_wide({w}, {called})"), _ => called }, None),
+        };
         let mut definitions = format!("import {owner};\nimport runtime;\n");
         definitions.push_str(&format!("\n// The program `runtime fn {source}` published, callees first: function `k` the one with `k` after it.
 fn {prefix}_program() → List<Function> {{ {source}::program }}
@@ -192,8 +206,21 @@ fn {prefix}_fn{k}() → Function {{ match {prefix}_first_{k}() {{ Nil => Setup::
 theorem {prefix}_agrees({typed}): program_eval({prefix}_program(), {f}, [{list}]) = {answer} {{
     {source}::agrees({list})
 }}
-", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), f = functions - 1, list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, on: String::new(), lent: None, marks: None, tables: None, entries: Vec::new(), optimize: false }
+{also}", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), f = functions - 1, list = parameters.join(", "),
+            also = match &rest {
+                Some(rest) => format!("
+// And the words it returns after the first, the record's fields after its
+// first, from the same instances (`{source}::agrees_also`).
+theorem {prefix}_agrees_also({typed}): program_eval_also({prefix}_program(), [{list}]) = {rest} {{
+    {source}::agrees_also({list})
+}}
+
+{quiet}
+", list = parameters.join(", "), quiet = quiet_text(prefix, functions)),
+                None => String::new(),
+            });
+        if rest.is_some() { definitions.insert_str(0, "import function_ir_writes;\n"); }
+        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, on: String::new(), lent: None, marks: None, tables: None, entries: Vec::new(), optimize: false, rest }
     }
 
     /// A `runtime fn` that reads spans: its program is lent buffers
@@ -244,7 +271,7 @@ theorem {prefix}_agrees(now: Buffers(), {typed}): program_eval_over(now, {prefix
 }}
 ", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), f = functions - 1,
             list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, on, lent: Some(counts), marks: None, tables: None, entries: Vec::new(), optimize }
+        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, on, lent: Some(counts), marks: None, tables: None, entries: Vec::new(), optimize, rest: None }
     }
 
     /// A `runtime fn` that stores into the first span it is lent: its
@@ -321,7 +348,7 @@ theorem {prefix}_runs(span: List<BitVec(8)>, rest: Buffers(), {typed}):
 ", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")),
             within = if tables.is_some() { marked_text(prefix, &stem) } else { within_text(prefix, &stem, functions) }, f = functions - 1,
             list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, on, lent: Some(counts), marks: Some(marks), tables, entries: Vec::new(), optimize }
+        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, on, lent: Some(counts), marks: Some(marks), tables, entries: Vec::new(), optimize, rest: None }
     }
 }
 
@@ -371,8 +398,18 @@ fn {prefix}_rows(rows: List<List<Bool>>, counts: List<Nat>, f, functions: Nat) �
     match numbers[..] {
         [_, arity, ..] if arity > 8 => Err(format!("`{source}` takes {arity} words{}: compile-x86 passes at most eight, six in registers and two on the stack",
             if lent { ", an address and a length for each span among them" } else { "" })),
-        [functions, arity, ref widths @ ..] if functions >= 1 && !lent && widths.len() == arity as usize + 1 =>
-            Ok(Shape::runtime(prefix, owner, source, functions as usize, arity as usize, widths)),
+        [functions, arity, ref widths @ ..] if functions >= 1 && !lent && widths.len() == arity as usize + 1 => {
+            // A record of two words as the result: its fields' names, as
+            // the generator spells them (`{source}::fields`).
+            let fields = if elab.qualified_global(&format!("{source}::agrees_also")).is_some() {
+                let codes = function_ir_source::evaluate_numbers(&fork, &format!("{source}::fields")).map_err(|e| e.to_string())?;
+                let names: Vec<String> = codes.split(|code| *code == 0).filter(|name| !name.is_empty())
+                    .map(|name| name.iter().filter_map(|code| char::from_u32(*code as u32)).collect()).collect();
+                if names.len() != 2 { return Err(format!("`{source}::fields` did not read back as two names")); }
+                Some(names)
+            } else { None };
+            Ok(Shape::runtime(prefix, owner, source, functions as usize, arity as usize, widths, fields.as_deref()))
+        }
         [functions, arity, ref counts @ ..] if functions >= 1 && spans == Spans::Read && counts.len() == functions as usize =>
             Ok(Shape::runtime_lent(prefix, owner, source, functions as usize, arity as usize, counts.to_vec())),
         [functions, arity, ref rest @ ..] if functions >= 1 && spans == Spans::Written && rest.len() > functions as usize => {
@@ -1474,6 +1511,26 @@ theorem {prefix}_returns<M>(machine: Machine<M>, {slices}: Slice{comma_words}{ty
             ats = slices.iter().map(|s| format!("{s}.at")).collect::<Vec<_>>().join(", "),
             passed = on_slices(&parameters, slices.len(), 1).join(", "),
             room = room(f), arguments = parameters.join(", "), keeps = keeps(f)));
+    } else if let Some(rest) = &program.rest {
+        // A record of two words: its first field in RAX and its second in
+        // RDX, the System V return of such a structure. The program is
+        // lowered as published (the optimizer's rewrites are of the first
+        // word alone).
+        let earlier = if f == 0 { "Nil".to_string() } else { format!("{prefix}_first_{}()", f - 1) };
+        text.push_str(&format!("
+// The code computes the source function's record of two words
+// (`Prog::ComputesBoth`, function_ir_correct): called at its label with its
+// arguments in RDI, RSI, … and past the sixth on the stack above the
+// return address (`Stack::Passed`), {room} bytes of stack below it, it
+// returns the record's first field in RAX and its second in RDX, keeps the
+// callee-saved registers and RSP, and leaves memory as it was but for
+// stores into its own room below that address (`Stack::Wrote`): on every
+// machine, loaded anywhere.
+theorem {prefix}_returns<M>(machine: Machine<M>{comma}{typed}): {prefix}_code().ComputesBoth(machine, {f}, {room}, {list}, {call}, {rest}) {{
+    compiled_computes_both<M>({prefix}_fn{f}(), {earlier}, {prefix}_placement(), {prefix}_rooms(), {prefix}_code(), {prefix}_lowers(), {prefix}_evaluable(),
+        {prefix}_quiet(), machine, {list}, refl, {call}, {rest}, {prefix}_agrees({arguments}), {prefix}_agrees_also({arguments}))
+}}
+", room = room(f), arguments = parameters.join(", ")));
     } else {
         text.push_str(&format!("
 // The code computes the source function (`Prog::Computes`,

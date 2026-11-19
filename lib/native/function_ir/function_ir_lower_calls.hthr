@@ -5824,6 +5824,41 @@ theorem prologue_moves<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(),
 // (System V's two-word aggregate, docs/native/runtime-fn-setups-design.md
 // §16.16). A function with no word past the first leaves RDX as it is.
 fn result_registers() → List<Gpr> { [Rax, Rdx] }
+
+// The moves of a function's words into its result registers: in order, or,
+// where that loses a word (a later word held in an earlier word's
+// register), in the reverse order. Either keeps every word the file
+// represents (`move_results_keeps`); the closing checks the file after.
+fn File::move_results(self file: File, outs: List<Port>, registers: List<Gpr>) → Option<Lowered> {
+    match file.move_outputs(outs, registers) {
+        None => file.move_outputs(outs.rev(), registers.rev()),
+        Some(moved) => match moved.file.outputs_check(outs, registers) {
+            True => Some(moved),
+            False => file.move_outputs(outs.rev(), registers.rev()),
+        },
+    }
+}
+
+theorem move_results_keeps<M>(values: Valuation(), outs: List<Port>, file: File, registers: List<Gpr>):
+    MayKeep<M>(values, file, True, file.move_results(outs, registers)) {
+    let reversed = move_outputs_keeps<M>(values, outs.rev(), file, registers.rev());
+    (match file.move_outputs(outs, registers) as λ o => MayKeep<M>(values, file, True, o) → MayKeep<M>(values, file, True, match o {
+            None => file.move_outputs(outs.rev(), registers.rev()),
+            Some(moved) => match moved.file.outputs_check(outs, registers) {
+                True => Some(moved),
+                False => file.move_outputs(outs.rev(), registers.rev()),
+            },
+        }) {
+        None => λ _ => reversed,
+        Some(moved) => λ kept => match moved.file.outputs_check(outs, registers) as λ c => MayKeep<M>(values, file, True, match c {
+                True => Some(moved),
+                False => file.move_outputs(outs.rev(), registers.rev()),
+            }) {
+            True => kept,
+            False => reversed,
+        },
+    })(move_outputs_keeps<M>(values, outs, file, registers))
+}
 fn Function::outs(self function: Function) → List<Port> { Cons(Port(id := function.result, width := 64), word_ports(function.also)) }
 
 // What a function's caller finds: `answer` in RAX and `rest` in RDX.
@@ -6540,7 +6575,7 @@ theorem function_returns<M>(asked, saves: Nat, short: List<Nat>, site: Site<M>, 
 // The function's code once its body is emitted: the result into RAX,
 // refused where the moves lose it or touch a callee-saved register.
 fn Function::closing(self function: Function, asked, saves: Nat, body: Emitted) → Option<Emitted> {
-    match body.file.move_outputs(function.outs(), result_registers()) {
+    match body.file.move_results(function.outs(), result_registers()) {
         None => None,
         Some(moves) => match moves.file.outputs_check(function.outs(), result_registers()) &&
             leaves_all(moves.code, body_kept(saves)) {
@@ -6680,7 +6715,7 @@ theorem Function::closing_returns<M>(self function: Function, asked, saves: Nat,
         file.Represents(values, g), few: function.loads() <= 2):
     MayReturnBoth<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, function.closing(asked, saves, body)) {
     let outs: List<Port> = function.outs();
-    (match body.file.move_outputs(outs, result_registers()) as λ moved => ((values: Valuation()) → MayKeep<M>(values, body.file, True, moved)) →
+    (match body.file.move_results(outs, result_registers()) as λ moved => ((values: Valuation()) → MayKeep<M>(values, body.file, True, moved)) →
         MayReturnBoth<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, match moved {
             None => None,
             Some(moves) => match moves.file.outputs_check(outs, result_registers()) && leaves_all(moves.code, body_kept(saves)) {
@@ -6707,7 +6742,7 @@ theorem Function::closing_returns<M>(self function: Function, asked, saves: Nat,
                         count, within, words, result, rest, before, after)⟩
                 },
             })(λ ok => Bool::is_true_and(moves.file.outputs_check(outs, result_registers()), leaves_all(moves.code, body_kept(saves)), ok)),
-    })(λ values => move_outputs_keeps<M>(values, outs, body.file, result_registers()))
+    })(λ values => move_results_keeps<M>(values, outs, body.file, result_registers()))
 }
 
 theorem Function::emit_body_returns<M>(self function: Function, asked, saves: Nat, short: List<Nat>, site: Site<M>, laid: site.program.laid_out().IsTrue(),
@@ -7080,7 +7115,7 @@ theorem Site::meets_extend<M>(self site: Site<M>, stack: Stack<M>(site.fetch, si
 theorem Function::closing_grows(self function: Function, asked, saves: Nat, prog: Prog, body: Emitted, grown: prog.Within(body.prog)):
     Grows(prog, function.closing(asked, saves, body)) {
     let outs: List<Port> = function.outs();
-    match body.file.move_outputs(outs, result_registers()) as λ moved => Grows(prog, match moved {
+    match body.file.move_results(outs, result_registers()) as λ moved => Grows(prog, match moved {
             None => None,
             Some(moves) => match moves.file.outputs_check(outs, result_registers()) && leaves_all(moves.code, body_kept(saves)) {
                 False => None,
