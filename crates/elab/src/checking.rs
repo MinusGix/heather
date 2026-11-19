@@ -102,7 +102,10 @@ impl Checking<'_> {
         let Ok(Type::Squash { level: dst_level, ty: goal }) = self.whnf(cx, expected, span) else { return None };
         // The first fact not yet released (`__unsq_h` names its release).
         let mut seen = std::collections::HashSet::new();
-        let found = cx.names.iter().rev().find_map(|name| {
+        // A fact bound by `let` (`let kept = h.kept;`, a loop state's
+        // field) is released as a parameter is.
+        let aliased: Vec<&str> = cx.aliases.iter().rev().map(|a| a.name.as_str()).collect();
+        let found = aliased.into_iter().chain(cx.names.iter().rev()).find_map(|name| {
             if name.starts_with('#') || name.starts_with("__unsq_") || !seen.insert(name.clone()) {
                 return None;
             }

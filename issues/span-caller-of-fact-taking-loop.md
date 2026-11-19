@@ -5,7 +5,7 @@ labels: [native,runtime-fn,proofs]
 area: heather-in-heather
 milestone: [nh-front]
 created: 2026-11-18
-updated: 2026-11-18
+updated: 2026-11-19
 ---
 
 A loop over a `Bytes(n)` that takes facts now gets its theorem
@@ -60,3 +60,6 @@ sits under the continuations of the statements before it.
 `zero_upto`'s `expect-error` comes off: the caller of a fact-taking loop
 gets `runs_bytes` with nothing proved by hand, and the sort's two loops
 follow.
+
+## Log
+- 2026-11-19: a third route, [[loops-on-one-combinator]]: a loop's facts become fields of its state, so a caller passes them in the initial state it builds; the loop's code is never asked to agree where they fail.

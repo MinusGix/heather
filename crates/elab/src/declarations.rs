@@ -174,6 +174,13 @@ impl DeclarationsMut<'_> {
             };
             let built = self.session_transaction(|me| {
                 for eq in &equations {
+                    // A function that does not recur had its equations built
+                    // with it; its case principle, asked for later, reads them.
+                    if recursion == branch_equations::Recursion::None && !designate
+                        && matches!(NameLookup(me).resolve_declared(&eq.decl.name), NameRes::Found(_))
+                    {
+                        continue;
+                    }
                     me.elab_decl_one(&eq.decl, None).map_err(|e| {
                         ElabError::Elab { msg: format!("the generated `{}` was refused ({e})", eq.designed), span: eq.decl.span }
                     })?;
@@ -312,11 +319,13 @@ impl DeclarationsMut<'_> {
             // module would have.
             let recorded = if module == self.names.module() {
                 self.pass.recursions.borrow().get(&base).cloned()
+                    .or_else(|| asked.contains(&head).then(|| self.cases_only(&module, &base)).flatten())
             } else {
                 self.names.surface_decl_in(&module, &base).filter(|f| {
                     f.kind == DeclKind::Fn && f.decreases.is_none() && f.partial.is_none() && branch_equations::candidate(f)
                         && !loops::has_loop(f) && branch_equations::recursive(f, base_name(&f.name))
                 }).map(|f| (Rc::new(f.clone()), branch_equations::Recursion::Structural))
+                    .or_else(|| asked.contains(&head).then(|| self.cases_only(&module, &base)).flatten())
             };
             // A path that only looked like an equation (`Nat::Succ`) names
             // no recursion and asks for nothing.
@@ -330,6 +339,16 @@ impl DeclarationsMut<'_> {
             let owner = function.name.rsplit_once("::").map(|(owner, _)| owner.to_string());
             self.scoped(|s| &mut s.member_owner, owner, |me| DeclarationsMut(me).elab_recursion_equations(&function, recursion));
         }
+    }
+
+    /// A function that does not recur and whose body is a tree of tests:
+    /// `induct f(…)` follows its cases (a loop's step,
+    /// docs/language/loop-combinator-design.md §4).
+    fn cases_only(&self, module: &str, base: &str) -> Option<(Rc<Decl>, branch_equations::Recursion)> {
+        self.names.surface_decl_in(module, base).filter(|f| {
+            f.kind == DeclKind::Fn && f.decreases.is_none() && f.partial.is_none() && branch_equations::candidate(f)
+                && !loops::has_loop(f) && !branch_equations::recursive(f, base_name(&f.name))
+        }).map(|f| (Rc::new(f.clone()), branch_equations::Recursion::None))
     }
 
     fn elab_recursion_equations(&mut self, decl: &Decl, recursion: branch_equations::Recursion) {
@@ -372,6 +391,10 @@ impl DeclarationsMut<'_> {
         let built = self.session_transaction(|me| {
             let r = if recursion == branch_equations::Recursion::Measure {
                 DeclarationsMut(me).elab_measure_decl_as(&principle, false)
+            } else if recursion == branch_equations::Recursion::None {
+                // Its equations were designated when the function was: the
+                // principle cites them by their minted names.
+                me.generated_mode(|me| DeclarationsMut(me).elab_decl_owned(&principle))
             } else {
                 DeclarationsMut(me).elab_decl_owned(&principle)
             };
