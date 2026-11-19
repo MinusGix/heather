@@ -650,9 +650,9 @@ pub(crate) fn render_expr(e: &Expr) -> String {
         {
             format!(
                 "{} {} {}",
-                render_expr(&args[0]),
+                render_operand(&args[0]),
                 render_expr(head),
-                render_expr(&args[1])
+                render_operand(&args[1])
             )
         }
         ExprKind::App { head, args, .. }
@@ -664,7 +664,7 @@ pub(crate) fn render_expr(e: &Expr) -> String {
                 }
             ) && args.len() == 1 =>
         {
-            format!("{}{}", render_expr(head), render_expr(&args[0]))
+            format!("{}{}", render_expr(head), render_operand(&args[0]))
         }
         ExprKind::App { head, args, .. }
             if matches!(
@@ -675,7 +675,7 @@ pub(crate) fn render_expr(e: &Expr) -> String {
                 }
             ) && args.len() == 1 =>
         {
-            format!("{}{}", render_expr(&args[0]), render_expr(head))
+            format!("{}{}", render_operand(&args[0]), render_expr(head))
         }
         // A named argument renders as it was **written**, `x := e`, for the
         // same reason an operator application renders as `a + b`
@@ -698,8 +698,29 @@ pub(crate) fn render_expr(e: &Expr) -> String {
             named.iter().find_map(|a| a.name.strip_prefix("#decreasing:"))
                 .map(|n| format!(" decreasing {n}")).unwrap_or_default()
         ),
-        ExprKind::Dot { recv, name, .. } => format!("{}.{name}", render_expr(recv)),
+        // A method call keeps its argument list, and its receiver is
+        // bracketed where it is an operator application: `(n - i).toNat()`,
+        // never `n - i.toNat`, which reads as a different term.
+        ExprKind::Dot { recv, name, args, .. } => format!(
+            "{}.{name}{}",
+            render_operand(recv),
+            args.as_ref()
+                .map(|args| format!("({})", args.iter().map(render_expr).collect::<Vec<_>>().join(", ")))
+                .unwrap_or_default()
+        ),
         _ => "_".into(),
+    }
+}
+
+/// [`render_expr`] at an operand's place (an operator's argument, a method's
+/// receiver): an operator application is bracketed, so the text parses
+/// back as the term it shows.
+fn render_operand(e: &Expr) -> String {
+    let text = render_expr(e);
+    match &e.kind {
+        ExprKind::Eq(..) => format!("({text})"),
+        ExprKind::App { head, .. } if matches!(head.kind, ExprKind::OpSymbol { .. }) => format!("({text})"),
+        _ => text,
     }
 }
 

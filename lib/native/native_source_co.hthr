@@ -1,29 +1,38 @@
 // A `Source` with no fuel: its statements as a coinductive tree over
 // Linux's calls (issues/effectful-loops-without-passes.md;
-// docs/language/effects-capabilities-design.md §4).
+// docs/language/effects-capabilities-design.md §4;
+// docs/native/native-procedure-frames-design.md §7.3).
 //
 // `Stmt::denote` reads a `Repeat` as `ITree::iter` at a fuel, cut past it,
 // and the fuel is shared by every loop and every call. Here a `Repeat` is
 // `CoTree::iter`: it goes round for as long as its again-bit says, so a
 // loop that never ends is a tree that never returns, not one that is cut.
-// Calls are charged and refused as the compiled program's are
-// (`Source::bounded`, a call refused where its check finds too few bytes),
-// so this is the compiled program's meaning with no fuel. One count is
-// left: how deep calls nest (`d`); past it a call never returns, claiming
-// nothing, as a fuelled tree's cut does. Calls with no bound on their
-// nesting would be a recursion with no fuel (`coitree_rec`'s `mrec`).
 //
-// The two meanings have the same traces: the fuelled tree at fuel `n` is
-// inside the fuel-free one with calls `n` deep (`Source::tree_co_into`,
-// `tree_co_refines`), and every trace of the fuel-free one at any depth is
-// the fuelled program's (`Source::tree_co_refined`). The first is the
-// direction a compiled program's theorem travels in: its ELF refines the
-// fuelled program (`native_compile_elf`), so each run of it is one of the
-// fuel-free tree at some depth, whose reading at
-// a world is a computation in `Partial` (`Io::against_co`). Both are proved
-// construct by construct (`ITree::Into`, `CoTree::Onto` in
-// `coitree_bridge`); a `Repeat` is `CoTree::iter_refined`/`iter_refines`
-// for a body that is itself a denotation, a family in the fuel.
+// A call is an event (`Stmt::denote_calls`): the procedure, its arguments,
+// where its results go, the caller's environment and the bytes of stack
+// left, answered with the flow back in the caller. `Source::tree_co` runs
+// `main`'s tree with every call answered by the procedure's own tree
+// (`coitree_rec`'s `mrec`, `Source::handler`), charged and refused as the
+// compiled program's calls are (`Source::bounded`). So no count is left: a
+// recursion as deep as its input needs is one tree, whose reading at a
+// world is a computation in `Partial` (`Io::against_co`) at every world.
+//
+// The statement read with a call as a function of the environment
+// (`Stmt::denote_co`) is the same tree with fewer silent steps
+// (`Stmt::lags`, `coitree_lag`): `mrec` steps at each call and after each
+// command, and commutes with `bind` and loops step for step. The two
+// meanings have the same traces: the fuelled program at every fuel is
+// inside the tree (`Source::tree_co_into`, `tree_co_refines`), and every
+// trace of the tree is the fuelled program's (`Source::tree_co_refined`).
+// The first is the direction a compiled program's theorem travels in: its
+// ELF refines the fuelled program (`native_compile_elf`), so each run of it
+// is one of the tree's. The second goes through the tree with calls nested
+// at most `d` deep (`Source::tree_upto`, a call past it never returning):
+// the tree cut at depth `d` is inside it, since every call takes a silent
+// step, and it is inside the fuelled program, construct by construct
+// (`ITree::Into`, `CoTree::Onto` in `coitree_bridge`; a `Repeat` is
+// `CoTree::iter_refined`/`iter_refines` for a body that is itself a
+// denotation, a family in the fuel).
 import logic;
 import nat;
 import list;
@@ -34,6 +43,8 @@ import itree_trace;
 import coitree;
 import coitree_eutt;
 import coitree_bridge;
+import coitree_rec;
+import coitree_lag;
 import linux_calls;
 import linux_trees;
 import function_ir;
@@ -44,7 +55,7 @@ import bool;
 import native_source;
 
 // ---------------------------------------------------------------------------
-// The fuel-free denotation
+// The fuel-free denotation, a call as a function
 
 // What a call does, with no fuel.
 fn PerformsCo() → Type { Nat → List<Nat> → List<Nat> → Env → CoTree<Flow>(Events::linux()) }
@@ -71,38 +82,40 @@ fn Stmt::denote_co(self s: Stmt, call: Writers(), perform: PerformsCo()) → Env
     }
 }
 
+// ---------------------------------------------------------------------------
+// Calls nested at most `d` deep
+
 // What a call does with `d` levels of calls left, charged as `ch` says with
 // `left` bytes of stack, as `Source::performs` with no fuel: a silent step
 // (the CALL), then a refusal where the check finds too few bytes, or the
 // body. Past `d` levels nothing is claimed: the call never returns, as a
 // fuelled tree's `Cut` claims nothing.
-fn Source::performs_co(self src: Source, call: Writers(), d: Nat, ch: Charges, left: Nat) → PerformsCo() {
+fn Source::performs_upto(self src: Source, call: Writers(), d: Nat, ch: Charges, left: Nat) → PerformsCo() {
     match d {
         Zero => λ procedure args results env => CoTree::spin(Events::linux()),
         Succ(k) => λ procedure args results env => CTau(match src.procedures.nth(procedure) {
             None => CRet(Onward(env)),
             Some(proc) => match ch.refuses(procedure, left) {
                 True => CRet(Exited(call_depth_status())),
-                False => CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_co(call, k, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
+                False => CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_upto(call, k, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
                     λ flow => proc.leave(env, results, flow)),
             },
         }),
     }
 }
 
-fn Source::main_tree_co(self src: Source, args: List<List<BitVec(8)>>, ch: Charges, left, d: Nat) → CoTree<Flow>(Events::linux()) {
-    src.main.denote_co(program_writers(src.functions), src.performs_co(program_writers(src.functions), d, ch, left))(src.start(args))
+fn Source::main_tree_upto(self src: Source, args: List<List<BitVec(8)>>, ch: Charges, left, d: Nat) → CoTree<Flow>(Events::linux()) {
+    src.main.denote_co(program_writers(src.functions), src.performs_upto(program_writers(src.functions), d, ch, left))(src.start(args))
 }
 
 // The program run with the command line `args`, with no fuel, its calls
-// nesting `d` deep. The defaults read a source that performs nothing,
-// whose tree no charges or depth change (`Charges::free()`, `0`, `0`).
-fn Source::tree_co(self src: Source, args: List<List<BitVec(8)>>, ch: Charges, left, d: Nat) → CoTree<BitVec(64)>(Events::linux()) {
-    CoTree::map(Events::linux(), src.main_tree_co(args, ch, left, d), λ flow => flow.status())
+// nesting `d` deep.
+fn Source::tree_upto(self src: Source, args: List<List<BitVec(8)>>, ch: Charges, left, d: Nat) → CoTree<BitVec(64)>(Events::linux()) {
+    CoTree::map(Events::linux(), src.main_tree_upto(args, ch, left, d), λ flow => flow.status())
 }
 
 // ---------------------------------------------------------------------------
-// The fuelled tree is inside the fuel-free one
+// The fuelled tree at fuel `n` is inside the tree `n` deep
 
 // Each call's fuelled tree inside its fuel-free one.
 fn performs_into(perform: Performs(), perform_co: PerformsCo()) → Type {
@@ -149,8 +162,8 @@ theorem Stmt::into_co(self s: Stmt, call: Writers(), perform: Performs(), perfor
 }
 
 // Every call at every depth, by induction on the depth.
-theorem Source::performs_into_co(self src: Source, call: Writers(), n, d: Nat, ch: Charges, left: Nat):
-    performs_into(src.performs(call, n, d, ch, left), src.performs_co(call, d, ch, left))
+theorem Source::performs_into_upto(self src: Source, call: Writers(), n, d: Nat, ch: Charges, left: Nat):
+    performs_into(src.performs(call, n, d, ch, left), src.performs_upto(call, d, ch, left))
 {
     match d {
         Zero => λ procedure args results env => ITree::into_cut(Events::linux(), CoTree::spin(Events::linux())),
@@ -167,7 +180,7 @@ theorem Source::performs_into_co(self src: Source, call: Writers(), n, d: Nat, c
                 None => CRet(Onward(env)),
                 Some(proc) => match ch.refuses(procedure, left) {
                     True => CRet(Exited(call_depth_status())),
-                    False => CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_co(call, k, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
+                    False => CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_upto(call, k, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
                         λ flow => proc.leave(env, results, flow)),
                 },
             },
@@ -184,7 +197,7 @@ theorem Source::performs_into_co(self src: Source, call: Writers(), n, d: Nat, c
                         None => CRet(Onward(env)),
                         Some(proc) => match ch.refuses(procedure, left) {
                             True => CRet(Exited(call_depth_status())),
-                            False => CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_co(call, k, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
+                            False => CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_upto(call, k, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
                                 λ flow => proc.leave(env, results, flow)),
                         },
                     }) {
@@ -197,44 +210,42 @@ theorem Source::performs_into_co(self src: Source, call: Writers(), n, d: Nat, c
                         },
                         match b as λ _ => CoTree<Flow>(Events::linux()) {
                             True => CRet(Exited(call_depth_status())),
-                            False => CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_co(call, k, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
+                            False => CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_upto(call, k, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
                                 λ flow => proc.leave(env, results, flow)),
                         }) {
                     True => ITree::into_ret(Events::linux(), Exited(call_depth_status())),
                     False => ITree::into_map(Events::linux(),
                         proc.body.denote(call, src.performs(call, n, k, ch, left - ch.cost(procedure)), n, proc.enter(env, args)),
-                        proc.body.denote_co(call, src.performs_co(call, k, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
+                        proc.body.denote_co(call, src.performs_upto(call, k, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
                         λ flow => proc.leave(env, results, flow),
-                        proc.body.into_co(call, src.performs(call, n, k, ch, left - ch.cost(procedure)), src.performs_co(call, k, ch, left - ch.cost(procedure)),
-                            src.performs_into_co(call, n, k, ch, left - ch.cost(procedure)), n, proc.enter(env, args))),
+                        proc.body.into_co(call, src.performs(call, n, k, ch, left - ch.cost(procedure)), src.performs_upto(call, k, ch, left - ch.cost(procedure)),
+                            src.performs_into_upto(call, n, k, ch, left - ch.cost(procedure)), n, proc.enter(env, args))),
                 },
             }),
     }
 }
 
-// The bridge: the program's tree at fuel `n` is inside its fuel-free tree
-// with calls `n` deep, so every trace it produces at some fuel the
-// fuel-free tree produces at some depth. A compiled program refines
-// `src.bounded` (`native_compile_elf`), so through this it refines
-// `src.tree_co` at the run's depth.
-theorem Source::tree_co_into(self src: Source, args: List<List<BitVec(8)>>, ch: Charges, left, n: Nat):
-    ITree::Into(Events::linux(), src.bounded(args, ch, left).at(n), src.tree_co(args, ch, left, n))
+// The program's tree at fuel `n` is inside its fuel-free tree with calls
+// `n` deep, so every trace it produces at some fuel the fuel-free tree
+// produces at some depth.
+theorem Source::tree_upto_into(self src: Source, args: List<List<BitVec(8)>>, ch: Charges, left, n: Nat):
+    ITree::Into(Events::linux(), src.bounded(args, ch, left).at(n), src.tree_upto(args, ch, left, n))
 {
-    ITree::into_map(Events::linux(), src.bounded_main(args, ch, left, n), src.main_tree_co(args, ch, left, n), λ flow => flow.status(),
+    ITree::into_map(Events::linux(), src.bounded_main(args, ch, left, n), src.main_tree_upto(args, ch, left, n), λ flow => flow.status(),
         src.main.into_co(program_writers(src.functions), src.performs(program_writers(src.functions), n, n, ch, left),
-            src.performs_co(program_writers(src.functions), n, ch, left),
-            src.performs_into_co(program_writers(src.functions), n, n, ch, left), n, src.start(args)))
+            src.performs_upto(program_writers(src.functions), n, ch, left),
+            src.performs_into_upto(program_writers(src.functions), n, n, ch, left), n, src.start(args)))
 }
 
-theorem Source::tree_co_refines(self src: Source, args: List<List<BitVec(8)>>, ch: Charges, left: Nat, tr: Trace<BitVec(64)>(Events::linux()),
+theorem Source::tree_upto_refines(self src: Source, args: List<List<BitVec(8)>>, ch: Charges, left: Nat, tr: Trace<BitVec(64)>(Events::linux()),
     c: Converges<BitVec(64)>(Events::linux(), λ n => src.bounded(args, ch, left).at(n), tr)):
-    Exists<Nat>(λ d => Converges<BitVec(64)>(Events::linux(), λ k => CoTree::approx(Events::linux(), k, src.tree_co(args, ch, left, d)), tr))
+    Exists<Nat>(λ d => Converges<BitVec(64)>(Events::linux(), λ k => CoTree::approx(Events::linux(), k, src.tree_upto(args, ch, left, d)), tr))
 {
-    Exists(c.n, src.tree_co_into(args, ch, left, c.n, tr, c.h))
+    Exists(c.n, src.tree_upto_into(args, ch, left, c.n, tr, c.h))
 }
 
 // ---------------------------------------------------------------------------
-// The fuel-free tree is inside the fuelled program
+// The tree `d` deep is inside the fuelled program
 
 // Each call's fuel-free tree inside its fuelled family.
 fn performs_onto(perform_co: PerformsCo(), perform: Nat → Performs()) → Type {
@@ -294,8 +305,8 @@ theorem Stmt::onto_co(self s: Stmt, call: Writers(), perform: Nat → Performs()
 }
 
 // Every call at every depth, by induction on the depth.
-theorem Source::performs_onto_co(self src: Source, call: Writers(), d: Nat, ch: Charges, left: Nat):
-    performs_onto(src.performs_co(call, d, ch, left), λ n => src.performs(call, n, d, ch, left))
+theorem Source::performs_onto_upto(self src: Source, call: Writers(), d: Nat, ch: Charges, left: Nat):
+    performs_onto(src.performs_upto(call, d, ch, left), λ n => src.performs(call, n, d, ch, left))
 {
     match d {
         Zero => λ procedure args results env => CoTree::onto_spin<Flow>(Events::linux()),
@@ -304,7 +315,7 @@ theorem Source::performs_onto_co(self src: Source, call: Writers(), d: Nat, ch: 
                 None => CRet(Onward(env)),
                 Some(proc) => match ch.refuses(procedure, left) {
                     True => CRet(Exited(call_depth_status())),
-                    False => CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_co(call, k, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
+                    False => CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_upto(call, k, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
                         λ flow => proc.leave(env, results, flow)),
                 },
             },
@@ -321,7 +332,7 @@ theorem Source::performs_onto_co(self src: Source, call: Writers(), d: Nat, ch: 
                         None => CRet(Onward(env)),
                         Some(proc) => match ch.refuses(procedure, left) {
                             True => CRet(Exited(call_depth_status())),
-                            False => CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_co(call, k, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
+                            False => CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_upto(call, k, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
                                 λ flow => proc.leave(env, results, flow)),
                         },
                     },
@@ -337,7 +348,7 @@ theorem Source::performs_onto_co(self src: Source, call: Writers(), d: Nat, ch: 
                 Some(proc) => match ch.refuses(procedure, left) as λ b => CoTree::Onto(Events::linux(),
                         match b as λ _ => CoTree<Flow>(Events::linux()) {
                             True => CRet(Exited(call_depth_status())),
-                            False => CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_co(call, k, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
+                            False => CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_upto(call, k, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
                                 λ flow => proc.leave(env, results, flow)),
                         },
                         λ n => match b as λ _ => ITree<Flow>(Events::linux()) {
@@ -347,7 +358,7 @@ theorem Source::performs_onto_co(self src: Source, call: Writers(), d: Nat, ch: 
                         }) {
                     True => CoTree::onto_ret(Events::linux(), Exited(call_depth_status())),
                     False => CoTree::onto_map(Events::linux(),
-                        proc.body.denote_co(call, src.performs_co(call, k, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
+                        proc.body.denote_co(call, src.performs_upto(call, k, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
                         λ n => proc.body.denote(call, src.performs(call, n, k, ch, left - ch.cost(procedure)), n, proc.enter(env, args)),
                         λ n => proc.body.grows(call, src.performs(call, n, k, ch, left - ch.cost(procedure)), src.performs(call, n + 1, k, ch, left - ch.cost(procedure)),
                             src.performs_below_le(call, n, n + 1, Nat::le_succ_r(n, n, Nat::le_refl(n)), k, k, Nat::le_refl(k), ch, left - ch.cost(procedure)), n,
@@ -355,30 +366,29 @@ theorem Source::performs_onto_co(self src: Source, call: Writers(), d: Nat, ch: 
                         λ flow => proc.leave(env, results, flow),
                         proc.body.onto_co(call, λ n => src.performs(call, n, k, ch, left - ch.cost(procedure)),
                             λ n => src.performs_below_le(call, n, n + 1, Nat::le_succ_r(n, n, Nat::le_refl(n)), k, k, Nat::le_refl(k), ch, left - ch.cost(procedure)),
-                            src.performs_co(call, k, ch, left - ch.cost(procedure)), src.performs_onto_co(call, k, ch, left - ch.cost(procedure)), proc.enter(env, args))),
+                            src.performs_upto(call, k, ch, left - ch.cost(procedure)), src.performs_onto_upto(call, k, ch, left - ch.cost(procedure)), proc.enter(env, args))),
                 },
             }),
     }
 }
 
-// The bridge the other way: every trace the fuel-free tree produces with
-// calls `d` deep, the program produces at some fuel: at the fuel the
-// family needs, raised to `d` so that its calls nest as deep. With
-// `Source::tree_co_refines`, the two have the same traces.
-theorem Source::tree_co_refined(self src: Source, args: List<List<BitVec(8)>>, ch: Charges, left, d: Nat):
-    Program::Refines(Events::linux(), CoTree::program(Events::linux(), src.tree_co(args, ch, left, d)), src.bounded(args, ch, left))
+// Every trace the fuel-free tree produces with calls `d` deep, the program
+// produces at some fuel: at the fuel the family needs, raised to `d` so
+// that its calls nest as deep.
+theorem Source::tree_upto_refined(self src: Source, args: List<List<BitVec(8)>>, ch: Charges, left, d: Nat):
+    Program::Refines(Events::linux(), CoTree::program(Events::linux(), src.tree_upto(args, ch, left, d)), src.bounded(args, ch, left))
 {
     let call = program_writers(src.functions);
-    λ tr (c: Converges<BitVec(64)>(Events::linux(), λ n => CoTree::approx(Events::linux(), n, src.tree_co(args, ch, left, d)), tr)) => {
+    λ tr (c: Converges<BitVec(64)>(Events::linux(), λ n => CoTree::approx(Events::linux(), n, src.tree_upto(args, ch, left, d)), tr)) => {
         let found: Converges<BitVec(64)>(Events::linux(),
                 λ n => ITree::map(Events::linux(), src.main.denote(call, src.performs(call, n, d, ch, left), n, src.start(args)), λ flow => flow.status()), tr) =
-            CoTree::onto_map(Events::linux(), src.main_tree_co(args, ch, left, d), λ n => src.main.denote(call, src.performs(call, n, d, ch, left), n, src.start(args)),
+            CoTree::onto_map(Events::linux(), src.main_tree_upto(args, ch, left, d), λ n => src.main.denote(call, src.performs(call, n, d, ch, left), n, src.start(args)),
                 λ n => src.main.grows(call, src.performs(call, n, d, ch, left), src.performs(call, n + 1, d, ch, left),
                     src.performs_below_le(call, n, n + 1, Nat::le_succ_r(n, n, Nat::le_refl(n)), d, d, Nat::le_refl(d), ch, left), n, src.start(args)),
                 λ flow => flow.status(),
                 src.main.onto_co(call, λ n => src.performs(call, n, d, ch, left),
                     λ n => src.performs_below_le(call, n, n + 1, Nat::le_succ_r(n, n, Nat::le_refl(n)), d, d, Nat::le_refl(d), ch, left),
-                    src.performs_co(call, d, ch, left), src.performs_onto_co(call, d, ch, left), src.start(args)),
+                    src.performs_upto(call, d, ch, left), src.performs_onto_upto(call, d, ch, left), src.start(args)),
                 c.n, tr, c.h);
         Converges(found.n + d, IsTrace::of_below(Events::linux(),
             ITree::map(Events::linux(), src.main.denote(call, src.performs(call, found.n, d, ch, left), found.n, src.start(args)), λ flow => flow.status()),
@@ -390,4 +400,565 @@ theorem Source::tree_co_refined(self src: Source, args: List<List<BitVec(8)>>, c
                 λ flow => refl),
             found.h))
     }
+}
+
+// ---------------------------------------------------------------------------
+// Calls as events
+
+// A call, as its caller makes it: the procedure, its arguments, where its
+// results go, the caller's environment, and the bytes of stack left.
+record ProcedureCall { procedure: Nat, args: List<Nat>, results: List<Nat>, env: Env, left: Nat }
+
+// Calls answered with the flow back in the caller.
+fn Events::procedure_calls() → Events { Events::calls(ProcedureCall, Flow) }
+
+// A statement's events: its calls and Linux's.
+fn Events::with_calls() → Events { Events::sum(Events::procedure_calls(), Events::linux()) }
+
+// What answers a call: a tree with calls of its own.
+fn Handler() → Type { (c: ProcedureCall) → CoTree<Flow>(Events::with_calls()) }
+
+// A statement with its calls left as events, each made with `left` bytes.
+fn Stmt::denote_calls(self s: Stmt, call: Writers(), left: Nat) → Env → CoTree<Flow>(Events::with_calls()) {
+    match s {
+        Compute(region) => λ env => CRet(Onward(env.compute(call, region))),
+        Invoke(shape) => λ env => CVis(Inr(shape.cmd(env)), λ a => CRet(Onward(shape.answer(env, a)))),
+        Then(first, rest) => λ env => CoTree::bind(Events::with_calls(), first.denote_calls(call, left)(env), λ flow => match flow {
+            Onward(next) => rest.denote_calls(call, left)(next),
+            Exited(status) => CRet(Exited(status)),
+        }),
+        Branch(condition, yes, no) => λ env => match env.bit(condition) {
+            True => yes.denote_calls(call, left)(env),
+            False => no.denote_calls(call, left)(env),
+        },
+        Repeat(body, again) => λ env => CoTree::iter(Events::with_calls(),
+            λ e => CoTree::map(Events::with_calls(), body.denote_calls(call, left)(e), λ flow => flow.pass(again)), env),
+        Exit(status) => λ env => CRet(Exited(env.word(status))),
+        Arg(index, buf, len) => λ env => CRet(Onward(env.arg(env.number(index), buf, len))),
+        Perform(procedure, args, results) => λ env =>
+            CoTree::call<ProcedureCall, Flow>(Events::linux(), ProcedureCall(procedure, args, results, env, left)),
+    }
+}
+
+// A call run by `h`: the call as an event, its tree's calls answered by `h`
+// again, with no bound on how deep they nest.
+fn performs_by(h: Handler(), left: Nat) → PerformsCo() {
+    λ procedure args results env => CoTree::mrec(Events::procedure_calls(), Events::linux(), h,
+        CoTree::call<ProcedureCall, Flow>(Events::linux(), ProcedureCall(procedure, args, results, env, left)))
+}
+
+// Running a statement's calls is reading it with each call run: the run
+// takes a silent step after each command of Linux, where the reading
+// takes none, and is otherwise the reading step for step (`mrec` commutes
+// with `bind` and loops, `Bisim::mrec_bind`, `Bisim::mrec_iter`).
+theorem Stmt::lags(self s: Stmt, call: Writers(), h: Handler(), left: Nat): (env: Env) →
+    Lag<Flow>(Events::linux(), s.denote_co(call, performs_by(h, left))(env),
+        CoTree::mrec(Events::procedure_calls(), Events::linux(), h, s.denote_calls(call, left)(env)))
+{
+    match s {
+        Compute(region) => λ env => LRet(0, Onward(env.compute(call, region)), refl, refl),
+        Invoke(shape) => λ env => LVis(0, shape.cmd(env), λ a => CRet(Onward(shape.answer(env, a))),
+            λ a => CoTree::mrec(Events::procedure_calls(), Events::linux(), h, CTau(CRet(Onward(shape.answer(env, a))))), refl, refl,
+            λ a => LRet(1, Onward(shape.answer(env, a)), refl, refl)),
+        Then(first, rest) => λ env => Lag::then_bisim(Events::linux(),
+            CoTree::bind(Events::linux(), first.denote_co(call, performs_by(h, left))(env), λ flow => match flow {
+                Onward(next) => rest.denote_co(call, performs_by(h, left))(next),
+                Exited(status) => CRet(Exited(status)),
+            }),
+            CoTree::bind(Events::linux(), CoTree::mrec(Events::procedure_calls(), Events::linux(), h, first.denote_calls(call, left)(env)),
+                λ x => CoTree::mrec(Events::procedure_calls(), Events::linux(), h, match x {
+                    Onward(next) => rest.denote_calls(call, left)(next),
+                    Exited(status) => CRet(Exited(status)),
+                })),
+            CoTree::mrec(Events::procedure_calls(), Events::linux(), h, CoTree::bind(Events::with_calls(), first.denote_calls(call, left)(env), λ flow => match flow {
+                    Onward(next) => rest.denote_calls(call, left)(next),
+                    Exited(status) => CRet(Exited(status)),
+                })),
+            Lag::bind_up(Events::linux(), first.denote_co(call, performs_by(h, left))(env),
+                CoTree::mrec(Events::procedure_calls(), Events::linux(), h, first.denote_calls(call, left)(env)),
+                λ flow => match flow { Onward(next) => rest.denote_co(call, performs_by(h, left))(next), Exited(status) => CRet(Exited(status)) },
+                λ x => CoTree::mrec(Events::procedure_calls(), Events::linux(), h, match x {
+                    Onward(next) => rest.denote_calls(call, left)(next),
+                    Exited(status) => CRet(Exited(status)),
+                }),
+                first.lags(call, h, left, env),
+                λ flow => match flow as λ f => Lag<Flow>(Events::linux(),
+                        match f as λ _ => CoTree<Flow>(Events::linux()) {
+                            Onward(next) => rest.denote_co(call, performs_by(h, left))(next), Exited(status) => CRet(Exited(status)),
+                        },
+                        CoTree::mrec(Events::procedure_calls(), Events::linux(), h, match f as λ _ => CoTree<Flow>(Events::with_calls()) {
+                            Onward(next) => rest.denote_calls(call, left)(next), Exited(status) => CRet(Exited(status)),
+                        })) {
+                    Onward(next) => rest.lags(call, h, left, next),
+                    Exited(status) => LRet(0, Exited(status), refl, refl),
+                }),
+            Bisim::sym(Events::linux(), CoTree::mrec(Events::procedure_calls(), Events::linux(), h, CoTree::bind(Events::with_calls(), first.denote_calls(call, left)(env), λ flow => match flow {
+                    Onward(next) => rest.denote_calls(call, left)(next),
+                    Exited(status) => CRet(Exited(status)),
+                })),
+                CoTree::bind(Events::linux(), CoTree::mrec(Events::procedure_calls(), Events::linux(), h, first.denote_calls(call, left)(env)),
+                    λ x => CoTree::mrec(Events::procedure_calls(), Events::linux(), h, match x {
+                        Onward(next) => rest.denote_calls(call, left)(next),
+                        Exited(status) => CRet(Exited(status)),
+                    })),
+                Bisim::mrec_bind(Events::procedure_calls(), Events::linux(), h, first.denote_calls(call, left)(env), λ flow => match flow {
+                    Onward(next) => rest.denote_calls(call, left)(next),
+                    Exited(status) => CRet(Exited(status)),
+                }))),
+        Branch(condition, yes, no) => λ env => match env.bit(condition) as λ b => Lag<Flow>(Events::linux(),
+                match b as λ _ => CoTree<Flow>(Events::linux()) {
+                    True => yes.denote_co(call, performs_by(h, left))(env), False => no.denote_co(call, performs_by(h, left))(env),
+                },
+                CoTree::mrec(Events::procedure_calls(), Events::linux(), h, match b as λ _ => CoTree<Flow>(Events::with_calls()) {
+                    True => yes.denote_calls(call, left)(env), False => no.denote_calls(call, left)(env),
+                })) {
+            True => yes.lags(call, h, left, env),
+            False => no.lags(call, h, left, env),
+        },
+        Repeat(body, again) => λ env => Lag::then_bisim(Events::linux(), CoTree::iter(Events::linux(),
+                λ e => CoTree::map(Events::linux(), body.denote_co(call, performs_by(h, left))(e), λ flow => flow.pass(again)), env),
+            CoTree::iter(Events::linux(), λ e => CoTree::mrec(Events::procedure_calls(), Events::linux(), h,
+                CoTree::map(Events::with_calls(), body.denote_calls(call, left)(e), λ flow => flow.pass(again))), env),
+            CoTree::mrec(Events::procedure_calls(), Events::linux(), h, CoTree::iter(Events::with_calls(),
+                λ e => CoTree::map(Events::with_calls(), body.denote_calls(call, left)(e), λ flow => flow.pass(again)), env)),
+            Lag::iter_cong(Events::linux(), λ e => CoTree::map(Events::linux(), body.denote_co(call, performs_by(h, left))(e), λ flow => flow.pass(again)),
+                λ e => CoTree::mrec(Events::procedure_calls(), Events::linux(), h,
+                    CoTree::map(Events::with_calls(), body.denote_calls(call, left)(e), λ flow => flow.pass(again))),
+                λ e => Lag::then_bisim(Events::linux(), CoTree::map(Events::linux(), body.denote_co(call, performs_by(h, left))(e), λ flow => flow.pass(again)),
+                    CoTree::map(Events::linux(), CoTree::mrec(Events::procedure_calls(), Events::linux(), h, body.denote_calls(call, left)(e)), λ flow => flow.pass(again)),
+                    CoTree::mrec(Events::procedure_calls(), Events::linux(), h,
+                        CoTree::map(Events::with_calls(), body.denote_calls(call, left)(e), λ flow => flow.pass(again))),
+                    Lag::map(Events::linux(), body.denote_co(call, performs_by(h, left))(e),
+                        CoTree::mrec(Events::procedure_calls(), Events::linux(), h, body.denote_calls(call, left)(e)), λ flow => flow.pass(again),
+                        body.lags(call, h, left, e)),
+                    Bisim::sym(Events::linux(), CoTree::mrec(Events::procedure_calls(), Events::linux(), h,
+                            CoTree::map(Events::with_calls(), body.denote_calls(call, left)(e), λ flow => flow.pass(again))),
+                        CoTree::map(Events::linux(), CoTree::mrec(Events::procedure_calls(), Events::linux(), h, body.denote_calls(call, left)(e)), λ flow => flow.pass(again)),
+                        Bisim::mrec_map(Events::procedure_calls(), Events::linux(), h, body.denote_calls(call, left)(e), λ flow => flow.pass(again)))),
+                env),
+            Bisim::sym(Events::linux(), CoTree::mrec(Events::procedure_calls(), Events::linux(), h, CoTree::iter(Events::with_calls(),
+                λ e => CoTree::map(Events::with_calls(), body.denote_calls(call, left)(e), λ flow => flow.pass(again)), env)),
+                CoTree::iter(Events::linux(), λ e => CoTree::mrec(Events::procedure_calls(), Events::linux(), h,
+                    CoTree::map(Events::with_calls(), body.denote_calls(call, left)(e), λ flow => flow.pass(again))), env),
+                Bisim::mrec_iter(Events::procedure_calls(), Events::linux(), h,
+                    λ e => CoTree::map(Events::with_calls(), body.denote_calls(call, left)(e), λ flow => flow.pass(again)), env))),
+        Exit(status) => λ env => LRet(0, Exited(env.word(status)), refl, refl),
+        Arg(index, buf, len) => λ env => LRet(0, Onward(env.arg(env.number(index), buf, len)), refl, refl),
+        Perform(procedure, args, results) => λ env => Lag::refl(Events::linux(), performs_by(h, left)(procedure, args, results, env)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The program's tree
+
+// What a call does, its own calls left as events: as `Source::performs`
+// with no fuel and no count, a refusal where the check finds too few bytes,
+// or the body with the call's cost taken. The CALL's silent step is the
+// one `mrec` takes at the call.
+fn Source::handler(self src: Source, call: Writers(), ch: Charges) → Handler() {
+    λ c => match src.procedures.nth(c.procedure) {
+        None => CRet(Onward(c.env)),
+        Some(proc) => match ch.refuses(c.procedure, c.left) {
+            True => CRet(Exited(call_depth_status())),
+            False => CoTree::map(Events::with_calls(), proc.body.denote_calls(call, c.left - ch.cost(c.procedure))(proc.enter(c.env, c.args)),
+                λ flow => proc.leave(c.env, c.results, flow)),
+        },
+    }
+}
+
+// What a call does with `left` bytes of stack, its calls run as deep as
+// they go.
+fn Source::performs_co(self src: Source, call: Writers(), ch: Charges, left: Nat) → PerformsCo() {
+    performs_by(src.handler(call, ch), left)
+}
+
+fn Source::main_tree_co(self src: Source, args: List<List<BitVec(8)>>, ch: Charges, left: Nat) → CoTree<Flow>(Events::linux()) {
+    CoTree::mrec(Events::procedure_calls(), Events::linux(), src.handler(program_writers(src.functions), ch),
+        src.main.denote_calls(program_writers(src.functions), left)(src.start(args)))
+}
+
+// The program run with the command line `args`, with no fuel and no bound
+// on its calls, charged as `ch` says with `left` bytes below `main`'s
+// frame. A source that performs nothing is read with `Charges::free()`
+// and `0`, which nothing it does reads.
+fn Source::tree_co(self src: Source, args: List<List<BitVec(8)>>, ch: Charges, left: Nat) → CoTree<BitVec(64)>(Events::linux()) {
+    CoTree::map(Events::linux(), src.main_tree_co(args, ch, left), λ flow => flow.status())
+}
+
+// `main` read with each call run is `main` run, up to silent steps
+// (`Stmt::lags`).
+theorem Source::main_lags(self src: Source, args: List<List<BitVec(8)>>, ch: Charges, left: Nat):
+    Lag<Flow>(Events::linux(), src.main.denote_co(program_writers(src.functions), src.performs_co(program_writers(src.functions), ch, left))(src.start(args)),
+        src.main_tree_co(args, ch, left))
+{
+    src.main.lags(program_writers(src.functions), src.handler(program_writers(src.functions), ch), left, src.start(args))
+}
+
+theorem Source::tree_lags(self src: Source, args: List<List<BitVec(8)>>, ch: Charges, left: Nat):
+    Lag<BitVec(64)>(Events::linux(), CoTree::map(Events::linux(),
+            src.main.denote_co(program_writers(src.functions), src.performs_co(program_writers(src.functions), ch, left))(src.start(args)),
+            λ flow => flow.status()),
+        src.tree_co(args, ch, left))
+{
+    Lag::map(Events::linux(), src.main.denote_co(program_writers(src.functions), src.performs_co(program_writers(src.functions), ch, left))(src.start(args)),
+        src.main_tree_co(args, ch, left), λ flow => flow.status(), src.main_lags(args, ch, left))
+}
+
+// What a call does, read with its body's calls run: the handler's tree
+// with each call a function.
+fn Source::answers_co(self src: Source, call: Writers(), ch: Charges, c: ProcedureCall) → CoTree<Flow>(Events::linux()) {
+    match src.procedures.nth(c.procedure) {
+        None => CRet(Onward(c.env)),
+        Some(proc) => match ch.refuses(c.procedure, c.left) {
+            True => CRet(Exited(call_depth_status())),
+            False => CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_co(call, ch, c.left - ch.cost(c.procedure)))(proc.enter(c.env, c.args)),
+                λ flow => proc.leave(c.env, c.results, flow)),
+        },
+    }
+}
+
+theorem Source::answers_lag(self src: Source, call: Writers(), ch: Charges, c: ProcedureCall):
+    Lag<Flow>(Events::linux(), src.answers_co(call, ch, c),
+        CoTree::mrec(Events::procedure_calls(), Events::linux(), src.handler(call, ch), src.handler(call, ch)(c)))
+{
+    match src.procedures.nth(c.procedure) as λ o => Lag<Flow>(Events::linux(),
+            match o as λ _ => CoTree<Flow>(Events::linux()) {
+                None => CRet(Onward(c.env)),
+                Some(proc) => match ch.refuses(c.procedure, c.left) {
+                    True => CRet(Exited(call_depth_status())),
+                    False => CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_co(call, ch, c.left - ch.cost(c.procedure)))(proc.enter(c.env, c.args)),
+                        λ flow => proc.leave(c.env, c.results, flow)),
+                },
+            },
+            CoTree::mrec(Events::procedure_calls(), Events::linux(), src.handler(call, ch), match o as λ _ => CoTree<Flow>(Events::with_calls()) {
+                None => CRet(Onward(c.env)),
+                Some(proc) => match ch.refuses(c.procedure, c.left) {
+                    True => CRet(Exited(call_depth_status())),
+                    False => CoTree::map(Events::with_calls(), proc.body.denote_calls(call, c.left - ch.cost(c.procedure))(proc.enter(c.env, c.args)),
+                        λ flow => proc.leave(c.env, c.results, flow)),
+                },
+            })) {
+        None => LRet(0, Onward(c.env), refl, refl),
+        Some(proc) => match ch.refuses(c.procedure, c.left) as λ b => Lag<Flow>(Events::linux(),
+                match b as λ _ => CoTree<Flow>(Events::linux()) {
+                    True => CRet(Exited(call_depth_status())),
+                    False => CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_co(call, ch, c.left - ch.cost(c.procedure)))(proc.enter(c.env, c.args)),
+                        λ flow => proc.leave(c.env, c.results, flow)),
+                },
+                CoTree::mrec(Events::procedure_calls(), Events::linux(), src.handler(call, ch), match b as λ _ => CoTree<Flow>(Events::with_calls()) {
+                    True => CRet(Exited(call_depth_status())),
+                    False => CoTree::map(Events::with_calls(), proc.body.denote_calls(call, c.left - ch.cost(c.procedure))(proc.enter(c.env, c.args)),
+                        λ flow => proc.leave(c.env, c.results, flow)),
+                })) {
+            True => LRet(0, Exited(call_depth_status()), refl, refl),
+            False => Lag::then_bisim(Events::linux(),
+                CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_co(call, ch, c.left - ch.cost(c.procedure)))(proc.enter(c.env, c.args)),
+                    λ flow => proc.leave(c.env, c.results, flow)),
+                CoTree::map(Events::linux(), CoTree::mrec(Events::procedure_calls(), Events::linux(), src.handler(call, ch),
+                    proc.body.denote_calls(call, c.left - ch.cost(c.procedure))(proc.enter(c.env, c.args))), λ flow => proc.leave(c.env, c.results, flow)),
+                CoTree::mrec(Events::procedure_calls(), Events::linux(), src.handler(call, ch),
+                    CoTree::map(Events::with_calls(), proc.body.denote_calls(call, c.left - ch.cost(c.procedure))(proc.enter(c.env, c.args)),
+                        λ flow => proc.leave(c.env, c.results, flow))),
+                Lag::map(Events::linux(), proc.body.denote_co(call, src.performs_co(call, ch, c.left - ch.cost(c.procedure)))(proc.enter(c.env, c.args)),
+                    CoTree::mrec(Events::procedure_calls(), Events::linux(), src.handler(call, ch),
+                        proc.body.denote_calls(call, c.left - ch.cost(c.procedure))(proc.enter(c.env, c.args))),
+                    λ flow => proc.leave(c.env, c.results, flow),
+                    proc.body.lags(call, src.handler(call, ch), c.left - ch.cost(c.procedure), proc.enter(c.env, c.args))),
+                Bisim::sym(Events::linux(), CoTree::mrec(Events::procedure_calls(), Events::linux(), src.handler(call, ch),
+                        CoTree::map(Events::with_calls(), proc.body.denote_calls(call, c.left - ch.cost(c.procedure))(proc.enter(c.env, c.args)),
+                            λ flow => proc.leave(c.env, c.results, flow))),
+                    CoTree::map(Events::linux(), CoTree::mrec(Events::procedure_calls(), Events::linux(), src.handler(call, ch),
+                        proc.body.denote_calls(call, c.left - ch.cost(c.procedure))(proc.enter(c.env, c.args))), λ flow => proc.leave(c.env, c.results, flow)),
+                    Bisim::mrec_map(Events::procedure_calls(), Events::linux(), src.handler(call, ch),
+                        proc.body.denote_calls(call, c.left - ch.cost(c.procedure))(proc.enter(c.env, c.args)), λ flow => proc.leave(c.env, c.results, flow)))),
+        },
+    }
+}
+
+// A call run is one silent step, then the handler's tree run: up to silent
+// steps, what the call does read with its body's calls run.
+theorem Source::performs_lag(self src: Source, call: Writers(), ch: Charges, c: ProcedureCall):
+    Lag<Flow>(Events::linux(), src.answers_co(call, ch, c),
+        CoTree::mrec(Events::procedure_calls(), Events::linux(), src.handler(call, ch),
+            CoTree::bind<Flow, Flow>(Events::with_calls(), src.handler(call, ch)(c), λ flow => CRet(flow))))
+{
+    Lag::then_bisim(Events::linux(), src.answers_co(call, ch, c),
+        CoTree::mrec(Events::procedure_calls(), Events::linux(), src.handler(call, ch), src.handler(call, ch)(c)),
+        CoTree::mrec(Events::procedure_calls(), Events::linux(), src.handler(call, ch),
+            CoTree::bind<Flow, Flow>(Events::with_calls(), src.handler(call, ch)(c), λ flow => CRet(flow))),
+        src.answers_lag(call, ch, c),
+        Bisim::mrec_cong(Events::procedure_calls(), Events::linux(), src.handler(call, ch), src.handler(call, ch)(c),
+            CoTree::bind<Flow, Flow>(Events::with_calls(), src.handler(call, ch)(c), λ flow => CRet(flow)),
+            Bisim::sym(Events::with_calls(), CoTree::bind<Flow, Flow>(Events::with_calls(), src.handler(call, ch)(c), λ flow => CRet(flow)),
+                src.handler(call, ch)(c), CoTree::bind_ret_r(Events::with_calls(), src.handler(call, ch)(c)))))
+}
+
+// ---------------------------------------------------------------------------
+// The fuelled tree is inside the tree
+
+// Every call at every depth inside the call run, by induction on the depth:
+// past the CALL's step, the fuelled body is inside the body read with its
+// calls run (`Stmt::into_co`), which the run is up to silent steps
+// (`Source::performs_lag`).
+theorem Source::performs_into_co(self src: Source, call: Writers(), n, d: Nat, ch: Charges): (left: Nat) →
+    performs_into(src.performs(call, n, d, ch, left), src.performs_co(call, ch, left))
+{
+    match d {
+        Zero => λ left procedure args results env => ITree::into_cut(Events::linux(), src.performs_co(call, ch, left)(procedure, args, results, env)),
+        Succ(k) => λ left procedure args results env => ITree::into_bisim(Events::linux(),
+            Tau(match src.procedures.nth(procedure) as λ _ => ITree<Flow>(Events::linux()) {
+                None => Ret(Onward(env)),
+                Some(proc) => match ch.refuses(procedure, left) {
+                    True => Ret(Exited(call_depth_status())),
+                    False => ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, n, k, ch, left - ch.cost(procedure)), n, proc.enter(env, args)),
+                        λ flow => proc.leave(env, results, flow)),
+                },
+            }),
+            CTau(CoTree::mrec(Events::procedure_calls(), Events::linux(), src.handler(call, ch),
+                CoTree::bind<Flow, Flow>(Events::with_calls(), src.handler(call, ch)(ProcedureCall(procedure, args, results, env, left)), λ flow => CRet(flow)))),
+            src.performs_co(call, ch, left)(procedure, args, results, env),
+            ITree::into_tau(Events::linux(),
+                match src.procedures.nth(procedure) as λ _ => ITree<Flow>(Events::linux()) {
+                    None => Ret(Onward(env)),
+                    Some(proc) => match ch.refuses(procedure, left) {
+                        True => Ret(Exited(call_depth_status())),
+                        False => ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, n, k, ch, left - ch.cost(procedure)), n, proc.enter(env, args)),
+                            λ flow => proc.leave(env, results, flow)),
+                    },
+                },
+                CoTree::mrec(Events::procedure_calls(), Events::linux(), src.handler(call, ch),
+                    CoTree::bind<Flow, Flow>(Events::with_calls(), src.handler(call, ch)(ProcedureCall(procedure, args, results, env, left)), λ flow => CRet(flow))),
+                ITree::into_eutt(Events::linux(),
+                    match src.procedures.nth(procedure) as λ _ => ITree<Flow>(Events::linux()) {
+                        None => Ret(Onward(env)),
+                        Some(proc) => match ch.refuses(procedure, left) {
+                            True => Ret(Exited(call_depth_status())),
+                            False => ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, n, k, ch, left - ch.cost(procedure)), n, proc.enter(env, args)),
+                                λ flow => proc.leave(env, results, flow)),
+                        },
+                    },
+                    src.answers_co(call, ch, ProcedureCall(procedure, args, results, env, left)),
+                    CoTree::mrec(Events::procedure_calls(), Events::linux(), src.handler(call, ch),
+                        CoTree::bind<Flow, Flow>(Events::with_calls(), src.handler(call, ch)(ProcedureCall(procedure, args, results, env, left)), λ flow => CRet(flow))),
+                    match src.procedures.nth(procedure) as λ o => ITree::Into(Events::linux(),
+                            match o as λ _ => ITree<Flow>(Events::linux()) {
+                                None => Ret(Onward(env)),
+                                Some(proc) => match ch.refuses(procedure, left) {
+                                    True => Ret(Exited(call_depth_status())),
+                                    False => ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, n, k, ch, left - ch.cost(procedure)), n, proc.enter(env, args)),
+                                        λ flow => proc.leave(env, results, flow)),
+                                },
+                            },
+                            match o as λ _ => CoTree<Flow>(Events::linux()) {
+                                None => CRet(Onward(env)),
+                                Some(proc) => match ch.refuses(procedure, left) {
+                                    True => CRet(Exited(call_depth_status())),
+                                    False => CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_co(call, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
+                                        λ flow => proc.leave(env, results, flow)),
+                                },
+                            }) {
+                        None => ITree::into_ret(Events::linux(), Onward(env)),
+                        Some(proc) => match ch.refuses(procedure, left) as λ b => ITree::Into(Events::linux(),
+                                match b as λ _ => ITree<Flow>(Events::linux()) {
+                                    True => Ret(Exited(call_depth_status())),
+                                    False => ITree::map(Events::linux(), proc.body.denote(call, src.performs(call, n, k, ch, left - ch.cost(procedure)), n, proc.enter(env, args)),
+                                        λ flow => proc.leave(env, results, flow)),
+                                },
+                                match b as λ _ => CoTree<Flow>(Events::linux()) {
+                                    True => CRet(Exited(call_depth_status())),
+                                    False => CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_co(call, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
+                                        λ flow => proc.leave(env, results, flow)),
+                                }) {
+                            True => ITree::into_ret(Events::linux(), Exited(call_depth_status())),
+                            False => ITree::into_map(Events::linux(),
+                                proc.body.denote(call, src.performs(call, n, k, ch, left - ch.cost(procedure)), n, proc.enter(env, args)),
+                                proc.body.denote_co(call, src.performs_co(call, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
+                                λ flow => proc.leave(env, results, flow),
+                                proc.body.into_co(call, src.performs(call, n, k, ch, left - ch.cost(procedure)), src.performs_co(call, ch, left - ch.cost(procedure)),
+                                    src.performs_into_co(call, n, k, ch, left - ch.cost(procedure)), n, proc.enter(env, args))),
+                        },
+                    },
+                    Lag::eutt(Events::linux(), src.answers_co(call, ch, ProcedureCall(procedure, args, results, env, left)),
+                        CoTree::mrec(Events::procedure_calls(), Events::linux(), src.handler(call, ch),
+                            CoTree::bind<Flow, Flow>(Events::with_calls(), src.handler(call, ch)(ProcedureCall(procedure, args, results, env, left)), λ flow => CRet(flow))),
+                        src.performs_lag(call, ch, ProcedureCall(procedure, args, results, env, left))))),
+            Bisim::of_obs(Events::linux(),
+                CTau(CoTree::mrec(Events::procedure_calls(), Events::linux(), src.handler(call, ch),
+                    CoTree::bind<Flow, Flow>(Events::with_calls(), src.handler(call, ch)(ProcedureCall(procedure, args, results, env, left)), λ flow => CRet(flow)))),
+                src.performs_co(call, ch, left)(procedure, args, results, env), refl)),
+    }
+}
+
+// The program's tree at every fuel is inside its fuel-free tree: every trace
+// it produces at some fuel the tree produces. A compiled program refines
+// `src.bounded` (`native_compile_elf`), so through this it refines
+// `src.tree_co`.
+theorem Source::tree_co_into(self src: Source, args: List<List<BitVec(8)>>, ch: Charges, left, n: Nat):
+    ITree::Into(Events::linux(), src.bounded(args, ch, left).at(n), src.tree_co(args, ch, left))
+{
+    ITree::into_map(Events::linux(), src.bounded_main(args, ch, left, n), src.main_tree_co(args, ch, left), λ flow => flow.status(),
+        ITree::into_eutt(Events::linux(), src.bounded_main(args, ch, left, n),
+            src.main.denote_co(program_writers(src.functions), src.performs_co(program_writers(src.functions), ch, left))(src.start(args)),
+            src.main_tree_co(args, ch, left),
+            src.main.into_co(program_writers(src.functions), src.performs(program_writers(src.functions), n, n, ch, left),
+                src.performs_co(program_writers(src.functions), ch, left),
+                src.performs_into_co(program_writers(src.functions), n, n, ch, left), n, src.start(args)),
+            Lag::eutt(Events::linux(), src.main.denote_co(program_writers(src.functions), src.performs_co(program_writers(src.functions), ch, left))(src.start(args)),
+                src.main_tree_co(args, ch, left), src.main_lags(args, ch, left))))
+}
+
+theorem Source::tree_co_refines(self src: Source, args: List<List<BitVec(8)>>, ch: Charges, left: Nat):
+    Program::Refines(Events::linux(), src.bounded(args, ch, left), CoTree::program(Events::linux(), src.tree_co(args, ch, left)))
+{
+    λ tr (c: Converges<BitVec(64)>(Events::linux(), λ n => src.bounded(args, ch, left).at(n), tr)) => src.tree_co_into(args, ch, left, c.n, tr, c.h)
+}
+
+// ---------------------------------------------------------------------------
+// The tree is inside the fuelled program
+
+// Each call's tree cut at depth `k` inside another call's tree.
+fn performs_approx_into(k: Nat, perform, perform2: PerformsCo()) → Type {
+    (procedure: Nat) → (args, results: List<Nat>) → (env: Env) →
+        ITree::Into(Events::linux(), CoTree::approx(Events::linux(), k, perform(procedure, args, results, env)), perform2(procedure, args, results, env))
+}
+
+// A statement cut at depth `n`, its calls cut at `n` or less inside other
+// calls, is inside the statement with those calls: construct by construct
+// at the one depth (`ITree::into_approx_bind`, `ITree::into_approx_iter`).
+theorem Stmt::approx_into(self s: Stmt, call: Writers(), perform, perform2: PerformsCo(), n: Nat,
+    hp: (k: Nat) → k <= n → performs_approx_into(k, perform, perform2)): (env: Env) →
+    ITree::Into(Events::linux(), CoTree::approx(Events::linux(), n, s.denote_co(call, perform)(env)), s.denote_co(call, perform2)(env))
+{
+    match s {
+        Compute(region) => λ env => ITree::into_approx(Events::linux(), n, CRet(Onward(env.compute(call, region)))),
+        Invoke(shape) => λ env => ITree::into_approx(Events::linux(), n, CVis(shape.cmd(env), λ a => CRet(Onward(shape.answer(env, a))))),
+        Then(first, rest) => λ env => ITree::into_approx_bind(Events::linux(), first.denote_co(call, perform)(env), first.denote_co(call, perform2)(env),
+            λ flow => match flow { Onward(next) => rest.denote_co(call, perform)(next), Exited(status) => CRet(Exited(status)) },
+            λ flow => match flow { Onward(next) => rest.denote_co(call, perform2)(next), Exited(status) => CRet(Exited(status)) },
+            n, first.approx_into(call, perform, perform2, n, hp, env),
+            λ flow => match flow as λ f => ITree::Into(Events::linux(),
+                    CoTree::approx(Events::linux(), n, match f as λ _ => CoTree<Flow>(Events::linux()) {
+                        Onward(next) => rest.denote_co(call, perform)(next), Exited(status) => CRet(Exited(status)),
+                    }),
+                    match f as λ _ => CoTree<Flow>(Events::linux()) { Onward(next) => rest.denote_co(call, perform2)(next), Exited(status) => CRet(Exited(status)) }) {
+                Onward(next) => rest.approx_into(call, perform, perform2, n, hp, next),
+                Exited(status) => ITree::into_approx(Events::linux(), n, CRet(Exited(status))),
+            }),
+        Branch(condition, yes, no) => λ env => match env.bit(condition) as λ b => ITree::Into(Events::linux(),
+                CoTree::approx(Events::linux(), n, match b as λ _ => CoTree<Flow>(Events::linux()) {
+                    True => yes.denote_co(call, perform)(env), False => no.denote_co(call, perform)(env),
+                }),
+                match b as λ _ => CoTree<Flow>(Events::linux()) { True => yes.denote_co(call, perform2)(env), False => no.denote_co(call, perform2)(env) }) {
+            True => yes.approx_into(call, perform, perform2, n, hp, env),
+            False => no.approx_into(call, perform, perform2, n, hp, env),
+        },
+        Repeat(body, again) => λ env => ITree::into_approx_iter(Events::linux(),
+            λ e => CoTree::map(Events::linux(), body.denote_co(call, perform)(e), λ flow => flow.pass(again)),
+            λ e => CoTree::map(Events::linux(), body.denote_co(call, perform2)(e), λ flow => flow.pass(again)), n,
+            λ k le e => ITree::into_approx_bind(Events::linux(), body.denote_co(call, perform)(e), body.denote_co(call, perform2)(e),
+                λ flow => CRet(flow.pass(again)), λ flow => CRet(flow.pass(again)), k,
+                body.approx_into(call, perform, perform2, k, λ k2 le2 => hp(k2, Nat::le_trans(k2, k, n, le2, le)), e),
+                λ flow => ITree::into_approx(Events::linux(), k, CRet(flow.pass(again)))),
+            env),
+        Exit(status) => λ env => ITree::into_approx(Events::linux(), n, CRet(Exited(env.word(status)))),
+        Arg(index, buf, len) => λ env => ITree::into_approx(Events::linux(), n, CRet(Onward(env.arg(env.number(index), buf, len)))),
+        Perform(procedure, args, results) => λ env => hp(n, Nat::le_refl(n), procedure, args, results, env),
+    }
+}
+
+// A call run, cut at depth `k`, is inside the call with calls `d` deep for
+// any `d` at least `k`: every call the cut reaches costs a silent step, so
+// it reaches calls at most `k` deep. By induction on `d`, through the run's
+// reading with its calls run (`Source::performs_lag`, which keeps depths).
+theorem Source::approx_into_upto(self src: Source, call: Writers(), ch: Charges, d: Nat): (left, k: Nat) → k <= d →
+    performs_approx_into(k, src.performs_co(call, ch, left), src.performs_upto(call, d, ch, left))
+{
+    match d {
+        Zero => λ left k => match k as λ k2 => k2 <= 0 → performs_approx_into(k2, src.performs_co(call, ch, left), src.performs_upto(call, 0, ch, left)) {
+            Zero => λ le procedure args results env => ITree::into_cut(Events::linux(), src.performs_upto(call, 0, ch, left)(procedure, args, results, env)),
+            Succ(j) => λ (le: False) => false_elim(le),
+        },
+        Succ(d2) => λ left k => match k as λ k2 => k2 <= d2 + 1 →
+                performs_approx_into(k2, src.performs_co(call, ch, left), src.performs_upto(call, d2 + 1, ch, left)) {
+            Zero => λ le procedure args results env => ITree::into_cut(Events::linux(), src.performs_upto(call, d2 + 1, ch, left)(procedure, args, results, env)),
+            Succ(i) => λ (le: i <= d2) procedure args results env => ITree::into_tau(Events::linux(),
+                CoTree::approx(Events::linux(), i, CoTree::mrec(Events::procedure_calls(), Events::linux(), src.handler(call, ch),
+                    CoTree::bind<Flow, Flow>(Events::with_calls(), src.handler(call, ch)(ProcedureCall(procedure, args, results, env, left)), λ flow => CRet(flow)))),
+                match src.procedures.nth(procedure) as λ _ => CoTree<Flow>(Events::linux()) {
+                    None => CRet(Onward(env)),
+                    Some(proc) => match ch.refuses(procedure, left) {
+                        True => CRet(Exited(call_depth_status())),
+                        False => CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_upto(call, d2, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
+                            λ flow => proc.leave(env, results, flow)),
+                    },
+                },
+                λ tr it => (match src.procedures.nth(procedure) as λ o => ITree::Into(Events::linux(),
+                        CoTree::approx(Events::linux(), i, match o as λ _ => CoTree<Flow>(Events::linux()) {
+                            None => CRet(Onward(env)),
+                            Some(proc) => match ch.refuses(procedure, left) {
+                                True => CRet(Exited(call_depth_status())),
+                                False => CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_co(call, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
+                                    λ flow => proc.leave(env, results, flow)),
+                            },
+                        }),
+                        match o as λ _ => CoTree<Flow>(Events::linux()) {
+                            None => CRet(Onward(env)),
+                            Some(proc) => match ch.refuses(procedure, left) {
+                                True => CRet(Exited(call_depth_status())),
+                                False => CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_upto(call, d2, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
+                                    λ flow => proc.leave(env, results, flow)),
+                            },
+                        }) {
+                    None => ITree::into_approx(Events::linux(), i, CRet(Onward(env))),
+                    Some(proc) => match ch.refuses(procedure, left) as λ b => ITree::Into(Events::linux(),
+                            CoTree::approx(Events::linux(), i, match b as λ _ => CoTree<Flow>(Events::linux()) {
+                                True => CRet(Exited(call_depth_status())),
+                                False => CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_co(call, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
+                                    λ flow => proc.leave(env, results, flow)),
+                            }),
+                            match b as λ _ => CoTree<Flow>(Events::linux()) {
+                                True => CRet(Exited(call_depth_status())),
+                                False => CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_upto(call, d2, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
+                                    λ flow => proc.leave(env, results, flow)),
+                            }) {
+                        True => ITree::into_approx(Events::linux(), i, CRet(Exited(call_depth_status()))),
+                        False => ITree::into_approx_bind(Events::linux(),
+                            proc.body.denote_co(call, src.performs_co(call, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
+                            proc.body.denote_co(call, src.performs_upto(call, d2, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
+                            λ flow => CRet(proc.leave(env, results, flow)), λ flow => CRet(proc.leave(env, results, flow)), i,
+                            proc.body.approx_into(call, src.performs_co(call, ch, left - ch.cost(procedure)), src.performs_upto(call, d2, ch, left - ch.cost(procedure)), i,
+                                λ k2 le2 => src.approx_into_upto(call, ch, d2, left - ch.cost(procedure), k2, Nat::le_trans(k2, i, d2, le2, le)),
+                                proc.enter(env, args)),
+                            λ flow => ITree::into_approx(Events::linux(), i, CRet(proc.leave(env, results, flow)))),
+                    },
+                })(tr, Lag::traces(Events::linux(), i, src.answers_co(call, ch, ProcedureCall(procedure, args, results, env, left)),
+                    CoTree::mrec(Events::procedure_calls(), Events::linux(), src.handler(call, ch),
+                        CoTree::bind<Flow, Flow>(Events::with_calls(), src.handler(call, ch)(ProcedureCall(procedure, args, results, env, left)), λ flow => CRet(flow))),
+                    src.performs_lag(call, ch, ProcedureCall(procedure, args, results, env, left)), tr, it))),
+        },
+    }
+}
+
+// Every trace of the tree is the fuelled program's: a trace seen at depth
+// `n` is one of the tree read with its calls run at that depth
+// (`Lag::traces`), so one of the tree with calls `n` deep
+// (`Source::approx_into_upto`), which is inside the program
+// (`Source::tree_upto_refined`). With `Source::tree_co_refines`, the two
+// have the same traces.
+theorem Source::tree_co_refined(self src: Source, args: List<List<BitVec(8)>>, ch: Charges, left: Nat):
+    Program::Refines(Events::linux(), CoTree::program(Events::linux(), src.tree_co(args, ch, left)), src.bounded(args, ch, left))
+{
+    let call = program_writers(src.functions);
+    λ tr (c: Converges<BitVec(64)>(Events::linux(), λ n => CoTree::approx(Events::linux(), n, src.tree_co(args, ch, left)), tr)) =>
+        src.tree_upto_refined(args, ch, left, c.n, tr,
+            ITree::into_approx_bind(Events::linux(), src.main.denote_co(call, src.performs_co(call, ch, left))(src.start(args)),
+                src.main.denote_co(call, src.performs_upto(call, c.n, ch, left))(src.start(args)),
+                λ flow => CRet(flow.status()), λ flow => CRet(flow.status()), c.n,
+                src.main.approx_into(call, src.performs_co(call, ch, left), src.performs_upto(call, c.n, ch, left), c.n,
+                    λ k le => src.approx_into_upto(call, ch, c.n, left, k, le), src.start(args)),
+                λ flow => ITree::into_approx(Events::linux(), c.n, CRet(flow.status())),
+                tr,
+                Lag::traces(Events::linux(), c.n,
+                    CoTree::map(Events::linux(), src.main.denote_co(call, src.performs_co(call, ch, left))(src.start(args)), λ flow => flow.status()),
+                    src.tree_co(args, ch, left), src.tree_lags(args, ch, left), tr, c.h)))
 }

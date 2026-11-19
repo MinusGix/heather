@@ -157,10 +157,12 @@ inductive Tool {
     // follows, which gets its index to call (procedures are numbered in
     // order); its body gets it as a `Proc`.
     WithProc(params: Nat, results: Nat, body: Proc → Act, rest: Nat → Tool),
-    // `room` bytes of stack below `main`'s frame for calls that reach
-    // themselves (`Source.room`); a call whose check finds too few exits
-    // 139.
-    WithRoom(room: Nat, body: Tool),
+    // Room below `main`'s frame for `levels` nested calls of procedures
+    // that reach themselves (`Source.levels`): the compiler works out the
+    // bytes from the frames it picks, and a run that nests no deeper is
+    // never refused (`Source::compiled_levels`); a call past them whose
+    // check finds too few bytes exits 139.
+    WithRoom(levels: Nat, body: Tool),
 }
 
 // ---------------------------------------------------------------------------
@@ -258,7 +260,7 @@ fn buffer_of(bytes: List<BitVec(8)>, body: Buf → Tool) → Tool { WithBuffer(b
 fn program(functions: List<Function>, body: Tool) → Tool { WithProgram(functions, body) }
 // A procedure for what follows (`perform` calls it).
 fn proc(params: Nat, results: Nat, body: Proc → Act, rest: Nat → Tool) → Tool { WithProc(params, results, body, rest) }
-fn room(room: Nat, body: Tool) → Tool { WithRoom(room, body) }
+fn room(levels: Nat, body: Tool) → Tool { WithRoom(levels, body) }
 fn perform(procedure: Nat, args: List<Val>, results: List<Var>) → Act { CallProc(procedure, args, results) }
 fn Proc::param(self p: Proc, i: Nat) → Var { p.params.nth(i).unwrap_or(Var(0)) }
 fn Proc::result(self p: Proc, i: Nat) → Var { p.results.nth(i).unwrap_or(Var(0)) }
@@ -762,8 +764,8 @@ fn Act::items(self a: Act, next: Nat) → List<Item> {
 // Tools as sources
 
 // A tool's buffers in order, its program, its statement, and its
-// procedures and the room it asks.
-record Opened { buffers: List<Buffer>, functions: List<Function>, main: Act, procedures: List<Procedure>, room: Nat }
+// procedures and the levels of room it asks.
+record Opened { buffers: List<Buffer>, functions: List<Function>, main: Act, procedures: List<Procedure>, levels: Nat }
 
 // `count` words from `first`.
 fn Nat::vars_from(self first: Nat, count: Nat) → List<Var> { match count { Zero => [], Succ(k) => Cons(Var(first), (first + 1).vars_from(k)) } }
@@ -784,19 +786,19 @@ fn Tool::opened_at(self t: Tool, buf: Nat, procs: Nat) → Opened {
         Run(main) => Opened([], [], main, [], 0),
         WithBuffer(capacity, initial, body) => {
             let rest = body(Buf(buf, capacity)).opened_at(buf + 1, procs);
-            Opened(Cons(Buffer(capacity, initial), rest.buffers), rest.functions, rest.main, rest.procedures, rest.room)
+            Opened(Cons(Buffer(capacity, initial), rest.buffers), rest.functions, rest.main, rest.procedures, rest.levels)
         },
         WithProgram(functions, body) => {
             let rest = body.opened_at(buf, procs);
-            Opened(rest.buffers, functions ++ rest.functions, rest.main, rest.procedures, rest.room)
+            Opened(rest.buffers, functions ++ rest.functions, rest.main, rest.procedures, rest.levels)
         },
         WithProc(params, results, body, after) => {
             let rest = after(procs).opened_at(buf, procs + 1);
-            Opened(rest.buffers, rest.functions, rest.main, Cons(Proc::lowered(procs, params, results, body), rest.procedures), rest.room)
+            Opened(rest.buffers, rest.functions, rest.main, Cons(Proc::lowered(procs, params, results, body), rest.procedures), rest.levels)
         },
-        WithRoom(room, body) => {
+        WithRoom(levels, body) => {
             let rest = body.opened_at(buf, procs);
-            Opened(rest.buffers, rest.functions, rest.main, rest.procedures, room)
+            Opened(rest.buffers, rest.functions, rest.main, rest.procedures, levels)
         },
     }
 }
@@ -809,12 +811,12 @@ fn List::procedures_bound(self procs: List<Procedure>) → Nat {
 }
 
 // A tool's words: `main`'s, and its procedures' when it has them; its
-// room only when it has procedures. Without, the source is the one
+// levels only when it has procedures. Without, the source is the one
 // before procedures (`Tool::source_of`, native_build_parts).
 fn List::tool_words(self procs: List<Procedure>, main: Stmt) → Nat {
     match procs { Nil => main.word_bound(), Cons(_, _) => main.word_bound().max(procs.procedures_bound()) }
 }
-fn List::tool_room(self procs: List<Procedure>, room: Nat) → Nat { match procs { Nil => 0, Cons(_, _) => room } }
+fn List::tool_levels(self procs: List<Procedure>, levels: Nat) → Nat { match procs { Nil => 0, Cons(_, _) => levels } }
 
 // A tool's source declares the words its lowering names, temporaries
 // included.
@@ -822,5 +824,5 @@ fn Tool::source(self t: Tool) → Source {
     let o = t.opened(0);
     let main = o.main.items(0).lowered();
     Source(functions := o.functions, buffers := o.buffers, words := o.procedures.tool_words(main), main := main,
-        procedures := o.procedures, room := o.procedures.tool_room(o.room))
+        procedures := o.procedures, levels := o.procedures.tool_levels(o.levels))
 }

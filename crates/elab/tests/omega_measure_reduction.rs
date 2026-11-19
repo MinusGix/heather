@@ -210,6 +210,21 @@ fn a_non_decreasing_measure_at_a_constructor_pattern_is_still_refused() {
 }
 
 #[test]
+fn a_refused_obligation_prints_as_it_parses() {
+    // The obligation's text brackets an operator operand and a method's
+    // receiver and keeps a call's arguments: `n - i + 1.toNat` read as a
+    // different term than the one refused.
+    let msg = elab_err(
+        r#"
+        fn stall(n, i: Nat) -> Nat decreases (n - (i + 1)).max(0) {
+            match i { Zero => 0, Succ(k) => stall(n, i) }
+        }
+        "#,
+    );
+    assert!(msg.contains("`(n - (Succ(k) + 1)).max(0) < (n - (Succ(k) + 1)).max(0)`"), "{msg}");
+}
+
+#[test]
 fn a_neutral_measure_head_still_interns_under_its_own_spelling() {
     // Design §7 control 2, and control 4's neutral site beside the literal
     // one: `runs`'s call is on a suffix a *callee* returned, so the measure

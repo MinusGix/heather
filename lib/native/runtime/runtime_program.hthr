@@ -15,11 +15,12 @@
 //     f::source  its `Source`: the lent functions' program, a zero-filled
 //                buffer per parameter, the lowered statements then an exit
 //                with the value's word
-//     f::reads   Io::Reads(f::source.tree_co([], Charges::free(), 0, 0), λ io => f(io, zeros…))
+//     f::reads   Io::Reads(f::source.tree_co([], Charges::free(), 0), λ io => f(io, zeros…))
 //
 // Nothing in `f::reads` is written for `f`: the lowering's theorem
-// (`ELoop::lower_reads`), the exit (`Stmt::exit_reads`), the bridge and a
-// lent function's agreement from its own theorem (`Lent::agrees_span`).
+// (`ELoop::lower_reads`), the exit (`Stmt::exit_reads`), the tree with its
+// calls run (`Source::reads_co`), the bridge and a lent function's
+// agreement from its own theorem (`Lent::agrees_span`).
 //
 // This module's `runtime` is `runtime`'s with the program mode in front: a
 // module that writes programs imports this one in its place (imports do
@@ -141,19 +142,19 @@ fn Program::reads(p: ELoop, ls: List<Lent>, g: List<Ty>, functions: List<Functio
         p.sem(ETm::plain_world(), ls, g, vals, io))) →
     Io::Reads<p.ty(ETm::plain_world(), g).sem(ETm::plain_world().tys)>(CoTree::map(Events::linux(),
             Program::lowered(p, ls, g).stmt.denote_co(program_writers(functions),
-                Program::source(p, ls, g, functions, caps, consts).performs_co(program_writers(functions), 0, Charges::free(), 0))(Program::source(p, ls, g, functions, caps, consts).start([])),
+                Program::source(p, ls, g, functions, caps, consts).performs_co(program_writers(functions), Charges::free(), 0))(Program::source(p, ls, g, functions, caps, consts).start([])),
             λ flow => flow.read_back(p.ty(ETm::plain_world(), g), ETm::plain_world().tys, Program::lowered(p, ls, g).result)),
         f)
 {
     let w = ETm::plain_world();
     let call = program_writers(functions);
     let src = Program::source(p, ls, g, functions, caps, consts);
-    Io::reads_back(CoTree::map(Events::linux(), Program::lowered(p, ls, g).stmt.denote_co(call, src.performs_co(call, 0, Charges::free(), 0))(src.start([])),
+    Io::reads_back(CoTree::map(Events::linux(), Program::lowered(p, ls, g).stmt.denote_co(call, src.performs_co(call, Charges::free(), 0))(src.start([])),
             λ flow => flow.read_back(p.ty(w, g), w.tys, Program::lowered(p, ls, g).result)),
         λ io => p.sem(w, ls, g, vals, io), f,
         p.lower_reads(w, ls, g, Program::locs(g.len()), 1, Program::lowered(p, ls, g), lowered, call,
             λ held f never ws => false_elim(never), λ held => Tm::calls_agree_none(RecInfo::none, Writers::words(call, held)),
-            lents, src.performs_co(call, 0, Charges::free(), 0), src.start([]), vals, held, Program::below(g.len()), trivial),
+            lents, src.performs_co(call, Charges::free(), 0), src.start([]), vals, held, Program::below(g.len()), trivial),
         bridge)
 }
 
@@ -361,7 +362,7 @@ fn runtime_program(name: String, f: GlobalRef) → Tac<List<Decl>> {
     let reads_t <- program_global("linux_world_co", "Io::Reads");
     let no_args <- program_global("runtime_program", "Program::no_args");
     let free <- program_global("native_source", "Charges::free");
-    let statement = ap(reads_t, [Blank, ap(tree_co, [source, no_args, free, NatLit(0), NatLit(0)]), surface]);
+    let statement = ap(reads_t, [Blank, ap(tree_co, [source, no_args, free, NatLit(0)]), surface]);
     // The proof: the lowering's theorem at the Source with the bridge at
     // those buffers, then the exit.
     let io_b <- assume(Hd(<- runtime_held_type("linux_world", "Io")), "io", None).or_fail("`" ++ name ++ "`: a world: ");
@@ -385,8 +386,10 @@ fn runtime_program(name: String, f: GlobalRef) → Tac<List<Decl>> {
     let exit_reads <- program_global("rt_io_program", "Stmt::exit_reads");
     let none_tys <- program_global("rt", "RecInfo::none");
     let call = ap(writers, [pl.functions]);
-    let proof = ap(exit_reads, [ap(stmt, [eloop, lents, gE]), ap(result, [eloop, lents, gE]), call, ap(performs, [source, call, NatLit(0), free, NatLit(0)]),
+    let proof = ap(exit_reads, [ap(stmt, [eloop, lents, gE]), ap(result, [eloop, lents, gE]), call, ap(performs, [source, call, free, NatLit(0)]),
         ap(start, [source, no_args]), none_tys, surface, inner]);
+    let reads_co <- program_global("rt_io_program", "Source::reads_co");
+    let proof = ap(reads_co, [source, no_args, free, NatLit(0), surface, proof]);
     let st <- as_type(statement).or_fail("`" ++ name ++ "`'s theorem: ");
     let eloop_t <- infer(eloop).or_fail("`" ++ name ++ "`: ");
     let lents_t <- infer(lents).or_fail("`" ++ name ++ "`: ");

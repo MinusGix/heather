@@ -674,3 +674,57 @@ theorem CoTree::onto_iter<A, B>(E: Events, body: Nat → A → ITree<Step<A, B>>
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// A coinductive tree cut at a depth, inside another
+//
+// `ITree::Into(approx(n, c), u)`: every trace `c` produces cut at depth `n`
+// is one of `u`'s. Construct by construct as `Into` is, at the one depth:
+// a bind's cut is the bind of the cuts (`CoTree::bind_traces`), and a loop
+// cut at `n` goes round at most `n` times, each pass cut at `n` or less.
+
+// A tree's cut is inside it.
+theorem ITree::into_approx<R>(E: Events, n: Nat, c: CoTree<R>(E)): ITree::Into(E, CoTree::approx(E, n, c), c) {
+    λ tr it => Converges(n, it)
+}
+
+// A shallower cut is inside whatever a deeper one is.
+theorem ITree::into_approx_le<R>(E: Events, k: Nat, n: Nat, le: k <= n, c: CoTree<R>(E), u: CoTree<R>(E),
+    h: ITree::Into(E, CoTree::approx(E, n, c), u)): ITree::Into(E, CoTree::approx(E, k, c), u)
+{
+    λ tr it => h(tr, IsTrace::fuel_monotone(E, λ m => CoTree::approx(E, m, c), CoTree::approx_grows(E, c), k, n, le, tr, it))
+}
+
+theorem ITree::into_approx_bind<A, B>(E: Events, c1: CoTree<A>(E), c2: CoTree<A>(E), h1: A → CoTree<B>(E), h2: A → CoTree<B>(E), n: Nat,
+    hc: ITree::Into(E, CoTree::approx(E, n, c1), c2), hh: (r: A) → ITree::Into(E, CoTree::approx(E, n, h1(r)), h2(r))):
+    ITree::Into(E, CoTree::approx(E, n, CoTree::bind(E, c1, h1)), CoTree::bind(E, c2, h2))
+{
+    λ tr it => ITree::into_bind(E, CoTree::approx(E, n, c1), c2, λ r => CoTree::approx(E, n, h1(r)), h2, hc, hh, tr,
+        CoTree::bind_traces(E, c1, h1, n, tr, it))
+}
+
+// A loop cut at `n`, over bodies whose cuts at `n` or less are inside the
+// other loop's bodies. By induction on the depth, one pass at a time.
+theorem ITree::into_approx_iter<A, B>(E: Events, cbody1: A → CoTree<Step<A, B>>(E), cbody2: A → CoTree<Step<A, B>>(E), n: Nat,
+    hb: (k: Nat) → k <= n → (a: A) → ITree::Into(E, CoTree::approx(E, k, cbody1(a)), cbody2(a))): (a: A) →
+    ITree::Into(E, CoTree::approx(E, n, CoTree::iter(E, cbody1, a)), CoTree::iter(E, cbody2, a))
+{
+    match n {
+        Zero => λ a => ITree::into_cut(E, CoTree::iter(E, cbody2, a)),
+        Succ(m) => λ a tr it => ITree::into_bisim(E, CoTree::approx(E, m + 1, CoTree::bind(E, cbody1(a), λ x => CoTree::iter_next(E, cbody1, x))),
+            CoTree::bind(E, cbody2(a), λ x => CoTree::iter_next(E, cbody2, x)), CoTree::iter(E, cbody2, a),
+            ITree::into_approx_bind(E, cbody1(a), cbody2(a), λ x => CoTree::iter_next(E, cbody1, x), λ x => CoTree::iter_next(E, cbody2, x), m + 1,
+                hb(m + 1, Nat::le_refl(m + 1), a),
+                λ x => match x as λ y => ITree::Into(E, CoTree::approx(E, m + 1, CoTree::iter_next(E, cbody1, y)), CoTree::iter_next(E, cbody2, y)) {
+                    Continue(a2) => ITree::into_tau(E, CoTree::approx(E, m, CoTree::iter(E, cbody1, a2)), CoTree::iter(E, cbody2, a2),
+                        ITree::into_approx_iter(E, cbody1, cbody2, m, λ k le => hb(k, Nat::le_succ_r(k, m, le)), a2)),
+                    Break(b) => ITree::into_approx(E, m + 1, CRet(b)),
+                }),
+            Bisim::sym(E, CoTree::iter(E, cbody2, a), CoTree::bind(E, cbody2(a), λ x => CoTree::iter_next(E, cbody2, x)), CoTree::iter_unfold(E, cbody2, a)),
+            tr,
+            IsTrace::of_same(E, CoTree::approx(E, m + 1, CoTree::iter(E, cbody1, a)),
+                CoTree::approx(E, m + 1, CoTree::bind(E, cbody1(a), λ x => CoTree::iter_next(E, cbody1, x))), tr,
+                Bisim::approx(E, m + 1, CoTree::iter(E, cbody1, a), CoTree::bind(E, cbody1(a), λ x => CoTree::iter_next(E, cbody1, x)),
+                    CoTree::iter_unfold(E, cbody1, a)), it)),
+    }
+}

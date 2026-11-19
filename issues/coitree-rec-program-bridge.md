@@ -4,7 +4,7 @@ status: open
 labels: [coinduction,itree,native]
 area: interaction-trees
 created: 2026-10-31
-updated: 2026-10-31
+updated: 2026-11-19
 ---
 
 `CoTree::rec` (`lib/std/itree/coitree_rec.hthr`, docs/language/partial-functions-design.md
@@ -33,3 +33,4 @@ native customer of non-tail partial recursion.
 ## Log
 
 - 2026-11-05: gardener: cites a file it shares with [[codata-up-to-friends-round-2]] (`docs/itrees/coitree-design.md`).
+- 2026-11-19: 2026-11-19: Native calls now run by `mrec` (`Source::performs_co`, lib/native/native_source_co.hthr): calls are events of `ProcedureCall`, and `Program::Refines` holds both ways against the depth family `tree_upto` with no depth (docs/native/native-procedure-frames-design.md §7.3). The step-for-step lemmas it needed are generic (`Bisim::mrec_bind`, `mrec_iter`, `mrec_map`, coitree_rec.hthr; `Lag`, coitree_lag.hthr; `ITree::into_approx_iter`, coitree_bridge.hthr, docs/itrees/coitree-design.md §7.10, §8.4a) and are the pieces this issue's `rec_refines`/`rec_refined` would reuse.

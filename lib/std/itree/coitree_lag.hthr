@@ -1,0 +1,207 @@
+// One tree behind another by silent steps (docs/itrees/coitree-design.md
+// §7.10).
+//
+// `Lag(t, u)`: `u` is `t` with finitely many more silent steps before each
+// of `t`'s steps, and no fewer: `t` is read one constructor at a time, `u`
+// after dropping some `CTau`s (a count, as `Eutt` counts them). It is
+// `Eutt` with the left count always zero (Coq's `euttge`, sides swapped),
+// so it implies `Eutt` (`Lag::eutt`), and it says one thing `Eutt` does
+// not: what `u` produces cut at depth `n`, `t` produces cut at the same
+// depth (`Lag::traces`), since `u`'s extra steps only push its nodes
+// deeper. A meaning that is another one with extra steps (a recursion run
+// by `mrec`, which takes a step at each call and after each command) is
+// related to it this way, and a bridge that counts depths crosses it.
+//
+// The congruences are `Eutt`'s, read with nothing dropped on the left:
+// `bind` (`Lag::bind_up`), loops (`Lag::iter_cong`), and bisimilarity on
+// either side (`Lag::up_to_bisim`).
+
+import logic;
+import nat;
+import itree;
+import itree_trace;
+import coitree;
+import coitree_eutt;
+
+codata Lag<R>(E: Events): (t: CoTree<R>(E)) → (u: CoTree<R>(E)) → Type {
+    LRet(nr: Nat, r: R, ht: CoTree::obs(E, t) = ORet(r), hu: CoTree::after(E, nr, u) = ORet(r)),
+    LTau(nr: Nat, t2: CoTree<R>(E), u2: CoTree<R>(E),
+         ht: CoTree::obs(E, t) = OTau(t2), hu: CoTree::after(E, nr, u) = OTau(u2), next: Lag<R>(E, t2, u2)),
+    LVis(nr: Nat, c: E.Cmd, k1: E.Resp(c) → CoTree<R>(E), k2: E.Resp(c) → CoTree<R>(E),
+         ht: CoTree::obs(E, t) = OVis(c, k1), hu: CoTree::after(E, nr, u) = OVis(c, k2),
+         next: (a: E.Resp(c)) → Lag<R>(E, k1(a), k2(a))),
+}
+
+// Bisimilar trees: nothing dropped on either side.
+fn Lag::of_bisim<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), b: Bisim<R>(E, t, u)) → Lag<R>(E, t, u) {
+    match b {
+        BRet(r, ht, hu) => LRet(0, r, ht, hu),
+        BTau(t2, u2, ht, hu, n) => LTau(0, t2, u2, ht, hu, Lag::of_bisim(E, t2, u2, n)),
+        BVis(c, k1, k2, ht, hu, n) => LVis(0, c, k1, k2, ht, hu, λ a => Lag::of_bisim(E, k1(a), k2(a), n(a))),
+    }
+}
+
+fn Lag::refl<R>(E: Events, t: CoTree<R>(E)) → Lag<R>(E, t, t) { Lag::of_bisim(E, t, t, Bisim::refl(E, t)) }
+
+// A tree behind another is equivalent to it up to taus.
+fn Lag::eutt<R>(E: Events, t: CoTree<R>(E), u: CoTree<R>(E), l: Lag<R>(E, t, u)) → Eutt<R>(E, t, u) {
+    match l {
+        LRet(nr, r, ht, hu) => ERet(0, nr, r, ht, hu),
+        LTau(nr, t2, u2, ht, hu, n) => ETau(0, nr, t2, u2, ht, hu, Lag::eutt(E, t2, u2, n)),
+        LVis(nr, c, k1, k2, ht, hu, n) => EVis(0, nr, c, k1, k2, ht, hu, λ a => Lag::eutt(E, k1(a), k2(a), n(a))),
+    }
+}
+
+// Up to bisimilarity on both sides: `t ~ t' ≲ u' ~ u` gives `t ≲ u` at the
+// middle relation's counts. Reads one constructor of `l`, so a friend.
+fn Lag::up_to_bisim<R>(E: Events, t: CoTree<R>(E), t2: CoTree<R>(E), u2: CoTree<R>(E), u: CoTree<R>(E),
+    bt: Bisim<R>(E, t2, t), l: Lag<R>(E, t2, u2), bu: Bisim<R>(E, u2, u)) → Lag<R>(E, t, u)
+{
+    match l {
+        LRet(nr, r, ht, hu) =>
+            LRet(nr, r, Bisim::after(E, t2, t, bt, 0, ORet(r), ht), Bisim::after(E, u2, u, bu, nr, ORet(r), hu)),
+        LTau(nr, t3, u3, ht, hu, n) => {
+            let wt: TauAt<R>(E, t3, CoTree::after(E, 0, t)) = Bisim::after(E, t2, t, bt, 0, OTau(t3), ht);
+            let wu: TauAt<R>(E, u3, CoTree::after(E, nr, u)) = Bisim::after(E, u2, u, bu, nr, OTau(u3), hu);
+            LTau(nr, wt.v2, wu.v2, wt.at, wu.at, Lag::up_to_bisim(E, wt.v2, t3, u3, wu.v2, wt.next, n, wu.next))
+        },
+        LVis(nr, c, k1, k2, ht, hu, n) => {
+            let wt: VisAt<R>(E, c, k1, CoTree::after(E, 0, t)) = Bisim::after(E, t2, t, bt, 0, OVis(c, k1), ht);
+            let wu: VisAt<R>(E, c, k2, CoTree::after(E, nr, u)) = Bisim::after(E, u2, u, bu, nr, OVis(c, k2), hu);
+            LVis(nr, c, wt.k2, wu.k2, wt.at, wu.at,
+                λ a => Lag::up_to_bisim(E, wt.k2(a), k1(a), k2(a), wu.k2(a), wt.next(a), n(a), wu.next(a)))
+        },
+    }
+}
+
+// Bisimilar on the right.
+fn Lag::then_bisim<R>(E: Events, t: CoTree<R>(E), u2: CoTree<R>(E), u: CoTree<R>(E), l: Lag<R>(E, t, u2),
+    bu: Bisim<R>(E, u2, u)) → Lag<R>(E, t, u)
+{
+    Lag::up_to_bisim(E, t, t, u2, u, Bisim::refl(E, t), l, bu)
+}
+
+// `bind` is a congruence, as [`Eutt::bind_up`] is: at a leaf of `t` the
+// left side is `h1(r)` at once, so the continuations' relation is read one
+// constructor deep with its own left count, zero.
+fn Lag::bind_up<A, B>(E: Events, t: CoTree<A>(E), u: CoTree<A>(E), h1: A → CoTree<B>(E), h2: A → CoTree<B>(E),
+    l: Lag<A>(E, t, u), hh: (a: A) → Lag<B>(E, h1(a), h2(a))) →
+    Lag<B>(E, CoTree::bind(E, t, h1), CoTree::bind(E, u, h2))
+{
+    match l {
+        LRet(nr, r, ht, hu) => {
+            let w2: BindRetAt<A, B>(E, u, h2, r) = CoTree::bind_ret_at(E, h2, r, nr, u, hu);
+            match hh(r) {
+                LRet(mr, s, a1, a2) =>
+                    LRet(mr + w2.j, s, prelude::trans(CoTree::obs_bind_at(E, t, h1, ORet(r), ht), a1), prelude::trans(w2.at(mr), a2)),
+                LTau(mr, x, y, a1, a2, nx) =>
+                    LTau(mr + w2.j, x, y, prelude::trans(CoTree::obs_bind_at(E, t, h1, ORet(r), ht), a1), prelude::trans(w2.at(mr), a2), nx),
+                LVis(mr, c, k1, k2, a1, a2, nx) =>
+                    LVis(mr + w2.j, c, k1, k2, prelude::trans(CoTree::obs_bind_at(E, t, h1, ORet(r), ht), a1), prelude::trans(w2.at(mr), a2), nx),
+            }
+        },
+        LTau(nr, t2, u2, ht, hu, n) => LTau(nr, CoTree::bind(E, t2, h1), CoTree::bind(E, u2, h2),
+            CoTree::obs_bind_at(E, t, h1, OTau(t2), ht), CoTree::after_bind(E, h2, OTau(u2), trivial, nr, u, hu),
+            Lag::bind_up(E, t2, u2, h1, h2, n, hh)),
+        LVis(nr, c, k1, k2, ht, hu, n) => LVis(nr, c, λ a => CoTree::bind(E, k1(a), h1), λ a => CoTree::bind(E, k2(a), h2),
+            CoTree::obs_bind_at(E, t, h1, OVis(c, k1), ht), CoTree::after_bind(E, h2, OVis(c, k2), trivial, nr, u, hu),
+            λ a => Lag::bind_up(E, k1(a), k2(a), h1, h2, n(a), hh)),
+    }
+}
+
+fn Lag::map<A, B>(E: Events, t: CoTree<A>(E), u: CoTree<A>(E), f: A → B, l: Lag<A>(E, t, u)) →
+    Lag<B>(E, CoTree::map(E, t, f), CoTree::map(E, u, f))
+{
+    Lag::bind_up(E, t, u, λ r => CRet(f(r)), λ r => CRet(f(r)), l, λ r => LRet(0, f(r), refl, refl))
+}
+
+// Loops over bodies each behind the other's, from passes one behind the
+// other, as [`Eutt::iter_from_cong`].
+fn Lag::iter_from_cong<A, B>(E: Events, body1: A → CoTree<Step<A, B>>(E), body2: A → CoTree<Step<A, B>>(E),
+    hb: (a: A) → Lag<Step<A, B>>(E, body1(a), body2(a)), t: CoTree<Step<A, B>>(E), u: CoTree<Step<A, B>>(E),
+    l: Lag<Step<A, B>>(E, t, u)) → Lag<B>(E, CoTree::iter_from(E, body1, t), CoTree::iter_from(E, body2, u))
+{
+    match l {
+        LRet(nr, x, ht, hu) => {
+            let w2: AfterIs<B>(E, CoTree::iter_from(E, body2, u), Obs::iter(E, body2, ORet(x))) =
+                CoTree::iter_after(E, body2, ORet(x), nr, u, hu);
+            match hx: x {
+                Continue(a2) => LTau(w2.m, CoTree::iter_from(E, body1, body1(a2)), CoTree::iter_from(E, body2, body2(a2)),
+                    j(hx, λ y q => CoTree::obs(E, CoTree::iter_from(E, body1, t)) = Obs::iter(E, body1, ORet(y)),
+                        CoTree::iter_at(E, body1, t, ORet(x), ht)),
+                    j(hx, λ y q => CoTree::after(E, w2.m, CoTree::iter_from(E, body2, u)) = Obs::iter(E, body2, ORet(y)), w2.at),
+                    Lag::iter_from_cong(E, body1, body2, hb, body1(a2), body2(a2), hb(a2))),
+                Break(b) => LRet(w2.m, b,
+                    j(hx, λ y q => CoTree::obs(E, CoTree::iter_from(E, body1, t)) = Obs::iter(E, body1, ORet(y)),
+                        CoTree::iter_at(E, body1, t, ORet(x), ht)),
+                    j(hx, λ y q => CoTree::after(E, w2.m, CoTree::iter_from(E, body2, u)) = Obs::iter(E, body2, ORet(y)), w2.at)),
+            }
+        },
+        LTau(nr, t2, u2, ht, hu, n) => {
+            let w2: AfterIs<B>(E, CoTree::iter_from(E, body2, u), Obs::iter(E, body2, OTau(u2))) =
+                CoTree::iter_after(E, body2, OTau(u2), nr, u, hu);
+            LTau(w2.m, CoTree::iter_from(E, body1, t2), CoTree::iter_from(E, body2, u2), CoTree::iter_at(E, body1, t, OTau(t2), ht), w2.at,
+                Lag::iter_from_cong(E, body1, body2, hb, t2, u2, n))
+        },
+        LVis(nr, c, k1, k2, ht, hu, n) => {
+            let w2: AfterIs<B>(E, CoTree::iter_from(E, body2, u), Obs::iter(E, body2, OVis(c, k2))) =
+                CoTree::iter_after(E, body2, OVis(c, k2), nr, u, hu);
+            LVis(w2.m, c, λ a => CoTree::iter_from(E, body1, k1(a)), λ a => CoTree::iter_from(E, body2, k2(a)),
+                CoTree::iter_at(E, body1, t, OVis(c, k1), ht), w2.at,
+                λ a => Lag::iter_from_cong(E, body1, body2, hb, k1(a), k2(a), n(a)))
+        },
+    }
+}
+
+fn Lag::iter_cong<A, B>(E: Events, body1: A → CoTree<Step<A, B>>(E), body2: A → CoTree<Step<A, B>>(E),
+    hb: (a: A) → Lag<Step<A, B>>(E, body1(a), body2(a)), a: A) → Lag<B>(E, CoTree::iter(E, body1, a), CoTree::iter(E, body2, a))
+{
+    Lag::iter_from_cong(E, body1, body2, hb, body1(a), body2(a), hb(a))
+}
+
+// ---------------------------------------------------------------------------
+// Depths
+
+// Dropping silent steps only raises what a depth reaches: a trace of `u` cut
+// at `n` is one of what `u` observes after drops, cut at `n` too.
+theorem CoTree::approx_after<R>(E: Events, k: Nat, o: Obs<R>(E), n: Nat, tr: Trace<R>(E)):
+    (u: CoTree<R>(E)) → CoTree::after(E, k, u) = o → IsTrace(E, CoTree::approx(E, n, u), tr) → IsTrace(E, CoTree::approx_obs(E, n, o), tr)
+{
+    match k {
+        Zero => λ u (h: CoTree::obs(E, u) = o) it => j(h, λ y q => IsTrace(E, CoTree::approx_obs(E, n, y), tr), it),
+        Succ(k2) => λ u => match h0: CoTree::obs(E, u) {
+            ORet(r) => λ h it => j(prelude::trans(h0, h), λ y q => IsTrace(E, CoTree::approx_obs(E, n, y), tr),
+                j(h0, λ y q => IsTrace(E, CoTree::approx_obs(E, n, y), tr), it)),
+            OTau(s) => λ h it => match n as λ m => IsTrace(E, CoTree::approx_obs(E, m, OTau(s)), tr) → IsTrace(E, CoTree::approx_obs(E, m, o), tr) {
+                Zero => λ (c: CutTrace<R>(E, tr)) => j(prelude::sym(CutTrace::ended(E, tr, c)), λ y q => IsTrace(E, CoTree::approx_obs(E, Zero, o), y),
+                    IsTrace::nil(E, CoTree::approx_obs(E, Zero, o))),
+                Succ(m) => λ (it2: IsTrace(E, CoTree::approx(E, m, s), tr)) =>
+                    CoTree::approx_after(E, k2, o, m + 1, tr, s, h,
+                        IsTrace::of_below(E, CoTree::approx(E, m, s), CoTree::approx(E, m + 1, s), tr, CoTree::approx_grows(E, s, m), it2)),
+            }(j(h0, λ y q => IsTrace(E, CoTree::approx_obs(E, n, y), tr), it)),
+            OVis(c, kv) => λ h it => j(prelude::trans(h0, h), λ y q => IsTrace(E, CoTree::approx_obs(E, n, y), tr),
+                j(h0, λ y q => IsTrace(E, CoTree::approx_obs(E, n, y), tr), it)),
+        },
+    }
+}
+
+// What the tree behind produces cut at depth `n`, the tree ahead produces
+// cut at the same depth. By induction on the depth.
+theorem Lag::traces<R>(E: Events, n: Nat): (t: CoTree<R>(E)) → (u: CoTree<R>(E)) → Lag<R>(E, t, u) → (tr: Trace<R>(E)) →
+    IsTrace(E, CoTree::approx(E, n, u), tr) → IsTrace(E, CoTree::approx(E, n, t), tr)
+{
+    match n {
+        Zero => λ t u l tr it => it,
+        Succ(m) => λ t u l tr it => match l {
+            LRet(nr, r, ht, hu) => j(prelude::sym(ht), λ y q => IsTrace(E, CoTree::approx_obs(E, m + 1, y), tr),
+                CoTree::approx_after(E, nr, ORet(r), m + 1, tr, u, hu, it)),
+            LTau(nr, t2, u2, ht, hu, nx) => j(prelude::sym(ht), λ y q => IsTrace(E, CoTree::approx_obs(E, m + 1, y), tr),
+                Lag::traces(E, m, t2, u2, nx, tr, CoTree::approx_after(E, nr, OTau(u2), m + 1, tr, u, hu, it))),
+            LVis(nr, c, k1, k2, ht, hu, nx) => j(prelude::sym(ht), λ y q => IsTrace(E, CoTree::approx_obs(E, m + 1, y), tr),
+                VisTrace::map(E, c, tr, λ a rest => IsTrace(E, CoTree::approx(E, m, k2(a)), rest),
+                    λ a rest => IsTrace(E, CoTree::approx(E, m, k1(a)), rest),
+                    λ a rest sub => Lag::traces(E, m, k1(a), k2(a), nx(a), rest, sub),
+                    CoTree::approx_after(E, nr, OVis(c, k2), m + 1, tr, u, hu, it))),
+        },
+    }
+}

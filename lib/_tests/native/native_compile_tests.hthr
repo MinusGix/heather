@@ -7,6 +7,7 @@ import native_source;
 import native_cat;
 import native_compile;
 import native_compile_correct;
+import native_compile_facts;
 import native_alloc;
 import function_ir;
 import function_ir_eval;
@@ -285,27 +286,26 @@ fn sum_body() → Stmt {
 }
 fn sum() → Procedure { Procedure(params := [1], results := [2], body := sum_body()) }
 
-// The sum of 0..n by one call from `main`, with `room` bytes of stack
-// below `main`'s frame: the sum of 0..20 nests 21 calls of `sum`, each
-// taking its level (`Frame::level`, under the homes `write-elf` compiles
-// with), and `sum` reaches itself, so each checks at its entry that its own
-// level and a return address are left. A level short, the innermost call
-// is refused and the program exits 139 (`call_depth_status`). `summing`'s
-// deeper sum nests four calls.
-fn summing_to(n, room: Nat) → Source {
+// The sum of 0..n by one call from `main`, with room for `levels` nested
+// calls of `sum`, which reaches itself and so checks at its entry: the
+// compiler works out the bytes from the frames it picks (`Source::left`,
+// a level being `sum`'s level under them, as `sum`'s body takes nothing
+// below its frame but its own checked calls). The sum of 0..20 nests 21
+// calls; with room for 20 the innermost call is refused and the program
+// exits 139 (`call_depth_status`). `summing`'s deeper sum nests four
+// calls.
+fn summing_to(n, levels: Nat) → Source {
     Source(functions := [], buffers := [], words := 10,
-        main := Then(ops([Const(64, 0, n)]), Then(Perform(0, [0], [7]), Exit(7))), procedures := [sum()], room := room)
+        main := Then(ops([Const(64, 0, n)]), Then(Perform(0, [0], [7]), Exit(7))), procedures := [sum()], levels := levels)
 }
-fn Source::cost(self src: Source, p: Nat) → Nat { src.charges(src.homes(), src.bodies()).cost(p) }
-fn sum_level() → Nat { summing_to(20, 0).cost(0) }
 fn summing() → Source {
     Source(functions := [], buffers := [], words := 10,
         main := Then(ops([Const(64, 0, 2)]), Then(Perform(0, [0], [7]),
             Then(ops([Const(64, 0, 3)]), Then(Perform(0, [0], [8]), Then(ops([Add(64, 9, 7, 8)]), Exit(9)))))),
-        procedures := [sum()], room := 4 * sum_level() + 8)
+        procedures := [sum()], levels := 4)
 }
-fn summing_twenty() → Source { summing_to(20, 21 * sum_level() + 8) }
-fn summing_shallow() → Source { summing_to(20, 20 * sum_level() + 8) }
+fn summing_twenty() → Source { summing_to(20, 21) }
+fn summing_shallow() → Source { summing_to(20, 20) }
 // The compiled program's meaning at fuel `n` (`Source::bounded`, charged
 // as `Source::charges` says), under the homes `write-elf` compiles with.
 fn compiled_next(src: Source, n: Nat) → Next<BitVec(64)>(Events::linux()) {
@@ -314,6 +314,29 @@ fn compiled_next(src: Source, n: Nat) → Next<BitVec(64)>(Events::linux()) {
 theorem summing_exits(): compiled_next(summing(), 8) = Exits(BitVec::ofNat(9)) { refl }
 theorem summing_twenty_exits(): compiled_next(summing_twenty(), 24) = Exits(BitVec::ofNat(210)) { refl }
 theorem summing_shallow_exits(): compiled_next(summing_shallow(), 24) = Exits(call_depth_status()) { refl }
+
+// A level is the most a checked procedure takes: here `sum`'s level, 40
+// bytes under the homes `write-elf` compiles with, so the bytes below
+// `main`'s frame are its call's return address and 21 levels, 8 + 21 * 40:
+// the levels' exact bytes, as one procedure recurses.
+fn Source::cost(self src: Source, p: Nat) → Nat { src.charges(src.homes(), src.bodies()).cost(p) }
+theorem summing_twenty_level(): summing_twenty().cost(0) = 40 { refl }
+theorem summing_twenty_left(): summing_twenty().left(summing_twenty().homes(), summing_twenty().bodies()) = 848 { refl }
+
+// The source within the levels (`Source::within`): within 21, the sum of
+// 0..20 is the source's; within 20 its innermost call claims nothing. The
+// ranks hold of the source, so the charges fit the levels and every run
+// within them is the compiled program's, never refused
+// (`Source::compiled_levels`).
+fn checked_by(src: Source) → Nat → Bool { λ p => src.checked(p) }
+theorem summing_within(): ITree::next(Events::linux(), summing_twenty().within_tree([], checked_by(summing_twenty()), 21, 24)) = Exits(BitVec::ofNat(210)) { refl }
+theorem summing_past_within(): ITree::next(Events::linux(), summing_shallow().within_tree([], checked_by(summing_shallow()), 20, 24)) = Stops { refl }
+theorem summing_ranked(): summing_twenty().ranked() = True { refl }
+theorem summing_twenty_levels(): summing_twenty().charges(summing_twenty().homes(), summing_twenty().bodies()).Levels(summing_twenty(),
+    checked_by(summing_twenty()), λ p => summing_twenty().body_below(summing_twenty().homes(), summing_twenty().bodies(), p),
+    summing_twenty().per_level(summing_twenty().homes(), summing_twenty().bodies()), summing_twenty().main_below(summing_twenty().homes(), summing_twenty().bodies())) {
+    summing_twenty().charges_levels(summing_twenty().homes(), summing_twenty().bodies(), summing_ranked())
+}
 
 // How many items of the program are named `name`, and how many call label
 // `label`.
@@ -379,18 +402,17 @@ fn alternate_body(other: Nat, twice: Bool) → Stmt {
                     False => ops([Add(64, 2, 6, 1)]),
                 }))))
 }
-fn alternating_to(n, room: Nat) → Source {
+fn alternating_to(n, levels: Nat) → Source {
     Source(functions := [], buffers := [], words := 10,
         main := Then(ops([Const(64, 0, n)]), Then(Perform(0, [0], [7]), Exit(7))),
         procedures := [
             Procedure(params := [1], results := [2], body := alternate_body(1, False)),
             Procedure(params := [1], results := [2], body := alternate_body(0, True)),
-        ], room := room)
+        ], levels := levels)
 }
-// a(5) calls a, b, a, b, a and b: three levels of each, and the last
-// call's check.
-fn alternating() → Source { alternating_to(5, 3 * alternating_to(5, 0).cost(0) + 3 * alternating_to(5, 0).cost(1) + 8) }
-fn alternating_shallow() → Source { alternating_to(5, 3 * alternating_to(5, 0).cost(0) + 2 * alternating_to(5, 0).cost(1) + 8) }
+// a(5) calls a, b, a, b, a and b: six levels of checked calls.
+fn alternating() → Source { alternating_to(5, 6) }
+fn alternating_shallow() → Source { alternating_to(5, 5) }
 theorem alternating_compiles(): refused(alternating()) = [] { refl }
 theorem alternating_allocated(): alternating().allocation_ok(alternating().homes()) = True { refl }
 theorem alternating_homed(): alternating().refusal(low(), alternating().homes(), alternating().bodies()) = [] { refl }
@@ -400,6 +422,7 @@ theorem alternating_exits(): ITree::next(Events::linux(), alternating().tree([],
 theorem alternating_compiled_exits(): compiled_next(alternating(), 8) = Exits(BitVec::ofNat(23)) { refl }
 // Both procedures reach themselves through the other, so both check.
 theorem alternating_checks(): alternating().procedures.checks() = [True, True] { refl }
+theorem alternating_ranked(): alternating().ranked() = True { refl }
 // The source with any room exits 23; the compiled program a level short
 // refuses the sixth call.
 theorem alternating_shallow_source_exits(): ITree::next(Events::linux(), alternating_shallow().tree([], 8)) = Exits(BitVec::ofNat(23)) { refl }
@@ -479,28 +502,29 @@ fn view_program_read() → Source { view_source(False) }
 // The stack a program needs (`Source::need`)
 
 fn need_slotted(src: Source) → Nat { src.need(Homes::slots(src), SpillAll().frames(src)) }
-// `main`'s frame, then the room the source asks for: five levels of `sum`,
-// and the word the last check leaves.
-theorem summing_need(): need_slotted(summing_to(20, 5 * 112 + 8)) = 80 + 5 * 112 + 8 { refl }
-// With no room, the return address of `main`'s call: a recursive callee
+// `main`'s frame, the return address of `main`'s call, then the room the
+// source asks for: five levels of `sum`.
+theorem summing_need(): need_slotted(summing_to(20, 5)) = 88 + 5 * 112 { refl }
+// With no levels, the return address of `main`'s call: a recursive callee
 // checks at its entry, so nothing more is asked below `main`.
-theorem summing_need_no_room(): need_slotted(summing_to(20, 0)) = 88 { refl }
+theorem summing_need_no_levels(): need_slotted(summing_to(20, 0)) = 88 { refl }
 
 // The bound follows the calls a body makes: `main` performs only
 // `double`, which performs nothing and so does not check, so the program
-// needs one level of `double` whatever room is asked below it, and never a
-// level of `sum`, which nothing reaches.
+// needs one level of `double` whatever levels are asked below it, as
+// nothing checks, and never a level of `sum`, which nothing reaches.
 fn double() → Procedure { Procedure(params := [1], results := [2], body := ops([Add(64, 2, 1, 1)])) }
-fn doubling(room: Nat) → Source {
+fn doubling(levels: Nat) → Source {
     Source(functions := [], buffers := [], words := 10,
-        main := Then(ops([Const(64, 0, 2)]), Then(Perform(0, [0], [7]), Exit(7))), procedures := [double(), sum()], room := room)
+        main := Then(ops([Const(64, 0, 2)]), Then(Perform(0, [0], [7]), Exit(7))), procedures := [double(), sum()], levels := levels)
 }
 theorem doubling_compiles(): refused(doubling(0)) = [] { refl }
 theorem doubling_performs(): doubling(0).main.performed() = [0] { refl }
 // Here `sum`'s call of procedure 0 is `double`: nothing reaches itself.
 theorem doubling_checks(): doubling(0).procedures.checks() = [False, False] { refl }
+theorem doubling_ranked(): doubling(0).ranked() = True { refl }
 theorem doubling_need(): need_slotted(doubling(0)) = 88 + SpillAll().frames(doubling(0)).frame(0).level([]) { refl }
-theorem doubling_need_small_room(): need_slotted(doubling(0)) = need_slotted(doubling(16)) { refl }
+theorem doubling_need_any_levels(): need_slotted(doubling(0)) = need_slotted(doubling(16)) { refl }
 
 // A call of a procedure the running body's layout does not list is
 // refused; a listed one fits where its callee checks, or ranks below the
