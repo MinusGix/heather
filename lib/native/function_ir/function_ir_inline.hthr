@@ -737,7 +737,7 @@ record Inlines { bound: Nat, sites: Sites }
 fn inline_function(callees: List<Function>, function: Function, plan: Inlines) → Option<Function> {
     (ids_under(Cons(function.result, function.parameters), plan.bound) && function.body.under(plan.bound)).then(
         inline_region(callees, function.body, plan.bound, plan.sites).and_then(λ r =>
-            Some(Function(function.parameters, r.region, function.result, function.lent))))
+            Some(Function(function.parameters, r.region, function.result, lent := function.lent, also := function.also))))
 }
 
 theorem inline_function_sound(callees: List<Function>, function: Function, plan: Inlines, new: Function,
@@ -745,17 +745,17 @@ theorem inline_function_sound(callees: List<Function>, function: Function, plan:
     λ arguments result before after ran => {
         let ok = Bool::then_some(ids_under(Cons(function.result, function.parameters), plan.bound) && function.body.under(plan.bound),
             inline_region(callees, function.body, plan.bound, plan.sites).and_then(λ r =>
-                Some(Function(function.parameters, r.region, function.result, function.lent))), new, made);
+                Some(Function(function.parameters, r.region, function.result, lent := function.lent, also := function.also))), new, made);
         let checks = Bool::and_true_parts(ids_under(Cons(function.result, function.parameters), plan.bound), function.body.under(plan.bound), ok.left);
         let got = Option::and_then_some(inline_region(callees, function.body, plan.bound, plan.sites),
-            λ (r: Inlined) => Some(Function(function.parameters, r.region, function.result, function.lent)), new, ok.right);
+            λ (r: Inlined) => Some(Function(function.parameters, r.region, function.result, lent := function.lent, also := function.also)), new, ok.right);
         let r = got.witness;
         let sound = inline_region_sound(callees, function.body, plan.bound, plan.sites, r, got.proof.left, checks.right);
         let values = ran.witness;
         let k = sound.right.right(values, before, after, ran.proof.right.left);
         let other = k.witness;
         let ids = ids_under_mem(plan.bound, Cons(function.result, function.parameters), checks.left);
-        j(Option::some_inj(Function(function.parameters, r.region, function.result, function.lent), new, got.proof.right),
+        j(Option::some_inj(Function(function.parameters, r.region, function.result, lent := function.lent, also := function.also), new, got.proof.right),
             λ g _ => g.Runs(program_effects(callees), arguments, result, before, after),
             Exists(other, ⟨trans(words_agree(function.parameters, values, other, λ id m => k.proof.left(id, ids(id, Inr(m)), 64)), ran.proof.left),
                 ⟨k.proof.right, trans(k.proof.left(function.result, ids(function.result, Inl(refl)), 64), ran.proof.right.right)⟩⟩))

@@ -1988,7 +1988,7 @@ fn Fun::entered(nodes: List<Node>, c: Lowered) → Lowered {
 }
 
 fn Fun::code_of(self f: Fun, e: Entry, c: Lowered) → Function {
-    Function(Fun::param_ids(f.params, 0), f.result.widen(Fun::entered(e.nodes, c)).region, f.result.widen(Fun::entered(e.nodes, c)).result, f.lent)
+    Function(Fun::param_ids(f.params, 0), f.result.widen(Fun::entered(e.nodes, c)).region, f.result.widen(Fun::entered(e.nodes, c)).result, lent := f.lent)
 }
 
 fn Fun::lower_typed(self f: Fun, w: World, c: Lowered) → Option<Function> {

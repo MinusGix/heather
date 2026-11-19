@@ -5820,23 +5820,44 @@ theorem prologue_moves<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(),
 
 // The result moved into RAX, memory as it was (`keep` is what the body
 // says of it).
+// Where a function's words land: the first in RAX, the one past it in RDX
+// (System V's two-word aggregate, docs/native/runtime-fn-setups-design.md
+// §16.16). A function with no word past the first leaves RDX as it is.
+fn result_registers() → List<Gpr> { [Rax, Rdx] }
+fn Function::outs(self function: Function) → List<Port> { Cons(Port(id := function.result, width := 64), word_ports(function.also)) }
+
+// What a function's caller finds: `answer` in RAX and `rest` in RDX.
+fn Answered(answer: BitVec(64), rest: List<BitVec(64)>, gprs: Gprs) → Type { (read_gpr(Rax, gprs) = answer) ∧ ArgsIn(rest, [Rdx], gprs) }
+
+theorem rdx_kept(words: List<BitVec(64)>, g, h: Gprs, same: read_gpr(Rdx, h) = read_gpr(Rdx, g)): ArgsIn(words, [Rdx], g) → ArgsIn(words, [Rdx], h) {
+    match words {
+        Nil => λ _ => trivial,
+        Cons(word, rest) => match rest {
+            Nil => λ held => ⟨trans(same, held.left), trivial⟩,
+            Cons(_, _) => λ held => false_elim(held.right),
+        },
+    }
+}
+
 theorem result_moves<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
-    values: Valuation(), keep: M → Type, s1: MachineState<M>, prog: Prog, file: File, result: Nat, moves: Lowered,
-    keeps: Keeps<M>(values, file, True, moves), placed: moves.file.outputs_check([Port(id := result, width := 64)], [Rax]).IsTrue(),
+    values: Valuation(), keep: M → Type, s1: MachineState<M>, prog: Prog, file: File, result: Nat, rest: List<Nat>, moves: Lowered,
+    keeps: Keeps<M>(values, file, True, moves),
+    placed: moves.file.outputs_check(Cons(Port(id := result, width := 64), word_ports(rest)), result_registers()).IsTrue(),
     leaves: leaves_all(moves.code, body_kept(saves)).IsTrue(), k: Nat, at: asm_back(site.program, k) = At(prog, 0, Block(moves.code))):
     site.Moves(stack.writes, prog_len(prog), prog_len(prog) + block_length(moves.code),
         λ (s: MachineState<M>) => file.Represents(values, s.gprs) ∧ (Kept(body_kept(saves), s1.gprs, s.gprs) ∧ keep(s.memory)),
-        λ (t: MachineState<M>) => (read_gpr(Rax, t.gprs) = values(64, result)) ∧ (Kept(body_kept(saves), s1.gprs, t.gprs) ∧ keep(t.memory))) {
+        λ (t: MachineState<M>) => Answered(values(64, result), words_of(values, rest), t.gprs) ∧ (Kept(body_kept(saves), s1.gprs, t.gprs) ∧ keep(t.memory))) {
     let pre = λ (g: Gprs) (m: M) => file.Represents(values, g) ∧ (Kept(body_kept(saves), s1.gprs, g) ∧ keep(m));
-    let post = λ (g: Gprs) (m: M) => (read_gpr(Rax, g) = values(64, result)) ∧ (Kept(body_kept(saves), s1.gprs, g) ∧ keep(m));
+    let post = λ (g: Gprs) (m: M) => Answered(values(64, result), words_of(values, rest), g) ∧ (Kept(body_kept(saves), s1.gprs, g) ∧ keep(m));
     site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length(moves.code), pre, post,
         λ memory => site.runs_block(site.program.laid_out_fits(laid), k, prog, 0, moves.code, at,
             site.program.block_reads_at(laid, k, prog, 0, moves.code, at),
             λ (g: Gprs) => pre(g, memory), λ (g: Gprs) => post(g, memory),
             λ x held => {
                 let y = execute_block_normal(moves.code, x);
-                ⟨sym(outputs_check_sound(values, moves.file, y.gprs, keeps(x, held.left, trivial),
-                    [Port(id := result, width := 64)], [Rax], placed).left),
+                let sound = outputs_check_sound(values, moves.file, y.gprs, keeps(x, held.left, trivial),
+                    Cons(Port(id := result, width := 64), word_ports(rest)), result_registers(), placed);
+                ⟨⟨sym(sound.left), ports_args(values, rest, [Rdx], y.gprs, sound.right)⟩,
                  ⟨kept_trans(body_kept(saves), s1.gprs, x.gprs, y.gprs, held.right.left,
                     execute_block_kept<M>(moves.code, x, body_kept(saves), leaves)), held.right.right⟩⟩
             }))
@@ -5907,6 +5928,26 @@ theorem saves_fit(slots, saves, d, size: Nat, few: slots <= 8, fits: d + frame_s
 
 theorem save_slot_inside(slots, saves, d, i: Nat, high: i + 8 <= d + 8 * (slots + function_saves(saves).len())): i + 8 <= d + frame_size(slots, saves) {
     high
+}
+
+// RDX is no register a function saves, so reloading the saves leaves it.
+theorem saves_restored_rdx(saves: Nat, saved, gprs: Gprs): read_gpr(Rdx, restore(function_saves(saves), saved, gprs)) = read_gpr(Rdx, gprs) {
+    match saves {
+        Zero => refl,
+        Succ(a) => match a {
+            Zero => refl,
+            Succ(b) => match b {
+                Zero => refl,
+                Succ(c) => match c {
+                    Zero => refl,
+                    Succ(e) => match e {
+                        Zero => refl,
+                        Succ(f) => match f { Zero => refl, Succ(_) => refl },
+                    },
+                },
+            },
+        },
+    }
 }
 
 theorem saves_restored(saves: Nat, saved, gprs: Gprs):
@@ -6074,8 +6115,8 @@ fn Function::homes(self function: Function) → List<Lent> { lent_homes(function
 // registers as it was entered, the stack pointer back at its return
 // address, and what it did to memory over the file its body leaves.
 fn Stack::Closed<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), lending: Lending, e: Nat,
-    s0: MachineState<M>, after: Buffers(), answer: BitVec(64), t: MachineState<M>) → Type {
-    (read_gpr(Rax, t.gprs) = answer) ∧ (Kept(callee_kept(), s0.gprs, t.gprs) ∧
+    s0: MachineState<M>, after: Buffers(), answer: BitVec(64), rest: List<BitVec(64)>, t: MachineState<M>) → Type {
+    Answered(answer, rest, t.gprs) ∧ (Kept(callee_kept(), s0.gprs, t.gprs) ∧
         ((read_gpr(Rsp, t.gprs) = stack.at(e)) ∧ stack.Entered(lending, e, s0.memory, after, t.memory)))
 }
 
@@ -6092,13 +6133,13 @@ theorem function_closes<M>(slots, saves: Nat, few: slots <= 8, site: Site<M>, la
     lending: Lending, loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), inner: Prog, code: List<Instruction>,
     within: function_closed(inner, code, slots, saves).Within(site.program), s0: MachineState<M>, d: Nat,
     rsp: read_gpr(Rsp, s0.gprs) = stack.at(d + frame_size(slots, saves)), fits: d + frame_size(slots, saves) <= stack.size,
-    under: (d + frame_size(slots, saves)) + 8 <= top, before, after: Buffers(), answer: BitVec(64), x1, x2: MachineState<M>,
+    under: (d + frame_size(slots, saves)) + 8 <= top, before, after: Buffers(), answer: BitVec(64), rest: List<BitVec(64)>, x1, x2: MachineState<M>,
     at1: (x1.gprs = stack.opened(d, frame_size(slots, saves), s0).gprs) ∧ (stack.Entered(lending, d + frame_size(slots, saves), s0.memory, before, x1.memory) ∧
         stack.Saved(d, function_saves(saves), slots, stack.opened(d, frame_size(slots, saves), s0).gprs, x1.memory)),
     here: x2.rip = next_rip(site.origin, prog_len(At(inner, 0, Block(code)))), resident: site.Resident(x2.memory),
-    at2: (read_gpr(Rax, x2.gprs) = answer) ∧ stack.Trailed(saves, lending, d + 8 * slots, x1, after, x2)):
+    at2: Answered(answer, rest, x2.gprs) ∧ stack.Trailed(saves, lending, d + 8 * slots, x1, after, x2)):
     site.Arrives(stack.writes, x2, prog_len(function_closed(inner, code, slots, saves)),
-        λ (t: MachineState<M>) => stack.Closed(lending, d + frame_size(slots, saves), s0, after, answer, t)) {
+        λ (t: MachineState<M>) => stack.Closed(lending, d + frame_size(slots, saves), s0, after, answer, rest, t)) {
     let g1 = stack.opened(d, frame_size(slots, saves), s0).gprs;
     let spans = lending.spans();
     let returned = At(inner, 0, Block(code));
@@ -6137,9 +6178,12 @@ theorem function_closes<M>(slots, saves: Nat, few: slots <= 8, site: Site<M>, la
         j(at1.left, λ g _ => Kept(kept_order().drop(saves), g, x2.gprs), at2.right.left.right);
     let kept: Kept(callee_kept(), s0.gprs, last) = kept_trans(callee_kept(), s0.gprs, g1, last, moved_rsp_kept(frame_size(slots, saves), stack.at(d), s0.gprs),
         kept_trans(callee_kept(), g1, back, last, loaded.right.right(kept_body), moved_rsp_kept(frame_size(slots, saves), stack.at(d + frame_size(slots, saves)), back)));
-    let rax: (read_gpr(Rax, last) = answer) = trans(moved_rsp_spares(frame_size(slots, saves), Rax, stack.at(d + frame_size(slots, saves)), back, trivial), trans(loaded.right.left, at2.left));
-    let closed_at: stack.Closed(lending, d + frame_size(slots, saves), s0, after, answer, t) =
-        ⟨j(sym(at3.left), λ g _ => read_gpr(Rax, g) = answer, rax),
+    let rax: (read_gpr(Rax, last) = answer) = trans(moved_rsp_spares(frame_size(slots, saves), Rax, stack.at(d + frame_size(slots, saves)), back, trivial), trans(loaded.right.left, at2.left.left));
+    let rdx: ArgsIn(rest, [Rdx], last) = rdx_kept(rest, x2.gprs, last,
+        trans(moved_rsp_spares(frame_size(slots, saves), Rdx, stack.at(d + frame_size(slots, saves)), back, trivial), saves_restored_rdx(saves, g1, x2.gprs)),
+        at2.left.right);
+    let closed_at: stack.Closed(lending, d + frame_size(slots, saves), s0, after, answer, rest, t) =
+        ⟨j(sym(at3.left), λ g _ => Answered(answer, rest, g), ⟨rax, rdx⟩),
          ⟨j(sym(at3.left), λ g _ => Kept(callee_kept(), s0.gprs, g), kept),
           ⟨j(sym(at3.left), λ g _ => read_gpr(Rsp, g) = stack.at(d + frame_size(slots, saves)),
               moved_rsp_reads(frame_size(slots, saves), stack.at(d + frame_size(slots, saves)), stack.at(d), back, trans(loaded.left, rsp_x2),
@@ -6155,7 +6199,7 @@ theorem function_runs_saved<M>(slots, saves: Nat, short: List<Nat>, few: slots <
     avail: Nat, shallow: function.body.Fits(rooms, k, avail),
     emitted: function.body.emit_calls(saves, slots, short, function_opened(prog, k, function.loads(), slots, saves), file, placement, names, k, lending.counts, function.homes()) = Some(body),
     moves: Lowered, keeps: (values: Valuation()) → Keeps<M>(values, body.file, True, moves),
-    placed: moves.file.outputs_check([Port(id := function.result, width := 64)], [Rax]).IsTrue(),
+    placed: moves.file.outputs_check(function.outs(), result_registers()).IsTrue(),
     leaves: leaves_all(moves.code, body_kept(saves)).IsTrue(),
     within: function_closed(body.prog, moves.code, slots, saves).Within(site.program),
     values: Valuation(), s0: MachineState<M>, d: Nat, rsp: read_gpr(Rsp, s0.gprs) = stack.at(d + frame_size(slots, saves)),
@@ -6167,7 +6211,7 @@ theorem function_runs_saved<M>(slots, saves: Nat, short: List<Nat>, few: slots <
     at1: (x1.gprs = stack.opened(d, frame_size(slots, saves), s0).gprs) ∧ (stack.Entered(lending, d + frame_size(slots, saves), s0.memory, before, x1.memory) ∧
         stack.Saved(d, function_saves(saves), slots, stack.opened(d, frame_size(slots, saves), s0).gprs, x1.memory))):
     site.Arrives(stack.writes, x1, prog_len(function_closed(body.prog, moves.code, slots, saves)),
-        λ (t: MachineState<M>) => stack.Closed(lending, d + frame_size(slots, saves), s0, after, values(64, function.result), t)) {
+        λ (t: MachineState<M>) => stack.Closed(lending, d + frame_size(slots, saves), s0, after, values(64, function.result), words_of(values, function.also), t)) {
     let spans = lending.spans();
     let opened = function_opened(prog, k, function.loads(), slots, saves);
     let returned = At(body.prog, 0, Block(moves.code));
@@ -6195,14 +6239,15 @@ theorem function_runs_saved<M>(slots, saves: Nat, short: List<Nat>, few: slots <
     let second = site.moves_trans(stack.writes, prog_len(opened), prog_len(body.prog), prog_len(returned),
         λ (x: MachineState<M>) => (file.Represents(values, x.gprs) ∧ facts) ∧ stack.Trailed(saves, lending, d + 8 * slots, x1, before, x),
         λ (t: MachineState<M>) => body.file.Represents(values, t.gprs) ∧ stack.Trailed(saves, lending, d + 8 * slots, x1, after, t),
-        λ (t: MachineState<M>) => (read_gpr(Rax, t.gprs) = answer) ∧ stack.Trailed(saves, lending, d + 8 * slots, x1, after, t),
+        λ (t: MachineState<M>) => Answered(answer, words_of(values, function.also), t.gprs) ∧ stack.Trailed(saves, lending, d + 8 * slots, x1, after, t),
         body_emits.right(body_in),
-        result_moves<M>(saves, site, laid, stack, values, keep, x1, body.prog, body.file, function.result, moves, keeps(values), placed,
+        result_moves<M>(saves, site, laid, stack, values, keep, x1, body.prog, body.file, function.result, function.also, moves, keeps(values), placed,
             leaves, returned_in.witness, returned_in.proof))(x1, here, resident,
         ⟨⟨j(sym(at1.left), λ g _ => file.Represents(values, g), ready), holds⟩, start⟩);
     site.arrives_after(stack.writes, x1, second.witness, prog_len(closed),
-        λ (t: MachineState<M>) => stack.Closed(lending, d + frame_size(slots, saves), s0, after, answer, t), second.proof.left,
+        λ (t: MachineState<M>) => stack.Closed(lending, d + frame_size(slots, saves), s0, after, answer, words_of(values, function.also), t), second.proof.left,
         function_closes<M>(slots, saves, few, site, laid, stack, top, lending, loan, body.prog, moves.code, within, s0, d, rsp, fits, under, before, after, answer,
+            words_of(values, function.also),
             x1, second.witness, at1, second.proof.right.left, second.proof.right.right.left, second.proof.right.right.right))
 }
 
@@ -6217,7 +6262,7 @@ theorem function_runs<M>(slots, saves: Nat, short: List<Nat>, slotted: slots <= 
     avail: Nat, shallow: function.body.Fits(rooms, k, avail),
     emitted: function.body.emit_calls(saves, slots, short, function_opened(prog, k, function.loads(), slots, saves), file, placement, names, k, lending.counts, function.homes()) = Some(body),
     moves: Lowered, keeps: (values: Valuation()) → Keeps<M>(values, body.file, True, moves),
-    placed: moves.file.outputs_check([Port(id := function.result, width := 64)], [Rax]).IsTrue(),
+    placed: moves.file.outputs_check(function.outs(), result_registers()).IsTrue(),
     leaves: leaves_all(moves.code, body_kept(saves)).IsTrue(),
     entered: (values: Valuation()) → (g: Gprs) → PortsAt(values, word_ports(function.parameters), parameter_registers(), g) →
         file.Represents(values, g),
@@ -6231,7 +6276,7 @@ theorem function_runs<M>(slots, saves: Nat, short: List<Nat>, slotted: slots <= 
         HomesHold(function.homes(), values, lending.addresses, lending.buffers)):
     site.Moves(stack.writes, prog_len(prog), prog_len(function_closed(body.prog, moves.code, slots, saves)),
         λ (x: MachineState<M>) => (x.gprs = s0.gprs) ∧ (x.memory = s0.memory),
-        λ (t: MachineState<M>) => stack.Closed(lending, d + frame_size(slots, saves), s0, after, values(64, function.result), t)) {
+        λ (t: MachineState<M>) => stack.Closed(lending, d + frame_size(slots, saves), s0, after, values(64, function.result), words_of(values, function.also), t)) {
     let ws = words_of(values, function.parameters);
     let label = At(prog, k + 1, Block([]));
     let loaded = function_loaded(prog, k, function.loads());
@@ -6288,7 +6333,7 @@ theorem function_runs<M>(slots, saves: Nat, short: List<Nat>, slotted: slots <= 
     site.moves_trans(stack.writes, prog_len(prog), prog_len(loaded), prog_len(closed),
         λ (x: MachineState<M>) => (x.gprs = s0.gprs) ∧ (x.memory = s0.memory),
         λ (x: MachineState<M>) => (x.gprs = g_loaded) ∧ (x.memory = s0.memory),
-        λ (t: MachineState<M>) => stack.Closed(lending, d + frame_size(slots, saves), s0, after, answer, t),
+        λ (t: MachineState<M>) => stack.Closed(lending, d + frame_size(slots, saves), s0, after, answer, words_of(values, function.also), t),
         first,
         λ s here resident held => {
             let entering = function_enters<M>(slots, saves, slotted, site, laid, stack, top, lending, loan, loaded, s1, d, rsp_s1, fits, under_frame, before,
@@ -6297,9 +6342,9 @@ theorem function_runs<M>(slots, saves: Nat, short: List<Nat>, slotted: slots <= 
                 names, body, allowed, asks, avail, shallow, emitted, moves, keeps, placed, leaves, within, values, s1, d, rsp_s1, room, deep, fits, under, before, after, ready,
                 holds, entering.witness, entering.proof.right.left, entering.proof.right.right.left, entering.proof.right.right.right);
             let t = ran.witness;
-            let done: stack.Closed(lending, d + frame_size(slots, saves), s1, after, answer, t) = ran.proof.right.right.right;
+            let done: stack.Closed(lending, d + frame_size(slots, saves), s1, after, answer, words_of(values, function.also), t) = ran.proof.right.right.right;
             site.arrives_after(stack.writes, s, entering.witness, prog_len(closed),
-                λ (t: MachineState<M>) => stack.Closed(lending, d + frame_size(slots, saves), s0, after, answer, t), entering.proof.left,
+                λ (t: MachineState<M>) => stack.Closed(lending, d + frame_size(slots, saves), s0, after, answer, words_of(values, function.also), t), entering.proof.left,
                 Exists(t, ⟨ran.proof.left, ⟨ran.proof.right.left, ⟨ran.proof.right.right.left,
                     ⟨done.left, ⟨kept_trans(callee_kept(), s0.gprs, g_loaded, t.gprs, kept01, done.right.left), done.right.right⟩⟩⟩⟩⟩))
         })
@@ -6313,6 +6358,39 @@ fn Stack::EnteredOver<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, sel
     Nat → MachineState<M> → Type {
     λ i s => (stack.Passed(words, i, s) ∧ (function.Runs(effects, words, result, before, after) ∧ rooms(k) <= i)) ∧
         stack.LentOver(lending, top, k, words, before)(i, s)
+}
+
+// The same, its words past the first `rest` (`Function::RunsBoth`); and
+// what it then promises: `rest` in RDX as well
+// (docs/native/runtime-fn-setups-design.md §16.16).
+fn Stack::EnteredBoth<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), effects: Effects(),
+    rooms: Nat → Nat, lending: Lending, top: Nat, k: Nat, function: Function, words: List<BitVec(64)>, result: BitVec(64), rest: List<BitVec(64)>,
+    before, after: Buffers()) → Nat → MachineState<M> → Type {
+    λ i s => (stack.Passed(words, i, s) ∧ (function.RunsBoth(effects, words, result, rest, before, after) ∧ rooms(k) <= i)) ∧
+        stack.LentOver(lending, top, k, words, before)(i, s)
+}
+fn Stack::AnsweredBoth<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self stack: Stack<M>(fetch, data), lending: Lending,
+    result: BitVec(64), rest: List<BitVec(64)>, after: Buffers()) → Nat → MachineState<M> → MachineState<M> → Type {
+    λ i s t => stack.AnsweredOver(lending, result, after)(i, s, t) ∧ ArgsIn(rest, [Rdx], t.gprs)
+}
+
+// The contract with one word, from the one with both: entered where the
+// function runs, its words past the first are whatever that run gives.
+theorem Site::returns_first<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), entry: Nat, effects: Effects(), rooms: Nat → Nat,
+    lending: Lending, top: Nat, k: Nat, function: Function, words: List<BitVec(64)>, result: BitVec(64), before, after: Buffers(),
+    both: (rest: List<BitVec(64)>) → site.Returns(stack, entry, stack.EnteredBoth(effects, rooms, lending, top, k, function, words, result, rest, before, after),
+        stack.AnsweredBoth(lending, result, rest, after))):
+    site.Returns(stack, entry, stack.EnteredOver(effects, rooms, lending, top, k, function, words, result, before, after),
+        stack.AnsweredOver(lending, result, after)) {
+    λ s at resident i rsp room held ret saved => {
+        let runs = held.left.right.left;
+        let rest = words_of(runs.witness, function.also);
+        let ran = both(rest)(s, at, resident, i, rsp, room,
+            ⟨⟨held.left.left, ⟨Exists(runs.witness, ⟨runs.proof.left, ⟨runs.proof.right.left, ⟨runs.proof.right.right, refl⟩⟩⟩), held.left.right.right⟩⟩, held.right⟩,
+            ret, saved);
+        Exists(ran.witness, ⟨ran.proof.left, ⟨ran.proof.right.left, ⟨ran.proof.right.right.left,
+            ⟨ran.proof.right.right.right.left, ran.proof.right.right.right.right.left⟩⟩⟩⟩)
+    }
 }
 
 // A function's call slots and frame, as its body asks for them.
@@ -6369,19 +6447,19 @@ theorem function_body<M>(asked, saves: Nat, short: List<Nat>, site: Site<M>, lai
     roomy: function.Roomy(rooms, k, asked, saves),
     emitted: function.body.emit_calls(saves, function.slots(asked), short, function_opened(prog, k, function.loads(), function.slots(asked), saves), file, placement, names, k, lending.counts, function.homes()) = Some(body),
     moves: Lowered, keeps: (values: Valuation()) → Keeps<M>(values, body.file, True, moves),
-    placed: moves.file.outputs_check([Port(id := function.result, width := 64)], [Rax]).IsTrue(),
+    placed: moves.file.outputs_check(function.outs(), result_registers()).IsTrue(),
     leaves: leaves_all(moves.code, body_kept(saves)).IsTrue(),
     entered: (values: Valuation()) → (g: Gprs) → PortsAt(values, word_ports(function.parameters), parameter_registers(), g) →
         file.Represents(values, g),
     few: function.loads() <= 2, count: function.lent = lent_count(lending.counts, k),
     within: function_closed(body.prog, moves.code, function.slots(asked), saves).Within(site.program),
-    words: List<BitVec(64)>, result: BitVec(64), before, after: Buffers(), s0: MachineState<M>, i: Nat, ret: BitVec(64)):
+    words: List<BitVec(64)>, result: BitVec(64), rest: List<BitVec(64)>, before, after: Buffers(), s0: MachineState<M>, i: Nat, ret: BitVec(64)):
     site.Moves(stack.writes, prog_len(prog), prog_len(function_closed(body.prog, moves.code, function.slots(asked), saves)),
         λ (s: MachineState<M>) => (s = s0) ∧ ((read_gpr(Rsp, s0.gprs) = stack.at(i)) ∧ ((i + 8 <= stack.size) ∧
-            (stack.EnteredOver(effects, rooms, lending, top, k, function, words, result, before, after)(i, s0) ∧
+            (stack.EnteredBoth(effects, rooms, lending, top, k, function, words, result, rest, before, after)(i, s0) ∧
              read_word(site.data, s0.memory, stack.at(i)) = Some(ret)))),
         λ (t: MachineState<M>) => (read_gpr(Rsp, t.gprs) = stack.at(i)) ∧ ((read_word(site.data, t.memory, stack.at(i)) = Some(ret)) ∧
-            stack.AnsweredOver(lending, result, after)(i, s0, return_near_after(ret, t)))) {
+            stack.AnsweredBoth(lending, result, rest, after)(i, s0, return_near_after(ret, t)))) {
     λ s here resident held => {
         let pre = held.right.right.right.left;
         let runs = pre.left.right.left;
@@ -6413,7 +6491,7 @@ theorem function_body<M>(asked, saves: Nat, short: List<Nat>, site: Site<M>, lai
         let a = ran(s, here, resident, ⟨cong_fn<MachineState<M>, Gprs>(λ x => x.gprs, held.left),
             cong_fn<MachineState<M>, M>(λ x => x.memory, held.left)⟩);
         let t = a.witness;
-        let done: stack.Closed(lending, d + function.frame(asked, saves), s0, after, values(64, function.result), t) = a.proof.right.right.right;
+        let done: stack.Closed(lending, d + function.frame(asked, saves), s0, after, values(64, function.result), words_of(values, function.also), t) = a.proof.right.right.right;
         let kept: Kept(callee_kept(), s0.gprs, t.gprs) = done.right.left;
         let popped = read_gpr(Rsp, t.gprs).add(BitVec::ofNat(8));
         let trail: stack.Entered(lending, d + function.frame(asked, saves), s0.memory, after, t.memory) = done.right.right.right;
@@ -6423,9 +6501,11 @@ theorem function_body<M>(asked, saves: Nat, short: List<Nat>, site: Site<M>, lai
             ⟨trans(done.right.right.left, at_back),
              ⟨trans(j(back, λ n _ => read_word(site.data, t.memory, stack.at(n)) = read_word(site.data, s0.memory, stack.at(n)),
                     unchanged_top), held.right.right.right.right),
-              ⟨trans(done.left, runs.proof.right.right),
+              ⟨⟨trans(done.left.left, runs.proof.right.right.left),
                ⟨kept_trans(callee_kept(), s0.gprs, t.gprs, write_gpr(Rsp, popped, t.gprs), kept, kept_past_rsp(t.gprs, popped)),
-                ⟨j(back, λ n _ => stack.WroteIn(n, lending.spans(), s0.memory, t.memory), trail.left), trail.right⟩⟩⟩⟩⟩⟩⟩⟩)
+                ⟨j(back, λ n _ => stack.WroteIn(n, lending.spans(), s0.memory, t.memory), trail.left), trail.right⟩⟩⟩,
+               rdx_kept(rest, t.gprs, write_gpr(Rsp, popped, t.gprs), refl,
+                   j(runs.proof.right.right.right, λ ws _ => ArgsIn(ws, [Rdx], t.gprs), done.left.right))⟩⟩⟩⟩⟩⟩)
     }
 }
 
@@ -6440,29 +6520,29 @@ theorem function_returns<M>(asked, saves: Nat, short: List<Nat>, site: Site<M>, 
     roomy: function.Roomy(rooms, k, asked, saves),
     emitted: function.body.emit_calls(saves, function.slots(asked), short, function_opened(prog, k, function.loads(), function.slots(asked), saves), file, placement, names, k, lending.counts, function.homes()) = Some(body),
     moves: Lowered, keeps: (values: Valuation()) → Keeps<M>(values, body.file, True, moves),
-    placed: moves.file.outputs_check([Port(id := function.result, width := 64)], [Rax]).IsTrue(),
+    placed: moves.file.outputs_check(function.outs(), result_registers()).IsTrue(),
     leaves: leaves_all(moves.code, body_kept(saves)).IsTrue(),
     entered: (values: Valuation()) → (g: Gprs) → PortsAt(values, word_ports(function.parameters), parameter_registers(), g) →
         file.Represents(values, g),
     few: function.loads() <= 2, count: function.lent = lent_count(lending.counts, k),
     within: At(function_closed(body.prog, moves.code, function.slots(asked), saves), 0, Ret).Within(site.program),
-    words: List<BitVec(64)>, result: BitVec(64), before, after: Buffers()):
-    site.Returns(stack, prog_len(prog), stack.EnteredOver(effects, rooms, lending, top, k, function, words, result, before, after),
-        stack.AnsweredOver(lending, result, after)) {
+    words: List<BitVec(64)>, result: BitVec(64), rest: List<BitVec(64)>, before, after: Buffers()):
+    site.Returns(stack, prog_len(prog), stack.EnteredBoth(effects, rooms, lending, top, k, function, words, result, rest, before, after),
+        stack.AnsweredBoth(lending, result, rest, after)) {
     let closed = function_closed(body.prog, moves.code, function.slots(asked), saves);
     site.returns_by(stack, site.program.laid_out_fits(laid), prog_len(prog), within.witness, closed, 0, within.proof,
-        stack.EnteredOver(effects, rooms, lending, top, k, function, words, result, before, after), stack.AnsweredOver(lending, result, after),
+        stack.EnteredBoth(effects, rooms, lending, top, k, function, words, result, rest, before, after), stack.AnsweredBoth(lending, result, rest, after),
         λ s0 i ret => function_body<M>(asked, saves, short, site, laid, stack, top, effects, rooms, k, lending, loan, needs, calls, function, prog, file, placement, names,
             body, allowed, asks, roomy, emitted, moves, keeps, placed, leaves, entered, few, count, closed.within_before(0, Ret, site.program, within), words, result,
-            before, after, s0, i, ret))
+            rest, before, after, s0, i, ret))
 }
 
 // The function's code once its body is emitted: the result into RAX,
 // refused where the moves lose it or touch a callee-saved register.
 fn Function::closing(self function: Function, asked, saves: Nat, body: Emitted) → Option<Emitted> {
-    match body.file.move_outputs([Port(id := function.result, width := 64)], [Rax]) {
+    match body.file.move_outputs(function.outs(), result_registers()) {
         None => None,
-        Some(moves) => match moves.file.outputs_check([Port(id := function.result, width := 64)], [Rax]) &&
+        Some(moves) => match moves.file.outputs_check(function.outs(), result_registers()) &&
             leaves_all(moves.code, body_kept(saves)) {
             False => None,
             True => Some(Emitted(At(function_closed(body.prog, moves.code, function.slots(asked), saves), 0, Ret), File::empty(), body.placement, body.names)),
@@ -6549,6 +6629,15 @@ fn Function::emit(self function: Function, prog: Prog, k: Nat, placement: List<P
 
 // What emitting a function proves: the code holds its label, and resident
 // with the functions below `k` meeting their contracts, it meets its own.
+fn MayReturnBoth<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, effects: Effects(), rooms: Nat → Nat, k: Nat, lending: Lending,
+    needs: Nat → Nat → Bool, function: Function, prog: Prog, out: Option<Emitted>) → Type {
+    out.All(λ (emitted: Emitted) => At(prog, k + 1, Block([])).Within(emitted.prog) ∧
+        (emitted.prog.Within(site.program) → site.CallsLent(stack, effects, rooms, k, lending.counts, needs, top) →
+            (words: List<BitVec(64)>) → (result: BitVec(64)) → (rest: List<BitVec(64)>) → (before, after: Buffers()) → site.Returns(stack, prog_len(prog),
+                stack.EnteredBoth(effects, rooms, lending, top, k, function, words, result, rest, before, after),
+                stack.AnsweredBoth(lending, result, rest, after))))
+}
+
 fn MayReturnOver<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, effects: Effects(), rooms: Nat → Nat, k: Nat, lending: Lending,
     needs: Nat → Nat → Bool, function: Function, prog: Prog, out: Option<Emitted>) → Type {
     out.All(λ (emitted: Emitted) => At(prog, k + 1, Block([])).Within(emitted.prog) ∧
@@ -6556,6 +6645,18 @@ fn MayReturnOver<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: 
             (words: List<BitVec(64)>) → (result: BitVec(64)) → (before, after: Buffers()) → site.Returns(stack, prog_len(prog),
                 stack.EnteredOver(effects, rooms, lending, top, k, function, words, result, before, after),
                 stack.AnsweredOver(lending, result, after))))
+}
+
+theorem may_return_first<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, effects: Effects(), rooms: Nat → Nat, k: Nat, lending: Lending,
+    needs: Nat → Nat → Bool, function: Function, prog: Prog): (out: Option<Emitted>) →
+    MayReturnBoth<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, out) →
+    MayReturnOver<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, out) {
+    λ out => match out {
+        None => λ _ => trivial,
+        Some(emitted) => λ both => ⟨both.left, λ within calls words result before after =>
+            site.returns_first(stack, prog_len(prog), effects, rooms, lending, top, k, function, words, result, before, after,
+                λ rest => both.right(within, calls, words, result, rest, before, after))⟩,
+    }
 }
 
 theorem closed_within(body: Prog, moves: List<Instruction>, slots, saves: Nat): body.Within(At(function_closed(body, moves, slots, saves), 0, Ret)) {
@@ -6577,21 +6678,21 @@ theorem Function::closing_returns<M>(self function: Function, asked, saves: Nat,
     grown: At(prog, k + 1, Block([])).Within(body.prog),
     entered: (values: Valuation()) → (g: Gprs) → PortsAt(values, word_ports(function.parameters), parameter_registers(), g) →
         file.Represents(values, g), few: function.loads() <= 2):
-    MayReturnOver<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, function.closing(asked, saves, body)) {
-    let outs: List<Port> = [Port(id := function.result, width := 64)];
-    (match body.file.move_outputs(outs, [Rax]) as λ moved => ((values: Valuation()) → MayKeep<M>(values, body.file, True, moved)) →
-        MayReturnOver<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, match moved {
+    MayReturnBoth<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, function.closing(asked, saves, body)) {
+    let outs: List<Port> = function.outs();
+    (match body.file.move_outputs(outs, result_registers()) as λ moved => ((values: Valuation()) → MayKeep<M>(values, body.file, True, moved)) →
+        MayReturnBoth<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, match moved {
             None => None,
-            Some(moves) => match moves.file.outputs_check(outs, [Rax]) && leaves_all(moves.code, body_kept(saves)) {
+            Some(moves) => match moves.file.outputs_check(outs, result_registers()) && leaves_all(moves.code, body_kept(saves)) {
                 False => None,
                 True => Some(Emitted(At(function_closed(body.prog, moves.code, function.slots(asked), saves), 0, Ret), File::empty(), body.placement, body.names)),
             },
         }) {
         None => λ _ => trivial,
         Some(moves) => λ keeps =>
-            (match moves.file.outputs_check(outs, [Rax]) && leaves_all(moves.code, body_kept(saves)) as λ c =>
-                (c.IsTrue() → moves.file.outputs_check(outs, [Rax]).IsTrue() ∧ leaves_all(moves.code, body_kept(saves)).IsTrue()) →
-                MayReturnOver<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, match c {
+            (match moves.file.outputs_check(outs, result_registers()) && leaves_all(moves.code, body_kept(saves)) as λ c =>
+                (c.IsTrue() → moves.file.outputs_check(outs, result_registers()).IsTrue() ∧ leaves_all(moves.code, body_kept(saves)).IsTrue()) →
+                MayReturnBoth<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, match c {
                     False => None,
                     True => Some(Emitted(At(function_closed(body.prog, moves.code, function.slots(asked), saves), 0, Ret), File::empty(), body.placement, body.names)),
                 }) {
@@ -6600,13 +6701,13 @@ theorem Function::closing_returns<M>(self function: Function, asked, saves: Nat,
                     let checked = parts(trivial);
                     ⟨Prog::within_trans(grown,
                         closed_within(body.prog, moves.code, function.slots(asked), saves)),
-                     λ within calls words result before after => function_returns<M>(asked, saves, short, site, laid, stack, top, effects, rooms, k, lending, loan,
+                     λ within calls words result rest before after => function_returns<M>(asked, saves, short, site, laid, stack, top, effects, rooms, k, lending, loan,
                         needs, calls, function, prog, file, placement, names, body, allowed, asks, roomy, emitted, moves, keeps, checked.left,
                         checked.right, entered, few,
-                        count, within, words, result, before, after)⟩
+                        count, within, words, result, rest, before, after)⟩
                 },
-            })(λ ok => Bool::is_true_and(moves.file.outputs_check(outs, [Rax]), leaves_all(moves.code, body_kept(saves)), ok)),
-    })(λ values => move_outputs_keeps<M>(values, outs, body.file, [Rax]))
+            })(λ ok => Bool::is_true_and(moves.file.outputs_check(outs, result_registers()), leaves_all(moves.code, body_kept(saves)), ok)),
+    })(λ values => move_outputs_keeps<M>(values, outs, body.file, result_registers()))
 }
 
 theorem Function::emit_body_returns<M>(self function: Function, asked, saves: Nat, short: List<Nat>, site: Site<M>, laid: site.program.laid_out().IsTrue(),
@@ -6618,12 +6719,12 @@ theorem Function::emit_body_returns<M>(self function: Function, asked, saves: Na
     count: function.lent = lent_count(lending.counts, k),
     entered: (values: Valuation()) → (g: Gprs) → PortsAt(values, word_ports(function.parameters), parameter_registers(), g) →
         file.Represents(values, g), few: function.loads() <= 2):
-    MayReturnOver<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, function.emit_body(asked, saves, short, prog, k, file, placement, names, lending.counts)) {
+    MayReturnBoth<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, function.emit_body(asked, saves, short, prog, k, file, placement, names, lending.counts)) {
     let opened = function_opened(prog, k, function.loads(), function.slots(asked), saves);
     let label = At(prog, k + 1, Block([]));
     (match function.body.emit_calls(saves, function.slots(asked), short, opened, file, placement, names, k, lending.counts, function.homes()) as λ e =>
         (function.body.emit_calls(saves, function.slots(asked), short, opened, file, placement, names, k, lending.counts, function.homes()) = e) → Grows(opened, e) →
-        MayReturnOver<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, match e { None => None, Some(body) => function.closing(asked, saves, body) }) {
+        MayReturnBoth<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, match e { None => None, Some(body) => function.closing(asked, saves, body) }) {
         None => λ _ _ => trivial,
         Some(body) => λ emitted grown => function.closing_returns(asked, saves, short, site, laid, stack, top, effects, rooms, k, lending, loan, needs, prog, file, placement,
             names, body, allowed, asks, roomy, emitted, count, Prog::within_trans(label_opened(prog, k, function.loads(), function.slots(asked), saves), grown), entered,
@@ -6639,7 +6740,7 @@ theorem Function::emit_returns<M>(self function: Function, site: Site<M>, laid: 
     loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), needs: Nat → Nat → Bool, prog: Prog, placement: List<Place>,
     names: Nat, allowed: (b: Nat) → function.body.stores(b).IsTrue() → lending.written(b) = True,
     asks: function.body.Asks(needs, lending.written)):
-    MayReturnOver<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, function.emit_lent(prog, k, placement, names, lending.counts, rooms)) {
+    MayReturnBoth<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, function.emit_lent(prog, k, placement, names, lending.counts, rooms)) {
     let saves = placement_saves(placement);
     let asked = placement_slots(placement);
     let short = placement_short(placement);
@@ -6650,7 +6751,7 @@ theorem Function::emit_returns<M>(self function: Function, site: Site<M>, laid: 
             ((values: Valuation()) → (g: Gprs) → PortsAt(values, ins, parameter_registers(), g) →
                 entry.All(λ (file: File) => file.Represents(values, g))) →
             entry.All(λ (_: File) => ins.len() <= parameter_registers().len()) →
-            MayReturnOver<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, match entry {
+            MayReturnBoth<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, match entry {
                 None => None,
                 Some(file) => function.emit_body(asked, saves, short, prog, k, file, placement_body(placement), names, lending.counts),
             }) {
@@ -6978,16 +7079,16 @@ theorem Site::meets_extend<M>(self site: Site<M>, stack: Stack<M>(site.fetch, si
 // A function's code comes after the code it was emitted after.
 theorem Function::closing_grows(self function: Function, asked, saves: Nat, prog: Prog, body: Emitted, grown: prog.Within(body.prog)):
     Grows(prog, function.closing(asked, saves, body)) {
-    let outs: List<Port> = [Port(id := function.result, width := 64)];
-    match body.file.move_outputs(outs, [Rax]) as λ moved => Grows(prog, match moved {
+    let outs: List<Port> = function.outs();
+    match body.file.move_outputs(outs, result_registers()) as λ moved => Grows(prog, match moved {
             None => None,
-            Some(moves) => match moves.file.outputs_check(outs, [Rax]) && leaves_all(moves.code, body_kept(saves)) {
+            Some(moves) => match moves.file.outputs_check(outs, result_registers()) && leaves_all(moves.code, body_kept(saves)) {
                 False => None,
                 True => Some(Emitted(At(function_closed(body.prog, moves.code, function.slots(asked), saves), 0, Ret), File::empty(), body.placement, body.names)),
             },
         }) {
         None => trivial,
-        Some(moves) => match moves.file.outputs_check(outs, [Rax]) && leaves_all(moves.code, body_kept(saves)) as λ c => Grows(prog, match c {
+        Some(moves) => match moves.file.outputs_check(outs, result_registers()) && leaves_all(moves.code, body_kept(saves)) as λ c => Grows(prog, match c {
                 False => None,
                 True => Some(Emitted(At(function_closed(body.prog, moves.code, function.slots(asked), saves), 0, Ret), File::empty(), body.placement, body.names)),
             }) {
@@ -7093,10 +7194,12 @@ theorem emit_functions_calls_lent<M>(site: Site<M>, laid: site.program.laid_out(
                     last.emit_lent_labels(before.prog, earlier.len(), before.placement, before.names, counts, rooms),
                     λ lending same loan covers => j(same, λ c _ => MayReturnOver<M>(site, stack, top, program_effects(earlier), rooms, earlier.len(),
                             lending, needs, last, before.prog, last.emit_lent(before.prog, earlier.len(), before.placement, before.names, c, rooms)),
-                        last.emit_returns(site, laid, stack, top, program_effects(earlier), rooms, earlier.len(), lending, loan, needs, before.prog,
-                            before.placement, before.names,
-                            λ b stores => covers(b, is_true_of_eq(needs(earlier.len(), b), needed.left.left(b, stores))),
-                            last.body.asks_within(needs, λ (b: Nat) => needs(earlier.len(), b), lending.written, covers, needed.left.right)))),
+                        may_return_first<M>(site, stack, top, program_effects(earlier), rooms, earlier.len(), lending, needs, last, before.prog,
+                            last.emit_lent(before.prog, earlier.len(), before.placement, before.names, lending.counts, rooms),
+                            last.emit_returns(site, laid, stack, top, program_effects(earlier), rooms, earlier.len(), lending, loan, needs, before.prog,
+                                before.placement, before.names,
+                                λ b stores => covers(b, is_true_of_eq(needs(earlier.len(), b), needed.left.left(b, stores))),
+                                last.body.asks_within(needs, λ (b: Nat) => needs(earlier.len(), b), lending.written, covers, needed.left.right))))),
             })(emit_functions_calls_lent<M>(site, laid, stack, top, rooms, counts, needs, start, placement, names, earlier, needed.right)),
     }
 }

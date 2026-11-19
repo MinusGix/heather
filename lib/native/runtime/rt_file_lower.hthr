@@ -1251,7 +1251,7 @@ theorem FTm::lower_sound(self t: FTm, fw: FWorld, base: Nat): (g: List<Ty>) → 
 fn FFun::context(self f: FFun) → List<Ty> { Ty::bind_onto(f.params, Nil) }
 
 fn FFun::lower_typed(self f: FFun, w: World, fsigs: List<Sig>, c: Lowered) → Option<Function> {
-    f.body.ty(w, fsigs, f.context()).check(f.result).and_then(λ _ => Some(Function(Fun::param_ids(f.params, 0), c.region, c.result, f.lent)))
+    f.body.ty(w, fsigs, f.context()).check(f.result).and_then(λ _ => Some(Function(Fun::param_ids(f.params, 0), c.region, c.result, lent := f.lent)))
 }
 
 fn FFun::lower_body(self f: FFun, w: World, fsigs: List<Sig>, base: Nat) → Option<Function> {
@@ -1311,10 +1311,10 @@ theorem FFun::lower_sound(self f: FFun, fw: FWorld, base: Nat): f.LowerHolds(fw,
     Option::and_then_elim(P, trivial, f.result.check_one_word(tys), λ _ => f.lower_distinct(fw.w, fw.fsigs, base), λ er _ =>
     Option::and_then_elim(P, trivial, Tm::check_true(distinct(ids)), λ _ => f.lower_body(fw.w, fw.fsigs, base), λ apart _ =>
     Option::and_then_elim(P, trivial, f.body.lower(fw.w, fw.fsigs, base, f.context(), ports, next), λ c => f.lower_typed(fw.w, fw.fsigs, c), λ c lowered =>
-    Option::and_then_elim(P, trivial, body_ty.check(f.result), λ _ => Some(Function(ids, c.region, c.result, f.lent)), λ eb _ =>
+    Option::and_then_elim(P, trivial, body_ty.check(f.result), λ _ => Some(Function(ids, c.region, c.result, lent := f.lent)), λ eb _ =>
         λ call agree own => FFun::curry_answers(tys, f.result, fw.rest, f.params, Nil, trivial,
             λ env => FTm::recast(tys, body_ty, f.result, f.body.sem(fw, f.context(), env, own)),
-            λ xs => Function(ids, c.region, c.result, f.lent).run(call, xs, Cons(own, fw.rest)), λ xs => {
+            λ xs => Function(ids, c.region, c.result, lent := f.lent).run(call, xs, Cons(own, fw.rest)), λ xs => {
                 let values = Valuation::bind(Valuation::zero(), ids, xs);
                 let env = Ty::extend(tys, f.params, Nil, trivial, xs);
                 let end = c.region.run(call, values, Cons(own, fw.rest));

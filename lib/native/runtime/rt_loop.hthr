@@ -1155,7 +1155,7 @@ fn Fun::meas_code(all, ks, ws: List<Ty>, lent: Nat, t, t2: Lowered) → Function
                     Fun::meas_next(all, ks, ws), Fun::param_ids(all, t.next + 2), Fun::past(all, t.next + 2)),
                 Fun::post(Fun::past(all, t.next + 2), t2.next, Fun::past(ks, t.next + 2),
                     Compose(t2.region, nodes_region([Move(64, t2.next, Fun::past(all, t.next + 2) + 1)]))))),
-        t2.next, lent)
+        t2.next, lent := lent)
 }
 
 fn Fun::lower_measured_at(all, ks, ws: List<Ty>, body: Tm, res: Ty, w: World, lent: Nat) → Option<Function> {

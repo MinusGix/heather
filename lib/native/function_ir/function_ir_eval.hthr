@@ -1100,6 +1100,11 @@ fn Function::eval(self function: Function, call: Answers(), arguments: List<BitV
     function.body.eval(call, Valuation::bind(Valuation::zero(), function.parameters, arguments), buffers := buffers)(64, function.result)
 }
 
+// Its words past the first, from the same evaluation.
+fn Function::eval_also(self function: Function, call: Answers(), arguments: List<BitVec(64)>, buffers: Buffers() := Nil) → List<BitVec(64)> {
+    words_of(function.body.eval(call, Valuation::bind(Valuation::zero(), function.parameters, arguments), buffers := buffers), function.also)
+}
+
 fn Function::evaluable(self function: Function, arity: Nat → Option<Nat>) → Bool {
     function.body.evaluable(arity) && (distinct(function.parameters) && disjoint(function.body.writes(), function.parameters))
 }
@@ -1181,7 +1186,7 @@ fn StructuredRegion::relabel(self region: StructuredRegion, links: Nat → Nat) 
 }
 
 fn Function::relabel(self function: Function, links: Nat → Nat) → Function {
-    Function(function.parameters, function.body.relabel(links), function.result, function.lent)
+    Function(function.parameters, function.body.relabel(links), function.result, lent := function.lent, also := function.also)
 }
 
 // Calls answered at their renamed functions.

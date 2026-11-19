@@ -109,7 +109,8 @@ fn StructuredRegion::spelled(self region: StructuredRegion) → List<Nat> → Li
 }
 
 fn Function::spelled(self function: Function) → List<Nat> → List<Nat> {
-    spell_call("Function", [spell_numbers(function.parameters), function.body.spelled(), spell_number(function.result), spell_number(function.lent)])
+    spell_call("Function", [spell_numbers(function.parameters), function.body.spelled(), spell_number(function.result),
+        λ after => spell_text("lent := ")(spell_number(function.lent)(after)), λ after => spell_text("also := ")(spell_numbers(function.also)(after))])
 }
 
 // ---------------------------------------------------------------------------

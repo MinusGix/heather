@@ -1359,7 +1359,10 @@ theorem StructuredRegion::holds_in(self region: StructuredRegion, callees: Calle
 // before every other: buffer `k` is parameters `2k` and `2k + 1`
 // (docs/native/native-one-compiler-design.md §2.3). The meaning reads neither
 // word as an address: a buffer is the list of bytes it is called over.
-record Function { parameters: List<Nat>, body: StructuredRegion, result: Nat, lent: Nat := 0 }
+// `also` are the 64-bit words it returns past the first, in RDX (System V's
+// two-word aggregate, docs/native/runtime-fn-setups-design.md §16.16); every
+// contract that names one result speaks of `result`.
+record Function { parameters: List<Nat>, body: StructuredRegion, result: Nat, lent: Nat := 0, also: List<Nat> := [] }
 
 // Called on `arguments` over `buffers`, the function may return `result`:
 // some valuation binds its parameters to the arguments, satisfies its

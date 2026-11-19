@@ -60,14 +60,14 @@ fn reader() → Function {
     Function([0, 1, 2], Compose(nodes([Move(64, 3, 1), Move(64, 4, 2), UnsignedLessThan(64, 5, 4, 3)]),
         Conditional(Ports([]), 5, Ports([]), Ports([]),
             Compose(nodes([BufferLoad(6, 0, 4), Move(64, 7, 6)]), Compose(Call(0, [7, 4], 8), nodes([Move(64, 9, 8)]))),
-            nodes([Const(64, 9, 0)]))), 9, 1)
+            nodes([Const(64, 9, 0)]))), 9, lent := 1)
 }
 
 fn reader_tidied() → Function {
     Function([0, 1, 2], Compose(nodes([UnsignedLessThan(64, 5, 2, 1)]),
         Conditional(Ports([]), 5, Ports([]), Ports([]),
             Compose(nodes([BufferLoad(6, 0, 2)]), Compose(Call(0, [6, 2], 8), nodes([Move(64, 9, 8)]))),
-            nodes([Const(64, 9, 0)]))), 9, 1)
+            nodes([Const(64, 9, 0)]))), 9, lent := 1)
 }
 
 theorem reader_run(): reader().tidy_plan(rules()).and_then(λ plan => tidy_stage(rules()).rewrite([], reader(), plan)) = Some(reader_tidied()) { refl }
@@ -83,7 +83,7 @@ theorem looper_run(): looper().tidy_plan(rules()).and_then(λ plan => tidy_stage
 
 // A store is never dropped, though nothing reads what it writes; a load
 // nothing reads is.
-theorem store_kept(): Function([0, 1, 2], nodes([BufferLoad(3, 0, 2), BufferStore(4, 0, 2, 2), Const(64, 5, 0)]), 5, 1).dead_plan() =
+theorem store_kept(): Function([0, 1, 2], nodes([BufferLoad(3, 0, 2), BufferStore(4, 0, 2, 2), Const(64, 5, 0)]), 5, lent := 1).dead_plan() =
     Nodes([Drop, Keep, Keep]) { refl }
 
 // A copy at one width is not read through at another.

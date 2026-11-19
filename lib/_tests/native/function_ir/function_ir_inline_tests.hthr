@@ -133,7 +133,7 @@ theorem lend_stays(): inline_stage().run(lends(), [Inlines(2, Stay), Inlines(3, 
 
 // x ↦ the byte at x of a span, plus x. The function's ids are below 4.
 fn reads() → Function {
-    Function([0, 1, 2], Compose(nodes([BufferLoad(3, 0, 2)]), nodes([Add(64, 3, 3, 2)])), 3, 1)
+    Function([0, 1, 2], Compose(nodes([BufferLoad(3, 0, 2)]), nodes([Add(64, 3, 3, 2)])), 3, lent := 1)
 }
 
 // After the load's leaf, two leaves more: the same byte loaded again at id
@@ -144,7 +144,7 @@ fn reads_put() → Inlines { Inlines(4, Both(Put(3, [[BufferLoad(4, 0, 2)], [Add
 fn reads_more() → Function {
     Function([0, 1, 2], Compose(
         Compose(nodes([BufferLoad(3, 0, 2)]), Compose(nodes([BufferLoad(4, 0, 2)]), Compose(nodes([Add(64, 5, 4, 4), BitXor(64, 6, 5, 2)]), nodes([])))),
-        nodes([Add(64, 3, 3, 2)])), 3, 1)
+        nodes([Add(64, 3, 3, 2)])), 3, lent := 1)
 }
 
 theorem put_run(): inline_stage().rewrite([], reads(), reads_put()) = Some(reads_more()) { refl }
