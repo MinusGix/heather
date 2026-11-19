@@ -77,11 +77,17 @@ impl Obligations {
         };
         let target = hole.strip_prefix("#decreasing:").map(|n| format!("decreasing {n}"))
             .unwrap_or_else(|| format!("?{hole}"));
+        // A `help:` the closer added (the import that would let it read
+        // the goal) leads, ahead of the search's own account.
+        let (msg, help) = match msg.split_once("\nhelp: ") {
+            Some((msg, help)) => (msg, format!(" To have it proved automatically, {help}.")),
+            None => (msg.as_str(), String::new()),
+        };
         crate::ElabError::Elab {
             msg: format!(
                 "this recursive call must decrease the measure, and `{text}` was not \
-                 proved automatically ({msg}). Discharge it by hand: \
-                 `on {target} := …;` at the end of the body{rank}"
+                 proved automatically.{help} Discharge it by hand: \
+                 `on {target} := …;` at the end of the body{rank}. The search said: {msg}"
             ),
             span: *span,
         }
