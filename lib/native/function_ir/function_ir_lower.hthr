@@ -11,8 +11,11 @@
 // code, the code computes the region.
 
 import function_ir;
+import function_ir_operation;
+import function_ir_operation_x86;
 import x86_64;
 import x86_64_block;
+import x86_64_kept;
 import bitvec;
 import bitvec_rotate;
 import bitvec_bytes;
@@ -377,19 +380,6 @@ fn Keeps<M>(values: Valuation(), file: File, facts: Type, out: Lowered) → Type
 // What a lowering step proves: if it emitted code, the code keeps the file.
 fn MayKeep<M>(values: Valuation(), file: File, facts: Type, out: Option<Lowered>) → Type {
     out.All(λ (lowered: Lowered) => Keeps<M>(values, file, facts, lowered))
-}
-
-theorem execute_block_append<M>(first: List<Instruction>):
-    (second: List<Instruction>) → (s: MachineState<M>) →
-        execute_block_normal(first ++ second, s) =
-            execute_block_normal(second, execute_block_normal(first, s))
-{
-    match first {
-        Nil => λ second s => refl,
-        Cons(instruction, rest) => λ second s =>
-            execute_block_append(rest, second,
-                execute_normal(decoded_canonical(instruction), s)),
-    }
 }
 
 fn Lowered::then(self first, second: Lowered) → Lowered {
@@ -1326,13 +1316,6 @@ theorem CompareOp::executes<M>(self op: CompareOp, low: LowByteGpr, s: MachineSt
         write_low_byte(low, op.flag(s.flags), s.gprs)
 {
     match op { Below => refl, Less => refl, Same => refl }
-}
-
-theorem condition_byte_extends(condition: Bool):
-    condition_byte(condition).concat(BitVec::zero(n := 64).drop_low(8, 56)) =
-        BitVec::ofBool(condition).zero_extend(63)
-{
-    match condition { False => refl, True => refl }
 }
 
 fn Gpr::low_byte(self register: Gpr) → Option<LowByteGpr> {
@@ -2746,6 +2729,169 @@ theorem File::rotate_right_keeps<M>(self file: File, values: Valuation(), destin
 }
 
 // ---------------------------------------------------------------------------
+// Operations as rows (docs/native/dogfooding-plan.md §5.3a): one case for
+// every operation of `function_ir_operation`. The row (function_ir_operation_x86)
+// says where the operands go, the code, and where the result is; here the
+// operands are placed, the code run, every register the code may write
+// forgotten (`leaves`, x86_64_kept) and the result's register written. The
+// row's theorem is all the operation brings.
+
+// The file with every register the code may write forgotten.
+fn File::forget(self file: File, code: List<Instruction>) → File {
+    File(slots_of(λ (register: Gpr) => match leaves(code, register) { True => file.at(register), False => None }), file.known)
+}
+
+theorem File::forget_represents<M>(self file: File, values: Valuation(), code: List<Instruction>, s: MachineState<M>,
+    before: file.Represents(values, s.gprs)):
+    file.forget(code).Represents(values, execute_block_normal(code, s).gprs)
+{
+    let after = execute_block_normal(code, s).gprs;
+    ⟨λ query => j(sym(slots_at_of(λ (register: Gpr) => match leaves(code, register) { True => file.at(register), False => None }, query)),
+        λ slot _ => SlotRep(values, slot, read_gpr(query, after)),
+        match kept: leaves(code, query) {
+            True => j(sym(execute_block_leaves<M>(code, s, query, Bool::is_true_of_eq(kept))),
+                λ word _ => SlotRep(values, file.at(query), word), before.left(query)),
+            False => trivial,
+        }), before.right⟩
+}
+
+// The right operand reads as the row says: in its register, or the word
+// the file knows it to be.
+record ReadsRight(file: File, right: Nat, operand: Operand) {
+    reads: (values: Valuation()) → (gprs: Gprs) → file.Represents(values, gprs) → values(64, right) = operand.read(gprs),
+}
+
+fn File::reads_right(self file: File, right: Nat, operand: Operand) → Option<ReadsRight(file, right, operand)> {
+    match operand {
+        InRegister(register) => match file.found_at(Held(right, Word), register) {
+            None => None,
+            Some(at) => Some(ReadsRight(λ values gprs represents => at.rep(values, gprs, represents))),
+        },
+        Immediate(word) => (match known: known_value(file.known, right) {
+            None => None,
+            Some(value) => match fits: BitVec::ofNat(value).eq_bit(word) {
+                False => None,
+                True => Some(ReadsRight(λ values gprs represents =>
+                    trans(known_value_holds(values, right, value, file.known, known, represents.right),
+                        BitVec::eq_of_eq_bit(64, BitVec::ofNat(value), word, fits)))),
+            },
+        }),
+    }
+}
+
+// The right operand where the row reads it: a register's moved there, a
+// word the code carries left where it is.
+fn Operand::place(self operand: Operand, file: File, right: Nat) → Option<Lowered> {
+    match operand { InRegister(register) => file.place(Held(right, Word), register), Immediate(_) => Some(Lowered([], file)) }
+}
+
+theorem Operand::place_keeps<M>(self operand: Operand, values: Valuation(), file: File, right: Nat):
+    MayKeep<M>(values, file, True, operand.place(file, right))
+{
+    match operand {
+        InRegister(register) => file.place_keeps<M>(values, Held(right, Word), register),
+        Immediate(_) => λ s represents _ => represents,
+    }
+}
+
+fn Operation::Holds(self op: Operation, values: Valuation(), output, left, right: Nat) → Type {
+    values(64, output) = op.meaning(values(64, left), values(64, right))
+}
+
+// With both operands where the row reads them, its code.
+fn File::run_row(self file: File, output, left, right: Nat, row: Row) → Option<Lowered> {
+    match file.found_at(Held(left, Word), row.left) {
+        None => None,
+        Some(_) => match file.reads_right(right, row.right) {
+            None => None,
+            Some(_) => Some(Lowered(row.code, file.forget(row.code).write(row.result, Some(Held(output, Word))))),
+        },
+    }
+}
+
+theorem File::run_row_keeps<M>(self file: File, values: Valuation(), op: Operation, output, left, right: Nat, row: Row,
+    computes: row.Computes<M>(op)):
+    MayKeep<M>(values, file, op.Holds(values, output, left, right), file.run_row(output, left, right, row))
+{
+    match file.found_at(Held(left, Word), row.left) {
+        None => trivial,
+        Some(here) => match file.reads_right(right, row.right) {
+            None => trivial,
+            Some(reads) => λ s represents holds => {
+                let after = execute_block_normal(row.code, s).gprs;
+                let a = read_gpr(row.left, s.gprs);
+                let b = row.right.read(s.gprs);
+                let left_rep: (values(64, left) = a) = here.rep(values, s.gprs, represents);
+                let right_rep: (values(64, right) = b) = reads.reads(values, s.gprs, represents);
+                let written: (values(64, output) = op.meaning(a, b)) =
+                    j(left_rep, λ x _ => values(64, output) = op.meaning(x, b),
+                        j(right_rep, λ y _ => values(64, output) = op.meaning(values(64, left), y), holds));
+                file.forget(row.code).represents_retag(values, after, row.result, Some(Held(output, Word)),
+                    file.forget_represents<M>(values, row.code, s, represents),
+                    trans(written, sym(computes(s))))
+            },
+        },
+    }
+}
+
+// The operands placed (the left first), the row's code, and the result
+// moved to the destination where the row leaves it elsewhere.
+fn File::apply_row(self file: File, destination: Gpr, output, left, right: Nat, row: Row) → Option<Lowered> {
+    then_step(then_step(then_step(file.place(Held(left, Word), row.left),
+        λ (placed: File) => row.right.place(placed, right)),
+        λ (placed: File) => placed.run_row(output, left, right, row)),
+        λ (done: File) => done.place(Held(output, Word), destination))
+}
+
+theorem File::apply_row_keeps<M>(self file: File, values: Valuation(), op: Operation, destination: Gpr,
+    output, left, right: Nat, row: Row, computes: row.Computes<M>(op)):
+    MayKeep<M>(values, file, op.Holds(values, output, left, right), file.apply_row(destination, output, left, right, row))
+{
+    let facts = op.Holds(values, output, left, right);
+    let first = then_step(file.place(Held(left, Word), row.left), λ (placed: File) => row.right.place(placed, right));
+    let second = then_step(first, λ (placed: File) => placed.run_row(output, left, right, row));
+    keeps_weaken<M>(values, file, ((True ∧ True) ∧ facts) ∧ True, facts,
+        then_step(second, λ (done: File) => done.place(Held(output, Word), destination)),
+        λ holds => ⟨⟨⟨trivial, trivial⟩, holds⟩, trivial⟩,
+        then_step_keeps<M>(values, file, (True ∧ True) ∧ facts, True, second,
+            λ (done: File) => done.place(Held(output, Word), destination),
+            λ (done: File) => done.place_keeps<M>(values, Held(output, Word), destination),
+            then_step_keeps<M>(values, file, True ∧ True, facts, first,
+                λ (placed: File) => placed.run_row(output, left, right, row),
+                λ (placed: File) => placed.run_row_keeps<M>(values, op, output, left, right, row, computes),
+                then_step_keeps<M>(values, file, True, True, file.place(Held(left, Word), row.left),
+                    λ (placed: File) => row.right.place(placed, right),
+                    λ (placed: File) => row.right.place_keeps<M>(values, placed, right),
+                    file.place_keeps<M>(values, Held(left, Word), row.left)))))
+}
+
+// The register the file holds a word in, if any.
+fn File::where(self file: File, id: Nat) → Option<Gpr> {
+    match file.find(Held(id, Word)) { None => None, Some(found) => Some(found.register) }
+}
+
+// An operation at the word: its row, if one is offered for the destination.
+fn File::apply(self file: File, op: Operation, destination: Gpr, output, left, right: Nat) → Option<Lowered> {
+    match op.row(destination, file.where(left), file.where(right), known_value(file.known, right)) {
+        None => None,
+        Some(row) => file.apply_row(destination, output, left, right, row),
+    }
+}
+
+theorem File::apply_keeps<M>(self file: File, values: Valuation(), op: Operation, destination: Gpr, output, left, right: Nat):
+    MayKeep<M>(values, file, op.Holds(values, output, left, right), file.apply(op, destination, output, left, right))
+{
+    (match op.row(destination, file.where(left), file.where(right), known_value(file.known, right)) as λ offered => Row::Offered<M>(offered, op) →
+        MayKeep<M>(values, file, op.Holds(values, output, left, right), match offered {
+            None => None,
+            Some(row) => file.apply_row(destination, output, left, right, row),
+        }) {
+        None => λ _ => trivial,
+        Some(row) => λ computes => file.apply_row_keeps<M>(values, op, destination, output, left, right, row, computes),
+    })(op.row_computes<M>(destination, file.where(left), file.where(right), known_value(file.known, right)))
+}
+
+// ---------------------------------------------------------------------------
 // Nodes
 
 // What only the word has yet (a signed comparison, an arithmetic right
@@ -2851,6 +2997,9 @@ fn Node::lower(self node: Node, destination: Gpr, file: File) → Option<Lowered
         ByteSwap(width, output, source) => at_width(32, width, width.eq_dec(32), file.byte_swap(destination, output, source), None),
         RotateRight(width, output, value, amount) => at_width(32, width, width.eq_dec(32),
             file.rotate_right(destination, output, value, amount), None),
+        // An operation by its row, at the word.
+        Apply(op, width, output, left, right) => word_only(width, width.eq_dec(64),
+            file.apply(op, destination, output, left, right)),
     }
 }
 
@@ -2957,6 +3106,10 @@ theorem Node::lower_keeps<M>(self node: Node, values: Valuation(), destination: 
             λ w => NodeHolds(values, RotateRight(w, output, value, amount)), width.eq_dec(32),
             file.rotate_right(destination, output, value, amount), None,
             file.rotate_right_keeps<M>(values, destination, output, value, amount), trivial),
+        Apply(op, width, output, left, right) => word_only_keeps<M>(values, file, width,
+            λ w => NodeHolds(values, Apply(op, w, output, left, right)), width.eq_dec(64),
+            file.apply(op, destination, output, left, right),
+            file.apply_keeps<M>(values, op, destination, output, left, right)),
     }
 }
 
@@ -3057,6 +3210,7 @@ theorem Node::fold_keeps<M>(self node: Node, values: Valuation(), file: File):
         WideStore(_, _, _, _, _) => trivial,
         ByteSwap(_, _, _) => trivial,
         RotateRight(_, _, _, _) => trivial,
+        Apply(_, _, _, _, _) => trivial,
     }
 }
 
@@ -3478,6 +3632,7 @@ fn Node::reads(self node: Node) → List<Nat> {
         WideStore(_, _, _, index, value) => [index, value],
         ByteSwap(_, _, source) => [source],
         RotateRight(_, _, value, _) => [value],
+        Apply(_, _, _, left, right) => [left, right],
     }
 }
 
@@ -3583,11 +3738,22 @@ fn Node::in_place(self node: Node, file: File, later: Nat → Bool) → Option<G
 // Nodes cheapest in their first operand's register: arithmetic writes it
 // in place, and a `Move` or a `Resize` there is only a retag or a settling
 // (a call's result taken where the call left it).
+// The registers the node's row writes besides its destination.
+fn Node::row_writes(self node: Node) → List<Gpr> {
+    match node { Apply(op, _, _, _, _) => op.writes_fixed(), _ => [] }
+}
+
+// The registers some row of `nodes` writes besides its destination.
+fn rows_write_in(nodes: List<Node>) → List<Gpr> {
+    match nodes { Nil => [], Cons(node, rest) => node.row_writes() ++ rows_write_in(rest) }
+}
+
 fn prefers_operand(node: Node) → Bool {
     match node {
         Add(_, _, _, _) => True, Sub(_, _, _, _) => True, BitAnd(_, _, _, _) => True,
         BitOr(_, _, _, _) => True, BitXor(_, _, _, _) => True, Move(_, _, _) => True,
-        Resize(_, _, _, _) => True, ByteSwap(_, _, _) => True, RotateRight(_, _, _, _) => True, _ => False,
+        Resize(_, _, _, _) => True, ByteSwap(_, _, _) => True, RotateRight(_, _, _, _) => True,
+        Apply(op, _, _, _, _) => !Rcx.listed(op.writes_fixed()), _ => False,
     }
 }
 

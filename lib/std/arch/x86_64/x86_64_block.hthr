@@ -61,6 +61,20 @@ fn execute_block_normal<M>(instructions: List<Instruction>) →
         instructions)
 }
 
+// A block run after another is the two run in turn.
+theorem execute_block_append<M>(first: List<Instruction>):
+    (second: List<Instruction>) → (s: MachineState<M>) →
+        execute_block_normal(first ++ second, s) =
+            execute_block_normal(second, execute_block_normal(first, s))
+{
+    match first {
+        Nil => λ second s => refl,
+        Cons(instruction, rest) => λ second s =>
+            execute_block_append(rest, second,
+                execute_normal(decoded_canonical(instruction), s)),
+    }
+}
+
 fn ExecuteBlock<M>(instructions: List<Instruction>) →
     MachineState<M> → MachineState<M> → Type
 {

@@ -553,6 +553,19 @@ fn StructuredRegion::reads(self region: StructuredRegion) → List<Nat> {
     }
 }
 
+// The registers some row of the region writes besides its destination.
+fn StructuredRegion::rows_write(self region: StructuredRegion) → List<Gpr> {
+    match region {
+        Dataflow(body) => rows_write_in(body.nodes),
+        Sequence(prefix, continuation) => rows_write_in(prefix.nodes) ++ continuation.rows_write(),
+        Compose(prefix, continuation) => prefix.rows_write() ++ continuation.rows_write(),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.rows_write() ++ when_false.rows_write(),
+        Lend(views, _, _, _) => rows_write_in(views_nodes(views)),
+        Call(_, _, _) => [],
+        Loop(_, _, _, _, body, _, _, _, _) => body.rows_write(),
+    }
+}
+
 fn StructuredRegion::calls(self region: StructuredRegion) → Bool {
     match region {
         Dataflow(_) => False,
@@ -891,27 +904,43 @@ fn File::holds_read(self file: File, outputs: List<Port>, after: Reads()) → Bo
     }
 }
 
+// `choose_keeping` clear of `writes`, the registers some row writes
+// besides its destination, while another is free: a value placed in one
+// would be lost across that row.
+fn Node::choose_clear_of(self node: Node, file: File, live, later: Nat → Bool, entries: List<Port>,
+    registers, pool: List<Gpr>, crossed, keeps: Nat → Bool, kept, writes: List<Gpr>) → Gpr
+{
+    let chosen = node.choose_keeping(file, live, later, entries, registers, pool, crossed, keeps, kept ++ writes);
+    match chosen.listed(writes) {
+        False => chosen,
+        True => {
+            let other = node.fresh(file, live, later, crossed, keeps, pool, kept ++ writes);
+            match other.listed(writes) { True => chosen, False => other }
+        },
+    }
+}
+
 // The nodes' places: folded as `folds` says, else registers from `pool`.
 // `live` is what the nodes and everything after them read, and `entries`
 // are wanted in `registers`, which a fresh place keeps clear of where the
 // plan is made `apart`.
 fn plan_block(nodes: List<Node>, file: File, live: Reads(), entries: List<Port>, registers, pool: List<Gpr>,
-    folds, crossed: Reads(), apart, sure: Bool) → Planned {
+    folds, crossed: Reads(), apart, sure: Bool, writes: List<Gpr>) → Planned {
     match nodes {
         Nil => Planned([], file),
         Cons(node, rest) => shared(reads_drop(live, node.reads()), λ (later: Reads()) => {
             let chosen = match node.folded(folds) {
                 True => Folded,
-                False => Into(node.choose_keeping(file, λ (id: Nat) => reads_has(live, id), λ (id: Nat) => reads_has(later, id),
+                False => Into(node.choose_clear_of(file, λ (id: Nat) => reads_has(live, id), λ (id: Nat) => reads_has(later, id),
                     entries, registers, pool, λ (id: Nat) => reads_has(crossed, id), λ (id: Nat) => sure && reads_has(crossed, id),
-                    kept_clear(apart, registers))),
+                    kept_clear(apart, registers), writes)),
             };
             shared(chosen, λ (place: Place) => match node.lower_at(place, file) {
                 None => match node.planned_wide(place, file) {
                     None => Planned([place], node.planned_file(place, file)),
-                    Some(loaded) => plan_block(rest, loaded, later, entries, registers, pool, folds, crossed, apart, sure).put(place),
+                    Some(loaded) => plan_block(rest, loaded, later, entries, registers, pool, folds, crossed, apart, sure, writes).put(place),
                 },
-                Some(step) => plan_block(rest, step.file, later, entries, registers, pool, folds, crossed, apart, sure).put(place),
+                Some(step) => plan_block(rest, step.file, later, entries, registers, pool, folds, crossed, apart, sure, writes).put(place),
             })
         }),
     }
@@ -1103,20 +1132,20 @@ fn StructuredRegion::crossed_in(self region: StructuredRegion, after, crossed: R
 // `File::loop_places`): the function saves one at its entry on every path,
 // and a call on a path that seldom runs does not pay for that.
 fn StructuredRegion::plan_in(self region: StructuredRegion, file: File, after: Reads(), entries: List<Port>,
-    registers, pool: List<Gpr>, folds, crossed: Reads(), apart, sure, looped: Bool) → Planned {
+    registers, pool: List<Gpr>, folds, crossed: Reads(), apart, sure, looped: Bool, writes: List<Gpr>) → Planned {
     match region {
-        Dataflow(body) => plan_block(body.nodes, file, reads_add(after, reads_of(body.nodes, [])), entries, registers, pool, folds, crossed, apart, sure),
+        Dataflow(body) => plan_block(body.nodes, file, reads_add(after, reads_of(body.nodes, [])), entries, registers, pool, folds, crossed, apart, sure, writes),
         Sequence(prefix, continuation) => shared(reads_add(after, continuation.reads()), λ (rest: Reads()) => {
             let block = plan_block(prefix.nodes, file, reads_add(rest, reads_of(prefix.nodes, [])), entries, registers, pool, folds,
-                continuation.crossed_in(after, crossed), apart, sure);
+                continuation.crossed_in(after, crossed), apart, sure, writes);
             shared(block, λ (first: Planned) =>
-                first.joined(continuation.plan_in(first.file, after, entries, registers, pool, folds, crossed, apart, sure, looped)))
+                first.joined(continuation.plan_in(first.file, after, entries, registers, pool, folds, crossed, apart, sure, looped, writes)))
         }),
         Compose(prefix, continuation) => {
             let before = prefix.plan_in(file, reads_add(after, continuation.reads()), entries, registers, pool, folds,
-                continuation.crossed_in(after, crossed), apart, sure, looped);
+                continuation.crossed_in(after, crossed), apart, sure, looped, writes);
             shared(before, λ (first: Planned) =>
-                first.joined(continuation.plan_in(first.file, after, entries, registers, pool, folds, crossed, apart, sure, looped)))
+                first.joined(continuation.plan_in(first.file, after, entries, registers, pool, folds, crossed, apart, sure, looped, writes)))
         },
         Conditional(_, _, _, outputs, when_true, when_false) =>
             shared(reads_add(reads_add(reads_add(after, port_ids(outputs.entries)), when_false.reads()), when_true.reads()), λ (live: Reads()) => {
@@ -1124,8 +1153,8 @@ fn StructuredRegion::plan_in(self region: StructuredRegion, file: File, after: R
                     shared(pick_targets(outputs.entries, file, λ (id: Nat) => reads_has(live, id), entries, registers, pool,
                         kept_clear(mode, registers), λ (id: Nat) => reads_has(crossed, id), λ (id: Nat) => sure && reads_has(crossed, id)),
                         λ (targets: List<Gpr>) =>
-                        Planned::met(when_true.plan_in(file, after, outputs.entries ++ entries, targets ++ registers, pool, folds, crossed, mode, sure && looped, looped),
-                            when_false.plan_in(file, after, outputs.entries ++ entries, targets ++ registers, pool, folds, crossed, mode, sure && looped, looped),
+                        Planned::met(when_true.plan_in(file, after, outputs.entries ++ entries, targets ++ registers, pool, folds, crossed, mode, sure && looped, looped, writes),
+                            when_false.plan_in(file, after, outputs.entries ++ entries, targets ++ registers, pool, folds, crossed, mode, sure && looped, looped, writes),
                             file.known));
                 match apart {
                     True => arms(True),
@@ -1138,7 +1167,7 @@ fn StructuredRegion::plan_in(self region: StructuredRegion, file: File, after: R
         // The views' nodes as a block the call's words are read after, everything
         // read after the lend crossing its call; then the call (`File::plan_call`).
         Lend(views, _, arguments, result) => shared(reads_add(after, views_homes(views) ++ arguments), λ (rest: Reads()) =>
-            shared(plan_block(views_nodes(views), file, reads_add(rest, reads_of(views_nodes(views), [])), entries, registers, pool, folds, after, apart, sure),
+            shared(plan_block(views_nodes(views), file, reads_add(rest, reads_of(views_nodes(views), [])), entries, registers, pool, folds, after, apart, sure, writes),
                 λ (first: Planned) => first.joined(first.file.plan_call(result, after)))),
         Call(_, _, result) => file.plan_call(result, after),
         Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) => {
@@ -1152,7 +1181,7 @@ fn StructuredRegion::plan_in(self region: StructuredRegion, file: File, after: R
                             None => File::empty(),
                             Some(h) => h,
                         };
-                        let pass = body.plan_in(head, read, word_ports(next), state, pool, folds, MEmpty, apart, sure, True);
+                        let pass = body.plan_in(head, read, word_ports(next), state, pool, folds, MEmpty, apart, sure, True, writes);
                         let out = match input_file(Cons(Port(id := exhausted, width := 1), word_ports(outputs)), Cons(flag, state)) {
                             None => File::empty(),
                             Some(o) => o,
@@ -1164,10 +1193,12 @@ fn StructuredRegion::plan_in(self region: StructuredRegion, file: File, after: R
 }
 
 // `plan_in` with what is read after the region, what is folded, and what
-// is read after a later call, as lists.
+// is read after a later call, as lists; a fresh place keeps clear of the
+// registers some row of the region writes besides its destination
+// (`writes`) while another is free.
 fn StructuredRegion::plan_from(self region: StructuredRegion, file: File, after: List<Nat>, entries: List<Port>,
     registers, pool: List<Gpr>, folds, crossed: List<Nat>) → Planned {
-    region.plan_in(file, reads_from(after), entries, registers, pool, reads_from(folds), reads_from(crossed), False, True, False)
+    region.plan_in(file, reads_from(after), entries, registers, pool, reads_from(folds), reads_from(crossed), False, True, False, region.rows_write())
 }
 
 // Round 2's branch tests a bit in a register, so only constants fold here.

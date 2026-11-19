@@ -10,6 +10,7 @@
 // bit of the number it is of, and a function's spelling is mostly numbers.
 // `spelled_text` is what the reader makes of one.
 import function_ir;
+import function_ir_operation;
 import bool;
 import char;
 import list;
@@ -64,6 +65,7 @@ fn Node::spelled(self node: Node) → List<Nat> → List<Nat> {
         ShiftLeft(w, o, a, b) => spell_of("ShiftLeft", [w, o, a, b]),
         LogicalShiftRight(w, o, a, b) => spell_of("LogicalShiftRight", [w, o, a, b]),
         RotateRight(w, o, a, b) => spell_of("RotateRight", [w, o, a, b]),
+        Apply(op, w, o, a, b) => spell_call("Apply", Cons(spell_text(op.constructor()), [w, o, a, b].map(spell_number))),
         ArithmeticShiftRight(w, o, a, b) => spell_of("ArithmeticShiftRight", [w, o, a, b]),
         UnsignedLessThan(w, o, a, b) => spell_of("UnsignedLessThan", [w, o, a, b]),
         SignedLessThan(w, o, a, b) => spell_of("SignedLessThan", [w, o, a, b]),

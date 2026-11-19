@@ -35,6 +35,7 @@ import native_source;
 import native_compile;
 import native_structured;
 import function_ir;
+import function_ir_operation;
 import function_ir_eval;
 import function_ir_state;
 import bitvec;
@@ -427,6 +428,7 @@ fn Node::output_to(self node: Node, dest: Nat) → Node {
         ShiftLeft(width, _, value, amount) => ShiftLeft(width, dest, value, amount),
         LogicalShiftRight(width, _, value, amount) => LogicalShiftRight(width, dest, value, amount),
         RotateRight(width, _, value, amount) => RotateRight(width, dest, value, amount),
+        Apply(op, width, _, left, right) => Node::Apply(op, width, dest, left, right),
         ArithmeticShiftRight(width, _, value, amount) => ArithmeticShiftRight(width, dest, value, amount),
         UnsignedLessThan(width, _, left, right) => UnsignedLessThan(width, dest, left, right),
         SignedLessThan(width, _, left, right) => SignedLessThan(width, dest, left, right),

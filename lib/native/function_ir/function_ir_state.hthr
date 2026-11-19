@@ -21,6 +21,7 @@
 // only and refuses the byte nodes; the native compiler, which keeps every
 // buffer in memory, compiles them (`native_compile`).
 import function_ir;
+import function_ir_operation;
 import function_ir_eval;
 import nat_map;
 import bitvec;
@@ -225,6 +226,7 @@ theorem Node::run_pure(self node: Node, values: Valuation(), buffers: Buffers(),
         ShiftLeft(_, _, _, _) => λ _ => refl,
         LogicalShiftRight(_, _, _, _) => λ _ => refl,
         RotateRight(_, _, _, _) => λ _ => refl,
+        Apply(_, _, _, _, _) => λ _ => refl,
         ArithmeticShiftRight(_, _, _, _) => λ _ => refl,
         UnsignedLessThan(_, _, _, _) => λ _ => refl,
         SignedLessThan(_, _, _, _) => λ _ => refl,
@@ -253,6 +255,7 @@ theorem Node::run_empty(self node: Node, values: Valuation()): node.run(values, 
         ShiftLeft(_, _, _, _) => refl,
         LogicalShiftRight(_, _, _, _) => refl,
         RotateRight(_, _, _, _) => refl,
+        Apply(_, _, _, _, _) => refl,
         ArithmeticShiftRight(_, _, _, _) => refl,
         UnsignedLessThan(_, _, _, _) => refl,
         SignedLessThan(_, _, _, _) => refl,

@@ -63,6 +63,8 @@ theorem Gpr::same_sound(self register: Gpr): (query: Gpr) →
 
 theorem Gpr::same_self(self register: Gpr): register.same(register) = True { register.index().same_self() }
 
+theorem Gpr::same_comm(self a: Gpr, b: Gpr): a.same(b) = b.same(a) { match a { _ => match b { _ => refl } } }
+
 // `same` decides equality of registers.
 theorem Gpr::same_reflects(self a: Gpr, b: Gpr): Reflects(a = b, a.same(b)) {
     match s: a.same(b) {
@@ -137,6 +139,19 @@ theorem read_gpr_write(register, query: Gpr, value: BitVec(64), registers: Gprs)
         R8 => refl, R9 => refl, R10 => refl, R11 => refl,
         R12 => refl, R13 => refl, R14 => refl, R15 => refl,
     }
+}
+
+// The register written reads as the value written.
+theorem read_gpr_self(register: Gpr, value: BitVec(64), g: Gprs): read_gpr(register, write_gpr(register, value, g)) = value {
+    trans(read_gpr_write(register, register, value, g),
+        j(sym(register.same_self()), λ b _ => (match b { False => read_gpr(register, g), True => value }) = value, refl))
+}
+
+// A register other than the one written reads as it did.
+theorem read_gpr_other(register, query: Gpr, value: BitVec(64), g: Gprs, differ: register.same(query) = False):
+    read_gpr(query, write_gpr(register, value, g)) = read_gpr(query, g) {
+    trans(read_gpr_write(register, query, value, g),
+        j(sym(differ), λ b _ => (match b { False => read_gpr(query, g), True => value }) = read_gpr(query, g), refl))
 }
 
 // A register written with what it holds is the file.
@@ -3392,6 +3407,14 @@ fn CmpRight::read(self right: CmpRight, gprs: Gprs) → BitVec(64) {
 
 fn condition_byte(condition: Bool) → BitVec(8) {
     BitVec::ofBool(condition).zero_extend(7)
+}
+
+// The byte SETcc writes over a cleared register: the bit, zero-extended.
+theorem condition_byte_extends(condition: Bool):
+    condition_byte(condition).concat(BitVec::zero(n := 64).drop_low(8, 56)) =
+        BitVec::ofBool(condition).zero_extend(63)
+{
+    match condition { False => refl, True => refl }
 }
 
 fn write_low_byte(destination: LowByteGpr, condition: Bool,

@@ -1,0 +1,81 @@
+// Division by a constant as a multiply by its reciprocal (Granlund and
+// Montgomery, "Division by invariant integers using multiplication", 1994):
+// where `m·d` is `k` up to an error `e` with `e·x < k`, the quotient
+// `⌊x·m / k⌋` is `⌊x / d⌋`. A compiler offers `x / d` for a constant `d` as
+// a multiply and a shift (`k` a power of two) once it has checked the two
+// bounds on the numbers it chose (function_ir_operation_x86); nothing about
+// how `m` was found is trusted.
+//
+// The word's remainder is the dividend less the product of the quotient and
+// the divisor, at every divisor, zero included (`urem_eq_sub_mul_udiv`).
+import bitvec;
+import bitvec_nat;
+import bitvec_div;
+import bool;
+import logic;
+import nat;
+import omega;
+
+// A common positive right factor cancels from a comparison.
+theorem Nat::le_of_mul_le_mul_r(self a, b, c: Nat, positive: 0 < c, h: a * c <= b * c): a <= b {
+    match a.le_dec(b) {
+        Inl(le) => le,
+        Inr(no) => omega(Nat::mul_le_mono_r(c, b + 1, a, Nat::lt_of_not_le(b, a, no)), Nat::mul_succ_left(b, c), h, positive),
+    }
+}
+
+// `x·m·d = x·k + x·e`, so `x·m / k` lies within `x·e / (d·k)` above `x / d`,
+// less than `1/d` when `e·x < k`, which `x`'s remainder leaves room for.
+theorem Nat::div_by_reciprocal(x, d, m, k: Nat, positive: 0 < d, low: k <= m * d, close: (m * d - k) * x < k):
+    (x * m).div(k) = x.div(d)
+{
+    let q = x.div(d);
+    let r = x.mod(d);
+    let t = x * m;
+    let e = m * d - k;
+    let parts: (q * d + r = x) = x.div_mul_add_mod(d);
+    let small: (r < d) = x.mod_lt(d, divisor_pos := positive);
+    let whole: (e + k = m * d) = Nat::sub_add_cancel(k, m * d, low);
+    let td: (t * d = e * x + x * k) = trans(Nat::mul_assoc(x, m, d),
+        trans(Nat::cong(λ (y: Nat) => x * y, sym(whole)),
+            trans(Nat::mul_add_distr(x, e, k), Nat::cong(λ (y: Nat) => y + x * k, Nat::mul_comm(x, e)))));
+    let swap = λ (a: Nat) => trans(Nat::mul_assoc(a, k, d), trans(Nat::cong(λ (y: Nat) => a * y, Nat::mul_comm(k, d)), sym(Nat::mul_assoc(a, d, k))));
+    let qd_le: (q * d <= x) = omega(parts);
+    let lower_d: ((q * k) * d <= t * d) = j(sym(swap(q)), λ y _ => y <= t * d,
+        omega(td, Nat::mul_le_mono_r(k, q * d, x, qd_le)));
+    let lower: (q * k <= t) = Nat::le_of_mul_le_mul_r(q * k, t, d, positive, lower_d);
+    let next_d: ((q + 1) * d = d + q * d) = Nat::mul_succ_left(q, d);
+    let x_next: (x + 1 <= (q + 1) * d) = omega(parts, small, next_d);
+    let upper_d: (t * d < ((q + 1) * k) * d) = j(sym(swap(q + 1)), λ y _ => t * d < y,
+        omega(td, close, Nat::mul_le_mono_r(k, x + 1, (q + 1) * d, x_next), Nat::mul_succ_left(x, k)));
+    let upper: (t < (q + 1) * k) = Nat::lt_of_mul_lt_mul_r(t, (q + 1) * k, d, upper_d);
+    let qk: ((q + 1) * k = k + q * k) = Nat::mul_succ_left(q, k);
+    t.div_mod_unique(k, q, t - q * k, omega(lower), omega(upper, qk)).left
+}
+
+// The quotient of words is the quotient of their values, the divisor not
+// zero.
+theorem BitVec::toNat_udiv(n: Nat, a, d: BitVec(n), positive: 0 < d.toNat()): a.udiv(d).toNat() = a.toNat().div(d.toNat()) {
+    let nonzero: (d ≠ BitVec::zero()) = λ (zero: d = BitVec::zero()) =>
+        omega(positive, trans(@cong(λ (w: BitVec(n)) => w.toNat(), d, BitVec::zero(), zero), BitVec::zero_toNat(n)));
+    sym(a.toNat().div_mod_unique(d.toNat(), a.udiv(d).toNat(), a.urem(d).toNat(),
+        sym(BitVec::udiv_urem_toNat(n, a, d)), BitVec::urem_lt(n, a, d, nonzero)).left)
+}
+
+// The remainder is what the quotient's multiple leaves, at every divisor:
+// by zero the quotient is all ones, its multiple zero, and the remainder
+// the dividend.
+theorem BitVec::urem_eq_sub_mul_udiv(n: Nat, a, d: BitVec(n)): a.urem(d) = a.sub(d.mul(a.udiv(d))) {
+    let q = a.udiv(d).toNat();
+    let r = a.urem(d).toNat();
+    let parts: (a.toNat() = q * d.toNat() + r) = BitVec::udiv_urem_toNat(n, a, d);
+    let wide: (a.toNat() < Nat::pow(2, n)) = BitVec::toNat_lt_pow(n, a);
+    let product: (d.toNat() * q = q * d.toNat()) = Nat::mul_comm(d.toNat(), q);
+    let exact: (d.mul(a.udiv(d)).toNat() = d.toNat() * q) =
+        trans(BitVec::toNat_mul_mod(n, d, a.udiv(d)), (d.toNat() * q).mod_of_lt(Nat::pow(2, n), omega(parts, wide, product)));
+    let shifted: (a.toNat() + Nat::pow(2, n) - d.toNat() * q = r + 1 * Nat::pow(2, n)) = omega(parts, product);
+    BitVec::toNat_inj(n, sym(trans(BitVec::toNat_sub_mod(n, a, d.mul(a.udiv(d))),
+        trans(Nat::cong(λ (v: Nat) => (a.toNat() + Nat::pow(2, n) - v).mod(Nat::pow(2, n)), exact),
+            trans(Nat::cong(λ (v: Nat) => v.mod(Nat::pow(2, n)), shifted),
+                trans(r.add_mul_mod(Nat::pow(2, n), 1), r.mod_of_lt(Nat::pow(2, n), omega(parts, wide))))))))
+}

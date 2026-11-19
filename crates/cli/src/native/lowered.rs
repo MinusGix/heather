@@ -17,6 +17,9 @@ pub(super) struct Reader<'a> {
     pub at: usize,
 }
 
+// `Operation`'s constructors in the order `Operation::code` numbers them.
+const OPERATIONS: &[&str] = &["Mul", "ShlBy", "ShrBy", "UDiv", "URem"];
+
 impl Reader<'_> {
     pub fn next(&mut self) -> Result<u64, String> {
         let n = *self.numbers.get(self.at).ok_or("the spelled source ended early")?;
@@ -60,6 +63,12 @@ impl Reader<'_> {
             19 => ("WideStore", 5),
             20 => ("ByteSwap", 3),
             21 => ("RotateRight", 4),
+            // An operation's row (`function_ir_operation`): its constructor
+            // by `Operation::code`, then four fields.
+            22 => {
+                let op = *OPERATIONS.get(self.next()? as usize).ok_or_else(|| "operation code".to_string())?;
+                return Ok(format!("Apply({op}, {})", join(&self.take(4)?)));
+            }
             tag => return Err(format!("node tag {tag}")),
         };
         Ok(format!("{name}({})", join(&self.take(fields)?)))

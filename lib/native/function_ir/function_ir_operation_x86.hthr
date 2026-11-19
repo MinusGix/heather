@@ -1,0 +1,525 @@
+// The rows of machine code (docs/native/dogfooding-plan.md §5.3a): for an
+// operation of `function_ir_operation`, the x86 instructions that compute
+// it, where they read their operands and leave the result, and the theorem
+// that they leave the operation's meaning there. The lowering's one case
+// (`File::apply` in function_ir_lower) places the operands where the row
+// says, runs its code, and forgets every register the code may write
+// (`leaves`, x86_64_kept) but the result's: a row proves only what it
+// computes, never what it spares.
+//
+// A row is offered or refused by evaluation, here; nothing it is not
+// offered for is ever compiled. The next operation is a case of
+// `Operation::row` and an arm of `Operation::row_computes`.
+import x86_64;
+import x86_64_block;
+import x86_64_kept;
+import function_ir_operation;
+import bitvec;
+import bitvec_nat;
+import bitvec_div;
+import bitvec_ring;
+import bitvec_shift_nat;
+import bitvec_reciprocal;
+import bool;
+import logic;
+import list;
+import nat;
+import option;
+import omega;
+
+// Where a row reads its right operand: a register, or a word its code
+// carries (a constant the file knows).
+inductive Operand { InRegister(register: Gpr), Immediate(word: BitVec(64)) }
+
+fn Operand::read(self operand: Operand, gprs: Gprs) → BitVec(64) {
+    match operand { InRegister(register) => read_gpr(register, gprs), Immediate(word) => word }
+}
+
+// The left operand in `left`, the right one read as `right` says, the
+// result in `result` once `code` has run.
+record Row { code: List<Instruction>, left: Gpr, right: Operand, result: Gpr }
+
+fn Row::Computes<M>(self row: Row, op: Operation) → Type {
+    (s: MachineState<M>) → read_gpr(row.result, execute_block_normal(row.code, s).gprs) =
+        op.meaning(read_gpr(row.left, s.gprs), row.right.read(s.gprs))
+}
+
+// ---------------------------------------------------------------------------
+// Multiply: `IMUL d, r`, the low word of the product in place.
+
+theorem mul_row_computes<M>(destination, source: Gpr):
+    Row([ImulRR(destination, source)], destination, InRegister(source), destination).Computes<M>(Mul)
+{
+    λ s => read_gpr_self(destination, read_gpr(destination, s.gprs).mul(read_gpr(source, s.gprs)), s.gprs)
+}
+
+// ---------------------------------------------------------------------------
+// A shift by a word: `SHL d, CL` (or SHR) shifts by the count masked to six
+// bits, so the word is then multiplied by whether the count was below 64,
+// which is zero from the width up as the meaning is:
+//
+//     SHL d, CL; CMP RCX, 64; MOV ECX, 0; SETB CL; IMUL d, RCX
+//
+// The count's register is the one written for the bit (the count is read
+// by then); `d` is any other.
+
+fn shift_row_code(op: ShiftOp, destination: Gpr) → List<Instruction> {
+    [ShiftCl(op, destination), CmpRI8(Rcx, BitVec::ofNat(64)), MovRI32(Rcx, BitVec::ofNat(0)),
+        SetBelow(Cl), ImulRR(destination, Rcx)]
+}
+
+// The shift by the masked count, times the count's bit, is the shift by the
+// whole count, for a shift that is zero from the width up.
+theorem shift_masked(op: ShiftOp, x, k: BitVec(64), past: (m: Nat) → op.by(x, m + 64) = BitVec::zero()):
+    op.by(x, k.toNat().mod(64)).mul(BitVec::ofBool(k.unsigned_lt_bit(BitVec::ofNat(64))).zero_extend(63)) =
+        op.by(x, k.toNat())
+{
+    let r = BitVec::reflects_lt(64, k, BitVec::ofNat(64));
+    match below: k.unsigned_lt_bit(BitVec::ofNat(64)) {
+        True => {
+            let lt: (k.toNat() < 64) = r.left(below);
+            trans(BitVec::mul_one(64, op.by(x, k.toNat().mod(64))),
+                cong_fn(λ (c: Nat) => op.by(x, c), Nat::mod_of_lt(k.toNat(), 64, lt)))
+        },
+        False => {
+            let ge: (64 <= k.toNat()) = Nat::le_of_not_lt(k.toNat(), 64, r.right(below));
+            let parts: ((k.toNat() - 64) + 64 = k.toNat()) = Nat::sub_add_cancel(64, k.toNat(), ge);
+            trans(BitVec::mul_zero(64, op.by(x, k.toNat().mod(64))),
+                sym(j(parts, λ c _ => op.by(x, c) = BitVec::zero(), past(k.toNat() - 64))))
+        },
+    }
+}
+
+theorem shift_row_reads<M>(op: ShiftOp, destination: Gpr, apart: destination.same(Rcx) = False, s: MachineState<M>):
+    read_gpr(destination, execute_block_normal(shift_row_code(op, destination), s).gprs) =
+        op.by(read_gpr(destination, s.gprs), cl_count(s.gprs)).mul(
+            BitVec::ofBool(read_gpr(Rcx, s.gprs).unsigned_lt_bit(BitVec::ofNat(64))).zero_extend(63))
+{
+    let g = s.gprs;
+    let shifted = op.by(read_gpr(destination, g), cl_count(g));
+    let g1 = write_gpr(destination, shifted, g);
+    let cf = read_gpr(Rcx, g1).borrow_sub_bit(BitVec::ofNat(64, n := 8).sign_extend(56));
+    let g3 = write_gpr(Rcx, BitVec::ofNat(0, n := 32).zero_extend(32), g1);
+    let g4 = write_gpr(Rcx, condition_byte(cf).concat(read_gpr(Rcx, g3).drop_low(8, 56)), g3);
+    let other: (Rcx.same(destination) = False) = trans(Rcx.same_comm(destination), apart);
+    let kept: (read_gpr(destination, g4) = shifted) =
+        trans(read_gpr_other(Rcx, destination, condition_byte(cf).concat(read_gpr(Rcx, g3).drop_low(8, 56)), g3, other),
+            trans(read_gpr_other(Rcx, destination, BitVec::ofNat(0, n := 32).zero_extend(32), g1, other),
+                read_gpr_self(destination, shifted, g)));
+    let count: (read_gpr(Rcx, g1) = read_gpr(Rcx, g)) = read_gpr_other(destination, Rcx, shifted, g, apart);
+    let bit: (read_gpr(Rcx, g4) = BitVec::ofBool(read_gpr(Rcx, g).unsigned_lt_bit(BitVec::ofNat(64))).zero_extend(63)) =
+        trans(condition_byte_extends(cf),
+            cong_fn(λ (w: BitVec(64)) => BitVec::ofBool(w.unsigned_lt_bit(BitVec::ofNat(64))).zero_extend(63), count));
+    trans(read_gpr_self(destination, read_gpr(destination, g4).mul(read_gpr(Rcx, g4)), g4),
+        trans(cong_fn(λ (a: BitVec(64)) => a.mul(read_gpr(Rcx, g4)), kept),
+            cong_fn(λ (b: BitVec(64)) => shifted.mul(b), bit)))
+}
+
+
+// ---------------------------------------------------------------------------
+// Divide by a constant: x86's DIV faults on a zero divisor and is not in the
+// model's blocks (`block_reads` refuses it), so a known divisor
+// `d = 2^z·o` is a multiply by the reciprocal of `o` (bitvec_reciprocal):
+// `m`, a word, with `2^(64+s) <= m·o` and
+// `(m·o - 2^(64+s))·2^(64-z) <= 2^(64+s)`, checked here on the numbers. The
+// high word of `(x >> z)·m`, shifted right by `s`, is `x / d`:
+//
+//     [MOV RDX, x; SHR RDX, z;] MOV RAX, m; MUL x (or RDX); SHR RDX, s
+//
+// (the first two only where `d` is even), and the remainder is `x` less `d`
+// times it:
+//
+//     ... ; MOV RAX, d; IMUL RAX, RDX; MOV RDX, x; SUB RDX, RAX
+//
+// The dividend's register is neither RAX nor RDX, which the code writes.
+// An odd divisor whose reciprocal needs a 65th bit (7, 25) is not offered
+// yet: its fix-up is a subtraction, a shift and an add more.
+
+// The dividend shifted right by `z`, and the register it is then in.
+fn halved_code(source: Gpr, z: Nat) → List<Instruction> {
+    match z { Zero => [], Succ(_) => [MovRR(Rdx, source), ShiftImm(OpShr, Rdx, BitVec::ofNat(z))] }
+}
+
+fn halved_at(source: Gpr, z: Nat) → Gpr { match z { Zero => source, Succ(_) => Rdx } }
+
+fn multiply_code(source: Gpr, m, s: Nat) → List<Instruction> {
+    [MovRI(Rax, BitVec::ofNat(m)), MulR(source), ShiftImm(OpShr, Rdx, BitVec::ofNat(s))]
+}
+
+fn quotient_code(source: Gpr, z, m, s: Nat) → List<Instruction> {
+    halved_code(source, z) ++ multiply_code(halved_at(source, z), m, s)
+}
+
+fn remainder_tail(source: Gpr, d: Nat) → List<Instruction> {
+    [MovRI(Rax, BitVec::ofNat(d)), ImulRR(Rax, Rdx), MovRR(Rdx, source), SubRR(Rdx, Rax)]
+}
+
+// The bounds the numbers meet, as one verdict.
+fn reciprocal_fits(d, o, z, m, s: Nat) → Bool {
+    d.same(Nat::pow(2, z) * o) && ((1).leb(o) && ((d + 1).leb(Nat::pow(2, 64)) && ((m + 1).leb(Nat::pow(2, 64)) &&
+        (s.leb(63) && (z.leb(63) && (Nat::pow(2, 64 + s).leb(m * o) &&
+            ((m * o - Nat::pow(2, 64 + s)) * Nat::pow(2, 64 - z)).leb(Nat::pow(2, 64 + s))))))))
+}
+
+record ReciprocalFits(d, o, z, m, s: Nat) {
+    parts: d = Nat::pow(2, z) * o,
+    positive: 0 < o,
+    divisor: d < Nat::pow(2, 64),
+    multiplier: m < Nat::pow(2, 64),
+    shift: s <= 63,
+    halving: z <= 63,
+    low: Nat::pow(2, 64 + s) <= m * o,
+    close: (m * o - Nat::pow(2, 64 + s)) * Nat::pow(2, 64 - z) <= Nat::pow(2, 64 + s),
+}
+
+theorem reciprocal_fits_sound(d, o, z, m, s: Nat, fits: reciprocal_fits(d, o, z, m, s) = True): ReciprocalFits(d, o, z, m, s) {
+    let k = Nat::pow(2, 64 + s);
+    let b8 = ((m * o - k) * Nat::pow(2, 64 - z)).leb(k);
+    let b7 = k.leb(m * o) && b8;
+    let b6 = z.leb(63) && b7;
+    let b5 = s.leb(63) && b6;
+    let b4 = (m + 1).leb(Nat::pow(2, 64)) && b5;
+    let b3 = (d + 1).leb(Nat::pow(2, 64)) && b4;
+    let b2 = (1).leb(o) && b3;
+    let c1 = Bool::is_true_and(d.same(Nat::pow(2, z) * o), b2, Bool::is_true_of_eq(fits));
+    let c2 = Bool::is_true_and((1).leb(o), b3, c1.right);
+    let c3 = Bool::is_true_and((d + 1).leb(Nat::pow(2, 64)), b4, c2.right);
+    let c4 = Bool::is_true_and((m + 1).leb(Nat::pow(2, 64)), b5, c3.right);
+    let c5 = Bool::is_true_and(s.leb(63), b6, c4.right);
+    let c6 = Bool::is_true_and(z.leb(63), b7, c5.right);
+    let c7 = Bool::is_true_and(k.leb(m * o), b8, c6.right);
+    ReciprocalFits(d.same_sound(Nat::pow(2, z) * o, eq_true_of_is_true(d.same(Nat::pow(2, z) * o), c1.left)),
+        (1).leb_sound(o, c2.left), (d + 1).leb_sound(Nat::pow(2, 64), c3.left),
+        (m + 1).leb_sound(Nat::pow(2, 64), c4.left), s.leb_sound(63, c5.left), z.leb_sound(63, c6.left),
+        k.leb_sound(m * o, c7.left), ((m * o - k) * Nat::pow(2, 64 - z)).leb_sound(k, c7.right))
+}
+
+// The divisor's odd part `o` and its twos `z`, the multiplier and shift.
+record Reciprocal { odd: Nat, twos: Nat, multiplier: Nat, shift: Nat }
+
+// The first shift below 64 whose rounded-up reciprocal of `o` fits. Found
+// by evaluation; only `reciprocal_fits` is trusted, and it is checked again.
+fn reciprocal_from(d, o, z, s, fuel: Nat) → Option<Reciprocal> {
+    match fuel {
+        Zero => None,
+        Succ(rest) => {
+            let m = (Nat::pow(2, 64 + s) + o - 1).ldiv(o).quot();
+            match reciprocal_fits(d, o, z, m, s) { True => Some(Reciprocal(o, z, m, s)), False => reciprocal_from(d, o, z, s + 1, rest) }
+        },
+    }
+}
+
+// `d`'s twos counted off, then the search.
+fn reciprocal_odd(d, o, z, fuel: Nat) → Option<Reciprocal> {
+    match fuel {
+        Zero => None,
+        Succ(rest) => match o.low_bit().same(0) {
+            True => reciprocal_odd(d, o.half(), z + 1, rest),
+            False => reciprocal_from(d, o, z, 0, 64),
+        },
+    }
+}
+
+fn reciprocal(d: Nat) → Option<Reciprocal> {
+    match d { Zero => None, Succ(_) => reciprocal_odd(d, d, 0, 64) }
+}
+
+// An error below `k` once it is scaled by the dividend's bound.
+theorem reciprocal_close(e, x, bound, k: Nat, scaled: e * bound <= k, small: x < bound, positive: 0 < k): e * x < k {
+    match e as λ f => f * bound <= k → f * x < k {
+        Zero => λ _ => j(sym(Nat::mul_left_zero(x)), λ v _ => v < k, positive),
+        Succ(f) => λ scaled => omega(scaled, Nat::mul_lt_mono_l(f + 1, x, bound, trivial, small)),
+    }(scaled)
+}
+
+// The six-bit mask leaves a count below 64 alone.
+theorem shift_count_word(count: Nat, fits: count <= 63): shift_count(BitVec::ofNat(count)) = count {
+    let small: (count < Nat::pow(2, 8)) = Nat::le_trans(count, 63, 255, fits, trivial);
+    trans(Nat::cong(λ (n: Nat) => n.mod(64), BitVec::toNat_ofNat(8, count, small)),
+        Nat::mod_of_lt(count, 64, fits))
+}
+
+// The high word of a product, as the product's quotient by `2^64`.
+theorem mul_high_ofNat(a, b: BitVec(64)): mul_high(a, b) = BitVec::ofNat((a.toNat() * b.toNat()).shr(64), n := 64) { refl }
+
+// The quotient the code computes is the word's.
+theorem quotient_value(x: BitVec(64), d, o, z, m, s: Nat, fits: ReciprocalFits(d, o, z, m, s)):
+    OpShr.by(mul_high(BitVec::ofNat(m), x.shift_right(z)), shift_count(BitVec::ofNat(s))) = x.udiv(BitVec::ofNat(d))
+{
+    let w = Nat::pow(2, 64);
+    let k = Nat::pow(2, 64 + s);
+    let h = x.shift_right(z);
+    let mm: (BitVec::ofNat(m, n := 64).toNat() = m) = BitVec::toNat_ofNat(64, m, fits.multiplier);
+    let dd: (BitVec::ofNat(d, n := 64).toNat() = d) = BitVec::toNat_ofNat(64, d, fits.divisor);
+    let xs: (x.toNat() < w) = BitVec::toNat_lt_pow(64, x);
+    let hx: (h.toNat() = x.toNat().div(Nat::pow(2, z))) = BitVec::toNat_shift_right(64, x, z);
+    let width: (Nat::pow(2, z) * Nat::pow(2, 64 - z) = w) =
+        trans(sym(Nat::pow_add(2, z, 64 - z)), Nat::cong(λ (e: Nat) => Nat::pow(2, e), omega(fits.halving)));
+    let hs: (h.toNat() < Nat::pow(2, 64 - z)) = j(sym(hx), λ v _ => v < Nat::pow(2, 64 - z),
+        Nat::div_lt_of_lt_mul(x.toNat(), Nat::pow(2, z), Nat::pow(2, 64 - z), j(sym(width), λ v _ => x.toNat() < v, xs)));
+    let hw: (h.toNat() < w) = BitVec::toNat_lt_pow(64, h);
+    let p = m * h.toNat();
+    let p_small: (p < w * w) = omega(Nat::mul_le_mono_l(m, h.toNat(), w, omega(hw)), Nat::mul_comm(m, w),
+        Nat::mul_lt_mono_l(w, m, w, Nat::pow_pos(), fits.multiplier));
+    let high: (p.shr(64) = p.div(w)) = Nat::shr_eq_div(64, p);
+    let high_small: (p.shr(64) < w) = j(sym(high), λ v _ => v < w, Nat::div_lt_of_lt_mul(p, w, w, p_small));
+    let hn: (mul_high(BitVec::ofNat(m), h).toNat() = p.div(w)) =
+        trans(Nat::cong(λ (a: Nat) => BitVec::ofNat((a * h.toNat()).shr(64), n := 64).toNat(), mm),
+            trans(BitVec::toNat_ofNat(64, p.shr(64), high_small), high));
+    let counted: (shift_count(BitVec::ofNat(s)) = s) = shift_count_word(s, fits.shift);
+    let quotient: (OpShr.by(mul_high(BitVec::ofNat(m), h), shift_count(BitVec::ofNat(s))).toNat() = (h.toNat() * m).div(k)) =
+        trans(@cong(λ (c: Nat) => mul_high(BitVec::ofNat(m), h).shift_right(c).toNat(), shift_count(BitVec::ofNat(s)), s, counted),
+            trans(BitVec::toNat_shift_right(64, mul_high(BitVec::ofNat(m), h), s),
+                trans(Nat::cong(λ (v: Nat) => v.div(Nat::pow(2, s)), hn),
+                    trans(p.div_div(w, Nat::pow(2, s)),
+                        trans(Nat::cong(λ (v: Nat) => p.div(v), sym(Nat::pow_add(2, 64, s))),
+                            Nat::cong(λ (v: Nat) => v.div(k), Nat::mul_comm(m, h.toNat())))))));
+    let close: ((m * o - k) * h.toNat() < k) = reciprocal_close(m * o - k, h.toNat(), Nat::pow(2, 64 - z), k, fits.close, hs, Nat::pow_pos());
+    let divided: ((h.toNat() * m).div(k) = h.toNat().div(o)) = Nat::div_by_reciprocal(h.toNat(), o, m, k, fits.positive, fits.low, close);
+    let odd_pos: (0 < o) = fits.positive;
+    let both: (h.toNat().div(o) = x.toNat().div(d)) =
+        trans(Nat::cong(λ (v: Nat) => v.div(o), hx),
+            trans(x.toNat().div_div(Nat::pow(2, z), o, b_pos := odd_pos), Nat::cong(λ (v: Nat) => x.toNat().div(v), sym(fits.parts))));
+    let d_pos: (0 < d) = j(sym(fits.parts), λ v _ => 0 < v, Nat::mul_lt_mono_l(Nat::pow(2, z), 0, o, Nat::pow_pos(), odd_pos));
+    let word: (x.udiv(BitVec::ofNat(d)).toNat() = x.toNat().div(d)) =
+        trans(BitVec::toNat_udiv(64, x, BitVec::ofNat(d), j(sym(dd), λ v _ => 0 < v, d_pos)),
+            Nat::cong(λ (v: Nat) => x.toNat().div(v), dd));
+    BitVec::toNat_inj(64, trans(quotient, trans(divided, trans(both, sym(word)))))
+}
+
+// The halving leaves the shifted dividend where `halved_at` says, and the
+// dividend's register as it was.
+theorem halved_reads<M>(source: Gpr, z: Nat, fits: z <= 63, state: MachineState<M>):
+    read_gpr(halved_at(source, z), execute_block_normal(halved_code(source, z), state).gprs) = read_gpr(source, state.gprs).shift_right(z)
+{
+    (match z as λ c => c <= 63 → read_gpr(halved_at(source, c), execute_block_normal(halved_code(source, c), state).gprs) =
+            read_gpr(source, state.gprs).shift_right(c) {
+        Zero => λ _ => refl,
+        Succ(c) => λ small => cong_fn(λ (n: Nat) => read_gpr(source, state.gprs).shift_right(n), shift_count_word(c + 1, small)),
+    })(fits)
+}
+
+theorem halved_spares<M>(source: Gpr, z: Nat, apart: Rdx.same(source) = False, state: MachineState<M>):
+    read_gpr(source, execute_block_normal(halved_code(source, z), state).gprs) = read_gpr(source, state.gprs)
+{
+    match z {
+        Zero => refl,
+        Succ(_) => {
+            let g1 = write_gpr(Rdx, read_gpr(source, state.gprs), state.gprs);
+            trans(read_gpr_other(Rdx, source, OpShr.by(read_gpr(Rdx, g1), shift_count(BitVec::ofNat(z))), g1, apart),
+                read_gpr_other(Rdx, source, read_gpr(source, state.gprs), state.gprs, apart))
+        },
+    }
+}
+
+theorem multiply_reads<M>(source: Gpr, m, s: Nat, apart: Rax.same(source) = False, state: MachineState<M>):
+    read_gpr(Rdx, execute_block_normal(multiply_code(source, m, s), state).gprs) =
+        OpShr.by(mul_high(BitVec::ofNat(m), read_gpr(source, state.gprs)), shift_count(BitVec::ofNat(s)))
+{
+    cong_fn(λ (x: BitVec(64)) => OpShr.by(mul_high(BitVec::ofNat(m), x), shift_count(BitVec::ofNat(s))),
+        read_gpr_other(Rax, source, BitVec::ofNat(m), state.gprs, apart))
+}
+
+// A register neither RAX nor RDX is as it was after the multiply.
+theorem multiply_spares<M>(source, query: Gpr, m, s: Nat, apart_a: Rax.same(query) = False, apart_d: Rdx.same(query) = False,
+    state: MachineState<M>):
+    read_gpr(query, execute_block_normal(multiply_code(source, m, s), state).gprs) = read_gpr(query, state.gprs)
+{
+    let g = state.gprs;
+    let g1 = write_gpr(Rax, BitVec::ofNat(m), g);
+    let low = write_gpr(Rax, mul_low(read_gpr(Rax, g1), read_gpr(source, g1)), g1);
+    let g2 = write_gpr(Rdx, mul_high(read_gpr(Rax, g1), read_gpr(source, g1)), low);
+    trans(read_gpr_other(Rdx, query, OpShr.by(read_gpr(Rdx, g2), shift_count(BitVec::ofNat(s))), g2, apart_d),
+        trans(read_gpr_other(Rdx, query, mul_high(read_gpr(Rax, g1), read_gpr(source, g1)), low, apart_d),
+            trans(read_gpr_other(Rax, query, mul_low(read_gpr(Rax, g1), read_gpr(source, g1)), g1, apart_a),
+                read_gpr_other(Rax, query, BitVec::ofNat(m), g, apart_a))))
+}
+
+// RAX is not where the halved dividend is.
+theorem halved_apart(source: Gpr, z: Nat, apart: Rax.same(source) = False): Rax.same(halved_at(source, z)) = False {
+    match z { Zero => apart, Succ(_) => refl }
+}
+
+theorem quotient_reads<M>(source: Gpr, d, o, z, m, s: Nat, apart: Rax.same(source) = False, fits: ReciprocalFits(d, o, z, m, s),
+    state: MachineState<M>):
+    read_gpr(Rdx, execute_block_normal(quotient_code(source, z, m, s), state).gprs) = read_gpr(source, state.gprs).udiv(BitVec::ofNat(d))
+{
+    let halved = execute_block_normal(halved_code(source, z), state);
+    trans(cong_fn(λ (st: MachineState<M>) => read_gpr(Rdx, st.gprs),
+            execute_block_append<M>(halved_code(source, z), multiply_code(halved_at(source, z), m, s), state)),
+        trans(multiply_reads<M>(halved_at(source, z), m, s, halved_apart(source, z, apart), halved),
+            trans(cong_fn(λ (h: BitVec(64)) => OpShr.by(mul_high(BitVec::ofNat(m), h), shift_count(BitVec::ofNat(s))),
+                    halved_reads<M>(source, z, fits.halving, state)),
+                quotient_value(read_gpr(source, state.gprs), d, o, z, m, s, fits))))
+}
+
+theorem quotient_spares<M>(source: Gpr, z, m, s: Nat, apart_a: Rax.same(source) = False, apart_d: Rdx.same(source) = False,
+    state: MachineState<M>):
+    read_gpr(source, execute_block_normal(quotient_code(source, z, m, s), state).gprs) = read_gpr(source, state.gprs)
+{
+    trans(cong_fn(λ (st: MachineState<M>) => read_gpr(source, st.gprs),
+            execute_block_append<M>(halved_code(source, z), multiply_code(halved_at(source, z), m, s), state)),
+        trans(multiply_spares<M>(halved_at(source, z), source, m, s, apart_a, apart_d, execute_block_normal(halved_code(source, z), state)),
+            halved_spares<M>(source, z, apart_d, state)))
+}
+
+theorem remainder_tail_reads<M>(source: Gpr, d: Nat, apart: Rax.same(source) = False, state: MachineState<M>):
+    read_gpr(Rdx, execute_block_normal(remainder_tail(source, d), state).gprs) =
+        read_gpr(source, state.gprs).sub(BitVec::ofNat(d).mul(read_gpr(Rdx, state.gprs)))
+{
+    let g = state.gprs;
+    let g1 = write_gpr(Rax, BitVec::ofNat(d), g);
+    let product = BitVec::ofNat(d).mul(read_gpr(Rdx, g));
+    cong_fn(λ (x: BitVec(64)) => x.sub(product),
+        trans(read_gpr_other(Rax, source, product, g1, apart), read_gpr_other(Rax, source, BitVec::ofNat(d), g, apart)))
+}
+
+theorem remainder_reads<M>(source: Gpr, d, o, z, m, s: Nat, apart_a: Rax.same(source) = False, apart_d: Rdx.same(source) = False,
+    fits: ReciprocalFits(d, o, z, m, s), state: MachineState<M>):
+    read_gpr(Rdx, execute_block_normal(quotient_code(source, z, m, s) ++ remainder_tail(source, d), state).gprs) =
+        read_gpr(source, state.gprs).urem(BitVec::ofNat(d))
+{
+    let after = execute_block_normal(quotient_code(source, z, m, s), state);
+    let x = read_gpr(source, state.gprs);
+    let q: (read_gpr(Rdx, after.gprs) = x.udiv(BitVec::ofNat(d))) = quotient_reads<M>(source, d, o, z, m, s, apart_a, fits, state);
+    trans(cong_fn(λ (st: MachineState<M>) => read_gpr(Rdx, st.gprs), execute_block_append<M>(quotient_code(source, z, m, s), remainder_tail(source, d), state)),
+        trans(remainder_tail_reads<M>(source, d, apart_a, after),
+            trans(trans(cong_fn(λ (a: BitVec(64)) => a.sub(BitVec::ofNat(d).mul(read_gpr(Rdx, after.gprs))),
+                        quotient_spares<M>(source, z, m, s, apart_a, apart_d, state)),
+                    cong_fn(λ (b: BitVec(64)) => x.sub(BitVec::ofNat(d).mul(b)), q)),
+                sym(BitVec::urem_eq_sub_mul_udiv(64, x, BitVec::ofNat(d))))))
+}
+
+// The dividend's register: where it is, else the destination, so long as
+// it is neither RAX nor RDX.
+fn dividend_register(left: Option<Gpr>, destination: Gpr) → Gpr {
+    match left {
+        None => destination,
+        Some(register) => match Rax.same(register) || Rdx.same(register) { True => destination, False => register },
+    }
+}
+
+// The row for a divide or a remainder by `d`, its code from `code`.
+fn divide_row(d: Nat, source: Gpr, code: Reciprocal → List<Instruction>) → Option<Row> {
+    match reciprocal(d) {
+        None => None,
+        Some(found) => match reciprocal_fits(d, found.odd, found.twos, found.multiplier, found.shift) {
+            False => None,
+            True => match Rax.same(source) {
+                True => None,
+                False => match Rdx.same(source) {
+                    True => None,
+                    False => Some(Row(code(found), source, Immediate(BitVec::ofNat(d)), Rdx)),
+                },
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The rows
+
+// A row offered computes the operation.
+fn Row::Offered<M>(offered: Option<Row>, op: Operation) → Type {
+    match offered { None => True, Some(row) => row.Computes<M>(op) }
+}
+
+// The shift an operation is, where it is a shift by a word.
+fn Operation::shift(self op: Operation) → Option<ShiftOp> {
+    match op { Mul => None, ShlBy => Some(OpShl), ShrBy => Some(OpShr), UDiv => None, URem => None }
+}
+
+// The registers an operation's row writes whatever its destination, which
+// a planner keeps values it still needs out of: the shift count goes
+// through RCX, and a quotient's multiply through RAX and RDX.
+fn Operation::writes_fixed(self op: Operation) → List<Gpr> {
+    match op { Mul => [], ShlBy => [Rcx], ShrBy => [Rcx], UDiv => [Rax, Rdx], URem => [Rax, Rdx] }
+}
+
+// The row for `op` with its result in `destination`, given the registers
+// the file holds the operands in and the constant it knows the right one to
+// be, if any.
+fn Operation::row(self op: Operation, destination: Gpr, left, right: Option<Gpr>, known: Option<Nat>) → Option<Row> {
+    match op {
+        Mul => match right {
+            None => None,
+            Some(source) => Some(Row([ImulRR(destination, source)], destination, InRegister(source), destination)),
+        },
+        ShlBy => match destination.same(Rcx) {
+            True => None,
+            False => Some(Row(shift_row_code(OpShl, destination), destination, InRegister(Rcx), destination)),
+        },
+        ShrBy => match destination.same(Rcx) {
+            True => None,
+            False => Some(Row(shift_row_code(OpShr, destination), destination, InRegister(Rcx), destination)),
+        },
+        UDiv => match known {
+            None => None,
+            Some(d) => divide_row(d, dividend_register(left, destination),
+                λ r => quotient_code(dividend_register(left, destination), r.twos, r.multiplier, r.shift)),
+        },
+        URem => match known {
+            None => None,
+            Some(d) => divide_row(d, dividend_register(left, destination),
+                λ r => quotient_code(dividend_register(left, destination), r.twos, r.multiplier, r.shift) ++ remainder_tail(dividend_register(left, destination), d)),
+        },
+    }
+}
+
+theorem divide_row_computes<M>(op: Operation, d: Nat, source: Gpr, code: Reciprocal → List<Instruction>,
+    computes: (r: Reciprocal) → ReciprocalFits(d, r.odd, r.twos, r.multiplier, r.shift) → Rax.same(source) = False → Rdx.same(source) = False →
+        (state: MachineState<M>) → read_gpr(Rdx, execute_block_normal(code(r), state).gprs) =
+            op.meaning(read_gpr(source, state.gprs), BitVec::ofNat(d))):
+    Row::Offered<M>(divide_row(d, source, code), op)
+{
+    match reciprocal(d) {
+        None => trivial,
+        Some(found) => match fits: reciprocal_fits(d, found.odd, found.twos, found.multiplier, found.shift) {
+            False => trivial,
+            True => match apart_a: Rax.same(source) {
+                True => trivial,
+                False => match apart_d: Rdx.same(source) {
+                    True => trivial,
+                    False => computes(found, reciprocal_fits_sound(d, found.odd, found.twos, found.multiplier, found.shift, fits), apart_a, apart_d),
+                },
+            },
+        },
+    }
+}
+
+theorem Operation::row_computes<M>(self op: Operation, destination: Gpr, left, right: Option<Gpr>, known: Option<Nat>):
+    Row::Offered<M>(op.row(destination, left, right, known), op)
+{
+    match op {
+        Mul => match right {
+            None => trivial,
+            Some(source) => mul_row_computes<M>(destination, source),
+        },
+        ShlBy => match apart: destination.same(Rcx) {
+            True => trivial,
+            False => λ s => trans(shift_row_reads<M>(OpShl, destination, apart, s),
+                shift_masked(OpShl, read_gpr(destination, s.gprs), read_gpr(Rcx, s.gprs),
+                    λ m => BitVec::shift_left_past(read_gpr(destination, s.gprs), m))),
+        },
+        ShrBy => match apart: destination.same(Rcx) {
+            True => trivial,
+            False => λ s => trans(shift_row_reads<M>(OpShr, destination, apart, s),
+                shift_masked(OpShr, read_gpr(destination, s.gprs), read_gpr(Rcx, s.gprs),
+                    λ m => BitVec::shift_right_past(read_gpr(destination, s.gprs), m))),
+        },
+        UDiv => match known {
+            None => trivial,
+            Some(d) => divide_row_computes<M>(UDiv, d, dividend_register(left, destination),
+                λ r => quotient_code(dividend_register(left, destination), r.twos, r.multiplier, r.shift),
+                λ r fits apart_a _ state => quotient_reads<M>(dividend_register(left, destination), d, r.odd, r.twos, r.multiplier, r.shift,
+                    apart_a, fits, state)),
+        },
+        URem => match known {
+            None => trivial,
+            Some(d) => divide_row_computes<M>(URem, d, dividend_register(left, destination),
+                λ r => quotient_code(dividend_register(left, destination), r.twos, r.multiplier, r.shift) ++ remainder_tail(dividend_register(left, destination), d),
+                λ r fits apart_a apart_d state => remainder_reads<M>(dividend_register(left, destination), d, r.odd, r.twos, r.multiplier, r.shift,
+                    apart_a, apart_d, fits, state)),
+        },
+    }
+}

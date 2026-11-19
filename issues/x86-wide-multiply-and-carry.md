@@ -5,7 +5,7 @@ labels: [x86,native,compiler,cryptography]
 area: heather-in-heather
 milestone: [hih-crypto]
 created: 2026-11-10
-updated: 2026-11-10
+updated: 2026-11-19
 ---
 
 The second instruction group of `docs/native/native-lexer-crypto-roadmap.md` §2
@@ -35,3 +35,7 @@ function at `Nat`, through `mul_wide` and `adc`'s `toNat` readings.
   target needs.
 - **[[field-arithmetic-language]]** is the customer: its compile strategy
   emits these instructions and nothing else in `rt` needs them yet.
+
+## Log
+
+- 2026-11-19: 2026-11-19: `MUL r/m64` (RDX:RAX, `mul_high`/`mul_low`) and `IMUL r64, r/m64` are in the model, flags undefined, checked against a CPU; FunctionIR reaches them through the operation rows (`Mul`, and `MUL` in the divide-by-constant rows). Still open here: ADC/SBB, CMOVcc, MULX/ADCX/ADOX, the widening multiply as a node.
