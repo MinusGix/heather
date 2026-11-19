@@ -338,6 +338,16 @@ impl DeclarationsMut<'_> {
             };
             let owner = function.name.rsplit_once("::").map(|(owner, _)| owner.to_string());
             self.scoped(|s| &mut s.member_owner, owner, |me| DeclarationsMut(me).elab_recursion_equations(&function, recursion));
+            // Asked for under a designed name (a loop's `f::step`), the
+            // principle is reached under that name too.
+            let built = format!("{}::induct", function.name);
+            if built != designed {
+                if let Some(target) = self.access_alias(&built).map(str::to_string) {
+                    self.designate_access(&designed, &target);
+                } else if let Some(why) = self.pass.unfold_refusals.borrow().get(&built).cloned() {
+                    self.pass.unfold_refusals.borrow_mut().insert(designed.clone(), why);
+                }
+            }
         }
     }
 
@@ -345,6 +355,9 @@ impl DeclarationsMut<'_> {
     /// `induct f(…)` follows its cases (a loop's step,
     /// docs/language/loop-combinator-design.md §4).
     fn cases_only(&self, module: &str, base: &str) -> Option<(Rc<Decl>, branch_equations::Recursion)> {
+        // A designed name (`f::step`) stands for its minted declaration.
+        let minted = self.access_alias(base).map(str::to_string);
+        let base = minted.as_deref().unwrap_or(base);
         self.names.surface_decl_in(module, base).filter(|f| {
             f.kind == DeclKind::Fn && f.decreases.is_none() && f.partial.is_none() && branch_equations::candidate(f)
                 && !loops::has_loop(f) && !branch_equations::recursive(f, base_name(&f.name))
@@ -893,7 +906,21 @@ impl DeclarationsMut<'_> {
         for part in &family.parts {
             match part {
                 loops::Part::State(d) => self.elab_inductive(d)?,
-                loops::Part::Decl(d) => self.elab_decl(d)?,
+                loops::Part::Decl(d) => self.elab_decl(d).map_err(|e| match e {
+                    // A pass that goes round owes the measure's decrease
+                    // (docs/language/loop-combinator-design.md §5).
+                    ElabError::Elab { msg, span } if family.decreases.iter().any(|(s, _)| *s == span)
+                        && (msg.starts_with("`omega` got stuck") || msg.starts_with("`bv_omega`")) =>
+                    {
+                        let text = family.decreases.iter().find(|(s, _)| *s == span).map(|(_, t)| t.clone()).unwrap_or_default();
+                        ElabError::Elab {
+                            msg: format!("this pass of the loop must decrease the measure `{text}`, and that was not proved \
+                                          automatically. The search said: {msg}"),
+                            span,
+                        }
+                    }
+                    e => e,
+                })?,
             }
         }
         // §7.1: always attempted, and never a reason to refuse `f` — the
@@ -915,6 +942,16 @@ impl DeclarationsMut<'_> {
             for part in ["body", "rec", "ext", "irrel"] {
                 if let Some(target) = self.access_alias(&format!("{minted}::{part}")).map(str::to_string) {
                     self.designate_access(&format!("{designed}::{part}"), &target);
+                }
+            }
+            // A combinator loop's step's branch equations (`f::step::True`),
+            // which `induct f::step(…)` and a proof cite.
+            let prefix = format!("{minted}::");
+            let members = self.access_aliases_under(&prefix);
+            for (member, target) in members {
+                let name = format!("{designed}::{member}");
+                if self.access_alias(&name).is_none() {
+                    self.designate_access(&name, &target);
                 }
             }
         }

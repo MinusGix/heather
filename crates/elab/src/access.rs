@@ -109,6 +109,20 @@ impl Elaborator {
             .map(String::as_str)
     }
 
+    /// Every designed path under `prefix`, with the rest of its path and the
+    /// declaration it names: a family's members (`f#step::True`) to designate
+    /// again under another name.
+    pub(crate) fn access_aliases_under(&self, prefix: &str) -> Vec<(String, String)> {
+        let mut found: Vec<(String, String)> = self.representations
+            .access()
+            .alias
+            .iter()
+            .filter_map(|(k, v)| k.strip_prefix(prefix).map(|rest| (rest.to_string(), v.clone())))
+            .collect();
+        found.sort();
+        found
+    }
+
     /// The refusal for a name written in user source, if it is one. `None` in
     /// generated mode, where the minted names are what the text says.
     pub(crate) fn access_refusal(&self, name: &str) -> Option<String> {
