@@ -100,7 +100,7 @@ fn Source::compiled_meaning(self src: Source, homes: Homes, bodies: List<Frame>,
     src.bounded(args, src.charges(homes, bodies), src.left(homes, bodies))
 }
 
-// The levels the source asks for, kept (§7.3): every run of the source
+// The levels the source asks for, kept (§7.4): every run of the source
 // whose checked calls nest at most `src.levels` deep, the compiled program
 // makes, never refused, whatever frames and homes the compile picked. It
 // rests on the ranks holding of the source (`Source::ranked`), what the

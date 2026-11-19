@@ -321,7 +321,7 @@ theorem List::reach_call(self callees: List<Nat>, procedures: List<Procedure>, b
 }
 
 // ---------------------------------------------------------------------------
-// Room in levels (docs/native/native-procedure-frames-design.md §7.3): the
+// Room in levels (docs/native/native-procedure-frames-design.md §7.4): the
 // charges a compile picks fit levels of checked calls, wherever the ranks
 // hold of the source (`Source::charges_levels`).
 

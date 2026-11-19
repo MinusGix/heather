@@ -31,6 +31,7 @@ import function_ir_run;
 import function_ir_placeless;
 import native_source;
 import native_source_co;
+import coitree_lag;
 import rt;
 import rt_io;
 import rt_io_lower;
@@ -99,6 +100,25 @@ fn Stmt::exit_reads(self s: Stmt, result: Nat, call: Writers(), perform: Perform
         Io::against_co_cong(CoTree::map(Events::linux(), Then(s, Exit(result)).denote_co(call, perform)(env), λ flow => flow.status()),
             CoTree::map(Events::linux(), s.denote_co(call, perform)(env), λ flow => flow.read_back(Word(64), tys, result)),
             Stmt::exit_eutt(s, result, call, perform, env, tys), io),
+        r(io))
+}
+
+// A source's tree, its calls run as deep as they go, reads as whatever its
+// `main` reads as with each call a function of the environment
+// (`Source::tree_lags`): `f::reads` is stated over `Source::tree_co` and
+// proved over the statements.
+fn Source::reads_co(self src: Source, args: List<List<BitVec(8)>>, ch: Charges, left: Nat, f: Io → Partial(Mutated<Io, BitVec(64)>),
+    r: Io::Reads<BitVec(64)>(CoTree::map(Events::linux(),
+        src.main.denote_co(program_writers(src.functions), src.performs_co(program_writers(src.functions), ch, left))(src.start(args)),
+        λ flow => flow.status()), f)) → Io::Reads<BitVec(64)>(src.tree_co(args, ch, left), f)
+{
+    let read = CoTree::map(Events::linux(),
+        src.main.denote_co(program_writers(src.functions), src.performs_co(program_writers(src.functions), ch, left))(src.start(args)),
+        λ flow => flow.status());
+    λ io => Eutt::trans(Events::none(), Io::against_co(src.tree_co(args, ch, left), io), Io::against_co(read, io), f(io),
+        Io::against_co_cong(src.tree_co(args, ch, left), read,
+            Eutt::sym(Events::linux(), read, src.tree_co(args, ch, left), Lag::eutt(Events::linux(), read, src.tree_co(args, ch, left), src.tree_lags(args, ch, left))),
+            io),
         r(io))
 }
 

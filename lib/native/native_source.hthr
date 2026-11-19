@@ -419,7 +419,7 @@ record Buffer { capacity: Nat, initial: List<BitVec(8)> := [] }
 // Its procedures (procedure `p` is the `p`-th), and how many levels of
 // calls that can nest without bound (those the compiler checks) the
 // compiled program has room for below `main`'s frame, past what `main`'s
-// own calls take (`Source::left`, §7.3; the source's own meaning has no
+// own calls take (`Source::left`, §7.4; the source's own meaning has no
 // stack).
 record Source { functions: List<Function>, buffers: List<Buffer>, words: Nat, main: Stmt,
     procedures: List<Procedure> := [], levels: Nat := 0 }
@@ -1123,7 +1123,7 @@ theorem Source::of_none_bounded(self src: Source, args: List<List<BitVec(8)>>, c
 }
 
 // ---------------------------------------------------------------------------
-// Room in levels of calls (docs/native/native-procedure-frames-design.md §7.3)
+// Room in levels of calls (docs/native/native-procedure-frames-design.md §7.4)
 //
 // A program asks for its stack in levels of the calls that can nest without
 // bound (the compiler's checked calls), not in bytes: the bytes a call takes

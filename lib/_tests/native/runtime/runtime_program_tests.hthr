@@ -53,7 +53,7 @@ runtime fn echo_all(mut io: Io, buf: ByteBuffer(64)) → Partial(Mutated<Io, Bit
 
 // What the generator states, written out: the Source's tree, read against
 // any world, is `echo_all` from a zeroed buffer of 64 bytes.
-fn echo_whole() → Io::Reads<BitVec(64)>(echo_all::source.tree_co([], Charges::free(), 0, 0), λ io => echo_all(io, List::replicate(zero_byte(), 64))) { echo_all::reads }
+fn echo_whole() → Io::Reads<BitVec(64)>(echo_all::source.tree_co([], Charges::free(), 0), λ io => echo_all(io, List::replicate(zero_byte(), 64))) { echo_all::reads }
 
 // tr: read into the buffer, raise what came back in place (a `runtime fn`
 // over a span, lent the buffer), write it; while a read brings something.
@@ -77,7 +77,7 @@ runtime fn tr_upper(mut io: Io, buf: ByteBuffer(256)) → Partial(Mutated<Io, Bi
     Pointed::ret(Mutated(io, status))
 }
 
-fn tr_whole() → Io::Reads<BitVec(64)>(tr_upper::source.tree_co([], Charges::free(), 0, 0), λ io => tr_upper(io, List::replicate(zero_byte(), 256))) { tr_upper::reads }
+fn tr_whole() → Io::Reads<BitVec(64)>(tr_upper::source.tree_co([], Charges::free(), 0), λ io => tr_upper(io, List::replicate(zero_byte(), 256))) { tr_upper::reads }
 
 // Its Source calls `raise_span`'s program, lent the buffer.
 theorem tr_upper_functions(): tr_upper::source.functions = raise_span::program { refl }
@@ -109,7 +109,7 @@ runtime fn ascii_check(mut io: Io, buf: ByteBuffer(4096)) → Partial(Mutated<Io
     Pointed::ret(Mutated(io, m.value))
 }
 
-fn ascii_whole() → Io::Reads<BitVec(64)>(ascii_check::source.tree_co([], Charges::free(), 0, 0), λ io => ascii_check(io, List::replicate(zero_byte(), 4096))) { ascii_check::reads }
+fn ascii_whole() → Io::Reads<BitVec(64)>(ascii_check::source.tree_co([], Charges::free(), 0), λ io => ascii_check(io, List::replicate(zero_byte(), 4096))) { ascii_check::reads }
 
 // ---------------------------------------------------------------------------
 // Byte strings a program writes (`b"…"`, docs/native/io-programs-design.md
@@ -147,7 +147,7 @@ runtime fn ascii_say(mut io: Io, buf: ByteBuffer(4096)) → Partial(Mutated<Io, 
 
 // What the generator states: the program from a zeroed buffer, with no
 // argument for the strings, which are the `Source`'s.
-fn ascii_say_whole() → Io::Reads<BitVec(64)>(ascii_say::source.tree_co([], Charges::free(), 0, 0), λ io => ascii_say(io, List::replicate(zero_byte(), 4096))) { ascii_say::reads }
+fn ascii_say_whole() → Io::Reads<BitVec(64)>(ascii_say::source.tree_co([], Charges::free(), 0), λ io => ascii_say(io, List::replicate(zero_byte(), 4096))) { ascii_say::reads }
 
 // The strings are buffers after the parameter's, in the order the
 // reflector's walk meets them (an `if`'s `False` arm is its `match`'s
@@ -179,7 +179,7 @@ runtime fn ascii_local(mut io: Io) → Partial(Mutated<Io, BitVec(64)>) {
     Pointed::ret(Mutated(io, m.value))
 }
 
-fn ascii_local_whole() → Io::Reads<BitVec(64)>(ascii_local::source.tree_co([], Charges::free(), 0, 0), λ io => ascii_local(io)) { ascii_local::reads }
+fn ascii_local_whole() → Io::Reads<BitVec(64)>(ascii_local::source.tree_co([], Charges::free(), 0), λ io => ascii_local(io)) { ascii_local::reads }
 
 // One buffer, the local's, zeroed at its capacity; the reading is
 // `ascii_check`'s (the parameter and the local read alike).
@@ -200,4 +200,4 @@ runtime fn two_locals(mut io: Io) → Partial(Mutated<Io, u64>) {
 }
 
 theorem two_locals_buffers(): two_locals::source.buffers.map(λ b => b.capacity) = [8, 16] { refl }
-fn two_locals_whole() → Io::Reads<u64>(two_locals::source.tree_co([], Charges::free(), 0, 0), λ io => two_locals(io)) { two_locals::reads }
+fn two_locals_whole() → Io::Reads<u64>(two_locals::source.tree_co([], Charges::free(), 0), λ io => two_locals(io)) { two_locals::reads }

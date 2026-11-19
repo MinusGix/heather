@@ -606,12 +606,9 @@ The depth in calls became the check in bytes (§7.2).
   concludes `SimPaidProgram(…, src.bounded(args, src.charges(homes,
   bodies), src.left(homes, bodies)), s)`.
 - **The fuel-free tree** (`native_source_co`) charges and refuses the same
-  way, with a depth `d` for its calls past which a call never returns
-  (claiming nothing, as a cut). The fuelled tree at fuel `n` is inside it
-  at depth `n` (`Source::tree_co_into`), and its traces at any depth are
-  the fuelled program's (`Source::tree_co_refined`). A tree with no bound
-  on its calls is `coitree_rec`'s `mrec`, not done.
-- **Builders** asked with `room(bytes, …)` (`native_build`); since §7.3
+  way. As first built it had a depth `d` for its calls past which a call
+  never returned; §7.3 removed it.
+- **Builders** asked with `room(bytes, …)` (`native_build`); since §7.4
   they ask in levels.
 
 That is guarantee 1 in bytes, 2 as in §7.1, and 5: a program whose
@@ -619,7 +616,56 @@ procedures never reach themselves has no check, its charges refuse nothing
 and `need` is its whole stack. What is left of §7 is tail calls (3) and
 bounded recursion (4).
 
-### 7.3 As built: room asked in levels
+### 7.3 As built: the fuel-free tree with no depth
+
+A source's meaning with no fuel (`native_source_co`) had kept one count:
+how deep calls nest, past which a call never returned. No one depth
+serves a program whose recursion is as deep as its input: `Io::Reads`
+asks for the tree's reading to be the program's at *every* world, and the
+depth a world needs grows with it. The tree now has no count.
+
+- **Calls as events.** `Stmt::denote_calls(call, left)` is the statement
+  with each `Perform` an event (`ProcedureCall`: the procedure, its
+  arguments, where its results go, the caller's environment and the bytes
+  left), over `Events::with_calls()` (those calls beside Linux's), answered
+  with the flow back in the caller. `Source::handler(call, ch)` answers one
+  as the compiled program does: the refusal where the check finds too few
+  bytes, otherwise the body with the cost taken, its own calls events
+  again. `Source::tree_co(args, ch, left)` is `coitree_rec`'s `mrec` of
+  `main`'s tree under that handler. The CALL's silent step is the one
+  `mrec` takes at the call.
+- **The key lemma** (`Stmt::lags`): running a statement's calls is reading
+  it with each call a function of the environment (`Stmt::denote_co` with
+  `performs_by(h, left)`, the call run by `mrec`), up to silent steps. The
+  run takes one more step after each command of Linux and is otherwise the
+  reading step for step: `mrec` commutes with `bind`, with a loop and with
+  `map` up to strong bisimilarity (`Bisim::mrec_bind`, `Bisim::mrec_iter`,
+  `Bisim::mrec_map` in `coitree_rec`, the loop's a new direct corecursion
+  over the pending pass). The relation is `Lag` (`coitree_lag`,
+  `docs/itrees/coitree-design.md` §7.10): `Eutt` with nothing dropped on
+  the reading's side, so it gives `Eutt` and it also keeps depths: what the
+  run produces cut at depth `n`, the reading produces cut at `n`.
+- **The bridge, both ways, no depth.** `Source::tree_co_refines`: the
+  fuelled program refines the tree (each call by induction on the fuelled
+  depth, its body through `Stmt::into_co` into the reading, which is the
+  run up to taus). `Source::tree_co_refined`: the tree refines the fuelled
+  program, through the depth family that stays as a proof device
+  (`Source::tree_upto`, the old tree, with a call past `d` levels a
+  `spin`): every call the run reaches by depth `n` costs a silent step,
+  so the run cut at `n` is inside the tree `n` deep
+  (`Source::approx_into_upto`, by induction on `d`, crossing `Lag` by
+  `Lag::traces`), which is inside the program (`tree_upto_refined`).
+- **Runtime programs.** `f::reads` is stated over `Source::tree_co([],
+  Charges::free(), 0)`; the generated proof is the old one, over the
+  statements read with each call a function, carried to the tree by
+  `Source::reads_co` (`rt_io_program`). A program with recursion reads the
+  same way.
+
+The probes (`lib/_tests/native/native_source_co_tests.hthr`): a recursion
+six calls deep returns in the tree and never in the tree four deep, and
+the bridge at it both ways.
+
+### 7.4 As built: room asked in levels
 
 A byte count was the wrong thing to ask for. The bytes a call takes are its
 level under the frames and homes the compiler picks, so a writer who wants

@@ -171,25 +171,25 @@ fn cat_deaf_end() → Mutated<Io, BitVec(64)> {
 // and all. The source is read with no fuel (`Source::tree_co`,
 // `native_source_co`), so its `Repeat` goes round for as long as its
 // again-bit says, as the surface loop does; the statement is
-// `Io::Reads(cat(256).tree_co([], Charges::free(), 0, 0), λ io => Io::cat(io, 256))` at one world.
+// `Io::Reads(cat(256).tree_co([], Charges::free(), 0), λ io => Io::cat(io, 256))` at one world.
 // The source's tree is what `write-elf` compiles, and its fuelled meaning
 // is inside this one (`Source::tree_co_refines`), so this is the agreement a
 // `runtime fn` setup will prove once (`Io::reads_bind`, `Io::reads_iter`)
 // checked here at a world.
 theorem cat_agrees_piped():
-    Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::against_co(cat(256).tree_co([], Charges::free(), 0, 0), piped()), Io::cat(piped(), 256))
+    Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::against_co(cat(256).tree_co([], Charges::free(), 0), piped()), Io::cat(piped(), 256))
 {
     ERet(30, 20, cat_piped_end(), refl, refl)
 }
 theorem cat_agrees_failing():
-    Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::against_co(cat(8).tree_co([], Charges::free(), 0, 0), Io::of(deaf())), Io::cat(Io::of(deaf()), 8))
+    Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::against_co(cat(8).tree_co([], Charges::free(), 0), Io::of(deaf())), Io::cat(Io::of(deaf()), 8))
 {
     ERet(30, 20, cat_deaf_end(), refl, refl)
 }
 // The negative control: a different end, the status of a failure.
 // expect-error(kernel): the kernel rejected `cat_agrees_wrong`: NotConvertible
 theorem cat_agrees_wrong():
-    Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::against_co(cat(256).tree_co([], Charges::free(), 0, 0), piped()), Io::cat(piped(), 256))
+    Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::against_co(cat(256).tree_co([], Charges::free(), 0), piped()), Io::cat(piped(), 256))
 {
     ERet(30, 20, Mutated(cat_piped_end().after, BitVec::ofNat(1)), refl, refl)
 }

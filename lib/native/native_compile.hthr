@@ -1634,7 +1634,7 @@ fn List::most(self flags: List<Bool>, f: Nat → Nat, index: Nat) → Nat {
 }
 
 // A level of checked calls: the most any checked procedure takes, its
-// level and what its body takes below its frame (§7.3; its check asks for
+// level and what its body takes below its frame (§7.4; its check asks for
 // that and one return address more).
 fn Source::per_level(self src: Source, homes: Homes, bodies: List<Frame>) → Nat {
     src.procedures.checks().most(λ p => bodies.frame(p).level(homes.places) + src.body_below(homes, bodies, p), 0)

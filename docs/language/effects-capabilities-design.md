@@ -70,7 +70,7 @@ The probe that ties them together:
 
 ```heather
 theorem cat_agrees_piped():
-    Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::against_co(cat(256).tree_co([]), piped()), Io::cat(piped(), 256))
+    Eutt<Mutated<Io, BitVec(64)>>(Events::none(), Io::against_co(cat(256).tree_co([], Charges::free(), 0), piped()), Io::cat(piped(), 256))
 {
     ERet(30, 20, cat_piped_end(), refl, refl)
 }
@@ -325,16 +325,18 @@ The work, in `issues/`: `partial-fn-surface`, `eutt-iteration-and-io-reading`,
 `issues/effectful-loops-without-passes.md`, milestone `it-world-loops`.
 
 - **A `Source` with no fuel** (`lib/native/native_source_co.hthr`).
-  `Stmt::denote_co` reads a `Repeat` as `CoTree::iter`; procedures still
-  nest to the source's depth (one call past it exits 139), so depth is
-  counted but no fuel is. `Source::tree_co(args)` is the program's tree.
-  It is a function of the environment (`Env → CoTree<Flow>`) so that its
-  recursion is on the statement: a function whose result is codata is read
-  as corecursive.
+  `Stmt::denote_co` reads a `Repeat` as `CoTree::iter`. It is a function
+  of the environment (`Env → CoTree<Flow>`) so that its recursion is on the
+  statement: a function whose result is codata is read as corecursive.
+  Since 2026-11-19 nothing is counted at all: a call is an event, and
+  `Source::tree_co(args, ch, left)` runs `main`'s tree with each call
+  answered by `coitree_rec`'s `mrec`, as deep as the calls go
+  (`docs/native/native-procedure-frames-design.md` §7.3). Before, calls
+  nested to a depth past which a call never returned.
 - **The bridge** is `Program::Refines` both ways, so the fuelled program
   and the fuel-free tree are the same program. `Source::tree_co_refines`:
-  every trace `src.denote(args)` produces at some fuel, `src.tree_co(args)`
-  produces at some depth. That is the direction a compiled program's
+  every trace the fuelled program produces at some fuel, `src.tree_co(…)`
+  produces. That is the direction a compiled program's
   theorem travels: its ELF refines the fuelled program, so it refines the
   fuel-free one. `Source::tree_co_refined` is the converse, which moves a
   spec proved on the fuelled side over. Both go construct by construct

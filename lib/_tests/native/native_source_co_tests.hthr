@@ -2,11 +2,12 @@
 // counts down returns at a depth with its status, as the fuelled tree does
 // at enough fuel; a loop that never stops is a tree that never returns,
 // where every fuelled tree is cut; a call is refused where its check finds
-// too few bytes, as the compiled meaning's is, and one past the depth never
-// returns; and the bridge (`Source::tree_co_refines`, `tree_co_refined`)
-// at a source. The
-// negative controls: a wrong status, and a depth too small to reach the
-// end. Tests, not library: nothing outside lib/_tests imports this module
+// too few bytes, as the compiled meaning's is; a recursion as deep as its
+// argument returns in the tree with no bound on its calls, and never in the
+// tree with calls nested less deep (`Source::tree_upto`); and the bridge
+// (`Source::tree_co_refines`, `tree_co_refined`) at a source. The negative
+// controls: a wrong status, and a depth too small to reach the end. Tests,
+// not library: nothing outside lib/_tests imports this module
 // (docs/test-value-audit.md §4.5).
 import logic;
 import nat;
@@ -33,11 +34,11 @@ fn countdown(k: Nat) → Source {
 }
 
 // The status a fuel-free tree returns with, after `n` silent steps.
-fn status_after(src: Source, n: Nat) → Obs<BitVec(64)>(Events::linux()) { CoTree::after(Events::linux(), n, src.tree_co([], Charges::free(), 0, 0)) }
+fn status_after(src: Source, n: Nat) → Obs<BitVec(64)>(Events::linux()) { CoTree::after(Events::linux(), n, src.tree_co([], Charges::free(), 0)) }
 
 // Three passes, two of them going round: two silent steps.
 theorem countdown_3(): status_after(countdown(3), 2) = ORet(7) { refl }
-theorem countdown_returns(): Returns<BitVec(64)>(Events::linux(), countdown(5).tree_co([], Charges::free(), 0, 0), 7) { Returns(30, refl) }
+theorem countdown_returns(): Returns<BitVec(64)>(Events::linux(), countdown(5).tree_co([], Charges::free(), 0), 7) { Returns(30, refl) }
 // The fuelled tree agrees at enough fuel.
 theorem countdown_fuelled(): ITree::next(Events::linux(), countdown(3).tree([], 4)) = Exits(7) { refl }
 
@@ -63,23 +64,45 @@ fn calls() → Source {
         procedures := [Procedure(params := [], results := [], body := Then(ops([Const(64, 0, 0)]), Perform(0, [], [])))])
 }
 fn eight() → Charges { Charges(λ _ => 8, λ _ => Some(8)) }
-fn calls_after(left, d, n: Nat) → Obs<BitVec(64)>(Events::linux()) { CoTree::after(Events::linux(), n, calls().tree_co([], eight(), left, d)) }
-theorem calls_refused(): calls_after(24, 10, 20) = ORet(139) { refl }
-theorem calls_past_depth(): ¬Obs::Settled(Events::linux(), calls_after(100, 2, 40)) { λ s => s }
+fn calls_after(left, n: Nat) → Obs<BitVec(64)>(Events::linux()) { CoTree::after(Events::linux(), n, calls().tree_co([], eight(), left)) }
+fn calls_upto_after(left, d, n: Nat) → Obs<BitVec(64)>(Events::linux()) { CoTree::after(Events::linux(), n, calls().tree_upto([], eight(), left, d)) }
+theorem calls_refused(): calls_after(24, 20) = ORet(139) { refl }
+theorem calls_upto_refused(): calls_upto_after(24, 10, 20) = ORet(139) { refl }
+theorem calls_past_depth(): ¬Obs::Settled(Events::linux(), calls_upto_after(100, 2, 40)) { λ s => s }
 // expect-error(kernel): the kernel rejected `calls_refused_later`: NotConvertible
-theorem calls_refused_later(): calls_after(32, 10, 20) = ORet(1) { refl }
+theorem calls_refused_later(): calls_after(32, 20) = ORet(1) { refl }
 
-// The bridge at a source, both ways: the fuelled program at fuel `n` is
-// inside the fuel-free tree with calls `n` deep, and every trace of that
-// tree at any depth is the fuelled program's.
-theorem countdown_into(k, n: Nat):
-    ITree::Into(Events::linux(), countdown(k).bounded([], Charges::free(), 0).at(n), countdown(k).tree_co([], Charges::free(), 0, n))
-{
-    countdown(k).tree_co_into([], Charges::free(), 0, n)
+// A procedure that calls itself with its argument less one until it is
+// zero; `main` calls it at `k` and exits with 7. Nothing is charged, so the
+// recursion is as deep as `k`: the tree with no bound on its calls returns,
+// and the tree with calls `d` deep never does once `d` is less than `k`.
+fn down(k: Nat) → Source {
+    Source(functions := [], buffers := [], words := 5,
+        main := Then(ops([Const(64, 0, k), Const(64, 4, 7)]), Then(Perform(0, [0], []), Exit(4))),
+        procedures := [Procedure(params := [0], results := [],
+            body := Then(ops([Const(64, 1, 0), Equal(64, 2, 0, 1), Const(64, 3, 1), Sub(64, 0, 0, 3)]),
+                Branch(2, ops([]), Perform(0, [0], []))))])
 }
-theorem countdown_refined(k, d: Nat):
-    Program::Refines(Events::linux(), CoTree::program(Events::linux(), countdown(k).tree_co([], Charges::free(), 0, d)),
-        countdown(k).bounded([], Charges::free(), 0))
+theorem down_returns(): Returns<BitVec(64)>(Events::linux(), down(6).tree_co([], Charges::free(), 0), 7) { Returns(60, refl) }
+theorem down_upto_runs(): ¬Obs::Settled(Events::linux(), CoTree::after(Events::linux(), 200, down(6).tree_upto([], Charges::free(), 0, 4))) { λ s => s }
+// expect-error(kernel): the kernel rejected `down_returns_wrong`: NotConvertible
+theorem down_returns_wrong(): Returns<BitVec(64)>(Events::linux(), down(6).tree_co([], Charges::free(), 0), 0) { Returns(60, refl) }
+
+// The bridge at a source, both ways, with no depth: the fuelled program at
+// every fuel is inside the tree, and every trace of the tree is the fuelled
+// program's.
+theorem down_into(k, n: Nat):
+    ITree::Into(Events::linux(), down(k).bounded([], Charges::free(), 0).at(n), down(k).tree_co([], Charges::free(), 0))
 {
-    countdown(k).tree_co_refined([], Charges::free(), 0, d)
+    down(k).tree_co_into([], Charges::free(), 0, n)
+}
+theorem down_refines(k: Nat):
+    Program::Refines(Events::linux(), down(k).bounded([], Charges::free(), 0), CoTree::program(Events::linux(), down(k).tree_co([], Charges::free(), 0)))
+{
+    down(k).tree_co_refines([], Charges::free(), 0)
+}
+theorem down_refined(k: Nat):
+    Program::Refines(Events::linux(), CoTree::program(Events::linux(), down(k).tree_co([], Charges::free(), 0)), down(k).bounded([], Charges::free(), 0))
+{
+    down(k).tree_co_refined([], Charges::free(), 0)
 }
