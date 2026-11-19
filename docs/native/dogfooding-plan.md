@@ -211,8 +211,9 @@ Rungs 3 and 4 carry the one real decision of this plan (§8, question 3).
 
 ### 5.1 A ledger of ports drives the rounds
 
-A directory of small ports, each named for the Rust it ports
-(`lib/_tests/native/ports/`), under the project's own convention: a port that
+A module of small ports, each named for the Rust it ports
+(`lib/_tests/native/runtime/runtime_ports_tests.hthr`, built with this
+note), under the project's own convention: a port that
 does not compile yet stands under `// expect-error: <the refusal>`, so the
 gate holds its reason; when a round lands, the expectation fails, and the
 round flips the row to a positive probe run by `refl`. The eighteen probes
@@ -396,6 +397,62 @@ elaborator), the optimizer's search cost, and the tactic threads.
 4. **Are the targets and their order right?** In particular, whether
    `numeral` (trusted base, slower than rustc at first) is wanted second, and
    whether the lexer should go on by default before its values are Heather's.
+
+### 8.1 Minus's answers (2026-11-19)
+
+- **The ledger: yes, first.** "An excellent method of getting it across
+  before eventually piecing it all together into a useful whole", and the
+  bigger piece would run into the same rows.
+- **Adding things goes through too much logic**, and the loops were
+  overcomplicated in their implementation. Agreed reading: a loop was made a
+  function that calls itself last, with companions per function and a tail
+  mode in each lowering, and agreement was an equation between total
+  functions at every state, which is what forces an answer where a loop's
+  facts fail. The replacement is one loop combinator that `while` and `for`
+  elaborate to, with agreement a relation a pass keeps under the loop's
+  invariant, proved once. It has its own thread ("Rebuild loops on one
+  combinator"). The old statements need not be kept matching: "that's the
+  power of proofs".
+- **Question 3, the unproved lane: yes**, as the immediate target for
+  getting the compiler, the optimizer and tactic logic out of Rust. Two
+  conditions. It is done properly and not as a fragment: its language is the
+  whole erased core, not what one customer happens to use. And it must not
+  become a bootstrapping chokehold, where a bug in one version infests the
+  next (§8.2).
+
+### 8.2 No bootstrapping chokehold
+
+The aim is the loop Minus named: the compiler fed into itself, each version
+making the next faster. What makes that safe is that the loop never becomes
+the only way to build.
+
+1. **The seed is an interpreter, never a compiled compiler.** The compiler
+   is Heather source, and `crates/run` (with the kernel's evaluator behind
+   it) runs that source directly. A native compiler is a faster way to get
+   the answer the interpreter gives, so it is a cache of an evaluation and
+   not an ancestor: no checked-in binary is needed to build the next one,
+   and a bad one is thrown away and rebuilt from source. This is what a
+   compiler bootstrapped from its own binary does not have.
+2. **A fixpoint, checked.** Stage 1 is the compiler compiled under the
+   interpreter. Stage 2 is the compiler compiled by stage 1. The two must be
+   the same bytes, and the nightly sentinel says when they are not. A bug
+   that changes what the compiler emits cannot pass silently from one
+   version into the next.
+3. **Answers stay checked.** What the native compiler emits for a program is
+   still stated in a certificate the kernel checks, and a plan is still
+   replayed. `HEATHER_READS=check` compares the native answers with the
+   interpreter's, as it compares the interpreter's with the kernel's now,
+   and stays in the suite.
+4. **`heather` always builds and runs with its native parts off.** One
+   switch falls back to the interpreter for everything the lane runs, and
+   every generated artifact can be regenerated from a build with the switch
+   off. `issues/linked-assembly-bootstrap.md` is this failure met already in
+   small (a generated file that lost a symbol stops the build that would
+   regenerate it), and the rule closes it for the linked code too.
+5. **Where the lane cannot run something, it says so and the interpreter
+   does**, as `Stuck` works today. Doing it properly means the lane's
+   language is everything `Machine::erase` produces; the fallback is for the
+   time before that is true, not a reason to stop short of it.
 
 ## 9. What this does not propose
 
