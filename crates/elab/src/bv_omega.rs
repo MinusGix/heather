@@ -1914,19 +1914,27 @@ pub(crate) fn aliased_goal(elab: &Elaborator, cx: &Cx, expected: &Type) -> Optio
             return collect(elab, cx, inner, out);
         }
         let (head, args) = crate::spelling::app_spine(tm);
+        let call = matches!(head, Term::GlobalTm { .. }) && !args.is_empty();
+        let oracle = elab.goal_oracle();
+        // A call that steps to a local is that local, whatever its
+        // arguments: the found proof inside it is never read.
+        if call && let Some(local) = oracle.unfold_to(&cx.gamma, tm, Unfold::WordShape, |reduct| matches!(reduct, Term::Var(_)).then_some(reduct)) {
+            out.push(((**tm).clone(), local));
+            return true;
+        }
         let mark = out.len();
         let mut all = true;
         for arg in &args {
             all &= collect(elab, cx, arg, out);
         }
-        if all && !args.is_empty() && matches!(head, Term::GlobalTm { .. }) {
+        if call && all && out.len() > mark {
             return true;
         }
         // A reduct headed by a call or a local, which the walk takes apart
         // by its head, over one headed by a destructor (`Range(…).lo` spells
-        // as the field, but its head is a projection the walk does not read).
+        // as the field, but its head is a projection).
         let mut first = None;
-        let reduct = elab.goal_oracle().unfold_to(&cx.gamma, tm, Unfold::WordShape, |reduct| {
+        let reduct = oracle.unfold_to(&cx.gamma, tm, Unfold::WordShape, |reduct| {
             if elab.spell_term_source(cx, &reduct).is_none() {
                 return None;
             }
