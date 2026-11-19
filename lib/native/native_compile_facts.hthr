@@ -330,88 +330,297 @@ theorem Nat::max_mono(self a: Nat, b, c, d: Nat, ac: a <= c, bd: b <= d): a.max(
     Nat::max_le(a, b, c.max(d), Nat::le_trans(a, c, c.max(d), ac, Nat::le_max_l(c, d)), Nat::le_trans(b, d, c.max(d), bd, Nat::le_max_r(c, d)))
 }
 
-// A larger row, a larger step.
-theorem Nat::step_le(self callee: Nat, bodies: List<Frame>, places: List<Place>, checks: List<Bool>, row, row2: List<Nat>,
-    le: row.deep_at(callee) <= row2.deep_at(callee)):
-    callee.step_of(bodies, places, checks, row) <= callee.step_of(bodies, places, checks, row2) {
+// One row within another, entry by entry; no row within any.
+fn List::RowWithin(self row: List<Nat>, row2: List<Nat>) → Type { (i: Nat) → row.deep_at(i) <= row2.deep_at(i) }
+fn Option::RowWithin(self row: Option<List<Nat>>, row2: Option<List<Nat>>) → Type {
+    match row { None => True, Some(r) => match row2 as λ _ => Type { None => False, Some(r2) => r.RowWithin(r2) } }
+}
+
+// Larger levels and a larger row, a larger step.
+theorem Nat::step_by_le(self callee: Nat, bodies: List<Frame>, places: List<Place>, checks: List<Bool>, levels, levels2: List<Nat>, row, row2: Option<List<Nat>>,
+    hl: levels.RowWithin(levels2), hr: row.RowWithin(row2)):
+    callee.step_by(bodies, places, checks, levels, row) <= callee.step_by(bodies, places, checks, levels2, row2) {
     match checks.checked(callee) as λ b =>
-        (match b { True => 0, False => bodies.frame(callee).level(places) + row.deep_at(callee) }) <=
-            (match b { True => 0, False => bodies.frame(callee).level(places) + row2.deep_at(callee) }) {
-        True => Nat::le_refl(0),
-        False => {
-            let more: (bodies.frame(callee).level(places) + row.deep_at(callee) <= bodies.frame(callee).level(places) + row2.deep_at(callee)) = omega(le);
-            more
+        (match b { True => levels.deep_at(callee), False => match row { None => 0, Some(r) => bodies.frame(callee).level(places) + r.deep_at(callee) } }) <=
+            (match b { True => levels2.deep_at(callee), False => match row2 { None => 0, Some(r) => bodies.frame(callee).level(places) + r.deep_at(callee) } }) {
+        True => hl(callee),
+        False => (match row as λ o => o.RowWithin(row2) →
+                (match o { None => 0, Some(r) => bodies.frame(callee).level(places) + r.deep_at(callee) }) <=
+                    (match row2 { None => 0, Some(r) => bodies.frame(callee).level(places) + r.deep_at(callee) }) {
+            None => λ _ => trivial,
+            Some(r) => (match row2 as λ o2 => Option::RowWithin(Some(r), o2) →
+                    bodies.frame(callee).level(places) + r.deep_at(callee) <= (match o2 { None => 0, Some(r2) => bodies.frame(callee).level(places) + r2.deep_at(callee) }) {
+                None => λ never => false_elim(never),
+                Some(r2) => λ within => {
+                    let more: (bodies.frame(callee).level(places) + r.deep_at(callee) <= bodies.frame(callee).level(places) + r2.deep_at(callee)) = omega(within(callee));
+                    more
+                },
+            }),
+        })(hr),
+    }
+}
+
+theorem List::deepest_by_le(self callees: List<Nat>, bodies: List<Frame>, places: List<Place>, checks: List<Bool>, levels, levels2: List<Nat>, row, row2: Option<List<Nat>>,
+    hl: levels.RowWithin(levels2), hr: row.RowWithin(row2)):
+    callees.deepest_by(bodies, places, checks, levels, row) <= callees.deepest_by(bodies, places, checks, levels2, row2) {
+    match callees {
+        Nil => Nat::le_refl(0),
+        Cons(callee, rest) => Nat::max_mono(callee.step_by(bodies, places, checks, levels, row), rest.deepest_by(bodies, places, checks, levels, row),
+            callee.step_by(bodies, places, checks, levels2, row2), rest.deepest_by(bodies, places, checks, levels2, row2),
+            callee.step_by_le(bodies, places, checks, levels, levels2, row, row2, hl, hr), rest.deepest_by_le(bodies, places, checks, levels, levels2, row, row2, hl, hr)),
+    }
+}
+
+// A callee's step is within the deepest.
+theorem List::deepest_by_mem(self callees: List<Nat>, bodies: List<Frame>, places: List<Place>, checks: List<Bool>, levels: List<Nat>, row: Option<List<Nat>>):
+    (index: Nat) → Mem(index, callees) → index.step_by(bodies, places, checks, levels, row) <= callees.deepest_by(bodies, places, checks, levels, row) {
+    match callees {
+        Nil => λ index never => false_elim(never),
+        Cons(callee, rest) => λ index m => {
+            let here = callee.step_by(bodies, places, checks, levels, row);
+            match m {
+                Inl(e) => j(sym(e), λ x _ => x.step_by(bodies, places, checks, levels, row) <= Nat::max(here, rest.deepest_by(bodies, places, checks, levels, row)),
+                    Nat::le_max_l(here, rest.deepest_by(bodies, places, checks, levels, row))),
+                Inr(later) => Nat::le_trans(index.step_by(bodies, places, checks, levels, row), rest.deepest_by(bodies, places, checks, levels, row),
+                    Nat::max(here, rest.deepest_by(bodies, places, checks, levels, row)), rest.deepest_by_mem(bodies, places, checks, levels, row, index, later),
+                    Nat::le_max_r(here, rest.deepest_by(bodies, places, checks, levels, row))),
+            }
         },
     }
 }
 
-// A larger row, a larger deepest call.
-theorem List::deepest_le(self callees: List<Nat>, bodies: List<Frame>, places: List<Place>, checks: List<Bool>, row, row2: List<Nat>,
-    le: (i: Nat) → row.deep_at(i) <= row2.deep_at(i)):
-    callees.deepest(bodies, places, checks, row) <= callees.deepest(bodies, places, checks, row2) {
-    match callees {
-        Nil => Nat::le_refl(0),
-        Cons(callee, rest) => Nat::max_mono(callee.step_of(bodies, places, checks, row), rest.deepest(bodies, places, checks, row),
-            callee.step_of(bodies, places, checks, row2), rest.deepest(bodies, places, checks, row2),
-            callee.step_le(bodies, places, checks, row, row2, le(callee)), rest.deepest_le(bodies, places, checks, row, row2, le)),
+// A row's entry for a procedure is what its body takes below its frame.
+theorem List::deep_row_by_at(self procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, table: List<Nat>, checks: List<Bool>, levels: List<Nat>, d, index: Nat):
+    procedures.deep_row_by(bodies, places, table, checks, levels, d).deep_at(index) =
+        procedures.performed_by(index).below_by(procedures.called_by(index), procedures, bodies, places, table, checks, levels, d) {
+    let f = λ (proc: Procedure) => proc.body.performed().below_by(proc.body.called(), procedures, bodies, places, table, checks, levels, d);
+    let row_is: (procedures.deep_row_by(bodies, places, table, checks, levels, d) = procedures.map(f)) = match d { Zero => refl, Succ(_) => refl };
+    let nil_is: (0 = Nat::max([].reach_by(procedures, bodies, places, table, checks, levels, d), 0)) = match d { Zero => refl, Succ(_) => refl };
+    let by = λ (o: Option<Procedure>) => (match o { None => [], Some(proc) => proc.body.performed() })
+        .below_by(match o { None => [], Some(proc) => proc.body.called() }, procedures, bodies, places, table, checks, levels, d);
+    let at = cong_fn<List<Nat>, Nat>(λ row => row.deep_at(index), row_is);
+    match found: procedures.nth(index) {
+        None => trans(at, trans(procedures.deep_map_none(f, index, found), trans(nil_is, sym(cong_fn<Option<Procedure>, Nat>(by, found))))),
+        Some(proc) => trans(at, trans(j(sym(procedures.nth_map_some(f, index, proc, found)), λ o _ => (match o { None => 0, Some(deep) => deep }) = f(proc), refl),
+            sym(cong_fn<Option<Procedure>, Nat>(by, found)))),
     }
 }
 
-// One more level of room, at least as much reach.
-theorem List::reach_step(self callees: List<Nat>, procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, table: List<Nat>, checks: List<Bool>,
-    d: Nat): callees.reach(procedures, bodies, places, table, checks, d) <= callees.reach(procedures, bodies, places, table, checks, Succ(d)) {
+// Larger levels, at least as much reach.
+theorem List::reach_by_levels(self callees: List<Nat>, procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, table: List<Nat>, checks: List<Bool>,
+    levels, levels2: List<Nat>, hl: levels.RowWithin(levels2), d: Nat):
+    callees.reach_by(procedures, bodies, places, table, checks, levels, d) <= callees.reach_by(procedures, bodies, places, table, checks, levels2, d) {
     match d {
-        Zero => omega(),
-        Succ(k) => callees.deepest_le(bodies, places, checks, procedures.deep_row(bodies, places, table, checks, k),
-            procedures.deep_row(bodies, places, table, checks, Succ(k)), λ i => {
+        Zero => callees.deepest_by_le(bodies, places, checks, levels, levels2, None, None, hl, trivial),
+        Succ(k) => callees.deepest_by_le(bodies, places, checks, levels, levels2,
+            Some(procedures.deep_row_by(bodies, places, table, checks, levels, k)), Some(procedures.deep_row_by(bodies, places, table, checks, levels2, k)), hl, λ i => {
                 let callees_i = procedures.performed_by(i);
                 let called_i = procedures.called_by(i);
-                let grows: (callees_i.below(called_i, procedures, bodies, places, table, checks, k) <=
-                        callees_i.below(called_i, procedures, bodies, places, table, checks, Succ(k))) =
-                    Nat::max_mono(callees_i.reach(procedures, bodies, places, table, checks, k), called_i.functions_room(table),
-                        callees_i.reach(procedures, bodies, places, table, checks, Succ(k)), called_i.functions_room(table),
-                        callees_i.reach_step(procedures, bodies, places, table, checks, k), Nat::le_refl(called_i.functions_room(table)));
-                j(sym(procedures.deep_row_at(bodies, places, table, checks, Succ(k), i)),
-                    λ x _ => procedures.deep_row(bodies, places, table, checks, k).deep_at(i) <= x,
-                    j(sym(procedures.deep_row_at(bodies, places, table, checks, k, i)),
-                        λ x _ => x <= callees_i.below(called_i, procedures, bodies, places, table, checks, Succ(k)), grows))
+                let grows: (callees_i.below_by(called_i, procedures, bodies, places, table, checks, levels, k) <=
+                        callees_i.below_by(called_i, procedures, bodies, places, table, checks, levels2, k)) =
+                    Nat::max_mono(callees_i.reach_by(procedures, bodies, places, table, checks, levels, k), called_i.functions_room(table),
+                        callees_i.reach_by(procedures, bodies, places, table, checks, levels2, k), called_i.functions_room(table),
+                        callees_i.reach_by_levels(procedures, bodies, places, table, checks, levels, levels2, hl, k), Nat::le_refl(called_i.functions_room(table)));
+                j(sym(procedures.deep_row_by_at(bodies, places, table, checks, levels2, k, i)),
+                    λ x _ => procedures.deep_row_by(bodies, places, table, checks, levels, k).deep_at(i) <= x,
+                    j(sym(procedures.deep_row_by_at(bodies, places, table, checks, levels, k, i)),
+                        λ x _ => x <= callees_i.below_by(called_i, procedures, bodies, places, table, checks, levels2, k), grows))
             }),
     }
 }
 
-// More levels of room, at least as much reach.
-theorem List::reach_up(self callees: List<Nat>, procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, table: List<Nat>, checks: List<Bool>,
-    d, m: Nat): callees.reach(procedures, bodies, places, table, checks, d) <= callees.reach(procedures, bodies, places, table, checks, d + m) {
-    match m {
-        Zero => Nat::le_refl(callees.reach(procedures, bodies, places, table, checks, d)),
-        Succ(k) => Nat::le_trans(callees.reach(procedures, bodies, places, table, checks, d), callees.reach(procedures, bodies, places, table, checks, d + k),
-            callees.reach(procedures, bodies, places, table, checks, Succ(d + k)), callees.reach_up(procedures, bodies, places, table, checks, d, k),
-            callees.reach_step(procedures, bodies, places, table, checks, d + k)),
+// One more level of room, at least as much reach.
+theorem List::reach_by_step(self callees: List<Nat>, procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, table: List<Nat>, checks: List<Bool>,
+    levels: List<Nat>, d: Nat):
+    callees.reach_by(procedures, bodies, places, table, checks, levels, d) <= callees.reach_by(procedures, bodies, places, table, checks, levels, Succ(d)) {
+    match d {
+        Zero => callees.deepest_by_le(bodies, places, checks, levels, levels, None, Some(procedures.deep_row_by(bodies, places, table, checks, levels, 0)),
+            λ i => Nat::le_refl(levels.deep_at(i)), trivial),
+        Succ(k) => callees.deepest_by_le(bodies, places, checks, levels, levels,
+            Some(procedures.deep_row_by(bodies, places, table, checks, levels, k)), Some(procedures.deep_row_by(bodies, places, table, checks, levels, Succ(k))),
+            λ i => Nat::le_refl(levels.deep_at(i)), λ i => {
+                let callees_i = procedures.performed_by(i);
+                let called_i = procedures.called_by(i);
+                let grows: (callees_i.below_by(called_i, procedures, bodies, places, table, checks, levels, k) <=
+                        callees_i.below_by(called_i, procedures, bodies, places, table, checks, levels, Succ(k))) =
+                    Nat::max_mono(callees_i.reach_by(procedures, bodies, places, table, checks, levels, k), called_i.functions_room(table),
+                        callees_i.reach_by(procedures, bodies, places, table, checks, levels, Succ(k)), called_i.functions_room(table),
+                        callees_i.reach_by_step(procedures, bodies, places, table, checks, levels, k), Nat::le_refl(called_i.functions_room(table)));
+                j(sym(procedures.deep_row_by_at(bodies, places, table, checks, levels, Succ(k), i)),
+                    λ x _ => procedures.deep_row_by(bodies, places, table, checks, levels, k).deep_at(i) <= x,
+                    j(sym(procedures.deep_row_by_at(bodies, places, table, checks, levels, k, i)),
+                        λ x _ => x <= callees_i.below_by(called_i, procedures, bodies, places, table, checks, levels, Succ(k)), grows))
+            }),
     }
 }
 
-theorem List::reach_le(self callees: List<Nat>, procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, table: List<Nat>, checks: List<Bool>,
-    d, e: Nat, le: d <= e): callees.reach(procedures, bodies, places, table, checks, d) <= callees.reach(procedures, bodies, places, table, checks, e) {
-    let is: (d + (e - d) = e) = omega(le);
-    j(is, λ x _ => callees.reach(procedures, bodies, places, table, checks, d) <= callees.reach(procedures, bodies, places, table, checks, x),
-        callees.reach_up(procedures, bodies, places, table, checks, d, e - d))
+theorem List::reach_by_up(self callees: List<Nat>, procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, table: List<Nat>, checks: List<Bool>,
+    levels: List<Nat>, d, m: Nat):
+    callees.reach_by(procedures, bodies, places, table, checks, levels, d) <= callees.reach_by(procedures, bodies, places, table, checks, levels, d + m) {
+    match m {
+        Zero => Nat::le_refl(callees.reach_by(procedures, bodies, places, table, checks, levels, d)),
+        Succ(k) => Nat::le_trans(callees.reach_by(procedures, bodies, places, table, checks, levels, d),
+            callees.reach_by(procedures, bodies, places, table, checks, levels, d + k),
+            callees.reach_by(procedures, bodies, places, table, checks, levels, Succ(d + k)), callees.reach_by_up(procedures, bodies, places, table, checks, levels, d, k),
+            callees.reach_by_step(procedures, bodies, places, table, checks, levels, d + k)),
+    }
 }
 
-// A marked index's value is within the most.
-theorem List::most_mem(self flags: List<Bool>, f: Nat → Nat, index: Nat): (i: Nat) → flags.checked(i) = True → f(index + i) <= flags.most(f, index) {
-    match flags {
-        Nil => λ i no => absurd(no),
-        Cons(b, rest) => λ i => match i {
-            Zero => λ marked => j(sym(marked), λ x _ => f(index) <= Nat::max(match x { True => f(index), False => 0 }, rest.most(f, Succ(index))),
-                Nat::le_max_l(f(index), rest.most(f, Succ(index)))),
-            Succ(k) => λ marked => {
+// More levels of rank, at least as much reach.
+theorem List::reach_by_le(self callees: List<Nat>, procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, table: List<Nat>, checks: List<Bool>,
+    levels: List<Nat>, d, e: Nat, le: d <= e):
+    callees.reach_by(procedures, bodies, places, table, checks, levels, d) <= callees.reach_by(procedures, bodies, places, table, checks, levels, e) {
+    let is: (d + (e - d) = e) = omega(le);
+    j(is, λ x _ => callees.reach_by(procedures, bodies, places, table, checks, levels, d) <= callees.reach_by(procedures, bodies, places, table, checks, levels, x),
+        callees.reach_by_up(procedures, bodies, places, table, checks, levels, d, e - d))
+}
+
+// With no levels a checked callee takes nothing, and nothing with no row.
+theorem List::deepest_by_none(self callees: List<Nat>, bodies: List<Frame>, places: List<Place>, checks: List<Bool>):
+    callees.deepest_by(bodies, places, checks, [], None) = 0 {
+    match callees {
+        Nil => refl,
+        Cons(callee, rest) => {
+            let step: (callee.step_by(bodies, places, checks, [], None) = 0) =
+                match checks.checked(callee) as λ b => (match b { True => [].deep_at(callee), False => 0 }) = 0 {
+                    True => refl,
+                    False => refl,
+                };
+            let rest_is = rest.deepest_by_none(bodies, places, checks);
+            j(sym(step), λ x _ => Nat::max(x, rest.deepest_by(bodies, places, checks, [], None)) = 0, rest_is)
+        },
+    }
+}
+
+// With no levels and a row equal to `below`'s, the deepest is `below`'s.
+theorem List::deepest_by_same(self callees: List<Nat>, bodies: List<Frame>, places: List<Place>, checks: List<Bool>, row_by, row: List<Nat>,
+    same: (i: Nat) → row_by.deep_at(i) = row.deep_at(i)):
+    callees.deepest_by(bodies, places, checks, [], Some(row_by)) = callees.deepest(bodies, places, checks, row) {
+    match callees {
+        Nil => refl,
+        Cons(callee, rest) => {
+            let step: (callee.step_by(bodies, places, checks, [], Some(row_by)) = callee.step_of(bodies, places, checks, row)) =
+                match checks.checked(callee) as λ b =>
+                    (match b { True => [].deep_at(callee), False => bodies.frame(callee).level(places) + row_by.deep_at(callee) }) =
+                        (match b { True => 0, False => bodies.frame(callee).level(places) + row.deep_at(callee) }) {
+                    True => refl,
+                    False => cong_fn<Nat, Nat>(λ x => bodies.frame(callee).level(places) + x, same(callee)),
+                };
+            let rest_is = rest.deepest_by_same(bodies, places, checks, row_by, row, same);
+            j(rest_is, λ x _ => Nat::max(callee.step_by(bodies, places, checks, [], Some(row_by)), rest.deepest_by(bodies, places, checks, [], Some(row_by))) =
+                    Nat::max(callee.step_of(bodies, places, checks, row), x),
+                j(step, λ x _ => Nat::max(callee.step_by(bodies, places, checks, [], Some(row_by)), rest.deepest_by(bodies, places, checks, [], Some(row_by))) =
+                    Nat::max(x, rest.deepest_by(bodies, places, checks, [], Some(row_by))), refl))
+        },
+    }
+}
+
+// With no levels the stack below a frame is `below`'s.
+theorem List::reach_by_none(self callees: List<Nat>, procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, table: List<Nat>, checks: List<Bool>, d: Nat):
+    callees.reach_by(procedures, bodies, places, table, checks, [], d) = callees.reach(procedures, bodies, places, table, checks, d) {
+    match d {
+        Zero => callees.deepest_by_none(bodies, places, checks),
+        Succ(k) => callees.deepest_by_same(bodies, places, checks, procedures.deep_row_by(bodies, places, table, checks, [], k),
+            procedures.deep_row(bodies, places, table, checks, k), λ i => {
+                let callees_i = procedures.performed_by(i);
+                let called_i = procedures.called_by(i);
+                let inner = callees_i.reach_by_none(procedures, bodies, places, table, checks, k);
+                trans(procedures.deep_row_by_at(bodies, places, table, checks, [], k, i),
+                    trans(cong_fn<Nat, Nat>(λ x => Nat::max(x, called_i.functions_room(table)), inner),
+                        sym(procedures.deep_row_at(bodies, places, table, checks, k, i))))
+            }),
+    }
+}
+
+theorem List::below_by_none(self callees: List<Nat>, called: List<Nat>, procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, table: List<Nat>,
+    checks: List<Bool>, d: Nat):
+    callees.below_by(called, procedures, bodies, places, table, checks, [], d) = callees.below(called, procedures, bodies, places, table, checks, d) {
+    cong_fn<Nat, Nat>(λ x => Nat::max(x, called.functions_room(table)), callees.reach_by_none(procedures, bodies, places, table, checks, d))
+}
+
+// Any levels, at least `below`.
+theorem List::below_le_by(self callees: List<Nat>, called: List<Nat>, procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, table: List<Nat>,
+    checks: List<Bool>, levels: List<Nat>, d: Nat):
+    callees.below(called, procedures, bodies, places, table, checks, d) <= callees.below_by(called, procedures, bodies, places, table, checks, levels, d) {
+    j(callees.below_by_none(called, procedures, bodies, places, table, checks, d),
+        λ x _ => x <= callees.below_by(called, procedures, bodies, places, table, checks, levels, d),
+        Nat::max_mono(callees.reach_by(procedures, bodies, places, table, checks, [], d), called.functions_room(table),
+            callees.reach_by(procedures, bodies, places, table, checks, levels, d), called.functions_room(table),
+            callees.reach_by_levels(procedures, bodies, places, table, checks, [], levels, λ i => omega(), d), Nat::le_refl(called.functions_room(table))))
+}
+
+// A call without a check of a procedure the body may call, with room: the
+// callee's level and what its body takes below its frame, within the
+// body's reach one level of room deeper.
+theorem List::reach_by_call(self callees: List<Nat>, procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, table: List<Nat>, checks: List<Bool>,
+    levels: List<Nat>, d, index: Nat, m: Mem(index, callees), unchecked: checks.checked(index) = False):
+    bodies.frame(index).level(places) + procedures.performed_by(index).below_by(procedures.called_by(index), procedures, bodies, places, table, checks, levels, d) <=
+        callees.reach_by(procedures, bodies, places, table, checks, levels, Succ(d)) {
+    let row = procedures.deep_row_by(bodies, places, table, checks, levels, d);
+    let step: (index.step_by(bodies, places, checks, levels, Some(row)) = bodies.frame(index).level(places) + row.deep_at(index)) =
+        j(sym(unchecked), λ b _ => (match b { True => levels.deep_at(index), False => bodies.frame(index).level(places) + row.deep_at(index) }) =
+            bodies.frame(index).level(places) + row.deep_at(index), refl);
+    j(procedures.deep_row_by_at(bodies, places, table, checks, levels, d, index),
+        λ deep _ => bodies.frame(index).level(places) + deep <= callees.reach_by(procedures, bodies, places, table, checks, levels, Succ(d)),
+        j(step, λ x _ => x <= callees.reach_by(procedures, bodies, places, table, checks, levels, Succ(d)),
+            callees.deepest_by_mem(bodies, places, checks, levels, Some(row), index, m)))
+}
+
+// A checked callee's entry in the levels is within the body's reach.
+theorem List::reach_by_checked(self callees: List<Nat>, procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, table: List<Nat>, checks: List<Bool>,
+    levels: List<Nat>, d, index: Nat, m: Mem(index, callees), checked: checks.checked(index) = True):
+    levels.deep_at(index) <= callees.reach_by(procedures, bodies, places, table, checks, levels, d) {
+    let at = λ (row: Option<List<Nat>>) => {
+        let step: (index.step_by(bodies, places, checks, levels, row) = levels.deep_at(index)) =
+            j(sym(checked), λ b _ => (match b {
+                True => levels.deep_at(index),
+                False => match row { None => 0, Some(r) => bodies.frame(index).level(places) + r.deep_at(index) },
+            }) = levels.deep_at(index), refl);
+        j(step, λ x _ => x <= callees.deepest_by(bodies, places, checks, levels, row), callees.deepest_by_mem(bodies, places, checks, levels, row, index, m))
+    };
+    match d { Zero => at(None), Succ(k) => at(Some(procedures.deep_row_by(bodies, places, table, checks, levels, k))) }
+}
+
+// The entry of a procedure the levels row has.
+theorem List::calls_from_at(self rest: List<Procedure>, procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, table: List<Nat>, checks: List<Bool>,
+    ranks: List<Nat>, levels: List<Nat>, index: Nat): (i: Nat) → (proc: Procedure) → rest.nth(i) = Some(proc) →
+    rest.calls_from(procedures, bodies, places, table, checks, ranks, levels, index).deep_at(i) =
+        bodies.frame(index + i).level(places) + proc.body.performed().below_by(proc.body.called(), procedures, bodies, places, table, checks, levels, ranks.deep_at(index + i)) {
+    match rest {
+        Nil => λ i proc no => false_elim(j(no, λ o _ => match o as λ _ => Type { None => True, Some(_) => False }, trivial)),
+        Cons(first, more) => λ i => match i {
+            Zero => λ proc found => {
+                let same: (first = proc) = cong_fn<Option<Procedure>, Procedure>(λ o => match o { None => first, Some(x) => x }, found);
+                j(same, λ x _ => bodies.frame(index).level(places) + first.body.performed().below_by(first.body.called(), procedures, bodies, places, table, checks, levels,
+                        ranks.deep_at(index)) =
+                    bodies.frame(index).level(places) + x.body.performed().below_by(x.body.called(), procedures, bodies, places, table, checks, levels, ranks.deep_at(index)), refl)
+            },
+            Succ(k) => λ proc found => {
                 let is: (Succ(index) + k = index + Succ(k)) = omega();
-                Nat::le_trans(f(index + Succ(k)), rest.most(f, Succ(index)), Nat::max(match b { True => f(index), False => 0 }, rest.most(f, Succ(index))),
-                    j(is, λ x _ => f(x) <= rest.most(f, Succ(index)), rest.most_mem(f, Succ(index), k, marked)),
-                    Nat::le_max_r(match b { True => f(index), False => 0 }, rest.most(f, Succ(index))))
+                j(is, λ x _ => more.calls_from(procedures, bodies, places, table, checks, ranks, levels, Succ(index)).deep_at(k) =
+                        bodies.frame(x).level(places) + proc.body.performed().below_by(proc.body.called(), procedures, bodies, places, table, checks, levels, ranks.deep_at(x)),
+                    more.calls_from_at(procedures, bodies, places, table, checks, ranks, levels, Succ(index), k, proc, found))
             },
         },
     }
+}
+
+// What a call of procedure `p` takes with `j + 1` levels: its level and
+// what its body takes with `j`.
+theorem Source::level_row_at(self src: Source, homes: Homes, bodies: List<Frame>, j, p: Nat, proc: Procedure, found: src.procedures.nth(p) = Some(proc)):
+    src.procedures.level_row(bodies, homes.places, homes.room_table(src.functions), src.procedures.checks(), src.procedures.ranks(src.procedures.checks()), Succ(j)).deep_at(p) =
+        bodies.frame(p).level(homes.places) + src.total(homes, bodies, j, p) {
+    let checks = src.procedures.checks();
+    let ranks = src.procedures.ranks(checks);
+    let table = homes.room_table(src.functions);
+    let levels = src.procedures.level_row(bodies, homes.places, table, checks, ranks, j);
+    let is: (0 + p = p) = omega();
+    let at = j(is, λ x _ => src.procedures.calls_from(src.procedures, bodies, homes.places, table, checks, ranks, levels, 0).deep_at(p) =
+            bodies.frame(x).level(homes.places) + proc.body.performed().below_by(proc.body.called(), src.procedures, bodies, homes.places, table, checks, levels, ranks.deep_at(x)),
+        src.procedures.calls_from_at(src.procedures, bodies, homes.places, table, checks, ranks, levels, 0, p, proc, found));
+    j(sym(found), λ o _ => src.procedures.calls_from(src.procedures, bodies, homes.places, table, checks, ranks, levels, 0).deep_at(p) =
+            bodies.frame(p).level(homes.places) + (match o { None => [], Some(pr) => pr.body.performed() }).below_by(match o { None => [], Some(pr) => pr.body.called() },
+                src.procedures, bodies, homes.places, table, checks, levels, ranks.deep_at(p)), at)
 }
 
 // A call without a check among callees under a rank goes below it.
@@ -458,57 +667,143 @@ theorem List::ranked_from_at(self rest: List<Procedure>, checks: List<Bool>, ran
     }
 }
 
-// A call without a check in a body ranked above it: the callee's level and
-// what its body takes at its rank, within what the body takes at its own.
-theorem List::below_call(self callees: List<Nat>, called: List<Nat>, procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, table: List<Nat>,
-    checks: List<Bool>, ranks: List<Nat>, rank, p: Nat, held: callees.holds(p) = True, unchecked: checks.checked(p) = False, ranked: Succ(ranks.deep_at(p)) <= rank):
-    bodies.frame(p).level(places) + procedures.performed_by(p).below(procedures.called_by(p), procedures, bodies, places, table, checks, ranks.deep_at(p)) <=
-        callees.below(called, procedures, bodies, places, table, checks, rank) {
+// Procedures that have one at an index and hold their ranks: each
+// procedure's and `main`'s calls.
+theorem List::ranked_parts(self procedures: List<Procedure>, main: Stmt, i: Nat, proc: Procedure, found: procedures.nth(i) = Some(proc), ranked: procedures.ranked_with(main) = True):
+    (procedures.ranked_from(procedures.checks(), procedures.ranks(procedures.checks()), 0) &&
+        main.performed().under_rank(procedures.checks(), procedures.ranks(procedures.checks()), procedures.len())).IsTrue() {
+    (match procedures as λ ps => ps.nth(i) = Some(proc) → ps.ranked_with(main) = True →
+            (ps.ranked_from(ps.checks(), ps.ranks(ps.checks()), 0) && main.performed().under_rank(ps.checks(), ps.ranks(ps.checks()), ps.len())).IsTrue() {
+        Nil => λ no _ => false_elim(j(no, λ o _ => match o as λ _ => Type { None => True, Some(_) => False }, trivial)),
+        Cons(_, _) => λ _ r => Bool::is_true_of_eq(r),
+    })(found, ranked)
+}
+
+// A call without a check from a body ranked above it, with any levels:
+// the callee's level and what its body takes at its rank, within what the
+// caller's body takes at its own.
+theorem List::below_by_call(self callees: List<Nat>, called: List<Nat>, procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, table: List<Nat>,
+    checks: List<Bool>, ranks: List<Nat>, levels: List<Nat>, rank, p: Nat, m: Mem(p, callees), unchecked: checks.checked(p) = False,
+    ranked: Succ(ranks.deep_at(p)) <= rank):
+    bodies.frame(p).level(places) + procedures.performed_by(p).below_by(procedures.called_by(p), procedures, bodies, places, table, checks, levels, ranks.deep_at(p)) <=
+        callees.below_by(called, procedures, bodies, places, table, checks, levels, rank) {
     Nat::le_trans(
-        bodies.frame(p).level(places) + procedures.performed_by(p).below(procedures.called_by(p), procedures, bodies, places, table, checks, ranks.deep_at(p)),
-        callees.reach(procedures, bodies, places, table, checks, rank),
-        callees.below(called, procedures, bodies, places, table, checks, rank),
+        bodies.frame(p).level(places) + procedures.performed_by(p).below_by(procedures.called_by(p), procedures, bodies, places, table, checks, levels, ranks.deep_at(p)),
+        callees.reach_by(procedures, bodies, places, table, checks, levels, rank),
+        callees.below_by(called, procedures, bodies, places, table, checks, levels, rank),
         Nat::le_trans(
-            bodies.frame(p).level(places) + procedures.performed_by(p).below(procedures.called_by(p), procedures, bodies, places, table, checks, ranks.deep_at(p)),
-            callees.reach(procedures, bodies, places, table, checks, Succ(ranks.deep_at(p))),
-            callees.reach(procedures, bodies, places, table, checks, rank),
-            callees.reach_call(procedures, bodies, places, table, checks, ranks.deep_at(p), p, held, unchecked),
-            callees.reach_le(procedures, bodies, places, table, checks, Succ(ranks.deep_at(p)), rank, ranked)),
-        Nat::le_max_l(callees.reach(procedures, bodies, places, table, checks, rank), called.functions_room(table)))
+            bodies.frame(p).level(places) + procedures.performed_by(p).below_by(procedures.called_by(p), procedures, bodies, places, table, checks, levels, ranks.deep_at(p)),
+            callees.reach_by(procedures, bodies, places, table, checks, levels, Succ(ranks.deep_at(p))),
+            callees.reach_by(procedures, bodies, places, table, checks, levels, rank),
+            callees.reach_by_call(procedures, bodies, places, table, checks, levels, ranks.deep_at(p), p, m, unchecked),
+            callees.reach_by_le(procedures, bodies, places, table, checks, levels, Succ(ranks.deep_at(p)), rank, ranked)),
+        Nat::le_max_l(callees.reach_by(procedures, bodies, places, table, checks, levels, rank), called.functions_room(table)))
+}
+
+// A checked call with a level left: what it takes, its level and its body
+// with one level fewer, is within what the caller's body takes.
+theorem List::below_by_checked(self callees: List<Nat>, called: List<Nat>, procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, table: List<Nat>,
+    checks: List<Bool>, levels: List<Nat>, rank, p: Nat, m: Mem(p, callees), checked: checks.checked(p) = True):
+    levels.deep_at(p) <= callees.below_by(called, procedures, bodies, places, table, checks, levels, rank) {
+    Nat::le_trans(levels.deep_at(p), callees.reach_by(procedures, bodies, places, table, checks, levels, rank),
+        callees.below_by(called, procedures, bodies, places, table, checks, levels, rank),
+        callees.reach_by_checked(procedures, bodies, places, table, checks, levels, rank, p, m, checked),
+        Nat::le_max_l(callees.reach_by(procedures, bodies, places, table, checks, levels, rank), called.functions_room(table)))
+}
+
+// A call's step within the levels, from a body ranked as the source's
+// ranks say (`rank`, its calls under it): the callee's cost and what its
+// body takes with the levels the call leaves, within what the caller's body
+// takes with the levels it has.
+theorem Source::step_within(self src: Source, homes: Homes, bodies: List<Frame>, callees, called: List<Nat>, rank: Nat,
+    under: callees.under_rank(src.procedures.checks(), src.procedures.ranks(src.procedures.checks()), rank).IsTrue(),
+    p: Nat, callee: Procedure, found: src.procedures.nth(p) = Some(callee), m: Mem(p, callees), k, j: Nat, spent: k.spend(src.checked(p)) = Some(j)):
+    bodies.frame(p).level(homes.places) + src.total(homes, bodies, j, p) <=
+        callees.below_by(called, src.procedures, bodies, homes.places, homes.room_table(src.functions), src.procedures.checks(),
+            src.procedures.level_row(bodies, homes.places, homes.room_table(src.functions), src.procedures.checks(), src.procedures.ranks(src.procedures.checks()), k), rank) {
+    let checks = src.procedures.checks();
+    let ranks = src.procedures.ranks(checks);
+    let table = homes.room_table(src.functions);
+    let goal = λ (j2: Nat) => bodies.frame(p).level(homes.places) + src.total(homes, bodies, j2, p) <=
+        callees.below_by(called, src.procedures, bodies, homes.places, table, checks, src.procedures.level_row(bodies, homes.places, table, checks, ranks, k), rank);
+    (match checks.checked(p) as λ b => checks.checked(p) = b → k.spend(b) = Some(j) → goal(j) {
+        False => λ unc sp => {
+            let same: (k = j) = cong_fn<Option<Nat>, Nat>(λ o => match o { None => k, Some(x) => x }, sp);
+            j(same, λ x _ => goal(x),
+                callees.below_by_call(called, src.procedures, bodies, homes.places, table, checks, ranks, src.procedures.level_row(bodies, homes.places, table, checks, ranks, k),
+                    rank, p, m, unc, callees.under_rank_mem(checks, ranks, rank, under, p, m, unc)))
+        },
+        True => λ cnt => (match k as λ k2 => (match k2 { Zero => None, Succ(i) => Some(i) }) = Some(j) →
+                bodies.frame(p).level(homes.places) + src.total(homes, bodies, j, p) <=
+                    callees.below_by(called, src.procedures, bodies, homes.places, table, checks, src.procedures.level_row(bodies, homes.places, table, checks, ranks, k2), rank) {
+            Zero => λ no => false_elim(j(no, λ o _ => match o as λ _ => Type { None => True, Some(_) => False }, trivial)),
+            Succ(i) => λ sp => {
+                let same: (i = j) = cong_fn<Option<Nat>, Nat>(λ o => match o { None => i, Some(x) => x }, sp);
+                let row = src.procedures.level_row(bodies, homes.places, table, checks, ranks, Succ(i));
+                j(same, λ x _ => bodies.frame(p).level(homes.places) + src.total(homes, bodies, x, p) <=
+                        callees.below_by(called, src.procedures, bodies, homes.places, table, checks, row, rank),
+                    j(src.level_row_at(homes, bodies, i, p, callee, found), λ x _ => x <= callees.below_by(called, src.procedures, bodies, homes.places, table, checks, row, rank),
+                        callees.below_by_checked(called, src.procedures, bodies, homes.places, table, checks, row, rank, p, m, cnt)))
+            },
+        }),
+    })(refl, spent)
 }
 
 // Where the ranks hold of the source, the charges any compile picks fit
-// levels of checked calls: a checked procedure's check asks for its level
-// and its body's room, at most a level's bytes, and a return address; a body
-// calls a procedure without a check only within its own room.
+// levels of checked calls: a checked procedure's check asks for its level,
+// its body's room with no levels and a return address, no more than with
+// any; and a call within the levels takes no more than its caller's body
+// may (`Source::total`, `Source::top`).
 theorem Source::charges_levels(self src: Source, homes: Homes, bodies: List<Frame>, ranked: src.ranked() = True):
-    src.charges(homes, bodies).Levels(src, λ p => src.checked(p), λ p => src.body_below(homes, bodies, p), src.per_level(homes, bodies), src.main_below(homes, bodies)) {
+    src.charges(homes, bodies).Levels(src, λ p => src.checked(p), λ k p => src.total(homes, bodies, k, p), λ k => src.top(homes, bodies, k)) {
     let checks = src.procedures.checks();
     let ranks = src.procedures.ranks(checks);
     let table = homes.room_table(src.functions);
     let places = homes.places;
     let need = λ (p: Nat) => src.procedures.need(p, bodies, places, table, checks, ranks);
-    let parts = Bool::both(Bool::is_true_of_eq(ranked));
     Charges::Levels(
-        checked := λ p cnt => j(sym(cnt), λ b _ => (match b { False => None, True => Some(need(p)) }) = Some(need(p)), refl),
-        most := λ p cnt => {
-            let is: (0 + p = p) = omega();
-            let level = λ (q: Nat) => bodies.frame(q).level(places) + src.body_below(homes, bodies, q);
-            j(is, λ x _ => level(x) <= src.per_level(homes, bodies), checks.most_mem(level, 0, p, cnt))
+        checked := λ p cnt asked asked_is j2 => {
+            let is: (Some(need(p)) = Some(asked)) = trans(sym(j(sym(cnt), λ b _ => (match b { False => None, True => Some(need(p)) }) = Some(need(p)), refl)), asked_is);
+            let same: (need(p) = asked) = cong_fn<Option<Nat>, Nat>(λ o => match o { None => need(p), Some(x) => x }, is);
+            let more = src.procedures.performed_by(p).below_le_by(src.procedures.called_by(p), src.procedures, bodies, places, table, checks,
+                src.procedures.level_row(bodies, places, table, checks, ranks, j2), ranks.deep_at(p));
+            let need_is: (src.procedures.need(p, bodies, places, table, checks, ranks) = (bodies.frame(p).level(places) + src.procedures.performed_by(p).below(src.procedures.called_by(p), src.procedures, bodies, places, table,
+                checks, ranks.deep_at(p))) + 8) = refl;
+            let total_is: (src.total(homes, bodies, j2, p) = src.procedures.performed_by(p).below_by(src.procedures.called_by(p), src.procedures, bodies, places, table, checks,
+                src.procedures.level_row(bodies, places, table, checks, ranks, j2), ranks.deep_at(p))) = refl;
+            let cost_is: (src.charges(homes, bodies).cost(p) = bodies.frame(p).level(places)) = refl;
+            let fits: (src.procedures.need(p, bodies, places, table, checks, ranks) <= (src.charges(homes, bodies).cost(p) + src.total(homes, bodies, j2, p)) + 8) =
+                omega(more, need_is, total_is, cost_is);
+            j(same, λ x _ => x <= (src.charges(homes, bodies).cost(p) + src.total(homes, bodies, j2, p)) + 8, fits)
         },
         unchecked := λ p unc => j(sym(unc), λ b _ => (match b { False => None, True => Some(need(p)) }) = None, refl),
-        under := λ q proc found p mem unc => {
+        step := λ q proc found p callee found_p mem k j2 spent => {
+            let parts = Bool::both(src.procedures.ranked_parts(src.main, q, proc, found, ranked));
             let is: (0 + q = q) = omega();
             let under_q = j(is, λ x _ => proc.body.performed().under_rank(checks, ranks, ranks.deep_at(x)).IsTrue(),
                 src.procedures.ranked_from_at(checks, ranks, 0, parts.left, q, proc, found));
-            let below_rank = proc.body.performed().under_rank_mem(checks, ranks, ranks.deep_at(q), under_q, p, mem, unc);
-            let held: (src.procedures.performed_by(q).holds(p) = True) =
-                j(sym(found), λ o _ => (match o { None => [], Some(pr) => pr.body.performed() }).holds(p) = True, proc.body.performed().mem_holds(p, mem));
-            src.procedures.performed_by(q).below_call(src.procedures.called_by(q), src.procedures, bodies, places, table, checks, ranks, ranks.deep_at(q), p,
-                held, unc, below_rank)
+            let step = src.step_within(homes, bodies, proc.body.performed(), proc.body.called(), ranks.deep_at(q), under_q, p, callee, found_p, mem, k, j2, spent);
+            j(sym(found), λ o _ => bodies.frame(p).level(places) + src.total(homes, bodies, j2, p) <=
+                    (match o { None => [], Some(pr) => pr.body.performed() }).below_by(match o { None => [], Some(pr) => pr.body.called() }, src.procedures, bodies, places, table,
+                        checks, src.procedures.level_row(bodies, places, table, checks, ranks, k), ranks.deep_at(q)), step)
         },
-        main_under := λ p mem unc => src.main.performed().below_call(src.main.called(), src.procedures, bodies, places, table, checks, ranks, src.procedures.len(), p,
-            src.main.performed().mem_holds(p, mem), unc, src.main.performed().under_rank_mem(checks, ranks, src.procedures.len(), parts.right, p, mem, unc)))
+        main_step := λ p callee found_p mem k j2 spent => {
+            let parts = Bool::both(src.procedures.ranked_parts(src.main, p, callee, found_p, ranked));
+            src.step_within(homes, bodies, src.main.performed(), src.main.called(), src.procedures.len(), parts.right, p, callee, found_p, mem, k, j2, spent)
+        })
+}
+
+// What `main`'s body takes with no levels is within the bytes it leaves.
+theorem Source::main_below_left(self src: Source, homes: Homes, bodies: List<Frame>):
+    src.main.performed().below(src.main.called(), src.procedures, bodies, homes.places, homes.room_table(src.functions), src.procedures.checks(), src.procedures.len()) + 8 <=
+        src.left(homes, bodies) {
+    let checks = src.procedures.checks();
+    let table = homes.room_table(src.functions);
+    let more = src.main.performed().below_le_by(src.main.called(), src.procedures, bodies, homes.places, table, checks,
+        src.procedures.level_row(bodies, homes.places, table, checks, src.procedures.ranks(checks), src.levels), src.procedures.len());
+    let left_is: (src.left(homes, bodies) = src.main.performed().below_by(src.main.called(), src.procedures, bodies, homes.places, table, checks,
+        src.procedures.level_row(bodies, homes.places, table, checks, src.procedures.ranks(checks), src.levels), src.procedures.len()) + 8) = refl;
+    omega(more, left_is)
 }
 
 // Every word a fitting list names is in the file.

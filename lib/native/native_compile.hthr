@@ -1614,30 +1614,90 @@ fn table_room(rooms: List<Nat>) → Nat → Nat { λ (f: Nat) => rooms_at(rooms,
 // Whether procedure `p` is entered with a check: where it can reach itself.
 fn Source::checked(self src: Source, p: Nat) → Bool { src.procedures.checks().checked(p) }
 
-// The stack procedure `p`'s body takes below its frame, at its rank.
-fn Source::body_below(self src: Source, homes: Homes, bodies: List<Frame>, p: Nat) → Nat {
+// ---------------------------------------------------------------------------
+// The stack with levels of checked calls left (§7.4)
+//
+// As `List::below` and the rows before it, with what a checked callee takes
+// read from `levels` (a row by procedure) and not taken as nothing: with no
+// levels the same as `below` (`List::below_by_none`).
+
+// What a call of `callee` takes below the caller's frame: a checked one
+// its entry in `levels`, any other its level and, below its frame, its
+// entry in `row` (nothing with no row).
+fn Nat::step_by(self callee: Nat, bodies: List<Frame>, places: List<Place>, checks: List<Bool>, levels: List<Nat>, row: Option<List<Nat>>) → Nat {
+    match checks.checked(callee) {
+        True => levels.deep_at(callee),
+        False => match row { None => 0, Some(r) => bodies.frame(callee).level(places) + r.deep_at(callee) },
+    }
+}
+
+fn List::deepest_by(self callees: List<Nat>, bodies: List<Frame>, places: List<Place>, checks: List<Bool>, levels: List<Nat>, row: Option<List<Nat>>) → Nat {
+    match callees { Nil => 0, Cons(callee, rest) => Nat::max(callee.step_by(bodies, places, checks, levels, row), rest.deepest_by(bodies, places, checks, levels, row)) }
+}
+
+fn List::deep_row_by(self procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, table: List<Nat>, checks: List<Bool>, levels: List<Nat>, d: Nat) → List<Nat> {
+    match d {
+        Zero => procedures.map(λ (proc: Procedure) => Nat::max(proc.body.performed().deepest_by(bodies, places, checks, levels, None), proc.body.called().functions_room(table))),
+        Succ(k) => {
+            let row = procedures.deep_row_by(bodies, places, table, checks, levels, k);
+            procedures.map(λ (proc: Procedure) => Nat::max(proc.body.performed().deepest_by(bodies, places, checks, levels, Some(row)), proc.body.called().functions_room(table)))
+        },
+    }
+}
+
+fn List::reach_by(self callees: List<Nat>, procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, table: List<Nat>, checks: List<Bool>, levels: List<Nat>,
+    d: Nat) → Nat {
+    match d {
+        Zero => callees.deepest_by(bodies, places, checks, levels, None),
+        Succ(k) => callees.deepest_by(bodies, places, checks, levels, Some(procedures.deep_row_by(bodies, places, table, checks, levels, k))),
+    }
+}
+
+fn List::below_by(self callees: List<Nat>, called: List<Nat>, procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, table: List<Nat>,
+    checks: List<Bool>, levels: List<Nat>, d: Nat) → Nat {
+    Nat::max(callees.reach_by(procedures, bodies, places, table, checks, levels, d), called.functions_room(table))
+}
+
+// What a call of each procedure from `index` on takes with the levels
+// `levels` stands for left past it: its level, and below its frame what its
+// body takes at its rank.
+fn List::calls_from(self rest: List<Procedure>, procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, table: List<Nat>, checks: List<Bool>,
+    ranks: List<Nat>, levels: List<Nat>, index: Nat) → List<Nat> {
+    match rest {
+        Nil => Nil,
+        Cons(proc, more) => Cons(bodies.frame(index).level(places) +
+                proc.body.performed().below_by(proc.body.called(), procedures, bodies, places, table, checks, levels, ranks.deep_at(index)),
+            more.calls_from(procedures, bodies, places, table, checks, ranks, levels, Succ(index))),
+    }
+}
+
+// What a call of each checked procedure takes with `k` levels left before
+// it: nothing with none (it is refused, or past the levels); with `k + 1`,
+// its level and what its body takes with `k`.
+fn List::level_row(self procedures: List<Procedure>, bodies: List<Frame>, places: List<Place>, table: List<Nat>, checks: List<Bool>, ranks: List<Nat>, k: Nat) → List<Nat> {
+    match k {
+        Zero => [],
+        Succ(j) => procedures.calls_from(procedures, bodies, places, table, checks, ranks, procedures.level_row(bodies, places, table, checks, ranks, j), 0),
+    }
+}
+
+// What procedure `p`'s body takes below its frame with `k` levels left,
+// at its rank.
+fn Source::total(self src: Source, homes: Homes, bodies: List<Frame>, k, p: Nat) → Nat {
     let checks = src.procedures.checks();
-    src.procedures.performed_by(p).below(src.procedures.called_by(p), src.procedures, bodies, homes.places, homes.room_table(src.functions),
-        checks, src.procedures.ranks(checks).deep_at(p))
+    let ranks = src.procedures.ranks(checks);
+    let table = homes.room_table(src.functions);
+    src.procedures.performed_by(p).below_by(src.procedures.called_by(p), src.procedures, bodies, homes.places, table, checks,
+        src.procedures.level_row(bodies, homes.places, table, checks, ranks, k), ranks.deep_at(p))
 }
 
-// The stack `main`'s calls take below its frame, at its rank, above every
-// procedure's.
-fn Source::main_below(self src: Source, homes: Homes, bodies: List<Frame>) → Nat {
-    src.main.performed().below(src.main.called(), src.procedures, bodies, homes.places, homes.room_table(src.functions),
-        src.procedures.checks(), src.procedures.len())
-}
-
-// The most of `f` at an index the flags from `index` on mark.
-fn List::most(self flags: List<Bool>, f: Nat → Nat, index: Nat) → Nat {
-    match flags { Nil => 0, Cons(b, rest) => Nat::max(match b { True => f(index), False => 0 }, rest.most(f, Succ(index))) }
-}
-
-// A level of checked calls: the most any checked procedure takes, its
-// level and what its body takes below its frame (§7.4; its check asks for
-// that and one return address more).
-fn Source::per_level(self src: Source, homes: Homes, bodies: List<Frame>) → Nat {
-    src.procedures.checks().most(λ p => bodies.frame(p).level(homes.places) + src.body_below(homes, bodies, p), 0)
+// What `main`'s body takes below its frame with `k` levels left, at its
+// rank, above every procedure's.
+fn Source::top(self src: Source, homes: Homes, bodies: List<Frame>, k: Nat) → Nat {
+    let checks = src.procedures.checks();
+    let table = homes.room_table(src.functions);
+    src.main.performed().below_by(src.main.called(), src.procedures, bodies, homes.places, table, checks,
+        src.procedures.level_row(bodies, homes.places, table, checks, src.procedures.ranks(checks), k), src.procedures.len())
 }
 
 // Whether every call among `callees` without a check goes to a rank below
@@ -1656,22 +1716,26 @@ fn List::ranked_from(self rest: List<Procedure>, checks: List<Bool>, ranks: List
 }
 
 // Whether the ranks hold of every call without a check, `main`'s at the
-// rank above every procedure's: what `Layout::call_fits` checks of each
-// call, here of the whole source at once, so a statement about the source
-// can rest on it.
-fn Source::ranked(self src: Source) → Bool {
-    let checks = src.procedures.checks();
-    src.procedures.ranked_from(checks, src.procedures.ranks(checks), 0) &&
-        src.main.performed().under_rank(checks, src.procedures.ranks(checks), src.procedures.len())
+// rank above every procedure's; nothing to hold with no procedures, where
+// a call is of none.
+fn List::ranked_with(self procedures: List<Procedure>, main: Stmt) → Bool {
+    match procedures {
+        Nil => True,
+        Cons(_, _) => procedures.ranked_from(procedures.checks(), procedures.ranks(procedures.checks()), 0) &&
+            main.performed().under_rank(procedures.checks(), procedures.ranks(procedures.checks()), procedures.len()),
+    }
 }
 
-// The bytes `main`'s activation leaves below its frame: what its own
-// calls take at its rank, above every procedure's, and one return address
-// more (`Target.roomy`), and the levels of checked calls the source asks
-// for (`Source.levels`).
-fn Source::left(self src: Source, homes: Homes, bodies: List<Frame>) → Nat {
-    (src.main_below(homes, bodies) + 8) + src.levels.stacked(src.per_level(homes, bodies))
-}
+// What `Layout::call_fits` checks of each call, here of the whole source
+// at once: the compile checks it (`Source::compile_calls`), so a statement
+// about what the source asks can rest on it (`Source::compile_ranked`).
+fn Source::ranked(self src: Source) → Bool { src.procedures.ranked_with(src.main) }
+
+// The bytes `main`'s activation leaves below its frame: what its body
+// takes at its rank, above every procedure's, with the levels of checked
+// calls the source asks for (`Source.levels`) and one return address more
+// (`Target.roomy`).
+fn Source::left(self src: Source, homes: Homes, bodies: List<Frame>) → Nat { src.top(homes, bodies, src.levels) + 8 }
 
 // What a program needs of its stack: `main`'s frame and the bytes below it.
 fn Source::need(self src: Source, homes: Homes, bodies: List<Frame>) → Nat { 8 * src.words + src.left(homes, bodies) }
@@ -1733,19 +1797,23 @@ theorem Prog::links_of(self p: Prog, functions: List<Function>, places: List<Pla
     }(linkable, emitted)
 }
 
-// A source with procedures or functions: `main` naming its labels past
-// theirs and the shared exit's, then exit 0, each procedure, the shared
-// exit, and the functions.
+// A source with procedures or functions: its ranks checked
+// (`Source::ranked`), then `main` naming its labels past theirs and the
+// shared exit's, then exit 0, each procedure, the shared exit, and the
+// functions.
 fn Source::compile_calls(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>) → Option<Prog> {
     let layout = src.layout(low, homes, bodies);
-    match src.main.emit(src.entry(low, homes, bodies), layout, [], layout.deep_label()) {
-        None => None,
-        Some(c) => match src.procedures.procedures_code(then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall),
-                layout, 0, c.names) {
+    match src.ranked() {
+        False => None,
+        True => match src.main.emit(src.entry(low, homes, bodies), layout, [], layout.deep_label()) {
             None => None,
-            Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, homes.room_table(src.functions), d.names) {
+            Some(c) => match src.procedures.procedures_code(then(then(c.prog, Block([MovRI(Rdi, BitVec::ofNat(0)), MovRI(Rax, BitVec::ofNat(60))])), Syscall),
+                    layout, 0, c.names) {
                 None => None,
-                Some(whole) => match whole.laid_out() { False => None, True => Some(whole) },
+                Some(d) => match d.prog.deep_exit(layout).links(src.functions, homes.places, homes.room_table(src.functions), d.names) {
+                    None => None,
+                    Some(whole) => match whole.laid_out() { False => None, True => Some(whole) },
+                },
             },
         },
     }
