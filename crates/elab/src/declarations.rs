@@ -344,8 +344,11 @@ impl DeclarationsMut<'_> {
             if built != designed {
                 if let Some(target) = self.access_alias(&built).map(str::to_string) {
                     self.designate_access(&designed, &target);
-                } else if let Some(why) = self.pass.unfold_refusals.borrow().get(&built).cloned() {
-                    self.pass.unfold_refusals.borrow_mut().insert(designed.clone(), why);
+                } else {
+                    let why = self.pass.unfold_refusals.borrow().get(&built).cloned();
+                    if let Some(why) = why {
+                        self.pass.unfold_refusals.borrow_mut().insert(designed.clone(), why);
+                    }
                 }
             }
         }
