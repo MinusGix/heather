@@ -60,6 +60,7 @@ import pair;
 import bitvec;
 import rt;
 import function_ir;
+import function_ir_operation;
 import function_ir_eval;
 
 // ---------------------------------------------------------------------------
@@ -896,6 +897,8 @@ fn Tm::prim2(op: Op, g: List<Ty>, next, a, b, pa, pb: Nat) → Option<Lowered> {
         Slt(width) => Tm::binary(g, a, b, Word(width), Tm::one_node(SignedLessThan(width, next, pa, pb), next)),
         Conj => Tm::binary(g, a, b, Bit, Tm::one_node(BitAnd(1, next, pa, pb), next)),
         Disj => Tm::binary(g, a, b, Bit, Tm::one_node(BitOr(1, next, pa, pb), next)),
+        // An operation by its row: FunctionIR's one node for it.
+        Apply(o, width) => Tm::binary(g, a, b, Word(width), Tm::one_node(Node::Apply(o, width, next, pa, pb), next)),
         Neg => None,
         Zext(_, _) => None,
         Get(_) => None,
@@ -1361,6 +1364,9 @@ theorem Tm::prim2_sound(op: Op, w: World, g: List<Ty>, ports: List<Nat>, next, a
         Trunc(_, _) => trivial,
         Shl(_, _) => trivial, Lshr(_, _) => trivial, Ashr(_, _) => trivial,
         Sext(_, _) => trivial,
+        Apply(o, width) => Tm::binary_sound(λ r => Tm::LowerHolds(Prim(Apply(o, width), [a, b]), w, g, ports, next, r), trivial, g, a, b, Word(width),
+            Tm::one_node(Node::Apply(o, width, next, pa, pb), next), λ ea eb =>
+            Tm::word_node_sound(w, g, ports, next, a, b, pa, pb, at_a, at_b, width, λ wd x y => o.meaning(x, y), ea, eb)),
     }
 }
 

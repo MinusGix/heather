@@ -5,7 +5,7 @@ labels: [native,x86,runtime-fn]
 area: heather-in-heather
 milestone: [nh-front]
 created: 2026-11-08
-updated: 2026-11-08
+updated: 2026-11-19
 ---
 
 `SInt::div`/`rem` on an i64 should compile to `CQO; IDIV r64` (REX.W 99,
@@ -41,3 +41,7 @@ undefined (`DefinedFlags::none()`), and `Exception::DivideError` exists with
 
 The remaining instructions that leave flags undefined (MUL, IMUL, BSF)
 come by the same mask and need no further model change.
+
+## Log
+
+- 2026-11-19: Unsigned division landed by another route (2026-11-19): `/` and `%` on a word reflect to the operation rows `UDiv`/`URem` (function_ir_operation, rt `Apply`), and a divisor the file knows compiles as a multiply by its reciprocal (function_ir_operation_x86, theorem in bitvec_reciprocal); no DIV. MUL r/m64 and IMUL r64, r/m64 are in the model with all six flags undefined. What this issue still owns: DIV/IDIV themselves (a divisor that is a word), which a row can offer once the model's blocks take a guarded faulting instruction.

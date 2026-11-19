@@ -38,6 +38,7 @@ import string;
 import tactic;
 import derive;
 import rt;
+import function_ir_operation;
 
 // ---------------------------------------------------------------------------
 // What the reflector recognises, as the host's global references.
@@ -53,7 +54,7 @@ import rt;
 // the right it would be stuck on the neutral bit), and `PRotate(kind)` is
 // `x.rotr(k)` (`kind` 0) or `x.rotl(k)` (1) read as the shift pair it is
 // defined as (`bitvec_rotate.hthr`), the other count `w - k` computed here.
-inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PWiden(extra: Nat), PFoldl, PGet, PSet, PToNat, PTrunc, PShift(kind: Nat), PSext, PWithin, PComplement, PRotate(kind: Nat), PAt, PLen }
+inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PWiden(extra: Nat), PFoldl, PGet, PSet, PToNat, PTrunc, PShift(kind: Nat), PSext, PWithin, PComplement, PRotate(kind: Nat), PAt, PLen, POperation(code: Nat) }
 
 record PrimEntry { g: Nat, p: Prim }
 
@@ -322,6 +323,12 @@ fn Known::field(names: List<String>, name: String, k: Nat) → Option<Nat> {
 // A shift by its kind: left, logical right, arithmetic right.
 fn Known::shift_op(kind, w, c: Nat) → Op {
     match kind { Zero => Shl(w, c), Succ(a) => match a { Zero => Lshr(w, c), Succ(_) => Ashr(w, c) } }
+}
+
+// The operation a shift by a word is, by its kind; an arithmetic shift by
+// a word is none yet.
+fn Known::shift_by(kind: Nat) → Option<Operation> {
+    match kind { Zero => Some(ShlBy), Succ(a) => match a { Zero => Some(ShrBy), Succ(_) => None } }
 }
 
 fn Known::word_op(op: Nat, w: Nat) → Op {
@@ -1909,6 +1916,16 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                                     _ => rt_refuse("`" ++ name ++ "` on something other than a word"),
                                 }),
                             }),
+                        // An operation of two words named once, with its row
+                        // (`function_ir_operation`), by its code.
+                        POperation(code) => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, args).bind(λ r =>
+                            match args {
+                                Nil => rt_refuse("`" ++ name ++ "` without its operands"),
+                                Cons(a0, _) => k.ty_of(a0).bind(λ t => match t {
+                                    Word(w) => pure(r.fst.finish(h, operand, Prim(Apply(Operation::of_code(code), w), r.snd))),
+                                    _ => rt_refuse("`" ++ name ++ "` on something other than a word"),
+                                }),
+                            }),
                         PConj => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, args).bind(λ r => pure(r.fst.finish(h, operand, Prim(Conj, r.snd)))),
                         PDisj => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, args).bind(λ r => pure(r.fst.finish(h, operand, Prim(Disj, r.snd)))),
                         PNeg => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, args).bind(λ r => pure(r.fst.finish(h, operand, Prim(Neg, r.snd)))),
@@ -1962,12 +1979,23 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                             Nil => rt_refuse("`truncate` without its widths"),
                         },
                         // A shift of a word by a literal count (FunctionIR's
-                        // shifts are immediate).
+                        // immediate shifts), or by a word's `toNat()` (the
+                        // operation `ShlBy` or `ShrBy`).
                         PShift(kind) => match args {
                             Cons(x, rest) => match rest {
                                 Cons(count, _) => k.ty_of(x).bind(λ t => match t {
-                                    Word(w) => rt_literal(count).bind(λ c => rt_go(f, k, st, x, True).bind(λ r =>
-                                        pure(r.fst.finish(h, operand, Prim(Known::shift_op(kind, w, c), [RSt::level(r.snd)]))))),
+                                    Word(w) => rt_to_nat_of(count).bind(λ by => match by {
+                                        Some(y) => match Known::shift_by(kind) {
+                                            None => rt_refuse("`" ++ name ++ "` by a word: an arithmetic shift by a word is not an operation yet"),
+                                            Some(o) => k.ty_of(y).bind(λ u => match u.same(Word(w)) {
+                                                False => rt_refuse("`" ++ name ++ "` by a word of another width"),
+                                                True => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, [x, y]).bind(λ r =>
+                                                    pure(r.fst.finish(h, operand, Prim(Apply(o, w), r.snd)))),
+                                            }),
+                                        },
+                                        None => rt_literal(count).bind(λ c => rt_go(f, k, st, x, True).bind(λ r =>
+                                            pure(r.fst.finish(h, operand, Prim(Known::shift_op(kind, w, c), [RSt::level(r.snd)]))))),
+                                    }),
                                     _ => rt_refuse("`" ++ name ++ "` of something other than a word"),
                                 }),
                                 Nil => rt_refuse("`" ++ name ++ "` without its count"),
@@ -2286,6 +2314,7 @@ fn rt_prim_names() → List<Pair<String, Prim>> {
     [Pair("bitvec::BitVec::add", PWord(0)), Pair("bitvec::BitVec::sub", PWord(1)), Pair("bitvec::BitVec::band", PWord(2)),
      Pair("bitvec::BitVec::bor", PWord(3)), Pair("bitvec::BitVec::bxor", PWord(4)), Pair("bitvec::BitVec::eq_bit", PWord(5)),
      Pair("bitvec::BitVec::unsigned_lt_bit", PWord(6)), Pair("bitvec::BitVec::signed_lt_bit", PWord(7)),
+     Pair("bitvec::BitVec::mul", POperation(Mul.code())),
      Pair(name_of(Bool::and), PConj), Pair(name_of(Bool::or), PDisj), Pair(name_of(Bool::not), PNeg),
      Pair("bitvec::BitVec::ofNat", POfNat), Pair("bitvec::BitVec::zero_extend", PZext),
      Pair("bitvec::BitVec::widen_8_16", PWiden(8)), Pair("bitvec::BitVec::widen_8_32", PWiden(24)), Pair("bitvec::BitVec::widen_8_64", PWiden(56)),
@@ -2300,7 +2329,8 @@ fn rt_prim_names() → List<Pair<String, Prim>> {
 // `bitvec_rotate` has no `rotr` to call.
 fn rt_derived_names() → List<Pair<String, Prim>> {
     [Pair("bitvec::BitVec::complement", PComplement), Pair("bitvec_rotate::BitVec::rotr", PRotate(0)), Pair("bitvec_rotate::BitVec::rotl", PRotate(1)),
-     Pair("bytes::Bytes::at", PAt), Pair("bytes::Bytes::len", PLen)]
+     Pair("bytes::Bytes::at", PAt), Pair("bytes::Bytes::len", PLen),
+     Pair("bitvec_div::BitVec::udiv", POperation(UDiv.code())), Pair("bitvec_div::BitVec::urem", POperation(URem.code()))]
 }
 
 fn rt_prims_present(ps: List<Pair<String, Prim>>) → Tac<List<PrimEntry>> {
