@@ -1195,8 +1195,24 @@ impl Checking<'_> {
                     Ok(term) => return Ok(term),
                     Err(stuck) => stuck,
                 };
-                if self.key_of("bitvec_omega::add_form").is_none() || !bv_omega::mentions_word(self, expected) {
+                if !bv_omega::mentions_word(self, expected) {
                     return Err(stuck);
+                }
+                // Over words the default is `bv_omega`, which only a module
+                // that sees `bitvec_omega` has: say so, rather than leave
+                // the writer with `omega`'s model of a goal it cannot read.
+                if self.key_of("bitvec_omega::add_form").is_none() {
+                    return Err(match stuck {
+                        ElabError::Elab { msg, span } => ElabError::Elab {
+                            msg: format!(
+                                "{msg}\nhelp: the obligation is over words, which `bv_omega` reads; it \
+                                 needs `import bitvec_omega;` (and `import bitvec_shift_nat;` for a \
+                                 shift such as `x.shift_right(1)`)"
+                            ),
+                            span,
+                        },
+                        stuck => stuck,
+                    });
                 }
                 self.pass.warnings.borrow_mut().truncate(mark.0);
                 self.attempt.goal_arena.rollback(mark.1);

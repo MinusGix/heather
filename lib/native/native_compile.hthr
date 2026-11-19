@@ -1614,12 +1614,66 @@ fn program_linkable(functions: List<Function>) → Bool {
 // (`Function::roomy`), so any the functions link under bounds their calls.
 fn table_room(rooms: List<Nat>) → Nat → Nat { λ (f: Nat) => rooms_at(rooms, f) }
 
+// Whether procedure `p` is entered with a check: where it can reach itself.
+fn Source::checked(self src: Source, p: Nat) → Bool { src.procedures.checks().checked(p) }
+
+// The stack procedure `p`'s body takes below its frame, at its rank.
+fn Source::body_below(self src: Source, homes: Homes, bodies: List<Frame>, p: Nat) → Nat {
+    let checks = src.procedures.checks();
+    src.procedures.performed_by(p).below(src.procedures.called_by(p), src.procedures, bodies, homes.places, homes.room_table(src.functions),
+        checks, src.procedures.ranks(checks).deep_at(p))
+}
+
+// The stack `main`'s calls take below its frame, at its rank, above every
+// procedure's.
+fn Source::main_below(self src: Source, homes: Homes, bodies: List<Frame>) → Nat {
+    src.main.performed().below(src.main.called(), src.procedures, bodies, homes.places, homes.room_table(src.functions),
+        src.procedures.checks(), src.procedures.len())
+}
+
+// The most of `f` at an index the flags from `index` on mark.
+fn List::most(self flags: List<Bool>, f: Nat → Nat, index: Nat) → Nat {
+    match flags { Nil => 0, Cons(b, rest) => Nat::max(match b { True => f(index), False => 0 }, rest.most(f, Succ(index))) }
+}
+
+// A level of checked calls: the most any checked procedure takes, its
+// level and what its body takes below its frame (§7.4; its check asks for
+// that and one return address more).
+fn Source::per_level(self src: Source, homes: Homes, bodies: List<Frame>) → Nat {
+    src.procedures.checks().most(λ p => bodies.frame(p).level(homes.places) + src.body_below(homes, bodies, p), 0)
+}
+
+// Whether every call among `callees` without a check goes to a rank below
+// `rank`.
+fn List::under_rank(self callees: List<Nat>, checks: List<Bool>, ranks: List<Nat>, rank: Nat) → Bool {
+    match callees { Nil => True, Cons(c, rest) => (checks.checked(c) || Succ(ranks.deep_at(c)).leb(rank)) && rest.under_rank(checks, ranks, rank) }
+}
+
+// Whether each procedure from `index` on calls without a check only below
+// its rank.
+fn List::ranked_from(self rest: List<Procedure>, checks: List<Bool>, ranks: List<Nat>, index: Nat) → Bool {
+    match rest {
+        Nil => True,
+        Cons(proc, more) => proc.body.performed().under_rank(checks, ranks, ranks.deep_at(index)) && more.ranked_from(checks, ranks, Succ(index)),
+    }
+}
+
+// Whether the ranks hold of every call without a check, `main`'s at the
+// rank above every procedure's: what `Layout::call_fits` checks of each
+// call, here of the whole source at once, so a statement about the source
+// can rest on it.
+fn Source::ranked(self src: Source) → Bool {
+    let checks = src.procedures.checks();
+    src.procedures.ranked_from(checks, src.procedures.ranks(checks), 0) &&
+        src.main.performed().under_rank(checks, src.procedures.ranks(checks), src.procedures.len())
+}
+
 // The bytes `main`'s activation leaves below its frame: what its own
 // calls take at its rank, above every procedure's, and one return address
-// more (`Target.roomy`), or the source's `room` where that is more.
+// more (`Target.roomy`), and the levels of checked calls the source asks
+// for (`Source.levels`).
 fn Source::left(self src: Source, homes: Homes, bodies: List<Frame>) → Nat {
-    Nat::max(src.room, src.main.performed().below(src.main.called(), src.procedures, bodies, homes.places, homes.room_table(src.functions),
-        src.procedures.checks(), src.procedures.len()) + 8)
+    (src.main_below(homes, bodies) + 8) + src.levels.stacked(src.per_level(homes, bodies))
 }
 
 // What a program needs of its stack: `main`'s frame and the bytes below it.

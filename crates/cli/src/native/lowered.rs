@@ -221,7 +221,7 @@ impl Printer<'_> {
 /// The definitions of `{p}_lowered()`, the source `numbers` spell, and its
 /// buffers' capacities and initial lengths; `None` when the source spelled
 /// itself `[0]`, which is compiled as it is.
-/// A source with procedures spells itself `[2]`, its room after its words
+/// A source with procedures spells itself `[2]`, its levels after its words
 /// and its procedures after its buffers; one with functions `[3]`, as `[2]`
 /// with its functions before its procedures, each a definition
 /// (`{p}_fn_{k}()`) and each ending with how many buffers it is lent.
@@ -231,7 +231,7 @@ pub(super) fn literal(p: &str, numbers: &[u64]) -> Result<Option<(String, Vec<(u
     if tag == 0 { return Ok(None); }
     if tag > 3 { return Err(format!("source tag {tag}")); }
     let words = printer.reader.next()?;
-    let room = if tag >= 2 { Some(printer.reader.next()?) } else { None };
+    let levels = if tag >= 2 { Some(printer.reader.next()?) } else { None };
     let count = printer.reader.next()? as usize;
     let buffers = buffers(p, &mut printer.reader, count)?;
     let mut functions = Vec::new();
@@ -248,7 +248,7 @@ pub(super) fn literal(p: &str, numbers: &[u64]) -> Result<Option<(String, Vec<(u
         }
     }
     let mut calls = String::new();
-    if let Some(room) = room {
+    if let Some(levels) = levels {
         let count = printer.reader.next()? as usize;
         let mut procedures = Vec::with_capacity(count);
         for _ in 0..count {
@@ -257,7 +257,7 @@ pub(super) fn literal(p: &str, numbers: &[u64]) -> Result<Option<(String, Vec<(u
             let (body, _) = printer.stmt()?;
             procedures.push(format!("Procedure(params := {params}, results := {results}, body := {body})"));
         }
-        calls = format!(", procedures := [{}], room := {room}", procedures.join(", "));
+        calls = format!(", procedures := [{}], levels := {levels}", procedures.join(", "));
     }
     let (main, _) = printer.stmt()?;
     if printer.reader.at != numbers.len() {
