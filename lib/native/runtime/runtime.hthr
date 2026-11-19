@@ -2042,7 +2042,6 @@ fn runtime_fst<A, B>(p: Pair<A, B>) → A { p.fst }
 
 fn runtime_snd<A, B>(p: Pair<A, B>) → B { p.snd }
 
-
 // And their names.
 fn runtime_result_names(reprs: List<ReprEntry>, recs: List<RecShape>, r: Ty) → List<String> {
     match r {
@@ -2093,7 +2092,6 @@ fn runtime_rec_infos(q: RtQ, rfl: Expr, recs: List<RecShape>) → Tac<List<Expr>
         },
     }
 }
-
 
 // The world's type table: none without reprs or records, else each repr's
 // `RecInfo::word_repr`, its round trips `refl` at each word and each value,
