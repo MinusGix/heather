@@ -365,6 +365,24 @@ fn the_symbol_resolves_to_the_files_own_name() {
 }
 
 #[test]
+fn an_operand_that_does_not_elaborate_is_the_refusal() {
+    // `*` is designated at `Nat`, but its left operand calls a method that
+    // does not exist: that is what the writer has to fix, so it is what is
+    // reported, not "no designation covers this carrier".
+    let mut e = Elaborator::with_prelude().expect("prelude");
+    let err = e
+        .elab_source(
+            "fn times(a: Nat, b: Nat) -> Nat { a }\n\
+             designation * at Nat := times\n\
+             fn m(x: Nat) -> Nat { x.no_such_method() * 3 }",
+        )
+        .expect_err("the operand is unbound");
+    let msg = format!("{err}");
+    assert!(msg.contains("no_such_method"), "{msg}");
+    assert!(!msg.contains("covers this carrier"), "{msg}");
+}
+
+#[test]
 fn a_symbol_with_no_name_behind_it_says_so() {
     // `*` has no designation and no `mul` in scope. Before this round the
     // message was `unbound name \`mul\``, which named something nobody wrote.
