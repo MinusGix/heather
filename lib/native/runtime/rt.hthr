@@ -173,10 +173,14 @@ fn Ty::to_count(tys: Nat → RecInfo, a: Ty) → a.sem(tys) → Nat {
 
 // A 64-bit word read at a flat code, and a flat value read back as a
 // 64-bit word: the word itself at `Word(64)` (the transport along `64 = w`
-// evaluates away at a literal width), the default elsewhere.
+// evaluates away at a literal width); at a narrower word, its low bits, and
+// the narrow word zero-extended back (how a narrow word crosses a function's
+// boundary in a 64-bit one, issues/runtime-repr-narrow-words.md: the low
+// bits are what binding the word gives its port at that width,
+// `word_value`); the default elsewhere.
 fn Ty::word_at(self f: Ty, x: BitVec(64)) → f.Flat() {
     match f as λ y => y.Flat() {
-        Word(w) => match Nat::equation(64, w) { Inl(e) => j(e, λ y _ => BitVec(y), x), Inr(_) => BitVec::ofNat(0) },
+        Word(w) => match Nat::equation(64, w) { Inl(e) => j(e, λ y _ => BitVec(y), x), Inr(_) => BitVec::ofNat(x.toNat()) },
         Bit => False,
         ByteList(_) => Nil,
         Lines => Nil,
@@ -187,7 +191,7 @@ fn Ty::word_at(self f: Ty, x: BitVec(64)) → f.Flat() {
 
 fn Ty::flat_word(self f: Ty) → f.Flat() → BitVec(64) {
     match f as λ y => y.Flat() → BitVec(64) {
-        Word(w) => λ v => match w.equation(64) { Inl(e) => j(e, λ y _ => BitVec(y), v), Inr(_) => BitVec::ofNat(0) },
+        Word(w) => λ v => match w.equation(64) { Inl(e) => j(e, λ y _ => BitVec(y), v), Inr(_) => BitVec::ofNat(v.toNat()) },
         Bit => λ _ => BitVec::ofNat(0),
         ByteList(_) => λ _ => BitVec::ofNat(0),
         Lines => λ _ => BitVec::ofNat(0),

@@ -1804,6 +1804,134 @@ theorem Tm::lower_sound(self t: Tm, w: World): (g: List<Ty>) → (ports: List<Na
 }
 
 // ---------------------------------------------------------------------------
+// Narrow words at a function's boundary (issues/runtime-repr-narrow-words.md).
+// A plain function's parameter or result may be a word narrower than 64
+// bits. It still crosses the boundary in a 64-bit word: a parameter is the
+// word's low bits, read into a fresh port by one `Resize` before the body
+// (`Fun::entry`), so that the x86 lowering finds it zero-extended in its
+// register; the result is zero-extended into a fresh port by one `Resize`
+// after the body (`widen`).
+// Calls and loops keep `Ty::OneWord`: a call of a function with a narrow
+// word would widen its argument first, which the call's lowering does not
+// do yet.
+
+// A decision whose equation does not hold is its `Inr`.
+theorem Or::inr_apart<P>(o: P ∨ True, apart: P → False): o = Inr(trivial) {
+    match o { Inl(e) => false_elim(apart(e)), Inr(_) => refl }
+}
+
+// A code a plain function's boundary passes in one 64-bit word: one held
+// in a 64-bit word (`Ty::OneWord`), or a word narrower than one.
+fn Ty::Edge(self t: Ty, tys: Nat → RecInfo) → Type {
+    match t { Word(w) => (w = 64) ∨ (w < 64), Bit => False, ByteList(_) => False, Lines => False, Named(i) => tys(i).fields = [Word(64)], Count => False }
+}
+
+fn Ty::check_narrow(w: Nat) → Option<(w = 64) ∨ (w < 64)> {
+    match w.equation(64) {
+        Inl(e) => Some(Inl(e)),
+        Inr(_) => Tm::check_true((w + 1).leb(64)).and_then(λ h => Some(Inr(Nat::leb_sound(w + 1, 64, h)))),
+    }
+}
+
+fn Ty::check_edge(self t: Ty, tys: Nat → RecInfo) → Option<t.Edge(tys)> {
+    match t as λ x => Option<x.Edge(tys)> {
+        Word(w) => Ty::check_narrow(w),
+        Bit => None, ByteList(_) => None, Lines => None,
+        Named(i) => Ty::check_fields_word(tys(i).fields),
+        Count => None,
+    }
+}
+
+fn Ty::Edges(tys: Nat → RecInfo, ps: List<Ty>) → Type {
+    match ps { Nil => True, Cons(p, rest) => p.Edge(tys) ∧ Ty::Edges(tys, rest) }
+}
+
+fn Ty::check_edges(tys: Nat → RecInfo, ps: List<Ty>) → Option<Ty::Edges(tys, ps)> {
+    match ps {
+        Nil => Some(trivial),
+        Cons(p, rest) => p.check_edge(tys).and_then(λ e => Ty::check_edges(tys, rest).and_then(λ ok => Some(⟨e, ok⟩))),
+    }
+}
+
+// A 64-bit word read at a narrower word is its low bits.
+theorem Ty::cast_narrow_in(tys: Nat → RecInfo, w: Nat, ne: w ≠ 64, x: BitVec(64)): Ty::cast(tys, Word(64), Word(w), x) = BitVec::ofNat(x.toNat()) {
+    let converted: (Ty::cast(tys, Word(64), Word(w), x) = Ty::convert(tys, Word(64), Word(w), x)) =
+        j(sym(Or::inr_apart(Word(64).equation(Word(w)), λ e => ne(sym(cong_fn(Ty::width, e))))), λ d _ =>
+            (match d as λ _ => BitVec(w) { Inl(e) => j(e, λ y _ => y.sem(tys), x), Inr(_) => Ty::convert(tys, Word(64), Word(w), x) }) =
+                Ty::convert(tys, Word(64), Word(w), x),
+            refl);
+    let truncated: (Ty::convert(tys, Word(64), Word(w), x) = BitVec::ofNat(x.toNat())) =
+        j(sym(Or::inr_apart(Nat::equation(64, w), λ e => ne(sym(e)))), λ d _ =>
+            (match d as λ _ => BitVec(w) { Inl(e) => j(e, λ y _ => BitVec(y), x), Inr(_) => BitVec::ofNat(x.toNat()) }) = BitVec::ofNat(x.toNat()),
+            refl);
+    trans(converted, truncated)
+}
+
+// A narrow word read as a 64-bit word is its zero extension.
+theorem Ty::cast_narrow_out(tys: Nat → RecInfo, w: Nat, ne: w ≠ 64, v: BitVec(w)): Ty::cast(tys, Word(w), Word(64), v) = BitVec::ofNat(v.toNat()) {
+    let converted: (Ty::cast(tys, Word(w), Word(64), v) = Ty::convert(tys, Word(w), Word(64), v)) =
+        j(sym(Or::inr_apart(Word(w).equation(Word(64)), λ e => ne(cong_fn(Ty::width, e)))), λ d _ =>
+            (match d as λ _ => BitVec(64) { Inl(e) => j(e, λ y _ => y.sem(tys), v), Inr(_) => Ty::convert(tys, Word(w), Word(64), v) }) =
+                Ty::convert(tys, Word(w), Word(64), v),
+            refl);
+    let extended: (Ty::convert(tys, Word(w), Word(64), v) = BitVec::ofNat(v.toNat())) =
+        j(sym(Or::inr_apart(w.equation(64), ne)), λ d _ =>
+            (match d as λ _ => BitVec(64) { Inl(e) => j(e, λ y _ => BitVec(y), v), Inr(_) => BitVec::ofNat(v.toNat()) }) = BitVec::ofNat(v.toNat()),
+            refl);
+    trans(converted, extended)
+}
+
+// A code the boundary passes spans one port.
+theorem Ty::edge_below(tys: Nat → RecInfo, t: Ty): t.Edge(tys) → (m: Nat) → t.Below(tys, m, m + 1) {
+    match t {
+        Word(_) => λ _ m => m.lt_succ_self(),
+        Bit => λ never => false_elim(never),
+        ByteList(_) => λ never => false_elim(never),
+        Lines => λ never => false_elim(never),
+        Named(i) => λ e m => Ty::one_word_below(tys, Named(i), e, m),
+        Count => λ never => false_elim(never),
+    }
+}
+
+// A function's result at the boundary: a narrow word zero-extended into a
+// fresh port by one `Resize`; any other code where the body left it.
+fn Ty::widen_by(w: Nat, o: (w = 64) ∨ True, c: Lowered) → Lowered {
+    match o { Inl(_) => c, Inr(_) => Lowered(Compose(c.region, nodes_region([Resize(w, 64, c.next, c.result)])), c.next, c.next + 1) }
+}
+
+fn Ty::widen(self t: Ty, c: Lowered) → Lowered {
+    match t { Word(w) => Ty::widen_by(w, w.equation(64), c), Bit => c, ByteList(_) => c, Lines => c, Named(_) => c, Count => c }
+}
+
+// The result's 64-bit word, after the widening, is the value read as one.
+theorem Ty::edge_reads(tys: Nat → RecInfo, call: function_ir_eval::Answers(), buffers: Buffers(), values: Valuation(), t: Ty, c: Lowered): t.Edge(tys) →
+    (v: t.sem(tys)) → t.Holds(tys, c.region.eval(call, values, buffers := buffers), c.result, v) →
+    t.widen(c).region.eval(call, values, buffers := buffers)(64, t.widen(c).result) = Ty::cast(tys, t, Word(64), v) {
+    match t {
+        Word(w) => λ ok => match ok {
+            Inl(e) => j(sym(e), λ y _ => (v: BitVec(y)) → c.region.eval(call, values, buffers := buffers)(y, c.result) = v →
+                    Word(y).widen(c).region.eval(call, values, buffers := buffers)(64, Word(y).widen(c).result) = Ty::cast(tys, Word(y), Word(64), v),
+                λ v h => trans(h, sym(Ty::cast_self(tys, Word(64), v)))),
+            Inr(lt) => λ v h => {
+                let ne = Nat::ne_of_lt(w, 64, lt);
+                let after = c.region.eval(call, values, buffers := buffers);
+                let read: (Valuation::set(after, c.next, λ wd => BitVec::ofNat(after(w, c.result).toNat()), 64, c.next) = Ty::cast(tys, Word(w), Word(64), v)) =
+                    trans(Valuation::set_here(after, c.next, λ wd => BitVec::ofNat(after(w, c.result).toNat()), 64),
+                        trans(cong_fn(λ (y: BitVec(w)) => BitVec::ofNat(y.toNat(), n := 64), h), sym(Ty::cast_narrow_out(tys, w, ne, v))));
+                j(sym(Or::inr_apart(w.equation(64), ne)), λ o _ =>
+                    Ty::widen_by(w, o, c).region.eval(call, values, buffers := buffers)(64, Ty::widen_by(w, o, c).result) = Ty::cast(tys, Word(w), Word(64), v),
+                    read)
+            },
+        },
+        Bit => λ never => false_elim(never),
+        ByteList(_) => λ never => false_elim(never),
+        Lines => λ never => false_elim(never),
+        Named(i) => λ e v h => Ty::one_word_reads(tys, c.region.eval(call, values, buffers := buffers), c.result, Named(i), e, v, h),
+        Count => λ never => false_elim(never),
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Functions: the wrapper from FunctionIR's `Function::eval`, which binds its
 // parameters by `Valuation::bind`, to the reflected function's curried
 // meaning (`Fun::meaning`). Parameters are 64-bit words, the ids 0, 1, …
@@ -1824,12 +1952,51 @@ fn Fun::past(ps: List<Ty>, m: Nat) → Nat {
 
 fn Fun::context(self f: Fun) → List<Ty> { Ty::bind_onto(f.params, Nil) }
 
+// The parameters' entry: a narrow word's low bits read into a fresh port
+// by one `Resize` (the x86 lowering holds a narrow value zero-extended in
+// its register, and a parameter's register holds the whole word passed);
+// any other parameter at its own id. `ports` are the context's, the last
+// parameter's first; with no narrow word they are `Fun::ports_onto`'s.
+record Entry { nodes: List<Node>, ports: List<Nat>, next: Nat }
+
+fn Ty::narrow_by(w: Nat, o: (w = 64) ∨ True) → Bool { match o { Inl(_) => False, Inr(_) => True } }
+
+fn Ty::narrow(self t: Ty) → Bool {
+    match t { Word(w) => Ty::narrow_by(w, w.equation(64)), Bit => False, ByteList(_) => False, Lines => False, Named(_) => False, Count => False }
+}
+
+fn Fun::entry_step(b: Bool, p: Ty, m, next: Nat, ports: List<Nat>, again: Nat → List<Nat> → Entry) → Entry {
+    match b {
+        True => Entry(Cons(Resize(64, p.width(), next, m), again(next + 1, Cons(next, ports)).nodes), again(next + 1, Cons(next, ports)).ports,
+            again(next + 1, Cons(next, ports)).next),
+        False => again(next, Cons(m, ports)),
+    }
+}
+
+fn Fun::entry(ps: List<Ty>, m, next: Nat, ports: List<Nat>) → Entry {
+    match ps {
+        Nil => Entry(Nil, ports, next),
+        Cons(p, rest) => Fun::entry_step(p.narrow(), p, m, next, ports, λ n2 ps2 => Fun::entry(rest, m + 1, n2, ps2)),
+    }
+}
+
+fn Fun::entry_of(self f: Fun) → Entry { Fun::entry(f.params, 0, Fun::past(f.params, 0), Nil) }
+
+// The body's code after the entry's nodes (with none, the body's alone).
+fn Fun::entered(nodes: List<Node>, c: Lowered) → Lowered {
+    match nodes { Nil => c, Cons(_, _) => Lowered(Compose(nodes_region(nodes), c.region), c.result, c.next) }
+}
+
+fn Fun::code_of(self f: Fun, e: Entry, c: Lowered) → Function {
+    Function(Fun::param_ids(f.params, 0), f.result.widen(Fun::entered(e.nodes, c)).region, f.result.widen(Fun::entered(e.nodes, c)).result, f.lent)
+}
+
 fn Fun::lower_typed(self f: Fun, w: World, c: Lowered) → Option<Function> {
-    Tm::ty(f.body, w, f.context()).check(f.result).and_then(λ _ => Some(Function(Fun::param_ids(f.params, 0), c.region, c.result, f.lent)))
+    Tm::ty(f.body, w, f.context()).check(f.result).and_then(λ _ => Some(f.code_of(f.entry_of(), c)))
 }
 
 fn Fun::lower_body(self f: Fun, w: World) → Option<Function> {
-    f.body.lower(w, f.context(), Fun::ports_onto(f.params, 0, Nil), Fun::past(f.params, 0)).and_then(λ c => f.lower_typed(w, c))
+    f.body.lower(w, f.context(), f.entry_of().ports, f.entry_of().next).and_then(λ c => f.lower_typed(w, c))
 }
 
 fn Fun::lower_distinct(self f: Fun, w: World) → Option<Function> {
@@ -1837,14 +2004,14 @@ fn Fun::lower_distinct(self f: Fun, w: World) → Option<Function> {
 }
 
 fn Fun::lower_result(self f: Fun, w: World) → Option<Function> {
-    f.result.check_one_word(w.tys).and_then(λ _ => f.lower_distinct(w))
+    f.result.check_edge(w.tys).and_then(λ _ => f.lower_distinct(w))
 }
 
 // A function of words to a word, lowered to a FunctionIR function: each
-// parameter and the result a 64-bit word, or a record held in one
-// (`Ty::OneWord`).
+// parameter and the result a 64-bit word, a record held in one
+// (`Ty::OneWord`), or a narrower word (`Ty::Edge`).
 fn Fun::lower(self f: Fun, w: World) → Option<Function> {
-    Ty::check_one_words(w.tys, f.params).and_then(λ _ => f.lower_result(w))
+    Ty::check_edges(w.tys, f.params).and_then(λ _ => f.lower_result(w))
 }
 
 // Words as an environment: the parameters bound onto `g` in order, each
@@ -1947,6 +2114,121 @@ theorem Fun::below_onto(tys: Nat → RecInfo, ps: List<Ty>): (g: List<Ty>) → (
     }
 }
 
+theorem Fun::past_ge(ps: List<Ty>): (m: Nat) → m <= Fun::past(ps, m) {
+    match ps {
+        Nil => λ m => m.le_refl(),
+        Cons(_, rest) => λ m => Nat::le_of_lt(m, Fun::past(rest, m + 1), Fun::past_ge(rest, m + 1)),
+    }
+}
+
+// A parameter's id is below the ids' end.
+theorem Fun::param_ids_below(ps: List<Ty>): (m, id: Nat) → Mem(id, Fun::param_ids(ps, m)) → id < Fun::past(ps, m) {
+    match ps {
+        Nil => λ m id never => false_elim(never),
+        Cons(_, rest) => λ m id mem => match mem {
+            Inl(e) => j(sym(e), λ y _ => y < Fun::past(rest, m + 1), Fun::past_ge(rest, m + 1)),
+            Inr(later) => Fun::param_ids_below(rest, m + 1, id, later),
+        },
+    }
+}
+
+// What `narrow` decides at a code the boundary passes: a code held in a
+// 64-bit word, or a narrow word.
+theorem Ty::narrow_cases(tys: Nat → RecInfo, P: Bool → Type, p: Ty): p.Edge(tys) → (p.OneWord(tys) → P(False)) →
+    ((w: Nat) → p = Word(w) → w ≠ 64 → P(True)) → P(p.narrow()) {
+    match p {
+        Word(w) => λ ok own narrow => match ok {
+            Inl(e) => j(sym(e), λ y _ => P(Ty::narrow_by(y, y.equation(64))), own(e)),
+            Inr(lt) => j(sym(Or::inr_apart(w.equation(64), Nat::ne_of_lt(w, 64, lt))), λ o _ => P(Ty::narrow_by(w, o)),
+                narrow(w, refl, Nat::ne_of_lt(w, 64, lt))),
+        },
+        Bit => λ never => false_elim(never),
+        ByteList(_) => λ never => false_elim(never),
+        Lines => λ never => false_elim(never),
+        Named(_) => λ ok own _ => own(ok),
+        Count => λ never => false_elim(never),
+    }
+}
+
+// A narrow word's port after its `Resize` holds the low bits of the word
+// passed, which is that word read at the narrow code.
+theorem Fun::narrow_holds(tys: Nat → RecInfo, values: Valuation(), p: Ty, w: Nat, hp: p = Word(w), ne: w ≠ 64, m, next: Nat, x: BitVec(64),
+    bound: values(64, m) = x): p.Holds(tys, Valuation::set(values, next, λ wd => BitVec::ofNat(values(64, m).toNat())), next, Ty::cast(tys, Word(64), p, x)) {
+    let after = Valuation::set(values, next, λ wd => BitVec::ofNat(values(64, m).toNat()));
+    let at_word: (after(w, next) = Ty::cast(tys, Word(64), Word(w), x)) =
+        trans(Valuation::set_here(values, next, λ wd => BitVec::ofNat(values(64, m).toNat()), w),
+            trans(cong_fn(λ (y: BitVec(64)) => BitVec::ofNat(y.toNat(), n := w), bound), sym(Ty::cast_narrow_in(tys, w, ne, x))));
+    j(sym(hp), λ q _ => q.Holds(tys, after, next, Ty::cast(tys, Word(64), q, x)), at_word)
+}
+
+// What the entry leaves: the parameters' ports hold the environment the
+// words make, each below the entry's `next`.
+fn Fun::EntryHolds(tys: Nat → RecInfo, buffers: Buffers(), ps: List<Ty>, g: List<Ty>, env: Env(tys, g), e: Entry, xs: List<BitVec(64)>,
+    values: Valuation()) → Type {
+    EnvHolds(tys, eval_nodes_over(buffers, e.nodes, values), Ty::bind_onto(ps, g), e.ports, Ty::extend(tys, ps, g, env, xs)) ∧
+        Below(tys, Ty::bind_onto(ps, g), e.ports, e.next)
+}
+
+// One parameter's step of the entry, from the rest's (`ih`).
+theorem Fun::entry_step_holds(tys: Nat → RecInfo, buffers: Buffers(), p: Ty, rest: List<Ty>, g: List<Ty>, ports: List<Nat>, env: Env(tys, g),
+    m, next: Nat, x: BitVec(64), more: List<BitVec(64)>, values: Valuation(), ok: p.Edge(tys), held: EnvHolds(tys, values, g, ports, env),
+    below: Below(tys, g, ports, next), bound: values(64, m) = x, bound_rest: Fun::BoundWords(values, Fun::param_ids(rest, m + 1), more),
+    past: Fun::past(rest, m + 1) <= next,
+    ih: (g2: List<Ty>) → (ports2: List<Nat>) → (env2: Env(tys, g2)) → (next2: Nat) → (values2: Valuation()) → EnvHolds(tys, values2, g2, ports2, env2) →
+        Below(tys, g2, ports2, next2) → Fun::BoundWords(values2, Fun::param_ids(rest, m + 1), more) → Fun::past(rest, m + 1) <= next2 →
+        Fun::EntryHolds(tys, buffers, rest, g2, env2, Fun::entry(rest, m + 1, next2, ports2), more, values2)):
+    Fun::EntryHolds(tys, buffers, rest, Cons(p, g), Pair(Ty::cast(tys, Word(64), p, x), env),
+        Fun::entry_step(p.narrow(), p, m, next, ports, λ n2 ps2 => Fun::entry(rest, m + 1, n2, ps2)), more, values) {
+    let again = λ (n2: Nat) (ps2: List<Nat>) => Fun::entry(rest, m + 1, n2, ps2);
+    let env2 = Pair(Ty::cast(tys, Word(64), p, x), env);
+    Ty::narrow_cases(tys, λ b => Fun::EntryHolds(tys, buffers, rest, Cons(p, g), env2, Fun::entry_step(b, p, m, next, ports, again), more, values), p, ok,
+        λ one => ih(Cons(p, g), Cons(m, ports), env2, next, values,
+            ⟨Ty::one_word_holds(tys, values, m, p, one, x, bound), held⟩,
+            ⟨p.below_mono(tys, m, m + 1, next, Nat::le_trans(m + 1, Fun::past(rest, m + 1), next, Fun::past_ge(rest, m + 1), past),
+                Ty::one_word_below(tys, p, one, m)), below⟩,
+            bound_rest, past),
+        λ w hp ne => {
+            let after = Valuation::set(values, next, λ wd => BitVec::ofNat(values(64, m).toNat()));
+            let keeps: Keeps(values, after, next) = λ wd id lt =>
+                Valuation::set_other(values, next, λ v => BitVec::ofNat(values(64, m).toNat()), wd, id, Nat::ne_of_lt(id, next, lt));
+            ih(Cons(p, g), Cons(next, ports), env2, next + 1, after,
+                ⟨Fun::narrow_holds(tys, values, p, w, hp, ne, m, next, x, bound), env_holds_keeps(tys, g, values, after, next, keeps, ports, env, below, held)⟩,
+                ⟨Ty::edge_below(tys, p, ok, next), below_mono(tys, g, next, next + 1, Nat::le_succ_r(next, next, next.le_refl()), ports, below)⟩,
+                Fun::bound_frame(values, after, Fun::param_ids(rest, m + 1), more, λ id mem =>
+                    Valuation::set_other(values, next, λ v => BitVec::ofNat(values(64, m).toNat()), 64, id,
+                        Nat::ne_of_lt(id, next, Nat::lt_of_lt_of_le(id, Fun::past(rest, m + 1), next, Fun::param_ids_below(rest, m + 1, id, mem), past))),
+                    bound_rest),
+                Nat::le_succ_r(Fun::past(rest, m + 1), next, past))
+        })
+}
+
+theorem Fun::entry_holds(tys: Nat → RecInfo, buffers: Buffers(), ps: List<Ty>): (g: List<Ty>) → (ports: List<Nat>) → (env: Env(tys, g)) →
+    (m, next: Nat) → (xs: List<BitVec(64)>) → (values: Valuation()) → Ty::Edges(tys, ps) → EnvHolds(tys, values, g, ports, env) →
+    Below(tys, g, ports, next) → Fun::BoundWords(values, Fun::param_ids(ps, m), xs) → Fun::past(ps, m) <= next →
+    Fun::EntryHolds(tys, buffers, ps, g, env, Fun::entry(ps, m, next, ports), xs, values) {
+    match ps {
+        Nil => λ g ports env m next xs values ok held below bound past => ⟨held, below⟩,
+        Cons(p, rest) => λ g ports env m next xs values ok held below => match xs as λ ys =>
+            Fun::BoundWords(values, Fun::param_ids(Cons(p, rest), m), ys) → Fun::past(Cons(p, rest), m) <= next →
+            Fun::EntryHolds(tys, buffers, Cons(p, rest), g, env, Fun::entry(Cons(p, rest), m, next, ports), ys, values) {
+            Nil => λ bound past => Fun::entry_step_holds(tys, buffers, p, rest, g, ports, env, m, next, BitVec::zero(), Nil, values, ok.left, held, below,
+                bound.left, bound.right, past,
+                λ g2 ports2 env2 next2 values2 => Fun::entry_holds(tys, buffers, rest, g2, ports2, env2, m + 1, next2, Nil, values2, ok.right)),
+            Cons(x, more) => λ bound past => Fun::entry_step_holds(tys, buffers, p, rest, g, ports, env, m, next, x, more, values, ok.left, held, below,
+                bound.left, bound.right, past,
+                λ g2 ports2 env2 next2 values2 => Fun::entry_holds(tys, buffers, rest, g2, ports2, env2, m + 1, next2, more, values2, ok.right)),
+        },
+    }
+}
+
+// The body's code after the entry's nodes runs the body over what they
+// leave.
+theorem Fun::entered_holds(tys: Nat → RecInfo, call: function_ir_eval::Answers(), buffers: Buffers(), values: Valuation(), t: Ty, c: Lowered,
+    v: t.sem(tys)): (nodes: List<Node>) → t.Holds(tys, c.region.eval(call, eval_nodes_over(buffers, nodes, values), buffers := buffers), c.result, v) →
+    t.Holds(tys, Fun::entered(nodes, c).region.eval(call, values, buffers := buffers), Fun::entered(nodes, c).result, v) {
+    λ nodes => match nodes { Nil => λ h => h, Cons(_, _) => λ h => h }
+}
+
 // What a function's lowering promises: called on any words, with calls
 // answered by the program's meanings, it answers with its meaning, over
 // the file of spans the meaning reads. A function lent spans takes each as
@@ -1966,26 +2248,28 @@ fn Fun::LowerHolds(self f: Fun, w: World, r: Option<Function>) → Type {
 theorem Fun::lower_sound(self f: Fun, w: World): f.LowerHolds(w, f.lower(w)) {
     let P = λ (r: Option<Function>) => f.LowerHolds(w, r);
     let ids = Fun::param_ids(f.params, 0);
-    let ports = Fun::ports_onto(f.params, 0, Nil);
-    let next = Fun::past(f.params, 0);
-    Option::and_then_elim(P, trivial, Ty::check_one_words(w.tys, f.params), λ _ => f.lower_result(w), λ ok _ =>
-    Option::and_then_elim(P, trivial, f.result.check_one_word(w.tys), λ _ => f.lower_distinct(w), λ er _ =>
+    let e = f.entry_of();
+    Option::and_then_elim(P, trivial, Ty::check_edges(w.tys, f.params), λ _ => f.lower_result(w), λ ok _ =>
+    Option::and_then_elim(P, trivial, f.result.check_edge(w.tys), λ _ => f.lower_distinct(w), λ er _ =>
     Option::and_then_elim(P, trivial, Tm::check_true(distinct(ids)), λ _ => f.lower_body(w), λ apart _ =>
-    Option::and_then_elim(P, trivial, f.body.lower(w, f.context(), ports, next), λ c => f.lower_typed(w, c), λ c lowered =>
-    Option::and_then_elim(P, trivial, Tm::ty(f.body, w, f.context()).check(f.result), λ _ => Some(Function(ids, c.region, c.result, f.lent)), λ eb _ =>
+    Option::and_then_elim(P, trivial, f.body.lower(w, f.context(), e.ports, e.next), λ c => f.lower_typed(w, c), λ c lowered =>
+    Option::and_then_elim(P, trivial, Tm::ty(f.body, w, f.context()).check(f.result), λ _ => Some(f.code_of(e, c)), λ eb _ =>
         λ call agree => Ty::curry_answers(w.tys, f.result, f.params, Nil, trivial,
             λ env => Ty::cast(w.tys, Tm::ty(f.body, w, f.context()), f.result, Tm::sem(f.body, w, f.context(), env)),
-            λ xs => Function(ids, c.region, c.result, f.lent).eval(call, xs, buffers := w.spans), λ xs => {
+            λ xs => f.code_of(e, c).eval(call, xs, buffers := w.spans), λ xs => {
                 let values = Valuation::bind(Valuation::zero(), ids, xs);
                 let env = Ty::extend(w.tys, f.params, Nil, trivial, xs);
-                let after = c.region.eval(call, values, buffers := w.spans);
+                let entered = Fun::entry_holds(w.tys, w.spans, f.params, Nil, Nil, trivial, 0, Fun::past(f.params, 0), xs, values, ok, trivial, trivial,
+                    Fun::bind_bound(ids, xs, apart), Fun::past(f.params, 0).le_refl());
+                let inside = eval_nodes_over(w.spans, e.nodes, values);
+                let after = c.region.eval(call, inside, buffers := w.spans);
                 let body_ty = Tm::ty(f.body, w, f.context());
-                let ran = j(lowered, λ r _ => Tm::LowerHolds(f.body, w, f.context(), ports, next, r),
-                    Tm::lower_sound(f.body, w, f.context(), ports, next))(call, agree, values, env,
-                    Fun::env_extend_holds(w.tys, values, f.params, Nil, Nil, trivial, 0, xs, ok, trivial, Fun::bind_bound(ids, xs, apart)),
-                    Fun::below_onto(w.tys, f.params, Nil, 0, Nil, ok, trivial));
-                Ty::one_word_reads(w.tys, after, c.result, f.result, er, Ty::cast(w.tys, body_ty, f.result, Tm::sem(f.body, w, f.context(), env)),
-                    Ty::cast_holds(w.tys, after, c.result, body_ty, f.result, eb, Tm::sem(f.body, w, f.context(), env), ran.right.right.right))
+                let value = Ty::cast(w.tys, body_ty, f.result, Tm::sem(f.body, w, f.context(), env));
+                let ran = j(lowered, λ r _ => Tm::LowerHolds(f.body, w, f.context(), e.ports, e.next, r),
+                    Tm::lower_sound(f.body, w, f.context(), e.ports, e.next))(call, agree, inside, env, entered.left, entered.right);
+                Ty::edge_reads(w.tys, call, w.spans, values, f.result, Fun::entered(e.nodes, c), er, value,
+                    Fun::entered_holds(w.tys, call, w.spans, values, f.result, c, value, e.nodes,
+                        Ty::cast_holds(w.tys, after, c.result, body_ty, f.result, eb, Tm::sem(f.body, w, f.context(), env), ran.right.right.right)))
             }))))))
 }
 
@@ -2072,15 +2356,15 @@ theorem Tm::lower_static(self t: Tm, w: World, cs: Sig::Sems(w.tys, w.sigs), spa
 
 theorem Fun::lower_static(self f: Fun, w: World, cs: Sig::Sems(w.tys, w.sigs), spans: List<List<BitVec(8)>>): f.lower(w.over(cs, spans)) = f.lower(w) {
     let v = w.over(cs, spans);
-    let ports = Fun::ports_onto(f.params, 0, Nil);
-    let next = Fun::past(f.params, 0);
-    let typed = λ (c: Lowered) => cong_fn(λ (a: Ty) => a.check(f.result).and_then(λ _ =>
-            Some(Function(Fun::param_ids(f.params, 0), c.region, c.result, f.lent))), Tm::ty_static(f.body, w, cs, spans, f.context()));
+    let ports = f.entry_of().ports;
+    let next = f.entry_of().next;
+    let typed = λ (c: Lowered) => cong_fn(λ (a: Ty) => a.check(f.result).and_then(λ _ => Some(f.code_of(f.entry_of(), c))),
+        Tm::ty_static(f.body, w, cs, spans, f.context()));
     let body: (f.lower_body(v) = f.lower_body(w)) = trans(
         cong_fn(λ (o: Option<Lowered>) => o.and_then(λ c => f.lower_typed(v, c)), Tm::lower_static(f.body, w, cs, spans, f.context(), ports, next)),
         Option::and_then_ext(f.body.lower(w, f.context(), ports, next), λ c => f.lower_typed(v, c), λ c => f.lower_typed(w, c), typed));
     let apart: (f.lower_distinct(v) = f.lower_distinct(w)) = cong_fn(λ (o: Option<Function>) =>
         Tm::check_true(distinct(Fun::param_ids(f.params, 0))).and_then(λ _ => o), body);
-    let result: (f.lower_result(v) = f.lower_result(w)) = cong_fn(λ (o: Option<Function>) => f.result.check_one_word(w.tys).and_then(λ _ => o), apart);
-    cong_fn(λ (o: Option<Function>) => Ty::check_one_words(w.tys, f.params).and_then(λ _ => o), result)
+    let result: (f.lower_result(v) = f.lower_result(w)) = cong_fn(λ (o: Option<Function>) => f.result.check_edge(w.tys).and_then(λ _ => o), apart);
+    cong_fn(λ (o: Option<Function>) => Ty::check_edges(w.tys, f.params).and_then(λ _ => o), result)
 }

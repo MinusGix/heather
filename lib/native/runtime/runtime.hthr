@@ -110,6 +110,25 @@ fn Ty::all_one_word(ts: List<Ty>, tys: Nat → RecInfo) → Bool {
     match ts { Nil => True, Cons(t, rest) => t.is_one_word(tys).and(Ty::all_one_word(rest, tys)) }
 }
 
+// A code a plain function's boundary passes in one 64-bit word: one of the
+// above, or a word narrower than 64 bits (a parameter its low bits, the
+// result zero-extended; what `Ty::check_edge`, `rt_lower.hthr`, accepts).
+fn Ty::is_edge(self t: Ty, tys: Nat → RecInfo) → Bool {
+    match t { Word(w) => w.leb(64), _ => t.is_one_word(tys) }
+}
+
+fn Ty::all_edge(ts: List<Ty>, tys: Nat → RecInfo) → Bool {
+    match ts { Nil => True, Cons(t, rest) => t.is_edge(tys).and(Ty::all_edge(rest, tys)) }
+}
+
+// The width a code crosses a function's boundary at: a word's own, 64 for
+// the rest (each in one 64-bit word). `compile-x86` reads a function's
+// result's and then its parameters' (`Fun::edge_widths`) to state what its
+// code computes on the words it is passed.
+fn Ty::edge_width(self t: Ty) → Nat { match t { Word(w) => w, _ => 64 } }
+
+fn Fun::edge_widths(self f: Fun) → List<Nat> { Cons(f.result.edge_width(), f.params.map(λ p => p.edge_width())) }
+
 fn Ty::all_held_at(ts: List<Ty>, tys: Nat → RecInfo) → Bool {
     match ts { Nil => True, Cons(t, rest) => match t { Count => True, _ => t.is_one_word(tys) }.and(Ty::all_held_at(rest, tys)) }
 }
@@ -176,26 +195,26 @@ fn Tm::judge_tail(self t: Tm, sigs: List<Sig>, tys: Nat → RecInfo) → Verdict
 }
 
 fn Fun::words_reason() → String {
-    "a parameter that is not a 64-bit word: the default setup compiles functions from 64-bit words (and a loop's `Nat` fuel, first) to a 64-bit word (issues/function-ir-multi-word-calls.md)"
+    "a parameter that is not a word of at most 64 bits: the default setup compiles functions from words (and a loop's `Nat` fuel, first) to a word (issues/function-ir-multi-word-calls.md)"
+}
+
+fn Fun::result_reason() → String {
+    "a result that is not a word of at most 64 bits: the default setup compiles functions from words to a word (issues/function-ir-multi-word-calls.md)"
 }
 
 fn Fun::loop_words_reason() → String {
     "a loop over something other than 64-bit words: a loop's state is words, or types held by their repr in one"
 }
 
-// The function at entry 0 of its world's table: 64-bit words in and out
-// (FunctionIR's calling convention today), and a body of what the lowering
-// covers; a fuel recursion and a measured one are loops (design §16.11).
-fn Fun::judge(self f: Fun, w: World) → Verdict {
+// A loop's state and result: words held in one 64-bit word (a narrow word
+// is not yet, issues/runtime-repr-narrow-words.md).
+fn Fun::judge_loop(self f: Fun, w: World) → Verdict {
     match f.result.is_one_word(w.tys) {
-        False => Refused("a result that is not a 64-bit word: the default setup compiles functions from 64-bit words to a 64-bit word (issues/function-ir-multi-word-calls.md)"),
+        False => Refused("a result that is not a 64-bit word: a loop compiles to a 64-bit word (issues/runtime-repr-narrow-words.md)"),
+        // The boundary passes a type held by its repr in one word
+        // (`SInt(64)`, design §16.13), a loop's state among them.
         True => match f.shape() {
-            // The boundary passes a type held by its repr in one word
-            // (`SInt(64)`, design §16.13), a loop's state among them.
-            Plain => match Ty::all_one_word(f.params, w.tys) {
-                False => Refused(Fun::words_reason()),
-                True => f.body.judge(w.sigs, w.tys),
-            },
+            Plain => f.body.judge(w.sigs, w.tys),
             Fuel(w0, wrest, zero, succ) => match Ty::all_one_word(Cons(w0, wrest), w.tys) {
                 False => Refused(Fun::loop_words_reason()),
                 True => match f.body {
@@ -211,6 +230,25 @@ fn Fun::judge(self f: Fun, w: World) → Verdict {
                 True => body.judge_tail(w.sigs, w.tys),
             },
         },
+    }
+}
+
+// The function at entry 0 of its world's table: words in and out, each
+// passed in a 64-bit word (FunctionIR's calling convention today), and a
+// body of what the lowering
+// covers; a fuel recursion and a measured one are loops (design §16.11).
+fn Fun::judge(self f: Fun, w: World) → Verdict {
+    match f.shape() {
+        // A plain function's boundary passes a word narrower than 64 bits
+        // too (issues/runtime-repr-narrow-words.md); a loop's does not yet.
+        Plain => match f.result.is_edge(w.tys) {
+            False => Refused(Fun::result_reason()),
+            True => match Ty::all_edge(f.params, w.tys) {
+                False => Refused(Fun::words_reason()),
+                True => f.body.judge(w.sigs, w.tys),
+            },
+        },
+        _ => f.judge_loop(w),
     }
 }
 
@@ -1432,6 +1470,53 @@ fn runtime_succ(n: Nat) → Nat { n + 1 }
 
 fn runtime_count(w: BitVec(64)) → Nat { w.toNat() }
 
+// A word narrower than 64 bits across a function's boundary
+// (issues/runtime-repr-narrow-words.md): a parameter is the low bits of
+// the word passed, and the result is zero-extended into the word returned.
+// They are what `Ty::cast` computes between `Word(64)` and `Word(w)`.
+fn runtime_low(w: Nat, x: BitVec(64)) → BitVec(w) { BitVec::ofNat(x.toNat()) }
+
+fn runtime_wide(w: Nat, v: BitVec(w)) → BitVec(64) { BitVec::ofNat(v.toNat()) }
+
+// A value at a narrow word through `by` (`runtime_low` or `runtime_wide`);
+// any other code as it is.
+fn runtime_narrow_result(by: Expr, r: Ty, e: Expr) → Expr {
+    match r { Word(w) => match w.same(64) { True => e, False => ap(by, [NatLit(w), e]) }, _ => e }
+}
+
+// A function's arguments, a narrow word as the low bits of its word.
+fn runtime_narrow_args(low: Expr, ps: List<Ty>, es: List<Expr>) → List<Expr> {
+    match ps {
+        Nil => es,
+        Cons(p, rest) => match es {
+            Nil => Nil,
+            Cons(e, more) => Cons(runtime_narrow_result(low, p, e), runtime_narrow_args(low, rest, more)),
+        },
+    }
+}
+
+// A plain function's own parameter types: a narrow word at its width.
+fn runtime_own_types(word: Handle, reprs: List<ReprEntry>, ps: List<Ty>) → Tac<List<Handle>> {
+    match ps {
+        Nil => pure([]),
+        Cons(p, rest) => {
+            let more <- runtime_own_types(word, reprs, rest);
+            match p {
+                Word(w) => match w.same(64) {
+                    True => pure(Cons(word, more)),
+                    False => {
+                        let bv <- runtime_global("bitvec::BitVec");
+                        let t <- as_type(ap(bv, [NatLit(w)])).or_fail("runtime: a narrow word's type: ");
+                        pure(Cons(t, more))
+                    },
+                },
+                Named(i) => pure(Cons(match reprs.nth(i) { Some(e) => e.ty, None => word }, more)),
+                _ => pure(Cons(word, more)),
+            }
+        },
+    }
+}
+
 // Binders of a statement opened in turn, each read in weak head normal form
 // first (`ForWords` unfolds to one binder per word).
 fn runtime_open_n(fuel: Nat, h: Handle, names: List<String>) → Tac<Pair<List<LocalRef>, Handle>> {
@@ -1916,7 +2001,9 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
     let made: List<Decl> = [
         Decl(AsValue, name ++ "::code", [], Hd(ts.function), code_e),
         Decl(AsInstance("runtime::Compile", [Hd(ft)], [name]), name ++ "::compile", [], Hd(instance_t), instance_e)];
-    let own_types = runtime_param_types(ts.word, reprs, rfun.params);
+    let own_types <- runtime_own_types(ts.word, reprs, rfun.params);
+    let low <- runtime_global(name_of(runtime_low));
+    let wide <- runtime_global(name_of(runtime_wide));
     // The program: this function and every runtime fn it reaches, each
     // callee's code from its own instance, linked at every file.
     let insts <- runtime_instances(l.order, l.names, f.id, Global(f), instance_e);
@@ -1960,7 +2047,8 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
             // is `program_eval`.
             let tail: List<Decl> = [
                 Decl(AsTheorem, name ++ "::agrees", runtime_params_of(ys),
-                    Equation(ap(program_eval, [linked.program, root, words_e]), runtime_result(reprs, rfun.result, ap(Global(f), runtime_args(count, reprs, rfun.params, at_ys)))),
+                    Equation(ap(program_eval, [linked.program, root, words_e]), runtime_narrow_result(wide, rfun.result,
+                        runtime_result(reprs, rfun.result, ap(Global(f), runtime_narrow_args(low, rfun.params, runtime_args(count, reprs, rfun.params, at_ys)))))),
                     ap(eval_sources, [linked.program, linked.arities, ap(sources, [linked.srcs]), linked.sourced, no_file, root, words_e, Hd(trivial_h)])),
             ];
             pure(head.append(pin).append(made).append(linked_decls).append(tail))

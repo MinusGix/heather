@@ -1,0 +1,81 @@
+// Probes of a word narrower than 64 bits at a `runtime fn`'s boundary
+// (issues/runtime-repr-narrow-words.md, `Ty::Edge` in `rt_lower.hthr`). A
+// plain function may take and return `u8`, `u16` or `u32`: a parameter is
+// the low bits of the word passed, read into its own port by one `Resize`
+// before the body, and the result is zero-extended into the word returned
+// by one `Resize` after it. The agreement is stated at the words a call
+// passes, through `runtime_low` and `runtime_wide`. Tests, not library:
+// nothing imports this module.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import omega;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+
+// ---------------------------------------------------------------------------
+// A byte in, a word out: the code reads the byte's port at its width.
+
+runtime fn digit_value(b: u8) → u64 { if b'0' <= b ∧ b <= b'9' { (b - b'0').zero_extend(56) } else { 99 } }
+
+theorem digit_value_rt_params(): digit_value::rt.params = [Word(8)] ∧ digit_value::rt.result = Word(64) { ⟨refl, refl⟩ }
+
+// The low bits of whatever word is passed: the upper bits are not read.
+theorem digit_value_agrees(x: u64): program_eval(digit_value::program, 0, [x]) = digit_value(runtime_low(8, x)) { digit_value::agrees(x) }
+
+theorem digit_value_runs(): program_eval(digit_value::program, 0, [BitVec::ofNat(0x137)]) = 7 { digit_value::agrees(BitVec::ofNat(0x137)) }
+
+// ---------------------------------------------------------------------------
+// Narrow words in and out, at two widths: the result zero-extended.
+
+runtime fn widen_add(a: u8, b: u16) → u16 { b + a.zero_extend(8) }
+
+theorem widen_add_agrees(x, y: u64):
+    program_eval(widen_add::program, 0, [x, y]) = runtime_wide(16, widen_add(runtime_low(8, x), runtime_low(16, y))) {
+    widen_add::agrees(x, y)
+}
+
+// A sum that wraps at sixteen bits, from words with stray upper bits.
+theorem widen_add_wraps(): program_eval(widen_add::program, 0, [BitVec::ofNat(0x302), BitVec::ofNat(0x1ffff)]) = 1 {
+    widen_add::agrees(BitVec::ofNat(0x302), BitVec::ofNat(0x1ffff))
+}
+
+// A 32-bit result from 64-bit words: a truncation inside, a widening at the
+// edge.
+runtime fn low_half(x: u64) → u32 { x.truncate(32, 32) }
+
+theorem low_half_runs(): program_eval(low_half::program, 0, [BitVec::ofNat(0x500000007)]) = 7 {
+    low_half::agrees(BitVec::ofNat(0x500000007))
+}
+
+// ---------------------------------------------------------------------------
+// Refusals, each with its reason.
+
+// A loop's state is still 64-bit words (the loop's own lowering keeps
+// `Ty::OneWord`).
+// expect-error: a loop over something other than 64-bit words
+runtime fn count_up(n, i: u64, b: u8) → u64 decreases (n - i).toNat() {
+    if lt: i < n { count_up(n, i + 1, b + 1) } else { b.zero_extend(56) }
+}
+
+// A call of a function with a narrow parameter: the caller would widen its
+// argument first, which the call's lowering does not do yet.
+// expect-error: a call of a function that does not take and return 64-bit words
+runtime fn calls_digit(x: u64) → u64 { digit_value(x.truncate(8, 56)) + 1 }
+
+// A `Bool` result is not a word.
+// expect-error: a result that is not a word of at most 64 bits
+runtime fn is_space(b: u8) → Bool { if b = b' ' { True } else { False } }

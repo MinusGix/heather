@@ -333,7 +333,7 @@ runtime fn uses_helper(a: BitVec(64)) → BitVec(64) { helper(a).sub(a) }
 // expect-error: unbound name `uses_helper`
 theorem uses_helper_unpublished(a: BitVec(64)): uses_helper(a) = a { refl }
 
-// expect-error: a result that is not a 64-bit word
+// expect-error: a result that is not a word of at most 64 bits
 runtime fn is_small(a: BitVec(64)) → Bool { a.unsigned_lt_bit(BitVec::ofNat(8)) }
 
 // A byte list is a lent span only where a span may stand: before the other
