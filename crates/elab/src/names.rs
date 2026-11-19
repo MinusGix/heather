@@ -223,6 +223,22 @@ pub(crate) struct Names {
     /// [`Names::enter_scope`], their one writer, drops it when it writes one;
     /// a snapshot carries the closure of the tables it carries.
     common: std::sync::OnceLock<Rc<CommonClosure>>,
+    /// The current scope's own import closure, walked as [`common_reaches`]
+    /// walks the prelude's, for [`closure_reaches`]: kept for the scope
+    /// that was current when it was made, and dropped with `common`.
+    closure: ClosureCell,
+}
+
+/// [`Names::closure`]: the last scope [`closure_reaches`] walked, and its
+/// walk. Replaced when another scope asks; a clone of the tables carries a
+/// copy, never a share, since the closure is a function of their scopes.
+#[derive(Default)]
+struct ClosureCell(std::sync::Mutex<Option<(Scope, Rc<CommonClosure>)>>);
+
+impl Clone for ClosureCell {
+    fn clone(&self) -> Self {
+        ClosureCell(std::sync::Mutex::new(self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()))
+    }
 }
 
 /// The walk of the common prelude's import closure, kept
@@ -239,19 +255,32 @@ struct CommonClosure {
 impl CommonClosure {
     /// The walk [`common_reaches`] did per asking, done once, to its end.
     fn walk(names: &Names) -> CommonClosure {
+        Self::walk_from(names, COMMON_MODULE, None)
+    }
+
+    /// The same walk from `root`; with `scope`, `root`'s imports are read
+    /// off that scope rather than the tables (the scope being elaborated
+    /// need not be in them yet).
+    fn walk_from(names: &Names, root: &str, scope: Option<&Scope>) -> CommonClosure {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let mut popped: Vec<String> = Vec::new();
         let mut met_after: NameMap<String, usize> = NameMap::default();
         let mut seen: NameSet<&str> = NameSet::default();
-        seen.insert(COMMON_MODULE);
-        let mut stack: Vec<&str> = vec![COMMON_MODULE];
+        seen.insert(root);
+        let mut stack: Vec<&str> = vec![root];
         while let Some(m) = stack.pop() {
             popped.push(m.to_string());
-            let Some(s) = names.tables.find(SCOPES, m, |layer| layer.module_scopes.get(m)) else { continue };
+            let s = match scope {
+                Some(s) if m == root => s,
+                _ => match names.tables.find(SCOPES, m, |layer| layer.module_scopes.get(m)) {
+                    Some(s) => s,
+                    None => continue,
+                },
+            };
             for i in &s.imports {
                 // The root is never met: asked for, it is the answer only if
                 // a module of the closure imports it.
-                if i.module == COMMON_MODULE {
+                if i.module == root {
                     met_after.entry(i.module.clone()).or_insert(popped.len());
                 }
                 if seen.insert(&i.module) {
@@ -386,6 +415,7 @@ impl Names {
             scope: Scope::new(module),
             tables: Layered::default(),
             common: std::sync::OnceLock::new(),
+            closure: ClosureCell::default(),
         }
     }
 
@@ -444,6 +474,7 @@ impl Names {
                 .module_scopes
                 .insert(scope.module.clone(), scope.clone());
             self.common = std::sync::OnceLock::new();
+            self.closure = ClosureCell::default();
         }
         // Publish aliases only in the visibility index: global coordinates,
         // nominal tags, signatures and proof provenance stay at their origin.
@@ -767,7 +798,8 @@ fn resolve_kinds(
     let visible_module = qual == scope.module
         || scope.imports_module(qual)
         || qual == PRELUDE_MODULE
-        || common_reaches(names, scope, qual);
+        || common_reaches(names, scope, qual)
+        || closure_reaches(names, scope, qual);
     if visible_module && names.declares(qual, base) {
         // ... unless a visible module also declares the whole string as a
         // member — `f::pos` of a function `f` named like the module `f`
@@ -849,6 +881,46 @@ fn common_reaches(names: &Names, scope: &Scope, module: &str) -> bool {
             "the kept walk of the prelude's closure is not the walk for `{module}`"
         );
     }
+    match closure.met_after.get(module) {
+        Some(&popped) => {
+            closure.note_walk(popped);
+            true
+        }
+        None => {
+            closure.note_walk(closure.popped.len());
+            false
+        }
+    }
+}
+
+/// Is `module` in this scope's import closure? Such a module is visible
+/// **qualified only**, as [`common_reaches`] makes the prelude's closure:
+/// `bitvec_div::BitVec::udiv` resolves wherever `bitvec_div` is imported by
+/// something this module imports, and a bare `udiv` does not. That is what a
+/// designation reached through the closure emits, what a tactic spells its
+/// lemmas with (`bitvec_omega::add_form`), and what a generator looks up; a
+/// writer may spell it too. The walk is kept for the current scope and noted
+/// as the prelude's is, so the early cutoff sees the modules it read.
+fn closure_reaches(names: &Names, scope: &Scope, module: &str) -> bool {
+    // Most qualifiers that get here are types (`List::map`): a name no
+    // loaded module has is answered without a walk.
+    if names.tables.find(SCOPES, module, |layer| layer.module_scopes.get(module)).is_none() {
+        return false;
+    }
+    // Kept for the scope it was walked from: a scope entered without its
+    // tables changing (a session's next module over the same world) keeps
+    // the cell, so the key is checked, not assumed.
+    let closure = {
+        let mut kept = names.closure.0.lock().unwrap_or_else(|e| e.into_inner());
+        match &*kept {
+            Some((at, closure)) if at == scope => closure.clone(),
+            _ => {
+                let closure = Rc::new(CommonClosure::walk_from(names, &scope.module, Some(scope)));
+                *kept = Some((scope.clone(), closure.clone()));
+                closure
+            }
+        }
+    };
     match closure.met_after.get(module) {
         Some(&popped) => {
             closure.note_walk(popped);

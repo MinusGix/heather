@@ -108,6 +108,30 @@ fn qualifying_by_a_module_that_is_not_imported_is_an_error() {
 }
 
 #[test]
+fn a_module_in_the_import_closure_is_visible_qualified() {
+    // `user` imports `mid`, which imports `a`: `a` is in `user`'s closure,
+    // so `a::only_in_a` names its declaration, as a designation or a tactic
+    // reached through the closure spells it.
+    ok(&[
+        ("a", A),
+        ("mid", "import a;\nfn via() -> Nat { only_in_a() }"),
+        ("user", "import mid;\ntheorem t(): a::only_in_a() = 7 { refl }"),
+    ]);
+}
+
+#[test]
+fn a_module_in_the_import_closure_is_not_visible_bare() {
+    // The control: the closure is qualified-only. A bare name still needs
+    // its module imported.
+    let e = bad(&[
+        ("a", A),
+        ("mid", "import a;\nfn via() -> Nat { only_in_a() }"),
+        ("user", "import mid;\ntheorem t(): only_in_a() = 7 { refl }"),
+    ]);
+    assert!(e.contains("only_in_a"), "{e}");
+}
+
+#[test]
 fn a_name_declared_in_two_imports_is_ambiguous_at_use() {
     // Not shadowed by import order — an error naming BOTH origins. This is
     // the one test a first-match `open` system cannot pass.
@@ -699,11 +723,15 @@ fn selected_reexports_preserve_identity_and_do_not_publish_private_imports() {
         fn bare_flag() -> Flag { Off }
     "#)]);
     ok(&[("origin", origin), ("facade", facade), ("client", "import facade::{Box}; fn id<A>(b: Box<A>) -> A { b.keep() }")]);
-    for body in ["hidden()", "facade::hidden()", "origin::hidden()"] {
+    for body in ["hidden()", "facade::hidden()"] {
         let client = format!("import facade; fn bad() -> Nat {{ {body} }}");
         let error = bad(&[("origin", origin), ("facade", facade), ("client", &client)]);
         assert!(error.contains("hidden") || error.contains("origin"), "{error}");
     }
+    // A facade's private import publishes no name, but its module is in the
+    // client's closure, where a qualified name reaches it
+    // (docs/language/modules-design.md §3.6).
+    ok(&[("origin", origin), ("facade", facade), ("client", "import facade; fn reached() -> Nat { origin::hidden() }")]);
 }
 
 #[test]

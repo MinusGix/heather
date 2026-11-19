@@ -8,14 +8,6 @@ import bitvec;
 import bitvec_nat;
 import int;
 import sint;
-// What the `runtime` generator reads (issues/runtime-generator-imports.md).
-import tactic;
-import char;
-import string;
-import rt;
-import rt_lower;
-import function_ir;
-import function_ir_eval;
 import runtime;
 
 // Shifts by constants (docs/native/runtime-fn-setups-design.md §16.13, round 3):

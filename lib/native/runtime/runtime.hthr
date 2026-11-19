@@ -69,6 +69,14 @@ import rt_loop;
 import rt_file;
 import rt_file_reflect;
 import rt_held_reflect;
+// What a `runtime fn`'s own elaboration reaches for, so that `import
+// runtime;` is enough to write one: `bv_omega` for a measure over words
+// (and its reading of `x >> k`), `/` and `%` at words, and spans. Reached
+// qualified through the closure (`bitvec_div::BitVec::udiv`), never bare.
+import bitvec_omega;
+import bitvec_shift_nat;
+import bitvec_div;
+import bytes;
 
 // ---------------------------------------------------------------------------
 // The judgment: what the default setup compiles today, with the reason for

@@ -1,13 +1,5 @@
 import bitvec;
 import bool;
-// What the `runtime` generator reads (issues/runtime-generator-imports.md).
-import tactic;
-import char;
-import string;
-import rt;
-import rt_lower;
-import function_ir;
-import function_ir_eval;
 import runtime;
 
 // Each function is a runtime fn, compiled by the default setup through its

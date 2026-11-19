@@ -4,14 +4,6 @@ import int;
 import sint;
 import logic;
 import nat;
-// What the `runtime` generator reads (issues/runtime-generator-imports.md).
-import tactic;
-import char;
-import string;
-import rt;
-import rt_lower;
-import function_ir;
-import function_ir_eval;
 import runtime;
 
 // A loop over an `i64` with an `i64` result (docs/native/runtime-fn-setups-design.md

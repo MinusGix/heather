@@ -6,14 +6,6 @@ import option;
 import pair;
 import bitvec;
 import bitvec_nat;
-// What the `runtime` generator reads (issues/runtime-generator-imports.md).
-import tactic;
-import char;
-import string;
-import rt;
-import rt_lower;
-import function_ir;
-import function_ir_eval;
 import runtime;
 
 // One value through five widths (issues/function-ir-narrow-arithmetic.md):

@@ -29,8 +29,9 @@ constant, and XORs the results. The C file supplies `main` and checks boundary v
 ## Runtime fns
 
 A function runs only when it is marked: `runtime fn f` (with `import
-runtime;` and the modules its generator reads, `runtime-generator-imports`)
-publishes `f::program`, a FunctionIR program of `f` and every runtime fn it
+bitvec; import runtime;`, which since 2026-11-19 is enough: the generator's
+own names resolve through the import closure, docs/language/modules-design.md
+§3.6) publishes `f::program`, a FunctionIR program of `f` and every runtime fn it
 calls, each from its `Compile` instance, and `f::agrees`, that the program
 evaluates to `f` ([design §16.9](../../docs/native/runtime-fn-setups-design.md)).
 `compile-x86` compiles a marked function through those: its certificate's

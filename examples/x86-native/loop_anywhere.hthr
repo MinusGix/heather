@@ -1,13 +1,5 @@
 import bitvec;
 import bool;
-// What the `runtime` generator reads (issues/runtime-generator-imports.md).
-import tactic;
-import char;
-import string;
-import rt;
-import rt_lower;
-import function_ir;
-import function_ir_eval;
 import runtime;
 
 // Loops anywhere (examples/x86-native/README.md): each fuelled recursion is
