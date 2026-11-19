@@ -1,0 +1,161 @@
+// IMUL r64, r/m64 (`ImulRR`), MUL r/m64 (`MulR`) and the shifts by CL
+// (`ShiftCl`), x86_64: the bytes the model writes are the assembler's for
+// every register, the decoders read them back, and the model's results are
+// the processor's. Tests, not library (docs/test-value-audit.md §4.5).
+//
+// The encodings are `as` (GNU Binutils 2.42), disassembled by `objdump`.
+// The processor's results are from running the same bytes on the x86-64
+// machine these tests were written on (an Intel Xeon, a C harness with the
+// bytes inline): 3,000,000 operand triples, the eight edge words below
+// among them, checked against the meaning the model gives (the low word of
+// the product, the high word of the unsigned product, a shift by the count
+// masked to six bits), counts drawn over the whole word, below 64 and below
+// 300; no mismatch. The run is not repeated by the suite. The flags are
+// undefined in the model after all three, so no flag is compared.
+import x86_64; import x86_64_step_forms; import x86_64_block;
+import bitvec; import bool; import list; import logic; import nat; import option;
+
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+fn encodings(xs: List<List<BitVec(8)>>) → List<List<BitVec(8)>> { xs }
+fn words(xs: List<BitVec(64)>) → List<BitVec(64)> { xs }
+
+// Registers holding `a` in RAX, `b` in RBX and `c` in RCX.
+fn state(a, b, c: BitVec(64)) → Gprs { write_gpr(Rcx, c, write_gpr(Rbx, b, write_gpr(Rax, a, zero_gprs()))) }
+
+// `register` after the instruction runs from `gprs`.
+fn after(instruction: Instruction, gprs: Gprs, register: Gpr) → BitVec(64) {
+    read_gpr(register, execute_register(instruction, gprs, clear_flags()).gprs)
+}
+
+// ---------------------------------------------------------------------------
+// The encodings
+
+// `imul %rbx, %r64` for every destination.
+theorem imul_destination_encodings(): encodings([imul_bytes(Rax, Rbx), imul_bytes(Rcx, Rbx), imul_bytes(Rdx, Rbx), imul_bytes(Rbx, Rbx), imul_bytes(Rsp, Rbx), imul_bytes(Rbp, Rbx), imul_bytes(Rsi, Rbx), imul_bytes(Rdi, Rbx), imul_bytes(R8, Rbx), imul_bytes(R9, Rbx), imul_bytes(R10, Rbx), imul_bytes(R11, Rbx), imul_bytes(R12, Rbx), imul_bytes(R13, Rbx), imul_bytes(R14, Rbx), imul_bytes(R15, Rbx)]) =
+    [[b(0x48), b(0x0f), b(0xaf), b(0xc3)], [b(0x48), b(0x0f), b(0xaf), b(0xcb)], [b(0x48), b(0x0f), b(0xaf), b(0xd3)], [b(0x48), b(0x0f), b(0xaf), b(0xdb)], [b(0x48), b(0x0f), b(0xaf), b(0xe3)], [b(0x48), b(0x0f), b(0xaf), b(0xeb)], [b(0x48), b(0x0f), b(0xaf), b(0xf3)], [b(0x48), b(0x0f), b(0xaf), b(0xfb)], [b(0x4c), b(0x0f), b(0xaf), b(0xc3)], [b(0x4c), b(0x0f), b(0xaf), b(0xcb)], [b(0x4c), b(0x0f), b(0xaf), b(0xd3)], [b(0x4c), b(0x0f), b(0xaf), b(0xdb)], [b(0x4c), b(0x0f), b(0xaf), b(0xe3)], [b(0x4c), b(0x0f), b(0xaf), b(0xeb)], [b(0x4c), b(0x0f), b(0xaf), b(0xf3)], [b(0x4c), b(0x0f), b(0xaf), b(0xfb)]] { refl }
+
+// `imul %r64, %r9` for every source.
+theorem imul_source_encodings(): encodings([imul_bytes(R9, Rax), imul_bytes(R9, Rcx), imul_bytes(R9, Rdx), imul_bytes(R9, Rbx), imul_bytes(R9, Rsp), imul_bytes(R9, Rbp), imul_bytes(R9, Rsi), imul_bytes(R9, Rdi), imul_bytes(R9, R8), imul_bytes(R9, R9), imul_bytes(R9, R10), imul_bytes(R9, R11), imul_bytes(R9, R12), imul_bytes(R9, R13), imul_bytes(R9, R14), imul_bytes(R9, R15)]) =
+    [[b(0x4c), b(0x0f), b(0xaf), b(0xc8)], [b(0x4c), b(0x0f), b(0xaf), b(0xc9)], [b(0x4c), b(0x0f), b(0xaf), b(0xca)], [b(0x4c), b(0x0f), b(0xaf), b(0xcb)], [b(0x4c), b(0x0f), b(0xaf), b(0xcc)], [b(0x4c), b(0x0f), b(0xaf), b(0xcd)], [b(0x4c), b(0x0f), b(0xaf), b(0xce)], [b(0x4c), b(0x0f), b(0xaf), b(0xcf)], [b(0x4d), b(0x0f), b(0xaf), b(0xc8)], [b(0x4d), b(0x0f), b(0xaf), b(0xc9)], [b(0x4d), b(0x0f), b(0xaf), b(0xca)], [b(0x4d), b(0x0f), b(0xaf), b(0xcb)], [b(0x4d), b(0x0f), b(0xaf), b(0xcc)], [b(0x4d), b(0x0f), b(0xaf), b(0xcd)], [b(0x4d), b(0x0f), b(0xaf), b(0xce)], [b(0x4d), b(0x0f), b(0xaf), b(0xcf)]] { refl }
+
+// `mul %r64` for every register.
+theorem mul_encodings(): encodings([mul_bytes(Rax), mul_bytes(Rcx), mul_bytes(Rdx), mul_bytes(Rbx), mul_bytes(Rsp), mul_bytes(Rbp), mul_bytes(Rsi), mul_bytes(Rdi), mul_bytes(R8), mul_bytes(R9), mul_bytes(R10), mul_bytes(R11), mul_bytes(R12), mul_bytes(R13), mul_bytes(R14), mul_bytes(R15)]) =
+    [[b(0x48), b(0xf7), b(0xe0)], [b(0x48), b(0xf7), b(0xe1)], [b(0x48), b(0xf7), b(0xe2)], [b(0x48), b(0xf7), b(0xe3)], [b(0x48), b(0xf7), b(0xe4)], [b(0x48), b(0xf7), b(0xe5)], [b(0x48), b(0xf7), b(0xe6)], [b(0x48), b(0xf7), b(0xe7)], [b(0x49), b(0xf7), b(0xe0)], [b(0x49), b(0xf7), b(0xe1)], [b(0x49), b(0xf7), b(0xe2)], [b(0x49), b(0xf7), b(0xe3)], [b(0x49), b(0xf7), b(0xe4)], [b(0x49), b(0xf7), b(0xe5)], [b(0x49), b(0xf7), b(0xe6)], [b(0x49), b(0xf7), b(0xe7)]] { refl }
+
+// `shl %cl, %r64` for every register.
+theorem shl_cl_encodings(): encodings([shift_cl_bytes(OpShl, Rax), shift_cl_bytes(OpShl, Rcx), shift_cl_bytes(OpShl, Rdx), shift_cl_bytes(OpShl, Rbx), shift_cl_bytes(OpShl, Rsp), shift_cl_bytes(OpShl, Rbp), shift_cl_bytes(OpShl, Rsi), shift_cl_bytes(OpShl, Rdi), shift_cl_bytes(OpShl, R8), shift_cl_bytes(OpShl, R9), shift_cl_bytes(OpShl, R10), shift_cl_bytes(OpShl, R11), shift_cl_bytes(OpShl, R12), shift_cl_bytes(OpShl, R13), shift_cl_bytes(OpShl, R14), shift_cl_bytes(OpShl, R15)]) =
+    [[b(0x48), b(0xd3), b(0xe0)], [b(0x48), b(0xd3), b(0xe1)], [b(0x48), b(0xd3), b(0xe2)], [b(0x48), b(0xd3), b(0xe3)], [b(0x48), b(0xd3), b(0xe4)], [b(0x48), b(0xd3), b(0xe5)], [b(0x48), b(0xd3), b(0xe6)], [b(0x48), b(0xd3), b(0xe7)], [b(0x49), b(0xd3), b(0xe0)], [b(0x49), b(0xd3), b(0xe1)], [b(0x49), b(0xd3), b(0xe2)], [b(0x49), b(0xd3), b(0xe3)], [b(0x49), b(0xd3), b(0xe4)], [b(0x49), b(0xd3), b(0xe5)], [b(0x49), b(0xd3), b(0xe6)], [b(0x49), b(0xd3), b(0xe7)]] { refl }
+
+// `shr %cl, %r64` for every register.
+theorem shr_cl_encodings(): encodings([shift_cl_bytes(OpShr, Rax), shift_cl_bytes(OpShr, Rcx), shift_cl_bytes(OpShr, Rdx), shift_cl_bytes(OpShr, Rbx), shift_cl_bytes(OpShr, Rsp), shift_cl_bytes(OpShr, Rbp), shift_cl_bytes(OpShr, Rsi), shift_cl_bytes(OpShr, Rdi), shift_cl_bytes(OpShr, R8), shift_cl_bytes(OpShr, R9), shift_cl_bytes(OpShr, R10), shift_cl_bytes(OpShr, R11), shift_cl_bytes(OpShr, R12), shift_cl_bytes(OpShr, R13), shift_cl_bytes(OpShr, R14), shift_cl_bytes(OpShr, R15)]) =
+    [[b(0x48), b(0xd3), b(0xe8)], [b(0x48), b(0xd3), b(0xe9)], [b(0x48), b(0xd3), b(0xea)], [b(0x48), b(0xd3), b(0xeb)], [b(0x48), b(0xd3), b(0xec)], [b(0x48), b(0xd3), b(0xed)], [b(0x48), b(0xd3), b(0xee)], [b(0x48), b(0xd3), b(0xef)], [b(0x49), b(0xd3), b(0xe8)], [b(0x49), b(0xd3), b(0xe9)], [b(0x49), b(0xd3), b(0xea)], [b(0x49), b(0xd3), b(0xeb)], [b(0x49), b(0xd3), b(0xec)], [b(0x49), b(0xd3), b(0xed)], [b(0x49), b(0xd3), b(0xee)], [b(0x49), b(0xd3), b(0xef)]] { refl }
+
+// `sar %cl, %r64` for every register.
+theorem sar_cl_encodings(): encodings([shift_cl_bytes(OpSar, Rax), shift_cl_bytes(OpSar, Rcx), shift_cl_bytes(OpSar, Rdx), shift_cl_bytes(OpSar, Rbx), shift_cl_bytes(OpSar, Rsp), shift_cl_bytes(OpSar, Rbp), shift_cl_bytes(OpSar, Rsi), shift_cl_bytes(OpSar, Rdi), shift_cl_bytes(OpSar, R8), shift_cl_bytes(OpSar, R9), shift_cl_bytes(OpSar, R10), shift_cl_bytes(OpSar, R11), shift_cl_bytes(OpSar, R12), shift_cl_bytes(OpSar, R13), shift_cl_bytes(OpSar, R14), shift_cl_bytes(OpSar, R15)]) =
+    [[b(0x48), b(0xd3), b(0xf8)], [b(0x48), b(0xd3), b(0xf9)], [b(0x48), b(0xd3), b(0xfa)], [b(0x48), b(0xd3), b(0xfb)], [b(0x48), b(0xd3), b(0xfc)], [b(0x48), b(0xd3), b(0xfd)], [b(0x48), b(0xd3), b(0xfe)], [b(0x48), b(0xd3), b(0xff)], [b(0x49), b(0xd3), b(0xf8)], [b(0x49), b(0xd3), b(0xf9)], [b(0x49), b(0xd3), b(0xfa)], [b(0x49), b(0xd3), b(0xfb)], [b(0x49), b(0xd3), b(0xfc)], [b(0x49), b(0xd3), b(0xfd)], [b(0x49), b(0xd3), b(0xfe)], [b(0x49), b(0xd3), b(0xff)]] { refl }
+
+// ---------------------------------------------------------------------------
+// Read back: the instruction decoder and the step-form decoder.
+
+theorem imul_decodes(): decode_instruction(imul_bytes(R13, Rsi)) = Some(decoded_canonical(ImulRR(R13, Rsi))) { refl }
+theorem mul_decodes(): decode_instruction(mul_bytes(R11)) = Some(decoded_canonical(MulR(R11))) { refl }
+theorem shift_cl_decodes(): decode_instruction(shift_cl_bytes(OpSar, R12)) = Some(decoded_canonical(ShiftCl(OpSar, R12))) { refl }
+theorem imul_step_form(): decode_step_form(imul_bytes(Rdi, R14)) = Some(FormEmitted(EmitOrdinary(ImulRR(Rdi, R14)))) { refl }
+theorem mul_step_form(): decode_step_form(mul_bytes(Rbp)) = Some(FormEmitted(EmitOrdinary(MulR(Rbp)))) { refl }
+theorem shift_cl_step_form(): decode_step_form(shift_cl_bytes(OpShr, R9)) = Some(FormEmitted(EmitOrdinary(ShiftCl(OpShr, R9)))) { refl }
+// The byte load beside IMUL under REX.W 0F still reads back.
+theorem byte_load_still_step_form(): decode_step_form([b(0x48), b(0x0f), b(0xb6), b(0x06)]) =
+    Some(FormEmitted(EmitLoad(ByteLoad(destination := Rax, base := Rsi)))) { refl }
+// F7 /6 is DIV, and F7 /7 IDIV, which the model does not have.
+theorem div_refused(): decode_instruction([b(0x48), b(0xf7), b(0xf3)]) = None { refl }
+theorem idiv_refused(): decode_instruction([b(0x48), b(0xf7), b(0xfb)]) = None { refl }
+// D3 /1 is ROR by CL, which the model does not have.
+theorem ror_cl_refused(): decode_instruction([b(0x48), b(0xd3), b(0xc8)]) = None { refl }
+
+// ---------------------------------------------------------------------------
+// Every flag is undefined after each, and nothing reads them: a SETcc after
+// any of the three is refused.
+
+theorem imul_then_setb_refused(): block_reads([CmpRR(Rax, Rbx), ImulRR(Rax, Rbx), SetBelow(Al)], DefinedFlags::none()) = False { refl }
+theorem mul_then_sete_refused(): block_reads([CmpRR(Rax, Rbx), MulR(Rbx), SetEqual(Al)], DefinedFlags::none()) = False { refl }
+theorem shift_cl_then_setl_refused(): block_reads([CmpRR(Rax, Rbx), ShiftCl(OpShl, Rax), SetLess(Al)], DefinedFlags::none()) = False { refl }
+theorem compare_after_multiply_reads(): block_reads([ImulRR(Rax, Rbx), CmpRR(Rax, Rbx), SetBelow(Al)], DefinedFlags::none()) = True { refl }
+
+// ---------------------------------------------------------------------------
+// The processor's results: the edge words multiplied in pairs, and shifted
+// at counts 0, 1, 7, 63, 64, 65 and 255 (the last three masked to 0, 1
+// and 63).
+
+theorem imul_on_the_cpu(): words([after(ImulRR(Rax, Rbx), state(w(0x0000000000000000), w(0x00000000ffffffff), w(0)), Rax), after(ImulRR(Rax, Rbx), state(w(0xffffffffffffffff), w(0xffffffff00000000), w(0)), Rax), after(ImulRR(Rax, Rbx), state(w(0x8000000000000000), w(0x0123456789abcdef), w(0)), Rax), after(ImulRR(Rax, Rbx), state(w(0x00000000ffffffff), w(0x0000000000000001), w(0)), Rax), after(ImulRR(Rax, Rbx), state(w(0xffffffff00000000), w(0x8000000000000001), w(0)), Rax), after(ImulRR(Rax, Rbx), state(w(0x0123456789abcdef), w(0x0000000000000000), w(0)), Rax), after(ImulRR(Rax, Rbx), state(w(0x0000000000000001), w(0xffffffffffffffff), w(0)), Rax), after(ImulRR(Rax, Rbx), state(w(0x8000000000000001), w(0x8000000000000000), w(0)), Rax)]) =
+    [w(0x0000000000000000), w(0x0000000100000000), w(0x8000000000000000), w(0x00000000ffffffff), w(0xffffffff00000000), w(0x0000000000000000), w(0xffffffffffffffff), w(0x8000000000000000)] { refl }
+
+theorem mul_low_on_the_cpu(): words([after(MulR(Rbx), state(w(0x0000000000000000), w(0x00000000ffffffff), w(0)), Rax), after(MulR(Rbx), state(w(0xffffffffffffffff), w(0xffffffff00000000), w(0)), Rax), after(MulR(Rbx), state(w(0x8000000000000000), w(0x0123456789abcdef), w(0)), Rax), after(MulR(Rbx), state(w(0x00000000ffffffff), w(0x0000000000000001), w(0)), Rax), after(MulR(Rbx), state(w(0xffffffff00000000), w(0x8000000000000001), w(0)), Rax), after(MulR(Rbx), state(w(0x0123456789abcdef), w(0x0000000000000000), w(0)), Rax), after(MulR(Rbx), state(w(0x0000000000000001), w(0xffffffffffffffff), w(0)), Rax), after(MulR(Rbx), state(w(0x8000000000000001), w(0x8000000000000000), w(0)), Rax)]) =
+    [w(0x0000000000000000), w(0x0000000100000000), w(0x8000000000000000), w(0x00000000ffffffff), w(0xffffffff00000000), w(0x0000000000000000), w(0xffffffffffffffff), w(0x8000000000000000)] { refl }
+
+theorem mul_high_on_the_cpu(): words([after(MulR(Rbx), state(w(0x0000000000000000), w(0x00000000ffffffff), w(0)), Rdx), after(MulR(Rbx), state(w(0xffffffffffffffff), w(0xffffffff00000000), w(0)), Rdx), after(MulR(Rbx), state(w(0x8000000000000000), w(0x0123456789abcdef), w(0)), Rdx), after(MulR(Rbx), state(w(0x00000000ffffffff), w(0x0000000000000001), w(0)), Rdx), after(MulR(Rbx), state(w(0xffffffff00000000), w(0x8000000000000001), w(0)), Rdx), after(MulR(Rbx), state(w(0x0123456789abcdef), w(0x0000000000000000), w(0)), Rdx), after(MulR(Rbx), state(w(0x0000000000000001), w(0xffffffffffffffff), w(0)), Rdx), after(MulR(Rbx), state(w(0x8000000000000001), w(0x8000000000000000), w(0)), Rdx)]) =
+    [w(0x0000000000000000), w(0xfffffffeffffffff), w(0x0091a2b3c4d5e6f7), w(0x0000000000000000), w(0x7fffffff80000000), w(0x0000000000000000), w(0x0000000000000000), w(0x4000000000000000)] { refl }
+
+theorem shl_cl_0_on_the_cpu(): words([after(ShiftCl(OpShl, Rax), state(w(0x0000000000000000), w(0x0), w(0)), Rax), after(ShiftCl(OpShl, Rax), state(w(0xffffffffffffffff), w(0x0), w(0)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x8000000000000000), w(0x0), w(0)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x00000000ffffffff), w(0x0), w(0)), Rax), after(ShiftCl(OpShl, Rax), state(w(0xffffffff00000000), w(0x0), w(0)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x0123456789abcdef), w(0x0), w(0)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x0000000000000001), w(0x0), w(0)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x8000000000000001), w(0x0), w(0)), Rax)]) =
+    [w(0x0000000000000000), w(0xffffffffffffffff), w(0x8000000000000000), w(0x00000000ffffffff), w(0xffffffff00000000), w(0x0123456789abcdef), w(0x0000000000000001), w(0x8000000000000001)] { refl }
+
+theorem shl_cl_1_on_the_cpu(): words([after(ShiftCl(OpShl, Rax), state(w(0x0000000000000000), w(0x0), w(1)), Rax), after(ShiftCl(OpShl, Rax), state(w(0xffffffffffffffff), w(0x0), w(1)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x8000000000000000), w(0x0), w(1)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x00000000ffffffff), w(0x0), w(1)), Rax), after(ShiftCl(OpShl, Rax), state(w(0xffffffff00000000), w(0x0), w(1)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x0123456789abcdef), w(0x0), w(1)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x0000000000000001), w(0x0), w(1)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x8000000000000001), w(0x0), w(1)), Rax)]) =
+    [w(0x0000000000000000), w(0xfffffffffffffffe), w(0x0000000000000000), w(0x00000001fffffffe), w(0xfffffffe00000000), w(0x02468acf13579bde), w(0x0000000000000002), w(0x0000000000000002)] { refl }
+
+theorem shl_cl_7_on_the_cpu(): words([after(ShiftCl(OpShl, Rax), state(w(0x0000000000000000), w(0x0), w(7)), Rax), after(ShiftCl(OpShl, Rax), state(w(0xffffffffffffffff), w(0x0), w(7)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x8000000000000000), w(0x0), w(7)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x00000000ffffffff), w(0x0), w(7)), Rax), after(ShiftCl(OpShl, Rax), state(w(0xffffffff00000000), w(0x0), w(7)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x0123456789abcdef), w(0x0), w(7)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x0000000000000001), w(0x0), w(7)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x8000000000000001), w(0x0), w(7)), Rax)]) =
+    [w(0x0000000000000000), w(0xffffffffffffff80), w(0x0000000000000000), w(0x0000007fffffff80), w(0xffffff8000000000), w(0x91a2b3c4d5e6f780), w(0x0000000000000080), w(0x0000000000000080)] { refl }
+
+theorem shl_cl_63_on_the_cpu(): words([after(ShiftCl(OpShl, Rax), state(w(0x0000000000000000), w(0x0), w(63)), Rax), after(ShiftCl(OpShl, Rax), state(w(0xffffffffffffffff), w(0x0), w(63)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x8000000000000000), w(0x0), w(63)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x00000000ffffffff), w(0x0), w(63)), Rax), after(ShiftCl(OpShl, Rax), state(w(0xffffffff00000000), w(0x0), w(63)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x0123456789abcdef), w(0x0), w(63)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x0000000000000001), w(0x0), w(63)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x8000000000000001), w(0x0), w(63)), Rax)]) =
+    [w(0x0000000000000000), w(0x8000000000000000), w(0x0000000000000000), w(0x8000000000000000), w(0x0000000000000000), w(0x8000000000000000), w(0x8000000000000000), w(0x8000000000000000)] { refl }
+
+theorem shl_cl_64_on_the_cpu(): words([after(ShiftCl(OpShl, Rax), state(w(0x0000000000000000), w(0x0), w(64)), Rax), after(ShiftCl(OpShl, Rax), state(w(0xffffffffffffffff), w(0x0), w(64)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x8000000000000000), w(0x0), w(64)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x00000000ffffffff), w(0x0), w(64)), Rax), after(ShiftCl(OpShl, Rax), state(w(0xffffffff00000000), w(0x0), w(64)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x0123456789abcdef), w(0x0), w(64)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x0000000000000001), w(0x0), w(64)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x8000000000000001), w(0x0), w(64)), Rax)]) =
+    [w(0x0000000000000000), w(0xffffffffffffffff), w(0x8000000000000000), w(0x00000000ffffffff), w(0xffffffff00000000), w(0x0123456789abcdef), w(0x0000000000000001), w(0x8000000000000001)] { refl }
+
+theorem shl_cl_65_on_the_cpu(): words([after(ShiftCl(OpShl, Rax), state(w(0x0000000000000000), w(0x0), w(65)), Rax), after(ShiftCl(OpShl, Rax), state(w(0xffffffffffffffff), w(0x0), w(65)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x8000000000000000), w(0x0), w(65)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x00000000ffffffff), w(0x0), w(65)), Rax), after(ShiftCl(OpShl, Rax), state(w(0xffffffff00000000), w(0x0), w(65)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x0123456789abcdef), w(0x0), w(65)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x0000000000000001), w(0x0), w(65)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x8000000000000001), w(0x0), w(65)), Rax)]) =
+    [w(0x0000000000000000), w(0xfffffffffffffffe), w(0x0000000000000000), w(0x00000001fffffffe), w(0xfffffffe00000000), w(0x02468acf13579bde), w(0x0000000000000002), w(0x0000000000000002)] { refl }
+
+theorem shl_cl_255_on_the_cpu(): words([after(ShiftCl(OpShl, Rax), state(w(0x0000000000000000), w(0x0), w(255)), Rax), after(ShiftCl(OpShl, Rax), state(w(0xffffffffffffffff), w(0x0), w(255)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x8000000000000000), w(0x0), w(255)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x00000000ffffffff), w(0x0), w(255)), Rax), after(ShiftCl(OpShl, Rax), state(w(0xffffffff00000000), w(0x0), w(255)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x0123456789abcdef), w(0x0), w(255)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x0000000000000001), w(0x0), w(255)), Rax), after(ShiftCl(OpShl, Rax), state(w(0x8000000000000001), w(0x0), w(255)), Rax)]) =
+    [w(0x0000000000000000), w(0x8000000000000000), w(0x0000000000000000), w(0x8000000000000000), w(0x0000000000000000), w(0x8000000000000000), w(0x8000000000000000), w(0x8000000000000000)] { refl }
+
+theorem shr_cl_0_on_the_cpu(): words([after(ShiftCl(OpShr, Rax), state(w(0x0000000000000000), w(0x0), w(0)), Rax), after(ShiftCl(OpShr, Rax), state(w(0xffffffffffffffff), w(0x0), w(0)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x8000000000000000), w(0x0), w(0)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x00000000ffffffff), w(0x0), w(0)), Rax), after(ShiftCl(OpShr, Rax), state(w(0xffffffff00000000), w(0x0), w(0)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x0123456789abcdef), w(0x0), w(0)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x0000000000000001), w(0x0), w(0)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x8000000000000001), w(0x0), w(0)), Rax)]) =
+    [w(0x0000000000000000), w(0xffffffffffffffff), w(0x8000000000000000), w(0x00000000ffffffff), w(0xffffffff00000000), w(0x0123456789abcdef), w(0x0000000000000001), w(0x8000000000000001)] { refl }
+
+theorem shr_cl_1_on_the_cpu(): words([after(ShiftCl(OpShr, Rax), state(w(0x0000000000000000), w(0x0), w(1)), Rax), after(ShiftCl(OpShr, Rax), state(w(0xffffffffffffffff), w(0x0), w(1)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x8000000000000000), w(0x0), w(1)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x00000000ffffffff), w(0x0), w(1)), Rax), after(ShiftCl(OpShr, Rax), state(w(0xffffffff00000000), w(0x0), w(1)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x0123456789abcdef), w(0x0), w(1)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x0000000000000001), w(0x0), w(1)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x8000000000000001), w(0x0), w(1)), Rax)]) =
+    [w(0x0000000000000000), w(0x7fffffffffffffff), w(0x4000000000000000), w(0x000000007fffffff), w(0x7fffffff80000000), w(0x0091a2b3c4d5e6f7), w(0x0000000000000000), w(0x4000000000000000)] { refl }
+
+theorem shr_cl_7_on_the_cpu(): words([after(ShiftCl(OpShr, Rax), state(w(0x0000000000000000), w(0x0), w(7)), Rax), after(ShiftCl(OpShr, Rax), state(w(0xffffffffffffffff), w(0x0), w(7)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x8000000000000000), w(0x0), w(7)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x00000000ffffffff), w(0x0), w(7)), Rax), after(ShiftCl(OpShr, Rax), state(w(0xffffffff00000000), w(0x0), w(7)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x0123456789abcdef), w(0x0), w(7)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x0000000000000001), w(0x0), w(7)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x8000000000000001), w(0x0), w(7)), Rax)]) =
+    [w(0x0000000000000000), w(0x01ffffffffffffff), w(0x0100000000000000), w(0x0000000001ffffff), w(0x01fffffffe000000), w(0x0002468acf13579b), w(0x0000000000000000), w(0x0100000000000000)] { refl }
+
+theorem shr_cl_63_on_the_cpu(): words([after(ShiftCl(OpShr, Rax), state(w(0x0000000000000000), w(0x0), w(63)), Rax), after(ShiftCl(OpShr, Rax), state(w(0xffffffffffffffff), w(0x0), w(63)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x8000000000000000), w(0x0), w(63)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x00000000ffffffff), w(0x0), w(63)), Rax), after(ShiftCl(OpShr, Rax), state(w(0xffffffff00000000), w(0x0), w(63)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x0123456789abcdef), w(0x0), w(63)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x0000000000000001), w(0x0), w(63)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x8000000000000001), w(0x0), w(63)), Rax)]) =
+    [w(0x0000000000000000), w(0x0000000000000001), w(0x0000000000000001), w(0x0000000000000000), w(0x0000000000000001), w(0x0000000000000000), w(0x0000000000000000), w(0x0000000000000001)] { refl }
+
+theorem shr_cl_64_on_the_cpu(): words([after(ShiftCl(OpShr, Rax), state(w(0x0000000000000000), w(0x0), w(64)), Rax), after(ShiftCl(OpShr, Rax), state(w(0xffffffffffffffff), w(0x0), w(64)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x8000000000000000), w(0x0), w(64)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x00000000ffffffff), w(0x0), w(64)), Rax), after(ShiftCl(OpShr, Rax), state(w(0xffffffff00000000), w(0x0), w(64)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x0123456789abcdef), w(0x0), w(64)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x0000000000000001), w(0x0), w(64)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x8000000000000001), w(0x0), w(64)), Rax)]) =
+    [w(0x0000000000000000), w(0xffffffffffffffff), w(0x8000000000000000), w(0x00000000ffffffff), w(0xffffffff00000000), w(0x0123456789abcdef), w(0x0000000000000001), w(0x8000000000000001)] { refl }
+
+theorem shr_cl_65_on_the_cpu(): words([after(ShiftCl(OpShr, Rax), state(w(0x0000000000000000), w(0x0), w(65)), Rax), after(ShiftCl(OpShr, Rax), state(w(0xffffffffffffffff), w(0x0), w(65)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x8000000000000000), w(0x0), w(65)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x00000000ffffffff), w(0x0), w(65)), Rax), after(ShiftCl(OpShr, Rax), state(w(0xffffffff00000000), w(0x0), w(65)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x0123456789abcdef), w(0x0), w(65)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x0000000000000001), w(0x0), w(65)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x8000000000000001), w(0x0), w(65)), Rax)]) =
+    [w(0x0000000000000000), w(0x7fffffffffffffff), w(0x4000000000000000), w(0x000000007fffffff), w(0x7fffffff80000000), w(0x0091a2b3c4d5e6f7), w(0x0000000000000000), w(0x4000000000000000)] { refl }
+
+theorem shr_cl_255_on_the_cpu(): words([after(ShiftCl(OpShr, Rax), state(w(0x0000000000000000), w(0x0), w(255)), Rax), after(ShiftCl(OpShr, Rax), state(w(0xffffffffffffffff), w(0x0), w(255)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x8000000000000000), w(0x0), w(255)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x00000000ffffffff), w(0x0), w(255)), Rax), after(ShiftCl(OpShr, Rax), state(w(0xffffffff00000000), w(0x0), w(255)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x0123456789abcdef), w(0x0), w(255)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x0000000000000001), w(0x0), w(255)), Rax), after(ShiftCl(OpShr, Rax), state(w(0x8000000000000001), w(0x0), w(255)), Rax)]) =
+    [w(0x0000000000000000), w(0x0000000000000001), w(0x0000000000000001), w(0x0000000000000000), w(0x0000000000000001), w(0x0000000000000000), w(0x0000000000000000), w(0x0000000000000001)] { refl }
+
+theorem sar_cl_0_on_the_cpu(): words([after(ShiftCl(OpSar, Rax), state(w(0x0000000000000000), w(0x0), w(0)), Rax), after(ShiftCl(OpSar, Rax), state(w(0xffffffffffffffff), w(0x0), w(0)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x8000000000000000), w(0x0), w(0)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x00000000ffffffff), w(0x0), w(0)), Rax), after(ShiftCl(OpSar, Rax), state(w(0xffffffff00000000), w(0x0), w(0)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x0123456789abcdef), w(0x0), w(0)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x0000000000000001), w(0x0), w(0)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x8000000000000001), w(0x0), w(0)), Rax)]) =
+    [w(0x0000000000000000), w(0xffffffffffffffff), w(0x8000000000000000), w(0x00000000ffffffff), w(0xffffffff00000000), w(0x0123456789abcdef), w(0x0000000000000001), w(0x8000000000000001)] { refl }
+
+theorem sar_cl_1_on_the_cpu(): words([after(ShiftCl(OpSar, Rax), state(w(0x0000000000000000), w(0x0), w(1)), Rax), after(ShiftCl(OpSar, Rax), state(w(0xffffffffffffffff), w(0x0), w(1)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x8000000000000000), w(0x0), w(1)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x00000000ffffffff), w(0x0), w(1)), Rax), after(ShiftCl(OpSar, Rax), state(w(0xffffffff00000000), w(0x0), w(1)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x0123456789abcdef), w(0x0), w(1)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x0000000000000001), w(0x0), w(1)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x8000000000000001), w(0x0), w(1)), Rax)]) =
+    [w(0x0000000000000000), w(0xffffffffffffffff), w(0xc000000000000000), w(0x000000007fffffff), w(0xffffffff80000000), w(0x0091a2b3c4d5e6f7), w(0x0000000000000000), w(0xc000000000000000)] { refl }
+
+theorem sar_cl_7_on_the_cpu(): words([after(ShiftCl(OpSar, Rax), state(w(0x0000000000000000), w(0x0), w(7)), Rax), after(ShiftCl(OpSar, Rax), state(w(0xffffffffffffffff), w(0x0), w(7)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x8000000000000000), w(0x0), w(7)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x00000000ffffffff), w(0x0), w(7)), Rax), after(ShiftCl(OpSar, Rax), state(w(0xffffffff00000000), w(0x0), w(7)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x0123456789abcdef), w(0x0), w(7)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x0000000000000001), w(0x0), w(7)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x8000000000000001), w(0x0), w(7)), Rax)]) =
+    [w(0x0000000000000000), w(0xffffffffffffffff), w(0xff00000000000000), w(0x0000000001ffffff), w(0xfffffffffe000000), w(0x0002468acf13579b), w(0x0000000000000000), w(0xff00000000000000)] { refl }
+
+theorem sar_cl_63_on_the_cpu(): words([after(ShiftCl(OpSar, Rax), state(w(0x0000000000000000), w(0x0), w(63)), Rax), after(ShiftCl(OpSar, Rax), state(w(0xffffffffffffffff), w(0x0), w(63)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x8000000000000000), w(0x0), w(63)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x00000000ffffffff), w(0x0), w(63)), Rax), after(ShiftCl(OpSar, Rax), state(w(0xffffffff00000000), w(0x0), w(63)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x0123456789abcdef), w(0x0), w(63)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x0000000000000001), w(0x0), w(63)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x8000000000000001), w(0x0), w(63)), Rax)]) =
+    [w(0x0000000000000000), w(0xffffffffffffffff), w(0xffffffffffffffff), w(0x0000000000000000), w(0xffffffffffffffff), w(0x0000000000000000), w(0x0000000000000000), w(0xffffffffffffffff)] { refl }
+
+theorem sar_cl_64_on_the_cpu(): words([after(ShiftCl(OpSar, Rax), state(w(0x0000000000000000), w(0x0), w(64)), Rax), after(ShiftCl(OpSar, Rax), state(w(0xffffffffffffffff), w(0x0), w(64)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x8000000000000000), w(0x0), w(64)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x00000000ffffffff), w(0x0), w(64)), Rax), after(ShiftCl(OpSar, Rax), state(w(0xffffffff00000000), w(0x0), w(64)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x0123456789abcdef), w(0x0), w(64)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x0000000000000001), w(0x0), w(64)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x8000000000000001), w(0x0), w(64)), Rax)]) =
+    [w(0x0000000000000000), w(0xffffffffffffffff), w(0x8000000000000000), w(0x00000000ffffffff), w(0xffffffff00000000), w(0x0123456789abcdef), w(0x0000000000000001), w(0x8000000000000001)] { refl }
+
+theorem sar_cl_65_on_the_cpu(): words([after(ShiftCl(OpSar, Rax), state(w(0x0000000000000000), w(0x0), w(65)), Rax), after(ShiftCl(OpSar, Rax), state(w(0xffffffffffffffff), w(0x0), w(65)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x8000000000000000), w(0x0), w(65)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x00000000ffffffff), w(0x0), w(65)), Rax), after(ShiftCl(OpSar, Rax), state(w(0xffffffff00000000), w(0x0), w(65)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x0123456789abcdef), w(0x0), w(65)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x0000000000000001), w(0x0), w(65)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x8000000000000001), w(0x0), w(65)), Rax)]) =
+    [w(0x0000000000000000), w(0xffffffffffffffff), w(0xc000000000000000), w(0x000000007fffffff), w(0xffffffff80000000), w(0x0091a2b3c4d5e6f7), w(0x0000000000000000), w(0xc000000000000000)] { refl }
+
+theorem sar_cl_255_on_the_cpu(): words([after(ShiftCl(OpSar, Rax), state(w(0x0000000000000000), w(0x0), w(255)), Rax), after(ShiftCl(OpSar, Rax), state(w(0xffffffffffffffff), w(0x0), w(255)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x8000000000000000), w(0x0), w(255)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x00000000ffffffff), w(0x0), w(255)), Rax), after(ShiftCl(OpSar, Rax), state(w(0xffffffff00000000), w(0x0), w(255)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x0123456789abcdef), w(0x0), w(255)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x0000000000000001), w(0x0), w(255)), Rax), after(ShiftCl(OpSar, Rax), state(w(0x8000000000000001), w(0x0), w(255)), Rax)]) =
+    [w(0x0000000000000000), w(0xffffffffffffffff), w(0xffffffffffffffff), w(0x0000000000000000), w(0xffffffffffffffff), w(0x0000000000000000), w(0x0000000000000000), w(0xffffffffffffffff)] { refl }
+

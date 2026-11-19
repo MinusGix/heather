@@ -89,6 +89,7 @@ fn Instruction::defines(self instruction: Instruction, defined: DefinedFlags) �
         CmpRI8(_, _) => DefinedFlags::all(), CmpRI32(_, _) => DefinedFlags::all(), MovRI32(_, _) => defined,
         MovSelf32(_) => defined,
         RorRI32(_, immediate) => ror32_defines(ror32_count(immediate), defined),
+        ImulRR(_, _) => DefinedFlags::none(), MulR(_) => DefinedFlags::none(), ShiftCl(_, _) => DefinedFlags::none(),
     }
 }
 
@@ -105,6 +106,7 @@ theorem execute_normal_defines<M>(instruction: Instruction, s: MachineState<M>):
         MovSelf32(_) => refl,
         RorRI32(d, immediate) => ror32_flags_defined(ror32_value(read_gpr(d, s.gprs), ror32_count(immediate)),
             ror32_count(immediate), s.flags),
+        ImulRR(_, _) => refl, MulR(_) => refl, ShiftCl(_, _) => refl,
     }
 }
 
@@ -164,6 +166,7 @@ theorem Instruction::reads_within(self instruction: Instruction, a, b: DefinedFl
         TestRR(_, _) => λ r => r, AddRI8(_, _) => λ r => r, AddRI32(_, _) => λ r => r, ShiftOne(_, _) => λ r => r,
         ShiftImm(_, _, _) => λ r => r, Bswap32(_) => λ r => r, MovSelf32(_) => λ r => r, RorRI32(_, _) => λ r => r,
         CmpRI8(_, _) => λ r => r, CmpRI32(_, _) => λ r => r, MovRI32(_, _) => λ r => r,
+        ImulRR(_, _) => λ r => r, MulR(_) => λ r => r, ShiftCl(_, _) => λ r => r,
     }
 }
 
@@ -194,6 +197,7 @@ theorem Instruction::defines_within(self instruction: Instruction, a, b: Defined
         CmpRI8(_, _) => refl, CmpRI32(_, _) => refl, MovRI32(_, _) => w,
         MovSelf32(_) => w,
         RorRI32(_, immediate) => ror32_defines_within(ror32_count(immediate), a, b, w),
+        ImulRR(_, _) => refl, MulR(_) => refl, ShiftCl(_, _) => refl,
     }
 }
 
