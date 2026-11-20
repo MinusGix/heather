@@ -232,7 +232,6 @@ fn Known::payload_at(ps: List<PayloadAt>, x: Nat) → Option<PayloadAt> {
     match ps { Nil => None, Cons(p, rest) => match p.local.same(x) { True => Some(p), False => Known::payload_at(rest, x) } }
 }
 
-
 // A buffer a program makes for itself, read as a parameter after the
 // function's own: a byte string it writes, by its bytes (`Written`, §5 D3), or a
 // local that starts as `n` zero bytes, `List::replicate(0, n)` (§5 D2).
@@ -349,7 +348,6 @@ fn Known::payload_index(name: String, n, left: Nat) → Option<Nat> {
         Succ(more) => match Known::str_same(decimal_name(4, n), name) { True => Some(n), False => Known::payload_index(name, n + 1, more) },
     }
 }
-
 
 fn Known::field(names: List<String>, name: String, k: Nat) → Option<Nat> {
     match names {
@@ -538,7 +536,6 @@ fn rt_arities_of(h: Handle) → Tac<List<Nat>> {
 // Whether any of them has a field: an enum with a payload, whose values
 // are built by `Inject`.
 fn rt_has_payload(arities: List<Nat>) → Bool { arities.any_bit(λ (n: Nat) => !n.same(0)) }
-
 
 // Whether a type is a record: one constructor, with fields.
 fn rt_is_record(h: Handle) → Tac<Bool> {
