@@ -39,3 +39,4 @@ the targets that need them start.
 
 - 2026-11-20: Filed from the written-paths round (thread "Smooth the first hour
   of writing a runtime fn"), whose plain suite was otherwise green.
+- 2026-11-20: 2026-11-20: A run killed at the rail stores no images, so re-running the target alone stays cold and dies again. Workaround: run `linux_wp_count` (same fixture, passes cold) first; `linux_determinism` then passes. Seen on the umbrellas branch over master 5b7c4ec71.
