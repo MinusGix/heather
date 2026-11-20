@@ -804,6 +804,20 @@ fn Ty::on_words(ps: List<Ty>) → Ty::WordsToNat(ps) → List<BitVec(64)> → Na
     }
 }
 
+// The same into any type: a combinator loop's value, state and next words
+// as functions of the words (`runtime_loop_instance`).
+fn Ty::WordsTo(ps: List<Ty>, R: Type) → Type { match ps { Nil => R, Cons(_, rest) => BitVec(64) → Ty::WordsTo(rest, R) } }
+
+fn Ty::on_words_to(ps: List<Ty>, R: Type) → Ty::WordsTo(ps, R) → List<BitVec(64)> → R {
+    match ps {
+        Nil => λ v _ => v,
+        Cons(_, rest) => λ v ws => match ws {
+            Nil => Ty::on_words_to(rest, R, v(BitVec::zero()), Nil),
+            Cons(x, more) => Ty::on_words_to(rest, R, v(x), more),
+        },
+    }
+}
+
 // A curried meaning answers like its uncurried form.
 theorem Ty::answers_uncurry(tys: Nat → RecInfo, ps: List<Ty>, r: Ty): (v: Ty::Arrows(tys, ps, r)) →
     Ty::Answers(tys, ps, r, v, λ ws => Ty::uncurry(tys, ps, r, v, ws)) {
@@ -1184,6 +1198,8 @@ def runtime_w_shape: RtShape = Plain;
 def runtime_w_nat: Nat = 0;
 def runtime_w_buffers: List<List<BitVec(8)>> = [];
 def runtime_w_bytes: List<BitVec(8)> = [];
+// A loop's `again`: a function of its next words.
+def runtime_w_again: List<BitVec(64)> → BitVec(64) = λ _ => BitVec::ofNat(0);
 
 record RtTypes { ty: Handle, tm: Handle, op: Handle, fun_t: Handle, sig: Handle, world: Handle, verdict: Handle, function: Handle,
     tys: Handle, nats: Handle, sigs: Handle, words: Handle, word: Handle, srcs: Handle, functions: Handle, operation: Handle }
@@ -1385,7 +1401,10 @@ record LinkFrame { g: Nat, name: String, table: List<Nat>, pending: List<Nat>, r
 fn runtime_reflect(k: Known, g: Nat, name: String) → Tac<Pair<Fun, List<Nat>>> {
     lookup(name ++ "::body").bind(λ c => match c {
         Accepted(step) => rt_reflect_measured(4096, k, g, step.id),
-        Refused(_) => rt_reflect_one(4096, k, g),
+        Refused(_) => lookup(name ++ "::twin").bind(λ c2 => match c2 {
+            Accepted(twin) => rt_reflect_loop(4096, k, g, twin.id),
+            Refused(_) => rt_reflect_one(4096, k, g),
+        }),
     })
 }
 
@@ -1972,6 +1991,115 @@ fn runtime_measured_instance(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, sh
         world_e, table_e, Global(f), typed, shaped, m_e, bounded, guarded, verdict]))
 }
 
+// A loop of the library's combinator (`f::loop`, written by the
+// elaborator for a `while`): `Fun::Guarded` from `Fun::guarded_of_loop`,
+// each of its obligations a conversion but the step's, which is the loop's
+// own `f::loop::elim` (docs/language/loop-combinator-design.md §6.1). Every
+// word is a `u64`, nothing is lent and the result is a word.
+fn runtime_loop_instance(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, shapes: List<Expr>, setup, world_e, table_e, typed: Expr,
+    lent: Nat, ks: List<Ty>, w0: Ty, wrest: List<Ty>, res: Ty, body: Tm) → Tac<Expr> {
+    let ws = ks ++ Cons(w0, wrest);
+    let words64 = ws.all_bit(λ t => t.is_word64());
+    let res64 = res.is_word64();
+    match lent.same(0).and(words64).and(res64) {
+        False => runtime_fail("a combinator loop over anything but 64-bit words, or lent a span: not yet (docs/language/loop-combinator-design.md §6.1)"),
+        True => {
+            let compile <- runtime_global(name_of(Setup::compile_measured));
+            let rfl <- runtime_global("tactic::rfl");
+            let lt_pow <- runtime_global(name_of(Setup::below_pow));
+            let on_words <- runtime_global(name_of(Ty::on_words));
+            let on_words_to <- runtime_global(name_of(Ty::on_words_to));
+            let guarded_g <- runtime_global(name_of(Setup::Guarded));
+            let of_loop <- runtime_global(name_of(Fun::guarded_of_loop));
+            let verdict <- runtime_verdict();
+            let word_list <- runtime_ctors_at(ts.words);
+            let of_g <- runtime_global(name ++ "::of");
+            let at_g <- runtime_global(name ++ "::at");
+            let words_g <- runtime_global(name ++ "::words");
+            let twin_g <- runtime_global(name ++ "::twin");
+            let elim_g <- runtime_global(name ++ "::elim");
+            let count_g <- runtime_global(name ++ "::count");
+            let measure_g <- runtime_global(name ++ "::measure");
+            let ws_e = Ty::quotes(ws, q);
+            let body_e = Tm::quote(body, q);
+            let res_e = Ty::quote(res, q);
+            let word = Hd(ts.word);
+            let shaped = ap(rfl, [Blank, ap(runtime_at(shapes, 2), [Ty::quotes(ks, q), Ty::quote(w0, q), Ty::quotes(wrest, q), body_e])]);
+            let m_e = ap(on_words, [ws_e, measure_g]);
+            let bs <- runtime_params(ts.word, ws, None, 0);
+            let bounded = runtime_lams(bs, ap(lt_pow, [ap(count_g, runtime_locals(bs))]));
+            // What each is at the words, which names no word.
+            let w_word <- runtime_global(name_of(runtime_w_word));
+            let xs0 = ws.map(λ _ => w_word);
+            let l_ty <- infer(ap(of_g, xs0)).or_fail("runtime: a loop's value: ");
+            let s0_ty <- infer(ap(at_g, xs0)).or_fail("runtime: a loop's state: ");
+            let w_ty <- infer(ap(words_g, xs0)).or_fail("runtime: a loop's next words: ");
+            let l_e = ap(on_words_to, [ws_e, Hd(l_ty), of_g]);
+            let state_e = ap(on_words_to, [ws_e, Hd(s0_ty), at_g]);
+            let words_e = ap(on_words_to, [ws_e, Hd(w_ty), words_g]);
+            // Each binder is assumed under the one it sits inside, so each
+            // `λ` is built where it is used: `out` the identity at the
+            // result's word, and `again` on the words, as the twin and its
+            // theorem take it, one binder per word.
+            let out_at: Option<LocalRef> → Tac<Expr> = λ u => assume(word, "r", u).or_fail("runtime: a loop's result: ").bind(λ r =>
+                pure(Lam(r.ref, Local(r.ref))));
+            let unlist: LocalRef → Tac<Expr> = λ again => runtime_params(ts.word, ws, Some(again), 0).bind(λ ys =>
+                pure(runtime_lams(ys, ap(Local(again), [RtQ::seq(word_list, runtime_locals(ys))]))));
+            let a_ty <- runtime_type_of(name_of(runtime_w_again));
+            // The statement's file, and the world and function it names there.
+            let stated = ap(guarded_g, [Blank, Global(f), NatLit(0), ws_e, res_e, body_e, world_e, table_e, typed, m_e]);
+            let g_t <- as_type(stated).or_fail("runtime: a loop's `Guarded`: ");
+            let opened <- runtime_open_n(4, g_t, ["b"]);
+            let b = opened.fst.head_or(LocalRef(0));
+            let at_b <- view(opened.snd);
+            let wh: Pair<Expr, Expr> = match at_b {
+                HGlobal(_, _, args) => Pair(Hd(args.nth(3).unwrap_or(opened.snd)), Hd(args.nth(4).unwrap_or(opened.snd))),
+                _ => Pair(Blank, Blank),
+            };
+            // The words under the file, and the last binder they leave.
+            let words_at: Tac<List<LocalRef>> = runtime_params(ts.word, ws, Some(b), 0);
+            let last = λ (xs: List<LocalRef>) => match xs.rev().head() { Some(x) => Some(x), None => Some(b) };
+            // Each conversion, at its words.
+            let on_state: (List<LocalRef> → LocalRef → Expr) → Tac<Expr> = λ proof => words_at.bind(λ xs =>
+                infer(ap(at_g, runtime_locals(xs))).or_fail("runtime: a loop's state: ").bind(λ st =>
+                    assume(Hd(st), "s", last(xs)).or_fail("runtime: a loop's state: ").bind(λ sl =>
+                        pure(runtime_lams(xs.append([sl.ref]), proof(xs, sl.ref))))));
+            let on_words: (List<LocalRef> → Expr) → Tac<Expr> = λ proof => words_at.bind(λ xs => pure(runtime_lams(xs, proof(xs))));
+            let back <- on_state(λ _ sl => ap(rfl, [Blank, Local(sl)]));
+            let kept <- on_state(λ xs _ => ap(rfl, [Blank, ap(of_g, runtime_locals(xs))]));
+            let sized <- on_state(λ _ _ => ap(rfl, [Blank, NatLit(ws.len())]));
+            let measure <- on_words(λ xs => ap(rfl, [Blank, ap(measure_g, runtime_locals(xs))]));
+            let is_run <- on_words(λ xs => ap(rfl, [Blank, ap(Global(f), runtime_locals(xs))]));
+            // The step's twin at the words, its leaves `again` and `out`,
+            // `under` the binder it sits inside.
+            let twin_at: List<LocalRef> → LocalRef → Tac<Expr> = λ xs again => unlist(again).bind(λ a =>
+                out_at(Some(again)).bind(λ o => pure(ap(twin_g, Cons(word, runtime_locals(xs).append([a, o]))))));
+            let zs <- assume(Hd(ts.words), "zs", Some(b)).or_fail("runtime: a loop's words: ");
+            let ak <- assume(Hd(a_ty), "again", Some(zs.ref)).or_fail("runtime: a loop's `again`: ");
+            let xs2 <- runtime_params(ts.word, ws, Some(ak.ref), 0);
+            let ak2 <- assume(Hd(a_ty), "again", last(xs2)).or_fail("runtime: a loop's `again`: ");
+            let k_in <- twin_at(xs2, ak2.ref);
+            // `k` takes `again` once; under the words it is read through a
+            // `let`-free β: `(λ again => twin(…))(again)`.
+            let k_e = Lam(zs.ref, Lam(ak.ref, ap(on_words_to, [ws_e, word, runtime_lams(xs2, App(Lam(ak2.ref, k_in), Local(ak.ref))), Local(zs.ref)])));
+            let xs3 <- words_at;
+            let a3 <- assume(Hd(a_ty), "again", last(xs3)).or_fail("runtime: a loop's `again`: ");
+            let u3 <- unlist(a3.ref);
+            let o3 <- out_at(Some(a3.ref));
+            let twin = runtime_lams(xs3.append([a3.ref]), ap(elim_g, Cons(word, runtime_locals(xs3).append([u3, o3]))));
+            let xs4 <- words_at;
+            let a4 <- assume(Hd(a_ty), "again", last(xs4)).or_fail("runtime: a loop's `again`: ");
+            let t4 <- twin_at(xs4, a4.ref);
+            let reads = runtime_lams(xs4.append([a4.ref]), ap(rfl, [Blank, t4]));
+            let out_e <- out_at(Some(b));
+            let guarded = Lam(b, ap(of_loop, [Blank, Blank, ws_e, res_e, body_e, wh.fst, wh.snd, m_e, l_e, state_e, words_e, out_e,
+                back, kept, sized, measure, is_run, k_e, twin, reads]));
+            pure(ap(compile, [Blank, setup, Ty::quotes(ks, q), Ty::quote(w0, q), Ty::quotes(wrest, q), res_e, body_e, NatLit(0),
+                world_e, table_e, Global(f), typed, shaped, m_e, bounded, guarded, verdict]))
+        },
+    }
+}
+
 // The `Compile(f)` instance, by the reflection's shape. `table_e` is the
 // function's table at each file: its world's own for a function lent
 // nothing, `Setup::lent_callees` for one lent spans.
@@ -1998,8 +2126,11 @@ fn runtime_instance(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes, 
             Case(c, _, _) => runtime_fuel_instance(f, q, ts, shapes, setup, world_e, table_e, typed, count, reprs, w0, wrest, rfun.result, c, zero, succ),
             _ => runtime_fail("a fuel recursion whose body is not its fuel's `match`"),
         },
-        Measured(ks, w0, wrest, body) =>
-            runtime_measured_instance(name, f, q, ts, shapes, setup, world_e, table_e, typed, count, reprs, rfun.lent, ks ++ Cons(w0, wrest), rfun.result, body),
+        Measured(ks, w0, wrest, body) => lookup(name ++ "::twin").bind(λ c => match c {
+            Accepted(_) => runtime_loop_instance(name, f, q, ts, shapes, setup, world_e, table_e, typed, rfun.lent, ks, w0, wrest, rfun.result, body),
+            Refused(_) =>
+                runtime_measured_instance(name, f, q, ts, shapes, setup, world_e, table_e, typed, count, reprs, rfun.lent, ks ++ Cons(w0, wrest), rfun.result, body),
+        }),
     }
 }
 

@@ -59,14 +59,13 @@ fn CD::step_k<X>(self d: CD, again: Lower<CD>(CD::left, d) → X, done: BitVec(6
     }
 }
 
-// Matching on the step is the twin with those arms: one per way it goes.
+// Matching on the step is the twin with those arms: `split_all` splits
+// both on the step's tests, and each case is a conversion. This is the
+// theorem the elaborator writes for each loop.
 theorem CD::step_elim<X>(self d: CD, again: Lower<CD>(CD::left, d) → X, done: BitVec(64) → X):
     (match d.step() { Again(b) => again(b), Done(r) => done(r) }) = d.step_k(again, done)
 {
-    induct CD::step(d) {
-        True => sym(CD::step_k::True(d, again, done, h)),
-        False => sym(CD::step_k::False(d, again, done, h)),
-    }
+    split_all; all_goals { refl }
 }
 
 theorem cd_reads(n, acc: BitVec(64), again: List<BitVec(64)> → BitVec(64)):

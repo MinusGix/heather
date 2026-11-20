@@ -148,7 +148,10 @@ fn OldByte::find(olds: List<OldByte>, s: Nat, i: Nat) → Option<Nat> {
 // (`varied`, in the order the call passes them) replaced by the call's
 // arguments. A measured step's call passes a proof after the words, which
 // nothing reads.
-record SelfCall { ih: Nat, head: List<Nat>, slots: List<Nat>, varied: List<Nat> }
+// A loop of the combinator read from its twin (`rt_reflect_loop`) also
+// has `exit`: the local its answer is handed to, a call of which is that
+// answer.
+record SelfCall { ih: Nat, head: List<Nat>, slots: List<Nat>, varied: List<Nat>, exit: Option<Nat> := None }
 
 // The elements of an array field, each a word its codec's accessor reads:
 // element `i` of `count` lies at the word `base + i * stride`, and a read
@@ -1991,7 +1994,13 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                     Some(sc) => match x.id.same(sc.ih) {
                         True => rt_lent_args(λ s a => rt_go(f, k, s, a, True), k, st, 0, k.lent, args.take(sc.varied.len())).bind(λ r =>
                             pure(r.fst.finish(h, operand, Call(0, sc.call_args(r.snd))))),
-                        False => rt_local(k, st, h, operand, x, args),
+                        False => match (match sc.exit { Some(e) => x.id.same(e), None => False }) {
+                            True => match args {
+                                Cons(a, Nil) => rt_go(f, k, st, a, operand),
+                                _ => rt_refuse("a loop's answer handed on with other than one argument"),
+                            },
+                            False => rt_local(k, st, h, operand, x, args),
+                        },
                     },
                     None => rt_local(k, st, h, operand, x, args),
                 },
@@ -2397,6 +2406,28 @@ fn rt_reflect_measured(fuel: Nat, k: Known, g: Nat, step: Nat) → Tac<Pair<Fun,
     let o3 <- open(p.snd, "h").bind(λ c => rt_accepted("its step's measure proof", c));
     let result <- k.ty_of(o3.body);
     let r <- rt_go(fuel, k.within(sc).lending(lent.fst), p.fst.fst, o3.body, False);
+    pure(Pair(Fun(lent.snd, result, RSt::wrap(r.fst.lets, r.snd), lent.fst), r.fst.funs))
+}
+
+// A loop of the combinator (`f#loop`, docs/language/loop-combinator-design.md
+// §6.1), read from its twin `f::loop::twin`: `λ X c̄ v̄ again done => …`, its
+// parameters the loop's own, then the next pass and the answer. A call of
+// `again` is a call of the loop itself on its arguments, and a call of
+// `done` is the loop's answer: the measured function the lowering reads,
+// with no recursion in the elaborated term (`Loop::run` is) and no proof
+// read.
+fn rt_reflect_loop(fuel: Nat, k: Known, g: Nat, twin: Nat) → Tac<Pair<Fun, List<Nat>>> {
+    let n <- infer(Global(GlobalRef(g))).bind(λ c => rt_accepted("its type", c)).bind(λ t => rt_arity(fuel, t));
+    let b <- body(GlobalRef(twin)).bind(λ c => rt_accepted("its twin's body", c));
+    let ox <- open(b, "X").bind(λ c => rt_accepted("its twin's answer type", c));
+    let p <- rt_params_n(n, k, RSt(0, [], [], [], [], k.funs), [], ox.body);
+    let oa <- open(p.snd, "again").bind(λ c => rt_accepted("its twin's next pass", c));
+    let od <- open(oa.body, "done").bind(λ c => rt_accepted("its twin's answer", c));
+    let answer <- view(od.local.ty);
+    let result <- match answer { HPi(dom) => k.ty(dom), _ => rt_refuse("a loop's twin whose answer is not a function") };
+    let sc = SelfCall(oa.local.ref.id, [], List::range(n), List::range(n), exit := Some(od.local.ref.id));
+    let lent <- rt_lend(k, p.fst.snd);
+    let r <- rt_go(fuel, k.within(sc).lending(lent.fst), p.fst.fst, od.body, False);
     pure(Pair(Fun(lent.snd, result, RSt::wrap(r.fst.lets, r.snd), lent.fst), r.fst.funs))
 }
 
