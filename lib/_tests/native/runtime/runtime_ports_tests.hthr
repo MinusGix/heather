@@ -101,8 +101,13 @@ theorem port_classify_runs(): program_eval(port_classify::program, 0, [BitVec::o
 // A token kind as the enum it is in Rust (`TokKind`).
 inductive PortKind { Ident, Number, Space, Other }
 
-// expect-error: `PortKind` has no runtime layout
 runtime fn port_weight(k: PortKind) → u64 { match k { Ident => 3, Number => 2, Space => 0, Other => 1 } }
+
+// The enum crosses as its tag word, the constructor's index.
+theorem port_weight_runs(): program_eval(port_weight::program, 0, [BitVec::ofNat(1)]) = 2 ∧
+    program_eval(port_weight::program, 0, [BitVec::ofNat(3)]) = 1 {
+    ⟨port_weight::agrees(Number), port_weight::agrees(Other)⟩
+}
 
 // Two results at once (a value and whether it fits).
 record PortParsed { value: u64, ok: u64 }

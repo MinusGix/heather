@@ -1,0 +1,40 @@
+// What a `runtime fn` over an enum is refused at
+// (docs/native/runtime-fn-setups-design.md §16.16): an enum is passed in
+// as its tag word and matched on, and nothing else yet. The accepted probes
+// are runtime_enum_tests. Tests, not library: nothing imports this module.
+
+import bitvec;
+import runtime;
+
+inductive Shade { Dark, Mid, Light }
+
+runtime fn shade_level(s: Shade) → u64 { match s { Dark => 10, Mid => 20, Light => 30 } }
+
+// An enum is not returned: a caller would read a tag word it has no
+// contract for.
+// expect-error: the constructor `Dark` as a value
+runtime fn shade_of(x: u64) → Shade { if x < 10 { Dark } else { Light } }
+
+// A call passes words: an enum is not passed on.
+// expect-error: a call of a function that does not take and return 64-bit words
+runtime fn shade_twice(s: Shade) → u64 { shade_level(s) + shade_level(s) }
+
+// A `match h:` on an enum: its arms' equations are not reflected.
+// expect-error: a `match h:` on an enum
+runtime fn shade_eq(s: Shade) → u64 { match h: s { Dark => 1, Mid => 2, Light => 3 } }
+
+// An enum built in the body.
+// expect-error: the constructor `Dark` builds a type with no runtime layout
+runtime fn shade_made(x: u64) → u64 { shade_level(if x < 10 { Dark } else { Mid }) }
+
+// An enum is not a record's field: a record's fields are words.
+record Tagged { s: Shade, n: u64 }
+
+// expect-error: `Shade` has no runtime layout
+runtime fn tagged_n(t: Tagged) → u64 { t.n }
+
+// A constructor with fields is no enum.
+inductive Pocket { Empty, Holds(n: u64) }
+
+// expect-error: `Pocket` has no runtime layout
+runtime fn pocket_n(p: Pocket) → u64 { match p { Empty => 0, Holds(n) => n } }

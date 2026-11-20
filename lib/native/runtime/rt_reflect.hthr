@@ -58,7 +58,10 @@ inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PWiden(extra
 
 record PrimEntry { g: Nat, p: Prim }
 
-record RecEntry { g: Nat }
+// A record the program holds as its fields, or with `alts` an enum held
+// as its tag word (docs/native/runtime-fn-setups-design.md §16.16): its
+// type's global.
+record RecEntry { g: Nat, alts: Bool := False }
 
 // A type the program holds by its `datarepr` (docs/native/runtime-fn-setups-design.md
 // §16.13): the repr's global (what `Repr` answers for the type) and name, the spec
@@ -315,6 +318,9 @@ fn Known::rec(rs: List<RecEntry>, g: Nat, i: Nat) → Option<Nat> {
     match rs { Nil => None, Cons(r, rest) => match r.g.same(g) { True => Some(i), False => Known::rec(rest, g, i + 1) } }
 }
 
+// Whether table entry `i` among `rs` is an enum.
+fn Known::is_enum_at(rs: List<RecEntry>, i: Nat) → Bool { match rs.nth(i) { Some(r) => r.alts, None => False } }
+
 fn Known::str_same(a, b: String) → Bool { match string_eq_dec(a, b) { Inl(_) => True, Inr(_) => False } }
 
 fn Known::field(names: List<String>, name: String, k: Nat) → Option<Nat> {
@@ -481,6 +487,22 @@ fn rt_needs_repr<A>(rname: String, spec: String) → Tac<A> { rt_refuse(rt_repr_
 // (docs/native/runtime-fn-setups-design.md §16.7, §16.16).
 fn rt_rec_marker() → String { "a record the walk has not met yet: " }
 
+// An enum the walk has met but was not given: a type of at least two
+// constructors, none with fields, which the program holds as its tag word
+// (§16.16).
+fn rt_enum_marker() → String { "an enum the walk has not met yet: " }
+
+// Whether a type is an enum: two constructors or more, none with fields.
+fn rt_is_enum(h: Handle) → Tac<Bool> {
+    ctors(h).bind(λ cc => match cc {
+        Refused(_) => pure(False),
+        Accepted(cs) => pure(match cs.len().leb(1) {
+            True => False,
+            False => cs.all_bit(λ (c: CtorInfo) => match c.fields { Nil => True, Cons(_, _) => False }),
+        }),
+    })
+}
+
 // Whether a type is a record: one constructor, with fields.
 fn rt_is_record(h: Handle) → Tac<Bool> {
     ctors(h).bind(λ cc => match cc {
@@ -501,7 +523,10 @@ fn Known::repr_ty(self k: Known, h: Handle, name: String) → Tac<Ty> {
         True => repr_of(h).bind(λ c => match c {
             Refused(_) => match k.discover {
                 False => rt_refuse(none),
-                True => rt_is_record(h).bind(λ r => match r { True => rt_refuse(rt_rec_marker() ++ name), False => rt_refuse(none) }),
+                True => rt_is_record(h).bind(λ r => match r {
+                    True => rt_refuse(rt_rec_marker() ++ name),
+                    False => rt_is_enum(h).bind(λ e => match e { True => rt_refuse(rt_enum_marker() ++ name), False => rt_refuse(none) }),
+                }),
             },
             Accepted(r) => view(r).bind(λ v => match v {
                 HGlobal(rg, rname, _) => match Known::repr_at(k.reprs, rg.id, 0) {
@@ -579,16 +604,21 @@ fn Known::ty_within(self k: Known, fuel: Nat, h: Handle) → Tac<Ty> {
                         Nil => rt_refuse("`List` without its element type"),
                     },
                     False => match Known::rec(k.recs, g.id, 0) {
-                        Some(i) => pure(Named(k.reprs.len() + i)),
+                        Some(i) => pure(match Known::is_enum_at(k.recs, i) { True => Enum(k.reprs.len() + i), False => Named(k.reprs.len() + i) }),
                         None => repr_of(h).bind(λ c => match c {
                             Accepted(_) => k.repr_ty(h, name),
-                            Refused(_) => match fuel {
+                            // An enum is met as itself, not as the sum
+                            // its definition unfolds to.
+                            Refused(_) => rt_is_enum(h).bind(λ is_enum => match is_enum {
+                              True => k.repr_ty(h, name),
+                              False => match fuel {
                                 Zero => k.repr_ty(h, name),
                                 Succ(f) => whnf(h).bind(λ u => match u {
                                     Accepted(x) => k.ty_within(f, x),
                                     Refused(_) => k.repr_ty(h, name),
                                 }),
-                            },
+                              },
+                            }),
                         }),
                     },
                 },
@@ -648,6 +678,7 @@ fn RSt::at_depth(self st: RSt, t: Tm) → Tm {
         If(c, yes, no) => If(st.index(c), yes, no),
         IfEq(c, yes, no) => IfEq(st.index(c), yes, no),
         Byte(k, i, length) => Byte(k, st.index(i), st.index(length)),
+        Pick(i, c, arms) => Pick(i, st.index(c), arms),
         _ => t,
     }
 }
@@ -669,7 +700,7 @@ fn RSt::finish(self st: RSt, h: Handle, operand: Bool, node: Tm) → Pair<RSt, T
         False => Pair(st, st.at_depth(node)),
         True => match node {
             Var(l) => Pair(st, Var(l)),
-            _ => match (match node { Lit(_, _) => None, If(_, _, _) => None, IfEq(_, _, _) => None, _ => rt_memo(st.memo, node) }) {
+            _ => match (match node { Lit(_, _) => None, If(_, _, _) => None, IfEq(_, _, _) => None, Pick(_, _, _) => None, _ => rt_memo(st.memo, node) }) {
                 Some(l) => Pair(RSt(st.depth, st.lets, st.memo, Cons(Pair(h.id, l), st.handles), st.locals, st.funs), Var(l)),
                 None => Pair(RSt(st.depth + 1, Cons(st.at_depth(node), st.lets), Cons(Pair(node, st.depth), st.memo),
                     Cons(Pair(h.id, st.depth), st.handles), st.locals, st.funs), Var(st.depth)),
@@ -1622,6 +1653,40 @@ fn rt_fuel_match(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, m: MatchIn
     }
 }
 
+// The arms from constructor `j` on, `left` of them after it, at `st`
+// (fresh lets), the matched constructor at level `at`.
+fn rt_pick_arms(go: RSt → Handle → Bool → Tac<Pair<RSt, Tm>>, st: RSt, m: MatchInfo, i: Nat, at: Nat, j: Nat, left: Nat) → Tac<Pair<RSt, Tm>> {
+    match left {
+        Zero => rt_arm(m, j).bind(λ ah => go(st, ah, False).bind(λ r => pure(Pair(r.fst, RSt::wrap(r.fst.lets, r.snd))))),
+        Succ(more) => rt_arm(m, j).bind(λ ah => {
+            let under = RSt(st.depth + 1, [], st.memo, st.handles, st.locals, st.funs);
+            go(under, ah, False).bind(λ ry =>
+            rt_pick_arms(go, RSt(st.depth + 1, [], st.memo, st.handles, st.locals, ry.fst.funs), m, i, at, j + 1, more).bind(λ rn =>
+            pure(Pair(rn.fst, Let(Prim(TagIs(i, j), [st.index(at)]), If(0, RSt::wrap(ry.fst.lets, ry.snd), rn.snd))))))
+        }),
+    }
+}
+
+// A `match` on an enum of table entry `i`: the scrutinee's variable `c`,
+// then `Pick(i, c, arms)`, under which variable 0 is the constructor
+// matched. `arms` tests it against each constructor but the last in turn,
+// each test a `TagIs` bound by a `Let` and an `If` on it; the last
+// constructor's arm is the default (docs/native/runtime-fn-setups-design.md
+// §16.16). Each arm is reflected in a block of its own, as an `if`'s are.
+fn rt_pick(k: Known, st: RSt, h: Handle, operand: Bool, m: MatchInfo, i: Nat,
+    go: RSt → Handle → Bool → Tac<Pair<RSt, Tm>>) → Tac<Pair<RSt, Tm>>
+{
+    match m.args {
+        Cons(_, _) => rt_refuse("a `match h:` on an enum: its arms' equations are not reflected yet"),
+        Nil => go(st, m.scrut, True).bind(λ rc => {
+            let s0 = rc.fst;
+            let at = s0.depth;
+            rt_pick_arms(go, RSt(at + 1, [], s0.memo, s0.handles, s0.locals, s0.funs), m, i, at, 0, m.arms.len() - 1).bind(λ ra =>
+                pure(s0.with_funs(ra.fst.funs).finish(h, operand, Pick(i, RSt::level(rc.snd), ra.snd))))
+        }),
+    }
+}
+
 // Whether `name` is a field of a repr'd record `r`.
 fn Known::is_field_of_repr(self k: Known, r: Handle, name: String) → Tac<Bool> {
     let held <- k.is_repr_typed(r);
@@ -2163,7 +2228,10 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                             },
                         }),
                         False => match Known::rec(k.recs, ty.id, 0) {
-                        Some(ri) => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, fields).bind(λ r => pure(r.fst.finish(h, operand, Make(ri, r.snd)))),
+                        Some(ri) => match Known::is_enum_at(k.recs, ri) {
+                          True => rt_refuse("the constructor `" ++ name ++ "` as a value: an enum is passed in and matched on, not built, by the default setup yet"),
+                          False => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, fields).bind(λ r => pure(r.fst.finish(h, operand, Make(ri, r.snd)))),
+                        },
                         // A record held by its repr: its code is its type's.
                         None => k.is_repr_typed(h).bind(λ held => match held {
                             True => k.ty_of(h).bind(λ t => match t {
@@ -2191,7 +2259,8 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                                 Cons(_, _) => IfEq(RSt::level(rc.snd), RSt::wrap(ry.fst.lets, ry.snd), RSt::wrap(rn.fst.lets, rn.snd)),
                             }))))))),
                         Count => rt_fuel_match(f, k, st, h, operand, m, λ k2 s a o => rt_go(f, k2, s, a, o)),
-                        _ => rt_refuse("a `match` on something other than a `Bool` (enums are not reflected yet)"),
+                        Enum(i) => rt_pick(k, st, h, operand, m, i, λ s a o => rt_go(f, k, s, a, o)),
+                        _ => rt_refuse("a `match` on something other than a `Bool` or an enum"),
                     })),
                 }),
                 HLit(_) => rt_refuse("a `Nat` numeral is not runtime data under the reflected fragment"),
@@ -2430,6 +2499,19 @@ fn rt_needed_repr(msg: String) → Option<Pair<String, String>> {
     }
 }
 
+// The table with the record or enum named `rest` added. One the program
+// cannot hold (one already given, so held some other way, or one with no
+// global name) is refused as having no layout.
+fn rt_with_entry(k: Known, rest: List<Char>, alts: Bool) → Tac<Known> {
+    attempt(rt_global(String(rest))).bind(λ og => match og {
+        Done(g) => match k.recs.any_bit(λ (e: RecEntry) => e.g.same(g)) {
+            False => pure(k.with_recs(k.recs ++ [RecEntry(g, alts := alts)])),
+            True => rt_refuse("`" ++ String(rest) ++ "` has no runtime layout under the reflected fragment"),
+        },
+        Failed(_, _) => rt_refuse("`" ++ String(rest) ++ "` has no runtime layout under the reflected fragment"),
+    })
+}
+
 // A walk in the generator's mode, the reprs it meets added as it meets
 // them: each time it stops for a repr not yet in the table, the repr is
 // appended and the walk runs again (at most `fuel` reprs). The `Known`
@@ -2441,17 +2523,14 @@ fn rt_with_reprs<A>(fuel: Nat, k: Known, run: Known → Tac<A>) → Tac<Pair<Kno
             Done(a) => pure(Pair(k, a)),
             Failed(msg, notes) => match rt_needed_repr(msg) {
                 None => match rt_strip(("rt: " ++ rt_rec_marker()).chars, msg.chars) {
-                    None => fail(msg, notes),
+                    None => match rt_strip(("rt: " ++ rt_enum_marker()).chars, msg.chars) {
+                        None => fail(msg, notes),
+                        Some(rest) => rt_with_entry(k, rest, True).bind(λ k2 => rt_with_reprs(more, k2, run)),
+                    },
                     // A record the program cannot hold (one already given,
                     // so held some other way, or one with no global name)
                     // is refused as having no layout.
-                    Some(rest) => attempt(rt_global(String(rest))).bind(λ og => match og {
-                        Done(g) => match k.recs.any_bit(λ (e: RecEntry) => e.g.same(g)) {
-                            False => rt_with_reprs(more, k.with_recs(k.recs ++ [RecEntry(g)]), run),
-                            True => rt_refuse("`" ++ String(rest) ++ "` has no runtime layout under the reflected fragment"),
-                        },
-                        Failed(_, _) => rt_refuse("`" ++ String(rest) ++ "` has no runtime layout under the reflected fragment"),
-                    }),
+                    Some(rest) => rt_with_entry(k, rest, False).bind(λ k2 => rt_with_reprs(more, k2, run)),
                 },
                 Some(p) => rt_repr_entry(p.fst, p.snd).bind(λ e => rt_with_reprs(more, k.with_reprs(k.reprs ++ [e]), run)),
             },
@@ -2466,7 +2545,10 @@ fn rt_no_records<A>(run: Tac<A>) → Tac<A> {
     attempt(run).bind(λ o => match o {
         Done(a) => pure(a),
         Failed(msg, notes) => match rt_strip(("rt: " ++ rt_rec_marker()).chars, msg.chars) {
-            None => fail(msg, notes),
+            None => match rt_strip(("rt: " ++ rt_enum_marker()).chars, msg.chars) {
+                None => fail(msg, notes),
+                Some(rest) => rt_refuse("`" ++ String(rest) ++ "` has no runtime layout under the reflected fragment"),
+            },
             Some(rest) => rt_refuse("`" ++ String(rest) ++ "` has no runtime layout under the reflected fragment"),
         },
     })
@@ -2489,7 +2571,8 @@ fn rt_nats(ns: List<Nat>) → String {
 }
 
 fn Ty::show(self t: Ty) → String {
-    match t { Word(w) => "Word(" ++ rt_nat(w) ++ ")", Bit => "Bit", ByteList(c) => "ByteList(" ++ rt_nat(c) ++ ")", Lines => "Lines", Named(i) => "Named(" ++ rt_nat(i) ++ ")", Count => "Count" }
+    match t { Word(w) => "Word(" ++ rt_nat(w) ++ ")", Bit => "Bit", ByteList(c) => "ByteList(" ++ rt_nat(c) ++ ")", Lines => "Lines", Named(i) => "Named(" ++ rt_nat(i) ++ ")", Count => "Count",
+        Enum(i) => "Enum(" ++ rt_nat(i) ++ ")" }
 }
 
 fn Ty::shows(ts: List<Ty>) → String {
@@ -2514,6 +2597,7 @@ fn Tm::show(self t: Tm) → String {
         Fold(over, init, step) => "Fold(" ++ rt_nat(over) ++ ", " ++ rt_nat(init) ++ ", " ++ rt_nat(step) ++ ")",
         Case(c, zero, succ) => "Case(" ++ rt_nat(c) ++ ", " ++ zero.show() ++ ", " ++ succ.show() ++ ")",
         Byte(k, i, length) => "Byte(" ++ rt_nat(k) ++ ", " ++ rt_nat(i) ++ ", " ++ rt_nat(length) ++ ")",
+        Pick(i, c, arms) => "Pick(" ++ rt_nat(i) ++ ", " ++ rt_nat(c) ++ ", " ++ arms.show() ++ ")",
     }
 }
 

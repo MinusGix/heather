@@ -1719,3 +1719,44 @@ arm as the default. The contract covers only real values: `f::agrees`
 quantifies over the enum and passes its tag, so nothing is said of a word
 that is no tag (no clamping, no junk value). An enum result stays refused
 until a caller needs one.
+
+**Built (2026-11-20).** As designed. In rt, `Ty::Enum(i)` names entry `i`
+of the type table, whose `RecInfo.alts` is the enum as an `EnumInfo`: its
+type, its last tag, `of` (a tag to its constructor) and `pick`, the enum's
+own `match` over arms indexed by tag, with the laws `picks`, `of_tag` and
+`tag_of`. An enum is a parameter (`Ty::Param`) and nothing else: it is no
+`Edge`, `Out`, `OneWord` or record field, so an enum result, an enum
+passed to a call and an enum field stay refused. `Tm::Pick(i, c, arms)`
+means `alts.pick` at the arms read with each constructor bound as
+variable 0; its arms test variable 0 against each constructor but the last
+in turn (`Op::TagIs(i, k)`, a `Const` and an `Equal` of the tag word,
+under a `Let` and an `If`), the last arm the default. Both are proved
+sound once in `rt_lower` (`Tm::pick_sound`, `Tm::tag_sound`): inside the
+lowering the tag word is read clamped (`EnumInfo::read`), which is how a
+word that is no tag falls through to the last arm, but no contract states
+such a word.
+
+The reflector meets an enum as it meets a record (`rt_enum_marker`,
+`RecEntry.alts`), before its definition would unfold to the sums the
+kernel holds it as, and reads a `match` on one as a `Pick`
+(`rt_pick`). `Arms` answers a `match` on a type of any number of
+constructors with no fields (the elaborator's case tree read back,
+`case_tree_arms`). The generator builds each enum's `EnumInfo` with
+`EnumInfo::of_ctors`: `pick` is a plain `match` on the value whose arm
+`k` is `a(k)`, which the new host request `Branches` builds through the
+elaborator's own `match` (the `Cases` request's split carries an
+equation, so its term is not the source's), so that the source's `match`
+is `pick` at its arms by conversion and the pin stays `refl`. The laws are
+by cases, each branch `refl`, and the tags are checked by evaluation.
+`f::agrees` quantifies over the enum itself and passes
+`RecInfo::enum_word` (its tag word): the instance's agreement is at what
+the word reads back as, and `RecInfo::enum_agrees` rewrites it to the
+value, from `EnumInfo::of_ctors_tag_le` (every tag is a constructor's) and
+the last tag below 2^64 by evaluation. `compile-x86` quantifies the
+certificate's `_returns` over `RecInfo::enum_at` and passes the tag word;
+it states no `_implements`, which is over every word. An enum beside a
+record result of two words, or in a function lent spans, is refused as
+not stated yet. Probes: `lib/_tests/native/runtime/runtime_enum_tests`
+(two enums, a `match` inside another's arm, words beside the enum) and
+`…_refused_tests`; `examples/x86-native/enum_tag.hthr`, called from C as a
+C `enum` (`native_program.rs`). Ledger row `port_weight` is flipped.
