@@ -544,7 +544,7 @@ impl<'a, 'v> Eval<'a, 'v> {
                     let unfold = n.unfold.unwrap();
                     let glued = glued.or_else(|| Some(v));
                     self.frames.push(Frame::NatRunTail { program, glued });
-                    Work::Force(unfold)
+                    if self.transparent { Work::Force(unfold) } else { Work::Val(self.force_counter(unfold)?) }
                 }
                 Val::Neutral(_) => {
                     let tail = glued.unwrap_or(v);
@@ -675,6 +675,31 @@ impl<'a, 'v> Eval<'a, 'v> {
             }
             v = next;
         };
+        self.transparent = saved;
+        out
+    }
+
+    /// A glued counter the run machinery needs as a number — the scrutinee
+    /// of a fold it accelerates, the right-hand counter of a synchronous
+    /// fold, the tail of a run — forced **δ-transparently**, to its
+    /// δ-transparent head ([`Eval::delta_whnf`]), whatever mode the run it
+    /// is met in has. The machinery unfolds the counter in either mode
+    /// (`step_neutral`); forced opaquely, every eliminator inside its body
+    /// that meets another glued value stalls as a spine, and the next fold
+    /// that wants that value as a number replays the spine in turn: work
+    /// that grows with the depth of the computation the counter hides, all
+    /// of it inside one δ-step of the definition the fold sits in. One
+    /// δ-step of `Nat::max(reach(…), room(…))` against a sum of literals
+    /// filled a value arena of gigabytes that way
+    /// (`issues/conversion-closed-sum-opaque-counter.md`). The number the
+    /// counter computes is the same either way; only the replays go.
+    ///
+    /// A nested run: within it every such counter is met transparently and
+    /// takes the frame-pushing path, so it nests at most once.
+    #[inline(never)]
+    fn force_counter(&mut self, unfold: &'v TmClo<'v>) -> Res<&'v Val<'v>> {
+        let saved = std::mem::replace(&mut self.transparent, true);
+        let out = self.force(unfold).and_then(|v| self.delta_whnf(v));
         self.transparent = saved;
         out
     }
@@ -2150,6 +2175,10 @@ impl<'a, 'v> Eval<'a, 'v> {
         if let (Some(unfold), Elim::ElimNat { step, .. }) = (n.unfold, &e) {
             if matches!(&*self.classify_step(step)?, FoldClass::Affine { .. } | FoldClass::Sync { .. }) {
                 self.spend()?;
+                if !self.transparent {
+                    let counter = self.force_counter(unfold)?;
+                    return Ok(Work::Elim(counter, e));
+                }
                 self.frames.push(Frame::Owned(e));
                 return Ok(Work::Force(unfold));
             }
@@ -2557,6 +2586,9 @@ impl<'a, 'v> Eval<'a, 'v> {
                     head: head,
                     app: self.arena.elim_cell(e.clone()),
                 });
+                if !self.transparent {
+                    return Ok(Work::Val(self.force_counter(unfold)?));
+                }
                 return Ok(Work::Force(unfold));
             }
         }
