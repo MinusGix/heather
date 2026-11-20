@@ -54,7 +54,7 @@ theorem peek_pinned(f: Buffers(), place, length, i: BitVec(64)):
 theorem peek_compiled(f: Buffers(), call: Answers(), agree: Tm::CallsAgree(peek::world.at(peek::compile.callees, f), call),
     place, length, i: BitVec(64)):
     peek::code.eval(call, [place, length, i], buffers := f) = peek(f.span(0), length, i) {
-    peek::compile.agrees(f, call, agree, place, length, i)
+    peek::compile.agrees(f, call, agree, place, trivial, length, trivial, i, trivial)
 }
 
 fn abc() → List<BitVec(8)> { [b(97), b(98), b(99)] }
@@ -89,7 +89,7 @@ theorem count_shaped(): count_from::rt.lent = 1 { refl }
 theorem count_compiled(f: Buffers(), call: Answers(), agree: Tm::CallsAgree(count_from::world.at(count_from::compile.callees, f), call),
     place, length, i, acc: BitVec(64)):
     count_from::code.eval(call, [place, length, i, acc], buffers := f) = count_from(f.span(0), length, i, acc) {
-    count_from::compile.agrees(f, call, agree, place, length, i, acc)
+    count_from::compile.agrees(f, call, agree, place, trivial, length, trivial, i, trivial, acc, trivial)
 }
 
 // The function's program, evaluated over a file, is the function at the
@@ -121,7 +121,7 @@ theorem peek_twice_linked(f: Buffers(), place, length, i: BitVec(64)):
 theorem peek_twice_compiled(f: Buffers(), call: Answers(), agree: Tm::CallsAgree(peek_twice::world.at(peek_twice::compile.callees, f), call),
     place, length, i: BitVec(64)):
     peek_twice::code.eval(call, [place, length, i], buffers := f) = peek_twice(f.span(0), length, i) {
-    peek_twice::compile.agrees(f, call, agree, place, length, i)
+    peek_twice::compile.agrees(f, call, agree, place, trivial, length, trivial, i, trivial)
 }
 
 // ---------------------------------------------------------------------------
@@ -137,7 +137,7 @@ theorem differ_shaped(): differ::rt.lent = 2 { refl }
 theorem differ_compiled(f: Buffers(), call: Answers(), agree: Tm::CallsAgree(differ::world.at(differ::compile.callees, f), call),
     xp, xn, yp, yn, i: BitVec(64)):
     differ::code.eval(call, [xp, xn, yp, yn, i], buffers := f) = differ(f.span(0), xn, f.span(1), yn, i) {
-    differ::compile.agrees(f, call, agree, xp, xn, yp, yn, i)
+    differ::compile.agrees(f, call, agree, xp, trivial, xn, trivial, yp, trivial, yn, trivial, i, trivial)
 }
 
 theorem differ_runs(): program_eval_over([abc(), [b(97), b(96), b(99)]], [differ::code], 0, [w(4096), w(3), w(8192), w(3), w(1)]) = w(2) { refl }

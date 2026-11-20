@@ -39,6 +39,10 @@ import nat;
 inductive Asm {
     // An instruction block: its length is its instructions' summed.
     Block(instructions: List<Instruction>),
+    // A block that may divide: the same bytes, run only where none of its
+    // divides faults (`NoFaults`, x86_64_block), which its run takes as a
+    // premise instead of the block refusing DIV.
+    Guarded(instructions: List<Instruction>),
     // Bytes short enough to read their length off, which no proof runs.
     Code(bytes: List<BitVec(8)>),
     // A word loaded and a word stored: bytes as `Code`, with what they do,
@@ -113,6 +117,7 @@ theorem block_length_is(instructions: List<Instruction>): canonical_block_bytes(
 fn asm_len(item: Asm) → Nat {
     match item {
         Block(instructions) => block_length(instructions),
+        Guarded(instructions) => block_length(instructions),
         Code(bytes) => bytes.len(),
         Load(load) => word_load_bytes(load).len(),
         Store(_) => 3,
@@ -147,6 +152,7 @@ fn asm_labels(p: Prog) → Nat → Nat { λ name => asm_target(p, name) }
 fn asm_bytes(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, here: Nat, item: Asm) → List<BitVec(8)> {
     match item {
         Block(instructions) => canonical_block_bytes(instructions),
+        Guarded(instructions) => canonical_block_bytes(instructions),
         Code(bytes) => bytes,
         Load(load) => word_load_bytes(load),
         Store(store) => word_store_bytes(store),
@@ -256,6 +262,7 @@ theorem fills_fit_before(fills: Nat → List<BitVec(8)>, before: Prog, name: Nat
     FillsFit(before, fills) {
     match item {
         Block(_) => fits,
+        Guarded(_) => fits,
         Code(_) => fits,
         Load(_) => fits,
         Store(_) => fits,
@@ -280,6 +287,7 @@ theorem asm_bytes_len(fills: Nat → List<BitVec(8)>, labels: Nat → Nat, here:
     fits: FillsFit(At(before, name, item), fills)): asm_bytes(fills, labels, here, item).len() = asm_len(item) {
     match item {
         Block(instructions) => block_length_is(instructions),
+        Guarded(instructions) => block_length_is(instructions),
         Code(_) => refl,
         Load(_) => refl,
         Store(_) => refl,
@@ -481,6 +489,7 @@ fn instructions_numbers(instructions: List<Instruction>) → List<Nat> {
 fn Asm::numbers(self item: Asm) → List<Nat> {
     match item {
         Block(instructions) => Cons(0, Cons(instructions.len(), instructions_numbers(instructions))),
+        Guarded(instructions) => Cons(16, Cons(instructions.len(), instructions_numbers(instructions))),
         Jcc(cc, target) => [1, cc.number(), target],
         Jmp(target) => [2, target],
         JccShort(cc, target) => [14, cc.number(), target],

@@ -356,7 +356,7 @@ fn Target::Answered(self t: Target, call: Writers()) → Type {
 // at the stated homes (`program_run_placeless`). The program lends every
 // buffer to write, which is every row's.
 theorem Target::answers_of(self t: Target, evaluable: program_evaluable(t.functions).IsTrue(), placeless: program_placeless(t.functions).IsTrue(),
-    calls: (addresses: List<BitVec(64)>) → (buffers: Buffers()) → (written: Nat → Bool) → (top: Nat) →
+    total: program_total(t.functions).IsTrue(), calls: (addresses: List<BitVec(64)>) → (buffers: Buffers()) → (written: Nat → Bool) → (top: Nat) →
         ((f: Nat) → (b: Nat) → marked(marks_row(program_rows(t.functions), f), b).IsTrue() → written(b) = True) →
         Loan<X86Memory(t.r.profile)>(t.io().fetch, t.io().data, t.stack, top,
             Lending(program_counts(t.functions), addresses, buffers, written).spans()) →
@@ -381,7 +381,7 @@ theorem Target::answers_of(self t: Target, evaluable: program_evaluable(t.functi
                 args_lent_first(at, size, held, words, k, sized));
         let loan = t.loan(held, k, sized, λ b => in_memory(b).right.left);
         let runs: program_effects(t.functions)(lent, f, passed, ran.word, ran.buffers) =
-            program_run_effects(t.functions, evaluable, lent, f, passed, fit);
+            program_run_effects(t.functions, evaluable, lent, f, passed, fit, program_total_run_defined(t.functions, total, lent, f, passed));
         let answered = calls(placed_addresses(at, 0, k), lent, λ (_: Nat) => True, t.stack.size, λ f b _ => refl, loan, f, below, passed, ran.word, lent,
             ran.buffers, s0, at0, resident, i0, rsp, room, ⟨⟨called0.left, ⟨runs, called0.right.left⟩⟩, ⟨args, ⟨room, in_memory⟩⟩⟩, ret, saved);
         let u = answered.witness;
@@ -476,7 +476,7 @@ theorem Prog::links_calls<M>(self base: Prog, places: List<Place>, rooms: List<N
                     })(λ addresses buffers written top allowed loan => emit_functions_after_lent_calls_needs<M>(site, laid, stack, top,
                         Lending(program_counts(fs), addresses, buffers, written), loan, base, places, names, fs,
                         λ (f: Nat) (b: Nat) => marked(marks_row(program_rows(fs), f), b),
-                        program_rowed_needs(fs, Bool::both(both).right),
+                        program_rowed_needs(fs, Bool::both(Bool::both(both).left).right),
                         table_room(rooms), allowed))
                 },
             })(refl)

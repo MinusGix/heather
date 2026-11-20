@@ -641,14 +641,15 @@ fn List::widths_agree(self nodes: List<Node>, written: List<Port>) → Bool {
 // inputs and nodes within the registers no word may live in
 // (`scratch_pool`), so whatever homes the words get, in evaluation order
 // and no input written (`leaf_checks`), values read at their widths. Its
-// values stay in registers, so it is the better leaf. `leaf_checks` less its
+// values stay in registers, so it is the better leaf. `leaf_checks` (its
+// nodes total: no divide by a word yet) less its
 // register checks, which hold of the pool's slices whatever the counts
 // (RBX is not in the pool, and the pool repeats no register), with the
 // inputs found once: a tool's lowering runs this for every node it packs.
 fn List::fits_registers(self nodes: List<Node>) → Bool {
     let inputs = nodes_inputs(nodes);
     nodes_pure(nodes) && ((inputs.len() + nodes.len()).leb(scratch_pool().len())
-        && ((nodes_evaluable(nodes) && ports_absent(inputs, nodes_writes(nodes))) && nodes.widths_agree([])))
+        && ((nodes_evaluable(nodes) && ports_absent(inputs, nodes_writes(nodes))) && (nodes.widths_agree([]) && nodes_total(nodes))))
 }
 
 // Whether the leaf so far takes the next node, as `Prog::computes` would.

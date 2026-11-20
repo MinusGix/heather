@@ -288,7 +288,24 @@ impl Walk<'_> {
                 Err(Unresolved::Missing(e) | Unresolved::Refused(e)) => return Err(e),
             }
         }
-        if let Some((path, closure)) = self.common_prelude()?
+        let common = self.common_prelude()?;
+        // The paths it writes (`fs::read`): each that names a module is
+        // loaded for it without an import, visible qualified only
+        // (docs/language/modules-design.md §3.8). A path that names no file
+        // is a type's or a function's, and the elaborator reads it so.
+        for written in heather_syntax::written_paths(&src) {
+            if written == name || written == heather_elab::PRELUDE_MODULE || imports.iter().any(|(m, _)| *m == written) {
+                continue;
+            }
+            // A path naming a module that imports this one is a function's
+            // or a type's (`nat::rec` read in a module `nat` imports): no cycle.
+            if let Ok(path) = self.resolve(&written, &canon)
+                && !self.reaches(&path, &canon)
+            {
+                imports.push((written, path));
+            }
+        }
+        if let Some((path, closure)) = common
             && !closure.contains(&name)
             && !imports.iter().any(|(m, _)| m == heather_elab::COMMON_MODULE)
         {
@@ -304,6 +321,44 @@ impl Walk<'_> {
         self.out.push(Module { name, path: canon, src });
         self.imports.push(imports.into_iter().map(|(_, dep)| self.done[&dep.canonicalize().expect("visited")].clone()).collect());
         Ok(())
+    }
+
+    /// Whether the module at `path` reaches `from` or a module being visited,
+    /// by its imports, its written paths and the common prelude every module
+    /// outside the prelude's closure imports: loading it for `from` would
+    /// close a cycle. A module already visited reaches neither.
+    fn reaches(&mut self, path: &Path, from: &Path) -> bool {
+        let common = match &self.common {
+            Some(Some((path, _))) => Some(path.clone()),
+            _ => None,
+        };
+        let mut seen: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+        let mut todo = vec![path.to_path_buf()];
+        while let Some(next) = todo.pop() {
+            let Ok(canon) = next.canonicalize() else { continue };
+            if canon == from || self.stack.iter().any(|(p, _)| *p == canon) {
+                return true;
+            }
+            if self.done.contains_key(&canon) || !seen.insert(canon.clone()) {
+                continue;
+            }
+            let src = match self.overlays.get(&canon) {
+                Some(src) => src.clone(),
+                None => match std::fs::read_to_string(&canon) {
+                    Ok(src) => src,
+                    Err(_) => continue,
+                },
+            };
+            let name = module_name(&canon).unwrap_or_default();
+            let written = heather_syntax::written_paths(&src).into_iter().filter(|m| *m != name);
+            for dep in heather_syntax::leading_imports(&src).into_iter().map(|i| i.module).chain(written) {
+                if let Ok(dep) = self.resolve(&dep, &canon) {
+                    todo.push(dep);
+                }
+            }
+            todo.extend(common.clone());
+        }
+        false
     }
 
     /// The common prelude's file and the names of its closure, found on the

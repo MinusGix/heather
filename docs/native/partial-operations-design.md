@@ -166,6 +166,74 @@ register carries a proof), and they move into the statement:
 - **The planner** keeps RAX and RDX free across a `DIV` row, as it does for
   the reciprocal rows (`Operation::writes_fixed`).
 
+### 6.1 What building round 2 showed (2026-11-20)
+
+Three refinements of the above, found while building:
+
+- **`Defined` is a decision computed beside `eval`.** `eval` recurses
+  through sequences, branches, loops (one valuation per pass) and calls, and
+  a divide's requirement must hold at every valuation it meets there. So
+  `Defined` is a `Bool` with `eval`'s own recursion
+  (`StructuredRegion::defined_over`, `loop_defined`), with calls asking the
+  callee's own decision (`Defines()`, built program-wide as `Answers()`
+  is). `Operation::Gives` takes the `Requires` proof from a true bit. The
+  certificate's premise is then `program_defined(functions, f, arguments) =
+  True`: decidable at run time, which is what the safe Rust wrapper of §9's
+  option 2 tests.
+- **The lowering's statement does change, in one place.** A node's
+  equation gives the lowering "the divisor is not zero", but the block
+  theorem also needs `NoFaults` at the state the `DIV` meets, which only a
+  `Keeps` chain knows (the registers it ran through). Rather than add a
+  conjunct to every `Keeps` proof (about 160 sites, nearly all of code that
+  cannot fault), a second family `Guards` is proved for `lower_nodes` only:
+  the code of each node is checked by evaluation to be free of instructions
+  that may fault, or to be a divide's row, and the divide's case reads the
+  divisor's register through the `Keeps` of the moves before it. The
+  lowered code goes to the program as an `Asm` item whose verdict is
+  `block_flags`, and its block theorem takes `NoFaults` from `Guards`.
+- **`rt_lower` is where rounds 2 and 3 meet.** `rt_lower` proves each node's
+  equation from `rt`'s meaning; at a divide it needs the requirement at the
+  operands' values, which is `Tm::Safe`. So `Tm::LowerHolds` takes `Safe`
+  in the same change that makes the equation partial, and divide-by-a-
+  constant keeps working because its `Safe` is closed and decided by
+  evaluation.
+
+### 6.2 What round 2 built
+
+- **Rows prove they do not fault.** `Row::Computes` gives, under the
+  operation's requirement at the operands it reads, `NoFaults` of the row's
+  code beside its result. Every row but the divide's proves it by
+  `no_divides` (evaluated); the divide by a word, `XOR EDX, EDX; DIV r`
+  (`word_divide_reads`), by `div_fits_cleared`: with RDX cleared, `DIV`
+  faults only on a zero divisor. The quotient is left in RAX and the
+  remainder in RDX (`div_of_word`); a divisor in RAX or RDX is refused and
+  placed elsewhere.
+- **`Guards` beside `Keeps`, for the nodes only.** `lower_nodes_guards`:
+  from a state the file describes, where the nodes' equations hold, no
+  instruction of their code faults. An operation's node takes it from its
+  row through `File::apply_row_guards` (the placing moves are MOVs,
+  `place_calm`); every other node's code is checked to hold no divide by
+  `Node::lower_checked`, which refuses it otherwise, so no lemma per
+  lowering is needed. `Keeps` is unchanged.
+- **One item more in the machine's programs: `Asm::Guarded`,** the same
+  bytes as a `Block`, whose laid-out check is `block_flags` (flags only) and
+  whose run (`Site::runs_guarded`, and its `wp_item`) takes `NoFaults` at
+  the state it starts from. A leaf is laid out by `Asm::of_code`: a `Block`
+  where its code holds no divide, so every program compiled before is laid
+  out, and certified, as it was. The leaf sites of the structured and the
+  call lowerings (`emit_nodes`, `emit_kept_nodes`) use it; a leaf before a
+  table read or a wide store keeps `Block`, so a divide there is refused at
+  layout until those sites take it too.
+- **Certificates.** The certificate's premise is `program_defined`; the
+  generator proves it from `program_total` (no divide anywhere), checked a
+  function at a time as the scan is. A program that divides needs its
+  definedness from round 3's `Safe`. Two-word results
+  (`compiled_computes_both`) take the same premise, read at the last
+  function by `program_defined_last`. A source program's functions link
+  only when total (`program_linkable` checks `program_total`), so a call
+  between them is defined (`Target::answers_of`); a source program that
+  divides waits for round 3 there too.
+
 ## 7. The machine: `DIV` and a block that may fault
 
 This is the trust-base part, the same kind as `IMUL`/`MUL` in PR #811.

@@ -33,6 +33,6 @@ theorem two_consts_compile<M>(state: MachineState<M>, body: Lowered,
     eval_nodes(two_consts().optimised([1]), λ v k => BitVec::zero(), w, 1) =
         run_nodes(two_consts(), λ v k => BitVec::zero(), Nil).values(w, 1) {
     two_consts().compiled_runs<M>([1], λ v k => BitVec::zero(), Nil, [Into(Rax)], File::empty(), body, state,
-        trivial, trivial, lowered, File::empty_represents(eval_nodes(two_consts().optimised([1]), λ v k => BitVec::zero()), state.gprs))
-        .right(1, Inl(refl), w)
+        trivial, trivial, lowered, File::empty_represents(eval_nodes(two_consts().optimised([1]), λ v k => BitVec::zero()), state.gprs),
+        trivial).right(1, Inl(refl), w)
 }

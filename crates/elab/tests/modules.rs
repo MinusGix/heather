@@ -102,8 +102,21 @@ fn a_qualified_name_resolves_through_the_module() {
 }
 
 #[test]
-fn qualifying_by_a_module_that_is_not_imported_is_an_error() {
-    let e = bad(&[("a", A), ("user", "theorem t(): a::only_in_a() = 7 { refl }")]);
+fn a_module_is_reachable_by_path_without_an_import() {
+    // §3.8: writing `a::only_in_a` puts `a` in `user`'s closure, as
+    // `fs::read` would `fs`, with no `import a;`.
+    ok(&[("a", A), ("user", "theorem t(): a::only_in_a() = 7 { refl }")]);
+    // Qualified only: the path makes nothing of `a` bare.
+    let e = bad(&[("a", A), ("user", "theorem t(): a::only_in_a() = 7 { refl }\ntheorem u(): only_in_a() = 7 { refl }")]);
+    assert!(e.contains("only_in_a"), "{e}");
+    // A path in a comment or a string names no module.
+    let e = bad(&[("a", A), ("user", "// a::only_in_a\ntheorem u(): only_in_a() = 7 { refl }")]);
+    assert!(e.contains("only_in_a"), "{e}");
+}
+
+#[test]
+fn qualifying_by_a_name_that_is_no_module_is_an_error() {
+    let e = bad(&[("a", A), ("user", "theorem t(): nowhere::only_in_a() = 7 { refl }")]);
     assert!(e.contains("neither an imported module nor a type"), "{e}");
 }
 

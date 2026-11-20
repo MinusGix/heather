@@ -361,6 +361,51 @@ theorem block_reads_no_faults<M>(instructions: List<Instruction>): (defined: Def
     }
 }
 
+// Whether no instruction of the block can fault: every block but one
+// that divides. A block of these needs no premise to run (`no_divides_safe`).
+fn no_divides(instructions: List<Instruction>) → Bool {
+    match instructions { Nil => True, Cons(instruction, rest) => !instruction.may_fault() && no_divides(rest) }
+}
+
+theorem no_divides_safe<M>(instructions: List<Instruction>): no_divides(instructions) = True →
+    (s: MachineState<M>) → NoFaults(instructions, s)
+{
+    match instructions {
+        Nil => λ _ _ => trivial,
+        Cons(instruction, rest) => λ ok s =>
+            ⟨instruction.never_faults(s.gprs, not_true(and_true_left(ok))),
+             no_divides_safe<M>(rest, and_true_right(ok), execute_normal(decoded_canonical(instruction), s))⟩,
+    }
+}
+
+// Two blocks run one after the other fault nowhere if neither does where
+// it starts.
+theorem no_faults_append<M>(first: List<Instruction>): (second: List<Instruction>) → (s: MachineState<M>) →
+    NoFaults(first, s) → NoFaults(second, execute_block_normal(first, s)) → NoFaults(first ++ second, s)
+{
+    match first {
+        Nil => λ second s _ rest => rest,
+        Cons(instruction, more) => λ second s here rest =>
+            ⟨here.left, no_faults_append<M>(more, second, execute_normal(decoded_canonical(instruction), s), here.right, rest)⟩,
+    }
+}
+
+theorem block_flags_within(instructions: List<Instruction>): (a, b: DefinedFlags) → a.within(b) = True →
+    block_flags(instructions, a) = True → block_flags(instructions, b) = True {
+    match instructions {
+        Nil => λ a b w ok => refl,
+        Cons(instruction, rest) => λ a b w ok =>
+            and_true_intro(instruction.reads_within(a, b, w, and_true_left(ok)),
+                block_flags_within(rest, instruction.defines(a), instruction.defines(b), instruction.defines_within(a, b, w),
+                    and_true_right(ok))),
+    }
+}
+
+theorem block_flags_from_none(instructions: List<Instruction>, ok: block_flags(instructions, DefinedFlags::none()) = True,
+    defined: DefinedFlags): block_flags(instructions, defined) = True {
+    block_flags_within(instructions, DefinedFlags::none(), defined, refl, ok)
+}
+
 // The sixteen x86 condition codes (Jcc, SETcc), in the manual's encoding
 // order: each odd code is its even neighbour negated. `condition_holds` is the
 // manual's table over the flags; no code reads AF.

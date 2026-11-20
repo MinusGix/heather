@@ -683,7 +683,14 @@ fn check(opts: &Opts, files: &[String]) -> ExitCode {
         let imports: Vec<Vec<String>> = modules
             .iter()
             .enumerate()
-            .map(|(i, m)| heather_cli::semantic::module_imports(&m.name, &m.src, common_at.is_some_and(|c| c < i)))
+            .map(|(i, m)| {
+                // Not a module after it: a written path (§3.8) can name one,
+                // which the loader did not load for it.
+                heather_cli::semantic::module_imports(&m.name, &m.src, common_at.is_some_and(|c| c < i))
+                    .into_iter()
+                    .filter(|d| modules[i..].iter().all(|later| later.name != *d))
+                    .collect::<Vec<_>>()
+            })
             .collect();
         // What each module still to come needs, so a finished module's world
         // goes once nothing left imports it (`docs/infrastructure/module-dag-design.md` §8).

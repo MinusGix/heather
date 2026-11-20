@@ -107,7 +107,7 @@ inductive Node {
     // unfolding: `rotate_right_of_shifts`); the lowering takes `width` 32.
     RotateRight(width: Nat, output: Nat, value: Nat, amount: Nat),
     // An operation of two words named by its row
-    // (`function_ir_operation`): `op.meaning(left, right)` at `width`.
+    // (`function_ir_operation`): `op.meaning(left, right, needs)` at `width`, stated where `op.Requires(left, right)` holds (`Operation::Gives`).
     Apply(op: Operation, width: Nat, output: Nat, left: Nat, right: Nat),
 }
 
@@ -870,7 +870,7 @@ fn NodeHolds(values: Valuation(), node: Node, buffers: Buffers() := Nil) → Typ
         RotateRight(width, output, value, amount) =>
             values(width, output) = values(width, value).rotr(amount),
         Apply(op, width, output, left, right) =>
-            values(width, output) = op.meaning(values(width, left), values(width, right)),
+            op.Gives(width, values(width, left), values(width, right), values(width, output)),
     }
 }
 

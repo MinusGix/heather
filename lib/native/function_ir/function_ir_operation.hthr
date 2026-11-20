@@ -7,11 +7,12 @@
 // the theorem that the instructions leave the meaning. The next operation
 // is a constructor here, its meaning, and its row there.
 //
-// The meaning is Heather's, at every width, total: a shift by a word is
-// zero from the width up, and division by zero is `BitVec::udiv`'s and
-// `urem`'s answer. A row whose instructions compute something else at some
-// operands (x86 masks a shift's count, faults on a zero divisor) fixes
-// that up in its own instructions, or is not offered for those operands.
+// The meaning is Heather's, at every width. A shift by a word is total and
+// zero from the width up; a row whose instructions compute something else
+// (x86 masks a shift's count) fixes that up in its own instructions. A
+// divide requires its divisor not to be zero (`Requires`) and means
+// nothing anywhere else: every equation that reads `meaning` holds a proof
+// of the requirement.
 //
 // Constructors are appended, never reordered: `code` numbers them, and the
 // numbers are written into certificates.
@@ -34,7 +35,25 @@ inductive Operation {
     URem,
 }
 
-fn Operation::meaning(self op: Operation, {w: Nat}, x, y: BitVec(w)) → BitVec(w) {
+// What an operation asks of its operands: nothing, but that a divisor is
+// not zero (docs/native/partial-operations-design.md §2). Every level
+// states its equation for an operation only where this holds, so no
+// statement anywhere says what a quotient by zero is.
+fn Operation::Requires(self op: Operation, {w: Nat}, x, y: BitVec(w)) → Type {
+    match op {
+        Mul => True,
+        ShlBy => True,
+        ShrBy => True,
+        UDiv => y ≠ BitVec::zero(),
+        URem => y ≠ BitVec::zero(),
+    }
+}
+
+// The word the operation's code leaves where its requirement holds. A
+// runner (`rt`'s `sem`, FunctionIR's `eval`) computes it at every operand,
+// as `BitVec::udiv` does; what it gives where the requirement fails is the
+// runner's business and no equation reads it.
+fn Operation::run(self op: Operation, {w: Nat}, x, y: BitVec(w)) → BitVec(w) {
     match op {
         Mul => x.mul(y),
         ShlBy => x.shift_left(y.toNat()),
@@ -42,6 +61,86 @@ fn Operation::meaning(self op: Operation, {w: Nat}, x, y: BitVec(w)) → BitVec(
         UDiv => x.udiv(y),
         URem => x.urem(y),
     }
+}
+
+// The operation's meaning, which takes the proof of its requirement.
+fn Operation::meaning(self op: Operation, {w: Nat}, x, y: BitVec(w), needs: op.Requires(x, y)) → BitVec(w) {
+    op.run(x, y)
+}
+
+// A node's equation for the operation: the requirement holds at its
+// operands, and the output is the meaning there.
+record Operation::Gives(self op: Operation, w: Nat, x, y, output: BitVec(w)) {
+    needs: op.Requires(x, y),
+    equation: output = op.meaning(x, y, needs),
+}
+
+// The equation carried along equal words.
+theorem Operation::gives_cong(self op: Operation, w: Nat, {x, y, output, x2, y2, output2: BitVec(w)},
+    held: op.Gives(w, x, y, output), ex: x = x2, ey: y = y2, eo: output = output2): op.Gives(w, x2, y2, output2)
+{
+    Operation::Gives(
+        needs := j(ex, λ a _ => op.Requires(a, y2), j(ey, λ b _ => op.Requires(x, b), held.needs)),
+        equation := trans(sym(eo), trans(held.equation, trans(j(ex, λ a _ => op.run(x, y) = op.run(a, y), refl),
+            j(ey, λ b _ => op.run(x2, y) = op.run(x2, b), refl)))))
+}
+
+// Two outputs that hold the operation's value at the same operands agree.
+theorem Operation::gives_same(self op: Operation, w: Nat, {x, y, output, other: BitVec(w)},
+    here: op.Gives(w, x, y, output), there: op.Gives(w, x, y, other)): output = other
+{
+    let a: (output = op.run(x, y)) = here.equation;
+    let b: (other = op.run(x, y)) = there.equation;
+    trans(a, sym(b))
+}
+
+// The requirement decided, at any operands: what a runner checks where
+// `run` is about to give an answer the meaning does not (`requires_of_bit`).
+fn Operation::requires_bit(self op: Operation, {w: Nat}, x, y: BitVec(w)) → Bool {
+    match op {
+        Mul => True,
+        ShlBy => True,
+        ShrBy => True,
+        UDiv => !y.eq_bit(BitVec::zero()),
+        URem => !y.eq_bit(BitVec::zero()),
+    }
+}
+
+theorem Operation::nonzero_of_bit({w: Nat}, y: BitVec(w), ok: (!y.eq_bit(BitVec::zero())) = True): y ≠ BitVec::zero() {
+    λ e => absurd(j(BitVec::eq_bit_self(w, BitVec::zero()), λ b _ => (!b) = True,
+        j(e, λ z _ => (!z.eq_bit(BitVec::zero())) = True, ok)))
+}
+
+theorem Operation::requires_of_bit(self op: Operation, {w: Nat}, x, y: BitVec(w), ok: op.requires_bit(x, y) = True):
+    op.Requires(x, y)
+{
+    (match op as λ o => o.requires_bit(x, y) = True → o.Requires(x, y) {
+        Mul => λ _ => trivial,
+        ShlBy => λ _ => trivial,
+        ShrBy => λ _ => trivial,
+        UDiv => λ yes => Operation::nonzero_of_bit(y, yes),
+        URem => λ yes => Operation::nonzero_of_bit(y, yes),
+    })(ok)
+}
+
+theorem Operation::bit_of_nonzero({w: Nat}, y: BitVec(w), nonzero: y ≠ BitVec::zero()): (!y.eq_bit(BitVec::zero())) = True {
+    match same: y.eq_bit(BitVec::zero()) {
+        True => false_elim(nonzero(BitVec::eq_of_eq_bit(w, y, BitVec::zero(), same))),
+        False => refl,
+    }
+}
+
+// And back: where the requirement holds, its decision says so.
+theorem Operation::bit_of_requires(self op: Operation, {w: Nat}, x, y: BitVec(w), needs: op.Requires(x, y)):
+    op.requires_bit(x, y) = True
+{
+    (match op as λ o => o.Requires(x, y) → o.requires_bit(x, y) = True {
+        Mul => λ _ => refl,
+        ShlBy => λ _ => refl,
+        ShrBy => λ _ => refl,
+        UDiv => λ nonzero => Operation::bit_of_nonzero(y, nonzero),
+        URem => λ nonzero => Operation::bit_of_nonzero(y, nonzero),
+    })(needs)
 }
 
 fn Operation::code(self op: Operation) → Nat {

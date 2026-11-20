@@ -1794,6 +1794,15 @@ fn placeholder(len: usize) -> GlobalCtx {
 /// (issues/std-prelude-facade.md).
 pub fn module_imports(name: &str, src: &str, common_earlier: bool) -> Vec<String> {
     let mut imports = written_imports(src);
+    // The modules its paths name, loaded without an import (§3.8 of
+    // docs/language/modules-design.md). The caller keeps those the run holds
+    // ahead of this module: a path the loader did not load for it (no such
+    // module, or one that imports this one) names none of them.
+    for path in heather_syntax::written_paths(src) {
+        if path != name && path != heather_elab::PRELUDE_MODULE && !imports.contains(&path) {
+            imports.push(path);
+        }
+    }
     let common = heather_elab::COMMON_MODULE;
     if common_earlier && name != common && !imports.iter().any(|m| m == common) {
         imports.push(common.to_string());
@@ -2049,7 +2058,7 @@ impl BuildPlan {
         for (i, m) in modules.iter().enumerate() {
             let common_earlier = common_at.is_some_and(|c| c < i);
             let mut written: Vec<String> =
-                module_imports(&m.name, &m.src, common_earlier).into_iter().filter(|d| at.contains_key(d)).collect();
+                module_imports(&m.name, &m.src, common_earlier).into_iter().filter(|d| at.get(d).is_some_and(|&j| j < i)).collect();
             written.sort();
             written.dedup();
             let c = canon_over(&written, &|d| &canon[at[d]].order, &|d| &imports[at[d]]);

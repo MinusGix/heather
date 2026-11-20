@@ -184,7 +184,7 @@ impl ModulePassMut<'_> {
         // (`docs/infrastructure/instrumentation-design.md` §5).
         let file = stats::timed(stats::Timer::Parse, || parse_file(src))?;
         let lint_source = lint::Source::new(src, self.policy.lint_profile);
-        self.enter_module(module, &file)?;
+        self.enter_module(module, &file, src)?;
         DeltasMut(self).slice_enter(module);
         let plan = self.begin_container(&file);
         for (idx, item) in file.items.iter().enumerate() {
@@ -277,7 +277,7 @@ impl ModulePassMut<'_> {
     /// Set the scope for a module about to be elaborated: its own name plus
     /// its written imports, each checked for existence and for the one
     /// import-time error the regime has (two lists claiming one name).
-    fn enter_module(&mut self, module: &str, file: &heather_syntax::File) -> R<()> {
+    fn enter_module(&mut self, module: &str, file: &heather_syntax::File, src: &str) -> R<()> {
         // Re-entering a module is *not* an error here, and it is **additive**:
         // a caller that feeds one accumulator two chunks of the same module
         // (every test that calls `check_source` twice, and every REPL-shaped
@@ -401,6 +401,18 @@ impl ModulePassMut<'_> {
                 exported: Vec::new(),
             });
         }
+        // The modules its paths name (`fs::read`) without an import: in its
+        // closure, qualified only (docs/language/modules-design.md §3.8). A
+        // path naming no module in this world is a type's or a function's.
+        for path in heather_syntax::written_paths(src) {
+            if path != module
+                && self.names.has_module(&path)
+                && !scope.imports_module(&path)
+                && !scope.paths.contains(&path)
+            {
+                scope.paths.push(path);
+            }
+        }
         self.names.enter_scope(scope);
         // The interface boundary is per module: the definitions this module
         // declares are transparent in it, every other module's are withheld.
@@ -450,7 +462,7 @@ impl ModulePassMut<'_> {
             Err(e) => return vec![e.into()],
         };
         let lint_source = lint::Source::new(src, self.policy.lint_profile);
-        if let Err(e) = self.enter_module(module, &file) {
+        if let Err(e) = self.enter_module(module, &file, src) {
             return vec![e];
         }
         DeltasMut(self).slice_enter(module);

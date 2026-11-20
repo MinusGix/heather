@@ -37,11 +37,12 @@ import tactic;
 theorem returns_is_compiled_returns<M>(functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, code: Prog,
     lowered: lower_program_roomed(functions, placement, [], rooms) = Some(code), evaluable: program_evaluable(functions).IsTrue(),
     machine: Machine<M>, origin: BitVec(64), last: List<BitVec(8)>, f: Nat, defined: f + 1 <= functions.len(),
-    arguments: List<BitVec(64)>, arity: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), answer: BitVec(64),
+    arguments: List<BitVec(64)>, arity: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(),
+    meets: program_defined(functions, f, arguments).IsTrue(), answer: BitVec(64),
     evaluates: program_eval(functions, f, arguments) = answer):
     code.Returns(machine, origin, last, f, rooms(f), arguments, answer) {
     compiled_returns<M>(functions, placement, rooms, code, lowered, evaluable, machine.fetch, machine.data, last, origin, machine.stack,
-        f, defined, arguments, arity, answer, evaluates)
+        f, defined, arguments, arity, meets, answer, evaluates)
 }
 
 // ---------------------------------------------------------------------------
@@ -64,7 +65,8 @@ fn leaf_rooms() → Nat → Nat { λ (_: Nat) => 0 }
 // Whatever code the lowering makes of `sum`, it adds.
 theorem sum_computes<M>(placement: List<Place>, code: Prog, lowered: lower_program_roomed([sum()], placement, [], leaf_rooms()) = Some(code),
     machine: Machine<M>, a, b: BitVec(64)): code.Computes(machine, 0, 0, [a, b], a + b) {
-    compiled_computes<M>([sum()], placement, leaf_rooms(), code, lowered, trivial, machine, 0, trivial, [a, b], trivial, a + b, refl)
+    compiled_computes<M>([sum()], placement, leaf_rooms(), code, lowered, trivial, machine, 0, trivial, [a, b], trivial,
+        program_total_defined([sum()], [], trivial, 0, [a, b]), a + b, refl)
 }
 
 // ---------------------------------------------------------------------------
@@ -133,7 +135,7 @@ theorem clamp_within(x: u64, {lo, hi: u64}, ordered: lo <= hi): lo <= clamp(x, l
 theorem clamp_computes<M>(placement: List<Place>, code: Prog, lowered: lower_program_roomed(clamp::program, placement, [], leaf_rooms()) = Some(code),
     machine: Machine<M>, x, lo, hi: u64): code.Computes(machine, 0, 0, [x, lo, hi], clamp(x, lo, hi)) {
     compiled_computes<M>(clamp::program, placement, leaf_rooms(), code, lowered, trivial, machine, 0, trivial, [x, lo, hi], trivial,
-        clamp(x, lo, hi), clamp::agrees(x, lo, hi))
+        program_total_defined(clamp::program, [], trivial, 0, [x, lo, hi]), clamp(x, lo, hi), clamp::agrees(x, lo, hi))
 }
 
 // So a fact about the source function is a fact about what the machine
@@ -168,7 +170,7 @@ theorem sum_agrees(words: List<BitVec(64)>, length: words.len() = 2):
 theorem sum_implements<M>(placement: List<Place>, code: Prog, lowered: lower_program_roomed([sum()], placement, [], leaf_rooms()) = Some(code), machine: Machine<M>):
     code.Implements(machine, 0, 0, 2, λ (a: BitVec(64)) (b: BitVec(64)) => a + b) {
     compiled_implements<M>([sum()], placement, leaf_rooms(), code, lowered, trivial, machine, 0, trivial, 2, trivial, λ (a: BitVec(64)) (b: BitVec(64)) => a + b,
-        sum_agrees)
+        λ words _ => program_total_defined([sum()], [], trivial, 0, words), sum_agrees)
 }
 
 // A function of words is a function of spans lent nothing, and back.

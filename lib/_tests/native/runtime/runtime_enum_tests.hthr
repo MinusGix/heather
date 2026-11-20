@@ -102,9 +102,9 @@ theorem pick_side_runs(): program_eval(pick_side::program, 0, [BitVec::ofNat(1),
 
 // ---------------------------------------------------------------------------
 // An enum returned, as its tag word: a constructor is its index, a
-// constant. The word returned is clamped at the last tag (`Ty::clamp`), so
-// that a function that returns a parameter's word unchanged returns a tag
-// on every word it is called with.
+// constant. Nothing is added at the return: the program is linked at the
+// words each function admits (an enum's word a tag), so a word that is no
+// tag is outside every contract.
 
 runtime fn shade_of(x: u64) → Shade { if x < 10 { Dark } else { if x < 20 { Mid } else { Light } } }
 
@@ -141,9 +141,9 @@ theorem shade_same_agrees(s: Shade):
     shade_same::agrees(s)
 }
 
-// A word that is no tag reads as the last constructor, and the clamp
-// returns that constructor's tag.
-theorem shade_same_past(): program_eval(shade_same::program, 0, [BitVec::ofNat(7)]) = 2 { refl }
+// Nothing is clamped: a word that is no tag, which no contract passes
+// (`Ty::Admits`), comes back as it went in.
+theorem shade_same_past(): program_eval(shade_same::program, 0, [BitVec::ofNat(7)]) = 7 { refl }
 
 // ---------------------------------------------------------------------------
 // An enum passed to a call, as its tag word: the callee reads it back as

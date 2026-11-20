@@ -116,9 +116,12 @@ theorem EnumInfo::chooses(self e: EnumInfo, eq: Bool, R: Type, a: Nat → R, v: 
 }
 
 // The constructor a word names: its index, the last constructor past it.
-// This is how compiled code reads a word that is no tag (its compares fall
-// through to the last arm); a contract states only the words that are tags.
+// Only a tag is ever passed (`EnumInfo::Names`, `Ty::Admits`); past the
+// last tag this is the meaning's total reading, which no code reaches.
 fn EnumInfo::read(self e: EnumInfo, x: BitVec(64)) → e.E { e.of(x.toNat().min(e.last)) }
+
+// A word that is the tag of `v`, one of the enum's.
+fn EnumInfo::Names(self e: EnumInfo, x: BitVec(64), v: e.E) → Type { (x.toNat() = e.tag(v)) ∧ (x.toNat() <= e.last) }
 
 // No enum: what a record's entry carries.
 fn EnumInfo::none() → EnumInfo {
@@ -595,7 +598,7 @@ fn Op::sem(self o: Op, tys: Nat → RecInfo) → Ty::Arrows(tys, o.params(), o.r
         Lshr(w, k) => λ (x: BitVec(w)) => x.shift_right(k),
         Ashr(w, k) => λ (x: BitVec(w)) => x.arithmetic_shift_right(k),
         Sext(n, extra) => λ (x: BitVec(n + 1)) => x.sign_extend(extra),
-        Apply(o, w) => λ (x: BitVec(w)) (y: BitVec(w)) => o.meaning(x, y),
+        Apply(o, w) => λ (x: BitVec(w)) (y: BitVec(w)) => o.run(x, y),
         TagIs(i, k) => λ (v: tys(i).alts.E) => tys(i).alts.tag(v).same(k),
     }
 }

@@ -233,13 +233,14 @@ theorem compiler_correct_on<M>(functions: List<Function>, placement: List<Place>
     lowered: lower_program_roomed(functions, placement, counts, rooms) = Some(code), evaluable: program_evaluable(functions).IsTrue(),
     machine: Machine<M>, f: Nat, defined: f < functions.len(), borrows: List<Borrow>, taken: lent_count(counts, f) = borrows.len(),
     within: program_stores_within(functions, Borrow::marks(borrows)).IsTrue(), words: List<BitVec(64)>,
-    arity: arity_fits(program_arity(functions, f), (Borrow::words(borrows) ++ words).len()).IsTrue()):
+    arity: arity_fits(program_arity(functions, f), (Borrow::words(borrows) ++ words).len()).IsTrue(),
+    meets: program_run_defined(functions, Borrow::bytes(borrows), f, Borrow::words(borrows) ++ words).IsTrue()):
     code.ComputesOn(machine, f, rooms(f), borrows, words,
         program_run(functions, Borrow::bytes(borrows), f, Borrow::words(borrows) ++ words).word,
         program_run(functions, Borrow::bytes(borrows), f, Borrow::words(borrows) ++ words).buffers) {
     code.computes_on(machine, f, rooms(f), borrows, words, counts, λ (b: Nat) => marked(Borrow::marks(borrows), b), taken, λ b held => held,
         program_run(functions, Borrow::bytes(borrows), f, Borrow::words(borrows) ++ words),
         λ top loan origin last => compiler_correct_over<M>(functions, placement, rooms, counts, Borrow::marks(borrows), code, lowered, evaluable, within,
-            machine, top, Borrow::addresses(borrows), Borrow::bytes(borrows), loan, f, defined, Borrow::words(borrows) ++ words, arity, origin,
-            last))
+            machine, top, Borrow::addresses(borrows), Borrow::bytes(borrows), loan, f, defined, Borrow::words(borrows) ++ words, arity, meets,
+            origin, last))
 }

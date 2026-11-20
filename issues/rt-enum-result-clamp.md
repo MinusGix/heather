@@ -1,6 +1,6 @@
 ---
 title: Drop an enum result's clamp where the word returned is already a tag
-status: open
+status: closed
 labels: [native,runtime-fn,performance]
 area: heather-in-heather
 milestone: [nh-front]
@@ -45,3 +45,12 @@ tag as a whole 64-bit word. Compilers write the 32-bit register, which
 zero-extends, so callers work in practice; reading an enum parameter
 through a 32-bit `Resize` at entry, as a `u32` parameter is read, would
 make the contract the ABI's.
+
+## Resolution (2026-11-20)
+
+Route 2, at Minus's ask to remove the clamp entirely: agreements and the
+program's linking are stated at admitted words (`Ty::Admits`,
+`program_linked_files` with `admits`), `Ty::Holds` at `Enum` is the exact
+tag, and `Ty::clamp` is deleted. docs/native/runtime-fn-setups-design.md
+§16.16, "Linking at admitted words". The ABI point above belongs to a C
+`datarepr` of an enum, not to the default tag word.

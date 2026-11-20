@@ -112,11 +112,12 @@ fn skip_nodes(nodes: List<Node>, placement: List<Place>) → List<Place> {
     }
 }
 
-// A dataflow leaf: its nodes as one block.
+// A dataflow leaf: its nodes as one block (one run under `NoFaults` where
+// it divides, `Asm::of_code`).
 fn emit_nodes(prog: Prog, file: File, nodes: List<Node>, placement: List<Place>, names: Nat) → Option<Emitted> {
     match lower_nodes(nodes, placement, file) {
         None => None,
-        Some(lowered) => Some(Emitted(At(prog, 0, Block(lowered.code)), lowered.file, skip_nodes(nodes, placement), names)),
+        Some(lowered) => Some(Emitted(At(prog, 0, Asm::of_code(lowered.code)), lowered.file, skip_nodes(nodes, placement), names)),
     }
 }
 
@@ -207,18 +208,18 @@ theorem emit_nodes_emits<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(
     MayEmit<M>(site, values, prog, file, NodesHold(values, nodes), emit_nodes(prog, file, nodes, placement, names)) {
     (match lower_nodes(nodes, placement, file) as λ lowered =>
         MayKeep<M>(values, file, NodesHold(values, nodes), lowered) →
+        MayGuard<M>(values, file, NodesHold(values, nodes), lowered) →
         MayEmit<M>(site, values, prog, file, NodesHold(values, nodes), match lowered {
             None => None,
-            Some(l) => Some(Emitted(At(prog, 0, Block(l.code)), l.file, skip_nodes(nodes, placement), names)),
+            Some(l) => Some(Emitted(At(prog, 0, Asm::of_code(l.code)), l.file, skip_nodes(nodes, placement), names)),
         }) {
-        None => λ _ => trivial,
-        Some(lowered) => λ keeps => ⟨prog.within_then(0, Block(lowered.code)),
-            λ within => site.runs_block(site.program.laid_out_fits(laid), within.witness, prog, 0, lowered.code, within.proof,
-                site.program.block_reads_at(laid, within.witness, prog, 0, lowered.code, within.proof),
+        None => λ _ _ => trivial,
+        Some(lowered) => λ keeps guards => ⟨prog.within_then(0, Asm::of_code(lowered.code)),
+            λ within => site.runs_code(laid, within.witness, prog, 0, lowered.code, within.proof,
                 λ (g: Gprs) => file.Represents(values, g) ∧ NodesHold(values, nodes),
                 λ (g: Gprs) => lowered.file.Represents(values, g),
-                λ s held => keeps(s, held.left, held.right))⟩,
-    })(lower_nodes_keeps<M>(values, nodes, placement, file))
+                λ s held => ⟨guards(s, held.left, held.right), keeps(s, held.left, held.right)⟩)⟩,
+    })(lower_nodes_keeps<M>(values, nodes, placement, file), lower_nodes_guards<M>(values, nodes, placement, file))
 }
 
 // Where the condition's register is nonzero, the condition holds and its

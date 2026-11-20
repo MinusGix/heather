@@ -62,7 +62,7 @@ theorem block_runs<M>(code, rest: List<Instruction>, state: MachineState<M>):
 // placement, then the rest from the file it left.
 fn ConsLowered(node: Node, rest: List<Node>, file: File, body: Lowered) → Type {
     ∃ place: Place, ∃ first: Lowered, ∃ later: List<Place>, ∃ after: Lowered,
-        (node.lower_at(place, file) = Some(first)) ∧ ((lower_nodes(rest, later, first.file) = Some(after)) ∧ (body = first.then(after)))
+        (node.lower_checked(place, file) = Some(first)) ∧ ((lower_nodes(rest, later, first.file) = Some(after)) ∧ (body = first.then(after)))
 }
 
 theorem lower_nodes_cons(node: Node, rest: List<Node>, file: File, body: Lowered): (placement: List<Place>) →
@@ -70,7 +70,7 @@ theorem lower_nodes_cons(node: Node, rest: List<Node>, file: File, body: Lowered
     λ placement => match placement {
         Nil => λ none => Option::none_ne_some(body, none, ConsLowered(node, rest, file, body)),
         Cons(place, later) => λ lowered =>
-            (match node.lower_at(place, file) as λ o => node.lower_at(place, file) = o →
+            (match node.lower_checked(place, file) as λ o => node.lower_checked(place, file) = o →
                     (match o { None => None, Some(first) => first.then_option(lower_nodes(rest, later, first.file)) }) = Some(body) →
                     ConsLowered(node, rest, file, body) {
                 None => λ _ none => Option::none_ne_some(body, none, ConsLowered(node, rest, file, body)),
@@ -123,8 +123,8 @@ theorem lower_star<M>(meant: Valuation(), end: File, tail: List<Instruction>):
                     let after = parts.proof.proof.proof.witness;
                     let eqs = parts.proof.proof.proof.proof;
                     let first_keeps: Keeps<M>(meant, file, NodeHolds(meant, node), first) =
-                        node.lower_at(place, file).all_some(λ (l: Lowered) => Keeps<M>(meant, file, NodeHolds(meant, node), l),
-                            first, eqs.left, node.lower_at_keeps<M>(meant, place, file));
+                        node.lower_checked(place, file).all_some(λ (l: Lowered) => Keeps<M>(meant, file, NodeHolds(meant, node), l),
+                            first, eqs.left, node.lower_checked_keeps<M>(meant, place, file));
                     let b2 = Pending<Instruction, MachineState<M>>(after.code ++ tail, execute_block_normal<M>(first.code, state));
                     // The first node's code, then the rest's, then the tail.
                     let at_code: (code = first.code ++ (after.code ++ tail)) =
@@ -178,7 +178,8 @@ theorem List::compiled_runs<M>(self nodes: List<Node>, out: List<Nat>, values: V
     placement: List<Place>, file: File, body: Lowered, state: MachineState<M>,
     pure: nodes_pure(nodes.optimised(out)).IsTrue(), evaluable: nodes_evaluable(nodes.optimised(out)).IsTrue(),
     lowered: lower_nodes(nodes.optimised(out), placement, file) = Some(body),
-    represents: file.Represents(eval_nodes(nodes.optimised(out), values), state.gprs)):
+    represents: file.Represents(eval_nodes(nodes.optimised(out), values), state.gprs),
+    defined: nodes_defined_over(Nil, nodes.optimised(out), values).IsTrue()):
     body.file.Represents(eval_nodes(nodes.optimised(out), values), execute_block_normal<M>(body.code, state).gprs)
         ∧ ((i: Nat) → Mem(i, out) → (w: Nat) → eval_nodes(nodes.optimised(out), values, w, i) = run_nodes(nodes, values, buffers).values(w, i)) {
     let meant = eval_nodes(nodes.optimised(out), values);
@@ -191,7 +192,7 @@ theorem List::compiled_runs<M>(self nodes: List<Node>, out: List<Nat>, values: V
         Exists(Leaf(nodes.folded([]), values, buffers), ⟨Exists([], ⟨refl, ⟨trivial, ⟨λ w id => refl, refl⟩⟩⟩),
             ⟨refl, ⟨refl, ⟨refl, λ k _ w => refl⟩⟩⟩⟩);
     let lowering: LowerMatch<M>(meant, body.file, Nil, index.fst, target, block) =
-        ⟨refl, ⟨pure, ⟨λ w id => refl, ⟨eval_nodes_holds(nodes.optimised(out), Nil, evaluable, values, meant, λ w id _ => refl),
+        ⟨refl, ⟨pure, ⟨λ w id => refl, ⟨eval_nodes_holds(nodes.optimised(out), Nil, evaluable, values, meant, λ w id _ => refl, defined),
             Exists(placement, Exists(file, Exists(body, ⟨lowered, ⟨refl, ⟨refl, represents⟩⟩⟩)))⟩⟩⟩⟩;
     let mapped = StarDiagram::runs<Leaf, Pending<Instruction, MachineState<M>>, Pair<Nat, Pair<Nat, True>>>(Leaf::Step,
         λ a b => BlockStep<M>(a, b), CompileOrder, λ k s b => CompileMatch<M>(out, meant, body.file, Nil, k, s, b),

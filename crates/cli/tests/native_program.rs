@@ -317,9 +317,9 @@ int main(void) {
 // of the same constructors in the same order. The certificate states the
 // code at every real value of the enum, its tag word passed and returned
 // (`RecInfo::enum_word`), and states no `Prog::Implements`, which would be
-// over every word. C calls it at every constructor against a reference,
-// and once with a word that is no tag, which comes back clamped to the
-// last constructor's (`Ty::clamp`).
+// over every word. C calls it at every constructor against a reference;
+// a word that is no tag is outside the contract, and the code is not
+// asked about it.
 #[test]
 fn an_enum_is_passed_and_returned_as_its_tag_word() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -356,9 +356,7 @@ int main(void) {
     for (int k = Ident; k <= Other; ++k)
         for (unsigned i = 0; i < 8; ++i)
             if (tok_settle((enum TokKind)k, cs[i]) != reference((enum TokKind)k, cs[i])) return 1;
-    // A word that is no tag, returned unchanged: clamped to `Other`'s.
-    if ((uint64_t)tok_settle((enum TokKind)7, 40) != Other) return 2;
-    puts("41 calls passed");
+    puts("40 calls passed");
     return 0;
 }
 "#).unwrap();

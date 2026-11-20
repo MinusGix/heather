@@ -151,9 +151,9 @@ theorem linked_spanned(): program_spanned(linked_program(), [3, 1, 1], [False, T
     ⟨CompileSpan::spanned(raise_from, raise_from_compile(), linked_srcs(), [1], [],
             linked_arity(linked_program().tail(), [1, 1]), linked_still(linked_program().tail(), [True, True]), refl, λ rest own => refl, trivial,
             λ rest own => refl, trivial),
-        ⟨Compile::spanned(raise, raise::compile, trivial, linked_srcs(), [1], linked_arity(linked_program().drop(2), [1]),
+        ⟨Compile::spanned(raise, raise::compile, trivial, trivial, linked_srcs(), [1], linked_arity(linked_program().drop(2), [1]),
                 linked_still(linked_program().drop(2), [True]), λ rest own => refl, trivial),
-            ⟨Compile::spanned(twice, twice::compile, trivial, linked_srcs(), [0], linked_arity([], []), linked_still([], []),
+            ⟨Compile::spanned(twice, twice::compile, trivial, trivial, linked_srcs(), [0], linked_arity([], []), linked_still([], []),
                 λ rest own => refl, trivial), trivial⟩⟩⟩
 }
 

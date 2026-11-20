@@ -118,7 +118,8 @@ theorem lending_puts<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: Li
         stack.AnsweredOver(Lending::writing([1, 1], addresses, five(), [True]), w(9), [[b(1), b(2), b(9), b(4), b(5)]])) {
     compiled_returns_marked<M>(lending(), plan_program(lending()), program_room(lending()), [1, 1], addresses, [[True], [True]], lending_program(), lending_lowers(),
         lending_evaluable(), trivial, fetch, data, last, origin, stack, top, five(), 1, trivial, loan, [a, w(5), w(1), w(4), w(1), w(9)],
-        trivial, Ending(w(9), [[b(1), b(2), b(9), b(4), b(5)]]), lending_runs(a))
+        trivial, program_total_run_defined(lending(), trivial, five(), 1, [a, w(5), w(1), w(4), w(1), w(9)]),
+        Ending(w(9), [[b(1), b(2), b(9), b(4), b(5)]]), lending_runs(a))
 }
 
 // A view lent to read, to a callee that stores into it. The lowering does
@@ -175,7 +176,8 @@ theorem renaming_puts<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: L
         stack.AnsweredOver(Lending::writing([1, 2], addresses, two(), [False, True]), w(9), [[b(1), b(2), b(3)], [b(4), b(5), b(6), b(9)]])) {
     compiled_returns_marked<M>(renaming(), plan_program(renaming()), program_room(renaming()), [1, 2], addresses, [[True], [False, True]], renaming_program(),
         renaming_lowers(), renaming_evaluable(), trivial, fetch, data, last, origin, stack, top, two(), 1, trivial, loan,
-        [a, w(3), c, w(4), w(3), w(9)], trivial, Ending(w(9), [[b(1), b(2), b(3)], [b(4), b(5), b(6), b(9)]]), renaming_runs(a, c))
+        [a, w(3), c, w(4), w(3), w(9)], trivial,
+        program_total_run_defined(renaming(), trivial, two(), 1, [a, w(3), c, w(4), w(3), w(9)]), Ending(w(9), [[b(1), b(2), b(3)], [b(4), b(5), b(6), b(9)]]), renaming_runs(a, c))
 }
 
 // ---------------------------------------------------------------------------
@@ -238,7 +240,8 @@ theorem crossed_carries<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last:
         stack.AnsweredOver(Lending::writing([2, 2], addresses, two(), [True, False]), w(6), [[b(1), b(2), b(6)], [b(4), b(5), b(6), b(7)]])) {
     compiled_returns_marked<M>(crossed(), plan_program(crossed()), program_room(crossed()), [2, 2], addresses, [[False, True], [True, False]], crossed_program(),
         crossed_lowers(), crossed_evaluable(), trivial, fetch, data, last, origin, stack, top, two(), 1, trivial, loan,
-        [a, w(3), c, w(4), w(1)], trivial, Ending(w(6), [[b(1), b(2), b(6)], [b(4), b(5), b(6), b(7)]]), crossed_runs(a, c))
+        [a, w(3), c, w(4), w(1)], trivial,
+        program_total_run_defined(crossed(), trivial, two(), 1, [a, w(3), c, w(4), w(1)]), Ending(w(6), [[b(1), b(2), b(6)], [b(4), b(5), b(6), b(7)]]), crossed_runs(a, c))
 }
 
 // crossing_whole(address, length, address, length, mid): the same with the
