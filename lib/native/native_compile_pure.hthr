@@ -1,0 +1,91 @@
+// What the compile gives a pure source (docs/native/runtime-fn-recursion-design.md
+// §6 step 3): the charges any compile picks and the ranks it checked are
+// what `Source::Pure` asks of them, so where each procedure's body keeps
+// its obligations (`Source::PureBodies`), `main` with its calls run as
+// deep as they go, charged as the compiled frames are, reads as `main`
+// threaded with each call answered by its value, for every run whose calls
+// keep within the levels the source asks for (`Source.levels`).
+import logic;
+import nat;
+import list;
+import option;
+import bool;
+import bitvec;
+import coitree;
+import coitree_eutt;
+import coitree_lag;
+import itree;
+import linux_calls;
+import linux_trees;
+import linux_world;
+import linux_world_co;
+import function_ir_state;
+import function_ir_placeless;
+import native_source;
+import native_source_co;
+import native_source_io;
+import native_source_pure;
+import native_compile;
+import native_compile_facts;
+import native_compile_correct;
+import native_alloc;
+import x86_64;
+import x86_64_asm;
+import omega;
+
+// The ranks the compile checks, read per procedure.
+fn Source::rank_of(self src: Source, p: Nat) → Nat { src.procedures.ranks(src.procedures.checks()).deep_at(p) }
+
+// A call without a check goes down the ranks the compile checked.
+theorem Source::ranked_below(self src: Source, ranked: src.ranked() = True):
+    (q: Nat) → (proc: Procedure) → src.procedures.nth(q) = Some(proc) → (p: Nat) → Mem(p, proc.body.performed()) → src.checked(p) = False → src.rank_of(p) < src.rank_of(q)
+{
+    λ q proc found p mem unc => {
+        let checks = src.procedures.checks();
+        let ranks = src.procedures.ranks(checks);
+        let parts = Bool::both(src.procedures.ranked_parts(src.main, q, proc, found, ranked));
+        let is: (0 + q = q) = omega();
+        let under_q = j(is, λ x _ => proc.body.performed().under_rank(checks, ranks, ranks.deep_at(x)).IsTrue(),
+            src.procedures.ranked_from_at(checks, ranks, 0, parts.left, q, proc, found));
+        let below = proc.body.performed().under_rank_mem(checks, ranks, ranks.deep_at(q), under_q, p, mem, unc);
+        let lt: (Succ(src.rank_of(p)) <= src.rank_of(q)) = below;
+        lt
+    }
+}
+
+// The compile's charges and ranks, with bodies that keep their
+// obligations, make a pure source.
+theorem Source::pure_compiled(self src: Source, homes: Homes, bodies: List<Frame>, ranked: src.ranked() = True, call: Writers(), spec: PureSpec,
+    kept: src.PureBodies(call, spec, λ p => src.checked(p))):
+    src.Pure(call, src.charges(homes, bodies), spec, λ p => src.checked(p), λ k p => src.room_total(homes, bodies, k, p), λ k => src.room_top(homes, bodies, k),
+        λ p => src.rank_of(p))
+{
+    Source::Pure(levels := src.charges_room(homes, bodies, ranked), bodies := kept, ranked := src.ranked_below(ranked))
+}
+
+// The theorem: a source the compile accepted, whose procedures are pure and
+// whose `main` has no loop, run with the command line `args` and its calls
+// charged as the compiled frames are, reads as `main` threaded with each
+// call answered by its value, wherever the calls that run makes keep within
+// the source's levels.
+theorem Source::pure_program_reads(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>, program: Prog, compiled: src.compile(low, homes, bodies) = Some(program),
+    spec: PureSpec, kept: src.PureBodies(program_writers(src.functions), spec, λ p => src.checked(p)), loop_free: src.main.loop_free().IsTrue(),
+    args: List<List<BitVec(8)>>, io: Io,
+    within: src.main.calls_ok(program_writers(src.functions), src.pure_answer(spec), src.pure_within(spec, λ p => src.checked(p), src.levels), src.start(args), io).IsTrue()):
+    Eutt<Mutated<Io, Flow>>(Events::none(), Io::against_co(src.main_tree_co(args, src.charges(homes, bodies), src.left(homes, bodies)), io),
+        CRet(Stmt::thread_by(src.main, program_writers(src.functions), src.pure_answer(spec), src.start(args), io)))
+{
+    let call = program_writers(src.functions);
+    let ch = src.charges(homes, bodies);
+    let left = src.left(homes, bodies);
+    let read = src.main.denote_co(call, src.performs_co(call, ch, left))(src.start(args));
+    let pure = src.pure_compiled(homes, bodies, src.compile_ranked(low, homes, bodies, program, compiled), call, spec, kept);
+    let room: (src.room_top(homes, bodies, src.levels) + 8 <= left) = Nat::le_refl(left);
+    Eutt::trans(Events::none(), Io::against_co(src.main_tree_co(args, ch, left), io), Io::against_co(read, io),
+        CRet(Stmt::thread_by(src.main, call, src.pure_answer(spec), src.start(args), io)),
+        Io::against_co_cong(src.main_tree_co(args, ch, left), read,
+            Eutt::sym(Events::linux(), read, src.main_tree_co(args, ch, left), Lag::eutt(Events::linux(), read, src.main_tree_co(args, ch, left), src.main_lags(args, ch, left))),
+            io),
+        src.pure_main_reads(call, ch, spec, λ p => src.checked(p), λ k p => src.room_total(homes, bodies, k, p), λ k => src.room_top(homes, bodies, k),
+            λ p => src.rank_of(p), pure, src.levels, left, room, loop_free, src.start(args), io, within))
+}

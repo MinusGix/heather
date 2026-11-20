@@ -267,7 +267,7 @@ impl<'v> Env<'v> {
         }
         let node = EnvNode { val, rest: self.node };
         Env {
-            node: Some(arena.envs.alloc(node)),
+            node: Some(arena.envs.alloc(&arena.tally, node)),
             len: self.len + 1,
             scope: self.scope,
         }
@@ -441,6 +441,7 @@ pub struct ValueArena<'v> {
     /// An evaluation run's emptied continuation stack, between runs
     /// ([`ValueArena::lend_frames`]).
     frames: RefCell<Vec<crate::eval::Frame<'v>>>,
+    tally: Tally,
     envs: Region<EnvNode<'v>>,
     /// The forced values themselves (`issues/value-cache-memo-in-arena.md`):
     /// a value is born here, so forcing a node is a bump of this region
@@ -472,7 +473,8 @@ impl<T> Region<T> {
 
     #[inline]
     #[allow(clippy::mut_from_ref)]
-    fn alloc(&self, value: T) -> &mut T {
+    fn alloc(&self, tally: &Tally, value: T) -> &mut T {
+        tally.0.set(tally.0.get() + std::mem::size_of::<T>());
         self.0.get_or_init(Arena::new).alloc(value)
     }
 
@@ -481,11 +483,19 @@ impl<T> Region<T> {
     fn len(&self) -> usize {
         self.0.get().map_or(0, Arena::len)
     }
+}
 
-    /// The bytes its values take: a walk of its chunks, so a handful of
-    /// reads, not one per value.
-    fn bytes(&self) -> usize {
-        self.0.get().map_or(0, |a| a.len() * std::mem::size_of::<T>())
+/// The bytes a [`ValueArena`]'s regions hold, counted as they are allocated,
+/// and reported to [`crate::stats::arena_peak_bytes`] when the arena is
+/// released. A field of its own because the arena's other fields borrow the
+/// arena: a `Drop` on the arena itself would make the borrow checker demand
+/// that `'v` outlive it.
+#[derive(Default)]
+struct Tally(Cell<usize>);
+
+impl Drop for Tally {
+    fn drop(&mut self) {
+        crate::stats::arena_peak_bytes(self.0.get() as u64);
     }
 }
 
@@ -918,6 +928,7 @@ impl<'v> ValueArena<'v> {
             subjects: RefCell::new(FewMap::default()),
             projections: [Cell::new(None), Cell::new(None)],
             frames: RefCell::new(Vec::new()),
+            tally: Tally::default(),
             envs: Region::new(),
             vals: Region::new(),
             vtys: Region::new(),
@@ -953,6 +964,7 @@ impl<'v> ValueArena<'v> {
             subjects: RefCell::new(FewMap::default()),
             projections: [Cell::new(None), Cell::new(None)],
             frames: RefCell::new(Vec::new()),
+            tally: Tally::default(),
             envs: Region::new(),
                 vals: Region::new(),
                 vtys: Region::new(),
@@ -975,7 +987,7 @@ impl<'v> ValueArena<'v> {
         if let Some(m) = self.metrics {
             ValueMetrics::bump(&m.inner.term_closures);
         }
-        self.terms.alloc(value)
+        self.terms.alloc(&self.tally, value)
     }
 
     /// The neutral variable at concrete level `lvl`, as this arena's one
@@ -1073,39 +1085,31 @@ impl<'v> ValueArena<'v> {
 
     /// A value, born in this region.
     /// The bytes the arena's regions hold: what one query's values have
-    /// taken so far ([`Eval`](crate::eval::Eval) bounds it,
+    /// taken so far, one read ([`Eval`](crate::eval::Eval) bounds it,
     /// [`crate::eval::ARENA_BYTES_LIMIT`]). The side tables are left out:
     /// they hold a word or two per value the regions hold.
     pub fn bytes(&self) -> usize {
-        self.envs.bytes()
-            + self.vals.bytes()
-            + self.vtys.bytes()
-            + self.neutrals.bytes()
-            + self.elim_cells.bytes()
-            + self.elims.bytes()
-            + self.terms.bytes()
-            + self.types.bytes()
-            + self.bit_tys.bytes()
+        self.tally.0.get()
     }
 
     pub fn val(&'v self, value: Val<'v>) -> &'v Val<'v> {
-        self.vals.alloc(value)
+        self.vals.alloc(&self.tally, value)
     }
 
     /// A neutral's head, spine and glue, born in this region.
     pub fn neutral(&'v self, value: VNeutral<'v>) -> &'v VNeutral<'v> {
-        self.neutrals.alloc(value)
+        self.neutrals.alloc(&self.tally, value)
     }
 
     /// An elimination that is not a spine node — a frame's, a glued
     /// unfolding's, an induction hypothesis's — born in this region.
     pub fn elim_cell(&'v self, value: Elim<'v>) -> &'v Elim<'v> {
-        self.elim_cells.alloc(value)
+        self.elim_cells.alloc(&self.tally, value)
     }
 
     /// A type value, born in this region.
     pub fn vty(&'v self, value: VTy<'v>) -> &'v VTy<'v> {
-        self.vtys.alloc(value)
+        self.vtys.alloc(&self.tally, value)
     }
 
     pub fn ty(&'v self, value: TyClo<'v>) -> &'v TyClo<'v> {
@@ -1113,7 +1117,7 @@ impl<'v> ValueArena<'v> {
         if let Some(m) = self.metrics {
             ValueMetrics::bump(&m.inner.type_closures);
         }
-        self.types.alloc(value)
+        self.types.alloc(&self.tally, value)
     }
 
     /// Build one of the uncommon synthesized type forms.
@@ -1135,7 +1139,7 @@ impl<'v> ValueArena<'v> {
     /// in the query region, so sharing a prefix needs neither a `Vec` copy nor
     /// reference-count bookkeeping.
     pub fn elim(&'v self, prev: ElimSpine<'v>, elim: Elim<'v>) -> ElimSpine<'v> {
-        ElimSpine(Some(self.elims.alloc(ElimNode { elim, prev: prev.0 })))
+        ElimSpine(Some(self.elims.alloc(&self.tally, ElimNode { elim, prev: prev.0 })))
     }
 
     /// The probed class of `step`, if it has been probed (`fold_classes`).
@@ -1168,7 +1172,7 @@ impl<'v> ValueArena<'v> {
     }
 
     pub fn bit_ty(&'v self, ty: BitTy<'v>) -> &'v BitTy<'v> {
-        self.bit_tys.alloc(ty)
+        self.bit_tys.alloc(&self.tally, ty)
     }
 
     pub fn transducer(

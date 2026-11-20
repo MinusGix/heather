@@ -178,6 +178,17 @@ columns carry the kernel's names plus the elaborator's own
 (`decls_gated`, `gendefs_pushed`, `resolve_goals`, `unify_calls`). The four
 `ValueMetrics` cache columns come next and are empty without the feature.
 
+`arena_peak_bytes` (2026-11-20) is a **peak**, not a sum: the most bytes
+one kernel query's value arena held while the scope was open, over the
+queries the scope ran (its own and its nested scopes', on whichever kernel
+worker ran them). The kernel keeps it as the one counter that merges by
+maximum (`stats.rs`, the `peaks:` section of `counters!`); a scope or a
+deferred check opens a fresh peak and folds it back into the enclosing one
+when it closes (`peak_scope_open`/`peak_scope_close`). It is the number
+`ARENA_BYTES_LIMIT` refuses a query at (`eval.rs`), so a row near that limit
+is the declaration to look at before raising it, and `scripts/timings` shows
+it as `arena MB`, taking the maximum rather than the sum over rows.
+
 `peak_growth_kb`, last (2026-10-26, `issues/native-compile-capacity.md`), is
 how far the process's peak resident set (`VmHWM`) rose while the scope was
 open. Unlike every other column it is not the scope's own use: a scope that

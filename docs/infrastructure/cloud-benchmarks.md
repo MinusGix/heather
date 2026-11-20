@@ -71,7 +71,7 @@ whose prefix is most of the library. The probes exist for those.
 scripts/bench-probes                       # every default case, three samples, printed
 scripts/bench-probes --filter native       # the cases whose name contains it
 scripts/bench-probes --heavy               # also the cold write-elf cases
-scripts/bench-probes --check               # against perf/bench/results.tsv; exit 1 on a regression, 3 if shape-only
+scripts/bench-probes --check               # against perf/bench/results.tsv; exit 1 if a counter grew
 scripts/bench-probes --save                # record (a filtered --save replaces only its own cases)
 scripts/bench-probes --list
 ```
@@ -85,7 +85,7 @@ kind:
   repeats exactly and leaves the store as it found it. The row is the
   item's own: its marginal cost with everything before it replayed. The
   process around it is mostly the replayed world, which is a case of its own
-  (`native/world-replay`); an `only` case is gated on the item's seconds, not
+  (`native/world-replay`); an `only` case reports the item's seconds, not
   the process's.
 - **`warm`**: `heather check --cache FILE` after two unmeasured runs, so every
   module is an image hit and the run row is what loading the world costs.
@@ -138,10 +138,17 @@ compared within 5%. Any other counter that differs between samples is
 printed as unstable, which means the case has stopped being deterministic,
 and that is a bug in the case.
 
-`--check` reports every counter that moved against the recorded row, and
-fails when `time` is at least 1.25× the recorded value on the same
-environment key. A moved counter is not a failure: when a round meant to move
-it, the moved counter is the round's result, and `--save` records it.
+`--check` reports every counter that moved against the recorded row, on any
+environment, and **fails when a counter grew** (since 2026-11-20; the two
+address-keyed ones past their 5%). A counter that fell is printed as fewer:
+when a round meant to move it, the moved counter is the round's result, and
+`--save` records it; a counter a round meant to grow is recorded the same
+way, with the reason in the commit. Seconds are information: a `time` at
+least 1.25× the recorded value on the same environment key is printed as
+slower and does not fail, because the box's load moves it as much as the
+code does. `arena_peak_bytes` is the largest value arena one kernel query of
+the case built (the `--timings` column `scripts/timings` shows as
+`arena MB`), the case's largest row rather than a sum.
 
 ### What a cold gate's per-item column means
 

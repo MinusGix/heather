@@ -20,7 +20,7 @@ use crate::common::Rng;
 use crate::harness::{Case, Family};
 
 pub fn families() -> Vec<Family> {
-    vec![computed_numeral(), perturbed_pairs(), vec_literal(), vec_items_values()]
+    vec![computed_numeral(), perturbed_pairs(), vec_literal(), vec_items_values(), shared_neutral_dag()]
 }
 
 /// `add n n ≡ 2n` at `Nat` — an equation discharged purely by computation,
@@ -251,6 +251,55 @@ fn vec_items_values() -> Family {
         what: "[x₀…xₙ₋₁] ≡ [x₀…xₙ₋₁] — two separately built VecItems nodes, by value",
         unit: "elements",
         expect_slope: Some((0.85, 1.35)),
+        cases,
+    }
+}
+
+/// `tₙ ≡ tₙ'` under `x : Nat`, for two **separately built** copies of
+/// `t₀ := x`, `tᵢ := elim_Nat(tᵢ₋₁; Nat; tᵢ₋₁; _ ih. Succ ih)`, each
+/// sharing its `tᵢ₋₁` (`subst/shared-dag`'s term). Every eliminator is
+/// stuck on the variable, so the two values are neutral spines whose trees
+/// are 2ⁿ wide over DAGs n long, and nothing is pointer-equal across the
+/// sides: conversion has to remember the pairs it has already compared to
+/// stay linear.
+///
+/// It does not today: `syntax_eq_nodes` grows as n² (work slope 2.0), because
+/// each eliminator's closures are compared by a syntactic `==` whose pair
+/// memo lives for that one call (`issues/conversion-neutral-dag-syntax-memo.md`).
+/// The band records the exponent; it becomes `(0.80, 1.35)` when fixed.
+fn shared_neutral_dag() -> Family {
+    fn build(n: u64) -> Rc<Term> {
+        let mut t = Rc::new(Term::Var(LocalVar(0)));
+        for _ in 0..n {
+            t = Rc::new(Term::ElimNat {
+                level: Level::Zero,
+                motive: Rc::new(Type::Nat),
+                base: Rc::clone(&t),
+                step: Rc::new(Term::Succ(Rc::new(Term::Var(LocalVar(0))))),
+                scrut: t,
+            });
+        }
+        t
+    }
+    let cases = [16u64, 32, 64, 128, 256]
+        .iter()
+        .map(|&n| {
+            let (lhs, rhs) = (build(n), build(n));
+            let mut gamma = nil_ctx();
+            gamma.entries.push(CtxEntry { ty: Rc::new(Type::Nat), level: Level::Zero });
+            let go = move || {
+                conv_term(&GlobalCtx::default(), &gamma, Layer::Prog, &lhs, &rhs, &Type::Nat, &Level::Zero, FUEL)
+                    .is_ok() as u64
+            };
+            assert!(go() == 1, "the two depth-{n} DAGs are not convertible");
+            Case::new(n, 1, go)
+        })
+        .collect();
+    Family {
+        name: "conv/shared-neutral-dag",
+        what: "tₙ ≡ tₙ' — two separately built neutral DAGs, 2ⁿ as trees, n as DAGs",
+        unit: "DAG levels",
+        expect_slope: Some((1.40, 2.10)),
         cases,
     }
 }

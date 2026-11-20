@@ -78,6 +78,52 @@ pub struct Point {
     pub min_ns: f64,
     pub median_ns: f64,
     pub iters: u64,
+    /// The kernel's counters (`heather_kernel::stats`) over one run of the
+    /// case, the [`COUNTED`] ones that moved. Unlike the times these are
+    /// exact and machine-independent: the same code does the same work.
+    pub counts: Vec<(&'static str, u64)>,
+}
+
+/// The counters a case records and `--check` gates exactly. Each is work
+/// the kernel does, not time: fuel units and δ-steps of the evaluator, the
+/// substitution reducer's steps, the nodes the shift, substitution and
+/// syntactic-equality walks visited, and the largest value arena one query built.
+/// `arena_peak_bytes` is a size in bytes of this build's value layout, so it
+/// is compared only where frame layout is (same `rustc` and profile).
+pub const COUNTED: &[&str] = &[
+    "eval_steps",
+    "eval_delta_steps",
+    "reduce_steps",
+    "local_subst_nodes",
+    "shift_global_nodes",
+    "syntax_eq_nodes",
+    "arena_peak_bytes",
+];
+
+/// The counter whose value depends on the build's memory layout.
+const LAYOUT_COUNTER: &str = "arena_peak_bytes";
+
+/// Counters that move by a little between identical runs, because the memos
+/// that save their work are keyed by node address (`scripts/bench-probes`
+/// has the same two), compared within [`APPROX_TOLERANCE`].
+const APPROX: &[&str] = &["local_subst_nodes", "shift_global_nodes"];
+const APPROX_TOLERANCE: f64 = 0.05;
+
+/// Run `f` once and read the [`COUNTED`] counters it moved.
+fn count_run(f: &dyn Fn() -> u64) -> (u64, Vec<(&'static str, u64)>) {
+    use heather_kernel::stats;
+    let peaks = stats::peak_scope_open();
+    let before = stats::snapshot();
+    let got = f();
+    let moved = stats::snapshot().since(&before);
+    stats::peak_scope_close(peaks);
+    let counts = stats::Snapshot::NAMES
+        .iter()
+        .zip(moved.values())
+        .filter(|(name, v)| *v > 0 && COUNTED.contains(name))
+        .map(|(name, v)| (*name, v))
+        .collect();
+    (got, counts)
 }
 
 /// Outcome for one family.
@@ -127,7 +173,10 @@ fn time_iters(f: &dyn Fn() -> u64, iters: u64) -> u64 {
 /// Measure one case: validate, calibrate an iteration count, warm up, then
 /// sample.
 pub fn measure(case: &Case, cfg: &Cfg) -> Point {
-    let got = (case.run)();
+    // The validating run is also the counted one. A fixture has run once at
+    // setup already, so this run sees the same warm per-node caches (the
+    // kernel's `Rc` heads) every later one does.
+    let (got, counts) = count_run(&*case.run);
     assert!(
         got == case.expect,
         "fixture at size {} returned {got}, expected {} — the fixture is \
@@ -164,6 +213,7 @@ pub fn measure(case: &Case, cfg: &Cfg) -> Point {
         min_ns: per_iter[0],
         median_ns: per_iter[per_iter.len() / 2],
         iters,
+        counts,
     }
 }
 
@@ -228,6 +278,8 @@ pub struct Baseline {
     pub slopes: Vec<(String, f64)>,
     /// `(probe, stack_bytes) -> max_levels`
     pub stacks: Vec<(String, u64, u64)>,
+    /// `(family, size, counter) -> value`
+    pub counts: Vec<(String, u64, String, u64)>,
 }
 
 impl Baseline {
@@ -249,6 +301,11 @@ impl Baseline {
                 ["slope", name, s] => {
                     if let Ok(s) = s.parse() {
                         b.slopes.push((name.to_string(), s));
+                    }
+                }
+                ["count", name, size, counter, value] => {
+                    if let (Ok(size), Ok(value)) = (size.parse(), value.parse()) {
+                        b.counts.push((name.to_string(), size, counter.to_string(), value));
                     }
                 }
                 ["stack", name, bytes, levels] => {
@@ -285,6 +342,13 @@ impl Baseline {
                 let _ = writeln!(out, "slope\t{}\t{:.3}", r.name, s);
             }
         }
+        for r in reports {
+            for p in &r.points {
+                for (counter, v) in &p.counts {
+                    let _ = writeln!(out, "count\t{}\t{}\t{counter}\t{v}", r.name, p.size);
+                }
+            }
+        }
         for p in probes {
             let _ = writeln!(out, "stack\t{}\t{}\t{}", p.name, p.stack_bytes, p.max_levels);
         }
@@ -303,6 +367,18 @@ impl Baseline {
         self.slopes.iter().find(|(n, _)| n == name).map(|(_, s)| *s)
     }
 
+    /// The family's recorded counters at `size`, or `None` when the baseline
+    /// predates counters for it.
+    fn counts(&self, name: &str, size: u64) -> Option<Vec<(&str, u64)>> {
+        let v: Vec<_> = self
+            .counts
+            .iter()
+            .filter(|(n, s, _, _)| n == name && *s == size)
+            .map(|(_, _, c, v)| (c.as_str(), *v))
+            .collect();
+        (!v.is_empty()).then_some(v)
+    }
+
     fn stack(&self, name: &str, bytes: u64) -> Option<u64> {
         self.stacks
             .iter()
@@ -316,6 +392,11 @@ impl Baseline {
 #[derive(PartialEq, Eq, Clone, Copy)]
 pub enum Verdict {
     Regressed,
+    /// A time past the regression ratio. Reported, never failing: times are
+    /// information and the counters are the gate (a busy machine is slower
+    /// without the code doing more work, and a change that does more work
+    /// moves a counter whatever the machine).
+    Slower,
     Improved,
     Ok,
     /// No baseline entry, or times not comparable on this machine.
@@ -394,7 +475,7 @@ pub fn compare(
                 };
                 let ratio = p.min_ns / b;
                 let verdict = if ratio >= th.time_regress {
-                    Verdict::Regressed
+                    Verdict::Slower
                 } else if ratio <= th.time_improve {
                     Verdict::Improved
                 } else {
@@ -407,13 +488,51 @@ pub fn compare(
                 });
             }
         }
+        // Counters are compared exactly, on every machine: the same code does
+        // the same work. Any growth is a regression, any drop an improvement
+        // to re-record; there is no noise to allow for. The layout counter
+        // is held to the stack's condition (same rustc and profile).
+        for p in &r.points {
+            let Some(b) = base.counts(r.name, p.size) else {
+                if !p.counts.is_empty() {
+                    out.push(Diff {
+                        label: format!("{}:{} counters", r.name, p.size),
+                        verdict: Verdict::Untracked,
+                        detail: "no recorded counters".into(),
+                    });
+                }
+                continue;
+            };
+            for &counter in COUNTED {
+                if counter == LAYOUT_COUNTER && !th.compare_stack {
+                    continue;
+                }
+                let get = |v: &[(&str, u64)]| v.iter().find(|(c, _)| *c == counter).map_or(0, |(_, v)| *v);
+                let (was, now) = (get(&b), get(&p.counts));
+                let within = if APPROX.contains(&counter) {
+                    (now as f64 - was as f64).abs() <= was as f64 * APPROX_TOLERANCE
+                } else {
+                    now == was
+                };
+                if within {
+                    continue;
+                }
+                out.push(Diff {
+                    label: format!("{}:{} {counter}", r.name, p.size),
+                    verdict: if now > was { Verdict::Regressed } else { Verdict::Improved },
+                    detail: format!("{was} → {now} ({:+.1}%)", (now as f64 - was as f64) * 100.0 / was.max(1) as f64),
+                });
+            }
+        }
         // Slopes are compared on every machine: the exponent of the cost
         // model is a property of the code, not of the CPU.
+        // A drift in the time slope is information like the times are: the
+        // work behind it is gated exactly by the counters above.
         if let (Some(s), Some(b)) = (r.slope, base.slope(r.name)) {
             let drift = s - b;
             out.push(Diff {
                 label: format!("{} slope", r.name),
-                verdict: if drift > th.slope_drift { Verdict::Regressed } else { Verdict::Ok },
+                verdict: if drift > th.slope_drift { Verdict::Slower } else { Verdict::Ok },
                 detail: format!("{b:.2} → {s:.2} ({drift:+.2})"),
             });
         }
@@ -472,6 +591,54 @@ pub fn dur(ns: f64) -> String {
     }
 }
 
+/// The counters as a short trailer: `  [eval 1.2K δ 40 …]`.
+fn render_counts(counts: &[(&str, u64)]) -> String {
+    if counts.is_empty() {
+        return String::new();
+    }
+    fn short(c: &str) -> &str {
+        match c {
+            "eval_steps" => "eval",
+            "eval_delta_steps" => "δ",
+            "reduce_steps" => "reduce",
+            "local_subst_nodes" => "subst",
+            "shift_global_nodes" => "shiftΨ",
+            "syntax_eq_nodes" => "syn",
+            "arena_peak_bytes" => "arena",
+            other => other,
+        }
+    }
+    let num = |v: u64| match v {
+        0..10_000 => v.to_string(),
+        10_000..10_000_000 => format!("{:.0}K", v as f64 / 1e3),
+        _ => format!("{:.0}M", v as f64 / 1e6),
+    };
+    let parts: Vec<String> = counts.iter().map(|(c, v)| format!("{} {}", short(c), num(*v))).collect();
+    format!("   [{}]", parts.join(" "))
+}
+
+/// The slope of each counter against size: the exponent of the cost model
+/// read off work instead of time, so it carries no noise.
+pub fn count_slopes(r: &Report) -> Vec<(&'static str, f64)> {
+    COUNTED
+        .iter()
+        .filter_map(|&c| {
+            let pts: Vec<Point> = r
+                .points
+                .iter()
+                .filter_map(|p| {
+                    let v = p.counts.iter().find(|(n, _)| *n == c)?.1;
+                    Some(Point { size: p.size, min_ns: v as f64, median_ns: v as f64, iters: 1, counts: vec![] })
+                })
+                .collect();
+            if pts.len() != r.points.len() {
+                return None;
+            }
+            fit_slope(&pts).map(|s| (c, s))
+        })
+        .collect()
+}
+
 pub fn render_family(r: &Report) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "{}  — {}", r.name, r.what);
@@ -481,7 +648,7 @@ pub fn render_family(r: &Report) -> String {
         let flag = if noise > 1.5 { "  ⚠ noisy" } else { "" };
         let _ = writeln!(
             out,
-            "  {:>10} {:<14} {:>10}   med {:>10}   {:>10}/{}   ×{}{}",
+            "  {:>10} {:<14} {:>10}   med {:>10}   {:>10}/{}   ×{}{}{}",
             p.size,
             r.unit,
             dur(p.min_ns),
@@ -490,6 +657,7 @@ pub fn render_family(r: &Report) -> String {
             r.unit.trim_end_matches('s'),
             p.iters,
             flag,
+            render_counts(&p.counts),
         );
     }
     if let Some(s) = r.slope {
@@ -499,6 +667,11 @@ pub fn render_family(r: &Report) -> String {
             None => String::new(),
         };
         let _ = writeln!(out, "  slope {s:.2}{band}");
+    }
+    let counted = count_slopes(r);
+    if !counted.is_empty() {
+        let parts: Vec<String> = counted.iter().map(|(c, s)| format!("{c} {s:.2}")).collect();
+        let _ = writeln!(out, "  work slopes  {}", parts.join("  "));
     }
     out
 }

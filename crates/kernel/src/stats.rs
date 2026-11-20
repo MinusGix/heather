@@ -26,9 +26,9 @@
 use std::cell::Cell;
 
 macro_rules! counters {
-    ($($(#[$m:meta])* $name:ident),* $(,)?) => {
+    ($($(#[$m:meta])* $name:ident),* $(,)? ; peaks: $($(#[$pm:meta])* $peak:ident),* $(,)?) => {
         #[derive(Default)]
-        struct Cells { $($name: Cell<u64>,)* }
+        struct Cells { $($name: Cell<u64>,)* $($peak: Cell<u64>,)* }
 
         thread_local! {
             static CELLS: Cells = Cells::default();
@@ -36,7 +36,7 @@ macro_rules! counters {
 
         /// A copyable reading of every counter on this thread.
         #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-        pub struct Snapshot { $($(#[$m])* pub $name: u64,)* }
+        pub struct Snapshot { $($(#[$m])* pub $name: u64,)* $($(#[$pm])* pub $peak: u64,)* }
 
         $(
             $(#[$m])*
@@ -46,15 +46,41 @@ macro_rules! counters {
             }
         )*
 
+        $(
+            $(#[$pm])*
+            #[inline]
+            pub fn $peak(n: u64) {
+                CELLS.with(|c| c.$peak.set(c.$peak.get().max(n)));
+            }
+        )*
+
         /// Read every counter on this thread.
         pub fn snapshot() -> Snapshot {
-            CELLS.with(|c| Snapshot { $($name: c.$name.get(),)* })
+            CELLS.with(|c| Snapshot { $($name: c.$name.get(),)* $($peak: c.$peak.get(),)* })
         }
 
         /// Zero every counter on this thread.
         pub fn reset() {
-            CELLS.with(|c| { $(c.$name.set(0);)* });
+            CELLS.with(|c| { $(c.$name.set(0);)* $(c.$peak.set(0);)* });
         }
+
+        /// Open a scope of the peaks: they read zero inside it, and what
+        /// they were before is returned for [`peak_scope_close`]. A peak
+        /// cannot be differenced like a count, so a scope that wants its own
+        /// (a `--timings` row) brackets its work with these, innermost last.
+        pub fn peak_scope_open() -> Peaks {
+            CELLS.with(|c| Peaks { $($peak: c.$peak.replace(0),)* })
+        }
+
+        /// Close a scope [`peak_scope_open`] opened: the enclosing scope's
+        /// peaks become the larger of theirs and the inner scope's.
+        pub fn peak_scope_close(outer: Peaks) {
+            CELLS.with(|c| { $(c.$peak.set(c.$peak.get().max(outer.$peak));)* });
+        }
+
+        /// The peaks an enclosing scope had when an inner one opened.
+        #[derive(Debug, Default, Clone, Copy)]
+        pub struct Peaks { $($peak: u64,)* }
 
         /// Add another thread's reading into this thread's counters.
         ///
@@ -64,7 +90,10 @@ macro_rules! counters {
         /// inert: this module writes counters and reads them only through
         /// `snapshot`.
         pub fn merge(delta: &Snapshot) {
-            CELLS.with(|c| { $(c.$name.set(c.$name.get().wrapping_add(delta.$name));)* });
+            CELLS.with(|c| {
+                $(c.$name.set(c.$name.get().wrapping_add(delta.$name));)*
+                $(c.$peak.set(c.$peak.get().max(delta.$peak));)*
+            });
         }
 
         /// Run `f` with none of its bumps reaching this thread's counters:
@@ -78,29 +107,32 @@ macro_rules! counters {
         pub(crate) fn unobserved<T>(f: impl FnOnce() -> T) -> T {
             let saved = snapshot();
             let out = f();
-            CELLS.with(|c| { $(c.$name.set(saved.$name);)* });
+            CELLS.with(|c| { $(c.$name.set(saved.$name);)* $(c.$peak.set(saved.$peak);)* });
             out
         }
 
         impl Snapshot {
             /// The counters' column names, in the order [`Snapshot::values`]
             /// reports them.
-            pub const NAMES: &'static [&'static str] = &[$(stringify!($name),)*];
+            pub const NAMES: &'static [&'static str] = &[$(stringify!($name),)* $(stringify!($peak),)*];
 
             /// This snapshot minus an earlier one: what happened in between.
+            /// A peak is not a difference: it is this reading's, which is the
+            /// scope's own when the scope opened with [`peak_scope_open`].
             pub fn since(&self, earlier: &Snapshot) -> Snapshot {
-                Snapshot { $($name: self.$name.wrapping_sub(earlier.$name),)* }
+                let _ = earlier;
+                Snapshot { $($name: self.$name.wrapping_sub(earlier.$name),)* $($peak: self.$peak,)* }
             }
 
             /// Two readings added column-wise — one row's own numbers plus
-            /// what a worker did for it.
+            /// what a worker did for it. Peaks take the larger.
             pub fn plus(&self, other: &Snapshot) -> Snapshot {
-                Snapshot { $($name: self.$name.wrapping_add(other.$name),)* }
+                Snapshot { $($name: self.$name.wrapping_add(other.$name),)* $($peak: self.$peak.max(other.$peak),)* }
             }
 
             /// The counters in [`Snapshot::NAMES`] order.
             pub fn values(&self) -> Vec<u64> {
-                vec![$(self.$name,)*]
+                vec![$(self.$name,)* $(self.$peak,)*]
             }
         }
     };
@@ -225,6 +257,15 @@ counters! {
     /// is the mean depth of the redex; steps times depth is the reducer's
     /// quadratic term.
     reduce_frames,
+    ;
+    peaks:
+    /// The most bytes one query's value arena held when it was released
+    /// (`ValueArena::bytes`): the memory a single conversion or evaluation
+    /// took, which [`crate::eval::ARENA_BYTES_LIMIT`] bounds. A peak, not a
+    /// count: a scope's is the largest of its queries', so a `--timings`
+    /// row names the declaration that came near the limit
+    /// (`issues/kernel-memory-outruns-fuel.md`).
+    arena_peak_bytes,
 }
 
 /// How often each global was read by the evaluator on this thread, by its
