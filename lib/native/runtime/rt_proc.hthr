@@ -50,6 +50,7 @@ import rt;
 import rt_lower;
 import rt_io;
 import rt_io_lower;
+import native_source_pure;
 
 // ---------------------------------------------------------------------------
 // Terms and their meaning
@@ -127,7 +128,7 @@ fn PTm::within(needs: Nat → List<BitVec(64)> → Nat, counted: Nat → Bool, k
 
 // One call's needs, kept within `k`.
 theorem PTm::within_of(needs: Nat → List<BitVec(64)> → Nat, counted: Nat → Bool, k, p: Nat, xs: List<BitVec(64)>,
-    le: needs(p, xs) + (match counted(p) as λ _ => Nat { True => 1, False => 0 }) <= k): PTm::within(needs, counted, k)(p, xs).IsTrue() {
+    le: needs(p, xs) + (match counted(p) as λ _ => Nat { True => 1, False => 0 }) <= k): PTm::within(needs, counted, k, p, xs).IsTrue() {
     (match counted(p) as λ b => needs(p, xs) + (match b as λ _ => Nat { True => 1, False => 0 }) <= k →
             (match k.spend(b) as λ _ => Bool { None => False, Some(j) => needs(p, xs).leb(j) }).IsTrue() {
         True => match k as λ m => needs(p, xs) + 1 <= m → (match m.spend(True) as λ _ => Bool { None => False, Some(j) => needs(p, xs).leb(j) }).IsTrue() {
@@ -152,7 +153,7 @@ theorem PTm::need_within(self t: PTm, w: rt::World, f: PCalls(), needs: Nat → 
             let xs = PTm::words(w, g, vals, args);
             let call_need = needs(p, xs) + (match counted(p) as λ _ => Nat { True => 1, False => 0 });
             let rest = body.need(w, f, needs, counted, Cons(Word(64), g), Pair(f(p, xs), vals));
-            Bool::is_true_and_intro(PTm::within(needs, counted, k)(p, xs),
+            Bool::is_true_and_intro(PTm::within(needs, counted, k, p, xs),
                 body.calls_ok(w, f, PTm::within(needs, counted, k), Cons(Word(64), g), Pair(f(p, xs), vals)),
                 PTm::within_of(needs, counted, k, p, xs, call_need.le_trans(call_need.max(rest), k, call_need.le_max_l(rest), h)),
                 body.need_within(w, f, needs, counted, k, Cons(Word(64), g), Pair(f(p, xs), vals), rest.le_trans(call_need.max(rest), k, call_need.le_max_r(rest), h)))
@@ -189,7 +190,7 @@ fn PTm::arg_words(g: List<Ty>, locs: List<Loc>, args: List<Nat>) → Option<List
 // `known` names, on word variables, its word fresh at `next`; a value or a
 // binding is a region that keeps the buffers and calls only the world's
 // functions.
-fn PTm::lower(self t: PTm, w: rt::World, known: Nat → Bool, g: List<Ty>, locs: List<Loc>, next, out: Nat) → Option<Stmt> {
+fn PTm::lower(self t: PTm, w: rt::World, known: Nat → Nat → Bool, g: List<Ty>, locs: List<Loc>, next, out: Nat) → Option<Stmt> {
     match t {
         Value(v) => Tm::ty(v, w, g).check(Word(64)).and_then(λ _ =>
             Tm::lower(v, w, g, Loc::ports(locs), next).and_then(λ l =>
@@ -199,8 +200,8 @@ fn PTm::lower(self t: PTm, w: rt::World, known: Nat → Bool, g: List<Ty>, locs:
             Tm::check_true(c.region.byte_free() && c.region.calls_among(functions_below(w.sigs.len()))).and_then(λ _ =>
             body.lower(w, known, Cons(Tm::ty(e, w, g), g), Cons(InWord(c.result), locs), c.next, out).and_then(λ sb =>
                 Some(Then(Compute(c.region), sb))))),
-        Recur(p, args, body) => Tm::check_true(known(p)).and_then(λ _ =>
-            PTm::arg_words(g, locs, args).and_then(λ ids =>
+        Recur(p, args, body) => PTm::arg_words(g, locs, args).and_then(λ ids =>
+            Tm::check_true(known(p, ids.len())).and_then(λ _ =>
             body.lower(w, known, Cons(Word(64), g), Cons(InWord(next), locs), next + 1, out).and_then(λ sb =>
                 Some(Then(Perform(p, ids, [next]), sb))))),
         Choose(c, yes, no) => ETm::operand(g, locs, Bit, c).and_then(λ id =>
@@ -215,14 +216,14 @@ fn PTm::lower(self t: PTm, w: rt::World, known: Nat → Bool, g: List<Ty>, locs:
 
 // Each call of a known procedure answered by its meaning's word, in its
 // result word, with the world and the buffers as they were.
-fn PTm::Answers(known: Nat → Bool, answer: CallAnswers(), f: PCalls()) → Type {
-    (p: Nat) → known(p).IsTrue() → (ids: List<Nat>) → (r: Nat) → (env: Env) → (io: Io) →
+fn PTm::Answers(known: Nat → Nat → Bool, answer: CallAnswers(), f: PCalls()) → Type {
+    (p: Nat) → (ids: List<Nat>) → known(p, ids.len()).IsTrue() → (r: Nat) → (env: Env) → (io: Io) →
         answer(p, ids, [r], env, io) = Mutated(io, Onward(env.set_word(r, f(p, env.words_at(ids)))))
 }
 
 // A call's `ok` is read on its procedure and argument words.
-fn PTm::OkReads(known: Nat → Bool, ok: Nat → List<Nat> → List<Nat> → Env → Bool, okw: Nat → List<BitVec(64)> → Bool) → Type {
-    (p: Nat) → known(p).IsTrue() → (ids: List<Nat>) → (r: Nat) → (env: Env) → ok(p, ids, [r], env) = okw(p, env.words_at(ids))
+fn PTm::OkReads(known: Nat → Nat → Bool, ok: Nat → List<Nat> → List<Nat> → Env → Bool, okw: Nat → List<BitVec(64)> → Bool) → Type {
+    (p: Nat) → (ids: List<Nat>) → known(p, ids.len()).IsTrue() → (r: Nat) → (env: Env) → ok(p, ids, [r], env) = okw(p, env.words_at(ids))
 }
 
 // Where a body's run ends: on, the world and the buffers as they were, the
@@ -238,7 +239,7 @@ fn PTm::Lands(v: BitVec(64), out: Nat, env: Env, io: Io, m: Mutated<Io, Flow>) �
 // holding the variables, with each call answered by the procedures'
 // meaning, land as the meaning does, and make only calls that are `ok`
 // where the meaning's are.
-fn PTm::LowerHolds(self t: PTm, w: rt::World, known: Nat → Bool, g: List<Ty>, locs: List<Loc>, next, out: Nat, r: Option<Stmt>) → Type {
+fn PTm::LowerHolds(self t: PTm, w: rt::World, known: Nat → Nat → Bool, g: List<Ty>, locs: List<Loc>, next, out: Nat, r: Option<Stmt>) → Type {
     match r {
         None => True,
         Some(s) => s.loop_free().IsTrue() ∧ ((call: Writers()) → Writers::Still(call, functions_below(w.sigs.len())) →
@@ -272,7 +273,7 @@ theorem PTm::lands_from(v: BitVec(64), out: Nat, env, env1: Env, io: Io, m: Muta
                 Onward(after) => (after.buffers = env.buffers) ∧ (after.number(out) = v.toNat()),
                 Exited(_) => False,
             }) {
-        Onward(after) => λ k => ⟨trans(k.left, same), k.right⟩,
+        Onward(_) => λ k => ⟨trans(k.left, same), k.right⟩,
         Exited(_) => λ never => never,
     })(h.right)⟩
 }
@@ -300,7 +301,7 @@ theorem PTm::arg_words_kept(w: rt::World, env: Env, g: List<Ty>, locs: List<Loc>
     }
 }
 
-theorem PTm::lower_sound(self t: PTm, w: rt::World, known: Nat → Bool): (g: List<Ty>) → (locs: List<Loc>) → (next, out: Nat) →
+theorem PTm::lower_sound(self t: PTm, w: rt::World, known: Nat → Nat → Bool): (g: List<Ty>) → (locs: List<Loc>) → (next, out: Nat) →
     PTm::LowerHolds(t, w, known, g, locs, next, out, t.lower(w, known, g, locs, next, out)) {
     let among = functions_below(w.sigs.len());
     match t {
@@ -361,10 +362,10 @@ theorem PTm::lower_sound(self t: PTm, w: rt::World, known: Nat → Bool): (g: Li
         },
         Recur(p, args, body) => λ g locs next out => {
             let P = λ (r: Option<Stmt>) => PTm::LowerHolds(Recur(p, args, body), w, known, g, locs, next, out, r);
-            Option::and_then_elim(P, trivial, Tm::check_true(known(p)), λ _ => PTm::arg_words(g, locs, args).and_then(λ ids =>
-                    body.lower(w, known, Cons(Word(64), g), Cons(InWord(next), locs), next + 1, out).and_then(λ sb => Some(Then(Perform(p, ids, [next]), sb)))), λ kp _ =>
-            Option::and_then_elim(P, trivial, PTm::arg_words(g, locs, args), λ ids =>
-                    body.lower(w, known, Cons(Word(64), g), Cons(InWord(next), locs), next + 1, out).and_then(λ sb => Some(Then(Perform(p, ids, [next]), sb))), λ ids e_ids =>
+            Option::and_then_elim(P, trivial, PTm::arg_words(g, locs, args), λ ids => Tm::check_true(known(p, ids.len())).and_then(λ _ =>
+                    body.lower(w, known, Cons(Word(64), g), Cons(InWord(next), locs), next + 1, out).and_then(λ sb => Some(Then(Perform(p, ids, [next]), sb)))), λ ids e_ids =>
+            Option::and_then_elim(P, trivial, Tm::check_true(known(p, ids.len())), λ _ =>
+                    body.lower(w, known, Cons(Word(64), g), Cons(InWord(next), locs), next + 1, out).and_then(λ sb => Some(Then(Perform(p, ids, [next]), sb))), λ kp _ =>
             Option::and_then_elim(P, trivial, body.lower(w, known, Cons(Word(64), g), Cons(InWord(next), locs), next + 1, out),
                     λ sb => Some(Then(Perform(p, ids, [next]), sb)), λ sb e_sb => {
                 let bh = j(e_sb, λ r _ => PTm::LowerHolds(body, w, known, Cons(Word(64), g), Cons(InWord(next), locs), next + 1, out, r),
@@ -375,7 +376,7 @@ theorem PTm::lower_sound(self t: PTm, w: rt::World, known: Nat → Bool): (g: Li
                     let x = f(p, xs);
                     let env1 = env.set_word(next, x);
                     let answered: (answer(p, ids, [next], env, io) = Mutated(io, Onward(env1))) =
-                        trans(answers(p, kp, ids, next, env, io), cong_fn(λ (ys: List<BitVec(64)>) => Mutated(io, Onward(env.set_word(next, f(p, ys)))), words_eq));
+                        trans(answers(p, ids, kp, next, env, io), cong_fn(λ (ys: List<BitVec(64)>) => Mutated(io, Onward(env.set_word(next, f(p, ys)))), words_eq));
                     let held1: LocsHold(w.tys, env1, Cons(Word(64), g), Cons(InWord(next), locs), Pair(x, vals)) =
                         ⟨env.number_set_here(next, x), locs_hold_same(w.tys, env, env1, g, locs, vals, Loc::same_set_word(locs, env, next, x, below), held)⟩;
                     let lt: (next < next + 1) = omega();
@@ -391,7 +392,7 @@ theorem PTm::lower_sound(self t: PTm, w: rt::World, known: Nat → Bool): (g: Li
                         PTm::lands_from(v, out, env, env1, io, Stmt::thread_by(sb, call, answer, env1, io), refl, r.left));
                     ⟨lands, λ ok okw reads okm => {
                         let parts = Bool::is_true_and(okw(p, xs), body.calls_ok(w, f, okw, Cons(Word(64), g), Pair(x, vals)), okm);
-                        let read: (ok(p, ids, [next], env) = okw(p, xs)) = trans(reads(p, kp, ids, next, env), cong_fn(λ (ys: List<BitVec(64)>) => okw(p, ys), words_eq));
+                        let read: (ok(p, ids, [next], env) = okw(p, xs)) = trans(reads(p, ids, kp, next, env), cong_fn(λ (ys: List<BitVec(64)>) => okw(p, ys), words_eq));
                         let first: ok(p, ids, [next], env).IsTrue() = j(sym(read), λ b _ => b.IsTrue(), parts.left);
                         let rest_ok = j(sym(answered), λ m _ => (match m.value as λ _ => Bool {
                                 Onward(n) => sb.calls_ok(call, answer, ok, n, m.after),
@@ -442,5 +443,463 @@ theorem PTm::lower_sound(self t: PTm, w: rt::World, known: Nat → Bool): (g: Li
                 }⟩
             })))
         },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Procedures from bodies: what `Source::pure_reads` asks of them
+//
+// A body over `n` word variables is a procedure whose parameters are words
+// `0` to `n - 1`, whose value is word `n`, and whose statements start past
+// it (`PDef::procedure`). Read at its entry, its statements are its
+// meaning at its parameter words, so the procedures' meanings and depths,
+// given as functions that unfold to their bodies' (`PDef::Unfolds`,
+// `PDef::Deep`), meet every obligation of `Source::PureBodies`
+// (`PDef::bodies`).
+
+// Words `from` to `from + n - 1`.
+fn PTm::range(from, n: Nat) → List<Nat> {
+    match n { Zero => Nil, Succ(m) => Cons(from, PTm::range(from + 1, m)) }
+}
+
+// `n` word variables.
+fn PTm::word_ctx(n: Nat) → List<Ty> {
+    match n { Zero => Nil, Succ(m) => Cons(Word(64), PTm::word_ctx(m)) }
+}
+
+// Variable `i` in word `from + i`.
+fn PTm::param_locs(from, n: Nat) → List<Loc> {
+    match n { Zero => Nil, Succ(m) => Cons(InWord(from), PTm::param_locs(from + 1, m)) }
+}
+
+// The values of `n` word variables, from words; a missing one is zero.
+fn PTm::vals_n(tys: Nat → RecInfo, n: Nat, xs: List<BitVec(64)>) → rt::Env(tys, PTm::word_ctx(n)) {
+    match n as λ k => rt::Env(tys, PTm::word_ctx(k)) {
+        Zero => trivial,
+        Succ(m) => match xs {
+            Nil => Pair(BitVec::ofNat(0), PTm::vals_n(tys, m, Nil)),
+            Cons(x, rest) => Pair(x, PTm::vals_n(tys, m, rest)),
+        },
+    }
+}
+
+// The words from `from` on hold `xs`, in order.
+fn PTm::WordsAt(env: Env, from: Nat, xs: List<BitVec(64)>) → Type {
+    match xs { Nil => True, Cons(x, rest) => (env.number(from) = x.toNat()) ∧ PTm::WordsAt(env, from + 1, rest) }
+}
+
+theorem PTm::range_len(n: Nat): (from: Nat) → PTm::range(from, n).len() = n {
+    match n {
+        Zero => λ from => refl,
+        Succ(m) => λ from => cong_fn(λ (k: Nat) => Succ(k), PTm::range_len(m, from + 1)),
+    }
+}
+
+theorem PTm::words_at_len(env: Env, ids: List<Nat>): env.words_at(ids).len() = ids.len() {
+    match ids {
+        Nil => refl,
+        Cons(_, rest) => cong_fn(λ (k: Nat) => Succ(k), PTm::words_at_len(env, rest)),
+    }
+}
+
+// Setting the words from `from` on keeps every word below it.
+theorem PTm::set_words_below(m: Nat): (from: Nat) → (ws: List<BitVec(64)>) → (env: Env) → (k: Nat) → k < from →
+    env.set_words(PTm::range(from, m), ws).number(k) = env.number(k) {
+    match m {
+        Zero => λ from ws env k _ => refl,
+        Succ(m2) => λ from ws => match ws {
+            Nil => λ env k _ => refl,
+            Cons(x, more) => λ env k lt => {
+                let lt2: (k < from + 1) = omega(lt);
+                let ne: (k ≠ from) = Nat::ne_of_lt(k, from, lt);
+                trans(PTm::set_words_below(m2, from + 1, more, env.set_word(from, x), k, lt2), env.number_set_other(from, x, k, ne))
+            },
+        },
+    }
+}
+
+// Words set from `from` on hold what they were set to.
+theorem PTm::set_words_at(xs: List<BitVec(64)>): (from: Nat) → (env: Env) → PTm::WordsAt(env.set_words(PTm::range(from, xs.len()), xs), from, xs) {
+    match xs {
+        Nil => λ from env => trivial,
+        Cons(x, rest) => λ from env => {
+            let lt: (from < from + 1) = omega();
+            ⟨trans(PTm::set_words_below(rest.len(), from + 1, rest, env.set_word(from, x), from, lt), env.number_set_here(from, x)),
+                PTm::set_words_at(rest, from + 1, env.set_word(from, x))⟩
+        },
+    }
+}
+
+// Words holding `xs` read back as `xs`.
+theorem PTm::words_of(xs: List<BitVec(64)>): (from: Nat) → (env: Env) → PTm::WordsAt(env, from, xs) → env.words_at(PTm::range(from, xs.len())) = xs {
+    match xs {
+        Nil => λ from env _ => refl,
+        Cons(x, rest) => λ from env h => {
+            let first: (env.word(from) = x) = ETm::word_of_kept(env, from, x, h.left);
+            j(first, λ y _ => Cons(env.word(from), env.words_at(PTm::range(from + 1, rest.len()))) = Cons(y, rest),
+                cong_fn(λ (ys: List<BitVec(64)>) => Cons(env.word(from), ys), PTm::words_of(rest, from + 1, env, h.right)))
+        },
+    }
+}
+
+// A callee entered with as many argument words as it has parameters reads
+// them back.
+theorem PTm::entered_words(env, callee: Env, ids: List<Nat>, n: Nat, len: ids.len() = n):
+    native_source::Env(Nil, env.buffers, env.args).set_words(PTm::range(0, n), callee.words_at(ids)).words_at(PTm::range(0, n)) = callee.words_at(ids) {
+    let xs = callee.words_at(ids);
+    let lx: (xs.len() = n) = trans(PTm::words_at_len(callee, ids), len);
+    j(lx, λ k _ => native_source::Env(Nil, env.buffers, env.args).set_words(PTm::range(0, k), xs).words_at(PTm::range(0, k)) = xs,
+        PTm::words_of(xs, 0, native_source::Env(Nil, env.buffers, env.args).set_words(PTm::range(0, xs.len()), xs),
+            PTm::set_words_at(xs, 0, native_source::Env(Nil, env.buffers, env.args))))
+}
+
+// Every word a number a word can hold.
+fn PTm::Bounded(env: Env) → Type { (k: Nat) → env.number(k) < Nat::pow(2, 64) }
+
+theorem PTm::bounded_set_word(env: Env, b: PTm::Bounded(env), id: Nat, x: BitVec(64)): PTm::Bounded(env.set_word(id, x)) {
+    λ k => match k.eq_dec(id) {
+        Inl(e) => j(sym(e), λ q _ => env.set_word(id, x).number(q) < Nat::pow(2, 64),
+            j(sym(env.number_set_here(id, x)), λ v _ => v < Nat::pow(2, 64), BitVec::toNat_lt_pow(64, x))),
+        Inr(ne) => j(sym(env.number_set_other(id, x, k, ne)), λ v _ => v < Nat::pow(2, 64), b(k)),
+    }
+}
+
+theorem PTm::bounded_set_words(ids: List<Nat>): (ws: List<BitVec(64)>) → (env: Env) → PTm::Bounded(env) → PTm::Bounded(env.set_words(ids, ws)) {
+    match ids {
+        Nil => λ ws env b => b,
+        Cons(id, rest) => λ ws => match ws {
+            Nil => λ env b => b,
+            Cons(x, more) => λ env b => PTm::bounded_set_words(rest, more, env.set_word(id, x), PTm::bounded_set_word(env, b, id, x)),
+        },
+    }
+}
+
+theorem PTm::bounded_none(buffers, args: List<List<BitVec(8)>>): PTm::Bounded(native_source::Env(Nil, buffers, args)) {
+    λ k => {
+        let one: (1 <= Nat::pow(2, 64)) = Nat::one_le_pow(2, 64, trivial);
+        let zero: (native_source::Env(Nil, buffers, args).number(k) = 0) = refl;
+        j(sym(zero), λ v _ => v < Nat::pow(2, 64), omega(one))
+    }
+}
+
+// Bounded words hold what they read as.
+theorem PTm::words_at_bounded(m: Nat): (from: Nat) → (env: Env) → PTm::Bounded(env) → PTm::WordsAt(env, from, env.words_at(PTm::range(from, m))) {
+    match m {
+        Zero => λ from env b => trivial,
+        Succ(m2) => λ from env b => ⟨sym(BitVec::toNat_ofNat(64, env.number(from), b(from))), PTm::words_at_bounded(m2, from + 1, env, b)⟩,
+    }
+}
+
+// Words holding `xs` hold the `n` word variables they are.
+theorem PTm::hold_params(tys: Nat → RecInfo, n: Nat): (xs: List<BitVec(64)>) → xs.len() = n → (env: Env) → (from: Nat) → PTm::WordsAt(env, from, xs) →
+    LocsHold(tys, env, PTm::word_ctx(n), PTm::param_locs(from, n), PTm::vals_n(tys, n, xs)) {
+    match n {
+        Zero => λ xs _ env from _ => trivial,
+        Succ(m) => λ xs => match xs {
+            Nil => λ never => {
+                let bad: False = omega(never);
+                false_elim(bad)
+            },
+            Cons(_, rest) => λ len env from h => {
+                let len2: (rest.len() = m) = omega(len);
+                ⟨h.left, PTm::hold_params(tys, m, rest, len2, env, from + 1, h.right)⟩
+            },
+        },
+    }
+}
+
+theorem PTm::params_below(m: Nat): (from, bound: Nat) → from + m <= bound → LocsBelow(PTm::param_locs(from, m), bound) {
+    match m {
+        Zero => λ from bound _ => trivial,
+        Succ(m2) => λ from bound le => {
+            let lt: (from < bound) = omega(le);
+            let le2: ((from + 1) + m2 <= bound) = omega(le);
+            ⟨lt, PTm::params_below(m2, from + 1, bound, le2)⟩
+        },
+    }
+}
+
+// A procedure's body: how many word arguments it takes, and its term over
+// them.
+record PDef { arity: Nat, body: PTm }
+
+// Its parameters the first words, its value the word after them, its
+// statements past that.
+fn PDef::procedure(self d: PDef, w: rt::World, known: Nat → Nat → Bool) → Option<Procedure> {
+    d.body.lower(w, known, PTm::word_ctx(d.arity), PTm::param_locs(0, d.arity), d.arity + 1, d.arity)
+        .and_then(λ s => Some(Procedure(PTm::range(0, d.arity), [d.arity], s)))
+}
+
+fn PDef::procedures(defs: List<PDef>, w: rt::World, known: Nat → Nat → Bool) → Option<List<Procedure>> {
+    match defs {
+        Nil => Some(Nil),
+        Cons(d, rest) => d.procedure(w, known).and_then(λ proc => PDef::procedures(rest, w, known).and_then(λ procs => Some(Cons(proc, procs)))),
+    }
+}
+
+// The calls a body may make: of a definition, with as many arguments as it
+// takes.
+fn PDef::known(defs: List<PDef>) → Nat → Nat → Bool {
+    λ p m => match defs.nth(p) { None => False, Some(d) => m.matches(d.arity) }
+}
+
+fn PDef::arity_at(defs: List<PDef>, p: Nat) → Nat { match defs.nth(p) { None => 0, Some(d) => d.arity } }
+
+// Each procedure's value and depth, read at its parameter words.
+fn PDef::spec(defs: List<PDef>, f: PCalls(), needs: Nat → List<BitVec(64)> → Nat) → PureSpec {
+    PureSpec(λ p entered => [f(p, entered.words_at(PTm::range(0, PDef::arity_at(defs, p))))],
+        λ p entered => needs(p, entered.words_at(PTm::range(0, PDef::arity_at(defs, p)))))
+}
+
+// The procedures' meanings unfold to their bodies' (each function's pin).
+fn PDef::Unfolds(defs: List<PDef>, w: rt::World, f: PCalls()) → Type {
+    (p: Nat) → (d: PDef) → defs.nth(p) = Some(d) → (xs: List<BitVec(64)>) →
+        f(p, xs) = d.body.sem(w, f, PTm::word_ctx(d.arity), PTm::vals_n(w.tys, d.arity, xs))
+}
+
+// Each one's depth is at least its body's.
+fn PDef::Deep(defs: List<PDef>, w: rt::World, f: PCalls(), needs: Nat → List<BitVec(64)> → Nat, counted: Nat → Bool) → Type {
+    (p: Nat) → (d: PDef) → defs.nth(p) = Some(d) → (xs: List<BitVec(64)>) →
+        d.body.need(w, f, needs, counted, PTm::word_ctx(d.arity), PTm::vals_n(w.tys, d.arity, xs)) <= needs(p, xs)
+}
+
+// A procedure at an index is the definition's there.
+theorem PDef::procedures_at(defs: List<PDef>, w: rt::World, known: Nat → Nat → Bool): (ps: List<Procedure>) → PDef::procedures(defs, w, known) = Some(ps) →
+    (p: Nat) → (proc: Procedure) → ps.nth(p) = Some(proc) →
+    (match defs.nth(p) as λ _ => Type { None => False, Some(d) => d.procedure(w, known) = Some(proc) }) {
+    match defs {
+        Nil => λ ps e p proc found => {
+            let none: (ps.nth(p) = None) = j(Option::some_inj(Nil, ps, e), λ z _ => z.nth(p) = None, refl);
+            Option::none_ne_some(proc, trans(sym(none), found), False)
+        },
+        Cons(d, rest) => λ ps => {
+            let P = λ (r: Option<List<Procedure>>) => r = Some(ps) → (p: Nat) → (proc: Procedure) → ps.nth(p) = Some(proc) →
+                (match Cons(d, rest).nth(p) as λ _ => Type { None => False, Some(d2) => d2.procedure(w, known) = Some(proc) });
+            let none: P(None) = λ never => Option::none_ne_some(ps, never, (p: Nat) → (proc: Procedure) → ps.nth(p) = Some(proc) →
+                (match Cons(d, rest).nth(p) as λ _ => Type { None => False, Some(d2) => d2.procedure(w, known) = Some(proc) }));
+            Option::and_then_elim(P, none, d.procedure(w, known), λ proc0 => PDef::procedures(rest, w, known).and_then(λ ps0 => Some(Cons(proc0, ps0))), λ proc0 e0 =>
+            Option::and_then_elim(P, none, PDef::procedures(rest, w, known), λ ps0 => Some(Cons(proc0, ps0)), λ ps0 e1 =>
+                λ (e: Some(Cons(proc0, ps0)) = Some(ps)) p proc found => {
+                    let found2: (Cons(proc0, ps0).nth(p) = Some(proc)) = trans(cong_fn(λ (z: List<Procedure>) => z.nth(p), Option::some_inj(Cons(proc0, ps0), ps, e)), found);
+                    (match p as λ i => Cons(proc0, ps0).nth(i) = Some(proc) →
+                            (match Cons(d, rest).nth(i) as λ _ => Type { None => False, Some(d2) => d2.procedure(w, known) = Some(proc) }) {
+                        Zero => λ h => trans(e0, h),
+                        Succ(i) => λ h => PDef::procedures_at(rest, w, known, ps0, e1, i, proc, h),
+                    })(found2)
+                }))
+        },
+    }
+}
+
+// A definition at an index has its procedure there.
+theorem PDef::procedures_found(defs: List<PDef>, w: rt::World, known: Nat → Nat → Bool): (ps: List<Procedure>) → PDef::procedures(defs, w, known) = Some(ps) →
+    (p: Nat) → (d: PDef) → defs.nth(p) = Some(d) →
+    (match ps.nth(p) as λ _ => Type { None => False, Some(proc) => d.procedure(w, known) = Some(proc) }) {
+    match defs {
+        Nil => λ ps e p d found => Option::none_ne_some(d, found, match ps.nth(p) as λ _ => Type { None => False, Some(proc) => d.procedure(w, known) = Some(proc) }),
+        Cons(d0, rest) => λ ps => {
+            let P = λ (r: Option<List<Procedure>>) => r = Some(ps) → (p: Nat) → (d: PDef) → Cons(d0, rest).nth(p) = Some(d) →
+                (match ps.nth(p) as λ _ => Type { None => False, Some(proc) => d.procedure(w, known) = Some(proc) });
+            let none: P(None) = λ never => Option::none_ne_some(ps, never, (p: Nat) → (d: PDef) → Cons(d0, rest).nth(p) = Some(d) →
+                (match ps.nth(p) as λ _ => Type { None => False, Some(proc) => d.procedure(w, known) = Some(proc) }));
+            Option::and_then_elim(P, none, d0.procedure(w, known), λ proc0 => PDef::procedures(rest, w, known).and_then(λ ps0 => Some(Cons(proc0, ps0))), λ proc0 e0 =>
+            Option::and_then_elim(P, none, PDef::procedures(rest, w, known), λ ps0 => Some(Cons(proc0, ps0)), λ ps0 e1 =>
+                λ (e: Some(Cons(proc0, ps0)) = Some(ps)) p d found =>
+                    j(Option::some_inj(Cons(proc0, ps0), ps, e), λ z _ => (match z.nth(p) as λ _ => Type { None => False, Some(proc) => d.procedure(w, known) = Some(proc) }),
+                        (match p as λ i => Cons(d0, rest).nth(i) = Some(d) →
+                                (match Cons(proc0, ps0).nth(i) as λ _ => Type { None => False, Some(proc) => d.procedure(w, known) = Some(proc) }) {
+                            Zero => λ h => j(Option::some_inj(d0, d, h), λ x _ => x.procedure(w, known) = Some(proc0), e0),
+                            Succ(i) => λ h => PDef::procedures_found(rest, w, known, ps0, e1, i, d, h),
+                        })(found))))
+        },
+    }
+}
+
+// A definition's procedure: its parameters, its value word, its lowered body.
+theorem PDef::procedure_parts(self d: PDef, w: rt::World, known: Nat → Nat → Bool, proc: Procedure, made: d.procedure(w, known) = Some(proc)):
+    (proc.params = PTm::range(0, d.arity)) ∧ ((proc.results = [d.arity]) ∧
+        (d.body.lower(w, known, PTm::word_ctx(d.arity), PTm::param_locs(0, d.arity), d.arity + 1, d.arity) = Some(proc.body))) {
+    let low = d.body.lower(w, known, PTm::word_ctx(d.arity), PTm::param_locs(0, d.arity), d.arity + 1, d.arity);
+    (match low as λ o => low = o → o.and_then(λ s => Some(Procedure(PTm::range(0, d.arity), [d.arity], s))) = Some(proc) →
+            (proc.params = PTm::range(0, d.arity)) ∧ ((proc.results = [d.arity]) ∧ (low = Some(proc.body))) {
+        None => λ _ never => Option::none_ne_some(proc, never, (proc.params = PTm::range(0, d.arity)) ∧ ((proc.results = [d.arity]) ∧ (low = Some(proc.body)))),
+        Some(s) => λ es e => j(Option::some_inj(Procedure(PTm::range(0, d.arity), [d.arity], s), proc, e),
+            λ q _ => (q.params = PTm::range(0, d.arity)) ∧ ((q.results = [d.arity]) ∧ (low = Some(q.body))), ⟨refl, ⟨refl, es⟩⟩),
+    })(refl, made)
+}
+
+// Setting words keeps the buffers.
+theorem PTm::set_words_buffers(ids: List<Nat>): (ws: List<BitVec(64)>) → (env: Env) → env.set_words(ids, ws).buffers = env.buffers {
+    match ids {
+        Nil => λ ws env => refl,
+        Cons(id, rest) => λ ws => match ws {
+            Nil => λ env => refl,
+            Cons(x, more) => λ env => PTm::set_words_buffers(rest, more, env.set_word(id, x)),
+        },
+    }
+}
+
+// The definition at an index, where there is one.
+fn PDef::at(defs: List<PDef>, p: Nat) → PDef { match defs.nth(p) { None => PDef(0, Value(Var(0))), Some(d) => d } }
+
+theorem PDef::at_of(defs: List<PDef>, p: Nat, T: PDef → Type, h: match defs.nth(p) as λ _ => Type { None => False, Some(d) => T(d) }):
+    (defs.nth(p) = Some(PDef::at(defs, p))) ∧ T(PDef::at(defs, p)) {
+    (match defs.nth(p) as λ o => (match o as λ _ => Type { None => False, Some(d) => T(d) }) →
+            (o = Some(match o as λ _ => PDef { None => PDef(0, Value(Var(0))), Some(d) => d })) ∧ T(match o as λ _ => PDef { None => PDef(0, Value(Var(0))), Some(d) => d }) {
+        None => λ never => false_elim(never),
+        Some(_) => λ t => ⟨refl, t⟩,
+    })(h)
+}
+
+// The procedure at an index, where there is one.
+fn PDef::proc_at(ps: List<Procedure>, p: Nat) → Procedure { match ps.nth(p) { None => Procedure(Nil, Nil, Exit(0)), Some(proc) => proc } }
+
+theorem PDef::proc_at_of(ps: List<Procedure>, p: Nat, T: Procedure → Type, h: match ps.nth(p) as λ _ => Type { None => False, Some(proc) => T(proc) }):
+    (ps.nth(p) = Some(PDef::proc_at(ps, p))) ∧ T(PDef::proc_at(ps, p)) {
+    (match ps.nth(p) as λ o => (match o as λ _ => Type { None => False, Some(proc) => T(proc) }) →
+            (o = Some(match o as λ _ => Procedure { None => Procedure(Nil, Nil, Exit(0)), Some(proc) => proc })) ∧
+                T(match o as λ _ => Procedure { None => Procedure(Nil, Nil, Exit(0)), Some(proc) => proc }) {
+        None => λ never => false_elim(never),
+        Some(_) => λ t => ⟨refl, t⟩,
+    })(h)
+}
+
+// A known call's definition, and its arity.
+theorem PDef::known_at(defs: List<PDef>, p, m: Nat, k: PDef::known(defs, p, m).IsTrue()):
+    (defs.nth(p) = Some(PDef::at(defs, p))) ∧ (m = PDef::at(defs, p).arity) {
+    (match defs.nth(p) as λ o => (match o as λ _ => Bool { None => False, Some(d) => m.matches(d.arity) }).IsTrue() →
+            (o = Some(match o as λ _ => PDef { None => PDef(0, Value(Var(0))), Some(d) => d })) ∧
+                (m = (match o as λ _ => PDef { None => PDef(0, Value(Var(0))), Some(d) => d }).arity) {
+        None => λ never => false_elim(never),
+        Some(d) => λ t => ⟨refl, m.matches_eq(d.arity, t)⟩,
+    })(k)
+}
+
+// A known call's definition, its procedure, and its arguments' words read
+// back at the callee's entry.
+record PDef::Known(defs: List<PDef>, w: rt::World, ps: List<Procedure>, p: Nat, env: Env, ids: List<Nat>) {
+    def_at: defs.nth(p) = Some(PDef::at(defs, p)),
+    proc_at: ps.nth(p) = Some(PDef::proc_at(ps, p)),
+    arity: PDef::arity_at(defs, p) = PDef::at(defs, p).arity,
+    entered: PDef::proc_at(ps, p).enter(env, ids).words_at(PTm::range(0, PDef::at(defs, p).arity)) = env.words_at(ids),
+}
+
+theorem PDef::known_call(defs: List<PDef>, w: rt::World, ps: List<Procedure>, made: PDef::procedures(defs, w, PDef::known(defs)) = Some(ps),
+    p: Nat, env: Env, ids: List<Nat>, k: PDef::known(defs, p, ids.len()).IsTrue()): PDef::Known(defs, w, ps, p, env, ids) {
+    let got = PDef::known_at(defs, p, ids.len(), k);
+    let d = PDef::at(defs, p);
+    let len: (ids.len() = d.arity) = got.right;
+    let found = PDef::procedures_found(defs, w, PDef::known(defs), ps, made, p, d, got.left);
+    let has = PDef::proc_at_of(ps, p, λ proc => d.procedure(w, PDef::known(defs)) = Some(proc), found);
+    let proc = PDef::proc_at(ps, p);
+    let parts = d.procedure_parts(w, PDef::known(defs), proc, has.right);
+    let ar: (PDef::arity_at(defs, p) = d.arity) = j(sym(got.left), λ o _ => (match o as λ _ => Nat { None => 0, Some(x) => x.arity }) = d.arity, refl);
+    let back = j(sym(parts.left), λ qs _ => native_source::Env(Nil, env.buffers, env.args).set_words(qs, env.words_at(ids)).words_at(PTm::range(0, d.arity)) = env.words_at(ids),
+        PTm::entered_words(env, env, ids, d.arity, len));
+    PDef::Known(got.left, has.left, ar, back)
+}
+
+// Calls of known procedures are answered by their meanings.
+theorem PDef::answers(defs: List<PDef>, w: rt::World, src: Source, made: PDef::procedures(defs, w, PDef::known(defs)) = Some(src.procedures),
+    f: PCalls(), needs: Nat → List<BitVec(64)> → Nat): PTm::Answers(PDef::known(defs), src.pure_answer(PDef::spec(defs, f, needs)), f) {
+    λ p ids k r env io => {
+        let kc = PDef::known_call(defs, w, src.procedures, made, p, env, ids, k);
+        let proc = PDef::proc_at(src.procedures, p);
+        let n = PDef::at(defs, p).arity;
+        let value = λ (xs: List<BitVec(64)>) => Mutated(io, Onward(native_source::Env(env.words, env.buffers, env.args).set_words([r], [f(p, xs)])));
+        let at_proc: (value(proc.enter(env, ids).words_at(PTm::range(0, PDef::arity_at(defs, p)))) = value(env.words_at(ids))) =
+            trans(cong_fn(λ (a: Nat) => value(proc.enter(env, ids).words_at(PTm::range(0, a))), kc.arity), cong_fn(value, kc.entered));
+        j(sym(kc.proc_at), λ o _ => Mutated(io, match o as λ _ => Flow {
+                None => Onward(env),
+                Some(q) => Onward(native_source::Env(env.words, env.buffers, env.args).set_words([r], PDef::spec(defs, f, needs).value(p, q.enter(env, ids)))),
+            }) = Mutated(io, Onward(env.set_word(r, f(p, env.words_at(ids))))), at_proc)
+    }
+}
+
+// A known call's `ok` within the levels is read on its words.
+theorem PDef::ok_reads(defs: List<PDef>, w: rt::World, src: Source, made: PDef::procedures(defs, w, PDef::known(defs)) = Some(src.procedures),
+    f: PCalls(), needs: Nat → List<BitVec(64)> → Nat, counted: Nat → Bool, k: Nat):
+    PTm::OkReads(PDef::known(defs), src.pure_within(PDef::spec(defs, f, needs), counted, k), PTm::within(needs, counted, k)) {
+    λ p ids kn r env => {
+        let kc = PDef::known_call(defs, w, src.procedures, made, p, env, ids, kn);
+        let proc = PDef::proc_at(src.procedures, p);
+        let words: (proc.enter(env, ids).words_at(PTm::range(0, PDef::arity_at(defs, p))) = env.words_at(ids)) =
+            trans(cong_fn(λ (a: Nat) => proc.enter(env, ids).words_at(PTm::range(0, a)), kc.arity), kc.entered);
+        j(sym(kc.proc_at), λ o _ => (match k.spend(counted(p)) as λ _ => Bool {
+                None => False,
+                Some(j2) => match o as λ _ => Bool { None => True, Some(q) => PDef::spec(defs, f, needs).need(p, q.enter(env, ids)).leb(j2) },
+            }) = PTm::within(needs, counted, k, p, env.words_at(ids)),
+            match k.spend(counted(p)) as λ s => (match s as λ _ => Bool { None => False, Some(j2) => needs(p, proc.enter(env, ids).words_at(PTm::range(0, PDef::arity_at(defs, p)))).leb(j2) })
+                    = (match s as λ _ => Bool { None => False, Some(j2) => needs(p, env.words_at(ids)).leb(j2) }) {
+                None => refl,
+                Some(j2) => cong_fn(λ (xs: List<BitVec(64)>) => needs(p, xs).leb(j2), words),
+            })
+    }
+}
+
+// The theorem: procedures lowered from definitions whose meanings and
+// depths unfold to their bodies' meet every obligation `Source::pure_reads`
+// asks of their bodies.
+theorem PDef::bodies(defs: List<PDef>, w: rt::World, src: Source, made: PDef::procedures(defs, w, PDef::known(defs)) = Some(src.procedures),
+    call: Writers(), still: Writers::Still(call, functions_below(w.sigs.len())), agree: (held: Buffers()) → Tm::CallsAgree(w, Writers::words(call, held)),
+    f: PCalls(), needs: Nat → List<BitVec(64)> → Nat, counted: Nat → Bool,
+    unfolds: PDef::Unfolds(defs, w, f), deep: PDef::Deep(defs, w, f, needs, counted)):
+    src.PureBodies(call, PDef::spec(defs, f, needs), counted) {
+    let known = PDef::known(defs);
+    let spec = PDef::spec(defs, f, needs);
+    λ p proc found => {
+        let pa = PDef::procedures_at(defs, w, known, src.procedures, made, p, proc, found);
+        let got = PDef::at_of(defs, p, λ d => d.procedure(w, known) = Some(proc), pa);
+        let d = PDef::at(defs, p);
+        let n = d.arity;
+        let parts = d.procedure_parts(w, known, proc, got.right);
+        let low = j(parts.right.right, λ r _ => PTm::LowerHolds(d.body, w, known, PTm::word_ctx(n), PTm::param_locs(0, n), n + 1, n, r),
+            d.body.lower_sound(w, known, PTm::word_ctx(n), PTm::param_locs(0, n), n + 1, n));
+        let ar: (PDef::arity_at(defs, p) = n) = j(sym(got.left), λ o _ => (match o as λ _ => Nat { None => 0, Some(x) => x.arity }) = n, refl);
+        ⟨low.left, λ caller args results lj enough io => {
+            let entered = proc.enter(caller, args);
+            let xs = entered.words_at(PTm::range(0, n));
+            let lx: (xs.len() = n) = trans(PTm::words_at_len(entered, PTm::range(0, n)), PTm::range_len(n, 0));
+            let bounded = PTm::bounded_set_words(proc.params, caller.words_at(args), native_source::Env(Nil, caller.buffers, caller.args),
+                PTm::bounded_none(caller.buffers, caller.args));
+            let wa = PTm::words_at_bounded(n, 0, entered, bounded);
+            let held = PTm::hold_params(w.tys, n, xs, lx, entered, 0, wa);
+            let le: (0 + n <= n + 1) = omega();
+            let below = PTm::params_below(n, 0, n + 1, le);
+            let pos: (0 < n + 1) = omega();
+            let answer = src.pure_answer(spec);
+            let r = low.right(call, still, agree, f, answer, PDef::answers(defs, w, src, made, f, needs), entered, PTm::vals_n(w.tys, n, xs), io, held, below, pos);
+            let m = Stmt::thread_by(proc.body, call, answer, entered, io);
+            let v = d.body.sem(w, f, PTm::word_ctx(n), PTm::vals_n(w.tys, n, xs));
+            // Within the levels.
+            let need_le: (needs(p, xs) <= lj) = Nat::le_of_leb(needs(p, xs), lj,
+                eq_true_of_is_true(needs(p, xs).leb(lj), j(ar, λ a _ => needs(p, entered.words_at(PTm::range(0, a))).leb(lj).IsTrue(), enough)));
+            let body_le = Nat::le_trans(d.body.need(w, f, needs, counted, PTm::word_ctx(n), PTm::vals_n(w.tys, n, xs)), needs(p, xs), lj,
+                deep(p, d, got.left, xs), need_le);
+            let within = d.body.need_within(w, f, needs, counted, lj, PTm::word_ctx(n), PTm::vals_n(w.tys, n, xs), body_le);
+            let calls = r.right(src.pure_within(spec, counted, lj), PTm::within(needs, counted, lj), PDef::ok_reads(defs, w, src, made, f, needs, counted, lj), within);
+            // The value it leaves.
+            let single: BitVec(64) → List<BitVec(64)> = λ x => [x];
+            let sv: (spec.value(p, entered) = [v]) = trans(cong_fn(λ (a: Nat) => single(f(p, entered.words_at(PTm::range(0, a)))), ar),
+                cong_fn(single, unfolds(p, d, got.left, xs)));
+            let bufs0: (entered.buffers = caller.buffers) = PTm::set_words_buffers(proc.params, caller.words_at(args), native_source::Env(Nil, caller.buffers, caller.args));
+            let target = Onward(native_source::Env(caller.words, caller.buffers, caller.args).set_words(results, [v]));
+            let leaves = (match m.value as λ fl => (match fl as λ _ => Type {
+                        Onward(after) => (after.buffers = entered.buffers) ∧ (after.number(n) = v.toNat()),
+                        Exited(_) => False,
+                    }) → proc.leave(caller, results, fl) = target {
+                Onward(after) => λ k => {
+                    let wv: (after.word(n) = v) = ETm::word_of_kept(after, n, v, k.right);
+                    let ws: (after.words_at(proc.results) = [v]) = j(sym(parts.right.left), λ rs _ => after.words_at(rs) = [v],
+                        cong_fn(single, wv));
+                    let bufs: (after.buffers = caller.buffers) = trans(k.left, bufs0);
+                    j(sym(ws), λ ys _ => Onward(native_source::Env(caller.words, after.buffers, caller.args).set_words(results, ys)) = target,
+                        cong_fn(λ (bs: List<List<BitVec(8)>>) => Onward(native_source::Env(caller.words, bs, caller.args).set_words(results, [v])), bufs))
+                },
+                Exited(_) => λ never => false_elim(never),
+            })(r.left.right);
+            ⟨calls, ⟨r.left.left, trans(leaves, sym(cong_fn(λ (ys: List<BitVec(64)>) =>
+                Onward(native_source::Env(caller.words, caller.buffers, caller.args).set_words(results, ys)), sv)))⟩⟩
+        }⟩
     }
 }
