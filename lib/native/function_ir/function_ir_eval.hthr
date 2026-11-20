@@ -60,6 +60,13 @@ theorem Nat::matches_eq(self a, b: Nat, h: a.matches(b).IsTrue()): a = b {
     })(h)
 }
 
+theorem Nat::matches_of_eq(self a, b: Nat, e: a = b): a.matches(b).IsTrue() {
+    j(e, λ y _ => a.matches(y).IsTrue(), (match a.eq_dec(a) as λ d => Bool::IsTrue(match d { Inl(_) => True, Inr(_) => False }) {
+        Inl(_) => trivial,
+        Inr(ne) => false_elim(ne(refl)),
+    }))
+}
+
 // `id` is none of `ids`.
 fn absent(id: Nat, ids: List<Nat>) → Bool {
     match ids { Nil => True, Cons(x, rest) => id.differs(x) && absent(id, rest) }
@@ -1767,55 +1774,55 @@ theorem program_linked_sources(functions: List<Function>): (arities: List<Nat>) 
     }
 }
 
+// Calls `call` answers with `sources`' answers on every word list of a fitting
+// arity that `admits` admits: a function's contract, which passes only the
+// words its parameters admit (an enum's tags, every word of a word).
+fn Answers::Agree(call, sources: Answers(), arity: Nat → Option<Nat>, admits: Nat → List<BitVec(64)> → Type) → Type {
+    (f: Nat) → (words: List<BitVec(64)>) → arity_fits(arity(f), words.len()).IsTrue() → admits(f, words) → call(f, words) = sources(f, words)
+}
+
 // The same over a file, at every file at once: the functions' sources are
 // what they compute at each file (a function lent spans reads the file's),
 // and the program, evaluated over a file, is its sources there
-// (docs/native/native-one-compiler-design.md §2.3). That a function's calls fit is
-// no file's matter and is stated once.
-fn program_linked_files(functions: List<Function>, arities: List<Nat>, sources: Buffers() → Answers()) → Type {
+// (docs/native/native-one-compiler-design.md §2.3). Each function is stated
+// on the words it admits, its calls answered by any calls that answer its
+// callees' sources on the words they admit: so a function is never asked
+// what it does with a word no caller passes. That a function's calls fit
+// is no file's matter and is stated once.
+fn program_linked_files(functions: List<Function>, arities: List<Nat>, admits: Nat → List<BitVec(64)> → Type, sources: Buffers() → Answers()) → Type {
     match functions {
         Nil => True,
         Cons(last, earlier) =>
             (last.calls_fit(linked_arity(earlier, arities.tail())).IsTrue()
-                ∧ ((buffers: Buffers()) → (words: List<BitVec(64)>) → arity_fits(arities.nth(0), words.len()).IsTrue() →
-                    last.eval(sources(buffers), words, buffers := buffers) = sources(buffers)(earlier.len(), words)))
-            ∧ program_linked_files(earlier, arities.tail(), sources),
+                ∧ ((buffers: Buffers()) → (call: Answers()) → Answers::Agree(call, sources(buffers), linked_arity(earlier, arities.tail()), admits) →
+                    (words: List<BitVec(64)>) → arity_fits(arities.nth(0), words.len()).IsTrue() → admits(earlier.len(), words) →
+                    last.eval(call, words, buffers := buffers) = sources(buffers)(earlier.len(), words)))
+            ∧ program_linked_files(earlier, arities.tail(), admits, sources),
     }
 }
 
-theorem program_linked_files_sources(functions: List<Function>): (arities: List<Nat>) → (sources: Buffers() → Answers()) →
-    program_linked_files(functions, arities, sources) → (buffers: Buffers()) →
-    (f: Nat) → (words: List<BitVec(64)>) → arity_fits(linked_arity(functions, arities, f), words.len()).IsTrue() →
-        program_eval_over(buffers, functions, f, words) = sources(buffers)(f, words) {
+// A linked program answers with its sources on the words they admit.
+theorem program_linked_files_sources(functions: List<Function>): (arities: List<Nat>) → (admits: Nat → List<BitVec(64)> → Type) →
+    (sources: Buffers() → Answers()) → program_linked_files(functions, arities, admits, sources) → (buffers: Buffers()) →
+    Answers::Agree(program_eval_over(buffers, functions), sources(buffers), linked_arity(functions, arities), admits) {
     match functions {
-        Nil => λ arities sources linked buffers f words never => false_elim(never),
-        Cons(last, earlier) => λ arities sources linked buffers f words => {
-            let ih = program_linked_files_sources(earlier, arities.tail(), sources, linked.right, buffers);
+        Nil => λ arities admits sources linked buffers f words never => false_elim(never),
+        Cons(last, earlier) => λ arities admits sources linked buffers f words => {
+            let ih = program_linked_files_sources(earlier, arities.tail(), admits, sources, linked.right, buffers);
             (match f.eq_dec(earlier.len()) as λ d =>
                 arity_fits(match d { Inl(_) => arities.nth(0), Inr(_) => linked_arity(earlier, arities.tail(), f) },
-                    words.len()).IsTrue() →
+                    words.len()).IsTrue() → admits(f, words) →
                 (match d as λ _ => BitVec(64) {
                     Inl(_) => last.eval(program_eval_over(buffers, earlier), words, buffers := buffers),
                     Inr(_) => program_eval_over(buffers, earlier, f, words),
                 }) = sources(buffers)(f, words) {
-                Inl(e) => λ fits => trans(
-                    last.eval_answers_over(buffers, sources(buffers), program_eval_over(buffers, earlier), linked_arity(earlier, arities.tail()), ih,
-                        linked.left.left, words),
-                    j(sym(e), λ g _ => last.eval(sources(buffers), words, buffers := buffers) = sources(buffers)(g, words),
-                        linked.left.right(buffers, words, fits))),
+                Inl(e) => λ fits => j(sym(e), λ g _ => admits(g, words) →
+                        last.eval(program_eval_over(buffers, earlier), words, buffers := buffers) = sources(buffers)(g, words),
+                    linked.left.right(buffers, program_eval_over(buffers, earlier), ih, words, fits)),
                 Inr(_) => λ fits => ih(f, words, fits),
             })
         },
     }
-}
-
-// A linked program's last function's words past its first are its own,
-// its calls answered by the sources (over no buffers).
-theorem program_linked_also(last: Function, earlier: List<Function>, arities: List<Nat>, sources: Buffers() → Answers(),
-    linked: program_linked_files(Cons(last, earlier), arities, sources), arguments: List<BitVec(64)>):
-    program_eval_also(Cons(last, earlier), arguments) = last.eval_also(sources(Nil), arguments) {
-    last.eval_also_answers_over(Nil, sources(Nil), program_eval_over(Nil, earlier), linked_arity(earlier, arities.tail()),
-        program_linked_files_sources(earlier, arities.tail(), sources, linked.right, Nil), linked.left.left, arguments)
 }
 
 // For a program checked whole (`program_evaluable`).

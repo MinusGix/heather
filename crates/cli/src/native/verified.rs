@@ -550,8 +550,8 @@ fn {prefix}_taken() → List<Nat> {{ {source}::arities }}\n");
 // The program's function {index} evaluates to `{named}`: the generator's
 // theorem about every function of the program, read at this one.
 theorem {function}_native_agrees({typed}): {evaluated} = {named}({list}) {{
-    program_linked_files_sources({prefix}_program(), {source}::arities, link_sources_at({source}::sources), {source}::sourced, Nil, {index},
-        [{list}], trivial)
+    program_linked_files_sources({prefix}_program(), {source}::arities, link_admits({source}::admits), link_sources_at({source}::sources), {source}::sourced,
+        Nil, {index}, [{list}], trivial, trivial)
 }}
 ", typed = typed(&parameters)));
         let imported = |text: &str| text.lines().any(|line| line.strip_prefix("import ").and_then(|rest| rest.strip_suffix(';')) == Some(module.as_str()));

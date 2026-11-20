@@ -534,7 +534,7 @@ theorem FTm::links_answer(tys: Nat → RecInfo, rest: List<List<BitVec(8)>>, own
 // whatever words. Every callee it names is one marked still (`named`,
 // against the arities of those alone). The two conjuncts are the ones
 // `program_spanned` asks of a function marked still.
-theorem Compile::spanned<F>(f: F, c: Compile<F>(f), quiet: c.code.body.quiet().IsTrue(),
+theorem Compile::spanned<F>(f: F, c: Compile<F>(f), quiet: c.code.body.quiet().IsTrue(), open: Ty::all_open(c.reflected.params).IsTrue(),
     srcs: List<List<BitVec(8)>> → List<BitVec(8)> → List<List<BitVec(64)> → Ending>, links: List<Nat>, arity: Nat → Option<Nat>, still: Nat → Bool,
     linked: (rest: List<List<BitVec(8)>>) → (own: List<BitVec(8)>) →
         links.map(λ (n: Nat) => link_source(srcs(rest, own).map(span_word), n)) = Compile::table(f, c, Cons(own, rest)),
@@ -558,7 +558,8 @@ theorem Compile::spanned<F>(f: F, c: Compile<F>(f), quiet: c.code.body.quiet().I
             let table = link_sources(Compile::table(f, c, b));
             let meaning = Ty::lent_at(at.tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed(b), f, b);
             let answered = Ty::answers_at(at.tys, c.reflected.params, c.reflected.result, meaning, λ xs => c.code.eval(table, xs, buffers := b),
-                c.agrees(b, table, at.calls_agree_own()), words, sym(c.reflected.params.len().matches_eq(words.len(), n)));
+                c.agrees(b, table, at.calls_agree_own()), words, sym(c.reflected.params.len().matches_eq(words.len(), n)),
+                Ty::all_open_admits(at.tys, c.reflected.params, open, words));
             let moved = c.code.eval_answers_over(b, table, Writers::words(other, b), c.world.callee_arity(),
                 λ k ws ok => trans(
                     trans(cong_fn(λ (e: Ending) => e.word, sourced.left(s, link_at(links, k), ws,

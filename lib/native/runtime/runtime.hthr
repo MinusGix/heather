@@ -809,44 +809,59 @@ theorem Ty::answers_uncurry(tys: Nat → RecInfo, ps: List<Ty>, r: Ty): (v: Ty::
     Ty::Answers(tys, ps, r, v, λ ws => Ty::uncurry(tys, ps, r, v, ws)) {
     match ps {
         Nil => λ v => refl,
-        Cons(p, rest) => λ v => λ x => Ty::answers_uncurry(tys, rest, r, v(Ty::cast(tys, Word(64), p, x))),
+        Cons(p, rest) => λ v => λ x _ => Ty::answers_uncurry(tys, rest, r, v(Ty::cast(tys, Word(64), p, x))),
     }
 }
 
 // What answers like a meaning is its uncurried form, on as many words as
-// parameters.
+// parameters, each admitted.
 theorem Ty::answers_at(tys: Nat → RecInfo, ps: List<Ty>, r: Ty): (v: Ty::Arrows(tys, ps, r)) → (ans: List<BitVec(64)> → BitVec(64)) →
-    Ty::Answers(tys, ps, r, v, ans) → (words: List<BitVec(64)>) → words.len() = ps.len() → ans(words) = Ty::uncurry(tys, ps, r, v, words) {
+    Ty::Answers(tys, ps, r, v, ans) → (words: List<BitVec(64)>) → words.len() = ps.len() → Ty::AdmitsAll(tys, ps, words) →
+    ans(words) = Ty::uncurry(tys, ps, r, v, words) {
     match ps {
-        Nil => λ v ans held words => match words as λ ws => ws.len() = 0 → ans(ws) = Ty::uncurry(tys, Nil, r, v, ws) {
-            Nil => λ _ => held,
-            Cons(_, more) => λ (bad: more.len() + 1 = 0) => false_elim(more.len().succ_ne_zero(bad)),
+        Nil => λ v ans held words => match words as λ ws => ws.len() = 0 → Ty::AdmitsAll(tys, Nil, ws) → ans(ws) = Ty::uncurry(tys, Nil, r, v, ws) {
+            Nil => λ _ _ => held,
+            Cons(_, more) => λ (bad: more.len() + 1 = 0) _ => false_elim(more.len().succ_ne_zero(bad)),
         },
-        Cons(p, rest) => λ v ans held words => match words as λ ws => ws.len() = rest.len() + 1 → ans(ws) = Ty::uncurry(tys, Cons(p, rest), r, v, ws) {
-            Nil => λ (bad: 0 = rest.len() + 1) => false_elim(rest.len().zero_ne_succ(bad)),
-            Cons(x, more) => λ (same: more.len() + 1 = rest.len() + 1) =>
-                Ty::answers_at(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)), held(x), more,
-                    Nat::succ_inj(more.len(), rest.len(), same)),
+        Cons(p, rest) => λ v ans held words => match words as λ ws => ws.len() = rest.len() + 1 → Ty::AdmitsAll(tys, Cons(p, rest), ws) →
+            ans(ws) = Ty::uncurry(tys, Cons(p, rest), r, v, ws) {
+            Nil => λ (bad: 0 = rest.len() + 1) _ => false_elim(rest.len().zero_ne_succ(bad)),
+            Cons(x, more) => λ (same: more.len() + 1 = rest.len() + 1) admitted =>
+                Ty::answers_at(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)), held(x, admitted.left), more,
+                    Nat::succ_inj(more.len(), rest.len(), same), admitted.right),
         },
     }
 }
 
+// What is its uncurried form on as many admitted words as parameters
+// answers like the meaning (the converse of `Ty::answers_at`).
+theorem Ty::answers_of_admitted(tys: Nat → RecInfo, ps: List<Ty>, r: Ty): (v: Ty::Arrows(tys, ps, r)) → (ans: List<BitVec(64)> → BitVec(64)) →
+    ((xs: List<BitVec(64)>) → xs.len() = ps.len() → Ty::AdmitsAll(tys, ps, xs) → ans(xs) = Ty::uncurry(tys, ps, r, v, xs)) → Ty::Answers(tys, ps, r, v, ans) {
+    match ps {
+        Nil => λ v ans h => h(Nil, refl, trivial),
+        Cons(p, rest) => λ v ans h => λ x admitted => Ty::answers_of_admitted(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)),
+            λ ws len more => h(Cons(x, ws), cong_fn(λ (n: Nat) => n + 1, len), ⟨admitted, more⟩)),
+    }
+}
+
 // The same of the words past the first: what answers like a meaning's is
-// its applied value's (`Ty::rest_words`), on as many words as parameters.
+// its applied value's (`Ty::rest_words`), on as many admitted words as
+// parameters.
 theorem Ty::answers_also_at(tys: Nat → RecInfo, ps: List<Ty>, r: Ty): (v: Ty::Arrows(tys, ps, r)) → (ans: List<BitVec(64)> → List<BitVec(64)>) →
-    Ty::AnswersAlso(tys, ps, r, v, ans) → (words: List<BitVec(64)>) → words.len() = ps.len() →
+    Ty::AnswersAlso(tys, ps, r, v, ans) → (words: List<BitVec(64)>) → words.len() = ps.len() → Ty::AdmitsAll(tys, ps, words) →
     ans(words) = Ty::rest_words(tys, r, Ty::apply(tys, ps, r, v, words)) {
     match ps {
-        Nil => λ v ans held words => match words as λ ws => ws.len() = 0 → ans(ws) = Ty::rest_words(tys, r, Ty::apply(tys, Nil, r, v, ws)) {
-            Nil => λ _ => held,
-            Cons(_, more) => λ (bad: more.len() + 1 = 0) => false_elim(more.len().succ_ne_zero(bad)),
+        Nil => λ v ans held words => match words as λ ws => ws.len() = 0 → Ty::AdmitsAll(tys, Nil, ws) →
+            ans(ws) = Ty::rest_words(tys, r, Ty::apply(tys, Nil, r, v, ws)) {
+            Nil => λ _ _ => held,
+            Cons(_, more) => λ (bad: more.len() + 1 = 0) _ => false_elim(more.len().succ_ne_zero(bad)),
         },
-        Cons(p, rest) => λ v ans held words => match words as λ ws => ws.len() = rest.len() + 1 →
+        Cons(p, rest) => λ v ans held words => match words as λ ws => ws.len() = rest.len() + 1 → Ty::AdmitsAll(tys, Cons(p, rest), ws) →
             ans(ws) = Ty::rest_words(tys, r, Ty::apply(tys, Cons(p, rest), r, v, ws)) {
-            Nil => λ (bad: 0 = rest.len() + 1) => false_elim(rest.len().zero_ne_succ(bad)),
-            Cons(x, more) => λ (same: more.len() + 1 = rest.len() + 1) =>
-                Ty::answers_also_at(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)), held(x), more,
-                    Nat::succ_inj(more.len(), rest.len(), same)),
+            Nil => λ (bad: 0 = rest.len() + 1) _ => false_elim(rest.len().zero_ne_succ(bad)),
+            Cons(x, more) => λ (same: more.len() + 1 = rest.len() + 1) admitted =>
+                Ty::answers_also_at(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)), held(x, admitted.left), more,
+                    Nat::succ_inj(more.len(), rest.len(), same), admitted.right),
         },
     }
 }
@@ -858,6 +873,15 @@ fn link_source(srcs: List<List<BitVec(64)> → BitVec(64)>, k: Nat) → List<Bit
 
 // Calls answered by a list of word functions.
 fn link_sources(srcs: List<List<BitVec(64)> → BitVec(64)>) → Answers() { λ k words => link_source(srcs, k, words) }
+
+// The words function `k` of a list of admitted-word predicates admits,
+// every word list past its end.
+fn link_admit(adm: List<List<BitVec(64)> → Bool>, k: Nat) → List<BitVec(64)> → Bool {
+    match adm.nth(k) { None => λ _ => Bool::True, Some(a) => a }
+}
+
+// A program's admitted words, function by function.
+fn link_admits(adm: List<List<BitVec(64)> → Bool>) → Nat → List<BitVec(64)> → Type { λ k words => link_admit(adm, k, words).IsTrue() }
 
 // A table's renaming: entry `k` is the program's `links[k]`.
 fn link_at(links: List<Nat>) → Nat → Nat { λ k => match links.nth(k) { None => 0, Some(n) => n } }
@@ -931,6 +955,52 @@ fn Sig::uncurried(tys: Nat → RecInfo, sigs: List<Sig>) → Sig::Sems(tys, sigs
 }
 
 fn World::uncurried(self w: World) → List<List<BitVec(64)> → BitVec(64)> { Sig::uncurried(w.tys, w.sigs, w.callees) }
+
+// A table's admitted words, entry by entry (`Ty::AdmitsAll`).
+fn Sig::admitted(tys: Nat → RecInfo, sigs: List<Sig>) → List<List<BitVec(64)> → Bool> {
+    match sigs { Nil => Nil, Cons(s, rest) => Cons(λ ws => Ty::admits_all(tys, s.params, ws), Sig::admitted(tys, rest)) }
+}
+
+fn World::admitted(self w: World) → List<List<BitVec(64)> → Bool> { Sig::admitted(w.tys, w.sigs) }
+
+// A word-signature entry takes as many words as its parameters.
+theorem Sig::arity_words(tys: Nat → RecInfo, sigs: List<Sig>): (k: Nat) → Sig::at(sigs, k).Words(tys) → (n: Nat) → n = Sig::at(sigs, k).params.len() →
+    arity_fits(Sig::arity(sigs, k), n).IsTrue() {
+    match sigs {
+        Nil => λ k ok => false_elim(ok.right),
+        Cons(s, rest) => λ k => match k as λ i => Sig::at(Cons(s, rest), i).Words(tys) → (n: Nat) → n = Sig::at(Cons(s, rest), i).params.len() →
+            arity_fits(Sig::arity(Cons(s, rest), i), n).IsTrue() {
+            Zero => λ _ n e => s.params.len().matches_of_eq(n, sym(e)),
+            Succ(i) => λ ok => Sig::arity_words(tys, rest, i, ok),
+        },
+    }
+}
+
+// Where a list of admitted-word predicates, read through a table's
+// renaming, is the table's own (by conversion, as `Sig::links_agree`'s
+// sources), what an entry admits its program function admits.
+theorem Sig::links_admit(tys: Nat → RecInfo, adm: List<List<BitVec(64)> → Bool>, sigs: List<Sig>): (links: List<Nat>) →
+    links.map(λ (n: Nat) => link_admit(adm, n)) = Sig::admitted(tys, sigs) →
+    (k: Nat) → Sig::at(sigs, k).Words(tys) → (words: List<BitVec(64)>) → Ty::AdmitsAll(tys, Sig::at(sigs, k).params, words) →
+    link_admit(adm, link_at(links, k), words).IsTrue() {
+    match sigs {
+        Nil => λ links linked k ok => false_elim(ok.right),
+        Cons(s, rest) => λ links => match links as λ ls => ls.map(λ (n: Nat) => link_admit(adm, n)) = Sig::admitted(tys, Cons(s, rest)) →
+            (k: Nat) → Sig::at(Cons(s, rest), k).Words(tys) → (words: List<BitVec(64)>) → Ty::AdmitsAll(tys, Sig::at(Cons(s, rest), k).params, words) →
+            link_admit(adm, link_at(ls, k), words).IsTrue() {
+            Nil => λ linked => false_elim(List::nil_ne_cons(Sig::admitted(tys, rest), λ (ws: List<BitVec(64)>) => Ty::admits_all(tys, s.params, ws), linked)),
+            Cons(l, ls) => λ linked k => {
+                let heads = cong_fn(λ (fs: List<List<BitVec(64)> → Bool>) => fs.head_or(λ (_: List<BitVec(64)>) => Bool::True), linked);
+                let tails = cong_fn(λ (fs: List<List<BitVec(64)> → Bool>) => fs.tail(), linked);
+                match k as λ i => Sig::at(Cons(s, rest), i).Words(tys) → (words: List<BitVec(64)>) → Ty::AdmitsAll(tys, Sig::at(Cons(s, rest), i).params, words) →
+                    link_admit(adm, link_at(Cons(l, ls), i), words).IsTrue() {
+                    Zero => λ _ words h => j(sym(heads), λ g _ => g(words).IsTrue(), Ty::admits_all_complete(tys, s.params, words, h)),
+                    Succ(i) => λ ok words h => Sig::links_admit(tys, adm, rest, ls, tails, i, ok, words, h),
+                }
+            },
+        },
+    }
+}
 
 fn World::arity(self w: World) → Nat → Option<Nat> { λ k => Sig::arity(w.sigs, k) }
 
@@ -1052,66 +1122,140 @@ fn link_arity(functions: List<Function>, arities: List<Nat>, k: Nat) → Nat →
     linked_arity(functions.drop(k), arities.drop(k))
 }
 
-// An instance's code, linked into a program whose calls `srcs` answers at
-// each file and whose functions take `arity` words: its calls fit the
-// program, and over every file it returns its function's meaning there.
-// `links` names, for each entry of its table, a function of the program
-// answered by that entry's meaning (`linked`, by conversion, at every file)
-// and taking that entry's words (`named`, by evaluating the two lists).
-// That the code's calls fit its own table is the instance's `fits`, so no
-// link reads the code. This is one conjunct of `program_linked_files`.
-theorem Compile::part<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<List<BitVec(64)> → BitVec(64)>, links: List<Nat>, arity: Nat → Option<Nat>,
+// A program's admitted words, function by function, spelled with no
+// binder: the generator applies `Compile::admits` to each function and its
+// instance.
+fn link_admits_nil() → List<List<BitVec(64)> → Bool> { [] }
+
+fn link_admits_cons(a: List<BitVec(64)> → Bool, rest: List<List<BitVec(64)> → Bool>) → List<List<BitVec(64)> → Bool> { Cons(a, rest) }
+
+theorem link_same_admits(x: List<List<BitVec(64)> → Bool>): x = x { refl }
+
+// The words an instance's function admits (`Ty::AdmitsAll` at its
+// parameters), read by pattern as `Compile::uncurried` is.
+fn Compile::admits<F>(f: F, c: Compile<F>(f)) → List<BitVec(64)> → Bool {
+    match c { Compile(reflected, World(tys, _, _, _), _, _, _, _, _) => λ ws => Ty::admits_all(tys, reflected.params, ws) }
+}
+
+// An instance's table of admitted words: what `links` must name.
+fn Compile::admit_table<F>(f: F, c: Compile<F>(f)) → List<List<BitVec(64)> → Bool> { c.world.at(c.callees, Nil).admitted() }
+
+// Calls answered by a table's own meanings at its first entry (the
+// function itself, which its code never calls by its index) and by
+// `other` at every other.
+fn link_own(own, other: Answers()) → Answers() { λ k words => match k { Zero => own(0, words), Succ(_) => other(k, words) } }
+
+// The two answer alike wherever a callee is called.
+theorem link_own_callees(sigs: List<Sig>, own, other: Answers()): (k: Nat) → (words: List<BitVec(64)>) →
+    arity_fits(Sig::callee_arity(sigs, k), words.len()).IsTrue() → other(k, words) = link_own(own, other, k, words) {
+    λ k words => match k as λ i => arity_fits(Sig::callee_arity(sigs, i), words.len()).IsTrue() → other(i, words) = link_own(own, other, i, words) {
+        Zero => λ never => false_elim(never),
+        Succ(_) => λ _ => refl,
+    }
+}
+
+// Calls that answer a program's sources on the words they admit, renamed
+// by `links`, answer an instance's table: each callee is answered by the
+// program function `links` names, on the words the callee admits, which
+// that function admits (`admitted`) and whose source is the callee's
+// meaning (`linked`).
+theorem Compile::calls_agree_linked<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<List<BitVec(64)> → BitVec(64)>, adm: List<List<BitVec(64)> → Bool>,
+    links: List<Nat>, arity: Nat → Option<Nat>,
     linked: (b: Buffers()) → links.map(λ (n: Nat) => link_source(srcs(b), n)) = Compile::table(f, c, b),
+    admitted: links.map(λ (n: Nat) => link_admit(adm, n)) = Compile::admit_table(f, c),
+    named: Sig::links_fit(c.world.sigs.tail(), links.tail(), arity).IsTrue(),
+    b: Buffers(), call: Answers(), agree: Answers::Agree(call, link_sources(srcs(b)), arity, link_admits(adm))):
+    Tm::CallsAgree(c.world.at(c.callees, b), link_own(link_sources(Compile::table(f, c, b)), Answers::relabel(call, link_at(links)))) {
+    let at = c.world.at(c.callees, b);
+    let mixed = link_own(link_sources(Compile::table(f, c, b)), Answers::relabel(call, link_at(links)));
+    λ g => match g as λ k => Sig::at(at.sigs, k).Words(at.tys) →
+        Ty::Answers(at.tys, Sig::at(at.sigs, k).params, Sig::at(at.sigs, k).result, Sig::get(at.tys, at.sigs, at.callees, k), λ ws => mixed(k, ws)) {
+        Zero => λ ok => at.calls_agree_own()(0, ok),
+        Succ(i) => λ ok => Ty::answers_of_admitted(at.tys, Sig::at(at.sigs, i + 1).params, Sig::at(at.sigs, i + 1).result,
+            Sig::get(at.tys, at.sigs, at.callees, i + 1), λ ws => call(link_at(links, i + 1), ws), λ ws len taken => {
+                let fits = Sig::arity_words(at.tys, at.sigs, i + 1, ok, ws.len(), len);
+                trans(agree(link_at(links, i + 1), ws, Sig::callee_links_fit_at(arity, c.world.sigs, links, named, i + 1, ws.len(), fits),
+                        Sig::links_admit(at.tys, adm, at.sigs, links, admitted, i + 1, ok, ws, taken)),
+                    trans(Sig::links_agree(c.world.tys, srcs(b), c.world.sigs, c.callees(b), links, linked(b), i + 1, ws, fits),
+                        Ty::answers_at(at.tys, Sig::at(at.sigs, i + 1).params, Sig::at(at.sigs, i + 1).result, Sig::get(at.tys, at.sigs, at.callees, i + 1),
+                            λ ws2 => link_sources(Sig::uncurried(at.tys, at.sigs, at.callees), i + 1, ws2),
+                            Sig::uncurried_answers(at.tys, at.sigs, at.callees, i + 1, ok), ws, len, taken)))
+            }),
+    }
+}
+
+// An instance's code, linked into a program whose calls `srcs` answers at
+// each file and whose functions take `arity` words and admit `adm`'s: its
+// calls fit the program, and over every file, its calls answered by any
+// calls that answer the program's sources on the words they admit, it
+// returns its function's meaning there on the words it admits. `links`
+// names, for each entry of its table, a function of the program answered
+// by that entry's meaning (`linked`, by conversion, at every file),
+// admitting that entry's words (`admitted`) and taking as many
+// (`named`, by evaluating the two lists). That the code's calls fit its
+// own table is the instance's `fits`, so no link reads the code. This is
+// one conjunct of `program_linked_files`.
+theorem Compile::part<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<List<BitVec(64)> → BitVec(64)>, adm: List<List<BitVec(64)> → Bool>,
+    links: List<Nat>, arity: Nat → Option<Nat>,
+    linked: (b: Buffers()) → links.map(λ (n: Nat) => link_source(srcs(b), n)) = Compile::table(f, c, b),
+    admitted: links.map(λ (n: Nat) => link_admit(adm, n)) = Compile::admit_table(f, c),
     named: Sig::links_fit(c.world.sigs.tail(), links.tail(), arity).IsTrue()):
     Compile::linked(f, c, links).calls_fit(arity).IsTrue()
-    ∧ ((b: Buffers()) → (words: List<BitVec(64)>) → arity_fits(Some(Compile::arity(f, c)), words.len()).IsTrue() →
-        Compile::linked(f, c, links).eval(link_sources(srcs(b)), words, buffers := b) = Compile::uncurried(f, c, b, words)) {
+    ∧ ((b: Buffers()) → (call: Answers()) → Answers::Agree(call, link_sources(srcs(b)), arity, link_admits(adm)) →
+        (words: List<BitVec(64)>) → arity_fits(Some(Compile::arity(f, c)), words.len()).IsTrue() → Compile::admits(f, c, words).IsTrue() →
+        Compile::linked(f, c, links).eval(call, words, buffers := b) = Compile::uncurried(f, c, b, words)) {
     ⟨c.code.relabel_calls_fit(link_at(links), c.world.callee_arity(), arity,
         Sig::callee_links_fit_at(arity, c.world.sigs, links, named), c.fits),
-    λ b words n => {
+    λ b call agree words n admits => {
         let at = c.world.at(c.callees, b);
         let own = link_sources(Compile::table(f, c, b));
+        let others = Answers::relabel(call, link_at(links));
+        let mixed = link_own(own, others);
         let meaning = Ty::lent_at(at.tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed(b), f, b);
-        let answered = Ty::answers_at(at.tys, c.reflected.params, c.reflected.result, meaning, λ xs => c.code.eval(own, xs, buffers := b),
-            c.agrees(b, own, at.calls_agree_own()), words, sym(c.reflected.params.len().matches_eq(words.len(), n)));
-        trans(c.code.relabel_eval_over(b, link_sources(srcs(b)), link_at(links), words),
-            trans(c.code.eval_answers_over(b, own, Answers::relabel(link_sources(srcs(b)), link_at(links)), c.world.callee_arity(),
-                λ k ws fits => Sig::links_agree(c.world.tys, srcs(b), c.world.sigs, c.callees(b), links, linked(b), k, ws,
-                    Sig::callee_fits(c.world.sigs, k, ws.len(), fits)), c.fits, words),
+        let answered = Ty::answers_at(at.tys, c.reflected.params, c.reflected.result, meaning, λ xs => c.code.eval(mixed, xs, buffers := b),
+            c.agrees(b, mixed, Compile::calls_agree_linked(f, c, srcs, adm, links, arity, linked, admitted, named, b, call, agree)), words,
+            sym(c.reflected.params.len().matches_eq(words.len(), n)), Ty::admits_all_sound(at.tys, c.reflected.params, words, admits));
+        trans(c.code.relabel_eval_over(b, call, link_at(links), words),
+            trans(c.code.eval_answers_over(b, mixed, others, c.world.callee_arity(), link_own_callees(c.world.sigs, own, others), c.fits, words),
                 answered))
     }⟩
 }
 
 // A program whose last function is an instance's code returning two words:
 // the program's words past the first (`program_eval_also`) are the
-// function's, at no file. `linked` is what `Compile::part` takes, and
-// `also` the instance's agreement on those words
-// (`Setup::plain_agrees_also`); the program is linked
-// (`program_linked_files`), so its earlier functions answer the code's
-// calls with their meanings.
-theorem Compile::root_also<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<List<BitVec(64)> → BitVec(64)>, links: List<Nat>,
+// function's, at no file, on the words it admits. `linked`, `admitted` and
+// `named` are what `Compile::part` takes, and `also` the instance's
+// agreement on those words (`Setup::plain_agrees_also`); the program is
+// linked (`program_linked_files`), so its earlier functions answer the
+// code's calls with their meanings.
+theorem Compile::root_also<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<List<BitVec(64)> → BitVec(64)>, adm: List<List<BitVec(64)> → Bool>,
+    links: List<Nat>,
     linked: (b: Buffers()) → links.map(λ (n: Nat) => link_source(srcs(b), n)) = Compile::table(f, c, b),
+    admitted: links.map(λ (n: Nat) => link_admit(adm, n)) = Compile::admit_table(f, c),
     also: (call: Answers()) → Tm::CallsAgree(c.world.at(c.callees, Nil), call) →
         Ty::AnswersAlso(c.world.at(c.callees, Nil).tys, c.reflected.params, c.reflected.result,
             Ty::lent_at(c.world.at(c.callees, Nil).tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed(Nil), f, Nil),
             λ xs => c.code.eval_also(call, xs, buffers := Nil)),
     earlier: List<Function>, arities: List<Nat>,
-    sourced: program_linked_files(Cons(Compile::linked(f, c, links), earlier), arities, link_sources_at(srcs)),
-    words: List<BitVec(64)>, n: arity_fits(Some(Compile::arity(f, c)), words.len()).IsTrue()):
+    sourced: program_linked_files(Cons(Compile::linked(f, c, links), earlier), arities, link_admits(adm), link_sources_at(srcs)),
+    named: Sig::links_fit(c.world.sigs.tail(), links.tail(), linked_arity(earlier, arities.tail())).IsTrue(),
+    words: List<BitVec(64)>, n: arity_fits(Some(Compile::arity(f, c)), words.len()).IsTrue(), admits: Compile::admits(f, c, words).IsTrue()):
     program_eval_also(Cons(Compile::linked(f, c, links), earlier), words) =
         Ty::rest_words(c.world.at(c.callees, Nil).tys, c.reflected.result, Ty::apply(c.world.at(c.callees, Nil).tys, c.reflected.params, c.reflected.result,
             Ty::lent_at(c.world.at(c.callees, Nil).tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed(Nil), f, Nil), words)) {
     let at = c.world.at(c.callees, Nil);
+    let call = program_eval_over(Nil, earlier);
+    let agree = program_linked_files_sources(earlier, arities.tail(), link_admits(adm), link_sources_at(srcs), sourced.right, Nil);
     let own = link_sources(Compile::table(f, c, Nil));
+    let others = Answers::relabel(call, link_at(links));
+    let mixed = link_own(own, others);
     let meaning = Ty::lent_at(at.tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed(Nil), f, Nil);
-    let answered = Ty::answers_also_at(at.tys, c.reflected.params, c.reflected.result, meaning, λ xs => c.code.eval_also(own, xs, buffers := Nil),
-        also(own, at.calls_agree_own()), words, sym(c.reflected.params.len().matches_eq(words.len(), n)));
-    trans(program_linked_also(Compile::linked(f, c, links), earlier, arities, link_sources_at(srcs), sourced, words),
-        trans(c.code.relabel_eval_also_over(Nil, link_sources(srcs(Nil)), link_at(links), words),
-            trans(c.code.eval_also_answers_over(Nil, own, Answers::relabel(link_sources(srcs(Nil)), link_at(links)), c.world.callee_arity(),
-                λ k ws fits => Sig::links_agree(c.world.tys, srcs(Nil), c.world.sigs, c.callees(Nil), links, linked(Nil), k, ws,
-                    Sig::callee_fits(c.world.sigs, k, ws.len(), fits)), c.fits, words),
-                answered)))
+    let answered = Ty::answers_also_at(at.tys, c.reflected.params, c.reflected.result, meaning, λ xs => c.code.eval_also(mixed, xs, buffers := Nil),
+        also(mixed, Compile::calls_agree_linked(f, c, srcs, adm, links, linked_arity(earlier, arities.tail()), linked, admitted, named, Nil, call, agree)),
+        words, sym(c.reflected.params.len().matches_eq(words.len(), n)), Ty::admits_all_sound(at.tys, c.reflected.params, words, admits));
+    trans(c.code.relabel_eval_also_over(Nil, call, link_at(links), words),
+        trans(c.code.eval_also_answers_over(Nil, mixed, others, c.world.callee_arity(), link_own_callees(c.world.sigs, own, others), c.fits, words),
+            answered))
 }
 
 // A table of meanings that answers every call with a default: what the
@@ -1527,10 +1671,11 @@ fn runtime_held(e: Expr, what: String) → Tac<Expr> {
 // The program (the last function first, as `program_eval` reads it), the
 // word functions answering its calls at each file, and the proof each
 // function returns its own over every file (`program_linked_files`), with
-// that statement.
+// that statement. `adm` is each function's admitted words
+// (`Compile::admits`), as `srcs` lists the functions.
 // `root`: the last function's arguments to `Compile::part` up to its
 // arity, what `Compile::root_also` takes before its agreement.
-record Linked { program: Expr, srcs: Expr, arities: Expr, sourced: Expr, statement: Expr, root: List<Expr> }
+record Linked { program: Expr, srcs: Expr, arities: Expr, sourced: Expr, statement: Expr, root: List<Expr>, adm: Expr }
 
 // Each function's type, read once: what `Compile`'s members take first.
 // Spelled, not left to inference (`Blank`), in everything the link applies:
@@ -1570,6 +1715,12 @@ fn runtime_linked(q: RtQ, ts: RtTypes, l: Linking, insts: List<Pair<Expr, Expr>>
     let files_cons <- runtime_global(name_of(link_files_cons));
     let sources <- runtime_global(name_of(link_sources_at));
     let linked_files <- runtime_global(name_of(program_linked_files));
+    let admits <- runtime_global(name_of(Compile::admits));
+    let admit_table <- runtime_global(name_of(Compile::admit_table));
+    let admits_nil <- runtime_global(name_of(link_admits_nil));
+    let admits_cons <- runtime_global(name_of(link_admits_cons));
+    let admits_of <- runtime_global(name_of(link_admits));
+    let same_admits <- runtime_global(name_of(link_same_admits));
     let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
     let links = l.tables.map(λ t => q.nat_list(runtime_links(l.order, t)));
     let types <- runtime_types(insts);
@@ -1578,23 +1729,25 @@ fn runtime_linked(q: RtQ, ts: RtTypes, l: Linking, insts: List<Pair<Expr, Expr>>
     let indices = List::range(insts.len());
     // Each function at each file: `Compile::uncurried` short of its file.
     let srcs <- runtime_held(indices.foldr(λ i acc => ap(files_cons, [ap(uncurried, of(i)), acc]), files_nil), "the program's sources");
+    let adm <- runtime_held(indices.foldr(λ i acc => ap(admits_cons, [ap(admits, of(i)), acc]), admits_nil), "the program's admitted words");
     let last_first = indices.rev();
     let program <- runtime_held(RtQ::seq(fn_ctors, last_first.map(λ i => ap(linked, of(i) ++ [runtime_at(links, i)]))), "the program");
     let arities <- runtime_held(RtQ::seq(q.nats, last_first.map(λ i => ap(arity_of, of(i)))), "the program's arities");
     // Function `i` is `insts.len() - 1 - i` from the last, and is linked
     // against the functions before it.
-    let parts = last_first.map(λ i => ap(part, of(i) ++ [srcs, runtime_at(links, i),
-        ap(arity_at, [program, arities, NatLit(insts.len() - i)]), ap(every, [ap(table, of(i))]), Hd(trivial_h)]));
+    let parts = last_first.map(λ i => ap(part, of(i) ++ [srcs, adm, runtime_at(links, i),
+        ap(arity_at, [program, arities, NatLit(insts.len() - i)]), ap(every, [ap(table, of(i))]), ap(same_admits, [ap(admit_table, of(i))]), Hd(trivial_h)]));
     let proof <- runtime_conjoined(both, parts, Hd(trivial_h));
     // The proof is cited by two members of the group (`f::sourced`, and
     // `f::agrees` at the last function). Held at its statement, each
     // mention is one node.
-    let statement <- as_type(ap(linked_files, [program, arities, ap(sources, [srcs])])).or_fail("runtime: the program's linking: ");
+    let statement <- as_type(ap(linked_files, [program, arities, ap(admits_of, [adm]), ap(sources, [srcs])])).or_fail("runtime: the program's linking: ");
     let held <- hole(statement).or_fail("runtime: the program's linking: ");
     let solved <- defeq(Hd(held), proof);
     match solved {
         True => pure(Linked(program, srcs, arities, Hd(held), Hd(statement),
-            of(insts.len() - 1) ++ [srcs, runtime_at(links, insts.len() - 1), ap(every, [ap(table, of(insts.len() - 1))])])),
+            of(insts.len() - 1) ++ [srcs, adm, runtime_at(links, insts.len() - 1), ap(every, [ap(table, of(insts.len() - 1))]),
+                ap(same_admits, [ap(admit_table, of(insts.len() - 1))])], adm)),
         False => runtime_fail("the program's linking does not prove its statement"),
     }
 }
@@ -2341,7 +2494,10 @@ fn runtime_also_decls(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes
                 let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
                 let agreement = ap(plain_also, [Blank, Global(f), rt_e, world_e, table_e, ap(typed_refl, [Blank, Global(f)]), ap(at_every, [Blank, Global(f)]),
                     verdict, ap(rfl, [Blank, runtime_at(shapes, 0)]), no_file]);
-                let proof = ap(root_also, linked.root ++ [agreement, ap(tail, [Blank, linked.program]), linked.arities, linked.sourced, words_e, Hd(trivial_h)]);
+                // Its parameters are words (an enum's is refused), each
+                // admitted by evaluation.
+                let proof = ap(root_also, linked.root ++ [agreement, ap(tail, [Blank, linked.program]), linked.arities, linked.sourced, Hd(trivial_h), words_e,
+                    Hd(trivial_h), Hd(trivial_h)]);
                 // The record's fields' names, as `f::names` spells names:
                 // what `compile-x86` states the two words as.
                 pure([Decl(AsTheorem, name ++ "::agrees_also", ys,
@@ -2414,6 +2570,39 @@ fn runtime_enum_read(tys: Nat → RecInfo, i: Nat, v: tys(i).alts.E) → tys(i).
 // before parameter `j` as its value and each from `j` on as what its word
 // reads back as; each from `j` on is rewritten to the value itself (`RecInfo::enum_agrees`), its tags among the constructors'
 // (`les`, by table entry) and the last below 2^64 by evaluation.
+// That the words a function's agreement is stated at are admitted
+// (`Ty::admits_all`): an enum's tag word by its tags' bound, any other
+// word by evaluation. `ws` are the words, `ys` what they are of (an enum's
+// value where its word is its tag word).
+record Admitting { rfl: Expr, intro: Expr, word_admits: Expr, admits: Expr, admits_all: Expr, trivial: Expr, words: List<Expr>, tys: Expr, q: RtQ }
+
+fn runtime_admitted(a: Admitting, les: List<Option<Expr>>, ps: List<Ty>, ys, ws: List<Expr>) → Tac<Expr> {
+    match ps {
+        Nil => pure(a.trivial),
+        Cons(p, rest) => runtime_admitted(a, les, rest, ys.tail(), ws.tail()).bind(λ later => {
+            let y = ys.head_or(Blank);
+            let x = ws.head_or(Blank);
+            let piece: Tac<Expr> = match p {
+                Enum(i) => match les.nth(i).and_then(λ o => o) {
+                    None => runtime_fail("an enum without its tags' bound"),
+                    Some(le_of) => pure(ap(a.word_admits, [a.tys, NatLit(i), y, ap(le_of, [y]), ap(a.rfl, [Blank, Blank])])),
+                },
+                _ => pure(a.trivial),
+            };
+            piece.bind(λ here => pure(ap(a.intro, [ap(a.admits, [Ty::quote(p, a.q), a.tys, x]),
+                ap(a.admits_all, [a.tys, Ty::quotes(rest, a.q), RtQ::seq(a.words, ws.tail())]), here, later])))
+        }),
+    }
+}
+
+fn runtime_admitting(rfl, trivial_e, tys_e: Expr, q: RtQ, words: List<Expr>) → Tac<Admitting> {
+    let intro <- runtime_global(name_of(Bool::is_true_and_intro));
+    let word_admits <- runtime_global(name_of(Ty::enum_word_admits));
+    let admits <- runtime_global(name_of(Ty::admits));
+    let admits_all <- runtime_global(name_of(Ty::admits_all));
+    pure(Admitting(rfl, intro, word_admits, admits, admits_all, trivial_e, words, tys_e, q))
+}
+
 fn runtime_at_enums(rfl, tys_e: Expr, les: List<Option<Expr>>, reprs: List<ReprEntry>, ps: List<Ty>, own: List<Handle>, ys: List<Expr>, left: List<Ty>, j: Nat, lhs: Expr,
     rhs: List<Expr> → Tac<Expr>, evaluated: Expr, under: Option<LocalRef>) → Tac<Expr> {
     match left {
@@ -2512,6 +2701,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
     let linked <- runtime_linked(q, ts, l, insts);
     let root = NatLit(l.order.len() - 1);
     let srcs_t <- infer(linked.srcs).or_fail("runtime: `" ++ name ++ "`'s sources: ");
+    let adm_t <- infer(linked.adm).or_fail("runtime: `" ++ name ++ "`'s admitted words: ");
     let linked_decls: List<Decl> = [
         Decl(AsValue, name ++ "::program", [], Hd(ts.functions), linked.program),
         // How many words each function of the program takes, as the
@@ -2525,6 +2715,10 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
         // name as its characters' codes, a zero after each, the first
         // function's first.
         Decl(AsValue, name ++ "::sources", [], Hd(srcs_t), linked.srcs),
+        // The words each function admits (an enum's tags; every word of any
+        // other code), as `f::sources` lists the functions: `f::sourced`
+        // states each on those.
+        Decl(AsValue, name ++ "::admits", [], Hd(adm_t), linked.adm),
         Decl(AsTheorem, name ++ "::sourced", [], linked.statement, linked.sourced),
         Decl(AsValue, name ++ "::names", [], Hd(ts.nats), q.nat_list(runtime_name_codes(l.names)))];
     match rfun.lent {
@@ -2559,7 +2753,11 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
                 Nil => runtime_enum_result(enum_word, tys_e, rfun.result, runtime_narrow_result(wide, rfun.result, runtime_result(reprs, rfun.result, fx))),
             };
             let lhs = ap(program_eval, [linked.program, root, words_e]);
-            let evaluated = ap(eval_sources, [linked.program, linked.arities, ap(sources, [linked.srcs]), linked.sourced, no_file, root, words_e, Hd(trivial_h)]);
+            let admits_of <- runtime_global(name_of(link_admits));
+            let admitting <- runtime_admitting(rfl, Hd(trivial_h), tys_e, q, word_list);
+            let admitted <- runtime_admitted(admitting, tys_both.snd, rfun.params, at_ys, runtime_enum_words(enum_word, tys_e, rfun.params, at_ys));
+            let evaluated = ap(eval_sources, [linked.program, linked.arities, ap(admits_of, [linked.adm]), ap(sources, [linked.srcs]), linked.sourced, no_file, root,
+                words_e, Hd(trivial_h), admitted]);
             let agreed <- runtime_at_enums(rfl, tys_e, tys_both.snd, reprs, rfun.params, own_types, at_ys, rfun.params, 0, lhs,
                 λ args => runtime_agree_rhs(low, wide, count, reprs, recs, rfun, f, args).bind(λ e => pure(runtime_enum_result(enum_word, tys_e, rfun.result, e))),
                 evaluated, ys.last());
@@ -2600,10 +2798,14 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
             let at_ys = runtime_locals(ys);
             let words_e = RtQ::seq(word_list, at_ys);
             let at_file = runtime_lent_args(span, Local(c.ref), 0, rfun.lent, runtime_args(count, reprs, rfun.params, at_ys));
+            let admits_of <- runtime_global(name_of(link_admits));
+            let admitting <- runtime_admitting(rfl, Hd(trivial_h), tys_e, q, word_list);
+            let admitted <- runtime_admitted(admitting, tys_both.snd, rfun.params, at_ys, at_ys);
             let tail: List<Decl> = [
                 Decl(AsTheorem, name ++ "::agrees_over", runtime_params_of(Cons(c.ref, ys)),
                     Equation(ap(program_eval_over, [Local(c.ref), linked.program, root, words_e]), runtime_result(reprs, rfun.result, ap(Global(f), at_file))),
-                    ap(eval_sources, [linked.program, linked.arities, ap(sources, [linked.srcs]), linked.sourced, Local(c.ref), root, words_e, Hd(trivial_h)])),
+                    ap(eval_sources, [linked.program, linked.arities, ap(admits_of, [linked.adm]), ap(sources, [linked.srcs]), linked.sourced, Local(c.ref), root,
+                        words_e, Hd(trivial_h), admitted])),
             ];
             pure(head.append(pin).append(made).append(linked_decls).append(tail))
           },
@@ -2981,7 +3183,7 @@ fn runtime_span_parts(q: RtQ, l: Linking, insts: List<Pair<Expr, Expr>>, sl: Spa
         let arity = ap(arity_at, [sl.program, sl.arities, NatLit(n - i)]);
         let still = ap(still_at, [sl.program, sl.stills, NatLit(n - i)]);
         match l.reads.nth(i).unwrap_or(None) {
-            None => ap(c_spanned, [Blank, p.fst, p.snd, Hd(trivial_h), sl.srcs, q.nat_list(links), arity, still,
+            None => ap(c_spanned, [Blank, p.fst, p.snd, Hd(trivial_h), Hd(trivial_h), sl.srcs, q.nat_list(links), arity, still,
                 ap(every, [Blank, ap(c_table, [Blank, p.fst, p.snd])]), Hd(trivial_h)]),
             Some(k) => ap(s_spanned, [Blank, p.fst, p.snd, sl.srcs, q.nat_list(links.take(k)), q.nat_list(links.drop(k)), arity, still,
                 ap(rfl, [Blank, NatLit(k)]), ap(every, [Blank, ap(reads_table, [Blank, p.fst, p.snd])]), Hd(trivial_h),

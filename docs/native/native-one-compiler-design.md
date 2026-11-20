@@ -528,8 +528,10 @@ that neither is needed, and what follows is the form that was built.
   lemmas are stated over the buffers (`Function::eval_answers_over`,
   `Function::relabel_eval_over`; the old ones are these at no buffers),
   and a program is linked at every file at once:
-  `program_linked_files(functions, arities, sources)` asks each function
-  to answer as `sources(b)` says over each file `b`, and
+  `program_linked_files(functions, arities, admits, sources)` asks each
+  function to answer as `sources(b)` says over each file `b`, at the
+  words its contract admits (since 2026-11-20, runtime-fn-setups-design
+  §16.16 "Linking at admitted words"), and
   `program_linked_files_sources` gives `program_eval_over(b, functions)`
   as `sources(b)`. `Compile::part` is the class's agreement in that
   form, at the function's own table at `b`. Every generated program is
