@@ -1626,3 +1626,34 @@ every function it calls.
 What a single function may be is unchanged by this section and is the
 next limit: its emission is one kernel statement
 (`issues/native-function-emission-one-statement.md`).
+
+### 16.15 Narrow words at a plain function's boundary (2026-11-19)
+
+A plain function (no loop) takes and returns `u8`, `u16` and `u32`
+(`Ty::Edge` in `rt_lower.hthr`; ledger row `port_classify`). Each still
+crosses the boundary in a 64-bit word, as FunctionIR's calling convention
+passes them:
+
+- **A parameter is the low bits of its word**, read into a fresh port by one
+  `Resize(64, w)` before the body (`Fun::entry`). Binding the word already
+  gives its port the low bits at width `w` (`word_value`), so the meaning
+  did not need the node; the x86 lowering does: it holds a narrow value
+  zero-extended in its register, and a parameter's register holds the whole
+  word passed. The node is the `shl`/`shr` pair at the code's entry.
+- **The result is zero-extended** into a fresh port by one `Resize(w, 64)`
+  after the body (`Ty::widen`).
+- `Ty::cast` between `Word(64)` and `Word(w)` is now the truncation and the
+  zero extension (it was the zero word), so `Ty::Answers` states exactly
+  this at every word passed, and `Fun::lower_sound` proves it once
+  (`Fun::entry_holds`, `Ty::edge_reads`). With no narrow word the entry has
+  no nodes and the code is what it was.
+- The generator states `f::agrees` through `runtime_low(w, x)` and
+  `runtime_wide(w, v)`, which are what `Ty::cast` computes at the two codes,
+  and `compile-x86` reads the widths (`Fun::edge_widths`) to state the same
+  answer in its certificate.
+
+Loops keep `Ty::OneWord` (their state and spent answer are 64-bit words),
+and a call of a function with a narrow parameter is refused (the caller
+would widen its argument first). Both are left in
+`issues/runtime-repr-narrow-words.md`, with the signed reprs, which want a
+`SignResize` at the edge.

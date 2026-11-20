@@ -163,9 +163,18 @@ impl Shape {
     /// runtime fns it reaches) with its agreement (`{source}::agrees`, from
     /// the functions' `Compile` instances, docs/native/runtime-fn-setups-design.md
     /// §16.9): nothing about the program is proved here.
-    pub fn runtime(prefix: &str, owner: &str, source: &str, functions: usize, arity: usize) -> Shape {
+    ///
+    /// `widths` are the function's result's width and its parameters', as
+    /// it crosses its boundary: a narrower word than 64 bits is passed as
+    /// the low bits of its word (`runtime_low`) and returned zero-extended
+    /// (`runtime_wide`), as the generator states its agreement
+    /// (issues/runtime-repr-narrow-words.md).
+    pub fn runtime(prefix: &str, owner: &str, source: &str, functions: usize, arity: usize, widths: &[u64]) -> Shape {
         let parameters = arguments(arity);
-        let answer = format!("{source}({})", parameters.join(", "));
+        let narrowed: Vec<String> = parameters.iter().enumerate()
+            .map(|(i, a)| match widths.get(i + 1) { Some(&w) if w != 64 => format!("runtime_low({w}, {a})"), _ => a.clone() }).collect();
+        let called = format!("{source}({})", narrowed.join(", "));
+        let answer = match widths.first() { Some(&w) if w != 64 => format!("runtime_wide({w}, {called})"), _ => called };
         let mut definitions = format!("import {owner};\nimport runtime;\n");
         definitions.push_str(&format!("\n// The program `runtime fn {source}` published, callees first: function `k` the one with `k` after it.
 fn {prefix}_program() → List<Function> {{ {source}::program }}
@@ -326,8 +335,10 @@ pub(super) fn runtime_shape(elab: &Elaborator, prefix: &str, owner: &str, source
     let lent = spans != Spans::None;
     // The rows' search is in a writer's scope: `runtime_file`, which every
     // module with a `runtime fn` over a span it writes imports, imports it.
+    // A function lent nothing: the widths its result and its parameters
+    // cross its boundary at (`Fun::edge_widths`).
     let (imports, counts) = match spans {
-        Spans::None => ("", "[]".to_string()),
+        Spans::None => ("", format!("{source}::rt.edge_widths()")),
         Spans::Read => ("import function_ir_lower_calls;\nimport function_ir_writes;\n", format!("program_counts({source}::program)")),
         Spans::Written => ("import function_ir_lower_calls;\nimport function_ir_writes;\nimport function_ir_rows;\n",
             format!("program_counts({source}::program)")),
@@ -360,7 +371,8 @@ fn {prefix}_rows(rows: List<List<Bool>>, counts: List<Nat>, f, functions: Nat) �
     match numbers[..] {
         [_, arity, ..] if arity > 8 => Err(format!("`{source}` takes {arity} words{}: compile-x86 passes at most eight, six in registers and two on the stack",
             if lent { ", an address and a length for each span among them" } else { "" })),
-        [functions, arity] if functions >= 1 && !lent => Ok(Shape::runtime(prefix, owner, source, functions as usize, arity as usize)),
+        [functions, arity, ref widths @ ..] if functions >= 1 && !lent && widths.len() == arity as usize + 1 =>
+            Ok(Shape::runtime(prefix, owner, source, functions as usize, arity as usize, widths)),
         [functions, arity, ref counts @ ..] if functions >= 1 && spans == Spans::Read && counts.len() == functions as usize =>
             Ok(Shape::runtime_lent(prefix, owner, source, functions as usize, arity as usize, counts.to_vec())),
         [functions, arity, ref rest @ ..] if functions >= 1 && spans == Spans::Written && rest.len() > functions as usize => {

@@ -620,13 +620,6 @@ theorem Tm::differs_of_ne(a, b: Nat, ne: a ≠ b): a.differs(b).IsTrue() {
     }
 }
 
-theorem Fun::past_ge(ps: List<Ty>): (m: Nat) → m <= Fun::past(ps, m) {
-    match ps {
-        Nil => λ m => m.le_refl(),
-        Cons(_, rest) => λ m => Nat::le_of_lt(m, Fun::past(rest, m + 1), Fun::past_ge(rest, m + 1)),
-    }
-}
-
 theorem Fun::ids_len(ps: List<Ty>): (m: Nat) → Fun::param_ids(ps, m).len() = ps.len() {
     match ps { Nil => λ m => refl, Cons(_, rest) => λ m => cong_fn(λ (k: Nat) => k + 1, Fun::ids_len(rest, m + 1)) }
 }
