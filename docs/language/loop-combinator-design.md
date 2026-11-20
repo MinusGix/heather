@@ -91,12 +91,12 @@ The probe re-proves `examples/binary-search`'s `lower_bound_splits` this way
 (`lib/_tests/std/core/loop_tests.hthr`). `Range::search_keeps` is the
 example's `lower_bound_in_splits` arm for arm; the headline is one
 application of `Loop::rule`. Each arm returns the invariant at the next
-state instead of calling an `ih` with five arguments. It came out a few
-lines longer, for two reasons that are gaps in `bv_omega`, not in the rule:
-it does not see the midpoint's bounds through `r.lo`/`r.hi` (the example's
-`midpoint_from`/`midpoint_below` are named in the arms), and a conjunct of
-an anonymous pair is not a goal it spells (each is given a `let` with its
-type).
+state instead of calling an `ih` with five arguments. Each conjunct of the
+next state's invariant is a `bv_omega` inside an anonymous pair: the goal
+there is `b.next.lo <= b.next.hi` over the pass's payload, which `bv_omega`
+reads through the value the step built (docs/tactics/bv-omega-design.md
+§4), so no conjunct needs its type written out and no midpoint lemma is
+named.
 
 What is genuinely different: the invariant is a named predicate on the state
 (`Range::Splits`) rather than a theorem's hypotheses, and the postcondition
