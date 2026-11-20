@@ -1837,6 +1837,49 @@ word (`Ty::all_open`), which is how `Compile::spanned` keeps its statement.
 `program_linked_also` are gone, and a word that is no tag returns as it
 came (`shade_same_past`), outside every contract.
 
+**Enums whose constructors carry fields (built 2026-11-20).** An enum
+whose constructors carry words, bits or counts (`Pocket { Empty,
+Holds(n: u64) }`) is held as its tag word and then its payload's slots:
+every constructor's fields in turn, constructor `k`'s from slot
+`EnumInfo.lo(k)`, `arity(k)` of them (`EnumInfo.slots`; the layout is the
+concatenation, so a slot belongs to one constructor and another
+constructor leaves it at its default). `EnumInfo.of(n, t)` builds
+constructor `n` from a tuple of every slot, reading its own;
+`pick`/`convoy` hand an arm its tag and the tuple; the laws `tag_of` and
+`fields_of` (`Ty::keep`, the constructor's own slots kept and the rest
+defaults) are by `refl` at any tuple, and an enum without a payload
+passes them as before. `Ty::Holds` at `Enum` is the tag word at the port
+(`EnumInfo::Names`) and the slots from the next port on, read by the
+record fields' machinery (`Ty::FieldsHold`).
+
+In rt, `Tm::Inject(i, k, args)` is a constructor applied to its fields:
+it lowers to a `Const` of the tag and a move of each field into its slot,
+the other slots their codes' defaults. `Tm::Slot(i, j, of)` is an arm's
+read of slot `j` of the enum held at `of`, which is no code: the slot's
+port. The reflector reads a constructor with fields as an `Inject`, and
+an arm's field (the elaborator's projection of the constructor's
+payload, which `View` now shows as `HField(payload, "<k>")`) as a
+`Slot`. The generator builds `pick` and `convoy` through the `Branches`
+and `Cases` requests, whose split now reports each arm's fields as its
+pattern binds them (`Branch.fields`, the arm's aliases into the
+payload), so arm `k` is `a(k, t)` at the arm's fields in their slots and
+the source's `match` is `pick` at its arms by conversion.
+
+A function returns an enum whose payload is one 64-bit slot as its tag
+word in RAX and the slot in RDX (`Ty::Out`, `Ty::also_ports` the slot's
+port, `Ty::rest_words` = `RecInfo::enum_rest`), which is how System V
+returns a C structure `{ tag, value }`; `f::agrees_also` and the
+certificate's `ComputesBoth` state the second word. Probes:
+`lib/_tests/native/runtime/runtime_enum_payload_tests` (constructors of
+none, one and two fields, a `match h:`, a bit field, the result in two
+words) and `…_refused_tests`; `examples/x86-native/enum_payload.hthr`,
+read from C as a structure (`native_program.rs`). Still refused: such an
+enum as a parameter (a parameter is one word: the word-level contract,
+`Ty::Answers`, would take a code's words in turn), a call of a function
+returning one (a call reads RAX alone,
+`issues/function-ir-multi-word-calls.md`), a payload past one slot as a
+result, and an enum as a record's field.
+
 A C enum is an `int`, whose register's upper 32 bits System V leaves
 unspecified, where the contract passes the tag as a whole 64-bit word.
 Compilers write the 32-bit register, which zero-extends, so callers work
