@@ -40,6 +40,24 @@ fn sum_body() → PTm {
 
 fn sum_defs() → List<PDef> { [PDef(1, sum_body())] }
 
+// The sum as the reflector writes it, its call of itself `Call(0, …)`
+// bound by a `Let`, reads as the same `PTm`.
+fn sum_reflected() → Tm {
+    Let(Lit(Word(64), 0),
+    Let(Prim(Eq(64), [1, 0]),
+    If(0,
+        Var(1),
+        Let(Lit(Word(64), 1),
+        Let(Prim(Sub(64), [3, 0]),
+        Let(Call(0, [0]),
+        Prim(Add(64), [5, 0])))))))
+}
+
+theorem sum_from_reflected(): sum_reflected().to_ptm() = Some(sum_body()) { refl }
+
+// A self-call inside a bound term's own binding is refused.
+theorem nested_self_call_refused(): Tm::to_ptm(Let(Let(Call(0, [0]), Var(0)), Var(0))).is_some() = False { refl }
+
 // What the procedure means: the sum of 0 to its argument.
 fn sum_meaning(p: Nat, xs: List<BitVec(64)>) → BitVec(64) {
     match xs { Nil => BitVec::ofNat(0), Cons(x, _) => BitVec::ofNat((x.toNat() * (x.toNat() + 1)).ldiv(2).quot()) }

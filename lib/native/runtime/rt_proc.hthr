@@ -48,6 +48,7 @@ import native_source_co;
 import native_source_io;
 import rt;
 import rt_lower;
+import rt_loop;
 import rt_io;
 import rt_io_lower;
 import native_source_pure;
@@ -129,6 +130,33 @@ theorem PTm::calls_ok_mono(self t: PTm, w: rt::World, f: PCalls(), ok1, ok2: Nat
                 (match b as λ _ => Bool { True => yes.calls_ok(w, f, ok2, g, vals), False => no.calls_ok(w, f, ok2, g, vals) }).IsTrue() {
             True => λ h => yes.calls_ok_mono(w, f, ok1, ok2, more, g, vals, h),
             False => λ h => no.calls_ok_mono(w, f, ok1, ok2, more, g, vals, h),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A recursive function's body as a `PTm`
+
+// A function's reflected body, its calls of itself (entry 0) read as calls
+// of procedure 0: a self-call bound by a `Let` or as the body's value is a
+// `Recur`, a branch on a bit with a self-call in an arm is a `Choose`, and
+// a part with no self-call is a `Bind` or the `Value`. A self-call anywhere
+// else (inside a bound term, a `match h:`, a `Nat` or enum match) is
+// refused.
+fn Tm::to_ptm(self t: Tm) → Option<PTm> {
+    match t.calls_self() {
+        False => Some(Value(t)),
+        True => match t {
+            Let(e, body) => match e {
+                Call(f, args) => match f {
+                    Zero => body.to_ptm().map(λ b => Recur(0, args, b)),
+                    Succ(_) => body.to_ptm().map(λ b => Bind(e, b)),
+                },
+                _ => match e.calls_self() { True => None, False => body.to_ptm().map(λ b => Bind(e, b)) },
+            },
+            If(c, yes, no) => yes.to_ptm().and_then(λ y => no.to_ptm().map(λ n => Choose(c, y, n))),
+            Call(f, args) => match f { Zero => Some(Recur(0, args, Value(Var(0)))), Succ(_) => Some(Value(t)) },
+            _ => None,
         },
     }
 }
