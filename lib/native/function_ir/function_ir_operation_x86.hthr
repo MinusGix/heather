@@ -40,9 +40,11 @@ fn Operand::read(self operand: Operand, gprs: Gprs) → BitVec(64) {
 record Row { code: List<Instruction>, left: Gpr, right: Operand, result: Gpr }
 
 // Where the operation's requirement holds at the operands the row reads,
-// the result is the operation's meaning there.
+// none of its code faults (only a DIV can, and the requirement is what
+// keeps it from it) and the result is the operation's meaning there.
 fn Row::Computes<M>(self row: Row, op: Operation) → Type {
     (s: MachineState<M>) → (needs: op.Requires(read_gpr(row.left, s.gprs), row.right.read(s.gprs))) →
+        NoFaults(row.code, s) ∧
         read_gpr(row.result, execute_block_normal(row.code, s).gprs) =
             op.meaning(read_gpr(row.left, s.gprs), row.right.read(s.gprs), needs)
 }
@@ -53,7 +55,8 @@ fn Row::Computes<M>(self row: Row, op: Operation) → Type {
 theorem mul_row_computes<M>(destination, source: Gpr):
     Row([ImulRR(destination, source)], destination, InRegister(source), destination).Computes<M>(Mul)
 {
-    λ s _ => read_gpr_self(destination, read_gpr(destination, s.gprs).mul(read_gpr(source, s.gprs)), s.gprs)
+    λ s _ => ⟨no_divides_safe<M>([ImulRR(destination, source)], refl, s),
+        read_gpr_self(destination, read_gpr(destination, s.gprs).mul(read_gpr(source, s.gprs)), s.gprs)⟩
 }
 
 // ---------------------------------------------------------------------------
@@ -152,8 +155,17 @@ fn quotient_code(source: Gpr, z, m, s: Nat) → List<Instruction> {
     halved_code(source, z) ++ multiply_code(halved_at(source, z), m, s)
 }
 
+// Neither divides.
+theorem quotient_calm(source: Gpr, z, m, s: Nat): no_divides(quotient_code(source, z, m, s)) = True {
+    match z { Zero => refl, Succ(_) => refl }
+}
+
 fn remainder_tail(source: Gpr, d: Nat) → List<Instruction> {
     [MovRI(Rax, BitVec::ofNat(d)), ImulRR(Rax, Rdx), MovRR(Rdx, source), SubRR(Rdx, Rax)]
+}
+
+theorem remainder_calm(source: Gpr, z, m, s, d: Nat): no_divides(quotient_code(source, z, m, s) ++ remainder_tail(source, d)) = True {
+    match z { Zero => refl, Succ(_) => refl }
 }
 
 // The bounds the numbers meet, as one verdict.
@@ -419,6 +431,94 @@ fn divide_row(d: Nat, source: Gpr, code: Reciprocal → List<Instruction>) → O
 }
 
 // ---------------------------------------------------------------------------
+// Divide by a word: `XOR EDX, EDX; DIV r`, the dividend in RAX. With RDX
+// cleared DIV divides RAX alone, and faults only where the divisor is zero,
+// which the operation's requirement rules out: the quotient is left in RAX,
+// the remainder in RDX. The divisor's register is not RDX, which the code
+// clears first.
+
+// With RDX zero, DIV's quotient and remainder are the word's.
+theorem div_of_word(x, y: BitVec(64), nonzero: y ≠ BitVec::zero()):
+    (div_quotient(BitVec::zero(), x, y) = x.udiv(y)) ∧ (div_remainder(BitVec::zero(), x, y) = x.urem(y)) {
+    let positive: (0 < y.toNat()) = BitVec::toNat_pos(64, y, nonzero);
+    let low: (div_dividend(BitVec::zero(), x) = x.toNat()) =
+        j(sym(BitVec::zero_toNat(64)), λ z _ => z * Nat::pow(2, 64) + x.toNat() = x.toNat(),
+            trans(Nat::cong(λ (w: Nat) => w + x.toNat(), Nat::pow(2, 64).mul_left_zero()), x.toNat().add_left_zero()));
+    let word = x.toNat().div_mod_unique(y.toNat(), x.udiv(y).toNat(), x.urem(y).toNat(),
+        sym(BitVec::udiv_urem_toNat(64, x, y)), BitVec::urem_lt(64, x, y, nonzero));
+    let quotient: (div_dividend(BitVec::zero(), x).ldiv(y.toNat()).quot() = x.udiv(y).toNat()) =
+        trans(j(sym(low), λ n _ => n.ldiv(y.toNat()).quot() = x.toNat().ldiv(y.toNat()).quot(), refl),
+            trans(x.toNat().ldiv_div(y.toNat(), d_pos := positive), word.left));
+    let remainder: (div_dividend(BitVec::zero(), x).ldiv(y.toNat()).rem() = x.urem(y).toNat()) =
+        trans(j(sym(low), λ n _ => n.ldiv(y.toNat()).rem() = x.toNat().ldiv(y.toNat()).rem(), refl),
+            trans(x.toNat().ldiv_mod(y.toNat(), d_pos := positive), word.right));
+    ⟨trans(BitVec::ofNat_cong(64, quotient), BitVec::ofNat_toNat(64, x.udiv(y))),
+     trans(BitVec::ofNat_cong(64, remainder), BitVec::ofNat_toNat(64, x.urem(y)))⟩
+}
+
+fn word_divide_code(divisor: Gpr) → List<Instruction> { [XorRR(Rdx, Rdx), DivR(divisor)] }
+
+record WordDivides<M>(divisor: Gpr, s: MachineState<M>) {
+    safe: NoFaults(word_divide_code(divisor), s),
+    quotient: read_gpr(Rax, execute_block_normal(word_divide_code(divisor), s).gprs) =
+        read_gpr(Rax, s.gprs).udiv(read_gpr(divisor, s.gprs)),
+    remainder: read_gpr(Rdx, execute_block_normal(word_divide_code(divisor), s).gprs) =
+        read_gpr(Rax, s.gprs).urem(read_gpr(divisor, s.gprs)),
+}
+
+theorem word_divide_reads<M>(divisor: Gpr, apart: Rdx.same(divisor) = False, s: MachineState<M>,
+    nonzero: read_gpr(divisor, s.gprs) ≠ BitVec::zero()): WordDivides<M>(divisor, s)
+{
+    let g = s.gprs;
+    let c = read_gpr(Rdx, g);
+    let g1 = write_gpr(Rdx, c.bxor(c), g);
+    let x = read_gpr(Rax, g);
+    let y = read_gpr(divisor, g);
+    let h = read_gpr(Rdx, g1);
+    let a = read_gpr(Rax, g1);
+    let b = read_gpr(divisor, g1);
+    let high: (h = BitVec::zero()) = trans(read_gpr_self(Rdx, c.bxor(c), g), BitVec::xor_self(64, c));
+    let low: (a = x) = read_gpr_other(Rdx, Rax, c.bxor(c), g, refl);
+    let kept: (b = y) = read_gpr_other(Rdx, divisor, c.bxor(c), g, apart);
+    let parts = div_of_word(x, y, nonzero);
+    let fits: (div_faults(h, b) = False) = j(sym(read_gpr_self(Rdx, c.bxor(c), g)), λ w _ => div_faults(w, b) = False,
+        div_fits_cleared(c, b, λ zero => nonzero(trans(sym(kept), zero))));
+    let quotient: (div_quotient(h, a, b) = x.udiv(y)) =
+        trans(cong_fn(λ (w: BitVec(64)) => div_quotient(w, a, b), high),
+            trans(cong_fn(λ (w: BitVec(64)) => div_quotient(BitVec::zero(), w, b), low),
+                trans(cong_fn(λ (w: BitVec(64)) => div_quotient(BitVec::zero(), x, w), kept), parts.left)));
+    let remainder: (div_remainder(h, a, b) = x.urem(y)) =
+        trans(cong_fn(λ (w: BitVec(64)) => div_remainder(w, a, b), high),
+            trans(cong_fn(λ (w: BitVec(64)) => div_remainder(BitVec::zero(), w, b), low),
+                trans(cong_fn(λ (w: BitVec(64)) => div_remainder(BitVec::zero(), x, w), kept), parts.right)));
+    let g2 = write_gpr(Rax, div_quotient(h, a, b), g1);
+    WordDivides(safe := ⟨refl, ⟨fits, trivial⟩⟩,
+        quotient := trans(read_gpr_other(Rdx, Rax, div_remainder(h, a, b), g2, refl),
+            trans(read_gpr_self(Rax, div_quotient(h, a, b), g1), quotient)),
+        remainder := trans(read_gpr_self(Rdx, div_remainder(h, a, b), g2), remainder))
+}
+
+// The divisor's register: where it is, else the destination, so long as it
+// is neither RAX (the dividend's) nor RDX (cleared).
+fn divisor_register(right: Option<Gpr>, destination: Gpr) → Gpr {
+    match right {
+        None => destination,
+        Some(register) => match Rax.same(register) || Rdx.same(register) { True => destination, False => register },
+    }
+}
+
+// The row dividing RAX by the word in `divisor`, its result in `result`.
+fn word_divide_row(divisor, result: Gpr) → Option<Row> {
+    match Rdx.same(divisor) {
+        True => None,
+        False => match Rax.same(divisor) {
+            True => None,
+            False => Some(Row(word_divide_code(divisor), Rax, InRegister(divisor), result)),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The rows
 
 // A row offered computes the operation.
@@ -456,12 +556,12 @@ fn Operation::row(self op: Operation, destination: Gpr, left, right: Option<Gpr>
             False => Some(Row(shift_row_code(OpShr, destination), destination, InRegister(Rcx), destination)),
         },
         UDiv => match known {
-            None => None,
+            None => word_divide_row(divisor_register(right, destination), Rax),
             Some(d) => divide_row(d, dividend_register(left, destination),
                 λ r => quotient_code(dividend_register(left, destination), r.twos, r.multiplier, r.shift)),
         },
         URem => match known {
-            None => None,
+            None => word_divide_row(divisor_register(right, destination), Rdx),
             Some(d) => divide_row(d, dividend_register(left, destination),
                 λ r => quotient_code(dividend_register(left, destination), r.twos, r.multiplier, r.shift) ++ remainder_tail(dividend_register(left, destination), d)),
         },
@@ -469,6 +569,7 @@ fn Operation::row(self op: Operation, destination: Gpr, left, right: Option<Gpr>
 }
 
 theorem divide_row_computes<M>(op: Operation, d: Nat, source: Gpr, code: Reciprocal → List<Instruction>,
+    calm: (r: Reciprocal) → no_divides(code(r)) = True,
     computes: (r: Reciprocal) → ReciprocalFits(d, r.odd, r.twos, r.multiplier, r.shift) → Rax.same(source) = False → Rdx.same(source) = False →
         (state: MachineState<M>) → read_gpr(Rdx, execute_block_normal(code(r), state).gprs) =
             op.run(read_gpr(source, state.gprs), BitVec::ofNat(d))):
@@ -482,8 +583,9 @@ theorem divide_row_computes<M>(op: Operation, d: Nat, source: Gpr, code: Recipro
                 True => trivial,
                 False => match apart_d: Rdx.same(source) {
                     True => trivial,
-                    False => λ s _ => computes(found, reciprocal_fits_sound(d, found.odd, found.twos, found.multiplier, found.shift, fits),
-                        apart_a, apart_d, s),
+                    False => λ s _ => ⟨no_divides_safe<M>(code(found), calm(found), s),
+                        computes(found, reciprocal_fits_sound(d, found.odd, found.twos, found.multiplier, found.shift, fits),
+                            apart_a, apart_d, s)⟩,
                 },
             },
         },
@@ -500,29 +602,52 @@ theorem Operation::row_computes<M>(self op: Operation, destination: Gpr, left, r
         },
         ShlBy => match apart: destination.same(Rcx) {
             True => trivial,
-            False => λ s _ => trans(shift_row_reads<M>(OpShl, destination, apart, s),
-                shift_masked(OpShl, read_gpr(destination, s.gprs), read_gpr(Rcx, s.gprs),
-                    λ m => BitVec::shift_left_past(read_gpr(destination, s.gprs), m))),
+            False => λ s _ => ⟨no_divides_safe<M>(shift_row_code(OpShl, destination), refl, s),
+                trans(shift_row_reads<M>(OpShl, destination, apart, s),
+                    shift_masked(OpShl, read_gpr(destination, s.gprs), read_gpr(Rcx, s.gprs),
+                        λ m => BitVec::shift_left_past(read_gpr(destination, s.gprs), m)))⟩,
         },
         ShrBy => match apart: destination.same(Rcx) {
             True => trivial,
-            False => λ s _ => trans(shift_row_reads<M>(OpShr, destination, apart, s),
-                shift_masked(OpShr, read_gpr(destination, s.gprs), read_gpr(Rcx, s.gprs),
-                    λ m => BitVec::shift_right_past(read_gpr(destination, s.gprs), m))),
+            False => λ s _ => ⟨no_divides_safe<M>(shift_row_code(OpShr, destination), refl, s),
+                trans(shift_row_reads<M>(OpShr, destination, apart, s),
+                    shift_masked(OpShr, read_gpr(destination, s.gprs), read_gpr(Rcx, s.gprs),
+                        λ m => BitVec::shift_right_past(read_gpr(destination, s.gprs), m)))⟩,
         },
         UDiv => match known {
-            None => trivial,
+            None => match apart: Rdx.same(divisor_register(right, destination)) {
+                True => trivial,
+                False => match Rax.same(divisor_register(right, destination)) {
+                    True => trivial,
+                    False => λ s needs => {
+                        let w = word_divide_reads<M>(divisor_register(right, destination), apart, s, needs);
+                        ⟨w.safe, w.quotient⟩
+                    },
+                },
+            },
             Some(d) => divide_row_computes<M>(UDiv, d, dividend_register(left, destination),
                 λ r => quotient_code(dividend_register(left, destination), r.twos, r.multiplier, r.shift),
+                λ r => quotient_calm(dividend_register(left, destination), r.twos, r.multiplier, r.shift),
                 λ r fits apart_a _ state => quotient_reads<M>(dividend_register(left, destination), d, r.odd, r.twos, r.multiplier, r.shift,
                     apart_a, fits, state)),
         },
         URem => match known {
-            None => trivial,
+            None => match apart: Rdx.same(divisor_register(right, destination)) {
+                True => trivial,
+                False => match Rax.same(divisor_register(right, destination)) {
+                    True => trivial,
+                    False => λ s needs => {
+                        let w = word_divide_reads<M>(divisor_register(right, destination), apart, s, needs);
+                        ⟨w.safe, w.remainder⟩
+                    },
+                },
+            },
             Some(d) => divide_row_computes<M>(URem, d, dividend_register(left, destination),
                 λ r => quotient_code(dividend_register(left, destination), r.twos, r.multiplier, r.shift) ++ remainder_tail(dividend_register(left, destination), d),
+                λ r => remainder_calm(dividend_register(left, destination), r.twos, r.multiplier, r.shift, d),
                 λ r fits apart_a apart_d state => remainder_reads<M>(dividend_register(left, destination), d, r.odd, r.twos, r.multiplier, r.shift,
                     apart_a, apart_d, fits, state)),
         },
     }
 }
+
