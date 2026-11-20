@@ -576,7 +576,8 @@ theorem Target::goes_leaf_into(self t: Target, live, out: List<Nat>, env: Env, p
                                 λ r k => t.outputs_unused(nodes, r, k), apart, next);
                             let post = λ (u: MachineState<X86Memory(t.r.profile)>) => t.Held(left, env, u.gprs, u.memory) ∧ PortsAt(values, outputs, outs, u.gprs);
                             let at_loaded = t.goes_block(loaded, 0, code, w_body, tree, post, at_body);
-                            let holds: RegionHolds(region, values) = eval_nodes_holds(nodes, Nil, known, env.valuation(), values, λ w id _ => refl);
+                            let holds: RegionHolds(region, values) = eval_nodes_holds(nodes, Nil, known, env.valuation(), values, λ w id _ => refl,
+                                nodes_total_defined(nodes, Nil, known, env.valuation()));
                             let q_in = λ (g: Gprs) (m: X86Memory(t.r.profile)) => t.Held(live, env, g, m) ∧ PortsAt(values, inputs, ins, g);
                             let narrowed = λ (i: Nat) (m: Mem(i, left)) => keeps(i, out.mem_filter(i, λ (id: Nat) => absent(id, words), m),
                                 out.mem_filter_holds(i, λ (id: Nat) => absent(id, words), m));

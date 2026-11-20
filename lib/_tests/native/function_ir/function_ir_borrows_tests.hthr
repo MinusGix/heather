@@ -122,6 +122,7 @@ theorem peek_computes<M>(placement: List<Place>, code: Prog, lowered: lower_prog
         Ending(word := peek(text.bytes, text.length(), i), buffers := [text.bytes]),
         λ top loan origin last => compiled_returns_lent<M>(peek::program, placement, λ (_: Nat) => 0, Lending::reading([1], [text.at], [text.bytes]), code, lowered,
             trivial, trivial, machine.fetch, machine.data, last, origin, machine.stack, top, loan, 0, trivial,
-            [text.at, text.length(), i], trivial, [text.bytes], peek(text.bytes, text.length(), i),
+            [text.at, text.length(), i], trivial, [text.bytes],
+            program_total_defined(peek::program, [text.bytes], trivial, 0, [text.at, text.length(), i]), peek(text.bytes, text.length(), i),
             peek::agrees_over([text.bytes], text.at, text.length(), i)))
 }

@@ -32,6 +32,15 @@ theorem raise_letter_native_evaluable(): program_evaluable(raise_letter_native_p
     program_scan_at_evaluable(raise_letter_native_program(), raise_letter_native_arities(), program_scan_at_drop_zero(raise_letter_native_program(), raise_letter_native_arities(), raise_letter_native_scans_0()))
 }
 
+theorem raise_letter_native_totals_none(): program_total(raise_letter_native_program().drop(1)).IsTrue() { trivial }
+theorem raise_letter_native_total_head_0(): program_total_head(raise_letter_native_program().drop(0)).IsTrue() { trivial }
+theorem raise_letter_native_totals_0(): program_total(raise_letter_native_program().drop(0)).IsTrue() {
+    program_total_drop(raise_letter_native_program(), 0, raise_letter_native_total_head_0(), raise_letter_native_totals_none())
+}
+theorem raise_letter_native_defined_everywhere(): program_total(raise_letter_native_program()).IsTrue() {
+    program_total_drop_zero(raise_letter_native_program(), raise_letter_native_totals_0())
+}
+
 // What each function computes: its source.
 fn raise_letter_native_sources() → Answers() {
     λ (g0: Nat) (words: List<BitVec(64)>) => match g0 { Zero => native_tool_words::raise_letter(words.word(0)), Succ(g1) => BitVec::zero() }

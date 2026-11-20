@@ -348,7 +348,8 @@ theorem each_carries<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: Li
         stack.AnsweredOver(Lending::writing([2, 2], addresses, [five(), tens()], [True]), w(5), [[b(1), b(20), b(30), b(40), b(50)], tens()])) {
     compiled_returns_marked<M>(each_program(), plan_program(each_program()), program_room(each_program()), [2, 2], addresses, [[True], [True]], each_machine(),
         each_accepted(), each_evaluable(), trivial, fetch, data, last, origin, stack, top, [five(), tens()], 1, trivial, loan,
-        [a, w(5), c, w(5), w(1)], trivial, Ending(w(5), [[b(1), b(20), b(30), b(40), b(50)], tens()]), each_runs(a, c))
+        [a, w(5), c, w(5), w(1)], trivial, program_total_run_defined(each_program(), trivial, [five(), tens()], 1, [a, w(5), c, w(5), w(1)]),
+        Ending(w(5), [[b(1), b(20), b(30), b(40), b(50)], tens()]), each_runs(a, c))
 }
 
 // The controls. The same places with no save are refused: a value in a

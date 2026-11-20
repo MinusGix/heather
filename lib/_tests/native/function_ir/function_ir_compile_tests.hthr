@@ -184,7 +184,7 @@ theorem sum_beside_returns<M>(placement: List<Place>, program: Prog, lowered: lo
         λ (i: Nat) (s: MachineState<M>) => stack.Passed([a, b], i, s) ∧ 48 <= i,
         stack.CalleePost(program_eval_over(Nil, reading_beside(), 0, [a, b]))) {
     compiled_returns_unlent<M>(reading_beside(), placement, program_room(reading_beside()), [0, 1], program, lowered, trivial, trivial, fetch, data, last, origin, stack, 0, trivial,
-        refl, [a, b], trivial, program_eval_over(Nil, reading_beside(), 0, [a, b]), refl)
+        refl, [a, b], trivial, program_total_defined(reading_beside(), [], trivial, 0, [a, b]), program_eval_over(Nil, reading_beside(), 0, [a, b]), refl)
 }
 
 // The function that reads its span has no such contract: that it is lent

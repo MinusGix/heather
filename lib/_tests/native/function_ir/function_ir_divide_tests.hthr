@@ -1,0 +1,88 @@
+// Probes of a divide by a word (docs/native/partial-operations-design.md):
+// the node takes the divisor's being nonzero as its requirement, the
+// lowering emits `XOR EDX, EDX; DIV r` under it, and the compiler's
+// theorem holds where the program is defined, which here is where the
+// divisor is not zero.
+import function_ir;
+import function_ir_operation;
+import function_ir_eval;
+import function_ir_lower;
+import function_ir_lower_calls;
+import function_ir_compile;
+import function_ir_correct;
+import x86_64;
+import x86_64_block;
+import x86_64_asm;
+import x86_64_asm_runs;
+import bitvec;
+import bitvec_div;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+fn word(id: Nat) → Port { Port(id := id, width := 64) }
+
+fn divides(op: Operation) → Function {
+    Function(parameters := [0, 1],
+        body := Dataflow(Region(inputs := Ports([word(0), word(1)]),
+            nodes := [Apply(op := op, width := 64, output := 2, left := 0, right := 1)], outputs := Ports([word(2)]))),
+        result := 2)
+}
+
+fn leaf_rooms() → Nat → Nat { λ (_: Nat) => 0 }
+
+// Both lower, and to code that divides.
+theorem quotient_lowers(): lower_program_planned([divides(UDiv)]).is_some() = True { refl }
+theorem remainder_lowers(): lower_program_planned([divides(URem)]).is_some() = True { refl }
+
+// The lowered program holds the divide as a block run under `NoFaults`,
+// and is laid out (`Prog::laid_out`, which checks the block's flags).
+fn Prog::guards_some(self p: Prog) → Bool {
+    match p { Start => False, At(before, _, item) => match item { Guarded(_) => True, _ => before.guards_some() } }
+}
+
+fn divides_laid_out(op: Operation) → Bool {
+    match lower_program_planned([divides(op)]) { None => False, Some(p) => p.guards_some() && p.laid_out() }
+}
+
+theorem quotient_laid_out(): divides_laid_out(UDiv) = True { refl }
+theorem remainder_laid_out(): divides_laid_out(URem) = True { refl }
+
+// The program evaluates to the word's quotient and is defined where the
+// divisor is not zero, and nowhere else.
+theorem quotient_evaluates(a, b: BitVec(64)): program_eval([divides(UDiv)], 0, [a, b]) = a.udiv(b) { refl }
+
+theorem quotient_defined(a, b: BitVec(64), nonzero: b ≠ BitVec::zero()):
+    program_defined([divides(UDiv)], 0, [a, b]).IsTrue() {
+    j(sym(Operation::bit_of_nonzero(b, nonzero)), λ c _ => (c && True).IsTrue(), trivial)
+}
+
+theorem quotient_by_zero_undefined(a: BitVec(64)): program_defined([divides(UDiv)], 0, [a, BitVec::zero()]) = False { refl }
+
+// Whatever code the lowering makes of it, where the divisor is not zero it
+// computes the quotient.
+theorem quotient_computes<M>(placement: List<Place>, code: Prog,
+    lowered: lower_program_roomed([divides(UDiv)], placement, [], leaf_rooms()) = Some(code),
+    machine: Machine<M>, a, b: BitVec(64), nonzero: b ≠ BitVec::zero()): code.Computes(machine, 0, 0, [a, b], a.udiv(b)) {
+    compiled_computes<M>([divides(UDiv)], placement, leaf_rooms(), code, lowered, trivial, machine, 0, trivial, [a, b], trivial,
+        quotient_defined(a, b, nonzero), a.udiv(b), refl)
+}
+
+theorem remainder_computes<M>(placement: List<Place>, code: Prog,
+    lowered: lower_program_roomed([divides(URem)], placement, [], leaf_rooms()) = Some(code),
+    machine: Machine<M>, a, b: BitVec(64), nonzero: b ≠ BitVec::zero()): code.Computes(machine, 0, 0, [a, b], a.urem(b)) {
+    compiled_computes<M>([divides(URem)], placement, leaf_rooms(), code, lowered, trivial, machine, 0, trivial, [a, b], trivial,
+        j(sym(Operation::bit_of_nonzero(b, nonzero)), λ c _ => (c && True).IsTrue(), trivial), a.urem(b), refl)
+}
+
+// Without the divisor's being nonzero there is no claim to make: the
+// theorem asks for the program's definedness, which nothing gives.
+// expect-error: `trivial` proves `True`, but `IsTrue(program_defined(
+theorem quotient_computes_anywhere<M>(placement: List<Place>, code: Prog,
+    lowered: lower_program_roomed([divides(UDiv)], placement, [], leaf_rooms()) = Some(code),
+    machine: Machine<M>, a, b: BitVec(64)): code.Computes(machine, 0, 0, [a, b], a.udiv(b)) {
+    compiled_computes<M>([divides(UDiv)], placement, leaf_rooms(), code, lowered, trivial, machine, 0, trivial, [a, b], trivial,
+        trivial, a.udiv(b), refl)
+}

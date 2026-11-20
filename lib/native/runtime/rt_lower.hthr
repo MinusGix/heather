@@ -1464,7 +1464,7 @@ theorem Tm::prim2_sound(op: Op, w: World, g: List<Ty>, ports: List<Nat>, next, a
         TagIs(_, _) => trivial,
         Apply(o, width) => Tm::binary_sound(λ r => Tm::LowerHolds(Prim(Apply(o, width), [a, b]), w, g, ports, next, r), trivial, g, a, b, Word(width),
             Tm::one_node(Node::Apply(o, width, next, pa, pb), next), λ ea eb =>
-            Tm::word_node_sound(w, g, ports, next, a, b, pa, pb, at_a, at_b, width, λ wd x y => o.meaning(x, y), ea, eb)),
+            Tm::word_node_sound(w, g, ports, next, a, b, pa, pb, at_a, at_b, width, λ wd x y => o.run(x, y), ea, eb)),
     }
 }
 

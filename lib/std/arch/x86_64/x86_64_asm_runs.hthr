@@ -80,6 +80,7 @@ theorem Prog::no_holes_fit(self p: Prog): p.no_holes().IsTrue() → FillsFit(p, 
         Start => λ _ => trivial,
         At(before, name, item) => match item {
             Block(_) => λ ok => before.no_holes_fit(ok),
+            Guarded(_) => λ ok => before.no_holes_fit(ok),
             Code(_) => λ ok => before.no_holes_fit(ok),
             Load(_) => λ ok => before.no_holes_fit(ok),
             Store(_) => λ ok => before.no_holes_fit(ok),
@@ -435,7 +436,11 @@ theorem targets_named_back(whole: Prog, k: Nat): (p: Prog) → targets_named_las
 // a flag-reading instruction follows, in its own block, the instruction that
 // defined what it reads.
 fn Asm::reads_own(self item: Asm) → Bool {
-    match item { Block(instructions) => block_reads(instructions, DefinedFlags::none()), _ => True }
+    match item {
+        Block(instructions) => block_reads(instructions, DefinedFlags::none()),
+        Guarded(instructions) => block_flags(instructions, DefinedFlags::none()),
+        _ => True,
+    }
 }
 
 fn Prog::blocks_read_own(self p: Prog) → Bool {
@@ -489,6 +494,14 @@ theorem Prog::laid_out_reads(self p: Prog, laid: p.laid_out().IsTrue()): p.block
 theorem Prog::block_reads_at(self p: Prog, laid: p.laid_out().IsTrue(), k: Nat, before: Prog, name: Nat,
     instructions: List<Instruction>, at: asm_back(p, k) = At(before, name, Block(instructions))):
     block_reads(instructions, DefinedFlags::none()) = True {
+    and_true_left(j(at, λ q _ => q.blocks_read_own() = True, blocks_read_back(k, p, p.laid_out_reads(laid))))
+}
+
+// A block of a laid-out program that may divide reads only flags it set
+// itself.
+theorem Prog::guarded_flags_at(self p: Prog, laid: p.laid_out().IsTrue(), k: Nat, before: Prog, name: Nat,
+    instructions: List<Instruction>, at: asm_back(p, k) = At(before, name, Guarded(instructions))):
+    block_flags(instructions, DefinedFlags::none()) = True {
     and_true_left(j(at, λ q _ => q.blocks_read_own() = True, blocks_read_back(k, p, p.laid_out_reads(laid))))
 }
 
@@ -605,6 +618,35 @@ theorem block_steps<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, instructi
     }
 }
 
+// A block that may divide, from a state where none of its divides faults.
+theorem block_steps_guarded<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, instructions: List<Instruction>):
+    (s: MachineState<M>) → CodeResident(fetch, s.memory, canonical_block_bytes(instructions), s.rip) →
+    block_flags(instructions, s.flags.defined) = True → NoFaults(instructions, s) →
+    FetchedSteps(fetch, data, s, execute_block_normal(instructions, s)) ∧
+    (execute_block_normal(instructions, s).rip = next_rip(s.rip, block_length(instructions)) ∧
+     execute_block_normal(instructions, s).memory = s.memory) {
+    match instructions {
+        Nil => λ s _ _ _ => ⟨fetched_steps_refl(fetch, data, s), ⟨refl, refl⟩⟩,
+        Cons(instruction, rest) => λ s resident ok safe => {
+            let middle = execute_normal(decoded_canonical(instruction), s);
+            let parts = resident_split(fetch, s.memory, canonical_bytes(instruction), canonical_block_bytes(rest), s.rip, resident);
+            let advanced: (next_rip(s.rip, canonical_length(instruction)) = middle.rip) =
+                sym(execute_normal_advances_rip(decoded_canonical(instruction), s));
+            let tail = block_steps_guarded(fetch, data, rest, middle,
+                j(trans(rip_count(s.rip, canonical_bytes_length(instruction)), advanced),
+                    λ address _ => CodeResident(fetch, s.memory, canonical_block_bytes(rest), address), parts.right),
+                j(sym(execute_normal_defines(instruction, s)), λ d _ => block_flags(rest, d) = True, and_true_right(ok)),
+                safe.right);
+            ⟨fetched_steps_cons(fetch, data, s, middle, execute_block_normal(rest, middle),
+                guarded_fetched_step(fetch, data, instruction, s, parts.left, and_true_left(ok), safe.left), tail.left),
+             ⟨trans(tail.right.left, trans(
+                cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, block_length(rest)), sym(advanced)),
+                rip_compose(s.rip, canonical_length(instruction), block_length(rest)))),
+              tail.right.right⟩⟩
+        },
+    }
+}
+
 // A block at a label runs from the label to its end.
 theorem Site::runs_block<M>(self site: Site<M>, fits: FillsFit(site.program, no_fills()), k: Nat, before: Prog, name: Nat,
     instructions: List<Instruction>, at: asm_back(site.program, k) = At(before, name, Block(instructions)),
@@ -621,6 +663,50 @@ theorem Site::runs_block<M>(self site: Site<M>, fits: FillsFit(site.program, no_
             cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, block_length(instructions)), here),
             rip_compose(site.origin, prog_len(before), block_length(instructions)))), ⟨ran.right.right, step(s, holds)⟩⟩⟩)
     }
+}
+
+// A block that may divide runs from its label to its end where, from
+// every state its precondition holds at, none of its divides faults.
+theorem Site::runs_guarded<M>(self site: Site<M>, fits: FillsFit(site.program, no_fills()), k: Nat, before: Prog, name: Nat,
+    instructions: List<Instruction>, at: asm_back(site.program, k) = At(before, name, Guarded(instructions)),
+    flags: block_flags(instructions, DefinedFlags::none()) = True,
+    pre, post: Gprs → Type,
+    step: (s: MachineState<M>) → pre(s.gprs) → NoFaults(instructions, s) ∧ post(execute_block_normal(instructions, s).gprs)):
+    site.Runs(prog_len(before), prog_len(before) + block_length(instructions), pre, post) {
+    λ s here resident holds => {
+        let item = site.item_resident(fits, s.memory, resident, k, before, name, Guarded(instructions), at);
+        let both = step(s, holds);
+        let ran = block_steps_guarded(site.fetch, site.data, instructions, s,
+            j(sym(here), λ address _ => CodeResident(site.fetch, s.memory, canonical_block_bytes(instructions), address), item),
+            block_flags_from_none(instructions, flags, s.flags.defined), both.left);
+        Exists(execute_block_normal(instructions, s), ⟨ran.left, ⟨trans(ran.right.left, trans(
+            cong_fn<BitVec(64), BitVec(64)>(λ address => next_rip(address, block_length(instructions)), here),
+            rip_compose(site.origin, prog_len(before), block_length(instructions)))), ⟨ran.right.right, both.right⟩⟩⟩)
+    }
+}
+
+// The item a compiled block of code is: a plain block where it holds no
+// divide, else one run under `NoFaults`. Code that never divides is laid
+// out as it was before divides were lowered.
+fn Asm::of_code(code: List<Instruction>) → Asm {
+    match no_divides(code) { True => Block(code), False => Guarded(code) }
+}
+
+// Either runs from its label to its end where, from every state its
+// precondition holds at, none of its divides faults.
+theorem Site::runs_code<M>(self site: Site<M>, laid: site.program.laid_out().IsTrue(), k: Nat, before: Prog, name: Nat,
+    instructions: List<Instruction>, at: asm_back(site.program, k) = At(before, name, Asm::of_code(instructions)),
+    pre, post: Gprs → Type,
+    step: (s: MachineState<M>) → pre(s.gprs) → NoFaults(instructions, s) ∧ post(execute_block_normal(instructions, s).gprs)):
+    site.Runs(prog_len(before), prog_len(At(before, name, Asm::of_code(instructions))), pre, post) {
+    (match no_divides(instructions) as λ b =>
+        asm_back(site.program, k) = At(before, name, match b { True => Block(instructions), False => Guarded(instructions) }) →
+        site.Runs(prog_len(before), prog_len(At(before, name, match b { True => Block(instructions), False => Guarded(instructions) })), pre, post) {
+        True => λ here => site.runs_block(site.program.laid_out_fits(laid), k, before, name, instructions, here,
+            site.program.block_reads_at(laid, k, before, name, instructions, here), pre, post, λ s held => step(s, held).right),
+        False => λ here => site.runs_guarded(site.program.laid_out_fits(laid), k, before, name, instructions, here,
+            site.program.guarded_flags_at(laid, k, before, name, instructions, here), pre, post, step),
+    })(at)
 }
 
 // A near JMP at a label runs to where it lands, the registers as they were.

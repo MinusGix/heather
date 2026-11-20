@@ -48,7 +48,8 @@ theorem storer_changes(same: program_run([storer()], [[b(1), b(2)]], 0, [w(1), w
 theorem storer_allowed(file: Buffers(), i, v: BitVec(64)):
     program_effects([storer()])(file, 0, [i, v], program_run([storer()], file, 0, [i, v]).word,
         program_run([storer()], file, 0, [i, v]).buffers) {
-    program_run_effects([storer()], trivial, file, 0, [i, v], trivial)
+    program_run_effects([storer()], trivial, file, 0, [i, v], trivial,
+        program_total_run_defined([storer()], trivial, file, 0, [i, v]))
 }
 
 // A call with another count of words than the function takes is not one
@@ -85,7 +86,8 @@ theorem reads_back_fixed(): program_eval_over([[b(1), b(2)]], calling(), 1, [w(1
 
 theorem reads_back_allowed(file: Buffers(), i, v: BitVec(64)):
     program_effects(calling())(file, 1, [i, v], program_run(calling(), file, 1, [i, v]).word, program_run(calling(), file, 1, [i, v]).buffers) {
-    program_run_effects(calling(), trivial, file, 1, [i, v], trivial)
+    program_run_effects(calling(), trivial, file, 1, [i, v], trivial,
+        program_total_run_defined(calling(), trivial, file, 1, [i, v]))
 }
 
 // ---------------------------------------------------------------------------
@@ -122,5 +124,6 @@ theorem selfish_not_evaluable(): program_evaluable([selfish()]) = False { refl }
 theorem selfish_allowed(file: Buffers(), i, v: BitVec(64)):
     program_effects([selfish()])(file, 0, [i, v], program_run([selfish()], file, 0, [i, v]).word,
         program_run([selfish()], file, 0, [i, v]).buffers) {
-    program_run_effects([selfish()], trivial, file, 0, [i, v], trivial)
+    program_run_effects([selfish()], trivial, file, 0, [i, v], trivial,
+        program_total_run_defined([selfish()], trivial, file, 0, [i, v]))
 }

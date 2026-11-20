@@ -396,7 +396,7 @@ theorem Node::value_agree(self node: Node, values, other: Valuation(), agree: no
         ShiftLeft(_, _, value, amount) => λ agree w => cong_fn(λ (x: BitVec(w)) => x.shift_left(amount), agree(value, Inl(refl), w)),
         LogicalShiftRight(_, _, value, amount) => λ agree w => cong_fn(λ (x: BitVec(w)) => x.shift_right(amount), agree(value, Inl(refl), w)),
         RotateRight(_, _, value, amount) => λ agree w => cong_fn(λ (x: BitVec(w)) => x.rotr(amount), agree(value, Inl(refl), w)),
-        Apply(op, _, _, left, right) => λ agree w => eq2(λ (x: BitVec(w)) (y: BitVec(w)) => op.meaning(x, y), agree(left, Inl(refl), w), agree(right, Inr(Inl(refl)), w)),
+        Apply(op, _, _, left, right) => λ agree w => eq2(λ (x: BitVec(w)) (y: BitVec(w)) => op.run(x, y), agree(left, Inl(refl), w), agree(right, Inr(Inl(refl)), w)),
         ArithmeticShiftRight(_, _, value, amount) => λ agree w => cong_fn(λ (x: BitVec(w)) => x.arithmetic_shift_right(amount), agree(value, Inl(refl), w)),
         UnsignedLessThan(width, _, left, right) => λ agree w => cong_fn(λ (b: Bool) => bit_value(b, w),
             eq2(λ (x: BitVec(width)) (y: BitVec(width)) => x.unsigned_lt_bit(y), agree(left, Inl(refl), width), agree(right, Inr(Inl(refl)), width))),

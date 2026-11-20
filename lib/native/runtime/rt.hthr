@@ -595,7 +595,7 @@ fn Op::sem(self o: Op, tys: Nat → RecInfo) → Ty::Arrows(tys, o.params(), o.r
         Lshr(w, k) => λ (x: BitVec(w)) => x.shift_right(k),
         Ashr(w, k) => λ (x: BitVec(w)) => x.arithmetic_shift_right(k),
         Sext(n, extra) => λ (x: BitVec(n + 1)) => x.sign_extend(extra),
-        Apply(o, w) => λ (x: BitVec(w)) (y: BitVec(w)) => o.meaning(x, y),
+        Apply(o, w) => λ (x: BitVec(w)) (y: BitVec(w)) => o.run(x, y),
         TagIs(i, k) => λ (v: tys(i).alts.E) => tys(i).alts.tag(v).same(k),
     }
 }

@@ -147,6 +147,7 @@ fn wp_item_honest<M, V>(io: LinuxIo<M>, view: View<M, V>, origin: BitVec(64), la
         CallTo(target) => callees(target).Returns(io, view, next_rip(origin, labels(target))),
         // A block reads only flags it set itself (issues/x86-undefined-flags.md).
         Block(instructions) => block_reads(instructions, DefinedFlags::none()).IsTrue(),
+        Guarded(instructions) => block_flags(instructions, DefinedFlags::none()).IsTrue(),
         _ => True,
     }
 }
@@ -246,6 +247,9 @@ fn wp_item<M, V>(io: LinuxIo<M>, view: View<M, V>, origin: BitVec(64), labels: N
     → Bool → ITree<BitVec(64)>(Events::linux()) → V → MachineState<M> → Type {
     match item {
         Block(instructions) => λ passed t v state => then(passed, t, v, execute_block_normal(instructions, state)),
+        // A block that may divide: where none of its divides faults.
+        Guarded(instructions) => λ passed t v state =>
+            NoFaults(instructions, state) ∧ then(passed, t, v, execute_block_normal(instructions, state)),
         Load(load) => λ passed t v state =>
             view.Word(v, read_gpr(load.base, state.gprs), λ word => then(passed, t, v, word_load_after(load, word, state))),
         LoadByte(load) => λ passed t v state =>
@@ -445,6 +449,17 @@ theorem wp_item_goes<M, V>(io: LinuxIo<M>, view: View<M, V>, sound: ViewSound<M,
                 linux_steps_of_fetched(io, state, after, ran.left),
                 trans(ran.right.left, rip_advance(origin, state.rip, here, block_length(instructions), rip)),
                 j(sym(ran.right.right), λ m _ => view.Holds(v, m), holds), trace_of, valid, short, held)
+        },
+        Guarded(instructions) => λ code reach honest goes passed t v state cur rip holds trace_of valid short held => {
+            let resident = j(sym(rip), λ a _ => CodeResident(io.fetch, state.memory, canonical_block_bytes(instructions), a), code(v, state.memory, holds));
+            let ran = block_steps_guarded(io.fetch, io.data, instructions, state, resident,
+                block_flags_from_none(instructions, eq_true_of_is_true(block_flags(instructions, DefinedFlags::none()), honest),
+                    state.flags.defined), held.left);
+            let after = execute_block_normal(instructions, state);
+            wp_after(io, view, origin, tr, here + block_length(instructions), then, goes, passed, t, v, state, after, cur,
+                linux_steps_of_fetched(io, state, after, ran.left),
+                trans(ran.right.left, rip_advance(origin, state.rip, here, block_length(instructions), rip)),
+                j(sym(ran.right.right), λ m _ => view.Holds(v, m), holds), trace_of, valid, short, held.right)
         },
         Code(_) => λ code reach honest goes passed t v state cur rip holds trace_of valid short never => false_elim(never),
         Load(load) => λ code reach honest goes passed t v state cur rip holds trace_of valid short held => {

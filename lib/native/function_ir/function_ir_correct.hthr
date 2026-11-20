@@ -108,10 +108,10 @@ fn Prog::Computes<M>(self code: Prog, machine: Machine<M>, f, room: Nat, argumen
 theorem compiler_correct<M>(functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, code: Prog,
     lowered: lower_program_roomed(functions, placement, [], rooms) = Some(code), evaluable: program_evaluable(functions).IsTrue(),
     machine: Machine<M>, f: Nat, defined: f < functions.len(), arguments: List<BitVec(64)>,
-    arity: arity_fits(program_arity(functions, f), arguments.len()).IsTrue()):
+    arity: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), meets: program_defined(functions, f, arguments).IsTrue()):
     code.Computes(machine, f, rooms(f), arguments, program_eval(functions, f, arguments)) {
     λ origin last => compiled_returns<M>(functions, placement, rooms, code, lowered, evaluable, machine.fetch, machine.data, last, origin,
-        machine.stack, f, defined, arguments, arity, program_eval(functions, f, arguments), refl)
+        machine.stack, f, defined, arguments, arity, meets, program_eval(functions, f, arguments), refl)
 }
 
 // What a certificate cites. The program a `runtime fn` compiles to comes
@@ -121,11 +121,11 @@ theorem compiler_correct<M>(functions: List<Function>, placement: List<Place>, r
 theorem compiled_computes<M>(functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, code: Prog,
     lowered: lower_program_roomed(functions, placement, [], rooms) = Some(code), evaluable: program_evaluable(functions).IsTrue(),
     machine: Machine<M>, f: Nat, defined: f < functions.len(), arguments: List<BitVec(64)>,
-    arity: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), value: BitVec(64),
-    agrees: program_eval(functions, f, arguments) = value):
+    arity: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), meets: program_defined(functions, f, arguments).IsTrue(),
+    value: BitVec(64), agrees: program_eval(functions, f, arguments) = value):
     code.Computes(machine, f, rooms(f), arguments, value) {
     j(agrees, λ x _ => code.Computes(machine, f, rooms(f), arguments, x),
-        compiler_correct<M>(functions, placement, rooms, code, lowered, evaluable, machine, f, defined, arguments, arity))
+        compiler_correct<M>(functions, placement, rooms, code, lowered, evaluable, machine, f, defined, arguments, arity, meets))
 }
 
 // What a certificate states of a program whose last function returns two
@@ -151,10 +151,11 @@ theorem compiled_computes_both<M>(last: Function, earlier: List<Function>, place
     lowered: lower_program_roomed(Cons(last, earlier), placement, [], rooms) = Some(code),
     evaluable: program_evaluable(Cons(last, earlier)).IsTrue(), quiet: program_quiet(Cons(last, earlier)).IsTrue(),
     machine: Machine<M>, arguments: List<BitVec(64)>, count: last.parameters.len() = arguments.len(), answer: BitVec(64), rest: List<BitVec(64)>,
-    evaluates: last.eval(program_eval(earlier), arguments) = answer, evaluates_rest: program_eval_also(Cons(last, earlier), arguments) = rest):
+    evaluates: last.eval(program_eval(earlier), arguments) = answer, evaluates_rest: program_eval_also(Cons(last, earlier), arguments) = rest,
+    defined: program_defined(Cons(last, earlier), earlier.len(), arguments).IsTrue()):
     code.ComputesBoth(machine, earlier.len(), rooms(earlier.len()), arguments, answer, rest) {
     λ origin bytes => compiled_returns_both<M>(last, earlier, placement, rooms, code, lowered, evaluable, quiet, machine.fetch, machine.data, bytes, origin,
-        machine.stack, arguments, count, answer, rest, evaluates, evaluates_rest)
+        machine.stack, arguments, count, answer, rest, evaluates, evaluates_rest, defined)
 }
 
 // ---------------------------------------------------------------------------
@@ -216,12 +217,13 @@ theorem Prog::implements_of<M>(self code: Prog, machine: Machine<M>, f: Nat, roo
 theorem compiled_implements<M>(functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, code: Prog,
     lowered: lower_program_roomed(functions, placement, [], rooms) = Some(code), evaluable: program_evaluable(functions).IsTrue(),
     machine: Machine<M>, f: Nat, defined: f < functions.len(), n: Nat, arity: arity_fits(program_arity(functions, f), n).IsTrue(),
-    spec: Words(n), agrees: (words: List<BitVec(64)>) → words.len() = n → program_eval(functions, f, words) = apply_words(n, spec, words)):
+    spec: Words(n), meets: (words: List<BitVec(64)>) → words.len() = n → program_defined(functions, f, words).IsTrue(),
+    agrees: (words: List<BitVec(64)>) → words.len() = n → program_eval(functions, f, words) = apply_words(n, spec, words)):
     code.Implements(machine, f, rooms(f), n, spec) {
     code.implements_of(machine, f, rooms(f), n, spec, λ words length =>
         compiled_computes<M>(functions, placement, rooms, code, lowered, evaluable, machine, f, defined, words,
             j(sym(length), λ k _ => arity_fits(program_arity(functions, f), k).IsTrue(), arity),
-            apply_words(n, spec, words), agrees(words, length)))
+            meets(words, length), apply_words(n, spec, words), agrees(words, length)))
 }
 
 // ---------------------------------------------------------------------------
@@ -263,11 +265,12 @@ theorem compiler_correct_over<M>(functions: List<Function>, placement: List<Plac
     machine: Machine<M>, top: Nat, addresses: List<BitVec(64)>, before: Buffers(),
     loan: Loan<M>(machine.fetch, machine.data, machine.stack, top, Lending::writing(counts, addresses, before, marks).spans()),
     f: Nat, defined: f < functions.len(), arguments: List<BitVec(64)>,
-    arity: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(), origin: BitVec(64), last: List<BitVec(8)>):
+    arity: arity_fits(program_arity(functions, f), arguments.len()).IsTrue(),
+    meets: program_run_defined(functions, before, f, arguments).IsTrue(), origin: BitVec(64), last: List<BitVec(8)>):
     code.ReturnsOver(machine, origin, last, top, Lending::writing(counts, addresses, before, marks), f, rooms(f), arguments, before,
         program_run(functions, before, f, arguments)) {
     compiled_returns_written<M>(functions, placement, rooms, counts, addresses, marks, code, lowered, evaluable, within, machine.fetch,
-        machine.data, last, origin, machine.stack, top, before, loan, f, defined, arguments, arity,
+        machine.data, last, origin, machine.stack, top, before, loan, f, defined, arguments, arity, meets,
         program_run(functions, before, f, arguments), refl)
 }
 
