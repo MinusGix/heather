@@ -75,6 +75,35 @@ record Operation::Gives(self op: Operation, w: Nat, x, y, output: BitVec(w)) {
     equation: output = op.meaning(x, y, needs),
 }
 
+// The requirement decided, at any operands: what a runner checks where
+// `run` is about to give an answer the meaning does not (`requires_of_bit`).
+fn Operation::requires_bit(self op: Operation, {w: Nat}, x, y: BitVec(w)) → Bool {
+    match op {
+        Mul => True,
+        ShlBy => True,
+        ShrBy => True,
+        UDiv => !y.eq_bit(BitVec::zero()),
+        URem => !y.eq_bit(BitVec::zero()),
+    }
+}
+
+theorem Operation::nonzero_of_bit({w: Nat}, y: BitVec(w), ok: (!y.eq_bit(BitVec::zero())) = True): y ≠ BitVec::zero() {
+    λ e => absurd(j(BitVec::eq_bit_self(w, BitVec::zero()), λ b _ => (!b) = True,
+        j(e, λ z _ => (!z.eq_bit(BitVec::zero())) = True, ok)))
+}
+
+theorem Operation::requires_of_bit(self op: Operation, {w: Nat}, x, y: BitVec(w), ok: op.requires_bit(x, y) = True):
+    op.Requires(x, y)
+{
+    (match op as λ o => o.requires_bit(x, y) = True → o.Requires(x, y) {
+        Mul => λ _ => trivial,
+        ShlBy => λ _ => trivial,
+        ShrBy => λ _ => trivial,
+        UDiv => λ yes => Operation::nonzero_of_bit(y, yes),
+        URem => λ yes => Operation::nonzero_of_bit(y, yes),
+    })(ok)
+}
+
 fn Operation::code(self op: Operation) → Nat {
     match op { Mul => 0, ShlBy => 1, ShrBy => 2, UDiv => 3, URem => 4 }
 }
