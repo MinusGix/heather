@@ -139,10 +139,10 @@ theorem PTm::calls_ok_mono(self t: PTm, w: rt::World, f: PCalls(), ok1, ok2: Nat
 
 // A function's reflected body, its calls of itself (entry 0) read as calls
 // of procedure 0: a self-call bound by a `Let` or as the body's value is a
-// `Recur`, a branch on a bit with a self-call in an arm is a `Choose`, and
-// a part with no self-call is a `Bind` or the `Value`. A self-call anywhere
-// else (inside a bound term, a `match h:`, a `Nat` or enum match) is
-// refused.
+// `Recur`, a branch on a bit (`match` or `match h:`) with a self-call in
+// an arm is a `Choose`, and a part with no self-call is a `Bind` or the
+// `Value`. A self-call anywhere else (inside a bound term, a `Nat` or enum
+// match) is refused.
 fn Tm::to_ptm(self t: Tm) → Option<PTm> {
     match t.calls_self() {
         False => Some(Value(t)),
@@ -155,6 +155,8 @@ fn Tm::to_ptm(self t: Tm) → Option<PTm> {
                 _ => match e.calls_self() { True => None, False => body.to_ptm().map(λ b => Bind(e, b)) },
             },
             If(c, yes, no) => yes.to_ptm().and_then(λ y => no.to_ptm().map(λ n => Choose(c, y, n))),
+            // The equation `match h:` convoys is read only in proofs.
+            IfEq(c, yes, no) => yes.to_ptm().and_then(λ y => no.to_ptm().map(λ n => Choose(c, y, n))),
             Call(f, args) => match f { Zero => Some(Recur(0, args, Value(Var(0)))), Succ(_) => Some(Value(t)) },
             _ => None,
         },
