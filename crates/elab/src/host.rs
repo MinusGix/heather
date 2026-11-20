@@ -399,11 +399,16 @@ pub struct OpenedView {
     pub dependent: bool,
 }
 
-/// One branch of a split: its new locals, oldest first, and its goal.
+/// One branch of a split: its new locals, oldest first, its goal, and the
+/// fields of the constructor it reaches as the arm binds them (a `Cases` or
+/// `Branches` arm's pattern binders, in order; none for `Constructor`). A
+/// field is no local: the arm reads it off the constructor's payload, one of
+/// the locals (`Inductives::elab_arm`).
 #[derive(Clone, Debug)]
 pub struct BranchView {
     pub locals: Vec<LocalView>,
     pub goal: u64,
+    pub fields: Vec<u64>,
 }
 
 /// A split, as `Cases` and `Constructor` answer it.
@@ -984,6 +989,9 @@ impl<B: Values> Interpreted<B> {
                     for l in &b.locals {
                         let name = self.string_value(&l.name)?;
                         out = self.call("host_branch_local", vec![out, self.lit(l.id), name, self.lit(l.ty)])?;
+                    }
+                    for f in &b.fields {
+                        out = self.call("host_branch_field", vec![out, self.lit(*f)])?;
                     }
                 }
                 Ok(out)
@@ -4834,6 +4842,7 @@ impl Host<'_> {
             return Err(Fault::Ill("a branch's statement depends on another branch's proof".into()));
         }
         let base = run.len(at);
+        let base_aliases = cx.aliases.len();
         let mut branches = Vec::with_capacity(n);
         let mut views = Vec::with_capacity(n);
         for (bcx, ty, level) in first {
@@ -4852,14 +4861,24 @@ impl Host<'_> {
                 let name = bcx.names.get(p).map(str::to_string).unwrap_or_else(|| "_".to_string());
                 shown.push((id, name, entry.ty.shift_local((len - p) as u32), entry.level.clone()));
             }
+            // The arm's field aliases, each shifted from the depth it was
+            // bound at to the branch's.
+            let fields: Vec<_> = (base_aliases..bcx.aliases.len())
+                .filter_map(|i| bcx.aliases.get(i))
+                .map(|a| {
+                    let by = (len - a.depth) as u32;
+                    (a.term.shift_local(by), a.ty.shift_local(by), a.level.clone())
+                })
+                .collect();
             run.scopes.push(Scope { parent: Some(at), cx: bcx, world: 0, locals });
             let locals = shown
                 .into_iter()
                 .map(|(id, name, ty, level)| LocalView { id, name, ty: run.issue(scope, Held::Type(ty, level)) })
                 .collect();
+            let fields = fields.into_iter().map(|(t, ty, level)| run.issue(scope, Held::Term(t, ty, level))).collect();
             let goal = run.issue(scope, Held::Type(ty, level));
             branches.push((scope, goal));
-            views.push(BranchView { locals, goal });
+            views.push(BranchView { locals, goal, fields });
         }
         run.splits.push(Rc::new(Split { at, goal, lvl, skeleton, branches }));
         Ok(SplitView { id: (run.splits.len() - 1) as u64, branches: views })

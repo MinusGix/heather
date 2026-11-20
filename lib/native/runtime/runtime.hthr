@@ -144,8 +144,12 @@ fn Ty::is_two_words(self t: Ty, tys: Nat → RecInfo) → Bool {
 }
 
 // What a function returns (`Ty::Out`): an enum among them, as its tag word.
+// An enum without a payload: what crosses a boundary as its tag word
+// alone (`Ty::Bare`).
+fn Ty::is_bare(tys: Nat → RecInfo, i: Nat) → Bool { match tys(i).alts.slots { Nil => True, Cons(_, _) => False } }
+
 fn Ty::is_out(self t: Ty, tys: Nat → RecInfo) → Bool {
-    match t { Enum(_) => True, _ => t.is_edge(tys).or(t.is_two_words(tys)) }
+    match t { Enum(i) => Ty::is_bare(tys, i), _ => t.is_edge(tys).or(t.is_two_words(tys)) }
 }
 
 fn Ty::all_edge(ts: List<Ty>, tys: Nat → RecInfo) → Bool {
@@ -155,7 +159,7 @@ fn Ty::all_edge(ts: List<Ty>, tys: Nat → RecInfo) → Bool {
 // A function's parameters: each crosses the boundary (`Ty::Param`), an
 // enum as its tag word among them.
 fn Ty::all_param(ts: List<Ty>, tys: Nat → RecInfo) → Bool {
-    match ts { Nil => True, Cons(t, rest) => (match t { Enum(_) => True, _ => t.is_edge(tys) }).and(Ty::all_param(rest, tys)) }
+    match ts { Nil => True, Cons(t, rest) => (match t { Enum(i) => Ty::is_bare(tys, i), _ => t.is_edge(tys) }).and(Ty::all_param(rest, tys)) }
 }
 
 // The width a code crosses a function's boundary at: a word's own, 64 for
@@ -167,14 +171,17 @@ fn Ty::edge_width(self t: Ty) → Nat { match t { Word(w) => w, _ => 64 } }
 fn Fun::edge_widths(self f: Fun) → List<Nat> { Cons(f.result.edge_width(), f.params.map(λ p => p.edge_width())) }
 
 fn Ty::all_held_at(ts: List<Ty>, tys: Nat → RecInfo) → Bool {
-    match ts { Nil => True, Cons(t, rest) => match t { Count => True, Enum(_) => True, _ => t.is_one_word(tys) }.and(Ty::all_held_at(rest, tys)) }
+    match ts { Nil => True, Cons(t, rest) => match t { Count => True, Enum(i) => Ty::is_bare(tys, i), _ => t.is_one_word(tys) }.and(Ty::all_held_at(rest, tys)) }
 }
 
 // A signature a call passes and returns in words, a type held by its repr
 // and an enum's tag word among them, an enum returned where its tags fit a
 // word (what `Tm::lower_call` checks, as `Bool`).
 fn Sig::is_held_at(self s: Sig, tys: Nat → RecInfo) → Bool {
-    Ty::all_held_at(s.params, tys).and(match s.result { Enum(i) => (tys(i).alts.last + 1).leb(Nat::pow(2, 64)), _ => s.result.is_one_word(tys) })
+    Ty::all_held_at(s.params, tys).and(match s.result {
+        Enum(i) => (tys(i).alts.last + 1).leb(Nat::pow(2, 64)).and(Ty::is_bare(tys, i)),
+        _ => s.result.is_one_word(tys),
+    })
 }
 
 fn Op::judge(self o: Op) → Verdict {
@@ -2338,13 +2345,13 @@ fn runtime_slot_values(flat_default: Expr, q: RtQ, codes: List<Ty>, lo: Nat, own
 
 // The arms of a split on an enum's value, arm `k` `a(k, t)` at its
 // fields' tuple.
-fn runtime_enum_arms(a: Expr, tuple_of: Nat → List<LocalInfo> → Expr, bs: List<Branch>, k: Nat) → List<Expr> {
-    match bs { Nil => [], Cons(b, rest) => Cons(ap(a, [NatLit(k), tuple_of(k, b.locals)]), runtime_enum_arms(a, tuple_of, rest, k + 1)) }
+fn runtime_enum_arms(a: Expr, tuple_of: Nat → List<Expr> → Expr, bs: List<Branch>, k: Nat) → List<Expr> {
+    match bs { Nil => [], Cons(b, rest) => Cons(ap(a, [NatLit(k), tuple_of(k, b.fields.map(Hd))]), runtime_enum_arms(a, tuple_of, rest, k + 1)) }
 }
 
-// `refl` at every index up to `m` (`Nat::AllUpTo`).
-fn runtime_all_refl(rfl, pair: Expr, m: Nat) → Expr {
-    match m { Zero => ap(rfl, [Blank, Blank]), Succ(k) => ap(pair, [Blank, Blank, runtime_all_refl(rfl, pair, k), ap(rfl, [Blank, Blank])]) }
+// `refl` at every index up to `m` (`Nat::AllUpTo`), index `k`'s at `at(k)`.
+fn runtime_all_refl(rfl, pair: Expr, at: Nat → Expr, m: Nat) → Expr {
+    match m { Zero => ap(rfl, [Blank, at(0)]), Succ(k) => ap(pair, [Blank, Blank, runtime_all_refl(rfl, pair, at, k), ap(rfl, [Blank, at(k + 1)])]) }
 }
 
 // An enum's entry in the type table (docs/native/runtime-fn-setups-design.md
@@ -2365,6 +2372,7 @@ fn runtime_enum_info(q: RtQ, rfl: Expr, r: RecShape) → Tac<Pair<Expr, Expr>> {
     let arity_of <- runtime_global(name_of(EnumInfo::arity_of));
     let flats <- runtime_global(name_of(Ty::Flats));
     let flat_default <- runtime_global(name_of(Ty::flat_default));
+    let keep <- runtime_global(name_of(Ty::keep));
     let fst <- runtime_global(name_of(runtime_fst));
     let snd <- runtime_global(name_of(runtime_snd));
     let pair <- runtime_global(name_of(Pair::of));
@@ -2378,11 +2386,10 @@ fn runtime_enum_info(q: RtQ, rfl: Expr, r: RecShape) → Tac<Pair<Expr, Expr>> {
     let list_t <- as_type(ap(Global(list_g), [Hd(fn_t)])).or_fail("runtime: an enum's constructors: ");
     let nil_cons <- runtime_ctors_at(list_t);
     let arities_e = q.nat_list(r.arities);
-    // Constructor `k`'s fields, the branch's locals, in their slots.
-    let tuple_of = λ (k: Nat) (locals: List<LocalInfo>) => {
-        let own = locals.rev().take(EnumInfo::arity_of(r.arities, k)).map(λ (l: LocalInfo) => Local(l.ref));
-        runtime_tuple_of(pair, Hd(unit), runtime_slot_values(flat_default, q, r.codes, EnumInfo::lo_of(r.arities, k), own, 0))
-    };
+    // Constructor `k`'s fields, as the branch's arm binds them, in their
+    // slots.
+    let tuple_of = λ (k: Nat) (own: List<Expr>) =>
+        runtime_tuple_of(pair, Hd(unit), runtime_slot_values(flat_default, q, r.codes, EnumInfo::lo_of(r.arities, k), own, 0));
     match fns {
         Nil => runtime_fail("`" ++ r.name ++ "` has no constructor"),
         Cons(first, rest) => {
@@ -2410,8 +2417,11 @@ fn runtime_enum_info(q: RtQ, rfl: Expr, r: RecShape) → Tac<Pair<Expr, Expr>> {
             let of_tag = runtime_lams(of_tag_o.fst, of_tag_b);
             // Each constructor's tag, checked by evaluation, and its fields,
             // each `refl`, at any tuple.
-            let checked = Lam(t.ref, ap(rfl, [Blank, Blank]));
-            let kept = Lam(t.ref, runtime_all_refl(rfl, pair, rest.len()));
+            // (Each `refl` names its side: a hole made outside the tuple's
+            // binder could not mention it.)
+            let checked = Lam(t.ref, ap(rfl, [Blank, q.boolean(True)]));
+            let keep_at = λ (k: Nat) => ap(keep, [slots_e, NatLit(EnumInfo::lo_of(r.arities, k)), NatLit(EnumInfo::arity_of(r.arities, k)), Local(t.ref)]);
+            let kept = Lam(t.ref, runtime_all_refl(rfl, pair, keep_at, rest.len()));
             // `convoy`: the same arms by a `match h:` (`Cases`, the
             // elaborator's convoy), each a function of its equation, so
             // that a source's `match h:` on the enum is `convoy` at its arms

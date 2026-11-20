@@ -131,8 +131,10 @@ inductive Checked<A> { Accepted(a: A), Refused(why: String) }
 record Opened { local: LocalInfo, body: Handle, dependent: Bool }
 
 // One branch of a split: the locals it adds to the context, the most recent
-// first, and the statement its proof proves there.
-record Branch { locals: List<LocalInfo>, goal: Handle }
+// first, the statement its proof proves there, and the fields of the
+// constructor it reaches as its arm binds them, in order (none for
+// `Constructor`): read off the constructor's payload, one of the locals.
+record Branch { locals: List<LocalInfo>, goal: Handle, fields: List<Handle> }
 
 // A split of a goal into branches (`Cases`, `Constructor`). `Close` turns one
 // proof per branch into a proof of the goal.
@@ -1519,12 +1521,12 @@ fn host_global(g: Nat) → Answer { AGlobal(Accepted(GlobalRef(g))) }
 fn host_no_global(why: String) → Answer { AGlobal(Refused(why)) }
 
 // A split is its number, then one branch at a time, each followed by its
-// locals, oldest first.
+// locals, oldest first, and then its fields in order.
 fn host_split(id: Nat) → Answer { ASplit(Accepted(Split(id, []))) }
 
 fn host_branch(a: Answer, goal: Nat) → Answer {
     match a {
-        ASplit(c) => match c { Accepted(s) => ASplit(Accepted(Split(s.id, s.branches ++ [Branch([], Handle(goal))]))), Refused(_) => a },
+        ASplit(c) => match c { Accepted(s) => ASplit(Accepted(Split(s.id, s.branches ++ [Branch([], Handle(goal), [])]))), Refused(_) => a },
         _ => a,
     }
 }
@@ -1534,7 +1536,7 @@ fn branches_local(bs: List<Branch>, l: LocalInfo) → List<Branch> {
     match bs {
         Nil => [],
         Cons(b, rest) => match rest {
-            Nil => [Branch(Cons(l, b.locals), b.goal)],
+            Nil => [Branch(Cons(l, b.locals), b.goal, b.fields)],
             Cons(_, _) => Cons(b, branches_local(rest, l)),
         },
     }
@@ -1546,6 +1548,24 @@ fn host_branch_local(a: Answer, ref: Nat, name: String, ty: Nat) → Answer {
             Accepted(s) => ASplit(Accepted(Split(s.id, branches_local(s.branches, LocalInfo(LocalRef(ref), name, Handle(ty)))))),
             Refused(_) => a,
         },
+        _ => a,
+    }
+}
+
+// The branches with `f` added to the last one's fields, as its last.
+fn branches_field(bs: List<Branch>, f: Handle) → List<Branch> {
+    match bs {
+        Nil => [],
+        Cons(b, rest) => match rest {
+            Nil => [Branch(b.locals, b.goal, b.fields ++ [f])],
+            Cons(_, _) => Cons(b, branches_field(rest, f)),
+        },
+    }
+}
+
+fn host_branch_field(a: Answer, h: Nat) → Answer {
+    match a {
+        ASplit(c) => match c { Accepted(s) => ASplit(Accepted(Split(s.id, branches_field(s.branches, Handle(h))))), Refused(_) => a },
         _ => a,
     }
 }
