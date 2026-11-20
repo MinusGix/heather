@@ -89,3 +89,19 @@ theorem pocket_below_agrees(x, y: u64):
 theorem pocket_below_empty(): program_eval_also(pocket_below::program, [BitVec::ofNat(9), BitVec::ofNat(5)]) = [BitVec::ofNat(0)] {
     pocket_below::agrees_also(BitVec::ofNat(9), BitVec::ofNat(5))
 }
+
+// ---------------------------------------------------------------------------
+// A field that is a bit: its slot holds the one-bit word.
+
+inductive Flag { Off, On(b: Bool) }
+
+runtime fn flag_of(x: u64) → u64 {
+    let f: Flag = if x < 1 { Off } else { if x < 5 { On(True) } else { On(False) } };
+    match f { Off => 0, On(b) => if b { 1 } else { 2 } }
+}
+
+theorem flag_of_runs(): program_eval(flag_of::program, 0, [BitVec::ofNat(3)]) = 1 ∧ program_eval(flag_of::program, 0, [BitVec::ofNat(9)]) = 2 {
+    ⟨flag_of::agrees(BitVec::ofNat(3)), flag_of::agrees(BitVec::ofNat(9))⟩
+}
+
+theorem flag_of_slots(): flag_of::world.tys(0).alts.slots = [Bit] { refl }
