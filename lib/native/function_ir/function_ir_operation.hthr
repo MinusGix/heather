@@ -123,6 +123,26 @@ theorem Operation::requires_of_bit(self op: Operation, {w: Nat}, x, y: BitVec(w)
     })(ok)
 }
 
+theorem Operation::bit_of_nonzero({w: Nat}, y: BitVec(w), nonzero: y ≠ BitVec::zero()): (!y.eq_bit(BitVec::zero())) = True {
+    match same: y.eq_bit(BitVec::zero()) {
+        True => false_elim(nonzero(BitVec::eq_of_eq_bit(w, y, BitVec::zero(), same))),
+        False => refl,
+    }
+}
+
+// And back: where the requirement holds, its decision says so.
+theorem Operation::bit_of_requires(self op: Operation, {w: Nat}, x, y: BitVec(w), needs: op.Requires(x, y)):
+    op.requires_bit(x, y) = True
+{
+    (match op as λ o => o.Requires(x, y) → o.requires_bit(x, y) = True {
+        Mul => λ _ => refl,
+        ShlBy => λ _ => refl,
+        ShrBy => λ _ => refl,
+        UDiv => λ nonzero => Operation::bit_of_nonzero(y, nonzero),
+        URem => λ nonzero => Operation::bit_of_nonzero(y, nonzero),
+    })(needs)
+}
+
 fn Operation::code(self op: Operation) → Nat {
     match op { Mul => 0, ShlBy => 1, ShrBy => 2, UDiv => 3, URem => 4 }
 }
