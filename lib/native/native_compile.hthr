@@ -1604,9 +1604,11 @@ fn Prog::deep_exit(self p: Prog, layout: Layout) → Prog {
 // (`program_writers`), wherever its buffers lie; and with rows of marks
 // that hold (`program_rowed`), so a function that calls over views lends
 // to write each view its callee stores through
-// (docs/native/native-library-exports-design.md §3.1).
+// (docs/native/native-library-exports-design.md §3.1); and total, no node
+// requiring anything of its operands (`program_total`), so every call is
+// defined (docs/native/partial-operations-design.md §4).
 fn program_linkable(functions: List<Function>) → Bool {
-    (program_evaluable(functions) && program_placeless(functions)) && program_rowed(functions)
+    ((program_evaluable(functions) && program_placeless(functions)) && program_rowed(functions)) && program_total(functions)
 }
 
 // The room table `rooms` the functions are emitted with, read by entry.
@@ -1780,12 +1782,13 @@ fn Prog::links(self p: Prog, functions: List<Function>, places: List<Place>, roo
 // function at a time, `program_scan_at_drop`).
 theorem Prog::links_of(self p: Prog, functions: List<Function>, places: List<Place>, rooms: List<Nat>, names: Nat, q: Prog,
     evaluable: program_evaluable(functions).IsTrue(), placeless: program_placeless(functions).IsTrue(), rowed: program_rowed(functions).IsTrue(),
-    emitted: emit_functions_after_lent(p, functions, places, names, program_counts(functions), table_room(rooms)).map(λ out => out.prog) = Some(q)):
+    total: program_total(functions).IsTrue(), emitted: emit_functions_after_lent(p, functions, places, names, program_counts(functions), table_room(rooms)).map(λ out => out.prog) = Some(q)):
     p.links(functions, places, rooms, names) = Some(q)
 {
     let linkable: (program_linkable(functions) = True) = eq_true_of_is_true(program_linkable(functions),
-        Bool::is_true_and_intro(program_evaluable(functions) && program_placeless(functions), program_rowed(functions),
-            Bool::is_true_and_intro(program_evaluable(functions), program_placeless(functions), evaluable, placeless), rowed));
+        Bool::is_true_and_intro((program_evaluable(functions) && program_placeless(functions)) && program_rowed(functions), program_total(functions),
+            Bool::is_true_and_intro(program_evaluable(functions) && program_placeless(functions), program_rowed(functions),
+                Bool::is_true_and_intro(program_evaluable(functions), program_placeless(functions), evaluable, placeless), rowed), total));
     match functions as λ fs => program_linkable(fs) = True →
         emit_functions_after_lent(p, fs, places, names, program_counts(fs), table_room(rooms)).map(λ out => out.prog) = Some(q) →
         p.links(fs, places, rooms, names) = Some(q) {

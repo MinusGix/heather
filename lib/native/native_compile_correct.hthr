@@ -1711,7 +1711,7 @@ theorem native_compile_correct_calls(src: Source, r: DataRegion, homes: Homes, b
     let hosts: Hosts(t) = Hosts(built.hosted, built.deep, built.deep_within);
     let meets = built.base.links_calls<X86Memory(r.profile)>(homes.places, homes.room_table(src.functions), built.names, program, t.site(), t.laid, stack, program.within_self(),
         src.functions, built.linked);
-    let answers: t.Answered(call) = t.answers_of(known, known, meets.right);
+    let answers: t.Answered(call) = t.answers_of(known, known, known, meets.right);
     let fns = t.functions_run(call, answers);
     let live = src.main.live_in(homes, []);
     let saved = Start.saves_rsp(layout, src.need(homes, bodies)).frames_main(layout, live);

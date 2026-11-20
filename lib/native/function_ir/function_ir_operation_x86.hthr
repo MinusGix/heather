@@ -650,4 +650,3 @@ theorem Operation::row_computes<M>(self op: Operation, destination: Gpr, left, r
         },
     }
 }
-
