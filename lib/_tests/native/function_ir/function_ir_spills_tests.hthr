@@ -86,7 +86,7 @@ fn double() → Function {
 // read after the call, `a` is not.
 fn add_double() → Function {
     Function(parameters := [0, 1],
-        body := Compose(Call(0, [0], 2),
+        body := Compose(Call(0, [0], 2, []),
             Dataflow(Region(inputs := Ports([word(1), word(2)]), nodes := [Add(width := 64, output := 3, left := 2, right := 1)],
                 outputs := Ports([word(3)])))),
         result := 3)

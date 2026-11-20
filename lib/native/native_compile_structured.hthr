@@ -231,9 +231,10 @@ theorem StructuredRegion::meaning_frame(self region: StructuredRegion, call: Wri
             Env::settle_frame(nodes_write_ports(views_nodes(views)) ++ [Port(result, 64)], Env(env.words, after.buffers, env.args), after.values, x,
                 j(sym(views_touched(views, result)), λ l _ => absent(x, l).IsTrue(), h))
         },
-        Call(callee, arguments, result) => λ env x h => {
-            let after = Call(callee, arguments, result).run(call, env.valuation(), env.buffers);
-            Env::settle_frame([Port(result, 64)], Env(env.words, after.buffers, env.args), after.values, x, h)
+        Call(callee, arguments, result, also) => λ env x h => {
+            let after = Call(callee, arguments, result, also).run(call, env.valuation(), env.buffers);
+            Env::settle_frame(word_ports(Cons(result, also)), Env(env.words, after.buffers, env.args), after.values, x,
+                j(sym(word_port_ids(Cons(result, also))), λ l _ => absent(x, l).IsTrue(), h))
         },
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ env x h => {
             let r = Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted);
@@ -292,7 +293,7 @@ fn StructuredRegion::Ok(self region: StructuredRegion) → Type {
         Compose(prefix, continuation) => prefix.Ok() ∧ continuation.Ok(),
         Conditional(_, _, _, _, when_true, when_false) => when_true.Ok() ∧ when_false.Ok(),
         Lend(_, _, _, _) => False,
-        Call(_, _, _) => True,
+        Call(_, _, _, _) => True,
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => body.Ok() ∧
             (LoopShape(inputs, parameters, count, body, exit, next, outputs, exhausted) ∧
             Exists<Scope>(λ bs => (body.scoped(Scope::pass(parameters, count)) = Some(bs)) ∧ (bs.bit(exit) && bs.all_defined(next)).IsTrue())),
@@ -315,7 +316,7 @@ theorem StructuredRegion::ok_of_scoped(self region: StructuredRegion): (s, t: Sc
             ⟨when_true.ok_of_scoped(s, a, yes), when_false.ok_of_scoped(s, c, no)⟩
         },
         Lend(_, _, _, _) => λ s t none => absurd(none),
-        Call(_, _, _) => λ s t _ => trivial,
+        Call(_, _, _, _) => λ s t _ => trivial,
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ s t scoped => {
             cases scoped as ok, got(bs), bits;
             let parts = Bool::both(Bool::is_true_of_eq(ok));
@@ -393,6 +394,12 @@ theorem Prog::within_tests(self p: Prog, layout: Layout, condition, else_name: N
     calc { p <= p.bit_to(layout, condition, Rax) := p.within_bit_to(layout, condition, Rax), <= p.tests(layout, condition, else_name) := Exists(2, refl), }
 }
 
+// A call compiled is one of a function returning one word.
+theorem call_code_one(also: List<Nat>, x: Option<Compiled>, c: Compiled):
+    (match also { Nil => x, Cons(_, _) => None }) = Some(c) → (also = Nil) ∧ (x = Some(c)) {
+    match also { Nil => λ e => ⟨refl, e⟩, Cons(_, _) => λ none => absurd(none) }
+}
+
 // A function's call from its start (`Prog::function_call`).
 theorem Prog::within_function_call(self p: Prog, layout: Layout, out: List<Nat>, callee: Nat, arguments: List<Nat>, result: Nat):
     p.Within(p.function_call(layout, out, callee, arguments, result)) {
@@ -437,9 +444,10 @@ theorem StructuredRegion::within_code(self region: StructuredRegion, layout: Lay
             })))
         },
         Lend(_, _, _, _) => λ p out names c none => absurd(none),
-        Call(callee, arguments, result) => λ p out names c emitted => {
+        Call(callee, arguments, result, also) => λ p out names c emitted => {
             let fc = p.function_call(layout, out, callee, arguments, result);
-            let chain: (layout.function_fits(callee, arguments, result).guard(Some(Compiled(fc, names))) = Some(c)) = emitted;
+            let chain: (layout.function_fits(callee, arguments, result).guard(Some(Compiled(fc, names))) = Some(c)) =
+                call_code_one(also, layout.function_fits(callee, arguments, result).guard(Some(Compiled(fc, names))), c, emitted).right;
             Bool::guard_with(chain, λ _ same => j(Option::some_inj(Compiled(fc, names), c, same), λ x _ => p.Within(x.prog),
                 p.within_function_call(layout, out, callee, arguments, result)))
         },
@@ -832,7 +840,7 @@ fn Target::Functions(self t: Target, call: Writers()) → Type {
     (p: Prog) → (out: List<Nat>) → (callee: Nat) → (arguments: List<Nat>) → (result: Nat) →
         t.layout().function_fits(callee, arguments, result).IsTrue() →
         p.function_call(t.layout(), out, callee, arguments, result).Within(t.program) → t.homes.apart(result, out).IsTrue() →
-        t.Computes(Call(callee, arguments, result), call, live_before(arguments, result, out), out, p,
+        t.Computes(Call(callee, arguments, result, []), call, live_before(arguments, result, out), out, p,
             p.function_call(t.layout(), out, callee, arguments, result))
 }
 
@@ -1217,20 +1225,25 @@ theorem StructuredRegion::code_runs(self region: StructuredRegion, t: Target, ca
             })))))
         },
         Lend(_, _, _, _) => λ never p out names c emitted within live checked => false_elim(never),
-        Call(callee, arguments, result) => λ ok p out names c emitted within live checked => {
-            let region = Call(callee, arguments, result);
+        Call(callee, arguments, result, also) => λ ok p out names c emitted within live checked => {
+            let region = Call(callee, arguments, result, []);
             let fc = p.function_call(layout, out, callee, arguments, result);
             let before = live_before(arguments, result, out);
-            let chain: (layout.function_fits(callee, arguments, result).guard(Some(Compiled(fc, names))) = Some(c)) = emitted;
-            Bool::guard_with(chain, λ fit same =>
-                (match t.homes.apart(result, out) as λ b => t.homes.apart(result, out) = b →
+            let one = call_code_one(also, layout.function_fits(callee, arguments, result).guard(Some(Compiled(fc, names))), c, emitted);
+            let chain: (layout.function_fits(callee, arguments, result).guard(Some(Compiled(fc, names))) = Some(c)) = one.right;
+            j(sym(one.left), λ a _ => t.homes.region_checked(Call(callee, arguments, result, a), out) = Some(live) →
+                    t.Computes(Call(callee, arguments, result, a), call, live, out, p, c.prog),
+                λ checked1 => Bool::guard_with(chain, λ fit same =>
+                (match t.homes.all_apart([result], out) as λ b => t.homes.all_apart([result], out) = b →
                         (match b as λ _ => Option<List<Nat>> { False => None, True => Some(before) }) = Some(live) → t.Computes(region, call, live, out, p, c.prog) {
                     False => λ _ none => absurd(none),
-                    True => λ apart same_live =>
+                    True => λ apart same_live => {
+                        let parts = Bool::and_true_parts(t.homes.apart(result, out), t.homes.all_apart([], out), apart);
                         j(Option::some_inj(before, live, same_live), λ l _ => t.Computes(region, call, l, out, p, c.prog),
                         j(Option::some_inj(Compiled(fc, names), c, same), λ x _ => x.prog.Within(t.program) → t.Computes(region, call, before, out, p, x.prog),
-                            λ (w: fc.Within(t.program)) => fns(p, out, callee, arguments, result, fit, w, j(sym(apart), λ b _ => b.IsTrue(), trivial)))(within)),
-                })(refl, checked))
+                            λ (w: fc.Within(t.program)) => fns(p, out, callee, arguments, result, fit, w, j(sym(parts.left), λ b _ => b.IsTrue(), trivial)))(within))
+                    },
+                })(refl, checked1)))(checked)
         },
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ ok p out names c emitted within live checked =>
             t.loop_goes(call, inputs, bound, parameters, count, body, exit, next, outputs, exhausted, p, out, names, c, live, emitted, within, checked, ok,

@@ -852,7 +852,7 @@ fn StructuredRegion::called(self region: StructuredRegion, after: List<Nat>) →
         Sequence(_, continuation) => continuation.called(after),
         Compose(prefix, continuation) => prefix.called(continuation.called(after)),
         Conditional(_, _, _, _, when_true, when_false) => when_true.called(when_false.called(after)),
-        Call(callee, _, _) => Cons(callee, after),
+        Call(callee, _, _, _) => Cons(callee, after),
         Loop(_, _, _, _, body, _, _, _, _) => body.called(after),
         Lend(_, callee, _, _) => Cons(callee, after),
     }

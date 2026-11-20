@@ -288,7 +288,7 @@ theorem count_all_runs(): program_eval_over([[b(10), b(97), b(10), b(10)]], coun
 theorem count_all_placeless(): program_placeless(count_all::program) = True { refl }
 theorem count_all_lowers(): lower_program_lent(count_all::program, plan_program(count_all::program), program_counts(count_all::program)).is_some()
     = True { refl }
-theorem count_all_called(): program_readers(count_all::program)([[b(10), b(97), b(10), b(10)]], 1, []) = w(3) { refl }
+theorem count_all_called(): program_readers(count_all::program)([[b(10), b(97), b(10), b(10)]], 1, []) = [w(3)] { refl }
 
 // The second of two spans cannot be a callee's first: a call does not
 // rename buffers.

@@ -119,7 +119,15 @@ impl Reader<'_> {
             4 => {
                 let callee = self.next()?;
                 let arguments = self.ids()?;
-                (format!("Call({callee}, {arguments}, {})", self.next()?), 1)
+                (format!("Call({callee}, {arguments}, {}, [])", self.next()?), 1)
+            }
+            // A call answering more than one word: its words past the
+            // first follow the result.
+            8 => {
+                let callee = self.next()?;
+                let arguments = self.ids()?;
+                let result = self.next()?;
+                (format!("Call({callee}, {arguments}, {result}, {})", self.ids()?), 1)
             }
             5 => {
                 let inputs = self.ids()?;

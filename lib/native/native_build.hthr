@@ -550,7 +550,7 @@ fn StructuredRegion::counts(self region: StructuredRegion) → List<Nat> {
         Compose(prefix, continuation) => prefix.counts() ++ continuation.counts(),
         Conditional(_, _, _, _, when_true, when_false) => when_true.counts() ++ when_false.counts(),
         Lend(_, _, _, _) => [],
-        Call(_, _, _) => [],
+        Call(_, _, _, _) => [],
         Loop(_, _, _, count, body, _, _, _, _) => Cons(count, body.counts()),
     }
 }
@@ -587,7 +587,7 @@ fn Calc::pieces(self c: Calc, next: Nat) → List<Piece> {
         },
         Apply(callee, arguments, result) => {
             let a = arguments.placed_words(next);
-            [Nodes(a.nodes), Part(Call(callee, a.ids, result.id))]
+            [Nodes(a.nodes), Part(Call(callee, a.ids, result.id, []))]
         },
         Passes(bound, state, body, stop, ran_out) => {
             let b = bound.placed(True, next);

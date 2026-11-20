@@ -46,7 +46,7 @@ fn double() → Function {
 // the call, saved and restored around it.
 fn add_double() → Function {
     Function(parameters := [0, 1],
-        body := Compose(Call(0, [0], 2),
+        body := Compose(Call(0, [0], 2, []),
             Dataflow(Region(inputs := Ports([word(1), word(2)]), nodes := [Add(width := 64, output := 3, left := 2, right := 1)],
                 outputs := Ports([word(3)])))),
         result := 3)
@@ -96,7 +96,7 @@ fn pick() → Function {
             Region(inputs := pair_ports(), nodes := [UnsignedLessThan(width := 64, output := 3, left := 0, right := 1)],
                 outputs := Ports([bit(3)])),
             Conditional(Ports([word(0), word(1), bit(3)]), 3, pair_ports(), Ports([word(2)]),
-                Call(0, [1], 2),
+                Call(0, [1], 2, []),
                 Dataflow(Region(inputs := pair_ports(), nodes := [Move(width := 64, output := 2, source := 0)],
                     outputs := Ports([word(2)]))))),
         result := 2)
@@ -131,7 +131,7 @@ fn sum_double() → Function {
         body := Sequence(
             Region(inputs := pair_ports(), nodes := [Add(width := 64, output := 2, left := 0, right := 1)],
                 outputs := Ports([word(0), word(2)])),
-            Compose(Call(0, [0], 3),
+            Compose(Call(0, [0], 3, []),
                 Dataflow(Region(inputs := Ports([word(2), word(3)]), nodes := [Add(width := 64, output := 4, left := 3, right := 2)],
                     outputs := Ports([word(4)]))))),
         result := 4)
@@ -141,10 +141,10 @@ theorem sum_kept_in_rcx(): lower_program([sum_double(), double()], [Into(Rax), I
 theorem sum_lost_in_rax(): lower_program([sum_double(), double()], [Into(Rax), Into(Rax), Into(Rax)]) = None { refl }
 
 // A function may call only those before it: no recursion, no forward call.
-fn calls_itself() → Function { Function(parameters := [0], body := Call(0, [0], 1), result := 1) }
+fn calls_itself() → Function { Function(parameters := [0], body := Call(0, [0], 1, []), result := 1) }
 theorem recursion_refused(): lower_program([calls_itself()], []) = None { refl }
 theorem forward_call_refused(): lower_program([double(), calls_itself()], [Into(Rax)]) = None { refl }
 
 // Nine arguments do not fit the six registers and the two stack words.
-fn wide() → Function { Function(parameters := [0], body := Call(0, [0, 0, 0, 0, 0, 0, 0, 0, 0], 1), result := 1) }
+fn wide() → Function { Function(parameters := [0], body := Call(0, [0, 0, 0, 0, 0, 0, 0, 0, 0], 1, []), result := 1) }
 theorem nine_arguments_refused(): lower_program([wide(), double()], [Into(Rax)]) = None { refl }

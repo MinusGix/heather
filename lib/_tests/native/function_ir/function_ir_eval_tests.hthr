@@ -58,7 +58,7 @@ theorem parameter_written_refused(): parameter_written().scan(no_calls()) = Fals
 theorem parameter_written_not_evaluable(): parameter_written().evaluable(no_calls()) = False { refl }
 
 // A call of a function the program does not have.
-fn unknown_call() → Function { of(Call(5, [0], 1)) }
+fn unknown_call() → Function { of(Call(5, [0], 1, [])) }
 
 theorem unknown_call_refused(): unknown_call().scan(no_calls()) = False { refl }
 theorem unknown_call_not_evaluable(): unknown_call().evaluable(no_calls()) = False { refl }

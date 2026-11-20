@@ -94,7 +94,12 @@ fn StructuredRegion::spelled_tagged(self region: StructuredRegion) → List<Nat>
                 List::append(when_true.spelled_tagged(), when_false.spelled_tagged())))))),
         Lend(views, callee, arguments, result) => Cons(6, Cons(views.len(), List::append(spell_views(views),
             Cons(callee, List::append(arguments.spell_ids(), [result]))))),
-        Call(callee, arguments, result) => Cons(4, Cons(callee, List::append(arguments.spell_ids(), [result]))),
+        // A call of one word as it always was; one of more words tagged 8,
+        // its words past the first after the result.
+        Call(callee, arguments, result, also) => match also {
+            Nil => Cons(4, Cons(callee, List::append(arguments.spell_ids(), [result]))),
+            Cons(_, _) => Cons(8, Cons(callee, List::append(arguments.spell_ids(), Cons(result, also.spell_ids())))),
+        },
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => Cons(5, List::append(inputs.spell_ids(),
             Cons(bound, List::append(parameters.spell_ids(), Cons(count, List::append(body.spelled_tagged(),
                 Cons(exit, List::append(next.spell_ids(), List::append(outputs.spell_ids(), [exhausted]))))))))),
@@ -115,7 +120,7 @@ fn Stmt::spelled_stmt(self s: Stmt) → Option<List<Nat>> {
             Compose(_, _) => Some(Cons(7, region.spelled_tagged())),
             Conditional(_, _, _, _, _, _) => Some(Cons(7, region.spelled_tagged())),
             Lend(_, _, _, _) => Some(Cons(7, region.spelled_tagged())),
-            Call(_, _, _) => Some(Cons(7, region.spelled_tagged())),
+            Call(_, _, _, _) => Some(Cons(7, region.spelled_tagged())),
             Loop(_, _, _, _, _, _, _, _, _) => Some(Cons(7, region.spelled_tagged())),
         },
         Invoke(shape) => Some(Cons(1, shape.spelled_call())),

@@ -380,14 +380,14 @@ theorem Target::answers_of(self t: Target, evaluable: program_evaluable(t.functi
             j(sym(program_counts_lent(t.functions, f, below)), λ c _ => ArgsLent(c, 0, passed, placed_addresses(at, 0, k), lent),
                 args_lent_first(at, size, held, words, k, sized));
         let loan = t.loan(held, k, sized, λ b => in_memory(b).right.left);
-        let runs: program_effects(t.functions)(lent, f, passed, ran.word, ran.buffers) =
+        let runs: program_effects(t.functions)(lent, f, passed, ran.word, ran.rest, ran.buffers) =
             program_run_effects(t.functions, evaluable, lent, f, passed, fit, program_total_run_defined(t.functions, total, lent, f, passed));
-        let answered = calls(placed_addresses(at, 0, k), lent, λ (_: Nat) => True, t.stack.size, λ f b _ => refl, loan, f, below, passed, ran.word, lent,
+        let answered = calls(placed_addresses(at, 0, k), lent, λ (_: Nat) => True, t.stack.size, λ f b _ => refl, loan, f, below, passed, ran.word, ran.rest, lent,
             ran.buffers, s0, at0, resident, i0, rsp, room, ⟨⟨called0.left, ⟨runs, called0.right.left⟩⟩, ⟨args, ⟨room, in_memory⟩⟩⟩, ret, saved);
         let u = answered.witness;
         let left: t.Left(held, k, program_writers(t.functions)(held, f, words))(i0, s0, u) =
             j(same, λ r _ => t.Left(held, k, Ending(r.word, relent(k, r.buffers, held)))(i0, s0, u),
-                Exists(ran.buffers, ⟨refl, answered.proof.right.right.right.right⟩));
+                Exists(ran.buffers, ⟨refl, answered.proof.right.right.right.right.left⟩));
         Exists(u, ⟨answered.proof.left, ⟨answered.proof.right.left, ⟨answered.proof.right.right.left, ⟨answered.proof.right.right.right.left, left⟩⟩⟩⟩)
     }
 }
@@ -855,7 +855,7 @@ theorem Env::words_of_valuation(self env: Env, ids: List<Nat>): words_of(env.val
 // A call sets its result's word to the answer at its arguments' words, and
 // leaves the file its callee left.
 theorem Env::call_meaning(self env: Env, call: Writers(), callee: Nat, arguments: List<Nat>, result: Nat):
-    Call(callee, arguments, result).meaning(call, env) =
+    Call(callee, arguments, result, []).meaning(call, env) =
         Env(env.words, call(env.buffers, callee, env.words_at(arguments)).buffers, env.args).set_word(result,
             call(env.buffers, callee, env.words_at(arguments)).word) {
     let answer = call(env.buffers, callee, words_of(env.valuation(), arguments));
@@ -1031,7 +1031,7 @@ theorem Target::function_performs(self t: Target, call: Writers(), answers: t.An
 theorem Target::functions_run(self t: Target, call: Writers(), answers: t.Answered(call)): t.Functions(call) {
     let layout = t.layout();
     λ p out callee arguments result fit within apart env tree next => {
-        let region = Call(callee, arguments, result);
+        let region = Call(callee, arguments, result, []);
         let live = live_before(arguments, result, out);
         let k = program_lent(t.functions, callee);
         let below: (Succ(callee) <= t.functions.len()) = Nat::leb_sound(Succ(callee), t.functions.len(), known);

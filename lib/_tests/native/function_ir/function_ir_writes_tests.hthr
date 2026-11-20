@@ -79,7 +79,7 @@ theorem get_reads_put(effects: Effects(), values: Valuation(), before, after: Bu
 // A call's file is the one its callee leaves
 
 fn storer() → Function { Function(parameters := [0, 1], body := put(), result := 2) }
-fn caller() → Function { Function(parameters := [0, 1], body := Call(0, [0, 1], 2), result := 2) }
+fn caller() → Function { Function(parameters := [0, 1], body := Call(0, [0, 1], 2, []), result := 2) }
 
 theorem call_leaves_callee_file(before, after: Buffers(), i, v, result: BitVec(64),
     ran: program_effects([caller(), storer()])(before, 1, [i, v], result, after)): after = store_byte(before, 0, i.toNat(), low_byte(v)) {

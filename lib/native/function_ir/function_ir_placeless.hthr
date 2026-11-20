@@ -94,6 +94,19 @@ theorem Valuation::bind_apart_same(ids: List<Nat>, hidden: List<Nat>, values, ot
     }
 }
 
+// Ids none of which is hidden read alike.
+theorem words_of_clear(hidden: List<Nat>, values, other: Valuation(), apart: Valuation::Apart(hidden, values, other), ids: List<Nat>):
+    disjoint(hidden, ids).IsTrue() → words_of(other, ids) = words_of(values, ids) {
+    match ids {
+        Nil => λ _ => refl,
+        Cons(id, rest) => λ clear => {
+            let parts = Bool::is_true_and(absent(id, hidden), disjoint(hidden, rest), clear);
+            eq2(λ (x: BitVec(64)) (xs: List<BitVec(64)>) => Cons(x, xs), apart(64, id, parts.left),
+                words_of_clear(hidden, values, other, apart, rest, parts.right))
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Lists of words agreeing where a mask says so
 
@@ -542,7 +555,7 @@ fn StructuredRegion::placeless(self region: StructuredRegion, lent: Nat → Nat,
             && (when_true.placeless(lent, hidden) && when_false.placeless(lent, hidden)),
         Lend(views, callee, arguments, _) => views_clear(views, views_taints(views, hidden))
             && mask_covers(mask_of(views_homes(views) ++ arguments, views_taints(views, hidden)), base_mask(lent(callee))),
-        Call(callee, arguments, _) => mask_covers(mask_of(arguments, hidden), base_mask(lent(callee))),
+        Call(callee, arguments, _, _) => mask_covers(mask_of(arguments, hidden), base_mask(lent(callee))),
         Loop(inputs, bound, parameters, _, body, exit, next, _, _) => absent(bound, hidden)
             && (body.placeless(lent, taint_onto(parameters, mask_of(inputs, hidden), []))
             && (absent(exit, body.taints(taint_onto(parameters, mask_of(inputs, hidden), [])))
@@ -608,16 +621,19 @@ theorem StructuredRegion::eval_apart(self region: StructuredRegion, buffers: Buf
             let others = words_of(bound2, passed);
             let read: ListsApart(base_mask(lent(callee)), words, others) = lists_apart_weaken(base_mask(lent(callee)),
                 mask_of(passed, hid), parts.right, words, others, words_of_apart(passed, hid, bound, bound2, alike));
-            Valuation::set_apart(hid, bound, bound2, alike, result, word_value(call(callee, words)), word_value(call(callee, others)),
-                λ w => cong_fn(λ (x: BitVec(64)) => word_value(x, w), answers(callee, words, others, read)))
+            Valuation::set_apart(hid, bound, bound2, alike, result, word_value(first_word(call(callee, words))),
+                word_value(first_word(call(callee, others))),
+                λ w => cong_fn(λ (x: List<BitVec(64)>) => word_value(first_word(x), w), answers(callee, words, others, read)))
         },
-        Call(callee, arguments, result) => λ hidden ok values other apart => {
+        Call(callee, arguments, result, also) => λ hidden ok values other apart => {
             let words = words_of(values, arguments);
             let others = words_of(other, arguments);
             let read: ListsApart(base_mask(lent(callee)), words, others) = lists_apart_weaken(base_mask(lent(callee)),
                 mask_of(arguments, hidden), ok, words, others, words_of_apart(arguments, hidden, values, other, apart));
-            Valuation::set_apart(hidden, values, other, apart, result, word_value(call(callee, words)), word_value(call(callee, others)),
-                λ w => cong_fn(λ (x: BitVec(64)) => word_value(x, w), answers(callee, words, others, read)))
+            j(sym(answers(callee, words, others, read)), λ got _ => Valuation::Apart(hidden,
+                    Valuation::bind(values, Cons(result, also), Answers::split(call(callee, words))),
+                    Valuation::bind(other, Cons(result, also), Answers::split(got))),
+                Valuation::bind_apart_same(Cons(result, also), hidden, values, other, apart, Answers::split(call(callee, words))))
         },
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ hidden ok values other apart => {
             let mask = mask_of(inputs, hidden);
@@ -658,23 +674,27 @@ theorem StructuredRegion::eval_apart(self region: StructuredRegion, buffers: Buf
 // The ids a function holds its lent buffers' addresses at.
 fn Function::addresses(self function: Function) → List<Nat> { taint_onto(function.parameters, base_mask(function.lent), []) }
 
-// The body is placeless from the address parameters, and the result is
-// not one of them or of what a loop carried one into.
+// The body is placeless from the address parameters, and no word it
+// returns (the result, then `also`) is one of them or of what a loop
+// carried one into.
 fn Function::placeless(self function: Function, lent: Nat → Nat) → Bool {
-    function.body.placeless(lent, function.addresses()) && absent(function.result, function.body.taints(function.addresses()))
+    function.body.placeless(lent, function.addresses()) && disjoint(function.body.taints(function.addresses()), Cons(function.result, function.also))
 }
 
 theorem Function::eval_apart(self function: Function, buffers: Buffers(), call: Answers(), lent: Nat → Nat,
     answers: (f: Nat) → (words, others: List<BitVec(64)>) → ListsApart(base_mask(lent(f)), words, others) → call(f, others) = call(f, words),
     ok: function.placeless(lent).IsTrue(), words, others: List<BitVec(64)>, apart: ListsApart(base_mask(function.lent), words, others)):
-    function.eval(call, others, buffers := buffers) = function.eval(call, words, buffers := buffers) {
+    function.eval_words(call, others, buffers := buffers) = function.eval_words(call, words, buffers := buffers) {
     let parts = Bool::is_true_and(function.body.placeless(lent, function.addresses()),
-        absent(function.result, function.body.taints(function.addresses())), ok);
+        disjoint(function.body.taints(function.addresses()), Cons(function.result, function.also)), ok);
     let bound = Valuation::bind_apart(function.parameters, [], Valuation::zero(), Valuation::zero(),
         Valuation::apart_refl([], Valuation::zero()), base_mask(function.lent), words, others, apart);
-    StructuredRegion::eval_apart(function.body, buffers, call, lent, answers, function.addresses(), parts.left,
-        Valuation::bind(Valuation::zero(), function.parameters, words), Valuation::bind(Valuation::zero(), function.parameters, others),
-        bound, 64, function.result, parts.right)
+    words_of_clear(function.body.taints(function.addresses()),
+        function.body.eval(call, Valuation::bind(Valuation::zero(), function.parameters, words), buffers := buffers),
+        function.body.eval(call, Valuation::bind(Valuation::zero(), function.parameters, others), buffers := buffers),
+        StructuredRegion::eval_apart(function.body, buffers, call, lent, answers, function.addresses(), parts.left,
+            Valuation::bind(Valuation::zero(), function.parameters, words), Valuation::bind(Valuation::zero(), function.parameters, others), bound),
+        Cons(function.result, function.also), parts.right)
 }
 
 // How many buffers each function of a program is lent, by the number
@@ -694,25 +714,32 @@ fn program_placeless(functions: List<Function>) → Bool {
 }
 
 // The theorem for programs: a placeless program's functions answer alike
-// at every address word, over any buffers.
-theorem program_eval_placeless(buffers: Buffers(), functions: List<Function>): program_placeless(functions).IsTrue() → (f: Nat) →
+// at every address word, every word of them, over any buffers.
+theorem program_answers_placeless(buffers: Buffers(), functions: List<Function>): program_placeless(functions).IsTrue() → (f: Nat) →
     (words, others: List<BitVec(64)>) → ListsApart(base_mask(program_lent(functions, f)), words, others) →
-    program_eval_over(buffers, functions)(f, others) = program_eval_over(buffers, functions)(f, words) {
+    program_answers_over(buffers, functions)(f, others) = program_answers_over(buffers, functions)(f, words) {
     match functions {
         Nil => λ _ f words others _ => refl,
         Cons(last, earlier) => λ ok f words others => {
             let parts = Bool::is_true_and(last.placeless(program_lent(earlier)), program_placeless(earlier), ok);
-            let ih = program_eval_placeless(buffers, earlier, parts.right);
-            let below = program_eval_over(buffers, earlier);
+            let ih = program_answers_placeless(buffers, earlier, parts.right);
+            let below = program_answers_over(buffers, earlier);
             match f.eq_dec(earlier.len()) as λ d =>
                 ListsApart(base_mask(match d { Inl(_) => last.lent, Inr(_) => program_lent(earlier, f) }), words, others) →
-                (match d { Inl(_) => last.eval(below, others, buffers := buffers), Inr(_) => below(f, others) }) =
-                (match d { Inl(_) => last.eval(below, words, buffers := buffers), Inr(_) => below(f, words) }) {
+                (match d as λ _ => List<BitVec(64)> { Inl(_) => last.eval_words(below, others, buffers := buffers), Inr(_) => below(f, others) }) =
+                (match d as λ _ => List<BitVec(64)> { Inl(_) => last.eval_words(below, words, buffers := buffers), Inr(_) => below(f, words) }) {
                 Inl(_) => λ h => last.eval_apart(buffers, below, program_lent(earlier), ih, parts.left, words, others, h),
                 Inr(_) => λ h => ih(f, words, others, h),
             }
         },
     }
+}
+
+// Its first word, as `program_eval` reads it.
+theorem program_eval_placeless(buffers: Buffers(), functions: List<Function>, ok: program_placeless(functions).IsTrue(), f: Nat,
+    words, others: List<BitVec(64)>, apart: ListsApart(base_mask(program_lent(functions, f)), words, others)):
+    program_eval_over(buffers, functions)(f, others) = program_eval_over(buffers, functions)(f, words) {
+    cong_fn(λ (ws: List<BitVec(64)>) => first_word(ws), program_answers_placeless(buffers, functions, ok, f, words, others, apart))
 }
 
 // ---------------------------------------------------------------------------
@@ -971,14 +998,16 @@ theorem StructuredRegion::run_apart(self region: StructuredRegion, call: Writers
             ⟨Valuation::set_apart(hid, bound.values, bound2.values, alike.left, result, word_value(answer.word), word_value(answer2.word),
                 λ w => cong_fn(λ (a: Ending) => word_value(a.word, w), same)), put⟩
         },
-        Call(callee, arguments, result) => λ hidden ok values other buffers apart => {
+        Call(callee, arguments, result, also) => λ hidden ok values other buffers apart => {
             let words = words_of(values, arguments);
             let others = words_of(other, arguments);
             let read: ListsApart(base_mask(lent(callee)), words, others) = lists_apart_weaken(base_mask(lent(callee)),
                 mask_of(arguments, hidden), ok, words, others, words_of_apart(arguments, hidden, values, other, apart));
             let same: (call(buffers, callee, others) = call(buffers, callee, words)) = answers(buffers, callee, words, others, read);
-            ⟨Valuation::set_apart(hidden, values, other, apart, result, word_value(call(buffers, callee, words).word),
-                word_value(call(buffers, callee, others).word), λ w => cong_fn(λ (answer: Ending) => word_value(answer.word, w), same)),
+            let answer = call(buffers, callee, words);
+            ⟨j(sym(same), λ got _ => Valuation::Apart(hidden, Valuation::bind(values, Cons(result, also), Cons(answer.word, answer.rest)),
+                    Valuation::bind(other, Cons(result, also), Cons(got.word, got.rest))),
+                    Valuation::bind_apart_same(Cons(result, also), hidden, values, other, apart, Cons(answer.word, answer.rest))),
                 cong_fn(λ (answer: Ending) => answer.buffers, same)⟩
         },
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ hidden ok values other buffers apart => {
@@ -1020,13 +1049,17 @@ theorem Function::run_apart(self function: Function, call: Writers(), lent: Nat 
     ok: function.placeless(lent).IsTrue(), words, others: List<BitVec(64)>, buffers: Buffers(),
     apart: ListsApart(base_mask(function.lent), words, others)): function.run(call, others, buffers) = function.run(call, words, buffers) {
     let parts = Bool::is_true_and(function.body.placeless(lent, function.addresses()),
-        absent(function.result, function.body.taints(function.addresses())), ok);
+        disjoint(function.body.taints(function.addresses()), Cons(function.result, function.also)), ok);
     let bound = Valuation::bind_apart(function.parameters, [], Valuation::zero(), Valuation::zero(),
         Valuation::apart_refl([], Valuation::zero()), base_mask(function.lent), words, others, apart);
+    let one = function.body.run(call, Valuation::bind(Valuation::zero(), function.parameters, words), buffers);
+    let two = function.body.run(call, Valuation::bind(Valuation::zero(), function.parameters, others), buffers);
     let ran = StructuredRegion::run_apart(function.body, call, lent, answers, function.addresses(), parts.left,
         Valuation::bind(Valuation::zero(), function.parameters, words), Valuation::bind(Valuation::zero(), function.parameters, others),
         buffers, bound);
-    eq2(λ (word: BitVec(64)) (file: Buffers()) => Ending(word, file), ran.left(64, function.result, parts.right), ran.right)
+    eq2(λ (ws: List<BitVec(64)>) (file: Buffers()) => Ending(first_word(ws), file, rest := ws.tail()),
+        words_of_clear(function.body.taints(function.addresses()), one.values, two.values, ran.left, Cons(function.result, function.also), parts.right),
+        ran.right)
 }
 
 // The theorem for programs, the file threaded: a placeless program's
@@ -1081,7 +1114,7 @@ fn stated_homes(from, count: Nat, held: Buffers()) → List<BitVec(64)> {
 // It is what `program_writers` answers when the program stores nothing
 // (`program_writers_quiet`).
 fn program_readers(functions: List<Function>) → Readers() {
-    λ held f words => program_eval_over(lent_buffers(program_lent(functions, f), held), functions)(f,
+    λ held f words => program_answers_over(lent_buffers(program_lent(functions, f), held), functions)(f,
         stated_homes(0, program_lent(functions, f), held) ++ words)
 }
 
@@ -1123,19 +1156,19 @@ theorem relent_same(count: Nat): (held: Buffers()) → relent(count, lent_buffer
 fn program_writers(functions: List<Function>) → Writers() {
     λ held f words => shared(program_run(functions, lent_buffers(program_lent(functions, f), held), f,
             stated_homes(0, program_lent(functions, f), held) ++ words),
-        λ (answer: Ending) => Ending(answer.word, relent(program_lent(functions, f), answer.buffers, held)))
+        λ (answer: Ending) => Ending(answer.word, relent(program_lent(functions, f), answer.buffers, held), rest := answer.rest))
 }
 
 // A program whose functions store nothing answers a call with the word its
 // readers do, and the file as it was.
 theorem program_writers_quiet(functions: List<Function>, quiet: program_quiet(functions).IsTrue(), held: Buffers(), f: Nat,
-    words: List<BitVec(64)>): program_writers(functions)(held, f, words) = Ending(program_readers(functions)(held, f, words), held) {
+    words: List<BitVec(64)>): program_writers(functions)(held, f, words) = Ending::of(program_readers(functions)(held, f, words), held) {
     let k = program_lent(functions, f);
     let lent = lent_buffers(k, held);
     let stated = stated_homes(0, k, held) ++ words;
-    trans(cong_fn<Ending, Ending>(λ answer => Ending(answer.word, relent(k, answer.buffers, held)),
+    trans(cong_fn<Ending, Ending>(λ answer => Ending(answer.word, relent(k, answer.buffers, held), rest := answer.rest),
             program_run_quiet(functions, quiet, lent, f, stated)),
-        cong_fn<Buffers(), Ending>(λ file => Ending(program_eval_over(lent, functions)(f, stated), file), relent_same(k, held)))
+        cong_fn<Buffers(), Ending>(λ file => Ending::of(program_answers_over(lent, functions)(f, stated), file), relent_same(k, held)))
 }
 
 theorem program_writers_still(functions: List<Function>, quiet: program_quiet(functions).IsTrue()): Writers::Quiet(program_writers(functions)) {
@@ -1163,8 +1196,8 @@ theorem program_unlent_lent(functions: List<Function>): program_unlent(functions
 // Such a program answers every call as `program_eval` does, whatever the
 // buffers.
 theorem program_readers_unlent(functions: List<Function>, ok: program_unlent(functions).IsTrue(), held: Buffers(), f: Nat,
-    words: List<BitVec(64)>): program_readers(functions)(held, f, words) = program_eval(functions)(f, words) {
+    words: List<BitVec(64)>): program_readers(functions)(held, f, words) = program_answers(functions)(f, words) {
     j(sym(program_unlent_lent(functions, ok, f)),
-        λ k _ => program_eval_over(lent_buffers(k, held), functions)(f, stated_homes(0, k, held) ++ words) = program_eval(functions)(f, words),
+        λ k _ => program_answers_over(lent_buffers(k, held), functions)(f, stated_homes(0, k, held) ++ words) = program_answers(functions)(f, words),
         refl)
 }

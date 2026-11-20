@@ -792,7 +792,7 @@ fn FFun::MeasuredHolds(ws: List<Ty>, res: Ty, fw: FWorld, base: Nat, h: FTm::Sem
 
 // What every end of the loop satisfies, the measure aside: the file's
 // other spans are as they were.
-fn FFun::Good(rest: List<List<BitVec(8)>>) → Ending → Type { λ e => FTm::Spanned(rest, e.buffers) }
+fn FFun::Good(rest: List<List<BitVec(8)>>) → Ending → Type { λ e => FTm::Spanned(rest, e.buffers) ∧ (e.rest = []) }
 
 // The recursion the loop is held to: the function, whatever the passes
 // left.
@@ -829,8 +829,8 @@ theorem FFun::meas_pass_turn(ks, ws: List<Ty>, res: Ty, body: FTm, fw: FWorld, b
         Ending(words_of(v, Fun::meas_ns(ks ++ ws, ws)).head_or(BitVec::zero()), file),
     r: Nat, v: Valuation(), own: List<BitVec(8)>,
     good: (state: List<BitVec(64)>) → (o: List<BitVec(8)>) → state.len() = Fun::meas_ps(ks ++ ws).len() →
-        FTm::Spanned(fw.rest, finish(loop_run(λ (pass: Valuation()) (held: Buffers()) => Fun::meas_pass(ks ++ ws, ws, t).run(call, pass, held),
-            Fun::meas_ps(ks ++ ws), Fun::meas_c(ks ++ ws), t.next + 1, Fun::meas_next(ks ++ ws, ks, ws), r, state, Cons(o, fw.rest))).buffers)):
+        FFun::Good(fw.rest, finish(loop_run(λ (pass: Valuation()) (held: Buffers()) => Fun::meas_pass(ks ++ ws, ws, t).run(call, pass, held),
+            Fun::meas_ps(ks ++ ws), Fun::meas_c(ks ++ ws), t.next + 1, Fun::meas_next(ks ++ ws, ks, ws), r, state, Cons(o, fw.rest))))):
     loop_pass_run(λ (pass: Valuation()) (held: Buffers()) => Fun::meas_pass(ks ++ ws, ws, t).run(call, pass, held), Fun::meas_ps(ks ++ ws),
         Fun::meas_c(ks ++ ws), t.next + 1, Fun::meas_next(ks ++ ws, ks, ws), finish,
         λ (state: List<BitVec(64)>) (file: Buffers()) => finish(loop_run(λ (pass: Valuation()) (held: Buffers()) =>
@@ -905,13 +905,14 @@ theorem FFun::meas_pass_turn(ks, ws: List<Ty>, res: Ty, body: FTm, fw: FWorld, b
     let span = buffer_bytes(left_file, 0);
     let spanned: FTm::Spanned(rest, left_file) = ran.right.left;
     let onward = later(handed, Cons(span, rest));
-    let good_onward: FTm::Spanned(rest, onward.buffers) = good(handed, span, len_handed);
+    let good_onward: FFun::Good(rest, onward) = good(handed, span, len_handed);
     // The later passes, read as the body's recursion.
     let again: FTm::Round(tys, res) = FFun::later_round(tys, res, rest, later);
     let resumed: (later(handed, left_file) = FTm::resume(tys, res, rest, again, handed, left_file)) =
         trans(cong_fn(λ (f: Buffers()) => later(handed, f), spanned),
-            trans(onward.still(Cons(buffer_bytes(onward.buffers, 0), rest), good_onward),
-                cong_fn(λ (x: BitVec(64)) => Ending(x, Cons(buffer_bytes(onward.buffers, 0), rest)), sym(Tm::out_into(tys, res, er, onward.word)))));
+            trans(onward.still(Cons(buffer_bytes(onward.buffers, 0), rest), good_onward.left),
+                eq2(λ (x: BitVec(64)) (more: List<BitVec(64)>) => Ending(x, Cons(buffer_bytes(onward.buffers, 0), rest), rest := more),
+                    sym(Tm::out_into(tys, res, er, onward.word)), good_onward.right)));
     let M = λ (b: Bool) (s: List<BitVec(64)>) (fin: Ending) => match b { False => later(s, left_file), True => fin };
     let turned = FTm::ended(tys, res, rest, body.tail_sem(fw, res, again, ctx, env, own));
     let chain: (loop_pass_run(step, ps, c, t.next + 1, next, finish, later, r, v, file) = turned) =
@@ -960,7 +961,7 @@ theorem FFun::meas_pass_sound(ks, ws: List<Ty>, res: Ty, body: FTm, fw: FWorld, 
         FTm::recast(tys, res, Word(64), body.tail_sem(fw, res, λ (ys: List<BitVec(64)>) (o: List<BitVec(8)>) =>
                 FTm::recast(tys, Word(64), res, k(ys, o)), ctx, Ty::extend(tys, all, Nil, trivial, xs), o1)) =
             FFun::uncurry(tys, all, res, h, xs, o1), guarded, st, len_st);
-    ⟨j(sym(chain), λ e _ => FTm::Spanned(rest, e.buffers), refl),
+    ⟨j(sym(chain), λ e _ => FFun::Good(rest, e), ⟨refl, refl⟩),
         λ hr => trans(chain, cong_fn(λ (x: Mutated<List<BitVec(8)>, BitVec(64)>) => FTm::end_of(rest, x), at_st(own, again_w, λ ys o len_ys lt =>
             cong_fn(λ (e: Ending) => Mutated(buffer_bytes(e.buffers, 0), e.word),
                     earlier(ys, o, trans(len_ys, sym(Fun::ids_len(all, Fun::meas_bnd(all) + 1)))).right(Nat::lt_of_lt_of_le(m(ys, o), m(st, own), r + 1, lt, hr))))))⟩
@@ -1067,7 +1068,7 @@ theorem FFun::meas_zero_sound(ks, ws: List<Ty>, res: Ty, body: FTm, fw: FWorld, 
         FTm::recast(tys, res, Word(64), body.tail_sem(fw, res, λ (ys: List<BitVec(64)>) (o2: List<BitVec(8)>) =>
                 FTm::recast(tys, Word(64), res, k(ys, o2)), ctx, Ty::extend(tys, all, Nil, trivial, xs), o1)) =
             FFun::uncurry(tys, all, res, h, xs, o1), guarded, st, len);
-    ⟨j(sym(chain), λ e _ => FTm::Spanned(rest, e.buffers), refl),
+    ⟨j(sym(chain), λ e _ => FFun::Good(rest, e), ⟨refl, refl⟩),
         λ hz => trans(chain, cong_fn(λ (u: Mutated<List<BitVec(8)>, BitVec(64)>) => FTm::end_of(rest, u), at_st(own, FFun::spent(ks.len()), λ ys o2 _ lt =>
             false_elim(Nat::lt_of_lt_of_le(m(ys, o2), m(st, own), 0, lt, hz)))))⟩
 }
@@ -1324,7 +1325,7 @@ theorem FFun::counted_sound<F>(ks: List<Ty>, w0: Ty, wrest: List<Ty>, body: FTm,
                                     λ (us: List<BitVec(64)>) (q: List<BitVec(8)>) => FFun::uncurry(tys, all, res, at(stop), us, q), ys, o1)),
                             ctx, Ty::extend(tys, all, Nil, trivial, zs), p)) =
                             FFun::uncurry(tys, all, res, at(pass(stop)), zs, p), passes(stop), st, len_st)(s, FFun::spent(ks.len()));
-                    ⟨j(sym(turn), λ e _ => FTm::Spanned(rest, e.buffers), refl),
+                    ⟨j(sym(turn), λ e _ => FFun::Good(rest, e), ⟨refl, refl⟩),
                         λ _ => trans(turn, cong_fn(λ (u: Mutated<List<BitVec(8)>, BitVec(64)>) => FTm::end_of(rest, u), passed))⟩
                 },
                 λ r v s earlier => {
@@ -1351,7 +1352,7 @@ theorem FFun::counted_sound<F>(ks: List<Ty>, w0: Ty, wrest: List<Ty>, body: FTm,
                                     λ (us: List<BitVec(64)>) (q: List<BitVec(8)>) => FFun::uncurry(tys, all, res, at(FFun::rounds(r, pass, stop)), us, q), ys, o1)),
                             ctx, Ty::extend(tys, all, Nil, trivial, zs), p)) =
                             FFun::uncurry(tys, all, res, at(pass(FFun::rounds(r, pass, stop))), zs, p), passes(FFun::rounds(r, pass, stop)), st, len_st)(s, again_w);
-                    ⟨j(sym(turn), λ e _ => FTm::Spanned(rest, e.buffers), refl),
+                    ⟨j(sym(turn), λ e _ => FFun::Good(rest, e), ⟨refl, refl⟩),
                         λ _ => trans(turn, trans(cong_fn(λ (u: Mutated<List<BitVec(8)>, res.sem(tys)>) => FTm::ended(tys, res, rest, u), swapped),
                             cong_fn(λ (u: Mutated<List<BitVec(8)>, BitVec(64)>) => FTm::end_of(rest, u), passed)))⟩
                 },

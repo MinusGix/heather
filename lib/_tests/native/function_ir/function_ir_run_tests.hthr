@@ -69,7 +69,7 @@ theorem put_get_runs(): program_run([put_get()], [[b(1), b(2)]], 0, [w(1), w(7)]
 
 // reads_back(i, v): calls `storer`, then loads the byte it stored into.
 fn reads_back() → Function {
-    Function(parameters := [0, 1], body := Compose(Call(0, [0, 1], 2), leaf([BufferLoad(output := 3, buffer := 0, index := 0)])),
+    Function(parameters := [0, 1], body := Compose(Call(0, [0, 1], 2, []), leaf([BufferLoad(output := 3, buffer := 0, index := 0)])),
         result := 3)
 }
 fn calling() → List<Function> { [reads_back(), storer()] }

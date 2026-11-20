@@ -333,7 +333,7 @@ fn StructuredRegion::touches(self region: StructuredRegion) → List<Nat> {
         Compose(prefix, continuation) => prefix.touches() ++ continuation.touches(),
         Conditional(_, _, _, _, when_true, when_false) => when_true.touches() ++ when_false.touches(),
         Lend(views, _, _, result) => nodes_writes(views_nodes(views)) ++ [result],
-        Call(_, _, result) => [result],
+        Call(_, _, result, also) => Cons(result, also),
         Loop(_, _, parameters, count, body, _, _, outputs, exhausted) => Cons(count, Cons(exhausted, parameters ++ (outputs ++ body.touches()))),
     }
 }
@@ -346,7 +346,7 @@ fn StructuredRegion::named(self region: StructuredRegion) → List<Nat> {
         Compose(prefix, continuation) => prefix.named() ++ continuation.named(),
         Conditional(_, condition, _, _, when_true, when_false) => Cons(condition, when_true.named() ++ when_false.named()),
         Lend(views, _, arguments, result) => nodes_words(views_nodes(views)) ++ Cons(result, views_homes(views) ++ arguments),
-        Call(_, arguments, result) => Cons(result, arguments),
+        Call(_, arguments, result, also) => Cons(result, also ++ arguments),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
             nodes_words(loop_entry(bound, count, inputs, parameters)) ++ (nodes_words(loop_zero(count, exhausted)) ++
             (nodes_words(moves(parameters, next)) ++ (nodes_words(loop_stop(exhausted)) ++ (nodes_words(loop_down(count, exhausted)) ++
@@ -379,8 +379,12 @@ fn Homes::region_checked(self homes: Homes, region: StructuredRegion, out: List<
         Lend(views, _, arguments, result) =>
             (match homes.apart(result, out) { False => None, True => Some(live_before(views_homes(views) ++ arguments, result, out)) }).and_then(λ mid =>
                 homes.leaf_checked(views_nodes(views), mid)),
-        // A call reads its arguments and writes its result, as a node does.
-        Call(_, arguments, result) => match homes.apart(result, out) { False => None, True => Some(live_before(arguments, result, out)) },
+        // A call reads its arguments and writes its words, each as a node
+        // writes its result.
+        Call(_, arguments, result, also) => match homes.all_apart(Cons(result, also), out) {
+            False => None,
+            True => Some(arguments.union(out.minus(Cons(result, also)))),
+        },
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => {
             let set = homes.loop_set(count);
             homes.leaf_checked(moves(outputs, parameters), out).and_then(λ done =>
@@ -520,7 +524,7 @@ fn Homes::region_needs(self homes: Homes, region: StructuredRegion, out: List<Na
             Needs(Cons(condition, y.live.union(n.live)), y.sets)
         },
         Lend(views, _, arguments, result) => Needs(nodes_live_in(views_nodes(views), live_before(views_homes(views) ++ arguments, result, out)), sets),
-        Call(_, arguments, result) => Needs(live_before(arguments, result, out), sets),
+        Call(_, arguments, result, also) => Needs(arguments.union(out.minus(Cons(result, also))), sets),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => {
             let set = homes.loop_set(count);
             let done = nodes_live_in(moves(outputs, parameters), out);
@@ -734,7 +738,7 @@ fn Homes::region_graph(self homes: Homes, region: StructuredRegion, out: List<Na
         },
         Lend(views, _, arguments, result) =>
             leaf_graph(views_nodes(views), live_before(views_homes(views) ++ arguments, result, out), of.written(result, out)),
-        Call(_, arguments, result) => Graph(live_before(arguments, result, out), of.written(result, out)),
+        Call(_, arguments, result, also) => Graph(arguments.union(out.minus(Cons(result, also))), of.all_written(Cons(result, also), out)),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => {
             let set = homes.loop_set(count);
             let done = leaf_graph(moves(outputs, parameters), out, of);
@@ -801,7 +805,7 @@ fn StructuredRegion::weighed(self region: StructuredRegion, loop_weight, scale: 
             when_false.weighed(loop_weight, scale, when_true.weighed(loop_weight, scale, weights.bump(condition, scale))),
         Lend(views, _, arguments, result) =>
             nodes_weights(views_nodes(views), scale, weights).bump_all(Cons(result, views_homes(views) ++ arguments), scale),
-        Call(_, arguments, result) => weights.bump_all(Cons(result, arguments), scale),
+        Call(_, arguments, result, also) => weights.bump_all(Cons(result, also ++ arguments), scale),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => {
             let inner = scale + loop_weight;
             let entered = nodes_weights(loop_entry(bound, count, inputs, parameters), scale, weights);
@@ -1226,10 +1230,11 @@ theorem StructuredRegion::checked_inside(self region: StructuredRegion, loops: L
                 λ mid => homes.leaf_checked(nodes, mid), call,
                 λ mid inside => nodes.leaf_checked_inside(loops, mid, m, inside, λ i x => sw(i, nodes_words(nodes).mem_append_l(Cons(result, args), i, x))))
         },
-        Call(_, arguments, result) => λ out so sw => {
-            let slot: (homes.apart(result, out) = True) = refl;
-            j(sym(slot), λ b _ => Option::Inside(match b { False => None, True => Some(live_before(arguments, result, out)) }, m),
-                inside_live_before(arguments, result, out, m, λ i x => sw(i, Inr(x)), so))
+        Call(_, arguments, result, also) => λ out so sw => {
+            let live = arguments.union(out.minus(Cons(result, also)));
+            j(sym(Cons(result, also).all_apart_slots(loops, out)), λ b _ => Option::Inside(match b { False => None, True => Some(live) }, m),
+                arguments.inside_union(out.minus(Cons(result, also)), m,
+                    λ i x => sw(i, Inr(also.mem_append_r(arguments, i, x))), out.inside_minus(Cons(result, also), m, so)))
         },
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ out so sw => {
             let set = homes.loop_set(count);

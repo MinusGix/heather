@@ -382,7 +382,7 @@ fn StructuredRegion::called(self region: StructuredRegion) → List<Nat> {
         Sequence(_, continuation) => continuation.called(),
         Compose(prefix, continuation) => prefix.called() ++ continuation.called(),
         Conditional(_, _, _, _, when_true, when_false) => when_true.called() ++ when_false.called(),
-        Call(callee, _, _) => [callee],
+        Call(callee, _, _, _) => [callee],
         Loop(_, _, _, _, body, _, _, _, _) => body.called(),
         Lend(_, callee, _, _) => [callee],
     }
@@ -1263,8 +1263,12 @@ fn StructuredRegion::code(self region: StructuredRegion, p: Prog, layout: Layout
             Some(Compiled(n.prog.join_label(Succ(Succ(names))), n.names))))),
         // A call over views is not a statement's yet (`StructuredRegion::scoped`).
         Lend(_, _, _, _) => None,
-        Call(callee, arguments, result) => layout.function_fits(callee, arguments, result).guard(
-            Some(Compiled(p.function_call(layout, out, callee, arguments, result), names))),
+        // A call whose function returns one word: the statement compiler
+        // keeps RAX alone.
+        Call(callee, arguments, result, also) => match also {
+            Nil => layout.function_fits(callee, arguments, result).guard(Some(Compiled(p.function_call(layout, out, callee, arguments, result), names))),
+            Cons(_, _) => None,
+        },
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => {
             let head = Succ(names);
             let enter = Succ(head);
@@ -1343,7 +1347,7 @@ fn Stmt::pair_known(self first: Stmt, rest: Stmt, homes: Homes, out: List<Nat>) 
             Compose(_, _) => Nil,
             Conditional(_, _, _, _, _, _) => Nil,
             Lend(_, _, _, _) => Nil,
-            Call(_, _, _) => Nil,
+            Call(_, _, _, _) => Nil,
             Loop(_, _, _, _, _, _, _, _, _) => Nil,
         },
         Invoke(_) => Nil,
@@ -1979,6 +1983,8 @@ fn Source::compile(self src: Source, low: BitVec(64), homes: Homes, bodies: List
 //  17  the functions the regions call do not link (`Prog::links`: not
 //      evaluable, not placeless, storing into a buffer, or lowered with
 //      the homes' placement of their values refused)
+//  18  a call of a function that returns more than one word (the function,
+//      how many words past the first)
 //
 // Reasons 1, 2, 3 and 6 come only from an all-pure leaf with a node not at
 // width 64: one with every node wide compiles a node at a time.
@@ -2097,7 +2103,7 @@ fn StructuredRegion::kind(self region: StructuredRegion) → Nat {
         Compose(_, _) => 2,
         Conditional(_, _, _, _, _, _) => 3,
         Lend(_, _, _, _) => 6,
-        Call(_, _, _) => 4,
+        Call(_, _, _, _) => 4,
         Loop(_, _, _, _, _, _, _, _, _) => 5,
     }
 }
@@ -2124,7 +2130,10 @@ fn parts_refusal(layout: Layout, region: StructuredRegion) → List<Nat> {
             Cons(reason, details) => Cons(reason, details),
         },
         Lend(_, _, _, _) => [0, 6, 0],
-        Call(callee, arguments, result) => match layout.function_fits(callee, arguments, result) { False => [16, callee, 0], True => [] },
+        Call(callee, arguments, result, also) => match also {
+            Nil => match layout.function_fits(callee, arguments, result) { False => [16, callee, 0], True => [] },
+            Cons(_, _) => [18, callee, also.len()],
+        },
         Loop(_, _, _, _, body, exit, _, _, exhausted) => match ids_refusal(layout, [exhausted, exit]) {
             Nil => match parts_refusal(layout, body) { Nil => [13, 0, 0], Cons(reason, details) => Cons(reason, details) },
             Cons(reason, details) => Cons(reason, details),
@@ -2294,7 +2303,7 @@ fn StructuredRegion::names_after(self region: StructuredRegion, names: Nat) → 
         Compose(prefix, continuation) => continuation.names_after(prefix.names_after(names)),
         Conditional(_, _, _, _, when_true, when_false) => when_false.names_after(when_true.names_after(Succ(Succ(names)))),
         Lend(_, _, _, _) => names,
-        Call(_, _, _) => names,
+        Call(_, _, _, _) => names,
         Loop(_, _, _, _, body, _, _, _, _) => body.names_after(Succ(Succ(Succ(Succ(names))))),
     }
 }

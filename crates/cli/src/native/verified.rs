@@ -1788,10 +1788,10 @@ pub(super) fn agreement_text(prefix: &str, program: &function_ir_source::Reflect
     // Each function proved on its own, its calls answered by its callees'
     // sources; then the program by `program_eval_sources`.
     let sources = format!("{prefix}_sources()");
-    let mut answers = "BitVec::zero()".to_string();
+    let mut answers = "[BitVec::zero()]".to_string();
     for (k, function) in program.functions.iter().enumerate().rev() {
         let words: Vec<String> = (0..function.arity).map(|i| format!("words.word({i})")).collect();
-        answers = format!("match g{k} {{ Zero => {}, Succ(g{}) => {answers} }}", function.answer(&words), k + 1);
+        answers = format!("match g{k} {{ Zero => [{}], Succ(g{}) => {answers} }}", function.answer(&words), k + 1);
     }
     let mut agreements = format!("// What each function computes: its source.
 fn {prefix}_sources() → Answers() {{
@@ -1803,8 +1803,11 @@ fn {prefix}_sources() → Answers() {{
     for (k, function) in program.functions.iter().enumerate() {
         agreements.push_str(&function_agreement(&format!("{prefix}_fn{k}"), &sources, function));
         let arguments = arguments(function.arity);
-        let at = if function.arity == 0 { format!("{prefix}_fn{k}_agrees()") } else { format!("λ {} => {prefix}_fn{k}_agrees({})", arguments.join(" "), arguments.join(", ")) };
-        sourced = format!("⟨λ (words: List<BitVec(64)>) (fits: words.len() = {n}) => spread({n}, λ (ws: List<BitVec(64)>) => {prefix}_fn{k}().eval({sources}, ws) = {sources}({k}, ws),
+        // Each function returns one word, so its words are that word's
+        // list by conversion.
+        let one = |agrees: String| format!("cong_fn<BitVec(64), List<BitVec(64)>>(λ x => [x], {agrees})");
+        let at = if function.arity == 0 { one(format!("{prefix}_fn{k}_agrees()")) } else { format!("λ {} => {}", arguments.join(" "), one(format!("{prefix}_fn{k}_agrees({})", arguments.join(", ")))) };
+        sourced = format!("⟨λ (words: List<BitVec(64)>) (fits: words.len() = {n}) => spread({n}, λ (ws: List<BitVec(64)>) => {prefix}_fn{k}().eval_words({sources}, ws) = {sources}({k}, ws),
             {at}, words, fits),
         {sourced}⟩", n = function.arity);
     }
@@ -1823,7 +1826,8 @@ theorem {prefix}_sourced(): program_sourced({prefix}_program(), {sources}) {{
 
 // The program's function {f} evaluates to the source function.
 theorem {prefix}_agrees({typed}): program_eval({prefix}_program(), {f}, {list}) = {call} {{
-    program_eval_sources({prefix}_program(), {prefix}_evaluable(), {sources}, {prefix}_sourced(), {f}, {list}, trivial)
+    cong_fn<List<BitVec(64)>, BitVec(64)>(λ l => first_word(l),
+        program_eval_sources({prefix}_program(), {prefix}_evaluable(), {sources}, {prefix}_sourced(), {f}, {list}, trivial))
 }}
 ")
 }

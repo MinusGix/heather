@@ -1392,6 +1392,13 @@ theorem Function::eval_words_len(self function: Function, call: Answers(), argum
     words_of_len(function.body.eval(call, Valuation::bind(Valuation::zero(), function.parameters, arguments), buffers := buffers), function.also)
 }
 
+// A function with no words past its first returns that one alone.
+theorem Function::eval_words_single(self function: Function, none: function.also = Nil, call: Answers(), arguments: List<BitVec(64)>,
+    buffers: Buffers()): function.eval_words(call, arguments, buffers := buffers) = [function.eval(call, arguments, buffers := buffers)] {
+    let after = function.body.eval(call, Valuation::bind(Valuation::zero(), function.parameters, arguments), buffers := buffers);
+    j(sym(none), λ a _ => words_of(after, Cons(function.result, a)) = [after(64, function.result)], refl)
+}
+
 fn Function::evaluable(self function: Function, arity: Nat → Option<Nat>) → Bool {
     function.body.evaluable(arity) && (distinct(function.parameters) && disjoint(function.body.writes(), function.parameters))
 }
@@ -1933,6 +1940,15 @@ theorem program_linked_files_sources(functions: List<Function>): (arities: List<
             })
         },
     }
+}
+
+// Its first word, the one a caller of one word reads: what a `runtime fn`'s
+// `f::agrees` cites.
+theorem program_eval_linked_sources(functions: List<Function>, arities: List<Nat>, admits: Nat → List<BitVec(64)> → Type,
+    sources: Buffers() → Answers(), linked: program_linked_files(functions, arities, admits, sources), buffers: Buffers(), f: Nat,
+    words: List<BitVec(64)>, fits: arity_fits(linked_arity(functions, arities, f), words.len()).IsTrue(), admitted: admits(f, words)):
+    program_eval_over(buffers, functions)(f, words) = first_word(sources(buffers)(f, words)) {
+    cong_fn(λ (ws: List<BitVec(64)>) => first_word(ws), program_linked_files_sources(functions, arities, admits, sources, linked, buffers, f, words, fits, admitted))
 }
 
 // For a program checked whole (`program_evaluable`).

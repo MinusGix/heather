@@ -166,7 +166,7 @@ fn add_double() → Function {
         body := Sequence(
             Region(inputs := Ports([word(0), word(1)]), nodes := [Move(width := 64, output := 2, source := 1)],
                 outputs := Ports([word(0), word(2)])),
-            Compose(Call(0, [0], 3),
+            Compose(Call(0, [0], 3, []),
                 Dataflow(Region(inputs := Ports([word(2), word(3)]), nodes := [Add(width := 64, output := 4, left := 3, right := 2)],
                     outputs := Ports([word(4)]))))),
         result := 4)

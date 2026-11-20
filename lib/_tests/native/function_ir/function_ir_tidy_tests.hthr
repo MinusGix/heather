@@ -59,14 +59,14 @@ theorem inlined_keeps(before: Buffers(), f: Nat, arguments: List<BitVec(64)>, re
 fn reader() → Function {
     Function([0, 1, 2], Compose(nodes([Move(64, 3, 1), Move(64, 4, 2), UnsignedLessThan(64, 5, 4, 3)]),
         Conditional(Ports([]), 5, Ports([]), Ports([]),
-            Compose(nodes([BufferLoad(6, 0, 4), Move(64, 7, 6)]), Compose(Call(0, [7, 4], 8), nodes([Move(64, 9, 8)]))),
+            Compose(nodes([BufferLoad(6, 0, 4), Move(64, 7, 6)]), Compose(Call(0, [7, 4], 8, []), nodes([Move(64, 9, 8)]))),
             nodes([Const(64, 9, 0)]))), 9, lent := 1)
 }
 
 fn reader_tidied() → Function {
     Function([0, 1, 2], Compose(nodes([UnsignedLessThan(64, 5, 2, 1)]),
         Conditional(Ports([]), 5, Ports([]), Ports([]),
-            Compose(nodes([BufferLoad(6, 0, 2)]), Compose(Call(0, [6, 2], 8), nodes([Move(64, 9, 8)]))),
+            Compose(nodes([BufferLoad(6, 0, 2)]), Compose(Call(0, [6, 2], 8, []), nodes([Move(64, 9, 8)]))),
             nodes([Const(64, 9, 0)]))), 9, lent := 1)
 }
 

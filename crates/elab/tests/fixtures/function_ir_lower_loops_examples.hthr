@@ -173,7 +173,7 @@ fn double() → Function {
 fn scale() → Function {
     Function(parameters := [0, 1],
         body := Loop(inputs := [0], bound := 1, parameters := [10], count := 11,
-            body := Compose(Call(0, [10], 12),
+            body := Compose(Call(0, [10], 12, []),
                 Dataflow(Region(inputs := Ports([word(11), word(12)]),
                     nodes := [UnsignedLessThan(width := 64, output := 13, left := 11, right := 11)],
                     outputs := Ports([word(12), bit(13)])))),
