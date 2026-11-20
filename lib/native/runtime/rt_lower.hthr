@@ -835,15 +835,6 @@ theorem Or::inr_apart<P>(o: P ∨ True, apart: P → False): o = Inr(trivial) {
     match o { Inl(e) => false_elim(apart(e)), Inr(_) => refl }
 }
 
-// A word read at an enum is the constructor it names (`EnumInfo::read`).
-theorem Ty::cast_word_enum(tys: Nat → RecInfo, i: Nat, x: BitVec(64)): Ty::cast(tys, Word(64), Enum(i), x) = tys(i).alts.read(x) {
-    let apart = λ (e: Word(64) = Enum(i)) => j(e, λ y _ => match y as λ _ => Type { Word(_) => True, _ => False }, trivial);
-    j(sym(Or::inr_apart(Word(64).equation(Enum(i)), apart)), λ d _ =>
-        (match d as λ _ => tys(i).alts.E { Inl(e) => j(e, λ y _ => y.sem(tys), x), Inr(_) => Ty::convert(tys, Word(64), Enum(i), x) }) =
-            tys(i).alts.read(x),
-        refl)
-}
-
 // A port holding a value of a code held in a word: the word, read back at
 // the code, is the value (a count's `toNat` is the count, an enum's word
 // names its constructor, `EnumInfo.of_tag`).
@@ -857,9 +848,8 @@ theorem Ty::held_reads(tys: Nat → RecInfo, p: Ty, values: Valuation(), port: N
         Lines => λ never => false_elim(never),
         Named(i) => λ e v held => Ty::record_word_reads(tys(i).T, tys(i).fields, tys(i).mk, tys(i).get, tys(i).back, e, values, port, v, held),
         Count => λ _ n held => held,
-        Enum(i) => λ _ v held => trans(Ty::cast_word_enum(tys, i, values(64, port)),
-            trans(cong_fn(tys(i).alts.of, trans(Nat::min_eq_l(values(64, port).toNat(), tys(i).alts.last, held.right), held.left)),
-                tys(i).alts.of_tag(v))),
+        Enum(i) => λ _ v held =>
+            trans(cong_fn(tys(i).alts.of, trans(Nat::min_eq_l(values(64, port).toNat(), tys(i).alts.last, held.right), held.left)), tys(i).alts.of_tag(v)),
     }
 }
 
@@ -2288,15 +2278,6 @@ fn Ty::widen_by(w: Nat, o: (w = 64) ∨ True, c: Lowered) → Lowered {
     match o { Inl(_) => c, Inr(_) => Lowered(Compose(c.region, nodes_region([Resize(w, 64, c.next, c.result)])), c.next, c.next + 1) }
 }
 
-// An enum read as a word is its tag word.
-theorem Ty::cast_enum_word(tys: Nat → RecInfo, i: Nat, v: tys(i).alts.E): Ty::cast(tys, Enum(i), Word(64), v) = RecInfo::enum_word(tys, i, v) {
-    let apart = λ (e: Enum(i) = Word(64)) => j(e, λ x _ => match x as λ _ => Type { Enum(_) => True, _ => False }, trivial);
-    j(sym(Or::inr_apart(Enum(i).equation(Word(64)), apart)), λ d _ =>
-        (match d as λ _ => BitVec(64) { Inl(e) => j(e, λ y _ => y.sem(tys), v), Inr(_) => Ty::convert(tys, Enum(i), Word(64), v) }) =
-            RecInfo::enum_word(tys, i, v),
-        refl)
-}
-
 fn Ty::widen(self t: Ty, tys: Nat → RecInfo, c: Lowered) → Lowered {
     match t { Word(w) => Ty::widen_by(w, w.equation(64), c), Bit => c, ByteList(_) => c, Lines => c, Named(_) => c, Count => c, Enum(_) => c }
 }
@@ -2389,7 +2370,7 @@ theorem Ty::out_reads(tys: Nat → RecInfo, call: function_ir_eval::Answers(), b
         Count => λ never => false_elim(never),
         Enum(i) => λ _ v h => {
             let x = c.region.eval(call, values, buffers := buffers)(64, c.result);
-            trans(sym(BitVec::ofNat_toNat(64, x)), trans(cong_fn(λ (m: Nat) => BitVec::ofNat(m, n := 64), h.left), sym(Ty::cast_enum_word(tys, i, v))))
+            trans(sym(BitVec::ofNat_toNat(64, x)), cong_fn(λ (m: Nat) => BitVec::ofNat(m, n := 64), h.left))
         },
     }
 }
