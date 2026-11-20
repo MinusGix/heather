@@ -297,9 +297,8 @@ Minus on 2026-11-20 over Lean's "every name of the closure is bare":
   import of `m` whose public list is every name `m` shows bare (its own
   declarations and its reexports), less generated names. It is opted into by
   the facade's author, so a module still decides what its importers see.
-  §3.4's rules carry over unchanged: an alias names the declaration's
-  origin, and a name two exports give different origins is an error at the
-  facade. The list is read when the facade is elaborated, so a name added to
+  An alias names the declaration's origin, as in §3.4; a name two exports
+  give different origins is §3.9's (a whole-module export is a glob). The list is read when the facade is elaborated, so a name added to
   `m` later reaches the facade's clients when the facade's image is rebuilt,
   which its dependency on `m` forces.
 
@@ -342,6 +341,32 @@ What this does not do yet: load a module lazily inside a closure that is
 already large. A path's module is elaborated, or its image replayed, like
 any import; making a closure's unused part cost nothing is the loading
 work, not a naming rule.
+
+### 3.9 Umbrellas, and `export import` as a glob (2026-11-20)
+
+Minus (2026-11-20) liked one-import umbrellas for the proof side: `import
+tactics;` (every module of `lib/std/tactic`), `import words;` (every module
+of `lib/std/bitvec`), `import numbers;` (`nat`, `int`, `rat`). Each is a
+file of `export import m;` lines. A client replays each module of the
+umbrella's closure from its image, so its cost grows with that closure, not
+with what the client uses; warm, that is a few seconds for `tactics`, the
+largest.
+
+An umbrella over modules written separately meets names two of them both
+declare (ten across the three: tactic internals such as `node_of` and
+`PTerm`, `DivMod` in `nat` and `int`). §3.4 refuses a name two exports give
+different origins, which would refuse the umbrella itself. So
+**`export import m;` is a glob**, as Rust's `pub use m::*` is:
+
+- it gives way to a declaration of the facade's own and to a name listed by
+  hand (`export a::{f};`), in either order;
+- two globs that give one name different origins leave it out of the facade;
+  it stays reachable qualified (`grind::node_of`), and a client that writes
+  it bare gets the ordinary unbound-name error;
+- two names listed by hand still clash at the facade, as §3.4 says.
+
+A glob never refuses, so adding a module to an umbrella cannot break the
+umbrella; at worst it takes a name out of it.
 
 ## 4. Names: unambiguous-or-qualified, never silently shadowed
 
