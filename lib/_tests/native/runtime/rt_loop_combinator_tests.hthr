@@ -49,7 +49,6 @@ fn cd_measure(ys: List<BitVec(64)>) → Nat { ys.head_or(BitVec::zero()).toNat()
 
 fn cd_state(xs: List<BitVec(64)>) → CD { CD(n := xs.head_or(BitVec::zero()), acc := xs.drop(1).head_or(BitVec::zero())) }
 
-
 // The step with its two leaves as functions: what the reflected body reads,
 // leaf for leaf.
 fn CD::step_k<X>(self d: CD, again: Lower<CD>(CD::left, d) → X, done: BitVec(64) → X) → X {
