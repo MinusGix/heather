@@ -64,8 +64,22 @@ inductive PTm {
     // Procedure `p` called on word variables: `body` sees its word as
     // variable 0.
     Recur(p: Nat, args: List<Nat>, body: PTm),
-    // A branch on a bit variable.
-    Choose(c: Nat, yes: PTm, no: PTm),
+    // A branch on a bit variable: a `match`, or with `eq` a `match h:`,
+    // whose meaning is the elaborator's convoy (`Tm::convoy`), so that
+    // either converts to the function it is the body of.
+    Choose(c: Nat, eq: Bool, yes: PTm, no: PTm),
+}
+
+// A branch's value: the convoy where `eq`, the plain match otherwise.
+fn PTm::branch(eq, b: Bool, yes, no: BitVec(64)) → BitVec(64) {
+    match eq { True => Tm::convoy(BitVec(64), b, yes, no), False => match b { True => yes, False => no } }
+}
+
+theorem PTm::branch_is_match(eq, b: Bool, yes, no: BitVec(64)): PTm::branch(eq, b, yes, no) = (match b as λ _ => BitVec(64) { True => yes, False => no }) {
+    match eq as λ e => PTm::branch(e, b, yes, no) = (match b as λ _ => BitVec(64) { True => yes, False => no }) {
+        True => match b as λ b2 => Tm::convoy(BitVec(64), b2, yes, no) = (match b2 as λ _ => BitVec(64) { True => yes, False => no }) { True => refl, False => refl },
+        False => refl,
+    }
 }
 
 // What the procedures mean: each one's word from its argument words.
@@ -84,10 +98,7 @@ fn PTm::sem(self t: PTm, w: rt::World, f: PCalls()) → (g: List<Ty>) → rt::En
         Value(v) => λ g vals => Ty::cast(w.tys, Tm::ty(v, w, g), Word(64), Tm::sem(v, w, g, vals)),
         Bind(e, body) => λ g vals => body.sem(w, f, Cons(Tm::ty(e, w, g), g), Pair(Tm::sem(e, w, g, vals), vals)),
         Recur(p, args, body) => λ g vals => body.sem(w, f, Cons(Word(64), g), Pair(f(p, PTm::words(w, g, vals, args)), vals)),
-        Choose(c, yes, no) => λ g vals => match Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, vals, c)) {
-            True => yes.sem(w, f, g, vals),
-            False => no.sem(w, f, g, vals),
-        },
+        Choose(c, eq, yes, no) => λ g vals => PTm::branch(eq, Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, vals, c)), yes.sem(w, f, g, vals), no.sem(w, f, g, vals)),
     }
 }
 
@@ -99,7 +110,7 @@ fn PTm::calls_ok(self t: PTm, w: rt::World, f: PCalls(), ok: Nat → List<BitVec
         Bind(e, body) => λ g vals => body.calls_ok(w, f, ok, Cons(Tm::ty(e, w, g), g), Pair(Tm::sem(e, w, g, vals), vals)),
         Recur(p, args, body) => λ g vals => ok(p, PTm::words(w, g, vals, args))
             && body.calls_ok(w, f, ok, Cons(Word(64), g), Pair(f(p, PTm::words(w, g, vals, args)), vals)),
-        Choose(c, yes, no) => λ g vals => match Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, vals, c)) {
+        Choose(c, _, yes, no) => λ g vals => match Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, vals, c)) {
             True => yes.calls_ok(w, f, ok, g, vals),
             False => no.calls_ok(w, f, ok, g, vals),
         },
@@ -125,7 +136,7 @@ theorem PTm::calls_ok_mono(self t: PTm, w: rt::World, f: PCalls(), ok1, ok2: Nat
             Bool::is_true_and_intro(ok2(p, xs), body.calls_ok(w, f, ok2, Cons(Word(64), g), Pair(f(p, xs), vals)),
                 more(p, xs, parts.left), body.calls_ok_mono(w, f, ok1, ok2, more, Cons(Word(64), g), Pair(f(p, xs), vals), parts.right))
         },
-        Choose(c, yes, no) => λ g vals => match Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, vals, c)) as λ b =>
+        Choose(c, _, yes, no) => λ g vals => match Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, vals, c)) as λ b =>
                 (match b as λ _ => Bool { True => yes.calls_ok(w, f, ok1, g, vals), False => no.calls_ok(w, f, ok1, g, vals) }).IsTrue() →
                 (match b as λ _ => Bool { True => yes.calls_ok(w, f, ok2, g, vals), False => no.calls_ok(w, f, ok2, g, vals) }).IsTrue() {
             True => λ h => yes.calls_ok_mono(w, f, ok1, ok2, more, g, vals, h),
@@ -154,9 +165,9 @@ fn Tm::to_ptm(self t: Tm) → Option<PTm> {
                 },
                 _ => match e.calls_self() { True => None, False => body.to_ptm().map(λ b => Bind(e, b)) },
             },
-            If(c, yes, no) => yes.to_ptm().and_then(λ y => no.to_ptm().map(λ n => Choose(c, y, n))),
+            If(c, yes, no) => yes.to_ptm().and_then(λ y => no.to_ptm().map(λ n => Choose(c, False, y, n))),
             // The equation `match h:` convoys is read only in proofs.
-            IfEq(c, yes, no) => yes.to_ptm().and_then(λ y => no.to_ptm().map(λ n => Choose(c, y, n))),
+            IfEq(c, yes, no) => yes.to_ptm().and_then(λ y => no.to_ptm().map(λ n => Choose(c, True, y, n))),
             Call(f, args) => match f { Zero => Some(Recur(0, args, Value(Var(0)))), Succ(_) => Some(Value(t)) },
             _ => None,
         },
@@ -197,7 +208,7 @@ fn PTm::lower(self t: PTm, w: rt::World, known: Nat → Nat → Bool, g: List<Ty
             Tm::check_true(known(p, ids.len())).and_then(λ _ =>
             body.lower(w, known, Cons(Word(64), g), Cons(InWord(next), locs), next + 1, out).and_then(λ sb =>
                 Some(Then(Perform(p, ids, [next]), sb))))),
-        Choose(c, yes, no) => ETm::operand(g, locs, Bit, c).and_then(λ id =>
+        Choose(c, _, yes, no) => ETm::operand(g, locs, Bit, c).and_then(λ id =>
             yes.lower(w, known, g, locs, next, out).and_then(λ sy =>
             no.lower(w, known, g, locs, next, out).and_then(λ sn =>
                 Some(Branch(id, sy, sn))))),
@@ -399,8 +410,8 @@ theorem PTm::lower_sound(self t: PTm, w: rt::World, known: Nat → Nat → Bool)
                 }⟩
             })))
         },
-        Choose(c, yes, no) => λ g locs next out => {
-            let P = λ (r: Option<Stmt>) => PTm::LowerHolds(Choose(c, yes, no), w, known, g, locs, next, out, r);
+        Choose(c, eq, yes, no) => λ g locs next out => {
+            let P = λ (r: Option<Stmt>) => PTm::LowerHolds(Choose(c, eq, yes, no), w, known, g, locs, next, out, r);
             Option::and_then_elim(P, trivial, ETm::operand(g, locs, Bit, c), λ id => yes.lower(w, known, g, locs, next, out).and_then(λ sy =>
                     no.lower(w, known, g, locs, next, out).and_then(λ sn => Some(Branch(id, sy, sn)))), λ id e_id =>
             Option::and_then_elim(P, trivial, yes.lower(w, known, g, locs, next, out), λ sy =>
@@ -414,6 +425,11 @@ theorem PTm::lower_sound(self t: PTm, w: rt::World, known: Nat → Nat → Bool)
                     let bit: (env.bit(id) = cv) = trans(cong_fn(λ (n: Nat) => ETm::word_at(64, n).head_bit(), k), ETm::head_bool(cv));
                     let ry = yh.right(call, still, agree, f, answer, answers, env, vals, io, held, below, pos);
                     let rn = nh.right(call, still, agree, f, answer, answers, env, vals, io, held, below, pos);
+                    let ys = yes.sem(w, f, g, vals);
+                    let ns = no.sem(w, f, g, vals);
+                    j(sym(PTm::branch_is_match(eq, cv, ys, ns)), λ v _ => PTm::Lands(v, out, env, io, Stmt::thread_by(Branch(id, sy, sn), call, answer, env, io)) ∧
+                        ((ok: Nat → List<Nat> → List<Nat> → Env → Bool) → (okw: Nat → List<BitVec(64)> → Bool) → PTm::OkReads(known, ok, okw) →
+                            Choose(c, eq, yes, no).calls_ok(w, f, okw, g, vals).IsTrue() → Branch(id, sy, sn).calls_ok(call, answer, ok, env, io).IsTrue()),
                     j(sym(bit), λ x _ => PTm::Lands(match cv as λ _ => BitVec(64) { True => yes.sem(w, f, g, vals), False => no.sem(w, f, g, vals) }, out, env, io,
                                 match x as λ _ => Mutated<Io, Flow> {
                                     True => Stmt::thread_by(sy, call, answer, env, io),
@@ -432,7 +448,7 @@ theorem PTm::lower_sound(self t: PTm, w: rt::World, known: Nat → Nat → Bool)
                                 (match b as λ _ => Bool { True => sy.calls_ok(call, answer, ok, env, io), False => sn.calls_ok(call, answer, ok, env, io) }).IsTrue()) {
                             True => ry,
                             False => rn,
-                        })
+                        }))
                 }⟩
             })))
         },
@@ -684,6 +700,25 @@ fn PTm::Guarded(n: Nat, body: PTm, w: rt::World, h: List<BitVec(64)> → BitVec(
     (xs: List<BitVec(64)>) → xs.len() = n → (again: List<BitVec(64)> → BitVec(64)) →
         ((ys: List<BitVec(64)>) → ys.len() = n → m(ys) < m(xs) → again(ys) = h(ys)) →
         body.sem(w, λ _ ys => again(ys), PTm::word_ctx(n), PTm::vals_n(w.tys, n, xs)) = h(xs)
+}
+
+// `PTm::Guarded` in the shape the generator proves it in, as it proves a
+// measured loop's `Fun::Guarded`: one binder per parameter word, the
+// function `h` itself at its signature, read in the world of a pure
+// program (`PTm::plain`'s: no records, no functions).
+fn PTm::GuardedWords(ws: List<Ty>, body: PTm, tys: Nat → RecInfo, h: Ty::Arrows(tys, ws, Word(64)), m: List<BitVec(64)> → Nat) → Type {
+    Ty::ForWords(ws, λ (xs: List<BitVec(64)>) => (again: List<BitVec(64)> → BitVec(64)) →
+        ((ys: List<BitVec(64)>) → ys.len() = ws.len() → m(ys) < m(xs) → again(ys) = Ty::uncurry(tys, ws, Word(64), h, ys)) →
+        body.sem(rt::World(tys, [], trivial), λ _ ys => again(ys), PTm::word_ctx(ws.len()), PTm::vals_n(tys, ws.len(), xs)) = Ty::uncurry(tys, ws, Word(64), h, xs))
+}
+
+theorem PTm::guarded_of_words(ws: List<Ty>, body: PTm, tys: Nat → RecInfo, h: Ty::Arrows(tys, ws, Word(64)), m: List<BitVec(64)> → Nat,
+    g: PTm::GuardedWords(ws, body, tys, h, m)):
+    PTm::Guarded(ws.len(), body, rt::World(tys, [], trivial), λ xs => Ty::uncurry(tys, ws, Word(64), h, xs), m) {
+    λ xs len => Ty::for_words_at(ws, λ (zs: List<BitVec(64)>) => (again: List<BitVec(64)> → BitVec(64)) →
+        ((ys: List<BitVec(64)>) → ys.len() = ws.len() → m(ys) < m(zs) → again(ys) = Ty::uncurry(tys, ws, Word(64), h, ys)) →
+        body.sem(rt::World(tys, [], trivial), λ _ ys => again(ys), PTm::word_ctx(ws.len()), PTm::vals_n(tys, ws.len(), zs)) = Ty::uncurry(tys, ws, Word(64), h, zs),
+        g, xs, len)
 }
 
 // A guarded function is its one procedure's meaning: the recursion answered

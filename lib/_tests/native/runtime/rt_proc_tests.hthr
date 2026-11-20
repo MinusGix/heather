@@ -27,16 +27,19 @@ fn proc_world() → rt::World { rt::World(RecInfo::none, [], trivial) }
 
 // `sum(n) = if n == 0 { 0 } else { n + sum(n - 1) }`, variable 0 the
 // argument: the call of itself is not the last thing it does.
-fn sum_body() → PTm {
+// `eq` says whether the branch is the convoy a `match h:` elaborates to.
+fn sum_body_by(eq: Bool) → PTm {
     Bind(Lit(Word(64), 0),
     Bind(Prim(Eq(64), [1, 0]),
-    Choose(0,
+    Choose(0, eq,
         Value(Var(1)),
         Bind(Lit(Word(64), 1),
         Bind(Prim(Sub(64), [3, 0]),
         Recur(0, [0],
         Value(Prim(Add(64), [5, 0]))))))))
 }
+
+fn sum_body() → PTm { sum_body_by(False) }
 
 fn sum_defs() → List<PDef> { [PDef(1, sum_body())] }
 
@@ -57,7 +60,7 @@ theorem sum_from_reflected(): sum_reflected().to_ptm() = Some(sum_body()) { refl
 
 // Under `if h:` too.
 theorem sum_from_if_eq(): Tm::to_ptm(Let(Lit(Word(64), 0), Let(Prim(Eq(64), [1, 0]), IfEq(0, Var(1),
-    Let(Lit(Word(64), 1), Let(Prim(Sub(64), [3, 0]), Let(Call(0, [0]), Prim(Add(64), [5, 0])))))))) = Some(sum_body()) { refl }
+    Let(Lit(Word(64), 1), Let(Prim(Sub(64), [3, 0]), Let(Call(0, [0]), Prim(Add(64), [5, 0])))))))) = Some(sum_body_by(True)) { refl }
 
 // A self-call inside a bound term's own binding is refused.
 theorem nested_self_call_refused(): Tm::to_ptm(Let(Let(Call(0, [0]), Var(0)), Var(0))).is_some() = False { refl }
