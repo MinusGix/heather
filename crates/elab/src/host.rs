@@ -3955,7 +3955,9 @@ impl Host<'_> {
     /// A field read left inline, `r.name(args…)`, as [`HeadView::Field`].
     fn view_field(&self, run: &mut Run, at: usize, t: &Term) -> Option<HeadView> {
         let (fun, args) = crate::spelling::app_spine(t);
-        let (record, name) = self.field_read_parts(&run.scopes[at].cx, fun)?;
+        let Some((record, name)) = self.field_read_parts(&run.scopes[at].cx, fun) else {
+            return if args.is_empty() { self.view_payload_field(run, at, t) } else { None };
+        };
         let (rty, rlevel) = self.kernel_type(run, at, record)?;
         let r = run.issue_shared(at, record, rty, rlevel);
         let mut handles = Vec::with_capacity(args.len());
@@ -3964,6 +3966,29 @@ impl Host<'_> {
             handles.push(run.issue_shared(at, a, ty, level));
         }
         Some(HeadView::Field(r, name, handles))
+    }
+
+    /// A field of a constructor's payload, as a `match` arm reads it: the
+    /// constructor's encoding is the tag then its fields, so field `k` is
+    /// `fst` of `k + 1` `snd`s of the arm's payload local. Shown as a field
+    /// read of the local named by the field's number (`0`, `1`, …), which no
+    /// declared field name is.
+    fn view_payload_field(&self, run: &mut Run, at: usize, t: &Term) -> Option<HeadView> {
+        let (true, mut pair) = crate::spelling::proj_of(t)? else {
+            return None;
+        };
+        let mut entry = 0usize;
+        while let Some((false, inner)) = crate::spelling::proj_of(pair) {
+            entry += 1;
+            pair = inner;
+        }
+        let idx = entry.checked_sub(1)?;
+        if !matches!(&**pair, Term::Var(_)) {
+            return None;
+        }
+        let (pty, plevel) = self.kernel_type(run, at, pair)?;
+        let payload = run.issue_shared(at, pair, pty, plevel);
+        Some(HeadView::Field(payload, idx.to_string(), Vec::new()))
     }
 
     fn view_term(&self, run: &mut Run, at: usize, t: &Term) -> HeadView {

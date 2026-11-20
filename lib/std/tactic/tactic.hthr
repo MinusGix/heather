@@ -98,7 +98,9 @@ inductive Head {
     // A field read of a record whose declaration registers no projection
     // definition, applied: a class dictionary's `d.inv(x)` or `d.unit`, by
     // the record, the field's name and the arguments. (A field with a
-    // projection definition is that global's `HGlobal`.)
+    // projection definition is that global's `HGlobal`.) A `match` arm's
+    // read of a field of its constructor's payload is one too, of the
+    // payload's local, by the field's number (`0`, `1`, …).
     HField(of: Handle, name: String, args: List<Handle>),
     HLit(n: Nat),
     // A `match` stuck on its scrutinee: a term that only reduces once

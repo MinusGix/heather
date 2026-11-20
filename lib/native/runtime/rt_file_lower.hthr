@@ -233,7 +233,7 @@ theorem Ty::moves_quiet(self t: Ty, tys: Nat → RecInfo, out, src: Nat): nodes_
         Lines => trivial,
         Named(i) => Ty::field_moves_quiet(tys(i).fields, out, src),
         Count => trivial,
-        Enum(_) => trivial,
+        Enum(i) => Ty::field_moves_quiet(Cons(Word(64), tys(i).alts.slots), out, src),
     }
 }
 

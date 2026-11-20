@@ -95,6 +95,8 @@ fn Tm::tail_sem(self t: Tm, w: World, skip: Nat, res: Ty, again: List<BitVec(64)
         Case(c, zero, succ) => λ g env => Tm::leaf(Case(c, zero, succ), w, res, g, env),
         Byte(k, i, length) => λ g env => Tm::leaf(Byte(k, i, length), w, res, g, env),
         Pick(i, c, arms, eq) => λ g env => Tm::leaf(Pick(i, c, arms, eq), w, res, g, env),
+        Inject(i, k, args) => λ g env => Tm::leaf(Inject(i, k, args), w, res, g, env),
+        Slot(i, j, of) => λ g env => Tm::leaf(Slot(i, j, of), w, res, g, env),
     }
 }
 
@@ -113,6 +115,8 @@ theorem Tm::tail_sem_ext(self t: Tm, w: World, skip: Nat, res: Ty, k1, k2: List<
         Case(_, _, _) => λ g env => refl,
         Byte(_, _, _) => λ g env => refl,
         Pick(_, _, _, _) => λ g env => refl,
+        Inject(_, _, _) => λ g env => refl,
+        Slot(_, _, _) => λ g env => refl,
         Call(f, args) => match f as λ f2 => (g: List<Ty>) → (env: Env(w.tys, g)) →
             Tm::tail_sem(Call(f2, args), w, skip, res, k1, g, env) = Tm::tail_sem(Call(f2, args), w, skip, res, k2, g, env) {
             Zero => λ g env => same(Tm::words(w, g, env, args.drop(skip))),
@@ -395,6 +399,8 @@ fn Tm::lower_tail(self t: Tm, w: World, skip: Nat, res: Ty, flag: Nat, kept, nex
         Case(c, zero, succ) => Tm::lower_leaf(Case(c, zero, succ), w, res, flag, nexts, g, ports, next),
         Byte(k, i, length) => Tm::lower_leaf(Byte(k, i, length), w, res, flag, nexts, g, ports, next),
         Pick(i, c, arms, eq) => Tm::lower_leaf(Pick(i, c, arms, eq), w, res, flag, nexts, g, ports, next),
+        Inject(i, k, args) => Tm::lower_leaf(Inject(i, k, args), w, res, flag, nexts, g, ports, next),
+        Slot(i, j, of) => Tm::lower_leaf(Slot(i, j, of), w, res, flag, nexts, g, ports, next),
     }
 }
 
@@ -579,6 +585,10 @@ theorem Tm::tail_sound(self t: Tm, w: World, skip: Nat, res: Ty, er: res.OneWord
             Tm::lower_leaf_sound(Byte(k, i, length), w, skip, res, er, flag, kept, nexts, g, ports, next, λ again env => refl),
         Pick(i, c, arms, eq) => λ g ports next =>
             Tm::lower_leaf_sound(Pick(i, c, arms, eq), w, skip, res, er, flag, kept, nexts, g, ports, next, λ again env => refl),
+        Inject(i, k, args) => λ g ports next =>
+            Tm::lower_leaf_sound(Inject(i, k, args), w, skip, res, er, flag, kept, nexts, g, ports, next, λ again env => refl),
+        Slot(i, j, of) => λ g ports next =>
+            Tm::lower_leaf_sound(Slot(i, j, of), w, skip, res, er, flag, kept, nexts, g, ports, next, λ again env => refl),
         Call(f, args) => match f as λ f2 => (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →
             Tm::TailHolds(Call(f2, args), w, skip, res, flag, kept, nexts, g, ports, next, Tm::lower_tail(Call(f2, args), w, skip, res, flag, kept, nexts, g, ports, next)) {
             Zero => λ g ports next => Tm::lower_again_sound(Call(Zero, args), w, skip, res, flag, kept, nexts, g, ports, next, args.drop(skip), λ again env => refl),
@@ -1693,6 +1703,8 @@ theorem Tm::lower_tail_static(self t: Tm, w: World, cs: Sig::Sems(w.tys, w.sigs)
         Case(c, zero, succ) => λ g ports next => Tm::lower_leaf_static(Case(c, zero, succ), w, cs, spans, res, flag, nexts, g, ports, next),
         Byte(k, i, length) => λ g ports next => Tm::lower_leaf_static(Byte(k, i, length), w, cs, spans, res, flag, nexts, g, ports, next),
         Pick(i, c, arms, eq) => λ g ports next => Tm::lower_leaf_static(Pick(i, c, arms, eq), w, cs, spans, res, flag, nexts, g, ports, next),
+        Inject(i, k, args) => λ g ports next => Tm::lower_leaf_static(Inject(i, k, args), w, cs, spans, res, flag, nexts, g, ports, next),
+        Slot(i, j, of) => λ g ports next => Tm::lower_leaf_static(Slot(i, j, of), w, cs, spans, res, flag, nexts, g, ports, next),
         Call(f, args) => match f as λ f2 => (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →
             Tm::lower_tail(Call(f2, args), w.over(cs, spans), skip, res, flag, kept, nexts, g, ports, next) =
                 Tm::lower_tail(Call(f2, args), w, skip, res, flag, kept, nexts, g, ports, next) {
