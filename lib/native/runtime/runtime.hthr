@@ -148,8 +148,14 @@ fn Ty::is_two_words(self t: Ty, tys: Nat → RecInfo) → Bool {
 // alone (`Ty::Bare`).
 fn Ty::is_bare(tys: Nat → RecInfo, i: Nat) → Bool { match tys(i).alts.slots { Nil => True, Cons(_, _) => False } }
 
+// An enum whose payload is one 64-bit slot: returned as its tag word and
+// the slot beside it, in RDX.
+fn Ty::is_one_slot(tys: Nat → RecInfo, i: Nat) → Bool {
+    match tys(i).alts.slots { Cons(f, rest) => f.is_word64().and(match rest { Nil => True, Cons(_, _) => False }), Nil => False }
+}
+
 fn Ty::is_out(self t: Ty, tys: Nat → RecInfo) → Bool {
-    match t { Enum(i) => Ty::is_bare(tys, i), _ => t.is_edge(tys).or(t.is_two_words(tys)) }
+    match t { Enum(i) => Ty::is_bare(tys, i).or(Ty::is_one_slot(tys, i)), _ => t.is_edge(tys).or(t.is_two_words(tys)) }
 }
 
 fn Ty::all_edge(ts: List<Ty>, tys: Nat → RecInfo) → Bool {
@@ -2564,15 +2570,17 @@ fn runtime_file_callees(entry, typed_once, nil, tys_e: Expr, q: RtQ, funs: List<
     runtime_file_callees_of(entry, typed_once, nil, tys_e, q, funs.map(λ g => Global(GlobalRef(g))), sigs, lents)
 }
 
-// A function returning a record of two words, lent nothing:
-// `f::agrees_also`, the program's words past its first against the
-// record's fields past its first (`Compile::root_also`, its agreement
-// `Setup::plain_agrees_also` at no file). None for any other function.
+// A function returning a record of two words, or an enum with a slot,
+// lent nothing: `f::agrees_also`, the program's words past its first
+// against `rest`, the record's fields past its first or the enum's slots
+// (`Compile::root_also`, its agreement `Setup::plain_agrees_also` at no
+// file); and for a record `f::fields`, its fields' names. None for any
+// other function.
 fn runtime_also_decls(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes, world_e, table_e, rt_e: Expr, linked: Linked, ys: List<Param>,
-    words_e: Expr, word_list: List<Expr>, rest: List<Expr>, fields: List<String>) → Tac<List<Decl>> {
+    words_e: Expr, rest: Option<Expr>, fields: List<String>) → Tac<List<Decl>> {
     match rest {
-        Nil => pure([]),
-        Cons(_, _) => match rfun.shape() {
+        None => pure([]),
+        Some(rhs) => match rfun.shape() {
             Plain => {
                 let rfl <- runtime_global("tactic::rfl");
                 let typed_refl <- runtime_global(name_of(Setup::typed_refl));
@@ -2593,13 +2601,21 @@ fn runtime_also_decls(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes
                     Hd(trivial_h), Hd(trivial_h)]);
                 // The record's fields' names, as `f::names` spells names:
                 // what `compile-x86` states the two words as.
-                pure([Decl(AsTheorem, name ++ "::agrees_also", ys,
-                    Equation(ap(eval_also, [linked.program, words_e]), RtQ::seq(word_list, rest)), proof),
-                    Decl(AsValue, name ++ "::fields", [], Hd(ts.nats), q.nat_list(runtime_name_codes(fields)))])
+                let agrees_also = Decl(AsTheorem, name ++ "::agrees_also", ys, Equation(ap(eval_also, [linked.program, words_e]), rhs), proof);
+                match fields {
+                    Nil => pure([agrees_also]),
+                    Cons(_, _) => pure([agrees_also, Decl(AsValue, name ++ "::fields", [], Hd(ts.nats), q.nat_list(runtime_name_codes(fields)))]),
+                }
             },
             _ => pure([]),
         },
     }
+}
+
+// Whether table entry `i`, an enum, has a payload: a function returning
+// one passes the lowering only where it is one slot (`Ty::Out`).
+fn runtime_enum_has_slots(reprs: List<ReprEntry>, recs: List<RecShape>, i: Nat) → Bool {
+    match reprs.nth(i) { Some(_) => False, None => match recs.nth(i - reprs.len()) { Some(rs) => match rs.codes { Nil => False, Cons(_, _) => True }, None => False } }
 }
 
 fn Ty::any_enum(ps: List<Ty>) → Bool { ps.any_bit(λ p => match p { Enum(_) => True, _ => False }) }
@@ -2857,13 +2873,26 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
             let tail: List<Decl> = [
                 Decl(AsTheorem, name ++ "::agrees", runtime_params_of(ys), Equation(lhs, first), agreed),
             ];
-            let two_with_enum = (match gets.tail() { Nil => False, Cons(_, _) => True }).and(Ty::any_enum(rfun.params));
+            // The words past the first: a record's fields after its first,
+            // an enum's slots (`RecInfo::enum_rest`).
+            let enum_rest <- runtime_global(name_of(RecInfo::enum_rest));
+            let rest: Option<Expr> = match gets.tail() {
+                Cons(_, _) => Some(RtQ::seq(word_list, gets.tail())),
+                Nil => match rfun.result {
+                    Enum(i) => match runtime_enum_has_slots(reprs, recs, i) {
+                        True => Some(ap(enum_rest, [tys_e, NatLit(i), runtime_result(reprs, rfun.result, fx)])),
+                        False => None,
+                    },
+                    _ => None,
+                },
+            };
+            let two_with_enum = rest.is_some().and(Ty::any_enum(rfun.params));
             let guard: Tac<Bool> = match two_with_enum {
                 True => runtime_fail("`" ++ name ++ "` takes an enum and returns two words: not stated yet (docs/native/runtime-fn-setups-design.md §16.16)"),
                 False => pure(True),
             };
             let _ <- guard;
-            let also <- runtime_also_decls(name, f, rfun, q, ts, world_e, table_e, rt_e, linked, runtime_params_of(ys), words_e, word_list, gets.tail(),
+            let also <- runtime_also_decls(name, f, rfun, q, ts, world_e, table_e, rt_e, linked, runtime_params_of(ys), words_e, rest,
                 runtime_result_names(reprs, recs, rfun.result));
             pure(head.append(pin).append(made).append(linked_decls).append(tail).append(also))
         },

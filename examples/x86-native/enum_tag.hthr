@@ -28,9 +28,8 @@ runtime fn tok_weight(k: TokKind, n: BitVec(64)) → BitVec(64) {
 }
 
 // An enum as a function's result: returned as its tag word, a constructor
-// as its index. A parameter returned unchanged is clamped at the last tag
-// (`Ty::clamp`), so on a word that is no tag the function returns `Other`'s,
-// the constructor every `match` reads such a word as.
+// as its index. A parameter returned unchanged is returned as it came: a
+// word that is no tag is outside every contract (`Ty::Admits`).
 runtime fn tok_settle(k: TokKind, c: u64) → TokKind {
     if c < 33 { Space } else { if c < 48 { k } else { match k { Ident => Number, Number => Ident, Space => Space, Punct => Other, Other => Other } } }
 }

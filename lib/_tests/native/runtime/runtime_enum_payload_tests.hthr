@@ -66,3 +66,26 @@ runtime fn shape_width(k: u64, a: u64) → u64 {
 }
 
 theorem shape_width_agrees(k, a: u64): program_eval(shape_width::program, 0, [k, a]) = shape_width(k, a) { shape_width::agrees(k, a) }
+
+// ---------------------------------------------------------------------------
+// An enum with one slot returned: its tag word in RAX and its slot beside
+// it in RDX (`Ty::Out`, `RecInfo::enum_rest`, `f::agrees_also`), as a
+// two-word record is.
+
+runtime fn pocket_below(x: u64, y: u64) → Pocket { if x < y { Holds(y - x) } else { Empty } }
+
+theorem pocket_below_runs(): program_eval(pocket_below::program, 0, [BitVec::ofNat(2), BitVec::ofNat(5)]) = 1 ∧
+    program_eval_also(pocket_below::program, [BitVec::ofNat(2), BitVec::ofNat(5)]) = [BitVec::ofNat(3)] {
+    ⟨pocket_below::agrees(BitVec::ofNat(2), BitVec::ofNat(5)), pocket_below::agrees_also(BitVec::ofNat(2), BitVec::ofNat(5))⟩
+}
+
+theorem pocket_below_agrees(x, y: u64):
+    program_eval(pocket_below::program, 0, [x, y]) = RecInfo::enum_word(pocket_below::world.tys, 0, pocket_below(x, y)) ∧
+    program_eval_also(pocket_below::program, [x, y]) = RecInfo::enum_rest(pocket_below::world.tys, 0, pocket_below(x, y)) {
+    ⟨pocket_below::agrees(x, y), pocket_below::agrees_also(x, y)⟩
+}
+
+// The constructor without the field leaves its slot at the default.
+theorem pocket_below_empty(): program_eval_also(pocket_below::program, [BitVec::ofNat(9), BitVec::ofNat(5)]) = [BitVec::ofNat(0)] {
+    pocket_below::agrees_also(BitVec::ofNat(9), BitVec::ofNat(5))
+}
