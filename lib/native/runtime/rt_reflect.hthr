@@ -54,7 +54,7 @@ import function_ir_operation;
 // the right it would be stuck on the neutral bit), and `PRotate(kind)` is
 // `x.rotr(k)` (`kind` 0) or `x.rotl(k)` (1) read as the shift pair it is
 // defined as (`bitvec_rotate.hthr`), the other count `w - k` computed here.
-inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PWiden(extra: Nat), PFoldl, PGet, PSet, PToNat, PTrunc, PShift(kind: Nat), PSext, PWithin, PComplement, PRotate(kind: Nat), PAt, PLen, POperation(code: Nat) }
+inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PWiden(extra: Nat), PFoldl, PGet, PSet, PToNat, PTrunc, PShift(kind: Nat), PSext, PWithin, PComplement, PRotate(kind: Nat), PAt, PLen, POperation(code: Nat), PSteps }
 
 record PrimEntry { g: Nat, p: Prim }
 
@@ -628,7 +628,15 @@ fn Known::ty_within(self k: Known, fuel: Nat, h: Handle) → Tac<Ty> {
             },
           },
         },
-        _ => rt_refuse("a type with no runtime layout under the reflected fragment"),
+        // A type an inference left as a redex (a generic's result at its
+        // type argument, `Loop::steps`'s `S`): its head form.
+        _ => match fuel {
+            Zero => rt_refuse("a type with no runtime layout under the reflected fragment"),
+            Succ(f) => whnf(h).bind(λ u => match u {
+                Accepted(x) => k.ty_within(f, x),
+                Refused(_) => rt_refuse("a type with no runtime layout under the reflected fragment"),
+            }),
+        },
     })
 }
 
@@ -1986,6 +1994,48 @@ fn rt_within(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, bytes, length,
     })
 }
 
+// A `while` loop (docs/language/loop-combinator-design.md §6.2), as the
+// elaborator writes it: `loop::Loop::steps(F, λ s => Step::turn(c, λ h =>
+// next, s), init)`, `F` the passes a loop is given (`Loop::passes()`). The
+// state starts as `init`'s variable; the test `c` and the next state are
+// each reflected in a block of their own under the state, at the level
+// after the current depth, as an `if`'s arms are. `h`, the test's equation,
+// is no runtime data: what reads it is a proof the reflection erases.
+fn rt_steps(k: Known, st: RSt, h: Handle, operand: Bool, args: List<Handle>,
+    go: RSt → Handle → Bool → Tac<Pair<RSt, Tm>>) → Tac<Pair<RSt, Tm>>
+{
+    let missing = rt_refuse<Pair<RSt, Tm>>("`Loop::steps` without its passes, step and start");
+    match args {
+        Nil => missing,
+        Cons(fuel, r1) => match r1 {
+        Nil => missing,
+        Cons(step, r2) => match r2 {
+        Nil => missing,
+        Cons(init, _) => view(fuel).bind(λ fv => match (match fv { HGlobal(_, fname, _) => Known::str_same(rt_base_name(fname), "passes"), _ => False }) {
+            False => rt_refuse("a loop given other than `Loop::passes()` passes: a `while` is given the most a 64-bit count reaches"),
+            True => go(st, init, True).bind(λ ri => {
+                let s0 = ri.fst;
+                let at = s0.depth;
+                open(step, "s").bind(λ c => rt_accepted("a loop's step", c)).bind(λ os => view(os.body).bind(λ v => match v {
+                    HGlobal(_, tname, targs) => match targs {
+                        Cons(test_h, Cons(next_h, _)) => open(next_h, "h").bind(λ c2 => rt_accepted("a loop's next state", c2)).bind(λ on => {
+                            let under = λ (funs: List<Nat>) => RSt(at + 1, [], s0.memo, s0.handles, Cons(Pair(os.local.ref.id, at), s0.locals), funs);
+                            go(under(s0.funs), test_h, False).bind(λ rt =>
+                            go(under(rt.fst.funs), on.body, False).bind(λ rb =>
+                            pure(s0.with_funs(rb.fst.funs).finish(h, operand,
+                                Iterate(RSt::level(ri.snd), RSt::wrap(rt.fst.lets, rt.snd), RSt::wrap(rb.fst.lets, rb.snd))))))
+                        }),
+                        _ => rt_refuse("a loop's step `" ++ tname ++ "` without its test and next state"),
+                    },
+                    _ => rt_refuse("a loop's step that is not `Step::turn` of a test, the next state and the state"),
+                }))
+            }),
+        }),
+        },
+        },
+    }
+}
+
 fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RSt, Tm>> {
     match fuel {
         Zero => rt_refuse("the body is deeper than the reflector's fuel"),
@@ -2154,6 +2204,7 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                             }),
                             _ => rt_refuse("`" ++ name ++ "` without its operand and count"),
                         },
+                        PSteps => rt_steps(k, st, h, operand, args, λ s a o => rt_go(f, k, s, a, o)),
                         PGet => rt_bytes_op(k, st, h, operand, name, args, λ c => Get(c), λ s a => rt_go(f, k, s, a, True)),
                         PSet => rt_bytes_op(k, st, h, operand, name, args, λ c => Set(c), λ s a => rt_go(f, k, s, a, True)),
                         PFoldl => match args {
@@ -2464,7 +2515,8 @@ fn rt_prim_names() → List<Pair<String, Prim>> {
 fn rt_derived_names() → List<Pair<String, Prim>> {
     [Pair("bitvec::BitVec::complement", PComplement), Pair("bitvec_rotate::BitVec::rotr", PRotate(0)), Pair("bitvec_rotate::BitVec::rotl", PRotate(1)),
      Pair("bytes::Bytes::at", PAt), Pair("bytes::Bytes::len", PLen),
-     Pair("bitvec_div::BitVec::udiv", POperation(UDiv.code())), Pair("bitvec_div::BitVec::urem", POperation(URem.code()))]
+     Pair("bitvec_div::BitVec::udiv", POperation(UDiv.code())), Pair("bitvec_div::BitVec::urem", POperation(URem.code())),
+     Pair("loop::Loop::steps", PSteps)]
 }
 
 fn rt_prims_present(ps: List<Pair<String, Prim>>) → Tac<List<PrimEntry>> {

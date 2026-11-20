@@ -165,16 +165,16 @@ fn Ty::check(self a: Ty, b: Ty) → Option<a = b> {
 // A code's equation with itself is `refl`, at an open code too.
 theorem Ty::equation_self(self a: Ty): a.equation(a) = Inl(refl) {
     match a {
-        Word(w) => j(sym(w.equation_self()), λ d _ =>
+        Word(w) => j(sym(Ty::nat_equation_self(w)), λ d _ =>
             (match d as λ _ => (Word(w) = Word(w)) ∨ True { Inl(e) => Inl(j(e, λ x _ => Word(w) = Word(x), refl)), Inr(_) => Inr(trivial) }) = Inl(refl), refl),
         Bit => refl,
-        ByteList(c) => j(sym(c.equation_self()), λ d _ =>
+        ByteList(c) => j(sym(Ty::nat_equation_self(c)), λ d _ =>
             (match d as λ _ => (ByteList(c) = ByteList(c)) ∨ True { Inl(e) => Inl(j(e, λ x _ => ByteList(c) = ByteList(x), refl)), Inr(_) => Inr(trivial) }) = Inl(refl), refl),
         Lines => refl,
-        Named(i) => j(sym(i.equation_self()), λ d _ =>
+        Named(i) => j(sym(Ty::nat_equation_self(i)), λ d _ =>
             (match d as λ _ => (Named(i) = Named(i)) ∨ True { Inl(e) => Inl(j(e, λ x _ => Named(i) = Named(x), refl)), Inr(_) => Inr(trivial) }) = Inl(refl), refl),
         Count => refl,
-        Enum(i) => j(sym(i.equation_self()), λ d _ =>
+        Enum(i) => j(sym(Ty::nat_equation_self(i)), λ d _ =>
             (match d as λ _ => (Enum(i) = Enum(i)) ∨ True { Inl(e) => Inl(j(e, λ x _ => Enum(i) = Enum(x), refl)), Inr(_) => Inr(trivial) }) = Inl(refl), refl),
     }
 }

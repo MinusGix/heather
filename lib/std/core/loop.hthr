@@ -177,6 +177,13 @@ fn Step::Stays<S>(s: S, q: Step<S>) → Type {
     match q { Next(_) => True, Stop(r) => r = s }
 }
 
+// How many passes a `while` loop is given: `2^64 - 1`, the most a 64-bit
+// count reaches, and at least every measure that is a 64-bit word's
+// `toNat`. A name, not a numeral: two loops given it compare at their
+// `Loop::steps` without either being unrolled pass by pass, which a
+// numeral's would be wherever a field read forces the loop's state.
+fn Loop::passes() → Nat { 18446744073709551615 }
+
 fn Loop::steps<S>(fuel: Nat, step: S → Step<S>, s: S) → S {
     match fuel {
         Zero => s,

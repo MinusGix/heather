@@ -286,28 +286,52 @@ fn Ty::items(self t: Ty, tys: Nat → RecInfo) → t.sem(tys) → List<t.elem().
     match t { Word(_) => λ _ => Nil, Bit => λ _ => Nil, ByteList(_) => λ v => v, Lines => λ v => v, Named(_) => λ _ => Nil, Count => λ _ => Nil, Enum(_) => λ _ => Nil }
 }
 
+// `Nat::equation`, restated here: a cast's equation is then a definition
+// newer than any a program's source names, so a comparison of a meaning
+// against its source advances the meaning's cast before unfolding the
+// source (a source's `Loop::steps` would otherwise unroll pass by pass
+// against a cast stalled at the older `Nat::equation`).
+fn Ty::nat_equation(self n: Nat) → (m: Nat) → (n = m) ∨ True {
+    match n {
+        Zero => λ m => match m { Zero => Inl(refl), Succ(_) => Inr(trivial) },
+        Succ(k, ih) => λ m => match m {
+            Zero => Inr(trivial),
+            Succ(m2) => match ih(m2) { Inr(_) => Inr(trivial), Inl(e) => Inl(j(e, λ x _ => k + 1 = x + 1, refl)) },
+        },
+    }
+}
+
+// A number's equation with itself is `refl`, at an open number too.
+theorem Ty::nat_equation_self(self n: Nat): Ty::nat_equation(n, n) = Inl(refl) {
+    match n {
+        Zero => refl,
+        Succ(k) => j(sym(Ty::nat_equation_self(k)), λ d _ =>
+            (match d as λ _ => (k + 1 = k + 1) ∨ True { Inr(_) => Inr(trivial), Inl(e) => Inl(j(e, λ x _ => k + 1 = x + 1, refl)) }) = Inl(refl), refl),
+    }
+}
+
 // The equation between two codes, as data: at two closed codes it
 // evaluates to `refl`, so a transport along it computes (as
 // `Nat::equation`'s does).
 fn Ty::equation(self a: Ty, b: Ty) → (a = b) ∨ True {
     match a {
         Word(w) => match b {
-            Word(v) => match w.equation(v) { Inl(e) => Inl(j(e, λ x _ => Word(w) = Word(x), refl)), Inr(_) => Inr(trivial) },
+            Word(v) => match Ty::nat_equation(w, v) { Inl(e) => Inl(j(e, λ x _ => Word(w) = Word(x), refl)), Inr(_) => Inr(trivial) },
             _ => Inr(trivial),
         },
         Bit => match b { Bit => Inl(refl), _ => Inr(trivial) },
         ByteList(c) => match b {
-            ByteList(d) => match c.equation(d) { Inl(e) => Inl(j(e, λ x _ => ByteList(c) = ByteList(x), refl)), Inr(_) => Inr(trivial) },
+            ByteList(d) => match Ty::nat_equation(c, d) { Inl(e) => Inl(j(e, λ x _ => ByteList(c) = ByteList(x), refl)), Inr(_) => Inr(trivial) },
             _ => Inr(trivial),
         },
         Lines => match b { Lines => Inl(refl), _ => Inr(trivial) },
         Named(i) => match b {
-            Named(k) => match i.equation(k) { Inl(e) => Inl(j(e, λ x _ => Named(i) = Named(x), refl)), Inr(_) => Inr(trivial) },
+            Named(k) => match Ty::nat_equation(i, k) { Inl(e) => Inl(j(e, λ x _ => Named(i) = Named(x), refl)), Inr(_) => Inr(trivial) },
             _ => Inr(trivial),
         },
         Count => match b { Count => Inl(refl), _ => Inr(trivial) },
         Enum(i) => match b {
-            Enum(k) => match i.equation(k) { Inl(e) => Inl(j(e, λ x _ => Enum(i) = Enum(x), refl)), Inr(_) => Inr(trivial) },
+            Enum(k) => match Ty::nat_equation(i, k) { Inl(e) => Inl(j(e, λ x _ => Enum(i) = Enum(x), refl)), Inr(_) => Inr(trivial) },
             _ => Inr(trivial),
         },
     }
@@ -784,7 +808,7 @@ fn Tm::convoy(T: Type, c: Bool, yes: T, no: T) → T {
 // reaches (`Tm::iter_region`), and at least every measure that is a 64-bit
 // word's `toNat`. A `while` loop stops at the state it tested, so that is
 // enough (`loop::Loop::steps_stays`).
-fn Tm::passes() → Nat { 18446744073709551615 }
+fn Tm::passes() → Nat { loop::Loop::passes() }
 
 // The meaning of a term, at the code it synthesizes.
 fn Tm::sem(self t: Tm, w: World) → (g: List<Ty>) → Env(w.tys, g) → t.ty(w, g).sem(w.tys) {
@@ -821,7 +845,7 @@ fn Tm::sem(self t: Tm, w: World) → (g: List<Ty>) → Env(w.tys, g) → t.ty(w,
         Pick(i, c, arms, eq) => λ g env =>
             w.tys(i).alts.choose(eq, arms.ty(w, Cons(Enum(i), g)).sem(w.tys), λ n => arms.sem(w, Cons(Enum(i), g), Pair(w.tys(i).alts.of(n), env)),
                 Ty::cast(w.tys, Ty::at(g, c), Enum(i), Env::get(w.tys, g, env, c))),
-        Iterate(init, test, body) => λ g env => loop::Loop::steps(Tm::passes(),
+        Iterate(init, test, body) => λ g env => loop::Loop::steps(loop::Loop::passes(),
             λ (s: Ty::at(g, init).sem(w.tys)) => loop::Step::turn(
                 Ty::cast(w.tys, test.ty(w, Cons(Ty::at(g, init), g)), Bit, test.sem(w, Cons(Ty::at(g, init), g), Pair(s, env))),
                 λ _ => Ty::cast(w.tys, body.ty(w, Cons(Ty::at(g, init), g)), Ty::at(g, init), body.sem(w, Cons(Ty::at(g, init), g), Pair(s, env))),
