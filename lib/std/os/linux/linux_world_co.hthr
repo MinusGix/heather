@@ -145,6 +145,12 @@ fn Io::reads_ret<R>(r: R) → Io::Reads<R>(CRet(r), λ io => CRet(Mutated(io, r)
     λ io => ERet(0, 0, Mutated(io, r), refl, refl)
 }
 
+// Trees equivalent up to taus read alike.
+fn Io::reads_eutt<R>(t: CoTree<R>(Events::linux()), u: CoTree<R>(Events::linux()), e: Eutt<R>(Events::linux(), t, u),
+    f: Io → Partial(Mutated<Io, R>), ru: Io::Reads(u, f)) → Io::Reads(t, f) {
+    λ io => Eutt::trans(Events::none(), Io::against_co(t, io), Io::against_co(u, io), f(io), Io::against_co_cong(t, u, e, io), ru(io))
+}
+
 // A call issued reads as the capability call (its answer one silent step
 // away).
 fn Io::reads_trigger(c: LinuxCmd<Nat>) → Io::Reads(CoTree::trigger(Events::linux(), c), λ io => CRet(Io::call(io, c))) {
