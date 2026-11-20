@@ -52,6 +52,11 @@ ROOT = Path(__file__).resolve().parent.parent
 MARK = re.compile(r"^\s*// lib-closure:\s*(.*?)\s*$")
 # `import m;`, and `export m::{…};` and `export import m;`, which import `m` too.
 IMPORT = re.compile(r"^(?:(?:export\s+)?import\s+([A-Za-z_][A-Za-z0-9_]*)\s*;|export\s+([A-Za-z_][A-Za-z0-9_]*)\s*::)", re.M)
+# A path's first segment, `m` of `m::x`, that no `.` or `::` precedes: the
+# loader loads module `m` for it without an import (modules-design §3.8,
+# `heather_syntax::written_paths`). Read after comments and strings are blanked.
+PATH = re.compile(r"(?<![\w.:])([a-z_][A-Za-z0-9_]*)::[A-Za-z_]")
+BLANK = re.compile(r'//[^\n]*|"(?:\\.|[^"\\\n])*"')
 # The elaborator's own prelude is never a file.
 PRELUDE = "prelude"
 # The common prelude: the loader makes it the first import of every module
@@ -87,7 +92,11 @@ class Library:
     def explicit(self, name):
         if name not in self.imports_of:
             src = self.path(name).read_text()
-            self.imports_of[name] = [a or b for a, b in IMPORT.findall(src) if (a or b) != PRELUDE]
+            im = [a or b for a, b in IMPORT.findall(src) if (a or b) != PRELUDE]
+            for m in PATH.findall(BLANK.sub("", src)):
+                if m != name and m != PRELUDE and m not in im and len(self.where.get(m, [])) == 1:
+                    im.append(m)
+            self.imports_of[name] = im
         return self.imports_of[name]
 
     def imports(self, name):

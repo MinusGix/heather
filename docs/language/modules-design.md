@@ -309,6 +309,40 @@ Minus on 2026-11-20 over Lean's "every name of the closure is bare":
 `stored_words` (`[u64; n]`'s `at`) builds on `runtime` and is imported
 beside it.
 
+### 3.8 A written path loads its module (2026-11-20)
+
+Minus's direction (2026-11-20): a program should not play "find the right
+import": once there is a filesystem module, `fs::read` should simply work,
+the way a path does in Rust. And imports should not cost what Lean's do, so
+the cost of reaching a module is never a reason to hide it.
+
+**Writing `m::x` puts `m` in the module's closure, with no `import m;`.**
+The loader reads each source's written paths
+(`heather_syntax::written_paths`: the lower-case first segment of every
+qualified name no `.` or `::` precedes, outside comments and strings) and
+loads each that names a module on the search path as if imported; the
+elaborator adds it to the module's scope as a path-only import, so it is
+reached exactly as §3.6's closure is: **qualified only**. Nothing of `m`
+becomes bare, and `m`'s own imports join the closure as an import's would
+(registries, designations, §3.7's members).
+
+- A path whose first segment names no module (`f::rec`, `List::map` is
+  upper-case and never read) is left to the elaborator, which reads it as
+  before.
+- A path naming a module that reaches the writer (a function `nat::rec`
+  read inside a module `nat` imports) is dropped rather than closing an
+  import cycle (`Walk::reaches` in `crates/cli/src/loader.rs`); it then
+  resolves or fails as it did before this rule.
+- A module's image key holds its path modules as it holds its imports
+  (`semantic::module_imports`), so editing `m` rebuilds what writes `m::x`.
+- `scripts/lib-closures` reads paths with a line pattern beside its import
+  pattern, so the `// lib-closure:` lists stay the loader's closures.
+
+What this does not do yet: load a module lazily inside a closure that is
+already large. A path's module is elaborated, or its image replayed, like
+any import; making a closure's unused part cost nothing is the loading
+work, not a naming rule.
+
 ## 4. Names: unambiguous-or-qualified, never silently shadowed
 
 The regime, and the one deliberate departure from Rust/ML convention:
