@@ -878,6 +878,27 @@ theorem Ty::holds_admits(tys: Nat → RecInfo, p: Ty, values: Valuation(), port:
     }
 }
 
+// What a parameter's word asks before `B`: an enum's, that the word is a
+// tag (`Ty::Admits`); any other code's, nothing, so that an agreement over
+// words alone binds no premise.
+fn Ty::Given(self p: Ty, tys: Nat → RecInfo, x: BitVec(64), B: Type) → Type {
+    match p { Word(_) => B, Bit => B, ByteList(_) => B, Lines => B, Named(_) => B, Count => B, Enum(i) => x.toNat() <= tys(i).alts.last → B }
+}
+
+theorem Ty::given<B>(p: Ty, tys: Nat → RecInfo, x: BitVec(64)): (p.Admits(tys, x) → B) → p.Given(tys, x, B) {
+    match p {
+        Word(_) => λ f => f(trivial), Bit => λ f => f(trivial), ByteList(_) => λ f => f(trivial), Lines => λ f => f(trivial),
+        Named(_) => λ f => f(trivial), Count => λ f => f(trivial), Enum(_) => λ f => f,
+    }
+}
+
+theorem Ty::given_at<B>(p: Ty, tys: Nat → RecInfo, x: BitVec(64)): p.Given(tys, x, B) → p.Admits(tys, x) → B {
+    match p {
+        Word(_) => λ h _ => h, Bit => λ h _ => h, ByteList(_) => λ h _ => h, Lines => λ h _ => h,
+        Named(_) => λ h _ => h, Count => λ h _ => h, Enum(_) => λ h a => h(a),
+    }
+}
+
 // The same decided, what a list of a program's functions holds (a list's
 // entries are of the lowest universe, and a predicate is not).
 fn Ty::admits(self t: Ty, tys: Nat → RecInfo, x: BitVec(64)) → Bool {
@@ -993,8 +1014,8 @@ fn Sig::Words(self s: Sig, tys: Nat → RecInfo) → Type { Ty::Helds(tys, s.par
 fn Ty::Answers(tys: Nat → RecInfo, ps: List<Ty>, r: Ty) → Ty::Arrows(tys, ps, r) → (List<BitVec(64)> → BitVec(64)) → Type {
     match ps {
         Nil => λ v ans => ans(Nil) = Ty::cast(tys, r, Word(64), v),
-        Cons(p, rest) => λ v ans => (x: BitVec(64)) → p.Admits(tys, x) →
-            Ty::Answers(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws))),
+        Cons(p, rest) => λ v ans => (x: BitVec(64)) →
+            p.Given(tys, x, Ty::Answers(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)))),
     }
 }
 
@@ -1813,7 +1834,7 @@ theorem Tm::call_args_sound(w: World, g: List<Ty>, ports: List<Nat>, values: Val
                             Ty::held_reads(w.tys, p, values, q, hp, Ty::cast(w.tys, Ty::at(g, a), p, Env::get(w.tys, g, env, a)),
                                 Tm::operand(w, g, ports, values, env, held, a, q, at_q, p, ea));
                         trans(Tm::call_args_sound(w, g, ports, values, env, held, r, rest, more, F(Ty::cast(w.tys, Word(64), p, x)),
-                                λ ws => ans(Cons(x, ws)), answers(x, Ty::holds_admits(w.tys, p, values, q, Ty::cast(w.tys, Ty::at(g, a), p, Env::get(w.tys, g, env, a)),
+                                λ ws => ans(Cons(x, ws)), Ty::given_at(p, w.tys, x, answers(x), Ty::holds_admits(w.tys, p, values, q, Ty::cast(w.tys, Ty::at(g, a), p, Env::get(w.tys, g, env, a)),
                                     Tm::operand(w, g, ports, values, env, held, a, q, at_q, p, ea))), found, e_rest),
                             cong_fn(λ (u: p.sem(w.tys)) => Ty::cast(w.tys, r, Word(64), Tm::apply(w, g, env, r, rest, F(u), more)), arg_eq))
                     })))))
@@ -2505,9 +2526,9 @@ theorem Ty::curry_answers(tys: Nat → RecInfo, r: Ty, ps: List<Ty>): (g: List<T
     Ty::Answers(tys, ps, r, Ty::curry(tys, r, ps, g, env, k), ans) {
     match ps {
         Nil => λ g env k ans h => h(Nil, trivial),
-        Cons(p, rest) => λ g env k ans h => λ x admitted =>
+        Cons(p, rest) => λ g env k ans h => λ x => Ty::given<Ty::Answers(tys, rest, r, Ty::curry(tys, r, rest, Cons(p, g), Pair(Ty::cast(tys, Word(64), p, x), env), k), λ ws => ans(Cons(x, ws)))>(p, tys, x, λ admitted =>
             Ty::curry_answers(tys, r, rest, Cons(p, g), Pair(Ty::cast(tys, Word(64), p, x), env), k, λ ws => ans(Cons(x, ws)),
-                λ ws more => h(Cons(x, ws), ⟨admitted, more⟩)),
+                λ ws more => h(Cons(x, ws), ⟨admitted, more⟩))),
     }
 }
 
@@ -2773,8 +2794,8 @@ theorem Fun::lower_sound(self f: Fun, w: World): f.LowerHolds(w, f.lower(w)) {
 fn Ty::AnswersAlso(tys: Nat → RecInfo, ps: List<Ty>, r: Ty) → Ty::Arrows(tys, ps, r) → (List<BitVec(64)> → List<BitVec(64)>) → Type {
     match ps {
         Nil => λ v ans => ans(Nil) = Ty::rest_words(tys, r, v),
-        Cons(p, rest) => λ v ans => (x: BitVec(64)) → p.Admits(tys, x) →
-            Ty::AnswersAlso(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws))),
+        Cons(p, rest) => λ v ans => (x: BitVec(64)) →
+            p.Given(tys, x, Ty::AnswersAlso(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)))),
     }
 }
 
@@ -2784,9 +2805,9 @@ theorem Ty::curry_answers_also(tys: Nat → RecInfo, r: Ty, ps: List<Ty>): (g: L
     Ty::AnswersAlso(tys, ps, r, Ty::curry(tys, r, ps, g, env, k), ans) {
     match ps {
         Nil => λ g env k ans h => h(Nil, trivial),
-        Cons(p, rest) => λ g env k ans h => λ x admitted =>
+        Cons(p, rest) => λ g env k ans h => λ x => Ty::given<Ty::AnswersAlso(tys, rest, r, Ty::curry(tys, r, rest, Cons(p, g), Pair(Ty::cast(tys, Word(64), p, x), env), k), λ ws => ans(Cons(x, ws)))>(p, tys, x, λ admitted =>
             Ty::curry_answers_also(tys, r, rest, Cons(p, g), Pair(Ty::cast(tys, Word(64), p, x), env), k, λ ws => ans(Cons(x, ws)),
-                λ ws more => h(Cons(x, ws), ⟨admitted, more⟩)),
+                λ ws more => h(Cons(x, ws), ⟨admitted, more⟩))),
     }
 }
 

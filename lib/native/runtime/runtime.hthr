@@ -809,7 +809,7 @@ theorem Ty::answers_uncurry(tys: Nat → RecInfo, ps: List<Ty>, r: Ty): (v: Ty::
     Ty::Answers(tys, ps, r, v, λ ws => Ty::uncurry(tys, ps, r, v, ws)) {
     match ps {
         Nil => λ v => refl,
-        Cons(p, rest) => λ v => λ x _ => Ty::answers_uncurry(tys, rest, r, v(Ty::cast(tys, Word(64), p, x))),
+        Cons(p, rest) => λ v => λ x => Ty::given<Ty::Answers(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), λ ws => Ty::uncurry(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), ws))>(p, tys, x, λ _ => Ty::answers_uncurry(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)))),
     }
 }
 
@@ -827,7 +827,7 @@ theorem Ty::answers_at(tys: Nat → RecInfo, ps: List<Ty>, r: Ty): (v: Ty::Arrow
             ans(ws) = Ty::uncurry(tys, Cons(p, rest), r, v, ws) {
             Nil => λ (bad: 0 = rest.len() + 1) _ => false_elim(rest.len().zero_ne_succ(bad)),
             Cons(x, more) => λ (same: more.len() + 1 = rest.len() + 1) admitted =>
-                Ty::answers_at(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)), held(x, admitted.left), more,
+                Ty::answers_at(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)), Ty::given_at(p, tys, x, held(x), admitted.left), more,
                     Nat::succ_inj(more.len(), rest.len(), same), admitted.right),
         },
     }
@@ -839,8 +839,8 @@ theorem Ty::answers_of_admitted(tys: Nat → RecInfo, ps: List<Ty>, r: Ty): (v: 
     ((xs: List<BitVec(64)>) → xs.len() = ps.len() → Ty::AdmitsAll(tys, ps, xs) → ans(xs) = Ty::uncurry(tys, ps, r, v, xs)) → Ty::Answers(tys, ps, r, v, ans) {
     match ps {
         Nil => λ v ans h => h(Nil, refl, trivial),
-        Cons(p, rest) => λ v ans h => λ x admitted => Ty::answers_of_admitted(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)),
-            λ ws len more => h(Cons(x, ws), cong_fn(λ (n: Nat) => n + 1, len), ⟨admitted, more⟩)),
+        Cons(p, rest) => λ v ans h => λ x => Ty::given<Ty::Answers(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)))>(p, tys, x, λ admitted => Ty::answers_of_admitted(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)),
+            λ ws len more => h(Cons(x, ws), cong_fn(λ (n: Nat) => n + 1, len), ⟨admitted, more⟩))),
     }
 }
 
@@ -860,7 +860,7 @@ theorem Ty::answers_also_at(tys: Nat → RecInfo, ps: List<Ty>, r: Ty): (v: Ty::
             ans(ws) = Ty::rest_words(tys, r, Ty::apply(tys, Cons(p, rest), r, v, ws)) {
             Nil => λ (bad: 0 = rest.len() + 1) _ => false_elim(rest.len().zero_ne_succ(bad)),
             Cons(x, more) => λ (same: more.len() + 1 = rest.len() + 1) admitted =>
-                Ty::answers_also_at(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)), held(x, admitted.left), more,
+                Ty::answers_also_at(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)), Ty::given_at(p, tys, x, held(x), admitted.left), more,
                     Nat::succ_inj(more.len(), rest.len(), same), admitted.right),
         },
     }

@@ -1813,8 +1813,8 @@ theorem Ty::answers_of_uncurry(tys: Nat → RecInfo, ps: List<Ty>, r: Ty): (v: T
     ((xs: List<BitVec(64)>) → xs.len() = ps.len() → ans(xs) = Ty::uncurry(tys, ps, r, v, xs)) → Ty::Answers(tys, ps, r, v, ans) {
     match ps {
         Nil => λ v ans h => h(Nil, refl),
-        Cons(p, rest) => λ v ans h => λ x _ => Ty::answers_of_uncurry(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)),
-            λ ws len => h(Cons(x, ws), cong_fn(λ (n: Nat) => n + 1, len))),
+        Cons(p, rest) => λ v ans h => λ x => Ty::given<Ty::Answers(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)))>(p, tys, x, λ _ => Ty::answers_of_uncurry(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)),
+            λ ws len => h(Cons(x, ws), cong_fn(λ (n: Nat) => n + 1, len)))),
     }
 }
 
@@ -1828,7 +1828,7 @@ theorem Fun::fuel_answers(ws: List<Ty>, res: Ty, w: World, h: Nat → Ty::Arrows
         (call: Answers()) → Tm::CallsAgree(w, call) →
         Ty::Answers(w.tys, Cons(Count, ws), res, h, λ xs => (match o { None => Function([], nodes_region(Nil), 0), Some(c) => c }).eval(call, xs, buffers := w.spans)) {
         None => λ never _ => false_elim(never),
-        Some(code) => λ _ holds call agree => λ b _ => Ty::answers_of_uncurry(w.tys, ws, res, h(b.toNat()), λ xs => code.eval(call, Cons(b, xs), buffers := w.spans),
+        Some(code) => λ _ holds call agree => λ b => Ty::answers_of_uncurry(w.tys, ws, res, h(b.toNat()), λ xs => code.eval(call, Cons(b, xs), buffers := w.spans),
             λ xs len => holds(call, agree, b, xs, len)),
     }(lowered, held)
 }

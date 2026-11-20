@@ -1812,7 +1812,10 @@ admitted word of a code: at `Enum(i)` the word is at most the last tag, at
 any other code `True`; `Ty::admits` is its `Bool` (a list of `Type`
 predicates would sit a universe up) with `admits_sound`/`_complete`, and
 `AdmitsAll`/`admits_all` are a parameter list's. `Ty::Answers` and
-`AnswersAlso` take `p.Admits(tys, x)` for each parameter, and
+`AnswersAlso` ask it of each enum parameter (`Ty::Given`: an enum's word
+binds the premise, any other code's binds nothing, so an agreement over
+words alone reads as before; `Ty::given`/`given_at` introduce and use it
+at a parameter not known), and
 `Fun::lower_sound` reads the entry with it (`Ty::entry_holds`): an enum's
 word that is admitted names the value it reads as (`EnumInfo::Names`,
 which is now `Ty::Holds` at `Enum`). Inside the body every word held is
