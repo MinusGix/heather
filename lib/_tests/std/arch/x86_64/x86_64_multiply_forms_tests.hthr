@@ -67,8 +67,9 @@ theorem shift_cl_step_form(): decode_step_form(shift_cl_bytes(OpShr, R9)) = Some
 // The byte load beside IMUL under REX.W 0F still reads back.
 theorem byte_load_still_step_form(): decode_step_form([b(0x48), b(0x0f), b(0xb6), b(0x06)]) =
     Some(FormEmitted(EmitLoad(ByteLoad(destination := Rax, base := Rsi)))) { refl }
-// F7 /6 is DIV, and F7 /7 IDIV, which the model does not have.
-theorem div_refused(): decode_instruction([b(0x48), b(0xf7), b(0xf3)]) = None { refl }
+// F7 /6 is DIV (x86_64_divide_forms_tests), and F7 /7 IDIV, which the
+// model does not have.
+theorem div_beside_mul(): decode_instruction([b(0x48), b(0xf7), b(0xf3)]) = Some(decoded_canonical(DivR(Rbx))) { refl }
 theorem idiv_refused(): decode_instruction([b(0x48), b(0xf7), b(0xfb)]) = None { refl }
 // D3 /1 is ROR by CL, which the model does not have.
 theorem ror_cl_refused(): decode_instruction([b(0x48), b(0xd3), b(0xc8)]) = None { refl }
