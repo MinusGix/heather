@@ -166,6 +166,38 @@ register carries a proof), and they move into the statement:
 - **The planner** keeps RAX and RDX free across a `DIV` row, as it does for
   the reciprocal rows (`Operation::writes_fixed`).
 
+### 6.1 What building round 2 showed (2026-11-20)
+
+Three refinements of the above, found while building:
+
+- **`Defined` is a decision computed beside `eval`.** `eval` recurses
+  through sequences, branches, loops (one valuation per pass) and calls, and
+  a divide's requirement must hold at every valuation it meets there. So
+  `Defined` is a `Bool` with `eval`'s own recursion
+  (`StructuredRegion::defined_over`, `loop_defined`), with calls asking the
+  callee's own decision (`Defines()`, built program-wide as `Answers()`
+  is). `Operation::Gives` takes the `Requires` proof from a true bit. The
+  certificate's premise is then `program_defined(functions, f, arguments) =
+  True`: decidable at run time, which is what the safe Rust wrapper of §9's
+  option 2 tests.
+- **The lowering's statement does change, in one place.** A node's
+  equation gives the lowering "the divisor is not zero", but the block
+  theorem also needs `NoFaults` at the state the `DIV` meets, which only a
+  `Keeps` chain knows (the registers it ran through). Rather than add a
+  conjunct to every `Keeps` proof (about 160 sites, nearly all of code that
+  cannot fault), a second family `Guards` is proved for `lower_nodes` only:
+  the code of each node is checked by evaluation to be free of instructions
+  that may fault, or to be a divide's row, and the divide's case reads the
+  divisor's register through the `Keeps` of the moves before it. The
+  lowered code goes to the program as an `Asm` item whose verdict is
+  `block_flags`, and its block theorem takes `NoFaults` from `Guards`.
+- **`rt_lower` is where rounds 2 and 3 meet.** `rt_lower` proves each node's
+  equation from `rt`'s meaning; at a divide it needs the requirement at the
+  operands' values, which is `Tm::Safe`. So `Tm::LowerHolds` takes `Safe`
+  in the same change that makes the equation partial, and divide-by-a-
+  constant keeps working because its `Safe` is closed and decided by
+  evaluation.
+
 ## 7. The machine: `DIV` and a block that may fault
 
 This is the trust-base part, the same kind as `IMUL`/`MUL` in PR #811.

@@ -870,7 +870,7 @@ fn NodeHolds(values: Valuation(), node: Node, buffers: Buffers() := Nil) → Typ
         RotateRight(width, output, value, amount) =>
             values(width, output) = values(width, value).rotr(amount),
         Apply(op, width, output, left, right) =>
-            values(width, output) = op.meaning(values(width, left), values(width, right)),
+            op.Gives(width, values(width, left), values(width, right), values(width, output)),
     }
 }
 

@@ -301,7 +301,7 @@ fn Node::value(self node: Node, values: Valuation(), buffers: Buffers() := Nil) 
         ShiftLeft(_, _, value, amount) => λ w => values(w, value).shift_left(amount),
         LogicalShiftRight(_, _, value, amount) => λ w => values(w, value).shift_right(amount),
         RotateRight(_, _, value, amount) => λ w => values(w, value).rotr(amount),
-        Apply(op, _, _, left, right) => λ w => op.meaning(values(w, left), values(w, right)),
+        Apply(op, _, _, left, right) => λ w => op.run(values(w, left), values(w, right)),
         ArithmeticShiftRight(_, _, value, amount) => λ w => values(w, value).arithmetic_shift_right(amount),
         UnsignedLessThan(width, _, left, right) => bit_value(values(width, left).unsigned_lt_bit(values(width, right))),
         SignedLessThan(width, _, left, right) => bit_value(values(width, left).signed_lt_bit(values(width, right))),

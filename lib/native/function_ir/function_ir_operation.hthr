@@ -7,11 +7,12 @@
 // the theorem that the instructions leave the meaning. The next operation
 // is a constructor here, its meaning, and its row there.
 //
-// The meaning is Heather's, at every width, total: a shift by a word is
-// zero from the width up, and division by zero is `BitVec::udiv`'s and
-// `urem`'s answer. A row whose instructions compute something else at some
-// operands (x86 masks a shift's count, faults on a zero divisor) fixes
-// that up in its own instructions, or is not offered for those operands.
+// The meaning is Heather's, at every width. A shift by a word is total and
+// zero from the width up; a row whose instructions compute something else
+// (x86 masks a shift's count) fixes that up in its own instructions. A
+// divide requires its divisor not to be zero (`Requires`) and means
+// nothing anywhere else: every equation that reads `meaning` holds a proof
+// of the requirement.
 //
 // Constructors are appended, never reordered: `code` numbers them, and the
 // numbers are written into certificates.
@@ -34,7 +35,25 @@ inductive Operation {
     URem,
 }
 
-fn Operation::meaning(self op: Operation, {w: Nat}, x, y: BitVec(w)) → BitVec(w) {
+// What an operation asks of its operands: nothing, but that a divisor is
+// not zero (docs/native/partial-operations-design.md §2). Every level
+// states its equation for an operation only where this holds, so no
+// statement anywhere says what a quotient by zero is.
+fn Operation::Requires(self op: Operation, {w: Nat}, x, y: BitVec(w)) → Type {
+    match op {
+        Mul => True,
+        ShlBy => True,
+        ShrBy => True,
+        UDiv => y ≠ BitVec::zero(),
+        URem => y ≠ BitVec::zero(),
+    }
+}
+
+// The word the operation's code leaves where its requirement holds. A
+// runner (`rt`'s `sem`, FunctionIR's `eval`) computes it at every operand,
+// as `BitVec::udiv` does; what it gives where the requirement fails is the
+// runner's business and no equation reads it.
+fn Operation::run(self op: Operation, {w: Nat}, x, y: BitVec(w)) → BitVec(w) {
     match op {
         Mul => x.mul(y),
         ShlBy => x.shift_left(y.toNat()),
@@ -42,6 +61,18 @@ fn Operation::meaning(self op: Operation, {w: Nat}, x, y: BitVec(w)) → BitVec(
         UDiv => x.udiv(y),
         URem => x.urem(y),
     }
+}
+
+// The operation's meaning, which takes the proof of its requirement.
+fn Operation::meaning(self op: Operation, {w: Nat}, x, y: BitVec(w), needs: op.Requires(x, y)) → BitVec(w) {
+    op.run(x, y)
+}
+
+// A node's equation for the operation: the requirement holds at its
+// operands, and the output is the meaning there.
+record Operation::Gives(self op: Operation, w: Nat, x, y, output: BitVec(w)) {
+    needs: op.Requires(x, y),
+    equation: output = op.meaning(x, y, needs),
 }
 
 fn Operation::code(self op: Operation) → Nat {
