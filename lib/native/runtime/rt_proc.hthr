@@ -463,19 +463,22 @@ fn PTm::word_ctx(n: Nat) → List<Ty> {
     match n { Zero => Nil, Succ(m) => Cons(Word(64), PTm::word_ctx(m)) }
 }
 
-// Variable `i` in word `from + i`.
+// `n` parameters in words `from` to `from + n - 1`, as variables the way
+// `rt` binds a function's parameters (`Ty::bind_onto`): the last
+// parameter is variable 0, so variable `i` is in word `from + n - 1 - i`.
 fn PTm::param_locs(from, n: Nat) → List<Loc> {
-    match n { Zero => Nil, Succ(m) => Cons(InWord(from), PTm::param_locs(from + 1, m)) }
+    match n { Zero => Nil, Succ(m) => Cons(InWord(from + m), PTm::param_locs(from, m)) }
 }
 
-// The values of `n` word variables, from words; a missing one is zero.
+// Word `i` of a list, zero past its end.
+fn PTm::word_at(xs: List<BitVec(64)>, i: Nat) → BitVec(64) { match xs.nth(i) { None => BitVec::ofNat(0), Some(x) => x } }
+
+// The values of `n` parameters from their words in order, the last
+// variable 0 (`PTm::param_locs`); a missing one is zero.
 fn PTm::vals_n(tys: Nat → RecInfo, n: Nat, xs: List<BitVec(64)>) → rt::Env(tys, PTm::word_ctx(n)) {
     match n as λ k => rt::Env(tys, PTm::word_ctx(k)) {
         Zero => trivial,
-        Succ(m) => match xs {
-            Nil => Pair(BitVec::ofNat(0), PTm::vals_n(tys, m, Nil)),
-            Cons(x, rest) => Pair(x, PTm::vals_n(tys, m, rest)),
-        },
+        Succ(m) => Pair(PTm::word_at(xs, m), PTm::vals_n(tys, m, xs)),
     }
 }
 
@@ -586,20 +589,37 @@ theorem PTm::words_at_bounded(m: Nat): (from: Nat) → (env: Env) → PTm::Bound
     }
 }
 
-// Words holding `xs` hold the `n` word variables they are.
-theorem PTm::hold_params(tys: Nat → RecInfo, n: Nat): (xs: List<BitVec(64)>) → xs.len() = n → (env: Env) → (from: Nat) → PTm::WordsAt(env, from, xs) →
-    LocsHold(tys, env, PTm::word_ctx(n), PTm::param_locs(from, n), PTm::vals_n(tys, n, xs)) {
+// Words holding `xs` from `from` on hold each of them.
+theorem PTm::words_at_nth(xs: List<BitVec(64)>): (env: Env) → (from: Nat) → PTm::WordsAt(env, from, xs) → (i: Nat) → i < xs.len() →
+    env.number(from + i) = PTm::word_at(xs, i).toNat() {
+    match xs {
+        Nil => λ env from _ i never => {
+            let bad: False = omega(never);
+            false_elim(bad)
+        },
+        Cons(x, rest) => λ env from h i => match i {
+            Zero => λ _ => {
+                let at: (from = from + 0) = omega();
+                j(at, λ k _ => env.number(k) = x.toNat(), h.left)
+            },
+            Succ(i2) => λ lt => {
+                let lt2: (i2 < rest.len()) = omega(lt);
+                let at: ((from + 1) + i2 = from + Succ(i2)) = omega();
+                j(at, λ k _ => env.number(k) = PTm::word_at(rest, i2).toNat(), PTm::words_at_nth(rest, env, from + 1, h.right, i2, lt2))
+            },
+        },
+    }
+}
+
+// Words holding `xs` hold the first `n` of them as parameters.
+theorem PTm::hold_params(tys: Nat → RecInfo, xs: List<BitVec(64)>, env: Env, from: Nat, h: PTm::WordsAt(env, from, xs), n: Nat):
+    n <= xs.len() → LocsHold(tys, env, PTm::word_ctx(n), PTm::param_locs(from, n), PTm::vals_n(tys, n, xs)) {
     match n {
-        Zero => λ xs _ env from _ => trivial,
-        Succ(m) => λ xs => match xs {
-            Nil => λ never => {
-                let bad: False = omega(never);
-                false_elim(bad)
-            },
-            Cons(_, rest) => λ len env from h => {
-                let len2: (rest.len() = m) = omega(len);
-                ⟨h.left, PTm::hold_params(tys, m, rest, len2, env, from + 1, h.right)⟩
-            },
+        Zero => λ _ => trivial,
+        Succ(m) => λ le => {
+            let lt: (m < xs.len()) = omega(le);
+            let le2: (m <= xs.len()) = omega(le);
+            ⟨PTm::words_at_nth(xs, env, from, h, m, lt), PTm::hold_params(tys, xs, env, from, h, m, le2)⟩
         },
     }
 }
@@ -608,9 +628,9 @@ theorem PTm::params_below(m: Nat): (from, bound: Nat) → from + m <= bound → 
     match m {
         Zero => λ from bound _ => trivial,
         Succ(m2) => λ from bound le => {
-            let lt: (from < bound) = omega(le);
-            let le2: ((from + 1) + m2 <= bound) = omega(le);
-            ⟨lt, PTm::params_below(m2, from + 1, bound, le2)⟩
+            let lt: (from + m2 < bound) = omega(le);
+            let le2: (from + m2 <= bound) = omega(le);
+            ⟨lt, PTm::params_below(m2, from, bound, le2)⟩
         },
     }
 }
@@ -969,7 +989,8 @@ theorem PDef::bodies(defs: List<PDef>, w: rt::World, src: Source, made: PDef::pr
             let bounded = PTm::bounded_set_words(proc.params, caller.words_at(args), native_source::Env(Nil, caller.buffers, caller.args),
                 PTm::bounded_none(caller.buffers, caller.args));
             let wa = PTm::words_at_bounded(n, 0, entered, bounded);
-            let held = PTm::hold_params(w.tys, n, xs, lx, entered, 0, wa);
+            let n_le: (n <= xs.len()) = omega(lx);
+            let held = PTm::hold_params(w.tys, xs, entered, 0, wa, n, n_le);
             let le: (0 + n <= n + 1) = omega();
             let below = PTm::params_below(n, 0, n + 1, le);
             let pos: (0 < n + 1) = omega();
