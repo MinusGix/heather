@@ -1,0 +1,37 @@
+// `alternating_left` of lib/_tests/native/native_compile_tests.hthr on its
+// own, for scripts/bench-probes' `conv/closed-sum` case: a closed number a
+// compiler computes (`Source::left`, a `Nat::max` over the call graph's
+// levels, plus 8) against a sum of literals. Both sides are applications of
+// `Nat::add`, so conversion first compares them argument by argument, and
+// that attempt takes one δ-step of `Nat::max` against `8 + 3 * 40`. The
+// step's fold forced its counter opaquely, every match inside it stalling on
+// a glued value and replayed by the next fold: gigabytes of value arena in
+// a few seconds (issues/conversion-closed-sum-opaque-counter.md). The
+// numeral spelling is the control: the two cost the same once the counter is
+// forced transparently.
+import native_source; import native_cat; import native_alloc; import native_compile; import nat; import list;
+
+// The two procedures of the test file's `alternating`.
+fn alternate_body(other: Nat, twice: Bool) → Stmt {
+    Then(ops([Const(64, 4, 0), Equal(64, 3, 1, 4)]),
+        Branch(3,
+            ops([Const(64, 2, 0)]),
+            Then(ops([Const(64, 4, 1), Sub(64, 5, 1, 4)]),
+                Then(Perform(other, [5], [6]), match twice {
+                    True => ops([Add(64, 2, 6, 6), Add(64, 2, 2, 1)]),
+                    False => ops([Add(64, 2, 6, 1)]),
+                }))))
+}
+fn alternating_to(n, levels: Nat) → Source {
+    Source(functions := [], buffers := [], words := 10,
+        main := Then(ops([Const(64, 0, n)]), Then(Perform(0, [0], [7]), Exit(7))),
+        procedures := [
+            Procedure(params := [1], results := [2], body := alternate_body(1, False)),
+            Procedure(params := [1], results := [2], body := alternate_body(0, True)),
+        ], levels := levels)
+}
+// Six levels of checked calls, three of each procedure at 40 bytes a level,
+// and the return address of `main`'s call: 8 + 3 * 40 + 3 * 40 = 248.
+fn alternating() → Source { alternating_to(5, 6) }
+theorem alternating_left_numeral(): alternating().left(alternating().homes(), alternating().bodies()) = 248 { refl }
+theorem alternating_left_sum(): alternating().left(alternating().homes(), alternating().bodies()) = 8 + 3 * 40 + 3 * 40 { refl }
