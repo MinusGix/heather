@@ -2229,7 +2229,9 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                         }),
                         False => match Known::rec(k.recs, ty.id, 0) {
                         Some(ri) => match Known::is_enum_at(k.recs, ri) {
-                          True => rt_refuse("the constructor `" ++ name ++ "` as a value: an enum is passed in and matched on, not built, by the default setup yet"),
+                          // An enum's constructor: its index, the tag word
+                          // it is held as (§16.16).
+                          True => pure(st.finish(h, operand, Lit(Enum(k.reprs.len() + ri), i))),
                           False => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, fields).bind(λ r => pure(r.fst.finish(h, operand, Make(ri, r.snd)))),
                         },
                         // A record held by its repr: its code is its type's.
@@ -2238,7 +2240,13 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                                 Named(ri) => RSt::operands(λ s a => rt_go(f, k, s, a, True), st, fields).bind(λ r => pure(r.fst.finish(h, operand, Make(ri, r.snd)))),
                                 _ => rt_refuse("the constructor `" ++ name ++ "` builds a type with no runtime layout under the reflected fragment"),
                             }),
-                            False => rt_refuse("the constructor `" ++ name ++ "` builds a type with no runtime layout under the reflected fragment"),
+                            // An enum the walk has not met: its type refuses
+                            // with the marker that adds it, and the walk
+                            // runs again.
+                            False => k.ty_of(h).bind(λ t => match t {
+                                Enum(ri) => pure(st.finish(h, operand, Lit(Enum(ri), i))),
+                                _ => rt_refuse("the constructor `" ++ name ++ "` builds a type with no runtime layout under the reflected fragment"),
+                            }),
                         }),
                         },
                     },

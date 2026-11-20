@@ -894,7 +894,12 @@ fn Tm::one_node(node: Node, next: Nat) → Lowered { Lowered(nodes_region([node]
 // A literal: a constant node, a bit as the one-bit 0 or 1.
 fn Tm::bit_code(n: Nat) → Nat { match n { Zero => 0, Succ(_) => 1 } }
 
-fn Tm::lower_lit(c: Ty, n, next: Nat) → Option<Lowered> {
+// An enum's constructor as its tag, one of the enum's and in a word.
+fn Tm::lit_tag(n, next: Nat) → Option<Lowered> {
+    Tm::check_true((n + 1).leb(Nat::pow(2, 64))).and_then(λ _ => Some(Tm::one_node(Const(64, next, n), next)))
+}
+
+fn Tm::lower_lit(tys: Nat → RecInfo, c: Ty, n, next: Nat) → Option<Lowered> {
     match c {
         Word(width) => Some(Tm::one_node(Const(width, next, n), next)),
         Bit => Some(Tm::one_node(Const(1, next, Tm::bit_code(n)), next)),
@@ -902,7 +907,7 @@ fn Tm::lower_lit(c: Ty, n, next: Nat) → Option<Lowered> {
         Lines => None,
         Named(_) => None,
         Count => None,
-        Enum(_) => None,
+        Enum(i) => Tm::check_true(n.leb(tys(i).alts.last)).and_then(λ _ => Tm::lit_tag(n, next)),
     }
 }
 
@@ -1138,7 +1143,7 @@ fn Tm::lower_byte(g: List<Ty>, ports: List<Nat>, next, k, i, length: Nat) → Op
 fn Tm::lower(self t: Tm, w: World, g: List<Ty>, ports: List<Nat>, next: Nat) → Option<Lowered> {
     match t {
         Var(i) => port_at(ports, i).and_then(λ p => Some(Lowered(nodes_region(Nil), p, next))),
-        Lit(c, n) => Tm::lower_lit(c, n, next),
+        Lit(c, n) => Tm::lower_lit(w.tys, c, n, next),
         Prim(op, args) => Tm::lower_prim(op, w.tys, g, ports, next, args),
         // The body sees the term's port as variable 0, and takes fresh ids
         // above the term's.
@@ -1361,7 +1366,7 @@ theorem Tm::binary_sound(P: Option<Lowered> → Type, none: P(None), g: List<Ty>
 }
 
 theorem Tm::lower_lit_sound(w: World, g: List<Ty>, ports: List<Nat>, next: Nat, c: Ty, n: Nat):
-    Tm::LowerHolds(Lit(c, n), w, g, ports, next, Tm::lower_lit(c, n, next)) {
+    Tm::LowerHolds(Lit(c, n), w, g, ports, next, Tm::lower_lit(w.tys, c, n, next)) {
     match c {
         Word(width) => λ call agree values env held below =>
             Tm::set_sound(w.tys, values, next, Word(width), trivial, λ wd => BitVec::ofNat(n), BitVec::ofNat(n),
@@ -1373,7 +1378,24 @@ theorem Tm::lower_lit_sound(w: World, g: List<Ty>, ports: List<Nat>, next: Nat, 
         Lines => trivial,
         Named(_) => trivial,
         Count => trivial,
-        Enum(_) => trivial,
+        // The constructor's tag, a constant: its word is the tag, which
+        // `of` and the tag invert (`EnumInfo.tag_of`).
+        Enum(i) => {
+            let P = λ (r: Option<Lowered>) => Tm::LowerHolds(Lit(Enum(i), n), w, g, ports, next, r);
+            let e = w.tys(i).alts;
+            Option::and_then_elim(P, trivial, Tm::check_true(n.leb(e.last)), λ _ => Tm::lit_tag(n, next), λ among _ =>
+            Option::and_then_elim(P, trivial, Tm::check_true((n + 1).leb(Nat::pow(2, 64))), λ _ => Some(Tm::one_node(Const(64, next, n), next)), λ fits _ =>
+                λ call agree values env held below => {
+                    let le: (n <= e.last) = Nat::leb_sound(n, e.last, among);
+                    let set = λ (wd: Nat) => BitVec::ofNat(n, n := wd);
+                    let at: (Valuation::set(values, next, set)(64, next).toNat().min(e.last) = e.tag(e.of(n))) =
+                        trans(cong_fn(λ (y: BitVec(64)) => y.toNat().min(e.last), Valuation::set_here(values, next, set, 64)),
+                            trans(cong_fn(λ (m: Nat) => m.min(e.last), BitVec::toNat_ofNat(64, n, Nat::leb_sound(n + 1, Nat::pow(2, 64), fits))),
+                                trans(Nat::min_eq_l(n, e.last, le), sym(e.tag_of(n, le)))));
+                    ⟨Nat::le_succ_r(next, next, next.le_refl()), ⟨next.lt_succ_self(),
+                        ⟨λ wd id lt => Valuation::set_other(values, next, set, wd, id, Nat::ne_of_lt(id, next, lt)), at⟩⟩⟩
+                }))
+        },
     }
 }
 
@@ -2003,7 +2025,7 @@ fn Ty::check_edge(self t: Ty, tys: Nat → RecInfo) → Option<t.Edge(tys)> {
 
 // A code a plain function takes at its boundary: one it passes in a word
 // (`Ty::Edge`), or an enum, passed as the word that names its constructor
-// (an enum result is refused until a caller needs one, design §16.16).
+// (an enum result is clamped at its last tag, `Ty::clamp`; design §16.16).
 fn Ty::Param(self t: Ty, tys: Nat → RecInfo) → Type {
     match t { Word(_) => t.Edge(tys), Bit => False, ByteList(_) => False, Lines => False, Named(_) => t.Edge(tys), Count => False, Enum(_) => True }
 }
@@ -2074,18 +2096,85 @@ fn Ty::widen_by(w: Nat, o: (w = 64) ∨ True, c: Lowered) → Lowered {
     match o { Inl(_) => c, Inr(_) => Lowered(Compose(c.region, nodes_region([Resize(w, 64, c.next, c.result)])), c.next, c.next + 1) }
 }
 
-fn Ty::widen(self t: Ty, c: Lowered) → Lowered {
-    match t { Word(w) => Ty::widen_by(w, w.equation(64), c), Bit => c, ByteList(_) => c, Lines => c, Named(_) => c, Count => c, Enum(_) => c }
+// An enum's word clamped at its last tag `last`: the word where it is at
+// most `last`, `last` past it. Inside a function a word that is no tag
+// reads as the last constructor (`EnumInfo::read`, the way a `match`'s
+// compares fall through to its last arm), so a parameter's word returned
+// unchanged would be no tag; clamped, the word returned is the tag of the
+// value returned, on every word the function is called with, which is how
+// a program is linked (`program_linked_files`). On a tag, which is every
+// word a contract passes, the clamp changes nothing.
+fn Ty::clamp(last: Nat, c: Lowered) → Lowered {
+    Lowered(Compose(c.region, Compose(nodes_region([Const(64, c.next, last), UnsignedLessThan(64, c.next + 1, c.next, c.result)]),
+            branch(c.next + 1, Ports([Port(c.next + 2, 64)]), nodes_region([Move(64, c.next + 2, c.next)]), nodes_region([Move(64, c.next + 2, c.result)])))),
+        c.next + 2, c.next + 3)
+}
+
+// The clamp's word is the tag a word at most `last` past it names.
+theorem Ty::clamp_reads(call: function_ir_eval::Answers(), buffers: Buffers(), values: Valuation(), last: Nat, c: Lowered, t: Nat,
+    small: last < Nat::pow(2, 64), below: c.result < c.next,
+    h: c.region.eval(call, values, buffers := buffers)(64, c.result).toNat().min(last) = t):
+    Ty::clamp(last, c).region.eval(call, values, buffers := buffers)(64, Ty::clamp(last, c).result) = BitVec::ofNat(t) {
+    let n = c.next;
+    let after = c.region.eval(call, values, buffers := buffers);
+    let x = after(64, c.result);
+    let bound = λ (wd: Nat) => BitVec::ofNat(last, n := wd);
+    let limit = Valuation::set(after, n, bound);
+    let r_ne: (c.result ≠ n) = Nat::ne_of_lt(c.result, n, below);
+    let at_l: (limit(64, n) = BitVec::ofNat(last)) = Valuation::set_here(after, n, bound, 64);
+    let at_x: (limit(64, c.result) = x) = Valuation::set_other(after, n, bound, 64, c.result, r_ne);
+    let tested = Valuation::set(limit, n + 1, bit_value(limit(64, n).unsigned_lt_bit(limit(64, c.result))));
+    let bit = Tm::cmp_op_holds(limit, n + 1, n, c.result, 64, λ (a: BitVec(64)) (b: BitVec(64)) => a.unsigned_lt_bit(b), BitVec::ofNat(last), x, at_l, at_x);
+    let test = BitVec::ofNat(last, n := 64).unsigned_lt_bit(x);
+    let chosen: (tested(1, n + 1).head_bit() = test) = trans(cong_fn(λ (y: BitVec(1)) => y.head_bit(), bit), BitVec::head_bit_ofBool(test));
+    let outs = Ports([Port(n + 2, 64)]);
+    let when_true = nodes_region([Move(64, n + 2, n)]);
+    let when_false = nodes_region([Move(64, n + 2, c.result)]);
+    let n1_ne: (n ≠ n + 1) = Nat::ne_of_lt(n, n + 1, n.lt_succ_self());
+    let r1_ne: (c.result ≠ n + 1) = Nat::ne_of_lt(c.result, n + 1, Nat::lt_trans(c.result, n, n + 1, below, n.lt_succ_self()));
+    let last_word: (BitVec::ofNat(last, n := 64).toNat() = last) = BitVec::toNat_ofNat(64, last, small);
+    (match test as λ b => test = b → branch(n + 1, outs, when_true, when_false).eval(call, tested, buffers := buffers)(64, n + 2) = BitVec::ofNat(t) {
+        True => λ hb => {
+            let lt: (last < x.toNat()) = j(last_word, λ y _ => y < x.toNat(), BitVec::reflects_lt(64, BitVec::ofNat(last), x).left(hb));
+            let at_last: (t = last) = trans(sym(h), Nat::min_eq_r(x.toNat(), last, Nat::le_of_lt(last, x.toNat(), lt)));
+            trans(branch_true(tested, n + 1, outs, when_true, when_false, call, buffers, trans(chosen, hb), 64, n + 2),
+                trans(Valuation::set_here(tested, n + 2, λ wd => tested(wd, n), 64),
+                    trans(Valuation::set_other(limit, n + 1, bit_value(limit(64, n).unsigned_lt_bit(limit(64, c.result))), 64, n, n1_ne),
+                        trans(at_l, cong_fn(λ (m: Nat) => BitVec::ofNat(m, n := 64), sym(at_last))))))
+        },
+        False => λ hb => {
+            let le: (x.toNat() <= last) = Nat::le_of_not_lt(last, x.toNat(),
+                λ lt => BitVec::reflects_lt(64, BitVec::ofNat(last), x).right(hb, j(sym(last_word), λ y _ => y < x.toNat(), lt)));
+            let at_x2: (t = x.toNat()) = trans(sym(h), Nat::min_eq_l(x.toNat(), last, le));
+            trans(branch_false(tested, n + 1, outs, when_true, when_false, call, buffers, trans(chosen, hb), 64, n + 2),
+                trans(Valuation::set_here(tested, n + 2, λ wd => tested(wd, c.result), 64),
+                    trans(Valuation::set_other(limit, n + 1, bit_value(limit(64, n).unsigned_lt_bit(limit(64, c.result))), 64, c.result, r1_ne),
+                        trans(at_x, trans(sym(BitVec::ofNat_toNat(64, x)), cong_fn(λ (m: Nat) => BitVec::ofNat(m, n := 64), sym(at_x2)))))))
+        },
+    })(refl)
+}
+
+// An enum read as a word is its tag word.
+theorem Ty::cast_enum_word(tys: Nat → RecInfo, i: Nat, v: tys(i).alts.E): Ty::cast(tys, Enum(i), Word(64), v) = RecInfo::enum_word(tys, i, v) {
+    let apart = λ (e: Enum(i) = Word(64)) => j(e, λ x _ => match x as λ _ => Type { Enum(_) => True, _ => False }, trivial);
+    j(sym(Or::inr_apart(Enum(i).equation(Word(64)), apart)), λ d _ =>
+        (match d as λ _ => BitVec(64) { Inl(e) => j(e, λ y _ => y.sem(tys), v), Inr(_) => Ty::convert(tys, Enum(i), Word(64), v) }) =
+            RecInfo::enum_word(tys, i, v),
+        refl)
+}
+
+fn Ty::widen(self t: Ty, tys: Nat → RecInfo, c: Lowered) → Lowered {
+    match t { Word(w) => Ty::widen_by(w, w.equation(64), c), Bit => c, ByteList(_) => c, Lines => c, Named(_) => c, Count => c, Enum(i) => Ty::clamp(tys(i).alts.last, c) }
 }
 
 // The result's 64-bit word, after the widening, is the value read as one.
 theorem Ty::edge_reads(tys: Nat → RecInfo, call: function_ir_eval::Answers(), buffers: Buffers(), values: Valuation(), t: Ty, c: Lowered): t.Edge(tys) →
     (v: t.sem(tys)) → t.Holds(tys, c.region.eval(call, values, buffers := buffers), c.result, v) →
-    t.widen(c).region.eval(call, values, buffers := buffers)(64, t.widen(c).result) = Ty::cast(tys, t, Word(64), v) {
+    t.widen(tys, c).region.eval(call, values, buffers := buffers)(64, t.widen(tys, c).result) = Ty::cast(tys, t, Word(64), v) {
     match t {
         Word(w) => λ ok => match ok {
             Inl(e) => j(sym(e), λ y _ => (v: BitVec(y)) → c.region.eval(call, values, buffers := buffers)(y, c.result) = v →
-                    Word(y).widen(c).region.eval(call, values, buffers := buffers)(64, Word(y).widen(c).result) = Ty::cast(tys, Word(y), Word(64), v),
+                    Word(y).widen(tys, c).region.eval(call, values, buffers := buffers)(64, Word(y).widen(tys, c).result) = Ty::cast(tys, Word(y), Word(64), v),
                 λ v h => trans(h, sym(Ty::cast_self(tys, Word(64), v)))),
             Inr(lt) => λ v h => {
                 let ne = Nat::ne_of_lt(w, 64, lt);
@@ -2108,17 +2197,18 @@ theorem Ty::edge_reads(tys: Nat → RecInfo, call: function_ir_eval::Answers(), 
 }
 
 // A code a function returns at its boundary: one it passes in a word
-// (`Ty::Edge`), or a record of two 64-bit words, the second returned beside
+// (`Ty::Edge`), a record of two 64-bit words, the second returned beside
 // the first (`Function.also`, RDX; docs/native/runtime-fn-setups-design.md
-// §16.16). Only the program's entry returns two words: a call reads RAX
-// alone, so a callee's signature still asks for one (`Sig::Words`).
+// §16.16), or an enum, as its tag word (its tags in a word). Only the
+// program's entry returns two words: a call reads RAX alone, so a callee's
+// signature still asks for one (`Sig::Words`).
 fn Ty::Out(self t: Ty, tys: Nat → RecInfo) → Type {
     match t {
         Word(w) => (w = 64) ∨ (w < 64),
         Bit => False, ByteList(_) => False, Lines => False,
         Named(i) => (tys(i).fields = [Word(64)]) ∨ (tys(i).fields = [Word(64), Word(64)]),
         Count => False,
-        Enum(_) => False,
+        Enum(i) => tys(i).alts.last < Nat::pow(2, 64),
     }
 }
 
@@ -2139,21 +2229,23 @@ fn Ty::check_out(self t: Ty, tys: Nat → RecInfo) → Option<t.Out(tys)> {
             None => Ty::check_fields_two(tys(i).fields).and_then(λ e => Some(Inr(e))),
         },
         Count => None,
-        Enum(_) => None,
+        Enum(i) => Tm::check_true((tys(i).alts.last + 1).leb(Nat::pow(2, 64))).and_then(λ h =>
+            Some(Nat::leb_sound(tys(i).alts.last + 1, Nat::pow(2, 64), h))),
     }
 }
 
 // The result's first word, after the widening, is the value read as one:
-// a record's of two words is its head field (`Ty::convert`).
+// a record's of two words is its head field (`Ty::convert`), an enum's
+// its tag word.
 theorem Ty::out_reads(tys: Nat → RecInfo, call: function_ir_eval::Answers(), buffers: Buffers(), values: Valuation(), t: Ty, c: Lowered): t.Out(tys) →
-    (v: t.sem(tys)) → t.Holds(tys, c.region.eval(call, values, buffers := buffers), c.result, v) →
-    t.widen(c).region.eval(call, values, buffers := buffers)(64, t.widen(c).result) = Ty::cast(tys, t, Word(64), v) {
+    t.Below(tys, c.result, c.next) → (v: t.sem(tys)) → t.Holds(tys, c.region.eval(call, values, buffers := buffers), c.result, v) →
+    t.widen(tys, c).region.eval(call, values, buffers := buffers)(64, t.widen(tys, c).result) = Ty::cast(tys, t, Word(64), v) {
     match t {
-        Word(w) => λ ok => Ty::edge_reads(tys, call, buffers, values, Word(w), c, ok),
+        Word(w) => λ ok _ => Ty::edge_reads(tys, call, buffers, values, Word(w), c, ok),
         Bit => λ never => false_elim(never),
         ByteList(_) => λ never => false_elim(never),
         Lines => λ never => false_elim(never),
-        Named(i) => λ ok => match ok {
+        Named(i) => λ ok _ => match ok {
             Inl(e) => Ty::edge_reads(tys, call, buffers, values, Named(i), c, e),
             Inr(e) => λ v h => {
                 let after = c.region.eval(call, values, buffers := buffers);
@@ -2163,7 +2255,8 @@ theorem Ty::out_reads(tys: Nat → RecInfo, call: function_ir_eval::Answers(), b
             },
         },
         Count => λ never => false_elim(never),
-        Enum(_) => λ never => false_elim(never),
+        Enum(i) => λ small below v h => trans(Ty::clamp_reads(call, buffers, values, tys(i).alts.last, c, tys(i).alts.tag(v), small, below, h),
+            sym(Ty::cast_enum_word(tys, i, v))),
     }
 }
 
@@ -2230,7 +2323,7 @@ theorem Ty::fields_rest_reads(values: Valuation(), port: Nat, fs: List<Ty>): Ty:
 // are the value's (none but for a record of two words).
 theorem Ty::also_reads(tys: Nat → RecInfo, call: function_ir_eval::Answers(), buffers: Buffers(), values: Valuation(), t: Ty, c: Lowered): t.Out(tys) →
     (v: t.sem(tys)) → t.Holds(tys, c.region.eval(call, values, buffers := buffers), c.result, v) →
-    words_of(t.widen(c).region.eval(call, values, buffers := buffers), t.also_ports(tys, t.widen(c).result)) = Ty::rest_words(tys, t, v) {
+    words_of(t.widen(tys, c).region.eval(call, values, buffers := buffers), t.also_ports(tys, t.widen(tys, c).result)) = Ty::rest_words(tys, t, v) {
     match t {
         Word(w) => λ _ _ _ => refl,
         Bit => λ never => false_elim(never),
@@ -2244,7 +2337,7 @@ theorem Ty::also_reads(tys: Nat → RecInfo, call: function_ir_eval::Answers(), 
             Ty::fields_rest_reads(c.region.eval(call, values, buffers := buffers), c.result, tys(i).fields, words, tys(i).get(v), h)
         },
         Count => λ never => false_elim(never),
-        Enum(_) => λ never => false_elim(never),
+        Enum(_) => λ _ _ _ => refl,
     }
 }
 
@@ -2305,8 +2398,8 @@ fn Fun::entered(nodes: List<Node>, c: Lowered) → Lowered {
 }
 
 fn Fun::code_of(self f: Fun, tys: Nat → RecInfo, e: Entry, c: Lowered) → Function {
-    Function(Fun::param_ids(f.params, 0), f.result.widen(Fun::entered(e.nodes, c)).region, f.result.widen(Fun::entered(e.nodes, c)).result,
-        lent := f.lent, also := f.result.also_ports(tys, f.result.widen(Fun::entered(e.nodes, c)).result))
+    Function(Fun::param_ids(f.params, 0), f.result.widen(tys, Fun::entered(e.nodes, c)).region, f.result.widen(tys, Fun::entered(e.nodes, c)).result,
+        lent := f.lent, also := f.result.also_ports(tys, f.result.widen(tys, Fun::entered(e.nodes, c)).result))
 }
 
 fn Fun::lower_typed(self f: Fun, w: World, c: Lowered) → Option<Function> {
@@ -2561,6 +2654,12 @@ theorem Fun::entry_holds(tys: Nat → RecInfo, buffers: Buffers(), ps: List<Ty>)
     }
 }
 
+// The body's code after the entry's nodes ends where the body's does.
+theorem Fun::entered_below(tys: Nat → RecInfo, t: Ty, c: Lowered, h: t.Below(tys, c.result, c.next)): (nodes: List<Node>) →
+    t.Below(tys, Fun::entered(nodes, c).result, Fun::entered(nodes, c).next) {
+    λ nodes => match nodes { Nil => h, Cons(_, _) => h }
+}
+
 // The body's code after the entry's nodes runs the body over what they
 // leave.
 theorem Fun::entered_holds(tys: Nat → RecInfo, call: function_ir_eval::Answers(), buffers: Buffers(), values: Valuation(), t: Ty, c: Lowered,
@@ -2607,7 +2706,8 @@ theorem Fun::lower_sound(self f: Fun, w: World): f.LowerHolds(w, f.lower(w)) {
                 let value = Ty::cast(w.tys, body_ty, f.result, Tm::sem(f.body, w, f.context(), env));
                 let ran = j(lowered, λ r _ => Tm::LowerHolds(f.body, w, f.context(), e.ports, e.next, r),
                     Tm::lower_sound(f.body, w, f.context(), e.ports, e.next))(call, agree, inside, env, entered.left, entered.right);
-                Ty::out_reads(w.tys, call, w.spans, values, f.result, Fun::entered(e.nodes, c), er, value,
+                Ty::out_reads(w.tys, call, w.spans, values, f.result, Fun::entered(e.nodes, c), er,
+                    Fun::entered_below(w.tys, f.result, c, Ty::below_cast(w.tys, body_ty, f.result, eb, c.result, c.next, ran.right.left), e.nodes), value,
                     Fun::entered_holds(w.tys, call, w.spans, values, f.result, c, value, e.nodes,
                         Ty::cast_holds(w.tys, after, c.result, body_ty, f.result, eb, Tm::sem(f.body, w, f.context(), env), ran.right.right.right)))
             }))))))

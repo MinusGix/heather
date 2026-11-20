@@ -708,7 +708,8 @@ fn Tm::lit(t: Ty, n: Nat, tys: Nat → RecInfo) → t.sem(tys) {
         Lines => Nil,
         Named(i) => Named(i).default(tys),
         Count => n,
-        Enum(i) => Enum(i).default(tys),
+        // A constructor of an enum by its index (`EnumInfo.of`).
+        Enum(i) => tys(i).alts.of(n),
     }
 }
 

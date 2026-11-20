@@ -189,8 +189,11 @@ impl Shape {
     /// `fields`, for a function returning a record of two words, are the
     /// record's fields' names: the first is the word it returns in RAX and
     /// the second the one in RDX (`{source}::agrees_also`).
+    ///
+    /// `result`, for a function returning an enum, is its table entry: the
+    /// function returns the value's tag word (`RecInfo::enum_word`).
     pub fn runtime(prefix: &str, owner: &str, source: &str, functions: usize, arity: usize, widths: &[u64], fields: Option<&[String]>,
-        enums: &[(usize, u64)]) -> Shape {
+        enums: &[(usize, u64)], result: Option<u64>) -> Shape {
         let parameters = arguments(arity);
         let table = format!("{source}::world.tys");
         let narrowed: Vec<String> = parameters.iter().enumerate()
@@ -199,11 +202,15 @@ impl Shape {
         let (answer, rest) = match fields {
             Some([first, others @ ..]) => (format!("{called}.{first}"),
                 Some(format!("[{}]", others.iter().map(|field| format!("{called}.{field}")).collect::<Vec<_>>().join(", ")))),
-            _ => (match widths.first() { Some(&w) if w != 64 => format!("runtime_wide({w}, {called})"), _ => called }, None),
+            _ => (match (result, widths.first()) {
+                (Some(i), _) => format!("RecInfo::enum_word({table}, {i}, {called})"),
+                (None, Some(&w)) if w != 64 => format!("runtime_wide({w}, {called})"),
+                _ => called,
+            }, None),
         };
         let mut definitions = format!("import {owner};\nimport runtime;\n");
         // An enum's type and tag word are `rt`'s (`RecInfo::enum_at`, `enum_word`).
-        if !enums.is_empty() { definitions.push_str("import rt;\n"); }
+        if !enums.is_empty() || result.is_some() { definitions.push_str("import rt;\n"); }
         definitions.push_str(&format!("\n// The program `runtime fn {source}` published, callees first: function `k` the one with `k` after it.
 fn {prefix}_program() â†’ List<Function> {{ {source}::program }}
 "));
@@ -381,7 +388,7 @@ pub(super) fn runtime_shape(elab: &Elaborator, prefix: &str, owner: &str, source
     // A function lent nothing: the widths its result and its parameters
     // cross its boundary at (`Fun::edge_widths`).
     let (imports, counts) = match spans {
-        Spans::None => ("", format!("{source}::rt.edge_widths() ++ {source}::rt.params.map(Î» p => match p {{ Enum(i) => i + 1, _ => 0 }})")),
+        Spans::None => ("", format!("{source}::rt.edge_widths() ++ Cons(match {source}::rt.result {{ Enum(i) => i + 1, _ => 0 }}, {source}::rt.params.map(Î» p => match p {{ Enum(i) => i + 1, _ => 0 }}))")),
         Spans::Read => ("import function_ir_lower_calls;\nimport function_ir_writes;\n", format!("program_counts({source}::program)")),
         Spans::Written => ("import function_ir_lower_calls;\nimport function_ir_writes;\nimport function_ir_rows;\n",
             format!("program_counts({source}::program)")),
@@ -414,10 +421,12 @@ fn {prefix}_rows(rows: List<List<Bool>>, counts: List<Nat>, f, functions: Nat) â
     match numbers[..] {
         [_, arity, ..] if arity > 8 => Err(format!("`{source}` takes {arity} words{}: compile-x86 passes at most eight, six in registers and two on the stack",
             if lent { ", an address and a length for each span among them" } else { "" })),
-        [functions, arity, ref both @ ..] if functions >= 1 && !lent && both.len() == 2 * arity as usize + 1 => {
+        [functions, arity, ref both @ ..] if functions >= 1 && !lent && both.len() == 2 * arity as usize + 2 => {
             let (widths, codes) = both.split_at(arity as usize + 1);
-            // Each enum parameter, by position, and its table entry.
-            let enums: Vec<(usize, u64)> = codes.iter().enumerate().filter(|(_, code)| **code > 0).map(|(i, code)| (i, code - 1)).collect();
+            // An enum result's table entry, then each enum parameter, by
+            // position, and its table entry.
+            let result = match codes[0] { 0 => None, code => Some(code - 1) };
+            let enums: Vec<(usize, u64)> = codes[1..].iter().enumerate().filter(|(_, code)| **code > 0).map(|(i, code)| (i, code - 1)).collect();
             // A record of two words as the result: its fields' names, as
             // the generator spells them (`{source}::fields`).
             let fields = if elab.qualified_global(&format!("{source}::agrees_also")).is_some() {
@@ -430,7 +439,7 @@ fn {prefix}_rows(rows: List<List<Bool>>, counts: List<Nat>, f, functions: Nat) â
             if fields.is_some() && !enums.is_empty() {
                 return Err(format!("`{source}` takes an enum and returns two words: not stated yet"));
             }
-            Ok(Shape::runtime(prefix, owner, source, functions as usize, arity as usize, widths, fields.as_deref(), &enums))
+            Ok(Shape::runtime(prefix, owner, source, functions as usize, arity as usize, widths, fields.as_deref(), &enums, result))
         }
         [functions, arity, ref counts @ ..] if functions >= 1 && spans == Spans::Read && counts.len() == functions as usize =>
             Ok(Shape::runtime_lent(prefix, owner, source, functions as usize, arity as usize, counts.to_vec())),
