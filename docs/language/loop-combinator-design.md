@@ -226,6 +226,25 @@ a PR that leaves the native gates green:
   `Loop::unique`.
 - **3c.** The other four loop files onto the node (round 4 above).
 
+**3a as built so far (2026-11-20).** A `runtime fn`'s `while` over one
+`u64` local with `u64` captures and no stated fact elaborates to the
+combinator (`loops.rs`, `lift_while_runtime`): `f#loop(c̄, v̄)` is
+`f#loop#of(c̄, v̄).run(f#State(v̄))`. Reading the step itself turned out not
+to work: matching on `step(s)`'s result against the reflected tail-mode
+body is a commuting conversion, which the kernel does not do. So the
+elaborator also writes the step's *twin*, the same tests with the two
+leaves as functions (`again(c̄, v̄′)`, `done(r)`), and a theorem
+`f#loop#elim`: `match step(c̄, State(v̄)) { Again(b) => again(c̄, b.next.v̄),
+Done(r) => done(r) } = twin(c̄, v̄, again, done)`, by `split_all; all_goals
+{ refl }`. The reflector reads the twin (`rt_reflect_loop`: `again` is the
+self-call, `done` the answer), and the generator
+(`runtime_loop_instance`) proves `Fun::Guarded` by
+`Fun::guarded_of_loop` (`rt_loop.hthr`), every obligation a conversion but
+the step's, which is the loop's own `elim`. No `#ext`, `#irrel` or
+companion is involved. Probes: `runtime_while_combinator_tests`. Still
+lifted: a state of two locals, a fact-carrying loop, `mut self` loops and
+counted `for`s.
+
 `port_fib` and `port_bits` (`runtime_ports_tests`) are refused today because
 their state, two words, is a record with no runtime layout: the lifted loop
 is a function that returns it. Stage 3a alone keeps that (its loop is still a
