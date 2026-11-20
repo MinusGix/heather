@@ -4,7 +4,7 @@ status: open
 labels: [native,layout,design]
 area: heather-in-heather
 created: 2026-11-12
-updated: 2026-11-12
+updated: 2026-11-20
 ---
 
 Minus, on the layout library (2026-11-12): "I'm unsure on the amount of functions as fields though I'm unsure of an obvious best way." Read here as two things, which is my reading and not his words: `laid record T` publishes one function per field (`T::f_part()`), and `Stored<A>` and `Part<A, B>` are themselves records of functions (`read`, `write`, `of`, `with`) with their laws.
@@ -35,3 +35,5 @@ Done when: either a `Shape` with `Holds`, `layout`, `stored` and `part` exists a
 - 2026-11-12: Prototyped, and it checks against the library as it stands (`docs/native/layout-design.md` §10.3; the files are in the project's shared folder, `layout-prototype/shape.hthr`, `shape_tests.hthr`, `laidv.hthr`, `rec.hthr`). `Shape` with `Holds`, `layout`, `stored` and `stored_layout`; `Path` with `at`, `offset` and a `find` whose answer carries its laws (`Found(s, p)`: the part, that it is of the shape `at` names, stored by that shape's codec, lying where `offset` says); and a record as one value, `Laid<T>`, its shape and the way to and from the record, from which the codec, the layout and each field's part are library functions. Probed on SHA-256's context as a shape and on a record inside a record, by `refl`. What the first sketch here had wrong: wrappers have to be steps of a path (`Inside`), `part` is better a function to an option whose answer carries its laws than a family of valid paths, and a field that is itself a laid type needs the other direction of `Part::mapped` (`Part::through`).
 
   Minus then asked why the function records are not classes, and a prototype of that checks too ([[layout-classes]]). The classes cover what this description was first wanted for (the generator choosing a load, a nested field's layout) in the open form, and a rule that orders fields can read each field's alignment from `Stored`'s `layout`, which is data already. What is left for a shape is what only data can do: a program that holds a format, and a field as a value it passes. So this is no longer recommended before stage B. Asked of Minus as a decision.
+- 2026-11-20: Survey docs/surveys/layout-rewrites-survey.md §3.1 (Isomer, arXiv:2611.19113): the case for Shape with sums and arena names, built as a canonical shape read off the declaration plus steps, each with its reconstruction (its abs) and a local law, lifted through paths and recursive bodies by lemmas proved once.
+- 2026-11-20: Minus 2026-11-20: the aim is that smart logic can lay data out and a person can also lay it out by hand. Survey §3.1 revised to that: Shape with sums, names and slots saying what they hold; a closed Shape::Valid; one generic codec theorem; layouters as untrusted functions to Shape; Isomer's proved steps kept only for slots that compute rather than store a field.

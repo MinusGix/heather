@@ -1,0 +1,12 @@
+// A `while` is a loop of the library's combinator (lib/std/core/loop.hthr,
+// docs/language/loop-combinator-design.md §5), so a module with one imports
+// `loop`; this one does not, and the refusal says so. Tests, not library:
+// nothing outside lib/_tests imports this module.
+import logic; import nat; import omega; import int;
+
+// expect-error: this module needs `import loop;`
+fn drain(n: Nat) → Nat {
+    let mut i = n;
+    while 1 <= i decreases i { i := i - 1 }
+    i
+}

@@ -5,7 +5,7 @@ labels: [compiler,design,runtime]
 area: heather-in-heather
 milestone: [hih-memory, nh-heap]
 created: 2026-07-24
-updated: 2026-10-28
+updated: 2026-11-20
 ---
 
 
@@ -123,3 +123,4 @@ place). The v1 charter itself is spent: both halves are in-tree.
 - 2026-08-15: Surface note (2026-08-15): §1.2's Impl registry gained its designed surface via the obligation-records round (docs/language/classes/obligation-records-design.md; pointer added at the design doc's §1.2) — inline clauses, the ? reporting hole, ':= derive()' (the first surface-requested transfer), via_derived(p), and provenance on registry entries. No change to this issue's Open list; the registry semantics were already settled here.
 - 2026-10-28: Proof repair survey (2026-10-28): a canonical-form `inv` repr is the paper's algebra isomorphism, and abs+inv is its strict generalisation (`docs/surveys/proof-repair-algebra-survey.md` §3). It filed [[reprgen-recursive-child-via-embedding]].
 - 2026-11-05: gardener: cites a file it shares with [[datarepr-guarded-images]] (`crates/elab/src/datarepr.rs`); [[datatype-container-algebras]] (`docs/surveys/proof-repair-algebra-survey.md`); [[surface-syntax]] (`docs/archive/surface-v2.md`).
+- 2026-11-20: Survey docs/surveys/layout-rewrites-survey.md §3.6/§3.7: Isomer measures an explicit layout conversion between phases (2.29x on a 2-3 tree), evidence for the §5.3 multi-repr trigger and its explicit-directive guardrail; a reference count as a field of the layout, removed only under proved uniqueness.

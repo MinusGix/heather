@@ -4,7 +4,7 @@ status: open
 labels: [native,layout,design]
 area: heather-in-heather
 created: 2026-11-12
-updated: 2026-11-12
+updated: 2026-11-20
 ---
 
 `laid record T { … }` (`lib/std/machine/laid.hthr`, `docs/native/layout-design.md` §6.2) places a record's fields in the order they are written. Minus decided (2026-11-12) that this is not the rule: reordering "should be "magical" by whatever setup the `laid` uses", "the ability for compiler to decide is valuable, though we don't need complex reordering yet", and it is "something to have an issue for". This is that issue.
@@ -25,3 +25,4 @@ Done when: `laid record` under `AnyOrder` places fields by a rule that is not th
 ## Log
 
 - 2026-11-12: **SHA-256's context is unpinned (PR #551, 2026-11-12).** Its bodies name `Sha256::…_at` and its theorems are stated at the names, so it is the first record a rule could move. Two things the rule can now use: `numeral(e)` gives the generator a codec's alignment as a number where `whnf` was out of budget (the second bullet above no longer needs the view of a literal), and the published `T::f_at` words are what compiled code follows. What still pins today's order, and would have to be respelled by name when a rule lands: the probes `hash_at_today` to `size_today` in `sha256_context_tests.hthr`, the two numerals Rust is given (`SHA256_CONTEXT_BYTES`, `SHA256_DIGEST_AT`, each a `refl` theorem that fails first), and the literals in `crates/linked/tests/sha256.rs` behind `the_context_lies_where_these_tests_read_it`.
+- 2026-11-20: Survey docs/surveys/layout-rewrites-survey.md §3.2: Isomer's commute/assoc steps are this issue's 'nothing to prove' made general (a permutation reconstructs by its inverse).
