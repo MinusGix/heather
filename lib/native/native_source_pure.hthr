@@ -1,0 +1,306 @@
+// Pure procedures read as their values within the levels
+// (docs/native/runtime-fn-recursion-design.md §6 step 2).
+//
+// A procedure whose body has no loop and asks nothing of Linux, and whose
+// calls are of such procedures, computes words: what it leaves in its
+// result words is a function of the environment it enters with
+// (`PureSpec::value`), and the world and the buffers are as they were. A
+// recursive one also has a depth: how many levels of counted calls its
+// body's calls nest (`PureSpec::need`). Then every call made within the
+// levels reads as its value (`Source::pure_reads`): it is never refused,
+// and the call returns with the value copied into the caller's words.
+//
+// The obligations are per procedure and about one run of its body, with
+// each call it makes answered by its value (`Stmt::thread_by`): the calls
+// it makes keep within the levels it has (`Stmt::calls_ok`) and it leaves
+// its value and the caller's buffers (`Source::PureBodies`). The theorem
+// that discharges every call is proved once, by induction on the levels
+// and, at one level, on the ranks of calls that spend none.
+import logic;
+import nat;
+import list;
+import option;
+import bool;
+import bitvec;
+import coitree;
+import coitree_eutt;
+import coitree_lag;
+import coitree_rec;
+import itree;
+import linux_calls;
+import linux_trees;
+import linux_world;
+import linux_world_co;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import native_source;
+import native_source_co;
+import native_source_io;
+
+// ---------------------------------------------------------------------------
+// What pure procedures compute
+
+// Each procedure's result words, and the levels its body's calls nest, as
+// functions of the environment its call enters with.
+record PureSpec { value: Nat → Env → List<BitVec(64)>, need: Nat → Env → Nat }
+
+// A pure call's answer: the world as it was, and the callee's value copied
+// into the caller's result words. A call of no procedure does nothing, as
+// it does in the source.
+fn Source::pure_answer(self src: Source, spec: PureSpec) → CallAnswers() {
+    λ procedure args results env io => Mutated(io, match src.procedures.nth(procedure) {
+        None => Onward(env),
+        Some(proc) => Onward(Env(env.words, env.buffers, env.args).set_words(results, spec.value(procedure, proc.enter(env, args)))),
+    })
+}
+
+// Whether a call made with `k` levels left keeps within them: a counted
+// call spends one, and the callee's body needs at most what is left.
+fn Source::pure_within(self src: Source, spec: PureSpec, counted: Nat → Bool, k: Nat) → Nat → List<Nat> → List<Nat> → Env → Bool {
+    λ procedure args results env => match k.spend(counted(procedure)) {
+        None => False,
+        Some(lj) => match src.procedures.nth(procedure) {
+            None => True,
+            Some(proc) => spec.need(procedure, proc.enter(env, args)).leb(lj),
+        },
+    }
+}
+
+// What each procedure's body owes, run with its calls answered by their
+// values: no loop, and from any caller with the levels its value needs,
+// every call it makes keeps within them, and it returns its value with the
+// world and the caller's buffers as they were.
+fn Source::PureBodies(self src: Source, call: Writers(), spec: PureSpec, counted: Nat → Bool) → Type {
+    (procedure: Nat) → (proc: Procedure) → src.procedures.nth(procedure) = Some(proc) → proc.body.loop_free().IsTrue() ∧ (
+        (caller: Env) → (args, results: List<Nat>) → (lj: Nat) → spec.need(procedure, proc.enter(caller, args)).leb(lj).IsTrue() → (io: Io) →
+            proc.body.calls_ok(call, src.pure_answer(spec), src.pure_within(spec, counted, lj), proc.enter(caller, args), io).IsTrue() ∧
+            Stmt::thread_by(proc.body, call, src.pure_answer(spec), proc.enter(caller, args), io).after = io ∧
+            proc.leave(caller, results, Stmt::thread_by(proc.body, call, src.pure_answer(spec), proc.enter(caller, args), io).value) =
+                Onward(Env(caller.words, caller.buffers, caller.args).set_words(results, spec.value(procedure, proc.enter(caller, args)))))
+}
+
+// What the theorem needs of a source: charges that fit the levels, bodies
+// that keep their obligations, and a rank for each procedure that every
+// call spending no level goes down.
+record Source::Pure(self src: Source, call: Writers(), ch: Charges, spec: PureSpec, counted: Nat → Bool, total: Nat → Nat → Nat, top: Nat → Nat, rank: Nat → Nat) {
+    levels: ch.Levels(src, counted, total, top),
+    bodies: src.PureBodies(call, spec, counted),
+    ranked: (q: Nat) → (proc: Procedure) → src.procedures.nth(q) = Some(proc) → (p: Nat) → Mem(p, proc.body.performed()) → counted(p) = False → rank(p) < rank(q),
+}
+
+// ---------------------------------------------------------------------------
+// One call
+
+// A call of `procedure` with `k` levels left has the bytes its body takes
+// with the levels the call leaves, and a return address.
+fn Source::FitsAt(self src: Source, ch: Charges, counted: Nat → Bool, total: Nat → Nat → Nat, k: Nat, procedure, left: Nat) → Type {
+    (callee: Procedure) → src.procedures.nth(procedure) = Some(callee) → (lj: Nat) → k.spend(counted(procedure)) = Some(lj) →
+        (ch.cost(procedure) + total(lj, procedure)) + 8 <= left
+}
+
+// Every call of a procedure `admit` names, made with `k` levels left
+// within them and with the bytes they take, reads as its value.
+fn Source::PureAt(self src: Source, call: Writers(), ch: Charges, spec: PureSpec, counted: Nat → Bool, total: Nat → Nat → Nat, k: Nat, admit: Nat → Type) → Type {
+    (procedure: Nat) → admit(procedure) → (left: Nat) → src.FitsAt(ch, counted, total, k, procedure, left) → (args, results: List<Nat>) → (env: Env) →
+        src.pure_within(spec, counted, k)(procedure, args, results, env).IsTrue() →
+        Io::Reads(src.performs_co(call, ch, left)(procedure, args, results, env), λ io => CRet(src.pure_answer(spec)(procedure, args, results, env, io)))
+}
+
+// A call run is, up to silent steps, what the call does with its body's
+// calls run (`Source::performs_lag`).
+theorem Source::performs_unfold(self src: Source, call: Writers(), ch: Charges, procedure: Nat, args, results: List<Nat>, env: Env, left: Nat):
+    Eutt<Flow>(Events::linux(), src.performs_co(call, ch, left)(procedure, args, results, env),
+        src.answers_co(call, ch, ProcedureCall(procedure, args, results, env, left)))
+{
+    let c = ProcedureCall(procedure, args, results, env, left);
+    let inner: CoTree<Flow>(Events::linux()) = CoTree::mrec(Events::procedure_calls(), Events::linux(), src.handler(call, ch),
+        CoTree::bind<Flow, Flow>(Events::with_calls(), src.handler(call, ch)(c), λ flow => CRet(flow)));
+    Eutt::trans(Events::linux(), src.performs_co(call, ch, left)(procedure, args, results, env), CTau(inner), src.answers_co(call, ch, c),
+        Eutt::of_bisim(Events::linux(), src.performs_co(call, ch, left)(procedure, args, results, env), CTau(inner),
+            Bisim::of_obs(Events::linux(), src.performs_co(call, ch, left)(procedure, args, results, env), CTau(inner), refl)),
+        Eutt::trans(Events::linux(), CTau(inner), inner, src.answers_co(call, ch, c), Eutt::tau_l(Events::linux(), inner),
+            Eutt::sym(Events::linux(), src.answers_co(call, ch, c), inner,
+                Lag::eutt(Events::linux(), src.answers_co(call, ch, c), inner, src.performs_lag(call, ch, c)))))
+}
+
+// One call within the levels, its body's calls read as their values: it
+// is not refused, its body runs to its value, and the call returns it.
+theorem Source::pure_answers(self src: Source, call: Writers(), ch: Charges, spec: PureSpec, counted: Nat → Bool, total: Nat → Nat → Nat, top: Nat → Nat,
+    rank: Nat → Nat, pure: src.Pure(call, ch, spec, counted, total, top, rank),
+    procedure, k, lj: Nat, spent: k.spend(counted(procedure)) = Some(lj), left: Nat, fits: src.FitsAt(ch, counted, total, k, procedure, left),
+    inner: (proc: Procedure) → src.procedures.nth(procedure) = Some(proc) →
+        Stmt::AnsweredWhere(proc.body, src.performs_co(call, ch, left - ch.cost(procedure)), src.pure_answer(spec), src.pure_within(spec, counted, lj)),
+    args, results: List<Nat>, env: Env, within: src.pure_within(spec, counted, k)(procedure, args, results, env).IsTrue(), io: Io):
+    Eutt<Mutated<Io, Flow>>(Events::none(), Io::against_co(src.answers_co(call, ch, ProcedureCall(procedure, args, results, env, left)), io),
+        CRet(src.pure_answer(spec)(procedure, args, results, env, io)))
+{
+    let w = j(spent, λ s _ => (match s as λ _ => Bool {
+            None => False,
+            Some(j2) => match src.procedures.nth(procedure) {
+                None => True,
+                Some(proc) => spec.need(procedure, proc.enter(env, args)).leb(j2),
+            },
+        }).IsTrue(), within);
+    (match src.procedures.nth(procedure) as λ o => src.procedures.nth(procedure) = o →
+        (match o as λ _ => Bool { None => True, Some(proc) => spec.need(procedure, proc.enter(env, args)).leb(lj) }).IsTrue() →
+        Eutt<Mutated<Io, Flow>>(Events::none(), Io::against_co(match o as λ _ => CoTree<Flow>(Events::linux()) {
+                None => CRet(Onward(env)),
+                Some(proc) => match ch.refuses(procedure, left) {
+                    True => CRet(Exited(call_depth_status())),
+                    False => CoTree::map(Events::linux(), proc.body.denote_co(call, src.performs_co(call, ch, left - ch.cost(procedure)))(proc.enter(env, args)),
+                        λ flow => proc.leave(env, results, flow)),
+                },
+            }, io),
+            CRet(Mutated(io, match o as λ _ => Flow {
+                None => Onward(env),
+                Some(proc) => Onward(Env(env.words, env.buffers, env.args).set_words(results, spec.value(procedure, proc.enter(env, args)))),
+            }))) {
+        None => λ _ _ => ERet(0, 0, Mutated(io, Onward(env)), refl, refl),
+        Some(proc) => λ found enough => {
+            let owed = pure.bodies(procedure, proc, found);
+            let run = owed.right(env, args, results, lj, enough, io);
+            let entered = proc.enter(env, args);
+            let perform = src.performs_co(call, ch, left - ch.cost(procedure));
+            let answer = src.pure_answer(spec);
+            let mb = Stmt::thread_by(proc.body, call, answer, entered, io);
+            let body_tree = proc.body.denote_co(call, perform)(entered);
+            let back: Flow → CoTree<Flow>(Events::linux()) = λ flow => CRet(proc.leave(env, results, flow));
+            let kb = λ (m: Mutated<Io, Flow>) => Io::against_co(back(m.value), m.after);
+            let value = Onward(Env(env.words, env.buffers, env.args).set_words(results, spec.value(procedure, entered)));
+            let t3: Partial(Mutated<Io, Flow>) = kb(mb);
+            let at_end: Eutt<Mutated<Io, Flow>>(Events::none(), t3, CRet(Mutated(mb.after, proc.leave(env, results, mb.value)))) =
+                ERet(0, 0, Mutated(mb.after, proc.leave(env, results, mb.value)), refl, refl);
+            let at_io = j(run.right.left, λ y _ => Eutt<Mutated<Io, Flow>>(Events::none(), t3, CRet(Mutated(y, proc.leave(env, results, mb.value)))), at_end);
+            let at_value = j(run.right.right, λ y _ => Eutt<Mutated<Io, Flow>>(Events::none(), t3, CRet(Mutated(io, y))), at_io);
+            let ran: Eutt<Mutated<Io, Flow>>(Events::none(), Io::against_co(CoTree::bind(Events::linux(), body_tree, back), io), CRet(Mutated(io, value))) =
+                Eutt::trans(Events::none(), Io::against_co(CoTree::bind(Events::linux(), body_tree, back), io),
+                    CoTree::bind(Events::none(), Io::against_co(body_tree, io), kb), CRet(Mutated(io, value)),
+                    Eutt::of_bisim(Events::none(), Io::against_co(CoTree::bind(Events::linux(), body_tree, back), io),
+                        CoTree::bind(Events::none(), Io::against_co(body_tree, io), kb), Io::against_co_bind(back, body_tree, io)),
+                    Eutt::trans(Events::none(), CoTree::bind(Events::none(), Io::against_co(body_tree, io), kb), CoTree::bind(Events::none(), CRet(mb), kb),
+                        CRet(Mutated(io, value)),
+                        Eutt::bind_cong_l(Events::none(), Io::against_co(body_tree, io), CRet(mb), kb,
+                            proc.body.reads_where(call, perform, answer, src.pure_within(spec, counted, lj), inner(proc, found), owed.left, entered, io, run.left)),
+                        Eutt::trans(Events::none(), CoTree::bind(Events::none(), CRet(mb), kb), t3, CRet(Mutated(io, value)),
+                            Eutt::bind_ret_l(Events::none(), mb, kb), at_value)));
+            j(sym(ch.levels_admit(src, counted, total, top, pure.levels, procedure, lj, left, fits(proc, found, lj, spent))),
+                λ b _ => Eutt<Mutated<Io, Flow>>(Events::none(), Io::against_co(match b as λ _ => CoTree<Flow>(Events::linux()) {
+                        True => CRet(Exited(call_depth_status())),
+                        False => CoTree::map(Events::linux(), body_tree, λ flow => proc.leave(env, results, flow)),
+                    }, io), CRet(Mutated(io, value))),
+                ran)
+        },
+    })(refl, w)
+}
+
+// The calls a body makes, with the levels its call leaves and the bytes
+// past it, read as their values where every procedure it calls does.
+theorem Source::pure_body_answered(self src: Source, call: Writers(), ch: Charges, spec: PureSpec, counted: Nat → Bool, total: Nat → Nat → Nat, top: Nat → Nat,
+    rank: Nat → Nat, pure: src.Pure(call, ch, spec, counted, total, top, rank),
+    procedure: Nat, proc: Procedure, found: src.procedures.nth(procedure) = Some(proc), k, lj: Nat, spent: k.spend(counted(procedure)) = Some(lj),
+    left: Nat, fits: src.FitsAt(ch, counted, total, k, procedure, left),
+    at: src.PureAt(call, ch, spec, counted, total, lj, λ q => Mem(q, proc.body.performed()))):
+    Stmt::AnsweredWhere(proc.body, src.performs_co(call, ch, left - ch.cost(procedure)), src.pure_answer(spec), src.pure_within(spec, counted, lj))
+{
+    λ q a r e mem okq => at(q, mem, left - ch.cost(procedure), λ callee found_q j2 spent2 => {
+        let step = pure.levels.step(procedure, proc, found, q, callee, found_q, mem, lj, j2, spent2);
+        let room = fits(proc, found, lj, spent);
+        omega(step, room)
+    }, a, r, e, okq)
+}
+
+// ---------------------------------------------------------------------------
+// Every call, by levels and ranks
+
+// A call spending a level, with none left, is outside them.
+theorem Source::pure_counted_none(self src: Source, call: Writers(), ch: Charges, spec: PureSpec, counted: Nat → Bool, total: Nat → Nat → Nat):
+    src.PureAt(call, ch, spec, counted, total, 0, λ q => (counted(q) = True))
+{
+    λ p cnt left fits args results env within => false_elim(j(cnt, λ b _ => (match Nat::spend(0, b) as λ _ => Bool {
+            None => False,
+            Some(j2) => match src.procedures.nth(p) {
+                None => True,
+                Some(proc) => spec.need(p, proc.enter(env, args)).leb(j2),
+            },
+        }).IsTrue(), within))
+}
+
+// A call spending a level, its body's calls read with the level fewer.
+theorem Source::pure_counted(self src: Source, call: Writers(), ch: Charges, spec: PureSpec, counted: Nat → Bool, total: Nat → Nat → Nat, top: Nat → Nat,
+    rank: Nat → Nat, pure: src.Pure(call, ch, spec, counted, total, top, rank), k: Nat,
+    below: src.PureAt(call, ch, spec, counted, total, k, λ _ => True)):
+    src.PureAt(call, ch, spec, counted, total, Succ(k), λ q => (counted(q) = True))
+{
+    λ p cnt left fits args results env within => {
+        let spent: (Nat::spend(Succ(k), counted(p)) = Some(k)) = j(sym(cnt), λ b _ => Nat::spend(Succ(k), b) = Some(k), refl);
+        Io::reads_eutt(src.performs_co(call, ch, left)(p, args, results, env), src.answers_co(call, ch, ProcedureCall(p, args, results, env, left)),
+            src.performs_unfold(call, ch, p, args, results, env, left), λ io => CRet(src.pure_answer(spec)(p, args, results, env, io)),
+            λ io => src.pure_answers(call, ch, spec, counted, total, top, rank, pure, p, Succ(k), k, spent, left, fits,
+                λ proc found => src.pure_body_answered(call, ch, spec, counted, total, top, rank, pure, p, proc, found, Succ(k), k, spent, left, fits,
+                    λ q _ left2 fits2 a2 r2 e2 w2 => below(q, trivial, left2, fits2, a2, r2, e2, w2)),
+                args, results, env, within, io))
+    }
+}
+
+// At one level, a call spending none, of a procedure ranked below `r`: its
+// body's calls spend a level or go down the ranks.
+theorem Source::pure_by_rank(self src: Source, call: Writers(), ch: Charges, spec: PureSpec, counted: Nat → Bool, total: Nat → Nat → Nat, top: Nat → Nat,
+    rank: Nat → Nat, pure: src.Pure(call, ch, spec, counted, total, top, rank), k: Nat,
+    counted_at: src.PureAt(call, ch, spec, counted, total, k, λ q => (counted(q) = True)), r: Nat):
+    src.PureAt(call, ch, spec, counted, total, k, λ q => (counted(q) = False ∧ rank(q) < r))
+{
+    match r {
+        Zero => λ p adm => {
+            let never: False = omega(adm.right);
+            false_elim(never)
+        },
+        Succ(r2) => λ p adm left fits args results env within => {
+            let spent: (k.spend(counted(p)) = Some(k)) = j(sym(adm.left), λ b _ => k.spend(b) = Some(k), refl);
+            Io::reads_eutt(src.performs_co(call, ch, left)(p, args, results, env), src.answers_co(call, ch, ProcedureCall(p, args, results, env, left)),
+                src.performs_unfold(call, ch, p, args, results, env, left), λ io => CRet(src.pure_answer(spec)(p, args, results, env, io)),
+                λ io => src.pure_answers(call, ch, spec, counted, total, top, rank, pure, p, k, k, spent, left, fits,
+                    λ proc found => src.pure_body_answered(call, ch, spec, counted, total, top, rank, pure, p, proc, found, k, k, spent, left, fits,
+                        λ q mem left2 fits2 a2 rs2 e2 w2 => (match counted(q) as λ b => counted(q) = b →
+                                Io::Reads(src.performs_co(call, ch, left2)(q, a2, rs2, e2), λ io2 => CRet(src.pure_answer(spec)(q, a2, rs2, e2, io2))) {
+                            True => λ cnt => counted_at(q, cnt, left2, fits2, a2, rs2, e2, w2),
+                            False => λ unc => {
+                                let down = pure.ranked(p, proc, found, q, mem, unc);
+                                let lt: (rank(q) < r2) = omega(down, adm.right);
+                                src.pure_by_rank(call, ch, spec, counted, total, top, rank, pure, k, counted_at, r2)(q, And(unc, lt), left2, fits2, a2, rs2, e2, w2)
+                            },
+                        })(refl)),
+                    args, results, env, within, io))
+        },
+    }
+}
+
+// Every call at one level, from the calls there that spend a level: the
+// others go down the ranks.
+theorem Source::pure_at_level(self src: Source, call: Writers(), ch: Charges, spec: PureSpec, counted: Nat → Bool, total: Nat → Nat → Nat, top: Nat → Nat,
+    rank: Nat → Nat, pure: src.Pure(call, ch, spec, counted, total, top, rank), k: Nat,
+    counted_at: src.PureAt(call, ch, spec, counted, total, k, λ q => (counted(q) = True))):
+    src.PureAt(call, ch, spec, counted, total, k, λ _ => True)
+{
+    λ p _ left fits args results env within => (match counted(p) as λ b => counted(p) = b →
+            Io::Reads(src.performs_co(call, ch, left)(p, args, results, env), λ io => CRet(src.pure_answer(spec)(p, args, results, env, io))) {
+        True => λ cnt => counted_at(p, cnt, left, fits, args, results, env, within),
+        False => λ unc => {
+            let lt: (rank(p) < Succ(rank(p))) = omega();
+            src.pure_by_rank(call, ch, spec, counted, total, top, rank, pure, k, counted_at, Succ(rank(p)))(p, And(unc, lt), left, fits, args, results, env, within)
+        },
+    })(refl)
+}
+
+// The theorem: every call made with `k` levels left, within them and with
+// the bytes they take, reads as its value.
+theorem Source::pure_reads(self src: Source, call: Writers(), ch: Charges, spec: PureSpec, counted: Nat → Bool, total: Nat → Nat → Nat, top: Nat → Nat,
+    rank: Nat → Nat, pure: src.Pure(call, ch, spec, counted, total, top, rank), k: Nat):
+    src.PureAt(call, ch, spec, counted, total, k, λ _ => True)
+{
+    match k {
+        Zero => src.pure_at_level(call, ch, spec, counted, total, top, rank, pure, 0, src.pure_counted_none(call, ch, spec, counted, total)),
+        Succ(k2) => src.pure_at_level(call, ch, spec, counted, total, top, rank, pure, Succ(k2),
+            src.pure_counted(call, ch, spec, counted, total, top, rank, pure, k2, src.pure_reads(call, ch, spec, counted, total, top, rank, pure, k2))),
+    }
+}
