@@ -226,7 +226,12 @@ a PR that leaves the native gates green:
   `Loop::unique`.
 - **3c.** The other four loop files onto the node (round 4 above).
 
-Stage 3a is the one `port_bits`'s two loop words need.
+`port_fib` and `port_bits` (`runtime_ports_tests`) are refused today because
+their state, two words, is a record with no runtime layout: the lifted loop
+is a function that returns it. Stage 3a alone keeps that (its loop is still a
+measured `Fun`), so those two need either a two-word result for the loop's
+function or stage 3b, whose node keeps the state in the loop's homes and
+never makes it a value. 3b is the one that fixes them for good.
 
 ## 7. Bootstrapping
 
