@@ -533,7 +533,7 @@ fn leaf_region(nodes: List<Node>) → Region { Region(Ports(nodes_inputs(nodes))
 // miss RBX.
 fn leaf_checks(nodes: List<Node>, inputs, outputs: List<Gpr>) → Bool {
     nodes_evaluable(nodes) && (ports_absent(nodes_inputs(nodes), nodes_writes(nodes)) &&
-        (gprs_distinct(Cons(Rbx, inputs)) && Rbx.absent_from(outputs)))
+        (gprs_distinct(Cons(Rbx, inputs)) && (Rbx.absent_from(outputs) && nodes_total(nodes))))
 }
 
 fn Layout::leaf_inputs(self layout: Layout, nodes: List<Node>) → List<Gpr> { layout.leaf_pool().take(nodes_inputs(nodes).len()) }

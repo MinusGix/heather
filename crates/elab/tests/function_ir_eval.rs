@@ -33,8 +33,8 @@ fn a_wrong_result_is_refused() {
 
 #[test]
 fn the_theorem_does_not_instantiate_at_the_wrong_arity() {
-    let mutant = EXAMPLES.replace("program_eval_computes(pair(), pair_evaluable, 1, [w(3), w(4)], trivial)",
-        "program_eval_computes(pair(), pair_evaluable, 1, [w(3)], trivial)");
+    let mutant = EXAMPLES.replace("program_eval_computes(pair(), pair_evaluable, 1, [w(3), w(4)], trivial,",
+        "program_eval_computes(pair(), pair_evaluable, 1, [w(3)], trivial,");
     assert_ne!(mutant, EXAMPLES, "the mutation site moved");
     let mut elaborator = checker();
     assert!(elaborator.elab_module_source("function_ir_eval_examples", &mutant).is_err(),

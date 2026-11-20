@@ -1596,9 +1596,22 @@ theorem {prefix}_scans_{k}(): program_scan_at({program}.drop({d}), {table}.drop(
     program_scan_at_evaluable({program}, {table}, program_scan_at_drop_zero({program}, {table}, {prefix}_scans_{last}()))
 }}
 
-// No node of the program requires anything of its operands, so it is
-// defined at every argument list (`program_total_defined`).
-theorem {prefix}_total(): program_total({program}).IsTrue() {{ trivial }}", last = functions - 1));
+", last = functions - 1));
+    // No node of the program requires anything of its operands, so it is
+    // defined at every argument list (`program_total_defined`), checked a
+    // function at a time as the scan is.
+    text.push_str(&format!("theorem {prefix}_totals_none(): program_total({program}.drop({functions})).IsTrue() {{ trivial }}\n"));
+    for k in 0..functions {
+        let below = if k == 0 { "none".to_string() } else { (k - 1).to_string() };
+        text.push_str(&format!("theorem {prefix}_total_head_{k}(): program_total_head({program}.drop({d})).IsTrue() {{ trivial }}
+theorem {prefix}_totals_{k}(): program_total({program}.drop({d})).IsTrue() {{
+    program_total_drop({program}, {d}, {prefix}_total_head_{k}(), {prefix}_totals_{below}())
+}}
+", d = functions - 1 - k));
+    }
+    text.push_str(&format!("theorem {prefix}_total(): program_total({program}).IsTrue() {{
+    program_total_drop_zero({program}, {prefix}_totals_{last}())
+}}", last = functions - 1));
     text
 }
 

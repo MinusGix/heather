@@ -1393,6 +1393,34 @@ fn program_total(functions: List<Function>) → Bool {
 }
 
 // A program none of whose nodes requires anything is defined everywhere.
+// `program_total` a function at a time, as `program_scan_at_drop`: the
+// kernel's fuel is per declaration, so a certificate pays for its largest
+// function, not for the sum of them.
+fn program_total_head(functions: List<Function>) → Bool {
+    match functions { Nil => True, Cons(last, _) => last.body.total() }
+}
+
+theorem program_total_drop_zero(functions: List<Function>):
+    program_total(functions.drop(0)).IsTrue() → program_total(functions).IsTrue() {
+    match functions { Nil => λ h => h, Cons(_, _) => λ h => h }
+}
+
+theorem program_total_drop(functions: List<Function>): (n: Nat) →
+    program_total_head(functions.drop(n)).IsTrue() → program_total(functions.drop(n + 1)).IsTrue() →
+    program_total(functions.drop(n)).IsTrue() {
+    match functions {
+        Nil => λ _ _ _ => trivial,
+        Cons(last, earlier) => λ n => match n as λ i =>
+            program_total_head(Cons(last, earlier).drop(i)).IsTrue() →
+            program_total(Cons(last, earlier).drop(i + 1)).IsTrue() →
+            program_total(Cons(last, earlier).drop(i)).IsTrue() {
+            Zero => λ head rest => Bool::is_true_and_intro(last.body.total(), program_total(earlier), head,
+                program_total_drop_zero(earlier, rest)),
+            Succ(k) => λ head rest => program_total_drop(earlier, k, head, rest),
+        },
+    }
+}
+
 theorem program_total_defined(functions: List<Function>, buffers: Buffers()): program_total(functions).IsTrue() →
     (f: Nat) → (words: List<BitVec(64)>) → program_defined_over(buffers, functions, f, words).IsTrue() {
     match functions {
