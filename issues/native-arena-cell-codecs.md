@@ -5,7 +5,7 @@ labels: [native,memory,datarepr]
 area: heather-in-heather
 milestone: [nh-heap]
 created: 2026-11-02
-updated: 2026-11-02
+updated: 2026-11-20
 ---
 
 `lib/native/native_arena.hthr` represents `List<List<BitVec(8)>>` (a file's
@@ -29,3 +29,4 @@ Both have `abs`, `inv` and the extension and image laws proved in
 ## Log
 
 - 2026-11-05: gardener: cites a file it shares with [[datarepr-guarded-images]] (`lib/native/native_arena.hthr`); [[runtime-fn-arena-lists]] (`lib/native/native_arena.hthr`).
+- 2026-11-20: Survey docs/surveys/layout-rewrites-survey.md §3.1/§3.4: derive the list and tree cells from canonical shapes plus steps; the line cell's length field is a cached len of the payload, statable as an image law giving len a certified constant-time Impl.

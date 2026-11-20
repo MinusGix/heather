@@ -5,7 +5,7 @@ labels: [datarepr,elaborator]
 area: heather-in-heather
 milestone: [nh-heap]
 created: 2026-11-02
-updated: 2026-11-02
+updated: 2026-11-20
 ---
 
 docs/native/datarepr-design.md §1.3 (FINDING 1) settled that constructor images are
@@ -40,3 +40,4 @@ image is guarded by the arena's limit, and a negative control (an unguarded
 ## Log
 
 - 2026-11-05: gardener: cites a file it shares with [[datarepr-separation]] (`crates/elab/src/datarepr.rs`); [[native-arena-cell-codecs]] (`lib/native/native_arena.hthr`); [[runtime-fn-arena-lists]] (`lib/native/native_arena.hthr`).
+- 2026-11-20: Survey docs/surveys/layout-rewrites-survey.md §3.3: arms for value shapes and small values (Isomer's refine) are guarded images too, a second customer besides the arena's capacity; a reason for the guard to be a test the construction runs.
