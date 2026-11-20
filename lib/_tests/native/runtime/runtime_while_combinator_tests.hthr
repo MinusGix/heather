@@ -1,0 +1,59 @@
+// Probes for a `runtime fn`'s `while` over one `u64` local, which the
+// elaborator writes as the library's loop combinator
+// (docs/language/loop-combinator-design.md §6.1): `f::loop` is
+// `Loop(…).run`, its twin is what the reflector reads, and the generator
+// proves it a measured function from the loop's own `elim` theorem. Each
+// function here is compiled by its `runtime fn`, so checking this module is
+// the test; each theorem runs a function by evaluation.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import omega;
+import tactic;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+import loop;
+
+// One local, one capture, and the decrease `bv_omega` finds from the test.
+runtime fn drop_to(n, lo: u64) → u64 {
+    let mut x = n;
+    while lo < x decreases (x - lo).toNat() { x := x - 1; }
+    x
+}
+
+theorem drop_to_stops(): drop_to(10, 3) = 3 { refl }
+theorem drop_to_below(): drop_to(2, 7) = 2 { refl }
+
+// The loop is the combinator's run, by its definition.
+theorem drop_to_loop_is_run(lo, x: u64): drop_to::loop(lo, x) = drop_to::loop::of(lo, x).run(drop_to::loop::at(lo, x)) { refl }
+
+// A body with a `let`, the next value read through it, and a test that is
+// a conjunction with a `≠` (split at the test as written, not inside it).
+runtime fn halve_gap(n, lo, by: u64) → u64 {
+    let mut x = n;
+    while lo < x && by ≠ 0 decreases x.toNat() {
+        let gap = x - lo;
+        x := lo + (gap >> 1);
+    }
+    x
+}
+
+theorem halve_gap_runs(): halve_gap(40, 3, 5) = 3 { refl }
+
+// Two captures, no local read in the test but the loop's own.
+runtime fn count_up(n, step, cap: u64) → u64 {
+    let mut x = n;
+    while x < cap && step ≠ 0 decreases (cap - x).toNat() { x := x + 1; }
+    x
+}
+
+theorem count_up_runs(): count_up(3, 1, 9) = 9 { refl }

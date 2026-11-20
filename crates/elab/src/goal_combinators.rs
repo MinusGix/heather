@@ -526,7 +526,15 @@ fn stuck_by_unfolding(elab: &Elaborator, cx: &Cx, term: &Term, budget: &mut u32,
                 decision: Some(Rc::clone(boolean)),
             });
         }
-        if (deep || elab.spell_term_source(cx, test).is_none()) && let Some(found) = stuck_scrutinee(elab, cx, scrut, budget, deep) {
+        // A convoy (`match h: c`, an `if` whose arms read their equation) on
+        // a test the source spells is split at `c` itself, never at a test
+        // inside it: its motive and arms are typed by `c = z`, so
+        // abstracting a test within `c` (`eq_bit` inside `step ≠ 0`, which
+        // is `!eq_bit(step, 0)`) leaves them at the wrong type and the split
+        // with no motive.
+        let convoy = matches!(&reduct, Term::AppAt { fun, arg } if matches!(&**fun, Term::Case { .. }) && matches!(&**arg, Term::Refl { .. }));
+        let whole = convoy && domain.is_some() && elab.spell_term_source(cx, test).is_some();
+        if !whole && (deep || elab.spell_term_source(cx, test).is_none()) && let Some(found) = stuck_scrutinee(elab, cx, scrut, budget, deep) {
             return Some(Blocked { original: term.clone(), replacement: lifted(&reduct, &found)?, ..found });
         }
         if let Some(inductive) = &domain
