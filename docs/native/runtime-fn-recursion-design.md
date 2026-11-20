@@ -173,9 +173,9 @@ contract for it must sort out first. So pure recursion comes first.
   recursive function cannot sit in a region (`Tm::CallsAgree` quantifies
   over every callee), which is why the node is on the statement lane and
   `Tm` is unchanged. `PDef::bodies` turns a list of `PTm` definitions into
-  procedures meeting `Source::PureBodies`, given the pins the generator
-  will supply (`PDef::Unfolds`, the meaning's equations; `PDef::Deep`, the
-  depth's). `Source::pure_reads` (`lib/native/native_source_pure.hthr`)
+  procedures meeting `Source::PureBodies`, given the one pin the generator
+  will supply (`PDef::Unfolds`, the meaning's equations) and which entries
+  fit within how many levels (`PDef::Fits`). `Source::pure_reads` (`lib/native/native_source_pure.hthr`)
   then reads every call within the levels as its value, by induction on
   the levels and, at one level, on the ranks of unchecked calls.
 - **Step 3**, the part about charges: `Source::pure_program_reads`
@@ -184,9 +184,19 @@ contract for it must sort out first. So pure recursion comes first.
   calls run as deep as they go, reads as `main` threaded with each call
   answered, for every run whose calls keep within `Source.levels`. Joining
   the co tree to the machine is the depth-free tree's thread (§5).
+- **The depth became a predicate, `PDef::fits(k, p, xs)`**: whether the
+  call runs within `k` levels, by recursion on `k` (each call it makes fits
+  within `k - 1`). It needs no measure and no fuel, so it is total for any
+  recursion, terminating or not, and at a closed argument it is `refl`;
+  `PDef::fits_fit` proves it is what the bodies keep wherever every call
+  is counted (a self-recursive function's are). §4's `f::depth(x) <= levels`
+  reads as `f::fits(levels, x) = True`, and a depth bound is the writer's
+  theorem `f::fits(g(x), x) = True`. A cycle with unchecked calls in it
+  would need the ranks in the recursion too; the generator refuses it for
+  now.
 - A closed probe (`lib/_tests/native/runtime/rt_proc_tests.hthr`): a
-  non-tail recursive sum lowers, its statements run to 55 at 10 with the
-  world untouched, and a wrong-arity call and a bit-valued body are
+  non-tail recursive sum lowers, fits within 10 levels at 10 and not 9,
+  its statements run to 55 at 10 with the world untouched, and a wrong-arity call and a bit-valued body are
   refused.
 
 ## 7. Decisions for Minus

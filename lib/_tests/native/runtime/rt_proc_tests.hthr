@@ -1,8 +1,8 @@
 // Probes of a pure body that calls procedures, lowered to a procedure's
 // statements (`rt_proc`; docs/native/runtime-fn-recursion-design.md §6
 // step 2): a recursive sum, its meaning read through the procedures'
-// meanings, its procedure, the statements run with each call answered by
-// its value, and refusals of a call with the wrong number of arguments and
+// meanings, the levels it fits within, its procedure, the statements run
+// with each call answered by its value, and refusals of a call with the wrong number of arguments and
 // of a value that is not a word. Tests, not library: nothing outside
 // lib/_tests imports this module (docs/test-value-audit.md §4.5).
 import logic;
@@ -50,11 +50,10 @@ theorem sum_body_means(): PTm::sem(sum_body(), proc_world(), sum_meaning, PTm::w
     refl
 }
 
-// One call of itself, one level below it.
-theorem sum_body_needs(): PTm::need(sum_body(), proc_world(), sum_meaning, λ _ xs => match xs { Nil => 0, Cons(x, _) => x.toNat() }, λ _ => True,
-    PTm::word_ctx(1), PTm::vals_n(RecInfo::none, 1, [BitVec::ofNat(10)])) = 10 {
-    refl
-}
+// Its calls at 10 nest ten deep: it fits within ten levels and not nine.
+theorem sum_fits_ten(): PDef::fits(sum_defs(), proc_world(), sum_meaning, 10, 0, [BitVec::ofNat(10)]) = True { refl }
+
+theorem sum_not_nine(): PDef::fits(sum_defs(), proc_world(), sum_meaning, 9, 0, [BitVec::ofNat(10)]) = False { refl }
 
 fn sum_procedures() → Option<List<Procedure>> { PDef::procedures(sum_defs(), proc_world(), PDef::known(sum_defs())) }
 
@@ -71,7 +70,7 @@ fn sum_statement() → Stmt {
 // Its statements from an entry with argument 10, the call answered by the
 // meaning: the world as it was, and 55 in the value word (word 1).
 fn sum_run(io: Io) → Mutated<Io, Flow> {
-    Stmt::thread_by(sum_statement(), program_writers([]), sum_source().pure_answer(PDef::spec(sum_defs(), sum_meaning, λ _ _ => 0)),
+    Stmt::thread_by(sum_statement(), program_writers([]), sum_source().pure_answer(PDef::spec(sum_defs(), sum_meaning, λ k p xs => PDef::fits(sum_defs(), proc_world(), sum_meaning, k, p, xs))),
         native_source::Env(Nil, [], []).set_words([0], [BitVec::ofNat(10)]), io)
 }
 

@@ -5,8 +5,8 @@
 // calls are of such procedures, computes words: what it leaves in its
 // result words is a function of the environment it enters with
 // (`PureSpec::value`), and the world and the buffers are as they were. A
-// recursive one also has a depth: how many levels of counted calls its
-// body's calls nest (`PureSpec::need`). Then every call made within the
+// recursive one also says which entries it runs within a number of levels
+// of counted calls (`PureSpec::fits`). Then every call made within the
 // levels reads as its value (`Source::pure_reads`): it is never refused,
 // and the call returns with the value copied into the caller's words.
 //
@@ -41,9 +41,9 @@ import native_source_io;
 // ---------------------------------------------------------------------------
 // What pure procedures compute
 
-// Each procedure's result words, and the levels its body's calls nest, as
-// functions of the environment its call enters with.
-record PureSpec { value: Nat → Env → List<BitVec(64)>, need: Nat → Env → Nat }
+// Each procedure's result words, as a function of the environment its call
+// enters with, and whether its body's calls keep within `k` levels there.
+record PureSpec { value: Nat → Env → List<BitVec(64)>, fits: Nat → Nat → Env → Bool }
 
 // A pure call's answer: the world as it was, and the callee's value copied
 // into the caller's result words. A call of no procedure does nothing, as
@@ -56,24 +56,24 @@ fn Source::pure_answer(self src: Source, spec: PureSpec) → CallAnswers() {
 }
 
 // Whether a call made with `k` levels left keeps within them: a counted
-// call spends one, and the callee's body needs at most what is left.
+// call spends one, and the callee's body keeps within what is left.
 fn Source::pure_within(self src: Source, spec: PureSpec, counted: Nat → Bool, k: Nat) → Nat → List<Nat> → List<Nat> → Env → Bool {
     λ procedure args results env => match k.spend(counted(procedure)) {
         None => False,
         Some(lj) => match src.procedures.nth(procedure) {
             None => True,
-            Some(proc) => spec.need(procedure, proc.enter(env, args)).leb(lj),
+            Some(proc) => spec.fits(lj, procedure, proc.enter(env, args)),
         },
     }
 }
 
 // What each procedure's body owes, run with its calls answered by their
-// values: no loop, and from any caller with the levels its value needs,
+// values: no loop, and from any caller with levels it fits within,
 // every call it makes keeps within them, and it returns its value with the
 // world and the caller's buffers as they were.
 fn Source::PureBodies(self src: Source, call: Writers(), spec: PureSpec, counted: Nat → Bool) → Type {
     (procedure: Nat) → (proc: Procedure) → src.procedures.nth(procedure) = Some(proc) → proc.body.loop_free().IsTrue() ∧ (
-        (caller: Env) → (args, results: List<Nat>) → (lj: Nat) → spec.need(procedure, proc.enter(caller, args)).leb(lj).IsTrue() → (io: Io) →
+        (caller: Env) → (args, results: List<Nat>) → (lj: Nat) → spec.fits(lj, procedure, proc.enter(caller, args)).IsTrue() → (io: Io) →
             proc.body.calls_ok(call, src.pure_answer(spec), src.pure_within(spec, counted, lj), proc.enter(caller, args), io).IsTrue() ∧
             Stmt::thread_by(proc.body, call, src.pure_answer(spec), proc.enter(caller, args), io).after = io ∧
             proc.leave(caller, results, Stmt::thread_by(proc.body, call, src.pure_answer(spec), proc.enter(caller, args), io).value) =
@@ -139,11 +139,11 @@ theorem Source::pure_answers(self src: Source, call: Writers(), ch: Charges, spe
             None => False,
             Some(j2) => match src.procedures.nth(procedure) {
                 None => True,
-                Some(proc) => spec.need(procedure, proc.enter(env, args)).leb(j2),
+                Some(proc) => spec.fits(j2, procedure, proc.enter(env, args)),
             },
         }).IsTrue(), within);
     (match src.procedures.nth(procedure) as λ o => src.procedures.nth(procedure) = o →
-        (match o as λ _ => Bool { None => True, Some(proc) => spec.need(procedure, proc.enter(env, args)).leb(lj) }).IsTrue() →
+        (match o as λ _ => Bool { None => True, Some(proc) => spec.fits(lj, procedure, proc.enter(env, args)) }).IsTrue() →
         Eutt<Mutated<Io, Flow>>(Events::none(), Io::against_co(match o as λ _ => CoTree<Flow>(Events::linux()) {
                 None => CRet(Onward(env)),
                 Some(proc) => match ch.refuses(procedure, left) {
@@ -221,7 +221,7 @@ theorem Source::pure_counted_none(self src: Source, call: Writers(), ch: Charges
             None => False,
             Some(j2) => match src.procedures.nth(p) {
                 None => True,
-                Some(proc) => spec.need(p, proc.enter(env, args)).leb(j2),
+                Some(proc) => spec.fits(j2, p, proc.enter(env, args)),
             },
         }).IsTrue(), within))
 }
