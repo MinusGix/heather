@@ -311,6 +311,60 @@ int main(void) {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+// An enum as a parameter (docs/native/runtime-fn-setups-design.md §16.16):
+// `tok_weight` takes a `TokKind`, passed as its tag word, the constructor's
+// index, which is how C passes a C enum of the same constructors in the
+// same order. The certificate states the code at every real value of the
+// enum, its tag word passed (`RecInfo::enum_word`), and states no
+// `Prog::Implements`, which would be over every word. C calls it at every
+// constructor against a reference.
+#[test]
+fn an_enum_is_passed_as_its_tag_word() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = root.join(format!("target/native-enum-tag-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let assembly = dir.join("enum_tag.s");
+    let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
+        .args(["compile-x86", "examples/x86-native/enum_tag.hthr", "tok_weight", "-o"]).arg(&assembly)
+        .args(heather_cli::showcase::native_image_args()).args(["--kernel-workers", "1"])
+        .output().unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let text = std::fs::read_to_string(&assembly).unwrap();
+    assert!(text.contains("# signature: tok_weight(word, word) -> word"), "{text}");
+    let certificate = std::fs::read_to_string(dir.join("enum_tag.certificate.hthr")).unwrap();
+    for claim in ["a0: RecInfo::enum_at(enum_tag::tok_weight::world.tys, 0)", "[RecInfo::enum_word(enum_tag::tok_weight::world.tys, 0, a0), a1]",
+        "_code().Computes(machine, "] {
+        assert!(certificate.contains(claim), "missing {claim}");
+    }
+    assert!(!certificate.contains("_implements"), "an enum's function is stated at its real values only");
+    let driver = dir.join("main.c");
+    std::fs::write(&driver, r#"
+#include <stdint.h>
+#include <stdio.h>
+enum TokKind { Ident, Number, Space, Punct, Other };
+extern uint64_t tok_weight(enum TokKind, uint64_t);
+static uint64_t reference(enum TokKind k, uint64_t n) {
+    switch (k) { case Ident: return n + 3; case Number: return n + n; case Space: return 0; case Punct: return n; default: return 1; }
+}
+int main(void) {
+    uint64_t ns[] = {0, 1, 2, 41, UINT64_C(1) << 63, UINT64_MAX - 2, UINT64_MAX};
+    for (int k = Ident; k <= Other; ++k)
+        for (unsigned i = 0; i < 7; ++i)
+            if (tok_weight((enum TokKind)k, ns[i]) != reference((enum TokKind)k, ns[i])) return 1;
+    puts("35 calls passed");
+    return 0;
+}
+"#).unwrap();
+    let binary = dir.join("enum_tag");
+    let linked = Command::new("cc").args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(&driver).arg(&assembly).arg("-o").arg(&binary).output().unwrap();
+    assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
+    let run = Command::new(&binary).output().unwrap();
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stdout));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 // A function of eight words called from Rust (issues/function-call-past-six-words.md):
 // `eight` passes its seventh and eighth on the stack to `spread` twice, and
 // Rust passes its own the same way, `extern "sysv64"` with the certified

@@ -1,0 +1,28 @@
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import bitvec_nat;
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+
+// An enum as a function's parameter (docs/native/runtime-fn-setups-design.md
+// §16.16): passed as its tag word, the constructor's index in declaration
+// order, the way a C caller passes a C enum. A `match` on it compares the
+// tag against each constructor but the last, whose arm is the default. The
+// certificate's contract covers the tags of real constructors only.
+inductive TokKind { Ident, Number, Space, Punct, Other }
+
+runtime fn tok_weight(k: TokKind, n: BitVec(64)) → BitVec(64) {
+    match k { Ident => n.add(BitVec::ofNat(3)), Number => n.add(n), Space => BitVec::ofNat(0), Punct => n, Other => BitVec::ofNat(1) }
+}
