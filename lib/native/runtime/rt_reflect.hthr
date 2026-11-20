@@ -518,11 +518,31 @@ fn rt_rec_marker() → String { "a record the walk has not met yet: " }
 // constructors' fields, each in a slot of its own (§16.16).
 fn rt_enum_marker() → String { "an enum the walk has not met yet: " }
 
-// Whether a type is an enum: two constructors or more.
+// Whether a constructor's fields are none of them the type itself (a
+// list's tail is): an enum's payload is flat.
+fn rt_fields_flat(h: Handle, fs: List<FieldInfo>) → Tac<Bool> {
+    match fs {
+        Nil => pure(True),
+        Cons(f, rest) => match f.ty {
+            None => pure(False),
+            Some(t) => defeq(Hd(t), Hd(h)).bind(λ same => match same { True => pure(False), False => rt_fields_flat(h, rest) }),
+        },
+    }
+}
+
+fn rt_ctors_flat(h: Handle, cs: List<CtorInfo>) → Tac<Bool> {
+    match cs {
+        Nil => pure(True),
+        Cons(c, rest) => rt_fields_flat(h, c.fields).bind(λ flat => match flat { True => rt_ctors_flat(h, rest), False => pure(False) }),
+    }
+}
+
+// Whether a type is an enum: two constructors or more, none of whose
+// fields is the type itself.
 fn rt_is_enum(h: Handle) → Tac<Bool> {
     ctors(h).bind(λ cc => match cc {
         Refused(_) => pure(False),
-        Accepted(cs) => pure(!cs.len().leb(1)),
+        Accepted(cs) => match cs.len().leb(1) { True => pure(False), False => rt_ctors_flat(h, cs) },
     })
 }
 

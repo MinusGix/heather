@@ -1880,6 +1880,27 @@ returning one (a call reads RAX alone,
 `issues/function-ir-multi-word-calls.md`), a payload past one slot as a
 result, and an enum as a record's field.
 
+**Next: an enum with fields as a parameter, and an enum as a record's
+field (design, 2026-11-20).** A parameter takes its code's words in
+turn: an enum's tag word and then its payload's slots, which is the order
+System V passes a C structure of two words by value (consecutive integer
+registers), so `f(a, p, b)` with `p: Pocket` is `f(a, p.tag, p.value, b)`
+from C. `Ty::Given` becomes `Ty::Takes(p, tys, x, K)`, which hands `K` the
+words past the first and the value: every code but an enum `K([],
+cast(x))`, so `Ty::Answers` at those is what it is now; an enum
+`x <= last →` one word per slot `→ K(slots, of(x.toNat(), t))`. A
+parameter's ids are consecutive, its port the first, so `Ty::Holds` at
+`Enum` (tag, then slots) holds at the entry with no move; `Fun::param_ids`,
+`Ty::extend` and `Ty::apply` take `tys` to count a code's words
+(`Ty::span`), and the proofs generic in a code gain one case lemma. Calls
+keep one word per argument until `Call` takes several
+(`issues/function-ir-multi-word-calls.md`). An enum as a record's field
+is held as its tag in the record's slot: `Ty::Flat` at `Enum` is the tag,
+a `Nat`, the record's `mk`/`get` convert by the enum's `of`/`tag`, and its
+round trip is stated at tags below the last (what `FlatHolds` at the field
+says), so the table needs no strata; a field that is an enum with a
+payload waits for the record to hold the payload's slots inline.
+
 A C enum is an `int`, whose register's upper 32 bits System V leaves
 unspecified, where the contract passes the tag as a whole 64-bit word.
 Compilers write the 32-bit register, which zero-extends, so callers work
