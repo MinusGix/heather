@@ -1,0 +1,446 @@
+// A pure function that calls procedures, lowered to a procedure's
+// statements (docs/native/runtime-fn-recursion-design.md §2, §6 step 2).
+//
+// A region is a total function of its words, so what it calls must answer
+// with a value; a call that can run out of levels is a call between
+// statements. A function whose body calls a recursive one (itself, or a
+// cycle) is therefore read as a `PTm`: `rt` terms for its pure parts, with
+// bindings, branches and calls of procedures between them.
+//
+// - a value (`Value`) is the pure lowering's region (`Tm::lower`), its
+//   word moved to the body's result word `out`;
+// - a pure binding (`Bind`) is a `Compute` of its region, its word fresh
+//   (`ETm::lower_value`);
+// - a call (`Recur`) is a `Perform` on the arguments' words, its result
+//   word fresh;
+// - a branch (`Choose`) is a `Branch` on the bit variable's word, each arm
+//   ending in `out`.
+//
+// The meaning (`PTm::sem`) reads a call through the procedures' meanings
+// `f`, as `Tm::sem` reads a `Call` through the world's. `PTm::lower_sound`
+// is the theorem every case is a case of: from any environment holding the
+// variables, the statements threaded with each call answered by `f`
+// (`Stmt::thread_by`) leave the world and the buffers as they were and the
+// meaning's word in `out`, and where the meaning's calls are all `ok`, so
+// are the statements' (`Stmt::calls_ok`). What `Source::pure_reads`
+// (`native_source_pure`) asks of a body is that, read at the procedure's
+// entry.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import itree;
+import coitree;
+import coitree_eutt;
+import linux_calls;
+import linux_trees;
+import linux_world;
+import linux_world_co;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_run;
+import native_source;
+import native_source_co;
+import native_source_io;
+import rt;
+import rt_lower;
+import rt_io;
+import rt_io_lower;
+
+// ---------------------------------------------------------------------------
+// Terms and their meaning
+
+inductive PTm {
+    // The value: a word.
+    Value(v: Tm),
+    // A pure value bound once: `body` sees it as variable 0.
+    Bind(e: Tm, body: PTm),
+    // Procedure `p` called on word variables: `body` sees its word as
+    // variable 0.
+    Recur(p: Nat, args: List<Nat>, body: PTm),
+    // A branch on a bit variable.
+    Choose(c: Nat, yes: PTm, no: PTm),
+}
+
+// What the procedures mean: each one's word from its argument words.
+fn PCalls() → Type { Nat → List<BitVec(64)> → BitVec(64) }
+
+// Variables as words, each cast to a word as the meaning reads it.
+fn PTm::words(w: rt::World, g: List<Ty>, vals: rt::Env(w.tys, g), args: List<Nat>) → List<BitVec(64)> {
+    match args {
+        Nil => Nil,
+        Cons(a, more) => Cons(Ty::cast(w.tys, Ty::at(g, a), Word(64), Env::get(w.tys, g, vals, a)), PTm::words(w, g, vals, more)),
+    }
+}
+
+fn PTm::sem(self t: PTm, w: rt::World, f: PCalls()) → (g: List<Ty>) → rt::Env(w.tys, g) → BitVec(64) {
+    match t {
+        Value(v) => λ g vals => Ty::cast(w.tys, Tm::ty(v, w, g), Word(64), Tm::sem(v, w, g, vals)),
+        Bind(e, body) => λ g vals => body.sem(w, f, Cons(Tm::ty(e, w, g), g), Pair(Tm::sem(e, w, g, vals), vals)),
+        Recur(p, args, body) => λ g vals => body.sem(w, f, Cons(Word(64), g), Pair(f(p, PTm::words(w, g, vals, args)), vals)),
+        Choose(c, yes, no) => λ g vals => match Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, vals, c)) {
+            True => yes.sem(w, f, g, vals),
+            False => no.sem(w, f, g, vals),
+        },
+    }
+}
+
+// Whether every call the meaning makes is `ok`, read on its procedure and
+// argument words.
+fn PTm::calls_ok(self t: PTm, w: rt::World, f: PCalls(), ok: Nat → List<BitVec(64)> → Bool) → (g: List<Ty>) → rt::Env(w.tys, g) → Bool {
+    match t {
+        Value(_) => λ g vals => True,
+        Bind(e, body) => λ g vals => body.calls_ok(w, f, ok, Cons(Tm::ty(e, w, g), g), Pair(Tm::sem(e, w, g, vals), vals)),
+        Recur(p, args, body) => λ g vals => ok(p, PTm::words(w, g, vals, args))
+            && body.calls_ok(w, f, ok, Cons(Word(64), g), Pair(f(p, PTm::words(w, g, vals, args)), vals)),
+        Choose(c, yes, no) => λ g vals => match Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, vals, c)) {
+            True => yes.calls_ok(w, f, ok, g, vals),
+            False => no.calls_ok(w, f, ok, g, vals),
+        },
+    }
+}
+
+// How many levels the meaning's calls nest: a call of `p` at `xs` needs
+// `needs(p, xs)` below it, and one more where it is counted.
+fn PTm::need(self t: PTm, w: rt::World, f: PCalls(), needs: Nat → List<BitVec(64)> → Nat, counted: Nat → Bool) → (g: List<Ty>) → rt::Env(w.tys, g) → Nat {
+    match t {
+        Value(_) => λ g vals => 0,
+        Bind(e, body) => λ g vals => body.need(w, f, needs, counted, Cons(Tm::ty(e, w, g), g), Pair(Tm::sem(e, w, g, vals), vals)),
+        Recur(p, args, body) => λ g vals => Nat::max(needs(p, PTm::words(w, g, vals, args)) + (match counted(p) as λ _ => Nat { True => 1, False => 0 }),
+            body.need(w, f, needs, counted, Cons(Word(64), g), Pair(f(p, PTm::words(w, g, vals, args)), vals))),
+        Choose(c, yes, no) => λ g vals => match Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, vals, c)) {
+            True => yes.need(w, f, needs, counted, g, vals),
+            False => no.need(w, f, needs, counted, g, vals),
+        },
+    }
+}
+
+// A call within `k` levels: it spends one where counted, and its callee
+// needs at most the rest.
+fn PTm::within(needs: Nat → List<BitVec(64)> → Nat, counted: Nat → Bool, k: Nat) → Nat → List<BitVec(64)> → Bool {
+    λ p xs => match k.spend(counted(p)) { None => False, Some(j) => needs(p, xs).leb(j) }
+}
+
+// One call's needs, kept within `k`.
+theorem PTm::within_of(needs: Nat → List<BitVec(64)> → Nat, counted: Nat → Bool, k, p: Nat, xs: List<BitVec(64)>,
+    le: needs(p, xs) + (match counted(p) as λ _ => Nat { True => 1, False => 0 }) <= k): PTm::within(needs, counted, k)(p, xs).IsTrue() {
+    (match counted(p) as λ b => needs(p, xs) + (match b as λ _ => Nat { True => 1, False => 0 }) <= k →
+            (match k.spend(b) as λ _ => Bool { None => False, Some(j) => needs(p, xs).leb(j) }).IsTrue() {
+        True => match k as λ m => needs(p, xs) + 1 <= m → (match m.spend(True) as λ _ => Bool { None => False, Some(j) => needs(p, xs).leb(j) }).IsTrue() {
+            Zero => λ h => {
+                let never: False = omega(h);
+                false_elim(never)
+            },
+            Succ(j) => λ h => Bool::is_true_of_eq(Nat::leb_true(needs(p, xs), j, omega(h))),
+        },
+        False => λ h => Bool::is_true_of_eq(Nat::leb_true(needs(p, xs), k, h)),
+    })(le)
+}
+
+// The meaning's calls, nesting at most `k` deep, are all within `k`.
+theorem PTm::need_within(self t: PTm, w: rt::World, f: PCalls(), needs: Nat → List<BitVec(64)> → Nat, counted: Nat → Bool, k: Nat):
+    (g: List<Ty>) → (vals: rt::Env(w.tys, g)) → t.need(w, f, needs, counted, g, vals) <= k →
+        t.calls_ok(w, f, PTm::within(needs, counted, k), g, vals).IsTrue() {
+    match t {
+        Value(_) => λ g vals _ => trivial,
+        Bind(e, body) => λ g vals h => body.need_within(w, f, needs, counted, k, Cons(Tm::ty(e, w, g), g), Pair(Tm::sem(e, w, g, vals), vals), h),
+        Recur(p, args, body) => λ g vals h => {
+            let xs = PTm::words(w, g, vals, args);
+            let call_need = needs(p, xs) + (match counted(p) as λ _ => Nat { True => 1, False => 0 });
+            let rest = body.need(w, f, needs, counted, Cons(Word(64), g), Pair(f(p, xs), vals));
+            Bool::is_true_and_intro(PTm::within(needs, counted, k)(p, xs),
+                body.calls_ok(w, f, PTm::within(needs, counted, k), Cons(Word(64), g), Pair(f(p, xs), vals)),
+                PTm::within_of(needs, counted, k, p, xs, call_need.le_trans(call_need.max(rest), k, call_need.le_max_l(rest), h)),
+                body.need_within(w, f, needs, counted, k, Cons(Word(64), g), Pair(f(p, xs), vals), rest.le_trans(call_need.max(rest), k, call_need.le_max_r(rest), h)))
+        },
+        Choose(c, yes, no) => λ g vals => match Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, vals, c)) as λ b =>
+                (match b as λ _ => Nat { True => yes.need(w, f, needs, counted, g, vals), False => no.need(w, f, needs, counted, g, vals) }) <= k →
+                (match b as λ _ => Bool {
+                    True => yes.calls_ok(w, f, PTm::within(needs, counted, k), g, vals),
+                    False => no.calls_ok(w, f, PTm::within(needs, counted, k), g, vals),
+                }).IsTrue() {
+            True => λ h => yes.need_within(w, f, needs, counted, k, g, vals, h),
+            False => λ h => no.need_within(w, f, needs, counted, k, g, vals, h),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The lowering
+
+// A value's region, its word moved to `out`.
+fn PTm::to_out(l: Lowered, out: Nat) → StructuredRegion {
+    Compose(l.region, Dataflow(Region(Ports(Nil), [Move(64, out, l.result)], Ports(Nil))))
+}
+
+// The words a call's arguments live in: each a word variable.
+fn PTm::arg_words(g: List<Ty>, locs: List<Loc>, args: List<Nat>) → Option<List<Nat>> {
+    match args {
+        Nil => Some(Nil),
+        Cons(a, more) => ETm::operand(g, locs, Word(64), a).and_then(λ id => PTm::arg_words(g, locs, more).and_then(λ ids => Some(Cons(id, ids)))),
+    }
+}
+
+// A body's statements, its value left in `out`. Each call is of a procedure
+// `known` names, on word variables, its word fresh at `next`; a value or a
+// binding is a region that keeps the buffers and calls only the world's
+// functions.
+fn PTm::lower(self t: PTm, w: rt::World, known: Nat → Bool, g: List<Ty>, locs: List<Loc>, next, out: Nat) → Option<Stmt> {
+    match t {
+        Value(v) => Tm::ty(v, w, g).check(Word(64)).and_then(λ _ =>
+            Tm::lower(v, w, g, Loc::ports(locs), next).and_then(λ l =>
+            Tm::check_true(l.region.byte_free() && l.region.calls_among(functions_below(w.sigs.len()))).and_then(λ _ =>
+                Some(Compute(PTm::to_out(l, out)))))),
+        Bind(e, body) => ETm::lower_value(e, w, g, locs, next).and_then(λ c =>
+            Tm::check_true(c.region.byte_free() && c.region.calls_among(functions_below(w.sigs.len()))).and_then(λ _ =>
+            body.lower(w, known, Cons(Tm::ty(e, w, g), g), Cons(InWord(c.result), locs), c.next, out).and_then(λ sb =>
+                Some(Then(Compute(c.region), sb))))),
+        Recur(p, args, body) => Tm::check_true(known(p)).and_then(λ _ =>
+            PTm::arg_words(g, locs, args).and_then(λ ids =>
+            body.lower(w, known, Cons(Word(64), g), Cons(InWord(next), locs), next + 1, out).and_then(λ sb =>
+                Some(Then(Perform(p, ids, [next]), sb))))),
+        Choose(c, yes, no) => ETm::operand(g, locs, Bit, c).and_then(λ id =>
+            yes.lower(w, known, g, locs, next, out).and_then(λ sy =>
+            no.lower(w, known, g, locs, next, out).and_then(λ sn =>
+                Some(Branch(id, sy, sn))))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// What the lowering promises
+
+// Each call of a known procedure answered by its meaning's word, in its
+// result word, with the world and the buffers as they were.
+fn PTm::Answers(known: Nat → Bool, answer: CallAnswers(), f: PCalls()) → Type {
+    (p: Nat) → known(p).IsTrue() → (ids: List<Nat>) → (r: Nat) → (env: Env) → (io: Io) →
+        answer(p, ids, [r], env, io) = Mutated(io, Onward(env.set_word(r, f(p, env.words_at(ids)))))
+}
+
+// A call's `ok` is read on its procedure and argument words.
+fn PTm::OkReads(known: Nat → Bool, ok: Nat → List<Nat> → List<Nat> → Env → Bool, okw: Nat → List<BitVec(64)> → Bool) → Type {
+    (p: Nat) → known(p).IsTrue() → (ids: List<Nat>) → (r: Nat) → (env: Env) → ok(p, ids, [r], env) = okw(p, env.words_at(ids))
+}
+
+// Where a body's run ends: on, the world and the buffers as they were, the
+// value in `out`.
+fn PTm::Lands(v: BitVec(64), out: Nat, env: Env, io: Io, m: Mutated<Io, Flow>) → Type {
+    (m.after = io) ∧ (match m.value {
+        Onward(after) => (after.buffers = env.buffers) ∧ (after.number(out) = v.toNat()),
+        Exited(_) => False,
+    })
+}
+
+// What a lowering promises: loop-free statements that, from any environment
+// holding the variables, with each call answered by the procedures'
+// meaning, land as the meaning does, and make only calls that are `ok`
+// where the meaning's are.
+fn PTm::LowerHolds(self t: PTm, w: rt::World, known: Nat → Bool, g: List<Ty>, locs: List<Loc>, next, out: Nat, r: Option<Stmt>) → Type {
+    match r {
+        None => True,
+        Some(s) => s.loop_free().IsTrue() ∧ ((call: Writers()) → Writers::Still(call, functions_below(w.sigs.len())) →
+            ((held: Buffers()) → Tm::CallsAgree(w, Writers::words(call, held))) →
+            (f: PCalls()) → (answer: CallAnswers()) → PTm::Answers(known, answer, f) →
+            (env: Env) → (vals: rt::Env(w.tys, g)) → (io: Io) → LocsHold(w.tys, env, g, locs, vals) → LocsBelow(locs, next) → 0 < next →
+            PTm::Lands(t.sem(w, f, g, vals), out, env, io, Stmt::thread_by(s, call, answer, env, io)) ∧
+            ((ok: Nat → List<Nat> → List<Nat> → Env → Bool) → (okw: Nat → List<BitVec(64)> → Bool) → PTm::OkReads(known, ok, okw) →
+                t.calls_ok(w, f, okw, g, vals).IsTrue() → s.calls_ok(call, answer, ok, env, io).IsTrue()))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sound
+
+// A port holding a value of a code that is a word holds it as a word.
+theorem PTm::holds_word(tys: Nat → RecInfo, t: Ty, eq: t = Word(64), values: Valuation(), port: Nat, v: t.sem(tys), h: t.Holds(tys, values, port, v)):
+    values(64, port) = Ty::cast(tys, t, Word(64), v) {
+    j(sym(eq), λ x _ => (u: x.sem(tys)) → x.Holds(tys, values, port, u) → values(64, port) = Ty::cast(tys, x, Word(64), u),
+        λ u k => trans(k, sym(Ty::cast_self(tys, Word(64), u))))(v, h)
+}
+
+// A run landing from one environment lands from another with the same
+// buffers.
+theorem PTm::lands_from(v: BitVec(64), out: Nat, env, env1: Env, io: Io, m: Mutated<Io, Flow>, same: env1.buffers = env.buffers,
+    h: PTm::Lands(v, out, env1, io, m)): PTm::Lands(v, out, env, io, m) {
+    ⟨h.left, (match m.value as λ x => (match x as λ _ => Type {
+                Onward(after) => (after.buffers = env1.buffers) ∧ (after.number(out) = v.toNat()),
+                Exited(_) => False,
+            }) → (match x as λ _ => Type {
+                Onward(after) => (after.buffers = env.buffers) ∧ (after.number(out) = v.toNat()),
+                Exited(_) => False,
+            }) {
+        Onward(after) => λ k => ⟨trans(k.left, same), k.right⟩,
+        Exited(_) => λ never => never,
+    })(h.right)⟩
+}
+
+// The arguments' words are the meaning's.
+theorem PTm::arg_words_kept(w: rt::World, env: Env, g: List<Ty>, locs: List<Loc>, vals: rt::Env(w.tys, g), held: LocsHold(w.tys, env, g, locs, vals),
+    args: List<Nat>): (ids: List<Nat>) → PTm::arg_words(g, locs, args) = Some(ids) → env.words_at(ids) = PTm::words(w, g, vals, args) {
+    match args {
+        Nil => λ ids e => j(Option::some_inj(Nil, ids, e), λ z _ => env.words_at(z) = Nil, refl),
+        Cons(a, more) => λ ids => {
+            let P = λ (r: Option<List<Nat>>) => r = Some(ids) → env.words_at(ids) = PTm::words(w, g, vals, Cons(a, more));
+            let none: P(None) = λ never => Option::none_ne_some(ids, never, env.words_at(ids) = PTm::words(w, g, vals, Cons(a, more)));
+            Option::and_then_elim(P, none, ETm::operand(g, locs, Word(64), a), λ id => PTm::arg_words(g, locs, more).and_then(λ rest => Some(Cons(id, rest))), λ id e_id =>
+            Option::and_then_elim(P, none, PTm::arg_words(g, locs, more), λ rest => Some(Cons(id, rest)), λ rest e_rest =>
+                λ (e: Some(Cons(id, rest)) = Some(ids)) => {
+                    let x = Ty::cast(w.tys, Ty::at(g, a), Word(64), Env::get(w.tys, g, vals, a));
+                    let k = ETm::operand_kept(w.tys, env, g, locs, vals, held, Word(64), a, id, e_id);
+                    let first: (env.word(id) = x) = ETm::word_of_kept(env, id, x, k);
+                    let tail = PTm::arg_words_kept(w, env, g, locs, vals, held, more, rest, e_rest);
+                    j(Option::some_inj(Cons(id, rest), ids, e), λ z _ => env.words_at(z) = PTm::words(w, g, vals, Cons(a, more)),
+                        j(first, λ y _ => Cons(env.word(id), env.words_at(rest)) = Cons(y, PTm::words(w, g, vals, more)),
+                            cong_fn(λ (ys: List<BitVec(64)>) => Cons(env.word(id), ys), tail)))
+                }))
+        },
+    }
+}
+
+theorem PTm::lower_sound(self t: PTm, w: rt::World, known: Nat → Bool): (g: List<Ty>) → (locs: List<Loc>) → (next, out: Nat) →
+    PTm::LowerHolds(t, w, known, g, locs, next, out, t.lower(w, known, g, locs, next, out)) {
+    let among = functions_below(w.sigs.len());
+    match t {
+        Value(v) => λ g locs next out => {
+            let P = λ (r: Option<Stmt>) => PTm::LowerHolds(Value(v), w, known, g, locs, next, out, r);
+            let tv = Tm::ty(v, w, g);
+            Option::and_then_elim(P, trivial, tv.check(Word(64)), λ _ => Tm::lower(v, w, g, Loc::ports(locs), next).and_then(λ l =>
+                    Tm::check_true(l.region.byte_free() && l.region.calls_among(among)).and_then(λ _ => Some(Compute(PTm::to_out(l, out))))), λ eq _ =>
+            Option::and_then_elim(P, trivial, Tm::lower(v, w, g, Loc::ports(locs), next), λ l =>
+                    Tm::check_true(l.region.byte_free() && l.region.calls_among(among)).and_then(λ _ => Some(Compute(PTm::to_out(l, out)))), λ l e_l =>
+            Option::and_then_elim(P, trivial, Tm::check_true(l.region.byte_free() && l.region.calls_among(among)), λ _ => Some(Compute(PTm::to_out(l, out))), λ ok _ =>
+            ⟨trivial, λ call still agree f answer answers env vals io held below pos => {
+                let checked = Bool::is_true_and(l.region.byte_free(), l.region.calls_among(among), ok);
+                let lowered = j(e_l, λ r _ => Tm::LowerHolds(v, w, g, Loc::ports(locs), next, r), Tm::lower_sound(v, w, g, Loc::ports(locs), next));
+                let r = lowered(Writers::words(call, env.buffers), agree(env.buffers), env.valuation(), vals, locs_env_holds(w.tys, env, g, locs, vals, held),
+                    locs_below(w.tys, env, g, next, pos, locs, vals, held, below));
+                let ev = l.region.eval(Writers::words(call, env.buffers), env.valuation());
+                let held_v = j(l.region.eval_byte_free(Writers::words(call, env.buffers), w.spans, checked.left, env.valuation()),
+                    λ u _ => tv.Holds(w.tys, u, l.result, Tm::sem(v, w, g, vals)), r.right.right.right);
+                let as_word = PTm::holds_word(w.tys, tv, eq, ev, l.result, Tm::sem(v, w, g, vals), held_v);
+                let number = env.compute_moved(call, among, still, l.region, checked.left, checked.right, 64, out, l.result);
+                let region = PTm::to_out(l, out);
+                let free2: region.byte_free().IsTrue() = Bool::is_true_and_intro(l.region.byte_free(),
+                    Dataflow(Region(Ports(Nil), [Move(64, out, l.result)], Ports(Nil))).byte_free(), checked.left, trivial);
+                let fits2: region.calls_among(among).IsTrue() = Bool::is_true_and_intro(l.region.calls_among(among), True, checked.right, trivial);
+                let keeps = env.compute_buffers(call, among, still, region, free2, fits2);
+                ⟨⟨refl, ⟨keeps, trans(number, cong_fn(λ (x: BitVec(64)) => x.toNat(), as_word))⟩⟩, λ ok okw _ _ => trivial⟩
+            }⟩)))
+        },
+        Bind(e, body) => λ g locs next out => {
+            let P = λ (r: Option<Stmt>) => PTm::LowerHolds(Bind(e, body), w, known, g, locs, next, out, r);
+            let te = Tm::ty(e, w, g);
+            Option::and_then_elim(P, trivial, ETm::lower_value(e, w, g, locs, next), λ c =>
+                    Tm::check_true(c.region.byte_free() && c.region.calls_among(among)).and_then(λ _ =>
+                    body.lower(w, known, Cons(te, g), Cons(InWord(c.result), locs), c.next, out).and_then(λ sb => Some(Then(Compute(c.region), sb)))), λ c e_c =>
+            Option::and_then_elim(P, trivial, Tm::check_true(c.region.byte_free() && c.region.calls_among(among)), λ _ =>
+                    body.lower(w, known, Cons(te, g), Cons(InWord(c.result), locs), c.next, out).and_then(λ sb => Some(Then(Compute(c.region), sb))), λ ok _ =>
+            Option::and_then_elim(P, trivial, body.lower(w, known, Cons(te, g), Cons(InWord(c.result), locs), c.next, out),
+                    λ sb => Some(Then(Compute(c.region), sb)), λ sb e_sb => {
+                let vh = j(e_c, λ r _ => ETm::ValueHolds(e, w, g, locs, next, r), ETm::value_sound(e, w, g, locs, next));
+                let bh = j(e_sb, λ r _ => PTm::LowerHolds(body, w, known, Cons(te, g), Cons(InWord(c.result), locs), c.next, out, r),
+                    body.lower_sound(w, known, Cons(te, g), Cons(InWord(c.result), locs), c.next, out));
+                ⟨bh.left, λ call still agree f answer answers env vals io held below pos => {
+                    let checked = Bool::is_true_and(c.region.byte_free(), c.region.calls_among(among), ok);
+                    let v1 = vh.right(call, still, agree, env, vals, held, below, pos);
+                    let env1 = env.compute(call, c.region);
+                    let keeps = env.compute_buffers(call, among, still, c.region, checked.left, checked.right);
+                    let step: (c.next = c.result + 1) = vh.left;
+                    let lt: (c.result < c.next) = omega(step);
+                    let le: (next <= c.next) = omega(step, v1.left);
+                    let pos1: (0 < c.next) = omega(step);
+                    let below1: LocsBelow(Cons(InWord(c.result), locs), c.next) = ⟨lt, locs_below_mono(locs, next, c.next, le, below)⟩;
+                    let r = bh.right(call, still, agree, f, answer, answers, env1, Pair(Tm::sem(e, w, g, vals), vals), io, v1.right, below1, pos1);
+                    ⟨PTm::lands_from(body.sem(w, f, Cons(te, g), Pair(Tm::sem(e, w, g, vals), vals)), out, env, env1, io,
+                        Stmt::thread_by(sb, call, answer, env1, io), keeps, r.left), r.right⟩
+                }⟩
+            })))
+        },
+        Recur(p, args, body) => λ g locs next out => {
+            let P = λ (r: Option<Stmt>) => PTm::LowerHolds(Recur(p, args, body), w, known, g, locs, next, out, r);
+            Option::and_then_elim(P, trivial, Tm::check_true(known(p)), λ _ => PTm::arg_words(g, locs, args).and_then(λ ids =>
+                    body.lower(w, known, Cons(Word(64), g), Cons(InWord(next), locs), next + 1, out).and_then(λ sb => Some(Then(Perform(p, ids, [next]), sb)))), λ kp _ =>
+            Option::and_then_elim(P, trivial, PTm::arg_words(g, locs, args), λ ids =>
+                    body.lower(w, known, Cons(Word(64), g), Cons(InWord(next), locs), next + 1, out).and_then(λ sb => Some(Then(Perform(p, ids, [next]), sb))), λ ids e_ids =>
+            Option::and_then_elim(P, trivial, body.lower(w, known, Cons(Word(64), g), Cons(InWord(next), locs), next + 1, out),
+                    λ sb => Some(Then(Perform(p, ids, [next]), sb)), λ sb e_sb => {
+                let bh = j(e_sb, λ r _ => PTm::LowerHolds(body, w, known, Cons(Word(64), g), Cons(InWord(next), locs), next + 1, out, r),
+                    body.lower_sound(w, known, Cons(Word(64), g), Cons(InWord(next), locs), next + 1, out));
+                ⟨bh.left, λ call still agree f answer answers env vals io held below pos => {
+                    let xs = PTm::words(w, g, vals, args);
+                    let words_eq = PTm::arg_words_kept(w, env, g, locs, vals, held, args, ids, e_ids);
+                    let x = f(p, xs);
+                    let env1 = env.set_word(next, x);
+                    let answered: (answer(p, ids, [next], env, io) = Mutated(io, Onward(env1))) =
+                        trans(answers(p, kp, ids, next, env, io), cong_fn(λ (ys: List<BitVec(64)>) => Mutated(io, Onward(env.set_word(next, f(p, ys)))), words_eq));
+                    let held1: LocsHold(w.tys, env1, Cons(Word(64), g), Cons(InWord(next), locs), Pair(x, vals)) =
+                        ⟨env.number_set_here(next, x), locs_hold_same(w.tys, env, env1, g, locs, vals, Loc::same_set_word(locs, env, next, x, below), held)⟩;
+                    let lt: (next < next + 1) = omega();
+                    let le: (next <= next + 1) = omega();
+                    let pos1: (0 < next + 1) = omega();
+                    let below1: LocsBelow(Cons(InWord(next), locs), next + 1) = ⟨lt, locs_below_mono(locs, next, next + 1, le, below)⟩;
+                    let r = bh.right(call, still, agree, f, answer, answers, env1, Pair(x, vals), io, held1, below1, pos1);
+                    let v = body.sem(w, f, Cons(Word(64), g), Pair(x, vals));
+                    let lands = j(sym(answered), λ m _ => PTm::Lands(v, out, env, io, match m.value as λ _ => Mutated<Io, Flow> {
+                            Onward(n) => Stmt::thread_by(sb, call, answer, n, m.after),
+                            Exited(s) => Mutated(m.after, Exited(s)),
+                        }),
+                        PTm::lands_from(v, out, env, env1, io, Stmt::thread_by(sb, call, answer, env1, io), refl, r.left));
+                    ⟨lands, λ ok okw reads okm => {
+                        let parts = Bool::is_true_and(okw(p, xs), body.calls_ok(w, f, okw, Cons(Word(64), g), Pair(x, vals)), okm);
+                        let read: (ok(p, ids, [next], env) = okw(p, xs)) = trans(reads(p, kp, ids, next, env), cong_fn(λ (ys: List<BitVec(64)>) => okw(p, ys), words_eq));
+                        let first: ok(p, ids, [next], env).IsTrue() = j(sym(read), λ b _ => b.IsTrue(), parts.left);
+                        let rest_ok = j(sym(answered), λ m _ => (match m.value as λ _ => Bool {
+                                Onward(n) => sb.calls_ok(call, answer, ok, n, m.after),
+                                Exited(_) => True,
+                            }).IsTrue(), r.right(ok, okw, reads, parts.right));
+                        Bool::is_true_and_intro(ok(p, ids, [next], env), match answer(p, ids, [next], env, io).value as λ _ => Bool {
+                                Onward(n) => sb.calls_ok(call, answer, ok, n, answer(p, ids, [next], env, io).after),
+                                Exited(_) => True,
+                            }, first, rest_ok)
+                    }⟩
+                }⟩
+            })))
+        },
+        Choose(c, yes, no) => λ g locs next out => {
+            let P = λ (r: Option<Stmt>) => PTm::LowerHolds(Choose(c, yes, no), w, known, g, locs, next, out, r);
+            Option::and_then_elim(P, trivial, ETm::operand(g, locs, Bit, c), λ id => yes.lower(w, known, g, locs, next, out).and_then(λ sy =>
+                    no.lower(w, known, g, locs, next, out).and_then(λ sn => Some(Branch(id, sy, sn)))), λ id e_id =>
+            Option::and_then_elim(P, trivial, yes.lower(w, known, g, locs, next, out), λ sy =>
+                    no.lower(w, known, g, locs, next, out).and_then(λ sn => Some(Branch(id, sy, sn))), λ sy e_sy =>
+            Option::and_then_elim(P, trivial, no.lower(w, known, g, locs, next, out), λ sn => Some(Branch(id, sy, sn)), λ sn e_sn => {
+                let yh = j(e_sy, λ r _ => PTm::LowerHolds(yes, w, known, g, locs, next, out, r), yes.lower_sound(w, known, g, locs, next, out));
+                let nh = j(e_sn, λ r _ => PTm::LowerHolds(no, w, known, g, locs, next, out, r), no.lower_sound(w, known, g, locs, next, out));
+                ⟨Bool::is_true_and_intro(sy.loop_free(), sn.loop_free(), yh.left, nh.left), λ call still agree f answer answers env vals io held below pos => {
+                    let cv = Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, vals, c));
+                    let k = ETm::operand_kept(w.tys, env, g, locs, vals, held, Bit, c, id, e_id);
+                    let bit: (env.bit(id) = cv) = trans(cong_fn(λ (n: Nat) => ETm::word_at(64, n).head_bit(), k), ETm::head_bool(cv));
+                    let ry = yh.right(call, still, agree, f, answer, answers, env, vals, io, held, below, pos);
+                    let rn = nh.right(call, still, agree, f, answer, answers, env, vals, io, held, below, pos);
+                    j(sym(bit), λ x _ => PTm::Lands(match cv as λ _ => BitVec(64) { True => yes.sem(w, f, g, vals), False => no.sem(w, f, g, vals) }, out, env, io,
+                                match x as λ _ => Mutated<Io, Flow> {
+                                    True => Stmt::thread_by(sy, call, answer, env, io),
+                                    False => Stmt::thread_by(sn, call, answer, env, io),
+                                }) ∧
+                            ((ok: Nat → List<Nat> → List<Nat> → Env → Bool) → (okw: Nat → List<BitVec(64)> → Bool) → PTm::OkReads(known, ok, okw) →
+                                (match cv as λ _ => Bool { True => yes.calls_ok(w, f, okw, g, vals), False => no.calls_ok(w, f, okw, g, vals) }).IsTrue() →
+                                (match x as λ _ => Bool { True => sy.calls_ok(call, answer, ok, env, io), False => sn.calls_ok(call, answer, ok, env, io) }).IsTrue()),
+                        match cv as λ b => PTm::Lands(match b as λ _ => BitVec(64) { True => yes.sem(w, f, g, vals), False => no.sem(w, f, g, vals) }, out, env, io,
+                                match b as λ _ => Mutated<Io, Flow> {
+                                    True => Stmt::thread_by(sy, call, answer, env, io),
+                                    False => Stmt::thread_by(sn, call, answer, env, io),
+                                }) ∧
+                            ((ok: Nat → List<Nat> → List<Nat> → Env → Bool) → (okw: Nat → List<BitVec(64)> → Bool) → PTm::OkReads(known, ok, okw) →
+                                (match b as λ _ => Bool { True => yes.calls_ok(w, f, okw, g, vals), False => no.calls_ok(w, f, okw, g, vals) }).IsTrue() →
+                                (match b as λ _ => Bool { True => sy.calls_ok(call, answer, ok, env, io), False => sn.calls_ok(call, answer, ok, env, io) }).IsTrue()) {
+                            True => ry,
+                            False => rn,
+                        })
+                }⟩
+            })))
+        },
+    }
+}
