@@ -38,12 +38,21 @@ elaborator or tactics.
    lifting lemmas that make it useful for layouts: a step under a context
    (inside a field, an arm, a pointee) and a step at a recursive type's
    body, which changes every child at once (Theorem 5, Lemma 6).
-3. **Where it lands first: the representation of an enum with fields.**
-   Today an enum is its tag word (`EnumInfo`, `lib/native/runtime/rt.hthr`,
-   PRs #818 to #821) and a list is an arena cell written by hand
-   (`lib/native/native_arena.hthr`). Both are "the canonical layout plus a
-   few rewrites" in the paper's sense, and the design for rung 3 should be
-   built that way rather than as one codec proved whole per type (§3.1).
+3. **Where it lands first: the representation of an enum with fields,
+   under Heather's own aim rather than the paper's.** Heather's aim
+   (Minus, 2026-11-20) is that smart logic *can* lay data out, and a
+   person can also lay it out by hand. So the centre is not the rewrite
+   system but one contract every layout meets, however it was made: a
+   layout is first-order data (`Shape` with sums and arena names, each
+   slot naming the field it holds), and one theorem proved once says any
+   such layout that passes a closed check (every field placed once, tags
+   distinct and read before their arms, slots apart) has a codec and a
+   repr. A hand layout is checked by evaluation, as `Layout::fits_bit`
+   checks a hand field table today. A layouter (descending alignment,
+   tags in a name's low bits, a C discriminant table, a search) is an
+   untrusted function that returns a `Shape` and is held to the same
+   check. The paper's rewrites are then one good way to *write* layouters
+   and to change a layout a step at a time, not the gate (§3.1).
 4. **Two small things Heather can do now, without new machinery**: a
    cached value in a cell as a repr whose `inv` says the field equals a
    function of `abs` (the arena's line length already is one, §3.4), and
@@ -157,46 +166,66 @@ not the proofs.
 
 ## 3. Ideas that fit, with where they land and what they cost
 
-### 3.1 Rung 3's cells as a canonical layout plus proved steps (the main one)
+### 3.1 Rung 3's cells: one contract, hand layouts and layouters both (the main one)
 
-**What.** When an enum with fields gets a runtime layout (rung 3,
-`nh-heap`), build it as: the canonical layout read off the declaration (a
-tag, then each constructor's fields in order, children by name into the
-arena), plus a list of steps chosen per type, each step a value with its
-reconstruction (`abs`) and its local law. The codec and the repr of the
-final layout are the canonical ones composed with the steps'
-reconstructions; no codec is proved whole per type.
+**The aim, in Minus's words (2026-11-20):** "you can have smart logic
+layout your data — of course that might be a common kind of way of laying
+it out but you can also lay it out yourself." So a layout written by hand
+and a layout computed by a layouter must be the same kind of thing and
+pass the same check, and neither may need its own proof.
 
-**Why it fits Heather in particular.**
-- It is the "layout is DATA" reading of `datarepr-design.md` §5.2 with
-  the proof decomposed: a layout choice never touches the proof language
-  because each step brings its own law.
-- It is how Minus asked for field order to work (`laid` decides,
-  "magical"), generalised from products to sums.
-- It gives the C-compatible enum Minus named on 2026-11-20 as one step
-  (`tag` with an explicit code table) on the same canonical layout as the
-  default, rather than a second hand-written repr.
-- The generator stays untrusted: a step it chooses is checked by its law.
+**The contract.** `Shape` (`issues/layout-first-order-description.md`,
+prototype `layout-prototype/shape.hthr`) gains what the paper's layout
+language has and the prototype lacks: a sum (a tag slot and one arm per
+code), a name into an arena (the paper's pointer), and, on every slot,
+*which part of the value it holds* (the paper's named layouts `π : ℓ`, a
+constructor and a field path, or a bit range of a field). Then:
 
-**Where.** `Shape` (`issues/layout-first-order-description.md`, prototype
-in `layout-prototype/shape.hthr`) gains a sum (tag and arms) and a name
-into an arena; the canonical shape of a declaration; a `Step` type with
-`apply : Shape → Option<Shape>` and a reconstruction with its law, proved
-once per step kind; the lifting lemmas (a step under a path, a step at a
-recursive body); and the composition lemma `datarepr-design.md` §7.1
-already asks for. The arena's list cell
-(`native_arena.hthr`) and `native-arena-cell-codecs`'s binary tree cell
-are then the first two derived layouts and should come out equal to the
-hand ones.
+- `Shape::Valid(T, s)`, a `Bool` decided by evaluation at a closed shape:
+  every field of every constructor is placed exactly once in that
+  constructor's arm (or recomputable from cached slots, §3.4); codes are
+  distinct; each tag is stored whole before the arms it selects (the
+  paper's Appendix F condition, which §7.2 shows is needed beyond
+  faithfulness); slots are apart and within (the field table's `Fits`).
+- One theorem, proved once in the library: a valid shape gives a codec
+  and a repr of `T` (`abs` reads the tag, picks the arm, reads each field
+  from its slot and follows names; the constructor images write them).
+  This is the "describe the target, invert it" design of the
+  description languages the paper compares itself to (Ribbit, Dargent,
+  §10), and in Heather it costs nothing per layout because the check is
+  evaluation and the theorem is generic.
 
-**Cost.** Large as a whole, but it is the cost of rung 3's representation
-anyway; the paper's contribution is the order of work. A first slice that
-proves the idea: a `Shape` sum with a tag word, the canonical shape of a
-two-constructor type, three steps (commute, pad, tag with a code table),
-and the arena list cell derived from the canonical shape of
-`List<List<BitVec(8)>>`, equal by `refl` to the hand one. Lemma 6 is the
-hard part; in Heather it is an induction over the arena's fuel (the name),
-the same induction `ArenaRef::abs` already does.
+**Hand layouts.** `laid(layout := my_shape) enum T { … }` (spelling
+illustrative) passes the user's `Shape`; `Shape::Valid` closes by `refl`
+or the declaration is refused with what failed (a field placed twice, a
+tag after its arm). A wire format, a C ABI, a register block are all this.
+
+**Layouters.** An ordinary Heather function `Decl → Shape`: Rust's rule
+(descending alignment), C's rule (written order, a discriminant table),
+tags in the low bits of names, a measured search. It is untrusted; what
+it returns passes the same check. This is what "the layout is chosen by
+whatever setup the `laid` uses" (2026-11-12) becomes for sums.
+
+**What the paper adds.** A layouter that works by steps (start at the
+canonical shape, pad, commute, box, tag) is easy to write and to explain,
+and Isomer's evaluation shows good layouts are reached that way (§9.2.1).
+Its local proofs matter only where `Valid` cannot reach: a slot whose
+content is *computed*, not a field (the interval rule `hi ↦ hi - lo`, a
+cached `max`), where the generic theorem does not know how to recover the
+field. There a step's reconstruction function is the extra `abs`, proved
+once for the step kind, and it composes with the generic repr by the
+refinement-composition lemma `datarepr-design.md` §7.1 already plans.
+So the rewrite system is an extension point for non-trivial encodings,
+not the gate every layout goes through.
+
+**Cost and first slice.** A `Shape` sum with a tag word and arena names,
+`Shape::Valid`, and the generic codec theorem for that fragment; then the
+arena's list cell (`native_arena.hthr`) written as a hand `Shape` and
+shown equal to the hand codec by `refl`, plus one layouter (written order)
+producing the same shape. The generic theorem's recursive case (a name to
+a cell of the same type) is the induction over the arena's fuel that
+`ArenaRef::abs` already does. Negative controls: a field placed twice, a
+tag after its arm, two codes equal.
 
 ### 3.2 Field order as a permutation step
 
@@ -273,15 +302,16 @@ padded to one cell size let a dying cell be reused by another constructor.
 The last is how Koka's FIP programs get reuse by editing the source (Pad
 fields); here it is a `pad` step. Note for `nh-ownership`, nothing now.
 
-### 3.8 A decodability check for derived codecs
+### 3.8 A decodability check (part of `Shape::Valid`)
 
 §7.2's example is worth keeping as a negative control: once `Shape` has
 sums with arms of different widths, a derived layout can be faithful and
 still undecodable. Appendix F's condition (each tag stored whole, before
 the payload it selects, in its scope) is a closed check over a `Shape`, a
 `Bool` decided by evaluation like `Layout::fits_bit`, which a generator can
-ask before it tries to prove `round`. It lands with §3.1, as the refusal a
-step that moves a tag after its payload gets.
+ask before it tries to prove `round`. It is one conjunct of §3.1's
+`Shape::Valid`, and the refusal a hand layout or a layouter gets when it
+puts a tag after its payload.
 
 ## 4. What does not apply
 
@@ -325,19 +355,20 @@ Nothing here is urgent, and nothing is filed as a new issue: the ideas
 attach to issues that exist.
 
 - `issues/layout-first-order-description.md`: §3.1 is the case for `Shape`
-  with sums and names, built as canonical shape plus steps.
+  with sums, names and slots that say what they hold, a closed validity
+  check, and one generic codec theorem, so a hand layout and a layouter's
+  output are the same thing.
 - `issues/datarepr-guarded-images.md`: §3.3, a second customer (arms for
   value shapes), and a reason for the guard to be a decidable test.
-- `issues/native-arena-cell-codecs.md`: §3.1's first slice derives the
-  list cell and the tree cell from canonical shapes; §3.4, the cached
-  length as a stated law.
+- `issues/native-arena-cell-codecs.md`: §3.1's first slice writes the
+  list cell (then the tree cell) as a `Shape` and checks it against the
+  hand codec; §3.4, the cached length as a stated law.
 - `issues/laid-field-order-chosen.md`: §3.2.
 - `issues/datarepr-separation.md`: §3.6 (measured evidence for the
   multi-repr trigger) and §3.7 (counts as a layout field).
 
-The one decision for Minus: whether rung 3's representation of an enum
-with fields is designed as §3.1 (canonical layout plus proved steps) or as
-one codec per type proved whole. The recommendation is §3.1, because it is
-what makes "the layout is chosen by the `laid` setup" and "a C enum is
-another repr with a discriminant table" the same mechanism, and because it
-keeps every layout choice out of the proof of the program.
+Direction, from Minus (2026-11-20): smart logic can lay data out, and a
+person can also lay it out by hand. §3.1 is written to that: one contract
+(`Shape::Valid` and a generic codec theorem) that both meet, layouters as
+untrusted functions to `Shape`, and the paper's locally proved steps kept
+for encodings that compute a slot rather than store a field.
