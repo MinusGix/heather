@@ -123,6 +123,11 @@ pub(crate) struct ImportSpec {
 pub(crate) struct Scope {
     pub module: String,
     pub imports: Vec<ImportSpec>,
+    /// The modules the source's paths name without importing them
+    /// (`fs::read`, docs/language/modules-design.md §3.8): in this module's
+    /// closure, qualified only, and not passed on to its importers, so not
+    /// stored in its image.
+    pub paths: Vec<String>,
 }
 
 impl Scope {
@@ -130,6 +135,7 @@ impl Scope {
         Scope {
             module: module.into(),
             imports: Vec::new(),
+            paths: Vec::new(),
         }
     }
 
@@ -277,15 +283,18 @@ impl CommonClosure {
                     None => continue,
                 },
             };
-            for i in &s.imports {
+            // The root's written paths join its imports here (§3.8); another
+            // module's do not reach its importers.
+            let paths: &[String] = if m == root { &s.paths } else { &[] };
+            for i in s.imports.iter().map(|i| &i.module).chain(paths) {
                 // The root is never met: asked for, it is the answer only if
                 // a module of the closure imports it.
-                if i.module == root {
-                    met_after.entry(i.module.clone()).or_insert(popped.len());
+                if i == root {
+                    met_after.entry(i.clone()).or_insert(popped.len());
                 }
-                if seen.insert(&i.module) {
-                    met_after.entry(i.module.clone()).or_insert(popped.len());
-                    stack.push(&i.module);
+                if seen.insert(i) {
+                    met_after.entry(i.clone()).or_insert(popped.len());
+                    stack.push(i);
                 }
             }
         }
@@ -1160,6 +1169,7 @@ mod layered_tests {
                 .iter()
                 .map(|m| ImportSpec { module: m.to_string(), listed: Vec::new(), exported: Vec::new() })
                 .collect(),
+            paths: Vec::new(),
         }
     }
 

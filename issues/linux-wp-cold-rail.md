@@ -4,7 +4,7 @@ status: closed
 labels: [testing,performance]
 area: infrastructure
 created: 2026-10-22
-updated: 2026-10-23
+updated: 2026-11-20
 ---
 
 On a fresh 4-CPU cloud container, a full `scripts/test` reports `INCOMPLETE`:
@@ -65,3 +65,4 @@ elaborator whnf).
   warmup does not cover that prefix (`semantic_x86_warmup` stops at
   `x86_64`). The cold margin is about half the rail. If it shrinks again,
   the lever is a warmup over `READ_LOOP` and the Linux list, not more rail.
+- 2026-11-20: 2026-11-20: The same shape in `linux_determinism`, still open: [[linux-determinism-cold-rail]].

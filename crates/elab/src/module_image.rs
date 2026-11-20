@@ -1744,6 +1744,8 @@ fn get_scope(r: &mut Reader<'_>) -> Result<Scope, ModuleImageDecodeError> {
     Ok(Scope {
         module: r.string()?,
         imports: r.vec(|r| Ok(ImportSpec { module: r.string()?, listed: r.vec(Reader::string)?, exported: r.vec(Reader::string)? }))?,
+        // A module's written paths are its own (§3.8): not stored.
+        paths: Vec::new(),
     })
 }
 

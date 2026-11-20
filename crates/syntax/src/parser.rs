@@ -198,6 +198,31 @@ pub fn leading_imports(src: &str) -> Vec<ImportItem> {
     imports
 }
 
+/// The first segments of the paths a source writes, `m` of `m::x`: the
+/// lower-case first segment of every qualified name (the lexer reads
+/// `m::T::x` as one identifier) that no `.` or `::` precedes, in order of
+/// first appearance. A module named so is loaded for the source without an
+/// import, visible qualified only (docs/language/modules-design.md §3.8); a
+/// name that is no module (a function's `f::rec`, a local's) is the caller's
+/// to drop. Read from the tokens, so a comment or a string never names one,
+/// and a source that does not lex names the paths before the point it stops.
+pub fn written_paths(src: &str) -> Vec<String> {
+    let toks = crate::lexer::lex_while(src, |_| true);
+    let mut out: Vec<String> = Vec::new();
+    for (i, tok) in toks.iter().enumerate() {
+        let TokKind::Ident(text) = &tok.kind else { continue };
+        let Some((head, _)) = text.split_once("::") else { continue };
+        if i > 0 && matches!(toks[i - 1].kind, TokKind::ColonColon | TokKind::Dot) {
+            continue;
+        }
+        if !head.starts_with(|c: char| c.is_ascii_lowercase()) || out.iter().any(|m| m == head) {
+            continue;
+        }
+        out.push(head.to_string());
+    }
+    out
+}
+
 /// One `section`'s head, split as [`Parser::splice_sections`] splices it.
 struct SectionHead {
     tyvars: Vec<TyParam>,
@@ -7539,6 +7564,13 @@ impl Parser {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn written_paths_are_first_segments_outside_comments_and_strings() {
+        let src = "fn f(x: bitvec::BitVec(8)) -> Nat { rat::Rat::ofInt(x.y::z) + Nat::succ(0) }\n\
+                   // fs::read\nfn g() -> Str { \"io::write\" }\nfn h() -> Nat { rat::one }";
+        assert_eq!(written_paths(src), ["bitvec", "rat"]);
+    }
 
     /// The file's single `fn`/`theorem` declaration.
     fn only_decl(f: &File) -> &Decl {
