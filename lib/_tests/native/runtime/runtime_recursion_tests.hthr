@@ -1,0 +1,82 @@
+// Probes of a `runtime fn` whose call of itself is not its last act
+// (docs/native/runtime-fn-recursion-design.md §6 step 4): the generator
+// reads it as a procedure's body, `f::ptm`, proves its guard from its own
+// `f::ext` and `f::irrel` (`f::guarded`), its one definition's pin
+// (`f::unfolds`), and publishes `f::fits`, how deep it runs at given
+// words. Tests, not library: nothing outside lib/_tests imports this
+// module (docs/test-value-audit.md §4.5).
+import logic;
+import nat;
+import list;
+import bitvec;
+import bitvec_nat;
+import rt;
+import rt_ptm;
+import runtime;
+
+// `n + (n - 1) + … + 0`: the call under a method call.
+runtime fn rsum(n: u64) → u64 decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => BitVec::ofNat(0),
+        False => n.add(rsum(n.sub(BitVec::ofNat(1)))),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+// The call of itself is `Recur(0, …)`, the `match h:` a convoyed branch.
+theorem rsum_ptm(): rsum::ptm = Bind(Lit(Word(64), 0), Bind(Prim(Eq(64), [1, 0]), Choose(0, True, Value(Lit(Word(64), 0)),
+    Bind(Lit(Word(64), 1), Bind(Prim(Sub(64), [3, 0]), Recur(0, [0], Value(Prim(Add(64), [5, 0])))))))) { refl }
+
+// At 10 its calls nest ten deep.
+theorem rsum_fits_ten(): rsum::fits(10, [BitVec::ofNat(10)]) = True { refl }
+
+theorem rsum_not_nine(): rsum::fits(9, [BitVec::ofNat(10)]) = False { refl }
+
+// The pin: the definition's meaning at 10, its call answered by `rsum`,
+// is `rsum(10)`.
+theorem rsum_unfolds_ten(): rsum(BitVec::ofNat(10)) = PTm::sem(rsum::ptm, PTm::words_world(RecInfo::none), PTm::words_meaning(RecInfo::none, [Word(64)], rsum),
+    PTm::word_ctx(1), PTm::vals_n(RecInfo::none, 1, [BitVec::ofNat(10)])) {
+    rsum::unfolds(0, PDef(1, rsum::ptm), refl, [BitVec::ofNat(10)], refl)
+}
+
+// Two words, the call bound by a `let` and read twice: `2^n · acc`, one
+// level per halving of nothing, so `n` levels.
+runtime fn doubled(n: u64, acc: u64) → u64 decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => acc,
+        False => { let r = doubled(n.sub(BitVec::ofNat(1)), acc); r.add(r) },
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+theorem doubled_fits(): doubled::fits(5, [BitVec::ofNat(5), BitVec::ofNat(3)]) = True { refl }
+
+theorem doubled_not_four(): doubled::fits(4, [BitVec::ofNat(5), BitVec::ofNat(3)]) = False { refl }
+
+theorem doubled_value(): doubled(BitVec::ofNat(5), BitVec::ofNat(3)) = BitVec::ofNat(96) { refl }
+
+// A tail call is still a loop: `count_down` gets a `Compile` instance and
+// no `f::ptm`.
+runtime fn count_down(n, acc: u64) → u64 decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => acc,
+        False => count_down(n.sub(BitVec::ofNat(1)), acc.add(n)),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+// expect-error: `count_down` has no member `ptm`
+fn count_down_ptm() → PTm { count_down::ptm }
+
+// A recursion that calls another function is not yet a procedure: refused
+// with the judgment's reason.
+runtime fn plus_one(x: u64) → u64 { x.add(BitVec::ofNat(1)) }
+
+// expect-error: a call of itself that is not the last thing it does
+runtime fn rcall(n: u64) → u64 decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => BitVec::ofNat(0),
+        False => plus_one(rcall(n.sub(BitVec::ofNat(1)))),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}

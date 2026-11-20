@@ -65,6 +65,7 @@ import function_ir;
 import function_ir_operation;
 import function_ir_eval;
 import rt_loop;
+import rt_ptm;
 import rt_file;
 import rt_file_reflect;
 import rt_held_reflect;
@@ -91,8 +92,6 @@ export import bytes;
 inductive Verdict { Ok, Refused(why: String) }
 
 fn Verdict::and(self a: Verdict, b: Verdict) → Verdict { match a { Ok => b, Refused(why) => Refused(why) } }
-
-fn Ty::is_word64(self t: Ty) → Bool { match t { Word(w) => w.same(64), _ => False } }
 
 fn Ty::all_word64(ts: List<Ty>) → Bool {
     match ts { Nil => True, Cons(t, rest) => t.is_word64().and(Ty::all_word64(rest)) }
@@ -1359,6 +1358,7 @@ def runtime_w_functions: List<Function> = [];
 def runtime_w_shape: RtShape = Plain;
 def runtime_w_nat: Nat = 0;
 def runtime_w_buffers: List<List<BitVec(8)>> = [];
+def runtime_w_ptm: PTm = Value(Var(0));
 def runtime_w_bytes: List<BitVec(8)> = [];
 // A loop's `again`: a function of its next words.
 def runtime_w_again: List<BitVec(64)> → BitVec(64) = λ _ => BitVec::ofNat(0);
@@ -1442,6 +1442,16 @@ fn Tm::quote(self t: Tm, q: RtQ) → Expr {
         Pick(i, c, arms, eq) => ap(runtime_at(q.tm, 12), [NatLit(i), NatLit(c), arms.quote(q), q.boolean(eq)]),
         Inject(i, k, args) => ap(runtime_at(q.tm, 13), [NatLit(i), NatLit(k), q.nat_list(args)]),
         Slot(i, j, of) => ap(runtime_at(q.tm, 14), [NatLit(i), NatLit(j), NatLit(of)]),
+    }
+}
+
+// A `PTm`, its constructors `cs` in declaration order.
+fn PTm::quote(self t: PTm, q: RtQ, cs: List<Expr>) → Expr {
+    match t {
+        Value(v) => ap(runtime_at(cs, 0), [v.quote(q)]),
+        Bind(e, body) => ap(runtime_at(cs, 1), [e.quote(q), body.quote(q, cs)]),
+        Recur(p, args, body) => ap(runtime_at(cs, 2), [NatLit(p), q.nat_list(args), body.quote(q, cs)]),
+        Choose(c, eq, yes, no) => ap(runtime_at(cs, 3), [NatLit(c), q.boolean(eq), yes.quote(q, cs), no.quote(q, cs)]),
     }
 }
 
@@ -4119,6 +4129,97 @@ fn runtime_span(name: String, f: GlobalRef) → Tac<List<Decl>> {
 }
 
 // A function that only reads.
+// ---------------------------------------------------------------------------
+// A recursion whose call of itself is not its last act
+// (docs/native/runtime-fn-recursion-design.md §6 step 4)
+//
+// A call that can run out of levels is a call between statements, so such
+// a function is not a region and has no `Compile` instance: it is a
+// procedure, its body the reflection read as a `PTm` (`Fun::recursive_ptm`).
+// What is published is the function as a definition and what a program
+// calling it cites:
+//
+//     f::ptm      its body as a `PTm`, the call of itself `Recur(0, …)`
+//     f::guarded  `PTm::GuardedWords`: the body, its call answered by
+//                 anything that agrees with `f` below the measure, is `f`
+//     f::unfolds  `PDef::Unfolds` of its one definition at `f` itself
+//     f::fits     whether `f` at its words runs within `k` levels
+//
+// `f::guarded` is proved as a measured loop's `Guarded` is
+// (`runtime_measured_instance`): `f::ext` at two recursions, the
+// recursor's and the hypothesis's, which agree by `f::irrel` and the
+// hypothesis. Nothing in it is written for `f`.
+fn runtime_recursive(name: String, f: GlobalRef, rfun: Fun, p: PTm) → Tac<List<Decl>> {
+    let ts <- runtime_type_handles();
+    let q <- runtime_quoting(ts);
+    let ptm_h <- runtime_type_of(name_of(runtime_w_ptm));
+    let ptms <- runtime_ctors_at(ptm_h);
+    let rfl <- runtime_global("tactic::rfl");
+    let sym_g <- runtime_global(name_of(Setup::eq_sym));
+    let trans_g <- runtime_global(name_of(Setup::eq_trans));
+    let lt_succ <- runtime_global(name_of(Setup::lt_succ));
+    let on_words <- runtime_global(name_of(Ty::on_words));
+    let guarded_g <- runtime_global(name_of(PTm::GuardedWords));
+    let unfolds_g <- runtime_global(name_of(PTm::unfolds_words));
+    let fits_g <- runtime_global(name_of(PTm::fits_words));
+    let none_g <- runtime_global(name_of(RecInfo::none));
+    let rec <- runtime_global(name ++ "::rec");
+    let ext <- runtime_global(name ++ "::ext");
+    let irrel <- runtime_global(name ++ "::irrel");
+    let word_list <- runtime_ctors_at(ts.words);
+    let ws = rfun.params;
+    let ws_e = Ty::quotes(ws, q);
+    let ptm_e = PTm::quote(p, q, ptms);
+    let word_ts: List<Handle> = ws.map(λ _ => ts.word);
+    let list: List<LocalRef> → Expr = λ ys => RtQ::seq(word_list, runtime_locals(ys));
+    // The measure, as a function of the words.
+    let zs <- runtime_params(ts.word, ws, None, 0);
+    let mu_z <- runtime_measure_at(rec, runtime_locals(zs));
+    let m_e = ap(on_words, [ws_e, runtime_lams(zs, Hd(mu_z))]);
+    // The guard, its binders opened off its statement: the words, the
+    // recursion `again`, and what `again` agrees with below the measure.
+    let stated = ap(guarded_g, [ws_e, ptm_e, none_g, Global(f), m_e]);
+    let g_t <- as_type(stated).or_fail("runtime: a recursive function's guard: ");
+    let words: List<String> = List::range(ws.len()).map(λ i => "x".append(decimal_name(2, i)));
+    let opened <- runtime_open_n(64, g_t, words.append(["again", "hyp"]));
+    let xs = opened.fst.take(ws.len());
+    let again = opened.fst.nth(ws.len()).unwrap_or(LocalRef(0));
+    let hyp = opened.fst.nth(ws.len() + 1).unwrap_or(LocalRef(0));
+    let mu_x <- runtime_measure_at(rec, runtime_locals(xs));
+    let n_e = Hd(mu_x);
+    // `g1 = λ y… p => f::rec(N, y…, p)`.
+    let ys1 <- runtime_params_at(word_ts, Some(hyp), 0);
+    let d1 <- runtime_bound_dom(rec, n_e, runtime_locals(ys1));
+    let p1 <- assume(Hd(d1), "p", Some(ys1.rev().head_or(hyp))).or_fail("runtime: a bound proof: ");
+    let g1 = runtime_lams(ys1.append([p1.ref]), ap(rec, Cons(n_e, runtime_locals(ys1).append([Local(p1.ref)]))));
+    // `g2 = λ y… _ => again([y…])`.
+    let ys2 <- runtime_params_at(word_ts, Some(hyp), 0);
+    let d2 <- runtime_bound_dom(rec, n_e, runtime_locals(ys2));
+    let p2 <- assume(Hd(d2), "q", Some(ys2.rev().head_or(hyp))).or_fail("runtime: a bound proof: ");
+    let g2 = runtime_lams(ys2.append([p2.ref]), ap(Local(again), [list(ys2)]));
+    // They agree: `f::irrel` on the left, the hypothesis on the right.
+    let ys3 <- runtime_params_at(word_ts, Some(hyp), 0);
+    let d3 <- runtime_bound_dom(rec, n_e, runtime_locals(ys3));
+    let mu_y <- runtime_measure_of(d3);
+    let p3 <- assume(Hd(d3), "p", Some(ys3.rev().head_or(hyp))).or_fail("runtime: a bound proof: ");
+    let q3 <- assume(Hd(d3), "q", Some(p3.ref)).or_fail("runtime: a bound proof: ");
+    let irr = ap(irrel, Cons(n_e, Cons(Blank, runtime_locals(ys3).append([Local(p3.ref), ap(lt_succ, [Hd(mu_y)])]))));
+    let hy = ap(Local(hyp), [list(ys3), ap(rfl, [Blank, NatLit(ws.len())]), Local(p3.ref)]);
+    let hg = runtime_lams(ys3.append([p3.ref, q3.ref]), ap(trans_g, [Blank, Blank, Blank, Blank, irr, ap(sym_g, [Blank, Blank, Blank, hy])]));
+    let lt_n = ap(lt_succ, [n_e]);
+    let proved = runtime_lams(xs.append([again, hyp]),
+        ap(sym_g, [Blank, Blank, Blank, ap(ext, Cons(n_e, Cons(n_e, Cons(g1, Cons(g2, Cons(hg, runtime_locals(xs).append([lt_n, lt_n])))))))]));
+    let unfolds = ap(unfolds_g, [ws_e, ptm_e, none_g, Global(f), m_e, proved]);
+    let unfolds_t <- infer(unfolds).or_fail("runtime: `" ++ name ++ "::unfolds`: ");
+    let fits = ap(fits_g, [ws_e, ptm_e, none_g, Global(f)]);
+    let fits_t <- infer(fits).or_fail("runtime: `" ++ name ++ "::fits`: ");
+    pure([
+        Decl(AsValue, name ++ "::ptm", [], Hd(ptm_h), ptm_e),
+        Decl(AsTheorem, name ++ "::guarded", [], stated, proved),
+        Decl(AsTheorem, name ++ "::unfolds", [], Hd(unfolds_t), unfolds),
+        Decl(AsValue, name ++ "::fits", [], Hd(fits_t), fits)])
+}
+
 fn runtime_reads(name: String, f: GlobalRef) → Tac<List<Decl>> {
     let k0 <- rt_known_in([name], [], True);
     // The reflection and its callees' signatures, the types held by their
@@ -4137,7 +4238,12 @@ fn runtime_reads(name: String, f: GlobalRef) → Tac<List<Decl>> {
     let tys = runtime_shapes_with(reprs, recs);
     let world = World(tys, sigs, Sig::sems_default(tys, sigs));
     match Fun::judge(rfun, world) {
-        Refused(why) => fail("`" ++ name ++ "` cannot be a runtime fn under the default setup: " ++ why, []),
+        // A call of itself that is not its last act: a procedure, where it
+        // calls nothing else.
+        Refused(why) => match (match callee_sigs { Nil => rfun.recursive_ptm(), Cons(_, _) => None }) {
+            Some(p) => runtime_recursive(name, f, rfun, p),
+            None => fail("`" ++ name ++ "` cannot be a runtime fn under the default setup: " ++ why, []),
+        },
         Ok => match Setup::lowers(Fun::lower_any(rfun, world)) {
             False => fail("`" ++ name ++ "`: the default setup's lowering refused it though its judgment accepted it (a gap in `Fun::judge`)", []),
             True => runtime_link(4096, k, [LinkFrame(f.id, name, reflected.snd, reflected.snd.drop(1), None)], Linking([], [], [], [])).bind(λ l =>
