@@ -173,6 +173,10 @@ impl OpFixity {
 pub struct ImportItem {
     /// Explicit selected reexport (`export m::{x};`); ordinary imports stay private.
     pub reexport: bool,
+    /// `export import m;`: every name `m` makes visible bare is reexported
+    /// (docs/language/modules-design.md §3.7). Only with `reexport`, and
+    /// never with a list.
+    pub whole: bool,
     pub module: String,
     pub module_span: Span,
     pub listed: Vec<(String, Span)>,

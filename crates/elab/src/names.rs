@@ -223,6 +223,22 @@ pub(crate) struct Names {
     /// [`Names::enter_scope`], their one writer, drops it when it writes one;
     /// a snapshot carries the closure of the tables it carries.
     common: std::sync::OnceLock<Rc<CommonClosure>>,
+    /// The current scope's own import closure, walked as [`common_reaches`]
+    /// walks the prelude's, for [`closure_reaches`]: kept for the scope
+    /// that was current when it was made, and dropped with `common`.
+    closure: ClosureCell,
+}
+
+/// [`Names::closure`]: the last scope [`closure_reaches`] walked, and its
+/// walk. Replaced when another scope asks; a clone of the tables carries a
+/// copy, never a share, since the closure is a function of their scopes.
+#[derive(Default)]
+struct ClosureCell(std::sync::Mutex<Option<(Scope, Rc<CommonClosure>)>>);
+
+impl Clone for ClosureCell {
+    fn clone(&self) -> Self {
+        ClosureCell(std::sync::Mutex::new(self.0.lock().unwrap_or_else(|e| e.into_inner()).clone()))
+    }
 }
 
 /// The walk of the common prelude's import closure, kept
@@ -239,19 +255,32 @@ struct CommonClosure {
 impl CommonClosure {
     /// The walk [`common_reaches`] did per asking, done once, to its end.
     fn walk(names: &Names) -> CommonClosure {
+        Self::walk_from(names, COMMON_MODULE, None)
+    }
+
+    /// The same walk from `root`; with `scope`, `root`'s imports are read
+    /// off that scope rather than the tables (the scope being elaborated
+    /// need not be in them yet).
+    fn walk_from(names: &Names, root: &str, scope: Option<&Scope>) -> CommonClosure {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let mut popped: Vec<String> = Vec::new();
         let mut met_after: NameMap<String, usize> = NameMap::default();
         let mut seen: NameSet<&str> = NameSet::default();
-        seen.insert(COMMON_MODULE);
-        let mut stack: Vec<&str> = vec![COMMON_MODULE];
+        seen.insert(root);
+        let mut stack: Vec<&str> = vec![root];
         while let Some(m) = stack.pop() {
             popped.push(m.to_string());
-            let Some(s) = names.tables.find(SCOPES, m, |layer| layer.module_scopes.get(m)) else { continue };
+            let s = match scope {
+                Some(s) if m == root => s,
+                _ => match names.tables.find(SCOPES, m, |layer| layer.module_scopes.get(m)) {
+                    Some(s) => s,
+                    None => continue,
+                },
+            };
             for i in &s.imports {
                 // The root is never met: asked for, it is the answer only if
                 // a module of the closure imports it.
-                if i.module == COMMON_MODULE {
+                if i.module == root {
                     met_after.entry(i.module.clone()).or_insert(popped.len());
                 }
                 if seen.insert(&i.module) {
@@ -386,6 +415,7 @@ impl Names {
             scope: Scope::new(module),
             tables: Layered::default(),
             common: std::sync::OnceLock::new(),
+            closure: ClosureCell::default(),
         }
     }
 
@@ -444,6 +474,7 @@ impl Names {
                 .module_scopes
                 .insert(scope.module.clone(), scope.clone());
             self.common = std::sync::OnceLock::new();
+            self.closure = ClosureCell::default();
         }
         // Publish aliases only in the visibility index: global coordinates,
         // nominal tags, signatures and proof provenance stay at their origin.
@@ -502,6 +533,23 @@ impl Names {
             }
         }
         seen
+    }
+
+    /// Every name `module` makes visible bare to an importer: its own
+    /// declarations and the names it reexports, sorted. What `export
+    /// import module;` reexports (docs/language/modules-design.md §3.7).
+    pub(crate) fn visible_from(&self, module: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for layer in self.tables.layers() {
+            for (name, entries) in &layer.index.by_name {
+                if entries.iter().any(|e| e.module == module) {
+                    out.push(name.clone());
+                }
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
     }
 
     pub(crate) fn declares(&self, module: &str, name: &str) -> bool {
@@ -767,7 +815,8 @@ fn resolve_kinds(
     let visible_module = qual == scope.module
         || scope.imports_module(qual)
         || qual == PRELUDE_MODULE
-        || common_reaches(names, scope, qual);
+        || common_reaches(names, scope, qual)
+        || closure_reaches(names, scope, qual);
     if visible_module && names.declares(qual, base) {
         // ... unless a visible module also declares the whole string as a
         // member — `f::pos` of a function `f` named like the module `f`
@@ -813,10 +862,51 @@ fn resolve_kinds(
     {
         return NameRes::Found(origin);
     }
+    // `List::byte_within` where `List` is visible and the member is declared
+    // in a module only the closure reaches (`rt`, imported by `runtime`): a
+    // type's members follow the import closure, as qualified names do
+    // (docs/language/modules-design.md §3.7). Asked only when no directly
+    // visible declaration answered, so nothing that resolved before changes;
+    // two closure modules attaching the same member are ambiguous.
+    if CLOSURE_MEMBERS.with(|c| c.get())
+        && let NameRes::Found(_) = resolve_bare(names, scope, qual)
+    {
+        let mut hits: Vec<(String, String)> = Vec::new();
+        for e in names.entries(name) {
+            if (kinds.is_empty() || kinds.contains(&e.kind))
+                && e.module == e.origin
+                && !hits.iter().any(|(origin, _)| origin == &e.origin)
+                && closure_reaches(names, scope, &e.module)
+            {
+                hits.push((e.origin.clone(), e.module.clone()));
+            }
+        }
+        match hits.len() {
+            0 => {}
+            1 => return NameRes::Found(hits.remove(0).0),
+            _ => return NameRes::Ambiguous(hits.into_iter().map(|(_, m)| m).collect()),
+        }
+    }
     if visible_module {
         return NameRes::NotFound;
     }
     NameRes::NoSuchQualifier(qual.to_string())
+}
+
+thread_local! {
+    /// Whether [`resolve_kinds`] reads a type's members through the import
+    /// closure (§3.7); off inside [`without_closure_members`].
+    static CLOSURE_MEMBERS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// `body` with a type's members read only from the modules visible
+/// directly: how a caller asks whether a member it found came only through
+/// the closure.
+pub(crate) fn without_closure_members<T>(body: impl FnOnce() -> T) -> T {
+    let before = CLOSURE_MEMBERS.with(|c| c.replace(false));
+    let out = body();
+    CLOSURE_MEMBERS.with(|c| c.set(before));
+    out
 }
 
 /// Is `module` in the common prelude's closure, in a scope that imports the
@@ -849,6 +939,46 @@ fn common_reaches(names: &Names, scope: &Scope, module: &str) -> bool {
             "the kept walk of the prelude's closure is not the walk for `{module}`"
         );
     }
+    match closure.met_after.get(module) {
+        Some(&popped) => {
+            closure.note_walk(popped);
+            true
+        }
+        None => {
+            closure.note_walk(closure.popped.len());
+            false
+        }
+    }
+}
+
+/// Is `module` in this scope's import closure? Such a module is visible
+/// **qualified only**, as [`common_reaches`] makes the prelude's closure:
+/// `bitvec_div::BitVec::udiv` resolves wherever `bitvec_div` is imported by
+/// something this module imports, and a bare `udiv` does not. That is what a
+/// designation reached through the closure emits, what a tactic spells its
+/// lemmas with (`bitvec_omega::add_form`), and what a generator looks up; a
+/// writer may spell it too. The walk is kept for the current scope and noted
+/// as the prelude's is, so the early cutoff sees the modules it read.
+fn closure_reaches(names: &Names, scope: &Scope, module: &str) -> bool {
+    // Most qualifiers that get here are types (`List::map`): a name no
+    // loaded module has is answered without a walk.
+    if names.tables.find(SCOPES, module, |layer| layer.module_scopes.get(module)).is_none() {
+        return false;
+    }
+    // Kept for the scope it was walked from: a scope entered without its
+    // tables changing (a session's next module over the same world) keeps
+    // the cell, so the key is checked, not assumed.
+    let closure = {
+        let mut kept = names.closure.0.lock().unwrap_or_else(|e| e.into_inner());
+        match &*kept {
+            Some((at, closure)) if at == scope => closure.clone(),
+            _ => {
+                let closure = Rc::new(CommonClosure::walk_from(names, &scope.module, Some(scope)));
+                *kept = Some((scope.clone(), closure.clone()));
+                closure
+            }
+        }
+    };
     match closure.met_after.get(module) {
         Some(&popped) => {
             closure.note_walk(popped);

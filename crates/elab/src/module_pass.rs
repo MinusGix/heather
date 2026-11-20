@@ -315,7 +315,16 @@ impl ModulePassMut<'_> {
             }
             written.push((&imp.module, imp.reexport));
             let mut exported = Vec::new();
-            for (n, nspan) in &imp.listed {
+            // `export import m;`: every name `m` shows bare, less the
+            // generated ones the access regime keeps unwritable.
+            let whole: Vec<(String, Span)> = if imp.whole {
+                self.names.visible_from(&imp.module).into_iter()
+                    .filter(|n| !n.contains('#') && self.access_refusal(n).is_none())
+                    .map(|n| (n, imp.module_span)).collect()
+            } else {
+                Vec::new()
+            };
+            for (n, nspan) in imp.listed.iter().chain(&whole) {
                 if imp.reexport && let Some(why) = self.access_refusal(n) {
                     return err(why, *nspan);
                 }
