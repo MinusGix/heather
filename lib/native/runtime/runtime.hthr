@@ -201,7 +201,7 @@ fn Tm::judge(self t: Tm, sigs: List<Sig>, tys: Nat → RecInfo) → Verdict {
         Fold(_, _, _) => Refused("a `foldl`: loops over buffers are not lowered yet (docs/native/runtime-fn-setups-design.md §16.6)"),
         Case(_, _, _) => Refused("a `match` on a `Nat` that is not a loop's fuel: only a fuel recursion's top `match` is lowered"),
         Byte(_, _, _) => Ok,
-        Pick(_, _, arms) => arms.judge(sigs, tys),
+        Pick(_, _, arms, _) => arms.judge(sigs, tys),
     }
 }
 
@@ -220,7 +220,7 @@ fn Tm::judge_tail(self t: Tm, sigs: List<Sig>, tys: Nat → RecInfo) → Verdict
         Fold(over, init, step) => Fold(over, init, step).judge(sigs, tys),
         Case(c, zero, succ) => Case(c, zero, succ).judge(sigs, tys),
         Byte(k, i, length) => Byte(k, i, length).judge(sigs, tys),
-        Pick(i, c, arms) => Pick(i, c, arms).judge(sigs, tys),
+        Pick(i, c, arms, eq) => Pick(i, c, arms, eq).judge(sigs, tys),
     }
 }
 
@@ -1194,7 +1194,10 @@ fn runtime_at(es: List<Expr>, i: Nat) → Expr { es.nth(i).unwrap_or(Blank) }
 // The constructors quoting reads: `Ty`, `Tm`, `Op`, `Fun`, `Sig`, and the
 // lists of codes, indices and signatures.
 record RtQ { ty: List<Expr>, tm: List<Expr>, op: List<Expr>, tys: List<Expr>, nats: List<Expr>, sigs: List<Expr>, mk_fun: Expr, mk_sig: Expr,
-    operation: List<Expr> }
+    operation: List<Expr>, bools: List<Expr> }
+
+// A `Bool` as the term of its constructor (`False`, then `True`).
+fn RtQ::boolean(self q: RtQ, b: Bool) → Expr { runtime_at(q.bools, match b { False => 0, True => 1 }) }
 
 fn RtQ::seq(nil_cons: List<Expr>, xs: List<Expr>) → Expr {
     match xs { Nil => runtime_at(nil_cons, 0), Cons(x, rest) => ap(runtime_at(nil_cons, 1), [x, RtQ::seq(nil_cons, rest)]) }
@@ -1246,7 +1249,7 @@ fn Tm::quote(self t: Tm, q: RtQ) → Expr {
         Fold(over, init, step) => ap(runtime_at(q.tm, 9), [NatLit(over), NatLit(init), NatLit(step)]),
         Case(c, zero, succ) => ap(runtime_at(q.tm, 10), [NatLit(c), zero.quote(q), succ.quote(q)]),
         Byte(k, i, length) => ap(runtime_at(q.tm, 11), [NatLit(k), NatLit(i), NatLit(length)]),
-        Pick(i, c, arms) => ap(runtime_at(q.tm, 12), [NatLit(i), NatLit(c), arms.quote(q)]),
+        Pick(i, c, arms, eq) => ap(runtime_at(q.tm, 12), [NatLit(i), NatLit(c), arms.quote(q), q.boolean(eq)]),
     }
 }
 
@@ -1266,7 +1269,10 @@ fn runtime_quoting(ts: RtTypes) → Tac<RtQ> {
     let funs <- runtime_ctors_at(ts.fun_t);
     let sigs <- runtime_ctors_at(ts.sig);
     let operations <- runtime_ctors_at(ts.operation);
-    pure(RtQ(tys, tms, ops, ty_list, nat_list, sig_list, runtime_at(funs, 0), runtime_at(sigs, 0), operations))
+    let bool_g <- runtime_ref("Bool");
+    let bool_t <- as_type(Global(bool_g)).or_fail("runtime: `Bool`: ");
+    let bools <- runtime_ctors_at(bool_t);
+    pure(RtQ(tys, tms, ops, ty_list, nat_list, sig_list, runtime_at(funs, 0), runtime_at(sigs, 0), operations, bools))
 }
 
 // A pair, its types left to the elaborator: what the generator spells a
@@ -2119,8 +2125,9 @@ fn runtime_split_refl(rfl: Expr, e: Expr, goal: Handle) → Tac<Expr> {
 // §16.16): `EnumInfo::of_ctors` at its constructors in order. Its `pick`
 // is a plain `match` on the value whose arm `k` is `a(k)` (`Branches`, the
 // elaborator's own `match`), so that a `match` of the source on the enum is
-// `pick` at its arms by conversion. Its two laws are by cases on the value,
-// each branch `refl`; the tags are checked by evaluation.
+// `pick` at its arms by conversion; its `convoy` is the same by a
+// `match h:` (`Cases`). Its laws are by cases on the value, each branch
+// `refl`; the tags are checked by evaluation.
 fn runtime_enum_info(rfl: Expr, r: RecShape) → Tac<Pair<Expr, Expr>> {
     let of_ctors <- runtime_global(name_of(EnumInfo::of_ctors));
     let tag_le <- runtime_global(name_of(EnumInfo::of_ctors_tag_le));
@@ -2153,7 +2160,25 @@ fn runtime_enum_info(rfl: Expr, r: RecShape) → Tac<Pair<Expr, Expr>> {
             let of_tag_o <- runtime_open_n(1, of_tag_t, ["v"]);
             let of_tag_b <- runtime_split_refl(rfl, Local(runtime_at_ref(of_tag_o.fst, 0)), of_tag_o.snd);
             let of_tag = runtime_lams(of_tag_o.fst, of_tag_b);
-            let parts: List<Expr> = [pick, picks, of_tag, ap(rfl, [Blank, Blank])];
+            // `convoy`: the same arms by a `match h:` (`Cases`, the
+            // elaborator's convoy), each a function of its equation, so
+            // that a source's `match h:` on the enum is `convoy` at its arms
+            // by conversion.
+            let checked = ap(rfl, [Blank, Blank]);
+            let convoy_t <- runtime_next_arg(ap(head, [pick, picks, of_tag, checked]));
+            let convoy_o <- runtime_open_n(3, convoy_t, ["R", "a", "v"]);
+            let cv = runtime_at_ref(convoy_o.fst, 2);
+            let ca = runtime_at_ref(convoy_o.fst, 1);
+            let ccut <- cases(Local(cv), convoy_o.snd).or_fail("runtime: `" ++ r.name ++ "`'s `match h:`: ");
+            let cclosed <- close(ccut.id, List::range(ccut.branches.len()).map(λ k => ap(Local(ca), [NatLit(k)])));
+            let convoy_b <- match cclosed { Accepted(h) => pure(Hd(h)), Refused(why) => runtime_fail("`" ++ r.name ++ "`'s `match h:`: " ++ why) };
+            let convoy = runtime_lams(convoy_o.fst, convoy_b);
+            // `convoys`.
+            let convoys_t <- runtime_next_arg(ap(head, [pick, picks, of_tag, checked, convoy]));
+            let convoys_o <- runtime_open_n(3, convoys_t, ["R", "a", "v"]);
+            let convoys_b <- runtime_split_refl(rfl, Local(runtime_at_ref(convoys_o.fst, 2)), convoys_o.snd);
+            let convoys = runtime_lams(convoys_o.fst, convoys_b);
+            let parts: List<Expr> = [pick, picks, of_tag, checked, convoy, convoys];
             // Every value's tag among the constructors', as a function of
             // the value, held as a hole solved by it (as the table is).
             let le_of <- runtime_held(ap(tag_le, [Hd(r.ty), first, rest_e] ++ parts), "`" ++ r.name ++ "`'s tags");

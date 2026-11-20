@@ -172,3 +172,24 @@ runtime fn step_twice(d: Dir, s: Shade, x: u64) → u64 { step_toward(d, s, step
 theorem step_twice_runs(): program_eval(step_twice::program, 1, [BitVec::ofNat(0), BitVec::ofNat(2), BitVec::ofNat(5)]) = 11 {
     step_twice::agrees(North, Light, BitVec::ofNat(5))
 }
+
+// ---------------------------------------------------------------------------
+// A `match h:` on an enum: the enum's convoy (`EnumInfo.convoy`), lowered
+// as its plain `match` is, the arms' equations erased.
+
+runtime fn shade_eq(s: Shade) → u64 { match h: s { Dark => 1, Mid => 2, Light => 3 } }
+
+theorem shade_eq_runs(): program_eval(shade_eq::program, 0, [BitVec::ofNat(1)]) = 2 { shade_eq::agrees(Mid) }
+
+theorem shade_eq_pin(s: Shade): shade_eq::rt.meaning(shade_eq::world)(s) = shade_eq(s) { shade_eq::reflects(s) }
+
+theorem shade_eq_agrees(s: Shade): program_eval(shade_eq::program, 0, [RecInfo::enum_word(shade_eq::world.tys, 0, s)]) = shade_eq(s) {
+    shade_eq::agrees(s)
+}
+
+// A `match h:` beside a plain `match` on another enum, returning an enum.
+runtime fn turn_eq(d: Dir, s: Shade) → Dir {
+    match h: d { North => match s { Dark => East, _ => West }, East => South, South => West, West => North }
+}
+
+theorem turn_eq_runs(): program_eval(turn_eq::program, 0, [BitVec::ofNat(0), BitVec::ofNat(2)]) = 3 { turn_eq::agrees(North, Light) }
