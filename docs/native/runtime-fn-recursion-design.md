@@ -34,7 +34,7 @@ A region is a total function of its words, so what it calls must answer
 with a value; a statement is a tree, so what it calls may ask Linux for
 things, run out of levels or exit (procedures-are-functions §0 item 4).
 A non-tail recursion can run out of levels, so it is a call between
-statements. That fixes the route:
+statements. That fixes the route (built in the order of §6, pure recursion first):
 
 1. **`ETm` calls an `EFun`** (`rt-effectful-callees`, not yet built): an
    `ETm` node calling another function of the program on variables, binding
