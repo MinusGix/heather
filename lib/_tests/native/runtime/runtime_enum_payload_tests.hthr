@@ -1,0 +1,107 @@
+// Probes of an enum whose constructors carry fields, built and matched in
+// a `runtime fn`'s body (docs/native/runtime-fn-setups-design.md §16.16).
+// Its value is held as its tag word and then its payload's slots, every
+// constructor's fields in turn (`EnumInfo.slots`), a slot another
+// constructor leaves at its default; a constructor applied to its fields
+// is `Tm::Inject`, and an arm's read of a field `Tm::Slot`. Tests, not
+// library: nothing imports this module.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import tactic;
+import bitvec;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+
+// ---------------------------------------------------------------------------
+// One constructor with a field.
+
+inductive Pocket { Empty, Holds(n: u64) }
+
+runtime fn pocket_or(x: u64, y: u64) → u64 {
+    let p = if x < y { Holds(x) } else { Empty };
+    match p { Empty => y, Holds(n) => n + y }
+}
+
+theorem pocket_or_runs(): program_eval(pocket_or::program, 0, [BitVec::ofNat(2), BitVec::ofNat(5)]) = 7 ∧
+    program_eval(pocket_or::program, 0, [BitVec::ofNat(9), BitVec::ofNat(5)]) = 5 {
+    ⟨pocket_or::agrees(BitVec::ofNat(2), BitVec::ofNat(5)), pocket_or::agrees(BitVec::ofNat(9), BitVec::ofNat(5))⟩
+}
+
+theorem pocket_or_agrees(x, y: u64): program_eval(pocket_or::program, 0, [x, y]) = pocket_or(x, y) { pocket_or::agrees(x, y) }
+
+// The enum's slots: one word, `Holds`'s.
+theorem pocket_or_slots(): pocket_or::world.tys(0).alts.slots = [Word(64)] { refl }
+
+// ---------------------------------------------------------------------------
+// Constructors of no, one and two fields, each in slots of its own.
+
+inductive Shape { Dot, Line(len: u64), Rect(w: u64, h: u64) }
+
+runtime fn shape_area(k: u64, a: u64, b: u64) → u64 {
+    let s = if k < 1 { Dot } else { if k < 2 { Line(a) } else { Rect(a, b) } };
+    match s { Dot => 0, Line(l) => l, Rect(w, h) => w * h }
+}
+
+theorem shape_area_runs(): program_eval(shape_area::program, 0, [BitVec::ofNat(0), BitVec::ofNat(3), BitVec::ofNat(4)]) = 0 ∧
+    program_eval(shape_area::program, 0, [BitVec::ofNat(1), BitVec::ofNat(3), BitVec::ofNat(4)]) = 3 ∧
+    program_eval(shape_area::program, 0, [BitVec::ofNat(2), BitVec::ofNat(3), BitVec::ofNat(4)]) = 12 {
+    ⟨shape_area::agrees(BitVec::ofNat(0), BitVec::ofNat(3), BitVec::ofNat(4)),
+        ⟨shape_area::agrees(BitVec::ofNat(1), BitVec::ofNat(3), BitVec::ofNat(4)), shape_area::agrees(BitVec::ofNat(2), BitVec::ofNat(3), BitVec::ofNat(4))⟩⟩
+}
+
+theorem shape_area_slots(): shape_area::world.tys(0).alts.slots = [Word(64), Word(64), Word(64)] { refl }
+
+// A `match h:` on it, an arm reading a field.
+runtime fn shape_width(k: u64, a: u64) → u64 {
+    let s = if k < 1 { Dot } else { Line(a) };
+    match h: s { Dot => 1, Line(l) => l + 1, Rect(w, _) => w }
+}
+
+theorem shape_width_agrees(k, a: u64): program_eval(shape_width::program, 0, [k, a]) = shape_width(k, a) { shape_width::agrees(k, a) }
+
+// ---------------------------------------------------------------------------
+// An enum with one slot returned: its tag word in RAX and its slot beside
+// it in RDX (`Ty::Out`, `RecInfo::enum_rest`, `f::agrees_also`), as a
+// two-word record is.
+
+runtime fn pocket_below(x: u64, y: u64) → Pocket { if x < y { Holds(y - x) } else { Empty } }
+
+theorem pocket_below_runs(): program_eval(pocket_below::program, 0, [BitVec::ofNat(2), BitVec::ofNat(5)]) = 1 ∧
+    program_eval_also(pocket_below::program, [BitVec::ofNat(2), BitVec::ofNat(5)]) = [BitVec::ofNat(3)] {
+    ⟨pocket_below::agrees(BitVec::ofNat(2), BitVec::ofNat(5)), pocket_below::agrees_also(BitVec::ofNat(2), BitVec::ofNat(5))⟩
+}
+
+theorem pocket_below_agrees(x, y: u64):
+    program_eval(pocket_below::program, 0, [x, y]) = RecInfo::enum_word(pocket_below::world.tys, 0, pocket_below(x, y)) ∧
+    program_eval_also(pocket_below::program, [x, y]) = RecInfo::enum_rest(pocket_below::world.tys, 0, pocket_below(x, y)) {
+    ⟨pocket_below::agrees(x, y), pocket_below::agrees_also(x, y)⟩
+}
+
+// The constructor without the field leaves its slot at the default.
+theorem pocket_below_empty(): program_eval_also(pocket_below::program, [BitVec::ofNat(9), BitVec::ofNat(5)]) = [BitVec::ofNat(0)] {
+    pocket_below::agrees_also(BitVec::ofNat(9), BitVec::ofNat(5))
+}
+
+// ---------------------------------------------------------------------------
+// A field that is a bit: its slot holds the one-bit word.
+
+inductive Flag { Off, On(b: Bool) }
+
+runtime fn flag_of(x: u64) → u64 {
+    let f: Flag = if x < 1 { Off } else { if x < 5 { On(True) } else { On(False) } };
+    match f { Off => 0, On(b) => if b { 1 } else { 2 } }
+}
+
+theorem flag_of_runs(): program_eval(flag_of::program, 0, [BitVec::ofNat(3)]) = 1 ∧ program_eval(flag_of::program, 0, [BitVec::ofNat(9)]) = 2 {
+    ⟨flag_of::agrees(BitVec::ofNat(3)), flag_of::agrees(BitVec::ofNat(9))⟩
+}
+
+theorem flag_of_slots(): flag_of::world.tys(0).alts.slots = [Bit] { refl }

@@ -191,9 +191,11 @@ impl Shape {
     /// the second the one in RDX (`{source}::agrees_also`).
     ///
     /// `result`, for a function returning an enum, is its table entry: the
-    /// function returns the value's tag word (`RecInfo::enum_word`).
+    /// function returns the value's tag word (`RecInfo::enum_word`), and
+    /// where `slot` its payload's one slot in RDX (`RecInfo::enum_rest`,
+    /// `{source}::agrees_also`).
     pub fn runtime(prefix: &str, owner: &str, source: &str, functions: usize, arity: usize, widths: &[u64], fields: Option<&[String]>,
-        enums: &[(usize, u64)], result: Option<u64>) -> Shape {
+        enums: &[(usize, u64)], result: Option<u64>, slot: bool) -> Shape {
         let parameters = arguments(arity);
         let table = format!("{source}::world.tys");
         let narrowed: Vec<String> = parameters.iter().enumerate()
@@ -205,8 +207,11 @@ impl Shape {
             _ => (match (result, widths.first()) {
                 (Some(i), _) => format!("RecInfo::enum_word({table}, {i}, {called})"),
                 (None, Some(&w)) if w != 64 => format!("runtime_wide({w}, {called})"),
-                _ => called,
-            }, None),
+                _ => called.clone(),
+            }, match result {
+                Some(i) if slot => Some(format!("RecInfo::enum_rest({table}, {i}, {called})")),
+                _ => None,
+            }),
         };
         let mut definitions = format!("import {owner};\nimport runtime;\n");
         // An enum's type and tag word are `rt`'s (`RecInfo::enum_at`, `enum_word`).
@@ -233,7 +238,7 @@ theorem {prefix}_agrees({typed}): program_eval({prefix}_program(), {f}, [{words}
             also = match &rest {
                 Some(rest) => format!("
 // And the words it returns after the first, the record's fields after its
-// first, from the same instances (`{source}::agrees_also`).
+// first or the enum's slot, from the same instances (`{source}::agrees_also`).
 theorem {prefix}_agrees_also({typed}): program_eval_also({prefix}_program(), [{list}]) = {rest} {{
     {source}::agrees_also({list})
 }}
@@ -429,17 +434,20 @@ fn {prefix}_rows(rows: List<List<Bool>>, counts: List<Nat>, f, functions: Nat) â
             let enums: Vec<(usize, u64)> = codes[1..].iter().enumerate().filter(|(_, code)| **code > 0).map(|(i, code)| (i, code - 1)).collect();
             // A record of two words as the result: its fields' names, as
             // the generator spells them (`{source}::fields`).
-            let fields = if elab.qualified_global(&format!("{source}::agrees_also")).is_some() {
+            let also = elab.qualified_global(&format!("{source}::agrees_also")).is_some();
+            // An enum result with its slot in RDX: no names to read.
+            let slot = also && result.is_some();
+            let fields = if also && !slot {
                 let codes = function_ir_source::evaluate_numbers(&fork, &format!("{source}::fields")).map_err(|e| e.to_string())?;
                 let names: Vec<String> = codes.split(|code| *code == 0).filter(|name| !name.is_empty())
                     .map(|name| name.iter().filter_map(|code| char::from_u32(*code as u32)).collect()).collect();
                 if names.len() != 2 { return Err(format!("`{source}::fields` did not read back as two names")); }
                 Some(names)
             } else { None };
-            if fields.is_some() && !enums.is_empty() {
+            if also && !enums.is_empty() {
                 return Err(format!("`{source}` takes an enum and returns two words: not stated yet"));
             }
-            Ok(Shape::runtime(prefix, owner, source, functions as usize, arity as usize, widths, fields.as_deref(), &enums, result))
+            Ok(Shape::runtime(prefix, owner, source, functions as usize, arity as usize, widths, fields.as_deref(), &enums, result, slot))
         }
         [functions, arity, ref counts @ ..] if functions >= 1 && spans == Spans::Read && counts.len() == functions as usize =>
             Ok(Shape::runtime_lent(prefix, owner, source, functions as usize, arity as usize, counts.to_vec())),

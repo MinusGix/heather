@@ -95,7 +95,7 @@ theorem tr_still(): Writers::Still(tr_calls(), functions_below(1)) {
 // lent nothing, and it is the program `raise_word` has alone.
 theorem tr_agrees(held: Buffers()): Tm::CallsAgree(tr_world(), Writers::words(tr_calls(), held)) {
     λ f => match f {
-        Zero => λ _ x _ => trans(cong_fn<Ending, BitVec(64)>(λ end => end.word, program_run_quiet(raise_span_program().tail(), trivial, [], 0, [x])),
+        Zero => λ _ x => trans(cong_fn<Ending, BitVec(64)>(λ end => end.word, program_run_quiet(raise_span_program().tail(), trivial, [], 0, [x])),
             raise_word::agrees(x)),
         Succ(_) => λ ok => false_elim(ok.right),
     }

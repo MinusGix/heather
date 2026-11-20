@@ -1,8 +1,11 @@
 // What a `runtime fn` over an enum is refused at
 // (docs/native/runtime-fn-setups-design.md §16.16): an enum is passed in
 // as its tag word, matched on (`match` and `match h:`), built, returned
-// and passed to a call, and nothing else yet. The accepted probes
-// are runtime_enum_tests. Tests, not library: nothing imports this module.
+// and passed to a call; an enum whose constructors carry 64-bit fields is
+// built and matched in a body and returned with one slot, and nothing
+// else yet. The accepted probes are runtime_enum_tests and
+// runtime_enum_payload_tests. Tests, not library: nothing imports this
+// module.
 
 import bitvec;
 import runtime;
@@ -11,20 +14,34 @@ inductive Shade { Dark, Mid, Light }
 
 runtime fn shade_level(s: Shade) → u64 { match s { Dark => 10, Mid => 20, Light => 30 } }
 
-// A call reads one word back, and an enum's is not read back yet.
-runtime fn shade_next(s: Shade) → Shade { match s { Dark => Mid, Mid => Light, Light => Dark } }
-
-// expect-error: a call of a function that does not take and return 64-bit words
-runtime fn shade_next_level(s: Shade) → u64 { shade_level(shade_next(s)) }
-
 // An enum is not a record's field: a record's fields are words.
 record Tagged { s: Shade, n: u64 }
 
 // expect-error: `Shade` has no runtime layout
 runtime fn tagged_n(t: Tagged) → u64 { t.n }
 
-// A constructor with fields is no enum.
+// An enum with a payload is no parameter yet: its slots are words past
+// its tag, and a parameter is one word.
 inductive Pocket { Empty, Holds(n: u64) }
 
-// expect-error: `Pocket` has no runtime layout
+// expect-error: a parameter that is not a word of at most 64 bits or an enum
 runtime fn pocket_n(p: Pocket) → u64 { match p { Empty => 0, Holds(n) => n } }
+
+runtime fn pocket_of(x: u64) → Pocket { if x < 10 { Empty } else { Holds(x) } }
+
+// A call reads RAX alone: a function returning an enum's slot in RDX is
+// not called.
+// expect-error: a call of a function that does not take and return 64-bit words
+runtime fn pocket_called(x: u64) → u64 { match pocket_of(x) { Empty => 0, Holds(n) => n } }
+
+// Two slots are past the two result registers.
+inductive Span2 { None2, Both(a: u64, b: u64) }
+
+// expect-error: a result that is not a word of at most 64 bits, an enum or a record of two 64-bit words
+runtime fn span2_of(x: u64) → Span2 { Both(x, x) }
+
+// A field that is an enum has no slot: a slot is a word, a bit or a count.
+inductive Lit { Off, On(s: Shade) }
+
+// expect-error: a field of `Lit::On` that is not a word, a `Bool` or a `Nat`
+runtime fn lit_of(x: u64) → u64 { match (if x < 1 { Off } else { On(Dark) }) { Off => 0, On(_) => 1 } }

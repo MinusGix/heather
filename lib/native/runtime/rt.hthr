@@ -83,58 +83,185 @@ fn Ty::flats_default(ts: List<Ty>) → Ty::Flats(ts) {
     match ts { Nil => trivial, Cons(t, rest) => Pair(t.flat_default(), Ty::flats_default(rest)) }
 }
 
+// The codes of slots `lo` to `lo + n` of `fs`: one constructor's fields
+// in an enum's payload.
+fn Ty::range(fs: List<Ty>, lo, n: Nat) → List<Ty> {
+    match fs {
+        Nil => Nil,
+        Cons(f, rest) => match lo { Succ(l) => Ty::range(rest, l, n), Zero => match n { Zero => Nil, Succ(m) => Cons(f, Ty::range(rest, 0, m)) } },
+    }
+}
+
+// Those slots of a tuple.
+fn Ty::take_range(fs: List<Ty>, lo, n: Nat) → Ty::Flats(fs) → Ty::Flats(Ty::range(fs, lo, n)) {
+    match fs {
+        Nil => λ _ => trivial,
+        Cons(f, rest) => match lo as λ l => Ty::Flats(Cons(f, rest)) → Ty::Flats(Ty::range(Cons(f, rest), l, n)) {
+            Succ(l) => λ t => Ty::take_range(rest, l, n, t.snd),
+            Zero => match n as λ m => Ty::Flats(Cons(f, rest)) → Ty::Flats(Ty::range(Cons(f, rest), 0, m)) {
+                Zero => λ _ => trivial,
+                Succ(m) => λ t => Pair(t.fst, Ty::take_range(rest, 0, m, t.snd)),
+            },
+        },
+    }
+}
+
+// Those slots put back in a tuple of defaults.
+fn Ty::spread(fs: List<Ty>, lo, n: Nat) → Ty::Flats(Ty::range(fs, lo, n)) → Ty::Flats(fs) {
+    match fs {
+        Nil => λ _ => trivial,
+        Cons(f, rest) => match lo as λ l => Ty::Flats(Ty::range(Cons(f, rest), l, n)) → Ty::Flats(Cons(f, rest)) {
+            Succ(l) => λ p => Pair(f.flat_default(), Ty::spread(rest, l, n, p)),
+            Zero => match n as λ m => Ty::Flats(Ty::range(Cons(f, rest), 0, m)) → Ty::Flats(Cons(f, rest)) {
+                Zero => λ _ => Ty::flats_default(Cons(f, rest)),
+                Succ(m) => λ p => Pair(p.fst, Ty::spread(rest, 0, m, p.snd)),
+            },
+        },
+    }
+}
+
+// A tuple with only those slots kept, the rest defaults: what a
+// constructor's value holds in its enum's payload.
+fn Ty::keep(fs: List<Ty>, lo, n: Nat, t: Ty::Flats(fs)) → Ty::Flats(fs) { Ty::spread(fs, lo, n, Ty::take_range(fs, lo, n, t)) }
+
+theorem Ty::take_spread(fs: List<Ty>): (lo, n: Nat) → (p: Ty::Flats(Ty::range(fs, lo, n))) → Ty::take_range(fs, lo, n, Ty::spread(fs, lo, n, p)) = p {
+    match fs {
+        Nil => λ lo n p => refl,
+        Cons(f, rest) => λ lo => match lo as λ l => (n: Nat) → (p: Ty::Flats(Ty::range(Cons(f, rest), l, n))) →
+                Ty::take_range(Cons(f, rest), l, n, Ty::spread(Cons(f, rest), l, n, p)) = p {
+            Succ(l) => λ n p => Ty::take_spread(rest, l, n, p),
+            Zero => λ n => match n as λ m => (p: Ty::Flats(Ty::range(Cons(f, rest), 0, m))) →
+                    Ty::take_range(Cons(f, rest), 0, m, Ty::spread(Cons(f, rest), 0, m, p)) = p {
+                Zero => λ p => refl,
+                Succ(m) => λ p => cong_fn(λ (q: Ty::Flats(Ty::range(rest, 0, m))) => Pair(p.fst, q), Ty::take_spread(rest, 0, m, p.snd)),
+            },
+        },
+    }
+}
+
 // An enum as the meaning reads it (docs/native/runtime-fn-setups-design.md
-// §16.16): its type, its last constructor's index, the constructor at each
-// index (`of`, the last past it), and its own `match` as a function of the
-// arms by index (`pick`), which is what a `match` on it means, so a pin over
-// it stays a conversion. Its tag is the `match` that answers the index
-// (`EnumInfo::tag`), and the laws are that `pick` chooses the tag's arm, and
-// that `of` and the tag are inverse on the constructors. `convoy` is its
+// §16.16): its type, its last constructor's index, its payload's slots
+// (every constructor's fields in turn, constructor `k`'s `arity(k)` of them
+// from slot `lo(k)`; none, for an enum of constructors without fields),
+// the constructor at each index from a tuple of the slots (`of`, the last
+// past it, reading only its own), and its own `match` as a function of the
+// arms by index and fields (`pick`), which is what a `match` on it means,
+// so a pin over it stays a conversion. Its tag is the `match` that answers
+// the index (`EnumInfo::tag`) and its fields the one that answers the tuple
+// (`EnumInfo::fields`, the other constructors' slots defaults); the laws
+// are that `pick` chooses the tag's arm at the fields, that `of` builds
+// back every value from its tag and fields, and that a constructor built
+// from a tuple has its index and the tuple's own slots. `convoy` is its
 // `match h:` (the match at a convoyed motive applied to `refl`, each arm a
 // function of the equation, `matching::plan_convoy`), which does not
 // convert with the plain one, and which also chooses the tag's arm.
 record EnumInfo {
-    E: Type, last: Nat, of: Nat → E,
-    pick: (R: Type) → (Nat → R) → E → R,
-    picks: (R: Type) → (a: Nat → R) → (v: E) → pick(R, a, v) = a(pick(Nat, λ n => n, v)),
-    of_tag: (v: E) → of(pick(Nat, λ n => n, v)) = v,
-    tag_of: (n: Nat) → n <= last → pick(Nat, λ n => n, of(n)) = n,
-    convoy: (R: Type) → (Nat → R) → E → R,
-    convoys: (R: Type) → (a: Nat → R) → (v: E) → convoy(R, a, v) = a(pick(Nat, λ n => n, v)),
+    E: Type, last: Nat, slots: List<Ty>, lo: Nat → Nat, arity: Nat → Nat,
+    of: Nat → Ty::Flats(slots) → E,
+    pick: (R: Type) → (Nat → Ty::Flats(slots) → R) → E → R,
+    picks: (R: Type) → (a: Nat → Ty::Flats(slots) → R) → (v: E) →
+        pick(R, a, v) = a(pick(Nat, λ n _ => n, v), pick(Ty::Flats(slots), λ _ t => t, v)),
+    of_tag: (v: E) → of(pick(Nat, λ n _ => n, v), pick(Ty::Flats(slots), λ _ t => t, v)) = v,
+    tag_of: (n: Nat) → n <= last → (t: Ty::Flats(slots)) → pick(Nat, λ n _ => n, of(n, t)) = n,
+    fields_of: (n: Nat) → n <= last → (t: Ty::Flats(slots)) → pick(Ty::Flats(slots), λ _ u => u, of(n, t)) = Ty::keep(slots, lo(n), arity(n), t),
+    convoy: (R: Type) → (Nat → Ty::Flats(slots) → R) → E → R,
+    convoys: (R: Type) → (a: Nat → Ty::Flats(slots) → R) → (v: E) →
+        convoy(R, a, v) = a(pick(Nat, λ n _ => n, v), pick(Ty::Flats(slots), λ _ t => t, v)),
+    // Every value's tag is a constructor's: what holding a word a call
+    // returned as the value it names needs.
+    bounded: (v: E) → pick(Nat, λ n _ => n, v) <= last,
 }
 
-fn EnumInfo::tag(self e: EnumInfo, v: e.E) → Nat { e.pick(Nat, λ n => n, v) }
+fn EnumInfo::tag(self e: EnumInfo, v: e.E) → Nat { e.pick(Nat, λ n _ => n, v) }
+
+fn EnumInfo::fields(self e: EnumInfo, v: e.E) → Ty::Flats(e.slots) { e.pick(Ty::Flats(e.slots), λ _ t => t, v) }
 
 // The enum's `match` (`eq` False) or its `match h:` (`eq` True).
-fn EnumInfo::choose(self e: EnumInfo, eq: Bool, R: Type, a: Nat → R, v: e.E) → R {
+fn EnumInfo::choose(self e: EnumInfo, eq: Bool, R: Type, a: Nat → Ty::Flats(e.slots) → R, v: e.E) → R {
     match eq { False => e.pick(R, a, v), True => e.convoy(R, a, v) }
 }
 
-// Either chooses the tag's arm.
-theorem EnumInfo::chooses(self e: EnumInfo, eq: Bool, R: Type, a: Nat → R, v: e.E): e.choose(eq, R, a, v) = a(e.tag(v)) {
+// Either chooses the tag's arm, at the fields.
+theorem EnumInfo::chooses(self e: EnumInfo, eq: Bool, R: Type, a: Nat → Ty::Flats(e.slots) → R, v: e.E):
+    e.choose(eq, R, a, v) = a(e.tag(v), e.fields(v)) {
     match eq { False => e.picks(R, a, v), True => e.convoys(R, a, v) }
 }
 
-// The constructor a word names: its index, the last constructor past it.
-// Only a tag is ever passed (`EnumInfo::Names`, `Ty::Admits`); past the
-// last tag this is the meaning's total reading, which no code reaches.
-fn EnumInfo::read(self e: EnumInfo, x: BitVec(64)) → e.E { e.of(x.toNat().min(e.last)) }
+// The constructor a word names, its fields defaults: its index, the last
+// constructor past it. Only a tag is ever passed (`EnumInfo::Names`,
+// `Ty::Admits`); past the last tag this is the meaning's total reading,
+// which no code reaches.
+fn EnumInfo::read(self e: EnumInfo, x: BitVec(64)) → e.E { e.of(x.toNat().min(e.last), Ty::flats_default(e.slots)) }
 
 // A word that is the tag of `v`, one of the enum's.
 fn EnumInfo::Names(self e: EnumInfo, x: BitVec(64), v: e.E) → Type { (x.toNat() = e.tag(v)) ∧ (x.toNat() <= e.last) }
 
 // No enum: what a record's entry carries.
 fn EnumInfo::none() → EnumInfo {
-    EnumInfo(True, 0, λ _ => trivial, λ R a _ => a(0), λ R a v => refl, λ v => refl,
-        λ n => match n as λ k => k <= 0 → 0 = k { Zero => λ _ => refl, Succ(_) => λ never => false_elim(never) },
-        λ R a _ => a(0), λ R a v => refl)
+    EnumInfo(True, 0, [], λ _ => 0, λ _ => 0, λ _ _ => trivial, λ R a _ => a(0, trivial), λ R a v => refl, λ v => refl,
+        λ n => match n as λ k => k <= 0 → (t: True) → 0 = k { Zero => λ _ _ => refl, Succ(_) => λ never => false_elim(never) },
+        λ n _ t => refl, λ R a _ => a(0, trivial), λ R a v => refl, λ _ => trivial)
 }
 
-// An enum of `last + 1` constructors as a judgment and a lowering read it:
-// only `last`, the tags its compares test (the generator's table before
-// the enum's own, `runtime_rec_table`).
-fn EnumInfo::shape(last: Nat) → EnumInfo {
-    EnumInfo(Nat, last, λ n => n, λ R a v => a(v), λ R a v => refl, λ v => refl, λ n _ => refl, λ R a v => a(v), λ R a v => refl)
+// The tags of an enum of `last + 1` constructors, each with its bound.
+fn EnumInfo::Fin(last: Nat) → Type { Exists<Nat>(λ n => n <= last) }
+
+fn EnumInfo::fin(last, n: Nat, le: n <= last) → EnumInfo::Fin(last) { Exists(witness := n, proof := le) }
+
+// A constructor of an enum of `last + 1` and its fields, as a judgment and
+// a lowering read it: the enum the generator's table holds before the
+// enum's own (`EnumInfo::shape`, `runtime_rec_table`).
+fn EnumInfo::Val(last: Nat, slots: List<Ty>, lo, arity: Nat → Nat) → Type {
+    Exists<EnumInfo::Fin(last)>(λ t => Ty::Flats(Ty::range(slots, lo(t.witness), arity(t.witness))))
+}
+
+fn EnumInfo::val(last: Nat, slots: List<Ty>, lo, arity: Nat → Nat, t: EnumInfo::Fin(last),
+    p: Ty::Flats(Ty::range(slots, lo(t.witness), arity(t.witness)))) → EnumInfo::Val(last, slots, lo, arity) {
+    Exists(witness := t, proof := p)
+}
+
+theorem EnumInfo::val_of_tag(last: Nat, slots: List<Ty>, lo, arity: Nat → Nat, v: EnumInfo::Val(last, slots, lo, arity)):
+    EnumInfo::val(last, slots, lo, arity, EnumInfo::fin(last, v.witness.witness.min(last), Nat::min_le_r(v.witness.witness, last)),
+        Ty::take_range(slots, lo(v.witness.witness.min(last)), arity(v.witness.witness.min(last)),
+            Ty::spread(slots, lo(v.witness.witness), arity(v.witness.witness), v.proof))) = v {
+    let w = v.witness.witness;
+    let q = v.witness.proof;
+    let at_w = λ (q2: w <= last) => trans(
+        cong_fn(λ (u: Ty::Flats(Ty::range(slots, lo(w), arity(w)))) => EnumInfo::val(last, slots, lo, arity, EnumInfo::fin(last, w, q2), u),
+            Ty::take_spread(slots, lo(w), arity(w), v.proof)),
+        cong_fn(λ (r: w <= last) => EnumInfo::val(last, slots, lo, arity, EnumInfo::fin(last, w, r), v.proof), w.le_unique(last, q2, q)));
+    j(sym(Nat::min_eq_l(w, last, q)), λ m _ => (q2: m <= last) →
+            EnumInfo::val(last, slots, lo, arity, EnumInfo::fin(last, m, q2),
+                Ty::take_range(slots, lo(m), arity(m), Ty::spread(slots, lo(w), arity(w), v.proof))) = v,
+        at_w)(Nat::min_le_r(w, last))
+}
+
+fn EnumInfo::shape(last: Nat, slots: List<Ty>, lo, arity: Nat → Nat) → EnumInfo {
+    EnumInfo(EnumInfo::Val(last, slots, lo, arity), last, slots, lo, arity,
+        λ n t => EnumInfo::val(last, slots, lo, arity, EnumInfo::fin(last, n.min(last), Nat::min_le_r(n, last)),
+            Ty::take_range(slots, lo(n.min(last)), arity(n.min(last)), t)),
+        λ R a v => a(v.witness.witness, Ty::spread(slots, lo(v.witness.witness), arity(v.witness.witness), v.proof)),
+        λ R a v => refl,
+        λ v => EnumInfo::val_of_tag(last, slots, lo, arity, v),
+        λ n le t => Nat::min_eq_l(n, last, le),
+        λ n le t => j(sym(Nat::min_eq_l(n, last, le)), λ m _ =>
+            Ty::spread(slots, lo(m), arity(m), Ty::take_range(slots, lo(m), arity(m), t)) = Ty::keep(slots, lo(n), arity(n), t), refl),
+        λ R a v => a(v.witness.witness, Ty::spread(slots, lo(v.witness.witness), arity(v.witness.witness), v.proof)),
+        λ R a v => refl,
+        λ v => v.witness.proof)
+}
+
+// A tag past `last` read as `last`'s constructor: every value's tag is at
+// most `last`, as `of` and the tag are inverse below it.
+theorem EnumInfo::bounded_by<E, F>(last: Nat, of: Nat → F → E, tag: E → Nat, fields: E → F, of_tag: (v: E) → of(tag(v), fields(v)) = v,
+    tag_of: (n: Nat) → n <= last → (t: F) → tag(of(n, t)) = n, of_min: (n: Nat) → (t: F) → of(n, t) = of(n.min(last), t)): (v: E) → tag(v) <= last {
+    λ v => {
+        let below = Nat::min_le_r(tag(v), last);
+        let back: (tag(of(tag(v).min(last), fields(v))) = tag(v).min(last)) = tag_of(tag(v).min(last), below, fields(v));
+        let same: (of(tag(v).min(last), fields(v)) = v) = trans(sym(of_min(tag(v), fields(v))), of_tag(v));
+        let tagged: (tag(v) = tag(v).min(last)) = j(same, λ y _ => tag(y) = tag(v).min(last), back);
+        j(sym(tagged), λ y _ => y <= last, below)
+    }
 }
 
 // Every index up to `m` passes `p`.
@@ -155,53 +282,74 @@ theorem Nat::all_upto_at(p: Nat → Bool, m: Nat): Nat::all_upto(m, p) = True �
     }
 }
 
-// An enum from its constructors in order, its own `match` and its laws by
-// cases, the indices checked by evaluation: what a generator builds.
-fn EnumInfo::of_ctors<E>(first: E, rest: List<E>, pick: (R: Type) → (Nat → R) → E → R,
-    picks: (R: Type) → (a: Nat → R) → (v: E) → pick(R, a, v) = a(pick(Nat, λ n => n, v)),
-    of_tag: (v: E) → Cons(first, rest).nth(pick(Nat, λ n => n, v).min(rest.len())).unwrap_or(first) = v,
-    checked: Nat::all_upto(rest.len(), λ n => pick(Nat, λ k => k, Cons(first, rest).nth(n.min(rest.len())).unwrap_or(first)).same(n)) = True,
-    convoy: (R: Type) → (Nat → R) → E → R, convoys: (R: Type) → (a: Nat → R) → (v: E) → convoy(R, a, v) = a(pick(Nat, λ n => n, v))) → EnumInfo {
-    EnumInfo(E, rest.len(), λ n => Cons(first, rest).nth(n.min(rest.len())).unwrap_or(first), pick, picks, of_tag,
-        λ n le => Nat::same_sound(pick(Nat, λ k => k, Cons(first, rest).nth(n.min(rest.len())).unwrap_or(first)), n,
-            Nat::all_upto_at(λ m => pick(Nat, λ k => k, Cons(first, rest).nth(m.min(rest.len())).unwrap_or(first)).same(m), rest.len(), checked, n, le)),
-        convoy, convoys)
+// Every index up to `m` has `P`, one proof each: what a generator proves
+// of each constructor, each by `refl` (a `Pair`, which it builds as a
+// term).
+fn Nat::AllUpTo(m: Nat, P: Nat → Type) → Type {
+    match m { Zero => P(0), Succ(k) => Pair<Nat::AllUpTo(k, P), P(k + 1)> }
 }
 
-// A value's tag is among the constructors' where `of` reads a tag past
-// `last` as `last` does.
-theorem EnumInfo::tag_le(self e: EnumInfo, v: e.E, clamps: e.of(e.tag(v)) = e.of(e.tag(v).min(e.last))): e.tag(v) <= e.last {
-    let below = Nat::min_le_r(e.tag(v), e.last);
-    let back: (e.tag(e.of(e.tag(v).min(e.last))) = e.tag(v).min(e.last)) = e.tag_of(e.tag(v).min(e.last), below);
-    let same: (e.of(e.tag(v).min(e.last)) = v) = trans(sym(clamps), e.of_tag(v));
-    let tagged: (e.tag(v) = e.tag(v).min(e.last)) = j(same, λ y _ => e.tag(y) = e.tag(v).min(e.last), back);
-    j(sym(tagged), λ y _ => y <= e.last, below)
+theorem Nat::all_up_to_at(P: Nat → Type, m: Nat): Nat::AllUpTo(m, P) → (n: Nat) → n <= m → P(n) {
+    match m {
+        Zero => λ all n => match n as λ k => k <= 0 → P(k) { Zero => λ _ => all, Succ(_) => λ never => false_elim(never) },
+        Succ(k) => λ all n le => match n.lt_or_ge(k + 1) {
+            Inl(lt) => Nat::all_up_to_at(P, k, all.fst, n, lt),
+            Inr(ge) => j(Nat::le_antisym(k + 1, n, ge, le), λ y _ => P(y), all.snd),
+        },
+    }
+}
+
+// A layout of the slots by each constructor's number of fields, every
+// constructor's after the ones before it: where constructor `n`'s first
+// field is, and how many it has.
+fn EnumInfo::lo_of(arities: List<Nat>) → Nat → Nat {
+    match arities { Nil => λ n => 0, Cons(a, rest) => λ n => match n { Zero => 0, Succ(m) => a + EnumInfo::lo_of(rest, m) } }
+}
+
+fn EnumInfo::arity_of(arities: List<Nat>) → Nat → Nat { λ n => arities.nth(n).unwrap_or(0) }
+
+// An enum from its constructors in order, each a function of the slots
+// reading its own, its own `match` and its laws by cases, each
+// constructor's index checked by evaluation and its fields by `refl`: what
+// a generator builds.
+fn EnumInfo::of_ctors<E>(slots: List<Ty>, lo, arity: Nat → Nat, first: Ty::Flats(slots) → E, rest: List<Ty::Flats(slots) → E>,
+    pick: (R: Type) → (Nat → Ty::Flats(slots) → R) → E → R,
+    picks: (R: Type) → (a: Nat → Ty::Flats(slots) → R) → (v: E) →
+        pick(R, a, v) = a(pick(Nat, λ n _ => n, v), pick(Ty::Flats(slots), λ _ t => t, v)),
+    of_tag: (v: E) → Cons(first, rest).nth(pick(Nat, λ n _ => n, v).min(rest.len())).unwrap_or(first)(pick(Ty::Flats(slots), λ _ t => t, v)) = v,
+    checked: (t: Ty::Flats(slots)) →
+        Nat::all_upto(rest.len(), λ n => pick(Nat, λ k _ => k, Cons(first, rest).nth(n.min(rest.len())).unwrap_or(first)(t)).same(n)) = True,
+    kept: (t: Ty::Flats(slots)) → Nat::AllUpTo(rest.len(), λ n =>
+        pick(Ty::Flats(slots), λ _ u => u, Cons(first, rest).nth(n.min(rest.len())).unwrap_or(first)(t)) = Ty::keep(slots, lo(n), arity(n), t)),
+    convoy: (R: Type) → (Nat → Ty::Flats(slots) → R) → E → R,
+    convoys: (R: Type) → (a: Nat → Ty::Flats(slots) → R) → (v: E) →
+        convoy(R, a, v) = a(pick(Nat, λ n _ => n, v), pick(Ty::Flats(slots), λ _ t => t, v))) → EnumInfo {
+    let of = λ (n: Nat) (t: Ty::Flats(slots)) => Cons(first, rest).nth(n.min(rest.len())).unwrap_or(first)(t);
+    let tag_of = λ (n: Nat) (le: n <= rest.len()) (t: Ty::Flats(slots)) =>
+        Nat::same_sound(pick(Nat, λ k _ => k, Cons(first, rest).nth(n.min(rest.len())).unwrap_or(first)(t)), n,
+            Nat::all_upto_at(λ m => pick(Nat, λ k _ => k, Cons(first, rest).nth(m.min(rest.len())).unwrap_or(first)(t)).same(m), rest.len(), checked(t), n, le));
+    let of_min = λ (n: Nat) (t: Ty::Flats(slots)) => cong_fn(λ (m: Nat) => Cons(first, rest).nth(m).unwrap_or(first)(t),
+        sym(Nat::min_eq_l(n.min(rest.len()), rest.len(), Nat::min_le_r(n, rest.len()))));
+    EnumInfo(E, rest.len(), slots, lo, arity, of, pick, picks, of_tag, tag_of,
+        λ n le t => Nat::all_up_to_at(λ m => pick(Ty::Flats(slots), λ _ u => u, Cons(first, rest).nth(m.min(rest.len())).unwrap_or(first)(t)) =
+            Ty::keep(slots, lo(m), arity(m), t), rest.len(), kept(t), n, le),
+        convoy, convoys,
+        EnumInfo::bounded_by(rest.len(), of, λ v => pick(Nat, λ k _ => k, v), λ v => pick(Ty::Flats(slots), λ _ u => u, v), of_tag, tag_of, of_min))
 }
 
 // The word of a value's tag reads back as the value: what a call passing
-// an enum as its tag word relies on (docs/native/runtime-fn-setups-design.md
-// §16.16).
-theorem EnumInfo::read_tag(self e: EnumInfo, v: e.E, le: e.tag(v) <= e.last, small: (e.last + 1).leb(Nat::pow(2, 64)) = True):
-    e.read(BitVec::ofNat(e.tag(v))) = v {
+// an enum without fields as its tag word relies on
+// (docs/native/runtime-fn-setups-design.md §16.16).
+theorem EnumInfo::read_tag(self e: EnumInfo, v: e.E, small: (e.last + 1).leb(Nat::pow(2, 64)) = True,
+    bare: e.fields(v) = Ty::flats_default(e.slots)): e.read(BitVec::ofNat(e.tag(v))) = v {
+    let le = e.bounded(v);
     let lt: (e.tag(v) < Nat::pow(2, 64)) = Nat::le_trans(e.tag(v) + 1, e.last + 1, Nat::pow(2, 64), Nat::le_succ_succ(e.tag(v), e.last, le),
         Nat::le_of_leb(e.last + 1, Nat::pow(2, 64), small));
     let word: (BitVec::ofNat(e.tag(v), n := 64).toNat() = e.tag(v)) = BitVec::toNat_ofNat(64, e.tag(v), lt);
     let clamped: (BitVec::ofNat(e.tag(v), n := 64).toNat().min(e.last) = e.tag(v)) =
         j(sym(word), λ y _ => y.min(e.last) = e.tag(v), Nat::min_eq_l(e.tag(v), e.last, le));
-    j(sym(clamped), λ y _ => e.of(y) = v, e.of_tag(v))
-}
-
-// An enum built from its constructors: every value's tag is among them.
-theorem EnumInfo::of_ctors_tag_le<E>(first: E, rest: List<E>, pick: (R: Type) → (Nat → R) → E → R,
-    picks: (R: Type) → (a: Nat → R) → (v: E) → pick(R, a, v) = a(pick(Nat, λ n => n, v)),
-    of_tag: (v: E) → Cons(first, rest).nth(pick(Nat, λ n => n, v).min(rest.len())).unwrap_or(first) = v,
-    checked: Nat::all_upto(rest.len(), λ n => pick(Nat, λ k => k, Cons(first, rest).nth(n.min(rest.len())).unwrap_or(first)).same(n)) = True,
-    convoy: (R: Type) → (Nat → R) → E → R, convoys: (R: Type) → (a: Nat → R) → (v: E) → convoy(R, a, v) = a(pick(Nat, λ n => n, v)), v: E):
-    EnumInfo::of_ctors(first, rest, pick, picks, of_tag, checked, convoy, convoys).tag(v) <= rest.len() {
-    let t = pick(Nat, λ n => n, v);
-    EnumInfo::of_ctors(first, rest, pick, picks, of_tag, checked, convoy, convoys).tag_le(v,
-        cong_fn(λ (n: Nat) => Cons(first, rest).nth(n).unwrap_or(first),
-            sym(Nat::min_eq_l(t.min(rest.len()), rest.len(), Nat::min_le_r(t, rest.len())))))
+    let back: (e.of(e.tag(v), Ty::flats_default(e.slots)) = v) = j(bare, λ t _ => e.of(e.tag(v), t) = v, e.of_tag(v));
+    j(sym(clamped), λ y _ => e.of(y, Ty::flats_default(e.slots)) = v, back)
 }
 
 // A record type as the meaning reads it: the type, its fields' codes, the
@@ -231,9 +379,9 @@ fn RecInfo::enum_word(tys: Nat → RecInfo, i: Nat, v: tys(i).alts.E) → BitVec
 // the value (`EnumInfo::read_tag`): how a generator states a function's
 // agreement at the enum it was passed rather than at what its word reads
 // as.
-theorem RecInfo::enum_agrees(tys: Nat → RecInfo, i: Nat, v: tys(i).alts.E, le: tys(i).alts.tag(v) <= tys(i).alts.last,
+theorem RecInfo::enum_agrees(tys: Nat → RecInfo, i: Nat, v: tys(i).alts.E, bare: tys(i).alts.fields(v) = Ty::flats_default(tys(i).alts.slots),
     small: (tys(i).alts.last + 1).leb(Nat::pow(2, 64)) = True, P: tys(i).alts.E → Type, h: P(tys(i).alts.read(RecInfo::enum_word(tys, i, v)))): P(v) {
-    j(tys(i).alts.read_tag(v, le, small), λ y _ => P(y), h)
+    j(tys(i).alts.read_tag(v, small, bare), λ y _ => P(y), h)
 }
 
 // The `i`th code, `Bit` past the end (every judgment refuses that index).
@@ -258,7 +406,7 @@ fn Ty::default(self t: Ty, tys: Nat → RecInfo) → t.sem(tys) {
         Lines => Nil,
         Named(i) => tys(i).mk(Ty::flats_default(tys(i).fields)),
         Count => 0,
-        Enum(i) => tys(i).alts.of(0),
+        Enum(i) => tys(i).alts.of(0, Ty::flats_default(tys(i).alts.slots)),
     }
 }
 
@@ -649,6 +797,13 @@ inductive Tm {
     // constructor's arm the default (docs/native/runtime-fn-setups-design.md
     // §16.16).
     Pick(i: Nat, c: Nat, arms: Tm, eq: Bool),
+    // Constructor `k` of the enum of table entry `i`, its fields from
+    // variables, one per field (its slots of `EnumInfo.slots`, the others
+    // defaults).
+    Inject(i: Nat, k: Nat, args: List<Nat>),
+    // Payload slot `j` of an enum variable of table entry `i`: in an arm of
+    // a `Pick`, a field of the arm's constructor.
+    Slot(i: Nat, j: Nat, of: Nat),
 }
 
 record Sig { params: List<Ty>, result: Ty }
@@ -730,8 +885,8 @@ fn Tm::lit(t: Ty, n: Nat, tys: Nat → RecInfo) → t.sem(tys) {
         Lines => Nil,
         Named(i) => Named(i).default(tys),
         Count => n,
-        // A constructor of an enum by its index (`EnumInfo.of`).
-        Enum(i) => tys(i).alts.of(n),
+        // A constructor of an enum by its index, without fields (`EnumInfo.of`).
+        Enum(i) => tys(i).alts.of(n, Ty::flats_default(tys(i).alts.slots)),
     }
 }
 
@@ -751,6 +906,8 @@ fn Tm::ty(self t: Tm, w: World, g: List<Ty>) → Ty {
         Case(_, zero, _) => zero.ty(w, g),
         Byte(_, _, _) => Word(8),
         Pick(i, _, arms, _) => arms.ty(w, Cons(Enum(i), g)),
+        Inject(i, _, _) => Enum(i),
+        Slot(i, j, _) => Ty::at(w.tys(i).alts.slots, j),
     }
 }
 
@@ -804,8 +961,13 @@ fn Tm::sem(self t: Tm, w: World) → (g: List<Ty>) → Env(w.tys, g) → t.ty(w,
             w.spans.span(k).byte_within(Ty::cast(w.tys, Ty::at(g, length), Word(64), Env::get(w.tys, g, env, length)),
                 Ty::cast(w.tys, Ty::at(g, i), Word(64), Env::get(w.tys, g, env, i))),
         Pick(i, c, arms, eq) => λ g env =>
-            w.tys(i).alts.choose(eq, arms.ty(w, Cons(Enum(i), g)).sem(w.tys), λ n => arms.sem(w, Cons(Enum(i), g), Pair(w.tys(i).alts.of(n), env)),
+            w.tys(i).alts.choose(eq, arms.ty(w, Cons(Enum(i), g)).sem(w.tys), λ n t => arms.sem(w, Cons(Enum(i), g), Pair(w.tys(i).alts.of(n, t), env)),
                 Ty::cast(w.tys, Ty::at(g, c), Enum(i), Env::get(w.tys, g, env, c))),
+        Inject(i, k, args) => λ g env => w.tys(i).alts.of(k, Ty::spread(w.tys(i).alts.slots, w.tys(i).alts.lo(k), w.tys(i).alts.arity(k),
+            Tm::fields(w, g, env, Ty::range(w.tys(i).alts.slots, w.tys(i).alts.lo(k), w.tys(i).alts.arity(k)), args))),
+        Slot(i, j, of) => λ g env =>
+            Ty::at(w.tys(i).alts.slots, j).of_flat(w.tys,
+                Ty::flat_nth(w.tys(i).alts.slots, w.tys(i).alts.fields(Ty::cast(w.tys, Ty::at(g, of), Enum(i), Env::get(w.tys, g, env, of))), j)),
     }
 }
 
@@ -916,6 +1078,8 @@ fn Tm::same(self t: Tm) → Tm → Bool {
             Pick(i2, c2, arms2, eq2) => i.same(i2).and(c.same(c2)).and(arms.same(arms2)).and(match eq { True => eq2, False => !eq2 }),
             _ => False,
         },
+        Inject(i, k, args) => λ u => match u { Inject(i2, k2, args2) => i.same(i2).and(k.same(k2)).and(Tm::nats_same(args, args2)), _ => False },
+        Slot(i, j, of) => λ u => match u { Slot(i2, j2, of2) => i.same(i2).and(j.same(j2)).and(of.same(of2)), _ => False },
     }
 }
 

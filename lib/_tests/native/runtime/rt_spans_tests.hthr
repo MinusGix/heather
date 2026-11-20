@@ -72,7 +72,7 @@ theorem peek_pinned(span: List<BitVec(8)>, place, i: BitVec(64)):
 // returns the meaning. Nothing is asked of the two words of the span.
 theorem peek_compiled(call: Answers(), span: List<BitVec(8)>, place, length, i: BitVec(64)):
     peek_code().eval(call, [place, length, i], buffers := [span]) = peek_rt().meaning(peek_world(span))(place, length, i) {
-    Fun::lower_sound(peek_rt(), peek_world(span), call, Tm::calls_agree_none_over(RecInfo::none, [span], call), place, trivial, length, trivial, i, trivial)
+    Fun::lower_sound(peek_rt(), peek_world(span), call, Tm::calls_agree_none_over(RecInfo::none, [span], call), place, length, i)
 }
 
 // So the code, lent a span with its length, computes the function.

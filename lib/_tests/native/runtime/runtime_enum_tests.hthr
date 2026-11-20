@@ -193,3 +193,30 @@ runtime fn turn_eq(d: Dir, s: Shade) → Dir {
 }
 
 theorem turn_eq_runs(): program_eval(turn_eq::program, 0, [BitVec::ofNat(0), BitVec::ofNat(2)]) = 3 { turn_eq::agrees(North, Light) }
+
+// ---------------------------------------------------------------------------
+// A call of a function that returns an enum: its tag word names the
+// callee's value (`Ty::Returned`, `EnumInfo.bounded`), so the caller holds
+// it as that value and may match on it or pass it on.
+
+runtime fn shade_next_level(s: Shade) → u64 { shade_level(shade_next(s)) }
+
+theorem shade_next_level_runs(): program_eval(shade_next_level::program, 2, [BitVec::ofNat(2)]) = 10 { shade_next_level::agrees(Light) }
+
+theorem shade_next_level_agrees(s: Shade):
+    program_eval(shade_next_level::program, 2, [RecInfo::enum_word(shade_next_level::world.tys, 0, s)]) = shade_next_level(s) {
+    shade_next_level::agrees(s)
+}
+
+// Two calls returning enums, one matched in the caller.
+runtime fn shade_twice_next(s: Shade) → u64 { match shade_next(shade_next(s)) { Dark => 1, Mid => 2, Light => 3 } }
+
+theorem shade_twice_next_runs(): program_eval(shade_twice_next::program, 1, [BitVec::ofNat(0)]) = 3 { shade_twice_next::agrees(Dark) }
+
+// An enum returned from a call, returned again.
+runtime fn shade_skip(s: Shade) → Shade { shade_next(shade_next(s)) }
+
+theorem shade_skip_agrees(s: Shade):
+    program_eval(shade_skip::program, 1, [RecInfo::enum_word(shade_skip::world.tys, 0, s)]) = RecInfo::enum_word(shade_skip::world.tys, 0, shade_skip(s)) {
+    shade_skip::agrees(s)
+}
