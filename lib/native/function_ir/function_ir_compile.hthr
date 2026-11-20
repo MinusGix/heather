@@ -643,7 +643,8 @@ fn Place::number(self place: Place) → Nat {
 // with its words past the first from the same run.
 theorem Function::eval_runs_both(self function: Function, earlier: List<Function>, ok: function.evaluable(program_arity(earlier)).IsTrue(),
     below: program_evaluable(earlier).IsTrue(), quiet: function.body.quiet().IsTrue(), reads: program_quiet(earlier).IsTrue(),
-    arguments: List<BitVec(64)>, count: function.parameters.len() = arguments.len()):
+    arguments: List<BitVec(64)>, count: function.parameters.len() = arguments.len(),
+    defined: function.defined(program_eval_over(Nil, earlier), program_defined_over(Nil, earlier), arguments).IsTrue()):
     function.RunsBoth(program_effects(earlier), arguments, function.eval(program_eval_over(Nil, earlier), arguments),
         function.eval_also(program_eval_over(Nil, earlier), arguments), Nil, Nil) {
     let call = program_eval_over(Nil, earlier);
@@ -656,8 +657,8 @@ theorem Function::eval_runs_both(self function: Function, earlier: List<Function
         words_agree(function.parameters, bound, after, λ id m =>
             function.body.eval_frame(call, Nil, bound, 64, id, disjoint_mem(function.body.writes(), function.parameters, params.right, id, m))),
         words_of_bind(Valuation::zero(), function.parameters, params.left, arguments, count));
-    let holds = function.body.eval_holds_in(program_callees_over(Nil, earlier), call, program_arity(earlier), Nil,
-        program_eval_reads(earlier, Nil, below), parts.left, bound, after, λ w id _ => refl);
+    let holds = function.body.eval_holds_in(program_callees_over(Nil, earlier), call, program_defined_over(Nil, earlier), program_arity(earlier), Nil,
+        program_eval_reads(earlier, Nil, below), parts.left, bound, after, λ w id _ => refl, defined);
     let keeping = function.body.runs_quiet(λ (held: Buffers()) => program_callees_over(held, earlier), Nil, quiet, after, holds);
     Exists(after, ⟨read, ⟨function.body.runs_weaken(Effects::keeping(λ (held: Buffers()) => program_callees_over(held, earlier)), program_effects(earlier),
         λ before g words word a kept => j(sym(kept.right), λ x _ => program_effects(earlier)(before, g, words, word, x),
@@ -674,7 +675,8 @@ theorem compiled_returns_both<M>(last: Function, earlier: List<Function>, placem
     evaluable: program_evaluable(Cons(last, earlier)).IsTrue(), quiet: program_quiet(Cons(last, earlier)).IsTrue(),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, bytes: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data),
     arguments: List<BitVec(64)>, count: last.parameters.len() = arguments.len(), answer: BitVec(64), rest: List<BitVec(64)>,
-    evaluates: last.eval(program_eval(earlier), arguments) = answer, evaluates_rest: last.eval_also(program_eval(earlier), arguments) = rest):
+    evaluates: last.eval(program_eval(earlier), arguments) = answer, evaluates_rest: last.eval_also(program_eval(earlier), arguments) = rest,
+    defined: program_defined(Cons(last, earlier), earlier.len(), arguments).IsTrue()):
     Site<M>(fetch, data, program, bytes, origin).Returns(stack, asm_labels(program, earlier.len() + 1),
         λ (i: Nat) (s: MachineState<M>) => stack.Passed(arguments, i, s) ∧ rooms(earlier.len()) <= i,
         λ (i: Nat) (s: MachineState<M>) (t: MachineState<M>) => stack.CalleePost(answer)(i, s, t) ∧ ArgsIn(rest, [Rdx], t.gprs)) {
@@ -688,7 +690,8 @@ theorem compiled_returns_both<M>(last: Function, earlier: List<Function>, placem
             program_quiet_lendless(functions, quiet), λ b stores => false_elim(program_quiet_stores(functions, b, quiet, stores))));
     let ran = j(evaluates_rest, λ r _ => last.RunsBoth(program_effects(earlier), arguments, answer, r, Nil, Nil),
         j(evaluates, λ x _ => last.RunsBoth(program_effects(earlier), arguments, x, last.eval_also(program_eval(earlier), arguments), Nil, Nil),
-            last.eval_runs_both(earlier, parts.left, parts.right, quiets.left, quiets.right, arguments, count)));
+            last.eval_runs_both(earlier, parts.left, parts.right, quiets.left, quiets.right, arguments, count,
+                program_defined_last(Nil, last, earlier, arguments, defined))));
     let returns = both(lending, refl, stack.loan_nothing(), λ b no => false_elim(no), arguments, answer, rest, Nil, Nil);
     λ s at resident i rsp room held ret saved => {
         let r = returns(s, at, resident, i, rsp, room, ⟨⟨held.left, ⟨ran, held.right⟩⟩, ⟨trivial, ⟨room, stack.in_memory_none(s.memory)⟩⟩⟩, ret, saved);

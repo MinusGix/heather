@@ -1562,7 +1562,8 @@ theorem {prefix}_returns<M>(machine: Machine<M>, {slices}: Slice{comma_words}{ty
 // machine, loaded anywhere.
 theorem {prefix}_returns<M>(machine: Machine<M>{comma}{typed}): {prefix}_code().ComputesBoth(machine, {f}, {room}, {list}, {call}, {rest}) {{
     compiled_computes_both<M>({prefix}_fn{f}(), {earlier}, {prefix}_placement(), {prefix}_rooms(), {prefix}_code(), {prefix}_lowers(), {prefix}_evaluable(),
-        {prefix}_quiet(), machine, {list}, refl, {call}, {rest}, {prefix}_agrees({arguments}), {prefix}_agrees_also({arguments}))
+        {prefix}_quiet(), machine, {list}, refl, {call}, {rest}, {prefix}_agrees({arguments}), {prefix}_agrees_also({arguments}),
+        program_total_defined({prefix}_program(), Nil, {prefix}_total(), {f}, {list}))
 }}
 ", room = room(f), arguments = parameters.join(", ")));
     } else {

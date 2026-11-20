@@ -1393,6 +1393,20 @@ fn program_defined_over(buffers: Buffers(), functions: List<Function>) → Defin
 
 fn program_defined(functions: List<Function>) → Defines() { program_defined_over(Nil, functions) }
 
+// At the last function's own number, the program is defined where that
+// function is.
+theorem program_defined_last(buffers: Buffers(), last: Function, earlier: List<Function>, words: List<BitVec(64)>):
+    program_defined_over(buffers, Cons(last, earlier))(earlier.len(), words).IsTrue() →
+    last.defined(program_eval_over(buffers, earlier), program_defined_over(buffers, earlier), words, buffers := buffers).IsTrue() {
+    match earlier.len().eq_dec(earlier.len()) as λ d => (match d as λ _ => Bool {
+            Inl(_) => last.defined(program_eval_over(buffers, earlier), program_defined_over(buffers, earlier), words, buffers := buffers),
+            Inr(_) => program_defined_over(buffers, earlier)(earlier.len(), words),
+        }).IsTrue() → last.defined(program_eval_over(buffers, earlier), program_defined_over(buffers, earlier), words, buffers := buffers).IsTrue() {
+        Inl(_) => λ h => h,
+        Inr(ne) => λ _ => false_elim(ne(refl)),
+    }
+}
+
 fn program_total(functions: List<Function>) → Bool {
     match functions { Nil => True, Cons(last, earlier) => last.body.total() && program_total(earlier) }
 }
