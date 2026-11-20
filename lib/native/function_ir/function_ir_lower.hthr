@@ -410,6 +410,49 @@ theorem keeps_then<M>(values: Valuation(), file: File, facts: Type,
             first_keeps, second_keeps, s, represents, ⟨trivial, fact⟩)
 }
 
+// Run from a state `file` describes, where `facts` hold, no instruction of
+// the code faults. Only an operation's row may divide, and its requirement,
+// among the facts, says its divisor is not zero (`File::run_row_guards`);
+// any other code is checked to hold no divide (`no_divides`).
+fn Guards<M>(values: Valuation(), file: File, facts: Type, out: Lowered) → Type {
+    (s: MachineState<M>) → file.Represents(values, s.gprs) → facts → NoFaults(out.code, s)
+}
+
+fn MayGuard<M>(values: Valuation(), file: File, facts: Type, out: Option<Lowered>) → Type {
+    out.All(λ (lowered: Lowered) => Guards<M>(values, file, facts, lowered))
+}
+
+// Code that holds no divide.
+fn Option::Calm(self out: Option<Lowered>) → Type {
+    out.All(λ (lowered: Lowered) => no_divides(lowered.code) = True)
+}
+
+theorem calm_guards<M>(values: Valuation(), file: File, facts: Type, out: Lowered, calm: no_divides(out.code) = True):
+    Guards<M>(values, file, facts, out)
+{
+    λ s _ _ => no_divides_safe<M>(out.code, calm, s)
+}
+
+theorem calm_may_guard<M>(values: Valuation(), file: File, facts: Type, out: Option<Lowered>):
+    out.Calm() → MayGuard<M>(values, file, facts, out)
+{
+    match out {
+        None => λ _ => trivial,
+        Some(lowered) => λ calm => calm_guards<M>(values, file, facts, lowered, calm),
+    }
+}
+
+theorem guards_seq<M>(values: Valuation(), file: File, first_facts, second_facts: Type,
+    first, second: Lowered,
+    first_keeps: Keeps<M>(values, file, first_facts, first),
+    first_guards: Guards<M>(values, file, first_facts, first),
+    second_guards: Guards<M>(values, first.file, second_facts, second)):
+    Guards<M>(values, file, first_facts ∧ second_facts, first.then(second))
+{
+    λ s represents facts => no_faults_append<M>(first.code, second.code, s, first_guards(s, represents, facts.left),
+        second_guards(execute_block_normal(first.code, s), first_keeps(s, represents, facts.left), facts.right))
+}
+
 // ---------------------------------------------------------------------------
 // What the file knows
 
@@ -604,6 +647,34 @@ theorem File::place_keeps<M>(self file: File, values: Valuation(), held: Held,
     file.place_from_keeps<M>(values, held, destination, file.find(held))
 }
 
+// A MOV, if anything.
+theorem mov_constant_calm(destination: Gpr, word: BitVec(64)): no_divides([mov_constant(destination, word)]) = True {
+    (match word.resize(32).zero_extend(32).eq_bit(word) as λ b => word.resize(32).zero_extend(32).eq_bit(word) = b →
+        no_divides([match b { True => MovRI32(destination, word.resize(32)), False => MovRI(destination, word) }]) = True {
+        True => λ _ => refl,
+        False => λ _ => refl,
+    })(refl)
+}
+
+theorem File::place_from_calm(self file: File, held: Held, destination: Gpr, found: Option<Found(file, held)>):
+    file.place_from(held, destination, found).Calm()
+{
+    match found {
+        None => match held.kind {
+            Word => match known_value(file.known, held.id) {
+                None => trivial,
+                Some(value) => mov_constant_calm(destination, BitVec::ofNat(value)),
+            },
+            Bit => trivial, Narrow(_) => trivial, Low(_) => trivial,
+        },
+        Some(here) => match destination.same(here.register) { True => refl, False => refl },
+    }
+}
+
+theorem File::place_calm(self file: File, held: Held, destination: Gpr): file.place(held, destination).Calm() {
+    file.place_from_calm(held, destination, file.find(held))
+}
+
 fn Lowered::then_option(self first: Lowered, second: Option<Lowered>) → Option<Lowered> {
     match second { None => None, Some(step) => Some(first.then(step)) }
 }
@@ -792,6 +863,16 @@ theorem keeps_weaken<M>(values: Valuation(), file: File, facts, stronger: Type, 
         None => λ _ => trivial,
         Some(lowered) => λ kept s represents holds => kept(s, represents, weaker(holds)),
     }(keeps)
+}
+
+theorem guards_weaken<M>(values: Valuation(), file: File, facts, stronger: Type, out: Option<Lowered>,
+    weaker: stronger → facts, guards: MayGuard<M>(values, file, facts, out)):
+    MayGuard<M>(values, file, stronger, out)
+{
+    match out as λ o => MayGuard<M>(values, file, facts, o) → MayGuard<M>(values, file, stronger, o) {
+        None => λ _ => trivial,
+        Some(lowered) => λ guarded s represents holds => guarded(s, represents, weaker(holds)),
+    }(guards)
 }
 
 theorem binary_placed_keeps<M>(values: Valuation(), op: BinaryOp, file: File,
@@ -2076,6 +2157,32 @@ theorem then_step_keeps<M>(values: Valuation(), file: File, first_facts, second_
     }
 }
 
+theorem then_option_guards<M>(values: Valuation(), file: File, first_facts, second_facts: Type,
+    first: Lowered, first_keeps: Keeps<M>(values, file, first_facts, first),
+    first_guards: Guards<M>(values, file, first_facts, first), second: Option<Lowered>):
+    MayGuard<M>(values, first.file, second_facts, second) →
+    MayGuard<M>(values, file, first_facts ∧ second_facts, first.then_option(second))
+{
+    match second {
+        None => λ _ => trivial,
+        Some(step) => λ step_guards => guards_seq<M>(values, file, first_facts, second_facts,
+            first, step, first_keeps, first_guards, step_guards),
+    }
+}
+
+theorem then_step_guards<M>(values: Valuation(), file: File, first_facts, second_facts: Type,
+    first: Option<Lowered>, next: File → Option<Lowered>,
+    next_guards: (middle: File) → MayGuard<M>(values, middle, second_facts, next(middle))):
+    MayKeep<M>(values, file, first_facts, first) → MayGuard<M>(values, file, first_facts, first) →
+    MayGuard<M>(values, file, first_facts ∧ second_facts, then_step(first, next))
+{
+    match first {
+        None => λ _ _ => trivial,
+        Some(step) => λ first_keeps first_guards => then_option_guards<M>(values, file, first_facts, second_facts,
+            step, first_keeps, first_guards, next(step.file), next_guards(step.file)),
+    }
+}
+
 // A step whose facts follow from a node's.
 theorem keeps_from<M>(values: Valuation(), file: File, facts, holds: Type, out: Option<Lowered>,
     derive: holds → facts, keeps: MayKeep<M>(values, file, facts, out)):
@@ -2794,6 +2901,13 @@ theorem Operand::place_keeps<M>(self operand: Operand, values: Valuation(), file
     }
 }
 
+theorem Operand::place_calm(self operand: Operand, file: File, right: Nat): operand.place(file, right).Calm() {
+    match operand {
+        InRegister(register) => file.place_calm(Held(right, Word), register),
+        Immediate(_) => refl,
+    }
+}
+
 fn Operation::Holds(self op: Operation, values: Valuation(), output, left, right: Nat) → Type {
     op.Gives(64, values(64, left), values(64, right), values(64, output))
 }
@@ -2826,7 +2940,26 @@ theorem File::run_row_keeps<M>(self file: File, values: Valuation(), op: Operati
                 let moved: op.Gives(64, a, b, values(64, output)) = op.gives_cong(64, holds, left_rep, right_rep, refl);
                 file.forget(row.code).represents_retag(values, after, row.result, Some(Held(output, Word)),
                     file.forget_represents<M>(values, row.code, s, represents),
-                    trans(moved.equation, sym(computes(s, moved.needs))))
+                    trans(moved.equation, sym(computes(s, moved.needs).right)))
+            },
+        },
+    }
+}
+
+// The row's code faults nowhere: its operands are the operation's, where
+// its requirement holds.
+theorem File::run_row_guards<M>(self file: File, values: Valuation(), op: Operation, output, left, right: Nat, row: Row,
+    computes: row.Computes<M>(op)):
+    MayGuard<M>(values, file, op.Holds(values, output, left, right), file.run_row(output, left, right, row))
+{
+    match file.found_at(Held(left, Word), row.left) {
+        None => trivial,
+        Some(here) => match file.reads_right(right, row.right) {
+            None => trivial,
+            Some(reads) => λ s represents holds => {
+                let moved: op.Gives(64, read_gpr(row.left, s.gprs), row.right.read(s.gprs), values(64, output)) =
+                    op.gives_cong(64, holds, here.rep(values, s.gprs, represents), reads.reads(values, s.gprs, represents), refl);
+                computes(s, moved.needs).left
             },
         },
     }
@@ -2863,6 +2996,38 @@ theorem File::apply_row_keeps<M>(self file: File, values: Valuation(), op: Opera
                     file.place_keeps<M>(values, Held(left, Word), row.left)))))
 }
 
+theorem File::apply_row_guards<M>(self file: File, values: Valuation(), op: Operation, destination: Gpr,
+    output, left, right: Nat, row: Row, computes: row.Computes<M>(op)):
+    MayGuard<M>(values, file, op.Holds(values, output, left, right), file.apply_row(destination, output, left, right, row))
+{
+    let facts = op.Holds(values, output, left, right);
+    let placing = file.place(Held(left, Word), row.left);
+    let first = then_step(placing, λ (placed: File) => row.right.place(placed, right));
+    let second = then_step(first, λ (placed: File) => placed.run_row(output, left, right, row));
+    let placing_keeps = file.place_keeps<M>(values, Held(left, Word), row.left);
+    let first_keeps = then_step_keeps<M>(values, file, True, True, placing,
+        λ (placed: File) => row.right.place(placed, right),
+        λ (placed: File) => row.right.place_keeps<M>(values, placed, right), placing_keeps);
+    let first_guards = then_step_guards<M>(values, file, True, True, placing,
+        λ (placed: File) => row.right.place(placed, right),
+        λ (placed: File) => calm_may_guard<M>(values, placed, True, row.right.place(placed, right), row.right.place_calm(placed, right)),
+        placing_keeps, calm_may_guard<M>(values, file, True, placing, file.place_calm(Held(left, Word), row.left)));
+    let second_keeps = then_step_keeps<M>(values, file, True ∧ True, facts, first,
+        λ (placed: File) => placed.run_row(output, left, right, row),
+        λ (placed: File) => placed.run_row_keeps<M>(values, op, output, left, right, row, computes), first_keeps);
+    let second_guards = then_step_guards<M>(values, file, True ∧ True, facts, first,
+        λ (placed: File) => placed.run_row(output, left, right, row),
+        λ (placed: File) => placed.run_row_guards<M>(values, op, output, left, right, row, computes), first_keeps, first_guards);
+    guards_weaken<M>(values, file, ((True ∧ True) ∧ facts) ∧ True, facts,
+        then_step(second, λ (done: File) => done.place(Held(output, Word), destination)),
+        λ holds => ⟨⟨⟨trivial, trivial⟩, holds⟩, trivial⟩,
+        then_step_guards<M>(values, file, (True ∧ True) ∧ facts, True, second,
+            λ (done: File) => done.place(Held(output, Word), destination),
+            λ (done: File) => calm_may_guard<M>(values, done, True, done.place(Held(output, Word), destination),
+                done.place_calm(Held(output, Word), destination)),
+            second_keeps, second_guards))
+}
+
 // The register the file holds a word in, if any.
 fn File::where(self file: File, id: Nat) → Option<Gpr> {
     match file.find(Held(id, Word)) { None => None, Some(found) => Some(found.register) }
@@ -2889,6 +3054,19 @@ theorem File::apply_keeps<M>(self file: File, values: Valuation(), op: Operation
     })(op.row_computes<M>(destination, file.where(left), file.where(right), known_value(file.known, right)))
 }
 
+theorem File::apply_guards<M>(self file: File, values: Valuation(), op: Operation, destination: Gpr, output, left, right: Nat):
+    MayGuard<M>(values, file, op.Holds(values, output, left, right), file.apply(op, destination, output, left, right))
+{
+    (match op.row(destination, file.where(left), file.where(right), known_value(file.known, right)) as λ offered => Row::Offered<M>(offered, op) →
+        MayGuard<M>(values, file, op.Holds(values, output, left, right), match offered {
+            None => None,
+            Some(row) => file.apply_row(destination, output, left, right, row),
+        }) {
+        None => λ _ => trivial,
+        Some(row) => λ computes => file.apply_row_guards<M>(values, op, destination, output, left, right, row, computes),
+    })(op.row_computes<M>(destination, file.where(left), file.where(right), known_value(file.known, right)))
+}
+
 // ---------------------------------------------------------------------------
 // Nodes
 
@@ -2905,6 +3083,17 @@ theorem word_only_keeps<M>(values: Valuation(), file: File, width: Nat,
 {
     match decided {
         Inl(word) => j(sym(word), λ w _ => MayKeep<M>(values, file, facts(w), step), keeps),
+        Inr(_) => trivial,
+    }
+}
+
+theorem word_only_guards<M>(values: Valuation(), file: File, width: Nat,
+    facts: Nat → Type, decided: width = 64 ∨ width ≠ 64, step: Option<Lowered>,
+    guards: MayGuard<M>(values, file, facts(64), step)):
+    MayGuard<M>(values, file, facts(width), word_only(width, decided, step))
+{
+    match decided {
+        Inl(word) => j(sym(word), λ w _ => MayGuard<M>(values, file, facts(w), step), guards),
         Inr(_) => trivial,
     }
 }
@@ -3228,13 +3417,79 @@ theorem Node::lower_at_keeps<M>(self node: Node, values: Valuation(), place: Pla
     }
 }
 
+// Whether a node may divide: only an operation's row may, under the
+// requirement its equation carries.
+fn Node::divides(self node: Node) → Bool { match node { Apply(_, _, _, _, _) => True, _ => False } }
+
+// The node lowered, refused where code other than an operation's holds a
+// divide (none does: the check is what lets `lower_nodes_guards` say so
+// without a lemma for every lowering).
+fn Node::lower_checked(self node: Node, place: Place, file: File) → Option<Lowered> {
+    match node.lower_at(place, file) {
+        None => None,
+        Some(first) => match node.divides() || no_divides(first.code) { False => None, True => Some(first) },
+    }
+}
+
+theorem Node::lower_checked_keeps<M>(self node: Node, values: Valuation(), place: Place, file: File):
+    MayKeep<M>(values, file, NodeHolds(values, node), node.lower_checked(place, file))
+{
+    (match node.lower_at(place, file) as λ step => MayKeep<M>(values, file, NodeHolds(values, node), step) →
+        MayKeep<M>(values, file, NodeHolds(values, node), match step {
+            None => None,
+            Some(first) => match node.divides() || no_divides(first.code) { False => None, True => Some(first) },
+        }) {
+        None => λ _ => trivial,
+        Some(first) => λ kept => match node.divides() || no_divides(first.code) { False => trivial, True => kept },
+    })(node.lower_at_keeps<M>(values, place, file))
+}
+
+// An operation's code faults nowhere where its equation holds.
+theorem Node::divides_guards<M>(self node: Node, values: Valuation(), place: Place, file: File):
+    node.divides() = True → MayGuard<M>(values, file, NodeHolds(values, node), node.lower_at(place, file))
+{
+    match node {
+        Apply(op, width, output, left, right) => λ _ => match place {
+            Into(destination) => word_only_guards<M>(values, file, width,
+                λ w => NodeHolds(values, Apply(op, w, output, left, right)), width.eq_dec(64),
+                file.apply(op, destination, output, left, right),
+                file.apply_guards<M>(values, op, destination, output, left, right)),
+            Folded => trivial,
+            Saving(_) => trivial,
+            CallSlots(_) => trivial, Short(_) => trivial,
+            Spilling(_) => trivial,
+        },
+        _ => λ no => absurd(no),
+    }
+}
+
+theorem Node::checked_guards<M>(self node: Node, values: Valuation(), place: Place, file: File):
+    MayGuard<M>(values, file, NodeHolds(values, node), node.lower_checked(place, file))
+{
+    (match node.lower_at(place, file) as λ step =>
+        (node.divides() = True → MayGuard<M>(values, file, NodeHolds(values, node), step)) →
+        MayGuard<M>(values, file, NodeHolds(values, node), match step {
+            None => None,
+            Some(first) => match node.divides() || no_divides(first.code) { False => None, True => Some(first) },
+        }) {
+        None => λ _ => trivial,
+        Some(first) => λ divides => match d: node.divides() {
+            True => divides(d),
+            False => match c: no_divides(first.code) {
+                False => trivial,
+                True => calm_guards<M>(values, file, NodeHolds(values, node), first, c),
+            },
+        },
+    })(node.divides_guards<M>(values, place, file))
+}
+
 // The nodes in their stored schedule, one placement entry each.
 fn lower_nodes(nodes: List<Node>, placement: List<Place>, file: File) → Option<Lowered> {
     match nodes {
         Nil => Some(Lowered([], file)),
         Cons(node, rest) => match placement {
             Nil => None,
-            Cons(place, later) => match node.lower_at(place, file) {
+            Cons(place, later) => match node.lower_checked(place, file) {
                 None => None,
                 Some(first) => first.then_option(lower_nodes(rest, later, first.file)),
             },
@@ -3251,7 +3506,7 @@ theorem lower_nodes_keeps<M>(values: Valuation(), nodes: List<Node>):
         Cons(node, rest) => λ placement => match placement {
             Nil => λ file => trivial,
             Cons(place, later) => λ file =>
-                (match node.lower_at(place, file) as λ step =>
+                (match node.lower_checked(place, file) as λ step =>
                     MayKeep<M>(values, file, NodeHolds(values, node), step) →
                     MayKeep<M>(values, file, NodeHolds(values, node) ∧ NodesHold(values, rest),
                         match step {
@@ -3264,7 +3519,36 @@ theorem lower_nodes_keeps<M>(values: Valuation(), nodes: List<Node>):
                             NodesHold(values, rest), first, first_keeps,
                             lower_nodes(rest, later, first.file),
                             lower_nodes_keeps<M>(values, rest, later, first.file)),
-                })(node.lower_at_keeps<M>(values, place, file)),
+                })(node.lower_checked_keeps<M>(values, place, file)),
+        },
+    }
+}
+
+// Nor does any of the nodes' code fault where their equations hold.
+theorem lower_nodes_guards<M>(values: Valuation(), nodes: List<Node>):
+    (placement: List<Place>) → (file: File) →
+    MayGuard<M>(values, file, NodesHold(values, nodes), lower_nodes(nodes, placement, file))
+{
+    match nodes {
+        Nil => λ placement file s represents _ => trivial,
+        Cons(node, rest) => λ placement => match placement {
+            Nil => λ file => trivial,
+            Cons(place, later) => λ file =>
+                (match node.lower_checked(place, file) as λ step =>
+                    MayKeep<M>(values, file, NodeHolds(values, node), step) →
+                    MayGuard<M>(values, file, NodeHolds(values, node), step) →
+                    MayGuard<M>(values, file, NodeHolds(values, node) ∧ NodesHold(values, rest),
+                        match step {
+                            None => None,
+                            Some(first) => first.then_option(lower_nodes(rest, later, first.file)),
+                        }) {
+                    None => λ _ _ => trivial,
+                    Some(first) => λ first_keeps first_guards =>
+                        then_option_guards<M>(values, file, NodeHolds(values, node),
+                            NodesHold(values, rest), first, first_keeps, first_guards,
+                            lower_nodes(rest, later, first.file),
+                            lower_nodes_guards<M>(values, rest, later, first.file)),
+                })(node.lower_checked_keeps<M>(values, place, file), node.checked_guards<M>(values, place, file)),
         },
     }
 }

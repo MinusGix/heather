@@ -62,7 +62,7 @@ theorem block_runs<M>(code, rest: List<Instruction>, state: MachineState<M>):
 // placement, then the rest from the file it left.
 fn ConsLowered(node: Node, rest: List<Node>, file: File, body: Lowered) → Type {
     ∃ place: Place, ∃ first: Lowered, ∃ later: List<Place>, ∃ after: Lowered,
-        (node.lower_at(place, file) = Some(first)) ∧ ((lower_nodes(rest, later, first.file) = Some(after)) ∧ (body = first.then(after)))
+        (node.lower_checked(place, file) = Some(first)) ∧ ((lower_nodes(rest, later, first.file) = Some(after)) ∧ (body = first.then(after)))
 }
 
 theorem lower_nodes_cons(node: Node, rest: List<Node>, file: File, body: Lowered): (placement: List<Place>) →
@@ -70,7 +70,7 @@ theorem lower_nodes_cons(node: Node, rest: List<Node>, file: File, body: Lowered
     λ placement => match placement {
         Nil => λ none => Option::none_ne_some(body, none, ConsLowered(node, rest, file, body)),
         Cons(place, later) => λ lowered =>
-            (match node.lower_at(place, file) as λ o => node.lower_at(place, file) = o →
+            (match node.lower_checked(place, file) as λ o => node.lower_checked(place, file) = o →
                     (match o { None => None, Some(first) => first.then_option(lower_nodes(rest, later, first.file)) }) = Some(body) →
                     ConsLowered(node, rest, file, body) {
                 None => λ _ none => Option::none_ne_some(body, none, ConsLowered(node, rest, file, body)),
@@ -123,8 +123,8 @@ theorem lower_star<M>(meant: Valuation(), end: File, tail: List<Instruction>):
                     let after = parts.proof.proof.proof.witness;
                     let eqs = parts.proof.proof.proof.proof;
                     let first_keeps: Keeps<M>(meant, file, NodeHolds(meant, node), first) =
-                        node.lower_at(place, file).all_some(λ (l: Lowered) => Keeps<M>(meant, file, NodeHolds(meant, node), l),
-                            first, eqs.left, node.lower_at_keeps<M>(meant, place, file));
+                        node.lower_checked(place, file).all_some(λ (l: Lowered) => Keeps<M>(meant, file, NodeHolds(meant, node), l),
+                            first, eqs.left, node.lower_checked_keeps<M>(meant, place, file));
                     let b2 = Pending<Instruction, MachineState<M>>(after.code ++ tail, execute_block_normal<M>(first.code, state));
                     // The first node's code, then the rest's, then the tail.
                     let at_code: (code = first.code ++ (after.code ++ tail)) =

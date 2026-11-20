@@ -489,7 +489,7 @@ fn instructions_numbers(instructions: List<Instruction>) → List<Nat> {
 fn Asm::numbers(self item: Asm) → List<Nat> {
     match item {
         Block(instructions) => Cons(0, Cons(instructions.len(), instructions_numbers(instructions))),
-        Guarded(instructions) => Cons(0, Cons(instructions.len(), instructions_numbers(instructions))),
+        Guarded(instructions) => Cons(16, Cons(instructions.len(), instructions_numbers(instructions))),
         Jcc(cc, target) => [1, cc.number(), target],
         Jmp(target) => [2, target],
         JccShort(cc, target) => [14, cc.number(), target],

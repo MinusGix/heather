@@ -685,6 +685,30 @@ theorem Site::runs_guarded<M>(self site: Site<M>, fits: FillsFit(site.program, n
     }
 }
 
+// The item a compiled block of code is: a plain block where it holds no
+// divide, else one run under `NoFaults`. Code that never divides is laid
+// out as it was before divides were lowered.
+fn Asm::of_code(code: List<Instruction>) → Asm {
+    match no_divides(code) { True => Block(code), False => Guarded(code) }
+}
+
+// Either runs from its label to its end where, from every state its
+// precondition holds at, none of its divides faults.
+theorem Site::runs_code<M>(self site: Site<M>, laid: site.program.laid_out().IsTrue(), k: Nat, before: Prog, name: Nat,
+    instructions: List<Instruction>, at: asm_back(site.program, k) = At(before, name, Asm::of_code(instructions)),
+    pre, post: Gprs → Type,
+    step: (s: MachineState<M>) → pre(s.gprs) → NoFaults(instructions, s) ∧ post(execute_block_normal(instructions, s).gprs)):
+    site.Runs(prog_len(before), prog_len(At(before, name, Asm::of_code(instructions))), pre, post) {
+    (match no_divides(instructions) as λ b =>
+        asm_back(site.program, k) = At(before, name, match b { True => Block(instructions), False => Guarded(instructions) }) →
+        site.Runs(prog_len(before), prog_len(At(before, name, match b { True => Block(instructions), False => Guarded(instructions) })), pre, post) {
+        True => λ here => site.runs_block(site.program.laid_out_fits(laid), k, before, name, instructions, here,
+            site.program.block_reads_at(laid, k, before, name, instructions, here), pre, post, λ s held => step(s, held).right),
+        False => λ here => site.runs_guarded(site.program.laid_out_fits(laid), k, before, name, instructions, here,
+            site.program.guarded_flags_at(laid, k, before, name, instructions, here), pre, post, step),
+    })(at)
+}
+
 // A near JMP at a label runs to where it lands, the registers as they were.
 theorem Site::runs_jump<M>(self site: Site<M>, fits: FillsFit(site.program, no_fills()), k: Nat, before: Prog, name, target: Nat,
     at: asm_back(site.program, k) = At(before, name, Jmp(target)), to: Nat,

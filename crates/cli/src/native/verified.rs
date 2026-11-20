@@ -1854,7 +1854,9 @@ pub(super) fn read_items_with(numbers: &[u64], word: &dyn Fn(u32, u64) -> String
         let mut take = || { used += 1; next() };
         let name = take()?;
         let item = match take()? {
-            0 => {
+            // A block, and one that may divide (`Guarded`): the same
+            // instructions, run under `NoFaults`.
+            kind @ (0 | 16) => {
                 let count = take()?;
                 let mut instructions = Vec::new();
                 for _ in 0..count {
@@ -1898,7 +1900,7 @@ pub(super) fn read_items_with(numbers: &[u64], word: &dyn Fn(u32, u64) -> String
                 // certificate's `{p}_at_` stretches cost about twice what
                 // their constructors do.
                 let list = instructions.iter().rev().fold("Nil".to_string(), |rest, i| format!("Cons({i}, {rest})"));
-                format!("Block({list})")
+                format!("{}({list})", if kind == 16 { "Guarded" } else { "Block" })
             }
             1 => format!("Jcc({}, {})", CONDITIONS.get(take()? as usize).ok_or_else(bad)?, take()?),
             2 => format!("Jmp({})", take()?),

@@ -1195,7 +1195,7 @@ fn emit_kept_nodes(saves: Nat, prog: Prog, file: File, nodes: List<Node>, placem
         None => None,
         Some(lowered) => match leaves_all(lowered.code, body_kept(saves)) {
             False => None,
-            True => Some(Emitted(At(prog, 0, Block(lowered.code)), lowered.file, skip_nodes(nodes, placement), names)),
+            True => Some(Emitted(At(prog, 0, Asm::of_code(lowered.code)), lowered.file, skip_nodes(nodes, placement), names)),
         },
     }
 }
@@ -1725,7 +1725,7 @@ theorem emit_kept_nodes_grows(saves: Nat, prog: Prog, file: File, nodes: List<No
         None => trivial,
         Some(lowered) => match leaves_all(lowered.code, body_kept(saves)) {
             False => trivial,
-            True => prog.within_then(0, Block(lowered.code)),
+            True => prog.within_then(0, Asm::of_code(lowered.code)),
         },
     }
 }
@@ -2179,24 +2179,24 @@ theorem StructuredRegion::emit_calls_grows(self region: StructuredRegion, saves:
     }
 }
 
-// A block that keeps the file's description and the callee-saved registers.
+// A block that keeps the file's description and the callee-saved registers
+// (one run under `NoFaults` where it divides).
 theorem kept_block_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
     values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File, facts: Type, lowered: Lowered,
-    keeps: Keeps<M>(values, file, facts, lowered), leaves: leaves_all(lowered.code, body_kept(saves)).IsTrue(),
-    placement: List<Place>, names: Nat):
-    EmitsIn<M>(saves, site, stack, values, d, s0, prog, file, facts, Emitted(At(prog, 0, Block(lowered.code)), lowered.file, placement, names)) {
+    keeps: Keeps<M>(values, file, facts, lowered), guards: Guards<M>(values, file, facts, lowered),
+    leaves: leaves_all(lowered.code, body_kept(saves)).IsTrue(), placement: List<Place>, names: Nat):
+    EmitsIn<M>(saves, site, stack, values, d, s0, prog, file, facts, Emitted(At(prog, 0, Asm::of_code(lowered.code)), lowered.file, placement, names)) {
     let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ facts) ∧
         (Kept(body_kept(saves), s0.gprs, g) ∧ stack.Wrote(d, s0.memory, m));
     let post = λ (g: Gprs) (m: M) => lowered.file.Represents(values, g) ∧
         (Kept(body_kept(saves), s0.gprs, g) ∧ stack.Wrote(d, s0.memory, m));
-    ⟨prog.within_then(0, Block(lowered.code)),
-     λ within => site.moves_of_pure(stack.writes, prog_len(prog), prog_len(prog) + block_length(lowered.code), pre, post,
-        λ memory => site.runs_block(site.program.laid_out_fits(laid), within.witness, prog, 0, lowered.code, within.proof,
-            site.program.block_reads_at(laid, within.witness, prog, 0, lowered.code, within.proof),
+    ⟨prog.within_then(0, Asm::of_code(lowered.code)),
+     λ within => site.moves_of_pure(stack.writes, prog_len(prog), prog_len(At(prog, 0, Asm::of_code(lowered.code))), pre, post,
+        λ memory => site.runs_code(laid, within.witness, prog, 0, lowered.code, within.proof,
             λ (g: Gprs) => pre(g, memory), λ (g: Gprs) => post(g, memory),
-            λ x held => ⟨keeps(x, held.left.left, held.left.right),
+            λ x held => ⟨guards(x, held.left.left, held.left.right), ⟨keeps(x, held.left.left, held.left.right),
                 ⟨kept_trans(body_kept(saves), s0.gprs, x.gprs, execute_block_normal(lowered.code, x).gprs, held.right.left,
-                    execute_block_kept<M>(lowered.code, x, body_kept(saves), leaves)), held.right.right⟩⟩))⟩
+                    execute_block_kept<M>(lowered.code, x, body_kept(saves), leaves)), held.right.right⟩⟩⟩))⟩
 }
 
 theorem is_true_of_eq(b: Bool, same: b = True): b.IsTrue() { j(sym(same), λ c _ => c.IsTrue(), trivial) }
@@ -2206,21 +2206,22 @@ theorem emit_kept_nodes_emits<M>(saves: Nat, site: Site<M>, laid: site.program.l
     MayEmitIn<M>(saves, site, stack, values, d, s0, prog, file, NodesHold(values, nodes), emit_kept_nodes(saves, prog, file, nodes, placement, names)) {
     (match lower_nodes(nodes, placement, file) as λ lowered =>
         MayKeep<M>(values, file, NodesHold(values, nodes), lowered) →
+        MayGuard<M>(values, file, NodesHold(values, nodes), lowered) →
         MayEmitIn<M>(saves, site, stack, values, d, s0, prog, file, NodesHold(values, nodes), match lowered {
             None => None,
             Some(l) => match leaves_all(l.code, body_kept(saves)) {
                 False => None,
-                True => Some(Emitted(At(prog, 0, Block(l.code)), l.file, skip_nodes(nodes, placement), names)),
+                True => Some(Emitted(At(prog, 0, Asm::of_code(l.code)), l.file, skip_nodes(nodes, placement), names)),
             },
         }) {
-        None => λ _ => trivial,
-        Some(lowered) => λ keeps =>
+        None => λ _ _ => trivial,
+        Some(lowered) => λ keeps guards =>
             match left: leaves_all(lowered.code, body_kept(saves)) {
                 False => trivial,
                 True => kept_block_emits<M>(saves, site, laid, stack, values, d, s0, prog, file, NodesHold(values, nodes), lowered,
-                    keeps, is_true_of_eq(leaves_all(lowered.code, body_kept(saves)), left), skip_nodes(nodes, placement), names),
+                    keeps, guards, is_true_of_eq(leaves_all(lowered.code, body_kept(saves)), left), skip_nodes(nodes, placement), names),
             },
-    })(lower_nodes_keeps<M>(values, nodes, placement, file))
+    })(lower_nodes_keeps<M>(values, nodes, placement, file), lower_nodes_guards<M>(values, nodes, placement, file))
 }
 
 // Facts that follow from the ones a body starts with.
