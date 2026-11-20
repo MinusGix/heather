@@ -70,7 +70,7 @@ fn StructuredRegion::stored(self region: StructuredRegion, marks: List<Bool>) â†
         Compose(prefix, continuation) => continuation.stored(prefix.stored(marks)),
         Conditional(_, _, _, _, when_true, when_false) => when_false.stored(when_true.stored(marks)),
         Lend(views, _, _, _) => views_stored(views, marks),
-        Call(_, _, _) => marks,
+        Call(_, _, _, _) => marks,
         Loop(_, _, _, _, body, _, _, _, _) => body.stored(marks),
     }
 }

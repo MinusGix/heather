@@ -522,7 +522,7 @@ fn StructuredRegion::taints(self region: StructuredRegion, hidden: List<Nat>) â†
         Compose(prefix, continuation) => continuation.taints(prefix.taints(hidden)),
         Conditional(_, _, _, _, when_true, when_false) => when_true.taints(hidden) ++ when_false.taints(hidden),
         Lend(views, _, _, _) => views_taints(views, hidden),
-        Call(_, _, _) => hidden,
+        Call(_, _, _, _) => hidden,
         Loop(inputs, _, _, _, _, _, _, outputs, _) => taint_onto(outputs, mask_of(inputs, hidden), hidden),
     }
 }

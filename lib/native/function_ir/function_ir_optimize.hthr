@@ -330,7 +330,7 @@ fn StructuredRegion::worded(self region: StructuredRegion, asked: List<Asked>, b
             shared(continuation.worded(asked, a.bound), λ c => Worded(Both(a.sites, c.sites), c.bound))),
         Conditional(_, _, _, _, when_true, when_false) => shared(when_true.worded(asked, by), λ a =>
             shared(when_false.worded(asked, a.bound), λ c => Worded(Arms(a.sites, c.sites), c.bound))),
-        Call(_, _, _) => Worded(Stay, by),
+        Call(_, _, _, _) => Worded(Stay, by),
         Loop(_, _, _, _, body, _, _, _, _) => shared(body.worded(asked, by), λ b => Worded(Body(b.sites), b.bound)),
         Lend(_, _, _, _) => Worded(Stay, by),
     }
@@ -347,7 +347,7 @@ fn StructuredRegion::byte_loads(self region: StructuredRegion) → Nat {
         Sequence(prefix, continuation) => nodes_byte_loads(prefix.nodes) + continuation.byte_loads(),
         Compose(prefix, continuation) => prefix.byte_loads() + continuation.byte_loads(),
         Conditional(_, _, _, _, when_true, when_false) => when_true.byte_loads() + when_false.byte_loads(),
-        Call(_, _, _) => 0,
+        Call(_, _, _, _) => 0,
         Loop(_, _, _, _, body, _, _, _, _) => body.byte_loads(),
         Lend(_, _, _, _) => 0,
     }
@@ -428,7 +428,7 @@ fn StructuredRegion::helped(self region: StructuredRegion, asked: List<Helper>, 
             shared(continuation.helped(a.asked, a.bound), λ c => Helping(Both(a.sites, c.sites), c.bound, c.asked))),
         Conditional(_, _, _, _, when_true, when_false) => shared(when_true.helped(asked, by), λ a =>
             shared(when_false.helped(asked, a.bound), λ c => Helping(Arms(a.sites, c.sites), c.bound, asked))),
-        Call(_, _, _) => Helping(Stay, by, asked),
+        Call(_, _, _, _) => Helping(Stay, by, asked),
         Loop(_, _, _, _, body, _, _, _, _) => shared(body.helped(asked, by), λ b => Helping(Body(b.sites), b.bound, asked)),
         Lend(_, _, _, _) => Helping(Stay, by, asked),
     }
@@ -686,7 +686,7 @@ fn StructuredRegion::stores_put(self region: StructuredRegion, by: Nat) → Word
         },
         Conditional(_, _, _, _, when_true, when_false) => shared(when_true.stores_put(by), λ a =>
             shared(when_false.stores_put(a.bound), λ c => Worded(Arms(a.sites, c.sites), c.bound))),
-        Call(_, _, _) => Worded(Stay, by),
+        Call(_, _, _, _) => Worded(Stay, by),
         Loop(_, _, _, _, body, _, _, _, _) => shared(body.stores_put(by), λ b => Worded(Body(b.sites), b.bound)),
         Lend(_, _, _, _) => Worded(Stay, by),
     }
@@ -783,7 +783,7 @@ fn StructuredRegion::stores_paid(self region: StructuredRegion) → PaidPlan {
         },
         Conditional(_, _, _, _, when_true, when_false) => shared(when_true.stores_paid(), λ a =>
             shared(when_false.stores_paid(), λ c => PaidPlan(Arms(a.plan, c.plan), a.found || c.found))),
-        Call(_, _, _) => PaidPlan(Same, False),
+        Call(_, _, _, _) => PaidPlan(Same, False),
         Loop(_, _, _, _, body, _, _, _, _) => shared(body.stores_paid(), λ b => PaidPlan(Body(b.plan), b.found)),
         Lend(_, _, _, _) => PaidPlan(Same, False),
     }

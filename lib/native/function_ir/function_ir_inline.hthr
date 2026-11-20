@@ -784,7 +784,7 @@ fn StructuredRegion::size(self region: StructuredRegion) → Nat {
         Sequence(prefix, continuation) => prefix.nodes.len() + continuation.size(),
         Compose(prefix, continuation) => prefix.size() + continuation.size(),
         Conditional(_, _, _, _, when_true, when_false) => when_true.size() + when_false.size() + 1,
-        Call(_, _, _) => 1,
+        Call(_, _, _, _) => 1,
         Loop(_, _, _, _, body, _, _, _, _) => body.size() + 1,
         Lend(views, _, _, _) => views.len() + 1,
     }

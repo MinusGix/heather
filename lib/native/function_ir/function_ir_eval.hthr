@@ -528,8 +528,22 @@ theorem eval_nodes_holds(nodes: List<Node>, buffers: Buffers()): nodes_evaluable
 // ---------------------------------------------------------------------------
 // Structured regions
 
-// What a call is answered with: function `f` on words.
-fn Answers() → Type { Nat → List<BitVec(64)> → BitVec(64) }
+// What a call is answered with: function `f` on words, the words it
+// returns (its result, then its `also`; docs/native/runtime-fn-setups-design.md
+// §16.17). A call reads them all: its result the first, its `also` the rest.
+fn Answers() → Type { Nat → List<BitVec(64)> → List<BitVec(64)> }
+
+// The first of a function's words, the one in RAX (zero for none).
+fn first_word(words: List<BitVec(64)>) → BitVec(64) { words.head_or(BitVec::zero()) }
+
+// A function's words as a call reads them: the first (zero for none), then
+// the rest.
+fn Answers::split(words: List<BitVec(64)>) → List<BitVec(64)> { Cons(first_word(words), words.tail()) }
+
+// A word list that is a word then more is read back as the two.
+theorem words_cons_parts(x: BitVec(64), xs, words: List<BitVec(64)>, e: Cons(x, xs) = words): (x = first_word(words)) ∧ (xs = words.tail()) {
+    ⟨cong_fn(λ (l: List<BitVec(64)>) => first_word(l), e), cong_fn(λ (l: List<BitVec(64)>) => l.tail(), e)⟩
+}
 
 // How a loop ends: its state, and whether its passes ran out.
 record LoopEnd { state: List<BitVec(64)>, exhausted: Bool }
@@ -660,9 +674,10 @@ fn StructuredRegion::eval_over(self region: StructuredRegion, buffers: Buffers()
         // homes and the arguments (see `StructuredRegionHoldsOver`).
         Lend(views, callee, arguments, result) => {
             let bound = eval_nodes_over(buffers, views_nodes(views), values);
-            Valuation::set(bound, result, word_value(call(callee, words_of(bound, views_homes(views) ++ arguments))))
+            Valuation::set(bound, result, word_value(first_word(call(callee, words_of(bound, views_homes(views) ++ arguments)))))
         },
-        Call(callee, arguments, result) => Valuation::set(values, result, word_value(call(callee, words_of(values, arguments)))),
+        // The result and the words past it, each at its id.
+        Call(callee, arguments, result, also) => Valuation::bind(values, Cons(result, also), Answers::split(call(callee, words_of(values, arguments)))),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => {
             let end = loop_eval(λ (pass: Valuation()) => body.eval_over(buffers, call, pass), parameters, count, exit, next,
                 values(64, bound).toNat(), words_of(values, inputs));
@@ -698,7 +713,9 @@ fn StructuredRegion::defined_over(self region: StructuredRegion, buffers: Buffer
             let bound = eval_nodes_over(buffers, views_nodes(views), values);
             nodes_defined_over(buffers, views_nodes(views), values) && defines(callee, words_of(bound, views_homes(views) ++ arguments))
         },
-        Call(callee, arguments, _) => defines(callee, words_of(values, arguments)),
+        // And the callee answers with as many words as the call names.
+        Call(callee, arguments, _, also) => defines(callee, words_of(values, arguments))
+            && call(callee, words_of(values, arguments)).tail().len().matches(also.len()),
         Loop(inputs, bound, parameters, count, body, exit, next, _, _) =>
             loop_defined(λ (pass: Valuation()) => body.eval_over(buffers, call, pass),
                 λ (pass: Valuation()) => body.defined_over(buffers, call, defines, pass), parameters, count, exit, next,
@@ -713,7 +730,7 @@ fn StructuredRegion::writes(self region: StructuredRegion) → List<Nat> {
         Compose(prefix, continuation) => prefix.writes() ++ continuation.writes(),
         Conditional(_, _, _, _, when_true, when_false) => when_true.writes() ++ when_false.writes(),
         Lend(views, _, _, result) => nodes_writes(views_nodes(views)) ++ [result],
-        Call(_, _, result) => [result],
+        Call(_, _, result, also) => Cons(result, also),
         Loop(_, _, _, _, _, _, _, outputs, exhausted) => Cons(exhausted, outputs),
     }
 }
@@ -725,7 +742,7 @@ fn StructuredRegion::mentions(self region: StructuredRegion) → List<Nat> {
         Compose(prefix, continuation) => prefix.mentions() ++ continuation.mentions(),
         Conditional(_, condition, _, _, when_true, when_false) => Cons(condition, when_true.mentions() ++ when_false.mentions()),
         Lend(views, _, arguments, result) => nodes_mentions(views_nodes(views)) ++ Cons(result, views_homes(views) ++ arguments),
-        Call(_, arguments, result) => Cons(result, arguments),
+        Call(_, arguments, result, also) => Cons(result, also) ++ arguments,
         Loop(inputs, bound, _, _, _, _, _, outputs, exhausted) => Cons(bound, inputs) ++ Cons(exhausted, outputs),
     }
 }
@@ -748,7 +765,8 @@ fn StructuredRegion::evaluable(self region: StructuredRegion, arity: Nat → Opt
         Lend(views, callee, arguments, result) => nodes_evaluable(views_nodes(views))
             && (disjoint([result], nodes_mentions(views_nodes(views)))
             && (absent(result, views_homes(views) ++ arguments) && arity_fits(arity(callee), (views_homes(views) ++ arguments).len()))),
-        Call(callee, arguments, result) => absent(result, arguments) && arity_fits(arity(callee), arguments.len()),
+        Call(callee, arguments, result, also) => distinct(Cons(result, also))
+            && (disjoint(Cons(result, also), arguments) && arity_fits(arity(callee), arguments.len())),
         Loop(inputs, bound, parameters, count, body, _, next, outputs, exhausted) => body.evaluable(arity)
             && (distinct(Cons(count, parameters)) && (disjoint(body.writes(), Cons(count, parameters))
             && (distinct(Cons(exhausted, outputs)) && (disjoint(Cons(exhausted, outputs), Cons(bound, inputs))
@@ -784,13 +802,12 @@ theorem StructuredRegion::eval_frame(self region: StructuredRegion, call: Answer
             let args = views_homes(views) ++ arguments;
             let first = eval_nodes_over(buffers, nodes, values);
             let parts = absent_append(id, nodes_writes(nodes), [result], h);
-            trans(Valuation::set_other(first, result, word_value(call(callee, words_of(first, args))), w, id,
+            trans(Valuation::set_other(first, result, word_value(first_word(call(callee, words_of(first, args)))), w, id,
                     id.differs_ne(result, Bool::is_true_and(id.differs(result), True, parts.right).left)),
                 eval_nodes_frame(nodes, buffers, values, w, id, parts.left))
         },
-        Call(callee, arguments, result) => λ values w id h =>
-            Valuation::set_other(values, result, word_value(call(callee, words_of(values, arguments))), w, id,
-                id.differs_ne(result, Bool::is_true_and(id.differs(result), True, h).left)),
+        Call(callee, arguments, result, also) => λ values w id h =>
+            Valuation::bind_frame(values, Cons(result, also), Answers::split(call(callee, words_of(values, arguments))), w, id, h),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ values w id h => {
             let end = loop_eval(λ (pass: Valuation()) => body.eval(call, pass, buffers := buffers), parameters, count, exit, next, values(64, bound).toNat(),
                 words_of(values, inputs));
@@ -808,7 +825,7 @@ theorem StructuredRegion::eval_frame(self region: StructuredRegion, call: Answer
 theorem StructuredRegion::eval_holds_in(self region: StructuredRegion, callees: Callees(), call: Answers(),
     defines: Defines(), arity: Nat → Option<Nat>, buffers: Buffers(),
     answers: (f: Nat) → (words: List<BitVec(64)>) → arity_fits(arity(f), words.len()).IsTrue() → defines(f, words).IsTrue() →
-        callees(f, words, call(f, words))):
+        callees(f, words, first_word(call(f, words)), call(f, words).tail())):
     region.evaluable(arity).IsTrue() → (values, after: Valuation()) →
     ((w: Nat) → (id: Nat) → Mem(id, region.mentions()) → after(w, id) = region.eval(call, values, buffers := buffers)(w, id)) →
     region.defined_over(buffers, call, defines, values).IsTrue() → StructuredRegionHoldsIn(callees, after, region, buffers := buffers) {
@@ -879,7 +896,7 @@ theorem StructuredRegion::eval_holds_in(self region: StructuredRegion, callees: 
             let last = Bool::is_true_and(absent(result, args), arity_fits(arity(callee), args.len()), later.right);
             let first = eval_nodes_over(buffers, nodes, values);
             let words = words_of(first, args);
-            let answer = call(callee, words);
+            let answer = first_word(call(callee, words));
             let at_result: (after(64, result) = answer) = trans(agree(64, result, List::mem_append_r(nodes_mentions(nodes), Cons(result, args), result, Inl(refl))),
                 trans(Valuation::set_here(first, result, word_value(answer), 64), word_value_word(answer)));
             let read: (words_of(after, args) = words) = words_agree(args, first, after, λ id m =>
@@ -893,22 +910,30 @@ theorem StructuredRegion::eval_holds_in(self region: StructuredRegion, callees: 
                         Valuation::set_other(first, result, word_value(answer), w, id, id.differs_ne(result,
                             Bool::is_true_and(id.differs(result), True, disjoint_mem([result], nodes_mentions(nodes), later.left, id, m)).left))),
                     both.left),
-                j(sym(read), λ ws _ => callees(callee, ws, after(64, result)),
-                    j(sym(at_result), λ r _ => callees(callee, words, r), answers(callee, words, fits, both.right)))⟩
+                Exists(call(callee, words).tail(), j(sym(read), λ ws _ => callees(callee, ws, after(64, result), call(callee, words).tail()),
+                    j(sym(at_result), λ r _ => callees(callee, words, r, call(callee, words).tail()), answers(callee, words, fits, both.right))))⟩
         },
-        Call(callee, arguments, result) => λ ok values after agree defined => {
-            let parts = Bool::is_true_and(absent(result, arguments), arity_fits(arity(callee), arguments.len()), ok);
+        Call(callee, arguments, result, also) => λ ok values after agree defined => {
+            let outs = Cons(result, also);
+            let parts = Bool::is_true_and(distinct(outs), disjoint(outs, arguments) && arity_fits(arity(callee), arguments.len()), ok);
+            let later = Bool::is_true_and(disjoint(outs, arguments), arity_fits(arity(callee), arguments.len()), parts.right);
             let words = words_of(values, arguments);
             let answer = call(callee, words);
-            let at_result: (after(64, result) = answer) = trans(agree(64, result, Inl(refl)),
-                trans(Valuation::set_here(values, result, word_value(answer), 64), word_value_word(answer)));
+            let asked = Bool::is_true_and(defines(callee, words), answer.tail().len().matches(also.len()), defined);
+            let bound = Valuation::bind(values, outs, Answers::split(answer));
+            let written: (words_of(after, outs) = Answers::split(answer)) = trans(
+                words_agree(outs, bound, after, λ id m => agree(64, id, List::mem_append_l(outs, arguments, id, m))),
+                words_of_bind(values, outs, parts.left, Answers::split(answer),
+                    cong_fn(λ (n: Nat) => n + 1, sym(answer.tail().len().matches_eq(also.len(), asked.right)))));
+            let parted = words_cons_parts(after(64, result), words_of(after, also), Answers::split(answer), written);
             let read: (words_of(after, arguments) = words) = words_agree(arguments, values, after, λ id m =>
-                trans(agree(64, id, Inr(m)), Valuation::set_other(values, result, word_value(answer), 64, id,
-                    λ e => absent_mem(result, arguments, parts.left, id, m, sym(e)))));
+                trans(agree(64, id, List::mem_append_r(outs, arguments, id, m)),
+                    Valuation::bind_frame(values, outs, Answers::split(answer), 64, id, disjoint_mem(outs, arguments, later.left, id, m))));
             let fits: arity_fits(arity(callee), words.len()).IsTrue() =
-                j(sym(words_of_len(values, arguments)), λ n _ => arity_fits(arity(callee), n).IsTrue(), parts.right);
-            j(sym(read), λ ws _ => callees(callee, ws, after(64, result)),
-                j(sym(at_result), λ r _ => callees(callee, words, r), answers(callee, words, fits, defined)))
+                j(sym(words_of_len(values, arguments)), λ n _ => arity_fits(arity(callee), n).IsTrue(), later.right);
+            j(sym(read), λ ws _ => callees(callee, ws, after(64, result), words_of(after, also)),
+                j(sym(parted.right), λ t _ => callees(callee, words, after(64, result), t),
+                    j(sym(parted.left), λ r _ => callees(callee, words, r, answer.tail()), answers(callee, words, fits, asked.left))))
         },
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ ok values after agree defined => {
             let pass = λ (v: Valuation()) => StructuredRegionHoldsIn(callees, v, body, buffers := buffers);
@@ -1108,7 +1133,7 @@ fn StructuredRegion::calls_fit(self region: StructuredRegion, arity: Nat → Opt
         Compose(prefix, continuation) => prefix.calls_fit(arity) && continuation.calls_fit(arity),
         Conditional(_, _, _, _, when_true, when_false) => when_true.calls_fit(arity) && when_false.calls_fit(arity),
         Lend(views, callee, arguments, _) => arity_fits(arity(callee), (views_homes(views) ++ arguments).len()),
-        Call(callee, arguments, _) => arity_fits(arity(callee), arguments.len()),
+        Call(callee, arguments, _, _) => arity_fits(arity(callee), arguments.len()),
         Loop(_, _, _, _, body, _, _, _, _) => body.calls_fit(arity),
     }
 }
@@ -1146,7 +1171,8 @@ theorem StructuredRegion::evaluable_calls_fit(self region: StructuredRegion, ari
                 parts.right);
             Bool::is_true_and(absent(result, args), arity_fits(arity(callee), args.len()), later.right).right
         },
-        Call(callee, arguments, result) => λ ok => Bool::is_true_and(absent(result, arguments), arity_fits(arity(callee), arguments.len()), ok).right,
+        Call(callee, arguments, result, also) => λ ok => Bool::is_true_and(disjoint(Cons(result, also), arguments), arity_fits(arity(callee), arguments.len()),
+            Bool::is_true_and(distinct(Cons(result, also)), disjoint(Cons(result, also), arguments) && arity_fits(arity(callee), arguments.len()), ok).right).right,
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ ok => {
             let passes = Bool::is_true_and(body.evaluable(arity), distinct(Cons(count, parameters)) && (disjoint(body.writes(), Cons(count, parameters))
                 && (distinct(Cons(exhausted, outputs)) && (disjoint(Cons(exhausted, outputs), Cons(bound, inputs))
@@ -1201,18 +1227,19 @@ theorem StructuredRegion::eval_answers_over(self region: StructuredRegion, buffe
                 j(sym(words_of_len(first, args)), λ n _ => arity_fits(arity(callee), n).IsTrue(), ok);
             let answered: (other(callee, words_of(second, args)) = call(callee, words)) =
                 trans(cong_fn(λ (ws: List<BitVec(64)>) => other(callee, ws), read), answers(callee, words, fits));
-            Valuation::set_same(first, second, alike, result, word_value(call(callee, words)), word_value(other(callee, words_of(second, args))),
-                λ w => cong_fn(λ (x: BitVec(64)) => word_value(x, w), answered))
+            Valuation::set_same(first, second, alike, result, word_value(first_word(call(callee, words))), word_value(first_word(other(callee, words_of(second, args)))),
+                λ w => cong_fn(λ (x: List<BitVec(64)>) => word_value(first_word(x), w), answered))
         },
-        Call(callee, arguments, result) => λ ok values others same => {
+        Call(callee, arguments, result, also) => λ ok values others same => {
             let words = words_of(values, arguments);
             let read: (words_of(others, arguments) = words) = words_agree(arguments, values, others, λ id _ => same(64, id));
             let fits: arity_fits(arity(callee), words.len()).IsTrue() =
                 j(sym(words_of_len(values, arguments)), λ n _ => arity_fits(arity(callee), n).IsTrue(), ok);
             let answered: (other(callee, words_of(others, arguments)) = call(callee, words)) =
                 trans(cong_fn(λ (ws: List<BitVec(64)>) => other(callee, ws), read), answers(callee, words, fits));
-            Valuation::set_same(values, others, same, result, word_value(call(callee, words)), word_value(other(callee, words_of(others, arguments))),
-                λ w => cong_fn(λ (x: BitVec(64)) => word_value(x, w), answered))
+            j(sym(answered), λ a _ => Valuation::Same(Valuation::bind(values, Cons(result, also), Answers::split(call(callee, words))),
+                    Valuation::bind(others, Cons(result, also), Answers::split(a))),
+                Valuation::bind_same(values, others, same, Cons(result, also), Answers::split(call(callee, words))))
         },
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ ok values others same => {
             let step = λ (pass: Valuation()) => body.eval_over(buffers, call, pass);
@@ -1239,20 +1266,26 @@ theorem StructuredRegion::eval_answers(self region: StructuredRegion, call, othe
     region.eval_answers_over(Nil, call, other, arity, answers)
 }
 
-// A region whose nodes all require nothing (`Node::total`): it is defined
-// wherever its callees are, which is how a program without a divide meets
-// its certificates' `defined` premise by evaluation.
-fn StructuredRegion::total(self region: StructuredRegion) → Bool {
+// A region whose nodes all require nothing (`Node::total`), and whose
+// calls each name as many words as the callee returns past its first
+// (`outs`, a program's `program_outs`; none where it says nothing): it is
+// defined wherever its callees are, which is how a program without a
+// divide meets its certificates' `defined` premise by evaluation.
+fn StructuredRegion::total_at(self region: StructuredRegion, outs: Nat → Nat) → Bool {
     match region {
         Dataflow(body) => nodes_total(body.nodes),
-        Sequence(prefix, continuation) => nodes_total(prefix.nodes) && continuation.total(),
-        Compose(prefix, continuation) => prefix.total() && continuation.total(),
-        Conditional(_, _, _, _, when_true, when_false) => when_true.total() && when_false.total(),
+        Sequence(prefix, continuation) => nodes_total(prefix.nodes) && continuation.total_at(outs),
+        Compose(prefix, continuation) => prefix.total_at(outs) && continuation.total_at(outs),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.total_at(outs) && when_false.total_at(outs),
         Lend(views, _, _, _) => nodes_total(views_nodes(views)),
-        Call(_, _, _) => True,
-        Loop(_, _, _, _, body, _, _, _, _) => body.total(),
+        Call(callee, _, _, also) => outs(callee).matches(also.len()),
+        Loop(_, _, _, _, body, _, _, _, _) => body.total_at(outs),
     }
 }
+
+// Where the program says nothing of its callees' words: every call names
+// its result alone.
+fn StructuredRegion::total(self region: StructuredRegion) → Bool { region.total_at(λ _ => 0) }
 
 theorem loop_defined_all(step: Valuation() → Valuation(), defined: Valuation() → Bool, all: (v: Valuation()) → defined(v).IsTrue(),
     parameters: List<Nat>, count, exit: Nat, next: List<Nat>, remaining: Nat):
@@ -1278,32 +1311,33 @@ theorem loop_defined_all(step: Valuation() → Valuation(), defined: Valuation()
 }
 
 theorem StructuredRegion::total_defined(self region: StructuredRegion, buffers: Buffers(), call: Answers(), defines: Defines(),
-    all: (f: Nat) → (words: List<BitVec(64)>) → defines(f, words).IsTrue()):
-    region.total().IsTrue() → (values: Valuation()) → region.defined_over(buffers, call, defines, values).IsTrue() {
+    all: (f: Nat) → (words: List<BitVec(64)>) → defines(f, words).IsTrue(), outs: Nat → Nat,
+    lens: (f: Nat) → (words: List<BitVec(64)>) → call(f, words).tail().len() = outs(f)):
+    region.total_at(outs).IsTrue() → (values: Valuation()) → region.defined_over(buffers, call, defines, values).IsTrue() {
     match region {
         Dataflow(body) => λ total values => nodes_total_defined(body.nodes, buffers, total, values),
         Sequence(prefix, continuation) => λ total values => {
-            let parts = Bool::is_true_and(nodes_total(prefix.nodes), continuation.total(), total);
+            let parts = Bool::is_true_and(nodes_total(prefix.nodes), continuation.total_at(outs), total);
             Bool::is_true_and_intro(prefix.defined(values, buffers := buffers),
                 continuation.defined_over(buffers, call, defines, prefix.eval(values, buffers := buffers)),
                 nodes_total_defined(prefix.nodes, buffers, parts.left, values),
-                continuation.total_defined(buffers, call, defines, all, parts.right, prefix.eval(values, buffers := buffers)))
+                continuation.total_defined(buffers, call, defines, all, outs, lens, parts.right, prefix.eval(values, buffers := buffers)))
         },
         Compose(prefix, continuation) => λ total values => {
-            let parts = Bool::is_true_and(prefix.total(), continuation.total(), total);
+            let parts = Bool::is_true_and(prefix.total_at(outs), continuation.total_at(outs), total);
             Bool::is_true_and_intro(prefix.defined_over(buffers, call, defines, values),
                 continuation.defined_over(buffers, call, defines, prefix.eval_over(buffers, call, values)),
-                prefix.total_defined(buffers, call, defines, all, parts.left, values),
-                continuation.total_defined(buffers, call, defines, all, parts.right, prefix.eval_over(buffers, call, values)))
+                prefix.total_defined(buffers, call, defines, all, outs, lens, parts.left, values),
+                continuation.total_defined(buffers, call, defines, all, outs, lens, parts.right, prefix.eval_over(buffers, call, values)))
         },
         Conditional(_, condition, _, _, when_true, when_false) => λ total values => {
-            let parts = Bool::is_true_and(when_true.total(), when_false.total(), total);
+            let parts = Bool::is_true_and(when_true.total_at(outs), when_false.total_at(outs), total);
             match values(1, condition).head_bit() as λ b => (match b as λ _ => Bool {
                 False => when_false.defined_over(buffers, call, defines, values),
                 True => when_true.defined_over(buffers, call, defines, values),
             }).IsTrue() {
-                False => when_false.total_defined(buffers, call, defines, all, parts.right, values),
-                True => when_true.total_defined(buffers, call, defines, all, parts.left, values),
+                False => when_false.total_defined(buffers, call, defines, all, outs, lens, parts.right, values),
+                True => when_true.total_defined(buffers, call, defines, all, outs, lens, parts.left, values),
             }
         },
         Lend(views, callee, arguments, _) => λ total values => {
@@ -1312,11 +1346,14 @@ theorem StructuredRegion::total_defined(self region: StructuredRegion, buffers: 
                 defines(callee, words_of(bound, views_homes(views) ++ arguments)),
                 nodes_total_defined(views_nodes(views), buffers, total, values), all(callee, words_of(bound, views_homes(views) ++ arguments)))
         },
-        Call(callee, arguments, _) => λ _ values => all(callee, words_of(values, arguments)),
+        Call(callee, arguments, _, also) => λ total values => Bool::is_true_and_intro(defines(callee, words_of(values, arguments)),
+            call(callee, words_of(values, arguments)).tail().len().matches(also.len()), all(callee, words_of(values, arguments)),
+            Nat::matches_of_eq(call(callee, words_of(values, arguments)).tail().len(), also.len(),
+                trans(lens(callee, words_of(values, arguments)), outs(callee).matches_eq(also.len(), total)))),
         Loop(inputs, bound, parameters, count, body, exit, next, _, _) => λ total values =>
             loop_defined_all(λ (pass: Valuation()) => body.eval_over(buffers, call, pass),
                 λ (pass: Valuation()) => body.defined_over(buffers, call, defines, pass),
-                λ pass => body.total_defined(buffers, call, defines, all, total, pass), parameters, count, exit, next,
+                λ pass => body.total_defined(buffers, call, defines, all, outs, lens, total, pass), parameters, count, exit, next,
                 values(64, bound).toNat(), words_of(values, inputs)),
     }
 }
@@ -1340,6 +1377,19 @@ fn Function::defined(self function: Function, call: Answers(), defines: Defines(
 // Its words past the first, from the same evaluation.
 fn Function::eval_also(self function: Function, call: Answers(), arguments: List<BitVec(64)>, buffers: Buffers() := Nil) → List<BitVec(64)> {
     words_of(function.body.eval(call, Valuation::bind(Valuation::zero(), function.parameters, arguments), buffers := buffers), function.also)
+}
+
+// All its words: the result, then its `also`. What a call of it is
+// answered with; its first is `eval` and the rest `eval_also`, both by
+// evaluation.
+fn Function::eval_words(self function: Function, call: Answers(), arguments: List<BitVec(64)>, buffers: Buffers() := Nil) → List<BitVec(64)> {
+    words_of(function.body.eval(call, Valuation::bind(Valuation::zero(), function.parameters, arguments), buffers := buffers),
+        Cons(function.result, function.also))
+}
+
+theorem Function::eval_words_len(self function: Function, call: Answers(), arguments: List<BitVec(64)>, buffers: Buffers()):
+    function.eval_words(call, arguments, buffers := buffers).tail().len() = function.also.len() {
+    words_of_len(function.body.eval(call, Valuation::bind(Valuation::zero(), function.parameters, arguments), buffers := buffers), function.also)
 }
 
 fn Function::evaluable(self function: Function, arity: Nat → Option<Nat>) → Bool {
@@ -1371,19 +1421,56 @@ theorem Function::eval_answers(self function: Function, call, other: Answers(), 
 }
 
 // A program's functions, each answering its calls by the functions after
-// it, as `program_callees` orders them, all over the same buffers.
-fn program_eval_over(buffers: Buffers(), functions: List<Function>) → Answers() {
+// it, as `program_callees` orders them, all over the same buffers: the
+// words each returns (`Function::eval_words`; one zero word at a number no
+// function has).
+fn program_answers_over(buffers: Buffers(), functions: List<Function>) → Answers() {
     match functions {
-        Nil => λ _ _ => BitVec::zero(),
+        Nil => λ _ _ => [BitVec::zero()],
         Cons(last, earlier) => λ f arguments => match f.eq_dec(earlier.len()) {
-            Inl(_) => last.eval(program_eval_over(buffers, earlier), arguments, buffers := buffers),
-            Inr(_) => program_eval_over(buffers, earlier)(f, arguments),
+            Inl(_) => last.eval_words(program_answers_over(buffers, earlier), arguments, buffers := buffers),
+            Inr(_) => program_answers_over(buffers, earlier)(f, arguments),
         },
     }
 }
 
+fn program_answers(functions: List<Function>) → Answers() { program_answers_over(Nil, functions) }
+
+// The first word each returns, in RAX: what a function returning one word
+// is stated by.
+fn program_eval_over(buffers: Buffers(), functions: List<Function>) → Nat → List<BitVec(64)> → BitVec(64) {
+    λ f arguments => first_word(program_answers_over(buffers, functions)(f, arguments))
+}
+
 // Over no buffers, as a program that reads none is stated.
-fn program_eval(functions: List<Function>) → Answers() { program_eval_over(Nil, functions) }
+fn program_eval(functions: List<Function>) → Nat → List<BitVec(64)> → BitVec(64) { program_eval_over(Nil, functions) }
+
+// How many words each function returns past its first (none at a number
+// no function has): what a call of it names (`Call`'s `also`).
+fn program_outs(functions: List<Function>) → Nat → Nat {
+    match functions {
+        Nil => λ _ => 0,
+        Cons(last, earlier) => λ f => match f.eq_dec(earlier.len()) {
+            Inl(_) => last.also.len(),
+            Inr(_) => program_outs(earlier, f),
+        },
+    }
+}
+
+theorem program_answers_len(buffers: Buffers(), functions: List<Function>): (f: Nat) → (words: List<BitVec(64)>) →
+    program_answers_over(buffers, functions)(f, words).tail().len() = program_outs(functions)(f) {
+    match functions {
+        Nil => λ f words => refl,
+        Cons(last, earlier) => λ f words => match f.eq_dec(earlier.len()) as λ d =>
+            (match d as λ _ => List<BitVec(64)> {
+                Inl(_) => last.eval_words(program_answers_over(buffers, earlier), words, buffers := buffers),
+                Inr(_) => program_answers_over(buffers, earlier)(f, words),
+            }).tail().len() = (match d as λ _ => Nat { Inl(_) => last.also.len(), Inr(_) => program_outs(earlier, f) }) {
+            Inl(_) => last.eval_words_len(program_answers_over(buffers, earlier), words, buffers),
+            Inr(_) => program_answers_len(buffers, earlier, f, words),
+        },
+    }
+}
 
 // Whether each function of the program is defined at the words, its calls
 // asking the functions after it (as `program_eval_over` answers them).
@@ -1391,7 +1478,7 @@ fn program_defined_over(buffers: Buffers(), functions: List<Function>) → Defin
     match functions {
         Nil => λ _ _ => True,
         Cons(last, earlier) => λ f arguments => match f.eq_dec(earlier.len()) {
-            Inl(_) => last.defined(program_eval_over(buffers, earlier), program_defined_over(buffers, earlier), arguments,
+            Inl(_) => last.defined(program_answers_over(buffers, earlier), program_defined_over(buffers, earlier), arguments,
                 buffers := buffers),
             Inr(_) => program_defined_over(buffers, earlier)(f, arguments),
         },
@@ -1404,18 +1491,18 @@ fn program_defined(functions: List<Function>) → Defines() { program_defined_ov
 // function is.
 theorem program_defined_last(buffers: Buffers(), last: Function, earlier: List<Function>, words: List<BitVec(64)>):
     program_defined_over(buffers, Cons(last, earlier))(earlier.len(), words).IsTrue() →
-    last.defined(program_eval_over(buffers, earlier), program_defined_over(buffers, earlier), words, buffers := buffers).IsTrue() {
+    last.defined(program_answers_over(buffers, earlier), program_defined_over(buffers, earlier), words, buffers := buffers).IsTrue() {
     match earlier.len().eq_dec(earlier.len()) as λ d => (match d as λ _ => Bool {
-            Inl(_) => last.defined(program_eval_over(buffers, earlier), program_defined_over(buffers, earlier), words, buffers := buffers),
+            Inl(_) => last.defined(program_answers_over(buffers, earlier), program_defined_over(buffers, earlier), words, buffers := buffers),
             Inr(_) => program_defined_over(buffers, earlier)(earlier.len(), words),
-        }).IsTrue() → last.defined(program_eval_over(buffers, earlier), program_defined_over(buffers, earlier), words, buffers := buffers).IsTrue() {
+        }).IsTrue() → last.defined(program_answers_over(buffers, earlier), program_defined_over(buffers, earlier), words, buffers := buffers).IsTrue() {
         Inl(_) => λ h => h,
         Inr(ne) => λ _ => false_elim(ne(refl)),
     }
 }
 
 fn program_total(functions: List<Function>) → Bool {
-    match functions { Nil => True, Cons(last, earlier) => last.body.total() && program_total(earlier) }
+    match functions { Nil => True, Cons(last, earlier) => last.body.total_at(program_outs(earlier)) && program_total(earlier) }
 }
 
 // A program none of whose nodes requires anything is defined everywhere.
@@ -1423,7 +1510,7 @@ fn program_total(functions: List<Function>) → Bool {
 // kernel's fuel is per declaration, so a certificate pays for its largest
 // function, not for the sum of them.
 fn program_total_head(functions: List<Function>) → Bool {
-    match functions { Nil => True, Cons(last, _) => last.body.total() }
+    match functions { Nil => True, Cons(last, earlier) => last.body.total_at(program_outs(earlier)) }
 }
 
 theorem program_total_drop_zero(functions: List<Function>):
@@ -1440,7 +1527,7 @@ theorem program_total_drop(functions: List<Function>): (n: Nat) →
             program_total_head(Cons(last, earlier).drop(i)).IsTrue() →
             program_total(Cons(last, earlier).drop(i + 1)).IsTrue() →
             program_total(Cons(last, earlier).drop(i)).IsTrue() {
-            Zero => λ head rest => Bool::is_true_and_intro(last.body.total(), program_total(earlier), head,
+            Zero => λ head rest => Bool::is_true_and_intro(last.body.total_at(program_outs(earlier)), program_total(earlier), head,
                 program_total_drop_zero(earlier, rest)),
             Succ(k) => λ head rest => program_total_drop(earlier, k, head, rest),
         },
@@ -1452,14 +1539,14 @@ theorem program_total_defined(functions: List<Function>, buffers: Buffers()): pr
     match functions {
         Nil => λ _ _ _ => trivial,
         Cons(last, earlier) => λ total f words => {
-            let parts = Bool::is_true_and(last.body.total(), program_total(earlier), total);
+            let parts = Bool::is_true_and(last.body.total_at(program_outs(earlier)), program_total(earlier), total);
             let ih = program_total_defined(earlier, buffers, parts.right);
             match f.eq_dec(earlier.len()) as λ d => (match d as λ _ => Bool {
-                Inl(_) => last.defined(program_eval_over(buffers, earlier), program_defined_over(buffers, earlier), words, buffers := buffers),
+                Inl(_) => last.defined(program_answers_over(buffers, earlier), program_defined_over(buffers, earlier), words, buffers := buffers),
                 Inr(_) => program_defined_over(buffers, earlier)(f, words),
             }).IsTrue() {
-                Inl(_) => last.body.total_defined(buffers, program_eval_over(buffers, earlier), program_defined_over(buffers, earlier), ih,
-                    parts.left, Valuation::bind(Valuation::zero(), last.parameters, words)),
+                Inl(_) => last.body.total_defined(buffers, program_answers_over(buffers, earlier), program_defined_over(buffers, earlier), ih,
+                    program_outs(earlier), program_answers_len(buffers, earlier), parts.left, Valuation::bind(Valuation::zero(), last.parameters, words)),
                 Inr(_) => ih(f, words),
             }
         },
@@ -1497,7 +1584,7 @@ fn StructuredRegion::relabel(self region: StructuredRegion, links: Nat → Nat) 
         Conditional(inputs, condition, arguments, outputs, when_true, when_false) =>
             Conditional(inputs, condition, arguments, outputs, when_true.relabel(links), when_false.relabel(links)),
         Lend(views, callee, arguments, result) => Lend(views, links(callee), arguments, result),
-        Call(callee, arguments, result) => Call(links(callee), arguments, result),
+        Call(callee, arguments, result, also) => Call(links(callee), arguments, result, also),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
             Loop(inputs, bound, parameters, count, body.relabel(links), exit, next, outputs, exhausted),
     }
@@ -1545,15 +1632,15 @@ theorem StructuredRegion::relabel_eval_over(self region: StructuredRegion, buffe
             let second = eval_nodes_over(buffers, nodes, others);
             let alike = eval_nodes_same_over(buffers, nodes, values, others, same);
             let read: (words_of(second, args) = words_of(first, args)) = words_agree(args, first, second, λ id _ => alike(64, id));
-            Valuation::set_same(first, second, alike, result, word_value(call(links(callee), words_of(first, args))),
-                word_value(call(links(callee), words_of(second, args))),
-                λ w => cong_fn(λ (ws: List<BitVec(64)>) => word_value(call(links(callee), ws), w), read))
+            Valuation::set_same(first, second, alike, result, word_value(first_word(call(links(callee), words_of(first, args)))),
+                word_value(first_word(call(links(callee), words_of(second, args)))),
+                λ w => cong_fn(λ (ws: List<BitVec(64)>) => word_value(first_word(call(links(callee), ws)), w), read))
         },
-        Call(callee, arguments, result) => λ values others same => {
+        Call(callee, arguments, result, also) => λ values others same => {
             let read: (words_of(others, arguments) = words_of(values, arguments)) = words_agree(arguments, values, others, λ id _ => same(64, id));
-            Valuation::set_same(values, others, same, result, word_value(call(links(callee), words_of(values, arguments))),
-                word_value(call(links(callee), words_of(others, arguments))),
-                λ w => cong_fn(λ (ws: List<BitVec(64)>) => word_value(call(links(callee), ws), w), read))
+            j(sym(read), λ ws _ => Valuation::Same(Valuation::bind(values, Cons(result, also), Answers::split(call(links(callee), words_of(values, arguments)))),
+                    Valuation::bind(others, Cons(result, also), Answers::split(call(links(callee), ws)))),
+                Valuation::bind_same(values, others, same, Cons(result, also), Answers::split(call(links(callee), words_of(values, arguments)))))
         },
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ values others same => {
             let step = λ (pass: Valuation()) => body.eval_over(buffers, Answers::relabel(call, links), pass);
@@ -1619,12 +1706,35 @@ theorem Function::eval_also_answers_over(self function: Function, buffers: Buffe
         StructuredRegion::eval_answers_over(function.body, buffers, call, other, arity, answers, ok, bound, bound, λ w id => refl), function.also)
 }
 
+theorem Function::eval_words_answers_over(self function: Function, buffers: Buffers(), call, other: Answers(), arity: Nat → Option<Nat>,
+    answers: (f: Nat) → (words: List<BitVec(64)>) → arity_fits(arity(f), words.len()).IsTrue() → other(f, words) = call(f, words),
+    ok: function.calls_fit(arity).IsTrue(), arguments: List<BitVec(64)>):
+    function.eval_words(other, arguments, buffers := buffers) = function.eval_words(call, arguments, buffers := buffers) {
+    let bound = Valuation::bind(Valuation::zero(), function.parameters, arguments);
+    words_of_same(function.body.eval(call, bound, buffers := buffers), function.body.eval(other, bound, buffers := buffers),
+        StructuredRegion::eval_answers_over(function.body, buffers, call, other, arity, answers, ok, bound, bound, λ w id => refl),
+        Cons(function.result, function.also))
+}
+
+theorem Function::eval_words_answers(self function: Function, call, other: Answers(), arity: Nat → Option<Nat>,
+    answers: (f: Nat) → (words: List<BitVec(64)>) → arity_fits(arity(f), words.len()).IsTrue() → other(f, words) = call(f, words),
+    ok: function.calls_fit(arity).IsTrue(), arguments: List<BitVec(64)>): function.eval_words(other, arguments) = function.eval_words(call, arguments) {
+    function.eval_words_answers_over(Nil, call, other, arity, answers, ok, arguments)
+}
+
+theorem Function::relabel_eval_words_over(self function: Function, buffers: Buffers(), call: Answers(), links: Nat → Nat, arguments: List<BitVec(64)>):
+    function.relabel(links).eval_words(call, arguments, buffers := buffers) = function.eval_words(Answers::relabel(call, links), arguments, buffers := buffers) {
+    let bound = Valuation::bind(Valuation::zero(), function.parameters, arguments);
+    words_of_same(function.body.eval(Answers::relabel(call, links), bound, buffers := buffers), function.relabel(links).body.eval(call, bound, buffers := buffers),
+        function.body.relabel_eval_over(buffers, call, links, bound, bound, λ w id => refl), Cons(function.result, function.also))
+}
+
 // A program's last function's words past its first, its calls answered by
 // the functions before it (over no buffers): what a program whose last
 // function returns two words returns in RDX (`compiled_returns_both`,
 // function_ir_compile).
 fn program_eval_also(functions: List<Function>, arguments: List<BitVec(64)>) → List<BitVec(64)> {
-    match functions { Nil => Nil, Cons(last, earlier) => last.eval_also(program_eval(earlier), arguments) }
+    match functions { Nil => Nil, Cons(last, earlier) => last.eval_also(program_answers(earlier), arguments) }
 }
 
 // Renamed calls fit wherever the renaming carries every arity over: what a
@@ -1650,7 +1760,7 @@ theorem StructuredRegion::relabel_calls_fit(self region: StructuredRegion, links
                 when_false.relabel_calls_fit(links, arity, other, carried, arms.right))
         },
         Lend(views, callee, arguments, _) => λ ok => carried(callee, (views_homes(views) ++ arguments).len(), ok),
-        Call(callee, arguments, _) => λ ok => carried(callee, arguments.len(), ok),
+        Call(callee, arguments, _, _) => λ ok => carried(callee, arguments.len(), ok),
         Loop(_, _, _, _, body, _, _, _, _) => λ ok => body.relabel_calls_fit(links, arity, other, carried, ok),
     }
 }
@@ -1675,7 +1785,7 @@ fn program_sourced(functions: List<Function>, sources: Answers()) → Type {
     match functions {
         Nil => True,
         Cons(last, earlier) =>
-            ((words: List<BitVec(64)>) → words.len() = last.parameters.len() → last.eval(sources, words) = sources(earlier.len(), words))
+            ((words: List<BitVec(64)>) → words.len() = last.parameters.len() → last.eval_words(sources, words) = sources(earlier.len(), words))
             ∧ program_sourced(earlier, sources),
     }
 }
@@ -1705,7 +1815,7 @@ theorem program_evaluable_calls_fit(functions: List<Function>): program_evaluabl
 theorem program_fit_sources(functions: List<Function>, ok: program_calls_fit(functions).IsTrue(), sources: Answers(),
     sourced: program_sourced(functions, sources)):
     (f: Nat) → (words: List<BitVec(64)>) → arity_fits(program_arity(functions, f), words.len()).IsTrue() →
-        program_eval(functions, f, words) = sources(f, words) {
+        program_answers(functions, f, words) = sources(f, words) {
     match functions {
         Nil => λ f words never => false_elim(never),
         Cons(last, earlier) => λ f words => {
@@ -1714,10 +1824,10 @@ theorem program_fit_sources(functions: List<Function>, ok: program_calls_fit(fun
             (match f.eq_dec(earlier.len()) as λ d =>
                 arity_fits(match d { Inl(_) => Some(last.parameters.len()), Inr(_) => program_arity(earlier, f) },
                     words.len()).IsTrue() →
-                (match d as λ _ => BitVec(64) { Inl(_) => last.eval(program_eval(earlier), words), Inr(_) => program_eval(earlier, f, words) }) =
+                (match d as λ _ => List<BitVec(64)> { Inl(_) => last.eval_words(program_answers(earlier), words), Inr(_) => program_answers(earlier, f, words) }) =
                     sources(f, words) {
-                Inl(e) => λ fits => trans(last.eval_answers(sources, program_eval(earlier), program_arity(earlier), ih, parts.left, words),
-                    j(sym(e), λ g _ => last.eval(sources, words) = sources(g, words),
+                Inl(e) => λ fits => trans(last.eval_words_answers(sources, program_answers(earlier), program_arity(earlier), ih, parts.left, words),
+                    j(sym(e), λ g _ => last.eval_words(sources, words) = sources(g, words),
                         sourced.left(words, sym(last.parameters.len().matches_eq(words.len(), fits))))),
                 Inr(_) => λ fits => ih(f, words, fits),
             })
@@ -1747,7 +1857,7 @@ fn program_linked(functions: List<Function>, arities: List<Nat>, sources: Answer
         Cons(last, earlier) =>
             (last.calls_fit(linked_arity(earlier, arities.tail())).IsTrue()
                 ∧ ((words: List<BitVec(64)>) → arity_fits(arities.nth(0), words.len()).IsTrue() →
-                    last.eval(sources, words) = sources(earlier.len(), words)))
+                    last.eval_words(sources, words) = sources(earlier.len(), words)))
             ∧ program_linked(earlier, arities.tail(), sources),
     }
 }
@@ -1755,7 +1865,7 @@ fn program_linked(functions: List<Function>, arities: List<Nat>, sources: Answer
 theorem program_linked_sources(functions: List<Function>): (arities: List<Nat>) → (sources: Answers()) →
     program_linked(functions, arities, sources) →
     (f: Nat) → (words: List<BitVec(64)>) → arity_fits(linked_arity(functions, arities, f), words.len()).IsTrue() →
-        program_eval(functions, f, words) = sources(f, words) {
+        program_answers(functions, f, words) = sources(f, words) {
     match functions {
         Nil => λ arities sources linked f words never => false_elim(never),
         Cons(last, earlier) => λ arities sources linked f words => {
@@ -1763,11 +1873,11 @@ theorem program_linked_sources(functions: List<Function>): (arities: List<Nat>) 
             (match f.eq_dec(earlier.len()) as λ d =>
                 arity_fits(match d { Inl(_) => arities.nth(0), Inr(_) => linked_arity(earlier, arities.tail(), f) },
                     words.len()).IsTrue() →
-                (match d as λ _ => BitVec(64) { Inl(_) => last.eval(program_eval(earlier), words), Inr(_) => program_eval(earlier, f, words) }) =
+                (match d as λ _ => List<BitVec(64)> { Inl(_) => last.eval_words(program_answers(earlier), words), Inr(_) => program_answers(earlier, f, words) }) =
                     sources(f, words) {
                 Inl(e) => λ fits => trans(
-                    last.eval_answers(sources, program_eval(earlier), linked_arity(earlier, arities.tail()), ih, linked.left.left, words),
-                    j(sym(e), λ g _ => last.eval(sources, words) = sources(g, words), linked.left.right(words, fits))),
+                    last.eval_words_answers(sources, program_answers(earlier), linked_arity(earlier, arities.tail()), ih, linked.left.left, words),
+                    j(sym(e), λ g _ => last.eval_words(sources, words) = sources(g, words), linked.left.right(words, fits))),
                 Inr(_) => λ fits => ih(f, words, fits),
             })
         },
@@ -1796,7 +1906,7 @@ fn program_linked_files(functions: List<Function>, arities: List<Nat>, admits: N
             (last.calls_fit(linked_arity(earlier, arities.tail())).IsTrue()
                 ∧ ((buffers: Buffers()) → (call: Answers()) → Answers::Agree(call, sources(buffers), linked_arity(earlier, arities.tail()), admits) →
                     (words: List<BitVec(64)>) → arity_fits(arities.nth(0), words.len()).IsTrue() → admits(earlier.len(), words) →
-                    last.eval(call, words, buffers := buffers) = sources(buffers)(earlier.len(), words)))
+                    last.eval_words(call, words, buffers := buffers) = sources(buffers)(earlier.len(), words)))
             ∧ program_linked_files(earlier, arities.tail(), admits, sources),
     }
 }
@@ -1804,7 +1914,7 @@ fn program_linked_files(functions: List<Function>, arities: List<Nat>, admits: N
 // A linked program answers with its sources on the words they admit.
 theorem program_linked_files_sources(functions: List<Function>): (arities: List<Nat>) → (admits: Nat → List<BitVec(64)> → Type) →
     (sources: Buffers() → Answers()) → program_linked_files(functions, arities, admits, sources) → (buffers: Buffers()) →
-    Answers::Agree(program_eval_over(buffers, functions), sources(buffers), linked_arity(functions, arities), admits) {
+    Answers::Agree(program_answers_over(buffers, functions), sources(buffers), linked_arity(functions, arities), admits) {
     match functions {
         Nil => λ arities admits sources linked buffers f words never => false_elim(never),
         Cons(last, earlier) => λ arities admits sources linked buffers f words => {
@@ -1812,13 +1922,13 @@ theorem program_linked_files_sources(functions: List<Function>): (arities: List<
             (match f.eq_dec(earlier.len()) as λ d =>
                 arity_fits(match d { Inl(_) => arities.nth(0), Inr(_) => linked_arity(earlier, arities.tail(), f) },
                     words.len()).IsTrue() → admits(f, words) →
-                (match d as λ _ => BitVec(64) {
-                    Inl(_) => last.eval(program_eval_over(buffers, earlier), words, buffers := buffers),
-                    Inr(_) => program_eval_over(buffers, earlier, f, words),
+                (match d as λ _ => List<BitVec(64)> {
+                    Inl(_) => last.eval_words(program_answers_over(buffers, earlier), words, buffers := buffers),
+                    Inr(_) => program_answers_over(buffers, earlier, f, words),
                 }) = sources(buffers)(f, words) {
                 Inl(e) => λ fits => j(sym(e), λ g _ => admits(g, words) →
-                        last.eval(program_eval_over(buffers, earlier), words, buffers := buffers) = sources(buffers)(g, words),
-                    linked.left.right(buffers, program_eval_over(buffers, earlier), ih, words, fits)),
+                        last.eval_words(program_answers_over(buffers, earlier), words, buffers := buffers) = sources(buffers)(g, words),
+                    linked.left.right(buffers, program_answers_over(buffers, earlier), ih, words, fits)),
                 Inr(_) => λ fits => ih(f, words, fits),
             })
         },
@@ -1829,7 +1939,7 @@ theorem program_linked_files_sources(functions: List<Function>): (arities: List<
 theorem program_eval_sources(functions: List<Function>, ok: program_evaluable(functions).IsTrue(), sources: Answers(),
     sourced: program_sourced(functions, sources)):
     (f: Nat) → (words: List<BitVec(64)>) → arity_fits(program_arity(functions, f), words.len()).IsTrue() →
-        program_eval(functions, f, words) = sources(f, words) {
+        program_answers(functions, f, words) = sources(f, words) {
     program_fit_sources(functions, program_evaluable_calls_fit(functions, ok), sources, sourced)
 }
 
@@ -1839,10 +1949,11 @@ theorem Function::eval_computes(self function: Function, callees: Callees(), cal
     buffers: Buffers(),
     defines: Defines(),
     answers: (f: Nat) → (words: List<BitVec(64)>) → arity_fits(arity(f), words.len()).IsTrue() → defines(f, words).IsTrue() →
-        callees(f, words, call(f, words)),
+        callees(f, words, first_word(call(f, words)), call(f, words).tail()),
     ok: function.evaluable(arity).IsTrue(), arguments: List<BitVec(64)>, count: function.parameters.len() = arguments.len(),
     defined: function.defined(call, defines, arguments, buffers := buffers).IsTrue()):
-    function.Computes(callees, arguments, function.eval(call, arguments, buffers := buffers), buffers := buffers) {
+    function.ComputesBoth(callees, arguments, function.eval(call, arguments, buffers := buffers), function.eval_also(call, arguments, buffers := buffers),
+        buffers := buffers) {
     let parts = Bool::is_true_and(function.body.evaluable(arity),
         distinct(function.parameters) && disjoint(function.body.writes(), function.parameters), ok);
     let params = Bool::is_true_and(distinct(function.parameters), disjoint(function.body.writes(), function.parameters), parts.right);
@@ -1853,7 +1964,7 @@ theorem Function::eval_computes(self function: Function, callees: Callees(), cal
             function.body.eval_frame(call, buffers, bound, 64, id, disjoint_mem(function.body.writes(), function.parameters, params.right, id, m))),
         words_of_bind(Valuation::zero(), function.parameters, params.left, arguments, count));
     ⟨after, ⟨read, ⟨function.body.eval_holds_in(callees, call, defines, arity, buffers, answers, parts.left, bound, after,
-        λ w id _ => refl, defined), refl⟩⟩⟩
+        λ w id _ => refl, defined), ⟨refl, refl⟩⟩⟩⟩
 }
 
 // The theorem for programs: what `program_eval_over` returns over `buffers`
@@ -1862,13 +1973,14 @@ theorem Function::eval_computes(self function: Function, callees: Callees(), cal
 theorem program_eval_reads(functions: List<Function>, buffers: Buffers(), ok: program_evaluable(functions).IsTrue()):
     (f: Nat) → (words: List<BitVec(64)>) → arity_fits(program_arity(functions, f), words.len()).IsTrue() →
     program_defined_over(buffers, functions)(f, words).IsTrue() →
-    program_callees_over(buffers, functions)(f, words, program_eval_over(buffers, functions)(f, words)) {
+    program_callees_over(buffers, functions)(f, words, first_word(program_answers_over(buffers, functions)(f, words)),
+        program_answers_over(buffers, functions)(f, words).tail()) {
     match functions {
         Nil => λ f words never _ => false_elim(never),
         Cons(last, earlier) => λ f words => {
             let parts = Bool::is_true_and(last.evaluable(program_arity(earlier)), program_evaluable(earlier), ok);
             let ih = program_eval_reads(earlier, buffers, parts.right);
-            let below = program_eval_over(buffers, earlier);
+            let below = program_answers_over(buffers, earlier);
             let may = program_callees_over(buffers, earlier);
             let defines = program_defined_over(buffers, earlier);
             match f.eq_dec(earlier.len()) as λ d =>
@@ -1879,10 +1991,12 @@ theorem program_eval_reads(functions: List<Function>, buffers: Buffers(), ok: pr
                     Inr(_) => defines(f, words),
                 }).IsTrue() →
                 (match d as λ _ => Type {
-                    Inl(_) => last.Computes(may, words,
-                        match d { Inl(_) => last.eval(below, words, buffers := buffers), Inr(_) => below(f, words) }, buffers := buffers),
+                    Inl(_) => last.ComputesBoth(may, words,
+                        first_word(match d { Inl(_) => last.eval_words(below, words, buffers := buffers), Inr(_) => below(f, words) }),
+                        (match d { Inl(_) => last.eval_words(below, words, buffers := buffers), Inr(_) => below(f, words) }).tail(), buffers := buffers),
                     Inr(_) => may(f, words,
-                        match d { Inl(_) => last.eval(below, words, buffers := buffers), Inr(_) => below(f, words) }),
+                        first_word(match d { Inl(_) => last.eval_words(below, words, buffers := buffers), Inr(_) => below(f, words) }),
+                        (match d { Inl(_) => last.eval_words(below, words, buffers := buffers), Inr(_) => below(f, words) }).tail()),
                 }) {
                 Inl(_) => λ fits defined => last.eval_computes(may, below, program_arity(earlier), buffers, defines, ih,
                     parts.left, words, last.parameters.len().matches_eq(words.len(), fits), defined),
@@ -1895,7 +2009,8 @@ theorem program_eval_reads(functions: List<Function>, buffers: Buffers(), ok: pr
 // Over no buffers.
 theorem program_eval_computes(functions: List<Function>, ok: program_evaluable(functions).IsTrue()):
     (f: Nat) → (words: List<BitVec(64)>) → arity_fits(program_arity(functions, f), words.len()).IsTrue() →
-    program_defined(functions, f, words).IsTrue() → program_callees(functions, f, words, program_eval(functions, f, words)) {
+    program_defined(functions, f, words).IsTrue() →
+    program_callees(functions, f, words, program_eval(functions, f, words), program_answers(functions, f, words).tail()) {
     program_eval_reads(functions, Nil, ok)
 }
 
@@ -2290,9 +2405,10 @@ fn StructuredRegion::scan(self region: StructuredRegion, arity: Nat → Option<N
         Lend(views, callee, arguments, result) => nodes_scan(views_nodes(views), marks).then(λ after => Scan(
             ok := missing(result, views_homes(views) ++ arguments) && (arity_fits(arity(callee), (views_homes(views) ++ arguments).len()) && after.has(result).not()),
             marks := after.add_all(Cons(result, views_homes(views) ++ arguments)))),
-        Call(callee, arguments, result) => Scan(
-            ok := missing(result, arguments) && (arity_fits(arity(callee), arguments.len()) && marks.has(result).not()),
-            marks := marks.add_all(Cons(result, arguments))),
+        Call(callee, arguments, result, also) => Scan(
+            ok := distinct(Cons(result, also)) && (disjoint(Cons(result, also), arguments)
+                && (arity_fits(arity(callee), arguments.len()) && marks.lack_all(Cons(result, also)))),
+            marks := marks.add_all(Cons(result, also) ++ arguments)),
         Loop(inputs, bound, parameters, count, body, _, next, outputs, exhausted) => Scan(
             ok := body.scan(arity, marks.fresh().add_all(Cons(count, parameters))).ok && (distinct(Cons(count, parameters))
                 && (loop_ports_fit(inputs, bound, parameters, next, outputs, exhausted) && marks.lack_all(Cons(exhausted, outputs)))),
@@ -2312,7 +2428,7 @@ theorem StructuredRegion::scan_keeps(self region: StructuredRegion, arity: Nat �
             Marks::union_l(when_true.scan(arity, marks.add(condition)).marks, when_false.scan(arity, marks.add(condition)).marks, id, when_true.scan_keeps(arity, marks.add(condition), id, Marks::add_keeps(condition, marks, id, h))),
         Lend(views, _, arguments, result) => λ marks id h => Marks::add_all_keeps(Cons(result, views_homes(views) ++ arguments), nodes_scan(views_nodes(views), marks).marks, id,
             nodes_scan_keeps(views_nodes(views), marks, id, h)),
-        Call(_, arguments, result) => λ marks id h => Marks::add_all_keeps(Cons(result, arguments), marks, id, h),
+        Call(_, arguments, result, also) => λ marks id h => Marks::add_all_keeps(Cons(result, also) ++ arguments, marks, id, h),
         Loop(inputs, bound, _, _, _, _, _, outputs, exhausted) => λ marks id h =>
             Marks::add_all_keeps(Cons(bound, inputs) ++ Cons(exhausted, outputs), marks, id, h),
     }
@@ -2349,7 +2465,7 @@ theorem StructuredRegion::scan_marks(self region: StructuredRegion, arity: Nat �
                 Inr(later) => Marks::add_all_has(Cons(result, args), after, id, later),
             }
         },
-        Call(_, arguments, result) => λ marks id m => Marks::add_all_has(Cons(result, arguments), marks, id, m),
+        Call(_, arguments, result, also) => λ marks id m => Marks::add_all_has(Cons(result, also) ++ arguments, marks, id, m),
         Loop(inputs, bound, _, _, _, _, _, outputs, exhausted) => λ marks id m =>
             Marks::add_all_has(Cons(bound, inputs) ++ Cons(exhausted, outputs), marks, id, m),
     }
@@ -2433,15 +2549,15 @@ theorem StructuredRegion::scan_sound(self region: StructuredRegion, arity: Nat �
                     Inr(later) => fresh(id, later, nodes_scan_keeps(nodes, marks, id, has)),
                 }⟩
         },
-        Call(callee, arguments, result) => λ marks ok => {
-            let parts = Bool::is_true_and(missing(result, arguments), arity_fits(arity(callee), arguments.len()) && marks.has(result).not(), ok);
-            let rest = Bool::is_true_and(arity_fits(arity(callee), arguments.len()), marks.has(result).not(), parts.right);
-            ⟨Bool::is_true_and_intro(absent(result, arguments), arity_fits(arity(callee), arguments.len()),
-                    missing_absent(result, arguments, parts.left), rest.left),
-                λ id w has => match w {
-                    Inl(e) => Bool::is_true_not(marks.has(result), rest.right, j(e, λ x _ => marks.has(x).IsTrue(), has)),
-                    Inr(never) => false_elim(never),
-                }⟩
+        Call(callee, arguments, result, also) => λ marks ok => {
+            let outs = Cons(result, also);
+            let p0 = Bool::is_true_and(distinct(outs), disjoint(outs, arguments)
+                && (arity_fits(arity(callee), arguments.len()) && marks.lack_all(outs)), ok);
+            let p1 = Bool::is_true_and(disjoint(outs, arguments), arity_fits(arity(callee), arguments.len()) && marks.lack_all(outs), p0.right);
+            let p2 = Bool::is_true_and(arity_fits(arity(callee), arguments.len()), marks.lack_all(outs), p1.right);
+            ⟨Bool::is_true_and_intro(distinct(outs), disjoint(outs, arguments) && arity_fits(arity(callee), arguments.len()), p0.left,
+                    Bool::is_true_and_intro(disjoint(outs, arguments), arity_fits(arity(callee), arguments.len()), p1.left, p2.left)),
+                Marks::lack_all_mem(marks, outs, p2.right)⟩
         },
         Loop(inputs, bound, parameters, count, body, _, next, outputs, exhausted) => λ marks ok => {
             let start = marks.fresh().add_all(Cons(count, parameters));
@@ -2542,9 +2658,12 @@ theorem StructuredRegion::evaluable_arity(self region: StructuredRegion, arity, 
                     Bool::and_right_map(absent(result, args), arity_fits(arity(callee), args.len()), arity_fits(other(callee), args.len()),
                         λ fits => j(same(callee), λ a _ => arity_fits(a, args.len()).IsTrue(), fits))))
         },
-        Call(callee, arguments, result) => Bool::and_right_map(absent(result, arguments), arity_fits(arity(callee), arguments.len()),
-            arity_fits(other(callee), arguments.len()),
-            λ fits => j(same(callee), λ a _ => arity_fits(a, arguments.len()).IsTrue(), fits)),
+        Call(callee, arguments, result, also) => Bool::and_right_map(distinct(Cons(result, also)),
+            disjoint(Cons(result, also), arguments) && arity_fits(arity(callee), arguments.len()),
+            disjoint(Cons(result, also), arguments) && arity_fits(other(callee), arguments.len()),
+            Bool::and_right_map(disjoint(Cons(result, also), arguments), arity_fits(arity(callee), arguments.len()),
+                arity_fits(other(callee), arguments.len()),
+                λ fits => j(same(callee), λ a _ => arity_fits(a, arguments.len()).IsTrue(), fits))),
         Loop(inputs, bound, parameters, count, body, _, next, outputs, exhausted) => Bool::and_left_map(body.evaluable(arity),
             distinct(Cons(count, parameters)) && (disjoint(body.writes(), Cons(count, parameters))
             && (distinct(Cons(exhausted, outputs)) && (disjoint(Cons(exhausted, outputs), Cons(bound, inputs))

@@ -1257,7 +1257,7 @@ fn StructuredRegion::learn(self region: StructuredRegion, seen: Seen) → Learne
                 shared(when_false.learn(seen.taking(condition, False).wanting(yes.seen.wants)), λ no =>
                     Learned(Arms(yes.plan, no.plan), seen.wanting(no.seen.wants).forgetting()))),
         },
-        Call(_, _, _) => Learned(Same, seen.forgetting()),
+        Call(_, _, _, _) => Learned(Same, seen.forgetting()),
         Loop(inputs, _, parameters, _, body, _, next, outputs, _) => shared(seen.kept(inputs, parameters, next), λ kept =>
             shared(explain(100, seen.how, seen.proved, kept), λ why =>
                 shared(body.learn(seen.carried(inputs, parameters, next, parameters, Seen::start(seen.indexes, seen.joins.ends, seen.tables).wanting(seen.wants))), λ inner =>
@@ -1289,7 +1289,7 @@ fn StructuredRegion::indexes(self region: StructuredRegion, found: NatMap<Bool>)
         Sequence(prefix, continuation) => continuation.indexes(nodes_indexes(prefix.nodes, found)),
         Compose(prefix, continuation) => continuation.indexes(prefix.indexes(found)),
         Conditional(_, _, _, _, when_true, when_false) => when_false.indexes(when_true.indexes(found)),
-        Call(_, _, _) => found,
+        Call(_, _, _, _) => found,
         Loop(_, _, _, _, body, _, _, _, _) => body.indexes(found),
         Lend(_, _, _, _) => found,
     }
@@ -1312,7 +1312,7 @@ fn StructuredRegion::ends(self region: StructuredRegion, found: NatMap<Nat>) →
         Sequence(prefix, continuation) => continuation.ends(nodes_ends(prefix.nodes, found)),
         Compose(prefix, continuation) => continuation.ends(prefix.ends(found)),
         Conditional(_, _, _, _, when_true, when_false) => when_false.ends(when_true.ends(found)),
-        Call(_, _, _) => found,
+        Call(_, _, _, _) => found,
         Loop(_, _, _, _, body, _, _, _, _) => body.ends(found),
         Lend(_, _, _, _) => found,
     }
