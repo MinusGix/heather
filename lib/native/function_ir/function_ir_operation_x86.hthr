@@ -122,8 +122,8 @@ theorem shift_row_reads<M>(op: ShiftOp, destination: Gpr, apart: destination.sam
 }
 
 // ---------------------------------------------------------------------------
-// Divide by a constant: x86's DIV faults on a zero divisor and is not in the
-// model's blocks (`block_reads` refuses it), so a known divisor
+// Divide by a constant: DIV is slow and runs only under its requirement
+// (`word_divide_reads` below), so a known divisor
 // `d = 2^z·o` is a multiply by the reciprocal of `o` (bitvec_reciprocal):
 // `m`, a word, with `2^(64+s) <= m·o` and
 // `(m·o - 2^(64+s))·2^(64-z) <= 2^(64+s)`, checked here on the numbers. The
