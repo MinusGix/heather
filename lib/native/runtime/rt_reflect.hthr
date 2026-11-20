@@ -2596,7 +2596,12 @@ fn rt_needed_repr(msg: String) → Option<Pair<String, String>> {
 // cannot hold (one already given, so held some other way, or one with no
 // global name) is refused as having no layout.
 fn rt_with_entry(k: Known, rest: List<Char>, alts: Bool) → Tac<Known> {
-    attempt(rt_global(String(rest))).bind(λ og => match og {
+    // A loop's state (`f#State`) is found by its designed name, `f::State`.
+    let found = attempt(rt_global(String(rest))).bind(λ og => match og {
+        Done(g) => pure(Done(g)),
+        Failed(_, _) => attempt(rt_global(String(rt_designed(rest)))),
+    });
+    found.bind(λ og => match og {
         Done(g) => match k.recs.any_bit(λ (e: RecEntry) => e.g.same(g)) {
             False => pure(k.with_recs(k.recs ++ [RecEntry(g, alts := alts)])),
             True => rt_refuse("`" ++ String(rest) ++ "` has no runtime layout under the reflected fragment"),

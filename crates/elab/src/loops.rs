@@ -872,12 +872,12 @@ impl Lift<'_> {
         // (a fact would be a field the words cannot rebuild, and a state of
         // two words has no runtime layout yet). The rest stay lifted for now
         // (docs/language/loop-combinator-design.md §6.1).
-        let words_only = vars.len() == 1
-            && state_tys.iter().all(is_u64)
-            && captures.iter().all(|(_, t)| is_u64(t))
-            && self.solver_params().is_empty();
-        if words_only && facts.is_empty() && self.receiver_in(&vars).is_none() && let Some(word) = measured_word(measure) {
-            return self.lift_while_runtime(span, body, captures, &vars, &state_tys, cond, measure, word);
+        let words_only = state_tys.iter().all(is_u64) && captures.iter().all(|(_, t)| is_u64(t)) && self.solver_params().is_empty();
+        if words_only && facts.is_empty() && self.receiver_in(&vars).is_none() && measured_word(measure).is_some() {
+            let names: Vec<String> = vars.iter().map(|v| v.to_string()).collect();
+            let at: Vec<Expr> = vars.iter().map(|v| var(v, span)).collect();
+            let word = measured_word(measure).expect("a word's measure").clone();
+            return self.lift_steps(span, body, &captures, &names, &state_tys, cond, at.clone(), at, measure, &word);
         }
         let (run, state, run_designed, state_designed) = self.names("run");
         let tyargs: Vec<Ty> = self.decl.tyvars.iter().map(|t| named_ty(&t.name, vec![], span)).collect();
@@ -1600,6 +1600,236 @@ impl Lift<'_> {
         Ok((call(var(&looped, span), entry, span), Shape::of(single), None))
     }
 
+    /// A `runtime fn`'s loop over words as the library's `Loop::steps`
+    /// (docs/language/loop-combinator-design.md §6.2), written where the
+    /// loop stood:
+    ///
+    /// ```text
+    /// loop::Loop::steps(loop::Loop::passes(), λ (#t: S) =>
+    ///     loop::Step::turn({ let v̄ = #t.v̄; c }, λ #h => { let v̄ = #t.v̄; body; S(v̄′) }, #t),
+    ///   S(v̄₀))
+    /// ```
+    ///
+    /// `S` is the one local's own type, or `f#State` with a field per
+    /// local (a `for`'s count among them). The reflector reads this as one
+    /// `Iterate` node, its test and next state each a block under the
+    /// state; the passes are the most a 64-bit count reaches, which every
+    /// measure that is a word's `toNat` is at most, so the loop is
+    /// `Loop::run` of its step (`Loop::steps_stays`).
+    #[allow(clippy::too_many_arguments)]
+    fn lift_steps(
+        &mut self,
+        span: Span,
+        body: &Block,
+        captures: &[(String, Ty)],
+        vars: &[String],
+        state_tys: &[Ty],
+        cond: &Expr,
+        next: Vec<Expr>,
+        init: Vec<Expr>,
+        measure: &Expr,
+        word: &Expr,
+    ) -> R<(Expr, Shape, Option<Expr>)> {
+        let single = vars.len() == 1;
+        let (looped, state, looped_designed, state_designed) = self.names("loop");
+        let tyargs: Vec<Ty> = self.decl.tyvars.iter().map(|t| named_ty(&t.name, vec![], span)).collect();
+        let state_ty = if single { state_tys[0].clone() } else { named_ty(&state, tyargs, span) };
+        if !single {
+            let names: Vec<&str> = vars.iter().map(|v| v.as_str()).collect();
+            self.push_state(&state, &names, state_tys, span);
+            self.designations.push((state_designed, state.clone()));
+        }
+        let field_of = |recv: &str, f: &str, at: Span| Expr {
+            kind: ExprKind::Dot { recv: Box::new(var(recv, at)), name: f.to_string(), tyargs: vec![], args: None, named: vec![] },
+            span: at,
+        };
+        // The locals read off a state `t`, ahead of a block: none where the
+        // state is the one local and `t` names it already.
+        let reads = |t: &str, at: Span| -> Vec<Stmt> {
+            vars.iter()
+                .filter(|v| !(single && v.as_str() == t))
+                .map(|v| Stmt::Let {
+                    name: v.clone(),
+                    ty: None,
+                    expr: if single { var(t, at) } else { field_of(t, v, at) },
+                    span: at,
+                    opaque: false,
+                })
+                .collect()
+        };
+        let state_of = |args: Vec<Expr>, at: Span| if single { args.into_iter().next().expect("one local") } else { call(var(&state, at), args, at) };
+        let block = |stmts: Vec<Stmt>, result: Expr, at: Span| Expr {
+            kind: ExprKind::Block(Box::new(Block { stmts, result: Box::new(result), ons: vec![], span: at })),
+            span: at,
+        };
+        let lam = |binder: &str, ty: Option<Ty>, body: Expr, at: Span| Expr {
+            kind: ExprKind::Lam { binders: vec![LamBinder { name: binder.to_string(), ty, implicit: false, span: at }], body: Box::new(body) },
+            span: at,
+        };
+        let decl = |kind: DeclKind, name: &str, params: Vec<Param>, result: Ty, body: Expr| Decl {
+            kind,
+            is_meta: false,
+            is_interface: false,
+            partial: None,
+            unfolding: Vec::new(),
+            is_evidence: false,
+            value: false,
+            elaborates: None,
+            name: name.to_string(),
+            tyvars: self.decl.tyvars.clone(),
+            params,
+            result,
+            decreases: None,
+            body: Block { stmts: vec![], result: Box::new(body), ons: vec![], span },
+            span,
+        };
+        // The test as one bit: its conjuncts joined by `&&`, each the test a
+        // `match h:` of the step below splits on.
+        let tests = tests_of(cond);
+        let joined = tests.iter().skip(1).fold(tests[0].clone(), |acc, t| op("&&", vec![acc, t.clone()], cond.span));
+        // `λ (t: S) => Step::turn({ let v̄ = t.v̄; c }, λ h => { let v̄ = t.v̄; body; S(v̄′) }, t)`.
+        let turn_args = |t: &str| -> Vec<Expr> {
+            let tested = block(reads(t, cond.span), joined.clone(), cond.span);
+            let mut round = body.clone();
+            let end = round.result.span;
+            round.stmts.splice(0..0, reads(t, body.span));
+            *round.result = state_of(next.clone(), end);
+            vec![tested, lam("__loop_h", None, Expr { kind: ExprKind::Block(Box::new(round)), span: body.span }, body.span), var(t, span)]
+        };
+        let turn_at = |t: &str| -> Expr { lam(t, Some(state_ty.clone()), call(var("loop::Step::turn", span), turn_args(t), span), span) };
+        let t = if single { vars[0].clone() } else { "__loop_t".to_string() };
+        let passes = || call(var("loop::Loop::passes", span), vec![], span);
+        let steps = call(var("loop::Loop::steps", span), vec![passes(), turn_at(&t), state_of(init, span)], span);
+
+        // What reasoning reads the loop by (§6.2): the loop as `Loop(m,
+        // step)` of its measure, whose step finds each decrease where it
+        // goes round, and `f#loop#runs`, the loop the function runs is
+        // that loop's `run`.
+        let kept: Vec<Param> = captures.iter().map(|(n, t)| param(n, t.clone(), span)).collect();
+        let kept_args = |at: Span| -> Vec<Expr> { captures.iter().map(|(n, _)| var(n, at)).collect() };
+        let with = |head: &str, more: Vec<Expr>, at: Span| -> Expr { call(var(head, at), kept_args(at).into_iter().chain(more).collect(), at) };
+        let s = "__loop_s";
+        let mut at_state = kept.clone();
+        at_state.push(param(s, state_ty.clone(), span));
+        let count = format!("{looped}#count");
+        let measured = format!("{looped}#measure");
+        let step = format!("{looped}#step");
+        let of = format!("{looped}#of");
+        let same = format!("{looped}#same");
+        let runs = format!("{looped}#runs");
+        let u64_ty = named_ty("u64", vec![], word.span);
+        self.parts.push(Part::Decl(decl(DeclKind::Fn, &count, at_state.clone(), u64_ty, block(reads(s, span), word.clone(), word.span))));
+        let to_nat = Expr {
+            kind: ExprKind::Dot { recv: Box::new(with(&count, vec![var(s, span)], span)), name: "toNat".into(), tyargs: vec![], args: Some(vec![]), named: vec![] },
+            span,
+        };
+        self.parts.push(Part::Decl(decl(DeclKind::Fn, &measured, at_state.clone(), Ty { kind: TyKind::Nat, span }, to_nat)));
+        let measure_fn = |at: Span| lam("__loop_m", Some(state_ty.clone()), with(&measured, vec![var("__loop_m", at)], at), at);
+        // The step: the same tests, each split by a `match h:`, and the
+        // decrease found under them.
+        let found = |ty: &Ty, at: Span| -> Expr {
+            block(
+                vec![Stmt::Let { name: "__found".into(), ty: Some(ty.clone()), expr: var(measure::CLOSER, at), span: at, opaque: true }],
+                call(var("squash", at), vec![var("__found", at)], at),
+                at,
+            )
+        };
+        let at = measure.span;
+        let next_of: Vec<(String, Expr)> = vars.iter().cloned().zip(next.iter().cloned()).collect();
+        let next_map: Vec<(&str, &Expr)> = next_of.iter().map(|(n, e)| (n.as_str(), e)).collect();
+        let now_of: Vec<(String, Expr)> = vars.iter().map(|v| (v.clone(), if single { var(s, at) } else { field_of(s, v, at) })).collect();
+        let now_map: Vec<(&str, &Expr)> = now_of.iter().map(|(n, e)| (n.as_str(), e)).collect();
+        let lt = Ty {
+            kind: TyKind::OfExpr(Box::new(call(
+                var("nat::Nat::Lt", at),
+                vec![measure::subst(measure, &next_map, &mut Vec::new()), measure::subst(measure, &now_map, &mut Vec::new())],
+                at,
+            ))),
+            span: at,
+        };
+        self.decreases.push((at, crate::traits::render_expr(measure)));
+        let mut again = body.clone();
+        let end = again.result.span;
+        let lower = Expr {
+            kind: ExprKind::App {
+                head: Box::new(var("loop::Lower", end)),
+                args: vec![],
+                named: vec![
+                    heather_syntax::NamedArg { name: "next".into(), name_span: end, expr: state_of(next.clone(), end), span: end },
+                    heather_syntax::NamedArg { name: "less".into(), name_span: end, expr: found(&lt, at), span: end },
+                ],
+                explicit: false,
+                goal_oriented: false,
+            },
+            span: end,
+        };
+        *again.result = call(var("Pass::Again", end), vec![lower], end);
+        let done = || call(var("Pass::Done", span), vec![var(s, span)], span);
+        let tested = self.tested(cond, Expr { kind: ExprKind::Block(Box::new(again)), span: body.span }, &done, span);
+        let pass_head = Expr { kind: ExprKind::TyApp { head: Box::new(var("loop::Pass", span)), args: vec![state_ty.clone(), state_ty.clone()] }, span };
+        let pass_ty = Ty { kind: TyKind::OfExpr(Box::new(call(pass_head, vec![measure_fn(span), var(s, span)], span))), span };
+        self.parts.push(Part::Decl(decl(DeclKind::Fn, &step, at_state.clone(), pass_ty, block(reads(s, span), tested, span))));
+        let combinator = Expr {
+            kind: ExprKind::App {
+                head: Box::new(Expr { kind: ExprKind::TyApp { head: Box::new(var("loop::Loop", span)), args: vec![state_ty.clone(), state_ty.clone()] }, span }),
+                args: vec![],
+                named: vec![
+                    heather_syntax::NamedArg { name: "measure".into(), name_span: span, expr: measure_fn(span), span },
+                    heather_syntax::NamedArg {
+                        name: "step".into(),
+                        name_span: span,
+                        expr: lam("__loop_m", Some(state_ty.clone()), with(&step, vec![var("__loop_m", span)], span), span),
+                        span,
+                    },
+                ],
+                explicit: false,
+                goal_oriented: false,
+            },
+            span,
+        };
+        let loop_ty = Ty { kind: TyKind::Named { name: "loop::Loop".into(), args: vec![state_ty.clone(), state_ty.clone()] }, span };
+        self.parts.push(Part::Decl(decl(DeclKind::Fn, &of, kept.clone(), loop_ty, combinator)));
+        // Each pass of the loop's step, read without its proofs, is the
+        // function's pass: both split on the same tests.
+        let pass_step = call(
+            var("loop::Pass::step", span),
+            vec![measure_fn(span), var(s, span), with(&step, vec![var(s, span)], span)],
+            span,
+        );
+        let split = Expr {
+            kind: ExprKind::App {
+                head: Box::new(var(heather_syntax::ast::SPLIT_ALL_GOALS, span)),
+                args: vec![block(vec![], Expr { kind: ExprKind::Refl, span }, span)],
+                named: Vec::new(),
+                explicit: false,
+                goal_oriented: false,
+            },
+            span,
+        };
+        let turned_at_s = call(turn_at(&t), vec![var(s, span)], span);
+        self.parts.push(Part::Decl(decl(
+            DeclKind::Theorem,
+            &same,
+            at_state.clone(),
+            Ty { kind: TyKind::Eq(Box::new(pass_step), Box::new(turned_at_s)), span },
+            split,
+        )));
+        // The loop the function runs is the loop's `run`: a pass stops where
+        // it is, and a word's measure is within the passes.
+        let of_call = with(&of, vec![], span);
+        let lhs = call(var("loop::Loop::steps", span), vec![passes(), turn_at(&t), var(s, span)], span);
+        let rhs = Expr { kind: ExprKind::Dot { recv: Box::new(of_call.clone()), name: "run".into(), tyargs: vec![], args: Some(vec![var(s, span)]), named: vec![] }, span };
+        let stays = lam(&t, Some(state_ty.clone()), call(var("loop::Step::turn_stays", span), turn_args(&t), span), span);
+        let same_fn = lam("__loop_m", Some(state_ty.clone()), with(&same, vec![var("__loop_m", span)], span), span);
+        let bound = call(var("rt::Tm::word_within", span), vec![with(&count, vec![var(s, span)], span)], span);
+        let proof = call(var("loop::Loop::steps_stays", span), vec![of_call, turn_at(&t), same_fn, stays, passes(), var(s, span), bound], span);
+        self.parts.push(Part::Decl(decl(DeclKind::Theorem, &runs, at_state, Ty { kind: TyKind::Eq(Box::new(lhs), Box::new(rhs)), span }, proof)));
+        for part in ["count", "measure", "step", "of", "same", "runs"] {
+            self.designations.push((format!("{looped_designed}::{part}"), format!("{looped}#{part}")));
+        }
+        Ok((steps, Shape::of(single), None))
+    }
+
     /// A `while` whose state is the receiver `r` of a `mut self` method and
     /// one other local `o`: the method `T::f_loop(mut self r, c̄, o) →
     /// Mutated<T, O> decreases m { if c { body; r.f_loop(c̄, o′) } else {
@@ -2052,6 +2282,40 @@ impl Lift<'_> {
             captures.push((b.name.clone(), t));
         }
         self.implicit_captures(&mut captures, state_tys.iter());
+        // In a `runtime fn`, a count over words whose state and captures
+        // are words is the library's `Loop::steps`, the count a field of
+        // its state (`Lift::lift_steps`).
+        if !self.free
+            && free.is_empty()
+            && self.receiver_in(&vars).is_none()
+            && is_u64(&word)
+            && state_tys.iter().all(is_u64)
+            && captures.iter().all(|(_, t)| is_u64(t))
+            && self.solver_params().is_empty()
+        {
+            let mut names: Vec<String> = vars.iter().map(|v| v.to_string()).collect();
+            names.push(x.name.clone());
+            let mut tys = state_tys.clone();
+            tys.push(word.clone());
+            let i = var(&x.name, span);
+            let test = op("<", vec![i.clone(), hi.clone()], span);
+            let bit = call(
+                Expr { kind: ExprKind::TyApp { head: Box::new(var("decide_bit", span)), args: vec![Ty { kind: TyKind::OfExpr(Box::new(test)), span }] }, span },
+                vec![],
+                span,
+            );
+            let end = body.result.span;
+            let mut next: Vec<Expr> = vars.iter().map(|v| var(v, end)).collect();
+            next.push(op("+", vec![var(&x.name, end), num(1, end)], end));
+            let mut init: Vec<Expr> = vars.iter().map(|v| var(v, span)).collect();
+            init.push(lo.clone());
+            let gap = op("-", vec![hi.clone(), i.clone()], span);
+            let counted = Expr { kind: ExprKind::Dot { recv: Box::new(gap.clone()), name: "toNat".into(), tyargs: vec![], args: Some(vec![]), named: vec![] }, span };
+            let lowered = self.lift_steps(span, body, &captures, &names, &tys, &bit, next, init, &counted, &gap)?;
+            // The state's fields are read back by name; with no local but
+            // the count, nothing reads it.
+            return Ok((lowered.0, if vars.is_empty() { Shape::Single } else { Shape::Record }, None));
+        }
         // The receiver of a `mut self` method among the state, with at most
         // one other local beside it.
         let receiver = self.receiver_in(&vars);

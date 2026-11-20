@@ -810,6 +810,10 @@ fn Tm::convoy(T: Type, c: Bool, yes: T, no: T) → T {
 // enough (`loop::Loop::steps_stays`).
 fn Tm::passes() → Nat { loop::Loop::passes() }
 
+// A word's `toNat` is at most the passes a loop is given: a loop whose
+// measure is one stops within them (`loop::Loop::steps_stays`).
+theorem Tm::word_within(w: BitVec(64)): w.toNat() <= loop::Loop::passes() { BitVec::toNat_lt_pow(64, w) }
+
 // The meaning of a term, at the code it synthesizes.
 fn Tm::sem(self t: Tm, w: World) → (g: List<Ty>) → Env(w.tys, g) → t.ty(w, g).sem(w.tys) {
     match t {

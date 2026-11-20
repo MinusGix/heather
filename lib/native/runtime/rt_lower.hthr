@@ -1456,11 +1456,11 @@ fn Tm::iter_branch(tys: Nat → RecInfo, st: Ty, next: Nat, lt, lb: Lowered) →
 }
 
 // A pass: the test, the branch, and the exit bit, set where the test's bit
-// is zero.
+// is zero (the test's bit with 1 exclusive-ored in: a bit has no compare).
 fn Tm::iter_pass(tys: Nat → RecInfo, st: Ty, next: Nat, lt, lb: Lowered) → StructuredRegion {
     Compose(lt.region, Compose(Tm::iter_branch(tys, st, next, lt, lb).region,
-        nodes_region([Const(1, Tm::iter_branch(tys, st, next, lt, lb).next, 0),
-            Equal(1, Tm::iter_branch(tys, st, next, lt, lb).next + 1, lt.result, Tm::iter_branch(tys, st, next, lt, lb).next)])))
+        nodes_region([Const(1, Tm::iter_branch(tys, st, next, lt, lb).next, 1),
+            BitXor(1, Tm::iter_branch(tys, st, next, lt, lb).next + 1, lt.result, Tm::iter_branch(tys, st, next, lt, lb).next)])))
 }
 
 fn Tm::iter_region(tys: Nat → RecInfo, st: Ty, pi, next: Nat, c: Carry, lt, lb: Lowered) → Lowered {
@@ -2534,8 +2534,8 @@ theorem Tm::loop_steps<S>(step: Valuation() → Valuation(), parameters: List<Na
     }
 }
 
-// The exit bit: the test's bit compared with zero.
-theorem Tm::exit_bit(b: Bool): bit_value(BitVec::ofBool(b).eq_bit(BitVec::ofNat(0)), 1).head_bit() = b.not() {
+// The exit bit: the test's bit with 1 exclusive-ored in.
+theorem Tm::exit_bit(b: Bool): BitVec::ofBool(b).bxor(BitVec::ofNat(1)).head_bit() = b.not() {
     match b { False => refl, True => refl }
 }
 
@@ -2646,20 +2646,20 @@ theorem Tm::iterate_pass(w: World, g: List<Ty>, init: Nat, test, body: Tm, next:
     let z = br.next;
     let z_past: (z = Fun::past(cs, out)) = st.past_cells(tys, out);
     let out_z: (out <= z) = j(sym(z_past), λ y _ => out <= y, Fun::past_ge(cs, out));
-    let q = Valuation::set(pvbr, z, λ wd => BitVec::ofNat(0));
-    let exit_value = bit_value(q(1, lt.result).eq_bit(q(1, z)));
+    let q = Valuation::set(pvbr, z, λ wd => BitVec::ofNat(1));
+    let exit_value = λ (w: Nat) => q(w, lt.result).bxor(q(w, z));
     let after = Valuation::set(q, z + 1, exit_value);
     let lt_z: (lt.result < z) = Nat::lt_of_lt_of_le(lt.result, lt.next, z, tr_lt, Nat::le_trans(lt.next, out, z, ran_b.left, out_z));
     let at_tr: (q(1, lt.result) = BitVec::ofBool(tv)) =
-        trans(Valuation::set_other(pvbr, z, λ wd => BitVec::ofNat(0), 1, lt.result, Nat::ne_of_lt(lt.result, z, lt_z)),
+        trans(Valuation::set_other(pvbr, z, λ wd => BitVec::ofNat(1), 1, lt.result, Nat::ne_of_lt(lt.result, z, lt_z)),
             trans(keeps_br(1, lt.result, tr_lt), bit_t));
-    let at_z: (q(1, z) = BitVec::ofNat(0)) = Valuation::set_here(pvbr, z, λ wd => BitVec::ofNat(0), 1);
+    let at_z: (q(1, z) = BitVec::ofNat(1)) = Valuation::set_here(pvbr, z, λ wd => BitVec::ofNat(1), 1);
     let exit: (after(1, z + 1).head_bit() = tv.not()) =
         trans(cong_fn(λ (x: BitVec(1)) => x.head_bit(), Valuation::set_here(q, z + 1, exit_value, 1)),
-            trans(eq2(λ (a: BitVec(1)) (b: BitVec(1)) => bit_value(a.eq_bit(b), 1).head_bit(), at_tr, at_z), Tm::exit_bit(tv)));
+            trans(eq2(λ (a: BitVec(1)) (b: BitVec(1)) => a.bxor(b).head_bit(), at_tr, at_z), Tm::exit_bit(tv)));
     let keeps_end: Keeps(pvbr, after, z) = λ wd id below_id =>
         trans(Valuation::set_other(q, z + 1, exit_value, wd, id, Nat::ne_of_lt(id, z + 1, Nat::lt_of_lt_of_le(id, z, z + 1, below_id, Nat::le_succ_r(z, z, z.le_refl())))),
-            Valuation::set_other(pvbr, z, λ x => BitVec::ofNat(0), wd, id, Nat::ne_of_lt(id, z, below_id)));
+            Valuation::set_other(pvbr, z, λ x => BitVec::ofNat(1), wd, id, Nat::ne_of_lt(id, z, below_id)));
     let below_out: st.Below(tys, out, z) = st.below_cells(tys, out, z, j(sym(z_past), λ y _ => Fun::past(cs, out) <= y, Fun::past(cs, out).le_refl()));
     let held_end: st.Holds(tys, after, out, fin) = st.holds_at(tys, pvbr, after, out, out, st.same_kept(tys, pvbr, after, z, keeps_end, out, below_out), fin, held_br);
     let sw = words_of(after, Fun::param_ids(cs, out));

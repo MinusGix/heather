@@ -184,6 +184,12 @@ fn Step::Stays<S>(s: S, q: Step<S>) → Type {
 // numeral's would be wherever a field read forces the loop's state.
 fn Loop::passes() → Nat { 18446744073709551615 }
 
+// `Step::turn` stops where it is.
+theorem Step::turn_stays<S>(go: Bool, next: (go = True) → S, s: S): Step::Stays(s, Step::turn(go, next, s)) {
+    (match go as λ b => (e: go = b) → Step::Stays(s, (match b as λ b2 => (go = b2) → Step<S> { False => λ _ => Stop(s), True => λ e2 => Next(next(e2)) })(e))
+    { False => λ _ => refl, True => λ _ => trivial })(refl)
+}
+
 fn Loop::steps<S>(fuel: Nat, step: S → Step<S>, s: S) → S {
     match fuel {
         Zero => s,
