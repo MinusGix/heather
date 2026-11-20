@@ -124,3 +124,19 @@ theorem pick_small_below(x: Nat, n: Nat): (n.leb(20) && pick_small(x, n).is_some
 theorem pick_small_negated(n: Nat): pick_small(0, n).is_some() = !small(n) {
     split_all; all_goals { refl }
 }
+
+// A `match h:` on a negated test whose arm reads its equation: split at the
+// test as written (`!eq_bit(x, 0)`), not at `eq_bit` inside it, where the
+// arm's equation would be left at the wrong type. The shape of a runtime
+// loop's `step ≠ 0` (docs/language/loop-combinator-design.md §6.1).
+fn drop_one(x: BitVec(64), _nonzero: (!x.eq_bit(BitVec::ofNat(0))) = True) → BitVec(64) { x.sub(BitVec::ofNat(1)) }
+fn nonzero_pred(x: BitVec(64)) → Option<BitVec(64)> {
+    match h: !x.eq_bit(BitVec::ofNat(0)) { True => Some(drop_one(x, h)), False => None }
+}
+fn nonzero_pred_k<X>(x: BitVec(64), some: BitVec(64) → X, none: X) → X {
+    match h: !x.eq_bit(BitVec::ofNat(0)) { True => some(drop_one(x, h)), False => none }
+}
+theorem nonzero_pred_elim<X>(x: BitVec(64), some: BitVec(64) → X, none: X):
+    (match nonzero_pred(x) { Some(y) => some(y), None => none }) = nonzero_pred_k(x, some, none) {
+    split_all; all_goals { refl }
+}
