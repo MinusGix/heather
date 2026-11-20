@@ -227,7 +227,12 @@ Three refinements of the above, found while building:
 - **Certificates.** The certificate's premise is `program_defined`; the
   generator proves it from `program_total` (no divide anywhere), checked a
   function at a time as the scan is. A program that divides needs its
-  definedness from round 3's `Safe`.
+  definedness from round 3's `Safe`. Two-word results
+  (`compiled_computes_both`) take the same premise, read at the last
+  function by `program_defined_last`. A source program's functions link
+  only when total (`program_linkable` checks `program_total`), so a call
+  between them is defined (`Target::answers_of`); a source program that
+  divides waits for round 3 there too.
 
 ## 7. The machine: `DIV` and a block that may fault
 
