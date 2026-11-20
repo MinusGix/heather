@@ -1,4 +1,3 @@
-import bitvec;
 import runtime;
 
 runtime fn leaf(left: BitVec(64), right: BitVec(64)) → BitVec(64) {

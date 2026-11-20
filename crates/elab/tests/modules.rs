@@ -120,6 +120,61 @@ fn a_module_in_the_import_closure_is_visible_qualified() {
 }
 
 #[test]
+fn a_types_members_follow_the_import_closure() {
+    // `ext` declares a member on `a`'s `Box`; `mid` imports both, `user`
+    // imports `a` (the type, bare) and `mid`. The member is reached as
+    // `Box::twice` and as a method, though `user` never imports `ext`.
+    let a = "record Box { value: Nat }";
+    let ext = "import a; fn Box::twice(self b: Box) -> Nat { Succ(b.value) }";
+    ok(&[
+        ("a", a),
+        ("ext", ext),
+        ("mid", "import a; import ext;"),
+        ("user", "import a; import mid;\n\
+                  theorem t(): Box::twice(Box(2)) = 3 { refl }\n\
+                  theorem m(): Box(3).twice() = 4 { refl }"),
+    ]);
+    // A module's own member of the same name is its own: a closure member
+    // is the last reading, never a rival (`native_build`'s `List::joined`
+    // beside `list_window`'s, whose self-call the library gate checks).
+    ok(&[
+        ("a", a),
+        ("ext", ext),
+        ("mid", "import a; import ext;"),
+        ("user", "import a; import mid;\n\
+                  fn Box::twice(self b: Box) -> Nat { 0 }\n\
+                  theorem own(): Box(3).twice() = 0 { refl }"),
+    ]);
+    // The control: a member nothing in the closure declares is still unbound.
+    let e = bad(&[("a", a), ("user", "import a; theorem t(): Box(2).twice() = 4 { refl }")]);
+    assert!(e.contains("twice"), "{e}");
+}
+
+#[test]
+fn export_import_reexports_every_name_of_the_module() {
+    // `facade`'s `export import a;` makes all of `a` bare in its clients,
+    // as `export a::{…}` would with every name listed.
+    ok(&[
+        ("a", A),
+        ("facade", "export import a;"),
+        ("user", "import facade;\ntheorem t(): only_in_a() = 7 { refl }\ntheorem u(): f() = 1 { refl }"),
+    ]);
+    // A plain import of the same module publishes nothing bare.
+    let e = bad(&[
+        ("a", A),
+        ("facade", "import a;"),
+        ("user", "import facade;\ntheorem t(): only_in_a() = 7 { refl }"),
+    ]);
+    assert!(e.contains("only_in_a"), "{e}");
+}
+
+#[test]
+fn export_import_takes_no_list() {
+    let e = parse_file("export import a::{f};").expect_err("must not parse");
+    assert!(e.msg.contains("reexports all of"), "{}", e.msg);
+}
+
+#[test]
 fn a_module_in_the_import_closure_is_not_visible_bare() {
     // The control: the closure is qualified-only. A bare name still needs
     // its module imported.

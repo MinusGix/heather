@@ -4,7 +4,6 @@ import nat;
 import list;
 import option;
 import pair;
-import bitvec;
 import bitvec_nat;
 import int;
 import sint;

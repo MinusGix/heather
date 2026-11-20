@@ -1,4 +1,3 @@
-import bitvec;
 import runtime;
 
 // Multiplication by shifts and adds, a pass per bit of `b`: the loop

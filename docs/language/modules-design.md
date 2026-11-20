@@ -147,7 +147,8 @@ nobody at the top imported (`float/`, `arch/x86_64/`) out of
 
 `export m::{a, b, T::method};` is the one reexport form. It is an import
 item with a public list: it must precede the first declaration, the list is
-mandatory and nonempty (no `export m;`, no glob), and `export` stays a
+mandatory and nonempty (no `export m;`, no glob; the whole module is
+`export import m;`, §3.7), and `export` stays a
 contextual keyword, so `fn export()` still parses. A listed name may be
 qualified by its owning type (`Box::get`) exactly as a declaration may.
 
@@ -189,7 +190,7 @@ Rules that follow from "same declaration, new spelling":
   changed origin invalidates the unchanged facade and its clients through
   the ordinary dependency identity.
 
-Not built, by decision: whole-module reexport, renaming on export, and
+Not built, by decision: renaming on export and
 hierarchical module paths. Each would obscure either the identity rule or
 §3.2's flat search, and the parser umbrella needed none of them.
 
@@ -275,6 +276,38 @@ Consequences:
 - A qualifier that is no loaded module's name (`List` in `List::map`) is
   answered without walking the closure; otherwise the walk is made once per
   scope and noted for the early cutoff exactly as the prelude's is.
+
+### 3.7 Members follow the closure; `export import m;` (2026-11-20)
+
+Minus's ask (2026-11-19): importing `runtime` should bring a large part of
+the runtime, with "no hesitation about what proofs or what types you have
+in context", without making every bare name public. Two rules, chosen with
+Minus on 2026-11-20 over Lean's "every name of the closure is bare":
+
+- **A type's members follow the closure.** Where `T` is visible, `T::x`
+  and `v.x` (for `v: T`) find a member of `T` declared in **any** module of
+  the importing module's closure (`names::resolve_kinds`, after every older
+  reading). Facts live in their type's namespace
+  (`docs/library/lib-layout-design.md`), so this is "every loaded fact about `BitVec`
+  is in context" without one new bare name. It is asked only when no
+  directly visible declaration answers, so nothing that resolved before
+  changes; two closure modules attaching the same member are ambiguous, as
+  two imports are.
+- **`export import m;` is the whole-module reexport** §3.4 left out: an
+  import of `m` whose public list is every name `m` shows bare (its own
+  declarations and its reexports), less generated names. It is opted into by
+  the facade's author, so a module still decides what its importers see.
+  §3.4's rules carry over unchanged: an alias names the declaration's
+  origin, and a name two exports give different origins is an error at the
+  facade. The list is read when the facade is elaborated, so a name added to
+  `m` later reaches the facade's clients when the facade's image is rebuilt,
+  which its dependency on `m` forces.
+
+`runtime` uses both: `export import bitvec; export import bytes;`, and
+`rt`'s methods on `List` reach a client through the member rule, so
+`import runtime;` alone writes a `runtime fn` over words and spans.
+`stored_words` (`[u64; n]`'s `at`) builds on `runtime` and is imported
+beside it.
 
 ## 4. Names: unambiguous-or-qualified, never silently shadowed
 

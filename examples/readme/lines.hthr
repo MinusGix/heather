@@ -5,7 +5,6 @@ import list;
 import list_window;
 import option;
 import pair;
-import bitvec;
 import bitvec_nat;
 import bitvec_omega;
 import algebra;
@@ -14,7 +13,6 @@ import rt_loop;
 import rt_file;
 import rt_file_lower;
 import rt_file_loop;
-import rt;
 import runtime;
 import runtime_file;
 

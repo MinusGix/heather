@@ -8,14 +8,13 @@
 // Each row says what it ports and the rung of the plan's ladder (§4) it
 // waits on: 1 the scalar core, 2 spans of anything, 3 inductive data,
 // 4 functional Heather. Nothing here is imported from outside.
-import bitvec;
+// `runtime` reexports the words and spans, and a type's methods reach the
+// whole closure (docs/language/modules-design.md §3.7). `[u64; n]`'s `at`
+// is `stored_words`', which builds on `runtime` and so is not under it.
+// `program_eval` runs a row's compiled program in its theorem.
 import runtime;
-// What a port names bare that `runtime` reaches only qualified: `rt`'s
-// methods on `List` (`s.byte_within`), `Bytes`, `Vec::at`
-// (docs/language/modules-design.md §3.6).
-import rt;
-import bytes;
 import stored_words;
+import function_ir_eval;
 
 // ---------------------------------------------------------------------------
 // Rung 1: operations

@@ -1,6 +1,5 @@
 import logic;
 import bool;
-import bitvec;
 import bitvec_nat;
 import bitvec_omega;
 import nat;

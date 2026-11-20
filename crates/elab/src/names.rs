@@ -535,6 +535,23 @@ impl Names {
         seen
     }
 
+    /// Every name `module` makes visible bare to an importer: its own
+    /// declarations and the names it reexports, sorted. What `export
+    /// import module;` reexports (docs/language/modules-design.md §3.7).
+    pub(crate) fn visible_from(&self, module: &str) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        for layer in self.tables.layers() {
+            for (name, entries) in &layer.index.by_name {
+                if entries.iter().any(|e| e.module == module) {
+                    out.push(name.clone());
+                }
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
     pub(crate) fn declares(&self, module: &str, name: &str) -> bool {
         self.entries(name).any(|e| e.module == module)
     }
@@ -845,10 +862,51 @@ fn resolve_kinds(
     {
         return NameRes::Found(origin);
     }
+    // `List::byte_within` where `List` is visible and the member is declared
+    // in a module only the closure reaches (`rt`, imported by `runtime`): a
+    // type's members follow the import closure, as qualified names do
+    // (docs/language/modules-design.md §3.7). Asked only when no directly
+    // visible declaration answered, so nothing that resolved before changes;
+    // two closure modules attaching the same member are ambiguous.
+    if CLOSURE_MEMBERS.with(|c| c.get())
+        && let NameRes::Found(_) = resolve_bare(names, scope, qual)
+    {
+        let mut hits: Vec<(String, String)> = Vec::new();
+        for e in names.entries(name) {
+            if (kinds.is_empty() || kinds.contains(&e.kind))
+                && e.module == e.origin
+                && !hits.iter().any(|(origin, _)| origin == &e.origin)
+                && closure_reaches(names, scope, &e.module)
+            {
+                hits.push((e.origin.clone(), e.module.clone()));
+            }
+        }
+        match hits.len() {
+            0 => {}
+            1 => return NameRes::Found(hits.remove(0).0),
+            _ => return NameRes::Ambiguous(hits.into_iter().map(|(_, m)| m).collect()),
+        }
+    }
     if visible_module {
         return NameRes::NotFound;
     }
     NameRes::NoSuchQualifier(qual.to_string())
+}
+
+thread_local! {
+    /// Whether [`resolve_kinds`] reads a type's members through the import
+    /// closure (§3.7); off inside [`without_closure_members`].
+    static CLOSURE_MEMBERS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// `body` with a type's members read only from the modules visible
+/// directly: how a caller asks whether a member it found came only through
+/// the closure.
+pub(crate) fn without_closure_members<T>(body: impl FnOnce() -> T) -> T {
+    let before = CLOSURE_MEMBERS.with(|c| c.replace(false));
+    let out = body();
+    CLOSURE_MEMBERS.with(|c| c.set(before));
+    out
 }
 
 /// Is `module` in the common prelude's closure, in a scope that imports the

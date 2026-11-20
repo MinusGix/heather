@@ -1,4 +1,3 @@
-import bitvec;
 import runtime;
 
 // Three levels of calls, a call in each arm of a branch, and arguments

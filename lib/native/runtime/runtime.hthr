@@ -58,7 +58,6 @@ import char;
 import string;
 import tactic;
 import derive;
-import bitvec;
 import rt;
 import rt_reflect;
 import rt_lower;
@@ -76,7 +75,12 @@ import rt_held_reflect;
 import bitvec_omega;
 import bitvec_shift_nat;
 import bitvec_div;
-import bytes;
+// What a `runtime fn` writes bare, so that `import runtime;` alone is
+// enough: the words (`u8`…`u64`, `BitVec`) and spans (`Bytes`). A type's
+// methods reach every module of the closure (§3.7), so `s.byte_within` and
+// `xs.at(i)` need nothing more.
+export import bitvec;
+export import bytes;
 
 // ---------------------------------------------------------------------------
 // The judgment: what the default setup compiles today, with the reason for

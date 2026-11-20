@@ -18,13 +18,11 @@ import nat;
 import list;
 import option;
 import pair;
-import bitvec;
 import bitvec_nat;
 import bitvec_omega;
 import omega;
 import function_ir_replay;
 import function_ir_rule;
-import rt;
 import runtime;
 
 // The first byte of a span, the long way round: the length added and

@@ -18,7 +18,6 @@ import nat;
 import list;
 import option;
 import pair;
-import bitvec;
 import bitvec_nat;
 import bitvec_omega;
 import bitvec_ring;
@@ -26,7 +25,6 @@ import ring;
 import omega;
 import function_ir_replay;
 import function_ir_rule;
-import rt;
 import runtime;
 
 rule theorem sub_self({w: Nat}, a: BitVec(w)): a - a = 0 { ring }
