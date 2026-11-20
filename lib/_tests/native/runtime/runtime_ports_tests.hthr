@@ -79,8 +79,8 @@ theorem port_split_runs(): program_eval(port_split::program, 0, [BitVec::ofNat(7
 // ---------------------------------------------------------------------------
 // Rung 1: loops and recursion
 
-// Two words carried round a loop.
-// expect-error: `port_fib#State` has no runtime layout
+// Two words carried round a loop, and its count: the loop's state is the
+// record `port_fib#State` of the three (`Loop::steps`).
 runtime fn port_fib(n: u64) → u64 {
     let mut a: u64 = 0;
     let mut b: u64 = 1;
@@ -88,16 +88,19 @@ runtime fn port_fib(n: u64) → u64 {
     a
 }
 
+theorem port_fib_runs(): port_fib(10) = 55 { refl }
+
 // A loop whose measure halves (`Numeral::bits`). The halving is proved by
 // the default search (`bv_omega` reads `x.shift_right(1)`, reached through
-// `runtime`); what is left is `port_fib`'s two loop words.
-// expect-error: `port_bits#State` has no runtime layout
+// `runtime`).
 runtime fn port_bits(n: u64) → u64 {
     let mut x = n;
     let mut c: u64 = 0;
     while 0 < x decreases x.toNat() { x := x.shift_right(1); c := c + 1; }
     c
 }
+
+theorem port_bits_runs(): port_bits(255) = 8 { refl }
 
 // A read-only loop over a span that carries its length (a checksum).
 // expect-error: a function over a span returns

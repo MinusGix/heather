@@ -46,7 +46,6 @@ import dec_set;
 import set_tactic;
 import relation;
 import relation_props;
-import loop;
 
 // ---------------------------------------------------------------------------
 // The tail meaning.
@@ -1795,82 +1794,4 @@ theorem Fun::measured_answers(ws: List<Ty>, res: Ty, w: World, h: Ty::Arrows(w.t
         Some(code) => λ _ holds call agree => Ty::answers_of_uncurry(w.tys, ws, res, h, λ xs => code.eval(call, xs, buffers := w.spans),
             λ xs len => holds(call, agree, xs, len)),
     }(lowered, held)
-}
-
-// ---------------------------------------------------------------------------
-// A loop of the library's combinator (lib/std/core/loop.hthr) is a measured
-// function: `Fun::Guarded` from `Loop::run_unfold`, proved once, where a
-// lifted loop proves it from its own `f::ext` and `f::irrel`
-// (docs/language/loop-combinator-design.md §6.1).
-
-// One pass of a combinator loop read at the words: `Again` answered by a
-// continuation that agrees with the loop at every lower state is the loop.
-theorem Fun::loop_pass_agrees<S, R>(l: Loop<S, R>, words: S → List<BitVec(64)>, out: R → BitVec(64), again: List<BitVec(64)> → BitVec(64), s: S,
-    below: (t: S) → l.measure(t) < l.measure(s) → again(words(t)) = out(l.run(t))):
-    (p: Pass<S, R>(l.measure, s)) → (match p { Again(b) => again(words(b.next)), Done(r) => out(r) }) = out(match p { Again(b) => l.run(b.next), Done(r) => r })
-{
-    λ p => match p as λ q => (match q { Again(b) => again(words(b.next)), Done(r) => out(r) }) = out(match q { Again(b) => l.run(b.next), Done(r) => r }) {
-        Again(b) => below(b.next, b.less.recover()),
-        Done(_) => refl,
-    }
-}
-
-// A combinator loop is a measured function (`Fun::Guarded`), from the
-// loop's own unfolding. At the words `xs` (its captures among them, which a
-// pass keeps): the loop `l(xs)`, its state `state(xs)`, the words of the
-// next pass `words(xs, s)`, the answer read as a word by `out`. What is
-// owed per function is curried over the words (`Ty::ForWords`). All but
-// one are conversions at neutral words: the body with its recursion
-// answered by `again` is the step's twin `k` (`reads`: the step with its
-// two leaves as functions, leaf for leaf), the function is the loop
-// (`is_run`), and the next words read back as the state, keep the loop and
-// have the signature's length. The one that is not, `twin`, is matching on
-// the step being its twin: a match pushed through the step's tests, which
-// conversion does not do, proved by `induct` on the step.
-theorem Fun::guarded_of_loop<S, R>(ws: List<Ty>, res: Ty, body: Tm, w: World, h: Ty::Arrows(w.tys, ws, res), m: List<BitVec(64)> → Nat,
-    l: List<BitVec(64)> → Loop<S, R>, state: List<BitVec(64)> → S, words: List<BitVec(64)> → S → List<BitVec(64)>, out: R → BitVec(64),
-    back: Ty::ForWords(ws, λ (xs: List<BitVec(64)>) => (s: S) → state(words(xs, s)) = s),
-    kept: Ty::ForWords(ws, λ (xs: List<BitVec(64)>) => (s: S) → l(words(xs, s)) = l(xs)),
-    sized: Ty::ForWords(ws, λ (xs: List<BitVec(64)>) => (s: S) → words(xs, s).len() = ws.len()),
-    measure: Ty::ForWords(ws, λ (xs: List<BitVec(64)>) => m(xs) = l(xs).measure(state(xs))),
-    is_run: Ty::ForWords(ws, λ (xs: List<BitVec(64)>) => Ty::uncurry(w.tys, ws, res, h, xs) = out(l(xs).run(state(xs)))),
-    k: List<BitVec(64)> → (List<BitVec(64)> → BitVec(64)) → BitVec(64),
-    twin: Ty::ForWords(ws, λ (xs: List<BitVec(64)>) => (again: List<BitVec(64)> → BitVec(64)) →
-        (match l(xs).step(state(xs)) { Again(b) => again(words(xs, b.next)), Done(r) => out(r) }) = k(xs, again)),
-    reads: Ty::ForWords(ws, λ (xs: List<BitVec(64)>) => (again: List<BitVec(64)> → BitVec(64)) →
-        Tm::out(w.tys, res, body.tail_sem(w, 0, res, λ (ys: List<BitVec(64)>) => Tm::into(w.tys, res, again(ys)), Ty::bind_onto(ws, Nil),
-            Ty::extend(w.tys, ws, Nil, trivial, xs))) = k(xs, again))):
-    Fun::Guarded(ws, res, body, w, h, m)
-{
-    let measured = λ (ys: List<BitVec(64)>) (yl: ys.len() = ws.len()) =>
-        Ty::for_words_at(ws, λ (xs: List<BitVec(64)>) => m(xs) = l(xs).measure(state(xs)), measure, ys, yl);
-    let run_at = λ (ys: List<BitVec(64)>) (yl: ys.len() = ws.len()) =>
-        Ty::for_words_at(ws, λ (xs: List<BitVec(64)>) => Ty::uncurry(w.tys, ws, res, h, xs) = out(l(xs).run(state(xs))), is_run, ys, yl);
-    Ty::for_words_of(ws, λ (xs: List<BitVec(64)>) => (again: List<BitVec(64)> → BitVec(64)) →
-        ((ys: List<BitVec(64)>) → ys.len() = ws.len() → m(ys) < m(xs) → again(ys) = Ty::uncurry(w.tys, ws, res, h, ys)) →
-        Tm::out(w.tys, res, body.tail_sem(w, 0, res, λ (ys: List<BitVec(64)>) => Tm::into(w.tys, res, again(ys)), Ty::bind_onto(ws, Nil),
-            Ty::extend(w.tys, ws, Nil, trivial, xs))) = Ty::uncurry(w.tys, ws, res, h, xs),
-        λ xs xl again hyp => {
-            let back_x = Ty::for_words_at(ws, λ (zs: List<BitVec(64)>) => (s: S) → state(words(zs, s)) = s, back, xs, xl);
-            let kept_x = Ty::for_words_at(ws, λ (zs: List<BitVec(64)>) => (s: S) → l(words(zs, s)) = l(zs), kept, xs, xl);
-            let sized_x = Ty::for_words_at(ws, λ (zs: List<BitVec(64)>) => (s: S) → words(zs, s).len() = ws.len(), sized, xs, xl);
-            let below: ((t: S) → l(xs).measure(t) < l(xs).measure(state(xs)) → again(words(xs, t)) = out(l(xs).run(t))) = λ t lt => {
-                let ys = words(xs, t);
-                let same_m: (l(ys).measure(state(ys)) = l(xs).measure(t)) =
-                    trans(cong_fn(λ (k: Loop<S, R>) => k.measure(state(ys)), kept_x(t)), cong_fn(l(xs).measure, back_x(t)));
-                let same_r: (out(l(ys).run(state(ys))) = out(l(xs).run(t))) =
-                    trans(cong_fn(λ (k: Loop<S, R>) => out(k.run(state(ys))), kept_x(t)), cong_fn(λ (u: S) => out(l(xs).run(u)), back_x(t)));
-                let lower: (m(ys) < m(xs)) = rewrite(measured(ys, sized_x(t)), rewrite(same_m, rewrite(measured(xs, xl), lt)));
-                trans(hyp(ys, sized_x(t), lower), trans(run_at(ys, sized_x(t)), same_r))
-            };
-            let reads_x = Ty::for_words_at(ws, λ (zs: List<BitVec(64)>) => (again: List<BitVec(64)> → BitVec(64)) →
-                Tm::out(w.tys, res, body.tail_sem(w, 0, res, λ (ys: List<BitVec(64)>) => Tm::into(w.tys, res, again(ys)), Ty::bind_onto(ws, Nil),
-                    Ty::extend(w.tys, ws, Nil, trivial, zs))) = k(zs, again),
-                reads, xs, xl);
-            let twin_x = Ty::for_words_at(ws, λ (zs: List<BitVec(64)>) => (again: List<BitVec(64)> → BitVec(64)) →
-                (match l(zs).step(state(zs)) { Again(b) => again(words(zs, b.next)), Done(r) => out(r) }) = k(zs, again),
-                twin, xs, xl);
-            trans(reads_x(again), trans(sym(twin_x(again)), trans(Fun::loop_pass_agrees(l(xs), λ s => words(xs, s), out, again, state(xs), below, l(xs).step(state(xs))),
-                trans(cong_fn(out, sym(l(xs).run_unfold(state(xs)))), sym(run_at(xs, xl))))))
-        })
 }

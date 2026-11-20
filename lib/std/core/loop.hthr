@@ -205,9 +205,9 @@ fn Pass::step<S>(m: S → Nat, s: S, self p: Pass<S, S>(m, s)) → Step<S> {
 // A loop whose stops are where it is needs no pass past its measure: with
 // the measure at most the fuel, the passes that go round are at most the
 // fuel, and the one that stops answers the state it was given, as running
-// out does. What a `while` loop is rewritten by (`Tm::passes()` is the most
-// a 64-bit count reaches, and a measure that is a word's `toNat` is at most
-// it).
+// out does. What a `while` loop is rewritten by (`Loop::passes()` is the
+// most a 64-bit count reaches, and a measure that is a word's `toNat` is at
+// most it).
 theorem Loop::steps_stays<S>(self l: Loop<S, S>, step: S → Step<S>, same: (s: S) → Pass::step(l.measure, s, l.step(s)) = step(s),
     stays: (s: S) → Step::Stays(s, step(s)), k: Nat): (s: S) → l.measure(s) <= k → Loop::steps(k, step, s) = l.run(s) {
     match k {

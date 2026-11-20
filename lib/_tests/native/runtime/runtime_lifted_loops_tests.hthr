@@ -231,12 +231,8 @@ fn Bytes::clear_below_kept({n: u64}, mut self s: Bytes(n), k: u64) → u64 {
 
 theorem clear_below_runs(): Bytes::clear_below_kept(Bytes([1, 2, 3, 4], refl), 2, n := 4).after.bytes = [1, 0, 0, 4] { refl }
 
-// ---------------------------------------------------------------------------
-// Refused, each by its reason.
-
-// A loop's state of two locals is a generated record, which a `runtime fn`
-// has no layout for.
-// expect-error: has no runtime layout under the reflected fragment
+// A loop's state of two locals is a generated record, `f#State`, which the
+// loop carries round as its two words (`Loop::steps`, §6.2).
 runtime fn two_locals(i: u64) → u64 {
     let mut j = i;
     let mut c: u64 = 0;
@@ -246,3 +242,8 @@ runtime fn two_locals(i: u64) → u64 {
     }
     c
 }
+
+theorem two_locals_runs(): two_locals(5) = 10 { refl }
+
+// ---------------------------------------------------------------------------
+// Refused, each by its reason.
