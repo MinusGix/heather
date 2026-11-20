@@ -1,11 +1,11 @@
 ---
-title: Compile a runtime fn that recurses, as a procedure with its depth in the meaning
+title: Compile a runtime fn that recurses, as a procedure within the program's levels
 status: open
 labels: [native,runtime,recursion,design]
 area: heather-in-heather
 milestone: [nh-procedures]
 created: 2026-11-11
-updated: 2026-11-11
+updated: 2026-11-20
 ---
 
 A `runtime fn` that calls itself other than last is refused: `rt` turns
@@ -16,24 +16,22 @@ needs that this blocks. The milestone `nh-procedures` asks that "a
 non-tail recursive function compiles"; that holds from the builder
 (`Perform`) and not from a `runtime fn`.
 
-`docs/native/native-procedures-are-functions-design.md` §2.8 gives the shape:
-the function reflects to a procedure whose body `Perform`s itself, each
-call a statement, and it publishes its tree at a depth: the Heather
-function's value where the depth covers the recursion at that argument,
-and the exit with `call_depth_status` otherwise.
+`docs/native/runtime-fn-recursion-design.md` is the note this issue asked
+for. Since #806 to #812 the stack is asked for in levels of checked calls
+(`Source.levels`) and a call past them is a refusal of the compiled
+program, not part of the source's meaning; the note replaces the depth
+this issue first proposed.
 
-## Scope
+## Scope (the note's §6)
 
-- A lowering of a pure term with self-calls to a `Stmt`, each call a
-  `Perform`, proved once against the term's meaning under a depth that
-  suffices.
-- What states the depth a call needs: a generated companion function by
-  the same recursion, or a bound the user proves. This is a surface
-  question and wants its own short note before the code.
-- The generator's dispatch: a function with a self-call that is not last
-  takes this route and publishes the run under the depth premise in
-  place of `f::agrees`.
-- Mutual recursion between `runtime fn`s through the same route.
+- Calls between statements first ([[rt-effectful-callees]]): an `ETm`
+  calls an `EFun`, lowered to `Perform`.
+- Self and mutual calls: the program states `levels`; `Fun::depth`,
+  defined once in `rt`, is the nesting a call needs; the published theorem
+  is the function's value wherever `f::depth(x) <= levels`, and a stop at
+  the first refused call otherwise.
+- Pure recursion through the statement lane; recursion lifts its callers
+  to statements.
 
 ## What it assumes from elsewhere
 
@@ -46,7 +44,8 @@ and the exit with `call_depth_status` otherwise.
 
 ## Done when
 
-A non-tail recursive `runtime fn` (a tree walk or a small
+A non-tail recursive `runtime fn` (`port_depth`, then a small
 recursive-descent recogniser) compiles, runs natively against its
-Heather meaning on inputs within the depth, and exits with the depth
-status one past it, with nothing proved for the function in particular.
+Heather meaning on inputs whose `f::depth` is within the program's
+levels, and stops with the call-depth status one past them, with nothing
+proved for the function in particular.
