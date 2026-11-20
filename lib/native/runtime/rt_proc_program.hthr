@@ -1,0 +1,130 @@
+// A pure program with recursion (docs/native/runtime-fn-recursion-design.md
+// §2 item 3, §6 step 4): a `PTm` main over no parameters, its calls of one
+// recursive function's procedure, its value the exit status. Where the
+// function is guarded by its measure (`PTm::Guarded`, which the generator
+// proves from the function's own `f::ext` and `f::irrel`), the compile
+// accepted the source and checks the function's call of itself, and
+// main's calls fit within the source's levels (`PDef::fits`, by
+// evaluation at closed arguments), the program run with its calls as deep
+// as they go, charged as the compiled frames are, exits with main's value
+// and leaves the world as it was (`PTm::program_reads`). Nothing in it is
+// proved per program.
+import logic;
+import nat;
+import list;
+import option;
+import bool;
+import bitvec;
+import coitree;
+import coitree_eutt;
+import itree;
+import linux_calls;
+import linux_trees;
+import linux_world;
+import linux_world_co;
+import function_ir;
+import function_ir_state;
+import function_ir_run;
+import function_ir_placeless;
+import native_source;
+import native_source_co;
+import native_source_io;
+import native_source_pure;
+import native_compile;
+import native_compile_correct;
+import native_compile_pure;
+import native_alloc;
+import x86_64;
+import x86_64_asm;
+import rt;
+import rt_lower;
+import rt_io_lower;
+import rt_proc;
+import omega;
+
+// The world a pure program's terms are read in: no records, no functions.
+fn PTm::plain(tys: Nat → RecInfo) → rt::World { rt::World(tys, [], trivial) }
+
+// The program: the recursive function's procedure, then main's statements
+// with its value in word 0 and an exit with it.
+fn PTm::program(main: PTm, defs: List<PDef>, w: rt::World, levels: Nat) → Option<Source> {
+    PDef::procedures(defs, w, PDef::known(defs)).and_then(λ ps =>
+        main.lower(w, PDef::known(defs), Nil, Nil, 1, 0).and_then(λ s =>
+            Some(Source([], [], Then(s, Exit(0)).word_bound(), Then(s, Exit(0)), procedures := ps, levels := levels))))
+}
+
+// A world with no functions leaves every call still.
+theorem PTm::plain_still(tys: Nat → RecInfo, call: Writers()): Writers::Still(call, functions_below(PTm::plain(tys).sigs.len())) {
+    λ held f never words => false_elim(never)
+}
+
+// Main's statements, then the exit: where they land main's value, the
+// program exits with it and the world as it was.
+theorem PTm::exits_with(s: Stmt, call: Writers(), answer: CallAnswers(), env: Env, io: Io, v: BitVec(64),
+    lands: PTm::Lands(v, 0, env, io, Stmt::thread_by(s, call, answer, env, io))):
+    Stmt::thread_by(Then(s, Exit(0)), call, answer, env, io) = Mutated(io, Exited(v)) {
+    let m = Stmt::thread_by(s, call, answer, env, io);
+    let ends = (match m.value as λ fl => (match fl as λ _ => Type {
+                Onward(after) => (after.buffers = env.buffers) ∧ (after.number(0) = v.toNat()),
+                Exited(_) => False,
+            }) → (match fl as λ _ => Mutated<Io, Flow> {
+                Onward(next) => Mutated(m.after, Exited(next.word(0))),
+                Exited(st) => Mutated(m.after, Exited(st)),
+            }) = Mutated(m.after, Exited(v)) {
+        Onward(after) => λ k => cong_fn(λ (x: BitVec(64)) => Mutated(m.after, Exited(x)), ETm::word_of_kept(after, 0, v, k.right)),
+        Exited(_) => λ never => false_elim(never),
+    })(lands.right);
+    trans(ends, cong_fn(λ (i: Io) => Mutated(i, Exited(v)), lands.left))
+}
+
+// The exit asks nothing of the calls.
+theorem PTm::exit_calls_ok(s: Stmt, call: Writers(), answer: CallAnswers(), ok: Nat → List<Nat> → List<Nat> → Env → Bool, env: Env, io: Io,
+    first: s.calls_ok(call, answer, ok, env, io).IsTrue()): Then(s, Exit(0)).calls_ok(call, answer, ok, env, io).IsTrue() {
+    let m = Stmt::thread_by(s, call, answer, env, io);
+    Bool::is_true_and_intro(s.calls_ok(call, answer, ok, env, io), match m.value { Onward(next) => Exit(0).calls_ok(call, answer, ok, next, m.after), Exited(_) => True },
+        first, match m.value as λ fl => (match fl as λ _ => Bool { Onward(next) => Exit(0).calls_ok(call, answer, ok, next, m.after), Exited(_) => True }).IsTrue() {
+            Onward(_) => trivial,
+            Exited(_) => trivial,
+        })
+}
+
+// The theorem.
+theorem PTm::program_reads(tys: Nat → RecInfo, n: Nat, body: PTm, h: List<BitVec(64)> → BitVec(64), m: List<BitVec(64)> → Nat,
+    guarded: PTm::Guarded(n, body, PTm::plain(tys), h, m), main: PTm, s: Stmt, src: Source,
+    made: PDef::procedures([PDef(n, body)], PTm::plain(tys), PDef::known([PDef(n, body)])) = Some(src.procedures),
+    lowered: main.lower(PTm::plain(tys), PDef::known([PDef(n, body)]), Nil, Nil, 1, 0) = Some(s),
+    is_main: src.main = Then(s, Exit(0)), no_functions: src.functions = [],
+    low: BitVec(64), homes: Homes, bodies: List<Frame>, program: Prog, compiled: src.compile(low, homes, bodies) = Some(program),
+    self_checked: src.checked(0) = True,
+    fits: main.calls_ok(PTm::plain(tys), λ _ xs => h(xs),
+        PTm::within(λ k p xs => PDef::fits([PDef(n, body)], PTm::plain(tys), λ _ ys => h(ys), k, p, xs), λ p => src.checked(p), src.levels), Nil, trivial).IsTrue(),
+    args: List<List<BitVec(8)>>, io: Io):
+    Eutt<Mutated<Io, Flow>>(Events::none(), Io::against_co(src.main_tree_co(args, src.charges(homes, bodies), src.left(homes, bodies)), io),
+        CRet(Mutated(io, Exited(main.sem(PTm::plain(tys), λ _ xs => h(xs), Nil, trivial)))))
+{
+    let w = PTm::plain(tys);
+    let defs: List<PDef> = [PDef(n, body)];
+    let known = PDef::known(defs);
+    let f: PCalls() = λ _ xs => h(xs);
+    let fitsf = λ (k: Nat) (p: Nat) (xs: List<BitVec(64)>) => PDef::fits(defs, w, λ _ ys => h(ys), k, p, xs);
+    let counted = λ (p: Nat) => src.checked(p);
+    let spec = PDef::spec(defs, f, fitsf);
+    let call = program_writers(src.functions);
+    let answer = src.pure_answer(spec);
+    let still = PTm::plain_still(tys, call);
+    let agree = λ (held: Buffers()) => Tm::calls_agree_none(tys, Writers::words(call, held));
+    let kept = PDef::bodies_one(n, body, w, src, made, call, still, agree, h, m, guarded, counted, self_checked);
+    let lowers = j(lowered, λ r _ => PTm::LowerHolds(main, w, known, Nil, Nil, 1, 0, r), main.lower_sound(w, known, Nil, Nil, 1, 0));
+    let env = src.start(args);
+    let pos: (0 < 1) = omega();
+    let run = lowers.right(call, still, agree, f, answer, PDef::answers(defs, w, src, made, f, fitsf), env, trivial, io, trivial, trivial, pos);
+    let calls = run.right(src.pure_within(spec, counted, src.levels), PTm::within(fitsf, counted, src.levels),
+        PDef::ok_reads(defs, w, src, made, f, fitsf, counted, src.levels), fits);
+    let loop_free = j(sym(is_main), λ st _ => st.loop_free().IsTrue(), Bool::is_true_and_intro(s.loop_free(), True, lowers.left, trivial));
+    let within = j(sym(is_main), λ st _ => st.calls_ok(call, answer, src.pure_within(spec, counted, src.levels), env, io).IsTrue(),
+        PTm::exit_calls_ok(s, call, answer, src.pure_within(spec, counted, src.levels), env, io, calls));
+    let exits = j(sym(is_main), λ st _ => Stmt::thread_by(st, call, answer, env, io) = Mutated(io, Exited(main.sem(w, f, Nil, trivial))),
+        PTm::exits_with(s, call, answer, env, io, main.sem(w, f, Nil, trivial), run.left));
+    let reads = src.pure_program_reads(low, homes, bodies, program, compiled, spec, kept, loop_free, args, io, within);
+    j(exits, λ r _ => Eutt<Mutated<Io, Flow>>(Events::none(), Io::against_co(src.main_tree_co(args, src.charges(homes, bodies), src.left(homes, bodies)), io), CRet(r)), reads)
+}

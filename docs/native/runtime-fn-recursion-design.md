@@ -194,6 +194,18 @@ contract for it must sort out first. So pure recursion comes first.
   theorem `f::fits(g(x), x) = True`. A cycle with unchecked calls in it
   would need the ranks in the recursion too; the generator refuses it for
   now.
+- **Step 4, the guard and a whole program.** `Tm::to_ptm` reads a reflected
+  body's calls of itself (`Call(0, …)`) as `Recur`s, under `if` and `if h:`
+  too. `PTm::Guarded` is `Fun::Guarded`'s statement over a `PTm`, which the
+  generator can prove as it proves a measured loop's; `PDef::bodies_one`
+  takes it to every obligation. `PTm::program_reads`
+  (`lib/native/runtime/rt_proc_program.hthr`) is a pure program's theorem:
+  main a `PTm` over no parameters calling the recursive function's
+  procedure, its value the exit status; for any compile that accepts it,
+  where main's calls fit within `Source.levels`, the run exits with main's
+  value and leaves the world as it was. `crates/cli/tests/native_recursion.rs`
+  runs `sum(10)` compiled: 55 within 16 levels, the call-depth status 139
+  within 9.
 - A closed probe (`lib/_tests/native/runtime/rt_proc_tests.hthr`): a
   non-tail recursive sum lowers, fits within 10 levels at 10 and not 9,
   its statements run to 55 at 10 with the world untouched, and a wrong-arity call and a bit-valued body are
