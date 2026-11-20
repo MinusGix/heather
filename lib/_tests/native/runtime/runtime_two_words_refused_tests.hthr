@@ -18,5 +18,5 @@ runtime fn halves_called(x: u64) → u64 { halves(x).high }
 // Three words are past the two result registers.
 record Triple { a: u64, b: u64, c: u64 }
 
-// expect-error: a result that is not a word of at most 64 bits or a record of two 64-bit words
+// expect-error: a result that is not a word of at most 64 bits, an enum or a record of two 64-bit words
 runtime fn triple(x: u64) → Triple { Triple(x, x, x) }

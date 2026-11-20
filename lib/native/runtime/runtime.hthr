@@ -131,7 +131,10 @@ fn Ty::is_two_words(self t: Ty, tys: Nat → RecInfo) → Bool {
     }
 }
 
-fn Ty::is_out(self t: Ty, tys: Nat → RecInfo) → Bool { t.is_edge(tys).or(t.is_two_words(tys)) }
+// What a function returns (`Ty::Out`): an enum among them, as its tag word.
+fn Ty::is_out(self t: Ty, tys: Nat → RecInfo) → Bool {
+    match t { Enum(_) => True, _ => t.is_edge(tys).or(t.is_two_words(tys)) }
+}
 
 fn Ty::all_edge(ts: List<Ty>, tys: Nat → RecInfo) → Bool {
     match ts { Nil => True, Cons(t, rest) => t.is_edge(tys).and(Ty::all_edge(rest, tys)) }
@@ -177,7 +180,9 @@ fn Tm::judge(self t: Tm, sigs: List<Sig>, tys: Nat → RecInfo) → Verdict {
         Lit(c, _) => match c {
             Word(_) => Ok,
             Bit => Ok,
-            _ => Refused("a literal that is not a word or a `Bool`: byte buffers and lists are not lowered yet"),
+            // An enum's constructor, as its tag word.
+            Enum(_) => Ok,
+            _ => Refused("a literal that is not a word, a `Bool` or an enum's constructor: byte buffers and lists are not lowered yet"),
         },
         Prim(op, _) => op.judge(),
         Let(e, body) => e.judge(sigs, tys).and(body.judge(sigs, tys)),
@@ -223,7 +228,7 @@ fn Fun::words_reason() → String {
 }
 
 fn Fun::result_reason() → String {
-    "a result that is not a word of at most 64 bits or a record of two 64-bit words: the default setup compiles functions from words to a word, or to two (issues/function-ir-multi-word-calls.md)"
+    "a result that is not a word of at most 64 bits, an enum or a record of two 64-bit words: the default setup compiles functions from words to a word, or to two (issues/function-ir-multi-word-calls.md)"
 }
 
 fn Fun::loop_words_reason() → String {
@@ -2340,6 +2345,12 @@ fn runtime_agree_rhs(low, wide, count: Expr, reprs: List<ReprEntry>, recs: List<
     pure(match gets { Cons(g, _) => g, Nil => runtime_narrow_result(wide, rfun.result, runtime_result(reprs, rfun.result, fx)) })
 }
 
+// The word a result is returned as: an enum's tag word
+// (`RecInfo::enum_word`), anything else itself.
+fn runtime_enum_result(enum_word, tys_e: Expr, r: Ty, e: Expr) → Expr {
+    match r { Enum(i) => ap(enum_word, [tys_e, NatLit(i), e]), _ => e }
+}
+
 // `f`'s arguments with parameter `j` as `here`, an enum before it as its
 // value and one after as what its word reads back as.
 fn runtime_enum_args(read_e, tys_e: Expr, ps: List<Ty>, ys: List<Expr>, j: Nat, here: Expr, n: Nat) → List<Expr> {
@@ -2505,11 +2516,15 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
             let gets <- runtime_result_fields(reprs, recs, rfun.result, fx);
             // A record result: its first field is the word returned, and
             // the rest are returned beside it (`f::agrees_also`).
-            let first: Expr = match gets { Cons(g, _) => g, Nil => runtime_narrow_result(wide, rfun.result, runtime_result(reprs, rfun.result, fx)) };
+            let first: Expr = match gets {
+                Cons(g, _) => g,
+                Nil => runtime_enum_result(enum_word, tys_e, rfun.result, runtime_narrow_result(wide, rfun.result, runtime_result(reprs, rfun.result, fx))),
+            };
             let lhs = ap(program_eval, [linked.program, root, words_e]);
             let evaluated = ap(eval_sources, [linked.program, linked.arities, ap(sources, [linked.srcs]), linked.sourced, no_file, root, words_e, Hd(trivial_h)]);
             let agreed <- runtime_at_enums(rfl, tys_e, tys_both.snd, reprs, rfun.params, own_types, at_ys, rfun.params, 0, lhs,
-                λ args => runtime_agree_rhs(low, wide, count, reprs, recs, rfun, f, args), evaluated, ys.last());
+                λ args => runtime_agree_rhs(low, wide, count, reprs, recs, rfun, f, args).bind(λ e => pure(runtime_enum_result(enum_word, tys_e, rfun.result, e))),
+                evaluated, ys.last());
             let tail: List<Decl> = [
                 Decl(AsTheorem, name ++ "::agrees", runtime_params_of(ys), Equation(lhs, first), agreed),
             ];

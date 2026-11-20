@@ -99,3 +99,48 @@ runtime fn pick_side(s: Side, a: u64, b: u64) → u64 { match s { Left => a, Rig
 theorem pick_side_runs(): program_eval(pick_side::program, 0, [BitVec::ofNat(1), BitVec::ofNat(4), BitVec::ofNat(6)]) = 6 {
     pick_side::agrees(Right, BitVec::ofNat(4), BitVec::ofNat(6))
 }
+
+// ---------------------------------------------------------------------------
+// An enum returned, as its tag word: a constructor is its index, a
+// constant. The word returned is clamped at the last tag (`Ty::clamp`), so
+// that a function that returns a parameter's word unchanged returns a tag
+// on every word it is called with.
+
+runtime fn shade_of(x: u64) → Shade { if x < 10 { Dark } else { if x < 20 { Mid } else { Light } } }
+
+theorem shade_of_runs(): program_eval(shade_of::program, 0, [BitVec::ofNat(3)]) = 0 ∧
+    program_eval(shade_of::program, 0, [BitVec::ofNat(15)]) = 1 ∧
+    program_eval(shade_of::program, 0, [BitVec::ofNat(99)]) = 2 {
+    ⟨shade_of::agrees(BitVec::ofNat(3)), ⟨shade_of::agrees(BitVec::ofNat(15)), shade_of::agrees(BitVec::ofNat(99))⟩⟩
+}
+
+// The agreement at a word the proof does not know: the tag word of the
+// function's value.
+theorem shade_of_agrees(x: u64): program_eval(shade_of::program, 0, [x]) = RecInfo::enum_word(shade_of::world.tys, 0, shade_of(x)) {
+    shade_of::agrees(x)
+}
+
+// An enum to an enum: a `match` whose arms are constructors.
+runtime fn shade_next(s: Shade) → Shade { match s { Dark => Mid, Mid => Light, Light => Dark } }
+
+theorem shade_next_runs(): program_eval(shade_next::program, 0, [BitVec::ofNat(2)]) = 0 ∧
+    program_eval(shade_next::program, 0, [BitVec::ofNat(0)]) = 1 {
+    ⟨shade_next::agrees(Light), shade_next::agrees(Dark)⟩
+}
+
+theorem shade_next_agrees(s: Shade):
+    program_eval(shade_next::program, 0, [RecInfo::enum_word(shade_next::world.tys, 0, s)]) = RecInfo::enum_word(shade_next::world.tys, 0, shade_next(s)) {
+    shade_next::agrees(s)
+}
+
+// A parameter returned unchanged: its tag word back.
+runtime fn shade_same(s: Shade) → Shade { s }
+
+theorem shade_same_agrees(s: Shade):
+    program_eval(shade_same::program, 0, [RecInfo::enum_word(shade_same::world.tys, 0, s)]) = RecInfo::enum_word(shade_same::world.tys, 0, s) {
+    shade_same::agrees(s)
+}
+
+// A word that is no tag reads as the last constructor, and the clamp
+// returns that constructor's tag.
+theorem shade_same_past(): program_eval(shade_same::program, 0, [BitVec::ofNat(7)]) = 2 { refl }

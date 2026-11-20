@@ -1760,3 +1760,28 @@ not stated yet. Probes: `lib/_tests/native/runtime/runtime_enum_tests`
 (two enums, a `match` inside another's arm, words beside the enum) and
 `…_refused_tests`; `examples/x86-native/enum_tag.hthr`, called from C as a
 C `enum` (`native_program.rs`). Ledger row `port_weight` is flipped.
+
+**An enum result (built 2026-11-20).** A function may return an enum, as
+its tag word, and build one: the reflector reads a constructor of an enum
+as `Lit(Enum(i), k)`, `k` its index (an enum the walk has not met is added
+by the marker, as a parameter's is), which means `alts.of(k)` and lowers to
+one `Const` of `k`, checked to be at most the last tag. `Ty::Out` covers an
+enum whose last tag is below 2^64. The word returned is clamped at the last
+tag (`Ty::clamp`: a `Const` of the last tag, one unsigned compare and a
+branch whose arms move the word or the last tag; `Ty::clamp_reads`). The
+clamp is what the program's linking needs, not what a caller sees: a
+program is linked as a function on every word (`program_linked_files`),
+and inside it a word that is no tag reads as the last constructor, so a
+function returning a parameter's word unchanged would return a word that
+is no tag where its meaning returns the last constructor. On every word a
+contract passes, a tag, the clamp changes nothing. Its cost is a compare
+and a branch at each return of an enum; dropping it where the word
+returned is already a tag (a constructor, a `match` whose arms are
+constructors, a callee's result) is `issues/rt-enum-result-clamp.md`.
+`f::agrees` states the tag word of the function's value
+(`RecInfo::enum_word`), and so does the certificate's `_returns`; with no
+enum parameter, `_implements` is stated too, over every word. Probes: the
+enum-result section of `runtime_enum_tests` (a constructor chosen by
+`if`, an enum to an enum, a parameter returned, and a word that is no tag
+returned clamped); `tok_settle` in `examples/x86-native/enum_tag.hthr`,
+called from C, which is `native_program.rs`' enum test now.

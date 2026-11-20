@@ -26,3 +26,11 @@ inductive TokKind { Ident, Number, Space, Punct, Other }
 runtime fn tok_weight(k: TokKind, n: BitVec(64)) → BitVec(64) {
     match k { Ident => n.add(BitVec::ofNat(3)), Number => n.add(n), Space => BitVec::ofNat(0), Punct => n, Other => BitVec::ofNat(1) }
 }
+
+// An enum as a function's result: returned as its tag word, a constructor
+// as its index. A parameter returned unchanged is clamped at the last tag
+// (`Ty::clamp`), so on a word that is no tag the function returns `Other`'s,
+// the constructor every `match` reads such a word as.
+runtime fn tok_settle(k: TokKind, c: u64) → TokKind {
+    if c < 33 { Space } else { if c < 48 { k } else { match k { Ident => Number, Number => Ident, Space => Space, Punct => Other, Other => Other } } }
+}
