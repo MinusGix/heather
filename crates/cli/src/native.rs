@@ -538,7 +538,7 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     // way.
     let compiled = verified::compile(&elab, &answers, &prefix, &format!("{prefix}_certificate"), &shape, explain)
         .map_err(|why| format!("verified lowering: {why}"))?;
-    let signature = heather_cli::linked::Signature { kinds, stack: compiled.room };
+    let signature = heather_cli::linked::Signature { kinds, stack: compiled.room, results: if shape.rest.is_some() { 2 } else { 1 } };
     let proof = compiled.text;
     eprintln!("checking the lowering, source agreement, bytes and return certificate in {}", unchecked.display());
     let certificate_module = format!("{prefix}_certificate");
@@ -596,7 +596,7 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     // The root, then the program's other entries: each a function of words.
     let mut exported = vec![(symbol.to_string(), signature, compiled.entry)];
     for ((entry, at), room) in shape.entries.iter().zip(&compiled.entries).zip(&compiled.rooms) {
-        let signature = heather_cli::linked::Signature { kinds: vec![heather_cli::linked::Kind::Word; entry.arity], stack: *room };
+        let signature = heather_cli::linked::Signature { kinds: vec![heather_cli::linked::Kind::Word; entry.arity], stack: *room, results: 1 };
         exported.push((entry.symbol.clone(), signature, *at));
     }
     write_new(&output, program_assembly(&exported, &compiled.bytes).as_bytes())?;
@@ -728,7 +728,7 @@ mod tests {
     fn the_exported_label_is_defined_once() {
         let bytes: Vec<u8> = (0..30).collect();
         for entry in [0, 13, 24] {
-            let signature = heather_cli::linked::Signature { kinds: vec![heather_cli::linked::Kind::Word], stack: 72 };
+            let signature = heather_cli::linked::Signature { kinds: vec![heather_cli::linked::Kind::Word], stack: 72, results: 1 };
             let text = program_assembly(&[("f".to_string(), signature.clone(), entry)], &bytes);
             assert_eq!(heather_cli::linked::Signature::read(&text, "f"), Ok(signature));
             let lines: Vec<&str> = text.lines().collect();
@@ -748,9 +748,9 @@ mod tests {
     fn every_entry_has_its_label() {
         use heather_cli::linked::{Kind, Signature};
         let bytes: Vec<u8> = (0..40).collect();
-        let exported = [("root".to_string(), Signature { kinds: vec![Kind::Span, Kind::Word], stack: 216 }, 25),
-            ("late".to_string(), Signature { kinds: vec![Kind::Word], stack: 144 }, 13),
-            ("first".to_string(), Signature { kinds: vec![], stack: 72 }, 0)];
+        let exported = [("root".to_string(), Signature { kinds: vec![Kind::Span, Kind::Word], stack: 216, results: 1 }, 25),
+            ("late".to_string(), Signature { kinds: vec![Kind::Word], stack: 144, results: 1 }, 13),
+            ("first".to_string(), Signature { kinds: vec![], stack: 72, results: 1 }, 0)];
         let text = program_assembly(&exported, &bytes);
         let lines: Vec<&str> = text.lines().collect();
         let count = |lines: &[&str]| lines.iter().filter(|line| line.trim_start().starts_with(".byte"))

@@ -436,6 +436,21 @@ fn Function::Runs(self function: Function, effects: Effects(), arguments: List<B
         (StructuredRegionRunsOver(effects, values, function.body, before, after) ∧ values(64, function.result) = result))
 }
 
+// And with its words past the first, `rest`, from the same run: what a
+// caller that reads RDX as well relies on.
+fn Function::RunsBoth(self function: Function, effects: Effects(), arguments: List<BitVec(64)>, result: BitVec(64), rest: List<BitVec(64)>,
+    before, after: Buffers()) → Type {
+    Exists<Valuation()>(λ values => (words_of(values, function.parameters) = arguments) ∧
+        (StructuredRegionRunsOver(effects, values, function.body, before, after) ∧
+            ((values(64, function.result) = result) ∧ (words_of(values, function.also) = rest))))
+}
+
+theorem Function::runs_both_runs(self function: Function, effects: Effects(), arguments: List<BitVec(64)>, result: BitVec(64), rest: List<BitVec(64)>,
+    before, after: Buffers(), both: function.RunsBoth(effects, arguments, result, rest, before, after)):
+    function.Runs(effects, arguments, result, before, after) {
+    Exists(both.witness, ⟨both.proof.left, ⟨both.proof.right.left, both.proof.right.right.left⟩⟩)
+}
+
 // What the functions of a program do, each answering its calls by the
 // functions after it, over the one file (`program_callees_over` with the
 // file threaded).

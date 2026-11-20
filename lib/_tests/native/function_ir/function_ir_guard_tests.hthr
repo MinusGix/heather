@@ -19,7 +19,7 @@ fn nodes(ns: List<Node>) → StructuredRegion { Dataflow(Region(Ports([]), ns, P
 // The byte at i of a span, or zero: the span's home is 0, its length 1, i is 2.
 fn byte_or_zero() → Function {
     Function([0, 1, 2], Compose(nodes([UnsignedLessThan(64, 3, 2, 1)]),
-        Conditional(Ports([]), 3, Ports([]), Ports([Port(5, 64)]), nodes([BufferLoad(5, 0, 2)]), nodes([Const(64, 5, 0)]))), 5, 1)
+        Conditional(Ports([]), 3, Ports([]), Ports([Port(5, 64)]), nodes([BufferLoad(5, 0, 2)]), nodes([Const(64, 5, 0)]))), 5, lent := 1)
 }
 
 // Whether the length is below 16, at ids the function has none of.
@@ -28,7 +28,7 @@ fn short() → Guard { Guard(6, [Const(64, 6, 16), UnsignedLessThan(64, 7, 1, 6)
 // The function under the test: its body in both arms.
 theorem guarded_made(): guard_function(byte_or_zero(), short()) = Some(Function([0, 1, 2],
     Compose(nodes([Const(64, 6, 16), UnsignedLessThan(64, 7, 1, 6)]),
-        Conditional(Ports([]), 7, Ports([]), Ports([Port(5, 64)]), byte_or_zero().body, byte_or_zero().body)), 5, 1)) { refl }
+        Conditional(Ports([]), 7, Ports([]), Ports([Port(5, 64)]), byte_or_zero().body, byte_or_zero().body)), 5, lent := 1)) { refl }
 
 // As a stage over a program of that one function, and what the stage owes:
 // the program made does whatever the program did.

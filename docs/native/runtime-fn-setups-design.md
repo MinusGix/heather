@@ -1657,3 +1657,65 @@ and a call of a function with a narrow parameter is refused (the caller
 would widen its argument first). Both are left in
 `issues/runtime-repr-narrow-words.md`, with the signed reprs, which want a
 `SignResize` at the edge.
+
+### 16.16 A record of two words as a result, and an enum as its tag (design, 2026-11-19)
+
+Minus's choices for ledger rows `port_split` and `port_weight`.
+
+**Two words back in RAX:RDX.** A flat record of two 64-bit fields
+(`PortParsed { value, ok }`) is returned as System V returns a two-word
+aggregate: the first field in RAX, the second in RDX. Nothing goes through
+memory.
+
+- FunctionIR: `Function` gains `also: List<Nat> := []`, the result ports
+  past the first (at most one for now, RDX). `Function::Runs` and
+  `Function::Computes` are unchanged and speak of the first word. A
+  function's second word is stated by `Function::RunsBoth` (the same
+  valuation, both ports), and the evaluator by `Function::eval_also`.
+- The x86 lowering: the function's closing moves its outputs
+  `[result] ++ also` into `[Rax, Rdx]` as one parallel move
+  (`move_outputs`/`outputs_check` already take lists). The epilogue reloads
+  only callee-saved registers and moves RSP, so RDX survives it as RAX
+  does. The contract at the function's label gains a twin
+  (`CalledBoth`/`AnsweredBoth`): entered where `RunsBoth(r1, r2)` holds, it
+  returns with RAX = r1 and RDX = r2. It is proved by the same
+  `function_body`/`function_closes`, generalised from "RAX holds the
+  answer" to "the registers hold the outputs".
+- Calls: a call inside a program still reads RAX alone, so a call of a
+  function with `also` stays refused until `Call` names several results
+  (`issues/function-ir-multi-word-calls.md`). Only the program's entry
+  function returns two words, which is the shape a Rust caller sees.
+- The generator lowers a `Named(i)` result whose fields are two `Word(64)`s
+  to its two ports, publishes `f::agrees` for the first field and
+  `f::agrees_also` for the second, and `compile-x86` states both in the
+  certificate's answer.
+
+**Built (2026-11-19).** As designed, with these names. The closing moves
+the outputs by `File::move_results` (in order, or in reverse where a later
+word sits in an earlier word's register), and the program-level theorem is
+`compiled_returns_both` (function_ir_compile), read by a certificate as
+`Prog::ComputesBoth` through `compiled_computes_both` (function_ir_correct);
+the optimizer is not run over such a program, since its rewrites keep only
+the first word. In rt, a result passes the boundary when it is `Ty::Out`
+(`Ty::Edge`, or a record of two `Word(64)` fields): `Fun::code_of` names the
+second field's port in `also`, `Fun::lower_sound` reads the first word
+(`Ty::out_reads`) and `Fun::lower_sound_also` the rest (`Ty::also_reads`,
+`Ty::AnswersAlso`), both proved once. The reflector meets records as it
+meets reprs (`rt_with_reprs` reruns the walk with the record added, its
+`RecInfo` built from its constructor and its fields' projections, both round
+trips `refl`). Linking: `program_linked_also` and `Compile::root_also`, with
+the instance's agreement on the second word `Setup::plain_agrees_also`. The
+generator publishes `f::agrees` for the first field, `f::agrees_also` for
+the second, and `f::fields`, the fields' names, which `compile-x86` spells
+the answer with. Probes: `lib/_tests/native/runtime/runtime_two_words_tests`
+and `…_refused_tests`; `examples/x86-native/two_words.hthr`, run from C
+(`native_program.rs`).
+
+**An enum as its tag.** A payload-free enum (`PortKind`) is held in one word
+as its constructor's index (§7.2). A `match` on it is a new rt node `Pick`
+whose meaning is the enum's own eliminator over the arms, so the pin stays
+`refl`. It lowers to a chain of compares against the tags, with the last
+arm as the default. The contract covers only real values: `f::agrees`
+quantifies over the enum and passes its tag, so nothing is said of a word
+that is no tag (no clamping, no junk value). An enum result stays refused
+until a caller needs one.

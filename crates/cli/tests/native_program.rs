@@ -254,6 +254,63 @@ int main(void) {{
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+// A record of two words as a result (docs/native/runtime-fn-setups-design.md
+// §16.16): `add_wide` returns a `Wide`, its first field in RAX and its
+// second in RDX, which is how System V returns a C structure of two
+// integer words. The certificate states both (`Prog::ComputesBoth`), and C
+// reads the structure against a 128-bit reference.
+#[test]
+fn a_record_of_two_words_is_returned_in_rax_and_rdx() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = root.join(format!("target/native-two-words-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let assembly = dir.join("two_words.s");
+    let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
+        .args(["compile-x86", "examples/x86-native/two_words.hthr", "add_wide", "-o"]).arg(&assembly)
+        .args(heather_cli::showcase::native_image_args()).args(["--kernel-workers", "1"])
+        .output().unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let text = std::fs::read_to_string(&assembly).unwrap();
+    assert!(text.contains("# signature: add_wide(word, word) -> word, word"), "{text}");
+    let certificate = std::fs::read_to_string(dir.join("two_words.certificate.hthr")).unwrap();
+    for claim in ["_code().ComputesBoth(machine, ", "compiled_computes_both<M>(", "::agrees_also(", ".low, [", ".high])"] {
+        assert!(certificate.contains(claim), "missing {claim}");
+    }
+    let driver = dir.join("main.c");
+    std::fs::write(&driver, r#"
+#include <stdint.h>
+#include <stdio.h>
+typedef struct { uint64_t low, high; } Wide;
+extern Wide add_wide(uint64_t, uint64_t);
+static int check(uint64_t a, uint64_t b) {
+    unsigned __int128 sum = (unsigned __int128)a + b;
+    Wide w = add_wide(a, b);
+    return w.low == (uint64_t)sum && w.high == (uint64_t)(sum >> 64);
+}
+int main(void) {
+    uint64_t edges[] = {0, 1, 2, (UINT64_C(1) << 32) - 1, UINT64_C(1) << 63, UINT64_MAX - 1, UINT64_MAX};
+    for (unsigned i = 0; i < 7; ++i) for (unsigned j = 0; j < 7; ++j) if (!check(edges[i], edges[j])) return 1;
+    uint64_t state = 1;
+    for (unsigned i = 0; i < 10000; ++i) {
+        state = state * UINT64_C(6364136223846793005) + 1;
+        uint64_t a = state;
+        state = state * UINT64_C(6364136223846793005) + 1;
+        if (!check(a, state)) return 2;
+    }
+    puts("10049 pairs passed");
+    return 0;
+}
+"#).unwrap();
+    let binary = dir.join("two_words");
+    let linked = Command::new("cc").args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(&driver).arg(&assembly).arg("-o").arg(&binary).output().unwrap();
+    assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
+    let run = Command::new(&binary).output().unwrap();
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stdout));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 // A function of eight words called from Rust (issues/function-call-past-six-words.md):
 // `eight` passes its seventh and eighth on the stack to `spread` twice, and
 // Rust passes its own the same way, `extern "sysv64"` with the certified

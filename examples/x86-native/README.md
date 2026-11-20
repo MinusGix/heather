@@ -138,6 +138,17 @@ bit set, and `narrow_widths.hthr` takes one value through 64, 32, 16, 27,
 sign extension are refused (`narrow_signed_operations_are_refused` in
 `native_program.rs`): zero extension does not keep a sign.
 
+## Two words back
+
+`two_words.hthr`'s `add_wide` returns a record of two 64-bit words, the sum
+of its arguments as a 128-bit number. It comes back the way System V returns
+a C structure of two integer words, the first field in RAX and the second in
+RDX, and the certificate states both (`Prog::ComputesBoth`). A C caller
+declares `typedef struct { uint64_t low, high; } Wide;` and reads it
+(`a_record_of_two_words_is_returned_in_rax_and_rdx` in `native_program.rs`).
+A function returning two words is called only from outside the program for
+now: a call inside it reads one word.
+
 ## Linked into Rust
 
 `crates/linked` links compiled functions into a Rust crate and calls them

@@ -1,0 +1,52 @@
+// Probes of a record of two 64-bit words as a `runtime fn`'s result
+// (docs/native/runtime-fn-setups-design.md §16.16,
+// issues/function-ir-multi-word-calls.md). The program's last function
+// returns the record's first field as its word and the second beside it
+// (`Function.also`, RDX at the machine): `f::agrees` states the first and
+// `f::agrees_also` the rest. A call reads one word, so a function returning
+// two is only ever the program's entry. Tests, not library: nothing imports
+// this module; what is refused is in
+// runtime_two_words_refused_tests, as `compile-x86` compiles from a module
+// that elaborates whole.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import tactic;
+import bitvec;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+
+// ---------------------------------------------------------------------------
+// Two words out of one.
+
+record Halves { high: u64, low: u64 }
+
+runtime fn halves(x: u64) → Halves { Halves(x >> 32, x & 0xffffffff) }
+
+theorem halves_runs(): program_eval(halves::program, 0, [BitVec::ofNat(0x500000007)]) = 5 ∧
+    program_eval_also(halves::program, [BitVec::ofNat(0x500000007)]) = [7] {
+    ⟨halves::agrees(BitVec::ofNat(0x500000007)), halves::agrees_also(BitVec::ofNat(0x500000007))⟩
+}
+
+// Its second word is a port of the code's own.
+theorem halves_also(): halves::code.also.len() = 1 { refl }
+
+// ---------------------------------------------------------------------------
+// The root calls a function of words; its calls are answered by the
+// program's earlier function, the second word too.
+
+runtime fn bump(x: u64) → u64 { x + 1 }
+
+runtime fn halves_bump(x: u64) → Halves { Halves(bump(x), bump(bump(x))) }
+
+theorem halves_bump_runs(): program_eval(halves_bump::program, 1, [BitVec::ofNat(4)]) = 5 ∧
+    program_eval_also(halves_bump::program, [BitVec::ofNat(4)]) = [6] {
+    ⟨halves_bump::agrees(BitVec::ofNat(4)), halves_bump::agrees_also(BitVec::ofNat(4))⟩
+}
