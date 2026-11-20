@@ -89,16 +89,31 @@ fn Ty::flats_default(ts: List<Ty>) → Ty::Flats(ts) {
 // arms by index (`pick`), which is what a `match` on it means, so a pin over
 // it stays a conversion. Its tag is the `match` that answers the index
 // (`EnumInfo::tag`), and the laws are that `pick` chooses the tag's arm, and
-// that `of` and the tag are inverse on the constructors.
+// that `of` and the tag are inverse on the constructors. `convoy` is its
+// `match h:` (the match at a convoyed motive applied to `refl`, each arm a
+// function of the equation, `matching::plan_convoy`), which does not
+// convert with the plain one, and which also chooses the tag's arm.
 record EnumInfo {
     E: Type, last: Nat, of: Nat → E,
     pick: (R: Type) → (Nat → R) → E → R,
     picks: (R: Type) → (a: Nat → R) → (v: E) → pick(R, a, v) = a(pick(Nat, λ n => n, v)),
     of_tag: (v: E) → of(pick(Nat, λ n => n, v)) = v,
     tag_of: (n: Nat) → n <= last → pick(Nat, λ n => n, of(n)) = n,
+    convoy: (R: Type) → (Nat → R) → E → R,
+    convoys: (R: Type) → (a: Nat → R) → (v: E) → convoy(R, a, v) = a(pick(Nat, λ n => n, v)),
 }
 
 fn EnumInfo::tag(self e: EnumInfo, v: e.E) → Nat { e.pick(Nat, λ n => n, v) }
+
+// The enum's `match` (`eq` False) or its `match h:` (`eq` True).
+fn EnumInfo::choose(self e: EnumInfo, eq: Bool, R: Type, a: Nat → R, v: e.E) → R {
+    match eq { False => e.pick(R, a, v), True => e.convoy(R, a, v) }
+}
+
+// Either chooses the tag's arm.
+theorem EnumInfo::chooses(self e: EnumInfo, eq: Bool, R: Type, a: Nat → R, v: e.E): e.choose(eq, R, a, v) = a(e.tag(v)) {
+    match eq { False => e.picks(R, a, v), True => e.convoys(R, a, v) }
+}
 
 // The constructor a word names: its index, the last constructor past it.
 // This is how compiled code reads a word that is no tag (its compares fall
@@ -108,14 +123,15 @@ fn EnumInfo::read(self e: EnumInfo, x: BitVec(64)) → e.E { e.of(x.toNat().min(
 // No enum: what a record's entry carries.
 fn EnumInfo::none() → EnumInfo {
     EnumInfo(True, 0, λ _ => trivial, λ R a _ => a(0), λ R a v => refl, λ v => refl,
-        λ n => match n as λ k => k <= 0 → 0 = k { Zero => λ _ => refl, Succ(_) => λ never => false_elim(never) })
+        λ n => match n as λ k => k <= 0 → 0 = k { Zero => λ _ => refl, Succ(_) => λ never => false_elim(never) },
+        λ R a _ => a(0), λ R a v => refl)
 }
 
 // An enum of `last + 1` constructors as a judgment and a lowering read it:
 // only `last`, the tags its compares test (the generator's table before
 // the enum's own, `runtime_rec_table`).
 fn EnumInfo::shape(last: Nat) → EnumInfo {
-    EnumInfo(Nat, last, λ n => n, λ R a v => a(v), λ R a v => refl, λ v => refl, λ n _ => refl)
+    EnumInfo(Nat, last, λ n => n, λ R a v => a(v), λ R a v => refl, λ v => refl, λ n _ => refl, λ R a v => a(v), λ R a v => refl)
 }
 
 // Every index up to `m` passes `p`.
@@ -141,10 +157,12 @@ theorem Nat::all_upto_at(p: Nat → Bool, m: Nat): Nat::all_upto(m, p) = True �
 fn EnumInfo::of_ctors<E>(first: E, rest: List<E>, pick: (R: Type) → (Nat → R) → E → R,
     picks: (R: Type) → (a: Nat → R) → (v: E) → pick(R, a, v) = a(pick(Nat, λ n => n, v)),
     of_tag: (v: E) → Cons(first, rest).nth(pick(Nat, λ n => n, v).min(rest.len())).unwrap_or(first) = v,
-    checked: Nat::all_upto(rest.len(), λ n => pick(Nat, λ k => k, Cons(first, rest).nth(n.min(rest.len())).unwrap_or(first)).same(n)) = True) → EnumInfo {
+    checked: Nat::all_upto(rest.len(), λ n => pick(Nat, λ k => k, Cons(first, rest).nth(n.min(rest.len())).unwrap_or(first)).same(n)) = True,
+    convoy: (R: Type) → (Nat → R) → E → R, convoys: (R: Type) → (a: Nat → R) → (v: E) → convoy(R, a, v) = a(pick(Nat, λ n => n, v))) → EnumInfo {
     EnumInfo(E, rest.len(), λ n => Cons(first, rest).nth(n.min(rest.len())).unwrap_or(first), pick, picks, of_tag,
         λ n le => Nat::same_sound(pick(Nat, λ k => k, Cons(first, rest).nth(n.min(rest.len())).unwrap_or(first)), n,
-            Nat::all_upto_at(λ m => pick(Nat, λ k => k, Cons(first, rest).nth(m.min(rest.len())).unwrap_or(first)).same(m), rest.len(), checked, n, le)))
+            Nat::all_upto_at(λ m => pick(Nat, λ k => k, Cons(first, rest).nth(m.min(rest.len())).unwrap_or(first)).same(m), rest.len(), checked, n, le)),
+        convoy, convoys)
 }
 
 // A value's tag is among the constructors' where `of` reads a tag past
@@ -174,10 +192,11 @@ theorem EnumInfo::read_tag(self e: EnumInfo, v: e.E, le: e.tag(v) <= e.last, sma
 theorem EnumInfo::of_ctors_tag_le<E>(first: E, rest: List<E>, pick: (R: Type) → (Nat → R) → E → R,
     picks: (R: Type) → (a: Nat → R) → (v: E) → pick(R, a, v) = a(pick(Nat, λ n => n, v)),
     of_tag: (v: E) → Cons(first, rest).nth(pick(Nat, λ n => n, v).min(rest.len())).unwrap_or(first) = v,
-    checked: Nat::all_upto(rest.len(), λ n => pick(Nat, λ k => k, Cons(first, rest).nth(n.min(rest.len())).unwrap_or(first)).same(n)) = True, v: E):
-    EnumInfo::of_ctors(first, rest, pick, picks, of_tag, checked).tag(v) <= rest.len() {
+    checked: Nat::all_upto(rest.len(), λ n => pick(Nat, λ k => k, Cons(first, rest).nth(n.min(rest.len())).unwrap_or(first)).same(n)) = True,
+    convoy: (R: Type) → (Nat → R) → E → R, convoys: (R: Type) → (a: Nat → R) → (v: E) → convoy(R, a, v) = a(pick(Nat, λ n => n, v)), v: E):
+    EnumInfo::of_ctors(first, rest, pick, picks, of_tag, checked, convoy, convoys).tag(v) <= rest.len() {
     let t = pick(Nat, λ n => n, v);
-    EnumInfo::of_ctors(first, rest, pick, picks, of_tag, checked).tag_le(v,
+    EnumInfo::of_ctors(first, rest, pick, picks, of_tag, checked, convoy, convoys).tag_le(v,
         cong_fn(λ (n: Nat) => Cons(first, rest).nth(n).unwrap_or(first),
             sym(Nat::min_eq_l(t.min(rest.len()), rest.len(), Nat::min_le_r(t, rest.len())))))
 }
@@ -626,7 +645,7 @@ inductive Tm {
     // each constructor in turn (`Prim(TagIs(i, k), …)` and `If`), the last
     // constructor's arm the default (docs/native/runtime-fn-setups-design.md
     // §16.16).
-    Pick(i: Nat, c: Nat, arms: Tm),
+    Pick(i: Nat, c: Nat, arms: Tm, eq: Bool),
 }
 
 record Sig { params: List<Ty>, result: Ty }
@@ -728,7 +747,7 @@ fn Tm::ty(self t: Tm, w: World, g: List<Ty>) → Ty {
         Fold(_, _, step) => Sig::at(w.sigs, step).result,
         Case(_, zero, _) => zero.ty(w, g),
         Byte(_, _, _) => Word(8),
-        Pick(i, _, arms) => arms.ty(w, Cons(Enum(i), g)),
+        Pick(i, _, arms, _) => arms.ty(w, Cons(Enum(i), g)),
     }
 }
 
@@ -781,8 +800,8 @@ fn Tm::sem(self t: Tm, w: World) → (g: List<Ty>) → Env(w.tys, g) → t.ty(w,
         Byte(k, i, length) => λ g env =>
             w.spans.span(k).byte_within(Ty::cast(w.tys, Ty::at(g, length), Word(64), Env::get(w.tys, g, env, length)),
                 Ty::cast(w.tys, Ty::at(g, i), Word(64), Env::get(w.tys, g, env, i))),
-        Pick(i, c, arms) => λ g env =>
-            w.tys(i).alts.pick(arms.ty(w, Cons(Enum(i), g)).sem(w.tys), λ n => arms.sem(w, Cons(Enum(i), g), Pair(w.tys(i).alts.of(n), env)),
+        Pick(i, c, arms, eq) => λ g env =>
+            w.tys(i).alts.choose(eq, arms.ty(w, Cons(Enum(i), g)).sem(w.tys), λ n => arms.sem(w, Cons(Enum(i), g), Pair(w.tys(i).alts.of(n), env)),
                 Ty::cast(w.tys, Ty::at(g, c), Enum(i), Env::get(w.tys, g, env, c))),
     }
 }
@@ -890,7 +909,10 @@ fn Tm::same(self t: Tm) → Tm → Bool {
         },
         Case(c, zero, succ) => λ u => match u { Case(c2, zero2, succ2) => c.same(c2).and(zero.same(zero2)).and(succ.same(succ2)), _ => False },
         Byte(k, i, length) => λ u => match u { Byte(k2, i2, length2) => k.same(k2).and(i.same(i2)).and(length.same(length2)), _ => False },
-        Pick(i, c, arms) => λ u => match u { Pick(i2, c2, arms2) => i.same(i2).and(c.same(c2)).and(arms.same(arms2)), _ => False },
+        Pick(i, c, arms, eq) => λ u => match u {
+            Pick(i2, c2, arms2, eq2) => i.same(i2).and(c.same(c2)).and(arms.same(arms2)).and(match eq { True => eq2, False => !eq2 }),
+            _ => False,
+        },
     }
 }
 

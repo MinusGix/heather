@@ -1183,7 +1183,7 @@ fn Tm::lower(self t: Tm, w: World, g: List<Ty>, ports: List<Nat>, next: Nat) →
         Byte(k, i, length) => Tm::lower_byte(g, ports, next, k, i, length),
         // The arms read the constructor at the enum's own port: the
         // constructor its word names is the one `pick` chose.
-        Pick(i, c, arms) => port_at(ports, c).and_then(λ pc =>
+        Pick(i, c, arms, eq) => port_at(ports, c).and_then(λ pc =>
             Ty::at(g, c).check(Enum(i)).and_then(λ _ => Tm::lower(arms, w, Cons(Enum(i), g), Cons(pc, ports), next))),
     }
 }
@@ -1923,11 +1923,11 @@ theorem Tm::lower_byte_sound(w: World, g: List<Ty>, ports: List<Nat>, next, k, i
 // A `match` on an enum: the arms run with the constructor `pick` chose
 // bound at the enum's port, which holds it (`of_tag`), and `pick` is the
 // arm at the tag (`picks`).
-theorem Tm::pick_sound(i, c: Nat, arms: Tm, w: World,
+theorem Tm::pick_sound(i, c: Nat, arms: Tm, eq: Bool, w: World,
     ih: (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) → Tm::LowerHolds(arms, w, g, ports, next, Tm::lower(arms, w, g, ports, next)),
     g: List<Ty>, ports: List<Nat>, next: Nat):
-    Tm::LowerHolds(Pick(i, c, arms), w, g, ports, next, Tm::lower(Pick(i, c, arms), w, g, ports, next)) {
-    let P = λ (r: Option<Lowered>) => Tm::LowerHolds(Pick(i, c, arms), w, g, ports, next, r);
+    Tm::LowerHolds(Pick(i, c, arms, eq), w, g, ports, next, Tm::lower(Pick(i, c, arms, eq), w, g, ports, next)) {
+    let P = λ (r: Option<Lowered>) => Tm::LowerHolds(Pick(i, c, arms, eq), w, g, ports, next, r);
     let inner = Cons(Enum(i), g);
     Option::and_then_elim(P, trivial, port_at(ports, c),
         λ pc => Ty::at(g, c).check(Enum(i)).and_then(λ _ => Tm::lower(arms, w, inner, Cons(pc, ports), next)), λ pc at_c =>
@@ -1947,7 +1947,7 @@ theorem Tm::pick_sound(i, c: Nat, arms: Tm, w: World,
             let after = l.region.eval(call, values, buffers := w.spans);
             let arm = λ (n: Nat) => arms.sem(w, inner, Pair(e.of(n), env));
             ⟨ran.left, ⟨ran.right.left, ⟨ran.right.right.left,
-                j(sym(e.picks(R.sem(w.tys), arm, v)), λ y _ => R.Holds(w.tys, after, l.result, y), ran.right.right.right)⟩⟩⟩
+                j(sym(e.chooses(eq, R.sem(w.tys), arm, v)), λ y _ => R.Holds(w.tys, after, l.result, y), ran.right.right.right)⟩⟩⟩
         },
     })(refl)))
 }
@@ -1996,7 +1996,7 @@ theorem Tm::lower_sound(self t: Tm, w: World): (g: List<Ty>) → (ports: List<Na
         Fold(_, _, _) => λ g ports next => trivial,
         Case(_, _, _) => λ g ports next => trivial,
         Byte(k, i, length) => λ g ports next => Tm::lower_byte_sound(w, g, ports, next, k, i, length),
-        Pick(i, c, arms) => λ g ports next => Tm::pick_sound(i, c, arms, w, λ g2 ports2 next2 => Tm::lower_sound(arms, w, g2, ports2, next2), g, ports, next),
+        Pick(i, c, arms, eq) => λ g ports next => Tm::pick_sound(i, c, arms, eq, w, λ g2 ports2 next2 => Tm::lower_sound(arms, w, g2, ports2, next2), g, ports, next),
     }
 }
 
@@ -2812,7 +2812,7 @@ theorem Tm::ty_static(self t: Tm, w: World, cs: Sig::Sems(w.tys, w.sigs), spans:
         Fold(_, _, _) => λ g => refl,
         Case(_, zero, _) => λ g => Tm::ty_static(zero, w, cs, spans, g),
         Byte(_, _, _) => λ g => refl,
-        Pick(i, _, arms) => λ g => Tm::ty_static(arms, w, cs, spans, Cons(Enum(i), g)),
+        Pick(i, _, arms, _) => λ g => Tm::ty_static(arms, w, cs, spans, Cons(Enum(i), g)),
     }
 }
 
@@ -2850,7 +2850,7 @@ theorem Tm::lower_static(self t: Tm, w: World, cs: Sig::Sems(w.tys, w.sigs), spa
         Fold(_, _, _) => λ g ports next => refl,
         Case(_, _, _) => λ g ports next => refl,
         Byte(_, _, _) => λ g ports next => refl,
-        Pick(i, c, arms) => λ g ports next => Option::and_then_ext(port_at(ports, c),
+        Pick(i, c, arms, eq) => λ g ports next => Option::and_then_ext(port_at(ports, c),
             λ pc => Ty::at(g, c).check(Enum(i)).and_then(λ _ => Tm::lower(arms, w.over(cs, spans), Cons(Enum(i), g), Cons(pc, ports), next)),
             λ pc => Ty::at(g, c).check(Enum(i)).and_then(λ _ => Tm::lower(arms, w, Cons(Enum(i), g), Cons(pc, ports), next)),
             λ pc => Option::and_then_ext(Ty::at(g, c).check(Enum(i)),

@@ -678,7 +678,7 @@ fn RSt::at_depth(self st: RSt, t: Tm) → Tm {
         If(c, yes, no) => If(st.index(c), yes, no),
         IfEq(c, yes, no) => IfEq(st.index(c), yes, no),
         Byte(k, i, length) => Byte(k, st.index(i), st.index(length)),
-        Pick(i, c, arms) => Pick(i, st.index(c), arms),
+        Pick(i, c, arms, eq) => Pick(i, st.index(c), arms, eq),
         _ => t,
     }
 }
@@ -700,7 +700,7 @@ fn RSt::finish(self st: RSt, h: Handle, operand: Bool, node: Tm) → Pair<RSt, T
         False => Pair(st, st.at_depth(node)),
         True => match node {
             Var(l) => Pair(st, Var(l)),
-            _ => match (match node { Lit(_, _) => None, If(_, _, _) => None, IfEq(_, _, _) => None, Pick(_, _, _) => None, _ => rt_memo(st.memo, node) }) {
+            _ => match (match node { Lit(_, _) => None, If(_, _, _) => None, IfEq(_, _, _) => None, Pick(_, _, _, _) => None, _ => rt_memo(st.memo, node) }) {
                 Some(l) => Pair(RSt(st.depth, st.lets, st.memo, Cons(Pair(h.id, l), st.handles), st.locals, st.funs), Var(l)),
                 None => Pair(RSt(st.depth + 1, Cons(st.at_depth(node), st.lets), Cons(Pair(node, st.depth), st.memo),
                     Cons(Pair(h.id, st.depth), st.handles), st.locals, st.funs), Var(st.depth)),
@@ -1668,7 +1668,7 @@ fn rt_pick_arms(go: RSt → Handle → Bool → Tac<Pair<RSt, Tm>>, st: RSt, m: 
 }
 
 // A `match` on an enum of table entry `i`: the scrutinee's variable `c`,
-// then `Pick(i, c, arms)`, under which variable 0 is the constructor
+// then `Pick(i, c, arms, eq)`, under which variable 0 is the constructor
 // matched. `arms` tests it against each constructor but the last in turn,
 // each test a `TagIs` bound by a `Let` and an `If` on it; the last
 // constructor's arm is the default (docs/native/runtime-fn-setups-design.md
@@ -1676,15 +1676,15 @@ fn rt_pick_arms(go: RSt → Handle → Bool → Tac<Pair<RSt, Tm>>, st: RSt, m: 
 fn rt_pick(k: Known, st: RSt, h: Handle, operand: Bool, m: MatchInfo, i: Nat,
     go: RSt → Handle → Bool → Tac<Pair<RSt, Tm>>) → Tac<Pair<RSt, Tm>>
 {
-    match m.args {
-        Cons(_, _) => rt_refuse("a `match h:` on an enum: its arms' equations are not reflected yet"),
-        Nil => go(st, m.scrut, True).bind(λ rc => {
-            let s0 = rc.fst;
-            let at = s0.depth;
-            rt_pick_arms(go, RSt(at + 1, [], s0.memo, s0.handles, s0.locals, s0.funs), m, i, at, 0, m.arms.len() - 1).bind(λ ra =>
-                pure(s0.with_funs(ra.fst.funs).finish(h, operand, Pick(i, RSt::level(rc.snd), ra.snd))))
-        }),
-    }
+    // A `match h:` is the enum's convoy (`EnumInfo.convoy`), its arms read
+    // under their equation, which no arm's runtime data reads (as `IfEq`'s).
+    let eq = match m.args { Nil => False, Cons(_, _) => True };
+    go(st, m.scrut, True).bind(λ rc => {
+        let s0 = rc.fst;
+        let at = s0.depth;
+        rt_pick_arms(go, RSt(at + 1, [], s0.memo, s0.handles, s0.locals, s0.funs), m, i, at, 0, m.arms.len() - 1).bind(λ ra =>
+            pure(s0.with_funs(ra.fst.funs).finish(h, operand, Pick(i, RSt::level(rc.snd), ra.snd, eq))))
+    })
 }
 
 // Whether `name` is a field of a repr'd record `r`.
@@ -2605,7 +2605,7 @@ fn Tm::show(self t: Tm) → String {
         Fold(over, init, step) => "Fold(" ++ rt_nat(over) ++ ", " ++ rt_nat(init) ++ ", " ++ rt_nat(step) ++ ")",
         Case(c, zero, succ) => "Case(" ++ rt_nat(c) ++ ", " ++ zero.show() ++ ", " ++ succ.show() ++ ")",
         Byte(k, i, length) => "Byte(" ++ rt_nat(k) ++ ", " ++ rt_nat(i) ++ ", " ++ rt_nat(length) ++ ")",
-        Pick(i, c, arms) => "Pick(" ++ rt_nat(i) ++ ", " ++ rt_nat(c) ++ ", " ++ arms.show() ++ ")",
+        Pick(i, c, arms, eq) => "Pick(" ++ rt_nat(i) ++ ", " ++ rt_nat(c) ++ ", " ++ arms.show() ++ match eq { True => ", True)", False => ", False)" },
     }
 }
 

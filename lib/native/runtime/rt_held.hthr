@@ -840,7 +840,7 @@ theorem Tm::reader_ok<A>(self e: Tm, hw: HWorld<A>, whole: Stored<A>, sound: Sou
         Fold(over, init, step) => refl,
         Case(c, zero, succ) => refl,
         Byte(k, i, length) => refl,
-        Pick(i, c, arms) => refl,
+        Pick(_, _, _, _) => refl,
     }
 }
 
@@ -866,7 +866,7 @@ theorem Tm::literal_known(self e: Tm, fw: FWorld, own: List<BitVec(8)>, g: List<
         Fold(over, init, step) => FTm::knows_more(fw.w.tys, g, env, known, knows, Fold(over, init, step).ty(fw.w, g), FTm::value(fw, own, Fold(over, init, step), g, env)),
         Case(c, zero, succ) => FTm::knows_more(fw.w.tys, g, env, known, knows, Case(c, zero, succ).ty(fw.w, g), FTm::value(fw, own, Case(c, zero, succ), g, env)),
         Byte(k, i, length) => FTm::knows_more(fw.w.tys, g, env, known, knows, Byte(k, i, length).ty(fw.w, g), FTm::value(fw, own, Byte(k, i, length), g, env)),
-        Pick(i, c, arms) => FTm::knows_more(fw.w.tys, g, env, known, knows, Pick(i, c, arms).ty(fw.w, g), FTm::value(fw, own, Pick(i, c, arms), g, env)),
+        Pick(i, c, arms, eq) => FTm::knows_more(fw.w.tys, g, env, known, knows, Pick(i, c, arms, eq).ty(fw.w, g), FTm::value(fw, own, Pick(i, c, arms, eq), g, env)),
     }
 }
 

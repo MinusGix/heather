@@ -1,7 +1,7 @@
 // What a `runtime fn` over an enum is refused at
 // (docs/native/runtime-fn-setups-design.md §16.16): an enum is passed in
-// as its tag word, matched on, built, returned and passed to a call, and
-// nothing else yet. The accepted probes
+// as its tag word, matched on (`match` and `match h:`), built, returned
+// and passed to a call, and nothing else yet. The accepted probes
 // are runtime_enum_tests. Tests, not library: nothing imports this module.
 
 import bitvec;
@@ -10,10 +10,6 @@ import runtime;
 inductive Shade { Dark, Mid, Light }
 
 runtime fn shade_level(s: Shade) → u64 { match s { Dark => 10, Mid => 20, Light => 30 } }
-
-// A `match h:` on an enum: its arms' equations are not reflected.
-// expect-error: a `match h:` on an enum
-runtime fn shade_eq(s: Shade) → u64 { match h: s { Dark => 1, Mid => 2, Light => 3 } }
 
 // A call reads one word back, and an enum's is not read back yet.
 runtime fn shade_next(s: Shade) → Shade { match s { Dark => Mid, Mid => Light, Light => Dark } }

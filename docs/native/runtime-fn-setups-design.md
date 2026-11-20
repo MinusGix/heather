@@ -1798,3 +1798,16 @@ tag word, which needs every value's tag to be at most the last
 enums are bare indices, could not meet one). Probes: the call section of
 `runtime_enum_tests` (an enum passed twice, a constructor built and
 passed, two enums and a word passed to a callee matching on both).
+
+**`match h:` on an enum (built 2026-11-20).** A `match h:` elaborates to
+the convoy (the match at a convoyed motive applied to `refl`, each arm a
+function of the equation), which does not convert with a plain `match`,
+so `EnumInfo` carries the enum's convoy beside `pick`: `convoy`, built by
+the `Cases` host request (the elaborator's own convoy) with arm `k` the
+`a(k)` of the arms, and its law `convoys` (it chooses the tag's arm), by
+cases with each branch `refl`. `Tm::Pick` carries `eq`, which `match h:`
+sets: its meaning is `EnumInfo::choose` (`pick` or `convoy`), and its
+lowering and its proof are the plain match's (`EnumInfo::chooses`). The
+arms are read under their equation, which no arm's runtime data reads, as
+`IfEq`'s are. Probes: the `match h:` section of `runtime_enum_tests` (its
+pin by `refl`, and one beside a plain `match` returning an enum).
