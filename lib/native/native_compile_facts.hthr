@@ -793,17 +793,88 @@ theorem Source::charges_levels(self src: Source, homes: Homes, bodies: List<Fram
         })
 }
 
+// No entry of `a` passes the entry of `b` beside it by more than the gap.
+theorem List::gap_at(self a: List<Nat>, b: List<Nat>): (p: Nat) → a.deep_at(p) - b.deep_at(p) <= a.gap(b) {
+    match a {
+        Nil => λ p => trivial,
+        Cons(x, rest) => λ p => match p {
+            Zero => {
+                let head_is: (b.deep_at(0) = b.head_or(0)) = match b { Nil => refl, Cons(_, _) => refl };
+                let at: (x - b.head_or(0) <= Nat::max(x - b.head_or(0), rest.gap(b.tail()))) = Nat::le_max_l(x - b.head_or(0), rest.gap(b.tail()));
+                let a_is: (Cons(x, rest).deep_at(0) = x) = refl;
+                let gap_is: (Cons(x, rest).gap(b) = Nat::max(x - b.head_or(0), rest.gap(b.tail()))) = refl;
+                omega(head_is, at, a_is, gap_is)
+            },
+            Succ(i) => {
+                let tail_is: (b.deep_at(Succ(i)) = b.tail().deep_at(i)) = match b { Nil => refl, Cons(_, _) => refl };
+                let a_is: (Cons(x, rest).deep_at(Succ(i)) = rest.deep_at(i)) = refl;
+                let later = rest.gap_at(b.tail(), i);
+                let more: (rest.gap(b.tail()) <= Nat::max(x - b.head_or(0), rest.gap(b.tail()))) = Nat::le_max_r(x - b.head_or(0), rest.gap(b.tail()));
+                let gap_is: (Cons(x, rest).gap(b) = Nat::max(x - b.head_or(0), rest.gap(b.tail()))) = refl;
+                omega(tail_is, a_is, later, more, gap_is)
+            },
+        },
+    }
+}
+
+// No procedure's body gains more than `Source::gain` over its period from
+// as many levels as there are procedures.
+theorem Source::gain_bound(self src: Source, homes: Homes, bodies: List<Frame>, period, q: Nat, proc: Procedure, found: src.procedures.nth(q) = Some(proc)):
+    src.total(homes, bodies, src.procedures.len() + period, q) <= src.total(homes, bodies, src.procedures.len(), q) + src.gain(homes, bodies, period) {
+    let checks = src.procedures.checks();
+    let ranks = src.procedures.ranks(checks);
+    let table = homes.room_table(src.functions);
+    let from = src.procedures.len();
+    let late = src.procedures.level_row(bodies, homes.places, table, checks, ranks, Succ(from + period));
+    let early = src.procedures.level_row(bodies, homes.places, table, checks, ranks, Succ(from));
+    let late_is = src.level_row_at(homes, bodies, from + period, q, proc, found);
+    let early_is = src.level_row_at(homes, bodies, from, q, proc, found);
+    let gap = late.gap_at(early, q);
+    let most: (late.gap(early) <= src.gain(homes, bodies, period)) =
+        Nat::le_max_l(late.gap(early), src.top(homes, bodies, from + period) - src.top(homes, bodies, from));
+    omega(late_is, early_is, gap, most)
+}
+
+// Nor does `main`'s.
+theorem Source::gain_top_bound(self src: Source, homes: Homes, bodies: List<Frame>, period: Nat):
+    src.top(homes, bodies, src.procedures.len() + period) <= src.top(homes, bodies, src.procedures.len()) + src.gain(homes, bodies, period) {
+    let checks = src.procedures.checks();
+    let ranks = src.procedures.ranks(checks);
+    let table = homes.room_table(src.functions);
+    let from = src.procedures.len();
+    let most: (src.top(homes, bodies, from + period) - src.top(homes, bodies, from) <= src.gain(homes, bodies, period)) =
+        Nat::le_max_r(src.procedures.level_row(bodies, homes.places, table, checks, ranks, Succ(from + period))
+                .gap(src.procedures.level_row(bodies, homes.places, table, checks, ranks, Succ(from))),
+            src.top(homes, bodies, from + period) - src.top(homes, bodies, from));
+    omega(most)
+}
+
+// The charges any compile picks fit the levels read in periods
+// (`Source::room_total`, `Source::room_top`): what `Source::left` asks for
+// with any number of levels.
+theorem Source::charges_room(self src: Source, homes: Homes, bodies: List<Frame>, ranked: src.ranked() = True):
+    src.charges(homes, bodies).Levels(src, λ p => src.checked(p), λ k p => src.room_total(homes, bodies, k, p), λ k => src.room_top(homes, bodies, k)) {
+    let period = src.period(homes, bodies);
+    src.charges(homes, bodies).levels_periodic(src, λ p => src.checked(p), λ k p => src.total(homes, bodies, k, p), λ k => src.top(homes, bodies, k),
+        src.charges_levels(homes, bodies, ranked), src.procedures.len(), period, src.gain(homes, bodies, period), trivial,
+        λ q proc found => src.gain_bound(homes, bodies, period, q, proc, found), src.gain_top_bound(homes, bodies, period))
+}
+
 // What `main`'s body takes with no levels is within the bytes it leaves.
 theorem Source::main_below_left(self src: Source, homes: Homes, bodies: List<Frame>):
     src.main.performed().below(src.main.called(), src.procedures, bodies, homes.places, homes.room_table(src.functions), src.procedures.checks(), src.procedures.len()) + 8 <=
         src.left(homes, bodies) {
     let checks = src.procedures.checks();
     let table = homes.room_table(src.functions);
-    let more = src.main.performed().below_le_by(src.main.called(), src.procedures, bodies, homes.places, table, checks,
-        src.procedures.level_row(bodies, homes.places, table, checks, src.procedures.ranks(checks), src.levels), src.procedures.len());
-    let left_is: (src.left(homes, bodies) = src.main.performed().below_by(src.main.called(), src.procedures, bodies, homes.places, table, checks,
-        src.procedures.level_row(bodies, homes.places, table, checks, src.procedures.ranks(checks), src.levels), src.procedures.len()) + 8) = refl;
-    omega(more, left_is)
+    let base = src.main.performed().below(src.main.called(), src.procedures, bodies, homes.places, table, checks, src.procedures.len());
+    let period = src.period(homes, bodies);
+    let room = src.levels.periodic_above(src.procedures.len(), period, src.gain(homes, bodies, period), base, λ i => src.top(homes, bodies, i),
+        λ i => src.main.performed().below_le_by(src.main.called(), src.procedures, bodies, homes.places, table, checks,
+            src.procedures.level_row(bodies, homes.places, table, checks, src.procedures.ranks(checks), i), src.procedures.len()));
+    let left_is: (src.left(homes, bodies) = src.room_top(homes, bodies, src.levels) + 8) = refl;
+    let room_is: (src.room_top(homes, bodies, src.levels) =
+        src.levels.periodic(src.procedures.len(), period, src.gain(homes, bodies, period), λ i => src.top(homes, bodies, i))) = refl;
+    omega(room, left_is, room_is)
 }
 
 // Every word a fitting list names is in the file.
