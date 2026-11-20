@@ -283,20 +283,30 @@ theorem Nat::all_upto_at(p: Nat → Bool, m: Nat): Nat::all_upto(m, p) = True �
 }
 
 // Every index up to `m` has `P`, one proof each: what a generator proves
-// of each constructor, each by `refl`.
+// of each constructor, each by `refl` (a `Pair`, which it builds as a
+// term).
 fn Nat::AllUpTo(m: Nat, P: Nat → Type) → Type {
-    match m { Zero => P(0), Succ(k) => Nat::AllUpTo(k, P) ∧ P(k + 1) }
+    match m { Zero => P(0), Succ(k) => Pair<Nat::AllUpTo(k, P), P(k + 1)> }
 }
 
 theorem Nat::all_up_to_at(P: Nat → Type, m: Nat): Nat::AllUpTo(m, P) → (n: Nat) → n <= m → P(n) {
     match m {
         Zero => λ all n => match n as λ k => k <= 0 → P(k) { Zero => λ _ => all, Succ(_) => λ never => false_elim(never) },
         Succ(k) => λ all n le => match n.lt_or_ge(k + 1) {
-            Inl(lt) => Nat::all_up_to_at(P, k, all.left, n, lt),
-            Inr(ge) => j(Nat::le_antisym(k + 1, n, ge, le), λ y _ => P(y), all.right),
+            Inl(lt) => Nat::all_up_to_at(P, k, all.fst, n, lt),
+            Inr(ge) => j(Nat::le_antisym(k + 1, n, ge, le), λ y _ => P(y), all.snd),
         },
     }
 }
+
+// A layout of the slots by each constructor's number of fields, every
+// constructor's after the ones before it: where constructor `n`'s first
+// field is, and how many it has.
+fn EnumInfo::lo_of(arities: List<Nat>) → Nat → Nat {
+    match arities { Nil => λ n => 0, Cons(a, rest) => λ n => match n { Zero => 0, Succ(m) => a + EnumInfo::lo_of(rest, m) } }
+}
+
+fn EnumInfo::arity_of(arities: List<Nat>) → Nat → Nat { λ n => arities.nth(n).unwrap_or(0) }
 
 // An enum from its constructors in order, each a function of the slots
 // reading its own, its own `match` and its laws by cases, each

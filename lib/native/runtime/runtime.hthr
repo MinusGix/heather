@@ -214,6 +214,9 @@ fn Tm::judge(self t: Tm, sigs: List<Sig>, tys: Nat → RecInfo) → Verdict {
         Case(_, _, _) => Refused("a `match` on a `Nat` that is not a loop's fuel: only a fuel recursion's top `match` is lowered"),
         Byte(_, _, _) => Ok,
         Pick(_, _, arms, _) => arms.judge(sigs, tys),
+        // A constructor with its fields, and a field of one an arm reads.
+        Inject(_, _, _) => Ok,
+        Slot(_, _, _) => Ok,
     }
 }
 
@@ -233,6 +236,8 @@ fn Tm::judge_tail(self t: Tm, sigs: List<Sig>, tys: Nat → RecInfo) → Verdict
         Case(c, zero, succ) => Case(c, zero, succ).judge(sigs, tys),
         Byte(k, i, length) => Byte(k, i, length).judge(sigs, tys),
         Pick(i, c, arms, eq) => Pick(i, c, arms, eq).judge(sigs, tys),
+        Inject(i, k, args) => Inject(i, k, args).judge(sigs, tys),
+        Slot(i, j, of) => Slot(i, j, of).judge(sigs, tys),
     }
 }
 
@@ -1406,6 +1411,8 @@ fn Tm::quote(self t: Tm, q: RtQ) → Expr {
         Case(c, zero, succ) => ap(runtime_at(q.tm, 10), [NatLit(c), zero.quote(q), succ.quote(q)]),
         Byte(k, i, length) => ap(runtime_at(q.tm, 11), [NatLit(k), NatLit(i), NatLit(length)]),
         Pick(i, c, arms, eq) => ap(runtime_at(q.tm, 12), [NatLit(i), NatLit(c), arms.quote(q), q.boolean(eq)]),
+        Inject(i, k, args) => ap(runtime_at(q.tm, 13), [NatLit(i), NatLit(k), q.nat_list(args)]),
+        Slot(i, j, of) => ap(runtime_at(q.tm, 14), [NatLit(i), NatLit(j), NatLit(of)]),
     }
 }
 
@@ -1802,7 +1809,10 @@ fn runtime_narrow_args(low: Expr, ps: List<Ty>, es: List<Expr>) → List<Expr> {
 // (docs/native/runtime-fn-setups-design.md §16.16): its type, its
 // constructor, and its fields' names and codes. An enum's (`alts`) has
 // no fields, and its constructors in order as terms.
-record RecShape { ty: Handle, ctor: Handle, name: String, fields: List<String>, codes: List<Ty>, alts: Bool := False, ctors: List<Expr> := [] }
+// An enum's `codes` are its payload's slots (`EnumInfo.slots`), and
+// `arities` how many of them each constructor has, in order.
+record RecShape { ty: Handle, ctor: Handle, name: String, fields: List<String>, codes: List<Ty>, alts: Bool := False, ctors: List<Expr> := [],
+    arities: List<Nat> := [] }
 
 // A plain function's own parameter types: a narrow word at its width.
 fn runtime_own_types(word: Handle, reprs: List<ReprEntry>, ps: List<Ty>, recs: List<RecShape>) → Tac<List<Handle>> {
@@ -2180,6 +2190,20 @@ fn runtime_field_codes(k: Known, fs: List<FieldInfo>) → Tac<List<Ty>> {
     }
 }
 
+// An enum's slots: each constructor's fields' codes in turn, each a word,
+// a `Bool` or a count (a slot another constructor leaves holds its
+// default, `Ty::Defaults`).
+fn runtime_enum_slots(k: Known, name: String, cs: List<CtorInfo>) → Tac<List<Ty>> {
+    match cs {
+        Nil => pure([]),
+        Cons(c, rest) => runtime_field_codes(k, c.fields).bind(λ codes =>
+            match codes.all_bit(λ (t: Ty) => match t { Word(_) => True, Bit => True, Count => True, _ => False }) {
+                False => runtime_fail("a field of `" ++ name ++ "::" ++ c.name ++ "` that is not a word, a `Bool` or a `Nat`: an enum's fields are held in words of their own"),
+                True => runtime_enum_slots(k, name, rest).bind(λ more => pure(codes ++ more)),
+            }),
+    }
+}
+
 fn runtime_rec_shapes(k: Known, recs: List<RecEntry>) → Tac<List<RecShape>> {
     match recs {
         Nil => pure([]),
@@ -2195,8 +2219,9 @@ fn runtime_rec_shapes(k: Known, recs: List<RecEntry>) → Tac<List<RecShape>> {
                     None => runtime_fail("`" ++ name ++ "`'s constructor is not a term"),
                     Some(ch) => {
                         let all <- runtime_ctor_exprs(cs);
+                        let slots <- rt_no_records(runtime_enum_slots(k, name, cs));
                         let more <- runtime_rec_shapes(k, rest);
-                        pure(Cons(RecShape(t, ch, name, [], [], alts := True, ctors := all), more))
+                        pure(Cons(RecShape(t, ch, name, [], slots, alts := True, ctors := all, arities := cs.map(λ (ci: CtorInfo) => ci.fields.len())), more))
                     },
                 },
                 Nil => runtime_fail("`" ++ name ++ "` has no constructor"),
@@ -2286,32 +2311,90 @@ fn runtime_split_refl(rfl: Expr, e: Expr, goal: Handle) → Tac<Expr> {
     match c { Accepted(h) => pure(Hd(h)), Refused(why) => runtime_fail("an enum's law by cases: " ++ why) }
 }
 
+// Each constructor as a function of the slots' tuple `t`: applied to the
+// slots from its own first, one per field.
+fn runtime_ctor_fns(fst, snd: Expr, t: LocalRef, ctors: List<Expr>, arities: List<Nat>, k, lo: Nat) → List<Expr> {
+    match ctors {
+        Nil => [],
+        Cons(c, rest) => {
+            let n = EnumInfo::arity_of(arities, k);
+            let body = match n { Zero => c, Succ(_) => ap(c, runtime_flat_fields(fst, snd, Local(t), lo, n)) };
+            Cons(Lam(t, body), runtime_ctor_fns(fst, snd, t, rest, arities, k + 1, lo + n))
+        },
+    }
+}
+
+// The slots' values from slot `j`: a constructor's fields `own` from slot
+// `lo`, each other slot its code's default.
+fn runtime_slot_values(flat_default: Expr, q: RtQ, codes: List<Ty>, lo: Nat, own: List<Expr>, j: Nat) → List<Expr> {
+    match codes {
+        Nil => [],
+        Cons(c, rest) => match (lo.leb(j) && (j + 1).leb(lo + own.len())) {
+            True => Cons(own.nth(j - lo).unwrap_or(Blank), runtime_slot_values(flat_default, q, rest, lo, own, j + 1)),
+            False => Cons(ap(flat_default, [Ty::quote(c, q)]), runtime_slot_values(flat_default, q, rest, lo, own, j + 1)),
+        },
+    }
+}
+
+// The arms of a split on an enum's value, arm `k` `a(k, t)` at its
+// fields' tuple.
+fn runtime_enum_arms(a: Expr, tuple_of: Nat → List<LocalInfo> → Expr, bs: List<Branch>, k: Nat) → List<Expr> {
+    match bs { Nil => [], Cons(b, rest) => Cons(ap(a, [NatLit(k), tuple_of(k, b.locals)]), runtime_enum_arms(a, tuple_of, rest, k + 1)) }
+}
+
+// `refl` at every index up to `m` (`Nat::AllUpTo`).
+fn runtime_all_refl(rfl, pair: Expr, m: Nat) → Expr {
+    match m { Zero => ap(rfl, [Blank, Blank]), Succ(k) => ap(pair, [Blank, Blank, runtime_all_refl(rfl, pair, k), ap(rfl, [Blank, Blank])]) }
+}
+
 // An enum's entry in the type table (docs/native/runtime-fn-setups-design.md
-// §16.16): `EnumInfo::of_ctors` at its constructors in order. Its `pick`
-// is a plain `match` on the value whose arm `k` is `a(k)` (`Branches`, the
-// elaborator's own `match`), so that a `match` of the source on the enum is
-// `pick` at its arms by conversion; its `convoy` is the same by a
-// `match h:` (`Cases`). Its laws are by cases on the value, each branch
-// `refl`; the tags are checked by evaluation.
-fn runtime_enum_info(rfl: Expr, r: RecShape) → Tac<Pair<Expr, Expr>> {
+// §16.16): `EnumInfo::of_ctors` at its constructors in order, each a
+// function of the payload's slots reading its own. Its `pick` is a plain
+// `match` on the value whose arm `k` is `a(k, t)`, `t` the arm's fields in
+// their slots and defaults in the rest (`Branches`, the elaborator's own
+// `match`), so that a `match` of the source on the enum is `pick` at its
+// arms by conversion; its `convoy` is the same by a `match h:` (`Cases`).
+// Its laws are by cases on the value, each branch `refl`; the tags and
+// fields of a constructor built from any tuple are `refl` too, as the
+// tuple's projections stand in its slots. The second part is the proof an
+// enum without a payload passes for its fields being defaults (`refl`).
+fn runtime_enum_info(q: RtQ, rfl: Expr, r: RecShape) → Tac<Pair<Expr, Expr>> {
     let of_ctors <- runtime_global(name_of(EnumInfo::of_ctors));
-    let tag_le <- runtime_global(name_of(EnumInfo::of_ctors_tag_le));
     let of_enum <- runtime_global(name_of(RecInfo::of_enum));
+    let lo_of <- runtime_global(name_of(EnumInfo::lo_of));
+    let arity_of <- runtime_global(name_of(EnumInfo::arity_of));
+    let flats <- runtime_global(name_of(Ty::Flats));
+    let flat_default <- runtime_global(name_of(Ty::flat_default));
+    let fst <- runtime_global(name_of(runtime_fst));
+    let snd <- runtime_global(name_of(runtime_snd));
+    let pair <- runtime_global(name_of(Pair::of));
+    let unit <- resolve("trivial").or_fail("runtime: `trivial`: ");
+    let slots_e = Ty::quotes(r.codes, q);
+    let tuple_t <- as_type(ap(flats, [slots_e])).or_fail("runtime: an enum's slots: ");
+    let t <- assume(Hd(tuple_t), "t", None).or_fail("runtime: an enum's slots: ");
+    let fns = runtime_ctor_fns(fst, snd, t.ref, r.ctors, r.arities, 0, 0);
     let list_g <- runtime_ref("List");
-    let list_t <- as_type(ap(Global(list_g), [Hd(r.ty)])).or_fail("runtime: an enum's constructors: ");
+    let fn_t <- as_type(Pi(t.ref, Hd(r.ty))).or_fail("runtime: an enum's constructors: ");
+    let list_t <- as_type(ap(Global(list_g), [Hd(fn_t)])).or_fail("runtime: an enum's constructors: ");
     let nil_cons <- runtime_ctors_at(list_t);
-    match r.ctors {
+    let arities_e = q.nat_list(r.arities);
+    // Constructor `k`'s fields, the branch's locals, in their slots.
+    let tuple_of = λ (k: Nat) (locals: List<LocalInfo>) => {
+        let own = locals.rev().take(EnumInfo::arity_of(r.arities, k)).map(λ (l: LocalInfo) => Local(l.ref));
+        runtime_tuple_of(pair, Hd(unit), runtime_slot_values(flat_default, q, r.codes, EnumInfo::lo_of(r.arities, k), own, 0))
+    };
+    match fns {
         Nil => runtime_fail("`" ++ r.name ++ "` has no constructor"),
         Cons(first, rest) => {
             let rest_e = RtQ::seq(nil_cons, rest);
-            let head = ap(of_ctors, [Hd(r.ty), first, rest_e]);
+            let head = ap(of_ctors, [Hd(r.ty), slots_e, ap(lo_of, [arities_e]), ap(arity_of, [arities_e]), first, rest_e]);
             // `pick`.
             let pick_t <- runtime_next_arg(head);
             let pick_o <- runtime_open_n(3, pick_t, ["R", "a", "v"]);
             let v = runtime_at_ref(pick_o.fst, 2);
             let a = runtime_at_ref(pick_o.fst, 1);
             let cut <- branches(Local(v), pick_o.snd).or_fail("runtime: `" ++ r.name ++ "`'s `match`: ");
-            let arms = List::range(cut.branches.len()).map(λ k => ap(Local(a), [NatLit(k)]));
+            let arms = runtime_enum_arms(Local(a), tuple_of, cut.branches, 0);
             let closed <- close(cut.id, arms);
             let pick_b <- match closed { Accepted(h) => pure(Hd(h)), Refused(why) => runtime_fail("`" ++ r.name ++ "`'s `match`: " ++ why) };
             let pick = runtime_lams(pick_o.fst, pick_b);
@@ -2325,29 +2408,28 @@ fn runtime_enum_info(rfl: Expr, r: RecShape) → Tac<Pair<Expr, Expr>> {
             let of_tag_o <- runtime_open_n(1, of_tag_t, ["v"]);
             let of_tag_b <- runtime_split_refl(rfl, Local(runtime_at_ref(of_tag_o.fst, 0)), of_tag_o.snd);
             let of_tag = runtime_lams(of_tag_o.fst, of_tag_b);
+            // Each constructor's tag, checked by evaluation, and its fields,
+            // each `refl`, at any tuple.
+            let checked = Lam(t.ref, ap(rfl, [Blank, Blank]));
+            let kept = Lam(t.ref, runtime_all_refl(rfl, pair, rest.len()));
             // `convoy`: the same arms by a `match h:` (`Cases`, the
             // elaborator's convoy), each a function of its equation, so
             // that a source's `match h:` on the enum is `convoy` at its arms
             // by conversion.
-            let checked = ap(rfl, [Blank, Blank]);
-            let convoy_t <- runtime_next_arg(ap(head, [pick, picks, of_tag, checked]));
+            let convoy_t <- runtime_next_arg(ap(head, [pick, picks, of_tag, checked, kept]));
             let convoy_o <- runtime_open_n(3, convoy_t, ["R", "a", "v"]);
             let cv = runtime_at_ref(convoy_o.fst, 2);
             let ca = runtime_at_ref(convoy_o.fst, 1);
             let ccut <- cases(Local(cv), convoy_o.snd).or_fail("runtime: `" ++ r.name ++ "`'s `match h:`: ");
-            let cclosed <- close(ccut.id, List::range(ccut.branches.len()).map(λ k => ap(Local(ca), [NatLit(k)])));
+            let cclosed <- close(ccut.id, runtime_enum_arms(Local(ca), tuple_of, ccut.branches, 0));
             let convoy_b <- match cclosed { Accepted(h) => pure(Hd(h)), Refused(why) => runtime_fail("`" ++ r.name ++ "`'s `match h:`: " ++ why) };
             let convoy = runtime_lams(convoy_o.fst, convoy_b);
             // `convoys`.
-            let convoys_t <- runtime_next_arg(ap(head, [pick, picks, of_tag, checked, convoy]));
+            let convoys_t <- runtime_next_arg(ap(head, [pick, picks, of_tag, checked, kept, convoy]));
             let convoys_o <- runtime_open_n(3, convoys_t, ["R", "a", "v"]);
             let convoys_b <- runtime_split_refl(rfl, Local(runtime_at_ref(convoys_o.fst, 2)), convoys_o.snd);
             let convoys = runtime_lams(convoys_o.fst, convoys_b);
-            let parts: List<Expr> = [pick, picks, of_tag, checked, convoy, convoys];
-            // Every value's tag among the constructors', as a function of
-            // the value, held as a hole solved by it (as the table is).
-            let le_of <- runtime_held(ap(tag_le, [Hd(r.ty), first, rest_e] ++ parts), "`" ++ r.name ++ "`'s tags");
-            pure(Pair(ap(of_enum, [ap(head, parts)]), le_of))
+            pure(Pair(ap(of_enum, [ap(head, [pick, picks, of_tag, checked, kept, convoy, convoys])]), ap(rfl, [Blank, Blank])))
         },
     }
 }
@@ -2359,7 +2441,7 @@ fn runtime_rec_infos(q: RtQ, rfl: Expr, recs: List<RecShape>) → Tac<List<Pair<
     match recs {
         Nil => pure([]),
         Cons(r, rest) => match r.alts {
-          True => runtime_enum_info(rfl, r).bind(λ e => runtime_rec_infos(q, rfl, rest).bind(λ more => pure(Cons(Pair(e.fst, Some(e.snd)), more)))),
+          True => runtime_enum_info(q, rfl, r).bind(λ e => runtime_rec_infos(q, rfl, rest).bind(λ more => pure(Cons(Pair(e.fst, Some(e.snd)), more)))),
           False => {
             let info <- runtime_global(name_of(runtime_rec_info));
             let flats <- runtime_global(name_of(Ty::Flats));
@@ -2388,8 +2470,9 @@ fn runtime_rec_infos(q: RtQ, rfl: Expr, recs: List<RecShape>) → Tac<List<Pair<
 // The world's type table: none without reprs or records, else each repr's
 // `RecInfo::word_repr`, its round trips `refl` at each word and each value,
 // then each record's own (`runtime_rec_infos`).
-// Beside it, each enum's `EnumInfo::of_ctors_tag_le` as a function of its
-// value, by its entry (`None` for a repr or a record).
+// Beside it, for each enum the proof that its fields are defaults
+// (`refl`, an enum a parameter passes having no payload), by its entry
+// (`None` for a repr or a record).
 fn runtime_tys(word: Handle, q: RtQ, reprs: List<ReprEntry>, recs: List<RecShape>) → Tac<Pair<Expr, List<Option<Expr>>>> {
     match reprs.len() + recs.len() {
         Zero => runtime_global(name_of(RecInfo::none)).bind(λ e => pure(Pair(e, []))),
@@ -2585,7 +2668,7 @@ fn runtime_admitted(a: Admitting, les: List<Option<Expr>>, ps: List<Ty>, ys, ws:
             let piece: Tac<Expr> = match p {
                 Enum(i) => match les.nth(i).and_then(λ o => o) {
                     None => runtime_fail("an enum without its tags' bound"),
-                    Some(le_of) => pure(ap(a.word_admits, [a.tys, NatLit(i), y, ap(le_of, [y]), ap(a.rfl, [Blank, Blank])])),
+                    Some(_) => pure(ap(a.word_admits, [a.tys, NatLit(i), y, ap(a.rfl, [Blank, Blank])])),
                 },
                 _ => pure(a.trivial),
             };
@@ -2622,7 +2705,7 @@ fn runtime_at_enums(rfl, tys_e: Expr, les: List<Option<Expr>>, reprs: List<ReprE
                     let motive_rhs <- rhs(at(Local(z.ref)));
                     let eq_at <- runtime_global(name_of(runtime_eq_at));
                     let motive = ap(eq_at, [Blank, Blank, lhs, Lam(z.ref, motive_rhs)]);
-                    let next = ap(enum_agrees, [tys_e, NatLit(i), y, ap(le_of, [y]), ap(rfl, [Blank, Blank]), motive, evaluated]);
+                    let next = ap(enum_agrees, [tys_e, NatLit(i), y, le_of, ap(rfl, [Blank, Blank]), motive, evaluated]);
                     runtime_at_enums(rfl, tys_e, les, reprs, ps, own, ys, later, j + 1, lhs, rhs, next, under)
                 },
             },
@@ -2823,7 +2906,10 @@ fn runtime_shapes(reprs: List<ReprEntry>) → Nat → RecInfo {
 fn runtime_rec_table(recs: List<RecShape>) → Nat → RecInfo {
     match recs {
         Nil => RecInfo::none,
-        Cons(r, rest) => RecInfo::cons(match r.alts { True => RecInfo::of_enum(EnumInfo::shape(r.ctors.len() - 1)), False => RecInfo::shape(r.codes) },
+        Cons(r, rest) => RecInfo::cons(match r.alts {
+                True => RecInfo::of_enum(EnumInfo::shape(r.ctors.len() - 1, r.codes, EnumInfo::lo_of(r.arities), EnumInfo::arity_of(r.arities))),
+                False => RecInfo::shape(r.codes),
+            },
             runtime_rec_table(rest)),
     }
 }

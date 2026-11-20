@@ -940,9 +940,10 @@ theorem Ty::admits_complete(tys: Nat → RecInfo, t: Ty, x: BitVec(64)): t.Admit
 }
 
 // An enum's tag word is admitted (its tags in a word).
-theorem Ty::enum_word_admits(tys: Nat → RecInfo, i: Nat, v: tys(i).alts.E, le: tys(i).alts.tag(v) <= tys(i).alts.last,
+theorem Ty::enum_word_admits(tys: Nat → RecInfo, i: Nat, v: tys(i).alts.E,
     small: (tys(i).alts.last + 1).leb(Nat::pow(2, 64)) = True): Enum(i).admits(tys, RecInfo::enum_word(tys, i, v)).IsTrue() {
     let e = tys(i).alts;
+    let le = e.bounded(v);
     let lt: (e.tag(v) < Nat::pow(2, 64)) = Nat::le_trans(e.tag(v) + 1, e.last + 1, Nat::pow(2, 64), Nat::le_succ_succ(e.tag(v), e.last, le),
         Nat::le_of_leb(e.last + 1, Nat::pow(2, 64), small));
     let word: (BitVec::ofNat(e.tag(v), n := 64).toNat() = e.tag(v)) = BitVec::toNat_ofNat(64, e.tag(v), lt);

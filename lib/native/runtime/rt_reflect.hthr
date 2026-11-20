@@ -539,10 +539,6 @@ fn rt_arities_of(h: Handle) → Tac<List<Nat>> {
 // are built by `Inject`.
 fn rt_has_payload(arities: List<Nat>) → Bool { arities.any_bit(λ (n: Nat) => !n.same(0)) }
 
-// The slot constructor `j`'s first field is in: every earlier
-// constructor's fields come first (`EnumInfo.lo`).
-fn rt_slot_lo(arities: List<Nat>, j: Nat) → Nat { arities.take(j).foldl(λ acc n => acc + n, 0) }
-
 
 // Whether a type is a record: one constructor, with fields.
 fn rt_is_record(h: Handle) → Tac<Bool> {
@@ -1713,7 +1709,7 @@ fn rt_pick_arm(go: Known → RSt → Handle → Bool → Tac<Pair<RSt, Tm>>, k: 
     match m.arms.nth(j) {
         None => rt_refuse("a match without its arms"),
         Some(a) => open(a.body, "payload").bind(λ c => rt_accepted("a match arm", c)).bind(λ o => {
-            let k2 = k.with_payload(PayloadAt(o.local.ref.id, i, at, rt_slot_lo(arities, j), arities.nth(j).unwrap_or(0)));
+            let k2 = k.with_payload(PayloadAt(o.local.ref.id, i, at, EnumInfo::lo_of(arities, j), arities.nth(j).unwrap_or(0)));
             match m.args {
                 Nil => go(k2, st, o.body, False),
                 Cons(_, _) => open(o.body, "equation").bind(λ c2 => rt_accepted("a `match h:` arm", c2)).bind(λ o2 => go(k2, st, o2.body, False)),
