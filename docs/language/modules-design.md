@@ -346,8 +346,14 @@ work, not a naming rule.
 
 Minus (2026-11-20) liked one-import umbrellas for the proof side: `import
 tactics;` (every module of `lib/std/tactic`), `import words;` (every module
-of `lib/std/bitvec`), `import numbers;` (`nat`, `int`, `rat`). Each is a
-file of `export import m;` lines. A client replays each module of the
+of `lib/std/bitvec`), `import numbers;` (`nat`, `int`, `rat`). For writing
+a program, Minus chose (2026-11-20) one umbrella with everything a program
+and its proofs reach for, tactics included: `import program;` is `runtime`,
+`stored_words`, `words`, `numbers`, `tactics`, text (`char`, `string`,
+`utf8`, `decimal`) and the everyday data (`list`, `option`, `result`,
+`vector`, `assoc`, `nat_map`, `sorting`). The deeper proof material
+(machine and OS models, transition systems) stays an import or a path away.
+Each umbrella is a file of `export import m;` lines. A client replays each module of the
 umbrella's closure from its image, so its cost grows with that closure, not
 with what the client uses; warm, that is a few seconds for `tactics`, the
 largest.

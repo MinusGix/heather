@@ -1,0 +1,23 @@
+// A program written with one import (docs/language/modules-design.md §3.9):
+// runtime fns over words and spans, their runs, and proofs about them, with
+// no other import.
+import program;
+
+runtime fn List::fnv(self s: List<u8>, n, i, h: u64) → u64 decreases (n - i).toNat() {
+    if lt: i < n { s.fnv(n, i + 1, h.bxor(↑s.byte_within(n, i)) * 1099511628211) } else { h }
+}
+
+theorem fnv_runs(): List::fnv(b"hi", 2, 0, 14695981039346656037) = 628919584683901914 { refl }
+
+runtime fn tenth(x: u64) → u64 { x / 10 }
+
+theorem tenth_runs(): tenth(1234) = 123 { refl }
+
+runtime fn rotated(x: u32) → u32 { x.rotl(3) }
+
+theorem rotated_runs(): rotated(1) = 8 { refl }
+
+// Proofs reach for the tactics and the number systems bare.
+theorem sum_comm(a, b: Nat): a + b = b + a { omega }
+
+theorem int_sum(): OfNat(2) + OfNat(3) = OfNat(5) { refl }
