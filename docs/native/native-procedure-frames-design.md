@@ -694,6 +694,23 @@ the source's own terms.
   past the levels); a cycle `a → b → a` of two procedures takes its own
   alternation, three levels of each for six
   (`alternating_left`, `lib/_tests/native/native_compile_tests.hthr`).
+- **Many levels in periods.** Worked out a level at a time, the room
+  costs the compile's check a row per level: hundreds of levels took
+  seconds and a thousand ran the kernel out of fuel. Past a point the
+  heaviest chain only goes round its heaviest cycle, so from as many levels
+  as there are procedures the room is read in periods
+  (`Nat::periodic`): the value at `from + r` again, a fixed gain more each
+  period. `Source::period` picks, among periods up to the procedure count,
+  the one with the least gain a level, the heaviest cycle's (two levels for
+  `a → b → a`); `Source::gain` is the most any body or `main` gains over it.
+  `Charges::levels_periodic` (native_source) says that read so, the charges
+  still fit wherever the levels did, given only that bound, which
+  `Source::gain_bound` proves from the gain being a maximum. Any period is
+  sound; the least gain makes it exact (`uneven_left`: a cycle of 40 and
+  56 bytes a level at 296 bytes for six levels, 4,800,048 for 100,001).
+  The quotient and remainder are by long division (`Nat::ldiv`), since
+  `Nat::div` counts its quotient out one at a time; the cost no longer
+  depends on the number of levels asked for.
 - **What the source means within the levels.** `Source::within(args,
   counted, k)` is the source's runs that nest at most `k` of the calls
   `counted` names: `Source::calls_within` is `Source::calls` with a counted
@@ -719,7 +736,8 @@ the source's own terms.
   `Source::compile_ranked` (native_compile_correct) reads it back from
   `compile = Some(program)`, so the guarantee rests on nothing the writer
   supplies. `Source::compiled_levels` (native_compile_elf) puts the parts
-  together: for a source that compiles, under any homes and frames, every
+  together, the levels read in periods (`Source::charges_room`): for a
+  source that compiles, under any homes and frames, every
   run whose checked calls nest at most `src.levels` deep is a run of the
   compiled program, never refused. That is guarantee 1 in the writer's
   terms.

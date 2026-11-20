@@ -185,9 +185,13 @@ theorem collisions(n, OfNat, Cons, Nil: Nat, Not: Nat, h: 0 < n):
     let irrelevant = "import nat; import omega;
         theorem bad(n: Nat, h: n = n): 0 < n { let irrelevant = h; omega }";
     support::assert_refused(&mut e, "omega_irrelevant", irrelevant, Refusal::Says("`omega` got stuck"));
-    let hidden = "fn hidden(x: int::Int) → int::Int { x }";
+    // `omega` imports `int`, so `int` is in this module's closure: visible
+    // qualified (docs/language/modules-design.md §3.6), never bare.
+    let hidden = "fn hidden(x: Int) → Int { x }";
     let error = e.elab_module_source("omega_aliases", hidden).unwrap_err();
-    assert!(error.render(hidden).contains("neither an imported module"));
+    assert!(error.render(hidden).contains("Int"), "{}", error.render(hidden));
+    let qualified = "import omega; fn reached(x: int::Int) → int::Int { x }";
+    e.elab_module_source("omega_aliases_qualified", qualified).expect("`int` is in the closure");
 }
 
 #[test]

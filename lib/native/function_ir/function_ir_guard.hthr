@@ -32,7 +32,7 @@ record Guard { bound: Nat, nodes: List<Node>, condition: Nat }
 fn Function::guarded(self function: Function, plan: Guard) → Function {
     Function(function.parameters, Compose(Dataflow(Region(Ports([]), plan.nodes, Ports([]))),
         Conditional(Ports([]), plan.condition, Ports([]), Ports([Port(function.result, 64)]), function.body, function.body)),
-        function.result, function.lent)
+        function.result, lent := function.lent, also := function.also)
 }
 
 // The nodes require nothing and store nothing, each can be evaluated after

@@ -2230,19 +2230,19 @@ theorem replay_region_sound(table: List<Rule>, effects: Effects(), region: Struc
 
 fn replay_function(table: List<Rule>, function: Function, plan: Plan) → Option<Function> {
     replay_region(table, function.body, Facts::none(), plan).and_then(λ r =>
-        Some(Function(function.parameters, r.region, function.result, function.lent)))
+        Some(Function(function.parameters, r.region, function.result, lent := function.lent, also := function.also)))
 }
 
 theorem replay_function_sound(table: List<Rule>, function: Function, plan: Plan, replayed: Function,
     made: replay_function(table, function, plan) = Some(replayed), effects: Effects(), arguments: List<BitVec(64)>, result: BitVec(64),
     before, after: Buffers(), ran: function.Runs(effects, arguments, result, before, after)):
     replayed.Runs(effects, arguments, result, before, after) {
-    let got = Option::and_then_some(replay_region(table, function.body, Facts::none(), plan), λ (r: Regioned) => Some(Function(function.parameters, r.region, function.result, function.lent)), replayed, made);
+    let got = Option::and_then_some(replay_region(table, function.body, Facts::none(), plan), λ (r: Regioned) => Some(Function(function.parameters, r.region, function.result, lent := function.lent, also := function.also)), replayed, made);
     let r = got.witness;
     let values = ran.witness;
     let ok = replay_region_sound(table, effects, function.body, Facts::none(), plan, r, got.proof.left, values, before, after,
         Facts::none_hold(values), trivial, ran.proof.right.left);
-    j(Option::some_inj(Function(function.parameters, r.region, function.result, function.lent), replayed, got.proof.right),
+    j(Option::some_inj(Function(function.parameters, r.region, function.result, lent := function.lent, also := function.also), replayed, got.proof.right),
         λ g _ => g.Runs(effects, arguments, result, before, after), Exists(values, ⟨ran.proof.left, ⟨ok.left, ran.proof.right.right⟩⟩))
 }
 

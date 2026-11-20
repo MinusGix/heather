@@ -3,7 +3,7 @@
 // back to it over a word measure (issues/decreases-word-measures-by-hand.md).
 // Tests, not library: nothing outside lib/_tests imports this module
 // (docs/test-value-audit.md §4.5).
-import logic; import bool; import nat; import int; import omega; import bitvec; import bitvec_nat; import bitvec_omega; import bitvec_shift_nat; import list;
+import logic; import bool; import nat; import int; import omega; import bitvec; import bitvec_nat; import bitvec_omega; import bitvec_shift_nat; import list; import loop;
 
 // ---- The test, read from the context as it is written ----
 
@@ -446,3 +446,24 @@ theorem kept_whole_open(n: Nat, a, b, c: BitVec(n), room: (a + (b >> 1)).toNat()
 // borrow when nothing orders `lo` and `hi`.
 // expect-error: may borrow
 theorem kept_whole_unbounded(lo, hi: u64): (lo + ((hi - lo) >> 1)).toNat() < ((lo + ((hi - lo) >> 1)) + 1).toNat() { bv_omega }
+
+// ---- Goals read through a value built in place ----
+
+// A step that hands on a record it built: its invariant is a defined
+// proposition over a match on the constructor, and its fields are
+// projections of the record, not calls. `bv_omega` unfolds the proposition
+// and reads each field as the word the record was built with, in a goal of
+// its own and as each conjunct of an anonymous pair
+// (lib/_tests/std/core/loop_tests.hthr's `Range::search_keeps`).
+record Span { lo: u64, hi: u64 }
+inductive Step { Next(s: Span), Stop(r: u64) }
+fn Step::Holds(self p: Step) → Type { match p { Next(s) => s.lo <= s.hi, Stop(r) => r <= 10 } }
+fn Step::Both(self p: Step) → Type { match p { Next(s) => And<s.lo <= s.hi, s.hi <= 20>, Stop(r) => r <= 10 } }
+
+theorem built_field(x: u64, h: x < 10): Step::Holds(Next(Span(lo := x + 1, hi := 10))) { bv_omega }
+theorem built_field_pair(x: u64, h: x < 10): Step::Both(Next(Span(lo := x + 1, hi := 10))) { ⟨bv_omega, bv_omega⟩ }
+// An open bound, from facts in scope.
+theorem built_field_open(w, x: u64, h: x < w, k: w <= 20): Step::Both(Next(Span(lo := x + 1, hi := w))) { ⟨bv_omega, bv_omega⟩ }
+// Control: `x + 2` may pass 10, so the field is refused.
+// expect-error: got stuck
+theorem built_field_past(x: u64, h: x < 10): Step::Holds(Next(Span(lo := x + 2, hi := 10))) { bv_omega }

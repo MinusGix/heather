@@ -58,4 +58,4 @@ theorem calling_closed(): program_closed(calling(), λ (f: Nat) => f.among([2, 1
 theorem calling_kept(): prune(calling(), λ (f: Nat) => f.among([2, 1, 0])) = calling() { refl }
 
 // An emptied function keeps its parameters and its count of lent buffers.
-theorem emptied_shape(): Function([0, 1], Call(0, [0, 1], 2), 2, 1).emptied() = Function([0, 1], nodes([Const(64, 2, 0)]), 2, 1) { refl }
+theorem emptied_shape(): Function([0, 1], Call(0, [0, 1], 2), 2, lent := 1).emptied() = Function([0, 1], nodes([Const(64, 2, 0)]), 2, lent := 1) { refl }

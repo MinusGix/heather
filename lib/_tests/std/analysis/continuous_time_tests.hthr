@@ -5,7 +5,7 @@
 // outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
 import logic; import nat; import int; import list; import relation; import relation_props; import order; import algebra_rel;
 import semiring; import ordered_field; import field_division; import big_operator; import ring; import omega; import linarith;
-import rat; import real_fn; import sequence;
+import rat; import real_fn; import sequence; import loop;
 
 // ---------------------------------------------------------------------------
 // 1. A deterministic `dt` program: `t' = 1`, `x' = 2t`.

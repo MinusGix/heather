@@ -128,6 +128,35 @@ theorem compiled_computes<M>(functions: List<Function>, placement: List<Place>, 
         compiler_correct<M>(functions, placement, rooms, code, lowered, evaluable, machine, f, defined, arguments, arity, meets))
 }
 
+// What a certificate states of a program whose last function returns two
+// words, wherever the code is loaded and whatever follows it: called at
+// the last function's label with its arguments in their registers and its
+// room on the stack, it returns `answer` in RAX and `rest` in RDX, keeps
+// the callee-saved registers, and leaves memory as it was but for stores
+// into its own room (`Stack::CalleePost`). The System V return of a
+// structure of two integer words (docs/native/runtime-fn-setups-design.md
+// §16.16).
+fn Prog::ComputesBoth<M>(self code: Prog, machine: Machine<M>, f, room: Nat, arguments: List<BitVec(64)>, answer: BitVec(64),
+    rest: List<BitVec(64)>) → Type {
+    (origin: BitVec(64)) → (last: List<BitVec(8)>) →
+        Site<M>(machine.fetch, machine.data, code, last, origin).Returns(machine.stack, asm_labels(code, f + 1),
+            λ (i: Nat) (s: MachineState<M>) => machine.stack.Passed(arguments, i, s) ∧ room <= i,
+            λ (i: Nat) (s: MachineState<M>) (t: MachineState<M>) => machine.stack.CalleePost(answer)(i, s, t) ∧ ArgsIn(rest, [Rdx], t.gprs))
+}
+
+// What a certificate cites: `compiled_returns_both` at every load, the
+// program's two evaluations given as its generator states them
+// (`f::agrees`, `f::agrees_also`).
+theorem compiled_computes_both<M>(last: Function, earlier: List<Function>, placement: List<Place>, rooms: Nat → Nat, code: Prog,
+    lowered: lower_program_roomed(Cons(last, earlier), placement, [], rooms) = Some(code),
+    evaluable: program_evaluable(Cons(last, earlier)).IsTrue(), quiet: program_quiet(Cons(last, earlier)).IsTrue(),
+    machine: Machine<M>, arguments: List<BitVec(64)>, count: last.parameters.len() = arguments.len(), answer: BitVec(64), rest: List<BitVec(64)>,
+    evaluates: last.eval(program_eval(earlier), arguments) = answer, evaluates_rest: program_eval_also(Cons(last, earlier), arguments) = rest):
+    code.ComputesBoth(machine, earlier.len(), rooms(earlier.len()), arguments, answer, rest) {
+    λ origin bytes => compiled_returns_both<M>(last, earlier, placement, rooms, code, lowered, evaluable, quiet, machine.fetch, machine.data, bytes, origin,
+        machine.stack, arguments, count, answer, rest, evaluates, evaluates_rest)
+}
+
 // ---------------------------------------------------------------------------
 // A function at every argument list (issues/compiled-function-implements.md)
 

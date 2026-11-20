@@ -481,6 +481,12 @@ impl<T> Region<T> {
     fn len(&self) -> usize {
         self.0.get().map_or(0, Arena::len)
     }
+
+    /// The bytes its values take: a walk of its chunks, so a handful of
+    /// reads, not one per value.
+    fn bytes(&self) -> usize {
+        self.0.get().map_or(0, |a| a.len() * std::mem::size_of::<T>())
+    }
 }
 
 /// Aggregate, observational counters for value-machine regions.
@@ -1066,6 +1072,22 @@ impl<'v> ValueArena<'v> {
     }
 
     /// A value, born in this region.
+    /// The bytes the arena's regions hold: what one query's values have
+    /// taken so far ([`Eval`](crate::eval::Eval) bounds it,
+    /// [`crate::eval::ARENA_BYTES_LIMIT`]). The side tables are left out:
+    /// they hold a word or two per value the regions hold.
+    pub fn bytes(&self) -> usize {
+        self.envs.bytes()
+            + self.vals.bytes()
+            + self.vtys.bytes()
+            + self.neutrals.bytes()
+            + self.elim_cells.bytes()
+            + self.elims.bytes()
+            + self.terms.bytes()
+            + self.types.bytes()
+            + self.bit_tys.bytes()
+    }
+
     pub fn val(&'v self, value: Val<'v>) -> &'v Val<'v> {
         self.vals.alloc(value)
     }

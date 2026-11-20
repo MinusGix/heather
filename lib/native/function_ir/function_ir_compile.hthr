@@ -635,3 +635,66 @@ theorem emit_functions_next(last: Function, earlier: List<Function>, placement: 
 fn Place::number(self place: Place) → Nat {
     match place { Into(register) => register.index(), Folded => 16, Saving(count) => 17 + count, CallSlots(count) => 24 + count, Spilling(mask) => 33 + mask, Short(name) => 289 + name }
 }
+
+// ---------------------------------------------------------------------------
+// Two words back (docs/native/runtime-fn-setups-design.md §16.16)
+
+// The evaluator's run of a function that stores nothing, over no buffers,
+// with its words past the first from the same run.
+theorem Function::eval_runs_both(self function: Function, earlier: List<Function>, ok: function.evaluable(program_arity(earlier)).IsTrue(),
+    below: program_evaluable(earlier).IsTrue(), quiet: function.body.quiet().IsTrue(), reads: program_quiet(earlier).IsTrue(),
+    arguments: List<BitVec(64)>, count: function.parameters.len() = arguments.len()):
+    function.RunsBoth(program_effects(earlier), arguments, function.eval(program_eval_over(Nil, earlier), arguments),
+        function.eval_also(program_eval_over(Nil, earlier), arguments), Nil, Nil) {
+    let call = program_eval_over(Nil, earlier);
+    let parts = Bool::is_true_and(function.body.evaluable(program_arity(earlier)),
+        distinct(function.parameters) && disjoint(function.body.writes(), function.parameters), ok);
+    let params = Bool::is_true_and(distinct(function.parameters), disjoint(function.body.writes(), function.parameters), parts.right);
+    let bound = Valuation::bind(Valuation::zero(), function.parameters, arguments);
+    let after = function.body.eval(call, bound, buffers := Nil);
+    let read: (words_of(after, function.parameters) = arguments) = trans(
+        words_agree(function.parameters, bound, after, λ id m =>
+            function.body.eval_frame(call, Nil, bound, 64, id, disjoint_mem(function.body.writes(), function.parameters, params.right, id, m))),
+        words_of_bind(Valuation::zero(), function.parameters, params.left, arguments, count));
+    let holds = function.body.eval_holds_in(program_callees_over(Nil, earlier), call, program_arity(earlier), Nil,
+        program_eval_reads(earlier, Nil, below), parts.left, bound, after, λ w id _ => refl);
+    let keeping = function.body.runs_quiet(λ (held: Buffers()) => program_callees_over(held, earlier), Nil, quiet, after, holds);
+    Exists(after, ⟨read, ⟨function.body.runs_weaken(Effects::keeping(λ (held: Buffers()) => program_callees_over(held, earlier)), program_effects(earlier),
+        λ before g words word a kept => j(sym(kept.right), λ x _ => program_effects(earlier)(before, g, words, word, x),
+            program_effects_quiet(earlier, reads, before, g, words, word, kept.left)),
+        after, Nil, Nil, keeping), ⟨refl, refl⟩⟩⟩)
+}
+
+// A program that stores nothing, its last function returning two words:
+// the code returns the first in RAX and the rest in RDX, at its arguments,
+// with the stack its row of `rooms` says. What a caller outside the
+// program reads of a function that returns a record of two words.
+theorem compiled_returns_both<M>(last: Function, earlier: List<Function>, placement: List<Place>, rooms: Nat → Nat, program: Prog,
+    lowered: lower_program_roomed(Cons(last, earlier), placement, [], rooms) = Some(program),
+    evaluable: program_evaluable(Cons(last, earlier)).IsTrue(), quiet: program_quiet(Cons(last, earlier)).IsTrue(),
+    fetch: FetchAccess<M>, data: ByteReadAccess<M>, bytes: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data),
+    arguments: List<BitVec(64)>, count: last.parameters.len() = arguments.len(), answer: BitVec(64), rest: List<BitVec(64)>,
+    evaluates: last.eval(program_eval(earlier), arguments) = answer, evaluates_rest: last.eval_also(program_eval(earlier), arguments) = rest):
+    Site<M>(fetch, data, program, bytes, origin).Returns(stack, asm_labels(program, earlier.len() + 1),
+        λ (i: Nat) (s: MachineState<M>) => stack.Passed(arguments, i, s) ∧ rooms(earlier.len()) <= i,
+        λ (i: Nat) (s: MachineState<M>) (t: MachineState<M>) => stack.CalleePost(answer)(i, s, t) ∧ ArgsIn(rest, [Rdx], t.gprs)) {
+    let functions = Cons(last, earlier);
+    let lending = Lending::none();
+    let parts = Bool::is_true_and(last.evaluable(program_arity(earlier)), program_evaluable(earlier), evaluable);
+    let quiets = Bool::is_true_and(last.body.quiet(), program_quiet(earlier), quiet);
+    let both = lower_program_roomed(functions, placement, lending.counts, rooms).all_some(
+        λ (p: Prog) => ProgramLastBoth<M>(fetch, data, bytes, origin, stack, stack.size, rooms, lending, last, earlier, p), program, lowered,
+        lower_program_last_both<M>(fetch, data, bytes, origin, stack, stack.size, rooms, lending, last, earlier, placement,
+            program_quiet_lendless(functions, quiet), λ b stores => false_elim(program_quiet_stores(functions, b, quiet, stores))));
+    let ran = j(evaluates_rest, λ r _ => last.RunsBoth(program_effects(earlier), arguments, answer, r, Nil, Nil),
+        j(evaluates, λ x _ => last.RunsBoth(program_effects(earlier), arguments, x, last.eval_also(program_eval(earlier), arguments), Nil, Nil),
+            last.eval_runs_both(earlier, parts.left, parts.right, quiets.left, quiets.right, arguments, count)));
+    let returns = both(lending, refl, stack.loan_nothing(), λ b no => false_elim(no), arguments, answer, rest, Nil, Nil);
+    λ s at resident i rsp room held ret saved => {
+        let r = returns(s, at, resident, i, rsp, room, ⟨⟨held.left, ⟨ran, held.right⟩⟩, ⟨trivial, ⟨room, stack.in_memory_none(s.memory)⟩⟩⟩, ret, saved);
+        let post = r.proof.right.right.right.right;
+        Exists(r.witness, ⟨r.proof.left, ⟨r.proof.right.left, ⟨r.proof.right.right.left, ⟨r.proof.right.right.right.left,
+            ⟨⟨post.left.left, ⟨post.left.right.left,
+                stack.wrote_in_none(i, lending.spans(), λ b => refl, s.memory, r.witness.memory, post.left.right.right.left)⟩⟩, post.right⟩⟩⟩⟩⟩)
+    }
+}

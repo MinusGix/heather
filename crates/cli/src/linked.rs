@@ -62,6 +62,9 @@ pub struct Signature {
     /// Bytes of stack below the return address the `_returns` theorem asks
     /// for.
     pub stack: u64,
+    /// How many words it returns: one in RAX, or two in RAX and RDX (a
+    /// record of two words, docs/native/runtime-fn-setups-design.md §16.16).
+    pub results: usize,
 }
 
 /// The lines of an assembly file that state `signature`, as `compile-x86`
@@ -69,7 +72,8 @@ pub struct Signature {
 /// file exports, the stack's after the signature's.
 pub fn header(symbol: &str, signature: &Signature) -> String {
     let kinds: Vec<&str> = signature.kinds.iter().map(|kind| kind.name()).collect();
-    format!("# signature: {symbol}({}) -> word\n# stack: {} bytes below the return address\n", kinds.join(", "), signature.stack)
+    let results = vec!["word"; signature.results.max(1)].join(", ");
+    format!("# signature: {symbol}({}) -> {results}\n# stack: {} bytes below the return address\n", kinds.join(", "), signature.stack)
 }
 
 impl Signature {
@@ -80,14 +84,15 @@ impl Signature {
         let mut lines = assembly.lines().skip_while(|line| line.strip_prefix("# signature: ")
             .and_then(|rest| rest.strip_prefix(symbol)).is_none_or(|rest| !rest.starts_with('(')));
         let line = lines.next().and_then(|line| line.strip_prefix("# signature: ")).ok_or_else(|| missing("signature of its own"))?;
-        let kinds = line.strip_prefix(symbol).and_then(|rest| rest.strip_prefix('('))
-            .and_then(|rest| rest.strip_suffix(") -> word")).ok_or_else(|| missing("signature of its own"))?;
+        let (kinds, results) = line.strip_prefix(symbol).and_then(|rest| rest.strip_prefix('('))
+            .and_then(|rest| rest.strip_suffix(") -> word, word").map(|kinds| (kinds, 2)).or_else(|| rest.strip_suffix(") -> word").map(|kinds| (kinds, 1))))
+            .ok_or_else(|| missing("signature of its own"))?;
         let kinds = kinds.split(',').map(str::trim).filter(|kind| !kind.is_empty())
             .map(|kind| Kind::named(kind).ok_or_else(|| format!("`{symbol}`'s signature: `{kind}` is no kind of argument")))
             .collect::<Result<Vec<_>, _>>()?;
         let stack = lines.next().and_then(|line| line.strip_prefix("# stack: "))
             .and_then(|rest| rest.split(' ').next()).and_then(|bytes| bytes.parse().ok()).ok_or_else(|| missing("stack"))?;
-        Ok(Signature { kinds, stack })
+        Ok(Signature { kinds, stack, results })
     }
 }
 
@@ -648,22 +653,22 @@ mod tests {
     }
 
     fn stated(symbol: &str, kinds: &[Kind], stack: u64) -> String {
-        format!("# a first line\n{}.text\n", header(symbol, &Signature { kinds: kinds.to_vec(), stack }))
+        format!("# a first line\n{}.text\n", header(symbol, &Signature { kinds: kinds.to_vec(), stack, results: 1 }))
     }
 
     // A file that exports several symbols states each one's signature, and
     // each is read as its own: by its whole name, with its own stack.
     #[test]
     fn each_symbol_of_a_file_reads_its_own() {
-        let (root, entry, other) = (Signature { kinds: vec![Kind::Span, Kind::Word], stack: 360 }, Signature { kinds: vec![Kind::Word, Kind::Word], stack: 144 },
-            Signature { kinds: vec![Kind::Word], stack: 72 });
+        let (root, entry, other) = (Signature { kinds: vec![Kind::Span, Kind::Word], stack: 360, results: 1 }, Signature { kinds: vec![Kind::Word, Kind::Word], stack: 144, results: 1 },
+            Signature { kinds: vec![Kind::Word], stack: 72, results: 1 });
         let text = format!("# a first line\n{}{}{}.text\n", header("scan", &root), header("scan_step", &entry), header("step", &other));
         assert_eq!(Signature::read(&text, "scan"), Ok(root));
         assert_eq!(Signature::read(&text, "scan_step"), Ok(entry));
         assert_eq!(Signature::read(&text, "step"), Ok(other));
         assert!(Signature::read(&text, "scan_").unwrap_err().contains("states no signature of its own"));
         // A signature with no stack line after it is not this compiler's.
-        let cut = format!("# signature: f(word) -> word\n{}", header("g", &Signature { kinds: vec![], stack: 72 }));
+        let cut = format!("# signature: f(word) -> word\n{}", header("g", &Signature { kinds: vec![], stack: 72, results: 1 }));
         assert!(Signature::read(&cut, "f").unwrap_err().contains("states no stack"));
     }
 
@@ -673,8 +678,8 @@ mod tests {
     fn an_entry_is_declared_from_its_program() {
         let manifest = "m.hthr\tstep\tstate, byte\tscan\nn.hthr\tscan\ttext: span, at\n";
         let assembly = |function: &str| match function {
-            "scan" => Ok(format!("{}{}.text\n", header("scan", &Signature { kinds: vec![Kind::Span, Kind::Word], stack: 216 }),
-                header("step", &Signature { kinds: vec![Kind::Word, Kind::Word], stack: 72 }))),
+            "scan" => Ok(format!("{}{}.text\n", header("scan", &Signature { kinds: vec![Kind::Span, Kind::Word], stack: 216, results: 1 }),
+                header("step", &Signature { kinds: vec![Kind::Word, Kind::Word], stack: 72, results: 1 }))),
             other => Err(format!("{other}.s was read")),
         };
         let text = exports_rs(manifest, &assembly).unwrap();
@@ -697,7 +702,7 @@ mod tests {
     #[test]
     fn a_header_reads_back() {
         for kinds in [&[][..], &[Kind::Word], &[Kind::Span, Kind::Word], &[Kind::Word, Kind::Span, Kind::Span], &[Kind::SpanMut, Kind::Span, Kind::Word]] {
-            let signature = Signature { kinds: kinds.to_vec(), stack: 216 };
+            let signature = Signature { kinds: kinds.to_vec(), stack: 216, results: 1 };
             assert_eq!(Signature::read(&stated("f", kinds, 216), "f"), Ok(signature));
         }
         // Another function's file, or one from before the header, is refused.

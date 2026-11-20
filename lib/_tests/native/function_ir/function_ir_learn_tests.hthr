@@ -86,7 +86,7 @@ fn pair_sum() → Function {
                             Compose(nodes([BufferLoad(9, 0, 7)]), nodes([Add(64, 13, 6, 9)])),
                             nodes([Const(64, 13, 0)])))),
                     nodes([Const(64, 13, 0)]))),
-            nodes([Const(64, 13, 0)]))), 13, 1)
+            nodes([Const(64, 13, 0)]))), 13, lent := 1)
 }
 
 // Nothing is decided as the function stands: the length is any word.
@@ -126,7 +126,7 @@ theorem pair_made(): replay_function(rules(), pair_sum().guarded(pair_guard()), 
                     Compose(nodes([UnsignedLessThan(64, 5, 2, 1), Const(1, 5, 1)]),
                         Compose(nodes([BufferLoad(6, 0, 2)]), Compose(nodes([Add(64, 7, 2, 3), UnsignedLessThan(64, 8, 7, 1), Const(1, 8, 1)]),
                             Compose(nodes([BufferLoad(9, 0, 7)]), nodes([Add(64, 13, 6, 9)]))))),
-                    nodes([Const(64, 13, 0)]))))), 13, 1)) { refl }
+                    nodes([Const(64, 13, 0)]))))), 13, lent := 1)) { refl }
 
 // A length compared with nothing the function indexes by asks for no test.
 fn no_index() → Function {
@@ -151,7 +151,7 @@ fn first16() → Function {
                             Compose(nodes([BufferLoad(18, 0, 12)]), nodes([Add(64, 16, 13, 18), Const(64, 19, 1), Add(64, 17, 12, 19)])),
                             nodes([Move(64, 16, 13), Move(64, 17, 12)]))),
                     nodes([Move(64, 16, 13), Move(64, 17, 12)]))),
-            20, [10, 11, 17, 16], [4, 5, 6, 7], 8)), 7, 1)
+            20, [10, 11, 17, 16], [4, 5, 6, 7], 8)), 7, lent := 1)
 }
 
 fn first_guard() → Guard { Guard(23, [Const(64, 23, 16), UnsignedLessThan(64, 24, 1, 23)], 24) }
@@ -174,7 +174,7 @@ fn first_loop() → StructuredRegion {
 theorem first_made(): replay_function(rules(), first16().guarded(first_guard()), first16().guarded(first_guard()).learn_plan()) =
     Some(Function([0, 1], Compose(nodes([Const(64, 23, 16), UnsignedLessThan(64, 24, 1, 23)]),
         Conditional(Ports([]), 24, Ports([]), Ports([Port(7, 64)]), first16().body,
-            Compose(nodes([Const(64, 2, 0), Const(64, 3, 0), Const(64, 9, 16)]), first_loop()))), 7, 1)) { refl }
+            Compose(nodes([Const(64, 2, 0), Const(64, 3, 0), Const(64, 9, 16)]), first_loop()))), 7, lent := 1)) { refl }
 
 // A loop whose passes change that word keeps no range of it: the same
 // body's test is not decided where the next length is the sum.
@@ -188,7 +188,7 @@ fn drifting() → Function {
                             Compose(nodes([BufferLoad(18, 0, 12)]), nodes([Add(64, 16, 13, 18), Const(64, 19, 1), Add(64, 17, 12, 19)])),
                             nodes([Move(64, 16, 13), Move(64, 17, 12)]))),
                     nodes([Move(64, 16, 13), Move(64, 17, 12)]))),
-            20, [10, 16, 17, 16], [4, 5, 6, 7], 8)), 7, 1)
+            20, [10, 16, 17, 16], [4, 5, 6, 7], 8)), 7, lent := 1)
 }
 
 theorem drifting_undecided(): drifting().guarded(first_guard()).learn_plan().decided() = 0 { refl }
@@ -267,7 +267,7 @@ fn word16() → Function {
                         nodes([BufferLoad(11, 0, 9), Resize(64, 8, 12, 11), Resize(8, 64, 13, 12), BitOr(64, 14, 7, 13), Resize(64, 16, 15, 14),
                             Resize(16, 64, 20, 15)]),
                         nodes([Const(64, 20, 0)])))),
-            nodes([Const(64, 20, 0)]))), 20, 1)
+            nodes([Const(64, 20, 0)]))), 20, lent := 1)
 }
 
 fn word16_moved() → Function {
@@ -279,7 +279,7 @@ fn word16_moved() → Function {
                         nodes([BufferLoad(11, 0, 9), Resize(64, 8, 12, 11), Move(64, 13, 11), BitOr(64, 14, 7, 13), Resize(64, 16, 15, 14),
                             Move(64, 20, 14)]),
                         nodes([Const(64, 20, 0)])))),
-            nodes([Const(64, 20, 0)]))), 20, 1)
+            nodes([Const(64, 20, 0)]))), 20, lent := 1)
 }
 
 theorem word16_written(): word16().learn_plan().written() = 6 { refl }
@@ -289,7 +289,7 @@ theorem word16_made(): replay_function(rules(), word16(), word16().learn_plan())
 // so does a narrowing of the function's own parameter.
 fn sum8() → Function {
     Function([0, 1, 2], nodes([BufferLoad(3, 0, 2), BufferLoad(4, 0, 2), Add(64, 5, 3, 4), Resize(64, 8, 6, 5), Resize(8, 64, 7, 6),
-        Resize(64, 8, 8, 2), Resize(8, 64, 9, 8), Add(64, 10, 7, 9)]), 10, 1)
+        Resize(64, 8, 8, 2), Resize(8, 64, 9, 8), Add(64, 10, 7, 9)]), 10, lent := 1)
 }
 
 theorem sum8_kept(): sum8().learn_plan().written() = 0 { refl }
@@ -300,9 +300,9 @@ theorem sum8_kept(): sum8().learn_plan().written() = 0 { refl }
 // `add_zero` is stated in function_ir_rules and listed in `matchable()`;
 // nothing in the search names it. A word and zero added is a move of the
 // word, and one added to a byte still an add.
-fn plus_zero() → Function { Function([0, 1, 2], nodes([Const(64, 3, 0), Add(64, 4, 2, 3), Const(64, 5, 1), Add(64, 6, 4, 5)]), 6, 1) }
+fn plus_zero() → Function { Function([0, 1, 2], nodes([Const(64, 3, 0), Add(64, 4, 2, 3), Const(64, 5, 1), Add(64, 6, 4, 5)]), 6, lent := 1) }
 
-fn plus_zero_moved() → Function { Function([0, 1, 2], nodes([Const(64, 3, 0), Move(64, 4, 2), Const(64, 5, 1), Add(64, 6, 4, 5)]), 6, 1) }
+fn plus_zero_moved() → Function { Function([0, 1, 2], nodes([Const(64, 3, 0), Move(64, 4, 2), Const(64, 5, 1), Add(64, 6, 4, 5)]), 6, lent := 1) }
 
 theorem plus_zero_made(): replay_function(rules(), plus_zero(), plus_zero().learn_plan()) = Some(plus_zero_moved()) { refl }
 
@@ -318,7 +318,7 @@ fn word_pair() → Function {
             Compose(nodes([BufferLoad(7, 0, 5)]), Compose(nodes([Const(64, 8, 1), Add(64, 9, 5, 8), UnsignedLessThan(64, 10, 9, 1)]),
                 Conditional(Ports([]), 10, Ports([]), Ports([Port(12, 64)]), Compose(nodes([BufferLoad(11, 0, 9)]), nodes([Add(64, 12, 7, 11)])),
                     nodes([Const(64, 12, 0)])))),
-            nodes([Const(64, 12, 0)]))), 12, 1)
+            nodes([Const(64, 12, 0)]))), 12, lent := 1)
 }
 
 // The test: the index computed again at new ids (13, 14), two added to it
@@ -347,14 +347,14 @@ theorem word_decided(): word_linked().learn_plan().decided().same(2) = True { re
 
 // One byte at an index is no span: its own test is the test.
 theorem one_byte(): Function([0, 1, 2, 3], Compose(nodes([ShiftLeft(64, 4, 3, 2), Add(64, 5, 2, 4), UnsignedLessThan(64, 6, 5, 1)]),
-    Conditional(Ports([]), 6, Ports([]), Ports([Port(7, 64)]), nodes([BufferLoad(7, 0, 5)]), nodes([Const(64, 7, 0)]))), 7, 1).guard() = None { refl }
+    Conditional(Ports([]), 6, Ports([]), Ports([Port(7, 64)]), nodes([BufferLoad(7, 0, 5)]), nodes([Const(64, 7, 0)]))), 7, lent := 1).guard() = None { refl }
 
 // A bit taken orders its operands with no test at the entry: in the arm
 // where i is below the length, i is below the length.
 theorem asked_twice(): Function([0, 1, 2], Compose(nodes([UnsignedLessThan(64, 3, 2, 1)]),
     Conditional(Ports([]), 3, Ports([]), Ports([Port(5, 64)]),
         Compose(nodes([UnsignedLessThan(64, 4, 2, 1)]), Conditional(Ports([]), 4, Ports([]), Ports([Port(5, 64)]), nodes([BufferLoad(5, 0, 2)]), nodes([Const(64, 5, 0)]))),
-        nodes([Const(64, 5, 0)]))), 5, 1).learn_plan().decided() = 1 { refl }
+        nodes([Const(64, 5, 0)]))), 5, lent := 1).learn_plan().decided() = 1 { refl }
 
 // ---------------------------------------------------------------------------
 // A test of several bounds is decided where each bound is
@@ -369,7 +369,7 @@ fn scaled(top: Nat) → Function {
             Compose(nodes([ShiftLeft(64, 5, 2, 2), Const(64, 6, 4), Add(64, 7, 5, 6), UnsignedLessThan(64, 8, 7, 5), Const(64, 9, 32),
                     UnsignedLessThan(64, 10, 9, 7), BitOr(1, 11, 8, 10)]),
                 Conditional(Ports([]), 11, Ports([]), Ports([Port(13, 64)]), nodes([Const(64, 13, 0)]), nodes([Move(64, 13, 7)]))),
-            nodes([Const(64, 13, 0)]))), 13, 1)
+            nodes([Const(64, 13, 0)]))), 13, lent := 1)
 }
 
 // Where i is below 8, j is at most 28, so the sum has room: it is j and 4
@@ -382,7 +382,7 @@ theorem scaled_made(): replay_function(rules(), scaled(8), scaled(8).learn_plan(
             Compose(nodes([ShiftLeft(64, 5, 2, 2), Const(64, 6, 4), Add(64, 7, 5, 6), UnsignedLessThan(64, 8, 7, 5), Const(64, 9, 32),
                     UnsignedLessThan(64, 10, 9, 7), BitOr(1, 11, 8, 10)]),
                 nodes([Move(64, 13, 7)])),
-            nodes([Const(64, 13, 0)]))), 13, 1)) { refl }
+            nodes([Const(64, 13, 0)]))), 13, lent := 1)) { refl }
 
 // Where i may be 8, t may be 36: the sum still has room, the second bound
 // is not decided, and an or with one bit unknown is not. The replayer
@@ -398,7 +398,7 @@ fn downward(top: Nat) → Function {
         Conditional(Ports([]), 4, Ports([]), Ports([Port(13, 64)]),
             Compose(nodes([Const(64, 5, 6), Sub(64, 6, 5, 2), Const(64, 7, 8), UnsignedLessThan(64, 8, 6, 7)]),
                 Conditional(Ports([]), 8, Ports([]), Ports([Port(13, 64)]), nodes([Move(64, 13, 6)]), nodes([Const(64, 13, 0)]))),
-            nodes([Const(64, 13, 0)]))), 13, 1)
+            nodes([Const(64, 13, 0)]))), 13, lent := 1)
 }
 
 theorem downward_decided(): downward(7).learn_plan().decided() = 1 { refl }

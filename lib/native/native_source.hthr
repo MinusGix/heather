@@ -1441,3 +1441,190 @@ theorem Source::levels_refines(self src: Source, args: List<List<BitVec(8)>>, ch
     λ tr c => Converges(c.n, IsTrace::of_below(Events::linux(), src.within_tree(args, counted, k, c.n), src.bounded_tree(args, ch, left, c.n), tr,
         src.levels_exact(args, ch, counted, total, top, lv, k, left, c.n, fits), c.h))
 }
+
+// ---------------------------------------------------------------------------
+// Levels in periods (§7.4). What a body takes with `k` levels left grows,
+// past a point, by the same amount every so many levels: the heaviest
+// chain of calls settles into going round its heaviest cycle. So the most
+// a body takes may be read past `from` from one period of values, `gain`
+// more for each period. Checking that takes two periods' values, however
+// many levels the source asks for.
+
+// `f` past `from` in periods of `period`: the value at `from + r` again,
+// `gain` more each period. The quotient and remainder are by long division
+// (`Nat::ldiv`), so a large `k` costs its bits.
+fn Nat::periodic(self k: Nat, from, period, gain: Nat, f: Nat → Nat) → Nat {
+    match Succ(k).leb(from) {
+        True => f(k),
+        False => f(from + (k - from).ldiv(period).rem()) + gain * (k - from).ldiv(period).quot(),
+    }
+}
+
+// Before `from`, the values themselves.
+theorem Nat::periodic_before(self k: Nat, from, period, gain: Nat, f: Nat → Nat, before: k < from): k.periodic(from, period, gain, f) = f(k) {
+    let is: (Succ(k).leb(from) = True) = Succ(k).leb_true(from, before);
+    j(sym(is), λ b _ => (match b { True => f(k), False => f(from + (k - from).ldiv(period).rem()) + gain * (k - from).ldiv(period).quot() }) = f(k), refl)
+}
+
+// From `from` on, at `from + q * period + r`: the value at `from + r` and
+// `q` gains.
+theorem Nat::periodic_past(self k: Nat, from, period, gain: Nat, f: Nat → Nat, q, r: Nat, parts: from + (q * period + r) = k, below: r < period):
+    k.periodic(from, period, gain, f) = f(from + r) + gain * q {
+    let pos: (0 < period) = omega(below);
+    let x = k - from;
+    let x_is: (q * period + r = x) = omega(parts);
+    let found = x.div_mod_unique(period, q, r, x_is, below);
+    let quot_is: (x.ldiv(period).quot() = q) = trans(x.ldiv_div(period, d_pos := pos), found.left);
+    let rem_is: (x.ldiv(period).rem() = r) = trans(x.ldiv_mod(period, d_pos := pos), found.right);
+    let not_before: (Succ(k).leb(from) = False) = Succ(k).leb_false(from, omega(parts));
+    j(sym(not_before), λ b _ => (match b { True => f(k), False => f(from + x.ldiv(period).rem()) + gain * x.ldiv(period).quot() }) = f(from + r) + gain * q,
+        j(sym(quot_is), λ y _ => f(from + x.ldiv(period).rem()) + gain * y = f(from + r) + gain * q,
+            j(sym(rem_is), λ y _ => f(from + y) + gain * q = f(from + r) + gain * q, refl)))
+}
+
+// Where `f` is never below `c`, nor is it read in periods.
+theorem Nat::periodic_above(self k: Nat, from, period, gain, c: Nat, f: Nat → Nat, above: (i: Nat) → c <= f(i)): c <= k.periodic(from, period, gain, f) {
+    match Succ(k).leb(from) as λ b => c <= match b { True => f(k), False => f(from + (k - from).ldiv(period).rem()) + gain * (k - from).ldiv(period).quot() } {
+        True => above(k),
+        False => {
+            let x = from + (k - from).ldiv(period).rem();
+            let y = gain * (k - from).ldiv(period).quot();
+            let at: (c <= f(x)) = above(x);
+            let fits: (c <= f(x) + y) = omega(at);
+            fits
+        },
+    }
+}
+
+// What holds of `f` and `g` level by level holds of them read in periods.
+theorem Nat::periodic_same(self k: Nat, from, period, gain, a: Nat, f, g: Nat → Nat, each: (i: Nat) → a + f(i) <= g(i)):
+    a + k.periodic(from, period, gain, f) <= k.periodic(from, period, gain, g) {
+    match Succ(k).leb(from) as λ b => a + (match b { True => f(k), False => f(from + (k - from).ldiv(period).rem()) + gain * (k - from).ldiv(period).quot() }) <=
+        match b { True => g(k), False => g(from + (k - from).ldiv(period).rem()) + gain * (k - from).ldiv(period).quot() } {
+        True => each(k),
+        False => {
+            let x = from + (k - from).ldiv(period).rem();
+            let y = gain * (k - from).ldiv(period).quot();
+            let at: (a + f(x) <= g(x)) = each(x);
+            let fits: (a + (f(x) + y) <= g(x) + y) = omega(at);
+            fits
+        },
+    }
+}
+
+// What holds from one level to the next holds of them read in periods,
+// where `g` gains no more than `gain` over a period from `from`: within a
+// period the step is the levels' own, and across the end of one it is the
+// step into `from + period`, which is within `gain` of `from`.
+theorem Nat::periodic_step(self j: Nat, from, period, gain, a: Nat, f, g: Nat → Nat, pos: 0 < period, each: (i: Nat) → a + f(i) <= g(Succ(i)),
+    bound: g(from + period) <= g(from) + gain):
+    a + j.periodic(from, period, gain, f) <= Succ(j).periodic(from, period, gain, g) {
+    match Succ(Succ(j)).leb(from) as λ b => Succ(Succ(j)).leb(from) = b → a + j.periodic(from, period, gain, f) <= Succ(j).periodic(from, period, gain, g) {
+        True => λ early => {
+            let lt: (Succ(j) < from) = Succ(Succ(j)).le_of_leb(from, early);
+            let lhs = j.periodic_before(from, period, gain, f, omega(lt));
+            let rhs = Succ(j).periodic_before(from, period, gain, g, lt);
+            let step = each(j);
+            omega(lhs, rhs, step)
+        },
+        False => λ late => {
+            let ge: (from <= Succ(j)) = omega(Succ(Succ(j)).not_le_of_leb(from, late));
+            match Succ(j).leb(from) as λ c => Succ(j).leb(from) = c → a + j.periodic(from, period, gain, f) <= Succ(j).periodic(from, period, gain, g) {
+                True => λ at_from => {
+                    // `j + 1 = from`: the first period starts at the call.
+                    let lt: (j < from) = Succ(j).le_of_leb(from, at_from);
+                    let lhs = j.periodic_before(from, period, gain, f, lt);
+                    let rhs = Succ(j).periodic_past(from, period, gain, g, 0, 0, omega(ge, lt), pos);
+                    let same: (from + 0 = Succ(j)) = omega(ge, lt);
+                    let g_is = cong_fn<Nat, Nat>(g, same);
+                    let step = each(j);
+                    omega(lhs, rhs, g_is, step)
+                },
+                False => λ past => {
+                    let ge_j: (from <= j) = omega(Succ(j).not_le_of_leb(from, past));
+                    let x = j - from;
+                    let q = x.ldiv(period).quot();
+                    let r = x.ldiv(period).rem();
+                    let parts: (q * period + r = x) = x.ldiv_parts(period);
+                    let below: (r < period) = x.ldiv_rem_lt(period, d_pos := pos);
+                    let lhs = j.periodic_past(from, period, gain, f, q, r, omega(parts, ge_j), below);
+                    let step = each(from + r);
+                    match (Succ(r)).leb(period - 1) as λ c => (Succ(r)).leb(period - 1) = c → a + j.periodic(from, period, gain, f) <= Succ(j).periodic(from, period, gain, g) {
+                        True => λ inside => {
+                            // Within the period: the next remainder.
+                            let le_last: (Succ(r) <= period - 1) = Succ(r).le_of_leb(period - 1, inside);
+                            let lt: (Succ(r) < period) = omega(le_last, below);
+                            let rhs = Succ(j).periodic_past(from, period, gain, g, q, Succ(r), omega(parts, ge_j), lt);
+                            let next: (from + Succ(r) = Succ(from + r)) = omega();
+                            let g_is = cong_fn<Nat, Nat>(g, next);
+                            omega(lhs, rhs, g_is, step)
+                        },
+                        False => λ last => {
+                            // The period's last level: the next is the
+                            // next period's first.
+                            let le: (period - 1 <= r) = omega(Succ(r).not_le_of_leb(period - 1, last));
+                            let more: ((q + 1) * period = period + q * period) = q.mul_succ_left(period);
+                            let rhs = Succ(j).periodic_past(from, period, gain, g, q + 1, 0, omega(parts, ge_j, le, below, more), pos);
+                            let gains: (gain * (q + 1) = gain + gain * q) = trans(gain.mul_comm(q + 1), trans(q.mul_succ_left(gain), cong_fn<Nat, Nat>(λ y => gain + y, q.mul_comm(gain))));
+                            let end_is: (Succ(from + r) = from + period) = omega(le, below);
+                            let start_is: (from + 0 = from) = omega();
+                            let g_end = cong_fn<Nat, Nat>(g, end_is);
+                            let g_start = cong_fn<Nat, Nat>(g, start_is);
+                            omega(lhs, rhs, gains, g_end, g_start, step, bound)
+                        },
+                    }(refl)
+                },
+            }(refl)
+        },
+    }(refl)
+}
+
+// A call's step from `k` levels to `j`, read in periods: the levels' own
+// at each level carries over (`periodic_same` where the call is not
+// counted, `periodic_step` where it is).
+theorem Nat::periodic_spend(from, period, gain, a: Nat, f, g: Nat → Nat, pos: 0 < period, counted: Bool,
+    each: (k, j: Nat) → k.spend(counted) = Some(j) → a + f(j) <= g(k), bound: g(from + period) <= g(from) + gain):
+    (k, j: Nat) → k.spend(counted) = Some(j) → a + j.periodic(from, period, gain, f) <= k.periodic(from, period, gain, g) {
+    match counted as λ b => ((k, j: Nat) → k.spend(b) = Some(j) → a + f(j) <= g(k)) →
+        (k, j: Nat) → k.spend(b) = Some(j) → a + j.periodic(from, period, gain, f) <= k.periodic(from, period, gain, g) {
+        False => λ each_f k j spent => {
+            let same: (k = j) = cong_fn<Option<Nat>, Nat>(λ o => match o { None => k, Some(x) => x }, spent);
+            j(same, λ x _ => a + x.periodic(from, period, gain, f) <= k.periodic(from, period, gain, g),
+                k.periodic_same(from, period, gain, a, f, g, λ i => each_f(i, i, refl)))
+        },
+        True => λ each_t k j => match k as λ k2 => (match k2 { Zero => None, Succ(i) => Some(i) }) = Some(j) → a + j.periodic(from, period, gain, f) <= k2.periodic(from, period, gain, g) {
+            Zero => λ no => false_elim(j(no, λ o _ => match o as λ _ => Type { None => True, Some(_) => False }, trivial)),
+            Succ(i) => λ spent => {
+                let same: (i = j) = cong_fn<Option<Nat>, Nat>(λ o => match o { None => i, Some(x) => x }, spent);
+                j(same, λ x _ => a + x.periodic(from, period, gain, f) <= Succ(i).periodic(from, period, gain, g),
+                    i.periodic_step(from, period, gain, a, f, g, pos, λ l => each_t(Succ(l), l, refl), bound))
+            },
+        },
+    }(each)
+}
+
+// Levels read in periods fit where the levels do, given that no body
+// gains more than `gain` over the period from `from`: the charges then fit
+// any number of levels with what two periods' values say.
+theorem Charges::levels_periodic(self ch: Charges, src: Source, counted: Nat → Bool, total: Nat → Nat → Nat, top: Nat → Nat, lv: ch.Levels(src, counted, total, top),
+    from, period, gain: Nat, pos: 0 < period,
+    bound: (q: Nat) → (proc: Procedure) → src.procedures.nth(q) = Some(proc) → total(from + period, q) <= total(from, q) + gain,
+    top_bound: top(from + period) <= top(from) + gain):
+    ch.Levels(src, counted, λ k p => k.periodic(from, period, gain, λ i => total(i, p)), λ k => k.periodic(from, period, gain, top)) {
+    Charges::Levels(
+        checked := λ p cnt need asked j2 => {
+            let above = j2.periodic_above(from, period, gain, need - (ch.cost(p) + 8), λ i => total(i, p),
+                λ i => { let fits = lv.checked(p, cnt, need, asked, i); let below: (need - (ch.cost(p) + 8) <= total(i, p)) = omega(fits); below });
+            let v = j2.periodic(from, period, gain, λ i => total(i, p));
+            let at: (need - (ch.cost(p) + 8) <= v) = above;
+            let fits: (need <= (ch.cost(p) + v) + 8) = omega(at);
+            fits
+        },
+        unchecked := lv.unchecked,
+        step := λ q proc found p callee found_p mem =>
+            Nat::periodic_spend(from, period, gain, ch.cost(p), λ i => total(i, p), λ i => total(i, q), pos, counted(p),
+                λ k j2 spent => lv.step(q, proc, found, p, callee, found_p, mem, k, j2, spent), bound(q, proc, found)),
+        main_step := λ p callee found_p mem =>
+            Nat::periodic_spend(from, period, gain, ch.cost(p), λ i => total(i, p), top, pos, counted(p),
+                λ k j2 spent => lv.main_step(p, callee, found_p, mem, k, j2, spent), top_bound))
+}

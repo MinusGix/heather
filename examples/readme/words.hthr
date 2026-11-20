@@ -1,15 +1,9 @@
 import logic;
 import bool;
-import bitvec;
 import bitvec_nat;
 import bitvec_omega;
 import nat;
 import omega;
-import tactic;
-import rt;
-import rt_lower;
-import function_ir;
-import function_ir_eval;
 import runtime;
 import list;
 import option;

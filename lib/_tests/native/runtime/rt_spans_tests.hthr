@@ -58,7 +58,7 @@ fn peek_code() → Function {
                     Compose(nodes_region([BufferLoad(4, 0, 2)]), nodes_region([Resize(64, 8, 5, 4)])),
                     nodes_region([Const(8, 5, 0)]))),
             nodes_region([Resize(8, 64, 6, 5)])),
-        6, 1)
+        6, lent := 1)
 }
 
 theorem peek_lowers(span: List<BitVec(8)>): peek_rt().lower(peek_world(span)) = Some(peek_code()) { refl }
@@ -134,7 +134,7 @@ theorem peek_misread_refused(): lower_program_lent([peek_misread_code()], plan_p
 theorem peek_misread_placed(): program_placeless([peek_misread_code()]) = False { refl }
 
 // The same code not lent the buffer: refused by the function compiler.
-fn peek_unlent_code() → Function { Function(peek_code().parameters, peek_code().body, peek_code().result, 0) }
+fn peek_unlent_code() → Function { Function(peek_code().parameters, peek_code().body, peek_code().result, lent := 0) }
 
 theorem peek_unlent_refused(): lower_program_lent([peek_unlent_code()], plan_program([peek_unlent_code()]), [0]) = None { refl }
 

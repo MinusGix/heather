@@ -1,12 +1,3 @@
-import bitvec;
-// What the `runtime` generator reads (issues/runtime-generator-imports.md).
-import tactic;
-import char;
-import string;
-import rt;
-import rt_lower;
-import function_ir;
-import function_ir_eval;
 import runtime;
 
 // A loop that runs out: `sum_down` recurses on its fuel, and `triangle`

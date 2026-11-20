@@ -107,8 +107,8 @@ fn Source::compiled_meaning(self src: Source, homes: Homes, bodies: List<Frame>,
 theorem Source::compiled_levels(self src: Source, low: BitVec(64), homes: Homes, bodies: List<Frame>, program: Prog, compiled: src.compile(low, homes, bodies) = Some(program),
     args: List<List<BitVec(8)>>):
     Program::Refines(Events::linux(), src.within(args, λ p => src.checked(p), src.levels), src.compiled_meaning(homes, bodies, args)) {
-    src.levels_refines(args, src.charges(homes, bodies), λ p => src.checked(p), λ k p => src.total(homes, bodies, k, p), λ k => src.top(homes, bodies, k),
-        src.charges_levels(homes, bodies, src.compile_ranked(low, homes, bodies, program, compiled)), src.levels, src.left(homes, bodies),
+    src.levels_refines(args, src.charges(homes, bodies), λ p => src.checked(p), λ k p => src.room_total(homes, bodies, k, p), λ k => src.room_top(homes, bodies, k),
+        src.charges_room(homes, bodies, src.compile_ranked(low, homes, bodies, program, compiled)), src.levels, src.left(homes, bodies),
         Nat::le_refl(src.left(homes, bodies)))
 }
 

@@ -1,0 +1,195 @@
+// Probes of an enum as a `runtime fn`'s parameter
+// (docs/native/runtime-fn-setups-design.md §16.16). An enum crosses the
+// boundary as its tag word, the constructor's index; a `match` on it is
+// `Tm::Pick`, a compare of the tag against each constructor but the last,
+// whose arm is the default. `f::agrees` is stated at the enum itself, its
+// tag word passed (`RecInfo::enum_word`): the contract covers real values
+// only. Tests, not library: nothing imports this module; what is refused
+// is in runtime_enum_refused_tests, as `compile-x86` compiles from a
+// module that elaborates whole.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import tactic;
+import bitvec;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+
+// ---------------------------------------------------------------------------
+// One enum, matched.
+
+inductive Shade { Dark, Mid, Light }
+
+runtime fn shade_level(s: Shade) → u64 { match s { Dark => 10, Mid => 20, Light => 30 } }
+
+// The program at each constructor's tag word, as a C caller passes it.
+theorem shade_level_runs(): program_eval(shade_level::program, 0, [BitVec::ofNat(0)]) = 10 ∧
+    program_eval(shade_level::program, 0, [BitVec::ofNat(1)]) = 20 ∧
+    program_eval(shade_level::program, 0, [BitVec::ofNat(2)]) = 30 {
+    ⟨shade_level::agrees(Dark), ⟨shade_level::agrees(Mid), shade_level::agrees(Light)⟩⟩
+}
+
+// The pin at a value the proof does not know: the reflection's meaning is
+// the function by conversion.
+theorem shade_level_pin(s: Shade): shade_level::rt.meaning(shade_level::world)(s) = shade_level(s) { shade_level::reflects(s) }
+
+// And the agreement at one.
+theorem shade_level_agrees(s: Shade): program_eval(shade_level::program, 0, [RecInfo::enum_word(shade_level::world.tys, 0, s)]) = shade_level(s) {
+    shade_level::agrees(s)
+}
+
+// The enum is entry 0 of the type table, read as an `Enum` code.
+theorem shade_level_params(): shade_level::rt.params = [Enum(0)] { refl }
+
+// ---------------------------------------------------------------------------
+// An enum beside words: the arms read the words, and one arm computes.
+
+inductive Op3 { Plus, Minus, Both }
+
+runtime fn apply_op(x: u64, o: Op3, y: u64) → u64 { match o { Plus => x + y, Minus => x - y, Both => (x + y) & (x - y) } }
+
+theorem apply_op_runs(): program_eval(apply_op::program, 0, [BitVec::ofNat(9), BitVec::ofNat(1), BitVec::ofNat(4)]) = 5 ∧
+    program_eval(apply_op::program, 0, [BitVec::ofNat(9), BitVec::ofNat(0), BitVec::ofNat(4)]) = 13 {
+    ⟨apply_op::agrees(BitVec::ofNat(9), Minus, BitVec::ofNat(4)), apply_op::agrees(BitVec::ofNat(9), Plus, BitVec::ofNat(4))⟩
+}
+
+theorem apply_op_agrees(x, y: u64, o: Op3):
+    program_eval(apply_op::program, 0, [x, RecInfo::enum_word(apply_op::world.tys, 0, o), y]) = apply_op(x, o, y) {
+    apply_op::agrees(x, o, y)
+}
+
+// ---------------------------------------------------------------------------
+// Two enums, one match inside another's arm, and an `if` in an arm.
+
+inductive Dir { North, East, South, West }
+
+runtime fn step_toward(d: Dir, s: Shade, x: u64) → u64 {
+    match d {
+        North => match s { Dark => x + 1, Mid => x + 2, Light => x + 3 },
+        East => if x < 100 { x * 2 } else { x },
+        South => x - 1,
+        West => 0,
+    }
+}
+
+theorem step_toward_runs(): program_eval(step_toward::program, 0, [BitVec::ofNat(0), BitVec::ofNat(2), BitVec::ofNat(5)]) = 8 ∧
+    program_eval(step_toward::program, 0, [BitVec::ofNat(1), BitVec::ofNat(0), BitVec::ofNat(7)]) = 14 ∧
+    program_eval(step_toward::program, 0, [BitVec::ofNat(3), BitVec::ofNat(1), BitVec::ofNat(7)]) = 0 {
+    ⟨step_toward::agrees(North, Light, BitVec::ofNat(5)),
+        ⟨step_toward::agrees(East, Dark, BitVec::ofNat(7)), step_toward::agrees(West, Mid, BitVec::ofNat(7))⟩⟩
+}
+
+// Both enums are in the table, each its own entry.
+theorem step_toward_params(): step_toward::rt.params = [Enum(0), Enum(1), Word(64)] { refl }
+
+// ---------------------------------------------------------------------------
+// Two constructors: one compare, the second arm the default.
+
+inductive Side { Left, Right }
+
+runtime fn pick_side(s: Side, a: u64, b: u64) → u64 { match s { Left => a, Right => b } }
+
+theorem pick_side_runs(): program_eval(pick_side::program, 0, [BitVec::ofNat(1), BitVec::ofNat(4), BitVec::ofNat(6)]) = 6 {
+    pick_side::agrees(Right, BitVec::ofNat(4), BitVec::ofNat(6))
+}
+
+// ---------------------------------------------------------------------------
+// An enum returned, as its tag word: a constructor is its index, a
+// constant. The word returned is clamped at the last tag (`Ty::clamp`), so
+// that a function that returns a parameter's word unchanged returns a tag
+// on every word it is called with.
+
+runtime fn shade_of(x: u64) → Shade { if x < 10 { Dark } else { if x < 20 { Mid } else { Light } } }
+
+theorem shade_of_runs(): program_eval(shade_of::program, 0, [BitVec::ofNat(3)]) = 0 ∧
+    program_eval(shade_of::program, 0, [BitVec::ofNat(15)]) = 1 ∧
+    program_eval(shade_of::program, 0, [BitVec::ofNat(99)]) = 2 {
+    ⟨shade_of::agrees(BitVec::ofNat(3)), ⟨shade_of::agrees(BitVec::ofNat(15)), shade_of::agrees(BitVec::ofNat(99))⟩⟩
+}
+
+// The agreement at a word the proof does not know: the tag word of the
+// function's value.
+theorem shade_of_agrees(x: u64): program_eval(shade_of::program, 0, [x]) = RecInfo::enum_word(shade_of::world.tys, 0, shade_of(x)) {
+    shade_of::agrees(x)
+}
+
+// An enum to an enum: a `match` whose arms are constructors.
+runtime fn shade_next(s: Shade) → Shade { match s { Dark => Mid, Mid => Light, Light => Dark } }
+
+theorem shade_next_runs(): program_eval(shade_next::program, 0, [BitVec::ofNat(2)]) = 0 ∧
+    program_eval(shade_next::program, 0, [BitVec::ofNat(0)]) = 1 {
+    ⟨shade_next::agrees(Light), shade_next::agrees(Dark)⟩
+}
+
+theorem shade_next_agrees(s: Shade):
+    program_eval(shade_next::program, 0, [RecInfo::enum_word(shade_next::world.tys, 0, s)]) = RecInfo::enum_word(shade_next::world.tys, 0, shade_next(s)) {
+    shade_next::agrees(s)
+}
+
+// A parameter returned unchanged: its tag word back.
+runtime fn shade_same(s: Shade) → Shade { s }
+
+theorem shade_same_agrees(s: Shade):
+    program_eval(shade_same::program, 0, [RecInfo::enum_word(shade_same::world.tys, 0, s)]) = RecInfo::enum_word(shade_same::world.tys, 0, s) {
+    shade_same::agrees(s)
+}
+
+// A word that is no tag reads as the last constructor, and the clamp
+// returns that constructor's tag.
+theorem shade_same_past(): program_eval(shade_same::program, 0, [BitVec::ofNat(7)]) = 2 { refl }
+
+// ---------------------------------------------------------------------------
+// An enum passed to a call, as its tag word: the callee reads it back as
+// the constructor it names (`Ty::held_reads`).
+
+runtime fn shade_twice(s: Shade) → u64 { shade_level(s) + shade_level(s) }
+
+theorem shade_twice_runs(): program_eval(shade_twice::program, 1, [BitVec::ofNat(2)]) = 60 { shade_twice::agrees(Light) }
+
+theorem shade_twice_agrees(s: Shade):
+    program_eval(shade_twice::program, 1, [RecInfo::enum_word(shade_twice::world.tys, 0, s)]) = shade_twice(s) {
+    shade_twice::agrees(s)
+}
+
+// A constructor built in the body and passed on.
+runtime fn shade_made(x: u64) → u64 { shade_level(if x < 10 { Dark } else { Mid }) }
+
+theorem shade_made_runs(): program_eval(shade_made::program, 1, [BitVec::ofNat(3)]) = 10 ∧
+    program_eval(shade_made::program, 1, [BitVec::ofNat(30)]) = 20 {
+    ⟨shade_made::agrees(BitVec::ofNat(3)), shade_made::agrees(BitVec::ofNat(30))⟩
+}
+
+// Two enums and a word passed on, the callee matching on both.
+runtime fn step_twice(d: Dir, s: Shade, x: u64) → u64 { step_toward(d, s, step_toward(d, s, x)) }
+
+theorem step_twice_runs(): program_eval(step_twice::program, 1, [BitVec::ofNat(0), BitVec::ofNat(2), BitVec::ofNat(5)]) = 11 {
+    step_twice::agrees(North, Light, BitVec::ofNat(5))
+}
+
+// ---------------------------------------------------------------------------
+// A `match h:` on an enum: the enum's convoy (`EnumInfo.convoy`), lowered
+// as its plain `match` is, the arms' equations erased.
+
+runtime fn shade_eq(s: Shade) → u64 { match h: s { Dark => 1, Mid => 2, Light => 3 } }
+
+theorem shade_eq_runs(): program_eval(shade_eq::program, 0, [BitVec::ofNat(1)]) = 2 { shade_eq::agrees(Mid) }
+
+theorem shade_eq_pin(s: Shade): shade_eq::rt.meaning(shade_eq::world)(s) = shade_eq(s) { shade_eq::reflects(s) }
+
+theorem shade_eq_agrees(s: Shade): program_eval(shade_eq::program, 0, [RecInfo::enum_word(shade_eq::world.tys, 0, s)]) = shade_eq(s) {
+    shade_eq::agrees(s)
+}
+
+// A `match h:` beside a plain `match` on another enum, returning an enum.
+runtime fn turn_eq(d: Dir, s: Shade) → Dir {
+    match h: d { North => match s { Dark => East, _ => West }, East => South, South => West, West => North }
+}
+
+theorem turn_eq_runs(): program_eval(turn_eq::program, 0, [BitVec::ofNat(0), BitVec::ofNat(2)]) = 3 { turn_eq::agrees(North, Light) }

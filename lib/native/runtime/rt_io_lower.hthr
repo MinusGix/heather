@@ -126,6 +126,7 @@ fn Ty::Kept(self t: Ty, tys: Nat → RecInfo, env: Env, l: Loc) → t.sem(tys) �
         Lines => λ _ => False,
         Named(_) => λ _ => False,
         Count => λ _ => False,
+        Enum(_) => λ _ => False,
     }
 }
 
@@ -174,6 +175,7 @@ theorem Ty::kept_holds(self t: Ty, tys: Nat → RecInfo, env: Env, l: Loc): (v: 
         Lines => λ v never => false_elim(never),
         Named(_) => λ v never => false_elim(never),
         Count => λ v never => false_elim(never),
+        Enum(_) => λ v never => false_elim(never),
     }
 }
 
@@ -203,6 +205,7 @@ theorem Ty::kept_below(self t: Ty, tys: Nat → RecInfo, env: Env, l: Loc, next:
         Lines => λ v never => false_elim(never),
         Named(_) => λ v never => false_elim(never),
         Count => λ v never => false_elim(never),
+        Enum(_) => λ v never => false_elim(never),
     }
 }
 
@@ -333,6 +336,7 @@ theorem Ty::kept_same(self t: Ty, tys: Nat → RecInfo, env, env2: Env, l: Loc, 
         Lines => λ v never => false_elim(never),
         Named(_) => λ v never => false_elim(never),
         Count => λ v never => false_elim(never),
+        Enum(_) => λ v never => false_elim(never),
     }
 }
 
@@ -438,6 +442,7 @@ theorem Ty::kept_forget(self t: Ty, tys: Nat → RecInfo, env: Env, l: Loc, b: N
         Lines => λ v never => false_elim(never),
         Named(_) => λ v never => false_elim(never),
         Count => λ v never => false_elim(never),
+        Enum(_) => λ v never => false_elim(never),
     }
 }
 
@@ -508,7 +513,7 @@ theorem Loc::clear_join(locs: List<Loc>, ws: List<Nat>, out: Nat): Loc::clear(lo
 // The place a parameter of code `p` is read from: a buffer for bytes, a word
 // for the rest.
 fn Loc::of(p: Ty, id: Nat) → Loc {
-    match p { Word(_) => InWord(id), Bit => InWord(id), ByteList(_) => InBuffer(id), Lines => InWord(id), Named(_) => InWord(id), Count => InWord(id) }
+    match p { Word(_) => InWord(id), Bit => InWord(id), ByteList(_) => InBuffer(id), Lines => InWord(id), Named(_) => InWord(id), Count => InWord(id), Enum(_) => InWord(id) }
 }
 
 fn Loc::place(self l: Loc, p: Ty) → Option<Nat> {
@@ -519,6 +524,7 @@ fn Loc::place(self l: Loc, p: Ty) → Option<Nat> {
         Lines => match l { InWord(id) => Some(id), InBuffer(_) => None, Gone => None },
         Named(_) => match l { InWord(id) => Some(id), InBuffer(_) => None, Gone => None },
         Count => match l { InWord(id) => Some(id), InBuffer(_) => None, Gone => None },
+        Enum(_) => match l { InWord(id) => Some(id), InBuffer(_) => None, Gone => None },
     }
 }
 
@@ -550,6 +556,10 @@ theorem Loc::place_of(self l: Loc, p: Ty, id: Nat): l.place(p) = Some(id) → l 
             Gone => λ e => Option::none_ne_some(id, e, Gone = InWord(id)),
         },
         Count => match l as λ k => k.place(Count) = Some(id) → k = Loc::of(Count, id) {
+            InWord(x) => λ e => cong_fn(λ (n: Nat) => InWord(n), Option::some_inj(x, id, e)),
+            InBuffer(_) => λ e => Option::none_ne_some(id, e, InBuffer(_) = InWord(id)),
+            Gone => λ e => Option::none_ne_some(id, e, Gone = InWord(id)),
+        },        Enum(i) => match l as λ k => k.place(Enum(i)) = Some(id) → k = Loc::of(Enum(i), id) {
             InWord(x) => λ e => cong_fn(λ (n: Nat) => InWord(n), Option::some_inj(x, id, e)),
             InBuffer(_) => λ e => Option::none_ne_some(id, e, InBuffer(_) = InWord(id)),
             Gone => λ e => Option::none_ne_some(id, e, Gone = InWord(id)),
@@ -767,12 +777,12 @@ theorem ETm::close_lands(env: Env, io: Io, locs: List<Loc>, fd, next: Nat, fdv: 
 // A code held in one port at its own width: a word or a bit (`Ty::OneWord`,
 // `rt_lower.hthr`, is the boundary's: one 64-bit word, records included).
 fn Ty::Scalar(self t: Ty) → Type {
-    match t { Word(_) => True, Bit => True, ByteList(_) => False, Lines => False, Named(_) => False, Count => False }
+    match t { Word(_) => True, Bit => True, ByteList(_) => False, Lines => False, Named(_) => False, Count => False, Enum(_) => False }
 }
 
 fn Ty::check_scalar(self t: Ty) → Option<t.Scalar()> {
     match t as λ x => Option<x.Scalar()> {
-        Word(_) => Some(trivial), Bit => Some(trivial), ByteList(_) => None, Lines => None, Named(_) => None, Count => None,
+        Word(_) => Some(trivial), Bit => Some(trivial), ByteList(_) => None, Lines => None, Named(_) => None, Count => None, Enum(_) => None,
     }
 }
 
@@ -787,6 +797,7 @@ theorem Ty::kept_moved(self t: Ty, tys: Nat → RecInfo, env: Env, out: Nat, val
         Lines => λ never => false_elim(never),
         Named(_) => λ never => false_elim(never),
         Count => λ never => false_elim(never),
+        Enum(_) => λ never => false_elim(never),
     }(one, v, h, e)
 }
 
@@ -887,6 +898,7 @@ fn ETm::placed(t: Ty, next: Nat, l: Lowered) → Lowered {
         Lines => Lowered(ETm::moved(t, l), l.next, l.next + 1),
         Named(_) => Lowered(ETm::moved(t, l), l.next, l.next + 1),
         Count => Lowered(ETm::moved(t, l), l.next, l.next + 1),
+        Enum(_) => Lowered(ETm::moved(t, l), l.next, l.next + 1),
     }
 }
 
@@ -991,6 +1003,7 @@ theorem ETm::placed_sound(t: Ty, w: rt::World, g: List<Ty>, locs: List<Loc>, nex
         Lines => λ m one ran => ETm::moved_sound(Lines, w, g, locs, next, m, l, one, ok, clear, ran),
         Named(i) => λ m one ran => ETm::moved_sound(Named(i), w, g, locs, next, m, l, one, ok, clear, ran),
         Count => λ m one ran => ETm::moved_sound(Count, w, g, locs, next, m, l, one, ok, clear, ran),
+        Enum(i) => λ m one ran => ETm::moved_sound(Enum(i), w, g, locs, next, m, l, one, ok, clear, ran),
     }
 }
 
@@ -1466,6 +1479,7 @@ fn Loc::move_one(t: Ty, d: Loc, s: Loc, more: Stmt) → Option<Stmt> {
         Lines => None,
         Named(_) => None,
         Count => None,
+        Enum(_) => None,
     }
 }
 
@@ -1604,6 +1618,7 @@ theorem Loc::move_one_sound(tys: Nat → RecInfo, rest: List<Ty>, ds: List<Loc>,
         Lines => λ d s _ _ => trivial,
         Named(_) => λ d s _ _ => trivial,
         Count => λ d s _ _ => trivial,
+        Enum(_) => λ d s _ _ => trivial,
     }
 }
 
@@ -2003,6 +2018,7 @@ fn Loc::meet(t: Ty, a: Loc, b: Loc) → Option<Loc> {
         Lines => None,
         Named(_) => None,
         Count => None,
+        Enum(_) => None,
     }
 }
 
@@ -2049,6 +2065,7 @@ theorem Loc::meet_sound(tys: Nat → RecInfo, t: Ty, a: Loc, b: Loc): Loc::MeetH
         Lines => trivial,
         Named(_) => trivial,
         Count => trivial,
+        Enum(_) => trivial,
     }
 }
 
@@ -2629,6 +2646,7 @@ fn Ty::read_back(self t: Ty, tys: Nat → RecInfo, env: Env, id: Nat) → t.sem(
         Lines => Lines.default(tys),
         Named(i) => Named(i).default(tys),
         Count => Count.default(tys),
+        Enum(i) => Enum(i).default(tys),
     }
 }
 
@@ -2649,6 +2667,7 @@ theorem Ty::read_back_kept(self t: Ty, tys: Nat → RecInfo, env: Env, id: Nat):
         Lines => λ v never => false_elim(never),
         Named(_) => λ v never => false_elim(never),
         Count => λ v never => false_elim(never),
+        Enum(_) => λ v never => false_elim(never),
     }
 }
 
