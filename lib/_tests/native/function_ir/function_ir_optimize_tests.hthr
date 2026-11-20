@@ -194,12 +194,12 @@ theorem three_cut_dead(): ProgramRewrites(three_made(), prune(three_made(), λ n
 // What the compiler reads of a search: `None`, or the plan on one line and
 // the function on the next.
 theorem seven_read(): read(seven().find_inlined([xor()], Wanted::usual())) =
-    "Inlines(3, Both(Stay, Here(3)))\nFunction([0], Compose(Dataflow(Region(Ports([]), [Const(64, 1, 7)], Ports([]))), Compose(Dataflow(Region(Ports([]), [Move(64, 3, 0), Move(64, 4, 1)], Ports([]))), Compose(Dataflow(Region(Ports([]), [BitXor(64, 5, 3, 4)], Ports([]))), Dataflow(Region(Ports([]), [Move(64, 2, 5)], Ports([])))))), 2, 0)" {
+    "Inlines(3, Both(Stay, Here(3)))\nFunction([0], Compose(Dataflow(Region(Ports([]), [Const(64, 1, 7)], Ports([]))), Compose(Dataflow(Region(Ports([]), [Move(64, 3, 0), Move(64, 4, 1)], Ports([]))), Compose(Dataflow(Region(Ports([]), [BitXor(64, 5, 3, 4)], Ports([]))), Dataflow(Region(Ports([]), [Move(64, 2, 5)], Ports([])))))), 2, lent := 0, also := [])" {
     refl
 }
 
 theorem swept_read(): read(seven_copied().find_swept()) =
-    "Both(Nodes([Keep]), Both(Nodes([Drop, Drop]), Both(Nodes([Keep]), Nodes([Keep]))))\nFunction([0], Compose(Dataflow(Region(Ports([]), [Const(64, 1, 7)], Ports([]))), Compose(Dataflow(Region(Ports([]), [], Ports([]))), Compose(Dataflow(Region(Ports([]), [BitXor(64, 5, 0, 1)], Ports([]))), Dataflow(Region(Ports([]), [Move(64, 2, 5)], Ports([])))))), 2, 0)" {
+    "Both(Nodes([Keep]), Both(Nodes([Drop, Drop]), Both(Nodes([Keep]), Nodes([Keep]))))\nFunction([0], Compose(Dataflow(Region(Ports([]), [Const(64, 1, 7)], Ports([]))), Compose(Dataflow(Region(Ports([]), [], Ports([]))), Compose(Dataflow(Region(Ports([]), [BitXor(64, 5, 0, 1)], Ports([]))), Dataflow(Region(Ports([]), [Move(64, 2, 5)], Ports([])))))), 2, lent := 0, also := [])" {
     refl
 }
 
@@ -220,7 +220,7 @@ fn pair_sum() → Function {
                             Compose(nodes([BufferLoad(9, 0, 7)]), nodes([Add(64, 13, 6, 9)])),
                             nodes([Const(64, 13, 0)])))),
                     nodes([Const(64, 13, 0)]))),
-            nodes([Const(64, 13, 0)]))), 13, 1)
+            nodes([Const(64, 13, 0)]))), 13, lent := 1)
 }
 
 fn pair_guard() → Guard { Guard(14, [Const(64, 14, 16), UnsignedLessThan(64, 15, 1, 14)], 15) }
@@ -252,7 +252,7 @@ fn pair_fast() → StructuredRegion {
 
 fn pair_made() → Function {
     Function([0, 1, 2], Compose(nodes([Const(64, 14, 16), UnsignedLessThan(64, 15, 1, 14)]),
-        Conditional(Ports([]), 15, Ports([]), Ports([Port(13, 64)]), pair_sum().body, pair_fast())), 13, 1)
+        Conditional(Ports([]), 15, Ports([]), Ports([Port(13, 64)]), pair_sum().body, pair_fast())), 13, lent := 1)
 }
 
 theorem pair_learned(): made(pair_sum().guarded(pair_guard()).find_learned_past()) = Some(pair_made()) { refl }
@@ -276,7 +276,7 @@ fn pair_unsaid() → Function {
                     Compose(nodes([UnsignedLessThan(64, 5, 2, 1), Const(1, 5, 1)]),
                         Compose(nodes([BufferLoad(6, 0, 2)]), Compose(nodes([Add(64, 7, 2, 3), UnsignedLessThan(64, 8, 7, 1)]),
                             Compose(nodes([BufferLoad(9, 0, 7)]), nodes([Add(64, 13, 6, 9)]))))),
-                    nodes([Const(64, 13, 0)]))))), 13, 1)
+                    nodes([Const(64, 13, 0)]))))), 13, lent := 1)
 }
 
 theorem unsaid_refused(): pair_unsaid().lowers(0, [1]) = False { refl }
@@ -297,12 +297,12 @@ theorem pair_staged(): optimize_stage().rewrite([], pair_sum(),
 // call answers in before the second.
 fn byte_at() → Function {
     Function([0, 1, 2], Compose(nodes([UnsignedLessThan(64, 3, 2, 1)]),
-        Conditional(Ports([]), 3, Ports([]), Ports([Port(5, 64)]), nodes([BufferLoad(5, 0, 2)]), nodes([Const(64, 5, 0)]))), 5, 1)
+        Conditional(Ports([]), 3, Ports([]), Ports([Port(5, 64)]), nodes([BufferLoad(5, 0, 2)]), nodes([Const(64, 5, 0)]))), 5, lent := 1)
 }
 
 fn two() → Function {
     Function([0, 1], Compose(nodes([Const(64, 2, 3)]), Compose(Call(0, [0, 1, 2], 3),
-        Compose(nodes([Move(64, 7, 3), Const(64, 4, 7)]), Compose(Call(0, [0, 1, 4], 5), nodes([Add(64, 6, 7, 5)]))))), 6, 1)
+        Compose(nodes([Move(64, 7, 3), Const(64, 4, 7)]), Compose(Call(0, [0, 1, 4], 5), nodes([Add(64, 6, 7, 5)]))))), 6, lent := 1)
 }
 
 // A search that inlines `byte_at` and nothing as large as `two` with it
@@ -336,7 +336,7 @@ fn two_made() → Function {
                 Compose(Compose(nodes([]), Compose(Compose(nodes([UnsignedLessThan(64, 25, 2, 1), Const(1, 25, 1)]), nodes([BufferLoad(27, 0, 2)])), nodes([]))),
                     Compose(nodes([Const(64, 4, 7)]),
                         Compose(Compose(nodes([]), Compose(Compose(nodes([UnsignedLessThan(64, 31, 4, 1), Const(1, 31, 1)]), nodes([BufferLoad(33, 0, 4)])), nodes([]))),
-                            nodes([Add(64, 6, 27, 33)]))))))), 6, 1)
+                            nodes([Add(64, 6, 27, 33)]))))))), 6, lent := 1)
 }
 
 theorem two_found(): made(two().guarded(two_guard()).find_inlined_past([byte_at()], tight()))
@@ -365,7 +365,7 @@ fn be16() → Function {
             Compose(Compose(nodes([Const(64, 8, 1), UnsignedLessThan(64, 9, 8, 1)]),
                     Conditional(Ports([]), 9, Ports([]), Ports([Port(11, 8)]), Compose(nodes([BufferLoad(10, 0, 8)]), nodes([Resize(64, 8, 11, 10)])),
                         nodes([Const(8, 11, 0)]))),
-                nodes([Resize(8, 64, 12, 11), BitOr(64, 13, 7, 12)])))), 13, 1)
+                nodes([Resize(8, 64, 12, 11), BitOr(64, 13, 7, 12)])))), 13, lent := 1)
 }
 
 // As it stands nothing is a move: what is widened is what one of two arms
@@ -393,7 +393,7 @@ fn be16_learned() → Function {
                 Compose(nodes([Move(64, 6, 4), ShiftLeft(64, 7, 6, 8)]),
                     Compose(Compose(nodes([Const(64, 8, 1), UnsignedLessThan(64, 9, 8, 1), Const(1, 9, 1)]),
                             Compose(nodes([BufferLoad(10, 0, 8)]), nodes([Resize(64, 8, 11, 10)]))),
-                        nodes([Move(64, 12, 10), BitOr(64, 13, 7, 12)])))))), 13, 1)
+                        nodes([Move(64, 12, 10), BitOr(64, 13, 7, 12)])))))), 13, lent := 1)
 }
 
 theorem be16_moves(): made(be16().guarded(be16_guard()).find_learned_past()) = Some(be16_learned()) { refl }
@@ -416,7 +416,7 @@ fn be16_made() → Function {
             Compose(Compose(nodes([Const(64, 2, 0), UnsignedLessThan(64, 3, 2, 1), Const(1, 3, 1)]), Compose(nodes([BufferLoad(4, 0, 2)]), nodes([]))),
                 Compose(nodes([ShiftLeft(64, 7, 4, 8)]),
                     Compose(Compose(nodes([Const(64, 8, 1), UnsignedLessThan(64, 9, 8, 1), Const(1, 9, 1)]), Compose(nodes([BufferLoad(10, 0, 8)]), nodes([]))),
-                        nodes([BitOr(64, 13, 7, 10)])))))), 13, 1)
+                        nodes([BitOr(64, 13, 7, 10)])))))), 13, lent := 1)
 }
 
 theorem be16_found(): made(be16_learned().find_copied_past()).and_then(λ (f: Function) => made(f.find_swept_past())) = Some(be16_made()) { refl }
@@ -444,7 +444,7 @@ fn word_pair() → Function {
             Compose(nodes([BufferLoad(7, 0, 5)]), Compose(nodes([Const(64, 8, 1), Add(64, 9, 5, 8), UnsignedLessThan(64, 10, 9, 1)]),
                 Conditional(Ports([]), 10, Ports([]), Ports([Port(12, 64)]), Compose(nodes([BufferLoad(11, 0, 9)]), nodes([Add(64, 12, 7, 11)])),
                     nodes([Const(64, 12, 0)])))),
-            nodes([Const(64, 12, 0)]))), 12, 1)
+            nodes([Const(64, 12, 0)]))), 12, lent := 1)
 }
 
 fn word_guard() → Guard {
@@ -472,7 +472,7 @@ fn word_fast() → Function {
     Function([0, 1, 2, 3], Compose(nodes(word_guard().nodes), Conditional(Ports([]), 19, Ports([]), Ports([Port(12, 64)]), word_pair().body,
         Compose(nodes([UnsignedLessThan(64, 6, 14, 1), Const(1, 6, 1)]),
             Compose(nodes([BufferLoad(7, 0, 14)]), Compose(nodes([Const(64, 8, 1), Add(64, 9, 14, 8), UnsignedLessThan(64, 10, 9, 1), Const(1, 10, 1)]),
-                Compose(nodes([BufferLoad(11, 0, 9)]), nodes([Add(64, 12, 7, 11)]))))))), 12, 1)
+                Compose(nodes([BufferLoad(11, 0, 9)]), nodes([Add(64, 12, 7, 11)]))))))), 12, lent := 1)
 }
 
 theorem word_staged(): word_made() = Some(word_fast()) { refl }
@@ -505,7 +505,7 @@ fn be_with(third: Nat, between: List<Node>) → Function {
                             Compose(nodes([BufferLoad(20, 0, 18)]),
                                 Compose(nodes(between ++ [ShiftLeft(64, 21, 20, 8), BitOr(64, 22, 21, 16), Const(64, 23, 3), Add(64, 24, 2, 23),
                                     UnsignedLessThan(64, 25, 24, 1), Const(1, 25, 1)]),
-                                    Compose(nodes([BufferLoad(26, 0, 24)]), nodes([BitOr(64, 30, 22, 26)]))))))))))), 30, 1)
+                                    Compose(nodes([BufferLoad(26, 0, 24)]), nodes([BitOr(64, 30, 22, 26)]))))))))))), 30, lent := 1)
 }
 
 fn be_bytes() → Function { be_with(2, []) }
@@ -541,7 +541,7 @@ fn be_word() → Function {
             Compose(nodes([UnsignedLessThan(64, 8, 2, 1), Const(1, 8, 1)]), Compose(nodes([]), Compose(nodes([]), Compose(nodes([]), Compose(nodes([]), Compose(nodes([]),
                 Compose(nodes([Const(64, 23, 3), Add(64, 24, 2, 23), UnsignedLessThan(64, 25, 24, 1), Const(1, 25, 1)]),
                     Compose(Compose(nodes([]), Compose(nodes([WideLoad(4, 31, 0, 2), ByteSwap(32, 32, 31), Resize(32, 64, 33, 32)]), nodes([]))),
-                        nodes([Move(64, 30, 33)]))))))))))), 30, 1)
+                        nodes([Move(64, 30, 33)]))))))))))), 30, lent := 1)
 }
 
 theorem be_staged(): be_made() = Some(be_word()) { refl }
@@ -565,7 +565,7 @@ fn be_fixed(at: Nat) → Function {
                             Compose(nodes([BufferLoad(20, 0, 18)]),
                                 Compose(nodes([ShiftLeft(64, 21, 20, 8), BitOr(64, 22, 21, 16), Const(64, 23, 3), Add(64, 24, 2, 23),
                                     UnsignedLessThan(64, 25, 24, 1), Const(1, 25, 1)]),
-                                    Compose(nodes([BufferLoad(26, 0, 24)]), nodes([BitOr(64, 30, 22, 26)]))))))))))), 30, 1)
+                                    Compose(nodes([BufferLoad(26, 0, 24)]), nodes([BitOr(64, 30, 22, 26)]))))))))))), 30, lent := 1)
 }
 
 theorem be_fixed_asked(): be_fixed(8).asked() = [Asked(0, 2, 26)] { refl }
@@ -612,7 +612,7 @@ fn st_with(k2, s0, s1, s2, s3: Nat, between: List<Node>, tested: Bool) → Funct
             (byte_nodes(11, 12, 14, s1) ++ ([[BufferStore(15, 0, 10, 14)],
         [Const(64, 16, k2)], [Add(64, 17, 2, 16)], [UnsignedLessThan(64, 20, 17, 1), Const(1, 20, 1)]] ++ (byte_nodes(18, 19, 21, s2) ++ ([between, [BufferStore(22, 0, 17, 21)],
         [Const(64, 23, 3)], [Add(64, 24, 2, 23)], [UnsignedLessThan(64, 26, 24, 1), Const(1, 26, 1)]] ++ (byte_nodes(30, 25, 27, s3) ++
-        [[BufferStore(28, 0, 24, 27)], [Const(64, 29, 0)]]))))))))), 29, 1)
+        [[BufferStore(28, 0, 24, 27)], [Const(64, 29, 0)]]))))))))), 29, lent := 1)
 }
 
 // Big-endian: the word's bytes from the highest.
@@ -640,7 +640,7 @@ fn st_word() → Function {
         Compose(nodes([Const(64, 9, 1), Add(64, 10, 2, 9), UnsignedLessThan(64, 13, 10, 1), Const(1, 13, 1), Const(64, 16, 2), Add(64, 17, 2, 16),
             UnsignedLessThan(64, 20, 17, 1), Const(1, 20, 1), Const(64, 23, 3), Add(64, 24, 2, 23), UnsignedLessThan(64, 26, 24, 1), Const(1, 26, 1),
             Resize(64, 32, 30, 3), ByteSwap(32, 31, 30), WideStore(4, 32, 0, 2, 31)]),
-        Compose(nodes([]), Compose(nodes([]), Compose(nodes([Const(64, 29, 0)]), nodes([]))))))))), 29, 1)
+        Compose(nodes([]), Compose(nodes([]), Compose(nodes([Const(64, 29, 0)]), nodes([]))))))))), 29, lent := 1)
 }
 
 theorem st_staged(): st_moves(st_bytes()) = Some(st_word()) { refl }
@@ -679,7 +679,7 @@ fn st_copy() → Function {
             [Const(64, 9, 1)], [Add(64, 10, 2, 9)], [UnsignedLessThan(64, 13, 10, 1), Const(1, 13, 1)]] ++ (byte_nodes_of(30, 11, 12, 14, 16) ++
             ([[BufferStore(15, 0, 10, 14)], [Const(64, 16, 2)], [Add(64, 17, 2, 16)], [UnsignedLessThan(64, 20, 17, 1), Const(1, 20, 1)]] ++
             (byte_nodes_of(30, 18, 19, 21, 8) ++ ([[BufferStore(22, 0, 17, 21)], [Const(64, 23, 3)], [Add(64, 24, 2, 23)],
-            [UnsignedLessThan(64, 26, 24, 1), Const(1, 26, 1)]] ++ (byte_nodes_of(30, 37, 25, 27, 0) ++ [[BufferStore(28, 0, 24, 27)], [Const(64, 29, 0)]]))))))))), 29, 1)
+            [UnsignedLessThan(64, 26, 24, 1), Const(1, 26, 1)]] ++ (byte_nodes_of(30, 37, 25, 27, 0) ++ [[BufferStore(28, 0, 24, 27)], [Const(64, 29, 0)]]))))))))), 29, lent := 1)
 }
 
 fn nodes_swaps(ns: List<Node>) → Nat {

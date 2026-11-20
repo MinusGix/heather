@@ -63,7 +63,7 @@ theorem lend_spelled(): spelled_text(Lend([View(0, 1, 2, 3, True, 4, 5), View(1,
     refl
 }
 
-theorem function_spelled(): spelled_text(Function([0, 1, 2], leaf([BufferLoad(3, 0, 2)]), 3, 1).spelled()([])) =
-    "Function([0, 1, 2], Dataflow(Region(Ports([]), [BufferLoad(3, 0, 2)], Ports([]))), 3, 1)" {
+theorem function_spelled(): spelled_text(Function([0, 1, 2], leaf([BufferLoad(3, 0, 2)]), 3, lent := 1).spelled()([])) =
+    "Function([0, 1, 2], Dataflow(Region(Ports([]), [BufferLoad(3, 0, 2)], Ports([]))), 3, lent := 1, also := [])" {
     refl
 }

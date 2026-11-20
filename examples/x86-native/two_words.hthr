@@ -1,0 +1,29 @@
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import bitvec_nat;
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+
+// A record of two 64-bit words as a function's result
+// (docs/native/runtime-fn-setups-design.md §16.16): returned the way
+// System V returns a C structure of two integer words, the first field in
+// RAX and the second in RDX. The sum of two words as a 128-bit number:
+// its low word, and the carry out of it.
+record Wide { low: BitVec(64), high: BitVec(64) }
+
+runtime fn add_wide(a, b: BitVec(64)) → Wide {
+    let sum = a.add(b);
+    Wide(sum, match sum.unsigned_lt_bit(a) { True => BitVec::ofNat(1), False => BitVec::ofNat(0) })
+}

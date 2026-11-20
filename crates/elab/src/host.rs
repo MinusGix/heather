@@ -466,6 +466,8 @@ pub enum Request {
     Lookup(String),
     /// The scrutinee and the goal's handle.
     Cases(RExpr, u64),
+    /// The same, split by a plain `match` (no equation).
+    Branches(RExpr, u64),
     Constructor(u64),
     /// A split's number and one proof per branch.
     Close(u64, Vec<RExpr>),
@@ -1196,6 +1198,11 @@ impl<B: Values> Interpreted<B> {
                 let cs = self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?;
                 Ok(Step::Ask(Request::Sat(cs, self.nat_of("host_hole_count", vec![tree])?)))
             }
+            39 => {
+                let mut budget = READ_BUDGET;
+                let e = self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?;
+                Ok(Step::Ask(Request::Branches(e, self.nat_of("host_handle", vec![tree])?)))
+            }
             other => Err(format!("a request tree with tag {other}")),
         }
     }
@@ -1624,6 +1631,9 @@ enum Skeleton {
     /// `match` on an elaborated scrutinee, at a motive, with the equation
     /// binder named `equation` (the elaborator's convoy).
     Cases { scrut: Term, ty: Type, level: Level, motive: Type, equation: String, arms: Vec<heather_syntax::Arm> },
+    /// A plain `match` on an elaborated scrutinee the goal does not mention
+    /// (`Branches`): no equation, the motive the goal.
+    Branches { scrut: Term, ty: Type, level: Level, motive: Type, arms: Vec<heather_syntax::Arm> },
     /// A constructor application, checked at the goal.
     Constructor(Expr),
 }
@@ -2427,7 +2437,8 @@ impl Host<'_> {
                     Answer::Unit
                 }
                 Request::Lookup(name) => Answer::Global(self.lookup_request(run, &name)),
-                Request::Cases(e, goal) => Answer::Split(refusable(self.cases_request(run, &e, goal))?),
+                Request::Cases(e, goal) => Answer::Split(refusable(self.cases_request(run, &e, goal, false))?),
+                Request::Branches(e, goal) => Answer::Split(refusable(self.cases_request(run, &e, goal, true))?),
                 Request::Constructor(goal) => Answer::Split(refusable(self.constructor_request(run, goal))?),
                 Request::Close(split, proofs) => Answer::Handle(refusable(self.close_request(run, split, &proofs))?),
                 Request::Assume(ty, name, under) => Answer::Local(refusable(self.assume_request(run, &ty, name, under))?),
@@ -3310,16 +3321,25 @@ impl Host<'_> {
             }
             return Ok(ArmsView { scrut: s, arms: vec![("Zero".into(), zero), ("Succ".into(), succ)], args, path });
         }
-        let Term::Case { lhs, rhs, lhs_level, rhs_level, motive_level, case_l, case_r, scrut, .. } = head else {
+        let Term::Case { scrut, .. } = head else {
             return Err(Fault::Ill("it is not a `match`".into()));
         };
         let (sty, slevel) = self.kernel_type(run, at, scrut).ok_or_else(|| Fault::Ill("its scrutinee has no type".into()))?;
-        let ind = self.display_tag_of(&sty).filter(|ind| ind.ctors.len() == 2)
-            .ok_or_else(|| Fault::Ill("only a `match` on a type with two constructors is presented yet".into()))?;
+        // A type of two constructors, or a flat one of more (an enum): a
+        // `match` on the latter is a tree of `Case`s, one per `+` of the
+        // type's sum (docs/inductives/inductive-tier0-lowering.md §5.2), each
+        // inner one on the binder its parent's side bound.
+        let ind = self
+            .display_tag_of(&sty)
+            .filter(|ind| ind.ctors.len() == 2 || (ind.ctors.len() > 2 && ind.flat() && ind.index.is_none()))
+            .ok_or_else(|| Fault::Ill("only a `match` on a type with two constructors, or on a flat type of more, is presented yet".into()))?;
         let s = run.issue_shared(at, scrut, sty, slevel);
-        let mut arms = Vec::with_capacity(2);
-        for (ctor, (dom, dom_level, case)) in ind.ctors.iter().zip([(lhs, lhs_level, case_l), (rhs, rhs_level, case_r)]) {
-            let lam = Term::Lam { dom_level: dom_level.clone(), cod_level: motive_level.clone(), dom: Rc::clone(dom), body: Rc::clone(case) };
+        let layout = crate::sum_layout::layout(ind.ctors.len());
+        let mut found: Vec<Option<Term>> = vec![None; ind.ctors.len()];
+        case_tree_arms(&layout, 0, head, 0, &mut found)?;
+        let mut arms = Vec::with_capacity(ind.ctors.len());
+        for (ctor, lam) in ind.ctors.iter().zip(found) {
+            let lam = lam.ok_or_else(|| Fault::Ill("a constructor's arm is missing from the `match`".into()))?;
             let (aty, alevel) = self.kernel_type(run, at, &lam)
                 .ok_or_else(|| Fault::Ill("an arm does not type as a function of its payload".into()))?;
             arms.push((ctor.name.clone(), run.issue(at, Held::Term(lam, aty, alevel))));
@@ -4664,9 +4684,12 @@ impl Host<'_> {
     /// that reaches `e` only through a definition, as `split_all` does
     /// (`goal_combinators::co_occurrences`): a goal whose two sides match on
     /// the same field behind two definitions is specialised on both.
-    fn cases_request(&self, run: &mut Run, e: &RExpr, goal: u64) -> Result<SplitView, Fault> {
+    ///
+    /// `Branches(e, goal)` (`plain`) is the same split by a plain `match`:
+    /// no equation, and refused where the goal mentions `e`.
+    fn cases_request(&self, run: &mut Run, e: &RExpr, goal: u64, plain: bool) -> Result<SplitView, Fault> {
         let at = run.join(run.scope_of(e)?, run.held(goal)?.0)?;
-        let (_, goal_ty, lvl) = self.committed_goal(run, goal, Some(at), "Cases")?;
+        let (_, goal_ty, lvl) = self.committed_goal(run, goal, Some(at), if plain { "Branches" } else { "Cases" })?;
         let mark = run.trail.len();
         let r = self.reify(run, e, at).inspect_err(|_| run.restore(mark))?;
         let unsolved = || Fault::Ill("`Cases` needs a scrutinee that mentions no unsolved hole".into());
@@ -4683,6 +4706,9 @@ impl Host<'_> {
             )));
         }
         let goal_ty = crate::inductive::decoded(&goal_ty).into_owned();
+        if plain && goal_ty.abstract_local_with_all(&[(scrut.clone(), Term::Var(LocalVar(0)))]).is_some() {
+            return Err(Fault::Ill("`Branches` splits only a goal that does not mention its scrutinee: `Cases` splits the rest".into()));
+        }
         let mut pairs = Vec::new();
         // Each side searched under its own budget: a side whose calls unfold
         // far without the test (`emit(…).holds()` beside the program's
@@ -4728,7 +4754,11 @@ impl Host<'_> {
                 span,
             })
             .collect();
-        let skeleton = Skeleton::Cases { scrut, ty, level: r.level, motive, equation, arms };
+        let skeleton = if plain {
+            Skeleton::Branches { scrut, ty, level: r.level, motive, arms }
+        } else {
+            Skeleton::Cases { scrut, ty, level: r.level, motive, equation, arms }
+        };
         self.split(run, at, goal_ty, lvl, skeleton, ind.ctors.len())
     }
 
@@ -4827,6 +4857,18 @@ impl Host<'_> {
                 motive.clone(),
                 lvl,
                 goal,
+                span,
+            ),
+            Skeleton::Branches { scrut, ty, level, motive, arms } => crate::matching::Routes(self).elab_match(
+                cx,
+                heather_syntax::MatchForm::Match,
+                true,
+                arms,
+                scrut.clone(),
+                ty,
+                level,
+                motive.clone(),
+                lvl.clone(),
                 span,
             ),
             Skeleton::Constructor(e) => self.elab_check(cx, e, goal, lvl),
@@ -5549,4 +5591,45 @@ fn applied_values(cx: &Cx, template: &Type, ty: &Type, m: u32, crossed: u32, sol
         }
         _ => {}
     }
+}
+
+/// The arms of a `match`'s `Case` tree at node `j` of its type's sum
+/// (`sum_layout`), `t` scoped under `depth` binders the outer `Case`s'
+/// sides bound: each constructor's arm as a function of its payload, in
+/// the `match`'s own context. An inner `Case` is on its parent side's
+/// binder, and an arm mentions none of those binders (a `match` whose
+/// motive does not read the scrutinee); anything else is refused.
+fn case_tree_arms(layout: &crate::sum_layout::Layout, j: usize, t: &Term, depth: u32, found: &mut [Option<Term>]) -> Result<(), Fault> {
+    let Term::Case { lhs, rhs, lhs_level, rhs_level, motive_level, case_l, case_r, scrut, .. } = t else {
+        return Err(Fault::Ill("a `match` whose inner case is not a `match`".into()));
+    };
+    if depth > 0 && **scrut != Term::Var(LocalVar(0)) {
+        return Err(Fault::Ill("a `match` whose inner case is on something other than its side's payload".into()));
+    }
+    let node = *layout.node(j);
+    for (child, dom, dom_level, case) in [(node.lhs, lhs, lhs_level, case_l), (node.rhs, rhs, rhs_level, case_r)] {
+        match child {
+            crate::sum_layout::Child::Leaf(k) => {
+                let lam = Term::Lam { dom_level: dom_level.clone(), cod_level: motive_level.clone(), dom: Rc::clone(dom), body: Rc::clone(case) };
+                let lam = strengthened_by(&lam, depth)
+                    .ok_or_else(|| Fault::Ill("an arm of a `match` reads the payload of a case around it".into()))?;
+                found[k] = Some(lam);
+            }
+            crate::sum_layout::Child::Node(j2) => case_tree_arms(layout, j2, case, depth + 1, found)?,
+        }
+    }
+    Ok(())
+}
+
+/// `t` with its `by` innermost free binders dropped, when it mentions none.
+fn strengthened_by(t: &Term, by: u32) -> Option<Term> {
+    let mut cur = t.clone();
+    for _ in 0..by {
+        let s = cur.inst_top(0, &Term::Zero);
+        if s.shift_local(1) != cur {
+            return None;
+        }
+        cur = s;
+    }
+    Some(cur)
 }

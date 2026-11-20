@@ -42,7 +42,7 @@ theorem guarded_line(): line(4, [1, 2, 0, 18446744073709551615, 0, 255, 3]) =
 
 // A whole plan: what the search over a function found, said. The plan is
 // the one `function_ir_learn_tests` replays.
-fn plus_zero() → Function { Function([0, 1, 2], Dataflow(Region(Ports([]), [Const(64, 3, 0), Add(64, 4, 2, 3), Const(64, 5, 1), Add(64, 6, 4, 5)], Ports([]))), 6, 1) }
+fn plus_zero() → Function { Function([0, 1, 2], Dataflow(Region(Ports([]), [Const(64, 3, 0), Add(64, 4, 2, 3), Const(64, 5, 1), Add(64, 6, 4, 5)], Ports([]))), 6, lent := 1) }
 
 fn plus_zero_said() → String { spelled_text(plan_explained(plus_zero().learn_plan())) }
 
@@ -54,7 +54,7 @@ theorem plus_zero_explained(): plus_zero_said() = "  t4 = t2 + 0 = t2   by add_z
 // a comparison of it with a word nothing is known of is not decided.
 fn wide_narrowed() → Function {
     Function([0, 1, 2], Dataflow(Region(Ports([]), [Const(64, 3, 4095), BitAnd(64, 4, 2, 3), Resize(64, 8, 5, 4), Resize(8, 64, 6, 5),
-        UnsignedLessThan(64, 7, 4, 1)], Ports([]))), 6, 1)
+        UnsignedLessThan(64, 7, 4, 1)], Ports([]))), 6, lent := 1)
 }
 
 fn wide_narrowed_said() → String { spelled_text(wide_narrowed().not_applied()) }
@@ -69,7 +69,7 @@ theorem plus_zero_not_applied(): spelled_text(plus_zero().not_applied()) = "" { 
 // A sum that could wrap has one: both its parts are known, and the rule's
 // condition is what fails. A word a constant made is said as the constant.
 fn sum_wraps() → Function {
-    Function([0, 1, 2], Dataflow(Region(Ports([]), [Const(64, 3, 18446744073709551615), Const(64, 4, 1), Add(64, 5, 3, 4)], Ports([]))), 5, 1)
+    Function([0, 1, 2], Dataflow(Region(Ports([]), [Const(64, 3, 18446744073709551615), Const(64, 4, 1), Add(64, 5, 3, 4)], Ports([]))), 5, lent := 1)
 }
 
 theorem sum_wraps_not_applied(): spelled_text(sum_wraps().not_applied()) = "  not applied at t5 = 18446744073709551615 + 1: within_add\n" { refl }

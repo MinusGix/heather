@@ -5,7 +5,7 @@ labels: [native,function-ir,compiler]
 area: heather-in-heather
 milestone: [nh-front]
 created: 2026-10-31
-updated: 2026-10-31
+updated: 2026-11-19
 ---
 
 FunctionIR's `Call` region (`lib/native/function_ir/function_ir.hthr`) takes
@@ -29,3 +29,8 @@ two sites and its code is emitted once.
 ## Log
 
 - 2026-11-05: gardener: cites a file it shares with [[function-ir-verified-lowering]] (`lib/native/function_ir/function_ir.hthr`).
+- 2026-11-19: a program's last function returns two words (`Function.also`,
+  RAX:RDX, docs/native/runtime-fn-setups-design.md §16.16), so a `runtime fn`
+  returning a record of two 64-bit words compiles as a program's entry. A
+  call still reads one word: calling such a function is what this issue
+  leaves.

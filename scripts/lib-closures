@@ -50,8 +50,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 MARK = re.compile(r"^\s*// lib-closure:\s*(.*?)\s*$")
-# `import m;`, and `export m::{…};`, which imports `m` too.
-IMPORT = re.compile(r"^(?:import\s+([A-Za-z_][A-Za-z0-9_]*)\s*;|export\s+([A-Za-z_][A-Za-z0-9_]*)\s*::)", re.M)
+# `import m;`, and `export m::{…};` and `export import m;`, which import `m` too.
+IMPORT = re.compile(r"^(?:(?:export\s+)?import\s+([A-Za-z_][A-Za-z0-9_]*)\s*;|export\s+([A-Za-z_][A-Za-z0-9_]*)\s*::)", re.M)
 # The elaborator's own prelude is never a file.
 PRELUDE = "prelude"
 # The common prelude: the loader makes it the first import of every module

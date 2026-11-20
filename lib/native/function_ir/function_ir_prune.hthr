@@ -89,7 +89,7 @@ theorem StructuredRegion::runs_weaken_within(self region: StructuredRegion, live
 // before.
 fn Function::emptied(self function: Function) → Function {
     Function(function.parameters, Dataflow(Region(Ports(Nil), [Const(64, ids_top(function.parameters, 0), 0)], Ports(Nil))),
-        ids_top(function.parameters, 0), function.lent)
+        ids_top(function.parameters, 0), lent := function.lent, also := function.also)
 }
 
 // The program with every function `live` does not name emptied.

@@ -413,15 +413,13 @@ fn alternating_to(n, levels: Nat) → Source {
 // a(5) calls a, b, a, b, a and b: six levels of checked calls. The room is
 // the chain's own, three levels of each and the return address of `main`'s
 // call, as the call graph alternates them: a level of each is 40 bytes, so
-// 8 + 3 * 40 + 3 * 40 = 248, and 208 with a level fewer. (Written as
-// numerals: a sum on the right has conversion try the two sums argument by
-// argument first.)
+// 8 + 3 * 40 + 3 * 40 = 248, and 208 with a level fewer.
 fn alternating() → Source { alternating_to(5, 6) }
 fn alternating_shallow() → Source { alternating_to(5, 5) }
 theorem alternating_level_first(): alternating().cost(0) = 40 { refl }
 theorem alternating_level_second(): alternating().cost(1) = 40 { refl }
-theorem alternating_left(): alternating().left(alternating().homes(), alternating().bodies()) = 248 { refl }
-theorem alternating_shallow_left(): alternating_shallow().left(alternating_shallow().homes(), alternating_shallow().bodies()) = 208 { refl }
+theorem alternating_left(): alternating().left(alternating().homes(), alternating().bodies()) = 8 + 3 * 40 + 3 * 40 { refl }
+theorem alternating_shallow_left(): alternating_shallow().left(alternating_shallow().homes(), alternating_shallow().bodies()) = 8 + 3 * 40 + 2 * 40 { refl }
 theorem alternating_compiles(): refused(alternating()) = [] { refl }
 theorem alternating_allocated(): alternating().allocation_ok(alternating().homes()) = True { refl }
 theorem alternating_homed(): alternating().refusal(low(), alternating().homes(), alternating().bodies()) = [] { refl }

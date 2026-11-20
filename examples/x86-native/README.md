@@ -29,8 +29,9 @@ constant, and XORs the results. The C file supplies `main` and checks boundary v
 ## Runtime fns
 
 A function runs only when it is marked: `runtime fn f` (with `import
-runtime;` and the modules its generator reads, `runtime-generator-imports`)
-publishes `f::program`, a FunctionIR program of `f` and every runtime fn it
+bitvec; import runtime;`, which since 2026-11-19 is enough: the generator's
+own names resolve through the import closure, docs/language/modules-design.md
+§3.6) publishes `f::program`, a FunctionIR program of `f` and every runtime fn it
 calls, each from its `Compile` instance, and `f::agrees`, that the program
 evaluates to `f` ([design §16.9](../../docs/native/runtime-fn-setups-design.md)).
 `compile-x86` compiles a marked function through those: its certificate's
@@ -137,6 +138,17 @@ bit set, and `narrow_widths.hthr` takes one value through 64, 32, 16, 27,
 32 and 64 bits. A narrow signed comparison, a narrow arithmetic shift and a
 sign extension are refused (`narrow_signed_operations_are_refused` in
 `native_program.rs`): zero extension does not keep a sign.
+
+## Two words back
+
+`two_words.hthr`'s `add_wide` returns a record of two 64-bit words, the sum
+of its arguments as a 128-bit number. It comes back the way System V returns
+a C structure of two integer words, the first field in RAX and the second in
+RDX, and the certificate states both (`Prog::ComputesBoth`). A C caller
+declares `typedef struct { uint64_t low, high; } Wide;` and reads it
+(`a_record_of_two_words_is_returned_in_rax_and_rdx` in `native_program.rs`).
+A function returning two words is called only from outside the program for
+now: a call inside it reads one word.
 
 ## Linked into Rust
 

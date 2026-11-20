@@ -4,18 +4,9 @@ import nat;
 import list;
 import option;
 import pair;
-import bitvec;
 import bitvec_nat;
 import int;
 import sint;
-// What the `runtime` generator reads (issues/runtime-generator-imports.md).
-import tactic;
-import char;
-import string;
-import rt;
-import rt_lower;
-import function_ir;
-import function_ir_eval;
 import runtime;
 
 // A count x86 would mask is legalized before selection: SHL by 64 or more

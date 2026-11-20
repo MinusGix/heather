@@ -14,13 +14,13 @@ import bool; import list; import nat; import option;
 // and then the or with that zero is `x` again, which is found on the walk
 // after the first, since a rule reads what the walk has made.
 fn tangled() → Function {
-    Function([0, 1, 2], Dataflow(Region(Ports([]), [Add(64, 3, 1, 2), Sub(64, 4, 3, 2), BitXor(64, 5, 1, 1), BitOr(64, 6, 4, 5)], Ports([]))), 6, 1)
+    Function([0, 1, 2], Dataflow(Region(Ports([]), [Add(64, 3, 1, 2), Sub(64, 4, 3, 2), BitXor(64, 5, 1, 1), BitOr(64, 6, 4, 5)], Ports([]))), 6, lent := 1)
 }
 
 fn untangled() → Option<Function> { replay_function(rules_with(registered(RuleEntry)), tangled(), tangled().learn_plan()) }
 
 theorem tangled_untangled(): untangled() =
-    Some(Function([0, 1, 2], Dataflow(Region(Ports([]), [Add(64, 3, 1, 2), Move(64, 4, 1), Const(64, 5, 0), Move(64, 6, 4)], Ports([]))), 6, 1)) { refl }
+    Some(Function([0, 1, 2], Dataflow(Region(Ports([]), [Add(64, 3, 1, 2), Move(64, 4, 1), Const(64, 5, 0), Move(64, 6, 4)], Ports([]))), 6, lent := 1)) { refl }
 
 // Bits. `t7 = t6 | t5` where `t5` is clear fits `or_zero`, but a bit's
 // move has no code in the lowering, so the or stays; and `t8 = t5 | t5`
@@ -28,7 +28,7 @@ theorem tangled_untangled(): untangled() =
 // move it would know less of.
 fn bits() → Function {
     Function([0, 1, 2], Dataflow(Region(Ports([]), [Const(64, 3, 5), Const(64, 4, 9), UnsignedLessThan(64, 5, 4, 3), UnsignedLessThan(64, 6, 1, 2),
-        BitOr(1, 7, 6, 5), BitOr(1, 8, 5, 5)], Ports([]))), 1, 1)
+        BitOr(1, 7, 6, 5), BitOr(1, 8, 5, 5)], Ports([]))), 1, lent := 1)
 }
 
 fn bits_learned() → Option<Function> { replay_function(rules_with(registered(RuleEntry)), bits(), bits().learn_plan()) }
@@ -40,13 +40,13 @@ theorem bits_kept(): bits_learned() = Some(bits()) { refl }
 // spells the sum the other way round and `add_sub` fits. `0 & x` is zero by
 // `and_comm` and `and_zero`, at the node itself.
 fn turned() → Function {
-    Function([0, 1, 2], Dataflow(Region(Ports([]), [Add(64, 3, 2, 1), Sub(64, 4, 3, 2), Const(64, 5, 0), BitAnd(64, 6, 5, 4)], Ports([]))), 6, 1)
+    Function([0, 1, 2], Dataflow(Region(Ports([]), [Add(64, 3, 2, 1), Sub(64, 4, 3, 2), Const(64, 5, 0), BitAnd(64, 6, 5, 4)], Ports([]))), 6, lent := 1)
 }
 
 theorem turned_left(): replay_function(rules_with(registered(RuleEntry)), turned(), turned().learn_plan()) = Some(turned()) { refl }
 
 theorem turned_searched(): replay_function(rules_with(registered(RuleEntry)), turned(), turned().learn_plan(spellings := 8)) =
-    Some(Function([0, 1, 2], Dataflow(Region(Ports([]), [Add(64, 3, 2, 1), Move(64, 4, 1), Const(64, 5, 0), Const(64, 6, 0)], Ports([]))), 6, 1)) { refl }
+    Some(Function([0, 1, 2], Dataflow(Region(Ports([]), [Add(64, 3, 2, 1), Move(64, 4, 1), Const(64, 5, 0), Const(64, 6, 0)], Ports([]))), 6, lent := 1)) { refl }
 
 // A rule whose other side reads a node the code does not have.
 // `(x + 3) + 4` is `x + (3 + 4)` by `add_assoc`, and no word is `3 + 4`.
@@ -56,7 +56,7 @@ theorem turned_searched(): replay_function(rules_with(registered(RuleEntry)), tu
 // reading the node put as the sum it was put as.
 fn sums() → Function {
     Function([0, 1, 2], Compose(Dataflow(Region(Ports([]), [Const(64, 3, 3)], Ports([]))), Compose(Dataflow(Region(Ports([]), [Add(64, 4, 1, 3)], Ports([]))),
-        Compose(Dataflow(Region(Ports([]), [Const(64, 5, 4)], Ports([]))), Dataflow(Region(Ports([]), [Add(64, 6, 4, 5)], Ports([])))))), 6, 1)
+        Compose(Dataflow(Region(Ports([]), [Const(64, 5, 4)], Ports([]))), Dataflow(Region(Ports([]), [Add(64, 6, 4, 5)], Ports([])))))), 6, lent := 1)
 }
 
 fn region_nodes(region: StructuredRegion) → List<Node> {
@@ -78,7 +78,7 @@ theorem sums_found(): made_nodes(sums_folded()) = [Const(64, 3, 3), Add(64, 4, 1
 // Nothing is asked for where the node would not fold: `(x + y) + 4`.
 fn sums_open() → Function {
     Function([0, 1, 2], Compose(Dataflow(Region(Ports([]), [Add(64, 4, 1, 2)], Ports([]))),
-        Compose(Dataflow(Region(Ports([]), [Const(64, 5, 4)], Ports([]))), Dataflow(Region(Ports([]), [Add(64, 6, 4, 5)], Ports([]))))), 6, 1)
+        Compose(Dataflow(Region(Ports([]), [Const(64, 5, 4)], Ports([]))), Dataflow(Region(Ports([]), [Add(64, 6, 4, 5)], Ports([]))))), 6, lent := 1)
 }
 
 theorem open_not_asked(): made_nodes(match sums_open().find_helped([]) { None => None, Some(found) => Some(found.made) }) = [] { refl }
@@ -88,7 +88,7 @@ theorem open_not_asked(): made_nodes(match sums_open().find_helped([]) { None =>
 fn sums_shared() → Function {
     Function([0, 1, 2], Compose(Dataflow(Region(Ports([]), [Const(64, 3, 3)], Ports([]))), Compose(Dataflow(Region(Ports([]), [Add(64, 4, 1, 3)], Ports([]))),
         Compose(Dataflow(Region(Ports([]), [Const(64, 5, 4)], Ports([]))), Compose(Dataflow(Region(Ports([]), [Add(64, 6, 4, 5)], Ports([]))),
-            Dataflow(Region(Ports([]), [BitXor(64, 7, 6, 4)], Ports([]))))))), 7, 1)
+            Dataflow(Region(Ports([]), [BitXor(64, 7, 6, 4)], Ports([]))))))), 7, lent := 1)
 }
 
 theorem shared_not_asked(): made_nodes(match sums_shared().find_helped([]) { None => None, Some(found) => Some(found.made) }) = [] { refl }
@@ -99,12 +99,12 @@ theorem shared_not_asked(): made_nodes(match sums_shared().find_helped([]) { Non
 // (`Seen::settles`).
 fn consts_summed() → Function {
     Function([0, 1, 2], Compose(Dataflow(Region(Ports([]), [Const(64, 3, 3)], Ports([]))), Compose(Dataflow(Region(Ports([]), [Const(64, 4, 4)], Ports([]))),
-        Dataflow(Region(Ports([]), [Add(64, 5, 3, 4)], Ports([]))))), 5, 1)
+        Dataflow(Region(Ports([]), [Add(64, 5, 3, 4)], Ports([]))))), 5, lent := 1)
 }
 
 fn consts_indexing() → Function {
     Function([0, 1, 2], Compose(Dataflow(Region(Ports([]), [Const(64, 3, 3)], Ports([]))), Compose(Dataflow(Region(Ports([]), [Const(64, 4, 4)], Ports([]))),
-        Compose(Dataflow(Region(Ports([]), [Add(64, 5, 3, 4)], Ports([]))), Dataflow(Region(Ports([]), [BufferLoad(6, 0, 5)], Ports([])))))), 6, 1)
+        Compose(Dataflow(Region(Ports([]), [Add(64, 5, 3, 4)], Ports([]))), Dataflow(Region(Ports([]), [BufferLoad(6, 0, 5)], Ports([])))))), 6, lent := 1)
 }
 
 theorem consts_folded(): made_nodes(replay_function(rules_with(registered(RuleEntry)), consts_summed(), consts_summed().learn_plan(spellings := 8))) =

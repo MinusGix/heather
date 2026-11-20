@@ -107,6 +107,19 @@ pub(super) struct Shape {
     /// this one ([`optimize`]): its definitions are then `{prefix}_cut_…`,
     /// and the checks the lowering needs are stated of them.
     pub optimize: bool,
+    /// For a function that returns a record of two words
+    /// (docs/native/runtime-fn-setups-design.md §16.16): the words after
+    /// `answer` it returns in RDX, as a list, with `{prefix}_agrees_also`
+    /// in the agreement.
+    pub rest: Option<String>,
+    /// For a function taking enums (docs/native/runtime-fn-setups-design.md
+    /// §16.16): each enum parameter's position and its entry in the
+    /// generator's type table `table` (`{source}::world.tys`). Such a
+    /// parameter is quantified as the enum and passed as its tag word
+    /// (`RecInfo::enum_word`), so the certificate speaks of real values
+    /// only, and states no `Prog::Implements`, which is over every word.
+    pub enums: Vec<(usize, u64)>,
+    pub table: String,
 }
 
 /// Whether `compile-x86` runs the optimizer over a program that is lent
@@ -155,6 +168,9 @@ impl Shape {
             tables: None,
             entries: Vec::new(),
             optimize: false,
+            rest: None,
+            enums: Vec::new(),
+            table: String::new(),
         }
     }
 
@@ -163,10 +179,38 @@ impl Shape {
     /// runtime fns it reaches) with its agreement (`{source}::agrees`, from
     /// the functions' `Compile` instances, docs/native/runtime-fn-setups-design.md
     /// §16.9): nothing about the program is proved here.
-    pub fn runtime(prefix: &str, owner: &str, source: &str, functions: usize, arity: usize) -> Shape {
+    ///
+    /// `widths` are the function's result's width and its parameters', as
+    /// it crosses its boundary: a narrower word than 64 bits is passed as
+    /// the low bits of its word (`runtime_low`) and returned zero-extended
+    /// (`runtime_wide`), as the generator states its agreement
+    /// (issues/runtime-repr-narrow-words.md).
+    ///
+    /// `fields`, for a function returning a record of two words, are the
+    /// record's fields' names: the first is the word it returns in RAX and
+    /// the second the one in RDX (`{source}::agrees_also`).
+    ///
+    /// `result`, for a function returning an enum, is its table entry: the
+    /// function returns the value's tag word (`RecInfo::enum_word`).
+    pub fn runtime(prefix: &str, owner: &str, source: &str, functions: usize, arity: usize, widths: &[u64], fields: Option<&[String]>,
+        enums: &[(usize, u64)], result: Option<u64>) -> Shape {
         let parameters = arguments(arity);
-        let answer = format!("{source}({})", parameters.join(", "));
+        let table = format!("{source}::world.tys");
+        let narrowed: Vec<String> = parameters.iter().enumerate()
+            .map(|(i, a)| match widths.get(i + 1) { Some(&w) if w != 64 => format!("runtime_low({w}, {a})"), _ => a.clone() }).collect();
+        let called = format!("{source}({})", narrowed.join(", "));
+        let (answer, rest) = match fields {
+            Some([first, others @ ..]) => (format!("{called}.{first}"),
+                Some(format!("[{}]", others.iter().map(|field| format!("{called}.{field}")).collect::<Vec<_>>().join(", ")))),
+            _ => (match (result, widths.first()) {
+                (Some(i), _) => format!("RecInfo::enum_word({table}, {i}, {called})"),
+                (None, Some(&w)) if w != 64 => format!("runtime_wide({w}, {called})"),
+                _ => called,
+            }, None),
+        };
         let mut definitions = format!("import {owner};\nimport runtime;\n");
+        // An enum's type and tag word are `rt`'s (`RecInfo::enum_at`, `enum_word`).
+        if !enums.is_empty() || result.is_some() { definitions.push_str("import rt;\n"); }
         definitions.push_str(&format!("\n// The program `runtime fn {source}` published, callees first: function `k` the one with `k` after it.
 fn {prefix}_program() → List<Function> {{ {source}::program }}
 "));
@@ -175,16 +219,31 @@ fn {prefix}_program() → List<Function> {{ {source}::program }}
 fn {prefix}_fn{k}() → Function {{ match {prefix}_first_{k}() {{ Nil => Setup::code_of(None), Cons(function, _) => function }} }}
 ", functions - 1 - k));
         }
-        let typed = typed(&parameters);
+        let typed = typed_enums(&parameters, enums, &table);
+        let words = words_enums(&parameters, enums, &table);
         let agreement = format!("{evaluable}
 
 // The program's function {f} evaluates to the source function: the
 // generator's theorem, from each function's `Compile` instance.
-theorem {prefix}_agrees({typed}): program_eval({prefix}_program(), {f}, [{list}]) = {answer} {{
+theorem {prefix}_agrees({typed}): program_eval({prefix}_program(), {f}, [{words}]) = {answer} {{
     {source}::agrees({list})
 }}
-", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), f = functions - 1, list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, on: String::new(), lent: None, marks: None, tables: None, entries: Vec::new(), optimize: false }
+{also}", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), f = functions - 1, list = parameters.join(", "),
+            words = words.join(", "),
+            also = match &rest {
+                Some(rest) => format!("
+// And the words it returns after the first, the record's fields after its
+// first, from the same instances (`{source}::agrees_also`).
+theorem {prefix}_agrees_also({typed}): program_eval_also({prefix}_program(), [{list}]) = {rest} {{
+    {source}::agrees_also({list})
+}}
+
+{quiet}
+", list = parameters.join(", "), quiet = quiet_text(prefix, functions)),
+                None => String::new(),
+            });
+        if rest.is_some() { definitions.insert_str(0, "import function_ir_writes;\n"); }
+        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, on: String::new(), lent: None, marks: None, tables: None, entries: Vec::new(), optimize: false, rest, enums: enums.to_vec(), table: format!("{source}::world.tys") }
     }
 
     /// A `runtime fn` that reads spans: its program is lent buffers
@@ -235,7 +294,7 @@ theorem {prefix}_agrees(now: Buffers(), {typed}): program_eval_over(now, {prefix
 }}
 ", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), f = functions - 1,
             list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, on, lent: Some(counts), marks: None, tables: None, entries: Vec::new(), optimize }
+        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, on, lent: Some(counts), marks: None, tables: None, entries: Vec::new(), optimize, rest: None, enums: Vec::new(), table: String::new() }
     }
 
     /// A `runtime fn` that stores into the first span it is lent: its
@@ -312,7 +371,7 @@ theorem {prefix}_runs(span: List<BitVec(8)>, rest: Buffers(), {typed}):
 ", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")),
             within = if tables.is_some() { marked_text(prefix, &stem) } else { within_text(prefix, &stem, functions) }, f = functions - 1,
             list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, on, lent: Some(counts), marks: Some(marks), tables, entries: Vec::new(), optimize }
+        Shape { functions, root: functions - 1, arity, definitions, agreement, answer, on, lent: Some(counts), marks: Some(marks), tables, entries: Vec::new(), optimize, rest: None, enums: Vec::new(), table: String::new() }
     }
 }
 
@@ -326,8 +385,10 @@ pub(super) fn runtime_shape(elab: &Elaborator, prefix: &str, owner: &str, source
     let lent = spans != Spans::None;
     // The rows' search is in a writer's scope: `runtime_file`, which every
     // module with a `runtime fn` over a span it writes imports, imports it.
+    // A function lent nothing: the widths its result and its parameters
+    // cross its boundary at (`Fun::edge_widths`).
     let (imports, counts) = match spans {
-        Spans::None => ("", "[]".to_string()),
+        Spans::None => ("", format!("{source}::rt.edge_widths() ++ Cons(match {source}::rt.result {{ Enum(i) => i + 1, _ => 0 }}, {source}::rt.params.map(λ p => match p {{ Enum(i) => i + 1, _ => 0 }}))")),
         Spans::Read => ("import function_ir_lower_calls;\nimport function_ir_writes;\n", format!("program_counts({source}::program)")),
         Spans::Written => ("import function_ir_lower_calls;\nimport function_ir_writes;\nimport function_ir_rows;\n",
             format!("program_counts({source}::program)")),
@@ -360,7 +421,26 @@ fn {prefix}_rows(rows: List<List<Bool>>, counts: List<Nat>, f, functions: Nat) �
     match numbers[..] {
         [_, arity, ..] if arity > 8 => Err(format!("`{source}` takes {arity} words{}: compile-x86 passes at most eight, six in registers and two on the stack",
             if lent { ", an address and a length for each span among them" } else { "" })),
-        [functions, arity] if functions >= 1 && !lent => Ok(Shape::runtime(prefix, owner, source, functions as usize, arity as usize)),
+        [functions, arity, ref both @ ..] if functions >= 1 && !lent && both.len() == 2 * arity as usize + 2 => {
+            let (widths, codes) = both.split_at(arity as usize + 1);
+            // An enum result's table entry, then each enum parameter, by
+            // position, and its table entry.
+            let result = match codes[0] { 0 => None, code => Some(code - 1) };
+            let enums: Vec<(usize, u64)> = codes[1..].iter().enumerate().filter(|(_, code)| **code > 0).map(|(i, code)| (i, code - 1)).collect();
+            // A record of two words as the result: its fields' names, as
+            // the generator spells them (`{source}::fields`).
+            let fields = if elab.qualified_global(&format!("{source}::agrees_also")).is_some() {
+                let codes = function_ir_source::evaluate_numbers(&fork, &format!("{source}::fields")).map_err(|e| e.to_string())?;
+                let names: Vec<String> = codes.split(|code| *code == 0).filter(|name| !name.is_empty())
+                    .map(|name| name.iter().filter_map(|code| char::from_u32(*code as u32)).collect()).collect();
+                if names.len() != 2 { return Err(format!("`{source}::fields` did not read back as two names")); }
+                Some(names)
+            } else { None };
+            if fields.is_some() && !enums.is_empty() {
+                return Err(format!("`{source}` takes an enum and returns two words: not stated yet"));
+            }
+            Ok(Shape::runtime(prefix, owner, source, functions as usize, arity as usize, widths, fields.as_deref(), &enums, result))
+        }
         [functions, arity, ref counts @ ..] if functions >= 1 && spans == Spans::Read && counts.len() == functions as usize =>
             Ok(Shape::runtime_lent(prefix, owner, source, functions as usize, arity as usize, counts.to_vec())),
         [functions, arity, ref rest @ ..] if functions >= 1 && spans == Spans::Written && rest.len() > functions as usize => {
@@ -1266,8 +1346,8 @@ fn {prefix}_lens() → List<Nat> {{ asm_lens({prefix}_code_{last}()) }}
 
     let agreement = &program.agreement;
     let parameters = arguments(program.arity);
-    let typed = typed(&parameters);
-    let list = format!("[{}]", parameters.join(", "));
+    let typed = typed_enums(&parameters, &program.enums, &program.table);
+    let list = format!("[{}]", words_enums(&parameters, &program.enums, &program.table).join(", "));
     let call = &program.answer;
     let mut text = definitions;
     text.push_str(&rewriting);
@@ -1462,6 +1542,26 @@ theorem {prefix}_returns<M>(machine: Machine<M>, {slices}: Slice{comma_words}{ty
             ats = slices.iter().map(|s| format!("{s}.at")).collect::<Vec<_>>().join(", "),
             passed = on_slices(&parameters, slices.len(), 1).join(", "),
             room = room(f), arguments = parameters.join(", "), keeps = keeps(f)));
+    } else if let Some(rest) = &program.rest {
+        // A record of two words: its first field in RAX and its second in
+        // RDX, the System V return of such a structure. The program is
+        // lowered as published (the optimizer's rewrites are of the first
+        // word alone).
+        let earlier = if f == 0 { "Nil".to_string() } else { format!("{prefix}_first_{}()", f - 1) };
+        text.push_str(&format!("
+// The code computes the source function's record of two words
+// (`Prog::ComputesBoth`, function_ir_correct): called at its label with its
+// arguments in RDI, RSI, … and past the sixth on the stack above the
+// return address (`Stack::Passed`), {room} bytes of stack below it, it
+// returns the record's first field in RAX and its second in RDX, keeps the
+// callee-saved registers and RSP, and leaves memory as it was but for
+// stores into its own room below that address (`Stack::Wrote`): on every
+// machine, loaded anywhere.
+theorem {prefix}_returns<M>(machine: Machine<M>{comma}{typed}): {prefix}_code().ComputesBoth(machine, {f}, {room}, {list}, {call}, {rest}) {{
+    compiled_computes_both<M>({prefix}_fn{f}(), {earlier}, {prefix}_placement(), {prefix}_rooms(), {prefix}_code(), {prefix}_lowers(), {prefix}_evaluable(),
+        {prefix}_quiet(), machine, {list}, refl, {call}, {rest}, {prefix}_agrees({arguments}), {prefix}_agrees_also({arguments}))
+}}
+", room = room(f), arguments = parameters.join(", ")));
     } else {
         text.push_str(&format!("
 // The code computes the source function (`Prog::Computes`,
@@ -1475,14 +1575,18 @@ theorem {prefix}_returns<M>(machine: Machine<M>{comma}{typed}): {prefix}_code().
     compiled_computes<M>({prefix}_program(), {prefix}_placement(), {prefix}_rooms(), {prefix}_code(), {prefix}_lowers(), {prefix}_evaluable(),
         machine, {f}, trivial, {list}, trivial, {call}, {prefix}_agrees({arguments}))
 }}
-
+{implements}", room = room(f), arguments = parameters.join(", "),
+            // A function taking an enum is stated at its real values only,
+            // each passed as its tag word: `Prog::Implements` is over every
+            // word, so it is not stated of one.
+            implements = if program.enums.is_empty() { format!("
 // The same at every argument list: the code implements the source function
 // (`Prog::Implements`).
 theorem {prefix}_implements<M>(machine: Machine<M>): {prefix}_code().Implements(machine, {f}, {room}, {arity}, {spec}) {{
     {binders}{prefix}_returns<M>(machine{comma}{arguments})
 }}
 ", room = room(f), arguments = parameters.join(", "), arity = parameters.len(), spec = curried(call, &parameters),
-            binders = binders(&parameters)));
+                binders = binders(&parameters)) } else { String::new() }));
     }
     // The program's other exported functions, each at its own label: a
     // function of words, lent nothing, so its contract is the plain one
@@ -1761,6 +1865,25 @@ fn on_slices(parameters: &[String], spans: usize, form: usize) -> Vec<String> {
 }
 
 fn arguments(arity: usize) -> Vec<String> { (0..arity).map(|i| format!("a{i}")).collect() }
+
+/// The parameters' binders, an enum's at its type (`RecInfo::enum_at`,
+/// entry `i` of `table`) and a word's at `BitVec(64)`.
+fn typed_enums(arguments: &[String], enums: &[(usize, u64)], table: &str) -> String {
+    if enums.is_empty() { return typed(arguments); }
+    arguments.iter().enumerate().map(|(k, a)| match enums.iter().find(|(at, _)| *at == k) {
+        Some((_, i)) => format!("{a}: RecInfo::enum_at({table}, {i})"),
+        None => format!("{a}: BitVec(64)"),
+    }).collect::<Vec<_>>().join(", ")
+}
+
+/// The words the code is passed: an enum's tag word (`RecInfo::enum_word`),
+/// a word itself.
+fn words_enums(arguments: &[String], enums: &[(usize, u64)], table: &str) -> Vec<String> {
+    arguments.iter().enumerate().map(|(k, a)| match enums.iter().find(|(at, _)| *at == k) {
+        Some((_, i)) => format!("RecInfo::enum_word({table}, {i}, {a})"),
+        None => a.clone(),
+    }).collect()
+}
 
 fn typed(arguments: &[String]) -> String {
     if arguments.is_empty() { String::new() } else { format!("{}: BitVec(64)", arguments.join(", ")) }

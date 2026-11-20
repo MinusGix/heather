@@ -147,7 +147,8 @@ nobody at the top imported (`float/`, `arch/x86_64/`) out of
 
 `export m::{a, b, T::method};` is the one reexport form. It is an import
 item with a public list: it must precede the first declaration, the list is
-mandatory and nonempty (no `export m;`, no glob), and `export` stays a
+mandatory and nonempty (no `export m;`, no glob; the whole module is
+`export import m;`, §3.7), and `export` stays a
 contextual keyword, so `fn export()` still parses. A listed name may be
 qualified by its owning type (`Box::get`) exactly as a declaration may.
 
@@ -163,8 +164,8 @@ certificates with no conversion, and an axiom audit reports the origin path.
 Rules that follow from "same declaration, new spelling":
 
 - **Ordinary imports stay private.** A facade's `import m;` or
-  `import m::{h};` publishes nothing; only the `export` list is visible to
-  the facade's clients. Reexports chain: a facade may export a name it only
+  `import m::{h};` publishes no bare name; only the `export` list is visible
+  bare to the facade's clients (`m::x` reaches them qualified, §3.6). Reexports chain: a facade may export a name it only
   sees through another facade, and the origin is still the declaring module.
 - **Selecting a type selects its constructors.** Methods, instances and
   other type-owned members remain explicit selections (`Box::get`) — except
@@ -189,7 +190,7 @@ Rules that follow from "same declaration, new spelling":
   changed origin invalidates the unchanged facade and its clients through
   the ordinary dependency identity.
 
-Not built, by decision: whole-module reexport, renaming on export, and
+Not built, by decision: renaming on export and
 hierarchical module paths. Each would obscure either the identity rule or
 §3.2's flat search, and the parser umbrella needed none of them.
 
@@ -242,6 +243,71 @@ the prelude costs almost nothing to build or replay, while an umbrella over
 the whole library costs about a minute to replay warm for a one-line client,
 and inside std the same idea is an import cycle that the single Ψ telescope
 collapses into one unit (`issues/std-prelude-facade.md` has the numbers).
+
+### 3.6 Every module's closure is visible qualified (2026-11-19)
+
+§3.5's second bullet, generalized (decided with Minus, 2026-11-19): a
+qualified name `m::x` resolves wherever `m` is in the **importing module's
+own** closure, not only the prelude's (`names::closure_reaches`). Bare
+names are unchanged: they still come only from direct imports, export
+lists and §3.4's member rule.
+
+The reason is the same as the prelude's, at every module. Registries are
+closure-wide (`docs/infrastructure/module-dag-design.md` §2), so a
+designation reached through the closure (`/` at words, declared in
+`bitvec_div`) is found, and the elaborator then spells its operation
+qualified (`bitvec_div::BitVec::udiv`); a tactic spells its lemmas the same
+way (`bv_omega`'s `bitvec_omega::add_form`), and a generator looks up its
+own names. Before this, each of those failed unless the client imported the
+module itself, so `import sint;` made `x / 3` at a word fail, and a `runtime
+fn` file carried a list of modules it never named
+(`issues/runtime-generator-imports.md`).
+
+Consequences:
+
+- A module that wants a feature's machinery reachable by its importers
+  imports it, and that is enough: `runtime` imports `bitvec_omega`,
+  `bitvec_shift_nat`, `bitvec_div` and `bytes`, so `import bitvec; import
+  runtime;` gives a `runtime fn` a measure over words, its reading of
+  `x >> k`, and `/` and `%`.
+- §3.4's "ordinary imports stay private" now holds for **bare** names
+  only: a facade's `import m;` publishes no bare name, but `m::x` resolves
+  in the facade's clients.
+- A qualifier that is no loaded module's name (`List` in `List::map`) is
+  answered without walking the closure; otherwise the walk is made once per
+  scope and noted for the early cutoff exactly as the prelude's is.
+
+### 3.7 Members follow the closure; `export import m;` (2026-11-20)
+
+Minus's ask (2026-11-19): importing `runtime` should bring a large part of
+the runtime, with "no hesitation about what proofs or what types you have
+in context", without making every bare name public. Two rules, chosen with
+Minus on 2026-11-20 over Lean's "every name of the closure is bare":
+
+- **A type's members follow the closure.** Where `T` is visible, `T::x`
+  and `v.x` (for `v: T`) find a member of `T` declared in **any** module of
+  the importing module's closure (`names::resolve_kinds`, after every older
+  reading). Facts live in their type's namespace
+  (`docs/library/lib-layout-design.md`), so this is "every loaded fact about `BitVec`
+  is in context" without one new bare name. It is asked only when no
+  directly visible declaration answers, so nothing that resolved before
+  changes; two closure modules attaching the same member are ambiguous, as
+  two imports are.
+- **`export import m;` is the whole-module reexport** §3.4 left out: an
+  import of `m` whose public list is every name `m` shows bare (its own
+  declarations and its reexports), less generated names. It is opted into by
+  the facade's author, so a module still decides what its importers see.
+  §3.4's rules carry over unchanged: an alias names the declaration's
+  origin, and a name two exports give different origins is an error at the
+  facade. The list is read when the facade is elaborated, so a name added to
+  `m` later reaches the facade's clients when the facade's image is rebuilt,
+  which its dependency on `m` forces.
+
+`runtime` uses both: `export import bitvec; export import bytes;`, and
+`rt`'s methods on `List` reach a client through the member rule, so
+`import runtime;` alone writes a `runtime fn` over words and spans.
+`stored_words` (`[u64; n]`'s `at`) builds on `runtime` and is imported
+beside it.
 
 ## 4. Names: unambiguous-or-qualified, never silently shadowed
 

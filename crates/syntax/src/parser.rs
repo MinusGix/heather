@@ -2379,6 +2379,11 @@ impl Parser {
     fn import(&mut self) -> R<ImportItem> {
         let reexport = self.at_kw("export");
         let start = self.bump().span; // `import` or `export`
+        // `export import m;`, the whole-module reexport.
+        let whole = reexport && self.at_kw("import");
+        if whole {
+            self.bump();
+        }
         let (module, module_span) = self.qual_ident("module name after `import`")?;
         if module.contains("::") {
             return Err(ParseError {
@@ -2411,11 +2416,15 @@ impl Parser {
             }
             self.expect(&TokKind::RBrace, "`}` to close the import list")?;
         }
-        if reexport && listed.is_empty() {
-            return self.err("an export needs an explicit nonempty list: `export m::{Name};`");
+        if whole && !listed.is_empty() {
+            return self.err("`export import m;` reexports all of `m`: a list is `export m::{Name};`");
+        }
+        if reexport && !whole && listed.is_empty() {
+            return self.err("an export needs an explicit nonempty list, `export m::{Name};`, \
+                             or is the whole module, `export import m;`");
         }
         let end = self.expect(&TokKind::Semi, "`;` to end the import")?;
-        Ok(ImportItem { reexport, module, module_span, listed, span: start.join(end) })
+        Ok(ImportItem { reexport, whole, module, module_span, listed, span: start.join(end) })
     }
 
     /// A field written `x: Pos<A>`, expanded: `x: A`, then `x_pos: 0 < x`,

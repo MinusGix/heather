@@ -8,58 +8,13 @@
 // Each row says what it ports and the rung of the plan's ladder (§4) it
 // waits on: 1 the scalar core, 2 spans of anything, 3 inductive data,
 // 4 functional Heather. Nothing here is imported from outside.
-import logic;
-import bool;
-import nat;
-import list;
-import option;
-import pair;
-import char;
-import string;
-import tactic;
-import derive;
-import bitvec;
-import bitvec_nat;
-import bitvec_div;
-import bitvec_omega;
-import algebra;
-import omega;
-import vector;
-import bitvec_bytes;
-import nat_map;
-import list_window;
-import layout;
-import stored;
-import part;
-import laid;
-import rt;
-import rt_reflect;
-import rt_lower;
-import rt_loop;
-import rt_file;
-import rt_file_lower;
-import rt_file_loop;
-import rt_file_reflect;
-import function_ir;
-import function_ir_eval;
-import function_ir_state;
-import function_ir_run;
-import function_ir_writes;
-import function_ir_link;
-import function_ir_placeless;
-import function_ir_lower;
-import function_ir_lower_calls;
-import x86_64_asm;
+// `runtime` reexports the words and spans, and a type's methods reach the
+// whole closure (docs/language/modules-design.md §3.7). `[u64; n]`'s `at`
+// is `stored_words`', which builds on `runtime` and so is not under it.
+// `program_eval` runs a row's compiled program in its theorem.
 import runtime;
-import runtime_file;
 import stored_words;
-import stored_accessor;
-import rt_held;
-import rt_held_fields;
-import rt_held_reflect;
-import bytes;
-import rt_bytes;
-import rt_bytes_loop;
+import function_ir_eval;
 
 // ---------------------------------------------------------------------------
 // Rung 1: operations
@@ -87,23 +42,39 @@ theorem port_tenth_runs(): port_tenth(1234) = 123 ∧ port_tenth(9) = 0 { ⟨ref
 // ---------------------------------------------------------------------------
 // Rung 1: what crosses a function's boundary
 
-// A byte's class in the scanner, the byte a parameter.
-// expect-error: a parameter that is not a 64-bit word
+// A byte's class in the scanner, the byte a parameter (passed as the low
+// bits of its word, issues/runtime-repr-narrow-words.md).
 runtime fn port_classify(b: u8) → u64 {
     if b = b' ' { 0 } else if b'0' <= b ∧ b <= b'9' { 1 } else if b'a' <= b ∧ b <= b'z' { 2 } else { 3 }
+}
+
+theorem port_classify_runs(): program_eval(port_classify::program, 0, [BitVec::ofNat(0x137)]) = 1 ∧
+    program_eval(port_classify::program, 0, [BitVec::ofNat(0x71)]) = 2 {
+    ⟨port_classify::agrees(BitVec::ofNat(0x137)), port_classify::agrees(BitVec::ofNat(0x71))⟩
 }
 
 // A token kind as the enum it is in Rust (`TokKind`).
 inductive PortKind { Ident, Number, Space, Other }
 
-// expect-error: `PortKind` has no runtime layout
 runtime fn port_weight(k: PortKind) → u64 { match k { Ident => 3, Number => 2, Space => 0, Other => 1 } }
+
+// The enum crosses as its tag word, the constructor's index.
+theorem port_weight_runs(): program_eval(port_weight::program, 0, [BitVec::ofNat(1)]) = 2 ∧
+    program_eval(port_weight::program, 0, [BitVec::ofNat(3)]) = 1 {
+    ⟨port_weight::agrees(Number), port_weight::agrees(Other)⟩
+}
 
 // Two results at once (a value and whether it fits).
 record PortParsed { value: u64, ok: u64 }
 
-// expect-error: `PortParsed` has no runtime layout
 runtime fn port_split(x: u64) → PortParsed { PortParsed(x + 1, x - 1) }
+
+// The first field comes back as the program's word and the second beside
+// it, the word a compiled call finds in RDX.
+theorem port_split_runs(): program_eval(port_split::program, 0, [BitVec::ofNat(7)]) = 8 ∧
+    program_eval_also(port_split::program, [BitVec::ofNat(7)]) = [6] {
+    ⟨port_split::agrees(BitVec::ofNat(7)), port_split::agrees_also(BitVec::ofNat(7))⟩
+}
 
 // ---------------------------------------------------------------------------
 // Rung 1: loops and recursion
@@ -117,8 +88,10 @@ runtime fn port_fib(n: u64) → u64 {
     a
 }
 
-// A loop whose measure halves (`Numeral::bits`).
-// expect-error: was not proved automatically
+// A loop whose measure halves (`Numeral::bits`). The halving is proved by
+// the default search (`bv_omega` reads `x.shift_right(1)`, reached through
+// `runtime`); what is left is `port_fib`'s two loop words.
+// expect-error: `port_bits#State` has no runtime layout
 runtime fn port_bits(n: u64) → u64 {
     let mut x = n;
     let mut c: u64 = 0;

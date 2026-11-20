@@ -61,7 +61,7 @@ fn poke_code() → Function {
                 Compose(nodes_region([UnsignedLessThan(64, 5, 2, 1)]),
                     branch(5, no_ports(), Compose(nodes_region([Resize(8, 64, 6, 4)]), nodes_region([BufferStore(7, 0, 2, 6)])), nodes_region(Nil))),
                 nodes_region(Nil))),
-        2, 1)
+        2, lent := 1)
 }
 
 theorem poke_lowers(): poke_rt().lower(bare(), [], 0) = Some(poke_code()) { refl }

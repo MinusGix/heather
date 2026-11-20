@@ -394,6 +394,11 @@ inductive Req {
     // the kernel replays its proof, `reaches_refutes`); a satisfying
     // valuation as the values of the variables below `vars`.
     Sat(cs: Expr, vars: Nat),
+    // Split `goal` by a plain `match` on `e`, as `Cases` does but with no
+    // equation: the term a function defined by cases is (`match e { … }`),
+    // which a generator builds a function from. Refused where `goal`
+    // mentions `e` (`Cases` is the split for that).
+    Branches(e: Expr, goal: Handle),
 }
 
 // What the solver found (`Sat`).
@@ -446,6 +451,7 @@ fn Resp(r: Req) → Type {
         SimpCheck(_) => Checked<Handle>,
         Numeral(_) => Checked<Handle>,
         Sat(_, _) => Checked<SatVerdict>,
+        Branches(_, _) => Checked<Split>,
     }
 }
 
@@ -510,6 +516,8 @@ fn restore(m: Nat) → Tac<True> { ask(Restore(m)) }
 fn lookup(name: String) → Tac<Checked<GlobalRef>> { ask(Lookup(name)) }
 
 fn cases(e: Expr, goal: Handle) → Tac<Checked<Split>> { ask(Cases(e, goal)) }
+
+fn branches(e: Expr, goal: Handle) → Tac<Checked<Split>> { ask(Branches(e, goal)) }
 
 fn constructor(goal: Handle) → Tac<Checked<Split>> { ask(Constructor(goal)) }
 
@@ -623,6 +631,7 @@ fn fit(r: Req, a: Answer) → Fit<Resp(r)> {
         SimpCheck(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
         Numeral(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
         Sat(_, _) => match a { ASat(c) => Fits(c), _ => Mismatch },
+        Branches(_, _) => match a { ASplit(c) => Fits(c), _ => Mismatch },
     }
 }
 
@@ -989,7 +998,7 @@ fn split_all(leaf: Tac<Expr>) → Tac<Expr> {
 // 22: `Body`. 23: `Arms`. 24: `Synth`. 25: `Spine`. 26: `Say`.
 // 27: `Fields`. 28: `Inj`. 29: `Absurd`. 30: `Unfold`. 31: `Repr`.
 // 32: `Spell`. 33: `Abstract`. 34: `Revert`. 35: `Simp`. 36: `SimpCheck`.
-// 37: `Numeral`. 38: `Sat`.
+// 37: `Numeral`. 38: `Sat`. 39: `Branches`.
 fn host_tag(t: Tac<Expr>) → Nat {
     match t {
         Pure(_) => 0,
@@ -1032,6 +1041,7 @@ fn host_tag(t: Tac<Expr>) → Nat {
             SimpCheck(_) => 36,
             Numeral(_) => 37,
             Sat(_, _) => 38,
+            Branches(_, _) => 39,
         },
     }
 }
@@ -1056,6 +1066,7 @@ fn host_lhs(t: Tac<Expr>) → Expr {
             Spell(e) => e,
             Numeral(e) => e,
             Sat(cs, _) => cs,
+            Branches(e, _) => e,
             Abstract(_, x) => x,
             Revert(_, x) => x,
             _ => NatLit(0),
@@ -1082,6 +1093,7 @@ fn host_handle(t: Tac<Expr>) → Nat {
             Match(ty, _) => ty.id,
             Hole(ty) => ty.id,
             Cases(_, goal) => goal.id,
+            Branches(_, goal) => goal.id,
             Constructor(goal) => goal.id,
             Ctors(ty) => ty.id,
             Body(g) => g.id,

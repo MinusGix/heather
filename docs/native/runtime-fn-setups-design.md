@@ -1626,3 +1626,188 @@ every function it calls.
 What a single function may be is unchanged by this section and is the
 next limit: its emission is one kernel statement
 (`issues/native-function-emission-one-statement.md`).
+
+### 16.15 Narrow words at a plain function's boundary (2026-11-19)
+
+A plain function (no loop) takes and returns `u8`, `u16` and `u32`
+(`Ty::Edge` in `rt_lower.hthr`; ledger row `port_classify`). Each still
+crosses the boundary in a 64-bit word, as FunctionIR's calling convention
+passes them:
+
+- **A parameter is the low bits of its word**, read into a fresh port by one
+  `Resize(64, w)` before the body (`Fun::entry`). Binding the word already
+  gives its port the low bits at width `w` (`word_value`), so the meaning
+  did not need the node; the x86 lowering does: it holds a narrow value
+  zero-extended in its register, and a parameter's register holds the whole
+  word passed. The node is the `shl`/`shr` pair at the code's entry.
+- **The result is zero-extended** into a fresh port by one `Resize(w, 64)`
+  after the body (`Ty::widen`).
+- `Ty::cast` between `Word(64)` and `Word(w)` is now the truncation and the
+  zero extension (it was the zero word), so `Ty::Answers` states exactly
+  this at every word passed, and `Fun::lower_sound` proves it once
+  (`Fun::entry_holds`, `Ty::edge_reads`). With no narrow word the entry has
+  no nodes and the code is what it was.
+- The generator states `f::agrees` through `runtime_low(w, x)` and
+  `runtime_wide(w, v)`, which are what `Ty::cast` computes at the two codes,
+  and `compile-x86` reads the widths (`Fun::edge_widths`) to state the same
+  answer in its certificate.
+
+Loops keep `Ty::OneWord` (their state and spent answer are 64-bit words),
+and a call of a function with a narrow parameter is refused (the caller
+would widen its argument first). Both are left in
+`issues/runtime-repr-narrow-words.md`, with the signed reprs, which want a
+`SignResize` at the edge.
+
+### 16.16 A record of two words as a result, and an enum as its tag (design, 2026-11-19)
+
+Minus's choices for ledger rows `port_split` and `port_weight`.
+
+**Two words back in RAX:RDX.** A flat record of two 64-bit fields
+(`PortParsed { value, ok }`) is returned as System V returns a two-word
+aggregate: the first field in RAX, the second in RDX. Nothing goes through
+memory.
+
+- FunctionIR: `Function` gains `also: List<Nat> := []`, the result ports
+  past the first (at most one for now, RDX). `Function::Runs` and
+  `Function::Computes` are unchanged and speak of the first word. A
+  function's second word is stated by `Function::RunsBoth` (the same
+  valuation, both ports), and the evaluator by `Function::eval_also`.
+- The x86 lowering: the function's closing moves its outputs
+  `[result] ++ also` into `[Rax, Rdx]` as one parallel move
+  (`move_outputs`/`outputs_check` already take lists). The epilogue reloads
+  only callee-saved registers and moves RSP, so RDX survives it as RAX
+  does. The contract at the function's label gains a twin
+  (`CalledBoth`/`AnsweredBoth`): entered where `RunsBoth(r1, r2)` holds, it
+  returns with RAX = r1 and RDX = r2. It is proved by the same
+  `function_body`/`function_closes`, generalised from "RAX holds the
+  answer" to "the registers hold the outputs".
+- Calls: a call inside a program still reads RAX alone, so a call of a
+  function with `also` stays refused until `Call` names several results
+  (`issues/function-ir-multi-word-calls.md`). Only the program's entry
+  function returns two words, which is the shape a Rust caller sees.
+- The generator lowers a `Named(i)` result whose fields are two `Word(64)`s
+  to its two ports, publishes `f::agrees` for the first field and
+  `f::agrees_also` for the second, and `compile-x86` states both in the
+  certificate's answer.
+
+**Built (2026-11-19).** As designed, with these names. The closing moves
+the outputs by `File::move_results` (in order, or in reverse where a later
+word sits in an earlier word's register), and the program-level theorem is
+`compiled_returns_both` (function_ir_compile), read by a certificate as
+`Prog::ComputesBoth` through `compiled_computes_both` (function_ir_correct);
+the optimizer is not run over such a program, since its rewrites keep only
+the first word. In rt, a result passes the boundary when it is `Ty::Out`
+(`Ty::Edge`, or a record of two `Word(64)` fields): `Fun::code_of` names the
+second field's port in `also`, `Fun::lower_sound` reads the first word
+(`Ty::out_reads`) and `Fun::lower_sound_also` the rest (`Ty::also_reads`,
+`Ty::AnswersAlso`), both proved once. The reflector meets records as it
+meets reprs (`rt_with_reprs` reruns the walk with the record added, its
+`RecInfo` built from its constructor and its fields' projections, both round
+trips `refl`). Linking: `program_linked_also` and `Compile::root_also`, with
+the instance's agreement on the second word `Setup::plain_agrees_also`. The
+generator publishes `f::agrees` for the first field, `f::agrees_also` for
+the second, and `f::fields`, the fields' names, which `compile-x86` spells
+the answer with. Probes: `lib/_tests/native/runtime/runtime_two_words_tests`
+and `…_refused_tests`; `examples/x86-native/two_words.hthr`, run from C
+(`native_program.rs`).
+
+**An enum as its tag.** A payload-free enum (`PortKind`) is held in one word
+as its constructor's index (§7.2). A `match` on it is a new rt node `Pick`
+whose meaning is the enum's own eliminator over the arms, so the pin stays
+`refl`. It lowers to a chain of compares against the tags, with the last
+arm as the default. The contract covers only real values: `f::agrees`
+quantifies over the enum and passes its tag, so nothing is said of a word
+that is no tag (no clamping, no junk value). An enum result stays refused
+until a caller needs one.
+
+**Built (2026-11-20).** As designed. In rt, `Ty::Enum(i)` names entry `i`
+of the type table, whose `RecInfo.alts` is the enum as an `EnumInfo`: its
+type, its last tag, `of` (a tag to its constructor) and `pick`, the enum's
+own `match` over arms indexed by tag, with the laws `picks`, `of_tag` and
+`tag_of`. An enum is a parameter (`Ty::Param`) and nothing else: it is no
+`Edge`, `Out`, `OneWord` or record field, so an enum result, an enum
+passed to a call and an enum field stay refused. `Tm::Pick(i, c, arms)`
+means `alts.pick` at the arms read with each constructor bound as
+variable 0; its arms test variable 0 against each constructor but the last
+in turn (`Op::TagIs(i, k)`, a `Const` and an `Equal` of the tag word,
+under a `Let` and an `If`), the last arm the default. Both are proved
+sound once in `rt_lower` (`Tm::pick_sound`, `Tm::tag_sound`): inside the
+lowering the tag word is read clamped (`EnumInfo::read`), which is how a
+word that is no tag falls through to the last arm, but no contract states
+such a word.
+
+The reflector meets an enum as it meets a record (`rt_enum_marker`,
+`RecEntry.alts`), before its definition would unfold to the sums the
+kernel holds it as, and reads a `match` on one as a `Pick`
+(`rt_pick`). `Arms` answers a `match` on a type of any number of
+constructors with no fields (the elaborator's case tree read back,
+`case_tree_arms`). The generator builds each enum's `EnumInfo` with
+`EnumInfo::of_ctors`: `pick` is a plain `match` on the value whose arm
+`k` is `a(k)`, which the new host request `Branches` builds through the
+elaborator's own `match` (the `Cases` request's split carries an
+equation, so its term is not the source's), so that the source's `match`
+is `pick` at its arms by conversion and the pin stays `refl`. The laws are
+by cases, each branch `refl`, and the tags are checked by evaluation.
+`f::agrees` quantifies over the enum itself and passes
+`RecInfo::enum_word` (its tag word): the instance's agreement is at what
+the word reads back as, and `RecInfo::enum_agrees` rewrites it to the
+value, from `EnumInfo::of_ctors_tag_le` (every tag is a constructor's) and
+the last tag below 2^64 by evaluation. `compile-x86` quantifies the
+certificate's `_returns` over `RecInfo::enum_at` and passes the tag word;
+it states no `_implements`, which is over every word. An enum beside a
+record result of two words, or in a function lent spans, is refused as
+not stated yet. Probes: `lib/_tests/native/runtime/runtime_enum_tests`
+(two enums, a `match` inside another's arm, words beside the enum) and
+`…_refused_tests`; `examples/x86-native/enum_tag.hthr`, called from C as a
+C `enum` (`native_program.rs`). Ledger row `port_weight` is flipped.
+
+**An enum result (built 2026-11-20).** A function may return an enum, as
+its tag word, and build one: the reflector reads a constructor of an enum
+as `Lit(Enum(i), k)`, `k` its index (an enum the walk has not met is added
+by the marker, as a parameter's is), which means `alts.of(k)` and lowers to
+one `Const` of `k`, checked to be at most the last tag. `Ty::Out` covers an
+enum whose last tag is below 2^64. The word returned is clamped at the last
+tag (`Ty::clamp`: a `Const` of the last tag, one unsigned compare and a
+branch whose arms move the word or the last tag; `Ty::clamp_reads`). The
+clamp is what the program's linking needs, not what a caller sees: a
+program is linked as a function on every word (`program_linked_files`),
+and inside it a word that is no tag reads as the last constructor, so a
+function returning a parameter's word unchanged would return a word that
+is no tag where its meaning returns the last constructor. On every word a
+contract passes, a tag, the clamp changes nothing. Its cost is a compare
+and a branch at each return of an enum; dropping it where the word
+returned is already a tag (a constructor, a `match` whose arms are
+constructors, a callee's result) is `issues/rt-enum-result-clamp.md`.
+`f::agrees` states the tag word of the function's value
+(`RecInfo::enum_word`), and so does the certificate's `_returns`; with no
+enum parameter, `_implements` is stated too, over every word. Probes: the
+enum-result section of `runtime_enum_tests` (a constructor chosen by
+`if`, an enum to an enum, a parameter returned, and a word that is no tag
+returned clamped); `tok_settle` in `examples/x86-native/enum_tag.hthr`,
+called from C, which is `native_program.rs`' enum test now.
+
+**An enum passed to a call (built 2026-11-20).** A call passes an enum
+as its tag word: `Ty::Held` covers an enum, and the callee, whose
+agreement is at every word (`Ty::Answers`), reads the word as the
+constructor it names (`EnumInfo::read`), which is the value the caller
+holds (`Ty::held_reads`: the clamped word is its tag, and `of_tag`). A
+constructor built in the body is passed the same way. Calling a function
+that returns an enum stays refused: the caller would hold the callee's
+tag word, which needs every value's tag to be at most the last
+(`EnumInfo` has no such law yet, and the generator's shape table, whose
+enums are bare indices, could not meet one). Probes: the call section of
+`runtime_enum_tests` (an enum passed twice, a constructor built and
+passed, two enums and a word passed to a callee matching on both).
+
+**`match h:` on an enum (built 2026-11-20).** A `match h:` elaborates to
+the convoy (the match at a convoyed motive applied to `refl`, each arm a
+function of the equation), which does not convert with a plain `match`,
+so `EnumInfo` carries the enum's convoy beside `pick`: `convoy`, built by
+the `Cases` host request (the elaborator's own convoy) with arm `k` the
+`a(k)` of the arms, and its law `convoys` (it chooses the tag's arm), by
+cases with each branch `refl`. `Tm::Pick` carries `eq`, which `match h:`
+sets: its meaning is `EnumInfo::choose` (`pick` or `convoy`), and its
+lowering and its proof are the plain match's (`EnumInfo::chooses`). The
+arms are read under their equation, which no arm's runtime data reads, as
+`IfEq`'s are. Probes: the `match h:` section of `runtime_enum_tests` (its
+pin by `refl`, and one beside a plain `match` returning an enum).

@@ -59,12 +59,15 @@ inductive Ty {
     // `Nat` held in a 64-bit word, as `w.toNat()`: a loop's fuel (design
     // §7.2: a `Nat` is accepted only where a bound is structural).
     Count,
+    // The enum of the type table's entry `i` (`RecInfo.alts`), held in one
+    // word as its constructor's index (design §16.16).
+    Enum(i: Nat),
 }
 
 // A record field's type, read without the table: a record's fields are
 // flat, and a `Named` field (refused by every judgment) means `True`.
 fn Ty::Flat(self t: Ty) → Type {
-    match t { Word(w) => BitVec(w), Bit => Bool, ByteList(_) => List<BitVec(8)>, Lines => List<List<BitVec(8)>>, Named(_) => True, Count => Nat }
+    match t { Word(w) => BitVec(w), Bit => Bool, ByteList(_) => List<BitVec(8)>, Lines => List<List<BitVec(8)>>, Named(_) => True, Count => Nat, Enum(_) => True }
 }
 
 // A tuple of flat fields, `True`-terminated.
@@ -73,11 +76,129 @@ fn Ty::Flats(ts: List<Ty>) → Type {
 }
 
 fn Ty::flat_default(self t: Ty) → t.Flat() {
-    match t { Word(_) => BitVec::ofNat(0), Bit => False, ByteList(_) => Nil, Lines => Nil, Named(_) => trivial, Count => 0 }
+    match t { Word(_) => BitVec::ofNat(0), Bit => False, ByteList(_) => Nil, Lines => Nil, Named(_) => trivial, Count => 0, Enum(_) => trivial }
 }
 
 fn Ty::flats_default(ts: List<Ty>) → Ty::Flats(ts) {
     match ts { Nil => trivial, Cons(t, rest) => Pair(t.flat_default(), Ty::flats_default(rest)) }
+}
+
+// An enum as the meaning reads it (docs/native/runtime-fn-setups-design.md
+// §16.16): its type, its last constructor's index, the constructor at each
+// index (`of`, the last past it), and its own `match` as a function of the
+// arms by index (`pick`), which is what a `match` on it means, so a pin over
+// it stays a conversion. Its tag is the `match` that answers the index
+// (`EnumInfo::tag`), and the laws are that `pick` chooses the tag's arm, and
+// that `of` and the tag are inverse on the constructors. `convoy` is its
+// `match h:` (the match at a convoyed motive applied to `refl`, each arm a
+// function of the equation, `matching::plan_convoy`), which does not
+// convert with the plain one, and which also chooses the tag's arm.
+record EnumInfo {
+    E: Type, last: Nat, of: Nat → E,
+    pick: (R: Type) → (Nat → R) → E → R,
+    picks: (R: Type) → (a: Nat → R) → (v: E) → pick(R, a, v) = a(pick(Nat, λ n => n, v)),
+    of_tag: (v: E) → of(pick(Nat, λ n => n, v)) = v,
+    tag_of: (n: Nat) → n <= last → pick(Nat, λ n => n, of(n)) = n,
+    convoy: (R: Type) → (Nat → R) → E → R,
+    convoys: (R: Type) → (a: Nat → R) → (v: E) → convoy(R, a, v) = a(pick(Nat, λ n => n, v)),
+}
+
+fn EnumInfo::tag(self e: EnumInfo, v: e.E) → Nat { e.pick(Nat, λ n => n, v) }
+
+// The enum's `match` (`eq` False) or its `match h:` (`eq` True).
+fn EnumInfo::choose(self e: EnumInfo, eq: Bool, R: Type, a: Nat → R, v: e.E) → R {
+    match eq { False => e.pick(R, a, v), True => e.convoy(R, a, v) }
+}
+
+// Either chooses the tag's arm.
+theorem EnumInfo::chooses(self e: EnumInfo, eq: Bool, R: Type, a: Nat → R, v: e.E): e.choose(eq, R, a, v) = a(e.tag(v)) {
+    match eq { False => e.picks(R, a, v), True => e.convoys(R, a, v) }
+}
+
+// The constructor a word names: its index, the last constructor past it.
+// This is how compiled code reads a word that is no tag (its compares fall
+// through to the last arm); a contract states only the words that are tags.
+fn EnumInfo::read(self e: EnumInfo, x: BitVec(64)) → e.E { e.of(x.toNat().min(e.last)) }
+
+// No enum: what a record's entry carries.
+fn EnumInfo::none() → EnumInfo {
+    EnumInfo(True, 0, λ _ => trivial, λ R a _ => a(0), λ R a v => refl, λ v => refl,
+        λ n => match n as λ k => k <= 0 → 0 = k { Zero => λ _ => refl, Succ(_) => λ never => false_elim(never) },
+        λ R a _ => a(0), λ R a v => refl)
+}
+
+// An enum of `last + 1` constructors as a judgment and a lowering read it:
+// only `last`, the tags its compares test (the generator's table before
+// the enum's own, `runtime_rec_table`).
+fn EnumInfo::shape(last: Nat) → EnumInfo {
+    EnumInfo(Nat, last, λ n => n, λ R a v => a(v), λ R a v => refl, λ v => refl, λ n _ => refl, λ R a v => a(v), λ R a v => refl)
+}
+
+// Every index up to `m` passes `p`.
+fn Nat::all_upto(m: Nat, p: Nat → Bool) → Bool {
+    match m { Zero => p(0), Succ(k) => Nat::all_upto(k, p).and(p(k + 1)) }
+}
+
+theorem Nat::all_upto_at(p: Nat → Bool, m: Nat): Nat::all_upto(m, p) = True → (n: Nat) → n <= m → p(n) = True {
+    match m {
+        Zero => λ all n => match n as λ k => k <= 0 → p(k) = True { Zero => λ _ => all, Succ(_) => λ never => false_elim(never) },
+        Succ(k) => λ all n le => {
+            let parts = Bool::and_true_parts(Nat::all_upto(k, p), p(k + 1), all);
+            match n.lt_or_ge(k + 1) {
+                Inl(lt) => Nat::all_upto_at(p, k, parts.left, n, lt),
+                Inr(ge) => j(Nat::le_antisym(k + 1, n, ge, le), λ y _ => p(y) = True, parts.right),
+            }
+        },
+    }
+}
+
+// An enum from its constructors in order, its own `match` and its laws by
+// cases, the indices checked by evaluation: what a generator builds.
+fn EnumInfo::of_ctors<E>(first: E, rest: List<E>, pick: (R: Type) → (Nat → R) → E → R,
+    picks: (R: Type) → (a: Nat → R) → (v: E) → pick(R, a, v) = a(pick(Nat, λ n => n, v)),
+    of_tag: (v: E) → Cons(first, rest).nth(pick(Nat, λ n => n, v).min(rest.len())).unwrap_or(first) = v,
+    checked: Nat::all_upto(rest.len(), λ n => pick(Nat, λ k => k, Cons(first, rest).nth(n.min(rest.len())).unwrap_or(first)).same(n)) = True,
+    convoy: (R: Type) → (Nat → R) → E → R, convoys: (R: Type) → (a: Nat → R) → (v: E) → convoy(R, a, v) = a(pick(Nat, λ n => n, v))) → EnumInfo {
+    EnumInfo(E, rest.len(), λ n => Cons(first, rest).nth(n.min(rest.len())).unwrap_or(first), pick, picks, of_tag,
+        λ n le => Nat::same_sound(pick(Nat, λ k => k, Cons(first, rest).nth(n.min(rest.len())).unwrap_or(first)), n,
+            Nat::all_upto_at(λ m => pick(Nat, λ k => k, Cons(first, rest).nth(m.min(rest.len())).unwrap_or(first)).same(m), rest.len(), checked, n, le)),
+        convoy, convoys)
+}
+
+// A value's tag is among the constructors' where `of` reads a tag past
+// `last` as `last` does.
+theorem EnumInfo::tag_le(self e: EnumInfo, v: e.E, clamps: e.of(e.tag(v)) = e.of(e.tag(v).min(e.last))): e.tag(v) <= e.last {
+    let below = Nat::min_le_r(e.tag(v), e.last);
+    let back: (e.tag(e.of(e.tag(v).min(e.last))) = e.tag(v).min(e.last)) = e.tag_of(e.tag(v).min(e.last), below);
+    let same: (e.of(e.tag(v).min(e.last)) = v) = trans(sym(clamps), e.of_tag(v));
+    let tagged: (e.tag(v) = e.tag(v).min(e.last)) = j(same, λ y _ => e.tag(y) = e.tag(v).min(e.last), back);
+    j(sym(tagged), λ y _ => y <= e.last, below)
+}
+
+// The word of a value's tag reads back as the value: what a call passing
+// an enum as its tag word relies on (docs/native/runtime-fn-setups-design.md
+// §16.16).
+theorem EnumInfo::read_tag(self e: EnumInfo, v: e.E, le: e.tag(v) <= e.last, small: (e.last + 1).leb(Nat::pow(2, 64)) = True):
+    e.read(BitVec::ofNat(e.tag(v))) = v {
+    let lt: (e.tag(v) < Nat::pow(2, 64)) = Nat::le_trans(e.tag(v) + 1, e.last + 1, Nat::pow(2, 64), Nat::le_succ_succ(e.tag(v), e.last, le),
+        Nat::le_of_leb(e.last + 1, Nat::pow(2, 64), small));
+    let word: (BitVec::ofNat(e.tag(v), n := 64).toNat() = e.tag(v)) = BitVec::toNat_ofNat(64, e.tag(v), lt);
+    let clamped: (BitVec::ofNat(e.tag(v), n := 64).toNat().min(e.last) = e.tag(v)) =
+        j(sym(word), λ y _ => y.min(e.last) = e.tag(v), Nat::min_eq_l(e.tag(v), e.last, le));
+    j(sym(clamped), λ y _ => e.of(y) = v, e.of_tag(v))
+}
+
+// An enum built from its constructors: every value's tag is among them.
+theorem EnumInfo::of_ctors_tag_le<E>(first: E, rest: List<E>, pick: (R: Type) → (Nat → R) → E → R,
+    picks: (R: Type) → (a: Nat → R) → (v: E) → pick(R, a, v) = a(pick(Nat, λ n => n, v)),
+    of_tag: (v: E) → Cons(first, rest).nth(pick(Nat, λ n => n, v).min(rest.len())).unwrap_or(first) = v,
+    checked: Nat::all_upto(rest.len(), λ n => pick(Nat, λ k => k, Cons(first, rest).nth(n.min(rest.len())).unwrap_or(first)).same(n)) = True,
+    convoy: (R: Type) → (Nat → R) → E → R, convoys: (R: Type) → (a: Nat → R) → (v: E) → convoy(R, a, v) = a(pick(Nat, λ n => n, v)), v: E):
+    EnumInfo::of_ctors(first, rest, pick, picks, of_tag, checked, convoy, convoys).tag(v) <= rest.len() {
+    let t = pick(Nat, λ n => n, v);
+    EnumInfo::of_ctors(first, rest, pick, picks, of_tag, checked, convoy, convoys).tag_le(v,
+        cong_fn(λ (n: Nat) => Cons(first, rest).nth(n).unwrap_or(first),
+            sym(Nat::min_eq_l(t.min(rest.len()), rest.len(), Nat::min_le_r(t, rest.len())))))
 }
 
 // A record type as the meaning reads it: the type, its fields' codes, the
@@ -92,6 +213,24 @@ record RecInfo {
     // by η for a record's own constructor and fields): what passing a
     // record held in one word to a call relies on.
     back: (v: T) → mk(get(v)) = v,
+    // The entry's enum, for an `Enum` code (none for a record's).
+    alts: EnumInfo := EnumInfo::none(),
+}
+
+// The enum of table entry `i`, as a type: what a certificate quantifies an
+// enum parameter over.
+fn RecInfo::enum_at(tys: Nat → RecInfo, i: Nat) → Type { tys(i).alts.E }
+
+// The word an enum of table entry `i` is passed as: its tag.
+fn RecInfo::enum_word(tys: Nat → RecInfo, i: Nat, v: tys(i).alts.E) → BitVec(64) { BitVec::ofNat(tys(i).alts.tag(v)) }
+
+// What is said of the value an enum's tag word reads back as is said of
+// the value (`EnumInfo::read_tag`): how a generator states a function's
+// agreement at the enum it was passed rather than at what its word reads
+// as.
+theorem RecInfo::enum_agrees(tys: Nat → RecInfo, i: Nat, v: tys(i).alts.E, le: tys(i).alts.tag(v) <= tys(i).alts.last,
+    small: (tys(i).alts.last + 1).leb(Nat::pow(2, 64)) = True, P: tys(i).alts.E → Type, h: P(tys(i).alts.read(RecInfo::enum_word(tys, i, v)))): P(v) {
+    j(tys(i).alts.read_tag(v, le, small), λ y _ => P(y), h)
 }
 
 // The `i`th code, `Bit` past the end (every judgment refuses that index).
@@ -100,7 +239,10 @@ fn Ty::at(ts: List<Ty>, i: Nat) → Ty {
 }
 
 fn Ty::sem(self t: Ty, tys: Nat → RecInfo) → Type {
-    match t { Word(w) => BitVec(w), Bit => Bool, ByteList(_) => List<BitVec(8)>, Lines => List<List<BitVec(8)>>, Named(i) => tys(i).T, Count => Nat }
+    match t {
+        Word(w) => BitVec(w), Bit => Bool, ByteList(_) => List<BitVec(8)>, Lines => List<List<BitVec(8)>>, Named(i) => tys(i).T, Count => Nat,
+        Enum(i) => tys(i).alts.E,
+    }
 }
 
 // Every type is inhabited, so a meaning is total: an ill-typed node (which
@@ -113,27 +255,31 @@ fn Ty::default(self t: Ty, tys: Nat → RecInfo) → t.sem(tys) {
         Lines => Nil,
         Named(i) => tys(i).mk(Ty::flats_default(tys(i).fields)),
         Count => 0,
+        Enum(i) => tys(i).alts.of(0),
     }
 }
 
 fn Ty::to_flat(self t: Ty, tys: Nat → RecInfo) → t.sem(tys) → t.Flat() {
-    match t { Word(_) => λ v => v, Bit => λ v => v, ByteList(_) => λ v => v, Lines => λ v => v, Named(_) => λ _ => trivial, Count => λ v => v }
+    match t { Word(_) => λ v => v, Bit => λ v => v, ByteList(_) => λ v => v, Lines => λ v => v, Named(_) => λ _ => trivial, Count => λ v => v, Enum(_) => λ _ => trivial }
 }
 
 fn Ty::of_flat(self t: Ty, tys: Nat → RecInfo) → t.Flat() → t.sem(tys) {
-    match t { Word(_) => λ v => v, Bit => λ v => v, ByteList(_) => λ v => v, Lines => λ v => v, Named(i) => λ _ => Named(i).default(tys), Count => λ v => v }
+    match t {
+        Word(_) => λ v => v, Bit => λ v => v, ByteList(_) => λ v => v, Lines => λ v => v, Named(i) => λ _ => Named(i).default(tys), Count => λ v => v,
+        Enum(i) => λ _ => Enum(i).default(tys),
+    }
 }
 
 // The code of a list's elements: a byte for a byte buffer, a byte string
 // for a list of lines (`Bit`, which nothing folds, for the rest).
 fn Ty::elem(self t: Ty) → Ty {
-    match t { Word(_) => Bit, Bit => Bit, ByteList(_) => Word(8), Lines => ByteList(0), Named(_) => Bit, Count => Bit }
+    match t { Word(_) => Bit, Bit => Bit, ByteList(_) => Word(8), Lines => ByteList(0), Named(_) => Bit, Count => Bit, Enum(_) => Bit }
 }
 
 // A list's elements, at their code (empty for a code that is no list): at
 // a closed code, the value itself.
 fn Ty::items(self t: Ty, tys: Nat → RecInfo) → t.sem(tys) → List<t.elem().sem(tys)> {
-    match t { Word(_) => λ _ => Nil, Bit => λ _ => Nil, ByteList(_) => λ v => v, Lines => λ v => v, Named(_) => λ _ => Nil, Count => λ _ => Nil }
+    match t { Word(_) => λ _ => Nil, Bit => λ _ => Nil, ByteList(_) => λ v => v, Lines => λ v => v, Named(_) => λ _ => Nil, Count => λ _ => Nil, Enum(_) => λ _ => Nil }
 }
 
 // The equation between two codes, as data: at two closed codes it
@@ -156,6 +302,10 @@ fn Ty::equation(self a: Ty, b: Ty) → (a = b) ∨ True {
             _ => Inr(trivial),
         },
         Count => match b { Count => Inl(refl), _ => Inr(trivial) },
+        Enum(i) => match b {
+            Enum(k) => match i.equation(k) { Inl(e) => Inl(j(e, λ x _ => Enum(i) = Enum(x), refl)), Inr(_) => Inr(trivial) },
+            _ => Inr(trivial),
+        },
     }
 }
 
@@ -169,31 +319,38 @@ fn Ty::to_count(tys: Nat → RecInfo, a: Ty) → a.sem(tys) → Nat {
         Lines => λ _ => 0,
         Named(_) => λ _ => 0,
         Count => λ n => n,
+        Enum(_) => λ _ => 0,
     }
 }
 
 // A 64-bit word read at a flat code, and a flat value read back as a
 // 64-bit word: the word itself at `Word(64)` (the transport along `64 = w`
-// evaluates away at a literal width), the default elsewhere.
+// evaluates away at a literal width); at a narrower word, its low bits, and
+// the narrow word zero-extended back (how a narrow word crosses a function's
+// boundary in a 64-bit one, issues/runtime-repr-narrow-words.md: the low
+// bits are what binding the word gives its port at that width,
+// `word_value`); the default elsewhere.
 fn Ty::word_at(self f: Ty, x: BitVec(64)) → f.Flat() {
     match f as λ y => y.Flat() {
-        Word(w) => match Nat::equation(64, w) { Inl(e) => j(e, λ y _ => BitVec(y), x), Inr(_) => BitVec::ofNat(0) },
+        Word(w) => match Nat::equation(64, w) { Inl(e) => j(e, λ y _ => BitVec(y), x), Inr(_) => BitVec::ofNat(x.toNat()) },
         Bit => False,
         ByteList(_) => Nil,
         Lines => Nil,
         Named(_) => trivial,
         Count => 0,
+        Enum(_) => trivial,
     }
 }
 
 fn Ty::flat_word(self f: Ty) → f.Flat() → BitVec(64) {
     match f as λ y => y.Flat() → BitVec(64) {
-        Word(w) => λ v => match w.equation(64) { Inl(e) => j(e, λ y _ => BitVec(y), v), Inr(_) => BitVec::ofNat(0) },
+        Word(w) => λ v => match w.equation(64) { Inl(e) => j(e, λ y _ => BitVec(y), v), Inr(_) => BitVec::ofNat(v.toNat()) },
         Bit => λ _ => BitVec::ofNat(0),
         ByteList(_) => λ _ => BitVec::ofNat(0),
         Lines => λ _ => BitVec::ofNat(0),
         Named(_) => λ _ => BitVec::ofNat(0),
         Count => λ _ => BitVec::ofNat(0),
+        Enum(_) => λ _ => BitVec::ofNat(0),
     }
 }
 
@@ -218,6 +375,7 @@ fn Ty::word_from(tys: Nat → RecInfo, a: Ty) → a.sem(tys) → BitVec(64) {
         Lines => λ _ => BitVec::ofNat(0),
         Named(i) => λ v => Ty::flats_head_word(tys(i).fields, tys(i).get(v)),
         Count => λ _ => BitVec::ofNat(0),
+        Enum(i) => λ v => BitVec::ofNat(tys(i).alts.tag(v)),
     }
 }
 
@@ -235,6 +393,7 @@ fn Ty::convert(tys: Nat → RecInfo, a, b: Ty, v: a.sem(tys)) → b.sem(tys) {
         Lines => Nil,
         Named(i) => tys(i).mk(Ty::flats_word(tys(i).fields, Ty::word_from(tys, a, v))),
         Count => Ty::to_count(tys, a, v),
+        Enum(i) => tys(i).alts.read(Ty::word_from(tys, a, v)),
     }
 }
 
@@ -373,6 +532,9 @@ inductive Op {
     // An operation of two words named once, with its meaning
     // (`function_ir_operation`): a multiply, a shift by a word, a divide.
     Apply(o: Operation, w: Nat),
+    // Whether an enum of table entry `i` is its constructor `k`: how a
+    // `match` on it tests each arm (`Tm::Pick`), a compare of its tag word.
+    TagIs(i: Nat, k: Nat),
 }
 
 fn Op::params(self o: Op) → List<Ty> {
@@ -389,6 +551,7 @@ fn Op::params(self o: Op) → List<Ty> {
         Shl(w, _) => [Word(w)], Lshr(w, _) => [Word(w)], Ashr(w, _) => [Word(w)],
         Sext(n, _) => [Word(n + 1)],
         Apply(_, w) => [Word(w), Word(w)],
+        TagIs(i, _) => [Enum(i)],
     }
 }
 
@@ -405,6 +568,7 @@ fn Op::result(self o: Op) → Ty {
         Shl(w, _) => Word(w), Lshr(w, _) => Word(w), Ashr(w, _) => Word(w),
         Sext(n, extra) => Word(extra + (n + 1)),
         Apply(_, w) => Word(w),
+        TagIs(_, _) => Bit,
     }
 }
 
@@ -432,6 +596,7 @@ fn Op::sem(self o: Op, tys: Nat → RecInfo) → Ty::Arrows(tys, o.params(), o.r
         Ashr(w, k) => λ (x: BitVec(w)) => x.arithmetic_shift_right(k),
         Sext(n, extra) => λ (x: BitVec(n + 1)) => x.sign_extend(extra),
         Apply(o, w) => λ (x: BitVec(w)) (y: BitVec(w)) => o.meaning(x, y),
+        TagIs(i, k) => λ (v: tys(i).alts.E) => tys(i).alts.tag(v).same(k),
     }
 }
 
@@ -474,6 +639,13 @@ inductive Tm {
     // where it lies and how long it is (docs/native/native-one-compiler-design.md
     // §2.3), and reads through the second.
     Byte(k: Nat, i: Nat, length: Nat),
+    // `match` on an enum variable `c` of table entry `i`: the enum's own
+    // `match` (`EnumInfo.pick`), each constructor's arm `arms` read with
+    // that constructor bound as variable 0. `arms` tests variable 0 against
+    // each constructor in turn (`Prim(TagIs(i, k), …)` and `If`), the last
+    // constructor's arm the default (docs/native/runtime-fn-setups-design.md
+    // §16.16).
+    Pick(i: Nat, c: Nat, arms: Tm, eq: Bool),
 }
 
 record Sig { params: List<Ty>, result: Ty }
@@ -555,6 +727,8 @@ fn Tm::lit(t: Ty, n: Nat, tys: Nat → RecInfo) → t.sem(tys) {
         Lines => Nil,
         Named(i) => Named(i).default(tys),
         Count => n,
+        // A constructor of an enum by its index (`EnumInfo.of`).
+        Enum(i) => tys(i).alts.of(n),
     }
 }
 
@@ -573,6 +747,7 @@ fn Tm::ty(self t: Tm, w: World, g: List<Ty>) → Ty {
         Fold(_, _, step) => Sig::at(w.sigs, step).result,
         Case(_, zero, _) => zero.ty(w, g),
         Byte(_, _, _) => Word(8),
+        Pick(i, _, arms, _) => arms.ty(w, Cons(Enum(i), g)),
     }
 }
 
@@ -625,6 +800,9 @@ fn Tm::sem(self t: Tm, w: World) → (g: List<Ty>) → Env(w.tys, g) → t.ty(w,
         Byte(k, i, length) => λ g env =>
             w.spans.span(k).byte_within(Ty::cast(w.tys, Ty::at(g, length), Word(64), Env::get(w.tys, g, env, length)),
                 Ty::cast(w.tys, Ty::at(g, i), Word(64), Env::get(w.tys, g, env, i))),
+        Pick(i, c, arms, eq) => λ g env =>
+            w.tys(i).alts.choose(eq, arms.ty(w, Cons(Enum(i), g)).sem(w.tys), λ n => arms.sem(w, Cons(Enum(i), g), Pair(w.tys(i).alts.of(n), env)),
+                Ty::cast(w.tys, Ty::at(g, c), Enum(i), Env::get(w.tys, g, env, c))),
     }
 }
 
@@ -646,6 +824,9 @@ fn RecInfo::cons(r: RecInfo, rest: Nat → RecInfo) → Nat → RecInfo { λ i =
 // A record's shape alone, its type its field tuple: what a generator judges
 // and lowers against, neither of which reads a record's type.
 fn RecInfo::shape(fs: List<Ty>) → RecInfo { RecInfo(Ty::Flats(fs), fs, λ t => t, λ t => t, λ t => refl, λ t => refl) }
+
+// An enum's entry in a type table: no record, the enum `e`.
+fn RecInfo::of_enum(e: EnumInfo) → RecInfo { RecInfo(True, [], λ _ => trivial, λ _ => trivial, λ t => refl, λ v => refl, alts := e) }
 
 // A type held in one 64-bit word by its `datarepr` (`SInt(64)` at
 // `BitVec(64)`, docs/native/runtime-fn-setups-design.md §16.13): the spec type
@@ -670,6 +851,7 @@ fn Ty::same(self a: Ty, b: Ty) → Bool {
         Lines => match b { Lines => True, _ => False },
         Named(i) => match b { Named(k) => i.same(k), _ => False },
         Count => match b { Count => True, _ => False },
+        Enum(i) => match b { Enum(k) => i.same(k), _ => False },
     }
 }
 
@@ -702,6 +884,7 @@ fn Op::code(self o: Op) → Pair<Nat, Pair<Nat, Nat>> {
         Shl(w, k) => Pair(17, Pair(w, k)), Lshr(w, k) => Pair(18, Pair(w, k)), Ashr(w, k) => Pair(19, Pair(w, k)),
         Sext(n, extra) => Pair(20, Pair(n, extra)),
         Apply(o, w) => Pair(21, Pair(w, o.code())),
+        TagIs(i, k) => Pair(22, Pair(i, k)),
     }
 }
 
@@ -726,6 +909,10 @@ fn Tm::same(self t: Tm) → Tm → Bool {
         },
         Case(c, zero, succ) => λ u => match u { Case(c2, zero2, succ2) => c.same(c2).and(zero.same(zero2)).and(succ.same(succ2)), _ => False },
         Byte(k, i, length) => λ u => match u { Byte(k2, i2, length2) => k.same(k2).and(i.same(i2)).and(length.same(length2)), _ => False },
+        Pick(i, c, arms, eq) => λ u => match u {
+            Pick(i2, c2, arms2, eq2) => i.same(i2).and(c.same(c2)).and(arms.same(arms2)).and(match eq { True => eq2, False => !eq2 }),
+            _ => False,
+        },
     }
 }
 
