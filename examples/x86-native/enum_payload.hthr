@@ -24,3 +24,9 @@ import runtime;
 inductive Diff { Borrow, Exact(d: u64) }
 
 runtime fn sub_checked(a, b: u64) → Diff { if a < b { Borrow } else { Exact(a - b) } }
+
+// And as a parameter: passed as its words, its tag word and then its
+// slot (`RecInfo::enum_words`), which is how System V passes that same
+// C structure by value, in two registers. Every slot of an enum passed
+// in is a 64-bit word, so the words are any the caller has.
+runtime fn diff_or(d: Diff, fallback: u64) → u64 { match d { Borrow => fallback, Exact(x) => x } }

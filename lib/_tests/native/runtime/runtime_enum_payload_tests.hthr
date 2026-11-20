@@ -105,3 +105,47 @@ theorem flag_of_runs(): program_eval(flag_of::program, 0, [BitVec::ofNat(3)]) = 
 }
 
 theorem flag_of_slots(): flag_of::world.tys(0).alts.slots = [Bit] { refl }
+
+// ---------------------------------------------------------------------------
+// An enum with fields as a parameter: passed as its words, its tag word and
+// then its payload's slots (`RecInfo::enum_words`), as C passes a structure
+// `{ tag, slots… }` of integer words, one register each. The theorem is
+// stated at the enum's values, so a tag past the last constructor is
+// nothing the code is asked about.
+
+runtime fn pocket_n(p: Pocket) → u64 { match p { Empty => 0, Holds(n) => n } }
+
+theorem pocket_n_agrees(p: Pocket): program_eval(pocket_n::program, 0, RecInfo::enum_words(pocket_n::world.tys, 0, p)) = pocket_n(p) {
+    pocket_n::agrees(p)
+}
+
+theorem pocket_n_runs(): program_eval(pocket_n::program, 0, [BitVec::ofNat(1), BitVec::ofNat(7)]) = 7 ∧
+    program_eval(pocket_n::program, 0, [BitVec::ofNat(0), BitVec::ofNat(0)]) = 0 {
+    ⟨pocket_n::agrees(Holds(BitVec::ofNat(7))), pocket_n::agrees(Empty)⟩
+}
+
+// Three slots and a word after them: five words.
+runtime fn shape_scaled(s: Shape, k: u64) → u64 { match s { Dot => k, Line(l) => l * k, Rect(w, h) => w * h * k } }
+
+theorem shape_scaled_agrees(s: Shape, k: u64):
+    program_eval(shape_scaled::program, 0, RecInfo::enum_words(shape_scaled::world.tys, 0, s) ++ [k]) = shape_scaled(s, k) {
+    shape_scaled::agrees(s, k)
+}
+
+theorem shape_scaled_runs(): program_eval(shape_scaled::program, 0, [BitVec::ofNat(2), BitVec::ofNat(0), BitVec::ofNat(3), BitVec::ofNat(4), BitVec::ofNat(5)]) = 60 {
+    shape_scaled::agrees(Rect(BitVec::ofNat(3), BitVec::ofNat(4)), BitVec::ofNat(5))
+}
+
+// A word before it, and an enum both in and out: its words in, its tag
+// word and slot out.
+runtime fn pocket_add(x: u64, p: Pocket) → Pocket { match p { Empty => Holds(x), Holds(n) => Holds(n + x) } }
+
+theorem pocket_add_agrees(x: u64, p: Pocket):
+    program_eval(pocket_add::program, 0, Cons(x, RecInfo::enum_words(pocket_add::world.tys, 0, p))) = RecInfo::enum_word(pocket_add::world.tys, 0, pocket_add(x, p)) ∧
+    program_eval_also(pocket_add::program, Cons(x, RecInfo::enum_words(pocket_add::world.tys, 0, p))) = RecInfo::enum_rest(pocket_add::world.tys, 0, pocket_add(x, p)) {
+    ⟨pocket_add::agrees(x, p), pocket_add::agrees_also(x, p)⟩
+}
+
+theorem pocket_add_runs(): program_eval_also(pocket_add::program, [BitVec::ofNat(2), BitVec::ofNat(1), BitVec::ofNat(5)]) = [BitVec::ofNat(7)] {
+    pocket_add::agrees_also(BitVec::ofNat(2), Holds(BitVec::ofNat(5)))
+}
