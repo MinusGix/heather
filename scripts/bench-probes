@@ -5,7 +5,7 @@ library, one at a time, through the `heather` binary the suite runs.
     scripts/bench-probes                     # measure every default case, print
     scripts/bench-probes --filter native     # the cases whose name contains it
     scripts/bench-probes --heavy             # also the write-elf cases (a minute or more each)
-    scripts/bench-probes --check             # compare against perf/bench/results.tsv; exit 1 on a regression
+    scripts/bench-probes --check             # compare against perf/bench/results.tsv; exit 1 if a counter grew
     scripts/bench-probes --save              # record this run's rows in perf/bench/results.tsv
     scripts/bench-probes --list              # what is in the suite, and why
 
@@ -50,9 +50,12 @@ Case kinds (cases.tsv `kind`):
   stale the way a frozen copy did (issues/bench-probe-cases-stale-2026-11.md).
 
 Counters (evaluator steps, conversion queries, substitution nodes, gated
-terms) are exact for one tree and must agree across samples; seconds are the
-minimum over samples, with the spread printed. Stdlib only, like
-scripts/timings.
+terms, the largest value arena) are exact for one tree and must agree across
+samples; seconds are the minimum over samples, with the spread printed.
+`--check` gates on the counters, on any machine: one that grew is a
+regression. Seconds are information (a case past SLOWER is printed as
+slower), because a busy box is slower without the code doing more work.
+Stdlib only, like scripts/timings.
 """
 
 import argparse
@@ -81,9 +84,9 @@ WORK = Path(os.environ.get("CARGO_TARGET_DIR", ROOT / "target")) / "bench-probes
 MEM_BYTES = 6 << 30
 CPU_SECS = int(os.environ.get("HEATHER_BENCH_CPU_SECS", "900"))
 
-# A time regression is a case at least this much slower than its recorded
-# row on the same environment key; the kernel suite's threshold, for its
-# reason (docs/infrastructure/benchmarking.md: a gate that cries wolf gets ignored).
+# A case at least this much slower than its recorded row on the same
+# environment key is printed as slower; the kernel suite's threshold. Not a
+# failure: the counters are the gate (docs/infrastructure/benchmarking.md).
 SLOWER = 1.25
 FASTER = 0.8
 
@@ -93,7 +96,9 @@ IMAGE_COLS = ["image_decode_ns", "image_recheck_ns", "image_relocate_ns", "image
 # New counters go at the end: a row saved before one existed is shorter, and
 # `--check` skips a counter the saved row does not have.
 COUNTERS = ["eval_steps", "queries", "conv_misses", "local_subst_nodes", "shift_global_nodes", "check_terms",
-            "reduce_steps", "reduce_frames"]
+            "reduce_steps", "reduce_frames", "arena_peak_bytes"]
+# Peaks: the case's value is the largest of its rows', not their sum.
+PEAKS = {"arena_peak_bytes"}
 # Exact for one tree, except these two: the substitution and rescoping memos
 # are keyed by node address, so what they answer (and so the nodes visited)
 # moves by a little from run to run. They are compared within this fraction.
@@ -244,6 +249,8 @@ def measure_rows(rows):
     for c in COUNTERS:
         if c == "queries":
             m[c] = sum(g(r, "conv_shortcut_hits") + g(r, "conv_memo_hits") + g(r, "conv_misses") for r in rows)
+        elif c in PEAKS:
+            m[c] = max((g(r, c) for r in rows), default=0)
         else:
             m[c] = sum(g(r, c) for r in rows)
     return m
@@ -452,17 +459,21 @@ def main():
         if args.check and case["name"] in old:
             o = old[case["name"]]
             moved = [c for c in COUNTERS if o.get(c) and (abs(m[c] - int(o[c])) > int(o[c]) * APPROX_TOLERANCE if c in APPROX else str(m[c]) != o[c])]
-            if moved:
-                print(f"{'':34} counters moved: " + ", ".join(f"{c} {o[c]} → {m[c]}" for c in moved))
+            grew = [c for c in moved if m[c] > int(o[c])]
+            fell = [c for c in moved if m[c] < int(o[c])]
+            if grew:
+                print(f"{'':34} REGRESSED: " + ", ".join(f"{c} {o[c]} → {m[c]}" for c in grew))
+                regressed = True
+            if fell:
+                print(f"{'':34} fewer: " + ", ".join(f"{c} {o[c]} → {m[c]}" for c in fell) + "; re-record with --save if intended")
             if comparable:
                 ratio = m["time"] / max(float(o["time"]), 1e-9)
                 if ratio >= SLOWER:
-                    print(f"{'':34} REGRESSED: time ×{ratio:.2f} ({o['time']} s → {m['time']:.2f} s)")
-                    regressed = True
+                    print(f"{'':34} slower: time ×{ratio:.2f} ({o['time']} s → {m['time']:.2f} s); counters are the gate")
                 elif ratio <= FASTER:
                     print(f"{'':34} faster: time ×{ratio:.2f}; re-record with --save if intended")
     if args.check and not comparable:
-        print(f"shape-only: results.tsv was recorded on another environment ({', '.join(f'{k}={old_env.get(k)}' for k in TIME_KEY)}); counters compared, seconds not")
+        print(f"results.tsv was recorded on another environment ({', '.join(f'{k}={old_env.get(k)}' for k in TIME_KEY)}): counters compared, seconds not")
     if args.save:
         if args.samples < 3:
             print("⚠ fewer than three samples saved: the minimum is a weak estimate")
@@ -475,8 +486,6 @@ def main():
             print("results.tsv was another environment's; this run replaces it whole")
         write_results(env, rows)
         print(f"saved {len(results)} case(s) to {RESULTS.relative_to(ROOT)}")
-    if args.check and not comparable:
-        sys.exit(3)
     sys.exit(1 if regressed else 0)
 
 
