@@ -102,6 +102,7 @@ Each case also records the kernel's own counters (`heather_kernel::stats`)
 over one run: evaluator fuel (`eval_steps`), δ-steps (`eval_delta_steps`),
 the substitution reducer's steps (`reduce_steps`), the nodes the shift and
 substitution traversals visited (`local_subst_nodes`, `shift_global_nodes`),
+the node pairs syntactic equality compared (`syntax_eq_nodes`),
 and the largest value arena one query built (`arena_peak_bytes`, the same
 count `heather check --timings` reports per declaration as `arena MB`). The
 report prints them after each case and fits a **work slope** per counter
@@ -205,18 +206,27 @@ Two, and both have been paid for elsewhere in this tree:
 |---|---|
 | `subst/shift-local` | one full pass over a term, no replacement — the suite's floor for "what does a traversal cost" |
 | `subst/apply-local` | the same pass with replacement; the gap is what substitution adds |
+| `subst/shared-dag` | `[3/x]` into a term 2ⁿ nodes as a tree and n as a DAG: the substitution memo keeps it linear |
 | `nat/step-once` | **one** `elim_Nat` β-step against annotation size the rule never reads. Expected exponent zero — the sharpest fixture here |
 | `nat/add-normalize` | the kernel *executing* a program: `n` β-steps, then reading a numeral off |
 | `nat/mul-normalize` | quadratic by construction — the control that proves the fit distinguishes exponents |
 | `nat/check-numeral` | the checking walk of `issues/numeral-stack-depth.md`, timed |
+| `run/affine-literal`, `run/sync-literal`, `run/mul-literal`, `run/open-tail` | folds over literals 16 to 4096 bits wide, which the run machinery moves in a few steps: flat counters. Their time is not flat past one word (`issues/wide-literal-run-cost.md`), and the bands record that |
+| `run/fuel-exhaustion` | a tail-calling fold refused at a fuel budget: steps and arena bytes per unit of fuel (a fold that nests its hypothesis is refused at `NATIVE_DEPTH_LIMIT` instead, whatever the budget) |
 | `conv/computed-numeral` | an equation discharged purely by computation — the thesis-shaped fixture in miniature |
 | `conv/perturbed-pairs` | conversion over the generated well-typed corpus: representative shapes, not chosen ones |
 | `conv/vec-literal` | a nested-pair vector literal at the elaborator's shape checked against `[T; n]` — linear since the spelled-`Vec` congruence (2026-09-11); it was quadratic through the `Σ` encodings |
 | `conv/vec-items-values` | two separately built `VecItems` nodes compared by value — linear since tail windows read the array's suffix joins (2026-11-07, `issues/vec-items-window-bounds.md`); it was quadratic, each fresh tail walking its window |
+| `conv/shared-neutral-dag` | two separately built neutral DAGs: quadratic in `syntax_eq_nodes` today (`issues/conversion-neutral-dag-syntax-memo.md`), and the band records it |
 | `delta/closed-sum` | conversion of two applications of one defined `add`, one side's argument a `max` folded over a chain of glued definitions: the shape of `issues/conversion-closed-sum-opaque-counter.md`. With the run machinery forcing those counters opaquely (before `Eval::force_counter`) its `eval_steps` grew as ~n^1.2 and rising and its arena 3× at 128 definitions; now linear |
 | `delta/closed-numeral` | the same left side against a numeral: the control, which takes one transparent run and no same-head attempt |
 | `delta/lockstep` | two interleaved chains of definitions with one value, compared by advancing the newer side |
+| `delta/refusal` | lockstep's chains one apart: a mismatch costs what a match does |
 | `delta/same-head-args` | one defined head whose arguments agree only through a chain of definitions |
+| `delta/shared-dag` | `dᵢ := max(dᵢ₋₁, dᵢ₋₁)`: a tree 2ⁿ wide over n definitions, linear through the glued values' memo |
+| `delta/record-projections` | field reads out of a chain of glued records, one field computed and one carried |
+| `delta/check-refl` | `refl : aₙ = n` through `check_term`, the gate's own path to a closed equation |
+| `delta/bool-verdict` | `refl : vₙ = true` for a verdict and-ed over n rows: the library's closed-verdict rule at size |
 | `wf/check-tree` | reading branching data — `Vec`/`Fin` unfolding per constructor |
 | `wf/mirror-involution` | `Wf` elimination at depth, twice, then compared |
 | `code/check-identity-recursor` | the 45-branch code recursor: the largest single thing the checker sees (a fixed cost, ~0.54 ms) |

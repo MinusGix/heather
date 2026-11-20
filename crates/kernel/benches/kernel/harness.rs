@@ -86,8 +86,8 @@ pub struct Point {
 
 /// The counters a case records and `--check` gates exactly. Each is work
 /// the kernel does, not time: fuel units and δ-steps of the evaluator, the
-/// substitution reducer's steps, the nodes the shift and substitution
-/// traversals visited, and the largest value arena one query built.
+/// substitution reducer's steps, the nodes the shift, substitution and
+/// syntactic-equality walks visited, and the largest value arena one query built.
 /// `arena_peak_bytes` is a size in bytes of this build's value layout, so it
 /// is compared only where frame layout is (same `rustc` and profile).
 pub const COUNTED: &[&str] = &[
@@ -96,6 +96,7 @@ pub const COUNTED: &[&str] = &[
     "reduce_steps",
     "local_subst_nodes",
     "shift_global_nodes",
+    "syntax_eq_nodes",
     "arena_peak_bytes",
 ];
 
@@ -602,6 +603,7 @@ fn render_counts(counts: &[(&str, u64)]) -> String {
             "reduce_steps" => "reduce",
             "local_subst_nodes" => "subst",
             "shift_global_nodes" => "shiftΨ",
+            "syntax_eq_nodes" => "syn",
             "arena_peak_bytes" => "arena",
             other => other,
         }

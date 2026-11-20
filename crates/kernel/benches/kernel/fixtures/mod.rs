@@ -18,6 +18,7 @@ pub mod conv;
 pub mod delta;
 pub mod level;
 pub mod nat;
+pub mod runs;
 pub mod simulate;
 pub mod subst;
 pub mod terms;
@@ -32,6 +33,7 @@ pub fn all() -> Vec<Family> {
     v.extend(level::families());
     v.extend(subst::families());
     v.extend(nat::families());
+    v.extend(runs::families());
     v.extend(conv::families());
     v.extend(delta::families());
     v.extend(simulate::families());

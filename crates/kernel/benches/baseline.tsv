@@ -4,154 +4,226 @@ env	host	vm
 env	cpu	Intel(R) Xeon(R) Processor @ 2.10GHz
 env	profile	release
 env	rustc	rustc 1.97.0 (2d8144b78 2026-07-07)
-env	commit	c2a9d0ce
-case	level/equiv-shared	4	83.2
-case	level/equiv-shared	8	59.0
-case	level/equiv-shared	16	47.5
-case	level/equiv-shared	32	46.4
-case	level/equiv-shared	64	52.2
-case	level/equiv-rebuilt	4	50.4
-case	level/equiv-rebuilt	8	61.1
-case	level/equiv-rebuilt	16	49.4
-case	level/equiv-rebuilt	32	47.3
-case	level/equiv-rebuilt	64	48.2
-case	level/join	4	68.7
-case	level/join	8	143.9
-case	level/join	16	180.9
-case	level/join	32	372.2
-case	level/join	64	747.1
-case	subst/shift-local	71	2322.7
-case	subst/shift-local	135	4940.9
-case	subst/shift-local	263	10778.7
-case	subst/shift-local	519	21887.4
-case	subst/shift-local	1031	44031.9
-case	subst/apply-local	71	3229.7
-case	subst/apply-local	135	5375.6
-case	subst/apply-local	263	9762.7
-case	subst/apply-local	519	18633.7
-case	subst/apply-local	1031	36717.9
-case	nat/step-once	64	164.8
-case	nat/step-once	128	128.2
-case	nat/step-once	256	129.4
-case	nat/step-once	512	143.9
-case	nat/step-once	1024	134.2
-case	nat/step-into-closed-body	64	223.2
-case	nat/step-into-closed-body	128	223.4
-case	nat/step-into-closed-body	256	327.6
-case	nat/step-into-closed-body	512	226.8
-case	nat/step-into-closed-body	1024	211.0
-case	nat/add-normalize	64	21252.1
-case	nat/add-normalize	128	37068.0
-case	nat/add-normalize	256	83600.3
-case	nat/add-normalize	512	167648.7
-case	nat/add-normalize	1024	275857.5
-case	nat/mul-normalize	8	17210.3
-case	nat/mul-normalize	12	36800.7
-case	nat/mul-normalize	16	65209.7
-case	nat/mul-normalize	24	139011.0
-case	nat/mul-normalize	32	309103.5
-case	nat/mul-normalize	48	686672.3
-case	nat/check-numeral	64	1905.6
-case	nat/check-numeral	128	3789.7
-case	nat/check-numeral	256	8711.9
-case	nat/check-numeral	512	21532.9
-case	conv/computed-numeral	32	18988.5
-case	conv/computed-numeral	64	43302.0
-case	conv/computed-numeral	128	71320.8
-case	conv/computed-numeral	256	168161.2
-case	conv/computed-numeral	512	333021.0
-case	conv/perturbed-pairs	25	55214.1
-case	conv/perturbed-pairs	50	200875.4
-case	conv/perturbed-pairs	100	265342.7
-case	conv/perturbed-pairs	200	519302.5
-case	conv/vec-literal	32	83429.0
-case	conv/vec-literal	64	162030.8
-case	conv/vec-literal	128	320187.1
-case	conv/vec-literal	256	584200.8
-case	conv/vec-literal	512	1156627.2
-case	conv/vec-items-values	1024	2390272.7
-case	conv/vec-items-values	2048	6451852.2
-case	conv/vec-items-values	4096	15426279.0
-case	conv/vec-items-values	8192	28031586.0
-case	conv/vec-items-values	16384	72139046.0
-case	delta/closed-sum	8	227606.4
-case	delta/closed-sum	16	564985.2
-case	delta/closed-sum	32	957218.5
-case	delta/closed-sum	64	2122102.8
-case	delta/closed-sum	128	3950823.2
-case	delta/closed-numeral	8	257483.2
-case	delta/closed-numeral	16	484323.8
-case	delta/closed-numeral	32	1055267.2
-case	delta/closed-numeral	64	1988389.3
-case	delta/closed-numeral	128	3960051.0
-case	delta/lockstep	8	18655.4
-case	delta/lockstep	16	36767.6
-case	delta/lockstep	32	56986.5
-case	delta/lockstep	64	140186.3
-case	delta/lockstep	128	283707.4
-case	delta/same-head-args	8	6782.9
-case	delta/same-head-args	16	11902.0
-case	delta/same-head-args	32	22160.4
-case	delta/same-head-args	64	39832.9
-case	delta/same-head-args	128	73123.8
-case	conv/simulate-payload	32	57204.5
-case	conv/simulate-payload	64	58707.9
-case	conv/simulate-payload	128	52696.5
-case	conv/simulate-payload	256	51062.6
-case	conv/simulate-payload	512	45831.9
-case	conv/simulate-payload	1024	45215.8
-case	conv/simulate-depth	16	12050.1
-case	conv/simulate-depth	32	23020.2
-case	conv/simulate-depth	64	58477.0
-case	conv/simulate-depth	128	99976.8
-case	conv/simulate-depth	256	197866.5
-case	wf/check-tree	303	28277.3
-case	wf/check-tree	683	57329.1
-case	wf/check-tree	1443	71078.2
-case	wf/check-tree	2963	118708.6
-case	wf/mirror-involution	303	30208.9
-case	wf/mirror-involution	683	62866.9
-case	wf/mirror-involution	1443	112629.7
-case	wf/mirror-involution	2963	266995.7
-case	code/check-identity-recursor	3	762761.0
-case	code/check-identity-recursor	5	934308.4
-case	code/check-identity-recursor	9	800913.2
-case	code/check-identity-recursor	17	883641.7
-case	code/check-identity-recursor	33	909572.7
-case	code/whnf-identity-recursor	3	881.3
-case	code/whnf-identity-recursor	5	971.8
-case	code/whnf-identity-recursor	9	992.1
-case	code/whnf-identity-recursor	17	967.1
-case	code/whnf-identity-recursor	33	955.2
-case	check/generated-terms	25	498067.8
-case	check/generated-terms	50	1153634.3
-case	check/generated-terms	100	3528808.4
-case	check/generated-terms	200	9588516.0
-slope	level/equiv-shared	-0.169
-slope	level/equiv-rebuilt	-0.050
-slope	level/join	0.826
-slope	subst/shift-local	1.100
-slope	subst/apply-local	0.912
-slope	nat/step-once	-0.043
-slope	nat/step-into-closed-body	-0.014
-slope	nat/add-normalize	0.957
-slope	nat/mul-normalize	2.075
-slope	nat/check-numeral	1.170
-slope	conv/computed-numeral	1.022
-slope	conv/perturbed-pairs	1.010
-slope	conv/vec-literal	0.944
-slope	conv/vec-items-values	1.195
-slope	delta/closed-sum	1.014
-slope	delta/closed-numeral	0.992
-slope	delta/lockstep	0.978
-slope	delta/same-head-args	0.860
-slope	conv/simulate-payload	-0.080
-slope	conv/simulate-depth	1.019
-slope	wf/check-tree	0.597
-slope	wf/mirror-involution	0.937
-slope	code/check-identity-recursor	0.048
-slope	code/whnf-identity-recursor	0.024
-slope	check/generated-terms	1.441
+env	commit	91339c55
+case	level/equiv-shared	4	47.3
+case	level/equiv-shared	8	48.2
+case	level/equiv-shared	16	38.9
+case	level/equiv-shared	32	46.3
+case	level/equiv-shared	64	47.0
+case	level/equiv-rebuilt	4	47.3
+case	level/equiv-rebuilt	8	36.3
+case	level/equiv-rebuilt	16	36.5
+case	level/equiv-rebuilt	32	36.2
+case	level/equiv-rebuilt	64	36.3
+case	level/join	4	87.3
+case	level/join	8	150.4
+case	level/join	16	204.7
+case	level/join	32	258.6
+case	level/join	64	676.5
+case	subst/shift-local	71	2541.6
+case	subst/shift-local	135	5272.8
+case	subst/shift-local	263	10843.9
+case	subst/shift-local	519	17476.8
+case	subst/shift-local	1031	35225.8
+case	subst/apply-local	71	2003.1
+case	subst/apply-local	135	9321.0
+case	subst/apply-local	263	10946.0
+case	subst/apply-local	519	22550.3
+case	subst/apply-local	1031	44996.5
+case	subst/shared-dag	8	1181.2
+case	subst/shared-dag	16	3476.3
+case	subst/shared-dag	32	8972.6
+case	subst/shared-dag	64	19700.1
+case	subst/shared-dag	128	25673.3
+case	nat/step-once	64	163.0
+case	nat/step-once	128	162.8
+case	nat/step-once	256	158.6
+case	nat/step-once	512	158.4
+case	nat/step-once	1024	132.1
+case	nat/step-into-closed-body	64	187.1
+case	nat/step-into-closed-body	128	201.7
+case	nat/step-into-closed-body	256	197.8
+case	nat/step-into-closed-body	512	205.1
+case	nat/step-into-closed-body	1024	178.6
+case	nat/add-normalize	64	16389.9
+case	nat/add-normalize	128	42602.8
+case	nat/add-normalize	256	86479.7
+case	nat/add-normalize	512	171545.1
+case	nat/add-normalize	1024	305938.6
+case	nat/mul-normalize	8	19724.1
+case	nat/mul-normalize	12	41398.4
+case	nat/mul-normalize	16	77626.6
+case	nat/mul-normalize	24	158592.8
+case	nat/mul-normalize	32	306957.8
+case	nat/mul-normalize	48	529724.6
+case	nat/check-numeral	64	1513.9
+case	nat/check-numeral	128	3490.0
+case	nat/check-numeral	256	7463.8
+case	nat/check-numeral	512	15080.3
+case	run/affine-literal	16	2228.9
+case	run/affine-literal	64	2649.8
+case	run/affine-literal	256	119811.9
+case	run/affine-literal	1024	598024.6
+case	run/affine-literal	4096	4707162.2
+case	run/sync-literal	16	3681.4
+case	run/sync-literal	64	4488.4
+case	run/sync-literal	256	269832.8
+case	run/sync-literal	1024	1445590.0
+case	run/sync-literal	4096	15085110.3
+case	run/mul-literal	16	5523.9
+case	run/mul-literal	64	13169.4
+case	run/mul-literal	256	422770.6
+case	run/mul-literal	1024	2187405.8
+case	run/mul-literal	4096	14583338.0
+case	run/open-tail	16	2029.8
+case	run/open-tail	64	2019.3
+case	run/open-tail	256	136511.5
+case	run/open-tail	1024	693617.4
+case	run/open-tail	4096	8013910.8
+case	run/fuel-exhaustion	4096	1004827.3
+case	run/fuel-exhaustion	8192	2090768.5
+case	run/fuel-exhaustion	16384	3319675.5
+case	run/fuel-exhaustion	32768	6444867.0
+case	run/fuel-exhaustion	65536	13539069.0
+case	conv/computed-numeral	32	22969.7
+case	conv/computed-numeral	64	43709.5
+case	conv/computed-numeral	128	84599.9
+case	conv/computed-numeral	256	167917.5
+case	conv/computed-numeral	512	330943.3
+case	conv/perturbed-pairs	25	56948.2
+case	conv/perturbed-pairs	50	116112.0
+case	conv/perturbed-pairs	100	248070.4
+case	conv/perturbed-pairs	200	477205.6
+case	conv/vec-literal	32	73384.9
+case	conv/vec-literal	64	126805.2
+case	conv/vec-literal	128	316382.4
+case	conv/vec-literal	256	632197.9
+case	conv/vec-literal	512	1155439.5
+case	conv/vec-items-values	1024	2828621.3
+case	conv/vec-items-values	2048	70750134.0
+case	conv/vec-items-values	4096	12480102.0
+case	conv/vec-items-values	8192	30200479.0
+case	conv/vec-items-values	16384	72163241.0
+case	conv/shared-neutral-dag	16	22127.5
+case	conv/shared-neutral-dag	32	59035.2
+case	conv/shared-neutral-dag	64	209680.7
+case	conv/shared-neutral-dag	128	820433.3
+case	conv/shared-neutral-dag	256	2986165.9
+case	delta/closed-sum	8	270009.2
+case	delta/closed-sum	16	487315.6
+case	delta/closed-sum	32	944867.7
+case	delta/closed-sum	64	1805368.4
+case	delta/closed-sum	128	3812053.2
+case	delta/closed-numeral	8	257805.5
+case	delta/closed-numeral	16	461206.3
+case	delta/closed-numeral	32	948016.1
+case	delta/closed-numeral	64	1999346.5
+case	delta/closed-numeral	128	3845658.1
+case	delta/lockstep	8	18417.8
+case	delta/lockstep	16	44140.6
+case	delta/lockstep	32	67778.9
+case	delta/lockstep	64	130217.3
+case	delta/lockstep	128	275296.6
+case	delta/refusal	8	19954.3
+case	delta/refusal	16	28152.9
+case	delta/refusal	32	55444.8
+case	delta/refusal	64	107514.2
+case	delta/refusal	128	249539.7
+case	delta/same-head-args	8	6062.1
+case	delta/same-head-args	16	10684.2
+case	delta/same-head-args	32	19307.2
+case	delta/same-head-args	64	36854.2
+case	delta/same-head-args	128	72769.4
+case	delta/shared-dag	4	120087.1
+case	delta/shared-dag	8	216544.9
+case	delta/shared-dag	12	317926.9
+case	delta/shared-dag	16	434537.0
+case	delta/shared-dag	20	485768.2
+case	delta/record-projections	8	17640.5
+case	delta/record-projections	16	30820.8
+case	delta/record-projections	32	51503.3
+case	delta/record-projections	64	82325.1
+case	delta/record-projections	128	145493.8
+case	delta/check-refl	8	13563.2
+case	delta/check-refl	16	25867.6
+case	delta/check-refl	32	49881.2
+case	delta/check-refl	64	97280.0
+case	delta/check-refl	128	242052.2
+case	delta/bool-verdict	8	19878.0
+case	delta/bool-verdict	16	37006.2
+case	delta/bool-verdict	32	65343.3
+case	delta/bool-verdict	64	137591.6
+case	delta/bool-verdict	128	283098.5
+case	conv/simulate-payload	32	46377.4
+case	conv/simulate-payload	64	46682.4
+case	conv/simulate-payload	128	46595.3
+case	conv/simulate-payload	256	54240.6
+case	conv/simulate-payload	512	58973.2
+case	conv/simulate-payload	1024	49432.0
+case	conv/simulate-depth	16	15563.2
+case	conv/simulate-depth	32	23567.7
+case	conv/simulate-depth	64	51754.4
+case	conv/simulate-depth	128	98265.7
+case	conv/simulate-depth	256	185707.4
+case	wf/check-tree	303	33444.8
+case	wf/check-tree	683	56592.7
+case	wf/check-tree	1443	90733.7
+case	wf/check-tree	2963	149135.9
+case	wf/mirror-involution	303	34609.6
+case	wf/mirror-involution	683	69127.3
+case	wf/mirror-involution	1443	136541.5
+case	wf/mirror-involution	2963	267037.8
+case	code/check-identity-recursor	3	857543.3
+case	code/check-identity-recursor	5	863812.6
+case	code/check-identity-recursor	9	872060.8
+case	code/check-identity-recursor	17	841814.8
+case	code/check-identity-recursor	33	826518.0
+case	code/whnf-identity-recursor	3	881.9
+case	code/whnf-identity-recursor	5	947.5
+case	code/whnf-identity-recursor	9	989.5
+case	code/whnf-identity-recursor	17	952.3
+case	code/whnf-identity-recursor	33	947.5
+case	check/generated-terms	25	494442.6
+case	check/generated-terms	50	1095838.4
+case	check/generated-terms	100	4209912.4
+case	check/generated-terms	200	9676109.0
+slope	level/equiv-shared	-0.008
+slope	level/equiv-rebuilt	-0.077
+slope	level/join	0.669
+slope	subst/shift-local	0.963
+slope	subst/apply-local	1.059
+slope	subst/shared-dag	1.139
+slope	nat/step-once	-0.065
+slope	nat/step-into-closed-body	-0.011
+slope	nat/add-normalize	1.045
+slope	nat/mul-normalize	1.879
+slope	nat/check-numeral	1.105
+slope	run/affine-literal	1.495
+slope	run/sync-literal	1.617
+slope	run/mul-literal	1.505
+slope	run/open-tail	1.616
+slope	run/fuel-exhaustion	0.913
+slope	conv/computed-numeral	0.964
+slope	conv/perturbed-pairs	1.030
+slope	conv/vec-literal	1.027
+slope	conv/vec-items-values	0.812
+slope	conv/shared-neutral-dag	1.795
+slope	delta/closed-sum	0.953
+slope	delta/closed-numeral	0.991
+slope	delta/lockstep	0.936
+slope	delta/refusal	0.922
+slope	delta/same-head-args	0.896
+slope	delta/shared-dag	0.894
+slope	delta/record-projections	0.751
+slope	delta/check-refl	1.023
+slope	delta/bool-verdict	0.956
+slope	conv/simulate-payload	0.048
+slope	conv/simulate-depth	0.921
+slope	wf/check-tree	0.653
+slope	wf/mirror-involution	0.897
+slope	code/check-identity-recursor	-0.017
+slope	code/whnf-identity-recursor	0.023
+slope	check/generated-terms	1.481
 count	subst/shift-local	71	local_subst_nodes	68
 count	subst/shift-local	135	local_subst_nodes	132
 count	subst/shift-local	263	local_subst_nodes	260
@@ -162,6 +234,11 @@ count	subst/apply-local	135	local_subst_nodes	132
 count	subst/apply-local	263	local_subst_nodes	260
 count	subst/apply-local	519	local_subst_nodes	516
 count	subst/apply-local	1031	local_subst_nodes	1028
+count	subst/shared-dag	8	local_subst_nodes	32
+count	subst/shared-dag	16	local_subst_nodes	64
+count	subst/shared-dag	32	local_subst_nodes	128
+count	subst/shared-dag	64	local_subst_nodes	256
+count	subst/shared-dag	128	local_subst_nodes	512
 count	nat/step-once	64	local_subst_nodes	1
 count	nat/step-once	64	reduce_steps	1
 count	nat/step-once	128	local_subst_nodes	1
@@ -204,15 +281,75 @@ count	nat/mul-normalize	32	local_subst_nodes	1152
 count	nat/mul-normalize	32	reduce_steps	2114
 count	nat/mul-normalize	48	local_subst_nodes	2496
 count	nat/mul-normalize	48	reduce_steps	4706
+count	run/affine-literal	16	eval_steps	4
+count	run/affine-literal	16	arena_peak_bytes	2200
+count	run/affine-literal	64	eval_steps	4
+count	run/affine-literal	64	arena_peak_bytes	2200
+count	run/affine-literal	256	eval_steps	4
+count	run/affine-literal	256	arena_peak_bytes	2200
+count	run/affine-literal	1024	eval_steps	4
+count	run/affine-literal	1024	arena_peak_bytes	2200
+count	run/affine-literal	4096	eval_steps	4
+count	run/affine-literal	4096	arena_peak_bytes	2200
+count	run/sync-literal	16	eval_steps	10
+count	run/sync-literal	16	eval_delta_steps	1
+count	run/sync-literal	16	arena_peak_bytes	4608
+count	run/sync-literal	64	eval_steps	10
+count	run/sync-literal	64	eval_delta_steps	1
+count	run/sync-literal	64	arena_peak_bytes	4608
+count	run/sync-literal	256	eval_steps	10
+count	run/sync-literal	256	eval_delta_steps	1
+count	run/sync-literal	256	arena_peak_bytes	4608
+count	run/sync-literal	1024	eval_steps	10
+count	run/sync-literal	1024	eval_delta_steps	1
+count	run/sync-literal	1024	arena_peak_bytes	4608
+count	run/sync-literal	4096	eval_steps	10
+count	run/sync-literal	4096	eval_delta_steps	1
+count	run/sync-literal	4096	arena_peak_bytes	4608
+count	run/mul-literal	16	eval_steps	8
+count	run/mul-literal	16	arena_peak_bytes	3848
+count	run/mul-literal	64	eval_steps	8
+count	run/mul-literal	64	arena_peak_bytes	3848
+count	run/mul-literal	256	eval_steps	8
+count	run/mul-literal	256	arena_peak_bytes	3848
+count	run/mul-literal	1024	eval_steps	8
+count	run/mul-literal	1024	arena_peak_bytes	3848
+count	run/mul-literal	4096	eval_steps	8
+count	run/mul-literal	4096	arena_peak_bytes	3848
+count	run/open-tail	16	eval_steps	4
+count	run/open-tail	16	arena_peak_bytes	2496
+count	run/open-tail	64	eval_steps	4
+count	run/open-tail	64	arena_peak_bytes	2496
+count	run/open-tail	256	eval_steps	4
+count	run/open-tail	256	arena_peak_bytes	2496
+count	run/open-tail	1024	eval_steps	4
+count	run/open-tail	1024	arena_peak_bytes	2496
+count	run/open-tail	4096	eval_steps	4
+count	run/open-tail	4096	arena_peak_bytes	2496
+count	run/fuel-exhaustion	4096	eval_steps	4095
+count	run/fuel-exhaustion	4096	arena_peak_bytes	1067144
+count	run/fuel-exhaustion	8192	eval_steps	8191
+count	run/fuel-exhaustion	8192	arena_peak_bytes	2132104
+count	run/fuel-exhaustion	16384	eval_steps	16383
+count	run/fuel-exhaustion	16384	arena_peak_bytes	4262024
+count	run/fuel-exhaustion	32768	eval_steps	32767
+count	run/fuel-exhaustion	32768	arena_peak_bytes	8521864
+count	run/fuel-exhaustion	65536	eval_steps	65535
+count	run/fuel-exhaustion	65536	arena_peak_bytes	17041544
 count	conv/computed-numeral	32	eval_steps	33
+count	conv/computed-numeral	32	syntax_eq_nodes	31
 count	conv/computed-numeral	32	arena_peak_bytes	17312
 count	conv/computed-numeral	64	eval_steps	65
+count	conv/computed-numeral	64	syntax_eq_nodes	63
 count	conv/computed-numeral	64	arena_peak_bytes	34208
 count	conv/computed-numeral	128	eval_steps	129
+count	conv/computed-numeral	128	syntax_eq_nodes	127
 count	conv/computed-numeral	128	arena_peak_bytes	68000
 count	conv/computed-numeral	256	eval_steps	257
+count	conv/computed-numeral	256	syntax_eq_nodes	255
 count	conv/computed-numeral	256	arena_peak_bytes	135584
 count	conv/computed-numeral	512	eval_steps	513
+count	conv/computed-numeral	512	syntax_eq_nodes	511
 count	conv/computed-numeral	512	arena_peak_bytes	270752
 count	conv/perturbed-pairs	25	eval_steps	93
 count	conv/perturbed-pairs	25	shift_global_nodes	86
@@ -235,29 +372,49 @@ count	conv/perturbed-pairs	200	reduce_steps	30
 count	conv/perturbed-pairs	200	arena_peak_bytes	3936
 count	conv/vec-literal	32	eval_steps	33
 count	conv/vec-literal	32	local_subst_nodes	66
+count	conv/vec-literal	32	syntax_eq_nodes	236
 count	conv/vec-literal	32	arena_peak_bytes	1352
 count	conv/vec-literal	64	eval_steps	65
 count	conv/vec-literal	64	local_subst_nodes	130
+count	conv/vec-literal	64	syntax_eq_nodes	492
 count	conv/vec-literal	64	arena_peak_bytes	1352
 count	conv/vec-literal	128	eval_steps	129
 count	conv/vec-literal	128	local_subst_nodes	258
+count	conv/vec-literal	128	syntax_eq_nodes	1004
 count	conv/vec-literal	128	arena_peak_bytes	1352
 count	conv/vec-literal	256	eval_steps	257
 count	conv/vec-literal	256	local_subst_nodes	514
+count	conv/vec-literal	256	syntax_eq_nodes	2028
 count	conv/vec-literal	256	arena_peak_bytes	1352
 count	conv/vec-literal	512	eval_steps	513
 count	conv/vec-literal	512	local_subst_nodes	1026
+count	conv/vec-literal	512	syntax_eq_nodes	4076
 count	conv/vec-literal	512	arena_peak_bytes	1352
 count	conv/vec-items-values	1024	eval_steps	5121
+count	conv/vec-items-values	1024	syntax_eq_nodes	2190
 count	conv/vec-items-values	1024	arena_peak_bytes	979776
 count	conv/vec-items-values	2048	eval_steps	10241
+count	conv/vec-items-values	2048	syntax_eq_nodes	4383
 count	conv/vec-items-values	2048	arena_peak_bytes	1959328
 count	conv/vec-items-values	4096	eval_steps	20481
+count	conv/vec-items-values	4096	syntax_eq_nodes	8775
 count	conv/vec-items-values	4096	arena_peak_bytes	3918352
 count	conv/vec-items-values	8192	eval_steps	40961
+count	conv/vec-items-values	8192	syntax_eq_nodes	17550
 count	conv/vec-items-values	8192	arena_peak_bytes	7836480
 count	conv/vec-items-values	16384	eval_steps	81921
+count	conv/vec-items-values	16384	syntax_eq_nodes	35103
 count	conv/vec-items-values	16384	arena_peak_bytes	15672736
+count	conv/shared-neutral-dag	16	syntax_eq_nodes	616
+count	conv/shared-neutral-dag	16	arena_peak_bytes	26856
+count	conv/shared-neutral-dag	32	syntax_eq_nodes	2512
+count	conv/shared-neutral-dag	32	arena_peak_bytes	52968
+count	conv/shared-neutral-dag	64	syntax_eq_nodes	10144
+count	conv/shared-neutral-dag	64	arena_peak_bytes	105192
+count	conv/shared-neutral-dag	128	syntax_eq_nodes	40768
+count	conv/shared-neutral-dag	128	arena_peak_bytes	209640
+count	conv/shared-neutral-dag	256	syntax_eq_nodes	163456
+count	conv/shared-neutral-dag	256	arena_peak_bytes	418536
 count	delta/closed-sum	8	eval_steps	1080
 count	delta/closed-sum	8	eval_delta_steps	10
 count	delta/closed-sum	8	shift_global_nodes	2
@@ -308,6 +465,21 @@ count	delta/lockstep	64	arena_peak_bytes	131672
 count	delta/lockstep	128	eval_steps	1155
 count	delta/lockstep	128	eval_delta_steps	643
 count	delta/lockstep	128	arena_peak_bytes	262744
+count	delta/refusal	8	eval_steps	75
+count	delta/refusal	8	eval_delta_steps	43
+count	delta/refusal	8	arena_peak_bytes	17024
+count	delta/refusal	16	eval_steps	147
+count	delta/refusal	16	eval_delta_steps	83
+count	delta/refusal	16	arena_peak_bytes	33408
+count	delta/refusal	32	eval_steps	291
+count	delta/refusal	32	eval_delta_steps	163
+count	delta/refusal	32	arena_peak_bytes	66176
+count	delta/refusal	64	eval_steps	579
+count	delta/refusal	64	eval_delta_steps	323
+count	delta/refusal	64	arena_peak_bytes	131712
+count	delta/refusal	128	eval_steps	1155
+count	delta/refusal	128	eval_delta_steps	643
+count	delta/refusal	128	arena_peak_bytes	262784
 count	delta/same-head-args	8	eval_steps	9
 count	delta/same-head-args	8	eval_delta_steps	9
 count	delta/same-head-args	8	shift_global_nodes	2
@@ -328,6 +500,86 @@ count	delta/same-head-args	128	eval_steps	129
 count	delta/same-head-args	128	eval_delta_steps	129
 count	delta/same-head-args	128	shift_global_nodes	2
 count	delta/same-head-args	128	arena_peak_bytes	57256
+count	delta/shared-dag	4	eval_steps	510
+count	delta/shared-dag	4	eval_delta_steps	2
+count	delta/shared-dag	4	arena_peak_bytes	145280
+count	delta/shared-dag	8	eval_steps	1018
+count	delta/shared-dag	8	eval_delta_steps	2
+count	delta/shared-dag	8	arena_peak_bytes	277312
+count	delta/shared-dag	12	eval_steps	1526
+count	delta/shared-dag	12	eval_delta_steps	2
+count	delta/shared-dag	12	arena_peak_bytes	409344
+count	delta/shared-dag	16	eval_steps	2034
+count	delta/shared-dag	16	eval_delta_steps	2
+count	delta/shared-dag	16	arena_peak_bytes	541376
+count	delta/shared-dag	20	eval_steps	2542
+count	delta/shared-dag	20	eval_delta_steps	2
+count	delta/shared-dag	20	arena_peak_bytes	673408
+count	delta/record-projections	8	eval_steps	47
+count	delta/record-projections	8	eval_delta_steps	10
+count	delta/record-projections	8	arena_peak_bytes	15728
+count	delta/record-projections	16	eval_steps	79
+count	delta/record-projections	16	eval_delta_steps	18
+count	delta/record-projections	16	arena_peak_bytes	25328
+count	delta/record-projections	32	eval_steps	143
+count	delta/record-projections	32	eval_delta_steps	34
+count	delta/record-projections	32	arena_peak_bytes	44528
+count	delta/record-projections	64	eval_steps	271
+count	delta/record-projections	64	eval_delta_steps	66
+count	delta/record-projections	64	arena_peak_bytes	82928
+count	delta/record-projections	128	eval_steps	527
+count	delta/record-projections	128	eval_delta_steps	130
+count	delta/record-projections	128	arena_peak_bytes	159728
+count	delta/check-refl	8	eval_steps	49
+count	delta/check-refl	8	eval_delta_steps	17
+count	delta/check-refl	8	syntax_eq_nodes	6
+count	delta/check-refl	8	arena_peak_bytes	15736
+count	delta/check-refl	16	eval_steps	97
+count	delta/check-refl	16	eval_delta_steps	33
+count	delta/check-refl	16	syntax_eq_nodes	6
+count	delta/check-refl	16	arena_peak_bytes	30904
+count	delta/check-refl	32	eval_steps	193
+count	delta/check-refl	32	eval_delta_steps	65
+count	delta/check-refl	32	syntax_eq_nodes	6
+count	delta/check-refl	32	arena_peak_bytes	61240
+count	delta/check-refl	64	eval_steps	385
+count	delta/check-refl	64	eval_delta_steps	129
+count	delta/check-refl	64	syntax_eq_nodes	6
+count	delta/check-refl	64	arena_peak_bytes	121912
+count	delta/check-refl	128	eval_steps	769
+count	delta/check-refl	128	eval_delta_steps	257
+count	delta/check-refl	128	syntax_eq_nodes	6
+count	delta/check-refl	128	arena_peak_bytes	243256
+count	delta/bool-verdict	8	eval_steps	65
+count	delta/bool-verdict	8	eval_delta_steps	3
+count	delta/bool-verdict	8	shift_global_nodes	2
+count	delta/bool-verdict	8	local_subst_nodes	2
+count	delta/bool-verdict	8	syntax_eq_nodes	14
+count	delta/bool-verdict	8	arena_peak_bytes	21024
+count	delta/bool-verdict	16	eval_steps	129
+count	delta/bool-verdict	16	eval_delta_steps	3
+count	delta/bool-verdict	16	shift_global_nodes	2
+count	delta/bool-verdict	16	local_subst_nodes	2
+count	delta/bool-verdict	16	syntax_eq_nodes	14
+count	delta/bool-verdict	16	arena_peak_bytes	40864
+count	delta/bool-verdict	32	eval_steps	257
+count	delta/bool-verdict	32	eval_delta_steps	3
+count	delta/bool-verdict	32	shift_global_nodes	2
+count	delta/bool-verdict	32	local_subst_nodes	2
+count	delta/bool-verdict	32	syntax_eq_nodes	14
+count	delta/bool-verdict	32	arena_peak_bytes	80544
+count	delta/bool-verdict	64	eval_steps	513
+count	delta/bool-verdict	64	eval_delta_steps	3
+count	delta/bool-verdict	64	shift_global_nodes	2
+count	delta/bool-verdict	64	local_subst_nodes	2
+count	delta/bool-verdict	64	syntax_eq_nodes	14
+count	delta/bool-verdict	64	arena_peak_bytes	159904
+count	delta/bool-verdict	128	eval_steps	1025
+count	delta/bool-verdict	128	eval_delta_steps	3
+count	delta/bool-verdict	128	shift_global_nodes	2
+count	delta/bool-verdict	128	local_subst_nodes	2
+count	delta/bool-verdict	128	syntax_eq_nodes	14
+count	delta/bool-verdict	128	arena_peak_bytes	318624
 count	conv/simulate-payload	32	eval_steps	129
 count	conv/simulate-payload	32	arena_peak_bytes	53072
 count	conv/simulate-payload	64	eval_steps	129
@@ -352,15 +604,19 @@ count	conv/simulate-depth	256	eval_steps	513
 count	conv/simulate-depth	256	arena_peak_bytes	211280
 count	wf/check-tree	303	eval_steps	6
 count	wf/check-tree	303	local_subst_nodes	76
+count	wf/check-tree	303	syntax_eq_nodes	353
 count	wf/check-tree	303	arena_peak_bytes	1840
 count	wf/check-tree	683	eval_steps	6
 count	wf/check-tree	683	local_subst_nodes	150
+count	wf/check-tree	683	syntax_eq_nodes	817
 count	wf/check-tree	683	arena_peak_bytes	1840
 count	wf/check-tree	1443	eval_steps	6
 count	wf/check-tree	1443	local_subst_nodes	288
+count	wf/check-tree	1443	syntax_eq_nodes	1735
 count	wf/check-tree	1443	arena_peak_bytes	1840
 count	wf/check-tree	2963	eval_steps	6
 count	wf/check-tree	2963	local_subst_nodes	554
+count	wf/check-tree	2963	syntax_eq_nodes	3561
 count	wf/check-tree	2963	arena_peak_bytes	1840
 count	wf/mirror-involution	303	eval_steps	118
 count	wf/mirror-involution	303	arena_peak_bytes	31464
@@ -372,18 +628,23 @@ count	wf/mirror-involution	2963	eval_steps	1126
 count	wf/mirror-involution	2963	arena_peak_bytes	247496
 count	code/check-identity-recursor	3	shift_global_nodes	1046
 count	code/check-identity-recursor	3	local_subst_nodes	2252
+count	code/check-identity-recursor	3	syntax_eq_nodes	815
 count	code/check-identity-recursor	3	reduce_steps	68
 count	code/check-identity-recursor	5	shift_global_nodes	1046
 count	code/check-identity-recursor	5	local_subst_nodes	2252
+count	code/check-identity-recursor	5	syntax_eq_nodes	815
 count	code/check-identity-recursor	5	reduce_steps	68
 count	code/check-identity-recursor	9	shift_global_nodes	1046
 count	code/check-identity-recursor	9	local_subst_nodes	2252
+count	code/check-identity-recursor	9	syntax_eq_nodes	815
 count	code/check-identity-recursor	9	reduce_steps	68
 count	code/check-identity-recursor	17	shift_global_nodes	1046
 count	code/check-identity-recursor	17	local_subst_nodes	2252
+count	code/check-identity-recursor	17	syntax_eq_nodes	815
 count	code/check-identity-recursor	17	reduce_steps	68
 count	code/check-identity-recursor	33	shift_global_nodes	1046
 count	code/check-identity-recursor	33	local_subst_nodes	2252
+count	code/check-identity-recursor	33	syntax_eq_nodes	815
 count	code/check-identity-recursor	33	reduce_steps	68
 count	code/whnf-identity-recursor	3	reduce_steps	2
 count	code/whnf-identity-recursor	5	local_subst_nodes	2
@@ -396,20 +657,24 @@ count	code/whnf-identity-recursor	33	local_subst_nodes	2
 count	code/whnf-identity-recursor	33	reduce_steps	2
 count	check/generated-terms	25	shift_global_nodes	143
 count	check/generated-terms	25	local_subst_nodes	1453
+count	check/generated-terms	25	syntax_eq_nodes	4
 count	check/generated-terms	25	reduce_steps	38
 count	check/generated-terms	50	eval_steps	4
 count	check/generated-terms	50	shift_global_nodes	602
 count	check/generated-terms	50	local_subst_nodes	3497
+count	check/generated-terms	50	syntax_eq_nodes	4
 count	check/generated-terms	50	reduce_steps	62
 count	check/generated-terms	50	arena_peak_bytes	1128
 count	check/generated-terms	100	eval_steps	19
 count	check/generated-terms	100	shift_global_nodes	3453
 count	check/generated-terms	100	local_subst_nodes	13531
+count	check/generated-terms	100	syntax_eq_nodes	196
 count	check/generated-terms	100	reduce_steps	182
 count	check/generated-terms	100	arena_peak_bytes	1488
 count	check/generated-terms	200	eval_steps	42
 count	check/generated-terms	200	shift_global_nodes	5931
 count	check/generated-terms	200	local_subst_nodes	28140
+count	check/generated-terms	200	syntax_eq_nodes	380
 count	check/generated-terms	200	reduce_steps	356
 count	check/generated-terms	200	arena_peak_bytes	1616
 stack	stack/check-numeral	4194304	16384
