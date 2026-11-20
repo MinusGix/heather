@@ -304,3 +304,32 @@ theorem Source::pure_reads(self src: Source, call: Writers(), ch: Charges, spec:
             src.pure_counted(call, ch, spec, counted, total, top, rank, pure, k2, src.pure_reads(call, ch, spec, counted, total, top, rank, pure, k2))),
     }
 }
+
+// ---------------------------------------------------------------------------
+// `main` with its calls read as their values
+
+// `main`'s calls, made with `k` levels and the bytes `main` leaves below its
+// frame, each read as its value where it is within them.
+theorem Source::pure_main_answered(self src: Source, call: Writers(), ch: Charges, spec: PureSpec, counted: Nat → Bool, total: Nat → Nat → Nat, top: Nat → Nat,
+    rank: Nat → Nat, pure: src.Pure(call, ch, spec, counted, total, top, rank), k, left: Nat, room: top(k) + 8 <= left):
+    Stmt::AnsweredWhere(src.main, src.performs_co(call, ch, left), src.pure_answer(spec), src.pure_within(spec, counted, k))
+{
+    λ p a r e mem okp => src.pure_reads(call, ch, spec, counted, total, top, rank, pure, k)(p, trivial, left, λ callee found lj spent => {
+        let step = pure.levels.main_step(p, callee, found, mem, k, lj, spent);
+        omega(step, room)
+    }, a, r, e, okp)
+}
+
+// The theorem for a whole program: where `main` has no loop and every call
+// a run of it makes is within `k` levels, with the bytes they take below
+// its frame, `main` run with its calls run reads as `main` threaded with
+// each call answered by its value.
+theorem Source::pure_main_reads(self src: Source, call: Writers(), ch: Charges, spec: PureSpec, counted: Nat → Bool, total: Nat → Nat → Nat, top: Nat → Nat,
+    rank: Nat → Nat, pure: src.Pure(call, ch, spec, counted, total, top, rank), k, left: Nat, room: top(k) + 8 <= left,
+    loop_free: src.main.loop_free().IsTrue(), env: Env, io: Io, within: src.main.calls_ok(call, src.pure_answer(spec), src.pure_within(spec, counted, k), env, io).IsTrue()):
+    Eutt<Mutated<Io, Flow>>(Events::none(), Io::against_co(src.main.denote_co(call, src.performs_co(call, ch, left))(env), io),
+        CRet(Stmt::thread_by(src.main, call, src.pure_answer(spec), env, io)))
+{
+    Stmt::reads_where(src.main, call, src.performs_co(call, ch, left), src.pure_answer(spec), src.pure_within(spec, counted, k),
+        src.pure_main_answered(call, ch, spec, counted, total, top, rank, pure, k, left, room), loop_free, env, io, within)
+}

@@ -160,6 +160,35 @@ contract for it must sort out first. So pure recursion comes first.
    computed and checked once at startup (the room is a cheap formula in
    the levels since #812).
 
+### 6.1 Built so far (2026-11-20)
+
+- **Step 1** is `Stmt::thread_by` and `Stmt::reads_where`
+  (`lib/native/native_source_io.hthr`): a statement with no loop, each
+  call it makes `ok` and read as its answer, reads as its threading.
+- **Step 2** took a narrower node than an `ETm` call: `PTm`
+  (`lib/native/runtime/rt_proc.hthr`), a pure body over `rt`'s `Tm` with
+  `Recur(p, args, rest)`, a call of procedure `p` on word variables. Its
+  meaning reads calls through the procedures' meanings, `PTm::need` is its
+  depth, and `PTm::lower_sound` proves its statements. A call of a
+  recursive function cannot sit in a region (`Tm::CallsAgree` quantifies
+  over every callee), which is why the node is on the statement lane and
+  `Tm` is unchanged. `PDef::bodies` turns a list of `PTm` definitions into
+  procedures meeting `Source::PureBodies`, given the pins the generator
+  will supply (`PDef::Unfolds`, the meaning's equations; `PDef::Deep`, the
+  depth's). `Source::pure_reads` (`lib/native/native_source_pure.hthr`)
+  then reads every call within the levels as its value, by induction on
+  the levels and, at one level, on the ranks of unchecked calls.
+- **Step 3**, the part about charges: `Source::pure_program_reads`
+  (`lib/native/native_compile_pure.hthr`) takes the charges and ranks of a
+  compile that accepted the source, so a compiled source's `main`, its
+  calls run as deep as they go, reads as `main` threaded with each call
+  answered, for every run whose calls keep within `Source.levels`. Joining
+  the co tree to the machine is the depth-free tree's thread (§5).
+- A closed probe (`lib/_tests/native/runtime/rt_proc_tests.hthr`): a
+  non-tail recursive sum lowers, its statements run to 55 at 10 with the
+  world untouched, and a wrong-arity call and a bit-valued body are
+  refused.
+
 ## 7. Decisions for Minus
 
 1. `levels` written and required where there is a cycle (recommended), or

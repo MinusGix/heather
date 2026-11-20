@@ -1,0 +1,48 @@
+// Probes of what the compile gives a pure source (`native_compile_pure`;
+// docs/native/runtime-fn-recursion-design.md §6 step 3): the recursive sum
+// of `rt_proc_tests` as a source whose `main` calls it once is ranked, its
+// self-call is checked, so it spends a level, and a call of a procedure
+// that calls nothing is not. Tests, not library: nothing outside lib/_tests
+// imports this module (docs/test-value-audit.md §4.5).
+import logic;
+import nat;
+import list;
+import option;
+import bitvec;
+import function_ir;
+import native_source;
+import native_compile;
+import native_compile_pure;
+import rt;
+import rt_lower;
+import rt_proc;
+
+fn pure_world() → rt::World { rt::World(RecInfo::none, [], trivial) }
+
+// `sum(n) = if n == 0 { 0 } else { n + sum(n - 1) }`.
+fn sum_body() → PTm {
+    Bind(Lit(Word(64), 0),
+    Bind(Prim(Eq(64), [1, 0]),
+    Choose(0,
+        Value(Var(1)),
+        Bind(Lit(Word(64), 1),
+        Bind(Prim(Sub(64), [3, 0]),
+        Recur(0, [0],
+        Value(Prim(Add(64), [5, 0]))))))))
+}
+
+// `double(n) = n + n`: no call.
+fn double_body() → PTm { Value(Prim(Add(64), [0, 0])) }
+
+fn defs() → List<PDef> { [PDef(1, sum_body()), PDef(1, double_body())] }
+
+fn pure_source() → Source {
+    Source([], [], 2, Then(Perform(0, [0], [1]), Perform(1, [1], [0])),
+        procedures := match PDef::procedures(defs(), pure_world(), PDef::known(defs())) { None => Nil, Some(ps) => ps })
+}
+
+theorem sum_source_ranked(): pure_source().ranked() = True { refl }
+
+theorem sum_call_checked(): pure_source().checked(0) = True { refl }
+
+theorem double_call_unchecked(): pure_source().checked(1) = False { refl }
