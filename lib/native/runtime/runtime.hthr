@@ -58,7 +58,6 @@ import char;
 import string;
 import tactic;
 import derive;
-import bitvec;
 import rt;
 import rt_reflect;
 import rt_lower;
@@ -69,6 +68,19 @@ import rt_loop;
 import rt_file;
 import rt_file_reflect;
 import rt_held_reflect;
+// What a `runtime fn`'s own elaboration reaches for, so that `import
+// runtime;` is enough to write one: `bv_omega` for a measure over words
+// (and its reading of `x >> k`), `/` and `%` at words, and spans. Reached
+// qualified through the closure (`bitvec_div::BitVec::udiv`), never bare.
+import bitvec_omega;
+import bitvec_shift_nat;
+import bitvec_div;
+// What a `runtime fn` writes bare, so that `import runtime;` alone is
+// enough: the words (`u8`…`u64`, `BitVec`) and spans (`Bytes`). A type's
+// methods reach every module of the closure (§3.7), so `s.byte_within` and
+// `xs.at(i)` need nothing more.
+export import bitvec;
+export import bytes;
 
 // ---------------------------------------------------------------------------
 // The judgment: what the default setup compiles today, with the reason for

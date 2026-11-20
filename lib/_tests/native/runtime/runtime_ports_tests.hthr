@@ -8,58 +8,13 @@
 // Each row says what it ports and the rung of the plan's ladder (§4) it
 // waits on: 1 the scalar core, 2 spans of anything, 3 inductive data,
 // 4 functional Heather. Nothing here is imported from outside.
-import logic;
-import bool;
-import nat;
-import list;
-import option;
-import pair;
-import char;
-import string;
-import tactic;
-import derive;
-import bitvec;
-import bitvec_nat;
-import bitvec_div;
-import bitvec_omega;
-import algebra;
-import omega;
-import vector;
-import bitvec_bytes;
-import nat_map;
-import list_window;
-import layout;
-import stored;
-import part;
-import laid;
-import rt;
-import rt_reflect;
-import rt_lower;
-import rt_loop;
-import rt_file;
-import rt_file_lower;
-import rt_file_loop;
-import rt_file_reflect;
-import function_ir;
-import function_ir_eval;
-import function_ir_state;
-import function_ir_run;
-import function_ir_writes;
-import function_ir_link;
-import function_ir_placeless;
-import function_ir_lower;
-import function_ir_lower_calls;
-import x86_64_asm;
+// `runtime` reexports the words and spans, and a type's methods reach the
+// whole closure (docs/language/modules-design.md §3.7). `[u64; n]`'s `at`
+// is `stored_words`', which builds on `runtime` and so is not under it.
+// `program_eval` runs a row's compiled program in its theorem.
 import runtime;
-import runtime_file;
 import stored_words;
-import stored_accessor;
-import rt_held;
-import rt_held_fields;
-import rt_held_reflect;
-import bytes;
-import rt_bytes;
-import rt_bytes_loop;
+import function_ir_eval;
 
 // ---------------------------------------------------------------------------
 // Rung 1: operations
@@ -133,8 +88,10 @@ runtime fn port_fib(n: u64) → u64 {
     a
 }
 
-// A loop whose measure halves (`Numeral::bits`).
-// expect-error: was not proved automatically
+// A loop whose measure halves (`Numeral::bits`). The halving is proved by
+// the default search (`bv_omega` reads `x.shift_right(1)`, reached through
+// `runtime`); what is left is `port_fib`'s two loop words.
+// expect-error: `port_bits#State` has no runtime layout
 runtime fn port_bits(n: u64) → u64 {
     let mut x = n;
     let mut c: u64 = 0;

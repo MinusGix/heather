@@ -461,6 +461,16 @@ impl Members<'_> {
         };
         let qualified = format!("{owner}::{name}");
         match self.resolve_name(&qualified) {
+            // A member only the closure reaches (docs/language/modules-design.md
+            // §3.7) is the last reading, never a rival: where the bare name
+            // resolves, the call is the ambient one it always was.
+            NameRes::Found(_)
+                if !matches!(crate::names::without_closure_members(|| self.resolve_name(&qualified)), NameRes::Found(_))
+                    && (matches!(self.resolve_name(name), NameRes::Found(_) | NameRes::Ambiguous(_))
+                        || self.ambient_reading_survives(cx, name, &carrier, span)) =>
+            {
+                return Ok(name.to_string());
+            }
             NameRes::Found(_) => {}
             // Two modules attaching the same member to the same type: the §4
             // regime's ambiguity, reported here rather than fallen back out

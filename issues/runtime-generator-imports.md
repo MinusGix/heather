@@ -1,11 +1,11 @@
 ---
 title: A module using runtime fn must import what the generator looks up
-status: open
+status: closed
 labels: [native,compiler,metaprogramming]
 area: heather-in-heather
 milestone: [nh-front]
 created: 2026-11-04
-updated: 2026-11-04
+updated: 2026-11-19
 ---
 
 A module that writes `runtime fn f` must also import `tactic`, `char`,
@@ -29,3 +29,16 @@ the Rust side of the same trap), [[scoped-declaration-generators]].
 
 - `import bitvec; import runtime;` is enough to write `runtime fn f`.
 - The examples drop the extra imports.
+
+## Log
+
+- 2026-11-19: done by the closure rule (docs/language/modules-design.md
+  §3.6, decided with Minus): a qualified name resolves wherever its module
+  is in the importing module's closure, so the generator's lookups, `bv_omega`'s
+  lemmas and a designation's operation reach what `runtime` imports. `runtime`
+  now imports `bitvec_omega`, `bitvec_shift_nat`, `bitvec_div` and `bytes`.
+  `import bitvec; import runtime;` writes a `runtime fn` with a measure over
+  words, `x >> k` in it, and `/`. The examples dropped the seven extra lines;
+  the ones calling a method `rt` declares on `List` (`s.byte_within`) keep
+  `import rt;`, which is the member rule Minus is still deciding on (members
+  of a type declared anywhere in the closure).
