@@ -1232,6 +1232,88 @@ theorem StructuredRegion::eval_answers(self region: StructuredRegion, call, othe
     region.eval_answers_over(Nil, call, other, arity, answers)
 }
 
+// A region whose nodes all require nothing (`Node::total`): it is defined
+// wherever its callees are, which is how a program without a divide meets
+// its certificates' `defined` premise by evaluation.
+fn StructuredRegion::total(self region: StructuredRegion) → Bool {
+    match region {
+        Dataflow(body) => nodes_total(body.nodes),
+        Sequence(prefix, continuation) => nodes_total(prefix.nodes) && continuation.total(),
+        Compose(prefix, continuation) => prefix.total() && continuation.total(),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.total() && when_false.total(),
+        Lend(views, _, _, _) => nodes_total(views_nodes(views)),
+        Call(_, _, _) => True,
+        Loop(_, _, _, _, body, _, _, _, _) => body.total(),
+    }
+}
+
+theorem loop_defined_all(step: Valuation() → Valuation(), defined: Valuation() → Bool, all: (v: Valuation()) → defined(v).IsTrue(),
+    parameters: List<Nat>, count, exit: Nat, next: List<Nat>, remaining: Nat):
+    (state: List<BitVec(64)>) → loop_defined(step, defined, parameters, count, exit, next, remaining, state).IsTrue() {
+    match remaining {
+        Zero => λ _ => trivial,
+        Succ(rest) => λ state => {
+            let before = pass_valuation(parameters, count, rest + 1, state);
+            let after = step(before);
+            Bool::is_true_and_intro(defined(before), match after(1, exit).head_bit() {
+                    False => loop_defined(step, defined, parameters, count, exit, next, rest, words_of(after, next)),
+                    True => True,
+                }, all(before),
+                match after(1, exit).head_bit() as λ b => (match b as λ _ => Bool {
+                    False => loop_defined(step, defined, parameters, count, exit, next, rest, words_of(after, next)),
+                    True => True,
+                }).IsTrue() {
+                    False => loop_defined_all(step, defined, all, parameters, count, exit, next, rest, words_of(after, next)),
+                    True => trivial,
+                })
+        },
+    }
+}
+
+theorem StructuredRegion::total_defined(self region: StructuredRegion, buffers: Buffers(), call: Answers(), defines: Defines(),
+    all: (f: Nat) → (words: List<BitVec(64)>) → defines(f, words).IsTrue()):
+    region.total().IsTrue() → (values: Valuation()) → region.defined_over(buffers, call, defines, values).IsTrue() {
+    match region {
+        Dataflow(body) => λ total values => nodes_total_defined(body.nodes, buffers, total, values),
+        Sequence(prefix, continuation) => λ total values => {
+            let parts = Bool::is_true_and(nodes_total(prefix.nodes), continuation.total(), total);
+            Bool::is_true_and_intro(prefix.defined(values, buffers := buffers),
+                continuation.defined_over(buffers, call, defines, prefix.eval(values, buffers := buffers)),
+                nodes_total_defined(prefix.nodes, buffers, parts.left, values),
+                continuation.total_defined(buffers, call, defines, all, parts.right, prefix.eval(values, buffers := buffers)))
+        },
+        Compose(prefix, continuation) => λ total values => {
+            let parts = Bool::is_true_and(prefix.total(), continuation.total(), total);
+            Bool::is_true_and_intro(prefix.defined_over(buffers, call, defines, values),
+                continuation.defined_over(buffers, call, defines, prefix.eval_over(buffers, call, values)),
+                prefix.total_defined(buffers, call, defines, all, parts.left, values),
+                continuation.total_defined(buffers, call, defines, all, parts.right, prefix.eval_over(buffers, call, values)))
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => λ total values => {
+            let parts = Bool::is_true_and(when_true.total(), when_false.total(), total);
+            match values(1, condition).head_bit() as λ b => (match b as λ _ => Bool {
+                False => when_false.defined_over(buffers, call, defines, values),
+                True => when_true.defined_over(buffers, call, defines, values),
+            }).IsTrue() {
+                False => when_false.total_defined(buffers, call, defines, all, parts.right, values),
+                True => when_true.total_defined(buffers, call, defines, all, parts.left, values),
+            }
+        },
+        Lend(views, callee, arguments, _) => λ total values => {
+            let bound = eval_nodes_over(buffers, views_nodes(views), values);
+            Bool::is_true_and_intro(nodes_defined_over(buffers, views_nodes(views), values),
+                defines(callee, words_of(bound, views_homes(views) ++ arguments)),
+                nodes_total_defined(views_nodes(views), buffers, total, values), all(callee, words_of(bound, views_homes(views) ++ arguments)))
+        },
+        Call(callee, arguments, _) => λ _ values => all(callee, words_of(values, arguments)),
+        Loop(inputs, bound, parameters, count, body, exit, next, _, _) => λ total values =>
+            loop_defined_all(λ (pass: Valuation()) => body.eval_over(buffers, call, pass),
+                λ (pass: Valuation()) => body.defined_over(buffers, call, defines, pass),
+                λ pass => body.total_defined(buffers, call, defines, all, total, pass), parameters, count, exit, next,
+                values(64, bound).toNat(), words_of(values, inputs)),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Functions and programs
 
@@ -1305,6 +1387,30 @@ fn program_defined_over(buffers: Buffers(), functions: List<Function>) → Defin
 }
 
 fn program_defined(functions: List<Function>) → Defines() { program_defined_over(Nil, functions) }
+
+fn program_total(functions: List<Function>) → Bool {
+    match functions { Nil => True, Cons(last, earlier) => last.body.total() && program_total(earlier) }
+}
+
+// A program none of whose nodes requires anything is defined everywhere.
+theorem program_total_defined(functions: List<Function>, buffers: Buffers()): program_total(functions).IsTrue() →
+    (f: Nat) → (words: List<BitVec(64)>) → program_defined_over(buffers, functions, f, words).IsTrue() {
+    match functions {
+        Nil => λ _ _ _ => trivial,
+        Cons(last, earlier) => λ total f words => {
+            let parts = Bool::is_true_and(last.body.total(), program_total(earlier), total);
+            let ih = program_total_defined(earlier, buffers, parts.right);
+            match f.eq_dec(earlier.len()) as λ d => (match d as λ _ => Bool {
+                Inl(_) => last.defined(program_eval_over(buffers, earlier), program_defined_over(buffers, earlier), words, buffers := buffers),
+                Inr(_) => program_defined_over(buffers, earlier)(f, words),
+            }).IsTrue() {
+                Inl(_) => last.body.total_defined(buffers, program_eval_over(buffers, earlier), program_defined_over(buffers, earlier), ih,
+                    parts.left, Valuation::bind(Valuation::zero(), last.parameters, words)),
+                Inr(_) => ih(f, words),
+            }
+        },
+    }
+}
 
 fn program_arity(functions: List<Function>) → Nat → Option<Nat> {
     match functions {
