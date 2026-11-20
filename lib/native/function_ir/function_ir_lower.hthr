@@ -2795,7 +2795,7 @@ theorem Operand::place_keeps<M>(self operand: Operand, values: Valuation(), file
 }
 
 fn Operation::Holds(self op: Operation, values: Valuation(), output, left, right: Nat) → Type {
-    values(64, output) = op.meaning(values(64, left), values(64, right))
+    op.Gives(64, values(64, left), values(64, right), values(64, output))
 }
 
 // With both operands where the row reads them, its code.
@@ -2823,12 +2823,10 @@ theorem File::run_row_keeps<M>(self file: File, values: Valuation(), op: Operati
                 let b = row.right.read(s.gprs);
                 let left_rep: (values(64, left) = a) = here.rep(values, s.gprs, represents);
                 let right_rep: (values(64, right) = b) = reads.reads(values, s.gprs, represents);
-                let written: (values(64, output) = op.meaning(a, b)) =
-                    j(left_rep, λ x _ => values(64, output) = op.meaning(x, b),
-                        j(right_rep, λ y _ => values(64, output) = op.meaning(values(64, left), y), holds));
+                let moved: op.Gives(64, a, b, values(64, output)) = op.gives_cong(64, holds, left_rep, right_rep, refl);
                 file.forget(row.code).represents_retag(values, after, row.result, Some(Held(output, Word)),
                     file.forget_represents<M>(values, row.code, s, represents),
-                    trans(written, sym(computes(s))))
+                    trans(moved.equation, sym(computes(s, moved.needs))))
             },
         },
     }

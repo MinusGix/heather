@@ -75,6 +75,25 @@ record Operation::Gives(self op: Operation, w: Nat, x, y, output: BitVec(w)) {
     equation: output = op.meaning(x, y, needs),
 }
 
+// The equation carried along equal words.
+theorem Operation::gives_cong(self op: Operation, w: Nat, {x, y, output, x2, y2, output2: BitVec(w)},
+    held: op.Gives(w, x, y, output), ex: x = x2, ey: y = y2, eo: output = output2): op.Gives(w, x2, y2, output2)
+{
+    Operation::Gives(
+        needs := j(ex, λ a _ => op.Requires(a, y2), j(ey, λ b _ => op.Requires(x, b), held.needs)),
+        equation := trans(sym(eo), trans(held.equation, trans(j(ex, λ a _ => op.run(x, y) = op.run(a, y), refl),
+            j(ey, λ b _ => op.run(x2, y) = op.run(x2, b), refl)))))
+}
+
+// Two outputs that hold the operation's value at the same operands agree.
+theorem Operation::gives_same(self op: Operation, w: Nat, {x, y, output, other: BitVec(w)},
+    here: op.Gives(w, x, y, output), there: op.Gives(w, x, y, other)): output = other
+{
+    let a: (output = op.run(x, y)) = here.equation;
+    let b: (other = op.run(x, y)) = there.equation;
+    trans(a, sym(b))
+}
+
 // The requirement decided, at any operands: what a runner checks where
 // `run` is about to give an answer the meaning does not (`requires_of_bit`).
 fn Operation::requires_bit(self op: Operation, {w: Nat}, x, y: BitVec(w)) → Bool {

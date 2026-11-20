@@ -39,9 +39,12 @@ fn Operand::read(self operand: Operand, gprs: Gprs) → BitVec(64) {
 // result in `result` once `code` has run.
 record Row { code: List<Instruction>, left: Gpr, right: Operand, result: Gpr }
 
+// Where the operation's requirement holds at the operands the row reads,
+// the result is the operation's meaning there.
 fn Row::Computes<M>(self row: Row, op: Operation) → Type {
-    (s: MachineState<M>) → read_gpr(row.result, execute_block_normal(row.code, s).gprs) =
-        op.meaning(read_gpr(row.left, s.gprs), row.right.read(s.gprs))
+    (s: MachineState<M>) → (needs: op.Requires(read_gpr(row.left, s.gprs), row.right.read(s.gprs))) →
+        read_gpr(row.result, execute_block_normal(row.code, s).gprs) =
+            op.meaning(read_gpr(row.left, s.gprs), row.right.read(s.gprs), needs)
 }
 
 // ---------------------------------------------------------------------------
@@ -50,7 +53,7 @@ fn Row::Computes<M>(self row: Row, op: Operation) → Type {
 theorem mul_row_computes<M>(destination, source: Gpr):
     Row([ImulRR(destination, source)], destination, InRegister(source), destination).Computes<M>(Mul)
 {
-    λ s => read_gpr_self(destination, read_gpr(destination, s.gprs).mul(read_gpr(source, s.gprs)), s.gprs)
+    λ s _ => read_gpr_self(destination, read_gpr(destination, s.gprs).mul(read_gpr(source, s.gprs)), s.gprs)
 }
 
 // ---------------------------------------------------------------------------
@@ -468,7 +471,7 @@ fn Operation::row(self op: Operation, destination: Gpr, left, right: Option<Gpr>
 theorem divide_row_computes<M>(op: Operation, d: Nat, source: Gpr, code: Reciprocal → List<Instruction>,
     computes: (r: Reciprocal) → ReciprocalFits(d, r.odd, r.twos, r.multiplier, r.shift) → Rax.same(source) = False → Rdx.same(source) = False →
         (state: MachineState<M>) → read_gpr(Rdx, execute_block_normal(code(r), state).gprs) =
-            op.meaning(read_gpr(source, state.gprs), BitVec::ofNat(d))):
+            op.run(read_gpr(source, state.gprs), BitVec::ofNat(d))):
     Row::Offered<M>(divide_row(d, source, code), op)
 {
     match reciprocal(d) {
@@ -479,7 +482,8 @@ theorem divide_row_computes<M>(op: Operation, d: Nat, source: Gpr, code: Recipro
                 True => trivial,
                 False => match apart_d: Rdx.same(source) {
                     True => trivial,
-                    False => computes(found, reciprocal_fits_sound(d, found.odd, found.twos, found.multiplier, found.shift, fits), apart_a, apart_d),
+                    False => λ s _ => computes(found, reciprocal_fits_sound(d, found.odd, found.twos, found.multiplier, found.shift, fits),
+                        apart_a, apart_d, s),
                 },
             },
         },
@@ -496,13 +500,13 @@ theorem Operation::row_computes<M>(self op: Operation, destination: Gpr, left, r
         },
         ShlBy => match apart: destination.same(Rcx) {
             True => trivial,
-            False => λ s => trans(shift_row_reads<M>(OpShl, destination, apart, s),
+            False => λ s _ => trans(shift_row_reads<M>(OpShl, destination, apart, s),
                 shift_masked(OpShl, read_gpr(destination, s.gprs), read_gpr(Rcx, s.gprs),
                     λ m => BitVec::shift_left_past(read_gpr(destination, s.gprs), m))),
         },
         ShrBy => match apart: destination.same(Rcx) {
             True => trivial,
-            False => λ s => trans(shift_row_reads<M>(OpShr, destination, apart, s),
+            False => λ s _ => trans(shift_row_reads<M>(OpShr, destination, apart, s),
                 shift_masked(OpShr, read_gpr(destination, s.gprs), read_gpr(Rcx, s.gprs),
                     λ m => BitVec::shift_right_past(read_gpr(destination, s.gprs), m))),
         },

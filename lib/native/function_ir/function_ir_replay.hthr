@@ -1011,7 +1011,7 @@ theorem Node::reading_runs(self node: Node, facts: Facts, values: Valuation(), h
         Apply(op, w, o, l, r) => λ new made ran => {
             let got = facts.reads_two(values, held, w, l, r, a, b, Apply(op, w, o, a, b), new, made);
             j(got.right, λ n _ => n.Runs(values, before, after),
-                ⟨trans(ran.left, eq2(λ (x: BitVec(w)) (y: BitVec(w)) => op.meaning(x, y), got.left.left, got.left.right)), ran.right⟩)
+                ⟨op.gives_cong(w, ran.left, got.left.left, got.left.right, refl), ran.right⟩)
         },
         RotateRight(w, o, v, n) => λ new made ran => {
             let got = facts.reads_one(values, held, w, v, a, RotateRight(w, o, a, n), new, made);
@@ -1133,7 +1133,7 @@ theorem Node::at_agrees(self node: Node, id: Nat, values: Valuation()): node.pur
         ShiftLeft(_, _, _, _) => λ _ here there => trans(here, sym(there)),
         LogicalShiftRight(_, _, _, _) => λ _ here there => trans(here, sym(there)),
         RotateRight(_, _, _, _) => λ _ here there => trans(here, sym(there)),
-        Apply(_, _, _, _, _) => λ _ here there => trans(here, sym(there)),
+        Apply(op, w, _, _, _) => λ _ here there => op.gives_same(w, here, there),
         ArithmeticShiftRight(_, _, _, _) => λ _ here there => trans(here, sym(there)),
         UnsignedLessThan(_, _, _, _) => λ _ here there => trans(here, sym(there)),
         SignedLessThan(_, _, _, _) => λ _ here there => trans(here, sym(there)),
