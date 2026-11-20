@@ -254,8 +254,8 @@ fn check(args: &Args, env: &[(String, String)], reports: &[Report], probes: &[st
     th.compare_stack = get("rustc") == base.env_get("rustc") && get("profile") == base.env_get("profile");
     if !th.compare_times {
         println!(
-            "baseline is not time-comparable ({}) — comparing scaling shape \
-             only, not times; the verdict will be shape-only, not ok",
+            "baseline times are from another machine ({}) — times not \
+             compared; the counters and slope bands still are",
             mismatched.join("; "),
         );
     }
@@ -268,6 +268,7 @@ fn check(args: &Args, env: &[(String, String)], reports: &[Report], probes: &[st
                 regressed += 1;
                 "REGRESSED"
             }
+            Verdict::Slower => "slower",
             Verdict::Improved => "improved",
             Verdict::Untracked => "untracked",
             Verdict::Ok => continue,
@@ -276,22 +277,24 @@ fn check(args: &Args, env: &[(String, String)], reports: &[Report], probes: &[st
     }
     if regressed == 0 {
         let n = diffs.iter().filter(|d| d.verdict != Verdict::Untracked).count();
-        // "ok" is reserved for a run that compared everything it knows how
-        // to compare. A run that skipped its time (or stack) half says so in
-        // its verdict and its exit code, so a green that checked half the
-        // gate cannot be read — or scripted — as the full gate passing.
-        let full = th.compare_times && (probes.is_empty() || th.compare_stack);
+        // "ok" is reserved for a run that compared everything the gate
+        // holds: every case's counters, and the stack probes. A run that
+        // skipped part says so in its verdict and its exit code, so a green
+        // that checked half the gate cannot be read — or scripted — as the
+        // full gate passing. Times are not part of the gate, so a baseline
+        // from another machine still gives a full pass.
+        let uncounted = diffs.iter().filter(|d| d.verdict == Verdict::Untracked && d.label.ends_with(" counters")).count();
+        let full = uncounted == 0 && (probes.is_empty() || th.compare_stack);
         if full {
             println!("ok: {n} comparisons within thresholds");
             0
         } else {
-            let skipped = if th.compare_times { 0 } else { reports.iter().map(|r| r.points.len()).sum::<usize>() }
-                + if th.compare_stack { 0 } else { probes.len() };
+            let skipped = uncounted + if th.compare_stack { 0 } else { probes.len() };
             println!(
-                "shape-only: {n} comparisons within thresholds — {skipped} \
-                 skipped for a baseline env mismatch. Not a full pass; \
-                 re-record with `scripts/bench --save` on this toolchain \
-                 to restore the time gate."
+                "partial: {n} comparisons within thresholds — {skipped} \
+                 skipped (cases with no recorded counters, or stack probes \
+                 under another toolchain). Not a full pass; re-record with \
+                 `scripts/bench --save` to restore the gate."
             );
             3
         }

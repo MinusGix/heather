@@ -564,6 +564,9 @@ struct Open {
     timers: [u64; TIMERS],
     counters: [u64; COUNTERS],
     kernel: kstats::Snapshot,
+    /// The enclosing scope's kernel peaks, set aside while this one is open
+    /// (`kstats::peak_scope_open`).
+    peaks: kstats::Peaks,
     value_metrics: Option<ValueMetricsSnapshot>,
     peak_kb: u64,
 }
@@ -609,7 +612,11 @@ impl Drop for ScopeGuard {
             kernel_ns: timers[Timer::KernelGate as usize],
             timers,
             counters,
-            kernel: kstats::snapshot().since(&open.kernel),
+            kernel: {
+                let kernel = kstats::snapshot().since(&open.kernel);
+                kstats::peak_scope_close(open.peaks);
+                kernel
+            },
             value_metrics: current_value_metrics()
                 .zip(open.value_metrics)
                 .map(|(after, before)| after.saturating_sub(before)),
@@ -689,6 +696,7 @@ pub fn scope(kind: ScopeKind, module: &str, item: &str) -> ScopeGuard {
             started: Instant::now(),
             timers,
             counters,
+            peaks: kstats::peak_scope_open(),
             kernel: kstats::snapshot(),
             value_metrics: current_value_metrics(),
             peak_kb: if explicit { peak_rss_kb() } else { 0 },

@@ -18,7 +18,7 @@ and why each of them is one of the differences between the two questions.
 
 ```
 scripts/bench                        # measure and print
-scripts/bench --check                # compare against the recorded baseline; exit 1 on a regression
+scripts/bench --check                # compare against the recorded baseline; exit 1 on a regression (counters, bands, stack)
 scripts/bench --save                 # record a new baseline
 scripts/bench --quick --filter nat   # iterate on a fixture (shapes only)
 scripts/bench --list                 # what is in the suite
@@ -96,20 +96,53 @@ smallest is the least contaminated. A large min/median gap means the machine
 was busy, and the report flags it (`⚠ noisy`). `--check` compares times only
 when the baseline's `host` and `profile` match.
 
+## Counters: the work, exactly
+
+Each case also records the kernel's own counters (`heather_kernel::stats`)
+over one run: evaluator fuel (`eval_steps`), δ-steps (`eval_delta_steps`),
+the substitution reducer's steps (`reduce_steps`), the nodes the shift and
+substitution traversals visited (`local_subst_nodes`, `shift_global_nodes`),
+the node pairs syntactic equality compared (`syntax_eq_nodes`),
+and the largest value arena one query built (`arena_peak_bytes`, the same
+count `heather check --timings` reports per declaration as `arena MB`). The
+report prints them after each case and fits a **work slope** per counter
+beside the time slope:
+
+```
+  128 definitions  4.02 ms  …  ×1   [eval 16K δ 9 shiftΨ 2 arena 4243K]
+  slope 0.95  (expected 0.80–1.40)
+  work slopes  eval_steps 0.98  eval_delta_steps 0.00  arena_peak_bytes 0.96
+```
+
+Counters are what the gate compares, because they have no noise: the same
+code does the same work on any machine, under any load. A time says *that*
+something got slower and has to be re-run to be believed; a counter says
+*what* the kernel did more of. The counters are the list `COUNTED` in
+`harness.rs`; the counted run is the validating one (the second run of the
+case, after setup's), so it sees the same warm per-node caches the timed runs
+do.
+
 ## What "regressed" means
 
 `scripts/bench --check` fails on any of:
 
 | condition | threshold | why that threshold |
 |---|---|---|
-| a case is slower than baseline | ≥ 1.25× | measured run-to-run spread on the recording machine is ~1–4%; 1.25 tolerates a merely-busy machine, because a gate that cries wolf gets ignored |
-| a fitted slope drifted upward | > +0.35 | a 4-point fit over a 16× size range moves ±0.15 between runs; 0.35 catches linear → quadratic with margin |
+| a counter grew | any growth (5% for `local_subst_nodes`, `shift_global_nodes`) | counters are exact, the same code doing the same work; those two move by a little between identical runs because the memos that save their work are keyed by node address |
 | a slope left its declared band | — | the band is a standing claim about the cost model, checked on every machine |
 | a stack probe lost depth | > 10% fewer levels | bisection is exact to one level; 10% is "not a one-frame rounding change" |
 
-Improvements ≥ 20% are printed too, as a hint to re-record — not a failure.
+`arena_peak_bytes` is a size in this build's value layout, so it is compared
+only under the baseline's `rustc` and profile, like the stack probes.
 
-**Re-run a single-case flag before believing it.** A lone case over the
+Times are information, not the gate (since 2026-11-20). A case ≥ 1.25×
+slower than baseline, or a time slope that drifted up by more than 0.35, is
+printed as `slower` and does not fail the run: measured run-to-run spread is
+~1–4% on a quiet machine and far more on a busy one, and a change that does
+more work moves a counter whatever the machine. A counter that dropped, and a
+time ≥ 20% faster, are printed as `improved` — a hint to re-record.
+
+**Re-run a single-case `slower` before believing it.** A lone case over the
 threshold with its neighbours in the same family unmoved is usually the
 machine, not the code: this happened on the first day (`nat/mul-normalize:32`
 read 1.35× while 24 and 48 were fine, and three quiet re-runs came in 4%
@@ -124,7 +157,8 @@ optimizations, only measurements (`issues/README.md` rule 3).
 
 `crates/kernel/benches/baseline.tsv`, tab-separated so it stays greppable and
 diffable, and parseable without a dependency. Rows are `env` (host, cpu,
-profile, rustc, commit), `case` (family, size, min ns), `slope`, and `stack`.
+profile, rustc, commit), `case` (family, size, min ns), `slope`, `count`
+(family, size, counter, value; only the counters that moved), and `stack`.
 It is recorded on the cloud box, the reference environment since 2026-10-29
 (`docs/infrastructure/cloud-benchmarks.md` §1); the same holds for the frontend suite's.
 Being in the tree is the point: a baseline that lives in CI artifacts is a
@@ -135,9 +169,12 @@ change moves the numbers. Time comparability is keyed on cpu + profile +
 rustc — not the hostname, which is the one env row with no bearing on speed
 (a machine rename once turned the time half off silently while `--check`
 kept printing `ok`; `issues/frontend-bench-baseline-host-string.md`). A
-baseline from another machine is still useful — the slope comparisons run
-regardless — but a run that skipped its time half says `shape-only` instead
-of `ok` and exits 3, so a scripted gate cannot mistake it for a full pass.
+baseline from another machine still gates fully, since counters, bands and
+(under the same toolchain) stack depth are what `--check` holds; it just
+prints no time comparisons. A run that could not compare part of the gate (a
+case with no recorded counters, stack probes under another toolchain) says
+`partial` instead of `ok` and exits 3, so a scripted gate cannot mistake it
+for a full pass.
 
 ## Why no Criterion
 
@@ -169,14 +206,27 @@ Two, and both have been paid for elsewhere in this tree:
 |---|---|
 | `subst/shift-local` | one full pass over a term, no replacement — the suite's floor for "what does a traversal cost" |
 | `subst/apply-local` | the same pass with replacement; the gap is what substitution adds |
+| `subst/shared-dag` | `[3/x]` into a term 2ⁿ nodes as a tree and n as a DAG: the substitution memo keeps it linear |
 | `nat/step-once` | **one** `elim_Nat` β-step against annotation size the rule never reads. Expected exponent zero — the sharpest fixture here |
 | `nat/add-normalize` | the kernel *executing* a program: `n` β-steps, then reading a numeral off |
 | `nat/mul-normalize` | quadratic by construction — the control that proves the fit distinguishes exponents |
 | `nat/check-numeral` | the checking walk of `issues/numeral-stack-depth.md`, timed |
+| `run/affine-literal`, `run/sync-literal`, `run/mul-literal`, `run/open-tail` | folds over literals 16 to 4096 bits wide, which the run machinery moves in a few steps: flat counters. Their time is not flat past one word (`issues/wide-literal-run-cost.md`), and the bands record that |
+| `run/fuel-exhaustion` | a tail-calling fold refused at a fuel budget: steps and arena bytes per unit of fuel (a fold that nests its hypothesis is refused at `NATIVE_DEPTH_LIMIT` instead, whatever the budget) |
 | `conv/computed-numeral` | an equation discharged purely by computation — the thesis-shaped fixture in miniature |
 | `conv/perturbed-pairs` | conversion over the generated well-typed corpus: representative shapes, not chosen ones |
 | `conv/vec-literal` | a nested-pair vector literal at the elaborator's shape checked against `[T; n]` — linear since the spelled-`Vec` congruence (2026-09-11); it was quadratic through the `Σ` encodings |
 | `conv/vec-items-values` | two separately built `VecItems` nodes compared by value — linear since tail windows read the array's suffix joins (2026-11-07, `issues/vec-items-window-bounds.md`); it was quadratic, each fresh tail walking its window |
+| `conv/shared-neutral-dag` | two separately built neutral DAGs: quadratic in `syntax_eq_nodes` today (`issues/conversion-neutral-dag-syntax-memo.md`), and the band records it |
+| `delta/closed-sum` | conversion of two applications of one defined `add`, one side's argument a `max` folded over a chain of glued definitions: the shape of `issues/conversion-closed-sum-opaque-counter.md`. With the run machinery forcing those counters opaquely (before `Eval::force_counter`) its `eval_steps` grew as ~n^1.2 and rising and its arena 3× at 128 definitions; now linear |
+| `delta/closed-numeral` | the same left side against a numeral: the control, which takes one transparent run and no same-head attempt |
+| `delta/lockstep` | two interleaved chains of definitions with one value, compared by advancing the newer side |
+| `delta/refusal` | lockstep's chains one apart: a mismatch costs what a match does |
+| `delta/same-head-args` | one defined head whose arguments agree only through a chain of definitions |
+| `delta/shared-dag` | `dᵢ := max(dᵢ₋₁, dᵢ₋₁)`: a tree 2ⁿ wide over n definitions, linear through the glued values' memo |
+| `delta/record-projections` | field reads out of a chain of glued records, one field computed and one carried |
+| `delta/check-refl` | `refl : aₙ = n` through `check_term`, the gate's own path to a closed equation |
+| `delta/bool-verdict` | `refl : vₙ = true` for a verdict and-ed over n rows: the library's closed-verdict rule at size |
 | `wf/check-tree` | reading branching data — `Vec`/`Fin` unfolding per constructor |
 | `wf/mirror-involution` | `Wf` elimination at depth, twice, then compared |
 | `code/check-identity-recursor` | the 45-branch code recursor: the largest single thing the checker sees (a fixed cost, ~0.54 ms) |
