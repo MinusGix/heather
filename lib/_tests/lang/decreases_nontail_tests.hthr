@@ -1,0 +1,57 @@
+// Unfolding equations and companions (`f_unfold`, `f::ext`, `f::irrel`) for
+// a `decreases` function whose call of itself is not its last act: the call
+// as a method call's receiver or argument, and the call bound by a `let`
+// (docs/language/recursion/decreases-unfolding-design.md §3, amended
+// 2026-11-20). A non-tail recursive `runtime fn` is proved from these
+// (docs/native/runtime-fn-recursion-design.md §6 step 4). Tests, not
+// library: nothing outside lib/_tests imports this module.
+import logic;
+import nat;
+import list;
+import bitvec;
+import bitvec_nat;
+
+// A call as a method call's argument, under `match h:`.
+fn tri(n: BitVec(64)) → BitVec(64) decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => BitVec::ofNat(0),
+        False => n.add(tri(n.sub(BitVec::ofNat(1)))),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+theorem tri_zero(): tri(BitVec::ofNat(0)) = BitVec::ofNat(0) { tri_unfold(BitVec::ofNat(0)) }
+
+// As a method call's receiver, at an open element type.
+fn count_all<A>(xs: List<A>) → Nat decreases xs.len() {
+    match xs { Nil => 0, Cons(_, rest) => count_all(rest).add(1) }
+    on ?dec1 := nat::Nat::lt_succ_self(rest.len());
+}
+
+theorem count_all_cons<A>(x: A, rest: List<A>): count_all(Cons(x, rest)) = count_all(rest).add(1) { count_all_unfold(Cons(x, rest)) }
+
+// Bound by a `let`, twice, the second read twice.
+fn twice(n: Nat) → Nat decreases n {
+    match n { Zero => 1, Succ(k) => { let a = twice(k); let b: Nat = twice(k); a + b + b } }
+    on ?dec1 := nat::Nat::lt_succ_self(k);
+}
+
+theorem twice_succ(k: Nat): twice(Succ(k)) = twice(k) + twice(k) + twice(k) { twice_unfold(Succ(k)) }
+
+// A `let` holding the call, and a `let` after it reading it.
+fn rsum(n: BitVec(64)) → BitVec(64) decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => BitVec::ofNat(0),
+        False => { let m = n.sub(BitVec::ofNat(1)); let r = rsum(m); let s = r.add(n); s },
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+theorem rsum_zero(): rsum(BitVec::ofNat(0)) = BitVec::ofNat(0) { rsum_unfold(BitVec::ofNat(0)) }
+
+// The equation is the body as written: one read fewer is refused.
+// expect-error(kernel): NotConvertible
+theorem twice_succ_wrong(k: Nat): twice(Succ(k)) = twice(k) + twice(k) { twice_unfold(Succ(k)) }
+
+// `f::ext` and `f::irrel` are what a non-tail recursive `runtime fn`'s guard
+// is proved from: `rsum_guarded` in lib/_tests/native/runtime/rt_proc_tests.

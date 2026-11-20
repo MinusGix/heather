@@ -11,6 +11,7 @@ import list;
 import option;
 import pair;
 import bitvec;
+import bitvec_nat;
 import function_ir;
 import function_ir_state;
 import function_ir_placeless;
@@ -21,6 +22,7 @@ import linux_world;
 import rt;
 import rt_lower;
 import rt_io_lower;
+import rt_loop;
 import rt_proc;
 
 fn proc_world() → rt::World { rt::World(RecInfo::none, [], trivial) }
@@ -130,3 +132,36 @@ fn diff_run(io: Io) → Mutated<Io, Flow> {
 }
 
 theorem diff_runs(io: Io): (match diff_run(io).value { Onward(after) => after.number(2), Exited(_) => 0 }) = 7 { refl }
+
+// ---------------------------------------------------------------------------
+// The guard as the generator will prove it: a Heather function whose call of
+// itself is not its last act, written with `match h:` and a measure, its
+// reflection the `match h:` body above, and `PTm::GuardedWords` from its own
+// `rsum::ext` and `rsum::irrel`, as `count_down_guarded` proves a measured
+// loop's (rt_loop_tests).
+
+fn rsum(n: BitVec(64)) → BitVec(64) decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => BitVec::ofNat(0),
+        False => n.add(rsum(n.sub(BitVec::ofNat(1)))),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+fn rsum_measure(ys: List<BitVec(64)>) → Nat { ys.head_or(BitVec::zero()).toNat() }
+
+theorem rsum_guarded(): PTm::GuardedWords([Word(64)], sum_body_by(True), RecInfo::none, rsum, rsum_measure) {
+    λ n again hyp => sym(rsum::ext(n.toNat(), n.toNat(),
+        λ (y: BitVec(64)) (p: nat::Nat::Lt(y.toNat(), n.toNat())) => rsum::rec(n.toNat(), y, p),
+        λ (y: BitVec(64)) _ => again([y]),
+        λ y p q => trans(rsum::irrel(n.toNat(), y.toNat() + 1, y, p, nat::Nat::lt_succ_self(y.toNat())),
+            sym(hyp([y], refl, p))),
+        n, nat::Nat::lt_succ_self(n.toNat()), nat::Nat::lt_succ_self(n.toNat())))
+}
+
+// Its one procedure means the function.
+theorem rsum_unfolds(): PDef::Unfolds([PDef(1, sum_body_by(True))], rt::World(RecInfo::none, [], trivial),
+    λ _ xs => Ty::uncurry(RecInfo::none, [Word(64)], Word(64), rsum, xs)) {
+    PTm::unfolds_one(1, sum_body_by(True), rt::World(RecInfo::none, [], trivial), λ xs => Ty::uncurry(RecInfo::none, [Word(64)], Word(64), rsum, xs),
+        rsum_measure, PTm::guarded_of_words([Word(64)], sum_body_by(True), RecInfo::none, rsum, rsum_measure, rsum_guarded()))
+}
