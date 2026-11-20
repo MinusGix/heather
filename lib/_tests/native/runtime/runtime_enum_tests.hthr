@@ -144,3 +144,31 @@ theorem shade_same_agrees(s: Shade):
 // A word that is no tag reads as the last constructor, and the clamp
 // returns that constructor's tag.
 theorem shade_same_past(): program_eval(shade_same::program, 0, [BitVec::ofNat(7)]) = 2 { refl }
+
+// ---------------------------------------------------------------------------
+// An enum passed to a call, as its tag word: the callee reads it back as
+// the constructor it names (`Ty::held_reads`).
+
+runtime fn shade_twice(s: Shade) → u64 { shade_level(s) + shade_level(s) }
+
+theorem shade_twice_runs(): program_eval(shade_twice::program, 1, [BitVec::ofNat(2)]) = 60 { shade_twice::agrees(Light) }
+
+theorem shade_twice_agrees(s: Shade):
+    program_eval(shade_twice::program, 1, [RecInfo::enum_word(shade_twice::world.tys, 0, s)]) = shade_twice(s) {
+    shade_twice::agrees(s)
+}
+
+// A constructor built in the body and passed on.
+runtime fn shade_made(x: u64) → u64 { shade_level(if x < 10 { Dark } else { Mid }) }
+
+theorem shade_made_runs(): program_eval(shade_made::program, 1, [BitVec::ofNat(3)]) = 10 ∧
+    program_eval(shade_made::program, 1, [BitVec::ofNat(30)]) = 20 {
+    ⟨shade_made::agrees(BitVec::ofNat(3)), shade_made::agrees(BitVec::ofNat(30))⟩
+}
+
+// Two enums and a word passed on, the callee matching on both.
+runtime fn step_twice(d: Dir, s: Shade, x: u64) → u64 { step_toward(d, s, step_toward(d, s, x)) }
+
+theorem step_twice_runs(): program_eval(step_twice::program, 1, [BitVec::ofNat(0), BitVec::ofNat(2), BitVec::ofNat(5)]) = 11 {
+    step_twice::agrees(North, Light, BitVec::ofNat(5))
+}
