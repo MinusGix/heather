@@ -788,8 +788,8 @@ inductive Tm {
     // §16.16).
     Pick(i: Nat, c: Nat, arms: Tm, eq: Bool),
     // Constructor `k` of the enum of table entry `i`, its fields from
-    // variables, one per payload slot (`EnumInfo.slots`; a slot not the
-    // constructor's own may be any variable, as `of` reads only its own).
+    // variables, one per field (its slots of `EnumInfo.slots`, the others
+    // defaults).
     Inject(i: Nat, k: Nat, args: List<Nat>),
     // Payload slot `j` of an enum variable of table entry `i`: in an arm of
     // a `Pick`, a field of the arm's constructor.
@@ -953,7 +953,8 @@ fn Tm::sem(self t: Tm, w: World) → (g: List<Ty>) → Env(w.tys, g) → t.ty(w,
         Pick(i, c, arms, eq) => λ g env =>
             w.tys(i).alts.choose(eq, arms.ty(w, Cons(Enum(i), g)).sem(w.tys), λ n t => arms.sem(w, Cons(Enum(i), g), Pair(w.tys(i).alts.of(n, t), env)),
                 Ty::cast(w.tys, Ty::at(g, c), Enum(i), Env::get(w.tys, g, env, c))),
-        Inject(i, k, args) => λ g env => w.tys(i).alts.of(k, Tm::fields(w, g, env, w.tys(i).alts.slots, args)),
+        Inject(i, k, args) => λ g env => w.tys(i).alts.of(k, Ty::spread(w.tys(i).alts.slots, w.tys(i).alts.lo(k), w.tys(i).alts.arity(k),
+            Tm::fields(w, g, env, Ty::range(w.tys(i).alts.slots, w.tys(i).alts.lo(k), w.tys(i).alts.arity(k)), args))),
         Slot(i, j, of) => λ g env =>
             Ty::at(w.tys(i).alts.slots, j).of_flat(w.tys,
                 Ty::flat_nth(w.tys(i).alts.slots, w.tys(i).alts.fields(Ty::cast(w.tys, Ty::at(g, of), Enum(i), Env::get(w.tys, g, env, of))), j)),
