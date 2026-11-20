@@ -198,6 +198,37 @@ Three refinements of the above, found while building:
   constant keeps working because its `Safe` is closed and decided by
   evaluation.
 
+### 6.2 What round 2 built
+
+- **Rows prove they do not fault.** `Row::Computes` gives, under the
+  operation's requirement at the operands it reads, `NoFaults` of the row's
+  code beside its result. Every row but the divide's proves it by
+  `no_divides` (evaluated); the divide by a word, `XOR EDX, EDX; DIV r`
+  (`word_divide_reads`), by `div_fits_cleared`: with RDX cleared, `DIV`
+  faults only on a zero divisor. The quotient is left in RAX and the
+  remainder in RDX (`div_of_word`); a divisor in RAX or RDX is refused and
+  placed elsewhere.
+- **`Guards` beside `Keeps`, for the nodes only.** `lower_nodes_guards`:
+  from a state the file describes, where the nodes' equations hold, no
+  instruction of their code faults. An operation's node takes it from its
+  row through `File::apply_row_guards` (the placing moves are MOVs,
+  `place_calm`); every other node's code is checked to hold no divide by
+  `Node::lower_checked`, which refuses it otherwise, so no lemma per
+  lowering is needed. `Keeps` is unchanged.
+- **One item more in the machine's programs: `Asm::Guarded`,** the same
+  bytes as a `Block`, whose laid-out check is `block_flags` (flags only) and
+  whose run (`Site::runs_guarded`, and its `wp_item`) takes `NoFaults` at
+  the state it starts from. A leaf is laid out by `Asm::of_code`: a `Block`
+  where its code holds no divide, so every program compiled before is laid
+  out, and certified, as it was. The leaf sites of the structured and the
+  call lowerings (`emit_nodes`, `emit_kept_nodes`) use it; a leaf before a
+  table read or a wide store keeps `Block`, so a divide there is refused at
+  layout until those sites take it too.
+- **Certificates.** The certificate's premise is `program_defined`; the
+  generator proves it from `program_total` (no divide anywhere), checked a
+  function at a time as the scan is. A program that divides needs its
+  definedness from round 3's `Safe`.
+
 ## 7. The machine: `DIV` and a block that may fault
 
 This is the trust-base part, the same kind as `IMUL`/`MUL` in PR #811.
