@@ -98,6 +98,8 @@ fn Tm::share(self t: Tm, sigs: List<Sig>, d: Nat, g: List<Share>) → Share {
         Case(_, zero, succ) => Share::join(zero.share(sigs, d, g), succ.share(sigs, d + 1, Cons(Share([d], False), g))),
         Byte(_, _, _) => Share([d], False),
         Pick(_, _, arms, _) => arms.share(sigs, d + 1, Cons(Share([d], False), g)),
+        Inject(_, _, _) => Share([d], False),
+        Slot(_, _, _) => Share([d], False),
         // A loop's state starts as `init` and is carried word by word, never
         // a buffer (`Ty::Carries`).
         Iterate(init, _, _) => Share(Cons(d, Share::at(g, init).ids), False),
@@ -140,6 +142,8 @@ fn Tm::reads(self t: Tm, d: Nat, bound: Nat, ls: List<Nat>) → Bool {
         Case(c, zero, succ) => Tm::hit(c, d, bound, ls) || zero.reads(d, bound, ls) || succ.reads(d + 1, bound, ls),
         Byte(_, i, length) => Tm::hit(i, d, bound, ls) || Tm::hit(length, d, bound, ls),
         Pick(_, c, arms, _) => Tm::hit(c, d, bound, ls) || arms.reads(d + 1, bound, ls),
+        Inject(_, _, args) => Tm::hits(args, d, bound, ls),
+        Slot(_, _, of) => Tm::hit(of, d, bound, ls),
         Iterate(init, test, body) => Tm::hit(init, d, bound, ls) || test.reads(d + 1, bound, ls) || body.reads(d + 1, bound, ls),
     }
 }
@@ -213,6 +217,8 @@ fn Tm::uses(self t: Tm, sigs: List<Sig>, n: Nat, d: Nat, g: List<Share>, ks: Lis
         Case(_, zero, succ) => zero.uses(sigs, n, d, g, ks) ++ succ.uses(sigs, n, d + 1, Cons(Share([d], False), g), ks),
         Byte(_, _, _) => [],
         Pick(_, _, arms, _) => arms.uses(sigs, n, d + 1, Cons(Share([d], False), g), ks),
+        Inject(_, _, _) => [],
+        Slot(_, _, _) => [],
         // No buffer reaches a loop's passes (`Ty::Carries`), so a pass's
         // consuming uses are of buffers it makes itself.
         Iterate(_, test, body) => test.uses(sigs, n, d + 1, Cons(Share([d], False), g), ks) ++ body.uses(sigs, n, d + 1, Cons(Share([d], False), g), ks),

@@ -197,7 +197,7 @@ fn Function::word(o: Option<Function>, call: Answers(), xs: List<BitVec(64)>) �
 fn twice_fun() → Fun { Fun([Word(64)], Word(64), twice_body()) }
 
 theorem twice_compiled(call: Answers(), x: BitVec(64)): Function::word(twice_fun().lower(no_records_world()), call, [x]) = twice(x) {
-    Fun::lower_sound(twice_fun(), no_records_world(), call, Tm::calls_agree_none(RecInfo::none, call), x, trivial)
+    Fun::lower_sound(twice_fun(), no_records_world(), call, Tm::calls_agree_none(RecInfo::none, call), x)
 }
 
 // A literal and an exclusive or (`calls.hthr`'s leaf), and a call of it.
@@ -220,14 +220,14 @@ fn calls_world() → World {
 
 theorem leaf_compiled(call: Answers(), agree: Tm::CallsAgree(calls_world(), call), a, b: BitVec(64)):
     Function::word(leaf_rt().lower(calls_world()), call, [a, b]) = leaf(a, b) {
-    Fun::lower_sound(leaf_rt(), calls_world(), call, agree, a, trivial, b, trivial)
+    Fun::lower_sound(leaf_rt(), calls_world(), call, agree, a, b)
 }
 
 // The call is FunctionIR's `Call` of function 0, answered by `leaf`'s
 // meaning: the hypothesis a program discharges from `leaf_compiled`.
 theorem caller_compiled(call: Answers(), agree: Tm::CallsAgree(calls_world(), call), a, b: BitVec(64)):
     Function::word(caller_rt().lower(calls_world()), call, [a, b]) = caller(a, b) {
-    Fun::lower_sound(caller_rt(), calls_world(), call, agree, a, trivial, b, trivial)
+    Fun::lower_sound(caller_rt(), calls_world(), call, agree, a, b)
 }
 
 // A `match h:` convoy (rt_tests' V4) lowers as a branch.
@@ -244,7 +244,7 @@ fn safe_pred_world() → World { World(RecInfo::none, [safe_pred_rt().sig()], Pa
 
 theorem safe_pred_compiled(call: Answers(), agree: Tm::CallsAgree(safe_pred_world(), call), n: BitVec(64)):
     Function::word(safe_pred_rt().lower(safe_pred_world()), call, [n]) = safe_pred(n) {
-    Fun::lower_sound(safe_pred_rt(), safe_pred_world(), call, agree, n, trivial)
+    Fun::lower_sound(safe_pred_rt(), safe_pred_world(), call, agree, n)
 }
 
 // ---------------------------------------------------------------------------

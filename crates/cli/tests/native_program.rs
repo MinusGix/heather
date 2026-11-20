@@ -315,8 +315,8 @@ int main(void) {
 // §16.16): `tok_settle` takes a `TokKind` and returns one, each as its tag
 // word, the constructor's index, which is how C passes and returns a C enum
 // of the same constructors in the same order. The certificate states the
-// code at every real value of the enum, its tag word passed and returned
-// (`RecInfo::enum_word`), and states no `Prog::Implements`, which would be
+// code at every real value of the enum, its words passed (`RecInfo::enum_words`,
+// its tag word alone) and its tag word returned (`RecInfo::enum_word`), and states no `Prog::Implements`, which would be
 // over every word. C calls it at every constructor against a reference;
 // a word that is no tag is outside the contract, and the code is not
 // asked about it.
@@ -335,7 +335,7 @@ fn an_enum_is_passed_and_returned_as_its_tag_word() {
     let text = std::fs::read_to_string(&assembly).unwrap();
     assert!(text.contains("# signature: tok_settle(word, word) -> word"), "{text}");
     let certificate = std::fs::read_to_string(dir.join("enum_tag.certificate.hthr")).unwrap();
-    for claim in ["a0: RecInfo::enum_at(enum_tag::tok_settle::world.tys, 0)", "[RecInfo::enum_word(enum_tag::tok_settle::world.tys, 0, a0), a1]",
+    for claim in ["a0: RecInfo::enum_at(enum_tag::tok_settle::world.tys, 0)", "RecInfo::enum_words(enum_tag::tok_settle::world.tys, 0, a0) ++ [a1]",
         "RecInfo::enum_word(enum_tag::tok_settle::world.tys, 0, enum_tag::tok_settle(a0, a1))", "_code().Computes(machine, "] {
         assert!(certificate.contains(claim), "missing {claim}");
     }
@@ -361,6 +361,121 @@ int main(void) {
 }
 "#).unwrap();
     let binary = dir.join("enum_tag");
+    let linked = Command::new("cc").args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(&driver).arg(&assembly).arg("-o").arg(&binary).output().unwrap();
+    assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
+    let run = Command::new(&binary).output().unwrap();
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stdout));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+// An enum whose constructor carries a field, as the result
+// (docs/native/runtime-fn-setups-design.md §16.16): `sub_checked` returns a
+// `Diff`, its tag word in RAX and its payload's one slot in RDX, which is
+// how System V returns a C structure `{ tag, value }`. The certificate
+// states both (`Prog::ComputesBoth`, `RecInfo::enum_rest`), and C reads
+// the structure against a reference, the slot zero where `Borrow` has no
+// field.
+#[test]
+fn an_enum_with_a_field_is_returned_in_rax_and_rdx() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = root.join(format!("target/native-enum-payload-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let assembly = dir.join("enum_payload.s");
+    let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
+        .args(["compile-x86", "examples/x86-native/enum_payload.hthr", "sub_checked", "-o"]).arg(&assembly)
+        .args(heather_cli::showcase::native_image_args()).args(["--kernel-workers", "1"])
+        .output().unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let text = std::fs::read_to_string(&assembly).unwrap();
+    assert!(text.contains("# signature: sub_checked(word, word) -> word, word"), "{text}");
+    let certificate = std::fs::read_to_string(dir.join("enum_payload.certificate.hthr")).unwrap();
+    for claim in ["_code().ComputesBoth(machine, ", "::agrees_also(", "RecInfo::enum_word(enum_payload::sub_checked::world.tys, 0, enum_payload::sub_checked(a0, a1))",
+        "RecInfo::enum_rest(enum_payload::sub_checked::world.tys, 0, enum_payload::sub_checked(a0, a1))"] {
+        assert!(certificate.contains(claim), "missing {claim}");
+    }
+    let driver = dir.join("main.c");
+    std::fs::write(&driver, r#"
+#include <stdint.h>
+#include <stdio.h>
+typedef struct { uint64_t tag, value; } Diff;
+enum { Borrow, Exact };
+extern Diff sub_checked(uint64_t, uint64_t);
+static int check(uint64_t a, uint64_t b) {
+    Diff d = sub_checked(a, b);
+    if (a < b) return d.tag == Borrow && d.value == 0;
+    return d.tag == Exact && d.value == a - b;
+}
+int main(void) {
+    uint64_t edges[] = {0, 1, 2, (UINT64_C(1) << 32) - 1, UINT64_C(1) << 63, UINT64_MAX - 1, UINT64_MAX};
+    for (unsigned i = 0; i < 7; ++i) for (unsigned j = 0; j < 7; ++j) if (!check(edges[i], edges[j])) return 1;
+    uint64_t state = 1;
+    for (unsigned i = 0; i < 10000; ++i) {
+        state = state * UINT64_C(6364136223846793005) + 1;
+        uint64_t a = state >> (state & 7);
+        state = state * UINT64_C(6364136223846793005) + 1;
+        if (!check(a, state >> (state & 7))) return 2;
+    }
+    puts("10049 pairs passed");
+    return 0;
+}
+"#).unwrap();
+    let binary = dir.join("enum_payload");
+    let linked = Command::new("cc").args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(&driver).arg(&assembly).arg("-o").arg(&binary).output().unwrap();
+    assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
+    let run = Command::new(&binary).output().unwrap();
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stdout));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+// An enum whose constructor carries a field, as a parameter
+// (docs/native/runtime-fn-setups-design.md §16.16): `diff_or` takes a
+// `Diff` as its words, its tag word and then its payload's slot
+// (`RecInfo::enum_words`), and a word after them, which is how System V
+// passes a C structure `{ tag, value }` by value, in RDI and RSI, and then
+// RDX. The certificate states the code at every value of the enum and
+// every word, and C calls it with the structure.
+#[test]
+fn an_enum_with_a_field_is_passed_as_its_words() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = root.join(format!("target/native-enum-param-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let assembly = dir.join("enum_payload.s");
+    let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
+        .args(["compile-x86", "examples/x86-native/enum_payload.hthr", "diff_or", "-o"]).arg(&assembly)
+        .args(heather_cli::showcase::native_image_args()).args(["--kernel-workers", "1"])
+        .output().unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let text = std::fs::read_to_string(&assembly).unwrap();
+    assert!(text.contains("# signature: diff_or(word, word, word) -> word"), "{text}");
+    let certificate = std::fs::read_to_string(dir.join("enum_payload.certificate.hthr")).unwrap();
+    for claim in ["a0: RecInfo::enum_at(enum_payload::diff_or::world.tys, 0), a1: BitVec(64)",
+        "RecInfo::enum_words(enum_payload::diff_or::world.tys, 0, a0) ++ [a1]", "_code().Computes(machine, "] {
+        assert!(certificate.contains(claim), "missing {claim}");
+    }
+    assert!(!certificate.contains("_implements"), "an enum's function is stated at its real values only");
+    let driver = dir.join("main.c");
+    std::fs::write(&driver, r#"
+#include <stdint.h>
+#include <stdio.h>
+typedef struct { uint64_t tag, value; } Diff;
+enum { Borrow, Exact };
+extern uint64_t diff_or(Diff, uint64_t);
+int main(void) {
+    uint64_t edges[] = {0, 1, 2, (UINT64_C(1) << 32) - 1, UINT64_C(1) << 63, UINT64_MAX - 1, UINT64_MAX};
+    for (unsigned i = 0; i < 7; ++i) for (unsigned j = 0; j < 7; ++j) {
+        Diff exact = { Exact, edges[i] }, borrow = { Borrow, 0 };
+        if (diff_or(exact, edges[j]) != edges[i]) return 1;
+        if (diff_or(borrow, edges[j]) != edges[j]) return 2;
+    }
+    puts("98 calls passed");
+    return 0;
+}
+"#).unwrap();
+    let binary = dir.join("enum_param");
     let linked = Command::new("cc").args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
         .arg(&driver).arg(&assembly).arg("-o").arg(&binary).output().unwrap();
     assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));

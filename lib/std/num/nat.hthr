@@ -399,6 +399,16 @@ theorem Nat::twice_lt_succ_twice_iff(n, m: Nat):
 
 theorem Nat::le_refl(self n: Nat): n <= n { match n { Zero => trivial, Succ(k) => k.le_refl() } }
 
+// `n <= m` has at most one proof: it computes to `True` or `False`, so a
+// value carrying an index with its bound (`Exists<Nat>(λ n => n <= last)`)
+// is its index.
+theorem Nat::le_unique(self n, m: Nat): (p, q: n <= m) → p = q {
+    match n {
+        Zero => λ _ _ => refl,
+        Succ(k) => match m as λ y => (p, q: Succ(k) <= y) → p = q { Zero => λ never _ => false_elim(never), Succ(l) => k.le_unique(l) },
+    }
+}
+
 theorem Nat::not_succ_le_zero(self n: Nat, h: n + 1 <= 0): False { h }
 
 // Both directions of the successor step, and both are the identity function —

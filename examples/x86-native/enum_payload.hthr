@@ -1,0 +1,32 @@
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import bitvec_nat;
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+
+// An enum whose constructor carries a field, as a function's result
+// (docs/native/runtime-fn-setups-design.md §16.16): returned as its tag
+// word in RAX and its payload's one slot in RDX, which is how System V
+// returns a C structure of two integer words (`{ tag, value }`). A
+// constructor without the field leaves the slot zero.
+inductive Diff { Borrow, Exact(d: u64) }
+
+runtime fn sub_checked(a, b: u64) → Diff { if a < b { Borrow } else { Exact(a - b) } }
+
+// And as a parameter: passed as its words, its tag word and then its
+// slot (`RecInfo::enum_words`), which is how System V passes that same
+// C structure by value, in two registers. Every slot of an enum passed
+// in is a 64-bit word, so the words are any the caller has.
+runtime fn diff_or(d: Diff, fallback: u64) → u64 { match d { Borrow => fallback, Exact(x) => x } }

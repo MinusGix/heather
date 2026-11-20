@@ -1812,7 +1812,10 @@ admitted word of a code: at `Enum(i)` the word is at most the last tag, at
 any other code `True`; `Ty::admits` is its `Bool` (a list of `Type`
 predicates would sit a universe up) with `admits_sound`/`_complete`, and
 `AdmitsAll`/`admits_all` are a parameter list's. `Ty::Answers` and
-`AnswersAlso` take `p.Admits(tys, x)` for each parameter, and
+`AnswersAlso` ask it of each enum parameter (`Ty::Given`: an enum's word
+binds the premise, any other code's binds nothing, so an agreement over
+words alone reads as before; `Ty::given`/`given_at` introduce and use it
+at a parameter not known), and
 `Fun::lower_sound` reads the entry with it (`Ty::entry_holds`): an enum's
 word that is admitted names the value it reads as (`EnumInfo::Names`,
 which is now `Ty::Holds` at `Enum`). Inside the body every word held is
@@ -1833,6 +1836,98 @@ word (`Ty::all_open`), which is how `Compile::spanned` keeps its statement.
 `Ty::clamp`, `clamp_reads`, `Fun::entered_below` and
 `program_linked_also` are gone, and a word that is no tag returns as it
 came (`shade_same_past`), outside every contract.
+
+**Enums whose constructors carry fields (built 2026-11-20).** An enum
+whose constructors carry words, bits or counts (`Pocket { Empty,
+Holds(n: u64) }`) is held as its tag word and then its payload's slots:
+every constructor's fields in turn, constructor `k`'s from slot
+`EnumInfo.lo(k)`, `arity(k)` of them (`EnumInfo.slots`; the layout is the
+concatenation, so a slot belongs to one constructor and another
+constructor leaves it at its default). `EnumInfo.of(n, t)` builds
+constructor `n` from a tuple of every slot, reading its own;
+`pick`/`convoy` hand an arm its tag and the tuple; the laws `tag_of` and
+`fields_of` (`Ty::keep`, the constructor's own slots kept and the rest
+defaults) are by `refl` at any tuple, and an enum without a payload
+passes them as before. `Ty::Holds` at `Enum` is the tag word at the port
+(`EnumInfo::Names`) and the slots from the next port on, read by the
+record fields' machinery (`Ty::FieldsHold`).
+
+In rt, `Tm::Inject(i, k, args)` is a constructor applied to its fields:
+it lowers to a `Const` of the tag and a move of each field into its slot,
+the other slots their codes' defaults. `Tm::Slot(i, j, of)` is an arm's
+read of slot `j` of the enum held at `of`, which is no code: the slot's
+port. The reflector reads a constructor with fields as an `Inject`, and
+an arm's field (the elaborator's projection of the constructor's
+payload, which `View` now shows as `HField(payload, "<k>")`) as a
+`Slot`. The generator builds `pick` and `convoy` through the `Branches`
+and `Cases` requests, whose split now reports each arm's fields as its
+pattern binds them (`Branch.fields`, the arm's aliases into the
+payload), so arm `k` is `a(k, t)` at the arm's fields in their slots and
+the source's `match` is `pick` at its arms by conversion.
+
+A function returns an enum whose payload is one 64-bit slot as its tag
+word in RAX and the slot in RDX (`Ty::Out`, `Ty::also_ports` the slot's
+port, `Ty::rest_words` = `RecInfo::enum_rest`), which is how System V
+returns a C structure `{ tag, value }`; `f::agrees_also` and the
+certificate's `ComputesBoth` state the second word. Probes:
+`lib/_tests/native/runtime/runtime_enum_payload_tests` (constructors of
+none, one and two fields, a `match h:`, a bit field, the result in two
+words) and `…_refused_tests`; `examples/x86-native/enum_payload.hthr`,
+read from C as a structure (`native_program.rs`).
+
+**Parameters of several words (built 2026-11-20).** A parameter takes
+its code's words in turn: an enum's tag word and then its payload's
+slots (`Ty::span`, `RecInfo::enum_words`), every other code one word.
+That is the order System V passes a C structure of integer words by
+value, so `f(a, p, b)` with `p: Pocket` is `f(a, p.tag, p.value, b)` from
+C, and a structure `{ tag, value }` passed by value lands in the same two
+registers. An enum is a parameter where every slot is a 64-bit word
+(`Ty::Passes` at `Enum`: its tag below the last and `Ty::Words(slots)`),
+so every word the caller passes for a slot is a value of the field.
+
+The word-level contract is stated at the codes' words, not at one word a
+parameter. `Ty::Takes(p, tys)(K)` replaces `Ty::Given`: a word code hands
+`K` its word and the value cast from it, an enum hands `K` its words at
+every value `v` (`RecInfo::enum_words(v)`) and `v` itself, so the
+contract quantifies an enum by its value and never names a word that is
+no tag. `Ty::Answers` chains `Takes`, appending each parameter's words.
+The other direction reads the values back from the words:
+`Ty::read_words` (a word cast, or an enum's `of` at its tag and slots),
+`Ty::AdmitsAt` (an enum's first `span` words are its own `enum_words` at
+what they read), and `Ty::takes_at`, which gives `K` at the first `span`
+words and what they read wherever they admit; `Ty::Taken` is the pair of
+the two, so a proof generic in a code (`answers_of_admitted`,
+`answers_at`, `curry_answers`) has one case lemma (`takes_intro`,
+`takes_at`) instead of a case split.
+
+A function's word ids are consecutive, a parameter's first id its port
+(`Ty::ids`, `Fun::word_ids`), so `Ty::Holds` at `Enum` (tag, then slots)
+holds at the entry with no move: `Fun::entry` steps by `Ty::span`, and
+the entry proof (`entry_step_holds`, `Ty::FromWords`) reads each
+parameter from its own words (`Ty::extend_words`, `apply_words`,
+`uncurry_words`; loops and spans keep their one word a parameter, as
+`Fun::param_ids` and `Ty::extend`). The generator states `f::agrees` and
+`f::agrees_also` at `RecInfo::enum_words(v) ++ rest` for an enum
+parameter (`runtime_word_tails`), linking (`Compile::arity`) counts words
+(`Ty::spans`), and `compile-x86` reads that count from the shape probe,
+quantifies the certificate's theorems by parameter and passes the words
+(`words_enums`). An enum parameter and a two-word result now go
+together. Probes: `pocket_n`, `shape_scaled` (five words) and
+`pocket_add` (an enum in and out) in `runtime_enum_payload_tests`;
+`diff_or` in `examples/x86-native/enum_payload.hthr`, called from C with
+the structure by value (`native_program.rs`).
+
+Still refused: a slot that is a bit or a count in a parameter (its word
+would not be every value of the field), a call of a function taking or
+returning several words (a call passes one word an argument and reads
+RAX alone, `issues/function-ir-multi-word-calls.md`), a payload past one
+slot as a result, and an enum as a record's field. An enum as a record's
+field is held as its tag in the record's slot: `Ty::Flat` at `Enum` is
+the tag, a `Nat`, the record's `mk`/`get` convert by the enum's
+`of`/`tag`, and its round trip is stated at tags below the last (what
+`FlatHolds` at the field says), so the table needs no strata; a field
+that is an enum with a payload waits for the record to hold the payload's
+slots inline.
 
 A C enum is an `int`, whose register's upper 32 bits System V leaves
 unspecified, where the contract passes the tag as a whole 64-bit word.

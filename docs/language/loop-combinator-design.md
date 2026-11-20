@@ -311,7 +311,8 @@ and the 3a twin path (`::twin`, `#elim`, `rt_reflect_loop`,
   (`rt_reflect.hthr`, `rt_steps`) reads exactly that shape.
 - **Its lowering is a FunctionIR loop region** (`rt_lower.hthr`,
   `Tm::lower_iterate`): the state and the context are the region's
-  parameters, a pass is the test, a branch that moves the body's value
+  parameters (a record as its fields, an enum as its tag word and slots,
+  `Ty::cells`; never a buffer), a pass is the test, a branch that moves the body's value
   (or the state itself, once the test fails) to fresh ports, and the exit
   bit, the test's bit exclusive-ored with 1 (the emitter has no 1-bit
   compare). The region is given `Loop::passes()` passes, the meaning's
