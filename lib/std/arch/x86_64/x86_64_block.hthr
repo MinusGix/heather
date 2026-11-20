@@ -287,6 +287,80 @@ theorem canonical_block_executes_normal<M>(instructions: List<Instruction>):
     }
 }
 
+// ---------------------------------------------------------------------------
+// A block that may fault (docs/native/partial-operations-design.md §7)
+
+// Whether every instruction of the block reads only flags defined when it
+// runs: `block_reads` without its refusal of an instruction that may fault.
+// Such a block is run only under a proof that none of its instructions
+// faults at the state it meets (`NoFaults`).
+fn block_flags(instructions: List<Instruction>, defined: DefinedFlags) → Bool {
+    match instructions {
+        Nil => True,
+        Cons(instruction, rest) =>
+            instruction.reads_defined(defined) && block_flags(rest, instruction.defines(defined)),
+    }
+}
+
+// No instruction of the block faults at the state the block's run meets it
+// with. Only DIV can fault, so this is one premise per divide.
+fn NoFaults<M>(instructions: List<Instruction>, s: MachineState<M>) → Type {
+    match instructions {
+        Nil => True,
+        Cons(instruction, rest) =>
+            instruction.faults(s.gprs) = False ∧ NoFaults(rest, execute_normal(decoded_canonical(instruction), s)),
+    }
+}
+
+// The run of a block that reads only defined flags and does not fault is
+// its functional run.
+theorem canonical_block_executes_guarded<M>(instructions: List<Instruction>):
+    (before: MachineState<M>) → block_flags(instructions, before.flags.defined) = True →
+    NoFaults(instructions, before) →
+    ExecuteBlock(instructions, before, execute_block_normal(instructions, before))
+{
+    match instructions {
+        Nil => λ before _ _ => execute_block_nil(before),
+        Cons(instruction, rest) => λ before ok safe => {
+            let next = execute_normal(decoded_canonical(instruction), before);
+            execute_steps_cons<Instruction, MachineState<M>>(
+                λ current state result =>
+                    Execute(decoded_canonical(current), state, Returned(result)),
+                instruction, rest, before, next, execute_block_normal(rest, next),
+                canonical_execute_normal_is_allowed(instruction, before, and_true_left(ok), safe.left),
+                canonical_block_executes_guarded(rest, next,
+                    j(sym(execute_normal_defines(instruction, before)),
+                        λ d _ => block_flags(rest, d) = True, and_true_right(ok)),
+                    safe.right))
+        },
+    }
+}
+
+// A block `block_reads` admits holds nothing that may fault, so both
+// premises come from its verdict.
+theorem block_reads_flags(instructions: List<Instruction>): (defined: DefinedFlags) →
+    block_reads(instructions, defined) = True → block_flags(instructions, defined) = True
+{
+    match instructions {
+        Nil => λ _ _ => refl,
+        Cons(instruction, rest) => λ defined ok =>
+            and_true_intro(and_true_left(and_true_left(ok)),
+                block_reads_flags(rest, instruction.defines(defined), and_true_right(ok))),
+    }
+}
+
+theorem block_reads_no_faults<M>(instructions: List<Instruction>): (defined: DefinedFlags) →
+    block_reads(instructions, defined) = True → (s: MachineState<M>) → NoFaults(instructions, s)
+{
+    match instructions {
+        Nil => λ _ _ _ => trivial,
+        Cons(instruction, rest) => λ defined ok s =>
+            ⟨instruction.never_faults(s.gprs, not_true(and_true_right(and_true_left(ok)))),
+             block_reads_no_faults<M>(rest, instruction.defines(defined), and_true_right(ok),
+                execute_normal(decoded_canonical(instruction), s))⟩,
+    }
+}
+
 // The sixteen x86 condition codes (Jcc, SETcc), in the manual's encoding
 // order: each odd code is its even neighbour negated. `condition_holds` is the
 // manual's table over the flags; no code reads AF.

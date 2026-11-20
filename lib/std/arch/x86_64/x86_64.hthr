@@ -845,6 +845,23 @@ fn div_remainder(high, low, divisor: BitVec(64)) → BitVec(64) {
 // 2^64), and a zero divisor is at most any RDX, so one comparison says both.
 fn div_faults(high, divisor: BitVec(64)) → Bool { divisor.toNat().leb(high.toNat()) }
 
+// DIV runs when RDX is below the divisor: with RDX cleared, when the divisor
+// is not zero.
+theorem div_fits(high, divisor: BitVec(64), below: high.toNat() < divisor.toNat()): div_faults(high, divisor) = False {
+    divisor.toNat().leb_false(high.toNat(), below)
+}
+
+theorem div_fits_cleared(cleared, divisor: BitVec(64), nonzero: divisor ≠ BitVec::zero()):
+    div_faults(cleared.bxor(cleared), divisor) = False {
+    let positive = divisor.toNat().pos_of_ne_zero(λ zero => nonzero(
+        trans(sym(BitVec::ofNat_toNat(64, divisor)),
+            trans(BitVec::ofNat_cong(64, trans(zero, sym(BitVec::zero_toNat(64)))),
+                BitVec::ofNat_toNat(64, BitVec::zero())))));
+    div_fits(cleared.bxor(cleared), divisor,
+        j(sym(BitVec::xor_self(64, cleared)), λ z _ => z.toNat() < divisor.toNat(),
+            j(sym(BitVec::zero_toNat(64)), λ z _ => z < divisor.toNat(), positive)))
+}
+
 // A 64-bit shift by CL: the count is RCX's low six bits.
 fn cl_count(gprs: Gprs) → Nat { read_gpr(Rcx, gprs).toNat().mod(64) }
 

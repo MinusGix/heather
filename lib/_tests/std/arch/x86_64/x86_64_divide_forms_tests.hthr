@@ -48,6 +48,21 @@ theorem div_may_fault(): DivR(Rbx).may_fault() = True { refl }
 theorem div_not_admitted(): block_reads([DivR(Rbx)], DefinedFlags::none()) = False { refl }
 theorem div_leaves_no_flag(): DivR(Rbx).defines(DefinedFlags::all()) = DefinedFlags::none() { refl }
 
+// A block holding DIV runs under a proof that it does not fault: with RDX
+// cleared first, a nonzero divisor is that proof, at any state.
+theorem cleared_divide_runs<M>(s: MachineState<M>, nonzero: read_gpr(Rbx, s.gprs) ≠ BitVec::zero()):
+    ExecuteBlock([XorRR(Rdx, Rdx), DivR(Rbx)], s, execute_block_normal([XorRR(Rdx, Rdx), DivR(Rbx)], s)) {
+    canonical_block_executes_guarded<M>([XorRR(Rdx, Rdx), DivR(Rbx)], s, refl,
+        ⟨refl, ⟨div_fits_cleared(read_gpr(Rdx, s.gprs), read_gpr(Rbx, s.gprs), nonzero), trivial⟩⟩)
+}
+
+// The control: at a zero divisor no proof of `NoFaults` exists.
+theorem zero_divide_faults<M>(s: MachineState<M>, zero: read_gpr(Rbx, s.gprs) = BitVec::zero()):
+    ¬NoFaults([XorRR(Rdx, Rdx), DivR(Rbx)], s) {
+    λ safe => absurd(trans(sym(safe.right.left),
+        j(sym(zero), λ d _ => div_faults(read_gpr(Rdx, s.gprs).bxor(read_gpr(Rdx, s.gprs)), d) = True, refl)))
+}
+
 // ---------------------------------------------------------------------------
 // The processor's faults, quotients and remainders at the edge words.
 
