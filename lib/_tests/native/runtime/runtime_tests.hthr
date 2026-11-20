@@ -56,7 +56,7 @@ theorem leaf_runs(a, b: BitVec(64)): program_eval(leaf::program, 0, [a, b]) = le
 // The instance's own agreement is the composable one: the code answers
 // `caller` wherever its table's functions are answered by their meanings.
 theorem caller_compiled(call: Answers(), agree: Tm::CallsAgree(caller::world, call), a, b: BitVec(64)):
-    caller::code.eval(call, [a, b]) = caller(a, b) { caller::compile.agrees(Nil, call, agree, a, b) }
+    caller::code.eval(call, [a, b]) = caller(a, b) { caller::compile.agrees(Nil, call, agree, a, trivial, b, trivial) }
 
 // The instance is found by search, keyed on the function.
 fn code_of<F>(f: F, c: Compile<F>(f) := infer) → Function { c.code }
@@ -78,7 +78,7 @@ theorem leaf_through_class(c: Compile<BitVec(64) → BitVec(64) → BitVec(64)>(
 // A function lent nothing computes the same over any file: the file is
 // there for the functions that read it.
 theorem caller_compiled_over(b: Buffers(), call: Answers(), agree: Tm::CallsAgree(caller::world.at(caller::world.fixed(), b), call),
-    x, y: BitVec(64)): caller::code.eval(call, [x, y], buffers := b) = caller(x, y) { caller::compile.agrees(b, call, agree, x, y) }
+    x, y: BitVec(64)): caller::code.eval(call, [x, y], buffers := b) = caller(x, y) { caller::compile.agrees(b, call, agree, x, trivial, y, trivial) }
 
 // ---------------------------------------------------------------------------
 // Branches on comparisons through `&&`, `||` and `!`

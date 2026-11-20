@@ -1731,10 +1731,11 @@ means `alts.pick` at the arms read with each constructor bound as
 variable 0; its arms test variable 0 against each constructor but the last
 in turn (`Op::TagIs(i, k)`, a `Const` and an `Equal` of the tag word,
 under a `Let` and an `If`), the last arm the default. Both are proved
-sound once in `rt_lower` (`Tm::pick_sound`, `Tm::tag_sound`): inside the
-lowering the tag word is read clamped (`EnumInfo::read`), which is how a
-word that is no tag falls through to the last arm, but no contract states
-such a word.
+sound once in `rt_lower` (`Tm::pick_sound`, `Tm::tag_sound`). The word
+held for an enum is exactly a tag (`Ty::Holds` at `Enum` is
+`EnumInfo::Names`: the word is the value's tag, and at most the last), so
+no proof reads a word that is no tag; on one the code falls through to the
+last arm, which no contract states.
 
 The reflector meets an enum as it meets a record (`rt_enum_marker`,
 `RecEntry.alts`), before its definition would unfold to the sums the
@@ -1766,31 +1767,23 @@ its tag word, and build one: the reflector reads a constructor of an enum
 as `Lit(Enum(i), k)`, `k` its index (an enum the walk has not met is added
 by the marker, as a parameter's is), which means `alts.of(k)` and lowers to
 one `Const` of `k`, checked to be at most the last tag. `Ty::Out` covers an
-enum whose last tag is below 2^64. The word returned is clamped at the last
-tag (`Ty::clamp`: a `Const` of the last tag, one unsigned compare and a
-branch whose arms move the word or the last tag; `Ty::clamp_reads`). The
-clamp is what the program's linking needs, not what a caller sees: a
-program is linked as a function on every word (`program_linked_files`),
-and inside it a word that is no tag reads as the last constructor, so a
-function returning a parameter's word unchanged would return a word that
-is no tag where its meaning returns the last constructor. On every word a
-contract passes, a tag, the clamp changes nothing. Its cost is a compare
-and a branch at each return of an enum; dropping it where the word
-returned is already a tag (a constructor, a `match` whose arms are
-constructors, a callee's result) is `issues/rt-enum-result-clamp.md`.
-`f::agrees` states the tag word of the function's value
+enum whose last tag is below 2^64. The word returned is the word held,
+with nothing added: as first built it was clamped at the last tag, because
+a program was linked as a function on every word; linking at admitted
+words (below) removed the clamp. `f::agrees` states the tag word of the function's value
 (`RecInfo::enum_word`), and so does the certificate's `_returns`; with no
 enum parameter, `_implements` is stated too, over every word. Probes: the
 enum-result section of `runtime_enum_tests` (a constructor chosen by
 `if`, an enum to an enum, a parameter returned, and a word that is no tag
-returned clamped); `tok_settle` in `examples/x86-native/enum_tag.hthr`,
+returned as it came, outside every contract); `tok_settle` in `examples/x86-native/enum_tag.hthr`,
 called from C, which is `native_program.rs`' enum test now.
 
 **An enum passed to a call (built 2026-11-20).** A call passes an enum
 as its tag word: `Ty::Held` covers an enum, and the callee, whose
 agreement is at every word (`Ty::Answers`), reads the word as the
 constructor it names (`EnumInfo::read`), which is the value the caller
-holds (`Ty::held_reads`: the clamped word is its tag, and `of_tag`). A
+holds (`Ty::held_reads`: the word is its tag, and `of_tag`); the word
+held is admitted (`Ty::holds_admits`), which the callee's agreement takes. A
 constructor built in the body is passed the same way. Calling a function
 that returns an enum stays refused: the caller would hold the callee's
 tag word, which needs every value's tag to be at most the last
@@ -1811,3 +1804,39 @@ lowering and its proof are the plain match's (`EnumInfo::chooses`). The
 arms are read under their equation, which no arm's runtime data reads, as
 `IfEq`'s are. Probes: the `match h:` section of `runtime_enum_tests` (its
 pin by `refl`, and one beside a plain `match` returning an enum).
+
+**Linking at admitted words (built 2026-11-20).** A function's agreement is
+stated only at the words its contract admits, and the program is linked
+the same way, so no enum word is ever clamped. `Ty::Admits(tys, x)` is the
+admitted word of a code: at `Enum(i)` the word is at most the last tag, at
+any other code `True`; `Ty::admits` is its `Bool` (a list of `Type`
+predicates would sit a universe up) with `admits_sound`/`_complete`, and
+`AdmitsAll`/`admits_all` are a parameter list's. `Ty::Answers` and
+`AnswersAlso` take `p.Admits(tys, x)` for each parameter, and
+`Fun::lower_sound` reads the entry with it (`Ty::entry_holds`): an enum's
+word that is admitted names the value it reads as (`EnumInfo::Names`,
+which is now `Ty::Holds` at `Enum`). Inside the body every word held is
+admitted (`Ty::holds_admits`), so a call passes its callee's premise.
+
+`program_linked_files(functions, arities, admits, sources)` states each
+function for any `call` agreeing with the sources at admitted words
+(`Answers::Agree`), on admitted words; `program_linked_files_sources` gives
+that agreement for the program's own evaluation. The generator carries one
+`Bool` predicate per function (`f::admits`, `Compile::admits`, read by
+`link_admits`), and `Compile::part`/`root_also` build an instance's
+`CallsAgree` from the partial agreement by `link_own`: index 0 (the
+function itself) from its own table, every other index from the call. The
+certificate's entry theorem passes `link_admits(f::admits)`; the enum
+words it quantifies over are admitted by evaluation
+(`Ty::enum_word_admits`). A function with no enum parameter admits every
+word (`Ty::all_open`), which is how `Compile::spanned` keeps its statement.
+`Ty::clamp`, `clamp_reads`, `Fun::entered_below` and
+`program_linked_also` are gone, and a word that is no tag returns as it
+came (`shade_same_past`), outside every contract.
+
+A C enum is an `int`, whose register's upper 32 bits System V leaves
+unspecified, where the contract passes the tag as a whole 64-bit word.
+Compilers write the 32-bit register, which zero-extends, so callers work
+in practice; the ABI's own contract is a C `datarepr` of the enum (a
+discriminant table read through a 32-bit `Resize`), of which this default
+tag word is the derived case.
