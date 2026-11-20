@@ -89,7 +89,7 @@ fn decode_rr_form(opcode: BitVec(8), rm, reg: Gpr) → Option<StepForm> {
     }
 }
 
-// D3 /4, /5 and /7 the shifts of r/m by CL, F7 /4 MUL of RAX by r/m; any
+// D3 /4, /5 and /7 the shifts of r/m by CL, F7 /4 MUL of RAX by r/m and F7 /6 DIV of RDX:RAX by it; any
 // other opcode is a two-register form.
 fn decode_digit_form(opcode: BitVec(8), rm, reg: Gpr) → Option<StepForm> {
     match opcode.eq_dec(BitVec::ofNat(0xd3)) {
@@ -98,7 +98,10 @@ fn decode_digit_form(opcode: BitVec(8), rm, reg: Gpr) → Option<StepForm> {
             Some(op) => emitted_form(ShiftCl(op, rm)),
         },
         Inr(_) => match opcode.eq_dec(BitVec::ofNat(0xf7)) {
-            Inl(_) => match reg.same(Rsp) { True => emitted_form(MulR(rm)), False => None },
+            Inl(_) => match reg.same(Rsp) {
+                True => emitted_form(MulR(rm)),
+                False => match reg.same(Rsi) { True => emitted_form(DivR(rm)), False => None },
+            },
             Inr(_) => decode_rr_form(opcode, rm, reg),
         },
     }
@@ -626,6 +629,7 @@ theorem ordinary_form_complete(instruction: Instruction, rest: List<BitVec(8)>):
         },
         ImulRR(destination, source) => rr_form_back(λ x y => ImulRR(y, x), source, destination),
         MulR(source) => cong_fn(λ (d: Gpr) => emitted_form(MulR(d)), rm_of_fields(source, Rsp, True, True)),
+        DivR(source) => cong_fn(λ (d: Gpr) => emitted_form(DivR(d)), rm_of_fields(source, Rsi, True, True)),
         ShiftCl(op, destination) => match op {
             OpShl => cong_fn(λ (d: Gpr) => emitted_form(ShiftCl(OpShl, d)), rm_of_fields(destination, Rsp, True, True)),
             OpShr => cong_fn(λ (d: Gpr) => emitted_form(ShiftCl(OpShr, d)), rm_of_fields(destination, Rbp, True, True)),

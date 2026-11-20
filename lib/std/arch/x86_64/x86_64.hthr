@@ -317,6 +317,12 @@ inductive Instruction {
     // MUL r/m64 (REX.W F7 /4): RDX:RAX ← RAX × source, unsigned, the high
     // half in RDX. Its flags are left undefined as IMUL's are.
     MulR(source: Gpr),
+    // DIV r/m64 (REX.W F7 /6): RDX:RAX divided by source, unsigned, the
+    // quotient to RAX and the remainder to RDX. It faults (#DE) when the
+    // divisor is zero or the quotient does not fit a word, which is when
+    // RDX is not below the divisor (`div_faults`). Its flags are left
+    // undefined.
+    DivR(source: Gpr),
     // SHL, SHR or SAR r/m64, CL (REX.W D3 /digit): the count is CL masked to
     // six bits. The processor keeps the flags at a masked count of zero and
     // otherwise sets them as the immediate form does; the model leaves all
@@ -801,6 +807,9 @@ fn imul_bytes(destination, source: Gpr) → List<BitVec(8)> {
 // REX.W F7 /4: MUL's digit is RSP's code in ModRM.reg.
 fn mul_bytes(source: Gpr) → List<BitVec(8)> { rr_bytes(0xf7, source, Rsp) }
 
+// REX.W F7 /6: DIV's digit is RSI's code in ModRM.reg.
+fn div_bytes(source: Gpr) → List<BitVec(8)> { rr_bytes(0xf7, source, Rsi) }
+
 // REX.W D3 /digit: the one-bit shift's ModRM under the CL opcode.
 fn shift_cl_bytes(op: ShiftOp, destination: Gpr) → List<BitVec(8)> {
     rr_bytes(0xd3, destination, op.extension())
@@ -817,6 +826,41 @@ fn undefined_flags() → Flags {
 // RDX): the product is below 2^128, so it is a 128-bit word exactly.
 fn mul_low(a, b: BitVec(64)) → BitVec(64) { a.mul(b) }
 fn mul_high(a, b: BitVec(64)) → BitVec(64) { BitVec::ofNat(a.toNat() * b.toNat(), n := 128).drop_low(64, 64) }
+
+// DIV's dividend, RDX:RAX as one number, and its quotient and remainder
+// by a divisor where it does not fault (`div_faults` false: the divisor is
+// above RDX, so it is not zero and the quotient is below 2^64). `ldiv` is
+// `Nat::div` and `Nat::mod` at a positive divisor (`Nat::ldiv_div`,
+// `Nat::ldiv_mod`), computed one quotient bit at a time.
+fn div_dividend(high, low: BitVec(64)) → Nat { high.toNat() * Nat::pow(2, 64) + low.toNat() }
+fn div_quotient(high, low, divisor: BitVec(64)) → BitVec(64) {
+    BitVec::ofNat(div_dividend(high, low).ldiv(divisor.toNat()).quot())
+}
+fn div_remainder(high, low, divisor: BitVec(64)) → BitVec(64) {
+    BitVec::ofNat(div_dividend(high, low).ldiv(divisor.toNat()).rem())
+}
+
+// DIV faults (#DE) when the divisor is zero or the quotient does not fit a
+// word. RDX:RAX ≥ divisor · 2^64 exactly when RDX ≥ divisor (RAX is below
+// 2^64), and a zero divisor is at most any RDX, so one comparison says both.
+fn div_faults(high, divisor: BitVec(64)) → Bool { divisor.toNat().leb(high.toNat()) }
+
+// DIV runs when RDX is below the divisor: with RDX cleared, when the divisor
+// is not zero.
+theorem div_fits(high, divisor: BitVec(64), below: high.toNat() < divisor.toNat()): div_faults(high, divisor) = False {
+    divisor.toNat().leb_false(high.toNat(), below)
+}
+
+theorem div_fits_cleared(cleared, divisor: BitVec(64), nonzero: divisor ≠ BitVec::zero()):
+    div_faults(cleared.bxor(cleared), divisor) = False {
+    let positive = divisor.toNat().pos_of_ne_zero(λ zero => nonzero(
+        trans(sym(BitVec::ofNat_toNat(64, divisor)),
+            trans(BitVec::ofNat_cong(64, trans(zero, sym(BitVec::zero_toNat(64)))),
+                BitVec::ofNat_toNat(64, BitVec::zero())))));
+    div_fits(cleared.bxor(cleared), divisor,
+        j(sym(BitVec::xor_self(64, cleared)), λ z _ => z.toNat() < divisor.toNat(),
+            j(sym(BitVec::zero_toNat(64)), λ z _ => z < divisor.toNat(), positive)))
+}
 
 // A 64-bit shift by CL: the count is RCX's low six bits.
 fn cl_count(gprs: Gprs) → Nat { read_gpr(Rcx, gprs).toNat().mod(64) }
@@ -866,6 +910,7 @@ fn canonical_bytes(instruction: Instruction) → List<BitVec(8)> {
         RorRI32(destination, immediate) => ror32_bytes(destination, immediate),
         ImulRR(destination, source) => imul_bytes(destination, source),
         MulR(source) => mul_bytes(source),
+        DivR(source) => div_bytes(source),
         ShiftCl(op, destination) => shift_cl_bytes(op, destination),
     }
 }
@@ -942,6 +987,7 @@ fn canonical_length_valid(instruction: Instruction) →
         RorRI32(_, _) => And(trivial, trivial),
         ImulRR(_, _) => And(trivial, trivial),
         MulR(_) => And(trivial, trivial),
+        DivR(_) => And(trivial, trivial),
         ShiftCl(_, _) => And(trivial, trivial),
     }
 }
@@ -1037,6 +1083,7 @@ fn DecodesInstruction(bytes: List<BitVec(8)>, instruction: Instruction) → Type
         RorRI32(destination, immediate) => bytes = ror32_bytes(destination, immediate),
         ImulRR(destination, source) => bytes = imul_bytes(destination, source),
         MulR(source) => bytes = mul_bytes(source),
+        DivR(source) => bytes = div_bytes(source),
         ShiftCl(op, destination) => bytes = shift_cl_bytes(op, destination),
     }
 }
@@ -2182,7 +2229,10 @@ fn decode_digit_three(rex, opcode, modrm: BitVec(8)) → Option<DecodedInstructi
                     Inr(_) => None,
                     Inl(_) => match digit.same(Rsp) {
                         True => Some(decoded_canonical(MulR(rm))),
-                        False => None,
+                        False => match digit.same(Rsi) {
+                            True => Some(decoded_canonical(DivR(rm))),
+                            False => None,
+                        },
                     },
                 },
             },
@@ -2549,6 +2599,15 @@ theorem decode_mul_complete(source: Gpr):
     }
 }
 
+theorem decode_div_complete(source: Gpr):
+    decode_instruction(div_bytes(source)) = Some(decoded_canonical(DivR(source)))
+{
+    match source {
+        Rax => refl, Rcx => refl, Rdx => refl, Rbx => refl, Rsp => refl, Rbp => refl, Rsi => refl, Rdi => refl,
+        R8 => refl, R9 => refl, R10 => refl, R11 => refl, R12 => refl, R13 => refl, R14 => refl, R15 => refl,
+    }
+}
+
 theorem decode_shift_cl_complete(op: ShiftOp, destination: Gpr):
     decode_instruction(shift_cl_bytes(op, destination)) = Some(decoded_canonical(ShiftCl(op, destination)))
 {
@@ -2829,6 +2888,9 @@ theorem decode_instruction_complete(bytes: List<BitVec(8)>,
         MulR(source) => λ encoding =>
             j(sym(encoding), λ actual q => decode_instruction(actual) = Some(decoded_canonical(MulR(source))),
                 decode_mul_complete(source)),
+        DivR(source) => λ encoding =>
+            j(sym(encoding), λ actual q => decode_instruction(actual) = Some(decoded_canonical(DivR(source))),
+                decode_div_complete(source)),
         ShiftCl(op, destination) => λ encoding =>
             j(sym(encoding), λ actual q => decode_instruction(actual) = Some(decoded_canonical(ShiftCl(op, destination))),
                 decode_shift_cl_complete(op, destination)),
@@ -2876,7 +2938,7 @@ theorem decoded_canonical_length(instruction: Instruction):
         ShiftOne(_, _) => refl, ShiftImm(_, _, _) => refl, Bswap32(_) => refl,
         CmpRI8(_, _) => refl, CmpRI32(_, _) => refl, MovRI32(_, _) => refl,
         MovSelf32(_) => refl, RorRI32(_, _) => refl,
-        ImulRR(_, _) => refl, MulR(_) => refl, ShiftCl(_, _) => refl,
+        ImulRR(_, _) => refl, MulR(_) => refl, DivR(_) => refl, ShiftCl(_, _) => refl,
     }
 }
 
@@ -2916,6 +2978,7 @@ theorem canonical_encoding_decodes(start: BitVec(64), instruction: Instruction):
         RorRI32(_, _) => And(refl, refl),
         ImulRR(_, _) => And(refl, refl),
         MulR(_) => And(refl, refl),
+        DivR(_) => And(refl, refl),
         ShiftCl(_, _) => And(refl, refl),
     }
 }
@@ -3044,6 +3107,7 @@ theorem canonical_bytes_length(instruction: Instruction):
         RorRI32(_, _) => refl,
         ImulRR(_, _) => refl,
         MulR(_) => refl,
+        DivR(_) => refl,
         ShiftCl(_, _) => refl,
     }
 }
@@ -3516,6 +3580,11 @@ fn execute_register(instruction: Instruction, before: Gprs, flags: Flags) →
                 write_gpr(Rax, mul_low(read_gpr(Rax, before), read_gpr(source, before)), before)),
             flags := undefined_flags(),
         ),
+        DivR(source) => RegisterEffect(
+            gprs := write_gpr(Rdx, div_remainder(read_gpr(Rdx, before), read_gpr(Rax, before), read_gpr(source, before)),
+                write_gpr(Rax, div_quotient(read_gpr(Rdx, before), read_gpr(Rax, before), read_gpr(source, before)), before)),
+            flags := undefined_flags(),
+        ),
         ShiftCl(op, destination) => RegisterEffect(
             gprs := write_gpr(destination, op.by(read_gpr(destination, before), cl_count(before)), before),
             flags := undefined_flags(),
@@ -3730,14 +3799,19 @@ fn Instruction::reads_defined(self instruction: Instruction, defined: DefinedFla
 
 // Whether the instruction faults from these registers. Only a division
 // can.
-fn Instruction::faults(self instruction: Instruction, gprs: Gprs) → Bool { False }
+fn Instruction::faults(self instruction: Instruction, gprs: Gprs) → Bool {
+    match instruction { DivR(source) => div_faults(read_gpr(Rdx, gprs), read_gpr(source, gprs)), _ => False }
+}
 
 // Whether the instruction can fault from some registers.
-fn Instruction::may_fault(self instruction: Instruction) → Bool { False }
+fn Instruction::may_fault(self instruction: Instruction) → Bool { match instruction { DivR(_) => True, _ => False } }
 
 theorem Instruction::never_faults(self instruction: Instruction, gprs: Gprs, never: instruction.may_fault() = False):
     instruction.faults(gprs) = False {
-    refl
+    (match instruction as λ i => i.may_fault() = False → i.faults(gprs) = False {
+        DivR(_) => λ no => absurd(no),
+        _ => λ _ => refl,
+    })(never)
 }
 
 theorem not_true({b: Bool}, holds: !b = True): b = False {
@@ -3780,7 +3854,7 @@ theorem erase_normal_commute<M>(instruction: Instruction, before: MachineState<M
                 write_gpr(d, ror32_value(read_gpr(d, before.gprs), ror32_count(immediate)), before.gprs), f,
                 next_rip(before.rip, decoded_canonical(RorRI32(d, immediate)).length), before.memory),
             ror32_flags_erase(ror32_value(read_gpr(d, before.gprs), ror32_count(immediate)), ror32_count(immediate), before.flags)),
-        ImulRR(_, _) => λ _ => refl, MulR(_) => λ _ => refl, ShiftCl(_, _) => λ _ => refl,
+        ImulRR(_, _) => λ _ => refl, MulR(_) => λ _ => refl, DivR(_) => λ _ => refl, ShiftCl(_, _) => λ _ => refl,
     })(reads)
 }
 
@@ -4169,6 +4243,7 @@ theorem execute_normal_advances_rip<M>(decoded: DecodedInstruction,
         RorRI32(_, _) => refl,
         ImulRR(_, _) => refl,
         MulR(_) => refl,
+        DivR(_) => refl,
         ShiftCl(_, _) => refl,
     }
 }

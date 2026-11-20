@@ -66,6 +66,7 @@ fn Instruction::writes(self instruction: Instruction) → Option<Gpr> {
         RorRI32(destination, _) => Some(destination),
         ImulRR(destination, _) => Some(destination),
         MulR(_) => Some(Rax),
+        DivR(_) => Some(Rax),
         ShiftCl(_, destination) => Some(destination),
     }
 }
@@ -75,10 +76,11 @@ fn spares(written: Option<Gpr>, query: Gpr) → Bool {
 }
 
 // Whether the instruction leaves `query` as it was: every instruction
-// writes at most one register but MUL, which writes RAX and RDX.
+// writes at most one register but MUL and DIV, which write RAX and RDX.
 fn Instruction::leaves_gpr(self instruction: Instruction, query: Gpr) → Bool {
     match instruction {
         MulR(_) => !Rax.same(query) && !Rdx.same(query),
+        DivR(_) => !Rax.same(query) && !Rdx.same(query),
         _ => spares(instruction.writes(), query),
     }
 }
@@ -155,6 +157,12 @@ theorem execute_spares<M>(instruction: Instruction, s: MachineState<M>, query: G
             let low = write_gpr(Rax, mul_low(read_gpr(Rax, s.gprs), read_gpr(source, s.gprs)), s.gprs);
             trans(write_spares(Rdx, query, mul_high(read_gpr(Rax, s.gprs), read_gpr(source, s.gprs)), low, both.right),
                 write_spares(Rax, query, mul_low(read_gpr(Rax, s.gprs), read_gpr(source, s.gprs)), s.gprs, both.left))
+        },
+        DivR(source) => λ apart => {
+            let both = Bool::is_true_and(!Rax.same(query), !Rdx.same(query), apart);
+            let low = write_gpr(Rax, div_quotient(read_gpr(Rdx, s.gprs), read_gpr(Rax, s.gprs), read_gpr(source, s.gprs)), s.gprs);
+            trans(write_spares(Rdx, query, div_remainder(read_gpr(Rdx, s.gprs), read_gpr(Rax, s.gprs), read_gpr(source, s.gprs)), low, both.right),
+                write_spares(Rax, query, div_quotient(read_gpr(Rdx, s.gprs), read_gpr(Rax, s.gprs), read_gpr(source, s.gprs)), s.gprs, both.left))
         },
         ShiftCl(op, destination) => write_spares(destination, query,
             op.by(read_gpr(destination, s.gprs), cl_count(s.gprs)), s.gprs),
