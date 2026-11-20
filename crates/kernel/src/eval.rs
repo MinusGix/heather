@@ -64,6 +64,22 @@ use crate::value::{
 use crate::value::algebra::{AffineTree, FoldClass};
 use crate::value::program::ContextProgram;
 
+/// The bytes one query's value arena may hold before its evaluation is
+/// refused as [`OutOfFuel`] (`issues/kernel-memory-outruns-fuel.md`). Fuel
+/// counts steps, and a step can allocate any number of values: a run whose
+/// eliminators stall on glued scrutinees and are replayed allocates many per
+/// unit, and one such conversion grew past the process's 8 GiB rail before
+/// its fuel ran out, dying at the allocator with no declaration named
+/// (`issues/conversion-closed-sum-opaque-counter.md`). The limit sits a
+/// small multiple above the largest query of a cold library check (its
+/// measurement is in the issue) and under the suite's per-process rail.
+pub const ARENA_BYTES_LIMIT: usize = 2 << 30;
+
+/// How often, in units of fuel, [`Eval`] reads its arena's size against
+/// [`ARENA_BYTES_LIMIT`]: reading it walks the regions' chunks, a few dozen
+/// loads, which is noise once per this many steps.
+const ARENA_CHECK_EVERY: u64 = 1024;
+
 mod bits;
 mod probe;
 mod runs;
@@ -370,6 +386,24 @@ impl<'a, 'v> Eval<'a, 'v> {
         }
         self.fuel -= 1;
         self.steps += 1;
+        if self.fuel % ARENA_CHECK_EVERY == 0 {
+            return self.within_arena_limit();
+        }
+        Ok(())
+    }
+
+    /// Whether the query's value arena is still under
+    /// [`ARENA_BYTES_LIMIT`]; past it the run's fuel is spent, so the
+    /// query ends as [`OutOfFuel`] does, with no refund. Asked every
+    /// [`ARENA_CHECK_EVERY`] units of fuel: at a fixed remaining fuel, so a
+    /// verdict depends on the work done and never on when it was looked at.
+    #[cold]
+    #[inline(never)]
+    fn within_arena_limit(&mut self) -> Res<()> {
+        if self.arena.bytes() > ARENA_BYTES_LIMIT {
+            self.fuel = 0;
+            return Err(OutOfFuel);
+        }
         Ok(())
     }
 
@@ -384,8 +418,12 @@ impl<'a, 'v> Eval<'a, 'v> {
             self.fuel = 0;
             return Err(OutOfFuel);
         }
+        let before = self.fuel;
         self.fuel -= n;
         self.steps += n;
+        if before / ARENA_CHECK_EVERY != self.fuel / ARENA_CHECK_EVERY {
+            return self.within_arena_limit();
+        }
         Ok(())
     }
 
