@@ -731,7 +731,7 @@ theorem {p}_placeless(): program_placeless({functions}).IsTrue() {{ trivial }}
 theorem {p}_rowed(): program_rowed({functions}).IsTrue() {{ trivial }}
 theorem {p}_linked(): emit_functions_after_lent({exit}, {functions}, {homes}.places, {last}, program_counts({functions}), table_room({homes}.room_table({functions}))).map(λ out => out.prog) = Some({p}_code()) {{ refl }}
 theorem {p}_deep(): {exit}.links({functions}, {homes}.places, {homes}.room_table({functions}), {last}) = Some({p}_code()) {{
-    {exit}.links_of({functions}, {homes}.places, {homes}.room_table({functions}), {last}, {p}_code(), {p}_evaluable(), {p}_placeless(), {p}_rowed(), {p}_total(), {p}_linked())
+    {exit}.links_of({functions}, {homes}.places, {homes}.room_table({functions}), {last}, {p}_code(), {p}_evaluable(), {p}_placeless(), {p}_rowed(), {p}_defined_everywhere(), {p}_linked())
 }}
 ")
 }
