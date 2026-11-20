@@ -28,7 +28,7 @@ re-elaborates the whole of `x86_64_step_forms` for each of nine mutants (a
 fresh-name `heather check` of that module over warm imports is about 30 s), and
 then `linux_x86_64_determinism` for three more.
 
-Levers, unexamined: elaborate each mutant only up to the declaration the
+Same shape as [[linux-wp-cold-rail]], fixed there by cheaper proofs. Levers, unexamined: elaborate each mutant only up to the declaration the
 mutation lands in plus the one that must refuse (`--only`'s replayed prefix,
 `docs/infrastructure/check-only-design.md`); put the mutants in `lib/_tests` as
 `// expect-error:` declarations over small fixtures, where the gate's images
