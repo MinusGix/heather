@@ -105,7 +105,7 @@ export const PREREQUISITES = new Map([["library", {
   // native tests, which share the gate's store
   // (issues/native-tests-share-the-gate-store.md).
   readers: ["native_cat", "native_tools", "native_utf8", "heather", "native", "native_binary_search",
-    "native_branches", "native_linked", "native_own_rule", "native_program", "native_sort"],
+    "native_branches", "native_linked", "native_own_rule", "native_program", "native_recursion", "native_sort"],
   built: ["lib/native", "lib/_tests/native", "lib/lang/lexer"],
   store: "cli-check-images",
 }]]);

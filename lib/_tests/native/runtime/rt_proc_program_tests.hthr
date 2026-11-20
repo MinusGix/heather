@@ -1,0 +1,70 @@
+// Probes of a pure program with recursion (`rt_proc_program`;
+// docs/native/runtime-fn-recursion-design.md §6 step 4): main computes
+// `sum(10)` by a call of the recursive sum's procedure. The source is
+// built, its call of itself is checked, main's calls fit within its levels
+// and not within fewer, and the theorem reads it as exiting with 55 for
+// any compile that accepts it. `write-elf` of `sum_program` runs it.
+// Tests, not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic;
+import nat;
+import list;
+import option;
+import bitvec;
+import coitree;
+import coitree_eutt;
+import itree;
+import linux_world;
+import linux_world_co;
+import function_ir;
+import native_source;
+import native_source_co;
+import native_compile;
+import native_alloc;
+import x86_64;
+import x86_64_asm;
+import rt;
+import rt_lower;
+import rt_proc;
+import rt_proc_program;
+
+// `sum(n) = if n == 0 { 0 } else { n + sum(n - 1) }`.
+fn sum_body() → PTm {
+    Bind(Lit(Word(64), 0),
+    Bind(Prim(Eq(64), [1, 0]),
+    Choose(0,
+        Value(Var(1)),
+        Bind(Lit(Word(64), 1),
+        Bind(Prim(Sub(64), [3, 0]),
+        Recur(0, [0],
+        Value(Prim(Add(64), [5, 0]))))))))
+}
+
+fn sum_meaning(xs: List<BitVec(64)>) → BitVec(64) {
+    match xs { Nil => BitVec::ofNat(0), Cons(x, _) => BitVec::ofNat((x.toNat() * (x.toNat() + 1)).ldiv(2).quot()) }
+}
+
+// `main() = sum(10)`.
+fn main_body() → PTm { Bind(Lit(Word(64), 10), Recur(0, [0], Value(Var(0)))) }
+
+fn sum_world() → rt::World { PTm::plain(RecInfo::none) }
+
+fn sum_fits(k: Nat, p: Nat, xs: List<BitVec(64)>) → Bool { PDef::fits([PDef(1, sum_body())], sum_world(), λ _ ys => sum_meaning(ys), k, p, xs) }
+
+fn sum_program() → Source { match PTm::program(main_body(), [PDef(1, sum_body())], sum_world(), 16) { None => Source::of([], Exit(0)), Some(src) => src } }
+
+theorem sum_program_builds(): PTm::program(main_body(), [PDef(1, sum_body())], sum_world(), 16).is_some() = True { refl }
+
+// The compile checks the sum's call of itself.
+theorem sum_program_checked(): sum_program().checked(0) = True { refl }
+
+// `sum(10)` nests ten calls: within 16 levels, not within 9.
+theorem main_fits(): main_body().calls_ok(sum_world(), λ _ xs => sum_meaning(xs), PTm::within(sum_fits, λ p => sum_program().checked(p), 16), Nil, trivial) = True { refl }
+
+theorem main_not_nine(): main_body().calls_ok(sum_world(), λ _ xs => sum_meaning(xs), PTm::within(sum_fits, λ _ => True, 9), Nil, trivial) = False { refl }
+
+theorem main_value(): main_body().sem(sum_world(), λ _ xs => sum_meaning(xs), Nil, trivial) = BitVec::ofNat(55) { refl }
+
+// One level short: the tenth nested call is refused, and the program stops
+// with the call-depth status.
+fn sum_shallow() → Source { match PTm::program(main_body(), [PDef(1, sum_body())], sum_world(), 9) { None => Source::of([], Exit(0)), Some(src) => src } }
