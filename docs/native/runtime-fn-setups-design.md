@@ -1785,3 +1785,16 @@ enum-result section of `runtime_enum_tests` (a constructor chosen by
 `if`, an enum to an enum, a parameter returned, and a word that is no tag
 returned clamped); `tok_settle` in `examples/x86-native/enum_tag.hthr`,
 called from C, which is `native_program.rs`' enum test now.
+
+**An enum passed to a call (built 2026-11-20).** A call passes an enum
+as its tag word: `Ty::Held` covers an enum, and the callee, whose
+agreement is at every word (`Ty::Answers`), reads the word as the
+constructor it names (`EnumInfo::read`), which is the value the caller
+holds (`Ty::held_reads`: the clamped word is its tag, and `of_tag`). A
+constructor built in the body is passed the same way. Calling a function
+that returns an enum stays refused: the caller would hold the callee's
+tag word, which needs every value's tag to be at most the last
+(`EnumInfo` has no such law yet, and the generator's shape table, whose
+enums are bare indices, could not meet one). Probes: the call section of
+`runtime_enum_tests` (an enum passed twice, a constructor built and
+passed, two enums and a word passed to a callee matching on both).

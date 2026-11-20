@@ -771,10 +771,11 @@ theorem Ty::one_word_reads(tys: Nat → RecInfo, values: Valuation(), port: Nat,
 }
 
 // A code held in one 64-bit word across a call: a word, a record held in
-// one (`Ty::OneWord`, a type at its repr's word), or a count (a loop's
-// fuel, the word it is the `toNat` of).
+// one (`Ty::OneWord`, a type at its repr's word), a count (a loop's fuel,
+// the word it is the `toNat` of), or an enum (its tag word, which the
+// callee reads back as the constructor, `EnumInfo::read`).
 fn Ty::Held(self p: Ty, tys: Nat → RecInfo) → Type {
-    match p { Word(w) => w = 64, Bit => False, ByteList(_) => False, Lines => False, Named(i) => tys(i).fields = [Word(64)], Count => True, Enum(_) => False }
+    match p { Word(w) => w = 64, Bit => False, ByteList(_) => False, Lines => False, Named(i) => tys(i).fields = [Word(64)], Count => True, Enum(_) => True }
 }
 
 fn Ty::check_held(self p: Ty, tys: Nat → RecInfo) → Option<p.Held(tys)> {
@@ -783,7 +784,7 @@ fn Ty::check_held(self p: Ty, tys: Nat → RecInfo) → Option<p.Held(tys)> {
         Bit => None, ByteList(_) => None, Lines => None,
         Named(i) => Ty::check_fields_word(tys(i).fields),
         Count => Some(trivial),
-        Enum(_) => None,
+        Enum(_) => Some(trivial),
     }
 }
 
@@ -830,8 +831,23 @@ theorem Ty::one_word_back(tys: Nat → RecInfo, t: Ty): t.OneWord(tys) → (v: t
     }
 }
 
+// A decision whose equation does not hold is its `Inr`.
+theorem Or::inr_apart<P>(o: P ∨ True, apart: P → False): o = Inr(trivial) {
+    match o { Inl(e) => false_elim(apart(e)), Inr(_) => refl }
+}
+
+// A word read at an enum is the constructor it names (`EnumInfo::read`).
+theorem Ty::cast_word_enum(tys: Nat → RecInfo, i: Nat, x: BitVec(64)): Ty::cast(tys, Word(64), Enum(i), x) = tys(i).alts.read(x) {
+    let apart = λ (e: Word(64) = Enum(i)) => j(e, λ y _ => match y as λ _ => Type { Word(_) => True, _ => False }, trivial);
+    j(sym(Or::inr_apart(Word(64).equation(Enum(i)), apart)), λ d _ =>
+        (match d as λ _ => tys(i).alts.E { Inl(e) => j(e, λ y _ => y.sem(tys), x), Inr(_) => Ty::convert(tys, Word(64), Enum(i), x) }) =
+            tys(i).alts.read(x),
+        refl)
+}
+
 // A port holding a value of a code held in a word: the word, read back at
-// the code, is the value (a count's `toNat` is the count).
+// the code, is the value (a count's `toNat` is the count, an enum's word
+// names its constructor, `EnumInfo.of_tag`).
 theorem Ty::held_reads(tys: Nat → RecInfo, p: Ty, values: Valuation(), port: Nat): p.Held(tys) → (v: p.sem(tys)) →
     p.Holds(tys, values, port, v) → Ty::cast(tys, Word(64), p, values(64, port)) = v {
     match p {
@@ -842,7 +858,8 @@ theorem Ty::held_reads(tys: Nat → RecInfo, p: Ty, values: Valuation(), port: N
         Lines => λ never => false_elim(never),
         Named(i) => λ e v held => Ty::record_word_reads(tys(i).T, tys(i).fields, tys(i).mk, tys(i).get, tys(i).back, e, values, port, v, held),
         Count => λ _ n held => held,
-        Enum(_) => λ never => false_elim(never),
+        Enum(i) => λ _ v held => trans(Ty::cast_word_enum(tys, i, values(64, port)),
+            trans(cong_fn(tys(i).alts.of, held), tys(i).alts.of_tag(v))),
     }
 }
 
@@ -1994,11 +2011,6 @@ theorem Tm::lower_sound(self t: Tm, w: World): (g: List<Ty>) → (ports: List<Na
 // Calls and loops keep `Ty::OneWord`: a call of a function with a narrow
 // word would widen its argument first, which the call's lowering does not
 // do yet.
-
-// A decision whose equation does not hold is its `Inr`.
-theorem Or::inr_apart<P>(o: P ∨ True, apart: P → False): o = Inr(trivial) {
-    match o { Inl(e) => false_elim(apart(e)), Inr(_) => refl }
-}
 
 // A code a plain function's boundary passes in one 64-bit word: one held
 // in a 64-bit word (`Ty::OneWord`), or a word narrower than one.
