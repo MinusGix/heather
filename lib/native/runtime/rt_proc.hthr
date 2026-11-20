@@ -648,10 +648,37 @@ fn PDef::spec(defs: List<PDef>, f: PCalls(), fits: Nat → Nat → List<BitVec(6
         λ k p entered => fits(k, p, entered.words_at(PTm::range(0, PDef::arity_at(defs, p)))))
 }
 
-// The procedures' meanings unfold to their bodies' (each function's pin).
+// The procedures' meanings unfold to their bodies' at their arities (each
+// function's pin).
 fn PDef::Unfolds(defs: List<PDef>, w: rt::World, f: PCalls()) → Type {
-    (p: Nat) → (d: PDef) → defs.nth(p) = Some(d) → (xs: List<BitVec(64)>) →
+    (p: Nat) → (d: PDef) → defs.nth(p) = Some(d) → (xs: List<BitVec(64)>) → xs.len() = d.arity →
         f(p, xs) = d.body.sem(w, f, PTm::word_ctx(d.arity), PTm::vals_n(w.tys, d.arity, xs))
+}
+
+// A recursive function `h` of `n` words with body `body`, guarded by the
+// measure `m`: the body, its calls of itself answered by anything that
+// agrees with `h` below the measure, is `h` (`Fun::Guarded`'s statement,
+// over a `PTm`). The generator proves it from the function's own `f::ext`
+// and `f::irrel`, as it does a measured loop's.
+fn PTm::Guarded(n: Nat, body: PTm, w: rt::World, h: List<BitVec(64)> → BitVec(64), m: List<BitVec(64)> → Nat) → Type {
+    (xs: List<BitVec(64)>) → xs.len() = n → (again: List<BitVec(64)> → BitVec(64)) →
+        ((ys: List<BitVec(64)>) → ys.len() = n → m(ys) < m(xs) → again(ys) = h(ys)) →
+        body.sem(w, λ _ ys => again(ys), PTm::word_ctx(n), PTm::vals_n(w.tys, n, xs)) = h(xs)
+}
+
+// A guarded function is its one procedure's meaning: the recursion answered
+// by the function itself agrees everywhere.
+theorem PTm::unfolds_one(n: Nat, body: PTm, w: rt::World, h: List<BitVec(64)> → BitVec(64), m: List<BitVec(64)> → Nat,
+    guarded: PTm::Guarded(n, body, w, h, m)): PDef::Unfolds([PDef(n, body)], w, λ _ xs => h(xs)) {
+    λ p => match p {
+        Zero => λ d found xs len => {
+            let same: (PDef(n, body) = d) = cong_fn(λ (o: Option<PDef>) => match o { None => PDef(n, body), Some(x) => x }, found);
+            let len_n: (xs.len() = n) = j(sym(same), λ d2 _ => xs.len() = d2.arity, len);
+            j(same, λ d2 _ => h(xs) = d2.body.sem(w, λ _ ys => h(ys), PTm::word_ctx(d2.arity), PTm::vals_n(w.tys, d2.arity, xs)),
+                sym(guarded(xs, len_n, h, λ ys _ _ => refl)))
+        },
+        Succ(_) => λ d never => false_elim(j(never, λ o _ => match o as λ _ => Type { None => True, Some(_) => False }, trivial)),
+    }
 }
 
 // Where one fits within `k` levels, every call its body makes is within
@@ -682,8 +709,37 @@ fn PDef::below(defs: List<PDef>, w: rt::World, f: PCalls(), k: Nat) → Nat → 
     match k { Zero => λ _ _ => False, Succ(j) => PDef::fits(defs, w, f, j) }
 }
 
-// Where every call is counted, `PDef::fits` is what the bodies' calls keep.
-theorem PDef::fits_fit(defs: List<PDef>, w: rt::World, f: PCalls(), counted: Nat → Bool, all: (p: Nat) → counted(p) = True):
+// A call of no definition fits within any levels, as it does nothing.
+theorem PDef::fits_unknown(defs: List<PDef>, w: rt::World, f: PCalls(), q: Nat, ys: List<BitVec(64)>, none: defs.nth(q) = None):
+    (k: Nat) → PDef::fits(defs, w, f, k, q, ys) = True {
+    λ k => match k as λ k2 => PDef::fits(defs, w, f, k2, q, ys) = True {
+        Zero => j(sym(none), λ o _ => (match o as λ _ => Bool {
+                None => True,
+                Some(d) => d.body.calls_ok(w, f, λ _ _ => False, PTm::word_ctx(d.arity), PTm::vals_n(w.tys, d.arity, ys)),
+            }) = True, refl),
+        Succ(j2) => j(sym(none), λ o _ => (match o as λ _ => Bool {
+                None => True,
+                Some(d) => d.body.calls_ok(w, f, PDef::fits(defs, w, f, j2), PTm::word_ctx(d.arity), PTm::vals_n(w.tys, d.arity, ys)),
+            }) = True, refl),
+    }
+}
+
+// A call of no definition is within any levels it is below, counted or not.
+theorem PDef::within_unknown(defs: List<PDef>, w: rt::World, f: PCalls(), counted: Nat → Bool, k, q: Nat, ys: List<BitVec(64)>, none: defs.nth(q) = None,
+    ok: PDef::below(defs, w, f, k, q, ys).IsTrue()): PTm::within(λ k2 p xs => PDef::fits(defs, w, f, k2, p, xs), counted, k, q, ys).IsTrue() {
+    (match k as λ k2 => PDef::below(defs, w, f, k2, q, ys).IsTrue() → PTm::within(λ k3 p xs => PDef::fits(defs, w, f, k3, p, xs), counted, k2, q, ys).IsTrue() {
+        Zero => λ never => false_elim(never),
+        Succ(j2) => λ _ => match counted(q) as λ b => (match Nat::spend(Succ(j2), b) as λ _ => Bool { None => False, Some(x) => PDef::fits(defs, w, f, x, q, ys) }).IsTrue() {
+            False => j(sym(PDef::fits_unknown(defs, w, f, q, ys, none, Succ(j2))), λ b _ => b.IsTrue(), trivial),
+            True => j(sym(PDef::fits_unknown(defs, w, f, q, ys, none, j2)), λ b _ => b.IsTrue(), trivial),
+        },
+    })(ok)
+}
+
+// Where every call of a definition is counted, `PDef::fits` is what the
+// bodies' calls keep.
+theorem PDef::fits_fit(defs: List<PDef>, w: rt::World, f: PCalls(), counted: Nat → Bool,
+    all: (p: Nat) → (d: PDef) → defs.nth(p) = Some(d) → counted(p) = True):
     PDef::Fits(defs, w, f, λ k p xs => PDef::fits(defs, w, f, k, p, xs), counted) {
     let fits = λ (k: Nat) (p: Nat) (xs: List<BitVec(64)>) => PDef::fits(defs, w, f, k, p, xs);
     λ p d found xs k fit => {
@@ -696,16 +752,20 @@ theorem PDef::fits_fit(defs: List<PDef>, w: rt::World, f: PCalls(), counted: Nat
         let body: (d.body.calls_ok(w, f, below, PTm::word_ctx(d.arity), PTm::vals_n(w.tys, d.arity, xs)).IsTrue()) =
             j(found, λ o _ => (match o as λ _ => Bool { None => True, Some(d2) => d2.body.calls_ok(w, f, below, PTm::word_ctx(d2.arity), PTm::vals_n(w.tys, d2.arity, xs)) }).IsTrue(),
                 j(at, λ b _ => b.IsTrue(), fit));
-        d.body.calls_ok_mono(w, f, below, PTm::within(fits, counted, k), λ q ys ok => {
-            let spent = j(sym(all(q)), λ b _ => (match k.spend(b) as λ _ => Bool { None => False, Some(j2) => fits(j2, q, ys) }) =
-                    (match k.spend(True) as λ _ => Bool { None => False, Some(j2) => fits(j2, q, ys) }), refl);
-            let on_k = (match k as λ k2 => PDef::below(defs, w, f, k2, q, ys).IsTrue() →
-                    (match k2.spend(True) as λ _ => Bool { None => False, Some(j2) => fits(j2, q, ys) }).IsTrue() {
-                Zero => λ never => false_elim(never),
-                Succ(_) => λ h => h,
-            })(ok);
-            j(sym(spent), λ b _ => b.IsTrue(), on_k)
-        }, PTm::word_ctx(d.arity), PTm::vals_n(w.tys, d.arity, xs), body)
+        d.body.calls_ok_mono(w, f, below, PTm::within(fits, counted, k), λ q ys ok => (match defs.nth(q) as λ o => defs.nth(q) = o →
+                PTm::within(fits, counted, k, q, ys).IsTrue() {
+            None => λ none => PDef::within_unknown(defs, w, f, counted, k, q, ys, none, ok),
+            Some(dq) => λ at_q => {
+                let spent = j(sym(all(q, dq, at_q)), λ b _ => (match k.spend(b) as λ _ => Bool { None => False, Some(j2) => fits(j2, q, ys) }) =
+                        (match k.spend(True) as λ _ => Bool { None => False, Some(j2) => fits(j2, q, ys) }), refl);
+                let on_k = (match k as λ k2 => PDef::below(defs, w, f, k2, q, ys).IsTrue() →
+                        (match k2.spend(True) as λ _ => Bool { None => False, Some(j2) => fits(j2, q, ys) }).IsTrue() {
+                    Zero => λ never => false_elim(never),
+                    Succ(_) => λ h => h,
+                })(ok);
+                j(sym(spent), λ b _ => b.IsTrue(), on_k)
+            },
+        })(refl), PTm::word_ctx(d.arity), PTm::vals_n(w.tys, d.arity, xs), body)
     }
 }
 
@@ -924,7 +984,7 @@ theorem PDef::bodies(defs: List<PDef>, w: rt::World, src: Source, made: PDef::pr
             // The value it leaves.
             let single: BitVec(64) → List<BitVec(64)> = λ x => [x];
             let sv: (spec.value(p, entered) = [v]) = trans(cong_fn(λ (a: Nat) => single(f(p, entered.words_at(PTm::range(0, a)))), ar),
-                cong_fn(single, unfolds(p, d, got.left, xs)));
+                cong_fn(single, unfolds(p, d, got.left, xs, lx)));
             let bufs0: (entered.buffers = caller.buffers) = PTm::set_words_buffers(proc.params, caller.words_at(args), native_source::Env(Nil, caller.buffers, caller.args));
             let target = Onward(native_source::Env(caller.words, caller.buffers, caller.args).set_words(results, [v]));
             let leaves = (match m.value as λ fl => (match fl as λ _ => Type {
@@ -945,4 +1005,21 @@ theorem PDef::bodies(defs: List<PDef>, w: rt::World, src: Source, made: PDef::pr
                 Onward(native_source::Env(caller.words, caller.buffers, caller.args).set_words(results, ys)), sv)))⟩⟩
         }⟩
     }
+}
+
+// One recursive function, guarded by its measure and its call of itself
+// counted: its procedure keeps every obligation, its value the function
+// and the levels it fits within `PDef::fits`.
+theorem PDef::bodies_one(n: Nat, body: PTm, w: rt::World, src: Source,
+    made: PDef::procedures([PDef(n, body)], w, PDef::known([PDef(n, body)])) = Some(src.procedures),
+    call: Writers(), still: Writers::Still(call, functions_below(w.sigs.len())), agree: (held: Buffers()) → Tm::CallsAgree(w, Writers::words(call, held)),
+    h: List<BitVec(64)> → BitVec(64), m: List<BitVec(64)> → Nat, guarded: PTm::Guarded(n, body, w, h, m), counted: Nat → Bool, self_counted: counted(0) = True):
+    src.PureBodies(call, PDef::spec([PDef(n, body)], λ _ xs => h(xs), λ k p xs => PDef::fits([PDef(n, body)], w, λ _ ys => h(ys), k, p, xs)), counted) {
+    let defs: List<PDef> = [PDef(n, body)];
+    PDef::bodies(defs, w, src, made, call, still, agree, λ _ xs => h(xs), λ k p xs => PDef::fits(defs, w, λ _ ys => h(ys), k, p, xs), counted,
+        PTm::unfolds_one(n, body, w, h, m, guarded),
+        PDef::fits_fit(defs, w, λ _ ys => h(ys), counted, λ p => match p as λ p2 => (d: PDef) → defs.nth(p2) = Some(d) → counted(p2) = True {
+            Zero => λ _ _ => self_counted,
+            Succ(_) => λ d never => false_elim(j(never, λ o _ => match o as λ _ => Type { None => True, Some(_) => False }, trivial)),
+        }))
 }
