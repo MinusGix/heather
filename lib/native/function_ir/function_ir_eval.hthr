@@ -331,6 +331,27 @@ fn Node::defined(self node: Node, values: Valuation()) → Bool {
     }
 }
 
+// A node that requires nothing of its operands: anything but a divide. A
+// stage that adds nodes evaluated at whatever valuation it meets (a guard's
+// test, an inlined leaf) adds only these.
+fn Node::total(self node: Node) → Bool {
+    match node {
+        Apply(op, _, _, _, _) => match op { UDiv => False, URem => False, _ => True },
+        _ => True,
+    }
+}
+
+theorem Node::total_defined(self node: Node, values: Valuation()): node.total().IsTrue() → node.defined(values).IsTrue() {
+    match node {
+        Apply(op, _, _, _, _) => match op { UDiv => λ no => false_elim(no), URem => λ no => false_elim(no), _ => λ _ => trivial },
+        _ => λ _ => trivial,
+    }
+}
+
+fn nodes_total(nodes: List<Node>) → Bool {
+    match nodes { Nil => True, Cons(node, rest) => node.total() && nodes_total(rest) }
+}
+
 // A valuation whose output is the node's value and whose operands are as
 // they were satisfies the node.
 theorem Node::holds_of(self node: Node, values, after: Valuation(), buffers: Buffers()):
@@ -418,6 +439,18 @@ fn nodes_defined_over(buffers: Buffers(), nodes: List<Node>, values: Valuation()
     match nodes {
         Nil => True,
         Cons(node, rest) => node.defined(values) && nodes_defined_over(buffers, rest, node.step(values, buffers := buffers)),
+    }
+}
+
+theorem nodes_total_defined(nodes: List<Node>, buffers: Buffers()): nodes_total(nodes).IsTrue() → (values: Valuation()) →
+    nodes_defined_over(buffers, nodes, values).IsTrue() {
+    match nodes {
+        Nil => λ _ _ => trivial,
+        Cons(node, rest) => λ total values => {
+            let parts = Bool::is_true_and(node.total(), nodes_total(rest), total);
+            Bool::is_true_and_intro(node.defined(values), nodes_defined_over(buffers, rest, node.step(values, buffers := buffers)),
+                node.total_defined(values, parts.left), nodes_total_defined(rest, buffers, parts.right, node.step(values, buffers := buffers)))
+        },
     }
 }
 

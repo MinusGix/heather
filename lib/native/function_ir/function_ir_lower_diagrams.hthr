@@ -178,7 +178,8 @@ theorem List::compiled_runs<M>(self nodes: List<Node>, out: List<Nat>, values: V
     placement: List<Place>, file: File, body: Lowered, state: MachineState<M>,
     pure: nodes_pure(nodes.optimised(out)).IsTrue(), evaluable: nodes_evaluable(nodes.optimised(out)).IsTrue(),
     lowered: lower_nodes(nodes.optimised(out), placement, file) = Some(body),
-    represents: file.Represents(eval_nodes(nodes.optimised(out), values), state.gprs)):
+    represents: file.Represents(eval_nodes(nodes.optimised(out), values), state.gprs),
+    defined: nodes_defined_over(Nil, nodes.optimised(out), values).IsTrue()):
     body.file.Represents(eval_nodes(nodes.optimised(out), values), execute_block_normal<M>(body.code, state).gprs)
         ∧ ((i: Nat) → Mem(i, out) → (w: Nat) → eval_nodes(nodes.optimised(out), values, w, i) = run_nodes(nodes, values, buffers).values(w, i)) {
     let meant = eval_nodes(nodes.optimised(out), values);
@@ -191,7 +192,7 @@ theorem List::compiled_runs<M>(self nodes: List<Node>, out: List<Nat>, values: V
         Exists(Leaf(nodes.folded([]), values, buffers), ⟨Exists([], ⟨refl, ⟨trivial, ⟨λ w id => refl, refl⟩⟩⟩),
             ⟨refl, ⟨refl, ⟨refl, λ k _ w => refl⟩⟩⟩⟩);
     let lowering: LowerMatch<M>(meant, body.file, Nil, index.fst, target, block) =
-        ⟨refl, ⟨pure, ⟨λ w id => refl, ⟨eval_nodes_holds(nodes.optimised(out), Nil, evaluable, values, meant, λ w id _ => refl),
+        ⟨refl, ⟨pure, ⟨λ w id => refl, ⟨eval_nodes_holds(nodes.optimised(out), Nil, evaluable, values, meant, λ w id _ => refl, defined),
             Exists(placement, Exists(file, Exists(body, ⟨lowered, ⟨refl, ⟨refl, represents⟩⟩⟩)))⟩⟩⟩⟩;
     let mapped = StarDiagram::runs<Leaf, Pending<Instruction, MachineState<M>>, Pair<Nat, Pair<Nat, True>>>(Leaf::Step,
         λ a b => BlockStep<M>(a, b), CompileOrder, λ k s b => CompileMatch<M>(out, meant, body.file, Nil, k, s, b),

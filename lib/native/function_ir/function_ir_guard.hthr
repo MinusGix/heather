@@ -35,21 +35,22 @@ fn Function::guarded(self function: Function, plan: Guard) → Function {
         function.result, function.lent)
 }
 
-// The nodes store nothing, each can be evaluated after the ones before it,
-// and none writes an id of the function's.
+// The nodes require nothing and store nothing, each can be evaluated after
+// the ones before it, and none writes an id of the function's.
 fn guard_function(function: Function, plan: Guard) → Option<Function> {
-    (ids_under(Cons(function.result, function.parameters), plan.bound) && (function.body.under(plan.bound) && (nodes_quiet(plan.nodes) &&
-        (nodes_evaluable(plan.nodes) && ids_over(nodes_writes(plan.nodes), plan.bound))))).then(Some(function.guarded(plan)))
+    (nodes_total(plan.nodes) && (ids_under(Cons(function.result, function.parameters), plan.bound) && (function.body.under(plan.bound) && (nodes_quiet(plan.nodes) &&
+        (nodes_evaluable(plan.nodes) && ids_over(nodes_writes(plan.nodes), plan.bound)))))).then(Some(function.guarded(plan)))
 }
 
 theorem guard_function_sound(callees: List<Function>, function: Function, plan: Guard, new: Function,
     made: guard_function(function, plan) = Some(new)): Rewrites(callees, function, new) {
     λ arguments result before after ran => {
-        let checked = Bool::then_some(ids_under(Cons(function.result, function.parameters), plan.bound) && (function.body.under(plan.bound) &&
-            (nodes_quiet(plan.nodes) && (nodes_evaluable(plan.nodes) && ids_over(nodes_writes(plan.nodes), plan.bound)))),
-            Some(function.guarded(plan)), new, made);
+        let rest = ids_under(Cons(function.result, function.parameters), plan.bound) && (function.body.under(plan.bound) &&
+            (nodes_quiet(plan.nodes) && (nodes_evaluable(plan.nodes) && ids_over(nodes_writes(plan.nodes), plan.bound))));
+        let checked = Bool::then_some(nodes_total(plan.nodes) && rest, Some(function.guarded(plan)), new, made);
+        let c0 = Bool::and_true_parts(nodes_total(plan.nodes), rest, checked.left);
         let c1 = Bool::and_true_parts(ids_under(Cons(function.result, function.parameters), plan.bound), function.body.under(plan.bound) &&
-            (nodes_quiet(plan.nodes) && (nodes_evaluable(plan.nodes) && ids_over(nodes_writes(plan.nodes), plan.bound))), checked.left);
+            (nodes_quiet(plan.nodes) && (nodes_evaluable(plan.nodes) && ids_over(nodes_writes(plan.nodes), plan.bound))), c0.right);
         let c2 = Bool::and_true_parts(function.body.under(plan.bound),
             nodes_quiet(plan.nodes) && (nodes_evaluable(plan.nodes) && ids_over(nodes_writes(plan.nodes), plan.bound)), c1.right);
         let c3 = Bool::and_true_parts(nodes_quiet(plan.nodes), nodes_evaluable(plan.nodes) && ids_over(nodes_writes(plan.nodes), plan.bound), c2.right);
@@ -60,7 +61,8 @@ theorem guard_function_sound(callees: List<Function>, function: Function, plan: 
             eval_nodes_frame(plan.nodes, before, values, w, id, ids_over_absent(plan.bound, nodes_writes(plan.nodes), c4.right, id, under));
         let ids = ids_under_mem(plan.bound, Cons(function.result, function.parameters), c1.left);
         let tests = nodes_run_quiet(other, before, plan.nodes, Bool::is_true_of_eq(c3.left),
-            eval_nodes_holds(plan.nodes, before, Bool::is_true_of_eq(c4.left), values, other, λ w id m => refl));
+            eval_nodes_holds(plan.nodes, before, Bool::is_true_of_eq(c4.left), values, other, λ w id m => refl,
+                nodes_total_defined(plan.nodes, before, Bool::is_true_of_eq(c0.left), values)));
         let body = function.body.runs_agree(program_effects(callees), plan.bound, c2.left, values, other, agree, before, after, ran.proof.right.left);
         j(Option::some_inj(function.guarded(plan), new, checked.right), λ g _ => g.Runs(program_effects(callees), arguments, result, before, after),
             Exists(other, ⟨trans(words_agree(function.parameters, values, other, λ id m => agree(id, ids(id, Inr(m)), 64)), ran.proof.left),

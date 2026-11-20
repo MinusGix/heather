@@ -475,7 +475,8 @@ fn inline_region(callees: List<Function>, region: StructuredRegion) → Nat → 
         Dataflow(body) => λ by sites => match sites {
             Stay => Some(Inlined(Dataflow(body), by)),
             Put(room, leaves) => Inlined::at(Compose(Dataflow(body), leaves_region(leaves)), by + room,
-                nodes_quiet(leaves_nodes(leaves)) && (nodes_evaluable(leaves_nodes(leaves)) && ids_over(nodes_writes(leaves_nodes(leaves)), by))),
+                nodes_total(leaves_nodes(leaves)) &&
+                    (nodes_quiet(leaves_nodes(leaves)) && (nodes_evaluable(leaves_nodes(leaves)) && ids_over(nodes_writes(leaves_nodes(leaves)), by)))),
             _ => None,
         },
         Sequence(prefix, continuation) => λ by sites => match sites {
@@ -542,10 +543,11 @@ theorem inline_region_sound(callees: List<Function>, region: StructuredRegion): 
             Put(room, leaves) => λ r made under => {
                 let nodes = leaves_nodes(leaves);
                 let piece = Compose(Dataflow(body), leaves_region(leaves));
-                let ok = Bool::then_some((nodes_quiet(nodes) && (nodes_evaluable(nodes) && ids_over(nodes_writes(nodes), by))) && piece.under(by + room),
-                    Some(Inlined(piece, by + room)), r, made);
-                let checks = Bool::and_true_parts(nodes_quiet(nodes) && (nodes_evaluable(nodes) && ids_over(nodes_writes(nodes), by)), piece.under(by + room), ok.left);
-                let c1 = Bool::and_true_parts(nodes_quiet(nodes), nodes_evaluable(nodes) && ids_over(nodes_writes(nodes), by), checks.left);
+                let inside = nodes_quiet(nodes) && (nodes_evaluable(nodes) && ids_over(nodes_writes(nodes), by));
+                let ok = Bool::then_some((nodes_total(nodes) && inside) && piece.under(by + room), Some(Inlined(piece, by + room)), r, made);
+                let checks = Bool::and_true_parts(nodes_total(nodes) && inside, piece.under(by + room), ok.left);
+                let c0 = Bool::and_true_parts(nodes_total(nodes), inside, checks.left);
+                let c1 = Bool::and_true_parts(nodes_quiet(nodes), nodes_evaluable(nodes) && ids_over(nodes_writes(nodes), by), c0.right);
                 let c2 = Bool::and_true_parts(nodes_evaluable(nodes), ids_over(nodes_writes(nodes), by), c1.right);
                 j(Option::some_inj(Inlined(piece, by + room), r, ok.right), λ x _ => x.Sound(effects, Dataflow(body), by),
                     ⟨by.leb_true(by + room, by.le_add_l(room)), ⟨checks.right, λ values before after ran => {
@@ -554,7 +556,8 @@ theorem inline_region_sound(callees: List<Function>, region: StructuredRegion): 
                             eval_nodes_frame(nodes, after, values, w, id, ids_over_absent(by, nodes_writes(nodes), c2.right, id, below));
                         Exists(other, ⟨agree, Exists(after, ⟨Dataflow(body).runs_agree(effects, by, under, values, other, agree, before, after, ran),
                             leaves_run(effects, other, after, leaves, Bool::is_true_of_eq(c1.left),
-                                eval_nodes_holds(nodes, after, Bool::is_true_of_eq(c2.left), values, other, λ w id m => refl))⟩)⟩)
+                                eval_nodes_holds(nodes, after, Bool::is_true_of_eq(c2.left), values, other, λ w id m => refl,
+                                    nodes_total_defined(nodes, after, Bool::is_true_of_eq(c0.left), values)))⟩)⟩)
                     }⟩⟩)
             },
             _ => λ r made under => absurd(made),
