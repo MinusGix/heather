@@ -1006,7 +1006,62 @@ theorem Ty::all_open_admits(tys: Nat → RecInfo, ps: List<Ty>): Ty::all_open(ps
 
 // A signature the calling convention covers: each parameter held in a word,
 // and a word result.
-fn Sig::Words(self s: Sig, tys: Nat → RecInfo) → Type { Ty::Helds(tys, s.params) ∧ s.result.OneWord(tys) }
+// A code a call returns in one 64-bit word: one held in one
+// (`Ty::OneWord`), or an enum, as its tag word, which names the callee's
+// value where the enum's tags fit a word (`EnumInfo.bounded`).
+fn Ty::Returned(self t: Ty, tys: Nat → RecInfo) → Type {
+    match t {
+        Word(w) => w = 64, Bit => False, ByteList(_) => False, Lines => False, Named(i) => tys(i).fields = [Word(64)], Count => False,
+        Enum(i) => (tys(i).alts.last + 1).leb(Nat::pow(2, 64)) = True,
+    }
+}
+
+fn Ty::check_returned(self t: Ty, tys: Nat → RecInfo) → Option<t.Returned(tys)> {
+    match t as λ x => Option<x.Returned(tys)> {
+        Word(w) => match w.equation(64) { Inl(e) => Some(e), Inr(_) => None },
+        Bit => None, ByteList(_) => None, Lines => None,
+        Named(i) => Ty::check_fields_word(tys(i).fields),
+        Count => None,
+        Enum(i) => match (tys(i).alts.last + 1).leb(Nat::pow(2, 64)) as λ b => Option<b = True> { False => None, True => Some(refl) },
+    }
+}
+
+// A word returned at its port holds the value it is the word of.
+theorem Ty::returned_holds(tys: Nat → RecInfo, values: Valuation(), port: Nat, t: Ty): t.Returned(tys) → (v: t.sem(tys)) →
+    values(64, port) = Ty::cast(tys, t, Word(64), v) → t.Holds(tys, values, port, v) {
+    match t {
+        Word(w) => λ (e: w = 64) v h => j(Ty::one_word_back(tys, Word(w), e, v), λ u _ => Word(w).Holds(tys, values, port, u),
+            Ty::one_word_holds(tys, values, port, Word(w), e, Ty::cast(tys, Word(w), Word(64), v), h)),
+        Bit => λ never => false_elim(never),
+        ByteList(_) => λ never => false_elim(never),
+        Lines => λ never => false_elim(never),
+        Named(i) => λ e v h => j(Ty::one_word_back(tys, Named(i), e, v), λ u _ => Named(i).Holds(tys, values, port, u),
+            Ty::one_word_holds(tys, values, port, Named(i), e, Ty::cast(tys, Named(i), Word(64), v), h)),
+        Count => λ never => false_elim(never),
+        Enum(i) => λ small v h => {
+            let e = tys(i).alts;
+            let lt: (e.tag(v) < Nat::pow(2, 64)) = Nat::le_trans(e.tag(v) + 1, e.last + 1, Nat::pow(2, 64), Nat::le_succ_succ(e.tag(v), e.last, e.bounded(v)),
+                Nat::le_of_leb(e.last + 1, Nat::pow(2, 64), small));
+            let word: (values(64, port).toNat() = e.tag(v)) = trans(cong_fn(λ (y: BitVec(64)) => y.toNat(), h), BitVec::toNat_ofNat(64, e.tag(v), lt));
+            ⟨word, j(sym(word), λ y _ => y <= e.last, e.bounded(v))⟩
+        },
+    }
+}
+
+// A code returned in one word spans one port.
+theorem Ty::returned_below(tys: Nat → RecInfo, t: Ty): t.Returned(tys) → (m: Nat) → t.Below(tys, m, m + 1) {
+    match t {
+        Word(w) => λ e m => Ty::one_word_below(tys, Word(w), e, m),
+        Bit => λ never => false_elim(never),
+        ByteList(_) => λ never => false_elim(never),
+        Lines => λ never => false_elim(never),
+        Named(i) => λ e m => Ty::one_word_below(tys, Named(i), e, m),
+        Count => λ never => false_elim(never),
+        Enum(_) => λ _ m => m.lt_succ_self(),
+    }
+}
+
+fn Sig::Words(self s: Sig, tys: Nat → RecInfo) → Type { Ty::Helds(tys, s.params) ∧ s.result.Returned(tys) }
 
 // A function on words answers like a curried meaning: on every word list
 // its parameters admit, the meaning applied to the words (each cast to its
@@ -1265,7 +1320,7 @@ fn Tm::lower_call_args(w: World, g: List<Ty>, ports: List<Nat>, next, f: Nat, ar
 }
 
 fn Tm::lower_call_result(w: World, g: List<Ty>, ports: List<Nat>, next, f: Nat, args: List<Nat>) → Option<Lowered> {
-    Sig::at(w.sigs, f).result.check_one_word(w.tys).and_then(λ _ => Tm::lower_call_args(w, g, ports, next, f, args))
+    Sig::at(w.sigs, f).result.check_returned(w.tys).and_then(λ _ => Tm::lower_call_args(w, g, ports, next, f, args))
 }
 
 // A call of the program's function `f`: FunctionIR's `Call` of the same
@@ -1847,7 +1902,7 @@ theorem Tm::lower_call_sound(w: World, g: List<Ty>, ports: List<Nat>, next, f: N
     Tm::LowerHolds(Call(f, args), w, g, ports, next, Tm::lower_call(w, g, ports, next, f, args)) {
     let P = λ (r: Option<Lowered>) => Tm::LowerHolds(Call(f, args), w, g, ports, next, r);
     Option::and_then_elim(P, trivial, Ty::check_helds(w.tys, Sig::at(w.sigs, f).params), λ _ => Tm::lower_call_result(w, g, ports, next, f, args), λ ok _ =>
-    Option::and_then_elim(P, trivial, Sig::at(w.sigs, f).result.check_one_word(w.tys), λ _ => Tm::lower_call_args(w, g, ports, next, f, args), λ er _ =>
+    Option::and_then_elim(P, trivial, Sig::at(w.sigs, f).result.check_returned(w.tys), λ _ => Tm::lower_call_args(w, g, ports, next, f, args), λ er _ =>
     Option::and_then_elim(P, trivial, Tm::call_args(w.tys, g, ports, Sig::at(w.sigs, f).params, args),
         λ qs => Some(Tm::called(f, qs, next)), λ qs e_qs =>
         λ call agree values env held below => {
@@ -1865,11 +1920,9 @@ theorem Tm::lower_call_sound(w: World, g: List<Ty>, ports: List<Nat>, next, f: N
                 trans(Valuation::set_here(called, next + 1, moved, 64), word);
             // The result, held in one word (a word, or a record held at its
             // repr's word), holds at the moved port.
-            let holds: r.Holds(w.tys, after, next + 1, meaning) =
-                j(Ty::one_word_back(w.tys, r, er, meaning), λ u _ => r.Holds(w.tys, after, next + 1, u),
-                    Ty::one_word_holds(w.tys, after, next + 1, r, er, Ty::cast(w.tys, r, Word(64), meaning), word_moved));
+            let holds: r.Holds(w.tys, after, next + 1, meaning) = Ty::returned_holds(w.tys, after, next + 1, r, er, meaning, word_moved);
             ⟨Nat::le_succ_r(next, next + 1, Nat::le_succ_r(next, next, next.le_refl())),
-                ⟨Ty::one_word_below(w.tys, r, er, next + 1),
+                ⟨Ty::returned_below(w.tys, r, er, next + 1),
                     ⟨λ wd id lt => trans(Valuation::set_other(called, next + 1, moved, wd, id,
                             Nat::ne_of_lt(id, next + 1, Nat::lt_trans(id, next, next + 1, lt, next.lt_succ_self()))),
                         Valuation::set_other(values, next, v, wd, id, Nat::ne_of_lt(id, next, lt))),

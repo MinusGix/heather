@@ -501,7 +501,7 @@ fn FTm::call_args(w: World, fsigs: List<Sig>, base: Nat, g: List<Ty>, ports: Lis
 }
 
 fn FTm::call_result(w: World, fsigs: List<Sig>, base: Nat, g: List<Ty>, ports: List<Nat>, next, f: Nat, args: List<Nat>) → Option<Lowered> {
-    Sig::at(fsigs, f).result.check_one_word(w.tys).and_then(λ _ => FTm::call_args(w, fsigs, base, g, ports, next, f, args))
+    Sig::at(fsigs, f).result.check_returned(w.tys).and_then(λ _ => FTm::call_args(w, fsigs, base, g, ports, next, f, args))
 }
 
 // A call of the program's computation `f`: FunctionIR's `Call` of function
@@ -519,7 +519,7 @@ theorem FTm::call_sound(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, ne
     let ps = Sig::at(fw.fsigs, f).params;
     let P = λ (o: Option<Lowered>) => FTm::StepHolds(fw, base, g, ports, next, r, λ env own => FTm::called(fw, g, env, f, args, own), o);
     Option::and_then_elim(P, trivial, Ty::check_helds(tys, ps), λ _ => FTm::call_result(fw.w, fw.fsigs, base, g, ports, next, f, args), λ ok _ =>
-    Option::and_then_elim(P, trivial, r.check_one_word(tys), λ _ => FTm::call_args(fw.w, fw.fsigs, base, g, ports, next, f, args), λ er _ =>
+    Option::and_then_elim(P, trivial, r.check_returned(tys), λ _ => FTm::call_args(fw.w, fw.fsigs, base, g, ports, next, f, args), λ er _ =>
     Option::and_then_elim(P, trivial, Tm::call_args(tys, g, ports, ps, args), λ qs => Some(Tm::called(base + f, qs, next)), λ qs e_qs =>
         λ call agree values env own held below => {
             let file: Buffers() = Cons(own, fw.rest);
@@ -536,13 +536,12 @@ theorem FTm::call_sound(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, ne
                     λ wd => Valuation::set(values, next, word_value(answer.word), wd, next)), answer.buffers), answered);
             let word_moved: (after(64, next + 1) = word) =
                 trans(Valuation::set_here(called, next + 1, moved, 64), Valuation::set_here(values, next, word_value(word), 64));
-            let holds: r.Holds(tys, after, next + 1, m.value) = j(Ty::one_word_back(tys, r, er, m.value), λ u _ => r.Holds(tys, after, next + 1, u),
-                Ty::one_word_holds(tys, after, next + 1, r, er, word, word_moved));
+            let holds: r.Holds(tys, after, next + 1, m.value) = Ty::returned_holds(tys, after, next + 1, r, er, m.value, word_moved);
             let kept: Keeps(values, after, next) = λ wd id lt =>
                 trans(Valuation::set_other(called, next + 1, moved, wd, id,
                         Nat::ne_of_lt(id, next + 1, Nat::lt_trans(id, next, next + 1, lt, next.lt_succ_self()))),
                     Valuation::set_other(values, next, word_value(word), wd, id, Nat::ne_of_lt(id, next, lt)));
-            ⟨Nat::le_succ_r(next, next + 1, Nat::le_succ_r(next, next, next.le_refl())), ⟨Ty::one_word_below(tys, r, er, next + 1),
+            ⟨Nat::le_succ_r(next, next + 1, Nat::le_succ_r(next, next, next.le_refl())), ⟨Ty::returned_below(tys, r, er, next + 1),
                 j(sym(ran), λ s _ => FTm::Ran(r, tys, values, s, next, next + 1, fw.rest, m), ⟨kept, ⟨holds, refl⟩⟩)⟩⟩
         })))
 }
@@ -952,7 +951,7 @@ fn FTm::lend_views(w: World, fsigs: List<Sig>, base: Nat, g: List<Ty>, ports: Li
 }
 
 fn FTm::lend_result(w: World, fsigs: List<Sig>, base: Nat, g: List<Ty>, ports: List<Nat>, next, f: Nat, views: List<FView>, args: List<Nat>) → Option<Lowered> {
-    Sig::at(fsigs, f).result.check_one_word(w.tys).and_then(λ _ => FTm::lend_views(w, fsigs, base, g, ports, next, f, views, args))
+    Sig::at(fsigs, f).result.check_returned(w.tys).and_then(λ _ => FTm::lend_views(w, fsigs, base, g, ports, next, f, views, args))
 }
 
 fn FTm::lend_helds(w: World, fsigs: List<Sig>, base: Nat, g: List<Ty>, ports: List<Nat>, next, f: Nat, views: List<FView>, args: List<Nat>) → Option<Lowered> {
@@ -968,7 +967,7 @@ fn FTm::lower_lend(w: World, fsigs: List<Sig>, base: Nat, g: List<Ty>, ports: Li
 
 // The run of a lowered lend, from the ports found.
 theorem FTm::lend_ran(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, next, f: Nat, view: FView, reads: List<FView>, args: List<Nat>,
-    at_own: view.span = 0, ok: Ty::Helds(fw.w.tys, Sig::at(fw.fsigs, f).params), er: Sig::at(fw.fsigs, f).result.OneWord(fw.w.tys),
+    at_own: view.span = 0, ok: Ty::Helds(fw.w.tys, Sig::at(fw.fsigs, f).params), er: Sig::at(fw.fsigs, f).result.Returned(fw.w.tys),
     call: Writers(), agree: FTm::CallsAgree(fw, base, call), values: Valuation(), env: Env(fw.w.tys, g), own: List<BitVec(8)>,
     held: EnvHolds(fw.w.tys, values, g, ports, env), below: Below(fw.w.tys, g, ports, next), ats: List<ViewPorts>):
     FTm::PortsHold(fw.w.tys, g, env, Cons(own, fw.rest), Cons(view, reads), next, values, Some(ats)) → (qs: List<Nat>) →
@@ -1041,14 +1040,13 @@ theorem FTm::lend_ran(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, next
             let m = FTm::lent(fw, g, env, f, vs, args, own);
             let word_moved: (after(64, out + 1) = word) =
                 trans(Valuation::set_here(called, out + 1, moved, 64), Valuation::set_here(b, out, word_value(word), 64));
-            let holds: r.Holds(tys, after, out + 1, m.value) = j(Ty::one_word_back(tys, r, er, m1.value), λ u _ => r.Holds(tys, after, out + 1, u),
-                Ty::one_word_holds(tys, after, out + 1, r, er, word, word_moved));
+            let holds: r.Holds(tys, after, out + 1, m.value) = Ty::returned_holds(tys, after, out + 1, r, er, m1.value, word_moved);
             let kept: Keeps(values, after, next) = λ wd id lt =>
                 trans(Valuation::set_other(called, out + 1, moved, wd, id,
                         Nat::ne_of_lt(id, out + 1, Nat::lt_trans(id, out, out + 1, Nat::lt_of_lt_of_le(id, next, out, lt, le_out), out.lt_succ_self()))),
                     trans(Valuation::set_other(b, out, word_value(word), wd, id, Nat::ne_of_lt(id, out, Nat::lt_of_lt_of_le(id, next, out, lt, le_out))),
                         kept_b(wd, id, lt)));
-            ⟨Nat::le_succ_r(next, out + 1, Nat::le_succ_r(next, out, le_out)), ⟨Ty::one_word_below(tys, r, er, out + 1),
+            ⟨Nat::le_succ_r(next, out + 1, Nat::le_succ_r(next, out, le_out)), ⟨Ty::returned_below(tys, r, er, out + 1),
                 j(sym(ran), λ s _ => FTm::Ran(r, tys, values, s, next, out + 1, fw.rest, m), ⟨kept, ⟨holds, refl⟩⟩)⟩⟩
         },
     }
@@ -1066,7 +1064,7 @@ theorem FTm::lend_sound_at(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>,
     Option::and_then_elim(P, trivial, Tm::check_true(FTm::own_first(vs)), λ _ => FTm::lend_helds(fw.w, fw.fsigs, base, g, ports, next, f, vs, args),
         λ first _ =>
     Option::and_then_elim(P, trivial, Ty::check_helds(tys, ps), λ _ => FTm::lend_result(fw.w, fw.fsigs, base, g, ports, next, f, vs, args), λ ok _ =>
-    Option::and_then_elim(P, trivial, r.check_one_word(tys), λ _ => FTm::lend_views(fw.w, fw.fsigs, base, g, ports, next, f, vs, args), λ er _ =>
+    Option::and_then_elim(P, trivial, r.check_returned(tys), λ _ => FTm::lend_views(fw.w, fw.fsigs, base, g, ports, next, f, vs, args), λ er _ =>
     Option::and_then_elim(P, trivial, FTm::views_ports(g, ports, vs, next), λ ats => FTm::lend_args(fw.w, fw.fsigs, base, g, ports, next, f, vs, args, ats),
         λ ats found =>
     Option::and_then_elim(P, trivial, FTm::lent_args(tys, g, ports, views_homes(FTm::views_built(ats, True, top)), ps, args),

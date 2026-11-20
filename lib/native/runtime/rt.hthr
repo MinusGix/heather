@@ -101,6 +101,9 @@ record EnumInfo {
     tag_of: (n: Nat) → n <= last → pick(Nat, λ n => n, of(n)) = n,
     convoy: (R: Type) → (Nat → R) → E → R,
     convoys: (R: Type) → (a: Nat → R) → (v: E) → convoy(R, a, v) = a(pick(Nat, λ n => n, v)),
+    // Every value's tag is a constructor's: what holding a word a call
+    // returned as the value it names needs.
+    bounded: (v: E) → pick(Nat, λ n => n, v) <= last,
 }
 
 fn EnumInfo::tag(self e: EnumInfo, v: e.E) → Nat { e.pick(Nat, λ n => n, v) }
@@ -127,14 +130,41 @@ fn EnumInfo::Names(self e: EnumInfo, x: BitVec(64), v: e.E) → Type { (x.toNat(
 fn EnumInfo::none() → EnumInfo {
     EnumInfo(True, 0, λ _ => trivial, λ R a _ => a(0), λ R a v => refl, λ v => refl,
         λ n => match n as λ k => k <= 0 → 0 = k { Zero => λ _ => refl, Succ(_) => λ never => false_elim(never) },
-        λ R a _ => a(0), λ R a v => refl)
+        λ R a _ => a(0), λ R a v => refl, λ _ => trivial)
 }
 
 // An enum of `last + 1` constructors as a judgment and a lowering read it:
 // only `last`, the tags its compares test (the generator's table before
 // the enum's own, `runtime_rec_table`).
+// The tags of an enum of `last + 1` constructors, each with its bound: the
+// enum a judgment reads before the enum's own (`EnumInfo::shape`).
+fn EnumInfo::Fin(last: Nat) → Type { Exists<Nat>(λ n => n <= last) }
+
+fn EnumInfo::fin(last, n: Nat, le: n <= last) → EnumInfo::Fin(last) { Exists(witness := n, proof := le) }
+
+theorem EnumInfo::fin_of_tag(last: Nat, v: EnumInfo::Fin(last)): EnumInfo::fin(last, v.witness.min(last), Nat::min_le_r(v.witness, last)) = v {
+    let e = Nat::min_eq_l(v.witness, last, v.proof);
+    j(sym(e), λ m _ => (q: m <= last) → EnumInfo::fin(last, m, q) = v,
+        λ q => cong_fn(λ (r: v.witness <= last) => EnumInfo::fin(last, v.witness, r), v.witness.le_unique(last, q, v.proof)))(
+        Nat::min_le_r(v.witness, last))
+}
+
+// A tag past `last` read as `last`'s constructor: every value's tag is at
+// most `last`, as `of` and the tag are inverse below it.
+theorem EnumInfo::bounded_by<E>(last: Nat, of: Nat → E, tag: E → Nat, of_tag: (v: E) → of(tag(v)) = v,
+    tag_of: (n: Nat) → n <= last → tag(of(n)) = n, of_min: (n: Nat) → of(n) = of(n.min(last))): (v: E) → tag(v) <= last {
+    λ v => {
+        let below = Nat::min_le_r(tag(v), last);
+        let back: (tag(of(tag(v).min(last))) = tag(v).min(last)) = tag_of(tag(v).min(last), below);
+        let same: (of(tag(v).min(last)) = v) = trans(sym(of_min(tag(v))), of_tag(v));
+        let tagged: (tag(v) = tag(v).min(last)) = j(same, λ y _ => tag(y) = tag(v).min(last), back);
+        j(sym(tagged), λ y _ => y <= last, below)
+    }
+}
+
 fn EnumInfo::shape(last: Nat) → EnumInfo {
-    EnumInfo(Nat, last, λ n => n, λ R a v => a(v), λ R a v => refl, λ v => refl, λ n _ => refl, λ R a v => a(v), λ R a v => refl)
+    EnumInfo(EnumInfo::Fin(last), last, λ n => EnumInfo::fin(last, n.min(last), Nat::min_le_r(n, last)), λ R a v => a(v.witness), λ R a v => refl,
+        λ v => EnumInfo::fin_of_tag(last, v), λ n le => Nat::min_eq_l(n, last, le), λ R a v => a(v.witness), λ R a v => refl, λ v => v.proof)
 }
 
 // Every index up to `m` passes `p`.
@@ -162,10 +192,13 @@ fn EnumInfo::of_ctors<E>(first: E, rest: List<E>, pick: (R: Type) → (Nat → R
     of_tag: (v: E) → Cons(first, rest).nth(pick(Nat, λ n => n, v).min(rest.len())).unwrap_or(first) = v,
     checked: Nat::all_upto(rest.len(), λ n => pick(Nat, λ k => k, Cons(first, rest).nth(n.min(rest.len())).unwrap_or(first)).same(n)) = True,
     convoy: (R: Type) → (Nat → R) → E → R, convoys: (R: Type) → (a: Nat → R) → (v: E) → convoy(R, a, v) = a(pick(Nat, λ n => n, v))) → EnumInfo {
-    EnumInfo(E, rest.len(), λ n => Cons(first, rest).nth(n.min(rest.len())).unwrap_or(first), pick, picks, of_tag,
-        λ n le => Nat::same_sound(pick(Nat, λ k => k, Cons(first, rest).nth(n.min(rest.len())).unwrap_or(first)), n,
-            Nat::all_upto_at(λ m => pick(Nat, λ k => k, Cons(first, rest).nth(m.min(rest.len())).unwrap_or(first)).same(m), rest.len(), checked, n, le)),
-        convoy, convoys)
+    let of = λ (n: Nat) => Cons(first, rest).nth(n.min(rest.len())).unwrap_or(first);
+    let tag_of = λ (n: Nat) (le: n <= rest.len()) => Nat::same_sound(pick(Nat, λ k => k, Cons(first, rest).nth(n.min(rest.len())).unwrap_or(first)), n,
+        Nat::all_upto_at(λ m => pick(Nat, λ k => k, Cons(first, rest).nth(m.min(rest.len())).unwrap_or(first)).same(m), rest.len(), checked, n, le));
+    let of_min = λ (n: Nat) => cong_fn(λ (m: Nat) => Cons(first, rest).nth(m).unwrap_or(first),
+        sym(Nat::min_eq_l(n.min(rest.len()), rest.len(), Nat::min_le_r(n, rest.len()))));
+    EnumInfo(E, rest.len(), of, pick, picks, of_tag, tag_of, convoy, convoys,
+        EnumInfo::bounded_by(rest.len(), of, λ v => pick(Nat, λ k => k, v), of_tag, tag_of, of_min))
 }
 
 // A value's tag is among the constructors' where `of` reads a tag past

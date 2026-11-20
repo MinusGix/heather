@@ -171,10 +171,10 @@ fn Ty::all_held_at(ts: List<Ty>, tys: Nat → RecInfo) → Bool {
 }
 
 // A signature a call passes and returns in words, a type held by its repr
-// and an enum's tag word among them (what `Tm::lower_call` checks, as
-// `Bool`).
+// and an enum's tag word among them, an enum returned where its tags fit a
+// word (what `Tm::lower_call` checks, as `Bool`).
 fn Sig::is_held_at(self s: Sig, tys: Nat → RecInfo) → Bool {
-    Ty::all_held_at(s.params, tys).and(s.result.is_one_word(tys))
+    Ty::all_held_at(s.params, tys).and(match s.result { Enum(i) => (tys(i).alts.last + 1).leb(Nat::pow(2, 64)), _ => s.result.is_one_word(tys) })
 }
 
 fn Op::judge(self o: Op) → Verdict {
