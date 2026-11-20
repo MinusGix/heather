@@ -1,0 +1,90 @@
+// A loop of the library's combinator read by the measured lowering
+// (docs/language/loop-combinator-design.md §6.1): `count_down` of
+// rt_loop_tests as a `Loop`, its body reflected by hand as `runtime fn`
+// reflection will read the step, and `Fun::Guarded` from
+// `Fun::guarded_of_loop`. What each loop owes beside conversions is its
+// step's twin with the two leaves as functions, and one theorem by `induct`
+// on the step. Tests, not library: nothing outside lib/_tests imports this
+// module.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import bitvec_nat;
+import rt;
+import function_ir;
+import function_ir_eval;
+import rt_lower;
+import rt_loop;
+import tactic;
+import loop;
+
+// count_down of rt_loop_tests as a combinator loop, its body reflected by
+// hand as `runtime fn` reflection will read the step.
+
+record CD { n: BitVec(64), acc: BitVec(64) }
+
+fn CD::left(self d: CD) → Nat { d.n.toNat() }
+
+fn CD::step(self d: CD) → Pass<CD, BitVec(64)>(CD::left, d) {
+    match h: d.n.eq_bit(BitVec::ofNat(0)) {
+        True => Done(d.acc),
+        False => Again(Lower(next := CD(n := d.n.sub(BitVec::ofNat(1)), acc := d.acc.add(d.n)), less := squash(bitvec_nat::toNat_sub_one_lt(d.n, h)))),
+    }
+}
+
+fn cd_loop(n, acc: BitVec(64)) → BitVec(64) { loop::Loop<CD, BitVec(64)>(measure := CD::left, step := CD::step).run(CD(n := n, acc := acc)) }
+
+fn cd_body() → Tm {
+    Let(Lit(Word(64), 0), Let(Prim(Eq(64), [2, 0]),
+        IfEq(0, Var(2), Let(Lit(Word(64), 1), Let(Prim(Sub(64), [4, 0]), Let(Prim(Add(64), [4, 5]), Call(0, [1, 0])))))))
+}
+
+fn cd_world() → World { World(RecInfo::none, [Sig([Word(64), Word(64)], Word(64))], Pair(cd_loop, trivial)) }
+
+fn cd_measure(ys: List<BitVec(64)>) → Nat { ys.head_or(BitVec::zero()).toNat() }
+
+fn cd_state(xs: List<BitVec(64)>) → CD { CD(n := xs.head_or(BitVec::zero()), acc := xs.drop(1).head_or(BitVec::zero())) }
+
+
+// The step with its two leaves as functions: what the reflected body reads,
+// leaf for leaf.
+fn CD::step_k<X>(self d: CD, again: Lower<CD>(CD::left, d) → X, done: BitVec(64) → X) → X {
+    match h: d.n.eq_bit(BitVec::ofNat(0)) {
+        True => done(d.acc),
+        False => again(Lower(next := CD(n := d.n.sub(BitVec::ofNat(1)), acc := d.acc.add(d.n)), less := squash(bitvec_nat::toNat_sub_one_lt(d.n, h)))),
+    }
+}
+
+// Matching on the step is the twin with those arms: one per way it goes.
+theorem CD::step_elim<X>(self d: CD, again: Lower<CD>(CD::left, d) → X, done: BitVec(64) → X):
+    (match d.step() { Again(b) => again(b), Done(r) => done(r) }) = d.step_k(again, done)
+{
+    induct CD::step(d) {
+        True => sym(CD::step_k::True(d, again, done, h)),
+        False => sym(CD::step_k::False(d, again, done, h)),
+    }
+}
+
+theorem cd_reads(n, acc: BitVec(64), again: List<BitVec(64)> → BitVec(64)):
+    Tm::out(RecInfo::none, Word(64), cd_body().tail_sem(cd_world(), 0, Word(64), λ (ys: List<BitVec(64)>) => Tm::into(RecInfo::none, Word(64), again(ys)),
+        Ty::bind_onto([Word(64), Word(64)], Nil), Ty::extend(RecInfo::none, [Word(64), Word(64)], Nil, trivial, [n, acc]))) =
+    cd_state([n, acc]).step_k(λ b => again([b.next.n, b.next.acc]), λ (r: BitVec(64)) => r) { refl }
+
+theorem cd_guarded(): Fun::Guarded([Word(64), Word(64)], Word(64), cd_body(), cd_world(), cd_loop, cd_measure) {
+    Fun::guarded_of_loop([Word(64), Word(64)], Word(64), cd_body(), cd_world(), cd_loop, cd_measure,
+        λ _ => loop::Loop<CD, BitVec(64)>(measure := CD::left, step := CD::step), cd_state, λ _ (s: CD) => [s.n, s.acc], λ (r: BitVec(64)) => r,
+        λ n acc s => refl, λ n acc s => refl, λ n acc s => refl, λ n acc => refl, λ n acc => refl,
+        λ xs again => cd_state(xs).step_k(λ b => again([b.next.n, b.next.acc]), λ (r: BitVec(64)) => r),
+        λ n acc again => cd_state([n, acc]).step_elim(λ b => again([b.next.n, b.next.acc]), λ (r: BitVec(64)) => r),
+        λ n acc again => refl)
+}
+
+theorem cd_loops(): Fun::MeasuredHolds([Word(64), Word(64)], Word(64), cd_world(), cd_loop,
+    Fun::lower_measured([], Word(64), [Word(64)], cd_body(), Word(64), cd_world(), 0)) {
+    Fun::measured_sound([], Word(64), [Word(64)], cd_body(), Word(64), cd_world(), 0, cd_loop, cd_measure,
+        λ n acc => BitVec::toNat_lt_pow(64, n), cd_guarded())
+}

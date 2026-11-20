@@ -459,7 +459,8 @@ pub(crate) fn induct(decl: &Decl, self_name: &str, eqs: &[BranchEquation], recur
     // -- the proof: `f`'s tests, each leaf its case ---------------------------
     let all: Vec<usize> = (0..eqs.len()).collect();
     let mut bits = 0usize;
-    let proof = tree(eqs, &cases, &all, 0, &[], &mut bits, span)?;
+    let goal = app(var(&motive, span), varying.iter().map(|&i| var(&decl.params[i].name, span)).collect(), span);
+    let proof = tree(eqs, &cases, &goal, &all, 0, &[], &mut bits, span)?;
     let mut body = block(proof, span);
     // A measured principle recurses where `f` does, in the same order, so
     // its calls owe `f`'s decrease obligations: the `on ?decN` clauses that
@@ -496,7 +497,7 @@ pub(crate) fn induct(decl: &Decl, self_name: &str, eqs: &[BranchEquation], recur
 /// The proof at the tests `group` (equation indices) share down to `depth`:
 /// the leaf's case where one equation is left at its end, else the test at
 /// `depth` with one arm per arm the group's equations take, in order.
-fn tree(eqs: &[BranchEquation], cases: &[Case], group: &[usize], depth: usize, sigma: &[(String, Expr)], bits: &mut usize, span: Span) -> Result<Expr, String> {
+fn tree(eqs: &[BranchEquation], cases: &[Case], goal: &Expr, group: &[usize], depth: usize, sigma: &[(String, Expr)], bits: &mut usize, span: Span) -> Result<Expr, String> {
     if let [k] = group
         && eqs[*k].path.len() == depth
     {
@@ -544,7 +545,7 @@ fn tree(eqs: &[BranchEquation], cases: &[Case], group: &[usize], depth: usize, s
                     }
                     None => var(&e, span),
                 };
-                let inner = tree(eqs, cases, &ks, depth + 1, sigma, bits, span)?;
+                let inner = tree(eqs, cases, goal, &ks, depth + 1, sigma, bits, span)?;
                 // Typed as the case states it, so a lifted decrease
                 // obligation whose `on` names `h` can quantify it: the
                 // walk's binder types are read off `f`'s own elaboration,
@@ -578,8 +579,13 @@ fn tree(eqs: &[BranchEquation], cases: &[Case], group: &[usize], depth: usize, s
                 }
                 None => subst_all(scrut, sigma),
             };
+            // The goal as the motive, unchanged in each arm: a case is
+            // handed its test's equation as it is, so nothing is refined,
+            // and a case whose type reads the test (`(h: b = False) → f(x)
+            // = g(h) → motive`) would be refined to one that does not check.
+            let motive = crate::measure::lam(&["__induct_tested"], subst_all(goal, sigma), span);
             Ok(Expr {
-                kind: ExprKind::Match { form: MatchForm::Match, generated: false, scrut: Box::new(scrut), eqbind: Some(e), motive: None, arms },
+                kind: ExprKind::Match { form: MatchForm::Match, generated: false, scrut: Box::new(scrut), eqbind: Some(e), motive: Some(Box::new(motive)), arms },
                 span,
             })
         }
@@ -595,7 +601,7 @@ fn tree(eqs: &[BranchEquation], cases: &[Case], group: &[usize], depth: usize, s
                 let step = &eqs[ks[0]].path[depth];
                 let PathTest::Result { ctor, written, .. } = &step.test else { return Err("a test's arms disagree".into()) };
                 let (h, fields) = step.params.split_last().ok_or("a test without its hypothesis")?;
-                let inner = tree(eqs, cases, &ks, depth + 1, sigma, bits, span)?;
+                let inner = tree(eqs, cases, goal, &ks, depth + 1, sigma, bits, span)?;
                 let mut stmts = vec![Stmt::Let { name: h.0.clone(), ty: Some(subst_ty_all(&h.1, sigma)), expr: var(&e, span), span, opaque: false }];
                 if let Some(w) = written {
                     stmts.push(Stmt::Let { name: w.clone(), ty: Some(subst_ty_all(&h.1, sigma)), expr: var(&h.0, span), span, opaque: false });
@@ -628,7 +634,7 @@ fn tree(eqs: &[BranchEquation], cases: &[Case], group: &[usize], depth: usize, s
                 };
                 let mut sigma = sigma.to_vec();
                 sigma.push((x.clone(), value));
-                let inner = tree(eqs, cases, &ks, depth + 1, &sigma, bits, span)?;
+                let inner = tree(eqs, cases, goal, &ks, depth + 1, &sigma, bits, span)?;
                 arms.push(Arm {
                     ctor: ctor.clone(),
                     default: false,

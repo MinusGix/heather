@@ -172,6 +172,23 @@ theorem count_down_is_loop(d: Down): count_down(d.n, d.acc) = Loop(measure := Do
     Loop(measure := Down::left, step := Down::step).unique(λ e => count_down(e.n, e.acc), λ e => e.step_agrees(), d)
 }
 
+// A step whose test's equation is handed on (a `match h:` on a word's test,
+// `h` passed to what the arm calls): `induct` follows it as well. Its
+// principle's cases each read the equation, so they are not refined by the
+// test, which would leave a case that does not check.
+fn needs_nonzero(n: u64, h: n.eq_bit(0) = False) → u64 { n }
+
+fn Down::drop(self d: Down) → u64 {
+    match h: d.n.eq_bit(0) { True => d.acc, False => needs_nonzero(d.n, h) }
+}
+
+theorem Down::drop_nonzero(self d: Down, ne: d.n.eq_bit(0) = False): d.drop() = d.n {
+    induct Down::drop(d) {
+        True => absurd(trans(sym(h), ne)),
+        False => refl,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Negative controls.
 
