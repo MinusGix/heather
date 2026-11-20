@@ -373,6 +373,17 @@ theorem ordinary_fetched_step<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>,
          ⟨refl, ⟨canonical_encoding_decodes(before.rip, instruction), instruction.admitted_runs(before, ok)⟩⟩⟩)
 }
 
+// The same of an instruction that may fault, where it does not: a DIV
+// whose quotient fits.
+theorem guarded_fetched_step<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, instruction: Instruction,
+    before: MachineState<M>, resident: CodeResident(fetch, before.memory, canonical_bytes(instruction), before.rip),
+    reads: instruction.reads_defined(before.flags.defined) = True, safe: instruction.faults(before.gprs) = False):
+    FetchedStep(fetch, data, before, execute_normal(decoded_canonical(instruction), before)) {
+    Exists(EmitOrdinary(instruction),
+        ⟨FetchedFrom(resident_readable(fetch, before.memory, canonical_bytes(instruction), before.rip, resident)),
+         ⟨refl, ⟨canonical_encoding_decodes(before.rip, instruction), canonical_execute_normal_is_allowed(instruction, before, reads, safe)⟩⟩⟩)
+}
+
 theorem resident_state<M>(fetch: FetchAccess<M>, bytes: List<BitVec(8)>, memory: M, address: BitVec(64),
     state: MachineState<M>, memory_same: state.memory = memory, rip_same: state.rip = address,
     resident: CodeResident(fetch, memory, bytes, address)): CodeResident(fetch, state.memory, bytes, state.rip) {
