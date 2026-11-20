@@ -199,6 +199,35 @@ lowering can go even for recursion.
 in an effectful program is `Io::iterate` of the step with `Lower` forgotten,
 equal to `CRet(run(s))` by one lemma from `Loop::rule`.
 
+### 6.1 Round 3 in stages
+
+Every counted `for` over words and every `mut self` loop in the library is
+in a `runtime fn` (the SHA-256 modules, the ports, the runtime tests); the
+one ordinary function with one is `induct_word_loop_tests`. So they move
+with round 3, not before it, and round 3 is staged so that each stage is
+a PR that leaves the native gates green:
+
+- **3a. The reflector reads the combinator; the elaborator stops lifting.**
+  In a `runtime fn` too, a `while`, a counted `for` and a `mut self` loop
+  elaborate to `Loop(…).run` (§5). The reflector reads
+  `Loop(m, f#step).run(init)` as today's measured `Fun`: the state's
+  fields are its words, an `Again(Lower(next := S(ā), …))` leaf is a
+  call of itself on `ā`, a `Done(e)` leaf is `e`. What `rt_loop` needs of
+  a measured function, `Fun::Guarded`, is proved once in the library from
+  `Loop::run_unfold` and the `less` each `Again` carries, where today
+  each function proves it from its own generated `#ext`/`#irrel`. The
+  lifting half of `loops.rs` and its companion family go. Tail mode stays
+  for this stage.
+- **3b. One loop node, agreement as a relation.** `Tm` gains the loop
+  node of §6; its lowering is the body, the moves and the flag; its
+  soundness is the pass relation, proved once over `Function::run` with
+  `Loop::rule`. `Tm::lower_tail`, `Fun::Guarded` and `rt_loop`'s two loop
+  theorems go; a recursion a user writes is read as a loop through
+  `Loop::unique`.
+- **3c.** The other four loop files onto the node (round 4 above).
+
+Stage 3a is the one `port_bits`'s two loop words need.
+
 ## 7. Bootstrapping
 
 Minus's fear: a bug that infects the next version. The loop's meaning is
