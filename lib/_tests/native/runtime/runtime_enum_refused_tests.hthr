@@ -2,8 +2,8 @@
 // (docs/native/runtime-fn-setups-design.md §16.16): an enum is passed in
 // as its tag word, matched on (`match` and `match h:`), built, returned
 // and passed to a call; an enum whose constructors carry 64-bit fields is
-// built and matched in a body and returned with one slot, and nothing
-// else yet. The accepted probes are runtime_enum_tests and
+// built and matched in a body, taken as its words and returned with one
+// slot, and nothing else yet. The accepted probes are runtime_enum_tests and
 // runtime_enum_payload_tests. Tests, not library: nothing imports this
 // module.
 
@@ -20,12 +20,23 @@ record Tagged { s: Shade, n: u64 }
 // expect-error: `Shade` has no runtime layout
 runtime fn tagged_n(t: Tagged) → u64 { t.n }
 
-// An enum with a payload is no parameter yet: its slots are words past
-// its tag, and a parameter is one word.
+// An enum with a payload is a parameter of several words, its tag word
+// and then its slots (runtime_enum_payload_tests), but only where every
+// slot is a 64-bit word: a bit's slot would be a word the caller could
+// pass any value in.
 inductive Pocket { Empty, Holds(n: u64) }
 
-// expect-error: a parameter that is not a word of at most 64 bits or an enum
+inductive Flag { Unset, Set(b: Bool) }
+
+// expect-error: a parameter that is not a word of at most 64 bits or an enum whose fields are 64-bit words
+runtime fn flag_n(f: Flag) → u64 { match f { Unset => 0, Set(b) => if b { 1 } else { 2 } } }
+
 runtime fn pocket_n(p: Pocket) → u64 { match p { Empty => 0, Holds(n) => n } }
+
+// A call passes each argument as one word: a function taking an enum's
+// several words is not called.
+// expect-error: a call
+runtime fn pocket_n_of(x: u64) → u64 { pocket_n(Holds(x)) }
 
 runtime fn pocket_of(x: u64) → Pocket { if x < 10 { Empty } else { Holds(x) } }
 

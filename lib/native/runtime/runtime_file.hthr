@@ -459,7 +459,7 @@ theorem Sig::links_answer(tys: Nat → RecInfo, srcs: List<List<BitVec(64)> → 
                 match k as λ i => Sig::at(Cons(s, rest), i).Words(tys) →
                     Ty::Answers(tys, Sig::at(Cons(s, rest), i).params, Sig::at(Cons(s, rest), i).result, Sig::get(tys, Cons(s, rest), cs, i),
                         λ ws => ans(link_at(Cons(l, ls) ++ more, i), ws)) {
-                    Zero => λ _ => Ty::answers_of_uncurry(tys, s.params, s.result, cs.fst, λ ws => ans(l, ws), λ xs len =>
+                    Zero => λ ok => Ty::answers_of_uncurry_words(tys, s.params, s.result, ok.left, cs.fst, λ ws => ans(l, ws), λ xs len =>
                         trans(agree(l, xs, j(sym(len), λ m _ => arity_fits(arity(l), m).IsTrue(), parts.left)),
                             cong_fn(λ (g: List<BitVec(64)> → BitVec(64)) => g(xs), heads))),
                     Succ(i) => λ ok => Sig::links_answer(tys, srcs, ans, arity, agree, more, rest, cs.snd, ls, tails, parts.right, i, ok),
@@ -558,7 +558,7 @@ theorem Compile::spanned<F>(f: F, c: Compile<F>(f), quiet: c.code.body.quiet().I
             let table = link_sources(Compile::table(f, c, b));
             let meaning = Ty::lent_at(at.tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed(b), f, b);
             let answered = Ty::answers_at(at.tys, c.reflected.params, c.reflected.result, meaning, λ xs => c.code.eval(table, xs, buffers := b),
-                c.agrees(b, table, at.calls_agree_own()), words, sym(c.reflected.params.len().matches_eq(words.len(), n)),
+                c.agrees(b, table, at.calls_agree_own()), words, sym(Ty::spans(at.tys, c.reflected.params).matches_eq(words.len(), n)),
                 Ty::all_open_admits(at.tys, c.reflected.params, open, words));
             let moved = c.code.eval_answers_over(b, table, Writers::words(other, b), c.world.callee_arity(),
                 λ k ws ok => trans(

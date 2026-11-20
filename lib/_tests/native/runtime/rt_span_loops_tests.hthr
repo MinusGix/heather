@@ -165,7 +165,7 @@ theorem count_compiled(span: List<BitVec(8)>, call: Answers(), agree: Tm::CallsA
     count_code().eval(call, [place, length, i, acc], buffers := [span]) = count_from(span, length, i, acc) {
     j(count_lowers(span), λ r _ => Fun::MeasuredHolds(count_words(), Word(64), count_world(span),
         λ (place2: BitVec(64)) (length2: BitVec(64)) (i2: BitVec(64)) (acc2: BitVec(64)) => count_at(span, place2, length2, i2, acc2), r),
-        count_loops(span))(call, agree, [place, length, i, acc], refl)
+        count_loops(span)).right(call, agree, [place, length, i, acc], refl)
 }
 
 // ---------------------------------------------------------------------------
