@@ -411,3 +411,63 @@ fn StructuredRegion::run(self region: StructuredRegion, call: Writers(), values:
         },
     }
 }
+
+// Whether every requirement a run meets holds (`defined_over`'s reading
+// of a run): each node's at the valuation it runs in, each pass's, and each
+// callee's at the file and words it is called with.
+fn run_nodes_defined(nodes: List<Node>, values: Valuation(), buffers: Buffers()) → Bool {
+    match nodes {
+        Nil => True,
+        Cons(node, rest) => {
+            let after = node.run(values, buffers);
+            node.defined(values) && run_nodes_defined(rest, after.values, after.buffers)
+        },
+    }
+}
+
+fn loop_run_defined(step: Valuation() → Buffers() → State, defined: Valuation() → Buffers() → Bool, parameters: List<Nat>,
+    count, exit: Nat, next: List<Nat>, remaining: Nat) → List<BitVec(64)> → Buffers() → Bool {
+    match remaining {
+        Zero => λ state buffers => True,
+        Succ(rest) => λ state buffers => {
+            let before = pass_valuation(parameters, count, rest + 1, state);
+            let after = step(before, buffers);
+            defined(before, buffers) && match after.values(1, exit).head_bit() {
+                False => loop_run_defined(step, defined, parameters, count, exit, next, rest, words_of(after.values, next), after.buffers),
+                True => True,
+            }
+        },
+    }
+}
+
+// Whether callee `f` is defined at the words, called over the file.
+fn RunDefines() → Type { Buffers() → Nat → List<BitVec(64)> → Bool }
+
+fn StructuredRegion::run_defined(self region: StructuredRegion, call: Writers(), defines: RunDefines(), values: Valuation(),
+    buffers: Buffers()) → Bool {
+    match region {
+        Dataflow(body) => run_nodes_defined(body.nodes, values, buffers),
+        Sequence(prefix, continuation) => {
+            let after = run_nodes(prefix.nodes, values, buffers);
+            run_nodes_defined(prefix.nodes, values, buffers) && continuation.run_defined(call, defines, after.values, after.buffers)
+        },
+        Compose(prefix, continuation) => {
+            let after = prefix.run(call, values, buffers);
+            prefix.run_defined(call, defines, values, buffers) && continuation.run_defined(call, defines, after.values, after.buffers)
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => match values(1, condition).head_bit() {
+            False => when_false.run_defined(call, defines, values, buffers),
+            True => when_true.run_defined(call, defines, values, buffers),
+        },
+        Lend(views, callee, arguments, _) => {
+            let bound = run_nodes(views_nodes(views), values, buffers);
+            run_nodes_defined(views_nodes(views), values, buffers)
+                && defines(viewed(views, bound.values, bound.buffers), callee, words_of(bound.values, views_homes(views) ++ arguments))
+        },
+        Call(callee, arguments, _) => defines(buffers, callee, words_of(values, arguments)),
+        Loop(inputs, bound, parameters, count, body, exit, next, _, _) =>
+            loop_run_defined(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held),
+                λ (pass: Valuation()) (held: Buffers()) => body.run_defined(call, defines, pass, held), parameters, count, exit, next,
+                values(64, bound).toNat(), words_of(values, inputs), buffers),
+    }
+}
