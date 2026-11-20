@@ -7,7 +7,7 @@
 // crates/syntax/tests/imperative_statements.rs: a parse error refuses the
 // whole file). Tests, not library: nothing outside lib/_tests imports
 // this module (docs/test-value-audit.md §4.5).
-import logic; import bool; import nat; import option; import list; import omega; import int;
+import logic; import bool; import nat; import option; import list; import omega; import int; import loop;
 
 // Straight-line reassignment: each `:=` is a new alias checked at the
 // local's declared type.
@@ -303,11 +303,13 @@ fn doubled_unless_big(xs: List<Nat>) → Nat {
 theorem doubled_unless_big_lit(): doubled_unless_big([1, 2]) = 6 { refl }
 theorem doubled_unless_big_returns(): doubled_unless_big([1, 200, 2]) = 0 { refl }
 
-// ---- `while c decreases m { … }` (§5.3): a recursive `f::run` ----
+// ---- `while c decreases m { … }` (§5.3): the loop combinator ----
+// (docs/language/loop-combinator-design.md §5: the state is `f::State`, a
+// pass is `f::step`, and the loop is `Loop(…).run` from the locals.)
 
-// Several locals: `f::run` takes them as separate parameters and returns
-// the state record; the measure obligation reads the condition from the
-// match's equation (`omega`, so this module imports `omega` and `int`).
+// Several locals: the state record holds each; the decrease reads the
+// condition from the test's equation (`omega`, so this module imports
+// `omega` and `int`).
 fn countdown(n: Nat) → List<Nat> {
     let mut m = n;
     let mut out: List<Nat> = List::Nil;
@@ -318,28 +320,29 @@ fn countdown(n: Nat) → List<Nat> {
     out
 }
 theorem countdown_lit(): countdown(3) = [1, 2, 3] { refl }
-// Neutral: the function is its run from the initial state.
-theorem countdown_is(n: Nat): countdown(n) = countdown::run(n, List::Nil).out { refl }
-theorem countdown_unfolds(n: Nat): countdown(n) = countdown::run(n, List::Nil).out { countdown::unfold(n) }
-theorem countdown_stops(out: List<Nat>): countdown::run(0, out) = countdown::State(0, out) { refl }
-// The run's equation (§7.3), at a neutral state: one step under the
-// condition, the state itself otherwise.
-theorem countdown_run_unfolds(m: Nat, out: List<Nat>):
-    countdown::run(m, out) = (match h: decide_bit<1 <= m>() {
-        True => countdown::run(m - 1, List::Cons(m, out)),
-        False => countdown::State(m, out),
-    }) {
-    countdown::run::unfold(m, out)
+// Neutral: a pass at a state is one step under the condition, and leaves
+// at the state itself otherwise.
+theorem countdown_stops(out: List<Nat>): countdown::step(countdown::State(0, out)) = Done(countdown::State(0, out)) { refl }
+// What the loop answers is the state its last pass leaves: `m` is 0 there,
+// by the rule, at any start. A pass's two ways are `induct` on the step.
+theorem countdown_pass(s: countdown::State): Pass::Keeps(λ (t: countdown::State) => t.m, s, countdown::step(s), λ _ => True, λ (r: countdown::State) => r.m = 0) {
+    induct countdown::step(s) {
+        True => trivial,
+        False => omega,
+    }
+}
+theorem countdown_ends(n: Nat): Loop<countdown::State, countdown::State>(measure := λ (s: countdown::State) => s.m, step := countdown::step).run(countdown::State(n, List::Nil)).m = 0 {
+    Loop<countdown::State, countdown::State>(measure := λ (s: countdown::State) => s.m, step := countdown::step).rule(λ _ => True, λ (r: countdown::State) => r.m = 0,
+        λ s _ => countdown_pass(s), countdown::State(n, List::Nil), trivial)
 }
 
-// One local: the run returns it.
+// One local: the state holds it.
 fn drain(n: Nat) → Nat {
     let mut i = n;
     while 1 <= i decreases i { i := i - 1 }
     i
 }
 theorem drain_lit(): drain(4) = 0 { refl }
-theorem drain_is(n: Nat): drain(n) = drain::run(n) { refl }
 
 // A capture, an open element type, a measure over two locals and a
 // statement `if` in the body.
@@ -397,7 +400,7 @@ theorem iclimb_lit(): iclimb(NegSucc(2), OfNat(2)) = 5 { refl }
 theorem iclimb_past(): iclimb(OfNat(3), OfNat(1)) = 0 { refl }
 
 // The guard alone does not make a non-decreasing body decrease.
-// expect-error: this recursive call must decrease the measure
+// expect-error: this pass of the loop must decrease the measure `k`
 fn drain_bool_stuck(n: Nat) → Nat {
     let mut k = n;
     while !k.same(0) decreases k { k := k + 0 }
@@ -405,7 +408,7 @@ fn drain_bool_stuck(n: Nat) → Nat {
 }
 
 // A body that does not decrease the measure is refused at its obligation.
-// expect-error: this recursive call must decrease the measure
+// expect-error: this pass of the loop must decrease the measure `m`
 fn stuck(n: Nat) → Nat {
     let mut m = n;
     let mut k = 0;

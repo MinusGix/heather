@@ -3,7 +3,7 @@
 // back to it over a word measure (issues/decreases-word-measures-by-hand.md).
 // Tests, not library: nothing outside lib/_tests imports this module
 // (docs/test-value-audit.md §4.5).
-import logic; import bool; import nat; import int; import omega; import bitvec; import bitvec_nat; import bitvec_omega; import bitvec_shift_nat; import list;
+import logic; import bool; import nat; import int; import omega; import bitvec; import bitvec_nat; import bitvec_omega; import bitvec_shift_nat; import list; import loop;
 
 // ---- The test, read from the context as it is written ----
 

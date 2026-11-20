@@ -62,6 +62,9 @@ pub(crate) struct Family {
     /// lowering writes.
     pub(crate) unfold: Option<Decl>,
     pub(crate) designations: Vec<(String, String)>,
+    /// Where a combinator loop's step owes its decrease, and the measure:
+    /// a refusal there is reworded to name it.
+    pub(crate) decreases: Vec<(Span, String)>,
 }
 
 fn loop_parts(e: &Expr) -> Option<(&Expr, &LamBinder, &Block, Vec<&str>)> {
@@ -234,6 +237,8 @@ struct Lift<'a> {
     known: Vec<(Ty, usize)>,
     /// Whether loops are given the facts they cannot change at all.
     free: bool,
+    /// Each combinator loop's decrease: its span and the measure written.
+    decreases: Vec<(Span, String)>,
 }
 
 /// An invariant fact after its loop: `fact` over the loop's state, the
@@ -244,6 +249,10 @@ struct Held {
     receiver: String,
     local: String,
     proof: Expr,
+    /// A combinator loop's fact is a field of its answer, which also holds
+    /// every local by name: `Some(field)`, and the fact restated by field
+    /// (docs/language/loop-combinator-design.md §5).
+    field: Option<(String, Vec<String>)>,
 }
 
 /// How a loop's result holds its state, for the `\0proj`s after it: the
@@ -468,11 +477,21 @@ impl<'a> Lift<'a> {
                     // after it as the facts in scope (`s[j] := key` after a
                     // loop that keeps `j <= i`).
                     for (k, held) in std::mem::take(&mut self.held).into_iter().enumerate() {
-                        let fact = at_result(&held.fact, &[(&held.receiver, "after"), (&held.local, "value")], &|at| var(&name, at));
+                        let (fact, proof) = match &held.field {
+                            Some((field, locals)) => {
+                                let pairs: Vec<(&str, &str)> = locals.iter().map(|l| (l.as_str(), l.as_str())).collect();
+                                let read = Expr {
+                                    kind: ExprKind::Dot { recv: Box::new(var(&name, span)), name: field.clone(), tyargs: vec![], args: None, named: vec![] },
+                                    span,
+                                };
+                                (at_result(&held.fact, &pairs, &|at| var(&name, at)), read)
+                            }
+                            None => (at_result(&held.fact, &[(&held.receiver, "after"), (&held.local, "value")], &|at| var(&name, at)), held.proof),
+                        };
                         self.next_if += 1;
                         let local = format!("__held{}_{k}", self.next_if);
                         scope.push(Local { name: local.clone(), written: Some(fact.clone()), value: None });
-                        stmts.push(Stmt::Let { name: local, ty: Some(fact), expr: held.proof, span, opaque: true });
+                        stmts.push(Stmt::Let { name: local, ty: Some(fact), expr: proof, span, opaque: true });
                     }
                     if let Some((s, init)) = alias {
                         let read = Expr {
@@ -842,6 +861,12 @@ impl Lift<'_> {
         if let Some((r, Some(k))) = self.receiver_in(&vars) {
             return self.lift_while_method(span, body, captures, r, (vars[k], state_tys[k].clone()), cond, measure, facts, explicit);
         }
+        // Outside a prefix generator, a `while` is the loop combinator
+        // (docs/language/loop-combinator-design.md §5). A `runtime fn`'s
+        // loops are lifted until its reflector reads the combinator.
+        if self.free {
+            return self.lift_while_loop(span, body, captures, &vars, &state_tys, cond, measure, facts, explicit);
+        }
         let (run, state, run_designed, state_designed) = self.names("run");
         let tyargs: Vec<Ty> = self.decl.tyvars.iter().map(|t| named_ty(&t.name, vec![], span)).collect();
         let single = vars.len() == 1;
@@ -907,6 +932,243 @@ impl Lift<'_> {
             .chain(facts.iter().map(|f| found_at_entry(f, span)))
             .collect();
         Ok((call(var(&run, span), entry, span), Shape::of(single), None))
+    }
+
+    /// A `while` as the loop combinator (docs/language/loop-combinator-design.md §5):
+    ///
+    /// ```text
+    /// record f#State(c̄ the fields need) { v̄, __invN_k: ∥P_k∥ }
+    /// fn f#step(c̄, #s: f#State) → Pass<f#State, f#State>(λ #t => m[#t], #s) {
+    ///     let v̄ = #s.v̄; let __invN_k = #s.__invN_k;
+    ///     match c { True => { body; Again(Lower(next := f#State(v̄, found), less := found)) }, False => Done(#s) }
+    /// }
+    /// ```
+    ///
+    /// and the loop `Loop(measure := λ #t => m[#t], step := λ #t =>
+    /// f#step(c̄, #t)).run(f#State(v̄, found))`. The facts are fields of the
+    /// state, so the step never meets a state where one fails; each is found
+    /// where a pass goes round, under the tests that lead there, as the
+    /// decrease is. After the loop each invariant fact is read off its answer.
+    #[allow(clippy::too_many_arguments)]
+    fn lift_while_loop(
+        &mut self,
+        span: Span,
+        body: &Block,
+        captures: Vec<(String, Ty)>,
+        vars: &[&str],
+        state_tys: &[Ty],
+        cond: &Expr,
+        measure: &Expr,
+        facts: Vec<Param>,
+        explicit: usize,
+    ) -> R<(Expr, Shape, Option<Expr>)> {
+        let (step, state, step_designed, state_designed) = self.names("step");
+        // The state's value parameters: the captures its fields' types name.
+        let field_tys: Vec<Ty> = state_tys.iter().cloned().chain(facts.iter().map(|f| f.ty.clone())).collect();
+        let valparams: Vec<(String, Ty)> = captures
+            .iter()
+            .filter(|(n, _)| field_tys.iter().any(|t| measure::mentions_ty(t, n)))
+            .cloned()
+            .collect();
+        let tyargs: Vec<Ty> = self.decl.tyvars.iter().map(|t| named_ty(&t.name, vec![], span)).collect();
+        // `f#State<T̄>(c̄)`: a value parameter is applied as `Bytes(n)` is.
+        let state_ty = if valparams.is_empty() {
+            Ty { kind: TyKind::Named { name: state.clone(), args: tyargs.clone() }, span }
+        } else {
+            let head = if tyargs.is_empty() {
+                var(&state, span)
+            } else {
+                Expr { kind: ExprKind::TyApp { head: Box::new(var(&state, span)), args: tyargs.clone() }, span }
+            };
+            Ty { kind: TyKind::OfExpr(Box::new(call(head, valparams.iter().map(|(n, _)| var(n, span)).collect(), span))), span }
+        };
+        let fields: Vec<String> = vars.iter().map(|v| v.to_string()).chain(facts.iter().map(|f| f.name.clone())).collect();
+        self.parts.push(Part::State(InductiveDecl {
+            name: state.clone(),
+            params: self.decl.tyvars.iter().map(|t| t.name.clone()).collect(),
+            valparams: valparams.iter().map(|(n, t)| param(n, t.clone(), span)).collect(),
+            varies: None,
+            ctors: vec![CtorDecl {
+                name: state.clone(),
+                fields: fields
+                    .iter()
+                    .zip(&field_tys)
+                    .map(|(v, t)| FieldDecl { name: Some(v.clone()), ty: t.clone(), default: None, span })
+                    .collect(),
+                result: None,
+                span,
+            }],
+            is_record: true,
+            is_codata: false,
+            index: None,
+            span,
+        }));
+        self.designations.push((state_designed, state.clone()));
+        let field_of = |recv: &str, f: &str, at: Span| Expr {
+            kind: ExprKind::Dot { recv: Box::new(var(recv, at)), name: f.to_string(), tyargs: vec![], args: None, named: vec![] },
+            span: at,
+        };
+        // The measure at a state `#t`: each local read off it.
+        let measure_at = |recv: &str, at: Span| -> Expr {
+            let reads: Vec<(String, Expr)> = vars.iter().map(|v| (v.to_string(), field_of(recv, v, at))).collect();
+            let map: Vec<(&str, &Expr)> = reads.iter().map(|(n, e)| (n.as_str(), e)).collect();
+            measure::subst(measure, &map, &mut Vec::new())
+        };
+        let lam = |binder: &str, ty: &Ty, body: Expr, at: Span| Expr {
+            kind: ExprKind::Lam {
+                binders: vec![LamBinder { name: binder.to_string(), ty: Some(ty.clone()), implicit: false, span: at }],
+                body: Box::new(body),
+            },
+            span: at,
+        };
+        let measure_fn = |at: Span| lam("__loop_t", &state_ty, measure_at("__loop_t", at), at);
+        let found = |ty: &Ty, at: Span| -> Expr {
+            // `{ let __found: P = <closer>; squash(__found) }`: the fact
+            // stated as written, where the pass's locals are its new
+            // values, and proved as a `decreases` obligation is (`omega`,
+            // then `bv_omega` over words, which it sees only outside the
+            // squash), the facts in scope released.
+            let (ty, squash) = match &ty.kind {
+                TyKind::Squash(p) => (&**p, true),
+                _ => (ty, false),
+            };
+            let result = if squash { call(var("squash", at), vec![var("__found", at)], at) } else { var("__found", at) };
+            Expr {
+                kind: ExprKind::Block(Box::new(Block {
+                    stmts: vec![Stmt::Let {
+                        name: "__found".into(),
+                        ty: Some(ty.clone()),
+                        expr: var(measure::CLOSER, at),
+                        span: at,
+                        opaque: true,
+                    }],
+                    result: Box::new(result),
+                    ons: vec![],
+                    span: at,
+                })),
+                span: at,
+            }
+        };
+        let squashed = |t: Ty, at: Span| Ty { kind: TyKind::Squash(Box::new(t)), span: at };
+        let lt = |a: Expr, b: Expr, at: Span| Ty {
+            kind: TyKind::OfExpr(Box::new(call(var("nat::Nat::Lt", at), vec![a, b], at))),
+            span: at,
+        };
+        // The step: the locals and facts read off the state, then the test.
+        let mut stmts: Vec<Stmt> = fields
+            .iter()
+            .map(|f| Stmt::Let { name: f.clone(), ty: None, expr: field_of("__loop_s", f, span), span, opaque: false })
+            .collect();
+        let mut again = body.clone();
+        let end = again.result.span;
+        let next = call(
+            var(&state, end),
+            vars.iter().map(|v| var(v, end)).chain(facts.iter().map(|f| found(&f.ty, end))).collect(),
+            end,
+        );
+        // At the measure's span, so a refusal names it (`Family::decreases`).
+        let at = measure.span;
+        let less = found(&squashed(lt(measure.clone(), measure_at("__loop_s", at), at), at), at);
+        self.decreases.push((at, crate::traits::render_expr(measure)));
+        let lower = Expr {
+            kind: ExprKind::App {
+                head: Box::new(var("Lower", end)),
+                args: vec![],
+                named: vec![
+                    heather_syntax::NamedArg { name: "next".into(), name_span: end, expr: next, span: end },
+                    heather_syntax::NamedArg { name: "less".into(), name_span: end, expr: less, span: end },
+                ],
+                explicit: false,
+                goal_oriented: false,
+            },
+            span: end,
+        };
+        *again.result = call(var("Again", end), vec![lower], end);
+        let done = || call(var("Done", span), vec![var("__loop_s", span)], span);
+        let tested = self.tested(cond, Expr { kind: ExprKind::Block(Box::new(again)), span: body.span }, &done, span);
+        // `Pass<S, S>(measure, #s)`.
+        let pass_head = Expr {
+            kind: ExprKind::TyApp { head: Box::new(var("Pass", span)), args: vec![state_ty.clone(), state_ty.clone()] },
+            span,
+        };
+        let pass_ty = Ty { kind: TyKind::OfExpr(Box::new(call(pass_head, vec![measure_fn(span), var("__loop_s", span)], span))), span };
+        let mut params: Vec<Param> = self.solver_params();
+        params.extend(captures.iter().map(|(n, t)| param(n, t.clone(), span)));
+        params.push(param("__loop_s", state_ty.clone(), span));
+        self.parts.push(Part::Decl(Decl {
+            kind: DeclKind::Fn,
+            is_meta: false,
+            is_interface: false,
+            partial: None,
+            unfolding: Vec::new(),
+            is_evidence: false,
+            value: false,
+            elaborates: None,
+            name: step.clone(),
+            tyvars: self.decl.tyvars.clone(),
+            params,
+            result: pass_ty,
+            decreases: None,
+            body: Block { stmts, result: Box::new(tested), ons: vec![], span },
+            span,
+        }));
+        self.designations.push((step_designed, step.clone()));
+        // The loop, from the locals as they are and the facts found here.
+        let start = call(
+            var(&state, span),
+            vars.iter().map(|v| var(v, span)).chain(facts.iter().map(|f| found(&f.ty, span))).collect(),
+            span,
+        );
+        let mut step_head = var(&step, span);
+        if !self.decl.tyvars.is_empty() {
+            step_head = Expr {
+                kind: ExprKind::TyApp {
+                    head: Box::new(step_head),
+                    args: self.decl.tyvars.iter().map(|t| named_ty(&t.name, vec![], span)).collect(),
+                },
+                span,
+            };
+        }
+        let step_args: Vec<Expr> = self
+            .solver_params()
+            .iter()
+            .map(|p| var(&p.name, span))
+            .chain(captures.iter().map(|(n, _)| var(n, span)))
+            .chain(std::iter::once(var("__loop_t", span)))
+            .collect();
+        let step_fn = lam("__loop_t", &state_ty, call(step_head, step_args, span), span);
+        let looped = Expr {
+            kind: ExprKind::App {
+                head: Box::new(Expr {
+                    kind: ExprKind::TyApp { head: Box::new(var("Loop", span)), args: vec![state_ty.clone(), state_ty.clone()] },
+                    span,
+                }),
+                args: vec![],
+                named: vec![
+                    heather_syntax::NamedArg { name: "measure".into(), name_span: span, expr: measure_fn(span), span },
+                    heather_syntax::NamedArg { name: "step".into(), name_span: span, expr: step_fn, span },
+                ],
+                explicit: false,
+                goal_oriented: false,
+            },
+            span,
+        };
+        let run = Expr {
+            kind: ExprKind::Dot { recv: Box::new(looped), name: "run".into(), tyargs: vec![], args: Some(vec![start]), named: vec![] },
+            span,
+        };
+        // Each invariant fact, read off the answer after the loop.
+        self.held = facts[..explicit]
+            .iter()
+            .map(|f| Held {
+                fact: f.ty.clone(),
+                receiver: String::new(),
+                local: String::new(),
+                proof: var("", span),
+                field: Some((f.name.clone(), vars.iter().map(|v| v.to_string()).collect())),
+            })
+            .collect();
+        Ok((run, Shape::Record, None))
     }
 
     /// A `while` whose state is the receiver `r` of a `mut self` method and
@@ -1048,6 +1310,7 @@ impl Lift<'_> {
                 receiver: r.name.clone(),
                 local: o.to_string(),
                 proof: call(var(&theorem, span), entry.clone(), span),
+                field: None,
             })
             .collect();
         self.methods.push(run);
@@ -1737,6 +2000,7 @@ pub(crate) fn lower(decl: &Decl, tys: &dyn BinderTys, ranges: Ranges, free: bool
         held: Vec::new(),
         known: Vec::new(),
         free,
+        decreases: Vec::new(),
     };
     let mut scope: Vec<Local> =
         decl.params.iter().map(|p| Local { name: p.name.clone(), written: Some(p.ty.clone()), value: None }).collect();
@@ -1781,5 +2045,5 @@ pub(crate) fn lower(decl: &Decl, tys: &dyn BinderTys, ranges: Ranges, free: bool
         span,
     };
     parts.push(Part::Decl(Decl { body, ..decl.clone() }));
-    Ok(Family { parts, methods: lift.methods, unfold: (!measured).then_some(unfold), designations: lift.designations })
+    Ok(Family { parts, methods: lift.methods, unfold: (!measured).then_some(unfold), designations: lift.designations, decreases: lift.decreases })
 }
