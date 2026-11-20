@@ -87,7 +87,15 @@ COLUMNS = {
     # (docs/infrastructure/instrumentation-design.md §4): a rise, not a use, and exact only
     # at one kernel worker. The row with the largest raised the peak.
     "peak MB":   (["peak_growth_kb"], 1e3),
+    # The most one kernel query's value arena held (`arena_peak_bytes`,
+    # issues/kernel-memory-outruns-fuel.md): a peak, so a row's is the
+    # largest of its queries' and rows are compared by max, not summed. The
+    # row nearest `ARENA_BYTES_LIMIT` (2 GiB) is the one that would be
+    # refused first.
+    "arena MB":  (["arena_peak_bytes"], 2 ** 20),
 }
+# Columns that are peaks: the over-rows line takes their max, not their sum.
+PEAKS = {"arena MB"}
 DEFAULT = ["total ms", "gate ms", "misses", "queries", "steps"]
 
 # Which columns are counts and which are seconds. A count is reproducible to
@@ -201,8 +209,9 @@ def cmd_read(args, cols):
         totals = t.scoped("run")
         over = t.scoped("item")
         print()
+        agg = lambda c: max((t.value(r, c) for r in over), default=0) if c in PEAKS else sum(t.value(r, c) for r in over)
         print("sum over item rows:  " + "  ".join(
-            f"{c} {fmt(c, sum(t.value(r, c) for r in over))}" for c in cols))
+            f"{c} {fmt(c, agg(c))}" for c in cols))
         for r in totals:
             print("run row:             " + "  ".join(f"{c} {fmt(c, t.value(r, c))}" for c in cols))
         print(f"({len(over)} item rows in {t.path})")

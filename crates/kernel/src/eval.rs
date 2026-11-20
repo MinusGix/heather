@@ -76,8 +76,9 @@ use crate::value::program::ContextProgram;
 pub const ARENA_BYTES_LIMIT: usize = 2 << 30;
 
 /// How often, in units of fuel, [`Eval`] reads its arena's size against
-/// [`ARENA_BYTES_LIMIT`]: reading it walks the regions' chunks, a few dozen
-/// loads, which is noise once per this many steps.
+/// [`ARENA_BYTES_LIMIT`]. Reading it is one load (the arena tallies its
+/// bytes as it allocates); the interval keeps the comparison off the step
+/// path, and a step's allocations are far below what it lets through.
 const ARENA_CHECK_EVERY: u64 = 1024;
 
 mod bits;

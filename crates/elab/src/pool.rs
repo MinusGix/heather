@@ -111,6 +111,7 @@ pub(crate) struct Outcome {
 }
 
 fn run(index: usize, item: Rc<Deferred>) -> Outcome {
+    let peaks = kstats::peak_scope_open();
     let before = kstats::snapshot();
     let started = std::time::Instant::now();
     // A panic in a worker must not poison the queue or wedge the join. It is
@@ -131,7 +132,9 @@ fn run(index: usize, item: Rc<Deferred>) -> Outcome {
     unsealed.sort_unstable();
     unsealed.dedup();
     let ns = started.elapsed().as_nanos() as u64;
-    Outcome { index, item, verdict, ns, kernel: kstats::snapshot().since(&before), unsealed }
+    let kernel = kstats::snapshot().since(&before);
+    kstats::peak_scope_close(peaks);
+    Outcome { index, item, verdict, ns, kernel, unsealed }
 }
 
 // ---------------------------------------------------------------------------
