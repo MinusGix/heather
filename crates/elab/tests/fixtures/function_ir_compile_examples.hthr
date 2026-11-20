@@ -77,7 +77,8 @@ theorem caller_returns<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: 
         λ (i: Nat) (s: MachineState<M>) => stack.Passed([a, b], i, s) ∧ 40 <= i,
         stack.CalleePost(caller(a, b))) {
     compiled_returns<M>(calls(), plan_program(calls()), program_room_planned(calls()), calls_code(), calls_lowers(), calls_evaluable(),
-        fetch, data, last, origin, stack, 1, trivial, [a, b], trivial, caller(a, b), caller_agrees(a, b))
+        fetch, data, last, origin, stack, 1, trivial, [a, b], trivial,
+        program_total_defined(calls(), [], trivial, 1, [a, b]), caller(a, b), caller_agrees(a, b))
 }
 
 // The arguments rotated, a cycle no order of moves completes without a

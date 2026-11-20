@@ -76,7 +76,8 @@ theorem relay_returns<M>(placement: List<Place>, program: Prog, lowered: lower_p
         λ (i: Nat) (s: MachineState<M>) => stack.Passed([a, b, c, d, e, f, g, h], i, s) ∧ 184 <= i,
         stack.CalleePost(program_eval(eight(), 1, [a, b, c, d, e, f, g, h]))) {
     compiled_returns<M>(eight(), placement, program_room(eight()), program, lowered, trivial, fetch, data, last, origin, stack, 1, trivial,
-        [a, b, c, d, e, f, g, h], trivial, program_eval(eight(), 1, [a, b, c, d, e, f, g, h]), refl)
+        [a, b, c, d, e, f, g, h], trivial, program_total_defined(eight(), Nil, trivial, 1, [a, b, c, d, e, f, g, h]),
+        program_eval(eight(), 1, [a, b, c, d, e, f, g, h]), refl)
 }
 
 // And mix's, which calls it: mix(1, 2) returns 14 in RAX.
@@ -86,7 +87,7 @@ theorem mix_returns<M>(placement: List<Place>, program: Prog, lowered: lower_pro
         λ (i: Nat) (s: MachineState<M>) => stack.Passed([w(1), w(2)], i, s) ∧ 320 <= i,
         stack.CalleePost(w(14))) {
     compiled_returns<M>(eight(), placement, program_room(eight()), program, lowered, trivial, fetch, data, last, origin, stack, 2, trivial,
-        [w(1), w(2)], trivial, w(14), eight_evaluates())
+        [w(1), w(2)], trivial, program_total_defined(eight(), Nil, trivial, 2, [w(1), w(2)]), w(14), eight_evaluates())
 }
 
 // Nine is refused, the function and the call each with the count named.

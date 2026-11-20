@@ -1422,11 +1422,13 @@ theorem {prefix}_returns<M>(machine: Machine<M>, {slices}: Slice{comma_words}{ty
             // The root's row of the tables is `{prefix}_marks`, by evaluation.
             format!("Ending::returns_marked{through}<M>({programs}, {prefix}_placement(), {prefix}_rooms(), {prefix}_counts(), addresses, {prefix}_tables(), {prefix}_code(),
         {prefix}_lowers(), {prefix}_evaluable(), {stem}_marked(), machine.fetch, machine.data, last, origin, machine.stack, top, Cons(span, rest), {f}, trivial,{keeps} loan,
-        {list}, trivial, rest, {call}, {prefix}_runs(span, rest{comma}{arguments}))", arguments = parameters.join(", "), keeps = keeps(f))
+        {list}, trivial, program_total_run_defined({prefix}_program(), {prefix}_total(), Cons(span, rest), {f}, {list}), rest, {call},
+        {prefix}_runs(span, rest{comma}{arguments}))", arguments = parameters.join(", "), keeps = keeps(f))
         } else {
             format!("Ending::returns_written{through}<M>({programs}, {prefix}_placement(), {prefix}_rooms(), {prefix}_counts(), addresses, {prefix}_marks(), {prefix}_code(),
         {prefix}_lowers(), {prefix}_evaluable(), {stem}_within(), machine.fetch, machine.data, last, origin, machine.stack, top, Cons(span, rest), loan, {f}, trivial,{keeps}
-        {list}, trivial, rest, {call}, {prefix}_runs(span, rest{comma}{arguments}))", arguments = parameters.join(", "), keeps = keeps(f))
+        {list}, trivial, program_total_run_defined({prefix}_program(), {prefix}_total(), Cons(span, rest), {f}, {list}), rest, {call},
+        {prefix}_runs(span, rest{comma}{arguments}))", arguments = parameters.join(", "), keeps = keeps(f))
         }));
     } else if lent {
         // The file is any (`now`), lying anywhere (`addresses`) under the
@@ -1453,7 +1455,8 @@ theorem {prefix}_returns_over<M>(machine: Machine<M>, top: Nat, addresses: List<
         Ending(word := {call}, buffers := now)) {{
     λ origin last => compiled_returns_lent{through}<M>({programs}, {prefix}_placement(), {prefix}_rooms(), {prefix}_lending(addresses, now), {prefix}_code(),
         {prefix}_lowers(), {prefix}_evaluable(), {quiet}, machine.fetch, machine.data, last, origin, machine.stack, top, loan, {f}, trivial,{keeps}
-        {list}, trivial, now, {call}, {prefix}_agrees(now{comma}{arguments}))
+        {list}, trivial, now, program_total_defined({prefix}_program(), now, {prefix}_total(), {f}, {list}), {call},
+        {prefix}_agrees(now{comma}{arguments}))
 }}
 
 // The same read as the function's signature (`Prog::ComputesOn`,
@@ -1485,7 +1488,8 @@ theorem {prefix}_returns<M>(machine: Machine<M>, {slices}: Slice{comma_words}{ty
 // address (`Stack::Wrote`): on every machine, loaded anywhere.
 theorem {prefix}_returns<M>(machine: Machine<M>{comma}{typed}): {prefix}_code().Computes(machine, {f}, {room}, {list}, {call}) {{
     compiled_computes<M>({prefix}_program(), {prefix}_placement(), {prefix}_rooms(), {prefix}_code(), {prefix}_lowers(), {prefix}_evaluable(),
-        machine, {f}, trivial, {list}, trivial, {call}, {prefix}_agrees({arguments}))
+        machine, {f}, trivial, {list}, trivial, program_total_defined({prefix}_program(), Nil, {prefix}_total(), {f}, {list}), {call},
+        {prefix}_agrees({arguments}))
 }}
 
 // The same at every argument list: the code implements the source function
@@ -1511,11 +1515,11 @@ theorem {prefix}_implements<M>(machine: Machine<M>): {prefix}_code().Implements(
         let proved = if lent {
             format!("compiled_returns_unlent{through}<M>({programs}, {prefix}_placement(), {prefix}_rooms(), {prefix}_counts(), {prefix}_code(), {prefix}_lowers(),
         {prefix}_evaluable(), {quiet}, machine.fetch, machine.data, last, origin, machine.stack, {g}, trivial,{keeps} refl, {list}, trivial,
-        {call}({arguments}), {symbol}_native_agrees({arguments}))", keeps = keeps(g))
+        program_total_defined({prefix}_program(), [], {prefix}_total(), {g}, {list}), {call}({arguments}), {symbol}_native_agrees({arguments}))", keeps = keeps(g))
         } else {
             format!("compiled_returns<M>({prefix}_program(), {prefix}_placement(), {prefix}_rooms(), {prefix}_code(), {prefix}_lowers(), {prefix}_evaluable(),
-        machine.fetch, machine.data, last, origin, machine.stack, {g}, trivial, {list}, trivial, {call}({arguments}),
-        {symbol}_native_agrees({arguments}))")
+        machine.fetch, machine.data, last, origin, machine.stack, {g}, trivial, {list}, trivial,
+        program_total_defined({prefix}_program(), Nil, {prefix}_total(), {g}, {list}), {call}({arguments}), {symbol}_native_agrees({arguments}))")
         };
         text.push_str(&format!("
 theorem {symbol}_native_entry_at(): asm_labels({prefix}_code())({label}) = {at} {{ refl }}
@@ -1590,7 +1594,11 @@ theorem {prefix}_scans_{k}(): program_scan_at({program}.drop({d}), {table}.drop(
     }
     text.push_str(&format!("theorem {prefix}_evaluable(): program_evaluable({program}).IsTrue() {{
     program_scan_at_evaluable({program}, {table}, program_scan_at_drop_zero({program}, {table}, {prefix}_scans_{last}()))
-}}", last = functions - 1));
+}}
+
+// No node of the program requires anything of its operands, so it is
+// defined at every argument list (`program_total_defined`).
+theorem {prefix}_total(): program_total({program}).IsTrue() {{ trivial }}", last = functions - 1));
     text
 }
 
