@@ -24,14 +24,16 @@ this issue first proposed.
 
 ## Scope (the note's §6)
 
-- Calls between statements first ([[rt-effectful-callees]]): an `ETm`
-  calls an `EFun`, lowered to `Perform`.
-- Self and mutual calls: the program states `levels`; `Fun::depth`,
-  defined once in `rt`, is the nesting a call needs; the published theorem
-  is the function's value wherever `f::depth(x) <= levels`, and a stop at
-  the first refused call otherwise.
-- Pure recursion through the statement lane; recursion lifts its callers
-  to statements.
+- Pure recursion first: statements read with their calls answered
+  (`Stmt::thread_by`); `ETm` calls a pure procedure, lowered to
+  `Perform`; the procedure's answer at `k` levels proved once by
+  induction on the levels; the levels in the co tree.
+- The generator: the program states `levels`; `Fun::depth`, defined once
+  in `rt`, is the nesting a call needs; the published theorem is the
+  function's value wherever `f::depth(x) <= levels`, and a stop at the
+  first refused call otherwise.
+- Then calls between `Io` functions ([[rt-effectful-callees]]) with a
+  buffer contract, and recursion over `Io` through them.
 
 ## What it assumes from elsewhere
 

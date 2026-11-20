@@ -126,16 +126,37 @@ other's.
 
 ## 6. Steps
 
-1. **Calls between statements** (`rt-effectful-callees`): `ETm` calls an
-   `EFun`, lowered to `Perform`, sound once; a program of two `Io`
-   functions compiles. No recursion.
-2. **Self and mutual calls, with levels:** the generator admits a cycle,
-   the program states `levels`, `Fun::depth` and the theorem of §4.
-   `port_depth` compiles, runs to its value within the levels and stops
-   one past.
-3. **Pure recursion by the statement lane**, and the lifting rule of §2;
-   a recursive-descent recogniser over a byte span as the example.
-4. **Guarantee 4**, separately: a proved `f::depth(x) <= g(size)`, the room
+Reordered after reading the `Io` lowering (2026-11-20): a pure callee
+leaves the world and every buffer as they were, so its call is answered
+by a value or a stop and nothing else, while an `Io` callee's own buffers
+share the program's one file of buffers with its caller's, which a
+contract for it must sort out first. So pure recursion comes first.
+
+1. **Statements read with their calls answered.** `Stmt::thread` today does
+   nothing at a `Perform` (`Stmt::straight` refuses it). A threading that
+   takes each call's answer as a function of the caller's environment
+   (`Stmt::thread_by`), and its reading theorem under the premise that
+   each call's tree reads as its answer, is the statement-level piece the
+   rest stands on.
+2. **A pure recursive function as a procedure.** `ETm` gains a call of a
+   pure procedure on word variables, its result a fresh word; the lowering
+   emits `Perform`, and `ETm::lower_sound` gains its case from the premise
+   of step 1. The procedure's own body is the function's term with each
+   self-call such a node. Its answer at `k` levels is the function's value
+   where `Fun::depth` fits and the call-depth stop otherwise, proved once
+   by induction on the levels.
+3. **The levels reach the co tree.** `Source::tree_co` charges calls in
+   bytes as the compiled program does; with the charges of
+   `Source::charges_room`, a call within the levels is never refused
+   there either, which makes the answer of step 2 the procedure's tree.
+4. **The generator.** The reflector reads a non-tail self-call as the new
+   node, the program states `levels`, and `f::depth` and the theorem of
+   §4 are published. `port_depth` compiles, runs to its value within the
+   levels and stops one past; then a recursive-descent recogniser over a
+   byte span.
+5. **Calls between `Io` functions** (`rt-effectful-callees`), with a
+   buffer contract, and recursion over `Io` through them.
+6. **Guarantee 4**, separately: a proved `f::depth(x) <= g(size)`, the room
    computed and checked once at startup (the room is a cheap formula in
    the levels since #812).
 
