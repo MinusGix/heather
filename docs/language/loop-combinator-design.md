@@ -252,6 +252,51 @@ measured `Fun`), so those two need either a two-word result for the loop's
 function or stage 3b, whose node keeps the state in the loop's homes and
 never makes it a value. 3b is the one that fixes them for good.
 
+### 6.2 Stage 3b as built: the loop node
+
+What 3a taught: the kernel will not commute a `match` on a step's result
+into the step's own tests, and a `runtime fn`'s instance is pinned by
+*conversion* (`Setup::compile`'s `pinned` is an equation of curried
+functions, and there is no funext to prove one any other way). So the
+loop's meaning in a `runtime fn` must be a term that the reflected node's
+meaning converts to, with no theorem in between. That fixes the design:
+
+- **A proof-free iteration in the library.** `loop::Step<S> { Next(s),
+  Stop(s) }` and `Loop::steps(fuel, step: S → Step<S>, s) → S`:
+  `steps(0, s) = s`, `steps(k + 1, s) = match step(s) { Next(t) =>
+  steps(k, t), Stop(r) => r }`. Running out answers the state it got to,
+  so no value is invented. `Loop::steps_run` proves it is `Loop::run`
+  wherever the measure is below the fuel and the step agrees with the
+  loop's (one `split_all` per loop, as 3a's `elim`).
+- **The elaborator writes a `runtime fn`'s loop as that iteration.** The
+  state is the loop's generated record (`f#State`), also for one local, and
+  the answer is the state: `loop::Loop::steps(2^64, λ s => f#loop#step(c̄,
+  s), f#State(v̄))`, inline in the function's body, the step a function of
+  its own whose leaves are `Next(f#State(v̄′))` and `Stop(f#State(v̄))`. The
+  loop's `Loop` (`f#loop#of`), its `elim` and `f#loop#run`, the equation
+  of the iteration with `of(c̄).run(…)` that every proof about the function
+  rewrites by, are generated beside it. Nothing about the loop is a
+  separate function of the program any more.
+- **One node in the runtime terms.** `Tm::Loop(init, body)`: the state is
+  variable `init` (a word or a record of words), `body` sees it as
+  variable 0 and ends in leaves that are either `Again(a)` (go round with
+  variable `a` as the state) or any other term (stop with it). Its meaning
+  is `Loop::steps(2^64, λ s => body.pass_sem(…, s), init)`, so the pin of a
+  function with loops in it is still a conversion, and the instance is a
+  plain function's.
+- **Its lowering is a loop region.** The state's homes are the region's
+  parameters, a pass is the body lowered with `Again` as moves into the
+  homes and a cleared flag, any other leaf as its value and a set flag,
+  and the region is given `2^64 - 1` passes, the exhausted branch running
+  the body once more, which together are the `2^64` the meaning allows.
+  Its soundness is by induction on the passes and never mentions a
+  measure: the measure appears only in `Loop::steps_run`, about Heather
+  terms. `Tm::lower_tail`, `Fun::Guarded`, the measured shape and its
+  generator instance are what this replaces for loops.
+
+`port_fib` and `port_bits` compile because a state of two words is a
+record held in the loop's homes, never a function's result.
+
 ## 7. Bootstrapping
 
 Minus's fear: a bug that infects the next version. The loop's meaning is

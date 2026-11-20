@@ -682,6 +682,7 @@ fn RSt::at_depth(self st: RSt, t: Tm) → Tm {
         IfEq(c, yes, no) => IfEq(st.index(c), yes, no),
         Byte(k, i, length) => Byte(k, st.index(i), st.index(length)),
         Pick(i, c, arms, eq) => Pick(i, st.index(c), arms, eq),
+        Iterate(init, test, body) => Iterate(st.index(init), test, body),
         _ => t,
     }
 }
@@ -703,7 +704,8 @@ fn RSt::finish(self st: RSt, h: Handle, operand: Bool, node: Tm) → Pair<RSt, T
         False => Pair(st, st.at_depth(node)),
         True => match node {
             Var(l) => Pair(st, Var(l)),
-            _ => match (match node { Lit(_, _) => None, If(_, _, _) => None, IfEq(_, _, _) => None, Pick(_, _, _, _) => None, _ => rt_memo(st.memo, node) }) {
+            _ => match (match node { Lit(_, _) => None, If(_, _, _) => None, IfEq(_, _, _) => None, Pick(_, _, _, _) => None, Iterate(_, _, _) => None,
+                _ => rt_memo(st.memo, node) }) {
                 Some(l) => Pair(RSt(st.depth, st.lets, st.memo, Cons(Pair(h.id, l), st.handles), st.locals, st.funs), Var(l)),
                 None => Pair(RSt(st.depth + 1, Cons(st.at_depth(node), st.lets), Cons(Pair(node, st.depth), st.memo),
                     Cons(Pair(h.id, st.depth), st.handles), st.locals, st.funs), Var(st.depth)),
@@ -2637,6 +2639,7 @@ fn Tm::show(self t: Tm) → String {
         Case(c, zero, succ) => "Case(" ++ rt_nat(c) ++ ", " ++ zero.show() ++ ", " ++ succ.show() ++ ")",
         Byte(k, i, length) => "Byte(" ++ rt_nat(k) ++ ", " ++ rt_nat(i) ++ ", " ++ rt_nat(length) ++ ")",
         Pick(i, c, arms, eq) => "Pick(" ++ rt_nat(i) ++ ", " ++ rt_nat(c) ++ ", " ++ arms.show() ++ match eq { True => ", True)", False => ", False)" },
+        Iterate(init, test, body) => "Iterate(" ++ rt_nat(init) ++ ", " ++ test.show() ++ ", " ++ body.show() ++ ")",
     }
 }
 

@@ -39,6 +39,7 @@ import option;
 import pair;
 import bitvec;
 import function_ir_operation;
+import loop;
 
 // ---------------------------------------------------------------------------
 // Types.
@@ -649,6 +650,13 @@ inductive Tm {
     // constructor's arm the default (docs/native/runtime-fn-setups-design.md
     // §16.16).
     Pick(i: Nat, c: Nat, arms: Tm, eq: Bool),
+    // A `while` loop (docs/language/loop-combinator-design.md §6.2): its
+    // state starts as variable `init` (a word, or a record of words);
+    // `test` and `body` see the state as variable 0. While `test` holds the
+    // state becomes `body`'s value, at the state's code; when it fails the
+    // state is the loop's answer. Its meaning is `Loop::steps` of
+    // `Step::turn(test, body, s)`, at most `Tm::passes()` of them.
+    Iterate(init: Nat, test: Tm, body: Tm),
 }
 
 record Sig { params: List<Ty>, result: Ty }
@@ -751,6 +759,7 @@ fn Tm::ty(self t: Tm, w: World, g: List<Ty>) → Ty {
         Case(_, zero, _) => zero.ty(w, g),
         Byte(_, _, _) => Word(8),
         Pick(i, _, arms, _) => arms.ty(w, Cons(Enum(i), g)),
+        Iterate(init, _, _) => Ty::at(g, init),
     }
 }
 
@@ -770,6 +779,12 @@ fn Tm::step(w: World, e: Ty, k: Nat)
 fn Tm::convoy(T: Type, c: Bool, yes: T, no: T) → T {
     (match c as λ b => (c = b) → T { False => λ _ => no, True => λ _ => yes })(refl)
 }
+
+// How many passes a loop is given: `2^64 - 1`, the most a 64-bit count
+// reaches (`Tm::iter_region`), and at least every measure that is a 64-bit
+// word's `toNat`. A `while` loop stops at the state it tested, so that is
+// enough (`loop::Loop::steps_stays`).
+fn Tm::passes() → Nat { 18446744073709551615 }
 
 // The meaning of a term, at the code it synthesizes.
 fn Tm::sem(self t: Tm, w: World) → (g: List<Ty>) → Env(w.tys, g) → t.ty(w, g).sem(w.tys) {
@@ -806,6 +821,12 @@ fn Tm::sem(self t: Tm, w: World) → (g: List<Ty>) → Env(w.tys, g) → t.ty(w,
         Pick(i, c, arms, eq) => λ g env =>
             w.tys(i).alts.choose(eq, arms.ty(w, Cons(Enum(i), g)).sem(w.tys), λ n => arms.sem(w, Cons(Enum(i), g), Pair(w.tys(i).alts.of(n), env)),
                 Ty::cast(w.tys, Ty::at(g, c), Enum(i), Env::get(w.tys, g, env, c))),
+        Iterate(init, test, body) => λ g env => loop::Loop::steps(Tm::passes(),
+            λ (s: Ty::at(g, init).sem(w.tys)) => loop::Step::turn(
+                Ty::cast(w.tys, test.ty(w, Cons(Ty::at(g, init), g)), Bit, test.sem(w, Cons(Ty::at(g, init), g), Pair(s, env))),
+                λ _ => Ty::cast(w.tys, body.ty(w, Cons(Ty::at(g, init), g)), Ty::at(g, init), body.sem(w, Cons(Ty::at(g, init), g), Pair(s, env))),
+                s),
+            Env::get(w.tys, g, env, init)),
     }
 }
 
@@ -914,6 +935,10 @@ fn Tm::same(self t: Tm) → Tm → Bool {
         Byte(k, i, length) => λ u => match u { Byte(k2, i2, length2) => k.same(k2).and(i.same(i2)).and(length.same(length2)), _ => False },
         Pick(i, c, arms, eq) => λ u => match u {
             Pick(i2, c2, arms2, eq2) => i.same(i2).and(c.same(c2)).and(arms.same(arms2)).and(match eq { True => eq2, False => !eq2 }),
+            _ => False,
+        },
+        Iterate(init, test, body) => λ u => match u {
+            Iterate(init2, test2, body2) => init.same(init2).and(test.same(test2)).and(body.same(body2)),
             _ => False,
         },
     }

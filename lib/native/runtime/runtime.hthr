@@ -214,6 +214,9 @@ fn Tm::judge(self t: Tm, sigs: List<Sig>, tys: Nat → RecInfo) → Verdict {
         Case(_, _, _) => Refused("a `match` on a `Nat` that is not a loop's fuel: only a fuel recursion's top `match` is lowered"),
         Byte(_, _, _) => Ok,
         Pick(_, _, arms, _) => arms.judge(sigs, tys),
+        // A `while` loop: its state and the context it reads are carried
+        // as words (`Tm::lower_iterate`).
+        Iterate(_, test, body) => test.judge(sigs, tys).and(body.judge(sigs, tys)),
     }
 }
 
@@ -233,6 +236,7 @@ fn Tm::judge_tail(self t: Tm, sigs: List<Sig>, tys: Nat → RecInfo) → Verdict
         Case(c, zero, succ) => Case(c, zero, succ).judge(sigs, tys),
         Byte(k, i, length) => Byte(k, i, length).judge(sigs, tys),
         Pick(i, c, arms, eq) => Pick(i, c, arms, eq).judge(sigs, tys),
+        Iterate(init, test, body) => Iterate(init, test, body).judge(sigs, tys),
     }
 }
 
@@ -1422,6 +1426,7 @@ fn Tm::quote(self t: Tm, q: RtQ) → Expr {
         Case(c, zero, succ) => ap(runtime_at(q.tm, 10), [NatLit(c), zero.quote(q), succ.quote(q)]),
         Byte(k, i, length) => ap(runtime_at(q.tm, 11), [NatLit(k), NatLit(i), NatLit(length)]),
         Pick(i, c, arms, eq) => ap(runtime_at(q.tm, 12), [NatLit(i), NatLit(c), arms.quote(q), q.boolean(eq)]),
+        Iterate(init, test, body) => ap(runtime_at(q.tm, 13), [NatLit(init), test.quote(q), body.quote(q)]),
     }
 }
 

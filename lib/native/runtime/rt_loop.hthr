@@ -96,6 +96,7 @@ fn Tm::tail_sem(self t: Tm, w: World, skip: Nat, res: Ty, again: List<BitVec(64)
         Case(c, zero, succ) => λ g env => Tm::leaf(Case(c, zero, succ), w, res, g, env),
         Byte(k, i, length) => λ g env => Tm::leaf(Byte(k, i, length), w, res, g, env),
         Pick(i, c, arms, eq) => λ g env => Tm::leaf(Pick(i, c, arms, eq), w, res, g, env),
+        Iterate(init, test, body) => λ g env => Tm::leaf(Iterate(init, test, body), w, res, g, env),
     }
 }
 
@@ -114,6 +115,7 @@ theorem Tm::tail_sem_ext(self t: Tm, w: World, skip: Nat, res: Ty, k1, k2: List<
         Case(_, _, _) => λ g env => refl,
         Byte(_, _, _) => λ g env => refl,
         Pick(_, _, _, _) => λ g env => refl,
+        Iterate(_, _, _) => λ g env => refl,
         Call(f, args) => match f as λ f2 => (g: List<Ty>) → (env: Env(w.tys, g)) →
             Tm::tail_sem(Call(f2, args), w, skip, res, k1, g, env) = Tm::tail_sem(Call(f2, args), w, skip, res, k2, g, env) {
             Zero => λ g env => same(Tm::words(w, g, env, args.drop(skip))),
@@ -396,6 +398,7 @@ fn Tm::lower_tail(self t: Tm, w: World, skip: Nat, res: Ty, flag: Nat, kept, nex
         Case(c, zero, succ) => Tm::lower_leaf(Case(c, zero, succ), w, res, flag, nexts, g, ports, next),
         Byte(k, i, length) => Tm::lower_leaf(Byte(k, i, length), w, res, flag, nexts, g, ports, next),
         Pick(i, c, arms, eq) => Tm::lower_leaf(Pick(i, c, arms, eq), w, res, flag, nexts, g, ports, next),
+        Iterate(init, test, body) => Tm::lower_leaf(Iterate(init, test, body), w, res, flag, nexts, g, ports, next),
     }
 }
 
@@ -580,6 +583,8 @@ theorem Tm::tail_sound(self t: Tm, w: World, skip: Nat, res: Ty, er: res.OneWord
             Tm::lower_leaf_sound(Byte(k, i, length), w, skip, res, er, flag, kept, nexts, g, ports, next, λ again env => refl),
         Pick(i, c, arms, eq) => λ g ports next =>
             Tm::lower_leaf_sound(Pick(i, c, arms, eq), w, skip, res, er, flag, kept, nexts, g, ports, next, λ again env => refl),
+        Iterate(init, test, body) => λ g ports next =>
+            Tm::lower_leaf_sound(Iterate(init, test, body), w, skip, res, er, flag, kept, nexts, g, ports, next, λ again env => refl),
         Call(f, args) => match f as λ f2 => (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →
             Tm::TailHolds(Call(f2, args), w, skip, res, flag, kept, nexts, g, ports, next, Tm::lower_tail(Call(f2, args), w, skip, res, flag, kept, nexts, g, ports, next)) {
             Zero => λ g ports next => Tm::lower_again_sound(Call(Zero, args), w, skip, res, flag, kept, nexts, g, ports, next, args.drop(skip), λ again env => refl),
@@ -615,65 +620,6 @@ theorem Tm::tail_sound(self t: Tm, w: World, skip: Nat, res: Ty, er: res.OneWord
             λ again env => Tm::convoy_match(res.sem(w.tys), Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c)),
                 yes.tail_sem(w, skip, res, again, g, env), no.tail_sem(w, skip, res, again, g, env))),
     }
-}
-
-// ---------------------------------------------------------------------------
-// Ids in a run: `Fun::param_ids(ps, m)` is `m, m+1, …` below `Fun::past(ps, m)`.
-
-theorem Tm::differs_of_ne(a, b: Nat, ne: a ≠ b): a.differs(b).IsTrue() {
-    match a.eq_dec(b) as λ d => Bool::IsTrue(match d { Inl(_) => False, Inr(_) => True }) {
-        Inl(e) => false_elim(ne(e)),
-        Inr(_) => trivial,
-    }
-}
-
-theorem Fun::ids_len(ps: List<Ty>): (m: Nat) → Fun::param_ids(ps, m).len() = ps.len() {
-    match ps { Nil => λ m => refl, Cons(_, rest) => λ m => cong_fn(λ (k: Nat) => k + 1, Fun::ids_len(rest, m + 1)) }
-}
-
-// An id below the run or past it is none of it.
-theorem Fun::absent_ids(ps: List<Ty>): (m, id: Nat) → (id < m) ∨ (Fun::past(ps, m) <= id) → absent(id, Fun::param_ids(ps, m)).IsTrue() {
-    match ps {
-        Nil => λ m id _ => trivial,
-        Cons(_, rest) => λ m id out => {
-            let ne: (id ≠ m) = match out {
-                Inl(lt) => Nat::ne_of_lt(id, m, lt),
-                Inr(ge) => Nat::ne_of_gt(id, m, Nat::lt_of_lt_of_le(m, Fun::past(rest, m + 1), id, Fun::past_ge(rest, m + 1), ge)),
-            };
-            let later: (id < m + 1) ∨ (Fun::past(rest, m + 1) <= id) = match out {
-                Inl(lt) => Inl(Nat::lt_trans(id, m, m + 1, lt, m.lt_succ_self())),
-                Inr(ge) => Inr(ge),
-            };
-            Bool::is_true_and_intro(id.differs(m), absent(id, Fun::param_ids(rest, m + 1)), Tm::differs_of_ne(id, m, ne),
-                Fun::absent_ids(rest, m + 1, id, later))
-        },
-    }
-}
-
-theorem Fun::ids_distinct(ps: List<Ty>): (m: Nat) → distinct(Fun::param_ids(ps, m)).IsTrue() {
-    match ps {
-        Nil => λ m => trivial,
-        Cons(_, rest) => λ m => Bool::is_true_and_intro(absent(m, Fun::param_ids(rest, m + 1)), distinct(Fun::param_ids(rest, m + 1)),
-            Fun::absent_ids(rest, m + 1, m, Inl(m.lt_succ_self())), Fun::ids_distinct(rest, m + 1)),
-    }
-}
-
-// Ids of a signature in two parts.
-theorem Fun::past_append(ks, ws: List<Ty>): (m: Nat) → Fun::past(ks ++ ws, m) = Fun::past(ws, Fun::past(ks, m)) {
-    match ks { Nil => λ m => refl, Cons(_, rest) => λ m => Fun::past_append(rest, ws, m + 1) }
-}
-
-theorem Fun::ids_append(ks, ws: List<Ty>): (m: Nat) →
-    Fun::param_ids(ks ++ ws, m) = Fun::param_ids(ks, m) ++ Fun::param_ids(ws, Fun::past(ks, m)) {
-    match ks { Nil => λ m => refl, Cons(_, rest) => λ m => cong_fn(λ (l: List<Nat>) => Cons(m, l), Fun::ids_append(rest, ws, m + 1)) }
-}
-
-theorem Fun::past_first(ks, ws: List<Ty>, m: Nat): Fun::past(ks, m) <= Fun::past(ks ++ ws, m) {
-    j(sym(Fun::past_append(ks, ws, m)), λ y _ => Fun::past(ks, m) <= y, Fun::past_ge(ws, Fun::past(ks, m)))
-}
-
-theorem Fun::words_append(values: Valuation(), xs, ys: List<Nat>): words_of(values, xs ++ ys) = words_of(values, xs) ++ words_of(values, ys) {
-    match xs { Nil => refl, Cons(x, rest) => cong_fn(λ (l: List<BitVec(64)>) => Cons(values(64, x), l), Fun::words_append(values, rest, ys)) }
 }
 
 // Words read back where they are bound, as `Fun::BoundWords`.
@@ -1584,6 +1530,7 @@ fn Tm::calls_self(self t: Tm) → Bool {
         Call(f, _) => match f { Zero => True, Succ(_) => False },
         Case(_, zero, succ) => zero.calls_self() || succ.calls_self(),
         Pick(_, _, arms, _) => arms.calls_self(),
+        Iterate(_, test, body) => test.calls_self() || body.calls_self(),
         _ => False,
     }
 }
@@ -1694,6 +1641,8 @@ theorem Tm::lower_tail_static(self t: Tm, w: World, cs: Sig::Sems(w.tys, w.sigs)
         Case(c, zero, succ) => λ g ports next => Tm::lower_leaf_static(Case(c, zero, succ), w, cs, spans, res, flag, nexts, g, ports, next),
         Byte(k, i, length) => λ g ports next => Tm::lower_leaf_static(Byte(k, i, length), w, cs, spans, res, flag, nexts, g, ports, next),
         Pick(i, c, arms, eq) => λ g ports next => Tm::lower_leaf_static(Pick(i, c, arms, eq), w, cs, spans, res, flag, nexts, g, ports, next),
+        Iterate(init, test, body) => λ g ports next =>
+            Tm::lower_leaf_static(Iterate(init, test, body), w, cs, spans, res, flag, nexts, g, ports, next),
         Call(f, args) => match f as λ f2 => (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →
             Tm::lower_tail(Call(f2, args), w.over(cs, spans), skip, res, flag, kept, nexts, g, ports, next) =
                 Tm::lower_tail(Call(f2, args), w, skip, res, flag, kept, nexts, g, ports, next) {
