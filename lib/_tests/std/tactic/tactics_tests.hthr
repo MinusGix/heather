@@ -1,0 +1,11 @@
+// One import brings every tactic bare (docs/language/modules-design.md §3.9).
+import tactics;
+
+theorem by_omega(n: Nat): n + 0 = n { omega }
+
+theorem by_grind(a, b: Nat, h: a = b): b = a { by grind() }
+
+// A name two tactic modules declare is left out of the umbrella, and the
+// closure still reaches it qualified.
+// expect-error: unbound name `node_of`
+fn clashed() -> Nat { node_of }
