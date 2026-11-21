@@ -1,5 +1,5 @@
 ---
-title: Pass an enum as a record's field, and export wide results to C
+title: Export wide results to C, take records with enum fields, count slots
 status: open
 labels: [native, runtime-fn, compiler]
 area: heather-in-heather
@@ -23,16 +23,26 @@ each stands after §16.18.
 - **A count among the slots.** Still refused: a `Nat` round-trips through a
   word only below 2^64, so its contract needs a premise that it fits, which
   no caller states.
-- **An enum as a record's field.** Still refused. `Ty::Flat` is free of the
-  type table, since the table's records are built from it; the table splits
-  into enums first (payload slots only) and records over them, a record's
-  enum field crossing as the enum's words inline.
+- **An enum as a record's field.** Done (§16.19) for an enum without a
+  payload, held in its tag word: the table splits into enums and records
+  over them (`Table`), and a record with one is built, returned, read back
+  from a call and its field matched (`runtime_enum_field_tests`), and
+  returned to C (`examples/x86-native/enum_fields.hthr`). Still refused:
+  such a record as a parameter (its words come from a caller, and a word
+  that names no constructor does not read back, `Table::round`), and an
+  enum with a payload as a field (its slots would cross inline after the
+  tag).
 - **A result of more than two words exported to C.** Still refused by
   `compile-x86` (`runtime_shape`). System V returns such a structure
-  through a pointer the caller passes in RDI and expects back in RAX; it
-  needs an entry that shifts the arguments, calls, stores the answer
-  registers through the pointer, and a machine contract that memory changes
-  exactly there, proved once for every word count.
+  through a pointer the caller passes in RDI and expects back in RAX. The
+  program can already store words into a span it is lent (`WideStore`),
+  so the export is a wrapper function in the program that calls the
+  record's function and stores its words into a span of `8k` bytes. What
+  is missing is a lent span whose length is fixed rather than passed: a
+  lent function's span homes are its first parameters, two a span
+  (`lent_homes`, function_ir_lower_reads), and C passes only the
+  address. A home whose length is a constant port, with the borrow's byte
+  count as the premise, makes the wrapper's words `[address, args…]`.
 - **Records with two narrow fields side by side at a C boundary.** Refused
   by `compile-x86` on purpose: C packs them into one eightbyte, one
   register, where a record here crosses a word a field (`Ty::slots_share`).

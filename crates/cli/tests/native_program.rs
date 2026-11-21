@@ -627,6 +627,52 @@ int main(void) {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+// A record with an enum field (docs/native/runtime-fn-setups-design.md
+// §16.19) returned to C: the enum's tag word in RAX, which C reads as the
+// enum's `int`, and the word in RDX.
+#[test]
+fn a_record_with_an_enum_field_crosses_as_a_c_structure() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = root.join(format!("target/native-enum-fields-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let assembly = dir.join("enum_fields.s");
+    let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
+        .args(["compile-x86", "examples/x86-native/enum_fields.hthr", "signal", "-o"]).arg(&assembly)
+        .args(heather_cli::showcase::native_image_args()).args(["--kernel-workers", "1"])
+        .output().unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let certificate = std::fs::read_to_string(dir.join("enum_fields.certificate.hthr")).unwrap();
+    for claim in ["RecInfo::enum_word(enum_fields::signal::world.tys, 1, enum_fields::signal(a0).light)", "[enum_fields::signal(a0).at]"] {
+        assert!(certificate.contains(claim), "missing {claim}");
+    }
+    let driver = dir.join("main.c");
+    std::fs::write(&driver, r#"
+#include <stdint.h>
+#include <stdio.h>
+typedef enum { Red, Amber, Green } Light;
+typedef struct { Light light; uint64_t at; } Signal;
+extern Signal signal(uint64_t);
+int main(void) {
+    uint64_t xs[] = {0, 9, 10, 19, 20, 1000, UINT64_MAX};
+    for (unsigned i = 0; i < 7; ++i) {
+        Signal s = signal(xs[i]);
+        Light want = xs[i] < 10 ? Red : xs[i] < 20 ? Amber : Green;
+        if (s.light != want || s.at != xs[i] + 1) return 1;
+    }
+    puts("7 calls passed");
+    return 0;
+}
+"#).unwrap();
+    let binary = dir.join("enum_fields");
+    let linked = Command::new("cc").args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(&driver).arg(&assembly).arg("-o").arg(&binary).output().unwrap();
+    assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
+    let run = Command::new(&binary).output().unwrap();
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stdout));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 // Two narrow fields side by side share an eightbyte in C, one register, so
 // compile-x86 refuses such a record rather than certify a word a field.
 #[test]

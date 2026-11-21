@@ -2135,12 +2135,7 @@ stated at every word (`runtime_low`).
 
 **Still refused, and how each would go.**
 
-- *An enum as a record's field.* `Ty::Flat` must stay free of the type
-  table, since the table's records are built from it. The table splits:
-  enums first (their payloads are slots, leaves only), then records over
-  them, with a record's enum field flat as the enums table's value and
-  crossing as the enum's words inline. A record and an enum are then both
-  a code of several words.
+- *An enum as a record's field.* Built in §16.19.
 - *A result of more than two words exported to C.* System V returns such a
   structure through memory: the caller passes a pointer in RDI and expects
   it back in RAX. The machine code already returns every word in the answer
@@ -2158,3 +2153,78 @@ calls; an enum whose payloads hold a `u8`, a `Bool` and a word; a `Bool`
 payload; both kinds of parameter in a function lent a span), the call
 section of `runtime_narrow_tests` (`calls_digit` and the other narrow and
 `Bool` arguments), and `count_result_world` in `rt_lower_tests`.
+
+### 16.19 An enum as a record's field: the table split (built 2026-11-21)
+
+Minus (2026-11-21, "Everything in one PR"): a record holds an enum, done
+when one is returned from one runtime fn and matched in another.
+
+**The table is two tables over one numbering.** `rt`'s `Table` is
+`{ ens: Nat → EnumInfo, recs: Nat → RecInfo(ens) }`: an entry is an enum
+or a record, and the other table holds nothing there (`EnumInfo::none`,
+`RecInfo::empty`). The enums come first in the sense that matters, by
+dependency: `RecInfo` is indexed by the enums, and a record's field tuple
+is `Ty::Flats(fields, en := Ty::types(ens))`, where `Ty::Flat`'s `Enum(j)`
+is `en(j)`, the enum's own type. Everything that reads a table without
+enums uses the default `en := Ty::no_enums`, so an enum's payload slots
+and every word-only record read exactly as before. `RecInfo::of_enum` and
+`RecInfo.alts` are gone; `X.tys(i)` is `X.tys.recs(i)`, an enum's info
+`X.tys.ens(i)`.
+
+**Which enums a record may hold.** Only an enum without a payload whose
+tags fit a word (`Ty::EnumFieldOk`), so that the field is its tag word and
+nothing else. `RecInfo.fits` carries this, as
+`Ty::check_enum_fields(fields, ens).is_some().IsTrue()`, which is
+`trivial` by evaluation at a table's closed fields (the generator writes
+`trivial`, and refuses an enum with a payload by name first,
+`runtime_check_enum_fields`). A generator's shape table, whose fields are
+not closed when `runtime.hthr` is checked, gets its `fits` from
+`Ty::fitting_by`: the fields themselves when they fit, otherwise a field
+every judgment refuses.
+
+**The lowering holds a record as its leaves.** A record's field is one
+port; an enum field's port holds its tag word. Rather than thread the
+enums through every judgment, the lowering reads a record through
+`Table::fields(i) = Ty::leaves(recs(i).fields)` (an enum field's leaf is
+`Word(64)`), `Table::get` (a value's leaves: `Ty::leafs`, an enum to
+`BitVec::ofNat(tag)`) and `Table::mk` (a record built from leaves:
+`Ty::unleafs`, a word read back by `EnumInfo::read`). `Ty::Holds` at
+`Named(i)` is `FieldsHold(tys.fields(i), …, tys.get(i, v))`, so every
+proof about word and narrow fields is unchanged. The two round trips:
+
+- `Table::back` (`mk(get(v)) = v`) holds of every table record, from
+  `fits` (`Ty::unleafs_leafs`: an enum field's tag word reads back as it,
+  `EnumInfo::read_tag`). Results and call read-back use it.
+- `Table::round` (`get(mk(t)) = t`) holds only of a record without enum
+  fields (`Ty::NoEnums`): a word that names no constructor does not come
+  back. What needs it is the entry, which reads a parameter's words from
+  a caller, so `Ty::Param` asks `NoEnums` of a record parameter, and the
+  generator refuses one by name ("takes `Tagged`, a record with an enum
+  field"). A record held in one word asks the same
+  (`tys.recs(i).fields = [Word(64)]`, so `Table::word_round`).
+
+`Make` is lowered over the record's real fields (`Ty::FieldOne`: a
+one-port code or an enum, moved by its tag word), and its moves hold the
+leaves of the field values (`Ty::leaf_holds`, `Tm::MadeFields`); the
+record's holding is then `Table::leaves_round`, `get(recs.mk(u)) =
+leafs(u)`, which is `RecInfo.round` under `leafs` and needs no premise.
+`Field` reads its port back at the field's code (`Ty::holds_of_leaf`: a
+tag word at an enum field is `EnumInfo::Names` of the value, from
+`EnumInfo::tag_word`), so a `match` on the field is the ordinary `Pick`.
+
+**The generator.** A record's field types are read in the walk's mode
+(`rt_no_field_records`): an enum a field holds that the walk has not met
+stops it and is added to the table, as a body's enum is, so `runtime_reads`
+reads the records' shapes inside `rt_with_reprs`. The certificate's table
+is `Table::of(ens, recs)`, its enums held in a hole of their own that each
+record's `RecInfo(ens)` names. A record result's enum field is stated as
+its tag word (`RecInfo::enum_word`, through `RtNarrow.tag`), and at a C
+boundary `{prefix}_field_widths` reads it back as `ENUM_FIELD + j`, so the
+certificate states RAX as the tag word of the field; C's `{ Light;
+uint64_t }` reads its `int` from RAX's low half.
+
+Probes: `lib/_tests/native/runtime/runtime_enum_field_tests` (`signal`
+returns `Signal { light: Light, at: u64 }`, `signal_wait` matches the
+field of the record a call returned), the `Tagged` refusal in
+`runtime_enum_refused_tests`, and `examples/x86-native/enum_fields.hthr`
+called from C.
