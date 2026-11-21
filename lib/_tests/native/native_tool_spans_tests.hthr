@@ -75,16 +75,16 @@ theorem count_lowers(): lower_program_lent(count_newlines_program(), plan_progra
 // ---------------------------------------------------------------------------
 // A program's call: the buffers it holds, no address, the count its word
 
-theorem call_answers(): program_readers(count_newlines_program())(lines(), count_newlines_entry(), [w(6)]) = w(3) { refl }
+theorem call_answers(): program_readers(count_newlines_program())(lines(), count_newlines_entry(), [w(6)]) = [w(3)] { refl }
 // It is lent the first buffer only, and sees it as it is when called.
-theorem call_sees_first(): program_readers(count_newlines_program())([[b(10), b(10)], [b(10)]], count_newlines_entry(), [w(2)]) = w(2) { refl }
-theorem call_sees_now(): program_readers(count_newlines_program())([[b(10), b(7)]], count_newlines_entry(), [w(2)]) = w(1) { refl }
+theorem call_sees_first(): program_readers(count_newlines_program())([[b(10), b(10)], [b(10)]], count_newlines_entry(), [w(2)]) = [w(2)] { refl }
+theorem call_sees_now(): program_readers(count_newlines_program())([[b(10), b(7)]], count_newlines_entry(), [w(2)]) = [w(1)] { refl }
 
 // The same call's word at any buffers and any count, with no evaluation:
 // the Heather function at the tool's first buffer and its size.
 theorem call_is_function(held: Buffers(), count: BitVec(64)):
     program_readers(count_newlines_program())(held, count_newlines_entry(), [count])
-        = count_newlines(buffer_bytes(held, 0), BitVec::ofNat(buffer_bytes(held, 0).len()), count) {
+        = [count_newlines(buffer_bytes(held, 0), BitVec::ofNat(buffer_bytes(held, 0).len()), count)] {
     count_newlines_answers(held, count)
 }
 

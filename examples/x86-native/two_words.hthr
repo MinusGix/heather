@@ -27,3 +27,13 @@ runtime fn add_wide(a, b: BitVec(64)) → Wide {
     let sum = a.add(b);
     Wide(sum, match sum.unsigned_lt_bit(a) { True => BitVec::ofNat(1), False => BitVec::ofNat(0) })
 }
+
+// And records of two words as parameters (§16.17): each is passed a word a
+// field, as System V passes a C structure of two integer words by value,
+// `x` in RDI and RSI and `y` in RDX and RCX. The sum of two 128-bit
+// numbers, modulo 2^128.
+runtime fn add_wides(x, y: Wide) → Wide {
+    let low = x.low.add(y.low);
+    let carry: BitVec(64) = match low.unsigned_lt_bit(x.low) { True => BitVec::ofNat(1), False => BitVec::ofNat(0) };
+    Wide(low, x.high.add(y.high).add(carry))
+}

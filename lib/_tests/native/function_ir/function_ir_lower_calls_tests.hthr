@@ -50,7 +50,7 @@ fn sum8() → Function {
 // it passes them on the stack again, and `g` is read after the call.
 fn relay() → Function {
     Function(parameters := [0, 1, 2, 3, 4, 5, 6, 7],
-        body := Compose(Call(0, [7, 6, 5, 4, 3, 2, 1, 0], 8),
+        body := Compose(Call(0, [7, 6, 5, 4, 3, 2, 1, 0], 8, []),
             Dataflow(Region(inputs := Ports([word(6), word(8)]), nodes := [Add(width := 64, output := 9, left := 8, right := 6)],
                 outputs := Ports([word(9)])))),
         result := 9)
@@ -58,7 +58,7 @@ fn relay() → Function {
 
 // mix(a, b) = relay(a, b, a, b, a, b, b, a), function 2.
 fn mix() → Function {
-    Function(parameters := [0, 1], body := Call(1, [0, 1, 0, 1, 0, 1, 1, 0], 2), result := 2)
+    Function(parameters := [0, 1], body := Call(1, [0, 1, 0, 1, 0, 1, 1, 0], 2, []), result := 2)
 }
 
 fn eight() → List<Function> { [mix(), relay(), sum8()] }
@@ -99,7 +99,7 @@ fn sum9() → Function {
         result := 9)
 }
 fn nine_caller() → Function {
-    Function(parameters := [0, 1], body := Call(0, [0, 1, 1, 1, 1, 1, 1, 1, 0], 2), result := 2)
+    Function(parameters := [0, 1], body := Call(0, [0, 1, 1, 1, 1, 1, 1, 1, 0], 2, []), result := 2)
 }
 theorem nine_refused(): lower_program([sum9()], plan_program([sum9()])) = None { refl }
 theorem nine_why(): sum9().refused(0, sum9().plan(), 10, [], index_rooms()) =

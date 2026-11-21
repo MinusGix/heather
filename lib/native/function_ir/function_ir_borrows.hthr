@@ -207,16 +207,16 @@ theorem Prog::computes_on<M>(self code: Prog, machine: Machine<M>, f, room: Nat,
                 machine.stack.LentOver(lending, top, f, Borrow::words(borrows) ++ words, Borrow::bytes(borrows))(i, s),
             λ (i: Nat) (s: MachineState<M>) => (machine.stack.Passed(Borrow::words(borrows) ++ words, i, s) ∧ room <= i) ∧
                 ((i + 8 <= top) ∧ machine.stack.InMemory(Borrow::lending(borrows), Borrow::bytes(borrows), s.memory)),
-            machine.stack.AnsweredOver(lending, answer.word, answer.buffers), ran,
+            machine.stack.AnsweredBoth(lending, answer.word, answer.rest, answer.buffers), ran,
             λ i s held => ⟨held.left, ⟨lent, held.right⟩⟩);
         site.returns_implies(machine.stack, asm_labels(code, f + 1),
             λ (i: Nat) (s: MachineState<M>) => (machine.stack.Passed(Borrow::words(borrows) ++ words, i, s) ∧ room <= i) ∧
                 ((i + 8 <= top) ∧ machine.stack.InMemory(Borrow::lending(borrows), Borrow::bytes(borrows), s.memory)),
-            machine.stack.AnsweredOver(lending, answer.word, answer.buffers),
+            machine.stack.AnsweredBoth(lending, answer.word, answer.rest, answer.buffers),
             machine.stack.AnsweredOver(Borrow::lending(borrows), answer.word, answer.buffers), entered,
-            λ i s t room post => ⟨post.left, ⟨post.right.left,
-                ⟨machine.stack.wrote_in_wider(i, at, size, written, wide, fewer, s.memory, t.memory, post.right.right.left),
-                    post.right.right.right⟩⟩⟩)
+            λ i s t room both => ⟨both.left.left, ⟨both.left.right.left,
+                ⟨machine.stack.wrote_in_wider(i, at, size, written, wide, fewer, s.memory, t.memory, both.left.right.right.left),
+                    both.left.right.right.right⟩⟩⟩)
     }
 }
 

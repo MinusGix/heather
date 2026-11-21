@@ -50,7 +50,7 @@ fn leaf(nodes: List<Node>) → StructuredRegion { Dataflow(Region(Ports(Nil), no
 // A program of two functions, last first: function 1 is the sums and then
 // a call of function 0 on the result, function 0 its argument plus zero.
 fn two() → List<Function> {
-    [Function([0], Compose(leaf(sums()), Call(0, [3], 4)), 4), Function([0], leaf([Const(64, 1, 0), Add(64, 2, 0, 1)]), 2)]
+    [Function([0], Compose(leaf(sums()), Call(0, [3], 4, [])), 4), Function([0], leaf([Const(64, 1, 0), Add(64, 2, 0, 1)]), 2)]
 }
 
 fn two_plans() → List<Plan> {
@@ -58,15 +58,15 @@ fn two_plans() → List<Plan> {
 }
 
 fn two_replayed() → List<Function> {
-    [Function([0], Compose(leaf([Move(64, 3, 0)]), Call(0, [3], 4)), 4), Function([0], leaf([Move(64, 2, 0)]), 2)]
+    [Function([0], Compose(leaf([Move(64, 3, 0)]), Call(0, [3], 4, [])), 4), Function([0], leaf([Move(64, 2, 0)]), 2)]
 }
 
 theorem two_run(): replay_stage(rules()).run(two(), two_plans()) = Some(two_replayed()) { refl }
 
 // What the program may do, the rewritten one may.
-theorem two_keeps(before: Buffers(), f: Nat, arguments: List<BitVec(64)>, result: BitVec(64), after: Buffers(),
-    did: program_effects(two(), before, f, arguments, result, after)): program_effects(two_replayed(), before, f, arguments, result, after) {
-    replay_stage(rules()).run_sound(two(), two_plans(), two_replayed(), two_run(), before, f, arguments, result, after, did)
+theorem two_keeps(before: Buffers(), f: Nat, arguments: List<BitVec(64)>, result: BitVec(64), rest: List<BitVec(64)>, after: Buffers(),
+    did: program_effects(two(), before, f, arguments, result, rest, after)): program_effects(two_replayed(), before, f, arguments, result, rest, after) {
+    replay_stage(rules()).run_sound(two(), two_plans(), two_replayed(), two_run(), before, f, arguments, result, rest, after, did)
 }
 
 // A plan in the wrong shape for its region, and too few plans.
@@ -92,10 +92,10 @@ theorem swap_const(): replay(rules(), Facts::none(), [Move(64, 1, 0), Const(64, 
 
 // A call on what its argument copies, and a loop from what its input
 // copies; neither on an id the facts say nothing of.
-theorem call_read(): replay_region(rules(), Compose(leaf([Move(64, 1, 0)]), Call(0, [1, 1], 2)), Facts::none(), Both(Nodes([]), Args([0, 0]))).map(λ r => r.region) =
-    Some(Compose(leaf([Move(64, 1, 0)]), Call(0, [0, 0], 2))) { refl }
-theorem call_unknown(): replay_region(rules(), Compose(leaf([Const(64, 1, 0)]), Call(0, [1], 2)), Facts::none(), Both(Nodes([]), Args([0]))).map(λ r => r.region) = None { refl }
-theorem call_short(): replay_region(rules(), Compose(leaf([Move(64, 1, 0)]), Call(0, [1, 1], 2)), Facts::none(), Both(Nodes([]), Args([0]))).map(λ r => r.region) = None { refl }
+theorem call_read(): replay_region(rules(), Compose(leaf([Move(64, 1, 0)]), Call(0, [1, 1], 2, [])), Facts::none(), Both(Nodes([]), Args([0, 0]))).map(λ r => r.region) =
+    Some(Compose(leaf([Move(64, 1, 0)]), Call(0, [0, 0], 2, []))) { refl }
+theorem call_unknown(): replay_region(rules(), Compose(leaf([Const(64, 1, 0)]), Call(0, [1], 2, [])), Facts::none(), Both(Nodes([]), Args([0]))).map(λ r => r.region) = None { refl }
+theorem call_short(): replay_region(rules(), Compose(leaf([Move(64, 1, 0)]), Call(0, [1, 1], 2, [])), Facts::none(), Both(Nodes([]), Args([0]))).map(λ r => r.region) = None { refl }
 theorem loop_read(): replay_region(rules(), Compose(leaf([Move(64, 2, 0)]), Loop([2], 1, [3], 4, leaf([Const(1, 5, 1)]), 5, [3], [6], 7)), Facts::none(),
     Both(Nodes([]), Inputs([0], Same))).map(λ r => r.region) =
     Some(Compose(leaf([Move(64, 2, 0)]), Loop([0], 1, [3], 4, leaf([Const(1, 5, 1)]), 5, [3], [6], 7))) { refl }
@@ -148,7 +148,7 @@ theorem across_nodes(): regioned(apart(leaf([Add(64, 3, 1, 1)])), apart_plan(Nod
 // loop.
 theorem across_same(): regioned(apart(leaf([Add(64, 3, 1, 1)])), apart_plan(Same)) = None { refl }
 
-theorem across_call(): regioned(apart(Call(0, [1], 4)), apart_plan(Same)) = None { refl }
+theorem across_call(): regioned(apart(Call(0, [1], 4, [])), apart_plan(Same)) = None { refl }
 
 theorem across_arms(): regioned(apart(Conditional(Ports(Nil), 5, Ports(Nil), Ports(Nil), leaf([]), leaf([]))), apart_plan(Arms(Nodes([]), Nodes([])))) = None { refl }
 
@@ -162,9 +162,9 @@ fn doubled_once() → List<Function> { [Function([0], leaf([BufferLoad(1, 0, 0),
 
 theorem doubled_run(): replay_stage(rules()).run(doubled(), [Nodes(Cons(Keep, again()))]) = Some(doubled_once()) { refl }
 
-theorem doubled_keeps(before: Buffers(), f: Nat, arguments: List<BitVec(64)>, result: BitVec(64), after: Buffers(),
-    did: program_effects(doubled(), before, f, arguments, result, after)): program_effects(doubled_once(), before, f, arguments, result, after) {
-    replay_stage(rules()).run_sound(doubled(), [Nodes(Cons(Keep, again()))], doubled_once(), doubled_run(), before, f, arguments, result, after, did)
+theorem doubled_keeps(before: Buffers(), f: Nat, arguments: List<BitVec(64)>, result: BitVec(64), rest: List<BitVec(64)>, after: Buffers(),
+    did: program_effects(doubled(), before, f, arguments, result, rest, after)): program_effects(doubled_once(), before, f, arguments, result, rest, after) {
+    replay_stage(rules()).run_sound(doubled(), [Nodes(Cons(Keep, again()))], doubled_once(), doubled_run(), before, f, arguments, result, rest, after, did)
 }
 
 // ---------------------------------------------------------------------------

@@ -51,10 +51,10 @@ fn caller(left: BitVec(64), right: BitVec(64)) → BitVec(64) {
 fn caller_ir() → Function {
     Function(parameters := [0, 1],
         body := Compose(data([word(0), word(1)], [BitOr(width := 64, output := 2, left := 0, right := 1)], [word(2)]),
-            Compose(Call(0, [1, 0], 3),
+            Compose(Call(0, [1, 0], 3, []),
                 Compose(data([word(3), word(1)], [Add(width := 64, output := 4, left := 3, right := 1),
                         Const(width := 64, output := 5, value := 3)], [word(4), word(5)]),
-                    Compose(Call(0, [4, 5], 6),
+                    Compose(Call(0, [4, 5], 6, []),
                         data([word(2), word(6)], [BitXor(width := 64, output := 7, left := 2, right := 6)], [word(7)]))))),
         result := 7)
 }
@@ -90,7 +90,7 @@ fn spin_ir() → Function {
         result := 4)
 }
 fn rotate_ir() → Function {
-    Function(parameters := [0, 1, 2], body := Call(0, [1, 2, 0], 3), result := 3)
+    Function(parameters := [0, 1, 2], body := Call(0, [1, 2, 0], 3, []), result := 3)
 }
 fn rotation() → List<Function> { [rotate_ir(), spin_ir()] }
 theorem rotation_planned(): lower_program_planned(rotation()).is_some() = True { refl }
@@ -119,13 +119,13 @@ fn middle_ir() → Function {
     Function(parameters := [0, 1],
         body := Compose(data([word(0), word(1)], [UnsignedLessThan(width := 64, output := 2, left := 0, right := 1)], [bit(2)]),
             Conditional(Ports([word(0), word(1), bit(2)]), 2, Ports([word(0), word(1)]), Ports([word(3)]),
-                Compose(Call(0, [0, 1], 4),
+                Compose(Call(0, [0, 1], 4, []),
                     data([word(4), word(0)], [Add(width := 64, output := 3, left := 4, right := 0)], [word(3)])),
-                Compose(Call(0, [1, 0], 5), data([word(5)], [Move(width := 64, output := 3, source := 5)], [word(3)])))),
+                Compose(Call(0, [1, 0], 5, []), data([word(5)], [Move(width := 64, output := 3, source := 5)], [word(3)])))),
         result := 3)
 }
 fn outer_ir() → Function {
-    Function(parameters := [0, 1], body := Compose(Call(1, [1, 0], 2), Call(1, [2, 0], 3)), result := 3)
+    Function(parameters := [0, 1], body := Compose(Call(1, [1, 0], 2, []), Call(1, [2, 0], 3, [])), result := 3)
 }
 fn branches() → List<Function> { [outer_ir(), middle_ir(), twist_ir()] }
 theorem branches_planned(): lower_program_planned(branches()).is_some() = True { refl }

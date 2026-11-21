@@ -52,9 +52,14 @@ theorem Ending::returns_written<M>(functions: List<Function>, placement: List<Pl
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program, f + 1),
         λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ rooms(f) <= i) ∧
             stack.LentOver(Lending::writing(counts, addresses, before, marks), top, f, arguments, before)(i, s),
-        stack.AnsweredOver(Lending::writing(counts, addresses, before, marks), m.value, Cons(m.after, rest))) {
-    compiled_returns_written<M>(functions, placement, rooms, counts, addresses, marks, program, lowered, evaluable, within, fetch, data, last, origin,
-        stack, top, before, loan, f, below, arguments, fits, defined, FTm::end_of(rest, m), runs)
+        stack.AnsweredBoth(Lending::writing(counts, addresses, before, marks), m.value, Nil, Cons(m.after, rest))) {
+    let returns = compiled_returns_written<M>(functions, placement, rooms, counts, addresses, marks, program, lowered, evaluable, within, fetch, data, last, origin,
+        stack, top, before, loan, f, below, arguments, fits, defined, FTm::end_of(rest, m), runs);
+    λ s at resident i rsp room held ret saved => {
+        let ran = returns(s, at, resident, i, rsp, room, held, ret, saved);
+        Exists(ran.witness, ⟨ran.proof.left, ⟨ran.proof.right.left, ⟨ran.proof.right.right.left,
+            ⟨ran.proof.right.right.right.left, ⟨ran.proof.right.right.right.right.left, trivial⟩⟩⟩⟩⟩)
+    }
 }
 
 theorem Ending::returns_marked<M>(functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, counts: List<Nat>, addresses: List<BitVec(64)>,
@@ -69,9 +74,14 @@ theorem Ending::returns_marked<M>(functions: List<Function>, placement: List<Pla
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program, f + 1),
         λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ rooms(f) <= i) ∧
             stack.LentOver(Lending::writing(counts, addresses, before, marks_row(tables, f)), top, f, arguments, before)(i, s),
-        stack.AnsweredOver(Lending::writing(counts, addresses, before, marks_row(tables, f)), m.value, Cons(m.after, rest))) {
-    compiled_returns_marked<M>(functions, placement, rooms, counts, addresses, tables, program, lowered, evaluable, marks, fetch, data, last, origin,
-        stack, top, before, f, below, loan, arguments, fits, defined, FTm::end_of(rest, m), runs)
+        stack.AnsweredBoth(Lending::writing(counts, addresses, before, marks_row(tables, f)), m.value, Nil, Cons(m.after, rest))) {
+    let returns = compiled_returns_marked<M>(functions, placement, rooms, counts, addresses, tables, program, lowered, evaluable, marks, fetch, data, last, origin,
+        stack, top, before, f, below, loan, arguments, fits, defined, FTm::end_of(rest, m), runs);
+    λ s at resident i rsp room held ret saved => {
+        let ran = returns(s, at, resident, i, rsp, room, held, ret, saved);
+        Exists(ran.witness, ⟨ran.proof.left, ⟨ran.proof.right.left, ⟨ran.proof.right.right.left,
+            ⟨ran.proof.right.right.right.left, ⟨ran.proof.right.right.right.right.left, trivial⟩⟩⟩⟩⟩)
+    }
 }
 
 // The same through an optimizer (`compiled_returns_written_through`): the
@@ -88,9 +98,14 @@ theorem Ending::returns_written_through<M>(source, functions: List<Function>, pl
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program, f + 1),
         λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ rooms(f) <= i) ∧
             stack.LentOver(Lending::writing(counts, addresses, before, marks), top, f, arguments, before)(i, s),
-        stack.AnsweredOver(Lending::writing(counts, addresses, before, marks), m.value, Cons(m.after, rest))) {
-    compiled_returns_written_through<M>(source, functions, placement, rooms, counts, addresses, marks, program, lowered, evaluable, within, fetch, data,
-        last, origin, stack, top, before, loan, f, below, keeps, arguments, fits, defined, FTm::end_of(rest, m), runs)
+        stack.AnsweredBoth(Lending::writing(counts, addresses, before, marks), m.value, Nil, Cons(m.after, rest))) {
+    let returns = compiled_returns_written_through<M>(source, functions, placement, rooms, counts, addresses, marks, program, lowered, evaluable, within, fetch, data,
+        last, origin, stack, top, before, loan, f, below, keeps, arguments, fits, defined, FTm::end_of(rest, m), runs);
+    λ s at resident i rsp room held ret saved => {
+        let ran = returns(s, at, resident, i, rsp, room, held, ret, saved);
+        Exists(ran.witness, ⟨ran.proof.left, ⟨ran.proof.right.left, ⟨ran.proof.right.right.left,
+            ⟨ran.proof.right.right.right.left, ⟨ran.proof.right.right.right.right.left, trivial⟩⟩⟩⟩⟩)
+    }
 }
 
 theorem Ending::returns_marked_through<M>(source, functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, counts: List<Nat>,
@@ -105,7 +120,12 @@ theorem Ending::returns_marked_through<M>(source, functions: List<Function>, pla
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program, f + 1),
         λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ rooms(f) <= i) ∧
             stack.LentOver(Lending::writing(counts, addresses, before, marks_row(tables, f)), top, f, arguments, before)(i, s),
-        stack.AnsweredOver(Lending::writing(counts, addresses, before, marks_row(tables, f)), m.value, Cons(m.after, rest))) {
-    compiled_returns_marked_through<M>(source, functions, placement, rooms, counts, addresses, tables, program, lowered, evaluable, marks, fetch, data,
-        last, origin, stack, top, before, f, below, keeps, loan, arguments, fits, defined, FTm::end_of(rest, m), runs)
+        stack.AnsweredBoth(Lending::writing(counts, addresses, before, marks_row(tables, f)), m.value, Nil, Cons(m.after, rest))) {
+    let returns = compiled_returns_marked_through<M>(source, functions, placement, rooms, counts, addresses, tables, program, lowered, evaluable, marks, fetch, data,
+        last, origin, stack, top, before, f, below, keeps, loan, arguments, fits, defined, FTm::end_of(rest, m), runs);
+    λ s at resident i rsp room held ret saved => {
+        let ran = returns(s, at, resident, i, rsp, room, held, ret, saved);
+        Exists(ran.witness, ⟨ran.proof.left, ⟨ran.proof.right.left, ⟨ran.proof.right.right.left,
+            ⟨ran.proof.right.right.right.left, ⟨ran.proof.right.right.right.right.left, trivial⟩⟩⟩⟩⟩)
+    }
 }

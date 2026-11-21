@@ -21,7 +21,7 @@ fn nodes(ns: List<Node>) → StructuredRegion { StructuredRegion::of_nodes(ns) }
 
 // Function 1 is x ↦ (5 + x) + 5, by a call of function 0, the sum.
 fn two() → List<Function> {
-    [Function([0], Compose(nodes([Const(64, 1, 5)]), Compose(Call(0, [1, 0], 2), nodes([Add(64, 3, 2, 1)]))), 3),
+    [Function([0], Compose(nodes([Const(64, 1, 5)]), Compose(Call(0, [1, 0], 2, []), nodes([Add(64, 3, 2, 1)]))), 3),
         Function([0, 1], nodes([Add(64, 2, 0, 1)]), 2)]
 }
 
@@ -41,9 +41,9 @@ theorem two_run(): inline_stage().run(two(), two_plans()) = Some(two_inlined()) 
 
 // The inlined program does whatever the program did, a function at its
 // number: the stage's one theorem.
-theorem two_keeps(before: Buffers(), f: Nat, arguments: List<BitVec(64)>, result: BitVec(64), after: Buffers(),
-    ran: program_effects(two(), before, f, arguments, result, after)): program_effects(two_inlined(), before, f, arguments, result, after) {
-    inline_stage().run_sound(two(), two_plans(), two_inlined(), two_run(), before, f, arguments, result, after, ran)
+theorem two_keeps(before: Buffers(), f: Nat, arguments: List<BitVec(64)>, result: BitVec(64), rest: List<BitVec(64)>, after: Buffers(),
+    ran: program_effects(two(), before, f, arguments, result, rest, after)): program_effects(two_inlined(), before, f, arguments, result, rest, after) {
+    inline_stage().run_sound(two(), two_plans(), two_inlined(), two_run(), before, f, arguments, result, rest, after, ran)
 }
 
 // The searcher finds that plan: the least bounds, every call.
@@ -53,8 +53,8 @@ theorem two_searched(): inline_search(two(), λ _ _ => True).map(λ s => s.plans
 // function 2 takes function 1's body as inlining left it: its ids below 6,
 // raised by 3.
 fn three() → List<Function> {
-    [Function([0], Compose(Call(1, [0], 1), nodes([Add(64, 2, 1, 0)])), 2),
-        Function([0], Compose(nodes([Const(64, 1, 7)]), Call(0, [0, 1], 2)), 2),
+    [Function([0], Compose(Call(1, [0], 1, []), nodes([Add(64, 2, 1, 0)])), 2),
+        Function([0], Compose(nodes([Const(64, 1, 7)]), Call(0, [0, 1], 2, [])), 2),
         Function([0, 1], nodes([BitXor(64, 2, 0, 1)]), 2)]
 }
 
@@ -89,7 +89,7 @@ theorem three_all(): inline_search(three(), inline_small(5)).map(λ s => s.plans
 // A call in a conditional's arm.
 fn arm() → List<Function> {
     [Function([0], Compose(nodes([Equal(64, 1, 0, 0)]),
-            Conditional(Ports([]), 1, Ports([]), Ports([]), Call(0, [0, 0], 2), nodes([Move(64, 2, 0)]))), 2),
+            Conditional(Ports([]), 1, Ports([]), Ports([]), Call(0, [0, 0], 2, []), nodes([Move(64, 2, 0)]))), 2),
         Function([0, 1], nodes([Add(64, 2, 0, 1)]), 2)]
 }
 
@@ -103,7 +103,7 @@ theorem arm_run(): inline_stage().run(arm(), [Inlines(3, Both(Stay, Arms(Here(3)
 // A call in a loop's body: the body's passes have valuations of their own,
 // and the callee's ids are raised past the function's bound all the same.
 fn looped() → List<Function> {
-    [Function([0, 1], Loop([0], 1, [2], 3, Compose(Call(0, [2, 2], 4), nodes([Const(1, 5, 1)])), 5, [4], [6], 7), 6),
+    [Function([0, 1], Loop([0], 1, [2], 3, Compose(Call(0, [2, 2], 4, []), nodes([Const(1, 5, 1)])), 5, [4], [6], 7), 6),
         Function([0, 1], nodes([Add(64, 2, 0, 1)]), 2)]
 }
 
@@ -121,7 +121,7 @@ theorem shape_refused(): inline_stage().run(two(), [Inlines(4, Then(Stay)), Inli
 
 // Refused: a call of a function the program does not have, and a call that
 // lends views, which stays a call.
-theorem callee_missing(): inline_stage().run([Function([0], Call(5, [0], 1), 1)], [Inlines(2, Here(1))]) = None { refl }
+theorem callee_missing(): inline_stage().run([Function([0], Call(5, [0], 1, []), 1)], [Inlines(2, Here(1))]) = None { refl }
 
 fn lends() → List<Function> { [Function([0], Lend([], 0, [0, 0], 1), 1), Function([0, 1], nodes([Add(64, 2, 0, 1)]), 2)] }
 

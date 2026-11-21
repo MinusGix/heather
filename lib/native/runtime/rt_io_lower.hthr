@@ -834,7 +834,7 @@ fn ETm::ends_at(region: StructuredRegion, id: Nat) → Bool {
         Compose(_, continuation) => ETm::ends_at(continuation, id),
         Sequence(_, _) => False,
         Conditional(_, _, _, _, _, _) => False,
-        Call(_, _, _) => False,
+        Call(_, _, _, _) => False,
         Lend(_, _, _, _) => False,
         Loop(_, _, _, _, _, _, _, _, _) => False,
     }
@@ -873,7 +873,7 @@ theorem ETm::settle_end(region: StructuredRegion, id: Nat, call: Writers()): (va
         },
         Sequence(_, _) => λ values buffers after env never => false_elim(never),
         Conditional(_, _, _, _, _, _) => λ values buffers after env never => false_elim(never),
-        Call(_, _, _) => λ values buffers after env never => false_elim(never),
+        Call(_, _, _, _) => λ values buffers after env never => false_elim(never),
         Lend(_, _, _, _) => λ values buffers after env never => false_elim(never),
         Loop(_, _, _, _, _, _, _, _, _) => λ values buffers after env never => false_elim(never),
     }
@@ -1322,7 +1322,7 @@ theorem ETm::word_ids_sound(tys: Nat → RecInfo, env: Env, g: List<Ty>, locs: L
 record LentCall { region: StructuredRegion, locs: List<Loc> }
 
 fn ETm::lend_call(entry, next: Nat, ids: List<Nat>, locs: List<Loc>) → LentCall {
-    LentCall(Call(entry, ids, next), Cons(InWord(next), Cons(InBuffer(0), Loc::forget_all(locs, 0))))
+    LentCall(Call(entry, ids, next, []), Cons(InWord(next), Cons(InBuffer(0), Loc::forget_all(locs, 0))))
 }
 
 // A function of the table, on as many words as it takes; the buffer

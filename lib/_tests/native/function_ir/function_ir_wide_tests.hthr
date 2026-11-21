@@ -109,7 +109,7 @@ theorem store4_past(): program_run([store4()], [[b(1), b(2), b(3), b(4), b(5)]],
 // meaning allows.
 theorem store4_allowed(file: Buffers(), i, v: BitVec(64)):
     program_effects([store4()])(file, 0, [i, v], program_run([store4()], file, 0, [i, v]).word,
-        program_run([store4()], file, 0, [i, v]).buffers) {
+        program_run([store4()], file, 0, [i, v]).rest, program_run([store4()], file, 0, [i, v]).buffers) {
     program_run_effects([store4()], trivial, file, 0, [i, v], trivial, program_total_run_defined([store4()], trivial, file, 0, [i, v]))
 }
 

@@ -182,6 +182,24 @@ fn export_import_reexports_every_name_of_the_module() {
 }
 
 #[test]
+fn whole_module_exports_are_globs() {
+    // §3.9: `a` and `b` both declare `f`. Two globs that clash leave `f`
+    // out of the umbrella, and everything else in: `only_in_a` is bare,
+    // and `a::f` still reaches `a`'s through the closure.
+    let both = ("umbrella", "export import a;\nexport import b;");
+    ok(&[("a", A), ("b", B), both, ("user", "import umbrella;\ntheorem t(): only_in_a() = 7 { refl }\ntheorem u(): a::f() = 1 { refl }")]);
+    let e = bad(&[("a", A), ("b", B), both, ("user", "import umbrella;\ntheorem t(): f() = 1 { refl }")]);
+    assert!(e.contains("`f`"), "{e}");
+    // A name listed by hand wins over a glob, in either order.
+    for umbrella in ["export a::{f};\nexport import b;", "export import b;\nexport a::{f};"] {
+        ok(&[("a", A), ("b", B), ("umbrella", umbrella), ("user", "import umbrella;\ntheorem t(): f() = 1 { refl }")]);
+    }
+    // Two names listed by hand still clash at the facade (§3.4).
+    let e = bad(&[("a", A), ("b", B), ("umbrella", "export a::{f};\nexport b::{f};")]);
+    assert!(e.contains("listed by two imports"), "{e}");
+}
+
+#[test]
 fn export_import_takes_no_list() {
     let e = parse_file("export import a::{f};").expect_err("must not parse");
     assert!(e.msg.contains("reexports all of"), "{}", e.msg);

@@ -113,7 +113,7 @@ impl ProgramRegion {
             Self::Compose(prefix, continuation) => format!("Compose({}, {})", prefix.render(), continuation.render()),
             Self::Conditional { inputs, condition, arguments, outputs, when_true, when_false } => format!("Conditional({}, {condition}, {}, {}, {}, {})",
                 ports(inputs), ports(arguments), ports(outputs), when_true.render(), when_false.render()),
-            Self::Call { callee, arguments, result } => format!("Call({callee}, [{}], {result})", ids(arguments)),
+            Self::Call { callee, arguments, result } => format!("Call({callee}, [{}], {result}, [])", ids(arguments)),
         }
     }
 }
@@ -434,7 +434,7 @@ impl Body {
         if let Some(port) = self.scope.values.get(&key) { return Ok(*port); }
         self.flush(pending);
         let result = self.fresh()?;
-        let spelling = format!("call({callee}, [{}])", spelled.join(", "));
+        let spelling = format!("first_word(call({callee}, [{}]))", spelled.join(", "));
         self.steps.push(ProgramRegion::Call { callee, arguments: arguments[..arity].to_vec(), result });
         self.spell.insert(result, spelling.clone());
         // The result arrives in RAX, which the next call takes: it moves to

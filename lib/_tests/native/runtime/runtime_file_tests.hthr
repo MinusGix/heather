@@ -185,5 +185,5 @@ theorem linked_misnamed(rest: List<List<BitVec(8)>>, own: List<BitVec(8)>):
 
 // The loop linked as a function that only reads would be: its name is not
 // among the functions marked still.
-theorem linked_not_still(): Sig::links_fit([Sig([Word(64), Word(64), Word(64)], Word(64))], [2],
+theorem linked_not_still(): Sig::links_fit(RecInfo::none, [Sig([Word(64), Word(64), Word(64)], Word(64))], [2],
     still_arity(linked_arity(linked_program(), [3, 1, 1]), linked_still(linked_program(), [False, True, True]))) = False { refl }

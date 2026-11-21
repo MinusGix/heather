@@ -208,7 +208,7 @@ fn FTm::Sems(tys: Nat → RecInfo, sigs: List<Sig>) → Type {
 
 fn FTm::get(tys: Nat → RecInfo, sigs: List<Sig>) → FTm::Sems(tys, sigs) → (i: Nat) → FTm::Sem(tys, Sig::at(sigs, i)) {
     match sigs {
-        Nil => λ _ i => λ own => Mutated(own, False),
+        Nil => λ _ i => λ own => Mutated(own, Nil),
         Cons(_, rest) => λ cs i => match i { Zero => cs.fst, Succ(k) => FTm::get(tys, rest, cs.snd, k) },
     }
 }

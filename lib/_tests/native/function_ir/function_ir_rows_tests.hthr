@@ -32,7 +32,7 @@ fn reads() → Function {
 
 // calls(callee): its buffers handed on to `callee`.
 fn calls(callee: Nat) → Function {
-    Function(parameters := [0, 1, 2, 3, 4, 5], lent := 2, result := 9, body := Call(callee, [0, 1, 2, 3, 4, 5], 9))
+    Function(parameters := [0, 1, 2, 3, 4, 5], lent := 2, result := 9, body := Call(callee, [0, 1, 2, 3, 4, 5], 9, []))
 }
 
 // lends(callee, written): the whole of its buffer 1 as `callee`'s buffer 0.

@@ -63,7 +63,7 @@ instance Compile<List<BitVec(8)> → BitVec(64) → BitVec(64) → BitVec(64)>(p
 // code returns `peek` of the file's span.
 theorem peek_compiled(f: Buffers(), call: Answers(), place, length, i: BitVec(64)):
     peek_compile().code.eval(call, [place, length, i], buffers := f) = peek(f.span(0), length, i) {
-    peek_compile().agrees(f, call, Tm::calls_agree_none_over(RecInfo::none, f, call), place, length, i)
+    cong_fn<List<BitVec(64)>, BitVec(64)>(λ l => first_word(l), peek_compile().agrees(f, call, Tm::calls_agree_none_over(RecInfo::none, f, call), place, length, i))
 }
 
 // The instance is found by search, keyed on the function.
@@ -157,7 +157,7 @@ fn count_compile() → Compile<List<BitVec(8)> → BitVec(64) → BitVec(64) →
 theorem count_compiled(f: Buffers(), call: Answers(), agree: Tm::CallsAgree(count_base().at(count_callees, f), call),
     place, length, i, acc: BitVec(64)):
     count_compile().code.eval(call, [place, length, i, acc], buffers := f) = count_from(f.span(0), length, i, acc) {
-    count_compile().agrees(f, call, agree, place, length, i, acc)
+    cong_fn<List<BitVec(64)>, BitVec(64)>(λ l => first_word(l), count_compile().agrees(f, call, agree, place, length, i, acc))
 }
 
 // The code is the one the step 2 probes lower by evaluation, and it runs.

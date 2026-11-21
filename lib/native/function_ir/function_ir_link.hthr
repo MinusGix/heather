@@ -104,7 +104,7 @@ theorem StructuredRegion::relabel_run(self region: StructuredRegion, call: Write
                     refl))
         },
         Lend(views, callee, arguments, result) => λ values buffers => refl,
-        Call(callee, arguments, result) => λ values buffers => refl,
+        Call(callee, arguments, result, also) => λ values buffers => refl,
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ values buffers =>
             cong_fn<LoopState, State>(λ end => State(Valuation::set(Valuation::bind(values, outputs, end.end.state), exhausted,
                     bit_value(end.end.exhausted)), end.buffers),
@@ -117,7 +117,7 @@ theorem StructuredRegion::relabel_run(self region: StructuredRegion, call: Write
 
 theorem Function::relabel_run(self function: Function, call: Writers(), links: Nat → Nat, arguments: List<BitVec(64)>, buffers: Buffers()):
     function.relabel(links).run(call, arguments, buffers) = function.run(Writers::relabel(call, links), arguments, buffers) {
-    cong_fn<State, Ending>(λ end => Ending(end.values(64, function.result), end.buffers),
+    cong_fn<State, Ending>(λ end => Ending(end.values(64, function.result), end.buffers, rest := words_of(end.values, function.also)),
         function.body.relabel_run(call, links, Valuation::bind(Valuation::zero(), function.parameters, arguments), buffers))
 }
 
@@ -142,7 +142,7 @@ theorem StructuredRegion::calls_fit_among(self region: StructuredRegion, arity: 
                 when_true.calls_fit_among(arity, among, named, arms.left), when_false.calls_fit_among(arity, among, named, arms.right))
         },
         Lend(views, callee, arguments, _) => λ ok => named(callee, (views_homes(views) ++ arguments).len(), ok),
-        Call(callee, arguments, _) => λ ok => named(callee, arguments.len(), ok),
+        Call(callee, arguments, _, _) => λ ok => named(callee, arguments.len(), ok),
         Loop(_, _, _, _, body, _, _, _, _) => λ ok => body.calls_fit_among(arity, among, named, ok),
     }
 }
@@ -154,11 +154,11 @@ theorem StructuredRegion::calls_fit_among(self region: StructuredRegion, arity: 
 theorem Function::run_still(self function: Function, call: Writers(), buffers: Buffers(), among: Nat → Bool,
     still: (f: Nat) → among(f).IsTrue() → (words: List<BitVec(64)>) → call(buffers, f, words).buffers = buffers,
     quiet: function.body.quiet().IsTrue(), fits: function.body.calls_among(among).IsTrue(), arguments: List<BitVec(64)>):
-    function.run(call, arguments, buffers) = Ending(function.eval(Writers::words(call, buffers), arguments, buffers := buffers), buffers) {
-    cong_fn<State, Ending>(λ end => Ending(end.values(64, function.result), end.buffers),
+    function.run(call, arguments, buffers) = Ending::of(function.eval_words(Writers::words(call, buffers), arguments, buffers := buffers), buffers) {
+    cong_fn<State, Ending>(λ end => Ending(end.values(64, function.result), end.buffers, rest := words_of(end.values, function.also)),
         function.body.run_quiet_among(call, Writers::words(call, buffers), buffers, among,
-            λ f ok words => j(still(f, ok, words), λ held _ => call(buffers, f, words) = Ending(call(buffers, f, words).word, held),
-                refl),
+            λ f ok words => j(still(f, ok, words),
+                λ held _ => call(buffers, f, words) = Ending(call(buffers, f, words).word, held, rest := call(buffers, f, words).rest), refl),
             quiet, fits, Valuation::bind(Valuation::zero(), function.parameters, arguments)))
 }
 

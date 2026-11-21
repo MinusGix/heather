@@ -170,7 +170,7 @@ fn StructuredRegion::copy_plan(self region: StructuredRegion, copies: Copies) �
         Compose(prefix, continuation) => shared(prefix.copy_plan(copies), λ a =>
             shared(continuation.copy_plan(a.copies), λ c => CopyPlan(Both(a.plan, c.plan), c.copies))),
         Conditional(_, _, _, _, when_true, when_false) => CopyPlan(Arms(when_true.copy_plan(copies).plan, when_false.copy_plan(copies).plan), copies),
-        Call(_, arguments, _) => CopyPlan(Args(copies.read_all(arguments)), copies),
+        Call(_, arguments, _, _) => CopyPlan(Args(copies.read_all(arguments)), copies),
         Loop(inputs, _, _, _, body, _, _, _, _) => CopyPlan(Inputs(copies.read_all(inputs), body.copy_plan(Copies::none()).plan), copies),
         Lend(_, _, _, _) => CopyPlan(Same, copies),
     }
@@ -243,14 +243,14 @@ fn StructuredRegion::dead_plan(self region: StructuredRegion, live: Live) → De
         Conditional(inputs, condition, arguments, outputs, when_true, when_false) => shared(live.add_ports(outputs), λ after =>
             shared(when_true.dead_plan(after), λ a => shared(when_false.dead_plan(after), λ b =>
                 DeadPlan(Arms(a.plan, b.plan), a.live.either(b.live).add(condition).add_ports(inputs).add_ports(arguments))))),
-        Call(_, arguments, _) => DeadPlan(Same, live.add_all(arguments)),
+        Call(_, arguments, _, _) => DeadPlan(Same, live.add_all(arguments)),
         Loop(inputs, bound, _, _, body, exit, next, _, _) => shared(body.dead_plan(live.add_all(Cons(exit, next))), λ b =>
             DeadPlan(Body(b.plan), b.live.add_all(Cons(bound, inputs)))),
         Lend(views, _, arguments, _) => DeadPlan(Same, live.add_all(nodes_mentions(views_nodes(views))).add_all(views_homes(views) ++ arguments)),
     }
 }
 
-fn Function::dead_plan(self function: Function) → Plan { function.body.dead_plan(Live::none().add(function.result)).plan }
+fn Function::dead_plan(self function: Function) → Plan { function.body.dead_plan(Live::none().add(function.result).add_all(function.also)).plan }
 
 // ---------------------------------------------------------------------------
 // The stage

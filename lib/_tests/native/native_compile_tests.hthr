@@ -512,7 +512,7 @@ fn view_functions(written: Bool) → List<Function> { [view_lender(written), vie
 // A program whose statement calls the lender on its two buffers.
 fn view_source(written: Bool) → Source {
     Source(functions := view_functions(written), buffers := [Buffer(3), Buffer(4)], words := 10,
-        main := Then(ops([Const(64, 0, 3), Const(64, 1, 88)]), Then(Compute(Call(1, [0, 1], 2)), Exit(2))))
+        main := Then(ops([Const(64, 0, 3), Const(64, 1, 88)]), Then(Compute(Call(1, [0, 1], 2, [])), Exit(2))))
 }
 
 // Its functions' values where the function compiler's planner puts them.

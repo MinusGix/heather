@@ -1,0 +1,9 @@
+// One import brings Nat, Int and Rat bare (docs/language/modules-design.md §3.9).
+import numbers;
+
+theorem int_sum(): OfNat(2) + OfNat(3) = OfNat(5) { refl }
+
+// `DivMod`, which `nat` and `int` both declare, is left out of the glob and
+// reached qualified.
+// expect-error: unbound name `DivMod`
+fn clashed() -> Nat { DivMod }

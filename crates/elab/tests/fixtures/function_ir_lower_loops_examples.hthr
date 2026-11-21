@@ -64,7 +64,7 @@ theorem triangle_of_zero(): program_eval([triangle()], 0, [w(0)]) = w(0) { refl 
 
 // The loop came out exhausted.
 theorem triangle_exhausted():
-    triangle().body.eval(program_eval([triangle()]), Valuation::bind(Valuation::zero(), [0], [w(4)]))(1, 3) = BitVec::ofBool(True) { refl }
+    triangle().body.eval(program_answers([triangle()]), Valuation::bind(Valuation::zero(), [0], [w(4)]))(1, 3) = BitVec::ofBool(True) { refl }
 
 // The state in R8, the counter in RCX, the flag in RDX; the body's sum
 // lands in the state's register, so neither way out moves anything.
@@ -125,7 +125,7 @@ fn gcd() → Function {
 theorem gcd_evaluable(): program_evaluable([gcd()]).IsTrue() { trivial }
 theorem gcd_runs(): program_eval([gcd()], 0, [w(12), w(18)]) = w(6) { refl }
 theorem gcd_not_exhausted():
-    gcd().body.eval(program_eval([gcd()]), Valuation::bind(Valuation::zero(), [0, 1], [w(12), w(18)]))(1, 5) = BitVec::ofBool(False) { refl }
+    gcd().body.eval(program_answers([gcd()]), Valuation::bind(Valuation::zero(), [0, 1], [w(12), w(18)]))(1, 5) = BitVec::ofBool(False) { refl }
 
 // Both arms leave the new state in R8 and R9, where the loop keeps it.
 fn gcd_placement() → List<Place> { [Into(Rax), Into(R8), Into(R9), Into(Rcx), Into(Rdx), Into(R10), Into(R11), Into(R8), Into(R9), Into(R9), Into(R8)] }
@@ -173,7 +173,7 @@ fn double() → Function {
 fn scale() → Function {
     Function(parameters := [0, 1],
         body := Loop(inputs := [0], bound := 1, parameters := [10], count := 11,
-            body := Compose(Call(0, [10], 12),
+            body := Compose(Call(0, [10], 12, []),
                 Dataflow(Region(inputs := Ports([word(11), word(12)]),
                     nodes := [UnsignedLessThan(width := 64, output := 13, left := 11, right := 11)],
                     outputs := Ports([word(12), bit(13)])))),

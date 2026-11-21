@@ -48,8 +48,8 @@ theorem sequence_spelled(): spelled_text(Sequence(Region(Ports([Port(0, 64)]), [
     refl
 }
 
-theorem conditional_spelled(): spelled_text(Conditional(Ports([]), 5, Ports([]), Ports([Port(9, 64), Port(8, 8)]), Call(0, [7, 4], 8), leaf([])).spelled()([])) =
-    "Conditional(Ports([]), 5, Ports([]), Ports([Port(9, 64), Port(8, 8)]), Call(0, [7, 4], 8), Dataflow(Region(Ports([]), [], Ports([]))))" {
+theorem conditional_spelled(): spelled_text(Conditional(Ports([]), 5, Ports([]), Ports([Port(9, 64), Port(8, 8)]), Call(0, [7, 4], 8, []), leaf([])).spelled()([])) =
+    "Conditional(Ports([]), 5, Ports([]), Ports([Port(9, 64), Port(8, 8)]), Call(0, [7, 4], 8, []), Dataflow(Region(Ports([]), [], Ports([]))))" {
     refl
 }
 

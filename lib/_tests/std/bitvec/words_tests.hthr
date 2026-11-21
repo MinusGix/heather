@@ -1,0 +1,9 @@
+// One import brings the words and their laws bare (docs/language/modules-design.md §3.9).
+import words;
+
+fn tenth(x: u64) -> u64 { x / 10 }
+
+theorem tenth_of_twenty(): tenth(20) = 2 { refl }
+
+fn rotated(x: u32) -> u32 { x.rotl(3) }
+theorem rotated_one(): rotated(1) = 8 { refl }

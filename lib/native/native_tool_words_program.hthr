@@ -20,6 +20,9 @@ fn raise_letter_native_fn0() → Function {
 fn raise_letter_native_first_0() → List<Function> { Cons(raise_letter_native_fn0(), Nil) }
 fn raise_letter_native_program() → List<Function> { raise_letter_native_first_0() }
 
+// How many words each function returns past its first, the last function's first.
+fn raise_letter_native_outs() → List<Nat> { [0] }
+
 // How many words each function takes, the last function's first.
 fn raise_letter_native_arities() → List<Nat> { [1] }
 
@@ -32,18 +35,18 @@ theorem raise_letter_native_evaluable(): program_evaluable(raise_letter_native_p
     program_scan_at_evaluable(raise_letter_native_program(), raise_letter_native_arities(), program_scan_at_drop_zero(raise_letter_native_program(), raise_letter_native_arities(), raise_letter_native_scans_0()))
 }
 
-theorem raise_letter_native_totals_none(): program_total(raise_letter_native_program().drop(1)).IsTrue() { trivial }
-theorem raise_letter_native_total_head_0(): program_total_head(raise_letter_native_program().drop(0)).IsTrue() { trivial }
-theorem raise_letter_native_totals_0(): program_total(raise_letter_native_program().drop(0)).IsTrue() {
-    program_total_drop(raise_letter_native_program(), 0, raise_letter_native_total_head_0(), raise_letter_native_totals_none())
+theorem raise_letter_native_totals_none(): program_total_at(raise_letter_native_program().drop(1), raise_letter_native_outs().drop(1)).IsTrue() { trivial }
+theorem raise_letter_native_total_head_0(): program_total_at_head(raise_letter_native_program().drop(0), raise_letter_native_outs().drop(0)).IsTrue() { trivial }
+theorem raise_letter_native_totals_0(): program_total_at(raise_letter_native_program().drop(0), raise_letter_native_outs().drop(0)).IsTrue() {
+    program_total_at_drop(raise_letter_native_program(), raise_letter_native_outs(), 0, raise_letter_native_total_head_0(), raise_letter_native_totals_none())
 }
 theorem raise_letter_native_defined_everywhere(): program_total(raise_letter_native_program()).IsTrue() {
-    program_total_drop_zero(raise_letter_native_program(), raise_letter_native_totals_0())
+    program_total_at_total(raise_letter_native_program(), raise_letter_native_outs(), program_total_at_drop_zero(raise_letter_native_program(), raise_letter_native_outs(), raise_letter_native_totals_0()))
 }
 
 // What each function computes: its source.
 fn raise_letter_native_sources() → Answers() {
-    λ (g0: Nat) (words: List<BitVec(64)>) => match g0 { Zero => native_tool_words::raise_letter(words.word(0)), Succ(g1) => BitVec::zero() }
+    λ (g0: Nat) (words: List<BitVec(64)>) => match g0 { Zero => [native_tool_words::raise_letter(words.word(0))], Succ(g1) => [BitVec::zero()] }
 }
 
 // `native_tool_words::raise_letter` as the decision tree it compiles, its calls answered by `call`.
@@ -62,12 +65,13 @@ theorem raise_letter_native_fn0_agrees(a0: BitVec(64)): raise_letter_native_fn0(
 }
 
 theorem raise_letter_native_sourced(): program_sourced(raise_letter_native_program(), raise_letter_native_sources()) {
-    ⟨λ (words: List<BitVec(64)>) (fits: words.len() = 1) => spread(1, λ (ws: List<BitVec(64)>) => raise_letter_native_fn0().eval(raise_letter_native_sources(), ws) = raise_letter_native_sources()(0, ws),
-            λ a0 => raise_letter_native_fn0_agrees(a0), words, fits),
+    ⟨λ (words: List<BitVec(64)>) (fits: words.len() = 1) => spread(1, λ (ws: List<BitVec(64)>) => raise_letter_native_fn0().eval_words(raise_letter_native_sources(), ws) = raise_letter_native_sources()(0, ws),
+            λ a0 => cong_fn<BitVec(64), List<BitVec(64)>>(λ x => [x], raise_letter_native_fn0_agrees(a0)), words, fits),
         trivial⟩
 }
 
 // The program's function 0 evaluates to the source function.
 theorem raise_letter_native_agrees(a0: BitVec(64)): program_eval(raise_letter_native_program(), 0, [a0]) = native_tool_words::raise_letter(a0) {
-    program_eval_sources(raise_letter_native_program(), raise_letter_native_evaluable(), raise_letter_native_sources(), raise_letter_native_sourced(), 0, [a0], trivial)
+    cong_fn<List<BitVec(64)>, BitVec(64)>(λ l => first_word(l),
+        program_eval_sources(raise_letter_native_program(), raise_letter_native_evaluable(), raise_letter_native_sources(), raise_letter_native_sourced(), 0, [a0], trivial))
 }

@@ -1,0 +1,20 @@
+// Machine words by one import: `BitVec(n)`, `u8`…`u64`, bytes, signed
+// words, division, shifts, rotations, resizing and their laws, bare
+// (docs/language/modules-design.md §3.9). A glob: a name two of these
+// modules both declare is left out here and reached qualified.
+export import bitvec;
+export import bitvec_bytes;
+export import bitvec_concat;
+export import bitvec_div;
+export import bitvec_fintype;
+export import bitvec_loop;
+export import bitvec_nat;
+export import bitvec_order;
+export import bitvec_reciprocal;
+export import bitvec_resize;
+export import bitvec_ring;
+export import bitvec_rotate;
+export import bitvec_shift_nat;
+export import bitvec_signed;
+export import byte;
+export import sint;
