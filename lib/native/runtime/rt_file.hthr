@@ -380,8 +380,8 @@ fn FTm::lent(fw: FWorld, g: List<Ty>, env: Env(fw.w.tys, g), f: Nat, views: List
 fn FTm::turn(fw: FWorld, g: List<Ty>, env: Env(fw.w.tys, g), st: Ty, test: Tm, bt: Ty,
     run: Env(fw.w.tys, Cons(st, g)) → List<BitVec(8)> → Mutated<List<BitVec(8)>, bt.sem(fw.w.tys)>)
     → Mutated<List<BitVec(8)>, st.sem(fw.w.tys)> → loop::Step<Mutated<List<BitVec(8)>, st.sem(fw.w.tys)>> {
-    λ p => loop::Step::turn(Ty::cast(fw.w.tys, test.ty(fw.w, Cons(st, g)), Bit, FTm::value(fw, p.after, test, Cons(st, g), Pair(p.value, env))),
-        λ _ => FTm::recast(fw.w.tys, bt, st, run(Pair(p.value, env), p.after)), p)
+    λ p => loop::Loop::after(p, λ o v => loop::Step::turn(Ty::cast(fw.w.tys, test.ty(fw.w, Cons(st, g)), Bit, FTm::value(fw, o, test, Cons(st, g), Pair(v, env))),
+        λ _ => FTm::recast(fw.w.tys, bt, st, run(Pair(v, env), o)), p))
 }
 
 // A loop's run from the span `own`: its turns iterated from the state the

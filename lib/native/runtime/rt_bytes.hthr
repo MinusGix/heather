@@ -104,8 +104,8 @@ fn FTm::over_put(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), i, length,
 fn FTm::over_turn(bw: BWorld, g: List<Ty>, env: Env(bw.fw.w.tys, g), st: Ty, test: Tm, bt: Ty, n: BitVec(64),
     run: Env(bw.fw.w.tys, Cons(st, g)) → Bytes(n) → Mutated<Bytes(n), bt.sem(bw.fw.w.tys)>)
     → Mutated<Bytes(n), st.sem(bw.fw.w.tys)> → loop::Step<Mutated<Bytes(n), st.sem(bw.fw.w.tys)>> {
-    λ p => loop::Step::turn(Ty::cast(bw.fw.w.tys, test.ty(bw.fw.w, Cons(st, g)), Bit, FTm::value(bw.fw, p.after.bytes, test, Cons(st, g), Pair(p.value, env))),
-        λ _ => FTm::over_recast(bw.fw.w.tys, bt, st, n, run(Pair(p.value, env), p.after)), p)
+    λ p => loop::Loop::after(p, λ o v => loop::Step::turn(Ty::cast(bw.fw.w.tys, test.ty(bw.fw.w, Cons(st, g)), Bit, FTm::value(bw.fw, o.bytes, test, Cons(st, g), Pair(v, env))),
+        λ _ => FTm::over_recast(bw.fw.w.tys, bt, st, n, run(Pair(v, env), o)), p))
 }
 
 // A loop's run over a record (`FTm::iterated`'s).
