@@ -4449,7 +4449,6 @@ fn runtime_reads(name: String, f: GlobalRef, levels: Nat := 0) → Tac<List<Decl
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // A function of a laid record (docs/native/layout-design.md §9)
 //
