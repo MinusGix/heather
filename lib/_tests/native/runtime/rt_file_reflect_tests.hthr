@@ -25,7 +25,7 @@ import rt_file_loop;
 import rt_reflect;
 import rt_file_reflect;
 
-fn alone(rest: List<List<BitVec(8)>>) → FWorld { FWorld::alone(RecInfo::none, rest) }
+fn alone(rest: List<List<BitVec(8)>>) → FWorld { FWorld::alone(Table::none(), rest) }
 
 // ---------------------------------------------------------------------------
 // A store
@@ -89,7 +89,7 @@ fn poke_pair_rt() → FFun {
 theorem poke_pair_reflected(): True { by reflects_file_as(["List::poke", "List::poke_pair"], [], [poke_rt(), poke_pair_rt()]) }
 
 fn pair_world(rest: List<List<BitVec(8)>>) → FWorld {
-    FWorld(World(RecInfo::none, [], trivial), λ _ => trivial, [poke_rt().sig()],
+    FWorld(World(Table::none(), [], trivial), λ _ => trivial, [poke_rt().sig()],
         λ _ => Pair(λ (span: List<BitVec(8)>) (place: BitVec(64)) (length: BitVec(64)) (i: BitVec(64)) (v: BitVec(64)) => List::poke(span, length, i, v), trivial), rest)
 }
 
@@ -136,7 +136,7 @@ fn raise_from_rt() → FFun {
 theorem raise_from_reflected(): True { by reflects_file_as(["raise_from"], ["raise"], [raise_from_rt()]) }
 
 fn raise_world(rest: List<List<BitVec(8)>>) → FWorld {
-    FWorld(World(RecInfo::none, [Sig([Word(64)], Word(64))], Pair(λ (x: BitVec(64)) => raise(x), trivial)),
+    FWorld(World(Table::none(), [Sig([Word(64)], Word(64))], Pair(λ (x: BitVec(64)) => raise(x), trivial)),
         λ _ => Pair(λ (x: BitVec(64)) => raise(x), trivial), [], λ _ => trivial, rest)
 }
 

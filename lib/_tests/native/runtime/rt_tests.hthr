@@ -38,7 +38,7 @@ fn leaf_rt() → Fun {
 fn caller_rt() → Fun { Fun([Word(64), Word(64)], Word(64), Call(0, [1, 0])) }
 
 fn calls_world() → World {
-    World(RecInfo::none, [leaf_rt().sig(), caller_rt().sig()], Pair(leaf, Pair(caller, trivial)))
+    World(Table::none(), [leaf_rt().sig(), caller_rt().sig()], Pair(leaf, Pair(caller, trivial)))
 }
 
 theorem calls_reflected(): True { by reflects_as(["leaf", "caller"], [], [leaf_rt(), caller_rt()]) }
@@ -96,7 +96,7 @@ fn calls_either_rt() → Fun {
 }
 
 fn branches_world() → World {
-    World(RecInfo::none, [unequal_rt().sig(), either_rt().sig(), calls_either_rt().sig()],
+    World(Table::none(), [unequal_rt().sig(), either_rt().sig(), calls_either_rt().sig()],
         Pair(unequal, Pair(either, Pair(calls_either, trivial))))
 }
 
@@ -139,7 +139,7 @@ fn scaller_rt() → Fun {
 }
 
 fn sharing_world() → World {
-    World(RecInfo::none, [sleaf_rt().sig(), scaller_rt().sig()], Pair(sleaf, Pair(scaller, trivial)))
+    World(Table::none(), [sleaf_rt().sig(), scaller_rt().sig()], Pair(sleaf, Pair(scaller, trivial)))
 }
 
 theorem sharing_reflected(): True { by reflects_as(["sleaf", "scaller"], [], [sleaf_rt(), scaller_rt()]) }
@@ -159,12 +159,14 @@ fn wc_step(s: WcState, nl: Bool, space: Bool) → WcState {
             inside := !space)
 }
 
-fn wc_tys(i: Nat) → RecInfo {
+fn wc_recs(i: Nat) → RecInfo(EnumInfo::nones) {
     RecInfo(WcState, [Word(64), Word(64), Bit],
         λ t => WcState(t.fst, t.snd.fst, t.snd.snd.fst),
         λ s => Pair(s.lines, Pair(s.words, Pair(s.inside, trivial))),
-        λ t => refl, λ s => refl)
+        λ t => refl, λ s => refl, trivial)
 }
+
+fn wc_tys() → Table { Table(EnumInfo::nones, wc_recs) }
 
 fn wc_step_rt() → Fun {
     Fun([Named(0), Bit, Bit], Named(0),
@@ -179,7 +181,7 @@ fn wc_step_rt() → Fun {
             Make(0, [5, 0, 4]))))))))))
 }
 
-fn wc_world() → World { World(wc_tys, [wc_step_rt().sig()], Pair(wc_step, trivial)) }
+fn wc_world() → World { World(wc_tys(), [wc_step_rt().sig()], Pair(wc_step, trivial)) }
 
 theorem wc_reflected(): True { by reflects_as(["wc_step"], ["WcState"], [wc_step_rt()]) }
 
@@ -197,7 +199,7 @@ fn sum_step_rt() → Fun { Fun([Word(64), Word(8)], Word(64), Let(Prim(Zext(8, 5
 
 fn sum_rt() → Fun { Fun([ByteList(0), Word(64)], Word(64), Fold(1, 0, 0)) }
 
-fn sum_world() → World { World(RecInfo::none, [sum_step_rt().sig(), sum_rt().sig()], Pair(sum_step, Pair(sum, trivial))) }
+fn sum_world() → World { World(Table::none(), [sum_step_rt().sig(), sum_rt().sig()], Pair(sum_step, Pair(sum, trivial))) }
 
 theorem sum_reflected(): True { by reflects_as(["sum_step", "sum"], [], [sum_step_rt(), sum_rt()]) }
 
@@ -218,7 +220,7 @@ fn safe_pred_rt() → Fun {
         Let(Lit(Word(64), 0), Let(Prim(Eq(64), [1, 0]), IfEq(0, Var(2), Let(Lit(Word(64), 1), Prim(Sub(64), [3, 0]))))))
 }
 
-fn safe_pred_world() → World { World(RecInfo::none, [safe_pred_rt().sig()], Pair(safe_pred, trivial)) }
+fn safe_pred_world() → World { World(Table::none(), [safe_pred_rt().sig()], Pair(safe_pred, trivial)) }
 
 theorem safe_pred_reflected(): True { by reflects_as(["safe_pred"], [], [safe_pred_rt()]) }
 
@@ -250,7 +252,7 @@ fn count_down_rt() → Fun {
             IfEq(0, Var(2), Let(Lit(Word(64), 1), Let(Prim(Sub(64), [4, 0]), Let(Prim(Add(64), [4, 5]), Call(0, [1, 0]))))))))
 }
 
-fn count_down_world() → World { World(RecInfo::none, [count_down_rt().sig()], Pair(count_down, trivial)) }
+fn count_down_world() → World { World(Table::none(), [count_down_rt().sig()], Pair(count_down, trivial)) }
 
 theorem count_down_body_reflects(n, acc: BitVec(64)): count_down_rt().meaning(count_down_world())(n, acc) =
     match h: n.eq_bit(BitVec::ofNat(0)) { True => acc, False => count_down(n.sub(BitVec::ofNat(1)), acc.add(n)) } { refl }
@@ -279,7 +281,7 @@ fn bump_rt() → Fun {
             Prim(Get(0), [1, 0])))))))
 }
 
-fn bump_world() → World { World(RecInfo::none, [bump_rt().sig()], Pair(bump, trivial)) }
+fn bump_world() → World { World(Table::none(), [bump_rt().sig()], Pair(bump, trivial)) }
 
 theorem bump_reflected(): True { by reflects_as(["bump"], [], [bump_rt()]) }
 
@@ -312,7 +314,7 @@ fn keep_step_rt() → Fun { Fun([Lines, ByteList(0)], Lines, Prim(ConsLine(0), [
 fn reversed_rt() → Fun { Fun([Lines], Lines, Let(Lit(Lines, 0), Fold(1, 0, 3))) }
 
 fn lines_world() → World {
-    World(RecInfo::none, [push_line_rt().sig(), count_step_rt().sig(), count_lines_rt().sig(), keep_step_rt().sig(), reversed_rt().sig()],
+    World(Table::none(), [push_line_rt().sig(), count_step_rt().sig(), count_lines_rt().sig(), keep_step_rt().sig(), reversed_rt().sig()],
         Pair(push_line, Pair(count_step, Pair(count_lines, Pair(keep_step, Pair(reversed, trivial))))))
 }
 

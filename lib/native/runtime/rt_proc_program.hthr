@@ -43,7 +43,7 @@ import rt_proc;
 import omega;
 
 // The world a pure program's terms are read in: no records, no functions.
-fn PTm::plain(tys: Nat → RecInfo) → rt::World { rt::World(tys, [], trivial) }
+fn PTm::plain(tys: Table) → rt::World { rt::World(tys, [], trivial) }
 
 // The program: the recursive function's procedure, then main's statements
 // with its value in word 0 and an exit with it.
@@ -54,7 +54,7 @@ fn PTm::program(main: PTm, defs: List<PDef>, w: rt::World, levels: Nat) → Opti
 }
 
 // A world with no functions leaves every call still.
-theorem PTm::plain_still(tys: Nat → RecInfo, call: Writers()): Writers::Still(call, functions_below(PTm::plain(tys).sigs.len())) {
+theorem PTm::plain_still(tys: Table, call: Writers()): Writers::Still(call, functions_below(PTm::plain(tys).sigs.len())) {
     λ held f never words => false_elim(never)
 }
 
@@ -89,7 +89,7 @@ theorem PTm::exit_calls_ok(s: Stmt, call: Writers(), answer: CallAnswers(), ok: 
 }
 
 // The theorem.
-theorem PTm::program_reads(tys: Nat → RecInfo, n: Nat, body: PTm, h: List<BitVec(64)> → BitVec(64), m: List<BitVec(64)> → Nat,
+theorem PTm::program_reads(tys: Table, n: Nat, body: PTm, h: List<BitVec(64)> → BitVec(64), m: List<BitVec(64)> → Nat,
     guarded: PTm::Guarded(n, body, PTm::plain(tys), h, m), main: PTm, s: Stmt, src: Source,
     made: PDef::procedures([PDef(n, body)], PTm::plain(tys), PDef::known([PDef(n, body)])) = Some(src.procedures),
     lowered: main.lower(PTm::plain(tys), PDef::known([PDef(n, body)]), Nil, Nil, 1, 0) = Some(s),

@@ -139,36 +139,38 @@ theorem Tm::tail_sem_ext(self t: Tm, w: World, skip: Nat, res: Ty, k1, k2: List<
 
 // A value at `res` read as a word, and a word read at `res`: what a pass
 // leaves for the loop, and what the loop's continuation is read at.
-fn Tm::out(tys: Nat → RecInfo, res: Ty, v: res.sem(tys)) → BitVec(64) { Ty::cast(tys, res, Word(64), v) }
+fn Tm::out(tys: Table, res: Ty, v: res.sem(tys)) → BitVec(64) { Ty::cast(tys, res, Word(64), v) }
 
-fn Tm::into(tys: Nat → RecInfo, res: Ty, x: BitVec(64)) → res.sem(tys) { Ty::cast(tys, Word(64), res, x) }
+fn Tm::into(tys: Table, res: Ty, x: BitVec(64)) → res.sem(tys) { Ty::cast(tys, Word(64), res, x) }
 
 // A code held in one word: a word read at it and back is the word (the
 // repr's round trip, `emb(abs(x)) = x`).
-theorem Tm::out_into(tys: Nat → RecInfo, res: Ty, er: res.OneWord(tys), x: BitVec(64)): Tm::out(tys, res, Tm::into(tys, res, x)) = x {
+theorem Tm::out_into(tys: Table, res: Ty, er: res.OneWord(tys), x: BitVec(64)): Tm::out(tys, res, Tm::into(tys, res, x)) = x {
     match res as λ t => t.OneWord(tys) → Tm::out(tys, t, Tm::into(tys, t, x)) = x {
         Word(n) => λ (e: n = 64) => j(sym(e), λ m _ => Tm::out(tys, Word(m), Tm::into(tys, Word(m), x)) = x,
             trans(Ty::cast_self(tys, Word(64), Ty::cast(tys, Word(64), Word(64), x)), Ty::cast_self(tys, Word(64), x))),
         Bit => λ never => false_elim(never),
         ByteList(_) => λ never => false_elim(never),
         Lines => λ never => false_elim(never),
-        Named(i) => λ e => j(sym(e), λ fs _ => (mk: Ty::Flats(fs) → tys(i).T) → (get: tys(i).T → Ty::Flats(fs)) →
-                ((t: Ty::Flats(fs)) → get(mk(t)) = t) → Ty::flats_head_word(fs, get(mk(Ty::flats_word(fs, x)))) = x,
-            λ mk get round => cong_fn(λ (t: Ty::Flats([Word(64)])) => Ty::flats_head_word([Word(64)], t), round(Ty::flats_word([Word(64)], x))))(
-            tys(i).mk, tys(i).get, tys(i).round),
+        Named(i) => λ e => j(sym(tys.word_leaves(i, e)), λ fs _ => (mk: Ty::Flats(fs) → tys.recs(i).T) → (get: tys.recs(i).T → Ty::Flats(fs)) →
+                ((t: Ty::Flats(fs)) → get(mk(t)) = t) →
+                Ty::flats_head_word(fs, EnumInfo::nones, get(mk(Ty::flats_word(fs, x, EnumInfo::nones)))) = x,
+            λ mk get round => cong_fn(λ (t: Ty::Flats([Word(64)])) => Ty::flats_head_word([Word(64)], EnumInfo::nones, t),
+                round(Ty::flats_word([Word(64)], x, EnumInfo::nones))))(
+            λ t => tys.mk(i, t), λ v => tys.get(i, v), λ t => tys.word_round(i, e, t)),
         Count => λ never => false_elim(never),
         Enum(_) => λ never => false_elim(never),
     }(er)
 }
 
 // Read along an equation of codes, then as a word: the value read as a word.
-theorem Tm::out_cast(tys: Nat → RecInfo, a, res: Ty, e: a = res, v: a.sem(tys)): Tm::out(tys, res, Ty::cast(tys, a, res, v)) = Ty::cast(tys, a, Word(64), v) {
+theorem Tm::out_cast(tys: Table, a, res: Ty, e: a = res, v: a.sem(tys)): Tm::out(tys, res, Ty::cast(tys, a, res, v)) = Ty::cast(tys, a, Word(64), v) {
     j(e, λ b _ => Tm::out(tys, b, Ty::cast(tys, a, b, v)) = Ty::cast(tys, a, Word(64), v),
         cong_fn(λ (u: a.sem(tys)) => Ty::cast(tys, a, Word(64), u), Ty::cast_self(tys, a, v)))
 }
 
 // A match read as a word is its arms read so.
-theorem Tm::out_match(tys: Nat → RecInfo, res: Ty, b: Bool, yes, no: res.sem(tys)):
+theorem Tm::out_match(tys: Table, res: Ty, b: Bool, yes, no: res.sem(tys)):
     (match b { False => Tm::out(tys, res, no), True => Tm::out(tys, res, yes) }) = Tm::out(tys, res, match b { False => no, True => yes }) {
     match b as λ c => (match c { False => Tm::out(tys, res, no), True => Tm::out(tys, res, yes) }) =
         Tm::out(tys, res, match c { False => no, True => yes }) {
@@ -717,7 +719,7 @@ theorem Ty::for_words_of(ps: List<Ty>): (P: List<BitVec(64)> → Type) → ((xs:
 
 // A curried meaning on a word list: each word cast to its parameter's code
 // (zero past the list's end, as `Ty::extend` reads).
-fn Ty::apply(tys: Nat → RecInfo, ps: List<Ty>, r: Ty) → Ty::Arrows(tys, ps, r) → List<BitVec(64)> → r.sem(tys) {
+fn Ty::apply(tys: Table, ps: List<Ty>, r: Ty) → Ty::Arrows(tys, ps, r) → List<BitVec(64)> → r.sem(tys) {
     match ps {
         Nil => λ v ws => v,
         Cons(p, rest) => λ v ws => match ws {
@@ -728,7 +730,7 @@ fn Ty::apply(tys: Nat → RecInfo, ps: List<Ty>, r: Ty) → Ty::Arrows(tys, ps, 
 }
 
 // The same, its result read as a word: the function a call answers.
-fn Ty::uncurry(tys: Nat → RecInfo, ps: List<Ty>, r: Ty) → Ty::Arrows(tys, ps, r) → List<BitVec(64)> → BitVec(64) {
+fn Ty::uncurry(tys: Table, ps: List<Ty>, r: Ty) → Ty::Arrows(tys, ps, r) → List<BitVec(64)> → BitVec(64) {
     λ v ws => Tm::out(tys, r, Ty::apply(tys, ps, r, v, ws))
 }
 
@@ -1187,7 +1189,7 @@ evidence theorem Tm::leave_pointwise({a: Valuation()}, {flag: Nat}, {kept: List<
 
 // The pass's environment: the state bound at `ps` from a valuation that
 // sets the count first.
-theorem Fun::meas_env(ws: List<Ty>, tys: Nat → RecInfo, ok: Ty::OneWords(tys, ws), m: Nat, base: Valuation(), st: List<BitVec(64)>,
+theorem Fun::meas_env(ws: List<Ty>, tys: Table, ok: Ty::OneWords(tys, ws), m: Nat, base: Valuation(), st: List<BitVec(64)>,
     len: st.len() = ws.len()):
     EnvHolds(tys, Valuation::bind(base, Fun::param_ids(ws, m), st), Ty::bind_onto(ws, Nil), Fun::ports_onto(ws, m, Nil),
         Ty::extend(tys, ws, Nil, trivial, st)) {
@@ -1774,7 +1776,7 @@ theorem Fun::lower_any_sound(self f: Fun, w: World): f.Holds(w, f.lower_any(w)) 
 // answers like the meaning (the converse of `Ty::answers_at`), at codes a
 // call passes in one word: an enum's value is passed as its tag word, which
 // reads back as it (`EnumInfo::read_tag`).
-theorem Ty::answers_of_uncurry(tys: Nat → RecInfo, ps: List<Ty>, r: Ty): Ty::Helds(tys, ps) → (v: Ty::Arrows(tys, ps, r)) → (ans: List<BitVec(64)> → BitVec(64)) →
+theorem Ty::answers_of_uncurry(tys: Table, ps: List<Ty>, r: Ty): Ty::Helds(tys, ps) → (v: Ty::Arrows(tys, ps, r)) → (ans: List<BitVec(64)> → BitVec(64)) →
     ((xs: List<BitVec(64)>) → xs.len() = ps.len() → ans(xs) = Ty::uncurry(tys, ps, r, v, xs)) → Ty::Answers(tys, ps, r, v, ans) {
     match ps {
         Nil => λ _ v ans h => h(Nil, refl),

@@ -2712,6 +2712,19 @@ fn rt_with_reprs<A>(fuel: Nat, k: Known, run: Known → Tac<A>) → Tac<Pair<Kno
     }
 }
 
+// A record's fields read in the generator's mode: an enum a field holds is
+// added to the table as the walk meets it (`rt_with_reprs`), a record a
+// field holds has no layout there.
+fn rt_no_field_records<A>(run: Tac<A>) → Tac<A> {
+    attempt(run).bind(λ o => match o {
+        Done(a) => pure(a),
+        Failed(msg, notes) => match rt_strip(("rt: " ++ rt_rec_marker()).chars, msg.chars) {
+            None => fail(msg, notes),
+            Some(rest) => rt_refuse("`" ++ String(rest) ++ "` has no runtime layout under the reflected fragment"),
+        },
+    })
+}
+
 // A walk that does not add the records it meets (a function over a file,
 // or a laid record's): one it stops for has no layout there, as before
 // records were discovered.

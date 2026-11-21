@@ -1,0 +1,40 @@
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import bitvec_nat;
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+
+
+// A record with an enum field (docs/native/runtime-fn-setups-design.md
+// §16.18): the enum has no payload, so the record holds it in its tag word,
+// a field a word like any other. C lays `{ Light; uint64_t }` in two
+// eightbytes, the enum (an `int`) in the low bits of the first, and System
+// V returns it in RAX and RDX: the tag word, then the word.
+inductive Light { Red, Amber, Green }
+
+record Signal { light: Light, at: u64 }
+
+// The signal at a distance: red near, amber further, green beyond, and
+// the next distance.
+runtime fn signal(x: u64) → Signal {
+    let l: Light = if x < 10 { Red } else { if x < 20 { Amber } else { Green } };
+    Signal(l, x + 1)
+}
+
+// Read back from the call and its field matched: how long to wait.
+runtime fn signal_wait(x: u64) → u64 {
+    let s = signal(x);
+    match s.light { Red => 30, Amber => 5, Green => 0 }
+}

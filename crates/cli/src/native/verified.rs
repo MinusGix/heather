@@ -208,8 +208,10 @@ impl Shape {
         let narrowed: Vec<String> = parameters.iter().enumerate()
             .map(|(i, a)| match widths.get(i + 1) { Some(&1) => format!("runtime_bit_low({a})"), Some(&w) if w != 64 => format!("runtime_low({w}, {a})"), _ => a.clone() }).collect();
         let called = format!("{source}({})", narrowed.join(", "));
-        // A field as the word it is returned in: a narrow one zero-extended.
+        // A field as the word it is returned in: a narrow one zero-extended,
+        // an enum as its tag word.
         let field = |(name, w): &(String, u64)| match w { 1 => format!("runtime_bit_wide({called}.{name})"), 64 => format!("{called}.{name}"),
+            w if *w >= ENUM_FIELD => format!("RecInfo::enum_word({table}, {}, {called}.{name})", w - ENUM_FIELD),
             w => format!("runtime_wide({w}, {called}.{name})") };
         let (answer, rest) = match fields {
             Some([first, others @ ..]) => (field(first),
@@ -226,7 +228,7 @@ impl Shape {
         };
         let mut definitions = format!("import {owner};\nimport runtime;\n");
         // An enum's type and tag word are `rt`'s (`RecInfo::enum_at`, `enum_word`).
-        if !enums.is_empty() || result.is_some() { definitions.push_str("import rt;\n"); }
+        if !enums.is_empty() || result.is_some() || fields.is_some_and(|fs| fs.iter().any(|(_, w)| *w >= ENUM_FIELD)) { definitions.push_str("import rt;\n"); }
         definitions.push_str(&format!("\n// The program `runtime fn {source}` published, callees first: function `k` the one with `k` after it.
 fn {prefix}_program() → List<Function> {{ {source}::program }}
 "));
@@ -406,7 +408,7 @@ pub(super) fn runtime_shape(elab: &Elaborator, prefix: &str, owner: &str, source
     // (`runtime_bit_low`, `runtime_bit_wide`).
     let width = "(λ (p: Ty) => match p { Bit => 1, _ => p.edge_width() })";
     let (imports, counts) = match spans {
-        Spans::None => ("", format!("Cons({width}({source}::rt.result), {source}::rt.params.map({width})) ++ Cons(match {source}::rt.result {{ Enum(i) => i + 1, _ => 0 }}, {source}::rt.params.map(λ p => match p {{ Enum(i) => i + 1, Named(i) => match {source}::world.tys(i).fields.len().leb(1) {{ True => 0, False => {RECORD} + i + 1 }}, _ => 0 }})) ++ [Ty::spans({source}::world.tys, {source}::rt.params), {source}::code.also.len(), Cons({source}::rt.result, {source}::rt.params).filter(λ p => match p {{ Named(i) => Ty::slots_share({source}::world.tys(i).fields), _ => False }}).len()]")),
+        Spans::None => ("", format!("Cons({width}({source}::rt.result), {source}::rt.params.map({width})) ++ Cons(match {source}::rt.result {{ Enum(i) => i + 1, _ => 0 }}, {source}::rt.params.map(λ p => match p {{ Enum(i) => i + 1, Named(i) => match {source}::world.tys.fields(i).len().leb(1) {{ True => 0, False => {RECORD} + i + 1 }}, _ => 0 }})) ++ [Ty::spans({source}::world.tys, {source}::rt.params), {source}::code.also.len(), Cons({source}::rt.result, {source}::rt.params).filter(λ p => match p {{ Named(i) => Ty::slots_share({source}::world.tys.fields(i)), _ => False }}).len()]")),
         Spans::Read => ("import function_ir_lower_calls;\nimport function_ir_writes;\n", format!("program_counts({source}::program)")),
         Spans::Written => ("import function_ir_lower_calls;\nimport function_ir_writes;\nimport function_ir_rows;\n",
             format!("program_counts({source}::program)")),
@@ -434,7 +436,8 @@ fn {prefix}_rows(rows: List<List<Bool>>, counts: List<Nat>, f, functions: Nat) �
     let text = format!("import {owner};\nimport runtime;\nimport rt;\nimport nat;\nimport list;\nimport function_ir;\n{imports}
 {rows}fn {prefix}_shape() → List<Nat> {{ Cons({source}::program.len(), Cons({source}::rt.params.len(), {counts}{marks})) }}
 fn {prefix}_outs() → List<Nat> {{ {source}::program.map(λ (f: Function) => f.also.len()) }}
-fn {prefix}_field_widths() → List<Nat> {{ match {source}::rt.result {{ Named(i) => {source}::world.tys(i).fields.map({width}), _ => [] }} }}\n");
+fn {prefix}_field_widths() → List<Nat> {{ match {source}::rt.result {{
+    Named(i) => {source}::world.tys.recs(i).fields.map(λ (t: Ty) => match t {{ Enum(j) => {ENUM_FIELD} + j, _ => {width}(t) }}), _ => [] }} }}\n");
     let mut fork = elab.fork();
     fork.elab_module_source(&probe, &text).map_err(|e| e.render(&text))?;
     let numbers = function_ir_source::evaluate_numbers(&fork, &format!("{probe}::{prefix}_shape")).map_err(|e| e.to_string())?;
@@ -1972,6 +1975,11 @@ fn arguments(arity: usize) -> Vec<String> { (0..arity).map(|i| format!("a{i}")).
 /// is quantified as the record and passed in its fields' words
 /// (`RecInfo::record_at`, `RecInfo::record_words`).
 const RECORD: u64 = 1 << 32;
+
+/// A record result's enum field, as `{prefix}_field_widths` reads it back:
+/// `ENUM_FIELD` plus the enum's table entry, past every word's width. It is
+/// returned as its tag word (`RecInfo::enum_word`, §16.18).
+const ENUM_FIELD: u64 = 1 << 20;
 
 fn typed_enums(arguments: &[String], enums: &[(usize, u64)], table: &str) -> String {
     if enums.is_empty() { return typed(arguments); }

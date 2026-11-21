@@ -45,7 +45,7 @@ fn peek(span: List<BitVec(8)>, i: BitVec(64)) → BitVec(64) {
 fn peek_rt() → Fun { Fun([Word(64), Word(64), Word(64)], Word(64), Let(Byte(0, 0, 1), Prim(Zext(8, 56), [0])), 1) }
 
 // The world is the file: the one span.
-fn peek_world(span: List<BitVec(8)>) → World { World(RecInfo::none, [], trivial, [span]) }
+fn peek_world(span: List<BitVec(8)>) → World { World(Table::none(), [], trivial, [span]) }
 
 // The lowering's code, spelled: the index against the length word, the
 // load under the test and narrowed to its byte, zero otherwise, and the
@@ -73,7 +73,7 @@ theorem peek_pinned(span: List<BitVec(8)>, place, i: BitVec(64)):
 theorem peek_compiled(call: Answers(), span: List<BitVec(8)>, place, length, i: BitVec(64)):
     peek_code().eval(call, [place, length, i], buffers := [span]) = peek_rt().meaning(peek_world(span))(place, length, i) {
     cong_fn<List<BitVec(64)>, BitVec(64)>(λ l => first_word(l),
-        Fun::lower_sound(peek_rt(), peek_world(span), call, Tm::calls_agree_none_over(RecInfo::none, [span], call), place, length, i))
+        Fun::lower_sound(peek_rt(), peek_world(span), call, Tm::calls_agree_none_over(Table::none(), [span], call), place, length, i))
 }
 
 // So the code, lent a span with its length, computes the function.
@@ -105,7 +105,7 @@ theorem peek_short_code(): program_eval_over([abc()], [peek_code()], 0, [w(4096)
 theorem guard_matters(): abc().byte_at(w(2)).eq_bit(abc().byte_within(w(2), w(2))) = False { refl }
 
 // A file without the span reads as zeroes.
-theorem peek_no_span(): peek_rt().meaning(World(RecInfo::none, [], trivial))(w(4096), w(3), w(1)) = w(0) { refl }
+theorem peek_no_span(): peek_rt().meaning(World(Table::none(), [], trivial))(w(4096), w(3), w(1)) = w(0) { refl }
 
 // ---------------------------------------------------------------------------
 // The function compiler takes the code.
@@ -127,10 +127,10 @@ theorem peek_accepted(): lower_program_lent([peek_code()], plan_program([peek_co
 fn peek_misread_rt() → Fun { Fun([Word(64), Word(64), Word(64)], Word(64), Let(Byte(0, 0, 2), Prim(Zext(8, 56), [0])), 1) }
 
 fn peek_misread_code() → Function {
-    match peek_misread_rt().lower(World(RecInfo::none, [], trivial)) { None => Function([], nodes_region(Nil), 0), Some(code) => code }
+    match peek_misread_rt().lower(World(Table::none(), [], trivial)) { None => Function([], nodes_region(Nil), 0), Some(code) => code }
 }
 
-theorem peek_misread_lowered(): peek_misread_rt().lower(World(RecInfo::none, [], trivial)).is_some() = True { refl }
+theorem peek_misread_lowered(): peek_misread_rt().lower(World(Table::none(), [], trivial)).is_some() = True { refl }
 theorem peek_misread_refused(): lower_program_lent([peek_misread_code()], plan_program([peek_misread_code()]), [1]) = None { refl }
 theorem peek_misread_placed(): program_placeless([peek_misread_code()]) = False { refl }
 
@@ -141,6 +141,6 @@ theorem peek_unlent_refused(): lower_program_lent([peek_unlent_code()], plan_pro
 
 // An index that is not a 64-bit word, and a variable out of scope: refused
 // by this lowering.
-theorem byte_of_bit_refused(): Tm::lower(Byte(0, 0, 1), World(RecInfo::none, [], trivial), [Bit, Word(64)], [1, 0], 2) = None { refl }
-theorem byte_narrow_length_refused(): Tm::lower(Byte(0, 0, 1), World(RecInfo::none, [], trivial), [Word(64), Word(8)], [1, 0], 2) = None { refl }
-theorem byte_unbound_refused(): Tm::lower(Byte(0, 3, 1), World(RecInfo::none, [], trivial), [Word(64), Word(64)], [1, 0], 2) = None { refl }
+theorem byte_of_bit_refused(): Tm::lower(Byte(0, 0, 1), World(Table::none(), [], trivial), [Bit, Word(64)], [1, 0], 2) = None { refl }
+theorem byte_narrow_length_refused(): Tm::lower(Byte(0, 0, 1), World(Table::none(), [], trivial), [Word(64), Word(8)], [1, 0], 2) = None { refl }
+theorem byte_unbound_refused(): Tm::lower(Byte(0, 3, 1), World(Table::none(), [], trivial), [Word(64), Word(64)], [1, 0], 2) = None { refl }

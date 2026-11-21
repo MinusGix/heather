@@ -249,7 +249,7 @@ fn PTm::LowerHolds(self t: PTm, w: rt::World, known: Nat → Nat → Bool, g: Li
 // Sound
 
 // A port holding a value of a code that is a word holds it as a word.
-theorem PTm::holds_word(tys: Nat → RecInfo, t: Ty, eq: t = Word(64), values: Valuation(), port: Nat, v: t.sem(tys), h: t.Holds(tys, values, port, v)):
+theorem PTm::holds_word(tys: Table, t: Ty, eq: t = Word(64), values: Valuation(), port: Nat, v: t.sem(tys), h: t.Holds(tys, values, port, v)):
     values(64, port) = Ty::cast(tys, t, Word(64), v) {
     j(sym(eq), λ x _ => (u: x.sem(tys)) → x.Holds(tys, values, port, u) → values(64, port) = Ty::cast(tys, x, Word(64), u),
         λ u k => trans(k, sym(Ty::cast_self(tys, Word(64), u))))(v, h)
@@ -469,7 +469,7 @@ fn PTm::param_locs(from, n: Nat) → List<Loc> {
 }
 
 // The values of `n` word variables, from words; a missing one is zero.
-fn PTm::vals_n(tys: Nat → RecInfo, n: Nat, xs: List<BitVec(64)>) → rt::Env(tys, PTm::word_ctx(n)) {
+fn PTm::vals_n(tys: Table, n: Nat, xs: List<BitVec(64)>) → rt::Env(tys, PTm::word_ctx(n)) {
     match n as λ k => rt::Env(tys, PTm::word_ctx(k)) {
         Zero => trivial,
         Succ(m) => match xs {
@@ -587,7 +587,7 @@ theorem PTm::words_at_bounded(m: Nat): (from: Nat) → (env: Env) → PTm::Bound
 }
 
 // Words holding `xs` hold the `n` word variables they are.
-theorem PTm::hold_params(tys: Nat → RecInfo, n: Nat): (xs: List<BitVec(64)>) → xs.len() = n → (env: Env) → (from: Nat) → PTm::WordsAt(env, from, xs) →
+theorem PTm::hold_params(tys: Table, n: Nat): (xs: List<BitVec(64)>) → xs.len() = n → (env: Env) → (from: Nat) → PTm::WordsAt(env, from, xs) →
     LocsHold(tys, env, PTm::word_ctx(n), PTm::param_locs(from, n), PTm::vals_n(tys, n, xs)) {
     match n {
         Zero => λ xs _ env from _ => trivial,

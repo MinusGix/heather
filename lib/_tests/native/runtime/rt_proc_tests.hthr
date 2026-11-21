@@ -23,7 +23,7 @@ import rt_lower;
 import rt_io_lower;
 import rt_proc;
 
-fn proc_world() → rt::World { rt::World(RecInfo::none, [], trivial) }
+fn proc_world() → rt::World { rt::World(Table::none(), [], trivial) }
 
 // `sum(n) = if n == 0 { 0 } else { n + sum(n - 1) }`, variable 0 the
 // argument: the call of itself is not the last thing it does.
@@ -68,7 +68,7 @@ fn sum_meaning(p: Nat, xs: List<BitVec(64)>) → BitVec(64) {
 }
 
 // The meaning at 10, its call read through the procedures' meaning.
-theorem sum_body_means(): PTm::sem(sum_body(), proc_world(), sum_meaning, PTm::word_ctx(1), PTm::vals_n(RecInfo::none, 1, [BitVec::ofNat(10)])) = BitVec::ofNat(55) {
+theorem sum_body_means(): PTm::sem(sum_body(), proc_world(), sum_meaning, PTm::word_ctx(1), PTm::vals_n(Table::none(), 1, [BitVec::ofNat(10)])) = BitVec::ofNat(55) {
     refl
 }
 

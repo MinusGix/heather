@@ -62,21 +62,30 @@ inductive Ty {
     // `Nat` held in a 64-bit word, as `w.toNat()`: a loop's fuel (design
     // §7.2: a `Nat` is accepted only where a bound is structural).
     Count,
-    // The enum of the type table's entry `i` (`RecInfo.alts`), held in one
+    // The enum of the type table's entry `i` (`Table.ens`), held in one
     // word as its constructor's index (design §16.16).
     Enum(i: Nat),
 }
 
-// A record field's type, read without the table: a record's fields are
-// flat, and a `Named` field (refused by every judgment) means `True`.
-fn Ty::Flat(self t: Ty) → Type {
-    match t { Word(w) => BitVec(w), Bit => Bool, ByteList(_) => List<BitVec(8)>, Lines => List<List<BitVec(8)>>, Named(_) => True, Count => Nat, Enum(_) => True }
+// No enums: what an enum's own payload slots are read under (a slot is
+// never an enum).
+fn Ty::no_enums(j: Nat) → Type { True }
+
+// A record field's type, read with the enums' types `en` alone (the type
+// table's enums come before its records, docs/native/runtime-fn-setups-design.md
+// §16.18): a record's fields are flat or enums, and a `Named` field
+// (refused by every judgment) means `True`. Without `en`, an enum means
+// `True` too: an enum's payload slots are read so.
+fn Ty::Flat(self t: Ty, en: Nat → Type := Ty::no_enums) → Type {
+    match t { Word(w) => BitVec(w), Bit => Bool, ByteList(_) => List<BitVec(8)>, Lines => List<List<BitVec(8)>>, Named(_) => True, Count => Nat, Enum(j) => en(j) }
 }
 
 // A tuple of flat fields, `True`-terminated.
-fn Ty::Flats(ts: List<Ty>) → Type {
-    match ts { Nil => True, Cons(t, rest) => Pair<t.Flat(), Ty::Flats(rest)> }
+fn Ty::FlatsIn(ts: List<Ty>, en: Nat → Type) → Type {
+    match ts { Nil => True, Cons(t, rest) => Pair<t.Flat(en := en), Ty::FlatsIn(rest, en)> }
 }
+
+fn Ty::Flats(ts: List<Ty>, en: Nat → Type := Ty::no_enums) → Type { Ty::FlatsIn(ts, en) }
 
 fn Ty::flat_default(self t: Ty) → t.Flat() {
     match t { Word(_) => BitVec::ofNat(0), Bit => False, ByteList(_) => Nil, Lines => Nil, Named(_) => trivial, Count => 0, Enum(_) => trivial }
@@ -343,16 +352,63 @@ fn EnumInfo::of_ctors<E>(slots: List<Ty>, lo, arity: Nat → Nat, first: Ty::Fla
 // The word of a value's tag reads back as the value: what a call passing
 // an enum without fields as its tag word relies on
 // (docs/native/runtime-fn-setups-design.md §16.16).
+// A tag of an enum whose tags fit a word is the number its word is.
+theorem EnumInfo::tag_word(self e: EnumInfo, v: e.E, small: (e.last + 1).leb(Nat::pow(2, 64)) = True):
+    BitVec::ofNat(e.tag(v), n := 64).toNat() = e.tag(v) {
+    BitVec::toNat_ofNat(64, e.tag(v), Nat::le_trans(e.tag(v) + 1, e.last + 1, Nat::pow(2, 64), Nat::le_succ_succ(e.tag(v), e.last, e.bounded(v)),
+        Nat::le_of_leb(e.last + 1, Nat::pow(2, 64), small)))
+}
+
 theorem EnumInfo::read_tag(self e: EnumInfo, v: e.E, small: (e.last + 1).leb(Nat::pow(2, 64)) = True,
     bare: e.fields(v) = Ty::flats_default(e.slots)): e.read(BitVec::ofNat(e.tag(v))) = v {
     let le = e.bounded(v);
-    let lt: (e.tag(v) < Nat::pow(2, 64)) = Nat::le_trans(e.tag(v) + 1, e.last + 1, Nat::pow(2, 64), Nat::le_succ_succ(e.tag(v), e.last, le),
-        Nat::le_of_leb(e.last + 1, Nat::pow(2, 64), small));
-    let word: (BitVec::ofNat(e.tag(v), n := 64).toNat() = e.tag(v)) = BitVec::toNat_ofNat(64, e.tag(v), lt);
+    let word: (BitVec::ofNat(e.tag(v), n := 64).toNat() = e.tag(v)) = e.tag_word(v, small);
     let clamped: (BitVec::ofNat(e.tag(v), n := 64).toNat().min(e.last) = e.tag(v)) =
         j(sym(word), λ y _ => y.min(e.last) = e.tag(v), Nat::min_eq_l(e.tag(v), e.last, le));
     let back: (e.of(e.tag(v), Ty::flats_default(e.slots)) = v) = j(bare, λ t _ => e.of(e.tag(v), t) = v, e.of_tag(v));
     j(sym(clamped), λ y _ => e.of(y, Ty::flats_default(e.slots)) = v, back)
+}
+
+// No enum at any entry: what a table without enums holds.
+fn EnumInfo::nones(j: Nat) → EnumInfo { EnumInfo::none() }
+
+// The enums' types, by entry.
+fn Ty::types(ens: Nat → EnumInfo) → Nat → Type { λ j => ens(j).E }
+
+// An enum field is one without a payload, whose tags fit a word.
+fn Ty::EnumFieldOk(self f: Ty, ens: Nat → EnumInfo) → Type {
+    match f {
+        Word(_) => True, Bit => True, ByteList(_) => True, Lines => True, Named(_) => True, Count => True,
+        Enum(j) => (ens(j).slots = Nil) ∧ ((ens(j).last + 1).leb(Nat::pow(2, 64)) = True),
+    }
+}
+
+fn Ty::EnumFieldsOk(fs: List<Ty>, ens: Nat → EnumInfo) → Type {
+    match fs { Nil => True, Cons(f, rest) => f.EnumFieldOk(ens) ∧ Ty::EnumFieldsOk(rest, ens) }
+}
+
+fn Ty::check_bare_small(slots: List<Ty>, b: Bool) → Option<(slots = Nil) ∧ (b = True)> {
+    match slots as λ s => Option<(s = Nil) ∧ (b = True)> {
+        Cons(_, _) => None,
+        Nil => match b as λ c => Option<(Nil<Ty> = Nil<Ty>) ∧ (c = True)> { False => None, True => Some(⟨refl, refl⟩) },
+    }
+}
+
+fn Ty::check_enum_field(self f: Ty, ens: Nat → EnumInfo) → Option<f.EnumFieldOk(ens)> {
+    match f as λ g => Option<g.EnumFieldOk(ens)> {
+        Word(_) => Some(trivial), Bit => Some(trivial), ByteList(_) => Some(trivial), Lines => Some(trivial), Named(_) => Some(trivial), Count => Some(trivial),
+        Enum(j) => Ty::check_bare_small(ens(j).slots, (ens(j).last + 1).leb(Nat::pow(2, 64))),
+    }
+}
+
+fn Ty::check_enum_fields(fs: List<Ty>, ens: Nat → EnumInfo) → Option<Ty::EnumFieldsOk(fs, ens)> {
+    match fs {
+        Nil => Some(trivial),
+        Cons(f, rest) => match f.check_enum_field(ens) {
+            None => None,
+            Some(o) => match Ty::check_enum_fields(rest, ens) { None => None, Some(os) => Some(⟨o, os⟩) },
+        },
+    }
 }
 
 // A record type as the meaning reads it: the type, its fields' codes, the
@@ -360,59 +416,98 @@ theorem EnumInfo::read_tag(self e: EnumInfo, v: e.E, small: (e.last + 1).leb(Nat
 // projecting what was built gives the fields back (`refl` for a record's own
 // constructor and fields, by η for pairs and `True`): what a setup that keeps
 // a record as its fields relies on.
-record RecInfo {
-    T: Type, fields: List<Ty>, mk: Ty::Flats(fields) → T, get: T → Ty::Flats(fields),
-    round: (t: Ty::Flats(fields)) → get(mk(t)) = t,
+//
+// A field may be an enum of the table (`Enum(j)`), its type `ens(j).E`:
+// the table holds its enums apart from its records and before them
+// (`Table`), so a record's field types read the enums' and never a
+// record's.
+record RecInfo(ens: Nat → EnumInfo) {
+    T: Type, fields: List<Ty>, mk: Ty::Flats(fields, en := Ty::types(ens)) → T, get: T → Ty::Flats(fields, en := Ty::types(ens)),
+    round: (t: Ty::Flats(fields, en := Ty::types(ens))) → get(mk(t)) = t,
     // And building from what was read off a record is the record (`refl`
     // by η for a record's own constructor and fields): what passing a
     // record held in one word to a call relies on.
     back: (v: T) → mk(get(v)) = v,
-    // The entry's enum, for an `Enum` code (none for a record's).
-    alts: EnumInfo := EnumInfo::none(),
+    // Its enum fields are ones the lowering holds in their tag words
+    // (`Ty::EnumFieldOk`): `trivial`, by evaluating the check, at a
+    // table's closed fields.
+    fits: Ty::check_enum_fields(fields, ens).is_some().IsTrue(),
 }
+
+// The type table a program's meaning reads: its enums (`EnumInfo`, whose
+// payload slots are flat) and its records over them (`RecInfo`, whose
+// fields may be those enums), by one numbering of entries. An entry is an
+// enum or a record; the other table holds nothing there.
+record Table { ens: Nat → EnumInfo, recs: Nat → RecInfo(ens) }
 
 // The enum of table entry `i`, as a type: what a certificate quantifies an
 // enum parameter over.
-fn RecInfo::enum_at(tys: Nat → RecInfo, i: Nat) → Type { tys(i).alts.E }
+fn RecInfo::enum_at(tys: Table, i: Nat) → Type { tys.ens(i).E }
 
 // The record of table entry `i`, as a type: what a certificate
 // quantifies a record parameter of several words over.
-fn RecInfo::record_at(tys: Nat → RecInfo, i: Nat) → Type { tys(i).T }
+fn RecInfo::record_at(tys: Table, i: Nat) → Type { tys.recs(i).T }
 
 // The word an enum of table entry `i` is passed as: its tag.
-fn RecInfo::enum_word(tys: Nat → RecInfo, i: Nat, v: tys(i).alts.E) → BitVec(64) { BitVec::ofNat(tys(i).alts.tag(v)) }
+fn RecInfo::enum_word(tys: Table, i: Nat, v: tys.ens(i).E) → BitVec(64) { BitVec::ofNat(tys.ens(i).tag(v)) }
 
 // The `i`th code, `Bit` past the end (every judgment refuses that index).
 fn Ty::at(ts: List<Ty>, i: Nat) → Ty {
     match ts { Nil => Bit, Cons(t, rest) => match i { Zero => t, Succ(k) => Ty::at(rest, k) } }
 }
 
-fn Ty::sem(self t: Ty, tys: Nat → RecInfo) → Type {
+fn Ty::sem(self t: Ty, tys: Table) → Type {
     match t {
-        Word(w) => BitVec(w), Bit => Bool, ByteList(_) => List<BitVec(8)>, Lines => List<List<BitVec(8)>>, Named(i) => tys(i).T, Count => Nat,
-        Enum(i) => tys(i).alts.E,
+        Word(w) => BitVec(w), Bit => Bool, ByteList(_) => List<BitVec(8)>, Lines => List<List<BitVec(8)>>, Named(i) => tys.recs(i).T, Count => Nat,
+        Enum(i) => tys.ens(i).E,
     }
+}
+
+// A field's default, an enum field its first constructor without fields.
+fn Ty::flat_default_in(self t: Ty, ens: Nat → EnumInfo) → t.Flat(en := Ty::types(ens)) {
+    match t {
+        Word(_) => BitVec::ofNat(0), Bit => False, ByteList(_) => Nil, Lines => Nil, Named(_) => trivial, Count => 0,
+        Enum(j) => ens(j).of(0, Ty::flats_default(ens(j).slots)),
+    }
+}
+
+fn Ty::flats_default_in(ts: List<Ty>, ens: Nat → EnumInfo) → Ty::Flats(ts, en := Ty::types(ens)) {
+    match ts { Nil => trivial, Cons(t, rest) => Pair(t.flat_default_in(ens), Ty::flats_default_in(rest, ens)) }
 }
 
 // Every type is inhabited, so a meaning is total: an ill-typed node (which
 // every judgment refuses) means this.
-fn Ty::default(self t: Ty, tys: Nat → RecInfo) → t.sem(tys) {
+fn Ty::default(self t: Ty, tys: Table) → t.sem(tys) {
     match t {
         Word(_) => BitVec::ofNat(0),
         Bit => False,
         ByteList(_) => Nil,
         Lines => Nil,
-        Named(i) => tys(i).mk(Ty::flats_default(tys(i).fields)),
+        Named(i) => tys.recs(i).mk(Ty::flats_default_in(tys.recs(i).fields, tys.ens)),
         Count => 0,
-        Enum(i) => tys(i).alts.of(0, Ty::flats_default(tys(i).alts.slots)),
+        Enum(i) => tys.ens(i).of(0, Ty::flats_default(tys.ens(i).slots)),
     }
 }
 
-fn Ty::to_flat(self t: Ty, tys: Nat → RecInfo) → t.sem(tys) → t.Flat() {
+// A value as a record's field and back: itself, but for a record, which no
+// field holds. An enum field is the enum.
+fn Ty::to_flat(self t: Ty, tys: Table) → t.sem(tys) → t.Flat(en := Ty::types(tys.ens)) {
+    match t { Word(_) => λ v => v, Bit => λ v => v, ByteList(_) => λ v => v, Lines => λ v => v, Named(_) => λ _ => trivial, Count => λ v => v, Enum(_) => λ v => v }
+}
+
+fn Ty::of_flat(self t: Ty, tys: Table) → t.Flat(en := Ty::types(tys.ens)) → t.sem(tys) {
+    match t {
+        Word(_) => λ v => v, Bit => λ v => v, ByteList(_) => λ v => v, Lines => λ v => v, Named(i) => λ _ => Named(i).default(tys), Count => λ v => v,
+        Enum(_) => λ v => v,
+    }
+}
+
+// The same as an enum's payload slot, which is never an enum or a record.
+fn Ty::to_slot(self t: Ty, tys: Table) → t.sem(tys) → t.Flat() {
     match t { Word(_) => λ v => v, Bit => λ v => v, ByteList(_) => λ v => v, Lines => λ v => v, Named(_) => λ _ => trivial, Count => λ v => v, Enum(_) => λ _ => trivial }
 }
 
-fn Ty::of_flat(self t: Ty, tys: Nat → RecInfo) → t.Flat() → t.sem(tys) {
+fn Ty::of_slot(self t: Ty, tys: Table) → t.Flat() → t.sem(tys) {
     match t {
         Word(_) => λ v => v, Bit => λ v => v, ByteList(_) => λ v => v, Lines => λ v => v, Named(i) => λ _ => Named(i).default(tys), Count => λ v => v,
         Enum(i) => λ _ => Enum(i).default(tys),
@@ -427,7 +522,7 @@ fn Ty::elem(self t: Ty) → Ty {
 
 // A list's elements, at their code (empty for a code that is no list): at
 // a closed code, the value itself.
-fn Ty::items(self t: Ty, tys: Nat → RecInfo) → t.sem(tys) → List<t.elem().sem(tys)> {
+fn Ty::items(self t: Ty, tys: Table) → t.sem(tys) → List<t.elem().sem(tys)> {
     match t { Word(_) => λ _ => Nil, Bit => λ _ => Nil, ByteList(_) => λ v => v, Lines => λ v => v, Named(_) => λ _ => Nil, Count => λ _ => Nil, Enum(_) => λ _ => Nil }
 }
 
@@ -482,9 +577,144 @@ fn Ty::equation(self a: Ty, b: Ty) → (a = b) ∨ True {
     }
 }
 
+// ---------------------------------------------------------------------------
+// A record as the lowering holds it (docs/native/runtime-fn-setups-design.md
+// §16.18): each field at one port, an enum field as its tag word. The
+// meaning reads a record's enum field as the enum (`RecInfo`, `Table`);
+// the lowering, which keeps a field in a word, reads it as a 64-bit word,
+// the field's leaf. Only an enum without a payload is a field
+// (`Ty::EnumFieldOk`), so its tag word is all of it.
+
+fn Ty::leaf(self f: Ty) → Ty {
+    match f { Word(w) => Word(w), Bit => Bit, ByteList(c) => ByteList(c), Lines => Lines, Named(i) => Named(i), Count => Count, Enum(_) => Word(64) }
+}
+
+fn Ty::leaves(fs: List<Ty>) → List<Ty> {
+    match fs { Nil => Nil, Cons(f, rest) => Cons(f.leaf(), Ty::leaves(rest)) }
+}
+
+// A field as its leaf, and back: an enum's tag word, and the enum a word
+// names (`EnumInfo::read`).
+fn Ty::leaf_of(self f: Ty, ens: Nat → EnumInfo) → f.Flat(en := Ty::types(ens)) → f.leaf().Flat() {
+    match f as λ g => g.Flat(en := Ty::types(ens)) → g.leaf().Flat() {
+        Word(_) => λ v => v, Bit => λ v => v, ByteList(_) => λ v => v, Lines => λ v => v, Named(_) => λ v => v, Count => λ v => v,
+        Enum(j) => λ v => BitVec::ofNat(ens(j).tag(v)),
+    }
+}
+
+fn Ty::of_leaf(self f: Ty, ens: Nat → EnumInfo) → f.leaf().Flat() → f.Flat(en := Ty::types(ens)) {
+    match f as λ g => g.leaf().Flat() → g.Flat(en := Ty::types(ens)) {
+        Word(_) => λ v => v, Bit => λ v => v, ByteList(_) => λ v => v, Lines => λ v => v, Named(_) => λ v => v, Count => λ v => v,
+        Enum(j) => λ x => ens(j).read(x),
+    }
+}
+
+fn Ty::leafs(fs: List<Ty>, ens: Nat → EnumInfo) → Ty::FlatsIn(fs, Ty::types(ens)) → Ty::Flats(Ty::leaves(fs)) {
+    match fs {
+        Nil => λ _ => trivial,
+        Cons(f, rest) => λ t => Pair(f.leaf_of(ens, t.fst), Ty::leafs(rest, ens, t.snd)),
+    }
+}
+
+fn Ty::unleafs(fs: List<Ty>, ens: Nat → EnumInfo) → Ty::Flats(Ty::leaves(fs)) → Ty::FlatsIn(fs, Ty::types(ens)) {
+    match fs {
+        Nil => λ _ => trivial,
+        Cons(f, rest) => λ t => Pair(f.of_leaf(ens, t.fst), Ty::unleafs(rest, ens, t.snd)),
+    }
+}
+
+// A tuple of no slots is the default one.
+theorem Ty::flats_nil_default(fs: List<Ty>, none: fs = Nil, t: Ty::Flats(fs)): t = Ty::flats_default(fs) {
+    j(sym(none), λ g _ => (u: Ty::Flats(g)) → u = Ty::flats_default(g), λ u => refl)(t)
+}
+
+// An enum field read back off its leaf is itself.
+theorem Ty::of_leaf_of(self f: Ty, ens: Nat → EnumInfo): f.EnumFieldOk(ens) → (v: f.Flat(en := Ty::types(ens))) → f.of_leaf(ens, f.leaf_of(ens, v)) = v {
+    match f {
+        Word(_) => λ _ v => refl, Bit => λ _ v => refl, ByteList(_) => λ _ v => refl, Lines => λ _ v => refl, Named(_) => λ _ v => refl, Count => λ _ v => refl,
+        Enum(j) => λ ok v => ens(j).read_tag(v, ok.right, Ty::flats_nil_default(ens(j).slots, ok.left, ens(j).fields(v))),
+    }
+}
+
+theorem Ty::unleafs_leafs(fs: List<Ty>, ens: Nat → EnumInfo): Ty::EnumFieldsOk(fs, ens) → (t: Ty::FlatsIn(fs, Ty::types(ens))) →
+    Ty::unleafs(fs, ens, Ty::leafs(fs, ens, t)) = t {
+    match fs {
+        Nil => λ _ t => refl,
+        Cons(f, rest) => λ ok t => trans(cong_fn(λ (a: f.Flat(en := Ty::types(ens))) => Pair(a, Ty::unleafs(rest, ens, Ty::leafs(rest, ens, t.snd))),
+                f.of_leaf_of(ens, ok.left, t.fst)),
+            cong_fn(λ (b: Ty::FlatsIn(rest, Ty::types(ens))) => Pair(t.fst, b), Ty::unleafs_leafs(rest, ens, ok.right, t.snd))),
+    }
+}
+
+// A record of the table as the lowering holds it: its fields' leaves, its
+// fields as their leaves, and the record built from leaves.
+fn Table::fields(self tys: Table, i: Nat) → List<Ty> { Ty::leaves(tys.recs(i).fields) }
+
+fn Table::get(self tys: Table, i: Nat, v: tys.recs(i).T) → Ty::Flats(tys.fields(i)) { Ty::leafs(tys.recs(i).fields, tys.ens, tys.recs(i).get(v)) }
+
+fn Table::mk(self tys: Table, i: Nat, t: Ty::Flats(tys.fields(i))) → tys.recs(i).T { tys.recs(i).mk(Ty::unleafs(tys.recs(i).fields, tys.ens, t)) }
+
+// Its enum fields fit (`RecInfo.fits`), so it is built back from its
+// leaves.
+theorem Table::back(self tys: Table, i: Nat, v: tys.recs(i).T): tys.mk(i, tys.get(i, v)) = v {
+    let ok = Ty::check_enum_fields(tys.recs(i).fields, tys.ens).get(tys.recs(i).fits);
+    trans(cong_fn(tys.recs(i).mk, Ty::unleafs_leafs(tys.recs(i).fields, tys.ens, ok, tys.recs(i).get(v))), tys.recs(i).back(v))
+}
+
+// Built from the leaves of its fields, a record's leaves are those
+// (`RecInfo.round`): what building a record from words the lowering holds
+// relies on.
+theorem Table::leaves_round(self tys: Table, i: Nat, u: Ty::FlatsIn(tys.recs(i).fields, Ty::types(tys.ens))):
+    tys.get(i, tys.recs(i).mk(u)) = Ty::leafs(tys.recs(i).fields, tys.ens, u) {
+    cong_fn(λ (t: Ty::FlatsIn(tys.recs(i).fields, Ty::types(tys.ens))) => Ty::leafs(tys.recs(i).fields, tys.ens, t), tys.recs(i).round(u))
+}
+
+// With no enum field, a record's leaves are its fields, and building one
+// from leaves and reading them back is the identity (`RecInfo.round`).
+fn Ty::not_enum(self f: Ty) → Type { match f { Word(_) => True, Bit => True, ByteList(_) => True, Lines => True, Named(_) => True, Count => True, Enum(_) => False } }
+
+fn Ty::NoEnums(fs: List<Ty>) → Type {
+    match fs { Nil => True, Cons(f, rest) => f.not_enum() ∧ Ty::NoEnums(rest) }
+}
+
+theorem Ty::leafs_unleafs(fs: List<Ty>, ens: Nat → EnumInfo): Ty::NoEnums(fs) → (t: Ty::Flats(Ty::leaves(fs))) → Ty::leafs(fs, ens, Ty::unleafs(fs, ens, t)) = t {
+    match fs {
+        Nil => λ _ t => refl,
+        Cons(f, rest) => match f as λ g => Ty::NoEnums(Cons(g, rest)) → (t: Ty::Flats(Ty::leaves(Cons(g, rest)))) →
+                Ty::leafs(Cons(g, rest), ens, Ty::unleafs(Cons(g, rest), ens, t)) = t {
+            Word(_) => λ ok t => cong_fn(λ (b: Ty::Flats(Ty::leaves(rest))) => Pair(t.fst, b), Ty::leafs_unleafs(rest, ens, ok.right, t.snd)),
+            Bit => λ ok t => cong_fn(λ (b: Ty::Flats(Ty::leaves(rest))) => Pair(t.fst, b), Ty::leafs_unleafs(rest, ens, ok.right, t.snd)),
+            ByteList(_) => λ ok t => cong_fn(λ (b: Ty::Flats(Ty::leaves(rest))) => Pair(t.fst, b), Ty::leafs_unleafs(rest, ens, ok.right, t.snd)),
+            Lines => λ ok t => cong_fn(λ (b: Ty::Flats(Ty::leaves(rest))) => Pair(t.fst, b), Ty::leafs_unleafs(rest, ens, ok.right, t.snd)),
+            Named(_) => λ ok t => cong_fn(λ (b: Ty::Flats(Ty::leaves(rest))) => Pair(t.fst, b), Ty::leafs_unleafs(rest, ens, ok.right, t.snd)),
+            Count => λ ok t => cong_fn(λ (b: Ty::Flats(Ty::leaves(rest))) => Pair(t.fst, b), Ty::leafs_unleafs(rest, ens, ok.right, t.snd)),
+            Enum(_) => λ ok t => false_elim(ok.left),
+        },
+    }
+}
+
+fn Ty::check_not_enum(self f: Ty) → Option<f.not_enum()> {
+    match f as λ g => Option<g.not_enum()> {
+        Word(_) => Some(trivial), Bit => Some(trivial), ByteList(_) => Some(trivial), Lines => Some(trivial), Named(_) => Some(trivial), Count => Some(trivial), Enum(_) => None,
+    }
+}
+
+fn Ty::check_no_enums(fs: List<Ty>) → Option<Ty::NoEnums(fs)> {
+    match fs {
+        Nil => Some(trivial),
+        Cons(f, rest) => match f.check_not_enum() { None => None, Some(o) => match Ty::check_no_enums(rest) { None => None, Some(os) => Some(⟨o, os⟩) } },
+    }
+}
+
+theorem Table::round(self tys: Table, i: Nat, none: Ty::NoEnums(tys.recs(i).fields), t: Ty::Flats(tys.fields(i))): tys.get(i, tys.mk(i, t)) = t {
+    trans(cong_fn(λ (u: Ty::FlatsIn(tys.recs(i).fields, Ty::types(tys.ens))) => Ty::leafs(tys.recs(i).fields, tys.ens, u),
+            tys.recs(i).round(Ty::unleafs(tys.recs(i).fields, tys.ens, t))),
+        Ty::leafs_unleafs(tys.recs(i).fields, tys.ens, none, t))
+}
+
 // A value read as a count: a word's `toNat` (how a count held in a word
 // crosses a call, docs/native/runtime-fn-setups-design.md §16.11), 0 for the rest.
-fn Ty::to_count(tys: Nat → RecInfo, a: Ty) → a.sem(tys) → Nat {
+fn Ty::to_count(tys: Table, a: Ty) → a.sem(tys) → Nat {
     match a as λ x => x.sem(tys) → Nat {
         Word(_) => λ v => v.toNat(),
         Bit => λ _ => 0,
@@ -503,8 +733,11 @@ fn Ty::to_count(tys: Nat → RecInfo, a: Ty) → a.sem(tys) → Nat {
 // boundary in a 64-bit one, issues/runtime-repr-narrow-words.md: the low
 // bits are what binding the word gives its port at that width,
 // `word_value`); the default elsewhere.
-fn Ty::word_at(self f: Ty, x: BitVec(64)) → f.Flat() {
-    match f as λ y => y.Flat() {
+// An enum field reads its word as its tag (`EnumInfo::read`) and is
+// written as its tag word: only an enum without a payload is a field one
+// word holds (`Ty::Slot`).
+fn Ty::word_at(self f: Ty, x: BitVec(64), ens: Nat → EnumInfo) → f.Flat(en := Ty::types(ens)) {
+    match f as λ y => y.Flat(en := Ty::types(ens)) {
         Word(w) => match Nat::equation(64, w) { Inl(e) => j(e, λ y _ => BitVec(y), x), Inr(_) => BitVec::ofNat(x.toNat()) },
         // A bit is the word's lowest bit, as `Resize` to one bit keeps it.
         Bit => BitVec::ofNat(x.toNat(), n := 1).head_bit(),
@@ -512,12 +745,12 @@ fn Ty::word_at(self f: Ty, x: BitVec(64)) → f.Flat() {
         Lines => Nil,
         Named(_) => trivial,
         Count => 0,
-        Enum(_) => trivial,
+        Enum(j) => ens(j).read(x),
     }
 }
 
-fn Ty::flat_word(self f: Ty) → f.Flat() → BitVec(64) {
-    match f as λ y => y.Flat() → BitVec(64) {
+fn Ty::flat_word(self f: Ty, ens: Nat → EnumInfo) → f.Flat(en := Ty::types(ens)) → BitVec(64) {
+    match f as λ y => y.Flat(en := Ty::types(ens)) → BitVec(64) {
         Word(w) => λ v => match w.equation(64) { Inl(e) => j(e, λ y _ => BitVec(y), v), Inr(_) => BitVec::ofNat(v.toNat()) },
         // A bit as the word it is zero-extended to (zero or one).
         Bit => λ b => BitVec::ofNat(BitVec::ofBool(b).toNat()),
@@ -525,33 +758,33 @@ fn Ty::flat_word(self f: Ty) → f.Flat() → BitVec(64) {
         Lines => λ _ => BitVec::ofNat(0),
         Named(_) => λ _ => BitVec::ofNat(0),
         Count => λ _ => BitVec::ofNat(0),
-        Enum(_) => λ _ => BitVec::ofNat(0),
+        Enum(j) => λ v => BitVec::ofNat(ens(j).tag(v)),
     }
 }
 
 // A record held in one word (a type at its `datarepr`'s word carrier,
 // `SInt(64)` at `BitVec(64)`): built from the word, its first field is the
 // word and the rest are defaults; read back, the word is its first field.
-fn Ty::flats_word(fs: List<Ty>, x: BitVec(64)) → Ty::Flats(fs) {
-    match fs { Nil => trivial, Cons(f, rest) => Pair(f.word_at(x), Ty::flats_default(rest)) }
+fn Ty::flats_word(fs: List<Ty>, x: BitVec(64), ens: Nat → EnumInfo) → Ty::Flats(fs, en := Ty::types(ens)) {
+    match fs { Nil => trivial, Cons(f, rest) => Pair(f.word_at(x, ens), Ty::flats_default_in(rest, ens)) }
 }
 
-fn Ty::flats_head_word(fs: List<Ty>) → Ty::Flats(fs) → BitVec(64) {
-    match fs as λ g => Ty::Flats(g) → BitVec(64) { Nil => λ _ => BitVec::ofNat(0), Cons(f, _) => λ t => f.flat_word(t.fst) }
+fn Ty::flats_head_word(fs: List<Ty>, ens: Nat → EnumInfo) → Ty::Flats(fs, en := Ty::types(ens)) → BitVec(64) {
+    match fs as λ g => Ty::Flats(g, en := Ty::types(ens)) → BitVec(64) { Nil => λ _ => BitVec::ofNat(0), Cons(f, _) => λ t => f.flat_word(ens, t.fst) }
 }
 
 // The word a value crosses a function's boundary as, read off a word or a
 // record held in one word (zero for the rest).
-fn Ty::word_from(tys: Nat → RecInfo, a: Ty) → a.sem(tys) → BitVec(64) {
+fn Ty::word_from(tys: Table, a: Ty) → a.sem(tys) → BitVec(64) {
     match a as λ x => x.sem(tys) → BitVec(64) {
-        Word(w) => λ v => Word(w).flat_word(v),
+        Word(w) => λ v => Word(w).flat_word(EnumInfo::nones, v),
         // A bit as the word it is zero-extended to (C's `bool`, 0 or 1).
         Bit => λ b => BitVec::ofNat(BitVec::ofBool(b).toNat()),
         ByteList(_) => λ _ => BitVec::ofNat(0),
         Lines => λ _ => BitVec::ofNat(0),
-        Named(i) => λ v => Ty::flats_head_word(tys(i).fields, tys(i).get(v)),
+        Named(i) => λ v => Ty::flats_head_word(tys.fields(i), EnumInfo::nones, tys.get(i, v)),
         Count => λ _ => BitVec::ofNat(0),
-        Enum(i) => λ v => BitVec::ofNat(tys(i).alts.tag(v)),
+        Enum(i) => λ v => BitVec::ofNat(tys.ens(i).tag(v)),
     }
 }
 
@@ -561,49 +794,49 @@ fn Ty::word_from(tys: Nat → RecInfo, a: Ty) → a.sem(tys) → BitVec(64) {
 // other mismatches). The two record cases are how a function's boundary,
 // which passes 64-bit words, reads a parameter or result held in one
 // (`Ty::OneWord`, `rt_lower.hthr`).
-fn Ty::convert(tys: Nat → RecInfo, a, b: Ty, v: a.sem(tys)) → b.sem(tys) {
+fn Ty::convert(tys: Table, a, b: Ty, v: a.sem(tys)) → b.sem(tys) {
     match b as λ y => y.sem(tys) {
-        Word(w) => Word(w).word_at(Ty::word_from(tys, a, v)),
+        Word(w) => Word(w).word_at(Ty::word_from(tys, a, v), EnumInfo::nones),
         // A word read as a bit is its lowest bit (what `Resize` to one bit
         // keeps).
         Bit => BitVec::ofNat(Ty::word_from(tys, a, v).toNat(), n := 1).head_bit(),
         ByteList(_) => Nil,
         Lines => Nil,
-        Named(i) => tys(i).mk(Ty::flats_word(tys(i).fields, Ty::word_from(tys, a, v))),
+        Named(i) => tys.mk(i, Ty::flats_word(tys.fields(i), Ty::word_from(tys, a, v), EnumInfo::nones)),
         Count => Ty::to_count(tys, a, v),
-        Enum(i) => tys(i).alts.read(Ty::word_from(tys, a, v)),
+        Enum(i) => tys.ens(i).read(Ty::word_from(tys, a, v)),
     }
 }
 
 // A value at `a` read at `b`: itself when the codes agree, which at closed
 // codes is a conversion; a word read as a count is its `toNat`.
-fn Ty::cast(tys: Nat → RecInfo, a, b: Ty, v: a.sem(tys)) → b.sem(tys) {
+fn Ty::cast(tys: Table, a, b: Ty, v: a.sem(tys)) → b.sem(tys) {
     match a.equation(b) { Inl(e) => j(e, λ x _ => x.sem(tys), v), Inr(_) => Ty::convert(tys, a, b, v) }
 }
 
 // The curried function type of a signature.
-fn Ty::Arrows(tys: Nat → RecInfo, ps: List<Ty>, r: Ty) → Type {
+fn Ty::Arrows(tys: Table, ps: List<Ty>, r: Ty) → Type {
     match ps { Nil => r.sem(tys), Cons(p, rest) => p.sem(tys) → Ty::Arrows(tys, rest, r) }
 }
 
-fn Ty::arrows_default(tys: Nat → RecInfo, ps: List<Ty>, r: Ty) → Ty::Arrows(tys, ps, r) {
+fn Ty::arrows_default(tys: Table, ps: List<Ty>, r: Ty) → Ty::Arrows(tys, ps, r) {
     match ps { Nil => r.default(tys), Cons(_, rest) => λ _ => Ty::arrows_default(tys, rest, r) }
 }
 
 // A curried function of a signature's operands into any type: what a
 // computation over a state means (`rt_io`, `rt_file`).
-fn Ty::ArrowsTo(tys: Nat → RecInfo, ps: List<Ty>, R: Type) → Type {
+fn Ty::ArrowsTo(tys: Table, ps: List<Ty>, R: Type) → Type {
     match ps { Nil => R, Cons(p, rest) => p.sem(tys) → Ty::ArrowsTo(tys, rest, R) }
 }
 
 // ---------------------------------------------------------------------------
 // Environments: a value per variable, the most recent first.
 
-fn Env(tys: Nat → RecInfo, g: List<Ty>) → Type {
+fn Env(tys: Table, g: List<Ty>) → Type {
     match g { Nil => True, Cons(t, rest) => Pair<t.sem(tys), Env(tys, rest)> }
 }
 
-fn Env::get(tys: Nat → RecInfo, g: List<Ty>) → Env(tys, g) → (i: Nat) → Ty::at(g, i).sem(tys) {
+fn Env::get(tys: Table, g: List<Ty>) → Env(tys, g) → (i: Nat) → Ty::at(g, i).sem(tys) {
     match g {
         Nil => λ _ i => False,
         Cons(_, rest) => λ env i => match i { Zero => env.fst, Succ(k) => Env::get(tys, rest, env.snd, k) },
@@ -617,7 +850,7 @@ fn Ty::bind_onto(ps: List<Ty>, g: List<Ty>) → List<Ty> {
 }
 
 // A function of an environment, curried into the signature's arguments.
-fn Ty::curry(tys: Nat → RecInfo, r: Ty, ps: List<Ty>)
+fn Ty::curry(tys: Table, r: Ty, ps: List<Ty>)
     → (g: List<Ty>) → Env(tys, g) → (Env(tys, Ty::bind_onto(ps, g)) → r.sem(tys)) → Ty::Arrows(tys, ps, r)
 {
     match ps {
@@ -750,7 +983,7 @@ fn Op::result(self o: Op) → Ty {
     }
 }
 
-fn Op::sem(self o: Op, tys: Nat → RecInfo) → Ty::Arrows(tys, o.params(), o.result()) {
+fn Op::sem(self o: Op, tys: Table) → Ty::Arrows(tys, o.params(), o.result()) {
     match o {
         Add(w) => λ (x: BitVec(w)) (y: BitVec(w)) => x.add(y),
         Sub(w) => λ (x: BitVec(w)) (y: BitVec(w)) => x.sub(y),
@@ -774,7 +1007,7 @@ fn Op::sem(self o: Op, tys: Nat → RecInfo) → Ty::Arrows(tys, o.params(), o.r
         Ashr(w, k) => λ (x: BitVec(w)) => x.arithmetic_shift_right(k),
         Sext(n, extra) => λ (x: BitVec(n + 1)) => x.sign_extend(extra),
         Apply(o, w) => λ (x: BitVec(w)) (y: BitVec(w)) => o.run(x, y),
-        TagIs(i, k) => λ (v: tys(i).alts.E) => tys(i).alts.tag(v).same(k),
+        TagIs(i, k) => λ (v: tys.ens(i).E) => tys.ens(i).tag(v).same(k),
     }
 }
 
@@ -858,11 +1091,11 @@ fn Sig::at(sigs: List<Sig>, i: Nat) → Sig {
 // The meanings of a program's functions, one per signature: what a `Call`
 // is answered with. The pin of a function supplies its callees' own
 // definitions, so no callee is unfolded.
-fn Sig::Sems(tys: Nat → RecInfo, sigs: List<Sig>) → Type {
+fn Sig::Sems(tys: Table, sigs: List<Sig>) → Type {
     match sigs { Nil => True, Cons(s, rest) => Pair<Ty::Arrows(tys, s.params, s.result), Sig::Sems(tys, rest)> }
 }
 
-fn Sig::get(tys: Nat → RecInfo, sigs: List<Sig>) → Sig::Sems(tys, sigs) → (i: Nat)
+fn Sig::get(tys: Table, sigs: List<Sig>) → Sig::Sems(tys, sigs) → (i: Nat)
     → Ty::Arrows(tys, Sig::at(sigs, i).params, Sig::at(sigs, i).result)
 {
     match sigs {
@@ -878,7 +1111,7 @@ fn Program::sigs(self p: Program) → List<Sig> { p.funs.map(Fun::sig) }
 // What the meaning reads besides a term: the type table, the program's
 // signatures, the meanings answering its calls, and the file of spans its
 // functions are lent (none, for a function of words alone).
-record World { tys: Nat → RecInfo, sigs: List<Sig>, callees: Sig::Sems(tys, sigs), spans: List<List<BitVec(8)>> := [] }
+record World { tys: Table, sigs: List<Sig>, callees: Sig::Sems(tys, sigs), spans: List<List<BitVec(8)>> := [] }
 
 // A function of a signature applied to variables, each cast to its
 // parameter's code.
@@ -895,25 +1128,39 @@ fn Tm::apply(w: World, g: List<Ty>, env: Env(w.tys, g), r: Ty, ps: List<Ty>)
 }
 
 // The flat field tuple of a record, from variables.
-fn Tm::fields(w: World, g: List<Ty>, env: Env(w.tys, g), fs: List<Ty>) → List<Nat> → Ty::Flats(fs) {
+fn Tm::fields(w: World, g: List<Ty>, env: Env(w.tys, g), fs: List<Ty>) → List<Nat> → Ty::Flats(fs, en := Ty::types(w.tys.ens)) {
     match fs {
         Nil => λ _ => trivial,
         Cons(f, rest) => λ vs => match vs {
-            Nil => Ty::flats_default(Cons(f, rest)),
+            Nil => Ty::flats_default_in(Cons(f, rest), w.tys.ens),
             Cons(v, more) => Pair(f.to_flat(w.tys, Ty::cast(w.tys, Ty::at(g, v), f, Env::get(w.tys, g, env, v))),
                 Tm::fields(w, g, env, rest, more)),
         },
     }
 }
 
-fn Ty::flat_nth(fs: List<Ty>) → Ty::Flats(fs) → (k: Nat) → Ty::at(fs, k).Flat() {
+// An enum's payload slots, from variables.
+fn Tm::slots(w: World, g: List<Ty>, env: Env(w.tys, g), fs: List<Ty>) → List<Nat> → Ty::Flats(fs) {
     match fs {
-        Nil => λ _ k => False,
-        Cons(_, rest) => λ t k => match k { Zero => t.fst, Succ(n) => Ty::flat_nth(rest, t.snd, n) },
+        Nil => λ _ => trivial,
+        Cons(f, rest) => λ vs => match vs {
+            Nil => Ty::flats_default(Cons(f, rest)),
+            Cons(v, more) => Pair(f.to_slot(w.tys, Ty::cast(w.tys, Ty::at(g, v), f, Env::get(w.tys, g, env, v))),
+                Tm::slots(w, g, env, rest, more)),
+        },
     }
 }
 
-fn Tm::lit(t: Ty, n: Nat, tys: Nat → RecInfo) → t.sem(tys) {
+fn Ty::flat_nth_in(fs: List<Ty>, en: Nat → Type) → Ty::Flats(fs, en := en) → (k: Nat) → Ty::at(fs, k).Flat(en := en) {
+    match fs {
+        Nil => λ _ k => False,
+        Cons(_, rest) => λ t k => match k { Zero => t.fst, Succ(n) => Ty::flat_nth_in(rest, en, t.snd, n) },
+    }
+}
+
+fn Ty::flat_nth(fs: List<Ty>) → Ty::Flats(fs) → (k: Nat) → Ty::at(fs, k).Flat() { Ty::flat_nth_in(fs, Ty::no_enums) }
+
+fn Tm::lit(t: Ty, n: Nat, tys: Table) → t.sem(tys) {
     match t {
         Word(_) => BitVec::ofNat(n),
         Bit => match n { Zero => False, Succ(_) => True },
@@ -922,7 +1169,7 @@ fn Tm::lit(t: Ty, n: Nat, tys: Nat → RecInfo) → t.sem(tys) {
         Named(i) => Named(i).default(tys),
         Count => n,
         // A constructor of an enum by its index, without fields (`EnumInfo.of`).
-        Enum(i) => tys(i).alts.of(n, Ty::flats_default(tys(i).alts.slots)),
+        Enum(i) => tys.ens(i).of(n, Ty::flats_default(tys.ens(i).slots)),
     }
 }
 
@@ -936,14 +1183,14 @@ fn Tm::ty(self t: Tm, w: World, g: List<Ty>) → Ty {
         If(_, yes, _) => yes.ty(w, g),
         IfEq(_, yes, _) => yes.ty(w, g),
         Make(i, _) => Named(i),
-        Field(i, k, _) => Ty::at(w.tys(i).fields, k),
+        Field(i, k, _) => Ty::at(w.tys.recs(i).fields, k),
         Call(f, _) => Sig::at(w.sigs, f).result,
         Fold(_, _, step) => Sig::at(w.sigs, step).result,
         Case(_, zero, _) => zero.ty(w, g),
         Byte(_, _, _) => Word(8),
         Pick(i, _, arms, _) => arms.ty(w, Cons(Enum(i), g)),
         Inject(i, _, _) => Enum(i),
-        Slot(i, j, _) => Ty::at(w.tys(i).alts.slots, j),
+        Slot(i, j, _) => Ty::at(w.tys.ens(i).slots, j),
         Iterate(init, _, _) => Ty::at(g, init),
     }
 }
@@ -990,10 +1237,11 @@ fn Tm::sem(self t: Tm, w: World) → (g: List<Ty>) → Env(w.tys, g) → t.ty(w,
         IfEq(c, yes, no) => λ g env =>
             Tm::convoy(yes.ty(w, g).sem(w.tys), Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c)),
                 yes.sem(w, g, env), Ty::cast(w.tys, no.ty(w, g), yes.ty(w, g), no.sem(w, g, env))),
-        Make(i, args) => λ g env => w.tys(i).mk(Tm::fields(w, g, env, w.tys(i).fields, args)),
+        Make(i, args) => λ g env => w.tys.recs(i).mk(Tm::fields(w, g, env, w.tys.recs(i).fields, args)),
         Field(i, k, of) => λ g env =>
-            Ty::at(w.tys(i).fields, k).of_flat(w.tys,
-                Ty::flat_nth(w.tys(i).fields, w.tys(i).get(Ty::cast(w.tys, Ty::at(g, of), Named(i), Env::get(w.tys, g, env, of))), k)),
+            Ty::at(w.tys.recs(i).fields, k).of_flat(w.tys,
+                Ty::flat_nth_in(w.tys.recs(i).fields, Ty::types(w.tys.ens),
+                    w.tys.recs(i).get(Ty::cast(w.tys, Ty::at(g, of), Named(i), Env::get(w.tys, g, env, of))), k)),
         Call(f, args) => λ g env =>
             Tm::apply(w, g, env, Sig::at(w.sigs, f).result, Sig::at(w.sigs, f).params, Sig::get(w.tys, w.sigs, w.callees, f), args),
         Fold(over, init, step) => λ g env =>
@@ -1008,13 +1256,13 @@ fn Tm::sem(self t: Tm, w: World) → (g: List<Ty>) → Env(w.tys, g) → t.ty(w,
             w.spans.span(k).byte_within(Ty::cast(w.tys, Ty::at(g, length), Word(64), Env::get(w.tys, g, env, length)),
                 Ty::cast(w.tys, Ty::at(g, i), Word(64), Env::get(w.tys, g, env, i))),
         Pick(i, c, arms, eq) => λ g env =>
-            w.tys(i).alts.choose(eq, arms.ty(w, Cons(Enum(i), g)).sem(w.tys), λ n t => arms.sem(w, Cons(Enum(i), g), Pair(w.tys(i).alts.of(n, t), env)),
+            w.tys.ens(i).choose(eq, arms.ty(w, Cons(Enum(i), g)).sem(w.tys), λ n t => arms.sem(w, Cons(Enum(i), g), Pair(w.tys.ens(i).of(n, t), env)),
                 Ty::cast(w.tys, Ty::at(g, c), Enum(i), Env::get(w.tys, g, env, c))),
-        Inject(i, k, args) => λ g env => w.tys(i).alts.of(k, Ty::spread(w.tys(i).alts.slots, w.tys(i).alts.lo(k), w.tys(i).alts.arity(k),
-            Tm::fields(w, g, env, Ty::range(w.tys(i).alts.slots, w.tys(i).alts.lo(k), w.tys(i).alts.arity(k)), args))),
+        Inject(i, k, args) => λ g env => w.tys.ens(i).of(k, Ty::spread(w.tys.ens(i).slots, w.tys.ens(i).lo(k), w.tys.ens(i).arity(k),
+            Tm::slots(w, g, env, Ty::range(w.tys.ens(i).slots, w.tys.ens(i).lo(k), w.tys.ens(i).arity(k)), args))),
         Slot(i, j, of) => λ g env =>
-            Ty::at(w.tys(i).alts.slots, j).of_flat(w.tys,
-                Ty::flat_nth(w.tys(i).alts.slots, w.tys(i).alts.fields(Ty::cast(w.tys, Ty::at(g, of), Enum(i), Env::get(w.tys, g, env, of))), j)),
+            Ty::at(w.tys.ens(i).slots, j).of_slot(w.tys,
+                Ty::flat_nth(w.tys.ens(i).slots, w.tys.ens(i).fields(Ty::cast(w.tys, Ty::at(g, of), Enum(i), Env::get(w.tys, g, env, of))), j)),
         Iterate(init, test, body) => λ g env => loop::Loop::steps(loop::Loop::passes(),
             λ (s: Ty::at(g, init).sem(w.tys)) => loop::Step::turn(
                 Ty::cast(w.tys, test.ty(w, Cons(Ty::at(g, init), g)), Bit, test.sem(w, Cons(Ty::at(g, init), g), Pair(s, env))),
@@ -1031,30 +1279,54 @@ fn Fun::meaning(self f: Fun, w: World) → Ty::Arrows(w.tys, f.params, f.result)
         Ty::cast(w.tys, Tm::ty(f.body, w, Ty::bind_onto(f.params, Nil)), f.result, Tm::sem(f.body, w, Ty::bind_onto(f.params, Nil), env)))
 }
 
-// The type table of a program with no records.
-fn RecInfo::none(i: Nat) → RecInfo { RecInfo(True, [], λ _ => trivial, λ _ => trivial, λ t => refl, λ v => refl) }
+// No record: what an enum's entry, or a table without records, holds.
+fn RecInfo::empty(ens: Nat → EnumInfo, i: Nat) → RecInfo(ens) { RecInfo(True, [], λ _ => trivial, λ _ => trivial, λ t => refl, λ v => refl, trivial) }
 
-// A type table with `r` first and `rest` after it (a `RecInfo` is too large
-// for a `List`): a table of entries in order is `cons`es ending at
-// `RecInfo::none`.
-fn RecInfo::cons(r: RecInfo, rest: Nat → RecInfo) → Nat → RecInfo { λ i => match i { Zero => r, Succ(k) => rest(k) } }
+// A table's entries with `r` first and `rest` after them (a `RecInfo` is
+// too large for a `List`): a table of entries in order is `cons`es ending
+// at `RecInfo::empty`, and so its enums', ending at `EnumInfo::nones`.
+fn RecInfo::cons(ens: Nat → EnumInfo, r: RecInfo(ens), rest: Nat → RecInfo(ens)) → Nat → RecInfo(ens) { λ i => match i { Zero => r, Succ(k) => rest(k) } }
+
+fn EnumInfo::cons(e: EnumInfo, rest: Nat → EnumInfo) → Nat → EnumInfo { λ i => match i { Zero => e, Succ(k) => rest(k) } }
+
+// The type table of a program with no records and no enums.
+fn Table::none() → Table { Table(EnumInfo::nones, RecInfo::empty(EnumInfo::nones)) }
+
+// A table from its enums and its records: what a generator's certificate
+// spells.
+fn Table::of(ens: Nat → EnumInfo, recs: Nat → RecInfo(ens)) → Table { Table(ens, recs) }
+
+// Fields as a table's record holds them: themselves when their enum
+// fields fit (`Ty::EnumFieldOk`), else a field no judgment accepts, so that
+// a shape is a record of any fields (the generator refuses the rest itself
+// first, by name).
+fn Ty::fitting_by(fs: List<Ty>, ens: Nat → EnumInfo, o: Option<Ty::EnumFieldsOk(fs, ens)>) → List<Ty> { match o { Some(_) => fs, None => [Lines] } }
+
+theorem Ty::fitting_by_fits(fs: List<Ty>, ens: Nat → EnumInfo): (o: Option<Ty::EnumFieldsOk(fs, ens)>) → Ty::check_enum_fields(fs, ens) = o →
+    Ty::check_enum_fields(Ty::fitting_by(fs, ens, o), ens).is_some().IsTrue() {
+    λ o => match o {
+        Some(_) => λ e => j(sym(e), λ p _ => p.is_some().IsTrue(), trivial),
+        None => λ _ => trivial,
+    }
+}
 
 // A record's shape alone, its type its field tuple: what a generator judges
 // and lowers against, neither of which reads a record's type.
-fn RecInfo::shape(fs: List<Ty>) → RecInfo { RecInfo(Ty::Flats(fs), fs, λ t => t, λ t => t, λ t => refl, λ t => refl) }
-
-// An enum's entry in a type table: no record, the enum `e`.
-fn RecInfo::of_enum(e: EnumInfo) → RecInfo { RecInfo(True, [], λ _ => trivial, λ _ => trivial, λ t => refl, λ v => refl, alts := e) }
+fn RecInfo::shape(ens: Nat → EnumInfo, fs: List<Ty>) → RecInfo(ens) {
+    let gs = Ty::fitting_by(fs, ens, Ty::check_enum_fields(fs, ens));
+    RecInfo(Ty::Flats(gs, en := Ty::types(ens)), gs, λ t => t, λ t => t, λ t => refl, λ t => refl,
+        Ty::fitting_by_fits(fs, ens, Ty::check_enum_fields(fs, ens), refl))
+}
 
 // A type held in one 64-bit word by its `datarepr` (`SInt(64)` at
 // `BitVec(64)`, docs/native/runtime-fn-setups-design.md §16.13): the spec type
 // `S`, built from the word by the repr's `abs` and read back by its `emb`,
 // with the round trip `emb(abs(x)) = x` (`refl` at a repr whose images
 // are its constructors' fields).
-fn RecInfo::word_repr<S>(abs: BitVec(64) → S, emb: S → BitVec(64), round: (x: BitVec(64)) → emb(abs(x)) = x,
-    back: (s: S) → abs(emb(s)) = s) → RecInfo {
+fn RecInfo::word_repr<S>(ens: Nat → EnumInfo, abs: BitVec(64) → S, emb: S → BitVec(64), round: (x: BitVec(64)) → emb(abs(x)) = x,
+    back: (s: S) → abs(emb(s)) = s) → RecInfo(ens) {
     RecInfo(S, [Word(64)], λ t => abs(t.fst), λ s => Pair(emb(s), trivial),
-        λ t => j(sym(round(t.fst)), λ y _ => Pair(y, trivial) = t, refl), back)
+        λ t => j(sym(round(t.fst)), λ y _ => Pair(y, trivial) = t, refl), back, trivial)
 }
 
 // ---------------------------------------------------------------------------

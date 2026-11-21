@@ -66,7 +66,7 @@ import runtime;
 // spans follow that it only reads: the span's length word, then each read
 // span's bytes and its length word, then the words. With none it is the
 // words.
-fn FTm::Reads(tys: Nat → RecInfo, n: Nat, ps: List<Ty>, R: Type) → Type {
+fn FTm::Reads(tys: Table, n: Nat, ps: List<Ty>, R: Type) → Type {
     match n {
         Zero => Ty::ArrowsTo(tys, ps, R),
         Succ(k) => match ps {
@@ -81,7 +81,7 @@ fn FTm::Reads(tys: Nat → RecInfo, n: Nat, ps: List<Ty>, R: Type) → Type {
 
 // Such a function at the spans of `rest` from the `k`th on: a read span's
 // place is not read, and its bytes are `rest`'s.
-fn FTm::read_at(tys: Nat → RecInfo, R: Type, rest: List<List<BitVec(8)>>, n: Nat) → (k: Nat) → (ps: List<Ty>) → FTm::Reads(tys, n, ps, R) →
+fn FTm::read_at(tys: Table, R: Type, rest: List<List<BitVec(8)>>, n: Nat) → (k: Nat) → (ps: List<Ty>) → FTm::Reads(tys, n, ps, R) →
     Ty::ArrowsTo(tys, ps, R) {
     match n {
         Zero => λ k ps v => v,
@@ -98,7 +98,7 @@ fn FTm::read_at(tys: Nat → RecInfo, R: Type, rest: List<List<BitVec(8)>>, n: N
 // The type of a function over the span it writes, lent `lent` spans, whose
 // code takes `ps`: the written span's bytes, then what follows its place
 // (`FTm::Reads`), the spans after the first only read.
-fn FTm::Source(tys: Nat → RecInfo, lent: Nat, ps: List<Ty>, r: Ty) → Type {
+fn FTm::Source(tys: Table, lent: Nat, ps: List<Ty>, r: Ty) → Type {
     match ps {
         Nil => List<BitVec(8)> → Mutated<List<BitVec(8)>, r.sem(tys)>,
         Cons(_, more) => List<BitVec(8)> → FTm::Reads(tys, lent.pred(), more, Mutated<List<BitVec(8)>, r.sem(tys)>),
@@ -107,7 +107,7 @@ fn FTm::Source(tys: Nat → RecInfo, lent: Nat, ps: List<Ty>, r: Ty) → Type {
 
 // Such a function as a computation's meaning over the read spans `rest`:
 // no place is read.
-fn FTm::of_source(tys: Nat → RecInfo, r: Ty, lent: Nat, ps: List<Ty>, rest: List<List<BitVec(8)>>) → FTm::Source(tys, lent, ps, r) →
+fn FTm::of_source(tys: Table, r: Ty, lent: Nat, ps: List<Ty>, rest: List<List<BitVec(8)>>) → FTm::Source(tys, lent, ps, r) →
     FTm::Sem(tys, Sig(ps, r)) {
     match ps {
         Nil => λ v => v,
@@ -116,7 +116,7 @@ fn FTm::of_source(tys: Nat → RecInfo, r: Ty, lent: Nat, ps: List<Ty>, rest: Li
 }
 
 // A function of any type `F` that is such a function's, as a meaning.
-fn FTm::source_at<F>(tys: Nat → RecInfo, lent: Nat, ps: List<Ty>, r: Ty, typed: Itself(F) = Itself(FTm::Source(tys, lent, ps, r)), f: F,
+fn FTm::source_at<F>(tys: Table, lent: Nat, ps: List<Ty>, r: Ty, typed: Itself(F) = Itself(FTm::Source(tys, lent, ps, r)), f: F,
     rest: List<List<BitVec(8)>>) → FTm::Sem(tys, Sig(ps, r)) {
     FTm::of_source(tys, r, lent, ps, rest, retype(FTm::Source(tys, lent, ps, r), typed, f))
 }
@@ -393,7 +393,7 @@ fn CompileSpan::linked<F>(f: F, c: CompileSpan<F>(f), links: List<Nat>) → Func
 fn CompileSpan::arity<F>(f: F, c: CompileSpan<F>(f)) → Nat { c.reflected.params.len() }
 
 // A table of writing meanings at a span, each as an answer.
-fn FTm::uncurried(tys: Nat → RecInfo, rest: List<List<BitVec(8)>>, own: List<BitVec(8)>, sigs: List<Sig>)
+fn FTm::uncurried(tys: Table, rest: List<List<BitVec(8)>>, own: List<BitVec(8)>, sigs: List<Sig>)
     → FTm::Sems(tys, sigs) → List<List<BitVec(64)> → Ending> {
     match sigs {
         Nil => λ _ => Nil,
@@ -407,7 +407,7 @@ fn FTm::uncurried(tys: Nat → RecInfo, rest: List<List<BitVec(8)>>, own: List<B
 
 // What answers like a computation's meaning ends, on as many words as
 // parameters, as its uncurried form does.
-theorem FTm::answers_at(tys: Nat → RecInfo, r: Ty, rest: List<List<BitVec(8)>>, ps: List<Ty>):
+theorem FTm::answers_at(tys: Table, r: Ty, rest: List<List<BitVec(8)>>, ps: List<Ty>):
     (F: Ty::ArrowsTo(tys, ps, Mutated<List<BitVec(8)>, r.sem(tys)>)) → (ans: List<BitVec(64)> → Ending) → FTm::Answers(tys, ps, r, rest, F, ans) →
     (words: List<BitVec(64)>) → words.len() = ps.len() →
     ans(words) = FTm::end_of(rest, FTm::recast(tys, r, Word(64), Ty::apply_to(tys, ps, Mutated<List<BitVec(8)>, r.sem(tys)>, F, words))) {
@@ -439,7 +439,7 @@ theorem link_at_append(pre, links: List<Nat>, k: Nat): link_at(pre ++ links, pre
 // meanings (by conversion) at their arities, `ans` at the linked names
 // answers the table: the reading half of what a function that writes
 // assumes of its calls.
-theorem Sig::links_answer(tys: Nat → RecInfo, srcs: List<List<BitVec(64)> → List<BitVec(64)>>, ans: Nat → List<BitVec(64)> → List<BitVec(64)>,
+theorem Sig::links_answer(tys: Table, srcs: List<List<BitVec(64)> → List<BitVec(64)>>, ans: Nat → List<BitVec(64)> → List<BitVec(64)>,
     arity: Nat → Option<Nat>,
     agree: (n: Nat) → (ws: List<BitVec(64)>) → arity_fits(arity(n), ws.len()).IsTrue() → ans(n, ws) = Answers::split(link_source(srcs, n, ws)),
     more: List<Nat>,
@@ -473,7 +473,7 @@ theorem Sig::links_answer(tys: Nat → RecInfo, srcs: List<List<BitVec(64)> → 
 
 // Links checked against the functions marked still name functions that
 // leave the file.
-theorem Sig::links_still(tys: Nat → RecInfo, arity: Nat → Option<Nat>, still: Nat → Bool, more: List<Nat>, sigs: List<Sig>): (links: List<Nat>) →
+theorem Sig::links_still(tys: Table, arity: Nat → Option<Nat>, still: Nat → Bool, more: List<Nat>, sigs: List<Sig>): (links: List<Nat>) →
     Sig::links_fit(tys, sigs, links, still_arity(arity, still)).IsTrue() → (k: Nat) → FTm::pure(sigs.len(), k).IsTrue() →
     still(link_at(links ++ more, k)).IsTrue() {
     match sigs {
@@ -495,7 +495,7 @@ theorem Sig::links_still(tys: Nat → RecInfo, arity: Nat → Option<Nat>, still
 
 // The writing half: `ans` at the linked names answers the table's
 // computations, each with its meaning from the span.
-theorem FTm::links_answer(tys: Nat → RecInfo, rest: List<List<BitVec(8)>>, own: List<BitVec(8)>, held: Buffers(),
+theorem FTm::links_answer(tys: Table, rest: List<List<BitVec(8)>>, own: List<BitVec(8)>, held: Buffers(),
     srcs: List<List<BitVec(64)> → Ending>, ans: Nat → List<BitVec(64)> → Ending, arity: Nat → Option<Nat>,
     agree: (n: Nat) → (xs: List<BitVec(64)>) → arity_fits(arity(n), xs.len()).IsTrue() → ans(n, xs) = span_source(srcs, held, n, xs),
     sigs: List<Sig>): (ws: FTm::Sems(tys, sigs)) → (links: List<Nat>) →
@@ -532,7 +532,7 @@ theorem FTm::links_answer(tys: Nat → RecInfo, rest: List<List<BitVec(8)>>, own
 
 // A table's entry at a word list it fits returns a word then more, so it
 // reads as a call reads it.
-theorem Sig::uncurried_split(tys: Nat → RecInfo, sigs: List<Sig>): (cs: Sig::Sems(tys, sigs)) → (k: Nat) → (words: List<BitVec(64)>) →
+theorem Sig::uncurried_split(tys: Table, sigs: List<Sig>): (cs: Sig::Sems(tys, sigs)) → (k: Nat) → (words: List<BitVec(64)>) →
     arity_fits(Sig::arity(tys, sigs, k), words.len()).IsTrue() →
     Answers::split(link_sources(Sig::uncurried(tys, sigs, cs), k, words)) = link_sources(Sig::uncurried(tys, sigs, cs), k, words) {
     match sigs {
@@ -649,7 +649,7 @@ theorem CompileSpan::spanned<F>(f: F, c: CompileSpan<F>(f),
 
 // The pin of a function its reflection's meaning converts to: it at every
 // rest of the file and every span.
-theorem FFun::source_every<F>(f: F, tys: Nat → RecInfo, lent: Nat, ps: List<Ty>, r: Ty, typed: Itself(F) = Itself(FTm::Source(tys, lent, ps, r))):
+theorem FFun::source_every<F>(f: F, tys: Table, lent: Nat, ps: List<Ty>, r: Ty, typed: Itself(F) = Itself(FTm::Source(tys, lent, ps, r))):
     (rest: List<List<BitVec(8)>>) → (own: List<BitVec(8)>) →
     FTm::source_at(tys, lent, ps, r, typed, f, rest, own) = FTm::source_at(tys, lent, ps, r, typed, f, rest, own) {
     λ _ _ => refl
@@ -657,9 +657,9 @@ theorem FFun::source_every<F>(f: F, tys: Nat → RecInfo, lent: Nat, ps: List<Ty
 
 // The table of the functions that write, an entry at a time: each function
 // as a meaning.
-fn FTm::sems_nil(tys: Nat → RecInfo) → List<List<BitVec(8)>> → FTm::Sems(tys, Nil) { λ _ => trivial }
+fn FTm::sems_nil(tys: Table) → List<List<BitVec(8)>> → FTm::Sems(tys, Nil) { λ _ => trivial }
 
-fn FTm::sems_cons<F>(f: F, tys: Nat → RecInfo, lent: Nat, ps: List<Ty>, r: Ty, typed: Itself(F) = Itself(FTm::Source(tys, lent, ps, r)), sigs: List<Sig>,
+fn FTm::sems_cons<F>(f: F, tys: Table, lent: Nat, ps: List<Ty>, r: Ty, typed: Itself(F) = Itself(FTm::Source(tys, lent, ps, r)), sigs: List<Sig>,
     more: List<List<BitVec(8)>> → FTm::Sems(tys, sigs)) → List<List<BitVec(8)>> → FTm::Sems(tys, Cons(Sig(ps, r), sigs)) {
     λ rest => Pair(FTm::source_at(tys, lent, ps, r, typed, f, rest), more(rest))
 }

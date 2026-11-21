@@ -170,7 +170,7 @@ fn no_procedures() → PerformsCo() { λ p args results env => CRet(Onward(env))
 // surface method end at the same world with the same value.
 fn tr_run() → Partial(Mutated<Io, BitVec(64)>) {
     CoTree::map(Events::none(), tr_stmt().run(tr_calls(), no_procedures())(start(zeros()), piped()),
-        λ m => ELoop::back(Word(64), RecInfo::none, tr_result(), m))
+        λ m => ELoop::back(Word(64), Table::none(), tr_result(), m))
 }
 
 fn raised() → List<BitVec(8)> { [b(72), b(73), b(33), b(65), b(90)] }
@@ -212,11 +212,11 @@ theorem tr_lents_agree(): ETm::LentsAgree(tr_lents(), tr_calls()) {
 // function that writes among them.
 fn tr_reads(buf: List<BitVec(8)>, perform: PerformsCo()) →
     Io::Reads<BitVec(64)>(CoTree::map(Events::linux(), tr_stmt().denote_co(tr_calls(), perform)(start(buf)),
-            λ flow => flow.read_back(Word(64), RecInfo::none, tr_result())),
+            λ flow => flow.read_back(Word(64), Table::none(), tr_result())),
         λ io => tr_prog().sem(tr_world(), tr_lents(), tr_g(), Pair(buf, trivial), io))
 {
     tr_prog().lower_reads(tr_world(), tr_lents(), tr_g(), tr_locs(), 1, tr_lowered().unwrap_or(ELowered(Exit(0), 0, 0, [])), refl,
-        tr_calls(), λ held f never ws => false_elim(never), λ held => Tm::calls_agree_none(RecInfo::none, Writers::words(tr_calls(), held)),
+        tr_calls(), λ held f never ws => false_elim(never), λ held => Tm::calls_agree_none(Table::none(), Writers::words(tr_calls(), held)),
         tr_lents_agree(), perform, start(buf), Pair(buf, trivial), ⟨refl, trivial⟩, ⟨trivial, trivial⟩, trivial)
 }
 
@@ -307,11 +307,11 @@ theorem tr_bridged(): (io: Io) → (buf: List<BitVec(8)>) →
 // (`tr_reads`) and the bridge the reflector writes (`tr_bridged`), joined.
 fn tr_surface_reads(buf: List<BitVec(8)>, perform: PerformsCo()) →
     Io::Reads<BitVec(64)>(CoTree::map(Events::linux(), tr_stmt().denote_co(tr_calls(), perform)(start(buf)),
-            λ flow => flow.read_back(Word(64), RecInfo::none, tr_result())),
+            λ flow => flow.read_back(Word(64), Table::none(), tr_result())),
         λ io => Io::tr_upper(io, buf))
 {
     Io::reads_then(CoTree::map(Events::linux(), tr_stmt().denote_co(tr_calls(), perform)(start(buf)),
-            λ flow => flow.read_back(Word(64), RecInfo::none, tr_result())),
+            λ flow => flow.read_back(Word(64), Table::none(), tr_result())),
         λ io => tr_prog().sem(tr_world(), tr_lents(), tr_g(), Pair(buf, trivial), io), λ io => Io::tr_upper(io, buf),
         tr_reads(buf, perform),
         λ io => Eutt::sym(Events::none(), Io::tr_upper(io, buf), tr_prog().sem(tr_world(), tr_lents(), tr_g(), Pair(buf, trivial), io),

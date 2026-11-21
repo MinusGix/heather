@@ -63,7 +63,7 @@ fn Io::read_raised(mut self io: Io, buf: List<BitVec(8)>) → BitVec(64) {
 fn read_body() → ETm { ETm::Let(Lit(Word(64), 0), ETm::Let(Lit(Word(64), 64), ETm::Invoke(Reads(0), [1, 2, 1, 0], ETm::Pure(Call(0, [0]))))) }
 
 // The world: one function, `raise_word`, as `tr`'s program numbers it.
-fn tr_world() → rt::World { rt::World(RecInfo::none, [Sig([Word(64)], Word(64))], Pair(λ (x: BitVec(64)) => raise_word(x), trivial)) }
+fn tr_world() → rt::World { rt::World(Table::none(), [Sig([Word(64)], Word(64))], Pair(λ (x: BitVec(64)) => raise_word(x), trivial)) }
 
 fn read_g() → List<Ty> { [ByteList(0)] }
 fn read_locs() → List<Loc> { [InBuffer(0)] }
@@ -108,7 +108,7 @@ fn start(buf: List<BitVec(8)>) → native_source::Env { native_source::Env([], [
 // silent steps.
 fn read_reads(buf: List<BitVec(8)>, perform: PerformsCo()) →
     Io::Reads<BitVec(64)>(CoTree::map(Events::linux(), read_stmt().denote_co(tr_calls(), perform)(start(buf)),
-            λ flow => flow.read_back(Word(64), RecInfo::none, read_result())),
+            λ flow => flow.read_back(Word(64), Table::none(), read_result())),
         λ io => CRet(Io::read_raised(io, buf)))
 {
     read_body().lower_reads(tr_world(), [], read_g(), read_locs(), 1, read_lowered().unwrap_or(ELowered(Exit(0), 0, 0, [])), refl,

@@ -14,10 +14,11 @@ inductive Shade { Dark, Mid, Light }
 
 runtime fn shade_level(s: Shade) → u64 { match s { Dark => 10, Mid => 20, Light => 30 } }
 
-// An enum is not a record's field: a record's fields are words.
+// A record with an enum field is returned and read back from a call
+// (runtime_enum_field_tests), but not taken: a caller passes its words.
 record Tagged { s: Shade, n: u64 }
 
-// expect-error: `Shade` has no runtime layout
+// expect-error: takes `Tagged`, a record with an enum field
 runtime fn tagged_n(t: Tagged) → u64 { t.n }
 
 // A field that is an enum has no slot: a slot is a word, a bit or a count.

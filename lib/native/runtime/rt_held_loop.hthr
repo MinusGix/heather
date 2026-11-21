@@ -450,7 +450,7 @@ theorem FFun::counted_held<A, F>(hw: HWorld<A>, whole: Stored<A>, sound: Sound<A
 }
 
 // An agreement with a word's answer read as a word is one with the answer.
-theorem Agrees::bare<A>(whole: Stored<A>, n: BitVec(64), tys: Nat → RecInfo, h: Mutated<A, BitVec(64)>, m: Mutated<List<BitVec(8)>, BitVec(64)>,
+theorem Agrees::bare<A>(whole: Stored<A>, n: BitVec(64), tys: Table, h: Mutated<A, BitVec(64)>, m: Mutated<List<BitVec(8)>, BitVec(64)>,
     ag: Agrees<A, BitVec(64)>(whole, n, h, FTm::recast(tys, Word(64), Word(64), m))): Agrees<A, BitVec(64)>(whole, n, h, m) {
     Agrees(ag.value, ag.holds)
 }
