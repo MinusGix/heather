@@ -74,15 +74,16 @@ runtime fn count_newlines(span: List<BitVec(8)>, length, count: BitVec(64)) → 
 fn count_newlines_program() → List<Function> { count_newlines::program }
 fn count_newlines_entry() → Nat { 1 }
 
-// The word a tool's call answers: the function, at the first buffer the
+// The words a tool's call answers, its one word: the function, at the first buffer the
 // tool holds and that buffer's size, whatever the buffer's address. `held`
 // is the tool's buffers as they are at the call.
 theorem count_newlines_answers(held: Buffers(), count: BitVec(64)):
     program_readers(count_newlines_program())(held, count_newlines_entry(), [count])
-        = count_newlines(buffer_bytes(held, 0), BitVec::ofNat(buffer_bytes(held, 0).len()), count) {
+        = [count_newlines(buffer_bytes(held, 0), BitVec::ofNat(buffer_bytes(held, 0).len()), count)] {
     match held {
-        Nil => count_newlines::agrees_over(Nil, BitVec::zero(), BitVec::ofNat(0), count),
-        Cons(bytes, rest) => count_newlines::agrees_over([bytes], BitVec::zero(), BitVec::ofNat(bytes.len()), count),
+        Nil => cong_fn<BitVec(64), List<BitVec(64)>>(λ w => [w], count_newlines::agrees_over(Nil, BitVec::zero(), BitVec::ofNat(0), count)),
+        Cons(bytes, rest) => cong_fn<BitVec(64), List<BitVec(64)>>(λ w => [w],
+            count_newlines::agrees_over([bytes], BitVec::zero(), BitVec::ofNat(bytes.len()), count)),
     }
 }
 
@@ -92,7 +93,7 @@ theorem count_newlines_called(held: Buffers(), count: BitVec(64)):
     program_writers(count_newlines_program())(held, count_newlines_entry(), [count])
         = Ending(count_newlines(buffer_bytes(held, 0), BitVec::ofNat(buffer_bytes(held, 0).len()), count), held) {
     trans(program_writers_quiet(count_newlines_program(), trivial, held, count_newlines_entry(), [count]),
-        cong_fn<BitVec(64), Ending>(λ word => Ending(word, held), count_newlines_answers(held, count)))
+        cong_fn<List<BitVec(64)>, Ending>(λ words => Ending::of(words, held), count_newlines_answers(held, count)))
 }
 
 // ---------------------------------------------------------------------------

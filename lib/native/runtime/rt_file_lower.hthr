@@ -119,8 +119,10 @@ theorem FTm::ran_cast(tys: Nat → RecInfo, a, b: Ty, e: a = b, before: Valuatio
 // A pure term beside functions that write
 
 // A call's answer that left the file is its word and the file.
-theorem Ending::still(self e: Ending, file: Buffers(), left: e.buffers = file): e = Ending(e.word, file) {
-    match e { Ending(word, buffers) => λ (same: buffers = file) => cong_fn<Buffers(), Ending>(λ held => Ending(word, held), same) }(left)
+theorem Ending::still(self e: Ending, file: Buffers(), left: e.buffers = file): e = Ending(e.word, file, rest := e.rest) {
+    (match e as λ x => x.buffers = file → x = Ending(x.word, file, rest := x.rest) {
+        Ending(word, buffers, rest) => λ same => cong_fn<Buffers(), Ending>(λ held => Ending(word, held, rest := rest), same),
+    })(left)
 }
 
 fn FTm::value_checked(base: Nat, l: Lowered) → Option<Lowered> {
@@ -460,7 +462,7 @@ theorem FTm::put_sound(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, nex
 theorem FTm::call_args_sound(w: World, g: List<Ty>, ports: List<Nat>, values: Valuation(), env: Env(w.tys, g),
     held: EnvHolds(w.tys, values, g, ports, env), r: Ty, rest: List<List<BitVec(8)>>, d: Mutated<List<BitVec(8)>, r.sem(w.tys)>, ps: List<Ty>):
     (args: List<Nat>) → (F: Ty::ArrowsTo(w.tys, ps, Mutated<List<BitVec(8)>, r.sem(w.tys)>)) → (ans: List<BitVec(64)> → Ending) →
-    FTm::Answers(w.tys, ps, r, rest, F, ans) → (qs: List<Nat>) → Tm::call_args(w.tys, g, ports, ps, args) = Some(qs) →
+    FTm::Answers(w.tys, ps, r, rest, F, ans) → (qs: List<Nat>) → Tm::word_args(w.tys, g, ports, ps, args) = Some(qs) →
     ans(words_of(values, qs)) = FTm::ended(w.tys, r, rest, FTm::apply(w.tys, g, env, Mutated<List<BitVec(8)>, r.sem(w.tys)>, d, ps, F, args)) {
     let R = Mutated<List<BitVec(8)>, r.sem(w.tys)>;
     match ps {
@@ -477,11 +479,11 @@ theorem FTm::call_args_sound(w: World, g: List<Ty>, ports: List<Nat>, values: Va
                     FTm::ended(w.tys, r, rest, FTm::apply(w.tys, g, env, R, d, Cons(p, later), F, Cons(a, more)));
                 let P = λ (o: Option<List<Nat>>) => (qs: List<Nat>) → o = Some(qs) → Goal(qs);
                 let none: P(None) = λ qs e => Option::none_ne_some(qs, e, Goal(qs));
-                let after = λ (q: Nat) => p.check_held(w.tys).and_then(λ _ => Tm::call_args(w.tys, g, ports, later, more).and_then(λ qs => Some(Cons(q, qs))));
+                let after = λ (q: Nat) => p.check_held(w.tys).and_then(λ _ => Tm::word_args(w.tys, g, ports, later, more).and_then(λ qs => Some(Cons(q, qs))));
                 Option::and_then_elim(P, none, port_at(ports, a), λ q => Ty::at(g, a).check(p).and_then(λ _ => after(q)), λ q at_q =>
                 Option::and_then_elim(P, none, Ty::at(g, a).check(p), λ _ => after(q), λ ea _ =>
-                Option::and_then_elim(P, none, p.check_held(w.tys), λ _ => Tm::call_args(w.tys, g, ports, later, more).and_then(λ qs => Some(Cons(q, qs))), λ hp _ =>
-                Option::and_then_elim(P, none, Tm::call_args(w.tys, g, ports, later, more), λ qs => Some(Cons(q, qs)), λ found e_rest =>
+                Option::and_then_elim(P, none, p.check_held(w.tys), λ _ => Tm::word_args(w.tys, g, ports, later, more).and_then(λ qs => Some(Cons(q, qs))), λ hp _ =>
+                Option::and_then_elim(P, none, Tm::word_args(w.tys, g, ports, later, more), λ qs => Some(Cons(q, qs)), λ found e_rest =>
                     λ qs e => j(Option::some_inj(Cons(q, found), qs, e), λ z _ => Goal(z), {
                         let x = values(64, q);
                         let arg_eq: (Ty::cast(w.tys, Word(64), p, x) = Ty::cast(w.tys, Ty::at(g, a), p, Env::get(w.tys, g, env, a))) =
@@ -497,7 +499,7 @@ theorem FTm::call_args_sound(w: World, g: List<Ty>, ports: List<Nat>, values: Va
 }
 
 fn FTm::call_args(w: World, fsigs: List<Sig>, base: Nat, g: List<Ty>, ports: List<Nat>, next, f: Nat, args: List<Nat>) → Option<Lowered> {
-    Tm::call_args(w.tys, g, ports, Sig::at(fsigs, f).params, args).and_then(λ qs => Some(Tm::called(base + f, qs, next)))
+    Tm::word_args(w.tys, g, ports, Sig::at(fsigs, f).params, args).and_then(λ qs => Some(Tm::called_word(base + f, qs, next)))
 }
 
 fn FTm::call_result(w: World, fsigs: List<Sig>, base: Nat, g: List<Ty>, ports: List<Nat>, next, f: Nat, args: List<Nat>) → Option<Lowered> {
@@ -520,7 +522,7 @@ theorem FTm::call_sound(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, ne
     let P = λ (o: Option<Lowered>) => FTm::StepHolds(fw, base, g, ports, next, r, λ env own => FTm::called(fw, g, env, f, args, own), o);
     Option::and_then_elim(P, trivial, Ty::check_helds(tys, ps), λ _ => FTm::call_result(fw.w, fw.fsigs, base, g, ports, next, f, args), λ ok _ =>
     Option::and_then_elim(P, trivial, r.check_returned(tys), λ _ => FTm::call_args(fw.w, fw.fsigs, base, g, ports, next, f, args), λ er _ =>
-    Option::and_then_elim(P, trivial, Tm::call_args(tys, g, ports, ps, args), λ qs => Some(Tm::called(base + f, qs, next)), λ qs e_qs =>
+    Option::and_then_elim(P, trivial, Tm::word_args(tys, g, ports, ps, args), λ qs => Some(Tm::called_word(base + f, qs, next)), λ qs e_qs =>
         λ call agree values env own held below => {
             let file: Buffers() = Cons(own, fw.rest);
             let m = FTm::called(fw, g, env, f, args, own);
@@ -531,7 +533,7 @@ theorem FTm::call_sound(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, ne
             let called = Valuation::set(values, next, word_value(word));
             let moved = λ (wd: Nat) => called(wd, next);
             let after = Valuation::set(called, next + 1, moved);
-            let ran: (Tm::called(base + f, qs, next).region.run(call, values, file) = State(after, Cons(m.after, fw.rest))) =
+            let ran: (Tm::called_word(base + f, qs, next).region.run(call, values, file) = State(after, Cons(m.after, fw.rest))) =
                 cong_fn<Ending, State>(λ answer => State(Valuation::set(Valuation::set(values, next, word_value(answer.word)), next + 1,
                     λ wd => Valuation::set(values, next, word_value(answer.word), wd, next)), answer.buffers), answered);
             let word_moved: (after(64, next + 1) = word) =
@@ -903,7 +905,7 @@ theorem FTm::views_bound(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), fi
 // words, on the variables.
 fn FTm::lent_args(tys: Nat → RecInfo, g: List<Ty>, ports: List<Nat>, homes: List<Nat>, ps: List<Ty>, args: List<Nat>) → Option<List<Nat>> {
     match homes {
-        Nil => Tm::call_args(tys, g, ports, ps, args),
+        Nil => Tm::word_args(tys, g, ports, ps, args),
         Cons(_, more) => match ps { Nil => None, Cons(_, later) => FTm::lent_args(tys, g, ports, more, later, args) },
     }
 }

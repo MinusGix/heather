@@ -56,7 +56,7 @@ theorem leaf_runs(a, b: BitVec(64)): program_eval(leaf::program, 0, [a, b]) = le
 // The instance's own agreement is the composable one: the code answers
 // `caller` wherever its table's functions are answered by their meanings.
 theorem caller_compiled(call: Answers(), agree: Tm::CallsAgree(caller::world, call), a, b: BitVec(64)):
-    caller::code.eval(call, [a, b]) = caller(a, b) { caller::compile.agrees(Nil, call, agree, a, b) }
+    caller::code.eval(call, [a, b]) = caller(a, b) { cong_fn<List<BitVec(64)>, BitVec(64)>(λ l => first_word(l), caller::compile.agrees(Nil, call, agree, a, b)) }
 
 // The instance is found by search, keyed on the function.
 fn code_of<F>(f: F, c: Compile<F>(f) := infer) → Function { c.code }
@@ -66,19 +66,20 @@ theorem leaf_found(): code_of(leaf) = leaf::code { refl }
 theorem caller_found(): code_of(caller) = caller::code { refl }
 
 // The instance's agreement, read through the class at the function: at
-// every file, the code run over it returns what the function does there.
+// every file, the code run over it returns the words of what the function
+// does there.
 theorem leaf_through_class(c: Compile<BitVec(64) → BitVec(64) → BitVec(64)>(leaf), b: Buffers(), call: Answers(),
     agree: Tm::CallsAgree(c.world.at(c.callees, b), call)):
-    Ty::Answers(c.world.at(c.callees, b).tys, c.reflected.params, c.reflected.result,
+    Ty::AnswersWords(c.world.at(c.callees, b).tys, c.reflected.params, c.reflected.result,
         Ty::lent_at(c.world.at(c.callees, b).tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed(b), leaf, b),
-        λ xs => c.code.eval(call, xs, buffers := b)) {
+        λ xs => c.code.eval_words(call, xs, buffers := b)) {
     c.agrees(b, call, agree)
 }
 
 // A function lent nothing computes the same over any file: the file is
 // there for the functions that read it.
 theorem caller_compiled_over(b: Buffers(), call: Answers(), agree: Tm::CallsAgree(caller::world.at(caller::world.fixed(), b), call),
-    x, y: BitVec(64)): caller::code.eval(call, [x, y], buffers := b) = caller(x, y) { caller::compile.agrees(b, call, agree, x, y) }
+    x, y: BitVec(64)): caller::code.eval(call, [x, y], buffers := b) = caller(x, y) { cong_fn<List<BitVec(64)>, BitVec(64)>(λ l => first_word(l), caller::compile.agrees(b, call, agree, x, y)) }
 
 // ---------------------------------------------------------------------------
 // Branches on comparisons through `&&`, `||` and `!`
@@ -333,8 +334,11 @@ runtime fn uses_helper(a: BitVec(64)) → BitVec(64) { helper(a).sub(a) }
 // expect-error: unbound name `uses_helper`
 theorem uses_helper_unpublished(a: BitVec(64)): uses_helper(a) = a { refl }
 
-// expect-error: a result that is not a word of at most 64 bits
+// A `Bool` result is returned zero-extended to its word
+// (docs/native/runtime-fn-setups-design.md §16.17).
 runtime fn is_small(a: BitVec(64)) → Bool { a.unsigned_lt_bit(BitVec::ofNat(8)) }
+
+theorem is_small_agrees(a: BitVec(64)): program_eval(is_small::program, 0, [a]) = runtime_bit_wide(is_small(a)) { is_small::agrees(a) }
 
 // A byte list is a lent span only where a span may stand: before the other
 // parameters, followed by its length word

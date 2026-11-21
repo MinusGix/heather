@@ -1917,7 +1917,8 @@ together. Probes: `pocket_n`, `shape_scaled` (five words) and
 `diff_or` in `examples/x86-native/enum_payload.hthr`, called from C with
 the structure by value (`native_program.rs`).
 
-Still refused: a slot that is a bit or a count in a parameter (its word
+Still refused (calls of several words and results past one slot were
+built next, §16.17): a slot that is a bit or a count in a parameter (its word
 would not be every value of the field), a call of a function taking or
 returning several words (a call passes one word an argument and reads
 RAX alone, `issues/function-ir-multi-word-calls.md`), a payload past one
@@ -1935,3 +1936,122 @@ Compilers write the 32-bit register, which zero-extends, so callers work
 in practice; the ABI's own contract is a C `datarepr` of the enum (a
 discriminant table read through a 32-bit `Resize`), of which this default
 tag word is the derived case.
+
+### 16.17 Several words across calls, records as parameters, and `Bool` (built 2026-11-21)
+
+Minus (2026-11-20): make several words work across calls, `Bool` beside
+words, and enums, without a second mechanism for each.
+
+**A call's answer is a list of words.** `Call(callee, args, result, also)`
+names the ports its words past the first land in, as `Function.also` does
+for a function's own result. `Answers` gives a list of words and
+`Function::eval` is the first of `Function::eval_words`; the evaluator,
+the run over buffers, the stages and the replay carry every word
+(`Ending.rest`, the `rest` argument of `Effects`). The lowering answers a
+function's words past the first in the answer registers after RAX (RDX,
+RCX, RSI, …), which is System V's two-word return extended inside a
+program; a call site's contract is `AnsweredBoth`, the old
+`AnsweredOver` and the rest words in their registers
+(`Site::answered_framed`). The entry's separate two-word contract folded
+into this one. `compile-x86` still exports at most two words, RAX:RDX,
+since that is what a C caller reads back (`runtime_shape` refuses more).
+
+A call is defined only where it names as many words as its callee
+returns (`StructuredRegion::defined_over`), so a program's totality now
+reads its callees' counts. Read off the callees themselves, a function
+that calls every other one (the lexer's dispatch) evaluated each of them
+inside one theorem and ran past the kernel's budget. The certificate
+instead checks calls against a table of counts, as the scan checks them
+against the arities: `program_total_at(functions, outs)` asks each
+function for its own entry and reads its callees' from the table
+(`linked_outs`), one theorem per function, and `program_total_at_total`
+gives `program_total`. `compile-x86` reads the table off the published
+program with the shape probe (`{prefix}_outs`).
+
+**rt: one code of words, both ways.** A parameter already took its
+code's words in turn (§16.16, `Ty::span`); a call now passes them the same
+way (`Ty::Sent`: a word, or an enum whose slots are words, at
+`p.ids(tys, q)`), and reads back a result at its port and the ports after
+(`Ty::Back`: a 64-bit word, a record of 64-bit words, an enum with word
+slots, or a `Bool`). `Sig::Sends` is the pair, and `Tm::CallsAgree` is
+premised on it, so a callee's agreement (`Ty::Answers`, at its
+parameters' words) is the caller's by `Ty::AnswersWords`/`result_words`.
+A result of any number of words is `Ty::Out` (`WordsOne` fields, `Words`
+slots): a record of three words and an enum of three slots are returned
+to a caller, and only the entry is held to two. The span/effect world
+(`FTm`) keeps one-word calls (`Tm::word_args`, `Tm::called_word`); its
+callees read spans, which no multi-word code carries yet.
+
+**A record of words is a parameter, a word a field.** A record whose
+fields are 64-bit words is passed in its fields' words, in order
+(`Ty::span` is its field count, `Ty::ids` its fields' ports), as System V
+passes a C structure of integer words by value: two `{ low, high }`
+structures land in RDI, RSI and then RDX, RCX. A contract quantifies a
+record's words one field at a time (`Ty::TakesFields`) and reads the
+record they build (`Ty::read_words` is `mk` of the fields read off the
+words), so every word list is admitted and the proofs need nothing about
+the fields' codes; that is the difference from an enum, which is
+quantified by its value because not every word is a tag. A record of one
+word, which is how a type held by its `datarepr` crosses
+(`Ty::OneWord`), reads exactly as before (`Ty::fields_one_to`/`_from`).
+The entry binds a record with no move (`Ty::record_from_words`), and a
+call passes a record of words held at its ports (`Ty::Sent`,
+`Ty::takes_holds`). The generator states `f::agrees` at the record itself
+(`RecInfo::record_words`, a record parameter's binder its own type) and
+the statement converts to the evaluated one by the record's η, so no
+rewrite is needed. `compile-x86` reads which parameters are records of
+several words from the shape probe and quantifies the certificate by
+record (`RecInfo::record_at`); like an enum's, such a certificate states
+no `_implements`. A record parameter in a function lent spans is refused
+as not stated yet. Probes: the record-parameter section of
+`runtime_two_words_tests` (taken, taken and returned, and called twice
+from one function); `add_wides` in `examples/x86-native/two_words.hthr`,
+called from C with two structures by value (`native_program.rs`).
+
+**`Bool` is a narrow word of width one.** At the entry a `Bool` parameter
+is the lowest bit of its word, as a `u8` is the low byte of its word
+(§16.15): `Resize(64, 1)` in, `Resize(1, 64)` out, so `True` returns 1 and
+`False` 0, and a word above 1 passed as a `Bool` reads its lowest bit
+(the contract states that: `runtime_bit_low`). `Ty::Narrowed` packs what
+the entry needs of a narrowed parameter (the word bound, its bound, and
+`Ty::Holds` after the resize) so a `u8` and a `Bool` share one proof
+(`Ty::word_narrowed`, `Ty::bit_narrowed`). A call reads a `Bool` result
+back the same way: the callee's word is held at every width
+(`Valuation::bind` sets each from the 64-bit word), and its width-one
+reading is the value (`Ty::bit_back`). `Sig::at` past the end is now a
+signature returning lines, which no call reads back, since a `Bool`
+default would be one. The x86 lowering learned the two nodes this
+needs: a `Resize` from a word to one bit settles the register to its lowest
+bit and retags it as the bit (`File::resize_to_bit`), and a one-bit `Move`
+copies the register (`File::bit_copy`), each proved where the lowering's
+other cases are. `compile-x86` states a `Bool` through `runtime_bit_low`
+and `runtime_bit_wide`, so a C caller passes and receives a C `bool`
+(`examples/x86-native/bools.hthr`, `native_program.rs`).
+
+**Still refused, and how each would go** (`issues/runtime-fn-narrow-call-args.md`).
+
+- *A narrow word or a `Bool` passed to a call.* The callee reads the low
+  bits of a 64-bit word, so the caller widens first: `Tm::call_args`
+  would emit a `Resize(w, 64)` before the call for each narrow argument
+  and pass the fresh port, threading `next` past them, with the proof
+  the entry's in reverse (`Ty::widen_by`). It is the same node the entry
+  closes with, placed before the call.
+- *A slot that is a bit or a count in an enum crossing the boundary.* A
+  bit slot needs the width-one reading at its port (the `Bool` result's
+  proof, per slot); a count slot is a `Nat`, whose word round-trips only
+  below 2^64, so its contract needs a premise that the value fits, which
+  no caller states yet.
+- *An enum as a record's field.* A record's field is one port
+  (`Ty::Flat` is free of the type table), so an enum field holds its tag
+  alone; one with a payload waits for the record to hold the payload's
+  slots inline, at which point a record and an enum are both "a code of
+  several words" and share `Ty::span`.
+
+Probes: the call sections of `lib/_tests/native/runtime/runtime_two_words_tests`
+(a record of two and of three words read back and summed, a record passed
+and returned) and
+`runtime_enum_payload_tests` (an enum with a payload built, passed, read
+back and matched, at two sites); the `Bool` section of
+`runtime_narrow_tests` (a `Bool` result, a `Bool` parameter choosing
+between words, both together, and a `Bool` read back from a call and
+branched on).

@@ -96,7 +96,7 @@ fn StructuredRegion::under(self region: StructuredRegion, b: Nat) → Bool {
         Sequence(prefix, continuation) => nodes_under(prefix.nodes, b) && continuation.under(b),
         Compose(prefix, continuation) => prefix.under(b) && continuation.under(b),
         Conditional(_, condition, _, _, when_true, when_false) => (condition + 1).leb(b) && (when_true.under(b) && when_false.under(b)),
-        Call(_, arguments, result) => ids_under(Cons(result, arguments), b),
+        Call(_, arguments, result, also) => ids_under(Cons(result, arguments), b) && ids_under(also, b),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
             ids_under(Cons(bound, Cons(exhausted, inputs)), b) && (ids_under(outputs, b) &&
                 (ids_under(Cons(count, Cons(exit, parameters)), b) && (ids_under(next, b) && body.under(b)))),
@@ -123,7 +123,11 @@ theorem StructuredRegion::under_mono(self region: StructuredRegion, b, c: Nat, l
             Bool::and_true_of((condition + 1).leb(c), when_true.under(c) && when_false.under(c), (condition + 1).leb_trans(b, c, parts.left, le),
                 Bool::and_true_of(when_true.under(c), when_false.under(c), when_true.under_mono(b, c, le, arms.left), when_false.under_mono(b, c, le, arms.right)))
         },
-        Call(_, arguments, result) => λ under => ids_under_mono(b, c, le, Cons(result, arguments), under),
+        Call(_, arguments, result, also) => λ under => {
+            let parts = Bool::and_true_parts(ids_under(Cons(result, arguments), b), ids_under(also, b), under);
+            Bool::and_true_of(ids_under(Cons(result, arguments), c), ids_under(also, c), ids_under_mono(b, c, le, Cons(result, arguments), parts.left),
+                ids_under_mono(b, c, le, also, parts.right))
+        },
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ under => {
             let p1 = Bool::and_true_parts(ids_under(Cons(bound, Cons(exhausted, inputs)), b), ids_under(outputs, b) &&
                 (ids_under(Cons(count, Cons(exit, parameters)), b) && (ids_under(next, b) && body.under(b))), under);
@@ -324,12 +328,16 @@ theorem StructuredRegion::runs_agree(self region: StructuredRegion, effects: Eff
                     True => λ arm => when_true.runs_agree(effects, b, arms.left, values, other, agree, before, after, arm),
                 }))
         },
-        Call(callee, arguments, result) => λ under values other agree before after ran => {
+        Call(callee, arguments, result, also) => λ under values other agree before after ran => {
+            let parts = Bool::and_true_parts(ids_under(Cons(result, arguments), b), ids_under(also, b), under);
             let words: (words_of(values, arguments) = words_of(other, arguments)) = sym(words_agree(arguments, values, other,
-                λ id m => agree(id, ids_under_mem(b, Cons(result, arguments), under, id, Inr(m)), 64)));
-            let word: (values(64, result) = other(64, result)) = sym(agree(result, ids_under_mem(b, Cons(result, arguments), under, result, Inl(refl)), 64));
-            j(words, λ ws _ => effects(before, callee, ws, other(64, result), after),
-                j(word, λ r _ => effects(before, callee, words_of(values, arguments), r, after), ran))
+                λ id m => agree(id, ids_under_mem(b, Cons(result, arguments), parts.left, id, Inr(m)), 64)));
+            let word: (values(64, result) = other(64, result)) = sym(agree(result, ids_under_mem(b, Cons(result, arguments), parts.left, result, Inl(refl)), 64));
+            let rest: (words_of(values, also) = words_of(other, also)) = sym(words_agree(also, values, other,
+                λ id m => agree(id, ids_under_mem(b, also, parts.right, id, m), 64)));
+            j(rest, λ rs _ => effects(before, callee, words_of(other, arguments), other(64, result), rs, after),
+                j(words, λ ws _ => effects(before, callee, ws, other(64, result), words_of(values, also), after),
+                    j(word, λ r _ => effects(before, callee, words_of(values, arguments), r, words_of(values, also), after), ran)))
         },
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ under values other agree before after ran => {
             let p1 = Bool::and_true_parts(ids_under(Cons(bound, Cons(exhausted, inputs)), b), ids_under(outputs, b) &&
@@ -357,12 +365,13 @@ theorem StructuredRegion::runs_agree(self region: StructuredRegion, effects: Eff
             let words: (words_of(values, views_homes(views) ++ arguments) = words_of(other, views_homes(views) ++ arguments)) =
                 sym(words_agree(views_homes(views) ++ arguments, values, other, λ id m => agree(id, passed(id, Inr(m)), 64)));
             let word: (values(64, result) = other(64, result)) = sym(agree(result, passed(result, Inl(refl)), 64));
-            let called = j(windows, λ file _ => effects(file, callee, words_of(other, views_homes(views) ++ arguments), other(64, result), left),
-                j(words, λ ws _ => effects(viewed(views, values, mid), callee, ws, other(64, result), left),
-                    j(word, λ r _ => effects(viewed(views, values, mid), callee, words_of(values, views_homes(views) ++ arguments), r, left),
-                        ran.proof.right.proof.left)));
+            let rest = ran.proof.right.proof.left.witness;
+            let called = j(windows, λ file _ => effects(file, callee, words_of(other, views_homes(views) ++ arguments), other(64, result), rest, left),
+                j(words, λ ws _ => effects(viewed(views, values, mid), callee, ws, other(64, result), rest, left),
+                    j(word, λ r _ => effects(viewed(views, values, mid), callee, words_of(values, views_homes(views) ++ arguments), r, rest, left),
+                        ran.proof.right.proof.left.proof)));
             Exists(mid, ⟨nodes_run_agree(values, other, b, agree, views_nodes(views), p1.left, before, mid, ran.proof.left),
-                Exists(left, ⟨called, trans(ran.proof.right.proof.right, sym(put_views_agree(views, values, other, at_views, left, mid)))⟩)⟩)
+                Exists(left, ⟨Exists(rest, called), trans(ran.proof.right.proof.right, sym(put_views_agree(views, values, other, at_views, left, mid)))⟩)⟩)
         },
     }
 }
@@ -395,11 +404,11 @@ fn StructuredRegion::top(self region: StructuredRegion, top: Nat) → Nat {
         Sequence(prefix, continuation) => continuation.top(nodes_top(prefix.nodes, top)),
         Compose(prefix, continuation) => continuation.top(prefix.top(top)),
         Conditional(_, condition, _, _, when_true, when_false) => when_false.top(when_true.top(top.max(condition + 1))),
-        Call(_, arguments, result) => ids_top(Cons(result, arguments), top),
+        Call(_, arguments, result, also) => ids_top(also, ids_top(Cons(result, arguments), top)),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
             body.top(ids_top(next, ids_top(Cons(count, Cons(exit, parameters)), ids_top(outputs, ids_top(Cons(bound, Cons(exhausted, inputs)), top))))),
         Lend(views, _, arguments, result) => ids_top(Cons(result, views_homes(views) ++ arguments), ids_top(nodes_mentions(views_nodes(views)), top)),
     }
 }
 
-fn Function::top(self function: Function) → Nat { function.body.top(ids_top(Cons(function.result, function.parameters), 0)) }
+fn Function::top(self function: Function) → Nat { function.body.top(ids_top(Cons(function.result, function.parameters ++ function.also), 0)) }

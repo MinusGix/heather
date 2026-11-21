@@ -62,6 +62,53 @@ theorem low_half_runs(): program_eval(low_half::program, 0, [BitVec::ofNat(0x500
 }
 
 // ---------------------------------------------------------------------------
+// A `Bool` at the boundary (docs/native/runtime-fn-setups-design.md
+// §16.17) crosses as a one-bit word: a parameter is the lowest bit of the
+// word passed (`runtime_bit_low`, a `Resize` to one bit before the body),
+// and the result is zero or one (`runtime_bit_wide`, a `Resize` back after
+// it), as C passes a `bool`.
+
+runtime fn is_space(b: u8) → Bool { if b = b' ' { True } else { False } }
+
+theorem is_space_agrees(x: u64): program_eval(is_space::program, 0, [x]) = runtime_bit_wide(is_space(runtime_low(8, x))) { is_space::agrees(x) }
+
+theorem is_space_runs(): program_eval(is_space::program, 0, [BitVec::ofNat(0x120)]) = 1 ∧ program_eval(is_space::program, 0, [BitVec::ofNat(0x21)]) = 0 {
+    ⟨is_space::agrees(BitVec::ofNat(0x120)), is_space::agrees(BitVec::ofNat(0x21))⟩
+}
+
+// A `Bool` parameter chooses between words: only its word's lowest bit
+// is read.
+runtime fn choose(c: Bool, x: u64, y: u64) → u64 { if c { x } else { y } }
+
+theorem choose_agrees(c, x, y: u64): program_eval(choose::program, 0, [c, x, y]) = choose(runtime_bit_low(c), x, y) { choose::agrees(c, x, y) }
+
+theorem choose_runs(): program_eval(choose::program, 0, [BitVec::ofNat(1), BitVec::ofNat(5), BitVec::ofNat(9)]) = 5 ∧
+    program_eval(choose::program, 0, [BitVec::ofNat(2), BitVec::ofNat(5), BitVec::ofNat(9)]) = 9 {
+    ⟨choose::agrees(BitVec::ofNat(1), BitVec::ofNat(5), BitVec::ofNat(9)), choose::agrees(BitVec::ofNat(2), BitVec::ofNat(5), BitVec::ofNat(9))⟩
+}
+
+// Bools in and out: a comparison's bit returned, another passed through.
+runtime fn both_below(a: u64, b: u64, ok: Bool) → Bool { if a < b { ok } else { False } }
+
+theorem both_below_runs(): program_eval(both_below::program, 0, [BitVec::ofNat(2), BitVec::ofNat(3), BitVec::ofNat(1)]) = 1 ∧
+    program_eval(both_below::program, 0, [BitVec::ofNat(2), BitVec::ofNat(3), BitVec::ofNat(0)]) = 0 {
+    ⟨both_below::agrees(BitVec::ofNat(2), BitVec::ofNat(3), BitVec::ofNat(1)), both_below::agrees(BitVec::ofNat(2), BitVec::ofNat(3), BitVec::ofNat(0))⟩
+}
+
+// A `Bool` read back from a call: the callee answers its bit in a word,
+// and the caller branches on it.
+runtime fn is_small(x: u64) → Bool { if x < 10 { True } else { False } }
+
+runtime fn count_small(x: u64, y: u64) → u64 { if is_small(x) { y + 1 } else { y } }
+
+theorem count_small_agrees(x, y: u64): program_eval(count_small::program, 1, [x, y]) = count_small(x, y) { count_small::agrees(x, y) }
+
+theorem count_small_runs(): program_eval(count_small::program, 1, [BitVec::ofNat(3), BitVec::ofNat(5)]) = 6 ∧
+    program_eval(count_small::program, 1, [BitVec::ofNat(30), BitVec::ofNat(5)]) = 5 {
+    ⟨count_small::agrees(BitVec::ofNat(3), BitVec::ofNat(5)), count_small::agrees(BitVec::ofNat(30), BitVec::ofNat(5))⟩
+}
+
+// ---------------------------------------------------------------------------
 // Refusals, each with its reason.
 
 // A loop's state is still 64-bit words (the loop's own lowering keeps
@@ -73,9 +120,5 @@ runtime fn count_up(n, i: u64, b: u8) → u64 decreases (n - i).toNat() {
 
 // A call of a function with a narrow parameter: the caller would widen its
 // argument first, which the call's lowering does not do yet.
-// expect-error: a call of a function that does not take and return 64-bit words
+// expect-error: a call of a function whose parameters or result do not cross a call in 64-bit words
 runtime fn calls_digit(x: u64) → u64 { digit_value(x.truncate(8, 56)) + 1 }
-
-// A `Bool` result is not a word.
-// expect-error: a result that is not a word of at most 64 bits
-runtime fn is_space(b: u8) → Bool { if b = b' ' { True } else { False } }

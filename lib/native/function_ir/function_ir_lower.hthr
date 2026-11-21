@@ -2378,6 +2378,20 @@ theorem File::narrow_shift_right_keeps<M>(self file: File, values: Valuation(), 
 }
 
 // A copy, and a constant loaded zero-extended.
+// A bit copied: its register, 0 or 1, moved and tagged for the copy.
+fn File::bit_copy(self file: File, destination: Gpr, output, source: Nat) → Option<Lowered> {
+    file.reshaped([], Bit, Bit, destination, output, source)
+}
+
+theorem File::bit_copy_keeps<M>(self file: File, values: Valuation(), destination: Gpr, output, source: Nat):
+    MayKeep<M>(values, file, values(1, output) = values(1, source), file.bit_copy(destination, output, source))
+{
+    keeps_from<M>(values, file, Reshapes(values, Bit, Bit, output, source, λ x => x), values(1, output) = values(1, source),
+        file.bit_copy(destination, output, source),
+        λ holds => λ a (rep: values(1, source).zero_extend(63) = a) => trans(cong_fn(λ (c: BitVec(1)) => c.zero_extend(63), holds), rep),
+        file.reshaped_keeps<M>(values, [], λ x => x, Bit, Bit, destination, output, source, in_place_none<M>(destination)))
+}
+
 fn File::narrow_copy(self file: File, width: Nat, destination: Gpr, output, source: Nat) → Option<Lowered> {
     file.reshaped([], Narrow(width), Narrow(width), destination, output, source)
 }
@@ -2711,12 +2725,38 @@ theorem File::resize_to_narrow_keeps<M>(self file: File, values: Valuation(), fr
                             trans(BitVec::resize_narrowed(to, 64, high, values(from, source)), sym(holds)))))))
 }
 
-// A resize to one bit would have to leave a `Bit`, which no settling does
-// yet, and is refused.
+// A word to one bit: settled to its lowest bit, which leaves the register
+// 0 or 1, and that register retagged as the bit (what a `Bool` parameter's
+// entry reads, docs/native/runtime-fn-setups-design.md §16.17). From a
+// narrow width it is refused.
+fn File::resize_to_bit(self file: File, from: Nat, destination: Gpr, output, source: Nat) → Option<Lowered> {
+    at_width(64, from, from.eq_dec(64),
+        then_step(file.narrowed(Word, 1, destination, output, source),
+            λ (middle: File) => middle.retagged(Narrow(1), Bit, destination, output, output)),
+        None)
+}
+
+theorem File::resize_to_bit_keeps<M>(self file: File, values: Valuation(), from: Nat, destination: Gpr, output, source: Nat):
+    MayKeep<M>(values, file, Resized(values, from, 1, output, source), file.resize_to_bit(from, destination, output, source))
+{
+    let next = λ (middle: File) => middle.retagged(Narrow(1), Bit, destination, output, output);
+    let first = file.narrowed(Word, 1, destination, output, source);
+    at_width_keeps<M>(values, file, 64, from, λ w => Resized(values, w, 1, output, source), from.eq_dec(64),
+        then_step(first, next), None,
+        keeps_from<M>(values, file, Resized(values, 64, 1, output, source) ∧ True, Resized(values, 64, 1, output, source), then_step(first, next),
+            λ holds => ⟨holds, trivial⟩,
+            then_step_keeps<M>(values, file, Resized(values, 64, 1, output, source), True, first, next,
+                λ middle => middle.retagged_keeps<M>(values, True, Narrow(1), Bit, destination, output, output,
+                    λ _ => λ a (rep: values(1, output).resize(64) = a) => trans(sym(BitVec::resize_zero_extend(1, 63, values(1, output))), rep)),
+                file.narrowed_keeps<M>(values, Word, 64, 1, destination, output, source, Nat::le_of_leb(1, 64, refl),
+                    λ holds => λ a (rep: values(64, source) = a) => j(rep, λ u _ => u.resize(1) = values(1, output), sym(holds))))),
+        trivial)
+}
+
 fn File::resize(self file: File, from, to: Nat, destination: Gpr, output, source: Nat) → Option<Lowered> {
     at_width(64, to, to.eq_dec(64),
         file.resize_to_word(from, destination, output, source),
-        at_width(1, to, to.eq_dec(1), None,
+        at_width(1, to, to.eq_dec(1), file.resize_to_bit(from, destination, output, source),
             when_fits(to, 64, to.le_dec(64),
                 file.resize_to_narrow(from, to, destination, output, source), None)))
 }
@@ -2728,15 +2768,15 @@ theorem File::resize_keeps<M>(self file: File, values: Valuation(), from, to: Na
 {
     at_width_keeps<M>(values, file, 64, to, λ w => Resized(values, from, w, output, source), to.eq_dec(64),
         file.resize_to_word(from, destination, output, source),
-        at_width(1, to, to.eq_dec(1), None,
+        at_width(1, to, to.eq_dec(1), file.resize_to_bit(from, destination, output, source),
             when_fits(to, 64, to.le_dec(64),
                 file.resize_to_narrow(from, to, destination, output, source), None)),
         file.resize_to_word_keeps<M>(values, from, destination, output, source),
         at_width_keeps<M>(values, file, 1, to, λ w => Resized(values, from, w, output, source), to.eq_dec(1),
-            None,
+            file.resize_to_bit(from, destination, output, source),
             when_fits(to, 64, to.le_dec(64),
                 file.resize_to_narrow(from, to, destination, output, source), None),
-            trivial,
+            file.resize_to_bit_keeps<M>(values, from, destination, output, source),
             when_fits_keeps<M>(values, file, Resized(values, from, to, output, source), to, 64, to.le_dec(64),
                 file.resize_to_narrow(from, to, destination, output, source), None,
                 λ high => file.resize_to_narrow_keeps<M>(values, from, to, destination, output, source, high),
@@ -3135,7 +3175,7 @@ fn Node::lower(self node: Node, destination: Gpr, file: File) → Option<Lowered
             file.constant(destination, output, value), file.bit_constant(destination, output, value),
             file.narrow_constant(width, destination, output, value)),
         Move(width, output, source) => by_width(width, width.eq_dec(64), width.eq_dec(1),
-            file.copy(destination, output, source), None,
+            file.copy(destination, output, source), file.bit_copy(destination, output, source),
             file.narrow_copy(width, destination, output, source)),
         Add(width, output, left, right) => by_width(width, width.eq_dec(64), width.eq_dec(1),
             file.add(destination, output, left, right), None,
@@ -3203,9 +3243,9 @@ theorem Node::lower_keeps<M>(self node: Node, values: Valuation(), destination: 
             λ _ => file.narrow_constant_keeps<M>(values, width, destination, output, value)),
         Move(width, output, source) => by_width_keeps<M>(values, file, width,
             λ w => NodeHolds(values, Move(w, output, source)), width.eq_dec(64), width.eq_dec(1),
-            file.copy(destination, output, source), None,
+            file.copy(destination, output, source), file.bit_copy(destination, output, source),
             file.narrow_copy(width, destination, output, source),
-            file.copy_keeps<M>(values, destination, output, source), trivial,
+            file.copy_keeps<M>(values, destination, output, source), file.bit_copy_keeps<M>(values, destination, output, source),
             λ _ => file.narrow_copy_keeps<M>(values, width, destination, output, source)),
         Add(width, output, left, right) => by_width_keeps<M>(values, file, width,
             λ w => NodeHolds(values, Add(w, output, left, right)), width.eq_dec(64), width.eq_dec(1),

@@ -66,10 +66,10 @@ theorem planned_slots_most_saved(): places_slots([Spilling(4), Into(Rax), Spilli
 // The file after a call: the result, what was saved, and nothing where a
 // caller-saved register was left out; a register the callee keeps is as
 // it was whatever the mask.
-theorem called_keeps_saved(file: File): file.called([Rsi], 9).at(Rsi) = file.at(Rsi) { refl }
-theorem called_drops_unsaved(file: File): file.called([Rsi], 9).at(Rdi) = None { refl }
-theorem called_has_result(file: File): file.called([Rsi], 9).at(Rax) = Some(Held(9, Word)) { refl }
-theorem called_keeps_kept(file: File): file.called([], 9).at(R12) = file.at(R12) { refl }
+theorem called_keeps_saved(file: File): file.called([Rsi], 9, []).at(Rsi) = file.at(Rsi) { refl }
+theorem called_drops_unsaved(file: File): file.called([Rsi], 9, []).at(Rdi) = None { refl }
+theorem called_has_result(file: File): file.called([Rsi], 9, []).at(Rax) = Some(Held(9, Word)) { refl }
+theorem called_keeps_kept(file: File): file.called([], 9, []).at(R12) = file.at(R12) { refl }
 
 // ---------------------------------------------------------------------------
 // One word read after a call
@@ -86,7 +86,7 @@ fn double() → Function {
 // read after the call, `a` is not.
 fn add_double() → Function {
     Function(parameters := [0, 1],
-        body := Compose(Call(0, [0], 2),
+        body := Compose(Call(0, [0], 2, []),
             Dataflow(Region(inputs := Ports([word(1), word(2)]), nodes := [Add(width := 64, output := 3, left := 2, right := 1)],
                 outputs := Ports([word(3)])))),
         result := 3)

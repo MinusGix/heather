@@ -29,7 +29,7 @@ enum Region {
     Sequence(Vec<Node>, Box<Region>),
     Compose(Box<Region>, Box<Region>),
     Conditional(u64, Box<Region>, Box<Region>),
-    Call { arguments: Vec<u64>, result: u64 },
+    Call { arguments: Vec<u64>, result: u64, also: Vec<u64> },
     Loop { inputs: Vec<u64>, bound: u64, parameters: Vec<u64>, count: u64, body: Box<Region>, exit: u64, next: Vec<u64>, outputs: Vec<u64>, exhausted: u64 },
 }
 
@@ -102,7 +102,13 @@ impl Reader<'_> {
             4 => {
                 self.next()?;
                 let arguments = self.ids()?;
-                Region::Call { arguments, result: self.next()? }
+                Region::Call { arguments, result: self.next()?, also: Vec::new() }
+            }
+            8 => {
+                self.next()?;
+                let arguments = self.ids()?;
+                let result = self.next()?;
+                Region::Call { arguments, result, also: self.ids()? }
             }
             5 => {
                 let inputs = self.ids()?;
@@ -129,7 +135,7 @@ impl Reader<'_> {
                 }
                 self.next()?;
                 arguments.extend(self.ids()?);
-                Region::Call { arguments, result: self.next()? }
+                Region::Call { arguments, result: self.next()?, also: Vec::new() }
             }
             _ => return None,
         })
@@ -217,6 +223,13 @@ fn minus(a: &[u64], b: &[u64]) -> Vec<u64> { a.iter().copied().filter(|id| !hold
 
 fn live_before(reads: &[u64], written: u64, out: &[u64]) -> Vec<u64> { union(reads, &minus(out, &[written])) }
 
+/// The words a call writes: its result, then the words past it.
+fn call_words(result: u64, also: &[u64]) -> Vec<u64> {
+    let mut words = vec![result];
+    words.extend_from_slice(also);
+    words
+}
+
 fn nodes_live_in(nodes: &[Node], out: &[u64]) -> Vec<u64> {
     nodes.iter().rev().fold(out.to_vec(), |after, node| live_before(&node.reads, node.output, &after))
 }
@@ -285,7 +298,7 @@ fn region_needs(r: &Region, homes: &Homes, out: &[u64], sets: &mut Vec<Vec<u64>>
             let y = region_needs(yes, homes, out, sets);
             with_head(*condition, union(&y, &n))
         }
-        Region::Call { arguments, result } => live_before(arguments, *result, out),
+        Region::Call { arguments, result, also } => union(arguments, &minus(out, &call_words(*result, also))),
         Region::Loop { inputs, bound, parameters, count, body, exit, next, outputs, exhausted } => {
             let set = homes.loop_set(*count).to_vec();
             let done = nodes_live_in(&moves(outputs, parameters), out);
@@ -384,9 +397,10 @@ fn region_graph(r: &Region, homes: &Homes, out: &[u64], of: &mut Vec<Vec<bool>>)
             let y = region_graph(yes, homes, out, of);
             with_head(*condition, union(&y, &n))
         }
-        Region::Call { arguments, result } => {
-            written(of, *result, out);
-            live_before(arguments, *result, out)
+        Region::Call { arguments, result, also } => {
+            let words = call_words(*result, also);
+            for w in &words { written(of, *w, out); }
+            union(arguments, &minus(out, &words))
         }
         Region::Loop { inputs, bound, parameters, count, body, exit, next, outputs, exhausted } => {
             let set = homes.loop_set(*count).to_vec();
@@ -453,7 +467,7 @@ fn region_weights(r: &Region, scale: u64, w: &mut Vec<u64>) {
         Region::Sequence(prefix, rest) => { nodes_weights(prefix, scale, w); region_weights(rest, scale, w); }
         Region::Compose(prefix, rest) => { region_weights(prefix, scale, w); region_weights(rest, scale, w); }
         Region::Conditional(condition, yes, no) => { bump(w, *condition, scale); region_weights(yes, scale, w); region_weights(no, scale, w); }
-        Region::Call { arguments, result } => { bump(w, *result, scale); for a in arguments { bump(w, *a, scale); } }
+        Region::Call { arguments, result, also } => { bump(w, *result, scale); for a in also.iter().chain(arguments) { bump(w, *a, scale); } }
         Region::Loop { inputs, bound, parameters, count, body, exit, next, outputs, exhausted } => {
             let inner = scale + LOOP_WEIGHT;
             nodes_weights(&loop_entry(*bound, *count, inputs, parameters), scale, w);

@@ -149,3 +149,68 @@ theorem pocket_add_agrees(x: u64, p: Pocket):
 theorem pocket_add_runs(): program_eval_also(pocket_add::program, [BitVec::ofNat(2), BitVec::ofNat(1), BitVec::ofNat(5)]) = [BitVec::ofNat(7)] {
     pocket_add::agrees_also(BitVec::ofNat(2), Holds(BitVec::ofNat(5)))
 }
+
+// ---------------------------------------------------------------------------
+// Calls in several words (docs/native/runtime-fn-setups-design.md §16.17):
+// an enum with a payload passed as its tag word and its slots, and one
+// read back from a callee in its words (`Call.also`), then matched.
+
+// A constructor built and passed, twice, at two sites.
+runtime fn pocket_n_of(x: u64) → u64 { pocket_n(Holds(x)) + pocket_n(Empty) }
+
+theorem pocket_n_of_runs(): program_eval(pocket_n_of::program, 1, [BitVec::ofNat(7)]) = 7 { pocket_n_of::agrees(BitVec::ofNat(7)) }
+
+theorem pocket_n_of_agrees(x: u64): program_eval(pocket_n_of::program, 1, [x]) = pocket_n_of(x) { pocket_n_of::agrees(x) }
+
+// A parameter passed on as it came, its words to the callee's.
+runtime fn pocket_n_passed(p: Pocket, x: u64) → u64 { pocket_n(p) + x }
+
+theorem pocket_n_passed_agrees(p: Pocket, x: u64):
+    program_eval(pocket_n_passed::program, 1, RecInfo::enum_words(pocket_n_passed::world.tys, 0, p) ++ [x]) = pocket_n_passed(p, x) {
+    pocket_n_passed::agrees(p, x)
+}
+
+// An enum read back from a call, its slot in the second word, and matched.
+runtime fn pocket_of(x: u64) → Pocket { if x < 10 { Empty } else { Holds(x) } }
+
+runtime fn pocket_called(x: u64) → u64 { match pocket_of(x) { Empty => 1, Holds(n) => n } }
+
+theorem pocket_called_runs(): program_eval(pocket_called::program, 1, [BitVec::ofNat(12)]) = 12 ∧
+    program_eval(pocket_called::program, 1, [BitVec::ofNat(3)]) = 1 {
+    ⟨pocket_called::agrees(BitVec::ofNat(12)), pocket_called::agrees(BitVec::ofNat(3))⟩
+}
+
+theorem pocket_called_agrees(x: u64): program_eval(pocket_called::program, 1, [x]) = pocket_called(x) { pocket_called::agrees(x) }
+
+// Both ways through one callee: what one call returns is passed to the
+// next, an enum's words in and out each time.
+runtime fn pocket_twice(x: u64) → Pocket { pocket_add(x, pocket_add(x, pocket_of(x))) }
+
+theorem pocket_twice_runs(): program_eval_also(pocket_twice::program, [BitVec::ofNat(12)]) = [BitVec::ofNat(36)] ∧
+    program_eval_also(pocket_twice::program, [BitVec::ofNat(3)]) = [BitVec::ofNat(6)] {
+    ⟨pocket_twice::agrees_also(BitVec::ofNat(12)), pocket_twice::agrees_also(BitVec::ofNat(3))⟩
+}
+
+// An enum of three words (two slots) returned by a callee: past the two
+// words a C caller is handed, but read back whole by a Heather caller.
+inductive Span2 { None2, Both(a: u64, b: u64) }
+
+runtime fn span2_of(x: u64) → Span2 { if x < 1 { None2 } else { Both(x, x + 1) } }
+
+theorem span2_of_also(): span2_of::code.also.len() = 2 { refl }
+
+runtime fn span2_sum(x: u64) → u64 { match span2_of(x) { None2 => 0, Both(a, b) => a + b } }
+
+theorem span2_sum_runs(): program_eval(span2_sum::program, 1, [BitVec::ofNat(4)]) = 9 ∧
+    program_eval(span2_sum::program, 1, [BitVec::ofNat(0)]) = 0 {
+    ⟨span2_sum::agrees(BitVec::ofNat(4)), span2_sum::agrees(BitVec::ofNat(0))⟩
+}
+
+theorem span2_sum_agrees(x: u64): program_eval(span2_sum::program, 1, [x]) = span2_sum(x) { span2_sum::agrees(x) }
+
+// A three-slot enum passed to a callee from a caller that builds it.
+runtime fn shape_of_rect(w: u64, h: u64) → u64 { shape_scaled(Rect(w, h), 2) + shape_scaled(Dot, w) }
+
+theorem shape_of_rect_runs(): program_eval(shape_of_rect::program, 1, [BitVec::ofNat(3), BitVec::ofNat(4)]) = 27 {
+    shape_of_rect::agrees(BitVec::ofNat(3), BitVec::ofNat(4))
+}

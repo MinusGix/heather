@@ -147,8 +147,20 @@ a C structure of two integer words, the first field in RAX and the second in
 RDX, and the certificate states both (`Prog::ComputesBoth`). A C caller
 declares `typedef struct { uint64_t low, high; } Wide;` and reads it
 (`a_record_of_two_words_is_returned_in_rax_and_rdx` in `native_program.rs`).
-A function returning two words is called only from outside the program for
-now: a call inside it reads one word.
+Inside a program a call reads back every word of its callee's result, and
+passes a record or an enum in its words.
+
+`add_wides` takes two `Wide`s and returns one: a record of words is passed
+a word a field, as System V passes a C structure of integer words by value,
+so C calls it as `Wide add_wides(Wide, Wide)`
+(`records_of_two_words_are_passed_and_returned`).
+
+## Bools
+
+`bools.hthr`'s `in_range` takes and returns `Bool`s: a parameter is the
+lowest bit of its word and the result is 0 or 1, which is what System V
+asks of a C `bool`, so C declares it `bool in_range(uint64_t, uint64_t,
+uint64_t, bool)` (`bools_cross_as_c_bools`).
 
 ## Linked into Rust
 

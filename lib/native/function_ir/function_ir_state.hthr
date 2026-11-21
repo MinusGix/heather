@@ -354,15 +354,21 @@ theorem loop_run_empty(run_step: Valuation() → Buffers() → State, step: Valu
 // ---------------------------------------------------------------------------
 // Structured regions
 
-// What a call is answered with: the word returned and the file left.
-record Ending { word: BitVec(64), buffers: Buffers() }
+// What a call is answered with: the word returned, the file left, and the
+// words returned past the first (`Call`'s `also`, §16.17).
+record Ending { word: BitVec(64), buffers: Buffers(), rest: List<BitVec(64)> := [] }
+
+// A call answered by an evaluation's words over a file it leaves.
+fn Ending::of(words: List<BitVec(64)>, buffers: Buffers()) → Ending { Ending(first_word(words), buffers, rest := words.tail()) }
 
 // Callees that may write: each answers a call made over a file.
 fn Writers() → Type { Buffers() → Nat → List<BitVec(64)> → Ending }
 
 // The words such callees return over one file, as an evaluation is
 // answered (`Answers`).
-fn Writers::words(call: Writers(), held: Buffers()) → Answers() { λ f words => call(held, f, words).word }
+fn Writers::words(call: Writers(), held: Buffers()) → Answers() {
+    λ f words => Cons(call(held, f, words).word, call(held, f, words).rest)
+}
 
 // Callees that leave every file as it was.
 fn Writers::Quiet(call: Writers()) → Type { (held: Buffers()) → (f: Nat) → (words: List<BitVec(64)>) → call(held, f, words).buffers = held }
@@ -371,7 +377,7 @@ fn Writers::Quiet(call: Writers()) → Type { (held: Buffers()) → (f: Nat) →
 fn Readers() → Type { Buffers() → Answers() }
 
 // Callees that read, as callees that may write and do not.
-fn Readers::quiet(call: Readers()) → Writers() { λ held f words => Ending(call(held, f, words), held) }
+fn Readers::quiet(call: Readers()) → Writers() { λ held f words => Ending::of(call(held, f, words), held) }
 
 theorem Readers::quiet_quiet(call: Readers()): Writers::Quiet(Readers::quiet(call)) { λ held f words => refl }
 
@@ -402,8 +408,8 @@ fn StructuredRegion::run(self region: StructuredRegion, call: Writers(), values:
                 State(Valuation::set(bound.values, result, word_value(answer.word)), put_views(views, bound.values, answer.buffers, bound.buffers)))
         },
         // The callee is run once, whoever reads its word or its file.
-        Call(callee, arguments, result) => shared(call(buffers, callee, words_of(values, arguments)), λ (answer: Ending) =>
-            State(Valuation::set(values, result, word_value(answer.word)), answer.buffers)),
+        Call(callee, arguments, result, also) => shared(call(buffers, callee, words_of(values, arguments)), λ (answer: Ending) =>
+            State(Valuation::bind(values, Cons(result, also), Cons(answer.word, answer.rest)), answer.buffers)),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => {
             let end = loop_run(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held), parameters, count, exit, next,
                 values(64, bound).toNat(), words_of(values, inputs), buffers);
@@ -464,7 +470,8 @@ fn StructuredRegion::run_defined(self region: StructuredRegion, call: Writers(),
             run_nodes_defined(views_nodes(views), values, buffers)
                 && defines(viewed(views, bound.values, bound.buffers), callee, words_of(bound.values, views_homes(views) ++ arguments))
         },
-        Call(callee, arguments, _) => defines(buffers, callee, words_of(values, arguments)),
+        Call(callee, arguments, _, also) => defines(buffers, callee, words_of(values, arguments))
+            && call(buffers, callee, words_of(values, arguments)).rest.len().matches(also.len()),
         Loop(inputs, bound, parameters, count, body, exit, next, _, _) =>
             loop_run_defined(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held),
                 λ (pass: Valuation()) (held: Buffers()) => body.run_defined(call, defines, pass, held), parameters, count, exit, next,

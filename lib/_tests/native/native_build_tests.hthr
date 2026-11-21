@@ -186,7 +186,7 @@ fn raised_status(bytes: List<BitVec(8)>) → Tool {
 // A call is a FunctionIR `Call`, its program the source's functions.
 theorem raised_status_lowered(byte: BitVec(8)): raised_status([byte]).source() = Source(functions := raise_letter_native_program(),
     buffers := [Buffer(1, [byte])], words := 3,
-    main := Then(Stmt::leaf([Const(64, 0, 0)]), Then(Compute(Sequence(Region::bare([Const(64, 2, 0), BufferLoad(1, 0, 2)]), Call(0, [1], 0))), Exit(0)))) {
+    main := Then(Stmt::leaf([Const(64, 0, 0)]), Then(Compute(Sequence(Region::bare([Const(64, 2, 0), BufferLoad(1, 0, 2)]), Call(0, [1], 0, []))), Exit(0)))) {
     refl
 }
 

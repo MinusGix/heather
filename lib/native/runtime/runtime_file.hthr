@@ -326,8 +326,8 @@ fn span_source(srcs: List<List<BitVec(64)> → Ending>, held: Buffers(), k: Nat)
     match srcs.nth(k) { None => λ _ => Ending(BitVec::zero(), held), Some(s) => s }
 }
 
-// The word such an answer returns.
-fn span_word(s: List<BitVec(64)> → Ending) → List<BitVec(64)> → BitVec(64) { λ ws => s(ws).word }
+// The words such an answer returns: its word, then the rest.
+fn span_word(s: List<BitVec(64)> → Ending) → List<BitVec(64)> → List<BitVec(64)> { λ ws => Cons(s(ws).word, s(ws).rest) }
 
 // The family of files a function that writes is known at: a span and any
 // rest of a file after it. Every rest, and not one, because a function
@@ -353,12 +353,13 @@ fn span_all_cons(s: List<List<BitVec(8)>> → List<BitVec(8)> → List<BitVec(64
     λ rest own => Cons(s(rest, own), more(rest, own))
 }
 
+// Its words are the list's, read as a call reads them (a word for none).
 theorem span_source_word(held: Buffers(), srcs: List<List<BitVec(64)> → Ending>): (k: Nat) → (ws: List<BitVec(64)>) →
-    span_source(srcs, held, k, ws).word = link_source(srcs.map(span_word), k, ws) {
+    span_word(span_source(srcs, held, k), ws) = Answers::split(link_source(srcs.map(span_word), k, ws)) {
     match srcs {
         Nil => λ k ws => refl,
         Cons(s, rest) => λ k => match k as λ i => (ws: List<BitVec(64)>) →
-            span_source(Cons(s, rest), held, i, ws).word = link_source(Cons(s, rest).map(span_word), i, ws) {
+            span_word(span_source(Cons(s, rest), held, i), ws) = Answers::split(link_source(Cons(s, rest).map(span_word), i, ws)) {
             Zero => λ ws => refl,
             Succ(i) => λ ws => span_source_word(held, rest, i, ws),
         },
@@ -368,7 +369,7 @@ theorem span_source_word(held: Buffers(), srcs: List<List<BitVec(64)> → Ending
 // A function that only reads, in such a program: its meaning at the file,
 // and the file.
 fn Compile::span_source<F>(f: F, c: Compile<F>(f), rest: List<List<BitVec(8)>>) → List<BitVec(8)> → List<BitVec(64)> → Ending {
-    λ own xs => Ending(Compile::uncurried(f, c, Cons(own, rest), xs), Cons(own, rest))
+    λ own xs => Ending::of(Compile::uncurried(f, c, Cons(own, rest), xs), Cons(own, rest))
 }
 
 // A function that writes: its meaning from the span, as a word and the
@@ -438,30 +439,31 @@ theorem link_at_append(pre, links: List<Nat>, k: Nat): link_at(pre ++ links, pre
 // meanings (by conversion) at their arities, `ans` at the linked names
 // answers the table: the reading half of what a function that writes
 // assumes of its calls.
-theorem Sig::links_answer(tys: Nat → RecInfo, srcs: List<List<BitVec(64)> → BitVec(64)>, ans: Nat → List<BitVec(64)> → BitVec(64),
+theorem Sig::links_answer(tys: Nat → RecInfo, srcs: List<List<BitVec(64)> → List<BitVec(64)>>, ans: Nat → List<BitVec(64)> → List<BitVec(64)>,
     arity: Nat → Option<Nat>,
-    agree: (n: Nat) → (ws: List<BitVec(64)>) → arity_fits(arity(n), ws.len()).IsTrue() → ans(n, ws) = link_source(srcs, n, ws), more: List<Nat>,
+    agree: (n: Nat) → (ws: List<BitVec(64)>) → arity_fits(arity(n), ws.len()).IsTrue() → ans(n, ws) = Answers::split(link_source(srcs, n, ws)),
+    more: List<Nat>,
     sigs: List<Sig>): (cs: Sig::Sems(tys, sigs)) → (links: List<Nat>) →
-    links.map(λ (n: Nat) => link_source(srcs, n)) = Sig::uncurried(tys, sigs, cs) → Sig::links_fit(sigs, links, arity).IsTrue() →
-    (k: Nat) → Sig::at(sigs, k).Words(tys) →
-    Ty::Answers(tys, Sig::at(sigs, k).params, Sig::at(sigs, k).result, Sig::get(tys, sigs, cs, k), λ ws => ans(link_at(links ++ more, k), ws)) {
+    links.map(λ (n: Nat) => link_source(srcs, n)) = Sig::uncurried(tys, sigs, cs) → Sig::links_fit(tys, sigs, links, arity).IsTrue() →
+    (k: Nat) → Sig::at(sigs, k).Sends(tys) →
+    Ty::AnswersWords(tys, Sig::at(sigs, k).params, Sig::at(sigs, k).result, Sig::get(tys, sigs, cs, k), λ ws => ans(link_at(links ++ more, k), ws)) {
     match sigs {
         Nil => λ cs links linked named k ok => false_elim(ok.right),
         Cons(s, rest) => λ cs links => match links as λ ls => ls.map(λ (n: Nat) => link_source(srcs, n)) = Sig::uncurried(tys, Cons(s, rest), cs) →
-            Sig::links_fit(Cons(s, rest), ls, arity).IsTrue() → (k: Nat) → Sig::at(Cons(s, rest), k).Words(tys) →
-            Ty::Answers(tys, Sig::at(Cons(s, rest), k).params, Sig::at(Cons(s, rest), k).result, Sig::get(tys, Cons(s, rest), cs, k),
+            Sig::links_fit(tys, Cons(s, rest), ls, arity).IsTrue() → (k: Nat) → Sig::at(Cons(s, rest), k).Sends(tys) →
+            Ty::AnswersWords(tys, Sig::at(Cons(s, rest), k).params, Sig::at(Cons(s, rest), k).result, Sig::get(tys, Cons(s, rest), cs, k),
                 λ ws => ans(link_at(ls ++ more, k), ws)) {
             Nil => λ linked never k ok => false_elim(never),
             Cons(l, ls) => λ linked named k => {
-                let parts = Bool::is_true_and(arity_fits(arity(l), s.params.len()), Sig::links_fit(rest, ls, arity), named);
-                let heads = cong_fn(λ (fs: List<List<BitVec(64)> → BitVec(64)>) => fs.head_or(λ (_: List<BitVec(64)>) => BitVec::zero()), linked);
-                let tails = cong_fn(λ (fs: List<List<BitVec(64)> → BitVec(64)>) => fs.tail(), linked);
-                match k as λ i => Sig::at(Cons(s, rest), i).Words(tys) →
-                    Ty::Answers(tys, Sig::at(Cons(s, rest), i).params, Sig::at(Cons(s, rest), i).result, Sig::get(tys, Cons(s, rest), cs, i),
+                let parts = Bool::is_true_and(arity_fits(arity(l), Ty::spans(tys, s.params)), Sig::links_fit(tys, rest, ls, arity), named);
+                let heads = cong_fn(λ (fs: List<List<BitVec(64)> → List<BitVec(64)>>) => fs.head_or(λ (_: List<BitVec(64)>) => Nil), linked);
+                let tails = cong_fn(λ (fs: List<List<BitVec(64)> → List<BitVec(64)>>) => fs.tail(), linked);
+                match k as λ i => Sig::at(Cons(s, rest), i).Sends(tys) →
+                    Ty::AnswersWords(tys, Sig::at(Cons(s, rest), i).params, Sig::at(Cons(s, rest), i).result, Sig::get(tys, Cons(s, rest), cs, i),
                         λ ws => ans(link_at(Cons(l, ls) ++ more, i), ws)) {
-                    Zero => λ ok => Ty::answers_of_uncurry_words(tys, s.params, s.result, ok.left, cs.fst, λ ws => ans(l, ws), λ xs len =>
+                    Zero => λ ok => Ty::answers_words_of_admitted(tys, s.params, s.result, Ty::sents_pass(tys, s.params, ok.left), cs.fst, λ ws => ans(l, ws), λ xs len _ =>
                         trans(agree(l, xs, j(sym(len), λ m _ => arity_fits(arity(l), m).IsTrue(), parts.left)),
-                            cong_fn(λ (g: List<BitVec(64)> → BitVec(64)) => g(xs), heads))),
+                            cong_fn(λ (g: List<BitVec(64)> → List<BitVec(64)>) => Answers::split(g(xs)), heads))),
                     Succ(i) => λ ok => Sig::links_answer(tys, srcs, ans, arity, agree, more, rest, cs.snd, ls, tails, parts.right, i, ok),
                 }
             },
@@ -471,20 +473,20 @@ theorem Sig::links_answer(tys: Nat → RecInfo, srcs: List<List<BitVec(64)> → 
 
 // Links checked against the functions marked still name functions that
 // leave the file.
-theorem Sig::links_still(arity: Nat → Option<Nat>, still: Nat → Bool, more: List<Nat>, sigs: List<Sig>): (links: List<Nat>) →
-    Sig::links_fit(sigs, links, still_arity(arity, still)).IsTrue() → (k: Nat) → FTm::pure(sigs.len(), k).IsTrue() →
+theorem Sig::links_still(tys: Nat → RecInfo, arity: Nat → Option<Nat>, still: Nat → Bool, more: List<Nat>, sigs: List<Sig>): (links: List<Nat>) →
+    Sig::links_fit(tys, sigs, links, still_arity(arity, still)).IsTrue() → (k: Nat) → FTm::pure(sigs.len(), k).IsTrue() →
     still(link_at(links ++ more, k)).IsTrue() {
     match sigs {
         Nil => λ links named k never => false_elim(never),
-        Cons(s, rest) => λ links => match links as λ ls => Sig::links_fit(Cons(s, rest), ls, still_arity(arity, still)).IsTrue() → (k: Nat) →
+        Cons(s, rest) => λ links => match links as λ ls => Sig::links_fit(tys, Cons(s, rest), ls, still_arity(arity, still)).IsTrue() → (k: Nat) →
             FTm::pure(rest.len() + 1, k).IsTrue() → still(link_at(ls ++ more, k)).IsTrue() {
             Nil => λ never k _ => false_elim(never),
             Cons(l, ls) => λ named k => {
-                let parts = Bool::is_true_and(arity_fits(still_arity(arity, still, l), s.params.len()),
-                    Sig::links_fit(rest, ls, still_arity(arity, still)), named);
+                let parts = Bool::is_true_and(arity_fits(still_arity(arity, still, l), Ty::spans(tys, s.params)),
+                    Sig::links_fit(tys, rest, ls, still_arity(arity, still)), named);
                 match k as λ i => FTm::pure(rest.len() + 1, i).IsTrue() → still(link_at(Cons(l, ls) ++ more, i)).IsTrue() {
-                    Zero => λ _ => still_arity_fits(arity, still, l, s.params.len(), parts.left).left,
-                    Succ(i) => λ below => Sig::links_still(arity, still, more, rest, ls, parts.right, i, below),
+                    Zero => λ _ => still_arity_fits(arity, still, l, Ty::spans(tys, s.params), parts.left).left,
+                    Succ(i) => λ below => Sig::links_still(tys, arity, still, more, rest, ls, parts.right, i, below),
                 }
             },
         },
@@ -497,26 +499,26 @@ theorem FTm::links_answer(tys: Nat → RecInfo, rest: List<List<BitVec(8)>>, own
     srcs: List<List<BitVec(64)> → Ending>, ans: Nat → List<BitVec(64)> → Ending, arity: Nat → Option<Nat>,
     agree: (n: Nat) → (xs: List<BitVec(64)>) → arity_fits(arity(n), xs.len()).IsTrue() → ans(n, xs) = span_source(srcs, held, n, xs),
     sigs: List<Sig>): (ws: FTm::Sems(tys, sigs)) → (links: List<Nat>) →
-    links.map(λ (n: Nat) => span_source(srcs, held, n)) = FTm::uncurried(tys, rest, own, sigs, ws) → Sig::links_fit(sigs, links, arity).IsTrue() →
+    links.map(λ (n: Nat) => span_source(srcs, held, n)) = FTm::uncurried(tys, rest, own, sigs, ws) → Sig::links_fit(tys, sigs, links, arity).IsTrue() →
     (k: Nat) → Sig::at(sigs, k).Words(tys) →
     FTm::Answers(tys, Sig::at(sigs, k).params, Sig::at(sigs, k).result, rest, FTm::get(tys, sigs, ws, k, own), λ xs => ans(link_at(links, k), xs)) {
     match sigs {
         Nil => λ ws links linked named k ok => false_elim(ok.right),
         Cons(s, later) => λ ws links => match links as λ ls => ls.map(λ (n: Nat) => span_source(srcs, held, n)) =
                 FTm::uncurried(tys, rest, own, Cons(s, later), ws) →
-            Sig::links_fit(Cons(s, later), ls, arity).IsTrue() → (k: Nat) → Sig::at(Cons(s, later), k).Words(tys) →
+            Sig::links_fit(tys, Cons(s, later), ls, arity).IsTrue() → (k: Nat) → Sig::at(Cons(s, later), k).Words(tys) →
             FTm::Answers(tys, Sig::at(Cons(s, later), k).params, Sig::at(Cons(s, later), k).result, rest, FTm::get(tys, Cons(s, later), ws, k, own),
                 λ xs => ans(link_at(ls, k), xs)) {
             Nil => λ linked never k ok => false_elim(never),
             Cons(l, ls) => λ linked named k => {
-                let parts = Bool::is_true_and(arity_fits(arity(l), s.params.len()), Sig::links_fit(later, ls, arity), named);
+                let parts = Bool::is_true_and(arity_fits(arity(l), Ty::spans(tys, s.params)), Sig::links_fit(tys, later, ls, arity), named);
                 let heads = cong_fn(λ (fs: List<List<BitVec(64)> → Ending>) => fs.head_or(λ (_: List<BitVec(64)>) => Ending(BitVec::zero(), held)), linked);
                 let tails = cong_fn(λ (fs: List<List<BitVec(64)> → Ending>) => fs.tail(), linked);
                 match k as λ i => Sig::at(Cons(s, later), i).Words(tys) →
                     FTm::Answers(tys, Sig::at(Cons(s, later), i).params, Sig::at(Cons(s, later), i).result, rest,
                         FTm::get(tys, Cons(s, later), ws, i, own), λ xs => ans(link_at(Cons(l, ls), i), xs)) {
-                    Zero => λ _ => FFun::answers_of_uncurry(tys, s.result, rest, s.params, ws.fst(own), λ xs => ans(l, xs), λ xs len =>
-                        trans(agree(l, xs, j(sym(len), λ m _ => arity_fits(arity(l), m).IsTrue(), parts.left)),
+                    Zero => λ ok => FFun::answers_of_uncurry(tys, s.result, rest, s.params, ws.fst(own), λ xs => ans(l, xs), λ xs len =>
+                        trans(agree(l, xs, j(trans(Ty::helds_spans(tys, s.params, ok.left), sym(len)), λ m _ => arity_fits(arity(l), m).IsTrue(), parts.left)),
                             cong_fn(λ (g: List<BitVec(64)> → Ending) => g(xs), heads))),
                     Succ(i) => λ ok => FTm::links_answer(tys, rest, own, held, srcs, ans, arity, agree, later, ws.snd, ls, tails, parts.right, i, ok),
                 }
@@ -528,6 +530,21 @@ theorem FTm::links_answer(tys: Nat → RecInfo, rest: List<List<BitVec(8)>>, own
 // ---------------------------------------------------------------------------
 // A function of a linked program
 
+// A table's entry at a word list it fits returns a word then more, so it
+// reads as a call reads it.
+theorem Sig::uncurried_split(tys: Nat → RecInfo, sigs: List<Sig>): (cs: Sig::Sems(tys, sigs)) → (k: Nat) → (words: List<BitVec(64)>) →
+    arity_fits(Sig::arity(tys, sigs, k), words.len()).IsTrue() →
+    Answers::split(link_sources(Sig::uncurried(tys, sigs, cs), k, words)) = link_sources(Sig::uncurried(tys, sigs, cs), k, words) {
+    match sigs {
+        Nil => λ cs k words never => false_elim(never),
+        Cons(s, rest) => λ cs k => match k as λ i => (words: List<BitVec(64)>) → arity_fits(Sig::arity(tys, Cons(s, rest), i), words.len()).IsTrue() →
+            Answers::split(link_sources(Sig::uncurried(tys, Cons(s, rest), cs), i, words)) = link_sources(Sig::uncurried(tys, Cons(s, rest), cs), i, words) {
+            Zero => λ words _ => refl,
+            Succ(i) => λ words ok => Sig::uncurried_split(tys, rest, cs.snd, i, words, ok),
+        },
+    }
+}
+
 // A function that only reads, its code storing nothing, in a program over
 // the files `Cons(own, rest)`: with its calls answered as the program's
 // sources say, it returns its meaning at the file and leaves the file, on
@@ -538,7 +555,7 @@ theorem Compile::spanned<F>(f: F, c: Compile<F>(f), quiet: c.code.body.quiet().I
     srcs: List<List<BitVec(8)>> → List<BitVec(8)> → List<List<BitVec(64)> → Ending>, links: List<Nat>, arity: Nat → Option<Nat>, still: Nat → Bool,
     linked: (rest: List<List<BitVec(8)>>) → (own: List<BitVec(8)>) →
         links.map(λ (n: Nat) => link_source(srcs(rest, own).map(span_word), n)) = Compile::table(f, c, Cons(own, rest)),
-    named: Sig::links_fit(c.world.sigs.tail(), links.tail(), still_arity(arity, still)).IsTrue()):
+    named: Sig::links_fit(c.world.tys, c.world.sigs.tail(), links.tail(), still_arity(arity, still)).IsTrue()):
     (call: Writers()) → Writers::Sourced(call, span_file, span_sources(srcs), arity, still) →
     ((s: SpanFile()) → (words: List<BitVec(64)>) → arity_fits(Some(Compile::arity(f, c)), words.len()).IsTrue() →
         Compile::linked(f, c, links).run(call, words, span_file(s)) = Compile::span_source(f, c, s.snd, s.fst, words))
@@ -547,7 +564,7 @@ theorem Compile::spanned<F>(f: F, c: Compile<F>(f), quiet: c.code.body.quiet().I
     λ call sourced => {
         let other = Writers::relabel(call, link_at(links));
         let among = λ (k: Nat) => still(link_at(links, k));
-        let carried = Sig::callee_links_fit_at(still_arity(arity, still), c.world.sigs, links, named);
+        let carried = Sig::callee_links_fit_at(c.world.tys, still_arity(arity, still), c.world.sigs, links, named);
         let fits = c.code.body.calls_fit_among(c.world.callee_arity(), among,
             λ k n ok => still_arity_fits(arity, still, link_at(links, k), n, carried(k, n, ok)).left, c.fits);
         let ran = λ (s: SpanFile()) (words: List<BitVec(64)>) => trans(c.code.relabel_run(call, link_at(links), words, Cons(s.fst, s.snd)),
@@ -557,18 +574,22 @@ theorem Compile::spanned<F>(f: F, c: Compile<F>(f), quiet: c.code.body.quiet().I
             let at = c.world.at(c.callees, b);
             let table = link_sources(Compile::table(f, c, b));
             let meaning = Ty::lent_at(at.tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed(b), f, b);
-            let answered = Ty::answers_at(at.tys, c.reflected.params, c.reflected.result, meaning, λ xs => c.code.eval(table, xs, buffers := b),
+            let answered = Ty::answers_words_at(at.tys, c.reflected.params, c.reflected.result, meaning, λ xs => c.code.eval_words(table, xs, buffers := b),
                 c.agrees(b, table, at.calls_agree_own()), words, sym(Ty::spans(at.tys, c.reflected.params).matches_eq(words.len(), n)),
                 Ty::all_open_admits(at.tys, c.reflected.params, open, words));
-            let moved = c.code.eval_answers_over(b, table, Writers::words(other, b), c.world.callee_arity(),
-                λ k ws ok => trans(
-                    trans(cong_fn(λ (e: Ending) => e.word, sourced.left(s, link_at(links, k), ws,
-                            still_arity_fits(arity, still, link_at(links, k), ws.len(), carried(k, ws.len(), ok)).right)),
-                        span_source_word(b, srcs(s.snd, s.fst), link_at(links, k), ws)),
-                    Sig::links_agree(c.world.tys, srcs(s.snd, s.fst).map(span_word), c.world.sigs, c.callees(b), links, linked(s.snd, s.fst), k, ws,
-                        Sig::callee_fits(c.world.sigs, k, ws.len(), ok))),
+            let moved = c.code.eval_words_answers_over(b, table, Writers::words(other, b), c.world.callee_arity(),
+                λ k ws ok => {
+                    let fits = Sig::callee_fits(c.world.tys, c.world.sigs, k, ws.len(), ok);
+                    trans(trans(cong_fn(λ (e: Ending) => Cons(e.word, e.rest), sourced.left(s, link_at(links, k), ws,
+                                still_arity_fits(arity, still, link_at(links, k), ws.len(), carried(k, ws.len(), ok)).right)),
+                            span_source_word(b, srcs(s.snd, s.fst), link_at(links, k), ws)),
+                        trans(cong_fn(λ (l: List<BitVec(64)>) => Answers::split(l),
+                                Sig::links_agree(c.world.tys, srcs(s.snd, s.fst).map(span_word), c.world.sigs, c.callees(b), links, linked(s.snd, s.fst),
+                                    k, ws, fits)),
+                            Sig::uncurried_split(c.world.tys, c.world.sigs, c.callees(b), k, ws, fits)))
+                },
                 c.fits, words);
-            trans(ran(s, words), cong_fn<BitVec(64), Ending>(λ x => Ending(x, b), trans(moved, answered)))
+            trans(ran(s, words), cong_fn<List<BitVec(64)>, Ending>(λ l => Ending::of(l, b), trans(moved, answered)))
         }, λ _ s words => cong_fn(λ (e: Ending) => e.buffers, ran(s, words))⟩
     }
 }
@@ -586,10 +607,10 @@ theorem CompileSpan::spanned<F>(f: F, c: CompileSpan<F>(f),
     still: Nat → Bool, counted: pures.len() = c.world.sigs.len(),
     linked: (rest: List<List<BitVec(8)>>) → (own: List<BitVec(8)>) → pures.map(λ (n: Nat) => link_source(srcs(rest, own).map(span_word), n)) =
         Sig::uncurried(c.world.tys, c.world.sigs, c.callees(Cons(own, rest))),
-    named: Sig::links_fit(c.world.sigs, pures, still_arity(arity, still)).IsTrue(),
+    named: Sig::links_fit(c.world.tys, c.world.sigs, pures, still_arity(arity, still)).IsTrue(),
     written: (rest: List<List<BitVec(8)>>) → (own: List<BitVec(8)>) → comps.map(λ (n: Nat) => span_source(srcs(rest, own), Cons(own, rest), n)) =
         FTm::uncurried(c.world.tys, rest, own, c.fsigs, c.writers(rest)),
-    fitted: Sig::links_fit(c.fsigs, comps, arity).IsTrue()):
+    fitted: Sig::links_fit(c.world.tys, c.fsigs, comps, arity).IsTrue()):
     (call: Writers()) → Writers::Sourced(call, span_file, span_sources(srcs), arity, still) →
     ((s: SpanFile()) → (words: List<BitVec(64)>) → arity_fits(Some(CompileSpan::arity(f, c)), words.len()).IsTrue() →
         CompileSpan::linked(f, c, pures ++ comps).run(call, words, span_file(s)) = CompileSpan::source(f, c, s.snd, s.fst, words))
@@ -602,13 +623,14 @@ theorem CompileSpan::spanned<F>(f: F, c: CompileSpan<F>(f),
         let other = Writers::relabel(call, link_at(links));
         let fw = FWorld::of(c.world, c.callees, c.fsigs, c.writers, rest);
         let agree: FTm::CallsAgree(fw, c.world.sigs.len(), other) = ⟨
-            λ o => Sig::links_answer(c.world.tys, srcs(rest, o).map(span_word), λ k ws => call(Cons(o, rest), k, ws).word, still_arity(arity, still),
-                λ k ws ok => trans(cong_fn(λ (e: Ending) => e.word,
+            λ o => Sig::links_answer(c.world.tys, srcs(rest, o).map(span_word), λ k ws => Writers::words(call, Cons(o, rest), k, ws),
+                still_arity(arity, still),
+                λ k ws ok => trans(cong_fn(λ (e: Ending) => Cons(e.word, e.rest),
                         sourced.left(span_pair(o, rest), k, ws, still_arity_fits(arity, still, k, ws.len(), ok).right)),
                     span_source_word(Cons(o, rest), srcs(rest, o), k, ws)),
                 comps, c.world.sigs, c.callees(Cons(o, rest)), pures, linked(rest, o), named),
             ⟨λ k among o ws => sourced.right(span_pair(o, rest), link_at(links, k),
-                Sig::links_still(arity, still, comps, c.world.sigs, pures, named, k, among), ws),
+                Sig::links_still(c.world.tys, arity, still, comps, c.world.sigs, pures, named, k, among), ws),
             λ k ok r o => j(sym(j(counted, λ m _ => link_at(pures ++ comps, m + k) = link_at(comps, k), link_at_append(pures, comps, k))),
                 λ m _ => FTm::Answers(c.world.tys, Sig::at(c.fsigs, k).params, Sig::at(c.fsigs, k).result, r,
                     FTm::get(c.world.tys, c.fsigs, c.writers(r), k, o), λ xs => call(Cons(o, r), m, xs)),
@@ -656,11 +678,11 @@ theorem span_every<A>(x: List<List<BitVec(8)>> → List<BitVec(8)> → A): (rest
 }
 
 // The tables a link is checked against, at each rest and span.
-fn Compile::span_table<F>(f: F, c: Compile<F>(f)) → List<List<BitVec(8)>> → List<BitVec(8)> → List<List<BitVec(64)> → BitVec(64)> {
+fn Compile::span_table<F>(f: F, c: Compile<F>(f)) → List<List<BitVec(8)>> → List<BitVec(8)> → List<List<BitVec(64)> → List<BitVec(64)>> {
     λ rest own => Compile::table(f, c, Cons(own, rest))
 }
 
-fn CompileSpan::reads_table<F>(f: F, c: CompileSpan<F>(f)) → List<List<BitVec(8)>> → List<BitVec(8)> → List<List<BitVec(64)> → BitVec(64)> {
+fn CompileSpan::reads_table<F>(f: F, c: CompileSpan<F>(f)) → List<List<BitVec(8)>> → List<BitVec(8)> → List<List<BitVec(64)> → List<BitVec(64)>> {
     λ rest own => Sig::uncurried(c.world.tys, c.world.sigs, c.callees(Cons(own, rest)))
 }
 

@@ -129,48 +129,39 @@ fn Ty::all_one_word(ts: List<Ty>, tys: Nat → RecInfo) → Bool {
 // above, or a word narrower than 64 bits (a parameter its low bits, the
 // result zero-extended; what `Ty::check_edge`, `rt_lower.hthr`, accepts).
 fn Ty::is_edge(self t: Ty, tys: Nat → RecInfo) → Bool {
-    match t { Word(w) => w.leb(64), _ => t.is_one_word(tys) }
+    match t { Word(w) => w.leb(64), Bit => True, _ => t.is_one_word(tys) }
 }
 
-// A code a plain function returns: one it passes in a word, or a record of
-// two 64-bit words, the second returned in RDX (`Ty::check_out`,
-// docs/native/runtime-fn-setups-design.md §16.16).
-fn Ty::is_two_words(self t: Ty, tys: Nat → RecInfo) → Bool {
-    match t {
-        Named(i) => match tys(i).fields {
-            Cons(f, rest) => match rest { Cons(g, more) => f.is_word64().and(g.is_word64()).and(match more { Nil => True, Cons(_, _) => False }), Nil => False },
-            Nil => False,
-        },
-        _ => False,
-    }
-}
+// A code a plain function returns (`Ty::check_out`,
+// docs/native/runtime-fn-setups-design.md §16.16-17): one it passes in a
+// word, a record whose fields are 64-bit words (the first in RAX, the rest
+// beside it), or an enum whose payload's slots are 64-bit words (its tag
+// word, then its slots).
+fn Ty::is_words(fs: List<Ty>) → Bool { match fs { Nil => True, Cons(f, rest) => f.is_word64().and(Ty::is_words(rest)) } }
 
-// What a function returns (`Ty::Out`): an enum among them, as its tag word.
+fn Ty::is_words_one(fs: List<Ty>) → Bool { match fs { Nil => False, Cons(_, _) => Ty::is_words(fs) } }
+
 // An enum without a payload: what crosses a boundary as its tag word
 // alone (`Ty::Bare`).
 fn Ty::is_bare(tys: Nat → RecInfo, i: Nat) → Bool { match tys(i).alts.slots { Nil => True, Cons(_, _) => False } }
 
-// An enum whose payload is one 64-bit slot: returned as its tag word and
-// the slot beside it, in RDX.
-fn Ty::is_one_slot(tys: Nat → RecInfo, i: Nat) → Bool {
-    match tys(i).alts.slots { Cons(f, rest) => f.is_word64().and(match rest { Nil => True, Cons(_, _) => False }), Nil => False }
-}
-
 fn Ty::is_out(self t: Ty, tys: Nat → RecInfo) → Bool {
-    match t { Enum(i) => Ty::is_bare(tys, i).or(Ty::is_one_slot(tys, i)), _ => t.is_edge(tys).or(t.is_two_words(tys)) }
+    match t {
+        Enum(i) => Ty::is_bare(tys, i).or(Ty::is_words(tys(i).alts.slots)),
+        Named(i) => t.is_edge(tys).or(Ty::is_words_one(tys(i).fields)),
+        _ => t.is_edge(tys),
+    }
 }
 
 fn Ty::all_edge(ts: List<Ty>, tys: Nat → RecInfo) → Bool {
     match ts { Nil => True, Cons(t, rest) => t.is_edge(tys).and(Ty::all_edge(rest, tys)) }
 }
 
-fn Ty::is_words(fs: List<Ty>) → Bool { match fs { Nil => True, Cons(f, rest) => f.is_word64().and(Ty::is_words(rest)) } }
-
 // A function's parameters: each crosses the boundary (`Ty::Param`), an
 // enum as its tag word and a word for each slot of its payload, each a
-// 64-bit word.
+// 64-bit word, and a record of 64-bit words a word a field.
 fn Ty::all_param(ts: List<Ty>, tys: Nat → RecInfo) → Bool {
-    match ts { Nil => True, Cons(t, rest) => { let ok = match t { Enum(i) => Ty::is_words(tys(i).alts.slots), _ => t.is_edge(tys) }; ok.and(Ty::all_param(rest, tys)) } }
+    match ts { Nil => True, Cons(t, rest) => { let ok = match t { Enum(i) => Ty::is_words(tys(i).alts.slots), Named(i) => Ty::is_words(tys(i).fields), _ => t.is_edge(tys) }; ok.and(Ty::all_param(rest, tys)) } }
 }
 
 // The width a code crosses a function's boundary at: a word's own, 64 for
@@ -181,18 +172,12 @@ fn Ty::edge_width(self t: Ty) → Nat { match t { Word(w) => w, _ => 64 } }
 
 fn Fun::edge_widths(self f: Fun) → List<Nat> { Cons(f.result.edge_width(), f.params.map(λ p => p.edge_width())) }
 
-fn Ty::all_held_at(ts: List<Ty>, tys: Nat → RecInfo) → Bool {
-    match ts { Nil => True, Cons(t, rest) => match t { Count => True, Enum(i) => Ty::is_bare(tys, i), _ => t.is_one_word(tys) }.and(Ty::all_held_at(rest, tys)) }
-}
-
-// A signature a call passes and returns in words, a type held by its repr
-// and an enum's tag word among them, an enum returned where its tags fit a
-// word (what `Tm::lower_call` checks, as `Bool`).
-fn Sig::is_held_at(self s: Sig, tys: Nat → RecInfo) → Bool {
-    Ty::all_held_at(s.params, tys).and(match s.result {
-        Enum(i) => (tys(i).alts.last + 1).leb(Nat::pow(2, 64)).and(Ty::is_bare(tys, i)),
-        _ => s.result.is_one_word(tys),
-    })
+// A signature a call passes and reads back in words (`Sig::Sends`, what
+// `Tm::lower_call` checks): each parameter one it sends (an enum in its
+// tag word and its payload's slots), and a result it reads back (a word,
+// a record of words, an enum with its slots).
+fn Sig::is_sent_at(self s: Sig, tys: Nat → RecInfo) → Bool {
+    match Ty::check_sents(tys, s.params) { None => False, Some(_) => True }.and(match s.result.check_back(tys) { None => False, Some(_) => True })
 }
 
 fn Op::judge(self o: Op) → Verdict {
@@ -223,9 +208,9 @@ fn Tm::judge(self t: Tm, sigs: List<Sig>, tys: Nat → RecInfo) → Verdict {
         Field(_, _, _) => Ok,
         Call(f, _) => match f {
             Zero => Refused("a call of itself that is not the last thing it does: a recursion is lowered as a loop, its calls of itself in tail position (docs/native/runtime-fn-setups-design.md §16.11)"),
-            Succ(_) => match Sig::at(sigs, f).is_held_at(tys) {
+            Succ(_) => match Sig::at(sigs, f).is_sent_at(tys) {
                 True => Ok,
-                False => Refused("a call of a function that does not take and return 64-bit words (issues/function-ir-multi-word-calls.md)"),
+                False => Refused("a call of a function whose parameters or result do not cross a call in 64-bit words: a bit, a count or a byte buffer among them, or an enum whose payload is not words (docs/native/runtime-fn-setups-design.md §16.17)"),
             },
         },
         Fold(_, _, _) => Refused("a `foldl`: loops over buffers are not lowered yet (docs/native/runtime-fn-setups-design.md §16.6)"),
@@ -268,7 +253,7 @@ fn Fun::words_reason() → String {
 }
 
 fn Fun::result_reason() → String {
-    "a result that is not a word of at most 64 bits, an enum or a record of two 64-bit words: the default setup compiles functions from words to a word, or to two (issues/function-ir-multi-word-calls.md)"
+    "a result that is not a word of at most 64 bits, a record of 64-bit words or an enum whose fields are 64-bit words: the default setup compiles functions from words to words (docs/native/runtime-fn-setups-design.md §16.17)"
 }
 
 fn Fun::loop_words_reason() → String {
@@ -354,18 +339,18 @@ fn Setup::code(self s: Setup, f: Fun, w: World) → Function { Setup::code_of(s.
 fn Setup::lowered(self s: Setup, f: Fun, w: World) → Bool { Setup::lowers(s.lower(f, w)) }
 
 // How many words a table's entry takes.
-fn Sig::arity(sigs: List<Sig>, k: Nat) → Option<Nat> {
-    match sigs { Nil => None, Cons(s, rest) => match k { Zero => Some(s.params.len()), Succ(i) => Sig::arity(rest, i) } }
+fn Sig::arity(tys: Nat → RecInfo, sigs: List<Sig>, k: Nat) → Option<Nat> {
+    match sigs { Nil => None, Cons(s, rest) => match k { Zero => Some(Ty::spans(tys, s.params)), Succ(i) => Sig::arity(tys, rest, i) } }
 }
 
 // How many words a table's callee takes: an entry after the first, which
 // is the function itself and is never called by its index (a recursion is
 // a loop in the code).
-fn Sig::callee_arity(sigs: List<Sig>) → Nat → Option<Nat> {
-    λ k => match k { Zero => None, Succ(i) => Sig::arity(sigs, i + 1) }
+fn Sig::callee_arity(tys: Nat → RecInfo, sigs: List<Sig>) → Nat → Option<Nat> {
+    λ k => match k { Zero => None, Succ(i) => Sig::arity(tys, sigs, i + 1) }
 }
 
-fn World::callee_arity(self w: World) → Nat → Option<Nat> { Sig::callee_arity(w.sigs) }
+fn World::callee_arity(self w: World) → Nat → Option<Nat> { Sig::callee_arity(w.tys, w.sigs) }
 
 // What an instance checks of its lowering, in one evaluation of it: that it
 // produced code, and that the code's calls fit the world's table at its
@@ -398,7 +383,7 @@ theorem Setup::checked_fits(s: Setup, f: Fun, w: World, ok: s.checked(f, w) = Tr
 // produced code answers with the function's meaning.
 theorem Setup::of_lowered(f: Fun, w: World, r: Option<Function>): Setup::lowers(r).IsTrue() → f.LowerHolds(w, r) →
     (call: Answers()) → Tm::CallsAgree(w, call) →
-    Ty::Answers(w.tys, f.params, f.result, f.meaning(w), λ xs => Setup::code_of(r).eval(call, xs, buffers := w.spans)) {
+    Ty::AnswersWords(w.tys, f.params, f.result, f.meaning(w), λ xs => Setup::code_of(r).eval_words(call, xs, buffers := w.spans)) {
     match r {
         None => λ never _ => false_elim(never),
         Some(_) => λ _ holds => holds,
@@ -415,7 +400,7 @@ theorem Setup::holds_at(s: Setup, f: Fun, w: World, shape: RtShape, shaped: f.sh
 // evaluation and `plain` by evaluation too.
 theorem Setup::code_answers(s: Setup, f: Fun, w: World, ok: s.lowered(f, w).IsTrue(), plain: f.shape() = Plain):
     (call: Answers()) → Tm::CallsAgree(w, call) →
-    Ty::Answers(w.tys, f.params, f.result, f.meaning(w), λ xs => s.code(f, w).eval(call, xs, buffers := w.spans)) {
+    Ty::AnswersWords(w.tys, f.params, f.result, f.meaning(w), λ xs => s.code(f, w).eval_words(call, xs, buffers := w.spans)) {
     Setup::of_lowered(f, w, s.lower(f, w), ok, Setup::holds_at(s, f, w, Plain, plain))
 }
 
@@ -509,9 +494,9 @@ class Compile<F>(f: F) {
     typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(world.at(callees, b).tys, reflected.lent, reflected.params, reflected.result)),
     code: Function,
     agrees: (b: Buffers()) → (call: Answers()) → Tm::CallsAgree(world.at(callees, b), call) →
-        Ty::Answers(world.at(callees, b).tys, reflected.params, reflected.result,
+        Ty::AnswersWords(world.at(callees, b).tys, reflected.params, reflected.result,
             Ty::lent_at(world.at(callees, b).tys, reflected.lent, reflected.params, reflected.result, typed(b), f, b),
-            λ xs => code.eval(call, xs, buffers := b)),
+            λ xs => code.eval_words(call, xs, buffers := b)),
     // The code's calls name callees of the table at their arity: checked
     // once, here, by evaluation, and cited by every program the code is
     // linked into (`Compile::part`).
@@ -572,37 +557,19 @@ theorem Setup::plain_agrees<F>(f: F, s: Setup, rt: Fun, w: World, callees: (b: B
     pinned: (b: Buffers()) → Ty::lent_at(w.at(callees, b).tys, rt.lent, rt.params, rt.result, typed(b), f, b) = rt.meaning(w.at(callees, b)),
     ok: s.checked(rt, w) = True, plain: rt.shape() = Plain):
     (b: Buffers()) → (call: Answers()) → Tm::CallsAgree(w.at(callees, b), call) →
-    Ty::Answers(w.at(callees, b).tys, rt.params, rt.result, Ty::lent_at(w.at(callees, b).tys, rt.lent, rt.params, rt.result, typed(b), f, b),
-        λ xs => s.code(rt, w).eval(call, xs, buffers := b)) {
+    Ty::AnswersWords(w.at(callees, b).tys, rt.params, rt.result, Ty::lent_at(w.at(callees, b).tys, rt.lent, rt.params, rt.result, typed(b), f, b),
+        λ xs => s.code(rt, w).eval_words(call, xs, buffers := b)) {
     λ b call agree =>
-        j(sym(pinned(b)), λ g _ => Ty::Answers(w.at(callees, b).tys, rt.params, rt.result, g, λ xs => s.code(rt, w).eval(call, xs, buffers := b)),
-            j(s.static(rt, w, callees(b), b), λ r _ => Ty::Answers(w.at(callees, b).tys, rt.params, rt.result, rt.meaning(w.at(callees, b)),
-                    λ xs => Setup::code_of(r).eval(call, xs, buffers := b)),
+        j(sym(pinned(b)), λ g _ => Ty::AnswersWords(w.at(callees, b).tys, rt.params, rt.result, g, λ xs => s.code(rt, w).eval_words(call, xs, buffers := b)),
+            j(s.static(rt, w, callees(b), b), λ r _ => Ty::AnswersWords(w.at(callees, b).tys, rt.params, rt.result, rt.meaning(w.at(callees, b)),
+                    λ xs => Setup::code_of(r).eval_words(call, xs, buffers := b)),
                 Setup::code_answers(s, rt, w.at(callees, b),
                     Setup::lowered_over(s, rt, w, callees(b), b, Setup::checked_lowered(s, rt, w, ok)), plain, call, agree)))
 }
 
 // The words past the first a plain function's code returns
-// (`Function::eval_also`): the meaning's (`Ty::rest_words`, none but for a
-// record of two words), from `Fun::lower_sound_also`. Only the default
-// setup is read here: a function returning two words is the program's
-// entry (docs/native/runtime-fn-setups-design.md §16.16).
-theorem Setup::of_lowered_also(f: Fun, w: World, r: Option<Function>): Setup::lowers(r).IsTrue() → f.LowerAlso(w, r) →
-    (call: Answers()) → Tm::CallsAgree(w, call) →
-    Ty::AnswersAlso(w.tys, f.params, f.result, f.meaning(w), λ xs => Setup::code_of(r).eval_also(call, xs, buffers := w.spans)) {
-    match r {
-        None => λ never _ => false_elim(never),
-        Some(_) => λ _ holds => holds,
-    }
-}
-
-theorem Setup::code_answers_also(f: Fun, w: World, ok: Setup::default().lowered(f, w).IsTrue(), plain: f.shape() = Plain):
-    (call: Answers()) → Tm::CallsAgree(w, call) →
-    Ty::AnswersAlso(w.tys, f.params, f.result, f.meaning(w), λ xs => Setup::default().code(f, w).eval_also(call, xs, buffers := w.spans)) {
-    Setup::of_lowered_also(f, w, Setup::default().lower(f, w), ok,
-        j(sym(plain), λ x _ => f.LowerAlso(w, f.lower_at(w, x)), f.lower_sound_also(w)))
-}
-
+// (`Function::eval_also`): the meaning's (`Ty::rest_words`), read off every
+// word (`Ty::answers_words_also`). What `f::agrees_also` cites.
 theorem Setup::plain_agrees_also<F>(f: F, rt: Fun, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs),
     typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(w.at(callees, b).tys, rt.lent, rt.params, rt.result)),
     pinned: (b: Buffers()) → Ty::lent_at(w.at(callees, b).tys, rt.lent, rt.params, rt.result, typed(b), f, b) = rt.meaning(w.at(callees, b)),
@@ -610,13 +577,10 @@ theorem Setup::plain_agrees_also<F>(f: F, rt: Fun, w: World, callees: (b: Buffer
     (b: Buffers()) → (call: Answers()) → Tm::CallsAgree(w.at(callees, b), call) →
     Ty::AnswersAlso(w.at(callees, b).tys, rt.params, rt.result, Ty::lent_at(w.at(callees, b).tys, rt.lent, rt.params, rt.result, typed(b), f, b),
         λ xs => Setup::default().code(rt, w).eval_also(call, xs, buffers := b)) {
-    let s = Setup::default();
-    λ b call agree =>
-        j(sym(pinned(b)), λ g _ => Ty::AnswersAlso(w.at(callees, b).tys, rt.params, rt.result, g, λ xs => s.code(rt, w).eval_also(call, xs, buffers := b)),
-            j(s.static(rt, w, callees(b), b), λ r _ => Ty::AnswersAlso(w.at(callees, b).tys, rt.params, rt.result, rt.meaning(w.at(callees, b)),
-                    λ xs => Setup::code_of(r).eval_also(call, xs, buffers := b)),
-                Setup::code_answers_also(rt, w.at(callees, b),
-                    Setup::lowered_over(s, rt, w, callees(b), b, Setup::checked_lowered(s, rt, w, ok)), plain, call, agree)))
+    λ b call agree => Ty::answers_words_also(w.at(callees, b).tys, rt.params, rt.result,
+        Ty::lent_at(w.at(callees, b).tys, rt.lent, rt.params, rt.result, typed(b), f, b),
+        λ xs => Setup::default().code(rt, w).eval_words(call, xs, buffers := b),
+        Setup::plain_agrees(f, Setup::default(), rt, w, callees, typed, pinned, ok, plain, b, call, agree))
 }
 
 // `f` comes after the reflection and the table. Two instances met in a link
@@ -649,15 +613,15 @@ theorem Setup::fuel_agrees<F>(f: F, s: Setup, w0: Ty, wrest: List<Ty>, res: Ty, 
         retype(Ty::Arrows(w.at(callees, b).tys, Cons(Count, Cons(w0, wrest)), res), typed(b), f), n),
     ok: s.checked(Setup::fuel_fun(w0, wrest, res, c, zero, succ), w) = True):
     (b: Buffers()) → (call: Answers()) → Tm::CallsAgree(w.at(callees, b), call) →
-    Ty::Answers(w.at(callees, b).tys, Cons(Count, Cons(w0, wrest)), res,
+    Ty::AnswersWords(w.at(callees, b).tys, Cons(Count, Cons(w0, wrest)), res,
         Ty::lent_at(w.at(callees, b).tys, 0, Cons(Count, Cons(w0, wrest)), res, typed(b), f, b),
-        λ xs => s.code(Setup::fuel_fun(w0, wrest, res, c, zero, succ), w).eval(call, xs, buffers := b)) {
+        λ xs => s.code(Setup::fuel_fun(w0, wrest, res, c, zero, succ), w).eval_words(call, xs, buffers := b)) {
     let rt = Setup::fuel_fun(w0, wrest, res, c, zero, succ);
     λ b call agree => {
         let h = retype(Ty::Arrows(w.at(callees, b).tys, Cons(Count, Cons(w0, wrest)), res), typed(b), f);
-        j(s.static(rt, w, callees(b), b), λ r _ => Ty::Answers(w.at(callees, b).tys, Cons(Count, Cons(w0, wrest)), res, h,
-                λ xs => Setup::code_of(r).eval(call, xs, buffers := b)),
-            Fun::fuel_answers(Cons(w0, wrest), res, w.at(callees, b), h, s.lower(rt, w.at(callees, b)),
+        j(s.static(rt, w, callees(b), b), λ r _ => Ty::AnswersWords(w.at(callees, b).tys, Cons(Count, Cons(w0, wrest)), res, h,
+                λ xs => Setup::code_of(r).eval_words(call, xs, buffers := b)),
+            Fun::fuel_answers_words(Cons(w0, wrest), res, w.at(callees, b), h, s.lower(rt, w.at(callees, b)),
                 Setup::lowered_over(s, rt, w, callees(b), b, Setup::checked_lowered(s, rt, w, ok)),
                 Setup::holds_at(s, rt, w.at(callees, b), Fuel(w0, wrest, zero, succ), shaped, h, zero_eq(b), step_eq(b)), call, agree))
     }
@@ -752,14 +716,14 @@ theorem Setup::measured_agrees<F>(f: F, s: Setup, ks: List<Ty>, w0: Ty, wrest: L
     guarded: Setup::Guarded(f, lent, ks ++ Cons(w0, wrest), res, body, w, callees, typed, m),
     ok: s.checked(Setup::measured_fun(ks, w0, wrest, res, body, lent), w) = True):
     (b: Buffers()) → (call: Answers()) → Tm::CallsAgree(w.at(callees, b), call) →
-    Ty::Answers(w.at(callees, b).tys, ks ++ Cons(w0, wrest), res, Ty::lent_at(w.at(callees, b).tys, lent, ks ++ Cons(w0, wrest), res, typed(b), f, b),
-        λ xs => s.code(Setup::measured_fun(ks, w0, wrest, res, body, lent), w).eval(call, xs, buffers := b)) {
+    Ty::AnswersWords(w.at(callees, b).tys, ks ++ Cons(w0, wrest), res, Ty::lent_at(w.at(callees, b).tys, lent, ks ++ Cons(w0, wrest), res, typed(b), f, b),
+        λ xs => s.code(Setup::measured_fun(ks, w0, wrest, res, body, lent), w).eval_words(call, xs, buffers := b)) {
     let rt = Setup::measured_fun(ks, w0, wrest, res, body, lent);
     λ b call agree => {
         let h = Ty::lent_at(w.at(callees, b).tys, lent, ks ++ Cons(w0, wrest), res, typed(b), f, b);
-        j(s.static(rt, w, callees(b), b), λ r _ => Ty::Answers(w.at(callees, b).tys, ks ++ Cons(w0, wrest), res, h,
-                λ xs => Setup::code_of(r).eval(call, xs, buffers := b)),
-            Fun::measured_answers(ks ++ Cons(w0, wrest), res, w.at(callees, b), h, s.lower(rt, w.at(callees, b)),
+        j(s.static(rt, w, callees(b), b), λ r _ => Ty::AnswersWords(w.at(callees, b).tys, ks ++ Cons(w0, wrest), res, h,
+                λ xs => Setup::code_of(r).eval_words(call, xs, buffers := b)),
+            Fun::measured_answers_words(ks ++ Cons(w0, wrest), res, w.at(callees, b), h, s.lower(rt, w.at(callees, b)),
                 Setup::lowered_over(s, rt, w, callees(b), b, Setup::checked_lowered(s, rt, w, ok)),
                 Setup::holds_at(s, rt, w.at(callees, b), Measured(ks, w0, wrest, body), shaped, h, m, bounded, guarded(b)), call, agree))
     }
@@ -895,6 +859,22 @@ theorem Ty::answers_of_uncurry_words(tys: Nat → RecInfo, ps: List<Ty>, r: Ty):
     }
 }
 
+// The same of every word.
+theorem Ty::answers_words_of_uncurry_words(tys: Nat → RecInfo, ps: List<Ty>, r: Ty): Ty::Helds(tys, ps) → (v: Ty::Arrows(tys, ps, r)) →
+    (ans: List<BitVec(64)> → List<BitVec(64)>) → ((xs: List<BitVec(64)>) → xs.len() = ps.len() → ans(xs) = Ty::uncurry_all(tys, ps, r, v, xs)) →
+    Ty::AnswersWords(tys, ps, r, v, ans) {
+    match ps {
+        Nil => λ _ v ans h => h(Nil, refl),
+        Cons(p, rest) => λ ok v ans h => Ty::takes_held_intro(tys, p, λ ws a => Ty::AnswersWords(tys, rest, r, v(a), λ more => ans(ws ++ more)), ok.left,
+            λ x => Ty::answers_words_of_uncurry_words(tys, rest, r, ok.right, v(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)), λ ws len => {
+                let read = Ty::held_words(tys, p, ok.left, x, ws);
+                trans(h(Cons(x, ws), cong_fn(λ (n: Nat) => n + 1, len)),
+                    trans(cong_fn(λ (u: p.sem(tys)) => Ty::uncurry_all(tys, rest, r, v(u), Ty::skip(p.span(tys), Cons(x, ws))), read.left),
+                        cong_fn(λ (s: List<BitVec(64)>) => Ty::uncurry_all(tys, rest, r, v(Ty::cast(tys, Word(64), p, x)), s), read.right)))
+            })),
+    }
+}
+
 // The same of the words past the first: what answers like a meaning's is
 // its applied value's (`Ty::rest_words`), on as many admitted words as its
 // parameters take.
@@ -918,13 +898,60 @@ theorem Ty::answers_also_at(tys: Nat → RecInfo, ps: List<Ty>, r: Ty): (v: Ty::
     }
 }
 
-// The word function at index `k` of a list of them, zero past its end.
-fn link_source(srcs: List<List<BitVec(64)> → BitVec(64)>, k: Nat) → List<BitVec(64)> → BitVec(64) {
-    match srcs.nth(k) { None => λ _ => BitVec::zero(), Some(s) => s }
+// Every word, as `Ty::answers_at` the first: what answers every word like a
+// meaning is its uncurried form (`Ty::uncurry_all`), on as many admitted
+// words as its parameters take; and the converse.
+theorem Ty::answers_words_at(tys: Nat → RecInfo, ps: List<Ty>, r: Ty): (v: Ty::Arrows(tys, ps, r)) → (ans: List<BitVec(64)> → List<BitVec(64)>) →
+    Ty::AnswersWords(tys, ps, r, v, ans) → (words: List<BitVec(64)>) → words.len() = Ty::spans(tys, ps) → Ty::AdmitsAll(tys, ps, words) →
+    ans(words) = Ty::uncurry_all(tys, ps, r, v, words) {
+    match ps {
+        Nil => λ v ans held words => match words as λ ws => ws.len() = 0 → Ty::AdmitsAll(tys, Nil, ws) → ans(ws) = Ty::uncurry_all(tys, Nil, r, v, ws) {
+            Nil => λ _ _ => held,
+            Cons(_, more) => λ (bad: more.len() + 1 = 0) _ => false_elim(more.len().succ_ne_zero(bad)),
+        },
+        Cons(p, rest) => λ v ans held words len admitted => {
+            let n = p.span(tys);
+            let parts = Ty::first_skip(n, Ty::spans(tys, rest), words, len);
+            let a = Ty::read_words(p, tys, words);
+            let taken = Ty::takes_at(tys, p, λ ws u => Ty::AnswersWords(tys, rest, r, v(u), λ more => ans(ws ++ more)), held, words, admitted.left);
+            let inner = Ty::answers_words_at(tys, rest, r, v(a), λ more => ans(Ty::first(n, words) ++ more), taken, Ty::skip(n, words), parts.right, admitted.right);
+            trans(cong_fn(ans, sym(parts.left)), inner)
+        },
+    }
+}
+
+theorem Ty::answers_words_of_admitted(tys: Nat → RecInfo, ps: List<Ty>, r: Ty): Ty::PassesAll(tys, ps) → (v: Ty::Arrows(tys, ps, r)) →
+    (ans: List<BitVec(64)> → List<BitVec(64)>) →
+    ((xs: List<BitVec(64)>) → xs.len() = Ty::spans(tys, ps) → Ty::AdmitsAll(tys, ps, xs) → ans(xs) = Ty::uncurry_all(tys, ps, r, v, xs)) →
+    Ty::AnswersWords(tys, ps, r, v, ans) {
+    match ps {
+        Nil => λ _ v ans h => h(Nil, refl, trivial),
+        Cons(p, rest) => λ ok v ans h => Ty::takes_intro(tys, p, λ ws a => Ty::AnswersWords(tys, rest, r, v(a), λ more => ans(ws ++ more)), ok.left,
+            λ ws a taken => Ty::answers_words_of_admitted(tys, rest, r, ok.right, v(a), λ more => ans(ws ++ more), λ more len more_admitted => {
+                let t = taken.right(more);
+                let xs = ws ++ more;
+                let k_at = λ (u: p.sem(tys)) (s: List<BitVec(64)>) => Ty::uncurry_all(tys, rest, r, v(u), s);
+                let whole: (xs.len() = Ty::spans(tys, rest) + p.span(tys)) = Ty::taken_len(tys, p, ws, a, taken, more, Ty::spans(tys, rest), len);
+                trans(h(xs, whole, ⟨t.left, j(sym(t.right.left), λ s _ => Ty::AdmitsAll(tys, rest, s), more_admitted)⟩),
+                    trans(cong_fn(λ (u: p.sem(tys)) => k_at(u, Ty::skip(p.span(tys), xs)), t.right.right),
+                        cong_fn(λ (s: List<BitVec(64)>) => k_at(a, s), t.right.left)))
+            })),
+    }
+}
+
+// A curried meaning answers every word like its uncurried form.
+theorem Ty::answers_words_uncurry(tys: Nat → RecInfo, ps: List<Ty>, r: Ty, ok: Ty::PassesAll(tys, ps), v: Ty::Arrows(tys, ps, r)):
+    Ty::AnswersWords(tys, ps, r, v, λ ws => Ty::uncurry_all(tys, ps, r, v, ws)) {
+    Ty::answers_words_of_admitted(tys, ps, r, ok, v, λ ws => Ty::uncurry_all(tys, ps, r, v, ws), λ xs _ _ => refl)
+}
+
+// The word function at index `k` of a list of them, no words past its end.
+fn link_source(srcs: List<List<BitVec(64)> → List<BitVec(64)>>, k: Nat) → List<BitVec(64)> → List<BitVec(64)> {
+    match srcs.nth(k) { None => λ _ => Nil, Some(s) => s }
 }
 
 // Calls answered by a list of word functions.
-fn link_sources(srcs: List<List<BitVec(64)> → BitVec(64)>) → Answers() { λ k words => link_source(srcs, k, words) }
+fn link_sources(srcs: List<List<BitVec(64)> → List<BitVec(64)>>) → Answers() { λ k words => link_source(srcs, k, words) }
 
 // The words function `k` of a list of admitted-word predicates admits,
 // every word list past its end.
@@ -943,29 +970,29 @@ fn link_both<P, Q>(p: P, q: Q) → P ∧ Q { ⟨p, q⟩ }
 // Each entry of a table is named, by `links`, a function `arity` gives the
 // entry's parameter count: a walk of two short lists of numbers, which is
 // all a link evaluates (issues/runtime-generator-program-size.md).
-fn Sig::links_fit(sigs: List<Sig>, links: List<Nat>, arity: Nat → Option<Nat>) → Bool {
+fn Sig::links_fit(tys: Nat → RecInfo, sigs: List<Sig>, links: List<Nat>, arity: Nat → Option<Nat>) → Bool {
     match sigs {
         Nil => True,
         Cons(s, rest) => match links {
             Nil => False,
-            Cons(l, ls) => arity_fits(arity(l), s.params.len()) && Sig::links_fit(rest, ls, arity),
+            Cons(l, ls) => arity_fits(arity(l), Ty::spans(tys, s.params)) && Sig::links_fit(tys, rest, ls, arity),
         },
     }
 }
 
-theorem Sig::links_fit_at(sigs: List<Sig>, arity: Nat → Option<Nat>): (links: List<Nat>) → Sig::links_fit(sigs, links, arity).IsTrue() →
-    (k: Nat) → (n: Nat) → arity_fits(Sig::arity(sigs, k), n).IsTrue() → arity_fits(arity(link_at(links, k)), n).IsTrue() {
+theorem Sig::links_fit_at(tys: Nat → RecInfo, sigs: List<Sig>, arity: Nat → Option<Nat>): (links: List<Nat>) → Sig::links_fit(tys, sigs, links, arity).IsTrue() →
+    (k: Nat) → (n: Nat) → arity_fits(Sig::arity(tys, sigs, k), n).IsTrue() → arity_fits(arity(link_at(links, k)), n).IsTrue() {
     match sigs {
         Nil => λ links ok k n never => false_elim(never),
-        Cons(s, rest) => λ links => match links as λ ls => Sig::links_fit(Cons(s, rest), ls, arity).IsTrue() →
-            (k: Nat) → (n: Nat) → arity_fits(Sig::arity(Cons(s, rest), k), n).IsTrue() → arity_fits(arity(link_at(ls, k)), n).IsTrue() {
+        Cons(s, rest) => λ links => match links as λ ls => Sig::links_fit(tys, Cons(s, rest), ls, arity).IsTrue() →
+            (k: Nat) → (n: Nat) → arity_fits(Sig::arity(tys, Cons(s, rest), k), n).IsTrue() → arity_fits(arity(link_at(ls, k)), n).IsTrue() {
             Nil => λ never k n _ => false_elim(never),
             Cons(l, ls) => λ ok k => {
-                let parts = Bool::is_true_and(arity_fits(arity(l), s.params.len()), Sig::links_fit(rest, ls, arity), ok);
-                match k as λ i => (n: Nat) → arity_fits(Sig::arity(Cons(s, rest), i), n).IsTrue() →
+                let parts = Bool::is_true_and(arity_fits(arity(l), Ty::spans(tys, s.params)), Sig::links_fit(tys, rest, ls, arity), ok);
+                match k as λ i => (n: Nat) → arity_fits(Sig::arity(tys, Cons(s, rest), i), n).IsTrue() →
                     arity_fits(arity(link_at(Cons(l, ls), i)), n).IsTrue() {
-                    Zero => λ n fits => j(s.params.len().matches_eq(n, fits), λ m _ => arity_fits(arity(l), m).IsTrue(), parts.left),
-                    Succ(i) => λ n fits => Sig::links_fit_at(rest, arity, ls, parts.right, i, n, fits),
+                    Zero => λ n fits => j(Ty::spans(tys, s.params).matches_eq(n, fits), λ m _ => arity_fits(arity(l), m).IsTrue(), parts.left),
+                    Succ(i) => λ n fits => Sig::links_fit_at(tys, rest, arity, ls, parts.right, i, n, fits),
                 }
             },
         },
@@ -973,40 +1000,40 @@ theorem Sig::links_fit_at(sigs: List<Sig>, arity: Nat → Option<Nat>): (links: 
 }
 
 // The same for a table's callees, its entries after the first.
-theorem Sig::callee_links_fit_at(arity: Nat → Option<Nat>, sigs: List<Sig>): (links: List<Nat>) →
-    Sig::links_fit(sigs.tail(), links.tail(), arity).IsTrue() →
-    (k: Nat) → (n: Nat) → arity_fits(Sig::callee_arity(sigs, k), n).IsTrue() → arity_fits(arity(link_at(links, k)), n).IsTrue() {
+theorem Sig::callee_links_fit_at(tys: Nat → RecInfo, arity: Nat → Option<Nat>, sigs: List<Sig>): (links: List<Nat>) →
+    Sig::links_fit(tys, sigs.tail(), links.tail(), arity).IsTrue() →
+    (k: Nat) → (n: Nat) → arity_fits(Sig::callee_arity(tys, sigs, k), n).IsTrue() → arity_fits(arity(link_at(links, k)), n).IsTrue() {
     match sigs {
-        Nil => λ links ok k => match k as λ i => (n: Nat) → arity_fits(Sig::callee_arity(Nil, i), n).IsTrue() →
+        Nil => λ links ok k => match k as λ i => (n: Nat) → arity_fits(Sig::callee_arity(tys, Nil, i), n).IsTrue() →
             arity_fits(arity(link_at(links, i)), n).IsTrue() {
             Zero => λ n never => false_elim(never),
             Succ(_) => λ n never => false_elim(never),
         },
-        Cons(s, rest) => λ links => match links as λ ls => Sig::links_fit(rest, ls.tail(), arity).IsTrue() →
-            (k: Nat) → (n: Nat) → arity_fits(Sig::callee_arity(Cons(s, rest), k), n).IsTrue() → arity_fits(arity(link_at(ls, k)), n).IsTrue() {
-            Nil => λ ok k => match k as λ i => (n: Nat) → arity_fits(Sig::callee_arity(Cons(s, rest), i), n).IsTrue() →
+        Cons(s, rest) => λ links => match links as λ ls => Sig::links_fit(tys, rest, ls.tail(), arity).IsTrue() →
+            (k: Nat) → (n: Nat) → arity_fits(Sig::callee_arity(tys, Cons(s, rest), k), n).IsTrue() → arity_fits(arity(link_at(ls, k)), n).IsTrue() {
+            Nil => λ ok k => match k as λ i => (n: Nat) → arity_fits(Sig::callee_arity(tys, Cons(s, rest), i), n).IsTrue() →
                 arity_fits(arity(link_at(Nil, i)), n).IsTrue() {
                 Zero => λ n never => false_elim(never),
-                Succ(i) => λ n fits => Sig::links_fit_at(rest, arity, Nil, ok, i, n, fits),
+                Succ(i) => λ n fits => Sig::links_fit_at(tys, rest, arity, Nil, ok, i, n, fits),
             },
-            Cons(l, ls) => λ ok k => match k as λ i => (n: Nat) → arity_fits(Sig::callee_arity(Cons(s, rest), i), n).IsTrue() →
+            Cons(l, ls) => λ ok k => match k as λ i => (n: Nat) → arity_fits(Sig::callee_arity(tys, Cons(s, rest), i), n).IsTrue() →
                 arity_fits(arity(link_at(Cons(l, ls), i)), n).IsTrue() {
                 Zero => λ n never => false_elim(never),
-                Succ(i) => λ n fits => Sig::links_fit_at(rest, arity, ls, ok, i, n, fits),
+                Succ(i) => λ n fits => Sig::links_fit_at(tys, rest, arity, ls, ok, i, n, fits),
             },
         },
     }
 }
 
-// A table's meanings, uncurried.
-fn Sig::uncurried(tys: Nat → RecInfo, sigs: List<Sig>) → Sig::Sems(tys, sigs) → List<List<BitVec(64)> → BitVec(64)> {
+// A table's meanings, uncurried: every word of each (`Ty::uncurry_all`).
+fn Sig::uncurried(tys: Nat → RecInfo, sigs: List<Sig>) → Sig::Sems(tys, sigs) → List<List<BitVec(64)> → List<BitVec(64)>> {
     match sigs {
         Nil => λ _ => Nil,
-        Cons(s, rest) => λ cs => Cons(λ ws => Ty::uncurry_words(tys, s.params, s.result, cs.fst, ws), Sig::uncurried(tys, rest, cs.snd)),
+        Cons(s, rest) => λ cs => Cons(λ ws => Ty::uncurry_all(tys, s.params, s.result, cs.fst, ws), Sig::uncurried(tys, rest, cs.snd)),
     }
 }
 
-fn World::uncurried(self w: World) → List<List<BitVec(64)> → BitVec(64)> { Sig::uncurried(w.tys, w.sigs, w.callees) }
+fn World::uncurried(self w: World) → List<List<BitVec(64)> → List<BitVec(64)>> { Sig::uncurried(w.tys, w.sigs, w.callees) }
 
 // A table's admitted words, entry by entry (`Ty::AdmitsAll`).
 fn Sig::admitted(tys: Nat → RecInfo, sigs: List<Sig>) → List<List<BitVec(64)> → Bool> {
@@ -1015,14 +1042,14 @@ fn Sig::admitted(tys: Nat → RecInfo, sigs: List<Sig>) → List<List<BitVec(64)
 
 fn World::admitted(self w: World) → List<List<BitVec(64)> → Bool> { Sig::admitted(w.tys, w.sigs) }
 
-// A word-signature entry takes as many words as its parameters.
-theorem Sig::arity_words(tys: Nat → RecInfo, sigs: List<Sig>): (k: Nat) → Sig::at(sigs, k).Words(tys) → (n: Nat) → n = Sig::at(sigs, k).params.len() →
-    arity_fits(Sig::arity(sigs, k), n).IsTrue() {
+// An entry a call passes in words takes as many as its parameters span.
+theorem Sig::arity_words(tys: Nat → RecInfo, sigs: List<Sig>): (k: Nat) → Sig::at(sigs, k).Sends(tys) → (n: Nat) → n = Ty::spans(tys, Sig::at(sigs, k).params) →
+    arity_fits(Sig::arity(tys, sigs, k), n).IsTrue() {
     match sigs {
         Nil => λ k ok => false_elim(ok.right),
-        Cons(s, rest) => λ k => match k as λ i => Sig::at(Cons(s, rest), i).Words(tys) → (n: Nat) → n = Sig::at(Cons(s, rest), i).params.len() →
-            arity_fits(Sig::arity(Cons(s, rest), i), n).IsTrue() {
-            Zero => λ _ n e => s.params.len().matches_of_eq(n, sym(e)),
+        Cons(s, rest) => λ k => match k as λ i => Sig::at(Cons(s, rest), i).Sends(tys) → (n: Nat) → n = Ty::spans(tys, Sig::at(Cons(s, rest), i).params) →
+            arity_fits(Sig::arity(tys, Cons(s, rest), i), n).IsTrue() {
+            Zero => λ _ n e => Ty::spans(tys, s.params).matches_of_eq(n, sym(e)),
             Succ(i) => λ ok => Sig::arity_words(tys, rest, i, ok),
         },
     }
@@ -1033,18 +1060,18 @@ theorem Sig::arity_words(tys: Nat → RecInfo, sigs: List<Sig>): (k: Nat) → Si
 // sources), what an entry admits its program function admits.
 theorem Sig::links_admit(tys: Nat → RecInfo, adm: List<List<BitVec(64)> → Bool>, sigs: List<Sig>): (links: List<Nat>) →
     links.map(λ (n: Nat) => link_admit(adm, n)) = Sig::admitted(tys, sigs) →
-    (k: Nat) → Sig::at(sigs, k).Words(tys) → (words: List<BitVec(64)>) → Ty::AdmitsAll(tys, Sig::at(sigs, k).params, words) →
+    (k: Nat) → Sig::at(sigs, k).Sends(tys) → (words: List<BitVec(64)>) → Ty::AdmitsAll(tys, Sig::at(sigs, k).params, words) →
     link_admit(adm, link_at(links, k), words).IsTrue() {
     match sigs {
         Nil => λ links linked k ok => false_elim(ok.right),
         Cons(s, rest) => λ links => match links as λ ls => ls.map(λ (n: Nat) => link_admit(adm, n)) = Sig::admitted(tys, Cons(s, rest)) →
-            (k: Nat) → Sig::at(Cons(s, rest), k).Words(tys) → (words: List<BitVec(64)>) → Ty::AdmitsAll(tys, Sig::at(Cons(s, rest), k).params, words) →
+            (k: Nat) → Sig::at(Cons(s, rest), k).Sends(tys) → (words: List<BitVec(64)>) → Ty::AdmitsAll(tys, Sig::at(Cons(s, rest), k).params, words) →
             link_admit(adm, link_at(ls, k), words).IsTrue() {
             Nil => λ linked => false_elim(List::nil_ne_cons(Sig::admitted(tys, rest), λ (ws: List<BitVec(64)>) => Ty::admits_all(tys, s.params, ws), linked)),
             Cons(l, ls) => λ linked k => {
                 let heads = cong_fn(λ (fs: List<List<BitVec(64)> → Bool>) => fs.head_or(λ (_: List<BitVec(64)>) => Bool::True), linked);
                 let tails = cong_fn(λ (fs: List<List<BitVec(64)> → Bool>) => fs.tail(), linked);
-                match k as λ i => Sig::at(Cons(s, rest), i).Words(tys) → (words: List<BitVec(64)>) → Ty::AdmitsAll(tys, Sig::at(Cons(s, rest), i).params, words) →
+                match k as λ i => Sig::at(Cons(s, rest), i).Sends(tys) → (words: List<BitVec(64)>) → Ty::AdmitsAll(tys, Sig::at(Cons(s, rest), i).params, words) →
                     link_admit(adm, link_at(Cons(l, ls), i), words).IsTrue() {
                     Zero => λ _ words h => j(sym(heads), λ g _ => g(words).IsTrue(), Ty::admits_all_complete(tys, s.params, words, h)),
                     Succ(i) => λ ok words h => Sig::links_admit(tys, adm, rest, ls, tails, i, ok, words, h),
@@ -1054,24 +1081,24 @@ theorem Sig::links_admit(tys: Nat → RecInfo, adm: List<List<BitVec(64)> → Bo
     }
 }
 
-fn World::arity(self w: World) → Nat → Option<Nat> { λ k => Sig::arity(w.sigs, k) }
+fn World::arity(self w: World) → Nat → Option<Nat> { λ k => Sig::arity(w.tys, w.sigs, k) }
 
-theorem Sig::callee_fits(sigs: List<Sig>, k, n: Nat): arity_fits(Sig::callee_arity(sigs, k), n).IsTrue() →
-    arity_fits(Sig::arity(sigs, k), n).IsTrue() {
-    match k as λ i => arity_fits(Sig::callee_arity(sigs, i), n).IsTrue() → arity_fits(Sig::arity(sigs, i), n).IsTrue() {
+theorem Sig::callee_fits(tys: Nat → RecInfo, sigs: List<Sig>, k, n: Nat): arity_fits(Sig::callee_arity(tys, sigs, k), n).IsTrue() →
+    arity_fits(Sig::arity(tys, sigs, k), n).IsTrue() {
+    match k as λ i => arity_fits(Sig::callee_arity(tys, sigs, i), n).IsTrue() → arity_fits(Sig::arity(tys, sigs, i), n).IsTrue() {
         Zero => λ never => false_elim(never),
         Succ(_) => λ fits => fits,
     }
 }
 
-theorem Sig::uncurried_answers(tys: Nat → RecInfo, sigs: List<Sig>): (cs: Sig::Sems(tys, sigs)) → (f: Nat) → Sig::at(sigs, f).Words(tys) →
-    Ty::Answers(tys, Sig::at(sigs, f).params, Sig::at(sigs, f).result, Sig::get(tys, sigs, cs, f), λ ws => link_sources(Sig::uncurried(tys, sigs, cs), f, ws)) {
+theorem Sig::uncurried_answers(tys: Nat → RecInfo, sigs: List<Sig>): (cs: Sig::Sems(tys, sigs)) → (f: Nat) → Sig::at(sigs, f).Sends(tys) →
+    Ty::AnswersWords(tys, Sig::at(sigs, f).params, Sig::at(sigs, f).result, Sig::get(tys, sigs, cs, f), λ ws => link_sources(Sig::uncurried(tys, sigs, cs), f, ws)) {
     match sigs {
         Nil => λ cs f ok => false_elim(ok.right),
-        Cons(s, rest) => λ cs f => match f as λ g => Sig::at(Cons(s, rest), g).Words(tys) →
-            Ty::Answers(tys, Sig::at(Cons(s, rest), g).params, Sig::at(Cons(s, rest), g).result, Sig::get(tys, Cons(s, rest), cs, g),
+        Cons(s, rest) => λ cs f => match f as λ g => Sig::at(Cons(s, rest), g).Sends(tys) →
+            Ty::AnswersWords(tys, Sig::at(Cons(s, rest), g).params, Sig::at(Cons(s, rest), g).result, Sig::get(tys, Cons(s, rest), cs, g),
                 λ ws => link_sources(Sig::uncurried(tys, Cons(s, rest), cs), g, ws)) {
-            Zero => λ ok => Ty::answers_uncurry(tys, s.params, s.result, Ty::helds_pass(tys, s.params, ok.left), cs.fst),
+            Zero => λ ok => Ty::answers_words_uncurry(tys, s.params, s.result, Ty::sents_pass(tys, s.params, ok.left), cs.fst),
             Succ(k) => λ ok => Sig::uncurried_answers(tys, rest, cs.snd, k, ok),
         },
     }
@@ -1086,23 +1113,23 @@ theorem World::calls_agree_own(self w: World): Tm::CallsAgree(w, link_sources(w.
 // Where the program's word functions, read through a table's renaming, are
 // the table's own meanings (checked once per function, by conversion), the
 // renamed calls are answered alike wherever a call fits the table.
-theorem Sig::links_agree(tys: Nat → RecInfo, srcs: List<List<BitVec(64)> → BitVec(64)>, sigs: List<Sig>): (cs: Sig::Sems(tys, sigs)) →
+theorem Sig::links_agree(tys: Nat → RecInfo, srcs: List<List<BitVec(64)> → List<BitVec(64)>>, sigs: List<Sig>): (cs: Sig::Sems(tys, sigs)) →
     (links: List<Nat>) → links.map(λ (n: Nat) => link_source(srcs, n)) = Sig::uncurried(tys, sigs, cs) →
-    (k: Nat) → (words: List<BitVec(64)>) → arity_fits(Sig::arity(sigs, k), words.len()).IsTrue() →
+    (k: Nat) → (words: List<BitVec(64)>) → arity_fits(Sig::arity(tys, sigs, k), words.len()).IsTrue() →
     Answers::relabel(link_sources(srcs), link_at(links), k, words) = link_sources(Sig::uncurried(tys, sigs, cs), k, words) {
     match sigs {
         Nil => λ cs links linked k words never => false_elim(never),
         Cons(s, rest) => λ cs links => match links as λ ls => ls.map(λ (n: Nat) => link_source(srcs, n)) = Sig::uncurried(tys, Cons(s, rest), cs) →
-            (k: Nat) → (words: List<BitVec(64)>) → arity_fits(Sig::arity(Cons(s, rest), k), words.len()).IsTrue() →
+            (k: Nat) → (words: List<BitVec(64)>) → arity_fits(Sig::arity(tys, Cons(s, rest), k), words.len()).IsTrue() →
             Answers::relabel(link_sources(srcs), link_at(ls), k, words) = link_sources(Sig::uncurried(tys, Cons(s, rest), cs), k, words) {
             Nil => λ linked => false_elim(List::nil_ne_cons(Sig::uncurried(tys, rest, cs.snd),
-                λ (ws: List<BitVec(64)>) => Ty::uncurry_words(tys, s.params, s.result, cs.fst, ws), linked)),
+                λ (ws: List<BitVec(64)>) => Ty::uncurry_all(tys, s.params, s.result, cs.fst, ws), linked)),
             Cons(l, ls) => λ linked k => {
-                let heads = cong_fn(λ (fs: List<List<BitVec(64)> → BitVec(64)>) => fs.head_or(λ (_: List<BitVec(64)>) => BitVec::zero()), linked);
-                let tails = cong_fn(λ (fs: List<List<BitVec(64)> → BitVec(64)>) => fs.tail(), linked);
-                match k as λ i => (words: List<BitVec(64)>) → arity_fits(Sig::arity(Cons(s, rest), i), words.len()).IsTrue() →
+                let heads = cong_fn(λ (fs: List<List<BitVec(64)> → List<BitVec(64)>>) => fs.head_or(λ (_: List<BitVec(64)>) => Nil<BitVec(64)>()), linked);
+                let tails = cong_fn(λ (fs: List<List<BitVec(64)> → List<BitVec(64)>>) => fs.tail(), linked);
+                match k as λ i => (words: List<BitVec(64)>) → arity_fits(Sig::arity(tys, Cons(s, rest), i), words.len()).IsTrue() →
                     Answers::relabel(link_sources(srcs), link_at(Cons(l, ls)), i, words) = link_sources(Sig::uncurried(tys, Cons(s, rest), cs), i, words) {
-                    Zero => λ words _ => cong_fn(λ (g: List<BitVec(64)> → BitVec(64)) => g(words), heads),
+                    Zero => λ words _ => cong_fn(λ (g: List<BitVec(64)> → List<BitVec(64)>) => g(words), heads),
                     Succ(i) => λ words fits => Sig::links_agree(tys, srcs, rest, cs.snd, ls, tails, i, words, fits),
                 }
             },
@@ -1124,9 +1151,9 @@ theorem Sig::links_agree(tys: Nat → RecInfo, srcs: List<List<BitVec(64)> → B
 // world's types are read by pattern too, and not as `c.world.tys`: a
 // caller's world and a callee's are two applications of `World::tys`,
 // which the kernel would compare world by world, callee tables and all.
-fn Compile::uncurried<F>(f: F, c: Compile<F>(f), b: Buffers()) → List<BitVec(64)> → BitVec(64) {
+fn Compile::uncurried<F>(f: F, c: Compile<F>(f), b: Buffers()) → List<BitVec(64)> → List<BitVec(64)> {
     match c {
-        Compile(reflected, World(tys, _, _, _), _, typed, _, _, _) => λ ws => Ty::uncurry_words(tys, reflected.params,
+        Compile(reflected, World(tys, _, _, _), _, typed, _, _, _) => λ ws => Ty::uncurry_all(tys, reflected.params,
             reflected.result, Ty::lent_at(tys, reflected.lent, reflected.params, reflected.result, typed(b), f, b), ws),
     }
 }
@@ -1134,22 +1161,22 @@ fn Compile::uncurried<F>(f: F, c: Compile<F>(f), b: Buffers()) → List<BitVec(6
 // A program's word functions at each file, spelled with no binder: the
 // generator applies `Compile::uncurried` to a function and its instance
 // and leaves the file.
-fn link_files_nil() → Buffers() → List<List<BitVec(64)> → BitVec(64)> { λ _ => [] }
+fn link_files_nil() → Buffers() → List<List<BitVec(64)> → List<BitVec(64)>> { λ _ => [] }
 
-fn link_files_cons(s: Buffers() → List<BitVec(64)> → BitVec(64), rest: Buffers() → List<List<BitVec(64)> → BitVec(64)>)
-    → Buffers() → List<List<BitVec(64)> → BitVec(64)> {
+fn link_files_cons(s: Buffers() → List<BitVec(64)> → List<BitVec(64)>, rest: Buffers() → List<List<BitVec(64)> → List<BitVec(64)>>)
+    → Buffers() → List<List<BitVec(64)> → List<BitVec(64)>> {
     λ b => Cons(s(b), rest(b))
 }
 
 // Calls answered by a program's word functions at each file.
-fn link_sources_at(srcs: Buffers() → List<List<BitVec(64)> → BitVec(64)>) → Buffers() → Answers() { λ b => link_sources(srcs(b)) }
+fn link_sources_at(srcs: Buffers() → List<List<BitVec(64)> → List<BitVec(64)>>) → Buffers() → Answers() { λ b => link_sources(srcs(b)) }
 
 // `x(b) = x(b)` at every file, spelled with no binder.
 theorem link_every<A>(x: Buffers() → A): (b: Buffers()) → x(b) = x(b) { λ _ => refl }
 
 // The same at a table of meanings, with no type left to inference: what the
 // generator applies (`runtime_types`).
-theorem link_every_table(x: Buffers() → List<List<BitVec(64)> → BitVec(64)>): (b: Buffers()) → x(b) = x(b) { λ _ => refl }
+theorem link_every_table(x: Buffers() → List<List<BitVec(64)> → List<BitVec(64)>>): (b: Buffers()) → x(b) = x(b) { λ _ => refl }
 
 // An instance's code in a program: its calls renamed by `links`.
 fn Compile::linked<F>(f: F, c: Compile<F>(f), links: List<Nat>) → Function { c.code.relabel(link_at(links)) }
@@ -1161,7 +1188,7 @@ fn Compile::linked<F>(f: F, c: Compile<F>(f), links: List<Nat>) → Function { c
 // world apart, at no file against at the file, and the kernel told the two
 // worlds apart by evaluating the function at both
 // (issues/runtime-link-compares-functions.md).
-fn Compile::table<F>(f: F, c: Compile<F>(f), b: Buffers()) → List<List<BitVec(64)> → BitVec(64)> {
+fn Compile::table<F>(f: F, c: Compile<F>(f), b: Buffers()) → List<List<BitVec(64)> → List<BitVec(64)>> {
     c.world.at(c.callees, b).uncurried()
 }
 
@@ -1198,9 +1225,9 @@ fn Compile::admit_table<F>(f: F, c: Compile<F>(f)) → List<List<BitVec(64)> →
 fn link_own(own, other: Answers()) → Answers() { λ k words => match k { Zero => own(0, words), Succ(_) => other(k, words) } }
 
 // The two answer alike wherever a callee is called.
-theorem link_own_callees(sigs: List<Sig>, own, other: Answers()): (k: Nat) → (words: List<BitVec(64)>) →
-    arity_fits(Sig::callee_arity(sigs, k), words.len()).IsTrue() → other(k, words) = link_own(own, other, k, words) {
-    λ k words => match k as λ i => arity_fits(Sig::callee_arity(sigs, i), words.len()).IsTrue() → other(i, words) = link_own(own, other, i, words) {
+theorem link_own_callees(tys: Nat → RecInfo, sigs: List<Sig>, own, other: Answers()): (k: Nat) → (words: List<BitVec(64)>) →
+    arity_fits(Sig::callee_arity(tys, sigs, k), words.len()).IsTrue() → other(k, words) = link_own(own, other, k, words) {
+    λ k words => match k as λ i => arity_fits(Sig::callee_arity(tys, sigs, i), words.len()).IsTrue() → other(i, words) = link_own(own, other, i, words) {
         Zero => λ never => false_elim(never),
         Succ(_) => λ _ => refl,
     }
@@ -1211,25 +1238,25 @@ theorem link_own_callees(sigs: List<Sig>, own, other: Answers()): (k: Nat) → (
 // program function `links` names, on the words the callee admits, which
 // that function admits (`admitted`) and whose source is the callee's
 // meaning (`linked`).
-theorem Compile::calls_agree_linked<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<List<BitVec(64)> → BitVec(64)>, adm: List<List<BitVec(64)> → Bool>,
+theorem Compile::calls_agree_linked<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<List<BitVec(64)> → List<BitVec(64)>>, adm: List<List<BitVec(64)> → Bool>,
     links: List<Nat>, arity: Nat → Option<Nat>,
     linked: (b: Buffers()) → links.map(λ (n: Nat) => link_source(srcs(b), n)) = Compile::table(f, c, b),
     admitted: links.map(λ (n: Nat) => link_admit(adm, n)) = Compile::admit_table(f, c),
-    named: Sig::links_fit(c.world.sigs.tail(), links.tail(), arity).IsTrue(),
+    named: Sig::links_fit(c.world.tys, c.world.sigs.tail(), links.tail(), arity).IsTrue(),
     b: Buffers(), call: Answers(), agree: Answers::Agree(call, link_sources(srcs(b)), arity, link_admits(adm))):
     Tm::CallsAgree(c.world.at(c.callees, b), link_own(link_sources(Compile::table(f, c, b)), Answers::relabel(call, link_at(links)))) {
     let at = c.world.at(c.callees, b);
     let mixed = link_own(link_sources(Compile::table(f, c, b)), Answers::relabel(call, link_at(links)));
-    λ g => match g as λ k => Sig::at(at.sigs, k).Words(at.tys) →
-        Ty::Answers(at.tys, Sig::at(at.sigs, k).params, Sig::at(at.sigs, k).result, Sig::get(at.tys, at.sigs, at.callees, k), λ ws => mixed(k, ws)) {
+    λ g => match g as λ k => Sig::at(at.sigs, k).Sends(at.tys) →
+        Ty::AnswersWords(at.tys, Sig::at(at.sigs, k).params, Sig::at(at.sigs, k).result, Sig::get(at.tys, at.sigs, at.callees, k), λ ws => mixed(k, ws)) {
         Zero => λ ok => at.calls_agree_own()(0, ok),
-        Succ(i) => λ ok => Ty::answers_of_admitted(at.tys, Sig::at(at.sigs, i + 1).params, Sig::at(at.sigs, i + 1).result,
-            Ty::helds_pass(at.tys, Sig::at(at.sigs, i + 1).params, ok.left), Sig::get(at.tys, at.sigs, at.callees, i + 1), λ ws => call(link_at(links, i + 1), ws), λ ws len taken => {
-                let fits = Sig::arity_words(at.tys, at.sigs, i + 1, ok, ws.len(), trans(len, Ty::helds_spans(at.tys, Sig::at(at.sigs, i + 1).params, ok.left)));
-                trans(agree(link_at(links, i + 1), ws, Sig::callee_links_fit_at(arity, c.world.sigs, links, named, i + 1, ws.len(), fits),
+        Succ(i) => λ ok => Ty::answers_words_of_admitted(at.tys, Sig::at(at.sigs, i + 1).params, Sig::at(at.sigs, i + 1).result,
+            Ty::sents_pass(at.tys, Sig::at(at.sigs, i + 1).params, ok.left), Sig::get(at.tys, at.sigs, at.callees, i + 1), λ ws => call(link_at(links, i + 1), ws), λ ws len taken => {
+                let fits = Sig::arity_words(at.tys, at.sigs, i + 1, ok, ws.len(), len);
+                trans(agree(link_at(links, i + 1), ws, Sig::callee_links_fit_at(c.world.tys, arity, c.world.sigs, links, named, i + 1, ws.len(), fits),
                         Sig::links_admit(at.tys, adm, at.sigs, links, admitted, i + 1, ok, ws, taken)),
                     trans(Sig::links_agree(c.world.tys, srcs(b), c.world.sigs, c.callees(b), links, linked(b), i + 1, ws, fits),
-                        Ty::answers_at(at.tys, Sig::at(at.sigs, i + 1).params, Sig::at(at.sigs, i + 1).result, Sig::get(at.tys, at.sigs, at.callees, i + 1),
+                        Ty::answers_words_at(at.tys, Sig::at(at.sigs, i + 1).params, Sig::at(at.sigs, i + 1).result, Sig::get(at.tys, at.sigs, at.callees, i + 1),
                             λ ws2 => link_sources(Sig::uncurried(at.tys, at.sigs, at.callees), i + 1, ws2),
                             Sig::uncurried_answers(at.tys, at.sigs, at.callees, i + 1, ok), ws, len, taken)))
             }),
@@ -1247,67 +1274,53 @@ theorem Compile::calls_agree_linked<F>(f: F, c: Compile<F>(f), srcs: Buffers() �
 // (`named`, by evaluating the two lists). That the code's calls fit its
 // own table is the instance's `fits`, so no link reads the code. This is
 // one conjunct of `program_linked_files`.
-theorem Compile::part<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<List<BitVec(64)> → BitVec(64)>, adm: List<List<BitVec(64)> → Bool>,
+theorem Compile::part<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<List<BitVec(64)> → List<BitVec(64)>>, adm: List<List<BitVec(64)> → Bool>,
     links: List<Nat>, arity: Nat → Option<Nat>,
     linked: (b: Buffers()) → links.map(λ (n: Nat) => link_source(srcs(b), n)) = Compile::table(f, c, b),
     admitted: links.map(λ (n: Nat) => link_admit(adm, n)) = Compile::admit_table(f, c),
-    named: Sig::links_fit(c.world.sigs.tail(), links.tail(), arity).IsTrue()):
+    named: Sig::links_fit(c.world.tys, c.world.sigs.tail(), links.tail(), arity).IsTrue()):
     Compile::linked(f, c, links).calls_fit(arity).IsTrue()
     ∧ ((b: Buffers()) → (call: Answers()) → Answers::Agree(call, link_sources(srcs(b)), arity, link_admits(adm)) →
         (words: List<BitVec(64)>) → arity_fits(Some(Compile::arity(f, c)), words.len()).IsTrue() → Compile::admits(f, c, words).IsTrue() →
-        Compile::linked(f, c, links).eval(call, words, buffers := b) = Compile::uncurried(f, c, b, words)) {
+        Compile::linked(f, c, links).eval_words(call, words, buffers := b) = Compile::uncurried(f, c, b, words)) {
     ⟨c.code.relabel_calls_fit(link_at(links), c.world.callee_arity(), arity,
-        Sig::callee_links_fit_at(arity, c.world.sigs, links, named), c.fits),
+        Sig::callee_links_fit_at(c.world.tys, arity, c.world.sigs, links, named), c.fits),
     λ b call agree words n admits => {
         let at = c.world.at(c.callees, b);
         let own = link_sources(Compile::table(f, c, b));
         let others = Answers::relabel(call, link_at(links));
         let mixed = link_own(own, others);
         let meaning = Ty::lent_at(at.tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed(b), f, b);
-        let answered = Ty::answers_at(at.tys, c.reflected.params, c.reflected.result, meaning, λ xs => c.code.eval(mixed, xs, buffers := b),
+        let answered = Ty::answers_words_at(at.tys, c.reflected.params, c.reflected.result, meaning, λ xs => c.code.eval_words(mixed, xs, buffers := b),
             c.agrees(b, mixed, Compile::calls_agree_linked(f, c, srcs, adm, links, arity, linked, admitted, named, b, call, agree)), words,
             sym(Ty::spans(at.tys, c.reflected.params).matches_eq(words.len(), n)), Ty::admits_all_sound(at.tys, c.reflected.params, words, admits));
-        trans(c.code.relabel_eval_over(b, call, link_at(links), words),
-            trans(c.code.eval_answers_over(b, mixed, others, c.world.callee_arity(), link_own_callees(c.world.sigs, own, others), c.fits, words),
+        trans(c.code.relabel_eval_words_over(b, call, link_at(links), words),
+            trans(c.code.eval_words_answers_over(b, mixed, others, c.world.callee_arity(), link_own_callees(c.world.tys, c.world.sigs, own, others), c.fits, words),
                 answered))
     }⟩
 }
 
-// A program whose last function is an instance's code returning two words:
-// the program's words past the first (`program_eval_also`) are the
-// function's, at no file, on the words it admits. `linked`, `admitted` and
-// `named` are what `Compile::part` takes, and `also` the instance's
-// agreement on those words (`Setup::plain_agrees_also`); the program is
-// linked (`program_linked_files`), so its earlier functions answer the
-// code's calls with their meanings.
-theorem Compile::root_also<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<List<BitVec(64)> → BitVec(64)>, adm: List<List<BitVec(64)> → Bool>,
+// A program whose last function is an instance's code: the program's
+// words past the first (`program_eval_also`) are the function's, at no
+// file, on the words it admits. `linked`, `admitted` and `named` are what
+// `Compile::part` takes; the program is linked (`program_linked_files`),
+// so its earlier functions answer the code's calls with their meanings,
+// every word of them (docs/native/runtime-fn-setups-design.md §16.17).
+theorem Compile::root_also<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<List<BitVec(64)> → List<BitVec(64)>>, adm: List<List<BitVec(64)> → Bool>,
     links: List<Nat>,
     linked: (b: Buffers()) → links.map(λ (n: Nat) => link_source(srcs(b), n)) = Compile::table(f, c, b),
     admitted: links.map(λ (n: Nat) => link_admit(adm, n)) = Compile::admit_table(f, c),
-    also: (call: Answers()) → Tm::CallsAgree(c.world.at(c.callees, Nil), call) →
-        Ty::AnswersAlso(c.world.at(c.callees, Nil).tys, c.reflected.params, c.reflected.result,
-            Ty::lent_at(c.world.at(c.callees, Nil).tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed(Nil), f, Nil),
-            λ xs => c.code.eval_also(call, xs, buffers := Nil)),
     earlier: List<Function>, arities: List<Nat>,
     sourced: program_linked_files(Cons(Compile::linked(f, c, links), earlier), arities, link_admits(adm), link_sources_at(srcs)),
-    named: Sig::links_fit(c.world.sigs.tail(), links.tail(), linked_arity(earlier, arities.tail())).IsTrue(),
+    named: Sig::links_fit(c.world.tys, c.world.sigs.tail(), links.tail(), linked_arity(earlier, arities.tail())).IsTrue(),
     words: List<BitVec(64)>, n: arity_fits(Some(Compile::arity(f, c)), words.len()).IsTrue(), admits: Compile::admits(f, c, words).IsTrue()):
     program_eval_also(Cons(Compile::linked(f, c, links), earlier), words) =
         Ty::rest_words(c.world.at(c.callees, Nil).tys, c.reflected.result, Ty::apply_words(c.world.at(c.callees, Nil).tys, c.reflected.params, c.reflected.result,
             Ty::lent_at(c.world.at(c.callees, Nil).tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed(Nil), f, Nil), words)) {
-    let at = c.world.at(c.callees, Nil);
-    let call = program_eval_over(Nil, earlier);
+    let call = program_answers_over(Nil, earlier);
     let agree = program_linked_files_sources(earlier, arities.tail(), link_admits(adm), link_sources_at(srcs), sourced.right, Nil);
-    let own = link_sources(Compile::table(f, c, Nil));
-    let others = Answers::relabel(call, link_at(links));
-    let mixed = link_own(own, others);
-    let meaning = Ty::lent_at(at.tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed(Nil), f, Nil);
-    let answered = Ty::answers_also_at(at.tys, c.reflected.params, c.reflected.result, meaning, λ xs => c.code.eval_also(mixed, xs, buffers := Nil),
-        also(mixed, Compile::calls_agree_linked(f, c, srcs, adm, links, linked_arity(earlier, arities.tail()), linked, admitted, named, Nil, call, agree)),
-        words, sym(Ty::spans(at.tys, c.reflected.params).matches_eq(words.len(), n)), Ty::admits_all_sound(at.tys, c.reflected.params, words, admits));
-    trans(c.code.relabel_eval_also_over(Nil, call, link_at(links), words),
-        trans(c.code.eval_also_answers_over(Nil, mixed, others, c.world.callee_arity(), link_own_callees(c.world.sigs, own, others), c.fits, words),
-            answered))
+    cong_fn(λ (xs: List<BitVec(64)>) => xs.tail(),
+        Compile::part(f, c, srcs, adm, links, linked_arity(earlier, arities.tail()), linked, admitted, named).right(Nil, call, agree, words, n, admits))
 }
 
 // A table of meanings that answers every call with a default: what the
@@ -1374,7 +1387,7 @@ def runtime_w_nats: List<Nat> = [];
 def runtime_w_sigs: List<Sig> = [];
 def runtime_w_words: List<BitVec(64)> = [];
 def runtime_w_word: BitVec(64) = BitVec::ofNat(0);
-def runtime_w_srcs: List<List<BitVec(64)> → BitVec(64)> = [];
+def runtime_w_srcs: List<List<BitVec(64)> → List<BitVec(64)>> = [];
 def runtime_w_functions: List<Function> = [];
 def runtime_w_shape: RtShape = Plain;
 def runtime_w_nat: Nat = 0;
@@ -1836,14 +1849,25 @@ fn runtime_low(w: Nat, x: BitVec(64)) → BitVec(w) { BitVec::ofNat(x.toNat()) }
 
 fn runtime_wide(w: Nat, v: BitVec(w)) → BitVec(64) { BitVec::ofNat(v.toNat()) }
 
-// A value at a narrow word through `by` (`runtime_low` or `runtime_wide`);
-// any other code as it is.
-fn runtime_narrow_result(by: Expr, r: Ty, e: Expr) → Expr {
-    match r { Word(w) => match w.same(64) { True => e, False => ap(by, [NatLit(w), e]) }, _ => e }
+// A `Bool` the same way (docs/native/runtime-fn-setups-design.md §16.17):
+// a parameter is the lowest bit of its word, and the result is zero or
+// one, as C passes a `bool`.
+fn runtime_bit_low(x: BitVec(64)) → Bool { BitVec::ofNat(x.toNat(), n := 1).head_bit() }
+
+fn runtime_bit_wide(b: Bool) → BitVec(64) { BitVec::ofNat(BitVec::ofBool(b).toNat()) }
+
+// The two conversions one way: `runtime_low` and `runtime_bit_low`, or
+// `runtime_wide` and `runtime_bit_wide`.
+record RtNarrow { word: Expr, bit: Expr }
+
+// A value at a narrow word or a bit through `by`; any other code as it
+// is.
+fn runtime_narrow_result(by: RtNarrow, r: Ty, e: Expr) → Expr {
+    match r { Word(w) => match w.same(64) { True => e, False => ap(by.word, [NatLit(w), e]) }, Bit => ap(by.bit, [e]), _ => e }
 }
 
 // A function's arguments, a narrow word as the low bits of its word.
-fn runtime_narrow_args(low: Expr, ps: List<Ty>, es: List<Expr>) → List<Expr> {
+fn runtime_narrow_args(low: RtNarrow, ps: List<Ty>, es: List<Expr>) → List<Expr> {
     match ps {
         Nil => es,
         Cons(p, rest) => match es {
@@ -1877,9 +1901,19 @@ fn runtime_own_types(word: Handle, reprs: List<ReprEntry>, ps: List<Ty>, recs: L
                         pure(Cons(t, more))
                     },
                 },
-                Named(i) => pure(Cons(match reprs.nth(i) { Some(e) => e.ty, None => word }, more)),
+                // A type held by its repr as the repr's type; a record as
+                // itself.
+                Named(i) => match reprs.nth(i) {
+                    Some(e) => pure(Cons(e.ty, more)),
+                    None => match recs.nth(i - reprs.len()) { Some(r) => pure(Cons(r.ty, more)), None => runtime_fail("a record parameter without its type") },
+                },
                 // An enum's own type.
                 Enum(i) => match recs.nth(i - reprs.len()) { Some(r) => pure(Cons(r.ty, more)), None => runtime_fail("an enum parameter without its type") },
+                Bit => {
+                    let bool_g <- runtime_ref("Bool");
+                    let t <- as_type(Global(bool_g)).or_fail("runtime: `Bool`: ");
+                    pure(Cons(t, more))
+                },
                 _ => pure(Cons(word, more)),
             }
         },
@@ -2605,35 +2639,25 @@ fn runtime_file_callees(entry, typed_once, nil, tys_e: Expr, q: RtQ, funs: List<
     runtime_file_callees_of(entry, typed_once, nil, tys_e, q, funs.map(λ g => Global(GlobalRef(g))), sigs, lents)
 }
 
-// A function returning a record of two words, or an enum with a slot,
+// A function returning a record of several words, or an enum with slots,
 // lent nothing: `f::agrees_also`, the program's words past its first
 // against `rest`, the record's fields past its first or the enum's slots
-// (`Compile::root_also`, its agreement `Setup::plain_agrees_also` at no
-// file); and for a record `f::fields`, its fields' names. None for any
-// other function.
+// (`Compile::root_also`, read off the program's link); and for a record
+// `f::fields`, its fields' names. None for any other function.
 fn runtime_also_decls(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes, world_e, table_e, rt_e: Expr, linked: Linked, ys: List<Param>,
     words_e: Expr, rest: Option<Expr>, fields: List<String>, admitted: Expr, finish: Expr → Expr → Tac<Expr>) → Tac<List<Decl>> {
     match rest {
         None => pure([]),
         Some(rhs) => match rfun.shape() {
             Plain => {
-                let rfl <- runtime_global("tactic::rfl");
-                let typed_refl <- runtime_global(name_of(Setup::typed_refl));
-                let at_every <- runtime_global(name_of(Setup::at_every));
-                let verdict <- runtime_verdict();
-                let shapes <- runtime_type_of(name_of(runtime_w_shape)).bind(λ h => runtime_ctors_at(h));
-                let plain_also <- runtime_global(name_of(Setup::plain_agrees_also));
                 let root_also <- runtime_global(name_of(Compile::root_also));
                 let eval_also <- runtime_global(name_of(program_eval_also));
                 let tail <- runtime_global(name_of(List::tail));
-                let no_file <- runtime_global(name_of(runtime_w_buffers));
                 let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
-                let agreement = ap(plain_also, [Blank, Global(f), rt_e, world_e, table_e, ap(typed_refl, [Blank, Global(f)]), ap(at_every, [Blank, Global(f)]),
-                    verdict, ap(rfl, [Blank, runtime_at(shapes, 0)]), no_file]);
                 // Its words admitted as `f::agrees` has them, and each enum
                 // parameter's value stated as there.
                 let lhs = ap(eval_also, [linked.program, words_e]);
-                let proof <- finish(lhs, ap(root_also, linked.root ++ [agreement, ap(tail, [Blank, linked.program]), linked.arities, linked.sourced, Hd(trivial_h),
+                let proof <- finish(lhs, ap(root_also, linked.root ++ [ap(tail, [Blank, linked.program]), linked.arities, linked.sourced, Hd(trivial_h),
                     words_e, Hd(trivial_h), admitted]));
                 // The record's fields' names, as `f::names` spells names:
                 // what `compile-x86` states the two words as.
@@ -2658,10 +2682,15 @@ fn Ty::any_enum(ps: List<Ty>) → Bool { ps.any_bit(λ p => match p { Enum(_) =>
 
 // The types `f::agrees` quantifies over: a word for each parameter, and an
 // enum's own type for an enum.
-fn runtime_agree_types(word: Handle, ps: List<Ty>, own: List<Handle>) → List<Handle> {
+// Whether table entry `i` is a record the program reads rather than a type
+// held by its repr (the reprs come first in the table).
+fn runtime_is_record(reprs_n: Nat, i: Nat) → Bool { reprs_n.leb(i) }
+
+fn runtime_agree_types(word: Handle, reprs_n: Nat, ps: List<Ty>, own: List<Handle>) → List<Handle> {
     match ps {
         Nil => [],
-        Cons(p, rest) => Cons(match p { Enum(_) => own.head_or(word), _ => word }, runtime_agree_types(word, rest, own.drop(1))),
+        Cons(p, rest) => Cons(match p { Enum(_) => own.head_or(word), Named(i) => match runtime_is_record(reprs_n, i) { True => own.head_or(word), False => word }, _ => word },
+            runtime_agree_types(word, reprs_n, rest, own.drop(1))),
     }
 }
 
@@ -2671,15 +2700,21 @@ fn runtime_agree_types(word: Handle, ps: List<Ty>, own: List<Handle>) → List<H
 // the last.
 fn runtime_words_then(xs, ys: List<BitVec(64)>) → List<BitVec(64)> { xs ++ ys }
 
-fn runtime_word_tails(words: List<Expr>, enum_words, then, tys_e: Expr, ps: List<Ty>, ys: List<Expr>) → List<Expr> {
+fn runtime_word_tails(words: List<Expr>, enum_words, then, tys_e: Expr, ps: List<Ty>, ys: List<Expr>, record_words: Expr, reprs_n: Nat) → List<Expr> {
     match ps {
         Nil => [runtime_at(words, 0)],
         Cons(p, rest) => {
-            let later = runtime_word_tails(words, enum_words, then, tys_e, rest, ys.tail());
+            let later = runtime_word_tails(words, enum_words, then, tys_e, rest, ys.tail(), record_words, reprs_n);
             let after = later.head_or(runtime_at(words, 0));
             let y = ys.head_or(Blank);
             Cons(match p {
                 Enum(i) => ap(then, [ap(enum_words, [tys_e, NatLit(i), y]), after]),
+                // A record (not a type held by its repr) in its fields'
+                // words (`RecInfo::record_words`).
+                Named(i) => match runtime_is_record(reprs_n, i) {
+                    True => ap(then, [ap(record_words, [tys_e, NatLit(i), y]), after]),
+                    False => ap(runtime_at(words, 1), [y, after]),
+                },
                 _ => ap(runtime_at(words, 1), [y, after]),
             }, later)
         },
@@ -2688,7 +2723,7 @@ fn runtime_word_tails(words: List<Expr>, enum_words, then, tys_e: Expr, ps: List
 
 // The answer `f::agrees` states, at the arguments `args` (an enum's as
 // itself or as what its word reads back as).
-fn runtime_agree_rhs(low, wide, count: Expr, reprs: List<ReprEntry>, recs: List<RecShape>, rfun: Fun, f: GlobalRef, args: List<Expr>) → Tac<Expr> {
+fn runtime_agree_rhs(low, wide: RtNarrow, count: Expr, reprs: List<ReprEntry>, recs: List<RecShape>, rfun: Fun, f: GlobalRef, args: List<Expr>) → Tac<Expr> {
     let fx = ap(Global(f), runtime_narrow_args(low, rfun.params, runtime_args(count, reprs, rfun.params, args)));
     let gets <- runtime_result_fields(reprs, recs, rfun.result, fx);
     pure(match gets { Cons(g, _) => g, Nil => runtime_narrow_result(wide, rfun.result, runtime_result(reprs, rfun.result, fx)) })
@@ -2821,7 +2856,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
     let code_of <- runtime_global(name_of(Setup::code));
     let program_eval <- runtime_global(name_of(program_eval));
     let program_eval_over <- runtime_global(name_of(program_eval_over));
-    let eval_sources <- runtime_global(name_of(program_linked_files_sources));
+    let eval_sources <- runtime_global(name_of(program_eval_linked_sources));
     let sources <- runtime_global(name_of(link_sources_at));
     let count <- runtime_global(name_of(runtime_count));
     let word_list <- runtime_ctors_at(ts.words);
@@ -2860,8 +2895,12 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
         Decl(AsValue, name ++ "::code", [], Hd(ts.function), code_e),
         Decl(AsInstance("runtime::Compile", [Hd(ft)], [name]), name ++ "::compile", [], Hd(instance_t), instance_e)];
     let own_types <- runtime_own_types(ts.word, reprs, rfun.params, recs);
-    let low <- runtime_global(name_of(runtime_low));
-    let wide <- runtime_global(name_of(runtime_wide));
+    let low_word <- runtime_global(name_of(runtime_low));
+    let low_bit <- runtime_global(name_of(runtime_bit_low));
+    let wide_word <- runtime_global(name_of(runtime_wide));
+    let wide_bit <- runtime_global(name_of(runtime_bit_wide));
+    let low = RtNarrow(low_word, low_bit);
+    let wide = RtNarrow(wide_word, wide_bit);
     // The program: this function and every runtime fn it reaches, each
     // callee's code from its own instance, linked at every file.
     let insts <- runtime_instances(l.order, l.names, f.id, Global(f), instance_e);
@@ -2895,12 +2934,13 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
             let xs <- runtime_params_at(own_types, None, 0);
             // An enum is quantified as itself, its words passed
             // (`RecInfo::enum_words`): the agreement is at real values only.
-            let ys <- runtime_params_at(runtime_agree_types(ts.word, rfun.params, own_types), None, 0);
+            let ys <- runtime_params_at(runtime_agree_types(ts.word, reprs.len(), rfun.params, own_types), None, 0);
             let at_ys = runtime_locals(ys);
             let enum_word <- runtime_global(name_of(RecInfo::enum_word));
             let enum_words <- runtime_global(name_of(RecInfo::enum_words));
             let then <- runtime_global(name_of(runtime_words_then));
-            let tails = runtime_word_tails(word_list, enum_words, then, tys_e, rfun.params, at_ys);
+            let record_words <- runtime_global(name_of(RecInfo::record_words));
+            let tails = runtime_word_tails(word_list, enum_words, then, tys_e, rfun.params, at_ys, record_words, reprs.len());
             let words_e = tails.head_or(Blank);
             // The pin, for a function its reflection's meaning converts to: a loop's
             // meaning is one step of it, which is the function only at a
@@ -2969,8 +3009,8 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
         // every file (the reflection's meaning in the world there, and the
         // program evaluated over the file, against the function at the
         // file's spans).
-        Succ(_) => match Ty::any_enum(rfun.params) {
-          True => runtime_fail("`" ++ name ++ "` takes an enum and is lent spans: not stated yet (docs/native/runtime-fn-setups-design.md §16.16)"),
+        Succ(_) => match Ty::any_enum(rfun.params) || rfun.params.any_bit(λ p => match p { Named(i) => runtime_is_record(reprs.len(), i), _ => False }) {
+          True => runtime_fail("`" ++ name ++ "` takes an enum or a record of several words and is lent spans: not stated yet (docs/native/runtime-fn-setups-design.md §16.16)"),
           False => {
             let buffers_h <- runtime_type_of(name_of(runtime_w_buffers));
             let world_at <- runtime_global(name_of(World::at));
@@ -2989,7 +3029,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
             let at_ys = runtime_locals(ys);
             let enum_words <- runtime_global(name_of(RecInfo::enum_words));
             let then <- runtime_global(name_of(runtime_words_then));
-            let tails = runtime_word_tails(word_list, enum_words, then, tys_e, rfun.params, at_ys);
+            let tails = runtime_word_tails(word_list, enum_words, then, tys_e, rfun.params, at_ys, Blank, 0);
             let words_e = tails.head_or(Blank);
             let at_file = runtime_lent_args(span, Local(c.ref), 0, rfun.lent, runtime_args(count, reprs, rfun.params, at_ys));
             let admits_of <- runtime_global(name_of(link_admits));

@@ -35,7 +35,7 @@ import function_ir_state;
 import rt_file_returns;
 
 // At a function that leaves `after` and answers `value`, the code's word is
-// `value` and the file's first buffer `after`.
+// `value`, no words after it, and the file's first buffer `after`.
 theorem written_at_a_result<M>(functions: List<Function>, placement: List<Place>, rooms: Nat → Nat, counts: List<Nat>, addresses: List<BitVec(64)>,
     marks: List<Bool>, program: Prog, lowered: lower_program_roomed(functions, placement, counts, rooms) = Some(program),
     evaluable: program_evaluable(functions).IsTrue(), within: program_stores_within(functions, marks).IsTrue(),
@@ -48,7 +48,7 @@ theorem written_at_a_result<M>(functions: List<Function>, placement: List<Place>
     Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program)(f + 1),
         λ (i: Nat) (s: MachineState<M>) => (stack.Passed(arguments, i, s) ∧ rooms(f) <= i) ∧
             stack.LentOver(Lending::writing(counts, addresses, before, marks), top, f, arguments, before)(i, s),
-        stack.AnsweredOver(Lending::writing(counts, addresses, before, marks), value, Cons(after, rest))) {
+        stack.AnsweredBoth(Lending::writing(counts, addresses, before, marks), value, Nil, Cons(after, rest))) {
     Ending::returns_written<M>(functions, placement, rooms, counts, addresses, marks, program, lowered, evaluable, within, fetch, data, last, origin,
         stack, top, before, loan, f, below, arguments, fits, defined, rest, Mutated(after, value), runs)
 }

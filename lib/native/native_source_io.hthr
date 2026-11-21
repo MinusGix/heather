@@ -528,7 +528,7 @@ fn StructuredRegion::byte_free(self region: StructuredRegion) → Bool {
         Compose(prefix, continuation) => prefix.byte_free() && continuation.byte_free(),
         Conditional(_, _, _, _, when_true, when_false) => when_true.byte_free() && when_false.byte_free(),
         Lend(_, _, _, _) => False,
-        Call(_, _, _) => True,
+        Call(_, _, _, _) => True,
         Loop(_, _, _, _, _, _, _, _, _) => False,
     }
 }
@@ -606,7 +606,7 @@ theorem StructuredRegion::eval_byte_free(self region: StructuredRegion, call: An
                     refl))
         },
         Lend(_, _, _, _) => λ never => false_elim(never),
-        Call(_, _, _) => λ _ values => refl,
+        Call(_, _, _, _) => λ _ values => refl,
         Loop(_, _, _, _, _, _, _, _, _) => λ never => false_elim(never),
     }
 }
@@ -652,8 +652,9 @@ theorem StructuredRegion::run_byte_free(self region: StructuredRegion, call: Wri
                         same_either)))
         },
         Lend(_, _, _, _) => λ never => false_elim(never),
-        Call(callee, arguments, result) => λ _ fits values buffers => cong_fn<Buffers(), State>(
-            λ held => State(Valuation::set(values, result, word_value(call(buffers, callee, words_of(values, arguments)).word)), held),
+        Call(callee, arguments, result, also) => λ _ fits values buffers => cong_fn<Buffers(), State>(
+            λ held => State(Valuation::bind(values, Cons(result, also), Cons(call(buffers, callee, words_of(values, arguments)).word,
+                call(buffers, callee, words_of(values, arguments)).rest)), held),
             still(buffers, callee, fits, words_of(values, arguments))),
         Loop(_, _, _, _, _, _, _, _, _) => λ never => false_elim(never),
     }
@@ -713,7 +714,7 @@ theorem StructuredRegion::written_within(self region: StructuredRegion, call: Wr
                 absent_join(id, Port::ids(nodes_write_ports(nodes)), [result],
                     j(sym(nodes_write_ids(nodes)), λ l _ => absent(id, l).IsTrue(), parts.left), parts.right))
         },
-        Call(_, _, _) => λ values buffers id h => h,
+        Call(_, _, result, also) => λ values buffers id h => j(sym(word_port_ids(Cons(result, also))), λ l _ => absent(id, l).IsTrue(), h),
         Loop(_, _, _, _, _, _, _, outputs, exhausted) => λ values buffers id h => {
             let parts = Bool::is_true_and(id.differs(exhausted), absent(id, outputs), h);
             j(sym(Port::ids_append(word_ports(outputs), [Port(exhausted, 1)])), λ l _ => absent(id, l).IsTrue(),

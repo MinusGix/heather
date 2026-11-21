@@ -147,7 +147,7 @@ fn StructuredRegion::emit(self region: StructuredRegion, prog: Prog, file: File,
         // So does a call over views.
         Lend(_, _, _, _) => None,
         // A call needs the stack and its callees: function_ir_lower_calls.
-        Call(_, _, _) => None,
+        Call(_, _, _, _) => None,
         // So does a loop, emitted with them: function_ir_lower_calls.
         Loop(_, _, _, _, _, _, _, _, _) => None,
     }
@@ -385,7 +385,7 @@ theorem StructuredRegion::emit_emits<M>(self region: StructuredRegion, site: Sit
                         names + 2)),
             },
         Lend(_, _, _, _) => λ prog file placement names => trivial,
-        Call(_, _, _) => λ prog file placement names => trivial,
+        Call(_, _, _, _) => λ prog file placement names => trivial,
         Loop(_, _, _, _, _, _, _, _, _) => λ prog file placement names => trivial,
     }
 }
@@ -549,7 +549,7 @@ fn StructuredRegion::reads(self region: StructuredRegion) → List<Nat> {
         // A call over views is to the planner its views' nodes, then a call on
         // the views' homes.
         Lend(views, _, arguments, _) => reads_of(views_nodes(views), views_homes(views) ++ arguments),
-        Call(_, arguments, _) => arguments,
+        Call(_, arguments, _, _) => arguments,
         Loop(inputs, bound, _, _, _, _, _, _, _) => Cons(bound, inputs),
     }
 }
@@ -562,7 +562,7 @@ fn StructuredRegion::rows_write(self region: StructuredRegion) → List<Gpr> {
         Compose(prefix, continuation) => prefix.rows_write() ++ continuation.rows_write(),
         Conditional(_, _, _, _, when_true, when_false) => when_true.rows_write() ++ when_false.rows_write(),
         Lend(views, _, _, _) => rows_write_in(views_nodes(views)),
-        Call(_, _, _) => [],
+        Call(_, _, _, _) => [],
         Loop(_, _, _, _, body, _, _, _, _) => body.rows_write(),
     }
 }
@@ -574,7 +574,7 @@ fn StructuredRegion::calls(self region: StructuredRegion) → Bool {
         Compose(prefix, continuation) => prefix.calls() || continuation.calls(),
         Conditional(_, _, _, _, when_true, when_false) => when_true.calls() || when_false.calls(),
         Lend(_, _, _, _) => True,
-        Call(_, _, _) => True,
+        Call(_, _, _, _) => True,
         Loop(_, _, _, _, body, _, _, _, _) => body.calls(),
     }
 }
@@ -591,7 +591,7 @@ fn StructuredRegion::read_past_call(self region: StructuredRegion) → List<Nat>
         },
         Conditional(_, _, _, _, when_true, when_false) => when_true.read_past_call() ++ when_false.read_past_call(),
         Lend(_, _, _, _) => [],
-        Call(_, _, _) => [],
+        Call(_, _, _, _) => [],
         Loop(_, _, _, _, _, _, _, _, _) => [],
     }
 }
@@ -663,7 +663,7 @@ fn StructuredRegion::ends_comparing(self region: StructuredRegion, id: Nat) → 
         Compose(_, continuation) => continuation.ends_comparing(id),
         Conditional(_, _, _, _, _, _) => False,
         Lend(_, _, _, _) => False,
-        Call(_, _, _) => False,
+        Call(_, _, _, _) => False,
         Loop(_, _, _, _, _, _, _, _, _) => False,
     }
 }
@@ -694,7 +694,7 @@ fn StructuredRegion::register_reads(self region: StructuredRegion, folds: Reads(
         Compose(prefix, continuation) => prefix.register_reads(folds) ++ continuation.register_reads(folds),
         Conditional(_, _, _, _, when_true, when_false) => when_true.register_reads(folds) ++ when_false.register_reads(folds),
         Lend(views, _, arguments, _) => register_reads_of(views_nodes(views), folds, views_homes(views) ++ arguments),
-        Call(_, arguments, _) => arguments,
+        Call(_, arguments, _, _) => arguments,
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
             Cons(bound, inputs ++ (tested_exit(body, exit) ++ (next ++ body.register_reads(folds)))),
     }
@@ -722,7 +722,7 @@ fn StructuredRegion::conditions(self region: StructuredRegion) → List<Nat> {
         Conditional(_, condition, _, _, when_true, when_false) =>
             shared(when_true.conditions(), λ (yes: List<Nat>) => Cons(condition, yes ++ when_false.conditions().beyond(yes))),
         Lend(_, _, _, _) => [],
-        Call(_, _, _) => [],
+        Call(_, _, _, _) => [],
         Loop(_, _, _, _, body, exit, _, _, _) => match body.ends_comparing(exit) {
             True => Cons(exit, body.conditions()),
             False => body.conditions(),
@@ -798,7 +798,7 @@ fn StructuredRegion::folds_in(self region: StructuredRegion, reads, conditions: 
         Compose(prefix, continuation) => prefix.folds_in(reads, conditions) ++ continuation.folds_in(reads, conditions),
         Conditional(_, _, _, _, when_true, when_false) => when_true.folds_in(reads, conditions) ++ when_false.folds_in(reads, conditions),
         Lend(_, _, _, _) => [],
-        Call(_, _, _) => [],
+        Call(_, _, _, _) => [],
         Loop(_, _, _, _, body, _, _, _, _) => body.folds_in(reads, conditions),
     }
 }
@@ -810,7 +810,7 @@ fn StructuredRegion::folded_rights(self region: StructuredRegion, reads, conditi
         Compose(prefix, continuation) => prefix.folded_rights(reads, conditions) ++ continuation.folded_rights(reads, conditions),
         Conditional(_, _, _, _, when_true, when_false) => when_true.folded_rights(reads, conditions) ++ when_false.folded_rights(reads, conditions),
         Lend(_, _, _, _) => [],
-        Call(_, _, _) => [],
+        Call(_, _, _, _) => [],
         Loop(_, _, _, _, body, _, _, _, _) => body.folded_rights(reads, conditions),
     }
 }
@@ -1066,32 +1066,59 @@ fn masked(registers: List<Gpr>, mask: Nat) → List<Gpr> {
 // caller saves unsaved, the file's otherwise.
 fn left_slot(spare: Bool, slot: Option<Held>) → Option<Held> { match spare { True => None, False => slot } }
 
-// The file after a call that saved `saved`: the result in RAX, the saved
-// registers and the ones no caller saves as before.
-fn File::called(self file: File, saved: List<Gpr>, result: Nat) → File {
+// Where a call's words past the first land (docs/native/runtime-fn-setups-design.md
+// §16.17): RDX, as System V returns a second word, then the other registers
+// a caller saves, so an internal call returns up to nine words in registers.
+fn answer_registers() → List<Gpr> { [Rdx, Rcx, Rsi, Rdi, R8, R9, R10, R11] }
+
+// What a call's words past the first leave in `register`: the id of the
+// word that lands there, if one does.
+fn answer_slot(registers: List<Gpr>, also: List<Nat>, register: Gpr) → Option<Held> {
+    match also {
+        Nil => None,
+        Cons(id, rest) => match registers {
+            Nil => None,
+            Cons(here, later) => match here.same(register) { True => Some(Held(id, Word)), False => answer_slot(later, rest, register) },
+        },
+    }
+}
+
+// The file after a call that saved `saved`: the result in RAX, its words
+// past the first in `answer_registers()`, the saved registers and the ones
+// no caller saves as before.
+fn File::called(self file: File, saved: List<Gpr>, result: Nat, also: List<Nat>) → File {
     File(slots_of(λ (register: Gpr) => match register.same(Rax) {
         True => Some(Held(result, Word)),
-        False => left_slot(register.caller_saved() && saved.spare(register), file.at(register)),
+        False => match register.caller_saved() {
+            False => file.at(register),
+            True => match answer_slot(answer_registers(), also, register) {
+                Some(held) => Some(held),
+                None => left_slot(saved.spare(register), file.at(register)),
+            },
+        },
     }), file.known)
 }
 
 // The registers of `registers` holding a word read after a call, as a mask:
-// what the call saves.
-fn call_mask(registers: List<Gpr>, file: File, after: Reads()) → Nat {
+// what the call saves. None of `taken`, where the call's words land.
+fn call_mask(registers: List<Gpr>, file: File, after: Reads(), taken: List<Gpr>) → Nat {
     match registers {
         Nil => 0,
-        Cons(register, rest) => (match file.at(register) {
-            None => 0,
-            Some(held) => match reads_has(after, held.id) { True => 1, False => 0 },
-        }) + 2 * call_mask(rest, file, after),
+        Cons(register, rest) => (match taken.spare(register) {
+            False => 0,
+            True => match file.at(register) {
+                None => 0,
+                Some(held) => match reads_has(after, held.id) { True => 1, False => 0 },
+            },
+        }) + 2 * call_mask(rest, file, after, taken),
     }
 }
 
-// A call planned: it saves the registers whose words are read after it, and
-// its result is in RAX.
-fn File::plan_call(self file: File, result: Nat, after: Reads()) → Planned {
-    shared(call_mask(saved_registers(), file, after), λ (mask: Nat) =>
-        Planned([Spilling(mask)], file.called(masked(saved_registers(), mask), result)))
+// A call planned: it saves the registers whose words are read after it but
+// the ones its words land in, and its result is in RAX.
+fn File::plan_call(self file: File, result: Nat, also: List<Nat>, after: Reads()) → Planned {
+    shared(call_mask(saved_registers(), file, after, answer_registers().take(also.len())), λ (mask: Nat) =>
+        Planned([Spilling(mask)], file.called(masked(saved_registers(), mask), result, also)))
 }
 
 fn into_all(registers: List<Gpr>) → List<Place> {
@@ -1169,8 +1196,8 @@ fn StructuredRegion::plan_in(self region: StructuredRegion, file: File, after: R
         // read after the lend crossing its call; then the call (`File::plan_call`).
         Lend(views, _, arguments, result) => shared(reads_add(after, views_homes(views) ++ arguments), λ (rest: Reads()) =>
             shared(plan_block(views_nodes(views), file, reads_add(rest, reads_of(views_nodes(views), [])), entries, registers, pool, folds, after, apart, sure, writes),
-                λ (first: Planned) => first.joined(first.file.plan_call(result, after)))),
-        Call(_, _, result) => file.plan_call(result, after),
+                λ (first: Planned) => first.joined(first.file.plan_call(result, [], after)))),
+        Call(_, _, result, also) => file.plan_call(result, also, after),
         Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) => {
             let live = Cons(limit, inputs);
             let read = reads_from(Cons(count, compared_exit(folds, exit) ++ next));

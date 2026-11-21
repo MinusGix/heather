@@ -1,0 +1,18 @@
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import bitvec_nat;
+import runtime;
+
+// `Bool` at a function's boundary (docs/native/runtime-fn-setups-design.md
+// §16.17): a `Bool` parameter is the lowest bit of its word and a `Bool`
+// result is returned as 0 or 1, which is what System V asks of a C `bool`
+// (its upper bits unspecified going in, 0 or 1 in AL coming out). Whether
+// `x` lies between `lo` and `hi`, the upper end counted when `closed`.
+runtime fn in_range(x, lo, hi: BitVec(64), closed: Bool) → Bool {
+    if x.unsigned_lt_bit(lo) { False } else { if x.unsigned_lt_bit(hi) { True } else { if closed { x.eq_bit(hi) } else { False } } }
+}
