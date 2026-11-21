@@ -12,6 +12,8 @@ import bitvec;
 import bitvec_nat;
 import rt;
 import rt_ptm;
+import rt_proc_program;
+import native_source;
 import runtime;
 
 // `n + (n - 1) + … + 0`: the call under a method call.
@@ -55,28 +57,24 @@ theorem doubled_not_four(): doubled::fits(4, [BitVec::ofNat(5), BitVec::ofNat(3)
 
 theorem doubled_value(): doubled(BitVec::ofNat(5), BitVec::ofNat(3)) = BitVec::ofNat(96) { refl }
 
-// A tail call is still a loop: `count_down` gets a `Compile` instance and
-// no `f::ptm`.
-runtime fn count_down(n, acc: u64) → u64 decreases n.toNat() {
-    match h: n.eq_bit(BitVec::ofNat(0)) {
-        True => acc,
-        False => count_down(n.sub(BitVec::ofNat(1)), acc.add(n)),
-    }
-    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
-}
+// A program: `main` over no words calls the recursion, its levels stated.
+// `sum_ten::source` is what `write-elf` compiles
+// (crates/cli/tests/native_recursion.rs), and `sum_ten::reads` says any
+// compile of it that is accepted exits with `sum_ten`'s value, 55.
+runtime(levels := 16) fn sum_ten() → u64 { rsum(BitVec::ofNat(10)) }
 
-// expect-error: `count_down` has no member `ptm`
-fn count_down_ptm() → PTm { count_down::ptm }
+theorem sum_ten_ptm(): sum_ten::ptm = Bind(Lit(Word(64), 10), Recur(0, [0], Value(Var(0)))) { refl }
 
-// A recursion that calls another function is not yet a procedure: refused
-// with the judgment's reason.
-runtime fn plus_one(x: u64) → u64 { x.add(BitVec::ofNat(1)) }
+theorem sum_ten_value(): sum_ten = BitVec::ofNat(55) { refl }
 
-// expect-error: a call of itself that is not the last thing it does
-runtime fn rcall(n: u64) → u64 decreases n.toNat() {
-    match h: n.eq_bit(BitVec::ofNat(0)) {
-        True => BitVec::ofNat(0),
-        False => plus_one(rcall(n.sub(BitVec::ofNat(1)))),
-    }
-    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+theorem sum_ten_levels(): sum_ten::source.levels = 16 { refl }
+
+theorem sum_ten_reads(): PTm::SourceReads(sum_ten::source, sum_ten) { sum_ten::reads }
+
+// What `write-elf` compiles: the generated source, and the same program
+// at nine levels, whose tenth nested call stops with the call-depth status.
+fn sum_ten_program() → Source { sum_ten::source }
+
+fn sum_ten_short() → Source {
+    PTm::program(sum_ten::ptm, PTm::defs_words([Word(64)], rsum::ptm), PTm::plain(RecInfo::none), 9).get(trivial)
 }

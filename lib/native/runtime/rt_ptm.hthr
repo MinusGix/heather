@@ -106,31 +106,48 @@ theorem PTm::calls_ok_mono(self t: PTm, w: rt::World, f: PCalls(), ok1, ok2: Nat
 // ---------------------------------------------------------------------------
 // A recursive function's body as a `PTm`
 
+// Whether a term calls entry `c`.
+fn Tm::calls_of(self t: Tm, c: Nat) → Bool {
+    match t {
+        Let(e, body) => e.calls_of(c) || body.calls_of(c),
+        If(_, yes, no) => yes.calls_of(c) || no.calls_of(c),
+        IfEq(_, yes, no) => yes.calls_of(c) || no.calls_of(c),
+        Call(f, _) => f.same(c),
+        Case(_, zero, succ) => zero.calls_of(c) || succ.calls_of(c),
+        Pick(_, _, arms, _) => arms.calls_of(c),
+        _ => False,
+    }
+}
+
+// `Tm::to_ptm` with the calls of entry `c` read as calls of procedure 0:
+// itself (`c` 0), or for a program's main the recursive function it calls.
+fn Tm::to_ptm_of(self t: Tm, c: Nat) → Option<PTm> {
+    match t.calls_of(c) {
+        False => Some(Value(t)),
+        True => match t {
+            Let(e, body) => match e {
+                Call(f, args) => match f.same(c) {
+                    True => body.to_ptm_of(c).map(λ b => Recur(0, args, b)),
+                    False => body.to_ptm_of(c).map(λ b => Bind(e, b)),
+                },
+                _ => match e.calls_of(c) { True => None, False => body.to_ptm_of(c).map(λ b => Bind(e, b)) },
+            },
+            If(x, yes, no) => yes.to_ptm_of(c).and_then(λ y => no.to_ptm_of(c).map(λ n => Choose(x, False, y, n))),
+            // The equation `match h:` convoys is read only in proofs.
+            IfEq(x, yes, no) => yes.to_ptm_of(c).and_then(λ y => no.to_ptm_of(c).map(λ n => Choose(x, True, y, n))),
+            Call(f, args) => match f.same(c) { True => Some(Recur(0, args, Value(Var(0)))), False => Some(Value(t)) },
+            _ => None,
+        },
+    }
+}
+
 // A function's reflected body, its calls of itself (entry 0) read as calls
 // of procedure 0: a self-call bound by a `Let` or as the body's value is a
 // `Recur`, a branch on a bit (`match` or `match h:`) with a self-call in
 // an arm is a `Choose`, and a part with no self-call is a `Bind` or the
 // `Value`. A self-call anywhere else (inside a bound term, a `Nat` or enum
 // match) is refused.
-fn Tm::to_ptm(self t: Tm) → Option<PTm> {
-    match t.calls_self() {
-        False => Some(Value(t)),
-        True => match t {
-            Let(e, body) => match e {
-                Call(f, args) => match f {
-                    Zero => body.to_ptm().map(λ b => Recur(0, args, b)),
-                    Succ(_) => body.to_ptm().map(λ b => Bind(e, b)),
-                },
-                _ => match e.calls_self() { True => None, False => body.to_ptm().map(λ b => Bind(e, b)) },
-            },
-            If(c, yes, no) => yes.to_ptm().and_then(λ y => no.to_ptm().map(λ n => Choose(c, False, y, n))),
-            // The equation `match h:` convoys is read only in proofs.
-            IfEq(c, yes, no) => yes.to_ptm().and_then(λ y => no.to_ptm().map(λ n => Choose(c, True, y, n))),
-            Call(f, args) => match f { Zero => Some(Recur(0, args, Value(Var(0)))), Succ(_) => Some(Value(t)) },
-            _ => None,
-        },
-    }
-}
+fn Tm::to_ptm(self t: Tm) → Option<PTm> { t.to_ptm_of(0) }
 
 // ---------------------------------------------------------------------------
 // Definitions over words: their meanings, their pins, and how deep their
@@ -247,7 +264,7 @@ fn Ty::is_word64(self t: Ty) → Bool { match t { Word(w) => w.same(64), _ => Fa
 fn Fun::recursive_ptm(self f: Fun) → Option<PTm> {
     match f.lent {
         Succ(_) => None,
-        Zero => match f.params.all_bit(λ t => t.is_word64()) && f.result.is_word64() && f.body.calls_self() {
+        Zero => match f.params.all_bit(λ t => t.is_word64()) && f.result.is_word64() && f.body.calls_of(0) {
             False => None,
             True => f.body.to_ptm(),
         },

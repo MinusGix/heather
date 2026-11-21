@@ -23,6 +23,7 @@ import rt;
 import rt_lower;
 import rt_io_lower;
 import rt_loop;
+import rt_ptm;
 import rt_proc;
 
 fn proc_world() → rt::World { rt::World(RecInfo::none, [], trivial) }

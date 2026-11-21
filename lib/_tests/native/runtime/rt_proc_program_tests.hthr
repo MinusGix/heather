@@ -25,6 +25,7 @@ import x86_64;
 import x86_64_asm;
 import rt;
 import rt_lower;
+import rt_ptm;
 import rt_proc;
 import rt_proc_program;
 

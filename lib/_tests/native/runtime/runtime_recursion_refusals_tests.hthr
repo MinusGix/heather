@@ -1,0 +1,59 @@
+// Refusals of a `runtime fn` recursion and of a program calling one
+// (docs/native/runtime-fn-recursion-design.md §2, §3), apart from
+// runtime_recursion_tests, which `write-elf` compiles. Tests, not library:
+// nothing outside lib/_tests imports this module.
+import logic;
+import nat;
+import bitvec;
+import bitvec_nat;
+import rt;
+import rt_ptm;
+import rt_proc_program;
+import runtime;
+
+runtime fn rsum(n: u64) → u64 decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => BitVec::ofNat(0),
+        False => n.add(rsum(n.sub(BitVec::ofNat(1)))),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+runtime fn count_down(n, acc: u64) → u64 decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => acc,
+        False => count_down(n.sub(BitVec::ofNat(1)), acc.add(n)),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+// Ten nested calls do not fit within nine levels: refused, saying so.
+// expect-error: nest deeper than `levels := 9`
+runtime(levels := 9) fn sum_ten_shallow() → u64 { rsum(BitVec::ofNat(10)) }
+
+// A program that calls a recursion states its levels.
+// expect-error: say how many nested calls it has room for
+runtime fn sum_ten_unstated() → u64 { rsum(BitVec::ofNat(10)) }
+
+// A recursion lifts its callers to statements: a caller with words is not
+// built yet, and is refused naming the recursion.
+// expect-error: which calls itself, so it is a call between statements
+runtime fn rsum_twice(n: u64) → u64 { rsum(n).add(rsum(n)) }
+
+// A tail call is still a loop: `count_down` gets a `Compile` instance and
+// no `f::ptm`.
+// expect-error: `count_down` has no member `ptm`
+fn count_down_ptm() → PTm { count_down::ptm }
+
+// A recursion that calls another function is not yet a procedure: refused
+// with the judgment's reason.
+runtime fn plus_one(x: u64) → u64 { x.add(BitVec::ofNat(1)) }
+
+// expect-error: a call of itself that is not the last thing it does
+runtime fn rcall(n: u64) → u64 decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => BitVec::ofNat(0),
+        False => plus_one(rcall(n.sub(BitVec::ofNat(1)))),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}

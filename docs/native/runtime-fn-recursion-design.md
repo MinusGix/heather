@@ -206,6 +206,37 @@ contract for it must sort out first. So pure recursion comes first.
   value and leaves the world as it was. `crates/cli/tests/native_recursion.rs`
   runs `sum(10)` compiled: 55 within 16 levels, the call-depth status 139
   within 9.
+- **Step 4, the generator (2026-11-21).** A `runtime fn` whose call of
+  itself is not its last act, over words with a word result and calling
+  nothing else, is no longer refused: where the judgment refuses it and
+  `Fun::recursive_ptm` reads its body, the generator publishes `f::rt`,
+  `f::ptm`, `f::guarded` (`PTm::GuardedWords`, proved from `f::ext` and
+  `f::irrel` as a measured loop's guard is), `f::unfolds` and `f::fits`
+  (`f::fits(10, [10]) = True` by `refl`). The terms, their meaning and the
+  pins moved to `rt_ptm` (`lib/native/runtime/rt_ptm.hthr`), which needs
+  only `rt`, so `runtime` reads them without the native-source chain;
+  `rt_proc` keeps the lowering.
+- **A program, and its levels.** `runtime(levels := 16) fn main() → u64 {
+  f(10) }`, a main over no words calling one recursion, publishes
+  `main::ptm`, `main::source` (`PTm::program(…).get(trivial)`) and
+  `main::reads: PTm::SourceReads(main::source, main)`: any compile of the
+  source that is accepted, run against any world, exits with `main`'s
+  value. It is `PTm::source_reads` (`rt_proc_program`), which reads the
+  premises off the equation that made the source; the generator closes
+  each by evaluation after checking `PTm::program_verdict` itself, so a
+  main whose calls go deeper than its levels is refused saying so, as is
+  one that states none (§3's sentence). The levels are the generator's
+  argument, the builder spelling §3 allows, rather than a `levels n`
+  clause in the header: a parser change bought nothing the argument does
+  not. A caller with words of a recursion is refused naming it (§2's
+  rule, not yet built). `write-elf` runs `main::source` to 55, and the
+  same program at nine levels to the call-depth status
+  (`crates/cli/tests/native_recursion.rs`).
+- **Companions for non-tail calls.** The unfolding walk (`f_unfold`,
+  `f::ext`, `f::irrel`; docs/language/recursion/decreases-unfolding-design.md
+  §3) refused a recursive call under a method call (`n.add(f(n - 1))`) or
+  bound by a `let`; both are walked now, which is what `f::guarded` is
+  proved from.
 - A closed probe (`lib/_tests/native/runtime/rt_proc_tests.hthr`): a
   non-tail recursive sum lowers, fits within 10 levels at 10 and not 9,
   its statements run to 55 at 10 with the world untouched, and a wrong-arity call and a bit-valued body are
