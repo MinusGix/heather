@@ -217,6 +217,16 @@ theorem FTm::bind_sound(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, ne
     }
 }
 
+// `FTm::bind_sound` with the binding read through `FTm::rest_of`.
+theorem FTm::bind_sound_of(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, next: Nat, a: Ty,
+    ma: Env(fw.w.tys, g) → List<BitVec(8)> → Mutated<List<BitVec(8)>, a.sem(fw.w.tys)>, b: Ty,
+    mb: Env(fw.w.tys, Cons(a, g)) → List<BitVec(8)> → Mutated<List<BitVec(8)>, b.sem(fw.w.tys)>, lc, lb: Lowered,
+    first: FTm::StepHolds(fw, base, g, ports, next, a, ma, Some(lc)),
+    then: FTm::StepHolds(fw, base, Cons(a, g), Cons(lc.result, ports), lc.next, b, mb, Some(lb))):
+    FTm::StepHolds(fw, base, g, ports, next, b, λ env own => FTm::rest_of(fw, g, a, b, mb, ma(env, own), env), Tm::compose(lc, lb)) {
+    FTm::bind_sound(fw, base, g, ports, next, a, ma, b, mb, lc, lb, first, then)
+}
+
 // ---------------------------------------------------------------------------
 // The branch
 
@@ -1090,6 +1100,500 @@ theorem FTm::lend_sound(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, ne
 }
 
 // ---------------------------------------------------------------------------
+// What a computation reads: as for a pure term (`Tm::Within`, rt_lower), a
+// loop carries the variables its test and body read, and a computation's
+// meaning is the same at two environments that agree on those
+// (`FTm::sem_kept`). A lend is not read inside a loop yet.
+
+fn FTm::Within(self t: FTm, keep: Nat → Bool) → Type {
+    match t {
+        Pure(v) => v.Within(keep),
+        Let(e, body) => e.Within(keep) ∧ body.Within(Tm::under(keep)),
+        If(c, yes, no) => (keep(c) = True) ∧ (yes.Within(keep) ∧ no.Within(keep)),
+        IfEq(c, yes, no) => (keep(c) = True) ∧ (yes.Within(keep) ∧ no.Within(keep)),
+        Put(i, length, v, body) => Tm::AllKept([i, length, v], keep) ∧ body.Within(keep),
+        Call(_, args, body) => Tm::AllKept(args, keep) ∧ body.Within(Tm::under(keep)),
+        Again(args) => Tm::AllKept(args, keep),
+        Lend(_, _, _, _) => False,
+        Loop(init, test, body, rest) => (keep(init) = True) ∧
+            (test.Within(Tm::under(keep)) ∧ (body.Within(Tm::under(keep)) ∧ rest.Within(Tm::under(keep)))),
+    }
+}
+
+fn FTm::check_within(self t: FTm) → (keep: Nat → Bool) → Option<t.Within(keep)> {
+    match t as λ u => (keep: Nat → Bool) → Option<u.Within(keep)> {
+        Pure(v) => λ keep => v.check_within(keep),
+        Let(e, body) => λ keep => Tm::both(e.check_within(keep), body.check_within(Tm::under(keep))),
+        If(c, yes, no) => λ keep => Tm::both(Tm::kept_at(keep, c), Tm::both(yes.check_within(keep), no.check_within(keep))),
+        IfEq(c, yes, no) => λ keep => Tm::both(Tm::kept_at(keep, c), Tm::both(yes.check_within(keep), no.check_within(keep))),
+        Put(i, length, v, body) => λ keep => Tm::both(Tm::check_all_kept([i, length, v], keep), body.check_within(keep)),
+        Call(_, args, body) => λ keep => Tm::both(Tm::check_all_kept(args, keep), body.check_within(Tm::under(keep))),
+        Again(args) => λ keep => Tm::check_all_kept(args, keep),
+        Lend(_, _, _, _) => λ keep => None,
+        Loop(init, test, body, rest) => λ keep => Tm::both(Tm::kept_at(keep, init),
+            Tm::both(test.check_within(Tm::under(keep)), Tm::both(body.check_within(Tm::under(keep)), rest.check_within(Tm::under(keep))))),
+    }
+}
+
+// The variables a computation reads, a guess `check_within` checks.
+fn FTm::vars(self t: FTm) → List<Nat> {
+    match t {
+        Pure(v) => v.vars(),
+        Let(e, body) => e.vars() ++ Tm::unbind(body.vars()),
+        If(c, yes, no) => Cons(c, yes.vars() ++ no.vars()),
+        IfEq(c, yes, no) => Cons(c, yes.vars() ++ no.vars()),
+        Put(i, length, v, body) => Cons(i, Cons(length, Cons(v, body.vars()))),
+        Call(_, args, body) => args ++ Tm::unbind(body.vars()),
+        Again(args) => args,
+        Lend(_, _, _, _) => Nil,
+        Loop(init, test, body, rest) => Cons(init, Tm::unbind(test.vars()) ++ (Tm::unbind(body.vars()) ++ Tm::unbind(rest.vars()))),
+    }
+}
+
+theorem FTm::apply_kept(tys: Nat → RecInfo, g: List<Ty>, keep: Nat → Bool, e1, e2: Env(tys, g), a: Env::Agree(tys, g, keep, e1, e2), R: Type, d: R,
+    ps: List<Ty>): (f: Ty::ArrowsTo(tys, ps, R)) → (vs: List<Nat>) → Tm::AllKept(vs, keep) →
+    FTm::apply(tys, g, e1, R, d, ps, f, vs) = FTm::apply(tys, g, e2, R, d, ps, f, vs) {
+    match ps {
+        Nil => λ f vs _ => refl,
+        Cons(p, rest) => λ f vs => match vs as λ l => Tm::AllKept(l, keep) → FTm::apply(tys, g, e1, R, d, Cons(p, rest), f, l) = FTm::apply(tys, g, e2, R, d, Cons(p, rest), f, l) {
+            Nil => λ _ => refl,
+            Cons(v, more) => λ h => trans(
+                cong_fn(λ (x: Ty::at(g, v).sem(tys)) => FTm::apply(tys, g, e1, R, d, rest, f(Ty::cast(tys, Ty::at(g, v), p, x)), more), a(v, h.left)),
+                FTm::apply_kept(tys, g, keep, e1, e2, a, R, d, rest, f(Ty::cast(tys, Ty::at(g, v), p, Env::get(tys, g, e2, v))), more, h.right)),
+        },
+    }
+}
+
+// A pure term's value at the span as it is reads only what the term reads.
+theorem FTm::value_kept(fw: FWorld, own: List<BitVec(8)>, t: Tm, keep: Nat → Bool, g: List<Ty>, e1, e2: Env(fw.w.tys, g), h: t.Within(keep),
+    a: Env::Agree(fw.w.tys, g, keep, e1, e2)): FTm::value(fw, own, t, g, e1) = FTm::value(fw, own, t, g, e2) {
+    cong_fn(λ (x: t.ty(fw.at(own), g).sem(fw.w.tys)) => Ty::cast(fw.w.tys, t.ty(fw.at(own), g), t.ty(fw.w, g), x),
+        Tm::sem_kept(t, fw.at(own), keep, g, e1, e2, h, a))
+}
+
+// A loop's turns at two environments that agree, with bodies that agree,
+// are one.
+theorem FTm::turn_kept(fw: FWorld, g: List<Ty>, keep: Nat → Bool, e1, e2: Env(fw.w.tys, g), a: Env::Agree(fw.w.tys, g, keep, e1, e2), st: Ty, test: Tm,
+    h: test.Within(Tm::under(keep)), bt: Ty, run1, run2: Env(fw.w.tys, Cons(st, g)) → List<BitVec(8)> → Mutated<List<BitVec(8)>, bt.sem(fw.w.tys)>,
+    same: (s: st.sem(fw.w.tys)) → (own: List<BitVec(8)>) → run1(Pair(s, e1), own) = run2(Pair(s, e2), own),
+    p: Mutated<List<BitVec(8)>, st.sem(fw.w.tys)>): FTm::turn(fw, g, e1, st, test, bt, run1, p) = FTm::turn(fw, g, e2, st, test, bt, run2, p) {
+    let tys = fw.w.tys;
+    let inner = Cons(st, g);
+    eq2(λ (b: Bool) (y: Mutated<List<BitVec(8)>, st.sem(tys)>) => loop::Step::turn(b, λ _ => y, p),
+        cong_fn(λ (x: test.ty(fw.w, inner).sem(tys)) => Ty::cast(tys, test.ty(fw.w, inner), Bit, x),
+            FTm::value_kept(fw, p.after, test, Tm::under(keep), inner, Pair(p.value, e1), Pair(p.value, e2), h,
+                Env::agree_under(tys, g, st, keep, p.value, p.value, refl, e1, e2, a))),
+        cong_fn(λ (m: Mutated<List<BitVec(8)>, bt.sem(tys)>) => FTm::recast(tys, bt, st, m), same(p.value, p.after)))
+}
+
+// A computation's meaning reads only the variables it reads.
+theorem FTm::sem_kept(self t: FTm, fw: FWorld): (keep: Nat → Bool) → (g: List<Ty>) → (e1, e2: Env(fw.w.tys, g)) → (own: List<BitVec(8)>) →
+    t.Within(keep) → Env::Agree(fw.w.tys, g, keep, e1, e2) → t.sem(fw, g, e1, own) = t.sem(fw, g, e2, own) {
+    let tys = fw.w.tys;
+    match t {
+        Pure(v) => λ keep g e1 e2 own h a => cong_fn(λ (x: v.ty(fw.w, g).sem(tys)) => Mutated(own, x), FTm::value_kept(fw, own, v, keep, g, e1, e2, h, a)),
+        Let(e, body) => λ keep g e1 e2 own h a => {
+            let same_e = FTm::value_kept(fw, own, e, keep, g, e1, e2, h.left, a);
+            FTm::sem_kept(body, fw, Tm::under(keep), Cons(e.ty(fw.w, g), g), Pair(FTm::value(fw, own, e, g, e1), e1), Pair(FTm::value(fw, own, e, g, e2), e2), own,
+                h.right, Env::agree_under(tys, g, e.ty(fw.w, g), keep, FTm::value(fw, own, e, g, e1), FTm::value(fw, own, e, g, e2), same_e, e1, e2, a))
+        },
+        If(c, yes, no) => λ keep g e1 e2 own h a => {
+            let T = Mutated<List<BitVec(8)>, yes.ty(fw.w, fw.fsigs, g).sem(tys)>;
+            let N = Mutated<List<BitVec(8)>, no.ty(fw.w, fw.fsigs, g).sem(tys)>;
+            let pick = λ (b: Bool) (y: T) (n: N) => match b as λ _ => T {
+                False => FTm::recast(tys, no.ty(fw.w, fw.fsigs, g), yes.ty(fw.w, fw.fsigs, g), n), True => y };
+            trans(cong_fn(λ (x: Ty::at(g, c).sem(tys)) => pick(Ty::cast(tys, Ty::at(g, c), Bit, x), yes.sem(fw, g, e1, own), no.sem(fw, g, e1, own)), a(c, h.left)),
+                eq2(λ (y: T) (n: N) => pick(Ty::cast(tys, Ty::at(g, c), Bit, Env::get(tys, g, e2, c)), y, n),
+                    FTm::sem_kept(yes, fw, keep, g, e1, e2, own, h.right.left, a), FTm::sem_kept(no, fw, keep, g, e1, e2, own, h.right.right, a)))
+        },
+        IfEq(c, yes, no) => λ keep g e1 e2 own h a => {
+            let T = Mutated<List<BitVec(8)>, yes.ty(fw.w, fw.fsigs, g).sem(tys)>;
+            let N = Mutated<List<BitVec(8)>, no.ty(fw.w, fw.fsigs, g).sem(tys)>;
+            let pick = λ (b: Bool) (y: T) (n: N) => Tm::convoy(T, b, y, FTm::recast(tys, no.ty(fw.w, fw.fsigs, g), yes.ty(fw.w, fw.fsigs, g), n));
+            trans(cong_fn(λ (x: Ty::at(g, c).sem(tys)) => pick(Ty::cast(tys, Ty::at(g, c), Bit, x), yes.sem(fw, g, e1, own), no.sem(fw, g, e1, own)), a(c, h.left)),
+                eq2(λ (y: T) (n: N) => pick(Ty::cast(tys, Ty::at(g, c), Bit, Env::get(tys, g, e2, c)), y, n),
+                    FTm::sem_kept(yes, fw, keep, g, e1, e2, own, h.right.left, a), FTm::sem_kept(no, fw, keep, g, e1, e2, own, h.right.right, a)))
+        },
+        Put(i, length, v, body) => λ keep g e1 e2 own h a => {
+            let put = λ (e: Env(tys, g)) => FTm::put(tys, g, e, i, length, v, own);
+            let stored = λ (x: Ty::at(g, i).sem(tys)) (y: Ty::at(g, length).sem(tys)) (z: Ty::at(g, v).sem(tys)) =>
+                own.with_byte_within(Ty::cast(tys, Ty::at(g, length), Word(64), y), Ty::cast(tys, Ty::at(g, i), Word(64), x), Ty::cast(tys, Ty::at(g, v), Word(8), z));
+            let same_put: (put(e1) = put(e2)) = trans(
+                eq2(λ (x: Ty::at(g, i).sem(tys)) (y: Ty::at(g, length).sem(tys)) => stored(x, y, Env::get(tys, g, e1, v)), a(i, h.left.left), a(length, h.left.right.left)),
+                cong_fn(λ (z: Ty::at(g, v).sem(tys)) => stored(Env::get(tys, g, e2, i), Env::get(tys, g, e2, length), z), a(v, h.left.right.right.left)));
+            trans(cong_fn(λ (o: List<BitVec(8)>) => body.sem(fw, g, e1, o), same_put), FTm::sem_kept(body, fw, keep, g, e1, e2, put(e2), h.right, a))
+        },
+        Call(f, args, body) => λ keep g e1 e2 own h a => {
+            let r = Sig::at(fw.fsigs, f).result;
+            let M = Mutated<List<BitVec(8)>, r.sem(tys)>;
+            let same_call: (FTm::called(fw, g, e1, f, args, own) = FTm::called(fw, g, e2, f, args, own)) =
+                FTm::apply_kept(tys, g, keep, e1, e2, a, M, Mutated(own, r.default(tys)), Sig::at(fw.fsigs, f).params,
+                    FTm::get(tys, fw.fsigs, fw.writers(fw.rest), f, own), args, h.left);
+            trans(cong_fn(λ (m: M) => body.sem(fw, Cons(r, g), Pair(m.value, e1), m.after), same_call),
+                FTm::sem_kept(body, fw, Tm::under(keep), Cons(r, g), Pair(FTm::called(fw, g, e2, f, args, own).value, e1),
+                    Pair(FTm::called(fw, g, e2, f, args, own).value, e2), FTm::called(fw, g, e2, f, args, own).after, h.right,
+                    Env::agree_under(tys, g, r, keep, FTm::called(fw, g, e2, f, args, own).value, FTm::called(fw, g, e2, f, args, own).value, refl, e1, e2, a)))
+        },
+        Again(args) => λ keep g e1 e2 own h a => {
+            let r = Sig::at(fw.fsigs, 0).result;
+            FTm::apply_kept(tys, g, keep, e1, e2, a, Mutated<List<BitVec(8)>, r.sem(tys)>, Mutated(own, r.default(tys)), Sig::at(fw.fsigs, 0).params,
+                FTm::get(tys, fw.fsigs, fw.writers(fw.rest), 0, own), args, h)
+        },
+        Lend(_, _, _, _) => λ keep g e1 e2 own h a => false_elim(h),
+        Loop(init, test, body, rest) => λ keep g e1 e2 own h a => {
+            let st = Ty::at(g, init);
+            let inner = Cons(st, g);
+            let bt = body.ty(fw.w, fw.fsigs, inner);
+            let M = Mutated<List<BitVec(8)>, st.sem(tys)>;
+            let run = λ (e: Env(tys, inner)) (o: List<BitVec(8)>) => body.sem(fw, inner, e, o);
+            let turn = λ (e: Env(tys, g)) => FTm::turn(fw, g, e, st, test, bt, run);
+            let under = λ (s: st.sem(tys)) => Env::agree_under(tys, g, st, keep, s, s, refl, e1, e2, a);
+            let ended = λ (e: Env(tys, g)) (x: st.sem(tys)) => loop::Loop::steps(loop::Loop::passes(), turn(e), Mutated(own, x));
+            let same_end: (ended(e1, Env::get(tys, g, e1, init)) = ended(e2, Env::get(tys, g, e2, init))) =
+                trans(cong_fn(λ (x: st.sem(tys)) => ended(e1, x), a(init, h.left)),
+                    loop::Loop::steps_ext(turn(e1), turn(e2), λ p => FTm::turn_kept(fw, g, keep, e1, e2, a, st, test, h.right.left, bt, run, run,
+                        λ s o => FTm::sem_kept(body, fw, Tm::under(keep), inner, Pair(s, e1), Pair(s, e2), o, h.right.right.left, under(s)), p),
+                        loop::Loop::passes(), Mutated(own, Env::get(tys, g, e2, init))));
+            let m2 = ended(e2, Env::get(tys, g, e2, init));
+            trans(cong_fn(λ (m: M) => rest.sem(fw, inner, Pair(m.value, e1), m.after), same_end),
+                FTm::sem_kept(rest, fw, Tm::under(keep), inner, Pair(m2.value, e1), Pair(m2.value, e2), m2.after, h.right.right.right, under(m2.value)))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A loop: `Tm`'s `Iterate` lowering (`Tm::iter_region`, rt_lower) with the
+// span threaded. The region is the same FunctionIR `Loop`: the state and
+// the variables the test and body read carried as its parameters, a pass
+// the test, the body's branch and the exit bit. A pass may store, so its
+// relation to the meaning's state holds the file as well as the words: the
+// state's words, the context's, and the file with the state's span first
+// (`FTm::LoopWords`).
+
+fn FTm::loop_keeps(g: List<Ty>, st: Ty, test: Tm, body: FTm) → List<Bool> { Tm::keeps(g, st, Tm::unbind(test.vars()) ++ Tm::unbind(body.vars()), 0) }
+
+fn FTm::loop_keep(g: List<Ty>, st: Ty, test: Tm, body: FTm) → Nat → Bool { Tm::under(λ i => Tm::flag(FTm::loop_keeps(g, st, test, body), i)) }
+
+fn FTm::loop_checked(w: World, fsigs: List<Sig>, st: Ty, inner: List<Ty>, test: Tm, body: FTm, pi, next: Nat, c: Carry, lt, lb: Lowered) → Option<Lowered> {
+    Tm::ty(test, w, inner).check(Bit).and_then(λ _ => body.ty(w, fsigs, inner).check(st).and_then(λ _ =>
+        Some(Tm::iter_region(w.tys, st, pi, next, c, lt, lb))))
+}
+
+fn FTm::lower_loop(w: World, fsigs: List<Sig>, base: Nat, g: List<Ty>, ports: List<Nat>, next, init, pi: Nat, test: Tm, body: FTm,
+    lower_body: List<Nat> → Nat → Option<Lowered>) → Option<Lowered> {
+    Ty::at(g, init).check_carries(w.tys).and_then(λ _ =>
+    Tm::both(test.check_within(FTm::loop_keep(g, Ty::at(g, init), test, body)), body.check_within(FTm::loop_keep(g, Ty::at(g, init), test, body))).and_then(λ _ =>
+    Tm::carry(w.tys, Ty::at(g, init), next + 1, g, FTm::loop_keeps(g, Ty::at(g, init), test, body), ports, Tm::iter_at(w.tys, Ty::at(g, init), next)).and_then(λ c =>
+    FTm::lower_value(test, w, base, Cons(Ty::at(g, init), g), Cons(next + 1, c.inner), Fun::past(c.cells, Tm::iter_at(w.tys, Ty::at(g, init), next)) + 1).and_then(λ lt =>
+    lower_body(Cons(next + 1, c.inner), lt.next).and_then(λ lb =>
+        FTm::loop_checked(w, fsigs, Ty::at(g, init), Cons(Ty::at(g, init), g), test, body, pi, next, c, lt, lb))))))
+}
+
+// The loop's relation of words and a file to a state: the state's words
+// and the context's `ctx`, and the file the state's span over `rest`.
+fn FTm::LoopWords(tys: Nat → RecInfo, st: Ty, ctx: List<BitVec(64)>, rest: List<List<BitVec(8)>>)
+    → List<BitVec(64)> → Buffers() → Mutated<List<BitVec(8)>, st.sem(tys)> → Type {
+    λ ws file p => Tm::IterWords(tys, st, ctx, ws, p.value) ∧ (file = Cons(p.after, rest))
+}
+
+// What a pass promises the loop of a step `q`, the file with the words.
+fn FTm::Passes<S>(after: State, exit: Nat, next: List<Nat>, R: List<BitVec(64)> → Buffers() → S → Type, q: loop::Step<S>) → Type {
+    match q {
+        Next(t) => (after.values(1, exit).head_bit() = False) ∧ R(words_of(after.values, next), after.buffers, t),
+        Stop(t) => (after.values(1, exit).head_bit() = True) ∧ R(words_of(after.values, next), after.buffers, t),
+    }
+}
+
+// `Tm::loop_steps` with the file threaded: a loop whose passes each take
+// words and a file related to a state to those of its step runs the
+// iteration.
+theorem FTm::loop_runs<S>(step: Valuation() → Buffers() → State, parameters: List<Nat>, count, exit: Nat, next: List<Nat>,
+    R: List<BitVec(64)> → Buffers() → S → Type, turn: S → loop::Step<S>,
+    pass: (r: Nat) → (ws: List<BitVec(64)>) → (file: Buffers()) → (s: S) → R(ws, file, s) →
+        FTm::Passes(step(pass_valuation(parameters, count, r + 1, ws), file), exit, next, R, turn(s)), k: Nat):
+    (ws: List<BitVec(64)>) → (file: Buffers()) → (s: S) → R(ws, file, s) →
+    R(loop_run(step, parameters, count, exit, next, k, ws, file).end.state, loop_run(step, parameters, count, exit, next, k, ws, file).buffers,
+        loop::Loop::steps(k, turn, s)) {
+    match k {
+        Zero => λ ws file s h => h,
+        Succ(r) => λ ws file s h => {
+            let after = step(pass_valuation(parameters, count, r + 1, ws), file);
+            let ends = λ (b: Bool) => match b {
+                False => loop_run(step, parameters, count, exit, next, r, words_of(after.values, next), after.buffers),
+                True => LoopState(LoopEnd(words_of(after.values, next), False), after.buffers),
+            };
+            (match turn(s) as λ q => FTm::Passes(after, exit, next, R, q) →
+                R(ends(after.values(1, exit).head_bit()).end.state, ends(after.values(1, exit).head_bit()).buffers,
+                    match q { Next(t) => loop::Loop::steps(r, turn, t), Stop(t) => t }) {
+                Next(t) => λ p => j(sym(p.left), λ b _ => R(ends(b).end.state, ends(b).buffers, loop::Loop::steps(r, turn, t)),
+                    FTm::loop_runs(step, parameters, count, exit, next, R, turn, pass, r, words_of(after.values, next), after.buffers, t, p.right)),
+                Stop(t) => λ p => j(sym(p.left), λ b _ => R(ends(b).end.state, ends(b).buffers, t), p.right),
+            })(pass(r, ws, file, s, h))
+        },
+    }
+}
+
+// One pass: from words related to a state `p` and the file holding its
+// span, the test and body read the state at its parameters and the
+// context at theirs; the exit bit is set where the test failed, and the
+// next words and file are related to the step's state.
+theorem FTm::loop_pass(fw: FWorld, base: Nat, g: List<Ty>, init: Nat, test: Tm, body: FTm, next: Nat, ok: Ty::at(g, init).Carries(fw.w.tys), c: Carry,
+    lt, lb: Lowered,
+    c_below: Below(fw.w.tys, g, c.inner, Fun::past(c.cells, Tm::iter_at(fw.w.tys, Ty::at(g, init), next)) + 1),
+    t_holds: FTm::ValueHolds(test, fw, base, Cons(Ty::at(g, init), g), Cons(next + 1, c.inner),
+        Fun::past(c.cells, Tm::iter_at(fw.w.tys, Ty::at(g, init), next)) + 1, Some(lt)),
+    b_holds: FTm::StepHolds(fw, base, Cons(Ty::at(g, init), g), Cons(next + 1, c.inner), lt.next, body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)),
+        λ env own => body.sem(fw, Cons(Ty::at(g, init), g), env, own), Some(lb)),
+    e_t: Tm::ty(test, fw.w, Cons(Ty::at(g, init), g)) = Bit, e_b: body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)) = Ty::at(g, init),
+    call: Writers(), agree: FTm::CallsAgree(fw, base, call), env: Env(fw.w.tys, g), ctx: List<BitVec(64)>, ctx_len: ctx.len() = c.cells.len(),
+    carried: (b: Valuation()) → words_of(b, Fun::param_ids(c.cells, Tm::iter_at(fw.w.tys, Ty::at(g, init), next))) = ctx →
+        EnvHolds(fw.w.tys, b, g, c.inner, Env::refill(fw.w.tys, g, FTm::loop_keeps(g, Ty::at(g, init), test, body), c.inner, b, env)),
+    wi: test.Within(FTm::loop_keep(g, Ty::at(g, init), test, body)) ∧ body.Within(FTm::loop_keep(g, Ty::at(g, init), test, body)),
+    r: Nat, ws: List<BitVec(64)>, p: Mutated<List<BitVec(8)>, Ty::at(g, init).sem(fw.w.tys)>, h: Tm::IterWords(fw.w.tys, Ty::at(g, init), ctx, ws, p.value)):
+    (Fun::past(c.cells, Tm::iter_at(fw.w.tys, Ty::at(g, init), next)) + 1 <= lt.next) ∧ ((lt.next <= lb.next) ∧
+    FTm::Passes(Tm::iter_pass(fw.w.tys, Ty::at(g, init), next, lt, lb).run(call,
+            pass_valuation(Fun::param_ids(Ty::at(g, init).cells(fw.w.tys) ++ c.cells, next + 1),
+                Fun::past(c.cells, Tm::iter_at(fw.w.tys, Ty::at(g, init), next)), r + 1, ws), Cons(p.after, fw.rest)),
+        Tm::iter_branch(fw.w.tys, Ty::at(g, init), next, lt, lb).next + 1,
+        Fun::param_ids(Ty::at(g, init).cells(fw.w.tys), lb.next) ++ Fun::param_ids(c.cells, Tm::iter_at(fw.w.tys, Ty::at(g, init), next)),
+        FTm::LoopWords(fw.w.tys, Ty::at(g, init), ctx, fw.rest),
+        FTm::turn(fw, g, env, Ty::at(g, init), test, body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)),
+            λ e o => body.sem(fw, Cons(Ty::at(g, init), g), e, o), p))) {
+    let tys = fw.w.tys;
+    let st = Ty::at(g, init);
+    let inner = Cons(st, g);
+    let bt = body.ty(fw.w, fw.fsigs, inner);
+    let cs = st.cells(tys);
+    let n = cs.len();
+    let at = Tm::iter_at(tys, st, next);
+    let c0 = Fun::past(c.cells, at);
+    let all = cs ++ c.cells;
+    let params = Fun::param_ids(all, next + 1);
+    let sids = Fun::param_ids(cs, next + 1);
+    let cids = Fun::param_ids(c.cells, at);
+    let ports2 = Cons(next + 1, c.inner);
+    let br = Tm::iter_branch(tys, st, next, lt, lb);
+    let file: Buffers() = Cons(p.after, fw.rest);
+    let s = p.value;
+    let counted = Valuation::set(Valuation::zero(), c0, word_value(BitVec::ofNat(r + 1)));
+    let pv = pass_valuation(params, c0, r + 1, ws);
+    let ws_len: (params.len() = ws.len()) = trans(Fun::ids_len(all, next + 1),
+        trans(List::len_append(cs, c.cells), sym(trans(Tm::iter_words_len(tys, st, ctx, ws, s, h), cong_fn(λ (k: Nat) => n + k, ctx_len)))));
+    let bound: (words_of(pv, params) = ws) = words_of_bind(counted, params, Fun::ids_distinct(all, next + 1), ws, ws_len);
+    let halves = Tm::split_eq(words_of(pv, sids), words_of(pv, cids), ws.take(n), ctx,
+        trans(sym(Fun::words_append(pv, sids, cids)), trans(cong_fn(λ (l: List<Nat>) => words_of(pv, l), sym(Fun::ids_append(cs, c.cells, next + 1))),
+            trans(bound, sym(h.left)))),
+        trans(words_of_len(pv, sids), trans(Fun::ids_len(cs, next + 1), sym(h.right.left))));
+    let held_s: st.Holds(tys, pv, next + 1, s) = st.words_hold_in(tys, ok, pv, next + 1, ws.take(n), s, halves.left, h.right.left, h.right.right);
+    let c1: (c0 <= c0 + 1) = Nat::le_succ_r(c0, c0, c0.le_refl());
+    let below2: Below(tys, inner, ports2, c0 + 1) =
+        ⟨st.below_cells(tys, next + 1, c0 + 1, Nat::le_trans(at, c0, c0 + 1, Fun::past_ge(c.cells, at), c1)), c_below⟩;
+    let env2 = Pair(s, env);
+    let ks = FTm::loop_keeps(g, st, test, body);
+    let refilled = Env::refill(tys, g, ks, c.inner, pv, env);
+    let env2x = Pair(s, refilled);
+    let ag = Env::agree_under(tys, g, st, λ i => Tm::flag(ks, i), s, s, refl, env, refilled, Env::refill_agree(tys, g, ks, c.inner, pv, env));
+    let same_t: (FTm::value(fw, p.after, test, inner, env2) = FTm::value(fw, p.after, test, inner, env2x)) =
+        FTm::value_kept(fw, p.after, test, FTm::loop_keep(g, st, test, body), inner, env2, env2x, wi.left, ag);
+    let same_b: (body.sem(fw, inner, env2, p.after) = body.sem(fw, inner, env2x, p.after)) =
+        FTm::sem_kept(body, fw, FTm::loop_keep(g, st, test, body), inner, env2, env2x, p.after, wi.right, ag);
+    let held2: EnvHolds(tys, pv, inner, ports2, env2x) = ⟨held_s, carried(pv, halves.right)⟩;
+    // The test: it leaves the file, its bit at `lt.result`.
+    let ran_t = t_holds(call, agree, pv, env2x, p.after, held2, below2);
+    let mid_t = lt.region.run(call, pv, file);
+    let pvt = mid_t.values;
+    let tv = Ty::cast(tys, Tm::ty(test, fw.w, inner), Bit, FTm::value(fw, p.after, test, inner, env2));
+    let bit_t: (pvt(1, lt.result) = BitVec::ofBool(tv)) =
+        trans(Ty::cast_holds(tys, pvt, lt.result, Tm::ty(test, fw.w, inner), Bit, e_t, FTm::value(fw, p.after, test, inner, env2x), ran_t.right.right.right.left),
+            cong_fn(λ (x: Tm::ty(test, fw.w, inner).sem(tys)) => BitVec::ofBool(Ty::cast(tys, Tm::ty(test, fw.w, inner), Bit, x)), sym(same_t)));
+    let tr_lt: (lt.result < lt.next) = Ty::below_cast(tys, Tm::ty(test, fw.w, inner), Bit, e_t, lt.result, lt.next, ran_t.right.left);
+    let mid_is: (mid_t = State(pvt, file)) = mid_t.left(file, ran_t.right.right.right.right);
+    let held_t: EnvHolds(tys, pvt, inner, ports2, env2x) = env_holds_keeps(tys, inner, pv, pvt, c0 + 1, ran_t.right.right.left, ports2, env2x, below2, held2);
+    // The body: from the file as the test left it.
+    let ran_b = b_holds(call, agree, pvt, env2x, p.after, held_t, below_mono(tys, inner, c0 + 1, lt.next, ran_t.left, ports2, below2));
+    let bm = FTm::recast(tys, bt, st, body.sem(fw, inner, env2, p.after));
+    let bmx = FTm::recast(tys, bt, st, body.sem(fw, inner, env2x, p.after));
+    let out = lb.next;
+    let cast_b = FTm::ran_cast(tys, bt, st, e_b, pvt, lb.region.run(call, pvt, file), lt.next, lb.result, fw.rest, body.sem(fw, inner, env2x, p.after),
+        ran_b.right.right);
+    let below_b = Ty::below_cast(tys, bt, st, e_b, lb.result, lb.next, ran_b.right.left);
+    let le_out: (lt.next <= out) = ran_b.left;
+    let moved_t = FTm::moved_ran(st, tys, lb.region, call, pvt, file, lt.next, lb.result, out, fw.rest, bmx, below_b, le_out, cast_b);
+    let below_s: st.Below(tys, next + 1, out) = st.below_mono(tys, next + 1, c0 + 1, out, Nat::le_trans(c0 + 1, lt.next, out, ran_t.left, le_out), below2.left);
+    let ran_none: FTm::Ran(st, tys, pvt, nodes_region(Nil).run(call, pvt, file), lt.next, next + 1, fw.rest, p) = ⟨λ wd id _ => refl, ⟨held_t.left, refl⟩⟩;
+    let moved_f = FTm::moved_ran(st, tys, nodes_region(Nil), call, pvt, file, lt.next, next + 1, out, fw.rest, p, below_s, le_out, ran_none);
+    let outs = moved_ports(st.moves(tys, out, lb.result));
+    let when_true = Compose(lb.region, nodes_region(st.moves(tys, out, lb.result)));
+    let when_false = Compose(nodes_region(Nil), nodes_region(st.moves(tys, out, next + 1)));
+    let chosen: (pvt(1, lt.result).head_bit() = tv) = trans(cong_fn(λ (x: BitVec(1)) => x.head_bit(), bit_t), BitVec::head_bit_ofBool(tv));
+    let fin = match tv { False => p, True => bmx };
+    let ran_br: FTm::Ran(st, tys, pvt, br.region.run(call, pvt, file), lt.next, out, fw.rest, fin) =
+        FTm::branch_ran(st, tys, pvt, lt.result, outs, when_true, when_false, call, file, lt.next, out, fw.rest, tv, bmx, p, chosen,
+            moved_t.right.right, moved_f.right.right);
+    let mid_b = br.region.run(call, pvt, file);
+    let pvbr = mid_b.values;
+    let z = br.next;
+    let z_past: (z = Fun::past(cs, out)) = st.past_cells(tys, out);
+    let out_z: (out <= z) = j(sym(z_past), λ y _ => out <= y, Fun::past_ge(cs, out));
+    let q = Valuation::set(pvbr, z, λ wd => BitVec::ofNat(1));
+    let exit_value = λ (w: Nat) => q(w, lt.result).bxor(q(w, z));
+    let after = Valuation::set(q, z + 1, exit_value);
+    let lt_z: (lt.result < z) = Nat::lt_of_lt_of_le(lt.result, lt.next, z, tr_lt, Nat::le_trans(lt.next, out, z, le_out, out_z));
+    let at_tr: (q(1, lt.result) = BitVec::ofBool(tv)) =
+        trans(Valuation::set_other(pvbr, z, λ wd => BitVec::ofNat(1), 1, lt.result, Nat::ne_of_lt(lt.result, z, lt_z)),
+            trans(ran_br.left(1, lt.result, tr_lt), bit_t));
+    let at_z: (q(1, z) = BitVec::ofNat(1)) = Valuation::set_here(pvbr, z, λ wd => BitVec::ofNat(1), 1);
+    let exit: (after(1, z + 1).head_bit() = tv.not()) =
+        trans(cong_fn(λ (x: BitVec(1)) => x.head_bit(), Valuation::set_here(q, z + 1, exit_value, 1)),
+            trans(eq2(λ (a: BitVec(1)) (b: BitVec(1)) => a.bxor(b).head_bit(), at_tr, at_z), Tm::exit_bit(tv)));
+    let keeps_end: Keeps(pvbr, after, z) = λ wd id below_id =>
+        trans(Valuation::set_other(q, z + 1, exit_value, wd, id, Nat::ne_of_lt(id, z + 1, Nat::lt_of_lt_of_le(id, z, z + 1, below_id, Nat::le_succ_r(z, z, z.le_refl())))),
+            Valuation::set_other(pvbr, z, λ x => BitVec::ofNat(1), wd, id, Nat::ne_of_lt(id, z, below_id)));
+    let below_out: st.Below(tys, out, z) = st.below_cells(tys, out, z, j(sym(z_past), λ y _ => Fun::past(cs, out) <= y, Fun::past(cs, out).le_refl()));
+    let held_end: st.Holds(tys, after, out, fin.value) = st.holds_at(tys, pvbr, after, out, out, st.same_kept(tys, pvbr, after, z, keeps_end, out, below_out),
+        fin.value, ran_br.right.left);
+    let sw = words_of(after, Fun::param_ids(cs, out));
+    let sw_len: (sw.len() = n) = trans(words_of_len(after, Fun::param_ids(cs, out)), Fun::ids_len(cs, out));
+    let keeps_all: Keeps(pv, after, c0 + 1) = λ wd id below_id => {
+        let lt1 = Nat::lt_of_lt_of_le(id, c0 + 1, lt.next, below_id, ran_t.left);
+        trans(keeps_end(wd, id, Nat::lt_of_lt_of_le(id, lt.next, z, lt1, Nat::le_trans(lt.next, out, z, le_out, out_z))),
+            trans(ran_br.left(wd, id, lt1), ran_t.right.right.left(wd, id, below_id)))
+    };
+    let ctx_same: (words_of(after, cids) = ctx) =
+        trans(Tm::words_kept(pv, after, c0 + 1, keeps_all, cids, Tm::ids_below(c.cells, at, c0 + 1, c1)), halves.right);
+    let next_words: (words_of(after, Fun::param_ids(cs, out) ++ cids) = sw ++ ctx) =
+        trans(Fun::words_append(after, Fun::param_ids(cs, out), cids), cong_fn(λ (l: List<BitVec(64)>) => sw ++ l, ctx_same));
+    let related = λ (t: Mutated<List<BitVec(8)>, st.sem(tys)>) (hw: st.WordsHold(tys, sw, t.value)) (left: mid_b.buffers = Cons(t.after, fw.rest)) =>
+        And(j(sym(next_words), λ l _ => Tm::IterWords(tys, st, ctx, l, t.value), Tm::iter_words(tys, st, ctx, sw, t.value, sw_len, hw)), left);
+    let words_end = st.words_hold_out(tys, ok, after, out, fin.value, held_end);
+    // The pass's run: the test left the file, so the branch runs from it.
+    let ran_pass: (Tm::iter_pass(tys, st, next, lt, lb).run(call, pv, file) = State(after, mid_b.buffers)) =
+        cong_fn(λ (m: State) => Compose(br.region, nodes_region([Const(1, z, 1), BitXor(1, z + 1, lt.result, z)])).run(call, m.values, m.buffers), mid_is);
+    let turn_is: (FTm::turn(fw, g, env, st, test, bt, λ e o => body.sem(fw, inner, e, o), p) = loop::Step::turn(tv, λ _ => bm, p)) = refl;
+    let same_bm: (bm = bmx) = cong_fn(λ (m: Mutated<List<BitVec(8)>, bt.sem(tys)>) => FTm::recast(tys, bt, st, m), same_b);
+    ⟨ran_t.left, ⟨le_out,
+        j(sym(ran_pass), λ e _ => FTm::Passes(e, z + 1, Fun::param_ids(cs, out) ++ cids, FTm::LoopWords(tys, st, ctx, fw.rest), loop::Step::turn(tv, λ _ => bm, p)),
+            j(sym(same_bm), λ y _ => FTm::Passes(State(after, mid_b.buffers), z + 1, Fun::param_ids(cs, out) ++ cids, FTm::LoopWords(tys, st, ctx, fw.rest),
+                    loop::Step::turn(tv, λ _ => y, p)),
+                (match tv as λ b => (after(1, z + 1).head_bit() = b.not()) → st.WordsHold(tys, sw, (match b { False => p, True => bmx }).value) →
+                    (mid_b.buffers = Cons((match b { False => p, True => bmx }).after, fw.rest)) →
+                    FTm::Passes(State(after, mid_b.buffers), z + 1, Fun::param_ids(cs, out) ++ cids, FTm::LoopWords(tys, st, ctx, fw.rest), loop::Step::turn(b, λ _ => bmx, p)) {
+                    True => λ ex hw left => ⟨ex, related(bmx, hw, left)⟩,
+                    False => λ ex hw left => ⟨ex, related(p, hw, left)⟩,
+                })(exit, words_end, ran_br.right.right)))⟩⟩
+}
+
+// The loop: its words start related to the state the variable holds and
+// the span as it is, the passes keep them related, and its outputs hold
+// the state it ends at, the file holding the span it leaves.
+theorem FTm::loop_holds(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, next, init, pi: Nat, test: Tm, body: FTm, at_pi: port_at(ports, init) = Some(pi),
+    ok: Ty::at(g, init).Carries(fw.w.tys),
+    wi: test.Within(FTm::loop_keep(g, Ty::at(g, init), test, body)) ∧ body.Within(FTm::loop_keep(g, Ty::at(g, init), test, body)), c: Carry,
+    ch: Tm::CarryHolds(fw.w.tys, g, FTm::loop_keeps(g, Ty::at(g, init), test, body), ports, Tm::iter_at(fw.w.tys, Ty::at(g, init), next), Some(c)),
+    lt, lb: Lowered,
+    t_holds: FTm::ValueHolds(test, fw, base, Cons(Ty::at(g, init), g), Cons(next + 1, c.inner),
+        Fun::past(c.cells, Tm::iter_at(fw.w.tys, Ty::at(g, init), next)) + 1, Some(lt)),
+    b_holds: FTm::StepHolds(fw, base, Cons(Ty::at(g, init), g), Cons(next + 1, c.inner), lt.next, body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)),
+        λ env own => body.sem(fw, Cons(Ty::at(g, init), g), env, own), Some(lb)),
+    e_t: Tm::ty(test, fw.w, Cons(Ty::at(g, init), g)) = Bit, e_b: body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)) = Ty::at(g, init)):
+    FTm::StepHolds(fw, base, g, ports, next, Ty::at(g, init), FTm::iterated(fw, g, init, test, body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => body.sem(fw, Cons(Ty::at(g, init), g), e, o)),
+        Some(Tm::iter_region(fw.w.tys, Ty::at(g, init), pi, next, c, lt, lb))) {
+    λ call agree values env own held below => {
+        let tys = fw.w.tys;
+        let st = Ty::at(g, init);
+        let inner = Cons(st, g);
+        let bt = body.ty(fw.w, fw.fsigs, inner);
+        let cs = st.cells(tys);
+        let n = cs.len();
+        let at = Tm::iter_at(tys, st, next);
+        let c0 = Fun::past(c.cells, at);
+        let all = cs ++ c.cells;
+        let params = Fun::param_ids(all, next + 1);
+        let cids = Fun::param_ids(c.cells, at);
+        let br = Tm::iter_branch(tys, st, next, lt, lb);
+        let z = br.next;
+        let o = z + 2;
+        let outs = Fun::param_ids(all, o);
+        let x = Fun::past(all, o);
+        let loopnext = Fun::param_ids(cs, lb.next) ++ cids;
+        let file: Buffers() = Cons(own, fw.rest);
+        let values1 = Valuation::set(values, next, λ wd => BitVec::ofNat(Tm::passes()));
+        let inputs = Fun::param_ids(cs, pi) ++ c.src;
+        let ctx = words_of(values, c.src);
+        let v0 = Env::get(tys, g, env, init);
+        let held0: st.Holds(tys, values, pi, v0) = env_holds_at(tys, values, g, ports, env, held, init, pi, at_pi);
+        let below0: st.Below(tys, pi, next) = below_at(tys, g, ports, next, below, init, pi, at_pi);
+        let keeps1: Keeps(values, values1, next) = λ wd id below_id =>
+            Valuation::set_other(values, next, λ y => BitVec::ofNat(Tm::passes()), wd, id, Nat::ne_of_lt(id, next, below_id));
+        let in_below: Tm::AllBelow(inputs, next) =
+            Tm::all_below_append(next, c.src, ch.right.left(next, below), Fun::param_ids(cs, pi), st.cell_ids_below(tys, pi, next, below0));
+        let sw0 = words_of(values, Fun::param_ids(cs, pi));
+        let ws0: (words_of(values1, inputs) = sw0 ++ ctx) =
+            trans(Tm::words_kept(values, values1, next, keeps1, inputs, in_below), Fun::words_append(values, Fun::param_ids(cs, pi), c.src));
+        let sw0_len: (sw0.len() = n) = trans(words_of_len(values, Fun::param_ids(cs, pi)), Fun::ids_len(cs, pi));
+        let p0 = Mutated(own, v0);
+        let r0: FTm::LoopWords(tys, st, ctx, fw.rest, words_of(values1, inputs), file, p0) =
+            ⟨j(sym(ws0), λ l _ => Tm::IterWords(tys, st, ctx, l, v0),
+                Tm::iter_words(tys, st, ctx, sw0, v0, sw0_len, st.words_hold_out(tys, ok, values, pi, v0, held0))), refl⟩;
+        let ctx_len: (ctx.len() = c.cells.len()) = trans(words_of_len(values, c.src), ch.left);
+        let c_below: Below(tys, g, c.inner, c0 + 1) = ch.right.right.left(c0 + 1, c0.lt_succ_self());
+        let carried = λ (b: Valuation()) (same: words_of(b, cids) = ctx) => ch.right.right.right(values, b, env, same, held);
+        let turn = FTm::turn(fw, g, env, st, test, bt, λ e o => body.sem(fw, inner, e, o));
+        let pass_region = Tm::iter_pass(tys, st, next, lt, lb);
+        let stepf = λ (pv: Valuation()) (held: Buffers()) => pass_region.run(call, pv, held);
+        let pass = λ (r: Nat) (ws: List<BitVec(64)>) (f: Buffers()) (p: Mutated<List<BitVec(8)>, st.sem(tys)>)
+            (h: FTm::LoopWords(tys, st, ctx, fw.rest, ws, f, p)) =>
+            j(sym(h.right), λ f2 _ => FTm::Passes(stepf(pass_valuation(params, c0, r + 1, ws), f2), z + 1, loopnext, FTm::LoopWords(tys, st, ctx, fw.rest), turn(p)),
+                (FTm::loop_pass(fw, base, g, init, test, body, next, ok, c, lt, lb, c_below, t_holds, b_holds, e_t, e_b, call, agree, env, ctx, ctx_len,
+                    carried, wi, r, ws, p, h.left)).right.right);
+        let first = FTm::loop_pass(fw, base, g, init, test, body, next, ok, c, lt, lb, c_below, t_holds, b_holds, e_t, e_b, call, agree, env, ctx, ctx_len,
+            carried, wi, 0, words_of(values1, inputs), p0, r0.left);
+        let ran = FTm::loop_runs(stepf, params, c0, z + 1, loopnext, FTm::LoopWords(tys, st, ctx, fw.rest), turn, pass,
+            values1(64, next).toNat(), words_of(values1, inputs), file, p0, r0);
+        let at_bound: (values1(64, next).toNat() = Tm::passes()) = trans(
+            cong_fn(λ (v: BitVec(64)) => v.toNat(), Valuation::set_here(values, next, λ wd => BitVec::ofNat(Tm::passes()), 64)),
+            BitVec::toNat_ofNat(64, Tm::passes(), trivial));
+        let end = loop_run(stepf, params, c0, z + 1, loopnext, values1(64, next).toNat(), words_of(values1, inputs), file);
+        let fin = loop::Loop::steps(Tm::passes(), turn, p0);
+        let rel: FTm::LoopWords(tys, st, ctx, fw.rest, end.end.state, end.buffers, fin) =
+            j(at_bound, λ k _ => FTm::LoopWords(tys, st, ctx, fw.rest, end.end.state, end.buffers, loop::Loop::steps(k, turn, p0)), ran);
+        let bv1 = Valuation::bind(values1, outs, end.end.state);
+        let after = Valuation::set(bv1, x, bit_value(end.end.exhausted));
+        let end_len: (outs.len() = end.end.state.len()) = trans(Fun::ids_len(all, o),
+            trans(List::len_append(cs, c.cells), sym(trans(Tm::iter_words_len(tys, st, ctx, end.end.state, fin.value, rel.left), cong_fn(λ (k: Nat) => n + k, ctx_len)))));
+        let bound_out: (words_of(bv1, outs) = end.end.state) = words_of_bind(values1, outs, Fun::ids_distinct(all, o), end.end.state, end_len);
+        let ids_o = Fun::param_ids(cs, o);
+        let rest_o = Fun::param_ids(c.cells, Fun::past(cs, o));
+        let a_words = words_of(bv1, ids_o);
+        let a_len: (a_words.len() = n) = trans(words_of_len(bv1, ids_o), Fun::ids_len(cs, o));
+        let a_is: (a_words = end.end.state.take(n)) = trans(sym(Tm::take_front(a_words, words_of(bv1, rest_o), n, a_len)),
+            cong_fn(λ (l: List<BitVec(64)>) => l.take(n), trans(sym(Fun::words_append(bv1, ids_o, rest_o)),
+                trans(cong_fn(λ (l: List<Nat>) => words_of(bv1, l), sym(Fun::ids_append(cs, c.cells, o))), bound_out))));
+        let keeps_x: Keeps(bv1, after, x) = λ wd id below_id => Valuation::set_other(bv1, x, bit_value(end.end.exhausted), wd, id, Nat::ne_of_lt(id, x, below_id));
+        let o_past: (Fun::past(cs, o) <= x) = Fun::past_first(cs, c.cells, o);
+        let read: (words_of(after, ids_o) = end.end.state.take(n)) =
+            trans(Tm::words_kept(bv1, after, x, keeps_x, ids_o, Tm::ids_below(cs, o, x, o_past)), a_is);
+        let held_fin: st.Holds(tys, after, o, fin.value) =
+            st.words_hold_in(tys, ok, after, o, end.end.state.take(n), fin.value, read, rel.left.right.left, rel.left.right.right);
+        let le_at: (next + 1 <= at) = Fun::past_ge(cs, next + 1);
+        let le_c0: (at <= c0) = Fun::past_ge(c.cells, at);
+        let le_lb: (c0 + 1 <= lb.next) = Nat::le_trans(c0 + 1, lt.next, lb.next, first.left, first.right.left);
+        let le_z: (lb.next <= z) = j(sym(st.past_cells(tys, lb.next)), λ y _ => lb.next <= y, Fun::past_ge(cs, lb.next));
+        let next_z: (next < z) = Nat::le_trans(next + 1, at, z, le_at, Nat::le_trans(at, c0 + 1, z, Nat::le_succ_r(at, c0, le_c0),
+            Nat::le_trans(c0 + 1, lb.next, z, le_lb, le_z)));
+        let next_o: (next < o) = Nat::lt_of_lt_of_le(next, z, o, next_z, Nat::le_succ_r(z, z + 1, Nat::le_succ_r(z, z, z.le_refl())));
+        let o_x: (o <= x) = Fun::past_ge(all, o);
+        ⟨Nat::le_succ_r(next, x, Nat::le_of_lt(next, x, Nat::lt_of_lt_of_le(next, o, x, next_o, o_x))),
+            ⟨st.below_cells(tys, o, x + 1, Nat::le_succ_r(Fun::past(cs, o), x, o_past)),
+                ⟨λ wd id below_id => {
+                    let id_o: (id < o) = Nat::lt_trans(id, next, o, below_id, next_o);
+                    trans(keeps_x(wd, id, Nat::lt_of_lt_of_le(id, o, x, id_o, o_x)),
+                        trans(Valuation::bind_frame(values1, outs, end.end.state, wd, id, Fun::absent_ids(all, o, id, Inl(id_o))), keeps1(wd, id, below_id)))
+                }, ⟨held_fin, rel.right⟩⟩⟩⟩
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The lowering
 
 fn FTm::lower(self t: FTm, w: World, fsigs: List<Sig>, base: Nat, g: List<Ty>, ports: List<Nat>, next: Nat) → Option<Lowered> {
@@ -1117,8 +1621,18 @@ fn FTm::lower(self t: FTm, w: World, fsigs: List<Sig>, base: Nat, g: List<Ty>, p
         // As a call: the body sees the callee's value as variable 0.
         Lend(f, views, args, body) => FTm::lower_lend(w, fsigs, base, g, ports, next, f, views, args).and_then(λ lc =>
             FTm::lower(body, w, fsigs, base, Cons(Sig::at(fsigs, f).result, g), Cons(lc.result, ports), lc.next).and_then(λ lb => Tm::compose(lc, lb))),
+        // The loop (`FTm::lower_loop`), then the rest from its outputs.
+        Loop(init, test, body, rest) => port_at(ports, init).and_then(λ pi =>
+            FTm::lower_loop(w, fsigs, base, g, ports, next, init, pi, test, body, λ ps k => FTm::lower(body, w, fsigs, base, Cons(Ty::at(g, init), g), ps, k)).and_then(λ ll =>
+            FTm::lower(rest, w, fsigs, base, Cons(Ty::at(g, init), g), Cons(ll.result, ports), ll.next).and_then(λ lr => Tm::compose(ll, lr)))),
     }
 }
+
+theorem FTm::pure_lowers(v: Tm, w: World, fsigs: List<Sig>, base: Nat, g: List<Ty>, ports: List<Nat>, next: Nat):
+    FTm::lower(Pure(v), w, fsigs, base, g, ports, next) = FTm::lower_value(v, w, base, g, ports, next) { refl }
+
+theorem FTm::pure_steps(v: Tm, fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, next: Nat, r: Option<Lowered>, h: FTm::ValueHolds(v, fw, base, g, ports, next, r)):
+    FTm::StepHolds(fw, base, g, ports, next, v.ty(fw.w, g), λ env own => Mutated(own, FTm::value(fw, own, v, g, env)), r) { h }
 
 // What a lowering promises: the step of the computation's meaning.
 fn FTm::LowerHolds(self t: FTm, fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, next: Nat, r: Option<Lowered>) → Type {
@@ -1166,10 +1680,119 @@ theorem FTm::arms_sound(c: Nat, yes, no: FTm, fw: FWorld, base: Nat,
 }
 
 // The theorem: the code a computation lowers to runs to its meaning.
+// The `Loop` case before `rest`, from what the test's and body's lowerings
+// promise.
+theorem FTm::loop_sound(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, next, init, pi: Nat, test: Tm, body: FTm, at_pi: port_at(ports, init) = Some(pi),
+    ih_body: (ps: List<Nat>) → (k: Nat) → FTm::LowerHolds(body, fw, base, Cons(Ty::at(g, init), g), ps, k, FTm::lower(body, fw.w, fw.fsigs, base, Cons(Ty::at(g, init), g), ps, k))):
+    FTm::StepHolds(fw, base, g, ports, next, Ty::at(g, init), FTm::iterated(fw, g, init, test, body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => body.sem(fw, Cons(Ty::at(g, init), g), e, o)),
+        FTm::lower_loop(fw.w, fw.fsigs, base, g, ports, next, init, pi, test, body, λ ps k => FTm::lower(body, fw.w, fw.fsigs, base, Cons(Ty::at(g, init), g), ps, k))) {
+    let tys = fw.w.tys;
+    let st = Ty::at(g, init);
+    let inner = Cons(st, g);
+    let K = FTm::loop_keep(g, st, test, body);
+    let ks = FTm::loop_keeps(g, st, test, body);
+    let at = Tm::iter_at(tys, st, next);
+    let P = λ (r: Option<Lowered>) => FTm::StepHolds(fw, base, g, ports, next, st, FTm::iterated(fw, g, init, test, body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => body.sem(fw, Cons(Ty::at(g, init), g), e, o)), r);
+    Option::and_then_elim(P, trivial, st.check_carries(tys), λ _ =>
+        Tm::both(test.check_within(K), body.check_within(K)).and_then(λ _ =>
+        Tm::carry(tys, st, next + 1, g, ks, ports, at).and_then(λ c =>
+        FTm::lower_value(test, fw.w, base, inner, Cons(next + 1, c.inner), Fun::past(c.cells, at) + 1).and_then(λ lt =>
+        FTm::lower(body, fw.w, fw.fsigs, base, inner, Cons(next + 1, c.inner), lt.next).and_then(λ lb =>
+            FTm::loop_checked(fw.w, fw.fsigs, st, inner, test, body, pi, next, c, lt, lb))))), λ ok _ =>
+    Option::and_then_elim(P, trivial, Tm::both(test.check_within(K), body.check_within(K)), λ _ =>
+        Tm::carry(tys, st, next + 1, g, ks, ports, at).and_then(λ c =>
+        FTm::lower_value(test, fw.w, base, inner, Cons(next + 1, c.inner), Fun::past(c.cells, at) + 1).and_then(λ lt =>
+        FTm::lower(body, fw.w, fw.fsigs, base, inner, Cons(next + 1, c.inner), lt.next).and_then(λ lb =>
+            FTm::loop_checked(fw.w, fw.fsigs, st, inner, test, body, pi, next, c, lt, lb)))), λ wi _ =>
+    Option::and_then_elim(P, trivial, Tm::carry(tys, st, next + 1, g, ks, ports, at), λ c =>
+        FTm::lower_value(test, fw.w, base, inner, Cons(next + 1, c.inner), Fun::past(c.cells, at) + 1).and_then(λ lt =>
+        FTm::lower(body, fw.w, fw.fsigs, base, inner, Cons(next + 1, c.inner), lt.next).and_then(λ lb =>
+            FTm::loop_checked(fw.w, fw.fsigs, st, inner, test, body, pi, next, c, lt, lb))), λ c carried =>
+    Option::and_then_elim(P, trivial, FTm::lower_value(test, fw.w, base, inner, Cons(next + 1, c.inner), Fun::past(c.cells, at) + 1), λ lt =>
+        FTm::lower(body, fw.w, fw.fsigs, base, inner, Cons(next + 1, c.inner), lt.next).and_then(λ lb =>
+            FTm::loop_checked(fw.w, fw.fsigs, st, inner, test, body, pi, next, c, lt, lb)), λ lt lowered_t =>
+    Option::and_then_elim(P, trivial, FTm::lower(body, fw.w, fw.fsigs, base, inner, Cons(next + 1, c.inner), lt.next), λ lb =>
+        FTm::loop_checked(fw.w, fw.fsigs, st, inner, test, body, pi, next, c, lt, lb), λ lb lowered_b =>
+    Option::and_then_elim(P, trivial, Tm::ty(test, fw.w, inner).check(Bit), λ _ => body.ty(fw.w, fw.fsigs, inner).check(st).and_then(λ _ =>
+        Some(Tm::iter_region(tys, st, pi, next, c, lt, lb))), λ e_t _ =>
+    Option::and_then_elim(P, trivial, body.ty(fw.w, fw.fsigs, inner).check(st), λ _ => Some(Tm::iter_region(tys, st, pi, next, c, lt, lb)), λ e_b _ =>
+        FTm::loop_holds(fw, base, g, ports, next, init, pi, test, body, at_pi, ok, wi, c,
+            j(carried, λ r _ => Tm::CarryHolds(tys, g, ks, ports, at, r),
+                Tm::carry_sound(tys, st, next + 1, g, ks, ports, at, (Fun::past(st.cells(tys), next + 1)).le_refl())),
+            lt, lb,
+            j(lowered_t, λ r _ => FTm::ValueHolds(test, fw, base, inner, Cons(next + 1, c.inner), Fun::past(c.cells, at) + 1, r),
+                FTm::value_sound(test, fw, base, inner, Cons(next + 1, c.inner), Fun::past(c.cells, at) + 1)),
+            j(lowered_b, λ r _ => FTm::LowerHolds(body, fw, base, inner, Cons(next + 1, c.inner), lt.next, r), ih_body(Cons(next + 1, c.inner), lt.next)),
+            e_t, e_b))))))))
+}
+
+// The `Loop` arm of `FTm::lower`, as an equation: the kernel compares
+// `lower` of a `Loop` with its unfolding cheaply alone, not under
+// `LowerHolds`.
+theorem FTm::lower_loop_eq(init: Nat, test: Tm, body, rest: FTm, w: World, fsigs: List<Sig>, base: Nat, g: List<Ty>, ports: List<Nat>, next: Nat):
+    FTm::lower(Loop(init, test, body, rest), w, fsigs, base, g, ports, next) = port_at(ports, init).and_then(λ pi =>
+        FTm::lower_loop(w, fsigs, base, g, ports, next, init, pi, test, body, λ ps k => FTm::lower(body, w, fsigs, base, Cons(Ty::at(g, init), g), ps, k)).and_then(λ ll =>
+        FTm::lower(rest, w, fsigs, base, Cons(Ty::at(g, init), g), Cons(ll.result, ports), ll.next).and_then(λ lr => Tm::compose(ll, lr)))) { refl }
+
+// The loop's promise, at the loop's lowering found.
+theorem FTm::loop_first(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, next, init, pi: Nat, test: Tm, body: FTm,
+    at_pi: port_at(ports, init) = Some(pi), ll: Lowered,
+    lowered_loop: FTm::lower_loop(fw.w, fw.fsigs, base, g, ports, next, init, pi, test, body, λ ps k => FTm::lower(body, fw.w, fw.fsigs, base, Cons(Ty::at(g, init), g), ps, k)) = Some(ll),
+    ih_body: (ps: List<Nat>) → (k: Nat) → FTm::LowerHolds(body, fw, base, Cons(Ty::at(g, init), g), ps, k, FTm::lower(body, fw.w, fw.fsigs, base, Cons(Ty::at(g, init), g), ps, k))):
+    FTm::StepHolds(fw, base, g, ports, next, Ty::at(g, init), FTm::iterated(fw, g, init, test, body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => body.sem(fw, Cons(Ty::at(g, init), g), e, o)), Some(ll)) {
+    j(lowered_loop, λ r _ => FTm::StepHolds(fw, base, g, ports, next, Ty::at(g, init),
+            FTm::iterated(fw, g, init, test, body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => body.sem(fw, Cons(Ty::at(g, init), g), e, o)), r),
+        FTm::loop_sound(fw, base, g, ports, next, init, pi, test, body, at_pi, ih_body))
+}
+
+// The `Loop` case once the loop and the rest have lowered.
+theorem FTm::loop_bound(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, next, init, pi: Nat, test: Tm, body, rest: FTm,
+    at_pi: port_at(ports, init) = Some(pi), ll, lr: Lowered,
+    lowered_loop: FTm::lower_loop(fw.w, fw.fsigs, base, g, ports, next, init, pi, test, body, λ ps k => FTm::lower(body, fw.w, fw.fsigs, base, Cons(Ty::at(g, init), g), ps, k)) = Some(ll),
+    lowered_rest: FTm::lower(rest, fw.w, fw.fsigs, base, Cons(Ty::at(g, init), g), Cons(ll.result, ports), ll.next) = Some(lr),
+    ih_body: (ps: List<Nat>) → (k: Nat) → FTm::LowerHolds(body, fw, base, Cons(Ty::at(g, init), g), ps, k, FTm::lower(body, fw.w, fw.fsigs, base, Cons(Ty::at(g, init), g), ps, k)),
+    ih_rest: (ps: List<Nat>) → (k: Nat) → FTm::LowerHolds(rest, fw, base, Cons(Ty::at(g, init), g), ps, k, FTm::lower(rest, fw.w, fw.fsigs, base, Cons(Ty::at(g, init), g), ps, k))):
+    FTm::LowerHolds(Loop(init, test, body, rest), fw, base, g, ports, next, Tm::compose(ll, lr)) {
+    FTm::bind_sound_of(fw, base, g, ports, next, Ty::at(g, init),
+        FTm::iterated(fw, g, init, test, body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => body.sem(fw, Cons(Ty::at(g, init), g), e, o)),
+        rest.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => rest.sem(fw, Cons(Ty::at(g, init), g), e, o), ll, lr,
+        FTm::loop_first(fw, base, g, ports, next, init, pi, test, body, at_pi, ll, lowered_loop, ih_body),
+        j(lowered_rest, λ r _ => FTm::LowerHolds(rest, fw, base, Cons(Ty::at(g, init), g), Cons(ll.result, ports), ll.next, r),
+            ih_rest(Cons(ll.result, ports), ll.next)))
+}
+
+
+
+// The `Loop` case: the loop (`FTm::loop_sound`), then the rest from its
+// outputs, bound as a call's result is.
+theorem FTm::loop_case_sound(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, next, init: Nat, test: Tm, body, rest: FTm,
+    ih_body: (ps: List<Nat>) → (k: Nat) → FTm::LowerHolds(body, fw, base, Cons(Ty::at(g, init), g), ps, k, FTm::lower(body, fw.w, fw.fsigs, base, Cons(Ty::at(g, init), g), ps, k)),
+    ih_rest: (ps: List<Nat>) → (k: Nat) → FTm::LowerHolds(rest, fw, base, Cons(Ty::at(g, init), g), ps, k, FTm::lower(rest, fw.w, fw.fsigs, base, Cons(Ty::at(g, init), g), ps, k))):
+    FTm::LowerHolds(Loop(init, test, body, rest), fw, base, g, ports, next, FTm::lower(Loop(init, test, body, rest), fw.w, fw.fsigs, base, g, ports, next)) {
+    let P = λ (r: Option<Lowered>) => FTm::LowerHolds(Loop(init, test, body, rest), fw, base, g, ports, next, r);
+    let st = Ty::at(g, init);
+    let inner = Cons(st, g);
+    let lower_body = λ (ps: List<Nat>) (k: Nat) => FTm::lower(body, fw.w, fw.fsigs, base, inner, ps, k);
+    let looped = FTm::iterated(fw, g, init, test, body.ty(fw.w, fw.fsigs, inner), λ e o => body.sem(fw, inner, e, o));
+    let unfolded: P(port_at(ports, init).and_then(λ pi =>
+        FTm::lower_loop(fw.w, fw.fsigs, base, g, ports, next, init, pi, test, body, lower_body).and_then(λ ll =>
+        FTm::lower(rest, fw.w, fw.fsigs, base, inner, Cons(ll.result, ports), ll.next).and_then(λ lr => Tm::compose(ll, lr))))) =
+    Option::and_then_elim(P, trivial, port_at(ports, init), λ pi =>
+        FTm::lower_loop(fw.w, fw.fsigs, base, g, ports, next, init, pi, test, body, lower_body).and_then(λ ll =>
+        FTm::lower(rest, fw.w, fw.fsigs, base, inner, Cons(ll.result, ports), ll.next).and_then(λ lr => Tm::compose(ll, lr))), λ pi at_pi =>
+    Option::and_then_elim(P, trivial, FTm::lower_loop(fw.w, fw.fsigs, base, g, ports, next, init, pi, test, body, lower_body), λ ll =>
+        FTm::lower(rest, fw.w, fw.fsigs, base, inner, Cons(ll.result, ports), ll.next).and_then(λ lr => Tm::compose(ll, lr)), λ ll lowered_loop =>
+    Option::and_then_elim(P, trivial, FTm::lower(rest, fw.w, fw.fsigs, base, inner, Cons(ll.result, ports), ll.next), λ lr => Tm::compose(ll, lr),
+        λ lr lowered_rest => FTm::loop_bound(fw, base, g, ports, next, init, pi, test, body, rest, at_pi, ll, lr, lowered_loop, lowered_rest, ih_body, ih_rest))));
+    j(sym(FTm::lower_loop_eq(init, test, body, rest, fw.w, fw.fsigs, base, g, ports, next)), λ r _ => P(r), unfolded)
+}
+
 theorem FTm::lower_sound(self t: FTm, fw: FWorld, base: Nat): (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →
     FTm::LowerHolds(t, fw, base, g, ports, next, FTm::lower(t, fw.w, fw.fsigs, base, g, ports, next)) {
     match t {
-        Pure(v) => λ g ports next => FTm::value_sound(v, fw, base, g, ports, next),
+        Pure(v) => λ g ports next => FTm::pure_steps(v, fw, base, g, ports, next, FTm::lower(Pure(v), fw.w, fw.fsigs, base, g, ports, next),
+            j(sym(FTm::pure_lowers(v, fw.w, fw.fsigs, base, g, ports, next)), λ r _ => FTm::ValueHolds(v, fw, base, g, ports, next, r),
+                FTm::value_sound(v, fw, base, g, ports, next))),
         Let(e, body) => λ g ports next => {
             let P = λ (r: Option<Lowered>) => FTm::LowerHolds(Let(e, body), fw, base, g, ports, next, r);
             let inner = Cons(e.ty(fw.w, g), g);
@@ -1237,6 +1860,9 @@ theorem FTm::lower_sound(self t: FTm, fw: FWorld, base: Nat): (g: List<Ty>) → 
                     j(lowered_body, λ r _ => FTm::LowerHolds(body, fw, base, inner, Cons(lc.result, ports), lc.next, r),
                         FTm::lower_sound(body, fw, base, inner, Cons(lc.result, ports), lc.next)))))
         },
+        Loop(init, test, body, rest) => λ g ports next => FTm::loop_case_sound(fw, base, g, ports, next, init, test, body, rest,
+            λ ps k => FTm::lower_sound(body, fw, base, Cons(Ty::at(g, init), g), ps, k),
+            λ ps k => FTm::lower_sound(rest, fw, base, Cons(Ty::at(g, init), g), ps, k)),
     }
 }
 
