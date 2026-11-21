@@ -172,6 +172,9 @@ fn Step::turn<S>(go: Bool, next: (go = True) → S, s: S) → Step<S> {
     (match go as λ b => (go = b) → Step<S> { False => λ _ => Stop(s), True => λ e => Next(next(e)) })(refl)
 }
 
+// A turn whose next state does not read the test's equation.
+fn Step::when<S>(go: Bool, next: S, s: S) → Step<S> { Step::turn(go, λ _ => next, s) }
+
 // A step that stops stops where it is.
 fn Step::Stays<S>(s: S, q: Step<S>) → Type {
     match q { Next(_) => True, Stop(r) => r = s }

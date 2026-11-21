@@ -440,15 +440,14 @@ impl<'a> Lift<'a> {
     }
 
     /// The span a `runtime fn` writes among a loop's state: its `mut self`
-    /// receiver, a `List<u8>`, beside any number of other locals. A
-    /// `Bytes(n)` is not yet: its function's write-out over the span does
-    /// not meet the reflection's meaning at a loop (issues/bytes-loops-in-place.md).
+    /// receiver, a `List<u8>` or a `Bytes(n)`, beside any number of other
+    /// locals.
     fn span_receiver(&self, vars: &[&str]) -> Option<Param> {
         if !matches!(&self.decl.result.kind, TyKind::Named { name, .. } if name == heather_syntax::MUTATED_RECORD) {
             return None;
         }
         let r = self.decl.params.iter().find(|p| p.is_self)?;
-        (vars.contains(&r.name.as_str()) && is_span(&r.ty)).then(|| r.clone())
+        (vars.contains(&r.name.as_str()) && (is_span(&r.ty) || is_bytes(&r.ty))).then(|| r.clone())
     }
 
     /// The name of a loop lifted as a method of the receiver's type,
@@ -1994,6 +1993,16 @@ fn is_span(t: &Ty) -> bool {
                     _ => false,
                 }
         }
+        _ => false,
+    }
+}
+
+/// `Bytes(n)`: a span that carries its length (lib/native/runtime/bytes.hthr).
+fn is_bytes(t: &Ty) -> bool {
+    match &t.kind {
+        TyKind::Named { name, args } => args.len() == 1 && name.rsplit("::").next() == Some("Bytes"),
+        TyKind::OfExpr(e) => matches!(&e.kind, ExprKind::App { head, args, .. }
+            if args.len() == 1 && matches!(&head.kind, ExprKind::Var(n) if n.rsplit("::").next() == Some("Bytes"))),
         _ => false,
     }
 }
