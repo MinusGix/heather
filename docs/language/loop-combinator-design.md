@@ -339,7 +339,72 @@ that a term's meaning ignores an unread variable
 (`issues/iterate-carries-whole-context.md`).
 
 Still lifted the old way: loops with facts, `mut self` loops, loops whose
-locals are not all words, and the other four loop files (3c).
+locals are not all words, and the other four loop files (3c, §6.3).
+
+### 6.3 Stage 3c as built: loops over a span
+
+**One node for a computation over a span.** `FTm::Loop(init, test, body,
+rest)` (`rt_file.hthr`): the state is the span and variable `init`'s words,
+`Mutated<span, S>`; `test` (a bit) reads the words as variable 0 and the
+span as it is; `body` is a computation over the span ending in the next
+words; `rest` runs from the span and words the loop leaves. Its meaning is
+`FTm::rest_of(…, FTm::iterated(…), env)`, where `iterated` is
+`Loop::steps(Loop::passes(), FTm::turn(…), Mutated(own, init))` and every
+read of a loop's state goes through `Loop::after(m, k) := k(m.after,
+m.value)`. Its lowering is a FunctionIR loop region carrying only the
+variables the test and body read (`Tm::carry`, `FTm::loop_keep`), and its
+soundness (`FTm::loop_case_sound`, `rt_file_lower.hthr`) is proved once by
+induction on the passes. Over a `Bytes(n)` the meaning is `FTm::over`'s
+`Loop` arm, and the two meanings agree by `Loop::steps_map` (a loop seen
+through a map that commutes with its pass is the other loop), proved once
+in `loop.hthr`.
+
+**The elaborator writes the loop where it stands.** In a `runtime fn` whose
+receiver is its span (`List<u8>` or `Bytes(n)`), a `while` or counted `for`
+whose other locals and captures are words, with no `invariant`, is
+`Loop::steps(passes, λ t => Loop::after(t, λ span v => Step::turn(test, λ h
+=> { body; Mutated(span, S(v̄′)) }, t)), Mutated(s, S(v̄)))`
+(`Lift::lift_steps_over`), and the code after it reads the span as
+`#loop.after` and a word as `#loop.value` (or `.value.x`). A loop in its
+body is written first (`Lift::nested`). Its step is `Pass::of_turn` of the
+loop's one test, so that `f::loop::same` is one lemma,
+`Pass::step_of_turn`: the body's found proofs (`s[i] := 0` finds `i <
+s.len()`) read the test's equation, which a `split_all` of the goal cannot
+abstract.
+
+**The reflector reads it as one node** (`rt_file_loop`,
+`rt_file_reflect.hthr`): `Loop::steps(…).after` is a link of the span's
+chain, its start the span inside `Mutated(span, v̄)`; the test and body are
+reflected under the words, the body as a walk of its own over the span its
+pass is handed (`FileKnown::inside`). Two things a loop's body needs from
+outside it:
+
+- A byte of an enclosing walk's span (the outer loop's span in insertion
+  sort, read as `key` before the inner loop) is a variable bound before the
+  loop: the plan scans a loop link's pass at the state after it, and the
+  body reads that state through `FileKnown.outer`.
+- A loop carries 64-bit words only (`Ty::Carries`), so the words its test
+  and body make only of what is bound outside it are bound before it
+  (`rt_file_invariants`): `key.zero_extend(56)` is carried, not the byte.
+
+**Written out over a `Bytes(n)`.** The function of a `Bytes(n)` is also
+written out as a function of its bytes (`SpanWriting::written`,
+`runtime.hthr`). Its `Loop` arm spells the pass as `FTm::turn` does
+(`Loop::after`, the test through `Ty::cast`, the body through
+`FTm::recast`), and the write-out's agreement with its code is compared at
+an abstract function, as a measured function's is: compared at the
+function itself, its run's words spelled two ways are compared by running
+the loop, once per pass of `Loop::passes()`.
+
+**What compiles.** Insertion sort over a `List<u8>` span is two nested
+loop nodes and runs by `refl`; `Bytes::clear` is one.
+
+**Still lifted the old way:** loops with an `invariant` (their facts would
+be fields of the state, forgotten by `Loop::steps_map`), `mut self` loops
+over a held record (SHA-256, `Sched`, `Tally`), loops whose locals are not
+all words, and `Io` loops. A recursion written as a tail call still lowers
+in tail mode, so `lower_tail`, `Fun::Guarded` and the companions stay until
+those move.
 
 ## 7. Bootstrapping
 
