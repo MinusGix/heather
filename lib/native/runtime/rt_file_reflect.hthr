@@ -1035,6 +1035,10 @@ fn FTm::same(self t: FTm) → FTm → Bool {
             Lend(f2, views2, args2, body2) => f.same(f2).and(FView::all_same(views, views2)).and(Tm::nats_same(args, args2)).and(body.same(body2)),
             _ => False,
         },
+        Loop(init, test, body, rest) => λ u => match u {
+            Loop(init2, test2, body2, rest2) => init.same(init2).and(test.same(test2)).and(body.same(body2)).and(rest.same(rest2)),
+            _ => False,
+        },
     }
 }
 
@@ -1064,6 +1068,7 @@ fn FTm::show(self t: FTm) → String {
         Call(f, args, body) => "Call(" ++ rt_nat(f) ++ ", [" ++ rt_nats(args) ++ "], " ++ body.show() ++ ")",
         Again(args) => "Again([" ++ rt_nats(args) ++ "])",
         Lend(f, views, args, body) => "Lend(" ++ rt_nat(f) ++ ", [" ++ FView::shows(views) ++ "], [" ++ rt_nats(args) ++ "], " ++ body.show() ++ ")",
+        Loop(init, test, body, rest) => "Loop(" ++ rt_nat(init) ++ ", " ++ test.show() ++ ", " ++ body.show() ++ ", " ++ rest.show() ++ ")",
     }
 }
 

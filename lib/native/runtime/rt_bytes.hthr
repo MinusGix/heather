@@ -99,6 +99,29 @@ fn FTm::over_put(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), i, length,
         Ty::cast(tys, Ty::at(g, i), Word(64), Env::get(tys, g, env, i)), Ty::cast(tys, Ty::at(g, v), Word(8), Env::get(tys, g, env, v)))
 }
 
+// A loop's pass over a record: `FTm::turn` with the record threaded
+// through the state, `run` the body's meaning over the record.
+fn FTm::over_turn(bw: BWorld, g: List<Ty>, env: Env(bw.fw.w.tys, g), st: Ty, test: Tm, bt: Ty, n: BitVec(64),
+    run: Env(bw.fw.w.tys, Cons(st, g)) → Bytes(n) → Mutated<Bytes(n), bt.sem(bw.fw.w.tys)>)
+    → Mutated<Bytes(n), st.sem(bw.fw.w.tys)> → loop::Step<Mutated<Bytes(n), st.sem(bw.fw.w.tys)>> {
+    λ p => loop::Step::turn(Ty::cast(bw.fw.w.tys, test.ty(bw.fw.w, Cons(st, g)), Bit, FTm::value(bw.fw, p.after.bytes, test, Cons(st, g), Pair(p.value, env))),
+        λ _ => FTm::over_recast(bw.fw.w.tys, bt, st, n, run(Pair(p.value, env), p.after)), p)
+}
+
+// A loop's run over a record (`FTm::iterated`'s).
+fn FTm::over_iterated(bw: BWorld, g: List<Ty>, init: Nat, test: Tm, bt: Ty, n: BitVec(64),
+    run: Env(bw.fw.w.tys, Cons(Ty::at(g, init), g)) → Bytes(n) → Mutated<Bytes(n), bt.sem(bw.fw.w.tys)>, env: Env(bw.fw.w.tys, g), s: Bytes(n))
+    → Mutated<Bytes(n), Ty::at(g, init).sem(bw.fw.w.tys)> {
+    loop::Loop::steps(loop::Loop::passes(), FTm::over_turn(bw, g, env, Ty::at(g, init), test, bt, n, run), Mutated(s, Env::get(bw.fw.w.tys, g, env, init)))
+}
+
+// A result over a record bound for the rest (`FTm::rest_of`'s).
+fn FTm::over_rest_of(bw: BWorld, g: List<Ty>, st, rt: Ty, n: BitVec(64),
+    k: Env(bw.fw.w.tys, Cons(st, g)) → Bytes(n) → Mutated<Bytes(n), rt.sem(bw.fw.w.tys)>,
+    m: Mutated<Bytes(n), st.sem(bw.fw.w.tys)>, env: Env(bw.fw.w.tys, g)) → Mutated<Bytes(n), rt.sem(bw.fw.w.tys)> {
+    k(Pair(m.value, env), m.after)
+}
+
 // The meaning over a record: a function threading it, at the code the
 // computation returns. A self-call and a lend answer the record as it is.
 fn FTm::over(self t: FTm, bw: BWorld) → (g: List<Ty>) → Env(bw.fw.w.tys, g) → (n: BitVec(64)) → Bytes(n)
@@ -121,6 +144,11 @@ fn FTm::over(self t: FTm, bw: BWorld) → (g: List<Ty>) → Env(bw.fw.w.tys, g) 
                 body.over(bw, Cons(Sig::at(bw.fw.fsigs, f).result, g), Pair(m.value, env), n, m.after)),
         Again(_) => λ g env n s => Mutated(s, Sig::at(bw.fw.fsigs, 0).result.default(bw.fw.w.tys)),
         Lend(f, _, _, body) => λ g env n s => Mutated(s, body.ty(bw.fw.w, bw.fw.fsigs, Cons(Sig::at(bw.fw.fsigs, f).result, g)).default(bw.fw.w.tys)),
+        Loop(init, test, body, rest) => λ g env n s =>
+            FTm::over_rest_of(bw, g, Ty::at(g, init), rest.ty(bw.fw.w, bw.fw.fsigs, Cons(Ty::at(g, init), g)), n,
+                λ e s2 => rest.over(bw, Cons(Ty::at(g, init), g), e, n, s2),
+                FTm::over_iterated(bw, g, init, test, body.ty(bw.fw.w, bw.fw.fsigs, Cons(Ty::at(g, init), g)), n,
+                    λ e s2 => body.over(bw, Cons(Ty::at(g, init), g), e, n, s2), env, s), env),
     }
 }
 
@@ -177,12 +205,94 @@ fn FTm::over_ok(self t: FTm) → Nat → Bool {
         Call(_, args, body) => λ len => FTm::hands_on(args, len) && body.over_ok(Succ(len)),
         Again(_) => λ len => False,
         Lend(_, _, _, _) => λ len => False,
+        Loop(_, _, body, rest) => λ len => body.over_ok(Succ(len)) && rest.over_ok(Succ(len)),
     }
 }
 
 // Agreement along two equations of the byte side.
 theorem Over::along<R>(n: BitVec(64), m: Mutated<Bytes(n), R>, k, k2: Mutated<List<BitVec(8)>, R>, e: k = k2, agrees: Over<R>(n, m, k)): Over<R>(n, m, k2) {
     j(e, λ y _ => Over<R>(n, m, y), agrees)
+}
+
+// A record answer with the record read as its bytes: what the byte
+// meaning answers where the two agree.
+fn FTm::forget<R>(n: BitVec(64), m: Mutated<Bytes(n), R>) → Mutated<List<BitVec(8)>, R> { Mutated(m.after.bytes, m.value) }
+
+theorem Over::forgets<R>(n: BitVec(64), m: Mutated<Bytes(n), R>, k: Mutated<List<BitVec(8)>, R>, agrees: Over<R>(n, m, k)): FTm::forget(n, m) = k {
+    trans(j(agrees.after, λ a _ => Mutated<List<BitVec(8)>, R>(m.after.bytes, m.value) = Mutated<List<BitVec(8)>, R>(a, m.value), refl),
+        j(agrees.value, λ v _ => Mutated<List<BitVec(8)>, R>(k.after, m.value) = Mutated<List<BitVec(8)>, R>(k.after, v), refl))
+}
+
+// A loop's pass over a record, read through `FTm::forget`, is its byte
+// pass at the bytes: the test reads the same bytes, and the body's two
+// meanings agree (`ih`).
+theorem FTm::over_turn_runs(body: FTm, bw: BWorld, g: List<Ty>, env: Env(bw.fw.w.tys, g), st: Ty, test: Tm, n: BitVec(64),
+    ih: (v: st.sem(bw.fw.w.tys)) → (s: Bytes(n)) →
+        Over<body.ty(bw.fw.w, bw.fw.fsigs, Cons(st, g)).sem(bw.fw.w.tys)>(n, body.over(bw, Cons(st, g), Pair(v, env), n, s), body.sem(bw.fw, Cons(st, g), Pair(v, env), s.bytes)),
+    p: Mutated<Bytes(n), st.sem(bw.fw.w.tys)>):
+    loop::Step::map(λ (m: Mutated<Bytes(n), st.sem(bw.fw.w.tys)>) => FTm::forget(n, m),
+        FTm::over_turn(bw, g, env, st, test, body.ty(bw.fw.w, bw.fw.fsigs, Cons(st, g)), n, λ e s2 => body.over(bw, Cons(st, g), e, n, s2), p)) =
+    FTm::turn(bw.fw, g, env, st, test, body.ty(bw.fw.w, bw.fw.fsigs, Cons(st, g)), λ e o => body.sem(bw.fw, Cons(st, g), e, o), FTm::forget(n, p)) {
+    let tys = bw.fw.w.tys;
+    let bt = body.ty(bw.fw.w, bw.fw.fsigs, Cons(st, g));
+    loop::Step::turn_map(λ (m: Mutated<Bytes(n), st.sem(tys)>) => FTm::forget(n, m),
+        Ty::cast(tys, test.ty(bw.fw.w, Cons(st, g)), Bit, FTm::value(bw.fw, p.after.bytes, test, Cons(st, g), Pair(p.value, env))),
+        λ _ => FTm::over_recast(tys, bt, st, n, body.over(bw, Cons(st, g), Pair(p.value, env), n, p.after)),
+        λ _ => FTm::recast(tys, bt, st, body.sem(bw.fw, Cons(st, g), Pair(p.value, env), p.after.bytes)),
+        λ _ => Over::forgets(n, FTm::over_recast(tys, bt, st, n, body.over(bw, Cons(st, g), Pair(p.value, env), n, p.after)),
+            FTm::recast(tys, bt, st, body.sem(bw.fw, Cons(st, g), Pair(p.value, env), p.after.bytes)),
+            Over::recast(tys, bt, st, n, body.over(bw, Cons(st, g), Pair(p.value, env), n, p.after), body.sem(bw.fw, Cons(st, g), Pair(p.value, env), p.after.bytes),
+                ih(p.value, p.after))),
+        p)
+}
+
+// A loop's run over a record, read through `FTm::forget`, is its byte run.
+theorem FTm::over_iterated_runs(body: FTm, bw: BWorld, g: List<Ty>, env: Env(bw.fw.w.tys, g), init: Nat, test: Tm, n: BitVec(64),
+    ih: (v: Ty::at(g, init).sem(bw.fw.w.tys)) → (s: Bytes(n)) →
+        Over<body.ty(bw.fw.w, bw.fw.fsigs, Cons(Ty::at(g, init), g)).sem(bw.fw.w.tys)>(n,
+            body.over(bw, Cons(Ty::at(g, init), g), Pair(v, env), n, s), body.sem(bw.fw, Cons(Ty::at(g, init), g), Pair(v, env), s.bytes)),
+    s: Bytes(n)):
+    FTm::forget(n, FTm::over_iterated(bw, g, init, test, body.ty(bw.fw.w, bw.fw.fsigs, Cons(Ty::at(g, init), g)), n,
+        λ e s2 => body.over(bw, Cons(Ty::at(g, init), g), e, n, s2), env, s)) =
+    FTm::iterated(bw.fw, g, init, test, body.ty(bw.fw.w, bw.fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => body.sem(bw.fw, Cons(Ty::at(g, init), g), e, o), env, s.bytes) {
+    let st = Ty::at(g, init);
+    loop::Loop::steps_map(λ (m: Mutated<Bytes(n), st.sem(bw.fw.w.tys)>) => FTm::forget(n, m),
+        FTm::over_turn(bw, g, env, st, test, body.ty(bw.fw.w, bw.fw.fsigs, Cons(st, g)), n, λ e s2 => body.over(bw, Cons(st, g), e, n, s2)),
+        FTm::turn(bw.fw, g, env, st, test, body.ty(bw.fw.w, bw.fw.fsigs, Cons(st, g)), λ e o => body.sem(bw.fw, Cons(st, g), e, o)),
+        λ p => FTm::over_turn_runs(body, bw, g, env, st, test, n, ih, p),
+        loop::Loop::passes(), Mutated(s, Env::get(bw.fw.w.tys, g, env, init)))
+}
+
+// The rest after a loop, from two loop answers that agree.
+theorem FTm::over_rest_runs(rest: FTm, bw: BWorld, g: List<Ty>, env: Env(bw.fw.w.tys, g), st: Ty, n: BitVec(64),
+    ih: (v: st.sem(bw.fw.w.tys)) → (s: Bytes(n)) →
+        Over<rest.ty(bw.fw.w, bw.fw.fsigs, Cons(st, g)).sem(bw.fw.w.tys)>(n, rest.over(bw, Cons(st, g), Pair(v, env), n, s), rest.sem(bw.fw, Cons(st, g), Pair(v, env), s.bytes)),
+    m: Mutated<Bytes(n), st.sem(bw.fw.w.tys)>, k: Mutated<List<BitVec(8)>, st.sem(bw.fw.w.tys)>, e: FTm::forget(n, m) = k):
+    Over<rest.ty(bw.fw.w, bw.fw.fsigs, Cons(st, g)).sem(bw.fw.w.tys)>(n,
+        FTm::over_rest_of(bw, g, st, rest.ty(bw.fw.w, bw.fw.fsigs, Cons(st, g)), n, λ e2 s2 => rest.over(bw, Cons(st, g), e2, n, s2), m, env),
+        FTm::rest_of(bw.fw, g, st, rest.ty(bw.fw.w, bw.fw.fsigs, Cons(st, g)), λ e2 o => rest.sem(bw.fw, Cons(st, g), e2, o), k, env)) {
+    j(e, λ k2 _ => Over<rest.ty(bw.fw.w, bw.fw.fsigs, Cons(st, g)).sem(bw.fw.w.tys)>(n,
+            FTm::over_rest_of(bw, g, st, rest.ty(bw.fw.w, bw.fw.fsigs, Cons(st, g)), n, λ e2 s2 => rest.over(bw, Cons(st, g), e2, n, s2), m, env),
+            FTm::rest_of(bw.fw, g, st, rest.ty(bw.fw.w, bw.fw.fsigs, Cons(st, g)), λ e2 o => rest.sem(bw.fw, Cons(st, g), e2, o), k2, env)),
+        ih(m.value, m.after))
+}
+
+// The `Loop` case: the loop, then the rest.
+theorem FTm::over_loop_runs(body, rest: FTm, bw: BWorld, g: List<Ty>, env: Env(bw.fw.w.tys, g), init: Nat, test: Tm, n: BitVec(64),
+    ih_body: (v: Ty::at(g, init).sem(bw.fw.w.tys)) → (s: Bytes(n)) →
+        Over<body.ty(bw.fw.w, bw.fw.fsigs, Cons(Ty::at(g, init), g)).sem(bw.fw.w.tys)>(n,
+            body.over(bw, Cons(Ty::at(g, init), g), Pair(v, env), n, s), body.sem(bw.fw, Cons(Ty::at(g, init), g), Pair(v, env), s.bytes)),
+    ih_rest: (v: Ty::at(g, init).sem(bw.fw.w.tys)) → (s: Bytes(n)) →
+        Over<rest.ty(bw.fw.w, bw.fw.fsigs, Cons(Ty::at(g, init), g)).sem(bw.fw.w.tys)>(n,
+            rest.over(bw, Cons(Ty::at(g, init), g), Pair(v, env), n, s), rest.sem(bw.fw, Cons(Ty::at(g, init), g), Pair(v, env), s.bytes)),
+    s: Bytes(n)):
+    Over<FTm::ty(Loop(init, test, body, rest), bw.fw.w, bw.fw.fsigs, g).sem(bw.fw.w.tys)>(n,
+        FTm::over(Loop(init, test, body, rest), bw, g, env, n, s), FTm::sem(Loop(init, test, body, rest), bw.fw, g, env, s.bytes)) {
+    FTm::over_rest_runs(rest, bw, g, env, Ty::at(g, init), n, ih_rest,
+        FTm::over_iterated(bw, g, init, test, body.ty(bw.fw.w, bw.fw.fsigs, Cons(Ty::at(g, init), g)), n,
+            λ e s2 => body.over(bw, Cons(Ty::at(g, init), g), e, n, s2), env, s),
+        FTm::iterated(bw.fw, g, init, test, body.ty(bw.fw.w, bw.fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => body.sem(bw.fw, Cons(Ty::at(g, init), g), e, o), env, s.bytes),
+        FTm::over_iterated_runs(body, bw, g, env, init, test, n, ih_body, s))
 }
 
 theorem FTm::over_runs(self t: FTm, bw: BWorld, world: bw.Agrees()): (len: Nat) → t.over_ok(len).IsTrue() →
@@ -247,6 +357,12 @@ theorem FTm::over_runs(self t: FTm, bw: BWorld, world: bw.Agrees()): (len: Nat) 
         },
         Again(_) => λ len ok => false_elim(ok),
         Lend(_, _, _, _) => λ len ok => false_elim(ok),
+        Loop(init, test, body, rest) => λ len ok g env n known s => {
+            let both = body.over_ok(Succ(len)).is_true_and(rest.over_ok(Succ(len)), ok);
+            FTm::over_loop_runs(body, rest, bw, g, env, init, test, n,
+                λ v s2 => body.over_runs(bw, world, Succ(len), both.left, Cons(Ty::at(g, init), g), Pair(v, env), n, known, s2),
+                λ v s2 => rest.over_runs(bw, world, Succ(len), both.right, Cons(Ty::at(g, init), g), Pair(v, env), n, known, s2), s)
+        },
     }
 }
 

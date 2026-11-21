@@ -3126,6 +3126,7 @@ fn FTm::quote(self t: FTm, q: RtQ, cs: FtQ) → Expr {
         Again(args) => ap(runtime_at(cs.tm, 6), [q.nat_list(args)]),
         Lend(f, views, args, body) => ap(runtime_at(cs.tm, 7),
             [NatLit(f), RtQ::seq(cs.views, views.map(λ view => view.quote(cs))), q.nat_list(args), body.quote(q, cs)]),
+        Loop(init, test, body, rest) => ap(runtime_at(cs.tm, 8), [NatLit(init), test.quote(q), body.quote(q, cs), rest.quote(q, cs)]),
     }
 }
 

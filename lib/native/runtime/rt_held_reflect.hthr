@@ -1195,6 +1195,7 @@ fn rt_held_offsets(t: FTm, known: List<Option<Nat>>, held: List<Nat>) → List<N
         Call(f, args, body) => (match rt_held_has(held, f) { True => [], False => rt_held_third(args, 4, known) }) ++ rt_held_offsets(body, Cons(None, known), held),
         Again(_) => [],
         Lend(_, _, _, _) => [],
+        Loop(_, _, body, rest) => rt_held_offsets(body, Cons(None, known), held) ++ rt_held_offsets(rest, Cons(None, known), held),
     }
 }
 

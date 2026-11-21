@@ -404,6 +404,13 @@ fn FTm::rest_of(fw: FWorld, g: List<Ty>, st, rt: Ty,
     k(Pair(m.value, env), m.after)
 }
 
+// `FTm::rest_of` into any answer: what a pass of a tail-recursive body
+// (rt_file_loop, rt_held_loop) goes on with after a loop.
+fn FTm::bind_at<S>(tys: Nat → RecInfo, g: List<Ty>, st: Ty, m: Mutated<List<BitVec(8)>, st.sem(tys)>, env: Env(tys, g),
+    k: Env(tys, Cons(st, g)) → List<BitVec(8)> → S) → S {
+    k(Pair(m.value, env), m.after)
+}
+
 // The meaning: a function threading the written span's bytes, at the code
 // the computation returns.
 fn FTm::sem(self t: FTm, fw: FWorld) → (g: List<Ty>) → Env(fw.w.tys, g) → List<BitVec(8)>

@@ -72,8 +72,23 @@ fn FTm::tail_sem(self t: FTm, fw: FWorld, res: Ty, again: FTm::Round(fw.w.tys, r
         Again(args) => λ g env own => again(Tm::words(fw.w, g, env, args), own),
         Lend(f, views, args, body) => λ g env own => shared(FTm::lent(fw, g, env, f, views, args, own), λ m =>
             body.tail_sem(fw, res, again, Cons(Sig::at(fw.fsigs, f).result, g), Pair(m.value, env), m.after)),
+        Loop(init, test, body, rest) => λ g env own => FTm::bind_at(fw.w.tys, g, Ty::at(g, init),
+            FTm::iterated(fw, g, init, test, body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => body.sem(fw, Cons(Ty::at(g, init), g), e, o), env, own),
+            env, λ e o => rest.tail_sem(fw, res, again, Cons(Ty::at(g, init), g), e, o)),
     }
 }
+
+// Two continuations that agree go on alike after a loop.
+theorem FTm::bind_at_ext<S>(tys: Nat → RecInfo, g: List<Ty>, st: Ty, m: Mutated<List<BitVec(8)>, st.sem(tys)>, env: Env(tys, g),
+    k1, k2: Env(tys, Cons(st, g)) → List<BitVec(8)> → S, same: (e: Env(tys, Cons(st, g))) → (o: List<BitVec(8)>) → k1(e, o) = k2(e, o)):
+    FTm::bind_at(tys, g, st, m, env, k1) = FTm::bind_at(tys, g, st, m, env, k2) {
+    same(Pair(m.value, env), m.after)
+}
+
+// What follows a loop, read through `f`.
+theorem FTm::bind_at_after<S, T>(tys: Nat → RecInfo, g: List<Ty>, st: Ty, m: Mutated<List<BitVec(8)>, st.sem(tys)>, env: Env(tys, g),
+    k: Env(tys, Cons(st, g)) → List<BitVec(8)> → S, f: S → T):
+    FTm::bind_at(tys, g, st, m, env, λ e o => f(k(e, o))) = f(FTm::bind_at(tys, g, st, m, env, k)) { refl }
 
 // A step's meaning reads its recursion only at the calls it makes: two
 // recursions that answer alike give one meaning.
@@ -99,6 +114,10 @@ theorem FTm::tail_sem_ext(self t: FTm, fw: FWorld, res: Ty, k1, k2: FTm::Round(f
         Again(args) => λ g env own => same(Tm::words(fw.w, g, env, args), own),
         Lend(f, views, args, body) => λ g env own => FTm::tail_sem_ext(body, fw, res, k1, k2, same, Cons(Sig::at(fw.fsigs, f).result, g),
             Pair(FTm::lent(fw, g, env, f, views, args, own).value, env), FTm::lent(fw, g, env, f, views, args, own).after),
+        Loop(init, test, body, rest) => λ g env own => FTm::bind_at_ext(fw.w.tys, g, Ty::at(g, init),
+            FTm::iterated(fw, g, init, test, body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => body.sem(fw, Cons(Ty::at(g, init), g), e, o), env, own),
+            env, λ e o => rest.tail_sem(fw, res, k1, Cons(Ty::at(g, init), g), e, o), λ e o => rest.tail_sem(fw, res, k2, Cons(Ty::at(g, init), g), e, o),
+            λ e o => FTm::tail_sem_ext(rest, fw, res, k1, k2, same, Cons(Ty::at(g, init), g), e, o)),
     }
 }
 
@@ -449,6 +468,7 @@ fn FTm::lower_tail(self t: FTm, w: World, fsigs: List<Sig>, base: Nat, res: Ty, 
         Lend(f, views, args, body) => FTm::lower_lend(w, fsigs, base, g, ports, next, f, views, args).and_then(λ lc =>
             FTm::lower_tail(body, w, fsigs, base, res, flag, kept, nexts, Cons(Sig::at(fsigs, f).result, g), Cons(lc.result, ports), lc.next)
                 .and_then(λ lb => Tm::compose(lc, lb))),
+        Loop(_, _, _, _) => None,
     }
 }
 
@@ -563,6 +583,7 @@ theorem FTm::tail_sound(self t: FTm, fw: FWorld, base: Nat, res: Ty, er: res.One
                     j(lowered_body, λ r _ => FTm::TailHolds(body, fw, base, res, flag, kept, nexts, inner, Cons(lc.result, ports), lc.next, r),
                         FTm::tail_sound(body, fw, base, res, er, flag, kept, nexts, inner, Cons(lc.result, ports), lc.next)))))
         },
+        Loop(_, _, _, _) => λ g ports next => trivial,
     }
 }
 

@@ -242,3 +242,36 @@ theorem Loop::steps_stays<S>(self l: Loop<S, S>, step: S → Step<S>, same: (s: 
         },
     }
 }
+
+// A step's state read through `f`.
+fn Step::map<S, T>(f: S → T, self q: Step<S>) → Step<T> {
+    match q { Next(s) => Next(f(s)), Stop(s) => Stop(f(s)) }
+}
+
+// A `while` pass read through `f` is the pass over the states `f` reads,
+// where the two go round to states `f` relates.
+theorem Step::turn_map<S, T>(f: S → T, go: Bool, next1: (go = True) → S, next2: (go = True) → T,
+    same: (e: go = True) → f(next1(e)) = next2(e), s: S): Step::turn(go, next1, s).map(f) = Step::turn(go, next2, f(s)) {
+    (match go as λ b => (e: go = b) →
+        Step::map(f, (match b as λ b2 => (go = b2) → Step<S> { False => λ _ => Stop(s), True => λ e2 => Next(next1(e2)) })(e)) =
+        (match b as λ b2 => (go = b2) → Step<T> { False => λ _ => Stop(f(s)), True => λ e2 => Next(next2(e2)) })(e)
+    { False => λ _ => refl, True => λ e => j(same(e), λ t _ => Step::Next(f(next1(e))) = Step::Next(t), refl) })(refl)
+}
+
+// A loop simulated through `f`: where each pass read through `f` is the
+// other loop's pass at the state `f` reads, the two iterate alike. What a
+// loop's second meaning (over a record, forgetting facts) is proved by,
+// once.
+theorem Loop::steps_map<S, T>(f: S → T, s1: S → Step<S>, s2: T → Step<T>, commute: (s: S) → s1(s).map(f) = s2(f(s)), k: Nat):
+    (s: S) → f(Loop::steps(k, s1, s)) = Loop::steps(k, s2, f(s)) {
+    match k {
+        Zero => λ s => refl,
+        Succ(i) => λ s => {
+            let ran2 = λ (q: Step<T>) => match q { Next(t) => Loop::steps(i, s2, t), Stop(r) => r };
+            trans(match s1(s) as λ q => f(match q { Next(t) => Loop::steps(i, s1, t), Stop(r) => r }) = ran2(q.map(f)) {
+                    Next(t) => Loop::steps_map(f, s1, s2, commute, i, t),
+                    Stop(_) => refl,
+                }, j(commute(s), λ q _ => ran2(s1(s).map(f)) = ran2(q), refl))
+        },
+    }
+}
