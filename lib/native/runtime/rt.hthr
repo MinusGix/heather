@@ -375,15 +375,6 @@ fn RecInfo::enum_at(tys: Nat → RecInfo, i: Nat) → Type { tys(i).alts.E }
 // The word an enum of table entry `i` is passed as: its tag.
 fn RecInfo::enum_word(tys: Nat → RecInfo, i: Nat, v: tys(i).alts.E) → BitVec(64) { BitVec::ofNat(tys(i).alts.tag(v)) }
 
-// What is said of the value an enum's tag word reads back as is said of
-// the value (`EnumInfo::read_tag`): how a generator states a function's
-// agreement at the enum it was passed rather than at what its word reads
-// as.
-theorem RecInfo::enum_agrees(tys: Nat → RecInfo, i: Nat, v: tys(i).alts.E, bare: tys(i).alts.fields(v) = Ty::flats_default(tys(i).alts.slots),
-    small: (tys(i).alts.last + 1).leb(Nat::pow(2, 64)) = True, P: tys(i).alts.E → Type, h: P(tys(i).alts.read(RecInfo::enum_word(tys, i, v)))): P(v) {
-    j(tys(i).alts.read_tag(v, small, bare), λ y _ => P(y), h)
-}
-
 // The `i`th code, `Bit` past the end (every judgment refuses that index).
 fn Ty::at(ts: List<Ty>, i: Nat) → Ty {
     match ts { Nil => Bit, Cons(t, rest) => match i { Zero => t, Succ(k) => Ty::at(rest, k) } }
