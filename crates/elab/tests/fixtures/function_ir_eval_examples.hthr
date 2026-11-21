@@ -49,7 +49,7 @@ theorem double_runs(): program_eval(pair(), 0, [w(21)]) = w(42) { refl }
 
 // The claim: add_double, called on 3 and 4, may return what it evaluates
 // to, with its call answered by double.
-theorem pair_computes(): program_callees(pair(), 1, [w(3), w(4)], w(10)) {
+theorem pair_computes(): program_callees(pair(), 1, [w(3), w(4)], w(10), Nil) {
     program_eval_computes(pair(), pair_evaluable, 1, [w(3), w(4)], trivial,
         program_total_defined(pair(), [], trivial, 1, [w(3), w(4)]))
 }
@@ -74,13 +74,13 @@ theorem select_evaluable(): program_evaluable([select()]).IsTrue() { trivial }
 theorem select_true(): program_eval([select()], 0, [w(2), w(9), w(100)]) = w(7) { refl }
 theorem select_false(): program_eval([select()], 0, [w(9), w(2), w(100)]) = w(100) { refl }
 
-theorem select_computes(): program_callees([select()], 0, [w(2), w(9), w(100)], w(7)) {
+theorem select_computes(): program_callees([select()], 0, [w(2), w(9), w(100)], w(7), Nil) {
     program_eval_computes([select()], select_evaluable, 0, [w(2), w(9), w(100)], trivial,
         program_total_defined([select()], [], trivial, 0, [w(2), w(9), w(100)]))
 }
 
 // At an open argument the claim is the theorem's, with no evaluation.
-theorem select_computes_open(a, b, c: BitVec(64)): program_callees([select()], 0, [a, b, c], program_eval([select()], 0, [a, b, c])) {
+theorem select_computes_open(a, b, c: BitVec(64)): program_callees([select()], 0, [a, b, c], program_eval([select()], 0, [a, b, c]), program_answers([select()], 0, [a, b, c]).tail()) {
     program_eval_computes([select()], select_evaluable, 0, [a, b, c], trivial,
         program_total_defined([select()], [], trivial, 0, [a, b, c]))
 }

@@ -292,7 +292,6 @@ fn Function::inlined(self callee: Function, by: Nat, arguments: List<Nat>, resul
         Compose(callee.body.raised(by), StructuredRegion::of_nodes(Cons(Move(64, result, callee.result + by), returns(also, callee.also, by)))))
 }
 
-
 theorem binds_run(values, inner, new: Valuation(), by: Nat, below: Valuation::AgreeBelow(values, new, by),
     above: (w: Nat) → (id: Nat) → new(w, id + by) = inner(w, id), file: Buffers(), parameters: List<Nat>): (arguments: List<Nat>) →
     ids_under(arguments, by) = True → words_of(inner, parameters) = words_of(values, arguments) →

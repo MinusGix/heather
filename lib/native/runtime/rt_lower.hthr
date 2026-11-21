@@ -4060,7 +4060,6 @@ theorem Ty::enum_from_words(tys: Nat → RecInfo, i: Nat, ok: Enum(i).Passes(tys
     }, λ m => Ty::fields_below_len(Cons(Word(64), e.slots), m, m + (e.slots.len() + 1), (m + (e.slots.len() + 1)).le_refl())⟩
 }
 
-
 // What the entry needs of a code it reads by one `Resize` from the word
 // passed (`Ty::narrow`): the word is bound at its one id, its fresh port
 // is below the next, and the port after the `Resize` holds the word read
