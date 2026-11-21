@@ -1,11 +1,12 @@
 // Probes for loops in `runtime fn`s over a span (docs/language/sequencing-surface-design.md
-// §23): a `while` or a `for` over words whose state is the `mut self`
-// receiver and one other local is lifted as a `mut self` method of the
-// receiver's type that returns that local, which the `runtime` generator
-// compiles as a loop over the span; a loop in a loop lifts the inner one
-// from the outer one's method; a loop whose state is not the receiver is
-// compiled too, and its caller calls it. Nothing here is proved by hand:
-// each theorem runs the function by evaluation.
+// §23, docs/language/loop-combinator-design.md §6.3): a `while` or a `for`
+// over words whose state is the `mut self` receiver and words is written
+// where it stands, as the library's `Loop::steps` over `Mutated<span, S>`,
+// which the `runtime` generator reads as one loop node over the span; a
+// loop in a loop is one node inside another, and a value the inner loop
+// reads from outside it is bound before it. A loop whose state is not the
+// receiver is compiled too. Nothing here is proved by hand: each theorem
+// runs the function by evaluation.
 import logic;
 import bool;
 import nat;
@@ -67,9 +68,6 @@ runtime fn List::open_hole(mut self s: List<u8>, n, i, key: u64) → u64 {
     j
 }
 
-// The loop is a method of the span's type, `List::open_hole_loop`, which
-// answers the span it leaves and `j`.
-theorem open_hole_moves(): List::open_hole_loop([1, 3, 5, 7, 0], 5, 4, 4) = Mutated([1, 3, 5, 5, 7], 2) { refl }
 theorem open_hole_runs(): List::open_hole([1, 3, 5, 7, 0], 5, 4, 4) = Mutated([1, 3, 5, 5, 7], 2) { refl }
 
 // ---------------------------------------------------------------------------

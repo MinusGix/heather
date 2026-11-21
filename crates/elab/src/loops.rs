@@ -424,6 +424,31 @@ impl<'a> Lift<'a> {
         }
     }
 
+    /// A loop's body with the loops in it written first, where the loop is
+    /// written in place (`Lift::lift_steps_over`): they are lowered under
+    /// the enclosing scope and the loop's own counter (`extra`).
+    fn nested(&mut self, body: &Block, scope: &[Local], extra: &[(String, Ty)]) -> R<Block> {
+        let whole = Expr { kind: ExprKind::Block(Box::new(body.clone())), span: body.span };
+        if !contains_loop(&whole) {
+            return Ok(body.clone());
+        }
+        // Each loop's names carry its number once there are two.
+        self.loops = self.loops.max(2);
+        let mut inner: Vec<Local> = scope.to_vec();
+        inner.extend(extra.iter().map(|(n, t)| Local { name: n.clone(), written: Some(t.clone()), value: None }));
+        self.block(body.clone(), &mut inner)
+    }
+
+    /// The span a `runtime fn` writes among a loop's state: its `mut self`
+    /// receiver, a `List<u8>`, beside any number of other locals.
+    fn span_receiver(&self, vars: &[&str]) -> Option<Param> {
+        if !matches!(&self.decl.result.kind, TyKind::Named { name, .. } if name == heather_syntax::MUTATED_RECORD) {
+            return None;
+        }
+        let r = self.decl.params.iter().find(|p| p.is_self)?;
+        (vars.contains(&r.name.as_str()) && is_span(&r.ty)).then(|| r.clone())
+    }
+
     /// The name of a loop lifted as a method of the receiver's type,
     /// `T::f_loop`, or `T::f_loop2`, … where `f` has several.
     fn method_name(&self) -> String {
@@ -891,16 +916,16 @@ impl Lift<'_> {
             && measured_word(measure).is_some()
             && captures.iter().all(|(_, t)| is_u64(t))
             && self.solver_params().is_empty()
-            && let Some((r, Some(_))) = self.receiver_in(&vars)
-            && is_span(&r.ty)
+            && let Some(r) = self.span_receiver(&vars)
         {
             let others: Vec<usize> = (0..vars.len()).filter(|&k| vars[k] != r.name).collect();
-            if others.iter().all(|&k| is_u64(&state_tys[k])) {
+            if !others.is_empty() && others.iter().all(|&k| is_u64(&state_tys[k])) {
                 let names: Vec<String> = others.iter().map(|&k| vars[k].to_string()).collect();
                 let tys: Vec<Ty> = others.iter().map(|&k| state_tys[k].clone()).collect();
                 let at: Vec<Expr> = names.iter().map(|v| var(v, span)).collect();
                 let word = measured_word(measure).expect("a word's measure").clone();
-                return self.lift_steps_over(span, body, &captures, &names, &tys, cond, at.clone(), at, measure, &word, Some((r.name.clone(), r.ty.clone())));
+                let body = self.nested(body, scope, &[])?;
+                return self.lift_steps_over(span, &body, &captures, &names, &tys, cond, at.clone(), at, measure, &word, Some((r.name.clone(), r.ty.clone())));
             }
         }
         if let Some((r, Some(k))) = self.receiver_in(&vars) {
@@ -1335,7 +1360,13 @@ impl Lift<'_> {
         let words_of = |args: Vec<Expr>, at: Span| if single { args.into_iter().next().expect("one local") } else { call(var(&state, at), args, at) };
         let state_of = |args: Vec<Expr>, at: Span| match &receiver {
             None => words_of(args, at),
-            Some((r, _)) => call(var(heather_syntax::MUTATED_RECORD, at), vec![var(r, at), words_of(args, at)], at),
+            // Typed in full: a count's start is a numeral, which names no
+            // width of its own.
+            Some((r, rty)) => call(
+                Expr { kind: ExprKind::TyApp { head: Box::new(var(heather_syntax::MUTATED_RECORD, at)), args: vec![rty.clone(), words_ty.clone()] }, span: at },
+                vec![var(r, at), words_of(args, at)],
+                at,
+            ),
         };
         let block = |stmts: Vec<Stmt>, result: Expr, at: Span| Expr {
             kind: ExprKind::Block(Box::new(Block { stmts, result: Box::new(result), ons: vec![], span: at })),
@@ -2046,18 +2077,21 @@ impl Lift<'_> {
         self.implicit_captures(&mut captures, state_tys.iter());
         // In a `runtime fn`, a count over words whose state and captures
         // are words is the library's `Loop::steps`, the count a field of
-        // its state (`Lift::lift_steps`).
+        // its state (`Lift::lift_steps`); with the span the function writes
+        // among them, over `Mutated<span, S>` (`Lift::lift_steps_over`).
+        let span_receiver = self.span_receiver(&vars);
+        let words: Vec<usize> = (0..vars.len()).filter(|&k| span_receiver.as_ref().is_none_or(|r| vars[k] != r.name)).collect();
         if !self.free
             && free.is_empty()
-            && self.receiver_in(&vars).is_none()
+            && (span_receiver.is_some() || self.receiver_in(&vars).is_none())
             && is_u64(&word)
-            && state_tys.iter().all(is_u64)
+            && words.iter().all(|&k| is_u64(&state_tys[k]))
             && captures.iter().all(|(_, t)| is_u64(t))
             && self.solver_params().is_empty()
         {
-            let mut names: Vec<String> = vars.iter().map(|v| v.to_string()).collect();
+            let mut names: Vec<String> = words.iter().map(|&k| vars[k].to_string()).collect();
             names.push(x.name.clone());
-            let mut tys = state_tys.clone();
+            let mut tys: Vec<Ty> = words.iter().map(|&k| state_tys[k].clone()).collect();
             tys.push(word.clone());
             let i = var(&x.name, span);
             let test = op("<", vec![i.clone(), hi.clone()], span);
@@ -2067,12 +2101,16 @@ impl Lift<'_> {
                 span,
             );
             let end = body.result.span;
-            let mut next: Vec<Expr> = vars.iter().map(|v| var(v, end)).collect();
+            let mut next: Vec<Expr> = words.iter().map(|&k| var(vars[k], end)).collect();
             next.push(op("+", vec![var(&x.name, end), num(1, end)], end));
-            let mut init: Vec<Expr> = vars.iter().map(|v| var(v, span)).collect();
+            let mut init: Vec<Expr> = words.iter().map(|&k| var(vars[k], span)).collect();
             init.push(lo.clone());
             let gap = op("-", vec![hi.clone(), i.clone()], span);
             let counted = Expr { kind: ExprKind::Dot { recv: Box::new(gap.clone()), name: "toNat".into(), tyargs: vec![], args: Some(vec![]), named: vec![] }, span };
+            if let Some(r) = span_receiver {
+                let body = self.nested(body, scope, &[(x.name.clone(), word.clone())])?;
+                return self.lift_steps_over(span, &body, &captures, &names, &tys, &bit, next, init, &counted, &gap, Some((r.name.clone(), r.ty.clone())));
+            }
             let lowered = self.lift_steps(span, body, &captures, &names, &tys, &bit, next, init, &counted, &gap)?;
             // The state's fields are read back by name; with no local but
             // the count, nothing reads it.

@@ -541,6 +541,76 @@ fn rt_file_ops(names: FileNames, args: List<Handle>) → Tac<List<Handle>> {
     }
 }
 
+// Whether `todo` reads only locals bound outside a loop (`outer`), at
+// least one among them where `any` is not yet: never where it binds a
+// local of its own (a `λ`, a `match`) or reads one bound inside.
+fn rt_file_outside(fuel: Nat, outer: List<Pair<Nat, Nat>>, todo: List<Handle>, any: Bool) → Tac<Bool> {
+    match fuel {
+        Zero => pure(False),
+        Succ(f) => match todo {
+            Nil => pure(any),
+            Cons(h, rest) => view(h).bind(λ v => match v {
+                HLocal(x, args) => match rt_assoc(outer, x.id) {
+                    Some(_) => rt_file_outside(f, outer, args ++ rest, True),
+                    None => pure(False),
+                },
+                HGlobal(_, _, args) => rt_file_outside(f, outer, args ++ rest, any),
+                HField(of, _, args) => rt_file_outside(f, outer, Cons(of, args) ++ rest, any),
+                HCtor(_, _, _, fields) => rt_file_outside(f, outer, fields ++ rest, any),
+                HLit(_) => rt_file_outside(f, outer, rest, any),
+                _ => pure(False),
+            }),
+        },
+    }
+}
+
+// The words a loop's test and body make of what is bound outside it alone
+// (loop-invariant code), the largest first: bound before the loop, a pass
+// reads their variables. A loop carries 64-bit words only (`Ty::Carries`),
+// so a byte read outside and widened inside (`key.zero_extend(56)`) is
+// carried widened. A `λ` or a `match` arm is not entered: its walk opens
+// it again, at handles of its own.
+fn rt_file_invariants(fuel: Nat, k: Known, outer: List<Pair<Nat, Nat>>, todo: List<Handle>, found: List<Handle>) → Tac<List<Handle>> {
+    match fuel {
+        Zero => pure(found),
+        Succ(f) => match todo {
+            Nil => pure(found),
+            Cons(h, rest) => view(h).bind(λ v => {
+                let children: Tac<List<Handle>> = match v {
+                    HLocal(_, args) => pure(args),
+                    HGlobal(_, _, args) => pure(args),
+                    HField(of, _, args) => pure(Cons(of, args)),
+                    HCtor(_, _, _, fields) => pure(fields),
+                    HMatch(scrut) => pure([scrut]),
+                    _ => pure([]),
+                };
+                let descend = children.bind(λ cs => rt_file_invariants(f, k, outer, cs ++ rest, found));
+                let bare = match v { HLocal(_, args) => match args { Nil => True, Cons(_, _) => False }, HLit(_) => True, _ => False };
+                match bare {
+                    True => rt_file_invariants(f, k, outer, rest, found),
+                    False => rt_file_outside(256, outer, [h], False).bind(λ inv => match inv {
+                        False => descend,
+                        True => attempt(k.ty_of(h)).bind(λ o => match o {
+                            Done(t) => match t {
+                                Word(w) => match w.same(64) { True => rt_file_invariants(f, k, outer, rest, found ++ [h]), False => descend },
+                                _ => descend,
+                            },
+                            Failed(_, _) => descend,
+                        }),
+                    }),
+                }
+            }),
+        },
+    }
+}
+
+fn rt_file_bind_all(fuel: Nat, k: Known, st: RSt, hs: List<Handle>) → Tac<RSt> {
+    match hs {
+        Nil => pure(st),
+        Cons(h, rest) => rt_go(fuel, k, st, h, True).bind(λ r => rt_file_bind_all(fuel, k, r.fst, rest)),
+    }
+}
+
 // What a body's walk leaves: its computation, and the program's pure
 // functions and computations after it.
 record FileEnd { term: FTm, funs: List<Nat>, cfuns: List<Nat> }
@@ -563,8 +633,6 @@ fn rt_file_loop(fuel: Nat, k: Known, names: FileNames, w: FWalk, link: Handle, c
                     let start <- rt_file_loop_start(args);
                     let kk = k.at_file(w.fk);
                     let ri <- rt_go(f, kk, w.st, start.snd, True);
-                    let s0 = ri.fst;
-                    let at = s0.depth;
                     let os <- open(step, "t").bind(λ c1 => rt_accepted("a loop's step", c1));
                     let av <- view(os.body);
                     match av {
@@ -577,7 +645,10 @@ fn rt_file_loop(fuel: Nat, k: Known, names: FileNames, w: FWalk, link: Handle, c
                                     HGlobal(_, tname, targs) => match targs {
                                         Cons(test_h, Cons(next_h, _)) => {
                                             let on <- open(next_h, "h").bind(λ c4 => rt_accepted("a loop's next state", c4));
-                                            let inner = FileKnown::start(ospan.local.ref.id, w.fk.calls);
+                                            let hoisted <- rt_file_invariants(4096, k, Cons(Pair(w.fk.span, 0), w.fk.outer.map(λ o => Pair(o.span, 0)) ++ ri.fst.locals), [test_h, on.body], []);
+                                            let s0 <- rt_file_bind_all(f, kk, ri.fst, hoisted);
+                                            let at = s0.depth;
+                                            let inner = w.fk.inside(ospan.local.ref.id);
                                             let base = s0.written(at + 1);
                                             let under = RSt(at + 1, [], base.memo, base.handles, Cons(Pair(ov.local.ref.id, at), base.locals), s0.funs);
                                             let rt <- rt_go(f, k.at_file(inner), under, test_h, False);
@@ -725,6 +796,11 @@ fn rt_file_scan(fuel: Nat, k: Known, names: FileNames, w: FWalk, links: List<Han
                     }),
                 },
                 HCtor(_, _, _, fields) => rt_file_scan(f, k, names, w, links, now, fields ++ rest, found),
+                // A loop's step and its pass over the span and words.
+                HLam(_) => open(h, "x").bind(λ c => match c {
+                    Accepted(o) => rt_file_scan(f, k, names, w, links, now, Cons(o.body, rest), found),
+                    Refused(_) => rt_file_scan(f, k, names, w, links, now, rest, found),
+                }),
                 HMatch(_) => arms(h).bind(λ c => match c {
                     Accepted(m) => rt_file_arm_bodies(m, m.arms).bind(λ bodies => rt_file_scan(f, k, names, w, links, now, Cons(m.scrut, bodies) ++ rest, found)),
                     Refused(_) => rt_file_scan(f, k, names, w, links, now, rest, found),
@@ -759,14 +835,24 @@ fn rt_file_operands(names: FileNames, link: Handle) → Tac<List<Handle>> {
     })
 }
 
+// Whether a link is a loop over the span (`loop::Loop::steps(…).after`).
+fn rt_file_is_loop(names: FileNames, link: Handle) → Tac<Bool> {
+    view(link).bind(λ v => match v {
+        HField(c, _, _) => view(c).bind(λ cv => match cv { HGlobal(g, _, _) => pure(FileNames::names(names.steps, g.id)), _ => pure(False) }),
+        _ => pure(False),
+    })
+}
+
 // The reads to bind early on a path: each link's operands are read at the
 // state before it, and `uses`, what the path ends in, at the last.
 fn rt_file_plan_links(k: Known, names: FileNames, w: FWalk, links: List<Handle>, now: Nat, left: List<Handle>, found: List<Planned>)
     → Tac<List<Planned>> {
     match left {
         Nil => pure(found),
-        Cons(link, rest) => rt_file_operands(names, link).bind(λ ops =>
-            rt_file_scan(rt_file_scan_fuel(), k, names, w, links, now, ops, found)).bind(λ more =>
+        // A loop's pass reads the span as it is at the loop only through
+        // a byte bound before it.
+        Cons(link, rest) => rt_file_operands(names, link).bind(λ ops => rt_file_is_loop(names, link).bind(λ looped =>
+            rt_file_scan(rt_file_scan_fuel(), k, names, w, links, match looped { True => now + 1, False => now }, ops, found))).bind(λ more =>
             rt_file_plan_links(k, names, w, links, now + 1, rest, more)),
     }
 }
