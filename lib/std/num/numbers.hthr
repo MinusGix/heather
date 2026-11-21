@@ -1,0 +1,7 @@
+// The number systems by one import: `Nat`, `Int` and `Rat` with their
+// arithmetic, order and laws, bare (docs/language/modules-design.md §3.9).
+// A glob: `DivMod`, which `nat` and `int` both declare, is left out here and
+// reached as `nat::DivMod` or `int::DivMod`.
+export import nat;
+export import int;
+export import rat;

@@ -1,0 +1,28 @@
+// Every tactic by one import: `import tactics;` and `omega`, `grind`,
+// `ring`, `bv_decide`, `simp`, … are bare, with the lemmas each reads
+// (docs/language/modules-design.md §3.9). A glob: names two of these modules
+// both declare (`node_of`, `PTerm`, …) are left out here and reached as
+// `grind::node_of`. New tactic modules join the list.
+export import bitblast;
+export import bitvec_omega;
+export import bv_decide;
+export import bv_normalize;
+export import cast;
+export import derive;
+export import fact_request;
+export import grind;
+export import interval_tactic;
+export import linarith;
+export import lrat;
+export import mono;
+export import mono_laws;
+export import norm_num;
+export import norm_num_real;
+export import omega;
+export import relation_context;
+export import ring;
+export import set_tactic;
+export import simp;
+export import simp_laws;
+export import tactic;
+export import wlog;

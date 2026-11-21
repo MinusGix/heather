@@ -1,0 +1,23 @@
+// Everything a program and its proofs reach for, by one import: `import
+// program;` (docs/language/modules-design.md §3.9; chosen with Minus
+// 2026-11-20). The runtime and its words and spans, stored words, the
+// number systems, text, the everyday data structures and every tactic, bare.
+// A glob: a name two of these declare is left out here and reached
+// qualified. The deeper proof material (machine and OS models, transition
+// systems) stays an import, or a path (`linux_world::…`) away.
+export import runtime;
+export import stored_words;
+export import words;
+export import numbers;
+export import tactics;
+export import char;
+export import string;
+export import utf8;
+export import decimal;
+export import list;
+export import option;
+export import result;
+export import vector;
+export import assoc;
+export import nat_map;
+export import sorting;
