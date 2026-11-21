@@ -46,7 +46,7 @@ fn Sorting::insert({n: u64}, self t: Sorting(n)) → Pass<Sorting(n), Bytes(n)>(
         let fact: ∥t.i < n∥ = squash(inside);
         let key = t.s[t.i];
         let start: Hole(n, t.i) = Hole(s := t.s, j := t.i, kept := bitvec_omega::found_fact<t.i <= t.i>(fact := bv_omega));
-        let h = Loop<Hole(n, t.i), Hole(n, t.i)>(measure := Hole::left, step := λ (h: Hole(n, t.i)) => h.sift(key, fact)).run(start);
+        let h = loop::Loop<Hole(n, t.i), Hole(n, t.i)>(measure := Hole::left, step := λ (h: Hole(n, t.i)) => h.sift(key, fact)).run(start);
         let kept = h.kept;
         let less: ((n - (t.i + 1)).toNat() < (n - t.i).toNat()) = bv_omega;
         Again(Lower(next := Sorting(s := h.s.put(h.j, key), i := t.i + 1), less := squash(less)))
@@ -56,7 +56,7 @@ fn Sorting::insert({n: u64}, self t: Sorting(n)) → Pass<Sorting(n), Bytes(n)>(
 }
 
 fn Bytes::sorted({n: u64}, self s: Bytes(n)) → Bytes(n) {
-    Loop<Sorting(n), Bytes(n)>(measure := Sorting::left, step := λ (t: Sorting(n)) => t.insert()).run(Sorting(s := s, i := 0))
+    loop::Loop<Sorting(n), Bytes(n)>(measure := Sorting::left, step := λ (t: Sorting(n)) => t.insert()).run(Sorting(s := s, i := 0))
 }
 
 theorem sorted_runs(): Bytes([3, 1, 2, 0, 2], refl).sorted(n := 5).bytes = [0, 1, 2, 2, 3] { refl }

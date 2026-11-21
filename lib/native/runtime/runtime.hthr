@@ -3166,6 +3166,7 @@ fn FTm::quote(self t: FTm, q: RtQ, cs: FtQ) → Expr {
         Again(args) => ap(runtime_at(cs.tm, 6), [q.nat_list(args)]),
         Lend(f, views, args, body) => ap(runtime_at(cs.tm, 7),
             [NatLit(f), RtQ::seq(cs.views, views.map(λ view => view.quote(cs))), q.nat_list(args), body.quote(q, cs)]),
+        Loop(init, test, body, rest) => ap(runtime_at(cs.tm, 8), [NatLit(init), test.quote(q), body.quote(q, cs), rest.quote(q, cs)]),
     }
 }
 
@@ -3562,6 +3563,21 @@ fn SpanWriting::value(self cx: SpanWriting, span: Expr, env: List<Expr>, g: List
     }
 }
 
+// Whether a computation holds a loop node.
+fn FTm::loops(self t: FTm) → Bool {
+    match t {
+        Pure(_) => False,
+        Let(_, body) => body.loops(),
+        If(_, yes, no) => yes.loops().or(no.loops()),
+        IfEq(_, yes, no) => yes.loops().or(no.loops()),
+        Put(_, _, _, body) => body.loops(),
+        Call(_, _, body) => body.loops(),
+        Again(_) => False,
+        Lend(_, _, _, body) => body.loops(),
+        Loop(_, _, _, _) => True,
+    }
+}
+
 // A computation at a span, likewise.
 fn SpanWriting::written(self cx: SpanWriting, span: Expr, env: List<Expr>, g: List<Ty>, under: LocalRef, t: FTm) → Tac<Expr> {
     match t {
@@ -3617,6 +3633,40 @@ fn SpanWriting::written(self cx: SpanWriting, span: Expr, env: List<Expr>, g: Li
         Again(args) => match cx.again {
             None => runtime_fail("`" ++ cx.name ++ "`'s reflection calls itself and is not written out as a loop"),
             Some(later) => cx.lent(span, env, args).bind(λ es => pure(ap(later, es))),
+        },
+        // A loop over the span: the library's `Loop::steps` of a pass over
+        // `Mutated(span, words)`, then the rest from its span and words.
+        // Spelled as `FTm::sem` spells it (`FTm::turn`): `Loop::after`, the
+        // test cast to a bit, the body recast to the state's code. Compared
+        // with the meaning, the passes then meet by their arguments; a pass
+        // that did not would be unfolded on both sides once per pass of
+        // `Loop::passes()`.
+        Loop(init, test, body, rest) => {
+            let steps <- runtime_global("loop::Loop::steps");
+            let passes <- runtime_global("loop::Loop::passes");
+            let when <- runtime_global("loop::Step::when");
+            let after <- runtime_global("loop::Loop::after");
+            let mutated <- runtime_global("Mutated");
+            let cast <- runtime_global(name_of(Ty::cast));
+            let recast <- runtime_span_ref("rt_file::FTm::recast");
+            let st = Ty::at(g, init);
+            let inner_g = Cons(st, g);
+            let fsigs = cx.write_sigs.map(λ p => p.snd);
+            let init_e <- cx.var(env, init);
+            let p <- assume(ap(mutated, [Hd(cx.bytes), cx.sem(st)]), "p", Some(under)).or_fail("runtime: a loop's state: ");
+            let o <- assume(Hd(cx.bytes), "span", Some(p.ref)).or_fail("runtime: a span: ");
+            let v <- assume(cx.sem(st), "v", Some(o.ref)).or_fail("runtime: a loop's words: ");
+            let inner = Cons(Local(v.ref), env);
+            let test_e <- cx.value(Local(o.ref), inner, inner_g, v.ref, test);
+            let body_e <- cx.written(Local(o.ref), inner, inner_g, v.ref, body);
+            let tested = ap(cast, [cx.tys, Ty::quote(test.ty(cx.world, inner_g), cx.q), Ty::quote(Bit, cx.q), test_e]);
+            let next = ap(recast, [cx.tys, Ty::quote(body.ty(cx.world, fsigs, inner_g), cx.q), Ty::quote(st, cx.q), body_e]);
+            let step_e = Lam(p.ref, ap(after, [Blank, Blank, Blank, Local(p.ref), Lam(o.ref, Lam(v.ref, ap(when, [Blank, tested, next, Local(p.ref)])))]));
+            let run_e = ap(steps, [Blank, passes, step_e, ap(cx.answer, [Blank, span, init_e])]);
+            let left <- assume(Hd(cx.bytes), "span", Some(under)).or_fail("runtime: a span: ");
+            let x <- assume(cx.sem(st), "x", Some(left.ref)).or_fail("runtime: a loop's words after it: ");
+            let rest_e <- cx.written(Local(left.ref), Cons(Local(x.ref), env), inner_g, x.ref, rest);
+            pure(ap(after, [Blank, Blank, Blank, run_e, Lam(left.ref, Lam(x.ref, rest_e))]))
         },
         _ => runtime_held_refused(cx.name, "its reflection has a form that is not written out yet (a byte stored by itself, a callee lent a part of the span)"),
     }
@@ -4024,8 +4074,10 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
             // A loop's is the function on its own values with the
             // function a parameter, and so at the iteration: compared at
             // the iteration, a pass is unfolded on one side before the
-            // other arrives at it (`Passed::KEPT`).
-            let found: Tac<Expr> = match measured {
+            // other arrives at it (`Passed::KEPT`). So is a function with a
+            // loop node: its run's words spelled two ways would be
+            // compared by running it.
+            let found: Tac<Expr> = match measured.or(rfun.body.loops()) {
                 False => runtime_at_each(at, o.callees, [], Some(xs1.rev().head_or(place1.ref)),
                     λ es _ => as_type(Equation(sourced(es), ended(o.compiled(es)))).or_fail("runtime: `" ++ name ++ "`'s answer at its callees: ").bind(λ h => pure(Hd(h))),
                     λ es => ap(rfl, [Blank, ended(o.compiled(es))])),

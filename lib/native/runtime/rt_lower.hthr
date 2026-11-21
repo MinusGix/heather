@@ -2518,18 +2518,403 @@ fn Ty::check_carries(self t: Ty, tys: Nat → RecInfo) → Option<t.Carries(tys)
     }
 }
 
+// ---------------------------------------------------------------------------
+// What a term reads. A loop carries the variables its test and body read and
+// no others (docs/language/loop-combinator-design.md §6.2): a term's meaning
+// is the same at two environments that agree on the variables it reads
+// (`Tm::sem_kept`), so a pass may hold anything at the rest.
+
+// `keep` seen under one more binder: the new variable 0 is kept.
+fn Tm::under(keep: Nat → Bool) → Nat → Bool { λ i => match i { Zero => True, Succ(k) => keep(k) } }
+
+fn Tm::AllKept(vs: List<Nat>, keep: Nat → Bool) → Type {
+    match vs { Nil => True, Cons(v, more) => (keep(v) = True) ∧ Tm::AllKept(more, keep) }
+}
+
+// Every variable the term reads is kept.
+fn Tm::Within(self t: Tm, keep: Nat → Bool) → Type {
+    match t {
+        Var(i) => keep(i) = True,
+        Lit(_, _) => True,
+        Prim(_, args) => Tm::AllKept(args, keep),
+        Let(e, body) => e.Within(keep) ∧ body.Within(Tm::under(keep)),
+        If(c, yes, no) => (keep(c) = True) ∧ (yes.Within(keep) ∧ no.Within(keep)),
+        IfEq(c, yes, no) => (keep(c) = True) ∧ (yes.Within(keep) ∧ no.Within(keep)),
+        Make(_, args) => Tm::AllKept(args, keep),
+        Field(_, _, of) => keep(of) = True,
+        Call(_, args) => Tm::AllKept(args, keep),
+        Fold(over, init, _) => (keep(over) = True) ∧ (keep(init) = True),
+        Case(c, zero, succ) => (keep(c) = True) ∧ (zero.Within(keep) ∧ succ.Within(Tm::under(keep))),
+        Byte(_, i, length) => (keep(i) = True) ∧ (keep(length) = True),
+        Pick(_, c, arms, _) => (keep(c) = True) ∧ arms.Within(Tm::under(keep)),
+        Inject(_, _, args) => Tm::AllKept(args, keep),
+        Slot(_, _, of) => keep(of) = True,
+        Iterate(init, test, body) => (keep(init) = True) ∧ (test.Within(Tm::under(keep)) ∧ body.Within(Tm::under(keep))),
+    }
+}
+
+fn Tm::kept_at(keep: Nat → Bool, i: Nat) → Option<keep(i) = True> {
+    match keep(i) as λ b => Option<b = True> { True => Some(refl), False => None }
+}
+
+fn Tm::check_all_kept(vs: List<Nat>, keep: Nat → Bool) → Option<Tm::AllKept(vs, keep)> {
+    match vs as λ l => Option<Tm::AllKept(l, keep)> {
+        Nil => Some(trivial),
+        Cons(v, more) => Tm::kept_at(keep, v).and_then(λ h => Tm::check_all_kept(more, keep).and_then(λ hs => Some(⟨h, hs⟩))),
+    }
+}
+
+fn Tm::both<A, B>(a: Option<A>, b: Option<B>) → Option<A ∧ B> { a.and_then(λ x => b.and_then(λ y => Some(⟨x, y⟩))) }
+
+// Whether the term reads only kept variables, with the proof.
+fn Tm::check_within(self t: Tm) → (keep: Nat → Bool) → Option<t.Within(keep)> {
+    match t as λ u => (keep: Nat → Bool) → Option<u.Within(keep)> {
+        Var(i) => λ keep => Tm::kept_at(keep, i),
+        Lit(_, _) => λ keep => Some(trivial),
+        Prim(_, args) => λ keep => Tm::check_all_kept(args, keep),
+        Let(e, body) => λ keep => Tm::both(e.check_within(keep), body.check_within(Tm::under(keep))),
+        If(c, yes, no) => λ keep => Tm::both(Tm::kept_at(keep, c), Tm::both(yes.check_within(keep), no.check_within(keep))),
+        IfEq(c, yes, no) => λ keep => Tm::both(Tm::kept_at(keep, c), Tm::both(yes.check_within(keep), no.check_within(keep))),
+        Make(_, args) => λ keep => Tm::check_all_kept(args, keep),
+        Field(_, _, of) => λ keep => Tm::kept_at(keep, of),
+        Call(_, args) => λ keep => Tm::check_all_kept(args, keep),
+        Fold(over, init, _) => λ keep => Tm::both(Tm::kept_at(keep, over), Tm::kept_at(keep, init)),
+        Case(c, zero, succ) => λ keep => Tm::both(Tm::kept_at(keep, c), Tm::both(zero.check_within(keep), succ.check_within(Tm::under(keep)))),
+        Byte(_, i, length) => λ keep => Tm::both(Tm::kept_at(keep, i), Tm::kept_at(keep, length)),
+        Pick(_, c, arms, _) => λ keep => Tm::both(Tm::kept_at(keep, c), arms.check_within(Tm::under(keep))),
+        Inject(_, _, args) => λ keep => Tm::check_all_kept(args, keep),
+        Slot(_, _, of) => λ keep => Tm::kept_at(keep, of),
+        Iterate(init, test, body) => λ keep => Tm::both(Tm::kept_at(keep, init), Tm::both(test.check_within(Tm::under(keep)), body.check_within(Tm::under(keep)))),
+    }
+}
+
+// The variables a term reads, each as often as it is read (a guess the
+// lowering checks with `check_within`, never trusted).
+fn Tm::unbind(vs: List<Nat>) → List<Nat> {
+    match vs { Nil => Nil, Cons(v, more) => match v { Zero => Tm::unbind(more), Succ(k) => Cons(k, Tm::unbind(more)) } }
+}
+
+fn Tm::vars(self t: Tm) → List<Nat> {
+    match t {
+        Var(i) => [i],
+        Lit(_, _) => Nil,
+        Prim(_, args) => args,
+        Let(e, body) => e.vars() ++ Tm::unbind(body.vars()),
+        If(c, yes, no) => Cons(c, yes.vars() ++ no.vars()),
+        IfEq(c, yes, no) => Cons(c, yes.vars() ++ no.vars()),
+        Make(_, args) => args,
+        Field(_, _, of) => [of],
+        Call(_, args) => args,
+        Fold(over, init, _) => [over, init],
+        Case(c, zero, succ) => Cons(c, zero.vars() ++ Tm::unbind(succ.vars())),
+        Byte(_, i, length) => [i, length],
+        Pick(_, c, arms, _) => Cons(c, Tm::unbind(arms.vars())),
+        Inject(_, _, args) => args,
+        Slot(_, _, of) => [of],
+        Iterate(init, test, body) => Cons(init, Tm::unbind(test.vars()) ++ Tm::unbind(body.vars())),
+    }
+}
+
+fn Tm::mem_nat(vs: List<Nat>, i: Nat) → Bool {
+    match vs { Nil => False, Cons(v, more) => match v.equation(i) { Inl(_) => True, Inr(_) => Tm::mem_nat(more, i) } }
+}
+
+// Two environments that agree at every kept variable.
+fn Env::Agree(tys: Nat → RecInfo, g: List<Ty>, keep: Nat → Bool, e1, e2: Env(tys, g)) → Type {
+    (i: Nat) → keep(i) = True → Env::get(tys, g, e1, i) = Env::get(tys, g, e2, i)
+}
+
+theorem Env::agree_under(tys: Nat → RecInfo, g: List<Ty>, t: Ty, keep: Nat → Bool, x1, x2: t.sem(tys), ex: x1 = x2, e1, e2: Env(tys, g),
+    a: Env::Agree(tys, g, keep, e1, e2)): Env::Agree(tys, Cons(t, g), Tm::under(keep), Pair(x1, e1), Pair(x2, e2)) {
+    λ i => match i as λ k => Tm::under(keep, k) = True → Env::get(tys, Cons(t, g), Pair(x1, e1), k) = Env::get(tys, Cons(t, g), Pair(x2, e2), k) {
+        Zero => λ _ => ex,
+        Succ(k) => λ h => a(k, h),
+    }
+}
+
+theorem Tm::apply_kept(w: World, g: List<Ty>, keep: Nat → Bool, e1, e2: Env(w.tys, g), a: Env::Agree(w.tys, g, keep, e1, e2), r: Ty, ps: List<Ty>):
+    (f: Ty::Arrows(w.tys, ps, r)) → (vs: List<Nat>) → Tm::AllKept(vs, keep) → Tm::apply(w, g, e1, r, ps, f, vs) = Tm::apply(w, g, e2, r, ps, f, vs) {
+    match ps {
+        Nil => λ f vs _ => refl,
+        Cons(p, rest) => λ f vs => match vs as λ l => Tm::AllKept(l, keep) → Tm::apply(w, g, e1, r, Cons(p, rest), f, l) = Tm::apply(w, g, e2, r, Cons(p, rest), f, l) {
+            Nil => λ _ => refl,
+            Cons(v, more) => λ h => trans(
+                cong_fn(λ (x: Ty::at(g, v).sem(w.tys)) => Tm::apply(w, g, e1, r, rest, f(Ty::cast(w.tys, Ty::at(g, v), p, x)), more), a(v, h.left)),
+                Tm::apply_kept(w, g, keep, e1, e2, a, r, rest, f(Ty::cast(w.tys, Ty::at(g, v), p, Env::get(w.tys, g, e2, v))), more, h.right)),
+        },
+    }
+}
+
+theorem Tm::fields_kept(w: World, g: List<Ty>, keep: Nat → Bool, e1, e2: Env(w.tys, g), a: Env::Agree(w.tys, g, keep, e1, e2), fs: List<Ty>):
+    (vs: List<Nat>) → Tm::AllKept(vs, keep) → Tm::fields(w, g, e1, fs, vs) = Tm::fields(w, g, e2, fs, vs) {
+    match fs {
+        Nil => λ vs _ => refl,
+        Cons(f, rest) => λ vs => match vs as λ l => Tm::AllKept(l, keep) → Tm::fields(w, g, e1, Cons(f, rest), l) = Tm::fields(w, g, e2, Cons(f, rest), l) {
+            Nil => λ _ => refl,
+            Cons(v, more) => λ h => eq2(λ (x: f.Flat()) (y: Ty::Flats(rest)) => Pair(x, y),
+                cong_fn(λ (x: Ty::at(g, v).sem(w.tys)) => f.to_flat(w.tys, Ty::cast(w.tys, Ty::at(g, v), f, x)), a(v, h.left)),
+                Tm::fields_kept(w, g, keep, e1, e2, a, rest, more, h.right)),
+        },
+    }
+}
+
+// An enum's `match` whose arms agree everywhere answers alike.
+theorem EnumInfo::choose_ext(self e: EnumInfo, eq: Bool, R: Type, a1, a2: Nat → Ty::Flats(e.slots) → R,
+    same: (n: Nat) → (t: Ty::Flats(e.slots)) → a1(n, t) = a2(n, t), v: e.E): e.choose(eq, R, a1, v) = e.choose(eq, R, a2, v) {
+    trans(e.chooses(eq, R, a1, v), trans(same(e.tag(v), e.fields(v)), sym(e.chooses(eq, R, a2, v))))
+}
+
+// A term's meaning reads only the variables it reads.
+theorem Tm::sem_kept(self t: Tm, w: World): (keep: Nat → Bool) → (g: List<Ty>) → (e1, e2: Env(w.tys, g)) → t.Within(keep) →
+    Env::Agree(w.tys, g, keep, e1, e2) → t.sem(w, g, e1) = t.sem(w, g, e2) {
+    match t {
+        Var(i) => λ keep g e1 e2 h a => a(i, h),
+        Lit(_, _) => λ keep g e1 e2 h a => refl,
+        Prim(op, args) => λ keep g e1 e2 h a => Tm::apply_kept(w, g, keep, e1, e2, a, op.result(), op.params(), op.sem(w.tys), args, h),
+        Let(e, body) => λ keep g e1 e2 h a => {
+            let same_e = Tm::sem_kept(e, w, keep, g, e1, e2, h.left, a);
+            Tm::sem_kept(body, w, Tm::under(keep), Cons(e.ty(w, g), g), Pair(e.sem(w, g, e1), e1), Pair(e.sem(w, g, e2), e2), h.right,
+                Env::agree_under(w.tys, g, e.ty(w, g), keep, e.sem(w, g, e1), e.sem(w, g, e2), same_e, e1, e2, a))
+        },
+        If(c, yes, no) => λ keep g e1 e2 h a => {
+            let T = yes.ty(w, g).sem(w.tys);
+            let pick = λ (b: Bool) (y: T) (n: no.ty(w, g).sem(w.tys)) => match b as λ _ => T { False => Ty::cast(w.tys, no.ty(w, g), yes.ty(w, g), n), True => y };
+            trans(cong_fn(λ (x: Ty::at(g, c).sem(w.tys)) => pick(Ty::cast(w.tys, Ty::at(g, c), Bit, x), yes.sem(w, g, e1), no.sem(w, g, e1)), a(c, h.left)),
+                eq2(λ (y: T) (n: no.ty(w, g).sem(w.tys)) => pick(Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, e2, c)), y, n),
+                    Tm::sem_kept(yes, w, keep, g, e1, e2, h.right.left, a), Tm::sem_kept(no, w, keep, g, e1, e2, h.right.right, a)))
+        },
+        IfEq(c, yes, no) => λ keep g e1 e2 h a => {
+            let T = yes.ty(w, g).sem(w.tys);
+            let pick = λ (b: Bool) (y: T) (n: no.ty(w, g).sem(w.tys)) => Tm::convoy(T, b, y, Ty::cast(w.tys, no.ty(w, g), yes.ty(w, g), n));
+            trans(cong_fn(λ (x: Ty::at(g, c).sem(w.tys)) => pick(Ty::cast(w.tys, Ty::at(g, c), Bit, x), yes.sem(w, g, e1), no.sem(w, g, e1)), a(c, h.left)),
+                eq2(λ (y: T) (n: no.ty(w, g).sem(w.tys)) => pick(Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, e2, c)), y, n),
+                    Tm::sem_kept(yes, w, keep, g, e1, e2, h.right.left, a), Tm::sem_kept(no, w, keep, g, e1, e2, h.right.right, a)))
+        },
+        Make(i, args) => λ keep g e1 e2 h a => cong_fn(w.tys(i).mk, Tm::fields_kept(w, g, keep, e1, e2, a, w.tys(i).fields, args, h)),
+        Field(i, k, of) => λ keep g e1 e2 h a => cong_fn(λ (x: Ty::at(g, of).sem(w.tys)) =>
+            Ty::at(w.tys(i).fields, k).of_flat(w.tys, Ty::flat_nth(w.tys(i).fields, w.tys(i).get(Ty::cast(w.tys, Ty::at(g, of), Named(i), x)), k)), a(of, h)),
+        Call(f, args) => λ keep g e1 e2 h a =>
+            Tm::apply_kept(w, g, keep, e1, e2, a, Sig::at(w.sigs, f).result, Sig::at(w.sigs, f).params, Sig::get(w.tys, w.sigs, w.callees, f), args, h),
+        Fold(over, init, step) => λ keep g e1 e2 h a => eq2(λ (x: Ty::at(g, over).sem(w.tys)) (y: Ty::at(g, init).sem(w.tys)) =>
+            List::foldl(Ty::at(g, over).items(w.tys, x), Tm::step(w, Ty::at(g, over).elem(), step), Ty::cast(w.tys, Ty::at(g, init), Sig::at(w.sigs, step).result, y)),
+            a(over, h.left), a(init, h.right)),
+        Case(c, zero, succ) => λ keep g e1 e2 h a => {
+            let T = zero.ty(w, g).sem(w.tys);
+            let run = λ (e: Env(w.tys, g)) (n: Nat) => match n as λ _ => T {
+                Zero => zero.sem(w, g, e),
+                Succ(k) => Ty::cast(w.tys, succ.ty(w, Cons(Count, g)), zero.ty(w, g), succ.sem(w, Cons(Count, g), Pair(k, e))),
+            };
+            trans(cong_fn(λ (x: Ty::at(g, c).sem(w.tys)) => run(e1, Ty::cast(w.tys, Ty::at(g, c), Count, x)), a(c, h.left)),
+                match Ty::cast(w.tys, Ty::at(g, c), Count, Env::get(w.tys, g, e2, c)) as λ n => run(e1, n) = run(e2, n) {
+                    Zero => Tm::sem_kept(zero, w, keep, g, e1, e2, h.right.left, a),
+                    Succ(k) => cong_fn(λ (y: succ.ty(w, Cons(Count, g)).sem(w.tys)) => Ty::cast(w.tys, succ.ty(w, Cons(Count, g)), zero.ty(w, g), y),
+                        Tm::sem_kept(succ, w, Tm::under(keep), Cons(Count, g), Pair(k, e1), Pair(k, e2), h.right.right,
+                            Env::agree_under(w.tys, g, Count, keep, k, k, refl, e1, e2, a))),
+                })
+        },
+        Byte(k, i, length) => λ keep g e1 e2 h a => eq2(λ (x: Ty::at(g, i).sem(w.tys)) (y: Ty::at(g, length).sem(w.tys)) =>
+            w.spans.span(k).byte_within(Ty::cast(w.tys, Ty::at(g, length), Word(64), y), Ty::cast(w.tys, Ty::at(g, i), Word(64), x)),
+            a(i, h.left), a(length, h.right)),
+        Pick(i, c, arms, eq) => λ keep g e1 e2 h a => {
+            let e = w.tys(i).alts;
+            let R = arms.ty(w, Cons(Enum(i), g)).sem(w.tys);
+            let arm = λ (env: Env(w.tys, g)) (n: Nat) (t: Ty::Flats(e.slots)) => arms.sem(w, Cons(Enum(i), g), Pair(e.of(n, t), env));
+            trans(cong_fn(λ (x: Ty::at(g, c).sem(w.tys)) => e.choose(eq, R, arm(e1), Ty::cast(w.tys, Ty::at(g, c), Enum(i), x)), a(c, h.left)),
+                e.choose_ext(eq, R, arm(e1), arm(e2), λ n t => Tm::sem_kept(arms, w, Tm::under(keep), Cons(Enum(i), g), Pair(e.of(n, t), e1), Pair(e.of(n, t), e2),
+                    h.right, Env::agree_under(w.tys, g, Enum(i), keep, e.of(n, t), e.of(n, t), refl, e1, e2, a)),
+                    Ty::cast(w.tys, Ty::at(g, c), Enum(i), Env::get(w.tys, g, e2, c))))
+        },
+        Inject(i, k, args) => λ keep g e1 e2 h a => {
+            let e = w.tys(i).alts;
+            cong_fn(λ (fl: Ty::Flats(Ty::range(e.slots, e.lo(k), e.arity(k)))) => e.of(k, Ty::spread(e.slots, e.lo(k), e.arity(k), fl)),
+                Tm::fields_kept(w, g, keep, e1, e2, a, Ty::range(e.slots, e.lo(k), e.arity(k)), args, h))
+        },
+        Slot(i, j, of) => λ keep g e1 e2 h a => cong_fn(λ (x: Ty::at(g, of).sem(w.tys)) =>
+            Ty::at(w.tys(i).alts.slots, j).of_flat(w.tys, Ty::flat_nth(w.tys(i).alts.slots, w.tys(i).alts.fields(Ty::cast(w.tys, Ty::at(g, of), Enum(i), x)), j)),
+            a(of, h)),
+        Iterate(init, test, body) => λ keep g e1 e2 h a => {
+            let st = Ty::at(g, init);
+            let inner = Cons(st, g);
+            let turn = λ (env: Env(w.tys, g)) (s: st.sem(w.tys)) => loop::Step::turn(
+                Ty::cast(w.tys, test.ty(w, inner), Bit, test.sem(w, inner, Pair(s, env))),
+                λ _ => Ty::cast(w.tys, body.ty(w, inner), st, body.sem(w, inner, Pair(s, env))), s);
+            let under = λ (s: st.sem(w.tys)) => Env::agree_under(w.tys, g, st, keep, s, s, refl, e1, e2, a);
+            trans(cong_fn(λ (x: st.sem(w.tys)) => loop::Loop::steps(loop::Loop::passes(), turn(e1), x), a(init, h.left)),
+                loop::Loop::steps_ext(turn(e1), turn(e2), λ s => eq2(λ (b: Bool) (y: st.sem(w.tys)) => loop::Step::turn(b, λ _ => y, s),
+                    cong_fn(λ (x: test.ty(w, inner).sem(w.tys)) => Ty::cast(w.tys, test.ty(w, inner), Bit, x),
+                        Tm::sem_kept(test, w, Tm::under(keep), inner, Pair(s, e1), Pair(s, e2), h.right.left, under(s))),
+                    cong_fn(λ (x: body.ty(w, inner).sem(w.tys)) => Ty::cast(w.tys, body.ty(w, inner), st, x),
+                        Tm::sem_kept(body, w, Tm::under(keep), inner, Pair(s, e1), Pair(s, e2), h.right.right, under(s)))),
+                    loop::Loop::passes(), Env::get(w.tys, g, e2, init)))
+        },
+    }
+}
+
 // The context carried: the ports read (`src`, each variable's in turn),
 // each variable's port inside a pass (`inner`), and the code of each word
 // carried (`cells`), bound at `at, at + 1, …`.
 record Carry { src: List<Nat>, inner: List<Nat>, cells: List<Ty> }
 
-fn Tm::carry(tys: Nat → RecInfo, g: List<Ty>) → List<Nat> → Nat → Option<Carry> {
+// A variable a loop does not read is left out of its carry when a pass can
+// read some value of its code back from ports it already has
+// (`Ty::fill`): a word or a count from any port, a buffer (whose value no
+// port holds) anywhere, and a record of the state's code, of words, from the
+// state's own ports (the state's first value is such a record).
+fn Ty::Fills(self t: Ty, tys: Nat → RecInfo) → Type {
+    match t { Word(_) => True, Bit => False, ByteList(_) => True, Lines => False, Named(i) => Ty::CellsCarry(tys(i).fields), Count => True, Enum(_) => False }
+}
+
+fn Ty::read_flat(self f: Ty, values: Valuation(), port: Nat) → f.Flat() {
+    match f as λ u => u.Flat() {
+        Word(w) => values(w, port), Bit => False, ByteList(_) => Nil, Lines => Nil, Named(_) => trivial, Count => values(64, port).toNat(), Enum(_) => trivial,
+    }
+}
+
+fn Ty::read_flats(fs: List<Ty>, values: Valuation()) → Nat → Ty::Flats(fs) {
+    match fs { Nil => λ _ => trivial, Cons(f, rest) => λ port => Pair(f.read_flat(values, port), Ty::read_flats(rest, values, port + 1)) }
+}
+
+theorem Ty::read_flats_hold(fs: List<Ty>, values: Valuation()): Ty::CellsCarry(fs) → (port: Nat) → Ty::FieldsHold(fs, values, port, Ty::read_flats(fs, values, port)) {
+    match fs {
+        Nil => λ _ port => trivial,
+        Cons(f, rest) => λ ok port => ⟨(match f as λ u => u.CellCarries() → u.FlatHolds(values, port, u.read_flat(values, port)) {
+                Word(_) => λ _ => refl, Bit => λ never => false_elim(never), ByteList(_) => λ never => false_elim(never), Lines => λ never => false_elim(never),
+                Named(_) => λ never => false_elim(never), Count => λ _ => refl, Enum(_) => λ never => false_elim(never),
+            })(ok.left), Ty::read_flats_hold(rest, values, ok.right, port + 1)⟩,
+    }
+}
+
+// What a port holds, read at a code that fills; any other code keeps `v`.
+fn Ty::fill(self t: Ty, tys: Nat → RecInfo, values: Valuation(), port: Nat) → t.sem(tys) → t.sem(tys) {
+    match t as λ u => u.sem(tys) → u.sem(tys) {
+        Word(w) => λ _ => values(w, port),
+        Bit => λ v => v,
+        ByteList(_) => λ v => v,
+        Lines => λ v => v,
+        Named(i) => λ _ => tys(i).mk(Ty::read_flats(tys(i).fields, values, port)),
+        Count => λ _ => values(64, port).toNat(),
+        Enum(_) => λ v => v,
+    }
+}
+
+theorem Ty::fill_holds(self t: Ty, tys: Nat → RecInfo, values: Valuation(), port: Nat): t.Fills(tys) → (v: t.sem(tys)) →
+    t.Holds(tys, values, port, t.fill(tys, values, port, v)) {
+    match t {
+        Word(_) => λ _ v => refl,
+        Bit => λ never => false_elim(never),
+        ByteList(_) => λ _ v => trivial,
+        Lines => λ never => false_elim(never),
+        Named(i) => λ ok v => j(sym(tys(i).round(Ty::read_flats(tys(i).fields, values, port))), λ x _ => Ty::FieldsHold(tys(i).fields, values, port, x),
+            Ty::read_flats_hold(tys(i).fields, values, ok, port)),
+        Count => λ _ v => refl,
+        Enum(_) => λ never => false_elim(never),
+    }
+}
+
+theorem Ty::fields_below_of_past(fs: List<Ty>): (p, n: Nat) → Fun::past(fs, p) <= n → Ty::FieldsBelow(fs, p, n) {
+    match fs {
+        Nil => λ p n _ => trivial,
+        Cons(_, rest) => λ p n le => ⟨Nat::le_trans(p + 1, Fun::past(rest, p + 1), n, Fun::past_ge(rest, p + 1), le),
+            Ty::fields_below_of_past(rest, p + 1, n, le)⟩,
+    }
+}
+
+// A value whose ports end by `n` is below it.
+theorem Ty::below_cells(self t: Ty, tys: Nat → RecInfo, p, n: Nat): Fun::past(t.cells(tys), p) <= n → t.Below(tys, p, n) {
+    match t {
+        Word(_) => λ le => le, Bit => λ le => le, ByteList(_) => λ le => le, Lines => λ le => le,
+        Named(i) => λ le => Ty::fields_below_of_past(tys(i).fields, p, n, le),
+        Count => λ le => le,
+        Enum(i) => λ le => Ty::fields_below_of_past(Cons(Word(64), tys(i).alts.slots), p, n, le),
+    }
+}
+
+// Where a left-out variable reads back from, below anything past `at`
+// (the state's ports, from `home`, end by `at`).
+record DropAt(tys: Nat → RecInfo, t, st: Ty, home, at: Nat) {
+    port: Nat,
+    fills: t.Fills(tys),
+    below: (n: Nat) → at < n → Fun::past(st.cells(tys), home) <= at → t.Below(tys, port, n),
+}
+
+fn Ty::drop_at(self t: Ty, tys: Nat → RecInfo, st: Ty, home, at: Nat) → Option<DropAt(tys, t, st, home, at)> {
+    match t as λ u => Option<DropAt(tys, u, st, home, at)> {
+        Word(w) => Some(DropAt(port := at, fills := trivial, below := λ n lt _ => lt)),
+        Bit => None,
+        ByteList(c) => Some(DropAt(port := at, fills := trivial, below := λ n lt _ => lt)),
+        Lines => None,
+        Named(i) => Named(i).check(st).and_then(λ e => Ty::check_cells(tys(i).fields).and_then(λ cc =>
+            Some(DropAt(port := home, fills := cc, below := λ n lt le =>
+                j(sym(e), λ u _ => u.Below(tys, home, n), st.below_cells(tys, home, n,
+                    Nat::le_trans(Fun::past(st.cells(tys), home), at, n, le, Nat::le_of_lt(at, n, lt)))))))),
+        Count => Some(DropAt(port := at, fills := trivial, below := λ n lt _ => lt)),
+        Enum(_) => None,
+    }
+}
+
+// Whether `drop_at` may answer (a guess `keeps` makes; `drop_at` decides).
+fn Ty::can_drop(self t: Ty, st: Ty) → Bool {
+    match t { Word(_) => True, Bit => False, ByteList(_) => True, Lines => False, Named(_) => match t.equation(st) { Inl(_) => True, Inr(_) => False }, Count => True, Enum(_) => False }
+}
+
+// Which of the context's variables a loop carries, one flag each: those
+// its test or body reads (`vs`), and any a pass could not read back.
+fn Tm::keeps(g: List<Ty>, st: Ty, vs: List<Nat>, i: Nat) → List<Bool> {
+    match g { Nil => Nil, Cons(t, rest) => Cons(Tm::mem_nat(vs, i) || !t.can_drop(st), Tm::keeps(rest, st, vs, i + 1)) }
+}
+
+fn Tm::flag(ks: List<Bool>, i: Nat) → Bool {
+    match ks { Nil => False, Cons(k, more) => match i { Zero => k, Succ(j) => Tm::flag(more, j) } }
+}
+
+// The context carried, a variable at a time: a carried one's ports read
+// (`src`) and its cells, bound at `at, at + 1, …`; each variable's port
+// inside a pass (`inner`), a left-out one's where it reads back (`drop_at`).
+fn Tm::carry(tys: Nat → RecInfo, st: Ty, home: Nat, g: List<Ty>) → List<Bool> → List<Nat> → Nat → Option<Carry> {
     match g {
-        Nil => λ ports at => match ports { Nil => Some(Carry(Nil, Nil, Nil)), Cons(_, _) => None },
-        Cons(t, rest) => λ ports at => match ports {
+        Nil => λ ks ports at => match ports { Nil => Some(Carry(Nil, Nil, Nil)), Cons(_, _) => None },
+        Cons(t, rest) => λ ks ports at => match ports {
             Nil => None,
-            Cons(p, ps) => t.check_carries(tys).and_then(λ _ => Tm::carry(tys, rest, ps, Fun::past(t.cells(tys), at)).and_then(λ c =>
-                Some(Carry(Fun::param_ids(t.cells(tys), p) ++ c.src, Cons(at, c.inner), t.cells(tys) ++ c.cells)))),
+            Cons(p, ps) => match ks {
+                Nil => None,
+                Cons(k, more) => match k {
+                    True => t.check_carries(tys).and_then(λ _ => Tm::carry(tys, st, home, rest, more, ps, Fun::past(t.cells(tys), at)).and_then(λ c =>
+                        Some(Carry(Fun::param_ids(t.cells(tys), p) ++ c.src, Cons(at, c.inner), t.cells(tys) ++ c.cells)))),
+                    False => t.drop_at(tys, st, home, at).and_then(λ d => Tm::carry(tys, st, home, rest, more, ps, at).and_then(λ c =>
+                        Some(Carry(c.src, Cons(d.port, c.inner), c.cells)))),
+                },
+            },
+        },
+    }
+}
+
+// The environment a pass holds: a carried variable's value, a left-out
+// one's read back from its port.
+fn Env::refill(tys: Nat → RecInfo, g: List<Ty>) → List<Bool> → List<Nat> → Valuation() → Env(tys, g) → Env(tys, g) {
+    match g {
+        Nil => λ ks inner b env => env,
+        Cons(t, rest) => λ ks inner b env => match ks {
+            Nil => env,
+            Cons(k, more) => Pair(match k as λ _ => t.sem(tys) { True => env.fst, False => t.fill(tys, b, inner.head_or(0), env.fst) },
+                Env::refill(tys, rest, more, inner.tail(), b, env.snd)),
+        },
+    }
+}
+
+theorem Env::refill_agree(tys: Nat → RecInfo, g: List<Ty>): (ks: List<Bool>) → (inner: List<Nat>) → (b: Valuation()) → (env: Env(tys, g)) →
+    Env::Agree(tys, g, λ i => Tm::flag(ks, i), env, Env::refill(tys, g, ks, inner, b, env)) {
+    match g {
+        Nil => λ ks inner b env i _ => refl,
+        Cons(t, rest) => λ ks inner b env => match ks as λ l => Env::Agree(tys, Cons(t, rest), λ i => Tm::flag(l, i), env, Env::refill(tys, Cons(t, rest), l, inner, b, env)) {
+            Nil => λ i _ => refl,
+            Cons(k, more) => λ i => match i as λ m => Tm::flag(Cons(k, more), m) = True →
+                Env::get(tys, Cons(t, rest), env, m) = Env::get(tys, Cons(t, rest), Env::refill(tys, Cons(t, rest), Cons(k, more), inner, b, env), m) {
+                Zero => λ h => (match k as λ k2 => k2 = True → env.fst = (match k2 as λ _ => t.sem(tys) { True => env.fst, False => t.fill(tys, b, inner.head_or(0), env.fst) }) {
+                    True => λ _ => refl,
+                    False => λ (no: False = True) => absurd(no),
+                })(h),
+                Succ(j) => λ h => Env::refill_agree(tys, rest, more, inner.tail(), b, env.snd, j, h),
+            },
         },
     }
 }
@@ -2579,13 +2964,20 @@ fn Tm::iter_checked(w: World, st: Ty, inner: List<Ty>, test, body: Tm, pi, next:
 // past the count.
 fn Tm::iter_at(tys: Nat → RecInfo, st: Ty, next: Nat) → Nat { Fun::past(st.cells(tys), next + 1) }
 
+// The flags of what a loop carries, and what its test and body may read
+// (the state, variable 0, and the carried).
+fn Tm::iter_keeps(g: List<Ty>, st: Ty, test, body: Tm) → List<Bool> { Tm::keeps(g, st, Tm::unbind(test.vars()) ++ Tm::unbind(body.vars()), 0) }
+
+fn Tm::iter_keep(g: List<Ty>, st: Ty, test, body: Tm) → Nat → Bool { Tm::under(λ i => Tm::flag(Tm::iter_keeps(g, st, test, body), i)) }
+
 fn Tm::lower_iterate(w: World, g: List<Ty>, ports: List<Nat>, next, init, pi: Nat, test, body: Tm,
     lower_test: List<Nat> → Nat → Option<Lowered>, lower_body: List<Nat> → Nat → Option<Lowered>) → Option<Lowered> {
     Ty::at(g, init).check_carries(w.tys).and_then(λ _ =>
-    Tm::carry(w.tys, g, ports, Tm::iter_at(w.tys, Ty::at(g, init), next)).and_then(λ c =>
+    Tm::both(test.check_within(Tm::iter_keep(g, Ty::at(g, init), test, body)), body.check_within(Tm::iter_keep(g, Ty::at(g, init), test, body))).and_then(λ _ =>
+    Tm::carry(w.tys, Ty::at(g, init), next + 1, g, Tm::iter_keeps(g, Ty::at(g, init), test, body), ports, Tm::iter_at(w.tys, Ty::at(g, init), next)).and_then(λ c =>
     lower_test(Cons(next + 1, c.inner), Fun::past(c.cells, Tm::iter_at(w.tys, Ty::at(g, init), next)) + 1).and_then(λ lt =>
     lower_body(Cons(next + 1, c.inner), lt.next).and_then(λ lb =>
-        Tm::iter_checked(w, Ty::at(g, init), Cons(Ty::at(g, init), g), test, body, pi, next, c, lt, lb)))))
+        Tm::iter_checked(w, Ty::at(g, init), Cons(Ty::at(g, init), g), test, body, pi, next, c, lt, lb))))))
 }
 
 fn Tm::lower(self t: Tm, w: World, g: List<Ty>, ports: List<Nat>, next: Nat) → Option<Lowered> {
@@ -3646,24 +4038,6 @@ theorem Ty::past_cells(self t: Ty, tys: Nat → RecInfo, p: Nat): t.past(tys, p)
     }
 }
 
-theorem Ty::fields_below_of_past(fs: List<Ty>): (p, n: Nat) → Fun::past(fs, p) <= n → Ty::FieldsBelow(fs, p, n) {
-    match fs {
-        Nil => λ p n _ => trivial,
-        Cons(_, rest) => λ p n le => ⟨Nat::le_trans(p + 1, Fun::past(rest, p + 1), n, Fun::past_ge(rest, p + 1), le),
-            Ty::fields_below_of_past(rest, p + 1, n, le)⟩,
-    }
-}
-
-// A value whose ports end by `n` is below it.
-theorem Ty::below_cells(self t: Ty, tys: Nat → RecInfo, p, n: Nat): Fun::past(t.cells(tys), p) <= n → t.Below(tys, p, n) {
-    match t {
-        Word(_) => λ le => le, Bit => λ le => le, ByteList(_) => λ le => le, Lines => λ le => le,
-        Named(i) => λ le => Ty::fields_below_of_past(tys(i).fields, p, n, le),
-        Count => λ le => le,
-        Enum(i) => λ le => Ty::fields_below_of_past(Cons(Word(64), tys(i).alts.slots), p, n, le),
-    }
-}
-
 theorem Ty::fields_ids_below(fs: List<Ty>): (p, n: Nat) → Ty::FieldsBelow(fs, p, n) → Tm::AllBelow(Fun::param_ids(fs, p), n) {
     match fs { Nil => λ p n _ => trivial, Cons(_, rest) => λ p n b => ⟨b.left, Ty::fields_ids_below(rest, p + 1, n, b.right)⟩ }
 }
@@ -3723,61 +4097,84 @@ theorem Ty::carry_holds(self t: Ty, tys: Nat → RecInfo, a, b: Valuation(), pa,
 }
 
 // What a carry promises: as many words as cells; the ports read below
-// whatever the context is below; the ports inside below the cells' end;
-// and the context held at the inner ports wherever their words are the
-// words read.
-fn Tm::CarryHolds(tys: Nat → RecInfo, g: List<Ty>, ports: List<Nat>, at: Nat, r: Option<Carry>) → Type {
+// whatever the context is below; the ports inside below anything past the
+// cells' end; and the context held at the inner ports, a left-out
+// variable's value read back (`Env::refill`), wherever the cells' words
+// are the words read.
+fn Tm::CarryHolds(tys: Nat → RecInfo, g: List<Ty>, ks: List<Bool>, ports: List<Nat>, at: Nat, r: Option<Carry>) → Type {
     match r {
         None => True,
         Some(c) => (c.src.len() = c.cells.len()) ∧ (((n: Nat) → Below(tys, g, ports, n) → Tm::AllBelow(c.src, n)) ∧
-            (((n: Nat) → Fun::past(c.cells, at) <= n → Below(tys, g, c.inner, n)) ∧
+            (((n: Nat) → Fun::past(c.cells, at) < n → Below(tys, g, c.inner, n)) ∧
             ((a, b: Valuation()) → (env: Env(tys, g)) → words_of(b, Fun::param_ids(c.cells, at)) = words_of(a, c.src) →
-                EnvHolds(tys, a, g, ports, env) → EnvHolds(tys, b, g, c.inner, env)))),
+                EnvHolds(tys, a, g, ports, env) → EnvHolds(tys, b, g, c.inner, Env::refill(tys, g, ks, c.inner, b, env))))),
     }
 }
 
-theorem Tm::carry_sound(tys: Nat → RecInfo, g: List<Ty>): (ports: List<Nat>) → (at: Nat) → Tm::CarryHolds(tys, g, ports, at, Tm::carry(tys, g, ports, at)) {
+theorem Tm::carry_sound(tys: Nat → RecInfo, st: Ty, home: Nat, g: List<Ty>): (ks: List<Bool>) → (ports: List<Nat>) → (at: Nat) →
+    Fun::past(st.cells(tys), home) <= at → Tm::CarryHolds(tys, g, ks, ports, at, Tm::carry(tys, st, home, g, ks, ports, at)) {
     match g {
-        Nil => λ ports at => match ports {
+        Nil => λ ks ports at _ => match ports {
             Nil => ⟨refl, ⟨λ n _ => trivial, ⟨λ n _ => trivial, λ a b env _ held => held⟩⟩⟩,
             Cons(_, _) => trivial,
         },
-        Cons(t, rest) => λ ports at => match ports {
+        Cons(t, rest) => λ ks ports at hp => match ports {
             Nil => trivial,
-            Cons(p, ps) => {
-                let cs = t.cells(tys);
-                let at2 = Fun::past(cs, at);
-                let P = λ (r: Option<Carry>) => Tm::CarryHolds(tys, Cons(t, rest), Cons(p, ps), at, r);
-                Option::and_then_elim(P, trivial, t.check_carries(tys), λ _ => Tm::carry(tys, rest, ps, at2).and_then(λ c =>
-                    Some(Carry(Fun::param_ids(cs, p) ++ c.src, Cons(at, c.inner), cs ++ c.cells))), λ ok _ =>
-                Option::and_then_elim(P, trivial, Tm::carry(tys, rest, ps, at2), λ c =>
-                    Some(Carry(Fun::param_ids(cs, p) ++ c.src, Cons(at, c.inner), cs ++ c.cells)), λ c carried => {
-                    let ih = j(carried, λ r _ => Tm::CarryHolds(tys, rest, ps, at2, r), Tm::carry_sound(tys, rest, ps, at2));
-                    let len: ((Fun::param_ids(cs, p) ++ c.src).len() = (cs ++ c.cells).len()) =
-                        trans(List::len_append(Fun::param_ids(cs, p), c.src), trans(eq2(λ (x: Nat) (y: Nat) => x + y, Fun::ids_len(cs, p), ih.left),
-                            sym(List::len_append(cs, c.cells))));
-                    let past_at: (Fun::past(cs ++ c.cells, at) = Fun::past(c.cells, at2)) = Fun::past_append(cs, c.cells, at);
-                    ⟨len, ⟨λ n below => Tm::all_below_append(n, c.src, ih.right.left(n, below.right), Fun::param_ids(cs, p),
-                            t.cell_ids_below(tys, p, n, below.left)),
-                        ⟨λ n le => {
-                            let le2: (Fun::past(c.cells, at2) <= n) = j(past_at, λ x _ => x <= n, le);
-                            ⟨t.below_cells(tys, at, n, Nat::le_trans(at2, Fun::past(c.cells, at2), n, Fun::past_ge(c.cells, at2), le2)),
-                                ih.right.right.left(n, le2)⟩
-                        },
-                        λ a b env same held => {
-                            let lhs: (words_of(b, Fun::param_ids(cs ++ c.cells, at)) =
-                                words_of(b, Fun::param_ids(cs, at)) ++ words_of(b, Fun::param_ids(c.cells, at2))) =
-                                trans(cong_fn(λ (l: List<Nat>) => words_of(b, l), Fun::ids_append(cs, c.cells, at)),
-                                    Fun::words_append(b, Fun::param_ids(cs, at), Fun::param_ids(c.cells, at2)));
-                            let parts = Tm::split_eq(words_of(b, Fun::param_ids(cs, at)), words_of(b, Fun::param_ids(c.cells, at2)),
-                                words_of(a, Fun::param_ids(cs, p)), words_of(a, c.src),
-                                trans(sym(lhs), trans(same, Fun::words_append(a, Fun::param_ids(cs, p), c.src))),
-                                trans(words_of_len(b, Fun::param_ids(cs, at)), trans(Fun::ids_len(cs, at),
-                                    sym(trans(words_of_len(a, Fun::param_ids(cs, p)), Fun::ids_len(cs, p))))));
-                            ⟨t.carry_holds(tys, a, b, p, at, ok, parts.left, env.fst, held.left),
-                                ih.right.right.right(a, b, env.snd, parts.right, held.right)⟩
-                        }⟩⟩⟩
-                }))
+            Cons(p, ps) => match ks {
+                Nil => trivial,
+                Cons(k, more) => match k {
+                    True => {
+                        let cs = t.cells(tys);
+                        let at2 = Fun::past(cs, at);
+                        let P = λ (r: Option<Carry>) => Tm::CarryHolds(tys, Cons(t, rest), Cons(True, more), Cons(p, ps), at, r);
+                        Option::and_then_elim(P, trivial, t.check_carries(tys), λ _ => Tm::carry(tys, st, home, rest, more, ps, at2).and_then(λ c =>
+                            Some(Carry(Fun::param_ids(cs, p) ++ c.src, Cons(at, c.inner), cs ++ c.cells))), λ ok _ =>
+                        Option::and_then_elim(P, trivial, Tm::carry(tys, st, home, rest, more, ps, at2), λ c =>
+                            Some(Carry(Fun::param_ids(cs, p) ++ c.src, Cons(at, c.inner), cs ++ c.cells)), λ c carried => {
+                            let ih = j(carried, λ r _ => Tm::CarryHolds(tys, rest, more, ps, at2, r), Tm::carry_sound(tys, st, home, rest, more, ps, at2,
+                                Nat::le_trans(Fun::past(st.cells(tys), home), at, at2, hp, Fun::past_ge(cs, at))));
+                            let len: ((Fun::param_ids(cs, p) ++ c.src).len() = (cs ++ c.cells).len()) =
+                                trans(List::len_append(Fun::param_ids(cs, p), c.src), trans(eq2(λ (x: Nat) (y: Nat) => x + y, Fun::ids_len(cs, p), ih.left),
+                                    sym(List::len_append(cs, c.cells))));
+                            let past_at: (Fun::past(cs ++ c.cells, at) = Fun::past(c.cells, at2)) = Fun::past_append(cs, c.cells, at);
+                            ⟨len, ⟨λ n below => Tm::all_below_append(n, c.src, ih.right.left(n, below.right), Fun::param_ids(cs, p),
+                                    t.cell_ids_below(tys, p, n, below.left)),
+                                ⟨λ n lt => {
+                                    let lt2: (Fun::past(c.cells, at2) < n) = j(past_at, λ x _ => x < n, lt);
+                                    ⟨t.below_cells(tys, at, n, Nat::le_of_lt(at2, n, Nat::le_trans(at2 + 1, Fun::past(c.cells, at2) + 1, n,
+                                            Nat::le_succ_succ(at2, Fun::past(c.cells, at2), Fun::past_ge(c.cells, at2)), lt2))),
+                                        ih.right.right.left(n, lt2)⟩
+                                },
+                                λ a b env same held => {
+                                    let lhs: (words_of(b, Fun::param_ids(cs ++ c.cells, at)) =
+                                        words_of(b, Fun::param_ids(cs, at)) ++ words_of(b, Fun::param_ids(c.cells, at2))) =
+                                        trans(cong_fn(λ (l: List<Nat>) => words_of(b, l), Fun::ids_append(cs, c.cells, at)),
+                                            Fun::words_append(b, Fun::param_ids(cs, at), Fun::param_ids(c.cells, at2)));
+                                    let parts = Tm::split_eq(words_of(b, Fun::param_ids(cs, at)), words_of(b, Fun::param_ids(c.cells, at2)),
+                                        words_of(a, Fun::param_ids(cs, p)), words_of(a, c.src),
+                                        trans(sym(lhs), trans(same, Fun::words_append(a, Fun::param_ids(cs, p), c.src))),
+                                        trans(words_of_len(b, Fun::param_ids(cs, at)), trans(Fun::ids_len(cs, at),
+                                            sym(trans(words_of_len(a, Fun::param_ids(cs, p)), Fun::ids_len(cs, p))))));
+                                    ⟨t.carry_holds(tys, a, b, p, at, ok, parts.left, env.fst, held.left),
+                                        ih.right.right.right(a, b, env.snd, parts.right, held.right)⟩
+                                }⟩⟩⟩
+                        }))
+                    },
+                    False => {
+                        let P = λ (r: Option<Carry>) => Tm::CarryHolds(tys, Cons(t, rest), Cons(False, more), Cons(p, ps), at, r);
+                        Option::and_then_elim(P, trivial, t.drop_at(tys, st, home, at), λ d => Tm::carry(tys, st, home, rest, more, ps, at).and_then(λ c =>
+                            Some(Carry(c.src, Cons(d.port, c.inner), c.cells))), λ d _ =>
+                        Option::and_then_elim(P, trivial, Tm::carry(tys, st, home, rest, more, ps, at), λ c => Some(Carry(c.src, Cons(d.port, c.inner), c.cells)),
+                            λ c carried => {
+                            let ih = j(carried, λ r _ => Tm::CarryHolds(tys, rest, more, ps, at, r), Tm::carry_sound(tys, st, home, rest, more, ps, at, hp));
+                            ⟨ih.left, ⟨λ n below => ih.right.left(n, below.right),
+                                ⟨λ n lt => ⟨d.below(n, Nat::le_trans(at + 1, Fun::past(c.cells, at) + 1, n,
+                                        Nat::le_succ_succ(at, Fun::past(c.cells, at), Fun::past_ge(c.cells, at)), lt), hp),
+                                    ih.right.right.left(n, lt)⟩,
+                                λ a b env same held => ⟨t.fill_holds(tys, b, d.port, d.fills, env.fst), ih.right.right.right(a, b, env.snd, same, held.right)⟩⟩⟩⟩
+                        }))
+                    },
+                },
             },
         },
     }
@@ -3885,7 +4282,8 @@ theorem Tm::iterate_pass(w: World, g: List<Ty>, init: Nat, test, body: Tm, next:
     e_t: Tm::ty(test, w, Cons(Ty::at(g, init), g)) = Bit, e_b: Tm::ty(body, w, Cons(Ty::at(g, init), g)) = Ty::at(g, init),
     call: Answers(), agree: Tm::CallsAgree(w, call), env: Env(w.tys, g), ctx: List<BitVec(64)>, ctx_len: ctx.len() = c.cells.len(),
     carried: (b: Valuation()) → words_of(b, Fun::param_ids(c.cells, Tm::iter_at(w.tys, Ty::at(g, init), next))) = ctx →
-        EnvHolds(w.tys, b, g, c.inner, env),
+        EnvHolds(w.tys, b, g, c.inner, Env::refill(w.tys, g, Tm::iter_keeps(g, Ty::at(g, init), test, body), c.inner, b, env)),
+    wi: test.Within(Tm::iter_keep(g, Ty::at(g, init), test, body)) ∧ body.Within(Tm::iter_keep(g, Ty::at(g, init), test, body)),
     r: Nat, ws: List<BitVec(64)>, s: Ty::at(g, init).sem(w.tys), h: Tm::IterWords(w.tys, Ty::at(g, init), ctx, ws, s)):
     (Fun::past(c.cells, Tm::iter_at(w.tys, Ty::at(g, init), next)) + 1 <= lt.next) ∧ ((lt.next <= lb.next) ∧
     Tm::Passes(Tm::iter_pass(w.tys, Ty::at(g, init), next, lt, lb).eval(call,
@@ -3925,19 +4323,31 @@ theorem Tm::iterate_pass(w: World, g: List<Ty>, init: Nat, test, body: Tm, next:
     let below2: Below(tys, inner, ports2, c0 + 1) =
         ⟨st.below_cells(tys, next + 1, c0 + 1, Nat::le_trans(at, c0, c0 + 1, Fun::past_ge(c.cells, at), c1)), c_below⟩;
     let env2 = Pair(s, env);
-    let held2: EnvHolds(tys, pv, inner, ports2, env2) = ⟨held_s, carried(pv, halves.right)⟩;
-    let ran_t = t_holds(call, agree, pv, env2, held2, below2);
+    // The pass holds the carried variables and reads the others back; the
+    // test and body read only the carried, so they mean what they mean at
+    // the loop's own environment.
+    let ks = Tm::iter_keeps(g, Ty::at(g, init), test, body);
+    let refilled = Env::refill(tys, g, ks, c.inner, pv, env);
+    let env2x = Pair(s, refilled);
+    let ag = Env::agree_under(tys, g, st, λ i => Tm::flag(ks, i), s, s, refl, env, refilled, Env::refill_agree(tys, g, ks, c.inner, pv, env));
+    let same_t: (Tm::sem(test, w, inner, env2) = Tm::sem(test, w, inner, env2x)) =
+        Tm::sem_kept(test, w, Tm::iter_keep(g, Ty::at(g, init), test, body), inner, env2, env2x, wi.left, ag);
+    let same_b: (Tm::sem(body, w, inner, env2) = Tm::sem(body, w, inner, env2x)) =
+        Tm::sem_kept(body, w, Tm::iter_keep(g, Ty::at(g, init), test, body), inner, env2, env2x, wi.right, ag);
+    let held2: EnvHolds(tys, pv, inner, ports2, env2x) = ⟨held_s, carried(pv, halves.right)⟩;
+    let ran_t = t_holds(call, agree, pv, env2x, held2, below2);
     let pvt = lt.region.eval(call, pv, buffers := w.spans);
     let tv = Ty::cast(tys, Tm::ty(test, w, inner), Bit, Tm::sem(test, w, inner, env2));
     let bit_t: (pvt(1, lt.result) = BitVec::ofBool(tv)) =
-        Ty::cast_holds(tys, pvt, lt.result, Tm::ty(test, w, inner), Bit, e_t, Tm::sem(test, w, inner, env2), ran_t.right.right.right);
+        trans(Ty::cast_holds(tys, pvt, lt.result, Tm::ty(test, w, inner), Bit, e_t, Tm::sem(test, w, inner, env2x), ran_t.right.right.right),
+            cong_fn(λ (x: Tm::ty(test, w, inner).sem(tys)) => BitVec::ofBool(Ty::cast(tys, Tm::ty(test, w, inner), Bit, x)), sym(same_t)));
     let tr_lt: (lt.result < lt.next) = Ty::below_cast(tys, Tm::ty(test, w, inner), Bit, e_t, lt.result, lt.next, ran_t.right.left);
-    let held_t: EnvHolds(tys, pvt, inner, ports2, env2) = env_holds_keeps(tys, inner, pv, pvt, c0 + 1, ran_t.right.right.left, ports2, env2, below2, held2);
-    let ran_b = b_holds(call, agree, pvt, env2, held_t, below_mono(tys, inner, c0 + 1, lt.next, ran_t.left, ports2, below2));
+    let held_t: EnvHolds(tys, pvt, inner, ports2, env2x) = env_holds_keeps(tys, inner, pv, pvt, c0 + 1, ran_t.right.right.left, ports2, env2x, below2, held2);
+    let ran_b = b_holds(call, agree, pvt, env2x, held_t, below_mono(tys, inner, c0 + 1, lt.next, ran_t.left, ports2, below2));
     let pvb = lb.region.eval(call, pvt, buffers := w.spans);
     let bv = Ty::cast(tys, Tm::ty(body, w, inner), st, Tm::sem(body, w, inner, env2));
-    let held_b: st.Holds(tys, pvb, lb.result, bv) =
-        Ty::cast_holds(tys, pvb, lb.result, Tm::ty(body, w, inner), st, e_b, Tm::sem(body, w, inner, env2), ran_b.right.right.right);
+    let held_b: st.Holds(tys, pvb, lb.result, bv) = j(sym(same_b), λ x _ => st.Holds(tys, pvb, lb.result, Ty::cast(tys, Tm::ty(body, w, inner), st, x)),
+        Ty::cast_holds(tys, pvb, lb.result, Tm::ty(body, w, inner), st, e_b, Tm::sem(body, w, inner, env2x), ran_b.right.right.right));
     let below_b = Ty::below_cast(tys, Tm::ty(body, w, inner), st, e_b, lb.result, lb.next, ran_b.right.left);
     let out = lb.next;
     let moved_t = st.moves_sound(tys, w.spans, pvb, out, lb.result, below_b, bv, held_b);
@@ -4000,7 +4410,8 @@ theorem Tm::iterate_pass(w: World, g: List<Ty>, init: Nat, test, body: Tm, next:
 // The loop: its words start related to the state the variable holds, the
 // passes keep them related, and its outputs hold the state they end at.
 theorem Tm::iterate_holds(w: World, g: List<Ty>, ports: List<Nat>, next, init, pi: Nat, test, body: Tm, at_pi: port_at(ports, init) = Some(pi),
-    ok: Ty::at(g, init).Carries(w.tys), c: Carry, ch: Tm::CarryHolds(w.tys, g, ports, Tm::iter_at(w.tys, Ty::at(g, init), next), Some(c)),
+    ok: Ty::at(g, init).Carries(w.tys), wi: test.Within(Tm::iter_keep(g, Ty::at(g, init), test, body)) ∧ body.Within(Tm::iter_keep(g, Ty::at(g, init), test, body)), c: Carry,
+    ch: Tm::CarryHolds(w.tys, g, Tm::iter_keeps(g, Ty::at(g, init), test, body), ports, Tm::iter_at(w.tys, Ty::at(g, init), next), Some(c)),
     lt, lb: Lowered,
     t_holds: Tm::LowerHolds(test, w, Cons(Ty::at(g, init), g), Cons(next + 1, c.inner),
         Fun::past(c.cells, Tm::iter_at(w.tys, Ty::at(g, init), next)) + 1, Some(lt)),
@@ -4041,11 +4452,11 @@ theorem Tm::iterate_holds(w: World, g: List<Ty>, ports: List<Nat>, next, init, p
         let r0: Tm::IterWords(tys, st, ctx, words_of(values1, inputs), v0) = j(sym(ws0), λ l _ => Tm::IterWords(tys, st, ctx, l, v0),
             Tm::iter_words(tys, st, ctx, sw0, v0, sw0_len, st.words_hold_out(tys, ok, values, pi, v0, held0)));
         let ctx_len: (ctx.len() = c.cells.len()) = trans(words_of_len(values, c.src), ch.left);
-        let c_below: Below(tys, g, c.inner, c0 + 1) = ch.right.right.left(c0 + 1, Nat::le_succ_r(c0, c0, c0.le_refl()));
+        let c_below: Below(tys, g, c.inner, c0 + 1) = ch.right.right.left(c0 + 1, c0.lt_succ_self());
         let carried = λ (b: Valuation()) (same: words_of(b, cids) = ctx) => ch.right.right.right(values, b, env, same, held);
         let pass = λ (r: Nat) (ws: List<BitVec(64)>) (s: st.sem(tys)) (h: Tm::IterWords(tys, st, ctx, ws, s)) =>
             Tm::iterate_pass(w, g, init, test, body, next, ok, c, lt, lb, c_below, t_holds, b_holds, e_t, e_b, call, agree, env, ctx, ctx_len,
-                carried, r, ws, s, h);
+                carried, wi, r, ws, s, h);
         let turn = λ (s: st.sem(tys)) => loop::Step::turn(
             Ty::cast(tys, test.ty(w, inner), Bit, test.sem(w, inner, Pair(s, env))),
             λ _ => Ty::cast(tys, body.ty(w, inner), st, body.sem(w, inner, Pair(s, env))), s);
@@ -4105,30 +4516,33 @@ theorem Tm::iterate_sound(init: Nat, test, body: Tm, w: World,
     let st = Ty::at(g, init);
     let inner = Cons(st, g);
     let at = Tm::iter_at(tys, st, next);
+    let ks = Tm::iter_keeps(g, Ty::at(g, init), test, body);
+    let K = Tm::iter_keep(g, Ty::at(g, init), test, body);
     let P = λ (r: Option<Lowered>) => Tm::LowerHolds(Iterate(init, test, body), w, g, ports, next, r);
     let lower_test = λ (ps: List<Nat>) (k: Nat) => Tm::lower(test, w, inner, ps, k);
     let lower_body = λ (ps: List<Nat>) (k: Nat) => Tm::lower(body, w, inner, ps, k);
+    let from_body = λ (pi: Nat) (c: Carry) (lt: Lowered) =>
+        lower_body(Cons(next + 1, c.inner), lt.next).and_then(λ lb => Tm::iter_checked(w, st, inner, test, body, pi, next, c, lt, lb));
+    let from_test = λ (pi: Nat) (c: Carry) => lower_test(Cons(next + 1, c.inner), Fun::past(c.cells, at) + 1).and_then(λ lt => from_body(pi, c, lt));
+    let from_carry = λ (pi: Nat) => Tm::carry(tys, st, next + 1, g, ks, ports, at).and_then(λ c => from_test(pi, c));
+    let from_within = λ (pi: Nat) => Tm::both(test.check_within(K), body.check_within(K)).and_then(λ _ => from_carry(pi));
     Option::and_then_elim(P, trivial, port_at(ports, init),
         λ pi => Tm::lower_iterate(w, g, ports, next, init, pi, test, body, lower_test, lower_body), λ pi at_pi =>
-    Option::and_then_elim(P, trivial, st.check_carries(tys), λ _ => Tm::carry(tys, g, ports, at).and_then(λ c =>
-        lower_test(Cons(next + 1, c.inner), Fun::past(c.cells, at) + 1).and_then(λ lt =>
-        lower_body(Cons(next + 1, c.inner), lt.next).and_then(λ lb => Tm::iter_checked(w, st, inner, test, body, pi, next, c, lt, lb)))), λ ok _ =>
-    Option::and_then_elim(P, trivial, Tm::carry(tys, g, ports, at), λ c =>
-        lower_test(Cons(next + 1, c.inner), Fun::past(c.cells, at) + 1).and_then(λ lt =>
-        lower_body(Cons(next + 1, c.inner), lt.next).and_then(λ lb => Tm::iter_checked(w, st, inner, test, body, pi, next, c, lt, lb))), λ c carried =>
-    Option::and_then_elim(P, trivial, lower_test(Cons(next + 1, c.inner), Fun::past(c.cells, at) + 1), λ lt =>
-        lower_body(Cons(next + 1, c.inner), lt.next).and_then(λ lb => Tm::iter_checked(w, st, inner, test, body, pi, next, c, lt, lb)), λ lt lowered_t =>
+    Option::and_then_elim(P, trivial, st.check_carries(tys), λ _ => from_within(pi), λ ok _ =>
+    Option::and_then_elim(P, trivial, Tm::both(test.check_within(K), body.check_within(K)), λ _ => from_carry(pi), λ wi _ =>
+    Option::and_then_elim(P, trivial, Tm::carry(tys, st, next + 1, g, ks, ports, at), λ c => from_test(pi, c), λ c carried =>
+    Option::and_then_elim(P, trivial, lower_test(Cons(next + 1, c.inner), Fun::past(c.cells, at) + 1), λ lt => from_body(pi, c, lt), λ lt lowered_t =>
     Option::and_then_elim(P, trivial, lower_body(Cons(next + 1, c.inner), lt.next),
         λ lb => Tm::iter_checked(w, st, inner, test, body, pi, next, c, lt, lb), λ lb lowered_b =>
     Option::and_then_elim(P, trivial, Tm::ty(test, w, inner).check(Bit), λ _ => Tm::ty(body, w, inner).check(st).and_then(λ _ =>
         Some(Tm::iter_region(tys, st, pi, next, c, lt, lb))), λ e_t _ =>
     Option::and_then_elim(P, trivial, Tm::ty(body, w, inner).check(st), λ _ => Some(Tm::iter_region(tys, st, pi, next, c, lt, lb)), λ e_b _ =>
-        Tm::iterate_holds(w, g, ports, next, init, pi, test, body, at_pi, ok, c,
-            j(carried, λ r _ => Tm::CarryHolds(tys, g, ports, at, r), Tm::carry_sound(tys, g, ports, at)), lt, lb,
+        Tm::iterate_holds(w, g, ports, next, init, pi, test, body, at_pi, ok, wi, c,
+            j(carried, λ r _ => Tm::CarryHolds(tys, g, ks, ports, at, r), Tm::carry_sound(tys, st, next + 1, g, ks, ports, at, Fun::past(st.cells(tys), next + 1).le_refl())), lt, lb,
             j(lowered_t, λ r _ => Tm::LowerHolds(test, w, inner, Cons(next + 1, c.inner), Fun::past(c.cells, at) + 1, r),
                 ih_test(inner, Cons(next + 1, c.inner), Fun::past(c.cells, at) + 1)),
             j(lowered_b, λ r _ => Tm::LowerHolds(body, w, inner, Cons(next + 1, c.inner), lt.next, r), ih_body(inner, Cons(next + 1, c.inner), lt.next)),
-            e_t, e_b))))))))
+            e_t, e_b)))))))))
 }
 
 theorem Tm::lower_sound(self t: Tm, w: World): (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →
@@ -5129,18 +5543,24 @@ theorem Tm::iterate_static(init: Nat, test, body: Tm, w: World, cs: Sig::Sems(w.
     let body_w = λ (pi: Nat) (c: Carry) (lt: Lowered) => Tm::lower(body, w, inner, Cons(next + 1, c.inner), lt.next).and_then(λ lb => checked_w(pi, c, lt, lb));
     let test_v = λ (pi: Nat) (c: Carry) => Tm::lower(test, v, inner, Cons(next + 1, c.inner), Fun::past(c.cells, at) + 1).and_then(λ lt => body_v(pi, c, lt));
     let test_w = λ (pi: Nat) (c: Carry) => Tm::lower(test, w, inner, Cons(next + 1, c.inner), Fun::past(c.cells, at) + 1).and_then(λ lt => body_w(pi, c, lt));
-    let carry_v = λ (pi: Nat) => Tm::carry(tys, g, ports, at).and_then(λ c => test_v(pi, c));
-    let carry_w = λ (pi: Nat) => Tm::carry(tys, g, ports, at).and_then(λ c => test_w(pi, c));
+    let ks = Tm::iter_keeps(g, Ty::at(g, init), test, body);
+    let K = Tm::iter_keep(g, Ty::at(g, init), test, body);
+    let carry_v = λ (pi: Nat) => Tm::both(test.check_within(K), body.check_within(K)).and_then(λ _ =>
+        Tm::carry(tys, st, next + 1, g, ks, ports, at).and_then(λ c => test_v(pi, c)));
+    let carry_w = λ (pi: Nat) => Tm::both(test.check_within(K), body.check_within(K)).and_then(λ _ =>
+        Tm::carry(tys, st, next + 1, g, ks, ports, at).and_then(λ c => test_w(pi, c)));
     Option::and_then_ext(port_at(ports, init), λ pi => st.check_carries(tys).and_then(λ _ => carry_v(pi)),
         λ pi => st.check_carries(tys).and_then(λ _ => carry_w(pi)), λ pi =>
     Option::and_then_ext(st.check_carries(tys), λ _ => carry_v(pi), λ _ => carry_w(pi), λ _ =>
-    Option::and_then_ext(Tm::carry(tys, g, ports, at), λ c => test_v(pi, c), λ c => test_w(pi, c), λ c =>
+    Option::and_then_ext(Tm::both(test.check_within(K), body.check_within(K)), λ _ => Tm::carry(tys, st, next + 1, g, ks, ports, at).and_then(λ c => test_v(pi, c)),
+        λ _ => Tm::carry(tys, st, next + 1, g, ks, ports, at).and_then(λ c => test_w(pi, c)), λ _ =>
+    Option::and_then_ext(Tm::carry(tys, st, next + 1, g, ks, ports, at), λ c => test_v(pi, c), λ c => test_w(pi, c), λ c =>
         trans(cong_fn(λ (o: Option<Lowered>) => o.and_then(λ lt => body_v(pi, c, lt)), same_test(Cons(next + 1, c.inner), Fun::past(c.cells, at) + 1)),
     Option::and_then_ext(Tm::lower(test, w, inner, Cons(next + 1, c.inner), Fun::past(c.cells, at) + 1), λ lt => body_v(pi, c, lt), λ lt => body_w(pi, c, lt), λ lt =>
         trans(cong_fn(λ (o: Option<Lowered>) => o.and_then(λ lb => checked_v(pi, c, lt, lb)), same_body(Cons(next + 1, c.inner), lt.next)),
     Option::and_then_ext(Tm::lower(body, w, inner, Cons(next + 1, c.inner), lt.next), λ lb => checked_v(pi, c, lt, lb), λ lb => checked_w(pi, c, lt, lb), λ lb =>
         eq2(λ (a: Ty) (b: Ty) => a.check(Bit).and_then(λ _ => b.check(st).and_then(λ _ => Some(Tm::iter_region(tys, st, pi, next, c, lt, lb)))),
-            Tm::ty_static(test, w, cs, spans, inner), Tm::ty_static(body, w, cs, spans, inner)))))))))
+            Tm::ty_static(test, w, cs, spans, inner), Tm::ty_static(body, w, cs, spans, inner))))))))))
 }
 
 theorem Tm::lower_static(self t: Tm, w: World, cs: Sig::Sems(w.tys, w.sigs), spans: List<List<BitVec(8)>>): (g: List<Ty>) → (ports: List<Nat>) →

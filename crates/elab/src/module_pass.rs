@@ -196,7 +196,7 @@ impl ModulePassMut<'_> {
             // charged to this declaration. A no-op without `value-metrics`.
             #[cfg(feature = "value-metrics")]
             if let Some(metrics) = &self.policy.value_metrics {
-                metrics.set_current_item(Some(Arc::from(name.as_str())));
+                metrics.set_current_item(Some(std::sync::Arc::from(name.as_str())));
             }
             let slice_source = slice_source(&file, src, idx, &plan);
             let slice_start = lint::item_span(item).start;
@@ -518,7 +518,7 @@ impl ModulePassMut<'_> {
             let item_scope = stats::scope(stats::ScopeKind::Item, module, &name);
             #[cfg(feature = "value-metrics")]
             if let Some(metrics) = &self.policy.value_metrics {
-                metrics.set_current_item(Some(Arc::from(name.as_str())));
+                metrics.set_current_item(Some(std::sync::Arc::from(name.as_str())));
             }
             // A slice of the previous delta stands in for the item when its
             // text and the prefix so far match
