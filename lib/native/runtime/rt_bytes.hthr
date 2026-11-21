@@ -60,7 +60,7 @@ fn FTm::OverSems(tys: Nat → RecInfo, sigs: List<Sig>) → Type {
 
 fn FTm::get_over(tys: Nat → RecInfo, sigs: List<Sig>) → FTm::OverSems(tys, sigs) → (i: Nat) → FTm::OverSem(tys, Sig::at(sigs, i)) {
     match sigs {
-        Nil => λ _ i => λ n s => Mutated(s, False),
+        Nil => λ _ i => λ n s => Mutated(s, Nil),
         Cons(_, rest) => λ cs i => match i { Zero => cs.fst, Succ(k) => FTm::get_over(tys, rest, cs.snd, k) },
     }
 }

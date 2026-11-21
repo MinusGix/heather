@@ -127,7 +127,7 @@ fn Ty::all_one_word(ts: List<Ty>, tys: Nat → RecInfo) → Bool {
 // above, or a word narrower than 64 bits (a parameter its low bits, the
 // result zero-extended; what `Ty::check_edge`, `rt_lower.hthr`, accepts).
 fn Ty::is_edge(self t: Ty, tys: Nat → RecInfo) → Bool {
-    match t { Word(w) => w.leb(64), _ => t.is_one_word(tys) }
+    match t { Word(w) => w.leb(64), Bit => True, _ => t.is_one_word(tys) }
 }
 
 // A code a plain function returns (`Ty::check_out`,
@@ -1861,14 +1861,25 @@ fn runtime_low(w: Nat, x: BitVec(64)) → BitVec(w) { BitVec::ofNat(x.toNat()) }
 
 fn runtime_wide(w: Nat, v: BitVec(w)) → BitVec(64) { BitVec::ofNat(v.toNat()) }
 
-// A value at a narrow word through `by` (`runtime_low` or `runtime_wide`);
-// any other code as it is.
-fn runtime_narrow_result(by: Expr, r: Ty, e: Expr) → Expr {
-    match r { Word(w) => match w.same(64) { True => e, False => ap(by, [NatLit(w), e]) }, _ => e }
+// A `Bool` the same way (docs/native/runtime-fn-setups-design.md §16.17):
+// a parameter is the lowest bit of its word, and the result is zero or
+// one, as C passes a `bool`.
+fn runtime_bit_low(x: BitVec(64)) → Bool { BitVec::ofNat(x.toNat(), n := 1).head_bit() }
+
+fn runtime_bit_wide(b: Bool) → BitVec(64) { BitVec::ofNat(BitVec::ofBool(b).toNat()) }
+
+// The two conversions one way: `runtime_low` and `runtime_bit_low`, or
+// `runtime_wide` and `runtime_bit_wide`.
+record RtNarrow { word: Expr, bit: Expr }
+
+// A value at a narrow word or a bit through `by`; any other code as it
+// is.
+fn runtime_narrow_result(by: RtNarrow, r: Ty, e: Expr) → Expr {
+    match r { Word(w) => match w.same(64) { True => e, False => ap(by.word, [NatLit(w), e]) }, Bit => ap(by.bit, [e]), _ => e }
 }
 
 // A function's arguments, a narrow word as the low bits of its word.
-fn runtime_narrow_args(low: Expr, ps: List<Ty>, es: List<Expr>) → List<Expr> {
+fn runtime_narrow_args(low: RtNarrow, ps: List<Ty>, es: List<Expr>) → List<Expr> {
     match ps {
         Nil => es,
         Cons(p, rest) => match es {
@@ -1905,6 +1916,11 @@ fn runtime_own_types(word: Handle, reprs: List<ReprEntry>, ps: List<Ty>, recs: L
                 Named(i) => pure(Cons(match reprs.nth(i) { Some(e) => e.ty, None => word }, more)),
                 // An enum's own type.
                 Enum(i) => match recs.nth(i - reprs.len()) { Some(r) => pure(Cons(r.ty, more)), None => runtime_fail("an enum parameter without its type") },
+                Bit => {
+                    let bool_g <- runtime_ref("Bool");
+                    let t <- as_type(Global(bool_g)).or_fail("runtime: `Bool`: ");
+                    pure(Cons(t, more))
+                },
                 _ => pure(Cons(word, more)),
             }
         },
@@ -2815,7 +2831,7 @@ fn runtime_word_tails(words: List<Expr>, enum_words, then, tys_e: Expr, ps: List
 
 // The answer `f::agrees` states, at the arguments `args` (an enum's as
 // itself or as what its word reads back as).
-fn runtime_agree_rhs(low, wide, count: Expr, reprs: List<ReprEntry>, recs: List<RecShape>, rfun: Fun, f: GlobalRef, args: List<Expr>) → Tac<Expr> {
+fn runtime_agree_rhs(low, wide: RtNarrow, count: Expr, reprs: List<ReprEntry>, recs: List<RecShape>, rfun: Fun, f: GlobalRef, args: List<Expr>) → Tac<Expr> {
     let fx = ap(Global(f), runtime_narrow_args(low, rfun.params, runtime_args(count, reprs, rfun.params, args)));
     let gets <- runtime_result_fields(reprs, recs, rfun.result, fx);
     pure(match gets { Cons(g, _) => g, Nil => runtime_narrow_result(wide, rfun.result, runtime_result(reprs, rfun.result, fx)) })
@@ -2987,8 +3003,12 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
         Decl(AsValue, name ++ "::code", [], Hd(ts.function), code_e),
         Decl(AsInstance("runtime::Compile", [Hd(ft)], [name]), name ++ "::compile", [], Hd(instance_t), instance_e)];
     let own_types <- runtime_own_types(ts.word, reprs, rfun.params, recs);
-    let low <- runtime_global(name_of(runtime_low));
-    let wide <- runtime_global(name_of(runtime_wide));
+    let low_word <- runtime_global(name_of(runtime_low));
+    let low_bit <- runtime_global(name_of(runtime_bit_low));
+    let wide_word <- runtime_global(name_of(runtime_wide));
+    let wide_bit <- runtime_global(name_of(runtime_bit_wide));
+    let low = RtNarrow(low_word, low_bit);
+    let wide = RtNarrow(wide_word, wide_bit);
     // The program: this function and every runtime fn it reaches, each
     // callee's code from its own instance, linked at every file.
     let insts <- runtime_instances(l.order, l.names, f.id, Global(f), instance_e);
