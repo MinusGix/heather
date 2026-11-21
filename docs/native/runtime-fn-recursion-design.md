@@ -114,6 +114,23 @@ obligations `f#obl_N`, one per call site, each under the hypotheses of the
 path to it (docs/language/recursion/decreases-unfolding-design.md §4).
 Two routes to `PDef::Descends` at `f`:
 
+Built (2026-11-21) by the second route, which needed no new companion
+after all: the elaborator names each lifted obligation `f::obl_N`, and
+the generator walks `f::ptm` with one lemma per node (`PTm::calls_ok_bind`,
+`_recur`, `_choose`), closing each call with the obligation whose reading
+(the caller's words in order, the branch tests in scope) the call's
+lemma accepts. The join the companion was to avoid turned out not to be
+fragile: a reflected test's equation converts to the source's `match h:`
+equation, as the guard's conversions already showed. Two things it did
+need: the rank is the measure read at the first words of any list
+(`PTm::padded`), since `Ty::on_words` matches on the list and is stuck at
+the statement's own `xs`; and the environments are passed as handles read
+off each lemma's premise, since spelled out every `Bind` copies the one
+before it twice. The generator publishes `f::depth: (xs) → f::fits(μ(xs),
+xs) = True` wherever the walk closes every call, and nothing otherwise (an
+obligation reading a `let`'s or a call's result). The two routes as first
+weighed:
+
 - **Recommended: a companion, `f::descends`.** The unfolding walk that
   emits `f::ext` and `f::irrel` (`crates/elab/src/measure.rs`) already holds
   each call site's path hypotheses in source terms; one more instantiation
@@ -299,9 +316,9 @@ The first six steps of the 2026-11-20 order (statements read with their
 calls answered, a pure recursion as a procedure, the levels in the charges,
 the generator) are built, §8.1. From here, in order:
 
-1. **The depth by measure.** `PDef::Descends` and `PDef::fits_by_rank` in
-   `rt_ptm` (built); the `f::descends` companion (§3.2); the generator
-   publishes `f::depth: f::fits(μ(x), x)`.
+1. **The depth by measure** (built): `PDef::Descends` and
+   `PDef::fits_by_rank` in `rt_ptm`; the generator publishes `f::depth:
+   f::fits(μ(x), x)` from the lifted obligations (§3.2).
 2. **Closed programs infer their levels** (§3.4, built): `runtime fn
    main()` with no argument; `levels := n` optional.
 3. **The byte budget** (§4.1): `runtime(stack := n)`, the compiled theorem
@@ -400,7 +417,10 @@ the generator) are built, §8.1. From here, in order:
 - **Depth, inferred (2026-11-21).** `PDef::fits_by_rank` (§3.2) and the
   evaluated depth (§3.4): a closed `main` states no levels, and a stated
   `levels := n` is a check. `write-elf` runs `sum_ten` at its inferred
-  eleven levels to 55 and at ten to the call-depth status.
+  eleven levels to 55 and at ten to the call-depth status. Every
+  recursion in the probes gets `f::depth` from its obligations: `rsum`,
+  `doubled` (a `let`), `rpow2` (two calls, two obligations) and
+  `rsum_from` (the measure on the second word).
 
 ## 9. Decisions for Minus
 

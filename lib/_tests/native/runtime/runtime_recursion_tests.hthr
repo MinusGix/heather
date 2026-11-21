@@ -37,34 +37,11 @@ theorem rsum_not_nine(): rsum::fits(9, [BitVec::ofNat(10)]) = False { refl }
 
 // Every call `rsum` makes is at a lower `toNat`, by its own obligation
 // along the `match h:`, so a call at `x` runs within `x.toNat()` levels
-// (`PDef::fits_by_rank`). By hand here; the generator's `rsum::depth` is
-// this proof (docs/native/runtime-fn-recursion-design.md §3.2).
-fn rsum_rank() → Nat → List<BitVec(64)> → Nat { λ _ xs => PTm::word_at(xs, 0).toNat() }
+// (`PDef::fits_by_rank`): the generator's `rsum::depth`
+// (docs/native/runtime-fn-recursion-design.md §3.2).
+theorem rsum_depth(xs: List<BitVec(64)>): rsum::fits(PTm::word_at(xs, 0).toNat(), xs) = True { rsum::depth(xs) }
 
-theorem rsum_descends(): PDef::Descends(PTm::defs_words([Word(64)], rsum::ptm), PTm::words_world(RecInfo::none),
-    PTm::words_meaning(RecInfo::none, [Word(64)], rsum), rsum_rank()) {
-    λ p xs => match p as λ q => PDef::body_fits(PTm::defs_words([Word(64)], rsum::ptm), PTm::words_world(RecInfo::none),
-            PTm::words_meaning(RecInfo::none, [Word(64)], rsum), λ r ys => (rsum_rank()(r, ys) + 1).leb(rsum_rank()(q, xs)), q, xs).IsTrue() {
-        Zero => {
-            let x = PTm::word_at(xs, 0);
-            let at = λ (b: Bool) => (match b as λ _ => Bool {
-                True => True,
-                False => (x.sub(BitVec::ofNat(1)).toNat() + 1).leb(x.toNat()) && True,
-            }).IsTrue();
-            match h: x.eq_bit(BitVec::ofNat(0)) {
-                True => j(sym(h), λ b _ => at(b), trivial),
-                False => j(sym(h), λ b _ => at(b), Bool::is_true_and_intro((x.sub(BitVec::ofNat(1)).toNat() + 1).leb(x.toNat()), True,
-                    (x.sub(BitVec::ofNat(1)).toNat() + 1).leb_complete(x.toNat(), bitvec_nat::toNat_sub_one_lt(x, h)), trivial)),
-            }
-        },
-        Succ(_) => trivial,
-    }
-}
-
-theorem rsum_depth(xs: List<BitVec(64)>): rsum::fits(PTm::word_at(xs, 0).toNat(), xs) = True {
-    eq_true_of_is_true(rsum::fits(PTm::word_at(xs, 0).toNat(), xs), PDef::fits_by_rank(PTm::defs_words([Word(64)], rsum::ptm), PTm::words_world(RecInfo::none),
-        PTm::words_meaning(RecInfo::none, [Word(64)], rsum), rsum_rank(), rsum_descends(), 0, xs))
-}
+theorem rsum_depth_at(n: u64): rsum::fits(n.toNat(), [n]) = True { rsum::depth([n]) }
 
 // The pin: the definition's meaning at 10, its call answered by `rsum`,
 // is `rsum(10)`.
@@ -88,6 +65,34 @@ theorem doubled_fits(): doubled::fits(5, [BitVec::ofNat(5), BitVec::ofNat(3)]) =
 theorem doubled_not_four(): doubled::fits(4, [BitVec::ofNat(5), BitVec::ofNat(3)]) = False { refl }
 
 theorem doubled_value(): doubled(BitVec::ofNat(5), BitVec::ofNat(3)) = BitVec::ofNat(96) { refl }
+
+// Its depth too, through the `let`: `n.toNat()` levels, whatever `acc`.
+theorem doubled_depth(n, acc: u64): doubled::fits(n.toNat(), [n, acc]) = True { doubled::depth([n, acc]) }
+
+// Two calls, each closed by its own obligation.
+runtime fn rpow2(n: u64) → u64 decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => BitVec::ofNat(1),
+        False => rpow2(n.sub(BitVec::ofNat(1))).add(rpow2(n.sub(BitVec::ofNat(1)))),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+    on ?dec2 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+theorem rpow2_value(): rpow2(BitVec::ofNat(5)) = BitVec::ofNat(32) { refl }
+
+theorem rpow2_depth(n: u64): rpow2::fits(n.toNat(), [n]) = True { rpow2::depth([n]) }
+
+// The measure on the second word: the obligation reads `n`, not `acc`.
+runtime fn rsum_from(acc: u64, n: u64) → u64 decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => acc,
+        False => n.add(rsum_from(acc, n.sub(BitVec::ofNat(1)))),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+theorem rsum_from_depth(acc, n: u64): rsum_from::fits(n.toNat(), [acc, n]) = True { rsum_from::depth([acc, n]) }
 
 // The depth a call needs, evaluated: `rsum(10)` makes ten nested calls.
 theorem rsum_depth_ten(): PDef::depth(PTm::defs_words([Word(64)], rsum::ptm), PTm::words_world(RecInfo::none),
