@@ -150,3 +150,79 @@ theorem Loop::unique<S, R>(self l: Loop<S, R>, g: S → R,
 {
     l.unique_within(g, same, l.measure(s) + 1, s, Nat::lt_succ_self(l.measure(s)))
 }
+
+// ---------------------------------------------------------------------------
+// The same loop with its proofs taken out, as a `runtime fn` runs it
+// (docs/language/loop-combinator-design.md §6.2): a pass goes round at the
+// next state or stops at one, and the passes are counted by a fuel instead
+// of bounded by the measure. Running out answers the state it got to, so no
+// value is invented. `Loop::steps_stays` is why the fuel never runs out
+// where the measure is at most it.
+
+inductive Step<S> {
+    Next(s: S),
+    Stop(s: S),
+}
+
+// A `while` loop's pass: while `go` holds, round again at `next`, which
+// may read that it does (an index the test bounds); else stop at the state
+// `s` itself. The `match` is the one a `match h: go` writes, so a step the
+// elaborator spells that way is this by conversion.
+fn Step::turn<S>(go: Bool, next: (go = True) → S, s: S) → Step<S> {
+    (match go as λ b => (go = b) → Step<S> { False => λ _ => Stop(s), True => λ e => Next(next(e)) })(refl)
+}
+
+// A step that stops stops where it is.
+fn Step::Stays<S>(s: S, q: Step<S>) → Type {
+    match q { Next(_) => True, Stop(r) => r = s }
+}
+
+// How many passes a `while` loop is given: `2^64 - 1`, the most a 64-bit
+// count reaches, and at least every measure that is a 64-bit word's
+// `toNat`. A name, not a numeral: two loops given it compare at their
+// `Loop::steps` without either being unrolled pass by pass, which a
+// numeral's would be wherever a field read forces the loop's state.
+fn Loop::passes() → Nat { 18446744073709551615 }
+
+// `Step::turn` stops where it is.
+theorem Step::turn_stays<S>(go: Bool, next: (go = True) → S, s: S): Step::Stays(s, Step::turn(go, next, s)) {
+    (match go as λ b => (e: go = b) → Step::Stays(s, (match b as λ b2 => (go = b2) → Step<S> { False => λ _ => Stop(s), True => λ e2 => Next(next(e2)) })(e))
+    { False => λ _ => refl, True => λ _ => trivial })(refl)
+}
+
+fn Loop::steps<S>(fuel: Nat, step: S → Step<S>, s: S) → S {
+    match fuel {
+        Zero => s,
+        Succ(k) => match step(s) { Next(t) => Loop::steps(k, step, t), Stop(r) => r },
+    }
+}
+
+// A pass of a loop read without its proofs.
+fn Pass::step<S>(m: S → Nat, s: S, self p: Pass<S, S>(m, s)) → Step<S> {
+    match p { Again(b) => Next(b.next), Done(r) => Stop(r) }
+}
+
+// A loop whose stops are where it is needs no pass past its measure: with
+// the measure at most the fuel, the passes that go round are at most the
+// fuel, and the one that stops answers the state it was given, as running
+// out does. What a `while` loop is rewritten by (`Loop::passes()` is the
+// most a 64-bit count reaches, and a measure that is a word's `toNat` is at
+// most it).
+theorem Loop::steps_stays<S>(self l: Loop<S, S>, step: S → Step<S>, same: (s: S) → Pass::step(l.measure, s, l.step(s)) = step(s),
+    stays: (s: S) → Step::Stays(s, step(s)), k: Nat): (s: S) → l.measure(s) <= k → Loop::steps(k, step, s) = l.run(s) {
+    match k {
+        Zero => λ s h => trans((match l.step(s) as λ p => Step::Stays(s, Pass::step(l.measure, s, p)) →
+                s = (match p { Again(b) => l.run(b.next), Done(r) => r }) {
+                Again(b) => λ _ => false_elim(Nat::not_succ_le_zero(l.measure(b.next), Nat::lt_of_lt_of_le(l.measure(b.next), l.measure(s), 0, b.less.recover(), h))),
+                Done(r) => λ e => sym(e),
+            })(j(sym(same(s)), λ q _ => Step::Stays(s, q), stays(s))), sym(l.run_unfold(s))),
+        Succ(j) => λ s h => {
+            let ran = λ (q: Step<S>) => match q { Next(t) => Loop::steps(j, step, t), Stop(r) => r };
+            trans(rewrite(sym(same(s)), refl), trans(match l.step(s) as λ p =>
+                ran(Pass::step(l.measure, s, p)) = (match p { Again(b) => l.run(b.next), Done(r) => r }) {
+                Again(b) => Loop::steps_stays(l, step, same, stays, j, b.next, Nat::lt_of_lt_of_le(l.measure(b.next), l.measure(s), j + 1, b.less.recover(), h)),
+                Done(_) => refl,
+            }, sym(l.run_unfold(s))))
+        },
+    }
+}

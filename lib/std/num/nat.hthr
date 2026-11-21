@@ -405,7 +405,7 @@ theorem Nat::le_refl(self n: Nat): n <= n { match n { Zero => trivial, Succ(k) =
 theorem Nat::le_unique(self n, m: Nat): (p, q: n <= m) → p = q {
     match n {
         Zero => λ _ _ => refl,
-        Succ(k) => match m as λ y => (p, q: Succ(k) <= y) → p = q { Zero => λ never _ => false_elim(never), Succ(l) => k.le_unique(l) },
+        Succ(k) => match m { Zero => λ never _ => false_elim(never), Succ(l) => k.le_unique(l) },
     }
 }
 

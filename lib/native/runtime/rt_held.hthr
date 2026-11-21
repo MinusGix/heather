@@ -843,6 +843,7 @@ theorem Tm::reader_ok<A>(self e: Tm, hw: HWorld<A>, whole: Stored<A>, sound: Sou
         Pick(_, _, _, _) => refl,
         Inject(_, _, _) => refl,
         Slot(_, _, _) => refl,
+        Iterate(_, _, _) => refl,
     }
 }
 
@@ -871,6 +872,8 @@ theorem Tm::literal_known(self e: Tm, fw: FWorld, own: List<BitVec(8)>, g: List<
         Pick(i, c, arms, eq) => FTm::knows_more(fw.w.tys, g, env, known, knows, Pick(i, c, arms, eq).ty(fw.w, g), FTm::value(fw, own, Pick(i, c, arms, eq), g, env)),
         Inject(i, k, xs) => FTm::knows_more(fw.w.tys, g, env, known, knows, Inject(i, k, xs).ty(fw.w, g), FTm::value(fw, own, Inject(i, k, xs), g, env)),
         Slot(i, j, of) => FTm::knows_more(fw.w.tys, g, env, known, knows, Slot(i, j, of).ty(fw.w, g), FTm::value(fw, own, Slot(i, j, of), g, env)),
+        Iterate(init, test, body) => FTm::knows_more(fw.w.tys, g, env, known, knows, Iterate(init, test, body).ty(fw.w, g),
+            FTm::value(fw, own, Iterate(init, test, body), g, env)),
     }
 }
 

@@ -54,7 +54,7 @@ import function_ir_operation;
 // the right it would be stuck on the neutral bit), and `PRotate(kind)` is
 // `x.rotr(k)` (`kind` 0) or `x.rotl(k)` (1) read as the shift pair it is
 // defined as (`bitvec_rotate.hthr`), the other count `w - k` computed here.
-inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PWiden(extra: Nat), PFoldl, PGet, PSet, PToNat, PTrunc, PShift(kind: Nat), PSext, PWithin, PComplement, PRotate(kind: Nat), PAt, PLen, POperation(code: Nat) }
+inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PWiden(extra: Nat), PFoldl, PGet, PSet, PToNat, PTrunc, PShift(kind: Nat), PSext, PWithin, PComplement, PRotate(kind: Nat), PAt, PLen, POperation(code: Nat), PSteps }
 
 record PrimEntry { g: Nat, p: Prim }
 
@@ -148,10 +148,7 @@ fn OldByte::find(olds: List<OldByte>, s: Nat, i: Nat) → Option<Nat> {
 // (`varied`, in the order the call passes them) replaced by the call's
 // arguments. A measured step's call passes a proof after the words, which
 // nothing reads.
-// A loop of the combinator read from its twin (`rt_reflect_loop`) also
-// has `exit`: the local its answer is handed to, a call of which is that
-// answer.
-record SelfCall { ih: Nat, head: List<Nat>, slots: List<Nat>, varied: List<Nat>, exit: Option<Nat> := None }
+record SelfCall { ih: Nat, head: List<Nat>, slots: List<Nat>, varied: List<Nat> }
 
 // The elements of an array field, each a word its codec's accessor reads:
 // element `i` of `count` lies at the word `base + i * stride`, and a read
@@ -682,7 +679,15 @@ fn Known::ty_within(self k: Known, fuel: Nat, h: Handle) → Tac<Ty> {
             },
           },
         },
-        _ => rt_refuse("a type with no runtime layout under the reflected fragment"),
+        // A type an inference left as a redex (a generic's result at its
+        // type argument, `Loop::steps`'s `S`): its head form.
+        _ => match fuel {
+            Zero => rt_refuse("a type with no runtime layout under the reflected fragment"),
+            Succ(f) => whnf(h).bind(λ u => match u {
+                Accepted(x) => k.ty_within(f, x),
+                Refused(_) => rt_refuse("a type with no runtime layout under the reflected fragment"),
+            }),
+        },
     })
 }
 
@@ -738,6 +743,7 @@ fn RSt::at_depth(self st: RSt, t: Tm) → Tm {
         IfEq(c, yes, no) => IfEq(st.index(c), yes, no),
         Byte(k, i, length) => Byte(k, st.index(i), st.index(length)),
         Pick(i, c, arms, eq) => Pick(i, st.index(c), arms, eq),
+        Iterate(init, test, body) => Iterate(st.index(init), test, body),
         _ => t,
     }
 }
@@ -759,7 +765,8 @@ fn RSt::finish(self st: RSt, h: Handle, operand: Bool, node: Tm) → Pair<RSt, T
         False => Pair(st, st.at_depth(node)),
         True => match node {
             Var(l) => Pair(st, Var(l)),
-            _ => match (match node { Lit(_, _) => None, If(_, _, _) => None, IfEq(_, _, _) => None, Pick(_, _, _, _) => None, _ => rt_memo(st.memo, node) }) {
+            _ => match (match node { Lit(_, _) => None, If(_, _, _) => None, IfEq(_, _, _) => None, Pick(_, _, _, _) => None, Iterate(_, _, _) => None,
+                _ => rt_memo(st.memo, node) }) {
                 Some(l) => Pair(RSt(st.depth, st.lets, st.memo, Cons(Pair(h.id, l), st.handles), st.locals, st.funs), Var(l)),
                 None => Pair(RSt(st.depth + 1, Cons(st.at_depth(node), st.lets), Cons(Pair(node, st.depth), st.memo),
                     Cons(Pair(h.id, st.depth), st.handles), st.locals, st.funs), Var(st.depth)),
@@ -2088,6 +2095,48 @@ fn rt_within(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, bytes, length,
     })
 }
 
+// A `while` loop (docs/language/loop-combinator-design.md §6.2), as the
+// elaborator writes it: `loop::Loop::steps(F, λ s => Step::turn(c, λ h =>
+// next, s), init)`, `F` the passes a loop is given (`Loop::passes()`). The
+// state starts as `init`'s variable; the test `c` and the next state are
+// each reflected in a block of their own under the state, at the level
+// after the current depth, as an `if`'s arms are. `h`, the test's equation,
+// is no runtime data: what reads it is a proof the reflection erases.
+fn rt_steps(k: Known, st: RSt, h: Handle, operand: Bool, args: List<Handle>,
+    go: RSt → Handle → Bool → Tac<Pair<RSt, Tm>>) → Tac<Pair<RSt, Tm>>
+{
+    let missing = rt_refuse<Pair<RSt, Tm>>("`Loop::steps` without its passes, step and start");
+    match args {
+        Nil => missing,
+        Cons(fuel, r1) => match r1 {
+        Nil => missing,
+        Cons(step, r2) => match r2 {
+        Nil => missing,
+        Cons(init, _) => view(fuel).bind(λ fv => match (match fv { HGlobal(_, fname, _) => Known::str_same(rt_base_name(fname), "passes"), _ => False }) {
+            False => rt_refuse("a loop given other than `Loop::passes()` passes: a `while` is given the most a 64-bit count reaches"),
+            True => go(st, init, True).bind(λ ri => {
+                let s0 = ri.fst;
+                let at = s0.depth;
+                open(step, "s").bind(λ c => rt_accepted("a loop's step", c)).bind(λ os => view(os.body).bind(λ v => match v {
+                    HGlobal(_, tname, targs) => match targs {
+                        Cons(test_h, Cons(next_h, _)) => open(next_h, "h").bind(λ c2 => rt_accepted("a loop's next state", c2)).bind(λ on => {
+                            let under = λ (funs: List<Nat>) => RSt(at + 1, [], s0.memo, s0.handles, Cons(Pair(os.local.ref.id, at), s0.locals), funs);
+                            go(under(s0.funs), test_h, False).bind(λ rt =>
+                            go(under(rt.fst.funs), on.body, False).bind(λ rb =>
+                            pure(s0.with_funs(rb.fst.funs).finish(h, operand,
+                                Iterate(RSt::level(ri.snd), RSt::wrap(rt.fst.lets, rt.snd), RSt::wrap(rb.fst.lets, rb.snd))))))
+                        }),
+                        _ => rt_refuse("a loop's step `" ++ tname ++ "` without its test and next state"),
+                    },
+                    _ => rt_refuse("a loop's step that is not `Step::turn` of a test, the next state and the state"),
+                }))
+            }),
+        }),
+        },
+        },
+    }
+}
+
 fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RSt, Tm>> {
     match fuel {
         Zero => rt_refuse("the body is deeper than the reflector's fuel"),
@@ -2098,13 +2147,7 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                     Some(sc) => match x.id.same(sc.ih) {
                         True => rt_lent_args(λ s a => rt_go(f, k, s, a, True), k, st, 0, k.lent, args.take(sc.varied.len())).bind(λ r =>
                             pure(r.fst.finish(h, operand, Call(0, sc.call_args(r.snd))))),
-                        False => match (match sc.exit { Some(e) => x.id.same(e), None => False }) {
-                            True => match args {
-                                Cons(a, Nil) => rt_go(f, k, st, a, operand),
-                                _ => rt_refuse("a loop's answer handed on with other than one argument"),
-                            },
-                            False => rt_local(k, st, h, operand, x, args),
-                        },
+                        False => rt_local(k, st, h, operand, x, args),
                     },
                     None => rt_local(k, st, h, operand, x, args),
                 },
@@ -2256,6 +2299,7 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                             }),
                             _ => rt_refuse("`" ++ name ++ "` without its operand and count"),
                         },
+                        PSteps => rt_steps(k, st, h, operand, args, λ s a o => rt_go(f, k, s, a, o)),
                         PGet => rt_bytes_op(k, st, h, operand, name, args, λ c => Get(c), λ s a => rt_go(f, k, s, a, True)),
                         PSet => rt_bytes_op(k, st, h, operand, name, args, λ c => Set(c), λ s a => rt_go(f, k, s, a, True)),
                         PFoldl => match args {
@@ -2516,28 +2560,6 @@ fn rt_reflect_measured(fuel: Nat, k: Known, g: Nat, step: Nat) → Tac<Pair<Fun,
     pure(Pair(Fun(lent.snd, result, RSt::wrap(r.fst.lets, r.snd), lent.fst), r.fst.funs))
 }
 
-// A loop of the combinator (`f#loop`, docs/language/loop-combinator-design.md
-// §6.1), read from its twin `f::loop::twin`: `λ X c̄ v̄ again done => …`, its
-// parameters the loop's own, then the next pass and the answer. A call of
-// `again` is a call of the loop itself on its arguments, and a call of
-// `done` is the loop's answer: the measured function the lowering reads,
-// with no recursion in the elaborated term (`Loop::run` is) and no proof
-// read.
-fn rt_reflect_loop(fuel: Nat, k: Known, g: Nat, twin: Nat) → Tac<Pair<Fun, List<Nat>>> {
-    let n <- infer(Global(GlobalRef(g))).bind(λ c => rt_accepted("its type", c)).bind(λ t => rt_arity(fuel, t));
-    let b <- body(GlobalRef(twin)).bind(λ c => rt_accepted("its twin's body", c));
-    let ox <- open(b, "X").bind(λ c => rt_accepted("its twin's answer type", c));
-    let p <- rt_params_n(n, k, RSt(0, [], [], [], [], k.funs), [], ox.body);
-    let oa <- open(p.snd, "again").bind(λ c => rt_accepted("its twin's next pass", c));
-    let od <- open(oa.body, "done").bind(λ c => rt_accepted("its twin's answer", c));
-    let answer <- view(od.local.ty);
-    let result <- match answer { HPi(dom) => k.ty(dom), _ => rt_refuse("a loop's twin whose answer is not a function") };
-    let sc = SelfCall(oa.local.ref.id, [], List::range(n), List::range(n), exit := Some(od.local.ref.id));
-    let lent <- rt_lend(k, p.fst.snd);
-    let r <- rt_go(fuel, k.within(sc).lending(lent.fst), p.fst.fst, od.body, False);
-    pure(Pair(Fun(lent.snd, result, RSt::wrap(r.fst.lets, r.snd), lent.fst), r.fst.funs))
-}
-
 fn rt_reflect_fun(fuel: Nat, k: Known, g: Nat) → Tac<Fun> { rt_reflect_one(fuel, k, g).bind(λ r => pure(r.fst)) }
 
 fn rt_reflect_funs(fuel: Nat, k: Known, gs: List<Nat>) → Tac<List<Fun>> {
@@ -2569,7 +2591,8 @@ fn rt_prim_names() → List<Pair<String, Prim>> {
 fn rt_derived_names() → List<Pair<String, Prim>> {
     [Pair("bitvec::BitVec::complement", PComplement), Pair("bitvec_rotate::BitVec::rotr", PRotate(0)), Pair("bitvec_rotate::BitVec::rotl", PRotate(1)),
      Pair("bytes::Bytes::at", PAt), Pair("bytes::Bytes::len", PLen),
-     Pair("bitvec_div::BitVec::udiv", POperation(UDiv.code())), Pair("bitvec_div::BitVec::urem", POperation(URem.code()))]
+     Pair("bitvec_div::BitVec::udiv", POperation(UDiv.code())), Pair("bitvec_div::BitVec::urem", POperation(URem.code())),
+     Pair("loop::Loop::steps", PSteps)]
 }
 
 fn rt_prims_present(ps: List<Pair<String, Prim>>) → Tac<List<PrimEntry>> {
@@ -2649,7 +2672,12 @@ fn rt_needed_repr(msg: String) → Option<Pair<String, String>> {
 // cannot hold (one already given, so held some other way, or one with no
 // global name) is refused as having no layout.
 fn rt_with_entry(k: Known, rest: List<Char>, alts: Bool) → Tac<Known> {
-    attempt(rt_global(String(rest))).bind(λ og => match og {
+    // A loop's state (`f#State`) is found by its designed name, `f::State`.
+    let found = attempt(rt_global(String(rest))).bind(λ og => match og {
+        Done(g) => pure(Done(g)),
+        Failed(_, _) => attempt(rt_global(String(rt_designed(rest)))),
+    });
+    found.bind(λ og => match og {
         Done(g) => match k.recs.any_bit(λ (e: RecEntry) => e.g.same(g)) {
             False => pure(k.with_recs(k.recs ++ [RecEntry(g, alts := alts)])),
             True => rt_refuse("`" ++ String(rest) ++ "` has no runtime layout under the reflected fragment"),
@@ -2746,6 +2774,7 @@ fn Tm::show(self t: Tm) → String {
         Pick(i, c, arms, eq) => "Pick(" ++ rt_nat(i) ++ ", " ++ rt_nat(c) ++ ", " ++ arms.show() ++ match eq { True => ", True)", False => ", False)" },
         Inject(i, k, args) => "Inject(" ++ rt_nat(i) ++ ", " ++ rt_nat(k) ++ ", [" ++ rt_nats(args) ++ "])",
         Slot(i, j, of) => "Slot(" ++ rt_nat(i) ++ ", " ++ rt_nat(j) ++ ", " ++ rt_nat(of) ++ ")",
+        Iterate(init, test, body) => "Iterate(" ++ rt_nat(init) ++ ", " ++ test.show() ++ ", " ++ body.show() ++ ")",
     }
 }
 

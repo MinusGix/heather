@@ -1,8 +1,10 @@
 # One loop combinator
 
-Status: **round 1 built** (the combinator, its rule, a case principle for a
-step, probes); **round 2 in review** (a `while` outside a `runtime fn`
-elaborates to the combinator, §5). Rounds 3 to 5 (§8) are the rest of the
+Status: **rounds 1, 2 and 3a merged** (the combinator and its rule; a
+`while` outside a `runtime fn` elaborates to it, §5; the reflector read a
+twin of the step, §6.1); **stage 3b in review** (one loop node in the
+runtime terms, `while` and counted `for` over words written as
+`Loop::steps`, §6.2). Stage 3c and rounds 4 and 5 (§8) are the rest of the
 migration. Thread "Rebuild loops on
 one combinator", 2026-11-19, from the dogfooding review
 (`docs/native/dogfooding-plan.md`, PR #804).
@@ -226,7 +228,7 @@ a PR that leaves the native gates green:
   `Loop::unique`.
 - **3c.** The other four loop files onto the node (round 4 above).
 
-**3a as built so far (2026-11-20).** A `runtime fn`'s `while` over one
+**3a as built (2026-11-20, replaced by 3b).** A `runtime fn`'s `while` over one
 `u64` local with `u64` captures and no stated fact elaborates to the
 combinator (`loops.rs`, `lift_while_runtime`): `f#loop(c̄, v̄)` is
 `f#loop#of(c̄, v̄).run(f#State(v̄))`. Reading the step itself turned out not
@@ -251,6 +253,93 @@ is a function that returns it. Stage 3a alone keeps that (its loop is still a
 measured `Fun`), so those two need either a two-word result for the loop's
 function or stage 3b, whose node keeps the state in the loop's homes and
 never makes it a value. 3b is the one that fixes them for good.
+
+### 6.2 Stage 3b as built: the loop node
+
+What 3a taught: the kernel will not commute a `match` on a step's result
+into the step's own tests, and a `runtime fn`'s instance is pinned by
+*conversion* (`Setup::compile`'s `pinned` is an equation of curried
+functions, and there is no funext to prove one any other way). So the
+loop's meaning in a `runtime fn` must be a term that the reflected node's
+meaning converts to, with no theorem in between. 3b is that, end to end,
+and the 3a twin path (`::twin`, `#elim`, `rt_reflect_loop`,
+`runtime_loop_instance`, `Fun::guarded_of_loop`) is deleted with it.
+
+- **A proof-free iteration in the library** (`loop.hthr`).
+  `Step<S> { Next(s), Stop(s) }`, `Loop::steps(fuel, step: S → Step<S>,
+  s) → S` (`steps(0, s) = s`; `steps(k + 1, s) = match step(s) {
+  Next(t) => steps(k, t), Stop(r) => r }`), and `Step::turn(go, next, s)`,
+  the `match h: go` a `while` writes: `Next(next(h))` while `go` holds,
+  else `Stop(s)`. Running out answers the state it got to, so no value is
+  invented. `Loop::steps_stays` proves the iteration is `Loop::run`
+  wherever the measure is at most the fuel, the step agrees with the
+  loop's, and a stop stays where it is (`Step::turn_stays`).
+- **The fuel is a name.** `Loop::passes() = 2^64 - 1`, the most a 64-bit
+  count reaches, so every measure that is a word's `toNat` is below it
+  (`rt::Tm::word_within`). As a numeral, two loops compared at their
+  `Loop::steps` unrolled pass by pass wherever a field read forced the
+  state; as a name they compare by their arguments. The reflector refuses
+  a loop given any other fuel.
+- **The elaborator writes the loop where it stands** (`loops.rs`,
+  `lift_steps`). A `runtime fn`'s `while` or counted `for` whose locals and
+  captures are words, with no facts, no receiver and a word's `toNat` as
+  measure, becomes
+
+  ```text
+  loop::Loop::steps(loop::Loop::passes(), λ (t: S) => loop::Step::turn(
+      { let v̄ = t.v̄; c₁ && c₂ … }, λ _ => { let v̄ = t.v̄; body; S(v̄′) }, t), S(v̄₀))
+  ```
+
+  where `S` is the one local's type or the generated record `f#State` (a
+  counted `for` adds its count as a field, `i < hi` its test and `i + 1`
+  its next value). Nothing about the loop is a function of the program.
+  Beside it the elaborator writes the loop's reasoning, checked the
+  ordinary way: `f::loop::step`, a `Pass` whose decrease is found
+  (`bv_omega`; a body that does not lower the measure is refused there,
+  "this pass of the loop must decrease the measure"), `f::loop::of`, its
+  `Loop`, `f::loop::same` (the pass read without proofs is the written
+  `Step::turn`, by `split_all` and `refl`), and the theorem a proof about
+  `f` rewrites by, `f::loop::runs(c̄, s): Loop::steps(passes, turn, s) =
+  of(c̄).run(s)`, one application of `Loop::steps_stays`. With several
+  loops, `f::loop1_loop::runs`, ….
+- **One node in the runtime terms.** `Tm::Iterate(init, test, body)`
+  (`rt.hthr`): the state is variable `init` (a word or a record of words);
+  `test` (a bit) and `body` (the next state) see it as variable 0. Its
+  meaning is `Loop::steps(Loop::passes(), λ s => Step::turn(test, λ _ =>
+  body, s), init)`, so the pin of a function with loops in it is still a
+  conversion and the instance is a plain function's. The reflector
+  (`rt_reflect.hthr`, `rt_steps`) reads exactly that shape.
+- **Its lowering is a FunctionIR loop region** (`rt_lower.hthr`,
+  `Tm::lower_iterate`): the state and the context are the region's
+  parameters (a record as its fields, an enum as its tag word and slots,
+  `Ty::cells`; never a buffer), a pass is the test, a branch that moves the body's value
+  (or the state itself, once the test fails) to fresh ports, and the exit
+  bit, the test's bit exclusive-ored with 1 (the emitter has no 1-bit
+  compare). The region is given `Loop::passes()` passes, the meaning's
+  fuel. Its soundness, `Tm::iterate_holds`, is by induction on the passes
+  and never mentions a measure: the measure appears only in
+  `Loop::steps_stays`, about Heather terms.
+
+**A conversion trap found on the way.** Reading a record field after a
+symbolic loop ran the kernel out of fuel: the meaning side stalled at
+`Ty::cast`'s `Nat::equation`, a global older than `loop`, and the δ-lazy
+rule "unfold the newer side" unrolled the program's `Loop::steps` instead.
+The casts now decide on rt's own copy, `Ty::nat_equation`, newer than
+`loop`, so the cast unfolds first. A constant the meaning waits on should be
+newer than what the program's side unfolds into.
+
+**What compiles.** `port_fib` and `port_bits` (`runtime_ports_tests`) are
+accepted: a state of two words is a record held in the loop's homes, never
+a function's result. `drop_to` and `port_bits` compile to certified x86 and
+pass a native test. `port_fib` does not reach x86 yet: a FunctionIR loop
+pass sees only its parameters, so the region carries every word of the
+context, and fib's ten words leave the planner no register for the next
+state. Carrying only the variables the test and body read needs a lemma
+that a term's meaning ignores an unread variable
+(`issues/iterate-carries-whole-context.md`).
+
+Still lifted the old way: loops with facts, `mut self` loops, loops whose
+locals are not all words, and the other four loop files (3c).
 
 ## 7. Bootstrapping
 
