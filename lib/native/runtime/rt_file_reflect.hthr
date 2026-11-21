@@ -61,7 +61,9 @@ import rt_reflect;
 // two spellings of a store, a window and its putting back. The last two
 // are absent where the body's module does not import `list_window`: it
 // then writes no window, and none is read.
-record FileNames { mutated: Nat, put: Nat, with_byte: Nat, window: Option<Nat>, put_window: Option<Nat>, bytes: Option<Nat>, bytes_put: Option<Nat> }
+// `steps` is the library's loop (`loop::Loop::steps`), absent where the
+// body's module cannot reach it: it then writes no loop over the span.
+record FileNames { mutated: Nat, put: Nat, with_byte: Nat, window: Option<Nat>, put_window: Option<Nat>, bytes: Option<Nat>, bytes_put: Option<Nat>, steps: Option<Nat> }
 
 fn rt_global_here(name: String) → Tac<Option<Nat>> {
     lookup(name).bind(λ c => match c { Accepted(g) => pure(Some(g.id)), Refused(_) => pure(None) })
@@ -79,7 +81,8 @@ fn rt_file_names() → Tac<FileNames> {
     // function of a `Bytes(n)` is read as one of its bytes and `n`.
     let bytes <- rt_global_here("bytes::Bytes");
     let bytes_put <- rt_global_here("bytes::Bytes::put");
-    pure(FileNames(mutated, put, with_byte, window, put_window, bytes, bytes_put))
+    let steps <- rt_global_here("loop::Loop::steps");
+    pure(FileNames(mutated, put, with_byte, window, put_window, bytes, bytes_put, steps))
 }
 
 // ---------------------------------------------------------------------------
@@ -93,6 +96,7 @@ inductive FSeg {
     FPut(i: Nat, length: Nat, v: Nat),
     FCall(f: Nat, args: List<Nat>),
     FLend(f: Nat, views: List<FView>, args: List<Nat>),
+    FLoop(init: Nat, test: Tm, body: FTm),
 }
 
 fn FSeg::close(segs: List<FSeg>, last: FTm) → FTm {
@@ -101,6 +105,7 @@ fn FSeg::close(segs: List<FSeg>, last: FTm) → FTm {
         FPut(i, length, v) => FTm::Put(i, length, v, acc),
         FCall(f, args) => FTm::Call(f, args, acc),
         FLend(f, views, args) => FTm::Lend(f, views, args, acc),
+        FLoop(init, test, body) => FTm::Loop(init, test, body, acc),
     }, last)
 }
 
@@ -154,6 +159,22 @@ fn rt_file_threaded(names: FileNames, args: List<Handle>) → Tac<List<Handle>> 
     }
 }
 
+// A loop over the span (`loop::Loop::steps(F, step, Mutated(span, v))`,
+// as the elaborator writes a `while` in a `runtime fn`, crates/elab/src/
+// loops.rs `lift_steps_over`): the span it starts from and its words.
+fn rt_file_loop_start(args: List<Handle>) → Tac<Pair<Handle, Handle>> {
+    match args.rev() {
+        Cons(init, _) => view(init).bind(λ v => match v {
+            HCtor(_, _, _, fields) => match fields.rev() {
+                Cons(value, Cons(after, _)) => pure(Pair(after, value)),
+                _ => rt_refuse("a loop over the span that starts from other than `Mutated(span, words)`"),
+            },
+            _ => rt_refuse("a loop over the span that starts from other than `Mutated(span, words)`"),
+        }),
+        Nil => rt_refuse("`Loop::steps` without its start"),
+    }
+}
+
 // The stores and calls a span has been through, the first first: the
 // parameter has been through none.
 fn rt_file_chain(fuel: Nat, names: FileNames, span: Nat, h: Handle) → Tac<List<Handle>> {
@@ -166,10 +187,15 @@ fn rt_file_chain(fuel: Nat, names: FileNames, span: Nat, h: Handle) → Tac<List
             },
             HField(c, name, _) => match Known::str_same(name, "after") {
                 True => view(c).bind(λ cv => match cv {
-                    HGlobal(_, cname, args) => rt_file_threaded(names, args).bind(λ targs => match targs {
-                        Cons(prev, _) => rt_file_chain(f, names, span, prev).bind(λ ls => pure(ls ++ [h])),
-                        Nil => rt_refuse("`" ++ cname ++ "` without its span"),
-                    }),
+                    HGlobal(cg, cname, args) => match FileNames::names(names.steps, cg.id) {
+                        // A loop over the span: the span before it is its start's.
+                        True => rt_file_loop_start(args).bind(λ start =>
+                            rt_file_chain(f, names, span, start.fst).bind(λ ls => pure(ls ++ [h]))),
+                        False => rt_file_threaded(names, args).bind(λ targs => match targs {
+                            Cons(prev, _) => rt_file_chain(f, names, span, prev).bind(λ ls => pure(ls ++ [h])),
+                            Nil => rt_refuse("`" ++ cname ++ "` without its span"),
+                        }),
+                    },
                     _ => rt_refuse("the span after something other than a call"),
                 }),
                 False => rt_refuse("a span read out of a record (`." ++ name ++ "`)"),
@@ -515,7 +541,71 @@ fn rt_file_ops(names: FileNames, args: List<Handle>) → Tac<List<Handle>> {
     }
 }
 
-fn rt_file_link(fuel: Nat, k: Known, names: FileNames, w: FWalk, link: Handle) → Tac<FWalk> {
+// What a body's walk leaves: its computation, and the program's pure
+// functions and computations after it.
+record FileEnd { term: FTm, funs: List<Nat>, cfuns: List<Nat> }
+
+// A loop over the span (docs/language/loop-combinator-design.md §6.3): its
+// start's words bound, then the step `λ t => Loop::after(t, λ span v =>
+// Step::turn(c, λ h => next, t))` read as `FTm::Loop`'s test and body, each
+// under the words `v` at the level after the start's, the span `span` the
+// one it writes; the body is a walk of its own ending in `Mutated(span′,
+// words′)`. The words after the loop are its `.value`, bound at that level,
+// and its `.after` the span from then on.
+fn rt_file_loop(fuel: Nat, k: Known, names: FileNames, w: FWalk, link: Handle, c: Handle, g: GlobalRef, args: List<Handle>,
+    tail: FWalk → Handle → Tac<FileEnd>) → Tac<FWalk> {
+    match fuel {
+        Zero => rt_refuse("the loop is deeper than the reflector's fuel"),
+        Succ(f) => match args {
+            Cons(passes, Cons(step, _)) => view(passes).bind(λ pv => match (match pv { HGlobal(_, pname, _) => Known::str_same(rt_base_name(pname), "passes"), _ => False }) {
+                False => rt_refuse("a loop given other than `Loop::passes()` passes: a `while` is given the most a 64-bit count reaches"),
+                True => {
+                    let start <- rt_file_loop_start(args);
+                    let kk = k.at_file(w.fk);
+                    let ri <- rt_go(f, kk, w.st, start.snd, True);
+                    let s0 = ri.fst;
+                    let at = s0.depth;
+                    let os <- open(step, "t").bind(λ c1 => rt_accepted("a loop's step", c1));
+                    let av <- view(os.body);
+                    match av {
+                        HGlobal(_, aname, aargs) => match aargs.rev() {
+                            Cons(kh, _) => {
+                                let ospan <- open(kh, "span").bind(λ c2 => rt_accepted("a loop's pass over the span", c2));
+                                let ov <- open(ospan.body, "v").bind(λ c3 => rt_accepted("a loop's pass over the words", c3));
+                                let tv <- view(ov.body);
+                                match tv {
+                                    HGlobal(_, tname, targs) => match targs {
+                                        Cons(test_h, Cons(next_h, _)) => {
+                                            let on <- open(next_h, "h").bind(λ c4 => rt_accepted("a loop's next state", c4));
+                                            let inner = FileKnown::start(ospan.local.ref.id, w.fk.calls);
+                                            let base = s0.written(at + 1);
+                                            let under = RSt(at + 1, [], base.memo, base.handles, Cons(Pair(ov.local.ref.id, at), base.locals), s0.funs);
+                                            let rt <- rt_go(f, k.at_file(inner), under, test_h, False);
+                                            let rb <- tail(FWalk(under.with_funs(rt.fst.funs), [], inner, 0, w.cfuns), on.body);
+                                            let seg = FLoop(s0.index(RSt::level(ri.snd)), RSt::wrap(rt.fst.lets, rt.snd), rb.term);
+                                            let after = s0.written(at + 1).with_funs(rb.funs);
+                                            pure(FWalk(after, Cons(seg, FSeg::lets(s0.lets) ++ w.segs),
+                                                w.fk.past(link, w.fk.calls ++ [CallRes(w.fk.calls.len(), g.id, c, Some(at), [])]),
+                                                w.done + 1, rb.cfuns))
+                                        },
+                                        _ => rt_refuse("a loop's step `" ++ tname ++ "` without its test and next state"),
+                                    },
+                                    _ => rt_refuse("a loop's pass over the span that is not `Step::turn` of a test, the next state and the state"),
+                                }
+                            },
+                            Nil => rt_refuse("`" ++ aname ++ "` without its pass"),
+                        },
+                        _ => rt_refuse("a loop's step over the span that is not `Loop::after(t, λ span v => …)`"),
+                    }
+                },
+            }),
+            _ => rt_refuse("`Loop::steps` without its passes, step and start"),
+        },
+    }
+}
+
+// `tail` walks a loop's body (`rt_file_tail`, below).
+fn rt_file_link(fuel: Nat, k: Known, names: FileNames, w: FWalk, link: Handle, tail: FWalk → Handle → Tac<FileEnd>) → Tac<FWalk> {
     let v <- view(link);
     match v {
         HGlobal(g, _, args) => match FileNames::names(names.put_window, g.id) {
@@ -525,7 +615,10 @@ fn rt_file_link(fuel: Nat, k: Known, names: FileNames, w: FWalk, link: Handle) �
         HField(c, _, _) => view(c).bind(λ cv => match cv {
             HGlobal(g, name, args) => match g.id.same(names.put) {
                 True => rt_file_store(fuel, k, w, link, args.drop(1)),
+                False => match FileNames::names(names.steps, g.id) {
+                True => rt_file_loop(fuel, k, names, w, link, c, g, args, tail),
                 False => rt_file_threaded(names, args).bind(λ targs => rt_file_ops(names, targs)).bind(λ ops => rt_file_call(fuel, k, w, link, c, g, name, ops)),
+                },
             },
             _ => rt_refuse("the span after something other than a call"),
         }),
@@ -723,26 +816,23 @@ fn rt_file_hoist(fuel: Nat, k: Known, w: FWalk, plan: List<Planned>) → Tac<FWa
     }
 }
 
-fn rt_file_run(fuel: Nat, k: Known, names: FileNames, w: FWalk, links: List<Handle>, plan: List<Planned>) → Tac<FWalk> {
+fn rt_file_run(fuel: Nat, k: Known, names: FileNames, w: FWalk, links: List<Handle>, plan: List<Planned>, tail: FWalk → Handle → Tac<FileEnd>) → Tac<FWalk> {
     match links {
         Nil => pure(w),
-        Cons(link, rest) => rt_file_hoist(fuel, k, w, plan).bind(λ w0 => rt_file_link(fuel, k, names, w0, link)).bind(λ w1 =>
-            rt_file_run(fuel, k, names, w1, rest, plan)),
+        Cons(link, rest) => rt_file_hoist(fuel, k, w, plan).bind(λ w0 => rt_file_link(fuel, k, names, w0, link, tail)).bind(λ w1 =>
+            rt_file_run(fuel, k, names, w1, rest, plan, tail)),
     }
 }
 
 // The walk up to the span `target`: the stores and calls not yet read,
 // each after the reads of the span as it was before it that a later step
 // or `uses` (what the path ends in) makes.
-fn rt_file_upto(fuel: Nat, k: Known, names: FileNames, w: FWalk, target: Handle, uses: List<Handle>) → Tac<FWalk> {
+fn rt_file_upto(fuel: Nat, k: Known, names: FileNames, w: FWalk, target: Handle, uses: List<Handle>,
+    tail: FWalk → Handle → Tac<FileEnd>) → Tac<FWalk> {
     let links <- rt_file_links(fuel, names, w, target);
     let plan <- rt_file_plan(k, names, w, links, uses);
-    rt_file_run(fuel, k, names, w, links, plan)
+    rt_file_run(fuel, k, names, w, links, plan, tail)
 }
-
-// What a body's walk leaves: its computation, and the program's pure
-// functions and computations after it.
-record FileEnd { term: FTm, funs: List<Nat>, cfuns: List<Nat> }
 
 fn rt_file_ends<A>() → Tac<A> {
     rt_refuse("a function over a span ends in `Mutated(span, value)`, in a `match` on a `Bool` whose arms do, or (where it `decreases`) in its own call")
@@ -794,7 +884,7 @@ fn rt_file_tail(fuel: Nat, k: Known, names: FileNames, ih: Option<Nat>, arity: N
                 False => rt_file_ends(),
                 True => match fields.rev() {
                     Cons(value, Cons(after, _)) => {
-                        let w1 <- rt_file_upto(f, k, names, w, after, [value]);
+                        let w1 <- rt_file_upto(f, k, names, w, after, [value], λ w2 b => rt_file_tail(f, k, names, None, 0, w2, b));
                         let r <- rt_go(f, k.at_file(w1.fk), w1.st, value, False);
                         pure(FileEnd(FSeg::close(FSeg::lets(r.fst.lets) ++ w1.segs, FTm::Pure(r.snd)), r.fst.funs, w1.cfuns))
                     },
@@ -823,7 +913,7 @@ fn rt_file_tail(fuel: Nat, k: Known, names: FileNames, ih: Option<Nat>, arity: N
                 False => rt_file_ends(),
                 True => rt_file_again(names, args.take(arity)).bind(λ again => match again {
                     Cons(after, Cons(length, rest)) => {
-                        let w1 <- rt_file_upto(f, k, names, w, after, rest);
+                        let w1 <- rt_file_upto(f, k, names, w, after, rest, λ w2 b => rt_file_tail(f, k, names, None, 0, w2, b));
                         let kk = k.at_file(w1.fk);
                         let rl <- rt_go(f, kk, w1.st, length, True);
                         match RSt::level(rl.snd).same(1) {
