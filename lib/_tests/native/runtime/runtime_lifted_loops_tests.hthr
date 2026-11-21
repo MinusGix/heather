@@ -92,6 +92,16 @@ theorem insertion_sorts(): List::insertion([3, 1, 2, 0, 2], 5).after = [0, 1, 2,
 // ---------------------------------------------------------------------------
 // A loop whose state is not the receiver: compiled, and called.
 
+// A count over the span alone: its state is the span and the count.
+runtime fn List::bump(mut self s: List<u8>, n: u64) → u64 {
+    for i in 0..n {
+        s.put_within(n, i, s.byte_within(n, i) + 1);
+    }
+    n
+}
+
+theorem bump_runs(): List::bump([1, 2, 3], 3) = Mutated([2, 3, 4], 3) { refl }
+
 runtime fn sum_below(n: u64) → u64 {
     let mut s: u64 = 0;
     for i in 0..n { s := s + i; }

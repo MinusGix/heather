@@ -440,7 +440,9 @@ impl<'a> Lift<'a> {
     }
 
     /// The span a `runtime fn` writes among a loop's state: its `mut self`
-    /// receiver, a `List<u8>`, beside any number of other locals.
+    /// receiver, a `List<u8>`, beside any number of other locals. A
+    /// `Bytes(n)` is not yet: its function's write-out over the span does
+    /// not meet the reflection's meaning at a loop (issues/bytes-loops-in-place.md).
     fn span_receiver(&self, vars: &[&str]) -> Option<Param> {
         if !matches!(&self.decl.result.kind, TyKind::Named { name, .. } if name == heather_syntax::MUTATED_RECORD) {
             return None;
@@ -1517,9 +1519,27 @@ impl Lift<'_> {
             },
             span: end,
         };
+        // Over a span, the pass is `Pass::of_turn` of the loop's one test,
+        // so that its equation with the turn is one lemma
+        // (`Pass::step_of_turn`): the body's found proofs read the test's
+        // equation, which a split of the goal cannot abstract.
+        let over_turn = receiver.as_ref().map(|_| {
+            let mut next_block = again.clone();
+            *next_block.result = lower.clone();
+            let go = block(vec![], joined.clone(), cond.span);
+            let next = lam("__loop_h", None, Expr { kind: ExprKind::Block(Box::new(next_block)), span: body.span }, body.span);
+            (go, next)
+        });
+        let of_turn = |m: Expr, at: Span| -> Expr {
+            let (go, next) = over_turn.clone().expect("a span loop");
+            call(var("loop::Pass::of_turn", at), vec![m, var(s, at), go, next], at)
+        };
         *again.result = call(var("Pass::Again", end), vec![lower], end);
         let done = || call(var("Pass::Done", span), vec![var(s, span)], span);
-        let tested = self.tested(cond, Expr { kind: ExprKind::Block(Box::new(again)), span: body.span }, &done, span);
+        let tested = match &over_turn {
+            None => self.tested(cond, Expr { kind: ExprKind::Block(Box::new(again)), span: body.span }, &done, span),
+            Some(_) => of_turn(measure_fn(span), span),
+        };
         let pass_head = Expr { kind: ExprKind::TyApp { head: Box::new(var("loop::Pass", span)), args: vec![state_ty.clone(), state_ty.clone()] }, span };
         let pass_ty = Ty { kind: TyKind::OfExpr(Box::new(call(pass_head, vec![measure_fn(span), var(s, span)], span))), span };
         self.parts.push(Part::Decl(decl(DeclKind::Fn, &step, at_state.clone(), pass_ty, block(reads(s, span), tested, span))));
@@ -1561,12 +1581,20 @@ impl Lift<'_> {
             span,
         };
         let turned_at_s = call(turn_at(&t), vec![var(s, span)], span);
+        let same_proof = match &over_turn {
+            None => split,
+            Some((go, next)) => block(
+                reads(s, span),
+                call(var("loop::Pass::step_of_turn", span), vec![measure_fn(span), var(s, span), go.clone(), next.clone()], span),
+                span,
+            ),
+        };
         self.parts.push(Part::Decl(decl(
             DeclKind::Theorem,
             &same,
             at_state.clone(),
             Ty { kind: TyKind::Eq(Box::new(pass_step), Box::new(turned_at_s)), span },
-            split,
+            same_proof,
         )));
         // The loop the function runs is the loop's `run`: a pass stops where
         // it is, and a word's measure is within the passes.

@@ -218,6 +218,23 @@ fn Pass::step<S>(m: S → Nat, s: S, self p: Pass<S, S>(m, s)) → Step<S> {
     match p { Again(b) => Next(b.next), Done(r) => Stop(r) }
 }
 
+// A pass split on one test: round again where it holds, with the next
+// state and its decrease found under it, else leave where it is. What a
+// `while` over a span is stepped by (crates/elab/src/loops.rs,
+// `lift_steps_over`): its body's found proofs read the test's equation,
+// so the pass and the loop's `Step::turn` are one split, proved once here.
+fn Pass::of_turn<S>(m: S → Nat, s: S, go: Bool, next: (go = True) → Lower<S>(m, s)) → Pass<S, S>(m, s) {
+    (match go as λ b => (go = b) → Pass<S, S>(m, s) { False => λ _ => Done(s), True => λ e => Again(next(e)) })(refl)
+}
+
+theorem Pass::step_of_turn<S>(m: S → Nat, s: S, go: Bool, next: (go = True) → Lower<S>(m, s)):
+    Pass::step(m, s, Pass::of_turn(m, s, go, next)) = Step::turn(go, λ e => next(e).next, s) {
+    (match go as λ b => (e: go = b) →
+        Pass::step(m, s, (match b as λ b2 => (go = b2) → Pass<S, S>(m, s) { False => λ _ => Done(s), True => λ e2 => Again(next(e2)) })(e))
+            = (match b as λ b2 => (go = b2) → Step<S> { False => λ _ => Stop(s), True => λ e2 => Next(next(e2).next) })(e)
+    { False => λ _ => refl, True => λ _ => refl })(refl)
+}
+
 // A loop whose stops are where it is needs no pass past its measure: with
 // the measure at most the fuel, the passes that go round are at most the
 // fuel, and the one that stops answers the state it was given, as running
