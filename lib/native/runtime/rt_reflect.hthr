@@ -2000,7 +2000,6 @@ fn rt_was_of(k: Known, h: Handle) → Tac<Option<Pair<FileKnown, Nat>>> {
     }
 }
 
-
 // A span parameter, by number.
 fn rt_param_span(k: Known, st: RSt, h: Handle) → Tac<Nat> {
     let v <- view(h);

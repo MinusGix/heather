@@ -1763,8 +1763,6 @@ theorem FTm::loop_bound(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, ne
             ih_rest(Cons(ll.result, ports), ll.next)))
 }
 
-
-
 // The `Loop` case: the loop (`FTm::loop_sound`), then the rest from its
 // outputs, bound as a call's result is.
 theorem FTm::loop_case_sound(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, next, init: Nat, test: Tm, body, rest: FTm,
