@@ -3646,11 +3646,11 @@ theorem Ty::past_cells(self t: Ty, tys: Nat → RecInfo, p: Nat): t.past(tys, p)
     }
 }
 
-theorem Ty::fields_below_past(fs: List<Ty>): (p, n: Nat) → Fun::past(fs, p) <= n → Ty::FieldsBelow(fs, p, n) {
+theorem Ty::fields_below_of_past(fs: List<Ty>): (p, n: Nat) → Fun::past(fs, p) <= n → Ty::FieldsBelow(fs, p, n) {
     match fs {
         Nil => λ p n _ => trivial,
         Cons(_, rest) => λ p n le => ⟨Nat::le_trans(p + 1, Fun::past(rest, p + 1), n, Fun::past_ge(rest, p + 1), le),
-            Ty::fields_below_past(rest, p + 1, n, le)⟩,
+            Ty::fields_below_of_past(rest, p + 1, n, le)⟩,
     }
 }
 
@@ -3658,9 +3658,9 @@ theorem Ty::fields_below_past(fs: List<Ty>): (p, n: Nat) → Fun::past(fs, p) <=
 theorem Ty::below_cells(self t: Ty, tys: Nat → RecInfo, p, n: Nat): Fun::past(t.cells(tys), p) <= n → t.Below(tys, p, n) {
     match t {
         Word(_) => λ le => le, Bit => λ le => le, ByteList(_) => λ le => le, Lines => λ le => le,
-        Named(i) => λ le => Ty::fields_below_past(tys(i).fields, p, n, le),
+        Named(i) => λ le => Ty::fields_below_of_past(tys(i).fields, p, n, le),
         Count => λ le => le,
-        Enum(i) => λ le => Ty::fields_below_past(Cons(Word(64), tys(i).alts.slots), p, n, le),
+        Enum(i) => λ le => Ty::fields_below_of_past(Cons(Word(64), tys(i).alts.slots), p, n, le),
     }
 }
 
