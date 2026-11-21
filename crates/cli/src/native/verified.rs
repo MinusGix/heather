@@ -205,13 +205,14 @@ impl Shape {
         let parameters = arguments(params);
         let table = format!("{source}::world.tys");
         let narrowed: Vec<String> = parameters.iter().enumerate()
-            .map(|(i, a)| match widths.get(i + 1) { Some(&w) if w != 64 => format!("runtime_low({w}, {a})"), _ => a.clone() }).collect();
+            .map(|(i, a)| match widths.get(i + 1) { Some(&1) => format!("runtime_bit_low({a})"), Some(&w) if w != 64 => format!("runtime_low({w}, {a})"), _ => a.clone() }).collect();
         let called = format!("{source}({})", narrowed.join(", "));
         let (answer, rest) = match fields {
             Some([first, others @ ..]) => (format!("{called}.{first}"),
                 Some(format!("[{}]", others.iter().map(|field| format!("{called}.{field}")).collect::<Vec<_>>().join(", ")))),
             _ => (match (result, widths.first()) {
                 (Some(i), _) => format!("RecInfo::enum_word({table}, {i}, {called})"),
+                (None, Some(&1)) => format!("runtime_bit_wide({called})"),
                 (None, Some(&w)) if w != 64 => format!("runtime_wide({w}, {called})"),
                 _ => called.clone(),
             }, match result {
@@ -397,8 +398,11 @@ pub(super) fn runtime_shape(elab: &Elaborator, prefix: &str, owner: &str, source
     // module with a `runtime fn` over a span it writes imports, imports it.
     // A function lent nothing: the widths its result and its parameters
     // cross its boundary at (`Fun::edge_widths`).
+    // A `Bool` as width 1: its word's lowest bit in, zero-extended out
+    // (`runtime_bit_low`, `runtime_bit_wide`).
+    let width = "(λ (p: Ty) => match p { Bit => 1, _ => p.edge_width() })";
     let (imports, counts) = match spans {
-        Spans::None => ("", format!("{source}::rt.edge_widths() ++ Cons(match {source}::rt.result {{ Enum(i) => i + 1, _ => 0 }}, {source}::rt.params.map(λ p => match p {{ Enum(i) => i + 1, Named(i) => match {source}::world.tys(i).fields.len().leb(1) {{ True => 0, False => {RECORD} + i + 1 }}, _ => 0 }})) ++ [Ty::spans({source}::world.tys, {source}::rt.params), {source}::code.also.len()]")),
+        Spans::None => ("", format!("Cons({width}({source}::rt.result), {source}::rt.params.map({width})) ++ Cons(match {source}::rt.result {{ Enum(i) => i + 1, _ => 0 }}, {source}::rt.params.map(λ p => match p {{ Enum(i) => i + 1, Named(i) => match {source}::world.tys(i).fields.len().leb(1) {{ True => 0, False => {RECORD} + i + 1 }}, _ => 0 }})) ++ [Ty::spans({source}::world.tys, {source}::rt.params), {source}::code.also.len()]")),
         Spans::Read => ("import function_ir_lower_calls;\nimport function_ir_writes;\n", format!("program_counts({source}::program)")),
         Spans::Written => ("import function_ir_lower_calls;\nimport function_ir_writes;\nimport function_ir_rows;\n",
             format!("program_counts({source}::program)")),
@@ -423,7 +427,7 @@ fn {prefix}_rows(rows: List<List<Bool>>, counts: List<Nat>, f, functions: Nat) �
     match functions {{ Zero => [], Succ(k) => {prefix}_row(marks_row(rows, f), 0, lent_count(counts, f)) ++ {prefix}_rows(rows, counts, Succ(f), k) }}
 }}\n")
     } else { String::new() };
-    let text = format!("import {owner};\nimport runtime;\nimport rt;\nimport list;\nimport function_ir;\n{imports}
+    let text = format!("import {owner};\nimport runtime;\nimport rt;\nimport nat;\nimport list;\nimport function_ir;\n{imports}
 {rows}fn {prefix}_shape() → List<Nat> {{ Cons({source}::program.len(), Cons({source}::rt.params.len(), {counts}{marks})) }}\n");
     let mut fork = elab.fork();
     fork.elab_module_source(&probe, &text).map_err(|e| e.render(&text))?;

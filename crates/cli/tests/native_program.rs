@@ -535,6 +535,52 @@ int main(void) {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+// `Bool` at the boundary (docs/native/runtime-fn-setups-design.md §16.17):
+// a parameter is the lowest bit of its word (a `Resize` to one bit) and the
+// result is 0 or 1, as System V passes a C `bool` both ways. C calls
+// `in_range` with `bool`s at the edges of the words.
+#[test]
+fn bools_cross_as_c_bools() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = root.join(format!("target/native-bools-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let assembly = dir.join("bools.s");
+    let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
+        .args(["compile-x86", "examples/x86-native/bools.hthr", "in_range", "-o"]).arg(&assembly)
+        .args(heather_cli::showcase::native_image_args()).args(["--kernel-workers", "1"])
+        .output().unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let certificate = std::fs::read_to_string(dir.join("bools.certificate.hthr")).unwrap();
+    for claim in ["runtime_bit_wide(bools::in_range(a0, a1, a2, runtime_bit_low(a3)))", "_implements"] {
+        assert!(certificate.contains(claim), "missing {claim}");
+    }
+    let driver = dir.join("main.c");
+    std::fs::write(&driver, r#"
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdio.h>
+extern bool in_range(uint64_t, uint64_t, uint64_t, bool);
+int main(void) {
+    uint64_t edges[] = {0, 1, 2, (UINT64_C(1) << 32) - 1, UINT64_C(1) << 63, UINT64_MAX - 1, UINT64_MAX};
+    for (unsigned i = 0; i < 7; ++i) for (unsigned j = 0; j < 7; ++j) for (unsigned k = 0; k < 7; ++k) for (int c = 0; c < 2; ++c) {
+        uint64_t x = edges[i], lo = edges[j], hi = edges[k];
+        bool want = x >= lo && (x < hi || (c && x == hi));
+        if (in_range(x, lo, hi, c) != want) return 1;
+    }
+    puts("686 calls passed");
+    return 0;
+}
+"#).unwrap();
+    let binary = dir.join("bools");
+    let linked = Command::new("cc").args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(&driver).arg(&assembly).arg("-o").arg(&binary).output().unwrap();
+    assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
+    let run = Command::new(&binary).output().unwrap();
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stdout));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 // A function of eight words called from Rust (issues/function-call-past-six-words.md):
 // `eight` passes its seventh and eighth on the stack to `spread` twice, and
 // Rust passes its own the same way, `extern "sysv64"` with the certified

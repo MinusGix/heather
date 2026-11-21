@@ -1,6 +1,6 @@
 ---
 title: FunctionIR calls with several argument and result words at their widths
-status: open
+status: closed
 labels: [native,function-ir,compiler]
 area: heather-in-heather
 milestone: [nh-front]
@@ -38,5 +38,8 @@ two sites and its code is emitted once.
   names its result words past the first (`also`), answers are word lists
   through the evaluator, stages and lowering (RDX, RCX, RSI, … inside a
   program), and an rt call passes an enum's words and reads back a record
-  or an enum of word slots, or a `Bool`. A narrow word or `Bool` passed
-  to a call (a `Resize` before it) is left, as the §16.17 list says.
+  or an enum of word slots, or a `Bool`. A record of words is a parameter
+  a word a field; `halves_twice` (runtime_two_words_tests) takes and returns
+  a record through one callee called twice, its code emitted once, which
+  is the done-when. A narrow word or `Bool` passed to a call (a `Resize`
+  before it) is left, as the §16.17 list says: [[runtime-fn-narrow-call-args]].
