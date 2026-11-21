@@ -1171,6 +1171,16 @@ impl DeclarationsMut<'_> {
         // designation takes out of the surface.
         self.designate_access(&format!("{}::rec", decl.name), &measure::rec_name(&decl.name));
         self.designate_access(&format!("{}::body", decl.name), &measure::body_name(&decl.name));
+        // Each lifted obligation as `f::obl_N`: the decrease at that call,
+        // which a `runtime fn` reads its depth from
+        // (docs/native/runtime-fn-recursion-design.md §3.2).
+        if lifted {
+            for part in &family.obligations {
+                if let Some(site) = part.decl.name.strip_prefix(&format!("{}#obl_", decl.name)) {
+                    self.designate_access(&format!("{}::obl_{site}", decl.name), &part.decl.name);
+                }
+            }
+        }
         Ok(())
     }
 
