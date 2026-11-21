@@ -428,10 +428,24 @@ fn {prefix}_rows(rows: List<List<Bool>>, counts: List<Nat>, f, functions: Nat) �
 }}\n")
     } else { String::new() };
     let text = format!("import {owner};\nimport runtime;\nimport rt;\nimport nat;\nimport list;\nimport function_ir;\n{imports}
-{rows}fn {prefix}_shape() → List<Nat> {{ Cons({source}::program.len(), Cons({source}::rt.params.len(), {counts}{marks})) }}\n");
+{rows}fn {prefix}_shape() → List<Nat> {{ Cons({source}::program.len(), Cons({source}::rt.params.len(), {counts}{marks})) }}
+fn {prefix}_outs() → List<Nat> {{ {source}::program.map(λ (f: Function) => f.also.len()) }}\n");
     let mut fork = elab.fork();
     fork.elab_module_source(&probe, &text).map_err(|e| e.render(&text))?;
     let numbers = function_ir_source::evaluate_numbers(&fork, &format!("{probe}::{prefix}_shape")).map_err(|e| e.to_string())?;
+    // How many words each function returns past its first, the last
+    // function's first: the table its totality is checked against a
+    // function at a time (`program_total_at`), read here so that no check
+    // evaluates a callee to learn it.
+    let outs = function_ir_source::evaluate_numbers(&fork, &format!("{probe}::{prefix}_outs")).map_err(|e| e.to_string())?;
+    let table = format!("\n// How many words each function returns past its first, the last function's first.
+fn {prefix}_outs() → List<Nat> {{ [{}] }}\n", outs.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", "));
+    let shape = runtime_shape_of(elab, prefix, owner, source, spans, lent, &fork, &numbers);
+    shape.map(|mut shape| { shape.definitions.push_str(&table); shape })
+}
+
+/// [`runtime_shape`] once its probe is read: `numbers` its counts.
+fn runtime_shape_of(elab: &Elaborator, prefix: &str, owner: &str, source: &str, spans: Spans, lent: bool, fork: &Elaborator, numbers: &[u64]) -> Result<Shape, String> {
     match numbers[..] {
         [_, arity, ..] if arity > 8 => Err(format!("`{source}` takes {arity} words{}: compile-x86 passes at most eight, six in registers and two on the stack",
             if lent { ", an address and a length for each span among them" } else { "" })),
@@ -577,10 +591,12 @@ fn {prefix}_taken() → List<Nat> {{ {source}::arities }}\n");
             else { format!("program_eval({prefix}_program(), {index}, [{list}])") };
         shape.agreement.push_str(&format!("
 // The program's function {index} evaluates to `{named}`: the generator's
-// theorem about every function of the program, read at this one.
+// theorem about every function of the program, read at this one: its
+// words, of which the function's is the first.
 theorem {function}_native_agrees({typed}): {evaluated} = {named}({list}) {{
-    program_linked_files_sources({prefix}_program(), {source}::arities, link_admits({source}::admits), link_sources_at({source}::sources), {source}::sourced,
-        Nil, {index}, [{list}], trivial, trivial)
+    cong_fn<List<BitVec(64)>, BitVec(64)>(λ l => first_word(l),
+        program_linked_files_sources({prefix}_program(), {source}::arities, link_admits({source}::admits), link_sources_at({source}::sources), {source}::sourced,
+            Nil, {index}, [{list}], trivial, trivial))
 }}
 ", typed = typed(&parameters)));
         let imported = |text: &str| text.lines().any(|line| line.strip_prefix("import ").and_then(|rest| rest.strip_suffix(';')) == Some(module.as_str()));
@@ -1696,11 +1712,13 @@ fn binders(parameters: &[String]) -> String {
 /// where reading them off the callees would force each callee's code
 /// (issues/compile-x86-certificate-memory.md).
 fn evaluable_text(prefix: &str, functions: usize, arities: &str) -> String {
-    evaluable_text_over(prefix, &format!("{prefix}_program()"), functions, arities)
+    evaluable_text_over(prefix, &format!("{prefix}_program()"), functions, arities, &format!("{prefix}_outs()"))
 }
 
 /// [`evaluable_text`] of any program, spelled as `program`.
-pub(super) fn evaluable_text_over(prefix: &str, program: &str, functions: usize, arities: &str) -> String {
+/// `outs` the table of how many words each function returns past its
+/// first, the last function's first (`program_total_at`).
+pub(super) fn evaluable_text_over(prefix: &str, program: &str, functions: usize, arities: &str, outs: &str) -> String {
     let table = format!("{prefix}_arities()");
     let mut text = format!("// How many words each function takes, the last function's first.
 fn {prefix}_arities() → List<Nat> {{ {arities} }}
@@ -1719,20 +1737,22 @@ theorem {prefix}_scans_{k}(): program_scan_at({program}.drop({d}), {table}.drop(
 }}
 
 ", last = functions - 1));
-    // No node of the program requires anything of its operands, so it is
-    // defined at every argument list (`program_total_defined`), checked a
-    // function at a time as the scan is.
-    text.push_str(&format!("theorem {prefix}_totals_none(): program_total({program}.drop({functions})).IsTrue() {{ trivial }}\n"));
+    // No node of the program requires anything of its operands, and each
+    // call names as many words as its callee returns, so it is defined at
+    // every argument list (`program_total_defined`), checked a function at
+    // a time as the scan is, against the table of counts (`outs`) as the
+    // scan is against the arities: no check evaluates a callee.
+    text.push_str(&format!("theorem {prefix}_totals_none(): program_total_at({program}.drop({functions}), {outs}.drop({functions})).IsTrue() {{ trivial }}\n"));
     for k in 0..functions {
         let below = if k == 0 { "none".to_string() } else { (k - 1).to_string() };
-        text.push_str(&format!("theorem {prefix}_total_head_{k}(): program_total_head({program}.drop({d})).IsTrue() {{ trivial }}
-theorem {prefix}_totals_{k}(): program_total({program}.drop({d})).IsTrue() {{
-    program_total_drop({program}, {d}, {prefix}_total_head_{k}(), {prefix}_totals_{below}())
+        text.push_str(&format!("theorem {prefix}_total_head_{k}(): program_total_at_head({program}.drop({d}), {outs}.drop({d})).IsTrue() {{ trivial }}
+theorem {prefix}_totals_{k}(): program_total_at({program}.drop({d}), {outs}.drop({d})).IsTrue() {{
+    program_total_at_drop({program}, {outs}, {d}, {prefix}_total_head_{k}(), {prefix}_totals_{below}())
 }}
 ", d = functions - 1 - k));
     }
     text.push_str(&format!("theorem {prefix}_defined_everywhere(): program_total({program}).IsTrue() {{
-    program_total_drop_zero({program}, {prefix}_totals_{last}())
+    program_total_at_total({program}, {outs}, program_total_at_drop_zero({program}, {outs}, {prefix}_totals_{last}()))
 }}", last = functions - 1));
     text
 }
@@ -1829,8 +1849,13 @@ fn {prefix}_sources() → Answers() {{
     let list = format!("[{}]", parameters.join(", "));
     let call = root.answer(&parameters);
     let arities: Vec<String> = program.functions.iter().rev().map(|function| function.arity.to_string()).collect();
+    // Each function returns one word: none past it.
+    let outs = program.functions.iter().map(|_| "0").collect::<Vec<_>>().join(", ");
     let evaluable = evaluable_text(prefix, program.functions.len(), &format!("[{}]", arities.join(", ")));
-    format!("{evaluable}
+    format!("// How many words each function returns past its first, the last function's first.
+fn {prefix}_outs() → List<Nat> {{ [{outs}] }}
+
+{evaluable}
 
 {agreements}
 theorem {prefix}_sourced(): program_sourced({prefix}_program(), {sources}) {{

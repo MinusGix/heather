@@ -1956,6 +1956,18 @@ program; a call site's contract is `AnsweredBoth`, the old
 into this one. `compile-x86` still exports at most two words, RAX:RDX,
 since that is what a C caller reads back (`runtime_shape` refuses more).
 
+A call is defined only where it names as many words as its callee
+returns (`StructuredRegion::defined_over`), so a program's totality now
+reads its callees' counts. Read off the callees themselves, a function
+that calls every other one (the lexer's dispatch) evaluated each of them
+inside one theorem and ran past the kernel's budget. The certificate
+instead checks calls against a table of counts, as the scan checks them
+against the arities: `program_total_at(functions, outs)` asks each
+function for its own entry and reads its callees' from the table
+(`linked_outs`), one theorem per function, and `program_total_at_total`
+gives `program_total`. `compile-x86` reads the table off the published
+program with the shape probe (`{prefix}_outs`).
+
 **rt: one code of words, both ways.** A parameter already took its
 code's words in turn (§16.16, `Ty::span`); a call now passes them the same
 way (`Ty::Sent`: a word, or an enum whose slots are words, at

@@ -1513,34 +1513,6 @@ fn program_total(functions: List<Function>) → Bool {
 }
 
 // A program none of whose nodes requires anything is defined everywhere.
-// `program_total` a function at a time, as `program_scan_at_drop`: the
-// kernel's fuel is per declaration, so a certificate pays for its largest
-// function, not for the sum of them.
-fn program_total_head(functions: List<Function>) → Bool {
-    match functions { Nil => True, Cons(last, earlier) => last.body.total_at(program_outs(earlier)) }
-}
-
-theorem program_total_drop_zero(functions: List<Function>):
-    program_total(functions.drop(0)).IsTrue() → program_total(functions).IsTrue() {
-    match functions { Nil => λ h => h, Cons(_, _) => λ h => h }
-}
-
-theorem program_total_drop(functions: List<Function>): (n: Nat) →
-    program_total_head(functions.drop(n)).IsTrue() → program_total(functions.drop(n + 1)).IsTrue() →
-    program_total(functions.drop(n)).IsTrue() {
-    match functions {
-        Nil => λ _ _ _ => trivial,
-        Cons(last, earlier) => λ n => match n as λ i =>
-            program_total_head(Cons(last, earlier).drop(i)).IsTrue() →
-            program_total(Cons(last, earlier).drop(i + 1)).IsTrue() →
-            program_total(Cons(last, earlier).drop(i)).IsTrue() {
-            Zero => λ head rest => Bool::is_true_and_intro(last.body.total_at(program_outs(earlier)), program_total(earlier), head,
-                program_total_drop_zero(earlier, rest)),
-            Succ(k) => λ head rest => program_total_drop(earlier, k, head, rest),
-        },
-    }
-}
-
 theorem program_total_defined(functions: List<Function>, buffers: Buffers()): program_total(functions).IsTrue() →
     (f: Nat) → (words: List<BitVec(64)>) → program_defined_over(buffers, functions, f, words).IsTrue() {
     match functions {
@@ -1556,6 +1528,120 @@ theorem program_total_defined(functions: List<Function>, buffers: Buffers()): pr
                     program_outs(earlier), program_answers_len(buffers, earlier), parts.left, Valuation::bind(Valuation::zero(), last.parameters, words)),
                 Inr(_) => ih(f, words),
             }
+        },
+    }
+}
+
+// How many words each function returns past its first, read off a table
+// `outs` (the last function's first) as `linked_arity` reads arities. A
+// call's count is then the table's, not its callee's: a function that
+// calls every other one (the lexer's dispatch) evaluates none of them to
+// be checked, the table's entry for each function checked once, at that
+// function (`Function::total_with`).
+fn linked_outs(functions: List<Function>, outs: List<Nat>) → Nat → Nat {
+    match functions {
+        Nil => λ _ => 0,
+        Cons(_, earlier) => λ f => match f.eq_dec(earlier.len()) {
+            Inl(_) => outs.head_or(0),
+            Inr(_) => linked_outs(earlier, outs.tail(), f),
+        },
+    }
+}
+
+// The function's entry of the table is its own count, and its body is
+// total with its callees' counts read off the rest of the table.
+fn Function::total_with(self last: Function, earlier: List<Function>, outs: List<Nat>) → Bool {
+    outs.head_or(0).matches(last.also.len()) && last.body.total_at(linked_outs(earlier, outs.tail()))
+}
+
+fn program_total_at(functions: List<Function>, outs: List<Nat>) → Bool {
+    match functions { Nil => True, Cons(last, earlier) => last.total_with(earlier, outs) && program_total_at(earlier, outs.tail()) }
+}
+
+fn program_total_at_head(functions: List<Function>, outs: List<Nat>) → Bool {
+    match functions { Nil => True, Cons(last, earlier) => last.total_with(earlier, outs) }
+}
+
+// A region's totality reads its callees' counts only at the numbers it
+// calls.
+theorem StructuredRegion::total_at_same(self region: StructuredRegion, outs, others: Nat → Nat, same: (f: Nat) → outs(f) = others(f)):
+    region.total_at(outs) = region.total_at(others) {
+    match region {
+        Dataflow(_) => refl,
+        Sequence(prefix, continuation) => cong_fn(λ (b: Bool) => nodes_total(prefix.nodes) && b, continuation.total_at_same(outs, others, same)),
+        Compose(prefix, continuation) => trans(cong_fn(λ (b: Bool) => b && continuation.total_at(outs), prefix.total_at_same(outs, others, same)),
+            cong_fn(λ (b: Bool) => prefix.total_at(others) && b, continuation.total_at_same(outs, others, same))),
+        Conditional(_, _, _, _, when_true, when_false) => trans(cong_fn(λ (b: Bool) => b && when_false.total_at(outs), when_true.total_at_same(outs, others, same)),
+            cong_fn(λ (b: Bool) => when_true.total_at(others) && b, when_false.total_at_same(outs, others, same))),
+        Lend(_, _, _, _) => refl,
+        Call(callee, _, _, also) => cong_fn(λ (n: Nat) => n.matches(also.len()), same(callee)),
+        Loop(_, _, _, _, body, _, _, _, _) => body.total_at_same(outs, others, same),
+    }
+}
+
+// Where the table checks, it is the program's counts.
+theorem program_total_at_outs(functions: List<Function>): (outs: List<Nat>) → program_total_at(functions, outs).IsTrue() →
+    (f: Nat) → linked_outs(functions, outs, f) = program_outs(functions)(f) {
+    match functions {
+        Nil => λ outs ok f => refl,
+        Cons(last, earlier) => λ outs ok f => {
+            let parts = Bool::is_true_and(last.total_with(earlier, outs), program_total_at(earlier, outs.tail()), ok);
+            let own = Bool::is_true_and(outs.head_or(0).matches(last.also.len()), last.body.total_at(linked_outs(earlier, outs.tail())), parts.left).left;
+            match f.eq_dec(earlier.len()) as λ d =>
+                (match d as λ _ => Nat { Inl(_) => outs.head_or(0), Inr(_) => linked_outs(earlier, outs.tail(), f) })
+                = (match d as λ _ => Nat { Inl(_) => last.also.len(), Inr(_) => program_outs(earlier, f) }) {
+                Inl(_) => outs.head_or(0).matches_eq(last.also.len(), own),
+                Inr(_) => program_total_at_outs(earlier, outs.tail(), parts.right, f),
+            }
+        },
+    }
+}
+
+theorem program_total_at_total(functions: List<Function>): (outs: List<Nat>) → program_total_at(functions, outs).IsTrue() →
+    program_total(functions).IsTrue() {
+    match functions {
+        Nil => λ _ _ => trivial,
+        Cons(last, earlier) => λ outs ok => {
+            let parts = Bool::is_true_and(last.total_with(earlier, outs), program_total_at(earlier, outs.tail()), ok);
+            let own = Bool::is_true_and(outs.head_or(0).matches(last.also.len()), last.body.total_at(linked_outs(earlier, outs.tail())), parts.left).right;
+            Bool::is_true_and_intro(last.body.total_at(program_outs(earlier)), program_total(earlier),
+                j(last.body.total_at_same(linked_outs(earlier, outs.tail()), program_outs(earlier), program_total_at_outs(earlier, outs.tail(), parts.right)),
+                    λ b _ => Bool::IsTrue(b), own),
+                program_total_at_total(earlier, outs.tail(), parts.right))
+        },
+    }
+}
+
+theorem program_total_at_drop_zero(functions: List<Function>, outs: List<Nat>):
+    program_total_at(functions.drop(0), outs.drop(0)).IsTrue() → program_total_at(functions, outs).IsTrue() {
+    match functions {
+        Nil => λ h => trivial,
+        Cons(_, _) => match outs { Nil => λ h => h, Cons(_, _) => λ h => h },
+    }
+}
+
+// `program_total_at` a function at a time, as `program_scan_at_drop`.
+theorem program_total_at_drop(functions: List<Function>): (outs: List<Nat>) → (n: Nat) →
+    program_total_at_head(functions.drop(n), outs.drop(n)).IsTrue() →
+    program_total_at(functions.drop(n + 1), outs.drop(n + 1)).IsTrue() → program_total_at(functions.drop(n), outs.drop(n)).IsTrue() {
+    match functions {
+        Nil => λ _ _ _ _ => trivial,
+        Cons(last, earlier) => λ outs n => match n as λ i =>
+            program_total_at_head(Cons(last, earlier).drop(i), outs.drop(i)).IsTrue() →
+            program_total_at(Cons(last, earlier).drop(i + 1), outs.drop(i + 1)).IsTrue() →
+            program_total_at(Cons(last, earlier).drop(i), outs.drop(i)).IsTrue() {
+            Zero => match outs as λ ns => program_total_at_head(Cons(last, earlier), ns.drop(0)).IsTrue() →
+                program_total_at(earlier.drop(0), ns.drop(1)).IsTrue() → program_total_at(Cons(last, earlier), ns.drop(0)).IsTrue() {
+                Nil => λ head rest => Bool::is_true_and_intro(last.total_with(earlier, Nil), program_total_at(earlier, Nil), head,
+                    program_total_at_drop_zero(earlier, Nil, rest)),
+                Cons(o, more) => λ head rest => Bool::is_true_and_intro(last.total_with(earlier, Cons(o, more)), program_total_at(earlier, more), head,
+                    program_total_at_drop_zero(earlier, more, rest)),
+            },
+            Succ(k) => match outs as λ ns => program_total_at_head(earlier.drop(k), ns.drop(k + 1)).IsTrue() →
+                program_total_at(earlier.drop(k + 1), ns.drop(k + 2)).IsTrue() → program_total_at(earlier.drop(k), ns.drop(k + 1)).IsTrue() {
+                Nil => λ head rest => program_total_at_drop(earlier, Nil, k, head, rest),
+                Cons(_, more) => λ head rest => program_total_at_drop(earlier, more, k, head, rest),
+            },
         },
     }
 }
