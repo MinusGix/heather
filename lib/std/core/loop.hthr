@@ -197,6 +197,22 @@ fn Loop::steps<S>(fuel: Nat, step: S → Step<S>, s: S) → S {
     }
 }
 
+// Two steps that agree at every state iterate alike: what lets a loop's
+// meaning ignore what its step does not read.
+theorem Loop::steps_ext<S>(f1, f2: S → Step<S>, same: (s: S) → f1(s) = f2(s), k: Nat): (s: S) → Loop::steps(k, f1, s) = Loop::steps(k, f2, s) {
+    match k {
+        Zero => λ s => refl,
+        Succ(i) => λ s => {
+            let ran = λ (q: Step<S>) => match q { Next(t) => Loop::steps(i, f1, t), Stop(r) => r };
+            trans(j(same(s), λ q _ => ran(f1(s)) = ran(q), refl),
+            match f2(s) as λ q => ran(q) = (match q { Next(t) => Loop::steps(i, f2, t), Stop(r) => r }) {
+                Next(t) => Loop::steps_ext(f1, f2, same, i, t),
+                Stop(_) => refl,
+            })
+        },
+    }
+}
+
 // A pass of a loop read without its proofs.
 fn Pass::step<S>(m: S → Nat, s: S, self p: Pass<S, S>(m, s)) → Step<S> {
     match p { Again(b) => Next(b.next), Done(r) => Stop(r) }
