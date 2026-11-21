@@ -6,6 +6,7 @@
 // words. Tests, not library: nothing outside lib/_tests imports this
 // module (docs/test-value-audit.md §4.5).
 import logic;
+import bool;
 import nat;
 import list;
 import bitvec;
@@ -34,6 +35,37 @@ theorem rsum_fits_ten(): rsum::fits(10, [BitVec::ofNat(10)]) = True { refl }
 
 theorem rsum_not_nine(): rsum::fits(9, [BitVec::ofNat(10)]) = False { refl }
 
+// Every call `rsum` makes is at a lower `toNat`, by its own obligation
+// along the `match h:`, so a call at `x` runs within `x.toNat()` levels
+// (`PDef::fits_by_rank`). By hand here; the generator's `rsum::depth` is
+// this proof (docs/native/runtime-fn-recursion-design.md §3.2).
+fn rsum_rank() → Nat → List<BitVec(64)> → Nat { λ _ xs => PTm::word_at(xs, 0).toNat() }
+
+theorem rsum_descends(): PDef::Descends(PTm::defs_words([Word(64)], rsum::ptm), PTm::words_world(RecInfo::none),
+    PTm::words_meaning(RecInfo::none, [Word(64)], rsum), rsum_rank()) {
+    λ p xs => match p as λ q => PDef::body_fits(PTm::defs_words([Word(64)], rsum::ptm), PTm::words_world(RecInfo::none),
+            PTm::words_meaning(RecInfo::none, [Word(64)], rsum), λ r ys => (rsum_rank()(r, ys) + 1).leb(rsum_rank()(q, xs)), q, xs).IsTrue() {
+        Zero => {
+            let x = PTm::word_at(xs, 0);
+            let at = λ (b: Bool) => (match b as λ _ => Bool {
+                True => True,
+                False => (x.sub(BitVec::ofNat(1)).toNat() + 1).leb(x.toNat()) && True,
+            }).IsTrue();
+            match h: x.eq_bit(BitVec::ofNat(0)) {
+                True => j(sym(h), λ b _ => at(b), trivial),
+                False => j(sym(h), λ b _ => at(b), Bool::is_true_and_intro((x.sub(BitVec::ofNat(1)).toNat() + 1).leb(x.toNat()), True,
+                    (x.sub(BitVec::ofNat(1)).toNat() + 1).leb_complete(x.toNat(), bitvec_nat::toNat_sub_one_lt(x, h)), trivial)),
+            }
+        },
+        Succ(_) => trivial,
+    }
+}
+
+theorem rsum_depth(xs: List<BitVec(64)>): rsum::fits(PTm::word_at(xs, 0).toNat(), xs) = True {
+    eq_true_of_is_true(rsum::fits(PTm::word_at(xs, 0).toNat(), xs), PDef::fits_by_rank(PTm::defs_words([Word(64)], rsum::ptm), PTm::words_world(RecInfo::none),
+        PTm::words_meaning(RecInfo::none, [Word(64)], rsum), rsum_rank(), rsum_descends(), 0, xs))
+}
+
 // The pin: the definition's meaning at 10, its call answered by `rsum`,
 // is `rsum(10)`.
 theorem rsum_unfolds_ten(): rsum(BitVec::ofNat(10)) = PTm::sem(rsum::ptm, PTm::words_world(RecInfo::none), PTm::words_meaning(RecInfo::none, [Word(64)], rsum),
@@ -57,24 +89,39 @@ theorem doubled_not_four(): doubled::fits(4, [BitVec::ofNat(5), BitVec::ofNat(3)
 
 theorem doubled_value(): doubled(BitVec::ofNat(5), BitVec::ofNat(3)) = BitVec::ofNat(96) { refl }
 
-// A program: `main` over no words calls the recursion, its levels stated.
+// The depth a call needs, evaluated: `rsum(10)` makes ten nested calls.
+theorem rsum_depth_ten(): PDef::depth(PTm::defs_words([Word(64)], rsum::ptm), PTm::words_world(RecInfo::none),
+    PTm::words_meaning(RecInfo::none, [Word(64)], rsum), 100, 0, [BitVec::ofNat(10)]) = Some(10) { refl }
+
+// Past the fuel it is not known.
+theorem rsum_depth_past(): PDef::depth(PTm::defs_words([Word(64)], rsum::ptm), PTm::words_world(RecInfo::none),
+    PTm::words_meaning(RecInfo::none, [Word(64)], rsum), 10, 0, [BitVec::ofNat(10)]) = None { refl }
+
+// A program: `main` over no words calls the recursion, at the levels its
+// calls need, inferred: `rsum`'s ten and main's own call, eleven.
 // `sum_ten::source` is what `write-elf` compiles
 // (crates/cli/tests/native_recursion.rs), and `sum_ten::reads` says any
 // compile of it that is accepted exits with `sum_ten`'s value, 55.
-runtime(levels := 16) fn sum_ten() → u64 { rsum(BitVec::ofNat(10)) }
+runtime fn sum_ten() → u64 { rsum(BitVec::ofNat(10)) }
 
 theorem sum_ten_ptm(): sum_ten::ptm = Bind(Lit(Word(64), 10), Recur(0, [0], Value(Var(0)))) { refl }
 
 theorem sum_ten_value(): sum_ten = BitVec::ofNat(55) { refl }
 
-theorem sum_ten_levels(): sum_ten::source.levels = 16 { refl }
+theorem sum_ten_levels(): sum_ten::source.levels = 11 { refl }
+
+// Stated levels are a check, and the program is made at them.
+runtime(levels := 16) fn sum_ten_roomy() → u64 { rsum(BitVec::ofNat(10)) }
+
+theorem sum_ten_roomy_levels(): sum_ten_roomy::source.levels = 16 { refl }
 
 theorem sum_ten_reads(): PTm::SourceReads(sum_ten::source, sum_ten) { sum_ten::reads }
 
-// What `write-elf` compiles: the generated source, and the same program
-// at nine levels, whose tenth nested call stops with the call-depth status.
+// What `write-elf` compiles: the generated source at its inferred eleven
+// levels, and the same program at ten, one short, whose last nested call
+// stops with the call-depth status.
 fn sum_ten_program() → Source { sum_ten::source }
 
 fn sum_ten_short() → Source {
-    PTm::program(sum_ten::ptm, PTm::defs_words([Word(64)], rsum::ptm), PTm::plain(RecInfo::none), 9).get(trivial)
+    PTm::program(sum_ten::ptm, PTm::defs_words([Word(64)], rsum::ptm), PTm::plain(RecInfo::none), 10).get(trivial)
 }

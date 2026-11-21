@@ -27,13 +27,10 @@ runtime fn count_down(n, acc: u64) → u64 decreases n.toNat() {
     on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
 }
 
-// Ten nested calls do not fit within nine levels: refused, saying so.
-// expect-error: nest deeper than `levels := 9`
-runtime(levels := 9) fn sum_ten_shallow() → u64 { rsum(BitVec::ofNat(10)) }
-
-// A program that calls a recursion states its levels.
-// expect-error: say how many nested calls it has room for
-runtime fn sum_ten_unstated() → u64 { rsum(BitVec::ofNat(10)) }
+// Ten nested calls of `rsum` and main's own need eleven levels: ten,
+// stated, are refused, saying so (the inferred levels are the least).
+// expect-error: nest deeper than `levels := 10`
+runtime(levels := 10) fn sum_ten_shallow() → u64 { rsum(BitVec::ofNat(10)) }
 
 // A recursion lifts its callers to statements: a caller with words is not
 // built yet, and is refused naming the recursion.

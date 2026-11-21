@@ -248,6 +248,98 @@ fn PDef::fits(defs: List<PDef>, w: rt::World, f: PCalls(), k: Nat) → Nat → L
     }
 }
 
+// What a body's calls are `ok` by, they are by any weaker `ok`.
+theorem PDef::body_fits_mono(defs: List<PDef>, w: rt::World, f: PCalls(), ok1, ok2: Nat → List<BitVec(64)> → Bool,
+    more: (q: Nat) → (ys: List<BitVec(64)>) → ok1(q, ys).IsTrue() → ok2(q, ys).IsTrue(), p: Nat, xs: List<BitVec(64)>):
+    PDef::body_fits(defs, w, f, ok1, p, xs).IsTrue() → PDef::body_fits(defs, w, f, ok2, p, xs).IsTrue() {
+    match defs.nth(p) as λ o =>
+            (match o as λ _ => Bool { None => True, Some(d) => d.body.calls_ok(w, f, ok1, PTm::word_ctx(d.arity), PTm::vals_n(w.tys, d.arity, xs)) }).IsTrue() →
+            (match o as λ _ => Bool { None => True, Some(d) => d.body.calls_ok(w, f, ok2, PTm::word_ctx(d.arity), PTm::vals_n(w.tys, d.arity, xs)) }).IsTrue() {
+        None => λ _ => trivial,
+        Some(d) => λ h => d.body.calls_ok_mono(w, f, ok1, ok2, more, PTm::word_ctx(d.arity), PTm::vals_n(w.tys, d.arity, xs), h),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The depth a call needs, evaluated
+//
+// `PDef::fits(k)` asks whether a call runs within `k` levels; these give
+// the least such `k` at a closed argument in one evaluation, which is how
+// a program over closed arguments infers its levels
+// (docs/native/runtime-fn-recursion-design.md §3.4). Nothing is proved of
+// them: the generator states the program at the levels they give, and
+// the program's own verdict (`fits`, by evaluation) is what the theorem
+// takes.
+
+// The deeper of two depths, where both are known.
+fn PTm::deeper(a, b: Option<Nat>) → Option<Nat> {
+    match a { None => None, Some(x) => match b { None => None, Some(y) => Some(x.max(y)) } }
+}
+
+// The levels the calls a meaning makes need: each one more than its
+// callee's depth `d`, the most of them; `None` where one is unknown.
+fn PTm::calls_depth(self t: PTm, w: rt::World, f: PCalls(), d: Nat → List<BitVec(64)> → Option<Nat>) → (g: List<Ty>) → rt::Env(w.tys, g) → Option<Nat> {
+    match t {
+        Value(_) => λ g vals => Some(0),
+        Bind(e, body) => λ g vals => body.calls_depth(w, f, d, Cons(Tm::ty(e, w, g), g), Pair(Tm::sem(e, w, g, vals), vals)),
+        Recur(p, args, body) => λ g vals => PTm::deeper(
+            match d(p, PTm::words(w, g, vals, args)) { None => None, Some(n) => Some(n + 1) },
+            body.calls_depth(w, f, d, Cons(Word(64), g), Pair(f(p, PTm::words(w, g, vals, args)), vals))),
+        Choose(c, _, yes, no) => λ g vals => match Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, vals, c)) {
+            True => yes.calls_depth(w, f, d, g, vals),
+            False => no.calls_depth(w, f, d, g, vals),
+        },
+    }
+}
+
+// The depth definition `p`'s body needs at `xs`.
+fn PDef::body_depth(defs: List<PDef>, w: rt::World, f: PCalls(), d: Nat → List<BitVec(64)> → Option<Nat>, p: Nat, xs: List<BitVec(64)>) → Option<Nat> {
+    match defs.nth(p) { None => Some(0), Some(e) => e.body.calls_depth(w, f, d, PTm::word_ctx(e.arity), PTm::vals_n(w.tys, e.arity, xs)) }
+}
+
+// The depth a call of definition `p` at `xs` needs, the least `k` with
+// `PDef::fits(k, p, xs)`, where it is below `fuel`; `None` past it.
+fn PDef::depth(defs: List<PDef>, w: rt::World, f: PCalls(), fuel: Nat) → Nat → List<BitVec(64)> → Option<Nat> {
+    match fuel {
+        Zero => λ p xs => None,
+        Succ(j) => λ p xs => PDef::body_depth(defs, w, f, PDef::depth(defs, w, f, j), p, xs),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The depth from a rank
+//
+// A rank that drops at every call bounds the depth: a definition at rank
+// `r` runs within `r` levels. The termination measure is such a rank, and
+// so is any tighter one a writer proves (docs/native/runtime-fn-recursion-design.md §3).
+
+// Whether every call each definition's body makes, along the branch it
+// takes, is at a lower rank.
+fn PDef::Descends(defs: List<PDef>, w: rt::World, f: PCalls(), rank: Nat → List<BitVec(64)> → Nat) → Type {
+    (p: Nat) → (xs: List<BitVec(64)>) → PDef::body_fits(defs, w, f, λ q ys => (rank(q, ys) + 1).leb(rank(p, xs)), p, xs).IsTrue()
+}
+
+// A call whose rank is at most `k` runs within `k` levels.
+theorem PDef::fits_below_rank(defs: List<PDef>, w: rt::World, f: PCalls(), rank: Nat → List<BitVec(64)> → Nat,
+    descends: PDef::Descends(defs, w, f, rank), k: Nat):
+    (p: Nat) → (xs: List<BitVec(64)>) → rank(p, xs) <= k → PDef::fits(defs, w, f, k, p, xs).IsTrue() {
+    match k {
+        Zero => λ p xs low => PDef::body_fits_mono(defs, w, f, λ q ys => (rank(q, ys) + 1).leb(rank(p, xs)), λ _ _ => False,
+            λ q ys h => false_elim(Nat::le_trans(rank(q, ys) + 1, rank(p, xs), 0, (rank(q, ys) + 1).leb_sound(rank(p, xs), h), low)),
+            p, xs, descends(p, xs)),
+        Succ(i, ih) => λ p xs low => PDef::body_fits_mono(defs, w, f, λ q ys => (rank(q, ys) + 1).leb(rank(p, xs)), PDef::fits(defs, w, f, i),
+            λ q ys h => ih(q, ys, Nat::le_of_succ_succ(rank(q, ys), i,
+                Nat::le_trans(rank(q, ys) + 1, rank(p, xs), i + 1, (rank(q, ys) + 1).leb_sound(rank(p, xs), h), low))),
+            p, xs, descends(p, xs)),
+    }
+}
+
+// Every call runs within its rank's levels.
+theorem PDef::fits_by_rank(defs: List<PDef>, w: rt::World, f: PCalls(), rank: Nat → List<BitVec(64)> → Nat,
+    descends: PDef::Descends(defs, w, f, rank)): (p: Nat) → (xs: List<BitVec(64)>) → PDef::fits(defs, w, f, rank(p, xs), p, xs).IsTrue() {
+    λ p xs => PDef::fits_below_rank(defs, w, f, rank, descends, rank(p, xs), p, xs, Nat::le_refl(rank(p, xs)))
+}
+
 // ---------------------------------------------------------------------------
 // One recursive function, as the generator publishes it
 //

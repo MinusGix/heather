@@ -148,6 +148,17 @@ fn PTm::program_fits(tys: Nat → RecInfo, n: Nat, body: PTm, h: List<BitVec(64)
         PTm::within(λ k p xs => PDef::fits([PDef(n, body)], PTm::plain(tys), λ _ ys => h(ys), k, p, xs), λ p => src.checked(p), src.levels), Nil, trivial)
 }
 
+// The levels main's calls need, one more than the depth of each, as a
+// number a generator evaluates: `k + 1` for `k` levels, 0 where a call
+// goes past `fuel` levels (design §3.4).
+fn PTm::program_need(tys: Nat → RecInfo, n: Nat, body: PTm, h: List<BitVec(64)> → BitVec(64), main: PTm, fuel: Nat) → Nat {
+    match main.calls_depth(PTm::plain(tys), λ _ xs => h(xs),
+            λ p xs => PDef::depth([PDef(n, body)], PTm::plain(tys), λ _ ys => h(ys), fuel, p, xs), Nil, trivial) {
+        None => 0,
+        Some(k) => k + 1,
+    }
+}
+
 // Whether the compile checks the function's call of itself, which is what
 // counts its levels.
 fn PTm::program_checked(src: Source) → Bool { src.checked(0) }

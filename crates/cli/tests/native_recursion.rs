@@ -1,11 +1,12 @@
 //! A pure program with recursion, written as an ELF by `heather write-elf`
 //! and run as a Linux process (docs/native/runtime-fn-recursion-design.md
-//! §6 step 4; `lib/native/runtime/rt_proc_program.hthr` is its theorem):
+//! §3.4 and §8.1; `lib/native/runtime/rt_proc_program.hthr` is its theorem):
 //! main computes `sum(10)` by a non-tail recursive procedure and exits with
 //! 55 within 16 levels; with 9 levels the tenth nested call is refused and
 //! it exits with the call-depth status, 139. The same, generated: a
-//! `runtime fn` recursion and a `runtime(levels := 16) fn sum_ten()` that
-//! calls it (`lib/_tests/native/runtime/runtime_recursion_tests.hthr`).
+//! `runtime fn` recursion and a `runtime fn sum_ten()` that calls it at
+//! the eleven levels it infers, and the same at ten, one short
+//! (`lib/_tests/native/runtime/runtime_recursion_tests.hthr`).
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))]
 use std::path::{Path, PathBuf};
 use std::process::Command;

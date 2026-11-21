@@ -95,13 +95,15 @@ bound, with nothing written.
 The induction is one theorem in `rt_ptm`, generic over the body:
 
 ```
-theorem PTm::fits_by_rank(defs, w, f, ν, descends: PTm::Descends(defs, w, f, ν)):
-    (p: Nat) → (xs: List<BitVec(64)>) → PDef::fits(defs, w, f, ν(p, xs), p, xs).IsTrue()
+theorem PDef::fits_by_rank(defs, w, f, rank, descends: PDef::Descends(defs, w, f, rank)):
+    (p: Nat) → (xs: List<BitVec(64)>) → PDef::fits(defs, w, f, rank(p, xs), p, xs).IsTrue()
 ```
 
-where `PTm::Descends` says each body's calls, as `calls_ok` reads them
-along the branch actually taken, are at arguments of lower `ν`. At rank 0
-no call is allowed, so `calls_ok_mono` takes the body to `fits(0)`.
+where `PDef::Descends` says each body's calls, as `calls_ok` reads them
+along the branch actually taken, are at arguments of lower rank. At rank 0
+no call is allowed, so `calls_ok_mono` takes the body to `fits(0)`. Built
+(2026-11-21), with `PDef::body_fits_mono`; what is left is the premise at
+`f`, below.
 
 **What it needs that the guard does not have.** `f::guarded` (§8.1) is
 extensional: it says the body computes `f` whenever the calls are answered
@@ -110,7 +112,7 @@ the guard would still hold, so the bound cannot be read off it. The
 decrease has to come from the place it is proved: the elaborator's lifted
 obligations `f#obl_N`, one per call site, each under the hypotheses of the
 path to it (docs/language/recursion/decreases-unfolding-design.md §4).
-Two routes to `PTm::Descends` at `f`:
+Two routes to `PDef::Descends` at `f`:
 
 - **Recommended: a companion, `f::descends`.** The unfolding walk that
   emits `f::ext` and `f::irrel` (`crates/elab/src/measure.rs`) already holds
@@ -128,7 +130,7 @@ Two routes to `PTm::Descends` at `f`:
 
 The measure is often loose: binary search's `hi - lo` is a correct depth
 bound and an exponentially bad one. A tighter bound is any `ν` that also
-drops at every call, since `PTm::fits_by_rank` takes any rank, not only
+drops at every call, since `PDef::fits_by_rank` takes any rank, not only
 the termination measure. So a tighter bound is written the way a measure
 is:
 
@@ -152,9 +154,15 @@ of these.
 ### 3.4 A closed program infers its depth
 
 When `main` calls the recursion at closed arguments, `fits` evaluates.
-The generator takes the least `k` with `main`'s calls fitting within `k`
-(the search is bounded by the rank of §3.2, so it ends), and that is the
-program's levels: no argument, no theorem. `runtime(levels := n)` stays
+The generator takes the least `k` with `main`'s calls fitting within `k`,
+and that is the program's levels: no argument, no theorem. Built
+(2026-11-21): `PDef::depth` evaluates a call's depth directly, in one pass
+over its calls rather than a search over `k` (it is the least `k` with
+`fits(k)`, below a fuel that for a measured function is never reached),
+and `PTm::program_need` is main's. Nothing is proved of either: the
+program is made at the levels they give and the verdict that `fits` holds
+there is still what the theorem takes, so a wrong depth could only refuse.
+`runtime fn sum_ten() → u64 { rsum(10) }` runs at eleven levels. `runtime(levels := n)` stays
 as an optional check for a while (the program must fit within `n`), and
 leaves once the byte budget of §4 is there to state the same thing in the
 unit people mean.
@@ -291,11 +299,11 @@ The first six steps of the 2026-11-20 order (statements read with their
 calls answered, a pure recursion as a procedure, the levels in the charges,
 the generator) are built, §8.1. From here, in order:
 
-1. **The depth by measure.** `PTm::Descends` and `PTm::fits_by_rank` in
-   `rt_ptm`; the `f::descends` companion (§3.2); the generator publishes
-   `f::depth: f::fits(μ(x), x)`.
-2. **Closed programs infer their levels** (§3.4): `runtime fn main()` with
-   no argument; `levels := n` optional.
+1. **The depth by measure.** `PDef::Descends` and `PDef::fits_by_rank` in
+   `rt_ptm` (built); the `f::descends` companion (§3.2); the generator
+   publishes `f::depth: f::fits(μ(x), x)`.
+2. **Closed programs infer their levels** (§3.4, built): `runtime fn
+   main()` with no argument; `levels := n` optional.
 3. **The byte budget** (§4.1): `runtime(stack := n)`, the compiled theorem
    in bytes, the refusal that names the deepest chain and its frames.
 4. **One check at the boundary** (§4.2): the budgeted call, unchecked calls
@@ -388,6 +396,11 @@ the generator) are built, §8.1. From here, in order:
   non-tail recursive sum lowers, fits within 10 levels at 10 and not 9,
   its statements run to 55 at 10 with the world untouched, and a wrong-arity call and a bit-valued body are
   refused.
+
+- **Depth, inferred (2026-11-21).** `PDef::fits_by_rank` (§3.2) and the
+  evaluated depth (§3.4): a closed `main` states no levels, and a stated
+  `levels := n` is a check. `write-elf` runs `sum_ten` at its inferred
+  eleven levels to 55 and at ten to the call-depth status.
 
 ## 9. Decisions for Minus
 
