@@ -3483,7 +3483,6 @@ theorem Ty::past_cells(self t: Ty, tys: Nat → RecInfo, p: Nat): t.past(tys, p)
     }
 }
 
-
 theorem Ty::fields_ids_below(fs: List<Ty>): (p, n: Nat) → Ty::FieldsBelow(fs, p, n) → Tm::AllBelow(Fun::param_ids(fs, p), n) {
     match fs { Nil => λ p n _ => trivial, Cons(_, rest) => λ p n b => ⟨b.left, Ty::fields_ids_below(rest, p + 1, n, b.right)⟩ }
 }
