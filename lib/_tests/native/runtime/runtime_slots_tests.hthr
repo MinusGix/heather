@@ -1,0 +1,126 @@
+// Probes of records and enums whose fields are narrow words or `Bool`s at
+// a `runtime fn`'s boundary and across calls
+// (docs/native/runtime-fn-setups-design.md §16.18). Each field or slot
+// crosses in a word of its own, zero-extended, and is read back by its low
+// bits, as a narrow word or a `Bool` on its own does (§16.15, §16.17).
+// Tests, not library: nothing imports this module.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import tactic;
+import bitvec;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+
+// ---------------------------------------------------------------------------
+// A record of a byte, a flag and a word, returned: the byte and the flag
+// are widened into words of their own before they are answered.
+
+record Token { kind: u8, last: Bool, at: u64 }
+
+runtime fn token(x: u64) → Token { Token(x.truncate(8, 56), if x < 10 { True } else { False }, x + 1) }
+
+theorem token_runs(): program_eval(token::program, 0, [BitVec::ofNat(0x105)]) = 5 ∧
+    program_eval_also(token::program, [BitVec::ofNat(0x105)]) = [0, 0x106] {
+    ⟨token::agrees(BitVec::ofNat(0x105)), token::agrees_also(BitVec::ofNat(0x105))⟩
+}
+
+theorem token_small_runs(): program_eval_also(token::program, [BitVec::ofNat(7)]) = [1, 8] { token::agrees_also(BitVec::ofNat(7)) }
+
+// Taken as a parameter: each field read into its own port at its width.
+runtime fn token_sum(t: Token) → u64 { if t.last { t.at + t.kind.zero_extend(56) } else { t.at } }
+
+// The agreement is at the record, passed in its fields' words.
+theorem token_sum_agrees(t: Token): program_eval(token_sum::program, 0, RecInfo::record_words(token_sum::world.tys, 0, t)) = token_sum(t) {
+    token_sum::agrees(t)
+}
+
+theorem token_sum_runs(): program_eval(token_sum::program, 0, [BitVec::ofNat(5), BitVec::ofNat(1), BitVec::ofNat(10)]) = 15 ∧
+    program_eval(token_sum::program, 0, [BitVec::ofNat(5), BitVec::ofNat(0), BitVec::ofNat(10)]) = 10 {
+    ⟨token_sum::agrees(Token(5, True, 10)), token_sum::agrees(Token(5, False, 10))⟩
+}
+
+// Built in one function, passed to another and read back: every slot
+// widened before the call and read at its width after it.
+runtime fn token_round(x: u64) → u64 { token_sum(token(x)) }
+
+theorem token_round_agrees(x: u64): program_eval(token_round::program, 2, [x]) = token_round(x) { token_round::agrees(x) }
+
+theorem token_round_runs(): program_eval(token_round::program, 2, [BitVec::ofNat(7)]) = 15 ∧
+    program_eval(token_round::program, 2, [BitVec::ofNat(0x4105)]) = 0x4106 {
+    ⟨token_round::agrees(BitVec::ofNat(7)), token_round::agrees(BitVec::ofNat(0x4105))⟩
+}
+
+// A record read back from a call and its fields used at their widths.
+runtime fn token_kind(x: u64) → u8 { token(x).kind + 1 }
+
+theorem token_kind_runs(): program_eval(token_kind::program, 1, [BitVec::ofNat(0x1ff)]) = 0 { token_kind::agrees(BitVec::ofNat(0x1ff)) }
+
+// ---------------------------------------------------------------------------
+// An enum whose payloads hold a byte and a flag.
+
+inductive Step { Skip, Take(b: u8), Mark(set: Bool, w: u64) }
+
+runtime fn step_of(x: u64) → Step {
+    if x < 10 { Skip } else { if x < 300 { Take(x.truncate(8, 56)) } else { Mark(if x < 1000 { True } else { False }, x) } }
+}
+
+runtime fn step_value(s: Step) → u64 {
+    match s { Skip => 0, Take(b) => b.zero_extend(56), Mark(set, w) => if set { w } else { 1 } }
+}
+
+runtime fn step_round(x: u64) → u64 { step_value(step_of(x)) }
+
+theorem step_round_agrees(x: u64): program_eval(step_round::program, 2, [x]) = step_round(x) { step_round::agrees(x) }
+
+theorem step_round_runs(): program_eval(step_round::program, 2, [BitVec::ofNat(3)]) = 0 ∧
+    program_eval(step_round::program, 2, [BitVec::ofNat(0x105)]) = 5 ∧
+    program_eval(step_round::program, 2, [BitVec::ofNat(500)]) = 500 ∧
+    program_eval(step_round::program, 2, [BitVec::ofNat(5000)]) = 1 {
+    ⟨step_round::agrees(BitVec::ofNat(3)), ⟨step_round::agrees(BitVec::ofNat(0x105)),
+        ⟨step_round::agrees(BitVec::ofNat(500)), step_round::agrees(BitVec::ofNat(5000))⟩⟩⟩
+}
+
+// A slot that is a bit, in an enum taken as a parameter: its word's lowest
+// bit is read.
+inductive Flag { Unset, Set(b: Bool) }
+
+runtime fn flag_n(f: Flag) → u64 { match f { Unset => 0, Set(b) => if b { 1 } else { 2 } } }
+
+theorem flag_n_runs(): program_eval(flag_n::program, 0, [BitVec::ofNat(1), BitVec::ofNat(1)]) = 1 ∧
+    program_eval(flag_n::program, 0, [BitVec::ofNat(1), BitVec::ofNat(0)]) = 2 ∧ program_eval(flag_n::program, 0, [BitVec::ofNat(0), BitVec::ofNat(0)]) = 0 {
+    ⟨flag_n::agrees(Set(True)), ⟨flag_n::agrees(Set(False)), flag_n::agrees(Unset)⟩⟩
+}
+
+// ---------------------------------------------------------------------------
+// A record and an enum of slots as parameters of a function lent a span: the
+// generator states the function over every file at the values.
+
+runtime fn token_peek(span: List<u8>, length: u64, t: Token) → u64 {
+    if t.last { span.byte_within(length, t.at).zero_extend(56) + t.kind.zero_extend(56) } else { t.at }
+}
+
+theorem token_peek_over(f: Buffers(), place, length: u64, t: Token):
+    program_eval_over(f, token_peek::program, 0, Cons(place, Cons(length, RecInfo::record_words(token_peek::world.tys, 0, t)))) = token_peek(f.span(0), length, t) {
+    token_peek::agrees_over(f, place, length, t)
+}
+
+theorem token_peek_runs(): program_eval_over([[BitVec::ofNat(97), BitVec::ofNat(98)]], token_peek::program, 0,
+    [BitVec::ofNat(4096), BitVec::ofNat(2), BitVec::ofNat(3), BitVec::ofNat(1), BitVec::ofNat(1)]) = 101 { refl }
+
+runtime fn flag_peek(span: List<u8>, length: u64, g: Flag) → u64 {
+    match g { Unset => 0, Set(b) => if b { span.byte_within(length, 0).zero_extend(56) } else { 2 } }
+}
+
+theorem flag_peek_over(f: Buffers(), place, length: u64): program_eval_over(f, flag_peek::program, 0, [place, length, BitVec::ofNat(1), BitVec::ofNat(1)]) = flag_peek(f.span(0), length, Set(True)) {
+    flag_peek::agrees_over(f, place, length, Set(True))
+}
+
+theorem flag_peek_runs(): program_eval_over([[BitVec::ofNat(97)]], flag_peek::program, 0, [BitVec::ofNat(4096), BitVec::ofNat(1), BitVec::ofNat(1), BitVec::ofNat(1)]) = 97 { refl }

@@ -1225,13 +1225,158 @@ theorem Ty::fields_one_from(T: Type, fs: List<Ty>, mk: Ty::Flats(fs) → T, e: f
         Ty::TakesFields(g, λ (ws: List<BitVec(64)>) => K(ws, mk2(Ty::flats_of_words(g, ws)))), λ mk2 h => h)(mk)
 }
 
+fn Tm::check_true(b: Bool) → Option<b.IsTrue()> {
+    match b as λ x => Option<x.IsTrue()> { False => None, True => Some(trivial) }
+}
+
+fn Ty::check_narrow(w: Nat) → Option<(w = 64) ∨ (w < 64)> {
+    match w.equation(64) {
+        Inl(e) => Some(Inl(e)),
+        Inr(_) => Tm::check_true((w + 1).leb(64)).and_then(λ h => Some(Inr(Nat::leb_sound(w + 1, 64, h)))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Slots (design §16.18). A record's field or an enum's payload slot
+// crosses the boundary in one word, as a narrow word or a `Bool` does on
+// its own: a word of at most 64 bits zero-extended into it, a bit as zero
+// or one. Where it lands it is read back by its low bits (`Ty::word_at`),
+// and from a port the word is its zero extension (`Ty::flat_word`).
+
+fn Ty::Slot(self f: Ty) → Type {
+    match f { Word(w) => (w = 64) ∨ (w < 64), Bit => True, ByteList(_) => False, Lines => False, Named(_) => False, Count => False, Enum(_) => False }
+}
+
+fn Ty::check_slot(self f: Ty) → Option<f.Slot()> {
+    match f as λ x => Option<x.Slot()> {
+        Word(w) => Ty::check_narrow(w), Bit => Some(trivial), ByteList(_) => None, Lines => None, Named(_) => None, Count => None, Enum(_) => None,
+    }
+}
+
+fn Ty::Slots(fs: List<Ty>) → Type {
+    match fs { Nil => True, Cons(f, rest) => f.Slot() ∧ Ty::Slots(rest) }
+}
+
+fn Ty::check_slots(fs: List<Ty>) → Option<Ty::Slots(fs)> {
+    match fs {
+        Nil => Some(trivial),
+        Cons(f, rest) => f.check_slot().and_then(λ e => Ty::check_slots(rest).and_then(λ ok => Some(⟨e, ok⟩))),
+    }
+}
+
+// Whether a slot is narrower than a word: its port is not its word.
+fn Ty::slot_narrow(self f: Ty) → Bool {
+    match f { Word(w) => match w.equation(64) { Inl(_) => False, Inr(_) => True }, Bit => True, ByteList(_) => False, Lines => False, Named(_) => False, Count => False, Enum(_) => False }
+}
+
+fn Ty::slots_narrow(fs: List<Ty>) → Bool {
+    match fs { Nil => False, Cons(f, rest) => f.slot_narrow() || Ty::slots_narrow(rest) }
+}
+
+// Whether two adjacent fields are both narrow: a C structure of these
+// fields lays the two in one eightbyte, which System V passes in one
+// register, where a record here passes each field in a word of its own.
+// `compile-x86` refuses such a record at a C boundary (§16.18).
+fn Ty::slots_share(fs: List<Ty>) → Bool {
+    match fs {
+        Nil => False,
+        Cons(f, rest) => match rest {
+            Nil => False,
+            Cons(g, _) => (f.slot_narrow() && g.slot_narrow()) || Ty::slots_share(rest),
+        },
+    }
+}
+
+theorem Ty::words_slots(fs: List<Ty>): Ty::Words(fs) → Ty::Slots(fs) {
+    match fs {
+        Nil => λ _ => trivial,
+        Cons(f, rest) => λ ok => ⟨j(sym(ok.left), λ g _ => g.Slot(), Inl(refl)), Ty::words_slots(rest, ok.right)⟩,
+    }
+}
+
+// Slots none of which is narrow are 64-bit words.
+theorem Ty::slot_wide(f: Ty): f.Slot() → f.slot_narrow() = False → f = Word(64) {
+    match f {
+        Word(w) => λ ok => match ok {
+            Inl(e) => λ _ => j(sym(e), λ y _ => Word(y) = Word(64), refl),
+            Inr(lt) => λ (bad: (match w.equation(64) { Inl(_) => False, Inr(_) => True }) = False) =>
+                absurd(j(Or::inr_apart(w.equation(64), Nat::ne_of_lt(w, 64, lt)), λ d _ => (match d { Inl(_) => False, Inr(_) => True }) = False, bad)),
+        },
+        Bit => λ _ (bad: True = False) => absurd(bad),
+        ByteList(_) => λ never => false_elim(never),
+        Lines => λ never => false_elim(never),
+        Named(_) => λ never => false_elim(never),
+        Count => λ never => false_elim(never),
+        Enum(_) => λ never => false_elim(never),
+    }
+}
+
+theorem Ty::slots_wide(fs: List<Ty>): Ty::Slots(fs) → Ty::slots_narrow(fs) = False → Ty::Words(fs) {
+    match fs {
+        Nil => λ _ _ => trivial,
+        Cons(f, rest) => λ ok none => {
+            let parts = Bool::or_false_parts(f.slot_narrow(), Ty::slots_narrow(rest), none);
+            ⟨Ty::slot_wide(f, ok.left, parts.left), Ty::slots_wide(rest, ok.right, parts.right)⟩
+        },
+    }
+}
+
+// A word below 2^w, at most 64 bits, fits a 64-bit word.
+theorem Ty::narrow_small(w: Nat, lt: w < 64, v: BitVec(w)): v.toNat() < Nat::pow(2, 64) {
+    Nat::lt_of_lt_of_le(v.toNat(), Nat::pow(2, w), Nat::pow(2, 64), BitVec::toNat_lt_pow(w, v), Nat::pow_le_pow_r(2, w, 64, trivial, w.le_of_lt(64, lt)))
+}
+
+// A narrow slot's word and its reading, past the equation of its width.
+theorem Ty::narrow_flat_word(w: Nat, ne: w ≠ 64, v: BitVec(w)): Word(w).flat_word(v) = BitVec::ofNat(v.toNat()) {
+    j(sym(Or::inr_apart(w.equation(64), ne)), λ d _ =>
+        (match d as λ _ => BitVec(64) { Inl(e) => j(e, λ y _ => BitVec(y), v), Inr(_) => BitVec::ofNat(v.toNat()) }) = BitVec::ofNat(v.toNat()), refl)
+}
+
+theorem Ty::narrow_word_at(w: Nat, ne: w ≠ 64, x: BitVec(64)): Word(w).word_at(x) = BitVec::ofNat(x.toNat()) {
+    j(sym(Or::inr_apart(Nat::equation(64, w), λ e => ne(sym(e)))), λ d _ =>
+        (match d as λ _ => BitVec(w) { Inl(e) => j(e, λ y _ => BitVec(y), x), Inr(_) => BitVec::ofNat(x.toNat()) }) = BitVec::ofNat(x.toNat()), refl)
+}
+
+// A slot's word read back is the slot.
+theorem Ty::slot_round(f: Ty): f.Slot() → (v: f.Flat()) → f.word_at(f.flat_word(v)) = v {
+    match f {
+        Word(w) => λ ok => match ok {
+            Inl(e) => j(sym(e), λ y _ => (v: Word(y).Flat()) → Word(y).word_at(Word(y).flat_word(v)) = v, λ v => refl),
+            Inr(lt) => λ v => {
+                let ne = Nat::ne_of_lt(w, 64, lt);
+                trans(cong_fn(λ (x: BitVec(64)) => Word(w).word_at(x), Ty::narrow_flat_word(w, ne, v)),
+                    trans(Ty::narrow_word_at(w, ne, BitVec::ofNat(v.toNat())),
+                        trans(cong_fn(λ (m: Nat) => BitVec::ofNat(m, n := w), BitVec::toNat_ofNat(64, v.toNat(), Ty::narrow_small(w, lt, v))), BitVec::ofNat_toNat(w, v))))
+            },
+        },
+        Bit => λ _ v => match v { False => refl, True => refl },
+        ByteList(_) => λ never => false_elim(never),
+        Lines => λ never => false_elim(never),
+        Named(_) => λ never => false_elim(never),
+        Count => λ never => false_elim(never),
+        Enum(_) => λ never => false_elim(never),
+    }
+}
+
+// Slots read back off their words are themselves, whatever follows.
+theorem Ty::slots_round(fs: List<Ty>): Ty::Slots(fs) → (t: Ty::Flats(fs)) → (more: List<BitVec(64)>) →
+    Ty::flats_of_words(fs, Ty::flats_words(fs, t) ++ more) = t {
+    match fs {
+        Nil => λ _ t more => refl,
+        Cons(f, rest) => λ ok t more =>
+            trans(cong_fn(λ (a: f.Flat()) => Pair(a, Ty::flats_of_words(rest, Ty::flats_words(rest, t.snd) ++ more)), Ty::slot_round(f, ok.left, t.fst)),
+                cong_fn(λ (b: Ty::Flats(rest)) => Pair(t.fst, b), Ty::slots_round(rest, ok.right, t.snd, more))),
+    }
+}
+
+
 // What an enum asks of its table entry to cross the boundary in words:
 // its tags in a word, and its payload's slots each a 64-bit word. Every
 // other code crosses as it is.
 fn Ty::Passes(self p: Ty, tys: Nat → RecInfo) → Type {
     match p {
         Word(_) => True, Bit => True, ByteList(_) => True, Lines => True, Named(_) => True, Count => True,
-        Enum(i) => ((tys(i).alts.last + 1).leb(Nat::pow(2, 64)) = True) ∧ Ty::Words(tys(i).alts.slots),
+        Enum(i) => ((tys(i).alts.last + 1).leb(Nat::pow(2, 64)) = True) ∧ Ty::Slots(tys(i).alts.slots),
     }
 }
 
@@ -1243,12 +1388,12 @@ fn Ty::PassesAll(tys: Nat → RecInfo, ps: List<Ty>) → Type {
 fn Ty::passes(self p: Ty, tys: Nat → RecInfo) → Bool {
     match p {
         Word(_) => True, Bit => True, ByteList(_) => True, Lines => True, Named(_) => True, Count => True,
-        Enum(i) => (tys(i).alts.last + 1).leb(Nat::pow(2, 64)) && (match Ty::check_words(tys(i).alts.slots) { None => False, Some(_) => True }),
+        Enum(i) => (tys(i).alts.last + 1).leb(Nat::pow(2, 64)) && (match Ty::check_slots(tys(i).alts.slots) { None => False, Some(_) => True }),
     }
 }
 
-theorem Ty::words_checked(fs: List<Ty>): (o: Option<Ty::Words(fs)>) → (match o { None => False, Some(_) => True }).IsTrue() → Ty::Words(fs) {
-    λ o => match o as λ c => (match c { None => False, Some(_) => True }).IsTrue() → Ty::Words(fs) { None => λ never => false_elim(never), Some(h) => λ _ => h }
+theorem Ty::slots_checked(fs: List<Ty>): (o: Option<Ty::Slots(fs)>) → (match o { None => False, Some(_) => True }).IsTrue() → Ty::Slots(fs) {
+    λ o => match o as λ c => (match c { None => False, Some(_) => True }).IsTrue() → Ty::Slots(fs) { None => λ never => false_elim(never), Some(h) => λ _ => h }
 }
 
 theorem Ty::passes_sound(tys: Nat → RecInfo, p: Ty): p.passes(tys).IsTrue() → p.Passes(tys) {
@@ -1256,11 +1401,20 @@ theorem Ty::passes_sound(tys: Nat → RecInfo, p: Ty): p.passes(tys).IsTrue() �
         Word(_) => λ _ => trivial, Bit => λ _ => trivial, ByteList(_) => λ _ => trivial, Lines => λ _ => trivial,
         Named(_) => λ _ => trivial, Count => λ _ => trivial,
         Enum(i) => λ h => {
-            let parts = Bool::is_true_and((tys(i).alts.last + 1).leb(Nat::pow(2, 64)), match Ty::check_words(tys(i).alts.slots) { None => False, Some(_) => True }, h);
+            let parts = Bool::is_true_and((tys(i).alts.last + 1).leb(Nat::pow(2, 64)), match Ty::check_slots(tys(i).alts.slots) { None => False, Some(_) => True }, h);
             ⟨eq_true_of_is_true((tys(i).alts.last + 1).leb(Nat::pow(2, 64)), parts.left),
-                Ty::words_checked(tys(i).alts.slots, Ty::check_words(tys(i).alts.slots), parts.right)⟩
+                Ty::slots_checked(tys(i).alts.slots, Ty::check_slots(tys(i).alts.slots), parts.right)⟩
         },
     }
+}
+
+// Slots, decided: what a generator closes by evaluation.
+fn Ty::slots_ok(fs: List<Ty>) → Bool { match Ty::check_slots(fs) { None => False, Some(_) => True } }
+
+// A record's words, and any after them, read back as the record.
+theorem RecInfo::record_reads(tys: Nat → RecInfo, i: Nat, ok: Ty::Slots(tys(i).fields), v: tys(i).T, more: List<BitVec(64)>):
+    Ty::read_words(Named(i), tys, RecInfo::record_words(tys, i, v) ++ more) = v {
+    trans(cong_fn(tys(i).mk, Ty::slots_round(tys(i).fields, ok, tys(i).get(v), more)), tys(i).back(v))
 }
 
 // An enum's own words, and any after them: admitted, the rest past its
@@ -1278,7 +1432,7 @@ theorem RecInfo::enum_reads(tys: Nat → RecInfo, i: Nat, ok: Enum(i).Passes(tys
     let word: (BitVec::ofNat(e.tag(v), n := 64).toNat() = e.tag(v)) = BitVec::toNat_ofNat(64, e.tag(v), lt);
     let clamped: (BitVec::ofNat(e.tag(v), n := 64).toNat().min(e.last) = e.tag(v)) =
         j(sym(word), λ y _ => y.min(e.last) = e.tag(v), Nat::min_eq_l(e.tag(v), e.last, le));
-    let slots: (Ty::flats_of_words(e.slots, RecInfo::enum_rest(tys, i, v) ++ more) = e.fields(v)) = Ty::flats_round(e.slots, ok.right, e.fields(v), more);
+    let slots: (Ty::flats_of_words(e.slots, RecInfo::enum_rest(tys, i, v) ++ more) = e.fields(v)) = Ty::slots_round(e.slots, ok.right, e.fields(v), more);
     trans(cong_fn(λ (n: Nat) => e.of(n, Ty::flats_of_words(e.slots, RecInfo::enum_rest(tys, i, v) ++ more)), clamped),
         trans(cong_fn(λ (t: Ty::Flats(e.slots)) => e.of(e.tag(v), t), slots), e.of_tag(v)))
 }
@@ -1700,7 +1854,7 @@ theorem Ty::held_passes(tys: Nat → RecInfo, p: Ty): p.Held(tys) → p.Passes(t
     match p {
         Word(_) => λ _ => trivial, Bit => λ _ => trivial, ByteList(_) => λ _ => trivial, Lines => λ _ => trivial,
         Named(_) => λ _ => trivial, Count => λ _ => trivial,
-        Enum(i) => λ held => ⟨held.left, Ty::bare_words(tys(i).alts.slots, held.right)⟩,
+        Enum(i) => λ held => ⟨held.left, Ty::words_slots(tys(i).alts.slots, Ty::bare_words(tys(i).alts.slots, held.right))⟩,
     }
 }
 
@@ -1722,6 +1876,150 @@ theorem Ty::one_word_passes(tys: Nat → RecInfo, p: Ty): p.OneWord(tys) → p.P
 // result back in the callee's words (`Ty::result_words`), the first at
 // the port the value is held at and the rest at the ports after it
 // (`Ty::also_ports`).
+
+// A 64-bit word read at a narrower word is its low bits.
+theorem Ty::cast_narrow_in(tys: Nat → RecInfo, w: Nat, ne: w ≠ 64, x: BitVec(64)): Ty::cast(tys, Word(64), Word(w), x) = BitVec::ofNat(x.toNat()) {
+    let converted: (Ty::cast(tys, Word(64), Word(w), x) = Ty::convert(tys, Word(64), Word(w), x)) =
+        j(sym(Or::inr_apart(Word(64).equation(Word(w)), λ e => ne(sym(cong_fn(Ty::width, e))))), λ d _ =>
+            (match d as λ _ => BitVec(w) { Inl(e) => j(e, λ y _ => y.sem(tys), x), Inr(_) => Ty::convert(tys, Word(64), Word(w), x) }) =
+                Ty::convert(tys, Word(64), Word(w), x),
+            refl);
+    let truncated: (Ty::convert(tys, Word(64), Word(w), x) = BitVec::ofNat(x.toNat())) =
+        j(sym(Or::inr_apart(Nat::equation(64, w), λ e => ne(sym(e)))), λ d _ =>
+            (match d as λ _ => BitVec(w) { Inl(e) => j(e, λ y _ => BitVec(y), x), Inr(_) => BitVec::ofNat(x.toNat()) }) = BitVec::ofNat(x.toNat()),
+            refl);
+    trans(converted, truncated)
+}
+
+// A narrow word read as a 64-bit word is its zero extension.
+theorem Ty::cast_narrow_out(tys: Nat → RecInfo, w: Nat, ne: w ≠ 64, v: BitVec(w)): Ty::cast(tys, Word(w), Word(64), v) = BitVec::ofNat(v.toNat()) {
+    let converted: (Ty::cast(tys, Word(w), Word(64), v) = Ty::convert(tys, Word(w), Word(64), v)) =
+        j(sym(Or::inr_apart(Word(w).equation(Word(64)), λ e => ne(cong_fn(Ty::width, e)))), λ d _ =>
+            (match d as λ _ => BitVec(64) { Inl(e) => j(e, λ y _ => y.sem(tys), v), Inr(_) => Ty::convert(tys, Word(w), Word(64), v) }) =
+                Ty::convert(tys, Word(w), Word(64), v),
+            refl);
+    let extended: (Ty::convert(tys, Word(w), Word(64), v) = BitVec::ofNat(v.toNat())) =
+        j(sym(Or::inr_apart(w.equation(64), ne)), λ d _ =>
+            (match d as λ _ => BitVec(64) { Inl(e) => j(e, λ y _ => BitVec(y), v), Inr(_) => BitVec::ofNat(v.toNat()) }) = BitVec::ofNat(v.toNat()),
+            refl);
+    trans(converted, extended)
+}
+
+// A bit's word, zero or one, read back at one bit is the bit.
+theorem Ty::bit_back(v: Bool): word_value(BitVec::ofNat(BitVec::ofBool(v).toNat(), n := 64), 1) = BitVec::ofBool(v) {
+    match v { False => refl, True => refl }
+}
+
+// A slot's port bound to its word, as binding a word binds it at every
+// width (`word_value`), holds the slot.
+theorem Ty::slot_bound(f: Ty): f.Slot() → (values: Valuation()) → (port: Nat) → ((wd: Nat) → values(wd, port) = word_value(values(64, port), wd)) →
+    (v: f.Flat()) → values(64, port) = f.flat_word(v) → f.FlatHolds(values, port, v) {
+    match f {
+        Word(w) => λ ok => match ok {
+            Inl(e) => j(sym(e), λ y _ => (values: Valuation()) → (port: Nat) → ((wd: Nat) → values(wd, port) = word_value(values(64, port), wd)) →
+                (v: Word(y).Flat()) → values(64, port) = Word(y).flat_word(v) → Word(y).FlatHolds(values, port, v), λ values port bound v h => h),
+            Inr(lt) => λ values port bound v h => {
+                let ne = Nat::ne_of_lt(w, 64, lt);
+                let word: (values(64, port) = BitVec::ofNat(v.toNat())) = trans(h, Ty::narrow_flat_word(w, ne, v));
+                trans(bound(w), trans(Ty::narrow_word_at(w, ne, values(64, port)), trans(cong_fn(λ (y: BitVec(64)) => BitVec::ofNat(y.toNat(), n := w), word),
+                    trans(cong_fn(λ (m: Nat) => BitVec::ofNat(m, n := w), BitVec::toNat_ofNat(64, v.toNat(), Ty::narrow_small(w, lt, v))), BitVec::ofNat_toNat(w, v)))))
+            },
+        },
+        Bit => λ _ values port bound v h => trans(bound(1), trans(cong_fn(λ (x: BitVec(64)) => word_value(x, 1), h), Ty::bit_back(v))),
+        ByteList(_) => λ never => false_elim(never),
+        Lines => λ never => false_elim(never),
+        Named(_) => λ never => false_elim(never),
+        Count => λ never => false_elim(never),
+        Enum(_) => λ never => false_elim(never),
+    }
+}
+
+// A slot's port zero-extended into a word holds the slot's word.
+theorem Ty::slot_widened(f: Ty): f.Slot() → (values: Valuation()) → (port: Nat) → (v: f.Flat()) → f.FlatHolds(values, port, v) →
+    BitVec::ofNat(values(f.width(), port).toNat(), n := 64) = f.flat_word(v) {
+    match f {
+        Word(w) => λ ok => match ok {
+            Inl(e) => j(sym(e), λ y _ => (values: Valuation()) → (port: Nat) → (v: Word(y).Flat()) → Word(y).FlatHolds(values, port, v) →
+                BitVec::ofNat(values(Word(y).width(), port).toNat(), n := 64) = Word(y).flat_word(v),
+                λ values port v h => trans(BitVec::ofNat_toNat(64, values(64, port)), h)),
+            Inr(lt) => λ values port v h => trans(cong_fn(λ (y: BitVec(w)) => BitVec::ofNat(y.toNat(), n := 64), h), sym(Ty::narrow_flat_word(w, Nat::ne_of_lt(w, 64, lt), v))),
+        },
+        Bit => λ _ values port v h => cong_fn(λ (y: BitVec(1)) => BitVec::ofNat(y.toNat(), n := 64), h),
+        ByteList(_) => λ never => false_elim(never),
+        Lines => λ never => false_elim(never),
+        Named(_) => λ never => false_elim(never),
+        Count => λ never => false_elim(never),
+        Enum(_) => λ never => false_elim(never),
+    }
+}
+
+// A word's low bits at a slot's port (what `Resize` from the word writes)
+// hold the word read at the slot.
+theorem Ty::slot_narrowed(f: Ty): f.Slot() → (values: Valuation()) → (port: Nat) → (x: BitVec(64)) →
+    values(f.width(), port) = BitVec::ofNat(x.toNat()) → f.FlatHolds(values, port, f.word_at(x)) {
+    match f {
+        Word(w) => λ ok => match ok {
+            Inl(e) => j(sym(e), λ y _ => (values: Valuation()) → (port: Nat) → (x: BitVec(64)) →
+                values(Word(y).width(), port) = BitVec::ofNat(x.toNat()) → Word(y).FlatHolds(values, port, Word(y).word_at(x)),
+                λ values port x h => trans(h, BitVec::ofNat_toNat(64, x))),
+            Inr(lt) => λ values port x h => trans(h, sym(Ty::narrow_word_at(w, Nat::ne_of_lt(w, 64, lt), x))),
+        },
+        Bit => λ _ values port x h => trans(h, BitVec::one_bit_eq_ofBool(BitVec::ofNat(x.toNat(), n := 1))),
+        ByteList(_) => λ never => false_elim(never),
+        Lines => λ never => false_elim(never),
+        Named(_) => λ never => false_elim(never),
+        Count => λ never => false_elim(never),
+        Enum(_) => λ never => false_elim(never),
+    }
+}
+
+// Ports bound to slots' words hold the slots.
+fn Ty::BoundAt(values: Valuation(), ids: List<Nat>) → Type {
+    match ids { Nil => True, Cons(id, rest) => ((wd: Nat) → values(wd, id) = word_value(values(64, id), wd)) ∧ Ty::BoundAt(values, rest) }
+}
+
+theorem Ty::slots_bound(values: Valuation(), fs: List<Ty>): (port: Nat) → Ty::Slots(fs) → Ty::BoundAt(values, Ty::ports_from(fs, port)) → (t: Ty::Flats(fs)) →
+    words_of(values, Ty::ports_from(fs, port)) = Ty::flats_words(fs, t) → Ty::FieldsHold(fs, values, port, t) {
+    match fs {
+        Nil => λ port _ _ t _ => trivial,
+        Cons(f, rest) => λ port ok bound t h => {
+            let parts = words_cons_parts(values(64, port), words_of(values, Ty::ports_from(rest, port + 1)),
+                Cons(f.flat_word(t.fst), Ty::flats_words(rest, t.snd)), h);
+            ⟨Ty::slot_bound(f, ok.left, values, port, bound.left, t.fst, parts.left), Ty::slots_bound(values, rest, port + 1, ok.right, bound.right, t.snd, parts.right)⟩
+        },
+    }
+}
+
+theorem Ty::bound_at_frame(values, after: Valuation(), ids: List<Nat>): ((x: Nat) → Mem(x, ids) → (wd: Nat) → after(wd, x) = values(wd, x)) →
+    Ty::BoundAt(values, ids) → Ty::BoundAt(after, ids) {
+    match ids {
+        Nil => λ _ _ => trivial,
+        Cons(id, rest) => λ same b => ⟨λ wd => trans(same(id, Inl(refl), wd), trans(b.left(wd), cong_fn(λ (y: BitVec(64)) => word_value(y, wd), sym(same(id, Inl(refl), 64))))),
+            Ty::bound_at_frame(values, after, rest, λ x m => same(x, Inr(m)), b.right)⟩,
+    }
+}
+
+// Binding words binds each id at every width.
+theorem Ty::bind_bound(values: Valuation(), ids: List<Nat>): distinct(ids).IsTrue() → (words: List<BitVec(64)>) → ids.len() = words.len() →
+    Ty::BoundAt(Valuation::bind(values, ids, words), ids) {
+    match ids {
+        Nil => λ _ words _ => trivial,
+        Cons(id, rest) => λ apart words => match words {
+            Nil => λ (bad: rest.len() + 1 = 0) => false_elim(rest.len().succ_ne_zero(bad)),
+            Cons(word, more) => λ (same: rest.len() + 1 = more.len() + 1) => {
+                let parts = Bool::is_true_and(absent(id, rest), distinct(rest), apart);
+                let inner = Valuation::bind(values, rest, more);
+                let after = Valuation::set(inner, id, word_value(word));
+                let here = λ (wd: Nat) => trans(Valuation::set_here(inner, id, word_value(word), wd),
+                    cong_fn(λ (x: BitVec(64)) => word_value(x, wd), sym(Valuation::set_here(inner, id, word_value(word), 64))));
+                let others: Ty::BoundAt(after, rest) = Ty::bound_at_frame(inner, after, rest, λ x m wd =>
+                    Valuation::set_other(inner, id, word_value(word), wd, x, λ e => absent_mem(id, rest, parts.left, x, m, sym(e))),
+                    Ty::bind_bound(values, rest, parts.right, more, Nat::succ_inj(rest.len(), more.len(), same)));
+                ⟨here, others⟩
+            },
+        },
+    }
+}
 
 // A code a call passes: one held in a word (`Ty::Held`), or an enum whose
 // tags fit a word and whose payload's slots are 64-bit words, in its tag
@@ -1746,26 +2044,92 @@ fn Ty::check_sent(self p: Ty, tys: Nat → RecInfo) → Option<p.Sent(tys)> {
     }
 }
 
+// A code a call passes slot by slot (`Ty::pieces`), each in a word of its
+// own: a narrow word or a bit on its own, or a record or an enum whose
+// fields or slots are words of at most 64 bits or bits (design §16.18).
+// A narrow slot is zero-extended before the call, as the callee reads its
+// low bits back.
+fn Ty::pieces(self p: Ty, tys: Nat → RecInfo) → List<Ty> {
+    match p { Word(w) => [Word(w)], Bit => [Bit], ByteList(_) => Nil, Lines => Nil, Named(i) => tys(i).fields, Count => Nil, Enum(i) => Cons(Word(64), tys(i).alts.slots) }
+}
+
+fn Ty::Sliced(self p: Ty, tys: Nat → RecInfo) → Type {
+    match p {
+        Word(w) => w < 64, Bit => True, ByteList(_) => False, Lines => False, Named(i) => Ty::Slots(tys(i).fields), Count => False,
+        Enum(i) => ((tys(i).alts.last + 1).leb(Nat::pow(2, 64)) = True) ∧ Ty::Slots(tys(i).alts.slots),
+    }
+}
+
+// Sliced where it needs to be: a narrow word or a bit, or a record or an
+// enum with a narrow slot (one of 64-bit words is passed whole).
+fn Ty::check_sliced(self p: Ty, tys: Nat → RecInfo) → Option<p.Sliced(tys)> {
+    match p as λ x => Option<x.Sliced(tys)> {
+        Word(w) => match Ty::check_narrow(w) { None => None, Some(o) => match o { Inl(_) => None, Inr(lt) => Some(lt) } },
+        Bit => Some(trivial), ByteList(_) => None, Lines => None,
+        Named(i) => match Ty::slots_narrow(tys(i).fields) { False => None, True => Ty::check_slots(tys(i).fields) },
+        Count => None,
+        Enum(i) => match Ty::slots_narrow(tys(i).alts.slots) {
+            False => None,
+            True => match (tys(i).alts.last + 1).leb(Nat::pow(2, 64)) as λ b => Option<(b = True) ∧ Ty::Slots(tys(i).alts.slots)> {
+                False => None,
+                True => Ty::check_slots(tys(i).alts.slots).and_then(λ ok => Some(⟨refl, ok⟩)),
+            },
+        },
+    }
+}
+
+// A sliced code's pieces are slots.
+theorem Ty::sliced_slots(tys: Nat → RecInfo, p: Ty): p.Sliced(tys) → Ty::Slots(p.pieces(tys)) {
+    match p {
+        Word(w) => λ lt => ⟨Inr(lt), trivial⟩,
+        Bit => λ _ => ⟨trivial, trivial⟩,
+        ByteList(_) => λ never => false_elim(never),
+        Lines => λ never => false_elim(never),
+        Named(i) => λ ok => ok,
+        Count => λ never => false_elim(never),
+        Enum(i) => λ ok => ⟨Inl(refl), ok.right⟩,
+    }
+}
+
+// A code a call can pass: in its own words (`Ty::Sent`), or a slot at a
+// time, its narrow slots widened first (`Ty::Sliced`).
+fn Ty::Sendable(self p: Ty, tys: Nat → RecInfo) → Type { p.Sent(tys) ∨ p.Sliced(tys) }
+
+fn Ty::check_sendable(self p: Ty, tys: Nat → RecInfo) → Option<p.Sendable(tys)> {
+    match p.check_sliced(tys) { Some(n) => Some(Inr(n)), None => p.check_sent(tys).and_then(λ e => Some(Inl(e))) }
+}
+
 fn Ty::Sents(tys: Nat → RecInfo, ps: List<Ty>) → Type {
-    match ps { Nil => True, Cons(p, rest) => p.Sent(tys) ∧ Ty::Sents(tys, rest) }
+    match ps { Nil => True, Cons(p, rest) => p.Sendable(tys) ∧ Ty::Sents(tys, rest) }
 }
 
 fn Ty::check_sents(tys: Nat → RecInfo, ps: List<Ty>) → Option<Ty::Sents(tys, ps)> {
     match ps {
         Nil => Some(trivial),
-        Cons(p, rest) => p.check_sent(tys).and_then(λ e => Ty::check_sents(tys, rest).and_then(λ ok => Some(⟨e, ok⟩))),
+        Cons(p, rest) => p.check_sendable(tys).and_then(λ e => Ty::check_sents(tys, rest).and_then(λ ok => Some(⟨e, ok⟩))),
     }
 }
 
 theorem Ty::sent_passes(tys: Nat → RecInfo, p: Ty): p.Sent(tys) → p.Passes(tys) {
     match p {
         Word(_) => λ _ => trivial, Bit => λ _ => trivial, ByteList(_) => λ _ => trivial, Lines => λ _ => trivial,
-        Named(_) => λ _ => trivial, Count => λ _ => trivial, Enum(_) => λ ok => ok,
+        Named(_) => λ _ => trivial, Count => λ _ => trivial, Enum(i) => λ ok => ⟨ok.left, Ty::words_slots(tys(i).alts.slots, ok.right)⟩,
     }
 }
 
+theorem Ty::sliced_passes(tys: Nat → RecInfo, p: Ty): p.Sliced(tys) → p.Passes(tys) {
+    match p {
+        Word(_) => λ _ => trivial, Bit => λ _ => trivial, ByteList(_) => λ never => false_elim(never), Lines => λ never => false_elim(never),
+        Named(_) => λ _ => trivial, Count => λ never => false_elim(never), Enum(_) => λ ok => ok,
+    }
+}
+
+theorem Ty::sendable_passes(tys: Nat → RecInfo, p: Ty, ok: p.Sendable(tys)): p.Passes(tys) {
+    match ok { Inl(e) => Ty::sent_passes(tys, p, e), Inr(n) => Ty::sliced_passes(tys, p, n) }
+}
+
 theorem Ty::sents_pass(tys: Nat → RecInfo, ps: List<Ty>): Ty::Sents(tys, ps) → Ty::PassesAll(tys, ps) {
-    match ps { Nil => λ _ => trivial, Cons(p, rest) => λ ok => ⟨Ty::sent_passes(tys, p, ok.left), Ty::sents_pass(tys, rest, ok.right)⟩ }
+    match ps { Nil => λ _ => trivial, Cons(p, rest) => λ ok => ⟨Ty::sendable_passes(tys, p, ok.left), Ty::sents_pass(tys, rest, ok.right)⟩ }
 }
 
 // A code held in one word is sent in it.
@@ -1778,7 +2142,7 @@ theorem Ty::held_sent(tys: Nat → RecInfo, p: Ty): p.Held(tys) → p.Sent(tys) 
 }
 
 theorem Ty::helds_sents(tys: Nat → RecInfo, ps: List<Ty>): Ty::Helds(tys, ps) → Ty::Sents(tys, ps) {
-    match ps { Nil => λ _ => trivial, Cons(p, rest) => λ ok => ⟨Ty::held_sent(tys, p, ok.left), Ty::helds_sents(tys, rest, ok.right)⟩ }
+    match ps { Nil => λ _ => trivial, Cons(p, rest) => λ ok => ⟨Inl(Ty::held_sent(tys, p, ok.left)), Ty::helds_sents(tys, rest, ok.right)⟩ }
 }
 
 // A contract's parameter at the words a caller's ports hold for a value
@@ -1821,6 +2185,77 @@ theorem Ty::takes_holds(tys: Nat → RecInfo, p: Ty): (K: List<BitVec(64)> → p
     }
 }
 
+// A value's pieces, as the fields its pieces hold.
+fn Ty::flats_of(self p: Ty, tys: Nat → RecInfo) → p.sem(tys) → Ty::Flats(p.pieces(tys)) {
+    match p as λ x => x.sem(tys) → Ty::Flats(x.pieces(tys)) {
+        Word(w) => λ v => Pair(v, trivial),
+        Bit => λ v => Pair(v, trivial),
+        ByteList(_) => λ _ => trivial,
+        Lines => λ _ => trivial,
+        Named(i) => λ v => tys(i).get(v),
+        Count => λ _ => trivial,
+        Enum(i) => λ v => Pair(RecInfo::enum_word(tys, i, v), tys(i).alts.fields(v)),
+    }
+}
+
+// A code's ports are its pieces'.
+theorem Ty::ids_pieces(tys: Nat → RecInfo, p: Ty, q: Nat): p.Sliced(tys) → p.ids(tys, q) = Ty::ports_from(p.pieces(tys), q) {
+    match p {
+        Word(_) => λ _ => refl, Bit => λ _ => refl,
+        ByteList(_) => λ never => false_elim(never), Lines => λ never => false_elim(never),
+        Named(i) => λ _ => refl, Count => λ never => false_elim(never),
+        Enum(i) => λ _ => refl,
+    }
+}
+
+// A value held at its port holds its pieces there.
+theorem Ty::holds_pieces(tys: Nat → RecInfo, p: Ty, values: Valuation(), q: Nat): p.Sliced(tys) → (v: p.sem(tys)) → p.Holds(tys, values, q, v) →
+    Ty::FieldsHold(p.pieces(tys), values, q, p.flats_of(tys, v)) {
+    match p {
+        Word(_) => λ _ v h => ⟨h, trivial⟩,
+        Bit => λ _ v h => ⟨h, trivial⟩,
+        ByteList(_) => λ never => false_elim(never),
+        Lines => λ never => false_elim(never),
+        Named(i) => λ _ v h => h,
+        Count => λ never => false_elim(never),
+        Enum(i) => λ _ v h => ⟨trans(sym(BitVec::ofNat_toNat(64, values(64, q))), cong_fn(λ (m: Nat) => BitVec::ofNat(m, n := 64), h.left.left)), h.right⟩,
+    }
+}
+
+// A contract's parameter at a sliced value's words is the value: each
+// piece read back off its word is itself (`Ty::slot_round`).
+theorem Ty::takes_sliced(tys: Nat → RecInfo, p: Ty): (K: List<BitVec(64)> → p.sem(tys) → Type) → p.Sliced(tys) → p.Takes(tys, K) →
+    (v: p.sem(tys)) → K(Ty::flats_words(p.pieces(tys), p.flats_of(tys, v)), v) {
+    match p {
+        Word(w) => λ K (lt: w < 64) t v => {
+            let ne = Nat::ne_of_lt(w, 64, lt);
+            let x = Word(w).flat_word(v);
+            let back: (Ty::cast(tys, Word(64), Word(w), x) = v) =
+                trans(Ty::cast_narrow_in(tys, w, ne, x), trans(sym(Ty::narrow_word_at(w, ne, x)), Ty::slot_round(Word(w), Inr(lt), v)));
+            j(back, λ u _ => K([x], u), t(x))
+        },
+        Bit => λ K _ t v => {
+            let x = Bit.flat_word(v);
+            let back: (Ty::cast(tys, Word(64), Bit, x) = v) = match v { False => refl, True => refl };
+            j(back, λ u _ => K([x], u), t(x))
+        },
+        ByteList(_) => λ K never => false_elim(never),
+        Lines => λ K never => false_elim(never),
+        Named(i) => λ K ok t v => {
+            let fs = tys(i).fields;
+            let ws = Ty::flats_words(fs, tys(i).get(v));
+            let at = Ty::takes_at(tys, Named(i), K, t, ws, trivial);
+            let firsts: (Ty::first(fs.len(), ws) = ws) = j(Ty::flats_words_len(fs, tys(i).get(v)), λ n _ => Ty::first(n, ws) = ws, Ty::first_all(ws));
+            let value: (tys(i).mk(Ty::flats_of_words(fs, ws)) = v) = trans(cong_fn(tys(i).mk,
+                trans(cong_fn(λ (ys: List<BitVec(64)>) => Ty::flats_of_words(fs, ys), sym(ws.append_nil())), Ty::slots_round(fs, ok, tys(i).get(v), Nil))),
+                tys(i).back(v));
+            j(value, λ u _ => K(ws, u), j(firsts, λ ys _ => K(ys, tys(i).mk(Ty::flats_of_words(fs, ws))), at))
+        },
+        Count => λ K never => false_elim(never),
+        Enum(i) => λ K _ t v => t(v),
+    }
+}
+
 theorem words_of_append(values: Valuation(), xs, ys: List<Nat>): words_of(values, xs ++ ys) = words_of(values, xs) ++ words_of(values, ys) {
     match xs { Nil => refl, Cons(x, rest) => cong_fn(λ (l: List<BitVec(64)>) => Cons(values(64, x), l), words_of_append(values, rest, ys)) }
 }
@@ -1831,20 +2266,20 @@ theorem words_of_append(values: Valuation(), xs, ys: List<Nat>): words_of(values
 // words.
 fn Ty::Back(self t: Ty, tys: Nat → RecInfo) → Type {
     match t {
-        Word(w) => w = 64, Bit => True, ByteList(_) => False, Lines => False, Named(i) => Ty::Words(tys(i).fields), Count => False,
-        Enum(i) => ((tys(i).alts.last + 1).leb(Nat::pow(2, 64)) = True) ∧ Ty::Words(tys(i).alts.slots),
+        Word(w) => (w = 64) ∨ (w < 64), Bit => True, ByteList(_) => False, Lines => False, Named(i) => Ty::Slots(tys(i).fields), Count => False,
+        Enum(i) => ((tys(i).alts.last + 1).leb(Nat::pow(2, 64)) = True) ∧ Ty::Slots(tys(i).alts.slots),
     }
 }
 
 fn Ty::check_back(self t: Ty, tys: Nat → RecInfo) → Option<t.Back(tys)> {
     match t as λ x => Option<x.Back(tys)> {
-        Word(w) => match w.equation(64) { Inl(e) => Some(e), Inr(_) => None },
+        Word(w) => Ty::check_narrow(w),
         Bit => Some(trivial), ByteList(_) => None, Lines => None,
-        Named(i) => Ty::check_words(tys(i).fields),
+        Named(i) => Ty::check_slots(tys(i).fields),
         Count => None,
-        Enum(i) => match (tys(i).alts.last + 1).leb(Nat::pow(2, 64)) as λ b => Option<(b = True) ∧ Ty::Words(tys(i).alts.slots)> {
+        Enum(i) => match (tys(i).alts.last + 1).leb(Nat::pow(2, 64)) as λ b => Option<(b = True) ∧ Ty::Slots(tys(i).alts.slots)> {
             False => None,
-            True => Ty::check_words(tys(i).alts.slots).and_then(λ ws => Some(⟨refl, ws⟩)),
+            True => Ty::check_slots(tys(i).alts.slots).and_then(λ ws => Some(⟨refl, ws⟩)),
         },
     }
 }
@@ -1852,10 +2287,10 @@ fn Ty::check_back(self t: Ty, tys: Nat → RecInfo) → Option<t.Back(tys)> {
 // A code returned in one word is read back in it.
 theorem Ty::returned_back(tys: Nat → RecInfo, t: Ty): t.Returned(tys) → t.Back(tys) {
     match t {
-        Word(_) => λ e => e, Bit => λ never => false_elim(never), ByteList(_) => λ never => false_elim(never), Lines => λ never => false_elim(never),
-        Named(i) => λ e => j(sym(e), λ g _ => Ty::Words(g), ⟨refl, trivial⟩),
+        Word(_) => λ e => Inl(e), Bit => λ never => false_elim(never), ByteList(_) => λ never => false_elim(never), Lines => λ never => false_elim(never),
+        Named(i) => λ e => j(sym(e), λ g _ => Ty::Slots(g), ⟨Inl(refl), trivial⟩),
         Count => λ never => false_elim(never),
-        Enum(i) => λ ok => ⟨ok.left, Ty::bare_words(tys(i).alts.slots, ok.right)⟩,
+        Enum(i) => λ ok => ⟨ok.left, Ty::words_slots(tys(i).alts.slots, Ty::bare_words(tys(i).alts.slots, ok.right))⟩,
     }
 }
 
@@ -1901,48 +2336,49 @@ theorem Ty::back_len(tys: Nat → RecInfo, t: Ty, port: Nat): (v: t.sem(tys)) �
     }
 }
 
-// Fields of 64-bit words whose ports read their words hold there.
-theorem Ty::ports_holds_of(values: Valuation(), fs: List<Ty>): (port: Nat) → Ty::Words(fs) → (t: Ty::Flats(fs)) →
-    words_of(values, Ty::ports_from(fs, port)) = Ty::flats_words(fs, t) → Ty::FieldsHold(fs, values, port, t) {
-    match fs {
-        Nil => λ port _ t _ => trivial,
-        Cons(f, rest) => λ port ok t h => {
-            let parts = words_cons_parts(values(64, port), words_of(values, Ty::ports_from(rest, port + 1)),
-                Cons(f.flat_word(t.fst), Ty::flats_words(rest, t.snd)), h);
-            ⟨j(sym(ok.left), λ g _ => (x: g.Flat()) → values(64, port) = g.flat_word(x) → g.FlatHolds(values, port, x), λ x e => e)(t.fst, parts.left),
-                Ty::ports_holds_of(values, rest, port + 1, ok.right, t.snd, parts.right)⟩
-        },
-    }
-}
-
-theorem Ty::fields_back_holds(values: Valuation(), fs: List<Ty>, port: Nat): Ty::Words(fs) → (t: Ty::Flats(fs)) →
-    words_of(values, Cons(port, Ty::fields_also_ports(fs, port))) = Cons(Ty::flats_head_word(fs, t), Ty::flats_tail_words(fs, t)) →
+// Fields whose ports are bound to their words hold there.
+theorem Ty::fields_back_holds(values: Valuation(), fs: List<Ty>, port: Nat): Ty::Slots(fs) → Ty::BoundAt(values, Cons(port, Ty::fields_also_ports(fs, port))) →
+    (t: Ty::Flats(fs)) → words_of(values, Cons(port, Ty::fields_also_ports(fs, port))) = Cons(Ty::flats_head_word(fs, t), Ty::flats_tail_words(fs, t)) →
     Ty::FieldsHold(fs, values, port, t) {
     match fs {
-        Nil => λ _ t _ => trivial,
-        Cons(f, rest) => λ ok t h => Ty::ports_holds_of(values, Cons(f, rest), port, ok, t, h),
+        Nil => λ _ _ t _ => trivial,
+        Cons(f, rest) => λ ok bound t h => Ty::slots_bound(values, Cons(f, rest), port, ok, bound, t, h),
     }
 }
 
 // A value whose ports read its words holds there.
-// A bit's word, zero or one, read back at one bit is the bit.
-theorem Ty::bit_back(v: Bool): word_value(BitVec::ofNat(BitVec::ofBool(v).toNat(), n := 64), 1) = BitVec::ofBool(v) {
-    match v { False => refl, True => refl }
-}
 
 theorem Ty::back_holds(tys: Nat → RecInfo, t: Ty, values: Valuation(), port: Nat,
-    bound: (wd: Nat) → values(wd, port) = word_value(values(64, port), wd)): t.Back(tys) → (v: t.sem(tys)) →
+    bound_all: Ty::BoundAt(values, Cons(port, t.also_ports(tys, port)))): t.Back(tys) → (v: t.sem(tys)) →
     words_of(values, Cons(port, t.also_ports(tys, port))) = Ty::result_words(tys, t, v) → t.Holds(tys, values, port, v) {
+    let bound = bound_all.left;
     match t {
-        Word(w) => λ e v h => Ty::returned_holds(tys, values, port, Word(w), e, v,
-            words_cons_parts(values(64, port), Nil, Ty::result_words(tys, Word(w), v), h).left),
+        Word(w) => λ ok v h => match ok {
+            Inl(e) => Ty::returned_holds(tys, values, port, Word(w), e, v, words_cons_parts(values(64, port), Nil, Ty::result_words(tys, Word(w), v), h).left),
+            // A narrow word is read back from its zero extension, which
+            // binding the word gives its port at its width.
+            Inr(lt) => {
+                let small: (v.toNat() < Nat::pow(2, 64)) = Nat::lt_of_lt_of_le(v.toNat(), Nat::pow(2, w), Nat::pow(2, 64),
+                    BitVec::toNat_lt_pow(w, v), Nat::pow_le_pow_r(2, w, 64, trivial, w.le_of_lt(64, lt)));
+                let ne = Nat::ne_of_lt(w, 64, lt);
+                let word: (values(64, port) = BitVec::ofNat(v.toNat())) =
+                    trans(words_cons_parts(values(64, port), Nil, Ty::result_words(tys, Word(w), v), h).left, Ty::cast_narrow_out(tys, w, ne, v));
+                let at_w: (word_value(values(64, port), w) = BitVec::ofNat(values(64, port).toNat())) =
+                    j(sym(Or::inr_apart(Nat::equation(64, w), λ e => ne(sym(e)))), λ d _ =>
+                        (match d as λ _ => BitVec(w) { Inl(e) => j(e, λ y _ => BitVec(y), values(64, port)), Inr(_) => BitVec::ofNat(values(64, port).toNat()) })
+                            = BitVec::ofNat(values(64, port).toNat()),
+                        refl);
+                trans(bound(w), trans(at_w, trans(cong_fn(λ (y: BitVec(64)) => BitVec::ofNat(y.toNat(), n := w), word),
+                    trans(cong_fn(λ (m: Nat) => BitVec::ofNat(m, n := w), BitVec::toNat_ofNat(64, v.toNat(), small)), BitVec::ofNat_toNat(w, v)))))
+            },
+        },
         // A bit is read back from the word it was returned in (zero or
         // one), which binding the word gives its port at one bit.
         Bit => λ _ v h => trans(bound(1), trans(cong_fn(λ (x: BitVec(64)) => word_value(x, 1),
             words_cons_parts(values(64, port), Nil, Ty::result_words(tys, Bit, v), h).left), Ty::bit_back(v))),
         ByteList(_) => λ never => false_elim(never),
         Lines => λ never => false_elim(never),
-        Named(i) => λ ok v h => Ty::fields_back_holds(values, tys(i).fields, port, ok, tys(i).get(v), h),
+        Named(i) => λ ok v h => Ty::fields_back_holds(values, tys(i).fields, port, ok, bound_all, tys(i).get(v), h),
         Count => λ never => false_elim(never),
         Enum(i) => λ ok v h => {
             let e = tys(i).alts;
@@ -1950,7 +2386,7 @@ theorem Ty::back_holds(tys: Nat → RecInfo, t: Ty, values: Valuation(), port: N
             let lt: (e.tag(v) < Nat::pow(2, 64)) = Nat::le_trans(e.tag(v) + 1, e.last + 1, Nat::pow(2, 64), Nat::le_succ_succ(e.tag(v), e.last, e.bounded(v)),
                 Nat::le_of_leb(e.last + 1, Nat::pow(2, 64), ok.left));
             let word: (values(64, port).toNat() = e.tag(v)) = trans(cong_fn(λ (y: BitVec(64)) => y.toNat(), parts.left), BitVec::toNat_ofNat(64, e.tag(v), lt));
-            ⟨⟨word, j(sym(word), λ y _ => y <= e.last, e.bounded(v))⟩, Ty::ports_holds_of(values, e.slots, port + 1, ok.right, e.fields(v), parts.right)⟩
+            ⟨⟨word, j(sym(word), λ y _ => y <= e.last, e.bounded(v))⟩, Ty::slots_bound(values, e.slots, port + 1, ok.right, bound_all.right, e.fields(v), parts.right)⟩
         },
     }
 }
@@ -2006,9 +2442,6 @@ theorem Tm::calls_agree_none_over(tys: Nat → RecInfo, spans: List<List<BitVec(
 // `and_then`, its continuation a named function where it is not recursive,
 // so the soundness proof walks the same chain (`Option::and_then_elim`).
 
-fn Tm::check_true(b: Bool) → Option<b.IsTrue()> {
-    match b as λ x => Option<x.IsTrue()> { False => None, True => Some(trivial) }
-}
 
 // One node writing `next`, the result there.
 fn Tm::one_node(node: Node, next: Nat) → Lowered { Lowered(nodes_region([node]), next, next + 1) }
@@ -2283,15 +2716,41 @@ fn Tm::lower_slot(w: World, g: List<Ty>, ports: List<Nat>, next, i, j, of: Nat) 
 }
 
 // A call's arguments: each a variable at its parameter's code, one per
-// parameter, each passed in its code's words (`Ty::Sent`, `Ty::ids`).
-fn Tm::call_args(tys: Nat → RecInfo, g: List<Ty>, ports: List<Nat>, ps: List<Ty>, args: List<Nat>) → Option<List<Nat>> {
+// parameter, each passed in its code's words (`Ty::ids`): whole where its
+// ports hold its words (`Ty::Sent`), else a slot at a time, a narrow slot
+// first zero-extended into a port of its own from `next` on
+// (`Ty::Sliced`, `Tm::send_slots`). `nodes` are the widenings, `ports`
+// the words the call passes, `next` past the widened ports.
+record Sending { nodes: List<Node>, ports: List<Nat>, next: Nat }
+
+fn Tm::send_narrow_slot(f: Ty, port, next: Nat, s: Sending) → Sending { Sending(Cons(Resize(f.width(), 64, next, port), s.nodes), Cons(next, s.ports), s.next) }
+
+fn Tm::send_wide_slot(port: Nat, s: Sending) → Sending { Sending(s.nodes, Cons(port, s.ports), s.next) }
+
+fn Tm::send_slots(fs: List<Ty>, port, next: Nat) → Sending {
+    match fs {
+        Nil => Sending(Nil, Nil, next),
+        Cons(f, rest) => match f.slot_narrow() {
+            True => Tm::send_narrow_slot(f, port, next, Tm::send_slots(rest, port + 1, next + 1)),
+            False => Tm::send_wide_slot(port, Tm::send_slots(rest, port + 1, next)),
+        },
+    }
+}
+
+fn Tm::then_send(a, b: Sending) → Sending { Sending(a.nodes ++ b.nodes, a.ports ++ b.ports, b.next) }
+
+fn Tm::send_whole(tys: Nat → RecInfo, p: Ty, q: Nat, s: Sending) → Sending { Sending(s.nodes, p.ids(tys, q) ++ s.ports, s.next) }
+
+fn Tm::send_args(tys: Nat → RecInfo, g: List<Ty>, ports: List<Nat>, ps: List<Ty>, args: List<Nat>, next: Nat) → Option<Sending> {
     match ps {
-        Nil => match args { Nil => Some(Nil), Cons(_, _) => None },
+        Nil => match args { Nil => Some(Sending(Nil, Nil, next)), Cons(_, _) => None },
         Cons(p, rest) => match args {
             Nil => None,
-            Cons(a, more) => port_at(ports, a).and_then(λ q =>
-                Ty::at(g, a).check(p).and_then(λ _ => p.check_sent(tys).and_then(λ _ =>
-                    Tm::call_args(tys, g, ports, rest, more).and_then(λ qs => Some(p.ids(tys, q) ++ qs))))),
+            Cons(a, more) => port_at(ports, a).and_then(λ q => Ty::at(g, a).check(p).and_then(λ _ => match p.check_sliced(tys) {
+                Some(_) => Tm::send_args(tys, g, ports, rest, more, Tm::send_slots(p.pieces(tys), q, next).next).and_then(λ s =>
+                    Some(Tm::then_send(Tm::send_slots(p.pieces(tys), q, next), s))),
+                None => p.check_sent(tys).and_then(λ _ => Tm::send_args(tys, g, ports, rest, more, next).and_then(λ s => Some(Tm::send_whole(tys, p, q, s)))),
+            })),
         },
     }
 }
@@ -2325,18 +2784,28 @@ fn Tm::called_word(f: Nat, qs: List<Nat>, next: Nat) → Lowered {
     Lowered(Compose(Call(f, qs, next, []), nodes_region([Move(64, next + 1, next)])), next + 1, next + 2)
 }
 
-fn Tm::lower_call_args(w: World, g: List<Ty>, ports: List<Nat>, next, f: Nat, args: List<Nat>) → Option<Lowered> {
-    Tm::call_args(w.tys, g, ports, Sig::at(w.sigs, f).params, args).and_then(λ qs => Some(Tm::called(w.tys, Sig::at(w.sigs, f).result, f, qs, next)))
+// The widenings, then the code after them (none: the code alone).
+fn Tm::sent_then(nodes: List<Node>, c: Lowered) → Lowered {
+    Lowered(match nodes { Nil => c.region, Cons(_, _) => Compose(nodes_region(nodes), c.region) }, c.result, c.next)
+}
+
+theorem Tm::sent_then_eval(call: function_ir_eval::Answers(), buffers: Buffers(), values: Valuation(), c: Lowered): (nodes: List<Node>) →
+    Tm::sent_then(nodes, c).region.eval(call, values, buffers := buffers) = c.region.eval(call, eval_nodes_over(buffers, nodes, values), buffers := buffers) {
+    λ nodes => match nodes { Nil => refl, Cons(_, _) => refl }
 }
 
 // The ports the call's words land at are distinct, which the region's
 // evaluation reads them back by (`words_of_bind`).
-fn Tm::lower_call_outs(w: World, g: List<Ty>, ports: List<Nat>, next, f: Nat, args: List<Nat>) → Option<Lowered> {
-    Tm::check_true(distinct(Cons(next, Sig::at(w.sigs, f).result.also_ports(w.tys, next)))).and_then(λ _ => Tm::lower_call_args(w, g, ports, next, f, args))
+fn Tm::lower_call_at(w: World, r: Ty, f: Nat, s: Sending) → Option<Lowered> {
+    Tm::check_true(distinct(Cons(s.next, r.also_ports(w.tys, s.next)))).and_then(λ _ => Some(Tm::sent_then(s.nodes, Tm::called(w.tys, r, f, s.ports, s.next))))
+}
+
+fn Tm::lower_call_args(w: World, g: List<Ty>, ports: List<Nat>, next, f: Nat, args: List<Nat>) → Option<Lowered> {
+    Tm::send_args(w.tys, g, ports, Sig::at(w.sigs, f).params, args, next).and_then(λ s => Tm::lower_call_at(w, Sig::at(w.sigs, f).result, f, s))
 }
 
 fn Tm::lower_call_result(w: World, g: List<Ty>, ports: List<Nat>, next, f: Nat, args: List<Nat>) → Option<Lowered> {
-    Sig::at(w.sigs, f).result.check_back(w.tys).and_then(λ _ => Tm::lower_call_outs(w, g, ports, next, f, args))
+    Sig::at(w.sigs, f).result.check_back(w.tys).and_then(λ _ => Tm::lower_call_args(w, g, ports, next, f, args))
 }
 
 // A call of the program's function `f`: FunctionIR's `Call` of the same
@@ -3101,40 +3570,224 @@ theorem Tm::ifeq_of_if(c: Nat, yes, no: Tm, w: World, g: List<Ty>, ports: List<N
     }
 }
 
-// A call's argument ports hold words whose answer is the callee's meaning
-// on the meaning's arguments, every word of it.
-theorem Tm::call_args_sound(w: World, g: List<Ty>, ports: List<Nat>, values: Valuation(), env: Env(w.tys, g),
-    held: EnvHolds(w.tys, values, g, ports, env), r: Ty, ps: List<Ty>):
-    (args: List<Nat>) → (F: Ty::Arrows(w.tys, ps, r)) → (ans: List<BitVec(64)> → List<BitVec(64)>) →
-    Ty::AnswersWords(w.tys, ps, r, F, ans) → (qs: List<Nat>) → Tm::call_args(w.tys, g, ports, ps, args) = Some(qs) →
-    ans(words_of(values, qs)) = Ty::result_words(w.tys, r, Tm::apply(w, g, env, r, ps, F, args)) {
+theorem Tm::nodes_append(buffers: Buffers(), a: List<Node>): (b: List<Node>) → (values: Valuation()) →
+    eval_nodes_over(buffers, a ++ b, values) = eval_nodes_over(buffers, b, eval_nodes_over(buffers, a, values)) {
+    match a { Nil => λ b values => refl, Cons(n, rest) => λ b values => Tm::nodes_append(buffers, rest, b, n.step(values, buffers := buffers)) }
+}
+
+// What sending slots leaves: the widenings write from `next` on, the
+// words passed are the slots', and every port passed is below the end.
+fn Tm::SlotsSent(buffers: Buffers(), fs: List<Ty>, values: Valuation(), next: Nat, s: Sending, t: Ty::Flats(fs)) → Type {
+    (next <= s.next) ∧ (Keeps(values, eval_nodes_over(buffers, s.nodes, values), next) ∧
+        ((words_of(eval_nodes_over(buffers, s.nodes, values), s.ports) = Ty::flats_words(fs, t)) ∧ ((x: Nat) → Mem(x, s.ports) → x < s.next)))
+}
+
+theorem Tm::send_slots_sound(buffers: Buffers(), fs: List<Ty>): (port, next: Nat) → Ty::Slots(fs) → Ty::FieldsBelow(fs, port, next) → (values: Valuation()) →
+    (t: Ty::Flats(fs)) → Ty::FieldsHold(fs, values, port, t) → Tm::SlotsSent(buffers, fs, values, next, Tm::send_slots(fs, port, next), t) {
+    match fs {
+        Nil => λ port next _ _ values t _ => ⟨next.le_refl(), ⟨λ wd id lt => refl, ⟨refl, λ x never => false_elim(never)⟩⟩⟩,
+        Cons(f, rest) => λ port next ok below values t held => {
+            let G = λ (s: Sending) => Tm::SlotsSent(buffers, Cons(f, rest), values, next, s, t);
+            let narrow = Tm::send_narrow_slot(f, port, next, Tm::send_slots(rest, port + 1, next + 1));
+            let wide = Tm::send_wide_slot(port, Tm::send_slots(rest, port + 1, next));
+            (match f.slot_narrow() as λ b => f.slot_narrow() = b → G(match b { True => narrow, False => wide }) {
+                True => λ _ => {
+                    let node = Resize(f.width(), 64, next, port);
+                    let set = node.step(values, buffers := buffers);
+                    let step: (next <= next + 1) = Nat::le_succ_r(next, next, next.le_refl());
+                    let kept: Keeps(values, set, next) = λ wd id lt => Valuation::set_other(values, next, node.value(values, buffers := buffers), wd, id, Nat::ne_of_lt(id, next, lt));
+                    let s1 = Tm::send_slots(rest, port + 1, next + 1);
+                    let ih = Tm::send_slots_sound(buffers, rest, port + 1, next + 1, ok.right, Ty::fields_below_mono(rest, next, next + 1, step, port + 1, below.right), set, t.snd,
+                        Ty::fields_at(rest, values, set, port + 1, port + 1, Ty::fields_kept(rest, values, set, next, kept, port + 1, below.right), t.snd, held.right));
+                    let after = eval_nodes_over(buffers, s1.nodes, set);
+                    let head: (after(64, next) = f.flat_word(t.fst)) = trans(ih.right.left(64, next, next.lt_succ_self()),
+                        trans(Valuation::set_here(values, next, node.value(values, buffers := buffers), 64), Ty::slot_widened(f, ok.left, values, port, t.fst, held.left)));
+                    ⟨Nat::le_trans(next, next + 1, s1.next, step, ih.left),
+                        ⟨λ wd id lt => trans(ih.right.left(wd, id, Nat::lt_of_lt_of_le(id, next, next + 1, lt, step)), kept(wd, id, lt)),
+                            ⟨eq2(λ (a: BitVec(64)) (r: List<BitVec(64)>) => Cons(a, r), head, ih.right.right.left),
+                                λ x mem => match mem {
+                                    Inl(e) => j(sym(e), λ y _ => y < s1.next, Nat::lt_of_lt_of_le(next, next + 1, s1.next, next.lt_succ_self(), ih.left)),
+                                    Inr(later) => ih.right.right.right(x, later),
+                                }⟩⟩⟩
+                },
+                False => λ e => {
+                    let s1 = Tm::send_slots(rest, port + 1, next);
+                    let ih = Tm::send_slots_sound(buffers, rest, port + 1, next, ok.right, below.right, values, t.snd, held.right);
+                    let after = eval_nodes_over(buffers, s1.nodes, values);
+                    let word: (values(64, port) = f.flat_word(t.fst)) = j(sym(Ty::slot_wide(f, ok.left, e)), λ g _ => (x: g.Flat()) → g.FlatHolds(values, port, x) → values(64, port) = g.flat_word(x),
+                        λ x h => h)(t.fst, held.left);
+                    ⟨ih.left, ⟨ih.right.left,
+                        ⟨eq2(λ (a: BitVec(64)) (r: List<BitVec(64)>) => Cons(a, r), trans(ih.right.left(64, port, below.left), word), ih.right.right.left),
+                            λ x mem => match mem {
+                                Inl(same) => j(sym(same), λ y _ => y < s1.next, Nat::lt_of_lt_of_le(port, next, s1.next, below.left, ih.left)),
+                                Inr(later) => ih.right.right.right(x, later),
+                            }⟩⟩⟩
+                },
+            })(refl)
+        },
+    }
+}
+
+// A value's pieces are below where its ports end.
+theorem Ty::pieces_below(tys: Nat → RecInfo, p: Ty, q, next: Nat): p.Sliced(tys) → p.Below(tys, q, next) → Ty::FieldsBelow(p.pieces(tys), q, next) {
+    match p {
+        Word(_) => λ _ b => ⟨b, trivial⟩, Bit => λ _ b => ⟨b, trivial⟩,
+        ByteList(_) => λ never => false_elim(never), Lines => λ never => false_elim(never),
+        Named(i) => λ _ b => b, Count => λ never => false_elim(never),
+        Enum(i) => λ _ b => b,
+    }
+}
+
+theorem Tm::send_slots_keeps(buffers: Buffers(), fs: List<Ty>): (port, next: Nat) → (values: Valuation()) →
+    (next <= Tm::send_slots(fs, port, next).next) ∧ Keeps(values, eval_nodes_over(buffers, Tm::send_slots(fs, port, next).nodes, values), next) {
+    match fs {
+        Nil => λ port next values => ⟨next.le_refl(), λ wd id lt => refl⟩,
+        Cons(f, rest) => λ port next values => {
+            let G = λ (s: Sending) => (next <= s.next) ∧ Keeps(values, eval_nodes_over(buffers, s.nodes, values), next);
+            let narrow = Tm::send_narrow_slot(f, port, next, Tm::send_slots(rest, port + 1, next + 1));
+            let wide = Tm::send_wide_slot(port, Tm::send_slots(rest, port + 1, next));
+            (match f.slot_narrow() as λ b => f.slot_narrow() = b → G(match b { True => narrow, False => wide }) {
+                True => λ _ => {
+                    let node = Resize(f.width(), 64, next, port);
+                    let set = node.step(values, buffers := buffers);
+                    let step: (next <= next + 1) = Nat::le_succ_r(next, next, next.le_refl());
+                    let ih = Tm::send_slots_keeps(buffers, rest, port + 1, next + 1, set);
+                    ⟨Nat::le_trans(next, next + 1, Tm::send_slots(rest, port + 1, next + 1).next, step, ih.left),
+                        λ wd id lt => trans(ih.right(wd, id, Nat::lt_of_lt_of_le(id, next, next + 1, lt, step)),
+                            Valuation::set_other(values, next, node.value(values, buffers := buffers), wd, id, Nat::ne_of_lt(id, next, lt)))⟩
+                },
+                False => λ _ => Tm::send_slots_keeps(buffers, rest, port + 1, next, values),
+            })(refl)
+        },
+    }
+}
+
+// The widenings write only from `next` on.
+theorem Tm::send_keeps(tys: Nat → RecInfo, g: List<Ty>, ports: List<Nat>, buffers: Buffers(), ps: List<Ty>):
+    (args: List<Nat>) → (next: Nat) → (s: Sending) → Tm::send_args(tys, g, ports, ps, args, next) = Some(s) →
+    (values: Valuation()) → (next <= s.next) ∧ Keeps(values, eval_nodes_over(buffers, s.nodes, values), next) {
     match ps {
         Nil => λ args => match args {
-            Nil => λ F ans answers qs e =>
-                j(Option::some_inj(Nil, qs, e), λ z _ => ans(words_of(values, z)) = Ty::result_words(w.tys, r, F), answers),
-            Cons(a, more) => λ F ans answers qs e => Option::none_ne_some(qs, e,
-                ans(words_of(values, qs)) = Ty::result_words(w.tys, r, Tm::apply(w, g, env, r, Nil, F, Cons(a, more)))),
+            Nil => λ next s e => j(Option::some_inj(Sending(Nil, Nil, next), s, e), λ z _ =>
+                (values: Valuation()) → (next <= z.next) ∧ Keeps(values, eval_nodes_over(buffers, z.nodes, values), next),
+                λ values => ⟨next.le_refl(), λ wd id lt => refl⟩),
+            Cons(a, more) => λ next s e => Option::none_ne_some(s, e,
+                (values: Valuation()) → (next <= s.next) ∧ Keeps(values, eval_nodes_over(buffers, s.nodes, values), next)),
         },
         Cons(p, rest) => λ args => match args {
-            Nil => λ F ans answers qs e => Option::none_ne_some(qs, e,
-                ans(words_of(values, qs)) = Ty::result_words(w.tys, r, Tm::apply(w, g, env, r, Cons(p, rest), F, Nil))),
-            Cons(a, more) => λ F ans answers => {
-                let Goal = λ (qs: List<Nat>) => ans(words_of(values, qs)) = Ty::result_words(w.tys, r, Tm::apply(w, g, env, r, Cons(p, rest), F, Cons(a, more)));
-                let P = λ (o: Option<List<Nat>>) => (qs: List<Nat>) → o = Some(qs) → Goal(qs);
-                let none: P(None) = λ qs e => Option::none_ne_some(qs, e, Goal(qs));
-                let after = λ (q: Nat) => p.check_sent(w.tys).and_then(λ _ => Tm::call_args(w.tys, g, ports, rest, more).and_then(λ qs => Some(p.ids(w.tys, q) ++ qs)));
-                Option::and_then_elim(P, none, port_at(ports, a), λ q => Ty::at(g, a).check(p).and_then(λ _ => after(q)), λ q at_q =>
-                Option::and_then_elim(P, none, Ty::at(g, a).check(p), λ _ => after(q), λ ea _ =>
-                Option::and_then_elim(P, none, p.check_sent(w.tys), λ _ => Tm::call_args(w.tys, g, ports, rest, more).and_then(λ qs => Some(p.ids(w.tys, q) ++ qs)), λ hp _ =>
-                Option::and_then_elim(P, none, Tm::call_args(w.tys, g, ports, rest, more), λ qs => Some(p.ids(w.tys, q) ++ qs), λ found e_rest =>
-                    λ qs e => j(Option::some_inj(p.ids(w.tys, q) ++ found, qs, e), λ z _ => Goal(z), {
-                        let v = Ty::cast(w.tys, Ty::at(g, a), p, Env::get(w.tys, g, env, a));
-                        let ids = p.ids(w.tys, q);
-                        let taken = Ty::takes_holds(w.tys, p, λ ws u => Ty::AnswersWords(w.tys, rest, r, F(u), λ more2 => ans(ws ++ more2)), hp, answers,
-                            values, q, v, Tm::operand(w, g, ports, values, env, held, a, q, at_q, p, ea));
-                        trans(cong_fn(λ (l: List<BitVec(64)>) => ans(l), words_of_append(values, ids, found)),
-                            Tm::call_args_sound(w, g, ports, values, env, held, r, rest, more, F(v), λ ws => ans(words_of(values, ids) ++ ws), taken, found, e_rest))
-                    })))))
+            Nil => λ next s e => Option::none_ne_some(s, e,
+                (values: Valuation()) → (next <= s.next) ∧ Keeps(values, eval_nodes_over(buffers, s.nodes, values), next)),
+            Cons(a, more) => λ next => {
+                let Goal = λ (s: Sending) => (values: Valuation()) → (next <= s.next) ∧ Keeps(values, eval_nodes_over(buffers, s.nodes, values), next);
+                let P = λ (o: Option<Sending>) => (s: Sending) → o = Some(s) → Goal(s);
+                let none: P(None) = λ s e => Option::none_ne_some(s, e, Goal(s));
+                let whole = λ (q: Nat) => p.check_sent(tys).and_then(λ _ => Tm::send_args(tys, g, ports, rest, more, next).and_then(λ s => Some(Tm::send_whole(tys, p, q, s))));
+                let sliced = λ (q: Nat) => Tm::send_args(tys, g, ports, rest, more, Tm::send_slots(p.pieces(tys), q, next).next).and_then(λ s =>
+                    Some(Tm::then_send(Tm::send_slots(p.pieces(tys), q, next), s)));
+                let step = λ (q: Nat) => match p.check_sliced(tys) { Some(_) => sliced(q), None => whole(q) };
+                Option::and_then_elim(P, none, port_at(ports, a), λ q => Ty::at(g, a).check(p).and_then(λ _ => step(q)), λ q _ =>
+                Option::and_then_elim(P, none, Ty::at(g, a).check(p), λ _ => step(q), λ _ _ =>
+                    match p.check_sliced(tys) as λ o => P(match o { Some(_) => sliced(q), None => whole(q) }) {
+                        Some(_) => {
+                            let s1 = Tm::send_slots(p.pieces(tys), q, next);
+                            Option::and_then_elim(P, none, Tm::send_args(tys, g, ports, rest, more, s1.next), λ s => Some(Tm::then_send(s1, s)),
+                                λ s2 e2 s e => j(Option::some_inj(Tm::then_send(s1, s2), s, e), λ z _ => Goal(z), λ values => {
+                                    let first = Tm::send_slots_keeps(buffers, p.pieces(tys), q, next, values);
+                                    let ih = Tm::send_keeps(tys, g, ports, buffers, rest, more, s1.next, s2, e2, eval_nodes_over(buffers, s1.nodes, values));
+                                    let same = Tm::nodes_append(buffers, s1.nodes, s2.nodes, values);
+                                    ⟨Nat::le_trans(next, s1.next, s2.next, first.left, ih.left),
+                                        λ wd id lt => trans(cong_fn(λ (u: Valuation()) => u(wd, id), same),
+                                            trans(ih.right(wd, id, Nat::lt_of_lt_of_le(id, next, s1.next, lt, first.left)), first.right(wd, id, lt)))⟩
+                                }))
+                        },
+                        None => Option::and_then_elim(P, none, p.check_sent(tys), λ _ => Tm::send_args(tys, g, ports, rest, more, next).and_then(λ s => Some(Tm::send_whole(tys, p, q, s))), λ _ _ =>
+                            Option::and_then_elim(P, none, Tm::send_args(tys, g, ports, rest, more, next), λ s => Some(Tm::send_whole(tys, p, q, s)),
+                                λ s1 e1 s e => j(Option::some_inj(Tm::send_whole(tys, p, q, s1), s, e), λ z _ => Goal(z),
+                                    λ values => Tm::send_keeps(tys, g, ports, buffers, rest, more, next, s1, e1, values)))),
+                    }))
+            },
+        },
+    }
+}
+
+// The words a call passes, after its widenings, answer the callee's
+// meaning on the meaning's arguments, every word of it.
+theorem Tm::send_answers(w: World, g: List<Ty>, ports: List<Nat>, buffers: Buffers(), env: Env(w.tys, g), r: Ty, ps: List<Ty>):
+    (args: List<Nat>) → (next: Nat) → (s: Sending) → Tm::send_args(w.tys, g, ports, ps, args, next) = Some(s) →
+    (values: Valuation()) → EnvHolds(w.tys, values, g, ports, env) → Below(w.tys, g, ports, next) →
+    (F: Ty::Arrows(w.tys, ps, r)) → (ans: List<BitVec(64)> → List<BitVec(64)>) → Ty::AnswersWords(w.tys, ps, r, F, ans) →
+    ans(words_of(eval_nodes_over(buffers, s.nodes, values), s.ports)) = Ty::result_words(w.tys, r, Tm::apply(w, g, env, r, ps, F, args)) {
+    match ps {
+        Nil => λ args => match args {
+            Nil => λ next s e => j(Option::some_inj(Sending(Nil, Nil, next), s, e), λ z _ =>
+                (values: Valuation()) → EnvHolds(w.tys, values, g, ports, env) → Below(w.tys, g, ports, next) →
+                (F: Ty::Arrows(w.tys, Nil, r)) → (ans: List<BitVec(64)> → List<BitVec(64)>) → Ty::AnswersWords(w.tys, Nil, r, F, ans) →
+                ans(words_of(eval_nodes_over(buffers, z.nodes, values), z.ports)) = Ty::result_words(w.tys, r, Tm::apply(w, g, env, r, Nil, F, Nil)),
+                λ values held below F ans answers => answers),
+            Cons(a, more) => λ next s e => Option::none_ne_some(s, e,
+                (values: Valuation()) → EnvHolds(w.tys, values, g, ports, env) → Below(w.tys, g, ports, next) →
+                (F: Ty::Arrows(w.tys, Nil, r)) → (ans: List<BitVec(64)> → List<BitVec(64)>) → Ty::AnswersWords(w.tys, Nil, r, F, ans) →
+                ans(words_of(eval_nodes_over(buffers, s.nodes, values), s.ports)) = Ty::result_words(w.tys, r, Tm::apply(w, g, env, r, Nil, F, Cons(a, more)))),
+        },
+        Cons(p, rest) => λ args => match args {
+            Nil => λ next s e => Option::none_ne_some(s, e,
+                (values: Valuation()) → EnvHolds(w.tys, values, g, ports, env) → Below(w.tys, g, ports, next) →
+                (F: Ty::Arrows(w.tys, Cons(p, rest), r)) → (ans: List<BitVec(64)> → List<BitVec(64)>) → Ty::AnswersWords(w.tys, Cons(p, rest), r, F, ans) →
+                ans(words_of(eval_nodes_over(buffers, s.nodes, values), s.ports)) = Ty::result_words(w.tys, r, Tm::apply(w, g, env, r, Cons(p, rest), F, Nil))),
+            Cons(a, more) => λ next => {
+                let Goal = λ (s: Sending) => (values: Valuation()) → EnvHolds(w.tys, values, g, ports, env) → Below(w.tys, g, ports, next) →
+                    (F: Ty::Arrows(w.tys, Cons(p, rest), r)) → (ans: List<BitVec(64)> → List<BitVec(64)>) → Ty::AnswersWords(w.tys, Cons(p, rest), r, F, ans) →
+                    ans(words_of(eval_nodes_over(buffers, s.nodes, values), s.ports)) = Ty::result_words(w.tys, r, Tm::apply(w, g, env, r, Cons(p, rest), F, Cons(a, more)));
+                let P = λ (o: Option<Sending>) => (s: Sending) → o = Some(s) → Goal(s);
+                let none: P(None) = λ s e => Option::none_ne_some(s, e, Goal(s));
+                let whole = λ (q: Nat) => p.check_sent(w.tys).and_then(λ _ => Tm::send_args(w.tys, g, ports, rest, more, next).and_then(λ s => Some(Tm::send_whole(w.tys, p, q, s))));
+                let sliced = λ (q: Nat) => Tm::send_args(w.tys, g, ports, rest, more, Tm::send_slots(p.pieces(w.tys), q, next).next).and_then(λ s =>
+                    Some(Tm::then_send(Tm::send_slots(p.pieces(w.tys), q, next), s)));
+                let step = λ (q: Nat) => match p.check_sliced(w.tys) { Some(_) => sliced(q), None => whole(q) };
+                Option::and_then_elim(P, none, port_at(ports, a), λ q => Ty::at(g, a).check(p).and_then(λ _ => step(q)), λ q at_q =>
+                Option::and_then_elim(P, none, Ty::at(g, a).check(p), λ _ => step(q), λ ea _ =>
+                    match p.check_sliced(w.tys) as λ o => P(match o { Some(_) => sliced(q), None => whole(q) }) {
+                        Some(sl) => {
+                            let s1 = Tm::send_slots(p.pieces(w.tys), q, next);
+                            Option::and_then_elim(P, none, Tm::send_args(w.tys, g, ports, rest, more, s1.next), λ s => Some(Tm::then_send(s1, s)),
+                                λ s2 e2 s e => j(Option::some_inj(Tm::then_send(s1, s2), s, e), λ z _ => Goal(z), λ values held below F ans answers => {
+                                    let v = Ty::cast(w.tys, Ty::at(g, a), p, Env::get(w.tys, g, env, a));
+                                    let fl = p.flats_of(w.tys, v);
+                                    let fs = p.pieces(w.tys);
+                                    let hv = Tm::operand(w, g, ports, values, env, held, a, q, at_q, p, ea);
+                                    let bq = Ty::below_cast(w.tys, Ty::at(g, a), p, ea, q, next, below_at(w.tys, g, ports, next, below, a, q, at_q));
+                                    let sent = Tm::send_slots_sound(buffers, fs, q, next, Ty::sliced_slots(w.tys, p, sl), Ty::pieces_below(w.tys, p, q, next, sl, bq),
+                                        values, fl, Ty::holds_pieces(w.tys, p, values, q, sl, v, hv));
+                                    let mid = eval_nodes_over(buffers, s1.nodes, values);
+                                    let fin = eval_nodes_over(buffers, s2.nodes, mid);
+                                    let later = Tm::send_keeps(w.tys, g, ports, buffers, rest, more, s1.next, s2, e2, mid);
+                                    let words1: (words_of(fin, s1.ports) = Ty::flats_words(fs, fl)) =
+                                        trans(words_agree(s1.ports, mid, fin, λ x m => later.right(64, x, sent.right.right.right(x, m))), sent.right.right.left);
+                                    let taken = Ty::takes_sliced(w.tys, p, λ ws u => Ty::AnswersWords(w.tys, rest, r, F(u), λ more2 => ans(ws ++ more2)), sl, answers, v);
+                                    let ih = Tm::send_answers(w, g, ports, buffers, env, r, rest, more, s1.next, s2, e2, mid,
+                                        env_holds_keeps(w.tys, g, values, mid, next, sent.right.left, ports, env, below, held),
+                                        below_mono(w.tys, g, next, s1.next, sent.left, ports, below),
+                                        F(v), λ more2 => ans(Ty::flats_words(fs, fl) ++ more2), taken);
+                                    trans(cong_fn(λ (u: Valuation()) => ans(words_of(u, s1.ports ++ s2.ports)), Tm::nodes_append(buffers, s1.nodes, s2.nodes, values)),
+                                        trans(cong_fn(λ (l: List<BitVec(64)>) => ans(l), words_of_append(fin, s1.ports, s2.ports)),
+                                            trans(cong_fn(λ (l: List<BitVec(64)>) => ans(l ++ words_of(fin, s2.ports)), words1), ih)))
+                                }))
+                        },
+                        None => Option::and_then_elim(P, none, p.check_sent(w.tys), λ _ => Tm::send_args(w.tys, g, ports, rest, more, next).and_then(λ s => Some(Tm::send_whole(w.tys, p, q, s))), λ hp _ =>
+                            Option::and_then_elim(P, none, Tm::send_args(w.tys, g, ports, rest, more, next), λ s => Some(Tm::send_whole(w.tys, p, q, s)),
+                                λ s1 e1 s e => j(Option::some_inj(Tm::send_whole(w.tys, p, q, s1), s, e), λ z _ => Goal(z), λ values held below F ans answers => {
+                                    let after = eval_nodes_over(buffers, s1.nodes, values);
+                                    let kept = Tm::send_keeps(w.tys, g, ports, buffers, rest, more, next, s1, e1, values).right;
+                                    let held_after = env_holds_keeps(w.tys, g, values, after, next, kept, ports, env, below, held);
+                                    let v = Ty::cast(w.tys, Ty::at(g, a), p, Env::get(w.tys, g, env, a));
+                                    let ids = p.ids(w.tys, q);
+                                    let taken = Ty::takes_holds(w.tys, p, λ ws u => Ty::AnswersWords(w.tys, rest, r, F(u), λ more2 => ans(ws ++ more2)), hp, answers,
+                                        after, q, v, Tm::operand(w, g, ports, after, env, held_after, a, q, at_q, p, ea));
+                                    trans(cong_fn(λ (l: List<BitVec(64)>) => ans(l), words_of_append(after, ids, s1.ports)),
+                                        Tm::send_answers(w, g, ports, buffers, env, r, rest, more, next, s1, e1, values, held, below,
+                                            F(v), λ more2 => ans(words_of(after, ids) ++ more2), taken))
+                                }))),
+                    }))
             },
         },
     }
@@ -3144,41 +3797,49 @@ theorem Tm::lower_call_sound(w: World, g: List<Ty>, ports: List<Nat>, next, f: N
     Tm::LowerHolds(Call(f, args), w, g, ports, next, Tm::lower_call(w, g, ports, next, f, args)) {
     let r = Sig::at(w.sigs, f).result;
     let ps = Sig::at(w.sigs, f).params;
-    let outs = Cons(next, r.also_ports(w.tys, next));
     let P = λ (o: Option<Lowered>) => Tm::LowerHolds(Call(f, args), w, g, ports, next, o);
     Option::and_then_elim(P, trivial, Ty::check_sents(w.tys, ps), λ _ => Tm::lower_call_result(w, g, ports, next, f, args), λ ok _ =>
-    Option::and_then_elim(P, trivial, r.check_back(w.tys), λ _ => Tm::lower_call_outs(w, g, ports, next, f, args), λ er _ =>
-    Option::and_then_elim(P, trivial, Tm::check_true(distinct(outs)), λ _ => Tm::lower_call_args(w, g, ports, next, f, args), λ apart _ =>
-    Option::and_then_elim(P, trivial, Tm::call_args(w.tys, g, ports, ps, args), λ qs => Some(Tm::called(w.tys, r, f, qs, next)), λ qs e_qs =>
+    Option::and_then_elim(P, trivial, r.check_back(w.tys), λ _ => Tm::lower_call_args(w, g, ports, next, f, args), λ er _ =>
+    Option::and_then_elim(P, trivial, Tm::send_args(w.tys, g, ports, ps, args, next), λ s => Tm::lower_call_at(w, r, f, s), λ s e_s =>
+    Option::and_then_elim(P, trivial, Tm::check_true(distinct(Cons(s.next, r.also_ports(w.tys, s.next)))),
+        λ _ => Some(Tm::sent_then(s.nodes, Tm::called(w.tys, r, f, s.ports, s.next))), λ apart _ =>
         λ call agree values env held below => {
+            let at = s.next;
+            let outs = Cons(at, r.also_ports(w.tys, at));
+            let sent = eval_nodes_over(w.spans, s.nodes, values);
+            let widened = Tm::send_keeps(w.tys, g, ports, w.spans, ps, args, next, s, e_s, values);
             let meaning = Tm::apply(w, g, env, r, ps, Sig::get(w.tys, w.sigs, w.callees, f), args);
             let words = Ty::result_words(w.tys, r, meaning);
-            let answer = call(f, words_of(values, qs));
-            let answered: (answer = words) = Tm::call_args_sound(w, g, ports, values, env, held, r, ps, args,
-                Sig::get(w.tys, w.sigs, w.callees, f), λ ws => call(f, ws), agree(f, ⟨ok, er⟩), qs, e_qs);
+            let answer = call(f, words_of(sent, s.ports));
+            let answered: (answer = words) = Tm::send_answers(w, g, ports, w.spans, env, r, ps, args, next, s, e_s, values, held, below,
+                Sig::get(w.tys, w.sigs, w.callees, f), λ ws => call(f, ws), agree(f, ⟨ok, er⟩));
             // The call's words, read back at the ports they land at.
-            let after = Valuation::bind(values, outs, Answers::split(answer));
+            let after = Valuation::bind(sent, outs, Answers::split(answer));
             let read: (words_of(after, outs) = words) =
-                j(sym(answered), λ a _ => words_of(Valuation::bind(values, outs, Answers::split(a)), outs) = words,
-                    words_of_bind(values, outs, apart, words, Ty::back_len(w.tys, r, next, meaning)));
+                j(sym(answered), λ a _ => words_of(Valuation::bind(sent, outs, Answers::split(a)), outs) = words,
+                    words_of_bind(sent, outs, apart, words, Ty::back_len(w.tys, r, at, meaning)));
             // The first word's port holds it at every width, as binding a
             // word does (`word_value`).
-            let first = first_word(answer);
-            let below = Valuation::bind(values, r.also_ports(w.tys, next), answer.tail());
-            let bound = λ (wd: Nat) => trans(Valuation::set_here(below, next, word_value(first), wd),
-                cong_fn(λ (x: BitVec(64)) => word_value(x, wd), sym(Valuation::set_here(below, next, word_value(first), 64))));
-            let holds: r.Holds(w.tys, after, next, meaning) = Ty::back_holds(w.tys, r, after, next, bound, er, meaning, read);
+            let bound: Ty::BoundAt(after, outs) = j(sym(answered), λ a _ => Ty::BoundAt(Valuation::bind(sent, outs, Answers::split(a)), outs),
+                Ty::bind_bound(sent, outs, apart, words, Ty::back_len(w.tys, r, at, meaning)));
+            let holds: r.Holds(w.tys, after, at, meaning) = Ty::back_holds(w.tys, r, after, at, bound, er, meaning, read);
             // The moves: the result again, at the ports past its own.
-            let base = r.past(w.tys, next);
-            let span = Ty::below_past(w.tys, r, next);
-            let moved = r.moves_sound(w.tys, w.spans, after, base, next, span.left, meaning, holds);
-            let kept: Keeps(values, eval_nodes_over(w.spans, r.moves(w.tys, base, next), after), next) = λ wd id lt =>
-                trans(moved.right.left(wd, id, Nat::lt_of_lt_of_le(id, next, base, lt, span.right)),
-                    Valuation::bind_frame(values, outs, Answers::split(answer), wd, id, absent_of(id, outs, λ x m => match m {
-                        Inl(e) => λ same => Nat::ne_of_lt(id, next, lt, trans(same, e)),
-                        Inr(past) => Nat::ne_of_lt(id, x, Nat::lt_trans(id, next, x, lt, Ty::also_above(w.tys, r, next, x, past))),
-                    })));
-            ⟨Nat::le_trans(next, base, r.past(w.tys, base), span.right, moved.right.right.right), ⟨moved.right.right.left, ⟨kept, moved.left⟩⟩⟩
+            let base = r.past(w.tys, at);
+            let span = Ty::below_past(w.tys, r, at);
+            let moved = r.moves_sound(w.tys, w.spans, after, base, at, span.left, meaning, holds);
+            let kept: Keeps(values, eval_nodes_over(w.spans, r.moves(w.tys, base, at), after), next) = λ wd id lt => {
+                let below_at = Nat::lt_of_lt_of_le(id, next, at, lt, widened.left);
+                trans(moved.right.left(wd, id, Nat::lt_of_lt_of_le(id, at, base, below_at, span.right)),
+                    trans(Valuation::bind_frame(sent, outs, Answers::split(answer), wd, id, absent_of(id, outs, λ x m => match m {
+                        Inl(e) => λ same => Nat::ne_of_lt(id, at, below_at, trans(same, e)),
+                        Inr(past) => Nat::ne_of_lt(id, x, Nat::lt_trans(id, at, x, below_at, Ty::also_above(w.tys, r, at, x, past))),
+                    })), widened.right(wd, id, lt)))
+            };
+            let c = Tm::called(w.tys, r, f, s.ports, at);
+            let same = Tm::sent_then_eval(call, w.spans, values, c, s.nodes);
+            j(sym(same), λ e _ => (next <= c.next) ∧ (r.Below(w.tys, c.result, c.next) ∧ (Keeps(values, e, next) ∧ r.Holds(w.tys, e, c.result, meaning))),
+                ⟨Nat::le_trans(next, at, r.past(w.tys, base), widened.left, Nat::le_trans(at, base, r.past(w.tys, base), span.right, moved.right.right.right)),
+                    ⟨moved.right.right.left, ⟨kept, moved.left⟩⟩⟩)
         }))))
 }
 
@@ -4201,13 +4862,6 @@ fn Ty::Edge(self t: Ty, tys: Nat → RecInfo) → Type {
     match t { Word(w) => (w = 64) ∨ (w < 64), Bit => True, ByteList(_) => False, Lines => False, Named(i) => tys(i).fields = [Word(64)], Count => False, Enum(_) => False }
 }
 
-fn Ty::check_narrow(w: Nat) → Option<(w = 64) ∨ (w < 64)> {
-    match w.equation(64) {
-        Inl(e) => Some(Inl(e)),
-        Inr(_) => Tm::check_true((w + 1).leb(64)).and_then(λ h => Some(Inr(Nat::leb_sound(w + 1, 64, h)))),
-    }
-}
-
 fn Ty::check_edge(self t: Ty, tys: Nat → RecInfo) → Option<t.Edge(tys)> {
     match t as λ x => Option<x.Edge(tys)> {
         Word(w) => Ty::check_narrow(w),
@@ -4223,17 +4877,17 @@ fn Ty::check_edge(self t: Ty, tys: Nat → RecInfo) → Option<t.Edge(tys)> {
 // each of its payload's slots, each a 64-bit word (design §16.16).
 fn Ty::Param(self t: Ty, tys: Nat → RecInfo) → Type {
     match t {
-        Word(_) => t.Edge(tys), Bit => True, ByteList(_) => False, Lines => False, Named(i) => Ty::Words(tys(i).fields), Count => False,
-        Enum(i) => ((tys(i).alts.last + 1).leb(Nat::pow(2, 64)) = True) ∧ Ty::Words(tys(i).alts.slots),
+        Word(_) => t.Edge(tys), Bit => True, ByteList(_) => False, Lines => False, Named(i) => Ty::Slots(tys(i).fields), Count => False,
+        Enum(i) => ((tys(i).alts.last + 1).leb(Nat::pow(2, 64)) = True) ∧ Ty::Slots(tys(i).alts.slots),
     }
 }
 
 fn Ty::check_param(self t: Ty, tys: Nat → RecInfo) → Option<t.Param(tys)> {
     match t as λ x => Option<x.Param(tys)> {
-        Word(w) => Word(w).check_edge(tys), Bit => Some(trivial), ByteList(_) => None, Lines => None, Named(i) => Ty::check_words(tys(i).fields), Count => None,
-        Enum(i) => match (tys(i).alts.last + 1).leb(Nat::pow(2, 64)) as λ b => Option<(b = True) ∧ Ty::Words(tys(i).alts.slots)> {
+        Word(w) => Word(w).check_edge(tys), Bit => Some(trivial), ByteList(_) => None, Lines => None, Named(i) => Ty::check_slots(tys(i).fields), Count => None,
+        Enum(i) => match (tys(i).alts.last + 1).leb(Nat::pow(2, 64)) as λ b => Option<(b = True) ∧ Ty::Slots(tys(i).alts.slots)> {
             False => None,
-            True => Ty::check_words(tys(i).alts.slots).and_then(λ ws => Some(⟨refl, ws⟩)),
+            True => Ty::check_slots(tys(i).alts.slots).and_then(λ ws => Some(⟨refl, ws⟩)),
         },
     }
 }
@@ -4250,34 +4904,6 @@ fn Ty::check_edges(tys: Nat → RecInfo, ps: List<Ty>) → Option<Ty::Edges(tys,
     }
 }
 
-// A 64-bit word read at a narrower word is its low bits.
-theorem Ty::cast_narrow_in(tys: Nat → RecInfo, w: Nat, ne: w ≠ 64, x: BitVec(64)): Ty::cast(tys, Word(64), Word(w), x) = BitVec::ofNat(x.toNat()) {
-    let converted: (Ty::cast(tys, Word(64), Word(w), x) = Ty::convert(tys, Word(64), Word(w), x)) =
-        j(sym(Or::inr_apart(Word(64).equation(Word(w)), λ e => ne(sym(cong_fn(Ty::width, e))))), λ d _ =>
-            (match d as λ _ => BitVec(w) { Inl(e) => j(e, λ y _ => y.sem(tys), x), Inr(_) => Ty::convert(tys, Word(64), Word(w), x) }) =
-                Ty::convert(tys, Word(64), Word(w), x),
-            refl);
-    let truncated: (Ty::convert(tys, Word(64), Word(w), x) = BitVec::ofNat(x.toNat())) =
-        j(sym(Or::inr_apart(Nat::equation(64, w), λ e => ne(sym(e)))), λ d _ =>
-            (match d as λ _ => BitVec(w) { Inl(e) => j(e, λ y _ => BitVec(y), x), Inr(_) => BitVec::ofNat(x.toNat()) }) = BitVec::ofNat(x.toNat()),
-            refl);
-    trans(converted, truncated)
-}
-
-// A narrow word read as a 64-bit word is its zero extension.
-theorem Ty::cast_narrow_out(tys: Nat → RecInfo, w: Nat, ne: w ≠ 64, v: BitVec(w)): Ty::cast(tys, Word(w), Word(64), v) = BitVec::ofNat(v.toNat()) {
-    let converted: (Ty::cast(tys, Word(w), Word(64), v) = Ty::convert(tys, Word(w), Word(64), v)) =
-        j(sym(Or::inr_apart(Word(w).equation(Word(64)), λ e => ne(cong_fn(Ty::width, e)))), λ d _ =>
-            (match d as λ _ => BitVec(64) { Inl(e) => j(e, λ y _ => y.sem(tys), v), Inr(_) => Ty::convert(tys, Word(w), Word(64), v) }) =
-                Ty::convert(tys, Word(w), Word(64), v),
-            refl);
-    let extended: (Ty::convert(tys, Word(w), Word(64), v) = BitVec::ofNat(v.toNat())) =
-        j(sym(Or::inr_apart(w.equation(64), ne)), λ d _ =>
-            (match d as λ _ => BitVec(64) { Inl(e) => j(e, λ y _ => BitVec(y), v), Inr(_) => BitVec::ofNat(v.toNat()) }) = BitVec::ofNat(v.toNat()),
-            refl);
-    trans(converted, extended)
-}
-
 // A code the boundary passes spans one port.
 theorem Ty::edge_below(tys: Nat → RecInfo, t: Ty): t.Edge(tys) → (m: Nat) → t.Below(tys, m, m + 1) {
     match t {
@@ -4291,6 +4917,85 @@ theorem Ty::edge_below(tys: Nat → RecInfo, t: Ty): t.Edge(tys) → (m: Nat) �
     }
 }
 
+// A record's or an enum's result with a narrow slot: every slot moved to
+// fresh ports from `next`, a narrow one zero-extended by a `Resize`, so
+// that each port passed back holds its slot's word (design §16.18).
+fn Ty::widen_node(self f: Ty, out, src: Nat) → Node {
+    match f.slot_narrow() { True => Resize(f.width(), 64, out, src), False => Move(64, out, src) }
+}
+
+fn Ty::widen_slots(fs: List<Ty>, out, src: Nat) → List<Node> {
+    match fs { Nil => Nil, Cons(f, rest) => Cons(f.widen_node(out, src), Ty::widen_slots(rest, out + 1, src + 1)) }
+}
+
+fn Ty::widen_fields(fs: List<Ty>, c: Lowered) → Lowered {
+    match Ty::slots_narrow(fs) { False => c, True => Lowered(Compose(c.region, nodes_region(Ty::widen_slots(fs, c.next, c.result))), c.next, c.next + fs.len()) }
+}
+
+theorem Ty::widen_node_output(f: Ty, out, src: Nat): node_output(f.widen_node(out, src)).id = out {
+    (match f.slot_narrow() as λ b => node_output(match b { True => Resize(f.width(), 64, out, src), False => Move(64, out, src) }).id = out {
+        True => refl, False => refl,
+    })
+}
+
+// A slot's widening writes its word.
+theorem Ty::widen_node_word(f: Ty, ok: f.Slot(), values: Valuation(), buffers: Buffers(), out, src: Nat, x: f.Flat(), h: f.FlatHolds(values, src, x)):
+    f.widen_node(out, src).step(values, buffers := buffers)(64, out) = f.flat_word(x) {
+    (match f.slot_narrow() as λ b => f.slot_narrow() = b →
+            (match b { True => Resize(f.width(), 64, out, src), False => Move(64, out, src) }).step(values, buffers := buffers)(64, out) = f.flat_word(x) {
+        True => λ _ => trans(Valuation::set_here(values, out, λ wd => BitVec::ofNat(values(f.width(), src).toNat()), 64), Ty::slot_widened(f, ok, values, src, x, h)),
+        False => λ e => trans(Valuation::set_here(values, out, λ wd => values(wd, src), 64),
+            j(sym(Ty::slot_wide(f, ok, e)), λ g _ => (y: g.Flat()) → g.FlatHolds(values, src, y) → values(64, src) = g.flat_word(y), λ y hy => hy)(x, h)),
+    })(refl)
+}
+
+theorem Ty::widen_slots_sound(buffers: Buffers(), fs: List<Ty>): (out, src: Nat) → Ty::Slots(fs) → Ty::FieldsBelow(fs, src, out) → (values: Valuation()) →
+    (t: Ty::Flats(fs)) → Ty::FieldsHold(fs, values, src, t) →
+    (words_of(eval_nodes_over(buffers, Ty::widen_slots(fs, out, src), values), Ty::ports_from(fs, out)) = Ty::flats_words(fs, t)) ∧
+        Keeps(values, eval_nodes_over(buffers, Ty::widen_slots(fs, out, src), values), out) {
+    match fs {
+        Nil => λ out src _ _ values t _ => ⟨refl, λ wd id lt => refl⟩,
+        Cons(f, rest) => λ out src ok below values t held => {
+            let node = f.widen_node(out, src);
+            let set = node.step(values, buffers := buffers);
+            let step: (out <= out + 1) = Nat::le_succ_r(out, out, out.le_refl());
+            let kept: Keeps(values, set, out) = λ wd id lt => j(sym(Ty::widen_node_output(f, out, src)), λ o _ =>
+                Valuation::set(values, o, node.value(values, buffers := buffers))(wd, id) = values(wd, id),
+                Valuation::set_other(values, out, node.value(values, buffers := buffers), wd, id, Nat::ne_of_lt(id, out, lt)));
+            let ih = Ty::widen_slots_sound(buffers, rest, out + 1, src + 1, ok.right, Ty::fields_below_mono(rest, out, out + 1, step, src + 1, below.right), set, t.snd,
+                Ty::fields_at(rest, values, set, src + 1, src + 1, Ty::fields_kept(rest, values, set, out, kept, src + 1, below.right), t.snd, held.right));
+            let head = trans(ih.right(64, out, out.lt_succ_self()), Ty::widen_node_word(f, ok.left, values, buffers, out, src, t.fst, held.left));
+            ⟨eq2(λ (a: BitVec(64)) (r: List<BitVec(64)>) => Cons(a, r), head, ih.left),
+                λ wd id lt => trans(ih.right(wd, id, Nat::lt_of_lt_of_le(id, out, out + 1, lt, step)), kept(wd, id, lt))⟩
+        },
+    }
+}
+
+// The words at a result's pieces' ports, after the widening, are its
+// slots'.
+theorem Ty::widen_fields_reads(call: function_ir_eval::Answers(), buffers: Buffers(), values: Valuation(), fs: List<Ty>, c: Lowered, ok: Ty::Slots(fs),
+    below: Ty::FieldsBelow(fs, c.result, c.next), t: Ty::Flats(fs), held: Ty::FieldsHold(fs, c.region.eval(call, values, buffers := buffers), c.result, t)):
+    words_of(Ty::widen_fields(fs, c).region.eval(call, values, buffers := buffers), Ty::ports_from(fs, Ty::widen_fields(fs, c).result)) = Ty::flats_words(fs, t) {
+    let at = c.region.eval(call, values, buffers := buffers);
+    let narrow = Lowered(Compose(c.region, nodes_region(Ty::widen_slots(fs, c.next, c.result))), c.next, c.next + fs.len());
+    (match Ty::slots_narrow(fs) as λ b => Ty::slots_narrow(fs) = b →
+            words_of((match b { False => c, True => narrow }).region.eval(call, values, buffers := buffers), Ty::ports_from(fs, (match b { False => c, True => narrow }).result))
+                = Ty::flats_words(fs, t) {
+        False => λ e => Ty::ports_reads(at, fs, c.result, Ty::slots_wide(fs, ok, e), t, held),
+        True => λ _ => Ty::widen_slots_sound(buffers, fs, c.next, c.result, ok, below, at, t, held).left,
+    })(refl)
+}
+
+// Fields' words, split at the first.
+theorem Ty::fields_words_split(values: Valuation(), fs: List<Ty>, port: Nat): (t: Ty::Flats(fs)) → (fs = Nil → False) →
+    words_of(values, Ty::ports_from(fs, port)) = Ty::flats_words(fs, t) →
+    (values(64, port) = Ty::flats_head_word(fs, t)) ∧ (words_of(values, Ty::fields_also_ports(fs, port)) = Ty::flats_tail_words(fs, t)) {
+    match fs {
+        Nil => λ t no _ => false_elim(no(refl)),
+        Cons(f, rest) => λ t _ h => words_cons_parts(values(64, port), words_of(values, Ty::ports_from(rest, port + 1)), Ty::flats_words(Cons(f, rest), t), h),
+    }
+}
+
 // A function's result at the boundary: a narrow word zero-extended into a
 // fresh port by one `Resize`; any other code where the body left it.
 fn Ty::widen_by(w: Nat, o: (w = 64) ∨ True, c: Lowered) → Lowered {
@@ -4298,7 +5003,10 @@ fn Ty::widen_by(w: Nat, o: (w = 64) ∨ True, c: Lowered) → Lowered {
 }
 
 fn Ty::widen(self t: Ty, tys: Nat → RecInfo, c: Lowered) → Lowered {
-    match t { Word(w) => Ty::widen_by(w, w.equation(64), c), Bit => Ty::widen_by(1, Inr(trivial), c), ByteList(_) => c, Lines => c, Named(_) => c, Count => c, Enum(_) => c }
+    match t {
+        Word(w) => Ty::widen_by(w, w.equation(64), c), Bit => Ty::widen_by(1, Inr(trivial), c), ByteList(_) => c, Lines => c,
+        Named(i) => Ty::widen_fields(tys(i).fields, c), Count => c, Enum(i) => Ty::widen_fields(Cons(Word(64), tys(i).alts.slots), c),
+    }
 }
 
 // The result's 64-bit word, after the widening, is the value read as one.
@@ -4328,7 +5036,14 @@ theorem Ty::edge_reads(tys: Nat → RecInfo, call: function_ir_eval::Answers(), 
         },
         ByteList(_) => λ never => false_elim(never),
         Lines => λ never => false_elim(never),
-        Named(i) => λ e v h => Ty::one_word_reads(tys, c.region.eval(call, values, buffers := buffers), c.result, Named(i), e, v, h),
+        Named(i) => λ e v h => {
+            let fs = tys(i).fields;
+            let held: Ty::FieldsHold(fs, c.region.eval(call, values, buffers := buffers), c.result, tys(i).get(v)) = h;
+            let wide = j(sym(e), λ g _ => Ty::slots_narrow(g) = False, refl);
+            let same: (Ty::widen_fields(fs, c) = c) = j(sym(wide), λ b _ => (match b { False => c, True => Lowered(Compose(c.region, nodes_region(Ty::widen_slots(fs, c.next, c.result))), c.next, c.next + fs.len()) }) = c, refl);
+            j(sym(same), λ d _ => d.region.eval(call, values, buffers := buffers)(64, d.result) = Ty::cast(tys, Named(i), Word(64), v),
+                Ty::one_word_reads(tys, c.region.eval(call, values, buffers := buffers), c.result, Named(i), e, v, h))
+        },
         Count => λ never => false_elim(never),
         Enum(_) => λ never => false_elim(never),
     }
@@ -4356,6 +5071,23 @@ fn Ty::check_words_one(fs: List<Ty>) → Option<Ty::WordsOne(fs)> {
     }
 }
 
+// Slots, one at least: the first is the word returned, the rest beside it.
+fn Ty::SlotsOne(fs: List<Ty>) → Type {
+    match fs { Nil => False, Cons(f, rest) => f.Slot() ∧ Ty::Slots(rest) }
+}
+
+fn Ty::check_slots_one(fs: List<Ty>) → Option<Ty::SlotsOne(fs)> {
+    match fs as λ g => Option<Ty::SlotsOne(g)> { Nil => None, Cons(f, rest) => f.check_slot().and_then(λ e => Ty::check_slots(rest).and_then(λ ok => Some(⟨e, ok⟩))) }
+}
+
+theorem Ty::slots_one_all(fs: List<Ty>): Ty::SlotsOne(fs) → Ty::Slots(fs) {
+    match fs { Nil => λ never => false_elim(never), Cons(_, _) => λ ok => ok }
+}
+
+theorem Ty::slots_one_cons(fs: List<Ty>): Ty::SlotsOne(fs) → fs = Nil → False {
+    match fs { Nil => λ never _ => never, Cons(g, rest) => λ _ (bad: Cons(g, rest) = Nil) => absurd(bad) }
+}
+
 theorem Ty::words_one_all(fs: List<Ty>): Ty::WordsOne(fs) → Ty::Words(fs) {
     match fs { Nil => λ never => false_elim(never), Cons(_, _) => λ ok => ok }
 }
@@ -4374,9 +5106,9 @@ fn Ty::Out(self t: Ty, tys: Nat → RecInfo) → Type {
     match t {
         Word(w) => (w = 64) ∨ (w < 64),
         Bit => True, ByteList(_) => False, Lines => False,
-        Named(i) => (tys(i).fields = [Word(64)]) ∨ Ty::WordsOne(tys(i).fields),
+        Named(i) => (tys(i).fields = [Word(64)]) ∨ Ty::SlotsOne(tys(i).fields),
         Count => False,
-        Enum(i) => Ty::Bare(tys(i).alts.slots) ∨ Ty::Words(tys(i).alts.slots),
+        Enum(i) => Ty::Bare(tys(i).alts.slots) ∨ Ty::Slots(tys(i).alts.slots),
     }
 }
 
@@ -4386,63 +5118,45 @@ fn Ty::check_out(self t: Ty, tys: Nat → RecInfo) → Option<t.Out(tys)> {
         Bit => Some(trivial), ByteList(_) => None, Lines => None,
         Named(i) => match Ty::check_fields_word(tys(i).fields) {
             Some(e) => Some(Inl(e)),
-            None => Ty::check_words_one(tys(i).fields).and_then(λ ws => Some(Inr(ws))),
+            None => Ty::check_slots_one(tys(i).fields).and_then(λ ws => Some(Inr(ws))),
         },
         Count => None,
         Enum(i) => match Ty::check_bare(tys(i).alts.slots) {
             Some(b) => Some(Inl(b)),
-            None => Ty::check_words(tys(i).alts.slots).and_then(λ ws => Some(Inr(ws))),
+            None => Ty::check_slots(tys(i).alts.slots).and_then(λ ws => Some(Inr(ws))),
         },
     }
 }
 
-// The result's first word, after the widening, is the value read as one:
-// a record's of two words is its head field (`Ty::convert`), an enum's
-// its tag word.
-theorem Ty::out_reads(tys: Nat → RecInfo, call: function_ir_eval::Answers(), buffers: Buffers(), values: Valuation(), t: Ty, c: Lowered): t.Out(tys) →
-    (v: t.sem(tys)) → t.Holds(tys, c.region.eval(call, values, buffers := buffers), c.result, v) →
-    t.widen(tys, c).region.eval(call, values, buffers := buffers)(64, t.widen(tys, c).result) = Ty::cast(tys, t, Word(64), v) {
+// A record's or an enum's result, after the widening: its first word and
+// the words past it are its pieces' (`Ty::widen_fields`).
+theorem Ty::out_pieces(tys: Nat → RecInfo, call: function_ir_eval::Answers(), buffers: Buffers(), values: Valuation(), t: Ty, c: Lowered): t.Out(tys) →
+    (v: t.sem(tys)) → t.Holds(tys, c.region.eval(call, values, buffers := buffers), c.result, v) → t.Below(tys, c.result, c.next) →
+    (t.widen(tys, c).region.eval(call, values, buffers := buffers)(64, t.widen(tys, c).result) = Ty::cast(tys, t, Word(64), v)) ∧
+        (words_of(t.widen(tys, c).region.eval(call, values, buffers := buffers), t.also_ports(tys, t.widen(tys, c).result)) = Ty::rest_words(tys, t, v)) {
     match t {
-        Word(w) => λ ok => Ty::edge_reads(tys, call, buffers, values, Word(w), c, ok),
-        Bit => λ ok => Ty::edge_reads(tys, call, buffers, values, Bit, c, ok),
+        Word(w) => λ ok v h _ => ⟨Ty::edge_reads(tys, call, buffers, values, Word(w), c, ok, v, h), refl⟩,
+        Bit => λ ok v h _ => ⟨Ty::edge_reads(tys, call, buffers, values, Bit, c, ok, v, h), refl⟩,
         ByteList(_) => λ never => false_elim(never),
         Lines => λ never => false_elim(never),
-        Named(i) => λ ok => match ok {
-            Inl(e) => Ty::edge_reads(tys, call, buffers, values, Named(i), c, e),
-            Inr(ws) => λ v h => Ty::fields_head_reads(c.region.eval(call, values, buffers := buffers), c.result, tys(i).fields, ws, tys(i).get(v), h),
+        Named(i) => λ ok v h below => {
+            let fs = tys(i).fields;
+            let one: Ty::SlotsOne(fs) = match ok { Inl(e) => j(sym(e), λ g _ => Ty::SlotsOne(g), ⟨Inl(refl), trivial⟩), Inr(ws) => ws };
+            let d = Ty::widen_fields(fs, c);
+            let read = Ty::widen_fields_reads(call, buffers, values, fs, c, Ty::slots_one_all(fs, one), below, tys(i).get(v), h);
+            Ty::fields_words_split(d.region.eval(call, values, buffers := buffers), fs, d.result, tys(i).get(v), Ty::slots_one_cons(fs, one), read)
         },
         Count => λ never => false_elim(never),
-        Enum(i) => λ _ v h => {
+        Enum(i) => λ ok v h below => {
+            let e = tys(i).alts;
+            let fs = Cons(Word(64), e.slots);
+            let slots: Ty::Slots(e.slots) = match ok { Inl(bare) => Ty::words_slots(e.slots, Ty::bare_words(e.slots, bare)), Inr(ws) => ws };
             let x = c.region.eval(call, values, buffers := buffers)(64, c.result);
-            trans(sym(BitVec::ofNat_toNat(64, x)), cong_fn(λ (m: Nat) => BitVec::ofNat(m, n := 64), h.left.left))
-        },
-    }
-}
-
-// The result's words past the first, at the ports `Ty::also_ports` names,
-// are the value's (a record's fields past its first, an enum's slots).
-theorem Ty::also_reads(tys: Nat → RecInfo, call: function_ir_eval::Answers(), buffers: Buffers(), values: Valuation(), t: Ty, c: Lowered): t.Out(tys) →
-    (v: t.sem(tys)) → t.Holds(tys, c.region.eval(call, values, buffers := buffers), c.result, v) →
-    words_of(t.widen(tys, c).region.eval(call, values, buffers := buffers), t.also_ports(tys, t.widen(tys, c).result)) = Ty::rest_words(tys, t, v) {
-    match t {
-        Word(w) => λ _ _ _ => refl,
-        Bit => λ _ _ _ => refl,
-        ByteList(_) => λ never => false_elim(never),
-        Lines => λ never => false_elim(never),
-        Named(i) => λ ok v h => {
-            let words: Ty::Words(tys(i).fields) = match ok {
-                Inl(e) => j(sym(e), λ g _ => Ty::Words(g), ⟨refl, trivial⟩),
-                Inr(ws) => Ty::words_one_all(tys(i).fields, ws),
-            };
-            Ty::fields_rest_reads(c.region.eval(call, values, buffers := buffers), c.result, tys(i).fields, words, tys(i).get(v), h)
-        },
-        Count => λ never => false_elim(never),
-        Enum(i) => λ ok v h => {
-            let words: Ty::Words(tys(i).alts.slots) = match ok {
-                Inl(bare) => Ty::bare_words(tys(i).alts.slots, bare),
-                Inr(ws) => ws,
-            };
-            Ty::ports_reads(c.region.eval(call, values, buffers := buffers), tys(i).alts.slots, c.result + 1, words, tys(i).alts.fields(v), h.right)
+            let tag: (x = RecInfo::enum_word(tys, i, v)) = trans(sym(BitVec::ofNat_toNat(64, x)), cong_fn(λ (m: Nat) => BitVec::ofNat(m, n := 64), h.left.left));
+            let d = Ty::widen_fields(fs, c);
+            let read = Ty::widen_fields_reads(call, buffers, values, fs, c, ⟨Inl(refl), slots⟩, below, Pair(RecInfo::enum_word(tys, i, v), e.fields(v)), ⟨tag, h.right⟩);
+            words_cons_parts(d.region.eval(call, values, buffers := buffers)(64, d.result), words_of(d.region.eval(call, values, buffers := buffers), Ty::ports_from(e.slots, d.result + 1)),
+                Ty::flats_words(fs, Pair(RecInfo::enum_word(tys, i, v), e.fields(v))), read)
         },
     }
 }
@@ -4478,14 +5192,29 @@ record Entry { nodes: List<Node>, ports: List<Nat>, next: Nat }
 
 fn Ty::narrow_by(w: Nat, o: (w = 64) ∨ True) → Bool { match o { Inl(_) => False, Inr(_) => True } }
 
-fn Ty::narrow(self t: Ty) → Bool {
-    match t { Word(w) => Ty::narrow_by(w, w.equation(64)), Bit => True, ByteList(_) => False, Lines => False, Named(_) => False, Count => False, Enum(_) => False }
+fn Ty::narrow(self t: Ty, tys: Nat → RecInfo) → Bool {
+    match t {
+        Word(w) => Ty::narrow_by(w, w.equation(64)), Bit => True, ByteList(_) => False, Lines => False,
+        Named(i) => Ty::slots_narrow(tys(i).fields), Count => False, Enum(i) => Ty::slots_narrow(tys(i).alts.slots),
+    }
 }
 
-fn Fun::entry_step(b: Bool, p: Ty, m, next: Nat, ports: List<Nat>, again: Nat → List<Nat> → Entry) → Entry {
+// A parameter with a narrow slot (`Ty::narrow`): every slot read into a
+// fresh port from `next`, a narrow one by a `Resize` to its width (its low
+// bits), a 64-bit one by a move, so that its value is held at consecutive
+// ports as a record's or an enum's always is (design §16.18).
+fn Ty::entry_node(self f: Ty, out, src: Nat) → Node {
+    match f.slot_narrow() { True => Resize(64, f.width(), out, src), False => Move(64, out, src) }
+}
+
+fn Ty::entry_slots(fs: List<Ty>, out, src: Nat) → List<Node> {
+    match fs { Nil => Nil, Cons(f, rest) => Cons(f.entry_node(out, src), Ty::entry_slots(rest, out + 1, src + 1)) }
+}
+
+fn Fun::entry_step(tys: Nat → RecInfo, b: Bool, p: Ty, m, next: Nat, ports: List<Nat>, again: Nat → List<Nat> → Entry) → Entry {
     match b {
-        True => Entry(Cons(Resize(64, p.width(), next, m), again(next + 1, Cons(next, ports)).nodes), again(next + 1, Cons(next, ports)).ports,
-            again(next + 1, Cons(next, ports)).next),
+        True => Entry(Ty::entry_slots(p.pieces(tys), next, m) ++ again(next + p.span(tys), Cons(next, ports)).nodes, again(next + p.span(tys), Cons(next, ports)).ports,
+            again(next + p.span(tys), Cons(next, ports)).next),
         False => again(next, Cons(m, ports)),
     }
 }
@@ -4493,7 +5222,7 @@ fn Fun::entry_step(b: Bool, p: Ty, m, next: Nat, ports: List<Nat>, again: Nat �
 fn Fun::entry(tys: Nat → RecInfo, ps: List<Ty>, m, next: Nat, ports: List<Nat>) → Entry {
     match ps {
         Nil => Entry(Nil, ports, next),
-        Cons(p, rest) => Fun::entry_step(p.narrow(), p, m, next, ports, λ n2 ps2 => Fun::entry(tys, rest, m + p.span(tys), n2, ps2)),
+        Cons(p, rest) => Fun::entry_step(tys, p.narrow(tys), p, m, next, ports, λ n2 ps2 => Fun::entry(tys, rest, m + p.span(tys), n2, ps2)),
     }
 }
 
@@ -4801,7 +5530,7 @@ theorem Ty::one_word_from(tys: Nat → RecInfo, p: Ty): p.OneWord(tys) → p.Fro
 
 // An enum's words bound at its ids: the tag word names the constructor
 // they read as (its tags fit a word), and the slots are its fields.
-theorem Ty::enum_from_words(tys: Nat → RecInfo, i: Nat, ok: Enum(i).Passes(tys)): Enum(i).FromWords(tys) {
+theorem Ty::enum_from_words(tys: Nat → RecInfo, i: Nat, ok: ((tys(i).alts.last + 1).leb(Nat::pow(2, 64)) = True) ∧ Ty::Words(tys(i).alts.slots)): Enum(i).FromWords(tys) {
     let e = tys(i).alts;
     ⟨λ values m xs adm bound => {
         let a = Ty::read_words(Enum(i), tys, xs);
@@ -4813,65 +5542,159 @@ theorem Ty::enum_from_words(tys: Nat → RecInfo, i: Nat, ok: Enum(i).Passes(tys
     }, λ m => Ty::fields_below_len(Cons(Word(64), e.slots), m, m + (e.slots.len() + 1), (m + (e.slots.len() + 1)).le_refl())⟩
 }
 
-// What the entry needs of a code it reads by one `Resize` from the word
-// passed (`Ty::narrow`): the word is bound at its one id, its fresh port
-// is below the next, and the port after the `Resize` holds the word read
-// at the code. A narrow word and a bit are such codes.
+// The ports of fields below a bound are below it.
+theorem Ty::ports_from_below_of(fs: List<Ty>): (port, next: Nat) → Ty::FieldsBelow(fs, port, next) → (id: Nat) → Mem(id, Ty::ports_from(fs, port)) → id < next {
+    match fs {
+        Nil => λ port next _ id never => false_elim(never),
+        Cons(_, rest) => λ port next below id mem => match mem {
+            Inl(e) => j(sym(e), λ y _ => y < next, below.left),
+            Inr(later) => Ty::ports_from_below_of(rest, port + 1, next, below.right, id, later),
+        },
+    }
+}
+
+theorem Ty::entry_node_output(f: Ty, out, src: Nat): node_output(f.entry_node(out, src)).id = out {
+    (match f.slot_narrow() as λ b => node_output(match b { True => Resize(64, f.width(), out, src), False => Move(64, out, src) }).id = out {
+        True => refl, False => refl,
+    })
+}
+
+// A slot read from its word holds the word read at the slot.
+theorem Ty::entry_node_holds(f: Ty, ok: f.Slot(), values: Valuation(), buffers: Buffers(), out, src: Nat, x: BitVec(64), hx: values(64, src) = x):
+    f.FlatHolds(f.entry_node(out, src).step(values, buffers := buffers), out, f.word_at(x)) {
+    (match f.slot_narrow() as λ b => f.slot_narrow() = b →
+            f.FlatHolds((match b { True => Resize(64, f.width(), out, src), False => Move(64, out, src) }).step(values, buffers := buffers), out, f.word_at(x)) {
+        True => λ _ => Ty::slot_narrowed(f, ok, Valuation::set(values, out, λ wd => BitVec::ofNat(values(64, src).toNat())), out, x,
+            trans(Valuation::set_here(values, out, λ wd => BitVec::ofNat(values(64, src).toNat()), f.width()),
+                cong_fn(λ (y: BitVec(64)) => BitVec::ofNat(y.toNat(), n := f.width()), hx))),
+        False => λ e => j(sym(Ty::slot_wide(f, ok, e)), λ g _ => (moved: Valuation()) → moved(64, out) = x → g.FlatHolds(moved, out, g.word_at(x)), λ moved h => h)(
+            Valuation::set(values, out, λ wd => values(wd, src)), trans(Valuation::set_here(values, out, λ wd => values(wd, src), 64), hx)),
+    })(refl)
+}
+
+theorem Ty::entry_slots_keeps(buffers: Buffers(), fs: List<Ty>): (out, src: Nat) → (values: Valuation()) →
+    Keeps(values, eval_nodes_over(buffers, Ty::entry_slots(fs, out, src), values), out) {
+    match fs {
+        Nil => λ out src values wd id lt => refl,
+        Cons(f, rest) => λ out src values wd id lt => {
+            let node = f.entry_node(out, src);
+            let set = node.step(values, buffers := buffers);
+            trans(Ty::entry_slots_keeps(buffers, rest, out + 1, src + 1, set, wd, id, Nat::lt_trans(id, out, out + 1, lt, out.lt_succ_self())),
+                j(sym(Ty::entry_node_output(f, out, src)), λ o _ => Valuation::set(values, o, node.value(values, buffers := buffers))(wd, id) = values(wd, id),
+                    Valuation::set_other(values, out, node.value(values, buffers := buffers), wd, id, Nat::ne_of_lt(id, out, lt))))
+        },
+    }
+}
+
+// Slots read from their words, bound at the parameter's ids, hold at the
+// fresh ports what the words read as.
+theorem Ty::entry_slots_sound(buffers: Buffers(), fs: List<Ty>): (out, src: Nat) → Ty::Slots(fs) → Ty::FieldsBelow(fs, src, out) → (values: Valuation()) →
+    (xs: List<BitVec(64)>) → Fun::BoundWords(values, Ty::ports_from(fs, src), Ty::first(fs.len(), xs)) →
+    Ty::FieldsHold(fs, eval_nodes_over(buffers, Ty::entry_slots(fs, out, src), values), out, Ty::flats_of_words(fs, xs)) {
+    match fs {
+        Nil => λ out src _ _ values xs _ => trivial,
+        Cons(f, rest) => λ out src ok below values xs bound => {
+            let node = f.entry_node(out, src);
+            let set = node.step(values, buffers := buffers);
+            let same_set = λ (id: Nat) (lt: id < out) => j(sym(Ty::entry_node_output(f, out, src)), λ o _ =>
+                Valuation::set(values, o, node.value(values, buffers := buffers))(64, id) = values(64, id),
+                Valuation::set_other(values, out, node.value(values, buffers := buffers), 64, id, Nat::ne_of_lt(id, out, lt)));
+            let bound_rest = Fun::bound_frame(values, set, Ty::ports_from(rest, src + 1), Ty::first(rest.len(), xs.tail()),
+                λ id mem => same_set(id, Ty::ports_from_below_of(rest, src + 1, out, below.right, id, mem)), bound.right);
+            let step: (out <= out + 1) = Nat::le_succ_r(out, out, out.le_refl());
+            let ih = Ty::entry_slots_sound(buffers, rest, out + 1, src + 1, ok.right, Ty::fields_below_mono(rest, out, out + 1, step, src + 1, below.right),
+                set, xs.tail(), bound_rest);
+            let fin = eval_nodes_over(buffers, Ty::entry_slots(rest, out + 1, src + 1), set);
+            let head = f.flat_at(set, fin, out, out, λ wd => Ty::entry_slots_keeps(buffers, rest, out + 1, src + 1, set, wd, out, out.lt_succ_self()),
+                f.word_at(xs.head_or(BitVec::zero())), Ty::entry_node_holds(f, ok.left, values, buffers, out, src, xs.head_or(BitVec::zero()), bound.left));
+            ⟨head, ih⟩
+        },
+    }
+}
+
+
+// What the entry needs of a code it reads slot by slot into fresh ports
+// (`Ty::narrow`, `Ty::entry_slots`): from its words bound at its ids,
+// below the fresh ports, the value they read as is held at the first
+// fresh port, and its ports are below its span's end. A narrow word, a
+// bit, and a record or an enum with a narrow slot are such codes.
 fn Ty::Narrowed(self p: Ty, tys: Nat → RecInfo) → Type {
-    ((values: Valuation()) → (m: Nat) → (xs: List<BitVec(64)>) → Fun::BoundWords(values, p.ids(tys, m), Ty::first(p.span(tys), xs)) →
-        values(64, m) = xs.head_or(BitVec::zero())) ∧
-    (((n: Nat) → p.Below(tys, n, n + 1)) ∧
-    ((values: Valuation()) → (m, next: Nat) → (xs: List<BitVec(64)>) → values(64, m) = xs.head_or(BitVec::zero()) →
-        p.Holds(tys, Valuation::set(values, next, λ wd => BitVec::ofNat(values(64, m).toNat())), next, Ty::read_words(p, tys, xs))))
+    ((buffers: Buffers()) → (values: Valuation()) → (m, next: Nat) → (xs: List<BitVec(64)>) → p.AdmitsAt(tys, xs) →
+        Fun::BoundWords(values, p.ids(tys, m), Ty::first(p.span(tys), xs)) → m + p.span(tys) <= next →
+        p.Holds(tys, eval_nodes_over(buffers, Ty::entry_slots(p.pieces(tys), next, m), values), next, Ty::read_words(p, tys, xs))) ∧
+    ((n: Nat) → p.Below(tys, n, n + p.span(tys)))
 }
 
-// A narrow word's port after its `Resize` holds the low bits of the word
-// passed, which is that word read at the narrow code.
-theorem Fun::narrow_holds(tys: Nat → RecInfo, values: Valuation(), p: Ty, w: Nat, hp: p = Word(w), ne: w ≠ 64, m, next: Nat, xs: List<BitVec(64)>,
-    bound: values(64, m) = xs.head_or(BitVec::zero())):
-    p.Holds(tys, Valuation::set(values, next, λ wd => BitVec::ofNat(values(64, m).toNat())), next, Ty::read_words(p, tys, xs)) {
-    let x = xs.head_or(BitVec::zero());
-    let after = Valuation::set(values, next, λ wd => BitVec::ofNat(values(64, m).toNat()));
-    let at_word: (after(w, next) = Ty::cast(tys, Word(64), Word(w), x)) =
-        trans(Valuation::set_here(values, next, λ wd => BitVec::ofNat(values(64, m).toNat()), w),
-            trans(cong_fn(λ (y: BitVec(64)) => BitVec::ofNat(y.toNat(), n := w), bound), sym(Ty::cast_narrow_in(tys, w, ne, x))));
-    j(sym(hp), λ q _ => q.Holds(tys, after, next, Ty::read_words(q, tys, xs)), at_word)
-}
-
-// A bit's port after its `Resize` holds the word's lowest bit, which is
-// the word read as a bit.
-theorem Fun::bit_holds(tys: Nat → RecInfo, values: Valuation(), m, next: Nat, xs: List<BitVec(64)>, bound: values(64, m) = xs.head_or(BitVec::zero())):
-    Bit.Holds(tys, Valuation::set(values, next, λ wd => BitVec::ofNat(values(64, m).toNat())), next, Ty::read_words(Bit, tys, xs)) {
-    let low: BitVec(1) = BitVec::ofNat(xs.head_or(BitVec::zero()).toNat());
-    trans(Valuation::set_here(values, next, λ wd => BitVec::ofNat(values(64, m).toNat()), 1),
-        trans(cong_fn(λ (y: BitVec(64)) => BitVec::ofNat(y.toNat(), n := 1), bound), BitVec::one_bit_eq_ofBool(low)))
-}
-
-theorem Ty::word_narrowed(tys: Nat → RecInfo, w: Nat, ne: w ≠ 64): Word(w).Narrowed(tys) {
-    ⟨λ values m xs bound => bound.left, ⟨λ n => n.lt_succ_self(),
-        λ values m next xs bound => Fun::narrow_holds(tys, values, Word(w), w, refl, ne, m, next, xs, bound)⟩⟩
+theorem Ty::word_narrowed(tys: Nat → RecInfo, w: Nat, lt: w < 64): Word(w).Narrowed(tys) {
+    let ne = Nat::ne_of_lt(w, 64, lt);
+    ⟨λ buffers values m next xs _ bound le => {
+        let held = Ty::entry_slots_sound(buffers, [Word(w)], next, m, ⟨Inr(lt), trivial⟩, ⟨Nat::lt_of_lt_of_le(m, m + 1, next, m.lt_succ_self(), le), trivial⟩,
+            values, xs, bound);
+        let x = xs.head_or(BitVec::zero());
+        trans(held.left, sym(trans(Ty::cast_narrow_in(tys, w, ne, x), sym(Ty::narrow_word_at(w, ne, x)))))
+    }, λ n => n.lt_succ_self()⟩
 }
 
 theorem Ty::bit_narrowed(tys: Nat → RecInfo): Bit.Narrowed(tys) {
-    ⟨λ values m xs bound => bound.left, ⟨λ n => n.lt_succ_self(), λ values m next xs bound => Fun::bit_holds(tys, values, m, next, xs, bound)⟩⟩
+    ⟨λ buffers values m next xs _ bound le =>
+        Ty::entry_slots_sound(buffers, [Bit], next, m, ⟨trivial, trivial⟩, ⟨Nat::lt_of_lt_of_le(m, m + 1, next, m.lt_succ_self(), le), trivial⟩, values, xs, bound).left,
+        λ n => n.lt_succ_self()⟩
+}
+
+theorem Ty::record_narrowed(tys: Nat → RecInfo, i: Nat, ok: Ty::Slots(tys(i).fields)): Named(i).Narrowed(tys) {
+    let fs = tys(i).fields;
+    ⟨λ buffers values m next xs _ bound le => {
+        let fl = Ty::flats_of_words(fs, xs);
+        let held = Ty::entry_slots_sound(buffers, fs, next, m, ok, Ty::fields_below_len(fs, m, next, le), values, xs, bound);
+        j(sym(tys(i).round(fl)), λ t _ => Ty::FieldsHold(fs, eval_nodes_over(buffers, Ty::entry_slots(fs, next, m), values), next, t), held)
+    }, λ n => Ty::fields_below_len(fs, n, n + fs.len(), (n + fs.len()).le_refl())⟩
+}
+
+theorem Ty::enum_narrowed(tys: Nat → RecInfo, i: Nat, ok: Enum(i).Passes(tys)): Enum(i).Narrowed(tys) {
+    let e = tys(i).alts;
+    let fs = Cons(Word(64), e.slots);
+    ⟨λ buffers values m next xs adm bound le => {
+        let a = Ty::read_words(Enum(i), tys, xs);
+        let ws = RecInfo::enum_words(tys, i, a);
+        let len: (fs.len() = ws.len()) = sym(RecInfo::enum_words_len(tys, i, a));
+        let at: Fun::BoundWords(values, Ty::ports_from(fs, m), Ty::first(fs.len(), ws)) =
+            j(sym(j(sym(len), λ n _ => Ty::first(n, ws) = ws, Ty::first_all(ws))), λ l _ => Fun::BoundWords(values, Ty::ports_from(fs, m), l),
+                j(adm, λ l _ => Fun::BoundWords(values, Ty::ports_from(fs, m), l), bound));
+        let held = Ty::entry_slots_sound(buffers, fs, next, m, ⟨Inl(refl), ok.right⟩, Ty::fields_below_len(fs, m, next, le), values, ws, at);
+        let after = eval_nodes_over(buffers, Ty::entry_slots(fs, next, m), values);
+        let lt: (e.tag(a) < Nat::pow(2, 64)) = Nat::le_trans(e.tag(a) + 1, e.last + 1, Nat::pow(2, 64), Nat::le_succ_succ(e.tag(a), e.last, e.bounded(a)),
+            Nat::le_of_leb(e.last + 1, Nat::pow(2, 64), ok.left));
+        let tag: (after(64, next).toNat() = e.tag(a)) = trans(cong_fn(λ (y: BitVec(64)) => y.toNat(), held.left), BitVec::toNat_ofNat(64, e.tag(a), lt));
+        let slots: (Ty::flats_of_words(e.slots, RecInfo::enum_rest(tys, i, a)) = e.fields(a)) =
+            trans(cong_fn(λ (l: List<BitVec(64)>) => Ty::flats_of_words(e.slots, l), sym(RecInfo::enum_rest(tys, i, a).append_nil())),
+                Ty::slots_round(e.slots, ok.right, e.fields(a), Nil));
+        ⟨⟨tag, j(sym(tag), λ y _ => y <= e.last, e.bounded(a))⟩,
+            j(slots, λ t _ => Ty::FieldsHold(e.slots, after, next + 1, t), held.right)⟩
+    }, λ n => Ty::fields_below_len(fs, n, n + (e.slots.len() + 1), (n + (e.slots.len() + 1)).le_refl())⟩
 }
 
 // What `narrow` decides at a code a plain function takes: one whose value
 // binding its words leaves (`Ty::FromWords`), or a narrow word.
 theorem Ty::narrow_cases(tys: Nat → RecInfo, P: Bool → Type, p: Ty): p.Param(tys) → (p.FromWords(tys) → P(False)) →
-    (p.Narrowed(tys) → P(True)) → P(p.narrow()) {
+    (p.Narrowed(tys) → P(True)) → P(p.narrow(tys)) {
     match p {
         Word(w) => λ ok own narrow => match ok {
             Inl(e) => j(sym(e), λ y _ => P(Ty::narrow_by(y, y.equation(64))), own(Ty::one_word_from(tys, Word(w), e))),
             Inr(lt) => j(sym(Or::inr_apart(w.equation(64), Nat::ne_of_lt(w, 64, lt))), λ o _ => P(Ty::narrow_by(w, o)),
-                narrow(Ty::word_narrowed(tys, w, Nat::ne_of_lt(w, 64, lt)))),
+                narrow(Ty::word_narrowed(tys, w, lt))),
         },
         Bit => λ _ own narrow => narrow(Ty::bit_narrowed(tys)),
         ByteList(_) => λ never => false_elim(never),
         Lines => λ never => false_elim(never),
-        Named(i) => λ ok own _ => own(Ty::record_from_words(tys, i, ok)),
+        Named(i) => λ ok own narrow => (match Ty::slots_narrow(tys(i).fields) as λ b => Ty::slots_narrow(tys(i).fields) = b → P(b) {
+            False => λ e => own(Ty::record_from_words(tys, i, Ty::slots_wide(tys(i).fields, ok, e))),
+            True => λ _ => narrow(Ty::record_narrowed(tys, i, ok)),
+        })(refl),
         Count => λ never => false_elim(never),
-        Enum(i) => λ ok own _ => own(Ty::enum_from_words(tys, i, ok)),
+        Enum(i) => λ ok own narrow => (match Ty::slots_narrow(tys(i).alts.slots) as λ b => Ty::slots_narrow(tys(i).alts.slots) = b → P(b) {
+            False => λ e => own(Ty::enum_from_words(tys, i, ⟨ok.left, Ty::slots_wide(tys(i).alts.slots, ok.right, e)⟩)),
+            True => λ _ => narrow(Ty::enum_narrowed(tys, i, ok)),
+        })(refl),
     }
 }
 
@@ -4894,31 +5717,35 @@ theorem Fun::entry_step_holds(tys: Nat → RecInfo, buffers: Buffers(), p: Ty, r
         Fun::words_past(tys, rest, m + p.span(tys)) <= next2 →
         Fun::EntryHolds(tys, buffers, rest, g2, env2, Fun::entry(tys, rest, m + p.span(tys), next2, ports2), Ty::skip(p.span(tys), xs), values2)):
     Fun::EntryHolds(tys, buffers, rest, Cons(p, g), Pair(Ty::read_words(p, tys, xs), env),
-        Fun::entry_step(p.narrow(), p, m, next, ports, λ n2 ps2 => Fun::entry(tys, rest, m + p.span(tys), n2, ps2)), Ty::skip(p.span(tys), xs), values) {
+        Fun::entry_step(tys, p.narrow(tys), p, m, next, ports, λ n2 ps2 => Fun::entry(tys, rest, m + p.span(tys), n2, ps2)), Ty::skip(p.span(tys), xs), values) {
     let again = λ (n2: Nat) (ps2: List<Nat>) => Fun::entry(tys, rest, m + p.span(tys), n2, ps2);
     let env2 = Pair(Ty::read_words(p, tys, xs), env);
     let more = Ty::skip(p.span(tys), xs);
     let end = Fun::words_past(tys, rest, m + p.span(tys));
-    Ty::narrow_cases(tys, λ b => Fun::EntryHolds(tys, buffers, rest, Cons(p, g), env2, Fun::entry_step(b, p, m, next, ports, again), more, values), p, ok,
+    Ty::narrow_cases(tys, λ b => Fun::EntryHolds(tys, buffers, rest, Cons(p, g), env2, Fun::entry_step(tys, b, p, m, next, ports, again), more, values), p, ok,
         λ from => ih(Cons(p, g), Cons(m, ports), env2, next, values,
             ⟨from.left(values, m, xs, admitted, bound), held⟩,
             ⟨p.below_mono(tys, m, m + p.span(tys), next, Nat::le_trans(m + p.span(tys), end, next, Fun::words_past_ge(tys, rest, m + p.span(tys)), past),
                 from.right(m)), below⟩,
             bound_rest, past),
         λ nh => {
-            let after = Valuation::set(values, next, λ wd => BitVec::ofNat(values(64, m).toNat()));
-            let keeps: Keeps(values, after, next) = λ wd id lt =>
-                Valuation::set_other(values, next, λ v => BitVec::ofNat(values(64, m).toNat()), wd, id, Nat::ne_of_lt(id, next, lt));
-            let word: (values(64, m) = xs.head_or(BitVec::zero())) = nh.left(values, m, xs, bound);
-            ih(Cons(p, g), Cons(next, ports), env2, next + 1, after,
-                ⟨nh.right.right(values, m, next, xs, word), env_holds_keeps(tys, g, values, after, next, keeps, ports, env, below, held)⟩,
-                ⟨nh.right.left(next),
-                    below_mono(tys, g, next, next + 1, Nat::le_succ_r(next, next, next.le_refl()), ports, below)⟩,
+            let nodes = Ty::entry_slots(p.pieces(tys), next, m);
+            let after = eval_nodes_over(buffers, nodes, values);
+            let n2 = next + p.span(tys);
+            let keeps: Keeps(values, after, next) = Ty::entry_slots_keeps(buffers, p.pieces(tys), next, m, values);
+            let le: (m + p.span(tys) <= next) = Nat::le_trans(m + p.span(tys), end, next, Fun::words_past_ge(tys, rest, m + p.span(tys)), past);
+            let grow: (next <= n2) = Nat::le_add_l(next, p.span(tys));
+            let later = again(n2, Cons(next, ports));
+            let inner = ih(Cons(p, g), Cons(next, ports), env2, n2, after,
+                ⟨nh.left(buffers, values, m, next, xs, admitted, bound, le), env_holds_keeps(tys, g, values, after, next, keeps, ports, env, below, held)⟩,
+                ⟨nh.right(next), below_mono(tys, g, next, n2, grow, ports, below)⟩,
                 Fun::bound_frame(values, after, Fun::word_ids(tys, rest, m + p.span(tys)), more, λ id mem =>
-                    Valuation::set_other(values, next, λ v => BitVec::ofNat(values(64, m).toNat()), 64, id,
-                        Nat::ne_of_lt(id, next, Nat::lt_of_lt_of_le(id, end, next, Fun::word_ids_below(tys, rest, m + p.span(tys), id, mem), past))),
+                    keeps(64, id, Nat::lt_of_lt_of_le(id, end, next, Fun::word_ids_below(tys, rest, m + p.span(tys), id, mem), past)),
                     bound_rest),
-                Nat::le_succ_r(end, next, past))
+                Nat::le_trans(end, next, n2, past, grow));
+            j(sym(Tm::nodes_append(buffers, nodes, later.nodes, values)), λ u _ =>
+                EnvHolds(tys, u, Ty::bind_onto(rest, Cons(p, g)), later.ports, Ty::extend_words(tys, rest, Cons(p, g), env2, more)) ∧
+                    Below(tys, Ty::bind_onto(rest, Cons(p, g)), later.ports, later.next), inner)
         })
 }
 
@@ -5047,10 +5874,14 @@ theorem Fun::lower_sound(self f: Fun, w: World): f.LowerHolds(w, f.lower(w)) {
                     Ty::cast_holds(w.tys, after, c.result, body_ty, f.result, eb, Tm::sem(f.body, w, f.context(), env), ran.right.right.right));
                 let code = f.code_of(w.tys, e, c);
                 let ended = code.body.eval(call, values, buffers := w.spans);
-                let first: (ended(64, code.result) = Ty::cast(w.tys, f.result, Word(64), value)) =
-                    Ty::out_reads(w.tys, call, w.spans, values, f.result, Fun::entered(e.nodes, c), er, value, holds);
-                let also: (words_of(ended, code.also) = Ty::rest_words(w.tys, f.result, value)) =
-                    Ty::also_reads(w.tys, call, w.spans, values, f.result, Fun::entered(e.nodes, c), er, value, holds);
+                let below_body: f.result.Below(w.tys, c.result, c.next) =
+                    Ty::below_cast(w.tys, body_ty, f.result, eb, c.result, c.next, ran.right.left);
+                let below = match e.nodes as λ ns => f.result.Below(w.tys, Fun::entered(ns, c).result, Fun::entered(ns, c).next) {
+                    Nil => below_body, Cons(_, _) => below_body,
+                };
+                let out = Ty::out_pieces(w.tys, call, w.spans, values, f.result, Fun::entered(e.nodes, c), er, value, holds, below);
+                let first: (ended(64, code.result) = Ty::cast(w.tys, f.result, Word(64), value)) = out.left;
+                let also: (words_of(ended, code.also) = Ty::rest_words(w.tys, f.result, value)) = out.right;
                 trans(cong_fn(λ (x: BitVec(64)) => Cons(x, words_of(ended, code.also)), first),
                     cong_fn(λ (rest: List<BitVec(64)>) => Cons(Ty::cast(w.tys, f.result, Word(64), value), rest), also))
             }))))))

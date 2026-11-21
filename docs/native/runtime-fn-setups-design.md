@@ -2002,8 +2002,8 @@ the statement converts to the evaluated one by the record's η, so no
 rewrite is needed. `compile-x86` reads which parameters are records of
 several words from the shape probe and quantifies the certificate by
 record (`RecInfo::record_at`); like an enum's, such a certificate states
-no `_implements`. A record parameter in a function lent spans is refused
-as not stated yet. Probes: the record-parameter section of
+no `_implements`. A record parameter in a function lent spans was refused
+as not stated yet (§16.18 states it). Probes: the record-parameter section of
 `runtime_two_words_tests` (taken, taken and returned, and called twice
 from one function); `add_wides` in `examples/x86-native/two_words.hthr`,
 called from C with two structures by value (`native_program.rs`).
@@ -2028,7 +2028,8 @@ other cases are. `compile-x86` states a `Bool` through `runtime_bit_low`
 and `runtime_bit_wide`, so a C caller passes and receives a C `bool`
 (`examples/x86-native/bools.hthr`, `native_program.rs`).
 
-**Still refused, and how each would go** (`issues/runtime-fn-narrow-call-args.md`).
+**Still refused, and how each would go** (`issues/runtime-fn-narrow-call-args.md`;
+§16.18 builds the first, and the bit slots of the second).
 
 - *A narrow word or a `Bool` passed to a call.* The callee reads the low
   bits of a 64-bit word, so the caller widens first: `Tm::call_args`
@@ -2055,3 +2056,105 @@ back and matched, at two sites); the `Bool` section of
 `runtime_narrow_tests` (a `Bool` result, a `Bool` parameter choosing
 between words, both together, and a `Bool` read back from a call and
 branched on).
+
+### 16.18 Narrow slots, narrow arguments to a call, and records lent spans (built 2026-11-21)
+
+Minus (2026-11-21): fix the pieces §16.17 left refused.
+
+**A slot is a word, a narrow word or a bit, and crosses in one word.** A
+record's field and an enum's payload slot are each one port of the code
+(`Ty::Flat` is free of the type table), so a `u8` field or a `Bool` slot
+needs nothing a parameter of the same type did not already have: its word
+holds the value in its low bits, zero-extended (`Ty::flat_word`), and the
+value is read back from those bits (`Ty::word_at`; for `Bit`,
+`BitVec::ofNat(x.toNat(), n:=1).head_bit()`, the `Bool` parameter's
+reading). `Ty::Slot` names what a slot may be (`Word(w)` with `w = 64`
+or `w < 64`, or `Bit`), `Ty::Slots` a list of them, and
+`Ty::slot_narrow`/`slots_narrow` whether any needs the low-bits reading.
+`Ty::slots_round` is the one fact every direction uses: reading the words
+a value of slots writes gives the value back. Records and enums both take
+`Slots` where §16.17 took `Words`, so every proof that was stated for word
+fields is now stated once for slots (`Ty::words_slots` turns an old
+premise into the new one).
+
+**The same four directions, a node per narrow slot.** Each place a word
+crossed (§16.17) a narrow slot adds the one node the parameter of its type
+already used, and a wide slot keeps its port:
+
+- *Sent to a call* (`Tm::send_slots`): a narrow slot is widened by
+  `Resize(w, 64)` into a fresh port before the call, a wide one passes its
+  own port. A narrow word or a `Bool` passed as a whole argument is the
+  one-slot case of this (`Ty::Sliced` covers a narrow word, a bit, and a
+  record or enum with a narrow slot; `Sendable` is `Sent ∨ Sliced`), so
+  `calls_digit` compiles.
+- *Read back from a call* (`Ty::Back`): the callee's word is bound at
+  every width (`Valuation::bind`), so a narrow slot reads its value off the
+  port with no node (`Ty::BoundAt`, `Ty::bind_bound`).
+- *Returned* (`Ty::widen_fields`): `Resize(w, 64)` for a narrow slot and
+  `Move(64)` for a wide one, into fresh consecutive ports, so a result's
+  words are the slots' words in order (`Ty::widen_slots_sound`).
+- *Taken at the entry* (`Ty::entry_slots`): `Resize(64, w)` for a narrow
+  slot, `Move(64)` for a wide one. `Ty::Narrowed` packs what the entry needs
+  of each narrowed parameter, now one case per kind (`word_narrowed`,
+  `bit_narrowed`, `record_narrowed`, `enum_narrowed`).
+
+A count slot is still refused: a `Nat` round-trips through a word only
+below 2^64, so it needs a premise no caller states. A count *result* is
+refused for the same reason (`call_of_count_refused`).
+
+**The generator states a record parameter at its value.** A record of word
+fields converted to its read-back form by η (§16.17); a narrow field's
+round trip is `Ty::slots_round`, not conversion, so `f::agrees` at a record
+parameter goes through `runtime_record_agrees`, the record twin of
+`runtime_enum_agrees`. A record result's fields are stated as the words
+they are returned in (`runtime_result_fields`: `runtime_wide(w, r.f)` for
+a narrow field, `runtime_bit_wide(r.f)` for a bit).
+
+**Records and enums in functions lent spans.** The lent branch of the
+generator now quantifies enum and record parameters by value as the unlent
+one does (`runtime_at_enums` under the span's reference), so
+`f::agrees_over(f, place, length, t)` holds for a record `t` of slots or an
+enum with a payload; the refusal "takes an enum or a record of several
+words and is lent spans" is gone (`token_peek`, `flag_peek` in
+`runtime_slots_tests`).
+
+**At a C boundary.** `compile-x86` passes a record a word a field. C lays a
+structure's fields in eightbytes, and System V passes an eightbyte in one
+register, so the two agree exactly when no two adjacent fields are both
+narrow (a narrow field followed by a 64-bit one starts a new eightbyte; two
+narrow fields side by side share one). `Ty::slots_share` is that test, and
+`compile-x86` refuses a record parameter or result for which it holds,
+rather than certify a layout no C caller uses. A record result of two
+fields with a narrow one is stated as its zero-extended words (the shape
+probe reads the result's field widths, `{prefix}_field_widths`), which is a
+valid C return of `{ uint8_t; uint64_t }`. A record parameter is quantified
+by value (`RecInfo::record_at`), so a narrow field's word is stated at its
+zero extension; a C caller that leaves garbage above a `uint8_t` field is
+outside what the certificate says, where a narrow *scalar* parameter is
+stated at every word (`runtime_low`).
+
+**Still refused, and how each would go.**
+
+- *An enum as a record's field.* `Ty::Flat` must stay free of the type
+  table, since the table's records are built from it. The table splits:
+  enums first (their payloads are slots, leaves only), then records over
+  them, with a record's enum field flat as the enums table's value and
+  crossing as the enum's words inline. A record and an enum are then both
+  a code of several words.
+- *A result of more than two words exported to C.* System V returns such a
+  structure through memory: the caller passes a pointer in RDI and expects
+  it back in RAX. The machine code already returns every word in the answer
+  registers (`Prog::ComputesBoth`); the export needs an entry that shifts
+  the arguments one register up, calls the function, stores the answer
+  registers through the pointer and returns it, with a contract that says
+  memory changes exactly at the pointed-to words (and that they lie apart
+  from the stack's room). That is a new machine-level contract, proved once
+  for every word count, not a per-function proof.
+- *A count slot*, above.
+
+Probes: `lib/_tests/native/runtime/runtime_slots_tests` (a record with a
+`u8`, a `Bool` and a word built, passed, returned and read back across
+calls; an enum whose payloads hold a `u8`, a `Bool` and a word; a `Bool`
+payload; both kinds of parameter in a function lent a span), the call
+section of `runtime_narrow_tests` (`calls_digit` and the other narrow and
+`Bool` arguments), and `count_result_world` in `rt_lower_tests`.

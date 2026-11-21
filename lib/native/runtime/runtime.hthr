@@ -132,36 +132,33 @@ fn Ty::is_edge(self t: Ty, tys: Nat → RecInfo) → Bool {
     match t { Word(w) => w.leb(64), Bit => True, _ => t.is_one_word(tys) }
 }
 
-// A code a plain function returns (`Ty::check_out`,
-// docs/native/runtime-fn-setups-design.md §16.16-17): one it passes in a
-// word, a record whose fields are 64-bit words (the first in RAX, the rest
-// beside it), or an enum whose payload's slots are 64-bit words (its tag
-// word, then its slots).
+// Fields that are all 64-bit words.
 fn Ty::is_words(fs: List<Ty>) → Bool { match fs { Nil => True, Cons(f, rest) => f.is_word64().and(Ty::is_words(rest)) } }
 
 fn Ty::is_words_one(fs: List<Ty>) → Bool { match fs { Nil => False, Cons(_, _) => Ty::is_words(fs) } }
+
+// A code a plain function returns (`Ty::check_out`,
+// docs/native/runtime-fn-setups-design.md §16.16-18): one it passes in a
+// word, a record of one field at least (the first in RAX, the rest beside
+// it), or an enum (its tag word, then its slots), each field or slot a
+// word of at most 64 bits or a bit.
 
 // An enum without a payload: what crosses a boundary as its tag word
 // alone (`Ty::Bare`).
 fn Ty::is_bare(tys: Nat → RecInfo, i: Nat) → Bool { match tys(i).alts.slots { Nil => True, Cons(_, _) => False } }
 
-fn Ty::is_out(self t: Ty, tys: Nat → RecInfo) → Bool {
-    match t {
-        Enum(i) => Ty::is_bare(tys, i).or(Ty::is_words(tys(i).alts.slots)),
-        Named(i) => t.is_edge(tys).or(Ty::is_words_one(tys(i).fields)),
-        _ => t.is_edge(tys),
-    }
-}
+fn Ty::is_out(self t: Ty, tys: Nat → RecInfo) → Bool { match t.check_out(tys) { None => False, Some(_) => True } }
 
 fn Ty::all_edge(ts: List<Ty>, tys: Nat → RecInfo) → Bool {
     match ts { Nil => True, Cons(t, rest) => t.is_edge(tys).and(Ty::all_edge(rest, tys)) }
 }
 
 // A function's parameters: each crosses the boundary (`Ty::Param`), an
-// enum as its tag word and a word for each slot of its payload, each a
-// 64-bit word, and a record of 64-bit words a word a field.
+// enum as its tag word and a word for each slot of its payload, and a
+// record a word a field, each slot a word of at most 64 bits or a bit
+// (design §16.18).
 fn Ty::all_param(ts: List<Ty>, tys: Nat → RecInfo) → Bool {
-    match ts { Nil => True, Cons(t, rest) => { let ok = match t { Enum(i) => Ty::is_words(tys(i).alts.slots), Named(i) => Ty::is_words(tys(i).fields), _ => t.is_edge(tys) }; ok.and(Ty::all_param(rest, tys)) } }
+    match Ty::check_edges(tys, ts) { None => False, Some(_) => True }
 }
 
 // The width a code crosses a function's boundary at: a word's own, 64 for
@@ -210,7 +207,7 @@ fn Tm::judge(self t: Tm, sigs: List<Sig>, tys: Nat → RecInfo) → Verdict {
             Zero => Refused("a call of itself that is not the last thing it does: a recursion is lowered as a loop, its calls of itself in tail position (docs/native/runtime-fn-setups-design.md §16.11)"),
             Succ(_) => match Sig::at(sigs, f).is_sent_at(tys) {
                 True => Ok,
-                False => Refused("a call of a function whose parameters or result do not cross a call in 64-bit words: a bit, a count or a byte buffer among them, or an enum whose payload is not words (docs/native/runtime-fn-setups-design.md §16.17)"),
+                False => Refused("a call of a function whose parameters or result do not cross a call in words: a count result or a byte buffer among them, or a record or an enum with a field that is not a word or a bit (docs/native/runtime-fn-setups-design.md §16.18)"),
             },
         },
         Fold(_, _, _) => Refused("a `foldl`: loops over buffers are not lowered yet (docs/native/runtime-fn-setups-design.md §16.6)"),
@@ -249,11 +246,11 @@ fn Tm::judge_tail(self t: Tm, sigs: List<Sig>, tys: Nat → RecInfo) → Verdict
 }
 
 fn Fun::words_reason() → String {
-    "a parameter that is not a word of at most 64 bits or an enum whose fields are 64-bit words: the default setup compiles functions from words (and a loop's `Nat` fuel, first) to a word (issues/function-ir-multi-word-calls.md)"
+    "a parameter that is not a word of at most 64 bits, a `Bool`, or a record or an enum whose fields are those: the default setup compiles functions from words (and a loop's `Nat` fuel, first) to words (docs/native/runtime-fn-setups-design.md §16.18)"
 }
 
 fn Fun::result_reason() → String {
-    "a result that is not a word of at most 64 bits, a record of 64-bit words or an enum whose fields are 64-bit words: the default setup compiles functions from words to words (docs/native/runtime-fn-setups-design.md §16.17)"
+    "a result that is not a word of at most 64 bits, a `Bool`, or a record or an enum whose fields are those: the default setup compiles functions from words to words (docs/native/runtime-fn-setups-design.md §16.18)"
 }
 
 fn Fun::loop_words_reason() → String {
@@ -2368,11 +2365,20 @@ fn runtime_result_names(reprs: List<ReprEntry>, recs: List<RecShape>, r: Ty) →
 // A record result's fields, each its projection (none for any other
 // result): its first is the word the function returns, the rest those it
 // returns beside it (docs/native/runtime-fn-setups-design.md §16.16).
-fn runtime_result_fields(reprs: List<ReprEntry>, recs: List<RecShape>, r: Ty, e: Expr) → Tac<List<Expr>> {
+fn runtime_narrow_results(wide: RtNarrow, codes: List<Ty>, es: List<Expr>) → List<Expr> {
+    match es { Nil => [], Cons(e, rest) => Cons(runtime_narrow_result(wide, codes.head_or(Word(64)), e), runtime_narrow_results(wide, codes.tail(), rest)) }
+}
+
+fn runtime_result_fields(wide: RtNarrow, reprs: List<ReprEntry>, recs: List<RecShape>, r: Ty, e: Expr) → Tac<List<Expr>> {
     match r {
         Named(i) => match reprs.nth(i) {
             Some(_) => pure([]),
-            None => match recs.nth(i - reprs.len()) { Some(_) => runtime_projections(e, "a record result's fields"), None => pure([]) },
+            // Each field as the word it is answered in: a narrow one or a
+            // bit zero-extended (design §16.18).
+            None => match recs.nth(i - reprs.len()) {
+                Some(rec) => runtime_projections(e, "a record result's fields").bind(λ gs => pure(runtime_narrow_results(wide, rec.codes, gs))),
+                None => pure([]),
+            },
         },
         _ => pure([]),
     }
@@ -2725,7 +2731,7 @@ fn runtime_word_tails(words: List<Expr>, enum_words, then, tys_e: Expr, ps: List
 // itself or as what its word reads back as).
 fn runtime_agree_rhs(low, wide: RtNarrow, count: Expr, reprs: List<ReprEntry>, recs: List<RecShape>, rfun: Fun, f: GlobalRef, args: List<Expr>) → Tac<Expr> {
     let fx = ap(Global(f), runtime_narrow_args(low, rfun.params, runtime_args(count, reprs, rfun.params, args)));
-    let gets <- runtime_result_fields(reprs, recs, rfun.result, fx);
+    let gets <- runtime_result_fields(wide, reprs, recs, rfun.result, fx);
     pure(match gets { Cons(g, _) => g, Nil => runtime_narrow_result(wide, rfun.result, runtime_result(reprs, rfun.result, fx)) })
 }
 
@@ -2738,7 +2744,7 @@ fn runtime_enum_result(enum_word, tys_e: Expr, r: Ty, e: Expr) → Expr {
 // `f`'s arguments with parameter `j` as `here`, an enum before it as its
 // value and one after as what its words read back as (`tails`, from
 // `runtime_word_tails`: the words after each parameter's are the next's).
-fn runtime_enum_args(read_e, tys_e: Expr, ps: List<Ty>, ys, tails: List<Expr>, j: Nat, here: Expr, n: Nat) → List<Expr> {
+fn runtime_enum_args(read_e, read_r, tys_e: Expr, reprs_n: Nat, ps: List<Ty>, ys, tails: List<Expr>, j: Nat, here: Expr, n: Nat) → List<Expr> {
     match ps {
         Nil => [],
         Cons(p, rest) => match ys {
@@ -2747,9 +2753,13 @@ fn runtime_enum_args(read_e, tys_e: Expr, ps: List<Ty>, ys, tails: List<Expr>, j
                 True => here,
                 False => match p {
                     Enum(i) => match n.leb(j) { True => y, False => ap(read_e, [tys_e, NatLit(i), y, tails.nth(n + 1).unwrap_or(Blank)]) },
+                    Named(i) => match runtime_is_record(reprs_n, i).and(j.leb(n)) {
+                        True => ap(read_r, [tys_e, NatLit(i), y, tails.nth(n + 1).unwrap_or(Blank)]),
+                        False => y,
+                    },
                     _ => y,
                 },
-            }, runtime_enum_args(read_e, tys_e, rest, more, tails, j, here, n + 1)),
+            }, runtime_enum_args(read_e, read_r, tys_e, reprs_n, rest, more, tails, j, here, n + 1)),
         },
     }
 }
@@ -2768,6 +2778,20 @@ fn runtime_enum_read(tys: Nat → RecInfo, i: Nat, v: tys(i).alts.E, more: List<
 theorem runtime_enum_agrees(tys: Nat → RecInfo, i: Nat, v: tys(i).alts.E, more: List<BitVec(64)>, ok: Enum(i).passes(tys).IsTrue(),
     P: tys(i).alts.E → Type, h: P(runtime_enum_read(tys, i, v, more))): P(v) {
     j(RecInfo::enum_reads(tys, i, Ty::passes_sound(tys, Enum(i), ok), v, more), λ y _ => P(y), h)
+}
+
+// What a record's words, and the words after them, read back as: the
+// record built from its fields read off its words (design §16.18).
+fn runtime_record_read(tys: Nat → RecInfo, i: Nat, v: tys(i).T, more: List<BitVec(64)>) → tys(i).T {
+    Ty::read_words(Named(i), tys, runtime_words_then(RecInfo::record_words(tys, i, v), more))
+}
+
+// What is said of what a record's words read back as is said of the
+// record (`RecInfo::record_reads`): a narrow field read back off its word
+// is itself, which conversion does not see. `ok` closes by evaluation.
+theorem runtime_record_agrees(tys: Nat → RecInfo, i: Nat, v: tys(i).T, more: List<BitVec(64)>, ok: Ty::slots_ok(tys(i).fields).IsTrue(),
+    P: tys(i).T → Type, h: P(runtime_record_read(tys, i, v, more))): P(v) {
+    j(RecInfo::record_reads(tys, i, Ty::slots_checked(tys(i).fields, Ty::check_slots(tys(i).fields), ok), v, more), λ y _ => P(y), h)
 }
 
 // An enum's words, and any after them, are admitted.
@@ -2808,7 +2832,7 @@ fn runtime_admitting(trivial_e, tys_e: Expr, q: RtQ) → Tac<Admitting> {
     pure(Admitting(intro, enum_admits, admits, admits_all, trivial_e, tys_e, q))
 }
 
-fn runtime_at_enums(trivial_e, tys_e: Expr, ps: List<Ty>, own: List<Handle>, ys, tails: List<Expr>, left: List<Ty>, j: Nat, lhs: Expr,
+fn runtime_at_enums(trivial_e, tys_e: Expr, reprs_n: Nat, ps: List<Ty>, own: List<Handle>, ys, tails: List<Expr>, left: List<Ty>, j: Nat, lhs: Expr,
     rhs: List<Expr> → Tac<Expr>, evaluated: Expr, under: Option<LocalRef>) → Tac<Expr> {
     match left {
         Nil => pure(evaluated),
@@ -2821,14 +2845,34 @@ fn runtime_at_enums(trivial_e, tys_e: Expr, ps: List<Ty>, own: List<Handle>, ys,
                 let z <- assume(Hd(ty), "z", under).or_fail("runtime: an enum's value: ");
                 // Parameters before `j` are their values, `j` is `z`, and
                 // those after are what their words read back as.
-                let at = λ (here: Expr) => runtime_enum_args(read_e, tys_e, ps, ys, tails, j, here, 0);
+                let read_r <- runtime_global(name_of(runtime_record_read));
+                let at = λ (here: Expr) => runtime_enum_args(read_e, read_r, tys_e, reprs_n, ps, ys, tails, j, here, 0);
                 let motive_rhs <- rhs(at(Local(z.ref)));
                 let eq_at <- runtime_global(name_of(runtime_eq_at));
                 let motive = ap(eq_at, [Blank, Blank, lhs, Lam(z.ref, motive_rhs)]);
                 let next = ap(enum_agrees, [tys_e, NatLit(i), y, tails.nth(j + 1).unwrap_or(Blank), trivial_e, motive, evaluated]);
-                runtime_at_enums(trivial_e, tys_e, ps, own, ys, tails, later, j + 1, lhs, rhs, next, under)
+                runtime_at_enums(trivial_e, tys_e, reprs_n, ps, own, ys, tails, later, j + 1, lhs, rhs, next, under)
             },
-            _ => runtime_at_enums(trivial_e, tys_e, ps, own, ys, tails, later, j + 1, lhs, rhs, evaluated, under),
+            // A record (not a type held by its repr) as itself, read back
+            // off its fields' words (`runtime_record_agrees`).
+            Named(i) => match runtime_is_record(reprs_n, i) {
+                False => runtime_at_enums(trivial_e, tys_e, reprs_n, ps, own, ys, tails, later, j + 1, lhs, rhs, evaluated, under),
+                True => {
+                    let read_e <- runtime_global(name_of(runtime_enum_read));
+                    let read_r <- runtime_global(name_of(runtime_record_read));
+                    let record_agrees <- runtime_global(name_of(runtime_record_agrees));
+                    let y = ys.nth(j).unwrap_or(Blank);
+                    let ty <- match own.nth(j) { Some(t) => pure(t), None => runtime_fail("a record parameter without its type") };
+                    let z <- assume(Hd(ty), "z", under).or_fail("runtime: a record's value: ");
+                    let at = λ (here: Expr) => runtime_enum_args(read_e, read_r, tys_e, reprs_n, ps, ys, tails, j, here, 0);
+                    let motive_rhs <- rhs(at(Local(z.ref)));
+                    let eq_at <- runtime_global(name_of(runtime_eq_at));
+                    let motive = ap(eq_at, [Blank, Blank, lhs, Lam(z.ref, motive_rhs)]);
+                    let next = ap(record_agrees, [tys_e, NatLit(i), y, tails.nth(j + 1).unwrap_or(Blank), trivial_e, motive, evaluated]);
+                    runtime_at_enums(trivial_e, tys_e, reprs_n, ps, own, ys, tails, later, j + 1, lhs, rhs, next, under)
+                },
+            },
+            _ => runtime_at_enums(trivial_e, tys_e, reprs_n, ps, own, ys, tails, later, j + 1, lhs, rhs, evaluated, under),
         },
     }
 }
@@ -2955,7 +2999,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
             // A function lent nothing: its program at the empty file, which
             // is `program_eval`.
             let fx = ap(Global(f), runtime_narrow_args(low, rfun.params, runtime_args(count, reprs, rfun.params, at_ys)));
-            let gets <- runtime_result_fields(reprs, recs, rfun.result, fx);
+            let gets <- runtime_result_fields(wide, reprs, recs, rfun.result, fx);
             // A record result: its first field is the word returned, and
             // the rest are returned beside it (`f::agrees_also`).
             let first: Expr = match gets {
@@ -2968,7 +3012,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
             let admitted <- runtime_admitted(admitting, rfun.params, at_ys, tails);
             let evaluated = ap(eval_sources, [linked.program, linked.arities, ap(admits_of, [linked.adm]), ap(sources, [linked.srcs]), linked.sourced, no_file, root,
                 words_e, Hd(trivial_h), admitted]);
-            let agreed <- runtime_at_enums(Hd(trivial_h), tys_e, rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs,
+            let agreed <- runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs,
                 λ args => runtime_agree_rhs(low, wide, count, reprs, recs, rfun, f, args).bind(λ e => pure(runtime_enum_result(enum_word, tys_e, rfun.result, e))),
                 evaluated, ys.last());
             let tail: List<Decl> = [
@@ -2991,7 +3035,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
             // its value as the first is (`runtime_at_enums`).
             let rest_at = λ (args: List<Expr>) => {
                 let fa = ap(Global(f), runtime_narrow_args(low, rfun.params, runtime_args(count, reprs, rfun.params, args)));
-                runtime_result_fields(reprs, recs, rfun.result, fa).bind(λ gs => match gs.tail() {
+                runtime_result_fields(wide, reprs, recs, rfun.result, fa).bind(λ gs => match gs.tail() {
                     Cons(_, _) => pure(RtQ::seq(word_list, gs.tail())),
                     Nil => match rfun.result {
                         Enum(i) => pure(ap(enum_rest, [tys_e, NatLit(i), runtime_result(reprs, rfun.result, fa)])),
@@ -3000,7 +3044,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
                 })
             };
             let finish = λ (lhs_also: Expr) (proof: Expr) =>
-                runtime_at_enums(Hd(trivial_h), tys_e, rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs_also, rest_at, proof, ys.last());
+                runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs_also, rest_at, proof, ys.last());
             let also <- runtime_also_decls(name, f, rfun, q, ts, world_e, table_e, rt_e, linked, runtime_params_of(ys), words_e, rest,
                 runtime_result_names(reprs, recs, rfun.result), admitted, finish);
             pure(head.append(pin).append(made).append(linked_decls).append(tail).append(also))
@@ -3009,9 +3053,9 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
         // every file (the reflection's meaning in the world there, and the
         // program evaluated over the file, against the function at the
         // file's spans).
-        Succ(_) => match Ty::any_enum(rfun.params) || rfun.params.any_bit(λ p => match p { Named(i) => runtime_is_record(reprs.len(), i), _ => False }) {
-          True => runtime_fail("`" ++ name ++ "` takes an enum or a record of several words and is lent spans: not stated yet (docs/native/runtime-fn-setups-design.md §16.16)"),
-          False => {
+        // An enum or a record parameter is stated at its value, as for a
+        // function lent nothing (`runtime_at_enums`).
+        Succ(_) => {
             let buffers_h <- runtime_type_of(name_of(runtime_w_buffers));
             let world_at <- runtime_global(name_of(World::at));
             let span <- runtime_global(name_of(List::span));
@@ -3025,24 +3069,27 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
                 _ => [],
             };
             let c <- assume(Hd(buffers_h), "b", None).or_fail("runtime: a file: ");
-            let ys <- runtime_params(ts.word, rfun.params, Some(c.ref), 0);
+            let ys <- runtime_params_at(runtime_agree_types(ts.word, reprs.len(), rfun.params, own_types), Some(c.ref), 0);
             let at_ys = runtime_locals(ys);
             let enum_words <- runtime_global(name_of(RecInfo::enum_words));
             let then <- runtime_global(name_of(runtime_words_then));
-            let tails = runtime_word_tails(word_list, enum_words, then, tys_e, rfun.params, at_ys, Blank, 0);
+            let record_words <- runtime_global(name_of(RecInfo::record_words));
+            let tails = runtime_word_tails(word_list, enum_words, then, tys_e, rfun.params, at_ys, record_words, reprs.len());
             let words_e = tails.head_or(Blank);
-            let at_file = runtime_lent_args(span, Local(c.ref), 0, rfun.lent, runtime_args(count, reprs, rfun.params, at_ys));
+            let at_file = λ (args: List<Expr>) => runtime_lent_args(span, Local(c.ref), 0, rfun.lent, runtime_narrow_args(low, rfun.params, runtime_args(count, reprs, rfun.params, args)));
             let admits_of <- runtime_global(name_of(link_admits));
             let admitting <- runtime_admitting(Hd(trivial_h), tys_e, q);
             let admitted <- runtime_admitted(admitting, rfun.params, at_ys, tails);
+            let lhs = ap(program_eval_over, [Local(c.ref), linked.program, root, words_e]);
+            let evaluated = ap(eval_sources, [linked.program, linked.arities, ap(admits_of, [linked.adm]), ap(sources, [linked.srcs]), linked.sourced, Local(c.ref), root,
+                words_e, Hd(trivial_h), admitted]);
+            let agreed <- runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs,
+                λ args => pure(runtime_result(reprs, rfun.result, ap(Global(f), at_file(args)))), evaluated, match ys.last() { Some(y) => Some(y), None => Some(c.ref) });
             let tail: List<Decl> = [
                 Decl(AsTheorem, name ++ "::agrees_over", runtime_params_of(Cons(c.ref, ys)),
-                    Equation(ap(program_eval_over, [Local(c.ref), linked.program, root, words_e]), runtime_result(reprs, rfun.result, ap(Global(f), at_file))),
-                    ap(eval_sources, [linked.program, linked.arities, ap(admits_of, [linked.adm]), ap(sources, [linked.srcs]), linked.sourced, Local(c.ref), root,
-                        words_e, Hd(trivial_h), admitted])),
+                    Equation(lhs, runtime_result(reprs, rfun.result, ap(Global(f), at_file(at_ys)))), agreed),
             ];
             pure(head.append(pin).append(made).append(linked_decls).append(tail))
-          },
         },
     }
 }

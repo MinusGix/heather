@@ -255,10 +255,11 @@ theorem safe_pred_compiled(call: Answers(), agree: Tm::CallsAgree(safe_pred_worl
 // word given a 64-bit one.
 theorem zext_width_refused(): Tm::lower(Prim(Zext(32, 32), [0]), no_records_world(), [Word(64)], [0], 1) = None { refl }
 
-// A call at a signature that is not all words.
-fn bit_callee_world() → World { World(RecInfo::none, [Sig([Bit], Word(64))], Pair(λ (b: Bool) => BitVec::ofNat(0), trivial)) }
+// A call whose result a caller cannot read back: a count, which a word
+// holds only below 2^64.
+fn count_result_world() → World { World(RecInfo::none, [Sig([Word(64)], Count)], Pair(λ (x: BitVec(64)) => 0, trivial)) }
 
-theorem call_of_bit_refused(): Tm::lower(Call(0, [0]), bit_callee_world(), [Bit], [0], 1) = None { refl }
+theorem call_of_count_refused(): Tm::lower(Call(0, [0]), count_result_world(), [Word(64)], [0], 1) = None { refl }
 
 // A call with an argument too few.
 theorem call_arity_refused(): Tm::lower(Call(0, [0]), calls_world(), [Word(64)], [0], 1) = None { refl }

@@ -581,6 +581,70 @@ int main(void) {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+// A record with a `u8` field crosses as C's `{ uint8_t; uint64_t }` both
+// ways (docs/native/runtime-fn-setups-design.md §16.18): the byte in the
+// low bits of its own register, read from there and returned zero-extended,
+// the word in the next. C calls `tagged_next` at every tag and edge words.
+#[test]
+fn a_record_with_a_byte_field_crosses_as_a_c_structure() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = root.join(format!("target/native-narrow-fields-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let assembly = dir.join("narrow_fields.s");
+    let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
+        .args(["compile-x86", "examples/x86-native/narrow_fields.hthr", "tagged_next", "-o"]).arg(&assembly)
+        .args(heather_cli::showcase::native_image_args()).args(["--kernel-workers", "1"])
+        .output().unwrap();
+    assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+    let certificate = std::fs::read_to_string(dir.join("narrow_fields.certificate.hthr")).unwrap();
+    for claim in ["runtime_wide(8, narrow_fields::tagged_next(a0).tag)", "RecInfo::record_words(narrow_fields::tagged_next::world.tys, 0, a0)"] {
+        assert!(certificate.contains(claim), "missing {claim}");
+    }
+    let driver = dir.join("main.c");
+    std::fs::write(&driver, r#"
+#include <stdint.h>
+#include <stdio.h>
+typedef struct { uint8_t tag; uint64_t at; } Tagged;
+extern Tagged tagged_next(Tagged);
+int main(void) {
+    uint64_t edges[] = {0, 1, 255, 256, UINT64_MAX - 300, UINT64_MAX};
+    for (unsigned tag = 0; tag < 256; ++tag) for (unsigned i = 0; i < 6; ++i) {
+        Tagged t = { (uint8_t)tag, edges[i] };
+        Tagged n = tagged_next(t);
+        if (n.tag != (uint8_t)(tag + 1) || n.at != edges[i] + tag) return 1;
+    }
+    puts("1536 calls passed");
+    return 0;
+}
+"#).unwrap();
+    let binary = dir.join("narrow_fields");
+    let linked = Command::new("cc").args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(&driver).arg(&assembly).arg("-o").arg(&binary).output().unwrap();
+    assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
+    let run = Command::new(&binary).output().unwrap();
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stdout));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+// Two narrow fields side by side share an eightbyte in C, one register, so
+// compile-x86 refuses such a record rather than certify a word a field.
+#[test]
+fn a_record_of_two_packed_narrow_fields_is_refused_at_c() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = root.join(format!("target/native-packed-fields-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
+        .args(["compile-x86", "examples/x86-native/narrow_fields.hthr", "flagged_sum", "-o"]).arg(dir.join("flagged.s"))
+        .args(heather_cli::showcase::native_image_args()).args(["--kernel-workers", "1"])
+        .output().unwrap();
+    assert!(!result.status.success());
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(stderr.contains("two narrow fields side by side"), "{stderr}");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 // A function of eight words called from Rust (issues/function-call-past-six-words.md):
 // `eight` passes its seventh and eighth on the stack to `spread` twice, and
 // Rust passes its own the same way, `extern "sysv64"` with the certified

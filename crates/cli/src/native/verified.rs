@@ -193,23 +193,27 @@ impl Shape {
     /// (issues/runtime-repr-narrow-words.md).
     ///
     /// `fields`, for a function returning a record of two words, are the
-    /// record's fields' names: the first is the word it returns in RAX and
-    /// the second the one in RDX (`{source}::agrees_also`).
+    /// record's fields' names and widths: the first is the word it returns
+    /// in RAX and the second the one in RDX (`{source}::agrees_also`), a
+    /// narrow field zero-extended (§16.18).
     ///
     /// `result`, for a function returning an enum, is its table entry: the
     /// function returns the value's tag word (`RecInfo::enum_word`), and
     /// where `slot` its payload's one slot in RDX (`RecInfo::enum_rest`,
     /// `{source}::agrees_also`).
-    pub fn runtime(prefix: &str, owner: &str, source: &str, functions: usize, params: usize, arity: usize, widths: &[u64], fields: Option<&[String]>,
+    pub fn runtime(prefix: &str, owner: &str, source: &str, functions: usize, params: usize, arity: usize, widths: &[u64], fields: Option<&[(String, u64)]>,
         enums: &[(usize, u64)], result: Option<u64>, slot: bool) -> Shape {
         let parameters = arguments(params);
         let table = format!("{source}::world.tys");
         let narrowed: Vec<String> = parameters.iter().enumerate()
             .map(|(i, a)| match widths.get(i + 1) { Some(&1) => format!("runtime_bit_low({a})"), Some(&w) if w != 64 => format!("runtime_low({w}, {a})"), _ => a.clone() }).collect();
         let called = format!("{source}({})", narrowed.join(", "));
+        // A field as the word it is returned in: a narrow one zero-extended.
+        let field = |(name, w): &(String, u64)| match w { 1 => format!("runtime_bit_wide({called}.{name})"), 64 => format!("{called}.{name}"),
+            w => format!("runtime_wide({w}, {called}.{name})") };
         let (answer, rest) = match fields {
-            Some([first, others @ ..]) => (format!("{called}.{first}"),
-                Some(format!("[{}]", others.iter().map(|field| format!("{called}.{field}")).collect::<Vec<_>>().join(", ")))),
+            Some([first, others @ ..]) => (field(first),
+                Some(format!("[{}]", others.iter().map(field).collect::<Vec<_>>().join(", ")))),
             _ => (match (result, widths.first()) {
                 (Some(i), _) => format!("RecInfo::enum_word({table}, {i}, {called})"),
                 (None, Some(&1)) => format!("runtime_bit_wide({called})"),
@@ -402,7 +406,7 @@ pub(super) fn runtime_shape(elab: &Elaborator, prefix: &str, owner: &str, source
     // (`runtime_bit_low`, `runtime_bit_wide`).
     let width = "(λ (p: Ty) => match p { Bit => 1, _ => p.edge_width() })";
     let (imports, counts) = match spans {
-        Spans::None => ("", format!("Cons({width}({source}::rt.result), {source}::rt.params.map({width})) ++ Cons(match {source}::rt.result {{ Enum(i) => i + 1, _ => 0 }}, {source}::rt.params.map(λ p => match p {{ Enum(i) => i + 1, Named(i) => match {source}::world.tys(i).fields.len().leb(1) {{ True => 0, False => {RECORD} + i + 1 }}, _ => 0 }})) ++ [Ty::spans({source}::world.tys, {source}::rt.params), {source}::code.also.len()]")),
+        Spans::None => ("", format!("Cons({width}({source}::rt.result), {source}::rt.params.map({width})) ++ Cons(match {source}::rt.result {{ Enum(i) => i + 1, _ => 0 }}, {source}::rt.params.map(λ p => match p {{ Enum(i) => i + 1, Named(i) => match {source}::world.tys(i).fields.len().leb(1) {{ True => 0, False => {RECORD} + i + 1 }}, _ => 0 }})) ++ [Ty::spans({source}::world.tys, {source}::rt.params), {source}::code.also.len(), Cons({source}::rt.result, {source}::rt.params).filter(λ p => match p {{ Named(i) => Ty::slots_share({source}::world.tys(i).fields), _ => False }}).len()]")),
         Spans::Read => ("import function_ir_lower_calls;\nimport function_ir_writes;\n", format!("program_counts({source}::program)")),
         Spans::Written => ("import function_ir_lower_calls;\nimport function_ir_writes;\nimport function_ir_rows;\n",
             format!("program_counts({source}::program)")),
@@ -429,7 +433,8 @@ fn {prefix}_rows(rows: List<List<Bool>>, counts: List<Nat>, f, functions: Nat) �
     } else { String::new() };
     let text = format!("import {owner};\nimport runtime;\nimport rt;\nimport nat;\nimport list;\nimport function_ir;\n{imports}
 {rows}fn {prefix}_shape() → List<Nat> {{ Cons({source}::program.len(), Cons({source}::rt.params.len(), {counts}{marks})) }}
-fn {prefix}_outs() → List<Nat> {{ {source}::program.map(λ (f: Function) => f.also.len()) }}\n");
+fn {prefix}_outs() → List<Nat> {{ {source}::program.map(λ (f: Function) => f.also.len()) }}
+fn {prefix}_field_widths() → List<Nat> {{ match {source}::rt.result {{ Named(i) => {source}::world.tys(i).fields.map({width}), _ => [] }} }}\n");
     let mut fork = elab.fork();
     fork.elab_module_source(&probe, &text).map_err(|e| e.render(&text))?;
     let numbers = function_ir_source::evaluate_numbers(&fork, &format!("{probe}::{prefix}_shape")).map_err(|e| e.to_string())?;
@@ -449,12 +454,22 @@ fn runtime_shape_of(elab: &Elaborator, prefix: &str, owner: &str, source: &str, 
     match numbers[..] {
         [_, arity, ..] if arity > 8 => Err(format!("`{source}` takes {arity} words{}: compile-x86 passes at most eight, six in registers and two on the stack",
             if lent { ", an address and a length for each span among them" } else { "" })),
-        [functions, params, ref both @ ..] if functions >= 1 && !lent && both.len() == 2 * params as usize + 4 => {
+        [functions, params, ref both @ ..] if functions >= 1 && !lent && both.len() == 2 * params as usize + 5 => {
             let (widths, codes) = both.split_at(params as usize + 1);
             // Then how many words the parameters cross in (`Ty::spans`): an
             // enum its tag word and a word for each slot of its payload;
-            // and how many words the result has past its first.
-            let (codes, arity, also) = (&codes[..codes.len() - 2], codes[codes.len() - 2], codes[codes.len() - 1]);
+            // how many words the result has past its first; and how many
+            // of the result and parameters are records with two narrow
+            // fields side by side (`Ty::slots_share`).
+            let (codes, arity, also, shared) = (&codes[..codes.len() - 3], codes[codes.len() - 3], codes[codes.len() - 2], codes[codes.len() - 1]);
+            // A C structure lays two narrow fields side by side in one
+            // eightbyte, which System V passes in one register; a record
+            // here crosses in a word a field. Refused rather than stated
+            // at a layout no C caller uses.
+            if shared > 0 {
+                return Err(format!("`{source}` takes or returns a record with two narrow fields side by side: a C structure of them packs both \
+                    into one register, where compile-x86 passes a word a field (docs/native/runtime-fn-setups-design.md §16.18)"));
+            }
             if arity > 8 {
                 return Err(format!("`{source}` takes {arity} words: compile-x86 passes at most eight, six in registers and two on the stack"));
             }
@@ -480,7 +495,11 @@ fn runtime_shape_of(elab: &Elaborator, prefix: &str, owner: &str, source: &str, 
                 let names: Vec<String> = codes.split(|code| *code == 0).filter(|name| !name.is_empty())
                     .map(|name| name.iter().filter_map(|code| char::from_u32(*code as u32)).collect()).collect();
                 if names.len() != 2 { return Err(format!("`{source}::fields` did not read back as two names")); }
-                Some(names)
+                // Each field's width: a narrow field is returned
+                // zero-extended, as the generator states it (§16.18).
+                let widths = function_ir_source::evaluate_numbers(&fork, &format!("{prefix}_shape::{prefix}_field_widths")).map_err(|e| e.to_string())?;
+                if widths.len() != 2 { return Err(format!("`{source}`'s result's fields did not read back as two widths")); }
+                Some(names.into_iter().zip(widths).collect::<Vec<_>>())
             } else { None };
             Ok(Shape::runtime(prefix, owner, source, functions as usize, params as usize, arity as usize, widths, fields.as_deref(), &enums, result, slot))
         }

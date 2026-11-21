@@ -506,7 +506,8 @@ fn Ty::to_count(tys: Nat → RecInfo, a: Ty) → a.sem(tys) → Nat {
 fn Ty::word_at(self f: Ty, x: BitVec(64)) → f.Flat() {
     match f as λ y => y.Flat() {
         Word(w) => match Nat::equation(64, w) { Inl(e) => j(e, λ y _ => BitVec(y), x), Inr(_) => BitVec::ofNat(x.toNat()) },
-        Bit => False,
+        // A bit is the word's lowest bit, as `Resize` to one bit keeps it.
+        Bit => BitVec::ofNat(x.toNat(), n := 1).head_bit(),
         ByteList(_) => Nil,
         Lines => Nil,
         Named(_) => trivial,
@@ -518,7 +519,8 @@ fn Ty::word_at(self f: Ty, x: BitVec(64)) → f.Flat() {
 fn Ty::flat_word(self f: Ty) → f.Flat() → BitVec(64) {
     match f as λ y => y.Flat() → BitVec(64) {
         Word(w) => λ v => match w.equation(64) { Inl(e) => j(e, λ y _ => BitVec(y), v), Inr(_) => BitVec::ofNat(v.toNat()) },
-        Bit => λ _ => BitVec::ofNat(0),
+        // A bit as the word it is zero-extended to (zero or one).
+        Bit => λ b => BitVec::ofNat(BitVec::ofBool(b).toNat()),
         ByteList(_) => λ _ => BitVec::ofNat(0),
         Lines => λ _ => BitVec::ofNat(0),
         Named(_) => λ _ => BitVec::ofNat(0),

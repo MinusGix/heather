@@ -162,6 +162,19 @@ lowest bit of its word and the result is 0 or 1, which is what System V
 asks of a C `bool`, so C declares it `bool in_range(uint64_t, uint64_t,
 uint64_t, bool)` (`bools_cross_as_c_bools`).
 
+## Narrow fields
+
+`narrow_fields.hthr`'s `tagged_next` takes and returns a record of a `u8` and
+a 64-bit word. C lays `{ uint8_t; uint64_t }` in two eightbytes, so System V
+passes it in two registers, the byte in the low bits of the first: a word a
+field, as a record crosses here. The byte is read from the low bits of its
+word and returned zero-extended, so C declares `Tagged tagged_next(Tagged)`
+(`a_record_with_a_byte_field_crosses_as_a_c_structure`). Two narrow fields
+side by side share one eightbyte in C, so `compile-x86` refuses
+`flagged_sum`'s record at a C boundary
+(`a_record_of_two_packed_narrow_fields_is_refused_at_c`); inside a program
+such a record crosses calls like any other.
+
 ## Linked into Rust
 
 `crates/linked` links compiled functions into a Rust crate and calls them

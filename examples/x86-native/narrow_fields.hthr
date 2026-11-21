@@ -1,0 +1,37 @@
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import bitvec_nat;
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+
+// A record with a narrow field (docs/native/runtime-fn-setups-design.md
+// §16.18): a `u8` and a 64-bit word. C lays `{ uint8_t; uint64_t }` in two
+// eightbytes, the byte alone in the first, so System V passes it in two
+// registers, the byte in the low bits of the first, and returns it in RAX
+// and RDX: a word a field, as here. The field is read from the low bits of
+// its word and returned zero-extended.
+record Tagged { tag: u8, at: u64 }
+
+// The next position of a tagged one: the tag moves on by one, wrapping at
+// 256, and the position by the old tag.
+runtime fn tagged_next(t: Tagged) → Tagged { Tagged(t.tag + 1, t.at + t.tag.zero_extend(56)) }
+
+// Two narrow fields side by side: C packs `{ uint8_t; bool; uint64_t }`'s
+// byte and bool into one eightbyte, one register, where a record here
+// crosses a word a field, so compile-x86 refuses `flagged_sum` at a C
+// boundary. Inside a program it is passed like any other record.
+record Flagged { tag: u8, on: Bool, at: u64 }
+
+runtime fn flagged_sum(f: Flagged) → u64 { if f.on { f.at + f.tag.zero_extend(56) } else { f.at } }
