@@ -119,7 +119,7 @@ fn FTm::over_iterated(bw: BWorld, g: List<Ty>, init: Nat, test: Tm, bt: Ty, n: B
 fn FTm::over_rest_of(bw: BWorld, g: List<Ty>, st, rt: Ty, n: BitVec(64),
     k: Env(bw.fw.w.tys, Cons(st, g)) → Bytes(n) → Mutated<Bytes(n), rt.sem(bw.fw.w.tys)>,
     m: Mutated<Bytes(n), st.sem(bw.fw.w.tys)>, env: Env(bw.fw.w.tys, g)) → Mutated<Bytes(n), rt.sem(bw.fw.w.tys)> {
-    k(Pair(m.value, env), m.after)
+    loop::Loop::after(m, λ o v => k(Pair(v, env), o))
 }
 
 // The meaning over a record: a function threading it, at the code the

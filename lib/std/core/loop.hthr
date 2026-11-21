@@ -275,3 +275,9 @@ theorem Loop::steps_map<S, T>(f: S → T, s1: S → Step<S>, s2: T → Step<T>, 
         },
     }
 }
+
+// What a loop that threads a span goes on with: its span and its state,
+// handed to `k`. A name of its own so that a loop's written continuation
+// and a meaning's are one application, compared without reading the
+// loop's run as a pair, which would run it.
+fn Loop::after<S, R, T>(m: Mutated<S, R>, k: S → R → T) → T { k(m.after, m.value) }
