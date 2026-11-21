@@ -69,7 +69,7 @@ theorem lends_changes(same: program_run(lending(), five(), 1, [w(4096), w(5), w(
 // allows (`program_run_effects`).
 theorem lends_allowed(file: Buffers(), address, length, from, to, i, v: BitVec(64)):
     program_effects(lending())(file, 1, [address, length, from, to, i, v], program_run(lending(), file, 1, [address, length, from, to, i, v]).word,
-        program_run(lending(), file, 1, [address, length, from, to, i, v]).buffers) {
+        program_run(lending(), file, 1, [address, length, from, to, i, v]).rest, program_run(lending(), file, 1, [address, length, from, to, i, v]).buffers) {
     program_run_effects(lending(), trivial, file, 1, [address, length, from, to, i, v], trivial,
         program_total_run_defined(lending(), trivial, file, 1, [address, length, from, to, i, v]))
 }
@@ -134,7 +134,7 @@ theorem halves_first_kept(same: program_run(halving(), four(), 1, [w(4096), w(4)
 
 theorem halves_allowed(file: Buffers(), address, length, mid, i: BitVec(64)):
     program_effects(halving())(file, 1, [address, length, mid, i], program_run(halving(), file, 1, [address, length, mid, i]).word,
-        program_run(halving(), file, 1, [address, length, mid, i]).buffers) {
+        program_run(halving(), file, 1, [address, length, mid, i]).rest, program_run(halving(), file, 1, [address, length, mid, i]).buffers) {
     program_run_effects(halving(), trivial, file, 1, [address, length, mid, i], trivial,
         program_total_run_defined(halving(), trivial, file, 1, [address, length, mid, i]))
 }

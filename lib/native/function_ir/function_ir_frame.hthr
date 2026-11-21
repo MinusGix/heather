@@ -80,16 +80,16 @@ theorem Site::callee_framed<M>(self site: Site<M>, stack: Stack<M>(site.fetch, s
 
 // A function of spans.
 theorem Site::answered_framed<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), entry: Nat,
-    pre: Nat → MachineState<M> → Type, lending: Lending, result: BitVec(64), after: Buffers(),
-    returns: site.Returns(stack, entry, pre, stack.AnsweredOver(lending, result, after)),
+    pre: Nat → MachineState<M> → Type, lending: Lending, result: BitVec(64), rest: List<BitVec(64)>, after: Buffers(),
+    returns: site.Returns(stack, entry, pre, stack.AnsweredBoth(lending, result, rest, after)),
     {frame: Nat → M → Type}, stable: (i: Nat) → i + 8 <= stack.size → stack.StableIn(i, lending.spans(), frame(i))):
     site.Returns(stack, entry, λ (i: Nat) (s: MachineState<M>) => pre(i, s) ∧ frame(i, s.memory),
-        λ (i: Nat) (s: MachineState<M>) (t: MachineState<M>) => stack.AnsweredOver(lending, result, after)(i, s, t) ∧ frame(i, t.memory)) {
+        λ (i: Nat) (s: MachineState<M>) (t: MachineState<M>) => stack.AnsweredBoth(lending, result, rest, after)(i, s, t) ∧ frame(i, t.memory)) {
     λ s here resident i rsp room held ret saved => {
         let ran = returns(s, here, resident, i, rsp, room, held.left, ret, saved);
         let done = ran.proof.right.right.right.right;
         Exists(ran.witness, ⟨ran.proof.left, ⟨ran.proof.right.left, ⟨ran.proof.right.right.left, ⟨ran.proof.right.right.right.left,
-            ⟨done, stack.answered_frame(lending, result, after, i, s, ran.witness, done, stable(i, room), held.right)⟩⟩⟩⟩⟩)
+            ⟨done, stack.answered_frame(lending, result, after, i, s, ran.witness, done.left, stable(i, room), held.right)⟩⟩⟩⟩⟩)
     }
 }
 

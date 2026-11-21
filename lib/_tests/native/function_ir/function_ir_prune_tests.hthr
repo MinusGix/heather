@@ -45,10 +45,10 @@ theorem inlined_pruned(): prune(inlined(), entry()) =
         Function([0, 1], nodes([Const(64, 2, 0)]), 2)] { refl }
 
 // The entry does whatever it did.
-theorem entry_kept(before: Buffers(), arguments: List<BitVec(64)>, result: BitVec(64), after: Buffers(),
-    ran: program_effects(inlined(), before, 2, arguments, result, after)):
-    program_effects(prune(inlined(), entry()), before, 2, arguments, result, after) {
-    prune_sound(entry(), inlined(), inlined_closed(), before, 2, refl, arguments, result, after, ran)
+theorem entry_kept(before: Buffers(), arguments: List<BitVec(64)>, result: BitVec(64), rest: List<BitVec(64)>, after: Buffers(),
+    ran: program_effects(inlined(), before, 2, arguments, result, rest, after)):
+    program_effects(prune(inlined(), entry()), before, 2, arguments, result, rest, after) {
+    prune_sound(entry(), inlined(), inlined_closed(), before, 2, refl, arguments, result, rest, after, ran)
 }
 
 // Before inlining the entry calls function 1, so emptying it is refused;

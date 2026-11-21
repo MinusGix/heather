@@ -45,9 +45,9 @@ theorem inlined_run(): tidy_stage(rules()).run([inlined()], [inlined_plan()]) = 
 theorem inlined_found(): inlined().tidy_plan(rules()) = Some(inlined_plan()) { refl }
 
 // The stage's theorem: the tidied function does whatever the function did.
-theorem inlined_keeps(before: Buffers(), f: Nat, arguments: List<BitVec(64)>, result: BitVec(64), after: Buffers(),
-    did: program_effects([inlined()], before, f, arguments, result, after)): program_effects([inlined_tidied()], before, f, arguments, result, after) {
-    tidy_stage(rules()).run_sound([inlined()], [inlined_plan()], [inlined_tidied()], inlined_run(), before, f, arguments, result, after, did)
+theorem inlined_keeps(before: Buffers(), f: Nat, arguments: List<BitVec(64)>, result: BitVec(64), rest: List<BitVec(64)>, after: Buffers(),
+    did: program_effects([inlined()], before, f, arguments, result, rest, after)): program_effects([inlined_tidied()], before, f, arguments, result, rest, after) {
+    tidy_stage(rules()).run_sound([inlined()], [inlined_plan()], [inlined_tidied()], inlined_run(), before, f, arguments, result, rest, after, did)
 }
 
 // A function lent one buffer, parameters 0 and 1 its address and length,

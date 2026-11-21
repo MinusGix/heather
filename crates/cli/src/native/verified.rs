@@ -398,7 +398,7 @@ pub(super) fn runtime_shape(elab: &Elaborator, prefix: &str, owner: &str, source
     // A function lent nothing: the widths its result and its parameters
     // cross its boundary at (`Fun::edge_widths`).
     let (imports, counts) = match spans {
-        Spans::None => ("", format!("{source}::rt.edge_widths() ++ Cons(match {source}::rt.result {{ Enum(i) => i + 1, _ => 0 }}, {source}::rt.params.map(λ p => match p {{ Enum(i) => i + 1, _ => 0 }})) ++ [Ty::spans({source}::world.tys, {source}::rt.params)]")),
+        Spans::None => ("", format!("{source}::rt.edge_widths() ++ Cons(match {source}::rt.result {{ Enum(i) => i + 1, _ => 0 }}, {source}::rt.params.map(λ p => match p {{ Enum(i) => i + 1, _ => 0 }})) ++ [Ty::spans({source}::world.tys, {source}::rt.params), {source}::code.also.len()]")),
         Spans::Read => ("import function_ir_lower_calls;\nimport function_ir_writes;\n", format!("program_counts({source}::program)")),
         Spans::Written => ("import function_ir_lower_calls;\nimport function_ir_writes;\nimport function_ir_rows;\n",
             format!("program_counts({source}::program)")),
@@ -431,13 +431,21 @@ fn {prefix}_rows(rows: List<List<Bool>>, counts: List<Nat>, f, functions: Nat) �
     match numbers[..] {
         [_, arity, ..] if arity > 8 => Err(format!("`{source}` takes {arity} words{}: compile-x86 passes at most eight, six in registers and two on the stack",
             if lent { ", an address and a length for each span among them" } else { "" })),
-        [functions, params, ref both @ ..] if functions >= 1 && !lent && both.len() == 2 * params as usize + 3 => {
+        [functions, params, ref both @ ..] if functions >= 1 && !lent && both.len() == 2 * params as usize + 4 => {
             let (widths, codes) = both.split_at(params as usize + 1);
             // Then how many words the parameters cross in (`Ty::spans`): an
-            // enum its tag word and a word for each slot of its payload.
-            let (codes, arity) = (&codes[..codes.len() - 1], codes[codes.len() - 1]);
+            // enum its tag word and a word for each slot of its payload;
+            // and how many words the result has past its first.
+            let (codes, arity, also) = (&codes[..codes.len() - 2], codes[codes.len() - 2], codes[codes.len() - 1]);
             if arity > 8 {
                 return Err(format!("`{source}` takes {arity} words: compile-x86 passes at most eight, six in registers and two on the stack"));
+            }
+            // A C caller is handed RAX and RDX: a result of more words is
+            // one a Heather caller reads (the answer registers past RDX),
+            // not one compile-x86 exports.
+            if also > 1 {
+                return Err(format!("`{source}` returns {} words: compile-x86 exports a function returning at most two, in RAX and RDX, as System V \
+                    returns a structure of two integer words (docs/native/runtime-fn-setups-design.md §16.17)", also + 1));
             }
             // An enum result's table entry, then each enum parameter, by
             // position, and its table entry.

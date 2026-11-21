@@ -73,7 +73,7 @@ runtime fn count_up(n, i: u64, b: u8) → u64 decreases (n - i).toNat() {
 
 // A call of a function with a narrow parameter: the caller would widen its
 // argument first, which the call's lowering does not do yet.
-// expect-error: a call of a function that does not take and return 64-bit words
+// expect-error: a call of a function whose parameters or result do not cross a call in 64-bit words
 runtime fn calls_digit(x: u64) → u64 { digit_value(x.truncate(8, 56)) + 1 }
 
 // A `Bool` result is not a word.

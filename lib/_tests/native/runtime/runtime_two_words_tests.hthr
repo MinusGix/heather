@@ -3,11 +3,9 @@
 // issues/function-ir-multi-word-calls.md). The program's last function
 // returns the record's first field as its word and the second beside it
 // (`Function.also`, RDX at the machine): `f::agrees` states the first and
-// `f::agrees_also` the rest. A call reads one word, so a function returning
-// two is only ever the program's entry. Tests, not library: nothing imports
-// this module; what is refused is in
-// runtime_two_words_refused_tests, as `compile-x86` compiles from a module
-// that elaborates whole.
+// `f::agrees_also` the rest. A call reads every word back (§16.17), so a
+// function returning several is called too, and one of three words is a
+// result a caller reads. Tests, not library: nothing imports this module.
 
 import logic;
 import bool;
@@ -49,4 +47,45 @@ runtime fn halves_bump(x: u64) → Halves { Halves(bump(x), bump(bump(x))) }
 theorem halves_bump_runs(): program_eval(halves_bump::program, 1, [BitVec::ofNat(4)]) = 5 ∧
     program_eval_also(halves_bump::program, [BitVec::ofNat(4)]) = [6] {
     ⟨halves_bump::agrees(BitVec::ofNat(4)), halves_bump::agrees_also(BitVec::ofNat(4))⟩
+}
+
+// ---------------------------------------------------------------------------
+// Calls that read several words back (docs/native/runtime-fn-setups-design.md
+// §16.17): the call names the result's ports past the first
+// (`Call.also`), and the caller reads every field of what came back.
+
+runtime fn halves_called(x: u64) → u64 { halves(x).high + halves(x).low }
+
+theorem halves_called_runs(): program_eval(halves_called::program, 1, [BitVec::ofNat(0x500000007)]) = 12 {
+    halves_called::agrees(BitVec::ofNat(0x500000007))
+}
+
+theorem halves_called_agrees(x: u64): program_eval(halves_called::program, 1, [x]) = halves_called(x) { halves_called::agrees(x) }
+
+// Three words: the first in RAX, the other two beside it. A caller reads
+// all three; `compile-x86` exports at most two (`runtime_shape`).
+record Triple { a: u64, b: u64, c: u64 }
+
+runtime fn triple(x: u64) → Triple { Triple(x, x + 1, x + 2) }
+
+theorem triple_runs(): program_eval(triple::program, 0, [BitVec::ofNat(5)]) = 5 ∧
+    program_eval_also(triple::program, [BitVec::ofNat(5)]) = [6, 7] {
+    ⟨triple::agrees(BitVec::ofNat(5)), triple::agrees_also(BitVec::ofNat(5))⟩
+}
+
+theorem triple_also(): triple::code.also.len() = 2 { refl }
+
+runtime fn triple_sum(x: u64) → u64 { let t = triple(x); t.a + t.b + t.c }
+
+theorem triple_sum_runs(): program_eval(triple_sum::program, 1, [BitVec::ofNat(5)]) = 18 { triple_sum::agrees(BitVec::ofNat(5)) }
+
+theorem triple_sum_agrees(x: u64): program_eval(triple_sum::program, 1, [x]) = triple_sum(x) { triple_sum::agrees(x) }
+
+// A record of three words passed on from a call to a caller that returns
+// two of them: the callee's three words read back, two returned.
+runtime fn triple_ends(x: u64) → Halves { let t = triple(x); Halves(t.c, t.a) }
+
+theorem triple_ends_runs(): program_eval(triple_ends::program, 1, [BitVec::ofNat(5)]) = 7 ∧
+    program_eval_also(triple_ends::program, [BitVec::ofNat(5)]) = [5] {
+    ⟨triple_ends::agrees(BitVec::ofNat(5)), triple_ends::agrees_also(BitVec::ofNat(5))⟩
 }

@@ -41,9 +41,9 @@ theorem two_run(): inline_stage().run(two(), two_plans()) = Some(two_inlined()) 
 
 // The inlined program does whatever the program did, a function at its
 // number: the stage's one theorem.
-theorem two_keeps(before: Buffers(), f: Nat, arguments: List<BitVec(64)>, result: BitVec(64), after: Buffers(),
-    ran: program_effects(two(), before, f, arguments, result, after)): program_effects(two_inlined(), before, f, arguments, result, after) {
-    inline_stage().run_sound(two(), two_plans(), two_inlined(), two_run(), before, f, arguments, result, after, ran)
+theorem two_keeps(before: Buffers(), f: Nat, arguments: List<BitVec(64)>, result: BitVec(64), rest: List<BitVec(64)>, after: Buffers(),
+    ran: program_effects(two(), before, f, arguments, result, rest, after)): program_effects(two_inlined(), before, f, arguments, result, rest, after) {
+    inline_stage().run_sound(two(), two_plans(), two_inlined(), two_run(), before, f, arguments, result, rest, after, ran)
 }
 
 // The searcher finds that plan: the least bounds, every call.

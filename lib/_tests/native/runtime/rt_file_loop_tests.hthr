@@ -276,10 +276,10 @@ theorem raise_code_lowers(file: List<List<BitVec(8)>>): raise_rt().lower(World(R
 theorem raise_agrees(rest: List<List<BitVec(8)>>): FTm::CallsAgree(raise_world(rest), 1, program_run([raise_code()])) {
     ⟨λ own f => match f {
             Zero => λ _ x => trans(
-                cong_fn(λ (e: Ending) => e.word, program_run_quiet([raise_code()], trivial, Cons(own, rest), 0, [x])),
+                cong_fn(λ (e: Ending) => Cons(e.word, e.rest), program_run_quiet([raise_code()], trivial, Cons(own, rest), 0, [x])),
                 j(raise_code_lowers(Cons(own, rest)), λ r _ => raise_rt().LowerHolds(World(RecInfo::none, [], trivial, Cons(own, rest)), r),
                     Fun::lower_sound(raise_rt(), World(RecInfo::none, [], trivial, Cons(own, rest))))(
-                    program_eval_over(Cons(own, rest), []), Tm::calls_agree_none_over(RecInfo::none, Cons(own, rest), program_eval_over(Cons(own, rest), [])), x)),
+                    program_answers_over(Cons(own, rest), []), Tm::calls_agree_none_over(RecInfo::none, Cons(own, rest), program_answers_over(Cons(own, rest), [])), x)),
             Succ(_) => λ ok => false_elim(ok.right),
         },
         ⟨λ f among own words => cong_fn(λ (e: Ending) => e.buffers, program_run_quiet([raise_code()], trivial, Cons(own, rest), f, words)),

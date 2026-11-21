@@ -89,12 +89,12 @@ theorem computes_over_keeps_buffer<M>(code: Prog, machine: Machine<M>, top: Nat,
         λ (i: Nat) (s: MachineState<M>) => ((machine.stack.Passed(arguments, i, s) ∧ room <= i) ∧
             machine.stack.LentOver(lending, top, f, arguments, before)(i, s)) ∧
             ((i <= top) ∧ Readable(machine.data, s.memory, address_of(lending.addresses, b), ys)),
-        λ (i: Nat) (s: MachineState<M>) (t: MachineState<M>) => machine.stack.AnsweredOver(lending, answer.word, answer.buffers)(i, s, t) ∧
+        λ (i: Nat) (s: MachineState<M>) (t: MachineState<M>) => machine.stack.AnsweredBoth(lending, answer.word, answer.rest, answer.buffers)(i, s, t) ∧
             ((i <= top) ∧ Readable(machine.data, t.memory, address_of(lending.addresses, b), ys))) {
     Site<M>(machine.fetch, machine.data, code, last, origin).answered_framed(machine.stack, asm_labels(code, f + 1),
         λ (i: Nat) (s: MachineState<M>) => (machine.stack.Passed(arguments, i, s) ∧ room <= i) ∧
             machine.stack.LentOver(lending, top, f, arguments, before)(i, s),
-        lending, answer.word, answer.buffers, computes(origin, last),
+        lending, answer.word, answer.rest, answer.buffers, computes(origin, last),
         λ i room => machine.stack.stable_in_given(i, lending.spans(), λ (low: i <= top) =>
             loan.stable_buffer(lending, i, low, b, only_read, ys, short)))
 }

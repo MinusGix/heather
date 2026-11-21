@@ -81,8 +81,8 @@ theorem get_reads_put(effects: Effects(), values: Valuation(), before, after: Bu
 fn storer() → Function { Function(parameters := [0, 1], body := put(), result := 2) }
 fn caller() → Function { Function(parameters := [0, 1], body := Call(0, [0, 1], 2, []), result := 2) }
 
-theorem call_leaves_callee_file(before, after: Buffers(), i, v, result: BitVec(64),
-    ran: program_effects([caller(), storer()])(before, 1, [i, v], result, after)): after = store_byte(before, 0, i.toNat(), low_byte(v)) {
+theorem call_leaves_callee_file(before, after: Buffers(), i, v, result: BitVec(64), rest: List<BitVec(64)>,
+    ran: program_effects([caller(), storer()])(before, 1, [i, v], result, rest, after)): after = store_byte(before, 0, i.toNat(), low_byte(v)) {
     let outer = ran.witness;
     let called = ran.proof.right.left;
     let inner = called.witness;
@@ -110,17 +110,17 @@ theorem storer_stores(): program_quiet([storer()]) = False { refl }
 
 // What `peek` may return over a file, it returns with the file left as it
 // was.
-theorem peek_runs(file: Buffers(), arguments: List<BitVec(64)>, result: BitVec(64),
-    computes: program_callees_over(file, [peek()])(0, arguments, result)): program_effects([peek()])(file, 0, arguments, result, file) {
-    program_effects_quiet([peek()], trivial, file, 0, arguments, result, computes)
+theorem peek_runs(file: Buffers(), arguments: List<BitVec(64)>, result: BitVec(64), rest: List<BitVec(64)>,
+    computes: program_callees_over(file, [peek()])(0, arguments, result, rest)): program_effects([peek()])(file, 0, arguments, result, rest, file) {
+    program_effects_quiet([peek()], trivial, file, 0, arguments, result, rest, computes)
 }
 
 // `program_effects_quiet` asks for no store: the storing program is not one
 // it speaks of.
 // expect-error(mismatch)
-theorem storer_runs(file: Buffers(), arguments: List<BitVec(64)>, result: BitVec(64),
-    computes: program_callees_over(file, [storer()])(0, arguments, result)): program_effects([storer()])(file, 0, arguments, result, file) {
-    program_effects_quiet([storer()], trivial, file, 0, arguments, result, computes)
+theorem storer_runs(file: Buffers(), arguments: List<BitVec(64)>, result: BitVec(64), rest: List<BitVec(64)>,
+    computes: program_callees_over(file, [storer()])(0, arguments, result, rest)): program_effects([storer()])(file, 0, arguments, result, rest, file) {
+    program_effects_quiet([storer()], trivial, file, 0, arguments, result, rest, computes)
 }
 
 // ---------------------------------------------------------------------------

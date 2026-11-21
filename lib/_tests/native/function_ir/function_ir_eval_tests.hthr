@@ -78,7 +78,7 @@ fn table_lookup() → Function {
 }
 
 theorem table_lookup_evaluable(): table_lookup().evaluable(no_calls()) = True { refl }
-theorem table_lookup_five(): table_lookup().eval(λ _ _ => BitVec::zero(), [BitVec::ofNat(5)]) = BitVec::ofNat(20) { refl }
-theorem table_lookup_seven(): table_lookup().eval(λ _ _ => BitVec::zero(), [BitVec::ofNat(7)]) = BitVec::ofNat(40) { refl }
+theorem table_lookup_five(): table_lookup().eval(λ _ _ => [BitVec::zero(n := 64)], [BitVec::ofNat(5)]) = BitVec::ofNat(20) { refl }
+theorem table_lookup_seven(): table_lookup().eval(λ _ _ => [BitVec::zero(n := 64)], [BitVec::ofNat(7)]) = BitVec::ofNat(40) { refl }
 // Negative control: not the entry at the untruncated index.
-theorem table_lookup_not_past(): table_lookup().eval(λ _ _ => BitVec::zero(), [BitVec::ofNat(1)]).eq_bit(BitVec::ofNat(10)) = False { refl }
+theorem table_lookup_not_past(): table_lookup().eval(λ _ _ => [BitVec::zero(n := 64)], [BitVec::ofNat(1)]).eq_bit(BitVec::ofNat(10)) = False { refl }

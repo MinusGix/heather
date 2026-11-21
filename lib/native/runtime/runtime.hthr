@@ -130,39 +130,30 @@ fn Ty::is_edge(self t: Ty, tys: Nat → RecInfo) → Bool {
     match t { Word(w) => w.leb(64), _ => t.is_one_word(tys) }
 }
 
-// A code a plain function returns: one it passes in a word, or a record of
-// two 64-bit words, the second returned in RDX (`Ty::check_out`,
-// docs/native/runtime-fn-setups-design.md §16.16).
-fn Ty::is_two_words(self t: Ty, tys: Nat → RecInfo) → Bool {
-    match t {
-        Named(i) => match tys(i).fields {
-            Cons(f, rest) => match rest { Cons(g, more) => f.is_word64().and(g.is_word64()).and(match more { Nil => True, Cons(_, _) => False }), Nil => False },
-            Nil => False,
-        },
-        _ => False,
-    }
-}
+// A code a plain function returns (`Ty::check_out`,
+// docs/native/runtime-fn-setups-design.md §16.16-17): one it passes in a
+// word, a record whose fields are 64-bit words (the first in RAX, the rest
+// beside it), or an enum whose payload's slots are 64-bit words (its tag
+// word, then its slots).
+fn Ty::is_words(fs: List<Ty>) → Bool { match fs { Nil => True, Cons(f, rest) => f.is_word64().and(Ty::is_words(rest)) } }
 
-// What a function returns (`Ty::Out`): an enum among them, as its tag word.
+fn Ty::is_words_one(fs: List<Ty>) → Bool { match fs { Nil => False, Cons(_, _) => Ty::is_words(fs) } }
+
 // An enum without a payload: what crosses a boundary as its tag word
 // alone (`Ty::Bare`).
 fn Ty::is_bare(tys: Nat → RecInfo, i: Nat) → Bool { match tys(i).alts.slots { Nil => True, Cons(_, _) => False } }
 
-// An enum whose payload is one 64-bit slot: returned as its tag word and
-// the slot beside it, in RDX.
-fn Ty::is_one_slot(tys: Nat → RecInfo, i: Nat) → Bool {
-    match tys(i).alts.slots { Cons(f, rest) => f.is_word64().and(match rest { Nil => True, Cons(_, _) => False }), Nil => False }
-}
-
 fn Ty::is_out(self t: Ty, tys: Nat → RecInfo) → Bool {
-    match t { Enum(i) => Ty::is_bare(tys, i).or(Ty::is_one_slot(tys, i)), _ => t.is_edge(tys).or(t.is_two_words(tys)) }
+    match t {
+        Enum(i) => Ty::is_bare(tys, i).or(Ty::is_words(tys(i).alts.slots)),
+        Named(i) => t.is_edge(tys).or(Ty::is_words_one(tys(i).fields)),
+        _ => t.is_edge(tys),
+    }
 }
 
 fn Ty::all_edge(ts: List<Ty>, tys: Nat → RecInfo) → Bool {
     match ts { Nil => True, Cons(t, rest) => t.is_edge(tys).and(Ty::all_edge(rest, tys)) }
 }
-
-fn Ty::is_words(fs: List<Ty>) → Bool { match fs { Nil => True, Cons(f, rest) => f.is_word64().and(Ty::is_words(rest)) } }
 
 // A function's parameters: each crosses the boundary (`Ty::Param`), an
 // enum as its tag word and a word for each slot of its payload, each a
@@ -256,7 +247,7 @@ fn Fun::words_reason() → String {
 }
 
 fn Fun::result_reason() → String {
-    "a result that is not a word of at most 64 bits, an enum or a record of two 64-bit words: the default setup compiles functions from words to a word, or to two (issues/function-ir-multi-word-calls.md)"
+    "a result that is not a word of at most 64 bits, a record of 64-bit words or an enum whose fields are 64-bit words: the default setup compiles functions from words to words (docs/native/runtime-fn-setups-design.md §16.17)"
 }
 
 fn Fun::loop_words_reason() → String {

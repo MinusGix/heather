@@ -64,9 +64,9 @@ fn two_replayed() → List<Function> {
 theorem two_run(): replay_stage(rules()).run(two(), two_plans()) = Some(two_replayed()) { refl }
 
 // What the program may do, the rewritten one may.
-theorem two_keeps(before: Buffers(), f: Nat, arguments: List<BitVec(64)>, result: BitVec(64), after: Buffers(),
-    did: program_effects(two(), before, f, arguments, result, after)): program_effects(two_replayed(), before, f, arguments, result, after) {
-    replay_stage(rules()).run_sound(two(), two_plans(), two_replayed(), two_run(), before, f, arguments, result, after, did)
+theorem two_keeps(before: Buffers(), f: Nat, arguments: List<BitVec(64)>, result: BitVec(64), rest: List<BitVec(64)>, after: Buffers(),
+    did: program_effects(two(), before, f, arguments, result, rest, after)): program_effects(two_replayed(), before, f, arguments, result, rest, after) {
+    replay_stage(rules()).run_sound(two(), two_plans(), two_replayed(), two_run(), before, f, arguments, result, rest, after, did)
 }
 
 // A plan in the wrong shape for its region, and too few plans.
@@ -162,9 +162,9 @@ fn doubled_once() → List<Function> { [Function([0], leaf([BufferLoad(1, 0, 0),
 
 theorem doubled_run(): replay_stage(rules()).run(doubled(), [Nodes(Cons(Keep, again()))]) = Some(doubled_once()) { refl }
 
-theorem doubled_keeps(before: Buffers(), f: Nat, arguments: List<BitVec(64)>, result: BitVec(64), after: Buffers(),
-    did: program_effects(doubled(), before, f, arguments, result, after)): program_effects(doubled_once(), before, f, arguments, result, after) {
-    replay_stage(rules()).run_sound(doubled(), [Nodes(Cons(Keep, again()))], doubled_once(), doubled_run(), before, f, arguments, result, after, did)
+theorem doubled_keeps(before: Buffers(), f: Nat, arguments: List<BitVec(64)>, result: BitVec(64), rest: List<BitVec(64)>, after: Buffers(),
+    did: program_effects(doubled(), before, f, arguments, result, rest, after)): program_effects(doubled_once(), before, f, arguments, result, rest, after) {
+    replay_stage(rules()).run_sound(doubled(), [Nodes(Cons(Keep, again()))], doubled_once(), doubled_run(), before, f, arguments, result, rest, after, did)
 }
 
 // ---------------------------------------------------------------------------

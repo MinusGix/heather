@@ -3441,26 +3441,48 @@ theorem Ty::edge_reads(tys: Nat → RecInfo, call: function_ir_eval::Answers(), 
 }
 
 // A code a function returns at its boundary: one it passes in a word
-// (`Ty::Edge`), a record of two 64-bit words, the second returned beside
-// the first (`Function.also`, RDX; docs/native/runtime-fn-setups-design.md
-// §16.16), or an enum, as its tag word, and its payload's one slot, where
-// it has one, beside it. Only the program's entry returns two words: a call reads RAX alone, so a callee's
-// signature still asks for one (`Sig::Words`).
+// (`Ty::Edge`), a record whose fields are 64-bit words, the first returned
+// as the function's word and the rest beside it (`Function.also`, the
+// answer registers RDX, RCX, …; docs/native/runtime-fn-setups-design.md
+// §16.16-17), or an enum, as its tag word and then a word for each slot of
+// its payload, each a 64-bit word. A call reads every word back
+// (`Ty::Back`); a C caller is handed two at most, which `compile-x86`
+// checks.
+
+// Fields that are 64-bit words, one at least: the first is the word
+// returned, the rest beside it.
+fn Ty::WordsOne(fs: List<Ty>) → Type {
+    match fs { Nil => False, Cons(f, rest) => (f = Word(64)) ∧ Ty::Words(rest) }
+}
+
+fn Ty::check_words_one(fs: List<Ty>) → Option<Ty::WordsOne(fs)> {
+    match fs as λ g => Option<Ty::WordsOne(g)> {
+        Nil => None,
+        Cons(f, rest) => f.check(Word(64)).and_then(λ e => Ty::check_words(rest).and_then(λ ws => Some(⟨e, ws⟩))),
+    }
+}
+
+theorem Ty::words_one_all(fs: List<Ty>): Ty::WordsOne(fs) → Ty::Words(fs) {
+    match fs { Nil => λ never => false_elim(never), Cons(_, _) => λ ok => ok }
+}
+
+// The first of such fields held from `port` is the word there.
+theorem Ty::fields_head_reads(values: Valuation(), port: Nat, fs: List<Ty>): Ty::WordsOne(fs) → (t: Ty::Flats(fs)) →
+    Ty::FieldsHold(fs, values, port, t) → values(64, port) = Ty::flats_head_word(fs, t) {
+    match fs {
+        Nil => λ never => false_elim(never),
+        Cons(f, rest) => λ ok t held => j(sym(ok.left), λ g _ => (x: g.Flat()) → g.FlatHolds(values, port, x) → values(64, port) = g.flat_word(x),
+            λ x h => h)(t.fst, held.left),
+    }
+}
+
 fn Ty::Out(self t: Ty, tys: Nat → RecInfo) → Type {
     match t {
         Word(w) => (w = 64) ∨ (w < 64),
         Bit => False, ByteList(_) => False, Lines => False,
-        Named(i) => (tys(i).fields = [Word(64)]) ∨ (tys(i).fields = [Word(64), Word(64)]),
+        Named(i) => (tys(i).fields = [Word(64)]) ∨ Ty::WordsOne(tys(i).fields),
         Count => False,
-        Enum(i) => Ty::Bare(tys(i).alts.slots) ∨ (tys(i).alts.slots = [Word(64)]),
-    }
-}
-
-fn Ty::check_fields_two(fs: List<Ty>) → Option<fs = [Word(64), Word(64)]> {
-    match fs as λ g => Option<g = [Word(64), Word(64)]> {
-        Nil => None,
-        Cons(f, rest) => f.check(Word(64)).and_then(λ e1 => Ty::check_fields_word(rest).and_then(λ e2 =>
-            Some(trans(j(e1, λ x _ => Cons(f, rest) = Cons(x, rest), refl), cong_fn(λ (r: List<Ty>) => Cons(Word(64), r), e2))))),
+        Enum(i) => Ty::Bare(tys(i).alts.slots) ∨ Ty::Words(tys(i).alts.slots),
     }
 }
 
@@ -3470,12 +3492,12 @@ fn Ty::check_out(self t: Ty, tys: Nat → RecInfo) → Option<t.Out(tys)> {
         Bit => None, ByteList(_) => None, Lines => None,
         Named(i) => match Ty::check_fields_word(tys(i).fields) {
             Some(e) => Some(Inl(e)),
-            None => Ty::check_fields_two(tys(i).fields).and_then(λ e => Some(Inr(e))),
+            None => Ty::check_words_one(tys(i).fields).and_then(λ ws => Some(Inr(ws))),
         },
         Count => None,
         Enum(i) => match Ty::check_bare(tys(i).alts.slots) {
             Some(b) => Some(Inl(b)),
-            None => Ty::check_fields_word(tys(i).alts.slots).and_then(λ e => Some(Inr(e))),
+            None => Ty::check_words(tys(i).alts.slots).and_then(λ ws => Some(Inr(ws))),
         },
     }
 }
@@ -3493,12 +3515,7 @@ theorem Ty::out_reads(tys: Nat → RecInfo, call: function_ir_eval::Answers(), b
         Lines => λ never => false_elim(never),
         Named(i) => λ ok => match ok {
             Inl(e) => Ty::edge_reads(tys, call, buffers, values, Named(i), c, e),
-            Inr(e) => λ v h => {
-                let after = c.region.eval(call, values, buffers := buffers);
-                let general = j(sym(e), λ g _ => (t2: Ty::Flats(g)) → Ty::FieldsHold(g, after, c.result, t2) → after(64, c.result) = Ty::flats_head_word(g, t2),
-                    λ t2 held => held.left);
-                general(tys(i).get(v), h)
-            },
+            Inr(ws) => λ v h => Ty::fields_head_reads(c.region.eval(call, values, buffers := buffers), c.result, tys(i).fields, ws, tys(i).get(v), h),
         },
         Count => λ never => false_elim(never),
         Enum(i) => λ _ v h => {
@@ -3509,7 +3526,7 @@ theorem Ty::out_reads(tys: Nat → RecInfo, call: function_ir_eval::Answers(), b
 }
 
 // The result's words past the first, at the ports `Ty::also_ports` names,
-// are the value's (none but for a record of two words, and an enum's slot).
+// are the value's (a record's fields past its first, an enum's slots).
 theorem Ty::also_reads(tys: Nat → RecInfo, call: function_ir_eval::Answers(), buffers: Buffers(), values: Valuation(), t: Ty, c: Lowered): t.Out(tys) →
     (v: t.sem(tys)) → t.Holds(tys, c.region.eval(call, values, buffers := buffers), c.result, v) →
     words_of(t.widen(tys, c).region.eval(call, values, buffers := buffers), t.also_ports(tys, t.widen(tys, c).result)) = Ty::rest_words(tys, t, v) {
@@ -3521,7 +3538,7 @@ theorem Ty::also_reads(tys: Nat → RecInfo, call: function_ir_eval::Answers(), 
         Named(i) => λ ok v h => {
             let words: Ty::Words(tys(i).fields) = match ok {
                 Inl(e) => j(sym(e), λ g _ => Ty::Words(g), ⟨refl, trivial⟩),
-                Inr(e) => j(sym(e), λ g _ => Ty::Words(g), ⟨refl, ⟨refl, trivial⟩⟩),
+                Inr(ws) => Ty::words_one_all(tys(i).fields, ws),
             };
             Ty::fields_rest_reads(c.region.eval(call, values, buffers := buffers), c.result, tys(i).fields, words, tys(i).get(v), h)
         },
@@ -3529,7 +3546,7 @@ theorem Ty::also_reads(tys: Nat → RecInfo, call: function_ir_eval::Answers(), 
         Enum(i) => λ ok v h => {
             let words: Ty::Words(tys(i).alts.slots) = match ok {
                 Inl(bare) => Ty::bare_words(tys(i).alts.slots, bare),
-                Inr(e) => j(sym(e), λ g _ => Ty::Words(g), ⟨refl, trivial⟩),
+                Inr(ws) => ws,
             };
             Ty::ports_reads(c.region.eval(call, values, buffers := buffers), tys(i).alts.slots, c.result + 1, words, tys(i).alts.fields(v), h.right)
         },
