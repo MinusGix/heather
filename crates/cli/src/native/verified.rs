@@ -398,7 +398,7 @@ pub(super) fn runtime_shape(elab: &Elaborator, prefix: &str, owner: &str, source
     // A function lent nothing: the widths its result and its parameters
     // cross its boundary at (`Fun::edge_widths`).
     let (imports, counts) = match spans {
-        Spans::None => ("", format!("{source}::rt.edge_widths() ++ Cons(match {source}::rt.result {{ Enum(i) => i + 1, _ => 0 }}, {source}::rt.params.map(λ p => match p {{ Enum(i) => i + 1, _ => 0 }})) ++ [Ty::spans({source}::world.tys, {source}::rt.params), {source}::code.also.len()]")),
+        Spans::None => ("", format!("{source}::rt.edge_widths() ++ Cons(match {source}::rt.result {{ Enum(i) => i + 1, _ => 0 }}, {source}::rt.params.map(λ p => match p {{ Enum(i) => i + 1, Named(i) => match {source}::world.tys(i).fields.len().leb(1) {{ True => 0, False => {RECORD} + i + 1 }}, _ => 0 }})) ++ [Ty::spans({source}::world.tys, {source}::rt.params), {source}::code.also.len()]")),
         Spans::Read => ("import function_ir_lower_calls;\nimport function_ir_writes;\n", format!("program_counts({source}::program)")),
         Spans::Written => ("import function_ir_lower_calls;\nimport function_ir_writes;\nimport function_ir_rows;\n",
             format!("program_counts({source}::program)")),
@@ -448,7 +448,8 @@ fn {prefix}_rows(rows: List<List<Bool>>, counts: List<Nat>, f, functions: Nat) �
                     returns a structure of two integer words (docs/native/runtime-fn-setups-design.md §16.17)", also + 1));
             }
             // An enum result's table entry, then each enum parameter, by
-            // position, and its table entry.
+            // position, and its table entry (a record of several words
+            // past `RECORD`).
             let result = match codes[0] { 0 => None, code => Some(code - 1) };
             let enums: Vec<(usize, u64)> = codes[1..].iter().enumerate().filter(|(_, code)| **code > 0).map(|(i, code)| (i, code - 1)).collect();
             // A record of two words as the result: its fields' names, as
@@ -1918,9 +1919,16 @@ fn arguments(arity: usize) -> Vec<String> { (0..arity).map(|i| format!("a{i}")).
 
 /// The parameters' binders, an enum's at its type (`RecInfo::enum_at`,
 /// entry `i` of `table`) and a word's at `BitVec(64)`.
+/// A parameter that is a record of several words, among `enums`: its table
+/// entry past this (docs/native/runtime-fn-setups-design.md §16.17). It
+/// is quantified as the record and passed in its fields' words
+/// (`RecInfo::record_at`, `RecInfo::record_words`).
+const RECORD: u64 = 1 << 32;
+
 fn typed_enums(arguments: &[String], enums: &[(usize, u64)], table: &str) -> String {
     if enums.is_empty() { return typed(arguments); }
     arguments.iter().enumerate().map(|(k, a)| match enums.iter().find(|(at, _)| *at == k) {
+        Some((_, i)) if *i >= RECORD => format!("{a}: RecInfo::record_at({table}, {})", i - RECORD),
         Some((_, i)) => format!("{a}: RecInfo::enum_at({table}, {i})"),
         None => format!("{a}: BitVec(64)"),
     }).collect::<Vec<_>>().join(", ")
@@ -1936,7 +1944,7 @@ fn words_enums(arguments: &[String], enums: &[(usize, u64)], table: &str) -> Str
         match enums.iter().find(|(at, _)| *at == k) {
             Some((_, i)) => {
                 if !run.is_empty() { parts.push(format!("[{}]", run.join(", "))); run.clear(); }
-                parts.push(format!("RecInfo::enum_words({table}, {i}, {a})"));
+                parts.push(if *i >= RECORD { format!("RecInfo::record_words({table}, {}, {a})", i - RECORD) } else { format!("RecInfo::enum_words({table}, {i}, {a})") });
             }
             None => run.push(a.clone()),
         }

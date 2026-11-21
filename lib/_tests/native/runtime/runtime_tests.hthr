@@ -334,8 +334,11 @@ runtime fn uses_helper(a: BitVec(64)) → BitVec(64) { helper(a).sub(a) }
 // expect-error: unbound name `uses_helper`
 theorem uses_helper_unpublished(a: BitVec(64)): uses_helper(a) = a { refl }
 
-// expect-error: a result that is not a word of at most 64 bits
+// A `Bool` result is returned zero-extended to its word
+// (docs/native/runtime-fn-setups-design.md §16.17).
 runtime fn is_small(a: BitVec(64)) → Bool { a.unsigned_lt_bit(BitVec::ofNat(8)) }
+
+theorem is_small_agrees(a: BitVec(64)): program_eval(is_small::program, 0, [a]) = runtime_bit_wide(is_small(a)) { is_small::agrees(a) }
 
 // A byte list is a lent span only where a span may stand: before the other
 // parameters, followed by its length word

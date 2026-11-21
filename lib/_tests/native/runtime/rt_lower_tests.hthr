@@ -263,8 +263,11 @@ theorem call_of_bit_refused(): Tm::lower(Call(0, [0]), bit_callee_world(), [Bit]
 // A call with an argument too few.
 theorem call_arity_refused(): Tm::lower(Call(0, [0]), calls_world(), [Word(64)], [0], 1) = None { refl }
 
-// A function of a bit has no word entry.
-theorem fun_of_bit_refused(): Fun([Bit], Word(64), Lit(Word(64), 0)).lower(no_records_world()) = None { refl }
+// A function of a bit takes its word's lowest bit (docs/native/runtime-fn-setups-design.md
+// §16.17); one of a count has no word entry.
+theorem fun_of_bit_lowers(): Fun([Bit], Word(64), Lit(Word(64), 0)).lower(no_records_world()).is_some() = True { refl }
+
+theorem fun_of_count_refused(): Fun([Count], Word(64), Lit(Word(64), 0)).lower(no_records_world()) = None { refl }
 
 // ---------------------------------------------------------------------------
 // Records (round 3): a record is its fields at consecutive ports. `Make`

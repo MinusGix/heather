@@ -157,9 +157,9 @@ fn Ty::all_edge(ts: List<Ty>, tys: Nat → RecInfo) → Bool {
 
 // A function's parameters: each crosses the boundary (`Ty::Param`), an
 // enum as its tag word and a word for each slot of its payload, each a
-// 64-bit word.
+// 64-bit word, and a record of 64-bit words a word a field.
 fn Ty::all_param(ts: List<Ty>, tys: Nat → RecInfo) → Bool {
-    match ts { Nil => True, Cons(t, rest) => { let ok = match t { Enum(i) => Ty::is_words(tys(i).alts.slots), _ => t.is_edge(tys) }; ok.and(Ty::all_param(rest, tys)) } }
+    match ts { Nil => True, Cons(t, rest) => { let ok = match t { Enum(i) => Ty::is_words(tys(i).alts.slots), Named(i) => Ty::is_words(tys(i).fields), _ => t.is_edge(tys) }; ok.and(Ty::all_param(rest, tys)) } }
 }
 
 // The width a code crosses a function's boundary at: a word's own, 64 for
@@ -1913,7 +1913,12 @@ fn runtime_own_types(word: Handle, reprs: List<ReprEntry>, ps: List<Ty>, recs: L
                         pure(Cons(t, more))
                     },
                 },
-                Named(i) => pure(Cons(match reprs.nth(i) { Some(e) => e.ty, None => word }, more)),
+                // A type held by its repr as the repr's type; a record as
+                // itself.
+                Named(i) => match reprs.nth(i) {
+                    Some(e) => pure(Cons(e.ty, more)),
+                    None => match recs.nth(i - reprs.len()) { Some(r) => pure(Cons(r.ty, more)), None => runtime_fail("a record parameter without its type") },
+                },
                 // An enum's own type.
                 Enum(i) => match recs.nth(i - reprs.len()) { Some(r) => pure(Cons(r.ty, more)), None => runtime_fail("an enum parameter without its type") },
                 Bit => {
@@ -2801,10 +2806,15 @@ fn Ty::any_enum(ps: List<Ty>) → Bool { ps.any_bit(λ p => match p { Enum(_) =>
 
 // The types `f::agrees` quantifies over: a word for each parameter, and an
 // enum's own type for an enum.
-fn runtime_agree_types(word: Handle, ps: List<Ty>, own: List<Handle>) → List<Handle> {
+// Whether table entry `i` is a record the program reads rather than a type
+// held by its repr (the reprs come first in the table).
+fn runtime_is_record(reprs_n: Nat, i: Nat) → Bool { reprs_n.leb(i) }
+
+fn runtime_agree_types(word: Handle, reprs_n: Nat, ps: List<Ty>, own: List<Handle>) → List<Handle> {
     match ps {
         Nil => [],
-        Cons(p, rest) => Cons(match p { Enum(_) => own.head_or(word), _ => word }, runtime_agree_types(word, rest, own.drop(1))),
+        Cons(p, rest) => Cons(match p { Enum(_) => own.head_or(word), Named(i) => match runtime_is_record(reprs_n, i) { True => own.head_or(word), False => word }, _ => word },
+            runtime_agree_types(word, reprs_n, rest, own.drop(1))),
     }
 }
 
@@ -2814,15 +2824,21 @@ fn runtime_agree_types(word: Handle, ps: List<Ty>, own: List<Handle>) → List<H
 // the last.
 fn runtime_words_then(xs, ys: List<BitVec(64)>) → List<BitVec(64)> { xs ++ ys }
 
-fn runtime_word_tails(words: List<Expr>, enum_words, then, tys_e: Expr, ps: List<Ty>, ys: List<Expr>) → List<Expr> {
+fn runtime_word_tails(words: List<Expr>, enum_words, then, tys_e: Expr, ps: List<Ty>, ys: List<Expr>, record_words: Expr, reprs_n: Nat) → List<Expr> {
     match ps {
         Nil => [runtime_at(words, 0)],
         Cons(p, rest) => {
-            let later = runtime_word_tails(words, enum_words, then, tys_e, rest, ys.tail());
+            let later = runtime_word_tails(words, enum_words, then, tys_e, rest, ys.tail(), record_words, reprs_n);
             let after = later.head_or(runtime_at(words, 0));
             let y = ys.head_or(Blank);
             Cons(match p {
                 Enum(i) => ap(then, [ap(enum_words, [tys_e, NatLit(i), y]), after]),
+                // A record (not a type held by its repr) in its fields'
+                // words (`RecInfo::record_words`).
+                Named(i) => match runtime_is_record(reprs_n, i) {
+                    True => ap(then, [ap(record_words, [tys_e, NatLit(i), y]), after]),
+                    False => ap(runtime_at(words, 1), [y, after]),
+                },
                 _ => ap(runtime_at(words, 1), [y, after]),
             }, later)
         },
@@ -3042,12 +3058,13 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
             let xs <- runtime_params_at(own_types, None, 0);
             // An enum is quantified as itself, its words passed
             // (`RecInfo::enum_words`): the agreement is at real values only.
-            let ys <- runtime_params_at(runtime_agree_types(ts.word, rfun.params, own_types), None, 0);
+            let ys <- runtime_params_at(runtime_agree_types(ts.word, reprs.len(), rfun.params, own_types), None, 0);
             let at_ys = runtime_locals(ys);
             let enum_word <- runtime_global(name_of(RecInfo::enum_word));
             let enum_words <- runtime_global(name_of(RecInfo::enum_words));
             let then <- runtime_global(name_of(runtime_words_then));
-            let tails = runtime_word_tails(word_list, enum_words, then, tys_e, rfun.params, at_ys);
+            let record_words <- runtime_global(name_of(RecInfo::record_words));
+            let tails = runtime_word_tails(word_list, enum_words, then, tys_e, rfun.params, at_ys, record_words, reprs.len());
             let words_e = tails.head_or(Blank);
             // The pin, for a function its reflection's meaning converts to: a loop's
             // meaning is one step of it, which is the function only at a
@@ -3116,8 +3133,8 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
         // every file (the reflection's meaning in the world there, and the
         // program evaluated over the file, against the function at the
         // file's spans).
-        Succ(_) => match Ty::any_enum(rfun.params) {
-          True => runtime_fail("`" ++ name ++ "` takes an enum and is lent spans: not stated yet (docs/native/runtime-fn-setups-design.md §16.16)"),
+        Succ(_) => match Ty::any_enum(rfun.params) || rfun.params.any_bit(λ p => match p { Named(i) => runtime_is_record(reprs.len(), i), _ => False }) {
+          True => runtime_fail("`" ++ name ++ "` takes an enum or a record of several words and is lent spans: not stated yet (docs/native/runtime-fn-setups-design.md §16.16)"),
           False => {
             let buffers_h <- runtime_type_of(name_of(runtime_w_buffers));
             let world_at <- runtime_global(name_of(World::at));
@@ -3136,7 +3153,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
             let at_ys = runtime_locals(ys);
             let enum_words <- runtime_global(name_of(RecInfo::enum_words));
             let then <- runtime_global(name_of(runtime_words_then));
-            let tails = runtime_word_tails(word_list, enum_words, then, tys_e, rfun.params, at_ys);
+            let tails = runtime_word_tails(word_list, enum_words, then, tys_e, rfun.params, at_ys, Blank, 0);
             let words_e = tails.head_or(Blank);
             let at_file = runtime_lent_args(span, Local(c.ref), 0, rfun.lent, runtime_args(count, reprs, rfun.params, at_ys));
             let admits_of <- runtime_global(name_of(link_admits));

@@ -928,10 +928,13 @@ fn RecInfo::enum_words(tys: Nat → RecInfo, i: Nat, v: tys(i).alts.E) → List<
     Cons(RecInfo::enum_word(tys, i, v), RecInfo::enum_rest(tys, i, v))
 }
 
+// A record's words: its fields', in order (`Ty::flats_words`), each a word.
+fn RecInfo::record_words(tys: Nat → RecInfo, i: Nat, v: tys(i).T) → List<BitVec(64)> { Ty::flats_words(tys(i).fields, tys(i).get(v)) }
+
 // How many words a code crosses the boundary in, and a signature's
 // parameters (the last parameter's first).
 fn Ty::span(self p: Ty, tys: Nat → RecInfo) → Nat {
-    match p { Word(_) => 1, Bit => 1, ByteList(_) => 1, Lines => 1, Named(_) => 1, Count => 1, Enum(i) => tys(i).alts.slots.len() + 1 }
+    match p { Word(_) => 1, Bit => 1, ByteList(_) => 1, Lines => 1, Named(i) => tys(i).fields.len(), Count => 1, Enum(i) => tys(i).alts.slots.len() + 1 }
 }
 
 fn Ty::spans(tys: Nat → RecInfo, ps: List<Ty>) → Nat {
@@ -962,7 +965,7 @@ fn Ty::read_words(self p: Ty, tys: Nat → RecInfo, ws: List<BitVec(64)>) → p.
         Bit => Ty::cast(tys, Word(64), Bit, ws.head_or(BitVec::zero())),
         ByteList(n) => Ty::cast(tys, Word(64), ByteList(n), ws.head_or(BitVec::zero())),
         Lines => Ty::cast(tys, Word(64), Lines, ws.head_or(BitVec::zero())),
-        Named(i) => Ty::cast(tys, Word(64), Named(i), ws.head_or(BitVec::zero())),
+        Named(i) => tys(i).mk(Ty::flats_of_words(tys(i).fields, ws)),
         Count => Ty::cast(tys, Word(64), Count, ws.head_or(BitVec::zero())),
         Enum(i) => tys(i).alts.of(ws.head_or(BitVec::zero()).toNat().min(tys(i).alts.last), Ty::flats_of_words(tys(i).alts.slots, ws.tail())),
     }
@@ -1135,6 +1138,93 @@ theorem Ty::flats_round(fs: List<Ty>): Ty::Words(fs) → (t: Ty::Flats(fs)) → 
     }
 }
 
+// A record's fields crossing the boundary: a word each, quantified in
+// turn (`Ty::TakesFields`), so a contract names every word list of the
+// record's length and the record they are read as
+// (docs/native/runtime-fn-setups-design.md §16.17).
+fn Ty::TakesFields(fs: List<Ty>, k: List<BitVec(64)> → Type) → Type {
+    match fs { Nil => k(Nil), Cons(_, rest) => (x: BitVec(64)) → Ty::TakesFields(rest, λ (ws: List<BitVec(64)>) => k(Cons(x, ws))) }
+}
+
+theorem Ty::fields_intro(fs: List<Ty>): (k: List<BitVec(64)> → Type) → ((ws: List<BitVec(64)>) → ws.len() = fs.len() → k(ws)) → Ty::TakesFields(fs, k) {
+    match fs {
+        Nil => λ k h => h(Nil, refl),
+        Cons(_, rest) => λ k h x => Ty::fields_intro(rest, λ (ws: List<BitVec(64)>) => k(Cons(x, ws)), λ ws len => h(Cons(x, ws), cong_fn(λ (n: Nat) => Succ(n), len))),
+    }
+}
+
+theorem Ty::fields_taken_at(fs: List<Ty>): (k: List<BitVec(64)> → Type) → Ty::TakesFields(fs, k) → (xs: List<BitVec(64)>) → k(Ty::first(fs.len(), xs)) {
+    match fs {
+        Nil => λ k t xs => t,
+        Cons(_, rest) => λ k t xs => Ty::fields_taken_at(rest, λ (ws: List<BitVec(64)>) => k(Cons(xs.head_or(BitVec::zero()), ws)), t(xs.head_or(BitVec::zero())), xs.tail()),
+    }
+}
+
+theorem Ty::fields_map(fs: List<Ty>): (k, l: List<BitVec(64)> → Type) → ((ws: List<BitVec(64)>) → k(ws) → l(ws)) →
+    Ty::TakesFields(fs, k) → Ty::TakesFields(fs, l) {
+    match fs {
+        Nil => λ k l f t => f(Nil, t),
+        Cons(_, rest) => λ k l f t x => Ty::fields_map(rest, λ (ws: List<BitVec(64)>) => k(Cons(x, ws)), λ (ws: List<BitVec(64)>) => l(Cons(x, ws)), λ (ws: List<BitVec(64)>) => f(Cons(x, ws)), t(x)),
+    }
+}
+
+// Fields read off their own words, whatever follows them, or off the first
+// as many words as there are fields.
+theorem Ty::flats_of_words_append(fs: List<Ty>): (ws, more: List<BitVec(64)>) → ws.len() = fs.len() →
+    Ty::flats_of_words(fs, ws ++ more) = Ty::flats_of_words(fs, ws) {
+    match fs {
+        Nil => λ ws more _ => refl,
+        Cons(f, rest) => λ ws more => match ws as λ us => us.len() = Succ(rest.len()) → Ty::flats_of_words(Cons(f, rest), us ++ more) = Ty::flats_of_words(Cons(f, rest), us) {
+            Nil => λ (bad: 0 = Succ(rest.len())) => false_elim(rest.len().zero_ne_succ(bad)),
+            Cons(x, r) => λ (len: Succ(r.len()) = Succ(rest.len())) =>
+                cong_fn(λ (t: Ty::Flats(rest)) => Pair(f.word_at(x), t), Ty::flats_of_words_append(rest, r, more, Nat::succ_inj(r.len(), rest.len(), len))),
+        },
+    }
+}
+
+theorem Ty::flats_of_words_first(fs: List<Ty>): (xs: List<BitVec(64)>) → Ty::flats_of_words(fs, Ty::first(fs.len(), xs)) = Ty::flats_of_words(fs, xs) {
+    match fs {
+        Nil => λ xs => refl,
+        Cons(f, rest) => λ xs => cong_fn(λ (t: Ty::Flats(rest)) => Pair(f.word_at(xs.head_or(BitVec::zero())), t), Ty::flats_of_words_first(rest, xs.tail())),
+    }
+}
+
+// 64-bit fields' words, read and written back, are the first as many words.
+theorem Ty::flats_words_of(fs: List<Ty>): Ty::Words(fs) → (xs: List<BitVec(64)>) → Ty::flats_words(fs, Ty::flats_of_words(fs, xs)) = Ty::first(fs.len(), xs) {
+    match fs {
+        Nil => λ _ xs => refl,
+        Cons(f, rest) => λ ok xs => {
+            let head = j(sym(ok.left), λ g _ => (x: BitVec(64)) → g.flat_word(g.word_at(x)) = x, λ x => refl)(xs.head_or(BitVec::zero()));
+            eq2(λ (a: BitVec(64)) (r: List<BitVec(64)>) => Cons(a, r), head, Ty::flats_words_of(rest, ok.right, xs.tail()))
+        },
+    }
+}
+
+// A list's own count of its words is itself.
+theorem Ty::first_all(xs: List<BitVec(64)>): Ty::first(xs.len(), xs) = xs {
+    match xs { Nil => refl, Cons(x, r) => cong_fn(λ (t: List<BitVec(64)>) => Cons(x, t), Ty::first_all(r)) }
+}
+
+// A record whose one field is a 64-bit word is passed as that word: its
+// fields read off a word list starting with it are the record that word
+// reads as (`Ty::cast`), and a contract over its fields is one over the
+// word.
+theorem Ty::fields_one_read(fs: List<Ty>, e: fs = [Word(64)], x: BitVec(64), ws: List<BitVec(64)>): Ty::flats_of_words(fs, Cons(x, ws)) = Ty::flats_word(fs, x) {
+    j(sym(e), λ g _ => Ty::flats_of_words(g, Cons(x, ws)) = Ty::flats_word(g, x), refl)
+}
+
+theorem Ty::fields_one_to(T: Type, fs: List<Ty>, mk: Ty::Flats(fs) → T, e: fs = [Word(64)], K: List<BitVec(64)> → T → Type):
+    Ty::TakesFields(fs, λ (ws: List<BitVec(64)>) => K(ws, mk(Ty::flats_of_words(fs, ws)))) → (x: BitVec(64)) → K([x], mk(Ty::flats_word(fs, x))) {
+    j(sym(e), λ g _ => (mk2: Ty::Flats(g) → T) → Ty::TakesFields(g, λ (ws: List<BitVec(64)>) => K(ws, mk2(Ty::flats_of_words(g, ws)))) →
+        (x: BitVec(64)) → K([x], mk2(Ty::flats_word(g, x))), λ mk2 t => t)(mk)
+}
+
+theorem Ty::fields_one_from(T: Type, fs: List<Ty>, mk: Ty::Flats(fs) → T, e: fs = [Word(64)], K: List<BitVec(64)> → T → Type):
+    ((x: BitVec(64)) → K([x], mk(Ty::flats_word(fs, x)))) → Ty::TakesFields(fs, λ (ws: List<BitVec(64)>) => K(ws, mk(Ty::flats_of_words(fs, ws)))) {
+    j(sym(e), λ g _ => (mk2: Ty::Flats(g) → T) → ((x: BitVec(64)) → K([x], mk2(Ty::flats_word(g, x)))) →
+        Ty::TakesFields(g, λ (ws: List<BitVec(64)>) => K(ws, mk2(Ty::flats_of_words(g, ws)))), λ mk2 h => h)(mk)
+}
+
 // What an enum asks of its table entry to cross the boundary in words:
 // its tags in a word, and its payload's slots each a 64-bit word. Every
 // other code crosses as it is.
@@ -1227,7 +1317,7 @@ fn Ty::Takes(self p: Ty, tys: Nat → RecInfo) → (List<BitVec(64)> → p.sem(t
         Bit => λ k => (x: BitVec(64)) → k([x], Ty::cast(tys, Word(64), Bit, x)),
         ByteList(n) => λ k => (x: BitVec(64)) → k([x], Ty::cast(tys, Word(64), ByteList(n), x)),
         Lines => λ k => (x: BitVec(64)) → k([x], Ty::cast(tys, Word(64), Lines, x)),
-        Named(i) => λ k => (x: BitVec(64)) → k([x], Ty::cast(tys, Word(64), Named(i), x)),
+        Named(i) => λ k => Ty::TakesFields(tys(i).fields, λ (ws: List<BitVec(64)>) => k(ws, tys(i).mk(Ty::flats_of_words(tys(i).fields, ws)))),
         Count => λ k => (x: BitVec(64)) → k([x], Ty::cast(tys, Word(64), Count, x)),
         Enum(i) => λ k => (v: tys(i).alts.E) → k(RecInfo::enum_words(tys, i, v), v),
     }
@@ -1242,7 +1332,10 @@ theorem Ty::takes_intro(tys: Nat → RecInfo, p: Ty): (K: List<BitVec(64)> → p
         Bit => λ K _ h x => h([x], Ty::cast(tys, Word(64), Bit, x), ⟨refl, λ more => ⟨trivial, ⟨refl, refl⟩⟩⟩),
         ByteList(n) => λ K _ h x => h([x], Ty::cast(tys, Word(64), ByteList(n), x), ⟨refl, λ more => ⟨trivial, ⟨refl, refl⟩⟩⟩),
         Lines => λ K _ h x => h([x], Ty::cast(tys, Word(64), Lines, x), ⟨refl, λ more => ⟨trivial, ⟨refl, refl⟩⟩⟩),
-        Named(i) => λ K _ h x => h([x], Ty::cast(tys, Word(64), Named(i), x), ⟨refl, λ more => ⟨trivial, ⟨refl, refl⟩⟩⟩),
+        Named(i) => λ K _ h => Ty::fields_intro(tys(i).fields, λ (ws: List<BitVec(64)>) => K(ws, tys(i).mk(Ty::flats_of_words(tys(i).fields, ws))), λ ws len =>
+            h(ws, tys(i).mk(Ty::flats_of_words(tys(i).fields, ws)), ⟨len, λ more => ⟨trivial,
+                ⟨j(len, λ n _ => Ty::skip(n, ws ++ more) = more, Ty::skip_append(ws, more)),
+                    cong_fn(tys(i).mk, Ty::flats_of_words_append(tys(i).fields, ws, more, len))⟩⟩⟩)),
         Count => λ K _ h x => h([x], Ty::cast(tys, Word(64), Count, x), ⟨refl, λ more => ⟨trivial, ⟨refl, refl⟩⟩⟩),
         Enum(i) => λ K ok h v => h(RecInfo::enum_words(tys, i, v), v, RecInfo::enum_taken(tys, i, ok, v)),
     }
@@ -1257,7 +1350,8 @@ theorem Ty::takes_at(tys: Nat → RecInfo, p: Ty): (K: List<BitVec(64)> → p.se
         Bit => λ K t xs _ => t(xs.head_or(BitVec::zero())),
         ByteList(_) => λ K t xs _ => t(xs.head_or(BitVec::zero())),
         Lines => λ K t xs _ => t(xs.head_or(BitVec::zero())),
-        Named(_) => λ K t xs _ => t(xs.head_or(BitVec::zero())),
+        Named(i) => λ K t xs _ => j(Ty::flats_of_words_first(tys(i).fields, xs), λ fl _ => K(Ty::first(tys(i).fields.len(), xs), tys(i).mk(fl)),
+            Ty::fields_taken_at(tys(i).fields, λ (ws: List<BitVec(64)>) => K(ws, tys(i).mk(Ty::flats_of_words(tys(i).fields, ws))), t, xs)),
         Count => λ K t xs _ => t(xs.head_or(BitVec::zero())),
         Enum(i) => λ K t xs adm => j(sym(adm), λ ws _ => K(ws, Ty::read_words(Enum(i), tys, xs)), t(Ty::read_words(Enum(i), tys, xs))),
     }
@@ -1413,7 +1507,7 @@ theorem Ty::ports_from_len(fs: List<Ty>): (port: Nat) → Ty::ports_from(fs, por
 // tag word, its slots' ids the ports after it, as `Ty::Holds` reads them).
 fn Ty::ids(self p: Ty, tys: Nat → RecInfo, m: Nat) → List<Nat> {
     match p {
-        Word(_) => [m], Bit => [m], ByteList(_) => [m], Lines => [m], Named(_) => [m], Count => [m],
+        Word(_) => [m], Bit => [m], ByteList(_) => [m], Lines => [m], Named(i) => Ty::ports_from(tys(i).fields, m), Count => [m],
         Enum(i) => Cons(m, Ty::ports_from(tys(i).alts.slots, m + 1)),
     }
 }
@@ -1438,7 +1532,7 @@ theorem Ty::takes_map(tys: Nat → RecInfo, p: Ty): (K, L: List<BitVec(64)> → 
         Bit => λ K L f t x => f([x], Ty::cast(tys, Word(64), Bit, x), t(x)),
         ByteList(n) => λ K L f t x => f([x], Ty::cast(tys, Word(64), ByteList(n), x), t(x)),
         Lines => λ K L f t x => f([x], Ty::cast(tys, Word(64), Lines, x), t(x)),
-        Named(i) => λ K L f t x => f([x], Ty::cast(tys, Word(64), Named(i), x), t(x)),
+        Named(i) => λ K L f t => Ty::fields_map(tys(i).fields, λ (ws: List<BitVec(64)>) => K(ws, tys(i).mk(Ty::flats_of_words(tys(i).fields, ws))), λ (ws: List<BitVec(64)>) => L(ws, tys(i).mk(Ty::flats_of_words(tys(i).fields, ws))), λ (ws: List<BitVec(64)>) => f(ws, tys(i).mk(Ty::flats_of_words(tys(i).fields, ws))), t),
         Count => λ K L f t x => f([x], Ty::cast(tys, Word(64), Count, x), t(x)),
         Enum(i) => λ K L f t v => f(RecInfo::enum_words(tys, i, v), v, t(v)),
     }
@@ -1503,7 +1597,7 @@ theorem Ty::takes_held(tys: Nat → RecInfo, p: Ty): (K: List<BitVec(64)> → p.
     (x: BitVec(64)) → p.Admits(tys, x) → K([x], Ty::cast(tys, Word(64), p, x)) {
     match p {
         Word(_) => λ K _ t x _ => t(x), Bit => λ K _ t x _ => t(x), ByteList(_) => λ K _ t x _ => t(x), Lines => λ K _ t x _ => t(x),
-        Named(_) => λ K _ t x _ => t(x), Count => λ K _ t x _ => t(x),
+        Named(i) => λ K e t x _ => Ty::fields_one_to(tys(i).T, tys(i).fields, tys(i).mk, e, K, t, x), Count => λ K _ t x _ => t(x),
         Enum(i) => λ K held t x adm => {
             let e = tys(i).alts;
             let d = Ty::flats_default(e.slots);
@@ -1524,7 +1618,7 @@ theorem Ty::takes_held_intro(tys: Nat → RecInfo, p: Ty): (K: List<BitVec(64)> 
     ((x: BitVec(64)) → K([x], Ty::cast(tys, Word(64), p, x))) → p.Takes(tys, K) {
     match p {
         Word(_) => λ K _ h => h, Bit => λ K _ h => h, ByteList(_) => λ K _ h => h, Lines => λ K _ h => h,
-        Named(_) => λ K _ h => h, Count => λ K _ h => h,
+        Named(i) => λ K e h => Ty::fields_one_from(tys(i).T, tys(i).fields, tys(i).mk, e, K, h), Count => λ K _ h => h,
         Enum(i) => λ K held h v => {
             let e = tys(i).alts;
             let x = RecInfo::enum_word(tys, i, v);
@@ -1550,7 +1644,9 @@ theorem Ty::held_words(tys: Nat → RecInfo, p: Ty): p.Held(tys) → (x: BitVec(
     (Ty::read_words(p, tys, Cons(x, ws)) = Ty::cast(tys, Word(64), p, x)) ∧ (Ty::skip(p.span(tys), Cons(x, ws)) = ws) {
     match p {
         Word(_) => λ _ x ws => ⟨refl, refl⟩, Bit => λ _ x ws => ⟨refl, refl⟩, ByteList(_) => λ _ x ws => ⟨refl, refl⟩, Lines => λ _ x ws => ⟨refl, refl⟩,
-        Named(_) => λ _ x ws => ⟨refl, refl⟩, Count => λ _ x ws => ⟨refl, refl⟩,
+        Named(i) => λ e x ws => ⟨cong_fn(tys(i).mk, Ty::fields_one_read(tys(i).fields, e, x, ws)),
+            j(sym(cong_fn(λ (fs: List<Ty>) => fs.len(), e)), λ n _ => Ty::skip(n, Cons(x, ws)) = ws, refl)⟩,
+        Count => λ _ x ws => ⟨refl, refl⟩,
         Enum(i) => λ held x ws => ⟨cong_fn(λ (t: Ty::Flats(tys(i).alts.slots)) => tys(i).alts.of(x.toNat().min(tys(i).alts.last), t),
                 Ty::bare_flats_of(tys(i).alts.slots, held.right, ws)),
             j(sym(Ty::bare_len(tys(i).alts.slots, held.right)), λ n _ => Ty::skip(n + 1, Cons(x, ws)) = ws, refl)⟩,
@@ -1559,7 +1655,8 @@ theorem Ty::held_words(tys: Nat → RecInfo, p: Ty): p.Held(tys) → (x: BitVec(
 
 theorem Ty::held_span(tys: Nat → RecInfo, p: Ty): p.Held(tys) → p.span(tys) = 1 {
     match p {
-        Word(_) => λ _ => refl, Bit => λ _ => refl, ByteList(_) => λ _ => refl, Lines => λ _ => refl, Named(_) => λ _ => refl, Count => λ _ => refl,
+        Word(_) => λ _ => refl, Bit => λ _ => refl, ByteList(_) => λ _ => refl, Lines => λ _ => refl,
+        Named(_) => λ e => cong_fn(λ (fs: List<Ty>) => fs.len(), e), Count => λ _ => refl,
         Enum(i) => λ held => cong_fn(λ (n: Nat) => n + 1, Ty::bare_len(tys(i).alts.slots, held.right)),
     }
 }
@@ -1592,7 +1689,7 @@ theorem Ty::takes_one(tys: Nat → RecInfo, p: Ty): (K: List<BitVec(64)> → p.s
     ((x: BitVec(64)) → K([x], Ty::cast(tys, Word(64), p, x))) → p.Takes(tys, K) {
     match p {
         Word(_) => λ K _ h => h, Bit => λ K never => false_elim(never), ByteList(_) => λ K never => false_elim(never),
-        Lines => λ K never => false_elim(never), Named(_) => λ K _ h => h, Count => λ K never => false_elim(never),
+        Lines => λ K never => false_elim(never), Named(i) => λ K e h => Ty::fields_one_from(tys(i).T, tys(i).fields, tys(i).mk, e, K, h), Count => λ K never => false_elim(never),
         Enum(_) => λ K never => false_elim(never),
     }
 }
@@ -1631,7 +1728,7 @@ theorem Ty::one_word_passes(tys: Nat → RecInfo, p: Ty): p.OneWord(tys) → p.P
 // word and then a word a slot.
 fn Ty::Sent(self p: Ty, tys: Nat → RecInfo) → Type {
     match p {
-        Word(w) => w = 64, Bit => False, ByteList(_) => False, Lines => False, Named(i) => tys(i).fields = [Word(64)], Count => True,
+        Word(w) => w = 64, Bit => False, ByteList(_) => False, Lines => False, Named(i) => Ty::Words(tys(i).fields), Count => True,
         Enum(i) => ((tys(i).alts.last + 1).leb(Nat::pow(2, 64)) = True) ∧ Ty::Words(tys(i).alts.slots),
     }
 }
@@ -1640,7 +1737,7 @@ fn Ty::check_sent(self p: Ty, tys: Nat → RecInfo) → Option<p.Sent(tys)> {
     match p as λ x => Option<x.Sent(tys)> {
         Word(w) => match w.equation(64) { Inl(e) => Some(e), Inr(_) => None },
         Bit => None, ByteList(_) => None, Lines => None,
-        Named(i) => Ty::check_fields_word(tys(i).fields),
+        Named(i) => Ty::check_words(tys(i).fields),
         Count => Some(trivial),
         Enum(i) => match (tys(i).alts.last + 1).leb(Nat::pow(2, 64)) as λ b => Option<(b = True) ∧ Ty::Words(tys(i).alts.slots)> {
             False => None,
@@ -1675,7 +1772,7 @@ theorem Ty::sents_pass(tys: Nat → RecInfo, ps: List<Ty>): Ty::Sents(tys, ps) �
 theorem Ty::held_sent(tys: Nat → RecInfo, p: Ty): p.Held(tys) → p.Sent(tys) {
     match p {
         Word(_) => λ e => e, Bit => λ never => false_elim(never), ByteList(_) => λ never => false_elim(never), Lines => λ never => false_elim(never),
-        Named(_) => λ e => e, Count => λ _ => trivial,
+        Named(_) => λ e => j(sym(e), λ g _ => Ty::Words(g), ⟨refl, trivial⟩), Count => λ _ => trivial,
         Enum(i) => λ held => ⟨held.left, Ty::bare_words(tys(i).alts.slots, held.right)⟩,
     }
 }
@@ -1698,8 +1795,18 @@ theorem Ty::takes_holds(tys: Nat → RecInfo, p: Ty): (K: List<BitVec(64)> → p
         Bit => λ K never => false_elim(never),
         ByteList(_) => λ K never => false_elim(never),
         Lines => λ K never => false_elim(never),
-        Named(i) => λ K e t values port v h => j(Ty::record_word_reads(tys(i).T, tys(i).fields, tys(i).mk, tys(i).get, tys(i).back, e, values, port, v, h),
-            λ u _ => K([values(64, port)], u), t(values(64, port))),
+        Named(i) => λ K ok t values port v h => {
+            let fs = tys(i).fields;
+            let ws = Ty::flats_words(fs, tys(i).get(v));
+            let reads: (words_of(values, Ty::ports_from(fs, port)) = ws) = Ty::ports_reads(values, fs, port, ok, tys(i).get(v), h);
+            let at = j(reads, λ ys _ => K(Ty::first(fs.len(), ys), tys(i).mk(Ty::flats_of_words(fs, ys))),
+                Ty::takes_at(tys, Named(i), K, t, words_of(values, Ty::ports_from(fs, port)), trivial));
+            let firsts: (Ty::first(fs.len(), ws) = ws) = j(Ty::flats_words_len(fs, tys(i).get(v)), λ n _ => Ty::first(n, ws) = ws, Ty::first_all(ws));
+            let value: (tys(i).mk(Ty::flats_of_words(fs, ws)) = v) = trans(cong_fn(tys(i).mk,
+                trans(cong_fn(λ (ys: List<BitVec(64)>) => Ty::flats_of_words(fs, ys), sym(ws.append_nil())), Ty::flats_round(fs, ok, tys(i).get(v), Nil))),
+                tys(i).back(v));
+            j(sym(reads), λ ys _ => K(ys, v), j(value, λ u _ => K(ws, u), j(firsts, λ ys _ => K(ys, tys(i).mk(Ty::flats_of_words(fs, ws))), at)))
+        },
         Count => λ K _ t values port v h => j(h, λ u _ => K([values(64, port)], u), t(values(64, port))),
         Enum(i) => λ K ok t values port v h => {
             let e = tys(i).alts;
@@ -3348,14 +3455,14 @@ fn Ty::check_edge(self t: Ty, tys: Nat → RecInfo) → Option<t.Edge(tys)> {
 // each of its payload's slots, each a 64-bit word (design §16.16).
 fn Ty::Param(self t: Ty, tys: Nat → RecInfo) → Type {
     match t {
-        Word(_) => t.Edge(tys), Bit => True, ByteList(_) => False, Lines => False, Named(_) => t.Edge(tys), Count => False,
+        Word(_) => t.Edge(tys), Bit => True, ByteList(_) => False, Lines => False, Named(i) => Ty::Words(tys(i).fields), Count => False,
         Enum(i) => ((tys(i).alts.last + 1).leb(Nat::pow(2, 64)) = True) ∧ Ty::Words(tys(i).alts.slots),
     }
 }
 
 fn Ty::check_param(self t: Ty, tys: Nat → RecInfo) → Option<t.Param(tys)> {
     match t as λ x => Option<x.Param(tys)> {
-        Word(w) => Word(w).check_edge(tys), Bit => Some(trivial), ByteList(_) => None, Lines => None, Named(i) => Named(i).check_edge(tys), Count => None,
+        Word(w) => Word(w).check_edge(tys), Bit => Some(trivial), ByteList(_) => None, Lines => None, Named(i) => Ty::check_words(tys(i).fields), Count => None,
         Enum(i) => match (tys(i).alts.last + 1).leb(Nat::pow(2, 64)) as λ b => Option<(b = True) ∧ Ty::Words(tys(i).alts.slots)> {
             False => None,
             True => Ty::check_words(tys(i).alts.slots).and_then(λ ws => Some(⟨refl, ws⟩)),
@@ -3796,7 +3903,7 @@ theorem Fun::bound_split(values: Valuation(), ids: List<Nat>, later: List<Nat>):
 
 theorem Ty::ids_len(tys: Nat → RecInfo, p: Ty, m: Nat): p.ids(tys, m).len() = p.span(tys) {
     match p {
-        Word(_) => refl, Bit => refl, ByteList(_) => refl, Lines => refl, Named(_) => refl, Count => refl,
+        Word(_) => refl, Bit => refl, ByteList(_) => refl, Lines => refl, Named(i) => Ty::ports_from_len(tys(i).fields, m), Count => refl,
         Enum(i) => cong_fn(λ (n: Nat) => Succ(n), Ty::ports_from_len(tys(i).alts.slots, m + 1)),
     }
 }
@@ -3839,7 +3946,7 @@ theorem Ty::ids_below(tys: Nat → RecInfo, p: Ty, m, id: Nat): Mem(id, p.ids(ty
         Inr(never) => false_elim(never),
     };
     match p as λ q => Mem(id, q.ids(tys, m)) → id < m + q.span(tys) {
-        Word(_) => one, Bit => one, ByteList(_) => one, Lines => one, Named(_) => one, Count => one,
+        Word(_) => one, Bit => one, ByteList(_) => one, Lines => one, Named(i) => Ty::ports_from_below(tys(i).fields, m, id), Count => one,
         Enum(i) => λ mem => match mem {
             Inl(e) => j(sym(e), λ y _ => y < m + (tys(i).alts.slots.len() + 1),
                 Nat::le_succ_succ(m, m + tys(i).alts.slots.len(), Nat::le_add_l(m, tys(i).alts.slots.len()))),
@@ -3914,6 +4021,18 @@ fn Ty::FromWords(self p: Ty, tys: Nat → RecInfo) → Type {
         ((m: Nat) → p.Below(tys, m, m + p.span(tys)))
 }
 
+// A record of 64-bit words bound at its ids, a word a field: its fields
+// are the words, and it is the record they build.
+theorem Ty::record_from_words(tys: Nat → RecInfo, i: Nat, ok: Ty::Words(tys(i).fields)): Named(i).FromWords(tys) {
+    let fs = tys(i).fields;
+    ⟨λ values m xs _ bound => {
+        let fl = Ty::flats_of_words(fs, xs);
+        let at = j(sym(Ty::flats_words_of(fs, ok, xs)), λ ws _ => Fun::BoundWords(values, Ty::ports_from(fs, m), ws), bound);
+        let held: Ty::FieldsHold(fs, values, m, fl) = Ty::ports_hold(values, fs, m, ok, fl, at);
+        j(sym(tys(i).round(fl)), λ t _ => Ty::FieldsHold(fs, values, m, t), held)
+    }, λ m => Ty::fields_below_len(fs, m, m + fs.len(), (m + fs.len()).le_refl())⟩
+}
+
 theorem Ty::one_word_from(tys: Nat → RecInfo, p: Ty): p.OneWord(tys) → p.FromWords(tys) {
     match p {
         Word(w) => λ e => ⟨λ values m xs _ bound => Ty::one_word_holds(tys, values, m, Word(w), e, xs.head_or(BitVec::zero()), bound.left),
@@ -3921,8 +4040,7 @@ theorem Ty::one_word_from(tys: Nat → RecInfo, p: Ty): p.OneWord(tys) → p.Fro
         Bit => λ never => false_elim(never),
         ByteList(_) => λ never => false_elim(never),
         Lines => λ never => false_elim(never),
-        Named(i) => λ e => ⟨λ values m xs _ bound => Ty::one_word_holds(tys, values, m, Named(i), e, xs.head_or(BitVec::zero()), bound.left),
-            λ m => Ty::one_word_below(tys, Named(i), e, m)⟩,
+        Named(i) => λ e => Ty::record_from_words(tys, i, j(sym(e), λ g _ => Ty::Words(g), ⟨refl, trivial⟩)),
         Count => λ never => false_elim(never),
         Enum(_) => λ never => false_elim(never),
     }
@@ -3999,7 +4117,7 @@ theorem Ty::narrow_cases(tys: Nat → RecInfo, P: Bool → Type, p: Ty): p.Param
         Bit => λ _ own narrow => narrow(Ty::bit_narrowed(tys)),
         ByteList(_) => λ never => false_elim(never),
         Lines => λ never => false_elim(never),
-        Named(i) => λ ok own _ => own(Ty::one_word_from(tys, Named(i), ok)),
+        Named(i) => λ ok own _ => own(Ty::record_from_words(tys, i, ok)),
         Count => λ never => false_elim(never),
         Enum(i) => λ ok own _ => own(Ty::enum_from_words(tys, i, ok)),
     }

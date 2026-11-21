@@ -89,3 +89,36 @@ theorem triple_ends_runs(): program_eval(triple_ends::program, 1, [BitVec::ofNat
     program_eval_also(triple_ends::program, [BitVec::ofNat(5)]) = [5] {
     ⟨triple_ends::agrees(BitVec::ofNat(5)), triple_ends::agrees_also(BitVec::ofNat(5))⟩
 }
+
+// ---------------------------------------------------------------------------
+// A record of several words as a parameter (docs/native/runtime-fn-setups-design.md
+// §16.17): passed a word a field, as C passes a structure of words by
+// value, and stated at the record itself.
+
+runtime fn halves_join(h: Halves) → u64 { (h.high << 32) | h.low }
+
+theorem halves_join_runs(): program_eval(halves_join::program, 0, [BitVec::ofNat(5), BitVec::ofNat(7)]) = 0x500000007 {
+    halves_join::agrees(Halves(BitVec::ofNat(5), BitVec::ofNat(7)))
+}
+
+theorem halves_join_agrees(h: Halves): program_eval(halves_join::program, 0, [h.high, h.low]) = halves_join(h) { halves_join::agrees(h) }
+
+// Taken and returned, and called from two sites: the callee's code is
+// emitted once, and a record is passed in its words.
+runtime fn halves_swap(h: Halves, x: u64) → Halves { Halves(h.low + x, h.high) }
+
+theorem halves_swap_agrees(h: Halves, x: u64): program_eval(halves_swap::program, 0, [h.high, h.low, x]) = h.low + x {
+    halves_swap::agrees(h, x)
+}
+
+theorem halves_swap_also(h: Halves, x: u64): program_eval_also(halves_swap::program, [h.high, h.low, x]) = [h.high] { halves_swap::agrees_also(h, x) }
+
+runtime fn halves_twice(x: u64) → u64 { let h = halves_swap(halves_swap(halves(x), 1), 2); h.high + h.low }
+
+theorem halves_twice_runs(): program_eval(halves_twice::program, 2, [BitVec::ofNat(0x500000007)]) = 0xf {
+    halves_twice::agrees(BitVec::ofNat(0x500000007))
+}
+
+theorem halves_twice_agrees(x: u64): program_eval(halves_twice::program, 2, [x]) = halves_twice(x) { halves_twice::agrees(x) }
+
+theorem halves_twice_functions(): halves_twice::program.len() = 3 { refl }

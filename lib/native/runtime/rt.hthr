@@ -372,6 +372,10 @@ record RecInfo {
 // enum parameter over.
 fn RecInfo::enum_at(tys: Nat → RecInfo, i: Nat) → Type { tys(i).alts.E }
 
+// The record of table entry `i`, as a type: what a certificate
+// quantifies a record parameter of several words over.
+fn RecInfo::record_at(tys: Nat → RecInfo, i: Nat) → Type { tys(i).T }
+
 // The word an enum of table entry `i` is passed as: its tag.
 fn RecInfo::enum_word(tys: Nat → RecInfo, i: Nat, v: tys(i).alts.E) → BitVec(64) { BitVec::ofNat(tys(i).alts.tag(v)) }
 
