@@ -540,13 +540,15 @@ theorem loop_defined_same_where(step, other_step: Valuation() → Valuation(), d
 }
 
 // The theorem: a region defined at a valuation is defined from any
-// agreeing valuation over calls answered alike wherever `defines` says a
-// callee is defined. `StructuredRegion::eval_where_over` for whether the
-// evaluation is defined.
-theorem StructuredRegion::defined_where_over(self region: StructuredRegion, buffers: Buffers(), call, other: Answers(), defines: Defines(),
-    answers: (f: Nat) → (words: List<BitVec(64)>) → defines(f, words).IsTrue() → other(f, words) = call(f, words)):
+// agreeing valuation, over calls answered alike wherever `defines` says a
+// callee is defined, and by any `wider` that says so wherever `defines`
+// does. `StructuredRegion::eval_where_over` for whether the evaluation is
+// defined.
+theorem StructuredRegion::defined_where_over(self region: StructuredRegion, buffers: Buffers(), call, other: Answers(), defines, wider: Defines(),
+    answers: (f: Nat) → (words: List<BitVec(64)>) → defines(f, words).IsTrue() → other(f, words) = call(f, words),
+    widens: (f: Nat) → (words: List<BitVec(64)>) → defines(f, words).IsTrue() → wider(f, words).IsTrue()):
     (values, others: Valuation()) → Valuation::Same(values, others) → region.defined_over(buffers, call, defines, values).IsTrue() →
-    region.defined_over(buffers, other, defines, others).IsTrue() {
+    region.defined_over(buffers, other, wider, others).IsTrue() {
     match region {
         Dataflow(body) => λ values others same ok =>
             j(sym(nodes_defined_same_over(buffers, body.nodes, values, others, same)), λ b _ => b.IsTrue(), ok),
@@ -554,18 +556,18 @@ theorem StructuredRegion::defined_where_over(self region: StructuredRegion, buff
             let parts = Bool::is_true_and(prefix.defined(values, buffers := buffers),
                 continuation.defined_over(buffers, call, defines, prefix.eval(values, buffers := buffers)), ok);
             Bool::is_true_and_intro(prefix.defined(others, buffers := buffers),
-                continuation.defined_over(buffers, other, defines, prefix.eval(others, buffers := buffers)),
+                continuation.defined_over(buffers, other, wider, prefix.eval(others, buffers := buffers)),
                 j(sym(nodes_defined_same_over(buffers, prefix.nodes, values, others, same)), λ b _ => b.IsTrue(), parts.left),
-                continuation.defined_where_over(buffers, call, other, defines, answers, prefix.eval(values, buffers := buffers),
+                continuation.defined_where_over(buffers, call, other, defines, wider, answers, widens, prefix.eval(values, buffers := buffers),
                     prefix.eval(others, buffers := buffers), eval_nodes_same_over(buffers, prefix.nodes, values, others, same), parts.right))
         },
         Compose(prefix, continuation) => λ values others same ok => {
             let parts = Bool::is_true_and(prefix.defined_over(buffers, call, defines, values),
                 continuation.defined_over(buffers, call, defines, prefix.eval_over(buffers, call, values)), ok);
-            Bool::is_true_and_intro(prefix.defined_over(buffers, other, defines, others),
-                continuation.defined_over(buffers, other, defines, prefix.eval_over(buffers, other, others)),
-                prefix.defined_where_over(buffers, call, other, defines, answers, values, others, same, parts.left),
-                continuation.defined_where_over(buffers, call, other, defines, answers, prefix.eval_over(buffers, call, values),
+            Bool::is_true_and_intro(prefix.defined_over(buffers, other, wider, others),
+                continuation.defined_over(buffers, other, wider, prefix.eval_over(buffers, other, others)),
+                prefix.defined_where_over(buffers, call, other, defines, wider, answers, widens, values, others, same, parts.left),
+                continuation.defined_where_over(buffers, call, other, defines, wider, answers, widens, prefix.eval_over(buffers, call, values),
                     prefix.eval_over(buffers, other, others),
                     prefix.eval_where_over(buffers, call, other, defines, answers, values, others, same, parts.left), parts.right))
         },
@@ -578,15 +580,15 @@ theorem StructuredRegion::defined_where_over(self region: StructuredRegion, buff
                     True => when_true.defined_over(buffers, call, defines, values),
                 }).IsTrue() →
                 (match b as λ _ => Bool {
-                    False => when_false.defined_over(buffers, other, defines, others),
-                    True => when_true.defined_over(buffers, other, defines, others),
+                    False => when_false.defined_over(buffers, other, wider, others),
+                    True => when_true.defined_over(buffers, other, wider, others),
                 }).IsTrue() {
-                False => λ d => when_false.defined_where_over(buffers, call, other, defines, answers, values, others, same, d),
-                True => λ d => when_true.defined_where_over(buffers, call, other, defines, answers, values, others, same, d),
+                False => λ d => when_false.defined_where_over(buffers, call, other, defines, wider, answers, widens, values, others, same, d),
+                True => λ d => when_true.defined_where_over(buffers, call, other, defines, wider, answers, widens, values, others, same, d),
             })(ok);
             j(bit, λ b _ => (match b as λ _ => Bool {
-                    False => when_false.defined_over(buffers, other, defines, others),
-                    True => when_true.defined_over(buffers, other, defines, others),
+                    False => when_false.defined_over(buffers, other, wider, others),
+                    True => when_true.defined_over(buffers, other, wider, others),
                 }).IsTrue(), aligned)
         },
         Lend(views, callee, arguments, result) => λ values others same ok => {
@@ -598,28 +600,28 @@ theorem StructuredRegion::defined_where_over(self region: StructuredRegion, buff
             let words = words_of(first, args);
             let read: (words_of(second, args) = words) = words_agree(args, first, second, λ id _ => alike(64, id));
             let parts = Bool::is_true_and(nodes_defined_over(buffers, nodes, values), defines(callee, words), ok);
-            Bool::is_true_and_intro(nodes_defined_over(buffers, nodes, others), defines(callee, words_of(second, args)),
+            Bool::is_true_and_intro(nodes_defined_over(buffers, nodes, others), wider(callee, words_of(second, args)),
                 j(sym(nodes_defined_same_over(buffers, nodes, values, others, same)), λ b _ => b.IsTrue(), parts.left),
-                j(sym(read), λ ws _ => defines(callee, ws).IsTrue(), parts.right))
+                j(sym(read), λ ws _ => wider(callee, ws).IsTrue(), widens(callee, words, parts.right)))
         },
         Call(callee, arguments, result, also) => λ values others same ok => {
             let words = words_of(values, arguments);
             let read: (words_of(others, arguments) = words) = words_agree(arguments, values, others, λ id _ => same(64, id));
             let parts = Bool::is_true_and(defines(callee, words), call(callee, words).tail().len().matches(also.len()), ok);
             let answered: (other(callee, words) = call(callee, words)) = answers(callee, words, parts.left);
-            let here: (defines(callee, words) && other(callee, words).tail().len().matches(also.len())).IsTrue() =
-                Bool::is_true_and_intro(defines(callee, words), other(callee, words).tail().len().matches(also.len()), parts.left,
+            let here: (wider(callee, words) && other(callee, words).tail().len().matches(also.len())).IsTrue() =
+                Bool::is_true_and_intro(wider(callee, words), other(callee, words).tail().len().matches(also.len()), widens(callee, words, parts.left),
                     j(sym(answered), λ a _ => a.tail().len().matches(also.len()).IsTrue(), parts.right));
-            j(sym(read), λ ws _ => (defines(callee, ws) && other(callee, ws).tail().len().matches(also.len())).IsTrue(), here)
+            j(sym(read), λ ws _ => (wider(callee, ws) && other(callee, ws).tail().len().matches(also.len())).IsTrue(), here)
         },
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ values others same ok => {
             let step = λ (pass: Valuation()) => body.eval_over(buffers, call, pass);
             let other_step = λ (pass: Valuation()) => body.eval_over(buffers, other, pass);
             let defined = λ (pass: Valuation()) => body.defined_over(buffers, call, defines, pass);
-            let other_defined = λ (pass: Valuation()) => body.defined_over(buffers, other, defines, pass);
+            let other_defined = λ (pass: Valuation()) => body.defined_over(buffers, other, wider, pass);
             let ran = loop_defined_same_where(step, other_step, defined, other_defined,
                 λ v d => body.eval_where_over(buffers, call, other, defines, answers, v, v, λ w id => refl, d),
-                λ v d => body.defined_where_over(buffers, call, other, defines, answers, v, v, λ w id => refl, d),
+                λ v d => body.defined_where_over(buffers, call, other, defines, wider, answers, widens, v, v, λ w id => refl, d),
                 parameters, count, exit, next, values(64, bound).toNat(), words_of(values, inputs), ok);
             let counted = j(sym(cong_fn(λ (x: BitVec(64)) => x.toNat(), same(64, bound))), λ n _ =>
                 loop_defined(other_step, other_defined, parameters, count, exit, next, n, words_of(values, inputs)).IsTrue(), ran);
@@ -627,6 +629,155 @@ theorem StructuredRegion::defined_where_over(self region: StructuredRegion, buff
                 loop_defined(other_step, other_defined, parameters, count, exit, next, others(64, bound).toNat(), ws).IsTrue(), counted)
         },
     }
+}
+
+// A region with no call and no node that requires anything: defined at
+// every valuation, whatever answers its callers' calls.
+fn StructuredRegion::quiet(self region: StructuredRegion) → Bool {
+    match region {
+        Dataflow(body) => nodes_total(body.nodes),
+        Sequence(prefix, continuation) => nodes_total(prefix.nodes) && continuation.quiet(),
+        Compose(prefix, continuation) => prefix.quiet() && continuation.quiet(),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.quiet() && when_false.quiet(),
+        Lend(_, _, _, _) => False,
+        Call(_, _, _, _) => False,
+        Loop(_, _, _, _, body, _, _, _, _) => body.quiet(),
+    }
+}
+
+theorem StructuredRegion::quiet_defined(self region: StructuredRegion, buffers: Buffers(), call: Answers(), defines: Defines()):
+    region.quiet().IsTrue() → (values: Valuation()) → region.defined_over(buffers, call, defines, values).IsTrue() {
+    match region {
+        Dataflow(body) => λ quiet values => nodes_total_defined(body.nodes, buffers, quiet, values),
+        Sequence(prefix, continuation) => λ quiet values => {
+            let parts = Bool::is_true_and(nodes_total(prefix.nodes), continuation.quiet(), quiet);
+            Bool::is_true_and_intro(prefix.defined(values, buffers := buffers),
+                continuation.defined_over(buffers, call, defines, prefix.eval(values, buffers := buffers)),
+                nodes_total_defined(prefix.nodes, buffers, parts.left, values),
+                continuation.quiet_defined(buffers, call, defines, parts.right, prefix.eval(values, buffers := buffers)))
+        },
+        Compose(prefix, continuation) => λ quiet values => {
+            let parts = Bool::is_true_and(prefix.quiet(), continuation.quiet(), quiet);
+            Bool::is_true_and_intro(prefix.defined_over(buffers, call, defines, values),
+                continuation.defined_over(buffers, call, defines, prefix.eval_over(buffers, call, values)),
+                prefix.quiet_defined(buffers, call, defines, parts.left, values),
+                continuation.quiet_defined(buffers, call, defines, parts.right, prefix.eval_over(buffers, call, values)))
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => λ quiet values => {
+            let parts = Bool::is_true_and(when_true.quiet(), when_false.quiet(), quiet);
+            match values(1, condition).head_bit() as λ b => (match b as λ _ => Bool {
+                False => when_false.defined_over(buffers, call, defines, values),
+                True => when_true.defined_over(buffers, call, defines, values),
+            }).IsTrue() {
+                False => when_false.quiet_defined(buffers, call, defines, parts.right, values),
+                True => when_true.quiet_defined(buffers, call, defines, parts.left, values),
+            }
+        },
+        Lend(_, _, _, _) => λ never _ => false_elim(never),
+        Call(_, _, _, _) => λ never _ => false_elim(never),
+        Loop(inputs, bound, parameters, count, body, exit, next, _, _) => λ quiet values =>
+            loop_defined_all(λ (pass: Valuation()) => body.eval_over(buffers, call, pass),
+                λ (pass: Valuation()) => body.defined_over(buffers, call, defines, pass),
+                λ pass => body.quiet_defined(buffers, call, defines, quiet, pass), parameters, count, exit, next,
+                values(64, bound).toNat(), words_of(values, inputs)),
+    }
+}
+
+// Whether a callee is defined, asked at its renamed function
+// (`Answers::relabel`).
+fn Defines::relabel(defines: Defines(), links: Nat → Nat) → Defines() { λ f words => defines(links(f), words) }
+
+// A region defined with its calls answered and asked at their renamed
+// functions is defined, renamed, over the calls themselves
+// (`StructuredRegion::relabel_eval_over`).
+theorem StructuredRegion::relabel_defined_over(self region: StructuredRegion, buffers: Buffers(), call: Answers(), defines: Defines(), links: Nat → Nat):
+    (values, others: Valuation()) → Valuation::Same(values, others) →
+    region.defined_over(buffers, Answers::relabel(call, links), Defines::relabel(defines, links), values).IsTrue() →
+    region.relabel(links).defined_over(buffers, call, defines, others).IsTrue() {
+    match region {
+        Dataflow(body) => λ values others same ok =>
+            j(sym(nodes_defined_same_over(buffers, body.nodes, values, others, same)), λ b _ => b.IsTrue(), ok),
+        Sequence(prefix, continuation) => λ values others same ok => {
+            let parts = Bool::is_true_and(prefix.defined(values, buffers := buffers),
+                continuation.defined_over(buffers, Answers::relabel(call, links), Defines::relabel(defines, links), prefix.eval(values, buffers := buffers)), ok);
+            Bool::is_true_and_intro(prefix.defined(others, buffers := buffers),
+                continuation.relabel(links).defined_over(buffers, call, defines, prefix.eval(others, buffers := buffers)),
+                j(sym(nodes_defined_same_over(buffers, prefix.nodes, values, others, same)), λ b _ => b.IsTrue(), parts.left),
+                continuation.relabel_defined_over(buffers, call, defines, links, prefix.eval(values, buffers := buffers),
+                    prefix.eval(others, buffers := buffers), eval_nodes_same_over(buffers, prefix.nodes, values, others, same), parts.right))
+        },
+        Compose(prefix, continuation) => λ values others same ok => {
+            let parts = Bool::is_true_and(prefix.defined_over(buffers, Answers::relabel(call, links), Defines::relabel(defines, links), values),
+                continuation.defined_over(buffers, Answers::relabel(call, links), Defines::relabel(defines, links),
+                    prefix.eval_over(buffers, Answers::relabel(call, links), values)), ok);
+            Bool::is_true_and_intro(prefix.relabel(links).defined_over(buffers, call, defines, others),
+                continuation.relabel(links).defined_over(buffers, call, defines, prefix.relabel(links).eval_over(buffers, call, others)),
+                prefix.relabel_defined_over(buffers, call, defines, links, values, others, same, parts.left),
+                continuation.relabel_defined_over(buffers, call, defines, links, prefix.eval_over(buffers, Answers::relabel(call, links), values),
+                    prefix.relabel(links).eval_over(buffers, call, others), prefix.relabel_eval_over(buffers, call, links, values, others, same), parts.right))
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => λ values others same ok => {
+            let bit: (values(1, condition).head_bit() = others(1, condition).head_bit()) =
+                sym(cong_fn(λ (x: BitVec(1)) => x.head_bit(), same(1, condition)));
+            let aligned = (match values(1, condition).head_bit() as λ b =>
+                (match b as λ _ => Bool {
+                    False => when_false.defined_over(buffers, Answers::relabel(call, links), Defines::relabel(defines, links), values),
+                    True => when_true.defined_over(buffers, Answers::relabel(call, links), Defines::relabel(defines, links), values),
+                }).IsTrue() →
+                (match b as λ _ => Bool {
+                    False => when_false.relabel(links).defined_over(buffers, call, defines, others),
+                    True => when_true.relabel(links).defined_over(buffers, call, defines, others),
+                }).IsTrue() {
+                False => λ d => when_false.relabel_defined_over(buffers, call, defines, links, values, others, same, d),
+                True => λ d => when_true.relabel_defined_over(buffers, call, defines, links, values, others, same, d),
+            })(ok);
+            j(bit, λ b _ => (match b as λ _ => Bool {
+                    False => when_false.relabel(links).defined_over(buffers, call, defines, others),
+                    True => when_true.relabel(links).defined_over(buffers, call, defines, others),
+                }).IsTrue(), aligned)
+        },
+        Lend(views, callee, arguments, result) => λ values others same ok => {
+            let nodes = views_nodes(views);
+            let args = views_homes(views) ++ arguments;
+            let first = eval_nodes_over(buffers, nodes, values);
+            let second = eval_nodes_over(buffers, nodes, others);
+            let alike = eval_nodes_same_over(buffers, nodes, values, others, same);
+            let words = words_of(first, args);
+            let read: (words_of(second, args) = words) = words_agree(args, first, second, λ id _ => alike(64, id));
+            let parts = Bool::is_true_and(nodes_defined_over(buffers, nodes, values), defines(links(callee), words), ok);
+            Bool::is_true_and_intro(nodes_defined_over(buffers, nodes, others), defines(links(callee), words_of(second, args)),
+                j(sym(nodes_defined_same_over(buffers, nodes, values, others, same)), λ b _ => b.IsTrue(), parts.left),
+                j(sym(read), λ ws _ => defines(links(callee), ws).IsTrue(), parts.right))
+        },
+        Call(callee, arguments, result, also) => λ values others same ok => {
+            let words = words_of(values, arguments);
+            let read: (words_of(others, arguments) = words) = words_agree(arguments, values, others, λ id _ => same(64, id));
+            let here: (defines(links(callee), words) && call(links(callee), words).tail().len().matches(also.len())).IsTrue() = ok;
+            j(sym(read), λ ws _ => (defines(links(callee), ws) && call(links(callee), ws).tail().len().matches(also.len())).IsTrue(), here)
+        },
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ values others same ok => {
+            let step = λ (pass: Valuation()) => body.eval_over(buffers, Answers::relabel(call, links), pass);
+            let other_step = λ (pass: Valuation()) => body.relabel(links).eval_over(buffers, call, pass);
+            let defined = λ (pass: Valuation()) => body.defined_over(buffers, Answers::relabel(call, links), Defines::relabel(defines, links), pass);
+            let other_defined = λ (pass: Valuation()) => body.relabel(links).defined_over(buffers, call, defines, pass);
+            let ran = loop_defined_same_where(step, other_step, defined, other_defined,
+                λ v d => body.relabel_eval_over(buffers, call, links, v, v, λ w id => refl),
+                λ v d => body.relabel_defined_over(buffers, call, defines, links, v, v, λ w id => refl, d),
+                parameters, count, exit, next, values(64, bound).toNat(), words_of(values, inputs), ok);
+            let counted = j(sym(cong_fn(λ (x: BitVec(64)) => x.toNat(), same(64, bound))), λ n _ =>
+                loop_defined(other_step, other_defined, parameters, count, exit, next, n, words_of(values, inputs)).IsTrue(), ran);
+            j(sym(words_agree(inputs, values, others, λ id _ => same(64, id))), λ ws _ =>
+                loop_defined(other_step, other_defined, parameters, count, exit, next, others(64, bound).toNat(), ws).IsTrue(), counted)
+        },
+    }
+}
+
+// A function's, renamed.
+theorem Function::relabel_defined(self function: Function, buffers: Buffers(), call: Answers(), defines: Defines(), links: Nat → Nat,
+    words: List<BitVec(64)>, ok: function.defined(Answers::relabel(call, links), Defines::relabel(defines, links), words, buffers := buffers).IsTrue()):
+    function.relabel(links).defined(call, defines, words, buffers := buffers).IsTrue() {
+    let bound = Valuation::bind(Valuation::zero(), function.parameters, words);
+    function.body.relabel_defined_over(buffers, call, defines, links, bound, bound, λ w id => refl, ok)
 }
 
 // What a rank promises of function `k`'s code: over any table `Good`
@@ -664,8 +815,8 @@ theorem Function::level_defined_by_rank(self function: Function, buffers: Buffer
                 λ lower ok below_rank => function.level_defined_by_rank(buffers, below, below_defines, sources, arity, admits, k, own, rank, clause, under,
                     Admits, descends, i, lower, ok, Nat::lt_of_lt_of_le(rank(lower), rank(words), i, below_rank, le)));
             let start = Valuation::bind(Valuation::zero(), function.parameters, words);
-            function.body.defined_where_over(buffers, patched, call, defines,
-                λ f ws d => sym(Answers::patched_where(call, sources, defines, f, ws, d)), start, start, λ w id => refl, over)
+            function.body.defined_where_over(buffers, patched, call, defines, defines,
+                λ f ws d => sym(Answers::patched_where(call, sources, defines, f, ws, d)), λ f ws d => d, start, start, λ w id => refl, over)
         },
     }
 }
