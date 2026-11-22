@@ -1344,9 +1344,14 @@ theorem Compile::part<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<List<B
 fn Compile::linked_self<F>(f: F, c: Compile<F>(f), links: List<Nat>) → Function { Compile::linked(f, c, links).leveled(1) }
 
 // The arities such a function `k` of a program is linked against: those of
-// the functions before it, and its own.
+// the functions before it, and its own. Its own is read as the program's
+// statement reads it, the first of the arities from it on: read as
+// `arities.nth(k - 1)`, the two met as `nth` of two lists one entry apart,
+// which the kernel compares entry against the next entry before it
+// unfolds either, one function's arity against another's
+// (issues/runtime-link-compares-functions.md).
 fn link_arity_self(functions: List<Function>, arities: List<Nat>, k: Nat) → Nat → Option<Nat> {
-    tie(linked_arity(functions.drop(k), arities.drop(k)), functions.drop(k).len(), arities.nth(k - 1))
+    tie(linked_arity(functions.drop(k), arities.drop(k)), functions.drop(k).len(), arities.drop(k - 1).nth(0))
 }
 
 // `Compile::part` of it: the same check, against a table its own entry is

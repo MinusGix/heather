@@ -70,3 +70,15 @@ theorem rcall_levels(): rcall::program.map(λ (f: Function) => f.levels) = [1, 0
 theorem rcall_five(): program_eval(program_deepened(rcall::program, 5), 1, [BitVec::ofNat(5)]) = rcall(BitVec::ofNat(5)) {
     rcall::agrees_where(BitVec::ofNat(5), 5, trivial)
 }
+
+// A caller of its recursion's type whose value is the recursion at a
+// computed argument. Its program's linking reads each function's arity at
+// its own place in the list (`link_arity_self`): read one entry apart, the
+// recursion's arity met the caller's, and the kernel compared the two
+// functions by evaluating both (issues/runtime-link-compares-functions.md).
+runtime fn rsum_again(n: u64) → u64 { rsum(rsum(n)) }
+
+theorem again_any(n: u64, more: Nat, defined: program_defined(program_deepened(rsum_again::program, more), 1, [n]).IsTrue()):
+    program_eval(program_deepened(rsum_again::program, more), 1, [n]) = rsum_again(n) {
+    rsum_again::agrees_where(n, more, defined)
+}
