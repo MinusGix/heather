@@ -1,0 +1,90 @@
+// Probes of a function that calls itself (`Function.levels`,
+// docs/native/runtime-fn-recursion-design.md): the function the generator
+// lowers `if n == 0 { 0 } else { n + f(n - 1) }` to, alone in its program,
+// so that its call names function 0, itself. With no levels its own number
+// is no callee and the lowering refuses it; with levels it evaluates as
+// its source as deep as they reach, is defined exactly so deep, and lowers
+// to one copy of its code, its row of the room table holding every level's
+// frame. Tests, not library (docs/test-value-audit.md §4.5).
+import function_ir;
+import function_ir_eval;
+import function_ir_lower;
+import function_ir_lower_structured;
+import function_ir_lower_calls;
+import x86_64;
+import x86_64_asm;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+fn nodes(body: List<Node>) → StructuredRegion { Dataflow(Region(inputs := Ports([]), nodes := body, outputs := Ports([]))) }
+
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+
+// rsum(n) = if n == 0 { 0 } else { n + rsum(n - 1) }, function 0, with
+// `levels` levels of itself.
+fn rsum_ir(levels: Nat) → Function {
+    Function(parameters := [0],
+        body := Compose(nodes([Const(64, 1, 0)]), Compose(nodes([Equal(64, 2, 0, 1)]),
+            Conditional(Ports([]), 2, Ports([]), Ports([Port(id := 9, width := 64)]),
+                Compose(nodes([Const(64, 3, 0)]), nodes([Move(64, 9, 3)])),
+                Compose(Compose(nodes([Const(64, 4, 1)]), Compose(nodes([Sub(64, 5, 0, 4)]),
+                    Compose(Compose(Call(0, [5], 6, []), nodes([Move(64, 7, 6)])), nodes([Add(64, 8, 0, 7)])))),
+                    nodes([Move(64, 9, 8)]))))),
+        result := 9, levels := levels)
+}
+
+// ---------------------------------------------------------------------------
+// What it means
+
+// Eleven levels answer `rsum(10)`: the call at 10 and the ten under it.
+theorem rsum_ten(): program_eval([rsum_ir(11)], 0, [w(10)]) = w(55) { refl }
+
+// And the program is defined there, and at every argument its levels reach.
+theorem rsum_ten_defined(): program_defined([rsum_ir(11)], 0, [w(10)]) = True { refl }
+theorem rsum_zero_defined(): program_defined([rsum_ir(1)], 0, [w(0)]) = True { refl }
+
+// One level short it is not: the deepest call is answered by nothing.
+theorem rsum_ten_short(): program_defined([rsum_ir(10)], 0, [w(10)]) = False { refl }
+
+// More levels than a call needs change nothing.
+theorem rsum_ten_more(): program_eval([rsum_ir(40)], 0, [w(10)]) = w(55) { refl }
+
+// A caller below sees the recursion as any function: doubling `rsum(n)`.
+fn twice_rsum() → List<Function> {
+    [Function(parameters := [0], body := Compose(Call(0, [0], 1, []), nodes([Add(64, 2, 1, 1)])), result := 2), rsum_ir(11)]
+}
+
+theorem twice_ten(): program_eval(twice_rsum(), 1, [w(10)]) = w(110) { refl }
+theorem twice_ten_defined(): program_defined(twice_rsum(), 1, [w(10)]) = True { refl }
+
+// ---------------------------------------------------------------------------
+// What it lowers to
+
+// With no levels its callee is not below it: refused.
+theorem rsum_flat_refused(): lower_program_planned([rsum_ir(0)]).is_some() = False { refl }
+
+// With levels it is emitted, once.
+theorem rsum_lowers(): lower_program_planned([rsum_ir(11)]).is_some() = True { refl }
+
+// The code does not depend on how deep: the depth is in the room alone.
+theorem rsum_same_code(): lower_program_planned([rsum_ir(11)]) = lower_program_planned([rsum_ir(3)]) { refl }
+
+// A frame of 8 bytes and the call's 24, so 32 bytes a level; the planner's
+// row holds every level's and, under the last, a call's 24 once more (the
+// room it leaves any callee, which here is only the function itself).
+theorem rsum_frame(): rsum_ir(11).frame(placement_slots(rsum_ir(11).plan()), placement_saves(rsum_ir(11).plan())) = 8 { refl }
+theorem rsum_row(): program_room_planned([rsum_ir(11)], 0) = 376 { refl }
+theorem rsum_row_three(): program_room_planned([rsum_ir(3)], 0) = 120 { refl }
+
+// The levels' 352 bytes are what the code needs: a row one byte short is
+// refused.
+theorem rsum_tight(): lower_program_roomed([rsum_ir(11)], plan_program([rsum_ir(11)]), [], λ (_: Nat) => 351).is_some() = False { refl }
+theorem rsum_fits(): lower_program_roomed([rsum_ir(11)], plan_program([rsum_ir(11)]), [], λ (_: Nat) => 352).is_some() = True { refl }
+
+// The caller's row holds its frame, the call and the recursion's row.
+theorem twice_lowers(): lower_program_planned(twice_rsum()).is_some() = True { refl }
+theorem twice_row(): program_room_planned(twice_rsum(), 1) = 400 { refl }
