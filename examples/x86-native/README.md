@@ -162,6 +162,27 @@ lowest bit of its word and the result is 0 or 1, which is what System V
 asks of a C `bool`, so C declares it `bool in_range(uint64_t, uint64_t,
 uint64_t, bool)` (`bools_cross_as_c_bools`).
 
+## Recursion
+
+`recursion.hthr`'s `rsum` calls itself and then adds, so it is not a loop.
+It compiles as an ordinary function whose program may be live a number of
+levels deep, and `--stack <bytes>` says how much stack those levels may
+take:
+
+```sh
+target/release/heather compile-x86 \
+  examples/x86-native/recursion.hthr rsum --stack 2048 \
+  -o target/x86-native/rsum.s
+```
+
+The certificate's program is `program_deepened(recursion::rsum::program,
+more)` at the most levels that fit, `_returns` asks for that much stack
+below the return address, and `_agrees` and `_returns` hold where the
+program at those levels is defined, which is where the recursion ends
+within them. `rsum_pair` calls it twice and is compiled the same way
+(`a_recursion_is_compiled_within_a_stack_budget`;
+`docs/native/runtime-fn-recursion-design.md` §10).
+
 ## Narrow fields
 
 `narrow_fields.hthr`'s `tagged_next` takes and returns a record of a `u8` and

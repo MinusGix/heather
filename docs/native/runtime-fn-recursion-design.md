@@ -12,6 +12,12 @@ for in levels of checked calls, a call past them is a refusal of the
 compiled program, and the room costs the same to check at any number of
 levels (`docs/native/native-procedure-frames-design.md` §7.4).
 
+Revised 2026-11-22, built: a recursion over words is an ordinary function
+of its program, which may be live a stated number of levels deep (§10).
+`compile-x86` compiles one and links it into C. §2's procedure lane still
+serves `write-elf` and goes when statements call a recursion through its
+program (§10.6).
+
 ## 1. What is there
 
 - **The back end can recurse.** A `Source` procedure may `Perform` itself or
@@ -533,8 +539,121 @@ Agreed 2026-11-22:
 
 Open:
 
-4. Lifting callers to statements (§2) is a cost Minus is unsure of. §2.1's
-   reserved call is the proposed way out; whether to design it before the
-   byte budget (step 4) or after.
+4. Lifting callers to statements (§2) is a cost Minus is unsure of.
+   Answered by §10: a recursion is a function of its program, so its
+   callers are functions, and §2.1's reserved call is not needed.
 5. `levels` leaves the surface once `stack := …` lands (recommended),
    staying the compiler's internal unit.
+
+## 10. The value lane: a recursion is a function of its program
+
+Built 2026-11-22 for `compile-x86`: a `runtime fn` of words that calls
+itself, or calls one that does, compiles as an ordinary function, is
+exported to C, and its certificate is checked. The procedure lane of §2
+still serves `write-elf` until statements call a recursion through its
+program (§10.6).
+
+§2 made a recursion a procedure, which made every caller of one a
+statement: the open question of §9. The bound does not need a second
+language. What a recursion needs from the program is that its own calls
+are answered a bounded number of activations deep, and FunctionIR can say
+that of a function directly.
+
+### 10.1 Levels in the program's meaning
+
+`Function.levels` is how many activations of the function may be live. In
+a program, a function with levels answers its own calls as deep as they
+reach (`Function::answers_at`: the functions before it tied with itself,
+a level at a time), and below the last level a call of it is answered by
+nothing and is not defined (`program_defined`). With no levels a function
+does not call itself, which is every function there was: the theorems
+about such programs are unchanged, and the ones that need every word
+defined take `program_flat` (`program_total`, `program_linked_files_sources`).
+
+Every layer above reads the same definition: evaluation and runs, writes,
+the optimizer's stages (a rewrite holds over any effects alike at the
+callees), linking, pruning, and the compile's correctness.
+
+### 10.2 One code, a row of room per level
+
+The emitted code of a function that calls itself does not depend on its
+levels. What depends on them is its row of the room table: its callees'
+room and, for each level, its frame and a call's words (`rooms_then`,
+`Function::roomy_levels`). The lowering checks the row
+(`Function::emit_levels`), and the correctness proof enters each level
+with the room of the levels below it (`MayCallNext`,
+`Function::self_calls`). So the stack a recursion may use is checked
+where its row is, once, and no call inside it tests anything.
+
+### 10.3 Linked wherever defined
+
+A function is checked against its source once, over any calls that answer
+as its callees' sources (`program_linked_files`). For a function that
+calls itself the callees include itself (`linked_last_arity`), and the
+program's own answers are right only where defined, so the flat theorem
+does not apply. `program_linked_where` states what holds: the program
+answers as its sources wherever it is defined, whatever levels its
+functions have. Its proof patches the program's answers with the sources
+where they are not defined (`Answers::patched`), which is right at every
+word, and shows a defined evaluation never tells the two apart: it asks
+its callees only where they are defined (`Function::eval_words_where`).
+No rank and no contract enter it.
+
+### 10.4 The generator: a function that is its own callee
+
+The `Compile` class is unchanged. A function that `decreases` and whose
+call of itself is not its last act is reflected as its own callee
+(`Fun::own_callee`): its table lists it twice, entry 0 as every
+function's own and entry 1 the callee its calls of itself name. It is
+then a plain function, judged and lowered as any other, with records,
+enums and calls of other functions as they come.
+
+Its pin cannot be `refl`: a function that `decreases` equals its body at
+each argument, not as a function. So the pin is pointwise
+(`Ty::Alike`, `Setup::Pinned`), and the generator proves it from the
+function's own companions: `f::ext` at the recursion below the measure
+and at `f` itself, the two alike by `f::irrel`
+(`runtime_own_instance`).
+
+The link gives such a function one level, which marks it
+(`Compile::linked_self`), and checks it against a table its own entry is
+in (`Compile::part_self`). A caller of a recursion is an ordinary
+function linked to the recursion's instance. A program with a recursion
+publishes `f::agrees_where` in place of `f::agrees`: the program at any
+number of levels more evaluates to the function, its definedness at the
+words a premise.
+
+### 10.5 The compile picks the levels
+
+How deep a recursion may run is a fact about a compile, not about the
+function: a budget in bytes (§4.1) and the frames this target's placement
+gives. So the published program is at one level, and
+`program_deepened(program, more)` gives each recursion `more + 1`. A
+linked program stays linked (`program_linked_files_deepened`: the check
+reads a function's levels only to say whether its own entry is among its
+callees), which is what `f::agrees_where` rests on.
+
+`compile-x86 --stack <bytes>` reads the root's row at one level and at
+two, which gives a level's bytes, takes the most levels whose row fits,
+and reads that row back. The certificate's program is the published one
+at those levels, its `_returns` asks for that row of stack below the
+return address, and both `_agrees` and `_returns` take
+`program_defined(program, f, words)` as a premise.
+
+### 10.6 What is left
+
+1. **The depth as the premise.** `program_defined` is true but not
+   readable. It follows from `f::depth` (§3): where every call a body
+   makes is at a lower rank, a call at rank below the levels is defined.
+   The proof needs the lowering to preserve which calls a body makes,
+   a walk beside `Tm::lower_sound`, with the nodes' own requirements
+   checked on the code by evaluation.
+2. **Statements that call a recursion.** A statement's regions are
+   answered by a program proved defined at every word (`Target::Answered`,
+   `program_total`). Relaxed to the functions proved defined everywhere,
+   a closed `main` or a guarded entry among them, `write-elf` programs
+   call a recursion through its program and the procedure lane (`rt_ptm`,
+   `rt_proc`, `rt_proc_program`, `runtime(levels := n)`) is removed.
+3. A recursion lent a span, one returning a record, another function of
+   a recursion's program as an `--entry`, mutual recursion, and the
+   optimizer's rewrites of §5 at this level.

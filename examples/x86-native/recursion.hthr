@@ -1,0 +1,25 @@
+import logic;
+import bool;
+import nat;
+import list;
+import bitvec;
+import bitvec_nat;
+import runtime;
+
+// A function that calls itself, where the call is not the last thing it
+// does (docs/native/runtime-fn-recursion-design.md §10): `n + (n - 1) + … +
+// 0`. It compiles as an ordinary function whose program may be live some
+// number of levels deep, and `compile-x86 --stack <bytes>` picks the most
+// levels whose stack fits the budget. The certificate's theorems hold where
+// the program at those levels is defined, which is where the recursion
+// ends within them.
+runtime fn rsum(n: u64) → u64 decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => BitVec::ofNat(0),
+        False => n.add(rsum(n.sub(BitVec::ofNat(1)))),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+// A caller of a recursion is an ordinary function too.
+runtime fn rsum_pair(a, b: u64) → u64 { rsum(a).add(rsum(b)) }

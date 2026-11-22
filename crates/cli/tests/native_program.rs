@@ -590,6 +590,60 @@ int main(void) {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+// A function that calls itself where the call is not its last act
+// (docs/native/runtime-fn-recursion-design.md §10): an ordinary function
+// of its program at as many levels as `--stack` has room for. The
+// certificate's program is the published one at those levels, its theorems
+// take the program's definedness at the words, and C calls `rsum` within
+// them. A budget below one level's stack is refused, saying so.
+#[test]
+fn a_recursion_is_compiled_within_a_stack_budget() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = root.join(format!("target/native-recursion-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let compile = |function: &str, stack: &str, assembly: &std::path::Path| Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
+        .args(["compile-x86", "examples/x86-native/recursion.hthr", function, "--stack", stack, "-o"]).arg(assembly)
+        .args(heather_cli::showcase::native_image_args()).args(["--kernel-workers", "1"])
+        .output().unwrap();
+    for function in ["rsum", "rsum_pair"] {
+        let result = compile(function, "2048", &dir.join(format!("{function}.s")));
+        assert!(result.status.success(), "{function}: {}", String::from_utf8_lossy(&result.stderr));
+        let certificate = std::fs::read_to_string(dir.join(format!("{function}.certificate.hthr"))).unwrap();
+        for claim in ["program_deepened(recursion::", "::agrees_where(", "defined: program_defined(", "_returns"] {
+            assert!(certificate.contains(claim), "{function}: missing {claim}");
+        }
+        assert!(!certificate.contains("_defined_everywhere"), "{function}: a recursion's program is not defined at every word");
+    }
+    let driver = dir.join("main.c");
+    std::fs::write(&driver, r#"
+#include <stdint.h>
+#include <stdio.h>
+extern uint64_t rsum(uint64_t);
+extern uint64_t rsum_pair(uint64_t, uint64_t);
+int main(void) {
+    for (uint64_t n = 0; n < 20; ++n) {
+        if (rsum(n) != n * (n + 1) / 2) return 1;
+        if (rsum_pair(n, 19 - n) != n * (n + 1) / 2 + (19 - n) * (20 - n) / 2) return 2;
+    }
+    puts("20 depths passed");
+    return 0;
+}
+"#).unwrap();
+    let binary = dir.join("recursion");
+    let linked = Command::new("cc").args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(&driver).arg(dir.join("rsum.s")).arg(dir.join("rsum_pair.s")).arg("-o").arg(&binary).output().unwrap();
+    assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
+    let run = Command::new(&binary).output().unwrap();
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stdout));
+    let refused = dir.join("refused.s");
+    let result = compile("rsum", "8", &refused);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(!result.status.success() && stderr.contains("bytes of stack") && stderr.contains("raise `--stack`"), "{stderr}");
+    assert!(!refused.exists(), "a refused function wrote assembly");
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 // `Bool` at the boundary (docs/native/runtime-fn-setups-design.md §16.17):
 // a parameter is the lowest bit of its word (a `Resize` to one bit) and the
 // result is 0 or 1, as System V passes a C `bool` both ways. C calls
