@@ -440,6 +440,49 @@ fn Function::Runs(self function: Function, effects: Effects(), arguments: List<B
 
 // And with its words past the first, `rest`, from the same run: what a
 // caller that reads RDX as well relies on.
+// Whether a region's first node is `Const(64, length, bytes)`: what sets a
+// fixed span's length (`Fixed`).
+fn StructuredRegion::sets_first(self region: StructuredRegion, length, bytes: Nat) → Bool {
+    match region {
+        Sequence(prefix, _) => match prefix.nodes {
+            Nil => False,
+            Cons(node, _) => match node { Const(width, output, value) => width.same(64) && (output.same(length) && value.same(bytes)), _ => False },
+        },
+        _ => False,
+    }
+}
+
+// Run from any file, such a region has set the port.
+theorem StructuredRegion::first_set(self region: StructuredRegion, effects: Effects(), values: Valuation(), length, bytes: Nat, before, after: Buffers()):
+    region.sets_first(length, bytes).IsTrue() → StructuredRegionRunsOver(effects, values, region, before, after) → values(64, length) = BitVec::ofNat(bytes) {
+    match region {
+        Sequence(prefix, continuation) => match prefix.nodes as λ ns => (match ns {
+                Nil => False,
+                Cons(node, _) => match node { Const(width, output, value) => width.same(64) && (output.same(length) && value.same(bytes)), _ => False },
+            }).IsTrue() → Exists<Buffers()>(λ mid => NodesRun(ns, values, before, mid) ∧ StructuredRegionRunsOver(effects, values, continuation, mid, after)) →
+            values(64, length) = BitVec::ofNat(bytes) {
+            Nil => λ never => false_elim(never),
+            Cons(node, rest) => match node as λ n => (match n { Const(width, output, value) => width.same(64) && (output.same(length) && value.same(bytes)), _ => False }).IsTrue() →
+                Exists<Buffers()>(λ mid => NodesRun(Cons(n, rest), values, before, mid) ∧ StructuredRegionRunsOver(effects, values, continuation, mid, after)) →
+                values(64, length) = BitVec::ofNat(bytes) {
+                Const(width, output, value) => λ ok ran => {
+                    let parts = Bool::is_true_and(width.same(64), output.same(length) && value.same(bytes), ok);
+                    let rest_parts = Bool::is_true_and(output.same(length), value.same(bytes), parts.right);
+                    let w: (width = 64) = width.same_sound(64, eq_true_of_is_true(width.same(64), parts.left));
+                    let o: (output = length) = output.same_sound(length, eq_true_of_is_true(output.same(length), rest_parts.left));
+                    let v: (value = bytes) = value.same_sound(bytes, eq_true_of_is_true(value.same(bytes), rest_parts.right));
+                    let held: (values(width, output) = BitVec::ofNat(value)) = ran.proof.left.proof.left.left;
+                    let at_64: (values(64, output) = BitVec::ofNat(value)) = j(w, λ x _ => values(x, output) = BitVec::ofNat(value), held);
+                    let at_length: (values(64, length) = BitVec::ofNat(value)) = j(o, λ y _ => values(64, y) = BitVec::ofNat(value), at_64);
+                    j(v, λ z _ => values(64, length) = BitVec::ofNat(z), at_length)
+                },
+                _ => λ never => false_elim(never),
+            },
+        },
+        _ => λ never => false_elim(never),
+    }
+}
+
 fn Function::RunsBoth(self function: Function, effects: Effects(), arguments: List<BitVec(64)>, result: BitVec(64), rest: List<BitVec(64)>,
     before, after: Buffers()) → Type {
     Exists<Valuation()>(λ values => (words_of(values, function.parameters) = arguments) ∧

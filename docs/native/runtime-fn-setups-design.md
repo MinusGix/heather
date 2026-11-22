@@ -2228,3 +2228,69 @@ returns `Signal { light: Light, at: u64 }`, `signal_wait` matches the
 field of the record a call returned), the `Tagged` refusal in
 `runtime_enum_refused_tests`, and `examples/x86-native/enum_fields.hthr`
 called from C.
+
+### 16.20 A record of three words or more, returned through memory (built 2026-11-22)
+
+Minus (2026-11-22, decision card): a record result of more than two words
+crosses the C boundary as a real structure return, `R r = f(a, b)`, not
+through an out-buffer the caller names. System V returns such a structure
+through memory: the caller passes where it goes in RDI (the arguments
+move up one register), and the callee returns the same address in RAX.
+
+**The export is a function of the program.** `sret_export(callee, arity,
+more)` (`lib/native/function_ir/function_ir_export.hthr`) is a FunctionIR
+function appended after the `runtime fn`'s program as its root. Its
+parameter 0 is the structure's address, the others the callee's words; it
+calls the callee, stores each word it returns into the structure as two
+4-byte stores (`WideStore(4)`, low half first), and returns the address.
+Nothing about it is generated per function: its run is one theorem over
+every callee, arity and count of words (`sret_export_runs`): the program's
+run returns the address and leaves the callee's words in buffer 0, eight
+bytes each, little-endian (`put_words`).
+
+**A span lent by its address alone.** The structure is the export's
+buffer 0, but C passes no length. `Function.fixed = Some(Fixed(port,
+length))` says so: the function is lent a span whose length is the
+constant its body's first node sets (`Const(64, port, length)`), and its
+homes take the address from its parameter alone (`ArgsSized`). Since no
+function calls such a root and its contract is not a callee's,
+`emit_lent` refuses a fixed function and the root is emitted by
+`emit_any` (`lower_program_sized`, `lower_program_sized_correct`). The
+stores need no bounds test: with the index and the length both known
+constants, `constants_below` makes the access known in bounds
+(`File::bounded`, `File::span_bounded`).
+
+**The callee runs over the export's file.** Its agreement was stated over
+no buffers (`f::agrees`), so the generator now states it at every file
+too, for a function of plain words returning a record of three or more
+words: `f::agrees_at(xs…, b)` and `f::agrees_also_at(xs…, b)`
+(`Compile::root_also_at`, `program_eval_also_over`). The certificate
+instantiates both at the structure's bytes.
+
+**The certificate.** `{prefix}_returns` states
+`Prog::ComputesSret(machine, f, room, counts, arguments, words)`: at every
+load and every structure lying where the stack does not reach (`Loan`
+over `sret_lending`), of its size (`8 * words.len()` bytes), called with
+the address and the arguments (`Stack::Passed`), the code returns the
+address in RAX, keeps the callee-saved registers and RSP, stores only into
+its room and the structure, and leaves the record's fields in it
+(`Stack::AnsweredBoth` with `put_words`). It cites
+`compiled_computes_sret`, which composes `compiled_returns_sret` (the
+lowering's theorem with the export's run) with the generator's at-file
+agreements (`program_answers_root`). The lowering is stated as
+`lower_program_sized(...)`, from the earlier functions' emission and the
+root's own (`lower_program_sized_emitted`). The callee program stores
+nothing (`{prefix}_callees_quiet`), the whole program stores only into the
+structure (`program_stores_within(…, [True])`), and is total.
+
+**What C sees.** The signature line reads
+`# signature: stats(word, word) -> [word; 3] in memory`. A field is a word
+in the structure, so two narrow fields side by side, which C packs into
+one eightbyte, stay refused as at two words (§16.18). The address takes
+one of the eight words a call passes, so the function takes at most seven.
+
+What is not taken yet: a function taking enums or records (its at-file
+agreement is generated for plain words), and another entry beside such a
+root. Probes: `triple_agrees_at` in
+`lib/_tests/native/runtime/runtime_two_words_tests`, and
+`examples/x86-native/three_words.hthr` called from C.

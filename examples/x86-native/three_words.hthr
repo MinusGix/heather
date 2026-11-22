@@ -1,0 +1,37 @@
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import bitvec_nat;
+// What the `runtime` generator reads (issues/runtime-generator-imports.md).
+import tactic;
+import char;
+import string;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+
+// A record of three words or more as a function's result
+// (docs/native/runtime-fn-setups-design.md §16.20): returned the way
+// System V returns a C structure of that many integer words, through
+// memory. The caller passes where the structure goes in RDI and the
+// arguments after it, and gets the same address back in RAX. The sum of
+// two words, and the smaller and the larger of them.
+record Stats { sum: BitVec(64), min: BitVec(64), max: BitVec(64) }
+
+runtime fn stats(a, b: BitVec(64)) → Stats {
+    match a.unsigned_lt_bit(b) {
+        True => Stats(a.add(b), a, b),
+        False => Stats(a.add(b), b, a),
+    }
+}
+
+// Four words: the arguments turned one place to the left.
+record Four { w: BitVec(64), x: BitVec(64), y: BitVec(64), z: BitVec(64) }
+
+runtime fn turn(a, b, c, d: BitVec(64)) → Four { Four(b, c, d, a) }

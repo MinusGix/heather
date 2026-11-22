@@ -1830,6 +1830,12 @@ fn program_eval_also(functions: List<Function>, arguments: List<BitVec(64)>) →
     match functions { Nil => Nil, Cons(last, earlier) => last.eval_also(program_answers(earlier), arguments) }
 }
 
+// The same over a file: what the export of a structure of several words
+// calls its function over (docs/native/runtime-fn-setups-design.md §16.20).
+fn program_eval_also_over(buffers: Buffers(), functions: List<Function>, arguments: List<BitVec(64)>) → List<BitVec(64)> {
+    match functions { Nil => Nil, Cons(last, earlier) => last.eval_also(program_answers_over(buffers, earlier), arguments, buffers := buffers) }
+}
+
 // Renamed calls fit wherever the renaming carries every arity over: what a
 // linked function's calls are checked by, from the check its own code had
 // against its own table, with nothing read off the code again

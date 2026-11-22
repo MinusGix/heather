@@ -3,7 +3,7 @@
 // order (issues/function-ir-verified-lowering.md, round 4). Generated from
 // the imports: edit the roots on the marker, then run `scripts/lib-closures
 // --fix` (issues/grind-closure-cost.md).
-// lib-closure: as-loaded function_ir_compile function_ir_correct function_ir_borrows x86_64_asm_table function_ir_refusal function_ir_optimize function_ir_explain function_ir_identities
+// lib-closure: as-loaded function_ir_compile function_ir_correct function_ir_export function_ir_borrows x86_64_asm_table function_ir_refusal function_ir_optimize function_ir_explain function_ir_identities
 pub(super) const SUPPORT: &[(&str, &str, &str)] = &[
     ("logic", "lib/std/core/logic.hthr", include_str!("../../../../lib/std/core/logic.hthr")),
     ("bool", "lib/std/core/bool.hthr", include_str!("../../../../lib/std/core/bool.hthr")),
@@ -80,6 +80,7 @@ pub(super) const SUPPORT: &[(&str, &str, &str)] = &[
     ("function_ir_stage", "lib/native/function_ir/function_ir_stage.hthr", include_str!("../../../../lib/native/function_ir/function_ir_stage.hthr")),
     ("function_ir_compile", "lib/native/function_ir/function_ir_compile.hthr", include_str!("../../../../lib/native/function_ir/function_ir_compile.hthr")),
     ("function_ir_correct", "lib/native/function_ir/function_ir_correct.hthr", include_str!("../../../../lib/native/function_ir/function_ir_correct.hthr")),
+    ("function_ir_export", "lib/native/function_ir/function_ir_export.hthr", include_str!("../../../../lib/native/function_ir/function_ir_export.hthr")),
     ("function_ir_borrows", "lib/native/function_ir/function_ir_borrows.hthr", include_str!("../../../../lib/native/function_ir/function_ir_borrows.hthr")),
     ("x86_64_asm_table", "lib/std/arch/x86_64/x86_64_asm_table.hthr", include_str!("../../../../lib/std/arch/x86_64/x86_64_asm_table.hthr")),
     ("function_ir_spelled", "lib/native/function_ir/function_ir_spelled.hthr", include_str!("../../../../lib/native/function_ir/function_ir_spelled.hthr")),

@@ -160,6 +160,61 @@ theorem lent_homes_hold(values: Valuation(), addresses: List<BitVec(64)>, buffer
     }
 }
 
+// A span lent by its address alone (`Fixed`): the one argument word that
+// is its address, and the span `bytes` long.
+fn ArgsSized(bytes: Nat, arguments, addresses: List<BitVec(64)>, buffers: Buffers()) → Type {
+    match arguments { Nil => False, Cons(base, _) => (base = address_of(addresses, 0)) ∧ (buffer_bytes(buffers, 0).len() = bytes) }
+}
+
+// Its home: the first parameter and the port that holds the length.
+fn sized_homes(parameters: List<Nat>, length: Nat) → List<Lent> {
+    match parameters { Nil => [], Cons(base, _) => [Lent(0, base, length)] }
+}
+
+theorem sized_homes_hold(values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(), bytes, length: Nat,
+    set: values(64, length) = BitVec::ofNat(bytes)):
+    (parameters: List<Nat>) → ArgsSized(bytes, words_of(values, parameters), addresses, buffers) →
+    HomesHold(sized_homes(parameters, length), values, addresses, buffers) {
+    λ parameters => match parameters {
+        Nil => λ _ => trivial,
+        Cons(base, _) => λ sized => ⟨⟨sized.left, trans(set, cong_fn<Nat, BitVec(64)>(λ k => BitVec::ofNat(k), sym(sized.right)))⟩, trivial⟩,
+    }
+}
+
+// A function's homes and the words that hold them, by whether its span is
+// lent by its address alone (`Fixed`) or as an address and a length.
+fn homes_of(fixed: Option<Fixed>, parameters: List<Nat>, count: Nat) → List<Lent> {
+    match fixed {
+        None => lent_homes(parameters, count, 0),
+        Some(x) => match count { Zero => [], Succ(_) => sized_homes(parameters, x.length) },
+    }
+}
+
+theorem homes_of_zero(fixed: Option<Fixed>, parameters: List<Nat>): homes_of(fixed, parameters, 0) = [] {
+    match fixed { None => refl, Some(_) => refl }
+}
+
+fn ArgsHome(fixed: Option<Fixed>, count: Nat, arguments, addresses: List<BitVec(64)>, buffers: Buffers()) → Type {
+    match fixed { None => ArgsLent(count, 0, arguments, addresses, buffers), Some(x) => ArgsSized(x.bytes, arguments, addresses, buffers) }
+}
+
+// What sets a fixed span's length (`StructuredRegion::first_set`).
+fn FixedSet(fixed: Option<Fixed>, values: Valuation()) → Type {
+    match fixed { None => True, Some(x) => values(64, x.length) = BitVec::ofNat(x.bytes) }
+}
+
+theorem homes_of_hold(values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(), parameters: List<Nat>, count: Nat):
+    (fixed: Option<Fixed>) → FixedSet(fixed, values) → ArgsHome(fixed, count, words_of(values, parameters), addresses, buffers) →
+    HomesHold(homes_of(fixed, parameters, count), values, addresses, buffers) {
+    λ fixed => match fixed {
+        None => λ _ lent => lent_homes_hold(values, addresses, buffers, count, parameters, 0, lent),
+        Some(x) => λ set sized => match count as λ c => HomesHold(match c { Zero => [], Succ(_) => sized_homes(parameters, x.length) }, values, addresses, buffers) {
+            Zero => trivial,
+            Succ(_) => sized_homes_hold(values, addresses, buffers, x.bytes, x.length, set, parameters, sized),
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // In bounds: what the path knows
 
@@ -244,13 +299,62 @@ theorem known_bounded_sound(values: Valuation(), all: List<Known>, index, length
     }
 }
 
-// Some arm taken on the way here tested `index` below `length`.
-fn File::bounded(self file: File, index, length: Nat) → Bool { known_bounded(file.known, file.known, index, length) }
+// Both words constants the file knows, the `k`-th byte past `index` below
+// `length` (a fixed span's length and a store's offset into it,
+// docs/native/runtime-fn-setups-design.md §16.20).
+fn constants_below(known: List<Known>, index, length, k: Nat) → Bool {
+    match known_value(known, index) {
+        None => False,
+        Some(c) => match known_value(known, length) {
+            None => False,
+            Some(l) => (c + k + 1).leb(l) && (l + 1).leb(Nat::pow(2, 64)),
+        },
+    }
+}
+
+theorem constants_below_sound(values: Valuation(), known: List<Known>, index, length, k: Nat, holds: KnownHold(values, known)):
+    constants_below(known, index, length, k).IsTrue() → values(64, index).toNat() + k < values(64, length).toNat() {
+    (match known_value(known, index) as λ found => known_value(known, index) = found →
+        (match found { None => False, Some(c) => match known_value(known, length) {
+            None => False,
+            Some(l) => (c + k + 1).leb(l) && (l + 1).leb(Nat::pow(2, 64)),
+        } }).IsTrue() → values(64, index).toNat() + k < values(64, length).toNat() {
+        None => λ _ no => false_elim(no),
+        Some(c) => λ at_index => (match known_value(known, length) as λ found => known_value(known, length) = found →
+            (match found { None => False, Some(l) => (c + k + 1).leb(l) && (l + 1).leb(Nat::pow(2, 64)) }).IsTrue() →
+            values(64, index).toNat() + k < values(64, length).toNat() {
+            None => λ _ no => false_elim(no),
+            Some(l) => λ at_length ok => {
+                let parts = Bool::is_true_and((c + k + 1).leb(l), (l + 1).leb(Nat::pow(2, 64)), ok);
+                let below: (c + k + 1 <= l) = (c + k + 1).leb_sound(l, parts.left);
+                let small: (l + 1 <= Nat::pow(2, 64)) = (l + 1).leb_sound(Nat::pow(2, 64), parts.right);
+                let c_small: (c + 1 <= Nat::pow(2, 64)) = Nat::le_trans(c + 1, l + 1, Nat::pow(2, 64),
+                    Nat::le_trans(c + 1, c + k + 1, l + 1, c.le_succ_succ(c + k, c.le_add_l(k)),
+                        Nat::le_trans(c + k + 1, l, l + 1, below, l.le_succ_r(l, l.le_refl()))), small);
+                let read_index: (values(64, index).toNat() = c) = j(sym(known_value_holds(values, index, c, known, at_index, holds)),
+                    λ w _ => w.toNat() = c, BitVec::toNat_ofNat(64, c, c_small));
+                let read_length: (values(64, length).toNat() = l) = j(sym(known_value_holds(values, length, l, known, at_length, holds)),
+                    λ w _ => w.toNat() = l, BitVec::toNat_ofNat(64, l, small));
+                j(sym(read_index), λ x _ => x + k < values(64, length).toNat(),
+                    j(sym(read_length), λ y _ => c + k < y, below))
+            },
+        })(refl),
+    })(refl)
+}
+
+// Some arm taken on the way here tested `index` below `length`, or both
+// are constants and it is.
+fn File::bounded(self file: File, index, length: Nat) → Bool {
+    known_bounded(file.known, file.known, index, length) || constants_below(file.known, index, length, 0)
+}
 
 theorem File::bounded_sound(self file: File, values: Valuation(), gprs: Gprs, index, length: Nat,
     represents: file.Represents(values, gprs), bounded: file.bounded(index, length).IsTrue()):
     values(64, index).toNat() < values(64, length).toNat() {
-    known_bounded_sound(values, file.known, index, length, represents.right, file.known, bounded, represents.right)
+    match Bool::is_true_or(known_bounded(file.known, file.known, index, length), constants_below(file.known, index, length, 0), bounded) {
+        Inl(tested) => known_bounded_sound(values, file.known, index, length, represents.right, file.known, tested, represents.right),
+        Inr(constants) => constants_below_sound(values, file.known, index, length, 0, represents.right, constants),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -311,13 +415,18 @@ theorem known_span_sound(values: Valuation(), all: List<Known>, index, length, k
 
 // The path knows the `k` bytes past `index` are below `length` too: some
 // `t = index + k` was tested below it.
-fn File::span_bounded(self file: File, index, length, k: Nat) → Bool { known_span(file.known, file.known, index, length, k) }
+fn File::span_bounded(self file: File, index, length, k: Nat) → Bool {
+    known_span(file.known, file.known, index, length, k) || constants_below(file.known, index, length, k)
+}
 
 theorem File::span_bounded_sound(self file: File, values: Valuation(), gprs: Gprs, index, length, k: Nat,
     represents: file.Represents(values, gprs), no_wrap: values(64, index).toNat() + k < Nat::pow(2, 64),
     bounded: file.span_bounded(index, length, k).IsTrue()):
     values(64, index).toNat() + k < values(64, length).toNat() {
-    known_span_sound(values, file.known, index, length, k, represents.right, no_wrap, file.known, bounded, represents.right)
+    match Bool::is_true_or(known_span(file.known, file.known, index, length, k), constants_below(file.known, index, length, k), bounded) {
+        Inl(tested) => known_span_sound(values, file.known, index, length, k, represents.right, no_wrap, file.known, tested, represents.right),
+        Inr(constants) => constants_below_sound(values, file.known, index, length, k, represents.right, constants),
+    }
 }
 
 // ---------------------------------------------------------------------------

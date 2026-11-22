@@ -1,0 +1,503 @@
+// A function returning a structure of more than two words, exported as C
+// returns one (docs/native/runtime-fn-setups-design.md §16.20).
+//
+// System V returns a structure of three words or more through memory: the
+// caller passes where it goes in RDI, the words after it from RSI, and
+// expects the same address back in RAX. The export is a function of the
+// program of its own (`sret_export`): lent that structure by its address
+// alone (`Fixed`, its length the structure's size), it calls the function
+// returning the record's words, stores each into the structure, low half
+// first, and returns the address. Its run is proved here once for every
+// count of words (`sret_export_runs`, `put_words_bytes`); a certificate
+// instantiates it.
+
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_writes;
+import function_ir_run;
+import function_ir_lower;
+import function_ir_lower_structured;
+import function_ir_lower_reads;
+import function_ir_lower_calls;
+import function_ir_compile;
+import function_ir_correct;
+import x86_64;
+import x86_64_block;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_fetched_code;
+import x86_64_stack;
+import x86_64_lending;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+import nat_map;
+import omega;
+
+// ---------------------------------------------------------------------------
+// The words stored
+
+// A word's halves, as the export stores them: its low 32 bits, then its
+// high 32 (what `Resize` and `LogicalShiftRight` compute).
+fn word_low(word: BitVec(64)) → BitVec(32) { BitVec::ofNat(word.toNat()) }
+fn word_high(word: BitVec(64)) → BitVec(32) { BitVec::ofNat(word.shift_right(32).toNat()) }
+
+// The words from byte `at` of buffer 0, eight bytes each, the low half of
+// each first.
+fn put_words(buffers: Buffers(), at: Nat, words: List<BitVec(64)>) → Buffers() {
+    match words {
+        Nil => buffers,
+        Cons(word, rest) => put_words(store_word(store_word(buffers, 0, BitVec::ofNat(at, n := 64).toNat(), 4, word_low(word)), 0,
+            BitVec::ofNat(at + 4, n := 64).toNat(), 4, word_high(word)), at + 8, rest),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The regions that store them
+
+// Port `word`'s low half stored from byte `at`: the index, the half, the
+// store (ids `base` to `base + 2`).
+fn store_low(base, at, word: Nat) → Region {
+    Region(Ports([]), [Const(64, base, at), Resize(64, 32, base + 1, word), WideStore(4, base + 2, 0, base, base + 1)], Ports([]))
+}
+
+// Its high half from `at`: the index, the shifted word (`base + 3`), the
+// half, the store.
+fn store_high(base, at, word: Nat) → Region {
+    Region(Ports([]), [Const(64, base, at), LogicalShiftRight(64, base + 3, word, 32), Resize(64, 32, base + 1, base + 3),
+        WideStore(4, base + 2, 0, base, base + 1)], Ports([]))
+}
+
+// Each port of `words` stored from byte `at`, eight ids a word from `base`.
+fn store_words(base, at: Nat, words: List<Nat>) → StructuredRegion {
+    match words {
+        Nil => Dataflow(Region(Ports([]), [], Ports([]))),
+        Cons(word, rest) => Sequence(store_low(base, at, word), Sequence(store_high(base + 4, at + 4, word), store_words(base + 8, at + 8, rest))),
+    }
+}
+
+theorem below_ne(id, base, c: Nat, below: id + 1 <= base): id ≠ base + c {
+    id.ne_of_lt(base + c, omega(below))
+}
+
+theorem offset_ne(base, c, d: Nat, less: c + 1 <= d): base + c ≠ base + d {
+    (base + c).ne_of_lt(base + d, omega(less))
+}
+
+// The low half's leaf: the file it leaves, and every id below `base` kept.
+theorem store_low_runs(base, at, word: Nat, below: word + 1 <= base, values: Valuation(), buffers: Buffers()):
+    (run_nodes(store_low(base, at, word).nodes, values, buffers).buffers =
+        store_word(buffers, 0, BitVec::ofNat(at, n := 64).toNat(), 4, word_low(values(64, word)))) ∧
+    ((w, id: Nat) → id + 1 <= base → run_nodes(store_low(base, at, word).nodes, values, buffers).values(w, id) = values(w, id)) {
+    let indexing = λ (w: Nat) => BitVec::ofNat(at, n := w);
+    let indexed = Valuation::set(values, base, indexing);
+    let halving = λ (w: Nat) => BitVec::ofNat(indexed(64, word).toNat(), n := w);
+    let halved = Valuation::set(indexed, base + 1, halving);
+    let index: (halved(64, base) = BitVec::ofNat(at, n := 64)) =
+        trans(Valuation::set_other(indexed, base + 1, halving, 64, base, offset_ne(base, 0, 1, Nat::le_refl(1))),
+            Valuation::set_here(values, base, indexing, 64));
+    let read: (indexed(64, word) = values(64, word)) = Valuation::set_other(values, base, indexing, 64, word, below_ne(word, base, 0, below));
+    let half: (halved(32, base + 1) = word_low(values(64, word))) =
+        trans(Valuation::set_here(indexed, base + 1, halving, 32), cong_fn(λ (x: BitVec(64)) => BitVec::ofNat(x.toNat(), n := 32), read));
+    let after = store_word(buffers, 0, halved(64, base).toNat(), 4, halved(32, base + 1));
+    ⟨j(sym(index), λ x _ => store_word(buffers, 0, x.toNat(), 4, halved(32, base + 1)) =
+            store_word(buffers, 0, BitVec::ofNat(at, n := 64).toNat(), 4, word_low(values(64, word))),
+        cong_fn(λ (x: BitVec(32)) => store_word(buffers, 0, BitVec::ofNat(at, n := 64).toNat(), 4, x), half)),
+     λ w id under => trans(Valuation::set_other(halved, base + 2, wide_value(after, 0, base, 4, halved), w, id, below_ne(id, base, 2, under)),
+        trans(Valuation::set_other(indexed, base + 1, halving, w, id, below_ne(id, base, 1, under)),
+            Valuation::set_other(values, base, indexing, w, id, below_ne(id, base, 0, under))))⟩
+}
+
+// The high half's leaf.
+theorem store_high_runs(base, at, word: Nat, below: word + 1 <= base, values: Valuation(), buffers: Buffers()):
+    (run_nodes(store_high(base, at, word).nodes, values, buffers).buffers =
+        store_word(buffers, 0, BitVec::ofNat(at, n := 64).toNat(), 4, word_high(values(64, word)))) ∧
+    ((w, id: Nat) → id + 1 <= base → run_nodes(store_high(base, at, word).nodes, values, buffers).values(w, id) = values(w, id)) {
+    let indexing = λ (w: Nat) => BitVec::ofNat(at, n := w);
+    let indexed = Valuation::set(values, base, indexing);
+    let shifting = λ (w: Nat) => indexed(w, word).shift_right(32);
+    let shifted = Valuation::set(indexed, base + 3, shifting);
+    let halving = λ (w: Nat) => BitVec::ofNat(shifted(64, base + 3).toNat(), n := w);
+    let halved = Valuation::set(shifted, base + 1, halving);
+    let index: (halved(64, base) = BitVec::ofNat(at, n := 64)) =
+        trans(Valuation::set_other(shifted, base + 1, halving, 64, base, offset_ne(base, 0, 1, Nat::le_refl(1))),
+            trans(Valuation::set_other(indexed, base + 3, shifting, 64, base, offset_ne(base, 0, 3, omega())),
+                Valuation::set_here(values, base, indexing, 64)));
+    let read: (indexed(64, word) = values(64, word)) = Valuation::set_other(values, base, indexing, 64, word, below_ne(word, base, 0, below));
+    let moved: (shifted(64, base + 3) = values(64, word).shift_right(32)) =
+        trans(Valuation::set_here(indexed, base + 3, shifting, 64), cong_fn(λ (x: BitVec(64)) => x.shift_right(32), read));
+    let half: (halved(32, base + 1) = word_high(values(64, word))) =
+        trans(Valuation::set_here(shifted, base + 1, halving, 32), cong_fn(λ (x: BitVec(64)) => BitVec::ofNat(x.toNat(), n := 32), moved));
+    let after = store_word(buffers, 0, halved(64, base).toNat(), 4, halved(32, base + 1));
+    ⟨j(sym(index), λ x _ => store_word(buffers, 0, x.toNat(), 4, halved(32, base + 1)) =
+            store_word(buffers, 0, BitVec::ofNat(at, n := 64).toNat(), 4, word_high(values(64, word))),
+        cong_fn(λ (x: BitVec(32)) => store_word(buffers, 0, BitVec::ofNat(at, n := 64).toNat(), 4, x), half)),
+     λ w id under => trans(Valuation::set_other(halved, base + 2, wide_value(after, 0, base, 4, halved), w, id, below_ne(id, base, 2, under)),
+        trans(Valuation::set_other(shifted, base + 1, halving, w, id, below_ne(id, base, 1, under)),
+            trans(Valuation::set_other(indexed, base + 3, shifting, w, id, below_ne(id, base, 3, under)),
+                Valuation::set_other(values, base, indexing, w, id, below_ne(id, base, 0, under)))))⟩
+}
+
+// The stores, run: each word of `words` at its place from `at`, the
+// words' ports below `base`, which none of the stores writes.
+theorem store_words_runs(call: Writers(), words: List<Nat>): (base, at: Nat) → ((id: Nat) → Mem(id, words) → id + 1 <= base) →
+    (values: Valuation()) → (buffers: Buffers()) →
+    store_words(base, at, words).run(call, values, buffers).buffers = put_words(buffers, at, words_of(values, words)) {
+    match words {
+        Nil => λ base at _ values buffers => refl,
+        Cons(word, rest) => λ base at below values buffers => {
+            let own = below(word, Inl(refl));
+            let low = store_low_runs(base, at, word, own, values, buffers);
+            let first = run_nodes(store_low(base, at, word).nodes, values, buffers);
+            let high = store_high_runs(base + 4, at + 4, word, omega(own), first.values, first.buffers);
+            let second = run_nodes(store_high(base + 4, at + 4, word).nodes, first.values, first.buffers);
+            let rest_below: (id: Nat) → Mem(id, rest) → id + 1 <= base + 8 = λ id m => omega(below(id, Inr(m)));
+            let kept: (words_of(second.values, rest) = words_of(values, rest)) = words_agree(rest, values, second.values, λ id m => {
+                let under = below(id, Inr(m));
+                trans(high.right(64, id, omega(under)), low.right(64, id, under))
+            });
+            let read: (first.values(64, word) = values(64, word)) = low.right(64, word, own);
+            let stored: (second.buffers = store_word(store_word(buffers, 0, BitVec::ofNat(at, n := 64).toNat(), 4, word_low(values(64, word))), 0,
+                    BitVec::ofNat(at + 4, n := 64).toNat(), 4, word_high(values(64, word)))) =
+                trans(high.left, trans(cong_fn(λ (x: BitVec(64)) => store_word(first.buffers, 0, BitVec::ofNat(at + 4, n := 64).toNat(), 4, word_high(x)), read),
+                    cong_fn(λ (b: Buffers()) => store_word(b, 0, BitVec::ofNat(at + 4, n := 64).toNat(), 4, word_high(values(64, word))), low.left)));
+            trans(store_words_runs(call, rest, base + 8, at + 8, rest_below, second.values, second.buffers),
+                trans(cong_fn(λ (ws: List<BitVec(64)>) => put_words(second.buffers, at + 8, ws), kept),
+                    cong_fn(λ (b: Buffers()) => put_words(b, at + 8, words_of(values, rest)), stored)))
+        },
+    }
+}
+
+// And they write nothing below `base`.
+theorem store_words_keeps(call: Writers(), words: List<Nat>): (base, at: Nat) → ((id: Nat) → Mem(id, words) → id + 1 <= base) →
+    (values: Valuation()) → (buffers: Buffers()) → (w, id: Nat) → id + 1 <= base →
+    store_words(base, at, words).run(call, values, buffers).values(w, id) = values(w, id) {
+    match words {
+        Nil => λ base at _ values buffers w id _ => refl,
+        Cons(word, rest) => λ base at below values buffers w id under => {
+            let own = below(word, Inl(refl));
+            let low = store_low_runs(base, at, word, own, values, buffers);
+            let first = run_nodes(store_low(base, at, word).nodes, values, buffers);
+            let high = store_high_runs(base + 4, at + 4, word, omega(own), first.values, first.buffers);
+            let second = run_nodes(store_high(base + 4, at + 4, word).nodes, first.values, first.buffers);
+            trans(store_words_keeps(call, rest, base + 8, at + 8, λ i m => omega(below(i, Inr(m))), second.values, second.buffers, w, id, omega(under)),
+                trans(high.right(w, id, omega(under)), low.right(w, id, under)))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Runs of numbers as ports
+
+theorem absent_count_from(x, k: Nat): (a: Nat) → x + 1 <= a → absent(x, List::count_from(a, k)).IsTrue() {
+    match k {
+        Zero => λ a _ => trivial,
+        Succ(more) => λ a below => Bool::is_true_and_intro(x.differs(a), absent(x, List::count_from(a + 1, more)),
+            x.differs_of_ne(a, x.ne_of_lt(a, below)), absent_count_from(x, more, a + 1, omega(below))),
+    }
+}
+
+theorem distinct_count_from(k: Nat): (a: Nat) → distinct(List::count_from(a, k)).IsTrue() {
+    match k {
+        Zero => λ a => trivial,
+        Succ(more) => λ a => Bool::is_true_and_intro(absent(a, List::count_from(a + 1, more)), distinct(List::count_from(a + 1, more)),
+            absent_count_from(a, more, a + 1, Nat::le_refl(a + 1)), distinct_count_from(more, a + 1)),
+    }
+}
+
+theorem mem_count_from(k: Nat): (a, id: Nat) → Mem(id, List::count_from(a, k)) → id + 1 <= a + k {
+    match k {
+        Zero => λ a id never => false_elim(never),
+        Succ(more) => λ a id m => match m {
+            Inl(here) => j(sym(here), λ x _ => x + 1 <= a + (more + 1), omega()),
+            Inr(later) => omega(mem_count_from(more, a + 1, id, later)),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The export
+
+// The export of function `callee` of `arity` words, which returns `more`
+// words past its first: lent the structure by its address alone (its
+// parameter 0, its length port `arity + 1` set to the structure's size),
+// it calls the callee on its other parameters, stores the words it
+// returns, and returns the address. Ports: the parameters `0` to `arity`,
+// the length, the callee's words from `arity + 2`, the stores' from
+// `arity + 3 + more`.
+fn sret_export(callee, arity, more: Nat) → Function {
+    Function(parameters := List::count_from(0, arity + 1),
+        body := Sequence(Region(Ports([]), [Const(64, arity + 1, 8 * (more + 1))], Ports([])),
+            Compose(Call(callee, List::count_from(1, arity), arity + 2, List::count_from(arity + 3, more)),
+                store_words(arity + 3 + more, 0, List::count_from(arity + 2, more + 1)))),
+        result := 0, lent := 1, fixed := Some(Fixed(arity + 1, 8 * (more + 1))))
+}
+
+// Its run, proved once for every callee, arity and count of words: it
+// returns the address it was given, and the file its callee left with the
+// callee's words stored from the structure's start.
+theorem sret_export_runs(callee, arity, more: Nat, earlier: List<Function>, before: Buffers(), address: BitVec(64),
+    arguments: List<BitVec(64)>, count: arguments.len() = arity, answered: program_run(earlier, before, callee, arguments).rest.len() = more):
+    program_run(Cons(sret_export(callee, arity, more), earlier), before, earlier.len(), Cons(address, arguments)) =
+        Ending(address, put_words(program_run(earlier, before, callee, arguments).buffers, 0,
+            Cons(program_run(earlier, before, callee, arguments).word, program_run(earlier, before, callee, arguments).rest))) {
+    let export = sret_export(callee, arity, more);
+    let call = program_run(earlier);
+    let params = List::count_from(0, arity + 1);
+    let ids = List::count_from(1, arity);
+    let words = List::count_from(arity + 2, more + 1);
+    let base = arity + 3 + more;
+    let answer = call(before, callee, arguments);
+    let target = Ending(address, put_words(answer.buffers, 0, Cons(answer.word, answer.rest)));
+    let bound = Valuation::bind(Valuation::zero(), params, Cons(address, arguments));
+    let sizing = λ (w: Nat) => BitVec::ofNat(8 * (more + 1), n := w);
+    let lengthed = Valuation::set(bound, arity + 1, sizing);
+    let read_all: (words_of(bound, params) = Cons(address, arguments)) = words_of_bind(Valuation::zero(), params, distinct_count_from(arity + 1, 0),
+        Cons(address, arguments), trans(List::len_count_from(0, arity + 1), Nat::cong_succ(sym(count))));
+    let head: (bound(64, 0) = address) = cong_fn(λ (ws: List<BitVec(64)>) => match ws { Nil => address, Cons(h, _) => h }, read_all);
+    let tail: (words_of(bound, ids) = arguments) = cong_fn(λ (ws: List<BitVec(64)>) => ws.tail(), read_all);
+    let passed: (words_of(lengthed, ids) = arguments) = trans(words_agree(ids, bound, lengthed, λ id m =>
+        Valuation::set_other(bound, arity + 1, sizing, 64, id, below_ne(id, arity + 1, 0, omega(mem_count_from(arity, 1, id, m))))), tail);
+    let ran = λ (xs: List<BitVec(64)>) => shared(call(before, callee, xs), λ (got: Ending) =>
+        store_words(base, 0, words).run(call, Valuation::bind(lengthed, words, Cons(got.word, got.rest)), got.buffers));
+    let returned = Valuation::bind(lengthed, words, Cons(answer.word, answer.rest));
+    let below: (id: Nat) → Mem(id, words) → id + 1 <= base = λ id m => omega(mem_count_from(more + 1, arity + 2, id, m));
+    let stored: (words_of(returned, words) = Cons(answer.word, answer.rest)) = words_of_bind(lengthed, words, distinct_count_from(more + 1, arity + 2),
+        Cons(answer.word, answer.rest), trans(List::len_count_from(arity + 2, more + 1), Nat::cong_succ(sym(answered))));
+    let file: (ran(arguments).buffers = put_words(answer.buffers, 0, Cons(answer.word, answer.rest))) =
+        trans(store_words_runs(call, words, base, 0, below, returned, answer.buffers),
+            cong_fn(λ (ws: List<BitVec(64)>) => put_words(answer.buffers, 0, ws), stored));
+    let kept: (ran(arguments).values(64, 0) = address) =
+        trans(store_words_keeps(call, words, base, 0, below, returned, answer.buffers, 64, 0, omega()),
+            trans(Valuation::bind_frame(lengthed, words, Cons(answer.word, answer.rest), 64, 0, absent_count_from(0, more + 1, arity + 2, omega())),
+                trans(Valuation::set_other(bound, arity + 1, sizing, 64, 0, below_ne(0, arity + 1, 0, omega())), head)));
+    let ended: (Ending(ran(arguments).values(64, 0), ran(arguments).buffers) = target) =
+        trans(cong_fn(λ (x: BitVec(64)) => Ending(x, ran(arguments).buffers), kept),
+            cong_fn(λ (b: Buffers()) => Ending(address, b), file));
+    let main: (Ending(ran(words_of(lengthed, ids)).values(64, 0), ran(words_of(lengthed, ids)).buffers) = target) =
+        j(sym(passed), λ xs _ => Ending(ran(xs).values(64, 0), ran(xs).buffers) = target, ended);
+    match earlier.len().eq_dec(earlier.len()) as λ d => (match d {
+            Inl(_) => export.run(call, Cons(address, arguments), before),
+            Inr(_) => program_run(earlier, before, earlier.len(), Cons(address, arguments)),
+        }) = target {
+        Inl(_) => main,
+        Inr(differs) => false_elim(differs(refl)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The code
+
+// What the export is lent: the structure, at `address`, to be written.
+fn sret_lending(counts: List<Nat>, address: BitVec(64), bytes: List<BitVec(8)>) → Lending {
+    Lending::writing(counts, [address], [bytes], [True])
+}
+
+// A program's root answers the calls of it as its own run allows (the
+// converse of `program_effects_at_last`).
+theorem program_effects_root(last: Function, earlier: List<Function>, arguments: List<BitVec(64)>, result: BitVec(64),
+    rest: List<BitVec(64)>, before, after: Buffers()):
+    program_effects(Cons(last, earlier), before, earlier.len(), arguments, result, rest, after) →
+    last.RunsBoth(program_effects(earlier), arguments, result, rest, before, after) {
+    match earlier.len().eq_dec(earlier.len()) as λ d => (match d {
+            Inl(_) => last.RunsBoth(program_effects(earlier), arguments, result, rest, before, after),
+            Inr(_) => program_effects(earlier, before, earlier.len(), arguments, result, rest, after),
+        }) → last.RunsBoth(program_effects(earlier), arguments, result, rest, before, after) {
+        Inl(_) => λ held => held,
+        Inr(differs) => false_elim(differs(refl)),
+    }
+}
+
+// A list of `more + 1` words is its first and the rest.
+theorem first_and_rest(words: List<BitVec(64)>, more: Nat, count: words.len() = more + 1):
+    (Cons(first_word(words), words.tail()) = words) ∧ (words.tail().len() = more) {
+    match words as λ ws => ws.len() = more + 1 → (Cons(first_word(ws), ws.tail()) = ws) ∧ (ws.tail().len() = more) {
+        Nil => λ no => absurd(no),
+        Cons(_, t) => λ held => ⟨refl, Nat::succ_inj(t.len(), more, held)⟩,
+    }(count)
+}
+
+// The export's code returns a structure through memory as System V does
+// (design §16.20): called at its label with the structure's address in
+// RDI and the callee's words from RSI (`Stack::Passed`), the structure's
+// bytes lent to be written at that address, the code returns the address
+// in RAX, keeps the callee-saved registers and RSP, stores only into its
+// own room and the structure, and leaves in the structure the callee's
+// words, each low half first (`put_words`). Proved once, for every callee
+// that stores nothing; a certificate gives its lowering and its checks.
+theorem compiled_returns_sret<M>(callee, arity, more: Nat, earlier: List<Function>, placement: List<Place>, rooms: Nat → Nat, program: Prog,
+    lowered: lower_program_sized(sret_export(callee, arity, more), earlier, placement, program_counts(Cons(sret_export(callee, arity, more), earlier)),
+        rooms) = Some(program),
+    evaluable: program_evaluable(Cons(sret_export(callee, arity, more), earlier)).IsTrue(), quiet: program_quiet(earlier).IsTrue(),
+    within: program_stores_within(Cons(sret_export(callee, arity, more), earlier), [True]).IsTrue(),
+    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat,
+    address: BitVec(64), bytes: List<BitVec(8)>,
+    loan: Loan<M>(fetch, data, stack, top, sret_lending(program_counts(Cons(sret_export(callee, arity, more), earlier)), address, bytes).spans()),
+    sized: bytes.len() = 8 * (more + 1), arguments: List<BitVec(64)>, count: arguments.len() = arity,
+    fits: arity_fits(program_arity(Cons(sret_export(callee, arity, more), earlier), earlier.len()), arguments.len() + 1).IsTrue(),
+    defined: program_run_defined(Cons(sret_export(callee, arity, more), earlier), [bytes], earlier.len(), Cons(address, arguments)).IsTrue(),
+    answered: program_answers_over([bytes], earlier, callee, arguments).len() = more + 1):
+    Site<M>(fetch, data, program, last, origin).Returns(stack, asm_labels(program, earlier.len() + 1),
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(Cons(address, arguments), i, s) ∧ rooms(earlier.len()) <= i) ∧
+            ((i + 8 <= top) ∧ stack.InMemory(sret_lending(program_counts(Cons(sret_export(callee, arity, more), earlier)), address, bytes), [bytes], s.memory)),
+        stack.AnsweredBoth(sret_lending(program_counts(Cons(sret_export(callee, arity, more), earlier)), address, bytes), address, [],
+            put_words([bytes], 0, program_answers_over([bytes], earlier, callee, arguments)))) {
+    let export = sret_export(callee, arity, more);
+    let functions = Cons(export, earlier);
+    let n = earlier.len();
+    let lending = sret_lending(program_counts(functions), address, bytes);
+    let file: Buffers() = [bytes];
+    let whole = Cons(address, arguments);
+    let answers = program_answers_over(file, earlier, callee, arguments);
+    let after = put_words(file, 0, answers);
+    let parts = first_and_rest(answers, more, answered);
+    let quieted: (program_run(earlier, file, callee, arguments) = Ending::of(answers, file)) = program_run_quiet(earlier, quiet, file, callee, arguments);
+    let ran = program_effects_root(export, earlier, whole, program_run(functions, file, n, whole).word, program_run(functions, file, n, whole).rest, file,
+        program_run(functions, file, n, whole).buffers, program_run_effects(functions, evaluable, file, n, whole, fits, defined));
+    let stored = sret_export_runs(callee, arity, more, earlier, file, address, arguments, count,
+        j(sym(quieted), λ e _ => e.rest.len() = more, parts.right));
+    let at_run = j(stored, λ e _ => export.RunsBoth(program_effects(earlier), whole, e.word, e.rest, file, e.buffers), ran);
+    let at_file = j(quieted, λ e _ => export.RunsBoth(program_effects(earlier), whole, address, [], file, put_words(e.buffers, 0, Cons(e.word, e.rest))), at_run);
+    let runs: export.RunsBoth(program_effects(earlier), whole, address, [], file, after) =
+        j(parts.left, λ ws _ => export.RunsBoth(program_effects(earlier), whole, address, [], file, put_words(file, 0, ws)), at_file);
+    let needs = λ (_: Nat) (b: Nat) => lending.written(b);
+    let lendless = program_stores_within_lendless(functions, [True], within);
+    let needed = program_needs_all(functions, λ (b: Nat) => lending.written(b), lendless, λ b stores => program_stores_marked(functions, [True], b, within, stores));
+    let returns = lower_program_sized_correct<M>(export, earlier, placement, rooms, lending, program, lowered, fetch, data, last, origin, stack, top, loan,
+        needs, needed, λ f b need => eq_true_of_is_true(lending.written(b), need), whole, address, [], file, after);
+    Site<M>(fetch, data, program, last, origin).returns_weaken(stack, asm_labels(program, n + 1),
+        stack.EnteredBoth(program_effects(earlier), rooms, lending, top, n, export, whole, address, [], file, after),
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed(whole, i, s) ∧ rooms(n) <= i) ∧ ((i + 8 <= top) ∧ stack.InMemory(lending, file, s.memory)),
+        stack.AnsweredBoth(lending, address, [], after), returns,
+        λ i s held => ⟨⟨held.left.left, ⟨runs, held.left.right⟩⟩, ⟨⟨refl, sized⟩, held.right⟩⟩)
+}
+
+// ---------------------------------------------------------------------------
+// What a certificate cites
+
+// The program's code, its root last by `emit_any`, from the emission of
+// the functions before it and the root's own, each checked by evaluation
+// as a certificate states them (`lower_program_roomed_emitted`'s
+// counterpart).
+theorem lower_program_sized_emitted(root: Function, earlier: List<Function>, placement: List<Place>, counts: List<Nat>, rooms: Nat → Nat,
+    prog: Prog, rest: List<Place>, labels: Nat,
+    before: EmitsAs(emit_functions_after_lent(Start, earlier, placement, earlier.len() + 1, counts, rooms), prog, rest, labels),
+    next_prog: Prog, next_rest: List<Place>, next_labels: Nat,
+    emitted: EmitsAs(root.emit_any(prog, earlier.len(), rest, labels, counts, rooms), next_prog, next_rest, next_labels),
+    laid: next_prog.laid_out().IsTrue()): lower_program_sized(root, earlier, placement, counts, rooms) = Some(next_prog) {
+    let decided: ((match next_prog.laid_out() as λ _ => Option<Prog> { False => None, True => Some(next_prog) }) = Some(next_prog)) =
+        j(sym(eq_true_of_is_true(next_prog.laid_out(), laid)),
+            λ b _ => (match b as λ _ => Option<Prog> { False => None, True => Some(next_prog) }) = Some(next_prog), refl);
+    let finish = λ (out: Option<Emitted>) (held: EmitsAs(out, next_prog, next_rest, next_labels)) =>
+        (match out as λ o => EmitsAs(o, next_prog, next_rest, next_labels) →
+            (match o as λ _ => Option<Prog> {
+                None => None,
+                Some(e) => match e.prog.laid_out() { False => None, True => Some(e.prog) },
+            }) = Some(next_prog) {
+            None => λ no => Option::none_ne_some(Emission(prog := next_prog, placement := next_rest, names := next_labels), no, None<Prog>() = Some(next_prog)),
+            Some(e) => λ yes => j(sym(e.emits_as(next_prog, next_rest, next_labels, yes).left),
+                λ x _ => (match x.laid_out() as λ _ => Option<Prog> { False => None, True => Some(x) }) = Some(next_prog), decided),
+        })(held);
+    (match emit_functions_after_lent(Start, earlier, placement, earlier.len() + 1, counts, rooms) as λ out =>
+        EmitsAs(out, prog, rest, labels) →
+        (match out as λ _ => Option<Prog> {
+            None => None,
+            Some(b) => match root.emit_any(b.prog, earlier.len(), b.placement, b.names, counts, rooms) {
+                None => None,
+                Some(o) => match o.prog.laid_out() { False => None, True => Some(o.prog) },
+            },
+        }) = Some(next_prog) {
+        None => λ held => Option::none_ne_some(Emission(prog := prog, placement := rest, names := labels), held, None<Prog>() = Some(next_prog)),
+        Some(b) => λ held => {
+            let same = b.emits_as(prog, rest, labels, held);
+            let at: EmitsAs(root.emit_any(b.prog, earlier.len(), b.placement, b.names, counts, rooms), next_prog, next_rest, next_labels) =
+                j(sym(same.left), λ x _ => EmitsAs(root.emit_any(x, earlier.len(), b.placement, b.names, counts, rooms), next_prog, next_rest, next_labels),
+                    j(sym(same.right.left), λ y _ => EmitsAs(root.emit_any(prog, earlier.len(), y, b.names, counts, rooms), next_prog, next_rest, next_labels),
+                        j(sym(same.right.right), λ z _ => EmitsAs(root.emit_any(prog, earlier.len(), rest, z, counts, rooms), next_prog, next_rest, next_labels),
+                            emitted)));
+            finish(root.emit_any(b.prog, earlier.len(), b.placement, b.names, counts, rooms), at)
+        },
+    })(before)
+}
+
+// The words a program's last function returns: its first (`program_eval_over`)
+// and the rest (`program_eval_also_over`).
+theorem program_answers_root(buffers: Buffers(), last: Function, earlier: List<Function>, arguments: List<BitVec(64)>):
+    program_answers_over(buffers, Cons(last, earlier), earlier.len(), arguments) =
+        Cons(program_eval_over(buffers, Cons(last, earlier), earlier.len(), arguments), program_eval_also_over(buffers, Cons(last, earlier), arguments)) {
+    match earlier.len().eq_dec(earlier.len()) as λ d => (match d {
+            Inl(_) => last.eval_words(program_answers_over(buffers, earlier), arguments, buffers := buffers),
+            Inr(_) => program_answers_over(buffers, earlier, earlier.len(), arguments),
+        }) = Cons(first_word(match d {
+            Inl(_) => last.eval_words(program_answers_over(buffers, earlier), arguments, buffers := buffers),
+            Inr(_) => program_answers_over(buffers, earlier, earlier.len(), arguments),
+        }), last.eval_also(program_answers_over(buffers, earlier), arguments, buffers := buffers)) {
+        Inl(_) => refl,
+        Inr(differs) => false_elim(differs(refl)),
+    }
+}
+
+// What a certificate states of an export returning a structure through
+// memory (design §16.20), wherever the code is loaded and whatever follows
+// it, and wherever the structure lies that the stack does not reach:
+// called at function `f`'s label with the structure's address in RDI and
+// `arguments` after it (`Stack::Passed`), `room` bytes of stack below the
+// return address, the structure's bytes (any, of its size) lent to be
+// written, the code returns the address in RAX, keeps the callee-saved
+// registers and RSP, stores only into its own room and the structure, and
+// leaves in the structure `words`, eight bytes each, little-endian
+// (`put_words`), which is C's layout of a structure of words.
+fn Prog::ComputesSret<M>(self code: Prog, machine: Machine<M>, f, room: Nat, counts: List<Nat>, arguments: List<BitVec(64)>,
+    words: List<BitVec(64)>) → Type {
+    (origin: BitVec(64)) → (last: List<BitVec(8)>) → (top: Nat) → (address: BitVec(64)) → (bytes: List<BitVec(8)>) →
+        Loan<M>(machine.fetch, machine.data, machine.stack, top, sret_lending(counts, address, bytes).spans()) → bytes.len() = 8 * words.len() →
+        Site<M>(machine.fetch, machine.data, code, last, origin).Returns(machine.stack, asm_labels(code, f + 1),
+            λ (i: Nat) (s: MachineState<M>) => (machine.stack.Passed(Cons(address, arguments), i, s) ∧ room <= i) ∧
+                ((i + 8 <= top) ∧ machine.stack.InMemory(sret_lending(counts, address, bytes), [bytes], s.memory)),
+            machine.stack.AnsweredBoth(sret_lending(counts, address, bytes), address, [], put_words([bytes], 0, words)))
+}
+
+// What a certificate cites: `compiled_returns_sret` at every load and
+// every structure, the callee the last function of a program that stores
+// nothing, its words given as its generator states them at every file
+// (`f::agrees_at`, `f::agrees_also_at`).
+theorem compiled_computes_sret<M>(callee: Function, below: List<Function>, arity, more: Nat, placement: List<Place>, rooms: Nat → Nat, program: Prog,
+    lowered: lower_program_sized(sret_export(below.len(), arity, more), Cons(callee, below), placement,
+        program_counts(Cons(sret_export(below.len(), arity, more), Cons(callee, below))), rooms) = Some(program),
+    evaluable: program_evaluable(Cons(sret_export(below.len(), arity, more), Cons(callee, below))).IsTrue(),
+    quiet: program_quiet(Cons(callee, below)).IsTrue(),
+    within: program_stores_within(Cons(sret_export(below.len(), arity, more), Cons(callee, below)), [True]).IsTrue(),
+    total: program_total(Cons(sret_export(below.len(), arity, more), Cons(callee, below))).IsTrue(),
+    machine: Machine<M>, arguments: List<BitVec(64)>, count: arguments.len() = arity,
+    fits: arity_fits(program_arity(Cons(sret_export(below.len(), arity, more), Cons(callee, below)), Cons(callee, below).len()), arguments.len() + 1).IsTrue(),
+    first: BitVec(64), rest: List<BitVec(64)>, counted: rest.len() = more,
+    agrees: (b: Buffers()) → program_eval_over(b, Cons(callee, below), below.len(), arguments) = first,
+    agrees_also: (b: Buffers()) → program_eval_also_over(b, Cons(callee, below), arguments) = rest):
+    program.ComputesSret(machine, Cons(callee, below).len(), rooms(Cons(callee, below).len()),
+        program_counts(Cons(sret_export(below.len(), arity, more), Cons(callee, below))), arguments, Cons(first, rest)) {
+    λ origin last top address bytes loan sized => {
+        let export = sret_export(below.len(), arity, more);
+        let functions = Cons(export, Cons(callee, below));
+        let counts = program_counts(functions);
+        let words: (program_answers_over([bytes], Cons(callee, below), below.len(), arguments) = Cons(first, rest)) =
+            trans(program_answers_root([bytes], callee, below, arguments),
+                eq2(λ (x: BitVec(64)) (xs: List<BitVec(64)>) => Cons(x, xs), agrees([bytes]), agrees_also([bytes])));
+        let answered: (program_answers_over([bytes], Cons(callee, below), below.len(), arguments).len() = more + 1) =
+            j(sym(words), λ ws _ => ws.len() = more + 1, cong_fn(λ (k: Nat) => k + 1, counted));
+        let fitted: (bytes.len() = 8 * (more + 1)) = j(counted, λ k _ => bytes.len() = 8 * (k + 1), sized);
+        let returns = compiled_returns_sret<M>(below.len(), arity, more, Cons(callee, below), placement, rooms, program, lowered, evaluable, quiet, within,
+            machine.fetch, machine.data, last, origin, machine.stack, top, address, bytes, loan, fitted, arguments, count, fits,
+            program_total_run_defined(functions, total, [bytes], Cons(callee, below).len(), Cons(address, arguments)), answered);
+        j(words, λ ws _ => Site<M>(machine.fetch, machine.data, program, last, origin).Returns(machine.stack, asm_labels(program, Cons(callee, below).len() + 1),
+            λ (i: Nat) (s: MachineState<M>) => (machine.stack.Passed(Cons(address, arguments), i, s) ∧ rooms(Cons(callee, below).len()) <= i) ∧
+                ((i + 8 <= top) ∧ machine.stack.InMemory(sret_lending(counts, address, bytes), [bytes], s.memory)),
+            machine.stack.AnsweredBoth(sret_lending(counts, address, bytes), address, [], put_words([bytes], 0, ws))), returns)
+    }
+}
