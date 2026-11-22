@@ -6545,6 +6545,125 @@ theorem Function::roomy_sound(self function: Function, rooms: Nat → Nat, k, as
       function.body.fits_sound(rooms, k, rooms(k) - function.frame(asked, saves), rest.right)⟩⟩
 }
 
+// ---------------------------------------------------------------------------
+// Room per level: a function that calls itself
+//
+// A function's own index is a callee like the ones below it, answered by
+// the function one level down, and its row of the room table is a number
+// per level (docs/native/runtime-fn-recursion-design.md). The code is the
+// same at each level: only the room asked of the caller grows.
+
+// Function `k`'s room `j` levels deep: `base` where it calls itself no
+// more, and `step` more for each level.
+fn level_room(base, step, j: Nat) → Nat { match j { Zero => base, Succ(i) => level_room(base, step, i) + step } }
+
+theorem level_room_ge(base, step, j: Nat): base <= level_room(base, step, j) {
+    match j {
+        Zero => base.le_refl(),
+        Succ(i) => { let below = level_room_ge(base, step, i); omega },
+    }
+}
+
+// The table with function `k`'s row `own`, the others' rows theirs.
+fn self_rooms(rooms: Nat → Nat, k, own: Nat) → Nat → Nat { λ (f: Nat) => match f.eq_dec(k) { Inl(_) => own, Inr(_) => rooms(f) } }
+
+theorem self_rooms_same(rooms: Nat → Nat, k, own, f: Nat, same: f = k): self_rooms(rooms, k, own)(f) = own {
+    match f.eq_dec(k) { Inl(_) => refl, Inr(differs) => false_elim(differs(same)) }
+}
+
+theorem self_rooms_other(rooms: Nat → Nat, k, own, f: Nat, differs: f ≠ k): self_rooms(rooms, k, own)(f) = rooms(f) {
+    match f.eq_dec(k) { Inl(same) => false_elim(differs(same)), Inr(_) => refl }
+}
+
+// A region that fits a table fits one whose rows grew by no more than the
+// room it is given did.
+theorem StructuredRegion::fits_shift(self region: StructuredRegion, rooms, other: Nat → Nat, bound, avail, wider: Nat,
+    grown: (f: Nat) → f + 1 <= bound → other(f) + avail <= rooms(f) + wider):
+    region.Fits(rooms, bound, avail) → region.Fits(other, bound, wider) {
+    match region {
+        Dataflow(_) => λ _ => trivial,
+        Sequence(_, continuation) => λ ok => continuation.fits_shift(rooms, other, bound, avail, wider, grown, ok),
+        Compose(prefix, continuation) => λ ok => ⟨prefix.fits_shift(rooms, other, bound, avail, wider, grown, ok.left),
+            continuation.fits_shift(rooms, other, bound, avail, wider, grown, ok.right)⟩,
+        Conditional(_, _, _, _, when_true, when_false) => λ ok => ⟨when_true.fits_shift(rooms, other, bound, avail, wider, grown, ok.left),
+            when_false.fits_shift(rooms, other, bound, avail, wider, grown, ok.right)⟩,
+        Call(callee, _, _, _) => λ ok below => { let fit = ok(below); let more = grown(callee, below); omega },
+        Loop(_, _, _, _, body, _, _, _, _) => λ ok => body.fits_shift(rooms, other, bound, avail, wider, grown, ok),
+        Lend(_, callee, _, _) => λ ok below => { let fit = ok(below); let more = grown(callee, below); omega },
+    }
+}
+
+// One check is every level's: a function whose frame and calls fit with
+// its own row at `base` and its room `base + step` fits at each level, its
+// own row that level's room and its room the next's.
+theorem Function::roomy_level(self function: Function, rooms: Nat → Nat, k, base, step, asked, saves: Nat,
+    roomy: function.RoomyAt(self_rooms(rooms, k, base), k + 1, base + step, asked, saves), j: Nat):
+    function.RoomyAt(self_rooms(rooms, k, level_room(base, step, j)), k + 1, level_room(base, step, j) + step, asked, saves) {
+    let frame = function.frame(asked, saves);
+    let here = level_room(base, step, j);
+    let up: (base <= here) = level_room_ge(base, step, j);
+    let framed: (frame <= base + step) = roomy.left;
+    ⟨{ omega }, ⟨λ c => { let enough = roomy.right.left(c); omega },
+        function.body.fits_shift(self_rooms(rooms, k, base), self_rooms(rooms, k, here), k + 1, (base + step) - frame, (here + step) - frame,
+            λ f below => match f.eq_dec(k) {
+                Inl(same) => { let a = self_rooms_same(rooms, k, base, f, same); let b = self_rooms_same(rooms, k, here, f, same); omega },
+                Inr(differs) => { let a = self_rooms_other(rooms, k, base, f, differs); let b = self_rooms_other(rooms, k, here, f, differs); omega },
+            },
+            roomy.right.right)⟩⟩
+}
+
+
+theorem level_room_sum(base, step, j: Nat): level_room(base, step, j) = base + level_room(0, step, j) {
+    match j {
+        Zero => { omega },
+        Succ(i) => { let below = level_room_sum(base, step, i); omega },
+    }
+}
+
+// What a function that calls itself `levels` deep is checked for, by
+// evaluation: each level takes its frame and a call's 24 bytes, its row of
+// the table holds that many, and what is left of the row holds each other
+// callee's room.
+fn Function::roomy_levels(self function: Function, rooms: Nat → Nat, k, levels, asked, saves: Nat) → Bool {
+    level_room(0, function.frame(asked, saves) + 24, levels).leb(rooms(k)) &&
+        function.body.fits(self_rooms(rooms, k, rooms(k) - level_room(0, function.frame(asked, saves) + 24, levels)),
+            (rooms(k) - level_room(0, function.frame(asked, saves) + 24, levels)) + 24)
+}
+
+theorem roomy_levels_row(row, total, here: Nat, enough: total <= row, sum: here = (row - total) + total): here <= row { omega }
+theorem roomy_levels_frame(base, frame: Nat): frame <= base + (frame + 24) { omega }
+theorem roomy_levels_call(base, frame: Nat): frame + 24 <= base + (frame + 24) { omega }
+theorem roomy_levels_left(base, frame: Nat): base + 24 = (base + (frame + 24)) - frame { omega }
+
+// Then the row holds the room of the deepest level, and the function's
+// frame and calls fit the first, its own row what is left.
+theorem Function::roomy_levels_sound(self function: Function, rooms: Nat → Nat, k, levels, asked, saves: Nat,
+    ok: function.roomy_levels(rooms, k, levels, asked, saves).IsTrue()):
+    (level_room(rooms(k) - level_room(0, function.frame(asked, saves) + 24, levels), function.frame(asked, saves) + 24, levels) <= rooms(k)) ∧
+    function.RoomyAt(self_rooms(rooms, k, rooms(k) - level_room(0, function.frame(asked, saves) + 24, levels)), k + 1,
+        (rooms(k) - level_room(0, function.frame(asked, saves) + 24, levels)) + (function.frame(asked, saves) + 24), asked, saves) {
+    let frame = function.frame(asked, saves);
+    let total = level_room(0, frame + 24, levels);
+    let base = rooms(k) - total;
+    let parts = Bool::is_true_and(total.leb(rooms(k)), function.body.fits(self_rooms(rooms, k, base), base + 24), ok);
+    ⟨roomy_levels_row(rooms(k), total, level_room(base, frame + 24, levels), total.leb_sound(rooms(k), parts.left), level_room_sum(base, frame + 24, levels)),
+     ⟨roomy_levels_frame(base, frame), ⟨λ _ => roomy_levels_call(base, frame),
+        j(roomy_levels_left(base, frame), λ avail _ => function.body.Fits(self_rooms(rooms, k, base), k + 1, avail),
+            function.body.fits_sound(self_rooms(rooms, k, base), k + 1, base + 24, parts.right))⟩⟩⟩
+}
+
+// What emitting a function checks of its room: its frame and calls under
+// its row where it calls only the functions below it, and each level's
+// where it calls itself.
+fn Function::roomy_at(self function: Function, levels: Nat, rooms: Nat → Nat, k, asked, saves: Nat) → Bool {
+    match levels { Zero => function.roomy(rooms, k, asked, saves), Succ(depth) => function.roomy_levels(rooms, k, depth + 1, asked, saves) }
+}
+
+// The callees a function's body is emitted among: the functions below it
+// and, where it calls itself, its own number.
+fn bound_at(k, levels: Nat) → Nat { match levels { Zero => k, Succ(_) => k + 1 } }
+
+
 // The function's code from its label to its RET, entered as its contract
 // says. The return address is a word at the top of its room, which its
 // own stores and the buffers' bytes leave (`Loan::unchanged`).
@@ -6717,18 +6836,26 @@ fn placement_body(placement: List<Place>) → List<Place> { placement_after_shor
 // into RAX, the saves loaded back, RET. `counts` says how many buffers each
 // function of the program takes; the function is refused where the table
 // says another count of it than it does itself.
-fn Function::emit_lent(self function: Function, prog: Prog, k: Nat, placement: List<Place>, names: Nat, counts: List<Nat>,
+fn Function::emit_levels(self function: Function, levels: Nat, prog: Prog, k: Nat, placement: List<Place>, names: Nat, counts: List<Nat>,
     rooms: Nat → Nat) → Option<Emitted> {
     match function.lent.same(lent_count(counts, k)) {
         False => None,
-        True => match function.roomy(rooms, k, placement_slots(placement), placement_saves(placement)) {
+        True => match function.roomy_at(levels, rooms, k, placement_slots(placement), placement_saves(placement)) {
             False => None,
             True => match input_file(word_ports(function.parameters), parameter_registers()) {
                 None => None,
-                Some(file) => function.emit_body(placement_slots(placement), placement_saves(placement), placement_short(placement), prog, k, k, file, placement_body(placement), names, counts),
+                Some(file) => function.emit_body(placement_slots(placement), placement_saves(placement), placement_short(placement), prog, k, bound_at(k, levels), file, placement_body(placement), names, counts),
             },
         },
     }
+}
+
+// As deep as the function says it calls itself (`Function.levels`): the
+// code is the same at every depth but none, where its own number is no
+// callee; the depth is in the room its row of the table must hold.
+fn Function::emit_lent(self function: Function, prog: Prog, k: Nat, placement: List<Place>, names: Nat, counts: List<Nat>,
+    rooms: Nat → Nat) → Option<Emitted> {
+    function.emit_levels(function.levels, prog, k, placement, names, counts, rooms)
 }
 
 // In a program that lends nothing.
@@ -6834,14 +6961,14 @@ theorem Function::emit_returns<M>(self function: Function, site: Site<M>, laid: 
     loan: Loan<M>(site.fetch, site.data, stack, top, lending.spans()), needs: Nat → Nat → Bool, prog: Prog, placement: List<Place>,
     names: Nat, allowed: (b: Nat) → function.body.stores(b).IsTrue() → lending.written(b) = True,
     asks: function.body.Asks(needs, lending.written)):
-    MayReturnBoth<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, function.emit_lent(prog, k, placement, names, lending.counts, rooms)) {
+    MayReturnBoth<M>(site, stack, top, effects, rooms, k, lending, needs, function, prog, function.emit_levels(0, prog, k, placement, names, lending.counts, rooms)) {
     let saves = placement_saves(placement);
     let asked = placement_slots(placement);
     let short = placement_short(placement);
     let ins = word_ports(function.parameters);
     match same: function.lent.same(lent_count(lending.counts, k)) {
         False => trivial,
-        True => match ok: function.roomy(rooms, k, asked, saves) { False => trivial, True => (match input_file(ins, parameter_registers()) as λ entry =>
+        True => match ok: function.roomy_at(0, rooms, k, asked, saves) { False => trivial, True => (match input_file(ins, parameter_registers()) as λ entry =>
             ((values: Valuation()) → (g: Gprs) → PortsAt(values, ins, parameter_registers(), g) →
                 entry.All(λ (file: File) => file.Represents(values, g))) →
             entry.All(λ (_: File) => ins.len() <= parameter_registers().len()) →
@@ -6903,10 +7030,15 @@ fn lower_program_roomed(functions: List<Function>, placement: List<Place>, count
 // A room table for a program: each function's frame, function `f` asking
 // `asked(f)` call slots and saving `saves(f)` registers, and below it the largest of its callees' rooms
 // with a call's 24 bytes, where it calls. Function `f`'s room at entry `f`.
-// A table is checked where it is used (`Function::roomy`), so this one is
-// a choice, not a premise.
+// A function that calls itself asks for a frame and a call's 24 bytes a
+// level, above what its other callees ask (`Function::roomy_levels`).
+// A table is checked where it is used (`Function::roomy_at`), so this one
+// is a choice, not a premise.
 fn rooms_then(rooms: List<Nat>, last: Function, asked, saves: Nat) → List<Nat> {
-    rooms ++ [last.frame(asked, saves) + last.body.callee_room(λ (g: Nat) => rooms_at(rooms, g))]
+    rooms ++ [match last.levels {
+        Zero => last.frame(asked, saves) + last.body.callee_room(λ (g: Nat) => rooms_at(rooms, g)),
+        Succ(depth) => last.body.callee_room(λ (g: Nat) => rooms_at(rooms, g)) + level_room(0, last.frame(asked, saves) + 24, depth + 1),
+    }]
 }
 
 fn program_rooms_by(functions: List<Function>, asked, saves: Nat → Nat) → List<Nat> {
@@ -7106,50 +7238,29 @@ fn lower_program_planned(functions: List<Function>) → Option<Prog> {
     lower_program_roomed(functions, plan_program(functions), [], program_room_planned(functions))
 }
 
-// The last function answers the calls of it.
-theorem program_effects_last(last: Function, earlier: List<Function>, arguments: List<BitVec(64)>, result: BitVec(64),
-    rest: List<BitVec(64)>, before, after: Buffers()):
-    program_effects(Cons(last, earlier))(before, earlier.len(), arguments, result, rest, after) →
-    last.RunsBoth(program_effects(earlier), arguments, result, rest, before, after) {
-    match earlier.len().eq_dec(earlier.len()) {
-        Inl(_) => λ held => held,
-        Inr(differs) => λ _ => false_elim(differs(refl)),
-    }
-}
-
-// The earlier ones answer the rest.
-theorem program_effects_earlier(last: Function, earlier: List<Function>, f: Nat, differs: f ≠ earlier.len(),
-    arguments: List<BitVec(64)>, result: BitVec(64), rest: List<BitVec(64)>, before, after: Buffers()):
-    program_effects(Cons(last, earlier))(before, f, arguments, result, rest, after) →
-    program_effects(earlier)(before, f, arguments, result, rest, after) {
-    match f.eq_dec(earlier.len()) {
-        Inl(same) => λ _ => false_elim(differs(same)),
-        Inr(_) => λ held => held,
-    }
-}
-
 theorem below_other(f, n: Nat, below: f + 1 <= n + 1, differs: f ≠ n): f + 1 <= n { omega }
 
 theorem nothing_below_zero(f: Nat, below: f + 1 <= 0): False { omega }
 
-// One more function in the program: function `f` meets its contract at its
-// label, the last function by its entry and one below it as it did.
+// One more function, function `k` over the effects `below`: function `f`
+// meets its contract at its label, function `k` by its entry and one below
+// it as it did.
 theorem Site::meets_extend<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, rooms: Nat → Nat, lending: Lending, last: Function,
-    earlier: List<Function>, entry: Nat, label: asm_labels(site.program)(earlier.len() + 1) = entry, f: Nat,
-    below: (f ≠ earlier.len()) → (words: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) → (before, after: Buffers()) →
+    below_effects: Effects(), n: Nat, entry: Nat, label: asm_labels(site.program)(n + 1) = entry, f: Nat,
+    below: (f ≠ n) → (words: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) → (before, after: Buffers()) →
         site.Returns(stack, asm_labels(site.program)(f + 1),
-            stack.CalledOver(program_effects(earlier), rooms, lending, top, f, words, result, extra, before, after),
+            stack.CalledOver(below_effects, rooms, lending, top, f, words, result, extra, before, after),
             stack.AnsweredBoth(lending, result, extra, after)),
-    returns: (f = earlier.len()) → (words: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) → (before, after: Buffers()) → site.Returns(stack, entry,
-        stack.EnteredBoth(program_effects(earlier), rooms, lending, top, earlier.len(), last, words, result, extra, before, after),
+    returns: (f = n) → (words: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) → (before, after: Buffers()) → site.Returns(stack, entry,
+        stack.EnteredBoth(below_effects, rooms, lending, top, n, last, words, result, extra, before, after),
         stack.AnsweredBoth(lending, result, extra, after))):
     (words: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) → (before, after: Buffers()) →
     site.Returns(stack, asm_labels(site.program)(f + 1),
-        stack.CalledOver(program_effects(Cons(last, earlier)), rooms, lending, top, f, words, result, extra, before, after),
+        stack.CalledOver(tie_effects(below_effects, n, λ b a r e c => last.RunsBoth(below_effects, a, r, e, b, c)), rooms, lending, top, f, words, result,
+            extra, before, after),
         stack.AnsweredBoth(lending, result, extra, after)) {
-    let effects = program_effects(Cons(last, earlier));
-    let below_effects = program_effects(earlier);
-    let n = earlier.len();
+    let own = λ (b: Buffers()) (a: List<BitVec(64)>) (r: BitVec(64)) (e: List<BitVec(64)>) (c: Buffers()) => last.RunsBoth(below_effects, a, r, e, b, c);
+    let effects = tie_effects(below_effects, n, own);
     λ words result extra before after => match f.eq_dec(n) {
         Inl(same) => j(sym(same), λ m _ => site.Returns(stack, asm_labels(site.program)(m + 1),
                 stack.CalledOver(effects, rooms, lending, top, m, words, result, extra, before, after), stack.AnsweredBoth(lending, result, extra, after)),
@@ -7159,14 +7270,14 @@ theorem Site::meets_extend<M>(self site: Site<M>, stack: Stack<M>(site.fetch, si
                     stack.EnteredBoth(below_effects, rooms, lending, top, n, last, words, result, extra, before, after),
                     stack.CalledOver(effects, rooms, lending, top, n, words, result, extra, before, after),
                     stack.AnsweredBoth(lending, result, extra, after), returns(same, words, result, extra, before, after),
-                    λ i s held => ⟨⟨held.left.left, ⟨program_effects_last(last, earlier, words, result, extra, before, after, held.left.right.left),
+                    λ i s held => ⟨⟨held.left.left, ⟨tie_effects_own(below_effects, n, own, n, refl, words, result, extra, before, after, held.left.right.left),
                         held.left.right.right⟩⟩, held.right⟩))),
         Inr(differs) => site.returns_weaken(stack, asm_labels(site.program)(f + 1),
             stack.CalledOver(below_effects, rooms, lending, top, f, words, result, extra, before, after),
             stack.CalledOver(effects, rooms, lending, top, f, words, result, extra, before, after),
             stack.AnsweredBoth(lending, result, extra, after),
             below(differs, words, result, extra, before, after),
-            λ i s held => ⟨⟨held.left.left, ⟨program_effects_earlier(last, earlier, f, differs, words, result, extra, before, after,
+            λ i s held => ⟨⟨held.left.left, ⟨tie_effects_other(below_effects, n, own, f, differs, words, result, extra, before, after,
                 held.left.right.left), held.left.right.right⟩⟩, held.right⟩),
     }
 }
@@ -7194,8 +7305,8 @@ theorem Function::closing_grows(self function: Function, asked, saves: Nat, prog
 }
 
 // And it holds its label, whatever its contract is stated under.
-theorem Function::emit_lent_labels(self function: Function, prog: Prog, k: Nat, placement: List<Place>, names: Nat, counts: List<Nat>, rooms: Nat → Nat):
-    Grows(At(prog, k + 1, Block([])), function.emit_lent(prog, k, placement, names, counts, rooms)) {
+theorem Function::emit_levels_labels(self function: Function, levels: Nat, prog: Prog, k: Nat, placement: List<Place>, names: Nat, counts: List<Nat>, rooms: Nat → Nat):
+    Grows(At(prog, k + 1, Block([])), function.emit_levels(levels, prog, k, placement, names, counts, rooms)) {
     let saves = placement_saves(placement);
     let asked = placement_slots(placement);
     let short = placement_short(placement);
@@ -7203,18 +7314,18 @@ theorem Function::emit_lent_labels(self function: Function, prog: Prog, k: Nat, 
     let label = At(prog, k + 1, Block([]));
     match function.lent.same(lent_count(counts, k)) {
         False => trivial,
-        True => match function.roomy(rooms, k, asked, saves) { False => trivial, True => match input_file(word_ports(function.parameters), parameter_registers()) as λ entry => Grows(label, match entry {
+        True => match function.roomy_at(levels, rooms, k, asked, saves) { False => trivial, True => match input_file(word_ports(function.parameters), parameter_registers()) as λ entry => Grows(label, match entry {
                 None => None,
-                Some(file) => function.emit_body(asked, saves, short, prog, k, k, file, placement_body(placement), names, counts),
+                Some(file) => function.emit_body(asked, saves, short, prog, k, bound_at(k, levels), file, placement_body(placement), names, counts),
             }) {
             None => trivial,
             Some(file) =>
-                (match function.body.emit_calls(saves, function.slots(asked), short, opened, file, placement_body(placement), names, k, counts, function.homes()) as λ e => Grows(opened, e) →
+                (match function.body.emit_calls(saves, function.slots(asked), short, opened, file, placement_body(placement), names, bound_at(k, levels), counts, function.homes()) as λ e => Grows(opened, e) →
                     Grows(label, match e { None => None, Some(body) => function.closing(asked, saves, body) }) {
                     None => λ _ => trivial,
                     Some(body) => λ grown => function.closing_grows(asked, saves, label, body,
                         Prog::within_trans(label_opened(prog, k, function.loads(), function.slots(asked), saves), grown)),
-                })(function.body.emit_calls_grows(saves, function.slots(asked), short, k, counts, function.homes(), opened, file, placement_body(placement), names)),
+                })(function.body.emit_calls_grows(saves, function.slots(asked), short, bound_at(k, levels), counts, function.homes(), opened, file, placement_body(placement), names)),
         } },
     }
 }
@@ -7234,35 +7345,282 @@ fn MayCallLent<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Na
         site.CallsLent(stack, program_effects(functions), rooms, functions.len(), counts, needs, top))
 }
 
-// One more function: under each lending that lets it write what it needs
-// it meets its contract, the earlier ones meeting theirs under every
-// lending.
+// What emitting one more function proves, function `k` over the effects
+// `below`: resident with the functions below it meeting their contracts,
+// they and it meet theirs, a call of it answered by the function as deep
+// as it has levels.
+fn MayCallNext<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, below: Effects(), rooms: Nat → Nat, k: Nat, counts: List<Nat>,
+    needs: Nat → Nat → Bool, function: Function, levels: Nat, prog: Prog, out: Option<Emitted>) → Type {
+    out.All(λ (emitted: Emitted) => emitted.prog.Within(site.program) →
+        (prog.Within(site.program) → site.CallsLent(stack, below, rooms, k, counts, needs, top)) →
+        site.CallsLent(stack, tie_effects(below, k, λ b a r e c => function.RunsBoth(function.effects_at(below, k, levels), a, r, e, b, c)), rooms, k + 1,
+            counts, needs, top))
+}
+
+// One more function that calls only the ones below it: under each lending
+// that lets it write what it needs it meets its contract, the earlier ones
+// meeting theirs under every lending.
 theorem program_step<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat,
-    rooms: Nat → Nat, counts: List<Nat>, needs: Nat → Nat → Bool, last: Function, earlier: List<Function>, before: Emitted,
-    earlier_calls: before.prog.Within(site.program) → site.CallsLent(stack, program_effects(earlier), rooms, earlier.len(), counts, needs, top)):
-    (out: Option<Emitted>) → Grows(At(before.prog, earlier.len() + 1, Block([])), out) →
+    rooms: Nat → Nat, counts: List<Nat>, needs: Nat → Nat → Bool, last: Function, below: Effects(), n: Nat, prog: Prog):
+    (out: Option<Emitted>) → Grows(At(prog, n + 1, Block([])), out) →
     ((lending: Lending) → lending.counts = counts → Loan<M>(site.fetch, site.data, stack, top, lending.spans()) →
-        ((b: Nat) → needs(earlier.len(), b).IsTrue() → lending.written(b) = True) →
-        MayReturnBoth<M>(site, stack, top, program_effects(earlier), rooms, earlier.len(), lending, needs, last, before.prog, out)) →
-    MayCallLent<M>(site, stack, top, rooms, counts, needs, Cons(last, earlier), out) {
+        ((b: Nat) → needs(n, b).IsTrue() → lending.written(b) = True) →
+        MayReturnBoth<M>(site, stack, top, below, rooms, n, lending, needs, last, prog, out)) →
+    MayCallNext<M>(site, stack, top, below, rooms, n, counts, needs, last, 0, prog, out) {
     λ out => match out {
         None => λ _ _ => trivial,
-        Some(emitted) => λ labelled returns within lending same loan f below covers => {
-            let n = earlier.len();
+        Some(emitted) => λ labelled returns within earlier_calls lending same loan f under covers => {
             let label_in = Prog::within_trans(labelled, within);
-            let lent = earlier_calls(before.prog.within_before(n + 1, Block([]), site.program, label_in));
-            site.meets_extend(stack, top, rooms, lending, last, earlier, prog_len(before.prog),
-                label_target(label_in.witness, site.program, before.prog, n, Block([]),
+            let lent = earlier_calls(prog.within_before(n + 1, Block([]), site.program, label_in));
+            site.meets_extend(stack, top, rooms, lending, last, below, n, prog_len(prog),
+                label_target(label_in.witness, site.program, prog, n, Block([]),
                     site.program.laid_out_unique(laid), label_in.proof),
-                f, λ differs => lent(lending, same, loan, f, below_other(f, n, below, differs), covers),
+                f, λ differs => lent(lending, same, loan, f, below_other(f, n, under, differs), covers),
                 λ at_last => {
                     let returned = returns(lending, same, loan,
                         j(at_last, λ m _ => (b: Nat) → needs(m, b).IsTrue() → lending.written(b) = True, covers));
-                    let here: site.CallsLent(stack, program_effects(earlier), rooms, n, lending.counts, needs, top) =
-                        j(sym(same), λ c _ => site.CallsLent(stack, program_effects(earlier), rooms, n, c, needs, top), lent);
+                    let here: site.CallsLent(stack, below, rooms, n, lending.counts, needs, top) =
+                        j(sym(same), λ c _ => site.CallsLent(stack, below, rooms, n, c, needs, top), lent);
                     returned.right(within, here)
                 })
         },
+    }
+}
+
+// Functions that meet their contracts in the room a table says meet them
+// in more.
+theorem Site::calls_lent_room<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, effects: Effects(), rooms, other: Nat → Nat,
+    bound: Nat, counts: List<Nat>, needs: Nat → Nat → Bool, more: (f: Nat) → f + 1 <= bound → rooms(f) <= other(f),
+    calls: site.CallsLent(stack, effects, rooms, bound, counts, needs, top)): site.CallsLent(stack, effects, other, bound, counts, needs, top) {
+    λ lending same loan f under covers arguments result rest before after => site.returns_weaken(stack, asm_labels(site.program)(f + 1),
+        stack.CalledOver(effects, rooms, lending, top, f, arguments, result, rest, before, after),
+        stack.CalledOver(effects, other, lending, top, f, arguments, result, rest, before, after),
+        stack.AnsweredBoth(lending, result, rest, after),
+        calls(lending, same, loan, f, under, covers, arguments, result, rest, before, after),
+        λ i s held => ⟨⟨held.left.left, ⟨held.left.right.left, { let grown = more(f, under); let room = held.left.right.right; omega }⟩⟩, held.right⟩)
+}
+
+// ---------------------------------------------------------------------------
+// The induction on the level, for a function that calls itself
+
+// A function below `k` meets its contract at every level as it did.
+theorem Site::level_other<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, below: Effects(), rooms: Nat → Nat, k, own, j: Nat,
+    function: Function, lending: Lending, f: Nat, differs: f ≠ k,
+    arguments: List<BitVec(64)>, result: BitVec(64), rest: List<BitVec(64)>, before, after: Buffers(),
+    returns: site.Returns(stack, asm_labels(site.program)(f + 1), stack.CalledOver(below, rooms, lending, top, f, arguments, result, rest, before, after),
+        stack.AnsweredBoth(lending, result, rest, after))):
+    site.Returns(stack, asm_labels(site.program)(f + 1),
+        stack.CalledOver(function.tied_effects(below, k, j), self_rooms(rooms, k, own), lending, top, f, arguments, result, rest, before, after),
+        stack.AnsweredBoth(lending, result, rest, after)) {
+    site.returns_weaken(stack, asm_labels(site.program)(f + 1),
+        stack.CalledOver(below, rooms, lending, top, f, arguments, result, rest, before, after),
+        stack.CalledOver(function.tied_effects(below, k, j), self_rooms(rooms, k, own), lending, top, f, arguments, result, rest, before, after),
+        stack.AnsweredBoth(lending, result, rest, after), returns,
+        λ i s held => ⟨⟨held.left.left, ⟨tie_effects_other(below, k, function.level_runs(below, k, j), f, differs, arguments, result, rest, before, after, held.left.right.left),
+            { let row = self_rooms_other(rooms, k, own, f, differs); let room = held.left.right.right; omega }⟩⟩, held.right⟩)
+}
+
+// The theorem: where function `k`'s code, resident with the functions up
+// to itself meeting their contracts at a level, meets its own with one
+// step more room (`returns`, what `Function::emit_body_returns` proves of
+// code emitted with the bound `k + 1`), every function up to `k` meets its
+// contract at every level. The code is the same at each: only the room
+// asked of the caller grows.
+theorem Site::calls_level<M>(self site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, below: Effects(), rooms: Nat → Nat, k, base, step: Nat,
+    counts: List<Nat>, needs: Nat → Nat → Bool, function: Function, entry: Nat, label: asm_labels(site.program)(k + 1) = entry,
+    earlier: site.CallsLent(stack, below, rooms, k, counts, needs, top),
+    returns: (j: Nat) → (lending: Lending) → lending.counts = counts → Loan<M>(site.fetch, site.data, stack, top, lending.spans()) →
+        ((b: Nat) → needs(k, b).IsTrue() → lending.written(b) = True) →
+        site.CallsLent(stack, function.tied_effects(below, k, j), self_rooms(rooms, k, level_room(base, step, j)), k + 1, counts, needs, top) →
+        (words: List<BitVec(64)>) → (result: BitVec(64)) → (rest: List<BitVec(64)>) → (before, after: Buffers()) →
+        site.Returns(stack, entry,
+            stack.EnteredAt(function.tied_effects(below, k, j), level_room(base, step, j) + step, lending, top, k, function, words, result, rest, before, after),
+            stack.AnsweredBoth(lending, result, rest, after)),
+    j: Nat):
+    site.CallsLent(stack, function.tied_effects(below, k, j), self_rooms(rooms, k, level_room(base, step, j)), k + 1, counts, needs, top) {
+    match j {
+        Zero => λ lending same loan f under covers arguments result rest before after => match f.eq_dec(k) {
+            Inl(at) => λ s here resident i rsp room held ret saved =>
+                false_elim(tie_effects_own(below, k, function.level_runs(below, k, 0), f, at, arguments, result, rest, before, after, held.left.right.left)),
+            Inr(differs) => site.level_other(stack, top, below, rooms, k, level_room(base, step, 0), 0, function, lending, f, differs, arguments, result, rest,
+                before, after, earlier(lending, same, loan, f, below_other(f, k, under, differs), covers, arguments, result, rest, before, after)),
+        },
+        Succ(n) => λ lending same loan f under covers arguments result rest before after => match f.eq_dec(k) {
+            Inl(at) => {
+                let level = site.calls_level(stack, top, below, rooms, k, base, step, counts, needs, function, entry, label, earlier, returns, n);
+                let own = level_room(base, step, n) + step;
+                let entered = returns(n, lending, same, loan, j(at, λ m _ => (b: Nat) → needs(m, b).IsTrue() → lending.written(b) = True, covers), level,
+                    arguments, result, rest, before, after);
+                let called: site.Returns(stack, entry,
+                    stack.CalledOver(function.tied_effects(below, k, n + 1), self_rooms(rooms, k, own), lending, top, k, arguments, result, rest, before, after),
+                    stack.AnsweredBoth(lending, result, rest, after)) =
+                    site.returns_weaken(stack, entry,
+                        stack.EnteredAt(function.tied_effects(below, k, n), own, lending, top, k, function, arguments, result, rest, before, after),
+                        stack.CalledOver(function.tied_effects(below, k, n + 1), self_rooms(rooms, k, own), lending, top, k, arguments, result, rest, before, after),
+                        stack.AnsweredBoth(lending, result, rest, after), entered,
+                        λ i s held => ⟨⟨held.left.left, ⟨tie_effects_own(below, k, function.level_runs(below, k, n + 1), k, refl, arguments, result, rest, before, after, held.left.right.left),
+                            { let row = self_rooms_same(rooms, k, own, k, refl); let room = held.left.right.right; omega }⟩⟩, held.right⟩);
+                j(sym(at), λ m _ => site.Returns(stack, asm_labels(site.program)(m + 1),
+                        stack.CalledOver(function.tied_effects(below, k, n + 1), self_rooms(rooms, k, own), lending, top, m, arguments, result, rest, before, after),
+                        stack.AnsweredBoth(lending, result, rest, after)),
+                    j(sym(label), λ e _ => site.Returns(stack, e,
+                            stack.CalledOver(function.tied_effects(below, k, n + 1), self_rooms(rooms, k, own), lending, top, k, arguments, result, rest, before, after),
+                            stack.AnsweredBoth(lending, result, rest, after)), called))
+            },
+            Inr(differs) => site.level_other(stack, top, below, rooms, k, level_room(base, step, n + 1), n + 1, function, lending, f, differs, arguments, result, rest,
+                before, after, earlier(lending, same, loan, f, below_other(f, k, under, differs), covers, arguments, result, rest, before, after)),
+        },
+    }
+}
+
+// A function's code holds its label, whatever bound its calls are under.
+theorem Function::emit_body_labels(self function: Function, asked, saves: Nat, short: List<Nat>, prog: Prog, k, bound: Nat, file: File,
+    placement: List<Place>, names: Nat, counts: List<Nat>):
+    Grows(At(prog, k + 1, Block([])), function.emit_body(asked, saves, short, prog, k, bound, file, placement, names, counts)) {
+    let opened = function_opened(prog, k, function.loads(), function.slots(asked), saves);
+    let label = At(prog, k + 1, Block([]));
+    (match function.body.emit_calls(saves, function.slots(asked), short, opened, file, placement, names, bound, counts, function.homes()) as λ e => Grows(opened, e) →
+        Grows(label, match e { None => None, Some(body) => function.closing(asked, saves, body) }) {
+        None => λ _ => trivial,
+        Some(body) => λ grown => function.closing_grows(asked, saves, label, body,
+            Prog::within_trans(label_opened(prog, k, function.loads(), function.slots(asked), saves), grown)),
+    })(function.body.emit_calls_grows(saves, function.slots(asked), short, bound, counts, function.homes(), opened, file, placement, names))
+}
+
+// The theorem for a function that calls itself, proved once: code emitted
+// for function `k` with its own index among its callees (the bound
+// `k + 1`), resident with the functions below it meeting their contracts,
+// meets its own at every level `j`, where a call of it is answered within
+// `j` levels (`Function::tied_effects`) and asks for that level's room
+// (`level_room`). One room check is asked, of the first level (`roomy`).
+theorem Function::self_calls<M>(self function: Function, asked, saves: Nat, short: List<Nat>, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+    stack: Stack<M>(site.fetch, site.data), top: Nat, below: Effects(), rooms: Nat → Nat, k, base, step: Nat, counts: List<Nat>,
+    needs: Nat → Nat → Bool, prog: Prog, file: File, placement: List<Place>, names: Nat, emitted: Emitted,
+    emits: function.emit_body(asked, saves, short, prog, k, k + 1, file, placement, names, counts) = Some(emitted),
+    within: emitted.prog.Within(site.program),
+    stores: (b: Nat) → function.body.stores(b).IsTrue() → needs(k, b) = True,
+    asks: function.body.Asks(needs, λ (b: Nat) => needs(k, b)),
+    roomy: function.RoomyAt(self_rooms(rooms, k, base), k + 1, base + step, asked, saves),
+    count: function.lent = lent_count(counts, k),
+    entered: (values: Valuation()) → (g: Gprs) → PortsAt(values, word_ports(function.parameters), parameter_registers(), g) →
+        file.Represents(values, g),
+    few: function.loads() <= 2,
+    earlier: site.CallsLent(stack, below, rooms, k, counts, needs, top), j: Nat):
+    site.CallsLent(stack, function.tied_effects(below, k, j), self_rooms(rooms, k, level_room(base, step, j)), k + 1, counts, needs, top) {
+    let label = At(prog, k + 1, Block([]));
+    let labelled: label.Within(emitted.prog) = j(emits, λ o _ => Grows(label, o),
+        function.emit_body_labels(asked, saves, short, prog, k, k + 1, file, placement, names, counts));
+    let label_in = Prog::within_trans(labelled, within);
+    site.calls_level(stack, top, below, rooms, k, base, step, counts, needs, function, prog_len(prog),
+        label_target(label_in.witness, site.program, prog, k, Block([]), site.program.laid_out_unique(laid), label_in.proof),
+        earlier,
+        λ n lending same loan covers level words result rest before after => {
+            let effects = function.tied_effects(below, k, n);
+            let table = self_rooms(rooms, k, level_room(base, step, n));
+            let own = level_room(base, step, n) + step;
+            let may = function.emit_body_returns(asked, saves, short, site, laid, stack, top, effects, table, k, k + 1, own, lending, loan, needs, prog, file,
+                placement, names,
+                λ b stored => covers(b, is_true_of_eq(needs(k, b), stores(b, stored))),
+                function.body.asks_within(needs, λ (b: Nat) => needs(k, b), lending.written, covers, asks),
+                function.roomy_level(rooms, k, base, step, asked, saves, roomy, n),
+                j(sym(same), λ c _ => function.lent = lent_count(c, k), count), entered, few);
+            let at_counts = j(same, λ c _ => MayReturnAt<M>(site, stack, top, effects, table, k, k + 1, own, lending, needs, function, prog,
+                    function.emit_body(asked, saves, short, prog, k, k + 1, file, placement, names, c)), may);
+            let here = j(emits, λ o _ => MayReturnAt<M>(site, stack, top, effects, table, k, k + 1, own, lending, needs, function, prog, o), at_counts);
+            here.right(within, j(sym(same), λ c _ => site.CallsLent(stack, effects, table, k + 1, c, needs, top), level), words, result, rest, before, after)
+        }, j)
+}
+
+theorem row_fits(row, own, room: Nat, same: row = own, enough: own <= room): row <= room { omega }
+theorem row_same(row, room: Nat, same: row = room): row <= room { omega }
+
+// One more function that calls itself `depth + 1` levels deep: where its
+// row of the table holds every level's room, it and the functions below
+// it meet their contracts, a call of it answered within its levels.
+theorem Function::emit_levels_self<M>(self function: Function, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+    stack: Stack<M>(site.fetch, site.data), top: Nat, below: Effects(), rooms: Nat → Nat, k: Nat, counts: List<Nat>, needs: Nat → Nat → Bool,
+    prog: Prog, placement: List<Place>, names: Nat,
+    stores: (b: Nat) → function.body.stores(b).IsTrue() → needs(k, b) = True,
+    asks: function.body.Asks(needs, λ (b: Nat) => needs(k, b)), depth: Nat):
+    MayCallNext<M>(site, stack, top, below, rooms, k, counts, needs, function, depth + 1, prog,
+        function.emit_levels(depth + 1, prog, k, placement, names, counts, rooms)) {
+    let saves = placement_saves(placement);
+    let asked = placement_slots(placement);
+    let short = placement_short(placement);
+    let ins = word_ports(function.parameters);
+    let step = function.frame(asked, saves) + 24;
+    let base = rooms(k) - level_room(0, step, depth + 1);
+    match same: function.lent.same(lent_count(counts, k)) {
+        False => trivial,
+        True => match ok: function.roomy_at(depth + 1, rooms, k, asked, saves) { False => trivial, True => (match input_file(ins, parameter_registers()) as λ entry =>
+            ((values: Valuation()) → (g: Gprs) → PortsAt(values, ins, parameter_registers(), g) →
+                entry.All(λ (file: File) => file.Represents(values, g))) →
+            entry.All(λ (_: File) => ins.len() <= parameter_registers().len()) →
+            MayCallNext<M>(site, stack, top, below, rooms, k, counts, needs, function, depth + 1, prog, match entry {
+                None => None,
+                Some(file) => function.emit_body(asked, saves, short, prog, k, k + 1, file, placement_body(placement), names, counts),
+            }) {
+            None => λ _ _ => trivial,
+            Some(file) => λ entered fits => {
+                let sound = function.roomy_levels_sound(rooms, k, depth + 1, asked, saves, Bool::is_true_of_eq(ok));
+                (match function.emit_body(asked, saves, short, prog, k, k + 1, file, placement_body(placement), names, counts) as λ o =>
+                    (function.emit_body(asked, saves, short, prog, k, k + 1, file, placement_body(placement), names, counts) = o) →
+                    MayCallNext<M>(site, stack, top, below, rooms, k, counts, needs, function, depth + 1, prog, o) {
+                    None => λ _ => trivial,
+                    Some(emitted) => λ emits within earlier => {
+                        let label = At(prog, k + 1, Block([]));
+                        let labelled: label.Within(emitted.prog) = j(emits, λ o _ => Grows(label, o),
+                            function.emit_body_labels(asked, saves, short, prog, k, k + 1, file, placement_body(placement), names, counts));
+                        let label_in = Prog::within_trans(labelled, within);
+                        let own = level_room(base, step, depth + 1);
+                        site.calls_lent_room(stack, top, function.tied_effects(below, k, depth + 1), self_rooms(rooms, k, own), rooms, k + 1, counts, needs,
+                            λ f under => match f.eq_dec(k) as λ _ => self_rooms(rooms, k, own)(f) <= rooms(f) {
+                                Inl(at) => j(sym(at), λ m _ => self_rooms(rooms, k, own)(m) <= rooms(m),
+                                    row_fits(self_rooms(rooms, k, own)(k), own, rooms(k), self_rooms_same(rooms, k, own, k, refl), sound.left)),
+                                Inr(differs) => row_same(self_rooms(rooms, k, own)(f), rooms(f), self_rooms_other(rooms, k, own, f, differs)),
+                            },
+                            function.self_calls(asked, saves, short, site, laid, stack, top, below, rooms, k, base, step, counts, needs, prog, file,
+                                placement_body(placement), names, emitted, emits, within, stores, asks, sound.right,
+                                function.lent.same_sound(lent_count(counts, k), same), entered, function.loads_few(fits),
+                                earlier(prog.within_before(k + 1, Block([]), site.program, label_in)), depth + 1))
+                    },
+                })(refl)
+            },
+        })(λ values g placed => input_file_represents(values, g, ins, parameter_registers(), placed), input_file_fits(ins, parameter_registers())) },
+    }
+}
+
+// The theorem for one more function, proved once, whatever its levels.
+theorem Function::emit_levels_calls<M>(self function: Function, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+    stack: Stack<M>(site.fetch, site.data), top: Nat, below: Effects(), rooms: Nat → Nat, k: Nat, counts: List<Nat>, needs: Nat → Nat → Bool,
+    prog: Prog, placement: List<Place>, names: Nat,
+    stores: (b: Nat) → function.body.stores(b).IsTrue() → needs(k, b) = True,
+    asks: function.body.Asks(needs, λ (b: Nat) => needs(k, b))):
+    (levels: Nat) → MayCallNext<M>(site, stack, top, below, rooms, k, counts, needs, function, levels, prog,
+        function.emit_levels(levels, prog, k, placement, names, counts, rooms)) {
+    λ levels => match levels {
+        Zero => program_step<M>(site, laid, stack, top, rooms, counts, needs, function, below, k, prog,
+            function.emit_levels(0, prog, k, placement, names, counts, rooms),
+            function.emit_levels_labels(0, prog, k, placement, names, counts, rooms),
+            λ lending same loan covers => j(same, λ c _ => MayReturnBoth<M>(site, stack, top, below, rooms, k, lending, needs, function, prog,
+                    function.emit_levels(0, prog, k, placement, names, c, rooms)),
+                function.emit_returns(site, laid, stack, top, below, rooms, k, lending, loan, needs, prog, placement, names,
+                    λ b stored => covers(b, is_true_of_eq(needs(k, b), stores(b, stored))),
+                    function.body.asks_within(needs, λ (b: Nat) => needs(k, b), lending.written, covers, asks)))),
+        Succ(depth) => function.emit_levels_self(site, laid, stack, top, below, rooms, k, counts, needs, prog, placement, names, stores, asks, depth),
+    }
+}
+
+// The last function of a program, as the program's effects say it.
+theorem program_next<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), top: Nat, rooms: Nat → Nat, counts: List<Nat>, needs: Nat → Nat → Bool,
+    last: Function, earlier: List<Function>, before: Emitted,
+    earlier_calls: before.prog.Within(site.program) → site.CallsLent(stack, program_effects(earlier), rooms, earlier.len(), counts, needs, top)):
+    (out: Option<Emitted>) →
+    MayCallNext<M>(site, stack, top, program_effects(earlier), rooms, earlier.len(), counts, needs, last, last.levels, before.prog, out) →
+    MayCallLent<M>(site, stack, top, rooms, counts, needs, Cons(last, earlier), out) {
+    λ out => match out {
+        None => λ _ => trivial,
+        Some(emitted) => λ next within => next(within, earlier_calls),
     }
 }
 
@@ -7284,15 +7642,10 @@ theorem emit_functions_calls_lent<M>(site: Site<M>, laid: site.program.laid_out(
                     Some(before) => last.emit_lent(before.prog, earlier.len(), before.placement, before.names, counts, rooms),
                 }) {
                 None => λ _ => trivial,
-                Some(before) => λ earlier_calls => program_step<M>(site, laid, stack, top, rooms, counts, needs, last, earlier, before, earlier_calls,
+                Some(before) => λ earlier_calls => program_next<M>(site, stack, top, rooms, counts, needs, last, earlier, before, earlier_calls,
                     last.emit_lent(before.prog, earlier.len(), before.placement, before.names, counts, rooms),
-                    last.emit_lent_labels(before.prog, earlier.len(), before.placement, before.names, counts, rooms),
-                    λ lending same loan covers => j(same, λ c _ => MayReturnBoth<M>(site, stack, top, program_effects(earlier), rooms, earlier.len(),
-                            lending, needs, last, before.prog, last.emit_lent(before.prog, earlier.len(), before.placement, before.names, c, rooms)),
-                        last.emit_returns(site, laid, stack, top, program_effects(earlier), rooms, earlier.len(), lending, loan, needs, before.prog,
-                            before.placement, before.names,
-                            λ b stores => covers(b, is_true_of_eq(needs(earlier.len(), b), needed.left.left(b, stores))),
-                            last.body.asks_within(needs, λ (b: Nat) => needs(earlier.len(), b), lending.written, covers, needed.left.right)))),
+                    last.emit_levels_calls(site, laid, stack, top, program_effects(earlier), rooms, earlier.len(), counts, needs, before.prog,
+                        before.placement, before.names, needed.left.left, needed.left.right, last.levels)),
             })(emit_functions_calls_lent<M>(site, laid, stack, top, rooms, counts, needs, start, placement, names, earlier, needed.right)),
     }
 }
@@ -7332,8 +7685,8 @@ theorem emit_functions_after_lent_calls_needs<M>(site: Site<M>, laid: site.progr
     })(emit_functions_calls_lent<M>(site, laid, stack, top, rooms, lending.counts, needs, start, placement, names, functions, needed))
 }
 
-theorem Function::emit_lent_grows(self function: Function, prog: Prog, k: Nat, placement: List<Place>, names: Nat, counts: List<Nat>, rooms: Nat → Nat):
-    Grows(prog, function.emit_lent(prog, k, placement, names, counts, rooms)) {
+theorem Function::emit_levels_grows(self function: Function, levels: Nat, prog: Prog, k: Nat, placement: List<Place>, names: Nat, counts: List<Nat>, rooms: Nat → Nat):
+    Grows(prog, function.emit_levels(levels, prog, k, placement, names, counts, rooms)) {
     let saves = placement_saves(placement);
     let asked = placement_slots(placement);
     let short = placement_short(placement);
@@ -7342,19 +7695,24 @@ theorem Function::emit_lent_grows(self function: Function, prog: Prog, k: Nat, p
         label_opened(prog, k, function.loads(), function.slots(asked), saves));
     match function.lent.same(lent_count(counts, k)) {
         False => trivial,
-        True => match function.roomy(rooms, k, asked, saves) { False => trivial, True => match input_file(word_ports(function.parameters), parameter_registers()) as λ entry => Grows(prog, match entry {
+        True => match function.roomy_at(levels, rooms, k, asked, saves) { False => trivial, True => match input_file(word_ports(function.parameters), parameter_registers()) as λ entry => Grows(prog, match entry {
                 None => None,
-                Some(file) => function.emit_body(asked, saves, short, prog, k, k, file, placement_body(placement), names, counts),
+                Some(file) => function.emit_body(asked, saves, short, prog, k, bound_at(k, levels), file, placement_body(placement), names, counts),
             }) {
             None => trivial,
             Some(file) =>
-                (match function.body.emit_calls(saves, function.slots(asked), short, opened, file, placement_body(placement), names, k, counts, function.homes()) as λ e => Grows(opened, e) →
+                (match function.body.emit_calls(saves, function.slots(asked), short, opened, file, placement_body(placement), names, bound_at(k, levels), counts, function.homes()) as λ e => Grows(opened, e) →
                     Grows(prog, match e { None => None, Some(body) => function.closing(asked, saves, body) }) {
                     None => λ _ => trivial,
                     Some(body) => λ grown => function.closing_grows(asked, saves, prog, body, Prog::within_trans(before, grown)),
-                })(function.body.emit_calls_grows(saves, function.slots(asked), short, k, counts, function.homes(), opened, file, placement_body(placement), names)),
+                })(function.body.emit_calls_grows(saves, function.slots(asked), short, bound_at(k, levels), counts, function.homes(), opened, file, placement_body(placement), names)),
         } },
     }
+}
+
+theorem Function::emit_lent_grows(self function: Function, prog: Prog, k: Nat, placement: List<Place>, names: Nat, counts: List<Nat>, rooms: Nat → Nat):
+    Grows(prog, function.emit_lent(prog, k, placement, names, counts, rooms)) {
+    function.emit_levels_grows(function.levels, prog, k, placement, names, counts, rooms)
 }
 
 theorem Function::emit_grows(self function: Function, prog: Prog, k: Nat, placement: List<Place>, names: Nat, rooms: Nat → Nat):
@@ -7588,32 +7946,37 @@ theorem StructuredRegion::emit_calls_quiet(self region: StructuredRegion, saves:
     }
 }
 
-theorem Function::emit_lent_quiet(self function: Function, prog: Prog, k: Nat, placement: List<Place>, names: Nat, rooms: Nat → Nat):
-    Quiets(function.body.quiet(), function.emit_lent(prog, k, placement, names, [], rooms)) {
+theorem Function::emit_levels_quiet(self function: Function, levels: Nat, prog: Prog, k: Nat, placement: List<Place>, names: Nat, rooms: Nat → Nat):
+    Quiets(function.body.quiet(), function.emit_levels(levels, prog, k, placement, names, [], rooms)) {
     let saves = placement_saves(placement);
     let asked = placement_slots(placement);
     let short = placement_short(placement);
     let opened = function_opened(prog, k, function.loads(), function.slots(asked), saves);
     match same: function.lent.same(0) {
         False => trivial,
-        True => match function.roomy(rooms, k, asked, saves) { False => trivial, True => match input_file(word_ports(function.parameters), parameter_registers()) as λ entry => Quiets(function.body.quiet(), match entry {
+        True => match function.roomy_at(levels, rooms, k, asked, saves) { False => trivial, True => match input_file(word_ports(function.parameters), parameter_registers()) as λ entry => Quiets(function.body.quiet(), match entry {
                 None => None,
-                Some(file) => function.emit_body(asked, saves, short, prog, k, k, file, placement_body(placement), names, []),
+                Some(file) => function.emit_body(asked, saves, short, prog, k, bound_at(k, levels), file, placement_body(placement), names, []),
             }) {
             None => trivial,
             Some(file) => j(sym(function.lent.same_sound(0, same)), λ count _ => Quiets(function.body.quiet(),
-                match function.body.emit_calls(saves, function.slots(asked), short, opened, file, placement_body(placement), names, k, [], lent_homes(function.parameters, count, 0)) {
+                match function.body.emit_calls(saves, function.slots(asked), short, opened, file, placement_body(placement), names, bound_at(k, levels), [], lent_homes(function.parameters, count, 0)) {
                     None => None,
                     Some(body) => function.closing(asked, saves, body),
                 }),
-                (match function.body.emit_calls(saves, function.slots(asked), short, opened, file, placement_body(placement), names, k, [], []) as λ e =>
+                (match function.body.emit_calls(saves, function.slots(asked), short, opened, file, placement_body(placement), names, bound_at(k, levels), [], []) as λ e =>
                     Quiets(function.body.quiet(), e) →
                     Quiets(function.body.quiet(), match e { None => None, Some(body) => function.closing(asked, saves, body) }) {
                     None => λ _ => trivial,
                     Some(body) => λ quiet => quiets_of(function.closing(asked, saves, body), function.body.quiet(), quiet),
-                })(function.body.emit_calls_quiet(saves, function.slots(asked), short, k, [], opened, file, placement_body(placement), names))),
+                })(function.body.emit_calls_quiet(saves, function.slots(asked), short, bound_at(k, levels), [], opened, file, placement_body(placement), names))),
         } },
     }
+}
+
+theorem Function::emit_lent_quiet(self function: Function, prog: Prog, k: Nat, placement: List<Place>, names: Nat, rooms: Nat → Nat):
+    Quiets(function.body.quiet(), function.emit_lent(prog, k, placement, names, [], rooms)) {
+    function.emit_levels_quiet(function.levels, prog, k, placement, names, rooms)
 }
 
 theorem emit_functions_after_lent_quiet(start: Prog, placement: List<Place>, names: Nat, rooms: Nat → Nat, functions: List<Function>):

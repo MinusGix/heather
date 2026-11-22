@@ -462,6 +462,20 @@ fn tie_effects(below: Effects(), k: Nat, own: Buffers() → List<BitVec(64)> →
     }
 }
 
+// At its own number a tied table does what its row says, and at another
+// what the table below does.
+theorem tie_effects_own(below: Effects(), k: Nat, own: Buffers() → List<BitVec(64)> → BitVec(64) → List<BitVec(64)> → Buffers() → Type, f: Nat,
+    same: f = k, arguments: List<BitVec(64)>, result: BitVec(64), rest: List<BitVec(64)>, before, after: Buffers()):
+    tie_effects(below, k, own, before, f, arguments, result, rest, after) → own(before, arguments, result, rest, after) {
+    match f.eq_dec(k) { Inl(_) => λ held => held, Inr(differs) => λ _ => false_elim(differs(same)) }
+}
+
+theorem tie_effects_other(below: Effects(), k: Nat, own: Buffers() → List<BitVec(64)> → BitVec(64) → List<BitVec(64)> → Buffers() → Type, f: Nat,
+    differs: f ≠ k, arguments: List<BitVec(64)>, result: BitVec(64), rest: List<BitVec(64)>, before, after: Buffers()):
+    tie_effects(below, k, own, before, f, arguments, result, rest, after) → below(before, f, arguments, result, rest, after) {
+    match f.eq_dec(k) { Inl(same) => λ _ => false_elim(differs(same)), Inr(_) => λ held => held }
+}
+
 // What a function that calls itself (function `k`, over `below`) does
 // `depth` levels deep: what its body does with its own calls answered one
 // level down, and at no level nothing (`Function::level_computes`).
