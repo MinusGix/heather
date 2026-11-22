@@ -73,5 +73,5 @@ theorem raise_letter_native_sourced(): program_sourced(raise_letter_native_progr
 // The program's function 0 evaluates to the source function.
 theorem raise_letter_native_agrees(a0: BitVec(64)): program_eval(raise_letter_native_program(), 0, [a0]) = native_tool_words::raise_letter(a0) {
     cong_fn<List<BitVec(64)>, BitVec(64)>(λ l => first_word(l),
-        program_eval_sources(raise_letter_native_program(), raise_letter_native_evaluable(), raise_letter_native_sources(), raise_letter_native_sourced(), 0, [a0], trivial))
+        program_eval_sources(raise_letter_native_program(), raise_letter_native_evaluable(), trivial, raise_letter_native_sources(), raise_letter_native_sourced(), 0, [a0], trivial))
 }

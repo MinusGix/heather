@@ -618,7 +618,7 @@ fn {prefix}_taken() → List<Nat> {{ {source}::arities }}\n");
 theorem {function}_native_agrees({typed}): {evaluated} = {named}({list}) {{
     cong_fn<List<BitVec(64)>, BitVec(64)>(λ l => first_word(l),
         program_linked_files_sources({prefix}_program(), {source}::arities, link_admits({source}::admits), link_sources_at({source}::sources), {source}::sourced,
-            Nil, {index}, [{list}], trivial, trivial))
+            trivial, Nil, {index}, [{list}], trivial, trivial))
 }}
 ", typed = typed(&parameters)));
         let imported = |text: &str| text.lines().any(|line| line.strip_prefix("import ").and_then(|rest| rest.strip_suffix(';')) == Some(module.as_str()));
@@ -1887,7 +1887,7 @@ theorem {prefix}_sourced(): program_sourced({prefix}_program(), {sources}) {{
 // The program's function {f} evaluates to the source function.
 theorem {prefix}_agrees({typed}): program_eval({prefix}_program(), {f}, {list}) = {call} {{
     cong_fn<List<BitVec(64)>, BitVec(64)>(λ l => first_word(l),
-        program_eval_sources({prefix}_program(), {prefix}_evaluable(), {sources}, {prefix}_sourced(), {f}, {list}, trivial))
+        program_eval_sources({prefix}_program(), {prefix}_evaluable(), trivial, {sources}, {prefix}_sourced(), {f}, {list}, trivial))
 }}
 ")
 }

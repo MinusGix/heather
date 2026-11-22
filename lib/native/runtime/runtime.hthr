@@ -1309,12 +1309,13 @@ theorem Compile::root_also<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<L
     earlier: List<Function>, arities: List<Nat>,
     sourced: program_linked_files(Cons(Compile::linked(f, c, links), earlier), arities, link_admits(adm), link_sources_at(srcs)),
     named: Sig::links_fit(c.world.tys, c.world.sigs.tail(), links.tail(), linked_arity(earlier, arities.tail())).IsTrue(),
+    flat: program_flat(earlier).IsTrue(),
     words: List<BitVec(64)>, n: arity_fits(Some(Compile::arity(f, c)), words.len()).IsTrue(), admits: Compile::admits(f, c, words).IsTrue()):
     program_eval_also(Cons(Compile::linked(f, c, links), earlier), words) =
         Ty::rest_words(c.world.at(c.callees, Nil).tys, c.reflected.result, Ty::apply_words(c.world.at(c.callees, Nil).tys, c.reflected.params, c.reflected.result,
             Ty::lent_at(c.world.at(c.callees, Nil).tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed(Nil), f, Nil), words)) {
     let call = program_answers_over(Nil, earlier);
-    let agree = program_linked_files_sources(earlier, arities.tail(), link_admits(adm), link_sources_at(srcs), sourced.right, Nil);
+    let agree = program_linked_files_sources(earlier, arities.tail(), link_admits(adm), link_sources_at(srcs), sourced.right, flat, Nil);
     cong_fn(λ (xs: List<BitVec(64)>) => xs.tail(),
         Compile::part(f, c, srcs, adm, links, linked_arity(earlier, arities.tail()), linked, admitted, named).right(Nil, call, agree, words, n, admits))
 }
@@ -2713,7 +2714,7 @@ fn runtime_also_decls(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes
                 // Its words admitted as `f::agrees` has them, and each enum
                 // parameter's value stated as there.
                 let lhs = ap(eval_also, [linked.program, words_e]);
-                let proof <- finish(lhs, ap(root_also, linked.root ++ [ap(tail, [Blank, linked.program]), linked.arities, linked.sourced, Hd(trivial_h),
+                let proof <- finish(lhs, ap(root_also, linked.root ++ [ap(tail, [Blank, linked.program]), linked.arities, linked.sourced, Hd(trivial_h), Hd(trivial_h),
                     words_e, Hd(trivial_h), admitted]));
                 // The record's fields' names, as `f::names` spells names:
                 // what `compile-x86` states the two words as.
@@ -3077,7 +3078,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
             let admits_of <- runtime_global(name_of(link_admits));
             let admitting <- runtime_admitting(Hd(trivial_h), tys_e, q);
             let admitted <- runtime_admitted(admitting, rfun.params, at_ys, tails);
-            let evaluated = ap(eval_sources, [linked.program, linked.arities, ap(admits_of, [linked.adm]), ap(sources, [linked.srcs]), linked.sourced, no_file, root,
+            let evaluated = ap(eval_sources, [linked.program, linked.arities, ap(admits_of, [linked.adm]), ap(sources, [linked.srcs]), linked.sourced, Hd(trivial_h), no_file, root,
                 words_e, Hd(trivial_h), admitted]);
             let agreed <- runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), recs, rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs,
                 λ args => runtime_agree_rhs(low, wide, count, reprs, recs, rfun, f, args).bind(λ e => pure(runtime_enum_result(enum_word, tys_e, rfun.result, e))),
@@ -3148,7 +3149,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
             let admitting <- runtime_admitting(Hd(trivial_h), tys_e, q);
             let admitted <- runtime_admitted(admitting, rfun.params, at_ys, tails);
             let lhs = ap(program_eval_over, [Local(c.ref), linked.program, root, words_e]);
-            let evaluated = ap(eval_sources, [linked.program, linked.arities, ap(admits_of, [linked.adm]), ap(sources, [linked.srcs]), linked.sourced, Local(c.ref), root,
+            let evaluated = ap(eval_sources, [linked.program, linked.arities, ap(admits_of, [linked.adm]), ap(sources, [linked.srcs]), linked.sourced, Hd(trivial_h), Local(c.ref), root,
                 words_e, Hd(trivial_h), admitted]);
             let agreed <- runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), recs, rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs,
                 λ args => pure(runtime_result(reprs, rfun.result, ap(Global(f), at_file(args)))), evaluated, match ys.last() { Some(y) => Some(y), None => Some(c.ref) });
@@ -4210,7 +4211,7 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
     let file_e = ap(runtime_at(buffers, 1), [Local(span1.ref), Local(rest1.ref)]);
     let ran = ap(program_run, [sl.program, file_e, root, words_e]);
     let ended: Expr → Expr = λ g => ap(end_of, [Local(rest1.ref), ap(g, own_at(Local(span1.ref), Local(rest1.ref), Cons(place1.ref, xs1)))]);
-    let answered = ap(answers, [Blank, sl.program, sl.arities, sl.stills, span_file, ap(span_sources, [sl.srcs]), parts,
+    let answered = ap(answers, [Blank, sl.program, sl.arities, sl.stills, span_file, ap(span_sources, [sl.srcs]), parts, Hd(trivial_h),
         ap(span_pair, [Local(span1.ref), Local(rest1.ref)]), root, words_e, Hd(trivial_h)]);
     // What the link answers with is the function through its instance
     // (`CompileSpan::source`), on the code's words. For a function written
