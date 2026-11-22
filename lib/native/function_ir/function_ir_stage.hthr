@@ -79,7 +79,7 @@ theorem tie_effects_map(below, others: Effects(), k: Nat,
     grows: (before: Buffers()) → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) → (after: Buffers()) →
         own(before, arguments, result, extra, after) → more(before, arguments, result, extra, after)):
     (before: Buffers()) → (f: Nat) → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) → (after: Buffers()) →
-    tie_effects(below, k, own)(before, f, arguments, result, extra, after) → tie_effects(others, k, more)(before, f, arguments, result, extra, after) {
+    tie_effects(below, k, own, before, f, arguments, result, extra, after) → tie_effects(others, k, more, before, f, arguments, result, extra, after) {
     λ before f arguments result extra after => match f.eq_dec(k) as λ d =>
         (match d as λ _ => Type { Inl(_) => own(before, arguments, result, extra, after), Inr(_) => below(before, f, arguments, result, extra, after) }) →
         (match d as λ _ => Type { Inl(_) => more(before, arguments, result, extra, after), Inr(_) => others(before, f, arguments, result, extra, after) }) {
