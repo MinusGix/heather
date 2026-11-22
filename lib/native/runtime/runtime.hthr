@@ -2732,6 +2732,22 @@ fn Ty::any_enum(ps: List<Ty>) → Bool { ps.any_bit(λ p => match p { Enum(_) =>
 // held by its repr (the reprs come first in the table).
 fn runtime_is_record(reprs_n: Nat, i: Nat) → Bool { reprs_n.leb(i) }
 
+// Whether a record parameter's words read back as it only up to a proof
+// (`runtime_record_agrees`): a record with a field narrower than a word
+// (design §16.18). A record of 64-bit words reads back as itself by
+// conversion (each field off its word, then the record's eta), so it is
+// quantified as itself with no rewrite, which keeps the comparison of its
+// agreement to the reading conversion already sees.
+fn runtime_reads_back(reprs_n: Nat, recs: List<RecShape>, i: Nat) → Bool {
+    match runtime_is_record(reprs_n, i) {
+        False => False,
+        True => match recs.nth(i - reprs_n) {
+            Some(r) => r.codes.any_bit(λ c => match c { Word(w) => !w.same(64), _ => True }),
+            None => False,
+        },
+    }
+}
+
 fn runtime_agree_types(word: Handle, reprs_n: Nat, ps: List<Ty>, own: List<Handle>) → List<Handle> {
     match ps {
         Nil => [],
@@ -2784,7 +2800,7 @@ fn runtime_enum_result(enum_word, tys_e: Expr, r: Ty, e: Expr) → Expr {
 // `f`'s arguments with parameter `j` as `here`, an enum before it as its
 // value and one after as what its words read back as (`tails`, from
 // `runtime_word_tails`: the words after each parameter's are the next's).
-fn runtime_enum_args(read_e, read_r, tys_e: Expr, reprs_n: Nat, ps: List<Ty>, ys, tails: List<Expr>, j: Nat, here: Expr, n: Nat) → List<Expr> {
+fn runtime_enum_args(read_e, read_r, tys_e: Expr, reprs_n: Nat, recs: List<RecShape>, ps: List<Ty>, ys, tails: List<Expr>, j: Nat, here: Expr, n: Nat) → List<Expr> {
     match ps {
         Nil => [],
         Cons(p, rest) => match ys {
@@ -2793,13 +2809,13 @@ fn runtime_enum_args(read_e, read_r, tys_e: Expr, reprs_n: Nat, ps: List<Ty>, ys
                 True => here,
                 False => match p {
                     Enum(i) => match n.leb(j) { True => y, False => ap(read_e, [tys_e, NatLit(i), y, tails.nth(n + 1).unwrap_or(Blank)]) },
-                    Named(i) => match runtime_is_record(reprs_n, i).and(j.leb(n)) {
+                    Named(i) => match runtime_reads_back(reprs_n, recs, i).and(j.leb(n)) {
                         True => ap(read_r, [tys_e, NatLit(i), y, tails.nth(n + 1).unwrap_or(Blank)]),
                         False => y,
                     },
                     _ => y,
                 },
-            }, runtime_enum_args(read_e, read_r, tys_e, reprs_n, rest, more, tails, j, here, n + 1)),
+            }, runtime_enum_args(read_e, read_r, tys_e, reprs_n, recs, rest, more, tails, j, here, n + 1)),
         },
     }
 }
@@ -2872,7 +2888,7 @@ fn runtime_admitting(trivial_e, tys_e: Expr, q: RtQ) → Tac<Admitting> {
     pure(Admitting(intro, enum_admits, admits, admits_all, trivial_e, tys_e, q))
 }
 
-fn runtime_at_enums(trivial_e, tys_e: Expr, reprs_n: Nat, ps: List<Ty>, own: List<Handle>, ys, tails: List<Expr>, left: List<Ty>, j: Nat, lhs: Expr,
+fn runtime_at_enums(trivial_e, tys_e: Expr, reprs_n: Nat, recs: List<RecShape>, ps: List<Ty>, own: List<Handle>, ys, tails: List<Expr>, left: List<Ty>, j: Nat, lhs: Expr,
     rhs: List<Expr> → Tac<Expr>, evaluated: Expr, under: Option<LocalRef>) → Tac<Expr> {
     match left {
         Nil => pure(evaluated),
@@ -2886,17 +2902,17 @@ fn runtime_at_enums(trivial_e, tys_e: Expr, reprs_n: Nat, ps: List<Ty>, own: Lis
                 // Parameters before `j` are their values, `j` is `z`, and
                 // those after are what their words read back as.
                 let read_r <- runtime_global(name_of(runtime_record_read));
-                let at = λ (here: Expr) => runtime_enum_args(read_e, read_r, tys_e, reprs_n, ps, ys, tails, j, here, 0);
+                let at = λ (here: Expr) => runtime_enum_args(read_e, read_r, tys_e, reprs_n, recs, ps, ys, tails, j, here, 0);
                 let motive_rhs <- rhs(at(Local(z.ref)));
                 let eq_at <- runtime_global(name_of(runtime_eq_at));
                 let motive = ap(eq_at, [Blank, Blank, lhs, Lam(z.ref, motive_rhs)]);
                 let next = ap(enum_agrees, [tys_e, NatLit(i), y, tails.nth(j + 1).unwrap_or(Blank), trivial_e, motive, evaluated]);
-                runtime_at_enums(trivial_e, tys_e, reprs_n, ps, own, ys, tails, later, j + 1, lhs, rhs, next, under)
+                runtime_at_enums(trivial_e, tys_e, reprs_n, recs, ps, own, ys, tails, later, j + 1, lhs, rhs, next, under)
             },
             // A record (not a type held by its repr) as itself, read back
             // off its fields' words (`runtime_record_agrees`).
-            Named(i) => match runtime_is_record(reprs_n, i) {
-                False => runtime_at_enums(trivial_e, tys_e, reprs_n, ps, own, ys, tails, later, j + 1, lhs, rhs, evaluated, under),
+            Named(i) => match runtime_reads_back(reprs_n, recs, i) {
+                False => runtime_at_enums(trivial_e, tys_e, reprs_n, recs, ps, own, ys, tails, later, j + 1, lhs, rhs, evaluated, under),
                 True => {
                     let read_e <- runtime_global(name_of(runtime_enum_read));
                     let read_r <- runtime_global(name_of(runtime_record_read));
@@ -2904,15 +2920,15 @@ fn runtime_at_enums(trivial_e, tys_e: Expr, reprs_n: Nat, ps: List<Ty>, own: Lis
                     let y = ys.nth(j).unwrap_or(Blank);
                     let ty <- match own.nth(j) { Some(t) => pure(t), None => runtime_fail("a record parameter without its type") };
                     let z <- assume(Hd(ty), "z", under).or_fail("runtime: a record's value: ");
-                    let at = λ (here: Expr) => runtime_enum_args(read_e, read_r, tys_e, reprs_n, ps, ys, tails, j, here, 0);
+                    let at = λ (here: Expr) => runtime_enum_args(read_e, read_r, tys_e, reprs_n, recs, ps, ys, tails, j, here, 0);
                     let motive_rhs <- rhs(at(Local(z.ref)));
                     let eq_at <- runtime_global(name_of(runtime_eq_at));
                     let motive = ap(eq_at, [Blank, Blank, lhs, Lam(z.ref, motive_rhs)]);
                     let next = ap(record_agrees, [tys_e, NatLit(i), y, tails.nth(j + 1).unwrap_or(Blank), trivial_e, motive, evaluated]);
-                    runtime_at_enums(trivial_e, tys_e, reprs_n, ps, own, ys, tails, later, j + 1, lhs, rhs, next, under)
+                    runtime_at_enums(trivial_e, tys_e, reprs_n, recs, ps, own, ys, tails, later, j + 1, lhs, rhs, next, under)
                 },
             },
-            _ => runtime_at_enums(trivial_e, tys_e, reprs_n, ps, own, ys, tails, later, j + 1, lhs, rhs, evaluated, under),
+            _ => runtime_at_enums(trivial_e, tys_e, reprs_n, recs, ps, own, ys, tails, later, j + 1, lhs, rhs, evaluated, under),
         },
     }
 }
@@ -3053,7 +3069,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
             let admitted <- runtime_admitted(admitting, rfun.params, at_ys, tails);
             let evaluated = ap(eval_sources, [linked.program, linked.arities, ap(admits_of, [linked.adm]), ap(sources, [linked.srcs]), linked.sourced, no_file, root,
                 words_e, Hd(trivial_h), admitted]);
-            let agreed <- runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs,
+            let agreed <- runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), recs, rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs,
                 λ args => runtime_agree_rhs(low, wide, count, reprs, recs, rfun, f, args).bind(λ e => pure(runtime_enum_result(enum_word, tys_e, rfun.result, e))),
                 evaluated, ys.last());
             let tail: List<Decl> = [
@@ -3085,7 +3101,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
                 })
             };
             let finish = λ (lhs_also: Expr) (proof: Expr) =>
-                runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs_also, rest_at, proof, ys.last());
+                runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), recs, rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs_also, rest_at, proof, ys.last());
             let also <- runtime_also_decls(name, f, rfun, q, ts, world_e, table_e, rt_e, linked, runtime_params_of(ys), words_e, rest,
                 runtime_result_names(reprs, recs, rfun.result), admitted, finish);
             pure(head.append(pin).append(made).append(linked_decls).append(tail).append(also))
@@ -3124,7 +3140,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
             let lhs = ap(program_eval_over, [Local(c.ref), linked.program, root, words_e]);
             let evaluated = ap(eval_sources, [linked.program, linked.arities, ap(admits_of, [linked.adm]), ap(sources, [linked.srcs]), linked.sourced, Local(c.ref), root,
                 words_e, Hd(trivial_h), admitted]);
-            let agreed <- runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs,
+            let agreed <- runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), recs, rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs,
                 λ args => pure(runtime_result(reprs, rfun.result, ap(Global(f), at_file(args)))), evaluated, match ys.last() { Some(y) => Some(y), None => Some(c.ref) });
             let tail: List<Decl> = [
                 Decl(AsTheorem, name ++ "::agrees_over", runtime_params_of(Cons(c.ref, ys)),
