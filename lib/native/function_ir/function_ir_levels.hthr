@@ -352,3 +352,103 @@ theorem program_eval_linked_where(functions: List<Function>, arities: List<Nat>,
     cong_fn<List<BitVec(64)>, BitVec(64)>(λ l => first_word(l),
         program_linked_where(functions, arities, admits, sources, linked, buffers, f, words, fits, admitted, defined))
 }
+
+// ---------------------------------------------------------------------------
+// More levels
+//
+// A function is checked against its sources once, whatever levels it has:
+// the check reads its levels only to say whether its own entry is among
+// its callees (`linked_last_arity`). So a linked program stays linked with
+// each function that has levels given more of them: what a `runtime fn`
+// that calls itself publishes at one level, a compile gives as many as its
+// stack budget holds.
+
+// The function at `levels` levels.
+fn Function::leveled(self function: Function, levels: Nat) → Function {
+    Function(function.parameters, function.body, function.result, lent := function.lent, also := function.also, levels := levels,
+        fixed := function.fixed)
+}
+
+// A function with `levels` levels at `more + 1` of them, one with none as
+// it is.
+fn Function::deepened_at(self function: Function, levels, more: Nat) → Function {
+    match levels { Zero => function, Succ(_) => function.leveled(more + 1) }
+}
+
+fn Function::deepened(self function: Function, more: Nat) → Function { function.deepened_at(function.levels, more) }
+
+// A program, each function that has levels at `more + 1` of them.
+fn program_deepened(functions: List<Function>, more: Nat) → List<Function> {
+    match functions { Nil => Nil, Cons(last, earlier) => Cons(last.deepened(more), program_deepened(earlier, more)) }
+}
+
+theorem program_deepened_len(functions: List<Function>, more: Nat): program_deepened(functions, more).len() = functions.len() {
+    match functions { Nil => refl, Cons(_, earlier) => cong_fn(λ (n: Nat) => n + 1, program_deepened_len(earlier, more)) }
+}
+
+theorem linked_arity_deepened(functions: List<Function>, more: Nat): (arities: List<Nat>) →
+    linked_arity(program_deepened(functions, more), arities) = linked_arity(functions, arities) {
+    match functions {
+        Nil => λ arities => refl,
+        Cons(last, earlier) => λ arities =>
+            j(sym(program_deepened_len(earlier, more)), λ n _ =>
+                    (λ (f: Nat) => match f.eq_dec(n) { Inl(_) => arities.nth(0), Inr(_) => linked_arity(program_deepened(earlier, more), arities.tail(), f) })
+                        = linked_arity(Cons(last, earlier), arities),
+                j(sym(linked_arity_deepened(earlier, more, arities.tail())), λ t _ =>
+                        (λ (f: Nat) => match f.eq_dec(earlier.len()) { Inl(_) => arities.nth(0), Inr(_) => t(f) }) = linked_arity(Cons(last, earlier), arities),
+                    refl)),
+    }
+}
+
+// What a linked program says of one function: its calls fit the functions
+// before it (`below`, `n` of them) and itself where it has levels, and it
+// answers as its source over any calls that answer as theirs.
+fn Function::LinkedAt(self last: Function, below: Nat → Option<Nat>, n, levels: Nat, arities: List<Nat>, admits: Nat → List<BitVec(64)> → Type,
+    sources: Buffers() → Answers()) → Type {
+    last.calls_fit(self_table(below, n, levels, arities.nth(0))).IsTrue()
+        ∧ ((buffers: Buffers()) → (call: Answers()) → Answers::Agree(call, sources(buffers), self_table(below, n, levels, arities.nth(0)), admits) →
+            (words: List<BitVec(64)>) → arity_fits(arities.nth(0), words.len()).IsTrue() → admits(n, words) →
+            last.eval_words(call, words, buffers := buffers) = sources(buffers)(n, words))
+}
+
+theorem Function::deepened_linked_at(self last: Function, more: Nat, below: Nat → Option<Nat>, n: Nat, arities: List<Nat>,
+    admits: Nat → List<BitVec(64)> → Type, sources: Buffers() → Answers()): (levels: Nat) → (last.levels = levels) →
+    last.LinkedAt(below, n, levels, arities, admits, sources) →
+    last.deepened_at(levels, more).LinkedAt(below, n, last.deepened_at(levels, more).levels, arities, admits, sources) {
+    λ levels => match levels as λ l => (last.levels = l) → last.LinkedAt(below, n, l, arities, admits, sources) →
+        last.deepened_at(l, more).LinkedAt(below, n, last.deepened_at(l, more).levels, arities, admits, sources) {
+        Zero => λ e linked => j(sym(e), λ l _ => last.LinkedAt(below, n, l, arities, admits, sources), linked),
+        Succ(_) => λ _ linked => ⟨linked.left, λ buffers call agree words fits admitted => linked.right(buffers, call, agree, words, fits, admitted)⟩,
+    }
+}
+
+theorem program_linked_files_deepened(functions: List<Function>, more: Nat): (arities: List<Nat>) → (admits: Nat → List<BitVec(64)> → Type) →
+    (sources: Buffers() → Answers()) → program_linked_files(functions, arities, admits, sources) →
+    program_linked_files(program_deepened(functions, more), arities, admits, sources) {
+    match functions {
+        Nil => λ arities admits sources _ => trivial,
+        Cons(last, earlier) => λ arities admits sources linked => {
+            let deep = last.deepened(more);
+            let own: deep.LinkedAt(linked_arity(earlier, arities.tail()), earlier.len(), deep.levels, arities, admits, sources) =
+                last.deepened_linked_at(more, linked_arity(earlier, arities.tail()), earlier.len(), arities, admits, sources, last.levels, refl, linked.left);
+            let named = j(sym(linked_arity_deepened(earlier, more, arities.tail())), λ t _ =>
+                deep.LinkedAt(t, earlier.len(), deep.levels, arities, admits, sources), own);
+            ⟨j(sym(program_deepened_len(earlier, more)), λ n _ =>
+                    deep.LinkedAt(linked_arity(program_deepened(earlier, more), arities.tail()), n, deep.levels, arities, admits, sources), named),
+                program_linked_files_deepened(earlier, more, arities.tail(), admits, sources, linked.right)⟩
+        },
+    }
+}
+
+// So the program at more levels answers as its sources wherever it is
+// defined: what a certificate of a compiled recursion cites, its levels
+// the compile's.
+theorem program_eval_deepened_where(functions: List<Function>, arities: List<Nat>, admits: Nat → List<BitVec(64)> → Type,
+    sources: Buffers() → Answers(), linked: program_linked_files(functions, arities, admits, sources), more: Nat, buffers: Buffers(), f: Nat,
+    words: List<BitVec(64)>, fits: arity_fits(linked_arity(functions, arities, f), words.len()).IsTrue(), admitted: admits(f, words),
+    defined: program_defined_over(buffers, program_deepened(functions, more))(f, words).IsTrue()):
+    program_eval_over(buffers, program_deepened(functions, more))(f, words) = first_word(sources(buffers)(f, words)) {
+    program_eval_linked_where(program_deepened(functions, more), arities, admits, sources,
+        program_linked_files_deepened(functions, more, arities, admits, sources, linked), buffers, f, words,
+        j(sym(linked_arity_deepened(functions, more, arities)), λ t _ => arity_fits(t(f), words.len()).IsTrue(), fits), admitted, defined)
+}
