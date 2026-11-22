@@ -1567,6 +1567,30 @@ fn Compile::tested_rank<F>(f: F, c: Compile<F>(f), measure: Ty::ArrowsTo(c.world
     Ty::tested(c.world.tys, Sig::at(c.world.sigs, 1).params, Compile::ranked(f, c, measure, more))
 }
 
+// What a generator spells a function's test with, where one function's
+// meets another's (a caller's callee's test against the callee's own):
+// the instance's types and parameters read by pattern, as
+// `Compile::uncurried` reads them. Through the class's members, a caller's
+// and a callee's would be two applications of one member, which the kernel
+// compares function against function before it unfolds either
+// (issues/runtime-link-compares-functions.md).
+fn Compile::tys_of<F>(f: F, c: Compile<F>(f)) → Table { match c { Compile(_, World(tys, _, _, _), _, _, _, _, _) => tys } }
+
+fn Compile::params_of<F>(f: F, c: Compile<F>(f)) → List<Ty> { match c { Compile(reflected, _, _, _, _, _, _) => reflected.params } }
+
+fn Compile::Test<F>(f: F, c: Compile<F>(f)) → Type { Ty::Arrows(Compile::tys_of(f, c), Compile::params_of(f, c), Bit) }
+
+// A test, stated at that type.
+fn Compile::as_test<F>(f: F, c: Compile<F>(f), test: Compile::Test(f, c)) → Compile::Test(f, c) { test }
+
+fn Compile::always_at<F>(f: F, c: Compile<F>(f)) → Compile::Test(f, c) {
+    Ty::arrows_const(Compile::tys_of(f, c), Compile::params_of(f, c), Bit, True)
+}
+
+fn Compile::tested_at<F>(f: F, c: Compile<F>(f), test: Compile::Test(f, c)) → List<BitVec(64)> → Bool {
+    Ty::tested(Compile::tys_of(f, c), Compile::params_of(f, c), test)
+}
+
 // A function's callees' tests on words, an entry each: what the program's
 // tests must be at the functions `links` names.
 fn Compile::callee_tests<F>(f: F, c: Compile<F>(f), oks: Tm::Tests(c.world.tys, c.world.sigs.tail())) → List<List<BitVec(64)> → Bool> {
@@ -3837,7 +3861,7 @@ fn runtime_descent(name: String, rfun: Fun, q: RtQ, ts: RtTypes, inst: List<Expr
 // with a test of its own) leaves the program its definedness premise.
 
 // What the assembly names.
-record RtTestG { code_of: Expr, total_code: Expr, test_code: Expr, always: Expr, asks_nothing: Expr, test: Expr, ranked: Expr, tested: Expr, tested_rank: Expr,
+record RtTestG { code_of: Expr, total_code: Expr, test_code: Expr, always: Expr, asks_nothing: Expr, test: Expr, ranked: Expr, tested: Expr, as_test: Expr,
     callee_tests: Expr, other_tests: Expr, within_flat: Expr, within_leveled: Expr, earlier: Expr, arities: Expr, both: Expr, rfl: Expr, trivial: Expr,
     yes: Expr, plain: Expr, pair: Expr, function_t: Expr, nth: Expr }
 
@@ -3845,12 +3869,12 @@ fn runtime_test_globals(q: RtQ, ts: RtTypes) → Tac<RtTestG> {
     let code_of <- runtime_global(name_of(Compile::code_of));
     let total_code <- runtime_global(name_of(Compile::total_code));
     let test_code <- runtime_global(name_of(Compile::test_code));
-    let always <- runtime_global(name_of(Compile::always));
+    let always <- runtime_global(name_of(Compile::always_at));
     let asks_nothing <- runtime_global(name_of(Compile::asks_nothing));
     let test <- runtime_global(name_of(Compile::test));
     let ranked <- runtime_global(name_of(Compile::ranked));
-    let tested <- runtime_global(name_of(Compile::tested));
-    let tested_rank <- runtime_global(name_of(Compile::tested_rank));
+    let tested <- runtime_global(name_of(Compile::tested_at));
+    let as_test <- runtime_global(name_of(Compile::as_test));
     let callee_tests <- runtime_global(name_of(Compile::callee_tests));
     let other_tests <- runtime_global(name_of(Compile::other_tests));
     let within_flat <- runtime_global(name_of(Compile::within_flat));
@@ -3863,12 +3887,13 @@ fn runtime_test_globals(q: RtQ, ts: RtTypes) → Tac<RtTestG> {
     let pair <- runtime_global(name_of(Pair::of));
     let nth <- runtime_global(name_of(List::nth));
     let shapes <- runtime_type_of(name_of(runtime_w_shape)).bind(λ h => runtime_ctors_at(h));
-    pure(RtTestG(code_of, total_code, test_code, always, asks_nothing, test, ranked, tested, tested_rank, callee_tests, other_tests, within_flat, within_leveled,
+    pure(RtTestG(code_of, total_code, test_code, always, asks_nothing, test, ranked, tested, as_test, callee_tests, other_tests, within_flat, within_leveled,
         earlier, arities, both, rfl, Hd(trivial_h), ap(rfl, [Blank, q.boolean(True)]), ap(rfl, [Blank, runtime_at(shapes, 0)]), pair, Hd(ts.function), nth))
 }
 
 // One function's share: `kind` 0 asked nothing, 1 its calls' test, 2 a
-// recursion's measure; its typed test as a function of the levels, held;
+// recursion's measure; its typed test as a function of the levels, held,
+// at the type a generator spells (`Compile::Test`);
 // its callees' tests and its code's definedness, at the levels `more`; a
 // recursion's measure.
 record RtPart { kind: Nat, test: Expr, oks: Expr, defined: Expr, measure: Expr }
@@ -3906,7 +3931,7 @@ fn runtime_part(g: RtTestG, front: List<Expr>, links: List<Nat>, own: Bool, name
             };
             found.bind(λ o => match o {
                 None => pure(None),
-                Some(md) => runtime_held(Lam(levels, ap(g.ranked, inst ++ [md.fst, Local(levels)])), "`" ++ name ++ "`'s test").bind(λ t =>
+                Some(md) => runtime_held(Lam(levels, ap(g.as_test, inst ++ [ap(g.ranked, inst ++ [md.fst, Local(levels)])])), "`" ++ name ++ "`'s test").bind(λ t =>
                     pure(Some(RtPart(2, t, g.trivial, md.snd, md.fst)))),
             })
         },
@@ -3919,7 +3944,7 @@ fn runtime_part(g: RtTestG, front: List<Expr>, links: List<Nat>, own: Bool, name
                     let p = ap(g.test_code, inst ++ facts ++ [oks]);
                     infer(p).bind(λ c => match c {
                         Refused(_) => pure(None),
-                        Accepted(_) => runtime_held(Lam(levels, ap(g.test, inst ++ [runtime_oks(g, levels, done, callees).unwrap_or(Blank)])),
+                        Accepted(_) => runtime_held(Lam(levels, ap(g.as_test, inst ++ [ap(g.test, inst ++ [runtime_oks(g, levels, done, callees).unwrap_or(Blank)])])),
                             "`" ++ name ++ "`'s test").bind(λ t => pure(Some(RtPart(1, t, oks, p, g.trivial)))),
                     })
                 },
@@ -3955,12 +3980,7 @@ fn runtime_parts(g: RtTestG, fuel: Nat, fronts: List<List<Expr>>, links: List<Li
 }
 
 // A function's test on words, as the program's list names it.
-fn runtime_tested(g: RtTestG, front: List<Expr>, p: RtPart, more: LocalRef) → Expr {
-    match p.kind.same(2) {
-        True => ap(g.tested_rank, front.take(3) ++ [p.measure, Local(more)]),
-        False => ap(g.tested, front.take(3) ++ [ap(p.test, [Local(more)])]),
-    }
-}
+fn runtime_tested(g: RtTestG, front: List<Expr>, p: RtPart, more: LocalRef) → Expr { ap(g.tested, front.take(3) ++ [ap(p.test, [Local(more)])]) }
 
 // The parts' conjunction, the last function's first; None where one does
 // not check.
