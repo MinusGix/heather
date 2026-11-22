@@ -5103,32 +5103,35 @@ fn runtime_recursive_callee(name: String, rfun: Fun, callees: List<Nat>, sigs: L
 fn runtime_judged(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, world: World, k: Known, reflected: Pair<Fun, List<Nat>>, lents: List<Nat>,
     reprs: List<ReprEntry>, recs: List<RecShape>, callee_sigs: List<Sig>) → Tac<List<Decl>> {
     match Fun::judge(rfun, world) {
-        // A call of itself that is not its last act: a procedure, where it
-        // calls nothing else.
         // A function that `decreases` and whose call of itself is not its
         // last act: its own callee (`Fun::own_callee`), an ordinary
-        // function of words whose table lists it twice.
-        Refused(why) => lookup(name ++ "::body").bind(λ step => match (match step { Accepted(_) => rfun.body.calls_self(), Refused(_) => False }) {
+        // function of words whose table lists it twice. A tail call the
+        // loop's judgment refuses stays refused with its reason, and so
+        // does a recursion lent a span, which is not built.
+        Refused(why) => lookup(name ++ "::body").bind(λ step => match (match step { Accepted(_) => rfun.body.calls_self_inside(), Refused(_) => False }) {
             False => fail("`" ++ name ++ "` cannot be a runtime fn under the default setup: " ++ why, []),
-            True => {
-                let callee = rfun.own_callee();
-                let table = Cons(f.id, reflected.snd);
-                let sigs2 = Cons(rfun.sig(), sigs);
-                let world2 = World(world.tys, sigs2, Sig::sems_default(world.tys, sigs2));
-                match Fun::judge(callee, world2) {
-                    Refused(why2) => fail("`" ++ name ++ "` cannot be a runtime fn under the default setup: " ++ why2, []),
-                    Ok => match Setup::lowers(Fun::lower_any(callee, world2)) {
-                        False => fail("`" ++ name ++ "`: the default setup's lowering refused it though its judgment accepted it (a gap in `Fun::judge`)", []),
-                        True => runtime_link(4096, k, [LinkFrame(f.id, name, table, table.drop(1), None)], Linking([], [], [], [])).bind(λ l =>
-                            runtime_publish(name, f, callee, sigs2, table, Cons(rfun.lent, lents), l, reprs, recs := recs, own := True)).bind(λ decls =>
-                            // The procedure lane's theorems beside them, until
-                            // statements call a recursion through its program.
-                            match (match callee_sigs { Nil => rfun.recursive_ptm(), Cons(_, _) => None }) {
-                                Some(p) => runtime_recursive(name, f, rfun, p).bind(λ old => pure(decls.append(old.drop(1)))),
-                                None => pure(decls),
-                            }),
-                    },
-                }
+            True => match rfun.lent {
+                Succ(_) => fail("`" ++ name ++ "` cannot be a runtime fn under the default setup: " ++ why ++ ", in a function lent a span (a recursion over a lent span is not compiled yet)", []),
+                Zero => {
+                    let callee = rfun.own_callee();
+                    let table = Cons(f.id, reflected.snd);
+                    let sigs2 = Cons(rfun.sig(), sigs);
+                    let world2 = World(world.tys, sigs2, Sig::sems_default(world.tys, sigs2));
+                    match Fun::judge(callee, world2) {
+                        Refused(why2) => fail("`" ++ name ++ "` cannot be a runtime fn under the default setup: " ++ why2, []),
+                        Ok => match Setup::lowers(Fun::lower_any(callee, world2)) {
+                            False => fail("`" ++ name ++ "`: the default setup's lowering refused it though its judgment accepted it (a gap in `Fun::judge`)", []),
+                            True => runtime_link(4096, k, [LinkFrame(f.id, name, table, table.drop(1), None)], Linking([], [], [], [])).bind(λ l =>
+                                runtime_publish(name, f, callee, sigs2, table, Cons(rfun.lent, lents), l, reprs, recs := recs, own := True)).bind(λ decls =>
+                                // The procedure lane's theorems beside them, until
+                                // statements call a recursion through its program.
+                                match (match callee_sigs { Nil => rfun.recursive_ptm(), Cons(_, _) => None }) {
+                                    Some(p) => runtime_recursive(name, f, rfun, p).bind(λ old => pure(decls.append(old.drop(1)))),
+                                    None => pure(decls),
+                                }),
+                        },
+                    }
+                },
             },
         }),
         Ok => match Setup::lowers(Fun::lower_any(rfun, world)) {

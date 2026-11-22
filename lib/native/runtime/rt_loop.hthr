@@ -1548,6 +1548,18 @@ fn Tm::calls_self(self t: Tm) → Bool {
     }
 }
 
+// Whether a term calls the function itself somewhere other than as its last
+// act (`Tm::tail_sem`'s leaves): what a loop is not.
+fn Tm::calls_self_inside(self t: Tm) → Bool {
+    match t {
+        Let(e, body) => e.calls_self() || body.calls_self_inside(),
+        If(_, yes, no) => yes.calls_self_inside() || no.calls_self_inside(),
+        IfEq(_, yes, no) => yes.calls_self_inside() || no.calls_self_inside(),
+        Call(_, _) => False,
+        _ => t.calls_self(),
+    }
+}
+
 // A term with every function it names one entry later: the body of a
 // function that is its own callee, whose table lists it twice, entry 0 as
 // every function's own and entry 1 the callee its calls of itself name

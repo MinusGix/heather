@@ -52,3 +52,21 @@ theorem twice_any(n: u64, more: Nat, defined: program_defined(program_deepened(t
     program_eval(program_deepened(twice_rsum::program, more), 1, [n]) = rsum(n).add(rsum(n)) {
     twice_rsum::agrees_where(n, more, defined)
 }
+
+// A recursion that calls another function: its table lists itself twice
+// and then its callee.
+runtime fn plus_one(x: u64) → u64 { x.add(BitVec::ofNat(1)) }
+
+runtime fn rcall(n: u64) → u64 decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => BitVec::ofNat(0),
+        False => plus_one(rcall(n.sub(BitVec::ofNat(1)))),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+theorem rcall_levels(): rcall::program.map(λ (f: Function) => f.levels) = [1, 0] { refl }
+
+theorem rcall_five(): program_eval(program_deepened(rcall::program, 5), 1, [BitVec::ofNat(5)]) = rcall(BitVec::ofNat(5)) {
+    rcall::agrees_where(BitVec::ofNat(5), 5, trivial)
+}

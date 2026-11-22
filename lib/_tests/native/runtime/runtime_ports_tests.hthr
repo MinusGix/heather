@@ -136,8 +136,8 @@ runtime fn Bytes::port_count_clear({n: u64}, mut self s: Bytes(n), b: u8) → u6
 }
 
 // Nesting depth, the shape of recursive descent: a call of itself that is
-// not the last thing it does.
-// expect-error: a call of itself that is not the last thing it does
+// not the last thing it does, over a lent span.
+// expect-error: a recursion over a lent span is not compiled yet
 runtime fn List::port_depth(self s: List<u8>, n, i: u64) → u64 decreases (n - i).toNat() {
     if h: i < n {
         let rest = s.port_depth(n, i + 1);

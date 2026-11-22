@@ -6627,7 +6627,6 @@ theorem Function::roomy_level(self function: Function, rooms: Nat → Nat, k, ba
             roomy.right.right.left), roomy.right.right.right⟩⟩⟩
 }
 
-
 theorem level_room_sum(base, step, j: Nat): level_room(base, step, j) = base + level_room(0, step, j) {
     match j {
         Zero => { omega },
@@ -6678,7 +6677,6 @@ fn Function::roomy_at(self function: Function, levels: Nat, rooms: Nat → Nat, 
 // The callees a function's body is emitted among: the functions below it
 // and, where it calls itself, its own number.
 fn bound_at(k, levels: Nat) → Nat { match levels { Zero => k, Succ(_) => k + 1 } }
-
 
 // The function's code from its label to its RET, entered as its contract
 // says. The return address is a word at the top of its room, which its
