@@ -291,6 +291,7 @@ pub(crate) fn meaning_decl(decl: &Decl, proof: Expr) -> Decl {
             span,
         },
         decreases: None,
+        depth: None,
         unfolding: Vec::new(),
         body: Block { stmts: Vec::new(), result: Box::new(proof), ons: Vec::new(), span: decl.body.span },
         span,

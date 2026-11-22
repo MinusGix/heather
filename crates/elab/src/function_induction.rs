@@ -488,6 +488,7 @@ pub(crate) fn induct(decl: &Decl, self_name: &str, eqs: &[BranchEquation], recur
         params,
         result,
         decreases: if recursion == Recursion::Measure { decl.decreases.clone() } else { None },
+        depth: None,
         unfolding: Vec::new(),
         body,
         span: decl.span,

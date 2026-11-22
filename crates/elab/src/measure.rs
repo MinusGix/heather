@@ -374,6 +374,46 @@ pub(crate) fn body_name(name: &str) -> String {
     format!("{name}#body")
 }
 
+/// `f#depth` — the name a `depth ν` clause's lowering runs under, so that
+/// its obligations are `f#depth#obl_N` (`DeclarationsMut::elab_depth_bound`).
+pub(crate) fn depth_name(name: &str) -> String {
+    format!("{name}#depth")
+}
+
+/// `f#depth_rank` — a `depth ν` clause's `ν`, as a function of the
+/// parameters.
+pub(crate) fn depth_rank_name(name: &str) -> String {
+    format!("{name}#depth_rank")
+}
+
+/// Whether an `on` discharges a `depth` clause's obligation, `?depthN`.
+fn is_depth_on(on: &OnStmt) -> bool {
+    matches!(&on.target, OnTarget::Name(n)
+        if n.strip_prefix("depth").is_some_and(|k| !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit())))
+}
+
+/// `decl` without its `depth ν` clause and the discharges of its
+/// obligations, and those apart: the clause's `ν`, and each `on ?depthN`
+/// as the `on ?decN` it is when the body is lowered with `ν` as its measure.
+pub(crate) fn split_depth(decl: &Decl) -> (Decl, Option<(Expr, Vec<OnStmt>)>) {
+    let mut plain = decl.clone();
+    let Some(nu) = plain.depth.take() else {
+        return (plain, None);
+    };
+    let (ons, rest): (Vec<OnStmt>, Vec<OnStmt>) = plain.body.ons.drain(..).partition(is_depth_on);
+    plain.body.ons = rest;
+    let ons = ons
+        .into_iter()
+        .map(|mut on| {
+            if let OnTarget::Name(n) = &on.target {
+                on.target = OnTarget::Name(n.replacen("depth", "dec", 1));
+            }
+            on
+        })
+        .collect();
+    (plain, Some((nu, ons)))
+}
+
 /// `f#obl_N` — one self-call site's obligation, lifted out of the body (§4).
 pub(crate) fn obl_name(name: &str, site: usize) -> String {
     format!("{name}#obl_{site}")
@@ -646,6 +686,7 @@ fn companion(decl: &Decl, name: String, params: Vec<Param>, result: Ty, body: Bl
         params,
         result,
         decreases: None,
+        depth: None,
         unfolding: Vec::new(),
         body,
         span: decl.span,
@@ -954,6 +995,7 @@ pub(crate) fn lower(
     ));
     let f_decl = Decl {
         decreases: None,
+        depth: None,
         unfolding: Vec::new(),
         body: block(
             app(
@@ -1261,6 +1303,7 @@ pub(crate) fn lower_group(
             span,
         },
         decreases: None,
+        depth: None,
         unfolding: Vec::new(),
         body: block(
             Expr {
@@ -1379,6 +1422,7 @@ pub(crate) fn lower_group(
         params: vec![param(Z, nat_ty, span)],
         result: grp_at(var(Z, span)),
         decreases: None,
+        depth: None,
         unfolding: Vec::new(),
         body: block(elim, first.body.span),
         span: first.span,
@@ -1398,6 +1442,7 @@ pub(crate) fn lower_group(
             ));
             Decl {
                 decreases: None,
+                depth: None,
                 unfolding: Vec::new(),
                 body: block(
                     project(
@@ -2315,6 +2360,7 @@ impl<'a> Rewrite<'a> {
             params,
             result: lt_ty(at_args.clone(), refined.clone(), span),
             decreases: None,
+            depth: None,
             unfolding: Vec::new(),
             body,
             span: self.decl.span,
@@ -2434,6 +2480,7 @@ impl<'a> Rewrite<'a> {
             params,
             result: unalias_ty(&g.goal, &aliases),
             decreases: None,
+            depth: None,
             unfolding: Vec::new(),
             body: Block { stmts: lets, ..search },
             span: self.decl.span,
@@ -3910,6 +3957,83 @@ impl Respell<'_> {
     /// The walk proper. `at` says what the current position is (see [`At`]):
     /// only at the anchor can a `match` be re-matched under a motive that
     /// mentions the anchors.
+    /// `build(ā)` at the left renderings equals it at the right ones, by
+    /// one `j` per changed part (§3), rewriting the parts left to right
+    /// from the left rendering to the right.
+    fn congruence(&mut self, parts: &[(bool, Triple)], build: impl Fn(Vec<Expr>) -> Expr) -> Triple {
+        let span = self.span;
+        let lhs = build(parts.iter().map(|(_, t)| t.lhs.clone()).collect());
+        let rhs = build(parts.iter().map(|(_, t)| t.rhs.clone()).collect());
+        let mut cur: Vec<Expr> = parts.iter().map(|(_, t)| t.lhs.clone()).collect();
+        let mut proof = Expr {
+            kind: ExprKind::Refl,
+            span,
+        };
+        for (i, (changed, t)) in parts.iter().enumerate() {
+            if !changed {
+                continue;
+            }
+            let y = self.fresh("y");
+            let mut at_y = cur.clone();
+            at_y[i] = var(&y, span);
+            let motive = lam(&[&y, "__dec_q"], eq_expr(lhs.clone(), build(at_y), span), span);
+            proof = Expr {
+                kind: ExprKind::J {
+                    proof: Box::new(t.proof.clone()),
+                    motive: Box::new(motive),
+                    case: Box::new(proof),
+                },
+                span,
+            };
+            cur[i] = t.rhs.clone();
+        }
+        Triple { lhs, rhs, proof }
+    }
+
+    /// `let x = e; rest` where `e` holds a recursive call
+    /// (`let r = f(n - 1); n + r`): each side binds `x` to its rendering of
+    /// `e` and goes on with its rendering of `rest`, read with `x` a
+    /// variable; the proof is `rest`'s under the left binding, carried to
+    /// the right one by one `j` over `e`'s. Both sides are `f#body`'s and
+    /// the unfolding's by zeta.
+    fn let_of_call(&mut self, name: &str, ty: &Option<Ty>, expr: &Expr, opaque: bool, rest: &Expr, at: At) -> Result<Triple, String> {
+        let span = self.span;
+        if opaque {
+            return Err("a recursive call in an opaque `let`".into());
+        }
+        if rebind_marked(&[Stmt::Let { name: name.to_string(), ty: ty.clone(), expr: expr.clone(), span, opaque }], span, true)?.len() != 1 {
+            return Err("a recursive call in a `mut self` call statement".into());
+        }
+        let te = self.walk(expr, At::Argument)?;
+        let binder = self.rw.let_binder(name, ty, expr, opaque);
+        self.rw.scope.push(binder);
+        let tr = self.walk(rest, at);
+        self.rw.scope.pop();
+        let tr = tr?;
+        let bind = |value: Expr, body: Expr| Expr {
+            kind: ExprKind::Block(Box::new(Block {
+                stmts: vec![Stmt::Let { name: name.to_string(), ty: ty.clone(), expr: value, span, opaque: false }],
+                result: Box::new(body),
+                ons: Vec::new(),
+                span,
+            })),
+            span,
+        };
+        let lhs = bind(te.lhs.clone(), tr.lhs.clone());
+        let rhs = bind(te.rhs.clone(), tr.rhs.clone());
+        let y = self.fresh("y");
+        let motive = lam(&[&y, "__dec_q"], eq_expr(lhs.clone(), bind(var(&y, span), tr.rhs.clone()), span), span);
+        let proof = Expr {
+            kind: ExprKind::J {
+                proof: Box::new(te.proof),
+                motive: Box::new(motive),
+                case: Box::new(bind(te.lhs, tr.proof)),
+            },
+            span,
+        };
+        Ok(Triple { lhs, rhs, proof })
+    }
+
     fn walk(&mut self, e: &Expr, at: At) -> Result<Triple, String> {
         let span = self.span;
         if !self.has_self_call(e) {
@@ -3943,14 +4067,25 @@ impl Respell<'_> {
                 }
                 let (scope_n, env_n) = (self.rw.scope.len(), self.let_env.len());
                 let mut out = Ok(());
-                for st in &b.stmts {
+                for (i, st) in b.stmts.iter().enumerate() {
                     let Stmt::Let { name, ty, expr, opaque, .. } = st else {
                         out = Err("a destructuring or `code` binding in the body".to_string());
                         break;
                     };
                     if self.has_self_call(expr) {
-                        out = Err("a recursive call in a `let` right-hand side".to_string());
-                        break;
+                        let rest = Expr {
+                            kind: ExprKind::Block(Box::new(Block {
+                                stmts: b.stmts[i + 1..].to_vec(),
+                                result: b.result.clone(),
+                                ons: Vec::new(),
+                                span: b.span,
+                            })),
+                            span: e.span,
+                        };
+                        let r = self.let_of_call(name, ty, expr, *opaque, &rest, at);
+                        self.rw.scope.truncate(scope_n);
+                        self.let_env.truncate(env_n);
+                        return r;
                     }
                     let plain = match rebind_marked(std::slice::from_ref(st), span, true) {
                         Ok(plain) => plain,
@@ -4003,46 +4138,42 @@ impl Respell<'_> {
                 for a in args {
                     parts.push((self.has_self_call(a), self.walk(a, At::Argument)?));
                 }
-                let lhs = app(
-                    head_s.clone(),
-                    parts.iter().map(|(_, t)| t.lhs.clone()).collect(),
-                    span,
-                );
-                let rhs = app(
-                    head_s.clone(),
-                    parts.iter().map(|(_, t)| t.rhs.clone()).collect(),
-                    span,
-                );
-                // One `j` per changed argument (§3), rewriting the argument
-                // list left to right from the left rendering to the right.
-                let mut cur: Vec<Expr> = parts.iter().map(|(_, t)| t.lhs.clone()).collect();
-                let mut proof = Expr {
-                    kind: ExprKind::Refl,
-                    span,
-                };
-                for (i, (changed, t)) in parts.iter().enumerate() {
-                    if !changed {
-                        continue;
-                    }
-                    let y = self.fresh("y");
-                    let mut at_y = cur.clone();
-                    at_y[i] = var(&y, span);
-                    let motive = lam(
-                        &[&y, "__dec_q"],
-                        eq_expr(lhs.clone(), app(head_s.clone(), at_y, span), span),
-                        span,
-                    );
-                    proof = Expr {
-                        kind: ExprKind::J {
-                            proof: Box::new(t.proof.clone()),
-                            motive: Box::new(motive),
-                            case: Box::new(proof),
+                Ok(self.congruence(&parts, |xs| app(head_s.clone(), xs, span)))
+            }
+            // A method call, `recv.m(ā)`, with a recursive call in its
+            // receiver or an argument (`n.add(f(n - 1))`): walked as a call
+            // whose arguments are the receiver and then `ā`, the method
+            // resolved alike on both sides since each part keeps its type.
+            // `f`'s own method calls were rewritten to calls before the walk
+            // ([`method_calls_as_calls`]).
+            ExprKind::Dot {
+                recv,
+                name,
+                tyargs,
+                args: Some(args),
+                named,
+            } => {
+                if !named.is_empty() {
+                    return Err("named arguments around a recursive call".into());
+                }
+                let mut parts = vec![(self.has_self_call(recv), self.walk(recv, At::Argument)?)];
+                for a in args {
+                    parts.push((self.has_self_call(a), self.walk(a, At::Argument)?));
+                }
+                let (name, tyargs) = (name.clone(), tyargs.clone());
+                Ok(self.congruence(&parts, |mut xs| {
+                    let recv = xs.remove(0);
+                    Expr {
+                        kind: ExprKind::Dot {
+                            recv: Box::new(recv),
+                            name: name.clone(),
+                            tyargs: tyargs.clone(),
+                            args: Some(xs),
+                            named: Vec::new(),
                         },
                         span,
-                    };
-                    cur[i] = t.rhs.clone();
-                }
-                Ok(Triple { lhs, rhs, proof })
+                    }
+                }))
             }
             ExprKind::Match {
                 form,
@@ -4981,6 +5112,7 @@ pub(crate) fn companions(
         params: ext_params,
         result: eq_ty(body_at(A, G1, H1), body_at(B, G2, H2), span),
         decreases: None,
+        depth: None,
         unfolding: Vec::new(),
         body: ext_body,
         span: decl.span,
@@ -5162,6 +5294,7 @@ pub(crate) fn companions(
             span,
         ),
         decreases: None,
+        depth: None,
         unfolding: Vec::new(),
         body: block(app(irrel_elim, irrel_args, span), decl.body.span),
         span: decl.span,
@@ -5206,6 +5339,7 @@ pub(crate) fn companions(
             span,
         ),
         decreases: None,
+        depth: None,
         unfolding: Vec::new(),
         body: Block {
             stmts: std::mem::take(&mut unfold.lets),
@@ -5421,6 +5555,7 @@ pub(crate) fn step_equations(decl: &Decl, name: &str) -> Result<Vec<Lowered>, St
                 params,
                 result: eq_ty(lhs.clone(), rhs, span),
                 decreases: None,
+                depth: None,
                 unfolding: Vec::new(),
                 body: block(proof, span),
                 span: decl.span,

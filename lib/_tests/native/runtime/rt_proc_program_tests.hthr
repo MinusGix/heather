@@ -25,6 +25,7 @@ import x86_64;
 import x86_64_asm;
 import rt;
 import rt_lower;
+import rt_ptm;
 import rt_proc;
 import rt_proc_program;
 
@@ -32,7 +33,7 @@ import rt_proc_program;
 fn sum_body() → PTm {
     Bind(Lit(Word(64), 0),
     Bind(Prim(Eq(64), [1, 0]),
-    Choose(0,
+    Choose(0, False,
         Value(Var(1)),
         Bind(Lit(Word(64), 1),
         Bind(Prim(Sub(64), [3, 0]),

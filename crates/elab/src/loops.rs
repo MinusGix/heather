@@ -805,6 +805,7 @@ impl<'a> Lift<'a> {
             params,
             result: step_ty,
             decreases: None,
+            depth: None,
             unfolding: Vec::new(),
             body,
             span,
@@ -998,6 +999,7 @@ impl Lift<'_> {
             params,
             result: state_ty,
             decreases: Some(measure.clone()),
+            depth: None,
             body: again,
             span,
         }));
@@ -1193,6 +1195,7 @@ impl Lift<'_> {
             params,
             result: pass_ty,
             decreases: None,
+            depth: None,
             body: Block { stmts, result: Box::new(tested), ons: vec![], span },
             span,
         }));
@@ -1391,6 +1394,7 @@ impl Lift<'_> {
             params,
             result,
             decreases: None,
+            depth: None,
             body: Block { stmts: vec![], result: Box::new(body), ons: vec![], span },
             span,
         };
@@ -1751,6 +1755,7 @@ impl Lift<'_> {
             params: params.clone(),
             result,
             decreases: Some(measure.clone()),
+            depth: None,
             body: Block { stmts: vec![], result: Box::new(branch), ons: vec![], span },
             span,
         }));
@@ -1837,6 +1842,7 @@ impl Lift<'_> {
                     params: theorem_params.clone(),
                     result: stated,
                     decreases: None,
+                    depth: None,
                     body: Block { stmts: vec![], result: Box::new(proof), ons: vec![], span },
                     span,
                 }));
@@ -2324,6 +2330,7 @@ impl Lift<'_> {
             params,
             result,
             decreases: Some(measure),
+            depth: None,
             body: Block { stmts: vec![], result: Box::new(branch), ons: vec![], span },
             span,
         }));
@@ -2590,6 +2597,7 @@ pub(crate) fn lower(decl: &Decl, tys: &dyn BinderTys, ranges: Ranges, free: bool
         params: decl.params.clone(),
         result: Ty { kind: TyKind::Eq(Box::new(lhs), Box::new(rhs)), span },
         decreases: None,
+        depth: None,
         unfolding: Vec::new(),
         body: Block { stmts: vec![], result: Box::new(Expr { kind: ExprKind::Refl, span }), ons: vec![], span },
         span,

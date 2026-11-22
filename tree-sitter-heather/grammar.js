@@ -233,7 +233,10 @@ module.exports = grammar({
     // body (docs/language/recursion/termination-measures-design.md).
     // The measure is read with the declaration-type sub-grammar, which is the
     // expression grammar minus the forms that would swallow the body's `{`.
-    decreases_clause: $ => seq('decreases', $._declaration_type),
+    decreases_clause: $ => seq('decreases', $._declaration_type, optional($.depth_clause)),
+    // `depth ν` beside the measure: a tighter bound on how deep the
+    // recursion nests (docs/native/runtime-fn-recursion-design.md §3.3).
+    depth_clause: $ => seq('depth', $._declaration_type),
     // `unfolding f, g`: the interface definitions whose bodies this
     // declaration may read at open arguments
     // (docs/language/interface-definitions-design.md §4).

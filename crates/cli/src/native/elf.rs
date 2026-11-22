@@ -358,7 +358,8 @@ fn {p}_places() → List<Nat> {{ {p}_plans({src}().functions) }}
         let text = format!("import {root};\n{imports}{lowered}\n{homes_def}{}fn {p}_refusal() → List<Nat> {{ {src}().refusal({LOW}, {homes}, {frames}) }}\n\
             fn {p}_allocation() → List<Nat> {{ match {src}().allocation_ok({homes}) {{ True => [], False => [0, 5, 12, 0, 0] }} }}\n\
             fn {p}_live_sets() → List<Nat> {{ {src}().checked_spelled({homes}) }}\n\
-            fn {p}_need() → List<Nat> {{ [{src}().need({homes}, {frames})] }}\n", plan.text);
+            fn {p}_need() → List<Nat> {{ [{src}().need({homes}, {frames})] }}\n\
+            fn {p}_level_cost() → List<Nat> {{ [{src}().levels, {src}().room_top({homes}, {frames}, {src}().levels) - {src}().room_top({homes}, {frames}, {src}().levels - 1)] }}\n", plan.text);
         fork.elab_module_source(parts, &text).map_err(|e| e.render(&text))?;
         Ok((homes_def, numbers(fork, parts, &format!("{p}_allocation"))?))
     };
@@ -385,6 +386,41 @@ fn {p}_places() → List<Nat> {{ {p}_plans({src}().functions) }}
     // only up to the profile's limit.
     let [room] = numbers(&fork, &parts, &format!("{p}_need"))?[..] else {
         return Err(format!("`{symbol}`'s stack room did not read back"));
+    };
+    // A budget the program states (`runtime(stack := b)`, published as
+    // `main::stack` beside `main::source`): it is compiled within it, which
+    // the certificate states, or refused here, saying what a level costs
+    // under this placement (docs/native/runtime-fn-recursion-design.md §4.1).
+    let owner = symbol.strip_suffix("::source").filter(|_| path);
+    let budget = match owner {
+        None => None,
+        Some(owner) => {
+            let reading = format!("{p}_budget_probe");
+            let text = format!("import {root};\nfn {p}_budget() → List<Nat> {{ [{owner}::stack] }}\n");
+            let mut probing = elab.fork();
+            match probing.elab_module_source(&reading, &text) {
+                Err(_) => None,
+                Ok(_) => match numbers(&probing, &reading, &format!("{p}_budget"))?[..] {
+                    [b] => Some((owner, b)),
+                    _ => return Err(format!("`{owner}::stack` did not read back")),
+                },
+            }
+        }
+    };
+    if let Some((owner, b)) = budget
+        && room > b
+    {
+        let [levels, level] = numbers(&fork, &parts, &format!("{p}_level_cost"))?[..] else {
+            return Err(format!("`{symbol}`'s cost a level did not read back"));
+        };
+        return Err(format!("`{owner}` needs {room} bytes of stack under this placement, past its budget `stack := {b}`: \
+            its calls nest {levels} levels, the last costing {level} bytes. Tighten the recursion's depth bound (`depth ν`), \
+            make its frame smaller, or raise the budget"));
+    }
+    let budget_text = match budget {
+        None => String::new(),
+        Some((owner, _)) => format!("// Within the budget the program states (`runtime(stack := b)`).\n\
+            theorem {p}_budget(): {src}().need({homes}, {frames}) <= {owner}::stack {{ Nat::leb_sound({src}().need({homes}, {frames}), {owner}::stack, trivial) }}\n"),
     };
     let needed = if stack == StackFrom::Segment { laid + room } else { laid };
     let size = needed.div_ceil(PAGE) * PAGE;
@@ -624,7 +660,7 @@ fn {p}_from() → StackFrom {{ {from} }}
 fn {p}_contract() → Contract {{ {src}().contract({p}_from(), {p}_size(), {homes}, {frames}) }}
 theorem {p}_contract_is(): {p}_contract() = Contract({from}, {size}, {room}) {{ refl }}
 theorem {p}_presumes(): {p}_contract().lines() = [{lines}] {{ refl }}
-
+{budget_text}
 theorem {p}_fits(): {fits_of} <= {p}_size() {{
     Nat::leb_sound({fits_of}, {p}_size(), trivial)
 }}

@@ -5,7 +5,7 @@ labels: [native,runtime,recursion,design]
 area: heather-in-heather
 milestone: [nh-procedures]
 created: 2026-11-11
-updated: 2026-11-20
+updated: 2026-11-21
 ---
 
 A `runtime fn` that calls itself other than last is refused: `rt` turns
@@ -22,16 +22,21 @@ for. Since #806 to #812 the stack is asked for in levels of checked calls
 program, not part of the source's meaning; the note replaces the depth
 this issue first proposed.
 
-## Scope (the note's §6)
+## Scope (the note's §8)
 
-- Pure recursion first: statements read with their calls answered
-  (`Stmt::thread_by`); `ETm` calls a pure procedure, lowered to
-  `Perform`; the procedure's answer at `k` levels proved once by
-  induction on the levels; the levels in the co tree.
-- The generator: the program states `levels`; `Fun::depth`, defined once
-  in `rt`, is the nesting a call needs; the published theorem is the
-  function's value wherever `f::depth(x) <= levels`, and a stop at the
-  first refused call otherwise.
+- Built (#824, #832, #836): pure recursion as procedures, the generator
+  publishing `f::ptm`, `f::guarded`, `f::unfolds`, `f::fits`, and a closed
+  `main` with its levels stated.
+- Revised 2026-11-21 (note §3 to §5): the depth is a proved bound,
+  `f::fits(d(x), x)`, inferred from the `decreases` measure (built: the
+  generator closes each call with its lifted obligation `f::obl_N`) and
+  tightened by a `depth` clause; a closed program infers its levels
+  (built); the stack is a byte budget (`runtime(stack := 1 MiB)`) checked
+  once at the recursion's entry.
+- Revised 2026-11-22 (note §2.1, §3.3, §5): every bound is one named
+  theorem `f::depth`; rewrites off the stack (the accumulator) are the
+  optimizer's, at a new level for procedures, with an opt-in heap stack;
+  a call with its room reserved keeps a recursion's callers regions.
 - Then calls between `Io` functions ([[rt-effectful-callees]]) with a
   buffer contract, and recursion over `Io` through them.
 

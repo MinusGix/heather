@@ -352,6 +352,7 @@ fn theorem(decl: &Decl, name: String, lhs: Expr, rhs: Expr, span: Span) -> Decl 
         params: decl.params.clone(),
         result: Ty { kind: TyKind::Eq(Box::new(lhs), Box::new(rhs)), span },
         decreases: None,
+        depth: None,
         unfolding: Vec::new(),
         body: Block { stmts: Vec::new(), result: Box::new(Expr { kind: ExprKind::Refl, span }), ons: Vec::new(), span },
         span,
