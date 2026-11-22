@@ -395,7 +395,7 @@ fn StructuredRegion::missing(self region: StructuredRegion, names: List<RuleEntr
                 shared(when_false.missing(names, seen.taking(condition, False).wanting(yes.seen.wants)), λ no =>
                     Missing(λ after => yes.said(no.said(after)), seen.wanting(no.seen.wants).forgetting()))),
         },
-        Call(_, _, _) => Missing(λ after => after, seen.forgetting()),
+        Call(_, _, _, _) => Missing(λ after => after, seen.forgetting()),
         Loop(inputs, _, parameters, _, body, _, next, outputs, _) =>
             shared(body.missing(names, seen.carried(inputs, parameters, next, parameters, Seen::start(seen.indexes, seen.joins.ends, seen.tables).wanting(seen.wants))), λ inner =>
                 Missing(inner.said, seen.carried(inputs, parameters, next, outputs, seen.wanting(inner.seen.wants)).forgetting())),

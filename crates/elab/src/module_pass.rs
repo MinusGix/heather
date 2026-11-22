@@ -196,7 +196,7 @@ impl ModulePassMut<'_> {
             // charged to this declaration. A no-op without `value-metrics`.
             #[cfg(feature = "value-metrics")]
             if let Some(metrics) = &self.policy.value_metrics {
-                metrics.set_current_item(Some(Arc::from(name.as_str())));
+                metrics.set_current_item(Some(std::sync::Arc::from(name.as_str())));
             }
             let slice_source = slice_source(&file, src, idx, &plan);
             let slice_start = lint::item_span(item).start;
@@ -291,6 +291,10 @@ impl ModulePassMut<'_> {
             .cloned()
             .unwrap_or_else(|| Scope::new(module));
         let mut written: Vec<(&str, bool)> = Vec::new();
+        // §3.9: the names whole-module exports (`export import m;`) gave, as
+        // (module, name), and those two of them clashed on: a glob gives way.
+        let mut globbed: Vec<(String, String)> = Vec::new();
+        let mut clashed: Vec<String> = Vec::new();
         for item in &file.items {
             let Item::Import(imp) = item else { continue };
             if imp.module == module {
@@ -338,6 +342,10 @@ impl ModulePassMut<'_> {
                         && self.names.origin(&i.module, n) != self.names.origin(&imp.module, n))
                     .map(|i| i.module.clone())
                 {
+                    // A glob gives way to a name listed by hand.
+                    if imp.whole {
+                        continue;
+                    }
                     // Both were asked for by name; there is nothing left to
                     // prefer, so this is the error the regime promises rather
                     // than a silent precedence.
@@ -366,17 +374,47 @@ impl ModulePassMut<'_> {
                     }
                 }
             }
-            for name in &exported {
-                let origin = self.names.origin(&imp.module, name);
-                if self.names.declares(module, name) && self.names.origin(module, name) != origin {
+            // A name two exports give different origins is an error at the
+            // facade when both were asked for by name (§3.4). A whole-module
+            // export is a glob (§3.9): it gives way to the facade's own
+            // declaration and to a name listed by hand, and two globs that
+            // clash leave the name out, still reachable qualified.
+            let mut kept = Vec::new();
+            'names: for name in exported {
+                let origin = self.names.origin(&imp.module, &name);
+                if self.names.declares(module, &name) && self.names.origin(module, &name) != origin {
+                    if imp.whole {
+                        continue;
+                    }
                     return err(format!("reexport `{name}` conflicts with a declaration in `{module}`"), imp.span);
                 }
-                for previous in &scope.imports {
-                    if previous.exported.contains(name) && self.names.origin(&previous.module, name) != origin {
-                        return err(format!("reexport `{name}` conflicts between `{}` and `{}`", previous.module, imp.module), imp.span);
+                if imp.whole && clashed.contains(&name) {
+                    continue;
+                }
+                for previous in scope.imports.iter_mut() {
+                    if !previous.exported.contains(&name) || self.names.origin(&previous.module, &name) == origin {
+                        continue;
+                    }
+                    let previous_glob = globbed.iter().any(|(m, n)| *m == previous.module && *n == name);
+                    match (imp.whole, previous_glob) {
+                        (false, false) => {
+                            return err(format!("reexport `{name}` conflicts between `{}` and `{}`", previous.module, imp.module), imp.span);
+                        }
+                        (true, false) => continue 'names,
+                        (false, true) => previous.exported.retain(|n| *n != name),
+                        (true, true) => {
+                            previous.exported.retain(|n| *n != name);
+                            clashed.push(name.clone());
+                            continue 'names;
+                        }
                     }
                 }
+                if imp.whole {
+                    globbed.push((imp.module.clone(), name.clone()));
+                }
+                kept.push(name);
             }
+            let exported = kept;
             let listed: Vec<String> = imp.listed.iter().map(|(n, _)| n.clone()).collect();
             match scope.imports.iter_mut().find(|i| i.module == imp.module) {
                 Some(existing) => { existing.listed.extend(listed); existing.exported.extend(exported); },
@@ -480,7 +518,7 @@ impl ModulePassMut<'_> {
             let item_scope = stats::scope(stats::ScopeKind::Item, module, &name);
             #[cfg(feature = "value-metrics")]
             if let Some(metrics) = &self.policy.value_metrics {
-                metrics.set_current_item(Some(Arc::from(name.as_str())));
+                metrics.set_current_item(Some(std::sync::Arc::from(name.as_str())));
             }
             // A slice of the previous delta stands in for the item when its
             // text and the prefix so far match

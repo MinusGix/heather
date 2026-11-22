@@ -180,8 +180,8 @@ theorem Lent::agrees_span(prog: List<Function>, k: Nat, entry: Nat, run: List<Bi
                 Words::all_at(words, k, λ ws => program_run(prog, [own], entry, Cons(BitVec::zero(), Cons(BitVec::ofNat(own.len()), ws)))
                     = FTm::end_of(Nil, Words::apply(k, run(own, BitVec::ofNat(own.len())), ws)), runs(own, Nil, BitVec::zero(), BitVec::ofNat(own.len())), len);
             j(sym(lent), λ n _ => shared(program_run(prog, lent_buffers(n, Cons(own, rest)), entry, stated_homes(0, n, Cons(own, rest)) ++ words),
-                    λ (answer: Ending) => Ending(answer.word, relent(n, answer.buffers, Cons(own, rest)))) = Ending(m.value, Cons(m.after, rest)),
-                cong_fn<Ending, Ending>(λ answer => Ending(answer.word, relent(1, answer.buffers, Cons(own, rest))), ran))
+                    λ (answer: Ending) => Ending(answer.word, relent(n, answer.buffers, Cons(own, rest)), rest := answer.rest)) = Ending(m.value, Cons(m.after, rest)),
+                cong_fn<Ending, Ending>(λ answer => Ending(answer.word, relent(1, answer.buffers, Cons(own, rest)), rest := answer.rest), ran))
         },
         Succ(_) => λ never => false_elim(never),
     }

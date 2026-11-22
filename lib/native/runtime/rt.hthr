@@ -39,6 +39,9 @@ import option;
 import pair;
 import bitvec;
 import function_ir_operation;
+// `loop` is reached by written paths (`loop::Loop::steps`), not imported:
+// importing it here moved how an importer's goals spell
+// (issues/import-order-moves-goal-spelling.md).
 
 // ---------------------------------------------------------------------------
 // Types.
@@ -372,6 +375,10 @@ record RecInfo {
 // enum parameter over.
 fn RecInfo::enum_at(tys: Nat → RecInfo, i: Nat) → Type { tys(i).alts.E }
 
+// The record of table entry `i`, as a type: what a certificate
+// quantifies a record parameter of several words over.
+fn RecInfo::record_at(tys: Nat → RecInfo, i: Nat) → Type { tys(i).T }
+
 // The word an enum of table entry `i` is passed as: its tag.
 fn RecInfo::enum_word(tys: Nat → RecInfo, i: Nat, v: tys(i).alts.E) → BitVec(64) { BitVec::ofNat(tys(i).alts.tag(v)) }
 
@@ -424,28 +431,52 @@ fn Ty::items(self t: Ty, tys: Nat → RecInfo) → t.sem(tys) → List<t.elem().
     match t { Word(_) => λ _ => Nil, Bit => λ _ => Nil, ByteList(_) => λ v => v, Lines => λ v => v, Named(_) => λ _ => Nil, Count => λ _ => Nil, Enum(_) => λ _ => Nil }
 }
 
+// `Nat::equation`, restated here: a cast's equation is then a definition
+// newer than any a program's source names, so a comparison of a meaning
+// against its source advances the meaning's cast before unfolding the
+// source (a source's `Loop::steps` would otherwise unroll pass by pass
+// against a cast stalled at the older `Nat::equation`).
+fn Ty::nat_equation(self n: Nat) → (m: Nat) → (n = m) ∨ True {
+    match n {
+        Zero => λ m => match m { Zero => Inl(refl), Succ(_) => Inr(trivial) },
+        Succ(k, ih) => λ m => match m {
+            Zero => Inr(trivial),
+            Succ(m2) => match ih(m2) { Inr(_) => Inr(trivial), Inl(e) => Inl(j(e, λ x _ => k + 1 = x + 1, refl)) },
+        },
+    }
+}
+
+// A number's equation with itself is `refl`, at an open number too.
+theorem Ty::nat_equation_self(self n: Nat): Ty::nat_equation(n, n) = Inl(refl) {
+    match n {
+        Zero => refl,
+        Succ(k) => j(sym(Ty::nat_equation_self(k)), λ d _ =>
+            (match d as λ _ => (k + 1 = k + 1) ∨ True { Inr(_) => Inr(trivial), Inl(e) => Inl(j(e, λ x _ => k + 1 = x + 1, refl)) }) = Inl(refl), refl),
+    }
+}
+
 // The equation between two codes, as data: at two closed codes it
 // evaluates to `refl`, so a transport along it computes (as
 // `Nat::equation`'s does).
 fn Ty::equation(self a: Ty, b: Ty) → (a = b) ∨ True {
     match a {
         Word(w) => match b {
-            Word(v) => match w.equation(v) { Inl(e) => Inl(j(e, λ x _ => Word(w) = Word(x), refl)), Inr(_) => Inr(trivial) },
+            Word(v) => match Ty::nat_equation(w, v) { Inl(e) => Inl(j(e, λ x _ => Word(w) = Word(x), refl)), Inr(_) => Inr(trivial) },
             _ => Inr(trivial),
         },
         Bit => match b { Bit => Inl(refl), _ => Inr(trivial) },
         ByteList(c) => match b {
-            ByteList(d) => match c.equation(d) { Inl(e) => Inl(j(e, λ x _ => ByteList(c) = ByteList(x), refl)), Inr(_) => Inr(trivial) },
+            ByteList(d) => match Ty::nat_equation(c, d) { Inl(e) => Inl(j(e, λ x _ => ByteList(c) = ByteList(x), refl)), Inr(_) => Inr(trivial) },
             _ => Inr(trivial),
         },
         Lines => match b { Lines => Inl(refl), _ => Inr(trivial) },
         Named(i) => match b {
-            Named(k) => match i.equation(k) { Inl(e) => Inl(j(e, λ x _ => Named(i) = Named(x), refl)), Inr(_) => Inr(trivial) },
+            Named(k) => match Ty::nat_equation(i, k) { Inl(e) => Inl(j(e, λ x _ => Named(i) = Named(x), refl)), Inr(_) => Inr(trivial) },
             _ => Inr(trivial),
         },
         Count => match b { Count => Inl(refl), _ => Inr(trivial) },
         Enum(i) => match b {
-            Enum(k) => match i.equation(k) { Inl(e) => Inl(j(e, λ x _ => Enum(i) = Enum(x), refl)), Inr(_) => Inr(trivial) },
+            Enum(k) => match Ty::nat_equation(i, k) { Inl(e) => Inl(j(e, λ x _ => Enum(i) = Enum(x), refl)), Inr(_) => Inr(trivial) },
             _ => Inr(trivial),
         },
     }
@@ -512,7 +543,8 @@ fn Ty::flats_head_word(fs: List<Ty>) → Ty::Flats(fs) → BitVec(64) {
 fn Ty::word_from(tys: Nat → RecInfo, a: Ty) → a.sem(tys) → BitVec(64) {
     match a as λ x => x.sem(tys) → BitVec(64) {
         Word(w) => λ v => Word(w).flat_word(v),
-        Bit => λ _ => BitVec::ofNat(0),
+        // A bit as the word it is zero-extended to (C's `bool`, 0 or 1).
+        Bit => λ b => BitVec::ofNat(BitVec::ofBool(b).toNat()),
         ByteList(_) => λ _ => BitVec::ofNat(0),
         Lines => λ _ => BitVec::ofNat(0),
         Named(i) => λ v => Ty::flats_head_word(tys(i).fields, tys(i).get(v)),
@@ -530,7 +562,9 @@ fn Ty::word_from(tys: Nat → RecInfo, a: Ty) → a.sem(tys) → BitVec(64) {
 fn Ty::convert(tys: Nat → RecInfo, a, b: Ty, v: a.sem(tys)) → b.sem(tys) {
     match b as λ y => y.sem(tys) {
         Word(w) => Word(w).word_at(Ty::word_from(tys, a, v)),
-        Bit => False,
+        // A word read as a bit is its lowest bit (what `Resize` to one bit
+        // keeps).
+        Bit => BitVec::ofNat(Ty::word_from(tys, a, v).toNat(), n := 1).head_bit(),
         ByteList(_) => Nil,
         Lines => Nil,
         Named(i) => tys(i).mk(Ty::flats_word(tys(i).fields, Ty::word_from(tys, a, v))),
@@ -795,6 +829,13 @@ inductive Tm {
     // Payload slot `j` of an enum variable of table entry `i`: in an arm of
     // a `Pick`, a field of the arm's constructor.
     Slot(i: Nat, j: Nat, of: Nat),
+    // A `while` loop (docs/language/loop-combinator-design.md §6.2): its
+    // state starts as variable `init` (a word, or a record of words);
+    // `test` and `body` see the state as variable 0. While `test` holds the
+    // state becomes `body`'s value, at the state's code; when it fails the
+    // state is the loop's answer. Its meaning is `Loop::steps` of
+    // `Step::turn(test, body, s)`, at most `Tm::passes()` of them.
+    Iterate(init: Nat, test: Tm, body: Tm),
 }
 
 record Sig { params: List<Ty>, result: Ty }
@@ -806,8 +847,10 @@ record Fun { params: List<Ty>, result: Ty, body: Tm, lent: Nat := 0 }
 
 record Program { funs: List<Fun>, entry: Nat }
 
+// Past the end, a signature no call passes (its result is a list of lines,
+// which no call reads back).
 fn Sig::at(sigs: List<Sig>, i: Nat) → Sig {
-    match sigs { Nil => Sig([], Bit), Cons(s, rest) => match i { Zero => s, Succ(k) => Sig::at(rest, k) } }
+    match sigs { Nil => Sig([], Lines), Cons(s, rest) => match i { Zero => s, Succ(k) => Sig::at(rest, k) } }
 }
 
 // The meanings of a program's functions, one per signature: what a `Call`
@@ -821,7 +864,7 @@ fn Sig::get(tys: Nat → RecInfo, sigs: List<Sig>) → Sig::Sems(tys, sigs) → 
     → Ty::Arrows(tys, Sig::at(sigs, i).params, Sig::at(sigs, i).result)
 {
     match sigs {
-        Nil => λ _ i => False,
+        Nil => λ _ i => Nil,
         Cons(_, rest) => λ cs i => match i { Zero => cs.fst, Succ(k) => Sig::get(tys, rest, cs.snd, k) },
     }
 }
@@ -899,6 +942,7 @@ fn Tm::ty(self t: Tm, w: World, g: List<Ty>) → Ty {
         Pick(i, _, arms, _) => arms.ty(w, Cons(Enum(i), g)),
         Inject(i, _, _) => Enum(i),
         Slot(i, j, _) => Ty::at(w.tys(i).alts.slots, j),
+        Iterate(init, _, _) => Ty::at(g, init),
     }
 }
 
@@ -918,6 +962,16 @@ fn Tm::step(w: World, e: Ty, k: Nat)
 fn Tm::convoy(T: Type, c: Bool, yes: T, no: T) → T {
     (match c as λ b => (c = b) → T { False => λ _ => no, True => λ _ => yes })(refl)
 }
+
+// How many passes a loop is given: `2^64 - 1`, the most a 64-bit count
+// reaches (`Tm::iter_region`), and at least every measure that is a 64-bit
+// word's `toNat`. A `while` loop stops at the state it tested, so that is
+// enough (`loop::Loop::steps_stays`).
+fn Tm::passes() → Nat { loop::Loop::passes() }
+
+// A word's `toNat` is at most the passes a loop is given: a loop whose
+// measure is one stops within them (`loop::Loop::steps_stays`).
+theorem Tm::word_within(w: BitVec(64)): w.toNat() <= loop::Loop::passes() { BitVec::toNat_lt_pow(64, w) }
 
 // The meaning of a term, at the code it synthesizes.
 fn Tm::sem(self t: Tm, w: World) → (g: List<Ty>) → Env(w.tys, g) → t.ty(w, g).sem(w.tys) {
@@ -959,6 +1013,12 @@ fn Tm::sem(self t: Tm, w: World) → (g: List<Ty>) → Env(w.tys, g) → t.ty(w,
         Slot(i, j, of) => λ g env =>
             Ty::at(w.tys(i).alts.slots, j).of_flat(w.tys,
                 Ty::flat_nth(w.tys(i).alts.slots, w.tys(i).alts.fields(Ty::cast(w.tys, Ty::at(g, of), Enum(i), Env::get(w.tys, g, env, of))), j)),
+        Iterate(init, test, body) => λ g env => loop::Loop::steps(loop::Loop::passes(),
+            λ (s: Ty::at(g, init).sem(w.tys)) => loop::Step::turn(
+                Ty::cast(w.tys, test.ty(w, Cons(Ty::at(g, init), g)), Bit, test.sem(w, Cons(Ty::at(g, init), g), Pair(s, env))),
+                λ _ => Ty::cast(w.tys, body.ty(w, Cons(Ty::at(g, init), g)), Ty::at(g, init), body.sem(w, Cons(Ty::at(g, init), g), Pair(s, env))),
+                s),
+            Env::get(w.tys, g, env, init)),
     }
 }
 
@@ -1071,6 +1131,10 @@ fn Tm::same(self t: Tm) → Tm → Bool {
         },
         Inject(i, k, args) => λ u => match u { Inject(i2, k2, args2) => i.same(i2).and(k.same(k2)).and(Tm::nats_same(args, args2)), _ => False },
         Slot(i, j, of) => λ u => match u { Slot(i2, j2, of2) => i.same(i2).and(j.same(j2)).and(of.same(of2)), _ => False },
+        Iterate(init, test, body) => λ u => match u {
+            Iterate(init2, test2, body2) => init.same(init2).and(test.same(test2)).and(body.same(body2)),
+            _ => False,
+        },
     }
 }
 

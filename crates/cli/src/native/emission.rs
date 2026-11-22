@@ -725,7 +725,8 @@ fn deep_text(p: &str, src: &str, homes: &str, layout: &str, end: &str, last: u64
     if count == 0 {
         return format!("theorem {p}_deep(): {exit}.links({functions}, {homes}.places, {homes}.room_table({functions}), {last}) = Some({p}_code()) {{ refl }}\n");
     }
-    let evaluable = super::verified::evaluable_text_over(p, &functions, count, &format!("{functions}.map(λ (f: Function) => f.parameters.len())"));
+    let evaluable = super::verified::evaluable_text_over(p, &functions, count, &format!("{functions}.map(λ (f: Function) => f.parameters.len())"),
+        &format!("{functions}.map(λ (f: Function) => f.also.len())"));
     format!("{evaluable}
 theorem {p}_placeless(): program_placeless({functions}).IsTrue() {{ trivial }}
 theorem {p}_rowed(): program_rowed({functions}).IsTrue() {{ trivial }}

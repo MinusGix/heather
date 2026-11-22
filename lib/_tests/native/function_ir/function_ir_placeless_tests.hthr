@@ -91,7 +91,7 @@ fn first() → Function {
         body := Sequence(
             Region(inputs := Ports([word(0), word(1)]), nodes := [Const(width := 64, output := 2, value := 0)],
                 outputs := Ports([word(0), word(1), word(2)])),
-            Call(0, [0, 1, 2], 3)),
+            Call(0, [0, 1, 2], 3, [])),
         result := 3)
 }
 
@@ -148,7 +148,7 @@ fn swapped() → Function {
         body := Sequence(
             Region(inputs := Ports([word(0), word(1)]), nodes := [Const(width := 64, output := 2, value := 0)],
                 outputs := Ports([word(0), word(1), word(2)])),
-            Call(0, [1, 0, 2], 3)),
+            Call(0, [1, 0, 2], 3, [])),
         result := 3)
 }
 
@@ -162,7 +162,7 @@ fn takes_words() → Function {
 }
 
 fn hands_words() → Function {
-    Function(parameters := [0, 1], lent := 1, body := Call(0, [0, 1], 2), result := 2)
+    Function(parameters := [0, 1], lent := 1, body := Call(0, [0, 1], 2, []), result := 2)
 }
 
 theorem takes_words_placeless(): program_placeless([takes_words()]) = True { refl }
@@ -261,7 +261,7 @@ fn put_first() → Function {
         body := Sequence(
             Region(inputs := Ports([word(0), word(1), word(5)]), nodes := [Const(width := 64, output := 2, value := 0)],
                 outputs := Ports([word(0), word(1), word(2), word(5)])),
-            Call(0, [0, 1, 2, 5], 3)),
+            Call(0, [0, 1, 2, 5], 3, [])),
         result := 3)
 }
 

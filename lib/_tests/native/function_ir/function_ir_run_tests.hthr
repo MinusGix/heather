@@ -47,7 +47,7 @@ theorem storer_changes(same: program_run([storer()], [[b(1), b(2)]], 0, [w(1), w
 // allows (`program_run_effects`).
 theorem storer_allowed(file: Buffers(), i, v: BitVec(64)):
     program_effects([storer()])(file, 0, [i, v], program_run([storer()], file, 0, [i, v]).word,
-        program_run([storer()], file, 0, [i, v]).buffers) {
+        program_run([storer()], file, 0, [i, v]).rest, program_run([storer()], file, 0, [i, v]).buffers) {
     program_run_effects([storer()], trivial, file, 0, [i, v], trivial,
         program_total_run_defined([storer()], trivial, file, 0, [i, v]))
 }
@@ -69,7 +69,7 @@ theorem put_get_runs(): program_run([put_get()], [[b(1), b(2)]], 0, [w(1), w(7)]
 
 // reads_back(i, v): calls `storer`, then loads the byte it stored into.
 fn reads_back() → Function {
-    Function(parameters := [0, 1], body := Compose(Call(0, [0, 1], 2), leaf([BufferLoad(output := 3, buffer := 0, index := 0)])),
+    Function(parameters := [0, 1], body := Compose(Call(0, [0, 1], 2, []), leaf([BufferLoad(output := 3, buffer := 0, index := 0)])),
         result := 3)
 }
 fn calling() → List<Function> { [reads_back(), storer()] }
@@ -85,7 +85,7 @@ theorem reads_back_runs(): program_run(calling(), [[b(1), b(2)]], 1, [w(1), w(7)
 theorem reads_back_fixed(): program_eval_over([[b(1), b(2)]], calling(), 1, [w(1), w(7)]) = w(2) { refl }
 
 theorem reads_back_allowed(file: Buffers(), i, v: BitVec(64)):
-    program_effects(calling())(file, 1, [i, v], program_run(calling(), file, 1, [i, v]).word, program_run(calling(), file, 1, [i, v]).buffers) {
+    program_effects(calling())(file, 1, [i, v], program_run(calling(), file, 1, [i, v]).word, program_run(calling(), file, 1, [i, v]).rest, program_run(calling(), file, 1, [i, v]).buffers) {
     program_run_effects(calling(), trivial, file, 1, [i, v], trivial,
         program_total_run_defined(calling(), trivial, file, 1, [i, v]))
 }
@@ -123,7 +123,7 @@ theorem selfish_not_evaluable(): program_evaluable([selfish()]) = False { refl }
 // expect-error(mismatch)
 theorem selfish_allowed(file: Buffers(), i, v: BitVec(64)):
     program_effects([selfish()])(file, 0, [i, v], program_run([selfish()], file, 0, [i, v]).word,
-        program_run([selfish()], file, 0, [i, v]).buffers) {
+        program_run([selfish()], file, 0, [i, v]).rest, program_run([selfish()], file, 0, [i, v]).buffers) {
     program_run_effects([selfish()], trivial, file, 0, [i, v], trivial,
         program_total_run_defined([selfish()], trivial, file, 0, [i, v]))
 }

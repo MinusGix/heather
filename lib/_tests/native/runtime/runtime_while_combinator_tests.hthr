@@ -1,10 +1,11 @@
-// Probes for a `runtime fn`'s `while` over one `u64` local, which the
-// elaborator writes as the library's loop combinator
-// (docs/language/loop-combinator-design.md §6.1): `f::loop` is
-// `Loop(…).run`, its twin is what the reflector reads, and the generator
-// proves it a measured function from the loop's own `elim` theorem. Each
-// function here is compiled by its `runtime fn`, so checking this module is
-// the test; each theorem runs a function by evaluation.
+// Probes for a `runtime fn`'s loops over words, which the elaborator writes
+// as the library's `Loop::steps` where they stand
+// (docs/language/loop-combinator-design.md §6.2): the reflector reads one
+// `Iterate` node, and beside each loop the elaborator writes it as a
+// `Loop` of its measure, whose step finds the decrease, and `f::loop::runs`,
+// the loop the function runs is that `Loop`'s `run`. Each function here is
+// compiled by its `runtime fn`, so checking this module is the test; each
+// theorem runs a function by evaluation.
 import logic;
 import bool;
 import nat;
@@ -33,11 +34,16 @@ runtime fn drop_to(n, lo: u64) → u64 {
 theorem drop_to_stops(): drop_to(10, 3) = 3 { refl }
 theorem drop_to_below(): drop_to(2, 7) = 2 { refl }
 
-// The loop is the combinator's run, by its definition.
-theorem drop_to_loop_is_run(lo, x: u64): drop_to::loop(lo, x) = drop_to::loop::of(lo, x).run(drop_to::loop::at(lo, x)) { refl }
+// The loop the function runs is its `Loop`'s `run`, whatever the start.
+theorem drop_to_loop_is_run(lo, x: u64):
+    loop::Loop::steps(loop::Loop::passes(), λ (x: u64) => loop::Step::turn(decide_bit<lo < x>(), λ _ => { let x = x - 1; x }, x), x) =
+        drop_to::loop::of(lo).run(x)
+{
+    drop_to::loop::runs(lo, x)
+}
 
 // A body with a `let`, the next value read through it, and a test that is
-// a conjunction with a `≠` (split at the test as written, not inside it).
+// a conjunction with a `≠` (one bit at the loop, split by its `Loop`'s step).
 runtime fn halve_gap(n, lo, by: u64) → u64 {
     let mut x = n;
     while lo < x && by ≠ 0 decreases x.toNat() {
@@ -57,3 +63,76 @@ runtime fn count_up(n, step, cap: u64) → u64 {
 }
 
 theorem count_up_runs(): count_up(3, 1, 9) = 9 { refl }
+
+// Two locals: the state is the generated record `f#State`, read back by
+// its fields after the loop.
+runtime fn bits_of(n: u64) → u64 {
+    let mut x = n;
+    let mut c: u64 = 0;
+    while 0 < x decreases x.toNat() { x := x.shift_right(1); c := c + 1; }
+    c
+}
+
+theorem bits_of_255(): bits_of(255) = 8 { refl }
+theorem bits_of_0(): bits_of(0) = 0 { refl }
+
+theorem bits_of_loop_is_run(s: bits_of::State): True { let _e = bits_of::loop::runs(s); trivial }
+
+// A count over words: the count is a field of the state, the test `i < n`.
+runtime fn fib(n: u64) → u64 {
+    let mut a: u64 = 0;
+    let mut b: u64 = 1;
+    for i in 0..n { let t = a + b; a := b; b := t; }
+    a
+}
+
+theorem fib_10(): fib(10) = 55 { refl }
+
+theorem fib_loop_is_run(n: u64, s: fib::State): True { let _e = fib::loop::runs(n, s); trivial }
+
+// Two loops in a row, the second starting where the first stopped, each
+// read after it.
+runtime fn there_and_back(n: u64) → u64 {
+    let mut x: u64 = 0;
+    while x < n decreases (n - x).toNat() { x := x + 1; }
+    let mut y = x;
+    let mut steps: u64 = 0;
+    while 0 < y decreases y.toNat() { y := y - 1; steps := steps + 1; }
+    x + steps
+}
+
+theorem there_and_back_4(): there_and_back(4) = 8 { refl }
+
+// A measure the body does not lower is refused where the step goes round.
+// expect-error: this pass of the loop must decrease the measure
+runtime fn climbs(n: u64) → u64 {
+    let mut x = n;
+    while 0 < x decreases x.toNat() { x := x + 1; }
+    x
+}
+
+// Written by hand, the loop reads as the elaborator's does: a record state
+// read after the loop by its fields, a test of two bits, and the state's
+// field in the test.
+record Two { a: u64, b: u64 }
+
+runtime fn moved(n: u64) → u64 {
+    let r: Two = loop::Loop::steps(loop::Loop::passes(), λ (s: Two) => loop::Step::turn(decide_bit<0 < s.b>(), λ _ => Two(s.a + 1, s.b - 1), s), Two(0, n));
+    r.a + r.b + n
+}
+
+theorem moved_5(): moved(5) = 10 { refl }
+
+runtime fn two_bits(n, cap: u64) → u64 {
+    let x: u64 = loop::Loop::steps(loop::Loop::passes(), λ (x: u64) => loop::Step::turn(decide_bit<x < cap>() && decide_bit<x ≠ 7>(), λ _ => x + 1, x), n);
+    x * 2
+}
+
+theorem two_bits_runs(): two_bits(1, 20) = 14 { refl }
+
+// A loop given other passes than `Loop::passes()` is not one the reflector
+// reads.
+// expect-error: a loop given other than `Loop::passes()` passes
+runtime fn short_loop(n: u64) → u64 {
+    loop::Loop::steps(3, λ (x: u64) => loop::Step::turn(decide_bit<0 < x>(), λ _ => x - 1, x), n)
+}

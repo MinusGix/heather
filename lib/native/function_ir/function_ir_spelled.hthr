@@ -112,7 +112,7 @@ fn StructuredRegion::spelled(self region: StructuredRegion) → List<Nat> → Li
         Compose(prefix, continuation) => spell_call("Compose", [prefix.spelled(), continuation.spelled()]),
         Conditional(inputs, condition, arguments, outputs, when_true, when_false) => spell_call("Conditional",
             [inputs.spelled(), spell_number(condition), arguments.spelled(), outputs.spelled(), when_true.spelled(), when_false.spelled()]),
-        Call(callee, arguments, result) => spell_call("Call", [spell_number(callee), spell_numbers(arguments), spell_number(result)]),
+        Call(callee, arguments, result, also) => spell_call("Call", [spell_number(callee), spell_numbers(arguments), spell_number(result), spell_numbers(also)]),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => spell_call("Loop",
             [spell_numbers(inputs), spell_number(bound), spell_numbers(parameters), spell_number(count), body.spelled(), spell_number(exit),
                 spell_numbers(next), spell_numbers(outputs), spell_number(exhausted)]),

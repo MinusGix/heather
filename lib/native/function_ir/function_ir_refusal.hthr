@@ -160,8 +160,8 @@ fn StructuredRegion::shown(self region: StructuredRegion) → String {
         Lend(views, callee, arguments, result) =>
             refusal_number(result) ++ " = call function " ++ refusal_number(callee) ++ " over views (" ++ views_shown(views) ++ ") ("
                 ++ refusal_numbers(arguments) ++ "); ",
-        Call(callee, arguments, result) =>
-            refusal_number(result) ++ " = call function " ++ refusal_number(callee) ++ " (" ++ refusal_numbers(arguments) ++ "); ",
+        Call(callee, arguments, result, also) =>
+            refusal_numbers(Cons(result, also)) ++ " = call function " ++ refusal_number(callee) ++ " (" ++ refusal_numbers(arguments) ++ "); ",
         Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) =>
             "loop (state " ++ refusal_numbers(parameters) ++ " from " ++ refusal_numbers(inputs) ++ "; next " ++ refusal_numbers(next)
                 ++ "; count " ++ refusal_number(count) ++ "; exit " ++ refusal_number(exit) ++ ") { " ++ body.shown() ++ "} ",
@@ -311,7 +311,7 @@ fn StructuredRegion::refusal(self region: StructuredRegion, saves: Nat, slots: N
             },
         },
         Lend(views, callee, arguments, _) => file.lend_refusal(saves, slots, prog, views, callee, arguments, placement, names, bound, counts, homes),
-        Call(callee, arguments, _) => file.call_refusal(slots, placement, callee, arguments, bound, counts, homes),
+        Call(callee, arguments, _, _) => file.call_refusal(slots, placement, callee, arguments, bound, counts, homes),
         Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) =>
             match file.loop_entry(saves, inputs, limit, parameters, count, placement) {
                 None => "the entry of a loop: its bound " ++ refusal_number(limit) ++ " or an input (" ++ refusal_numbers(inputs)

@@ -146,7 +146,7 @@ fn StructuredRegion::loop_shape(self region: StructuredRegion) → Bool {
         Compose(_, _) => False,
         Conditional(_, _, _, _, _, _) => False,
         Lend(_, _, _, _) => False,
-        Call(_, _, _) => False,
+        Call(_, _, _, _) => False,
     }
 }
 
@@ -174,7 +174,11 @@ fn StructuredRegion::scoped(self region: StructuredRegion, s: Scope) → Option<
         Lend(_, _, _, _) => None,
         // A call reads its arguments and leaves a word, whose low bit a
         // conditional may branch on.
-        Call(_, arguments, result) => match s.all_defined(arguments) { False => None, True => Some(s.put(result, True)) },
+        // A call of a function returning one word: a statement keeps RAX.
+        Call(_, arguments, result, also) => match also {
+            Nil => match s.all_defined(arguments) { False => None, True => Some(s.put(result, True)) },
+            Cons(_, _) => None,
+        },
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
             match (s.defined(bound) && s.all_defined(inputs))
                 && Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted).loop_shape() {

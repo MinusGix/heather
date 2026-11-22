@@ -32,17 +32,17 @@ import option;
 // ---------------------------------------------------------------------------
 // What a call does over a file
 
-// `effects(before, f, arguments, result, after)`: function `f`, called on
-// `arguments` over the file `before`, may return `result` and leave the
-// file `after`.
-fn Effects() → Type<1> { Buffers() → Nat → List<BitVec(64)> → BitVec(64) → Buffers() → Type }
+// `effects(before, f, arguments, result, rest, after)`: function `f`,
+// called on `arguments` over the file `before`, may return `result` and,
+// past it, the words `rest` (its `also`), and leave the file `after`.
+fn Effects() → Type<1> { Buffers() → Nat → List<BitVec(64)> → BitVec(64) → List<BitVec(64)> → Buffers() → Type }
 
-fn no_effects() → Effects() { λ _ _ _ _ _ => False }
+fn no_effects() → Effects() { λ _ _ _ _ _ _ => False }
 
 // Callees that leave the file as it is, answered over it as it is at the
 // call.
 fn Effects::keeping(callees: Buffers() → Callees()) → Effects() {
-    λ before f arguments result after => callees(before)(f, arguments, result) ∧ (after = before)
+    λ before f arguments result rest after => callees(before)(f, arguments, result, rest) ∧ (after = before)
 }
 
 // ---------------------------------------------------------------------------
@@ -268,9 +268,10 @@ fn StructuredRegionRunsOver(effects: Effects(), values: Valuation(), region: Str
         // The callee's effect is from the windows to what it left of them, and
         // the file after is the file with the written windows put back.
         Lend(views, callee, arguments, result) => Exists<Buffers()>(λ mid => NodesRun(views_nodes(views), values, before, mid) ∧
-            Exists<Buffers()>(λ left => effects(viewed(views, values, mid), callee, words_of(values, views_homes(views) ++ arguments), values(64, result), left) ∧
+            Exists<Buffers()>(λ left => Exists<List<BitVec(64)>>(λ rest =>
+                effects(viewed(views, values, mid), callee, words_of(values, views_homes(views) ++ arguments), values(64, result), rest, left)) ∧
                 (after = put_views(views, values, left, mid)))),
-        Call(callee, arguments, result) => effects(before, callee, words_of(values, arguments), values(64, result), after),
+        Call(callee, arguments, result, also) => effects(before, callee, words_of(values, arguments), values(64, result), words_of(values, also), after),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
             LoopRunsOver(λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, pass, body, from, to),
                 parameters, count, exit, next, values(64, bound).toNat(), words_of(values, inputs), words_of(values, outputs),
@@ -295,7 +296,7 @@ fn StructuredRegion::quiet(self region: StructuredRegion) → Bool {
         // A call over views is taken for one that stores: what it puts back is
         // the callee's to say.
         Lend(_, _, _, _) => False,
-        Call(_, _, _) => True,
+        Call(_, _, _, _) => True,
         Loop(_, _, _, _, body, _, _, _, _) => body.quiet(),
     }
 }
@@ -308,7 +309,7 @@ fn StructuredRegion::stores(self region: StructuredRegion, b: Nat) → Bool {
         Compose(prefix, continuation) => prefix.stores(b) || continuation.stores(b),
         Conditional(_, _, _, _, when_true, when_false) => when_true.stores(b) || when_false.stores(b),
         Lend(views, _, _, _) => views_store(views, b),
-        Call(_, _, _) => False,
+        Call(_, _, _, _) => False,
         Loop(_, _, _, _, body, _, _, _, _) => body.stores(b),
     }
 }
@@ -338,7 +339,7 @@ theorem StructuredRegion::quiet_stores(self region: StructuredRegion, b: Nat): r
             }
         },
         Lend(_, _, _, _) => λ never _ => never,
-        Call(_, _, _) => λ _ never => never,
+        Call(_, _, _, _) => λ _ never => never,
         Loop(_, _, _, _, body, _, _, _, _) => body.quiet_stores(b),
     }
 }
@@ -376,7 +377,7 @@ theorem StructuredRegion::runs_quiet(self region: StructuredRegion, callees: Buf
             }
         },
         Lend(_, _, _, _) => λ never _ _ => false_elim(never),
-        Call(_, _, _) => λ _ values holds => ⟨holds, refl⟩,
+        Call(_, _, _, _) => λ _ values holds => ⟨holds, refl⟩,
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ quiet values =>
             loop_runs_over_quiet(λ (pass: Valuation()) => StructuredRegionHoldsOver(file, callees(file), pass, body),
                 λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(Effects::keeping(callees), pass, body, from, to),
@@ -387,8 +388,8 @@ theorem StructuredRegion::runs_quiet(self region: StructuredRegion, callees: Buf
 
 // A region runs under any effects its own imply.
 theorem StructuredRegion::runs_weaken(self region: StructuredRegion, effects, weaker: Effects(),
-    implies: (before: Buffers()) → (f: Nat) → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (after: Buffers()) →
-        effects(before, f, arguments, result, after) → weaker(before, f, arguments, result, after)):
+    implies: (before: Buffers()) → (f: Nat) → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (rest: List<BitVec(64)>) → (after: Buffers()) →
+        effects(before, f, arguments, result, rest, after) → weaker(before, f, arguments, result, rest, after)):
     (values: Valuation()) → (before, after: Buffers()) → StructuredRegionRunsOver(effects, values, region, before, after) →
     StructuredRegionRunsOver(weaker, values, region, before, after) {
     match region {
@@ -413,10 +414,11 @@ theorem StructuredRegion::runs_weaken(self region: StructuredRegion, effects, we
             },
         Lend(views, callee, arguments, result) => λ values before after ran =>
             Exists(ran.witness, ⟨ran.proof.left, Exists(ran.proof.right.witness,
-                ⟨implies(viewed(views, values, ran.witness), callee, words_of(values, views_homes(views) ++ arguments), values(64, result),
-                    ran.proof.right.witness, ran.proof.right.proof.left), ran.proof.right.proof.right⟩)⟩),
-        Call(callee, arguments, result) => λ values before after ran =>
-            implies(before, callee, words_of(values, arguments), values(64, result), after, ran),
+                ⟨Exists(ran.proof.right.proof.left.witness, implies(viewed(views, values, ran.witness), callee, words_of(values, views_homes(views) ++ arguments),
+                    values(64, result), ran.proof.right.proof.left.witness, ran.proof.right.witness, ran.proof.right.proof.left.proof)),
+                    ran.proof.right.proof.right⟩)⟩),
+        Call(callee, arguments, result, also) => λ values before after ran =>
+            implies(before, callee, words_of(values, arguments), values(64, result), words_of(values, also), after, ran),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ values before after =>
             loop_runs_over_weaken(
                 λ (pass: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, pass, body, from, to),
@@ -457,9 +459,9 @@ theorem Function::runs_both_runs(self function: Function, effects: Effects(), ar
 fn program_effects(functions: List<Function>) → Effects() {
     match functions {
         Nil => no_effects(),
-        Cons(last, earlier) => λ before f arguments result after => match f.eq_dec(earlier.len()) {
-            Inl(_) => last.Runs(program_effects(earlier), arguments, result, before, after),
-            Inr(_) => program_effects(earlier)(before, f, arguments, result, after),
+        Cons(last, earlier) => λ before f arguments result rest after => match f.eq_dec(earlier.len()) {
+            Inl(_) => last.RunsBoth(program_effects(earlier), arguments, result, rest, before, after),
+            Inr(_) => program_effects(earlier)(before, f, arguments, result, rest, after),
         },
     }
 }
@@ -594,7 +596,7 @@ fn StructuredRegion::stores_within(self region: StructuredRegion, marks: List<Bo
         Compose(prefix, continuation) => prefix.stores_within(marks) && continuation.stores_within(marks),
         Conditional(_, _, _, _, when_true, when_false) => when_true.stores_within(marks) && when_false.stores_within(marks),
         Lend(views, _, _, _) => views_within(views, marks),
-        Call(_, _, _) => True,
+        Call(_, _, _, _) => True,
         Loop(_, _, _, _, body, _, _, _, _) => body.stores_within(marks),
     }
 }
@@ -625,7 +627,7 @@ theorem StructuredRegion::stores_marked(self region: StructuredRegion, marks: Li
             }
         },
         Lend(views, _, _, _) => views_store_marked(views, marks, b),
-        Call(_, _, _) => λ _ never => false_elim(never),
+        Call(_, _, _, _) => λ _ never => false_elim(never),
         Loop(_, _, _, _, body, _, _, _, _) => body.stores_marked(marks, b),
     }
 }
@@ -638,7 +640,7 @@ fn StructuredRegion::lendless(self region: StructuredRegion) → Bool {
         Compose(prefix, continuation) => prefix.lendless() && continuation.lendless(),
         Conditional(_, _, _, _, when_true, when_false) => when_true.lendless() && when_false.lendless(),
         Lend(_, _, _, _) => False,
-        Call(_, _, _) => True,
+        Call(_, _, _, _) => True,
         Loop(_, _, _, _, body, _, _, _, _) => body.lendless(),
     }
 }
@@ -665,7 +667,7 @@ theorem StructuredRegion::quiet_lendless(self region: StructuredRegion): region.
                 when_false.quiet_lendless(both.right))
         },
         Lend(_, _, _, _) => λ never => never,
-        Call(_, _, _) => λ _ => trivial,
+        Call(_, _, _, _) => λ _ => trivial,
         Loop(_, _, _, _, body, _, _, _, _) => body.quiet_lendless(),
     }
 }
@@ -786,7 +788,7 @@ fn StructuredRegion::Asks(self region: StructuredRegion, needs: Nat → Nat → 
         Compose(prefix, continuation) => prefix.Asks(needs, written) ∧ continuation.Asks(needs, written),
         Conditional(_, _, _, _, when_true, when_false) => when_true.Asks(needs, written) ∧ when_false.Asks(needs, written),
         Lend(views, callee, _, _) => (v: Nat) → needs(callee, v).IsTrue() → marked(views_marks(views), v) = True,
-        Call(callee, _, _) => (b: Nat) → needs(callee, b).IsTrue() → written(b) = True,
+        Call(callee, _, _, _) => (b: Nat) → needs(callee, b).IsTrue() → written(b) = True,
         Loop(_, _, _, _, body, _, _, _, _) => body.Asks(needs, written),
     }
 }
@@ -802,7 +804,7 @@ theorem StructuredRegion::asks_within(self region: StructuredRegion, needs: Nat 
         Conditional(_, _, _, _, when_true, when_false) => λ asks => ⟨when_true.asks_within(needs, mine, written, covers, asks.left),
             when_false.asks_within(needs, mine, written, covers, asks.right)⟩,
         Lend(_, _, _, _) => λ asks => asks,
-        Call(callee, _, _) => λ asks b need => covers(b, Bool::is_true_of_eq(asks(b, need))),
+        Call(callee, _, _, _) => λ asks b need => covers(b, Bool::is_true_of_eq(asks(b, need))),
         Loop(_, _, _, _, body, _, _, _, _) => body.asks_within(needs, mine, written, covers),
     }
 }
@@ -833,7 +835,7 @@ theorem StructuredRegion::lendless_asks(self region: StructuredRegion, all: Nat 
             ⟨when_true.lendless_asks(all, both.left), when_false.lendless_asks(all, both.right)⟩
         },
         Lend(_, _, _, _) => λ never => false_elim(never),
-        Call(_, _, _) => λ _ b need => eq_true_of_is_true(all(b), need),
+        Call(_, _, _, _) => λ _ b need => eq_true_of_is_true(all(b), need),
         Loop(_, _, _, _, body, _, _, _, _) => body.lendless_asks(all),
     }
 }
@@ -900,7 +902,7 @@ fn StructuredRegion::calls_within(self region: StructuredRegion, tables: List<Li
         Compose(prefix, continuation) => prefix.calls_within(tables, mine) && continuation.calls_within(tables, mine),
         Conditional(_, _, _, _, when_true, when_false) => when_true.calls_within(tables, mine) && when_false.calls_within(tables, mine),
         Lend(views, callee, _, _) => marks_within(marks_row(tables, callee), views_marks(views)),
-        Call(callee, _, _) => marks_within(marks_row(tables, callee), mine),
+        Call(callee, _, _, _) => marks_within(marks_row(tables, callee), mine),
         Loop(_, _, _, _, body, _, _, _, _) => body.calls_within(tables, mine),
     }
 }
@@ -920,7 +922,7 @@ theorem StructuredRegion::calls_within_asks(self region: StructuredRegion, table
             ⟨when_true.calls_within_asks(tables, mine, both.left), when_false.calls_within_asks(tables, mine, both.right)⟩
         },
         Lend(views, callee, _, _) => λ within v need => marks_within_marked(marks_row(tables, callee), views_marks(views), v, within, need),
-        Call(callee, _, _) => λ within b need => marks_within_marked(marks_row(tables, callee), mine, b, within, need),
+        Call(callee, _, _, _) => λ within b need => marks_within_marked(marks_row(tables, callee), mine, b, within, need),
         Loop(_, _, _, _, body, _, _, _, _) => body.calls_within_asks(tables, mine),
     }
 }
@@ -960,33 +962,41 @@ theorem Function::runs_quiet(self function: Function, callees: Buffers() → Cal
         ⟨function.body.runs_quiet(callees, file, quiet, computes.witness, computes.proof.right.left), computes.proof.right.right⟩⟩)
 }
 
+theorem Function::runs_quiet_both(self function: Function, callees: Buffers() → Callees(), file: Buffers(), quiet: function.body.quiet().IsTrue(),
+    arguments: List<BitVec(64)>, result: BitVec(64), rest: List<BitVec(64)>,
+    computes: function.ComputesBoth(callees(file), arguments, result, rest, buffers := file)):
+    function.RunsBoth(Effects::keeping(callees), arguments, result, rest, file, file) {
+    Exists(computes.witness, ⟨computes.proof.left,
+        ⟨function.body.runs_quiet(callees, file, quiet, computes.witness, computes.proof.right.left), computes.proof.right.right⟩⟩)
+}
+
 // And a program none of whose functions stores: what it may return over a
 // file, it does with the file left as it was.
 theorem program_effects_quiet(functions: List<Function>): program_quiet(functions).IsTrue() → (file: Buffers()) → (f: Nat) →
-    (arguments: List<BitVec(64)>) → (result: BitVec(64)) → program_callees_over(file, functions)(f, arguments, result) →
-    program_effects(functions)(file, f, arguments, result, file) {
+    (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (rest: List<BitVec(64)>) → program_callees_over(file, functions)(f, arguments, result, rest) →
+    program_effects(functions)(file, f, arguments, result, rest, file) {
     match functions {
-        Nil => λ _ file f arguments result never => never,
-        Cons(last, earlier) => λ quiet file f arguments result => {
+        Nil => λ _ file f arguments result rest never => never,
+        Cons(last, earlier) => λ quiet file f arguments result rest => {
             let both = Bool::is_true_and(last.body.quiet(), program_quiet(earlier), quiet);
             let below = λ (held: Buffers()) => program_callees_over(held, earlier);
             match f.eq_dec(earlier.len()) as λ d =>
                 (match d {
-                    Inl(_) => last.Computes(program_callees_over(file, earlier), arguments, result, buffers := file),
-                    Inr(_) => program_callees_over(file, earlier)(f, arguments, result),
+                    Inl(_) => last.ComputesBoth(program_callees_over(file, earlier), arguments, result, rest, buffers := file),
+                    Inr(_) => program_callees_over(file, earlier)(f, arguments, result, rest),
                 }) →
                 (match d {
-                    Inl(_) => last.Runs(program_effects(earlier), arguments, result, file, file),
-                    Inr(_) => program_effects(earlier)(file, f, arguments, result, file),
+                    Inl(_) => last.RunsBoth(program_effects(earlier), arguments, result, rest, file, file),
+                    Inr(_) => program_effects(earlier)(file, f, arguments, result, rest, file),
                 }) {
                 Inl(_) => λ computes => {
-                    let ran = last.runs_quiet(below, file, both.left, arguments, result, computes);
+                    let ran = last.runs_quiet_both(below, file, both.left, arguments, result, rest, computes);
                     Exists(ran.witness, ⟨ran.proof.left, ⟨last.body.runs_weaken(Effects::keeping(below), program_effects(earlier),
-                        λ before g words word after kept => j(sym(kept.right), λ x _ => program_effects(earlier)(before, g, words, word, x),
-                            program_effects_quiet(earlier, both.right, before, g, words, word, kept.left)),
+                        λ before g words word more after kept => j(sym(kept.right), λ x _ => program_effects(earlier)(before, g, words, word, more, x),
+                            program_effects_quiet(earlier, both.right, before, g, words, word, more, kept.left)),
                         ran.witness, file, file, ran.proof.right.left), ran.proof.right.right⟩⟩)
                 },
-                Inr(_) => λ earlier_returns => program_effects_quiet(earlier, both.right, file, f, arguments, result, earlier_returns),
+                Inr(_) => λ earlier_returns => program_effects_quiet(earlier, both.right, file, f, arguments, result, rest, earlier_returns),
             }
         },
     }

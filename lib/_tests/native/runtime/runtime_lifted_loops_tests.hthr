@@ -1,11 +1,12 @@
 // Probes for loops in `runtime fn`s over a span (docs/language/sequencing-surface-design.md
-// §23): a `while` or a `for` over words whose state is the `mut self`
-// receiver and one other local is lifted as a `mut self` method of the
-// receiver's type that returns that local, which the `runtime` generator
-// compiles as a loop over the span; a loop in a loop lifts the inner one
-// from the outer one's method; a loop whose state is not the receiver is
-// compiled too, and its caller calls it. Nothing here is proved by hand:
-// each theorem runs the function by evaluation.
+// §23, docs/language/loop-combinator-design.md §6.3): a `while` or a `for`
+// over words whose state is the `mut self` receiver and words is written
+// where it stands, as the library's `Loop::steps` over `Mutated<span, S>`,
+// which the `runtime` generator reads as one loop node over the span; a
+// loop in a loop is one node inside another, and a value the inner loop
+// reads from outside it is bound before it. A loop whose state is not the
+// receiver is compiled too. Nothing here is proved by hand: each theorem
+// runs the function by evaluation.
 import logic;
 import bool;
 import nat;
@@ -67,9 +68,6 @@ runtime fn List::open_hole(mut self s: List<u8>, n, i, key: u64) → u64 {
     j
 }
 
-// The loop is a method of the span's type, `List::open_hole_loop`, which
-// answers the span it leaves and `j`.
-theorem open_hole_moves(): List::open_hole_loop([1, 3, 5, 7, 0], 5, 4, 4) = Mutated([1, 3, 5, 5, 7], 2) { refl }
 theorem open_hole_runs(): List::open_hole([1, 3, 5, 7, 0], 5, 4, 4) = Mutated([1, 3, 5, 5, 7], 2) { refl }
 
 // ---------------------------------------------------------------------------
@@ -93,6 +91,16 @@ theorem insertion_sorts(): List::insertion([3, 1, 2, 0, 2], 5).after = [0, 1, 2,
 
 // ---------------------------------------------------------------------------
 // A loop whose state is not the receiver: compiled, and called.
+
+// A count over the span alone: its state is the span and the count.
+runtime fn List::bump(mut self s: List<u8>, n: u64) → u64 {
+    for i in 0..n {
+        s.put_within(n, i, s.byte_within(n, i) + 1);
+    }
+    n
+}
+
+theorem bump_runs(): List::bump([1, 2, 3], 3) = Mutated([2, 3, 4], 3) { refl }
 
 runtime fn sum_below(n: u64) → u64 {
     let mut s: u64 = 0;
@@ -231,12 +239,8 @@ fn Bytes::clear_below_kept({n: u64}, mut self s: Bytes(n), k: u64) → u64 {
 
 theorem clear_below_runs(): Bytes::clear_below_kept(Bytes([1, 2, 3, 4], refl), 2, n := 4).after.bytes = [1, 0, 0, 4] { refl }
 
-// ---------------------------------------------------------------------------
-// Refused, each by its reason.
-
-// A loop's state of two locals is a generated record, which a `runtime fn`
-// has no layout for.
-// expect-error: has no runtime layout under the reflected fragment
+// A loop's state of two locals is a generated record, `f#State`, which the
+// loop carries round as its two words (`Loop::steps`, §6.2).
 runtime fn two_locals(i: u64) → u64 {
     let mut j = i;
     let mut c: u64 = 0;
@@ -246,3 +250,8 @@ runtime fn two_locals(i: u64) → u64 {
     }
     c
 }
+
+theorem two_locals_runs(): two_locals(5) = 10 { refl }
+
+// ---------------------------------------------------------------------------
+// Refused, each by its reason.

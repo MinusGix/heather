@@ -76,7 +76,7 @@ theorem sum_computes<M>(placement: List<Place>, code: Prog, lowered: lower_progr
 // and asks for what its frame asks wherever it is in the program, the
 // caller for its frame, the call's 24 bytes and its callee's room.
 fn twice_then_sum() → Function {
-    Function(parameters := [0, 1], body := Call(0, [0, 1], 2), result := 2)
+    Function(parameters := [0, 1], body := Call(0, [0, 1], 2, []), result := 2)
 }
 
 fn leaf_after_caller() → List<Function> { [sum(), twice_then_sum(), sum()] }

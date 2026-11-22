@@ -34,7 +34,7 @@ fn double() → Function {
 // add_double(a, b) = double(a) + b, function 1.
 fn add_double() → Function {
     Function(parameters := [0, 1],
-        body := Compose(Call(0, [0], 2),
+        body := Compose(Call(0, [0], 2, []),
             Dataflow(Region(inputs := Ports([word(1), word(2)]), nodes := [Add(width := 64, output := 3, left := 2, right := 1)],
                 outputs := Ports([word(3)])))),
         result := 3)
@@ -49,7 +49,7 @@ theorem double_runs(): program_eval(pair(), 0, [w(21)]) = w(42) { refl }
 
 // The claim: add_double, called on 3 and 4, may return what it evaluates
 // to, with its call answered by double.
-theorem pair_computes(): program_callees(pair(), 1, [w(3), w(4)], w(10)) {
+theorem pair_computes(): program_callees(pair(), 1, [w(3), w(4)], w(10), Nil) {
     program_eval_computes(pair(), pair_evaluable, 1, [w(3), w(4)], trivial,
         program_total_defined(pair(), [], trivial, 1, [w(3), w(4)]))
 }
@@ -74,13 +74,13 @@ theorem select_evaluable(): program_evaluable([select()]).IsTrue() { trivial }
 theorem select_true(): program_eval([select()], 0, [w(2), w(9), w(100)]) = w(7) { refl }
 theorem select_false(): program_eval([select()], 0, [w(9), w(2), w(100)]) = w(100) { refl }
 
-theorem select_computes(): program_callees([select()], 0, [w(2), w(9), w(100)], w(7)) {
+theorem select_computes(): program_callees([select()], 0, [w(2), w(9), w(100)], w(7), Nil) {
     program_eval_computes([select()], select_evaluable, 0, [w(2), w(9), w(100)], trivial,
         program_total_defined([select()], [], trivial, 0, [w(2), w(9), w(100)]))
 }
 
 // At an open argument the claim is the theorem's, with no evaluation.
-theorem select_computes_open(a, b, c: BitVec(64)): program_callees([select()], 0, [a, b, c], program_eval([select()], 0, [a, b, c])) {
+theorem select_computes_open(a, b, c: BitVec(64)): program_callees([select()], 0, [a, b, c], program_eval([select()], 0, [a, b, c]), program_answers([select()], 0, [a, b, c]).tail()) {
     program_eval_computes([select()], select_evaluable, 0, [a, b, c], trivial,
         program_total_defined([select()], [], trivial, 0, [a, b, c]))
 }
@@ -108,9 +108,9 @@ theorem arm_writes_condition_refused(): StructuredRegion::evaluable(Conditional(
 
 // A call with too few arguments, to a function that is not there, and
 // whose result is one of its arguments.
-theorem wrong_arity_refused(): StructuredRegion::evaluable(Call(0, [0], 2), program_arity([add_double()])) = False { refl }
-theorem no_callee_refused(): StructuredRegion::evaluable(Call(1, [0], 2), program_arity([double()])) = False { refl }
-theorem result_is_argument_refused(): StructuredRegion::evaluable(Call(0, [0], 0), program_arity([double()])) = False { refl }
+theorem wrong_arity_refused(): StructuredRegion::evaluable(Call(0, [0], 2, []), program_arity([add_double()])) = False { refl }
+theorem no_callee_refused(): StructuredRegion::evaluable(Call(1, [0], 2, []), program_arity([double()])) = False { refl }
+theorem result_is_argument_refused(): StructuredRegion::evaluable(Call(0, [0], 0, []), program_arity([double()])) = False { refl }
 
 // A function writing its parameter, and one naming a parameter twice.
 theorem parameter_written_refused(): Function::evaluable(Function(parameters := [0],

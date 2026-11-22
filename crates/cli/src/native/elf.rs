@@ -556,7 +556,7 @@ fn {p}_places() → List<Nat> {{ {p}_plans({src}().functions) }}
             format!("{src}().compile_calls_of({LOW}, {homes}, {frames}, {src}().procedures.head_or(Procedure([], [], Exit(0))), {src}().procedures.tail(), {p}_code(), {main}, {procs}, {names}, {after},
         {p}_allocated(), refl, refl, {p}_emitted(), {p}_procedures(), {p}_deep(), {p}_laid())")
         } else {
-            format!("{src}().compile_functions_of({LOW}, {homes}, {frames}, {src}().functions.head_or(Function([], Call(0, [], 0), 0)), {src}().functions.tail(), {p}_code(), {main}, {procs}, {names}, {after},
+            format!("{src}().compile_functions_of({LOW}, {homes}, {frames}, {src}().functions.head_or(Function([], Call(0, [], 0, []), 0)), {src}().functions.tail(), {p}_code(), {main}, {procs}, {names}, {after},
         {p}_allocated(), refl, refl, refl, {p}_emitted(), {p}_procedures(), {p}_deep(), {p}_laid())")
         }),
     };
@@ -816,6 +816,7 @@ fn refused(symbol: &str, why: &[u64]) -> String {
         15 => format!("procedure {first} does not compile (`Procedure::code`)"),
         16 => format!("the call of function {first} does not fit: no such function, another count of arguments than it takes after the homes of the buffers it is lent, more than six registers with them, a word past the slots, or more buffers lent than the source has"),
         17 => "the functions it calls do not link (`Prog::links`): they are not evaluable, they are not placeless (an answer could depend on where a lent buffer lies), no rows of marks hold of them (a function stores through a view it was lent to read, `program_rowed`), or the function compiler refused them with its own placement of their values".into(),
+        18 => format!("the call of function {first} returns {second} words past its first, and a statement keeps only the first (docs/native/runtime-fn-setups-design.md §16.17)"),
         _ => format!("reason {reason} ({first}, {second})"),
     };
     if kind == "the program" { format!("`{symbol}` is refused: {reason}") }

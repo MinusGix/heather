@@ -15,6 +15,7 @@ import function_ir_writes;
 import function_ir_state;
 import function_ir_run;
 import function_ir_lower;
+import function_ir_lower_structured;
 import function_ir_lower_calls;
 import function_ir_compile;
 import x86_64;
@@ -128,20 +129,21 @@ theorem compiled_computes<M>(functions: List<Function>, placement: List<Place>, 
         compiler_correct<M>(functions, placement, rooms, code, lowered, evaluable, machine, f, defined, arguments, arity, meets))
 }
 
-// What a certificate states of a program whose last function returns two
-// words, wherever the code is loaded and whatever follows it: called at
-// the last function's label with its arguments in their registers and its
-// room on the stack, it returns `answer` in RAX and `rest` in RDX, keeps
-// the callee-saved registers, and leaves memory as it was but for stores
-// into its own room (`Stack::CalleePost`). The System V return of a
-// structure of two integer words (docs/native/runtime-fn-setups-design.md
-// §16.16).
+// What a certificate states of a program whose last function returns
+// several words, wherever the code is loaded and whatever follows it:
+// called at the last function's label with its arguments in their
+// registers and its room on the stack, it returns `answer` in RAX and
+// `rest` in the answer registers (RDX, RCX, RSI, …), keeps the callee-saved
+// registers, and leaves memory as it was but for stores into its own room
+// (`Stack::CalleePost`). At two words, the System V return of a structure
+// of two integer words (docs/native/runtime-fn-setups-design.md §16.16,
+// §16.17).
 fn Prog::ComputesBoth<M>(self code: Prog, machine: Machine<M>, f, room: Nat, arguments: List<BitVec(64)>, answer: BitVec(64),
     rest: List<BitVec(64)>) → Type {
     (origin: BitVec(64)) → (last: List<BitVec(8)>) →
         Site<M>(machine.fetch, machine.data, code, last, origin).Returns(machine.stack, asm_labels(code, f + 1),
             λ (i: Nat) (s: MachineState<M>) => machine.stack.Passed(arguments, i, s) ∧ room <= i,
-            λ (i: Nat) (s: MachineState<M>) (t: MachineState<M>) => machine.stack.CalleePost(answer)(i, s, t) ∧ ArgsIn(rest, [Rdx], t.gprs))
+            λ (i: Nat) (s: MachineState<M>) (t: MachineState<M>) => machine.stack.CalleePost(answer)(i, s, t) ∧ ArgsIn(rest, answer_registers(), t.gprs))
 }
 
 // What a certificate cites: `compiled_returns_both` at every load, the
@@ -151,7 +153,7 @@ theorem compiled_computes_both<M>(last: Function, earlier: List<Function>, place
     lowered: lower_program_roomed(Cons(last, earlier), placement, [], rooms) = Some(code),
     evaluable: program_evaluable(Cons(last, earlier)).IsTrue(), quiet: program_quiet(Cons(last, earlier)).IsTrue(),
     machine: Machine<M>, arguments: List<BitVec(64)>, count: last.parameters.len() = arguments.len(), answer: BitVec(64), rest: List<BitVec(64)>,
-    evaluates: last.eval(program_eval(earlier), arguments) = answer, evaluates_rest: program_eval_also(Cons(last, earlier), arguments) = rest,
+    evaluates: last.eval(program_answers(earlier), arguments) = answer, evaluates_rest: program_eval_also(Cons(last, earlier), arguments) = rest,
     defined: program_defined(Cons(last, earlier), earlier.len(), arguments).IsTrue()):
     code.ComputesBoth(machine, earlier.len(), rooms(earlier.len()), arguments, answer, rest) {
     λ origin bytes => compiled_returns_both<M>(last, earlier, placement, rooms, code, lowered, evaluable, quiet, machine.fetch, machine.data, bytes, origin,
@@ -234,16 +236,17 @@ theorem compiled_implements<M>(functions: List<Function>, placement: List<Place>
 // lying at `addresses` with those `marks` marks lent to be written
 // (`Lending::writing`), all of them beyond the stack below `top` (`Loan`),
 // called with `arguments` (each span's address and length first, then its
-// words), returns `answer.word` in RAX and leaves the buffers as
+// words), returns `answer.word` in RAX and its words past the first
+// (`answer.rest`) in the answer registers, leaves the buffers as
 // `answer.buffers`, with the registers and stack as `Prog::Returns` says,
 // and stores nowhere but its own room and the bytes of the spans it may
-// write (`Stack::AnsweredOver`).
+// write (`Stack::AnsweredBoth`).
 fn Prog::ReturnsOver<M>(self code: Prog, machine: Machine<M>, origin: BitVec(64), last: List<BitVec(8)>, top: Nat,
     lending: Lending, f, room: Nat, arguments: List<BitVec(64)>, before: Buffers(), answer: Ending) → Type {
     Site<M>(machine.fetch, machine.data, code, last, origin).Returns(machine.stack, asm_labels(code, f + 1),
         λ (i: Nat) (s: MachineState<M>) => (machine.stack.Passed(arguments, i, s) ∧ room <= i) ∧
             machine.stack.LentOver(lending, top, f, arguments, before)(i, s),
-        machine.stack.AnsweredOver(lending, answer.word, answer.buffers))
+        machine.stack.AnsweredBoth(lending, answer.word, answer.rest, answer.buffers))
 }
 
 // The same wherever the code is loaded and whatever follows it: what a
@@ -287,9 +290,9 @@ theorem Prog::computes_over_none<M>(self code: Prog, machine: Machine<M>, f: Nat
         let ran = computes(origin, last, s, at, resident, i, rsp, room, held.left, ret, saved);
         let post = ran.proof.right.right.right.right;
         Exists(ran.witness, ⟨ran.proof.left, ⟨ran.proof.right.left, ⟨ran.proof.right.right.left, ⟨ran.proof.right.right.right.left,
-            ⟨post.left, ⟨post.right.left,
+            ⟨⟨post.left, ⟨post.right.left,
                 ⟨machine.stack.wrote_in_own(i, Lending::none().spans(), s.memory, ran.witness.memory, post.right.right),
-                    machine.stack.in_memory_none(ran.witness.memory)⟩⟩⟩⟩⟩⟩⟩)
+                    machine.stack.in_memory_none(ran.witness.memory)⟩⟩⟩, trivial⟩⟩⟩⟩⟩)
     }
 }
 
@@ -299,7 +302,7 @@ theorem Prog::computes_of_over_none<M>(self code: Prog, machine: Machine<M>, f: 
     code.Computes(machine, f, room, arguments, answer) {
     λ origin last s at resident i rsp room held ret saved => {
         let ran = over(origin, last, s, at, resident, i, rsp, room, ⟨held, ⟨trivial, ⟨room, machine.stack.in_memory_none(s.memory)⟩⟩⟩, ret, saved);
-        let post = ran.proof.right.right.right.right;
+        let post = ran.proof.right.right.right.right.left;
         Exists(ran.witness, ⟨ran.proof.left, ⟨ran.proof.right.left, ⟨ran.proof.right.right.left, ⟨ran.proof.right.right.right.left,
             ⟨post.left, ⟨post.right.left,
                 machine.stack.wrote_in_none(i, Lending::none().spans(), λ b => refl, s.memory, ran.witness.memory, post.right.right.left)⟩⟩⟩⟩⟩⟩)

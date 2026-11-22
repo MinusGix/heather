@@ -150,3 +150,154 @@ theorem Loop::unique<S, R>(self l: Loop<S, R>, g: S → R,
 {
     l.unique_within(g, same, l.measure(s) + 1, s, Nat::lt_succ_self(l.measure(s)))
 }
+
+// ---------------------------------------------------------------------------
+// The same loop with its proofs taken out, as a `runtime fn` runs it
+// (docs/language/loop-combinator-design.md §6.2): a pass goes round at the
+// next state or stops at one, and the passes are counted by a fuel instead
+// of bounded by the measure. Running out answers the state it got to, so no
+// value is invented. `Loop::steps_stays` is why the fuel never runs out
+// where the measure is at most it.
+
+inductive Step<S> {
+    Next(s: S),
+    Stop(s: S),
+}
+
+// A `while` loop's pass: while `go` holds, round again at `next`, which
+// may read that it does (an index the test bounds); else stop at the state
+// `s` itself. The `match` is the one a `match h: go` writes, so a step the
+// elaborator spells that way is this by conversion.
+fn Step::turn<S>(go: Bool, next: (go = True) → S, s: S) → Step<S> {
+    (match go as λ b => (go = b) → Step<S> { False => λ _ => Stop(s), True => λ e => Next(next(e)) })(refl)
+}
+
+// A turn whose next state does not read the test's equation.
+fn Step::when<S>(go: Bool, next: S, s: S) → Step<S> { Step::turn(go, λ _ => next, s) }
+
+// A step that stops stops where it is.
+fn Step::Stays<S>(s: S, q: Step<S>) → Type {
+    match q { Next(_) => True, Stop(r) => r = s }
+}
+
+// How many passes a `while` loop is given: `2^64 - 1`, the most a 64-bit
+// count reaches, and at least every measure that is a 64-bit word's
+// `toNat`. A name, not a numeral: two loops given it compare at their
+// `Loop::steps` without either being unrolled pass by pass, which a
+// numeral's would be wherever a field read forces the loop's state.
+fn Loop::passes() → Nat { 18446744073709551615 }
+
+// `Step::turn` stops where it is.
+theorem Step::turn_stays<S>(go: Bool, next: (go = True) → S, s: S): Step::Stays(s, Step::turn(go, next, s)) {
+    (match go as λ b => (e: go = b) → Step::Stays(s, (match b as λ b2 => (go = b2) → Step<S> { False => λ _ => Stop(s), True => λ e2 => Next(next(e2)) })(e))
+    { False => λ _ => refl, True => λ _ => trivial })(refl)
+}
+
+fn Loop::steps<S>(fuel: Nat, step: S → Step<S>, s: S) → S {
+    match fuel {
+        Zero => s,
+        Succ(k) => match step(s) { Next(t) => Loop::steps(k, step, t), Stop(r) => r },
+    }
+}
+
+// Two steps that agree at every state iterate alike: what lets a loop's
+// meaning ignore what its step does not read.
+theorem Loop::steps_ext<S>(f1, f2: S → Step<S>, same: (s: S) → f1(s) = f2(s), k: Nat): (s: S) → Loop::steps(k, f1, s) = Loop::steps(k, f2, s) {
+    match k {
+        Zero => λ s => refl,
+        Succ(i) => λ s => {
+            let ran = λ (q: Step<S>) => match q { Next(t) => Loop::steps(i, f1, t), Stop(r) => r };
+            trans(j(same(s), λ q _ => ran(f1(s)) = ran(q), refl),
+            match f2(s) as λ q => ran(q) = (match q { Next(t) => Loop::steps(i, f2, t), Stop(r) => r }) {
+                Next(t) => Loop::steps_ext(f1, f2, same, i, t),
+                Stop(_) => refl,
+            })
+        },
+    }
+}
+
+// A pass of a loop read without its proofs.
+fn Pass::step<S>(m: S → Nat, s: S, self p: Pass<S, S>(m, s)) → Step<S> {
+    match p { Again(b) => Next(b.next), Done(r) => Stop(r) }
+}
+
+// A pass split on one test: round again where it holds, with the next
+// state and its decrease found under it, else leave where it is. What a
+// `while` over a span is stepped by (crates/elab/src/loops.rs,
+// `lift_steps_over`): its body's found proofs read the test's equation,
+// so the pass and the loop's `Step::turn` are one split, proved once here.
+fn Pass::of_turn<S>(m: S → Nat, s: S, go: Bool, next: (go = True) → Lower<S>(m, s)) → Pass<S, S>(m, s) {
+    (match go as λ b => (go = b) → Pass<S, S>(m, s) { False => λ _ => Done(s), True => λ e => Again(next(e)) })(refl)
+}
+
+theorem Pass::step_of_turn<S>(m: S → Nat, s: S, go: Bool, next: (go = True) → Lower<S>(m, s)):
+    Pass::step(m, s, Pass::of_turn(m, s, go, next)) = Step::turn(go, λ e => next(e).next, s) {
+    (match go as λ b => (e: go = b) →
+        Pass::step(m, s, (match b as λ b2 => (go = b2) → Pass<S, S>(m, s) { False => λ _ => Done(s), True => λ e2 => Again(next(e2)) })(e))
+            = (match b as λ b2 => (go = b2) → Step<S> { False => λ _ => Stop(s), True => λ e2 => Next(next(e2).next) })(e)
+    { False => λ _ => refl, True => λ _ => refl })(refl)
+}
+
+// A loop whose stops are where it is needs no pass past its measure: with
+// the measure at most the fuel, the passes that go round are at most the
+// fuel, and the one that stops answers the state it was given, as running
+// out does. What a `while` loop is rewritten by (`Loop::passes()` is the
+// most a 64-bit count reaches, and a measure that is a word's `toNat` is at
+// most it).
+theorem Loop::steps_stays<S>(self l: Loop<S, S>, step: S → Step<S>, same: (s: S) → Pass::step(l.measure, s, l.step(s)) = step(s),
+    stays: (s: S) → Step::Stays(s, step(s)), k: Nat): (s: S) → l.measure(s) <= k → Loop::steps(k, step, s) = l.run(s) {
+    match k {
+        Zero => λ s h => trans((match l.step(s) as λ p => Step::Stays(s, Pass::step(l.measure, s, p)) →
+                s = (match p { Again(b) => l.run(b.next), Done(r) => r }) {
+                Again(b) => λ _ => false_elim(Nat::not_succ_le_zero(l.measure(b.next), Nat::lt_of_lt_of_le(l.measure(b.next), l.measure(s), 0, b.less.recover(), h))),
+                Done(r) => λ e => sym(e),
+            })(j(sym(same(s)), λ q _ => Step::Stays(s, q), stays(s))), sym(l.run_unfold(s))),
+        Succ(j) => λ s h => {
+            let ran = λ (q: Step<S>) => match q { Next(t) => Loop::steps(j, step, t), Stop(r) => r };
+            trans(rewrite(sym(same(s)), refl), trans(match l.step(s) as λ p =>
+                ran(Pass::step(l.measure, s, p)) = (match p { Again(b) => l.run(b.next), Done(r) => r }) {
+                Again(b) => Loop::steps_stays(l, step, same, stays, j, b.next, Nat::lt_of_lt_of_le(l.measure(b.next), l.measure(s), j + 1, b.less.recover(), h)),
+                Done(_) => refl,
+            }, sym(l.run_unfold(s))))
+        },
+    }
+}
+
+// A step's state read through `f`.
+fn Step::map<S, T>(f: S → T, self q: Step<S>) → Step<T> {
+    match q { Next(s) => Next(f(s)), Stop(s) => Stop(f(s)) }
+}
+
+// A `while` pass read through `f` is the pass over the states `f` reads,
+// where the two go round to states `f` relates.
+theorem Step::turn_map<S, T>(f: S → T, go: Bool, next1: (go = True) → S, next2: (go = True) → T,
+    same: (e: go = True) → f(next1(e)) = next2(e), s: S): Step::turn(go, next1, s).map(f) = Step::turn(go, next2, f(s)) {
+    (match go as λ b => (e: go = b) →
+        Step::map(f, (match b as λ b2 => (go = b2) → Step<S> { False => λ _ => Stop(s), True => λ e2 => Next(next1(e2)) })(e)) =
+        (match b as λ b2 => (go = b2) → Step<T> { False => λ _ => Stop(f(s)), True => λ e2 => Next(next2(e2)) })(e)
+    { False => λ _ => refl, True => λ e => j(same(e), λ t _ => Step::Next(f(next1(e))) = Step::Next(t), refl) })(refl)
+}
+
+// A loop simulated through `f`: where each pass read through `f` is the
+// other loop's pass at the state `f` reads, the two iterate alike. What a
+// loop's second meaning (over a record, forgetting facts) is proved by,
+// once.
+theorem Loop::steps_map<S, T>(f: S → T, s1: S → Step<S>, s2: T → Step<T>, commute: (s: S) → s1(s).map(f) = s2(f(s)), k: Nat):
+    (s: S) → f(Loop::steps(k, s1, s)) = Loop::steps(k, s2, f(s)) {
+    match k {
+        Zero => λ s => refl,
+        Succ(i) => λ s => {
+            let ran2 = λ (q: Step<T>) => match q { Next(t) => Loop::steps(i, s2, t), Stop(r) => r };
+            trans(match s1(s) as λ q => f(match q { Next(t) => Loop::steps(i, s1, t), Stop(r) => r }) = ran2(q.map(f)) {
+                    Next(t) => Loop::steps_map(f, s1, s2, commute, i, t),
+                    Stop(_) => refl,
+                }, j(commute(s), λ q _ => ran2(s1(s).map(f)) = ran2(q), refl))
+        },
+    }
+}
+
+// What a loop that threads a span goes on with: its span and its state,
+// handed to `k`. A name of its own so that a loop's written continuation
+// and a meaning's are one application, compared without reading the
+// loop's run as a pair, which would run it.
+fn Loop::after<S, R, T>(m: Mutated<S, R>, k: S → R → T) → T { k(m.after, m.value) }

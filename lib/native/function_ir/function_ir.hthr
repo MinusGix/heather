@@ -1030,8 +1030,10 @@ inductive StructuredRegion {
         when_false: StructuredRegion),
     // A call of function `callee` of the program on 64-bit `arguments`, its
     // 64-bit result named `result` (issues/function-ir-verified-lowering.md,
-    // round 3).
-    Call(callee: Nat, arguments: List<Nat>, result: Nat),
+    // round 3) and its words past the first `also`, as the callee names
+    // them in its own `Function.also` (docs/native/runtime-fn-setups-design.md
+    // §16.17): a value of several words comes back whole.
+    Call(callee: Nat, arguments: List<Nat>, result: Nat, also: List<Nat>),
     // A loop of at most `bound` passes (round 5; docs/native-effect-source-
     // design.md §5.4). The words `inputs` start its state. Each pass binds
     // the state to `parameters` and the passes left, counted down from
@@ -1067,7 +1069,7 @@ fn structured_inputs(region: StructuredRegion) → Ports {
         Sequence(prefix, _) => prefix.inputs,
         Compose(prefix, _) => structured_inputs(prefix),
         Conditional(inputs, _, _, _, _, _) => inputs,
-        Call(_, arguments, _) => Ports(word_ports(arguments)),
+        Call(_, arguments, _, _) => Ports(word_ports(arguments)),
         Loop(inputs, bound, _, _, _, _, _, _, _) => Ports(word_ports(inputs ++ [bound])),
         Lend(views, _, arguments, _) => Ports(word_ports(views_reads(views) ++ arguments)),
     }
@@ -1079,7 +1081,7 @@ fn structured_outputs(region: StructuredRegion) → Ports {
         Sequence(_, continuation) => structured_outputs(continuation),
         Compose(_, continuation) => structured_outputs(continuation),
         Conditional(_, _, _, outputs, _, _) => outputs,
-        Call(_, _, result) => Ports([Port(id := result, width := 64)]),
+        Call(_, _, result, also) => Ports(Cons(Port(id := result, width := 64), word_ports(also))),
         Loop(_, _, _, _, _, _, _, outputs, exhausted) => Ports(word_ports(outputs) ++ [Port(id := exhausted, width := 1)]),
         Lend(_, _, _, result) => Ports([Port(id := result, width := 64)]),
     }
@@ -1150,7 +1152,7 @@ fn StructuredRegionValid(region: StructuredRegion) → Type {
                   (structured_outputs(when_false) = outputs ∧
                    (StructuredRegionValid(when_true) ∧
                     StructuredRegionValid(when_false))))))))),
-        Call(_, arguments, result) =>
+        Call(_, arguments, result, _) =>
             arguments.len() <= 8 ∧ PortIdAbsent(result, word_ports(arguments)),
         Loop(inputs, _, parameters, _, body, _, next, outputs, _) =>
             (inputs.len() = parameters.len()) ∧ ((next.len() = parameters.len()) ∧
@@ -1289,7 +1291,7 @@ fn StructuredRegionHolds(values: Valuation(), region: StructuredRegion) → Type
                 True => StructuredRegionHolds(values, when_true),
             },
         // Without a program there is nothing to call.
-        Call(_, _, _) => False,
+        Call(_, _, _, _) => False,
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
             LoopHolds(λ (pass: Valuation()) => StructuredRegionHolds(pass, body), values, inputs, bound, parameters, count, exit,
                 next, outputs, exhausted),
@@ -1298,10 +1300,11 @@ fn StructuredRegionHolds(values: Valuation(), region: StructuredRegion) → Type
 }
 
 // What the functions of a program may return: `callees(f, arguments,
-// result)` when function `f`, called on `arguments`, may return `result`.
-fn Callees() → Type<1> { Nat → List<BitVec(64)> → BitVec(64) → Type }
+// result, rest)` when function `f`, called on `arguments`, may return
+// `result` and, past it, the words `rest` (its `also`).
+fn Callees() → Type<1> { Nat → List<BitVec(64)> → BitVec(64) → List<BitVec(64)> → Type }
 
-fn no_callees() → Callees() { λ _ _ _ => False }
+fn no_callees() → Callees() { λ _ _ _ _ => False }
 
 // A structured region's equations where its calls are answered by
 // `callees`.
@@ -1319,7 +1322,7 @@ fn StructuredRegionHoldsOver(buffers: Buffers(), callees: Callees(), values: Val
                 False => StructuredRegionHoldsOver(buffers, callees, values, when_false),
                 True => StructuredRegionHoldsOver(buffers, callees, values, when_true),
             },
-        Call(callee, arguments, result) => callees(callee, words_of(values, arguments), values(64, result)),
+        Call(callee, arguments, result, also) => callees(callee, words_of(values, arguments), values(64, result), words_of(values, also)),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
             LoopHolds(λ (pass: Valuation()) => StructuredRegionHoldsOver(buffers, callees, pass, body), values, inputs, bound,
                 parameters, count, exit, next, outputs, exhausted),
@@ -1329,7 +1332,7 @@ fn StructuredRegionHoldsOver(buffers: Buffers(), callees: Callees(), values: Val
         // threaded (`StructuredRegionRunsOver`, function_ir_writes), and no
         // theorem takes this one for it: a region with a lend is not `quiet`.
         Lend(views, callee, arguments, result) => NodesHoldOver(buffers, values, views_nodes(views)) ∧
-            callees(callee, words_of(values, views_homes(views) ++ arguments), values(64, result)),
+            Exists<List<BitVec(64)>>(λ rest => callees(callee, words_of(values, views_homes(views) ++ arguments), values(64, result), rest)),
     }
 }
 
@@ -1352,7 +1355,7 @@ theorem StructuredRegion::holds_in(self region: StructuredRegion, callees: Calle
                 False => λ holds => when_false.holds_in(callees, values, holds),
                 True => λ holds => when_true.holds_in(callees, values, holds),
             },
-        Call(_, _, _) => λ never => false_elim(never),
+        Call(_, _, _, _) => λ never => false_elim(never),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
             loop_runs_weaken(λ (pass: Valuation()) => StructuredRegionHolds(pass, body),
                 λ (pass: Valuation()) => StructuredRegionHoldsIn(callees, pass, body), λ pass held => body.holds_in(callees, pass, held),
@@ -1382,6 +1385,28 @@ fn Function::Computes(self function: Function, callees: Callees(), arguments: Li
         (StructuredRegionHoldsIn(callees, values, function.body, buffers := buffers) ∧ values(64, function.result) = result))
 }
 
+// And its words past the first, `rest`, from the same valuation: what a
+// call that names them (`Call`'s `also`) is answered with.
+fn Function::ComputesBoth(self function: Function, callees: Callees(), arguments: List<BitVec(64)>, result: BitVec(64), rest: List<BitVec(64)>,
+    buffers: Buffers() := Nil) → Type {
+    Exists<Valuation()>(λ values => (words_of(values, function.parameters) = arguments) ∧
+        (StructuredRegionHoldsIn(callees, values, function.body, buffers := buffers) ∧
+            ((values(64, function.result) = result) ∧ (words_of(values, function.also) = rest))))
+}
+
+theorem Function::computes_both_computes(self function: Function, callees: Callees(), arguments: List<BitVec(64)>, result: BitVec(64),
+    rest: List<BitVec(64)>, buffers: Buffers(), both: function.ComputesBoth(callees, arguments, result, rest, buffers := buffers)):
+    function.Computes(callees, arguments, result, buffers := buffers) {
+    Exists(both.witness, ⟨both.proof.left, ⟨both.proof.right.left, both.proof.right.right.left⟩⟩)
+}
+
+// Every run computes its words past the first: those its valuation gives.
+theorem Function::computes_both_of(self function: Function, callees: Callees(), arguments: List<BitVec(64)>, result: BitVec(64),
+    buffers: Buffers(), ran: function.Computes(callees, arguments, result, buffers := buffers)):
+    function.ComputesBoth(callees, arguments, result, words_of(ran.witness, function.also), buffers := buffers) {
+    Exists(ran.witness, ⟨ran.proof.left, ⟨ran.proof.right.left, ⟨ran.proof.right.right, refl⟩⟩⟩)
+}
+
 // A program lists its functions last first: function `f` is the one with
 // `f` functions after it, and calls only those, so a program cannot
 // recurse. What its functions return, each answering its calls by the
@@ -1390,9 +1415,9 @@ fn Function::Computes(self function: Function, callees: Callees(), arguments: Li
 fn program_callees_over(buffers: Buffers(), functions: List<Function>) → Callees() {
     match functions {
         Nil => no_callees(),
-        Cons(last, earlier) => λ f arguments result => match f.eq_dec(earlier.len()) {
-            Inl(_) => last.Computes(program_callees_over(buffers, earlier), arguments, result, buffers := buffers),
-            Inr(_) => program_callees_over(buffers, earlier)(f, arguments, result),
+        Cons(last, earlier) => λ f arguments result rest => match f.eq_dec(earlier.len()) {
+            Inl(_) => last.ComputesBoth(program_callees_over(buffers, earlier), arguments, result, rest, buffers := buffers),
+            Inr(_) => program_callees_over(buffers, earlier)(f, arguments, result, rest),
         },
     }
 }

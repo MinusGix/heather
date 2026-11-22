@@ -40,8 +40,8 @@ fn read(found: Option<Found>) → String { spelled_text(found_spelled(found)) }
 // Function 2 is x ↦ (x ^ 7) + x by a call of function 1, x ↦ x ^ 7, which
 // calls function 0, the exclusive or.
 fn xor() → Function { Function([0, 1], nodes([BitXor(64, 2, 0, 1)]), 2) }
-fn seven() → Function { Function([0], Compose(nodes([Const(64, 1, 7)]), Call(0, [0, 1], 2)), 2) }
-fn top() → Function { Function([0], Compose(Call(1, [0], 1), nodes([Add(64, 2, 1, 0)])), 2) }
+fn seven() → Function { Function([0], Compose(nodes([Const(64, 1, 7)]), Call(0, [0, 1], 2, [])), 2) }
+fn top() → Function { Function([0], Compose(Call(1, [0], 1, []), nodes([Add(64, 2, 1, 0)])), 2) }
 fn three() → List<Function> { [top(), seven(), xor()] }
 
 // Function 0 has no call to inline, no test to decide and no length to
@@ -301,8 +301,8 @@ fn byte_at() → Function {
 }
 
 fn two() → Function {
-    Function([0, 1], Compose(nodes([Const(64, 2, 3)]), Compose(Call(0, [0, 1, 2], 3),
-        Compose(nodes([Move(64, 7, 3), Const(64, 4, 7)]), Compose(Call(0, [0, 1, 4], 5), nodes([Add(64, 6, 7, 5)]))))), 6, lent := 1)
+    Function([0, 1], Compose(nodes([Const(64, 2, 3)]), Compose(Call(0, [0, 1, 2], 3, []),
+        Compose(nodes([Move(64, 7, 3), Const(64, 4, 7)]), Compose(Call(0, [0, 1, 4], 5, []), nodes([Add(64, 6, 7, 5)]))))), 6, lent := 1)
 }
 
 // A search that inlines `byte_at` and nothing as large as `two` with it

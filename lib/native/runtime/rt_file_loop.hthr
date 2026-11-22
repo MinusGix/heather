@@ -72,8 +72,23 @@ fn FTm::tail_sem(self t: FTm, fw: FWorld, res: Ty, again: FTm::Round(fw.w.tys, r
         Again(args) => λ g env own => again(Tm::words(fw.w, g, env, args), own),
         Lend(f, views, args, body) => λ g env own => shared(FTm::lent(fw, g, env, f, views, args, own), λ m =>
             body.tail_sem(fw, res, again, Cons(Sig::at(fw.fsigs, f).result, g), Pair(m.value, env), m.after)),
+        Loop(init, test, body, rest) => λ g env own => FTm::bind_at(fw.w.tys, g, Ty::at(g, init),
+            FTm::iterated(fw, g, init, test, body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => body.sem(fw, Cons(Ty::at(g, init), g), e, o), env, own),
+            env, λ e o => rest.tail_sem(fw, res, again, Cons(Ty::at(g, init), g), e, o)),
     }
 }
+
+// Two continuations that agree go on alike after a loop.
+theorem FTm::bind_at_ext<S>(tys: Nat → RecInfo, g: List<Ty>, st: Ty, m: Mutated<List<BitVec(8)>, st.sem(tys)>, env: Env(tys, g),
+    k1, k2: Env(tys, Cons(st, g)) → List<BitVec(8)> → S, same: (e: Env(tys, Cons(st, g))) → (o: List<BitVec(8)>) → k1(e, o) = k2(e, o)):
+    FTm::bind_at(tys, g, st, m, env, k1) = FTm::bind_at(tys, g, st, m, env, k2) {
+    same(Pair(m.value, env), m.after)
+}
+
+// What follows a loop, read through `f`.
+theorem FTm::bind_at_after<S, T>(tys: Nat → RecInfo, g: List<Ty>, st: Ty, m: Mutated<List<BitVec(8)>, st.sem(tys)>, env: Env(tys, g),
+    k: Env(tys, Cons(st, g)) → List<BitVec(8)> → S, f: S → T):
+    FTm::bind_at(tys, g, st, m, env, λ e o => f(k(e, o))) = f(FTm::bind_at(tys, g, st, m, env, k)) { refl }
 
 // A step's meaning reads its recursion only at the calls it makes: two
 // recursions that answer alike give one meaning.
@@ -99,6 +114,10 @@ theorem FTm::tail_sem_ext(self t: FTm, fw: FWorld, res: Ty, k1, k2: FTm::Round(f
         Again(args) => λ g env own => same(Tm::words(fw.w, g, env, args), own),
         Lend(f, views, args, body) => λ g env own => FTm::tail_sem_ext(body, fw, res, k1, k2, same, Cons(Sig::at(fw.fsigs, f).result, g),
             Pair(FTm::lent(fw, g, env, f, views, args, own).value, env), FTm::lent(fw, g, env, f, views, args, own).after),
+        Loop(init, test, body, rest) => λ g env own => FTm::bind_at_ext(fw.w.tys, g, Ty::at(g, init),
+            FTm::iterated(fw, g, init, test, body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => body.sem(fw, Cons(Ty::at(g, init), g), e, o), env, own),
+            env, λ e o => rest.tail_sem(fw, res, k1, Cons(Ty::at(g, init), g), e, o), λ e o => rest.tail_sem(fw, res, k2, Cons(Ty::at(g, init), g), e, o),
+            λ e o => FTm::tail_sem_ext(rest, fw, res, k1, k2, same, Cons(Ty::at(g, init), g), e, o)),
     }
 }
 
@@ -449,6 +468,7 @@ fn FTm::lower_tail(self t: FTm, w: World, fsigs: List<Sig>, base: Nat, res: Ty, 
         Lend(f, views, args, body) => FTm::lower_lend(w, fsigs, base, g, ports, next, f, views, args).and_then(λ lc =>
             FTm::lower_tail(body, w, fsigs, base, res, flag, kept, nexts, Cons(Sig::at(fsigs, f).result, g), Cons(lc.result, ports), lc.next)
                 .and_then(λ lb => Tm::compose(lc, lb))),
+        Loop(_, _, _, _) => None,
     }
 }
 
@@ -563,6 +583,7 @@ theorem FTm::tail_sound(self t: FTm, fw: FWorld, base: Nat, res: Ty, er: res.One
                     j(lowered_body, λ r _ => FTm::TailHolds(body, fw, base, res, flag, kept, nexts, inner, Cons(lc.result, ports), lc.next, r),
                         FTm::tail_sound(body, fw, base, res, er, flag, kept, nexts, inner, Cons(lc.result, ports), lc.next)))))
         },
+        Loop(_, _, _, _) => λ g ports next => trivial,
     }
 }
 
@@ -792,7 +813,7 @@ fn FFun::MeasuredHolds(ws: List<Ty>, res: Ty, fw: FWorld, base: Nat, h: FTm::Sem
 
 // What every end of the loop satisfies, the measure aside: the file's
 // other spans are as they were.
-fn FFun::Good(rest: List<List<BitVec(8)>>) → Ending → Type { λ e => FTm::Spanned(rest, e.buffers) }
+fn FFun::Good(rest: List<List<BitVec(8)>>) → Ending → Type { λ e => FTm::Spanned(rest, e.buffers) ∧ (e.rest = []) }
 
 // The recursion the loop is held to: the function, whatever the passes
 // left.
@@ -829,8 +850,8 @@ theorem FFun::meas_pass_turn(ks, ws: List<Ty>, res: Ty, body: FTm, fw: FWorld, b
         Ending(words_of(v, Fun::meas_ns(ks ++ ws, ws)).head_or(BitVec::zero()), file),
     r: Nat, v: Valuation(), own: List<BitVec(8)>,
     good: (state: List<BitVec(64)>) → (o: List<BitVec(8)>) → state.len() = Fun::meas_ps(ks ++ ws).len() →
-        FTm::Spanned(fw.rest, finish(loop_run(λ (pass: Valuation()) (held: Buffers()) => Fun::meas_pass(ks ++ ws, ws, t).run(call, pass, held),
-            Fun::meas_ps(ks ++ ws), Fun::meas_c(ks ++ ws), t.next + 1, Fun::meas_next(ks ++ ws, ks, ws), r, state, Cons(o, fw.rest))).buffers)):
+        FFun::Good(fw.rest, finish(loop_run(λ (pass: Valuation()) (held: Buffers()) => Fun::meas_pass(ks ++ ws, ws, t).run(call, pass, held),
+            Fun::meas_ps(ks ++ ws), Fun::meas_c(ks ++ ws), t.next + 1, Fun::meas_next(ks ++ ws, ks, ws), r, state, Cons(o, fw.rest))))):
     loop_pass_run(λ (pass: Valuation()) (held: Buffers()) => Fun::meas_pass(ks ++ ws, ws, t).run(call, pass, held), Fun::meas_ps(ks ++ ws),
         Fun::meas_c(ks ++ ws), t.next + 1, Fun::meas_next(ks ++ ws, ks, ws), finish,
         λ (state: List<BitVec(64)>) (file: Buffers()) => finish(loop_run(λ (pass: Valuation()) (held: Buffers()) =>
@@ -905,13 +926,14 @@ theorem FFun::meas_pass_turn(ks, ws: List<Ty>, res: Ty, body: FTm, fw: FWorld, b
     let span = buffer_bytes(left_file, 0);
     let spanned: FTm::Spanned(rest, left_file) = ran.right.left;
     let onward = later(handed, Cons(span, rest));
-    let good_onward: FTm::Spanned(rest, onward.buffers) = good(handed, span, len_handed);
+    let good_onward: FFun::Good(rest, onward) = good(handed, span, len_handed);
     // The later passes, read as the body's recursion.
     let again: FTm::Round(tys, res) = FFun::later_round(tys, res, rest, later);
     let resumed: (later(handed, left_file) = FTm::resume(tys, res, rest, again, handed, left_file)) =
         trans(cong_fn(λ (f: Buffers()) => later(handed, f), spanned),
-            trans(onward.still(Cons(buffer_bytes(onward.buffers, 0), rest), good_onward),
-                cong_fn(λ (x: BitVec(64)) => Ending(x, Cons(buffer_bytes(onward.buffers, 0), rest)), sym(Tm::out_into(tys, res, er, onward.word)))));
+            trans(onward.still(Cons(buffer_bytes(onward.buffers, 0), rest), good_onward.left),
+                eq2(λ (x: BitVec(64)) (more: List<BitVec(64)>) => Ending(x, Cons(buffer_bytes(onward.buffers, 0), rest), rest := more),
+                    sym(Tm::out_into(tys, res, er, onward.word)), good_onward.right)));
     let M = λ (b: Bool) (s: List<BitVec(64)>) (fin: Ending) => match b { False => later(s, left_file), True => fin };
     let turned = FTm::ended(tys, res, rest, body.tail_sem(fw, res, again, ctx, env, own));
     let chain: (loop_pass_run(step, ps, c, t.next + 1, next, finish, later, r, v, file) = turned) =
@@ -960,7 +982,7 @@ theorem FFun::meas_pass_sound(ks, ws: List<Ty>, res: Ty, body: FTm, fw: FWorld, 
         FTm::recast(tys, res, Word(64), body.tail_sem(fw, res, λ (ys: List<BitVec(64)>) (o: List<BitVec(8)>) =>
                 FTm::recast(tys, Word(64), res, k(ys, o)), ctx, Ty::extend(tys, all, Nil, trivial, xs), o1)) =
             FFun::uncurry(tys, all, res, h, xs, o1), guarded, st, len_st);
-    ⟨j(sym(chain), λ e _ => FTm::Spanned(rest, e.buffers), refl),
+    ⟨j(sym(chain), λ e _ => FFun::Good(rest, e), ⟨refl, refl⟩),
         λ hr => trans(chain, cong_fn(λ (x: Mutated<List<BitVec(8)>, BitVec(64)>) => FTm::end_of(rest, x), at_st(own, again_w, λ ys o len_ys lt =>
             cong_fn(λ (e: Ending) => Mutated(buffer_bytes(e.buffers, 0), e.word),
                     earlier(ys, o, trans(len_ys, sym(Fun::ids_len(all, Fun::meas_bnd(all) + 1)))).right(Nat::lt_of_lt_of_le(m(ys, o), m(st, own), r + 1, lt, hr))))))⟩
@@ -1067,7 +1089,7 @@ theorem FFun::meas_zero_sound(ks, ws: List<Ty>, res: Ty, body: FTm, fw: FWorld, 
         FTm::recast(tys, res, Word(64), body.tail_sem(fw, res, λ (ys: List<BitVec(64)>) (o2: List<BitVec(8)>) =>
                 FTm::recast(tys, Word(64), res, k(ys, o2)), ctx, Ty::extend(tys, all, Nil, trivial, xs), o1)) =
             FFun::uncurry(tys, all, res, h, xs, o1), guarded, st, len);
-    ⟨j(sym(chain), λ e _ => FTm::Spanned(rest, e.buffers), refl),
+    ⟨j(sym(chain), λ e _ => FFun::Good(rest, e), ⟨refl, refl⟩),
         λ hz => trans(chain, cong_fn(λ (u: Mutated<List<BitVec(8)>, BitVec(64)>) => FTm::end_of(rest, u), at_st(own, FFun::spent(ks.len()), λ ys o2 _ lt =>
             false_elim(Nat::lt_of_lt_of_le(m(ys, o2), m(st, own), 0, lt, hz)))))⟩
 }
@@ -1324,7 +1346,7 @@ theorem FFun::counted_sound<F>(ks: List<Ty>, w0: Ty, wrest: List<Ty>, body: FTm,
                                     λ (us: List<BitVec(64)>) (q: List<BitVec(8)>) => FFun::uncurry(tys, all, res, at(stop), us, q), ys, o1)),
                             ctx, Ty::extend(tys, all, Nil, trivial, zs), p)) =
                             FFun::uncurry(tys, all, res, at(pass(stop)), zs, p), passes(stop), st, len_st)(s, FFun::spent(ks.len()));
-                    ⟨j(sym(turn), λ e _ => FTm::Spanned(rest, e.buffers), refl),
+                    ⟨j(sym(turn), λ e _ => FFun::Good(rest, e), ⟨refl, refl⟩),
                         λ _ => trans(turn, cong_fn(λ (u: Mutated<List<BitVec(8)>, BitVec(64)>) => FTm::end_of(rest, u), passed))⟩
                 },
                 λ r v s earlier => {
@@ -1351,7 +1373,7 @@ theorem FFun::counted_sound<F>(ks: List<Ty>, w0: Ty, wrest: List<Ty>, body: FTm,
                                     λ (us: List<BitVec(64)>) (q: List<BitVec(8)>) => FFun::uncurry(tys, all, res, at(FFun::rounds(r, pass, stop)), us, q), ys, o1)),
                             ctx, Ty::extend(tys, all, Nil, trivial, zs), p)) =
                             FFun::uncurry(tys, all, res, at(pass(FFun::rounds(r, pass, stop))), zs, p), passes(FFun::rounds(r, pass, stop)), st, len_st)(s, again_w);
-                    ⟨j(sym(turn), λ e _ => FTm::Spanned(rest, e.buffers), refl),
+                    ⟨j(sym(turn), λ e _ => FFun::Good(rest, e), ⟨refl, refl⟩),
                         λ _ => trans(turn, trans(cong_fn(λ (u: Mutated<List<BitVec(8)>, res.sem(tys)>) => FTm::ended(tys, res, rest, u), swapped),
                             cong_fn(λ (u: Mutated<List<BitVec(8)>, BitVec(64)>) => FTm::end_of(rest, u), passed)))⟩
                 },
