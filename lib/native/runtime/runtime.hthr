@@ -66,6 +66,7 @@ import function_ir_operation;
 import function_ir_eval;
 import rt_loop;
 import function_ir_levels;
+import rt_lower_defined;
 import rt_ptm;
 import rt_file;
 import rt_file_reflect;
@@ -1366,6 +1367,117 @@ theorem Compile::part_self<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<L
         (words: List<BitVec(64)>) → arity_fits(Some(Compile::arity(f, c)), words.len()).IsTrue() → Compile::admits(f, c, words).IsTrue() →
         Compile::linked_self(f, c, links).eval_words(call, words, buffers := b) = Compile::uncurried(f, c, b, words)) {
     Compile::part(f, c, srcs, adm, links, arity, linked, admitted, named)
+}
+
+// ---------------------------------------------------------------------------
+// A recursion is defined to the depth its measure asks
+// (docs/native/runtime-fn-recursion-design.md §10.6)
+
+// An oracle's tests are what `Tm::defines_of` answers on words.
+theorem Tm::ok_defines_of(w: World, ok: Tm::Oracle(w)): Tm::OkDefines(w, ok, Tm::defines_of(w, ok)) {
+    λ f sends => {
+        let ps = Sig::at(w.sigs, f).params;
+        Ty::answers_words_of_admitted(w.tys, ps, Bit, Ty::sents_pass(w.tys, ps, sends.left), ok(f),
+            λ ws => Ty::result_words(w.tys, Bit, Tm::defines_of(w, ok, f, ws)),
+            λ xs _ admitted => cong_fn(λ (b: Bool) => Ty::result_words(w.tys, Bit, b && Ty::apply_words(w.tys, ps, Bit, ok(f), xs)),
+                eq_true_of_is_true(Ty::admits_all(w.tys, ps, xs), Ty::admits_all_complete(w.tys, ps, xs, admitted))))
+    }
+}
+
+// Read at an abstract lowering (docs/proof-patterns.md §1): a lowering
+// that produced code is defined where the calls its body makes are allowed.
+theorem Setup::defined_of_lowered(f: Fun, w: World, ok: Tm::Oracle(w), r: Option<Function>): Setup::lowers(r).IsTrue() → f.DefinedHolds(w, ok, r) →
+    (call: Answers()) → Tm::CallsAgree(w, call) → (defines: Defines()) → Tm::OkDefines(w, ok, defines) →
+    (xs: List<BitVec(64)>) → Ty::AdmitsAll(w.tys, f.params, xs) → f.quiet(w).IsTrue() →
+    f.body.calls_ok(w, ok, f.context(), Ty::extend_words(w.tys, f.params, Nil, trivial, xs)).IsTrue() →
+    Setup::code_of(r).defined(call, defines, xs, buffers := w.spans).IsTrue() {
+    match r {
+        None => λ never _ => false_elim(never),
+        Some(_) => λ _ holds => holds,
+    }
+}
+
+// The default setup's code of a plain function, over any file and table of
+// meanings: defined at the words its parameters admit, where the calls its
+// body's meaning makes there are allowed. `quiet` is an evaluation of the
+// code, once, at the world it was lowered at.
+theorem Setup::code_defined(rt: Fun, w: World, cs: Sig::Sems(w.tys, w.sigs), spans: List<List<BitVec(8)>>, ok: Tm::Oracle(w.over(cs, spans)),
+    lowered: Setup::default().lowered(rt, w).IsTrue(), plain: rt.shape() = Plain, quiet: rt.quiet(w) = True,
+    call: Answers(), agree: Tm::CallsAgree(w.over(cs, spans), call), defines: Defines(), oks: Tm::OkDefines(w.over(cs, spans), ok, defines),
+    xs: List<BitVec(64)>, admitted: Ty::AdmitsAll(w.tys, rt.params, xs),
+    calls: rt.body.calls_ok(w.over(cs, spans), ok, rt.context(), Ty::extend_words(w.tys, rt.params, Nil, trivial, xs)).IsTrue()):
+    Setup::default().code(rt, w).defined(call, defines, xs, buffers := spans).IsTrue() {
+    let v = w.over(cs, spans);
+    let held: rt.DefinedHolds(v, ok, rt.lower_any(v)) = j(sym(plain), λ s _ => rt.DefinedHolds(v, ok, rt.lower_at(v, s)), rt.lower_defined(v, ok));
+    let at_w: rt.DefinedHolds(v, ok, rt.lower_any(w)) = j(Fun::lower_any_static(rt, w, cs, spans), λ r _ => rt.DefinedHolds(v, ok, r), held);
+    Setup::defined_of_lowered(rt, v, ok, rt.lower_any(w), lowered, at_w, call, agree, defines, oks, xs, admitted,
+        Bool::is_true_of_eq(trans(Fun::quiet_static(rt, w, cs, spans), quiet)), calls)
+}
+
+// The rank of a function that is its own callee, on words: its measure at
+// the arguments the words are.
+fn Compile::rank<F>(f: F, c: Compile<F>(f), measure: Ty::ArrowsTo(c.world.tys, Sig::at(c.world.sigs, 1).params, Nat)) → List<BitVec(64)> → Nat {
+    λ ws => Ty::apply_words_to(c.world.tys, Sig::at(c.world.sigs, 1).params, Nat, measure, ws)
+}
+
+// The code of an instance that is its own callee, function `k` of a
+// program, descends by its measure (`Function::Descends`): over the file
+// `b`, it is defined at the words it admits, given that it is defined
+// itself at every such word list of lower rank and that the functions
+// before it are defined everywhere (`total`). `walked` is the decrease at
+// every call the body makes: its calls allowed by the rank's oracle
+// (`Tm::rank_oracle`), which a generator proves from the function's own
+// decrease obligations. `linked`, `admitted` and `named` are what
+// `Compile::part_self` takes; `coded`, `checked`, `plain`, `quiet`, `sig`
+// and `own` are evaluations at the instance.
+theorem Compile::descends<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<List<BitVec(64)> → List<BitVec(64)>>, adm: List<List<BitVec(64)> → Bool>,
+    links: List<Nat>, arity: Nat → Option<Nat>,
+    linked: (b: Buffers()) → links.map(λ (n: Nat) => link_source(srcs(b), n)) = Compile::table(f, c, b),
+    admitted: links.map(λ (n: Nat) => link_admit(adm, n)) = Compile::admit_table(f, c),
+    named: Sig::links_fit(c.world.tys, c.world.sigs.tail(), links.tail(), arity).IsTrue(),
+    coded: c.code = Setup::default().code(c.reflected, c.world),
+    checked: Setup::default().checked(c.reflected, c.world) = True,
+    plain: c.reflected.shape() = Plain,
+    quiet: c.reflected.quiet(c.world) = True,
+    sig: Sig::at(c.world.sigs, 1).params = c.reflected.params,
+    k: Nat, own: links.nth(1) = Some(k), b: Buffers(),
+    measure: Ty::ArrowsTo(c.world.tys, Sig::at(c.world.sigs, 1).params, Nat),
+    walked: (xs: List<BitVec(64)>) → Ty::AdmitsAll(c.world.tys, c.reflected.params, xs) →
+        c.reflected.body.calls_ok(c.world.at(c.callees, b),
+            Tm::rank_oracle(c.world.at(c.callees, b), links, k, measure, Compile::rank(f, c, measure, xs)),
+            c.reflected.context(), Ty::extend_words(c.world.tys, c.reflected.params, Nil, trivial, xs)).IsTrue(),
+    below: Defines(), total: (j: Nat) → j < k → (ws: List<BitVec(64)>) → below(j, ws).IsTrue()):
+    Compile::linked_self(f, c, links).Descends(b, below, k, Compile::rank(f, c, measure),
+        λ (call: Answers()) => Answers::Agree(call, link_sources(srcs(b)), arity, link_admits(adm)),
+        λ (ws: List<BitVec(64)>) => Ty::AdmitsAll(c.world.tys, c.reflected.params, ws)) {
+    λ call good own_at words admits lower => {
+        let at = c.world.at(c.callees, b);
+        let bound = Compile::rank(f, c, measure, words);
+        let oracle = Tm::rank_oracle(at, links, k, measure, bound);
+        let others = Answers::relabel(call, link_at(links));
+        let mixed = link_own(link_sources(Compile::table(f, c, b)), others);
+        let agree = Compile::calls_agree_linked(f, c, srcs, adm, links, arity, linked, admitted, named, b, call, good);
+        let code = Setup::default().code(c.reflected, c.world);
+        let asked = Tm::defines_of(at, oracle);
+        let inner: (code.defined(mixed, asked, words, buffers := b).IsTrue()) =
+            Setup::code_defined(c.reflected, c.world, c.callees(b), b, oracle, Setup::checked_lowered(Setup::default(), c.reflected, c.world, checked), plain, quiet,
+                mixed, agree, asked, Tm::ok_defines_of(at, oracle), words, admits, walked(words, admits));
+        let tied = tie_defines(below, k, own_at);
+        let start = Valuation::bind(Valuation::zero(), code.parameters, words);
+        let widened: (code.defined(others, Defines::relabel(tied, link_at(links)), words, buffers := b).IsTrue()) =
+            code.body.defined_where_over(b, mixed, others, asked, Defines::relabel(tied, link_at(links)),
+                λ i => match i as λ n => (ws: List<BitVec(64)>) → asked(n, ws).IsTrue() → others(n, ws) = mixed(n, ws) {
+                    Zero => λ ws never => false_elim(j(Ty::apply_words_const(at.tys, Sig::at(at.sigs, 0).params, Bit, False, ws), λ x _ => x.IsTrue(),
+                        Bool::is_true_and(Ty::admits_all(at.tys, Sig::at(at.sigs, 0).params, ws),
+                            Ty::apply_words(at.tys, Sig::at(at.sigs, 0).params, Bit, oracle(0), ws), never).right)),
+                    Succ(_) => λ ws _ => refl,
+                },
+                Tm::rank_oracle_widens(at, links, k, measure, bound, below, own_at, own,
+                    λ ws a lt => lower(ws, j(sig, λ ps _ => Ty::AdmitsAll(c.world.tys, ps, ws), a), lt), total),
+                start, start, λ wd id => refl, inner);
+        j(sym(coded), λ fn_ _ => fn_.relabel(link_at(links)).leveled(1).defined(call, tied, words, buffers := b).IsTrue(),
+            Function::relabel_defined(code, b, call, tied, link_at(links), words, widened))
+    }
 }
 
 // A program whose last function is an instance's code: the program's

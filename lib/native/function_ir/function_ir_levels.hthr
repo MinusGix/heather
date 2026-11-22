@@ -387,6 +387,21 @@ theorem program_deepened_len(functions: List<Function>, more: Nat): program_deep
     match functions { Nil => refl, Cons(_, earlier) => cong_fn(λ (n: Nat) => n + 1, program_deepened_len(earlier, more)) }
 }
 
+// A program proved defined at every word has no levels, and is itself at
+// any number more.
+theorem program_deepened_total(functions: List<Function>, more: Nat): program_total(functions).IsTrue() → program_deepened(functions, more) = functions {
+    match functions {
+        Nil => λ _ => refl,
+        Cons(last, earlier) => λ total => {
+            let parts = Bool::is_true_and(last.levels.matches(0) && last.body.total_at(program_outs(earlier)), program_total(earlier), total);
+            let own = Bool::is_true_and(last.levels.matches(0), last.body.total_at(program_outs(earlier)), parts.left);
+            let flat: (last.levels = 0) = last.levels.matches_eq(0, own.left);
+            let same: (last.deepened(more) = last) = j(sym(flat), λ n _ => last.deepened_at(n, more) = last, refl);
+            eq2(λ (f: Function) (rest: List<Function>) => Cons(f, rest), same, program_deepened_total(earlier, more, parts.right))
+        },
+    }
+}
+
 theorem linked_arity_deepened(functions: List<Function>, more: Nat): (arities: List<Nat>) →
     linked_arity(program_deepened(functions, more), arities) = linked_arity(functions, arities) {
     match functions {

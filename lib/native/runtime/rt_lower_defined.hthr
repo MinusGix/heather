@@ -469,3 +469,135 @@ theorem Fun::lower_defined(self f: Fun, w: World, ok: Tm::Oracle(w)): f.DefinedH
                 Fun::entered_defined(w.spans, call, defines, values, c, e.nodes, q2.left, body))
         })))))
 }
+
+// ---------------------------------------------------------------------------
+// A recursion's oracle: its rank
+
+// A curried function of a signature's operands into any type, applied to
+// words the plain way (`Ty::apply_words`).
+fn Ty::apply_words_to(tys: Table, ps: List<Ty>, R: Type) → Ty::ArrowsTo(tys, ps, R) → List<BitVec(64)> → R {
+    match ps {
+        Nil => λ v ws => v,
+        Cons(p, rest) => λ v ws => Ty::apply_words_to(tys, rest, R, v(Ty::read_words(p, tys, ws)), Ty::skip(p.span(tys), ws)),
+    }
+}
+
+// Such a function, then a function of its result.
+fn Ty::arrows_map(tys: Table, ps: List<Ty>, R: Type, r: Ty, h: R → r.sem(tys)) → Ty::ArrowsTo(tys, ps, R) → Ty::Arrows(tys, ps, r) {
+    match ps { Nil => λ v => h(v), Cons(p, rest) => λ v => λ (a: p.sem(tys)) => Ty::arrows_map(tys, rest, R, r, h, v(a)) }
+}
+
+theorem Ty::apply_words_map(tys: Table, ps: List<Ty>, R: Type, r: Ty, h: R → r.sem(tys)): (v: Ty::ArrowsTo(tys, ps, R)) → (ws: List<BitVec(64)>) →
+    Ty::apply_words(tys, ps, r, Ty::arrows_map(tys, ps, R, r, h, v), ws) = h(Ty::apply_words_to(tys, ps, R, v, ws)) {
+    match ps {
+        Nil => λ v ws => refl,
+        Cons(p, rest) => λ v ws => Ty::apply_words_map(tys, rest, R, r, h, v(Ty::read_words(p, tys, ws)), Ty::skip(p.span(tys), ws)),
+    }
+}
+
+// One answer at every argument.
+fn Ty::arrows_const(tys: Table, ps: List<Ty>, r: Ty, v: r.sem(tys)) → Ty::Arrows(tys, ps, r) {
+    match ps { Nil => v, Cons(p, rest) => λ (_: p.sem(tys)) => Ty::arrows_const(tys, rest, r, v) }
+}
+
+theorem Ty::apply_words_const(tys: Table, ps: List<Ty>, r: Ty, v: r.sem(tys)): (ws: List<BitVec(64)>) →
+    Ty::apply_words(tys, ps, r, Ty::arrows_const(tys, ps, r, v), ws) = v {
+    match ps { Nil => λ ws => refl, Cons(p, rest) => λ ws => Ty::apply_words_const(tys, rest, r, v, Ty::skip(p.span(tys), ws)) }
+}
+
+// What an oracle's tests answer on words: on words a function's parameters
+// admit, its test at the arguments the words are (`Ty::apply_words`). A
+// call passes the words of real arguments, which are admitted, so nothing
+// is asked at any others.
+fn Tm::defines_of(w: World, ok: Tm::Oracle(w)) → Defines() {
+    λ i ws => Ty::admits_all(w.tys, Sig::at(w.sigs, i).params, ws) && Ty::apply_words(w.tys, Sig::at(w.sigs, i).params, Bit, ok(i), ws)
+}
+
+// The function of the program entry `i` of a table names (`runtime`'s
+// `link_at`).
+fn Tm::linked_at(links: List<Nat>, i: Nat) → Nat { match links.nth(i) { None => 0, Some(n) => n } }
+
+// Whether entry `i` of a table linked by `links` is a function of the
+// program before function `k`.
+fn Tm::before(links: List<Nat>, k, i: Nat) → Bool { match links.nth(i) { None => False, Some(n) => (n + 1).leb(k) } }
+
+// The oracle of a function that is its own callee, function `k` of its
+// program: a call of itself (entry 1 of its table) is allowed at a measure
+// below `bound`, a call of a function before it in the program always, and
+// entry 0 (the function as every table's first, which no code calls) never.
+fn Tm::rank_oracle(w: World, links: List<Nat>, k: Nat, measure: Ty::ArrowsTo(w.tys, Sig::at(w.sigs, 1).params, Nat), bound: Nat) → Tm::Oracle(w) {
+    λ i => match i as λ n => Ty::Arrows(w.tys, Sig::at(w.sigs, n).params, Bit) {
+        Zero => Ty::arrows_const(w.tys, Sig::at(w.sigs, 0).params, Bit, False),
+        Succ(j) => match j as λ n => Ty::Arrows(w.tys, Sig::at(w.sigs, n + 1).params, Bit) {
+            Zero => Ty::arrows_map(w.tys, Sig::at(w.sigs, 1).params, Nat, Bit, λ (m: Nat) => (m + 1).leb(bound), measure),
+            Succ(l) => Ty::arrows_const(w.tys, Sig::at(w.sigs, l + 2).params, Bit, Tm::before(links, k, l + 2)),
+        },
+    }
+}
+
+theorem tie_defines_own(below: Defines(), k: Nat, own: List<BitVec(64)> → Bool, ws: List<BitVec(64)>, h: own(ws).IsTrue()):
+    tie_defines(below, k, own, k, ws).IsTrue() {
+    (match k.eq_dec(k) as λ d => Bool::IsTrue(match d { Inl(_) => own(ws), Inr(_) => below(k, ws) }) {
+        Inl(_) => h,
+        Inr(ne) => false_elim(ne(refl)),
+    })
+}
+
+theorem tie_defines_other(below: Defines(), k: Nat, own: List<BitVec(64)> → Bool, f: Nat, ws: List<BitVec(64)>, ne: f ≠ k, h: below(f, ws).IsTrue()):
+    tie_defines(below, k, own, f, ws).IsTrue() {
+    (match f.eq_dec(k) as λ d => Bool::IsTrue(match d { Inl(_) => own(ws), Inr(_) => below(f, ws) }) {
+        Inl(e) => false_elim(ne(e)),
+        Inr(_) => h,
+    })
+}
+
+// Where that oracle's tests hold on words, the program's functions are
+// defined as the linked code asks them: the function itself at admitted
+// words of a lower rank (`lower`), the functions before it everywhere
+// (`total`).
+theorem Tm::rank_oracle_widens(w: World, links: List<Nat>, k: Nat, measure: Ty::ArrowsTo(w.tys, Sig::at(w.sigs, 1).params, Nat), bound: Nat,
+    below: Defines(), own: List<BitVec(64)> → Bool, self: links.nth(1) = Some(k),
+    lower: (ws: List<BitVec(64)>) → Ty::AdmitsAll(w.tys, Sig::at(w.sigs, 1).params, ws) →
+        (Ty::apply_words_to(w.tys, Sig::at(w.sigs, 1).params, Nat, measure, ws) < bound) → own(ws).IsTrue(),
+    total: (j: Nat) → j < k → (ws: List<BitVec(64)>) → below(j, ws).IsTrue()):
+    (i: Nat) → (ws: List<BitVec(64)>) → Tm::defines_of(w, Tm::rank_oracle(w, links, k, measure, bound), i, ws).IsTrue() →
+    tie_defines(below, k, own, Tm::linked_at(links, i), ws).IsTrue() {
+    let oracle = Tm::rank_oracle(w, links, k, measure, bound);
+    λ i => match i as λ n => (ws: List<BitVec(64)>) → Tm::defines_of(w, oracle, n, ws).IsTrue() → tie_defines(below, k, own, Tm::linked_at(links, n), ws).IsTrue() {
+        Zero => λ ws d => false_elim(j(Ty::apply_words_const(w.tys, Sig::at(w.sigs, 0).params, Bit, False, ws), λ b _ => b.IsTrue(),
+            Bool::is_true_and(Ty::admits_all(w.tys, Sig::at(w.sigs, 0).params, ws), Ty::apply_words(w.tys, Sig::at(w.sigs, 0).params, Bit, oracle(0), ws), d).right)),
+        Succ(j0) => match j0 as λ n => (ws: List<BitVec(64)>) → Tm::defines_of(w, oracle, n + 1, ws).IsTrue() →
+            tie_defines(below, k, own, Tm::linked_at(links, n + 1), ws).IsTrue() {
+            Zero => λ ws d => {
+                let ps = Sig::at(w.sigs, 1).params;
+                let parts = Bool::is_true_and(Ty::admits_all(w.tys, ps, ws), Ty::apply_words(w.tys, ps, Bit, oracle(1), ws), d);
+                let rank = Ty::apply_words_to(w.tys, ps, Nat, measure, ws);
+                let test: ((rank + 1).leb(bound).IsTrue()) =
+                    j(Ty::apply_words_map(w.tys, ps, Nat, Bit, λ (m: Nat) => (m + 1).leb(bound), measure, ws), λ b _ => b.IsTrue(), parts.right);
+                let at_self: (Tm::linked_at(links, 1) = k) = cong_fn(λ (o: Option<Nat>) => match o { None => 0, Some(n) => n }, self);
+                j(sym(at_self), λ n _ => tie_defines(below, k, own, n, ws).IsTrue(),
+                    tie_defines_own(below, k, own, ws, lower(ws, Ty::admits_all_sound(w.tys, ps, ws, parts.left),
+                        Nat::le_of_leb(rank + 1, bound, eq_true_of_is_true((rank + 1).leb(bound), test)))))
+            },
+            Succ(l) => λ ws d => {
+                let ps = Sig::at(w.sigs, l + 2).params;
+                let guard: (Tm::before(links, k, l + 2).IsTrue()) =
+                    j(Ty::apply_words_const(w.tys, ps, Bit, Tm::before(links, k, l + 2), ws), λ b _ => b.IsTrue(),
+                        Bool::is_true_and(Ty::admits_all(w.tys, ps, ws), Ty::apply_words(w.tys, ps, Bit, oracle(l + 2), ws), d).right);
+                (match links.nth(l + 2) as λ o => Bool::IsTrue(match o { None => False, Some(n) => (n + 1).leb(k) }) →
+                    tie_defines(below, k, own, match o { None => 0, Some(n) => n }, ws).IsTrue() {
+                    None => λ never => false_elim(never),
+                    Some(n) => λ lt => tie_defines_other(below, k, own, n, ws, Nat::ne_of_lt(n, k, Nat::le_of_leb(n + 1, k, eq_true_of_is_true((n + 1).leb(k), lt))),
+                        total(n, Nat::le_of_leb(n + 1, k, eq_true_of_is_true((n + 1).leb(k), lt)), ws)),
+                })(guard)
+            },
+        },
+    }
+}
+
+// The code's checks read the world's type table and signatures alone, as
+// its lowering does (`Fun::lower_static`).
+theorem Fun::quiet_static(self f: Fun, w: World, cs: Sig::Sems(w.tys, w.sigs), spans: List<List<BitVec(8)>>): f.quiet(w.over(cs, spans)) = f.quiet(w) {
+    cong_fn(λ (r: Option<Lowered>) => match r { None => False, Some(c) => f.quiet_at(w, c) },
+        Tm::lower_static(f.body, w, cs, spans, f.context(), f.entry_of(w.tys).ports, f.entry_of(w.tys).next))
+}
