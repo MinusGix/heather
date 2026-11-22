@@ -606,11 +606,17 @@ fn a_recursion_is_compiled_within_a_stack_budget() {
         .args(["compile-x86", "examples/x86-native/recursion.hthr", function, "--stack", stack, "-o"]).arg(assembly)
         .args(heather_cli::showcase::native_image_args()).args(["--kernel-workers", "1"])
         .output().unwrap();
-    for function in ["rsum", "rsum_pair"] {
+    // The recursion's certificate is stated where its measure is at most
+    // its levels past the first (`rsum::defined_within`); its caller's
+    // where the program is defined.
+    let claims: [(&str, &[&str]); 2] = [
+        ("rsum", &["program_deepened(recursion::", "::agrees_within(", "::defined_within(", "within: recursion::rsum::measure(a0) <= 62", "_returns"]),
+        ("rsum_pair", &["program_deepened(recursion::", "::agrees_where(", "defined: program_defined(", "_returns"])];
+    for (function, claims) in claims {
         let result = compile(function, "2048", &dir.join(format!("{function}.s")));
         assert!(result.status.success(), "{function}: {}", String::from_utf8_lossy(&result.stderr));
         let certificate = std::fs::read_to_string(dir.join(format!("{function}.certificate.hthr"))).unwrap();
-        for claim in ["program_deepened(recursion::", "::agrees_where(", "defined: program_defined(", "_returns"] {
+        for claim in claims {
             assert!(certificate.contains(claim), "{function}: missing {claim}");
         }
         assert!(!certificate.contains("_defined_everywhere"), "{function}: a recursion's program is not defined at every word");
