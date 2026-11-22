@@ -130,3 +130,31 @@ fn sum_ten_program() → Source { sum_ten::source }
 fn sum_ten_short() → Source {
     PTm::program(sum_ten::ptm, PTm::defs_words([Word(64)], rsum::ptm), PTm::plain(RecInfo::none), 10).get(trivial)
 }
+
+// A bound tighter than the measure (design §3.3): two down per call, so
+// half as deep as `n.toNat()` says. Both decreases are found by the
+// default closers; `f::depth` is at `ν`.
+runtime fn rstep2(n: u64) → u64 decreases n.toNat() depth n.toNat() / 2 {
+    if small: n < 2 { 0 } else { n + rstep2(n - 2) }
+}
+
+theorem rstep2_value(): rstep2(BitVec::ofNat(10)) = BitVec::ofNat(30) { refl }
+
+theorem rstep2_fits(): rstep2::fits(5, [BitVec::ofNat(10)]) = True { refl }
+
+theorem rstep2_not_four(): rstep2::fits(4, [BitVec::ofNat(10)]) = False { refl }
+
+theorem rstep2_depth(n: u64): rstep2::fits(n.toNat() / 2, [n]) = True { rstep2::depth([n]) }
+
+// A `depth` obligation the default closers do not find, discharged by
+// hand as a measure's is: `on ?depthN`, here the same fact as `?dec1`.
+runtime fn rsum_hand(n: u64) → u64 decreases n.toNat() depth n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => BitVec::ofNat(0),
+        False => n.add(rsum_hand(n.sub(BitVec::ofNat(1)))),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+    on ?depth1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+theorem rsum_hand_depth(n: u64): rsum_hand::fits(n.toNat(), [n]) = True { rsum_hand::depth([n]) }

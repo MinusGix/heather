@@ -188,6 +188,21 @@ True`, by the same walk with ν in place of μ (the walk already takes any
 rank). Every route ends in that one named statement, and the compile reads
 nothing else (agreed 2026-11-22).
 
+Built (2026-11-22). The parser takes `depth ν` after `decreases μ` and
+refuses it alone. The elaborator lowers the body a second time with `ν` as
+its measure, under the name `f#depth`, and keeps only the lifted
+obligations, designated `f::depth_obl_N`; the writer's `on ?depthN := …`
+are their discharges and every other `on` stays with the measure's
+lowering. `ν` itself is published as `f::depth_rank`, a function of the
+parameters, so the generator's rank is a global and needs no `Lam` spelled
+per node. A `depth` obligation that does not hold is refused at its call,
+"this recursive call must decrease the `depth` bound". A `depth` clause on
+a declaration with loops or on a mutual recursion is refused as not built.
+`runtime fn rstep2(n: u64) → u64 decreases n.toNat() depth n.toNat() / 2`
+gets `rstep2::depth: rstep2::fits(n.toNat() / 2, [n])` with both
+obligations found by the default closers, five levels at 10 where the
+measure says ten.
+
 Where no rank does (the depth depends on more than a drop per call, as a
 flat `≤ 100` would), the writer proves `f::depth` themselves, in the
 general form of §3.1 by `f`'s functional induction, and the generator
@@ -378,7 +393,7 @@ the generator) are built, §8.1. From here, in order:
    f::fits(μ(x), x)` from the lifted obligations (§3.2).
 2. **Closed programs infer their levels** (§3.4, built): `runtime fn
    main()` with no argument; `levels := n` optional.
-3. **The `depth ν` clause** (§3.3): parsed beside `decreases`, its
+3. **The `depth ν` clause** (§3.3, built): parsed beside `decreases`, its
    obligations lifted and defaulted as a measure's, `f::depth` from ν.
 4. **The byte budget** (§4.1): `runtime(stack := n)`, the compiled theorem
    in bytes, the refusal that names the deepest chain and its frames.

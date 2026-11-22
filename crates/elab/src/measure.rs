@@ -374,6 +374,46 @@ pub(crate) fn body_name(name: &str) -> String {
     format!("{name}#body")
 }
 
+/// `f#depth` — the name a `depth ν` clause's lowering runs under, so that
+/// its obligations are `f#depth#obl_N` (`DeclarationsMut::elab_depth_bound`).
+pub(crate) fn depth_name(name: &str) -> String {
+    format!("{name}#depth")
+}
+
+/// `f#depth_rank` — a `depth ν` clause's `ν`, as a function of the
+/// parameters.
+pub(crate) fn depth_rank_name(name: &str) -> String {
+    format!("{name}#depth_rank")
+}
+
+/// Whether an `on` discharges a `depth` clause's obligation, `?depthN`.
+fn is_depth_on(on: &OnStmt) -> bool {
+    matches!(&on.target, OnTarget::Name(n)
+        if n.strip_prefix("depth").is_some_and(|k| !k.is_empty() && k.bytes().all(|b| b.is_ascii_digit())))
+}
+
+/// `decl` without its `depth ν` clause and the discharges of its
+/// obligations, and those apart: the clause's `ν`, and each `on ?depthN`
+/// as the `on ?decN` it is when the body is lowered with `ν` as its measure.
+pub(crate) fn split_depth(decl: &Decl) -> (Decl, Option<(Expr, Vec<OnStmt>)>) {
+    let mut plain = decl.clone();
+    let Some(nu) = plain.depth.take() else {
+        return (plain, None);
+    };
+    let (ons, rest): (Vec<OnStmt>, Vec<OnStmt>) = plain.body.ons.drain(..).partition(is_depth_on);
+    plain.body.ons = rest;
+    let ons = ons
+        .into_iter()
+        .map(|mut on| {
+            if let OnTarget::Name(n) = &on.target {
+                on.target = OnTarget::Name(n.replacen("depth", "dec", 1));
+            }
+            on
+        })
+        .collect();
+    (plain, Some((nu, ons)))
+}
+
 /// `f#obl_N` — one self-call site's obligation, lifted out of the body (§4).
 pub(crate) fn obl_name(name: &str, site: usize) -> String {
     format!("{name}#obl_{site}")
@@ -646,6 +686,7 @@ fn companion(decl: &Decl, name: String, params: Vec<Param>, result: Ty, body: Bl
         params,
         result,
         decreases: None,
+        depth: None,
         unfolding: Vec::new(),
         body,
         span: decl.span,
@@ -954,6 +995,7 @@ pub(crate) fn lower(
     ));
     let f_decl = Decl {
         decreases: None,
+        depth: None,
         unfolding: Vec::new(),
         body: block(
             app(
@@ -1261,6 +1303,7 @@ pub(crate) fn lower_group(
             span,
         },
         decreases: None,
+        depth: None,
         unfolding: Vec::new(),
         body: block(
             Expr {
@@ -1379,6 +1422,7 @@ pub(crate) fn lower_group(
         params: vec![param(Z, nat_ty, span)],
         result: grp_at(var(Z, span)),
         decreases: None,
+        depth: None,
         unfolding: Vec::new(),
         body: block(elim, first.body.span),
         span: first.span,
@@ -1398,6 +1442,7 @@ pub(crate) fn lower_group(
             ));
             Decl {
                 decreases: None,
+                depth: None,
                 unfolding: Vec::new(),
                 body: block(
                     project(
@@ -2315,6 +2360,7 @@ impl<'a> Rewrite<'a> {
             params,
             result: lt_ty(at_args.clone(), refined.clone(), span),
             decreases: None,
+            depth: None,
             unfolding: Vec::new(),
             body,
             span: self.decl.span,
@@ -2434,6 +2480,7 @@ impl<'a> Rewrite<'a> {
             params,
             result: unalias_ty(&g.goal, &aliases),
             decreases: None,
+            depth: None,
             unfolding: Vec::new(),
             body: Block { stmts: lets, ..search },
             span: self.decl.span,
@@ -5065,6 +5112,7 @@ pub(crate) fn companions(
         params: ext_params,
         result: eq_ty(body_at(A, G1, H1), body_at(B, G2, H2), span),
         decreases: None,
+        depth: None,
         unfolding: Vec::new(),
         body: ext_body,
         span: decl.span,
@@ -5246,6 +5294,7 @@ pub(crate) fn companions(
             span,
         ),
         decreases: None,
+        depth: None,
         unfolding: Vec::new(),
         body: block(app(irrel_elim, irrel_args, span), decl.body.span),
         span: decl.span,
@@ -5290,6 +5339,7 @@ pub(crate) fn companions(
             span,
         ),
         decreases: None,
+        depth: None,
         unfolding: Vec::new(),
         body: Block {
             stmts: std::mem::take(&mut unfold.lets),
@@ -5505,6 +5555,7 @@ pub(crate) fn step_equations(decl: &Decl, name: &str) -> Result<Vec<Lowered>, St
                 params,
                 result: eq_ty(lhs.clone(), rhs, span),
                 decreases: None,
+                depth: None,
                 unfolding: Vec::new(),
                 body: block(proof, span),
                 span: decl.span,

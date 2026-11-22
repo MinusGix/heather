@@ -4344,15 +4344,22 @@ fn runtime_recursive_main(name: String, f: GlobalRef, rfun: Fun, g: String, g_si
 // What the walk writes with: the node lemmas, the statement's world,
 // meaning and `ok`, and the obligations to close calls with.
 record RtDescends { value: Expr, bind: Expr, recur: Expr, choose: Expr, below: Expr, w: Expr, f: Expr, obls: List<Expr>,
-    rank_ok: Expr, on_words: Expr, rec: Expr, word_h: Handle, ws: List<Ty>, ws_e: Expr, xs: LocalRef, word_at: Expr, padded: Expr }
+    rank_ok: Expr, on_words: Expr, rec: Expr, word_h: Handle, ws: List<Ty>, ws_e: Expr, xs: LocalRef, word_at: Expr, padded: Expr,
+    ranked: Option<Expr> }
 
 // The `ok` the statement takes at the caller's words, spelled afresh under
 // `under`: a `Lam` is read only in the scope its binder was assumed under,
-// so the measure's, which every node's lemma mentions, is assumed there.
+// so the measure's, which every node's lemma mentions, is assumed there. A
+// `depth ν` clause's rank is a global, `f::depth_rank`, and needs no `Lam`.
 fn runtime_ok_at(d: RtDescends, under: Option<LocalRef>) → Tac<Expr> {
-    let zs <- runtime_params(d.word_h, d.ws, under, 0);
-    let mu_z <- runtime_measure_at(d.rec, runtime_locals(zs));
-    pure(ap(d.rank_ok, [ap(d.padded, [NatLit(d.ws.len()), ap(d.on_words, [d.ws_e, runtime_lams(zs, Hd(mu_z))])]), Local(d.xs)]))
+    match d.ranked {
+        Some(rank) => pure(ap(d.rank_ok, [ap(d.padded, [NatLit(d.ws.len()), ap(d.on_words, [d.ws_e, rank])]), Local(d.xs)])),
+        None => {
+            let zs <- runtime_params(d.word_h, d.ws, under, 0);
+            let mu_z <- runtime_measure_at(d.rec, runtime_locals(zs));
+            pure(ap(d.rank_ok, [ap(d.padded, [NatLit(d.ws.len()), ap(d.on_words, [d.ws_e, runtime_lams(zs, Hd(mu_z))])]), Local(d.xs)]))
+        },
+    }
 }
 
 // The domain of a function type.
@@ -4360,11 +4367,12 @@ fn runtime_dom(t: Handle) → Tac<Option<Handle>> {
     whnf_or(t).bind(λ w => view(w).bind(λ v => match v { HPi(dom) => pure(Some(dom)), _ => pure(None) }))
 }
 
-// The obligations `f::obl_0` … `f::obl_n`, those the elaborator named.
-fn runtime_obligations(name: String, n: Nat) → Tac<List<Expr>> {
+// The obligations `f::obl_0` … `f::obl_n` (or a `depth` clause's,
+// `f::depth_obl_N`), those the elaborator named, `prefix` the name up to N.
+fn runtime_obligations(prefix: String, n: Nat) → Tac<List<Expr>> {
     match n {
         Zero => pure([]),
-        Succ(k) => runtime_obligations(name, k).bind(λ found => lookup(name ++ "::obl_" ++ decimal_name(10, k)).bind(λ c => match c {
+        Succ(k) => runtime_obligations(prefix, k).bind(λ found => lookup(prefix ++ decimal_name(10, k)).bind(λ c => match c {
             Accepted(g) => pure(found.append([Global(g)])),
             Refused(_) => pure(found),
         })),
@@ -4570,7 +4578,13 @@ fn runtime_depth(name: String, f: GlobalRef, ws: List<Ty>, ws_e: Expr, p: PTm, p
     let on_words_g <- runtime_global(name_of(Ty::on_words));
     let word_at_g <- runtime_global(name_of(PTm::word_at));
     let padded_g <- runtime_global(name_of(PTm::padded));
-    let rank_e = ap(padded_g, [NatLit(n), m_e]);
+    // A `depth ν` clause's rank and obligations where it has one
+    // (design §3.3), else the measure's.
+    let ranked <- lookup(name ++ "::depth_rank").bind(λ c => match c { Accepted(g) => pure(Some(Global(g))), Refused(_) => pure(None) });
+    let rank_e = match ranked {
+        Some(rank) => ap(padded_g, [NatLit(n), ap(on_words_g, [ws_e, rank])]),
+        None => ap(padded_g, [NatLit(n), m_e]),
+    };
     let none_g <- runtime_global(name_of(RecInfo::none));
     let descends_g <- runtime_global(name_of(PTm::descends_words));
     let depth_g <- runtime_global(name_of(PTm::depth_words));
@@ -4584,7 +4598,7 @@ fn runtime_depth(name: String, f: GlobalRef, ws: List<Ty>, ws_e: Expr, p: PTm, p
     let recur_g <- runtime_global(name_of(PTm::calls_ok_recur));
     let choose_g <- runtime_global(name_of(PTm::calls_ok_choose));
     let below_g <- runtime_global(name_of(PTm::below_rank));
-    let obls <- runtime_obligations(name, 16);
+    let obls <- runtime_obligations(match ranked { Some(_) => name ++ "::depth_obl_", None => name ++ "::obl_" }, 16);
     let stated = ap(descends_g, [ws_e, ptm_e, none_g, Global(f), rank_e]);
     let stated_t <- infer(stated).or_fail("runtime: `" ++ name ++ "`'s decrease: ");
     let one <- runtime_dom(stated_t);
@@ -4597,7 +4611,7 @@ fn runtime_depth(name: String, f: GlobalRef, ws: List<Ty>, ws_e: Expr, p: PTm, p
             Accepted(local) => {
                 let xs = local.ref;
                 let d = RtDescends(value_g, bind_g, recur_g, choose_g, below_g, ap(world_g, [none_g]), ap(meaning_g, [none_g, ws_e, Global(f)]),
-                    obls, rank_ok_g, on_words_g, rec, ts.word, ws, ws_e, xs, word_at_g, padded_g);
+                    obls, rank_ok_g, on_words_g, rec, ts.word, ws, ws_e, xs, word_at_g, padded_g, ranked);
                 runtime_descends_walk(4096, p, d, q, cs, ap(ctx_g, [NatLit(n)]), ap(vals_g, [none_g, NatLit(n), Local(xs)]), [], Some(xs)).bind(λ walked =>
                     match walked {
                         None => pure([]),

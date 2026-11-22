@@ -987,6 +987,7 @@ pub(crate) fn branch_equations(decl: &Decl, self_name: &str, reading: Reading, f
                 params,
                 result: eq_ty(lhs.clone(), rhs, span),
                 decreases: None,
+                depth: None,
                 unfolding: Vec::new(),
                 body: block(proof, span),
                 span: decl.span,

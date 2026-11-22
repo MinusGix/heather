@@ -24,3 +24,16 @@ fn malformed_or_unscoped_labels_are_rejected() {
     // and discharge positions.
     parse_file("fn decreasing(n: Nat) -> Nat { n }").unwrap();
 }
+
+#[test]
+fn a_depth_bound_sits_beside_its_measure() {
+    let file = parse_file("fn f(n: Nat) -> Nat decreases n depth n / 2 { n on ?depth1 := p; }").unwrap();
+    let Item::Decl(d) = &file.items[0] else { panic!("declaration") };
+    assert!(d.decreases.is_some());
+    assert!(d.depth.is_some());
+    assert!(matches!(&d.body.ons[0].target, OnTarget::Name(n) if n == "depth1"));
+    let error = parse_file("fn f(n: Nat) -> Nat depth n { n }").unwrap_err();
+    assert!(error.msg.contains("sits beside a `decreases` measure"), "{}", error.msg);
+    // The contextual word remains an ordinary name everywhere else.
+    parse_file("fn depth(depth: Nat) -> Nat decreases depth { depth }").unwrap();
+}

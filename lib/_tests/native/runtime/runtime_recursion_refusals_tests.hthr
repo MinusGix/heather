@@ -54,3 +54,10 @@ runtime fn rcall(n: u64) → u64 decreases n.toNat() {
     }
     on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
 }
+
+// A `depth` bound that does not drop at a call is refused at the call,
+// naming the bound and how to discharge it by hand (design §3.3).
+// expect-error: must decrease the `depth` bound
+runtime fn rflat(n: u64) → u64 decreases n.toNat() depth 3 {
+    if small: n < 1 { 0 } else { n + rflat(n - 1) }
+}

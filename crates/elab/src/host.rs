@@ -5372,6 +5372,7 @@ impl HostMut<'_> {
             params,
             result,
             decreases: None,
+            depth: None,
             unfolding: Vec::new(),
             body: Block { stmts: Vec::new(), result: Box::new(leaf_expr(n + 1, span)), ons: Vec::new(), span },
             span,

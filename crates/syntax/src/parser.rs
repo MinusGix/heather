@@ -1251,6 +1251,7 @@ impl Parser {
             params,
             result: positive(call),
             decreases: None,
+            depth: None,
             unfolding: Vec::new(),
             body,
             span,
@@ -2718,6 +2719,7 @@ impl Parser {
                 params: rparams,
                 result: Ty { kind: TyKind::OfExpr(Box::new(stmt)), span: fspan },
                 decreases: None,
+                depth: None,
                 unfolding: Vec::new(),
                 body: Block { stmts: Vec::new(), result: Box::new(project(&fact)), ons: Vec::new(), span: fspan },
                 span: fspan,
@@ -3369,6 +3371,20 @@ impl Parser {
         } else {
             None
         };
+        // `depth ν` — a bound on how deep the recursion nests, beside its
+        // measure (docs/native/runtime-fn-recursion-design.md §3.3).
+        // Contextual, like `decreases`.
+        let depth = if self.eat_kw("depth") {
+            if decreases.is_none() {
+                return self.err(
+                    "a `depth` bound sits beside a `decreases` measure: `decreases μ depth ν`, \
+                     each recursive call owing `ν(y) < ν(x)` as it owes `μ(y) < μ(x)`",
+                );
+            }
+            Some(self.with_record_lit(true, |p| p.expr())?)
+        } else {
+            None
+        };
         // `unfolding f, g` — see through these interface definitions in this
         // declaration (docs/language/interface-definitions-design.md §4). Contextual,
         // like `decreases`.
@@ -3444,7 +3460,7 @@ impl Parser {
         crate::imperative::reject_residue(&body)?;
         let (tyvars, params) = self.splice_sections(&name, name_span, tyvars, params, leading, &result)?;
         let span = start.join(body.span);
-        Ok(Decl { kind, is_meta, is_evidence, is_interface, partial: None, value: false, elaborates, name, tyvars, params, result, decreases, unfolding, body, span })
+        Ok(Decl { kind, is_meta, is_evidence, is_interface, partial: None, value: false, elaborates, name, tyvars, params, result, decreases, depth, unfolding, body, span })
     }
 
     /// `def name<A>: T = e;`, `def name = e;` (docs/metaprogramming/value-definitions-design.md
@@ -3524,6 +3540,7 @@ impl Parser {
             params,
             result,
             decreases: None,
+            depth: None,
             unfolding: Vec::new(),
             body,
             span: start.join(end),

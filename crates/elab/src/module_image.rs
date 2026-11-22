@@ -33,8 +33,8 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x26";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x20";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x27";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x21";
 
 /// The two encodings' versions, image then interface: what a module cache
 /// key covers, so a bump of either is a clean miss for every reader rather
@@ -1704,6 +1704,7 @@ fn put_decl(w: &mut Writer, decl: &Decl) {
     w.vec(&decl.tyvars, |w, var| { w.string(&var.name); w.u64(var.level); put_span(w, var.span); });
     w.vec(&decl.params, put_param); put_ty(w, &decl.result);
     w.option(decl.decreases.as_ref(), put_expr);
+    w.option(decl.depth.as_ref(), put_expr);
     w.vec(&decl.unfolding, |w, name| w.string(name));
     if w.interface && matches!(decl.kind, DeclKind::Theorem | DeclKind::Axiom) {
         // The checked kernel binding retains the statement and opacity bit.
@@ -1726,7 +1727,7 @@ fn get_decl(r: &mut Reader<'_>) -> Result<Decl, ModuleImageDecodeError> {
             family: r.string()?, name: r.string()?, span: get_span(r)?,
         }))?, name: r.string()?, tyvars: r.vec(|r| Ok(TyParam {
             name: r.string()?, level: r.u64()?, span: get_span(r)?,
-        }))?, params: r.vec(get_param)?, result: get_ty(r)?, decreases: r.option(get_expr)?, unfolding: r.vec(Reader::string)?,
+        }))?, params: r.vec(get_param)?, result: get_ty(r)?, decreases: r.option(get_expr)?, depth: r.option(get_expr)?, unfolding: r.vec(Reader::string)?,
         body: get_block(r)?, span: get_span(r)?,
     })
 }
