@@ -1548,6 +1548,28 @@ fn Tm::calls_self(self t: Tm) → Bool {
     }
 }
 
+// A term with every function it names one entry later: the body of a
+// function that is its own callee, whose table lists it twice, entry 0 as
+// every function's own and entry 1 the callee its calls of itself name
+// (docs/native/runtime-fn-recursion-design.md). Such a body calls entry 0
+// nowhere, so it is a plain function's.
+fn Tm::calls_after(self t: Tm) → Tm {
+    match t {
+        Let(e, body) => Let(e.calls_after(), body.calls_after()),
+        If(c, yes, no) => If(c, yes.calls_after(), no.calls_after()),
+        IfEq(c, yes, no) => IfEq(c, yes.calls_after(), no.calls_after()),
+        Call(f, args) => Call(Succ(f), args),
+        Fold(over, init, step) => Fold(over, init, Succ(step)),
+        Case(c, zero, succ) => Case(c, zero.calls_after(), succ.calls_after()),
+        Pick(i, c, arms, eq) => Pick(i, c, arms.calls_after(), eq),
+        Iterate(init, test, body) => Iterate(init, test.calls_after(), body.calls_after()),
+        _ => t,
+    }
+}
+
+// A function as its own callee.
+fn Fun::own_callee(self f: Fun) → Fun { Fun(f.params, f.result, f.body.calls_after(), f.lent) }
+
 fn Fun::shape_words(p: Ty, rest: List<Ty>, body: Tm) → RtShape {
     match p {
         Count => match rest {

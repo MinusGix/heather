@@ -1,0 +1,54 @@
+// Probes of a `runtime fn` that calls itself, compiled as its own callee
+// (docs/native/runtime-fn-recursion-design.md): an ordinary function of
+// its program, whose table lists it twice and whose calls of itself are
+// calls of entry 1. Tests, not library: nothing outside lib/_tests imports
+// this module (docs/test-value-audit.md §4.5).
+import logic;
+import bool;
+import nat;
+import list;
+import bitvec;
+import bitvec_nat;
+import rt;
+import function_ir;
+import function_ir_eval;
+import function_ir_levels;
+import runtime;
+
+// `n + (n - 1) + … + 0`: the call under a method call.
+runtime fn rsum(n: u64) → u64 decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => BitVec::ofNat(0),
+        False => n.add(rsum(n.sub(BitVec::ofNat(1)))),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+// Its reflection calls entry 1, itself as a callee.
+theorem rsum_reflected(): rsum::rt.body.calls_self() = False { refl }
+
+// Its program is itself, at one level.
+theorem rsum_levels(): rsum::program.map(λ (f: Function) => f.levels) = [1] { refl }
+
+// At eleven levels the program is defined at 10 and answers `rsum(10)`.
+theorem rsum_ten_defined(): program_defined(program_deepened(rsum::program, 10), 0, [BitVec::ofNat(10)]) = True { refl }
+
+theorem rsum_ten(): program_eval(program_deepened(rsum::program, 10), 0, [BitVec::ofNat(10)]) = rsum(BitVec::ofNat(10)) {
+    rsum::agrees_where(BitVec::ofNat(10), 10, trivial)
+}
+
+// At any word, wherever the program at any levels is defined.
+theorem rsum_any(n: u64, more: Nat, defined: program_defined(program_deepened(rsum::program, more), 0, [n]).IsTrue()):
+    program_eval(program_deepened(rsum::program, more), 0, [n]) = rsum(n) {
+    rsum::agrees_where(n, more, defined)
+}
+
+// A caller of it is an ordinary function, linked to its instance.
+runtime fn twice_rsum(n: u64) → u64 { rsum(n).add(rsum(n)) }
+
+theorem twice_levels(): twice_rsum::program.map(λ (f: Function) => f.levels) = [0, 1] { refl }
+
+theorem twice_any(n: u64, more: Nat, defined: program_defined(program_deepened(twice_rsum::program, more), 1, [n]).IsTrue()):
+    program_eval(program_deepened(twice_rsum::program, more), 1, [n]) = rsum(n).add(rsum(n)) {
+    twice_rsum::agrees_where(n, more, defined)
+}
