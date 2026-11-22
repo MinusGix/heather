@@ -251,6 +251,22 @@ When it fails, the refusal says what the deepest chain costs, which frame
 dominates it, and what the bound was, so the writer knows whether to
 tighten the bound, shrink a frame, rewrite (§5) or raise the budget.
 
+Built (2026-11-22) for a closed program, as the generator's argument
+beside `levels`: `runtime(stack := 65536) fn main() → u64 { … }`
+publishes `main::stack`. The bytes a level costs are the placement's, so
+the comparison is made where the placement is chosen: `write-elf`, compiling
+`main::source`, reads `main::stack` beside it, refuses a program whose
+`Source::need` is past it, and otherwise states the fit in the certificate
+(`need(homes, frames) <= main::stack`, by evaluation). The refusal names
+the need, the levels and what the last level costs: "`sum_ten_tight` needs
+392 bytes of stack under this placement, past its budget `stack := 64`:
+its calls nest 11 levels, the last costing 32 bytes". The contract's
+`StackRoom` stays the exact need, which the program tests at startup; the
+budget is the writer's ceiling on it. A budget on a program that calls no
+recursion is refused for now. Naming the frame that dominates the deepest
+chain, and the target, are left for when there is more than one frame in
+it.
+
 Without a `stack` clause the budget is the stack the system contract
 presumes (Linux's default 8 MiB, `docs/native/system-contract-design.md`
 §4.1). A budget past it needs the contract's mapped stack, and until that
@@ -395,8 +411,9 @@ the generator) are built, §8.1. From here, in order:
    main()` with no argument; `levels := n` optional.
 3. **The `depth ν` clause** (§3.3, built): parsed beside `decreases`, its
    obligations lifted and defaulted as a measure's, `f::depth` from ν.
-4. **The byte budget** (§4.1): `runtime(stack := n)`, the compiled theorem
-   in bytes, the refusal that names the deepest chain and its frames.
+4. **The byte budget** (§4.1, built for a closed program):
+   `runtime(stack := n)`, checked at the compile and stated in its
+   certificate; the refusal names the need, the levels and a level's cost.
 5. **One check at the entry** (§4.2, §2.1): the budgeted call, unchecked
    calls inside a proved-bounded cycle, and the reserved call that keeps
    the recursion's callers regions.

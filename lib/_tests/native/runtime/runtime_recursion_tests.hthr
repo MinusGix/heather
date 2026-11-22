@@ -122,6 +122,17 @@ theorem sum_ten_roomy_levels(): sum_ten_roomy::source.levels = 16 { refl }
 
 theorem sum_ten_reads(): PTm::SourceReads(sum_ten::source, sum_ten) { sum_ten::reads }
 
+// A stated stack budget in bytes (design §4.1), published beside the
+// source: `write-elf` compiles `sum_ten_budget::source` within it, which
+// its certificate states, and refuses `sum_ten_tight::source`, whose
+// eleven levels need more than 64 bytes under any placement
+// (crates/cli/tests/native_recursion.rs).
+runtime(stack := 65536) fn sum_ten_budget() → u64 { rsum(BitVec::ofNat(10)) }
+
+theorem sum_ten_budget_is(): sum_ten_budget::stack = 65536 { refl }
+
+runtime(stack := 64) fn sum_ten_tight() → u64 { rsum(BitVec::ofNat(10)) }
+
 // What `write-elf` compiles: the generated source at its inferred eleven
 // levels, and the same program at ten, one short, whose last nested call
 // stops with the call-depth status.

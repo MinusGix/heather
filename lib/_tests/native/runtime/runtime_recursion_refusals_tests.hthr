@@ -61,3 +61,8 @@ runtime fn rcall(n: u64) → u64 decreases n.toNat() {
 runtime fn rflat(n: u64) → u64 decreases n.toNat() depth 3 {
     if small: n < 1 { 0 } else { n + rflat(n - 1) }
 }
+
+// A stack budget bounds a program's recursion, so a program calling none
+// is refused one.
+// expect-error: a stack budget, `stack := b`, is stated of a program that calls a recursion
+runtime(stack := 4096) fn plus_two() → u64 { plus_one(BitVec::ofNat(1)) }

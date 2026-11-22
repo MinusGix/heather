@@ -6,7 +6,8 @@
 //! it exits with the call-depth status, 139. The same, generated: a
 //! `runtime fn` recursion and a `runtime fn sum_ten()` that calls it at
 //! the eleven levels it infers, and the same at ten, one short
-//! (`lib/_tests/native/runtime/runtime_recursion_tests.hthr`).
+//! (`lib/_tests/native/runtime/runtime_recursion_tests.hthr`). And a stack
+//! budget (§4.1): compiled within 64 KiB, refused within 64 bytes.
 #![cfg(all(target_arch = "x86_64", target_os = "linux"))]
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -17,6 +18,11 @@ const PROBES: &str = "lib/_tests/native/runtime/rt_proc_program_tests.hthr";
 const GENERATED: &str = "lib/_tests/native/runtime/runtime_recursion_tests.hthr";
 
 fn write_elf(file: &str, source: &str, output: &Path) {
+    let result = write_elf_output(file, source, output);
+    assert!(result.status.success(), "{}{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+}
+
+fn write_elf_output(file: &str, source: &str, output: &Path) -> std::process::Output {
     let root = showcase::repo_root();
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_heather"));
     cmd.current_dir(&root)
@@ -26,8 +32,7 @@ fn write_elf(file: &str, source: &str, output: &Path) {
     if std::env::var("HEATHER_SEMANTIC_IMAGES").as_deref() == Ok("accept-stale") {
         cmd.arg("--accept-stale-images");
     }
-    let result = cmd.output().unwrap();
-    assert!(result.status.success(), "{}{}", String::from_utf8_lossy(&result.stdout), String::from_utf8_lossy(&result.stderr));
+    cmd.output().unwrap()
 }
 
 /// A directory of its own under `target/`, for one test's files.
@@ -39,8 +44,9 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 fn exit_code(file: &str, source: &str) -> Option<i32> {
-    let dir = scratch(source);
-    let binary = dir.join(source);
+    let name = source.replace("::", "_");
+    let dir = scratch(&name);
+    let binary = dir.join(&name);
     write_elf(file, source, &binary);
     let status = Command::new(&binary).status().unwrap();
     let _ = std::fs::remove_dir_all(&dir);
@@ -65,4 +71,18 @@ fn generated_program_exits_with_its_value_within_the_levels() {
 #[test]
 fn generated_program_stops_one_level_short() {
     assert_eq!(exit_code(GENERATED, "sum_ten_short"), Some(139));
+}
+
+#[test]
+fn generated_program_runs_within_its_stack_budget() {
+    assert_eq!(exit_code(GENERATED, "sum_ten_budget::source"), Some(55));
+}
+
+#[test]
+fn generated_program_past_its_stack_budget_is_refused() {
+    let dir = scratch("sum_ten_tight");
+    let result = write_elf_output(GENERATED, "sum_ten_tight::source", &dir.join("sum_ten_tight"));
+    let _ = std::fs::remove_dir_all(&dir);
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(!result.status.success() && stderr.contains("past its budget `stack := 64`"), "{stderr}");
 }

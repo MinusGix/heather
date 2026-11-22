@@ -4236,13 +4236,17 @@ fn runtime_levels_at(name: String, g: String, stated: Nat, fuel: Nat, need_e: Ex
 //     main::reads   `PTm::SourceReads(main::source, main)`: for any compile
 //                   that accepts it, run against any world, it exits with
 //                   `main`'s value and leaves the world as it was
+//     main::stack   with `runtime(stack := b)`, the budget `b` in bytes,
+//                   which `write-elf` compiles `main::source` within or
+//                   refuses (design §4.1): the bytes a level costs are the
+//                   placement's, known only to the compile
 //
 // `main::reads` is `PTm::source_reads` with `g::guarded`, every premise
 // but the compile closed by evaluation here: the source lowered, `g`'s
 // call of itself is checked, and main's calls fit within the levels. A
 // call too deep for them is refused at that premise, with the levels.
 // The statements live in `rt_proc_program`, which the module imports.
-fn runtime_recursive_main(name: String, f: GlobalRef, rfun: Fun, g: String, g_sig: Sig, levels: Nat) → Tac<List<Decl>> {
+fn runtime_recursive_main(name: String, f: GlobalRef, rfun: Fun, g: String, g_sig: Sig, levels: Nat, stack: Nat) → Tac<List<Decl>> {
     let main_p <- match rfun.body.to_ptm_of(1) {
         Some(p) => pure(p),
         None => runtime_fail("`" ++ name ++ "` calls `" ++ g ++ "`, which calls itself, from where a call between statements cannot be: in a bound term's own binding, or under a `Nat` or enum `match`"),
@@ -4287,10 +4291,12 @@ fn runtime_recursive_main(name: String, f: GlobalRef, rfun: Fun, g: String, g_si
     let _ <- runtime_levels_verdict(name, g, at, verdict);
     let made = ap(rfl, [Blank, ap(program_g, [main_e, ap(defs_g, [gws_e, g_ptm]), plain_e, NatLit(at)])]);
     let reads = ap(reads_g, [none_g, NatLit(gws.len()), g_ptm, h_e, m_e, guarded, main_e, NatLit(at), source_e, made, truth, truth]);
+    let nat_t <- infer(NatLit(stack)).or_fail("runtime: a number: ");
+    let budget: List<Decl> = match stack { Zero => [], Succ(_) => [Decl(AsValue, name ++ "::stack", [], Hd(nat_t), NatLit(stack))] };
     pure([
         Decl(AsValue, name ++ "::ptm", [], Hd(ptm_h), main_e),
         Decl(AsValue, name ++ "::source", [], Hd(source_t), source_e),
-        Decl(AsTheorem, name ++ "::reads", [], ap(stmt_g, [source_e, Global(f)]), reads)])
+        Decl(AsTheorem, name ++ "::reads", [], ap(stmt_g, [source_e, Global(f)]), reads)].append(budget))
 }
 
 // ---------------------------------------------------------------------------
@@ -4715,7 +4721,7 @@ fn runtime_judged(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, world:
     }
 }
 
-fn runtime_reads(name: String, f: GlobalRef, levels: Nat := 0) → Tac<List<Decl>> {
+fn runtime_reads(name: String, f: GlobalRef, levels: Nat := 0, stack: Nat := 0) → Tac<List<Decl>> {
     let k0 <- rt_known_in([name], [], True);
     // The reflection and its callees' signatures, the types held by their
     // reprs added to the table as the walk meets them (design §16.13).
@@ -4735,8 +4741,11 @@ fn runtime_reads(name: String, f: GlobalRef, levels: Nat := 0) → Tac<List<Decl
     // A main over no words calling one recursive function: the program.
     let recursive_callee <- runtime_recursive_callee(name, rfun, reflected.snd.drop(1), callee_sigs);
     match recursive_callee {
-        Some(callee) => runtime_recursive_main(name, f, rfun, callee.fst, callee.snd, levels),
-        None => runtime_judged(name, f, rfun, sigs, world, k, reflected, lents, reprs, recs, callee_sigs),
+        Some(callee) => runtime_recursive_main(name, f, rfun, callee.fst, callee.snd, levels, stack),
+        None => match stack {
+            Succ(_) => runtime_fail("`" ++ name ++ "`: a stack budget, `stack := b`, is stated of a program that calls a recursion, whose depth is what it bounds"),
+            Zero => runtime_judged(name, f, rfun, sigs, world, k, reflected, lents, reprs, recs, callee_sigs),
+        },
     }
 }
 
@@ -5930,14 +5939,15 @@ fn runtime_of_laid(f: GlobalRef) → Tac<Bool> {
 // type ends in `Mutated` writes a span, and any other only reads.
 // `levels`: how many nested calls of a recursive function the program has
 // room for, which a `main` that calls one states
-// (docs/native/runtime-fn-recursion-design.md §3).
-fn runtime(name: String, levels: Nat := 0) → Tac<List<Decl>> {
+// (docs/native/runtime-fn-recursion-design.md §3). `stack`: the bytes of
+// stack such a program must compile within (§4.1).
+fn runtime(name: String, levels: Nat := 0, stack: Nat := 0) → Tac<List<Decl>> {
     let f <- runtime_ref(name);
     let writes <- runtime_writes(f);
     let laid <- runtime_of_laid(f);
     let of_bytes <- runtime_of_bytes(f);
     match of_bytes {
         True => runtime_bytes(name, f),
-        False => match laid { True => runtime_record(name, f), False => match writes { True => runtime_span(name, f), False => runtime_reads(name, f, levels := levels) } },
+        False => match laid { True => runtime_record(name, f), False => match writes { True => runtime_span(name, f), False => runtime_reads(name, f, levels := levels, stack := stack) } },
     }
 }
