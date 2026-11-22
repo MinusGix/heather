@@ -1,0 +1,354 @@
+// A program that has a function calling itself, linked to its sources
+// (docs/native/runtime-fn-recursion-design.md): each function answers as
+// its source wherever the program is defined.
+//
+// A function with levels answers its own calls only as deep as its levels
+// reach (`Function.levels`), so a program with one does not answer as its
+// sources at every word, as a flat one does (`program_linked_files_sources`):
+// below the last level a call of it is answered by nothing. Where the
+// program is defined (`program_defined_over`) no evaluation reaches there,
+// and that is where it agrees.
+//
+// Each function is checked as in a flat program, once and against any
+// table that answers as the sources: its own entry among them where it
+// calls itself (`linked_last_arity`). That check asks the table to be
+// right at every word, and the program's own answers are right only where
+// defined. So the check is applied to the answers patched with the sources
+// where they are not defined (`Answers::patched`), which is right
+// everywhere, and a defined evaluation does not tell the two apart
+// (`Function::eval_words_where`): it asks its callees only where they are
+// defined.
+
+import function_ir;
+import function_ir_eval;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// A defined evaluation reads its callees only where they are defined
+
+// Loops whose passes agree wherever a pass is defined run alike where the
+// loop is.
+theorem loop_eval_same_where(step, other_step: Valuation() → Valuation(), defined: Valuation() → Bool,
+    same: (v: Valuation()) → defined(v).IsTrue() → Valuation::Same(step(v), other_step(v)),
+    parameters: List<Nat>, count, exit: Nat, next: List<Nat>, remaining: Nat):
+    (state: List<BitVec(64)>) → loop_defined(step, defined, parameters, count, exit, next, remaining, state).IsTrue() →
+    loop_eval(other_step, parameters, count, exit, next, remaining, state) = loop_eval(step, parameters, count, exit, next, remaining, state) {
+    match remaining {
+        Zero => λ state _ => refl,
+        Succ(rest) => λ state all => {
+            let entry = pass_valuation(parameters, count, rest + 1, state);
+            let after = step(entry);
+            let halves = Bool::is_true_and(defined(entry), match after(1, exit).head_bit() {
+                False => loop_defined(step, defined, parameters, count, exit, next, rest, words_of(after, next)),
+                True => True,
+            }, all);
+            let alike = same(entry, halves.left);
+            let bit: (other_step(entry, 1, exit).head_bit() = after(1, exit).head_bit()) =
+                cong_fn(λ (x: BitVec(1)) => x.head_bit(), alike(1, exit));
+            let words: (words_of(other_step(entry), next) = words_of(after, next)) =
+                words_agree(next, after, other_step(entry), λ id _ => alike(64, id));
+            let moved = eq2(λ (b: Bool) (ws: List<BitVec(64)>) => match b {
+                    False => loop_eval(other_step, parameters, count, exit, next, rest, ws),
+                    True => LoopEnd(ws, False),
+                }, bit, words);
+            trans(moved, (match after(1, exit).head_bit() as λ b =>
+                (match b as λ _ => Bool {
+                    False => loop_defined(step, defined, parameters, count, exit, next, rest, words_of(after, next)),
+                    True => True,
+                }).IsTrue() →
+                (match b { False => loop_eval(other_step, parameters, count, exit, next, rest, words_of(after, next)),
+                    True => LoopEnd(words_of(after, next), False) }) =
+                (match b { False => loop_eval(step, parameters, count, exit, next, rest, words_of(after, next)),
+                    True => LoopEnd(words_of(after, next), False) }) {
+                False => λ later => loop_eval_same_where(step, other_step, defined, same, parameters, count, exit, next, rest, words_of(after, next), later),
+                True => λ _ => refl,
+            })(halves.right))
+        },
+    }
+}
+
+// The theorem: a region defined at a valuation, its calls answered alike
+// wherever `defines` says a callee is defined, evaluates alike from
+// agreeing valuations. `StructuredRegion::eval_answers_over` with the
+// agreement asked only where the evaluation looks.
+theorem StructuredRegion::eval_where_over(self region: StructuredRegion, buffers: Buffers(), call, other: Answers(), defines: Defines(),
+    answers: (f: Nat) → (words: List<BitVec(64)>) → defines(f, words).IsTrue() → other(f, words) = call(f, words)):
+    (values, others: Valuation()) → Valuation::Same(values, others) → region.defined_over(buffers, call, defines, values).IsTrue() →
+    Valuation::Same(region.eval_over(buffers, call, values), region.eval_over(buffers, other, others)) {
+    match region {
+        Dataflow(body) => λ values others same _ => eval_nodes_same_over(buffers, body.nodes, values, others, same),
+        Sequence(prefix, continuation) => λ values others same ok => {
+            let parts = Bool::is_true_and(prefix.defined(values, buffers := buffers),
+                continuation.defined_over(buffers, call, defines, prefix.eval(values, buffers := buffers)), ok);
+            continuation.eval_where_over(buffers, call, other, defines, answers, prefix.eval(values, buffers := buffers), prefix.eval(others, buffers := buffers),
+                eval_nodes_same_over(buffers, prefix.nodes, values, others, same), parts.right)
+        },
+        Compose(prefix, continuation) => λ values others same ok => {
+            let parts = Bool::is_true_and(prefix.defined_over(buffers, call, defines, values),
+                continuation.defined_over(buffers, call, defines, prefix.eval_over(buffers, call, values)), ok);
+            continuation.eval_where_over(buffers, call, other, defines, answers, prefix.eval_over(buffers, call, values), prefix.eval_over(buffers, other, others),
+                prefix.eval_where_over(buffers, call, other, defines, answers, values, others, same, parts.left), parts.right)
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => λ values others same ok => λ w id => {
+            let bit: (values(1, condition).head_bit() = others(1, condition).head_bit()) =
+                sym(cong_fn(λ (x: BitVec(1)) => x.head_bit(), same(1, condition)));
+            let aligned = (match values(1, condition).head_bit() as λ b =>
+                (match b as λ _ => Bool {
+                    False => when_false.defined_over(buffers, call, defines, values),
+                    True => when_true.defined_over(buffers, call, defines, values),
+                }).IsTrue() →
+                (match b { False => when_false.eval_over(buffers, other, others)(w, id), True => when_true.eval_over(buffers, other, others)(w, id) }) =
+                (match b { False => when_false.eval_over(buffers, call, values)(w, id), True => when_true.eval_over(buffers, call, values)(w, id) }) {
+                False => λ d => when_false.eval_where_over(buffers, call, other, defines, answers, values, others, same, d, w, id),
+                True => λ d => when_true.eval_where_over(buffers, call, other, defines, answers, values, others, same, d, w, id),
+            })(ok);
+            j(bit, λ b _ => (match b { False => when_false.eval_over(buffers, other, others)(w, id), True => when_true.eval_over(buffers, other, others)(w, id) }) =
+                (match values(1, condition).head_bit() {
+                    False => when_false.eval_over(buffers, call, values)(w, id),
+                    True => when_true.eval_over(buffers, call, values)(w, id),
+                }), aligned)
+        },
+        Lend(views, callee, arguments, result) => λ values others same ok => {
+            let nodes = views_nodes(views);
+            let args = views_homes(views) ++ arguments;
+            let first = eval_nodes_over(buffers, nodes, values);
+            let second = eval_nodes_over(buffers, nodes, others);
+            let alike = eval_nodes_same_over(buffers, nodes, values, others, same);
+            let words = words_of(first, args);
+            let read: (words_of(second, args) = words) = words_agree(args, first, second, λ id _ => alike(64, id));
+            let parts = Bool::is_true_and(nodes_defined_over(buffers, nodes, values), defines(callee, words), ok);
+            let answered: (other(callee, words_of(second, args)) = call(callee, words)) =
+                trans(cong_fn(λ (ws: List<BitVec(64)>) => other(callee, ws), read), answers(callee, words, parts.right));
+            Valuation::set_same(first, second, alike, result, word_value(first_word(call(callee, words))), word_value(first_word(other(callee, words_of(second, args)))),
+                λ w => cong_fn(λ (x: List<BitVec(64)>) => word_value(first_word(x), w), answered))
+        },
+        Call(callee, arguments, result, also) => λ values others same ok => {
+            let words = words_of(values, arguments);
+            let read: (words_of(others, arguments) = words) = words_agree(arguments, values, others, λ id _ => same(64, id));
+            let parts = Bool::is_true_and(defines(callee, words), call(callee, words).tail().len().matches(also.len()), ok);
+            let answered: (other(callee, words_of(others, arguments)) = call(callee, words)) =
+                trans(cong_fn(λ (ws: List<BitVec(64)>) => other(callee, ws), read), answers(callee, words, parts.left));
+            j(sym(answered), λ a _ => Valuation::Same(Valuation::bind(values, Cons(result, also), Answers::split(call(callee, words))),
+                    Valuation::bind(others, Cons(result, also), Answers::split(a))),
+                Valuation::bind_same(values, others, same, Cons(result, also), Answers::split(call(callee, words))))
+        },
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ values others same ok => {
+            let step = λ (pass: Valuation()) => body.eval_over(buffers, call, pass);
+            let other_step = λ (pass: Valuation()) => body.eval_over(buffers, other, pass);
+            let defined = λ (pass: Valuation()) => body.defined_over(buffers, call, defines, pass);
+            let end = loop_eval(step, parameters, count, exit, next, values(64, bound).toNat(), words_of(values, inputs));
+            let ran: (loop_eval(other_step, parameters, count, exit, next, others(64, bound).toNat(), words_of(others, inputs)) = end) =
+                trans(eq2(λ (n: Nat) (s: List<BitVec(64)>) => loop_eval(other_step, parameters, count, exit, next, n, s),
+                        cong_fn(λ (x: BitVec(64)) => x.toNat(), same(64, bound)), words_agree(inputs, values, others, λ id _ => same(64, id))),
+                    loop_eval_same_where(step, other_step, defined,
+                        λ v d => body.eval_where_over(buffers, call, other, defines, answers, v, v, λ w id => refl, d),
+                        parameters, count, exit, next, values(64, bound).toNat(), words_of(values, inputs), ok));
+            j(sym(ran), λ e _ => Valuation::Same(Valuation::set(Valuation::bind(values, outputs, end.state), exhausted, bit_value(end.exhausted)),
+                    Valuation::set(Valuation::bind(others, outputs, e.state), exhausted, bit_value(e.exhausted))),
+                Valuation::set_same(Valuation::bind(values, outputs, end.state), Valuation::bind(others, outputs, end.state),
+                    Valuation::bind_same(values, others, same, outputs, end.state), exhausted, bit_value(end.exhausted), bit_value(end.exhausted),
+                    λ w => refl))
+        },
+    }
+}
+
+// So a function defined at its words returns the same words from either
+// table.
+theorem Function::eval_words_where(self function: Function, call, other: Answers(), defines: Defines(), buffers: Buffers(),
+    answers: (f: Nat) → (words: List<BitVec(64)>) → defines(f, words).IsTrue() → other(f, words) = call(f, words),
+    words: List<BitVec(64)>, defined: function.defined(call, defines, words, buffers := buffers).IsTrue()):
+    function.eval_words(other, words, buffers := buffers) = function.eval_words(call, words, buffers := buffers) {
+    let start = Valuation::bind(Valuation::zero(), function.parameters, words);
+    let alike = function.body.eval_where_over(buffers, call, other, defines, answers, start, start, λ w id => refl, defined);
+    words_agree(Cons(function.result, function.also), function.body.eval_over(buffers, call, start), function.body.eval_over(buffers, other, start),
+        λ id _ => alike(64, id))
+}
+
+// ---------------------------------------------------------------------------
+// Answers right where defined, and patched to be right everywhere
+
+// `call` answers with `sources`' answers on every word list of a fitting
+// arity that `admits` admits and `defines` says is defined
+// (`Answers::Agree`, where defined).
+fn Answers::AgreeWhere(call, sources: Answers(), arity: Nat → Option<Nat>, admits: Nat → List<BitVec(64)> → Type, defines: Defines()) → Type {
+    (f: Nat) → (words: List<BitVec(64)>) → arity_fits(arity(f), words.len()).IsTrue() → admits(f, words) → defines(f, words).IsTrue() →
+        call(f, words) = sources(f, words)
+}
+
+// `call` where defined and `sources` elsewhere.
+fn Answers::patched(call, sources: Answers(), defines: Defines()) → Answers() {
+    λ f words => match defines(f, words) { True => call(f, words), False => sources(f, words) }
+}
+
+theorem Answers::patched_where(call, sources: Answers(), defines: Defines(), f: Nat, words: List<BitVec(64)>, defined: defines(f, words).IsTrue()):
+    Answers::patched(call, sources, defines)(f, words) = call(f, words) {
+    (match defines(f, words) as λ b => b.IsTrue() → (match b { True => call(f, words), False => sources(f, words) }) = call(f, words) {
+        True => λ _ => refl,
+        False => λ never => false_elim(never),
+    })(defined)
+}
+
+theorem Answers::patched_agree(call, sources: Answers(), arity: Nat → Option<Nat>, admits: Nat → List<BitVec(64)> → Type, defines: Defines(),
+    agree: Answers::AgreeWhere(call, sources, arity, admits, defines)):
+    Answers::Agree(Answers::patched(call, sources, defines), sources, arity, admits) {
+    λ f words fits admitted => (match defines(f, words) as λ b => (b.IsTrue() → call(f, words) = sources(f, words)) →
+            (match b { True => call(f, words), False => sources(f, words) }) = sources(f, words) {
+        True => λ held => held(trivial),
+        False => λ _ => refl,
+    })(agree(f, words, fits, admitted))
+}
+
+// One function: checked against every table that answers as the sources
+// (`clause`, what `program_linked_files` holds of it), it answers as its
+// source where it is defined, over callees that answer as theirs where
+// they are.
+theorem Function::linked_where(self function: Function, buffers: Buffers(), call: Answers(), defines: Defines(), sources: Answers(),
+    arity: Nat → Option<Nat>, admits: Nat → List<BitVec(64)> → Type, k: Nat, own: Option<Nat>,
+    clause: (c: Answers()) → Answers::Agree(c, sources, arity, admits) → (words: List<BitVec(64)>) → arity_fits(own, words.len()).IsTrue() →
+        admits(k, words) → function.eval_words(c, words, buffers := buffers) = sources(k, words),
+    agree: Answers::AgreeWhere(call, sources, arity, admits, defines),
+    words: List<BitVec(64)>, fits: arity_fits(own, words.len()).IsTrue(), admitted: admits(k, words),
+    defined: function.defined(call, defines, words, buffers := buffers).IsTrue()):
+    function.eval_words(call, words, buffers := buffers) = sources(k, words) {
+    let patched = Answers::patched(call, sources, defines);
+    trans(sym(function.eval_words_where(call, patched, defines, buffers,
+            λ f ws d => Answers::patched_where(call, sources, defines, f, ws, d), words, defined)),
+        clause(patched, Answers::patched_agree(call, sources, arity, admits, defines, agree), words, fits, admitted))
+}
+
+// ---------------------------------------------------------------------------
+// A function that calls itself, level by level
+
+// What a level of function `k` answers: its source, where the level is
+// defined.
+fn Function::LevelLinked(self function: Function, buffers: Buffers(), below: Answers(), below_defines: Defines(), sources: Answers(),
+    admits: Nat → List<BitVec(64)> → Type, k: Nat, own: Option<Nat>, depth: Nat) → Type {
+    (words: List<BitVec(64)>) → arity_fits(own, words.len()).IsTrue() → admits(k, words) →
+        function.level_defined(below, below_defines, k, depth, buffers)(words).IsTrue() →
+        function.level_words(below, k, depth, buffers)(words) = sources(k, words)
+}
+
+// The functions below it and the function at a level answer as their
+// sources where defined, given that the level does.
+theorem Function::tied_where_at(self function: Function, buffers: Buffers(), below: Answers(), below_defines: Defines(), sources: Answers(),
+    arity: Nat → Option<Nat>, admits: Nat → List<BitVec(64)> → Type, k: Nat, own: Option<Nat>,
+    under: Answers::AgreeWhere(below, sources, arity, admits, below_defines), depth: Nat,
+    level: function.LevelLinked(buffers, below, below_defines, sources, admits, k, own, depth)):
+    Answers::AgreeWhere(function.tied_answers(below, k, depth, buffers), sources, tie(arity, k, own), admits,
+        function.tied_defines(below, below_defines, k, depth, buffers)) {
+    λ f words => match f.eq_dec(k) as λ d =>
+        arity_fits(match d { Inl(_) => own, Inr(_) => arity(f) }, words.len()).IsTrue() → admits(f, words) →
+        (match d as λ _ => Bool {
+            Inl(_) => function.level_defined(below, below_defines, k, depth, buffers)(words),
+            Inr(_) => below_defines(f, words),
+        }).IsTrue() →
+        (match d as λ _ => List<BitVec(64)> {
+            Inl(_) => function.level_words(below, k, depth, buffers)(words),
+            Inr(_) => below(f, words),
+        }) = sources(f, words) {
+        Inl(e) => λ fits => j(sym(e), λ g _ => admits(g, words) → function.level_defined(below, below_defines, k, depth, buffers)(words).IsTrue() →
+                function.level_words(below, k, depth, buffers)(words) = sources(g, words),
+            level(words, fits)),
+        Inr(_) => λ fits admitted defined => under(f, words, fits, admitted, defined),
+    }
+}
+
+// Every level does: none is defined nowhere, and one more is the function
+// over the level under it.
+theorem Function::level_where(self function: Function, buffers: Buffers(), below: Answers(), below_defines: Defines(), sources: Answers(),
+    arity: Nat → Option<Nat>, admits: Nat → List<BitVec(64)> → Type, k: Nat, own: Option<Nat>,
+    clause: (c: Answers()) → Answers::Agree(c, sources, tie(arity, k, own), admits) → (words: List<BitVec(64)>) → arity_fits(own, words.len()).IsTrue() →
+        admits(k, words) → function.eval_words(c, words, buffers := buffers) = sources(k, words),
+    under: Answers::AgreeWhere(below, sources, arity, admits, below_defines), depth: Nat):
+    function.LevelLinked(buffers, below, below_defines, sources, admits, k, own, depth) {
+    match depth {
+        Zero => λ words fits admitted never => false_elim(never),
+        Succ(i) => λ words fits admitted defined => function.linked_where(buffers, function.tied_answers(below, k, i, buffers),
+            function.tied_defines(below, below_defines, k, i, buffers), sources, tie(arity, k, own), admits, k, own, clause,
+            function.tied_where_at(buffers, below, below_defines, sources, arity, admits, k, own, under, i,
+                function.level_where(buffers, below, below_defines, sources, arity, admits, k, own, clause, under, i)),
+            words, fits, admitted, defined),
+    }
+}
+
+// The function as a program has it, at its levels: it answers as its
+// source where it is defined, over functions below it that do.
+theorem Function::levels_where(self function: Function, buffers: Buffers(), below: Answers(), below_defines: Defines(), sources: Answers(),
+    arity: Nat → Option<Nat>, admits: Nat → List<BitVec(64)> → Type, k: Nat, own: Option<Nat>,
+    under: Answers::AgreeWhere(below, sources, arity, admits, below_defines)):
+    (levels: Nat) →
+    ((c: Answers()) → Answers::Agree(c, sources, self_table(arity, k, levels, own), admits) → (words: List<BitVec(64)>) →
+        arity_fits(own, words.len()).IsTrue() → admits(k, words) → function.eval_words(c, words, buffers := buffers) = sources(k, words)) →
+    (words: List<BitVec(64)>) → arity_fits(own, words.len()).IsTrue() → admits(k, words) →
+    function.defined(function.answers_at(below, k, levels, buffers), function.defines_at(below, below_defines, k, levels, buffers), words,
+        buffers := buffers).IsTrue() →
+    function.eval_words(function.answers_at(below, k, levels, buffers), words, buffers := buffers) = sources(k, words) {
+    λ levels => match levels {
+        Zero => λ clause words fits admitted defined =>
+            function.linked_where(buffers, below, below_defines, sources, arity, admits, k, own, clause, under, words, fits, admitted, defined),
+        Succ(depth) => λ clause words fits admitted defined => function.linked_where(buffers, function.tied_answers(below, k, depth, buffers),
+            function.tied_defines(below, below_defines, k, depth, buffers), sources, tie(arity, k, own), admits, k, own, clause,
+            function.tied_where_at(buffers, below, below_defines, sources, arity, admits, k, own, under, depth,
+                function.level_where(buffers, below, below_defines, sources, arity, admits, k, own, clause, under, depth)),
+            words, fits, admitted, defined),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The program
+
+// The theorem: a linked program answers with its sources wherever it is
+// defined, on the words they admit, whatever levels its functions have.
+// At a program no function of which has levels, defined everywhere its
+// nodes are, this is `program_linked_files_sources`.
+theorem program_linked_where(functions: List<Function>): (arities: List<Nat>) → (admits: Nat → List<BitVec(64)> → Type) →
+    (sources: Buffers() → Answers()) → program_linked_files(functions, arities, admits, sources) → (buffers: Buffers()) →
+    Answers::AgreeWhere(program_answers_over(buffers, functions), sources(buffers), linked_arity(functions, arities), admits,
+        program_defined_over(buffers, functions)) {
+    match functions {
+        Nil => λ arities admits sources linked buffers f words never => false_elim(never),
+        Cons(last, earlier) => λ arities admits sources linked buffers f words => {
+            let below = program_answers_over(buffers, earlier);
+            let below_defines = program_defined_over(buffers, earlier);
+            let arity = linked_arity(earlier, arities.tail());
+            let n = earlier.len();
+            let ih = program_linked_where(earlier, arities.tail(), admits, sources, linked.right, buffers);
+            let own = last.levels_where(buffers, below, below_defines, sources(buffers), arity, admits, n, arities.nth(0), ih, last.levels,
+                linked.left.right(buffers));
+            (match f.eq_dec(n) as λ d =>
+                arity_fits(match d { Inl(_) => arities.nth(0), Inr(_) => arity(f) }, words.len()).IsTrue() → admits(f, words) →
+                (match d as λ _ => Bool {
+                    Inl(_) => last.defined(last.answers_at(below, n, last.levels, buffers), last.defines_at(below, below_defines, n, last.levels, buffers),
+                        words, buffers := buffers),
+                    Inr(_) => below_defines(f, words),
+                }).IsTrue() →
+                (match d as λ _ => List<BitVec(64)> {
+                    Inl(_) => last.eval_words(last.answers_at(below, n, last.levels, buffers), words, buffers := buffers),
+                    Inr(_) => below(f, words),
+                }) = sources(buffers)(f, words) {
+                Inl(e) => λ fits => j(sym(e), λ g _ => admits(g, words) →
+                        last.defined(last.answers_at(below, n, last.levels, buffers), last.defines_at(below, below_defines, n, last.levels, buffers),
+                            words, buffers := buffers).IsTrue() →
+                        last.eval_words(last.answers_at(below, n, last.levels, buffers), words, buffers := buffers) = sources(buffers)(g, words),
+                    own(words, fits)),
+                Inr(_) => λ fits admitted defined => ih(f, words, fits, admitted, defined),
+            })
+        },
+    }
+}
+
+// Its first word, the one a caller of one word reads: what a `runtime fn`
+// that calls itself cites for `f::agrees`, its definedness a premise.
+theorem program_eval_linked_where(functions: List<Function>, arities: List<Nat>, admits: Nat → List<BitVec(64)> → Type,
+    sources: Buffers() → Answers(), linked: program_linked_files(functions, arities, admits, sources), buffers: Buffers(), f: Nat,
+    words: List<BitVec(64)>, fits: arity_fits(linked_arity(functions, arities, f), words.len()).IsTrue(), admitted: admits(f, words),
+    defined: program_defined_over(buffers, functions)(f, words).IsTrue()):
+    program_eval_over(buffers, functions)(f, words) = first_word(sources(buffers)(f, words)) {
+    cong_fn<List<BitVec(64)>, BitVec(64)>(λ l => first_word(l),
+        program_linked_where(functions, arities, admits, sources, linked, buffers, f, words, fits, admitted, defined))
+}
