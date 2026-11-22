@@ -86,6 +86,9 @@ fn FTm::tail_pass(self t: FTm, fw: FWorld, res: Ty) → (g: List<Ty>) → Env(fw
         Again(args) => λ g env own => Goes(Tm::words(fw.w, g, env, args), own),
         Lend(f, views, args, body) => λ g env own => shared(FTm::lent(fw, g, env, f, views, args, own), λ m =>
             body.tail_pass(fw, res, Cons(Sig::at(fw.fsigs, f).result, g), Pair(m.value, env), m.after)),
+        Loop(init, test, body, rest) => λ g env own => FTm::bind_at(fw.w.tys, g, Ty::at(g, init),
+            FTm::iterated(fw, g, init, test, body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => body.sem(fw, Cons(Ty::at(g, init), g), e, o), env, own),
+            env, λ e o => rest.tail_pass(fw, res, Cons(Ty::at(g, init), g), e, o)),
     }
 }
 
@@ -116,6 +119,14 @@ theorem FTm::tail_sem_pass(self t: FTm, fw: FWorld, res: Ty, again: FTm::Round(f
         Again(args) => λ g env own => refl,
         Lend(f, views, args, body) => λ g env own => FTm::tail_sem_pass(body, fw, res, again, Cons(Sig::at(fw.fsigs, f).result, g),
             Pair(FTm::lent(fw, g, env, f, views, args, own).value, env), FTm::lent(fw, g, env, f, views, args, own).after),
+        Loop(init, test, body, rest) => λ g env own => trans(
+            FTm::bind_at_ext(fw.w.tys, g, Ty::at(g, init), FTm::iterated(fw, g, init, test, body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => body.sem(fw, Cons(Ty::at(g, init), g), e, o), env, own), env,
+                λ e o => rest.tail_sem(fw, res, again, Cons(Ty::at(g, init), g), e, o),
+                λ e o => rest.tail_pass(fw, res, Cons(Ty::at(g, init), g), e, o).fold(λ (m: Mutated<List<BitVec(8)>, res.sem(fw.w.tys)>) => m, again),
+                λ e o => FTm::tail_sem_pass(rest, fw, res, again, Cons(Ty::at(g, init), g), e, o)),
+            FTm::bind_at_after(fw.w.tys, g, Ty::at(g, init), FTm::iterated(fw, g, init, test, body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => body.sem(fw, Cons(Ty::at(g, init), g), e, o), env, own), env,
+                λ e o => rest.tail_pass(fw, res, Cons(Ty::at(g, init), g), e, o),
+                λ (p: Pass<List<BitVec(8)>, res.sem(fw.w.tys)>) => p.fold(λ (m: Mutated<List<BitVec(8)>, res.sem(fw.w.tys)>) => m, again))),
     }
 }
 
@@ -146,6 +157,7 @@ fn FTm::tail_held<A, S>(self t: FTm, hw: HWorld<A>, res: Ty, done: Mutated<A, re
         Again(args) => λ g env own a => again(Tm::words(hw.fw.w, g, env, args), a),
         Lend(f, views, args, body) => λ g env own a => shared(FTm::lent(hw.fw, g, env, f, views, args, own), λ m =>
             body.tail_held(hw, res, done, again, Cons(Sig::at(hw.fw.fsigs, f).result, g), Pair(m.value, env), m.after, a)),
+        Loop(_, _, _, _) => λ g env own a => done(Mutated(a, res.default(hw.fw.w.tys))),
     }
 }
 
@@ -183,6 +195,7 @@ theorem FTm::tail_held_pass<A, S>(self t: FTm, hw: HWorld<A>, res: Ty, done: Mut
         Again(args) => λ g env own a => refl,
         Lend(f, views, args, body) => λ g env own a => FTm::tail_held_pass(body, hw, res, done, again, Cons(Sig::at(hw.fw.fsigs, f).result, g),
             Pair(FTm::lent(hw.fw, g, env, f, views, args, own).value, env), FTm::lent(hw.fw, g, env, f, views, args, own).after, a),
+        Loop(_, _, _, _) => λ g env own a => refl,
     }
 }
 
@@ -199,6 +212,7 @@ fn FTm::tail_kept<A>(self t: FTm, hw: HWorld<A>, words: Nat) → Nat → List<Op
             Writer::at(hw.writers, f).lent(hw.fw.w.tys, args, len, known) && body.tail_kept(hw, words, len + 1, Cons(None, known)),
         Again(args) => λ len known => FTm::run_args(args, len, words),
         Lend(_, _, _, _) => λ len known => False,
+        Loop(_, _, _, _) => λ len known => False,
     }
 }
 
@@ -284,6 +298,7 @@ theorem FTm::tail_held_runs<A>(self t: FTm, hw: HWorld<A>, whole: Stored<A>, sou
                     And(refl, holds))),
                 kept),
         Lend(_, _, _, _) => λ len known kept => false_elim(kept),
+        Loop(_, _, _, _) => λ len known kept => false_elim(kept),
     }
 }
 

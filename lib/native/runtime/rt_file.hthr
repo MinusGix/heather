@@ -19,7 +19,12 @@
 // - `Lend(f, views, args, body)` runs a computation of the program over
 //   windows of the function's spans (`FView`) and binds its value: the
 //   callee's written span is a window of the written span, put back where
-//   it was, and the spans it reads are windows of any of the spans.
+//   it was, and the spans it reads are windows of any of the spans;
+// - `Loop(init, test, body, rest)` is a `while` (docs/language/
+//   loop-combinator-design.md §6.2): its state starts at a variable, each
+//   pass reads the test at the state and the span as they are and, where
+//   it holds, runs `body` to the next state and span; `rest` goes on from
+//   the state and span the loop ends at.
 //
 // A computation writes one span, span 0 of its file, and its meaning
 // threads that span's bytes: `List<BitVec(8)> → Mutated<List<BitVec(8)>,
@@ -180,6 +185,10 @@ inductive FTm {
     // it reads are the views after it. `body` sees its value as variable 0
     // and goes on from the span with the window put back.
     Lend(f: Nat, views: List<FView>, args: List<Nat>, body: FTm),
+    // A loop over a state of the code variable `init` holds: `test` (a bit)
+    // and `body` (the next state) see the state as variable 0, and `rest`
+    // sees the state the loop ends at as variable 0.
+    Loop(init: Nat, test: Tm, body: FTm, rest: FTm),
 }
 
 // A computation function: `lent` spans, the first the one it writes.
@@ -263,6 +272,7 @@ fn FTm::ty(self t: FTm, w: World, fsigs: List<Sig>, g: List<Ty>) → Ty {
         Call(f, _, body) => body.ty(w, fsigs, Cons(Sig::at(fsigs, f).result, g)),
         Again(_) => Sig::at(fsigs, 0).result,
         Lend(f, _, _, body) => body.ty(w, fsigs, Cons(Sig::at(fsigs, f).result, g)),
+        Loop(init, _, _, rest) => rest.ty(w, fsigs, Cons(Ty::at(g, init), g)),
     }
 }
 
@@ -363,6 +373,44 @@ fn FTm::lent(fw: FWorld, g: List<Ty>, env: Env(fw.w.tys, g), f: Nat, views: List
     }
 }
 
+// A loop's pass at a state and the span as it is: the test read there, and
+// where it holds, `run` (the body's meaning) from there, at the state's
+// code. The loop is `loop::Loop::steps` of it (`FTm::sem`), as `Tm`'s
+// `Iterate` is, with the span threaded through the state.
+fn FTm::turn(fw: FWorld, g: List<Ty>, env: Env(fw.w.tys, g), st: Ty, test: Tm, bt: Ty,
+    run: Env(fw.w.tys, Cons(st, g)) → List<BitVec(8)> → Mutated<List<BitVec(8)>, bt.sem(fw.w.tys)>)
+    → Mutated<List<BitVec(8)>, st.sem(fw.w.tys)> → loop::Step<Mutated<List<BitVec(8)>, st.sem(fw.w.tys)>> {
+    λ p => loop::Loop::after(p, λ o v => loop::Step::turn(Ty::cast(fw.w.tys, test.ty(fw.w, Cons(st, g)), Bit, FTm::value(fw, o, test, Cons(st, g), Pair(v, env))),
+        λ _ => FTm::recast(fw.w.tys, bt, st, run(Pair(v, env), o)), p))
+}
+
+// A loop's run from the span `own`: its turns iterated from the state the
+// variable holds, the span threaded through the state. A name of its own,
+// so a loop's meaning and a lowering's statement of it are one term, never
+// compared by unfolding the iteration.
+fn FTm::iterated(fw: FWorld, g: List<Ty>, init: Nat, test: Tm, bt: Ty,
+    run: Env(fw.w.tys, Cons(Ty::at(g, init), g)) → List<BitVec(8)> → Mutated<List<BitVec(8)>, bt.sem(fw.w.tys)>, env: Env(fw.w.tys, g), own: List<BitVec(8)>)
+    → Mutated<List<BitVec(8)>, Ty::at(g, init).sem(fw.w.tys)> {
+    loop::Loop::steps(loop::Loop::passes(), FTm::turn(fw, g, env, Ty::at(g, init), test, bt, run), Mutated(own, Env::get(fw.w.tys, g, env, init)))
+}
+
+// A computation's result bound for the rest: its value pushed on the
+// context, its span the rest's. A name of its own so that the loop's
+// meaning and the lowering's statement of the binding read the result's
+// fields the same way, never compared by running the loop to a pair.
+fn FTm::rest_of(fw: FWorld, g: List<Ty>, st, rt: Ty,
+    k: Env(fw.w.tys, Cons(st, g)) → List<BitVec(8)> → Mutated<List<BitVec(8)>, rt.sem(fw.w.tys)>,
+    m: Mutated<List<BitVec(8)>, st.sem(fw.w.tys)>, env: Env(fw.w.tys, g)) → Mutated<List<BitVec(8)>, rt.sem(fw.w.tys)> {
+    loop::Loop::after(m, λ o v => k(Pair(v, env), o))
+}
+
+// `FTm::rest_of` into any answer: what a pass of a tail-recursive body
+// (rt_file_loop, rt_held_loop) goes on with after a loop.
+fn FTm::bind_at<S>(tys: Table, g: List<Ty>, st: Ty, m: Mutated<List<BitVec(8)>, st.sem(tys)>, env: Env(tys, g),
+    k: Env(tys, Cons(st, g)) → List<BitVec(8)> → S) → S {
+    loop::Loop::after(m, λ o v => k(Pair(v, env), o))
+}
+
 // The meaning: a function threading the written span's bytes, at the code
 // the computation returns.
 fn FTm::sem(self t: FTm, fw: FWorld) → (g: List<Ty>) → Env(fw.w.tys, g) → List<BitVec(8)>
@@ -387,6 +435,9 @@ fn FTm::sem(self t: FTm, fw: FWorld) → (g: List<Ty>) → Env(fw.w.tys, g) → 
         Lend(f, views, args, body) => λ g env own =>
             shared(FTm::lent(fw, g, env, f, views, args, own), λ m =>
                 body.sem(fw, Cons(Sig::at(fw.fsigs, f).result, g), Pair(m.value, env), m.after)),
+        Loop(init, test, body, rest) => λ g env own =>
+            FTm::rest_of(fw, g, Ty::at(g, init), rest.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => rest.sem(fw, Cons(Ty::at(g, init), g), e, o),
+                FTm::iterated(fw, g, init, test, body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => body.sem(fw, Cons(Ty::at(g, init), g), e, o), env, own), env),
     }
 }
 
