@@ -2241,8 +2241,8 @@ move up one register), and the callee returns the same address in RAX.
 more)` (`lib/native/function_ir/function_ir_export.hthr`) is a FunctionIR
 function appended after the `runtime fn`'s program as its root. Its
 parameter 0 is the structure's address, the others the callee's words; it
-calls the callee, stores each word it returns into the structure as two
-4-byte stores (`WideStore(4)`, low half first), and returns the address.
+calls the callee, stores each word it returns into the structure with one
+8-byte store (`WideStore(8)`), and returns the address.
 Nothing about it is generated per function: its run is one theorem over
 every callee, arity and count of words (`sret_export_runs`): the program's
 run returns the address and leaves the callee's words in buffer 0, eight
@@ -2288,6 +2288,17 @@ structure (`program_stores_within(…, [True])`), and is total.
 in the structure, so two narrow fields side by side, which C packs into
 one eightbyte, stay refused as at two words (§16.18). The address takes
 one of the eight words a call passes, so the function takes at most seven.
+
+**Whole-word stores** (Minus, 2026-11-22: "store whole 8 byte words
+too"). A wide store's leaf carries its size, `StoreSize { Four, Eight }`
+(`function_ir_lower_reads`): four bytes are held as `Narrow(32)` and
+stored by `MOV dword [base], r32`, eight are held as a `Word` and stored
+by `MOV qword [base], r64` (`asm_word_store`, `Site::moves_word_store` in
+`x86_64_stack_runs`). One lowering proof covers both sizes
+(`wide_store_emits` over `StoreSize::moves`, `StoreSize::stored`, with
+`buffer_bytes_store_word_eight` beside the four-byte law), so every
+`WideStore(8)` lowers, not only the export's. The export stores each word
+once; `stats` went from 203 certified bytes to 110.
 
 What is not taken yet: a function taking enums or records (its at-file
 agreement is generated for plain words), and another entry beside such a

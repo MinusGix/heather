@@ -719,6 +719,30 @@ theorem Site::moves_dword_store<M>(self site: Site<M>, writes: ByteWrites<M>, fi
 }
 
 // ---------------------------------------------------------------------------
+// A word stored
+
+// MOV [base], r64 as a piece, as the doubleword store is one.
+fn asm_word_store(store: WordStore) → Asm { Asm::piece(word_store_bytes(store), 3, refl) }
+
+// A register's eight bytes stored at a label, through a plain base, to
+// eight writable bytes that keep the code.
+theorem Site::moves_word_store<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
+    before: Prog, name: Nat, store: WordStore, at: asm_back(site.program, k) = At(before, name, asm_word_store(store)),
+    pre, post: MachineState<M> → Type,
+    step: (s: MachineState<M>) → pre(s) → site.Resident(s.memory) → (store_base_plain(store.base) = True) ∧
+        (writes.writable(s.memory, read_gpr(store.base, s.gprs), 8) ∧
+        (site.Resident(word_store_after(writes, store, s).memory) ∧ post(word_store_after(writes, store, s))))):
+    site.Moves(writes, prog_len(before), prog_len(before) + 3, pre, post) {
+    λ s here resident holds => {
+        let got = step(s, holds, resident);
+        let after = word_store_after(writes, store, s);
+        Exists(after, ⟨machine_steps_one(site.fetch, site.data, writes, s, after, Inr(Inl(store_step(site.fetch, writes, store, s, got.left,
+                site.item_fetched(fits, s, resident, k, before, name, asm_word_store(store), at, here), got.right.left)))),
+            ⟨site.rip_after(s, prog_len(before), 3, here), got.right.right⟩⟩)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Calls
 
 // A function at offset `entry`: entered with the stack pointer at offset `i`

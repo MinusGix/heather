@@ -6,8 +6,8 @@
 // expects the same address back in RAX. The export is a function of the
 // program of its own (`sret_export`): lent that structure by its address
 // alone (`Fixed`, its length the structure's size), it calls the function
-// returning the record's words, stores each into the structure, low half
-// first, and returns the address. Its run is proved here once for every
+// returning the record's words, stores each whole into the structure (one
+// eight-byte store a word), and returns the address. Its run is proved here once for every
 // count of words (`sret_export_runs`, `put_words_bytes`); a certificate
 // instantiates it.
 
@@ -44,42 +44,28 @@ import omega;
 // ---------------------------------------------------------------------------
 // The words stored
 
-// A word's halves, as the export stores them: its low 32 bits, then its
-// high 32 (what `Resize` and `LogicalShiftRight` compute).
-fn word_low(word: BitVec(64)) → BitVec(32) { BitVec::ofNat(word.toNat()) }
-fn word_high(word: BitVec(64)) → BitVec(32) { BitVec::ofNat(word.shift_right(32).toNat()) }
-
-// The words from byte `at` of buffer 0, eight bytes each, the low half of
-// each first.
+// The words from byte `at` of buffer 0, eight bytes each, low byte first.
 fn put_words(buffers: Buffers(), at: Nat, words: List<BitVec(64)>) → Buffers() {
     match words {
         Nil => buffers,
-        Cons(word, rest) => put_words(store_word(store_word(buffers, 0, BitVec::ofNat(at, n := 64).toNat(), 4, word_low(word)), 0,
-            BitVec::ofNat(at + 4, n := 64).toNat(), 4, word_high(word)), at + 8, rest),
+        Cons(word, rest) => put_words(store_word(buffers, 0, BitVec::ofNat(at, n := 64).toNat(), 8, word), at + 8, rest),
     }
 }
 
 // ---------------------------------------------------------------------------
 // The regions that store them
 
-// Port `word`'s low half stored from byte `at`: the index, the half, the
-// store (ids `base` to `base + 2`).
-fn store_low(base, at, word: Nat) → Region {
-    Region(Ports([]), [Const(64, base, at), Resize(64, 32, base + 1, word), WideStore(4, base + 2, 0, base, base + 1)], Ports([]))
+// Port `word` stored whole from byte `at`: the index, then one eight-byte
+// store (ids `base` and `base + 1`).
+fn store_one(base, at, word: Nat) → Region {
+    Region(Ports([]), [Const(64, base, at), WideStore(8, base + 1, 0, base, word)], Ports([]))
 }
 
-// Its high half from `at`: the index, the shifted word (`base + 3`), the
-// half, the store.
-fn store_high(base, at, word: Nat) → Region {
-    Region(Ports([]), [Const(64, base, at), LogicalShiftRight(64, base + 3, word, 32), Resize(64, 32, base + 1, base + 3),
-        WideStore(4, base + 2, 0, base, base + 1)], Ports([]))
-}
-
-// Each port of `words` stored from byte `at`, eight ids a word from `base`.
+// Each port of `words` stored from byte `at`, two ids a word from `base`.
 fn store_words(base, at: Nat, words: List<Nat>) → StructuredRegion {
     match words {
         Nil => Dataflow(Region(Ports([]), [], Ports([]))),
-        Cons(word, rest) => Sequence(store_low(base, at, word), Sequence(store_high(base + 4, at + 4, word), store_words(base + 8, at + 8, rest))),
+        Cons(word, rest) => Sequence(store_one(base, at, word), store_words(base + 2, at + 8, rest)),
     }
 }
 
@@ -91,58 +77,20 @@ theorem offset_ne(base, c, d: Nat, less: c + 1 <= d): base + c ≠ base + d {
     (base + c).ne_of_lt(base + d, omega(less))
 }
 
-// The low half's leaf: the file it leaves, and every id below `base` kept.
-theorem store_low_runs(base, at, word: Nat, below: word + 1 <= base, values: Valuation(), buffers: Buffers()):
-    (run_nodes(store_low(base, at, word).nodes, values, buffers).buffers =
-        store_word(buffers, 0, BitVec::ofNat(at, n := 64).toNat(), 4, word_low(values(64, word)))) ∧
-    ((w, id: Nat) → id + 1 <= base → run_nodes(store_low(base, at, word).nodes, values, buffers).values(w, id) = values(w, id)) {
+// A word's leaf: the file it leaves, and every id below `base` kept.
+theorem store_one_runs(base, at, word: Nat, below: word + 1 <= base, values: Valuation(), buffers: Buffers()):
+    (run_nodes(store_one(base, at, word).nodes, values, buffers).buffers =
+        store_word(buffers, 0, BitVec::ofNat(at, n := 64).toNat(), 8, values(64, word))) ∧
+    ((w, id: Nat) → id + 1 <= base → run_nodes(store_one(base, at, word).nodes, values, buffers).values(w, id) = values(w, id)) {
     let indexing = λ (w: Nat) => BitVec::ofNat(at, n := w);
     let indexed = Valuation::set(values, base, indexing);
-    let halving = λ (w: Nat) => BitVec::ofNat(indexed(64, word).toNat(), n := w);
-    let halved = Valuation::set(indexed, base + 1, halving);
-    let index: (halved(64, base) = BitVec::ofNat(at, n := 64)) =
-        trans(Valuation::set_other(indexed, base + 1, halving, 64, base, offset_ne(base, 0, 1, Nat::le_refl(1))),
-            Valuation::set_here(values, base, indexing, 64));
+    let index: (indexed(64, base) = BitVec::ofNat(at, n := 64)) = Valuation::set_here(values, base, indexing, 64);
     let read: (indexed(64, word) = values(64, word)) = Valuation::set_other(values, base, indexing, 64, word, below_ne(word, base, 0, below));
-    let half: (halved(32, base + 1) = word_low(values(64, word))) =
-        trans(Valuation::set_here(indexed, base + 1, halving, 32), cong_fn(λ (x: BitVec(64)) => BitVec::ofNat(x.toNat(), n := 32), read));
-    let after = store_word(buffers, 0, halved(64, base).toNat(), 4, halved(32, base + 1));
-    ⟨j(sym(index), λ x _ => store_word(buffers, 0, x.toNat(), 4, halved(32, base + 1)) =
-            store_word(buffers, 0, BitVec::ofNat(at, n := 64).toNat(), 4, word_low(values(64, word))),
-        cong_fn(λ (x: BitVec(32)) => store_word(buffers, 0, BitVec::ofNat(at, n := 64).toNat(), 4, x), half)),
-     λ w id under => trans(Valuation::set_other(halved, base + 2, wide_value(after, 0, base, 4, halved), w, id, below_ne(id, base, 2, under)),
-        trans(Valuation::set_other(indexed, base + 1, halving, w, id, below_ne(id, base, 1, under)),
-            Valuation::set_other(values, base, indexing, w, id, below_ne(id, base, 0, under))))⟩
-}
-
-// The high half's leaf.
-theorem store_high_runs(base, at, word: Nat, below: word + 1 <= base, values: Valuation(), buffers: Buffers()):
-    (run_nodes(store_high(base, at, word).nodes, values, buffers).buffers =
-        store_word(buffers, 0, BitVec::ofNat(at, n := 64).toNat(), 4, word_high(values(64, word)))) ∧
-    ((w, id: Nat) → id + 1 <= base → run_nodes(store_high(base, at, word).nodes, values, buffers).values(w, id) = values(w, id)) {
-    let indexing = λ (w: Nat) => BitVec::ofNat(at, n := w);
-    let indexed = Valuation::set(values, base, indexing);
-    let shifting = λ (w: Nat) => indexed(w, word).shift_right(32);
-    let shifted = Valuation::set(indexed, base + 3, shifting);
-    let halving = λ (w: Nat) => BitVec::ofNat(shifted(64, base + 3).toNat(), n := w);
-    let halved = Valuation::set(shifted, base + 1, halving);
-    let index: (halved(64, base) = BitVec::ofNat(at, n := 64)) =
-        trans(Valuation::set_other(shifted, base + 1, halving, 64, base, offset_ne(base, 0, 1, Nat::le_refl(1))),
-            trans(Valuation::set_other(indexed, base + 3, shifting, 64, base, offset_ne(base, 0, 3, omega())),
-                Valuation::set_here(values, base, indexing, 64)));
-    let read: (indexed(64, word) = values(64, word)) = Valuation::set_other(values, base, indexing, 64, word, below_ne(word, base, 0, below));
-    let moved: (shifted(64, base + 3) = values(64, word).shift_right(32)) =
-        trans(Valuation::set_here(indexed, base + 3, shifting, 64), cong_fn(λ (x: BitVec(64)) => x.shift_right(32), read));
-    let half: (halved(32, base + 1) = word_high(values(64, word))) =
-        trans(Valuation::set_here(shifted, base + 1, halving, 32), cong_fn(λ (x: BitVec(64)) => BitVec::ofNat(x.toNat(), n := 32), moved));
-    let after = store_word(buffers, 0, halved(64, base).toNat(), 4, halved(32, base + 1));
-    ⟨j(sym(index), λ x _ => store_word(buffers, 0, x.toNat(), 4, halved(32, base + 1)) =
-            store_word(buffers, 0, BitVec::ofNat(at, n := 64).toNat(), 4, word_high(values(64, word))),
-        cong_fn(λ (x: BitVec(32)) => store_word(buffers, 0, BitVec::ofNat(at, n := 64).toNat(), 4, x), half)),
-     λ w id under => trans(Valuation::set_other(halved, base + 2, wide_value(after, 0, base, 4, halved), w, id, below_ne(id, base, 2, under)),
-        trans(Valuation::set_other(shifted, base + 1, halving, w, id, below_ne(id, base, 1, under)),
-            trans(Valuation::set_other(indexed, base + 3, shifting, w, id, below_ne(id, base, 3, under)),
-                Valuation::set_other(values, base, indexing, w, id, below_ne(id, base, 0, under)))))⟩
+    let after = store_word(buffers, 0, indexed(64, base).toNat(), 8, indexed(64, word));
+    ⟨trans(cong_fn(λ (x: BitVec(64)) => store_word(buffers, 0, x.toNat(), 8, indexed(64, word)), index),
+        cong_fn(λ (x: BitVec(64)) => store_word(buffers, 0, BitVec::ofNat(at, n := 64).toNat(), 8, x), read)),
+     λ w id under => trans(Valuation::set_other(indexed, base + 1, wide_value(after, 0, base, 8, indexed), w, id, below_ne(id, base, 1, under)),
+        Valuation::set_other(values, base, indexing, w, id, below_ne(id, base, 0, under)))⟩
 }
 
 // The stores, run: each word of `words` at its place from `at`, the
@@ -154,23 +102,14 @@ theorem store_words_runs(call: Writers(), words: List<Nat>): (base, at: Nat) →
         Nil => λ base at _ values buffers => refl,
         Cons(word, rest) => λ base at below values buffers => {
             let own = below(word, Inl(refl));
-            let low = store_low_runs(base, at, word, own, values, buffers);
-            let first = run_nodes(store_low(base, at, word).nodes, values, buffers);
-            let high = store_high_runs(base + 4, at + 4, word, omega(own), first.values, first.buffers);
-            let second = run_nodes(store_high(base + 4, at + 4, word).nodes, first.values, first.buffers);
-            let rest_below: (id: Nat) → Mem(id, rest) → id + 1 <= base + 8 = λ id m => omega(below(id, Inr(m)));
-            let kept: (words_of(second.values, rest) = words_of(values, rest)) = words_agree(rest, values, second.values, λ id m => {
-                let under = below(id, Inr(m));
-                trans(high.right(64, id, omega(under)), low.right(64, id, under))
-            });
-            let read: (first.values(64, word) = values(64, word)) = low.right(64, word, own);
-            let stored: (second.buffers = store_word(store_word(buffers, 0, BitVec::ofNat(at, n := 64).toNat(), 4, word_low(values(64, word))), 0,
-                    BitVec::ofNat(at + 4, n := 64).toNat(), 4, word_high(values(64, word)))) =
-                trans(high.left, trans(cong_fn(λ (x: BitVec(64)) => store_word(first.buffers, 0, BitVec::ofNat(at + 4, n := 64).toNat(), 4, word_high(x)), read),
-                    cong_fn(λ (b: Buffers()) => store_word(b, 0, BitVec::ofNat(at + 4, n := 64).toNat(), 4, word_high(values(64, word))), low.left)));
-            trans(store_words_runs(call, rest, base + 8, at + 8, rest_below, second.values, second.buffers),
-                trans(cong_fn(λ (ws: List<BitVec(64)>) => put_words(second.buffers, at + 8, ws), kept),
-                    cong_fn(λ (b: Buffers()) => put_words(b, at + 8, words_of(values, rest)), stored)))
+            let one = store_one_runs(base, at, word, own, values, buffers);
+            let first = run_nodes(store_one(base, at, word).nodes, values, buffers);
+            let rest_below: (id: Nat) → Mem(id, rest) → id + 1 <= base + 2 = λ id m => omega(below(id, Inr(m)));
+            let kept: (words_of(first.values, rest) = words_of(values, rest)) =
+                words_agree(rest, values, first.values, λ id m => one.right(64, id, below(id, Inr(m))));
+            trans(store_words_runs(call, rest, base + 2, at + 8, rest_below, first.values, first.buffers),
+                trans(cong_fn(λ (ws: List<BitVec(64)>) => put_words(first.buffers, at + 8, ws), kept),
+                    cong_fn(λ (b: Buffers()) => put_words(b, at + 8, words_of(values, rest)), one.left)))
         },
     }
 }
@@ -183,12 +122,10 @@ theorem store_words_keeps(call: Writers(), words: List<Nat>): (base, at: Nat) �
         Nil => λ base at _ values buffers w id _ => refl,
         Cons(word, rest) => λ base at below values buffers w id under => {
             let own = below(word, Inl(refl));
-            let low = store_low_runs(base, at, word, own, values, buffers);
-            let first = run_nodes(store_low(base, at, word).nodes, values, buffers);
-            let high = store_high_runs(base + 4, at + 4, word, omega(own), first.values, first.buffers);
-            let second = run_nodes(store_high(base + 4, at + 4, word).nodes, first.values, first.buffers);
-            trans(store_words_keeps(call, rest, base + 8, at + 8, λ i m => omega(below(i, Inr(m))), second.values, second.buffers, w, id, omega(under)),
-                trans(high.right(w, id, omega(under)), low.right(w, id, under)))
+            let one = store_one_runs(base, at, word, own, values, buffers);
+            let first = run_nodes(store_one(base, at, word).nodes, values, buffers);
+            trans(store_words_keeps(call, rest, base + 2, at + 8, λ i m => omega(below(i, Inr(m))), first.values, first.buffers, w, id, omega(under)),
+                one.right(w, id, under))
         },
     }
 }
@@ -330,7 +267,7 @@ theorem first_and_rest(words: List<BitVec(64)>, more: Nat, count: words.len() = 
 // bytes lent to be written at that address, the code returns the address
 // in RAX, keeps the callee-saved registers and RSP, stores only into its
 // own room and the structure, and leaves in the structure the callee's
-// words, each low half first (`put_words`). Proved once, for every callee
+// words, each whole (`put_words`). Proved once, for every callee
 // that stores nothing; a certificate gives its lowering and its checks.
 theorem compiled_returns_sret<M>(callee, arity, more: Nat, earlier: List<Function>, placement: List<Place>, rooms: Nat → Nat, program: Prog,
     lowered: lower_program_sized(sret_export(callee, arity, more), earlier, placement, program_counts(Cons(sret_export(callee, arity, more), earlier)),

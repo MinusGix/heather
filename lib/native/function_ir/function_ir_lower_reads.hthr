@@ -787,22 +787,56 @@ theorem leaf_table_holds(values: Valuation(), table: TableLeaf, nodes: List<Node
 }
 
 // ---------------------------------------------------------------------------
-// A word of four bytes stored: the last node of its leaf
+// A word of four or eight bytes stored: the last node of its leaf
 
-// `WideStore(4, …)` last, the nodes before it neither reading a buffer nor
-// storing: they lower as one block, which leaves the value held at width
-// 32, then the address and `MOV [base], r32` (`function_ir_lower_calls`,
-// `File::emit_wide_store`). The nodes before it hold the value's
-// producers, since a narrow value does not cross a leaf; for the same
-// reason nothing after the leaf reads the store's output, which is not
-// loaded back.
-record WideStoreLeaf { output: Nat, buffer: Nat, index: Nat, value: Nat }
+// How wide a word a leaf stores: four bytes, held at width 32 and stored
+// by `MOV [base], r32`, or eight, held as a word and stored by
+// `MOV [base], r64`.
+inductive StoreSize { Four, Eight }
+
+fn StoreSize::bytes(self size: StoreSize) → Nat { match size { Four => 4, Eight => 8 } }
+
+// The offset of its last byte from its first.
+fn StoreSize::last(self size: StoreSize) → Nat { match size { Four => 3, Eight => 7 } }
+
+theorem StoreSize::last_bytes(self size: StoreSize): size.last() + 1 = size.bytes() {
+    match size { Four => refl, Eight => refl }
+}
+
+// How a register holds the value stored.
+fn StoreSize::kind(self size: StoreSize) → Kind { match size { Four => Narrow(32), Eight => Word } }
+
+fn StoreSize::of(bytes: Nat) → Option<StoreSize> {
+    match bytes.same(4) {
+        True => Some(Four),
+        False => match bytes.same(8) { True => Some(Eight), False => None },
+    }
+}
+
+theorem StoreSize::of_sound(bytes: Nat, size: StoreSize): StoreSize::of(bytes) = Some(size) → bytes = size.bytes() {
+    match four: bytes.same(4) {
+        True => λ found => trans(bytes.same_sound(4, four), cong_fn(λ (z: StoreSize) => z.bytes(), Option::some_inj(Four, size, found))),
+        False => match eight: bytes.same(8) {
+            True => λ found => trans(bytes.same_sound(8, eight), cong_fn(λ (z: StoreSize) => z.bytes(), Option::some_inj(Eight, size, found))),
+            False => λ no => absurd(no),
+        },
+    }
+}
+
+// `WideStore(4, …)` or `WideStore(8, …)` last, the nodes before it neither
+// reading a buffer nor storing: they lower as one block, which leaves the
+// value held as its size says, then the address and the store
+// (`function_ir_lower_calls`, `File::emit_wide_store`). The nodes before
+// it hold the value's producers, since a narrow value does not cross a
+// leaf. The store's output is not loaded back: a later leaf reading it is
+// refused.
+record WideStoreLeaf { size: StoreSize, output: Nat, buffer: Nat, index: Nat, value: Nat }
 
 fn Node::as_wide_store(self node: Node) → Option<WideStoreLeaf> {
     match node {
-        WideStore(bytes, output, buffer, index, value) => match bytes.same(4) {
-            False => None,
-            True => Some(WideStoreLeaf(output, buffer, index, value)),
+        WideStore(bytes, output, buffer, index, value) => match StoreSize::of(bytes) {
+            None => None,
+            Some(size) => Some(WideStoreLeaf(size, output, buffer, index, value)),
         },
         _ => None,
     }
@@ -823,20 +857,20 @@ fn leaf_wide_store(nodes: List<Node>) → Option<WideStoreLeaf> {
 
 // The file the store leaves.
 fn WideStoreLeaf::after(self store: WideStoreLeaf, values: Valuation(), before: Buffers()) → Buffers() {
-    store_word(before, store.buffer, values(64, store.index).toNat(), 4, values(32, store.value))
+    store_word(before, store.buffer, values(64, store.index).toNat(), store.size.bytes(), values(8 * store.size.bytes(), store.value))
 }
 
 theorem Node::as_wide_store_runs(self node: Node, values: Valuation(), before, after: Buffers(), store: WideStoreLeaf):
     node.as_wide_store() = Some(store) → node.Runs(values, before, after) → after = store.after(values, before) {
     match node {
-        WideStore(bytes, output, buffer, index, value) => (match bytes.same(4) as λ b => bytes.same(4) = b →
-            (match b { False => None, True => Some(WideStoreLeaf(output, buffer, index, value)) }) = Some(store) →
+        WideStore(bytes, output, buffer, index, value) => (match StoreSize::of(bytes) as λ o => StoreSize::of(bytes) = o →
+            (match o { None => None, Some(size) => Some(WideStoreLeaf(size, output, buffer, index, value)) }) = Some(store) →
             (after = store_word(before, buffer, values(64, index).toNat(), bytes, values(8 * bytes, value))) ∧
                 (values(8 * bytes, output) = buffer_word(after, buffer, values(64, index).toNat(), bytes)) →
             after = store.after(values, before) {
-            False => λ _ no _ => absurd(no),
-            True => λ four found ran => {
-                let at: (bytes = 4) = bytes.same_sound(4, four);
+            None => λ _ no _ => absurd(no),
+            Some(size) => λ sized found ran => {
+                let at: (bytes = size.bytes()) = StoreSize::of_sound(bytes, size, sized);
                 j(found, λ o _ => o.All(λ (w: WideStoreLeaf) => after = w.after(values, before)),
                     j(at, λ k _ => after = store_word(before, buffer, values(64, index).toNat(), k, values(8 * k, value)), ran.left))
             },
@@ -888,11 +922,11 @@ theorem leaf_wide_store_stores(store: WideStoreLeaf, nodes: List<Node>): leaf_wi
             leaf_wide_store(Cons(node, r)) = Some(store) → nodes_store(Cons(node, r), store.buffer).IsTrue() {
             Nil => λ _ found => Bool::is_true_or_l(node.stores_to(store.buffer), False, (match node as λ n =>
                 n.as_wide_store() = Some(store) → n.stores_to(store.buffer).IsTrue() {
-                WideStore(bytes, output, buffer, index, value) => λ found => (match bytes.same(4) as λ b =>
-                    (match b { False => None, True => Some(WideStoreLeaf(output, buffer, index, value)) }) = Some(store) →
+                WideStore(bytes, output, buffer, index, value) => λ found => (match StoreSize::of(bytes) as λ o =>
+                    (match o { None => None, Some(size) => Some(WideStoreLeaf(size, output, buffer, index, value)) }) = Some(store) →
                     buffer.same(store.buffer).IsTrue() {
-                    False => λ no => absurd(no),
-                    True => λ here => j(here, λ o _ => o.All(λ (w: WideStoreLeaf) => buffer.same(w.buffer).IsTrue()),
+                    None => λ no => absurd(no),
+                    Some(size) => λ here => j(here, λ o _ => o.All(λ (w: WideStoreLeaf) => buffer.same(w.buffer).IsTrue()),
                         Bool::is_true_of_eq(buffer.same_self())),
                 })(found),
                 _ => λ no => absurd(no),
