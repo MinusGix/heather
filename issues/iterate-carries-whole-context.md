@@ -1,11 +1,11 @@
 ---
-title: A runtime loop carries the whole context, so port_fib misses registers
+title: port_fib's loop is refused by the register planner (it carried the whole context until 3c)
 status: open
 thread: Rebuild loops on one combinator
 labels: [native,runtime-fn]
 area: heather-in-heather
 created: 2026-11-20
-updated: 2026-11-20
+updated: 2026-11-21
 ---
 
 A `runtime fn` loop (`Tm::Iterate`, docs/language/loop-combinator-design.md
@@ -31,3 +31,18 @@ a port the pass never reads. The soundness proof then needs:
 
 Alternatively the elaborator could write fewer context variables at the
 loop (constants inlined), but that only moves the limit.
+
+## Log
+
+- 2026-11-21: Fixed: a loop carries the variables its test and body read (`Tm::vars`,
+  checked by `Tm::check_within`), and leaves out the rest when a pass can read a
+  value of their code back (`Ty::drop_at`: a word, a count or a buffer from any
+  port, a record of the state's code from the state's own ports).
+  `Tm::sem_kept` proves a term's meaning is the same at two environments that
+  agree on what it reads (with `Loop::steps_ext` and `EnumInfo::choose_ext`),
+  and the pass runs at `Env::refill`. `port_fib`'s loop now carries its three
+  state words and `n` (was ten words). It still does not reach x86: the
+  register planner refuses the pass ("a next state word (20, 21, 22, 11) is in
+  no register"), the same for a `while` that swaps (`let t = a + b; a := b;
+  b := t`) while one that only adds compiles. Left open for that, which is the
+  planner's (`StructuredRegion::plan_in`, the branch's meet).

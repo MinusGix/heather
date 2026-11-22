@@ -113,7 +113,16 @@ fn IoKnown::at(self io: IoKnown, world: Nat) → IoKnown { IoKnown(world, io.met
 // parameter state 0, the last link the span now), and `olds` the bytes of
 // earlier states bound before the store or call that ended their state
 // (`rt_file_reflect`'s plan, issues/rt-file-read-before-store.md).
-record FileKnown { span: Nat, now: Option<Handle>, calls: List<CallRes>, was: List<Handle>, olds: List<OldByte> }
+// `outer` is the walks this one is inside, the nearest first: a loop's
+// body is a walk of its own over the span its pass is handed, and reads a
+// state of an enclosing walk's span only through a byte bound before the
+// loop (`rt_file_loop`).
+record FileKnown { span: Nat, now: Option<Handle>, calls: List<CallRes>, was: List<Handle>, olds: List<OldByte>, outer: List<OuterSpan> }
+
+// An enclosing walk, as a loop's body reads it: its span parameter, the
+// links it walked up to the loop (the loop's own state the last), and the
+// bytes it bound before them.
+record OuterSpan { span: Nat, was: List<Handle>, olds: List<OldByte> }
 
 // A byte of the written span as it was at state `state`, read at the word
 // variable `index` and bound to the variable `level` before the link that
@@ -121,15 +130,20 @@ record FileKnown { span: Nat, now: Option<Handle>, calls: List<CallRes>, was: Li
 record OldByte { state: Nat, index: Nat, level: Nat }
 
 // The span at a function's start: the parameter, nothing walked.
-fn FileKnown::start(span: Nat, calls: List<CallRes>) → FileKnown { FileKnown(span, None, calls, [], []) }
+fn FileKnown::start(span: Nat, calls: List<CallRes>) → FileKnown { FileKnown(span, None, calls, [], [], []) }
+
+// The span a loop's pass is handed (`span`), inside the walk `fk`.
+fn FileKnown::inside(self fk: FileKnown, span: Nat) → FileKnown {
+    FileKnown(span, None, fk.calls, [], [], Cons(OuterSpan(fk.span, fk.was, fk.olds), fk.outer))
+}
 
 // The span after `link`, with the calls that wrote it so far.
 fn FileKnown::past(self fk: FileKnown, link: Handle, calls: List<CallRes>) → FileKnown {
-    FileKnown(fk.span, Some(link), calls, fk.was ++ [link], fk.olds)
+    FileKnown(fk.span, Some(link), calls, fk.was ++ [link], fk.olds, fk.outer)
 }
 
 fn FileKnown::keeping(self fk: FileKnown, old: OldByte) → FileKnown {
-    FileKnown(fk.span, fk.now, fk.calls, fk.was, Cons(old, fk.olds))
+    FileKnown(fk.span, fk.now, fk.calls, fk.was, Cons(old, fk.olds), fk.outer)
 }
 
 // The variable a byte of state `s` at the index variable `i` was bound to.
@@ -1959,6 +1973,18 @@ fn rt_old_span<A>() → Tac<A> {
     rt_refuse("the span as it was before a store or a call that wrote it: a span that is written is one, and code reads its bytes as they are now (a byte read before a store and used after it is read where it is used, which is after: issues/rt-file-read-before-store.md)")
 }
 
+// A state of an enclosing walk's span, read inside a loop: its bytes are
+// those bound before the loop, as that walk's `olds`.
+fn rt_outer_was(fk: FileKnown, frames: List<OuterSpan>, h: Handle) → Tac<Option<Pair<FileKnown, Nat>>> {
+    match frames {
+        Nil => pure(None),
+        Cons(o, rest) => rt_file_state_in(o.span, o.was, h).bind(λ at => match at {
+            Some(s) => pure(Some(Pair(FileKnown(fk.span, fk.now, fk.calls, fk.was, o.olds, fk.outer), s))),
+            None => rt_outer_was(fk, rest, h),
+        }),
+    }
+}
+
 // In a computation, the earlier state of the written span `h` is, with
 // what the walk knows of the span.
 fn rt_was_of(k: Known, h: Handle) → Tac<Option<Pair<FileKnown, Nat>>> {
@@ -1966,7 +1992,10 @@ fn rt_was_of(k: Known, h: Handle) → Tac<Option<Pair<FileKnown, Nat>>> {
         None => pure(None),
         Some(fk) => rt_same_span(fk, h).bind(λ same => match same {
             True => pure(None),
-            False => rt_file_was(fk, h).bind(λ was => pure(was.map(λ s => Pair(fk, s)))),
+            False => rt_file_was(fk, h).bind(λ was => match was {
+                Some(s) => pure(Some(Pair(fk, s))),
+                None => rt_outer_was(fk, fk.outer, h),
+            }),
         }),
     }
 }
