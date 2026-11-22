@@ -562,9 +562,9 @@ theorem Inlined::stay_sound(effects: Effects(), region: StructuredRegion, by: Na
     ⟨by.leb_refl(), ⟨under, λ values before after ran => Exists(values, ⟨Valuation::agree_below_refl(values, by), ran⟩)⟩⟩
 }
 
-theorem inline_region_sound(callees: List<Function>, region: StructuredRegion): (by: Nat) → (sites: Sites) → (r: Inlined) →
-    inline_region(callees, region, by, sites) = Some(r) → region.under(by) = True → r.Sound(program_effects(callees), region, by) {
-    let effects = program_effects(callees);
+theorem inline_region_sound(callees: List<Function>, effects: Effects(), alike: Effects::Alike(effects, program_effects(callees), callees.len()),
+    region: StructuredRegion): (by: Nat) → (sites: Sites) → (r: Inlined) →
+    inline_region(callees, region, by, sites) = Some(r) → region.under(by) = True → r.Sound(effects, region, by) {
     match region {
         Dataflow(body) => λ by sites => match sites {
             Stay => λ r made under => j(Option::some_inj(Inlined(Dataflow(body), by), r, made), λ x _ => x.Sound(effects, Dataflow(body), by),
@@ -602,7 +602,7 @@ theorem inline_region_sound(callees: List<Function>, region: StructuredRegion): 
                     λ (c: Inlined) => Some(Inlined(Sequence(prefix, c.region), c.bound)), r, made);
                 let c = got.witness;
                 let parts = Bool::and_true_parts(nodes_under(prefix.nodes, by), continuation.under(by), under);
-                let sc = inline_region_sound(callees, continuation, by, rest, c, got.proof.left, parts.right);
+                let sc = inline_region_sound(callees, effects, alike, continuation, by, rest, c, got.proof.left, parts.right);
                 j(Option::some_inj(Inlined(Sequence(prefix, c.region), c.bound), r, got.proof.right),
                     λ x _ => x.Sound(effects, Sequence(prefix, continuation), by),
                     ⟨sc.left, ⟨Bool::and_true_of(nodes_under(prefix.nodes, c.bound), c.region.under(c.bound),
@@ -627,8 +627,8 @@ theorem inline_region_sound(callees: List<Function>, region: StructuredRegion): 
                     λ (c: Inlined) => Some(Inlined(Compose(a.region, c.region), c.bound)), r, got.proof.right);
                 let c = more.witness;
                 let parts = Bool::and_true_parts(prefix.under(by), continuation.under(by), under);
-                let sa = inline_region_sound(callees, prefix, by, first, a, got.proof.left, parts.left);
-                let sc = inline_region_sound(callees, continuation, a.bound, second, c, more.proof.left,
+                let sa = inline_region_sound(callees, effects, alike, prefix, by, first, a, got.proof.left, parts.left);
+                let sc = inline_region_sound(callees, effects, alike, continuation, a.bound, second, c, more.proof.left,
                     continuation.under_mono(by, a.bound, sa.left, parts.right));
                 j(Option::some_inj(Inlined(Compose(a.region, c.region), c.bound), r, more.proof.right),
                     λ x _ => x.Sound(effects, Compose(prefix, continuation), by),
@@ -663,8 +663,8 @@ theorem inline_region_sound(callees: List<Function>, region: StructuredRegion): 
                 let c = more.witness;
                 let parts = Bool::and_true_parts((condition + 1).leb(by), when_true.under(by) && when_false.under(by), under);
                 let arms = Bool::and_true_parts(when_true.under(by), when_false.under(by), parts.right);
-                let sa = inline_region_sound(callees, when_true, by, yes, a, got.proof.left, arms.left);
-                let sc = inline_region_sound(callees, when_false, a.bound, no, c, more.proof.left,
+                let sa = inline_region_sound(callees, effects, alike, when_true, by, yes, a, got.proof.left, arms.left);
+                let sc = inline_region_sound(callees, effects, alike, when_false, a.bound, no, c, more.proof.left,
                     when_false.under_mono(by, a.bound, sa.left, arms.right));
                 let le = by.leb_trans(a.bound, c.bound, sa.left, sc.left);
                 j(Option::some_inj(Inlined(Conditional(inputs, condition, arguments, outputs, a.region, c.region), c.bound), r, more.proof.right),
@@ -723,11 +723,14 @@ theorem inline_region_sound(callees: List<Function>, region: StructuredRegion): 
                 j(Option::some_inj(Inlined(piece, by + room), r, ok.right), λ x _ => x.Sound(effects, Call(callee, arguments, result, also), by),
                     ⟨by.leb_true(by + room, by.le_add_l(room)), ⟨checks.right, λ values before after ran => {
                         let found = program_effects_function(callees, before, callee, words_of(values, arguments), values(64, result),
-                            words_of(values, also), after, ran);
+                            words_of(values, also), after,
+                            alike(before, callee, program_function_under(callees, callee, g, got.proof.left), words_of(values, arguments), values(64, result),
+                                words_of(values, also), after).left(ran));
                         let same: (found.witness = g) = Option::some_inj(found.witness, g, trans(sym(found.proof.left), got.proof.left));
                         g.inlined_runs(effects, by, room, arguments, result, also, ids.left, ids.right, checks.left, values, before, after,
                             j(same, λ x _ => x.RunsBoth(effects, words_of(values, arguments), values(64, result), words_of(values, also), before, after),
-                                found.proof.right))
+                                found.witness.runs_weaken(program_effects(callees), effects, Effects::alike_over(effects, callees, alike),
+                                    words_of(values, arguments), values(64, result), words_of(values, also), before, after, found.proof.right)))
                     }⟩⟩)
             },
             _ => λ r made under => absurd(made),
@@ -745,7 +748,7 @@ theorem inline_region_sound(callees: List<Function>, region: StructuredRegion): 
                 let p2 = Bool::and_true_parts(ids_under(outputs, by), ids_under(Cons(count, Cons(exit, parameters)), by) && (ids_under(next, by) && body.under(by)), p1.right);
                 let p3 = Bool::and_true_parts(ids_under(Cons(count, Cons(exit, parameters)), by), ids_under(next, by) && body.under(by), p2.right);
                 let p4 = Bool::and_true_parts(ids_under(next, by), body.under(by), p3.right);
-                let sc = inline_region_sound(callees, body, by, inner, c, got.proof.left, p4.right);
+                let sc = inline_region_sound(callees, effects, alike, body, by, inner, c, got.proof.left, p4.right);
                 j(Option::some_inj(Inlined(Loop(inputs, bound, parameters, count, c.region, exit, next, outputs, exhausted), c.bound), r, got.proof.right),
                     λ x _ => x.Sound(effects, Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted), by),
                     ⟨sc.left, ⟨loop_under_body(inputs, bound, parameters, count, body, c.region, exit, next, outputs, exhausted, by, c.bound, sc.left,
@@ -778,32 +781,43 @@ record Inlines { bound: Nat, sites: Sites }
 fn inline_function(callees: List<Function>, function: Function, plan: Inlines) → Option<Function> {
     (ids_under(Cons(function.result, function.parameters ++ function.also), plan.bound) && function.body.under(plan.bound)).then(
         inline_region(callees, function.body, plan.bound, plan.sites).and_then(λ r =>
-            Some(Function(function.parameters, r.region, function.result, lent := function.lent, also := function.also))))
+            Some(Function(function.parameters, r.region, function.result, lent := function.lent, also := function.also, levels := function.levels))))
+}
+
+theorem inline_function_levels(callees: List<Function>, function: Function, plan: Inlines, new: Function,
+    made: inline_function(callees, function, plan) = Some(new)): new.levels = function.levels {
+    let ok = Bool::then_some(ids_under(Cons(function.result, function.parameters ++ function.also), plan.bound) && function.body.under(plan.bound),
+        inline_region(callees, function.body, plan.bound, plan.sites).and_then(λ r =>
+            Some(Function(function.parameters, r.region, function.result, lent := function.lent, also := function.also, levels := function.levels))), new, made);
+    let got = Option::and_then_some(inline_region(callees, function.body, plan.bound, plan.sites),
+        λ (r: Inlined) => Some(Function(function.parameters, r.region, function.result, lent := function.lent, also := function.also, levels := function.levels)), new, ok.right);
+    j(Option::some_inj(Function(function.parameters, got.witness.region, function.result, lent := function.lent, also := function.also, levels := function.levels), new, got.proof.right),
+        λ g _ => g.levels = function.levels, refl)
 }
 
 theorem inline_function_sound(callees: List<Function>, function: Function, plan: Inlines, new: Function,
     made: inline_function(callees, function, plan) = Some(new)): Rewrites(callees, function, new) {
-    λ arguments result extra before after ran => {
+    λ effects alike => ⟨inline_function_levels(callees, function, plan, new, made), λ arguments result extra before after ran => {
         let ok = Bool::then_some(ids_under(Cons(function.result, function.parameters ++ function.also), plan.bound) && function.body.under(plan.bound),
             inline_region(callees, function.body, plan.bound, plan.sites).and_then(λ r =>
-                Some(Function(function.parameters, r.region, function.result, lent := function.lent, also := function.also))), new, made);
+                Some(Function(function.parameters, r.region, function.result, lent := function.lent, also := function.also, levels := function.levels))), new, made);
         let checks = Bool::and_true_parts(ids_under(Cons(function.result, function.parameters ++ function.also), plan.bound), function.body.under(plan.bound), ok.left);
         let got = Option::and_then_some(inline_region(callees, function.body, plan.bound, plan.sites),
-            λ (r: Inlined) => Some(Function(function.parameters, r.region, function.result, lent := function.lent, also := function.also)), new, ok.right);
+            λ (r: Inlined) => Some(Function(function.parameters, r.region, function.result, lent := function.lent, also := function.also, levels := function.levels)), new, ok.right);
         let r = got.witness;
-        let sound = inline_region_sound(callees, function.body, plan.bound, plan.sites, r, got.proof.left, checks.right);
+        let sound = inline_region_sound(callees, effects, alike, function.body, plan.bound, plan.sites, r, got.proof.left, checks.right);
         let values = ran.witness;
         let k = sound.right.right(values, before, after, ran.proof.right.left);
         let other = k.witness;
         let ids = ids_under_mem(plan.bound, Cons(function.result, function.parameters ++ function.also), checks.left);
-        j(Option::some_inj(Function(function.parameters, r.region, function.result, lent := function.lent, also := function.also), new, got.proof.right),
-            λ g _ => g.RunsBoth(program_effects(callees), arguments, result, extra, before, after),
+        j(Option::some_inj(Function(function.parameters, r.region, function.result, lent := function.lent, also := function.also, levels := function.levels), new, got.proof.right),
+            λ g _ => g.RunsBoth(effects, arguments, result, extra, before, after),
             Exists(other, ⟨trans(words_agree(function.parameters, values, other,
                     λ id m => k.proof.left(id, ids(id, Inr(function.parameters.mem_append_l(function.also, id, m))), 64)), ran.proof.left),
                 ⟨k.proof.right, ⟨trans(k.proof.left(function.result, ids(function.result, Inl(refl)), 64), ran.proof.right.right.left),
                     trans(words_agree(function.also, values, other, λ id m => k.proof.left(id, ids(id, Inr(function.parameters.mem_append_r(function.also, id, m))), 64)),
                         ran.proof.right.right.right)⟩⟩⟩))
-    }
+    }⟩
 }
 
 // Inlining as a stage: a function's calls are replaced by the bodies its

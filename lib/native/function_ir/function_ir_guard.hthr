@@ -32,7 +32,7 @@ record Guard { bound: Nat, nodes: List<Node>, condition: Nat }
 fn Function::guarded(self function: Function, plan: Guard) → Function {
     Function(function.parameters, Compose(Dataflow(Region(Ports([]), plan.nodes, Ports([]))),
         Conditional(Ports([]), plan.condition, Ports([]), Ports([Port(function.result, 64)]), function.body, function.body)),
-        function.result, lent := function.lent, also := function.also)
+        function.result, lent := function.lent, also := function.also, levels := function.levels)
 }
 
 // The nodes require nothing and store nothing, each can be evaluated after
@@ -43,8 +43,10 @@ fn guard_function(function: Function, plan: Guard) → Option<Function> {
 }
 
 theorem guard_function_sound(callees: List<Function>, function: Function, plan: Guard, new: Function,
-    made: guard_function(function, plan) = Some(new)): Rewrites(callees, function, new) {
-    λ arguments result extra before after ran => {
+    made: guard_function(function, plan) = Some(new), effects: Effects(), arguments: List<BitVec(64)>, result: BitVec(64), extra: List<BitVec(64)>,
+    before, after: Buffers(), ran: function.RunsBoth(effects, arguments, result, extra, before, after)):
+    new.RunsBoth(effects, arguments, result, extra, before, after) {
+    {
         let rest = ids_under(Cons(function.result, function.parameters ++ function.also), plan.bound) && (function.body.under(plan.bound) &&
             (nodes_quiet(plan.nodes) && (nodes_evaluable(plan.nodes) && ids_over(nodes_writes(plan.nodes), plan.bound))));
         let checked = Bool::then_some(nodes_total(plan.nodes) && rest, Some(function.guarded(plan)), new, made);
@@ -63,13 +65,13 @@ theorem guard_function_sound(callees: List<Function>, function: Function, plan: 
         let tests = nodes_run_quiet(other, before, plan.nodes, Bool::is_true_of_eq(c3.left),
             eval_nodes_holds(plan.nodes, before, Bool::is_true_of_eq(c4.left), values, other, λ w id m => refl,
                 nodes_total_defined(plan.nodes, before, Bool::is_true_of_eq(c0.left), values)));
-        let body = function.body.runs_agree(program_effects(callees), plan.bound, c2.left, values, other, agree, before, after, ran.proof.right.left);
-        j(Option::some_inj(function.guarded(plan), new, checked.right), λ g _ => g.RunsBoth(program_effects(callees), arguments, result, extra, before, after),
+        let body = function.body.runs_agree(effects, plan.bound, c2.left, values, other, agree, before, after, ran.proof.right.left);
+        j(Option::some_inj(function.guarded(plan), new, checked.right), λ g _ => g.RunsBoth(effects, arguments, result, extra, before, after),
             Exists(other, ⟨trans(words_agree(function.parameters, values, other, λ id m => agree(id, ids(id, Inr(function.parameters.mem_append_l(function.also, id, m))), 64)), ran.proof.left),
                 ⟨Exists(before, ⟨tests, (match other(1, plan.condition).head_bit() as λ b =>
                     (match b {
-                        False => StructuredRegionRunsOver(program_effects(callees), other, function.body, before, after),
-                        True => StructuredRegionRunsOver(program_effects(callees), other, function.body, before, after),
+                        False => StructuredRegionRunsOver(effects, other, function.body, before, after),
+                        True => StructuredRegionRunsOver(effects, other, function.body, before, after),
                     }) {
                     False => body,
                     True => body,
@@ -79,6 +81,17 @@ theorem guard_function_sound(callees: List<Function>, function: Function, plan: 
     }
 }
 
+theorem guard_function_levels(function: Function, plan: Guard, new: Function, made: guard_function(function, plan) = Some(new)): new.levels = function.levels {
+    let rest = ids_under(Cons(function.result, function.parameters ++ function.also), plan.bound) && (function.body.under(plan.bound) &&
+        (nodes_quiet(plan.nodes) && (nodes_evaluable(plan.nodes) && ids_over(nodes_writes(plan.nodes), plan.bound))));
+    let checked = Bool::then_some(nodes_total(plan.nodes) && rest, Some(function.guarded(plan)), new, made);
+    j(Option::some_inj(function.guarded(plan), new, checked.right), λ g _ => g.levels = function.levels, refl)
+}
+
+// The test reads no callee, so a guarded function does what it did over
+// whatever answers its calls.
 fn guard_stage() → Stage<Guard> {
-    Stage(λ callees function plan => guard_function(function, plan), λ callees old plan new made => guard_function_sound(callees, old, plan, new, made))
+    Stage(λ callees function plan => guard_function(function, plan), λ callees old plan new made effects alike =>
+        ⟨guard_function_levels(old, plan, new, made), λ arguments result extra before after ran =>
+            guard_function_sound(callees, old, plan, new, made, effects, arguments, result, extra, before, after, ran)⟩)
 }

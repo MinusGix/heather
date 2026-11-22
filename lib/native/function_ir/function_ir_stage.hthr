@@ -497,3 +497,31 @@ theorem program_effects_function(functions: List<Function>): (before: Buffers())
             }),
     }
 }
+
+theorem same_under(f, n: Nat, same: f = n): f + 1 <= n + 1 { omega }
+theorem under_more(f, n: Nat, under: f + 1 <= n): f + 1 <= n + 1 { omega }
+theorem less_under(f, n: Nat, less: f < n): f + 1 <= n { omega }
+
+// A function a program has is at a number below its length.
+theorem program_function_under(functions: List<Function>): (f: Nat) → (g: Function) → program_function(functions, f) = Some(g) →
+    f + 1 <= functions.len() {
+    match functions {
+        Nil => λ f g found => absurd(found),
+        Cons(last, earlier) => λ f g => match f.eq_dec(earlier.len()) as λ d =>
+            (match d as λ _ => Option<Function> { Inl(_) => Some(last), Inr(_) => program_function(earlier, f) }) = Some(g) → f + 1 <= earlier.len() + 1 {
+            Inl(same) => λ _ => same_under(f, earlier.len(), same),
+            Inr(_) => λ found => under_more(f, earlier.len(), program_function_under(earlier, f, g, found)),
+        },
+    }
+}
+
+// Effects alike a program's do whatever the program does, at every
+// number: past its end the program does nothing.
+theorem Effects::alike_over(effects: Effects(), functions: List<Function>, alike: Effects::Alike(effects, program_effects(functions), functions.len())):
+    (before: Buffers()) → (f: Nat) → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) → (after: Buffers()) →
+    program_effects(functions, before, f, arguments, result, extra, after) → effects(before, f, arguments, result, extra, after) {
+    λ before f arguments result extra after ran => match f.lt_or_ge(functions.len()) {
+        Inl(less) => alike(before, f, less_under(f, functions.len(), less), arguments, result, extra, after).right(ran),
+        Inr(past) => false_elim(program_effects_past(functions, f, past, before, arguments, result, extra, after, ran)),
+    }
+}
