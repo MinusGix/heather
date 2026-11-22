@@ -1,6 +1,8 @@
 // Probes of a recursion's depth bound (docs/native/runtime-fn-recursion-design.md
-// §10.6). Tests, not library: nothing outside lib/_tests imports this
-// module (docs/test-value-audit.md §4.5).
+// §10.6): a recursion's program, given `more` levels past its first, is
+// defined wherever the function's measure is at most `more`, and answers as
+// the function there. Tests, not library: nothing outside lib/_tests
+// imports this module (docs/test-value-audit.md §4.5).
 import logic;
 import bool;
 import nat;
@@ -16,6 +18,7 @@ import function_ir_eval;
 import function_ir_levels;
 import runtime;
 
+// `n + (n - 1) + … + 0`: the call under a method call.
 runtime fn rsum(n: u64) → u64 decreases n.toNat() {
     match h: n.eq_bit(BitVec::ofNat(0)) {
         True => BitVec::ofNat(0),
@@ -24,30 +27,62 @@ runtime fn rsum(n: u64) → u64 decreases n.toNat() {
     on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
 }
 
+// What `Compile::recursion_defined` evaluates at the instance: the code's
+// nodes around its calls require nothing, and the instance's code is the
+// default lowering's.
 theorem rsum_quiet(): rsum::rt.quiet(rsum::world) = True { refl }
 
 theorem rsum_coded(): rsum::compile.code = Setup::default().code(rsum::rt, rsum::world) { refl }
 
+// The recursion is defined, and answers as the function, wherever its
+// measure is at most the levels past the first: no premise about the
+// program is left.
+theorem rsum_defined(n: u64, more: Nat, within: n.toNat() <= more): program_defined(program_deepened(rsum::program, more), 0, [n]).IsTrue() {
+    rsum::defined_within(n, more, within)
+}
 
-fn rsum_measure(n: BitVec(64)) → Nat { n.toNat() }
+theorem rsum_agrees(n: u64, more: Nat, within: n.toNat() <= more): program_eval(program_deepened(rsum::program, more), 0, [n]) = rsum(n) {
+    rsum::agrees_within(n, more, within)
+}
 
-// The chain from a walked body to the program's definedness, the walk a
-// premise.
-theorem rsum_defined_from(more: Nat, n: BitVec(64),
-    walked: (xs: List<BitVec(64)>) → Ty::AdmitsAll(rsum::world.tys, rsum::rt.params, xs) →
-        rsum::rt.body.calls_ok(rsum::world.at(rsum::compile.callees, Nil),
-            Tm::rank_oracle(rsum::world.at(rsum::compile.callees, Nil), [0, 0], 0, rsum_measure, Compile::rank(rsum, rsum::compile, rsum_measure, xs)),
-            rsum::rt.context(), Ty::extend_words(rsum::world.tys, rsum::rt.params, Nil, trivial, xs)).IsTrue(),
-    within: n.toNat() <= more):
-    program_defined(program_deepened(rsum::program, more), 0, [n]).IsTrue() {
-    let srcs = rsum::sources;
-    let adm = rsum::admits;
-    let arity = link_arity_self(rsum::program, rsum::arities, 1);
-    let below = program_defined_over(Nil, program_deepened(Nil, more));
-    let descends = Compile::descends(rsum, rsum::compile, srcs, adm, [0, 0], arity, link_every_table(Compile::table(rsum, rsum::compile)),
-        link_same_admits(Compile::admit_table(rsum, rsum::compile)), trivial, refl, refl, refl, refl, refl, 0, refl, Nil, rsum_measure, walked, below,
-        λ j lt ws => trivial);
-    program_defined_deepened_by_rank(Compile::linked_self(rsum, rsum::compile, [0, 0]), Nil, rsum::arities, link_admits(adm), link_sources_at(srcs),
-        rsum::sourced, more, Nil, Compile::rank(rsum, rsum::compile, rsum_measure), λ (ws: List<BitVec(64)>) => Ty::AdmitsAll(rsum::world.tys, rsum::rt.params, ws),
-        0, refl, descends, [n], ⟨trivial, trivial⟩, within)
+// The bound is the one the levels give: one level short, the program is
+// not defined (negative control).
+theorem rsum_short(): program_defined(program_deepened(rsum::program, 2), 0, [BitVec::ofNat(3)]) = False { refl }
+
+// Two parameters, the measure reading the second, and a `let` before the
+// call.
+runtime fn rpair(acc: u64, n: u64) → u64 decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => acc,
+        False => {
+            let next = acc.add(n);
+            rpair(next, n.sub(BitVec::ofNat(1))).add(BitVec::ofNat(1))
+        },
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+theorem rpair_agrees(acc, n: u64, more: Nat, within: n.toNat() <= more):
+    program_eval(program_deepened(rpair::program, more), 0, [acc, n]) = rpair(acc, n) {
+    rpair::agrees_within(acc, n, more, within)
+}
+
+// A recursion that calls another function: the callee is before it in the
+// program, and is defined everywhere.
+runtime fn plus_one(x: u64) → u64 { x.add(BitVec::ofNat(1)) }
+
+runtime fn rcall(n: u64) → u64 decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => BitVec::ofNat(0),
+        False => plus_one(rcall(n.sub(BitVec::ofNat(1)))),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+theorem rcall_defined(n: u64, more: Nat, within: n.toNat() <= more): program_defined(program_deepened(rcall::program, more), 1, [n]).IsTrue() {
+    rcall::defined_within(n, more, within)
+}
+
+theorem rcall_agrees(n: u64, more: Nat, within: n.toNat() <= more): program_eval(program_deepened(rcall::program, more), 1, [n]) = rcall(n) {
+    rcall::agrees_within(n, more, within)
 }

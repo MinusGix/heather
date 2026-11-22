@@ -1442,7 +1442,7 @@ theorem Compile::descends<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<Li
     sig: Sig::at(c.world.sigs, 1).params = c.reflected.params,
     k: Nat, own: links.nth(1) = Some(k), b: Buffers(),
     measure: Ty::ArrowsTo(c.world.tys, Sig::at(c.world.sigs, 1).params, Nat),
-    walked: (xs: List<BitVec(64)>) → Ty::AdmitsAll(c.world.tys, c.reflected.params, xs) →
+    walked: (xs: List<BitVec(64)>) →
         c.reflected.body.calls_ok(c.world.at(c.callees, b),
             Tm::rank_oracle(c.world.at(c.callees, b), links, k, measure, Compile::rank(f, c, measure, xs)),
             c.reflected.context(), Ty::extend_words(c.world.tys, c.reflected.params, Nil, trivial, xs)).IsTrue(),
@@ -1461,7 +1461,7 @@ theorem Compile::descends<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<Li
         let asked = Tm::defines_of(at, oracle);
         let inner: (code.defined(mixed, asked, words, buffers := b).IsTrue()) =
             Setup::code_defined(c.reflected, c.world, c.callees(b), b, oracle, Setup::checked_lowered(Setup::default(), c.reflected, c.world, checked), plain, quiet,
-                mixed, agree, asked, Tm::ok_defines_of(at, oracle), words, admits, walked(words, admits));
+                mixed, agree, asked, Tm::ok_defines_of(at, oracle), words, admits, walked(words));
         let tied = tie_defines(below, k, own_at);
         let start = Valuation::bind(Valuation::zero(), code.parameters, words);
         let widened: (code.defined(others, Defines::relabel(tied, link_at(links)), words, buffers := b).IsTrue()) =
@@ -1478,6 +1478,58 @@ theorem Compile::descends<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<Li
         j(sym(coded), λ fn_ _ => fn_.relabel(link_at(links)).leveled(1).defined(call, tied, words, buffers := b).IsTrue(),
             Function::relabel_defined(code, b, call, tied, link_at(links), words, widened))
     }
+}
+
+// What a walk of a recursion's body proves, as a generator spells it: the
+// world the body is read at (no file), the oracle of the measure at the
+// caller's words, and the environment those words are.
+fn Compile::descent_world<F>(f: F, c: Compile<F>(f)) → World { c.world.at(c.callees, Nil) }
+
+fn Compile::descent_oracle<F>(f: F, c: Compile<F>(f), links: List<Nat>, k: Nat, measure: Ty::ArrowsTo(c.world.tys, Sig::at(c.world.sigs, 1).params, Nat),
+    xs: List<BitVec(64)>) → Tm::Oracle(c.world.at(c.callees, Nil)) {
+    Tm::rank_oracle(c.world.at(c.callees, Nil), links, k, measure, Compile::rank(f, c, measure, xs))
+}
+
+fn Compile::descent_env<F>(f: F, c: Compile<F>(f), xs: List<BitVec(64)>) → Env(c.world.tys, c.reflected.context()) {
+    Ty::extend_words(c.world.tys, c.reflected.params, Nil, trivial, xs)
+}
+
+// The program whose last function is a recursion's code, given `more + 1`
+// levels, is defined at that function on the words it admits whose measure
+// is at most `more`: `f::defined_within`. `walked` is the decrease at each
+// call of the body (`Compile::descends`); the functions before it are
+// defined everywhere (`total`, an evaluation of the program). What is left
+// is what `Compile::root_also` takes and evaluations at the instance.
+theorem Compile::recursion_defined<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<List<BitVec(64)> → List<BitVec(64)>>, adm: List<List<BitVec(64)> → Bool>,
+    links: List<Nat>,
+    linked: (b: Buffers()) → links.map(λ (n: Nat) => link_source(srcs(b), n)) = Compile::table(f, c, b),
+    admitted: links.map(λ (n: Nat) => link_admit(adm, n)) = Compile::admit_table(f, c),
+    earlier: List<Function>, arities: List<Nat>,
+    sourced: program_linked_files(Cons(Compile::linked_self(f, c, links), earlier), arities, link_admits(adm), link_sources_at(srcs)),
+    named: Sig::links_fit(c.world.tys, c.world.sigs.tail(), links.tail(), tie(linked_arity(earlier, arities.tail()), earlier.len(), arities.nth(0))).IsTrue(),
+    total: program_total(earlier).IsTrue(),
+    coded: c.code = Setup::default().code(c.reflected, c.world),
+    checked: Setup::default().checked(c.reflected, c.world) = True,
+    plain: c.reflected.shape() = Plain,
+    quiet: c.reflected.quiet(c.world) = True,
+    sig: Sig::at(c.world.sigs, 1).params = c.reflected.params,
+    own: links.nth(1) = Some(earlier.len()),
+    measure: Ty::ArrowsTo(c.world.tys, Sig::at(c.world.sigs, 1).params, Nat),
+    walked: (xs: List<BitVec(64)>) → c.reflected.body.calls_ok(Compile::descent_world(f, c), Compile::descent_oracle(f, c, links, earlier.len(), measure, xs),
+        c.reflected.context(), Compile::descent_env(f, c, xs)).IsTrue(),
+    more: Nat, words: List<BitVec(64)>, admits: Compile::admits(f, c, words).IsTrue(), within: Compile::rank(f, c, measure, words) <= more):
+    program_defined(program_deepened(Cons(Compile::linked_self(f, c, links), earlier), more), earlier.len(), words).IsTrue() {
+    let under = program_deepened(earlier, more);
+    let below = program_defined_over(Nil, under);
+    let arity = tie(linked_arity(earlier, arities.tail()), earlier.len(), arities.nth(0));
+    let all: ((i: Nat) → (ws: List<BitVec(64)>) → below(i, ws).IsTrue()) =
+        j(sym(program_deepened_total(earlier, more, total)), λ fs _ => (i: Nat) → (ws: List<BitVec(64)>) → program_defined_over(Nil, fs)(i, ws).IsTrue(),
+            program_total_defined(earlier, Nil, total));
+    let descends = Compile::descends(f, c, srcs, adm, links, arity, linked, admitted, named, coded, checked, plain, quiet, sig, earlier.len(), own, Nil, measure,
+        walked, below, λ i _ ws => all(i, ws));
+    program_defined_deepened_by_rank(Compile::linked_self(f, c, links), earlier, arities, link_admits(adm), link_sources_at(srcs), sourced, more, Nil,
+        Compile::rank(f, c, measure), λ (ws: List<BitVec(64)>) => Ty::AdmitsAll(c.world.tys, c.reflected.params, ws), 0, refl, descends, words,
+        Ty::admits_all_sound(c.world.tys, c.reflected.params, words, admits), within)
 }
 
 // A program whose last function is an instance's code: the program's
@@ -3237,6 +3289,314 @@ fn runtime_at_enums(trivial_e, tys_e: Expr, reprs_n: Nat, recs: List<RecShape>, 
     }
 }
 
+// ---------------------------------------------------------------------------
+// Reading a function's decrease obligations
+
+// The domain of a function type.
+fn runtime_dom(t: Handle) → Tac<Option<Handle>> {
+    whnf_or(t).bind(λ w => view(w).bind(λ v => match v { HPi(dom) => pure(Some(dom)), _ => pure(None) }))
+}
+
+// The obligations `f::obl_0` … `f::obl_n` (or a `depth` clause's,
+// `f::depth_obl_N`), those the elaborator named, `prefix` the name up to N.
+fn runtime_obligations(prefix: String, n: Nat) → Tac<List<Expr>> {
+    match n {
+        Zero => pure([]),
+        Succ(k) => runtime_obligations(prefix, k).bind(λ found => lookup(prefix ++ decimal_name(10, k)).bind(λ c => match c {
+            Accepted(g) => pure(found.append([Global(g)])),
+            Refused(_) => pure(found),
+        })),
+    }
+}
+
+// The first branch test in scope an obligation takes next, after `args`.
+fn runtime_obligation_eq(o: Expr, args: List<Expr>, left: List<LocalRef>) → Tac<Option<LocalRef>> {
+    match left {
+        Nil => pure(None),
+        Cons(e, more) => infer(ap(o, args.append([Local(e)]))).bind(λ c => match c {
+            Accepted(_) => pure(Some(e)),
+            Refused(_) => runtime_obligation_eq(o, args, more),
+        }),
+    }
+}
+
+// Which of an obligation's parameters are equations (a branch's test,
+// `True`) and which words (`False`).
+fn runtime_param_kinds(fuel: Nat, t: Handle) → Tac<List<Bool>> {
+    match fuel {
+        Zero => pure([]),
+        Succ(k) => whnf_or(t).bind(λ w => view(w).bind(λ v => match v {
+            HPi(dom) => view(dom).bind(λ dv => open(w, "_").bind(λ o => match o {
+                Refused(_) => pure([]),
+                Accepted(opened) => runtime_param_kinds(k, opened.body).bind(λ rest =>
+                    pure(Cons(match dv { HEq(_, _) => True, _ => False }, rest))),
+            })),
+            _ => pure([]),
+        })),
+    }
+}
+
+fn runtime_count_false(bs: List<Bool>) → Nat {
+    match bs { Nil => 0, Cons(b, rest) => match b { True => runtime_count_false(rest), False => runtime_count_false(rest) + 1 } }
+}
+
+// The ways to pick `k` of the words `from`, `from + 1`, … (`left` of them),
+// in order.
+fn runtime_choices(k, from, left: Nat) → List<List<Nat>> {
+    match left {
+        Zero => match k { Zero => [[]], Succ(_) => [] },
+        Succ(l) => match k {
+            Zero => [[]],
+            Succ(j) => runtime_choices(j, from + 1, l).map(λ c => Cons(from, c)).append(runtime_choices(k, from + 1, l)),
+        },
+    }
+}
+
+// An obligation at the caller's words `words` (in order) and its
+// equations from the branch tests in scope, each the first that checks.
+fn runtime_obligation_fill(o: Expr, kinds: List<Bool>, words: List<Nat>, word_at: Nat → Expr, eqs: List<LocalRef>, args: List<Expr>) → Tac<Option<Expr>> {
+    match kinds {
+        Nil => pure(Some(ap(o, args))),
+        Cons(k, rest) => match k {
+            True => runtime_obligation_eq(o, args, eqs).bind(λ found => match found {
+                None => pure(None),
+                Some(e) => runtime_obligation_fill(o, rest, words, word_at, eqs, args.append([Local(e)])),
+            }),
+            False => match words {
+                Nil => pure(None),
+                Cons(i, more) => runtime_obligation_fill(o, rest, more, word_at, eqs, args.append([word_at(i)])),
+            },
+        },
+    }
+}
+
+// The first reading of an obligation that `at` takes: `at(p)` is the
+// call's `ok` proved by it, which checks only where `p` proves the call's
+// decrease.
+fn runtime_obligation_try(o: Expr, kinds: List<Bool>, choices: List<List<Nat>>, word_at: Nat → Expr, eqs: List<LocalRef>, at: Expr → Expr) → Tac<Option<Expr>> {
+    match choices {
+        Nil => pure(None),
+        Cons(c, rest) => runtime_obligation_fill(o, kinds, c, word_at, eqs, []).bind(λ filled => match filled {
+            None => runtime_obligation_try(o, kinds, rest, word_at, eqs, at),
+            Some(p) => infer(at(p)).bind(λ t => match t {
+                Refused(_) => runtime_obligation_try(o, kinds, rest, word_at, eqs, at),
+                Accepted(_) => pure(Some(at(p))),
+            }),
+        }),
+    }
+}
+
+// The call's `ok` from the first obligation `at` takes, its words read
+// off the caller's `n` in order.
+fn runtime_obligation_for(obls: List<Expr>, n: Nat, word_at: Nat → Expr, at: Expr → Expr, eqs: List<LocalRef>) → Tac<Option<Expr>> {
+    match obls {
+        Nil => pure(None),
+        Cons(o, rest) => infer(o).bind(λ c => match c {
+            Refused(_) => runtime_obligation_for(rest, n, word_at, at, eqs),
+            Accepted(ty) => runtime_param_kinds(64, ty).bind(λ kinds =>
+                runtime_obligation_try(o, kinds, runtime_choices(runtime_count_false(kinds), 0, n), word_at, eqs, at).bind(λ r => match r {
+                    Some(p) => pure(Some(p)),
+                    None => runtime_obligation_for(rest, n, word_at, at, eqs),
+                })),
+        }),
+    }
+}
+
+// The environment the next premise's `calls_ok` is read at, its last two
+// arguments, as handles: spelled out, each `Bind` would copy the
+// environment before it twice, and the proof would double per binding.
+fn runtime_premise_env(t: Handle) → Tac<Option<Pair<Expr, Expr>>> {
+    runtime_dom(t).bind(λ d => match d {
+        None => pure(None),
+        Some(dom) => view(dom).bind(λ v => match v {
+            HGlobal(_, _, args) => match args.rev() {
+                Cons(b, _) => view(b).bind(λ bv => match bv {
+                    HGlobal(_, _, cargs) => match cargs.rev() {
+                        Cons(vals, Cons(g, _)) => pure(Some(Pair(Hd(g), Hd(vals)))),
+                        _ => pure(None),
+                    },
+                    _ => pure(None),
+                }),
+                Nil => pure(None),
+            },
+            _ => pure(None),
+        }),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// A recursion's depth, read off its body
+// (docs/native/runtime-fn-recursion-design.md §10.6)
+//
+// `Compile::recursion_defined` takes the decrease at every call of the
+// body: its calls allowed by the measure's oracle at the caller's words
+// (`Tm::calls_ok`). The walk proves it from the function's own decrease
+// obligations, `f::obl_N`, as the elaborator named them: a `let` from its
+// term and its body (the body's environment read off the lemma's premise),
+// a branch in each arm under its test's equation, a call of the function
+// itself by the first obligation that checks against it, a call of another
+// function by evaluation (it is one before the recursion), and a term with
+// no call by `Tm::calls_ok_none`. A body the walk cannot close (an
+// obligation that reads a `let`'s or a call's result, which the walk does
+// not hold as the obligation spells it) publishes no `f::defined_within`,
+// and its program keeps `f::agrees_where`.
+
+// What the walk writes with: the node lemmas, the world and the oracle the
+// statement is at, the obligations to close calls with, and the caller's
+// words as the body's environment holds them.
+record RtWalk { let_g: Expr, if_g: Expr, ifeq_g: Expr, call_g: Expr, none_g: Expr, below_g: Expr, w: Expr, ok: Expr, trivial: Expr, no_call: Expr,
+    obls: List<Expr>, words: List<Expr> }
+
+// The walk: a proof that `t`'s calls at the environment `g_e`, `env_e` are
+// allowed, under the branch tests `eqs`.
+fn runtime_walk(fuel: Nat, t: Tm, d: RtWalk, q: RtQ, g_e, env_e: Expr, eqs: List<LocalRef>, under: Option<LocalRef>) → Tac<Option<Expr>> {
+    match fuel {
+        Zero => pure(None),
+        Succ(fu) => match t.has_call() {
+            False => {
+                let none = ap(d.none_g, [t.quote(q), d.w, d.ok, g_e, env_e, d.no_call]);
+                pure(Some(match t { Let(_, _) => none, If(_, _, _) => none, IfEq(_, _, _) => none, Pick(_, _, _, _) => none, _ => d.trivial }))
+            },
+            True => match t {
+                Let(e, body) => runtime_walk(fu, e, d, q, g_e, env_e, eqs, under).bind(λ first => match first {
+                    None => pure(None),
+                    Some(p) => {
+                        let lemma = ap(d.let_g, [e.quote(q), body.quote(q), d.w, d.ok, g_e, env_e, p]);
+                        infer(lemma).bind(λ c => match c {
+                            Refused(_) => pure(None),
+                            Accepted(lemma_t) => runtime_premise_env(lemma_t).bind(λ env => match env {
+                                None => pure(None),
+                                Some(at) => runtime_walk(fu, body, d, q, at.fst, at.snd, eqs, under).bind(λ r => match r {
+                                    None => pure(None),
+                                    Some(rest) => pure(Some(ap(lemma, [rest]))),
+                                }),
+                            }),
+                        })
+                    },
+                }),
+                Call(f, args) => match f.same(1) {
+                    // The call's decrease from the first obligation the
+                    // lemma takes, which checks it against this call.
+                    True => runtime_obligation_for(d.obls, d.words.len(), λ i => runtime_at(d.words, i),
+                        λ p => ap(d.call_g, [NatLit(f), q.nat_list(args), d.w, d.ok, g_e, env_e, ap(d.below_g, [Blank, Blank, p])]), eqs),
+                    False => {
+                        let p = ap(d.call_g, [NatLit(f), q.nat_list(args), d.w, d.ok, g_e, env_e, d.trivial]);
+                        infer(p).bind(λ c => match c { Refused(_) => pure(None), Accepted(_) => pure(Some(p)) })
+                    },
+                },
+                _ => {
+                    let branch: Option<Pair<Expr, Pair<Nat, Pair<Tm, Tm>>>> = match t {
+                        If(c, yes, no) => Some(Pair(d.if_g, Pair(c, Pair(yes, no)))),
+                        IfEq(c, yes, no) => Some(Pair(d.ifeq_g, Pair(c, Pair(yes, no)))),
+                        _ => None,
+                    };
+                    match branch {
+                        None => pure(None),
+                        // Each arm under its test's equation, the second
+                        // read off the lemma once the first is given, so
+                        // that no binder is opened past the one the arm is
+                        // under.
+                        Some(b) => {
+                            let yes = b.snd.snd.fst;
+                            let no = b.snd.snd.snd;
+                            let lemma = ap(b.fst, [NatLit(b.snd.fst), yes.quote(q), no.quote(q), d.w, d.ok, g_e, env_e]);
+                            infer(lemma).bind(λ c0 => match c0 {
+                                Refused(_) => pure(None),
+                                Accepted(lemma_t) => runtime_dom(lemma_t).bind(λ o => match o { None => pure(None), Some(t1) => runtime_dom(t1) }).bind(λ yes_eq =>
+                                    match yes_eq {
+                                        None => pure(None),
+                                        Some(ey_t) => assume(Hd(ey_t), "e", under).or_fail("runtime: a branch's test: ").bind(λ e1 =>
+                                            runtime_walk(fu, yes, d, q, g_e, env_e, Cons(e1.ref, eqs), Some(e1.ref)).bind(λ py => match py {
+                                                None => pure(None),
+                                                Some(a) => {
+                                                    let half = ap(lemma, [Lam(e1.ref, a)]);
+                                                    infer(half).bind(λ c2 => match c2 {
+                                                        Refused(_) => pure(None),
+                                                        Accepted(half_t) => runtime_dom(half_t).bind(λ o => match o { None => pure(None), Some(t2) => runtime_dom(t2) })
+                                                            .bind(λ no_eq => match no_eq {
+                                                                None => pure(None),
+                                                                Some(en_t) => assume(Hd(en_t), "e", under).or_fail("runtime: a branch's test: ").bind(λ e2 =>
+                                                                    runtime_walk(fu, no, d, q, g_e, env_e, Cons(e2.ref, eqs), Some(e2.ref)).bind(λ pn => match pn {
+                                                                        None => pure(None),
+                                                                        Some(z) => pure(Some(ap(half, [Lam(e2.ref, z)]))),
+                                                                    })),
+                                                            }),
+                                                    })
+                                                },
+                                            })),
+                                    }),
+                            })
+                        },
+                    }
+                },
+            },
+        },
+    }
+}
+
+// A recursion's definedness from its measure: the local `within`, the
+// measure at the arguments `at` at most `more`, and under it the proof that
+// the program `more` levels deeper is defined at the recursion on `words_e`
+// (`Compile::recursion_defined`). None where the walk does not close or the
+// proof does not check.
+fn runtime_within(name: String, rfun: Fun, q: RtQ, ts: RtTypes, linked: Linked, root, tys_e, rt_e, code_e: Expr, own_types: List<Handle>, at: List<Expr>,
+    more: LocalRef, words_e, admitted: Expr) → Tac<Option<Pair<LocalRef, Expr>>> {
+    let found <- lookup(name ++ "::rec");
+    match found {
+        Refused(_) => pure(None),
+        Accepted(rec_g) => {
+            let rec = Global(rec_g);
+            let rfl <- runtime_global("tactic::rfl");
+            let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
+            let le_g <- runtime_global(name_of(Nat::Le));
+            let nth_g <- runtime_global(name_of(List::nth));
+            let tail_g <- runtime_global(name_of(List::tail));
+            let defined_g <- runtime_global(name_of(Compile::recursion_defined));
+            let world_g <- runtime_global(name_of(Compile::descent_world));
+            let oracle_g <- runtime_global(name_of(Compile::descent_oracle));
+            let env_g <- runtime_global(name_of(Compile::descent_env));
+            let get_g <- runtime_global(name_of(Env::get));
+            let context_g <- runtime_global(name_of(Fun::context));
+            let let_g <- runtime_global(name_of(Tm::calls_ok_let));
+            let if_g <- runtime_global(name_of(Tm::calls_ok_if));
+            let ifeq_g <- runtime_global(name_of(Tm::calls_ok_ifeq));
+            let call_g <- runtime_global(name_of(Tm::calls_ok_call));
+            let none_g <- runtime_global(name_of(Tm::calls_ok_none));
+            let below_g <- runtime_global(name_of(Tm::below_rank));
+            let shapes <- runtime_type_of(name_of(runtime_w_shape)).bind(λ h => runtime_ctors_at(h));
+            let obls <- runtime_obligations(name ++ "::obl_", 16);
+            // The measure as a function of the parameters, held: a `Lam` is
+            // read only where its binders were assumed, and a handle stands
+            // anywhere.
+            let zs <- runtime_params_at(own_types, None, 0);
+            let mu_z <- runtime_measure_at(rec, runtime_locals(zs));
+            let measure <- runtime_held(runtime_lams(zs, Hd(mu_z)), "`" ++ name ++ "`'s measure");
+            let mu_y <- runtime_measure_at(rec, at);
+            let within_t <- as_type(ap(le_g, [Hd(mu_y), Local(more)])).or_fail("runtime: `" ++ name ++ "`'s depth: ");
+            let within <- assume(Hd(within_t), "within", Some(more)).or_fail("runtime: `" ++ name ++ "`'s depth: ");
+            let xs <- assume(Hd(ts.words), "xs", Some(within.ref)).or_fail("runtime: `" ++ name ++ "`'s words: ");
+            let inst = linked.root.take(3);
+            let links_e = runtime_at(linked.root, 5);
+            let ctx_e = ap(context_g, [rt_e]);
+            let env_e = ap(env_g, inst ++ [Local(xs.ref)]);
+            let n = rfun.params.len();
+            let d = RtWalk(let_g, if_g, ifeq_g, call_g, none_g, below_g, ap(world_g, inst), ap(oracle_g, inst ++ [links_e, root, measure, Local(xs.ref)]),
+                Hd(trivial_h), ap(rfl, [Blank, q.boolean(False)]), obls, List::range(n).map(λ i => ap(get_g, [tys_e, ctx_e, env_e, NatLit(n - 1 - i)])));
+            let walked <- runtime_walk(4096, rfun.body, d, q, ctx_e, env_e, [], Some(xs.ref));
+            match walked {
+                None => pure(None),
+                Some(body) => {
+                    let yes = ap(rfl, [Blank, q.boolean(True)]);
+                    let proof = ap(defined_g, linked.root ++ [ap(tail_g, [Blank, linked.program]), linked.arities, linked.sourced, Hd(trivial_h), Hd(trivial_h),
+                        ap(rfl, [Blank, code_e]), yes, ap(rfl, [Blank, runtime_at(shapes, 0)]), yes, ap(rfl, [Blank, Ty::quotes(rfun.params, q)]),
+                        ap(rfl, [Blank, ap(nth_g, [Blank, links_e, NatLit(1)])]), measure, Lam(xs.ref, body), Local(more), words_e, admitted, Local(within.ref)]);
+                    infer(proof).bind(λ c => match c { Refused(_) => pure(None), Accepted(_) => pure(Some(Pair(within.ref, proof))) })
+                },
+            }
+        },
+    }
+}
+
 // `lents` says how many spans each function of `funs` is lent (the function
 // itself first).
 // `own`: the function is its own callee (`Fun::own_callee`, `funs` listing
@@ -3404,7 +3764,29 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
                     let agreed_where <- runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), recs, rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs_where,
                         λ args => runtime_agree_rhs(low, wide, count, reprs, recs, rfun, f, args).bind(λ e => pure(runtime_enum_result(enum_word, tys_e, rfun.result, e))),
                         evaluated_where, Some(d.ref));
-                    pure(Some([Decl(AsTheorem, name ++ "::agrees_where", runtime_params_of(ys.append([more.ref, d.ref])), Equation(lhs_where, first), agreed_where)]))
+                    let where_decl = Decl(AsTheorem, name ++ "::agrees_where", runtime_params_of(ys.append([more.ref, d.ref])), Equation(lhs_where, first), agreed_where);
+                    // The recursion itself: its definedness from its
+                    // measure, `f::defined_within`, and the agreement with
+                    // it in place of the premise, `f::agrees_within`.
+                    let within_decls <- match own as λ _ => Tac<List<Decl>> {
+                        False => pure([]),
+                        True => runtime_within(name, rfun, q, ts, linked, root, tys_e, rt_e, code_e, own_types,
+                            runtime_narrow_args(low, rfun.params, runtime_args(count, reprs, rfun.params, at_ys)), more.ref, words_e, admitted).bind(λ r => match r {
+                            None => pure([]),
+                            Some(p) => {
+                                let evaluated_within = ap(eval_where, [linked.program, linked.arities, ap(admits_of, [linked.adm]), ap(sources, [linked.srcs]),
+                                    linked.sourced, Local(more.ref), no_file, root, words_e, Hd(trivial_h), admitted, p.snd]);
+                                let params = runtime_params_of(ys.append([more.ref, p.fst]));
+                                runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), recs, rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs_where,
+                                    λ args => runtime_agree_rhs(low, wide, count, reprs, recs, rfun, f, args).bind(λ e =>
+                                        pure(runtime_enum_result(enum_word, tys_e, rfun.result, e))),
+                                    evaluated_within, Some(p.fst)).bind(λ agreed_within => pure([
+                                        Decl(AsTheorem, name ++ "::defined_within", params, Hd(defined_t), p.snd),
+                                        Decl(AsTheorem, name ++ "::agrees_within", params, Equation(lhs_where, first), agreed_within)]))
+                            },
+                        }),
+                    };
+                    pure(Some(Cons(where_decl, within_decls)))
                 },
             };
             match where_tail {
@@ -4850,141 +5232,9 @@ fn runtime_ok_at(d: RtDescends, under: Option<LocalRef>) → Tac<Expr> {
     }
 }
 
-// The domain of a function type.
-fn runtime_dom(t: Handle) → Tac<Option<Handle>> {
-    whnf_or(t).bind(λ w => view(w).bind(λ v => match v { HPi(dom) => pure(Some(dom)), _ => pure(None) }))
-}
-
-// The obligations `f::obl_0` … `f::obl_n` (or a `depth` clause's,
-// `f::depth_obl_N`), those the elaborator named, `prefix` the name up to N.
-fn runtime_obligations(prefix: String, n: Nat) → Tac<List<Expr>> {
-    match n {
-        Zero => pure([]),
-        Succ(k) => runtime_obligations(prefix, k).bind(λ found => lookup(prefix ++ decimal_name(10, k)).bind(λ c => match c {
-            Accepted(g) => pure(found.append([Global(g)])),
-            Refused(_) => pure(found),
-        })),
-    }
-}
-
-// The first branch test in scope an obligation takes next, after `args`.
-fn runtime_obligation_eq(o: Expr, args: List<Expr>, left: List<LocalRef>) → Tac<Option<LocalRef>> {
-    match left {
-        Nil => pure(None),
-        Cons(e, more) => infer(ap(o, args.append([Local(e)]))).bind(λ c => match c {
-            Accepted(_) => pure(Some(e)),
-            Refused(_) => runtime_obligation_eq(o, args, more),
-        }),
-    }
-}
-
-// Which of an obligation's parameters are equations (a branch's test,
-// `True`) and which words (`False`).
-fn runtime_param_kinds(fuel: Nat, t: Handle) → Tac<List<Bool>> {
-    match fuel {
-        Zero => pure([]),
-        Succ(k) => whnf_or(t).bind(λ w => view(w).bind(λ v => match v {
-            HPi(dom) => view(dom).bind(λ dv => open(w, "_").bind(λ o => match o {
-                Refused(_) => pure([]),
-                Accepted(opened) => runtime_param_kinds(k, opened.body).bind(λ rest =>
-                    pure(Cons(match dv { HEq(_, _) => True, _ => False }, rest))),
-            })),
-            _ => pure([]),
-        })),
-    }
-}
-
-fn runtime_count_false(bs: List<Bool>) → Nat {
-    match bs { Nil => 0, Cons(b, rest) => match b { True => runtime_count_false(rest), False => runtime_count_false(rest) + 1 } }
-}
-
-// The ways to pick `k` of the words `from`, `from + 1`, … (`left` of them),
-// in order.
-fn runtime_choices(k, from, left: Nat) → List<List<Nat>> {
-    match left {
-        Zero => match k { Zero => [[]], Succ(_) => [] },
-        Succ(l) => match k {
-            Zero => [[]],
-            Succ(j) => runtime_choices(j, from + 1, l).map(λ c => Cons(from, c)).append(runtime_choices(k, from + 1, l)),
-        },
-    }
-}
-
-// An obligation at the caller's words `words` (in order) and its
-// equations from the branch tests in scope, each the first that checks.
-fn runtime_obligation_fill(o: Expr, kinds: List<Bool>, words: List<Nat>, word_at: Nat → Expr, eqs: List<LocalRef>, args: List<Expr>) → Tac<Option<Expr>> {
-    match kinds {
-        Nil => pure(Some(ap(o, args))),
-        Cons(k, rest) => match k {
-            True => runtime_obligation_eq(o, args, eqs).bind(λ found => match found {
-                None => pure(None),
-                Some(e) => runtime_obligation_fill(o, rest, words, word_at, eqs, args.append([Local(e)])),
-            }),
-            False => match words {
-                Nil => pure(None),
-                Cons(i, more) => runtime_obligation_fill(o, rest, more, word_at, eqs, args.append([word_at(i)])),
-            },
-        },
-    }
-}
-
-// The first reading of an obligation that `at` takes: `at(p)` is the
-// call's `ok` proved by it, which checks only where `p` proves the call's
-// decrease.
-fn runtime_obligation_try(o: Expr, kinds: List<Bool>, choices: List<List<Nat>>, word_at: Nat → Expr, eqs: List<LocalRef>, at: Expr → Expr) → Tac<Option<Expr>> {
-    match choices {
-        Nil => pure(None),
-        Cons(c, rest) => runtime_obligation_fill(o, kinds, c, word_at, eqs, []).bind(λ filled => match filled {
-            None => runtime_obligation_try(o, kinds, rest, word_at, eqs, at),
-            Some(p) => infer(at(p)).bind(λ t => match t {
-                Refused(_) => runtime_obligation_try(o, kinds, rest, word_at, eqs, at),
-                Accepted(_) => pure(Some(at(p))),
-            }),
-        }),
-    }
-}
-
-// The call's `ok` from the first obligation `at` takes, its words read
-// off the caller's `n` in order.
-fn runtime_obligation_for(obls: List<Expr>, n: Nat, word_at: Nat → Expr, at: Expr → Expr, eqs: List<LocalRef>) → Tac<Option<Expr>> {
-    match obls {
-        Nil => pure(None),
-        Cons(o, rest) => infer(o).bind(λ c => match c {
-            Refused(_) => runtime_obligation_for(rest, n, word_at, at, eqs),
-            Accepted(ty) => runtime_param_kinds(64, ty).bind(λ kinds =>
-                runtime_obligation_try(o, kinds, runtime_choices(runtime_count_false(kinds), 0, n), word_at, eqs, at).bind(λ r => match r {
-                    Some(p) => pure(Some(p)),
-                    None => runtime_obligation_for(rest, n, word_at, at, eqs),
-                })),
-        }),
-    }
-}
-
 // A call's `ok`, `PTm::below_rank` from its obligation, given to `use`.
 fn runtime_descends_leaf(d: RtDescends, eqs: List<LocalRef>, use: Expr → Expr) → Tac<Option<Expr>> {
     runtime_obligation_for(d.obls, d.ws.len(), λ i => ap(d.word_at, [Local(d.xs), NatLit(i)]), λ p => use(ap(d.below, [Blank, Blank, p])), eqs)
-}
-
-// The environment the next premise's `calls_ok` is read at, its last two
-// arguments, as handles: spelled out, each `Bind` would copy the
-// environment before it twice, and the proof would double per binding.
-fn runtime_premise_env(t: Handle) → Tac<Option<Pair<Expr, Expr>>> {
-    runtime_dom(t).bind(λ d => match d {
-        None => pure(None),
-        Some(dom) => view(dom).bind(λ v => match v {
-            HGlobal(_, _, args) => match args.rev() {
-                Cons(b, _) => view(b).bind(λ bv => match bv {
-                    HGlobal(_, _, cargs) => match cargs.rev() {
-                        Cons(vals, Cons(g, _)) => pure(Some(Pair(Hd(g), Hd(vals)))),
-                        _ => pure(None),
-                    },
-                    _ => pure(None),
-                }),
-                Nil => pure(None),
-            },
-            _ => pure(None),
-        }),
-    })
 }
 
 // The walk: a proof that `t`'s calls at the environment `g_e`, `vals_e`

@@ -637,3 +637,46 @@ theorem Tm::calls_ok_ifeq(c: Nat, yes, no: Tm, w: World, ok: Tm::Oracle(w), g: L
 // A call of the function itself is allowed, from its decrease: below the
 // caller's rank.
 theorem Tm::below_rank(a, b: Nat, lt: a < b): (a + 1).leb(b).IsTrue() { (a + 1).leb_complete(b, lt) }
+
+// The same, stated at the call: what a generator checks a decrease against.
+theorem Tm::calls_ok_call(f: Nat, args: List<Nat>, w: World, ok: Tm::Oracle(w), g: List<Ty>, env: Env(w.tys, g),
+    here: Tm::apply(w, g, env, Bit, Sig::at(w.sigs, f).params, ok(f), args).IsTrue()): Tm::calls_ok(rt::Call(f, args), w, ok, g, env).IsTrue() {
+    here
+}
+
+// Whether a term's meaning can make a call at all.
+fn Tm::has_call(self t: Tm) → Bool {
+    match t {
+        Let(e, body) => e.has_call() || body.has_call(),
+        If(_, yes, no) => yes.has_call() || no.has_call(),
+        IfEq(_, yes, no) => yes.has_call() || no.has_call(),
+        Call(_, _) => True,
+        Pick(_, _, arms, _) => arms.has_call(),
+        _ => False,
+    }
+}
+
+// A term with no call asks no oracle anything.
+theorem Tm::calls_ok_none(self t: Tm, w: World, ok: Tm::Oracle(w)): (g: List<Ty>) → (env: Env(w.tys, g)) → t.has_call() = False →
+    t.calls_ok(w, ok, g, env).IsTrue() {
+    match t {
+        Let(e, body) => λ g env none => {
+            let parts = Bool::or_false_parts(e.has_call(), body.has_call(), none);
+            Tm::calls_ok_let(e, body, w, ok, g, env, e.calls_ok_none(w, ok, g, env, parts.left),
+                body.calls_ok_none(w, ok, Cons(e.ty(w, g), g), Pair(e.sem(w, g, env), env), parts.right))
+        },
+        If(c, yes, no) => λ g env none => {
+            let parts = Bool::or_false_parts(yes.has_call(), no.has_call(), none);
+            Tm::calls_ok_if(c, yes, no, w, ok, g, env, λ _ => yes.calls_ok_none(w, ok, g, env, parts.left), λ _ => no.calls_ok_none(w, ok, g, env, parts.right))
+        },
+        IfEq(c, yes, no) => λ g env none => {
+            let parts = Bool::or_false_parts(yes.has_call(), no.has_call(), none);
+            Tm::calls_ok_if(c, yes, no, w, ok, g, env, λ _ => yes.calls_ok_none(w, ok, g, env, parts.left), λ _ => no.calls_ok_none(w, ok, g, env, parts.right))
+        },
+        Call(_, _) => λ g env (none: True = False) => absurd(none),
+        Pick(i, c, arms, _) => λ g env none => arms.calls_ok_none(w, ok, Cons(Enum(i), g),
+            Pair(w.tys.ens(i).of(w.tys.ens(i).tag(Ty::cast(w.tys, Ty::at(g, c), Enum(i), Env::get(w.tys, g, env, c))),
+                w.tys.ens(i).fields(Ty::cast(w.tys, Ty::at(g, c), Enum(i), Env::get(w.tys, g, env, c)))), env), none),
+        _ => λ g env none => trivial,
+    }
+}
