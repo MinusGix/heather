@@ -1328,25 +1328,43 @@ fn File::emit_wide(self file: File, saves: Nat, prog: Prog, homes: List<Lent>, n
     }
 }
 
-// A word of four bytes stored into a lent buffer (`WideStore(4, …)`, the
-// last node of its leaf, `function_ir_lower_reads`), after `lowered`, the
-// nodes before it: refused unless the path knows the index below the
-// home's length and some `index + 3` below it too, a register holds the
-// value at width 32 and nothing callee-saved is written; then the nodes
-// before it and the address as one block, and `MOV [base], r32`. Nothing
-// is loaded back: the output is a narrow value, which no later leaf reads.
+// The instruction that stores a word of the size: `MOV [base], r32` or
+// `MOV [base], r64`, and the machine's store it is.
+fn StoreSize::item(self size: StoreSize, base, source: Gpr) → Asm {
+    match size { Four => asm_dword_store(DwordStore(base, source)), Eight => asm_word_store(WordStore(base, source)) }
+}
+
+fn StoreSize::store(self size: StoreSize, base, source: Gpr) → MemoryStore {
+    match size { Four => StoreDword(DwordStore(base, source)), Eight => StoreWord(WordStore(base, source)) }
+}
+
+// The machine after the store, its base read straight from `base` (so it
+// reduces while the size is unknown).
+fn StoreSize::after<M>(self size: StoreSize, writes: ByteWrites<M>, base, source: Gpr, s: MachineState<M>) → MachineState<M> {
+    MachineState(s.gprs, s.flags, next_rip(s.rip, 3),
+        writes.store(s.memory, read_gpr(base, s.gprs), memory_store_data(size.store(base, source), s.gprs)))
+}
+
+// A word of four or eight bytes stored into a lent buffer
+// (`WideStore(4, …)` or `WideStore(8, …)`, the last node of its leaf,
+// `function_ir_lower_reads`), after `lowered`, the nodes before it:
+// refused unless the path knows the index below the home's length and the
+// store's last byte below it too, a register holds the value as the size
+// says and nothing callee-saved is written; then the nodes before it and
+// the address as one block, and the store (`StoreSize::item`). Nothing is
+// loaded back.
 fn Lowered::wide_store_at(self lowered: Lowered, saves: Nat, prog: Prog, home: Lent, store: WideStoreLeaf, destination: Gpr,
     placement: List<Place>, names: Nat) → Option<Emitted> {
-    match lowered.file.bounded(store.index, home.length) && lowered.file.span_bounded(store.index, home.length, 3) {
+    match lowered.file.bounded(store.index, home.length) && lowered.file.span_bounded(store.index, home.length, store.size.last()) {
         False => None,
         True => match lowered.file.address(destination, home.base, store.index) {
             None => None,
-            Some(address) => match address.file.find(Held(store.value, Narrow(32))) {
+            Some(address) => match address.file.find(Held(store.value, store.size.kind())) {
                 None => None,
                 Some(source) => match (leaves_all(lowered.code ++ address.code, body_kept(saves)) && destination.apart(body_kept(saves))) &&
                     store_base_plain(destination) {
                     False => None,
-                    True => Some(Emitted(At(At(prog, 0, Block(lowered.code ++ address.code)), 0, asm_dword_store(DwordStore(destination, source.register))),
+                    True => Some(Emitted(At(At(prog, 0, Block(lowered.code ++ address.code)), 0, store.size.item(destination, source.register)),
                         address.file, placement, names)),
                 },
             },
@@ -1894,16 +1912,16 @@ theorem File::emit_wide_grows(self file: File, saves: Nat, prog: Prog, homes: Li
 
 theorem Lowered::wide_store_at_grows(self lowered: Lowered, saves: Nat, prog: Prog, home: Lent, store: WideStoreLeaf, destination: Gpr,
     placement: List<Place>, names: Nat): Grows(prog, lowered.wide_store_at(saves, prog, home, store, destination, placement, names)) {
-    match lowered.file.bounded(store.index, home.length) && lowered.file.span_bounded(store.index, home.length, 3) {
+    match lowered.file.bounded(store.index, home.length) && lowered.file.span_bounded(store.index, home.length, store.size.last()) {
         False => trivial,
         True => match lowered.file.address(destination, home.base, store.index) {
             None => trivial,
-            Some(address) => match address.file.find(Held(store.value, Narrow(32))) {
+            Some(address) => match address.file.find(Held(store.value, store.size.kind())) {
                 None => trivial,
                 Some(source) => match (leaves_all(lowered.code ++ address.code, body_kept(saves)) && destination.apart(body_kept(saves))) &&
                     store_base_plain(destination) {
                     False => trivial,
-                    True => prog.within_step(At(prog, 0, Block(lowered.code ++ address.code)), 0, asm_dword_store(DwordStore(destination, source.register)),
+                    True => prog.within_step(At(prog, 0, Block(lowered.code ++ address.code)), 0, store.size.item(destination, source.register),
                         prog.within_then(0, Block(lowered.code ++ address.code))),
                 },
             },
@@ -3317,10 +3335,65 @@ theorem File::store_from_runs<M>(self file: File, saves: Nat, site: Site<M>, lai
 }
 
 // ---------------------------------------------------------------------------
-// A word of four bytes stored into a lent buffer
+// The size's instruction at a label: one store of its bytes from the
+// source register through a plain base, to writable bytes that keep the
+// code (`Site::moves_dword_store`, `Site::moves_word_store`).
+theorem StoreSize::moves<M>(self size: StoreSize, site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
+    before: Prog, name: Nat, base, source: Gpr, at: asm_back(site.program, k) = At(before, name, size.item(base, source)),
+    pre, post: MachineState<M> → Type,
+    step: (s: MachineState<M>) → pre(s) → site.Resident(s.memory) → (store_base_plain(base) = True) ∧
+        (writes.writable(s.memory, read_gpr(base, s.gprs), size.bytes()) ∧
+        (site.Resident(size.after(writes, base, source, s).memory) ∧ post(size.after(writes, base, source, s))))):
+    site.Moves(writes, prog_len(before), prog_len(At(before, name, size.item(base, source))), pre, post) {
+    (match size as λ z => asm_back(site.program, k) = At(before, name, z.item(base, source)) →
+        ((s: MachineState<M>) → pre(s) → site.Resident(s.memory) → (store_base_plain(base) = True) ∧
+            (writes.writable(s.memory, read_gpr(base, s.gprs), z.bytes()) ∧
+            (site.Resident(z.after(writes, base, source, s).memory) ∧ post(z.after(writes, base, source, s))))) →
+        site.Moves(writes, prog_len(before), prog_len(At(before, name, z.item(base, source))), pre, post) {
+        Four => λ here ran => site.moves_dword_store(writes, fits, k, before, name, DwordStore(base, source), here, pre, post, ran),
+        Eight => λ here ran => site.moves_word_store(writes, fits, k, before, name, WordStore(base, source), here, pre, post, ran),
+    })(at, step)
+}
+
+theorem StoreSize::last_small(self size: StoreSize): size.last() <= 7 {
+    match size { Four => trivial, Eight => trivial }
+}
+
+// What the store writes is the size's bytes of the value its source
+// register holds, low first: the file with the leaf's store in it is the
+// one with those bytes over the buffer.
+theorem StoreSize::stored(self size: StoreSize, base, source: Gpr, gprs: Gprs, values: Valuation(), value: Nat,
+    held: Held(value, size.kind()).Rep(values, read_gpr(source, gprs)), before: Buffers(), buffer, k: Nat,
+    fits: size.bytes() + k <= buffer_bytes(before, buffer).len()):
+    (memory_store_data(size.store(base, source), gprs).len() = size.bytes()) ∧
+    ((c: Nat) → buffer_bytes(store_word(before, buffer, k, size.bytes(), values(8 * size.bytes(), value)), c) =
+        buffer_bytes(store_span(before, buffer, k, memory_store_data(size.store(base, source), gprs)), c)) {
+    (match size as λ z => Held(value, z.kind()).Rep(values, read_gpr(source, gprs)) → z.bytes() + k <= buffer_bytes(before, buffer).len() →
+        (memory_store_data(z.store(base, source), gprs).len() = z.bytes()) ∧
+        ((c: Nat) → buffer_bytes(store_word(before, buffer, k, z.bytes(), values(8 * z.bytes(), value)), c) =
+            buffer_bytes(store_span(before, buffer, k, memory_store_data(z.store(base, source), gprs)), c)) {
+        Four => λ narrow room => {
+            let word = values(32, value);
+            let widened: (word.resize(64) = word.zero_extend(32)) = BitVec::resize_zero_extend(32, 32, word);
+            let as_four: (dword_bytes(read_gpr(source, gprs)) = four_bytes(word)) =
+                cong_fn(λ (r: BitVec(64)) => dword_bytes(r), trans(sym(narrow), widened));
+            ⟨refl, λ c => trans(buffer_bytes_store_word_four(before, buffer, k, word, room, c),
+                cong_fn(λ (ys: List<BitVec(8)>) => buffer_bytes(store_span(before, buffer, k, ys), c), sym(as_four)))⟩
+        },
+        Eight => λ whole room => {
+            let word = values(64, value);
+            let as_eight: (word_bytes(read_gpr(source, gprs)) = eight_bytes(word)) =
+                cong_fn(λ (r: BitVec(64)) => word_bytes(r), sym(whole));
+            ⟨refl, λ c => trans(buffer_bytes_store_word_eight(before, buffer, k, word, room, c),
+                cong_fn(λ (ys: List<BitVec(8)>) => buffer_bytes(store_span(before, buffer, k, ys), c), sym(as_eight)))⟩
+        },
+    })(held, fits)
+}
+
+// A word of four or eight bytes stored into a lent buffer
 
 // The nodes before the store and the address as one block, then the
-// value's four bytes stored over the address in one store: the home says
+// value's bytes stored over the address in one store: the home says
 // where the buffer lies and how long it is, the path that the four bytes
 // are inside, and the lending that the buffer may be written, so under the
 // laws (`Loan`, stated of a store of several bytes) the bytes are
@@ -3332,20 +3405,22 @@ theorem wide_store_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_o
     s0: MachineState<M>, prog: Prog, file: File, front: Type, lowered: Lowered, keeps: Keeps<M>(values, file, front, lowered), home: Lent,
     store: WideStoreLeaf, destination: Gpr, placement: List<Place>, names: Nat, same: home.buffer = store.buffer,
     written: lending.written(store.buffer) = True, bounded: lowered.file.bounded(store.index, home.length).IsTrue(),
-    spanned: lowered.file.span_bounded(store.index, home.length, 3).IsTrue(), address: Lowered,
+    spanned: lowered.file.span_bounded(store.index, home.length, store.size.last()).IsTrue(), address: Lowered,
     addressed: Addressed<M>(values, lowered.file, destination, home.base, store.index, address),
-    source: Found(address.file, Held(store.value, Narrow(32))),
+    source: Found(address.file, Held(store.value, store.size.kind())),
     kept: leaves_all(lowered.code ++ address.code, body_kept(saves)).IsTrue() ∧ destination.apart(body_kept(saves)).IsTrue(),
     plain: store_base_plain(destination) = True, before: Buffers()):
     EmitsOver<M>(saves, site, stack, lending, values, d, s0, prog, file, front ∧ home.Holds(values, lending.addresses, lending.buffers),
-        before, store.after(values, before), Emitted(At(At(prog, 0, Block(lowered.code ++ address.code)), 0, asm_dword_store(DwordStore(destination, source.register))), address.file, placement, names)) {
+        before, store.after(values, before), Emitted(At(At(prog, 0, Block(lowered.code ++ address.code)), 0, store.size.item(destination, source.register)), address.file, placement, names)) {
     let after = store.after(values, before);
     let index = values(64, store.index);
-    let word = values(32, store.value);
+    let size = store.size;
+    let last_bytes: (size.last() + 1 = size.bytes()) = size.last_bytes();
+    let small: (size.last() <= 7) = size.last_small();
     let code = lowered.code ++ address.code;
     let formed = At(prog, 0, Block(code));
-    let the_store = DwordStore(destination, source.register);
-    let stored = At(formed, 0, asm_dword_store(the_store));
+    let item = size.item(destination, source.register);
+    let stored = At(formed, 0, item);
     let a = address_of(lending.addresses, store.buffer);
     let xs = buffer_bytes(lending.buffers, store.buffer);
     let spans = lending.spans();
@@ -3353,12 +3428,12 @@ theorem wide_store_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_o
     let trailed = λ (now: Buffers()) (g: Gprs) (m: M) => Kept(body_kept(saves), s0.gprs, g) ∧ stack.Trail(lending, d, s0.memory, now, m);
     let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ facts) ∧ trailed(before, g, m);
     let ready = λ (g: Gprs) (m: M) =>
-        ((address.file.Represents(values, g) ∧ (read_gpr(destination, g) = a.add(index))) ∧ (index.toNat() + 3 < xs.len())) ∧ trailed(before, g, m);
+        ((address.file.Represents(values, g) ∧ (read_gpr(destination, g) = a.add(index))) ∧ (index.toNat() + size.last() < xs.len())) ∧ trailed(before, g, m);
     let post = λ (t: MachineState<M>) => address.file.Represents(values, t.gprs) ∧ stack.Trailed(saves, lending, d, s0, after, t);
     let wide: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Nat::pow(2, 47) + 1, Nat::pow(2, 64), trivial);
-    ⟨prog.within_step(formed, 0, asm_dword_store(the_store), prog.within_then(0, Block(code))),
+    ⟨prog.within_step(formed, 0, item, prog.within_then(0, Block(code))),
      λ within => {
-        let formed_in = formed.within_before(0, asm_dword_store(the_store), site.program, within);
+        let formed_in = formed.within_before(0, item, site.program, within);
         let fits = site.program.laid_out_fits(laid);
         site.moves_trans(stack.writes, prog_len(prog), prog_len(formed), prog_len(stored),
             λ (s: MachineState<M>) => pre(s.gprs, s.memory), λ (s: MachineState<M>) => ready(s.gprs, s.memory), post,
@@ -3384,9 +3459,9 @@ theorem wide_store_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_o
                             j(in_memory.left, λ n _ => a.toNat() + n <= Nat::pow(2, 47), in_memory.right.left);
                         let below: (index.toNat() < values(64, home.length).toNat()) =
                             lowered.file.bounded_sound(values, y.gprs, store.index, home.length, middle, bounded);
-                        let no_wrap: (index.toNat() + 3 < Nat::pow(2, 64)) = omega(below, short, canonical, wide);
-                        let span: (index.toNat() + 3 < values(64, home.length).toNat()) =
-                            lowered.file.span_bounded_sound(values, y.gprs, store.index, home.length, 3, middle, no_wrap, spanned);
+                        let no_wrap: (index.toNat() + size.last() < Nat::pow(2, 64)) = omega(below, short, canonical, wide, small);
+                        let span: (index.toNat() + size.last() < values(64, home.length).toNat()) =
+                            lowered.file.span_bounded_sound(values, y.gprs, store.index, home.length, size.last(), middle, no_wrap, spanned);
                         let formed_at: (address.file.Represents(values, execute_block_normal(code, x).gprs) ∧
                                 (read_gpr(destination, execute_block_normal(code, x).gprs) = a.add(index))) =
                             j(sym(ran_apart), λ z _ => address.file.Represents(values, z.gprs) ∧ (read_gpr(destination, z.gprs) = a.add(index)),
@@ -3395,25 +3470,21 @@ theorem wide_store_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_o
                          ⟨kept_trans(body_kept(saves), s0.gprs, x.gprs, execute_block_normal(code, x).gprs, held.right.left,
                             execute_block_kept<M>(code, x, body_kept(saves), kept.left)), held.right.right⟩⟩
                     })),
-            site.moves_dword_store(stack.writes, fits, within.witness, formed, 0, the_store, within.proof,
+            size.moves<M>(site, stack.writes, fits, within.witness, formed, 0, destination, source.register, within.proof,
                 λ (s: MachineState<M>) => ready(s.gprs, s.memory), post,
                 λ s held resident => {
                     let k = index.toNat();
-                    let span: (k + 3 < xs.len()) = held.left.right;
+                    let span: (k + size.last() < xs.len()) = held.left.right;
                     let inside: (k < xs.len()) = omega(span);
-                    let reach: (k + 4 <= xs.len()) = omega(span);
-                    let reg = read_gpr(source.register, s.gprs);
-                    let bytes = dword_bytes(reg);
+                    let lent = held.right.right.right(store.buffer);
+                    let whole: (size.bytes() + k <= buffer_bytes(before, store.buffer).len()) = omega(span, last_bytes, lent.left);
+                    let bytes = memory_store_data(size.store(destination, source.register), s.gprs);
+                    let put = size.stored(destination, source.register, s.gprs, values, store.value,
+                        source.at.rep(values, s.gprs, held.left.left.left), before, store.buffer, k, whole);
+                    let reach: (k + bytes.len() <= xs.len()) =
+                        j(sym(put.left), λ n _ => k + n <= xs.len(), omega(span, last_bytes));
                     let cell = spans.byte(store.buffer, k);
                     let at: (read_gpr(destination, s.gprs) = cell) = trans(held.left.left.right, sym(BitVec::iter_add_eq_add(64, a, index)));
-                    let narrow: (word.resize(64) = reg) = source.at.rep(values, s.gprs, held.left.left.left);
-                    let widened: (word.resize(64) = word.zero_extend(32)) = BitVec::resize_zero_extend(32, 32, word);
-                    let as_four: (bytes = four_bytes(word)) = cong_fn(λ (r: BitVec(64)) => dword_bytes(r), trans(sym(narrow), widened));
-                    let lent = held.right.right.right(store.buffer);
-                    let whole: (4 + k <= buffer_bytes(before, store.buffer).len()) = omega(reach, lent.left);
-                    let same_file: ((c: Nat) → buffer_bytes(after, c) = buffer_bytes(store_span(before, store.buffer, k, bytes), c)) =
-                        λ c => trans(buffer_bytes_store_word_four(before, store.buffer, k, word, whole, c),
-                            cong_fn(λ (ys: List<BitVec(8)>) => buffer_bytes(store_span(before, store.buffer, k, ys), c), sym(as_four)));
                     let trail = stack.trail_span(top, lending, loan, d, s0.memory, before, s.memory, held.right.right, store.buffer, k, written,
                         inside, bytes, reach);
                     let goal = λ (x: BitVec(64)) => site.Resident(stack.writes.store(s.memory, x, bytes)) ∧
@@ -3424,9 +3495,11 @@ theorem wide_store_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_o
                             assemble(no_fills(), site.program, site.last), next_rip(site.origin, 0), resident),
                          ⟨held.left.left.left, ⟨held.right.left, ⟨trail.left,
                             stack.in_memory_same(lending, store_span(before, store.buffer, k, bytes), after,
-                                stack.writes.store(s.memory, cell, bytes), same_file, trail.right)⟩⟩⟩⟩;
-                    ⟨plain, ⟨j(sym(at), λ x _ => stack.writes.writable(s.memory, x, 4),
-                            loan.writable(s.memory, store.buffer, k, written, inside, bytes, reach)),
+                                stack.writes.store(s.memory, cell, bytes), put.right, trail.right)⟩⟩⟩⟩;
+                    let writable: stack.writes.writable(s.memory, cell, size.bytes()) =
+                        j(put.left, λ n _ => stack.writes.writable(s.memory, cell, n),
+                            loan.writable(s.memory, store.buffer, k, written, inside, bytes, reach));
+                    ⟨plain, ⟨j(sym(at), λ x _ => stack.writes.writable(s.memory, x, size.bytes()), writable),
                         j(sym(at), λ x _ => goal(x), done)⟩⟩
                 }))
      }⟩
@@ -3442,32 +3515,32 @@ theorem Lowered::wide_store_at_runs<M>(self lowered: Lowered, saves: Nat, site: 
         lowered.wide_store_at(saves, prog, home, store, destination, placement, names)) {
     let facts = (front ∧ (after = store.after(values, before))) ∧ home.Holds(values, lending.addresses, lending.buffers);
     let core = front ∧ home.Holds(values, lending.addresses, lending.buffers);
-    match inside: lowered.file.bounded(store.index, home.length) && lowered.file.span_bounded(store.index, home.length, 3) {
+    match inside: lowered.file.bounded(store.index, home.length) && lowered.file.span_bounded(store.index, home.length, store.size.last()) {
         False => trivial,
         True => {
-            let both = Bool::is_true_and(lowered.file.bounded(store.index, home.length), lowered.file.span_bounded(store.index, home.length, 3),
-                is_true_of_eq(lowered.file.bounded(store.index, home.length) && lowered.file.span_bounded(store.index, home.length, 3), inside));
+            let both = Bool::is_true_and(lowered.file.bounded(store.index, home.length), lowered.file.span_bounded(store.index, home.length, store.size.last()),
+                is_true_of_eq(lowered.file.bounded(store.index, home.length) && lowered.file.span_bounded(store.index, home.length, store.size.last()), inside));
             (match lowered.file.address(destination, home.base, store.index) as λ found =>
                 found.All(λ (out: Lowered) => Addressed<M>(values, lowered.file, destination, home.base, store.index, out)) →
                 MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file, facts, before, after, match found {
                     None => None,
-                    Some(address) => match address.file.find(Held(store.value, Narrow(32))) {
+                    Some(address) => match address.file.find(Held(store.value, store.size.kind())) {
                         None => None,
                         Some(source) => match (leaves_all(lowered.code ++ address.code, body_kept(saves)) && destination.apart(body_kept(saves))) &&
                             store_base_plain(destination) {
                             False => None,
-                            True => Some(Emitted(At(At(prog, 0, Block(lowered.code ++ address.code)), 0, asm_dword_store(DwordStore(destination, source.register))), address.file, placement, names)),
+                            True => Some(Emitted(At(At(prog, 0, Block(lowered.code ++ address.code)), 0, store.size.item(destination, source.register)), address.file, placement, names)),
                         },
                     },
                 }) {
                 None => λ _ => trivial,
-                Some(address) => λ addressed => match address.file.find(Held(store.value, Narrow(32))) as λ f =>
+                Some(address) => λ addressed => match address.file.find(Held(store.value, store.size.kind())) as λ f =>
                     MayEmitOver<M>(saves, site, stack, lending, values, d, s0, prog, file, facts, before, after, match f {
                         None => None,
                         Some(source) => match (leaves_all(lowered.code ++ address.code, body_kept(saves)) && destination.apart(body_kept(saves))) &&
                             store_base_plain(destination) {
                             False => None,
-                            True => Some(Emitted(At(At(prog, 0, Block(lowered.code ++ address.code)), 0, asm_dword_store(DwordStore(destination, source.register))), address.file, placement, names)),
+                            True => Some(Emitted(At(At(prog, 0, Block(lowered.code ++ address.code)), 0, store.size.item(destination, source.register)), address.file, placement, names)),
                         },
                     }) {
                     None => trivial,
@@ -3475,7 +3548,7 @@ theorem Lowered::wide_store_at_runs<M>(self lowered: Lowered, saves: Nat, site: 
                         store_base_plain(destination) {
                         False => trivial,
                         True => {
-                            let emitted = Emitted(At(At(prog, 0, Block(lowered.code ++ address.code)), 0, asm_dword_store(DwordStore(destination, source.register))), address.file, placement, names);
+                            let emitted = Emitted(At(At(prog, 0, Block(lowered.code ++ address.code)), 0, store.size.item(destination, source.register)), address.file, placement, names);
                             let all = Bool::is_true_and(leaves_all(lowered.code ++ address.code, body_kept(saves)) && destination.apart(body_kept(saves)),
                                 store_base_plain(destination),
                                 is_true_of_eq((leaves_all(lowered.code ++ address.code, body_kept(saves)) && destination.apart(body_kept(saves))) &&
