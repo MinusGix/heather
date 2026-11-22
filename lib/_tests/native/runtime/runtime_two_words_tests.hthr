@@ -63,7 +63,8 @@ theorem halves_called_runs(): program_eval(halves_called::program, 1, [BitVec::o
 theorem halves_called_agrees(x: u64): program_eval(halves_called::program, 1, [x]) = halves_called(x) { halves_called::agrees(x) }
 
 // Three words: the first in RAX, the other two beside it. A caller reads
-// all three; `compile-x86` exports at most two (`runtime_shape`).
+// all three; `compile-x86` exports the record through memory, as C returns
+// a structure of three words (docs/native/runtime-fn-setups-design.md §16.20).
 record Triple { a: u64, b: u64, c: u64 }
 
 runtime fn triple(x: u64) → Triple { Triple(x, x + 1, x + 2) }
@@ -74,6 +75,14 @@ theorem triple_runs(): program_eval(triple::program, 0, [BitVec::ofNat(5)]) = 5 
 }
 
 theorem triple_also(): triple::code.also.len() = 2 { refl }
+
+// Exported through memory, its export calls it over the structure's file
+// (docs/native/runtime-fn-setups-design.md §16.20): its agreement holds at
+// every file, a neutral one here.
+theorem triple_agrees_at(x: u64, file: Buffers()): program_eval_over(file, triple::program, 0, [x]) = triple(x).a ∧
+    program_eval_also_over(file, triple::program, [x]) = [triple(x).b, triple(x).c] {
+    ⟨triple::agrees_at(x, file), triple::agrees_also_at(x, file)⟩
+}
 
 runtime fn triple_sum(x: u64) → u64 { let t = triple(x); t.a + t.b + t.c }
 

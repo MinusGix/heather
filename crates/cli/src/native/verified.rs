@@ -125,6 +125,14 @@ pub(super) struct Shape {
     /// `Prog::Implements`, which is over every word.
     pub enums: Vec<(usize, u64)>,
     pub table: String,
+    /// For a function returning a record of three words or more
+    /// (docs/native/runtime-fn-setups-design.md §16.20): how many words it
+    /// returns past its first. The program is then the function's with its
+    /// export as the root (`sret_export`), lent the structure by its
+    /// address alone, and `rest` the record's fields after the first. With
+    /// it the source function, whose words its generator states at every
+    /// file (`{source}::agrees_at`, `agrees_also_at`).
+    pub sret: Option<(usize, String)>,
 }
 
 /// Whether `compile-x86` runs the optimizer over a program that is lent
@@ -177,6 +185,7 @@ impl Shape {
             rest: None,
             enums: Vec::new(),
             table: String::new(),
+            sret: None,
         }
     }
 
@@ -260,7 +269,56 @@ theorem {prefix}_agrees_also({typed}): program_eval_also({prefix}_program(), {wo
                 None => String::new(),
             });
         if rest.is_some() { definitions.insert_str(0, "import function_ir_writes;\n"); }
-        Shape { functions, root: functions - 1, arity, params, definitions, agreement, answer, on: String::new(), lent: None, marks: None, tables: None, entries: Vec::new(), optimize: false, rest, enums: enums.to_vec(), table: format!("{source}::world.tys") }
+        Shape { functions, root: functions - 1, arity, params, definitions, agreement, answer, on: String::new(), lent: None, marks: None, tables: None, entries: Vec::new(), optimize: false, rest, enums: enums.to_vec(), table: format!("{source}::world.tys"), sret: None }
+    }
+
+    /// A `runtime fn` returning a record of three words or more, exported
+    /// as System V returns such a structure, through memory
+    /// (docs/native/runtime-fn-setups-design.md §16.20): the program is the
+    /// function's (`{source}::program`, `functions` of them) with its export
+    /// after it as the root (`sret_export`), which is lent the structure by
+    /// its address, calls the function, stores each word it returns and
+    /// returns the address. The function stores into nothing
+    /// (`{prefix}_callees_quiet`), and its words are stated at every file
+    /// (`{source}::agrees_at`, `agrees_also_at`), since it is called over
+    /// the export's.
+    pub fn runtime_sret(prefix: &str, owner: &str, source: &str, functions: usize, arity: usize, widths: &[u64], fields: &[(String, u64)]) -> Shape {
+        let parameters = arguments(arity);
+        let table = format!("{source}::world.tys");
+        let narrowed: Vec<String> = parameters.iter().enumerate()
+            .map(|(i, a)| match widths.get(i + 1) { Some(&1) => format!("runtime_bit_low({a})"), Some(&w) if w != 64 => format!("runtime_low({w}, {a})"), _ => a.clone() }).collect();
+        let called = format!("{source}({})", narrowed.join(", "));
+        let field = |(name, w): &(String, u64)| match w { 1 => format!("runtime_bit_wide({called}.{name})"), 64 => format!("{called}.{name}"),
+            w if *w >= ENUM_FIELD => format!("RecInfo::enum_word({table}, {}, {called}.{name})", w - ENUM_FIELD),
+            w => format!("runtime_wide({w}, {called}.{name})") };
+        let answer = field(&fields[0]);
+        let rest = format!("[{}]", fields[1..].iter().map(field).collect::<Vec<_>>().join(", "));
+        let more = fields.len() - 1;
+        let m = functions + 1;
+        let mut definitions = format!("import function_ir_writes;\nimport function_ir_export;\nimport {owner};\nimport runtime;\n");
+        if fields.iter().any(|(_, w)| *w >= ENUM_FIELD) { definitions.push_str("import rt;\n"); }
+        definitions.push_str(&format!("
+// The program `runtime fn {source}` published, callees first, with its
+// export after it: function {functions}, lent the structure by its address,
+// calls function {callee} and stores the {words} words it returns.
+fn {prefix}_program() → List<Function> {{ Cons(sret_export({callee}, {arity}, {more}), {source}::program) }}
+
+// How many buffers each function is lent: the export the structure, the
+// others none.
+fn {prefix}_counts() → List<Nat> {{ program_counts({prefix}_program()) }}
+", callee = functions - 1, words = more + 1));
+        for k in 0..m {
+            definitions.push_str(&format!("fn {prefix}_first_{k}() → List<Function> {{ {prefix}_program().drop({}) }}
+fn {prefix}_fn{k}() → Function {{ match {prefix}_first_{k}() {{ Nil => Setup::code_of(None), Cons(function, _) => function }} }}
+", m - 1 - k));
+        }
+        let agreement = format!("{evaluable}
+
+{quiet}
+", evaluable = evaluable_text_over(prefix, &format!("{prefix}_program()"), m, &format!("Cons({}, {source}::arities)", arity + 1), &format!("Cons(0, {prefix}_outs())")),
+            quiet = quiet_text_over(&format!("{prefix}_callees"), &format!("{source}::program"), functions));
+        Shape { functions: m, root: functions, arity, params: arity, definitions, agreement, answer, on: String::new(), lent: Some((0..m).map(|k| u64::from(k == functions)).collect()), marks: None,
+            tables: None, entries: Vec::new(), optimize: false, rest: Some(rest), enums: Vec::new(), table, sret: Some((more, source.to_string())) }
     }
 
     /// A `runtime fn` that reads spans: its program is lent buffers
@@ -311,7 +369,7 @@ theorem {prefix}_agrees(now: Buffers(), {typed}): program_eval_over(now, {prefix
 }}
 ", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), f = functions - 1,
             list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, params: arity, definitions, agreement, answer, on, lent: Some(counts), marks: None, tables: None, entries: Vec::new(), optimize, rest: None, enums: Vec::new(), table: String::new() }
+        Shape { functions, root: functions - 1, arity, params: arity, definitions, agreement, answer, on, lent: Some(counts), marks: None, tables: None, entries: Vec::new(), optimize, rest: None, enums: Vec::new(), table: String::new(), sret: None }
     }
 
     /// A `runtime fn` that stores into the first span it is lent: its
@@ -388,7 +446,7 @@ theorem {prefix}_runs(span: List<BitVec(8)>, rest: Buffers(), {typed}):
 ", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")),
             within = if tables.is_some() { marked_text(prefix, &stem) } else { within_text(prefix, &stem, functions) }, f = functions - 1,
             list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, params: arity, definitions, agreement, answer, on, lent: Some(counts), marks: Some(marks), tables, entries: Vec::new(), optimize, rest: None, enums: Vec::new(), table: String::new() }
+        Shape { functions, root: functions - 1, arity, params: arity, definitions, agreement, answer, on, lent: Some(counts), marks: Some(marks), tables, entries: Vec::new(), optimize, rest: None, enums: Vec::new(), table: String::new(), sret: None }
     }
 }
 
@@ -476,12 +534,21 @@ fn runtime_shape_of(elab: &Elaborator, prefix: &str, owner: &str, source: &str, 
             if arity > 8 {
                 return Err(format!("`{source}` takes {arity} words: compile-x86 passes at most eight, six in registers and two on the stack"));
             }
-            // A C caller is handed RAX and RDX: a result of more words is
-            // one a Heather caller reads (the answer registers past RDX),
-            // not one compile-x86 exports.
+            // A C caller is handed RAX and RDX: a record of more words is
+            // returned through memory, by an export of its own (§16.20),
+            // which takes the structure's address as its first word.
             if also > 1 {
-                return Err(format!("`{source}` returns {} words: compile-x86 exports a function returning at most two, in RAX and RDX, as System V \
-                    returns a structure of two integer words (docs/native/runtime-fn-setups-design.md §16.17)", also + 1));
+                if arity > 7 {
+                    return Err(format!("`{source}` takes {arity} words and returns {} through memory: the structure's address is a word too, and \
+                        compile-x86 passes at most eight", also + 1));
+                }
+                if !elab.qualified_global(&format!("{source}::agrees_at")).is_some() {
+                    return Err(format!("`{source}` returns {} words: compile-x86 exports a record of three words or more through memory when its \
+                        words are stated at every file (`{source}::agrees_at`), which its generator states for a function of plain words \
+                        (docs/native/runtime-fn-setups-design.md §16.20)", also + 1));
+                }
+                let fields = runtime_fields(fork, prefix, source, also as usize + 1)?;
+                return Ok(Shape::runtime_sret(prefix, owner, source, functions as usize, arity as usize, widths, &fields));
             }
             // An enum result's table entry, then each enum parameter, by
             // position, and its table entry (a record of several words
@@ -493,17 +560,7 @@ fn runtime_shape_of(elab: &Elaborator, prefix: &str, owner: &str, source: &str, 
             let also = elab.qualified_global(&format!("{source}::agrees_also")).is_some();
             // An enum result with its slot in RDX: no names to read.
             let slot = also && result.is_some();
-            let fields = if also && !slot {
-                let codes = function_ir_source::evaluate_numbers(&fork, &format!("{source}::fields")).map_err(|e| e.to_string())?;
-                let names: Vec<String> = codes.split(|code| *code == 0).filter(|name| !name.is_empty())
-                    .map(|name| name.iter().filter_map(|code| char::from_u32(*code as u32)).collect()).collect();
-                if names.len() != 2 { return Err(format!("`{source}::fields` did not read back as two names")); }
-                // Each field's width: a narrow field is returned
-                // zero-extended, as the generator states it (§16.18).
-                let widths = function_ir_source::evaluate_numbers(&fork, &format!("{prefix}_shape::{prefix}_field_widths")).map_err(|e| e.to_string())?;
-                if widths.len() != 2 { return Err(format!("`{source}`'s result's fields did not read back as two widths")); }
-                Some(names.into_iter().zip(widths).collect::<Vec<_>>())
-            } else { None };
+            let fields = if also && !slot { Some(runtime_fields(fork, prefix, source, 2)?) } else { None };
             Ok(Shape::runtime(prefix, owner, source, functions as usize, params as usize, arity as usize, widths, fields.as_deref(), &enums, result, slot))
         }
         [functions, arity, ref counts @ ..] if functions >= 1 && spans == Spans::Read && counts.len() == functions as usize =>
@@ -549,6 +606,20 @@ fn runtime_shape_of(elab: &Elaborator, prefix: &str, owner: &str, source: &str, 
     }
 }
 
+/// The names of a record result's `count` fields, as the generator spells
+/// them (`{source}::fields`), each with its width: a narrow field is
+/// returned zero-extended, as the generator states it (§16.18), and an
+/// enum field as its tag word, its width past `ENUM_FIELD`.
+fn runtime_fields(fork: &Elaborator, prefix: &str, source: &str, count: usize) -> Result<Vec<(String, u64)>, String> {
+    let codes = function_ir_source::evaluate_numbers(fork, &format!("{source}::fields")).map_err(|e| e.to_string())?;
+    let names: Vec<String> = codes.split(|code| *code == 0).filter(|name| !name.is_empty())
+        .map(|name| name.iter().filter_map(|code| char::from_u32(*code as u32)).collect()).collect();
+    if names.len() != count { return Err(format!("`{source}::fields` did not read back as {count} names")); }
+    let widths = function_ir_source::evaluate_numbers(fork, &format!("{prefix}_shape::{prefix}_field_widths")).map_err(|e| e.to_string())?;
+    if widths.len() != count { return Err(format!("`{source}`'s result's fields did not read back as {count} widths")); }
+    Ok(names.into_iter().zip(widths).collect())
+}
+
 /// The program's other functions to export, `wanted` (each a module and a
 /// function in it), found in the program `source`'s generator published and
 /// added to `shape` with their agreements: the program's function there
@@ -565,6 +636,10 @@ fn runtime_shape_of(elab: &Elaborator, prefix: &str, owner: &str, source: &str, 
 /// words whatever the root is lent.
 pub(super) fn runtime_entries(elab: &Elaborator, prefix: &str, owner: &str, source: &str, shape: &mut Shape, wanted: &[(String, String)]) -> Result<(), String> {
     if wanted.is_empty() { return Ok(()); }
+    if shape.sret.is_some() {
+        return Err(format!("`{source}` returns its record through memory: compile-x86 exports another function of a program only beside a \
+            root returning its words in registers (issues/linked-program-entries-limits.md)"));
+    }
     if shape.marks.is_some() {
         return Err(format!("`{source}` stores into its span: compile-x86 exports another function of a program only where the program \
             stores into no span (issues/linked-program-entries-limits.md)"));
@@ -1184,7 +1259,12 @@ pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module
     // A function's emission after `prog`: under the program's counts of
     // lent buffers where it has them.
     let lent = program.lent.is_some();
-    let emit = |prog: &str, k: usize, places: &str, names: u64| if lent {
+    // An export through memory is the root, lent its structure by its
+    // address alone, and emitted by `emit_any` (`lower_program_sized`).
+    let sret = program.sret.as_ref().map(|(more, _)| *more);
+    let emit = |prog: &str, k: usize, places: &str, names: u64| if sret.is_some() && k == f {
+        format!("{stem}_fn{k}().emit_any({prog}, {k}, {places}, {names}, {prefix}_counts(), {prefix}_rooms())")
+    } else if lent {
         format!("{stem}_fn{k}().emit_lent({prog}, {k}, {places}, {names}, {prefix}_counts(), {prefix}_rooms())")
     } else {
         format!("{stem}_fn{k}().emit({prog}, {k}, {places}, {names}, {prefix}_rooms())")
@@ -1446,16 +1526,21 @@ fn {prefix}_rest_{k}() → List<Place> {{ {} }}
                 format!("emit_functions({stem}_first_{k}(), {prefix}_placement(), {m}, {prefix}_rooms())"),
                 format!("emit_functions_next({stem}_fn{k}(), {earlier}, {prefix}_placement(), {m}, {prefix}_rooms(), "))
         };
+        // The export's root is emitted alone: `{prefix}_lowers` composes it
+        // with the functions before it (`lower_program_sized_emitted`).
+        let alone = sret.is_some() && k == f;
         text.push_str(&format!("
 theorem {prefix}_emits_{k}(): EmitsAs({emitted}, {prefix}_code_{k}(), {prefix}_rest_{k}(), {names}) {{
     refl
 }}
-
+", emitted = emit(&before.0, k, &before.1, before.2)));
+        if alone { before = (format!("{prefix}_code_{k}()"), format!("{prefix}_rest_{k}()"), names); continue; }
+        text.push_str(&format!("
 theorem {prefix}_emitted_{k}(): EmitsAs({functions}, {prefix}_code_{k}(), {prefix}_rest_{k}(), {names}) {{
     {next}{prog}, {places}, {labels}, {started},
         {prefix}_code_{k}(), {prefix}_rest_{k}(), {names}, {prefix}_emits_{k}())
 }}
-", emitted = emit(&before.0, k, &before.1, before.2), prog = before.0, places = before.1, labels = before.2));
+", prog = before.0, places = before.1, labels = before.2));
         before = (format!("{prefix}_code_{k}()"), format!("{prefix}_rest_{k}()"), names);
     }
     let lent_counts = if lent { format!("{prefix}_counts()") } else { "[]".to_string() };
@@ -1471,13 +1556,23 @@ theorem {prefix}_laid(): {prefix}_code().laid_out().IsTrue() {{
     {prefix}_table().laid_out_of({prefix}_code(), {length}, {prefix}_checked_{count}(), {prefix}_holes(), {prefix}_reads())
 }}
 
-theorem {prefix}_lowers(): {lowered} = Some({prefix}_code()) {{
-    {lowers}{prefix}_code(), {prefix}_rest_{last}(), {labels}, {prefix}_emitted_{last}(),
-        {prefix}_laid())
+{lowers}", count = items.len(), layout = super::labels::layout(prefix, &offsets, &cuts),
+        lowers = if sret.is_some() {
+            // The functions before the root, then the root alone.
+            let earlier = after[f - 1].2;
+            format!("theorem {prefix}_lowers(): lower_program_sized({stem}_fn{f}(), {stem}_first_{e}(), {prefix}_placement(), {prefix}_counts(), {prefix}_rooms())
+    = Some({prefix}_code()) {{
+    lower_program_sized_emitted({stem}_fn{f}(), {stem}_first_{e}(), {prefix}_placement(), {prefix}_counts(), {prefix}_rooms(), {prefix}_code_{e}(),
+        {prefix}_rest_{e}(), {earlier}, {prefix}_emitted_{e}(), {prefix}_code(), {prefix}_rest_{f}(), {labels}, {prefix}_emits_{f}(), {prefix}_laid())
 }}
-", last = m - 1, labels = before.2, count = items.len(), layout = super::labels::layout(prefix, &offsets, &cuts),
-        lowered = format!("lower_program_roomed({stem}_program(), {prefix}_placement(), {lent_counts}, {prefix}_rooms())"),
-        lowers = format!("lower_program_roomed_emitted({stem}_program(), {prefix}_placement(), {lent_counts}, {prefix}_rooms(), ")));
+", e = f - 1, labels = before.2)
+        } else {
+            format!("theorem {prefix}_lowers(): lower_program_roomed({stem}_program(), {prefix}_placement(), {lent_counts}, {prefix}_rooms()) = Some({prefix}_code()) {{
+    lower_program_roomed_emitted({stem}_program(), {prefix}_placement(), {lent_counts}, {prefix}_rooms(), {prefix}_code(), {prefix}_rest_{last}(), {labels},
+        {prefix}_emitted_{last}(), {prefix}_laid())
+}}
+", last = m - 1, labels = before.2)
+        }));
     text.push_str(&format!("
 {agreement}
 // The published bytes, a piece at a time from the last item: no one
@@ -1504,7 +1599,32 @@ theorem {prefix}_entry_at(): asm_labels({prefix}_code())({label}) = {entry} {{ r
         .collect::<Vec<_>>().join(", ");
     let words: Vec<String> = parameters.iter().skip(2 * slices.len()).cloned().collect();
     let typed_words = if words.is_empty() { String::new() } else { format!("{}: BitVec(64)", words.join(", ")) };
-    if program.marks.is_some() {
+    if let Some(more) = sret {
+        // A record of three words or more, returned through memory as
+        // System V returns such a structure (§16.20): the export is the
+        // root, its callee the function's own program's last.
+        let (callee, rest) = (f - 1, program.rest.as_deref().unwrap_or("[]"));
+        let below = if callee == 0 { "Nil".to_string() } else { format!("{prefix}_first_{}()", callee - 1) };
+        text.push_str(&format!("
+// The code returns the source function's record through memory
+// (`Prog::ComputesSret`, function_ir_export): called at its label with the
+// structure's address in RDI and the arguments after it in RSI, … and past
+// the sixth on the stack above the return address (`Stack::Passed`), {room}
+// bytes of stack below it, the structure's {size} bytes lent to be written
+// wherever the stack does not reach, it returns the address in RAX, keeps
+// the callee-saved registers and RSP, stores only into its own room and
+// the structure, and leaves in the structure the record's fields, a word
+// each, little-endian: C's layout of a structure of {words} words. On every
+// machine, loaded anywhere.
+theorem {prefix}_returns<M>(machine: Machine<M>{comma}{typed}):
+    {prefix}_code().ComputesSret(machine, {f}, {room}, {prefix}_counts(), {list}, Cons({call}, {rest})) {{
+    compiled_computes_sret<M>({prefix}_fn{callee}(), {below}, {arity}, {more}, {prefix}_placement(), {prefix}_rooms(), {prefix}_code(), {prefix}_lowers(),
+        {prefix}_evaluable(), {prefix}_callees_quiet(), trivial, {prefix}_defined_everywhere(), machine, {list}, refl, trivial, {call}, {rest}, refl,
+        λ b => {source}::agrees_at({arguments}{comma}b), λ b => {source}::agrees_also_at({arguments}{comma}b))
+}}
+", room = room(f), size = 8 * (more + 1), words = more + 1, arity = program.arity, arguments = parameters.join(", "),
+            source = program.sret.as_ref().map_or("", |(_, source)| source.as_str())));
+    } else if program.marks.is_some() {
         // A writer: the file is any whose first span is `span`, and the
         // lending lets the marked buffers be written, so `loan` asks of
         // them what a store needs (`Loan::writable`, `stored`, `apart`,
@@ -1785,7 +1905,13 @@ theorem {prefix}_totals_{k}(): program_total_at({program}.drop({d}), {outs}.drop
 /// program with the scanner's automaton in it is past what one evaluation
 /// walks (`program_quiet_drop`).
 fn quiet_text(prefix: &str, functions: usize) -> String {
-    let program = format!("{prefix}_program()");
+    quiet_text_over(prefix, &format!("{prefix}_program()"), functions)
+}
+
+/// [`quiet_text`] of any program, spelled as `program`, its theorems
+/// named from `prefix`.
+fn quiet_text_over(prefix: &str, program: &str, functions: usize) -> String {
+    let program = program.to_string();
     let mut text = format!("// No function of the program stores into a buffer: it reads the file it is
 // lent and leaves it.
 theorem {prefix}_quiet_none(): program_quiet({program}.drop({functions})).IsTrue() {{ trivial }}\n");

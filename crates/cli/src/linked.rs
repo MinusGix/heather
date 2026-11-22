@@ -63,7 +63,9 @@ pub struct Signature {
     /// for.
     pub stack: u64,
     /// How many words it returns: one in RAX, or two in RAX and RDX (a
-    /// record of two words, docs/native/runtime-fn-setups-design.md §16.16).
+    /// record of two words, docs/native/runtime-fn-setups-design.md §16.16),
+    /// or more into a structure whose address the caller passes before the
+    /// arguments and gets back in RAX (§16.20).
     pub results: usize,
 }
 
@@ -72,7 +74,10 @@ pub struct Signature {
 /// file exports, the stack's after the signature's.
 pub fn header(symbol: &str, signature: &Signature) -> String {
     let kinds: Vec<&str> = signature.kinds.iter().map(|kind| kind.name()).collect();
-    let results = vec!["word"; signature.results.max(1)].join(", ");
+    let results = match signature.results {
+        n if n > 2 => format!("[word; {n}] in memory"),
+        n => vec!["word"; n.max(1)].join(", "),
+    };
     format!("# signature: {symbol}({}) -> {results}\n# stack: {} bytes below the return address\n", kinds.join(", "), signature.stack)
 }
 
@@ -85,7 +90,9 @@ impl Signature {
             .and_then(|rest| rest.strip_prefix(symbol)).is_none_or(|rest| !rest.starts_with('(')));
         let line = lines.next().and_then(|line| line.strip_prefix("# signature: ")).ok_or_else(|| missing("signature of its own"))?;
         let (kinds, results) = line.strip_prefix(symbol).and_then(|rest| rest.strip_prefix('('))
-            .and_then(|rest| rest.strip_suffix(") -> word, word").map(|kinds| (kinds, 2)).or_else(|| rest.strip_suffix(") -> word").map(|kinds| (kinds, 1))))
+            .and_then(|rest| rest.strip_suffix(") -> word, word").map(|kinds| (kinds, 2)).or_else(|| rest.strip_suffix(") -> word").map(|kinds| (kinds, 1)))
+                .or_else(|| rest.strip_suffix("] in memory").and_then(|rest| rest.rsplit_once(") -> [word; "))
+                    .and_then(|(kinds, n)| n.parse::<usize>().ok().filter(|n| *n > 2).map(|n| (kinds, n)))))
             .ok_or_else(|| missing("signature of its own"))?;
         let kinds = kinds.split(',').map(str::trim).filter(|kind| !kind.is_empty())
             .map(|kind| Kind::named(kind).ok_or_else(|| format!("`{symbol}`'s signature: `{kind}` is no kind of argument")))

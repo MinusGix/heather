@@ -1320,6 +1320,26 @@ theorem Compile::root_also<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<L
         Compile::part(f, c, srcs, adm, links, linked_arity(earlier, arities.tail()), linked, admitted, named).right(Nil, call, agree, words, n, admits))
 }
 
+// The same over any file: what a record of three words or more is
+// exported at, its export calling it over the structure's file
+// (docs/native/runtime-fn-setups-design.md §16.20).
+theorem Compile::root_also_at<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<List<BitVec(64)> → List<BitVec(64)>>, adm: List<List<BitVec(64)> → Bool>,
+    links: List<Nat>,
+    linked: (b: Buffers()) → links.map(λ (n: Nat) => link_source(srcs(b), n)) = Compile::table(f, c, b),
+    admitted: links.map(λ (n: Nat) => link_admit(adm, n)) = Compile::admit_table(f, c),
+    earlier: List<Function>, arities: List<Nat>,
+    sourced: program_linked_files(Cons(Compile::linked(f, c, links), earlier), arities, link_admits(adm), link_sources_at(srcs)),
+    named: Sig::links_fit(c.world.tys, c.world.sigs.tail(), links.tail(), linked_arity(earlier, arities.tail())).IsTrue(), b: Buffers(),
+    words: List<BitVec(64)>, n: arity_fits(Some(Compile::arity(f, c)), words.len()).IsTrue(), admits: Compile::admits(f, c, words).IsTrue()):
+    program_eval_also_over(b, Cons(Compile::linked(f, c, links), earlier), words) =
+        Ty::rest_words(c.world.at(c.callees, b).tys, c.reflected.result, Ty::apply_words(c.world.at(c.callees, b).tys, c.reflected.params, c.reflected.result,
+            Ty::lent_at(c.world.at(c.callees, b).tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed(b), f, b), words)) {
+    let call = program_answers_over(b, earlier);
+    let agree = program_linked_files_sources(earlier, arities.tail(), link_admits(adm), link_sources_at(srcs), sourced.right, b);
+    cong_fn(λ (xs: List<BitVec(64)>) => xs.tail(),
+        Compile::part(f, c, srcs, adm, links, linked_arity(earlier, arities.tail()), linked, admitted, named).right(b, call, agree, words, n, admits))
+}
+
 // A table of meanings that answers every call with a default: what the
 // generator's own run judges and lowers against (neither reads the
 // meanings).
@@ -3115,7 +3135,36 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
                 runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), recs, rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs_also, rest_at, proof, ys.last());
             let also <- runtime_also_decls(name, f, rfun, q, ts, world_e, table_e, rt_e, linked, runtime_params_of(ys), words_e, rest,
                 runtime_result_names(reprs, recs, rfun.result), admitted, finish);
-            pure(head.append(pin).append(made).append(linked_decls).append(tail).append(also))
+            // A record of three words or more is exported through memory,
+            // its export calling it over the structure's file (design
+            // §16.20): its agreement is stated at every file too.
+            let at_file <- match rest as λ _ => Tac<List<Decl>> {
+                None => pure([]),
+                Some(rest_e) => match gets.len().leb(2) || !(match rfun.shape() as λ _ => Bool { Plain => True, _ => False }) as λ _ => Tac<List<Decl>> {
+                    True => pure([]),
+                    False => {
+                        let buffers_h <- runtime_type_of(name_of(runtime_w_buffers));
+                        let c <- assume(Hd(buffers_h), "b", ys.last()).or_fail("runtime: a file: ");
+                        let params_at = runtime_params_of(ys ++ [c.ref]);
+                        let lhs_at = ap(program_eval_over, [Local(c.ref), linked.program, root, words_e]);
+                        let evaluated_at = ap(eval_sources, [linked.program, linked.arities, ap(admits_of, [linked.adm]), ap(sources, [linked.srcs]), linked.sourced,
+                            Local(c.ref), root, words_e, Hd(trivial_h), admitted]);
+                        let agreed_at <- runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), recs, rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs_at,
+                            λ args => runtime_agree_rhs(low, wide, count, reprs, recs, rfun, f, args).bind(λ e => pure(runtime_enum_result(enum_word, tys_e, rfun.result, e))),
+                            evaluated_at, Some(c.ref));
+                        let root_also_at <- runtime_global(name_of(Compile::root_also_at));
+                        let eval_also_over <- runtime_global(name_of(program_eval_also_over));
+                        let tail_e <- runtime_global(name_of(List::tail));
+                        let lhs_also_at = ap(eval_also_over, [Local(c.ref), linked.program, words_e]);
+                        let also_at <- runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), recs, rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs_also_at,
+                            rest_at, ap(root_also_at, linked.root ++ [ap(tail_e, [Blank, linked.program]), linked.arities, linked.sourced, Hd(trivial_h), Local(c.ref),
+                                words_e, Hd(trivial_h), admitted]), Some(c.ref));
+                        pure([Decl(AsTheorem, name ++ "::agrees_at", params_at, Equation(lhs_at, first), agreed_at),
+                            Decl(AsTheorem, name ++ "::agrees_also_at", params_at, Equation(lhs_also_at, rest_e), also_at)])
+                    },
+                },
+            };
+            pure(head.append(pin).append(made).append(linked_decls).append(tail).append(also).append(at_file))
         },
         // A function lent spans: its pin and its program's agreement are at
         // every file (the reflection's meaning in the world there, and the

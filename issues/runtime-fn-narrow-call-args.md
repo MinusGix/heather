@@ -5,7 +5,7 @@ labels: [native, runtime-fn, compiler]
 area: heather-in-heather
 milestone: [nh-front]
 created: 2026-11-21
-updated: 2026-11-21
+updated: 2026-11-22
 ---
 
 What docs/native/runtime-fn-setups-design.md §16.17 left refused after
@@ -32,17 +32,17 @@ each stands after §16.18.
   that names no constructor does not read back, `Table::round`), and an
   enum with a payload as a field (its slots would cross inline after the
   tag).
-- **A result of more than two words exported to C.** Still refused by
-  `compile-x86` (`runtime_shape`). System V returns such a structure
-  through a pointer the caller passes in RDI and expects back in RAX. The
-  program can already store words into a span it is lent (`WideStore`),
-  so the export is a wrapper function in the program that calls the
-  record's function and stores its words into a span of `8k` bytes. What
-  is missing is a lent span whose length is fixed rather than passed: a
-  lent function's span homes are its first parameters, two a span
-  (`lent_homes`, function_ir_lower_reads), and C passes only the
-  address. A home whose length is a constant port, with the borrow's byte
-  count as the premise, makes the wrapper's words `[address, args…]`.
+- **A result of more than two words exported to C.** Done (§16.20): the
+  program's root is an export (`sret_export`, function_ir_export) lent
+  the structure by its address alone (`Function.fixed`, a constant length
+  port), which calls the function, stores its words and returns the
+  address, as System V returns such a structure. Its run is proved once
+  (`sret_export_runs`, `compiled_returns_sret`); the generator states the
+  callee's words at every file (`f::agrees_at`, `f::agrees_also_at`), and
+  the certificate states `Prog::ComputesSret`
+  (`examples/x86-native/three_words.hthr`, called from C). Still refused:
+  such a function taking enums or records (its at-file agreement is
+  generated for plain words), and another entry beside it.
 - **Records with two narrow fields side by side at a C boundary.** Refused
   by `compile-x86` on purpose: C packs them into one eightbyte, one
   register, where a record here crosses a word a field (`Ty::slots_share`).

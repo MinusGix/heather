@@ -529,7 +529,9 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     // is an address and a length, the spans first; and the stack its premise
     // asks for below the return address.
     // A span the program stores into is one its caller lends to write.
-    let spans = shape.lent.as_ref().map_or(0, |counts| counts[shape.root] as usize);
+    // A record returned through memory takes the structure's address
+    // first, which the signature states by its count of words (§16.20).
+    let spans = if shape.sret.is_some() { 0 } else { shape.lent.as_ref().map_or(0, |counts| counts[shape.root] as usize) };
     let written = |span: usize| shape.marks.as_ref().is_some_and(|marks| marks.get(span) == Some(&true));
     let mut kinds: Vec<_> = (0..spans).map(|span| if written(span) { heather_cli::linked::Kind::SpanMut } else { heather_cli::linked::Kind::Span }).collect();
     kinds.resize(shape.arity - spans, heather_cli::linked::Kind::Word);
@@ -538,7 +540,11 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     // way.
     let compiled = verified::compile(&elab, &answers, &prefix, &format!("{prefix}_certificate"), &shape, explain)
         .map_err(|why| format!("verified lowering: {why}"))?;
-    let signature = heather_cli::linked::Signature { kinds, stack: compiled.room, results: if shape.rest.is_some() { 2 } else { 1 } };
+    let signature = heather_cli::linked::Signature { kinds, stack: compiled.room, results: match (&shape.sret, &shape.rest) {
+        (Some((more, _)), _) => more + 1,
+        (None, Some(_)) => 2,
+        (None, None) => 1,
+    } };
     let proof = compiled.text;
     eprintln!("checking the lowering, source agreement, bytes and return certificate in {}", unchecked.display());
     let certificate_module = format!("{prefix}_certificate");
