@@ -601,3 +601,39 @@ theorem Fun::quiet_static(self f: Fun, w: World, cs: Sig::Sems(w.tys, w.sigs), s
     cong_fn(λ (r: Option<Lowered>) => match r { None => False, Some(c) => f.quiet_at(w, c) },
         Tm::lower_static(f.body, w, cs, spans, f.context(), f.entry_of(w.tys).ports, f.entry_of(w.tys).next))
 }
+
+// ---------------------------------------------------------------------------
+// The decrease, read off a body
+//
+// What a generator composes a proof of `Tm::calls_ok` from, one lemma per
+// node it has to prove something at: a `let` from its term and its body, a
+// branch in each arm with its test's equation. A term with no call is
+// `trivial`, and a call of the function itself is `Tm::below_rank` of its
+// decrease.
+
+theorem Tm::calls_ok_let(e, body: Tm, w: World, ok: Tm::Oracle(w), g: List<Ty>, env: Env(w.tys, g), first: e.calls_ok(w, ok, g, env).IsTrue(),
+    rest: body.calls_ok(w, ok, Cons(e.ty(w, g), g), Pair(e.sem(w, g, env), env)).IsTrue()): Tm::calls_ok(Let(e, body), w, ok, g, env).IsTrue() {
+    Bool::is_true_and_intro(e.calls_ok(w, ok, g, env), body.calls_ok(w, ok, Cons(e.ty(w, g), g), Pair(e.sem(w, g, env), env)), first, rest)
+}
+
+theorem Tm::calls_ok_if(c: Nat, yes, no: Tm, w: World, ok: Tm::Oracle(w), g: List<Ty>, env: Env(w.tys, g),
+    on_yes: Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c)) = True → yes.calls_ok(w, ok, g, env).IsTrue(),
+    on_no: Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c)) = False → no.calls_ok(w, ok, g, env).IsTrue()):
+    Tm::calls_ok(If(c, yes, no), w, ok, g, env).IsTrue() {
+    let at = λ (b: Bool) => (match b as λ _ => Bool { False => no.calls_ok(w, ok, g, env), True => yes.calls_ok(w, ok, g, env) }).IsTrue();
+    match h: Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c)) {
+        True => j(sym(h), λ b _ => at(b), on_yes(h)),
+        False => j(sym(h), λ b _ => at(b), on_no(h)),
+    }
+}
+
+theorem Tm::calls_ok_ifeq(c: Nat, yes, no: Tm, w: World, ok: Tm::Oracle(w), g: List<Ty>, env: Env(w.tys, g),
+    on_yes: Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c)) = True → yes.calls_ok(w, ok, g, env).IsTrue(),
+    on_no: Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c)) = False → no.calls_ok(w, ok, g, env).IsTrue()):
+    Tm::calls_ok(IfEq(c, yes, no), w, ok, g, env).IsTrue() {
+    Tm::calls_ok_if(c, yes, no, w, ok, g, env, on_yes, on_no)
+}
+
+// A call of the function itself is allowed, from its decrease: below the
+// caller's rank.
+theorem Tm::below_rank(a, b: Nat, lt: a < b): (a + 1).leb(b).IsTrue() { (a + 1).leb_complete(b, lt) }
