@@ -41,7 +41,7 @@ fn sum_down_succ() → Tm {
         If(0, Var(3), Let(Lit(Word(64), 1), Let(Prim(Sub(64), [5, 0]), Let(Prim(Add(64), [5, 6]), Call(0, [5, 1, 0])))))))
 }
 
-fn sum_down_world() → World { World(RecInfo::none, [Sig([Count, Word(64), Word(64)], Word(64))], Pair(sum_down, trivial)) }
+fn sum_down_world() → World { World(Table::none(), [Sig([Count, Word(64), Word(64)], Word(64))], Pair(sum_down, trivial)) }
 
 theorem sum_down_lowers(): rt_loop_lowers(Fun::lower_fuel(Word(64), [Word(64)], Var(0), sum_down_succ(), Word(64), sum_down_world())) = True { refl }
 
@@ -79,7 +79,7 @@ fn count_down_body() → Tm {
         IfEq(0, Var(2), Let(Lit(Word(64), 1), Let(Prim(Sub(64), [4, 0]), Let(Prim(Add(64), [4, 5]), Call(0, [1, 0])))))))
 }
 
-fn count_down_world() → World { World(RecInfo::none, [Sig([Word(64), Word(64)], Word(64))], Pair(count_down, trivial)) }
+fn count_down_world() → World { World(Table::none(), [Sig([Word(64), Word(64)], Word(64))], Pair(count_down, trivial)) }
 
 fn count_down_measure(ys: List<BitVec(64)>) → Nat { ys.head_or(BitVec::zero()).toNat() }
 

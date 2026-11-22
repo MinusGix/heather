@@ -50,7 +50,7 @@ fn Stmt::exit_rest(call: Writers(), perform: PerformsCo(), result: Nat, flow: Fl
 fn Stmt::status_leaf() → Flow → CoTree<BitVec(64)>(Events::linux()) { λ x => CRet(x.status()) }
 
 // Each flow's status after the `Exit` is the word read back from it.
-fn Stmt::exit_leaf(call: Writers(), perform: PerformsCo(), result: Nat, tys: Nat → RecInfo) → (flow: Flow) →
+fn Stmt::exit_leaf(call: Writers(), perform: PerformsCo(), result: Nat, tys: Table) → (flow: Flow) →
     Eutt<BitVec(64)>(Events::linux(), CoTree::bind(Events::linux(), Stmt::exit_rest(call, perform, result, flow), λ x => CRet(x.status())),
         CRet(flow.read_back(Word(64), tys, result)))
 {
@@ -68,7 +68,7 @@ fn Stmt::exit_leaf(call: Writers(), perform: PerformsCo(), result: Nat, tys: Nat
 
 // The statements then an `Exit` of the result word, as statuses, are the
 // statements' tree with the value read back from that word.
-fn Stmt::exit_eutt(self s: Stmt, result: Nat, call: Writers(), perform: PerformsCo(), env: native_source::Env, tys: Nat → RecInfo) →
+fn Stmt::exit_eutt(self s: Stmt, result: Nat, call: Writers(), perform: PerformsCo(), env: native_source::Env, tys: Table) →
     Eutt<BitVec(64)>(Events::linux(),
         CoTree::map(Events::linux(), Then(s, Exit(result)).denote_co(call, perform)(env), λ flow => flow.status()),
         CoTree::map(Events::linux(), s.denote_co(call, perform)(env), λ flow => flow.read_back(Word(64), tys, result)))
@@ -88,7 +88,7 @@ fn Stmt::exit_eutt(self s: Stmt, result: Nat, call: Writers(), perform: Performs
 // statements then the `Exit` read as too: the lowering's theorem
 // (`ELoop::lower_reads`) is a theorem about a `Source` whose `main` is
 // `Then(stmt, Exit(result))`.
-fn Stmt::exit_reads(self s: Stmt, result: Nat, call: Writers(), perform: PerformsCo(), env: native_source::Env, tys: Nat → RecInfo,
+fn Stmt::exit_reads(self s: Stmt, result: Nat, call: Writers(), perform: PerformsCo(), env: native_source::Env, tys: Table,
     f: Io → Partial(Mutated<Io, BitVec(64)>),
     r: Io::Reads<BitVec(64)>(CoTree::map(Events::linux(), s.denote_co(call, perform)(env), λ flow => flow.read_back(Word(64), tys, result)), f)) →
     Io::Reads<BitVec(64)>(CoTree::map(Events::linux(), Then(s, Exit(result)).denote_co(call, perform)(env), λ flow => flow.status()), f)

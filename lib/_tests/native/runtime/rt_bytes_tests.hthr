@@ -22,7 +22,7 @@ import tactic;
 import rt_reflect;
 import rt_file_reflect;
 
-fn alone() → BWorld { BWorld(FWorld::alone(RecInfo::none, []), trivial) }
+fn alone() → BWorld { BWorld(FWorld::alone(Table::none(), []), trivial) }
 
 // The store of `v` at 0 and of the byte at 1 at 2: `s[0] := v; s[2] := s[1]`.
 fn Bytes::stores({n: u64}, self s: Bytes(n), v: u8, inside: ∥2 < s.len()∥ := bv_omega) → Bytes(n) {
@@ -38,7 +38,7 @@ fn stores_body() → FTm {
         Let(Lit(Word(64), 1), Let(Byte(0, 0, 2), Let(Lit(Word(64), 2), Put(0, 4, 1, Pure(Var(0))))))))
 }
 
-fn stores_env(n: BitVec(64), v: BitVec(8)) → Env(RecInfo::none, [Word(64), Word(8)]) { Pair(n, Pair(v, trivial)) }
+fn stores_env(n: BitVec(64), v: BitVec(8)) → Env(Table::none(), [Word(64), Word(8)]) { Pair(n, Pair(v, trivial)) }
 
 theorem stores_pinned({n: u64}, s: Bytes(n), v: u8, inside: ∥2 < s.len()∥):
     stores_body().over(alone(), [Word(64), Word(8)], stores_env(n, v), n, s).after = s.stores(v, inside := inside) { refl }

@@ -473,7 +473,7 @@ theorem Over::along_left<R>(n: BitVec(64), m, m2: Mutated<Bytes(n), R>, k: Mutat
     j(e, λ y _ => Over<R>(n, y, k), agrees)
 }
 
-theorem Over::bare(tys: Nat → RecInfo, n: BitVec(64), h: Mutated<Bytes(n), BitVec(64)>, m: Mutated<List<BitVec(8)>, BitVec(64)>,
+theorem Over::bare(tys: Table, n: BitVec(64), h: Mutated<Bytes(n), BitVec(64)>, m: Mutated<List<BitVec(8)>, BitVec(64)>,
     ag: Over<BitVec(64)>(n, h, FTm::recast(tys, Word(64), Word(64), m))): Over<BitVec(64)>(n, h, m) {
     Over(ag.after, ag.value)
 }

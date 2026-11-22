@@ -26,7 +26,7 @@ import rt_loop;
 import rt_ptm;
 import rt_proc;
 
-fn proc_world() → rt::World { rt::World(RecInfo::none, [], trivial) }
+fn proc_world() → rt::World { rt::World(Table::none(), [], trivial) }
 
 // `sum(n) = if n == 0 { 0 } else { n + sum(n - 1) }`, variable 0 the
 // argument: the call of itself is not the last thing it does.
@@ -74,7 +74,7 @@ fn sum_meaning(p: Nat, xs: List<BitVec(64)>) → BitVec(64) {
 }
 
 // The meaning at 10, its call read through the procedures' meaning.
-theorem sum_body_means(): PTm::sem(sum_body(), proc_world(), sum_meaning, PTm::word_ctx(1), PTm::vals_n(RecInfo::none, 1, [BitVec::ofNat(10)])) = BitVec::ofNat(55) {
+theorem sum_body_means(): PTm::sem(sum_body(), proc_world(), sum_meaning, PTm::word_ctx(1), PTm::vals_n(Table::none(), 1, [BitVec::ofNat(10)])) = BitVec::ofNat(55) {
     refl
 }
 
@@ -123,7 +123,7 @@ fn diff_defs() → List<PDef> { [PDef(2, Value(Prim(Sub(64), [1, 0])))] }
 fn diff_meaning(p: Nat, xs: List<BitVec(64)>) → BitVec(64) { PTm::word_at(xs, 0) - PTm::word_at(xs, 1) }
 
 theorem diff_means(): PTm::sem(Value(Prim(Sub(64), [1, 0])), proc_world(), diff_meaning, PTm::word_ctx(2),
-    PTm::vals_n(RecInfo::none, 2, [BitVec::ofNat(10), BitVec::ofNat(3)])) = BitVec::ofNat(7) { refl }
+    PTm::vals_n(Table::none(), 2, [BitVec::ofNat(10), BitVec::ofNat(3)])) = BitVec::ofNat(7) { refl }
 
 fn diff_run(io: Io) → Mutated<Io, Flow> {
     let src = Source([], [], 0, Exit(0), procedures := match PDef::procedures(diff_defs(), proc_world(), PDef::known(diff_defs())) { None => Nil, Some(ps) => ps });
@@ -151,7 +151,7 @@ fn rsum(n: BitVec(64)) → BitVec(64) decreases n.toNat() {
 
 fn rsum_measure(ys: List<BitVec(64)>) → Nat { ys.head_or(BitVec::zero()).toNat() }
 
-theorem rsum_guarded(): PTm::GuardedWords([Word(64)], sum_body_by(True), RecInfo::none, rsum, rsum_measure) {
+theorem rsum_guarded(): PTm::GuardedWords([Word(64)], sum_body_by(True), Table::none(), rsum, rsum_measure) {
     λ n again hyp => sym(rsum::ext(n.toNat(), n.toNat(),
         λ (y: BitVec(64)) (p: nat::Nat::Lt(y.toNat(), n.toNat())) => rsum::rec(n.toNat(), y, p),
         λ (y: BitVec(64)) _ => again([y]),
@@ -161,8 +161,8 @@ theorem rsum_guarded(): PTm::GuardedWords([Word(64)], sum_body_by(True), RecInfo
 }
 
 // Its one procedure means the function.
-theorem rsum_unfolds(): PDef::Unfolds([PDef(1, sum_body_by(True))], rt::World(RecInfo::none, [], trivial),
-    λ _ xs => Ty::uncurry(RecInfo::none, [Word(64)], Word(64), rsum, xs)) {
-    PTm::unfolds_one(1, sum_body_by(True), rt::World(RecInfo::none, [], trivial), λ xs => Ty::uncurry(RecInfo::none, [Word(64)], Word(64), rsum, xs),
-        rsum_measure, PTm::guarded_of_words([Word(64)], sum_body_by(True), RecInfo::none, rsum, rsum_measure, rsum_guarded()))
+theorem rsum_unfolds(): PDef::Unfolds([PDef(1, sum_body_by(True))], rt::World(Table::none(), [], trivial),
+    λ _ xs => Ty::uncurry(Table::none(), [Word(64)], Word(64), rsum, xs)) {
+    PTm::unfolds_one(1, sum_body_by(True), rt::World(Table::none(), [], trivial), λ xs => Ty::uncurry(Table::none(), [Word(64)], Word(64), rsum, xs),
+        rsum_measure, PTm::guarded_of_words([Word(64)], sum_body_by(True), Table::none(), rsum, rsum_measure, rsum_guarded()))
 }

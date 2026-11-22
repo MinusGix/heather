@@ -130,7 +130,7 @@ fn Effect::results(self e: Effect) → List<Ty> {
 
 // What an effect does, as a world-threading function: the word-level call,
 // its answer as the tuple of its result codes.
-fn Effect::sem(self e: Effect, tys: Nat → RecInfo) → Io → Ty::ArrowsTo(tys, e.params(), Mutated<Io, Ty::Flats(e.results())>) {
+fn Effect::sem(self e: Effect, tys: Table) → Io → Ty::ArrowsTo(tys, e.params(), Mutated<Io, Ty::Flats(e.results())>) {
     match e {
         Reads(_) => λ io (fd: BitVec(64)) (buf: List<BitVec(8)>) (at: BitVec(64)) (max: BitVec(64)) =>
             Mutated(Io::read_into(io, fd, buf, at, max).after,
@@ -160,10 +160,10 @@ fn Effect::apply(w: rt::World, g: List<Ty>, env: rt::Env(w.tys, g), R: Type, d: 
 }
 
 // A call's results bound in order onto the context: the last is variable 0.
-fn Effect::push(tys: Nat → RecInfo, rs: List<Ty>) → (g: List<Ty>) → rt::Env(tys, g) → Ty::Flats(rs) → rt::Env(tys, Ty::bind_onto(rs, g)) {
+fn Effect::push(tys: Table, rs: List<Ty>) → (g: List<Ty>) → rt::Env(tys, g) → Ty::Flats(rs) → rt::Env(tys, Ty::bind_onto(rs, g)) {
     match rs {
         Nil => λ g env _ => env,
-        Cons(r, rest) => λ g env t => Effect::push(tys, rest, Cons(r, g), Pair(r.of_flat(tys, t.fst), env), t.snd),
+        Cons(r, rest) => λ g env t => Effect::push(tys, rest, Cons(r, g), Pair(r.of_slot(tys, t.fst), env), t.snd),
     }
 }
 
@@ -193,11 +193,11 @@ fn Lent::at(ls: List<Lent>, f: Nat) → Lent {
 fn Lent::results(cap: Nat) → List<Ty> { [ByteList(cap), Word(64)] }
 
 // Variables read as the words a function takes.
-fn Lent::words(tys: Nat → RecInfo, g: List<Ty>, env: rt::Env(tys, g), args: List<Nat>) → List<BitVec(64)> {
+fn Lent::words(tys: Table, g: List<Ty>, env: rt::Env(tys, g), args: List<Nat>) → List<BitVec(64)> {
     match args { Nil => Nil, Cons(a, more) => Cons(Ty::cast(tys, Ty::at(g, a), Word(64), Env::get(tys, g, env, a)), Lent::words(tys, g, env, more)) }
 }
 
-theorem Lent::words_len(tys: Nat → RecInfo, g: List<Ty>, env: rt::Env(tys, g), args: List<Nat>): Lent::words(tys, g, env, args).len() = args.len() {
+theorem Lent::words_len(tys: Table, g: List<Ty>, env: rt::Env(tys, g), args: List<Nat>): Lent::words(tys, g, env, args).len() = args.len() {
     match args {
         Nil => refl,
         Cons(_, more) => cong_fn(λ (n: Nat) => n + 1, Lent::words_len(tys, g, env, more)),
@@ -206,7 +206,7 @@ theorem Lent::words_len(tys: Nat → RecInfo, g: List<Ty>, env: rt::Env(tys, g),
 
 // What a call of function `f` binds: the function run once on the buffer
 // variable's bytes and the word variables.
-fn Lent::answer(tys: Nat → RecInfo, ls: List<Lent>, g: List<Ty>, env: rt::Env(tys, g), f, cap, buf: Nat, args: List<Nat>) → Ty::Flats(Lent::results(cap)) {
+fn Lent::answer(tys: Table, ls: List<Lent>, g: List<Ty>, env: rt::Env(tys, g), f, cap, buf: Nat, args: List<Nat>) → Ty::Flats(Lent::results(cap)) {
     shared(Lent::at(ls, f).run(Ty::cast(tys, Ty::at(g, buf), ByteList(cap), Env::get(tys, g, env, buf)), Lent::words(tys, g, env, args)),
         λ (m: Mutated<List<BitVec(8)>, BitVec(64)>) => Pair(m.after, Pair(m.value, trivial)))
 }
@@ -226,12 +226,12 @@ inductive Part {
     PVar(t: Ty, y: Nat, n: Nat),
 }
 
-fn Part::ty(self p: Part, tys: Nat → RecInfo) → Type {
+fn Part::ty(self p: Part, tys: Table) → Type {
     match p { PWorld => Io, PVar(t, _, _) => t.sem(tys) }
 }
 
 // The joined state: the one part, or the parts nested in `Mutated`.
-fn Part::State(tys: Nat → RecInfo, ps: List<Part>) → Type {
+fn Part::State(tys: Table, ps: List<Part>) → Type {
     match ps {
         Nil => True,
         Cons(p, rest) => match rest { Nil => p.ty(tys), Cons(_, _) => Mutated<p.ty(tys), Part::State(tys, rest)> },
@@ -239,15 +239,15 @@ fn Part::State(tys: Nat → RecInfo, ps: List<Part>) → Type {
 }
 
 // A state's first part, and the parts after it.
-fn Part::head(tys: Nat → RecInfo, p: Part, rest: List<Part>) → Part::State(tys, Cons(p, rest)) → p.ty(tys) {
+fn Part::head(tys: Table, p: Part, rest: List<Part>) → Part::State(tys, Cons(p, rest)) → p.ty(tys) {
     match rest as λ r => Part::State(tys, Cons(p, r)) → p.ty(tys) { Nil => λ st => st, Cons(_, _) => λ st => st.after }
 }
 
-fn Part::tail(tys: Nat → RecInfo, p: Part, rest: List<Part>) → Part::State(tys, Cons(p, rest)) → Part::State(tys, rest) {
+fn Part::tail(tys: Table, p: Part, rest: List<Part>) → Part::State(tys, Cons(p, rest)) → Part::State(tys, rest) {
     match rest as λ r => Part::State(tys, Cons(p, r)) → Part::State(tys, r) { Nil => λ _ => trivial, Cons(_, _) => λ st => st.value }
 }
 
-fn Part::cons(tys: Nat → RecInfo, p: Part, rest: List<Part>, v: p.ty(tys)) → Part::State(tys, rest) → Part::State(tys, Cons(p, rest)) {
+fn Part::cons(tys: Table, p: Part, rest: List<Part>, v: p.ty(tys)) → Part::State(tys, rest) → Part::State(tys, Cons(p, rest)) {
     match rest as λ r => Part::State(tys, r) → Part::State(tys, Cons(p, r)) { Nil => λ _ => v, Cons(_, _) => λ more => Mutated(v, more) }
 }
 
@@ -256,7 +256,7 @@ fn Part::pick(side: Bool, y: Nat, n: Nat) → Nat { match side { True => y, Fals
 
 // A part at the end of an arm: the world the arm left, or its variable cast
 // to the part's code.
-fn Part::one(self p: Part, tys: Nat → RecInfo, side: Bool, ce: List<Ty>, ve: rt::Env(tys, ce), io: Io) → p.ty(tys) {
+fn Part::one(self p: Part, tys: Table, side: Bool, ce: List<Ty>, ve: rt::Env(tys, ce), io: Io) → p.ty(tys) {
     match p as λ x => x.ty(tys) {
         PWorld => io,
         PVar(t, y, n) => Ty::cast(tys, Ty::at(ce, Part::pick(side, y, n)), t, Env::get(tys, ce, ve, Part::pick(side, y, n))),
@@ -264,7 +264,7 @@ fn Part::one(self p: Part, tys: Nat → RecInfo, side: Bool, ce: List<Ty>, ve: r
 }
 
 // The state an arm ends in.
-fn Part::state(tys: Nat → RecInfo, ps: List<Part>, side: Bool, ce: List<Ty>, ve: rt::Env(tys, ce), io: Io) → Part::State(tys, ps) {
+fn Part::state(tys: Table, ps: List<Part>, side: Bool, ce: List<Ty>, ve: rt::Env(tys, ce), io: Io) → Part::State(tys, ps) {
     match ps as λ q => Part::State(tys, q) {
         Nil => trivial,
         Cons(p, rest) => Part::cons(tys, p, rest, p.one(tys, side, ce, ve, io), Part::state(tys, rest, side, ce, ve, io)),
@@ -279,12 +279,12 @@ fn Part::ctx(ps: List<Part>, g: List<Ty>) → List<Ty> {
     match ps { Nil => g, Cons(p, rest) => Part::ctx(rest, p.onto(g)) }
 }
 
-fn Part::add(self p: Part, tys: Nat → RecInfo, g: List<Ty>, env: rt::Env(tys, g), v: p.ty(tys)) → rt::Env(tys, p.onto(g)) {
+fn Part::add(self p: Part, tys: Table, g: List<Ty>, env: rt::Env(tys, g), v: p.ty(tys)) → rt::Env(tys, p.onto(g)) {
     match p as λ x => x.ty(tys) → rt::Env(tys, x.onto(g)) { PWorld => λ _ => env, PVar(_, _, _) => λ x => Pair(x, env) }(v)
 }
 
 // The environment after the join: the state's value parts bound onto it.
-fn Part::push(tys: Nat → RecInfo, ps: List<Part>) → (g: List<Ty>) → rt::Env(tys, g) → Part::State(tys, ps) → rt::Env(tys, Part::ctx(ps, g)) {
+fn Part::push(tys: Table, ps: List<Part>) → (g: List<Ty>) → rt::Env(tys, g) → Part::State(tys, ps) → rt::Env(tys, Part::ctx(ps, g)) {
     match ps {
         Nil => λ g env _ => env,
         Cons(p, rest) => λ g env st => Part::push(tys, rest, p.onto(g), p.add(tys, g, env, Part::head(tys, p, rest, st)), Part::tail(tys, p, rest, st)),
@@ -293,7 +293,7 @@ fn Part::push(tys: Nat → RecInfo, ps: List<Part>) → (g: List<Ty>) → rt::En
 
 // The world after the join: the state's world part, or the world before it
 // when no arm calls Linux.
-fn Part::world(tys: Nat → RecInfo, ps: List<Part>) → Part::State(tys, ps) → Io → Io {
+fn Part::world(tys: Table, ps: List<Part>) → Part::State(tys, ps) → Io → Io {
     match ps {
         Nil => λ _ io => io,
         Cons(p, rest) => match p as λ x => Part::State(tys, Cons(x, rest)) → Io → Io {
@@ -315,7 +315,7 @@ fn Part::codes(ps: List<Part>) → List<Ty> {
 
 // The branch: the `yes` state where the condition holds, the `no` one where
 // not.
-fn Part::branch(tys: Nat → RecInfo, ps: List<Part>, b: Bool, yes: Part::State(tys, ps), no: Part::State(tys, ps)) → Part::State(tys, ps) {
+fn Part::branch(tys: Table, ps: List<Part>, b: Bool, yes: Part::State(tys, ps), no: Part::State(tys, ps)) → Part::State(tys, ps) {
     match b as λ _ => Part::State(tys, ps) { True => yes, False => no }
 }
 
@@ -342,7 +342,7 @@ inductive ETm {
 
 // A condition's value as a bit (a bit's own; the lowering refuses any other
 // code).
-fn ETm::truth(tys: Nat → RecInfo, t: Ty, v: t.sem(tys)) → Bool { Ty::cast(tys, t, Bit, v) }
+fn ETm::truth(tys: Table, t: Ty, v: t.sem(tys)) → Bool { Ty::cast(tys, t, Bit, v) }
 
 // The code a computation returns.
 fn ETm::ty(self t: ETm, w: rt::World, g: List<Ty>) → Ty {
@@ -467,4 +467,4 @@ fn EFun::meaning(self f: EFun, w: rt::World, ls: List<Lent>) → Io → Ty::Arro
 
 // A world with no callees and no records: what an effectful function that
 // calls nothing else reads.
-fn ETm::plain_world() → rt::World { rt::World(RecInfo::none, [], trivial) }
+fn ETm::plain_world() → rt::World { rt::World(Table::none(), [], trivial) }

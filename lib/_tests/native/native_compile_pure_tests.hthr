@@ -18,7 +18,7 @@ import rt_lower;
 import rt_ptm;
 import rt_proc;
 
-fn pure_world() → rt::World { rt::World(RecInfo::none, [], trivial) }
+fn pure_world() → rt::World { rt::World(Table::none(), [], trivial) }
 
 // `sum(n) = if n == 0 { 0 } else { n + sum(n - 1) }`.
 fn sum_body() → PTm {

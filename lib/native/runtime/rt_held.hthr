@@ -184,7 +184,7 @@ fn Tm::reader<A>(self e: Tm, hw: HWorld<A>) → Reader<A> {
 // where a field lies at the offset its third operand is, the field; where
 // an array of the count its fourth is begins there, the array's element
 // at the word its fifth is; and a plain term's own.
-fn Reader::value<A>(self r: Reader<A>, tys: Nat → RecInfo, to: Ty, a: A, g: List<Ty>, env: Env(tys, g), args: List<Nat>, plain: to.sem(tys)) → to.sem(tys) {
+fn Reader::value<A>(self r: Reader<A>, tys: Table, to: Ty, a: A, g: List<Ty>, env: Env(tys, g), args: List<Nat>, plain: to.sem(tys)) → to.sem(tys) {
     match r {
         Plain => plain,
         Reads(width, fields) => match FTm::field(fields, FTm::word(tys, g, env, FTm::third(args)).toNat()) { None => plain, Some(get) => Ty::cast(tys, Word(width), to, get(a)) },
@@ -213,14 +213,14 @@ fn FTm::operands(args: List<Nat>) → List<Nat> {
     }
 }
 
-fn FTm::words(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), vs: List<Nat>) → List<BitVec(64)> {
+fn FTm::words(tys: Table, g: List<Ty>, env: Env(tys, g), vs: List<Nat>) → List<BitVec(64)> {
     match vs { Nil => [], Cons(v, rest) => Cons(FTm::word(tys, g, env, v), FTm::words(tys, g, env, rest)) }
 }
 
 // What a computation leaves the span holding: a writer at a field's
 // offset, its third operand, stores its fourth into the field, and a
 // held function leaves what its function of the record leaves.
-fn Writer::state<A>(self w: Writer<A>, tys: Nat → RecInfo, args: List<Nat>, g: List<Ty>, env: Env(tys, g), a: A) → A {
+fn Writer::state<A>(self w: Writer<A>, tys: Table, args: List<Nat>, g: List<Ty>, env: Env(tys, g), a: A) → A {
     match w {
         Apart => a,
         Runs(_, run) => run(a, FTm::words(tys, g, env, FTm::operands(args))).after,
@@ -259,7 +259,7 @@ fn FTm::held_state<A>(hw: HWorld<A>, f: Nat, args: List<Nat>, g: List<Ty>, env: 
 // word is its function of the record's, so that a caller's held meaning
 // names the callee's function of the record and never the span; any
 // other computation's is the byte meaning's own (`plain`).
-fn Writer::answer<A>(self w: Writer<A>, tys: Nat → RecInfo, args: List<Nat>, g: List<Ty>, env: Env(tys, g), a: A, to: Ty, plain: to.sem(tys)) → to.sem(tys) {
+fn Writer::answer<A>(self w: Writer<A>, tys: Table, args: List<Nat>, g: List<Ty>, env: Env(tys, g), a: A, to: Ty, plain: to.sem(tys)) → to.sem(tys) {
     match w {
         Apart => plain,
         Writes(_, _) => plain,
@@ -274,7 +274,7 @@ fn FTm::held_answer<A>(hw: HWorld<A>, f: Nat, args: List<Nat>, g: List<Ty>, env:
 }
 
 // A held computation's answer read at another code.
-fn FTm::held_recast<A>(tys: Nat → RecInfo, x, y: Ty, h: Mutated<A, x.sem(tys)>) → Mutated<A, y.sem(tys)> { Mutated(h.after, Ty::cast(tys, x, y, h.value)) }
+fn FTm::held_recast<A>(tys: Table, x, y: Ty, h: Mutated<A, x.sem(tys)>) → Mutated<A, y.sem(tys)> { Mutated(h.after, Ty::cast(tys, x, y, h.value)) }
 
 // The held meaning: what the span holds, threaded through the term. The
 // span's bytes are an operand and not an answer: a pure term is read at
@@ -476,20 +476,20 @@ fn Tm::literal(self e: Tm) → Option<Pair<Ty, Nat>> {
 }
 
 // A literal as the word a variable bound by it is.
-fn FTm::literal_word(tys: Nat → RecInfo, p: Pair<Ty, Nat>) → BitVec(64) { Ty::cast(tys, p.fst, Word(64), Tm::lit(p.fst, p.snd, tys)) }
+fn FTm::literal_word(tys: Table, p: Pair<Ty, Nat>) → BitVec(64) { Ty::cast(tys, p.fst, Word(64), Tm::lit(p.fst, p.snd, tys)) }
 
 // The environment is what the verdict knows: a variable known to be
 // bound by a literal is that literal's word.
-fn FTm::Knows(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), known: List<Option<Pair<Ty, Nat>>>) → Type {
+fn FTm::Knows(tys: Table, g: List<Ty>, env: Env(tys, g), known: List<Option<Pair<Ty, Nat>>>) → Type {
     (v: Nat) → (p: Pair<Ty, Nat>) → FTm::known_at(known, v) = Some(p) → FTm::word(tys, g, env, v) = FTm::literal_word(tys, p)
 }
 
-theorem FTm::knows_nothing(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g)): FTm::Knows(tys, g, env, Nil) {
+theorem FTm::knows_nothing(tys: Table, g: List<Ty>, env: Env(tys, g)): FTm::Knows(tys, g, env, Nil) {
     λ v p is => Option::none_ne_some(p, is, FTm::word(tys, g, env, v) = FTm::literal_word(tys, p))
 }
 
 // Under one more variable nothing is known of.
-theorem FTm::knows_more(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), known: List<Option<Pair<Ty, Nat>>>, knows: FTm::Knows(tys, g, env, known), t: Ty,
+theorem FTm::knows_more(tys: Table, g: List<Ty>, env: Env(tys, g), known: List<Option<Pair<Ty, Nat>>>, knows: FTm::Knows(tys, g, env, known), t: Ty,
     x: t.sem(tys)): FTm::Knows(tys, Cons(t, g), Pair(x, env), Cons(None, known)) {
     λ v p => match v {
         Zero => λ is => Option::none_ne_some(p, is, FTm::word(tys, Cons(t, g), Pair(x, env), Zero) = FTm::literal_word(tys, p)),
@@ -498,12 +498,12 @@ theorem FTm::knows_more(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), kno
 }
 
 // Whether the variable `i` is known to be a field's offset.
-fn FTm::known_field<X>(tys: Nat → RecInfo, fields: List<Pair<Nat, X>>, known: List<Option<Pair<Ty, Nat>>>, i: Nat) → Bool {
+fn FTm::known_field<X>(tys: Table, fields: List<Pair<Nat, X>>, known: List<Option<Pair<Ty, Nat>>>, i: Nat) → Bool {
     match FTm::known_at(known, i) { None => False, Some(p) => FTm::is_field(fields, FTm::literal_word(tys, p).toNat()) }
 }
 
 // Then the word it is in the environment is one.
-theorem FTm::known_found<X>(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), known: List<Option<Pair<Ty, Nat>>>, knows: FTm::Knows(tys, g, env, known),
+theorem FTm::known_found<X>(tys: Table, g: List<Ty>, env: Env(tys, g), known: List<Option<Pair<Ty, Nat>>>, knows: FTm::Knows(tys, g, env, known),
     fields: List<Pair<Nat, X>>, i: Nat): FTm::known_field(tys, fields, known, i).IsTrue() → FTm::is_field(fields, FTm::word(tys, g, env, i).toNat()).IsTrue() {
     let by_case: ((o: Option<Pair<Ty, Nat>>) → FTm::known_at(known, i) = o →
         (match o { None => False, Some(p) => FTm::is_field(fields, FTm::literal_word(tys, p).toNat()) }).IsTrue() →
@@ -522,7 +522,7 @@ fn FTm::is_array<X>(arrays: List<Pair<Nat, List<Pair<Nat, X>>>>, base, count: Na
 
 // Whether the variables `b` and `c` are known to be one's offset and its
 // count.
-fn FTm::known_array<X>(tys: Nat → RecInfo, arrays: List<Pair<Nat, List<Pair<Nat, X>>>>, known: List<Option<Pair<Ty, Nat>>>, b, c: Nat) → Bool {
+fn FTm::known_array<X>(tys: Table, arrays: List<Pair<Nat, List<Pair<Nat, X>>>>, known: List<Option<Pair<Ty, Nat>>>, b, c: Nat) → Bool {
     match FTm::known_at(known, b) {
         None => False,
         Some(p) => match FTm::field(arrays, FTm::literal_word(tys, p).toNat()) { None => False, Some(counted) => FTm::known_field(tys, counted, known, c) },
@@ -530,7 +530,7 @@ fn FTm::known_array<X>(tys: Nat → RecInfo, arrays: List<Pair<Nat, List<Pair<Na
 }
 
 // Then the words they are in the environment are.
-theorem FTm::known_array_found<X>(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), known: List<Option<Pair<Ty, Nat>>>, knows: FTm::Knows(tys, g, env, known),
+theorem FTm::known_array_found<X>(tys: Table, g: List<Ty>, env: Env(tys, g), known: List<Option<Pair<Ty, Nat>>>, knows: FTm::Knows(tys, g, env, known),
     arrays: List<Pair<Nat, List<Pair<Nat, X>>>>, b, c: Nat):
     FTm::known_array(tys, arrays, known, b, c).IsTrue() → FTm::is_array(arrays, FTm::word(tys, g, env, b).toNat(), FTm::word(tys, g, env, c).toNat()).IsTrue() {
     let counted_found: ((q: Option<List<Pair<Nat, X>>>) → (match q { None => False, Some(counted) => FTm::known_field(tys, counted, known, c) }).IsTrue() →
@@ -555,7 +555,7 @@ theorem FTm::known_array_found<X>(tys: Nat → RecInfo, g: List<Ty>, env: Env(ty
 
 // A pure function of a signature applied to variables under a type
 // table: `Tm::apply`, which takes a world for its table.
-fn FTm::apply_pure(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), r: Ty, ps: List<Ty>) → Ty::Arrows(tys, ps, r) → List<Nat> → r.sem(tys) {
+fn FTm::apply_pure(tys: Table, g: List<Ty>, env: Env(tys, g), r: Ty, ps: List<Ty>) → Ty::Arrows(tys, ps, r) → List<Nat> → r.sem(tys) {
     match ps {
         Nil => λ f vs => f,
         Cons(p, rest) => λ f vs => match vs {
@@ -738,7 +738,7 @@ fn Tm::kept<A>(self e: Tm, hw: HWorld<A>, len: Nat) → Bool {
 // A call a held function may make: a writer's, on that length word, at
 // an offset known to be a field's (or, indexed, an offset and a count
 // known to be an array's).
-fn Writer::lent<A>(self w: Writer<A>, tys: Nat → RecInfo, args: List<Nat>, len: Nat, known: List<Option<Pair<Ty, Nat>>>) → Bool {
+fn Writer::lent<A>(self w: Writer<A>, tys: Table, args: List<Nat>, len: Nat, known: List<Option<Pair<Ty, Nat>>>) → Bool {
     match w {
         Apart => False,
         Writes(_, fields) => FTm::write_args(args, len) && FTm::known_field(tys, fields, known, FTm::third(args)),
@@ -766,7 +766,7 @@ fn FTm::kept<A>(self t: FTm, hw: HWorld<A>) → Nat → List<Option<Pair<Ty, Nat
     }
 }
 
-theorem Agrees::recast<A>(whole: Stored<A>, n: BitVec(64), tys: Nat → RecInfo, x, y: Ty, h: Mutated<A, x.sem(tys)>, m: Mutated<List<BitVec(8)>, x.sem(tys)>,
+theorem Agrees::recast<A>(whole: Stored<A>, n: BitVec(64), tys: Table, x, y: Ty, h: Mutated<A, x.sem(tys)>, m: Mutated<List<BitVec(8)>, x.sem(tys)>,
     agrees: Agrees<A, x.sem(tys)>(whole, n, h, m)): Agrees<A, y.sem(tys)>(whole, n, FTm::held_recast(tys, x, y, h), FTm::recast(tys, x, y, m)) {
     Agrees(cong_fn(λ (v: x.sem(tys)) => Ty::cast(tys, x, y, v), agrees.value), agrees.holds)
 }
@@ -1064,7 +1064,7 @@ theorem Agrees::along<A, R>(whole: Stored<A>, n: BitVec(64), h, h2: Mutated<A, R
 }
 
 // A held answer read at its own code is itself.
-theorem FTm::held_recast_along<A>(tys: Nat → RecInfo, x, y: Ty, e: x = y, h: Mutated<A, x.sem(tys)>):
+theorem FTm::held_recast_along<A>(tys: Table, x, y: Ty, e: x = y, h: Mutated<A, x.sem(tys)>):
     FTm::held_recast(tys, x, y, h) = j(e, λ z _ => Mutated<A, z.sem(tys)>, h) {
     j(e, λ z q => FTm::held_recast(tys, x, z, h) = j(q, λ u _ => Mutated<A, u.sem(tys)>, h),
         match h { Mutated(after, value) => cong_fn(λ (v: x.sem(tys)) => Mutated(after, v), Ty::cast_self(tys, x, value)) })

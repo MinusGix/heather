@@ -79,7 +79,7 @@ theorem echo_runs_sent():
     Stmt::thread(echo_stmt(), no_calls(), start(zeros()), piped()).after.sent(Io::stdout()) = [b(104), b(105)] { refl }
 
 theorem echo_runs_result():
-    Stmt::thread(echo_stmt(), no_calls(), start(zeros()), piped()).value.read_back(Word(64), RecInfo::none, echo_result()) = BitVec::ofNat(2) { refl }
+    Stmt::thread(echo_stmt(), no_calls(), start(zeros()), piped()).value.read_back(Word(64), Table::none(), echo_result()) = BitVec::ofNat(2) { refl }
 
 // The computation's meaning is the surface method, world and all.
 theorem echo_means(io: Io, buf: List<BitVec(8)>):
@@ -90,11 +90,11 @@ theorem echo_means(io: Io, buf: List<BitVec(8)>):
 // program's functions answer (`call`): it calls none.
 fn echo_reads(buf: List<BitVec(8)>, perform: PerformsCo(), call: Writers()) →
     Io::Reads<BitVec(64)>(CoTree::map(Events::linux(), echo_stmt().denote_co(call, perform)(start(buf)),
-            λ flow => flow.read_back(Word(64), RecInfo::none, echo_result())),
+            λ flow => flow.read_back(Word(64), Table::none(), echo_result())),
         λ io => CRet(Io::echo_lowered(io, buf)))
 {
     echo_body().lower_reads(ETm::plain_world(), [], echo_g(), echo_locs(), 1, echo_lowered().unwrap_or(ELowered(Exit(0), 0, 0, [])), refl,
-        call, λ held f never ws => false_elim(never), λ held => Tm::calls_agree_none(RecInfo::none, Writers::words(call, held)), ETm::lents_agree_none(call), perform, start(buf), Pair(buf, trivial),
+        call, λ held f never ws => false_elim(never), λ held => Tm::calls_agree_none(Table::none(), Writers::words(call, held)), ETm::lents_agree_none(call), perform, start(buf), Pair(buf, trivial),
         ⟨refl, trivial⟩, ⟨trivial, trivial⟩, trivial)
 }
 
@@ -167,11 +167,11 @@ fn start_n(n: Nat) → native_source::Env { native_source::Env([n], [hi()], []) 
 theorem write_if_runs_sent():
     Stmt::thread(write_if_stmt(), no_calls(), start_n(2), piped()).after.sent(Io::stdout()) = hi() { refl }
 theorem write_if_runs_result():
-    Stmt::thread(write_if_stmt(), no_calls(), start_n(2), piped()).value.read_back(Word(64), RecInfo::none, write_if_result()) = BitVec::ofNat(2) { refl }
+    Stmt::thread(write_if_stmt(), no_calls(), start_n(2), piped()).value.read_back(Word(64), Table::none(), write_if_result()) = BitVec::ofNat(2) { refl }
 theorem write_if_skips_sent():
     Stmt::thread(write_if_stmt(), no_calls(), start_n(0), piped()).after.sent(Io::stdout()) = [] { refl }
 theorem write_if_skips_result():
-    Stmt::thread(write_if_stmt(), no_calls(), start_n(0), piped()).value.read_back(Word(64), RecInfo::none, write_if_result()) = BitVec::ofNat(0) { refl }
+    Stmt::thread(write_if_stmt(), no_calls(), start_n(0), piped()).value.read_back(Word(64), Table::none(), write_if_result()) = BitVec::ofNat(0) { refl }
 
 // A part that names a variable out of its arm's reach is refused.
 theorem write_if_out_of_reach_refused():

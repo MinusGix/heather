@@ -54,13 +54,13 @@ fn FTm::pure(base: Nat) → Nat → Bool { λ f => (f + 1).leb(base) }
 
 // What a computation's code answers when its meaning ends in `m`: the
 // value as a word, and the file with the span the meaning left.
-fn FTm::ended(tys: Nat → RecInfo, r: Ty, rest: List<List<BitVec(8)>>, m: Mutated<List<BitVec(8)>, r.sem(tys)>) → Ending {
+fn FTm::ended(tys: Table, r: Ty, rest: List<List<BitVec(8)>>, m: Mutated<List<BitVec(8)>, r.sem(tys)>) → Ending {
     Ending(Ty::cast(tys, r, Word(64), m.value), Cons(m.after, rest))
 }
 
 // A function on words that may write answers like a curried computation:
 // on every word list, what the meaning applied to the words ends in.
-fn FTm::Answers(tys: Nat → RecInfo, ps: List<Ty>, r: Ty, rest: List<List<BitVec(8)>>)
+fn FTm::Answers(tys: Table, ps: List<Ty>, r: Ty, rest: List<List<BitVec(8)>>)
     → Ty::ArrowsTo(tys, ps, Mutated<List<BitVec(8)>, r.sem(tys)>) → (List<BitVec(64)> → Ending) → Type {
     match ps {
         Nil => λ m ans => ans(Nil) = FTm::ended(tys, r, rest, m),
@@ -83,7 +83,7 @@ fn FTm::CallsAgree(fw: FWorld, base: Nat, call: Writers()) → Type {
 }
 
 // A program with no functions has nothing to answer.
-theorem FTm::calls_agree_none(tys: Nat → RecInfo, rest: List<List<BitVec(8)>>, call: Writers()): FTm::CallsAgree(FWorld::alone(tys, rest), 0, call) {
+theorem FTm::calls_agree_none(tys: Table, rest: List<List<BitVec(8)>>, call: Writers()): FTm::CallsAgree(FWorld::alone(tys, rest), 0, call) {
     ⟨λ own => Tm::calls_agree_none_over(tys, Cons(own, rest), Writers::words(call, Cons(own, rest))),
         ⟨λ f among => false_elim(among), λ f ok => false_elim(ok.right)⟩⟩
 }
@@ -93,13 +93,13 @@ theorem FTm::calls_agree_none(tys: Nat → RecInfo, rest: List<List<BitVec(8)>>,
 
 // A run from `before` ended in `end`: every id below `next` kept, the
 // value at `result`, the file the span `m` left over the rest.
-fn FTm::Ran(t: Ty, tys: Nat → RecInfo, before: Valuation(), end: State, next, result: Nat, rest: List<List<BitVec(8)>>,
+fn FTm::Ran(t: Ty, tys: Table, before: Valuation(), end: State, next, result: Nat, rest: List<List<BitVec(8)>>,
     m: Mutated<List<BitVec(8)>, t.sem(tys)>) → Type {
     Keeps(before, end.values, next) ∧ (t.Holds(tys, end.values, result, m.value) ∧ (end.buffers = Cons(m.after, rest)))
 }
 
 // A region that ran to `mid`, then one that ran on from there.
-theorem FTm::ran_after(t: Ty, tys: Nat → RecInfo, pre, post: StructuredRegion, call: Writers(), values: Valuation(), file: Buffers(), mid: State,
+theorem FTm::ran_after(t: Ty, tys: Table, pre, post: StructuredRegion, call: Writers(), values: Valuation(), file: Buffers(), mid: State,
     next, mid_next, result: Nat, rest: List<List<BitVec(8)>>, m: Mutated<List<BitVec(8)>, t.sem(tys)>,
     at: pre.run(call, values, file) = mid, kept: Keeps(values, mid.values, next), le: next <= mid_next,
     then: FTm::Ran(t, tys, mid.values, post.run(call, mid.values, mid.buffers), mid_next, result, rest, m)):
@@ -109,7 +109,7 @@ theorem FTm::ran_after(t: Ty, tys: Nat → RecInfo, pre, post: StructuredRegion,
 }
 
 // The same value read at an equal code.
-theorem FTm::ran_cast(tys: Nat → RecInfo, a, b: Ty, e: a = b, before: Valuation(), end: State, next, result: Nat, rest: List<List<BitVec(8)>>,
+theorem FTm::ran_cast(tys: Table, a, b: Ty, e: a = b, before: Valuation(), end: State, next, result: Nat, rest: List<List<BitVec(8)>>,
     m: Mutated<List<BitVec(8)>, a.sem(tys)>, ran: FTm::Ran(a, tys, before, end, next, result, rest, m)):
     FTm::Ran(b, tys, before, end, next, result, rest, FTm::recast(tys, a, b, m)) {
     ⟨ran.left, ⟨Ty::cast_holds(tys, end.values, result, a, b, e, m.value, ran.right.left), ran.right.right⟩⟩
@@ -237,21 +237,21 @@ theorem Ty::field_moves_quiet(fs: List<Ty>): (out, src: Nat) → nodes_quiet(Ty:
 }
 
 // Moves store nothing.
-theorem Ty::moves_quiet(self t: Ty, tys: Nat → RecInfo, out, src: Nat): nodes_quiet(t.moves(tys, out, src)).IsTrue() {
+theorem Ty::moves_quiet(self t: Ty, tys: Table, out, src: Nat): nodes_quiet(t.moves(tys, out, src)).IsTrue() {
     match t {
         Word(_) => trivial,
         Bit => trivial,
         ByteList(_) => trivial,
         Lines => trivial,
-        Named(i) => Ty::field_moves_quiet(tys(i).fields, out, src),
+        Named(i) => Ty::field_moves_quiet(tys.fields(i), out, src),
         Count => trivial,
-        Enum(i) => Ty::field_moves_quiet(Cons(Word(64), tys(i).alts.slots), out, src),
+        Enum(i) => Ty::field_moves_quiet(Cons(Word(64), tys.ens(i).slots), out, src),
     }
 }
 
 // An arm, then its value moved to fresh ports from `out`: the same run, the
 // value there.
-theorem FTm::moved_ran(t: Ty, tys: Nat → RecInfo, region: StructuredRegion, call: Writers(), values: Valuation(), file: Buffers(),
+theorem FTm::moved_ran(t: Ty, tys: Table, region: StructuredRegion, call: Writers(), values: Valuation(), file: Buffers(),
     next, src, out: Nat, rest: List<List<BitVec(8)>>, m: Mutated<List<BitVec(8)>, t.sem(tys)>, below: t.Below(tys, src, out), le: next <= out,
     ran: FTm::Ran(t, tys, values, region.run(call, values, file), next, src, rest, m)):
     (out <= t.past(tys, out)) ∧ (t.Below(tys, out, t.past(tys, out)) ∧
@@ -266,7 +266,7 @@ theorem FTm::moved_ran(t: Ty, tys: Nat → RecInfo, region: StructuredRegion, ca
 }
 
 // A branch on a bit ran as the arm the bit chooses.
-theorem FTm::branch_ran(t: Ty, tys: Nat → RecInfo, values: Valuation(), condition: Nat, outputs: Ports, when_true, when_false: StructuredRegion,
+theorem FTm::branch_ran(t: Ty, tys: Table, values: Valuation(), condition: Nat, outputs: Ports, when_true, when_false: StructuredRegion,
     call: Writers(), file: Buffers(), next, out: Nat, rest: List<List<BitVec(8)>>, b: Bool, yes, no: Mutated<List<BitVec(8)>, t.sem(tys)>,
     h: values(1, condition).head_bit() = b, ran_true: FTm::Ran(t, tys, values, when_true.run(call, values, file), next, out, rest, yes),
     ran_false: FTm::Ran(t, tys, values, when_false.run(call, values, file), next, out, rest, no)):
@@ -578,7 +578,7 @@ fn FTm::word_port(g: List<Ty>, ports: List<Nat>, v: Nat) → Option<Nat> {
     port_at(ports, v).and_then(λ p => Ty::at(g, v).check(Word(64)).and_then(λ _ => Some(p)))
 }
 
-fn FTm::WordPort(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), values: Valuation(), next, v: Nat, r: Option<Nat>) → Type {
+fn FTm::WordPort(tys: Table, g: List<Ty>, env: Env(tys, g), values: Valuation(), next, v: Nat, r: Option<Nat>) → Type {
     match r { None => True, Some(p) => (values(64, p) = FTm::word(tys, g, env, v)) ∧ (p < next) }
 }
 
@@ -594,7 +594,7 @@ theorem FTm::word_port_sound(w: World, g: List<Ty>, ports: List<Nat>, values: Va
 
 // The word a view starts at, and the valuation after the node that binds a
 // zero for a view from the first byte.
-fn FTm::start_word(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), start: Option<Nat>) → BitVec(64) {
+fn FTm::start_word(tys: Table, g: List<Ty>, env: Env(tys, g), start: Option<Nat>) → BitVec(64) {
     match start { None => BitVec::ofNat(0), Some(s) => FTm::word(tys, g, env, s) }
 }
 
@@ -614,7 +614,7 @@ fn FTm::start_port(g: List<Ty>, ports: List<Nat>, start: Option<Nat>, zero: Nat)
     match start { None => Some(zero), Some(s) => FTm::word_port(g, ports, s) }
 }
 
-fn FTm::StartPort(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), values: Valuation(), zero: Nat, start: Option<Nat>, r: Option<Nat>) → Type {
+fn FTm::StartPort(tys: Table, g: List<Ty>, env: Env(tys, g), values: Valuation(), zero: Nat, start: Option<Nat>, r: Option<Nat>) → Type {
     match r {
         None => True,
         Some(p) => (FTm::zeroed(start, zero, values, 64, p) = FTm::start_word(tys, g, env, start)) ∧ (p < zero + 1),
@@ -636,7 +636,7 @@ theorem FTm::start_port_sound(w: World, g: List<Ty>, ports: List<Nat>, values: V
 
 // What the lowered lend computes from a view's start is what the view
 // means: its place, its length, its first index.
-theorem FView::place_at(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), home: Nat, start: Option<Nat>):
+theorem FView::place_at(tys: Table, g: List<Ty>, env: Env(tys, g), home: Nat, start: Option<Nat>):
     FTm::word(tys, g, env, home).add(FTm::start_word(tys, g, env, start)) = FView::place(tys, g, env, home, start) {
     match start as λ s => FTm::word(tys, g, env, home).add(FTm::start_word(tys, g, env, s)) = FView::place(tys, g, env, home, s) {
         None => BitVec::add_zero(64, FTm::word(tys, g, env, home)),
@@ -644,7 +644,7 @@ theorem FView::place_at(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), hom
     }
 }
 
-theorem FView::size_at(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), start: Option<Nat>, end: Nat):
+theorem FView::size_at(tys: Table, g: List<Ty>, env: Env(tys, g), start: Option<Nat>, end: Nat):
     FTm::word(tys, g, env, end).sub(FTm::start_word(tys, g, env, start)) = FView::size(tys, g, env, start, end) {
     match start as λ s => FTm::word(tys, g, env, end).sub(FTm::start_word(tys, g, env, s)) = FView::size(tys, g, env, s, end) {
         None => j(sym(BitVec::ofNat_zero(64)), λ z _ => FTm::word(tys, g, env, end).sub(z) = FTm::word(tys, g, env, end),
@@ -653,7 +653,7 @@ theorem FView::size_at(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), star
     }
 }
 
-theorem FView::first_at(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), start: Option<Nat>):
+theorem FView::first_at(tys: Table, g: List<Ty>, env: Env(tys, g), start: Option<Nat>):
     FTm::start_word(tys, g, env, start).toNat() = FView::first(tys, g, env, start) {
     match start as λ s => FTm::start_word(tys, g, env, s).toNat() = FView::first(tys, g, env, s) {
         None => trans(cong_fn(λ (x: BitVec(64)) => x.toNat(), BitVec::ofNat_zero(64)), BitVec::zero_toNat(64)),
@@ -667,7 +667,7 @@ fn FView::ports(self view: FView, g: List<Ty>, ports: List<Nat>, zero: Nat) → 
         FTm::start_port(g, ports, view.start, zero).and_then(λ ps => Some(ViewPorts(view.span, ph, ps, pe)))))
 }
 
-fn FView::PortsHold(self view: FView, tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), values: Valuation(), zero: Nat, r: Option<ViewPorts>) → Type {
+fn FView::PortsHold(self view: FView, tys: Table, g: List<Ty>, env: Env(tys, g), values: Valuation(), zero: Nat, r: Option<ViewPorts>) → Type {
     match r {
         None => True,
         Some(at) => ((at.buffer = view.span) ∧ ((values(64, at.home) = FTm::word(tys, g, env, view.home)) ∧ (at.home < zero))) ∧
@@ -745,7 +745,7 @@ theorem FTm::zero_node_eval(file: Buffers(), start: Option<Nat>, zero: Nat, rest
 
 // Each view's ports hold what the view reads: its buffer is its span, and
 // its home, start and end hold the words.
-fn FTm::ViewsRead(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), values: Valuation(), views: List<FView>) → List<ViewPorts> → Type {
+fn FTm::ViewsRead(tys: Table, g: List<Ty>, env: Env(tys, g), values: Valuation(), views: List<FView>) → List<ViewPorts> → Type {
     match views {
         Nil => λ ats => match ats { Nil => True, Cons(_, _) => False },
         Cons(view, rest) => λ ats => match ats {
@@ -760,7 +760,7 @@ fn FTm::ViewsRead(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), values: V
 // What the ports promise: the zeros' nodes keep every id below `zero`, and
 // after them the ports hold what the views read, in every valuation that
 // keeps the ids below the zeros' end.
-fn FTm::PortsHold(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), file: Buffers(), views: List<FView>, zero: Nat, values: Valuation(),
+fn FTm::PortsHold(tys: Table, g: List<Ty>, env: Env(tys, g), file: Buffers(), views: List<FView>, zero: Nat, values: Valuation(),
     r: Option<List<ViewPorts>>) → Type {
     match r {
         None => True,
@@ -851,7 +851,7 @@ theorem FTm::unwritten_put(values: Valuation(), ats: List<ViewPorts>): (home: Na
 // read, wherever the ids below `top` are kept, the views' nodes keep every
 // id below `home`, the homes hold the words the callee takes, and the
 // views are the windows.
-theorem FTm::views_bound(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), file: Buffers(), top: Nat, views: List<FView>): (ats: List<ViewPorts>) →
+theorem FTm::views_bound(tys: Table, g: List<Ty>, env: Env(tys, g), file: Buffers(), top: Nat, views: List<FView>): (ats: List<ViewPorts>) →
     (written: Bool) → (home: Nat) → top <= home → (z: Valuation()) →
     ((val: Valuation()) → Keeps(z, val, top) → FTm::ViewsRead(tys, g, env, val, views, ats)) →
     Keeps(z, eval_nodes_over(file, views_nodes(FTm::views_built(ats, written, home)), z), home) ∧
@@ -913,7 +913,7 @@ theorem FTm::views_bound(tys: Nat → RecInfo, g: List<Ty>, env: Env(tys, g), fi
 
 // The ports of a lend's arguments: the callee's operands past the homes'
 // words, on the variables.
-fn FTm::lent_args(tys: Nat → RecInfo, g: List<Ty>, ports: List<Nat>, homes: List<Nat>, ps: List<Ty>, args: List<Nat>) → Option<List<Nat>> {
+fn FTm::lent_args(tys: Table, g: List<Ty>, ports: List<Nat>, homes: List<Nat>, ps: List<Ty>, args: List<Nat>) → Option<List<Nat>> {
     match homes {
         Nil => Tm::word_args(tys, g, ports, ps, args),
         Cons(_, more) => match ps { Nil => None, Cons(_, later) => FTm::lent_args(tys, g, ports, more, later, args) },
@@ -1152,7 +1152,7 @@ fn FTm::vars(self t: FTm) → List<Nat> {
     }
 }
 
-theorem FTm::apply_kept(tys: Nat → RecInfo, g: List<Ty>, keep: Nat → Bool, e1, e2: Env(tys, g), a: Env::Agree(tys, g, keep, e1, e2), R: Type, d: R,
+theorem FTm::apply_kept(tys: Table, g: List<Ty>, keep: Nat → Bool, e1, e2: Env(tys, g), a: Env::Agree(tys, g, keep, e1, e2), R: Type, d: R,
     ps: List<Ty>): (f: Ty::ArrowsTo(tys, ps, R)) → (vs: List<Nat>) → Tm::AllKept(vs, keep) →
     FTm::apply(tys, g, e1, R, d, ps, f, vs) = FTm::apply(tys, g, e2, R, d, ps, f, vs) {
     match ps {
@@ -1293,7 +1293,7 @@ fn FTm::lower_loop(w: World, fsigs: List<Sig>, base: Nat, g: List<Ty>, ports: Li
 
 // The loop's relation of words and a file to a state: the state's words
 // and the context's `ctx`, and the file the state's span over `rest`.
-fn FTm::LoopWords(tys: Nat → RecInfo, st: Ty, ctx: List<BitVec(64)>, rest: List<List<BitVec(8)>>)
+fn FTm::LoopWords(tys: Table, st: Ty, ctx: List<BitVec(64)>, rest: List<List<BitVec(8)>>)
     → List<BitVec(64)> → Buffers() → Mutated<List<BitVec(8)>, st.sem(tys)> → Type {
     λ ws file p => Tm::IterWords(tys, st, ctx, ws, p.value) ∧ (file = Cons(p.after, rest))
 }
@@ -1899,7 +1899,7 @@ fn FFun::lower(self f: FFun, w: World, fsigs: List<Sig>, base: Nat) → Option<F
 
 // A curried computation answers like a function on words that ends, on
 // every word list, as its uncurried form does.
-theorem FFun::curry_answers(tys: Nat → RecInfo, r: Ty, rest: List<List<BitVec(8)>>, ps: List<Ty>): (g: List<Ty>) → (env: Env(tys, g)) →
+theorem FFun::curry_answers(tys: Table, r: Ty, rest: List<List<BitVec(8)>>, ps: List<Ty>): (g: List<Ty>) → (env: Env(tys, g)) →
     (k: Env(tys, Ty::bind_onto(ps, g)) → Mutated<List<BitVec(8)>, r.sem(tys)>) → (ans: List<BitVec(64)> → Ending) →
     ((xs: List<BitVec(64)>) → ans(xs) = FTm::ended(tys, r, rest, k(Ty::extend(tys, ps, g, env, xs)))) →
     FTm::Answers(tys, ps, r, rest, FFun::curry(tys, r, ps, g, env, k), ans) {

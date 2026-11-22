@@ -38,7 +38,7 @@ theorem pocket_or_runs(): program_eval(pocket_or::program, 0, [BitVec::ofNat(2),
 theorem pocket_or_agrees(x, y: u64): program_eval(pocket_or::program, 0, [x, y]) = pocket_or(x, y) { pocket_or::agrees(x, y) }
 
 // The enum's slots: one word, `Holds`'s.
-theorem pocket_or_slots(): pocket_or::world.tys(0).alts.slots = [Word(64)] { refl }
+theorem pocket_or_slots(): pocket_or::world.tys.ens(0).slots = [Word(64)] { refl }
 
 // ---------------------------------------------------------------------------
 // Constructors of no, one and two fields, each in slots of its own.
@@ -57,7 +57,7 @@ theorem shape_area_runs(): program_eval(shape_area::program, 0, [BitVec::ofNat(0
         ⟨shape_area::agrees(BitVec::ofNat(1), BitVec::ofNat(3), BitVec::ofNat(4)), shape_area::agrees(BitVec::ofNat(2), BitVec::ofNat(3), BitVec::ofNat(4))⟩⟩
 }
 
-theorem shape_area_slots(): shape_area::world.tys(0).alts.slots = [Word(64), Word(64), Word(64)] { refl }
+theorem shape_area_slots(): shape_area::world.tys.ens(0).slots = [Word(64), Word(64), Word(64)] { refl }
 
 // A `match h:` on it, an arm reading a field.
 runtime fn shape_width(k: u64, a: u64) → u64 {
@@ -104,7 +104,7 @@ theorem flag_of_runs(): program_eval(flag_of::program, 0, [BitVec::ofNat(3)]) = 
     ⟨flag_of::agrees(BitVec::ofNat(3)), flag_of::agrees(BitVec::ofNat(9))⟩
 }
 
-theorem flag_of_slots(): flag_of::world.tys(0).alts.slots = [Bit] { refl }
+theorem flag_of_slots(): flag_of::world.tys.ens(0).slots = [Bit] { refl }
 
 // ---------------------------------------------------------------------------
 // An enum with fields as a parameter: passed as its words, its tag word and

@@ -68,13 +68,13 @@ inductive ELoop {
 // The state a pass leaves
 
 // Every variable at its code's default.
-fn ELoop::defaults(tys: Nat → RecInfo, g: List<Ty>) → rt::Env(tys, g) {
+fn ELoop::defaults(tys: Table, g: List<Ty>) → rt::Env(tys, g) {
     match g as λ x => rt::Env(tys, x) { Nil => trivial, Cons(t, rest) => Pair(t.default(tys), ELoop::defaults(tys, rest)) }
 }
 
 // Each variable of `g` rebound to the end context's variable `rebind`
 // names, at its code.
-fn ELoop::gather(tys: Nat → RecInfo, ce: List<Ty>, ve: rt::Env(tys, ce), g: List<Ty>, rebind: List<Nat>) → rt::Env(tys, g) {
+fn ELoop::gather(tys: Table, ce: List<Ty>, ve: rt::Env(tys, ce), g: List<Ty>, rebind: List<Nat>) → rt::Env(tys, g) {
     match g as λ x => rt::Env(tys, x) {
         Nil => trivial,
         Cons(t, rest) => match rebind {
@@ -100,7 +100,7 @@ fn ELoop::sources(ce: List<Ty>, el: List<Loc>, g: List<Ty>, rebind: List<Nat>) �
     }
 }
 
-fn ELoop::SourcesHold(tys: Nat → RecInfo, ce: List<Ty>, el: List<Loc>, g: List<Ty>, rebind: List<Nat>, r: Option<List<Loc>>) → Type {
+fn ELoop::SourcesHold(tys: Table, ce: List<Ty>, el: List<Loc>, g: List<Ty>, rebind: List<Nat>, r: Option<List<Loc>>) → Type {
     match r {
         None => True,
         Some(srcs) => (env: Env) → (ve: rt::Env(tys, ce)) → LocsHold(tys, env, ce, el, ve) →
@@ -108,7 +108,7 @@ fn ELoop::SourcesHold(tys: Nat → RecInfo, ce: List<Ty>, el: List<Loc>, g: List
     }
 }
 
-theorem ELoop::sources_sound(tys: Nat → RecInfo, ce: List<Ty>, el: List<Loc>, g: List<Ty>): (rebind: List<Nat>) →
+theorem ELoop::sources_sound(tys: Table, ce: List<Ty>, el: List<Loc>, g: List<Ty>): (rebind: List<Nat>) →
     ELoop::SourcesHold(tys, ce, el, g, rebind, ELoop::sources(ce, el, g, rebind)) {
     match g {
         Nil => λ rebind => match rebind as λ r => ELoop::SourcesHold(tys, ce, el, Nil, r, ELoop::sources(ce, el, Nil, r)) {
@@ -244,7 +244,7 @@ fn ELoop::bind_ret<A, B>(t: Partial(A), m: A, k: A → Partial(B), e: Eutt<A>(Ev
 
 // The program's value read back from its word, the world as the statements
 // left it.
-fn ELoop::back(t: Ty, tys: Nat → RecInfo, result: Nat, m: Mutated<Io, Flow>) → Mutated<Io, t.sem(tys)> {
+fn ELoop::back(t: Ty, tys: Table, result: Nat, m: Mutated<Io, Flow>) → Mutated<Io, t.sem(tys)> {
     Mutated(m.after, m.value.read_back(t, tys, result))
 }
 
@@ -285,11 +285,11 @@ fn ELoop::rest_holds(rest: ELoop, w: rt::World, ls: List<Lent>, g: List<Ty>, loc
 
 // The relation the loop keeps: the environment holds the state where it
 // lives; and out of the loop, the flow goes on holding it.
-fn ELoop::Held(tys: Nat → RecInfo, g: List<Ty>, locs: List<Loc>) → Env → rt::Env(tys, g) → Type {
+fn ELoop::Held(tys: Table, g: List<Ty>, locs: List<Loc>) → Env → rt::Env(tys, g) → Type {
     λ e v => LocsHold(tys, e, g, locs, v)
 }
 
-fn ELoop::Left(tys: Nat → RecInfo, g: List<Ty>, locs: List<Loc>) → Flow → rt::Env(tys, g) → Type {
+fn ELoop::Left(tys: Table, g: List<Ty>, locs: List<Loc>) → Flow → rt::Env(tys, g) → Type {
     λ f v => f.KeepsAll(tys, g, locs, v)
 }
 

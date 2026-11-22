@@ -86,7 +86,7 @@ fn count_at(span: List<BitVec(8)>, place, length, i, acc: BitVec(64)) → BitVec
 
 // The world is the file, and the function at it.
 fn count_world(span: List<BitVec(8)>) → World {
-    World(RecInfo::none, [Sig(count_words(), Word(64))], Pair(λ (place: BitVec(64)) (length: BitVec(64)) (i: BitVec(64)) (acc: BitVec(64)) =>
+    World(Table::none(), [Sig(count_words(), Word(64))], Pair(λ (place: BitVec(64)) (length: BitVec(64)) (i: BitVec(64)) (acc: BitVec(64)) =>
         count_at(span, place, length, i, acc), trivial), [span])
 }
 
