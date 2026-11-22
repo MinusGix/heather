@@ -28,12 +28,15 @@ this issue first proposed.
   publishing `f::ptm`, `f::guarded`, `f::unfolds`, `f::fits`, and a closed
   `main` with its levels stated.
 - Revised 2026-11-21 (note §3 to §5): the depth is a proved bound,
-  `f::fits(d(x), x)`, inferred from the `decreases` measure through a
-  per-call decrease companion `f::descends`, tightened by a `depth` clause
-  or a theorem; a closed program infers its levels; the stack is a byte
-  budget (`runtime(stack := 1 MiB)`) checked once at the recursion's
-  boundary; the accumulator rewrite and an opt-in heap stack take a
-  recursion off the stack.
+  `f::fits(d(x), x)`, inferred from the `decreases` measure (built: the
+  generator closes each call with its lifted obligation `f::obl_N`) and
+  tightened by a `depth` clause; a closed program infers its levels
+  (built); the stack is a byte budget (`runtime(stack := 1 MiB)`) checked
+  once at the recursion's entry.
+- Revised 2026-11-22 (note §2.1, §3.3, §5): every bound is one named
+  theorem `f::depth`; rewrites off the stack (the accumulator) are the
+  optimizer's, at a new level for procedures, with an opt-in heap stack;
+  a call with its room reserved keeps a recursion's callers regions.
 - Then calls between `Io` functions ([[rt-effectful-callees]]) with a
   buffer contract, and recursion over `Io` through them.
 

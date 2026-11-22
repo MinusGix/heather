@@ -1,8 +1,11 @@
 # Recursion in a `runtime fn`: procedures, proved depth and the stack budget
 
 Status: proposal (2026-11-20), revised 2026-11-21: the depth is a proved
-bound inferred from the measure, the stack a budget in bytes checked once,
-and rewrites take a recursion off the stack (§3 to §5). The short surface note that
+bound inferred from the measure, the stack a budget in bytes checked once
+(§3, §4). Revised 2026-11-22 on Minus's answers: every bound is one named
+theorem `f::depth`, rewrites that take a recursion off the stack belong to
+the optimizer (§5), and a caller enters a recursion with its room already
+reserved instead of becoming a statement (§2.1). The short surface note that
 `issues/runtime-fn-recursion.md` asks for before code. It replaces that issue's
 "depth in the meaning": since #806 to #812 a program's stack room is asked
 for in levels of checked calls, a call past them is a refusal of the
@@ -51,11 +54,43 @@ statements. That fixes the route (built in the order of §8, pure recursion firs
    Its body is an `ETm` with no `Io` node. Its meaning as a statement is a
    value or a stop at the levels, which is all §3 needs.
 
-One consequence is a rule rather than a choice: **recursion lifts its
-callers to statements.** A pure function that calls a recursive one cannot
-stay a region, because its call can stop. The refusal says so and names the
-recursive callee; the generator then reflects the caller as a statement
-too. A tail recursion still becomes a loop, and a loop stays a region.
+The first version drew a rule from this: **recursion lifts its callers to
+statements.** A pure function that calls a recursive one cannot stay a
+region, because its call can stop, so the caller is reflected as a
+statement too, and its caller, up to `main`. A tail recursion still becomes
+a loop, and a loop stays a region. The rule is sound but it is a cost paid
+far from its cause: one recursion deep in a program would take everything
+above it off the region lane, where the optimizer and the register planner
+do their best work. §2.1 is the way out; the rule stays only as what
+happens before it is built.
+
+### 2.1 A call with its room reserved
+
+The call can stop only because the stack can run out. Once the depth is a
+theorem (§3), whether it can run out is decided before the recursion
+starts: §4.2 checks `room(d(args))` once, where the program enters it. Below
+that check the recursion cannot be refused, so a call into it is total, and
+a total call is what a region can make.
+
+So the caller does not lift. One place, the **entry**, makes the check and
+is a statement (it is the one place that can stop); everything it calls
+with the room reserved, recursion and callers of the recursion alike, stays
+what it was. A region calling `f(y)` under a reservation carries the fact
+that the room it needs is held, `fits(d(y), y)` and `d(y) ≤ k` for the `k`
+levels reserved, the way a loop carries a fact in its state (`Loop::rule`),
+and its call reads as `f`'s value by `Source::pure_reads`' argument, with
+the levels taken from the fact rather than from `Source.levels`.
+
+Where the entry goes is the searcher's choice, not the writer's: as high as
+`main`, where a refused input has done nothing (guarantee 4), or as low as
+the outermost call whose arguments bound the rest. And if the optimizer
+turns the recursion into a loop (§5), there is no room to reserve and no
+entry at all.
+
+Not designed further yet: the region node for a reserved call, how the
+fact reaches a callee that is several calls below the entry (a parameter of
+the procedure, as a lent span is, is the likely form), and its case in the
+FunctionIR meaning.
 
 ## 3. Depth: a proved bound, inferred by default
 
@@ -112,36 +147,22 @@ the guard would still hold, so the bound cannot be read off it. The
 decrease has to come from the place it is proved: the elaborator's lifted
 obligations `f#obl_N`, one per call site, each under the hypotheses of the
 path to it (docs/language/recursion/decreases-unfolding-design.md §4).
-Two routes to `PDef::Descends` at `f`:
-
-Built (2026-11-21) by the second route, which needed no new companion
-after all: the elaborator names each lifted obligation `f::obl_N`, and
-the generator walks `f::ptm` with one lemma per node (`PTm::calls_ok_bind`,
-`_recur`, `_choose`), closing each call with the obligation whose reading
-(the caller's words in order, the branch tests in scope) the call's
-lemma accepts. The join the companion was to avoid turned out not to be
-fragile: a reflected test's equation converts to the source's `match h:`
-equation, as the guard's conversions already showed. Two things it did
-need: the rank is the measure read at the first words of any list
-(`PTm::padded`), since `Ty::on_words` matches on the list and is stuck at
-the statement's own `xs`; and the environments are passed as handles read
-off each lemma's premise, since spelled out every `Bind` copies the one
-before it twice. The generator publishes `f::depth: (xs) → f::fits(μ(xs),
-xs) = True` wherever the walk closes every call, and nothing otherwise (an
-obligation reading a `let`'s or a call's result). The two routes as first
-weighed:
-
-- **Recommended: a companion, `f::descends`.** The unfolding walk that
-  emits `f::ext` and `f::irrel` (`crates/elab/src/measure.rs`) already holds
-  each call site's path hypotheses in source terms; one more instantiation
-  of it, whose leaf at a self-call is that site's obligation rather than a
-  congruence step, states that every call the step functional makes is
-  below `μ(x)`. The generator then carries it to `f::ptm`'s `calls_ok` as
-  it carries `f::ext` to the guard.
-- The alternative: the generator walks `f::ptm` and closes each `Recur`
-  with the matching `f#obl_N`. It needs no elaborator change but has to
-  match the reflected branch conditions against the obligations'
-  hypotheses, which is the fragile join the companion avoids.
+The elaborator names each lifted obligation `f::obl_N`, and the generator
+walks `f::ptm` with one lemma per node (`PTm::calls_ok_bind`, `_recur`,
+`_choose`), closing each call with the obligation whose reading (the
+caller's words in order, the branch tests in scope) the call's lemma
+accepts. The note first recommended a new companion, `f::descends`, from
+the unfolding walk, to avoid matching the reflected branch tests against
+the obligations' hypotheses; the join turned out not to be fragile, since a
+reflected test's equation converts to the source's `match h:` equation, as
+the guard's conversions already showed. Two things it did need: the rank is
+the measure read at the first words of any list (`PTm::padded`), since
+`Ty::on_words` matches on the list and is stuck at the statement's own
+`xs`; and the environments are passed as handles read off each lemma's
+premise, since spelled out every `Bind` copies the one before it twice. The
+generator publishes `f::depth: (xs) → f::fits(μ(xs), xs) = True` wherever
+the walk closes every call, and nothing otherwise (an obligation reading a
+`let`'s or a call's result).
 
 ### 3.3 Tightening a bound
 
@@ -160,13 +181,20 @@ runtime fn find(xs: &[u64], lo: u64, hi: u64, k: u64) → u64
 
 The `depth` clause owes one obligation per call site, `ν(y) < ν(x)`,
 lifted and defaulted (`omega`, `bv_omega`) exactly as `decreases`'s are,
-and discharged by hand where the defaults fail. Where no rank does (the
-depth depends on more than a drop per call), the bound is a theorem in its
-general form, `f::depth` of §3.1 proved by `f`'s functional induction, and
-the runtime fn names it (`runtime(depth := find::depth_log)`). In every
-case it is an ordinary theorem; nothing about it is special to the
-compiler. A lexicographic measure gives no depth by itself and needs one
-of these.
+and discharged by hand where the defaults fail (`on ?depth_N := …`, the
+same as a measure's). The generator then publishes **the same theorem it
+publishes without the clause**, `f::depth: (xs) → f::fits(ν(xs), xs) =
+True`, by the same walk with ν in place of μ (the walk already takes any
+rank). Every route ends in that one named statement, and the compile reads
+nothing else (agreed 2026-11-22).
+
+Where no rank does (the depth depends on more than a drop per call, as a
+flat `≤ 100` would), the writer proves `f::depth` themselves, in the
+general form of §3.1 by `f`'s functional induction, and the generator
+takes it as given rather than generating one. That route is left until a
+program needs it: proving `fits` directly is the ugly case, and a rank
+covers every recursion in the probes. A lexicographic measure gives no
+depth by itself and needs a `depth` clause.
 
 ### 3.4 A closed program infers its depth
 
@@ -237,55 +265,84 @@ With a `stack := …` clause and an input-dependent bound, the theorem's
 set of refused runs is exactly the inputs whose bound does not fit, which
 is stated, not discovered at a random depth.
 
-## 5. Getting rid of the stack: rewrites and the heap stack
+## 5. Getting rid of the stack: the optimizer's job
 
-A bound that does not fit is not the end. A rewrite turns the recursion
-into something that needs less, and each is **a function on `PTm` with one
-meaning theorem**, `rewritten.sem = original.sem`, proved once in `rt`.
-That makes them not quite compiler passes: the compiler is unchanged and
-sees an ordinary program; the rewrite runs in the generator, its result is
-published (`f::rewritten`, and the equation to `f`), and it is offered,
-applied or declined by name, as the optimizer's rules are
-(rules-as-theorems). Their cost is the generator's, and a wrong one is
-impossible rather than unlikely.
+A bound that does not fit is not the end: a rewrite turns the recursion
+into something that needs less. The 2026-11-21 version did the rewrites in
+the generator, which was the wrong layer (Minus, 2026-11-22). For a
+function only the meaning matters, and a rewrite that keeps it is an
+optimization; it belongs to the optimizer
+(`docs/native/optimizer-design.md`), where it is one more rule, chosen by a
+searcher against a cost, and where a target on which stack is cheap can
+decline it while one on which it is dear takes it. The generator goes back
+to only reflecting.
+
+### 5.1 A level for procedures
+
+The optimizer has a replayer per code level and its moves are FunctionIR's.
+FunctionIR's functions cannot recurse, so a rewrite of a recursion needs a
+level above it: **procedures**, the `PTm` definitions (later the `Source`
+procedures they lower to). Its moves are the optimizer's, read there:
+
+- **Rewrite** by a rule whose sides are procedure definitions and whose
+  theorem says their meanings agree, `sem(lhs) = sem(rhs)` over
+  `PDef::Unfolds`, where its conditions hold.
+- **Inline** a non-recursive callee into its caller, and **restate** a
+  recursion as a loop (a tail call already is one, `rt_loop`).
+
+The level's one law adds depth to meaning: a move may replace a definition
+only by one that means the same **and needs no more depth**, `fits(k, x)`
+of the old implying it of the new. So `f::depth`, proved of the source,
+stays a bound of whatever the optimizer makes, and the room check (§4) runs
+on the optimized program, never looser than the source's. A move that does
+take the recursion off the stack, as the accumulator does, publishes a
+bound of 0 for what is now a loop.
+
+**Stack is a cost.** The searcher already weighs instructions; at this
+level it also weighs `room(depth)` in the target's bytes (`Source::top`).
+Where the budget of §4.1 fails, the searcher is asked for a plan that
+meets it before the compile refuses, and the refusal lists what it tried
+and why each rule did not apply (the operation is not associative, the
+continuation reads more than the result), so "too deep" always comes with
+something to do.
+
+### 5.2 The rules
 
 1. **The accumulator.** A body `if c then b else e ⊕ f(y)` with `⊕`
    associative becomes `go(x, acc) = if c then acc ⊕ b else go(y, acc ⊕ e)`
-   (entered as `f(x) = if c then b else go(y, e)`), a tail call, so a loop (`rt_loop`): no stack at all. On words, `+`, `*`,
-   `^`, `&` and `|` are associative, which covers the sums, products and
-   folds most recursions are. The meaning theorem takes associativity as a
-   premise and is proved by induction on the measure. Recognising the
-   shape on `PTm` is syntactic: a `Recur` whose continuation is
-   `Value(op(e, Var(0)))` with `e` not mentioning the result. This one is
-   strictly better whenever it applies, so it is **applied by default**
-   and reported in `--explain`. Generalising it (several base cases, the
-   operand on either side, a let between) is Koka's tail recursion modulo
-   context (Leijen and Lorenzen, POPL 2023), done as proved rewrites.
-2. **The explicit stack on the heap.** Any `PTm` recursion becomes a loop
-   over a stack of continuation frames held in a heap span: each `Recur`'s
-   continuation is a frame tag and the words it still reads
-   (defunctionalisation of its CPS form). `PTm`'s four constructors make
-   this one generic theorem, not one per function. The depth bound still
-   applies and now sizes the heap span, checked once as §4.2 checks the
-   stack; past it the run is refused the same way. It costs heap, an
-   allocation and a copy per level, so it is **opt-in**
-   (`runtime(recursion := heap)`), the deliberate sidestep for a recursion
-   whose depth is truly large, and the place to optimise later (frames
-   holding only live words, a span that grows by doubling).
-3. **Later, and harder to find:** tail calls modulo constructors once
-   `runtime fn`s build heap data (OCaml's `[@tail_mod_cons]`), and the
-   general TRMC of (1).
+   (entered as `f(x) = if c then b else go(y, e)`), a tail call, so a loop:
+   no stack at all. On words, `+`, `*`, `^`, `&` and `|` are associative,
+   which covers the sums, products and folds most recursions are. It is
+   one rule with associativity as a condition, proved once by induction on
+   the depth; the condition is answered by the registered learners as word
+   rules' are. Generalising it (several base cases, the operand on either
+   side, a let between) is Koka's tail recursion modulo context (Leijen and
+   Lorenzen, POPL 2023), as more rules of the same shape.
+2. **Later, and harder to find:** tail calls modulo constructors once
+   `runtime fn`s build heap data (OCaml's `[@tail_mod_cons]`), frame
+   shrinking (a frame holding only the words live across its call), and
+   inlining one level of a recursion into itself to halve its depth.
 
-The refusal of §4.1 lists the rewrites that apply and why the others do
-not (the operation is not associative, the continuation reads more than
-the result), so "too deep" always comes with something to do.
+### 5.3 The explicit stack on the heap, asked for
+
+Any `PTm` recursion becomes a loop over a stack of continuation frames held
+in a heap span: each `Recur`'s continuation is a frame tag and the words it
+still reads (defunctionalisation of its CPS form). `PTm`'s four
+constructors make this one generic theorem, not one per function. The depth
+bound still applies and now sizes the heap span, checked once as §4.2
+checks the stack; past it the run is refused the same way. It is a restate
+move like the others, but it trades stack for heap, an allocation and a
+copy per level, so the searcher never picks it unasked: it is **opt-in**
+(`runtime(recursion := heap)`), the deliberate sidestep for a recursion
+whose depth is truly large (agreed 2026-11-21), and the place to optimise
+later (frames holding only live words, a span that grows by doubling).
 
 ## 6. Prior art
 
 - **Stack analysis with a required annotation for cycles**: GNATstack
   reports cyclic call graphs as unbounded (`+?`) and asks the writer for
-  their depth; MISRA C and SPARK's `No_Recursion` forbid recursion. §3 is
-  what #836 did; this note leaves it.
+  their depth; MISRA C and SPARK's `No_Recursion` forbid recursion. The first
+  version (§8.1) was this; §3 leaves it.
 - **Verified source-level bounds**: Quantitative CompCert (PLDI 2014)
   proves stack bounds on the source with a frame-size metric the compiler
   supplies; CakeML's space cost semantics (OOPSLA 2020) proves programs run
@@ -294,7 +351,7 @@ the result), so "too deep" always comes with something to do.
   polynomial bounds; the rank of §3.2 is the degree-one case Heather gets
   for free from `decreases`.
 - **Making the problem go away at run time**: Go's and OCaml 5's growable
-  stacks, Racket's continuation on the heap. §5 item 2 is the proved, opt-in
+  stacks, Racket's continuation on the heap. §5.3 is the proved, opt-in
   version.
 - **Rewrites**: Koka's TRMC (POPL 2023), OCaml's `[@tail_mod_cons]`; Zig's
   open proposal for safe recursion (ziglang/zig#1006) asks for exactly the
@@ -321,14 +378,17 @@ the generator) are built, §8.1. From here, in order:
    f::fits(μ(x), x)` from the lifted obligations (§3.2).
 2. **Closed programs infer their levels** (§3.4, built): `runtime fn
    main()` with no argument; `levels := n` optional.
-3. **The byte budget** (§4.1): `runtime(stack := n)`, the compiled theorem
+3. **The `depth ν` clause** (§3.3): parsed beside `decreases`, its
+   obligations lifted and defaulted as a measure's, `f::depth` from ν.
+4. **The byte budget** (§4.1): `runtime(stack := n)`, the compiled theorem
    in bytes, the refusal that names the deepest chain and its frames.
-4. **One check at the boundary** (§4.2): the budgeted call, unchecked calls
-   inside a proved-bounded cycle, callers with words (§2's rule, which this
-   needs anyway), the `depth` clause and `runtime(depth := …)` (§3.3).
-5. **The accumulator rewrite** (§5 item 1), on by default.
-6. **The heap stack** (§5 item 2), opt-in.
-7. Mutual recursion, a recursion calling other functions, lent spans
+5. **One check at the entry** (§4.2, §2.1): the budgeted call, unchecked
+   calls inside a proved-bounded cycle, and the reserved call that keeps
+   the recursion's callers regions.
+6. **A procedure level for the optimizer** (§5.1) with the accumulator rule
+   (§5.2), stack as a cost.
+7. **The heap stack** (§5.3), opt-in.
+8. Mutual recursion, a recursion calling other functions, lent spans
    (`port_depth`), and calls between `Io` functions with a buffer contract
    (`rt-effectful-callees`) and recursion over `Io` through them.
 
@@ -426,15 +486,23 @@ the generator) are built, §8.1. From here, in order:
 
 Agreed 2026-11-21: the depth is a proved bound, inferred by default from
 the measure and tightened by the writer's theorems; the room is computed
-once, not per call; rewrites and an opt-in heap stack; a budget in bytes.
+once, not per call; an opt-in heap stack; a budget in bytes.
+
+Agreed 2026-11-22:
+
+1. The tighter bound is a `depth ν` clause beside `decreases`, and every
+   route, the clause, the measure or a hand proof, ends in one named
+   theorem `f::depth` (§3.3).
+2. A budget in bytes is a claim about the compiled program for one target,
+   and may hold on one target and fail on another: the runtime is platform
+   specific to that degree, and the refusal names the target and the frame.
+3. Rewrites that take a recursion off the stack are the optimizer's, at a
+   level for procedures, with stack as a cost (§5).
+
 Open:
 
-1. The tighter bound's surface: a `depth ν` clause beside `decreases`
-   (recommended, §3.3), with the general theorem named by
-   `runtime(depth := …)` for what no rank captures.
-2. `levels` leaves the surface once `stack := …` lands (recommended),
+4. Lifting callers to statements (§2) is a cost Minus is unsure of. §2.1's
+   reserved call is the proposed way out; whether to design it before the
+   byte budget (step 4) or after.
+5. `levels` leaves the surface once `stack := …` lands (recommended),
    staying the compiler's internal unit.
-3. The accumulator rewrite applied by default and reported (recommended),
-   or only when asked.
-4. Recursion lifts its callers to statements (§2): a consequence, listed
-   so it is seen.
