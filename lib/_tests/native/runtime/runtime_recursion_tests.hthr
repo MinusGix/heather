@@ -1,0 +1,171 @@
+// Probes of a `runtime fn` whose call of itself is not its last act
+// (docs/native/runtime-fn-recursion-design.md §6 step 4): the generator
+// reads it as a procedure's body, `f::ptm`, proves its guard from its own
+// `f::ext` and `f::irrel` (`f::guarded`), its one definition's pin
+// (`f::unfolds`), and publishes `f::fits`, how deep it runs at given
+// words. Tests, not library: nothing outside lib/_tests imports this
+// module (docs/test-value-audit.md §4.5).
+import logic;
+import bool;
+import nat;
+import list;
+import bitvec;
+import bitvec_nat;
+import rt;
+import rt_ptm;
+import rt_proc_program;
+import native_source;
+import runtime;
+
+// `n + (n - 1) + … + 0`: the call under a method call.
+runtime fn rsum(n: u64) → u64 decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => BitVec::ofNat(0),
+        False => n.add(rsum(n.sub(BitVec::ofNat(1)))),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+// The call of itself is `Recur(0, …)`, the `match h:` a convoyed branch.
+theorem rsum_ptm(): rsum::ptm = Bind(Lit(Word(64), 0), Bind(Prim(Eq(64), [1, 0]), Choose(0, True, Value(Lit(Word(64), 0)),
+    Bind(Lit(Word(64), 1), Bind(Prim(Sub(64), [3, 0]), Recur(0, [0], Value(Prim(Add(64), [5, 0])))))))) { refl }
+
+// At 10 its calls nest ten deep.
+theorem rsum_fits_ten(): rsum::fits(10, [BitVec::ofNat(10)]) = True { refl }
+
+theorem rsum_not_nine(): rsum::fits(9, [BitVec::ofNat(10)]) = False { refl }
+
+// Every call `rsum` makes is at a lower `toNat`, by its own obligation
+// along the `match h:`, so a call at `x` runs within `x.toNat()` levels
+// (`PDef::fits_by_rank`): the generator's `rsum::depth`
+// (docs/native/runtime-fn-recursion-design.md §3.2).
+theorem rsum_depth(xs: List<BitVec(64)>): rsum::fits(PTm::word_at(xs, 0).toNat(), xs) = True { rsum::depth(xs) }
+
+theorem rsum_depth_at(n: u64): rsum::fits(n.toNat(), [n]) = True { rsum::depth([n]) }
+
+// The pin: the definition's meaning at 10, its call answered by `rsum`,
+// is `rsum(10)`.
+theorem rsum_unfolds_ten(): rsum(BitVec::ofNat(10)) = PTm::sem(rsum::ptm, PTm::words_world(Table::none()), PTm::words_meaning(Table::none(), [Word(64)], rsum),
+    PTm::word_ctx(1), PTm::vals_n(Table::none(), 1, [BitVec::ofNat(10)])) {
+    rsum::unfolds(0, PDef(1, rsum::ptm), refl, [BitVec::ofNat(10)], refl)
+}
+
+// Two words, the call bound by a `let` and read twice: `2^n · acc`, one
+// level per halving of nothing, so `n` levels.
+runtime fn doubled(n: u64, acc: u64) → u64 decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => acc,
+        False => { let r = doubled(n.sub(BitVec::ofNat(1)), acc); r.add(r) },
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+theorem doubled_fits(): doubled::fits(5, [BitVec::ofNat(5), BitVec::ofNat(3)]) = True { refl }
+
+theorem doubled_not_four(): doubled::fits(4, [BitVec::ofNat(5), BitVec::ofNat(3)]) = False { refl }
+
+theorem doubled_value(): doubled(BitVec::ofNat(5), BitVec::ofNat(3)) = BitVec::ofNat(96) { refl }
+
+// Its depth too, through the `let`: `n.toNat()` levels, whatever `acc`.
+theorem doubled_depth(n, acc: u64): doubled::fits(n.toNat(), [n, acc]) = True { doubled::depth([n, acc]) }
+
+// Two calls, each closed by its own obligation.
+runtime fn rpow2(n: u64) → u64 decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => BitVec::ofNat(1),
+        False => rpow2(n.sub(BitVec::ofNat(1))).add(rpow2(n.sub(BitVec::ofNat(1)))),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+    on ?dec2 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+theorem rpow2_value(): rpow2(BitVec::ofNat(5)) = BitVec::ofNat(32) { refl }
+
+theorem rpow2_depth(n: u64): rpow2::fits(n.toNat(), [n]) = True { rpow2::depth([n]) }
+
+// The measure on the second word: the obligation reads `n`, not `acc`.
+runtime fn rsum_from(acc: u64, n: u64) → u64 decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => acc,
+        False => n.add(rsum_from(acc, n.sub(BitVec::ofNat(1)))),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+theorem rsum_from_depth(acc, n: u64): rsum_from::fits(n.toNat(), [acc, n]) = True { rsum_from::depth([acc, n]) }
+
+// The depth a call needs, evaluated: `rsum(10)` makes ten nested calls.
+theorem rsum_depth_ten(): PDef::depth(PTm::defs_words([Word(64)], rsum::ptm), PTm::words_world(Table::none()),
+    PTm::words_meaning(Table::none(), [Word(64)], rsum), 100, 0, [BitVec::ofNat(10)]) = Some(10) { refl }
+
+// Past the fuel it is not known.
+theorem rsum_depth_past(): PDef::depth(PTm::defs_words([Word(64)], rsum::ptm), PTm::words_world(Table::none()),
+    PTm::words_meaning(Table::none(), [Word(64)], rsum), 10, 0, [BitVec::ofNat(10)]) = None { refl }
+
+// A program: `main` over no words calls the recursion, at the levels its
+// calls need, inferred: `rsum`'s ten and main's own call, eleven.
+// `sum_ten::source` is what `write-elf` compiles
+// (crates/cli/tests/native_recursion.rs), and `sum_ten::reads` says any
+// compile of it that is accepted exits with `sum_ten`'s value, 55.
+runtime fn sum_ten() → u64 { rsum(BitVec::ofNat(10)) }
+
+theorem sum_ten_ptm(): sum_ten::ptm = Bind(Lit(Word(64), 10), Recur(0, [0], Value(Var(0)))) { refl }
+
+theorem sum_ten_value(): sum_ten = BitVec::ofNat(55) { refl }
+
+theorem sum_ten_levels(): sum_ten::source.levels = 11 { refl }
+
+// Stated levels are a check, and the program is made at them.
+runtime(levels := 16) fn sum_ten_roomy() → u64 { rsum(BitVec::ofNat(10)) }
+
+theorem sum_ten_roomy_levels(): sum_ten_roomy::source.levels = 16 { refl }
+
+theorem sum_ten_reads(): PTm::SourceReads(sum_ten::source, sum_ten) { sum_ten::reads }
+
+// A stated stack budget in bytes (design §4.1), published beside the
+// source: `write-elf` compiles `sum_ten_budget::source` within it, which
+// its certificate states, and refuses `sum_ten_tight::source`, whose
+// eleven levels need more than 64 bytes under any placement
+// (crates/cli/tests/native_recursion.rs).
+runtime(stack := 65536) fn sum_ten_budget() → u64 { rsum(BitVec::ofNat(10)) }
+
+theorem sum_ten_budget_is(): sum_ten_budget::stack = 65536 { refl }
+
+runtime(stack := 64) fn sum_ten_tight() → u64 { rsum(BitVec::ofNat(10)) }
+
+// What `write-elf` compiles: the generated source at its inferred eleven
+// levels, and the same program at ten, one short, whose last nested call
+// stops with the call-depth status.
+fn sum_ten_program() → Source { sum_ten::source }
+
+fn sum_ten_short() → Source {
+    PTm::program(sum_ten::ptm, PTm::defs_words([Word(64)], rsum::ptm), PTm::plain(Table::none()), 10).get(trivial)
+}
+
+// A bound tighter than the measure (design §3.3): two down per call, so
+// half as deep as `n.toNat()` says. Both decreases are found by the
+// default closers; `f::depth` is at `ν`.
+runtime fn rstep2(n: u64) → u64 decreases n.toNat() depth n.toNat() / 2 {
+    if small: n < 2 { 0 } else { n + rstep2(n - 2) }
+}
+
+theorem rstep2_value(): rstep2(BitVec::ofNat(10)) = BitVec::ofNat(30) { refl }
+
+theorem rstep2_fits(): rstep2::fits(5, [BitVec::ofNat(10)]) = True { refl }
+
+theorem rstep2_not_four(): rstep2::fits(4, [BitVec::ofNat(10)]) = False { refl }
+
+theorem rstep2_depth(n: u64): rstep2::fits(n.toNat() / 2, [n]) = True { rstep2::depth([n]) }
+
+// A `depth` obligation the default closers do not find, discharged by
+// hand as a measure's is: `on ?depthN`, here the same fact as `?dec1`.
+runtime fn rsum_hand(n: u64) → u64 decreases n.toNat() depth n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => BitVec::ofNat(0),
+        False => n.add(rsum_hand(n.sub(BitVec::ofNat(1)))),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+    on ?depth1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+theorem rsum_hand_depth(n: u64): rsum_hand::fits(n.toNat(), [n]) = True { rsum_hand::depth([n]) }

@@ -531,6 +531,12 @@ pub struct Decl {
     /// then elaborated as strong induction on a bound for `e`, and every
     /// recursive call owes `e[args] < e`, a goal hole named `decN`.
     pub decreases: Option<Expr>,
+    /// `depth ν` — beside `decreases`, a tighter bound on how deep the
+    /// recursion nests: every recursive call owes `ν[args] < ν`, lifted as
+    /// `f::depth_obl_N` and defaulted as a measure's obligations are, and a
+    /// `runtime fn` publishes `f::depth` at `ν` rather than at the measure
+    /// (docs/native/runtime-fn-recursion-design.md §3.3).
+    pub depth: Option<Expr>,
     /// `unfolding f, g` — interface definitions whose bodies this
     /// declaration may see through (docs/language/interface-definitions-design.md
     /// §4). Declaration-wide: the kernel gate checks a declaration as one

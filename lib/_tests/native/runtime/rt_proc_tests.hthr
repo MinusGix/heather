@@ -11,6 +11,7 @@ import list;
 import option;
 import pair;
 import bitvec;
+import bitvec_nat;
 import function_ir;
 import function_ir_state;
 import function_ir_placeless;
@@ -21,22 +22,27 @@ import linux_world;
 import rt;
 import rt_lower;
 import rt_io_lower;
+import rt_loop;
+import rt_ptm;
 import rt_proc;
 
 fn proc_world() → rt::World { rt::World(Table::none(), [], trivial) }
 
 // `sum(n) = if n == 0 { 0 } else { n + sum(n - 1) }`, variable 0 the
 // argument: the call of itself is not the last thing it does.
-fn sum_body() → PTm {
+// `eq` says whether the branch is the convoy a `match h:` elaborates to.
+fn sum_body_by(eq: Bool) → PTm {
     Bind(Lit(Word(64), 0),
     Bind(Prim(Eq(64), [1, 0]),
-    Choose(0,
+    Choose(0, eq,
         Value(Var(1)),
         Bind(Lit(Word(64), 1),
         Bind(Prim(Sub(64), [3, 0]),
         Recur(0, [0],
         Value(Prim(Add(64), [5, 0]))))))))
 }
+
+fn sum_body() → PTm { sum_body_by(False) }
 
 fn sum_defs() → List<PDef> { [PDef(1, sum_body())] }
 
@@ -57,7 +63,7 @@ theorem sum_from_reflected(): sum_reflected().to_ptm() = Some(sum_body()) { refl
 
 // Under `if h:` too.
 theorem sum_from_if_eq(): Tm::to_ptm(Let(Lit(Word(64), 0), Let(Prim(Eq(64), [1, 0]), IfEq(0, Var(1),
-    Let(Lit(Word(64), 1), Let(Prim(Sub(64), [3, 0]), Let(Call(0, [0]), Prim(Add(64), [5, 0])))))))) = Some(sum_body()) { refl }
+    Let(Lit(Word(64), 1), Let(Prim(Sub(64), [3, 0]), Let(Call(0, [0]), Prim(Add(64), [5, 0])))))))) = Some(sum_body_by(True)) { refl }
 
 // A self-call inside a bound term's own binding is refused.
 theorem nested_self_call_refused(): Tm::to_ptm(Let(Let(Call(0, [0]), Var(0)), Var(0))).is_some() = False { refl }
@@ -108,3 +114,55 @@ theorem wrong_arity_refused(): PDef::procedures([PDef(1, wrong_arity_body())], p
 // A value that is a bit, not a word.
 theorem bit_value_refused(): PDef::procedures([PDef(1, Bind(Lit(Word(64), 0), Value(Prim(Eq(64), [1, 0]))))], proc_world(),
     PDef::known([PDef(1, Bind(Lit(Word(64), 0), Value(Prim(Eq(64), [1, 0]))))])).is_some() = False { refl }
+
+// Two parameters bound as `rt` binds them, the last variable 0: the
+// reflection of `fn diff(a, b) = a - b` is `Prim(Sub(64), [1, 0])`, and its
+// procedure entered with 10 and 3 leaves 7 in its value word (word 2).
+fn diff_defs() → List<PDef> { [PDef(2, Value(Prim(Sub(64), [1, 0])))] }
+
+fn diff_meaning(p: Nat, xs: List<BitVec(64)>) → BitVec(64) { PTm::word_at(xs, 0) - PTm::word_at(xs, 1) }
+
+theorem diff_means(): PTm::sem(Value(Prim(Sub(64), [1, 0])), proc_world(), diff_meaning, PTm::word_ctx(2),
+    PTm::vals_n(Table::none(), 2, [BitVec::ofNat(10), BitVec::ofNat(3)])) = BitVec::ofNat(7) { refl }
+
+fn diff_run(io: Io) → Mutated<Io, Flow> {
+    let src = Source([], [], 0, Exit(0), procedures := match PDef::procedures(diff_defs(), proc_world(), PDef::known(diff_defs())) { None => Nil, Some(ps) => ps });
+    let body = match src.procedures { Nil => Exit(0), Cons(proc, _) => proc.body };
+    Stmt::thread_by(body, program_writers([]), src.pure_answer(PDef::spec(diff_defs(), diff_meaning, λ _ _ _ => True)),
+        native_source::Env(Nil, [], []).set_words([0, 1], [BitVec::ofNat(10), BitVec::ofNat(3)]), io)
+}
+
+theorem diff_runs(io: Io): (match diff_run(io).value { Onward(after) => after.number(2), Exited(_) => 0 }) = 7 { refl }
+
+// ---------------------------------------------------------------------------
+// The guard as the generator will prove it: a Heather function whose call of
+// itself is not its last act, written with `match h:` and a measure, its
+// reflection the `match h:` body above, and `PTm::GuardedWords` from its own
+// `rsum::ext` and `rsum::irrel`, as `count_down_guarded` proves a measured
+// loop's (rt_loop_tests).
+
+fn rsum(n: BitVec(64)) → BitVec(64) decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => BitVec::ofNat(0),
+        False => n.add(rsum(n.sub(BitVec::ofNat(1)))),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+fn rsum_measure(ys: List<BitVec(64)>) → Nat { ys.head_or(BitVec::zero()).toNat() }
+
+theorem rsum_guarded(): PTm::GuardedWords([Word(64)], sum_body_by(True), Table::none(), rsum, rsum_measure) {
+    λ n again hyp => sym(rsum::ext(n.toNat(), n.toNat(),
+        λ (y: BitVec(64)) (p: nat::Nat::Lt(y.toNat(), n.toNat())) => rsum::rec(n.toNat(), y, p),
+        λ (y: BitVec(64)) _ => again([y]),
+        λ y p q => trans(rsum::irrel(n.toNat(), y.toNat() + 1, y, p, nat::Nat::lt_succ_self(y.toNat())),
+            sym(hyp([y], refl, p))),
+        n, nat::Nat::lt_succ_self(n.toNat()), nat::Nat::lt_succ_self(n.toNat())))
+}
+
+// Its one procedure means the function.
+theorem rsum_unfolds(): PDef::Unfolds([PDef(1, sum_body_by(True))], rt::World(Table::none(), [], trivial),
+    λ _ xs => Ty::uncurry(Table::none(), [Word(64)], Word(64), rsum, xs)) {
+    PTm::unfolds_one(1, sum_body_by(True), rt::World(Table::none(), [], trivial), λ xs => Ty::uncurry(Table::none(), [Word(64)], Word(64), rsum, xs),
+        rsum_measure, PTm::guarded_of_words([Word(64)], sum_body_by(True), Table::none(), rsum, rsum_measure, rsum_guarded()))
+}

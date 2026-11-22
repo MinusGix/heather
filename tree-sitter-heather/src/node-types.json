@@ -2271,6 +2271,91 @@
     "named": true,
     "fields": {},
     "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "_expression",
+          "named": true
+        },
+        {
+          "type": "declaration_big_operator_type",
+          "named": true
+        },
+        {
+          "type": "declaration_binary_type",
+          "named": true
+        },
+        {
+          "type": "declaration_call_type",
+          "named": true
+        },
+        {
+          "type": "declaration_function_type",
+          "named": true
+        },
+        {
+          "type": "declaration_index_type",
+          "named": true
+        },
+        {
+          "type": "declaration_inverse_type",
+          "named": true
+        },
+        {
+          "type": "declaration_member_type",
+          "named": true
+        },
+        {
+          "type": "declaration_prefix_type",
+          "named": true
+        },
+        {
+          "type": "declaration_quantified_type",
+          "named": true
+        },
+        {
+          "type": "declaration_type_application",
+          "named": true
+        },
+        {
+          "type": "depth_clause",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "decreasing_expression",
+    "named": true,
+    "fields": {
+      "call": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
+      "label": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "depth_clause",
+    "named": true,
+    "fields": {},
+    "children": {
       "multiple": false,
       "required": true,
       "types": [
@@ -2319,32 +2404,6 @@
           "named": true
         }
       ]
-    }
-  },
-  {
-    "type": "decreasing_expression",
-    "named": true,
-    "fields": {
-      "call": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "_expression",
-            "named": true
-          }
-        ]
-      },
-      "label": {
-        "multiple": false,
-        "required": true,
-        "types": [
-          {
-            "type": "identifier",
-            "named": true
-          }
-        ]
-      }
     }
   },
   {
@@ -7564,6 +7623,10 @@
   },
   {
     "type": "def",
+    "named": false
+  },
+  {
+    "type": "depth",
     "named": false
   },
   {

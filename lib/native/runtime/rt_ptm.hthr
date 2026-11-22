@@ -1,0 +1,458 @@
+// A pure function that calls procedures, as a term: `PTm`, its meaning
+// read through the procedures' meanings, a reflected body read as one
+// (`Tm::to_ptm`), and what a list of such definitions owes and keeps
+// (docs/native/runtime-fn-recursion-design.md §6 step 2): each unfolds to
+// its body (`PDef::Unfolds`, from a guard the generator proves as it
+// proves a measured loop's), and `PDef::fits`, whether a call runs within
+// `k` levels. The lowering to statements and its theorems are `rt_proc`;
+// this module is what `runtime` reads, and needs only `rt`.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import rt;
+import rt_loop;
+
+// ---------------------------------------------------------------------------
+// Terms and their meaning
+
+inductive PTm {
+    // The value: a word.
+    Value(v: Tm),
+    // A pure value bound once: `body` sees it as variable 0.
+    Bind(e: Tm, body: PTm),
+    // Procedure `p` called on word variables: `body` sees its word as
+    // variable 0.
+    Recur(p: Nat, args: List<Nat>, body: PTm),
+    // A branch on a bit variable: a `match`, or with `eq` a `match h:`,
+    // whose meaning is the elaborator's convoy (`Tm::convoy`), so that
+    // either converts to the function it is the body of.
+    Choose(c: Nat, eq: Bool, yes: PTm, no: PTm),
+}
+
+// A branch's value: the convoy where `eq`, the plain match otherwise.
+fn PTm::branch(eq, b: Bool, yes, no: BitVec(64)) → BitVec(64) {
+    match eq { True => Tm::convoy(BitVec(64), b, yes, no), False => match b { True => yes, False => no } }
+}
+
+theorem PTm::branch_is_match(eq, b: Bool, yes, no: BitVec(64)): PTm::branch(eq, b, yes, no) = (match b as λ _ => BitVec(64) { True => yes, False => no }) {
+    match eq as λ e => PTm::branch(e, b, yes, no) = (match b as λ _ => BitVec(64) { True => yes, False => no }) {
+        True => match b as λ b2 => Tm::convoy(BitVec(64), b2, yes, no) = (match b2 as λ _ => BitVec(64) { True => yes, False => no }) { True => refl, False => refl },
+        False => refl,
+    }
+}
+
+// What the procedures mean: each one's word from its argument words.
+fn PCalls() → Type { Nat → List<BitVec(64)> → BitVec(64) }
+
+// Variables as words, each cast to a word as the meaning reads it.
+fn PTm::words(w: rt::World, g: List<Ty>, vals: rt::Env(w.tys, g), args: List<Nat>) → List<BitVec(64)> {
+    match args {
+        Nil => Nil,
+        Cons(a, more) => Cons(Ty::cast(w.tys, Ty::at(g, a), Word(64), Env::get(w.tys, g, vals, a)), PTm::words(w, g, vals, more)),
+    }
+}
+
+fn PTm::sem(self t: PTm, w: rt::World, f: PCalls()) → (g: List<Ty>) → rt::Env(w.tys, g) → BitVec(64) {
+    match t {
+        Value(v) => λ g vals => Ty::cast(w.tys, Tm::ty(v, w, g), Word(64), Tm::sem(v, w, g, vals)),
+        Bind(e, body) => λ g vals => body.sem(w, f, Cons(Tm::ty(e, w, g), g), Pair(Tm::sem(e, w, g, vals), vals)),
+        Recur(p, args, body) => λ g vals => body.sem(w, f, Cons(Word(64), g), Pair(f(p, PTm::words(w, g, vals, args)), vals)),
+        Choose(c, eq, yes, no) => λ g vals => PTm::branch(eq, Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, vals, c)), yes.sem(w, f, g, vals), no.sem(w, f, g, vals)),
+    }
+}
+
+// Whether every call the meaning makes is `ok`, read on its procedure and
+// argument words.
+fn PTm::calls_ok(self t: PTm, w: rt::World, f: PCalls(), ok: Nat → List<BitVec(64)> → Bool) → (g: List<Ty>) → rt::Env(w.tys, g) → Bool {
+    match t {
+        Value(_) => λ g vals => True,
+        Bind(e, body) => λ g vals => body.calls_ok(w, f, ok, Cons(Tm::ty(e, w, g), g), Pair(Tm::sem(e, w, g, vals), vals)),
+        Recur(p, args, body) => λ g vals => ok(p, PTm::words(w, g, vals, args))
+            && body.calls_ok(w, f, ok, Cons(Word(64), g), Pair(f(p, PTm::words(w, g, vals, args)), vals)),
+        Choose(c, _, yes, no) => λ g vals => match Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, vals, c)) {
+            True => yes.calls_ok(w, f, ok, g, vals),
+            False => no.calls_ok(w, f, ok, g, vals),
+        },
+    }
+}
+
+// What every call is `ok` by, it is by any weaker `ok`.
+theorem PTm::calls_ok_mono(self t: PTm, w: rt::World, f: PCalls(), ok1, ok2: Nat → List<BitVec(64)> → Bool,
+    more: (p: Nat) → (xs: List<BitVec(64)>) → ok1(p, xs).IsTrue() → ok2(p, xs).IsTrue()):
+    (g: List<Ty>) → (vals: rt::Env(w.tys, g)) → t.calls_ok(w, f, ok1, g, vals).IsTrue() → t.calls_ok(w, f, ok2, g, vals).IsTrue() {
+    match t {
+        Value(_) => λ g vals _ => trivial,
+        Bind(e, body) => λ g vals h => body.calls_ok_mono(w, f, ok1, ok2, more, Cons(Tm::ty(e, w, g), g), Pair(Tm::sem(e, w, g, vals), vals), h),
+        Recur(p, args, body) => λ g vals h => {
+            let xs = PTm::words(w, g, vals, args);
+            let parts = Bool::both(h);
+            Bool::is_true_and_intro(ok2(p, xs), body.calls_ok(w, f, ok2, Cons(Word(64), g), Pair(f(p, xs), vals)),
+                more(p, xs, parts.left), body.calls_ok_mono(w, f, ok1, ok2, more, Cons(Word(64), g), Pair(f(p, xs), vals), parts.right))
+        },
+        Choose(c, _, yes, no) => λ g vals => match Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, vals, c)) as λ b =>
+                (match b as λ _ => Bool { True => yes.calls_ok(w, f, ok1, g, vals), False => no.calls_ok(w, f, ok1, g, vals) }).IsTrue() →
+                (match b as λ _ => Bool { True => yes.calls_ok(w, f, ok2, g, vals), False => no.calls_ok(w, f, ok2, g, vals) }).IsTrue() {
+            True => λ h => yes.calls_ok_mono(w, f, ok1, ok2, more, g, vals, h),
+            False => λ h => no.calls_ok_mono(w, f, ok1, ok2, more, g, vals, h),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A recursive function's body as a `PTm`
+
+// Whether a term calls entry `c`.
+fn Tm::calls_of(self t: Tm, c: Nat) → Bool {
+    match t {
+        Let(e, body) => e.calls_of(c) || body.calls_of(c),
+        If(_, yes, no) => yes.calls_of(c) || no.calls_of(c),
+        IfEq(_, yes, no) => yes.calls_of(c) || no.calls_of(c),
+        Call(f, _) => f.same(c),
+        Case(_, zero, succ) => zero.calls_of(c) || succ.calls_of(c),
+        Pick(_, _, arms, _) => arms.calls_of(c),
+        _ => False,
+    }
+}
+
+// `Tm::to_ptm` with the calls of entry `c` read as calls of procedure 0:
+// itself (`c` 0), or for a program's main the recursive function it calls.
+fn Tm::to_ptm_of(self t: Tm, c: Nat) → Option<PTm> {
+    match t.calls_of(c) {
+        False => Some(Value(t)),
+        True => match t {
+            Let(e, body) => match e {
+                Call(f, args) => match f.same(c) {
+                    True => body.to_ptm_of(c).map(λ b => Recur(0, args, b)),
+                    False => body.to_ptm_of(c).map(λ b => Bind(e, b)),
+                },
+                _ => match e.calls_of(c) { True => None, False => body.to_ptm_of(c).map(λ b => Bind(e, b)) },
+            },
+            If(x, yes, no) => yes.to_ptm_of(c).and_then(λ y => no.to_ptm_of(c).map(λ n => Choose(x, False, y, n))),
+            // The equation `match h:` convoys is read only in proofs.
+            IfEq(x, yes, no) => yes.to_ptm_of(c).and_then(λ y => no.to_ptm_of(c).map(λ n => Choose(x, True, y, n))),
+            Call(f, args) => match f.same(c) { True => Some(Recur(0, args, Value(Var(0)))), False => Some(Value(t)) },
+            _ => None,
+        },
+    }
+}
+
+// A function's reflected body, its calls of itself (entry 0) read as calls
+// of procedure 0: a self-call bound by a `Let` or as the body's value is a
+// `Recur`, a branch on a bit (`match` or `match h:`) with a self-call in
+// an arm is a `Choose`, and a part with no self-call is a `Bind` or the
+// `Value`. A self-call anywhere else (inside a bound term, a `Nat` or enum
+// match) is refused.
+fn Tm::to_ptm(self t: Tm) → Option<PTm> { t.to_ptm_of(0) }
+
+// ---------------------------------------------------------------------------
+// Definitions over words: their meanings, their pins, and how deep their
+// calls go
+
+// Words `from` to `from + n - 1`.
+fn PTm::range(from, n: Nat) → List<Nat> {
+    match n { Zero => Nil, Succ(m) => Cons(from, PTm::range(from + 1, m)) }
+}
+
+// `n` word variables.
+fn PTm::word_ctx(n: Nat) → List<Ty> {
+    match n { Zero => Nil, Succ(m) => Cons(Word(64), PTm::word_ctx(m)) }
+}
+
+// Word `i` of a list, zero past its end.
+fn PTm::word_at(xs: List<BitVec(64)>, i: Nat) → BitVec(64) { match xs.nth(i) { None => BitVec::ofNat(0), Some(x) => x } }
+
+// The values of `n` parameters from their words in order, the last
+// variable 0 (`PTm::param_locs`); a missing one is zero.
+fn PTm::vals_n(tys: Table, n: Nat, xs: List<BitVec(64)>) → rt::Env(tys, PTm::word_ctx(n)) {
+    match n as λ k => rt::Env(tys, PTm::word_ctx(k)) {
+        Zero => trivial,
+        Succ(m) => Pair(PTm::word_at(xs, m), PTm::vals_n(tys, m, xs)),
+    }
+}
+
+// A procedure's body: how many word arguments it takes, and its term over
+// them.
+record PDef { arity: Nat, body: PTm }
+
+fn PDef::arity_at(defs: List<PDef>, p: Nat) → Nat { match defs.nth(p) { None => 0, Some(d) => d.arity } }
+
+// The procedures' meanings unfold to their bodies' at their arities (each
+// function's pin).
+fn PDef::Unfolds(defs: List<PDef>, w: rt::World, f: PCalls()) → Type {
+    (p: Nat) → (d: PDef) → defs.nth(p) = Some(d) → (xs: List<BitVec(64)>) → xs.len() = d.arity →
+        f(p, xs) = d.body.sem(w, f, PTm::word_ctx(d.arity), PTm::vals_n(w.tys, d.arity, xs))
+}
+
+// A recursive function `h` of `n` words with body `body`, guarded by the
+// measure `m`: the body, its calls of itself answered by anything that
+// agrees with `h` below the measure, is `h` (`Fun::Guarded`'s statement,
+// over a `PTm`). The generator proves it from the function's own `f::ext`
+// and `f::irrel`, as it does a measured loop's.
+fn PTm::Guarded(n: Nat, body: PTm, w: rt::World, h: List<BitVec(64)> → BitVec(64), m: List<BitVec(64)> → Nat) → Type {
+    (xs: List<BitVec(64)>) → xs.len() = n → (again: List<BitVec(64)> → BitVec(64)) →
+        ((ys: List<BitVec(64)>) → ys.len() = n → m(ys) < m(xs) → again(ys) = h(ys)) →
+        body.sem(w, λ _ ys => again(ys), PTm::word_ctx(n), PTm::vals_n(w.tys, n, xs)) = h(xs)
+}
+
+// `PTm::Guarded` in the shape the generator proves it in, as it proves a
+// measured loop's `Fun::Guarded`: one binder per parameter word, the
+// function `h` itself at its signature, read in the world of a pure
+// program (`PTm::plain`'s: no records, no functions).
+fn PTm::GuardedWords(ws: List<Ty>, body: PTm, tys: Table, h: Ty::Arrows(tys, ws, Word(64)), m: List<BitVec(64)> → Nat) → Type {
+    Ty::ForWords(ws, λ (xs: List<BitVec(64)>) => (again: List<BitVec(64)> → BitVec(64)) →
+        ((ys: List<BitVec(64)>) → ys.len() = ws.len() → m(ys) < m(xs) → again(ys) = Ty::uncurry(tys, ws, Word(64), h, ys)) →
+        body.sem(rt::World(tys, [], trivial), λ _ ys => again(ys), PTm::word_ctx(ws.len()), PTm::vals_n(tys, ws.len(), xs)) = Ty::uncurry(tys, ws, Word(64), h, xs))
+}
+
+theorem PTm::guarded_of_words(ws: List<Ty>, body: PTm, tys: Table, h: Ty::Arrows(tys, ws, Word(64)), m: List<BitVec(64)> → Nat,
+    g: PTm::GuardedWords(ws, body, tys, h, m)):
+    PTm::Guarded(ws.len(), body, rt::World(tys, [], trivial), λ xs => Ty::uncurry(tys, ws, Word(64), h, xs), m) {
+    λ xs len => Ty::for_words_at(ws, λ (zs: List<BitVec(64)>) => (again: List<BitVec(64)> → BitVec(64)) →
+        ((ys: List<BitVec(64)>) → ys.len() = ws.len() → m(ys) < m(zs) → again(ys) = Ty::uncurry(tys, ws, Word(64), h, ys)) →
+        body.sem(rt::World(tys, [], trivial), λ _ ys => again(ys), PTm::word_ctx(ws.len()), PTm::vals_n(tys, ws.len(), zs)) = Ty::uncurry(tys, ws, Word(64), h, zs),
+        g, xs, len)
+}
+
+// A guarded function is its one procedure's meaning: the recursion answered
+// by the function itself agrees everywhere.
+theorem PTm::unfolds_one(n: Nat, body: PTm, w: rt::World, h: List<BitVec(64)> → BitVec(64), m: List<BitVec(64)> → Nat,
+    guarded: PTm::Guarded(n, body, w, h, m)): PDef::Unfolds([PDef(n, body)], w, λ _ xs => h(xs)) {
+    λ p => match p {
+        Zero => λ d found xs len => {
+            let same: (PDef(n, body) = d) = cong_fn(λ (o: Option<PDef>) => match o { None => PDef(n, body), Some(x) => x }, found);
+            let len_n: (xs.len() = n) = j(sym(same), λ d2 _ => xs.len() = d2.arity, len);
+            j(same, λ d2 _ => h(xs) = d2.body.sem(w, λ _ ys => h(ys), PTm::word_ctx(d2.arity), PTm::vals_n(w.tys, d2.arity, xs)),
+                sym(guarded(xs, len_n, h, λ ys _ _ => refl)))
+        },
+        Succ(_) => λ d never => false_elim(j(never, λ o _ => match o as λ _ => Type { None => True, Some(_) => False }, trivial)),
+    }
+}
+
+// Whether definition `p`'s body, at `xs`, makes only calls `below` allows.
+fn PDef::body_fits(defs: List<PDef>, w: rt::World, f: PCalls(), below: Nat → List<BitVec(64)> → Bool, p: Nat, xs: List<BitVec(64)>) → Bool {
+    match defs.nth(p) { None => True, Some(d) => d.body.calls_ok(w, f, below, PTm::word_ctx(d.arity), PTm::vals_n(w.tys, d.arity, xs)) }
+}
+
+// Whether definition `p` at `xs` runs within `k` levels when every call
+// spends one: each call its body makes fits within the levels below. At a
+// closed argument it evaluates, so `f::fits(levels, x) = True` is `refl`.
+fn PDef::fits(defs: List<PDef>, w: rt::World, f: PCalls(), k: Nat) → Nat → List<BitVec(64)> → Bool {
+    match k {
+        Zero => λ p xs => PDef::body_fits(defs, w, f, λ _ _ => False, p, xs),
+        Succ(j) => λ p xs => PDef::body_fits(defs, w, f, PDef::fits(defs, w, f, j), p, xs),
+    }
+}
+
+// What a body's calls are `ok` by, they are by any weaker `ok`.
+theorem PDef::body_fits_mono(defs: List<PDef>, w: rt::World, f: PCalls(), ok1, ok2: Nat → List<BitVec(64)> → Bool,
+    more: (q: Nat) → (ys: List<BitVec(64)>) → ok1(q, ys).IsTrue() → ok2(q, ys).IsTrue(), p: Nat, xs: List<BitVec(64)>):
+    PDef::body_fits(defs, w, f, ok1, p, xs).IsTrue() → PDef::body_fits(defs, w, f, ok2, p, xs).IsTrue() {
+    match defs.nth(p) as λ o =>
+            (match o as λ _ => Bool { None => True, Some(d) => d.body.calls_ok(w, f, ok1, PTm::word_ctx(d.arity), PTm::vals_n(w.tys, d.arity, xs)) }).IsTrue() →
+            (match o as λ _ => Bool { None => True, Some(d) => d.body.calls_ok(w, f, ok2, PTm::word_ctx(d.arity), PTm::vals_n(w.tys, d.arity, xs)) }).IsTrue() {
+        None => λ _ => trivial,
+        Some(d) => λ h => d.body.calls_ok_mono(w, f, ok1, ok2, more, PTm::word_ctx(d.arity), PTm::vals_n(w.tys, d.arity, xs), h),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The depth a call needs, evaluated
+//
+// `PDef::fits(k)` asks whether a call runs within `k` levels; these give
+// the least such `k` at a closed argument in one evaluation, which is how
+// a program over closed arguments infers its levels
+// (docs/native/runtime-fn-recursion-design.md §3.4). Nothing is proved of
+// them: the generator states the program at the levels they give, and
+// the program's own verdict (`fits`, by evaluation) is what the theorem
+// takes.
+
+// The deeper of two depths, where both are known.
+fn PTm::deeper(a, b: Option<Nat>) → Option<Nat> {
+    match a { None => None, Some(x) => match b { None => None, Some(y) => Some(x.max(y)) } }
+}
+
+// The levels the calls a meaning makes need: each one more than its
+// callee's depth `d`, the most of them; `None` where one is unknown.
+fn PTm::calls_depth(self t: PTm, w: rt::World, f: PCalls(), d: Nat → List<BitVec(64)> → Option<Nat>) → (g: List<Ty>) → rt::Env(w.tys, g) → Option<Nat> {
+    match t {
+        Value(_) => λ g vals => Some(0),
+        Bind(e, body) => λ g vals => body.calls_depth(w, f, d, Cons(Tm::ty(e, w, g), g), Pair(Tm::sem(e, w, g, vals), vals)),
+        Recur(p, args, body) => λ g vals => PTm::deeper(
+            match d(p, PTm::words(w, g, vals, args)) { None => None, Some(n) => Some(n + 1) },
+            body.calls_depth(w, f, d, Cons(Word(64), g), Pair(f(p, PTm::words(w, g, vals, args)), vals))),
+        Choose(c, _, yes, no) => λ g vals => match Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, vals, c)) {
+            True => yes.calls_depth(w, f, d, g, vals),
+            False => no.calls_depth(w, f, d, g, vals),
+        },
+    }
+}
+
+// The depth definition `p`'s body needs at `xs`.
+fn PDef::body_depth(defs: List<PDef>, w: rt::World, f: PCalls(), d: Nat → List<BitVec(64)> → Option<Nat>, p: Nat, xs: List<BitVec(64)>) → Option<Nat> {
+    match defs.nth(p) { None => Some(0), Some(e) => e.body.calls_depth(w, f, d, PTm::word_ctx(e.arity), PTm::vals_n(w.tys, e.arity, xs)) }
+}
+
+// The depth a call of definition `p` at `xs` needs, the least `k` with
+// `PDef::fits(k, p, xs)`, where it is below `fuel`; `None` past it.
+fn PDef::depth(defs: List<PDef>, w: rt::World, f: PCalls(), fuel: Nat) → Nat → List<BitVec(64)> → Option<Nat> {
+    match fuel {
+        Zero => λ p xs => None,
+        Succ(j) => λ p xs => PDef::body_depth(defs, w, f, PDef::depth(defs, w, f, j), p, xs),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The depth from a rank
+//
+// A rank that drops at every call bounds the depth: a definition at rank
+// `r` runs within `r` levels. The termination measure is such a rank, and
+// so is any tighter one a writer proves (docs/native/runtime-fn-recursion-design.md §3).
+
+// Whether every call each definition's body makes, along the branch it
+// takes, is at a lower rank.
+fn PDef::Descends(defs: List<PDef>, w: rt::World, f: PCalls(), rank: Nat → List<BitVec(64)> → Nat) → Type {
+    (p: Nat) → (xs: List<BitVec(64)>) → PDef::body_fits(defs, w, f, λ q ys => (rank(q, ys) + 1).leb(rank(p, xs)), p, xs).IsTrue()
+}
+
+// A call whose rank is at most `k` runs within `k` levels.
+theorem PDef::fits_below_rank(defs: List<PDef>, w: rt::World, f: PCalls(), rank: Nat → List<BitVec(64)> → Nat,
+    descends: PDef::Descends(defs, w, f, rank), k: Nat):
+    (p: Nat) → (xs: List<BitVec(64)>) → rank(p, xs) <= k → PDef::fits(defs, w, f, k, p, xs).IsTrue() {
+    match k {
+        Zero => λ p xs low => PDef::body_fits_mono(defs, w, f, λ q ys => (rank(q, ys) + 1).leb(rank(p, xs)), λ _ _ => False,
+            λ q ys h => false_elim(Nat::le_trans(rank(q, ys) + 1, rank(p, xs), 0, (rank(q, ys) + 1).leb_sound(rank(p, xs), h), low)),
+            p, xs, descends(p, xs)),
+        Succ(i, ih) => λ p xs low => PDef::body_fits_mono(defs, w, f, λ q ys => (rank(q, ys) + 1).leb(rank(p, xs)), PDef::fits(defs, w, f, i),
+            λ q ys h => ih(q, ys, Nat::le_of_succ_succ(rank(q, ys), i,
+                Nat::le_trans(rank(q, ys) + 1, rank(p, xs), i + 1, (rank(q, ys) + 1).leb_sound(rank(p, xs), h), low))),
+            p, xs, descends(p, xs)),
+    }
+}
+
+// Every call runs within its rank's levels.
+theorem PDef::fits_by_rank(defs: List<PDef>, w: rt::World, f: PCalls(), rank: Nat → List<BitVec(64)> → Nat,
+    descends: PDef::Descends(defs, w, f, rank)): (p: Nat) → (xs: List<BitVec(64)>) → PDef::fits(defs, w, f, rank(p, xs), p, xs).IsTrue() {
+    λ p xs => PDef::fits_below_rank(defs, w, f, rank, descends, rank(p, xs), p, xs, Nat::le_refl(rank(p, xs)))
+}
+
+// ---------------------------------------------------------------------------
+// The decrease, read off a body
+//
+// What a generator composes a proof of `PDef::Descends` from, one lemma per
+// node it has to prove something at: a branch is proved in each arm with
+// its test's equation, and a call by its `ok` and the rest. A `Value` is
+// `trivial` and a `Bind` reduces to its body, so neither needs one.
+
+theorem PTm::calls_ok_value(v: Tm, w: rt::World, f: PCalls(), ok: Nat → List<BitVec(64)> → Bool, g: List<Ty>, vals: rt::Env(w.tys, g)):
+    PTm::calls_ok(Value(v), w, f, ok, g, vals).IsTrue() { trivial }
+
+theorem PTm::calls_ok_bind(e: Tm, body: PTm, w: rt::World, f: PCalls(), ok: Nat → List<BitVec(64)> → Bool, g: List<Ty>, vals: rt::Env(w.tys, g),
+    rest: body.calls_ok(w, f, ok, Cons(Tm::ty(e, w, g), g), Pair(Tm::sem(e, w, g, vals), vals)).IsTrue()):
+    PTm::calls_ok(Bind(e, body), w, f, ok, g, vals).IsTrue() { rest }
+
+theorem PTm::calls_ok_choose(c: Nat, eq: Bool, yes, no: PTm, w: rt::World, f: PCalls(), ok: Nat → List<BitVec(64)> → Bool,
+    g: List<Ty>, vals: rt::Env(w.tys, g),
+    on_yes: Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, vals, c)) = True → yes.calls_ok(w, f, ok, g, vals).IsTrue(),
+    on_no: Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, vals, c)) = False → no.calls_ok(w, f, ok, g, vals).IsTrue()):
+    PTm::calls_ok(Choose(c, eq, yes, no), w, f, ok, g, vals).IsTrue() {
+    let at = λ (b: Bool) => (match b as λ _ => Bool { True => yes.calls_ok(w, f, ok, g, vals), False => no.calls_ok(w, f, ok, g, vals) }).IsTrue();
+    match h: Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, vals, c)) {
+        True => j(sym(h), λ b _ => at(b), on_yes(h)),
+        False => j(sym(h), λ b _ => at(b), on_no(h)),
+    }
+}
+
+theorem PTm::calls_ok_recur(p: Nat, args: List<Nat>, body: PTm, w: rt::World, f: PCalls(), ok: Nat → List<BitVec(64)> → Bool,
+    g: List<Ty>, vals: rt::Env(w.tys, g),
+    here: ok(p, PTm::words(w, g, vals, args)).IsTrue(),
+    rest: body.calls_ok(w, f, ok, Cons(Word(64), g), Pair(f(p, PTm::words(w, g, vals, args)), vals)).IsTrue()):
+    PTm::calls_ok(Recur(p, args, body), w, f, ok, g, vals).IsTrue() {
+    Bool::is_true_and_intro(ok(p, PTm::words(w, g, vals, args)),
+        body.calls_ok(w, f, ok, Cons(Word(64), g), Pair(f(p, PTm::words(w, g, vals, args)), vals)), here, rest)
+}
+
+// A call's `ok` in `Descends`, from the decrease: below the caller's rank.
+theorem PTm::below_rank(a, b: Nat, lt: a < b): (a + 1).leb(b).IsTrue() { (a + 1).leb_complete(b, lt) }
+
+// A rank read at the first `n` words, each `0` where the list is short: it
+// reduces at a list nobody has looked into (`xs` itself), as a rank
+// reading the list by cases does not.
+fn PTm::padded(n: Nat, rank: List<BitVec(64)> → Nat) → List<BitVec(64)> → Nat {
+    λ xs => rank(PTm::range(0, n).map(λ i => PTm::word_at(xs, i)))
+}
+
+// A call's `ok` in `Descends` at the caller's words `xs`: below their rank.
+fn PTm::rank_ok(rank: List<BitVec(64)> → Nat, xs: List<BitVec(64)>) → Nat → List<BitVec(64)> → Bool {
+    λ _ ys => (rank(ys) + 1).leb(rank(xs))
+}
+
+// ---------------------------------------------------------------------------
+// One recursive function, as the generator publishes it
+//
+// A `runtime fn` of `ws` words whose call of itself is not its last act is
+// its one definition, `PTm::defs_words`. The generator proves its guard
+// (`PTm::GuardedWords`) from the function's own `f::ext` and `f::irrel`,
+// and publishes the rest as these, at the function itself.
+
+// A 64-bit word.
+fn Ty::is_word64(self t: Ty) → Bool { match t { Word(w) => w.same(64), _ => False } }
+
+// The words a recursive function takes and its body, if it is one: words
+// in and a word out, nothing lent, and a body `Tm::to_ptm` reads.
+fn Fun::recursive_ptm(self f: Fun) → Option<PTm> {
+    match f.lent {
+        Succ(_) => None,
+        Zero => match f.params.all_bit(λ t => t.is_word64()) && f.result.is_word64() && f.body.calls_of(0) {
+            False => None,
+            True => f.body.to_ptm(),
+        },
+    }
+}
+
+fn PTm::defs_words(ws: List<Ty>, body: PTm) → List<PDef> { [PDef(ws.len(), body)] }
+
+// The world a pure recursion reads in: no records, no functions.
+fn PTm::words_world(tys: Table) → rt::World { rt::World(tys, [], trivial) }
+
+// The function as its definitions' meaning: `h` at the words.
+fn PTm::words_meaning(tys: Table, ws: List<Ty>, h: Ty::Arrows(tys, ws, Word(64))) → PCalls() {
+    λ _ xs => Ty::uncurry(tys, ws, Word(64), h, xs)
+}
+
+// The guarded function unfolds to its body.
+theorem PTm::unfolds_words(ws: List<Ty>, body: PTm, tys: Table, h: Ty::Arrows(tys, ws, Word(64)), m: List<BitVec(64)> → Nat,
+    g: PTm::GuardedWords(ws, body, tys, h, m)): PDef::Unfolds(PTm::defs_words(ws, body), PTm::words_world(tys), PTm::words_meaning(tys, ws, h)) {
+    PTm::unfolds_one(ws.len(), body, PTm::words_world(tys), λ xs => Ty::uncurry(tys, ws, Word(64), h, xs), m,
+        PTm::guarded_of_words(ws, body, tys, h, m, g))
+}
+
+// Whether the function at `xs` runs within `k` levels.
+fn PTm::fits_words(ws: List<Ty>, body: PTm, tys: Table, h: Ty::Arrows(tys, ws, Word(64))) → Nat → List<BitVec(64)> → Bool {
+    λ k xs => PDef::fits(PTm::defs_words(ws, body), PTm::words_world(tys), PTm::words_meaning(tys, ws, h), k, 0, xs)
+}
+
+// One recursive function's decrease, as the generator proves it: its body
+// at any words calls only below their rank.
+theorem PTm::descends_words(ws: List<Ty>, body: PTm, tys: Table, h: Ty::Arrows(tys, ws, Word(64)), rank: List<BitVec(64)> → Nat,
+    one: (xs: List<BitVec(64)>) → body.calls_ok(PTm::words_world(tys), PTm::words_meaning(tys, ws, h),
+        PTm::rank_ok(rank, xs), PTm::word_ctx(ws.len()), PTm::vals_n(tys, ws.len(), xs)).IsTrue()):
+    PDef::Descends(PTm::defs_words(ws, body), PTm::words_world(tys), PTm::words_meaning(tys, ws, h), λ _ xs => rank(xs)) {
+    λ p xs => match p as λ q => PDef::body_fits(PTm::defs_words(ws, body), PTm::words_world(tys), PTm::words_meaning(tys, ws, h),
+            λ _ ys => (rank(ys) + 1).leb(rank(xs)), q, xs).IsTrue() {
+        Zero => one(xs),
+        Succ(_) => trivial,
+    }
+}
+
+// Its depth: a call at `xs` runs within `rank(xs)` levels.
+theorem PTm::depth_words(ws: List<Ty>, body: PTm, tys: Table, h: Ty::Arrows(tys, ws, Word(64)), rank: List<BitVec(64)> → Nat,
+    descends: PDef::Descends(PTm::defs_words(ws, body), PTm::words_world(tys), PTm::words_meaning(tys, ws, h), λ _ xs => rank(xs))):
+    (xs: List<BitVec(64)>) → PTm::fits_words(ws, body, tys, h, rank(xs), xs) = True {
+    λ xs => eq_true_of_is_true(PTm::fits_words(ws, body, tys, h, rank(xs), xs),
+        PDef::fits_by_rank(PTm::defs_words(ws, body), PTm::words_world(tys), PTm::words_meaning(tys, ws, h), λ _ ys => rank(ys), descends, 0, xs))
+}

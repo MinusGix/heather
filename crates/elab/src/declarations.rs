@@ -481,6 +481,9 @@ impl DeclarationsMut<'_> {
             return self.session_transaction(|me| DeclarationsMut(me).elab_partial_decl(decl));
         }
         if loops::has_loop(decl) {
+            if let Some(nu) = &decl.depth {
+                return err("a `depth` bound on a declaration with loops is not built yet: its loops lift into steps of their own", nu.span);
+            }
             return self.session_transaction(|me| DeclarationsMut(me).elab_loop_decl(decl));
         }
         if decl.decreases.is_some() {
@@ -1014,6 +1017,11 @@ impl DeclarationsMut<'_> {
         // A member's self-call may be written as a method call on its
         // receiver; every route below reads the call it desugars to.
         let decl = &measure::method_calls_as_calls(decl, base_name(&decl.name), self.0)?;
+        // A `depth ν` clause and its discharges (`on ?depthN := …`) are
+        // lowered on their own, after the family (`elab_depth_bound`): the
+        // recursion itself is the measure's alone.
+        let (plain, depth) = measure::split_depth(decl);
+        let decl = &plain;
         // The wrapper spells `nat::Nat::Lt`, `nat::Nat::le_trans` and `nat::Nat::lt_succ_self`;
         // the default closer spells `omega`'s certificates, which name the
         // `omega` module. Neither is the prelude's, so the module has to import
@@ -1171,6 +1179,80 @@ impl DeclarationsMut<'_> {
         // designation takes out of the surface.
         self.designate_access(&format!("{}::rec", decl.name), &measure::rec_name(&decl.name));
         self.designate_access(&format!("{}::body", decl.name), &measure::body_name(&decl.name));
+        // Each lifted obligation as `f::obl_N`: the decrease at that call,
+        // which a `runtime fn` reads its depth from
+        // (docs/native/runtime-fn-recursion-design.md §3.2).
+        if lifted {
+            for part in &family.obligations {
+                if let Some(site) = part.decl.name.strip_prefix(&format!("{}#obl_", decl.name)) {
+                    self.designate_access(&format!("{}::obl_{site}", decl.name), &part.decl.name);
+                }
+            }
+        }
+        if let Some((nu, ons)) = depth
+            && companions
+        {
+            self.elab_depth_bound(decl, &self_name, &nu, ons, omega_available, &auto, family.obligations.len())?;
+        }
+        Ok(())
+    }
+
+    /// `decreases μ depth ν` (docs/native/runtime-fn-recursion-design.md
+    /// §3.3): every recursive call owes `ν(y) < ν(x)` as it owes the
+    /// measure's decrease, so the body is lowered once more with `ν` as its
+    /// measure and only the lifted obligations are kept, as `f::depth_obl_N`,
+    /// with the writer's `on ?depthN := …` as their discharges and the
+    /// measure's default closer otherwise. `f::depth_rank` is `ν` as a
+    /// function of the parameters. Nothing here is the recursion's: a
+    /// `runtime fn` reads the two to publish `f::depth` at `ν`.
+    #[allow(clippy::too_many_arguments)]
+    fn elab_depth_bound(&mut self, decl: &Decl, self_name: &str, nu: &Expr, ons: Vec<heather_syntax::OnStmt>,
+                        omega_available: bool, auto: &measure::AutoEqs, calls: usize) -> R<()> {
+        let as_depth = |e: ElabError| match e {
+            ElabError::Elab { msg, span } => ElabError::Elab {
+                msg: msg.replace("a `decreases` measure is a `Nat`", "a `depth` bound is a `Nat`")
+                    .replace("must decrease the measure", "must decrease the `depth` bound")
+                    .replace("`on ?dec", "`on ?depth"),
+                span,
+            },
+            other => other,
+        };
+        self.check_measure_is_nat(decl, nu).map_err(as_depth)?;
+        let mut bound = decl.clone();
+        bound.name = measure::depth_name(&decl.name);
+        bound.decreases = Some(nu.clone());
+        bound.body.ons = ons;
+        let family = measure::lower(&bound, self_name, nu, omega_available, self.0, true, auto).map_err(as_depth)?;
+        if family.obligations.len() != calls {
+            return err(
+                "a `depth` bound's obligations are lifted one per recursive call, as the measure's are, \
+                 and here they could not all be: discharge each by name (`on ?depthN := …`)",
+                nu.span,
+            );
+        }
+        for part in &family.obligations {
+            self.elab_decl_one(&part.decl, Some(&part.obligations)).map_err(as_depth)?;
+        }
+        let span = nu.span;
+        let rank = Decl {
+            kind: DeclKind::Fn,
+            value: false,
+            elaborates: None,
+            name: measure::depth_rank_name(&decl.name),
+            result: Ty { kind: TyKind::Nat, span },
+            decreases: None,
+            depth: None,
+            body: heather_syntax::Block { stmts: Vec::new(), result: Box::new(nu.clone()), ons: Vec::new(), span },
+            ..decl.clone()
+        };
+        self.elab_decl_one(&rank, None).map_err(as_depth)?;
+        self.designate_access(&format!("{}::depth_rank", decl.name), &rank.name);
+        let prefix = format!("{}#obl_", bound.name);
+        for part in &family.obligations {
+            if let Some(site) = part.decl.name.strip_prefix(&prefix) {
+                self.designate_access(&format!("{}::depth_obl_{site}", decl.name), &part.decl.name);
+            }
+        }
         Ok(())
     }
 
@@ -1220,6 +1302,9 @@ impl DeclarationsMut<'_> {
         let members = &members[..];
         let mut gm: Vec<measure::GroupMember<'_>> = Vec::new();
         for d in members {
+            if let Some(nu) = &d.depth {
+                return err("a `depth` bound on a mutual recursion is not built yet: give it to a recursion of one declaration", nu.span);
+            }
             let measure = d.decreases.clone().expect("a measure declaration");
             measure::check_shape(d, &measure)?;
             gm.push(measure::GroupMember {

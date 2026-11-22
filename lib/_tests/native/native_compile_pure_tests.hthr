@@ -15,6 +15,7 @@ import native_compile;
 import native_compile_pure;
 import rt;
 import rt_lower;
+import rt_ptm;
 import rt_proc;
 
 fn pure_world() → rt::World { rt::World(Table::none(), [], trivial) }
@@ -23,7 +24,7 @@ fn pure_world() → rt::World { rt::World(Table::none(), [], trivial) }
 fn sum_body() → PTm {
     Bind(Lit(Word(64), 0),
     Bind(Prim(Eq(64), [1, 0]),
-    Choose(0,
+    Choose(0, False,
         Value(Var(1)),
         Bind(Lit(Word(64), 1),
         Bind(Prim(Sub(64), [3, 0]),

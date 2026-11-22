@@ -249,6 +249,23 @@ if it were a parameter, which made `h: __dec_scrut_N = False` unprovable in
 the lifted statement. It now substitutes the alias's value into the statement
 instead.
 
+**Amended again (2026-11-20, docs/native/runtime-fn-recursion-design.md §6
+step 4).** Two shapes a non-tail recursion is written in, which a recursive
+`runtime fn` is proved from:
+
+- **A method call around the call**, `n.add(f(n - 1))` or `f(rest).add(1)`:
+  walked as the call it is, its receiver the first argument, one `j` per
+  changed part. Each part keeps its type, so the method resolves alike on
+  both sides. `f`'s own method calls were already calls.
+- **A `let` whose right-hand side holds the call**, `let r = f(n - 1); n + r`:
+  each side binds `r` to its rendering of the right-hand side and goes on
+  with its rendering of the rest, read with `r` a variable, not substituted
+  (so a second read spells the call once). The proof is the rest's under
+  the left binding, carried to the right one by one `j` over the right-hand
+  side's proof; both sides are `f#body`'s and the unfolding's by zeta. An
+  opaque `let` and a `mut self` call statement around the call are still
+  refused. lib/_tests/lang/decreases_nontail_tests.hthr has the probes.
+
 Refusal is **not** an error on `f`: the companion is simply not emitted, and
 `f` checks exactly as it does today. A later reference to `f_unfold` is what
 reports, naming the body shape that stopped the walk and this section — the

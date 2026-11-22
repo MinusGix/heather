@@ -39,6 +39,7 @@ import x86_64_asm;
 import rt;
 import rt_lower;
 import rt_io_lower;
+import rt_ptm;
 import rt_proc;
 import omega;
 
@@ -127,4 +128,82 @@ theorem PTm::program_reads(tys: Table, n: Nat, body: PTm, h: List<BitVec(64)> �
         PTm::exits_with(s, call, answer, env, io, main.sem(w, f, Nil, trivial), run.left));
     let reads = src.pure_program_reads(low, homes, bodies, program, compiled, spec, kept, loop_free, args, io, within);
     j(exits, λ r _ => Eutt<Mutated<Io, Flow>>(Events::none(), Io::against_co(src.main_tree_co(args, src.charges(homes, bodies), src.left(homes, bodies)), io), CRet(r)), reads)
+}
+
+// What a program's source does: for any compile that accepts it, run
+// with any arguments against any world, it exits with `v` and leaves the
+// world as it was.
+fn PTm::SourceReads(src: Source, v: BitVec(64)) → Type {
+    (low: BitVec(64)) → (homes: Homes) → (bodies: List<Frame>) → (program: Prog) → src.compile(low, homes, bodies) = Some(program) →
+        (args: List<List<BitVec(8)>>) → (io: Io) →
+        Eutt<Mutated<Io, Flow>>(Events::none(), Io::against_co(src.main_tree_co(args, src.charges(homes, bodies), src.left(homes, bodies)), io),
+            CRet(Mutated(io, Exited(v))))
+}
+
+// Whether main's calls fit within the source's levels, each call of the
+// function spending one where the source checks it: by evaluation at a
+// closed main, which is how a generator learns that `levels` is too few.
+fn PTm::program_fits(tys: Table, n: Nat, body: PTm, h: List<BitVec(64)> → BitVec(64), main: PTm, src: Source) → Bool {
+    main.calls_ok(PTm::plain(tys), λ _ xs => h(xs),
+        PTm::within(λ k p xs => PDef::fits([PDef(n, body)], PTm::plain(tys), λ _ ys => h(ys), k, p, xs), λ p => src.checked(p), src.levels), Nil, trivial)
+}
+
+// The levels main's calls need, one more than the depth of each, as a
+// number a generator evaluates: `k + 1` for `k` levels, 0 where a call
+// goes past `fuel` levels (design §3.4).
+fn PTm::program_need(tys: Table, n: Nat, body: PTm, h: List<BitVec(64)> → BitVec(64), main: PTm, fuel: Nat) → Nat {
+    match main.calls_depth(PTm::plain(tys), λ _ xs => h(xs),
+            λ p xs => PDef::depth([PDef(n, body)], PTm::plain(tys), λ _ ys => h(ys), fuel, p, xs), Nil, trivial) {
+        None => 0,
+        Some(k) => k + 1,
+    }
+}
+
+// Whether the compile checks the function's call of itself, which is what
+// counts its levels.
+fn PTm::program_checked(src: Source) → Bool { src.checked(0) }
+
+// Both verdicts as a number a generator evaluates (`numeral`): 2 where
+// the call is checked and main's calls fit, 1 where they go deeper than
+// the levels, 0 where the call of itself is not checked.
+fn PTm::program_verdict(tys: Table, n: Nat, body: PTm, h: List<BitVec(64)> → BitVec(64), main: PTm, src: Source) → Nat {
+    match PTm::program_checked(src) {
+        False => 0,
+        True => match PTm::program_fits(tys, n, body, h, main, src) { False => 1, True => 2 },
+    }
+}
+
+// The theorem at the source `PTm::program` made: its parts read off the
+// equation that made it, so a generator states it of a published source
+// with every premise closed by evaluation (`made` and the verdicts by
+// `refl` at closed terms), and `v` the function it reflects.
+theorem PTm::source_reads(tys: Table, n: Nat, body: PTm, h: List<BitVec(64)> → BitVec(64), m: List<BitVec(64)> → Nat,
+    guarded: PTm::Guarded(n, body, PTm::plain(tys), h, m), main: PTm, levels: Nat, src: Source,
+    made: PTm::program(main, [PDef(n, body)], PTm::plain(tys), levels) = Some(src),
+    self_checked: src.checked(0) = True,
+    fits: PTm::program_fits(tys, n, body, h, main, src) = True):
+    PTm::SourceReads(src, main.sem(PTm::plain(tys), λ _ xs => h(xs), Nil, trivial)) {
+    λ low homes bodies program compiled args io => {
+        let w = PTm::plain(tys);
+        let defs: List<PDef> = [PDef(n, body)];
+        let known = PDef::known(defs);
+        let outer = Option::and_then_some(PDef::procedures(defs, w, known), λ ps =>
+            main.lower(w, known, Nil, Nil, 1, 0).and_then(λ s =>
+                Some(Source([], [], Then(s, Exit(0)).word_bound(), Then(s, Exit(0)), procedures := ps, levels := levels))), src, made);
+        let ps = outer.witness;
+        let inner = Option::and_then_some(main.lower(w, known, Nil, Nil, 1, 0), λ s =>
+            Some(Source([], [], Then(s, Exit(0)).word_bound(), Then(s, Exit(0)), procedures := ps, levels := levels)), src, outer.proof.right);
+        let s = inner.witness;
+        let is_src: (Source([], [], Then(s, Exit(0)).word_bound(), Then(s, Exit(0)), procedures := ps, levels := levels) = src) =
+            Option::some_inj(Source([], [], Then(s, Exit(0)).word_bound(), Then(s, Exit(0)), procedures := ps, levels := levels), src, inner.proof.right);
+        let made_ps: (PDef::procedures(defs, w, known) = Some(src.procedures)) =
+            j(is_src, λ x _ => PDef::procedures(defs, w, known) = Some(x.procedures), outer.proof.left);
+        let is_main: (src.main = Then(s, Exit(0))) = j(is_src, λ x _ => x.main = Then(s, Exit(0)), refl);
+        let no_functions: (src.functions = []) = j(is_src, λ x _ => x.functions = [], refl);
+        let fits_ok: (main.calls_ok(w, λ _ xs => h(xs),
+            PTm::within(λ k p xs => PDef::fits(defs, w, λ _ ys => h(ys), k, p, xs), λ p => src.checked(p), src.levels), Nil, trivial).IsTrue()) =
+            j(sym(fits), λ b _ => b.IsTrue(), trivial);
+        PTm::program_reads(tys, n, body, h, m, guarded, main, s, src, made_ps, inner.proof.left, is_main, no_functions, low, homes, bodies, program, compiled,
+            self_checked, fits_ok, args, io)
+    }
 }
