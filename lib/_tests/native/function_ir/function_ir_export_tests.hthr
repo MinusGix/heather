@@ -1,0 +1,48 @@
+// Probes of a record returned through memory (function_ir_export,
+// docs/native/runtime-fn-setups-design.md §16.20). Tests, not library:
+// nothing imports this module.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import tactic;
+import bitvec;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_run;
+import function_ir_lower_calls;
+import function_ir_export;
+import runtime;
+
+record Trio { a: u64, b: u64, c: u64 }
+
+runtime fn trio(x: u64) → Trio { Trio(x, x + 1, x + 2) }
+
+// The export over 24 zero bytes at address 4096: it returns the address,
+// and leaves the three words in the structure, each little-endian.
+fn trio_ran() → Ending {
+    program_run(Cons(sret_export(0, 1, 2), trio::program), [List::replicate(BitVec::zero(), 24)], 1,
+        [BitVec::ofNat(4096), BitVec::ofNat(0x0102030405060708)])
+}
+
+theorem trio_returns_address(): trio_ran().word = BitVec::ofNat(4096) { refl }
+
+theorem trio_bytes(): buffer_bytes(trio_ran().buffers, 0).map(λ (b: BitVec(8)) => b.toNat()) =
+    [8, 7, 6, 5, 4, 3, 2, 1, 9, 7, 6, 5, 4, 3, 2, 1, 10, 7, 6, 5, 4, 3, 2, 1] {
+    refl
+}
+
+// The same as the export's theorem says it: the callee's words, put.
+theorem trio_put(): trio_ran().buffers = put_words([List::replicate(BitVec::zero(), 24)], 0,
+    [BitVec::ofNat(0x0102030405060708), BitVec::ofNat(0x0102030405060709), BitVec::ofNat(0x010203040506070a)]) {
+    refl
+}
+
+// A negative control: a root lent its span by its address alone is no
+// callee, and the emission of a program's callees refuses it.
+theorem sret_not_a_callee(): sret_export(0, 1, 2).emit_lent(Start, 1, [], 2, [0, 1], λ _ => 0) = None { refl }

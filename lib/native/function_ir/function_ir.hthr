@@ -1374,7 +1374,17 @@ theorem StructuredRegion::holds_in(self region: StructuredRegion, callees: Calle
 // `also` are the 64-bit words it returns past the first, in RDX (System V's
 // two-word aggregate, docs/native/runtime-fn-setups-design.md §16.16); every
 // contract that names one result speaks of `result`.
-record Function { parameters: List<Nat>, body: StructuredRegion, result: Nat, lent: Nat := 0, also: List<Nat> := [] }
+// A span lent by its address alone (docs/native/runtime-fn-setups-design.md
+// §16.20): its length is no parameter but port `length`, which the body's
+// first node sets to `bytes` (`StructuredRegion::sets_first`). What a C
+// function returning a structure through memory is lent: the caller passes
+// where the structure goes, and its size is the function's own.
+record Fixed { length: Nat, bytes: Nat }
+
+// `fixed` set, the function is lent one span so (`lent` is 1) and its home
+// is its first parameter and `length`; only a program's last function,
+// which no call reaches, is (`program_unfixed`).
+record Function { parameters: List<Nat>, body: StructuredRegion, result: Nat, lent: Nat := 0, also: List<Nat> := [], fixed: Option<Fixed> := None }
 
 // Called on `arguments` over `buffers`, the function may return `result`:
 // some valuation binds its parameters to the arguments, satisfies its

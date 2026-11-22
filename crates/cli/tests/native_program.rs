@@ -535,6 +535,61 @@ int main(void) {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+// A record of three words or four, returned through memory as System V
+// returns such a structure (docs/native/runtime-fn-setups-design.md §16.20):
+// C passes where it goes in RDI and the arguments after it, and gets the
+// address back in RAX. The certificate states the structure's bytes
+// (`Prog::ComputesSret`), and C reads the structure against a reference.
+#[test]
+fn a_record_of_three_words_is_returned_through_memory() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let dir = root.join(format!("target/native-three-words-{}-{nonce}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for (symbol, words) in [("stats", 3), ("turn", 4)] {
+        let assembly = dir.join(format!("{symbol}.s"));
+        let result = Command::new(env!("CARGO_BIN_EXE_heather")).current_dir(&root)
+            .args(["compile-x86", "examples/x86-native/three_words.hthr", symbol, "-o"]).arg(&assembly)
+            .args(heather_cli::showcase::native_image_args()).args(["--kernel-workers", "1"])
+            .output().unwrap();
+        assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr));
+        let text = std::fs::read_to_string(&assembly).unwrap();
+        assert!(text.contains(&format!("-> [word; {words}] in memory")), "{text}");
+        let certificate = std::fs::read_to_string(dir.join(format!("{symbol}.certificate.hthr"))).unwrap();
+        for claim in ["_code().ComputesSret(machine, ", "compiled_computes_sret<M>(", "::agrees_at(", "::agrees_also_at(", "lower_program_sized_emitted("] {
+            assert!(certificate.contains(claim), "missing {claim}");
+        }
+    }
+    let driver = dir.join("main.c");
+    std::fs::write(&driver, r#"
+#include <stdint.h>
+#include <stdio.h>
+typedef struct { uint64_t sum, min, max; } Stats;
+typedef struct { uint64_t w, x, y, z; } Four;
+extern Stats stats(uint64_t, uint64_t);
+extern Four turn(uint64_t, uint64_t, uint64_t, uint64_t);
+int main(void) {
+    uint64_t edges[] = {0, 1, 2, (UINT64_C(1) << 32) - 1, UINT64_C(1) << 63, UINT64_MAX - 1, UINT64_MAX};
+    for (unsigned i = 0; i < 7; ++i) for (unsigned j = 0; j < 7; ++j) {
+        uint64_t a = edges[i], b = edges[j];
+        Stats s = stats(a, b);
+        if (s.sum != a + b || s.min != (a < b ? a : b) || s.max != (a < b ? b : a)) return 1;
+        Four f = turn(a, b, a ^ b, a + 7);
+        if (f.w != b || f.x != (a ^ b) || f.y != a + 7 || f.z != a) return 2;
+    }
+    puts("49 pairs passed");
+    return 0;
+}
+"#).unwrap();
+    let binary = dir.join("three_words");
+    let linked = Command::new("cc").args(["-std=c11", "-Wall", "-Wextra", "-Werror"])
+        .arg(&driver).arg(dir.join("stats.s")).arg(dir.join("turn.s")).arg("-o").arg(&binary).output().unwrap();
+    assert!(linked.status.success(), "{}", String::from_utf8_lossy(&linked.stderr));
+    let run = Command::new(&binary).output().unwrap();
+    assert!(run.status.success(), "{}", String::from_utf8_lossy(&run.stdout));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 // `Bool` at the boundary (docs/native/runtime-fn-setups-design.md §16.17):
 // a parameter is the lowest bit of its word (a `Resize` to one bit) and the
 // result is 0 or 1, as System V passes a C `bool` both ways. C calls

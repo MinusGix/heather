@@ -349,7 +349,7 @@ fn Function::refused(self function: Function, k: Nat, placement: List<Place>, na
                     None => function.body.refusal(saves, function.slots(asked), short, opened, file, placement_body(placement), names, k, counts, function.homes()),
                     Some(body) => match function.closing(asked, saves, body) {
                         None => "the function's end: its result " ++ refusal_numbers(Cons(function.result, function.also))
-                            ++ " cannot be moved into rax, rdx (a word lost, or a callee-saved register touched), where " ++ body.file.shown(),
+                            ++ " cannot be moved into rax, rdx, rcx, … in order (a word lost, or a callee-saved register touched), where " ++ body.file.shown(),
                         Some(_) => "nothing: the function has code after no other",
                     },
                 },
