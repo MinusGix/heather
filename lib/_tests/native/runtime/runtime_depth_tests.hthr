@@ -86,3 +86,32 @@ theorem rcall_defined(n: u64, more: Nat, within: n.toNat() <= more): program_def
 theorem rcall_agrees(n: u64, more: Nat, within: n.toNat() <= more): program_eval(program_deepened(rcall::program, more), 1, [n]) = rcall(n) {
     rcall::agrees_within(n, more, within)
 }
+
+// The measure, as a function of the parameters: what a certificate states
+// its bound by.
+theorem rpair_measure(acc, n: u64): rpair::measure(acc, n) = n.toNat() { refl }
+
+theorem rpair_defined(acc, n: u64, within: rpair::measure(acc, n) <= 7): program_defined(program_deepened(rpair::program, 7), 0, [acc, n]).IsTrue() {
+    rpair::defined_within(acc, n, 7, within)
+}
+
+// A recursion whose callee is a recursion has no bound read off it yet: its
+// agreement keeps its premise.
+runtime fn router(n: u64) → u64 decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => BitVec::ofNat(0),
+        False => rsum(n).add(router(n.sub(BitVec::ofNat(1)))),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+theorem router_where(n: u64, more: Nat, defined: program_defined(program_deepened(router::program, more), 1, [n]).IsTrue()):
+    program_eval(program_deepened(router::program, more), 1, [n]) = router(n) {
+    router::agrees_where(n, more, defined)
+}
+
+// expect-error: agrees_within
+theorem router_within(): True = True {
+    let _ = router::agrees_within;
+    refl
+}

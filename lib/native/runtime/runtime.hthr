@@ -1523,7 +1523,7 @@ theorem Compile::recursion_defined<F>(f: F, c: Compile<F>(f), srcs: Buffers() �
     let below = program_defined_over(Nil, under);
     let arity = tie(linked_arity(earlier, arities.tail()), earlier.len(), arities.nth(0));
     let all: ((i: Nat) → (ws: List<BitVec(64)>) → below(i, ws).IsTrue()) =
-        j(sym(program_deepened_total(earlier, more, total)), λ fs _ => (i: Nat) → (ws: List<BitVec(64)>) → program_defined_over(Nil, fs)(i, ws).IsTrue(),
+        j(sym(program_deepened_total(earlier, more, total)), λ fs _ => (i: Nat) → (ws: List<BitVec(64)>) → program_defined_over(Nil, fs, i, ws).IsTrue(),
             program_total_defined(earlier, Nil, total));
     let descends = Compile::descends(f, c, srcs, adm, links, arity, linked, admitted, named, coded, checked, plain, quiet, sig, earlier.len(), own, Nil, measure,
         walked, below, λ i _ ws => all(i, ws));
@@ -3537,10 +3537,13 @@ fn runtime_walk(fuel: Nat, t: Tm, d: RtWalk, q: RtQ, g_e, env_e: Expr, eqs: List
 // A recursion's definedness from its measure: the local `within`, the
 // measure at the arguments `at` at most `more`, and under it the proof that
 // the program `more` levels deeper is defined at the recursion on `words_e`
-// (`Compile::recursion_defined`). None where the walk does not close or the
-// proof does not check.
+// (`Compile::recursion_defined`); with them the measure as a function of
+// the parameters and its type, `f::measure`. None where the walk does not
+// close or the proof does not check.
+record RtWithin { within: LocalRef, proof: Expr, measure: Expr, measure_t: Handle }
+
 fn runtime_within(name: String, rfun: Fun, q: RtQ, ts: RtTypes, linked: Linked, root, tys_e, rt_e, code_e: Expr, own_types: List<Handle>, at: List<Expr>,
-    more: LocalRef, words_e, admitted: Expr) → Tac<Option<Pair<LocalRef, Expr>>> {
+    more: LocalRef, words_e, admitted: Expr) → Tac<Option<RtWithin>> {
     let found <- lookup(name ++ "::rec");
     match found {
         Refused(_) => pure(None),
@@ -3590,7 +3593,8 @@ fn runtime_within(name: String, rfun: Fun, q: RtQ, ts: RtTypes, linked: Linked, 
                     let proof = ap(defined_g, linked.root ++ [ap(tail_g, [Blank, linked.program]), linked.arities, linked.sourced, Hd(trivial_h), Hd(trivial_h),
                         ap(rfl, [Blank, code_e]), yes, ap(rfl, [Blank, runtime_at(shapes, 0)]), yes, ap(rfl, [Blank, Ty::quotes(rfun.params, q)]),
                         ap(rfl, [Blank, ap(nth_g, [Blank, links_e, NatLit(1)])]), measure, Lam(xs.ref, body), Local(more), words_e, admitted, Local(within.ref)]);
-                    infer(proof).bind(λ c => match c { Refused(_) => pure(None), Accepted(_) => pure(Some(Pair(within.ref, proof))) })
+                    let measure_t <- infer(measure).or_fail("runtime: `" ++ name ++ "`'s measure: ");
+                    infer(proof).bind(λ c => match c { Refused(_) => pure(None), Accepted(_) => pure(Some(RtWithin(within.ref, proof, measure, measure_t))) })
                 },
             }
         },
@@ -3775,13 +3779,17 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
                             None => pure([]),
                             Some(p) => {
                                 let evaluated_within = ap(eval_where, [linked.program, linked.arities, ap(admits_of, [linked.adm]), ap(sources, [linked.srcs]),
-                                    linked.sourced, Local(more.ref), no_file, root, words_e, Hd(trivial_h), admitted, p.snd]);
-                                let params = runtime_params_of(ys.append([more.ref, p.fst]));
+                                    linked.sourced, Local(more.ref), no_file, root, words_e, Hd(trivial_h), admitted, p.proof]);
+                                let params = runtime_params_of(ys.append([more.ref, p.within]));
                                 runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), recs, rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs_where,
                                     λ args => runtime_agree_rhs(low, wide, count, reprs, recs, rfun, f, args).bind(λ e =>
                                         pure(runtime_enum_result(enum_word, tys_e, rfun.result, e))),
-                                    evaluated_within, Some(p.fst)).bind(λ agreed_within => pure([
-                                        Decl(AsTheorem, name ++ "::defined_within", params, Hd(defined_t), p.snd),
+                                    evaluated_within, Some(p.within)).bind(λ agreed_within => pure([
+                                        // The measure as a function of the
+                                        // parameters: what a certificate
+                                        // states its bound by.
+                                        Decl(AsValue, name ++ "::measure", [], Hd(p.measure_t), p.measure),
+                                        Decl(AsTheorem, name ++ "::defined_within", params, Hd(defined_t), p.proof),
                                         Decl(AsTheorem, name ++ "::agrees_within", params, Equation(lhs_where, first), agreed_within)]))
                             },
                         }),
