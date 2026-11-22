@@ -153,4 +153,3 @@ theorem pass_flag_agrees(c, x: u64): program_eval(pass_flag::program, 1, [c, x])
 runtime fn count_up(n, i: u64, b: u8) → u64 decreases (n - i).toNat() {
     if lt: i < n { count_up(n, i + 1, b + 1) } else { b.zero_extend(56) }
 }
-

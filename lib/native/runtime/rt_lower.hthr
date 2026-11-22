@@ -1401,7 +1401,6 @@ theorem Ty::slots_round(fs: List<Ty>): Ty::Slots(fs) → (t: Ty::Flats(fs)) → 
     }
 }
 
-
 // What an enum asks of its table entry to cross the boundary in words:
 // its tags in a word, and its payload's slots each a 64-bit word. Every
 // other code crosses as it is.
@@ -2473,7 +2472,6 @@ theorem Tm::calls_agree_none_over(tys: Table, spans: List<List<BitVec(8)>>, call
 // The lowering. Each step that can refuse is an `Option` chained by
 // `and_then`, its continuation a named function where it is not recursive,
 // so the soundness proof walks the same chain (`Option::and_then_elim`).
-
 
 // One node writing `next`, the result there.
 fn Tm::one_node(node: Node, next: Nat) → Lowered { Lowered(nodes_region([node]), next, next + 1) }
@@ -4043,7 +4041,6 @@ theorem Tm::lower_field_sound(w: World, g: List<Ty>, ports: List<Nat>, next, i, 
                 ⟨λ wd id _ => refl, Ty::field_leaf_holds(rs, w.tys, values, p, k, has, one, fits, w.tys.recs(i).get(x), record)⟩⟩⟩
         }))))
 }
-
 
 // A slot set by one node and the slots after it moved: the payload from
 // `out` (what `Make`'s moves prove a field at a time, for any node that
@@ -5717,7 +5714,6 @@ theorem Ty::entry_slots_sound(buffers: Buffers(), fs: List<Ty>): (out, src: Nat)
         },
     }
 }
-
 
 // What the entry needs of a code it reads slot by slot into fresh ports
 // (`Ty::narrow`, `Ty::entry_slots`): from its words bound at its ids,

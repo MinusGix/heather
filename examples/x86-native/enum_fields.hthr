@@ -16,7 +16,6 @@ import function_ir;
 import function_ir_eval;
 import runtime;
 
-
 // A record with an enum field (docs/native/runtime-fn-setups-design.md
 // §16.18): the enum has no payload, so the record holds it in its tag word,
 // a field a word like any other. C lays `{ Light; uint64_t }` in two
