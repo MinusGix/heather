@@ -27,7 +27,7 @@ runtime fn rsum(n: u64) → u64 decreases n.toNat() {
     on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
 }
 
-// What `Compile::recursion_defined` evaluates at the instance: the code's
+// What `Compile::ranked_code` evaluates at the instance: the code's
 // nodes around its calls require nothing, and the instance's code is the
 // default lowering's.
 theorem rsum_quiet(): rsum::rt.quiet(rsum::world) = True { refl }

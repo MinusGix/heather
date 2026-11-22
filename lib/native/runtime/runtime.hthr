@@ -3674,7 +3674,7 @@ fn runtime_premise_env(t: Handle) → Tac<Option<Pair<Expr, Expr>>> {
 // A recursion's depth, read off its body
 // (docs/native/runtime-fn-recursion-design.md §10.6)
 //
-// `Compile::recursion_defined` takes the decrease at every call of the
+// `Compile::ranked_code` takes the decrease at every call of the
 // body: its calls allowed by the measure's oracle at the caller's words
 // (`Tm::calls_ok`). The walk proves it from the function's own decrease
 // obligations, `f::obl_N`, as the elaborator named them: a `let` from its

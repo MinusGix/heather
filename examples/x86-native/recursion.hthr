@@ -12,7 +12,7 @@ import runtime;
 // number of levels deep, and `compile-x86 --stack <bytes>` picks the most
 // levels whose stack fits the budget. The certificate's theorems hold where
 // the program at those levels is defined, which is where the recursion
-// ends within them.
+// ends within them: where its measure is at most the levels past the first.
 runtime fn rsum(n: u64) → u64 decreases n.toNat() {
     match h: n.eq_bit(BitVec::ofNat(0)) {
         True => BitVec::ofNat(0),
@@ -21,5 +21,13 @@ runtime fn rsum(n: u64) → u64 decreases n.toNat() {
     on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
 }
 
-// A caller of a recursion is an ordinary function too.
+// The measure is the one the function was written with.
+theorem rsum_measure(n: u64): rsum::measure(n) = n.toNat() { refl }
+
+// A caller of a recursion is an ordinary function too. Its certificate
+// holds where its calls stay within the levels, a test of its arguments
+// read off its body: `rsum_pair::within`.
 runtime fn rsum_pair(a, b: u64) → u64 { rsum(a).add(rsum(b)) }
+
+// Given `more` levels past the first, both arguments are at most `more`.
+theorem rsum_pair_within(more: Nat, a, b: u64): rsum_pair::within(more, a, b) = (a.toNat().leb(more) && (b.toNat().leb(more) && True)) { refl }

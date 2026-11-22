@@ -608,10 +608,10 @@ fn a_recursion_is_compiled_within_a_stack_budget() {
         .output().unwrap();
     // The recursion's certificate is stated where its measure is at most
     // its levels past the first (`rsum::defined_within`); its caller's
-    // where the program is defined.
+    // where its calls stay within them (`rsum_pair::within`).
     let claims: [(&str, &[&str]); 2] = [
         ("rsum", &["program_deepened(recursion::", "::agrees_within(", "::defined_within(", "within: recursion::rsum::measure(a0) <= 62", "_returns"]),
-        ("rsum_pair", &["program_deepened(recursion::", "::agrees_where(", "defined: program_defined(", "_returns"])];
+        ("rsum_pair", &["program_deepened(recursion::", "::agrees_within(", "::defined_within(", "within: recursion::rsum_pair::within(61, a0, a1).IsTrue()", "_returns"])];
     for (function, claims) in claims {
         let result = compile(function, "2048", &dir.join(format!("{function}.s")));
         assert!(result.status.success(), "{function}: {}", String::from_utf8_lossy(&result.stderr));

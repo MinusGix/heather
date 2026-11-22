@@ -16,7 +16,9 @@ Revised 2026-11-22, built: a recursion over words is an ordinary function
 of its program, which may be live a stated number of levels deep (§10).
 `compile-x86` compiles one and links it into C. §2's procedure lane still
 serves `write-elf` and goes when statements call a recursion through its
-program (§10.6).
+program (§10.8). The certificate's premise is the recursion's measure
+within its levels (§10.6), and for a function that calls one a test of
+its arguments, `g::within` (§10.7).
 
 ## 1. What is there
 
@@ -551,7 +553,7 @@ Built 2026-11-22 for `compile-x86`: a `runtime fn` of words that calls
 itself, or calls one that does, compiles as an ordinary function, is
 exported to C, and its certificate is checked. The procedure lane of §2
 still serves `write-elf` until statements call a recursion through its
-program (§10.6).
+program (§10.8).
 
 §2 made a recursion a procedure, which made every caller of one a
 statement: the open question of §9. The bound does not need a second
@@ -637,23 +639,106 @@ callees), which is what `f::agrees_where` rests on.
 two, which gives a level's bytes, takes the most levels whose row fits,
 and reads that row back. The certificate's program is the published one
 at those levels, its `_returns` asks for that row of stack below the
-return address, and both `_agrees` and `_returns` take
-`program_defined(program, f, words)` as a premise.
+return address, and both `_agrees` and `_returns` take as a premise
+where the program is defined at the words: the root's bound (§10.6,
+§10.7), or `program_defined(program, f, words)` itself where the
+generator states none.
 
-### 10.6 What is left
+### 10.6 The depth as the premise
 
-1. **The depth as the premise.** `program_defined` is true but not
-   readable. It follows from `f::depth` (§3): where every call a body
-   makes is at a lower rank, a call at rank below the levels is defined.
-   The proof needs the lowering to preserve which calls a body makes,
-   a walk beside `Tm::lower_sound`, with the nodes' own requirements
-   checked on the code by evaluation.
-2. **Statements that call a recursion.** A statement's regions are
+`program_defined` at the words is true of every call that returns, but
+nobody reads it. What a reader has is the function's measure, so the
+premise is the measure: a recursion given `more` levels past its first is
+defined wherever its measure is at most `more`
+(`f::defined_within(args, more, within: f::measure(args) <= more)`, and
+`f::agrees_within` beside it).
+
+The values of a function cannot say which calls it makes, so the fact is
+about the reflected term. `Tm::calls_ok` reads a term at an environment
+and asks an oracle, a test per function of the program, at each call the
+term's meaning makes on the path its tests take. The lowering preserves
+the calls: where every such test holds and the oracle's tests are what
+the callees answer on words, the lowered region is defined
+(`Tm::lower_defined`, an induction beside `Tm::lower_sound`). The nodes
+the code runs around its calls must require nothing themselves, which is
+a fact about the code and is checked on it by evaluation (`Tm::quiet_in`).
+
+A recursion's oracle is its rank (`Tm::rank_oracle`): a call of itself is
+allowed where its measure is below the measure at the arguments. That the
+body's calls pass it is the function's own termination obligations,
+`f::obl_N`, which the generator walks beside the body
+(`runtime_descent`). The result does not mention a program
+(`Compile::DefinedBelow`, published as `f::defined_below` with
+`f::measure`), so a recursion is walked once, where it is declared, and
+every program it is linked into reads it. `Function::Descends` then turns
+a body that only calls itself lower into a program defined to the levels'
+depth (`program_defined_deepened_by_rank`).
+
+### 10.7 Callers: a test per function
+
+A function that calls a recursion is defined where the recursion is,
+which depends on what it passes: `rsum_two(a, b) = rsum(a) + rsum(b)` at
+`more` levels is defined where `a <= more` and `b <= more`. A depth, one
+number per function, loses that. So each function of a leveled program
+has a **test**, a `Bool` of its arguments given the levels past the
+first, and the program is defined wherever the root's test holds:
+
+| The function | Its test | How it is proved |
+|---|---|---|
+| a recursion | its measure is at most the levels (`Compile::ranked`) | §10.6, read from `f::defined_below` |
+| asks its callees nothing: every callee's test always holds | always true (`Compile::always`) | an evaluated check that its calls fit their signatures (`Tm::calls_all`, `Tm::calls_ok_all`); no walk |
+| any other | the calls its body makes are allowed by its callees' tests (`Compile::test`) | `Tm::lower_defined` at the callees' tests as the oracle (`Compile::test_code`) |
+
+The third test is `calls_ok` itself, curried over the function's
+parameters, so it follows the paths the body takes: a call in one arm of
+a `match` is asked only where that arm runs, and a call's argument that
+is another call's result is the source function at it. It is published
+as `g::within(more, args)`, and unfolds by `refl` to what a reader would
+write:
+
+```
+runtime fn rsum_two(a: u64, b: u64) → u64 { rsum(a) + rsum(b) }
+
+theorem rsum_two_within(more: Nat, a: u64, b: u64):
+    rsum_two::within(more, a, b) = (a.toNat().leb(more) && (b.toNat().leb(more) && True)) { refl }
+```
+
+A root that is not a recursion publishes `g::defined_within` and
+`g::agrees_within` with the premise `g::within(more, args).IsTrue()`. At
+closed arguments the premise is `trivial`, or the statement is false and
+says so.
+
+The program's tests are sound a function at a time
+(`program_within_steps`): each function's part takes its callees' tests
+as given and concludes its own (`Compile::within_flat`,
+`Compile::within_leveled`), and the parts compose along the program as
+linking does (`program_within_of_steps`, `link_defined_within`). Only a
+recursion publishes anything at its own declaration. A flat function's
+test depends on the tests of its callees, which depend on which of them
+are recursions in this program, so its part is made at its instance when
+the root is published.
+
+Where a test meets another function's, both are spelled through
+accessors that read an instance by pattern (`Compile::tys_of`,
+`Compile::params_of`, `Compile::Test`), never through the instance's
+class members: two functions of one type are otherwise two constants the
+kernel settles by evaluating both
+(`issues/runtime-link-compares-functions.md`).
+
+Not bounded yet, each keeping `agrees_where` and its `program_defined`
+premise: a recursion that calls a function with a test of its own (a
+recursion calling a recursion), and a leveled program with a function
+that is not plain (a loop, a lent span).
+
+### 10.8 What is left
+
+1. **Statements that call a recursion.** A statement's regions are
    answered by a program proved defined at every word (`Target::Answered`,
    `program_total`). Relaxed to the functions proved defined everywhere,
    a closed `main` or a guarded entry among them, `write-elf` programs
    call a recursion through its program and the procedure lane (`rt_ptm`,
    `rt_proc`, `rt_proc_program`, `runtime(levels := n)`) is removed.
-3. A recursion lent a span, one returning a record, another function of
-   a recursion's program as an `--entry`, mutual recursion, and the
-   optimizer's rewrites of §5 at this level.
+2. A recursion calling a recursion, a recursion lent a span, one
+   returning a record, another function of a recursion's program as an
+   `--entry`, mutual recursion, and the optimizer's rewrites of §5 at
+   this level.
