@@ -1420,116 +1420,334 @@ fn Compile::rank<F>(f: F, c: Compile<F>(f), measure: Ty::ArrowsTo(c.world.tys, S
     λ ws => Ty::apply_words_to(c.world.tys, Sig::at(c.world.sigs, 1).params, Nat, measure, ws)
 }
 
-// The code of an instance that is its own callee, function `k` of a
-// program, descends by its measure (`Function::Descends`): over the file
-// `b`, it is defined at the words it admits, given that it is defined
-// itself at every such word list of lower rank and that the functions
-// before it are defined everywhere (`total`). `walked` is the decrease at
-// every call the body makes: its calls allowed by the rank's oracle
-// (`Tm::rank_oracle`), which a generator proves from the function's own
-// decrease obligations. `linked`, `admitted` and `named` are what
-// `Compile::part_self` takes; `coded`, `checked`, `plain`, `quiet`, `sig`
-// and `own` are evaluations at the instance.
-theorem Compile::descends<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<List<BitVec(64)> → List<BitVec(64)>>, adm: List<List<BitVec(64)> → Bool>,
-    links: List<Nat>, arity: Nat → Option<Nat>,
-    linked: (b: Buffers()) → links.map(λ (n: Nat) => link_source(srcs(b), n)) = Compile::table(f, c, b),
-    admitted: links.map(λ (n: Nat) => link_admit(adm, n)) = Compile::admit_table(f, c),
-    named: Sig::links_fit(c.world.tys, c.world.sigs.tail(), links.tail(), arity).IsTrue(),
+// What a function's calls are read at: the world of its instance at no
+// file, and the environment its words are.
+fn Compile::descent_world<F>(f: F, c: Compile<F>(f)) → World { c.world.at(c.callees, Nil) }
+
+fn Compile::descent_env<F>(f: F, c: Compile<F>(f), xs: List<BitVec(64)>) → Env(c.world.tys, c.reflected.context()) {
+    Ty::extend_words(c.world.tys, c.reflected.params, Nil, trivial, xs)
+}
+
+// The oracle of a recursion at the caller's words `xs`: itself at a lower
+// measure, and its other callees asked nothing (`Tm::tests_true`): each is
+// a function defined on whatever it admits.
+fn Compile::descent_oracle<F>(f: F, c: Compile<F>(f), measure: Ty::ArrowsTo(c.world.tys, Sig::at(c.world.sigs, 1).params, Nat), xs: List<BitVec(64)>)
+    → Tm::Oracle(c.world.at(c.callees, Nil)) {
+    Tm::rank_oracle(c.world.at(c.callees, Nil), Tm::tests_true(c.world.tys, c.world.sigs.tail().tail()), measure, Compile::rank(f, c, measure, xs))
+}
+
+// A recursion's code is defined below its measure: over any table that
+// answers its own, at the words it admits, asking itself only at a lower
+// measure and its other callees only on what they admit. It names no
+// program: `f::defined_below`, which every program the recursion is
+// linked into cites.
+fn Compile::DefinedBelow<F>(f: F, c: Compile<F>(f), measure: Ty::ArrowsTo(c.world.tys, Sig::at(c.world.sigs, 1).params, Nat)) → Type {
+    (call: Answers()) → Tm::CallsAgree(Compile::descent_world(f, c), call) → (xs: List<BitVec(64)>) →
+        Ty::AdmitsAll(c.world.tys, Sig::at(c.world.sigs, 1).params, xs) →
+        c.code.defined(call, Tm::defines_of(Compile::descent_world(f, c), Compile::descent_oracle(f, c, measure, xs)), xs).IsTrue()
+}
+
+// `walked` is the decrease at every call the body makes: its calls allowed
+// by the measure's oracle, which a generator proves from the function's
+// own decrease obligations. `coded`, `checked`, `plain`, `quiet` and `sig`
+// are evaluations at the instance.
+theorem Compile::ranked_code<F>(f: F, c: Compile<F>(f),
     coded: c.code = Setup::default().code(c.reflected, c.world),
     checked: Setup::default().checked(c.reflected, c.world) = True,
     plain: c.reflected.shape() = Plain,
     quiet: c.reflected.quiet(c.world) = True,
     sig: Sig::at(c.world.sigs, 1).params = c.reflected.params,
-    k: Nat, own: links.nth(1) = Some(k), b: Buffers(),
     measure: Ty::ArrowsTo(c.world.tys, Sig::at(c.world.sigs, 1).params, Nat),
-    walked: (xs: List<BitVec(64)>) →
-        c.reflected.body.calls_ok(c.world.at(c.callees, b),
-            Tm::rank_oracle(c.world.at(c.callees, b), links, k, measure, Compile::rank(f, c, measure, xs)),
-            c.reflected.context(), Ty::extend_words(c.world.tys, c.reflected.params, Nil, trivial, xs)).IsTrue(),
-    below: Defines(), total: (j: Nat) → j < k → (ws: List<BitVec(64)>) → below(j, ws).IsTrue()):
-    Compile::linked_self(f, c, links).Descends(b, below, k, Compile::rank(f, c, measure),
-        λ (call: Answers()) => Answers::Agree(call, link_sources(srcs(b)), arity, link_admits(adm)),
-        λ (ws: List<BitVec(64)>) => Ty::AdmitsAll(c.world.tys, c.reflected.params, ws)) {
+    walked: (xs: List<BitVec(64)>) → c.reflected.body.calls_ok(Compile::descent_world(f, c), Compile::descent_oracle(f, c, measure, xs),
+        c.reflected.context(), Compile::descent_env(f, c, xs)).IsTrue()): Compile::DefinedBelow(f, c, measure) {
+    λ call agree xs admits => {
+        let at = c.world.at(c.callees, Nil);
+        let oracle = Compile::descent_oracle(f, c, measure, xs);
+        let inner = Setup::code_defined(c.reflected, c.world, c.callees(Nil), Nil, oracle, Setup::checked_lowered(Setup::default(), c.reflected, c.world, checked),
+            plain, quiet, call, agree, Tm::defines_of(at, oracle), Tm::ok_defines_of(at, oracle), xs,
+            j(sig, λ ps _ => Ty::AdmitsAll(c.world.tys, ps, xs), admits), walked(xs));
+        j(sym(coded), λ fn_ _ => fn_.defined(call, Tm::defines_of(at, oracle), xs).IsTrue(), inner)
+    }
+}
+
+// Linked as function `k` of a program, such a code descends by its measure
+// (`Function::Descends`): it is defined at the words it admits, given that
+// it is defined itself at every such word list of lower rank and that the
+// functions before it are defined where their tests hold (`sound`).
+// `tested`: its callees past itself are functions before `k` whose tests
+// are what they admit. `linked`, `admitted` and `named` are what
+// `Compile::part_self` takes.
+theorem Compile::descends<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<List<BitVec(64)> → List<BitVec(64)>>, adm: List<List<BitVec(64)> → Bool>,
+    links: List<Nat>, arity: Nat → Option<Nat>,
+    linked: (b: Buffers()) → links.map(λ (n: Nat) => link_source(srcs(b), n)) = Compile::table(f, c, b),
+    admitted: links.map(λ (n: Nat) => link_admit(adm, n)) = Compile::admit_table(f, c),
+    named: Sig::links_fit(c.world.tys, c.world.sigs.tail(), links.tail(), arity).IsTrue(),
+    k: Nat, own: links.nth(1) = Some(k),
+    measure: Ty::ArrowsTo(c.world.tys, Sig::at(c.world.sigs, 1).params, Nat), defined: Compile::DefinedBelow(f, c, measure),
+    below: Defines(), tests: List<List<BitVec(64)> → Bool>,
+    tested: links.tail().tail().map(Tm::tested_below(tests, k))
+        = Sig::tested(c.world.tys, c.world.sigs.tail().tail(), Tm::tests_true(c.world.tys, c.world.sigs.tail().tail())),
+    sound: (g: Nat) → (ws: List<BitVec(64)>) → Tm::tested_at(tests, g, ws).IsTrue() → below(g, ws).IsTrue()):
+    Compile::linked_self(f, c, links).Descends(Nil, below, k, Compile::rank(f, c, measure),
+        λ (call: Answers()) => Answers::Agree(call, link_sources(srcs(Nil)), arity, link_admits(adm)),
+        λ (ws: List<BitVec(64)>) => Ty::AdmitsAll(c.world.tys, Sig::at(c.world.sigs, 1).params, ws)) {
     λ call good own_at words admits lower => {
-        let at = c.world.at(c.callees, b);
+        let at = c.world.at(c.callees, Nil);
         let bound = Compile::rank(f, c, measure, words);
-        let oracle = Tm::rank_oracle(at, links, k, measure, bound);
+        let oracle = Compile::descent_oracle(f, c, measure, words);
         let others = Answers::relabel(call, link_at(links));
-        let mixed = link_own(link_sources(Compile::table(f, c, b)), others);
-        let agree = Compile::calls_agree_linked(f, c, srcs, adm, links, arity, linked, admitted, named, b, call, good);
-        let code = Setup::default().code(c.reflected, c.world);
+        let mixed = link_own(link_sources(Compile::table(f, c, Nil)), others);
+        let agree = Compile::calls_agree_linked(f, c, srcs, adm, links, arity, linked, admitted, named, Nil, call, good);
         let asked = Tm::defines_of(at, oracle);
-        let inner: (code.defined(mixed, asked, words, buffers := b).IsTrue()) =
-            Setup::code_defined(c.reflected, c.world, c.callees(b), b, oracle, Setup::checked_lowered(Setup::default(), c.reflected, c.world, checked), plain, quiet,
-                mixed, agree, asked, Tm::ok_defines_of(at, oracle), words, admits, walked(words));
+        let inner: (c.code.defined(mixed, asked, words).IsTrue()) = defined(mixed, agree, words, admits);
         let tied = tie_defines(below, k, own_at);
-        let start = Valuation::bind(Valuation::zero(), code.parameters, words);
-        let widened: (code.defined(others, Defines::relabel(tied, link_at(links)), words, buffers := b).IsTrue()) =
-            code.body.defined_where_over(b, mixed, others, asked, Defines::relabel(tied, link_at(links)),
+        let start = Valuation::bind(Valuation::zero(), c.code.parameters, words);
+        let widened: (c.code.defined(others, Defines::relabel(tied, link_at(links)), words).IsTrue()) =
+            c.code.body.defined_where_over(Nil, mixed, others, asked, Defines::relabel(tied, link_at(links)),
                 λ i => match i as λ n => (ws: List<BitVec(64)>) → asked(n, ws).IsTrue() → others(n, ws) = mixed(n, ws) {
                     Zero => λ ws never => false_elim(j(Ty::apply_words_const(at.tys, Sig::at(at.sigs, 0).params, Bit, False, ws), λ x _ => x.IsTrue(),
                         Bool::is_true_and(Ty::admits_all(at.tys, Sig::at(at.sigs, 0).params, ws),
                             Ty::apply_words(at.tys, Sig::at(at.sigs, 0).params, Bit, oracle(0), ws), never).right)),
                     Succ(_) => λ ws _ => refl,
                 },
-                Tm::rank_oracle_widens(at, links, k, measure, bound, below, own_at, own,
-                    λ ws a lt => lower(ws, j(sig, λ ps _ => Ty::AdmitsAll(c.world.tys, ps, ws), a), lt), total),
+                Tm::rank_oracle_widens(at, links, k, Tm::tests_true(c.world.tys, c.world.sigs.tail().tail()), measure, bound, below, own_at, own,
+                    λ ws a lt => lower(ws, a, lt), tests, tested, sound),
                 start, start, λ wd id => refl, inner);
-        j(sym(coded), λ fn_ _ => fn_.relabel(link_at(links)).leveled(1).defined(call, tied, words, buffers := b).IsTrue(),
-            Function::relabel_defined(code, b, call, tied, link_at(links), words, widened))
+        Function::relabel_defined(c.code, Nil, call, tied, link_at(links), words, widened)
     }
 }
 
-// What a walk of a recursion's body proves, as a generator spells it: the
-// world the body is read at (no file), the oracle of the measure at the
-// caller's words, and the environment those words are.
-fn Compile::descent_world<F>(f: F, c: Compile<F>(f)) → World { c.world.at(c.callees, Nil) }
+// ---------------------------------------------------------------------------
+// A function that calls a recursion is defined where its calls stay within
+// the levels (docs/native/runtime-fn-recursion-design.md §10.7)
+//
+// Each function of a program has a test of its arguments, given the levels
+// past each recursion's first: a recursion's is its measure at most the
+// levels (`Compile::ranked`); a function whose callees are asked nothing
+// has the one that always holds (`Compile::always`); any other has its
+// body's calls allowed by its callees' tests (`Compile::test`), which is
+// the function `g::within`. A program's tests are sound a function at a
+// time (`program_within_steps`), each by its own part: `Compile::within_flat`
+// or `Compile::within_leveled`.
 
-fn Compile::descent_oracle<F>(f: F, c: Compile<F>(f), links: List<Nat>, k: Nat, measure: Ty::ArrowsTo(c.world.tys, Sig::at(c.world.sigs, 1).params, Nat),
-    xs: List<BitVec(64)>) → Tm::Oracle(c.world.at(c.callees, Nil)) {
-    Tm::rank_oracle(c.world.at(c.callees, Nil), links, k, measure, Compile::rank(f, c, measure, xs))
+// An instance's code, as a generator names it.
+fn Compile::code_of<F>(f: F, c: Compile<F>(f)) → Function { c.code }
+
+// The test that always holds.
+fn Compile::always<F>(f: F, c: Compile<F>(f)) → Ty::Arrows(c.world.tys, c.reflected.params, Bit) {
+    Ty::arrows_const(c.world.tys, c.reflected.params, Bit, True)
 }
 
-fn Compile::descent_env<F>(f: F, c: Compile<F>(f), xs: List<BitVec(64)>) → Env(c.world.tys, c.reflected.context()) {
-    Ty::extend_words(c.world.tys, c.reflected.params, Nil, trivial, xs)
+// The callees' tests of a function that asks them nothing.
+fn Compile::asks_nothing<F>(f: F, c: Compile<F>(f)) → Tm::Tests(c.world.tys, c.world.sigs.tail()) { Tm::tests_true(c.world.tys, c.world.sigs.tail()) }
+
+// A function's test over its callees' tests `oks`: whether the calls its
+// body's meaning makes at the arguments are ones the callees' tests allow.
+fn Compile::test<F>(f: F, c: Compile<F>(f), oks: Tm::Tests(c.world.tys, c.world.sigs.tail())) → Ty::Arrows(c.world.tys, c.reflected.params, Bit) {
+    Ty::curry(c.world.tys, Bit, c.reflected.params, Nil, trivial,
+        λ (env: Env(c.world.tys, c.reflected.context())) => c.reflected.body.calls_ok(Compile::descent_world(f, c),
+            Tm::callees_oracle(Compile::descent_world(f, c), oks), c.reflected.context(), env))
 }
 
-// The program whose last function is a recursion's code, given `more + 1`
-// levels, is defined at that function on the words it admits whose measure
-// is at most `more`: `f::defined_within`. `walked` is the decrease at each
-// call of the body (`Compile::descends`); the functions before it are
-// defined everywhere (`total`, an evaluation of the program). What is left
-// is what `Compile::root_also` takes and evaluations at the instance.
-theorem Compile::recursion_defined<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<List<BitVec(64)> → List<BitVec(64)>>, adm: List<List<BitVec(64)> → Bool>,
-    links: List<Nat>,
-    linked: (b: Buffers()) → links.map(λ (n: Nat) => link_source(srcs(b), n)) = Compile::table(f, c, b),
-    admitted: links.map(λ (n: Nat) => link_admit(adm, n)) = Compile::admit_table(f, c),
-    earlier: List<Function>, arities: List<Nat>,
-    sourced: program_linked_files(Cons(Compile::linked_self(f, c, links), earlier), arities, link_admits(adm), link_sources_at(srcs)),
-    named: Sig::links_fit(c.world.tys, c.world.sigs.tail(), links.tail(), tie(linked_arity(earlier, arities.tail()), earlier.len(), arities.nth(0))).IsTrue(),
-    total: program_total(earlier).IsTrue(),
+// A recursion's test at `more` levels past its first: its measure at most
+// `more`.
+fn Compile::ranked<F>(f: F, c: Compile<F>(f), measure: Ty::ArrowsTo(c.world.tys, Sig::at(c.world.sigs, 1).params, Nat), more: Nat)
+    → Ty::Arrows(c.world.tys, Sig::at(c.world.sigs, 1).params, Bit) {
+    Ty::arrows_map(c.world.tys, Sig::at(c.world.sigs, 1).params, Nat, Bit, λ (m: Nat) => m.leb(more), measure)
+}
+
+// The tests on words (`Ty::tested`), as a program's list of them names
+// each function's.
+fn Compile::tested<F>(f: F, c: Compile<F>(f), test: Ty::Arrows(c.world.tys, c.reflected.params, Bit)) → List<BitVec(64)> → Bool {
+    Ty::tested(c.world.tys, c.reflected.params, test)
+}
+
+fn Compile::tested_rank<F>(f: F, c: Compile<F>(f), measure: Ty::ArrowsTo(c.world.tys, Sig::at(c.world.sigs, 1).params, Nat), more: Nat)
+    → List<BitVec(64)> → Bool {
+    Ty::tested(c.world.tys, Sig::at(c.world.sigs, 1).params, Compile::ranked(f, c, measure, more))
+}
+
+// A function's callees' tests on words, an entry each: what the program's
+// tests must be at the functions `links` names.
+fn Compile::callee_tests<F>(f: F, c: Compile<F>(f), oks: Tm::Tests(c.world.tys, c.world.sigs.tail())) → List<List<BitVec(64)> → Bool> {
+    Sig::tested(c.world.tys, c.world.sigs.tail(), oks)
+}
+
+// The same for a recursion's callees past itself, asked nothing.
+fn Compile::other_tests<F>(f: F, c: Compile<F>(f)) → List<List<BitVec(64)> → Bool> {
+    Sig::tested(c.world.tys, c.world.sigs.tail().tail(), Tm::tests_true(c.world.tys, c.world.sigs.tail().tail()))
+}
+
+// A function's code is defined where its test holds: over any table that
+// answers its own, at the words it admits that pass `test`, asking its
+// callees only where their tests `oks` hold. It names no program.
+fn Compile::DefinedWhere<F>(f: F, c: Compile<F>(f), oks: Tm::Tests(c.world.tys, c.world.sigs.tail()), test: Ty::Arrows(c.world.tys, c.reflected.params, Bit))
+    → Type {
+    (call: Answers()) → Tm::CallsAgree(Compile::descent_world(f, c), call) → (xs: List<BitVec(64)>) →
+        Ty::AdmitsAll(c.world.tys, c.reflected.params, xs) → Ty::apply_words(c.world.tys, c.reflected.params, Bit, test, xs).IsTrue() →
+        c.code.defined(call, Tm::defines_of(Compile::descent_world(f, c), Tm::callees_oracle(Compile::descent_world(f, c), oks)), xs).IsTrue()
+}
+
+// From the calls its body makes where the test holds (`walked`); the rest
+// are evaluations at the instance.
+theorem Compile::walked_code<F>(f: F, c: Compile<F>(f),
     coded: c.code = Setup::default().code(c.reflected, c.world),
     checked: Setup::default().checked(c.reflected, c.world) = True,
     plain: c.reflected.shape() = Plain,
     quiet: c.reflected.quiet(c.world) = True,
-    sig: Sig::at(c.world.sigs, 1).params = c.reflected.params,
+    oks: Tm::Tests(c.world.tys, c.world.sigs.tail()), test: Ty::Arrows(c.world.tys, c.reflected.params, Bit),
+    walked: (xs: List<BitVec(64)>) → Ty::apply_words(c.world.tys, c.reflected.params, Bit, test, xs).IsTrue() →
+        c.reflected.body.calls_ok(Compile::descent_world(f, c), Tm::callees_oracle(Compile::descent_world(f, c), oks),
+            c.reflected.context(), Compile::descent_env(f, c, xs)).IsTrue()): Compile::DefinedWhere(f, c, oks, test) {
+    λ call agree xs admits holds => {
+        let at = c.world.at(c.callees, Nil);
+        let oracle = Tm::callees_oracle(at, oks);
+        let inner = Setup::code_defined(c.reflected, c.world, c.callees(Nil), Nil, oracle, Setup::checked_lowered(Setup::default(), c.reflected, c.world, checked),
+            plain, quiet, call, agree, Tm::defines_of(at, oracle), Tm::ok_defines_of(at, oracle), xs, admits, walked(xs, holds));
+        j(sym(coded), λ fn_ _ => fn_.defined(call, Tm::defines_of(at, oracle), xs).IsTrue(), inner)
+    }
+}
+
+// A function whose callees are asked nothing, by a check of its body
+// (`Tm::calls_all`): defined on whatever it admits.
+theorem Compile::total_code<F>(f: F, c: Compile<F>(f),
+    coded: c.code = Setup::default().code(c.reflected, c.world),
+    checked: Setup::default().checked(c.reflected, c.world) = True,
+    plain: c.reflected.shape() = Plain,
+    quiet: c.reflected.quiet(c.world) = True,
+    all: c.reflected.body.calls_all(c.world.sigs) = True): Compile::DefinedWhere(f, c, Compile::asks_nothing(f, c), Compile::always(f, c)) {
+    Compile::walked_code(f, c, coded, checked, plain, quiet, Compile::asks_nothing(f, c), Compile::always(f, c),
+        λ xs _ => c.reflected.body.calls_ok_all(Compile::descent_world(f, c), c.reflected.context(), Compile::descent_env(f, c, xs), all))
+}
+
+// Any other function, at its own test: the test is the calls its body
+// makes.
+theorem Compile::test_code<F>(f: F, c: Compile<F>(f),
+    coded: c.code = Setup::default().code(c.reflected, c.world),
+    checked: Setup::default().checked(c.reflected, c.world) = True,
+    plain: c.reflected.shape() = Plain,
+    quiet: c.reflected.quiet(c.world) = True,
+    oks: Tm::Tests(c.world.tys, c.world.sigs.tail())): Compile::DefinedWhere(f, c, oks, Compile::test(f, c, oks)) {
+    Compile::walked_code(f, c, coded, checked, plain, quiet, oks, Compile::test(f, c, oks),
+        λ xs holds => j(Ty::apply_words_curry(c.world.tys, Bit, c.reflected.params, Nil, trivial,
+                λ (env: Env(c.world.tys, c.reflected.context())) => c.reflected.body.calls_ok(Compile::descent_world(f, c),
+                    Tm::callees_oracle(Compile::descent_world(f, c), oks), c.reflected.context(), env), xs),
+            λ b _ => b.IsTrue(), holds))
+}
+
+// A function with no levels, as one part of a program's tests. `here`: the
+// program's test at its number is its own; `tested`: the program's tests
+// at the functions its table names are its callees'. Both are evaluations
+// of short lists.
+theorem Compile::within_flat<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<List<BitVec(64)> → List<BitVec(64)>>, adm: List<List<BitVec(64)> → Bool>,
+    links: List<Nat>,
+    linked: (b: Buffers()) → links.map(λ (n: Nat) => link_source(srcs(b), n)) = Compile::table(f, c, b),
+    admitted: links.map(λ (n: Nat) => link_admit(adm, n)) = Compile::admit_table(f, c),
+    earlier: List<Function>, arities: List<Nat>,
+    named: Sig::links_fit(c.world.tys, c.world.sigs.tail(), links.tail(), linked_arity(earlier, arities.tail())).IsTrue(),
+    oks: Tm::Tests(c.world.tys, c.world.sigs.tail()), test: Ty::Arrows(c.world.tys, c.reflected.params, Bit),
+    defined: Compile::DefinedWhere(f, c, oks, test),
+    more: Nat, tests: List<List<BitVec(64)> → Bool>,
+    here: Tm::tested_at(tests, earlier.len()) = Compile::tested(f, c, test),
+    tested: links.tail().map(Tm::tested_at(tests)) = Compile::callee_tests(f, c, oks)):
+    program_within_step(Compile::linked(f, c, links), earlier, arities, link_admits(adm), link_sources_at(srcs), more, Tm::tested_at(tests)) {
+    λ sourced rest => program_within_flat(Compile::linked(f, c, links), earlier, arities, link_admits(adm), link_sources_at(srcs), sourced, more,
+        Tm::tested_at(tests), refl,
+        λ call good below sound words holds => {
+            let at = c.world.at(c.callees, Nil);
+            let oracle = Tm::callees_oracle(at, oks);
+            let others = Answers::relabel(call, link_at(links));
+            let mixed = link_own(link_sources(Compile::table(f, c, Nil)), others);
+            let agree = Compile::calls_agree_linked(f, c, srcs, adm, links, linked_arity(earlier, arities.tail()), linked, admitted, named, Nil, call, good);
+            let asked = Tm::defines_of(at, oracle);
+            let ps = c.reflected.params;
+            let parts = Bool::is_true_and(Ty::admits_all(c.world.tys, ps, words), Ty::apply_words(c.world.tys, ps, Bit, test, words),
+                j(here, λ t _ => t(words).IsTrue(), holds));
+            let inner: (c.code.defined(mixed, asked, words).IsTrue()) =
+                defined(mixed, agree, words, Ty::admits_all_sound(c.world.tys, ps, words, parts.left), parts.right);
+            let start = Valuation::bind(Valuation::zero(), c.code.parameters, words);
+            let widened: (c.code.defined(others, Defines::relabel(below, link_at(links)), words).IsTrue()) =
+                c.code.body.defined_where_over(Nil, mixed, others, asked, Defines::relabel(below, link_at(links)),
+                    λ i => match i as λ n => (ws: List<BitVec(64)>) → asked(n, ws).IsTrue() → others(n, ws) = mixed(n, ws) {
+                        Zero => λ ws never => false_elim(j(Ty::apply_words_const(at.tys, Sig::at(at.sigs, 0).params, Bit, False, ws), λ x _ => x.IsTrue(),
+                            Bool::is_true_and(Ty::admits_all(at.tys, Sig::at(at.sigs, 0).params, ws),
+                                Ty::apply_words(at.tys, Sig::at(at.sigs, 0).params, Bit, oracle(0), ws), never).right)),
+                        Succ(_) => λ ws _ => refl,
+                    },
+                    Tm::callees_oracle_widens(at, links, oks, tests, tested, below, sound),
+                    start, start, λ wd id => refl, inner);
+            Function::relabel_defined(c.code, Nil, call, below, link_at(links), words, widened)
+        }, rest)
+}
+
+// A recursion, as one part of a program's tests. `here`: the program's
+// test at its number is its measure at most the levels; `tested`: its
+// callees past itself are functions before it whose tests are what they
+// admit.
+theorem Compile::within_leveled<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<List<BitVec(64)> → List<BitVec(64)>>, adm: List<List<BitVec(64)> → Bool>,
+    links: List<Nat>,
+    linked: (b: Buffers()) → links.map(λ (n: Nat) => link_source(srcs(b), n)) = Compile::table(f, c, b),
+    admitted: links.map(λ (n: Nat) => link_admit(adm, n)) = Compile::admit_table(f, c),
+    earlier: List<Function>, arities: List<Nat>,
+    named: Sig::links_fit(c.world.tys, c.world.sigs.tail(), links.tail(), tie(linked_arity(earlier, arities.tail()), earlier.len(), arities.nth(0))).IsTrue(),
     own: links.nth(1) = Some(earlier.len()),
-    measure: Ty::ArrowsTo(c.world.tys, Sig::at(c.world.sigs, 1).params, Nat),
-    walked: (xs: List<BitVec(64)>) → c.reflected.body.calls_ok(Compile::descent_world(f, c), Compile::descent_oracle(f, c, links, earlier.len(), measure, xs),
-        c.reflected.context(), Compile::descent_env(f, c, xs)).IsTrue(),
-    more: Nat, words: List<BitVec(64)>, admits: Compile::admits(f, c, words).IsTrue(), within: Compile::rank(f, c, measure, words) <= more):
-    program_defined(program_deepened(Cons(Compile::linked_self(f, c, links), earlier), more), earlier.len(), words).IsTrue() {
-    let under = program_deepened(earlier, more);
-    let below = program_defined_over(Nil, under);
-    let arity = tie(linked_arity(earlier, arities.tail()), earlier.len(), arities.nth(0));
-    let all: ((i: Nat) → (ws: List<BitVec(64)>) → below(i, ws).IsTrue()) =
-        j(sym(program_deepened_total(earlier, more, total)), λ fs _ => (i: Nat) → (ws: List<BitVec(64)>) → program_defined_over(Nil, fs, i, ws).IsTrue(),
-            program_total_defined(earlier, Nil, total));
-    let descends = Compile::descends(f, c, srcs, adm, links, arity, linked, admitted, named, coded, checked, plain, quiet, sig, earlier.len(), own, Nil, measure,
-        walked, below, λ i _ ws => all(i, ws));
-    program_defined_deepened_by_rank(Compile::linked_self(f, c, links), earlier, arities, link_admits(adm), link_sources_at(srcs), sourced, more, Nil,
-        Compile::rank(f, c, measure), λ (ws: List<BitVec(64)>) => Ty::AdmitsAll(c.world.tys, c.reflected.params, ws), 0, refl, descends, words,
-        Ty::admits_all_sound(c.world.tys, c.reflected.params, words, admits), within)
+    measure: Ty::ArrowsTo(c.world.tys, Sig::at(c.world.sigs, 1).params, Nat), defined: Compile::DefinedBelow(f, c, measure),
+    more: Nat, tests: List<List<BitVec(64)> → Bool>,
+    here: Tm::tested_at(tests, earlier.len()) = Compile::tested_rank(f, c, measure, more),
+    tested: links.tail().tail().map(Tm::tested_below(tests, earlier.len())) = Compile::other_tests(f, c)):
+    program_within_step(Compile::linked_self(f, c, links), earlier, arities, link_admits(adm), link_sources_at(srcs), more, Tm::tested_at(tests)) {
+    λ sourced rest => program_within_leveled(Compile::linked_self(f, c, links), earlier, arities, link_admits(adm), link_sources_at(srcs), sourced, more,
+        Tm::tested_at(tests), 0, refl, Compile::rank(f, c, measure),
+        λ (ws: List<BitVec(64)>) => Ty::AdmitsAll(c.world.tys, Sig::at(c.world.sigs, 1).params, ws),
+        λ words holds => {
+            let ps = Sig::at(c.world.sigs, 1).params;
+            let parts = Bool::is_true_and(Ty::admits_all(c.world.tys, ps, words), Ty::apply_words(c.world.tys, ps, Bit, Compile::ranked(f, c, measure, more), words),
+                j(here, λ t _ => t(words).IsTrue(), holds));
+            let rank = Compile::rank(f, c, measure, words);
+            let test: (rank.leb(more).IsTrue()) =
+                j(Ty::apply_words_map(c.world.tys, ps, Nat, Bit, λ (m: Nat) => m.leb(more), measure, words), λ b _ => b.IsTrue(), parts.right);
+            ⟨Ty::admits_all_sound(c.world.tys, ps, words, parts.left), rank.leb_sound(more, test)⟩
+        },
+        λ below sound => Compile::descends(f, c, srcs, adm, links, tie(linked_arity(earlier, arities.tail()), earlier.len(), arities.nth(0)), linked, admitted, named,
+            earlier.len(), own, measure, defined, below, tests, tested, sound),
+        rest)
+}
+
+// The functions before function `k` from the last of a program, and their
+// arities: what a part is stated over.
+fn link_earlier(functions: List<Function>, k: Nat) → List<Function> { functions.drop(k) }
+
+fn link_arities(arities: List<Nat>, k: Nat) → List<Nat> { arities.drop(k) }
+
+// A program's tests, function by function, are sound: the program, given
+// `more` levels past each recursion's first, is defined at a function on
+// the words that pass its test. `steps` is a part per function
+// (`Compile::within_flat`, `Compile::within_leveled`).
+theorem link_defined_within(functions: List<Function>, arities: List<Nat>, adm: List<List<BitVec(64)> → Bool>,
+    srcs: Buffers() → List<List<BitVec(64)> → List<BitVec(64)>>,
+    sourced: program_linked_files(functions, arities, link_admits(adm), link_sources_at(srcs)), more: Nat, tests: List<List<BitVec(64)> → Bool>,
+    steps: program_within_steps(functions, arities, link_admits(adm), link_sources_at(srcs), more, Tm::tested_at(tests)),
+    k: Nat, words: List<BitVec(64)>, holds: Tm::tested_at(tests, k, words).IsTrue()):
+    program_defined(program_deepened(functions, more), k, words).IsTrue() {
+    program_within_of_steps(functions, arities, link_admits(adm), link_sources_at(srcs), more, Tm::tested_at(tests), sourced, steps, k, words, holds)
+}
+
+// A recursion's test holds on admitted words whose measure is at most the
+// levels: what `f::defined_within` takes.
+theorem Compile::rank_tested<F>(f: F, c: Compile<F>(f), measure: Ty::ArrowsTo(c.world.tys, Sig::at(c.world.sigs, 1).params, Nat), more: Nat,
+    words: List<BitVec(64)>, admits: Ty::admits_all(c.world.tys, Sig::at(c.world.sigs, 1).params, words).IsTrue(),
+    within: Compile::rank(f, c, measure, words) <= more): Compile::tested_rank(f, c, measure, more, words).IsTrue() {
+    let ps = Sig::at(c.world.sigs, 1).params;
+    Bool::is_true_and_intro(Ty::admits_all(c.world.tys, ps, words), Ty::apply_words(c.world.tys, ps, Bit, Compile::ranked(f, c, measure, more), words), admits,
+        j(sym(Ty::apply_words_map(c.world.tys, ps, Nat, Bit, λ (m: Nat) => m.leb(more), measure, words)), λ b _ => b.IsTrue(),
+            Compile::rank(f, c, measure, words).leb_complete(more, within)))
+}
+
+// Any other function's, on admitted words at which it holds.
+theorem Compile::test_tested<F>(f: F, c: Compile<F>(f), test: Ty::Arrows(c.world.tys, c.reflected.params, Bit), words: List<BitVec(64)>,
+    admits: Ty::admits_all(c.world.tys, c.reflected.params, words).IsTrue(),
+    holds: Ty::apply_words(c.world.tys, c.reflected.params, Bit, test, words).IsTrue()): Compile::tested(f, c, test, words).IsTrue() {
+    Bool::is_true_and_intro(Ty::admits_all(c.world.tys, c.reflected.params, words), Ty::apply_words(c.world.tys, c.reflected.params, Bit, test, words), admits, holds)
 }
 
 // A program whose last function is an instance's code: the program's
@@ -2013,7 +2231,10 @@ fn runtime_held(e: Expr, what: String) → Tac<Expr> {
 // `leveled`: whether a function of the program is its own callee, linked at
 // one level (`Compile::linked_self`): such a program answers as its
 // sources only where defined (`program_eval_deepened_where`).
-record Linked { program: Expr, srcs: Expr, arities: Expr, sourced: Expr, statement: Expr, root: List<Expr>, adm: Expr, leveled: Bool := False }
+// `fronts`: each function's such arguments, the first function's first:
+// what a part of the program's tests is stated over.
+record Linked { program: Expr, srcs: Expr, arities: Expr, sourced: Expr, statement: Expr, root: List<Expr>, adm: Expr, leveled: Bool := False,
+    fronts: List<List<Expr>> := [] }
 
 // Whether a table is that of a function that is its own callee: it lists
 // the function twice (`Fun::own_callee`). A function that writes a span is
@@ -2104,10 +2325,11 @@ fn runtime_linked(q: RtQ, ts: RtTypes, l: Linking, insts: List<Pair<Expr, Expr>>
     let statement <- as_type(ap(linked_files, [program, arities, ap(admits_of, [adm]), ap(sources, [srcs])])).or_fail("runtime: the program's linking: ");
     let held <- hole(statement).or_fail("runtime: the program's linking: ");
     let solved <- defeq(Hd(held), proof);
+    let front: Nat → List<Expr> = λ i => of(i) ++ [srcs, adm, runtime_at(links, i), ap(every, [ap(table, of(i))]), ap(same_admits, [ap(admit_table, of(i))])];
+    let leveled = owns.any_bit(λ o => o);
     match solved {
-        True => pure(Linked(program, srcs, arities, Hd(held), Hd(statement),
-            of(insts.len() - 1) ++ [srcs, adm, runtime_at(links, insts.len() - 1), ap(every, [ap(table, of(insts.len() - 1))]),
-                ap(same_admits, [ap(admit_table, of(insts.len() - 1))])], adm, leveled := owns.any_bit(λ o => o))),
+        True => pure(Linked(program, srcs, arities, Hd(held), Hd(statement), front(insts.len() - 1), adm, leveled := leveled,
+            fronts := match leveled { True => indices.map(front), False => [] })),
         False => runtime_fail("the program's linking does not prove its statement"),
     }
 }
@@ -3534,16 +3756,14 @@ fn runtime_walk(fuel: Nat, t: Tm, d: RtWalk, q: RtQ, g_e, env_e: Expr, eqs: List
     }
 }
 
-// A recursion's definedness from its measure: the local `within`, the
-// measure at the arguments `at` at most `more`, and under it the proof that
-// the program `more` levels deeper is defined at the recursion on `words_e`
-// (`Compile::recursion_defined`); with them the measure as a function of
-// the parameters and its type, `f::measure`. None where the walk does not
-// close or the proof does not check.
-record RtWithin { within: LocalRef, proof: Expr, measure: Expr, measure_t: Handle }
+// A recursion's part of every program it is linked into: its measure as a
+// function of its parameters, `f::measure`, and that its code is defined
+// below it, `f::defined_below` (`Compile::ranked_code` at the walk). None
+// where the walk does not close or the proof does not check.
+record RtDescent { rec: Expr, measure: Expr, measure_t: Handle, defined: Expr, defined_t: Handle }
 
-fn runtime_within(name: String, rfun: Fun, q: RtQ, ts: RtTypes, linked: Linked, root, tys_e, rt_e, code_e: Expr, own_types: List<Handle>, at: List<Expr>,
-    more: LocalRef, words_e, admitted: Expr) → Tac<Option<RtWithin>> {
+fn runtime_descent(name: String, rfun: Fun, q: RtQ, ts: RtTypes, inst: List<Expr>, tys_e, rt_e, code_e: Expr, own_types: List<Handle>)
+    → Tac<Option<RtDescent>> {
     let found <- lookup(name ++ "::rec");
     match found {
         Refused(_) => pure(None),
@@ -3551,10 +3771,7 @@ fn runtime_within(name: String, rfun: Fun, q: RtQ, ts: RtTypes, linked: Linked, 
             let rec = Global(rec_g);
             let rfl <- runtime_global("tactic::rfl");
             let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
-            let le_g <- runtime_global(name_of(Nat::Le));
-            let nth_g <- runtime_global(name_of(List::nth));
-            let tail_g <- runtime_global(name_of(List::tail));
-            let defined_g <- runtime_global(name_of(Compile::recursion_defined));
+            let ranked_code <- runtime_global(name_of(Compile::ranked_code));
             let world_g <- runtime_global(name_of(Compile::descent_world));
             let oracle_g <- runtime_global(name_of(Compile::descent_oracle));
             let env_g <- runtime_global(name_of(Compile::descent_env));
@@ -3574,27 +3791,279 @@ fn runtime_within(name: String, rfun: Fun, q: RtQ, ts: RtTypes, linked: Linked, 
             let zs <- runtime_params_at(own_types, None, 0);
             let mu_z <- runtime_measure_at(rec, runtime_locals(zs));
             let measure <- runtime_held(runtime_lams(zs, Hd(mu_z)), "`" ++ name ++ "`'s measure");
-            let mu_y <- runtime_measure_at(rec, at);
-            let within_t <- as_type(ap(le_g, [Hd(mu_y), Local(more)])).or_fail("runtime: `" ++ name ++ "`'s depth: ");
-            let within <- assume(Hd(within_t), "within", Some(more)).or_fail("runtime: `" ++ name ++ "`'s depth: ");
-            let xs <- assume(Hd(ts.words), "xs", Some(within.ref)).or_fail("runtime: `" ++ name ++ "`'s words: ");
-            let inst = linked.root.take(3);
-            let links_e = runtime_at(linked.root, 5);
+            let xs <- assume(Hd(ts.words), "xs", None).or_fail("runtime: `" ++ name ++ "`'s words: ");
             let ctx_e = ap(context_g, [rt_e]);
             let env_e = ap(env_g, inst ++ [Local(xs.ref)]);
             let n = rfun.params.len();
-            let d = RtWalk(let_g, if_g, ifeq_g, call_g, none_g, below_g, ap(world_g, inst), ap(oracle_g, inst ++ [links_e, root, measure, Local(xs.ref)]),
+            let d = RtWalk(let_g, if_g, ifeq_g, call_g, none_g, below_g, ap(world_g, inst), ap(oracle_g, inst ++ [measure, Local(xs.ref)]),
                 Hd(trivial_h), ap(rfl, [Blank, q.boolean(False)]), obls, List::range(n).map(λ i => ap(get_g, [tys_e, ctx_e, env_e, NatLit(n - 1 - i)])));
             let walked <- runtime_walk(4096, rfun.body, d, q, ctx_e, env_e, [], Some(xs.ref));
             match walked {
                 None => pure(None),
                 Some(body) => {
                     let yes = ap(rfl, [Blank, q.boolean(True)]);
-                    let proof = ap(defined_g, linked.root ++ [ap(tail_g, [Blank, linked.program]), linked.arities, linked.sourced, Hd(trivial_h), Hd(trivial_h),
-                        ap(rfl, [Blank, code_e]), yes, ap(rfl, [Blank, runtime_at(shapes, 0)]), yes, ap(rfl, [Blank, Ty::quotes(rfun.params, q)]),
-                        ap(rfl, [Blank, ap(nth_g, [Blank, links_e, NatLit(1)])]), measure, Lam(xs.ref, body), Local(more), words_e, admitted, Local(within.ref)]);
+                    let proof = ap(ranked_code, inst ++ [ap(rfl, [Blank, code_e]), yes, ap(rfl, [Blank, runtime_at(shapes, 0)]), yes,
+                        ap(rfl, [Blank, Ty::quotes(rfun.params, q)]), measure, Lam(xs.ref, body)]);
                     let measure_t <- infer(measure).or_fail("runtime: `" ++ name ++ "`'s measure: ");
-                    infer(proof).bind(λ c => match c { Refused(_) => pure(None), Accepted(_) => pure(Some(RtWithin(within.ref, proof, measure, measure_t))) })
+                    infer(proof).bind(λ c => match c {
+                        Refused(_) => pure(None),
+                        // Held at its statement: the function's own program
+                        // cites it too.
+                        Accepted(defined_t) => hole(defined_t).or_fail("runtime: `" ++ name ++ "`'s descent: ").bind(λ held =>
+                            defeq(Hd(held), proof).bind(λ solved => match solved {
+                                True => pure(Some(RtDescent(rec, measure, measure_t, Hd(held), defined_t))),
+                                False => pure(None),
+                            })),
+                    })
+                },
+            }
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A program's tests (docs/native/runtime-fn-recursion-design.md §10.7)
+//
+// Each function of a program whose recursions are given levels has a test
+// of its arguments, and the program is defined at a function where its
+// test holds (`link_defined_within`). The tests are found the first
+// function first, each from those of the functions it calls: a recursion's
+// is its measure at most the levels, from its `f::measure` and
+// `f::defined_below`; a function all of whose callees are asked nothing is
+// asked nothing itself, where the check of its body evaluates
+// (`Compile::total_code`); any other function's is its calls allowed by its
+// callees' tests (`Compile::test_code`). A function whose part does not
+// check (one that is not plain code, or a recursion that calls a function
+// with a test of its own) leaves the program its definedness premise.
+
+// What the assembly names.
+record RtTestG { code_of: Expr, total_code: Expr, test_code: Expr, always: Expr, asks_nothing: Expr, test: Expr, ranked: Expr, tested: Expr, tested_rank: Expr,
+    callee_tests: Expr, other_tests: Expr, within_flat: Expr, within_leveled: Expr, earlier: Expr, arities: Expr, both: Expr, rfl: Expr, trivial: Expr,
+    yes: Expr, plain: Expr, pair: Expr, function_t: Expr, nth: Expr }
+
+fn runtime_test_globals(q: RtQ, ts: RtTypes) → Tac<RtTestG> {
+    let code_of <- runtime_global(name_of(Compile::code_of));
+    let total_code <- runtime_global(name_of(Compile::total_code));
+    let test_code <- runtime_global(name_of(Compile::test_code));
+    let always <- runtime_global(name_of(Compile::always));
+    let asks_nothing <- runtime_global(name_of(Compile::asks_nothing));
+    let test <- runtime_global(name_of(Compile::test));
+    let ranked <- runtime_global(name_of(Compile::ranked));
+    let tested <- runtime_global(name_of(Compile::tested));
+    let tested_rank <- runtime_global(name_of(Compile::tested_rank));
+    let callee_tests <- runtime_global(name_of(Compile::callee_tests));
+    let other_tests <- runtime_global(name_of(Compile::other_tests));
+    let within_flat <- runtime_global(name_of(Compile::within_flat));
+    let within_leveled <- runtime_global(name_of(Compile::within_leveled));
+    let earlier <- runtime_global(name_of(link_earlier));
+    let arities <- runtime_global(name_of(link_arities));
+    let both <- runtime_global(name_of(link_both));
+    let rfl <- runtime_global("tactic::rfl");
+    let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
+    let pair <- runtime_global(name_of(Pair::of));
+    let nth <- runtime_global(name_of(List::nth));
+    let shapes <- runtime_type_of(name_of(runtime_w_shape)).bind(λ h => runtime_ctors_at(h));
+    pure(RtTestG(code_of, total_code, test_code, always, asks_nothing, test, ranked, tested, tested_rank, callee_tests, other_tests, within_flat, within_leveled,
+        earlier, arities, both, rfl, Hd(trivial_h), ap(rfl, [Blank, q.boolean(True)]), ap(rfl, [Blank, runtime_at(shapes, 0)]), pair, Hd(ts.function), nth))
+}
+
+// One function's share: `kind` 0 asked nothing, 1 its calls' test, 2 a
+// recursion's measure; its typed test as a function of the levels, held;
+// its callees' tests and its code's definedness, at the levels `more`; a
+// recursion's measure.
+record RtPart { kind: Nat, test: Expr, oks: Expr, defined: Expr, measure: Expr }
+
+// A function's callees' tests, as its table lists them after itself.
+fn runtime_oks(g: RtTestG, more: LocalRef, done: List<RtPart>, callees: List<Nat>) → Option<Expr> {
+    match callees {
+        Nil => Some(g.trivial),
+        Cons(c, rest) => match done.nth(c) {
+            None => None,
+            Some(p) => match runtime_oks(g, more, done, rest) {
+                None => None,
+                Some(acc) => Some(ap(g.pair, [Blank, Blank, ap(p.test, [Local(more)]), acc])),
+            },
+        },
+    }
+}
+
+// `levels` is a local of no scope, which each held test abstracts: a test
+// is a function of the levels wherever it is read (`f::within` is one).
+fn runtime_part(g: RtTestG, front: List<Expr>, links: List<Nat>, own: Bool, name: String, more, levels: LocalRef, root: Option<Pair<Expr, Expr>>, last: Bool,
+    done: List<RtPart>) → Tac<Option<RtPart>> {
+    let inst = front.take(3);
+    match own {
+        True => {
+            let found: Tac<Option<Pair<Expr, Expr>>> = match last {
+                True => pure(root),
+                False => lookup(name ++ "::measure").bind(λ m => match m {
+                    Refused(_) => pure(None),
+                    Accepted(mg) => lookup(name ++ "::defined_below").bind(λ d => match d {
+                        Refused(_) => pure(None),
+                        Accepted(dg) => pure(Some(Pair(Global(mg), Global(dg)))),
+                    }),
+                }),
+            };
+            found.bind(λ o => match o {
+                None => pure(None),
+                Some(md) => runtime_held(Lam(levels, ap(g.ranked, inst ++ [md.fst, Local(levels)])), "`" ++ name ++ "`'s test").bind(λ t =>
+                    pure(Some(RtPart(2, t, g.trivial, md.snd, md.fst)))),
+            })
+        },
+        False => {
+            let facts: List<Expr> = [ap(g.rfl, [g.function_t, ap(g.code_of, inst)]), g.yes, g.plain, g.yes];
+            let callees = links.drop(1);
+            let tested: Tac<Option<RtPart>> = match runtime_oks(g, more, done, callees) {
+                None => pure(None),
+                Some(oks) => {
+                    let p = ap(g.test_code, inst ++ facts ++ [oks]);
+                    infer(p).bind(λ c => match c {
+                        Refused(_) => pure(None),
+                        Accepted(_) => runtime_held(Lam(levels, ap(g.test, inst ++ [runtime_oks(g, levels, done, callees).unwrap_or(Blank)])),
+                            "`" ++ name ++ "`'s test").bind(λ t => pure(Some(RtPart(1, t, oks, p, g.trivial)))),
+                    })
+                },
+            };
+            match callees.all_bit(λ c => match done.nth(c) { None => False, Some(p) => p.kind.same(0) }) {
+                False => tested,
+                True => {
+                    let p = ap(g.total_code, inst ++ facts ++ [g.yes]);
+                    infer(p).bind(λ c => match c {
+                        Refused(_) => tested,
+                        Accepted(_) => runtime_held(Lam(levels, ap(g.always, inst)), "`" ++ name ++ "`'s test").bind(λ t =>
+                            pure(Some(RtPart(0, t, ap(g.asks_nothing, inst), p, g.trivial)))),
+                    })
+                },
+            }
+        },
+    }
+}
+
+fn runtime_parts(g: RtTestG, fuel: Nat, fronts: List<List<Expr>>, links: List<List<Nat>>, owns: List<Bool>, names: List<String>, more, levels: LocalRef,
+    root: Option<Pair<Expr, Expr>>, done: List<RtPart>) → Tac<Option<List<RtPart>>> {
+    match fuel {
+        Zero => pure(Some(done)),
+        Succ(fu) => {
+            let i = done.len();
+            runtime_part(g, fronts.nth(i).unwrap_or([]), links.nth(i).unwrap_or([]), owns.nth(i).unwrap_or(False), names.nth(i).unwrap_or(""), more, levels, root,
+                fu.same(0), done).bind(λ r => match r {
+                None => pure(None),
+                Some(p) => runtime_parts(g, fu, fronts, links, owns, names, more, levels, root, done ++ [p]),
+            })
+        },
+    }
+}
+
+// A function's test on words, as the program's list names it.
+fn runtime_tested(g: RtTestG, front: List<Expr>, p: RtPart, more: LocalRef) → Expr {
+    match p.kind.same(2) {
+        True => ap(g.tested_rank, front.take(3) ++ [p.measure, Local(more)]),
+        False => ap(g.tested, front.take(3) ++ [ap(p.test, [Local(more)])]),
+    }
+}
+
+// The parts' conjunction, the last function's first; None where one does
+// not check.
+fn runtime_steps(g: RtTestG, steps: List<Expr>) → Tac<Option<Expr>> {
+    match steps {
+        Nil => pure(Some(g.trivial)),
+        Cons(p, rest) => runtime_steps(g, rest).bind(λ r => match r {
+            None => pure(None),
+            Some(acc) => infer(p).bind(λ c => match c {
+                Refused(_) => pure(None),
+                Accepted(tp) => infer(acc).bind(λ c2 => match c2 {
+                    Refused(_) => pure(None),
+                    Accepted(tq) => pure(Some(ap(g.both, [Hd(tp), Hd(tq), p, acc]))),
+                }),
+            }),
+        }),
+    }
+}
+
+// A program's definedness from its tests: the local `within`, the last
+// function's test at the arguments `at` and the levels `more` (a
+// recursion's as its measure at most `more`), and under it the proof that
+// the program `more` levels deeper is defined at that function on
+// `words_e`; with them what the function publishes for its callers: a
+// recursion's `f::measure` and `f::defined_below`, any other function's
+// test `f::within`. None where a part does not check.
+record RtWithin { within: LocalRef, proof: Expr, decls: List<Decl> }
+
+fn runtime_within(name: String, rfun: Fun, q: RtQ, ts: RtTypes, l: Linking, linked: Linked, root, tys_e, rt_e, code_e: Expr, own_types: List<Handle>,
+    at: List<Expr>, more: LocalRef, words_e, admitted: Expr, own: Bool) → Tac<Option<RtWithin>> {
+    let g <- runtime_test_globals(q, ts);
+    let n = linked.fronts.len();
+    let inst = linked.root.take(3);
+    let descent <- match own as λ _ => Tac<Option<RtDescent>> {
+        False => pure(None),
+        True => runtime_descent(name, rfun, q, ts, inst, tys_e, rt_e, code_e, own_types),
+    };
+    match own && descent.is_none() {
+        True => pure(None),
+        False => {
+            let nat_h <- runtime_type_of(name_of(runtime_w_nat));
+            let levels <- assume(Hd(nat_h), "levels", None).or_fail("runtime: a number of levels: ");
+            let parts <- runtime_parts(g, n, linked.fronts, l.tables.map(λ t => runtime_links(l.order, t)), l.own_callees(), l.names, more, levels.ref,
+                descent.map(λ d => Pair(d.measure, d.defined)), []);
+            match parts {
+                None => pure(None),
+                Some(ps) => {
+                    let admits_nil <- runtime_global(name_of(link_admits_nil));
+                    let admits_cons <- runtime_global(name_of(link_admits_cons));
+                    let defined_g <- runtime_global(name_of(link_defined_within));
+                    let rank_tested <- runtime_global(name_of(Compile::rank_tested));
+                    let test_tested <- runtime_global(name_of(Compile::test_tested));
+                    let le_g <- runtime_global(name_of(Nat::Le));
+                    let is_true <- runtime_global(name_of(Bool::IsTrue));
+                    let indices = List::range(n);
+                    let front: Nat → List<Expr> = λ i => linked.fronts.nth(i).unwrap_or([]);
+                    let part: Nat → RtPart = λ i => ps.nth(i).unwrap_or(RtPart(0, Blank, Blank, Blank, Blank));
+                    // The program's tests on words, held as a function of
+                    // the levels: every part names them.
+                    let held <- runtime_held(Lam(more, indices.foldr(λ i acc => ap(admits_cons, [runtime_tested(g, front(i), part(i), more), acc]), admits_nil)),
+                        "the program's tests");
+                    let tests = ap(held, [Local(more)]);
+                    let step: Nat → Expr = λ i => {
+                        let p = part(i);
+                        let over: List<Expr> = [ap(g.earlier, [linked.program, NatLit(n - i)]), ap(g.arities, [linked.arities, NatLit(n - 1 - i)]), g.trivial];
+                        let here = ap(g.rfl, [Blank, runtime_tested(g, front(i), p, more)]);
+                        match p.kind.same(2) {
+                            True => ap(g.within_leveled, front(i) ++ over ++ [ap(g.rfl, [Blank, ap(g.nth, [Blank, runtime_at(front(i), 5), NatLit(1)])]),
+                                p.measure, p.defined, Local(more), tests, here, ap(g.rfl, [Blank, ap(g.other_tests, front(i).take(3))])]),
+                            False => ap(g.within_flat, front(i) ++ over ++ [p.oks, ap(p.test, [Local(more)]), p.defined, Local(more), tests, here,
+                                ap(g.rfl, [Blank, ap(g.callee_tests, front(i).take(3) ++ [p.oks])])]),
+                        }
+                    };
+                    let conj <- runtime_steps(g, indices.rev().map(step));
+                    match conj {
+                        None => pure(None),
+                        Some(steps) => {
+                            let last = part(n - 1);
+                            // The premise: a recursion's measure at most the
+                            // levels, any other function's test.
+                            let stated: Tac<Pair<Handle, List<Decl>>> = match descent {
+                                Some(d) => runtime_measure_at(d.rec, at).bind(λ mu =>
+                                    as_type(ap(le_g, [Hd(mu), Local(more)])).or_fail("runtime: `" ++ name ++ "`'s depth: ").bind(λ t => pure(Pair(t, [
+                                        // The measure as a function of the
+                                        // parameters: what a certificate
+                                        // states its bound by.
+                                        Decl(AsValue, name ++ "::measure", [], Hd(d.measure_t), d.measure),
+                                        Decl(AsTheorem, name ++ "::defined_below", [], Hd(d.defined_t), d.defined)])))),
+                                None => infer(last.test).or_fail("runtime: `" ++ name ++ "`'s test: ").bind(λ test_t =>
+                                    as_type(ap(is_true, [ap(last.test, Cons(Local(more), at))])).or_fail("runtime: `" ++ name ++ "`'s test: ").bind(λ t => pure(Pair(t, [
+                                        Decl(AsValue, name ++ "::within", [], Hd(test_t), last.test)])))),
+                            };
+                            let said <- stated;
+                            let within <- assume(Hd(said.fst), "within", Some(more)).or_fail("runtime: `" ++ name ++ "`'s depth: ");
+                            let holds: Expr = match descent {
+                                Some(d) => ap(rank_tested, inst ++ [d.measure, Local(more), words_e, admitted, Local(within.ref)]),
+                                None => ap(test_tested, inst ++ [ap(last.test, [Local(more)]), words_e, admitted, Local(within.ref)]),
+                            };
+                            let proof = ap(defined_g, [linked.program, linked.arities, linked.adm, linked.srcs, linked.sourced, Local(more), tests, steps, root, words_e,
+                                holds]);
+                            infer(proof).bind(λ c => match c { Refused(_) => pure(None), Accepted(_) => pure(Some(RtWithin(within.ref, proof, said.snd))) })
+                        },
+                    }
                 },
             }
         },
@@ -3769,31 +4238,25 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
                         λ args => runtime_agree_rhs(low, wide, count, reprs, recs, rfun, f, args).bind(λ e => pure(runtime_enum_result(enum_word, tys_e, rfun.result, e))),
                         evaluated_where, Some(d.ref));
                     let where_decl = Decl(AsTheorem, name ++ "::agrees_where", runtime_params_of(ys.append([more.ref, d.ref])), Equation(lhs_where, first), agreed_where);
-                    // The recursion itself: its definedness from its
-                    // measure, `f::defined_within`, and the agreement with
-                    // it in place of the premise, `f::agrees_within`.
-                    let within_decls <- match own as λ _ => Tac<List<Decl>> {
-                        False => pure([]),
-                        True => runtime_within(name, rfun, q, ts, linked, root, tys_e, rt_e, code_e, own_types,
-                            runtime_narrow_args(low, rfun.params, runtime_args(count, reprs, rfun.params, at_ys)), more.ref, words_e, admitted).bind(λ r => match r {
-                            None => pure([]),
-                            Some(p) => {
-                                let evaluated_within = ap(eval_where, [linked.program, linked.arities, ap(admits_of, [linked.adm]), ap(sources, [linked.srcs]),
-                                    linked.sourced, Local(more.ref), no_file, root, words_e, Hd(trivial_h), admitted, p.proof]);
-                                let params = runtime_params_of(ys.append([more.ref, p.within]));
-                                runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), recs, rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs_where,
-                                    λ args => runtime_agree_rhs(low, wide, count, reprs, recs, rfun, f, args).bind(λ e =>
-                                        pure(runtime_enum_result(enum_word, tys_e, rfun.result, e))),
-                                    evaluated_within, Some(p.within)).bind(λ agreed_within => pure([
-                                        // The measure as a function of the
-                                        // parameters: what a certificate
-                                        // states its bound by.
-                                        Decl(AsValue, name ++ "::measure", [], Hd(p.measure_t), p.measure),
-                                        Decl(AsTheorem, name ++ "::defined_within", params, Hd(defined_t), p.proof),
-                                        Decl(AsTheorem, name ++ "::agrees_within", params, Equation(lhs_where, first), agreed_within)]))
-                            },
-                        }),
-                    };
+                    // Its definedness from its test (a recursion's measure at
+                    // most the levels, any other function's `f::within`),
+                    // `f::defined_within`, and the agreement with it in
+                    // place of the premise, `f::agrees_within`.
+                    let within_decls <- runtime_within(name, rfun, q, ts, l, linked, root, tys_e, rt_e, code_e, own_types,
+                        runtime_narrow_args(low, rfun.params, runtime_args(count, reprs, rfun.params, at_ys)), more.ref, words_e, admitted, own).bind(λ r => match r {
+                        None => pure([]),
+                        Some(p) => {
+                            let evaluated_within = ap(eval_where, [linked.program, linked.arities, ap(admits_of, [linked.adm]), ap(sources, [linked.srcs]),
+                                linked.sourced, Local(more.ref), no_file, root, words_e, Hd(trivial_h), admitted, p.proof]);
+                            let params = runtime_params_of(ys.append([more.ref, p.within]));
+                            runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), recs, rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs_where,
+                                λ args => runtime_agree_rhs(low, wide, count, reprs, recs, rfun, f, args).bind(λ e =>
+                                    pure(runtime_enum_result(enum_word, tys_e, rfun.result, e))),
+                                evaluated_within, Some(p.within)).bind(λ agreed_within => pure(p.decls ++ [
+                                    Decl(AsTheorem, name ++ "::defined_within", params, Hd(defined_t), p.proof),
+                                    Decl(AsTheorem, name ++ "::agrees_within", params, Equation(lhs_where, first), agreed_within)]))
+                        },
+                    });
                     pure(Some(Cons(where_decl, within_decls)))
                 },
             };

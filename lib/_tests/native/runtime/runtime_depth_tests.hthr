@@ -115,3 +115,17 @@ theorem router_within(): True = True {
     let _ = router::agrees_within;
     refl
 }
+
+// A function that calls a recursion: its test is its calls within the
+// levels, `rsum_two::within`, and its program is defined where it holds.
+runtime fn rsum_two(a, b: u64) → u64 { rsum(a).add(rsum(b)) }
+
+theorem rsum_two_defined(a, b: u64, more: Nat, within: rsum_two::within(more, a, b).IsTrue()):
+    program_defined(program_deepened(rsum_two::program, more), 1, [a, b]).IsTrue() {
+    rsum_two::defined_within(a, b, more, within)
+}
+
+theorem rsum_two_agrees(a, b: u64, more: Nat, within: rsum_two::within(more, a, b).IsTrue()):
+    program_eval(program_deepened(rsum_two::program, more), 1, [a, b]) = rsum_two(a, b) {
+    rsum_two::agrees_within(a, b, more, within)
+}

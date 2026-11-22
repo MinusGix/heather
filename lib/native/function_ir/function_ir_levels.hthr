@@ -902,20 +902,20 @@ theorem program_defined_deepened_by_rank(last: Function, earlier: List<Function>
 // A function that calls a recursion is defined where its calls stay within
 // the recursion's levels, which is a test of its own arguments. A test per
 // function, `tests`, is sound for a program at `more` levels past each
-// recursion's first when each function is defined on the words it admits
-// that pass its test (`program_within`). It is proved a function at a
+// recursion's first when each function is defined on the words that pass
+// its test (`program_within`): a test includes what the function admits. It is proved a function at a
 // time, each over the functions before it: one with no levels by its
 // code's definedness wherever the earlier functions' tests are sound
 // (`program_within_flat`), a recursion by its descent by a rank
 // (`program_within_leveled`).
 
-fn program_within(functions: List<Function>, more: Nat, admits: Nat → List<BitVec(64)> → Type, tests: Defines()) → Type {
-    (f: Nat) → (words: List<BitVec(64)>) → admits(f, words) → tests(f, words).IsTrue() →
+fn program_within(functions: List<Function>, more: Nat, tests: Defines()) → Type {
+    (f: Nat) → (words: List<BitVec(64)>) → tests(f, words).IsTrue() →
         program_defined_over(Nil, program_deepened(functions, more), f, words).IsTrue()
 }
 
-theorem program_within_nil(more: Nat, admits: Nat → List<BitVec(64)> → Type, tests: Defines()): program_within(Nil, more, admits, tests) {
-    λ f words _ _ => trivial
+theorem program_within_nil(more: Nat, tests: Defines()): program_within(Nil, more, tests) {
+    λ f words _ => trivial
 }
 
 // A program at one of its numbers: the last function's definedness at its
@@ -933,17 +933,17 @@ theorem program_defined_cons(buffers: Buffers(), last: Function, earlier: List<F
     })
 }
 
-// A function with no levels. `part`: its code is defined on the words it
-// admits that pass its test, over any calls that answer the sources and
+// A function with no levels. `part`: its code is defined on the words
+// that pass its test, over any calls that answer the sources and
 // any callees' definedness the earlier functions' tests are sound for.
 theorem program_within_flat(last: Function, earlier: List<Function>, arities: List<Nat>, admits: Nat → List<BitVec(64)> → Type,
     sources: Buffers() → Answers(), linked: program_linked_files(Cons(last, earlier), arities, admits, sources), more: Nat, tests: Defines(),
     flat: last.levels = 0,
     part: (call: Answers()) → Answers::Agree(call, sources(Nil), linked_arity(earlier, arities.tail()), admits) → (below: Defines()) →
-        ((f: Nat) → (ws: List<BitVec(64)>) → admits(f, ws) → tests(f, ws).IsTrue() → below(f, ws).IsTrue()) →
-        (words: List<BitVec(64)>) → admits(earlier.len(), words) → tests(earlier.len(), words).IsTrue() → last.defined(call, below, words).IsTrue(),
-    rest: program_within(earlier, more, admits, tests)): program_within(Cons(last, earlier), more, admits, tests) {
-    λ f words admitted test => {
+        ((f: Nat) → (ws: List<BitVec(64)>) → tests(f, ws).IsTrue() → below(f, ws).IsTrue()) →
+        (words: List<BitVec(64)>) → tests(earlier.len(), words).IsTrue() → last.defined(call, below, words).IsTrue(),
+    rest: program_within(earlier, more, tests)): program_within(Cons(last, earlier), more, tests) {
+    λ f words test => {
         let under = program_deepened(earlier, more);
         let deep = last.deepened(more);
         program_defined_cons(Nil, deep, under, f, words,
@@ -956,7 +956,7 @@ theorem program_within_flat(last: Function, earlier: List<Function>, arities: Li
                     program_linked_where(under, arities.tail(), admits, sources, relinked, Nil));
                 let patched = Answers::patched(below, sources(Nil), defines);
                 let over = part(patched, Answers::patched_agree(below, sources(Nil), linked_arity(earlier, arities.tail()), admits, defines, named), defines, rest,
-                    words, j(at, λ x _ => admits(x, words), admitted), j(at, λ x _ => tests(x, words).IsTrue(), test));
+                    words, j(at, λ x _ => tests(x, words).IsTrue(), test));
                 let start = Valuation::bind(Valuation::zero(), last.parameters, words);
                 let moved: (last.defined(below, defines, words).IsTrue()) = last.body.defined_where_over(Nil, patched, below, defines, defines,
                     λ g ws d => sym(Answers::patched_where(below, sources(Nil), defines, g, ws, d)), λ g ws d => d, start, start, λ w id => refl, over);
@@ -965,7 +965,7 @@ theorem program_within_flat(last: Function, earlier: List<Function>, arities: Li
                 let same: (deep = last) = j(sym(flat), λ n _ => last.deepened_at(n, more) = last, refl);
                 j(sym(same), λ d _ => d.defined(program_last_answers(Nil, d, under), program_last_defines(Nil, d, under), words).IsTrue(), at_levels)
             },
-            rest(f, words, admitted, test))
+            rest(f, words, test))
     }
 }
 
@@ -975,23 +975,50 @@ theorem program_within_flat(last: Function, earlier: List<Function>, arities: Li
 theorem program_within_leveled(last: Function, earlier: List<Function>, arities: List<Nat>, admits: Nat → List<BitVec(64)> → Type,
     sources: Buffers() → Answers(), linked: program_linked_files(Cons(last, earlier), arities, admits, sources), more: Nat, tests: Defines(),
     level: Nat, leveled: last.levels = level + 1, rank: List<BitVec(64)> → Nat, Admits: List<BitVec(64)> → Type,
-    ranked: (words: List<BitVec(64)>) → admits(earlier.len(), words) → tests(earlier.len(), words).IsTrue() → Admits(words) ∧ rank(words) <= more,
-    part: (below: Defines()) → ((f: Nat) → (ws: List<BitVec(64)>) → admits(f, ws) → tests(f, ws).IsTrue() → below(f, ws).IsTrue()) →
+    ranked: (words: List<BitVec(64)>) → tests(earlier.len(), words).IsTrue() → Admits(words) ∧ rank(words) <= more,
+    part: (below: Defines()) → ((f: Nat) → (ws: List<BitVec(64)>) → tests(f, ws).IsTrue() → below(f, ws).IsTrue()) →
         last.Descends(Nil, below, earlier.len(), rank,
             λ (c: Answers()) => Answers::Agree(c, sources(Nil), tie(linked_arity(earlier, arities.tail()), earlier.len(), arities.nth(0)), admits), Admits),
-    rest: program_within(earlier, more, admits, tests)): program_within(Cons(last, earlier), more, admits, tests) {
-    λ f words admitted test => {
+    rest: program_within(earlier, more, tests)): program_within(Cons(last, earlier), more, tests) {
+    λ f words test => {
         let under = program_deepened(earlier, more);
         let deep = last.deepened(more);
         program_defined_cons(Nil, deep, under, f, words,
             λ e => {
                 let at: (f = earlier.len()) = trans(e, program_deepened_len(earlier, more));
-                let facts = ranked(words, j(at, λ x _ => admits(x, words), admitted), j(at, λ x _ => tests(x, words).IsTrue(), test));
+                let facts = ranked(words, j(at, λ x _ => tests(x, words).IsTrue(), test));
                 let whole = program_defined_deepened_by_rank(last, earlier, arities, admits, sources, linked, more, Nil, rank, Admits, level, leveled,
                     part(program_defined_over(Nil, under), rest), words, facts.left, facts.right);
                 program_defined_last(Nil, deep, under, words,
                     j(sym(program_deepened_len(earlier, more)), λ n _ => program_defined_over(Nil, Cons(deep, under), n, words).IsTrue(), whole))
             },
-            rest(f, words, admitted, test))
+            rest(f, words, test))
+    }
+}
+
+// One function's part of a program's tests: with the program linked and the
+// tests sound for the functions before it, they are sound with it.
+fn program_within_step(last: Function, earlier: List<Function>, arities: List<Nat>, admits: Nat → List<BitVec(64)> → Type, sources: Buffers() → Answers(),
+    more: Nat, tests: Defines()) → Type {
+    program_linked_files(Cons(last, earlier), arities, admits, sources) → program_within(earlier, more, tests) → program_within(Cons(last, earlier), more, tests)
+}
+
+// A part per function, the last function's first.
+fn program_within_steps(functions: List<Function>, arities: List<Nat>, admits: Nat → List<BitVec(64)> → Type, sources: Buffers() → Answers(),
+    more: Nat, tests: Defines()) → Type {
+    match functions {
+        Nil => True,
+        Cons(last, earlier) => program_within_step(last, earlier, arities, admits, sources, more, tests)
+            ∧ program_within_steps(earlier, arities.tail(), admits, sources, more, tests),
+    }
+}
+
+theorem program_within_of_steps(functions: List<Function>): (arities: List<Nat>) → (admits: Nat → List<BitVec(64)> → Type) →
+    (sources: Buffers() → Answers()) → (more: Nat) → (tests: Defines()) → program_linked_files(functions, arities, admits, sources) →
+    program_within_steps(functions, arities, admits, sources, more, tests) → program_within(functions, more, tests) {
+    match functions {
+        Nil => λ arities admits sources more tests _ _ => program_within_nil(more, tests),
+        Cons(last, earlier) => λ arities admits sources more tests linked steps =>
+            steps.left(linked, program_within_of_steps(earlier, arities.tail(), admits, sources, more, tests, linked.right, steps.right)),
     }
 }
