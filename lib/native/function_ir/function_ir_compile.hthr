@@ -642,14 +642,19 @@ fn Place::number(self place: Place) → Nat {
 
 // The evaluator's run of a function that stores nothing, over no buffers,
 // with its words past the first from the same run.
-theorem Function::eval_runs_both(self function: Function, earlier: List<Function>, ok: function.evaluable(program_arity(earlier)).IsTrue(),
+theorem Function::eval_runs_both(self function: Function, earlier: List<Function>,
+    ok: function.evaluable(program_last_arity(function, earlier)).IsTrue(),
     below: program_evaluable(earlier).IsTrue(), quiet: function.body.quiet().IsTrue(), reads: program_quiet(earlier).IsTrue(),
     arguments: List<BitVec(64)>, count: function.parameters.len() = arguments.len(),
-    defined: function.defined(program_answers_over(Nil, earlier), program_defined_over(Nil, earlier), arguments).IsTrue()):
-    function.RunsBoth(program_effects(earlier), arguments, function.eval(program_answers_over(Nil, earlier), arguments),
-        function.eval_also(program_answers_over(Nil, earlier), arguments), Nil, Nil) {
-    let call = program_answers_over(Nil, earlier);
-    let parts = Bool::is_true_and(function.body.evaluable(program_arity(earlier)),
+    defined: function.defined(program_last_answers(Nil, function, earlier), program_last_defines(Nil, function, earlier), arguments).IsTrue()):
+    function.RunsBoth(function.effects_at(program_effects(earlier), earlier.len(), function.levels), arguments,
+        function.eval(program_last_answers(Nil, function, earlier), arguments),
+        function.eval_also(program_last_answers(Nil, function, earlier), arguments), Nil, Nil) {
+    let call = program_last_answers(Nil, function, earlier);
+    let arity = program_last_arity(function, earlier);
+    let mays = λ (held: Buffers()) => function.callees_at(program_callees_over(held, earlier), earlier.len(), function.levels, held);
+    let effects = function.effects_at(program_effects(earlier), earlier.len(), function.levels);
+    let parts = Bool::is_true_and(function.body.evaluable(arity),
         distinct(function.parameters) && disjoint(function.body.writes(), function.parameters), ok);
     let params = Bool::is_true_and(distinct(function.parameters), disjoint(function.body.writes(), function.parameters), parts.right);
     let bound = Valuation::bind(Valuation::zero(), function.parameters, arguments);
@@ -658,20 +663,23 @@ theorem Function::eval_runs_both(self function: Function, earlier: List<Function
         words_agree(function.parameters, bound, after, λ id m =>
             function.body.eval_frame(call, Nil, bound, 64, id, disjoint_mem(function.body.writes(), function.parameters, params.right, id, m))),
         words_of_bind(Valuation::zero(), function.parameters, params.left, arguments, count));
-    let holds = function.body.eval_holds_in(program_callees_over(Nil, earlier), call, program_defined_over(Nil, earlier), program_arity(earlier), Nil,
-        program_eval_reads(earlier, Nil, below), parts.left, bound, after, λ w id _ => refl, defined);
-    let keeping = function.body.runs_quiet(λ (held: Buffers()) => program_callees_over(held, earlier), Nil, quiet, after, holds);
-    Exists(after, ⟨read, ⟨function.body.runs_weaken(Effects::keeping(λ (held: Buffers()) => program_callees_over(held, earlier)), program_effects(earlier),
-        λ before g words word extra a kept => j(sym(kept.right), λ x _ => program_effects(earlier)(before, g, words, word, extra, x),
-            program_effects_quiet(earlier, reads, before, g, words, word, extra, kept.left)),
+    let holds = function.body.eval_holds_in(mays(Nil), call, program_last_defines(Nil, function, earlier), arity, Nil,
+        function.levels_reads(program_callees_over(Nil, earlier), program_answers_over(Nil, earlier), program_defined_over(Nil, earlier),
+            program_arity(earlier), earlier.len(), Nil, program_eval_reads(earlier, Nil, below), function.levels, ok),
+        parts.left, bound, after, λ w id _ => refl, defined);
+    let keeping = function.body.runs_quiet(mays, Nil, quiet, after, holds);
+    Exists(after, ⟨read, ⟨function.body.runs_weaken(Effects::keeping(mays), effects,
+        λ before g words word extra a kept => j(sym(kept.right), λ x _ => effects(before, g, words, word, extra, x),
+            function.levels_quiet(λ (held: Buffers()) => program_callees_over(held, earlier), program_effects(earlier), earlier.len(),
+                program_effects_quiet(earlier, reads), quiet, function.levels, before, g, words, word, extra, kept.left)),
         after, Nil, Nil, keeping), ⟨refl, refl⟩⟩⟩)
 }
 
-// The program's last function answers the calls of it (the converse of
-// `program_effects_last`, function_ir_lower_calls).
+// The program's last function answers the calls of it, as deep as it has
+// levels.
 theorem program_effects_at_last(last: Function, earlier: List<Function>, arguments: List<BitVec(64)>, result: BitVec(64),
     rest: List<BitVec(64)>, before, after: Buffers()):
-    last.RunsBoth(program_effects(earlier), arguments, result, rest, before, after) →
+    last.RunsBoth(last.effects_at(program_effects(earlier), earlier.len(), last.levels), arguments, result, rest, before, after) →
     program_effects(Cons(last, earlier))(before, earlier.len(), arguments, result, rest, after) {
     match earlier.len().eq_dec(earlier.len()) {
         Inl(_) => λ held => held,
@@ -689,17 +697,17 @@ theorem compiled_returns_both<M>(last: Function, earlier: List<Function>, placem
     evaluable: program_evaluable(Cons(last, earlier)).IsTrue(), quiet: program_quiet(Cons(last, earlier)).IsTrue(),
     fetch: FetchAccess<M>, data: ByteReadAccess<M>, bytes: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data),
     arguments: List<BitVec(64)>, count: last.parameters.len() = arguments.len(), answer: BitVec(64), rest: List<BitVec(64)>,
-    evaluates: last.eval(program_answers(earlier), arguments) = answer, evaluates_rest: last.eval_also(program_answers(earlier), arguments) = rest,
+    evaluates: last.eval(program_last_answers(Nil, last, earlier), arguments) = answer, evaluates_rest: last.eval_also(program_last_answers(Nil, last, earlier), arguments) = rest,
     defined: program_defined(Cons(last, earlier), earlier.len(), arguments).IsTrue()):
     Site<M>(fetch, data, program, bytes, origin).Returns(stack, asm_labels(program, earlier.len() + 1),
         λ (i: Nat) (s: MachineState<M>) => stack.Passed(arguments, i, s) ∧ rooms(earlier.len()) <= i,
         λ (i: Nat) (s: MachineState<M>) (t: MachineState<M>) => stack.CalleePost(answer)(i, s, t) ∧ ArgsIn(rest, answer_registers(), t.gprs)) {
     let functions = Cons(last, earlier);
     let lending = Lending::none();
-    let parts = Bool::is_true_and(last.evaluable(program_arity(earlier)), program_evaluable(earlier), evaluable);
+    let parts = Bool::is_true_and(last.evaluable(program_last_arity(last, earlier)), program_evaluable(earlier), evaluable);
     let quiets = Bool::is_true_and(last.body.quiet(), program_quiet(earlier), quiet);
-    let ran = j(evaluates_rest, λ r _ => last.RunsBoth(program_effects(earlier), arguments, answer, r, Nil, Nil),
-        j(evaluates, λ x _ => last.RunsBoth(program_effects(earlier), arguments, x, last.eval_also(program_answers(earlier), arguments), Nil, Nil),
+    let ran = j(evaluates_rest, λ r _ => last.RunsBoth(last.effects_at(program_effects(earlier), earlier.len(), last.levels), arguments, answer, r, Nil, Nil),
+        j(evaluates, λ x _ => last.RunsBoth(last.effects_at(program_effects(earlier), earlier.len(), last.levels), arguments, x, last.eval_also(program_last_answers(Nil, last, earlier), arguments), Nil, Nil),
             last.eval_runs_both(earlier, parts.left, parts.right, quiets.left, quiets.right, arguments, count,
                 program_defined_last(Nil, last, earlier, arguments, defined))));
     let returns = compiled_returns_over<M>(functions, placement, rooms, lending, program, lowered, program_quiet_lendless(functions, quiet),
