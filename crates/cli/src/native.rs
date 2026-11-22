@@ -259,6 +259,11 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
     // words (`--explain-optimizer`), and the rules not applied where their
     // nodes fit (`--explain-optimizer=all`).
     let mut explain = verified::Explain::No;
+    // `--stack <bytes>`: the stack a function that calls itself, or calls
+    // one that does, may ask for below its return address. The compile
+    // gives its recursions as many levels as fit
+    // (docs/native/runtime-fn-recursion-design.md).
+    let mut stack: Option<u64> = None;
     // `--accept-stale-images`: replay images another build of the compiler
     // wrote, as `heather check` and `write-elf` do under the flag (the
     // stale test lanes pass it, so the native tests replay what the library
@@ -300,6 +305,10 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
                 }
                 kernel_workers = Some(n);
             }
+            "--stack" => {
+                let value = args.next().ok_or("--stack needs a count of bytes")?;
+                stack = Some(value.parse().map_err(|_| format!("--stack `{value}` is not a count of bytes"))?);
+            }
             "--explain-optimizer" => explain = verified::Explain::Used,
             "--explain-optimizer=all" => explain = verified::Explain::All,
             _ if arg.starts_with('-') => return Err(format!("unknown option `{arg}`")),
@@ -310,7 +319,7 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
         return Err(if program_only {
             "usage: heather reflect <file.hthr> <function> -o <output.hthr> [-L <dir>]... [--cache-dir <dir>] [--accept-stale-images] [--kernel-workers <n>]"
         } else {
-            "usage: heather compile-x86 <file.hthr> <function> -o <output.s> [--symbol <name>] [--entry <module>::<function>]... [--explain-optimizer[=all]] [-L <dir>]... [--cache-dir <dir>] [--accept-stale-images] [--timings <file.tsv>] [--kernel-workers <n>]"
+            "usage: heather compile-x86 <file.hthr> <function> -o <output.s> [--symbol <name>] [--entry <module>::<function>]... [--stack <bytes>] [--explain-optimizer[=all]] [-L <dir>]... [--cache-dir <dir>] [--accept-stale-images] [--timings <file.tsv>] [--kernel-workers <n>]"
         }.into());
     }
     if program_only && (!entries.is_empty() || symbol.is_some()) {
@@ -495,11 +504,23 @@ fn compile(args: &[String], program_only: bool) -> Result<(), String> {
         // A function that stores into its span publishes its run at every
         // file: the word it answers and the span as it leaves it
         // (docs/native/native-library-exports-design.md §7).
-        verified::runtime_shape(&elab, &prefix, &root_name, &source_name, verified::Spans::Written)?
+        verified::runtime_shape(&elab, &prefix, &root_name, &source_name, verified::Spans::Written, 0)?
     } else if published("compile") {
         // One that reads spans publishes its agreement at every file.
         let spans = if published("agrees_over") { verified::Spans::Read } else { verified::Spans::None };
-        verified::runtime_shape(&elab, &prefix, &root_name, &source_name, spans)?
+        let shape = verified::runtime_shape(&elab, &prefix, &root_name, &source_name, spans, 0)?;
+        match shape.leveled {
+            false => shape,
+            // A program with a function that calls itself: its recursions
+            // are given as many levels as the stack it may ask for holds,
+            // found from its rows at one level and at two.
+            true => {
+                let budget = stack.unwrap_or(verified::DEFAULT_STACK);
+                let more = verified::levels_within(&elab, &answers, &prefix, &format!("{prefix}_certificate"), &shape, budget)
+                    .map_err(|why| format!("verified lowering: {why}"))?;
+                verified::runtime_shape(&elab, &prefix, &root_name, &source_name, spans, more)?
+            }
+        }
     } else {
         let program = verified::reflect(&elab, &source_name)?;
         if !program.functions.iter().any(|function| function.helped) {
