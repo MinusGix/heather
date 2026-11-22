@@ -730,15 +730,57 @@ premise: a recursion that calls a function with a test of its own (a
 recursion calling a recursion), and a leveled program with a function
 that is not plain (a loop, a lent span).
 
-### 10.8 What is left
+### 10.8 What is left: programs that call a recursion
 
-1. **Statements that call a recursion.** A statement's regions are
-   answered by a program proved defined at every word (`Target::Answered`,
-   `program_total`). Relaxed to the functions proved defined everywhere,
-   a closed `main` or a guarded entry among them, `write-elf` programs
-   call a recursion through its program and the procedure lane (`rt_ptm`,
-   `rt_proc`, `rt_proc_program`, `runtime(levels := n)`) is removed.
-2. A recursion calling a recursion, a recursion lent a span, one
+Read 2026-11-22, nothing below built.
+
+The procedure lane serves one thing: a closed pure `main` written as an
+ELF (`runtime_recursive_main`). A program that does I/O
+(`runtime_program`) is one function over `Io` with at most one function
+lent a buffer; it cannot call a plain `runtime fn` yet, recursive or not
+("`plus_one` is an ordinary fn"). So "statements call a recursion" is
+first "a program calls a `runtime fn`", and the recursion is its second
+half.
+
+1. **A program calls plain `runtime fn`s.** The library is ahead of the
+   generator: `ETm::lower_sound` already holds over a world with callees,
+   pure terms calling `functions_below(w.sigs.len())`, under
+   `Writers::Still` (the callees store nothing: `program_run_quiet`) and
+   `Tm::CallsAgree` (they answer as their sources: the link). The
+   generator reads the body at the plain world and links nothing. What is
+   to build is the reading at a world with the callees' signatures and
+   their programs linked into the `Source`'s functions, the lent function
+   after them. Nothing in the back end changes for flat callees.
+2. **A callee may be a recursion's caller, total within its levels.** A
+   statement's call must be answered at every word (`Target::Answered`),
+   since its arguments are run-time values. So a function a program calls
+   is one whose test always holds at some number of levels:
+   `(args) → g::within(k, args).IsTrue()`. For a call at closed arguments
+   that is an evaluation, the least `k` found by search. For one guarded
+   by a test of its arguments (`if n.ule(1000) { rsum(n) } else { … }`)
+   it is a theorem the writer or a tactic proves once, about the source
+   and free of bytes. Tests widen with the levels
+   (`Tm::callees_oracle_widens`, `Tm::rank_oracle_widens`), so the compile
+   needs only `k` levels within its byte budget and refuses, naming the
+   bytes, when they do not fit (§4.1). No call is checked at run time and
+   no junk value is returned.
+3. **The statement lane accepts such a program.** `program_total` is
+   checked inside `Prog::links` (`program_linkable`) and read once, in
+   `Target::answers_of`, as the run's definedness. A program with levels
+   is not total: the recursion itself is not defined everywhere. The
+   check keeps "no node requires anything" and drops "no levels", and
+   `Target::Answered` is asked only of the functions the statements call
+   (`Target.called`, each procedure's `called_by`), with their
+   definedness at every word a premise of `native_compile_correct`. A
+   flat program gives it as now (`program_total_run_defined`); a leveled
+   one from item 2, through the run of a program that stores nothing
+   (`program_run_quiet`, `program_effects_quiet`).
+4. **The procedure lane goes** (`rt_ptm`, `rt_proc`, `rt_proc_program`,
+   `runtime(levels := n)`, the PTm declarations published beside the new
+   ones): its closed `main` is a program whose one statement is the call.
+   A program that ran out of levels and exited with the call-depth status
+   is then refused when it is compiled.
+5. Later: a recursion calling a recursion, a recursion lent a span, one
    returning a record, another function of a recursion's program as an
    `--entry`, mutual recursion, and the optimizer's rewrites of §5 at
    this level.
