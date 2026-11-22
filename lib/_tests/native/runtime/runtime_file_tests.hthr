@@ -87,8 +87,8 @@ fn raise_body() → FTm {
 fn raise_words() → List<Ty> { [Word(64), Word(64), Word(64)] }
 
 // The loop's table: one function that only reads, none that write.
-fn raise_table() → World { World(RecInfo::none, [Sig([Word(64)], Word(64))], Pair(λ (x: BitVec(64)) => raise(x), trivial)) }
-fn raise_callees() → (b: Buffers()) → Sig::Sems(RecInfo::none, [Sig([Word(64)], Word(64))]) { λ _ => Pair(λ (x: BitVec(64)) => raise(x), trivial) }
+fn raise_table() → World { World(Table::none(), [Sig([Word(64)], Word(64))], Pair(λ (x: BitVec(64)) => raise(x), trivial)) }
+fn raise_callees() → (b: Buffers()) → Sig::Sems(Table::none(), [Sig([Word(64)], Word(64))]) { λ _ => Pair(λ (x: BitVec(64)) => raise(x), trivial) }
 
 fn raise_measure(ys: List<BitVec(64)>, span: List<BitVec(8)>) → Nat {
     ys.drop(1).head_or(BitVec::zero()).sub(ys.drop(2).head_or(BitVec::zero())).toNat()
@@ -97,20 +97,20 @@ fn raise_measure(ys: List<BitVec(64)>, span: List<BitVec(8)>) → Nat {
 theorem raise_bounded(): FFun::Bounded(raise_words(), raise_measure) { λ span place length i => BitVec::toNat_lt_pow(64, length.sub(i)) }
 
 fn raise_typed() → Itself(List<BitVec(8)> → BitVec(64) → BitVec(64) → Mutated<List<BitVec(8)>, BitVec(64)>) =
-    Itself(FTm::Source(RecInfo::none, 1, raise_words(), Word(64))) { refl }
+    Itself(FTm::Source(Table::none(), 1, raise_words(), Word(64))) { refl }
 
 // The function's equation, from its recursor's `ext` and `irrel`.
 theorem raise_guarded(rest: List<List<BitVec(8)>>): FFun::Guarded(raise_words(), Word(64), raise_body(),
-    FWorld::of(raise_table(), raise_callees(), [], λ _ => trivial, rest), FTm::source_at(RecInfo::none, 1, raise_words(), Word(64), raise_typed(), raise_from, rest),
+    FWorld::of(raise_table(), raise_callees(), [], λ _ => trivial, rest), FTm::source_at(Table::none(), 1, raise_words(), Word(64), raise_typed(), raise_from, rest),
     raise_measure) {
     λ place length i span again hyp => cong_fn(λ (m: Mutated<List<BitVec(8)>, BitVec(64)>) => Mutated(m.after, m.value),
         sym(raise_from::ext(length.sub(i).toNat(), length.sub(i).toNat(),
             λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) (p: nat::Nat::Lt(y1.sub(y2).toNat(), length.sub(i).toNat())) =>
                 raise_from::rec(length.sub(i).toNat(), s, y1, y2, p),
-            λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) _ => FTm::recast(RecInfo::none, Word(64), Word(64), again([place, y1, y2], s)),
+            λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) _ => FTm::recast(Table::none(), Word(64), Word(64), again([place, y1, y2], s)),
             λ s y1 y2 p q => trans(raise_from::irrel(length.sub(i).toNat(), y1.sub(y2).toNat() + 1, s, y1, y2, p,
                     nat::Nat::lt_succ_self(y1.sub(y2).toNat())),
-                sym(cong_fn(λ (m: Mutated<List<BitVec(8)>, BitVec(64)>) => FTm::recast(RecInfo::none, Word(64), Word(64), m),
+                sym(cong_fn(λ (m: Mutated<List<BitVec(8)>, BitVec(64)>) => FTm::recast(Table::none(), Word(64), Word(64), m),
                         hyp([place, y1, y2], s, refl, p)))),
             span, length, i, nat::Nat::lt_succ_self(length.sub(i).toNat()), nat::Nat::lt_succ_self(length.sub(i).toNat()))))
 }
@@ -181,9 +181,9 @@ theorem linked_raise(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, x: BitV
 // expect-error(kernel): the kernel rejected `linked_misnamed`: NotConvertible
 theorem linked_misnamed(rest: List<List<BitVec(8)>>, own: List<BitVec(8)>):
     List::map(Cons(0, Nil), λ (n: Nat) => link_source(linked_srcs()(rest, own).map(span_word), n)) =
-        Sig::uncurried(RecInfo::none, raise_table().sigs, raise_callees()(Cons(own, rest))) { refl }
+        Sig::uncurried(Table::none(), raise_table().sigs, raise_callees()(Cons(own, rest))) { refl }
 
 // The loop linked as a function that only reads would be: its name is not
 // among the functions marked still.
-theorem linked_not_still(): Sig::links_fit(RecInfo::none, [Sig([Word(64), Word(64), Word(64)], Word(64))], [2],
+theorem linked_not_still(): Sig::links_fit(Table::none(), [Sig([Word(64), Word(64), Word(64)], Word(64))], [2],
     still_arity(linked_arity(linked_program(), [3, 1, 1]), linked_still(linked_program(), [False, True, True]))) = False { refl }

@@ -36,8 +36,8 @@ import x86_64_asm;
 fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
 fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
 
-fn bare() → World { World(RecInfo::none, [], trivial) }
-fn alone(rest: List<List<BitVec(8)>>) → FWorld { FWorld::alone(RecInfo::none, rest) }
+fn bare() → World { World(Table::none(), [], trivial) }
+fn alone(rest: List<List<BitVec(8)>>) → FWorld { FWorld::alone(Table::none(), rest) }
 
 fn code_of(r: Option<Function>) → Function { match r { None => Function([], nodes_region(Nil), 0), Some(code) => code } }
 fn lowers(r: Option<Function>) → Bool { match r { None => False, Some(_) => True } }
@@ -129,10 +129,10 @@ theorem bump_guarded(rest: List<List<BitVec(8)>>): FFun::Guarded(bump_words(), W
         sym(bump_from::ext(length.sub(i).toNat(), length.sub(i).toNat(),
             λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) (p: nat::Nat::Lt(y1.sub(y2).toNat(), length.sub(i).toNat())) =>
                 bump_from::rec(length.sub(i).toNat(), s, y1, y2, p),
-            λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) _ => FTm::recast(RecInfo::none, Word(64), Word(64), again([place, y1, y2], s)),
+            λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) _ => FTm::recast(Table::none(), Word(64), Word(64), again([place, y1, y2], s)),
             λ s y1 y2 p q => trans(bump_from::irrel(length.sub(i).toNat(), y1.sub(y2).toNat() + 1, s, y1, y2, p,
                     nat::Nat::lt_succ_self(y1.sub(y2).toNat())),
-                sym(cong_fn(λ (m: Mutated<List<BitVec(8)>, BitVec(64)>) => FTm::recast(RecInfo::none, Word(64), Word(64), m),
+                sym(cong_fn(λ (m: Mutated<List<BitVec(8)>, BitVec(64)>) => FTm::recast(Table::none(), Word(64), Word(64), m),
                         hyp([place, y1, y2], s, refl, p)))),
             span, length, i, nat::Nat::lt_succ_self(length.sub(i).toNat()), nat::Nat::lt_succ_self(length.sub(i).toNat()))))
 }
@@ -154,7 +154,7 @@ theorem bump_compiled(call: Writers(), span: List<BitVec(8)>, rest: List<List<Bi
     bump_code().run(call, [place, length, i], Cons(span, rest)) =
         Ending(bump_from(span, length, i).value, Cons(bump_from(span, length, i).after, rest)) {
     j(bump_lowers_to(), λ r _ => FFun::MeasuredHolds(bump_words(), Word(64), alone(rest), 0, bump_at, r), bump_loops(rest))(
-        call, FTm::calls_agree_none(RecInfo::none, rest, call), span, [place, length, i], refl)
+        call, FTm::calls_agree_none(Table::none(), rest, call), span, [place, length, i], refl)
 }
 
 // As a program of one function, called.
@@ -219,7 +219,7 @@ fn raise_body() → FTm {
 
 // The program's one pure function, and the loop's world over it: the loop
 // is computation 0, FunctionIR function 1.
-fn raise_pure() → World { World(RecInfo::none, [raise_rt().sig()], Pair(λ (x: BitVec(64)) => raise(x), trivial)) }
+fn raise_pure() → World { World(Table::none(), [raise_rt().sig()], Pair(λ (x: BitVec(64)) => raise(x), trivial)) }
 fn raise_world(rest: List<List<BitVec(8)>>) → FWorld {
     FWorld(raise_pure(), λ _ => Pair(λ (x: BitVec(64)) => raise(x), trivial), [], λ _ => trivial, rest)
 }
@@ -259,16 +259,16 @@ theorem raise_guarded(rest: List<List<BitVec(8)>>): FFun::Guarded(bump_words(), 
         sym(raise_from::ext(length.sub(i).toNat(), length.sub(i).toNat(),
             λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) (p: nat::Nat::Lt(y1.sub(y2).toNat(), length.sub(i).toNat())) =>
                 raise_from::rec(length.sub(i).toNat(), s, y1, y2, p),
-            λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) _ => FTm::recast(RecInfo::none, Word(64), Word(64), again([place, y1, y2], s)),
+            λ (s: List<BitVec(8)>) (y1: BitVec(64)) (y2: BitVec(64)) _ => FTm::recast(Table::none(), Word(64), Word(64), again([place, y1, y2], s)),
             λ s y1 y2 p q => trans(raise_from::irrel(length.sub(i).toNat(), y1.sub(y2).toNat() + 1, s, y1, y2, p,
                     nat::Nat::lt_succ_self(y1.sub(y2).toNat())),
-                sym(cong_fn(λ (m: Mutated<List<BitVec(8)>, BitVec(64)>) => FTm::recast(RecInfo::none, Word(64), Word(64), m),
+                sym(cong_fn(λ (m: Mutated<List<BitVec(8)>, BitVec(64)>) => FTm::recast(Table::none(), Word(64), Word(64), m),
                         hyp([place, y1, y2], s, refl, p)))),
             span, length, i, nat::Nat::lt_succ_self(length.sub(i).toNat()), nat::Nat::lt_succ_self(length.sub(i).toNat()))))
 }
 
 theorem raise_lowers_to(): raise_lowered() = Some(raise_loop()) { refl }
-theorem raise_code_lowers(file: List<List<BitVec(8)>>): raise_rt().lower(World(RecInfo::none, [], trivial, file)) = Some(raise_code()) { refl }
+theorem raise_code_lowers(file: List<List<BitVec(8)>>): raise_rt().lower(World(Table::none(), [], trivial, file)) = Some(raise_code()) { refl }
 
 // The callee's code answers the loop's calls with the callee's function
 // and leaves every file: a program of pure functions is quiet
@@ -277,9 +277,9 @@ theorem raise_agrees(rest: List<List<BitVec(8)>>): FTm::CallsAgree(raise_world(r
     ⟨λ own f => match f {
             Zero => λ _ x => trans(
                 cong_fn(λ (e: Ending) => Cons(e.word, e.rest), program_run_quiet([raise_code()], trivial, Cons(own, rest), 0, [x])),
-                j(raise_code_lowers(Cons(own, rest)), λ r _ => raise_rt().LowerHolds(World(RecInfo::none, [], trivial, Cons(own, rest)), r),
-                    Fun::lower_sound(raise_rt(), World(RecInfo::none, [], trivial, Cons(own, rest))))(
-                    program_answers_over(Cons(own, rest), []), Tm::calls_agree_none_over(RecInfo::none, Cons(own, rest), program_answers_over(Cons(own, rest), [])), x)),
+                j(raise_code_lowers(Cons(own, rest)), λ r _ => raise_rt().LowerHolds(World(Table::none(), [], trivial, Cons(own, rest)), r),
+                    Fun::lower_sound(raise_rt(), World(Table::none(), [], trivial, Cons(own, rest))))(
+                    program_answers_over(Cons(own, rest), []), Tm::calls_agree_none_over(Table::none(), Cons(own, rest), program_answers_over(Cons(own, rest), [])), x)),
             Succ(_) => λ ok => false_elim(ok.right),
         },
         ⟨λ f among own words => cong_fn(λ (e: Ending) => e.buffers, program_run_quiet([raise_code()], trivial, Cons(own, rest), f, words)),

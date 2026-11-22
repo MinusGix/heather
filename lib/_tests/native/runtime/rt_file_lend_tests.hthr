@@ -51,8 +51,8 @@ fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
 fn five() → List<BitVec(8)> { [b(1), b(2), b(3), b(4), b(5)] }
 fn tens() → List<BitVec(8)> { [b(10), b(20), b(30), b(40), b(50)] }
 
-fn bare() → World { World(RecInfo::none, [], trivial) }
-fn alone(rest: List<List<BitVec(8)>>) → FWorld { FWorld::alone(RecInfo::none, rest) }
+fn bare() → World { World(Table::none(), [], trivial) }
+fn alone(rest: List<List<BitVec(8)>>) → FWorld { FWorld::alone(Table::none(), rest) }
 fn code_of(lowered: Option<Function>) → Function { match lowered { None => Function([], nodes_region(Nil), 0), Some(code) => code } }
 
 // ---------------------------------------------------------------------------
@@ -85,11 +85,11 @@ fn carry_world(rest: List<List<BitVec(8)>>) → FWorld {
 // lend among them: the hypothesis of the once-proof, from the callee's own
 // instance of it.
 theorem carry_agrees(rest: List<List<BitVec(8)>>): FTm::CallsAgree(carry_world(rest), 0, program_run([carry_code()])) {
-    ⟨λ own => Tm::calls_agree_none_over(RecInfo::none, Cons(own, rest), Writers::words(program_run([carry_code()]), Cons(own, rest))),
+    ⟨λ own => Tm::calls_agree_none_over(Table::none(), Cons(own, rest), Writers::words(program_run([carry_code()]), Cons(own, rest))),
         ⟨λ f among => false_elim(among),
             λ f => match f {
                 Zero => λ _ r own => FFun::lower_sound(carry_rt(), alone(r), 0, program_run([]),
-                    FTm::calls_agree_none(RecInfo::none, r, program_run([])), own),
+                    FTm::calls_agree_none(Table::none(), r, program_run([])), own),
                 Succ(_) => λ ok => false_elim(ok.right),
             }⟩⟩
 }

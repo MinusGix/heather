@@ -34,8 +34,8 @@ fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
 fn abc() → List<BitVec(8)> { [b(1), b(2), b(3)] }
 
 // No pure functions and no types: the world of every probe here.
-fn bare() → World { World(RecInfo::none, [], trivial) }
-fn alone(rest: List<List<BitVec(8)>>) → FWorld { FWorld::alone(RecInfo::none, rest) }
+fn bare() → World { World(Table::none(), [], trivial) }
+fn alone(rest: List<List<BitVec(8)>>) → FWorld { FWorld::alone(Table::none(), rest) }
 
 // ---------------------------------------------------------------------------
 // One store
@@ -76,7 +76,7 @@ theorem poke_pinned(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, place, l
 theorem poke_compiled(call: Writers(), span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, place, length, i, v: BitVec(64)):
     poke_code().run(call, [place, length, i, v], Cons(span, rest)) =
         Ending(poke(span, length, i, v).value, Cons(poke(span, length, i, v).after, rest)) {
-    FFun::lower_sound(poke_rt(), alone(rest), 0, call, FTm::calls_agree_none(RecInfo::none, rest, call), span, place, length, i, v)
+    FFun::lower_sound(poke_rt(), alone(rest), 0, call, FTm::calls_agree_none(Table::none(), rest, call), span, place, length, i, v)
 }
 
 // On bytes: the store, a store past the length word (none), and one under
@@ -131,7 +131,7 @@ theorem poke_low_pinned(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, plac
 theorem poke_low_compiled(call: Writers(), span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, place, length, i, v: BitVec(64)):
     poke_low_code().run(call, [place, length, i, v], Cons(span, rest)) =
         Ending(poke_low(span, length, i, v).value, Cons(poke_low(span, length, i, v).after, rest)) {
-    FFun::lower_sound(poke_low_rt(), alone(rest), 0, call, FTm::calls_agree_none(RecInfo::none, rest, call), span, place, length, i, v)
+    FFun::lower_sound(poke_low_rt(), alone(rest), 0, call, FTm::calls_agree_none(Table::none(), rest, call), span, place, length, i, v)
 }
 
 theorem poke_low_stores(): program_run([poke_low_code()], [abc()], 0, [w(4096), w(3), w(2), w(100)]) = Ending(w(1), [[b(1), b(2), b(100)]]) { refl }
@@ -180,11 +180,11 @@ theorem poke_pair_pinned(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, pla
 // The callee's code answers the caller's calls: the hypothesis of the
 // once-proof, from the callee's own instance of it.
 theorem pair_agrees(rest: List<List<BitVec(8)>>): FTm::CallsAgree(pair_world(rest), 0, program_run([poke_code()])) {
-    ⟨λ own => Tm::calls_agree_none_over(RecInfo::none, Cons(own, rest), Writers::words(program_run([poke_code()]), Cons(own, rest))),
+    ⟨λ own => Tm::calls_agree_none_over(Table::none(), Cons(own, rest), Writers::words(program_run([poke_code()]), Cons(own, rest))),
         ⟨λ f among => false_elim(among),
             λ f => match f {
                 Zero => λ _ r own => FFun::lower_sound(poke_rt(), alone(r), 0, program_run([]),
-                    FTm::calls_agree_none(RecInfo::none, r, program_run([])), own),
+                    FTm::calls_agree_none(Table::none(), r, program_run([])), own),
                 Succ(_) => λ ok => false_elim(ok.right),
             }⟩⟩
 }
@@ -227,7 +227,7 @@ theorem absent_call_refused():
 // A pure term's call must be of a pure function, one below `base`: with
 // one pure function the call lowers above it, and with none below `base`
 // it is refused (function 0 is then a computation, which may write).
-fn one_pure() → World { World(RecInfo::none, [Sig([Word(64)], Word(64))], Pair(λ (x: BitVec(64)) => x, trivial)) }
+fn one_pure() → World { World(Table::none(), [Sig([Word(64)], Word(64))], Pair(λ (x: BitVec(64)) => x, trivial)) }
 fn calls_pure() → FFun { FFun([Word(64), Word(64), Word(64)], Word(64), Pure(Call(0, [0]))) }
 theorem pure_call_lowers(): calls_pure().lower(one_pure(), [], 1).is_some() = True { refl }
 theorem pure_call_refused(): calls_pure().lower(one_pure(), [], 0) = None { refl }

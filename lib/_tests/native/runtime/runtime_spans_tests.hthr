@@ -41,7 +41,7 @@ fn peek(span: List<BitVec(8)>, length, i: BitVec(64)) → BitVec(64) { span.byte
 // before the index (variable 0; the length is variable 1).
 fn peek_rt() → Fun { Fun([Word(64), Word(64), Word(64)], Word(64), Let(Byte(0, 0, 1), Prim(Zext(8, 56), [0])), 1) }
 
-fn peek_base() → World { World(RecInfo::none, [], trivial) }
+fn peek_base() → World { World(Table::none(), [], trivial) }
 
 // The instance. The pin is `refl` at every file: the reflection's meaning
 // at the file `f` reads `f`'s span 0, which is what `peek` is handed.
@@ -63,7 +63,7 @@ instance Compile<List<BitVec(8)> → BitVec(64) → BitVec(64) → BitVec(64)>(p
 // code returns `peek` of the file's span.
 theorem peek_compiled(f: Buffers(), call: Answers(), place, length, i: BitVec(64)):
     peek_compile().code.eval(call, [place, length, i], buffers := f) = peek(f.span(0), length, i) {
-    cong_fn<List<BitVec(64)>, BitVec(64)>(λ l => first_word(l), peek_compile().agrees(f, call, Tm::calls_agree_none_over(RecInfo::none, f, call), place, length, i))
+    cong_fn<List<BitVec(64)>, BitVec(64)>(λ l => first_word(l), peek_compile().agrees(f, call, Tm::calls_agree_none_over(Table::none(), f, call), place, length, i))
 }
 
 // The instance is found by search, keyed on the function.
@@ -114,9 +114,9 @@ fn count_at(span: List<BitVec(8)>) → BitVec(64) → BitVec(64) → BitVec(64) 
 }
 
 // The table at a file: entry 0 is the function at the file's span.
-fn count_callees(f: Buffers()) → Sig::Sems(RecInfo::none, count_sigs()) { Pair(count_at(f.span(0)), trivial) }
+fn count_callees(f: Buffers()) → Sig::Sems(Table::none(), count_sigs()) { Pair(count_at(f.span(0)), trivial) }
 
-fn count_base() → World { World(RecInfo::none, count_sigs(), count_callees(Nil)) }
+fn count_base() → World { World(Table::none(), count_sigs(), count_callees(Nil)) }
 
 fn count_measure(ys: List<BitVec(64)>) → Nat { ys.drop(1).head_or(BitVec::zero()).sub(ys.drop(2).head_or(BitVec::zero())).toNat() }
 
@@ -124,7 +124,7 @@ fn count_measure(ys: List<BitVec(64)>) → Nat { ys.drop(1).head_or(BitVec::zero
 // worlds are the files as they stand and the recursion is keyed by the
 // span, since `count_from::ext` asks its two recursions to agree at every
 // span; a pass at a file is at the file's span 0.
-fn count_in_words(span: List<BitVec(8)>, ys: List<BitVec(64)>) → BitVec(64) { Ty::uncurry(RecInfo::none, count_words(), Word(64), count_at(span), ys) }
+fn count_in_words(span: List<BitVec(8)>, ys: List<BitVec(64)>) → BitVec(64) { Ty::uncurry(Table::none(), count_words(), Word(64), count_at(span), ys) }
 
 theorem count_guarded(): Fun::GuardedBy(count_words(), Word(64), count_body(), λ (f: Buffers()) => count_base().at(count_callees, f),
     λ (f: Buffers()) => count_at(f.span(0)), λ (f: Buffers()) => f.span(0), count_in_words, λ (_: List<BitVec(8)>) => count_measure) {

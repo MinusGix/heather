@@ -44,7 +44,7 @@ import rt_proc;
 import omega;
 
 // The world a pure program's terms are read in: no records, no functions.
-fn PTm::plain(tys: Nat → RecInfo) → rt::World { rt::World(tys, [], trivial) }
+fn PTm::plain(tys: Table) → rt::World { rt::World(tys, [], trivial) }
 
 // The program: the recursive function's procedure, then main's statements
 // with its value in word 0 and an exit with it.
@@ -55,7 +55,7 @@ fn PTm::program(main: PTm, defs: List<PDef>, w: rt::World, levels: Nat) → Opti
 }
 
 // A world with no functions leaves every call still.
-theorem PTm::plain_still(tys: Nat → RecInfo, call: Writers()): Writers::Still(call, functions_below(PTm::plain(tys).sigs.len())) {
+theorem PTm::plain_still(tys: Table, call: Writers()): Writers::Still(call, functions_below(PTm::plain(tys).sigs.len())) {
     λ held f never words => false_elim(never)
 }
 
@@ -90,7 +90,7 @@ theorem PTm::exit_calls_ok(s: Stmt, call: Writers(), answer: CallAnswers(), ok: 
 }
 
 // The theorem.
-theorem PTm::program_reads(tys: Nat → RecInfo, n: Nat, body: PTm, h: List<BitVec(64)> → BitVec(64), m: List<BitVec(64)> → Nat,
+theorem PTm::program_reads(tys: Table, n: Nat, body: PTm, h: List<BitVec(64)> → BitVec(64), m: List<BitVec(64)> → Nat,
     guarded: PTm::Guarded(n, body, PTm::plain(tys), h, m), main: PTm, s: Stmt, src: Source,
     made: PDef::procedures([PDef(n, body)], PTm::plain(tys), PDef::known([PDef(n, body)])) = Some(src.procedures),
     lowered: main.lower(PTm::plain(tys), PDef::known([PDef(n, body)]), Nil, Nil, 1, 0) = Some(s),
@@ -143,7 +143,7 @@ fn PTm::SourceReads(src: Source, v: BitVec(64)) → Type {
 // Whether main's calls fit within the source's levels, each call of the
 // function spending one where the source checks it: by evaluation at a
 // closed main, which is how a generator learns that `levels` is too few.
-fn PTm::program_fits(tys: Nat → RecInfo, n: Nat, body: PTm, h: List<BitVec(64)> → BitVec(64), main: PTm, src: Source) → Bool {
+fn PTm::program_fits(tys: Table, n: Nat, body: PTm, h: List<BitVec(64)> → BitVec(64), main: PTm, src: Source) → Bool {
     main.calls_ok(PTm::plain(tys), λ _ xs => h(xs),
         PTm::within(λ k p xs => PDef::fits([PDef(n, body)], PTm::plain(tys), λ _ ys => h(ys), k, p, xs), λ p => src.checked(p), src.levels), Nil, trivial)
 }
@@ -151,7 +151,7 @@ fn PTm::program_fits(tys: Nat → RecInfo, n: Nat, body: PTm, h: List<BitVec(64)
 // The levels main's calls need, one more than the depth of each, as a
 // number a generator evaluates: `k + 1` for `k` levels, 0 where a call
 // goes past `fuel` levels (design §3.4).
-fn PTm::program_need(tys: Nat → RecInfo, n: Nat, body: PTm, h: List<BitVec(64)> → BitVec(64), main: PTm, fuel: Nat) → Nat {
+fn PTm::program_need(tys: Table, n: Nat, body: PTm, h: List<BitVec(64)> → BitVec(64), main: PTm, fuel: Nat) → Nat {
     match main.calls_depth(PTm::plain(tys), λ _ xs => h(xs),
             λ p xs => PDef::depth([PDef(n, body)], PTm::plain(tys), λ _ ys => h(ys), fuel, p, xs), Nil, trivial) {
         None => 0,
@@ -166,7 +166,7 @@ fn PTm::program_checked(src: Source) → Bool { src.checked(0) }
 // Both verdicts as a number a generator evaluates (`numeral`): 2 where
 // the call is checked and main's calls fit, 1 where they go deeper than
 // the levels, 0 where the call of itself is not checked.
-fn PTm::program_verdict(tys: Nat → RecInfo, n: Nat, body: PTm, h: List<BitVec(64)> → BitVec(64), main: PTm, src: Source) → Nat {
+fn PTm::program_verdict(tys: Table, n: Nat, body: PTm, h: List<BitVec(64)> → BitVec(64), main: PTm, src: Source) → Nat {
     match PTm::program_checked(src) {
         False => 0,
         True => match PTm::program_fits(tys, n, body, h, main, src) { False => 1, True => 2 },
@@ -177,7 +177,7 @@ fn PTm::program_verdict(tys: Nat → RecInfo, n: Nat, body: PTm, h: List<BitVec(
 // equation that made it, so a generator states it of a published source
 // with every premise closed by evaluation (`made` and the verdicts by
 // `refl` at closed terms), and `v` the function it reflects.
-theorem PTm::source_reads(tys: Nat → RecInfo, n: Nat, body: PTm, h: List<BitVec(64)> → BitVec(64), m: List<BitVec(64)> → Nat,
+theorem PTm::source_reads(tys: Table, n: Nat, body: PTm, h: List<BitVec(64)> → BitVec(64), m: List<BitVec(64)> → Nat,
     guarded: PTm::Guarded(n, body, PTm::plain(tys), h, m), main: PTm, levels: Nat, src: Source,
     made: PTm::program(main, [PDef(n, body)], PTm::plain(tys), levels) = Some(src),
     self_checked: src.checked(0) = True,

@@ -168,7 +168,7 @@ fn PTm::word_at(xs: List<BitVec(64)>, i: Nat) → BitVec(64) { match xs.nth(i) {
 
 // The values of `n` parameters from their words in order, the last
 // variable 0 (`PTm::param_locs`); a missing one is zero.
-fn PTm::vals_n(tys: Nat → RecInfo, n: Nat, xs: List<BitVec(64)>) → rt::Env(tys, PTm::word_ctx(n)) {
+fn PTm::vals_n(tys: Table, n: Nat, xs: List<BitVec(64)>) → rt::Env(tys, PTm::word_ctx(n)) {
     match n as λ k => rt::Env(tys, PTm::word_ctx(k)) {
         Zero => trivial,
         Succ(m) => Pair(PTm::word_at(xs, m), PTm::vals_n(tys, m, xs)),
@@ -203,13 +203,13 @@ fn PTm::Guarded(n: Nat, body: PTm, w: rt::World, h: List<BitVec(64)> → BitVec(
 // measured loop's `Fun::Guarded`: one binder per parameter word, the
 // function `h` itself at its signature, read in the world of a pure
 // program (`PTm::plain`'s: no records, no functions).
-fn PTm::GuardedWords(ws: List<Ty>, body: PTm, tys: Nat → RecInfo, h: Ty::Arrows(tys, ws, Word(64)), m: List<BitVec(64)> → Nat) → Type {
+fn PTm::GuardedWords(ws: List<Ty>, body: PTm, tys: Table, h: Ty::Arrows(tys, ws, Word(64)), m: List<BitVec(64)> → Nat) → Type {
     Ty::ForWords(ws, λ (xs: List<BitVec(64)>) => (again: List<BitVec(64)> → BitVec(64)) →
         ((ys: List<BitVec(64)>) → ys.len() = ws.len() → m(ys) < m(xs) → again(ys) = Ty::uncurry(tys, ws, Word(64), h, ys)) →
         body.sem(rt::World(tys, [], trivial), λ _ ys => again(ys), PTm::word_ctx(ws.len()), PTm::vals_n(tys, ws.len(), xs)) = Ty::uncurry(tys, ws, Word(64), h, xs))
 }
 
-theorem PTm::guarded_of_words(ws: List<Ty>, body: PTm, tys: Nat → RecInfo, h: Ty::Arrows(tys, ws, Word(64)), m: List<BitVec(64)> → Nat,
+theorem PTm::guarded_of_words(ws: List<Ty>, body: PTm, tys: Table, h: Ty::Arrows(tys, ws, Word(64)), m: List<BitVec(64)> → Nat,
     g: PTm::GuardedWords(ws, body, tys, h, m)):
     PTm::Guarded(ws.len(), body, rt::World(tys, [], trivial), λ xs => Ty::uncurry(tys, ws, Word(64), h, xs), m) {
     λ xs len => Ty::for_words_at(ws, λ (zs: List<BitVec(64)>) => (again: List<BitVec(64)> → BitVec(64)) →
@@ -417,28 +417,28 @@ fn Fun::recursive_ptm(self f: Fun) → Option<PTm> {
 fn PTm::defs_words(ws: List<Ty>, body: PTm) → List<PDef> { [PDef(ws.len(), body)] }
 
 // The world a pure recursion reads in: no records, no functions.
-fn PTm::words_world(tys: Nat → RecInfo) → rt::World { rt::World(tys, [], trivial) }
+fn PTm::words_world(tys: Table) → rt::World { rt::World(tys, [], trivial) }
 
 // The function as its definitions' meaning: `h` at the words.
-fn PTm::words_meaning(tys: Nat → RecInfo, ws: List<Ty>, h: Ty::Arrows(tys, ws, Word(64))) → PCalls() {
+fn PTm::words_meaning(tys: Table, ws: List<Ty>, h: Ty::Arrows(tys, ws, Word(64))) → PCalls() {
     λ _ xs => Ty::uncurry(tys, ws, Word(64), h, xs)
 }
 
 // The guarded function unfolds to its body.
-theorem PTm::unfolds_words(ws: List<Ty>, body: PTm, tys: Nat → RecInfo, h: Ty::Arrows(tys, ws, Word(64)), m: List<BitVec(64)> → Nat,
+theorem PTm::unfolds_words(ws: List<Ty>, body: PTm, tys: Table, h: Ty::Arrows(tys, ws, Word(64)), m: List<BitVec(64)> → Nat,
     g: PTm::GuardedWords(ws, body, tys, h, m)): PDef::Unfolds(PTm::defs_words(ws, body), PTm::words_world(tys), PTm::words_meaning(tys, ws, h)) {
     PTm::unfolds_one(ws.len(), body, PTm::words_world(tys), λ xs => Ty::uncurry(tys, ws, Word(64), h, xs), m,
         PTm::guarded_of_words(ws, body, tys, h, m, g))
 }
 
 // Whether the function at `xs` runs within `k` levels.
-fn PTm::fits_words(ws: List<Ty>, body: PTm, tys: Nat → RecInfo, h: Ty::Arrows(tys, ws, Word(64))) → Nat → List<BitVec(64)> → Bool {
+fn PTm::fits_words(ws: List<Ty>, body: PTm, tys: Table, h: Ty::Arrows(tys, ws, Word(64))) → Nat → List<BitVec(64)> → Bool {
     λ k xs => PDef::fits(PTm::defs_words(ws, body), PTm::words_world(tys), PTm::words_meaning(tys, ws, h), k, 0, xs)
 }
 
 // One recursive function's decrease, as the generator proves it: its body
 // at any words calls only below their rank.
-theorem PTm::descends_words(ws: List<Ty>, body: PTm, tys: Nat → RecInfo, h: Ty::Arrows(tys, ws, Word(64)), rank: List<BitVec(64)> → Nat,
+theorem PTm::descends_words(ws: List<Ty>, body: PTm, tys: Table, h: Ty::Arrows(tys, ws, Word(64)), rank: List<BitVec(64)> → Nat,
     one: (xs: List<BitVec(64)>) → body.calls_ok(PTm::words_world(tys), PTm::words_meaning(tys, ws, h),
         PTm::rank_ok(rank, xs), PTm::word_ctx(ws.len()), PTm::vals_n(tys, ws.len(), xs)).IsTrue()):
     PDef::Descends(PTm::defs_words(ws, body), PTm::words_world(tys), PTm::words_meaning(tys, ws, h), λ _ xs => rank(xs)) {
@@ -450,7 +450,7 @@ theorem PTm::descends_words(ws: List<Ty>, body: PTm, tys: Nat → RecInfo, h: Ty
 }
 
 // Its depth: a call at `xs` runs within `rank(xs)` levels.
-theorem PTm::depth_words(ws: List<Ty>, body: PTm, tys: Nat → RecInfo, h: Ty::Arrows(tys, ws, Word(64)), rank: List<BitVec(64)> → Nat,
+theorem PTm::depth_words(ws: List<Ty>, body: PTm, tys: Table, h: Ty::Arrows(tys, ws, Word(64)), rank: List<BitVec(64)> → Nat,
     descends: PDef::Descends(PTm::defs_words(ws, body), PTm::words_world(tys), PTm::words_meaning(tys, ws, h), λ _ xs => rank(xs))):
     (xs: List<BitVec(64)>) → PTm::fits_words(ws, body, tys, h, rank(xs), xs) = True {
     λ xs => eq_true_of_is_true(PTm::fits_words(ws, body, tys, h, rank(xs), xs),

@@ -118,7 +118,7 @@ fn Loc::clear(locs: List<Loc>, ws: List<Nat>) → Bool {
 // buffer (so a function lent the file's first buffer finds one there). A
 // gone buffer holds nothing, and the other codes are refused by the
 // lowering.
-fn Ty::Kept(self t: Ty, tys: Nat → RecInfo, env: Env, l: Loc) → t.sem(tys) → Type {
+fn Ty::Kept(self t: Ty, tys: Table, env: Env, l: Loc) → t.sem(tys) → Type {
     match t {
         Word(_) => λ v => match l { InWord(id) => env.number(id) = v.toNat(), InBuffer(_) => False, Gone => False },
         Bit => λ v => match l { InWord(id) => env.number(id) = BitVec::ofBool(v).toNat(), InBuffer(_) => False, Gone => False },
@@ -131,7 +131,7 @@ fn Ty::Kept(self t: Ty, tys: Nat → RecInfo, env: Env, l: Loc) → t.sem(tys) �
 }
 
 // Every variable is kept where it lives, one place per variable.
-fn LocsHold(tys: Nat → RecInfo, env: Env, g: List<Ty>) → List<Loc> → rt::Env(tys, g) → Type {
+fn LocsHold(tys: Table, env: Env, g: List<Ty>) → List<Loc> → rt::Env(tys, g) → Type {
     match g {
         Nil => λ locs _ => match locs { Nil => True, Cons(_, _) => False },
         Cons(t, rest) => λ locs vals => match locs {
@@ -156,7 +156,7 @@ fn LocsBelow(locs: List<Loc>, next: Nat) → Type {
 // From where variables live to what the pure lowering assumes
 
 // A kept value is held at its port in the environment's valuation.
-theorem Ty::kept_holds(self t: Ty, tys: Nat → RecInfo, env: Env, l: Loc): (v: t.sem(tys)) → t.Kept(tys, env, l, v) →
+theorem Ty::kept_holds(self t: Ty, tys: Table, env: Env, l: Loc): (v: t.sem(tys)) → t.Kept(tys, env, l, v) →
     t.Holds(tys, env.valuation(), l.port(), v) {
     match t {
         Word(w) => λ v => match l as λ k => Word(w).Kept(tys, env, k, v) → Word(w).Holds(tys, env.valuation(), k.port(), v) {
@@ -181,7 +181,7 @@ theorem Ty::kept_holds(self t: Ty, tys: Nat → RecInfo, env: Env, l: Loc): (v: 
 
 // A kept value's port is below `next` when its word is, and the buffers'
 // port 0 is.
-theorem Ty::kept_below(self t: Ty, tys: Nat → RecInfo, env: Env, l: Loc, next: Nat, pos: 0 < next): (v: t.sem(tys)) → t.Kept(tys, env, l, v) →
+theorem Ty::kept_below(self t: Ty, tys: Table, env: Env, l: Loc, next: Nat, pos: 0 < next): (v: t.sem(tys)) → t.Kept(tys, env, l, v) →
     l.Under(next) → t.Below(tys, l.port(), next) {
     match t {
         Word(w) => λ v => match l as λ k => Word(w).Kept(tys, env, k, v) →
@@ -209,7 +209,7 @@ theorem Ty::kept_below(self t: Ty, tys: Nat → RecInfo, env: Env, l: Loc, next:
     }
 }
 
-theorem locs_env_holds(tys: Nat → RecInfo, env: Env, g: List<Ty>): (locs: List<Loc>) → (vals: rt::Env(tys, g)) →
+theorem locs_env_holds(tys: Table, env: Env, g: List<Ty>): (locs: List<Loc>) → (vals: rt::Env(tys, g)) →
     LocsHold(tys, env, g, locs, vals) → EnvHolds(tys, env.valuation(), g, Loc::ports(locs), vals) {
     match g {
         Nil => λ locs => match locs { Nil => λ vals h => h, Cons(_, _) => λ vals never => false_elim(never) },
@@ -220,7 +220,7 @@ theorem locs_env_holds(tys: Nat → RecInfo, env: Env, g: List<Ty>): (locs: List
     }
 }
 
-theorem locs_below(tys: Nat → RecInfo, env: Env, g: List<Ty>, next: Nat, pos: 0 < next): (locs: List<Loc>) → (vals: rt::Env(tys, g)) →
+theorem locs_below(tys: Table, env: Env, g: List<Ty>, next: Nat, pos: 0 < next): (locs: List<Loc>) → (vals: rt::Env(tys, g)) →
     LocsHold(tys, env, g, locs, vals) → LocsBelow(locs, next) → Below(tys, g, Loc::ports(locs), next) {
     match g {
         Nil => λ locs => match locs { Nil => λ vals h b => trivial, Cons(_, _) => λ vals never => false_elim(never) },
@@ -233,7 +233,7 @@ theorem locs_below(tys: Nat → RecInfo, env: Env, g: List<Ty>, next: Nat, pos: 
 }
 
 // A variable's place, and what is kept there.
-theorem locs_hold_at(tys: Nat → RecInfo, env: Env, g: List<Ty>): (locs: List<Loc>) → (vals: rt::Env(tys, g)) →
+theorem locs_hold_at(tys: Table, env: Env, g: List<Ty>): (locs: List<Loc>) → (vals: rt::Env(tys, g)) →
     LocsHold(tys, env, g, locs, vals) → (i: Nat) → (l: Loc) → Loc::at(locs, i) = Some(l) →
     Ty::at(g, i).Kept(tys, env, l, Env::get(tys, g, vals, i)) {
     match g {
@@ -315,7 +315,7 @@ fn Loc::Same(self l: Loc, env, env2: Env) → Type {
     }
 }
 
-theorem Ty::kept_same(self t: Ty, tys: Nat → RecInfo, env, env2: Env, l: Loc, same: l.Same(env, env2)): (v: t.sem(tys)) →
+theorem Ty::kept_same(self t: Ty, tys: Table, env, env2: Env, l: Loc, same: l.Same(env, env2)): (v: t.sem(tys)) →
     t.Kept(tys, env, l, v) → t.Kept(tys, env2, l, v) {
     match t {
         Word(w) => match l as λ k => k.Same(env, env2) → (v: BitVec(w)) → Word(w).Kept(tys, env, k, v) → Word(w).Kept(tys, env2, k, v) {
@@ -344,7 +344,7 @@ fn Loc::AllSame(locs: List<Loc>, env, env2: Env) → Type {
     match locs { Nil => True, Cons(l, rest) => l.Same(env, env2) ∧ Loc::AllSame(rest, env, env2) }
 }
 
-theorem locs_hold_same(tys: Nat → RecInfo, env, env2: Env, g: List<Ty>): (locs: List<Loc>) → (vals: rt::Env(tys, g)) →
+theorem locs_hold_same(tys: Table, env, env2: Env, g: List<Ty>): (locs: List<Loc>) → (vals: rt::Env(tys, g)) →
     Loc::AllSame(locs, env, env2) → LocsHold(tys, env, g, locs, vals) → LocsHold(tys, env2, g, locs, vals) {
     match g {
         Nil => λ locs => match locs { Nil => λ vals s h => h, Cons(_, _) => λ vals s never => false_elim(never) },
@@ -417,7 +417,7 @@ theorem Loc::same_set_buffer(locs: List<Loc>, env: Env, b: Nat, bytes: List<BitV
     }
 }
 
-theorem Ty::kept_forget(self t: Ty, tys: Nat → RecInfo, env: Env, l: Loc, b: Nat): (v: t.sem(tys)) → t.Kept(tys, env, l, v) →
+theorem Ty::kept_forget(self t: Ty, tys: Table, env: Env, l: Loc, b: Nat): (v: t.sem(tys)) → t.Kept(tys, env, l, v) →
     t.Kept(tys, env, l.forget(b), v) {
     match t {
         Word(w) => λ v => match l as λ k => Word(w).Kept(tys, env, k, v) → Word(w).Kept(tys, env, k.forget(b), v) {
@@ -446,7 +446,7 @@ theorem Ty::kept_forget(self t: Ty, tys: Nat → RecInfo, env: Env, l: Loc, b: N
     }
 }
 
-theorem locs_hold_forget(tys: Nat → RecInfo, env: Env, b: Nat, g: List<Ty>): (locs: List<Loc>) → (vals: rt::Env(tys, g)) →
+theorem locs_hold_forget(tys: Table, env: Env, b: Nat, g: List<Ty>): (locs: List<Loc>) → (vals: rt::Env(tys, g)) →
     LocsHold(tys, env, g, locs, vals) → LocsHold(tys, env, g, Loc::forget_all(locs, b), vals) {
     match g {
         Nil => λ locs => match locs { Nil => λ vals h => h, Cons(_, _) => λ vals never => false_elim(never) },
@@ -586,7 +586,7 @@ fn ETm::operands(g: List<Ty>, locs: List<Loc>, ps: List<Ty>, args: List<Nat>) �
 
 // Each operand, cast to its parameter's code as the meaning reads it, kept
 // at its place.
-fn ETm::OperandsKept(tys: Nat → RecInfo, env: Env, g: List<Ty>, vals: rt::Env(tys, g), ps: List<Ty>) → List<Nat> → List<Nat> → Type {
+fn ETm::OperandsKept(tys: Table, env: Env, g: List<Ty>, vals: rt::Env(tys, g), ps: List<Ty>) → List<Nat> → List<Nat> → Type {
     match ps {
         Nil => λ args ids => True,
         Cons(p, rest) => λ args ids => match args {
@@ -600,7 +600,7 @@ fn ETm::OperandsKept(tys: Nat → RecInfo, env: Env, g: List<Ty>, vals: rt::Env(
     }
 }
 
-theorem ETm::operand_kept(tys: Nat → RecInfo, env: Env, g: List<Ty>, locs: List<Loc>, vals: rt::Env(tys, g),
+theorem ETm::operand_kept(tys: Table, env: Env, g: List<Ty>, locs: List<Loc>, vals: rt::Env(tys, g),
     held: LocsHold(tys, env, g, locs, vals), p: Ty, a, id: Nat, e: ETm::operand(g, locs, p, a) = Some(id)):
     p.Kept(tys, env, Loc::of(p, id), Ty::cast(tys, Ty::at(g, a), p, Env::get(tys, g, vals, a))) {
     let P = λ (r: Option<Nat>) => r = Some(id) → p.Kept(tys, env, Loc::of(p, id), Ty::cast(tys, Ty::at(g, a), p, Env::get(tys, g, vals, a)));
@@ -615,7 +615,7 @@ theorem ETm::operand_kept(tys: Nat → RecInfo, env: Env, g: List<Ty>, locs: Lis
     }))(e)
 }
 
-theorem ETm::operands_kept(tys: Nat → RecInfo, env: Env, g: List<Ty>, locs: List<Loc>, vals: rt::Env(tys, g),
+theorem ETm::operands_kept(tys: Table, env: Env, g: List<Ty>, locs: List<Loc>, vals: rt::Env(tys, g),
     held: LocsHold(tys, env, g, locs, vals), ps: List<Ty>): (args: List<Nat>) → (ids: List<Nat>) →
     ETm::operands(g, locs, ps, args) = Some(ids) → ETm::OperandsKept(tys, env, g, vals, ps, args, ids) {
     match ps {
@@ -787,7 +787,7 @@ fn Ty::check_scalar(self t: Ty) → Option<t.Scalar()> {
 }
 
 // A value held at `port` at its code's width, moved to `out`, is kept there.
-theorem Ty::kept_moved(self t: Ty, tys: Nat → RecInfo, env: Env, out: Nat, values: Valuation(), port: Nat, one: t.Scalar(), v: t.sem(tys),
+theorem Ty::kept_moved(self t: Ty, tys: Table, env: Env, out: Nat, values: Valuation(), port: Nat, one: t.Scalar(), v: t.sem(tys),
     h: t.Holds(tys, values, port, v), e: env.number(out) = values(t.width(), port).toNat()): t.Kept(tys, env, InWord(out), v) {
     match t as λ x => x.Scalar() → (v: x.sem(tys)) → x.Holds(tys, values, port, v) → env.number(out) = values(x.width(), port).toNat() →
             x.Kept(tys, env, InWord(out), v) {
@@ -1295,7 +1295,7 @@ fn ETm::word_ids(g: List<Ty>, locs: List<Loc>, args: List<Nat>) → Option<List<
 }
 
 // Those words, read where they live, are the words the meaning hands over.
-theorem ETm::word_ids_sound(tys: Nat → RecInfo, env: Env, g: List<Ty>, locs: List<Loc>, vals: rt::Env(tys, g),
+theorem ETm::word_ids_sound(tys: Table, env: Env, g: List<Ty>, locs: List<Loc>, vals: rt::Env(tys, g),
     held: LocsHold(tys, env, g, locs, vals), args: List<Nat>): (ids: List<Nat>) →
     ETm::word_ids(g, locs, args) = Some(ids) → words_of(env.valuation(), ids) = Lent::words(tys, g, vals, args) {
     match args {
@@ -1408,7 +1408,7 @@ theorem ETm::lend_sound(w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List<Lo
 
 // Where a statement leaves the program: on, with every variable of a
 // context kept where it lives.
-fn Flow::KeepsAll(self flow: Flow, tys: Nat → RecInfo, g: List<Ty>, locs: List<Loc>, vals: rt::Env(tys, g)) → Type {
+fn Flow::KeepsAll(self flow: Flow, tys: Table, g: List<Ty>, locs: List<Loc>, vals: rt::Env(tys, g)) → Type {
     match flow { Onward(env) => LocsHold(tys, env, g, locs, vals), Exited(_) => False }
 }
 
@@ -1508,7 +1508,7 @@ fn Flow::Frames(self flow: Flow, frame: List<Loc>, env: Env) → Type {
 
 // What the moves promise: loop-free, the world untouched, every variable
 // moved from its source to its place, and every place no move writes kept.
-fn Loc::MovesHold(tys: Nat → RecInfo, g: List<Ty>, dsts: List<Loc>, srcs: List<Loc>, r: Option<Stmt>) → Type {
+fn Loc::MovesHold(tys: Table, g: List<Ty>, dsts: List<Loc>, srcs: List<Loc>, r: Option<Stmt>) → Type {
     match r {
         None => True,
         Some(st) => st.straight().IsTrue() ∧ ((call: Writers()) → (env: Env) → (vals: rt::Env(tys, g)) → (io: Io) → LocsHold(tys, env, g, srcs, vals) →
@@ -1523,7 +1523,7 @@ theorem Loc::skip_same(env: Env, call: Writers(), frame: List<Loc>): Loc::AllSam
 }
 
 // Keeping the head where the rest's statements keep it.
-theorem Loc::keeps_cons(tys: Nat → RecInfo, t: Ty, rest: List<Ty>, d: Loc, ds: List<Loc>, v: t.sem(tys), vs: rt::Env(tys, rest), env: Env,
+theorem Loc::keeps_cons(tys: Table, t: Ty, rest: List<Ty>, d: Loc, ds: List<Loc>, v: t.sem(tys), vs: rt::Env(tys, rest), env: Env,
     kept: t.Kept(tys, env, d, v)): (flow: Flow) → flow.KeepsAll(tys, rest, ds, vs) → flow.Frames([d], env) →
     flow.KeepsAll(tys, Cons(t, rest), Cons(d, ds), Pair(v, vs)) {
     λ flow => match flow {
@@ -1542,7 +1542,7 @@ theorem Loc::frames_trans(frame: List<Loc>, env, env1: Env, same: Loc::AllSame(f
 
 // A word or a bit moved: kept at its place, the rest's sources and every
 // other place untouched.
-theorem Loc::move_word_sound(tys: Nat → RecInfo, t: Ty, one: t.Scalar(), rest: List<Ty>, ds: List<Loc>, ss: List<Loc>, more: Stmt,
+theorem Loc::move_word_sound(tys: Table, t: Ty, one: t.Scalar(), rest: List<Ty>, ds: List<Loc>, ss: List<Loc>, more: Stmt,
     ih: Loc::MovesHold(tys, rest, ds, ss, Some(more)), dw, sw: Nat,
     c1: Loc::clear(ss, [dw]).IsTrue(), c2: Loc::clear([InWord(dw)], Loc::words(ds)).IsTrue()):
     Loc::MovesHold(tys, Cons(t, rest), Cons(InWord(dw), ds), Cons(InWord(sw), ss),
@@ -1566,7 +1566,7 @@ theorem Loc::move_word_sound(tys: Nat → RecInfo, t: Ty, one: t.Scalar(), rest:
 }
 
 // A buffer left where it is, or a gone one: nothing moved.
-theorem Loc::move_stay_sound(tys: Nat → RecInfo, t: Ty, rest: List<Ty>, d: Loc, ds: List<Loc>, s: Loc, ss: List<Loc>, more: Stmt,
+theorem Loc::move_stay_sound(tys: Table, t: Ty, rest: List<Ty>, d: Loc, ds: List<Loc>, s: Loc, ss: List<Loc>, more: Stmt,
     ih: Loc::MovesHold(tys, rest, ds, ss, Some(more)), stay: (env: Env) → (v: t.sem(tys)) → t.Kept(tys, env, s, v) → t.Kept(tys, env, d, v),
     c2: Loc::clear([d], Loc::words(ds)).IsTrue(), wd: Loc::words(Cons(d, ds)) = Loc::words(ds)):
     Loc::MovesHold(tys, Cons(t, rest), Cons(d, ds), Cons(s, ss), Some(more)) {
@@ -1578,7 +1578,7 @@ theorem Loc::move_stay_sound(tys: Nat → RecInfo, t: Ty, rest: List<Ty>, d: Loc
     }⟩
 }
 
-theorem Loc::move_one_sound(tys: Nat → RecInfo, rest: List<Ty>, ds: List<Loc>, ss: List<Loc>, more: Stmt,
+theorem Loc::move_one_sound(tys: Table, rest: List<Ty>, ds: List<Loc>, ss: List<Loc>, more: Stmt,
     ih: Loc::MovesHold(tys, rest, ds, ss, Some(more))): (t: Ty) → (d: Loc) → (s: Loc) →
     Loc::clear(ss, Loc::words([d])).IsTrue() → Loc::clear([d], Loc::words(ds)).IsTrue() →
     Loc::MovesHold(tys, Cons(t, rest), Cons(d, ds), Cons(s, ss), Loc::move_one(t, d, s, more)) {
@@ -1622,7 +1622,7 @@ theorem Loc::move_one_sound(tys: Nat → RecInfo, rest: List<Ty>, ds: List<Loc>,
     }
 }
 
-theorem Loc::moves_sound(tys: Nat → RecInfo, g: List<Ty>): (dsts: List<Loc>) → (srcs: List<Loc>) →
+theorem Loc::moves_sound(tys: Table, g: List<Ty>): (dsts: List<Loc>) → (srcs: List<Loc>) →
     Loc::MovesHold(tys, g, dsts, srcs, Loc::moves(g, dsts, srcs)) {
     match g {
         Nil => λ dsts => match dsts {
@@ -1665,7 +1665,7 @@ theorem ETm::head_bool(v: Bool): ETm::word_at(64, BitVec::ofBool(v).toNat()).hea
     match v { True => refl, False => refl }
 }
 
-theorem ETm::bit_kept(tys: Nat → RecInfo, env: Env, c: Nat, t: Ty, e: t = Bit): (v: t.sem(tys)) → t.Kept(tys, env, InWord(c), v) →
+theorem ETm::bit_kept(tys: Table, env: Env, c: Nat, t: Ty, e: t = Bit): (v: t.sem(tys)) → t.Kept(tys, env, InWord(c), v) →
     env.bit(c) = ETm::truth(tys, t, v) {
     j(sym(e), λ x _ => (v: x.sem(tys)) → x.Kept(tys, env, InWord(c), v) → env.bit(c) = ETm::truth(tys, x, v),
         λ v (k: env.number(c) = BitVec::ofBool(v).toNat()) =>
@@ -1673,7 +1673,7 @@ theorem ETm::bit_kept(tys: Nat → RecInfo, env: Env, c: Nat, t: Ty, e: t = Bit)
 }
 
 // A variable's value cast along an equation of codes is kept where it was.
-theorem Ty::kept_cast(tys: Nat → RecInfo, env: Env, l: Loc, a, b: Ty, e: a = b, v: a.sem(tys), k: a.Kept(tys, env, l, v)):
+theorem Ty::kept_cast(tys: Table, env: Env, l: Loc, a, b: Ty, e: a = b, v: a.sem(tys), k: a.Kept(tys, env, l, v)):
     b.Kept(tys, env, l, Ty::cast(tys, a, b, v)) {
     j(e, λ x _ => x.Kept(tys, env, l, Ty::cast(tys, a, x, v)),
         j(sym(Ty::cast_self(tys, a, v)), λ y _ => a.Kept(tys, env, l, y), k))
@@ -1684,7 +1684,7 @@ theorem Ty::kept_cast(tys: Nat → RecInfo, env: Env, l: Loc, a, b: Ty, e: a = b
 
 // The environment before a computation, out of the one at its end: each
 // variable it bound dropped.
-fn Effect::pop(tys: Nat → RecInfo, rs: List<Ty>) → (g: List<Ty>) → rt::Env(tys, Ty::bind_onto(rs, g)) → rt::Env(tys, g) {
+fn Effect::pop(tys: Table, rs: List<Ty>) → (g: List<Ty>) → rt::Env(tys, Ty::bind_onto(rs, g)) → rt::Env(tys, g) {
     match rs { Nil => λ g e => e, Cons(r, rest) => λ g e => Effect::pop(tys, rest, Cons(r, g), e).snd }
 }
 
@@ -1692,11 +1692,11 @@ fn Loc::pop(rs: List<Ty>, el: List<Loc>) → List<Loc> {
     match rs { Nil => el, Cons(_, rest) => Loc::pop(rest, el).tail() }
 }
 
-fn Part::drop(self p: Part, tys: Nat → RecInfo, g: List<Ty>) → rt::Env(tys, p.onto(g)) → rt::Env(tys, g) {
+fn Part::drop(self p: Part, tys: Table, g: List<Ty>) → rt::Env(tys, p.onto(g)) → rt::Env(tys, g) {
     match p as λ x => rt::Env(tys, x.onto(g)) → rt::Env(tys, g) { PWorld => λ e => e, PVar(_, _, _) => λ e => e.snd }
 }
 
-fn Part::pop(tys: Nat → RecInfo, ps: List<Part>) → (g: List<Ty>) → rt::Env(tys, Part::ctx(ps, g)) → rt::Env(tys, g) {
+fn Part::pop(tys: Table, ps: List<Part>) → (g: List<Ty>) → rt::Env(tys, Part::ctx(ps, g)) → rt::Env(tys, g) {
     match ps { Nil => λ g e => e, Cons(p, rest) => λ g e => p.drop(tys, g, Part::pop(tys, rest, p.onto(g), e)) }
 }
 
@@ -1726,16 +1726,16 @@ fn ETm::base_locs(self t: ETm, el: List<Loc>) → List<Loc> {
     }
 }
 
-theorem Effect::pop_push(tys: Nat → RecInfo, rs: List<Ty>): (g: List<Ty>) → (env: rt::Env(tys, g)) → (x: Ty::Flats(rs)) →
+theorem Effect::pop_push(tys: Table, rs: List<Ty>): (g: List<Ty>) → (env: rt::Env(tys, g)) → (x: Ty::Flats(rs)) →
     Effect::pop(tys, rs, g, Effect::push(tys, rs, g, env, x)) = env {
     match rs {
         Nil => λ g env x => refl,
         Cons(r, rest) => λ g env x => cong_fn(λ (e: rt::Env(tys, Cons(r, g))) => e.snd,
-            Effect::pop_push(tys, rest, Cons(r, g), Pair(r.of_flat(tys, x.fst), env), x.snd)),
+            Effect::pop_push(tys, rest, Cons(r, g), Pair(r.of_slot(tys, x.fst), env), x.snd)),
     }
 }
 
-theorem Part::pop_push(tys: Nat → RecInfo, ps: List<Part>): (g: List<Ty>) → (env: rt::Env(tys, g)) → (st: Part::State(tys, ps)) →
+theorem Part::pop_push(tys: Table, ps: List<Part>): (g: List<Ty>) → (env: rt::Env(tys, g)) → (st: Part::State(tys, ps)) →
     Part::pop(tys, ps, g, Part::push(tys, ps, g, env, st)) = env {
     match ps {
         Nil => λ g env st => refl,
@@ -1781,7 +1781,7 @@ theorem ETm::base_end(self t: ETm, w: rt::World, ls: List<Lent>): (g: List<Ty>) 
 }
 
 // Dropping the variable a context's head is.
-theorem locs_hold_tail(tys: Nat → RecInfo, env: Env, t: Ty, g: List<Ty>): (locs: List<Loc>) → (vals: rt::Env(tys, Cons(t, g))) →
+theorem locs_hold_tail(tys: Table, env: Env, t: Ty, g: List<Ty>): (locs: List<Loc>) → (vals: rt::Env(tys, Cons(t, g))) →
     LocsHold(tys, env, Cons(t, g), locs, vals) → LocsHold(tys, env, g, locs.tail(), vals.snd) {
     λ locs => match locs {
         Nil => λ vals never => false_elim(never),
@@ -1789,7 +1789,7 @@ theorem locs_hold_tail(tys: Nat → RecInfo, env: Env, t: Ty, g: List<Ty>): (loc
     }
 }
 
-theorem Effect::pop_holds(tys: Nat → RecInfo, env: Env, rs: List<Ty>): (g: List<Ty>) → (el: List<Loc>) → (e: rt::Env(tys, Ty::bind_onto(rs, g))) →
+theorem Effect::pop_holds(tys: Table, env: Env, rs: List<Ty>): (g: List<Ty>) → (el: List<Loc>) → (e: rt::Env(tys, Ty::bind_onto(rs, g))) →
     LocsHold(tys, env, Ty::bind_onto(rs, g), el, e) → LocsHold(tys, env, g, Loc::pop(rs, el), Effect::pop(tys, rs, g, e)) {
     match rs {
         Nil => λ g el e h => h,
@@ -1798,7 +1798,7 @@ theorem Effect::pop_holds(tys: Nat → RecInfo, env: Env, rs: List<Ty>): (g: Lis
     }
 }
 
-theorem Part::pop_holds(tys: Nat → RecInfo, env: Env, ps: List<Part>): (g: List<Ty>) → (el: List<Loc>) → (e: rt::Env(tys, Part::ctx(ps, g))) →
+theorem Part::pop_holds(tys: Table, env: Env, ps: List<Part>): (g: List<Ty>) → (el: List<Loc>) → (e: rt::Env(tys, Part::ctx(ps, g))) →
     LocsHold(tys, env, Part::ctx(ps, g), el, e) → LocsHold(tys, env, g, Part::pop_locs(ps, el), Part::pop(tys, ps, g, e)) {
     match ps {
         Nil => λ g el e h => h,
@@ -1832,7 +1832,7 @@ theorem ETm::base_holds(self t: ETm, w: rt::World, env: Env): (g: List<Ty>) → 
 // A branch: the joined state's parts
 
 // The value parts of a state, as an environment over their codes.
-fn Part::vals(tys: Nat → RecInfo, ps: List<Part>) → Part::State(tys, ps) → rt::Env(tys, Part::codes(ps)) {
+fn Part::vals(tys: Table, ps: List<Part>) → Part::State(tys, ps) → rt::Env(tys, Part::codes(ps)) {
     match ps {
         Nil => λ _ => trivial,
         Cons(p, rest) => match p as λ x => Part::State(tys, Cons(x, rest)) → rt::Env(tys, Part::codes(Cons(x, rest))) {
@@ -1842,7 +1842,7 @@ fn Part::vals(tys: Nat → RecInfo, ps: List<Part>) → Part::State(tys, ps) →
     }
 }
 
-theorem Part::head_cons(tys: Nat → RecInfo, p: Part, rest: List<Part>, v: p.ty(tys), x: Part::State(tys, rest)):
+theorem Part::head_cons(tys: Table, p: Part, rest: List<Part>, v: p.ty(tys), x: Part::State(tys, rest)):
     Part::head(tys, p, rest, Part::cons(tys, p, rest, v, x)) = v {
     match rest as λ r => (x: Part::State(tys, r)) → Part::head(tys, p, r, Part::cons(tys, p, r, v, x)) = v {
         Nil => λ _ => refl,
@@ -1850,7 +1850,7 @@ theorem Part::head_cons(tys: Nat → RecInfo, p: Part, rest: List<Part>, v: p.ty
     }(x)
 }
 
-theorem Part::tail_cons(tys: Nat → RecInfo, p: Part, rest: List<Part>, v: p.ty(tys), x: Part::State(tys, rest)):
+theorem Part::tail_cons(tys: Table, p: Part, rest: List<Part>, v: p.ty(tys), x: Part::State(tys, rest)):
     Part::tail(tys, p, rest, Part::cons(tys, p, rest, v, x)) = x {
     match rest as λ r => (x: Part::State(tys, r)) → Part::tail(tys, p, r, Part::cons(tys, p, r, v, x)) = x {
         Nil => λ _ => refl,
@@ -1872,7 +1872,7 @@ fn Part::sources(ps: List<Part>, side: Bool, ce: List<Ty>, el: List<Loc>) → Op
     }
 }
 
-fn Part::SourcesHold(tys: Nat → RecInfo, ps: List<Part>, side: Bool, ce: List<Ty>, el: List<Loc>, r: Option<List<Loc>>) → Type {
+fn Part::SourcesHold(tys: Table, ps: List<Part>, side: Bool, ce: List<Ty>, el: List<Loc>, r: Option<List<Loc>>) → Type {
     match r {
         None => True,
         Some(srcs) => (env: Env) → (ve: rt::Env(tys, ce)) → (io: Io) → LocsHold(tys, env, ce, el, ve) →
@@ -1880,7 +1880,7 @@ fn Part::SourcesHold(tys: Nat → RecInfo, ps: List<Part>, side: Bool, ce: List<
     }
 }
 
-theorem Part::sources_sound(tys: Nat → RecInfo, side: Bool, ce: List<Ty>, el: List<Loc>, ps: List<Part>):
+theorem Part::sources_sound(tys: Table, side: Bool, ce: List<Ty>, el: List<Loc>, ps: List<Part>):
     Part::SourcesHold(tys, ps, side, ce, el, Part::sources(ps, side, ce, el)) {
     match ps {
         Nil => λ env ve io _ => trivial,
@@ -1927,7 +1927,7 @@ fn Part::locs(ps: List<Part>, dsts: List<Loc>, base: List<Loc>) → List<Loc> {
     }
 }
 
-theorem Part::push_holds(tys: Nat → RecInfo, env: Env, ps: List<Part>): (g: List<Ty>) → (base: List<Loc>) → (vals: rt::Env(tys, g)) →
+theorem Part::push_holds(tys: Table, env: Env, ps: List<Part>): (g: List<Ty>) → (base: List<Loc>) → (vals: rt::Env(tys, g)) →
     (dsts: List<Loc>) → (st: Part::State(tys, ps)) →
     LocsHold(tys, env, Part::codes(ps), dsts, Part::vals(tys, ps, st)) → LocsHold(tys, env, g, base, vals) →
     LocsHold(tys, env, Part::ctx(ps, g), Part::locs(ps, dsts, base), Part::push(tys, ps, g, vals, st)) {
@@ -1948,7 +1948,7 @@ theorem Part::push_holds(tys: Nat → RecInfo, env: Env, ps: List<Part>): (g: Li
 // Which world the join leaves.
 fn Part::world_pick(has: Bool, a: Io, b: Io) → Io { match has { True => a, False => b } }
 
-theorem Part::world_state(tys: Nat → RecInfo, side: Bool, ce: List<Ty>, ve: rt::Env(tys, ce), a: Io, io: Io, ps: List<Part>):
+theorem Part::world_state(tys: Table, side: Bool, ce: List<Ty>, ve: rt::Env(tys, ce), a: Io, io: Io, ps: List<Part>):
     Part::world(tys, ps, Part::state(tys, ps, side, ce, ve, a), io) = Part::world_pick(Part::has_world(ps), a, io) {
     match ps {
         Nil => refl,
@@ -2022,14 +2022,14 @@ fn Loc::meet(t: Ty, a: Loc, b: Loc) → Option<Loc> {
     }
 }
 
-fn Loc::MeetHolds(tys: Nat → RecInfo, t: Ty, a: Loc, b: Loc, r: Option<Loc>) → Type {
+fn Loc::MeetHolds(tys: Table, t: Ty, a: Loc, b: Loc, r: Option<Loc>) → Type {
     match r {
         None => True,
         Some(m) => (env: Env) → (v: t.sem(tys)) → (t.Kept(tys, env, a, v) → t.Kept(tys, env, m, v)) ∧ (t.Kept(tys, env, b, v) → t.Kept(tys, env, m, v)),
     }
 }
 
-theorem Loc::meet_word(tys: Nat → RecInfo, t: Ty, x, y: Nat):
+theorem Loc::meet_word(tys: Table, t: Ty, x, y: Nat):
     Loc::MeetHolds(tys, t, InWord(x), InWord(y), match x.eq_dec(y) { Inl(_) => Some(InWord(x)), Inr(_) => None }) {
     match x.eq_dec(y) as λ d => Loc::MeetHolds(tys, t, InWord(x), InWord(y), match d { Inl(_) => Some(InWord(x)), Inr(_) => None }) {
         Inl(e) => λ env v => ⟨λ k => k, λ k => j(sym(e), λ z _ => t.Kept(tys, env, InWord(z), v), k)⟩,
@@ -2037,7 +2037,7 @@ theorem Loc::meet_word(tys: Nat → RecInfo, t: Ty, x, y: Nat):
     }
 }
 
-theorem Loc::meet_sound(tys: Nat → RecInfo, t: Ty, a: Loc, b: Loc): Loc::MeetHolds(tys, t, a, b, Loc::meet(t, a, b)) {
+theorem Loc::meet_sound(tys: Table, t: Ty, a: Loc, b: Loc): Loc::MeetHolds(tys, t, a, b, Loc::meet(t, a, b)) {
     match t {
         Word(wd) => match a {
             InWord(x) => match b { InWord(y) => Loc::meet_word(tys, Word(wd), x, y), InBuffer(_) => trivial, Gone => trivial },
@@ -2082,7 +2082,7 @@ fn Loc::meets(g: List<Ty>, a: List<Loc>, b: List<Loc>) → Option<List<Loc>> {
     }
 }
 
-fn Loc::MeetsHold(tys: Nat → RecInfo, g: List<Ty>, a: List<Loc>, b: List<Loc>, r: Option<List<Loc>>) → Type {
+fn Loc::MeetsHold(tys: Table, g: List<Ty>, a: List<Loc>, b: List<Loc>, r: Option<List<Loc>>) → Type {
     match r {
         None => True,
         Some(m) => (env: Env) → (vals: rt::Env(tys, g)) →
@@ -2090,7 +2090,7 @@ fn Loc::MeetsHold(tys: Nat → RecInfo, g: List<Ty>, a: List<Loc>, b: List<Loc>,
     }
 }
 
-theorem Loc::meets_sound(tys: Nat → RecInfo, g: List<Ty>): (a: List<Loc>) → (b: List<Loc>) → Loc::MeetsHold(tys, g, a, b, Loc::meets(g, a, b)) {
+theorem Loc::meets_sound(tys: Table, g: List<Ty>): (a: List<Loc>) → (b: List<Loc>) → Loc::MeetsHold(tys, g, a, b, Loc::meets(g, a, b)) {
     match g {
         Nil => λ a => match a {
             Nil => λ b => match b as λ q => Loc::MeetsHold(tys, Nil, Nil, q, Loc::meets(Nil, Nil, q)) {
@@ -2231,13 +2231,13 @@ fn ETm::lower(self t: ETm, w: rt::World, ls: List<Lent>, g: List<Ty>, locs: List
 
 // Where a statement leaves the program: on, with the value kept in the
 // result word.
-fn Flow::Keeps(self flow: Flow, t: Ty, tys: Nat → RecInfo, result: Nat, v: t.sem(tys)) → Type {
+fn Flow::Keeps(self flow: Flow, t: Ty, tys: Table, result: Nat, v: t.sem(tys)) → Type {
     match flow { Onward(env) => t.Kept(tys, env, InWord(result), v), Exited(_) => False }
 }
 
 // The statements' threading lands where the meaning does: the same world,
 // and the value in the result word.
-fn ETm::Lands(t: Ty, tys: Nat → RecInfo, result: Nat, m: Mutated<Io, Flow>, e: Mutated<Io, t.sem(tys)>) → Type {
+fn ETm::Lands(t: Ty, tys: Table, result: Nat, m: Mutated<Io, Flow>, e: Mutated<Io, t.sem(tys)>) → Type {
     (m.after = e.after) ∧ m.value.Keeps(t, tys, result, e.value)
 }
 
@@ -2638,7 +2638,7 @@ theorem ETm::lower_sound(self t: ETm, w: rt::World, ls: List<Lent>): (g: List<Ty
 
 // A value read back from the word it ends in: a word at its width, a bit as
 // its one-bit word's bit (the default for the codes no lowering ends in).
-fn Ty::read_back(self t: Ty, tys: Nat → RecInfo, env: Env, id: Nat) → t.sem(tys) {
+fn Ty::read_back(self t: Ty, tys: Table, env: Env, id: Nat) → t.sem(tys) {
     match t as λ x => x.sem(tys) {
         Word(w) => ETm::word_at(w, env.number(id)),
         Bit => ETm::word_at(1, env.number(id)).head_bit(),
@@ -2653,11 +2653,11 @@ fn Ty::read_back(self t: Ty, tys: Nat → RecInfo, env: Env, id: Nat) → t.sem(
 // A flow that left the program reads back as its status, the word an
 // `Exit` after the statements would have reported (`Stmt::exit_reads`); no
 // lowering's statements leave the program (`Flow::Keeps`).
-fn Flow::read_back(self flow: Flow, t: Ty, tys: Nat → RecInfo, id: Nat) → t.sem(tys) {
+fn Flow::read_back(self flow: Flow, t: Ty, tys: Table, id: Nat) → t.sem(tys) {
     match flow { Onward(env) => t.read_back(tys, env, id), Exited(status) => t.read_back(tys, native_source::Env([status.toNat()], [], []), 0) }
 }
 
-theorem Ty::read_back_kept(self t: Ty, tys: Nat → RecInfo, env: Env, id: Nat): (v: t.sem(tys)) → t.Kept(tys, env, InWord(id), v) →
+theorem Ty::read_back_kept(self t: Ty, tys: Table, env: Env, id: Nat): (v: t.sem(tys)) → t.Kept(tys, env, InWord(id), v) →
     t.read_back(tys, env, id) = v {
     match t {
         Word(w) => λ v (k: env.number(id) = v.toNat()) => ETm::word_at_kept(w, env, id, v, k),
@@ -2671,7 +2671,7 @@ theorem Ty::read_back_kept(self t: Ty, tys: Nat → RecInfo, env: Env, id: Nat):
     }
 }
 
-theorem Flow::read_back_keeps(self flow: Flow, t: Ty, tys: Nat → RecInfo, id: Nat, v: t.sem(tys)): flow.Keeps(t, tys, id, v) →
+theorem Flow::read_back_keeps(self flow: Flow, t: Ty, tys: Table, id: Nat, v: t.sem(tys)): flow.Keeps(t, tys, id, v) →
     flow.read_back(t, tys, id) = v {
     match flow {
         Onward(env) => λ k => t.read_back_kept(tys, env, id, v, k),

@@ -48,7 +48,7 @@ fn sum_meaning(xs: List<BitVec(64)>) → BitVec(64) {
 // `main() = sum(10)`.
 fn main_body() → PTm { Bind(Lit(Word(64), 10), Recur(0, [0], Value(Var(0)))) }
 
-fn sum_world() → rt::World { PTm::plain(RecInfo::none) }
+fn sum_world() → rt::World { PTm::plain(Table::none()) }
 
 fn sum_fits(k: Nat, p: Nat, xs: List<BitVec(64)>) → Bool { PDef::fits([PDef(1, sum_body())], sum_world(), λ _ ys => sum_meaning(ys), k, p, xs) }
 

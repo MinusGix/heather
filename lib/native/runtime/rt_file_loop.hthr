@@ -47,7 +47,7 @@ import set_tactic;
 
 // What a self-call is answered with: on the arguments' words and the span
 // as it is, the span left and the value at the result's code.
-fn FTm::Round(tys: Nat → RecInfo, res: Ty) → Type { List<BitVec(64)> → List<BitVec(8)> → Mutated<List<BitVec(8)>, res.sem(tys)> }
+fn FTm::Round(tys: Table, res: Ty) → Type { List<BitVec(64)> → List<BitVec(8)> → Mutated<List<BitVec(8)>, res.sem(tys)> }
 
 // A loop step's meaning at the function's result code `res`: `t` with its
 // self-call answered by `again`, the arguments read as the words a call
@@ -79,14 +79,14 @@ fn FTm::tail_sem(self t: FTm, fw: FWorld, res: Ty, again: FTm::Round(fw.w.tys, r
 }
 
 // Two continuations that agree go on alike after a loop.
-theorem FTm::bind_at_ext<S>(tys: Nat → RecInfo, g: List<Ty>, st: Ty, m: Mutated<List<BitVec(8)>, st.sem(tys)>, env: Env(tys, g),
+theorem FTm::bind_at_ext<S>(tys: Table, g: List<Ty>, st: Ty, m: Mutated<List<BitVec(8)>, st.sem(tys)>, env: Env(tys, g),
     k1, k2: Env(tys, Cons(st, g)) → List<BitVec(8)> → S, same: (e: Env(tys, Cons(st, g))) → (o: List<BitVec(8)>) → k1(e, o) = k2(e, o)):
     FTm::bind_at(tys, g, st, m, env, k1) = FTm::bind_at(tys, g, st, m, env, k2) {
     same(Pair(m.value, env), m.after)
 }
 
 // What follows a loop, read through `f`.
-theorem FTm::bind_at_after<S, T>(tys: Nat → RecInfo, g: List<Ty>, st: Ty, m: Mutated<List<BitVec(8)>, st.sem(tys)>, env: Env(tys, g),
+theorem FTm::bind_at_after<S, T>(tys: Table, g: List<Ty>, st: Ty, m: Mutated<List<BitVec(8)>, st.sem(tys)>, env: Env(tys, g),
     k: Env(tys, Cons(st, g)) → List<BitVec(8)> → S, f: S → T):
     FTm::bind_at(tys, g, st, m, env, λ e o => f(k(e, o))) = f(FTm::bind_at(tys, g, st, m, env, k)) { refl }
 
@@ -140,21 +140,21 @@ fn FTm::leave(end: State, flag: Nat, kept, nexts: List<Nat>, again: List<BitVec(
 
 // A self-call's answer as the loop's continuation: from the file's first
 // span, ending as a computation's code does.
-fn FTm::resume(tys: Nat → RecInfo, res: Ty, rest: List<List<BitVec(8)>>, again: FTm::Round(tys, res)) → List<BitVec(64)> → Buffers() → Ending {
+fn FTm::resume(tys: Table, res: Ty, rest: List<List<BitVec(8)>>, again: FTm::Round(tys, res)) → List<BitVec(64)> → Buffers() → Ending {
     λ ys file => FTm::ended(tys, res, rest, again(ys, buffer_bytes(file, 0)))
 }
 
 // A pass that ended in `end` took the turn `out`: the file's other spans
 // are as they were, and whatever answers the self-call, what the pass
 // leaves is what `out` ends in.
-fn FTm::Turn(tys: Nat → RecInfo, res: Ty, rest: List<List<BitVec(8)>>, flag: Nat, kept, nexts: List<Nat>, end: State,
+fn FTm::Turn(tys: Table, res: Ty, rest: List<List<BitVec(8)>>, flag: Nat, kept, nexts: List<Nat>, end: State,
     out: FTm::Round(tys, res) → Mutated<List<BitVec(8)>, res.sem(tys)>) → Type {
     FTm::Spanned(rest, end.buffers) ∧ ((again: FTm::Round(tys, res)) →
         FTm::leave(end, flag, kept, nexts, FTm::resume(tys, res, rest, again)) = FTm::ended(tys, res, rest, out(again)))
 }
 
 // A region that ran to `mid`, then a pass from there.
-theorem FTm::turn_after(tys: Nat → RecInfo, res: Ty, rest: List<List<BitVec(8)>>, flag: Nat, kept, nexts: List<Nat>, pre, post: StructuredRegion,
+theorem FTm::turn_after(tys: Table, res: Ty, rest: List<List<BitVec(8)>>, flag: Nat, kept, nexts: List<Nat>, pre, post: StructuredRegion,
     call: Writers(), values: Valuation(), file: Buffers(), mid: State, out: FTm::Round(tys, res) → Mutated<List<BitVec(8)>, res.sem(tys)>,
     at: pre.run(call, values, file) = mid, then: FTm::Turn(tys, res, rest, flag, kept, nexts, post.run(call, mid.values, mid.buffers), out)):
     FTm::Turn(tys, res, rest, flag, kept, nexts, Compose(pre, post).run(call, values, file), out) {
@@ -162,7 +162,7 @@ theorem FTm::turn_after(tys: Nat → RecInfo, res: Ty, rest: List<List<BitVec(8)
 }
 
 // A branch's pass is the arm's the bit chooses.
-theorem FTm::turn_branch(tys: Nat → RecInfo, res: Ty, rest: List<List<BitVec(8)>>, flag: Nat, kept, nexts: List<Nat>, values: Valuation(),
+theorem FTm::turn_branch(tys: Table, res: Ty, rest: List<List<BitVec(8)>>, flag: Nat, kept, nexts: List<Nat>, values: Valuation(),
     condition: Nat, outputs: Ports, when_true, when_false: StructuredRegion, call: Writers(), file: Buffers(), b: Bool,
     yes, no: FTm::Round(tys, res) → Mutated<List<BitVec(8)>, res.sem(tys)>, h: values(1, condition).head_bit() = b,
     turn_true: FTm::Turn(tys, res, rest, flag, kept, nexts, when_true.run(call, values, file), yes),
@@ -592,7 +592,7 @@ theorem FTm::tail_sound(self t: FTm, fw: FWorld, base: Nat, res: Ty, er: res.One
 
 // A curried function into any type on a word list: each word cast to its
 // parameter's code (zero past the list's end, as `Ty::extend` reads).
-fn Ty::apply_to(tys: Nat → RecInfo, ps: List<Ty>, R: Type) → Ty::ArrowsTo(tys, ps, R) → List<BitVec(64)> → R {
+fn Ty::apply_to(tys: Table, ps: List<Ty>, R: Type) → Ty::ArrowsTo(tys, ps, R) → List<BitVec(64)> → R {
     match ps {
         Nil => λ v ws => v,
         Cons(p, rest) => λ v ws => match ws {
@@ -604,7 +604,7 @@ fn Ty::apply_to(tys: Nat → RecInfo, ps: List<Ty>, R: Type) → Ty::ArrowsTo(ty
 
 // A computation's meaning on words and a span, its value read as a word:
 // what a call of its code answers, and the span it leaves.
-fn FFun::uncurry(tys: Nat → RecInfo, ps: List<Ty>, r: Ty, h: FTm::Sem(tys, Sig(ps, r)), xs: List<BitVec(64)>, own: List<BitVec(8)>)
+fn FFun::uncurry(tys: Table, ps: List<Ty>, r: Ty, h: FTm::Sem(tys, Sig(ps, r)), xs: List<BitVec(64)>, own: List<BitVec(8)>)
     → Mutated<List<BitVec(8)>, BitVec(64)> {
     FTm::recast(tys, r, Word(64), Ty::apply_to(tys, ps, Mutated<List<BitVec(8)>, r.sem(tys)>, h(own), xs))
 }
@@ -614,7 +614,7 @@ fn FTm::end_of(rest: List<List<BitVec(8)>>, m: Mutated<List<BitVec(8)>, BitVec(6
 
 // What answers like the uncurried meaning on as many words as parameters
 // answers like the meaning.
-theorem FFun::answers_of_uncurry(tys: Nat → RecInfo, r: Ty, rest: List<List<BitVec(8)>>, ps: List<Ty>):
+theorem FFun::answers_of_uncurry(tys: Table, r: Ty, rest: List<List<BitVec(8)>>, ps: List<Ty>):
     (F: Ty::ArrowsTo(tys, ps, Mutated<List<BitVec(8)>, r.sem(tys)>)) → (ans: List<BitVec(64)> → Ending) →
     ((xs: List<BitVec(64)>) → xs.len() = ps.len() →
         ans(xs) = FTm::end_of(rest, FTm::recast(tys, r, Word(64), Ty::apply_to(tys, ps, Mutated<List<BitVec(8)>, r.sem(tys)>, F, xs)))) →
@@ -817,12 +817,12 @@ fn FFun::Good(rest: List<List<BitVec(8)>>) → Ending → Type { λ e => FTm::Sp
 
 // The recursion the loop is held to: the function, whatever the passes
 // left.
-fn FFun::meas_run(tys: Nat → RecInfo, ws: List<Ty>, res: Ty, rest: List<List<BitVec(8)>>, h: FTm::Sem(tys, Sig(ws, res)),
+fn FFun::meas_run(tys: Table, ws: List<Ty>, res: Ty, rest: List<List<BitVec(8)>>, h: FTm::Sem(tys, Sig(ws, res)),
     m: List<BitVec(64)> → List<BitVec(8)> → Nat) → (r: Nat) → (state: List<BitVec(64)>) → (o: List<BitVec(8)>) → Nat::Lt(m(state, o), r + 1) → Ending {
     λ r state o _ => FTm::end_of(rest, FFun::uncurry(tys, ws, res, h, state, o))
 }
 
-fn FFun::Agrees(tys: Nat → RecInfo, ws: List<Ty>, res: Ty, rest: List<List<BitVec(8)>>, h: FTm::Sem(tys, Sig(ws, res)),
+fn FFun::Agrees(tys: Table, ws: List<Ty>, res: Ty, rest: List<List<BitVec(8)>>, h: FTm::Sem(tys, Sig(ws, res)),
     m: List<BitVec(64)> → List<BitVec(8)> → Nat, r: Nat, state: List<BitVec(64)>, o: List<BitVec(8)>, end: Ending) → Type {
     LoopAgrees<List<BitVec(8)>>(FFun::Good(rest), m, FFun::meas_run(tys, ws, res, rest, h, m), r, state, o, end)
 }
@@ -834,7 +834,7 @@ fn FFun::later_word(rest: List<List<BitVec(8)>>, later: List<BitVec(64)> → Buf
     λ ys o => shared(later(ys, Cons(o, rest)), λ (e: Ending) => Mutated(buffer_bytes(e.buffers, 0), e.word))
 }
 
-fn FFun::later_round(tys: Nat → RecInfo, res: Ty, rest: List<List<BitVec(8)>>, later: List<BitVec(64)> → Buffers() → Ending) → FTm::Round(tys, res) {
+fn FFun::later_round(tys: Table, res: Ty, rest: List<List<BitVec(8)>>, later: List<BitVec(64)> → Buffers() → Ending) → FTm::Round(tys, res) {
     λ ys o => FTm::recast(tys, Word(64), res, FFun::later_word(rest, later, ys, o))
 }
 
@@ -1241,7 +1241,7 @@ fn FFun::Passes<F>(ws: List<Ty>, res: Ty, body: FTm, fw: FWorld, at: F → FTm::
 }
 
 // `stop` answers as the code does once its count is spent.
-fn FFun::Stops<F>(kept: Nat, ws: List<Ty>, res: Ty, tys: Nat → RecInfo, at: F → FTm::Sem(tys, Sig(ws, res)), stop: F) → Type {
+fn FFun::Stops<F>(kept: Nat, ws: List<Ty>, res: Ty, tys: Table, at: F → FTm::Sem(tys, Sig(ws, res)), stop: F) → Type {
     Ty::ForWords(ws, λ (xs: List<BitVec(64)>) => (own: List<BitVec(8)>) → FFun::uncurry(tys, ws, res, at(stop), xs, own) = FFun::spent(kept, xs, own))
 }
 

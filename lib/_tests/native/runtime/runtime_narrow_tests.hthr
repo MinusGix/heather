@@ -108,6 +108,42 @@ theorem count_small_runs(): program_eval(count_small::program, 1, [BitVec::ofNat
     ⟨count_small::agrees(BitVec::ofNat(3), BitVec::ofNat(5)), count_small::agrees(BitVec::ofNat(30), BitVec::ofNat(5))⟩
 }
 
+// A call of a function with a narrow parameter: the caller widens its
+// argument into a word of its own first (`Tm::send_args`), and the callee
+// reads the word's low bits.
+runtime fn calls_digit(x: u64) → u64 { digit_value(x.truncate(8, 56)) + 1 }
+
+theorem calls_digit_agrees(x: u64): program_eval(calls_digit::program, 1, [x]) = calls_digit(x) { calls_digit::agrees(x) }
+
+// The byte is the word's low byte: 0x37 is '7', whatever is above it.
+theorem calls_digit_runs(): program_eval(calls_digit::program, 1, [BitVec::ofNat(0x4137)]) = 8 { calls_digit::agrees(BitVec::ofNat(0x4137)) }
+
+// A narrow argument computed in the caller, at its own width, then passed:
+// a `u16` sum that wraps before the call reads it.
+runtime fn wraps_then_widens(a: u8, b: u16) → u16 { widen_add(a, b + 1) }
+
+theorem wraps_then_widens_runs(): program_eval(wraps_then_widens::program, 1, [BitVec::ofNat(3), BitVec::ofNat(0xffff)]) = 3 {
+    wraps_then_widens::agrees(BitVec::ofNat(3), BitVec::ofNat(0xffff))
+}
+
+// A narrow result read back from a call, used at its width.
+runtime fn twice_low(x: u64) → u32 { low_half(x) + low_half(x) }
+
+theorem twice_low_runs(): program_eval(twice_low::program, 1, [BitVec::ofNat(0x900000003)]) = 6 { twice_low::agrees(BitVec::ofNat(0x900000003)) }
+
+// A `Bool` passed to a call, and one passed on from the caller's own
+// parameter.
+runtime fn choose_small(x: u64, y: u64) → u64 { choose(is_small(x), x, y) }
+
+theorem choose_small_runs(): program_eval(choose_small::program, 2, [BitVec::ofNat(3), BitVec::ofNat(40)]) = 3 ∧
+    program_eval(choose_small::program, 2, [BitVec::ofNat(30), BitVec::ofNat(40)]) = 40 {
+    ⟨choose_small::agrees(BitVec::ofNat(3), BitVec::ofNat(40)), choose_small::agrees(BitVec::ofNat(30), BitVec::ofNat(40))⟩
+}
+
+runtime fn pass_flag(c: Bool, x: u64) → u64 { choose(c, x, 0) }
+
+theorem pass_flag_agrees(c, x: u64): program_eval(pass_flag::program, 1, [c, x]) = pass_flag(runtime_bit_low(c), x) { pass_flag::agrees(c, x) }
+
 // ---------------------------------------------------------------------------
 // Refusals, each with its reason.
 
@@ -117,8 +153,3 @@ theorem count_small_runs(): program_eval(count_small::program, 1, [BitVec::ofNat
 runtime fn count_up(n, i: u64, b: u8) → u64 decreases (n - i).toNat() {
     if lt: i < n { count_up(n, i + 1, b + 1) } else { b.zero_extend(56) }
 }
-
-// A call of a function with a narrow parameter: the caller would widen its
-// argument first, which the call's lowering does not do yet.
-// expect-error: a call of a function whose parameters or result do not cross a call in 64-bit words
-runtime fn calls_digit(x: u64) → u64 { digit_value(x.truncate(8, 56)) + 1 }

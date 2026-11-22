@@ -116,9 +116,9 @@ fn Program::source(p: ELoop, ls: List<Lent>, g: List<Ty>, functions: List<Functi
 }
 
 // Each buffer parameter holds its bytes in its buffer, link by link.
-theorem Program::held_nil(tys: Nat → RecInfo, env: native_source::Env): LocsHold(tys, env, Nil, Nil, trivial) { trivial }
+theorem Program::held_nil(tys: Table, env: native_source::Env): LocsHold(tys, env, Nil, Nil, trivial) { trivial }
 
-theorem Program::held_cons(tys: Nat → RecInfo, env: native_source::Env, g: List<Ty>, i: Nat, v: List<BitVec(8)>, locs: List<Loc>, vals: rt::Env(tys, g),
+theorem Program::held_cons(tys: Table, env: native_source::Env, g: List<Ty>, i: Nat, v: List<BitVec(8)>, locs: List<Loc>, vals: rt::Env(tys, g),
     e: env.buffers.nth(i) = Some(v), h: LocsHold(tys, env, g, locs, vals)): LocsHold(tys, env, Cons(ByteList(0), g), Cons(InBuffer(i), locs), Pair(v, vals)) {
     ⟨e, h⟩
 }
@@ -153,7 +153,7 @@ fn Program::reads(p: ELoop, ls: List<Lent>, g: List<Ty>, functions: List<Functio
             λ flow => flow.read_back(p.ty(w, g), w.tys, Program::lowered(p, ls, g).result)),
         λ io => p.sem(w, ls, g, vals, io), f,
         p.lower_reads(w, ls, g, Program::locs(g.len()), 1, Program::lowered(p, ls, g), lowered, call,
-            λ held f never ws => false_elim(never), λ held => Tm::calls_agree_none(RecInfo::none, Writers::words(call, held)),
+            λ held f never ws => false_elim(never), λ held => Tm::calls_agree_none(Table::none(), Writers::words(call, held)),
             lents, src.performs_co(call, Charges::free(), 0), src.start([]), vals, held, Program::below(g.len()), trivial),
         bridge)
 }
@@ -370,7 +370,7 @@ fn runtime_program(name: String, f: GlobalRef) → Tac<List<Decl>> {
     let rfl <- runtime_global("tactic::rfl");
     let held_nil <- program_global("runtime_program", "Program::held_nil");
     let held_cons <- program_global("runtime_program", "Program::held_cons");
-    let tys_e <- program_global("rt", "RecInfo::none");
+    let tys_e <- program_global("rt", "Table::none");
     let start_e <- program_global("native_source", "Source::start");
     let env_e = ap(start_e, [source, no_args]);
     // The innermost link is the first parameter, in buffer 0.
@@ -384,7 +384,7 @@ fn runtime_program(name: String, f: GlobalRef) → Tac<List<Decl>> {
     let performs <- program_global("native_source_co", "Source::performs_co");
     let start <- program_global("native_source", "Source::start");
     let exit_reads <- program_global("rt_io_program", "Stmt::exit_reads");
-    let none_tys <- program_global("rt", "RecInfo::none");
+    let none_tys <- program_global("rt", "Table::none");
     let call = ap(writers, [pl.functions]);
     let proof = ap(exit_reads, [ap(stmt, [eloop, lents, gE]), ap(result, [eloop, lents, gE]), call, ap(performs, [source, call, free, NatLit(0)]),
         ap(start, [source, no_args]), none_tys, surface, inner]);

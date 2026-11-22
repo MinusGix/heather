@@ -1,0 +1,56 @@
+// Probes of an enum as a record's field (docs/native/runtime-fn-setups-design.md
+// §16.18): a record holds an enum without a payload in its tag word, one
+// field a word like any other. The type table holds its enums apart from
+// its records and before them (`Table`), so a record's field reads an
+// enum's type. The record is built and returned, read back from a call and
+// its field matched. Tests, not library: nothing imports this module; what
+// is refused is in runtime_enum_refused_tests.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import tactic;
+import bitvec;
+import rt;
+import rt_lower;
+import function_ir;
+import function_ir_eval;
+import runtime;
+
+inductive Light { Red, Amber, Green }
+
+record Signal { light: Light, at: u64 }
+
+// Built and returned: the enum's tag word in RAX, the word in RDX.
+runtime fn signal(x: u64) → Signal {
+    let l: Light = if x < 10 { Red } else { if x < 20 { Amber } else { Green } };
+    Signal(l, x + 1)
+}
+
+theorem signal_runs(): program_eval(signal::program, 0, [BitVec::ofNat(15)]) = 1 ∧
+    program_eval_also(signal::program, [BitVec::ofNat(15)]) = [16] ∧
+    program_eval(signal::program, 0, [BitVec::ofNat(40)]) = 2 {
+    ⟨signal::agrees(BitVec::ofNat(15)), ⟨signal::agrees_also(BitVec::ofNat(15)), signal::agrees(BitVec::ofNat(40))⟩⟩
+}
+
+// The record is entry 0 of the type table, the enum it holds entry 1: its
+// field codes are the enum's, then the word.
+theorem signal_fields(): signal::world.tys.recs(0).fields = [Enum(1), Word(64)] { refl }
+
+// Returned by one runtime fn and matched in another: the field read back
+// from the call names its constructor.
+runtime fn signal_wait(x: u64) → u64 {
+    let s = signal(x);
+    match s.light { Red => 30, Amber => 5, Green => 0 }
+}
+
+theorem signal_wait_agrees(x: u64): program_eval(signal_wait::program, 1, [x]) = signal_wait(x) { signal_wait::agrees(x) }
+
+theorem signal_wait_runs(): program_eval(signal_wait::program, 1, [BitVec::ofNat(3)]) = 30 ∧
+    program_eval(signal_wait::program, 1, [BitVec::ofNat(12)]) = 5 ∧
+    program_eval(signal_wait::program, 1, [BitVec::ofNat(99)]) = 0 {
+    ⟨signal_wait::agrees(BitVec::ofNat(3)), ⟨signal_wait::agrees(BitVec::ofNat(12)), signal_wait::agrees(BitVec::ofNat(99))⟩⟩
+}
