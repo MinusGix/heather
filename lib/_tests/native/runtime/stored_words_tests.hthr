@@ -121,3 +121,32 @@ theorem at_proofs_interchangeable(v: [u32; 64], i: u64, p: i.toNat() < 64, q: i.
     v.at(i, inside := p) = v.at(i, inside := q) { refl }
 theorem put_proofs_interchangeable(v: [u32; 64], i: u64, x: u32, p: i.toNat() < 64, q: ∥i.toNat() < 64∥):
     v.put(i, x, inside := p) = v.put(i, x, inside := q) { refl }
+
+// ---------------------------------------------------------------------------
+// Little-endian words: the least significant byte first, as a Rust
+// `&[u32]` or `&[u64]` lays them out on x86.
+
+theorem le_word_at_start(): List::u32_le_within(six(), w(6), w(0)) = w(0x67452301) { refl }
+// Past the length word a byte reads as zero, at the high end of the word.
+theorem le_word_under_length(): List::u32_le_within(six(), w(2), w(0)) = w(0x2301) { refl }
+theorem le_put_stores_four(): List::put_u32_le_within(six(), w(6), w(1), w(0x7deadbeef)).after = [b(0x01), b(0xef), b(0xbe), b(0xad), b(0xde), b(0xab)] { refl }
+theorem le_put_then_read(): List::u32_le_within(List::put_u32_le_within(six(), w(6), w(1), w(0xdeadbeef)).after, w(6), w(1)) = w(0xdeadbeef) { refl }
+
+// Eight bytes: `0x0123456789abcdef` as Rust's `u64::to_le_bytes` gives it.
+fn le_word() → List<BitVec(8)> { [b(0xef), b(0xcd), b(0xab), b(0x89), b(0x67), b(0x45), b(0x23), b(0x01)] }
+theorem le_u64_read(): List::u64_le_within(le_word(), w(8), w(0)) = w(0x0123456789abcdef) { refl }
+theorem le_u64_put(): List::put_u64_le_within(List::replicate(b(0), 8), w(8), w(0), w(0x0123456789abcdef)).after = le_word() { refl }
+// The two orders are each other's bytes reversed, and not the same.
+theorem le_not_be(): List::u64_be_within(le_word(), w(8), w(0)) = w(0xefcdab8967452301) { refl }
+// expect-error(kernel): NotConvertible
+theorem le_is_not_be(): List::u64_le_within(le_word(), w(8), w(0)) = w(0xefcdab8967452301) { refl }
+
+// An element of an array of little-endian words, by an index that is a
+// word, and nothing past the count.
+fn two_words() → List<BitVec(8)> { le_word() ++ [b(1), b(0), b(0), b(0), b(0), b(0), b(0), b(0)] }
+theorem le_element(): List::u64_le_at_within(two_words(), w(16), w(0), w(2), w(1)) = w(1) { refl }
+theorem le_element_past(): List::u64_le_at_within(two_words(), w(16), w(0), w(1), w(1)) = w(0) { refl }
+
+// At an open span the read is the codec's.
+theorem le_read_is_codec(span: List<u8>, length, i: u64, inside: i.toNat() + 8 <= length.toNat()):
+    span.u64_le_within(length, i) = Stored::u64_le().get(span, i.toNat()) { span.u64_le_within_stored(length, i, inside) }

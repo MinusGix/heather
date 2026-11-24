@@ -113,6 +113,39 @@ instance Accessor<BitVec(64)>(Stored::u64_be()) {
     writes_past := λ span length base count i word past => span.put_u64_be_at_within_past(length, base, count, i, word, past),
 }
 
+// The machine's order, `laid`'s default.
+instance Accessor<BitVec(32)>(Stored::u32_le()) {
+    wide := λ (w: u32) => w.zero_extend(32),
+    narrow := λ (w: u64) => w.truncate(32, 32),
+    kept := λ w => BitVec::truncate_zero_extend(32, 32, w),
+    read := λ span length i => span.u32_le_within(length, i),
+    write := λ span length i word => List::put_u32_le_within(span, length, i, word),
+    reads := λ span length i inside => span.u32_le_within_stored(length, i, inside),
+    writes := λ span length i word inside own => span.put_u32_le_within_stored(length, i, word, inside, own),
+    read_at := λ span length base count i => span.u32_le_at_within(length, base, count, i),
+    write_at := λ span length base count i word => List::put_u32_le_at_within(span, length, base, count, i, word),
+    reads_at := λ span length base count i below inside => span.u32_le_at_within_stored(length, base, count, i, below, inside),
+    reads_past := λ span length base count i past => span.u32_le_at_within_past(length, base, count, i, past),
+    writes_at := λ span length base count i word below inside own => span.put_u32_le_at_within_stored(length, base, count, i, word, below, inside, own),
+    writes_past := λ span length base count i word past => span.put_u32_le_at_within_past(length, base, count, i, word, past),
+}
+
+instance Accessor<BitVec(64)>(Stored::u64_le()) {
+    wide := λ (w: u64) => w,
+    narrow := λ (w: u64) => w,
+    kept := λ w => refl,
+    read := λ span length i => span.u64_le_within(length, i),
+    write := λ span length i word => List::put_u64_le_within(span, length, i, word),
+    reads := λ span length i inside => span.u64_le_within_stored(length, i, inside),
+    writes := λ span length i word inside own => span.put_u64_le_within_stored(length, i, word, inside, own),
+    read_at := λ span length base count i => span.u64_le_at_within(length, base, count, i),
+    write_at := λ span length base count i word => List::put_u64_le_at_within(span, length, base, count, i, word),
+    reads_at := λ span length base count i below inside => span.u64_le_at_within_stored(length, base, count, i, below, inside),
+    reads_past := λ span length base count i past => span.u64_le_at_within_past(length, base, count, i, past),
+    writes_at := λ span length base count i word below inside own => span.put_u64_le_at_within_stored(length, base, count, i, word, below, inside, own),
+    writes_past := λ span length base count i word past => span.put_u64_le_at_within_past(length, base, count, i, word, past),
+}
+
 // The members as functions of the codec. A generator applies these: a
 // tactic's `Expr` has no form for a member of a class.
 fn Stored::word_read<A: Accessor(codec)>(self codec: Stored<A>, span: List<u8>, length, i: u64) → u64 { A.read(span, length, i) }
