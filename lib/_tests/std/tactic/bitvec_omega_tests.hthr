@@ -25,6 +25,9 @@ theorem lt_prop(i: BitVec(64), h: i < 64):
 theorem le_prop(i: BitVec(64), h: i <= 63): i.toNat() + 1 <= 64 { bv_omega }
 // Two words, neither a literal.
 theorem lt_prop_words(i, j: BitVec(64), h: i < j): (j - (i + 1)).toNat() < (j - i).toNat() { bv_omega }
+// A literal at an open width: its fit `0 < 2^w` is over no atom but is no
+// comparison of literals, so `omega` proves it, from a leaf's range.
+theorem lt_prop_open_zero(w: Nat, n: BitVec(w), h: 0 < n): 1 <= n.toNat() { bv_omega }
 // In a checking position.
 theorem lt_prop_checking(i: BitVec(64), h: i < 64): i.toNat() < 64 {
     let below: (i.toNat() < 64) = bv_omega;

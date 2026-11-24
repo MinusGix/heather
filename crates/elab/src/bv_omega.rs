@@ -904,7 +904,9 @@ impl<'w, 'a> Emitter<'w, 'a> {
             } else {
                 format!("`{}` may overflow {} bits", node.word, node.width)
             };
-            let closed = p.terms.is_empty() && q.terms.is_empty();
+            // Over no atoms, and `2^n` a literal power: at an open width
+            // `omega` proves it, from a leaf's range.
+            let closed = p.terms.is_empty() && q.terms.is_empty() && node.width.parse::<u64>().is_ok();
             BoundFrom::Obligation(self.obligation(n, statement, shown, why, closed))
         };
         self.bound_from[n] = Some(from);
