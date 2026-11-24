@@ -1,0 +1,220 @@
+// Access maps: a share at every address, the combination of footprints and
+// fractions (docs/library/separation-algebra-design.md §4;
+// docs/language/ownership-design.md §10.3).
+//
+// An `Access` says what share of each address is held: the pointwise
+// lifting of `Share` (`pcm_share`) over addresses, as `Pcm::pointwise`
+// lifts any separation algebra, kept as a record so the class has a named
+// carrier to register at. The three kinds of access are then values of one
+// algebra:
+//
+// - an owned value or a live path holds its footprint whole
+//   (`Access::whole`);
+// - a frozen view holds a share of its footprint (`Access::of`), and a
+//   copied view halves it (`Access::view_halves`), the whole coming back
+//   when every half does (`Access::whole_of_halves`);
+// - holdings on disjoint footprints always compose (`Access::of_disjoint`),
+//   and views compose however they overlap while their shares total at most
+//   one (`Access::views_compose`); a whole and any positive share of one
+//   address do not (`Access::whole_overlap`), which is §10.3's "no store
+//   overlaps a frozen view's footprint while it is live".
+//
+// Exclusive footprints (`footprint`) map in as wholes and compose the same
+// way (`Access::of_footprint`).
+
+import logic;
+import bool;
+import nat;
+import omega;
+import relation;
+import relation_props;
+import algebra_rel;
+import rat;
+import span_set;
+import pcm;
+import pcm_share;
+import footprint;
+
+record Access { at: Nat → Share }
+
+fn Access::Same(a, b: Access) → Type { (x: Nat) → a.at(x) ≈ b.at(x) }
+
+designation ≈ at Access := Access::Same
+
+fn Access::join(self a, b: Access) → Access { Access(λ x => a.at(x).join(b.at(x))) }
+
+fn Access::Valid(self a: Access) → Type { (x: Nat) → a.at(x).Valid() }
+
+fn Access::none() → Access { Access(λ x => Share::none()) }
+
+instance Pcm<Access>(Access::Same, Access::join, Access::Valid) {
+    rel_refl := λ a x => a.at(x).same_refl(),
+    rel_sym := λ a b h x => Share::same_sym(h(x)),
+    rel_trans := λ a b c h1 h2 x => Share::same_trans(h1(x), h2(x)),
+    respects2 := λ a a2 ha b b2 hb x => Share::join_respects(ha(x), hb(x)),
+    assoc := λ a b c x => a.at(x).join_assoc(b.at(x), c.at(x)),
+    unit := Access::none(),
+    unit_l := λ a x => a.at(x).none_join(),
+    unit_r := λ a x => a.at(x).join_none(),
+    comm := λ a b x => a.at(x).join_comm(b.at(x)),
+    valid_unit := λ x => Share::valid_none(),
+    valid_l := λ a b h x => a.at(x).valid_left(b.at(x), h(x)),
+    valid_respects := λ a b e h x => Share::valid_respects(e(x), h(x)),
+}
+
+// ---------------------------------------------------------------------------
+// Holdings of a footprint
+
+// The share a holding has at one address, by whether the address is in its
+// footprint: the case analysis every pointwise law below makes, stated once
+// over the two verdicts.
+fn Access::pick(a: Bool, q: Share) → Share { match a { True => q, False => Share::none() } }
+
+// The share `q` of every address in `s`, and nothing elsewhere.
+fn Access::of(s: SpanSet, q: Share) → Access { Access(λ x => Access::pick(s.has(x), q)) }
+
+// An owned value's or a live path's holding: the whole of its footprint.
+fn Access::whole(s: SpanSet) → Access { Access::of(s, Share::whole()) }
+
+theorem Access::of_in(s: SpanSet, q: Share, x: Nat, h: s.has(x) = True): Access::of(s, q).at(x) = q {
+    j(sym(h), λ v _ => Access::pick(v, q) = q, refl)
+}
+
+theorem Access::of_out(s: SpanSet, q: Share, x: Nat, h: s.has(x) = False): Access::of(s, q).at(x) = Share::none() {
+    j(sym(h), λ v _ => Access::pick(v, q) = Share::none(), refl)
+}
+
+// A holding is valid when its share is.
+theorem Access::of_valid(s: SpanSet, q: Share, vq: q.Valid()): Access::of(s, q).Valid() {
+    λ x => match s.has(x) as λ v => Access::pick(v, q).Valid() {
+        True => vq,
+        False => Share::valid_none(),
+    }
+}
+
+// Holdings at `≈`-equal shares are `≈`-equal.
+theorem Access::of_same(s: SpanSet, q, r: Share, e: q ≈ r): Access::of(s, q) ≈ Access::of(s, r) {
+    λ x => match s.has(x) as λ v => Access::pick(v, q) ≈ Access::pick(v, r) {
+        True => e,
+        False => Share::none().same_refl(),
+    }
+}
+
+// Two holdings of one footprint join their shares…
+theorem Access::of_join(s: SpanSet, q, r: Share): Access::of(s, q).join(Access::of(s, r)) ≈ Access::of(s, q.join(r)) {
+    λ x => match s.has(x) as λ v => Access::pick(v, q).join(Access::pick(v, r))
+            ≈ Access::pick(v, q.join(r)) {
+        True => q.join(r).same_refl(),
+        False => Share::none().none_join(),
+    }
+}
+
+// …so a view copied by halving its share recomposes to the view…
+theorem Access::view_halves(s: SpanSet, q: Share): Access::of(s, q.half()).join(Access::of(s, q.half())) ≈ Access::of(s, q) {
+    λ x => Share::same_trans(Access::of_join(s, q.half(), q.half(), x), Access::of_same(s, q.half().join(q.half()), q, q.halves(), x))
+}
+
+// …and the whole comes back from its halves.
+theorem Access::whole_of_halves(s: SpanSet):
+    Access::of(s, Share::whole().half()).join(Access::of(s, Share::whole().half())) ≈ Access::whole(s)
+{
+    Access::view_halves(s, Share::whole())
+}
+
+// ---------------------------------------------------------------------------
+// What composes
+
+
+theorem Access::pick_valid(a: Bool): (b: Bool) → (q, r: Share) → q.Valid() → r.Valid() →
+    (a.IsTrue() → b.IsTrue() → q.join(r).Valid()) → Access::pick(a, q).join(Access::pick(b, r)).Valid()
+{
+    match a {
+        True => λ b => match b {
+            True => λ q r vq vr both => both(trivial, trivial),
+            False => λ q r vq vr both => Share::valid_respects(Share::same_sym(q.join_none()), vq),
+        },
+        False => λ b q r vq vr both => match b as λ v => Access::pick(False, q).join(Access::pick(v, r)).Valid() {
+            True => Share::valid_respects(Share::same_sym(r.none_join()), vr),
+            False => Share::valid_none(),
+        },
+    }
+}
+
+theorem Access::pick_join(a: Bool): (b: Bool) → (q: Share) → (a.IsTrue() → b.IsTrue() → False) →
+    Access::pick(a, q).join(Access::pick(b, q)) ≈ Access::pick(a || b, q)
+{
+    match a {
+        True => λ b => match b {
+            True => λ q apart => false_elim(apart(trivial, trivial)),
+            False => λ q apart => q.join_none(),
+        },
+        False => λ b q apart => match b as λ v => Access::pick(False, q).join(Access::pick(v, q)) ≈ Access::pick(False || v, q) {
+            True => q.none_join(),
+            False => Share::none().none_join(),
+        },
+    }
+}
+
+// Holdings of disjoint footprints compose, whatever their shares.
+theorem Access::of_disjoint(s, t: SpanSet, q, r: Share, d: s.Disjoint(t), vq: q.Valid(), vr: r.Valid()):
+    Access::of(s, q).join(Access::of(t, r)).Valid()
+{
+    λ x => Access::pick_valid(s.has(x), t.has(x), q, r, vq, vr, λ hs ht => false_elim(d(x, hs, ht)))
+}
+
+// Views compose however they overlap, while their shares total at most one.
+theorem Access::views_compose(s, t: SpanSet, q, r: Share, total: q.join(r).Valid()):
+    Access::of(s, q).join(Access::of(t, r)).Valid()
+{
+    let vq: q.Valid() = q.valid_left(r, total);
+    let vr: r.Valid() = r.valid_left(q, Share::valid_respects(q.join_comm(r), total));
+    λ x => Access::pick_valid(s.has(x), t.has(x), q, r, vq, vr, λ hs ht => total)
+}
+
+// A whole and a positive share of one address do not compose: a store
+// cannot overlap a live frozen view, nor two owners one address.
+theorem Access::whole_overlap(s, t: SpanSet, q: Share, x: Nat, hs: s.has(x) = True, ht: t.has(x) = True, pos: 0 < q.amount):
+    ¬Access::whole(s).join(Access::of(t, q)).Valid()
+{
+    λ h => {
+        let at: (Access::pick(s.has(x), Share::whole()).join(Access::pick(t.has(x), q)).Valid()) = h(x);
+        let first: (Access::pick(True, Share::whole()).join(Access::pick(t.has(x), q)).Valid()) =
+            j(hs, λ v _ => Access::pick(v, Share::whole()).join(Access::pick(t.has(x), q)).Valid(), at);
+        let both: (Access::pick(True, Share::whole()).join(Access::pick(True, q)).Valid()) =
+            j(ht, λ v _ => Access::pick(True, Share::whole()).join(Access::pick(v, q)).Valid(), first);
+        q.whole_meets_share(pos, both)
+    }
+}
+
+theorem Access::wholes_overlap(s, t: SpanSet, x: Nat, hs: s.has(x) = True, ht: t.has(x) = True):
+    ¬Access::whole(s).join(Access::whole(t)).Valid()
+{
+    Access::whole_overlap(s, t, Share::whole(), x, hs, ht, omega)
+}
+
+// ---------------------------------------------------------------------------
+// Exclusive footprints are wholes
+
+// A footprint's holding: the whole of what it owns.
+fn Access::of_footprint(f: Footprint) → Access { Access::whole(f.spans) }
+
+// Footprints that compose map to wholes that compose, to the composite's
+// whole: the two algebras agree on owned memory.
+theorem Access::footprint_join(f, g: Footprint, h: f.join(g).Valid()):
+    Access::of_footprint(f).join(Access::of_footprint(g)) ≈ Access::of_footprint(f.join(g))
+{
+    let d = f.apart_of_valid(g, h);
+    λ x => {
+        let e: (Access::pick(f.spans.has(x), Share::whole()).join(Access::pick(g.spans.has(x), Share::whole()))
+            ≈ Access::pick(f.spans.has(x) || g.spans.has(x), Share::whole())) =
+            Access::pick_join(f.spans.has(x), g.spans.has(x), Share::whole(), λ hf hg => d(x, hf, hg));
+        j(sym(f.spans.union_has(g.spans, x)), λ v _ =>
+            Access::pick(f.spans.has(x), Share::whole()).join(Access::pick(g.spans.has(x), Share::whole())) ≈ Access::pick(v, Share::whole()), e)
+    }
+}
+
+theorem Access::footprint_valid(f, g: Footprint, h: f.join(g).Valid()):
+    Access::of_footprint(f).join(Access::of_footprint(g)).Valid()
+{
+    Access::of_disjoint(f.spans, g.spans, Share::whole(), Share::whole(), f.apart_of_valid(g, h), omega, omega)
+}

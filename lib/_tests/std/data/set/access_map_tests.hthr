@@ -1,0 +1,53 @@
+// Probes of `lib/std/data/set/access_map.hthr`: the three kinds of access of
+// docs/language/ownership-design.md §10.3 as holdings of one algebra. Two
+// frozen views of one buffer compose; a view and a store into its
+// footprint do not, while a store elsewhere does; a view copied twice
+// recomposes. Tests, not library: nothing outside lib/_tests imports this
+// module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import omega; import list; import rat; import span_set; import pcm; import pcm_share;
+import footprint; import access_map;
+
+fn buffer() → SpanSet { SpanSet::of(Span(0, 8)) }
+fn front() → SpanSet { SpanSet::of(Span(0, 4)) }
+fn back() → SpanSet { SpanSet::of(Span(4, 4)) }
+fn view() → Share { Share::whole().half() }
+
+// Two frozen views of the whole buffer compose (each a half).
+theorem two_views(): Access::of(buffer(), view()).join(Access::of(buffer(), view())).Valid() {
+    Access::views_compose(buffer(), buffer(), view(), view(), Share::whole().half_valid(omega))
+}
+
+// A store into the back half composes with a view of the front half.
+theorem view_front_store_back(): Access::of(front(), view()).join(Access::whole(back())).Valid() {
+    Access::of_disjoint(front(), back(), view(), Share::whole(),
+        λ x hs ht => Span::adjacent_disjoint(0, 4, 4, x,
+            j(SpanSet::of_has(Span(0, 4), x), λ v _ => v.IsTrue(), hs),
+            j(SpanSet::of_has(Span(4, 4), x), λ v _ => v.IsTrue(), ht)),
+        view().valid_sound(refl),
+        omega)
+}
+
+// Not: a store into the buffer while a view of its front is live.
+theorem store_under_view(): ¬Access::whole(buffer()).join(Access::of(front(), view())).Valid() {
+    Access::whole_overlap(buffer(), front(), view(), 2, refl, refl, omega)
+}
+
+// Not: two owners of the buffer.
+theorem two_owners(): ¬Access::whole(buffer()).join(Access::whole(buffer())).Valid() {
+    Access::wholes_overlap(buffer(), buffer(), 0, refl, refl)
+}
+
+// A view copied twice recomposes to the view, and the halves to the whole.
+theorem copy_twice(): Access::of(buffer(), view().half()).join(Access::of(buffer(), view().half())) ≈ Access::of(buffer(), view()) {
+    Access::view_halves(buffer(), view())
+}
+
+theorem back_to_whole(): Access::of(buffer(), view()).join(Access::of(buffer(), view())) ≈ Access::whole(buffer()) {
+    Access::whole_of_halves(buffer())
+}
+
+// Footprints map in as wholes: owners of the two halves compose in both
+// algebras.
+theorem halves_owned(): Access::of_footprint(Footprint::own(front())).join(Access::of_footprint(Footprint::own(back()))).Valid() {
+    Access::footprint_valid(Footprint::own(front()), Footprint::own(back()), Footprint::own(front()).join(Footprint::own(back())).valid_sound(refl))
+}
