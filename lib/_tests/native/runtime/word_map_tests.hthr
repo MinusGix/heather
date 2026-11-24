@@ -1,0 +1,37 @@
+// Conversions the word map's proof needed lemmas for
+// (issues/arithmetic-definition-opaque-at-open-arguments.md, items 2 and 3).
+// Tests, not library.
+import logic;
+import nat;
+import runtime_data;
+import word_map;
+
+// A wrapper that returns its probe's record field by field is the probe:
+// the kernel compares the pair with the probe's projections (Σ-η) before
+// unfolding the probe, which is a measured recursion at the literal 4.
+theorem probe_insert_is(m: WordMap, k, v: u64): WordMap::insert(m, k, v) = WordMap::insert_at(m, k, v, word_map_home(k), 4) { refl }
+
+theorem probe_remove_is(m: WordMap, k: u64): WordMap::remove(m, k) = WordMap::remove_at(m, k, word_map_home(k), 4) { refl }
+
+// Negative control: a pair whose second field is not the probe's is not
+// the probe, and η says so at its second field.
+// expect-error(kernel)
+theorem probe_insert_not(m: WordMap, k, v: u64): WordMap::insert(m, k, v) = Mutated(WordMap::insert_at(m, k, v, word_map_home(k), 4).after, 1) { refl }
+
+// A defined proposition against its unfolding, through a second definition
+// (`home`) and at a witness: converts by unfolding the newer head.
+fn probe_home(k: u64) → Nat { word_map_home(k).toNat() }
+
+fn ProbeBefore(k: u64, t, s: Nat) → Type { ((t + 4 - probe_home(k)) % 4) < ((s + 4 - probe_home(k)) % 4) }
+
+record SeenBefore(k: u64, t: Nat) { s: Nat, before: ProbeBefore(k, t, s) }
+
+theorem probe_seen(k: u64, t: Nat, found: Exists(λ (s: Nat) => ((t + 4 - word_map_home(k).toNat()) % 4) < ((s + 4 - word_map_home(k).toNat()) % 4))): SeenBefore(k, t) {
+    SeenBefore(found.witness, found.proof)
+}
+
+// Negative control: the proof is about the slots the other way round.
+// expect-error(mismatch)
+theorem probe_seen_reversed(k: u64, t: Nat, found: Exists(λ (s: Nat) => ((s + 4 - word_map_home(k).toNat()) % 4) < ((t + 4 - word_map_home(k).toNat()) % 4))): SeenBefore(k, t) {
+    SeenBefore(found.witness, found.proof)
+}

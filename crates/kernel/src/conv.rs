@@ -2135,14 +2135,26 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                     // may still arrive at (`Passed`): then this side first
                     // looks for one, a head at a time
                     // (`Conv::meet_on_the_way`).
+                    //
+                    // And unless the other side is a pair at a Σ (a record's
+                    // constructor): then η compares its fields with this
+                    // side's projections first, which meet a field the pair
+                    // spells as a projection of this very spine without
+                    // unfolding it (`Conv::eta_before_unfolding`).
                     (Some(_), None) => {
                         if self.meet_on_the_way(env, &wa, &mut passed_b, false)? {
+                            return Ok(TmProgress::Done);
+                        }
+                        if D::is_pair(&wb) && self.eta_before_unfolding(env, &wa, &wb, w)? {
                             return Ok(TmProgress::Done);
                         }
                         wa = self.delta_to_head_tm(env, wa)?;
                     }
                     (None, Some(_)) => {
                         if self.meet_on_the_way(env, &wb, &mut passed_a, true)? {
+                            return Ok(TmProgress::Done);
+                        }
+                        if D::is_pair(&wa) && self.eta_before_unfolding(env, &wa, &wb, w)? {
                             return Ok(TmProgress::Done);
                         }
                         wb = self.delta_to_head_tm(env, wb)?;
@@ -2221,6 +2233,34 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             return self.tm_nf(env, &wa, &wb, &w, l);
         }
         self.tm_nf(env, &wa, &wb, w, l)
+    }
+
+    /// Σ-η between a pair and a δ-stuck term, tried before the stuck side
+    /// is unfolded ([`Conv::tm_w`]'s headless-other-side arms). A wrapper
+    /// `f(x) = let r = g(x, 4); Mutated(r.after, r.value)` against `g(x, 4)`
+    /// meets field by field at `g(x, 4)`'s own spine, where unfolding `g`
+    /// first ran a measured recursion at its literal out of fuel
+    /// (issues/arithmetic-definition-opaque-at-open-arguments.md, item 3).
+    /// Only at a type whose view is a Σ: a vector (a `Vec` view) keeps its
+    /// own arm, so a machine word is never compared a component at a time
+    /// here. A strategy change with no semantic content: η is the rule the
+    /// Σ arm applies anyway once the stuck side is unfolded, and a failed
+    /// attempt falls through to that unfolding with
+    /// [`Conv::delta_lazy`]'s guard semantics (fuel spent, not refunded).
+    fn eta_before_unfolding(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, w: &D::Ty) -> R<bool> {
+        let unfolded;
+        let w = if D::delta_head_ty(self, env, w).is_some() {
+            let w = D::delta_ty(self, env, w)?;
+            unfolded = self.delta_to_head_ty(env, w)?;
+            &unfolded
+        } else {
+            w
+        };
+        let vw = D::view_ty(self, env, w);
+        if !matches!(vw, TyView::Sigma { .. }) {
+            return Ok(false);
+        }
+        Ok(self.delta_lazy(|c| c.tm_nf_sigma(env, a, b, &vw).map(drop))?.is_some())
     }
 
     /// `Γ ⊢ k ≈ k' : Nat @ 0` — the length/arity comparison the `Vec`, `Fin`
