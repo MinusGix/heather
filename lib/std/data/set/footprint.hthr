@@ -1,0 +1,218 @@
+// Exclusive ownership of footprints, as a separation algebra (`pcm`;
+// docs/library/separation-algebra-design.md §2, docs/language/ownership-design.md §10.3).
+//
+// A `Footprint` is a set of addresses held exclusively (`SpanSet`, by
+// number) and a flag that says whether two claims in it overlapped. Two
+// footprints compose to their union; the composite clashes when they
+// share an address, and it is valid when nothing clashed. So composition
+// is total and partiality is validity, as the class states it: the owned
+// footprints of two names, of two live paths, or of a callee's part and
+// the caller's rest compose exactly when they are disjoint
+// (`Footprint::own_valid`, `Footprint::own_disjoint`), and overlapping
+// claims do not (`Footprint::own_overlap`). Footprints are compared by
+// their members (`≈`), since a `SpanSet` is a list of spans.
+
+import logic;
+import bool;
+import nat;
+import omega;
+import relation;
+import relation_props;
+import algebra_rel;
+import dec_set;
+import span_set;
+import tactic;
+import set_tactic;
+import pcm;
+
+record Footprint { spans: SpanSet, clash: Bool }
+
+fn Footprint::Same(f, g: Footprint) → Type { (f.clash = g.clash) ∧ ((x: Nat) → f.spans.has(x) = g.spans.has(x)) }
+
+designation ≈ at Footprint := Footprint::Same
+
+fn Footprint::join(self f, g: Footprint) → Footprint {
+    Footprint(f.spans.union(g.spans), f.clash || g.clash || !f.spans.disjoint(g.spans))
+}
+
+// Nothing clashed: the law form, and its decision.
+fn Footprint::Valid(self f: Footprint) → Type { f.clash = False }
+
+fn Footprint::valid(self f: Footprint) → Bool { !f.clash }
+
+theorem Footprint::valid_sound(self f: Footprint, h: f.valid() = True): f.Valid() {
+    match e: f.clash { False => refl, True => absurd(j(e, λ v _ => !v = True, h)) }
+}
+
+theorem Footprint::valid_complete(self f: Footprint, h: f.Valid()): f.valid() = True { j(sym(h), λ v _ => !v = True, refl) }
+
+// Owning a set of addresses, and owning nothing.
+fn Footprint::own(s: SpanSet) → Footprint { Footprint(s, False) }
+
+fn Footprint::none() → Footprint { Footprint::own(SpanSet::empty()) }
+
+// ---------------------------------------------------------------------------
+// The laws
+
+theorem Footprint::same_refl(self f: Footprint): f ≈ f { And(refl, λ x => refl) }
+
+theorem Footprint::same_sym({f, g: Footprint}, h: f ≈ g): g ≈ f { And(sym(h.left), λ x => sym(h.right(x))) }
+
+theorem Footprint::same_trans({f, g, k: Footprint}, h1: f ≈ g, h2: g ≈ k): f ≈ k {
+    And(trans(h1.left, h2.left), λ x => trans(h1.right(x), h2.right(x)))
+}
+
+// The clash bits, as identities of Booleans; the footprint laws below
+// instantiate them at the pairs' disjointness verdicts.
+theorem Footprint::regroup_bits(fc, gc, kc, a, b, c: Bool):
+    (((fc || gc) || !a) || kc) || !(b && c) = (fc || ((gc || kc) || !c)) || !(a && b)
+{
+    Bool::eq_of_is_true_iff((((fc || gc) || !a) || kc) || !(b && c), (fc || ((gc || kc) || !c)) || !(a && b),
+        λ h => omega(h), λ h => omega(h))
+}
+
+theorem Footprint::swap_bits(fc, gc, a: Bool): (fc || gc) || !a = (gc || fc) || !a {
+    Bool::eq_of_is_true_iff((fc || gc) || !a, (gc || fc) || !a, λ h => omega(h), λ h => omega(h))
+}
+
+theorem Footprint::unit_bits(c: Bool): (False || c) || !True = c { match c { False => refl, True => refl } }
+
+theorem Footprint::first_false(a: Bool): (b, c: Bool) → (a || b) || c = False → a = False {
+    match a {
+        False => λ b c h => refl,
+        True => λ b c h => absurd(h),
+    }
+}
+
+theorem Footprint::or_true(a: Bool): a || True = True { match a { False => refl, True => refl } }
+
+// Two parts that did not clash were disjoint, and two disjoint owned
+// parts do not clash.
+theorem Footprint::apart_bit(d: Bool): (a, b: Bool) → (a || b) || !d = False → d.IsTrue() {
+    match d {
+        False => λ a b h => absurd(trans(sym(Footprint::or_true(a || b)), h)),
+        True => λ a b h => trivial,
+    }
+}
+
+theorem Footprint::clear_bits(d: Bool): d.IsTrue() → (False || False) || !d = False {
+    match d { False => λ h => false_elim(h), True => λ h => refl }
+}
+
+theorem Footprint::join_assoc(self f, g, k: Footprint): f.join(g).join(k) ≈ f.join(g.join(k)) {
+    let e1: (f.spans.union(g.spans).disjoint(k.spans) = f.spans.disjoint(k.spans) && g.spans.disjoint(k.spans)) =
+        f.spans.union_disjoint(g.spans, k.spans);
+    let e2: (f.spans.disjoint(g.spans.union(k.spans)) = f.spans.disjoint(g.spans) && f.spans.disjoint(k.spans)) =
+        f.spans.disjoint_union(g.spans, k.spans);
+    let bits = Footprint::regroup_bits(f.clash, g.clash, k.clash, f.spans.disjoint(g.spans), f.spans.disjoint(k.spans), g.spans.disjoint(k.spans));
+    let clash: ((((f.clash || g.clash) || !f.spans.disjoint(g.spans)) || k.clash) || !f.spans.union(g.spans).disjoint(k.spans)
+        = (f.clash || ((g.clash || k.clash) || !g.spans.disjoint(k.spans))) || !f.spans.disjoint(g.spans.union(k.spans))) =
+        rewrite(e1, e2, bits);
+    And(clash, λ x => {
+        let e: (f.spans.union(g.spans).union(k.spans).has(x) = f.spans.union(g.spans.union(k.spans)).has(x)) = by sets();
+        e
+    })
+}
+
+theorem Footprint::join_comm(self f, g: Footprint): f.join(g) ≈ g.join(f) {
+    let e: (f.spans.disjoint(g.spans) = g.spans.disjoint(f.spans)) = f.spans.disjoint_comm(g.spans);
+    let clash: ((f.clash || g.clash) || !f.spans.disjoint(g.spans) = (g.clash || f.clash) || !g.spans.disjoint(f.spans)) =
+        rewrite(e, Footprint::swap_bits(f.clash, g.clash, g.spans.disjoint(f.spans)));
+    And(clash, λ x => {
+        let e: (f.spans.union(g.spans).has(x) = g.spans.union(f.spans).has(x)) = by sets();
+        e
+    })
+}
+
+theorem Footprint::none_join(self f: Footprint): Footprint::none().join(f) ≈ f {
+    And(Footprint::unit_bits(f.clash), λ x => refl)
+}
+
+theorem Footprint::join_none(self f: Footprint): f.join(Footprint::none()) ≈ f {
+    Footprint::same_trans(Footprint::join_comm(f, Footprint::none()), Footprint::none_join(f))
+}
+
+theorem Footprint::join_respects({f, f2, g, g2: Footprint}, hf: f ≈ f2, hg: g ≈ g2): f.join(g) ≈ f2.join(g2) {
+    let d: (f.spans.disjoint(g.spans) = f2.spans.disjoint(g2.spans)) = trans(
+        f.spans.disjoint_same(f2.spans, g.spans, hf.right), trans(
+        f2.spans.disjoint_comm(g.spans), trans(
+        g.spans.disjoint_same(g2.spans, f2.spans, hg.right),
+        g2.spans.disjoint_comm(f2.spans))));
+    let fc: (f.clash = f2.clash) = hf.left;
+    let gc: (g.clash = g2.clash) = hg.left;
+    let clash: ((f.clash || g.clash) || !f.spans.disjoint(g.spans) = (f2.clash || g2.clash) || !f2.spans.disjoint(g2.spans)) =
+        rewrite(fc, gc, d, refl);
+    And(clash,
+        λ x => {
+            let a: (f.spans.has(x) = f2.spans.has(x)) = hf.right(x);
+            let b: (g.spans.has(x) = g2.spans.has(x)) = hg.right(x);
+            trans(f.spans.union_has(g.spans, x), trans(Bool::or_cong(a, b), sym(f2.spans.union_has(g2.spans, x))))
+        })
+}
+
+theorem Footprint::valid_none(): Footprint::none().Valid() { refl }
+
+theorem Footprint::valid_left(self f, g: Footprint, h: f.join(g).Valid()): f.Valid() {
+    Footprint::first_false(f.clash, g.clash, !f.spans.disjoint(g.spans), h)
+}
+
+theorem Footprint::valid_respects({f, g: Footprint}, e: f ≈ g, h: f.Valid()): g.Valid() { trans(sym(e.left), h) }
+
+instance Pcm<Footprint>(Footprint::Same, Footprint::join, Footprint::Valid) {
+    rel_refl := λ f => f.same_refl(),
+    rel_sym := λ f g h => Footprint::same_sym(h),
+    rel_trans := λ f g k h1 h2 => Footprint::same_trans(h1, h2),
+    respects2 := λ f f2 hf g g2 hg => Footprint::join_respects(hf, hg),
+    assoc := Footprint::join_assoc,
+    unit := Footprint::none(),
+    unit_l := Footprint::none_join,
+    unit_r := Footprint::join_none,
+    comm := Footprint::join_comm,
+    valid_unit := Footprint::valid_none(),
+    valid_l := Footprint::valid_left,
+    valid_respects := λ f g e h => Footprint::valid_respects(e, h),
+}
+
+// ---------------------------------------------------------------------------
+// Owned footprints compose exactly when they are disjoint
+
+// A valid composite's parts share no address: what an owner may assume of
+// any frame beside it.
+theorem Footprint::apart_of_valid(self f, g: Footprint, h: f.join(g).Valid()): f.spans.Disjoint(g.spans) {
+    f.spans.disjoint_sound(g.spans, Footprint::apart_bit(f.spans.disjoint(g.spans), f.clash, g.clash, h))
+}
+
+theorem Footprint::own_valid(s, t: SpanSet, d: s.Disjoint(t)): Footprint::own(s).join(Footprint::own(t)).Valid() {
+    let decided: (s.disjoint(t).IsTrue()) = s.disjoint_complete(t, d);
+    Footprint::clear_bits(s.disjoint(t), decided)
+}
+
+theorem Footprint::own_disjoint(s, t: SpanSet, h: Footprint::own(s).join(Footprint::own(t)).Valid()): s.Disjoint(t) {
+    Footprint::own(s).apart_of_valid(Footprint::own(t), h)
+}
+
+// Two owned footprints compose to the owned union.
+theorem Footprint::own_join(s, t: SpanSet, d: s.Disjoint(t)): Footprint::own(s).join(Footprint::own(t)) ≈ Footprint::own(s.union(t)) {
+    And(Footprint::own_valid(s, t, d), λ x => refl)
+}
+
+// Two claims on one address do not compose.
+theorem Footprint::own_overlap(s, t: SpanSet, x: Nat, hs: s.has(x).IsTrue(), ht: t.has(x).IsTrue()):
+    ¬Footprint::own(s).join(Footprint::own(t)).Valid()
+{
+    λ h => Footprint::own_disjoint(s, t, h, x, hs, ht)
+}
+
+// A footprint splits along any partition: the callee's part and the
+// caller's rest compose back to the whole.
+theorem Footprint::own_split(s, t: SpanSet): Footprint::own(s.inter(t)).join(Footprint::own(s.minus(t))) ≈ Footprint::own(s) {
+    let d: (s.inter(t).Disjoint(s.minus(t))) = λ x hi hm => {
+        let a: ((s.has(x) && t.has(x)).IsTrue()) = j(s.inter_has(t, x), λ v _ => v.IsTrue(), hi);
+        let b: ((s.has(x) && !t.has(x)).IsTrue()) = j(s.minus_has(t, x), λ v _ => v.IsTrue(), hm);
+        omega(a, b)
+    };
+    And(Footprint::own_valid(s.inter(t), s.minus(t), d), λ x => {
+        let e: (s.inter(t).union(s.minus(t)).has(x) = s.has(x)) = by sets();
+        e
+    })
+}

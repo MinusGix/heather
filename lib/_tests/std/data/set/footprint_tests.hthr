@@ -1,0 +1,44 @@
+// Probes of `lib/std/data/set/footprint.hthr`: closed verdicts for owned
+// spans that meet or do not, the laws at literal footprints, and the `¬`
+// theorems for the readings a client might expect (two adjacent-looking
+// spans that overlap by one compose; a clash is forgotten by composing
+// further). Tests, not library: nothing outside lib/_tests imports this
+// module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import omega; import list; import span_set; import pcm; import footprint;
+
+fn low() → Footprint { Footprint::own(SpanSet::of(Span(0, 4))) }
+fn high() → Footprint { Footprint::own(SpanSet::of(Span(4, 4))) }
+fn middle() → Footprint { Footprint::own(SpanSet::of(Span(3, 2))) }
+
+// Closed verdicts evaluate.
+theorem adjacent_compose(): low().join(high()).valid() = True { refl }
+theorem overlap_clashes(): low().join(middle()).valid() = False { refl }
+theorem none_composes(): Footprint::none().join(low()).valid() = True { refl }
+
+// The decided verdict is the law.
+theorem adjacent_valid(): low().join(high()).Valid() { low().join(high()).valid_sound(refl) }
+
+// Open spans: disjoint ones compose, to the owned union.
+theorem split_compose(a, k, l: Nat): Footprint::own(SpanSet::of(Span(a, k))).join(Footprint::own(SpanSet::of(Span(a + k, l)))).Valid() {
+    Footprint::own_valid(SpanSet::of(Span(a, k)), SpanSet::of(Span(a + k, l)), λ x hs ht => {
+        let s: (Span(a, k).has(x).IsTrue()) = j(SpanSet::of_has(Span(a, k), x), λ v _ => v.IsTrue(), hs);
+        let t: (Span(a + k, l).has(x).IsTrue()) = j(SpanSet::of_has(Span(a + k, l), x), λ v _ => v.IsTrue(), ht);
+        Span::adjacent_disjoint(a, k, l, x, s, t)
+    })
+}
+
+// A footprint split by a cut: the part and the rest compose back.
+theorem cut_compose(s, t: SpanSet): Footprint::own(s.inter(t)).join(Footprint::own(s.minus(t))) ≈ Footprint::own(s) {
+    Footprint::own_split(s, t)
+}
+
+// Not: spans overlapping by one address compose.
+theorem overlap_by_one(): ¬low().join(Footprint::own(SpanSet::of(Span(3, 4)))).Valid() {
+    Footprint::own_overlap(SpanSet::of(Span(0, 4)), SpanSet::of(Span(3, 4)), 3, trivial, trivial)
+}
+
+// Not: a clash is forgotten when the composite composes further.
+theorem clash_stays(): ¬low().join(middle()).join(Footprint::none()).Valid() {
+    λ h => absurd(trans(sym(overlap_clashes()), Footprint::valid_complete(low().join(middle()),
+        Footprint::valid_left(low().join(middle()), Footprint::none(), h))))
+}
