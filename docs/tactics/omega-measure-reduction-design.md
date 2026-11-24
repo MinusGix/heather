@@ -1023,7 +1023,16 @@ Two things changed:
   again), and the word map's lemmas over five remainders got several times
   slower. It was withdrawn.
 
-Left, in the order the measurements point at: rows sized by the atoms the
+What the context still changes besides width: the subtraction split
+(§16) takes the facts newest first, up to `SUB_SPLIT_LIMIT`, whatever atoms
+they share with the goal. Two of the word map's one-off distance steps,
+written inline in a context of `ShiftInv`'s distances, spent the splits on
+facts over other slots and got stuck; as lemmas over bare numbers they
+close. A split ordered by connection to the goal (the relevance layers'
+reach) would let them move inline.
+
+Left, in the order the measurements point at: the split order above;
+rows sized by the atoms the
 refutation used rather than every atom reflected (`issues/bv-omega-check-cost.md`
 cost 1, now `omega`'s own), and a cheaper certificate for a CutSat leaf.
 Whether a narrowed call reads only its listed facts

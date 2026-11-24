@@ -850,6 +850,14 @@ theorem WordMap::slot_dist(j, i: u64, j4: j.toNat() < 4, i4: i.toNat() < 4): ((j
 theorem WordMap::moved_path(h, i, j, t: Nat, h4: h < 4, i4: i < 4, j4: j < 4, t4: t < 4, ij: ¬(i = j),
     moves: WordMap::dist(i, j) <= WordMap::dist(h, j), before: WordMap::dist(h, t) < WordMap::dist(h, i)): WordMap::dist(h, t) < WordMap::dist(h, j) { omega }
 
+// Its slot `j`, the new hole, is not on its new probe.
+theorem WordMap::moved_clear(h, i, j: Nat, h4: h < 4, i4: i < 4, j4: j < 4, ij: ¬(i = j),
+    moves: WordMap::dist(i, j) <= WordMap::dist(h, j), before: WordMap::dist(h, j) < WordMap::dist(h, i)): False { omega }
+
+// An entry that stays did not pass the hole.
+theorem WordMap::stays_clear(h, i, j: Nat, h4: h < 4, i4: i < 4, j4: j < 4,
+    stays: WordMap::dist(h, j) < WordMap::dist(i, j), before: WordMap::dist(h, i) < WordMap::dist(h, j)): False { omega }
+
 // Counting from the removed slot `i0`: a probe that passes `j` to reach a
 // slot counted before `j` passes `z`, counted after it.
 theorem WordMap::wraps_past(i0, h, j, s, z: Nat, i04: i0 < 4, h4: h < 4, j4: j < 4, s4: s < 4, z4: z < 4,
@@ -961,8 +969,7 @@ theorem WordMap::shift_skip(o: WordMap, k: u64, i0, z: Nat, m: WordMap, i, j, l:
                 let xj: (m.key(j) = x) = trans(cong_fn(λ (q: Nat) => m.key(q), sym(sj)), a);
                 let at_j = j(sym(xj), λ y _ => ((i + 4 - word_map_home(y).toNat()) % 4) < ((s + 4 - word_map_home(y).toNat()) % 4), before);
                 let at_jj = j(sj, λ q _ => ((i + 4 - word_map_home(m.key(j)).toNat()) % 4) < ((q + 4 - word_map_home(m.key(j)).toNat()) % 4), at_j);
-                // An entry that stays did not pass the hole.
-                false_elim(omega(word_map_home_below(m.key(j)), st.i4, st.j4, stays, at_jj))
+                false_elim(WordMap::stays_clear(word_map_home(m.key(j)).toNat(), i, j, word_map_home_below(m.key(j)), st.i4, st.j4, stays, at_jj))
             },
             Inr(other) => omega(st.i04, s4, st.j4, cn, other, st.cross(s, x, s4, si, a, xnz, before)),
         },
@@ -1011,8 +1018,7 @@ theorem WordMap::shift_move(o: WordMap, k: u64, i0, z: Nat, m: WordMap, i, j, l:
                 let xj: (m.key(j) = x) = trans(sym(ni), trans(cong_fn(λ (q: Nat) => n.key(q), sym(si)), a));
                 let at_i = j(si, λ q _ => ((j + 4 - word_map_home(x).toNat()) % 4) < ((q + 4 - word_map_home(x).toNat()) % 4), before);
                 let at_h = j(sym(xj), λ y _ => ((j + 4 - word_map_home(y).toNat()) % 4) < ((i + 4 - word_map_home(y).toNat()) % 4), at_i);
-                // Its slot `j`, the new hole, is not on its new probe.
-                false_elim(omega(h4, st.i4, st.j4, ij, moves, at_h))
+                false_elim(WordMap::moved_clear(h, i, j, h4, st.i4, st.j4, ij, moves, at_h))
             },
             Inr(sni) => match Nat::lt_or_ge((s + 4 - i0) % 4, (jn + 4 - i0) % 4) {
                 Inl(lt) => {

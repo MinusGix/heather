@@ -198,12 +198,15 @@ should read is `docs/library/program-and-proof-style.md`.
 - **It reads every hypothesis in scope**, and each atom a fact brings
   widens every row of the certificate. A written `omega`'s proof is lifted
   into a lemma of its own at the gate (design §27), so an inline call is no
-  longer re-checked and substituted with the body under every binder: write
-  the arithmetic where it is used. What still costs is the certificate's
-  width: a context with many unrelated facts over the same atoms, or `Rat`
-  facts (unfolded into Int cross products), still pays for them, and a
-  lemma stated over bare numbers is still the cheaper form for a step used
-  many times. `omega(h, …)` names the load-bearing facts (an `Exists`'s
+  longer re-checked and substituted with the body under every binder, and
+  a one-off step can be written where it is used. What still costs is the
+  certificate's width: a context with many unrelated facts over the same
+  atoms, or `Rat` facts (unfolded into Int cross products), still pays for
+  them. And the truncated-subtraction split (design §16) takes facts
+  newest first, at most six deep: in a context holding many distances an
+  inline call can spend them on unrelated facts and get stuck where the
+  same facts as a lemma close. State such a step as a lemma over bare
+  numbers, as `moved_clear` in `word_map_laws.hthr` is. `omega(h, …)` names the load-bearing facts (an `Exists`'s
   `.proof` is read only when named); whether it should read *only* those is
   [[omega-listed-facts-only]], an open decision.
 - **Remainders by a literal with subtractions inside are its costly
