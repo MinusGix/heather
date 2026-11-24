@@ -482,16 +482,29 @@ theorem port_arena_alloc_program(): program_run(Arena::alloc::program, [PORT_ARE
 
 // A window's element is read and stored under found proofs that it is
 // inside the window and the window inside the heap (`Arena::read`,
-// `Arena::store`), with no junk default past the count. As a `runtime fn`
-// that takes the proofs it is refused: a function of a laid record does not
-// take a proof parameter yet (runtime-record-function-limits). Compiled code
-// reads a window under its own tests, as `push_in` and `copy_at` do. The
-// stale window kept past a reset is the negative control of
-// `arena_laws_tests.hthr`, with an index read without a test.
-// expect-error: a type with no runtime layout
-runtime fn Arena::port_read(self a: Arena, base, count, i: u64, inside: ∥i.toNat() < count.toNat()∥ := bv_omega,
-    fits: ∥base.toNat() + count.toNat() <= 16∥ := bv_omega) → u64 {
-    a.heap.at(base + i)
+// `Arena::store`), with no junk default past the count. The proofs are
+// erased (issues/runtime-erased-parameters.md): the code takes the span,
+// its length word and the words, and nothing for them. The vector of two
+// has its window at 3: element 1 is 8, and a store of 5 at element 0
+// answers the 7 it replaced. The stale window kept past a reset is the
+// negative control of `arena_laws_tests.hthr`, with an index read without
+// a test.
+fn arena_read_code() → (List<u8> → u64 → u64 → u64 → u64 → Mutated<List<u8>, u64>) { Arena::read::bytes }
+
+theorem port_arena_window_runs(): Arena::read::bytes(PORT_VEC_TWO(), 144, 3, 2, 1).value = 8 ∧
+    Arena::store::bytes(PORT_VEC_TWO(), 144, 3, 2, 0, 5).value = 7 ∧
+    Arena::read::bytes(Arena::store::bytes(PORT_VEC_TWO(), 144, 3, 2, 0, 5).after, 144, 3, 2, 0).value = 5 {
+    ⟨refl, ⟨refl, refl⟩⟩
+}
+
+// What they publish, at every arena, window and pair of proofs.
+theorem port_arena_window_held(own: List<u8>, a: Arena, length, base, count, i, x: u64, inside: ∥i.toNat() < count.toNat()∥,
+    fits: ∥base.toNat() + count.toNat() <= 16∥, holds: rt_held::Stored::Holds(Arena::stored(), own, length, a)):
+    Arena::read(a, base, count, i, inside := inside, fits := fits) = Arena::read::bytes(own, length, base, count, i).value ∧
+    rt_held::Stored::Holds(Arena::stored(), Arena::store::bytes(own, length, base, count, i, x).after, length,
+        Arena::store(a, base, count, i, x, inside := inside, fits := fits).after) {
+    ⟨Arena::read::runs_held(own, a, length, base, count, i, inside, fits, holds).value,
+        Arena::store::runs_held(own, a, length, base, count, i, x, inside, fits, holds).holds⟩
 }
 
 // What it publishes, at every arena the span holds.
