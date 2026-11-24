@@ -105,7 +105,7 @@ fn Heap::read(self h: Heap, w: Window, i: u64, valid: h.Valid(w) := known, insid
 }
 
 fn Heap::store(self h: Heap, w: Window, i, x: u64, valid: h.Valid(w) := known, inside: ∥i.toNat() < w.count.toNat()∥ := bv_omega) → Heap {
-    Heap(Arena::store(h.arena, w.base, w.count, i, x, inside := inside, fits := squash(h.fits(w, valid))), h.claims,
+    Heap(Arena::store(h.arena, w.base, w.count, i, x, inside := inside, fits := squash(h.fits(w, valid))).after, h.claims,
         HeapInv(h.ok.limit, h.ok.top, h.ok.below, h.ok.apart))
 }
 
