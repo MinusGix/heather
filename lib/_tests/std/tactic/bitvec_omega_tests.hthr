@@ -3,7 +3,7 @@
 // back to it over a word measure (issues/decreases-word-measures-by-hand.md).
 // Tests, not library: nothing outside lib/_tests imports this module
 // (docs/test-value-audit.md §4.5).
-import logic; import bool; import nat; import int; import omega; import bitvec; import bitvec_nat; import bitvec_omega; import bitvec_shift_nat; import list; import loop;
+import logic; import bool; import nat; import int; import omega; import bitvec; import bitvec_nat; import bitvec_omega; import bitvec_shift_nat; import bitvec_div; import list; import loop;
 
 // ---- The test, read from the context as it is written ----
 
@@ -384,6 +384,47 @@ theorem halving_steps_lit(): halving_steps(0, 8) = 4 { refl }
 // Negative control: at zero the half is not smaller.
 // expect-error: got stuck
 theorem shr_smaller_wrong(x: BitVec(64)): x >> 1 < x { bv_omega }
+
+// ---- A remainder and a quotient are known by their laws ----
+
+// `x % d` and `x / d` are atoms with facts beside them (`bitvec_div`'s
+// `toNat_urem_*`, `toNat_udiv_*`): a hash table's slot `hash % 8` is below
+// the capacity with nothing in scope, the literal divisor read as its value.
+theorem rem_lit(k: u64): (k % 8).toNat() < 8 { bv_omega }
+theorem rem_lit_word(k: u64): k % 8 < 8 { bv_omega }
+theorem rem_lit_next(k: u64): (k % 8 + 1).toNat() <= 8 { bv_omega }
+theorem rem_lit_of_sum(a, b: u64): ((a + b) % 16).toNat() < 16 { bv_omega }
+// The remainder is at most the dividend, whatever the divisor.
+theorem rem_le(k, n: u64): k % n <= k { bv_omega }
+// A divisor of run-time value, under the test that puts it on the path:
+// `0 < n` or `n ≠ 0` as the proposition, or over its value.
+theorem rem_by_pos(k, n: u64, h: 0 < n): k % n < n { bv_omega }
+theorem rem_by_ne(k, n: u64, h: n ≠ 0): k % n < n { bv_omega }
+theorem rem_by_pos_nat(k, n: u64, h: 0 < n.toNat()): (k % n).toNat() < n.toNat() { bv_omega }
+fn rem_by_test(k, n: u64) → Bool { if h: 0 < n { let below: ((k % n).toNat() < n.toNat()) = bv_omega; True } else { False } }
+// An open width.
+theorem rem_open(w: Nat, k, n: BitVec(w), h: 0 < n): k % n < n { bv_omega }
+// The quotient: at most the dividend away from a zero divisor, and over a
+// literal divisor the two bounds of `x >> k`, with the link `x = q·c + r`
+// when the remainder is here too.
+theorem div_lit_le(k: u64): k / 8 <= k { bv_omega }
+theorem div_by_pos_le(k, n: u64, h: 0 < n): k / n <= k { bv_omega }
+theorem div_lit_scaled(k: u64): (k / 8).toNat() * 8 <= k.toNat() { bv_omega }
+theorem div_lit_above(k: u64): k.toNat() < (k / 8).toNat() * 8 + 8 { bv_omega }
+theorem div_rem_link(k: u64): (k / 8).toNat() * 8 + (k % 8).toNat() = k.toNat() { bv_omega }
+theorem div_of_rem(k: u64): (k % 64) / 8 < 8 { bv_omega }
+
+// Negative controls: by zero the remainder is the dividend and the
+// quotient all ones, so neither bound holds with nothing known of `n`.
+// expect-error: got stuck
+theorem rem_by_unknown(k, n: u64): k % n < n { bv_omega }
+// expect-error: got stuck
+theorem div_by_unknown(k, n: u64): k / n <= k { bv_omega }
+// The remainder can reach `c - 1`, and the quotient's product falls short.
+// expect-error: got stuck
+theorem rem_lit_too_tight(k: u64): (k % 8).toNat() < 7 { bv_omega }
+// expect-error: got stuck
+theorem div_lit_not_exact(k: u64): (k / 8).toNat() * 8 = k.toNat() { bv_omega }
 
 // ---- `omega` reads a word's comparison bit as the comparison ----
 // (issues/omega-if-bit-word-comparison.md). An `if x < y` branch that does
