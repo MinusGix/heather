@@ -11,3 +11,5 @@
 # the index is generated on demand and deliberately not tracked
 # (issues/README.md).
 /issues/INDEX.md
+
+/.claude
