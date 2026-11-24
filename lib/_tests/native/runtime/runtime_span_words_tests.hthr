@@ -1,0 +1,149 @@
+// Probes of a function over a span, a `Bytes(n)` or a laid record that
+// answers several words (docs/native/runtime-fn-setups-design.md §16.21):
+// a record of 64-bit words, returned in its fields' words, and an enum
+// whose constructors carry 64-bit words, returned as its tag word and its
+// payload's slots. Tests, not library: nothing imports this module.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import algebra;
+import omega;
+import vector;
+import bitvec_bytes;
+import nat_map;
+import list_window;
+import layout;
+import stored;
+import part;
+import laid;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import rt_file_reflect;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_run;
+import function_ir_writes;
+import function_ir_link;
+import function_ir_placeless;
+import function_ir_lower;
+import function_ir_lower_calls;
+import x86_64_asm;
+import runtime;
+import runtime_file;
+import stored_words;
+import stored_accessor;
+import rt_held;
+import rt_held_fields;
+import rt_held_reflect;
+import bytes;
+import rt_bytes;
+import rt_bytes_loop;
+
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+
+record Pair2 { lo: u64, hi: u64 }
+
+inductive Got { Found(at: u64), Missing }
+
+// ---------------------------------------------------------------------------
+// Over a span
+
+runtime fn List::poke_pair(mut self span: List<BitVec(8)>, length, i, v: BitVec(64)) → Pair2 {
+    span.put_within(length, i, v.truncate(8, 56));
+    Pair2(i, v)
+}
+
+theorem poke_pair_runs(): program_run(List::poke_pair::program, [[b(97), b(98), b(99)], [b(7)]], 0, [w(4096), w(3), w(1), w(88)]) =
+    Ending(w(1), [[b(97), b(88), b(99)], [b(7)]], rest := [w(88)]) { refl }
+
+runtime fn List::find_got(mut self span: List<BitVec(8)>, length, i: BitVec(64)) → Got {
+    if i.unsigned_lt_bit(length) { Found(i + 1) } else { Missing }
+}
+
+theorem find_got_runs(): program_run(List::find_got::program, [[b(97), b(98)]], 0, [w(4096), w(2), w(1)]) =
+    Ending(w(0), [[b(97), b(98)]], rest := [w(2)]) { refl }
+
+// What is published, at every file: the code's first word is the record's
+// first field, its words past it the rest, and its span the function's.
+theorem poke_pair_words(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, place, length, i, v: BitVec(64)):
+    program_run(List::poke_pair::program, Cons(span, rest), 0, [place, length, i, v]) =
+        Ending(List::poke_pair(span, length, i, v).value.lo, Cons(List::poke_pair(span, length, i, v).after, rest),
+            rest := [List::poke_pair(span, length, i, v).value.hi]) {
+    List::poke_pair::runs_over(span, rest, place, length, i, v)
+}
+
+// ---------------------------------------------------------------------------
+// A laid record
+
+laid record Cell2 { top: u64, limit: u64 }
+
+runtime fn Cell2::take(mut self c: Cell2, size: u64) → Got {
+    if fits: c.top <= c.limit ∧ size <= c.limit - c.top {
+        let base = c.top;
+        c.top := c.top + size;
+        Found(base)
+    } else { Missing }
+}
+
+runtime fn Cell2::span(self c: Cell2) → Mutated<Cell2, Pair2> { Mutated(c, Pair2(c.top, c.limit)) }
+
+// Taken at `top = 1, limit = 5`: 3 fits, the tag 0 and the base 1.
+fn CELL() → List<u8> { [1, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0] }
+
+theorem cell_take_runs(): Cell2::take::bytes(CELL(), 16, 3).value = Found(1) ∧
+    Cell2::take::bytes(CELL(), 16, 3).after.take(8) = [4, 0, 0, 0, 0, 0, 0, 0] ∧
+    Cell2::take::bytes(CELL(), 16, 5) = Mutated(CELL(), Missing) {
+    ⟨refl, ⟨refl, refl⟩⟩
+}
+
+// The program's root is its last function, after the accessors it calls.
+theorem cell_take_program(): program_run(Cell2::take::program, [CELL()], 4, [w(4096), w(16), w(3)]) =
+        Ending(w(0), [[4, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0]], rest := [w(1)]) ∧
+    program_run(Cell2::take::program, [CELL()], 4, [w(4096), w(16), w(5)]) = Ending(w(1), [CELL()], rest := [w(0)]) {
+    ⟨refl, refl⟩
+}
+
+// Stated at every span, as the code's words.
+theorem cell_take_over(span: List<u8>, rest: List<List<u8>>, place, length, size: u64):
+    program_run(Cell2::take::program, Cons(span, rest), 4, [place, length, size]) =
+        FTm::ended_all(Cell2::take::world.tys, Enum(0), rest, Cell2::take::bytes(span, length, size)) {
+    Cell2::take::runs_over(span, rest, place, length, size)
+}
+
+// What is published, at every record the span holds: the outcome is the
+// function's, and the span holds the record it leaves.
+theorem cell_take_held(own: List<u8>, c: Cell2, length, size: u64, holds: rt_held::Stored::Holds(Cell2::stored(), own, length, c)):
+    Cell2::take(c, size).value = Cell2::take::bytes(own, length, size).value ∧
+    rt_held::Stored::Holds(Cell2::stored(), Cell2::take::bytes(own, length, size).after, length, Cell2::take(c, size).after) {
+    let ran = Cell2::take::runs_held(own, c, length, size, holds);
+    ⟨ran.value, ran.holds⟩
+}
+
+theorem cell_span_held(own: List<u8>, c: Cell2, length: u64, holds: rt_held::Stored::Holds(Cell2::stored(), own, length, c)):
+    Cell2::span(c).value = Cell2::span::bytes(own, length).value {
+    Cell2::span::runs_held(own, c, length, holds).value
+}
+
+// ---------------------------------------------------------------------------
+// A `Bytes(n)`
+
+runtime fn Bytes::ends({n: u64}, self s: Bytes(n), inside: ∥1 < s.len()∥ := bv_omega) → Pair2 { Pair2(↑s[0], ↑s[1]) }
+
+theorem ends_runs(): Bytes::ends::bytes([b(3), b(9)], w(2)).value = Pair2(w(3), w(9)) { refl }
