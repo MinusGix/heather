@@ -20,10 +20,11 @@ From the repository root, link the folder into VS Code's extensions and
 reload the window:
 
 ```sh
-ln -s "$PWD/editors/vscode" ~/.vscode/extensions/heather
+ln -s "$PWD/editors/vscode" ~/.vscode/extensions/heather.heather-0.1.0
 ```
 
-(For VSCodium the directory is `~/.vscode-oss/extensions`.) To build a
+Forks keep their own directory: `~/.vscode-oss/extensions` for VSCodium,
+`~/.antigravity-ide/extensions` for Antigravity. To build a
 `.vsix` instead: `cd editors/vscode && npx @vscode/vsce package`.
 
 ## Checking a grammar change
