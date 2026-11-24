@@ -143,44 +143,58 @@ fn Grant::window_or(self g: Grant, d: Window) → Window { match g { Granted(w) 
 
 fn Heap::claimed(self h: Heap, base, size: u64) → Mutated<Store<Claim>, Key> { Store::alloc(h.claims, Claim(base.toNat(), size.toNat())) }
 
+// A claim of `size` words granted at the top, the top moved past it:
+// the invariant holds of the arena after and the claims with it added.
+theorem Heap::granted_inv(a, b: Arena, claims: Store<Claim>, size: Nat, inv: HeapInv(a, claims), lim: b.limit = a.limit,
+    moved: b.top.toNat() = a.top.toNat() + size, room: a.top.toNat() + size <= a.limit.toNat()):
+    HeapInv(b, Store::alloc(claims, Claim(a.top.toNat(), size)).after)
+{
+    let fresh_c = Claim(a.top.toNat(), size);
+    let ln: (b.limit.toNat() = a.limit.toNat()) = cong_fn(λ (x: u64) => x.toNat(), lim);
+    let below: ((k: Key) → (c: Claim) → Store::alloc(claims, fresh_c).after.get(k) = Some(c) → c.base + c.count <= b.top.toNat()) =
+        λ k c e => match Store::alloc_get_cases(claims, fresh_c, k, c, e) {
+            Inl(new) => {
+                let cb: (c.base = a.top.toNat()) = cong_fn(λ (d: Claim) => d.base, new.right);
+                let cc: (c.count = size) = cong_fn(λ (d: Claim) => d.count, new.right);
+                omega(cb, cc, moved)
+            },
+            Inr(old) => { let o = inv.below(k, c, old); omega(o, moved) },
+        };
+    HeapInv(omega(ln, inv.limit), omega(ln, moved, room), below, λ k1 k2 c1 c2 e1 e2 ne =>
+        match Store::alloc_get_cases(claims, fresh_c, k1, c1, e1) {
+            Inl(new1) => match Store::alloc_get_cases(claims, fresh_c, k2, c2, e2) {
+                Inl(new2) => false_elim(ne(trans(new1.left, sym(new2.left)))),
+                Inr(old2) => {
+                    let o = inv.below(k2, c2, old2);
+                    let cb: (c1.base = a.top.toNat()) = cong_fn(λ (d: Claim) => d.base, new1.right);
+                    Inr(omega(o, cb))
+                },
+            },
+            Inr(old1) => match Store::alloc_get_cases(claims, fresh_c, k2, c2, e2) {
+                Inl(new2) => {
+                    let o = inv.below(k1, c1, old1);
+                    let cb: (c2.base = a.top.toNat()) = cong_fn(λ (d: Claim) => d.base, new2.right);
+                    Inl(omega(o, cb))
+                },
+                Inr(old2) => inv.apart(k1, k2, c1, c2, old1, old2, ne),
+            },
+        })
+}
+
+// A claim released: the invariant holds of fewer claims.
+theorem Heap::released_inv(a: Arena, claims: Store<Claim>, k: Key, inv: HeapInv(a, claims)): HeapInv(a, claims.free(k)) {
+    HeapInv(inv.limit, inv.top, λ k2 c e => inv.below(k2, c, claims.free_some(k, k2, c, e)),
+        λ k1 k2 c1 c2 e1 e2 ne => inv.apart(k1, k2, c1, c2, claims.free_some(k, k1, c1, e1), claims.free_some(k, k2, c2, e2), ne))
+}
+
 theorem Heap::alloc_inv(self h: Heap, size, base: u64, got: Arena::alloc(h.arena, size).value = Got(base)):
     HeapInv(Arena::alloc(h.arena, size).after, Heap::claimed(h, base, size).after)
 {
     let a = h.arena;
     let fresh = Arena::alloc_fresh(a, size, base, got);
-    let at: (base.toNat() = a.top.toNat()) = cong_fn(λ (x: u64) => x.toNat(), fresh.left);
-    let room: (a.top.toNat() + size.toNat() <= a.limit.toNat()) = fresh.right.left;
-    let moved: (Arena::alloc(a, size).after.top.toNat() = a.top.toNat() + size.toNat()) = fresh.right.right.right;
-    let lim: (Arena::alloc(a, size).after.limit.toNat() = a.limit.toNat()) = cong_fn(λ (x: u64) => x.toNat(), Arena::alloc_limit(a, size));
-    let fresh_c = Claim(base.toNat(), size.toNat());
-    let below: ((k: Key) → (c: Claim) → Heap::claimed(h, base, size).after.get(k) = Some(c) → c.base + c.count <= Arena::alloc(a, size).after.top.toNat()) =
-        λ k c e => match Store::alloc_get_cases(h.claims, fresh_c, k, c, e) {
-            Inl(new) => {
-                let cb: (c.base = base.toNat()) = cong_fn(λ (d: Claim) => d.base, new.right);
-                let cc: (c.count = size.toNat()) = cong_fn(λ (d: Claim) => d.count, new.right);
-                omega(cb, cc, at, moved)
-            },
-            Inr(old) => { let o = h.ok.below(k, c, old); omega(o, moved) },
-        };
-    HeapInv(omega(lim, h.ok.limit), omega(lim, moved, room), below, λ k1 k2 c1 c2 e1 e2 ne =>
-        match Store::alloc_get_cases(h.claims, fresh_c, k1, c1, e1) {
-            Inl(new1) => match Store::alloc_get_cases(h.claims, fresh_c, k2, c2, e2) {
-                Inl(new2) => false_elim(ne(trans(new1.left, sym(new2.left)))),
-                Inr(old2) => {
-                    let o = h.ok.below(k2, c2, old2);
-                    let cb: (c1.base = base.toNat()) = cong_fn(λ (d: Claim) => d.base, new1.right);
-                    Inr(omega(o, cb, at))
-                },
-            },
-            Inr(old1) => match Store::alloc_get_cases(h.claims, fresh_c, k2, c2, e2) {
-                Inl(new2) => {
-                    let o = h.ok.below(k1, c1, old1);
-                    let cb: (c2.base = base.toNat()) = cong_fn(λ (d: Claim) => d.base, new2.right);
-                    Inl(omega(o, cb, at))
-                },
-                Inr(old2) => h.ok.apart(k1, k2, c1, c2, old1, old2, ne),
-            },
-        })
+    let lim = Arena::alloc_limit(a, size);
+    j(sym(fresh.left), λ x _ => HeapInv(Arena::alloc(a, size).after, Store::alloc(h.claims, Claim(x.toNat(), size.toNat())).after),
+        Heap::granted_inv(a, Arena::alloc(a, size).after, h.claims, size.toNat(), h.ok, lim, fresh.right.right.right, fresh.right.left))
 }
 
 theorem Heap::full_inv(self h: Heap, size: u64, full: Arena::alloc(h.arena, size).value = Full): HeapInv(Arena::alloc(h.arena, size).after, h.claims) {
@@ -219,7 +233,7 @@ theorem Heap::alloc_valid(self h: Heap, size: u64, w: Window, granted: Heap::all
             let at: (Window(base, size, Heap::claimed(h, base, size).value) = w) = cong_fn(λ (x: Grant) => x.window_or(w), g);
             j(at, λ v _ => Heap::claimed(h, base, size).after.get(v.key) = Some(v.claim()), Store::alloc_reads(h.claims, Claim(base.toNat(), size.toNat())))
         },
-        λ e g => absurd(g))(granted)
+        λ e g => absurd(g), granted)
 }
 
 // Every window valid before an allocation is valid after it.
@@ -239,7 +253,7 @@ theorem Heap::alloc_other_key(self h: Heap, size: u64, w: Window, granted: Heap:
             let at: (Window(base, size, Heap::claimed(h, base, size).value) = w) = cong_fn(λ (x: Grant) => x.window_or(w), g);
             j(at, λ v _ => ¬(w2.key.index = v.key.index), Store::alloc_index_fresh(h.claims, Claim(base.toNat(), size.toNat()), w2.key, h.key_valid(w2, valid2)))
         },
-        λ e g => absurd(g))(granted)
+        λ e g => absurd(g), granted)
 }
 
 // And reads what it read: an allocation changes no word of the heap.
@@ -309,4 +323,193 @@ theorem Heap::reset_reads_kept(self h: Heap, mark: u64, w: Window, k: u64, valid
 {
     Arena::read_same(Heap::reset(h, mark).after.arena, h.arena, w.base, w.count, k, lk, h.fits(w, valid),
         λ q _ _ => cong_fn(λ (v: [u64; 16]) => vector_get(v, q, BitVec::ofNat(0)), Arena::reset_heap(h.arena, mark)))
+}
+
+// ---------------------------------------------------------------------------
+// A vector: a header window of three words (its data window's base, its
+// capacity, its length) and the data window, both claimed
+
+record VecHandle { header: Window, data: Window }
+
+// A vector valid: both windows valid and of different keys, and the
+// header's words naming the data window, the length within the capacity.
+record VecOk(h: Heap, v: VecHandle) {
+    header: h.Valid(v.header),
+    data: h.Valid(v.data),
+    three: v.header.count.toNat() = 3,
+    distinct: ¬(v.header.key.index = v.data.key.index),
+    base: h.arena.cell(v.header.base) = v.data.base,
+    cap: h.arena.cell(v.header.base + 1) = v.data.count,
+    len: h.arena.cell(v.header.base + 2).toNat() <= v.data.count.toNat(),
+}
+
+// What the vector holds (`arena_laws.hthr`'s `vec`).
+fn Heap::items(self h: Heap, v: VecHandle) → List<u64> { h.arena.vec(v.header.base) }
+
+// A valid vector is well placed in the arena's sense, so the arena's
+// vector laws apply to it.
+theorem Heap::vec_inv(self h: Heap, v: VecHandle, ok: VecOk(h, v)): VecInv(h.arena, v.header.base) {
+    let hi = h.inside(v.header, ok.header);
+    let di = h.inside(v.data, ok.data);
+    let b: (h.arena.cell(v.header.base).toNat() = v.data.base.toNat()) = cong_fn(λ (x: u64) => x.toNat(), ok.base);
+    let c: (h.arena.cell(v.header.base + 1).toNat() = v.data.count.toNat()) = cong_fn(λ (x: u64) => x.toNat(), ok.cap);
+    let three = ok.three;
+    let len = ok.len;
+    VecInv(omega(hi, three), omega(di, b, c), omega(len, c),
+        match h.valid_apart(v.header, v.data, ok.header, ok.data, ok.distinct) { Inl(p) => Inl(omega(p, three, b)), Inr(p) => Inr(omega(p, b, c)) },
+        h.ok.top, h.ok.limit)
+}
+
+fn Heap::grow_claims(self h: Heap, v: VecHandle) → Mutated<Store<Claim>, Key> {
+    Store::alloc(h.claims, Window(h.arena.top, h.arena.cell(v.header.base + 1) + h.arena.cell(v.header.base + 1), Key(0, 0)).claim())
+}
+
+fn Heap::GrowCases(h: Heap, v: VecHandle) → Type {
+    Or<Grown(h.arena, v.header.base, Arena::grow(h.arena, v.header.base)), Arena::grow(h.arena, v.header.base) = Mutated(h.arena, BitVec::ofNat(0))>
+}
+
+theorem Heap::double(self h: Heap, v: VecHandle, ok: VecOk(h, v)):
+    (h.arena.cell(v.header.base + 1) + h.arena.cell(v.header.base + 1)).toNat() = h.arena.cell(v.header.base + 1).toNat() + h.arena.cell(v.header.base + 1).toNat()
+{
+    let c: (h.arena.cell(v.header.base + 1).toNat() = v.data.count.toNat()) = cong_fn(λ (x: u64) => x.toNat(), ok.cap);
+    let f = h.fits(v.data, ok.data);
+    Arena::small_sum(h.arena.cell(v.header.base + 1), h.arena.cell(v.header.base + 1), omega(c, f))
+}
+
+theorem Heap::grow_inv(self h: Heap, v: VecHandle, ok: VecOk(h, v), g: Grown(h.arena, v.header.base, Arena::grow(h.arena, v.header.base))):
+    HeapInv(Arena::grow(h.arena, v.header.base).after, Heap::grow_claims(h, v).after.free(v.data.key))
+{
+    let d = h.double(v, ok);
+    let gt = g.top;
+    let gr = g.room;
+    Heap::released_inv(Arena::grow(h.arena, v.header.base).after, Heap::grow_claims(h, v).after, v.data.key,
+        Heap::granted_inv(h.arena, Arena::grow(h.arena, v.header.base).after, h.claims,
+            (h.arena.cell(v.header.base + 1) + h.arena.cell(v.header.base + 1)).toNat(), h.ok, g.limit, omega(gt, d), omega(gr, d)))
+}
+
+theorem Heap::unmoved_inv(self h: Heap, v: VecHandle, same: Arena::grow(h.arena, v.header.base) = Mutated(h.arena, BitVec::ofNat(0))):
+    HeapInv(Arena::grow(h.arena, v.header.base).after, h.claims)
+{
+    j(sym(cong_fn(λ (m: Mutated<Arena, u64>) => m.after, same)), λ x _ => HeapInv(x, h.claims), h.ok)
+}
+
+// Grow with the arena's two outcomes as a parameter, so a proof about it
+// cases on that parameter.
+fn Heap::grow_by(self h: Heap, v: VecHandle, ok: VecOk(h, v), o: Heap::GrowCases(h, v)) → Mutated<Heap, VecHandle> {
+    match o {
+        Inl(g) => Mutated(Heap(Arena::grow(h.arena, v.header.base).after, Heap::grow_claims(h, v).after.free(v.data.key), h.grow_inv(v, ok, g)),
+            VecHandle(v.header, Window(h.arena.top, h.arena.cell(v.header.base + 1) + h.arena.cell(v.header.base + 1), Heap::grow_claims(h, v).value))),
+        Inr(same) => Mutated(Heap(Arena::grow(h.arena, v.header.base).after, h.claims, h.unmoved_inv(v, same)), v),
+    }
+}
+
+// Grow the vector: a data window of twice the capacity claimed at the top,
+// the items copied, the old data window released (its words stay below the
+// top until a reset). The handle answered names the new data window; where
+// the larger window does not fit, the heap and the handle are as they were.
+fn Heap::grow(self h: Heap, v: VecHandle, ok: VecOk(h, v)) → Mutated<Heap, VecHandle> {
+    Heap::grow_by(h, v, ok, Arena::grow_cases(h.arena, v.header.base, h.vec_inv(v, ok)))
+}
+
+// `grow_keeps`: every valid window but the vector's old data window stays
+// valid.
+theorem Heap::grow_by_keeps(self h: Heap, v: VecHandle, ok: VecOk(h, v), o: Heap::GrowCases(h, v), w: Window, valid: h.Valid(w),
+    other: ¬(w.key.index = v.data.key.index)): Heap::grow_by(h, v, ok, o).after.Valid(w)
+{
+    match o as λ p => (Heap::grow_by(h, v, ok, p).after.Valid(w)) {
+        Inl(_) => trans(Heap::grow_claims(h, v).after.free_other(v.data.key, w.key, other),
+            trans(Store::alloc_keeps(h.claims, Window(h.arena.top, h.arena.cell(v.header.base + 1) + h.arena.cell(v.header.base + 1), Key(0, 0)).claim(),
+                w.key, h.key_valid(w, valid)), valid)),
+        Inr(_) => valid,
+    }
+}
+
+theorem Heap::grow_keeps(self h: Heap, v: VecHandle, ok: VecOk(h, v), w: Window, valid: h.Valid(w), other: ¬(w.key.index = v.data.key.index)):
+    Heap::grow(h, v, ok).after.Valid(w)
+{
+    h.grow_by_keeps(v, ok, Arena::grow_cases(h.arena, v.header.base, h.vec_inv(v, ok)), w, valid, other)
+}
+
+// And a window of neither of the vector's keys reads what it read: growing
+// writes only the header's words and words at or past the old top.
+theorem Heap::grow_by_reads(self h: Heap, v: VecHandle, ok: VecOk(h, v), o: Heap::GrowCases(h, v), w: Window, k: u64, valid: h.Valid(w),
+    lk: k.toNat() < w.count.toNat(), oh: ¬(w.key.index = v.header.key.index), od: ¬(w.key.index = v.data.key.index)):
+    Arena::read(Heap::grow_by(h, v, ok, o).after.arena, w.base, w.count, k, fits := squash(h.fits(w, valid))) = h.read(w, k, valid := valid)
+{
+    match o as λ p => (Arena::read(Heap::grow_by(h, v, ok, p).after.arena, w.base, w.count, k, fits := squash(h.fits(w, valid))) = h.read(w, k, valid := valid)) {
+        Inl(g) => {
+            let wi = h.inside(w, valid);
+            let three = ok.three;
+            let ap = h.valid_apart(w, v.header, valid, ok.header, oh);
+            Arena::read_same(Arena::grow(h.arena, v.header.base).after, h.arena, w.base, w.count, k, lk, h.fits(w, valid), λ q lo hi =>
+                g.kept(q, omega(wi, hi), λ e => match ap { Inl(p) => omega(e, p, hi), Inr(p) => omega(e, p, lo, three) },
+                    λ e => match ap { Inl(p) => omega(e, p, hi, three), Inr(p) => omega(e, p, lo, three) }))
+        },
+        Inr(same) => Arena::read_same(Arena::grow(h.arena, v.header.base).after, h.arena, w.base, w.count, k, lk, h.fits(w, valid), λ q _ _ =>
+            cong_fn(λ (m: Mutated<Arena, u64>) => m.after.word(q), same)),
+    }
+}
+
+theorem Heap::grow_reads_kept(self h: Heap, v: VecHandle, ok: VecOk(h, v), w: Window, k: u64, valid: h.Valid(w), lk: k.toNat() < w.count.toNat(),
+    oh: ¬(w.key.index = v.header.key.index), od: ¬(w.key.index = v.data.key.index)):
+    Heap::grow(h, v, ok).after.read(w, k, valid := h.grow_keeps(v, ok, w, valid, od)) = h.read(w, k, valid := valid)
+{
+    h.grow_by_reads(v, ok, Arena::grow_cases(h.arena, v.header.base, h.vec_inv(v, ok)), w, k, valid, lk, oh, od)
+}
+
+// `grow_items`: the vector holds what it held (`grow_abs`).
+theorem Heap::grow_by_items(self h: Heap, v: VecHandle, ok: VecOk(h, v), o: Heap::GrowCases(h, v)):
+    Heap::grow_by(h, v, ok, o).after.items(Heap::grow_by(h, v, ok, o).value) = h.items(v)
+{
+    match o as λ p => (Heap::grow_by(h, v, ok, p).after.items(Heap::grow_by(h, v, ok, p).value) = h.items(v)) {
+        Inl(g) => Arena::grow_abs(h.arena, v.header.base, h.vec_inv(v, ok), g.value),
+        Inr(same) => cong_fn(λ (m: Mutated<Arena, u64>) => m.after.vec(v.header.base), same),
+    }
+}
+
+theorem Heap::grow_items(self h: Heap, v: VecHandle, ok: VecOk(h, v)): Heap::grow(h, v, ok).after.items(Heap::grow(h, v, ok).value) = h.items(v) {
+    h.grow_by_items(v, ok, Arena::grow_cases(h.arena, v.header.base, h.vec_inv(v, ok)))
+}
+
+// `grow_ok`: the handle answered is a valid vector of the heap after.
+theorem Heap::grow_by_ok(self h: Heap, v: VecHandle, ok: VecOk(h, v), o: Heap::GrowCases(h, v)): VecOk(Heap::grow_by(h, v, ok, o).after, Heap::grow_by(h, v, ok, o).value) {
+    match o as λ p => (VecOk(Heap::grow_by(h, v, ok, p).after, Heap::grow_by(h, v, ok, p).value)) {
+        Inl(g) => {
+            let cap = h.arena.cell(v.header.base + 1);
+            let fresh_c = Window(h.arena.top, cap + cap, Key(0, 0)).claim();
+            let n = Store::alloc(h.claims, fresh_c).value;
+            let hk: ¬(v.header.key.index = n.index) = Store::alloc_index_fresh(h.claims, fresh_c, v.header.key, h.key_valid(v.header, ok.header));
+            let dk: ¬(v.data.key.index = n.index) = Store::alloc_index_fresh(h.claims, fresh_c, v.data.key, h.key_valid(v.data, ok.data));
+            let header: (Heap::grow_claims(h, v).after.free(v.data.key).get(v.header.key) = Some(v.header.claim())) =
+                trans(Heap::grow_claims(h, v).after.free_other(v.data.key, v.header.key, ok.distinct),
+                    trans(Store::alloc_keeps(h.claims, fresh_c, v.header.key, h.key_valid(v.header, ok.header)), ok.header));
+            let data: (Heap::grow_claims(h, v).after.free(v.data.key).get(n) = Some(fresh_c)) =
+                trans(Heap::grow_claims(h, v).after.free_other(v.data.key, n, λ e => dk(sym(e))), Store::alloc_reads(h.claims, fresh_c));
+            let d = h.double(v, ok);
+            let c: (cap.toNat() = v.data.count.toNat()) = cong_fn(λ (x: u64) => x.toNat(), ok.cap);
+            let l: (Arena::grow(h.arena, v.header.base).after.cell(v.header.base + 2).toNat() = h.arena.cell(v.header.base + 2).toNat()) =
+                cong_fn(λ (x: u64) => x.toNat(), g.len);
+            let len = ok.len;
+            let fits: (Arena::grow(h.arena, v.header.base).after.cell(v.header.base + 2).toNat() <= (cap + cap).toNat()) = omega(l, len, c, d);
+            VecOk(header, data, ok.three, hk, g.base, g.cap, fits)
+        },
+        Inr(same) => {
+            let at: (Arena::grow(h.arena, v.header.base).after = h.arena) = cong_fn(λ (m: Mutated<Arena, u64>) => m.after, same);
+            VecOk(ok.header, ok.data, ok.three, ok.distinct,
+                trans(cong_fn(λ (x: Arena) => x.cell(v.header.base), at), ok.base),
+                trans(cong_fn(λ (x: Arena) => x.cell(v.header.base + 1), at), ok.cap),
+                j(sym(at), λ x _ => x.cell(v.header.base + 2).toNat() <= v.data.count.toNat(), ok.len))
+        },
+    }
+}
+
+theorem Heap::grow_ok(self h: Heap, v: VecHandle, ok: VecOk(h, v)): VecOk(Heap::grow(h, v, ok).after, Heap::grow(h, v, ok).value) {
+    h.grow_by_ok(v, ok, Arena::grow_cases(h.arena, v.header.base, h.vec_inv(v, ok)))
+}
+
+// A reset whose mark falls inside the vector's data window ends the vector.
+theorem Heap::reset_ends_vec(self h: Heap, mark: u64, v: VecHandle, above: mark.toNat() < v.data.base.toNat() + v.data.count.toNat()):
+    ¬VecOk(Heap::reset(h, mark).after, v)
+{
+    λ ok => h.reset_ends(mark, v.data, above, ok.data)
 }

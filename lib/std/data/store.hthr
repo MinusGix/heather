@@ -596,3 +596,37 @@ theorem Store::retain_some<V>(self s: Store<V>, keep: V → Bool, k: Key, c: V, 
         },
     }(e2)
 }
+
+// Freeing never makes a key read: what a key reads after a free it read
+// before.
+theorem Slot::freed_by_some<V>(c0: Bool, h, g2: Nat, w, c: V, e: Slot::freed_by(c0, h, w).answer(g2) = Some(c)): Live(h, w).answer(g2) = Some(c) {
+    match c0 as λ d => (Slot::freed_by(d, h, w).answer(g2) = Some(c) → Live(h, w).answer(g2) = Some(c)) {
+        True => λ e => absurd(e),
+        False => λ e => e,
+    }(e)
+}
+
+theorem Slot::freed_answer_some<V>(self sl: Slot<V>, g, g2: Nat, c: V, e: sl.freed(g).answer(g2) = Some(c)): sl.answer(g2) = Some(c) {
+    match sl as λ s => (s.freed(g).answer(g2) = Some(c) → s.answer(g2) = Some(c)) {
+        Live(h, w) => λ e => Slot::freed_by_some(h.same(g), h, g2, w, c, e),
+        Free(_) => λ e => e,
+    }(e)
+}
+
+theorem Store::free_some<V>(self s: Store<V>, k, k2: Key, c: V, e: s.free(k).get(k2) = Some(c)): s.get(k2) = Some(c) {
+    match Nat::eq_dec(k2.index, k.index) {
+        Inr(ne) => trans(sym(s.free_other(k, k2, ne)), e),
+        Inl(same) => {
+            let at: (Store<V>(s.slots.update(k2.index, λ (sl: Slot<V>) => sl.freed(k.gen))).get(k2) = Some(c)) =
+                j(sym(same), λ i _ => Store<V>(s.slots.update(i, λ (sl: Slot<V>) => sl.freed(k.gen))).get(k2) = Some(c), e);
+            let mapped: (s.slots.nth(k2.index).map(λ (sl: Slot<V>) => sl.freed(k.gen)).and_then(λ (sl: Slot<V>) => sl.answer(k2.gen)) = Some(c)) =
+                trans(sym(cong_fn(λ (o: Option<Slot<V>>) => o.and_then(λ (sl: Slot<V>) => sl.answer(k2.gen)),
+                    Store::nth_update_map(s.slots, k2.index, λ (sl: Slot<V>) => sl.freed(k.gen)))), at);
+            match s.slots.nth(k2.index) as λ o => (o.map(λ (sl: Slot<V>) => sl.freed(k.gen)).and_then(λ (sl: Slot<V>) => sl.answer(k2.gen)) = Some(c) →
+                    o.and_then(λ (sl: Slot<V>) => sl.answer(k2.gen)) = Some(c)) {
+                None => λ x => x,
+                Some(sl) => λ x => sl.freed_answer_some(k.gen, k2.gen, c, x),
+            }(mapped)
+        },
+    }
+}
