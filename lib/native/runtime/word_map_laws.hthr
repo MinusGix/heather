@@ -1205,3 +1205,147 @@ theorem WordMap::shift_removes(o: WordMap, oinv: WordMapInv(o), k: u64, nz: ¬(k
         λ m i j left more eq => WordMap::shifts_spent(o, k, i0, z, m, i, j, left, more),
         m, i, j, left)
 }
+
+// ---------------------------------------------------------------------------
+// Remove, along its probe.
+
+fn WordMap::Keeps(m: WordMap, k: u64, j, left: u64) → Type { j.toNat() < 4 → WordMap::remove_at(m, k, j, left) = Mutated(m, 0) }
+
+// A removal of a key no slot holds leaves the table.
+theorem WordMap::remove_absent(m: WordMap, k: u64, none: (t: Nat) → t < 4 → m.key(t) = k → m.key(t) = 0, j, left: u64): WordMap::Keeps(m, k, j, left) {
+    WordMap::remove_at::induct(m, k, λ (j: u64) (left: u64) => WordMap::Keeps(m, k, j, left),
+        λ j left more lt empty eq => λ j4 => eq,
+        λ j left more lt empty hit eq => λ j4 => false_elim(empty(none(j.toNat(), j4, hit))),
+        λ j left more lt empty hit eq ih => λ j4 => trans(eq, ih(omega(WordMap::next_slot(j, j4)))),
+        λ j left more lt eq => λ j4 => eq,
+        λ j left more eq => λ j4 => eq,
+        j, left)
+}
+
+fn WordMap::Reaches(m: WordMap, k: u64, s: Nat, j, left: u64) → Type {
+    j.toNat() < 4 → ((s + 4 - j.toNat()) % 4) < left.toNat() →
+    ((t: Nat) → t < 4 → ((t + 4 - j.toNat()) % 4) < ((s + 4 - j.toNat()) % 4) → And<¬(m.key(t) = 0), ¬(m.key(t) = k)>) →
+    Exists(λ (jj: u64) => And<jj.toNat() = s, WordMap::remove_at(m, k, j, left).after = WordMap::shift_at(m, jj, (jj + 1).band(3), 3).after>)
+}
+
+theorem WordMap::reaches_empty(m: WordMap, k: u64, s: Nat, s4: s < 4, at: m.key(s) = k, nz: ¬(k = 0), j, left: u64, empty: m.key(j.toNat()) = 0):
+    WordMap::Reaches(m, k, s, j, left)
+{
+    λ j4 budget clear => match Nat::eq_dec(j.toNat(), s) {
+        Inl(same) => false_elim(nz(trans(sym(at), trans(cong_fn(λ (q: Nat) => m.key(q), sym(same)), empty)))),
+        Inr(other) => match clear(j.toNat(), j4, omega) { And(occupied, _) => false_elim(occupied(empty)) },
+    }
+}
+
+theorem WordMap::reaches_hit(m: WordMap, k: u64, s: Nat, s4: s < 4, j, left: u64, hit: m.key(j.toNat()) = k,
+    eq: WordMap::remove_at(m, k, j, left) = Mutated(WordMap::shift_at(m, j, (j + 1).band(3), 3).after, WordMap::shift_at(m, j, (j + 1).band(3), 3).value)):
+    WordMap::Reaches(m, k, s, j, left)
+{
+    λ j4 budget clear => match Nat::eq_dec(j.toNat(), s) {
+        Inl(same) => Exists(j, And(same, cong_fn(λ (r: Mutated<WordMap, u64>) => r.after, eq))),
+        Inr(other) => match clear(j.toNat(), j4, omega) { And(_, other) => false_elim(other(hit)) },
+    }
+}
+
+theorem WordMap::reaches_next(m: WordMap, k: u64, s: Nat, s4: s < 4, at: m.key(s) = k, j, left: u64, more: 0 < left, hit: ¬(m.key(j.toNat()) = k),
+    eq: WordMap::remove_at(m, k, j, left) = WordMap::remove_at(m, k, (j + 1).band(3), left - 1), ih: WordMap::Reaches(m, k, s, (j + 1).band(3), left - 1)):
+    WordMap::Reaches(m, k, s, j, left)
+{
+    λ j4 budget clear => {
+        let nj = WordMap::next_slot(j, j4);
+        let dl: ((left - 1).toNat() = left.toNat() - 1) = bv_omega;
+        let other: (¬(j.toNat() = s)) = λ e => hit(trans(cong_fn(λ (q: Nat) => m.key(q), e), at));
+        let found = ih(omega(nj), WordMap::step_budget(j.toNat(), s, ((j + 1).band(3)).toNat(), left.toNat(), (left - 1).toNat(), j4, s4, nj, dl, other, budget),
+            λ t t4 before => clear(t, t4, WordMap::step_before(j.toNat(), s, t, ((j + 1).band(3)).toNat(), j4, s4, t4, nj, other, before)));
+        Exists(found.witness, And(found.proof.left, trans(cong_fn(λ (r: Mutated<WordMap, u64>) => r.after, eq), found.proof.right)))
+    }
+}
+
+// A removal of a stored key finds its slot and shifts from there.
+theorem WordMap::remove_found(m: WordMap, k: u64, s: Nat, s4: s < 4, at: m.key(s) = k, nz: ¬(k = 0), j, left: u64): WordMap::Reaches(m, k, s, j, left) {
+    WordMap::remove_at::induct(m, k, λ (j: u64) (left: u64) => WordMap::Reaches(m, k, s, j, left),
+        λ j left more lt empty eq => WordMap::reaches_empty(m, k, s, s4, at, nz, j, left, empty),
+        λ j left more lt empty hit eq => WordMap::reaches_hit(m, k, s, s4, j, left, hit, eq),
+        λ j left more lt empty hit eq ih => WordMap::reaches_next(m, k, s, s4, at, j, left, more, hit, eq, ih),
+        λ j left more lt eq => λ j4 budget clear => false_elim(lt(j4)),
+        λ j left more eq => λ j4 budget clear => false_elim(omega(more, budget)),
+        j, left)
+}
+
+theorem WordMap::remove_is(m: WordMap, k: u64): WordMap::remove(m, k) = WordMap::remove_at(m, k, word_map_home(k), 4) {
+    WordMap::mutated_eta(WordMap::remove_at(m, k, word_map_home(k), 4))
+}
+
+// A table with no slot holding `k` is itself with `k` removed.
+theorem WordMap::removed_absent(m: WordMap, inv: WordMapInv(m), k: u64, none: (t: Nat) → t < 4 → m.key(t) = k → m.key(t) = 0): Removed(m, k, m) {
+    Removed(inv, λ x => match BitVec::eq_dec(x, k) as λ _ => m.abs().assoc_get(x) = m.abs().assoc_remove(k).assoc_get(x) {
+        Inl(xk) => {
+            let gone = m.abs_get_none(k, λ t t4 a => trans(sym(a), none(t, t4, a)));
+            trans(cong_fn(λ (y: u64) => m.abs().assoc_get(y), xk), trans(gone, trans(sym(m.abs().assoc_get_remove_same(k)), cong_fn(λ (y: u64) => m.abs().assoc_remove(k).assoc_get(y), sym(xk)))))
+        },
+        Inr(ne) => sym(m.abs().assoc_get_remove_other(k, x, ne)),
+    })
+}
+
+theorem WordMap::remove_missing(m: WordMap, inv: WordMapInv(m), k: u64, none: (t: Nat) → t < 4 → m.key(t) = k → m.key(t) = 0):
+    Removed(m, k, WordMap::remove(m, k).after)
+{
+    let into = cong_fn(λ (r: Mutated<WordMap, u64>) => r.after, WordMap::remove_is(m, k));
+    let kept = cong_fn(λ (r: Mutated<WordMap, u64>) => r.after, WordMap::remove_absent(m, k, none, word_map_home(k), 4, word_map_home_below(k)));
+    j(sym(trans(into, kept)), λ y _ => Removed(m, k, y), WordMap::removed_absent(m, inv, k, none))
+}
+
+// The shift from the removed key's slot, `jj`.
+theorem WordMap::shift_from(m: WordMap, inv: WordMapInv(m), k: u64, nz: ¬(k = 0), jj: u64, jj4: jj.toNat() < 4, at: m.key(jj.toNat()) = k):
+    Removed(m, k, WordMap::shift_at(m, jj, (jj + 1).band(3), 3).after)
+{
+    let spare = WordMap::spare(m, inv);
+    let start = WordMap::shift_start(m, inv, k, nz, jj.toNat(), jj4, at, spare.witness, spare.proof.left, spare.proof.right,
+        ((jj + 1).band(3)).toNat(), WordMap::next_slot(jj, jj4));
+    WordMap::shift_removes(m, inv, k, nz, jj.toNat(), spare.witness, m, jj, (jj + 1).band(3), 3, start)
+}
+
+theorem WordMap::remove_reached(m: WordMap, inv: WordMapInv(m), k: u64, nz: ¬(k = 0), s: Nat, s4: s < 4, at: m.key(s) = k, jj: u64, js: jj.toNat() = s,
+    after: WordMap::remove_at(m, k, word_map_home(k), 4).after = WordMap::shift_at(m, jj, (jj + 1).band(3), 3).after): Removed(m, k, WordMap::remove(m, k).after)
+{
+    let into = cong_fn(λ (r: Mutated<WordMap, u64>) => r.after, WordMap::remove_is(m, k));
+    let jj4: (jj.toNat() < 4) = j(sym(js), λ q _ => q < 4, s4);
+    let at_jj: (m.key(jj.toNat()) = k) = trans(cong_fn(λ (q: Nat) => m.key(q), js), at);
+    j(sym(trans(into, after)), λ y _ => Removed(m, k, y), WordMap::shift_from(m, inv, k, nz, jj, jj4, at_jj))
+}
+
+theorem WordMap::remove_present(m: WordMap, inv: WordMapInv(m), k: u64, nz: ¬(k = 0), s: Nat, s4: s < 4, at: m.key(s) = k):
+    Removed(m, k, WordMap::remove(m, k).after)
+{
+    let h = word_map_home(k);
+    let h4: (h.toNat() < 4) = word_map_home_below(k);
+    let clear: ((t: Nat) → t < 4 → ((t + 4 - h.toNat()) % 4) < ((s + 4 - h.toNat()) % 4) → And<¬(m.key(t) = 0), ¬(m.key(t) = k)>) =
+        λ t t4 before => And(inv.reach(s, t, k, s4, t4, at, nz, before), λ again =>
+            WordMap::not_before_self(t, s, h.toNat(), inv.distinct(t, s, t4, s4, λ z0 => nz(trans(sym(again), z0)), trans(again, sym(at))), before));
+    let reached = WordMap::remove_found(m, k, s, s4, at, nz, h, 4, h4, omega(s4, h4), clear);
+    WordMap::remove_reached(m, inv, k, nz, s, s4, at, reached.witness, reached.proof.left, reached.proof.right)
+}
+
+// Remove keeps the invariant and is `assoc_remove` at every lookup.
+theorem WordMap::remove_spec(m: WordMap, inv: WordMapInv(m), k: u64): Removed(m, k, WordMap::remove(m, k).after) {
+    match m.locate(k) {
+        Inl(found) => match BitVec::eq_dec(k, BitVec::ofNat(0)) {
+            Inl(z) => WordMap::remove_missing(m, inv, k, λ t t4 a => trans(a, z)),
+            Inr(nz) => WordMap::remove_present(m, inv, k, nz, found.witness, found.proof.left, found.proof.right),
+        },
+        Inr(nowhere) => WordMap::remove_missing(m, inv, k, λ t t4 a => false_elim(nowhere(t, t4, a))),
+    }
+}
+
+// The law of `assoc.hthr` for removal, over the compiled functions.
+theorem WordMap::get_remove_same(m: WordMap, inv: WordMapInv(m), k: u64): WordMap::remove(m, k).after.get(k) = 0 {
+    let r = WordMap::remove_spec(m, inv, k);
+    trans(WordMap::get_is(WordMap::remove(m, k).after, r.inv, k),
+        cong_fn(λ (o: Option<u64>) => o.unwrap_or(0), trans(r.get(k), m.abs().assoc_get_remove_same(k))))
+}
+
+theorem WordMap::get_remove_other(m: WordMap, inv: WordMapInv(m), k, i: u64, ne: ¬(i = k)): WordMap::remove(m, k).after.get(i) = m.get(i) {
+    let r = WordMap::remove_spec(m, inv, k);
+    trans(WordMap::get_is(WordMap::remove(m, k).after, r.inv, i),
+        trans(cong_fn(λ (o: Option<u64>) => o.unwrap_or(0), trans(r.get(i), m.abs().assoc_get_remove_other(k, i, ne))), sym(WordMap::get_is(m, inv, i))))
+}
