@@ -32,6 +32,12 @@
 // (`lib/_tests/native/runtime/arena_laws_tests.hthr`): it meets the window
 // handed out again, and a store through one is read through the other.
 //
+// Over typed handles, where a window is valid by a key and two valid
+// windows are apart without a premise, the laws are restated in
+// `arena_handles.hthr`, which reads them through these (and through
+// `alloc_limit`, `alloc_full_same`, `reset_top_cases` and `grow_cases`,
+// here for it).
+//
 // Each function is cited by its branch equations (`Arena::alloc::True`, …),
 // its tests decided at the toNat of its words (`le_dec`, `lt_dec`); a sum
 // of words is a sum of numbers where the tests bound it (`small_sum`).
