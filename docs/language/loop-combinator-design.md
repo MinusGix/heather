@@ -899,8 +899,29 @@ The extra pass cannot simply go while the counter stays. With the count at
 below the passes left. A measure that is a 64-bit word's `toNat` reaches
 `2^64 - 1`, and its last pass (the one that leaves) is the `2^64`-th.
 
-**The change, as planned** (its order against rounds 3h and 4 is Minus's
-call, asked 2026-11-24):
+**Decided** (Minus, 2026-11-24): the primitive changes first, before
+`while`, the `FTm` node and 3h. The evidence: `while` onto the node needs
+a record answer, which is the multi-word exit in both arms of the
+exhaustion branch, and its pin is off by one because of the extra pass
+(`rounds(N)` with the extra pass is `Loop::steps(N + 1)`). Every stage
+built before the change would be built around the extra pass and then
+reworked.
+
+**The change**, in rounds, each leaving the gates green:
+
+- **Round A:** FunctionIR's `Loop` without bound, count and exhausted,
+  with its relational meaning, the evaluator and the passes. Today's
+  counted users are rewritten onto the helper.
+- **Round B:** the native structured layer and its proofs, termination as
+  a hypothesis of the lowering's soundness. The `runtime fn` layer
+  discharges it from the measure.
+- **Round C:** the allocator, the emitter and the decoder (`loop_zero`,
+  `loop_down` and `loop_stop` go), the remaining loop producers, and the
+  linked assembly regenerated.
+- **Round D:** the node without its extra pass, then `while`, the `FTm`
+  node and 3h.
+
+What each piece of the change is:
 
 1. FunctionIR's `Loop` loses `bound`, `count` and `exhausted`. Its meaning
    becomes a relation, the loop ends after some number of passes, with no
