@@ -1,6 +1,6 @@
 ---
 title: omega fails on a generated local in scope (`unexpected character '#'`) instead of skipping it
-status: open
+status: closed
 labels: [tactics,omega]
 area: tactics
 created: 2026-11-24
@@ -27,3 +27,7 @@ In the same proof, `omega` inside a larger `let`/`λ` context also answered
 `omega` skips (or renders under a spellable alias) a local whose name or
 type it cannot spell, instead of failing the call; the refusal names the
 local it could not spell.
+
+## Log
+
+- 2026-11-24: Fixed (branch `claude/proof-tooling-omega`). A generated binder (`#p1`, the variable a nested pattern binds and the written `q` aliases) is named `__omega_hidden_N` in `omega`'s source context, as a shadowed one is, and is still not read as a fact itself. A term with no spelling of its own is spelled again with each subterm that is a visible `let`'s value written as the `let`'s name (`spell_term_source_aliased`), so `jj.toNat()` for `let jj = reached.witness` spells; a term nothing names is refused with the term quoted and the advice to bind it. `WordMap::past_slots` and `WordMap::remove_reached` are gone (`false_elim(omega(big))` in both `match` arms; `remove_present` proves `jj.toNat() < 4` by `omega(js, s4)`). Design: docs/tactics/omega-measure-reduction-design.md §26. Probe: `lib/_tests/std/tactic/omega_tests.hthr` ("Locals with no spelling"); the word map's own `locate` and `remove_present` are the in-context cases.

@@ -451,6 +451,11 @@ impl<'a> Walk<'a> {
         let value = format!("bitvec::BitVec::toNat({spelled})");
         let numeral = named_args(self.elab, y, "bitvec::BitVec::ofNat")
             .and_then(|args| args.get(1).and_then(|c| self.literal(c)));
+        if let Some(m) = numeral
+            && self.low_mask_value(w, x, &xs, &value, m)?
+        {
+            return Ok(());
+        }
         let (statement, proof) = match numeral {
             Some(m) => (le(&value, &m.to_string()), format!("bitvec_nat::BitVec::toNat_band_ofNat_le({w}, {xs}, {m})")),
             None => {
@@ -462,6 +467,62 @@ impl<'a> Walk<'a> {
             self.bridges.push((format!("__bv_mask{}", self.bridges.len()), statement, proof));
         }
         Ok(())
+    }
+
+    /// A mask of the low `k` bits, the numeral `2^k - 1` at a literal width
+    /// of at least `k`, keeps the value modulo `2^k`
+    /// (`toNat_band_low_mask`; issues/bv-omega-word-arithmetic-modulo.md):
+    /// `(j + 1) & 3` is `(toNat(j) + 1) % 4`, with `x` a word of its own.
+    /// A masked difference `(a - b) & m` is read through its wrap instead,
+    /// `(toNat(a) + 2^w - toNat(b)) % 2^k` (`toNat_band_low_mask_sub`), and
+    /// a masked sum as `(toNat(a) + toNat(b)) % 2^k`
+    /// (`toNat_band_low_mask_add`): the borrow or carry is a case of the
+    /// remainder's quotient, not a side condition, and the operation is
+    /// never taken apart, so it owes no no-borrow or no-overflow. Only
+    /// where `bitvec_shift_nat` is loaded; otherwise the mask is a bound.
+    fn low_mask_value(&mut self, w: &str, x: &Rc<Term>, xs: &str, value: &str, m: i128) -> Result<bool, String> {
+        const MASK: &str = "bitvec_shift_nat::BitVec::toNat_band_low_mask";
+        const MASK_SUB: &str = "bitvec_shift_nat::BitVec::toNat_band_low_mask_sub";
+        const MASK_ADD: &str = "bitvec_shift_nat::BitVec::toNat_band_low_mask_add";
+        let Some(width) = w.parse::<u32>().ok().filter(|width| *width < 127) else { return Ok(false) };
+        let Some(k) = (m + 1).checked_ilog2().filter(|k| 1i128 << k == m + 1 && *k <= width) else { return Ok(false) };
+        if self.elab.key_of(MASK).is_none() {
+            return Ok(false);
+        }
+        let power = (1i128 << k).to_string();
+        let operation = |name: &str, lemma: &str| {
+            named_args(self.elab, x, name)
+                .filter(|_| self.elab.key_of(lemma).is_some() && !self.node_index.contains_key(xs))
+                .map(|args| (args, name == "bitvec::BitVec::sub"))
+        };
+        let wrapping = operation("bitvec::BitVec::sub", MASK_SUB).or_else(|| operation("bitvec::BitVec::add", MASK_ADD));
+        let (statement, proof) = match wrapping.as_ref().map(|(args, sub)| (args.as_slice(), *sub)) {
+            Some(([_, a, b], subtracts)) => {
+                let (Some(a_s), Some(b_s)) = (self.elab.spell_term_source(self.cx, a), self.elab.spell_term_source(self.cx, b)) else {
+                    return Ok(false);
+                };
+                if self.word_at(w.to_string(), a)?.is_none() || self.word_at(w.to_string(), b)?.is_none() {
+                    return Ok(false);
+                }
+                let (a_value, b_value) = (format!("bitvec::BitVec::toNat({a_s})"), format!("bitvec::BitVec::toNat({b_s})"));
+                let (wrapped, lemma) = if subtracts {
+                    (format!("nat::Nat::sub({}, {b_value})", add(&a_value, &(1i128 << width).to_string())), MASK_SUB)
+                } else {
+                    (add(&a_value, &b_value), MASK_ADD)
+                };
+                (format!("{value} = nat::Nat::mod({wrapped}, {power})"), format!("{lemma}({k}, {}, {a_s}, {b_s})", width - k))
+            }
+            _ => {
+                if self.word_at(w.to_string(), x)?.is_none() {
+                    return Ok(false);
+                }
+                (format!("{value} = nat::Nat::mod(bitvec::BitVec::toNat({xs}), {power})"), format!("{MASK}({w}, {k}, {xs})"))
+            }
+        };
+        if !self.bridges.iter().any(|(_, other, _)| other == &statement) {
+            self.bridges.push((format!("__bv_mask{}", self.bridges.len()), statement, proof));
+        }
+        Ok(true)
     }
 
     /// A word shifted right by a numeral, `x >> k`, is the quotient of

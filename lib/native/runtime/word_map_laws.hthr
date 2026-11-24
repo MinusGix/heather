@@ -24,11 +24,13 @@
 //
 // The proofs are at the table's capacity, four slots, which the compiled
 // functions fix (`[u64; 4]`, `band(3)`); distances between slots are
-// `(b + 4 - a) % 4`. Each probe is proved by applying its function's
-// `induct` principle to a motive with one stated lemma per case (the
-// principle's case binders carry no test names, so `induct`'s arms cannot
-// cite them). Arithmetic on slot distances sits in small lemmas over bare
-// numbers: inline `omega` in a large context cost minutes to check.
+// `WordMap::dist(a, b) = (b + 4 - a) % 4`, which `omega` reads as its body.
+// Each probe is proved by applying its function's `induct` principle to a
+// motive with one stated lemma per case (the principle's case binders carry
+// no test names, so `induct`'s arms cannot cite them). A distance step is a
+// small lemma over bare numbers: inline, `omega`'s certificate is as wide as
+// every distance in scope, and its subtraction splits may go to unrelated
+// ones (docs/tactics/omega-measure-reduction-design.md §27).
 import logic;
 import bool;
 import nat;
@@ -140,15 +142,7 @@ theorem WordMap::rows_row(self m: WordMap, x, w: u64, n: Nat): (s: Nat) → Mem(
 // ---------------------------------------------------------------------------
 // Slots as words: the next slot, and the home slot's range.
 
-theorem WordMap::band_three(x: u64): x.band(3).toNat() = x.toNat() % 4 {
-    let mask: (BitVec::ofNat(3, n := 64) = BitVec::low_mask(2)) = refl;
-    trans(cong_fn(λ (y: u64) => x.band(y).toNat(), mask), BitVec::toNat_band_low_mask(64, 2, x))
-}
-
-theorem WordMap::next_slot(j: u64, inside: j.toNat() < 4): ((j + 1).band(3)).toNat() = (j.toNat() + 1) % 4 {
-    let up: ((j + 1).toNat() = j.toNat() + 1) = bv_omega;
-    trans(WordMap::band_three(j + 1), cong_fn(λ (q: Nat) => q % 4, up))
-}
+theorem WordMap::next_slot(j: u64, inside: j.toNat() < 4): ((j + 1).band(3)).toNat() = (j.toNat() + 1) % 4 { bv_omega }
 
 theorem word_map_home_below(k: u64): word_map_home(k).toNat() < 4 {
     let is: (word_map_home(k) = (k * 11400714819323198485).shift_right(62)) = refl;
@@ -159,16 +153,20 @@ theorem word_map_home_below(k: u64): word_map_home(k).toNat() < 4 {
 // ---------------------------------------------------------------------------
 // One probe step in distances: from `j` to `jn`, the next slot.
 
-theorem WordMap::not_before_self(t, s, h: Nat, same: t = s, before: ((t + 4 - h) % 4) < ((s + 4 - h) % 4)): False { omega }
+// The steps from slot `a` forward to slot `b`, round the table. `omega`
+// reads it as its body.
+fn WordMap::dist(a, b: Nat) → Nat { (b + 4 - a) % 4 }
+
+theorem WordMap::not_before_self(t, s, h: Nat, same: t = s, before: WordMap::dist(h, t) < WordMap::dist(h, s)): False { omega }
 
 theorem WordMap::step_budget(j, s, jn, l, ln: Nat, j4: j < 4, s4: s < 4, nj: jn = (j + 1) % 4, dl: ln = l - 1, other: ¬(j = s),
-    budget: ((s + 4 - j) % 4) < l): ((s + 4 - jn) % 4) < ln { omega }
+    budget: WordMap::dist(j, s) < l): WordMap::dist(jn, s) < ln { omega }
 
 theorem WordMap::step_before(j, s, t, jn: Nat, j4: j < 4, s4: s < 4, t4: t < 4, nj: jn = (j + 1) % 4, other: ¬(j = s),
-    before: ((t + 4 - jn) % 4) < ((s + 4 - jn) % 4)): ((t + 4 - j) % 4) < ((s + 4 - j) % 4) { omega }
+    before: WordMap::dist(jn, t) < WordMap::dist(jn, s)): WordMap::dist(j, t) < WordMap::dist(j, s) { omega }
 
 theorem WordMap::step_before_back(j, s, t, jn: Nat, j4: j < 4, s4: s < 4, t4: t < 4, nj: jn = (j + 1) % 4, other: ¬(j = s), away: ¬(t = j),
-    before: ((t + 4 - j) % 4) < ((s + 4 - j) % 4)): ((t + 4 - jn) % 4) < ((s + 4 - jn) % 4) { omega }
+    before: WordMap::dist(j, t) < WordMap::dist(j, s)): WordMap::dist(jn, t) < WordMap::dist(jn, s) { omega }
 
 // ---------------------------------------------------------------------------
 // The table's lookups, read off its slots.
@@ -320,8 +318,6 @@ theorem WordMap::find_absent(m: WordMap, k: u64, none: (t: Nat) → t < 4 → m.
 }
 
 // Where a key is: at a slot, or at none.
-theorem WordMap::past_slots(q: Nat, big: q + 4 < 4): False { omega }
-
 theorem WordMap::locate(self m: WordMap, k: u64): Or<Exists(λ (t: Nat) => And<t < 4, m.key(t) = k>), (t: Nat) → t < 4 → ¬(m.key(t) = k)> {
     match BitVec::eq_dec(m.key(0), k) {
         Inl(e0) => Inl(Exists(0, And(omega, e0))),
@@ -336,7 +332,7 @@ theorem WordMap::locate(self m: WordMap, k: u64): Or<Exists(λ (t: Nat) => And<t
                         Succ(Zero) => λ _ => n1,
                         Succ(Succ(Zero)) => λ _ => n2,
                         Succ(Succ(Succ(Zero))) => λ _ => n3,
-                        Succ(Succ(Succ(Succ(q)))) => λ (big: q + 4 < 4) => false_elim(WordMap::past_slots(q, big)),
+                        Succ(Succ(Succ(Succ(q)))) => λ (big: q + 4 < 4) => false_elim(omega(big)),
                     }),
                 },
             },
@@ -850,50 +846,41 @@ theorem WordMap::get_insert_other(m: WordMap, inv: WordMapInv(m), k, v: u64, nz:
 // Removal by backward shifting: the distances it reasons with.
 
 // The shift's test, `(j - i).band(3)`, is the steps from `i` to `j`.
-theorem WordMap::slot_dist(j, i: u64, j4: j.toNat() < 4, i4: i.toNat() < 4): ((j - i).band(3)).toNat() = (j.toNat() + 4 - i.toNat()) % 4 {
-    let x = j.toNat() + Nat::pow(2, 64) - i.toNat();
-    let low: (x.mod(Nat::pow(2, 64)).mod(4) = x.mod(4)) = x.mod_pow_mod(2, 2, 62);
-    let p64: (Nat::pow(2, 64) = 18446744073709551616) = refl;
-    let shifted: ((j.toNat() + 18446744073709551616 - i.toNat()) % 4 = (j.toNat() + 4 - i.toNat()) % 4) = omega(j4, i4);
-    trans(WordMap::band_three(j - i), trans(cong_fn(λ (q: Nat) => q % 4, BitVec::toNat_sub_mod(64, j, i)), trans(low, rewrite(sym(p64), in := shifted))))
-}
+theorem WordMap::slot_dist(j, i: u64, j4: j.toNat() < 4, i4: i.toNat() < 4): ((j - i).band(3)).toNat() = (j.toNat() + 4 - i.toNat()) % 4 { bv_omega }
 
 // An entry that moves into the hole `i` (the hole on its probe) is reached
 // at `i` past only the slots it passed to reach `j`.
 theorem WordMap::moved_path(h, i, j, t: Nat, h4: h < 4, i4: i < 4, j4: j < 4, t4: t < 4, ij: ¬(i = j),
-    moves: ((j + 4 - i) % 4) <= ((j + 4 - h) % 4), before: ((t + 4 - h) % 4) < ((i + 4 - h) % 4)): ((t + 4 - h) % 4) < ((j + 4 - h) % 4) { omega }
+    moves: WordMap::dist(i, j) <= WordMap::dist(h, j), before: WordMap::dist(h, t) < WordMap::dist(h, i)): WordMap::dist(h, t) < WordMap::dist(h, j) { omega }
 
 // Its slot `j`, the new hole, is not on its new probe.
 theorem WordMap::moved_clear(h, i, j: Nat, h4: h < 4, i4: i < 4, j4: j < 4, ij: ¬(i = j),
-    moves: ((j + 4 - i) % 4) <= ((j + 4 - h) % 4), before: ((j + 4 - h) % 4) < ((i + 4 - h) % 4)): False { omega }
+    moves: WordMap::dist(i, j) <= WordMap::dist(h, j), before: WordMap::dist(h, j) < WordMap::dist(h, i)): False { omega }
 
 // An entry that stays did not pass the hole.
 theorem WordMap::stays_clear(h, i, j: Nat, h4: h < 4, i4: i < 4, j4: j < 4,
-    stays: ((j + 4 - h) % 4) < ((j + 4 - i) % 4), before: ((i + 4 - h) % 4) < ((j + 4 - h) % 4)): False { omega }
+    stays: WordMap::dist(h, j) < WordMap::dist(i, j), before: WordMap::dist(h, i) < WordMap::dist(h, j)): False { omega }
 
 // Counting from the removed slot `i0`: a probe that passes `j` to reach a
 // slot counted before `j` passes `z`, counted after it.
 theorem WordMap::wraps_past(i0, h, j, s, z: Nat, i04: i0 < 4, h4: h < 4, j4: j < 4, s4: s < 4, z4: z < 4,
-    sj: ((s + 4 - i0) % 4) < ((j + 4 - i0) % 4), jz: ((j + 4 - i0) % 4) < ((z + 4 - i0) % 4),
-    before: ((j + 4 - h) % 4) < ((s + 4 - h) % 4)): ((z + 4 - h) % 4) < ((s + 4 - h) % 4) { omega }
+    sj: WordMap::dist(i0, s) < WordMap::dist(i0, j), jz: WordMap::dist(i0, j) < WordMap::dist(i0, z),
+    before: WordMap::dist(h, j) < WordMap::dist(h, s)): WordMap::dist(h, z) < WordMap::dist(h, s) { omega }
 
 // A probe that passes the hole `i` to reach a slot counted after `j`
 // passes `j`.
 theorem WordMap::passes_next(i0, h, i, j, s: Nat, i04: i0 < 4, h4: h < 4, i4: i < 4, j4: j < 4, s4: s < 4,
-    ij: ((i + 4 - i0) % 4) < ((j + 4 - i0) % 4), js: ((j + 4 - i0) % 4) < ((s + 4 - i0) % 4),
-    before: ((i + 4 - h) % 4) < ((s + 4 - h) % 4)): ((j + 4 - h) % 4) < ((s + 4 - h) % 4) { omega }
+    ij: WordMap::dist(i0, i) < WordMap::dist(i0, j), js: WordMap::dist(i0, j) < WordMap::dist(i0, s),
+    before: WordMap::dist(h, i) < WordMap::dist(h, s)): WordMap::dist(h, j) < WordMap::dist(h, s) { omega }
 
 // The next slot, counted from `i0`, is one further while it is before `z`.
 theorem WordMap::count_next(i0, j, jn, z: Nat, i04: i0 < 4, j4: j < 4, z4: z < 4, nj: jn = (j + 1) % 4,
-    jz: ((j + 4 - i0) % 4) < ((z + 4 - i0) % 4)): ((jn + 4 - i0) % 4) = ((j + 4 - i0) % 4) + 1 { omega }
+    jz: WordMap::dist(i0, j) < WordMap::dist(i0, z)): WordMap::dist(i0, jn) = WordMap::dist(i0, j) + 1 { omega }
 
-theorem WordMap::before_count(i0, s, j, jn: Nat, i04: i0 < 4, s4: s < 4, j4: j < 4, cn: ((jn + 4 - i0) % 4) = ((j + 4 - i0) % 4) + 1, sj: ¬(s = j),
-    lt: ((s + 4 - i0) % 4) < ((jn + 4 - i0) % 4)): ((s + 4 - i0) % 4) < ((j + 4 - i0) % 4) { omega }
+theorem WordMap::before_count(i0, s, j, jn: Nat, i04: i0 < 4, s4: s < 4, j4: j < 4, cn: WordMap::dist(i0, jn) = WordMap::dist(i0, j) + 1, sj: ¬(s = j),
+    lt: WordMap::dist(i0, s) < WordMap::dist(i0, jn)): WordMap::dist(i0, s) < WordMap::dist(i0, j) { omega }
 
-theorem WordMap::after_count(i0, s, j, jn: Nat, i04: i0 < 4, s4: s < 4, j4: j < 4, cn: ((jn + 4 - i0) % 4) = ((j + 4 - i0) % 4) + 1, sj: ¬(s = j),
-    ge: ((j + 4 - i0) % 4) <= ((s + 4 - i0) % 4)): ((jn + 4 - i0) % 4) <= ((s + 4 - i0) % 4) { omega }
-
-theorem WordMap::count_apart(i0, a, b: Nat, i04: i0 < 4, a4: a < 4, b4: b < 4, lt: ((a + 4 - i0) % 4) < ((b + 4 - i0) % 4)): ¬(a = b) { λ e => omega(e, lt) }
+theorem WordMap::count_apart(i0, a, b: Nat, i04: i0 < 4, a4: a < 4, b4: b < 4, lt: WordMap::dist(i0, a) < WordMap::dist(i0, b)): ¬(a = b) { λ e => omega(e, lt) }
 
 // The table with the entry of slot `j` copied into slot `i`.
 fn WordMap::moved(self m: WordMap, i, j: Nat) → WordMap {
@@ -987,7 +974,7 @@ theorem WordMap::shift_skip(o: WordMap, k: u64, i0, z: Nat, m: WordMap, i, j, l:
                 let at_jj = j(sj, λ q _ => ((i + 4 - word_map_home(m.key(j)).toNat()) % 4) < ((q + 4 - word_map_home(m.key(j)).toNat()) % 4), at_j);
                 false_elim(WordMap::stays_clear(word_map_home(m.key(j)).toNat(), i, j, word_map_home_below(m.key(j)), st.i4, st.j4, stays, at_jj))
             },
-            Inr(other) => WordMap::after_count(i0, s, j, jn, st.i04, s4, st.j4, cn, other, st.cross(s, x, s4, si, a, xnz, before)),
+            Inr(other) => omega(st.i04, s4, st.j4, cn, other, st.cross(s, x, s4, si, a, xnz, before)),
         },
         st.distinct, st.there, st.back, st.used, st.count)
 }
@@ -1334,15 +1321,6 @@ theorem WordMap::shift_from(m: WordMap, inv: WordMapInv(m), k: u64, nz: ¬(k = 0
     WordMap::shift_removes(m, inv, k, nz, jj.toNat(), spare.witness, m, jj, (jj + 1).band(3), 3, start)
 }
 
-theorem WordMap::remove_reached(m: WordMap, inv: WordMapInv(m), k: u64, nz: ¬(k = 0), s: Nat, s4: s < 4, at: m.key(s) = k, jj: u64, js: jj.toNat() = s,
-    after: WordMap::remove_at(m, k, word_map_home(k), 4).after = WordMap::shift_at(m, jj, (jj + 1).band(3), 3).after): Removed(m, k, WordMap::remove(m, k).after)
-{
-    let into = cong_fn(λ (r: Mutated<WordMap, u64>) => r.after, WordMap::remove_is(m, k));
-    let jj4: (jj.toNat() < 4) = j(sym(js), λ q _ => q < 4, s4);
-    let at_jj: (m.key(jj.toNat()) = k) = trans(cong_fn(λ (q: Nat) => m.key(q), js), at);
-    j(sym(trans(into, after)), λ y _ => Removed(m, k, y), WordMap::shift_from(m, inv, k, nz, jj, jj4, at_jj))
-}
-
 theorem WordMap::remove_present(m: WordMap, inv: WordMapInv(m), k: u64, nz: ¬(k = 0), s: Nat, s4: s < 4, at: m.key(s) = k):
     Removed(m, k, WordMap::remove(m, k).after)
 {
@@ -1352,7 +1330,11 @@ theorem WordMap::remove_present(m: WordMap, inv: WordMapInv(m), k: u64, nz: ¬(k
         λ t t4 before => And(inv.reach(s, t, k, s4, t4, at, nz, before), λ again =>
             WordMap::not_before_self(t, s, h.toNat(), inv.distinct(t, s, t4, s4, λ z0 => nz(trans(sym(again), z0)), trans(again, sym(at))), before));
     let reached = WordMap::remove_found(m, k, s, s4, at, nz, h, 4, h4, omega(s4, h4), clear);
-    WordMap::remove_reached(m, inv, k, nz, s, s4, at, reached.witness, reached.proof.left, reached.proof.right)
+    let jj = reached.witness;
+    let js = reached.proof.left;
+    let into = cong_fn(λ (r: Mutated<WordMap, u64>) => r.after, WordMap::remove_is(m, k));
+    let at_jj: (m.key(jj.toNat()) = k) = trans(cong_fn(λ (q: Nat) => m.key(q), js), at);
+    j(sym(trans(into, reached.proof.right)), λ y _ => Removed(m, k, y), WordMap::shift_from(m, inv, k, nz, jj, omega(js, s4), at_jj))
 }
 
 // Remove keeps the invariant and is `assoc_remove` at every lookup.
@@ -1390,7 +1372,7 @@ theorem WordMap::empty_key(s: Nat, inside: s < 4): WordMap::empty().key(s) = 0 {
         Succ(Zero) => λ _ => refl,
         Succ(Succ(Zero)) => λ _ => refl,
         Succ(Succ(Succ(Zero))) => λ _ => refl,
-        Succ(Succ(Succ(Succ(q)))) => λ (big: q + 4 < 4) => false_elim(WordMap::past_slots(q, big)),
+        Succ(Succ(Succ(Succ(q)))) => λ (big: q + 4 < 4) => false_elim(omega(big)),
     })(inside)
 }
 

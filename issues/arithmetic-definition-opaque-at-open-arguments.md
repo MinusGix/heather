@@ -38,3 +38,7 @@ naming the distance between two slots of a table, `(b + 4 - a) % 4`:
 arguments too; the kernel's lazy δ prefers unfolding a definition whose
 body is the other side's head (`Before` against `Nat::Lt`), and prefers
 record η to unfolding a measured recursion at a literal.
+
+## Log
+
+- 2026-11-24: Item 1 fixed (branch `claude/proof-tooling-omega`; items 2 and 3, the kernel's δ heuristics, belong to the other proof-tooling thread). `omega` reads a call at open arguments as its body when a few head reducts (the δ step and the β steps instantiating its parameters, `Unfold::OpenArithmetic`) reach `+`, `*`, `div`, `mod` or a successor whose leaves spell; the subtraction split looks through the same opening, so `dist(a, b) = (b + 4 - a) % 4` is its body, split and all. A recursive definition stays an atom (stuck on its `match`). `word_map_laws.hthr` now defines `WordMap::dist` and states its distance lemmas with it; their callers' written-out facts convert. Design §26; probes and controls in `lib/_tests/std/tactic/omega_tests.hthr` ("Definitions at open arguments").

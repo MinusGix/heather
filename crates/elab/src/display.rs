@@ -267,6 +267,36 @@ impl Elaborator {
         (sp.fallbacks.get() == 0).then_some(out)
     }
 
+    /// [`Self::spell_term_source`] for a term that has no spelling of its
+    /// own, with every subterm that is the value of a visible `let` spelled
+    /// by the `let`'s name: `jj` for `reached.witness`, where `reached` is
+    /// bound to a call whose arguments include a `λ` the speller cannot
+    /// write (issues/omega-unspellable-local-in-scope.md). The name reads
+    /// back to the same term where the result is parsed in `cx`. Asked only
+    /// after the plain spelling failed, so a spellable term never pays for
+    /// the aliases' reads.
+    pub(crate) fn spell_term_source_aliased(&self, cx: &Cx, t: &Term) -> Option<String> {
+        let mut seen = std::collections::HashSet::new();
+        let aliased: Vec<(Term, String)> = cx
+            .aliases
+            .iter()
+            .rev()
+            .filter(|alias| !alias.name.starts_with('#') && !alias.name.starts_with("__") && seen.insert(alias.name.clone()))
+            .filter_map(|alias| {
+                let (term, _, _) = self.resolve_reading(cx, &alias.name, heather_syntax::Span { start: 0, end: 0 }).ok()?;
+                (!matches!(term, Term::Var(_))).then(|| (term, alias.name.clone()))
+            })
+            .collect();
+        if aliased.is_empty() {
+            return None;
+        }
+        let mut sp = self.speller(cx);
+        sp.qualified = true;
+        sp.aliased = Some(&aliased);
+        let out = sp.tm(t, 0);
+        (sp.fallbacks.get() == 0).then_some(out)
+    }
+
     fn spell_within(&self, cx: &Cx, ty: &Type, fallbacks: u32) -> Option<String> {
         let sp = self.speller(cx);
         let out = sp.ty(ty, 0);
@@ -284,6 +314,7 @@ impl Elaborator {
             qualified: false,
             annotations: false,
             rough: None,
+            aliased: None,
             numerals: std::cell::OnceCell::new(),
             fields: RefCell::new(Vec::new()),
         }
@@ -430,6 +461,10 @@ struct Speller<'a> {
     annotations: bool,
     /// Presentation-only scratch placeholders; this mode elides raw nodes.
     rough: Option<&'a [(GlobalVar, String)]>,
+    /// Terms a `let` in `cx` names, each spelled by its name where the walk
+    /// meets it outside every binder it crossed
+    /// ([`Elaborator::spell_term_source_aliased`]).
+    aliased: Option<&'a [(Term, String)]>,
     /// [`Elaborator::numeral_templates`], read the first time the walk meets
     /// a term that could be a numeral.
     numerals: std::cell::OnceCell<Vec<Term>>,
@@ -932,6 +967,10 @@ impl Speller<'_> {
         if !self.charge(d) {
             return self.raw_tm(t);
         }
+        if let Some(aliased) = self.aliased
+            && self.crossed.borrow().is_empty()
+            && let Some((_, name)) = aliased.iter().find(|(term, _)| term == t)
+        { return name.clone(); }
         if let Some(placeholders) = self.rough
             && let Term::GlobalTm { var, .. } = t
             && let Some((_, name)) = placeholders.iter().find(|(v, _)| v == var)
