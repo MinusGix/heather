@@ -152,6 +152,17 @@ impl Reader<'_> {
                 let arguments = self.ids()?;
                 (format!("Lend([{}], {callee}, {arguments}, {})", views.join(", "), self.next()?), 1)
             }
+            // A loop with no bound (`Until`): its inputs, parameters, body,
+            // exit, next words and outputs.
+            9 => {
+                let inputs = self.ids()?;
+                let parameters = self.ids()?;
+                let (body, n) = self.region()?;
+                let exit = self.next()?;
+                let next = self.ids()?;
+                let outputs = self.ids()?;
+                (format!("Until({inputs}, {parameters}, {body}, {exit}, {next}, {outputs})"), 1 + n)
+            }
             tag => return Err(format!("region tag {tag}")),
         })
     }
