@@ -240,7 +240,7 @@ theorem Arena::sum_inside(b, k: u64, bound: Nat, inside: b.toNat() + k.toNat() <
 // A store changes no word outside its window.
 theorem Arena::store_word(a: Arena, b, c, i, x: u64, j: Nat, li: i.toNat() < c.toNat(), inW: b.toNat() + c.toNat() <= 16,
     outside: Or<j < b.toNat(), b.toNat() + c.toNat() <= j>):
-    Arena::store(a, b, c, i, x).word(j) = a.word(j)
+    Arena::store(a, b, c, i, x).after.word(j) = a.word(j)
 {
     let sum = Arena::sum_inside(b, i, 16, omega(li, inW), omega);
     let other: (¬(j = (b + i).toNat())) = λ e => match outside { Inl(lo) => omega(e, sum, lo), Inr(hi) => omega(e, sum, hi, li) };
@@ -260,15 +260,15 @@ theorem Arena::read_same(y, z: Arena, b, c, k: u64, lk: k.toNat() < c.toNat(), i
 // apart from it, both inside the heap.
 theorem Arena::store_apart(a: Arena, b, c, i, x, b2, c2, k: u64, li: i.toNat() < c.toNat(), inW: b.toNat() + c.toNat() <= 16,
     lk: k.toNat() < c2.toNat(), inV: b2.toNat() + c2.toNat() <= 16, apart: Arena::Apart(b.toNat(), c.toNat(), b2.toNat(), c2.toNat())):
-    Arena::read(Arena::store(a, b, c, i, x), b2, c2, k) = Arena::read(a, b2, c2, k)
+    Arena::read(Arena::store(a, b, c, i, x).after, b2, c2, k) = Arena::read(a, b2, c2, k)
 {
-    Arena::read_same(Arena::store(a, b, c, i, x), a, b2, c2, k, lk, inV, λ j lo hi =>
+    Arena::read_same(Arena::store(a, b, c, i, x).after, a, b2, c2, k, lk, inV, λ j lo hi =>
         Arena::store_word(a, b, c, i, x, j, li, inW, match apart { Inl(before) => Inr(omega(before, lo)), Inr(after) => Inl(omega(after, hi)) }))
 }
 
 // The window a store wrote reads back what was stored.
 theorem Arena::read_store_same(a: Arena, b, c, i, x: u64, li: i.toNat() < c.toNat(), inW: b.toNat() + c.toNat() <= 16):
-    Arena::read(Arena::store(a, b, c, i, x), b, c, i) = x
+    Arena::read(Arena::store(a, b, c, i, x).after, b, c, i) = x
 {
     let sum = Arena::sum_inside(b, i, 16, omega(li, inW), omega);
     Arena::word_put_same(a, (b + i).toNat(), x, omega(sum, li, inW))

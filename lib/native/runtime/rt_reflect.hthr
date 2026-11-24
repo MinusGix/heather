@@ -428,6 +428,70 @@ fn rt_accepted<A>(what: String, c: Checked<A>) → Tac<A> {
     match c { Accepted(a) => pure(a), Refused(why) => rt_refuse(what ++ ": " ++ why) }
 }
 
+// Erased parameters (issues/runtime-erased-parameters.md): a parameter
+// the code does not take, wherever it stands among the others.
+//
+// - A proof: its type is a proposition, one any two of whose inhabitants
+//   are one term (`∥P∥`). Two locals of it are assumed and compared, so the
+//   test is the kernel's own: a function cannot answer differently at two
+//   proofs, and the pin, stated at every proof, holds by conversion.
+// - Erased data: `Erased<A>` (`lib/std/core/erased.hthr`), a value the
+//   meaning reads and the code does not carry. The pin is stated at every
+//   value of it too, and holds by conversion only where the body computes
+//   nothing from it; the reflector refuses a use of it as runtime data by
+//   name before the kernel would.
+//
+// Each is checked where it is read, so a wrong verdict here is a refused
+// pin, never a wrong program.
+fn rt_is_erased_ty(ty: Handle) → Tac<Bool> {
+    view(ty).bind(λ v => match v {
+        HGlobal(g, _, _) => lookup("erased::Erased").bind(λ c => match c {
+            Accepted(e) => pure(e.id.same(g.id)),
+            Refused(_) => pure(False),
+        }),
+        _ => pure(False),
+    })
+}
+
+fn rt_is_proof_ty(ty: Handle, under: Option<LocalRef>) → Tac<Bool> {
+    view(ty).bind(λ v => match v {
+        HOther => assume(Hd(ty), "p", under).bind(λ c => match c {
+            Refused(_) => pure(False),
+            Accepted(p) => assume(Hd(ty), "q", Some(p.ref)).bind(λ c2 => match c2 {
+                Refused(_) => pure(False),
+                Accepted(q) => defeq(Local(p.ref), Local(q.ref)),
+            }),
+        }),
+        _ => pure(False),
+    })
+}
+
+// Whether a parameter of type `ty`, under the local `under`, is erased.
+fn rt_erased_param(ty: Handle, under: Option<LocalRef>) → Tac<Bool> {
+    rt_is_erased_ty(ty).bind(λ e => match e { True => pure(True), False => rt_is_proof_ty(ty, under) })
+}
+
+// Whether a function of type `t` takes an erased parameter anywhere.
+fn rt_takes_erased(fuel: Nat, t: Handle, under: Option<LocalRef>) → Tac<Bool> {
+    match fuel {
+        Zero => pure(False),
+        Succ(f) => view(t).bind(λ v => match v {
+            HPi(dom) => rt_erased_param(dom, under).bind(λ e => match e {
+                True => pure(True),
+                False => open(t, "x").bind(λ c => match c {
+                    Refused(_) => pure(False),
+                    Accepted(o) => rt_takes_erased(f, o.body, Some(o.local.ref)),
+                }),
+            }),
+            _ => pure(False),
+        }),
+    }
+}
+
+fn rt_erased_used() → String {
+    "an erased parameter (`Erased<A>`) used as runtime data: the code does not take it, so a function may pass it on and state with it, but not compute from it"
+}
+
 // The `match` `h` is, itself: a field read of its record (`Arms`' `path`)
 // is a statement `if`'s joined locals, which only an effectful walk reads
 // (`rt_if_make`).
@@ -676,7 +740,9 @@ fn Known::ty_within(self k: Known, fuel: Nat, h: Handle) → Tac<Ty> {
                     },
                     False => match Known::rec(k.recs, g.id, 0) {
                         Some(i) => pure(match Known::is_enum_at(k.recs, i) { True => Enum(k.reprs.len() + i), False => Named(k.reprs.len() + i) }),
-                        None => repr_of(h).bind(λ c => match c {
+                        // An erased value met as a node's type: something
+                        // computes with it.
+                        None => rt_is_erased_ty(h).bind(λ erased => match erased { True => rt_refuse(rt_erased_used()), False => repr_of(h).bind(λ c => match c {
                             Accepted(_) => k.repr_ty(h, name),
                             // An enum is met as itself, not as the sum
                             // its definition unfolds to.
@@ -690,7 +756,7 @@ fn Known::ty_within(self k: Known, fuel: Nat, h: Handle) → Tac<Ty> {
                                 }),
                               },
                             }),
-                        }),
+                        }) }),
                     },
                 },
             },
@@ -1691,7 +1757,13 @@ fn rt_local(k: Known, st: RSt, h: Handle, operand: Bool, x: LocalRef, args: List
             },
             None => match k.is_world(x) {
                 True => rt_refuse("the world `io` used as a value: it is threaded through calls, never runtime data"),
-                False => rt_refuse("a local that is not runtime data (a proof, or a match's payload)"),
+                False => infer(Local(x)).bind(λ c => match c {
+                    Accepted(t) => rt_is_erased_ty(t).bind(λ e => match e {
+                        True => rt_refuse(rt_erased_used()),
+                        False => rt_refuse("a local that is not runtime data (a proof, or a match's payload)"),
+                    }),
+                    Refused(_) => rt_refuse("a local that is not runtime data (a proof, or a match's payload)"),
+                }),
             },
         },
         Cons(_, _) => rt_refuse("a local applied to arguments (a function value)"),
@@ -2043,24 +2115,25 @@ fn rt_span(k: Known, st: RSt, h: Handle) → Tac<Nat> {
 // callee's span `j` (a loop keeps a span's home in place, and a call reads
 // its callee over the caller's file), and the words after them are
 // operands.
-// A call's arguments that are runtime data: the facts a callee takes after
-// its words (squashed conditions, whose types `View` shows no layer of)
-// are proofs the code does not pass.
-// The arguments, last first, with the trailing proofs dropped.
-fn rt_data_rev(rev: List<Handle>) → Tac<List<Handle>> {
+// A call's arguments that are runtime data: an argument whose type is a
+// proof (a squashed condition, whose type `View` shows no layer of) or
+// `Erased<A>` is one the code does not pass, wherever it stands. The
+// callee's own reflection dropped the parameter the same way, and its pin
+// at every value of it is what the caller's conversion reads.
+fn rt_data_kept(rev: List<Handle>) → Tac<List<Handle>> {
     match rev {
         Nil => pure([]),
-        Cons(last, before) => infer(Hd(last)).bind(λ c => match c {
-            Refused(_) => pure(rev),
+        Cons(last, before) => rt_data_kept(before).bind(λ kept => infer(Hd(last)).bind(λ c => match c {
+            Refused(_) => pure(Cons(last, kept)),
             Accepted(t) => view(t).bind(λ v => match v {
-                HOther => rt_data_rev(before),
-                _ => pure(rev),
+                HOther => pure(kept),
+                _ => rt_is_erased_ty(t).bind(λ e => match e { True => pure(kept), False => pure(Cons(last, kept)) }),
             }),
-        }),
+        })),
     }
 }
 
-fn rt_data_args(args: List<Handle>) → Tac<List<Handle>> { rt_data_rev(args.rev()).bind(λ kept => pure(kept.rev())) }
+fn rt_data_args(args: List<Handle>) → Tac<List<Handle>> { rt_data_kept(args) }
 
 fn rt_lent_args(step: RSt → Handle → Tac<Pair<RSt, Tm>>, k: Known, st: RSt, j: Nat, lent: Nat, args: List<Handle>) → Tac<Pair<RSt, List<Nat>>> {
     match lent {
@@ -2488,17 +2561,25 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
 // A function: its parameters (the body's leading `λ`s), its result's code,
 // and its body as a term.
 
-fn rt_params(fuel: Nat, k: Known, st: RSt, tys: List<Ty>, b: Handle) → Tac<Pair<Pair<RSt, List<Ty>>, Handle>> {
+// An erased parameter (`rt_erased_param`) is opened and bound to no
+// variable: the code does not take it, and a use of it as runtime data is
+// refused.
+fn rt_params_under(fuel: Nat, k: Known, st: RSt, tys: List<Ty>, b: Handle, under: Option<LocalRef>) → Tac<Pair<Pair<RSt, List<Ty>>, Handle>> {
     match fuel {
         Zero => rt_refuse("more parameters than the reflector's fuel"),
         Succ(f) => view(b).bind(λ v => match v {
-            HLam(dom) => k.ty(dom).bind(λ t => open(b, "x").bind(λ c => rt_accepted("a parameter", c)).bind(λ o =>
-                rt_params(f, k, RSt(st.depth + 1, st.lets, st.memo, st.handles, Cons(Pair(o.local.ref.id, st.depth), st.locals), st.funs),
-                    tys ++ [t], o.body))),
+            HLam(dom) => rt_erased_param(dom, under).bind(λ erased => match erased {
+                True => open(b, "e").bind(λ c => rt_accepted("an erased parameter", c)).bind(λ o => rt_params_under(f, k, st, tys, o.body, Some(o.local.ref))),
+                False => k.ty(dom).bind(λ t => open(b, "x").bind(λ c => rt_accepted("a parameter", c)).bind(λ o =>
+                    rt_params_under(f, k, RSt(st.depth + 1, st.lets, st.memo, st.handles, Cons(Pair(o.local.ref.id, st.depth), st.locals), st.funs),
+                        tys ++ [t], o.body, Some(o.local.ref)))),
+            }),
             _ => pure(Pair(Pair(st, tys), b)),
         }),
     }
 }
+
+fn rt_params(fuel: Nat, k: Known, st: RSt, tys: List<Ty>, b: Handle) → Tac<Pair<Pair<RSt, List<Ty>>, Handle>> { rt_params_under(fuel, k, st, tys, b, None) }
 
 // The spans a function is lent, read off its parameters' codes: each
 // leading byte list followed by a 64-bit word is a span and its length

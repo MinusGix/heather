@@ -1,0 +1,158 @@
+// Probes for erased parameters of a `runtime fn` (issues/runtime-erased-parameters.md):
+// a parameter whose type is a proposition (`∥P∥`) or `Erased<A>` is no word
+// of the code, wherever it stands, and what the generator publishes holds at
+// every value of it. Nothing here is proved by hand: each theorem restates or
+// reads what the generator published. Nothing imports this module.
+import runtime_data;
+
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+
+// ---------------------------------------------------------------------------
+// A laid record's reader and writer taking proofs
+
+laid record Slots { n: u64, heap: [u64; 4] }
+
+// The proof between two words: the code takes the span, its length word,
+// `i` and `k`, and nothing for `inside`.
+runtime fn Slots::get(self s: Slots, i: u64, inside: ∥i.toNat() < 4∥ := bv_omega, k: u64) → u64 {
+    s.heap.at(i) + k
+}
+
+// The proofs last, as a window's are: the element it replaced.
+runtime fn Slots::set(mut self s: Slots, i, x: u64, inside: ∥i.toNat() < 4∥ := bv_omega) → u64 {
+    let old = s.heap.at(i);
+    s.heap := s.heap.put(i, x);
+    old
+}
+
+// `n` 9, the heap `[1, 2, 3, 4]`, little-endian words.
+fn SLOTS() → List<u8> {
+    [b(9), b(0), b(0), b(0), b(0), b(0), b(0), b(0), b(1), b(0), b(0), b(0), b(0), b(0), b(0), b(0),
+     b(2), b(0), b(0), b(0), b(0), b(0), b(0), b(0), b(3), b(0), b(0), b(0), b(0), b(0), b(0), b(0),
+     b(4), b(0), b(0), b(0), b(0), b(0), b(0), b(0)]
+}
+
+// The code takes no word for a proof.
+fn get_code() → (List<u8> → u64 → u64 → u64 → Mutated<List<u8>, u64>) { Slots::get::bytes }
+
+fn set_code() → (List<u8> → u64 → u64 → u64 → Mutated<List<u8>, u64>) { Slots::set::bytes }
+
+// At literal indexes it computes: element 2 is 3, and 3 + 10.
+theorem slots_get_runs(): Slots::get::bytes(SLOTS(), w(40), w(2), w(10)).value = w(13) { refl }
+
+// The store answers the old element and leaves the new one.
+theorem slots_set_runs(): Slots::set::bytes(SLOTS(), w(40), w(1), w(7)).value = w(2) ∧
+    Slots::get::bytes(Slots::set::bytes(SLOTS(), w(40), w(1), w(7)).after, w(40), w(1), w(0)).value = w(7) {
+    ⟨refl, refl⟩
+}
+
+// What it publishes, at an open index and an open proof: the theorem takes
+// the proof where the function does, and the code does not.
+theorem slots_get_held(own: List<u8>, s: Slots, length, i: u64, inside: ∥i.toNat() < 4∥, k: u64, holds: rt_held::Stored::Holds(Slots::stored(), own, length, s)):
+    Slots::get(s, i, k, inside := inside) = Slots::get::bytes(own, length, i, k).value {
+    Slots::get::runs_held(own, s, length, i, inside, k, holds).value
+}
+
+theorem slots_set_held(own: List<u8>, s: Slots, length, i, x: u64, inside: ∥i.toNat() < 4∥, holds: rt_held::Stored::Holds(Slots::stored(), own, length, s)):
+    Slots::set(s, i, x, inside := inside).value = Slots::set::bytes(own, length, i, x).value ∧
+    rt_held::Stored::Holds(Slots::stored(), Slots::set::bytes(own, length, i, x).after, length, Slots::set(s, i, x, inside := inside).after) {
+    let ran = Slots::set::runs_held(own, s, length, i, x, inside, holds);
+    ⟨ran.value, ran.holds⟩
+}
+
+// In a checking position: a caller's proof is found where the call is
+// written, from its own test, and the theorem is read at it.
+theorem slots_get_tested(own: List<u8>, s: Slots, length, i: u64, h: i < 4, holds: rt_held::Stored::Holds(Slots::stored(), own, length, s)):
+    Slots::get(s, i, 0) = Slots::get::bytes(own, length, i, 0).value {
+    let found: ∥i.toNat() < 4∥ = bv_omega;
+    Slots::get::runs_held(own, s, length, i, found, 0, holds).value
+}
+
+// ---------------------------------------------------------------------------
+// A proof about a record's parameter: its type names an ambient word
+
+laid record Ring(cap: u64) { head: u64, items: [u64; cap.toNat()] }
+
+runtime fn Ring::peek({cap: u64}, self r: Ring(cap), i: u64, inside: ∥i.toNat() < cap.toNat()∥ := bv_omega) → u64 { r.items.at(i) }
+
+theorem ring_peek_runs(): Ring::peek::bytes([b(0), b(0), b(0), b(0), b(0), b(0), b(0), b(0), b(5), b(0), b(0), b(0), b(0), b(0), b(0), b(0),
+    b(6), b(0), b(0), b(0), b(0), b(0), b(0), b(0)], w(24), w(2), w(1)).value = w(6) { refl }
+
+theorem ring_peek_held(cap: u64, own: List<u8>, r: Ring(cap), length, i: u64, inside: ∥i.toNat() < cap.toNat()∥,
+    holds: rt_held::Stored::Holds(Ring::stored(cap), own, length, r)):
+    Ring::peek(r, i, cap := cap, inside := inside) = Ring::peek::bytes(own, length, cap, i).value {
+    Ring::peek::runs_held(cap, own, r, length, i, inside, holds).value
+}
+
+// ---------------------------------------------------------------------------
+// Erased data: a generation the meaning reads and the code does not take
+
+// The element, where the generation the caller holds is the record's: the
+// meaning keeps `g`, the code has no word for it.
+runtime fn Slots::get_at(self s: Slots, g: Erased<u64>, i: u64, inside: ∥i.toNat() < 4∥ := bv_omega) → u64 { s.heap.at(i) }
+
+fn get_at_code() → (List<u8> → u64 → u64 → Mutated<List<u8>, u64>) { Slots::get_at::bytes }
+
+theorem slots_get_at_runs(): Slots::get_at::bytes(SLOTS(), w(40), w(3)).value = w(4) { refl }
+
+// At every generation, a neutral one.
+theorem slots_get_at_held(own: List<u8>, s: Slots, length: u64, g: Erased<u64>, i: u64, inside: ∥i.toNat() < 4∥,
+    holds: rt_held::Stored::Holds(Slots::stored(), own, length, s)):
+    Slots::get_at(s, g, i, inside := inside) = Slots::get_at::bytes(own, length, i).value {
+    Slots::get_at::runs_held(own, s, length, g, i, inside, holds).value
+}
+
+// ---------------------------------------------------------------------------
+// Negative controls
+
+// A function that branches on an erased parameter computes with it.
+// expect-error: an erased parameter (`Erased<A>`) used as runtime data
+runtime fn Slots::by_gen(self s: Slots, g: Erased<u64>) → u64 { if g.value < 3 { s.n } else { 0 } }
+
+// One that answers it.
+// expect-error: an erased parameter (`Erased<A>`) used as runtime data
+runtime fn Slots::gen_of(self s: Slots, g: Erased<u64>) → u64 { g.value }
+
+// A call whose proof is missing: no test bounds the index.
+// expect-error: was left to its default
+fn get_untested(s: Slots, i: u64) → u64 { s.get(i, 0) }
+
+// A function of the record that calls one taking a proof is not taken yet:
+// its meaning names the callee as a function of the record and words.
+// expect-error: takes an erased parameter
+runtime fn Slots::get_first(self s: Slots) → u64 { s.get(0, 0) }
+
+// A loop over an erased parameter waits for the loop combinator.
+// expect-error: a loop that takes an erased parameter
+runtime fn Slots::sum_from(self s: Slots, i, acc: u64, g: Erased<u64>) → u64 decreases (4 - i).toNat() {
+    if h: i < 4 { s.sum_from(i + 1, acc + s.heap.at(i), g) } else { acc }
+}
+
+// ---------------------------------------------------------------------------
+// A function of words taking a proof: not compiled yet
+
+// It would be compiled as its shadow, its reflection's meaning, which its
+// callers' tables would list (issues/runtime-erased-pure-shadow.md).
+// expect-error: a function of words that takes an erased parameter
+runtime fn erased_div(n, d: u64, nonzero: ∥0 < d.toNat()∥ := bv_omega) → u64 { n / d }
+
+// expect-error: a function of words that takes an erased parameter
+runtime fn erased_pick(g: Erased<u64>, x: u64) → u64 { x }
+
+// Nor one over a span: its code is compiled from the function itself.
+// expect-error: a function over a span that takes an erased parameter
+runtime fn List::erased_put(mut self s: List<u8>, n, i: u64, inside: ∥i < n∥ := bv_omega, x: u64) → u64 {
+    s.put_u64_be_within(n, i, x);
+    1
+}
+
+// ---------------------------------------------------------------------------
+// A `Bytes(n)`: a proof in the middle, and an erased datum
+
+runtime fn erased_byte({n: u64}, self s: Bytes(n), g: Erased<u64>, i: u64, inside: ∥i < s.len()∥ := bv_omega, k: u64) → u64 { ↑s.at(i) + k }
+
+// The code takes the span, its length word, `i` and `k`.
+fn erased_byte_code() → (List<u8> → u64 → u64 → u64 → Mutated<List<u8>, u64>) { erased_byte::bytes }
+
+theorem erased_byte_runs(): erased_byte::bytes([b(5), b(6), b(7)], w(3), w(1), w(10)).value = w(16) { refl }

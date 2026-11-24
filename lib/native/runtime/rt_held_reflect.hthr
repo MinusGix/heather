@@ -832,7 +832,10 @@ fn rt_held_callee(k: Known, held: List<HeldCall>, g: GlobalRef, name: String, ar
                 None => rt_name_of(g, name).bind(λ n => lookup(n ++ "::runs_held").bind(λ c => match c {
                     Refused(_) => pure(None),
                     Accepted(_) => lookup(n ++ "::bytes").bind(λ b => match b {
-                        Accepted(bytes) => rt_call_lent(64, k, operands).bind(λ spans => pure(Some(HeldCall(bytes.id, g, n, operands.len(), spans)))),
+                        Accepted(bytes) => infer(Global(g)).bind(λ c => rt_accepted("a callee's type", c)).bind(λ t => rt_takes_erased(64, t, None)).bind(λ erased => match erased {
+                            True => rt_refuse("a call of a function of a laid record that takes an erased parameter (a proof, an `Erased<A>`) is not taken yet: its caller's meaning names it as a function of the record and words"),
+                            False => rt_call_lent(64, k, operands).bind(λ spans => pure(Some(HeldCall(bytes.id, g, n, operands.len(), spans)))),
+                        }),
                         Refused(_) => pure(None),
                     }),
                 })),
@@ -1237,7 +1240,7 @@ fn rt_held_tail(fuel: Nat, cx: HeldCx, w: HeldWalk, reads: Bool, h: Handle) → 
 record HeldWords { locals: List<LocalRef>, bound: List<Pair<Nat, Nat>>, body: Handle, last: LocalRef, spans: Nat }
 
 fn rt_held_takes<A>() → Tac<A> {
-    rt_refuse("a function of a laid record takes, after its record, the spans it only reads (each a `List<u8>` followed by its 64-bit length word) and then 64-bit words")
+    rt_refuse("a function of a laid record takes, after its record, the spans it only reads (each a `List<u8>` followed by its 64-bit length word) and then 64-bit words, with proofs and `Erased<A>` anywhere among them")
 }
 
 // `spans`: a span may still come; `length`: the parameter is the length
@@ -1246,7 +1249,12 @@ fn rt_held_words(fuel: Nat, k: Known, h: Handle, level: Nat, under: LocalRef, sp
     match fuel {
         Zero => match length { True => rt_held_takes(), False => pure(HeldWords([], [], h, under, 0)) },
         Succ(f) => view(h).bind(λ v => match v {
-            HLam(dom) => k.ty(dom).bind(λ at => match at {
+            // An erased parameter (a proof, an `Erased<A>`) is no word of
+            // the code: opened, bound to no variable, and passed over.
+            HLam(dom) => rt_erased_param(dom, Some(under)).bind(λ erased => match erased {
+              True => open(h, "e").bind(λ c => rt_accepted("an erased parameter", c)).bind(λ o =>
+                  rt_held_words(f, k, o.body, level, o.local.ref, spans, length)),
+              False => k.ty(dom).bind(λ at => match at {
                 Word(w) => match w.same(64) {
                     False => rt_held_takes(),
                     True => {
@@ -1266,6 +1274,7 @@ fn rt_held_words(fuel: Nat, k: Known, h: Handle, level: Nat, under: LocalRef, sp
                     },
                 },
                 _ => rt_held_takes(),
+              }),
             }),
             _ => match length { True => rt_held_takes(), False => pure(HeldWords([], [], h, under, 0)) },
         }),
@@ -1418,6 +1427,17 @@ fn rt_held_reflect_one(k: Known, names: FileNames, g: GlobalRef, name: String) �
         },
     };
     let en <- entered;
+    // A loop over an erased parameter would hand it to its recursion, which
+    // the loop layer reads (`rt_held_loop`); it waits for the loop
+    // combinator's round 4 (issues/loops-on-one-combinator.md).
+    let erasing: Tac<True> = match en.snd {
+        None => pure(trivial),
+        Some(_) => infer(Global(g)).bind(λ c => rt_accepted("its type", c)).bind(λ t => rt_takes_erased(64, t, None)).bind(λ e => match e {
+            True => rt_refuse("a loop that takes an erased parameter (a proof, an `Erased<A>`) waits for the loop combinator (issues/loops-on-one-combinator.md); a function without one is taken"),
+            False => pure(trivial),
+        }),
+    };
+    let _ <- erasing;
     // A record that takes parameters is the function's after them:
     // `fn T::m({n: u64}, mut self t: T(n), …)`.
     let rp <- rt_held_record_params(8, en.fst, []);

@@ -41,8 +41,8 @@
 // where it stands: the tests that keep the heap's indexes in bounds are
 // written where an index is used (`h < 14`), as `bv_omega` does not read a
 // bound through a sum of words that may wrap; a window's `read` and `store`
-// take found proofs, so they are ordinary functions until a function of a
-// record takes a proof parameter; and `push` is a call, a test of
+// take found proofs, which their code does not carry (erased parameters);
+// and `push` is a call, a test of
 // its answer and a call, which has no branch equations (its laws are those
 // of `push_in` and `grow`).
 //
@@ -83,21 +83,23 @@ runtime fn Arena::reset(mut self a: Arena, mark: u64) → u64 {
 // no junk default past the count (span-record-design: junk values as a
 // default API are a sign of needing better automation).
 //
-// These two are ordinary functions, not `runtime fn`s: a function of a laid
-// record does not take a proof parameter yet ("a type with no runtime
-// layout", runtime-record-function-limits; the ledger pins it). Compiled
-// code reads and stores a window as `push_in` and `copy_at` do, the heap
-// array's element at `base + i` under the caller's own tests, which is the
-// term these two are.
-fn Arena::read(self a: Arena, base, count, i: u64, inside: ∥i.toNat() < count.toNat()∥ := bv_omega,
+// Both proofs are erased (issues/runtime-erased-parameters.md): the code
+// takes the span, its length word and the three words, and the read is the
+// heap array's element at `base + i`; `runs_held` holds at every pair of
+// proofs, and a caller's found proofs are checked where it is written and
+// leave nothing in the code.
+runtime fn Arena::read(self a: Arena, base, count, i: u64, inside: ∥i.toNat() < count.toNat()∥ := bv_omega,
     fits: ∥base.toNat() + count.toNat() <= 16∥ := bv_omega) → u64 {
     a.heap.at(base + i)
 }
 
-// Element `i` of the window `(base, count)` set to `x`, under the same proofs.
-fn Arena::store(self a: Arena, base, count, i, x: u64, inside: ∥i.toNat() < count.toNat()∥ := bv_omega,
-    fits: ∥base.toNat() + count.toNat() <= 16∥ := bv_omega) → Arena {
-    a with { heap = a.heap.put(base + i, x) }
+// Element `i` of the window `(base, count)` set to `x`, under the same
+// proofs, answering the element it replaced.
+runtime fn Arena::store(mut self a: Arena, base, count, i, x: u64, inside: ∥i.toNat() < count.toNat()∥ := bv_omega,
+    fits: ∥base.toNat() + count.toNat() <= 16∥ := bv_omega) → u64 {
+    let old = a.heap.at(base + i);
+    a.heap := a.heap.put(base + i, x);
+    old
 }
 
 // The copy that growing makes: elements `i ..< n` of the window at `from`

@@ -86,6 +86,9 @@ import bitvec_div;
 export import bitvec;
 export import bytes;
 export import loop;
+// `Erased<A>`: a parameter the code does not take (rt_reflect.hthr,
+// `rt_erased_param`).
+export import erased;
 
 // ---------------------------------------------------------------------------
 // The judgment: what the default setup compiles today, with the reason for
@@ -2017,12 +2020,16 @@ fn runtime_callees(pair: Expr, unit: Expr, gs: List<Nat>) → Expr {
 
 // A callee's signature, read off its type: the words its code takes (two
 // for each span it is lent, `rt_lent`), and how many spans it is lent.
-fn runtime_sig_from(fuel: Nat, k: Known, t: Handle, ps: List<Ty>) → Tac<Pair<Nat, Sig>> {
+// An erased parameter (`rt_erased_param`) is none of its words.
+fn runtime_sig_from(fuel: Nat, k: Known, t: Handle, ps: List<Ty>, under: Option<LocalRef>) → Tac<Pair<Nat, Sig>> {
     match fuel {
         Zero => runtime_fail("a callee with more parameters than the generator reads"),
         Succ(f) => view(t).bind(λ v => match v {
-            HPi(dom) => k.ty(dom).bind(λ p => open(t, "x").or_fail("runtime: a callee's type: ").bind(λ o =>
-                runtime_sig_from(f, k, o.body, ps ++ [p]))),
+            HPi(dom) => rt_erased_param(dom, under).bind(λ erased => match erased {
+                True => open(t, "e").or_fail("runtime: a callee's type: ").bind(λ o => runtime_sig_from(f, k, o.body, ps, Some(o.local.ref))),
+                False => k.ty(dom).bind(λ p => open(t, "x").or_fail("runtime: a callee's type: ").bind(λ o =>
+                    runtime_sig_from(f, k, o.body, ps ++ [p], Some(o.local.ref)))),
+            }),
             _ => k.ty(t).bind(λ r => { let lent = rt_lent(ps); pure(Pair(lent.fst, Sig(lent.snd, r))) }),
         }),
     }
@@ -2032,7 +2039,7 @@ fn runtime_sigs(k: Known, gs: List<Nat>) → Tac<List<Pair<Nat, Sig>>> {
     match gs {
         Nil => pure([]),
         Cons(g, rest) => infer(Global(GlobalRef(g))).or_fail("runtime: a callee's type: ").bind(λ t =>
-            runtime_sig_from(64, k, t, []).bind(λ s => runtime_sigs(k, rest).bind(λ ss => pure(Cons(s, ss))))),
+            runtime_sig_from(64, k, t, [], None).bind(λ s => runtime_sigs(k, rest).bind(λ ss => pure(Cons(s, ss))))),
     }
 }
 
@@ -2083,6 +2090,49 @@ fn runtime_at_places<A>(lent: Nat, xs: List<A>, i: Nat, at: Nat → A) → List<
 }
 
 fn runtime_params_of(xs: List<LocalRef>) → List<Param> { xs.map(λ x => Param(x, False)) }
+
+// The parameters of a function over its span after the span, as
+// `runtime_own_params` makes them (the length word first, then a read
+// span's bytes where the code takes their place, and words), with a local
+// for each erased parameter of `fe` where `fe` takes it among them
+// (`rt_erased_param`, issues/runtime-erased-parameters.md), read off `fe`'s
+// type at the arguments before it: `words` are the code's, `ordered` every
+// local in the order a theorem takes them, each under the one before, and
+// `args` `fe`'s arguments after `done` (the record's parameters and the
+// record), erased ones included. The code takes none of the erased ones,
+// and a theorem holds at every one. Trailing erased parameters are taken
+// too.
+record RtOwnArgs { words: List<LocalRef>, ordered: List<LocalRef>, args: List<Expr> }
+
+fn runtime_own_erased(fuel: Nat, fe: Expr, word, bytes: Handle, lent: Nat, n: Nat, under: Option<LocalRef>, i: Nat, done: List<Expr>, acc: RtOwnArgs) → Tac<RtOwnArgs> {
+    match fuel {
+        Zero => pure(RtOwnArgs(acc.words, acc.ordered, done)),
+        Succ(more) => {
+          let take_word: Tac<RtOwnArgs> = match n {
+            Zero => pure(RtOwnArgs(acc.words, acc.ordered, done)),
+            Succ(m) => assume(Hd(match runtime_read_place(lent, i) { True => bytes, False => word }), "x" ++ decimal_name(2, i), under).or_fail("runtime: a parameter: ").bind(λ x =>
+                runtime_own_erased(more, fe, word, bytes, lent, m, Some(x.ref), i + 1, match i { Zero => done, Succ(_) => done.append([Local(x.ref)]) },
+                    RtOwnArgs(acc.words.append([x.ref]), acc.ordered.append([x.ref]), acc.args))),
+          };
+          match i {
+            // The length word is the code's, not the function's.
+            Zero => take_word,
+            Succ(_) => infer(ap(fe, done)).bind(λ c => match c {
+                Refused(_) => take_word,
+                Accepted(t) => whnf_or(t).bind(λ tw => view(tw).bind(λ v => match v {
+                    HPi(dom) => rt_erased_param(dom, under).bind(λ erased => match erased {
+                        True => assume(Hd(dom), "erased" ++ decimal_name(2, done.len()), under).or_fail("runtime: an erased parameter: ").bind(λ p =>
+                            runtime_own_erased(more, fe, word, bytes, lent, n, Some(p.ref), i, done.append([Local(p.ref)]),
+                                RtOwnArgs(acc.words, acc.ordered.append([p.ref]), acc.args))),
+                        False => take_word,
+                    }),
+                    _ => take_word,
+                })),
+            }),
+          }
+        },
+    }
+}
 
 // ---------------------------------------------------------------------------
 // The program a runtime fn is compiled in: it and every runtime fn it calls,
@@ -4598,17 +4648,18 @@ fn runtime_span_sig_from(fuel: Nat, k: Known, names: FileNames, t: Handle, ps: L
     match fuel {
         Zero => runtime_fail("a callee with more parameters than the generator reads"),
         Succ(f) => view(t).bind(λ v => match v {
-            HPi(dom) => view(dom).bind(λ dv => match dv {
+            HPi(dom) => view(dom).bind(λ dv => rt_is_erased_ty(dom).bind(λ erased => match dv {
                 // A proof (a squashed condition): the code does not take it.
                 HOther => open(t, "x").or_fail("runtime: a callee's type: ").bind(λ o => runtime_span_sig_from(f, k, names, o.body, ps)),
-                _ => runtime_bytes_sig_at(k, names, t, ps).bind(λ at_bytes => match at_bytes {
+                // Nor an `Erased<A>`.
+                _ => match erased { True => open(t, "x").or_fail("runtime: a callee's type: ").bind(λ o => runtime_span_sig_from(f, k, names, o.body, ps)), False => runtime_bytes_sig_at(k, names, t, ps).bind(λ at_bytes => match at_bytes {
                     // A function of a `Bytes(n)`: its code takes the
                     // record's bytes and `n`.
                     Some(after) => runtime_span_sig_from(f, k, names, after, [ByteList(0), Word(64)]),
                     None => k.ty(dom).bind(λ p => open(t, "x").or_fail("runtime: a callee's type: ").bind(λ o =>
                         runtime_span_sig_from(f, k, names, o.body, ps ++ [p]))),
-                }),
-            }),
+                }) },
+            })),
             _ => rt_file_result(4, k, names, t).bind(λ r => rt_file_codes(ps).bind(λ codes => pure(Pair(codes.fst, Sig(codes.snd, r))))),
         }),
     }
@@ -5649,6 +5700,16 @@ fn runtime_words_out(tys: Table, t: Ty) → Bool {
 // for now (a count or a type held by its repr across such a function's
 // boundary is not generated yet).
 fn runtime_span(name: String, f: GlobalRef) → Tac<List<Decl>> {
+    // Its code is compiled from the function itself, typed by its own
+    // signature, so one taking an erased parameter needs a shadow, as a
+    // function of words does (issues/runtime-erased-pure-shadow.md).
+    let f_t <- infer(Global(f)).or_fail("runtime: `" ++ name ++ "`'s type: ");
+    let erasing <- rt_takes_erased(64, f_t, None);
+    let unerased <- match erasing {
+        True => runtime_fail("`" ++ name ++ "`: a function over a span that takes an erased parameter (a proof, an `Erased<A>`) is not compiled yet; "
+            ++ "a function of a laid record or of a `Bytes(n)` takes one (issues/runtime-erased-pure-shadow.md)"),
+        False => pure(trivial),
+    };
     let names <- rt_file_names();
     let found <- runtime_span_reflect(name, f, names);
     let k = found.fst;
@@ -6127,6 +6188,16 @@ fn runtime_judged(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, world:
 }
 
 fn runtime_reads(name: String, f: GlobalRef, levels: Nat := 0, stack: Nat := 0) → Tac<List<Decl>> {
+    // A function of words taking an erased parameter would be compiled as
+    // its shadow, its reflection's meaning; that is not built
+    // (issues/runtime-erased-pure-shadow.md).
+    let f_t <- infer(Global(f)).or_fail("runtime: `" ++ name ++ "`'s type: ");
+    let erasing <- rt_takes_erased(64, f_t, None);
+    let unerased <- match erasing {
+        True => runtime_fail("`" ++ name ++ "`: a function of words that takes an erased parameter (a proof, an `Erased<A>`) is not compiled yet, nor one lent a span; "
+            ++ "a function of a laid record or of a `Bytes(n)` takes one (issues/runtime-erased-pure-shadow.md)"),
+        False => pure(trivial),
+    };
     let k0 <- rt_known_in([name], [], True);
     // The reflection and its callees' signatures, the types held by their
     // reprs added to the table as the walk meets them (design §16.13).
@@ -6428,11 +6499,18 @@ fn runtime_held_straight(name: String, f: GlobalRef, r: HeldReflected, parts: Sp
     // A carried parameter's word is the parameter itself, the code's
     // operand after the length word.
     let carried_vars: List<Expr> = match s.carried { None => [], Some(c) => [c.w] };
-    let all0 <- runtime_own_params(ts.word, bytes_h, lent, r.operands + 1 - carried_vars.len(), Some(t0.ref), 0);
+    // The function's arguments: its record's parameters, the record and
+    // its words, with a local for each erased parameter where it stands
+    // (issues/runtime-erased-parameters.md). The code takes none of them;
+    // the theorem holds at every one.
+    let own_args <- runtime_own_erased(64, Global(f), ts.word, bytes_h, lent, r.operands + 1 - carried_vars.len(), Some(t0.ref), 0,
+        runtime_locals(r.params).append([Local(t0.ref)]), RtOwnArgs([], [], []));
+    let all0 = own_args.words;
+    let args0 = own_args.args;
     let length0 = all0.head_or(t0.ref);
     let xs0 = all0.drop(1);
     let code_vars: List<Expr> = Cons(Local(length0), carried_vars ++ runtime_locals(xs0));
-    let last0 = all0.rev().head_or(t0.ref);
+    let last0 = own_args.ordered.rev().head_or(t0.ref);
     let holds0 <- assume(ap(n.holds, [record, whole, Local(own0.ref), Local(length0), Local(t0.ref)]), "holds", Some(last0)).or_fail("runtime: a span that holds a record: ");
     let file = RtQ::seq(s.files, runtime_read_spans(lent, runtime_locals(all0), 0));
     let hw = ap(s.hw, [file]);
@@ -6441,7 +6519,7 @@ fn runtime_held_straight(name: String, f: GlobalRef, r: HeldReflected, parts: Sp
     // The function of the record: one that only reads it answers its
     // value beside the record as it was.
     let unchanged <- runtime_held_ref("rt_held::HWorld::unchanged");
-    let applied = ap(Global(f), runtime_locals(r.params) ++ Cons(Local(t0.ref), runtime_locals(xs0)));
+    let applied = ap(Global(f), args0);
     let spec = match r.changes { True => applied, False => ap(unchanged, [Blank, Blank, Local(t0.ref), applied]) };
     let code = ap(parts.compiled, Cons(Local(own0.ref), code_vars));
     let g_e = ap(n.bind_onto, [parts.params, parts.no_tys]);
@@ -6457,7 +6535,7 @@ fn runtime_held_straight(name: String, f: GlobalRef, r: HeldReflected, parts: Sp
     // the statement is made a parameter (`revert_into` at a global), the
     // statement is proved there by `refl`, and it is read at the callees.
     let written <- body(f).or_fail("runtime: `" ++ name ++ "`'s body: ");
-    let unfolded = ap(Hd(written), runtime_locals(r.params) ++ Cons(Local(t0.ref), runtime_locals(xs0)));
+    let unfolded = ap(Hd(written), args0);
     let spelled = match r.changes { True => unfolded, False => ap(unchanged, [Blank, Blank, Local(t0.ref), unfolded]) };
     // Stated beside the hypothesis the theorem ends in, so that the
     // statement lives under the theorem's last binder and a parameter
@@ -6506,7 +6584,7 @@ fn runtime_held_straight(name: String, f: GlobalRef, r: HeldReflected, parts: Sp
     pure([
         Decl(held_form, name ++ "::held", runtime_params_of(r.params), Hd(marked_t), s.hw),
         Decl(AsTheorem, name ++ "::sound", runtime_params_of(r.params), Hd(sound_t), s.sound),
-        Decl(AsTheorem, name ++ "::runs_held", runtime_params_of(r.params ++ Cons(own0.ref, Cons(t0.ref, all0.append([holds0.ref])))),
+        Decl(AsTheorem, name ++ "::runs_held", runtime_params_of(r.params ++ Cons(own0.ref, Cons(t0.ref, own_args.ordered.append([holds0.ref])))),
             ap(n.agreement, [record, Blank, whole, Local(length0), spec, code]), proof)])
 }
 
@@ -6954,11 +7032,13 @@ fn runtime_of_bytes(f: GlobalRef) → Tac<Bool> {
 
 // The parameters of a function's type that are words, by their locals:
 // the others are proofs (squashed conditions), which the code does not take.
+// A proof (whose type `View` shows no layer of) or an `Erased<A>` is none of
+// them, wherever it stands (issues/runtime-erased-parameters.md).
 fn runtime_bytes_words(xs: List<LocalRef>) → Tac<List<LocalRef>> {
     match xs {
         Nil => pure([]),
         Cons(x, rest) => infer(Local(x)).or_fail("runtime: a parameter's type: ").bind(λ t => view(t).bind(λ v =>
-            runtime_bytes_words(rest).bind(λ more => pure(match v { HOther => more, _ => Cons(x, more) })))),
+            rt_is_erased_ty(t).bind(λ erased => runtime_bytes_words(rest).bind(λ more => pure(match v { HOther => more, _ => match erased { True => more, False => Cons(x, more) } }))))),
     }
 }
 

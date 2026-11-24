@@ -18,7 +18,7 @@ import arena_laws;
 // at it is the proof the store takes that its window is inside the heap.
 theorem fresh_store_unseen(a: Arena, size, base, i, x, b, c, k: u64, got: Arena::alloc(a, size).value = Got(base),
     li: i.toNat() < size.toNat(), lk: k.toNat() < c.toNat(), older: b.toNat() + c.toNat() <= a.top.toNat(), small: a.top.toNat() <= 16):
-    Arena::read(Arena::store(Arena::alloc(a, size).after, base, size, i, x, fits := squash(Arena::alloc_inside(a, size, base, got))), b, c, k) =
+    Arena::read(Arena::store(Arena::alloc(a, size).after, base, size, i, x, fits := squash(Arena::alloc_inside(a, size, base, got))).after, b, c, k) =
         Arena::read(Arena::alloc(a, size).after, b, c, k)
 {
     let apart: Arena::Apart(base.toNat(), size.toNat(), b.toNat(), c.toNat()) =
@@ -33,7 +33,7 @@ theorem fresh_store_unseen(a: Arena, size, base, i, x, b, c, k: u64, got: Arena:
 // and the arena is as it was. (Stated as theorems: a `match` on the outcome
 // whose `Got` arm stores needs the arm's equation to reach `alloc_inside`.)
 theorem alloc_then_store_got(a: Arena, size, base, x: u64, got: Arena::alloc(a, size).value = Got(base), pos: 0 < size.toNat()):
-    And<base = a.top, Arena::read(Arena::store(Arena::alloc(a, size).after, base, size, 0, x, fits := squash(Arena::alloc_inside(a, size, base, got))),
+    And<base = a.top, Arena::read(Arena::store(Arena::alloc(a, size).after, base, size, 0, x, fits := squash(Arena::alloc_inside(a, size, base, got))).after,
         base, size, 0, fits := squash(Arena::alloc_inside(a, size, base, got))) = x>
 {
     And(Arena::alloc_fresh(a, size, base, got).left,
@@ -83,11 +83,11 @@ theorem stale_one_fits(): STALE_ONE().toNat() + 4 <= 16 { let b: (STALE_ONE().to
 
 theorem stale_two_fits(): STALE_TWO().toNat() + 4 <= 16 { let b: (STALE_TWO().toNat() = 0) = refl; omega(b) }
 
-theorem stale_store_seen(): ¬(Arena::read(Arena::store(STALE_SECOND().after, STALE_TWO(), 4, 1, 5, fits := squash(stale_two_fits())), STALE_ONE(), 4, 1,
+theorem stale_store_seen(): ¬(Arena::read(Arena::store(STALE_SECOND().after, STALE_TWO(), 4, 1, 5, fits := squash(stale_two_fits())).after, STALE_ONE(), 4, 1,
         fits := squash(stale_one_fits())) =
     Arena::read(STALE_SECOND().after, STALE_ONE(), 4, 1, fits := squash(stale_one_fits())))
 {
-    let seen: (Arena::read(Arena::store(STALE_SECOND().after, STALE_TWO(), 4, 1, 5, fits := squash(stale_two_fits())), STALE_ONE(), 4, 1,
+    let seen: (Arena::read(Arena::store(STALE_SECOND().after, STALE_TWO(), 4, 1, 5, fits := squash(stale_two_fits())).after, STALE_ONE(), 4, 1,
         fits := squash(stale_one_fits())) = BitVec::ofNat(5)) = refl;
     let before: (Arena::read(STALE_SECOND().after, STALE_ONE(), 4, 1, fits := squash(stale_one_fits())) = BitVec::ofNat(0)) = refl;
     λ e => zero_not_five(trans(sym(before), trans(sym(e), seen)))
