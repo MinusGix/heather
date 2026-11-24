@@ -319,25 +319,44 @@ function that leaves the record (until readers land, §2).
 
 **Its specification is a theorem about the function.** A `runtime fn` is
 ordinary Heather, and its agreement says the code is that function. So
-"this table is a finite map" is proved over `PortMap::insert` and
-`PortMap::get_at` as Heather functions, against `assoc.hthr`'s laws
-(`List::assoc_get_set_same`, `List::assoc_get_set_other`), with no
-`datarepr` between:
+"this table is a finite map" is proved over the compiled functions as
+Heather functions, against `assoc.hthr`'s laws, with no `datarepr` between.
+Built (2026-11-24) at the ledger's capacity: the table is
+`lib/native/runtime/word_map.hthr` (`WordMap`) and its laws
+`word_map_laws.hthr`:
 
-- `abs(m)` is the association list of the occupied slots;
-- `inv(m)` is the probing invariant: every key is reachable from its home
-  slot without passing an empty one, keys are distinct, and
-  `count` is the number of occupied slots;
-- `insert` keeps `inv` and, on its success arm, means `assoc_set` up to
-  lookup: at every key, `abs(insert(m, k, v)).assoc_get(i)` is
-  `abs(m).assoc_set(k, v).assoc_get(i)`. Equality of the lists is the wrong
-  statement, since `assoc_set` shadows by consing and a table holds one row
-  per key in slot order. The full answer comes only when `count = cap`;
-- `get` means `assoc_get` under `inv`.
+- `abs(m)` is the association list of the occupied slots, and a lookup in
+  it is read off the slots (`abs_get_at`, `abs_get_none`), so each
+  operation's agreement is a statement about which slots it changed
+  (`abs_get_same` over `Moves` both ways);
+- `WordMapInv(m)` is the probing invariant: every key is reachable from its
+  home slot without passing an empty one, keys are distinct, `count` is the
+  number of occupied slots, and one slot is empty;
+- `insert` keeps it and, on its success arm, means `assoc_set` up to
+  lookup (`insert_get`): at every key, `abs(insert(m, k, v)).assoc_get(i)`
+  is `abs(m).assoc_set(k, v).assoc_get(i)`. Equality of the lists is the
+  wrong statement, since `assoc_set` shadows by consing and a table holds
+  one row per key in slot order. The full answer comes only at `cap - 1`
+  keys (`insert_full`);
+- `get` means `assoc_get` under the invariant (`get_is`), and `remove`,
+  backward shifting, keeps the invariant and means `assoc_remove`
+  (`remove_spec`); the laws `get_insert_same`, `get_insert_other`,
+  `get_remove_same`, `get_remove_other` follow.
 
-The proofs are loops over a measure, so they are ordinary induction on
-`left`. `datarepr` earns its place when generic code over `List` or a map
-interface is to run on the table (transfer), which is rung 4's.
+**The table keeps one slot empty.** Backward shifting (Knuth's Algorithm R)
+stops at an empty slot; at a full table it runs out of slots first, and a
+key it moved across the wrap is left behind a later hole
+(`shift_at_full_is_wrong`: removing from a closed full table leaves a key
+stored twice). So insert answers full at `cap - 1` keys; with rehashing
+the load factor keeps the slot instead.
+
+The proofs are inductions along each function's own recursion (`f::induct`
+applied to a motive, a stated lemma per case); the shift's invariant
+counts slots from the removed key's slot and keeps an original empty slot
+ahead of the scan (`ShiftInv`). `datarepr` earns its place when generic
+code over `List` or a map interface is to run on the table (transfer),
+which is rung 4's. The capacity as a parameter and rehashing are
+`runtime-hash-map-rehash`.
 
 **With §3 and §5**: the table is a `Table(cap)` laid record whose trailing
 array holds its entries, in a window of the arena, and a full table (or a load factor reached) allocates a window
@@ -376,7 +395,8 @@ Each step lands its ledger rows; none needs a decision beyond §10's.
 4. **The arena** (§5): `Arena`, `alloc`, `reset`, the four laws, the growing
    vector over 2 and 3. Issue `runtime-arena-in-span`.
 5. **The hash map's specification** (§7), first at fixed capacity over the
-   ledger's table, then rehashing over 4. Issue `runtime-hash-map-spec`.
+   ledger's table (built 2026-11-24, `runtime-hash-map-spec`), then
+   rehashing over 4 (`runtime-hash-map-rehash`).
 6. Two written spans (§6) when a customer needs them.
 
 Steps 2 and 5's first half are independent and can run in parallel.

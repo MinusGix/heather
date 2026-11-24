@@ -329,6 +329,22 @@ Rust have a specification of exactly that form (the scanner is
 lemma family for "this loop is this fold" is worth more to dogfooding than
 any other single proof lever.
 
+**The first measurement, the word map** (2026-11-24,
+`lib/native/runtime/word_map_laws.hthr`): a fixed-capacity hash table
+(insert, lookup, backward-shift removal; 59 program lines) proved to be a
+finite map against `assoc.hthr`, about 1,160 proof lines, twenty to one, and
+removal alone eighteen to one. The cost was not the mathematics (stating
+lookups as facts about which slots changed made most invariant lemmas pass
+as written) but plumbing a tactic should own: each probe's induction applied
+by hand with a stated lemma per case, since a `runtime fn`'s principle
+carries no test names (`runtime-fn-induct-test-names`); word arithmetic
+modulo the capacity that `bv_omega` does not read
+(`bv-omega-word-arithmetic-modulo`); and distances between slots spelled out
+because `omega` holds a defined one as an atom
+(`arithmetic-definition-opaque-at-open-arguments`). The probes are not folds
+over a list, so the "loop is a fold" lever does not reach them; what reached
+them is `induct` along the function, which wants its arms back.
+
 ### 5.7 The friction of a first hour
 
 Smaller, and worth one round because a dogfooder meets them before anything
