@@ -630,3 +630,189 @@ theorem WordMap::insert_cases(m: WordMap, inv: WordMapInv(m), k, v: u64, nz: ¬(
         },
     }
 }
+
+// ---------------------------------------------------------------------------
+// The invariant after an insert, and its lookups.
+
+theorem WordMap::replaced_inv(m: WordMap, inv: WordMapInv(m), s: Nat, v: u64): WordMapInv(m.replaced(s, v)) {
+    WordMapInv(inv.reach, inv.distinct, inv.count, inv.room)
+}
+
+theorem WordMap::filled_reach(m: WordMap, inv: WordMapInv(m), k, v: u64, nz: ¬(k = 0), e: Nat, first: FirstEmpty(m, word_map_home(k).toNat(), e),
+    s, t: Nat, x: u64, s4: s < 4, t4: t < 4, at: m.filled(e, k, v).key(s) = x, xnz: ¬(x = 0),
+    before: ((t + 4 - word_map_home(x).toNat()) % 4) < ((s + 4 - word_map_home(x).toNat()) % 4)): ¬(m.filled(e, k, v).key(t) = 0)
+{
+    let n = m.filled(e, k, v);
+    match Nat::eq_dec(s, e) {
+        Inl(se) => {
+            let ke: (n.key(s) = k) = trans(cong_fn(λ (q: Nat) => n.key(q), se), WordMap::filled_key_same(m, e, k, v, first.inside));
+            let xk: (x = k) = trans(sym(at), ke);
+            let at_k = j(xk, λ y _ => ((t + 4 - word_map_home(y).toNat()) % 4) < ((s + 4 - word_map_home(y).toNat()) % 4), before);
+            let at_e = j(se, λ q _ => ((t + 4 - word_map_home(k).toNat()) % 4) < ((q + 4 - word_map_home(k).toNat()) % 4), at_k);
+            let te: (¬(t = e)) = λ same => WordMap::not_before_self(t, e, word_map_home(k).toNat(), same, at_e);
+            λ z => first.path(t, t4, at_e, trans(sym(WordMap::filled_key_other(m, e, k, v, t, te)), z))
+        },
+        Inr(other) => {
+            let was = inv.reach(s, t, x, s4, t4, trans(sym(WordMap::filled_key_other(m, e, k, v, s, other)), at), xnz, before);
+            match Nat::eq_dec(t, e) {
+                Inl(te) => λ z => nz(trans(sym(WordMap::filled_key_same(m, e, k, v, first.inside)), trans(cong_fn(λ (q: Nat) => n.key(q), sym(te)), z))),
+                Inr(away) => λ z => was(trans(sym(WordMap::filled_key_other(m, e, k, v, t, away)), z)),
+            }
+        },
+    }
+}
+
+theorem WordMap::filled_distinct(m: WordMap, inv: WordMapInv(m), k, v: u64, e: Nat, inside: e < 4, none: (t: Nat) → t < 4 → ¬(m.key(t) = k)):
+    m.filled(e, k, v).Distinct()
+{
+    let n = m.filled(e, k, v);
+    λ s t s4 t4 occupied same => match Nat::eq_dec(s, e) {
+        Inl(se) => match Nat::eq_dec(t, e) {
+            Inl(te) => trans(se, sym(te)),
+            Inr(tne) => {
+                let ks: (n.key(s) = k) = trans(cong_fn(λ (q: Nat) => n.key(q), se), WordMap::filled_key_same(m, e, k, v, inside));
+                false_elim(none(t, t4, trans(sym(WordMap::filled_key_other(m, e, k, v, t, tne)), trans(sym(same), ks))))
+            },
+        },
+        Inr(sne) => match Nat::eq_dec(t, e) {
+            Inl(te) => {
+                let kt: (n.key(t) = k) = trans(cong_fn(λ (q: Nat) => n.key(q), te), WordMap::filled_key_same(m, e, k, v, inside));
+                false_elim(none(s, s4, trans(sym(WordMap::filled_key_other(m, e, k, v, s, sne)), trans(same, kt))))
+            },
+            Inr(tne) => inv.distinct(s, t, s4, t4,
+                λ z => occupied(trans(WordMap::filled_key_other(m, e, k, v, s, sne), z)),
+                trans(sym(WordMap::filled_key_other(m, e, k, v, s, sne)), trans(same, WordMap::filled_key_other(m, e, k, v, t, tne)))),
+        },
+    }
+}
+
+theorem WordMap::filled_count(m: WordMap, inv: WordMapInv(m), k, v: u64, nz: ¬(k = 0), e: Nat, first: FirstEmpty(m, word_map_home(k).toNat(), e),
+    room: m.count.toNat() < 3): (m.count + 1).toNat() = m.filled(e, k, v).used(0, 4)
+{
+    let n = m.filled(e, k, v);
+    let up: ((m.count + 1).toNat() = m.count.toNat() + 1) = bv_omega;
+    let ne: (¬(n.key(e) = 0)) = λ z => nz(trans(sym(WordMap::filled_key_same(m, e, k, v, first.inside)), z));
+    let more = WordMap::used_fill(m, n, e, first.empty, ne, 4, 0, omega, omega(first.inside), λ t lo hi te => {
+        let same: (n.key(t) = m.key(t)) = WordMap::filled_key_other(m, e, k, v, t, te);
+        And(λ z => trans(same, z), λ z => trans(sym(same), z))
+    });
+    trans(up, trans(cong_fn(λ (q: Nat) => q + 1, inv.count), sym(more)))
+}
+
+theorem WordMap::filled_inv(m: WordMap, inv: WordMapInv(m), k, v: u64, nz: ¬(k = 0), e: Nat, first: FirstEmpty(m, word_map_home(k).toNat(), e),
+    room: m.count.toNat() < 3, none: (t: Nat) → t < 4 → ¬(m.key(t) = k)): WordMapInv(m.filled(e, k, v))
+{
+    let up: ((m.count + 1).toNat() < 4) = bv_omega;
+    WordMapInv(λ s t x s4 t4 at xnz before => WordMap::filled_reach(m, inv, k, v, nz, e, first, s, t, x, s4, t4, at, xnz, before),
+        WordMap::filled_distinct(m, inv, k, v, e, first.inside, none),
+        WordMap::filled_count(m, inv, k, v, nz, e, first, room),
+        up)
+}
+
+theorem WordMap::replaced_get(m: WordMap, inv: WordMapInv(m), k, v: u64, nz: ¬(k = 0), s: Nat, s4: s < 4, at: m.key(s) = k, i: u64):
+    m.replaced(s, v).abs().assoc_get(i) = m.abs().assoc_set(k, v).assoc_get(i)
+{
+    let n = m.replaced(s, v);
+    match BitVec::eq_dec(i, k) {
+        Inl(ik) => {
+            let got = n.abs_get_at(inv.distinct, k, v, s, s4, RowAt(at, nz, WordMap::replaced_val_same(m, s, v, s4)));
+            trans(cong_fn(λ (y: u64) => n.abs().assoc_get(y), ik), got)
+        },
+        Inr(ne) => {
+            let away = λ (t: Nat) (a: m.key(t) = i) => λ (ts: t = s) => ne(trans(sym(a), trans(cong_fn(λ (q: Nat) => m.key(q), ts), at)));
+            let there: WordMap::Moves(m, n, i) = λ w t t4 row => Exists(t, And(t4, RowAt(row.at, row.nz, trans(WordMap::replaced_val_other(m, s, v, t, away(t, row.at)), row.val))));
+            let back: WordMap::Moves(n, m, i) = λ w t t4 row => Exists(t, And(t4, RowAt(row.at, row.nz, trans(sym(WordMap::replaced_val_other(m, s, v, t, away(t, row.at))), row.val))));
+            WordMap::abs_get_same(m, n, inv.distinct, inv.distinct, i, there, back)
+        },
+    }
+}
+
+theorem WordMap::filled_get(m: WordMap, inv: WordMapInv(m), k, v: u64, nz: ¬(k = 0), e: Nat, first: FirstEmpty(m, word_map_home(k).toNat(), e),
+    room: m.count.toNat() < 3, none: (t: Nat) → t < 4 → ¬(m.key(t) = k), i: u64): m.filled(e, k, v).abs().assoc_get(i) = m.abs().assoc_set(k, v).assoc_get(i)
+{
+    let n = m.filled(e, k, v);
+    let dn = WordMap::filled_distinct(m, inv, k, v, e, first.inside, none);
+    match BitVec::eq_dec(i, k) {
+        Inl(ik) => {
+            let got = n.abs_get_at(dn, k, v, e, first.inside, RowAt(WordMap::filled_key_same(m, e, k, v, first.inside), nz, WordMap::filled_val_same(m, e, k, v, first.inside)));
+            trans(cong_fn(λ (y: u64) => n.abs().assoc_get(y), ik), got)
+        },
+        Inr(ne) => {
+            let there: WordMap::Moves(m, n, i) = λ w t t4 row => {
+                let te: (¬(t = e)) = λ same => row.nz(trans(sym(row.at), trans(cong_fn(λ (q: Nat) => m.key(q), same), first.empty)));
+                Exists(t, And(t4, RowAt(trans(WordMap::filled_key_other(m, e, k, v, t, te), row.at), row.nz, trans(WordMap::filled_val_other(m, e, k, v, t, te), row.val))))
+            };
+            let back: WordMap::Moves(n, m, i) = λ w t t4 row => {
+                let te: (¬(t = e)) = λ same => ne(trans(sym(row.at), trans(cong_fn(λ (q: Nat) => n.key(q), same), WordMap::filled_key_same(m, e, k, v, first.inside))));
+                Exists(t, And(t4, RowAt(trans(sym(WordMap::filled_key_other(m, e, k, v, t, te)), row.at), row.nz, trans(sym(WordMap::filled_val_other(m, e, k, v, t, te)), row.val))))
+            };
+            WordMap::abs_get_same(m, n, inv.distinct, dn, i, there, back)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Insert: it keeps the invariant, it answers full only with three keys
+// stored, and otherwise it is `assoc_set` at every key's lookup.
+
+theorem WordMap::after_of(m: WordMap, k, v: u64, n: WordMap, c: u64, eq: WordMap::insert(m, k, v) = Mutated(n, c)): WordMap::insert(m, k, v).after = n {
+    cong_fn(λ (r: Mutated<WordMap, u64>) => r.after, eq)
+}
+
+theorem WordMap::value_of(m: WordMap, k, v: u64, n: WordMap, c: u64, eq: WordMap::insert(m, k, v) = Mutated(n, c)): WordMap::insert(m, k, v).value = c {
+    cong_fn(λ (r: Mutated<WordMap, u64>) => r.value, eq)
+}
+
+theorem WordMap::insert_inv(m: WordMap, inv: WordMapInv(m), k, v: u64, nz: ¬(k = 0)): WordMapInv(WordMap::insert(m, k, v).after) {
+    match WordMap::insert_cases(m, inv, k, v, nz) {
+        Replaced(s, s4, at, eq) => j(sym(WordMap::after_of(m, k, v, m.replaced(s, v), 0, eq)), λ y _ => WordMapInv(y), WordMap::replaced_inv(m, inv, s, v)),
+        Added(e, first, room, none, eq) => j(sym(WordMap::after_of(m, k, v, m.filled(e, k, v), 1, eq)), λ y _ => WordMapInv(y), WordMap::filled_inv(m, inv, k, v, nz, e, first, room, none)),
+        Full(full, eq) => j(sym(WordMap::after_of(m, k, v, m, 2, eq)), λ y _ => WordMapInv(y), inv),
+    }
+}
+
+theorem WordMap::zero_not_two(h: BitVec::ofNat(0, n := 64) = BitVec::ofNat(2)): False { bv_omega }
+
+theorem WordMap::one_not_two(h: BitVec::ofNat(1, n := 64) = BitVec::ofNat(2)): False { bv_omega }
+
+// The full answer comes only at three keys stored, and leaves the table.
+theorem WordMap::insert_full(m: WordMap, inv: WordMapInv(m), k, v: u64, nz: ¬(k = 0), full: WordMap::insert(m, k, v).value = 2):
+    And<m.count.toNat() = 3, WordMap::insert(m, k, v).after = m>
+{
+    match WordMap::insert_cases(m, inv, k, v, nz) {
+        Replaced(s, s4, at, eq) => false_elim(WordMap::zero_not_two(trans(sym(WordMap::value_of(m, k, v, m.replaced(s, v), 0, eq)), full))),
+        Added(e, first, room, none, eq) => false_elim(WordMap::one_not_two(trans(sym(WordMap::value_of(m, k, v, m.filled(e, k, v), 1, eq)), full))),
+        Full(no_room, eq) => And(omega(no_room, inv.room), WordMap::after_of(m, k, v, m, 2, eq)),
+    }
+}
+
+// Every lookup after an insert that did not answer full is `assoc_set`'s.
+theorem WordMap::insert_get(m: WordMap, inv: WordMapInv(m), k, v: u64, nz: ¬(k = 0), ok: ¬(WordMap::insert(m, k, v).value = 2), i: u64):
+    WordMap::insert(m, k, v).after.abs().assoc_get(i) = m.abs().assoc_set(k, v).assoc_get(i)
+{
+    match WordMap::insert_cases(m, inv, k, v, nz) {
+        Replaced(s, s4, at, eq) => trans(cong_fn(λ (y: WordMap) => y.abs().assoc_get(i), WordMap::after_of(m, k, v, m.replaced(s, v), 0, eq)),
+            WordMap::replaced_get(m, inv, k, v, nz, s, s4, at, i)),
+        Added(e, first, room, none, eq) => trans(cong_fn(λ (y: WordMap) => y.abs().assoc_get(i), WordMap::after_of(m, k, v, m.filled(e, k, v), 1, eq)),
+            WordMap::filled_get(m, inv, k, v, nz, e, first, room, none, i)),
+        Full(no_room, eq) => false_elim(ok(WordMap::value_of(m, k, v, m, 2, eq))),
+    }
+}
+
+// The two laws of `assoc.hthr`, over the compiled functions.
+theorem WordMap::get_insert_same(m: WordMap, inv: WordMapInv(m), k, v: u64, nz: ¬(k = 0), ok: ¬(WordMap::insert(m, k, v).value = 2)):
+    WordMap::insert(m, k, v).after.get(k) = v
+{
+    let n = WordMap::insert(m, k, v).after;
+    trans(WordMap::get_is(n, WordMap::insert_inv(m, inv, k, v, nz), k),
+        cong_fn(λ (o: Option<u64>) => o.unwrap_or(0), trans(WordMap::insert_get(m, inv, k, v, nz, ok, k), m.abs().assoc_get_set_same(k, v))))
+}
+
+theorem WordMap::get_insert_other(m: WordMap, inv: WordMapInv(m), k, v: u64, nz: ¬(k = 0), ok: ¬(WordMap::insert(m, k, v).value = 2), i: u64, ne: ¬(i = k)):
+    WordMap::insert(m, k, v).after.get(i) = m.get(i)
+{
+    let n = WordMap::insert(m, k, v).after;
+    trans(WordMap::get_is(n, WordMap::insert_inv(m, inv, k, v, nz), i),
+        trans(cong_fn(λ (o: Option<u64>) => o.unwrap_or(0), trans(WordMap::insert_get(m, inv, k, v, nz, ok, i), m.abs().assoc_get_set_other(k, v, i, ne))),
+            sym(WordMap::get_is(m, inv, i))))
+}
