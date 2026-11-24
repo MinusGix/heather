@@ -747,7 +747,10 @@ fn rt_held_pending(fuel: Nat, k: Known, w: HeldWalk, hs: List<Handle>) → Tac<O
                 let inside: Tac<Option<Handle>> = match v {
                     HGlobal(g, name, args) => rt_held_callee(k, w.held, g, name, args).bind(λ c => match c {
                         None => rt_held_pending(f, k, w, args),
-                        Some(_) => rt_held_made(w.calls, g.id, h).bind(λ made => pure(match made { Some(_) => None, None => Some(h) })),
+                        Some(_) => match rt_assoc(w.st.handles, h.id) {
+                            Some(_) => pure(None),
+                            None => rt_held_made(w.calls, g.id, h).bind(λ made => pure(match made { Some(_) => None, None => Some(h) })),
+                        },
                     }),
                     HField(r, _, args) => rt_held_pending(f, k, w, Cons(r, args)),
                     HCtor(_, _, _, fields) => rt_held_pending(f, k, w, fields),
@@ -895,25 +898,30 @@ fn rt_held_do(fuel: Nat, cx: HeldCx, w: HeldWalk, job: HeldJob) → Tac<HeldOut>
                     None => rt_held_uncompiled(name),
                     Some(callee) => match args {
                         Nil => rt_held_built(),
-                        Cons(s, operands) => rt_held_changes(cx.names, x).bind(λ changes => match changes {
-                            False => rt_refuse("a call of `" ++ callee.name ++ "`, which only reads the record, is not reflected yet: a function of the record another one calls takes `mut self`"),
-                            True => {
-                                let settled <- rt_held_do(f, cx, w, Settle(s));
-                                let ready <- rt_held_do(f, cx, settled.w, Ready(operands));
-                                let still <- rt_held_still(settled.w, ready.w);
-                                let k = cx.known(ready.w);
-                                let ops <- rt_held_operands(f, k, ready.w.st, operands);
-                                let read <- rt_held_hoist(4096, cx, ready.w, k, ready.w.calls ++ [CallRes(ready.w.calls.len(), g.id, x, None, [])], ops.fst, cx.roots, []);
-                                let stored <- rt_held_stores(f, k, HeldStored(read.fst, ready.w.segs, ready.w.cfuns), settled.sets);
-                                let found: Pair<List<Nat>, Nat> = match Known::index(stored.cfuns, callee.bytes, 0) {
-                                    Some(i) => Pair(stored.cfuns, i),
-                                    None => Pair(stored.cfuns ++ [callee.bytes], stored.cfuns.len()),
-                                };
-                                let st = stored.st;
-                                pure(HeldOut(HeldWalk(st.written(st.depth + 1).forgetting(cx.terms()),
-                                    Cons(FCall(found.snd, Cons(st.index(0), Cons(st.index(1), st.indices(ops.snd)))), FSeg::lets(st.lets) ++ stored.segs),
-                                    found.fst, ready.w.calls ++ [CallRes(ready.w.calls.len(), g.id, x, Some(st.depth), [])], Some(x), HeldCall::add(ready.w.held, callee)), []))
-                            },
+                        // A callee that only reads the record is called as
+                        // one that writes is, and leaves the record the span
+                        // holds as it was: it is not among the calls that
+                        // changed it, and its word is bound where a value
+                        // reads the call (`st.handles`).
+                        Cons(s, operands) => rt_held_changes(cx.names, x).bind(λ changes => {
+                            let settled <- rt_held_do(f, cx, w, Settle(s));
+                            let ready <- rt_held_do(f, cx, settled.w, Ready(operands));
+                            let still <- rt_held_still(settled.w, ready.w);
+                            let k = cx.known(ready.w);
+                            let ops <- rt_held_operands(f, k, ready.w.st, operands);
+                            let read <- rt_held_hoist(4096, cx, ready.w, k, ready.w.calls ++ [CallRes(ready.w.calls.len(), g.id, x, None, [])], ops.fst, cx.roots, []);
+                            let stored <- rt_held_stores(f, k, HeldStored(read.fst, ready.w.segs, ready.w.cfuns), settled.sets);
+                            let found: Pair<List<Nat>, Nat> = match Known::index(stored.cfuns, callee.bytes, 0) {
+                                Some(i) => Pair(stored.cfuns, i),
+                                None => Pair(stored.cfuns ++ [callee.bytes], stored.cfuns.len()),
+                            };
+                            let st = stored.st;
+                            let after = st.written(st.depth + 1).forgetting(cx.terms());
+                            let bound = match changes { True => after, False => RSt(after.depth, after.lets, after.memo, Cons(Pair(x.id, st.depth), after.handles), after.locals, after.funs) };
+                            pure(HeldOut(HeldWalk(bound,
+                                Cons(FCall(found.snd, Cons(st.index(0), Cons(st.index(1), st.indices(ops.snd)))), FSeg::lets(st.lets) ++ stored.segs),
+                                found.fst, match changes { True => ready.w.calls ++ [CallRes(ready.w.calls.len(), g.id, x, Some(st.depth), [])], False => ready.w.calls },
+                                match changes { True => Some(x), False => ready.w.now }, HeldCall::add(ready.w.held, callee)), []))
                         }),
                     },
                 }),
@@ -1293,8 +1301,10 @@ fn rt_held_reflect_one(k: Known, names: FileNames, g: GlobalRef, name: String) �
         // it was, or its own call.
         False => match en.snd {
             Some(_) => rt_held_tail(fuel, cx, w, True, ws.body),
-            None => rt_go(fuel, cx.known(w), st, ws.body, True).bind(λ rv =>
-                pure(HeldEnd(FSeg::close(FSeg::lets(rv.fst.lets), FTm::Pure(Var(rv.fst.index(RSt::level(rv.snd))))), rv.fst.funs, [], []))),
+            // The calls in it of functions of the record made first.
+            None => rt_held_do(fuel, cx.rooted([ws.body]), w, Ready([ws.body])).bind(λ ready =>
+                rt_go(fuel, cx.known(ready.w), ready.w.st, ws.body, True).bind(λ rv =>
+                    pure(rt_held_answer(ready.w, rv.fst, ready.w.segs, ready.w.cfuns, RSt::level(rv.snd))))),
         },
     };
     let r <- walked;

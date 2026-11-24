@@ -5287,6 +5287,17 @@ fn runtime_held_names() → Tac<HeldNames> {
         <- runtime_held_ref("rt_held_fields::HWorld::stores_bytes_array")))
 }
 
+// A callee at a record and its operands, as its theorem states it: one
+// that only reads the record is its word beside the record as it was.
+fn runtime_held_spec(c: HeldCall, a: Expr, words: List<Expr>) → Tac<Expr> {
+    let writes <- runtime_writes(c.run);
+    let applied = ap(Global(c.run), Cons(a, words));
+    match writes {
+        True => pure(applied),
+        False => runtime_held_ref("rt_held::HWorld::unchanged").bind(λ unchanged => pure(ap(unchanged, [Blank, Blank, a, applied]))),
+    }
+}
+
 // A function of the record that the function calls, as its mark: how
 // many words it takes, and the function of the record at them.
 // A span the callee only reads is the file's, in the place the caller
@@ -5296,8 +5307,8 @@ fn runtime_held_run(record, words_t: Expr, c: HeldCall, rest: LocalRef, span_of:
     let operand <- runtime_held_ref("rt_held::FTm::operand");
     let a <- assume(record, "held", Some(rest)).or_fail("runtime: a record: ");
     let ws <- assume(words_t, "words", Some(a.ref)).or_fail("runtime: a call's words: ");
-    pure(ap(runs, [record, NatLit(c.operands), Lam(a.ref, Lam(ws.ref,
-        ap(Global(c.run), Cons(Local(a.ref), runtime_at_places(c.spans + 1, List::range(c.operands).map(λ i => ap(operand, [Local(ws.ref), NatLit(i)])), 1, span_of)))))]))
+    let spec <- runtime_held_spec(c, Local(a.ref), runtime_at_places(c.spans + 1, List::range(c.operands).map(λ i => ap(operand, [Local(ws.ref), NatLit(i)])), 1, span_of));
+    pure(ap(runs, [record, NatLit(c.operands), Lam(a.ref, Lam(ws.ref, spec))]))
 }
 
 // The names a held callee's promise is stated with.
@@ -5353,7 +5364,7 @@ fn runtime_held_ran(h: HeldRan, record, whole, hw, holds_of, bridge: Expr, j: Na
     // The callee's own values: a span it only reads where its code takes
     // the span's place.
     let words = runtime_at_places(c.spans + 1, call.words, 1, span_of);
-    let spec = ap(Global(c.run), Cons(Local(a), words));
+    let spec <- runtime_held_spec(c, Local(a), words);
     let code = ap(Global(GlobalRef(c.bytes)), Cons(Local(call.own), Cons(call.length, words)));
     let got = ap(agreed, Cons(Local(call.own), Cons(Local(a), Cons(call.length, words ++ [Local(holds.ref)]))));
     let k = c.operands;
