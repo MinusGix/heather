@@ -1854,20 +1854,22 @@ impl Checking<'_> {
         }
         let outer_depth = self.scope.omega_depth.get();
         let written_cx = cx;
-        let source_cx = omega_cert::source_context(cx);
-        let cx = source_cx.as_ref();
+        let mut source_cx = omega_cert::source_context(cx);
         let _certificate_scope = omega_cert::CertificateScope::enter(&self.scope.omega_depth);
         omega_cert::reset_phases();
         let reconstruct_guard = stats::guard(stats::Timer::OmegaReconstruct);
-        let mut cert = omega_cert::reconstruct(
-            self,
-            cx,
-            expected,
-            name != "__omega_diseq_branch",
-            name != "__omega_connective_branch",
-            true,
-        )
-        .map_err(|detail| {
+        let flags = (name != "__omega_diseq_branch", name != "__omega_connective_branch");
+        let mut cert = omega_cert::reconstruct(self, source_cx.as_ref(), expected, flags.0, flags.1, true);
+        // A certificate that spelled a generated binder (`#p1`, which a
+        // nested pattern's written name aliases) does not parse: once more
+        // with every generated binder named
+        // (issues/omega-unspellable-local-in-scope.md).
+        if matches!(&cert, Err(detail) if detail.contains("unexpected character '#'")) {
+            source_cx = omega_cert::source_context_naming(written_cx, true);
+            cert = omega_cert::reconstruct(self, source_cx.as_ref(), expected, flags.0, flags.1, true);
+        }
+        let cx = source_cx.as_ref();
+        let mut cert = cert.map_err(|detail| {
             // Stuck: an arm equation not yet in scope might be the missing
             // fact (docs/language/matching/dependent-match-compiler-design.md §4.3.1).
             Inference(self).want_match_equations(written_cx);

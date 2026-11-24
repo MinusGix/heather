@@ -2314,12 +2314,8 @@ impl DeclarationsMut<'_> {
             return Ok((sigma, Vec::new(), None));
         }
         let base = self.attempt.goal_arena.base();
-        let m = lifted.len() as u32;
-        for entry in sigma.entries.iter_mut() {
-            if let heather_kernel::subst::GlobalEntry::Tm(t) = entry {
-                *t = Rc::new(t.shift_global(m));
-            }
-        }
+        let originals: Vec<bool> = vec![true; sigma.entries.len()];
+        let mut originals = originals;
         // Out of the goal world, into Ψ and the lifted slots before this
         // one: an earlier lifted proof or value is referred to (a `let`
         // bound to one is inlined into what follows it, and `omega` names
@@ -2331,7 +2327,11 @@ impl DeclarationsMut<'_> {
         let first = world.bindings.len() as u32;
         let mut aux = Vec::new();
         let mut earlier: HashMap<usize, (usize, LocalCtx)> = HashMap::new();
-        for (j, slot) in lifted.into_iter().enumerate() {
+        // Slots kept inline, each with how many were lifted before it: its
+        // payload is scoped past those, and shifted past the rest at the end.
+        let mut inline: Vec<(usize, u32)> = Vec::new();
+        for slot in lifted.into_iter() {
+            let j = aux.len();
             let out = |dummy: Term| out_of_goals(base, first, &earlier, dummy);
             let (zero, one) = (out(Term::Zero), out(Term::Succ(Rc::new(Term::Zero))));
             let into = |sigma: &GlobalSubst| (
@@ -2344,10 +2344,22 @@ impl DeclarationsMut<'_> {
                 return err("internal: a lifted proof mentions a goal", span);
             }
             // Its context is checked here too: a declaration's own gate never
-            // sees a nonempty one.
+            // sees a nonempty one. A context or statement the kernel cannot
+            // type on its own (one the body's checking direction supplied, as
+            // a `λ r f` against a coinductive goal's step does) keeps the
+            // proof inline, where it was checked before lifting.
             let at = Rc::new(world.clone());
-            stats::time_kernel(|| typing::check_local_ctx(&at, 0, Layer::Prog, &gamma, self.policy.fuel))
-                .map_err(|e| Refusals(self).kernel_error(&format!("{name}#aux{j}"), span, e))?;
+            let standalone = stats::time_kernel(|| typing::check_local_ctx(&at, 0, Layer::Prog, &gamma, self.policy.fuel)).is_ok()
+                && stats::time_kernel(|| self.kernel_check_type(&at, Layer::Prog, &gamma, &ty, &slot.level)).is_ok();
+            if !standalone {
+                if slot.transparent {
+                    return err("internal: a named value's context does not check on its own", span);
+                }
+                sigma.entries[slot.slot] = heather_kernel::subst::GlobalEntry::Tm(Rc::new(body));
+                originals[slot.slot] = false;
+                inline.push((slot.slot, j as u32));
+                continue;
+            }
             self.gate_bodied(&at, &format!("{name}#aux{j}"), span, &gamma, &ty, &slot.level, &body, !slot.transparent)?;
             let binding = GlobalBinding::Tm {
                 ctx: gamma.clone(),
@@ -2363,6 +2375,22 @@ impl DeclarationsMut<'_> {
                 var: GlobalVar::constant(first + j as u32),
                 subst: LocalSubst::id(&gamma),
             }));
+            originals[slot.slot] = false;
+        }
+        let m = aux.len() as u32;
+        // The goal substitution's own payloads are scoped in Ψ: past every
+        // lifted proof. An inline proof's, past the ones after it.
+        for (k, entry) in sigma.entries.iter_mut().enumerate() {
+            if originals[k]
+                && let heather_kernel::subst::GlobalEntry::Tm(t) = entry
+            {
+                *t = Rc::new(t.shift_global(m));
+            }
+        }
+        for (k, before) in inline {
+            if let heather_kernel::subst::GlobalEntry::Tm(t) = &mut sigma.entries[k] {
+                *t = Rc::new(t.shift_global(m - before));
+            }
         }
         // A discharge (`on ?g := …`) is elaborated in the goal world, and a
         // goal's statement can mention a lifted slot (a search in the

@@ -902,9 +902,20 @@ fn coefficient_source(source: &str) -> Option<Vec<Z>> {
 /// (issues/omega-unspellable-local-in-scope.md). Such a binder is still not
 /// read as a fact itself ([`local_fact_entries`]).
 pub(crate) fn source_context(cx: &Cx) -> std::borrow::Cow<'_, Cx> {
+    source_context_naming(cx, false)
+}
+
+/// [`source_context`], with every generated binder named as well: what
+/// `omega` retries with when a certificate spelled a generated name and did
+/// not parse. Only then, since a generated binder is also a structure's
+/// instance dictionary, whose operations `ring` and `omega` itself read by
+/// the spelling the plain context gives them.
+pub(crate) fn source_context_naming(cx: &Cx, hidden: bool) -> std::borrow::Cow<'_, Cx> {
     let renamed: Vec<_> = cx.names.iter().enumerate().filter_map(|(pos, name)| {
-        (name.starts_with('#')
-            || cx.names.iter().skip(pos + 1).any(|later| later == name)
+        if name.starts_with('#') {
+            return hidden.then_some(pos);
+        }
+        (cx.names.iter().skip(pos + 1).any(|later| later == name)
             || cx.aliases.iter_inner().any(|alias| alias.name == *name && alias.depth > pos))
             .then_some(pos)
     }).collect();
@@ -1973,14 +1984,41 @@ fn open_arithmetic_body(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) -
         return None;
     }
     let oracle = elab.goal_oracle();
+    let (_, args) = app_spine(tm);
     for reduct in oracle.unfold(&cx.gamma, tm, Unfold::OpenArithmetic) {
         if !arithmetic_head(elab, &reduct) {
             continue;
+        }
+        // Only arithmetic over literals and the call's own arguments: a body
+        // that calls further definitions (`bound(x)` is a quotient of
+        // `x.at(0)`'s fields) is a quantity its own facts are stated about,
+        // and opened it would no longer meet them.
+        if !over_arguments(elab, &reduct, &args) {
+            return None;
         }
         let named = named_arithmetic_shape(elab, cx, &Rc::new(reduct), &[], depth)?;
         return (*named != **tm).then_some(named);
     }
     None
+}
+
+/// Whether `tm` is built from `+`, `*`, `-`, `div`, `mod`, successors and
+/// literals over `args` alone.
+fn over_arguments(elab: &Elaborator, tm: &Term, args: &[&Rc<Term>]) -> bool {
+    match tm {
+        Term::Zero | Term::NatLit(_) => return true,
+        Term::Succ(inner) => return over_arguments(elab, inner, args),
+        _ => {}
+    }
+    if args.iter().any(|arg| ***arg == *tm) {
+        return true;
+    }
+    for name in ["nat::Nat::add", "nat::Nat::mul", "nat::Nat::sub", "nat::Nat::div", "nat::Nat::mod"] {
+        if let Some(operands) = named_args(elab, tm, name) {
+            return operands.len() == 2 && operands.iter().all(|operand| over_arguments(elab, operand, args));
+        }
+    }
+    false
 }
 
 /// The bounded weak head of a global call when it is `Succ` of a leaf that

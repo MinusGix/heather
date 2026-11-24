@@ -962,20 +962,27 @@ between two slots of the word map, `fn WordMap::dist(a, b: Nat) → Nat {
   where an argument is a constructor or a literal, so `dist(j, s)` was an
   atom and `omega` found a model with `dist(j, s) = 0`. A call at open
   arguments is now walked a few head reducts (`Unfold::OpenArithmetic`: the
-  δ step and the β steps instantiating its parameters) for a body headed
-  by `+`, `*`, `div`, `mod` or a successor whose leaves spell, and read as
-  that body (`open_arithmetic_body`). A recursive definition is stuck on
-  its `match` long before an arithmetic head, so it stays an atom and pays
-  only the short walk; a word's `toNat` is never walked. The subtraction
+  δ step and the β steps instantiating its parameters) for a body built
+  from `+`, `*`, `-`, `div`, `mod`, successors and literals over the call's
+  own arguments alone, and read as that body (`open_arithmetic_body`). A
+  body that calls further definitions is not opened: `CReal::bound(x)`, a
+  quotient of `x.at(0)`'s fields, is a quantity `creal`'s facts are stated
+  about, and opened it no longer met them. A recursive definition is stuck
+  on its `match` long before an arithmetic head, so it stays an atom and
+  pays only the short walk; a word's `toNat` is never walked. The subtraction
   split (§16) looks through the same opening, so `b + 4 - a` inside
   `dist` is split as a written one is. The certificate still spells
   `dist(a, b)`; the checker converts it by the same δ step.
 - **A generated binder.** A nested pattern binds its variable under a
   generated name (`#p1`) that the written `q` aliases, and a fact's type
   mentions the binder. Spelled raw, the certificate did not parse
-  ("unexpected character '#'"). `source_context` now names every generated
-  binder `__omega_hidden_N`, as it names a shadowed one; such a binder is
-  still not read as a fact itself.
+  ("unexpected character '#'"). A certificate that fails so is built once
+  more with every generated binder named `__omega_hidden_N`, as a shadowed
+  one is named (`source_context_naming`); such a binder is still not read
+  as a fact itself. Only on that failure: a generated binder is also a
+  structure's instance dictionary, and named it hides the operations
+  `ring`, `linarith` and `omega` read by their plain spelling (`difference`
+  and `creal` failed that way when every call named them).
 - **A term with no spelling that a `let` names.** `let jj = reached.witness`,
   where `reached` is bound to a call one of whose arguments the speller
   cannot write, left `jj.toNat()` without a spelling, and the goal with it
@@ -1009,7 +1016,10 @@ leaf, which widens every row and lengthens the case analysis.
 Two things changed:
 
 - **A written `omega` lifts its proof** into a proved slot of the
-  declaration, as `bv_omega` does (docs/tactics/bv-omega-design.md §6):
+  declaration, as `bv_omega` does (docs/tactics/bv-omega-design.md §6;
+  where the slot's context or statement does not check on its own, as for
+  a `λ r f => omega` whose binder types the coinductive goal's checking
+  direction supplied, `lift_proved` keeps that proof inline):
   the gate checks the certificate once, as its own item in the
   declaration's context, and the body holds a reference. The certificate
   is no longer substituted along with the body under each enclosing
