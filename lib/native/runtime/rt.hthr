@@ -1078,10 +1078,11 @@ inductive Tm {
     Again(res: Ty, args: List<Nat>),
     // A loop that answers a value (docs/language/loop-combinator-design.md
     // §6.7): its state starts as the words of variables `inits`, and `body`
-    // sees the state's words bound onto the context in order (the last as
-    // variable 0, as a function sees its parameters). Each pass is `body`:
-    // a leaf `Again` goes round at the state it names, and any other leaf
-    // is the loop's answer.
+    // sees the state and nothing else, its words bound in order (the last
+    // as variable 0, as a function sees its parameters); what it reads of
+    // the context is a word of the state its passes hand on unchanged. Each
+    // pass is `body`: a leaf `Again` goes round at the state it names, and
+    // any other leaf is the loop's answer.
     Loop(inits: List<Nat>, body: Tm),
 }
 
@@ -1186,10 +1187,10 @@ fn Tm::lit(t: Ty, n: Nat, tys: Table) → t.sem(tys) {
 }
 
 // A loop's state codes, the codes of its variables `inits`, and the
-// context its body sees: the state bound onto the loop's own.
+// context its body sees: the state alone.
 fn Tm::state(g: List<Ty>, inits: List<Nat>) → List<Ty> { inits.map(λ i => Ty::at(g, i)) }
 
-fn Tm::inside(g: List<Ty>, inits: List<Nat>) → List<Ty> { Ty::bind_onto(Tm::state(g, inits), g) }
+fn Tm::inside(g: List<Ty>, inits: List<Nat>) → List<Ty> { Ty::bind_onto(Tm::state(g, inits), Nil) }
 
 // The code a term synthesizes in a context.
 fn Tm::ty(self t: Tm, w: World, g: List<Ty>) → Ty {
@@ -1329,10 +1330,10 @@ fn Tm::sem_in(self t: Tm, w: World, lab: Tm::Label(w.tys)) → (g: List<Ty>) →
         Loop(inits, body) => λ g env => loop::Loop::rounds(Tm::passes(),
             λ (again: List<BitVec(64)> → body.ty(w, Tm::inside(g, inits)).sem(w.tys)) (xs: List<BitVec(64)>) =>
                 body.sem_in(w, Tm::round(w.tys, body.ty(w, Tm::inside(g, inits)), again), Tm::inside(g, inits),
-                    Ty::extend(w.tys, Tm::state(g, inits), g, env, xs)),
+                    Ty::extend(w.tys, Tm::state(g, inits), Nil, trivial, xs)),
             λ (xs: List<BitVec(64)>) => body.sem_in(w,
                 Tm::round(w.tys, body.ty(w, Tm::inside(g, inits)), λ ys => Ty::cast(w.tys, Word(64), body.ty(w, Tm::inside(g, inits)), ys.head_or(BitVec::zero()))),
-                Tm::inside(g, inits), Ty::extend(w.tys, Tm::state(g, inits), g, env, xs)),
+                Tm::inside(g, inits), Ty::extend(w.tys, Tm::state(g, inits), Nil, trivial, xs)),
             Tm::words(w, g, env, inits)),
     }
 }

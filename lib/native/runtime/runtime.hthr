@@ -188,7 +188,7 @@ fn Op::judge(self o: Op) → Verdict {
 }
 
 // A term of the function at entry 0 of `sigs`.
-fn Tm::judge(self t: Tm, sigs: List<Sig>, tys: Table) → Verdict {
+fn Tm::judge_in(self t: Tm, sigs: List<Sig>, tys: Table, pass: Bool) → Verdict {
     match t {
         Var(_) => Ok,
         Lit(c, _) => match c {
@@ -199,9 +199,9 @@ fn Tm::judge(self t: Tm, sigs: List<Sig>, tys: Table) → Verdict {
             _ => Refused("a literal that is not a word, a `Bool` or an enum's constructor: byte buffers and lists are not lowered yet"),
         },
         Prim(op, _) => op.judge(),
-        Let(e, body) => e.judge(sigs, tys).and(body.judge(sigs, tys)),
-        If(_, yes, no) => yes.judge(sigs, tys).and(no.judge(sigs, tys)),
-        IfEq(_, yes, no) => yes.judge(sigs, tys).and(no.judge(sigs, tys)),
+        Let(e, body) => e.judge_in(sigs, tys, False).and(body.judge_in(sigs, tys, pass)),
+        If(_, yes, no) => yes.judge_in(sigs, tys, pass).and(no.judge_in(sigs, tys, pass)),
+        IfEq(_, yes, no) => yes.judge_in(sigs, tys, pass).and(no.judge_in(sigs, tys, pass)),
         Make(_, _) => Ok,
         Field(_, _, _) => Ok,
         Call(f, _) => match f {
@@ -214,17 +214,24 @@ fn Tm::judge(self t: Tm, sigs: List<Sig>, tys: Table) → Verdict {
         Fold(_, _, _) => Refused("a `foldl`: loops over buffers are not lowered yet (docs/native/runtime-fn-setups-design.md §16.6)"),
         Case(_, _, _) => Refused("a `match` on a `Nat` that is not a loop's fuel: only a fuel recursion's top `match` is lowered"),
         Byte(_, _, _) => Ok,
-        Pick(_, _, arms, _) => arms.judge(sigs, tys),
+        Pick(_, _, arms, _) => arms.judge_in(sigs, tys, False),
         // A constructor with its fields, and a field of one an arm reads.
         Inject(_, _, _) => Ok,
         Slot(_, _, _) => Ok,
         // A `while` loop: its state and the context it reads are carried
         // as words (`Tm::lower_iterate`).
-        Iterate(_, test, body) => test.judge(sigs, tys).and(body.judge(sigs, tys)),
-        Again(_, _) => Refused("going round a loop outside a loop's pass"),
-        Loop(_, _) => Refused("a loop that answers a value: its lowering is not built yet (docs/language/loop-combinator-design.md §6.7)"),
+        Iterate(_, test, body) => test.judge_in(sigs, tys, False).and(body.judge_in(sigs, tys, False)),
+        // Going round is a loop's pass's last act, never a value.
+        Again(_, _) => match pass { True => Ok, False => Refused("going round a loop outside a loop's pass") },
+        // A loop that answers: its body is a pass.
+        Loop(_, body) => body.judge_in(sigs, tys, True),
     }
 }
+
+// What the default setup lowers (as a value, outside every loop's pass).
+fn Tm::judge(self t: Tm, sigs: List<Sig>, tys: Table) → Verdict { t.judge_in(sigs, tys, False) }
+
+
 
 // A loop's pass: calls of itself only in tail position.
 fn Tm::judge_tail(self t: Tm, sigs: List<Sig>, tys: Table) → Verdict {

@@ -233,7 +233,7 @@ fn Tm::uses(self t: Tm, sigs: List<Sig>, n: Nat, d: Nat, g: List<Share>, ks: Lis
         // consuming uses are of buffers it makes itself.
         Iterate(_, test, body) => test.uses(sigs, n, d + 1, Cons(Share([d], False), g), ks) ++ body.uses(sigs, n, d + 1, Cons(Share([d], False), g), ks),
         Again(_, _) => [],
-        Loop(inits, body) => body.uses(sigs, n, d + inits.len(), Share::words(d, inits.len(), g), ks),
+        Loop(inits, body) => body.uses(sigs, n, d + inits.len(), Share::words(d, inits.len(), Nil), ks),
     }
 }
 

@@ -386,20 +386,6 @@ theorem Tm::tail_sound(self t: Tm, w: World, skip: Nat, res: Ty, er: res.OneWord
     }
 }
 
-// Words read back where they are bound, as `Fun::BoundWords`.
-theorem Fun::bound_of_words(values: Valuation(), ids: List<Nat>): (xs: List<BitVec(64)>) → ids.len() = xs.len() → words_of(values, ids) = xs →
-    Fun::BoundWords(values, ids, xs) {
-    match ids {
-        Nil => λ xs _ _ => trivial,
-        Cons(id, rest) => λ xs => match xs as λ ys => rest.len() + 1 = ys.len() → words_of(values, Cons(id, rest)) = ys →
-            Fun::BoundWords(values, Cons(id, rest), ys) {
-            Nil => λ (bad: rest.len() + 1 = 0) _ => false_elim(rest.len().succ_ne_zero(bad)),
-            Cons(x, more) => λ same read => ⟨cong_fn(λ (ws: List<BitVec(64)>) => ws.head_or(BitVec::zero()), read),
-                Fun::bound_of_words(values, rest, more, Nat::succ_inj(rest.len(), more.len(), same),
-                    cong_fn(λ (ws: List<BitVec(64)>) => ws.tail(), read))⟩,
-        },
-    }
-}
 
 // ---------------------------------------------------------------------------
 // A loop whose passes are below a bound: `loop_eval_agrees`, with each pass
@@ -495,27 +481,6 @@ fn Fun::post(x, rr, o0: Nat, exhausted: StructuredRegion) → StructuredRegion {
     branch(x, Ports([Port(rr, 64)]), exhausted, nodes_region([Move(64, rr, o0)]))
 }
 
-// The word bound at `o0`, past a prefix of ids that are not it.
-theorem Fun::bind_past(values: Valuation(), o0: Nat, os: List<Nat>, s0: BitVec(64), rest: List<BitVec(64)>, ko: List<Nat>):
-    (kw: List<BitVec(64)>) → absent(o0, ko).IsTrue() → ko.len() = kw.len() →
-    Valuation::bind(values, ko ++ Cons(o0, os), kw ++ Cons(s0, rest), 64, o0) = s0 {
-    match ko {
-        Nil => λ kw _ => match kw as λ k2 => 0 = k2.len() → Valuation::bind(values, Cons(o0, os), k2 ++ Cons(s0, rest), 64, o0) = s0 {
-            Nil => λ _ => Valuation::set_here(Valuation::bind(values, os, rest), o0, word_value(s0), 64),
-            Cons(_, more) => λ (bad: 0 = more.len() + 1) => false_elim(more.len().zero_ne_succ(bad)),
-        },
-        Cons(k, later) => λ kw fresh => match kw as λ k2 => later.len() + 1 = k2.len() →
-            Valuation::bind(values, Cons(k, later) ++ Cons(o0, os), k2 ++ Cons(s0, rest), 64, o0) = s0 {
-            Nil => λ (bad: later.len() + 1 = 0) => false_elim(later.len().succ_ne_zero(bad)),
-            Cons(y, more) => λ same => {
-                let parts = Bool::is_true_and(o0.differs(k), absent(o0, later), fresh);
-                trans(Valuation::set_other(Valuation::bind(values, later ++ Cons(o0, os), more ++ Cons(s0, rest)), k, word_value(y), 64, o0,
-                        o0.differs_ne(k, parts.left)),
-                    Fun::bind_past(values, o0, os, s0, rest, later, more, parts.right, Nat::succ_inj(later.len(), more.len(), same)))
-            },
-        },
-    }
-}
 
 // Leaving: the outputs are the kept words `ko` and then the moved ones, of
 // which the first, at `o0`, is the result.
@@ -915,22 +880,7 @@ fn Fun::MeasuredHolds(ws: List<Ty>, res: Ty, w: World, h: Ty::Arrows(w.tys, ws, 
     }
 }
 
-// Leaving or not, the first moved word, for a continuation that is it.
-theorem Tm::leave_first(a: Valuation(), flag: Nat, kept, ns: List<Nat>):
-    Tm::leave(a, flag, kept, ns, λ (ys: List<BitVec(64)>) => words_of(a, ns).head_or(BitVec::zero())) = words_of(a, ns).head_or(BitVec::zero()) {
-    match a(64, flag).eq_bit(BitVec::ofNat(1)) as λ b => (match b { False => words_of(a, ns).head_or(BitVec::zero()),
-        True => words_of(a, ns).head_or(BitVec::zero()) }) = words_of(a, ns).head_or(BitVec::zero()) {
-        False => refl,
-        True => refl,
-    }
-}
 
-// What a pass leaves reads its continuation only at the next state.
-theorem Tm::leave_cont(a: Valuation(), flag: Nat, kept, ns: List<Nat>, k1, k2: List<BitVec(64)> → BitVec(64),
-    same: k1(words_of(a, kept) ++ words_of(a, ns)) = k2(words_of(a, kept) ++ words_of(a, ns))):
-    Tm::leave(a, flag, kept, ns, k1) = Tm::leave(a, flag, kept, ns, k2) {
-    cong_fn(λ (k: BitVec(64)) => match a(64, flag).eq_bit(BitVec::ofNat(1)) { False => k, True => words_of(a, ns).head_or(BitVec::zero()) }, same)
-}
 
 // What a pass leaves moves with its continuation, pointwise: `simp` crosses
 // the continuation's `λ` by it.
