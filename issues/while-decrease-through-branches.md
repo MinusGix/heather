@@ -1,6 +1,6 @@
 ---
 title: A while's decrease is not found when the measure is assigned through an if
-status: open
+status: closed
 labels: [loops,omega,elaborator]
 area: tactics
 created: 2026-11-24
@@ -65,3 +65,7 @@ check whether it shares the route.
 the elaborator (it may then stop at the generator's own refusal, which the
 row's expectation names), and a control whose one arm does not decrease
 (`if left = 5 { left := left; }`) is still refused.
+
+## Log
+
+- 2026-11-24: fixed. The decreases closer (crates/elab/src/checking.rs, Checking::elab_measure_search beside the CLOSER arm) falls back, once omega and bv_omega have both failed and only where split_all's search finds a stuck match in the goal, to split_all's stuck-match step with the searches alone at each leaf (measure::CLOSER_LEAF); the searches' first refusal stays the diagnosis. A recursive call at an if-valued argument takes the same route; its argument is now ascribed at its parameter's type when substituted into the measure (measure::typed_arguments), since (if c { 0 } else { n - 1 }).toNat() read 0 as a Nat. dec_arms, dec_tail and the recursive fall_if/fall_if_word check, with refl runs, and the controls whose one arm keeps the measure are refused (lib/_tests/std/core/imperative_statements_tests.hthr, lib/_tests/std/tactic/bitvec_omega_tests.hthr). port_set_put passes the elaborator and stops at the generator: Bytes::port_set_put#State has no runtime layout (the row's expectation names it). Design: docs/tactics/omega-measure-reduction-design.md §24.

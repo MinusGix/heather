@@ -875,3 +875,31 @@ before. A Bool equation is also read either way round (`True = b` as
 `lib/_tests/std/tactic/bitvec_omega_tests.hthr` ("`omega` reads a word's
 comparison bit"); `examples/sort/sort.hthr`'s `insert_at_inserts` states
 its `ab` and `ba` by `omega`.
+
+## 24. A measure through an `if` (2026-11-24)
+
+`issues/while-decrease-through-branches.md`. A `while` whose measure is
+assigned in each arm of an `if` (or set to an `if`), and a recursive call
+at an `if`-valued argument, owe `m(if c { a } else { b }) < m(x)`. Neither
+search splits the match: `omega` reads `m(if …)` as an atom unrelated to
+`m(x)`, and `bv_omega` takes the word apart only through arithmetic. The
+closer (`Checking::elab_measure_search` beside the `CLOSER` arm,
+`crates/elab/src/checking.rs`) now falls back, once both searches have
+failed and only where `split_all`'s search finds a stuck match in the goal,
+to `split_all`'s stuck-match step with the searches alone at each leaf
+(`measure::CLOSER_LEAF`): each arm gets its test's equation, and over
+words its Nat reading, so `left = 5` gives `toNat(left) = 5` beside the
+arm's `0 < toNat(left)`. Lean's `decreasing_tactic` splits the same way. A
+split whose leaves fail leaves the searches' first refusal as the
+diagnosis, so `Obligations::explain` and the loop's rewording read it as
+before. The fallback costs only an obligation that would otherwise be
+refused.
+
+A recursive call's arguments are substituted into the measure as written,
+and an `if` there infers its type from an arm: `(if n = 7 { 0 } else { n -
+1 }).toNat()` read `0` as a `Nat`, and `toNat` was no method of it. An
+argument that is a match or a block (an `if` once the body is rewritten,
+its scrutinee bound first) is now ascribed at its parameter's type
+(`measure::typed_arguments`). Probes and a control whose one arm keeps the
+measure are in `lib/_tests/std/core/imperative_statements_tests.hthr`
+(Nat) and `lib/_tests/std/tactic/bitvec_omega_tests.hthr` (words).

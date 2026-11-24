@@ -99,6 +99,10 @@ impl Obligations {
 /// (`Checking::elab_measure_closer`, issues/decreases-word-measures-by-hand.md).
 pub(crate) const CLOSER: &str = "__measure_closer";
 
+/// The closer at a leaf of the split it makes when the new measure is an
+/// `if` (issues/while-decrease-through-branches.md): the search alone.
+pub(crate) const CLOSER_LEAF: &str = "__measure_closer_leaf";
+
 const K: &str = "__dec_k";
 const IH: &str = "__dec_ih";
 const H: &str = "__dec_h";
@@ -1920,9 +1924,10 @@ impl<'a> Rewrite<'a> {
         let (passed, spill) = args.split_at(positions.len());
         // e[ȳ]: the callee's measure with each of *its* parameters replaced by
         // the argument written at that position.
+        let typed = typed_arguments(&positions.iter().map(|&j| &tparams[j]).collect::<Vec<_>>(), passed);
         let map: Vec<(&str, &Expr)> = positions
             .iter()
-            .zip(passed)
+            .zip(&typed)
             .map(|(&j, a)| (tparams[j].name.as_str(), a))
             .collect();
         let to = &self.members[target];
@@ -3237,6 +3242,26 @@ pub(crate) fn pat_names(p: &Pat, out: &mut Vec<String>) {
         Pat::Ctor { args, .. } => args.iter().for_each(|a| pat_names(a, out)),
         Pat::Named { pat, .. } => pat_names(pat, out),
     }
+}
+
+/// The arguments of a recursive call as the measure is stated at them: an
+/// `if` or `match` (a block, once the body is rewritten: its scrutinee is
+/// bound first) ascribed at its parameter's type, which the substituted
+/// measure would otherwise infer from an arm (`(if c { 0 } else { n - 1
+/// }).toNat()` read its `0` as a `Nat`, and `toNat` was then no method of
+/// it; issues/while-decrease-through-branches.md). The type is stated over
+/// the call's own arguments, as the parameters before it are passed.
+fn typed_arguments(params: &[&Param], args: &[Expr]) -> Vec<Expr> {
+    args.iter()
+        .enumerate()
+        .map(|(i, a)| match (&a.kind, params.get(i)) {
+            (ExprKind::Match { .. } | ExprKind::Block(_), Some(p)) => {
+                let ty = params[..i].iter().zip(args).fold(p.ty.clone(), |ty, (q, b)| subst_surface_ty(&ty, &q.name, b));
+                Expr { kind: ExprKind::Ascribe { expr: Box::new(a.clone()), ty: Box::new(ty) }, span: a.span }
+            }
+            _ => a.clone(),
+        })
+        .collect()
 }
 
 /// `e[ȳ/x̄]`: the measure with each parameter name replaced by an argument
@@ -4793,12 +4818,13 @@ impl Respell<'_> {
                 return Err("a recursive call inside another recursive call's arguments".into());
             }
         }
+        let typed = typed_arguments(&self.rw.params.iter().copied().collect::<Vec<_>>(), args);
         let map: Vec<(&str, &Expr)> = self
             .rw
             .params
             .iter()
             .map(|p| p.name.as_str())
-            .zip(args)
+            .zip(&typed)
             .collect();
         // `e[ȳ]` — built from the *unsubstituted* measure, then pushed through
         // the enclosing arms' patterns, so it reads as the rewritten body's

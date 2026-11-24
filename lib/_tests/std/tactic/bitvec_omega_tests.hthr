@@ -174,6 +174,43 @@ fn sum_below(k: BitVec(64)) → BitVec(64) {
 theorem sum_below_lit(): sum_below(60) = 246 { refl }
 theorem sum_below_done(): sum_below(64) = 0 { refl }
 
+// The measure assigned through a branch (issues/while-decrease-through-
+// branches.md): the closer splits the `if` at its word test and finds each
+// arm's decrease beside that arm's comparison.
+fn dec_arms(x: u64) → u64 {
+    let mut left = x;
+    while 0 < left decreases left.toNat() {
+        if left = 5 { left := 0; } else { left := left - 1; }
+    }
+    left
+}
+theorem dec_arms_lit(): dec_arms(9) = 0 { refl }
+fn dec_tail(x: u64) → u64 {
+    let mut left = x;
+    let mut r: u64 = 0;
+    while 0 < left decreases left.toNat() {
+        r := r + 1;
+        left := if left = 5 { 0 } else { left - 1 };
+    }
+    r
+}
+theorem dec_tail_lit(): dec_tail(9) = 5 { refl }
+// Control: one arm keeps the measure.
+// expect-error: must decrease the measure
+fn dec_stays(x: u64) → u64 {
+    let mut left = x;
+    while 0 < left decreases left.toNat() {
+        if left = 5 { left := left; } else { left := left - 1; }
+    }
+    left
+}
+// A recursive call at an `if` over words: the argument is read at its
+// parameter's type, so the arm `0` is a word.
+fn fall_if_word(n: BitVec(64)) → BitVec(64) decreases n.toNat() {
+    if h: 0 < n { fall_if_word(if n = 7 { 0 } else { n - 1 }) } else { n }
+}
+theorem fall_if_word_lit(): fall_if_word(9) = 0 { refl }
+
 // Negative control: the measure does not fall when the counter counts up
 // past the bound the test does not check.
 // expect-error: must decrease the measure
