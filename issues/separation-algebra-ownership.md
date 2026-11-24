@@ -5,7 +5,7 @@ labels: [algebra,native,ownership]
 area: mathematics
 milestone: [nh-ownership]
 created: 2026-11-09
-updated: 2026-11-09
+updated: 2026-11-24
 ---
 
 Memory framing does not need a separation algebra: memory is a total
@@ -37,3 +37,7 @@ and an arena allocation hands out a footprint the caller owns exclusively.
 - **[[ownership-discipline-over-code]]** owns the setup and its judgment.
   Assumed here: only that it needs composable exclusive ownership.
 - **[[address-interval-sets]]** owns footprints as values.
+
+## Log
+
+- 2026-11-24: First wave of `docs/language/ownership-design.md` §12. Two changes of scope from the direction (§10.7, §10.9): build fractions now, since a frozen view is shared read access and the parallel licence splits tokens; and the resource a token stands for is a store's value split where paths are apart ([[ownership-paths]] states `Apart`), with footprints over `SpanSet` as the memory-side instance.

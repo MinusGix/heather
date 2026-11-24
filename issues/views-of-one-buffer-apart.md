@@ -3,9 +3,9 @@ title: Lend two views of one buffer, one to write, where the path knows them apa
 status: open
 labels: [native,function-ir,memory]
 area: heather-in-heather
-milestone: [nh-library]
+milestone: [nh-library, nh-ownership]
 created: 2026-11-12
-updated: 2026-11-12
+updated: 2026-11-24
 ---
 
 A call over views (`Lend`, [[native-library-exports-design]] §3.1) is lowered only where a view to write is of a buffer no other view of the same call is of (`views_alone`, `lib/native/function_ir/function_ir_lower_views.hthr`). So a function cannot lend one half of a buffer to read and the other to write, though the meaning says what that does (`halving`, `lib/_tests/native/function_ir/function_ir_views_tests.hthr`) and the machine law allows it: `Viewed.alone` (`lib/std/arch/x86_64/x86_64_views.hthr`) asks of a written view and another view that they are of different spans or share no byte. The lowering's report names it ("a view to write shares its buffer with another view", pinned as `halving_refused_why` in `function_ir_lower_views_tests.hthr`).
@@ -23,3 +23,7 @@ Read off the code as built in V4c:
 ## Done when
 
 `halving()` lowers and is stated against its run as `lending()` and `crossed()` are, and the control is two overlapping views of one buffer, one to write, refused.
+
+## Log
+
+- 2026-11-24: First wave of `docs/language/ownership-design.md` §12, now also serving `nh-ownership`: this is where `Apart` as a fact first licenses compiled code. The round takes the "step further" as well: two written views of one buffer known apart (`split_at_mut` with both halves written), `put_views` putting both windows back and the machine lemma stated for a set of windows of one span.

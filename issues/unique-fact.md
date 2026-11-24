@@ -5,7 +5,7 @@ labels: [compiler, ownership, design]
 area: heather-in-heather
 milestone: [nh-ownership]
 created: 2026-11-01
-updated: 2026-11-01
+updated: 2026-11-24
 ---
 
 `Unique(p, k)`: the buffer the `k`th update of `p` consumes is not read
@@ -73,3 +73,4 @@ that would be discarded.
   whose verdict fails.
 - **A setup publishing `Owned` itself.** Today a test declares the verdict.
   A runtime setup would publish it beside `judge(p) = Ok`.
+- 2026-11-24: `docs/language/ownership-design.md` §10.1 changes what a missing fact means where the source states ownership: a refusal that prints the obligation, not a copy; a copy is written (`clone`) or allowed by a function's policy. The lowering and the calling convention's half are the second wave's "homes for owned values" (§12).

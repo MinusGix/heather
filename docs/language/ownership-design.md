@@ -1,10 +1,10 @@
-# Ownership, borrows and shared mutation: the brief
+# Ownership, borrows and shared mutation: the brief and the direction
 
-Status: **a brief, 2026-11-24**: the direction Minus chose in discussion and
-the questions still open, written so that a separate design session can
-start from it. It is not the design. The design session's deliverable is the
-rest of this file (§9), and it extends rather than replaces the decisions in
-§4.
+Status: **a brief (§0 to §9) and the direction a design discussion with
+Minus reached the same day (§10 on), 2026-11-24.** §10 says which decisions
+of §4 it changes. §11 is what the tree has, §12 the work packages and their
+order, §13 what is still open. Nothing of §10 is built; the packages of §12
+carry their own issues.
 
 Read with it: `docs/compilation-vision.md` (§1's settled principles,
 especially 7 and 13, and §2.5 on memory a function is lent),
@@ -272,3 +272,276 @@ obligations it raises; the soundness statement; the runtime helpers; the
 inference; each worked example of §6 written out; the stages in which it is
 built and what each stage's done-when is; and the decisions it needs from
 Minus, each with a recommendation.
+
+## 10. The direction (Minus and a design session, 2026-11-24)
+
+Spellings are illustrative throughout. This section is the frame the work
+packages of §12 build in; the worked examples of §6 written out in full, and
+the soundness statement, are deliverables of those packages.
+
+**What it changes of §4.** §4.1 (stated, guaranteed, a refusal and never a
+silent copy), §4.4 to §4.9 stand. §4.2 changes: a region is named by what
+is borrowed, not by a duration (§10.5). §4.3 changes: an exclusive borrow
+means a path into its owner, of which a backward function is the case where
+the path is static (§10.4); prophecies are not used. New: aliasing of
+exclusive borrows is a fact that licenses optimisations, and the obligation
+that carries soundness is validity (§10.3, §10.6).
+
+### 10.1 Ownership is a licence
+
+A `runtime fn` means a pure function, defined whether or not two of its
+arguments share storage. Ownership never protects the meaning. It decides
+which implementation of that meaning the compiler may choose: an update in
+place and not a copy, a pointer and not a copied value, a read with no
+check. So every construct has a default implementation that needs no fact
+(copy, checked index, count), and a fact buys the cheap one (principle 13).
+
+The guarantee of §4.1 is then one rule. Where the source states a
+representation (a borrow, a move, an update of an owned value), a fact the
+compiler cannot find is a refusal that prints the obligation. Where the
+source states nothing, the compiler may still look for the fact as an
+optimisation. One fact system (`docs/native/facts-on-demand-design.md`)
+serves both; what differs is who asked.
+
+A consequence: strictness is a policy on a function, not a second language.
+A function that allows inserted copies and a function that refuses them have
+the same meaning and the same certificate.
+
+### 10.2 What the propositions are about
+
+A pure value has no identity, so "these two do not alias" is not a
+proposition about two values. Identity comes from three places:
+
+- **Names.** Two locals are distinct storage by construction. This is the
+  judgment over reflected code, as `Program::owned` is today
+  (`lib/lang/facts/unique.hthr`).
+- **Paths inside one owner.** `buf[0..k]` and `buf[k..n]` are apart because
+  the ranges are: an ordinary proposition about indices, found by `omega` or
+  `bv_omega`.
+- **Keys into a store.** A handle is valid if the store has it: an ordinary
+  proposition about the store's value and the key.
+
+So once two things have a common owner, every obligation of this design is
+an ordinary Heather proposition, and the fact machinery, a found proof
+(`:= bv_omega`) and a user's theorem all discharge it.
+
+### 10.3 Three kinds of access
+
+| Access | Spelling | Means | Obligation that carries soundness |
+|---|---|---|---|
+| Owned | `x: T` | the value | the storage is reached through `x` only (`Unique`) |
+| Frozen view | `&T` | the value | no store overlaps its footprint while it is live |
+| Live path | `&mut T` | a path into its owner (§10.4) | the path is valid in the owner at each use (§10.6) |
+
+A frozen view's meaning has cached the value, so a write under it must be
+shown apart from it; the showing is a proposition, so writing element 5
+while element 3 is frozen is accepted with a found proof. A live path is
+read through its owner at each use, so two live paths that overlap are well
+defined (the last store wins) and a pointer implementation agrees.
+
+One qualification. Two `&mut` parameters of a function whose meaning is
+stated the static way (each parameter a value of its own, §10.4) ask their
+arguments to be apart, because that meaning gives each its own copy. Passing
+overlapping places needs the callee to take paths under one owner.
+
+### 10.4 The meaning: a borrow is a path
+
+- A **frozen view** means the value, as in Aeneas. A token holding a slice
+  of the input means a token holding bytes; a proof about the tokenizer
+  never sees a region.
+- A **live path** means a path: data that names a part of an owner, with a
+  partial read and a partial write (a lens held as data, over
+  `lib/std/machine/location.hthr` where it is total). Reading is
+  `owner.get(p)`, writing is `owner := owner.set(p, v)`.
+- A **region** is the lent owner. A region parameter of a function is an
+  implicit, erased, linearly threaded argument whose meaning is the lent
+  value; the function's meaning takes it and returns it. This is the
+  mechanism `Io` already uses (`effects-capabilities-design.md` §5).
+
+`Mutated<T, R>` and `mut self` are the case where the path is static and the
+owner is the caller's place: the callee is handed the part and the caller
+puts it back. Nothing built changes. A record of live paths means a bundle
+of names for things passed alongside:
+
+```heather
+record Emitter(out: region) { sink: &mut{out} Vec<u8>, depth: Nat }
+// Emitter::byte means (self, b, out) → out
+```
+
+This is also the program written with indices into a vector or a slot map
+when lifetimes get hard elsewhere. Here that program is the meaning, and
+facts recover the pointer.
+
+### 10.5 Regions are named by what is borrowed
+
+`&{self} V` says the result borrows from `self`; a set of places is a region
+(`&{a, b} T`), which is Polonius's origin. Elision keeps the common cases
+unwritten. A record's field may borrow from an earlier field, which a
+dependent record states directly:
+
+```heather
+record Lexed { input: Bytes, tokens: Vec<Token(input)> }
+```
+
+A closure's type carries its capture set the same way (§10.9).
+
+### 10.6 Validity is the obligation; aliasing is a fact
+
+What is unsound is using a path whose storage moved or changed shape: a push
+that reallocates, an enum that changes variant, an arena reset. So:
+
+- `Valid(owner, path)` is the obligation at each use of a path.
+- Every operation on an owner publishes which paths it keeps (a store keeps
+  all; a push with spare capacity keeps all; a growing push keeps none).
+- `Apart(p, q)` is a fact: it lets the compiler keep a read across a store,
+  hand two callees their parts at once, and run iterations in parallel. For
+  a frozen view it is the obligation of §10.3.
+
+Capacity is therefore a fact about a home, not a field of the value.
+
+**Producers of `Valid`**, cheapest first, in the order facts already take:
+a region discipline over the reflected code (decidable, the common case); a
+proof the programmer supplies or a tactic finds; a runtime helper (a
+generation check, a count) that decides the same proposition; and a copy,
+which makes any view valid by making it owned.
+
+### 10.7 Stores and keys: shared mutation
+
+A shared structure is a store and keys: the pure meaning of a graph is a
+finite map and its handles. Keys copy freely; access needs the store, held
+`mut`. Fresh identity needs a supply to come from, so allocation threads the
+store; that is forced by purity, and the implicit region token of §10.4 is
+what keeps it out of the source.
+
+Validity of a key is a proposition about the store and the key. The arena
+is the first customer: a window used after the reset that freed it has no
+proof of validity, so `stale_windows_meet` becomes a refused obligation. A
+generation kept as erased state is the static form, and the same generation
+kept at run time and compared is the helper; a reference count is the other
+helper. Permission tokens of §5 are the store itself, split where paths are
+apart (`separation-algebra-ownership`, built with fractions in mind).
+
+A home is a root and a path. A local's home is not observable until it is
+borrowed, and two owned values never share one. Pointer equality is
+equality of paths. An address as a number is machine-level code against the
+explicit memory model, with its provenance questions, and is deferred.
+
+### 10.8 Copy, Clone, drop, and erased uses
+
+- **A use in an erased position is a use of the value, not the storage.**
+  The judgment runs over reflected code, and reflection drops proofs, types
+  and specifications, so a proof may mention a buffer after it moved or
+  while it is lent, and never needs a clone. A binding used only in erased
+  positions has no storage.
+- **`Clone`** is an operation with no law. **An extension** carries
+  `clone(x) = x`. Its consumers ask for it as a fact: a proof that rewrites
+  a clone away, the compiler inserting one where the policy allows, the
+  optimizer deleting one when the original is dead. It is derived for a type
+  described by its layout. A type whose meaning has representation slack
+  keeps plain `Clone`, or states its law up to its own equivalence.
+- **`Copy`** is a fact about a representation: words, records of copyable
+  parts, frozen views and keys are copyable; owned buffers, live paths and
+  stores are not.
+- **Drop** means nothing, so values are affine by default and a leak is
+  never unsound. A capability that must not be dropped says so in its type.
+
+### 10.9 Closures, and what concurrency asks now
+
+A closure is a record of its captures and code, so it is the stored-borrow
+case, and its type carries its capture set. One that captures a live path of
+`out` means `(a, out) → (b, out)`. The three receiver modes that exist
+replace three function traits. The capture set of live paths is the
+closure's footprint, the same thing `effects-locality-design.md` calls a
+footprint fact.
+
+Concurrency has no model yet. Deterministic parallelism needs none: the
+meaning of a parallel map is the sequential one, licensed by the iterations'
+footprints being apart. What that asks of the design today is only that
+footprints are values and tokens can be split.
+
+### 10.10 Inference, and the policy on copies
+
+Inference is untrusted search (principle 3): it writes the annotated program
+(regions, where each loan ends, where a copy goes), and a small checker of
+annotations carries the soundness theorem. Written annotations are demands
+checked against it. Inferred ones belong to a module's interface, so a
+change shows as an interface change.
+
+A `runtime fn` refuses an implied copy and names `clone`. A relaxed marker
+on a function lets the compiler insert the copy and report it.
+
+## 11. What the tree has, against this design
+
+Read off the code on 2026-11-24.
+
+| Piece | State |
+|---|---|
+| Updates in place | Only the one written span of an `FTm` computation, a laid record's fields and `Bytes(n)`, justified structurally: the span is never a value (`rt_file.hthr`). |
+| Buffers as values | `Op::Get`, `Op::Set` are refused by the default judgment and not lowered. |
+| `Unique`, `Owned`, `WritePlan` | Built over `rt` (`lib/lang/facts/`); no lowering consumes them (`unique-fact`). |
+| Borrows for a call | `FTm::Lend` and `FView`; FunctionIR `View`; machine `Loan`, `Viewed`. A written view must be its buffer's only view (`views-of-one-buffer-apart`). |
+| Several written spans | Not built (`rung2-spans-design.md` §6). |
+| Linearity | The reflector's refusals for the world and the span (`rt_reflect.hthr`). No judgment over `FTm`, `ETm` or held code: only pure `Fun` goes through `Setup`. |
+| Typed references | None. A window is two words, a vector handle a `u64`, laid records nest by value. |
+| Lenses | `Location`, `LocationLaws`, `Disjoint` (`lib/std/machine/location.hthr`), total only; `Part` and `Stored` for laid records. |
+| Footprints | `Span`, `SpanSet` with deciders (`span_set.hthr`); no separation algebra. |
+| `mut` in the surface | A parser desugaring; the AST's `Param` has no mode, and a `mut self` method is known by its `Mutated` result type alone. `&` is an infix token only. |
+| Erased parameters | Trailing squashed arguments of a call are dropped; a laid-record `runtime fn` cannot take a proof parameter (`runtime-record-function-limits`), which is why the arena's `read` and `store` are ordinary functions. |
+| `Copy`, `Clone` | No class. |
+
+In flux, and to be worked around rather than through: the loop combinator's
+rounds (`loops-on-one-combinator`), and one control language for `FTm` and
+`ETm` (`docs/native/dogfooding-plan.md` §5.3b).
+
+## 12. Work packages
+
+Each is an issue; its done-when is in the issue. The first wave has no
+package waiting on another.
+
+**First wave.**
+
+| Package | Issue | Where |
+|---|---|---|
+| Paths and validity: the meaning layer of §10.4 and §10.6, with `split_at_mut` and the word map's slot as theorems | `ownership-paths` | library, pure |
+| Stores, keys and generations, with the arena's windows as typed handles and the stale window refused | `ownership-stores-and-keys` | library, pure |
+| The separation algebra, with fractions | `separation-algebra-ownership` | library, pure |
+| Modes in the surface: a mode on a parameter the AST keeps, `&T` and `&mut T` on any parameter, several per function | `ownership-parameter-modes` | parser, elaborator |
+| Views of one buffer known apart, then two written views: `split_at_mut` through the machine | `views-of-one-buffer-apart` | FunctionIR, x86 views |
+| Proof and erased parameters of a laid-record `runtime fn`, so an access carries its obligation into compiled code | `runtime-erased-parameters` | reflector, generator |
+
+**Second wave**, each after what it names:
+
+- `Copy`, `Clone` and the exact-clone extension, derived from a layout
+  (after `ownership-paths`; consumer: the judgment).
+- **The judgment**: access kinds, moves and regions over reflected code,
+  raising `Valid` and `Apart` as fact requests, as a checker of annotations
+  with inference beside it (after paths, modes, and the one control
+  language). It replaces the reflector's linearity refusals and
+  `Program::owned`.
+- **Homes for owned values and the in-place lowering**: what `unique-fact`
+  leaves, with a vector owned by a local living in the arena.
+- **Stored borrows**: place-named regions on records, frozen views in a
+  vector (the tokenizer), and a view's layout as an address and a count,
+  which needs a reference-typed field in `laid` and `datarepr`.
+- **Soundness**: the invariant that every live name and path reads its
+  value, stated once against the memory model through the separation
+  algebra, composed with a function's certificate.
+
+**Later.** Closures and capture sets; the parallel licence; reference counts
+as a helper; addresses as numbers.
+
+## 13. Still open
+
+1. The spelling of regions and modes (§10.5), and elision's rules.
+2. Whether `Ref` and `Mut` are transparent to the kernel (a frozen view
+   unfolds to its type, the region a phantom the judgment reads) or opaque
+   with coercions. Lean: transparent, so ordinary functions take a view with
+   no coercion.
+3. How a frozen view carries its path when pointer equality on it is asked.
+4. Erased state that a `mut self` method changes (an arena's generation):
+   an erased field of the receiver, or a parameter of its type that the
+   method's result may change.
+5. The shape of the checker's annotations, and which of them a module's
+   interface keeps.
+6. The milestone's done-when (`docs/roadmap.md`, `nh-ownership`), to restate
+   once the first wave has shown what holds.
