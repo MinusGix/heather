@@ -485,7 +485,7 @@ Read off the code on 2026-11-24.
 | Typed references | None. A window is two words, a vector handle a `u64`, laid records nest by value. |
 | Lenses | `Location`, `LocationLaws`, `Disjoint` (`lib/std/machine/location.hthr`), total only; `Part` and `Stored` for laid records. |
 | Footprints | `Span`, `SpanSet` with deciders (`span_set.hthr`); no separation algebra. |
-| `mut` in the surface | A parser desugaring; the AST's `Param` has no mode, and a `mut self` method is known by its `Mutated` result type alone. `&` is an infix token only. |
+| `mut` in the surface | A parser desugaring; the AST's `Param` has no mode, and a `mut self` method is known by its `Mutated` result type alone. `&` is an infix token only. **Since built** (`ownership-parameter-modes`, `sequencing-surface-design.md` §24): `Param::mode`, `x: &T` and `x: &mut T` on any parameter, `&mut place` at a call, the modes readable by a generator (`tactic::modes`). |
 | Erased parameters | Trailing squashed arguments of a call are dropped; a laid-record `runtime fn` cannot take a proof parameter (`runtime-record-function-limits`), which is why the arena's `read` and `store` are ordinary functions. |
 | `Copy`, `Clone` | No class. |
 
@@ -533,10 +533,24 @@ as a helper; addresses as numbers.
 ## 13. Still open
 
 1. The spelling of regions and modes (§10.5), and elision's rules.
+   *Informed by `ownership-parameter-modes` (2026-11-24):* `x: &T` and
+   `x: &mut T` on a parameter and `&mut place` at a call are built
+   (`sequencing-surface-design.md` §24), with `self x: &mut T` a second
+   spelling of `mut self x: T`. A parameter's mode is written in front of
+   its type, which leaves `&{self} V` free for a region in the type
+   position later. Several `&mut` parameters return their values after as
+   `Mutated<A, Mutated<B, R>>` in parameter order, so one is exactly `mut
+   self`'s shape. Alternatives met and not taken: a mode before the name
+   (`&mut x: T`, the spelling §4.2 floated), which reads as a pattern and
+   collides with `mut x` at the head of a binder; and a record of the
+   values after per signature, which a generator would have to name. At a
+   call, nothing marks a frozen view (`f(&a)`): it means the value.
 2. Whether `Ref` and `Mut` are transparent to the kernel (a frozen view
    unfolds to its type, the region a phantom the judgment reads) or opaque
    with coercions. Lean: transparent, so ordinary functions take a view with
-   no coercion.
+   no coercion. *As built (2026-11-24):* a parameter's mode is fully
+   transparent, recorded beside the type and not in it, so the judgment
+   reads it from the declaration (`tactic::modes`), never from a type.
 3. How a frozen view carries its path when pointer equality on it is asked.
 4. Erased state that a `mut self` method changes (an arena's generation):
    an erased field of the receiver, or a parameter of its type that the
