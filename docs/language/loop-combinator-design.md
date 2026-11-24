@@ -970,16 +970,51 @@ round stays green. (`Repeat` was taken: it is a native statement's.)
   lemmas.
 - *The passes.* Analyses read its body. Replay, inlining and the
   optimizer's plans take it whole (`Same`, `Stay`), for now.
-- *No code yet.* The native layers refuse it (`emit_calls`, `code`,
-  `scoped`), each with its proof's case vacuous. It is spelled with tag 9,
-  which the Rust decoders do not read yet.
+- *Code.* None in round A: the native layers refused it until round B,
+  below. It is spelled with tag 9.
 - *A probe split.* `uneven_shallow_exits` (native_compile_tests) sat at the
   kernel's budget. One more constructor in every match tipped it over by
   a sliver, so it is now stage theorems.
 
-Left for round B: `Until`'s code and its proof in the native layers, its
-spelling in the decoders, its replay and inlining inside the body, and its
-placeless check. The counted loop's users move in round C.
+**Round B as built: `Until`'s code, with no counter.**
+
+- *The function path* (`function_ir_lower_calls`, the lowering runtime
+  functions compile through). The entry moves the inputs into the state's
+  registers. A pass is the body, then the exit test (`File::branch_test`);
+  leaving moves `next` into the state and jumps out, and going round moves
+  them and jumps to the head. There is no counter, no flag and no
+  exhausted bit.
+  - The machine proof (`until_emits`, `until_rounds`, `until_close_emits`)
+    inducts on the passes `∃ n. UntilRunsOver` gives, and the zero case is
+    absurd. It is smaller than the counted loop's, and so is each step's
+    cost.
+  - The planner places the state alone (`File::until_places`).
+  - A pass sees the homes the loop carries in (`until_carries`), but no
+    homes are carried out yet.
+  - Probe `function_ir_until_tests`: a countdown lowers by `refl` to
+    `SUB; CMP; JNE` and its jumps, with no counter. A loop whose exit is
+    no comparison tests a bit. A stray exit is refused by name.
+- *The statement path* (`native_compile_structured` and the layers under
+  it). A region holding an `Until` scopes, passes the allocator's check
+  (its loop set keyed by its exit id) and is emitted with its machine
+  proof (`Target::until_head`, `until_goes`). Termination is the region's
+  hypothesis: `StructuredRegion::Ok` takes `until_halts`, which is
+  `until_run_defined` from every state.
+- *Open: a statement cannot hold an `Until` yet.* A statement's meaning
+  (`Stmt::denote`'s `Compute`) has no hypothesis and no meaning for a loop
+  that does not end. `native_compile_correct` is cited by the ELF theorem
+  whose call the Rust emitter writes. So `scopes` refuses an `Until`
+  (`until_free`) until one of these is chosen:
+  - (a) `Compute` gets a meaning that can stop short (fuel, or a `Cut`).
+  - (b) The compile's correctness and the ELF theorem take a termination
+    hypothesis, which changes the call Rust writes.
+  - (c) A termination check the compile decides.
+
+  The native tools (`native_build`) are the counted loop's only
+  statement-level producer, so this decides how they leave `Loop` in
+  round C.
+- *Rust.* The region printer reads tag 9. The allocator does not, since no
+  statement reaches it with an `Until`.
 
 **Built: a pass that answers several words** (step 3's first half, kept
 as small as the extra pass allows).
