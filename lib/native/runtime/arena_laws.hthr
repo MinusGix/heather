@@ -8,11 +8,12 @@
 //
 // - `alloc_below`: allocation changes no word of the heap, so none below the
 //   old top: every window allocated before survives every later allocation.
-// - `alloc_fresh`: a window allocated (an answer other than `Full`) is at
-//   the old top and inside the limit and the heap, and the top moves past
-//   it; so it is apart from every window below the old top (`alloc_apart`).
-//   At the limit the answer is `Full` and the arena is as it was
-//   (`alloc_full`).
+// - `alloc_fresh`: a window allocated (an answer `Got(base)`) is at the
+//   old top and inside the limit and the heap, and the top moves past it;
+//   so it is apart from every window below the old top (`alloc_apart`).
+//   Where it fits the answer is `Got` (`alloc_got`); at the limit it is
+//   `Full` and the arena is as it was (`alloc_full`). The outcome is an
+//   enum (`Alloc`), so no law names a word standing for `Full`.
 // - `store_apart`: a store into a window changes no read of a window apart
 //   from it (both inside the heap).
 // - `grow_abs`: where growing answers 1, the vector holds what it held.
@@ -97,8 +98,8 @@ theorem Arena::fits_dec(a: Arena, size: u64): Or<Arena::Fits(a, size), ¬Arena::
 // `alloc_below`: allocation changes no word of the heap.
 theorem Arena::alloc_below(a: Arena, size: u64): Arena::alloc(a, size).after.heap = a.heap {
     match Arena::fits_dec(a, size) {
-        Inl(f) => cong_fn(λ (r: Mutated<Arena, u64>) => r.after.heap, Arena::alloc::True(a, size, f)),
-        Inr(nf) => cong_fn(λ (r: Mutated<Arena, u64>) => r.after.heap, Arena::alloc::False(a, size, nf)),
+        Inl(f) => cong_fn(λ (r: Mutated<Arena, Alloc>) => r.after.heap, Arena::alloc::True(a, size, f)),
+        Inr(nf) => cong_fn(λ (r: Mutated<Arena, Alloc>) => r.after.heap, Arena::alloc::False(a, size, nf)),
     }
 }
 
@@ -113,12 +114,14 @@ theorem Arena::lt_dec(x, y: u64): Or<x < y, ¬(x < y)> {
     }
 }
 
-fn ARENA_FULL() → u64 { BitVec::ofNat(18446744073709551615) }
+// The base an outcome carries, `d` where it is `Full`: what reads the
+// equation `alloc(a, size).value = Got(base)` back to `base`.
+fn Alloc::base_or(self r: Alloc, d: u64) → u64 { match r { Got(b) => b, Full => d } }
 
-// `alloc_fresh`: an allocation that did not answer `Full` answered a window
+// `alloc_fresh`: an allocation that answered `Got(base)` answered a window
 // at the old top, inside the limit and the heap, and moved the top past it.
-theorem Arena::alloc_fresh(a: Arena, size: u64, ok: ¬(Arena::alloc(a, size).value = ARENA_FULL())):
-    And<Arena::alloc(a, size).value = a.top, And<a.top.toNat() + size.toNat() <= a.limit.toNat(), And<a.limit.toNat() <= 16,
+theorem Arena::alloc_fresh(a: Arena, size, base: u64, got: Arena::alloc(a, size).value = Got(base)):
+    And<base = a.top, And<a.top.toNat() + size.toNat() <= a.limit.toNat(), And<a.limit.toNat() <= 16,
         Arena::alloc(a, size).after.top.toNat() = a.top.toNat() + size.toNat()>>>
 {
     match Arena::fits_dec(a, size) {
@@ -127,22 +130,32 @@ theorem Arena::alloc_fresh(a: Arena, size: u64, ok: ¬(Arena::alloc(a, size).val
             let sum = Arena::fits_sum(a, size, f);
             let lim: (a.limit.toNat() <= 16) = f.left;
             let below: ((a.top + size).toNat() <= a.limit.toNat()) = f.right.right.right;
-            And(cong_fn(λ (r: Mutated<Arena, u64>) => r.value, eq), And(omega(sum, below), And(lim, trans(cong_fn(λ (r: Mutated<Arena, u64>) => r.after.top.toNat(), eq), sum))))
+            let answered: (Got(a.top) = Got(base)) = trans(sym(cong_fn(λ (r: Mutated<Arena, Alloc>) => r.value, eq)), got);
+            let at: (base = a.top) = sym(cong_fn(λ (r: Alloc) => r.base_or(a.top), answered));
+            And(at, And(omega(sum, below), And(lim, trans(cong_fn(λ (r: Mutated<Arena, Alloc>) => r.after.top.toNat(), eq), sum))))
         },
-        Inr(nf) => false_elim(ok(cong_fn(λ (r: Mutated<Arena, u64>) => r.value, Arena::alloc::False(a, size, nf)))),
+        Inr(nf) => {
+            let full: (Full = Got(base)) = trans(sym(cong_fn(λ (r: Mutated<Arena, Alloc>) => r.value, Arena::alloc::False(a, size, nf))), got);
+            absurd(full)
+        },
     }
 }
 
 // So a window allocated is apart from every window below the old top.
-theorem Arena::alloc_apart(a: Arena, size: u64, ok: ¬(Arena::alloc(a, size).value = ARENA_FULL()), b, c: Nat, older: b + c <= a.top.toNat()):
-    Arena::Apart(b, c, Arena::alloc(a, size).value.toNat(), size.toNat())
+theorem Arena::alloc_apart(a: Arena, size, base: u64, got: Arena::alloc(a, size).value = Got(base), b, c: Nat, older: b + c <= a.top.toNat()):
+    Arena::Apart(b, c, base.toNat(), size.toNat())
 {
-    let base: (Arena::alloc(a, size).value.toNat() = a.top.toNat()) = cong_fn(λ (x: u64) => x.toNat(), Arena::alloc_fresh(a, size, ok).left);
-    Inl(omega(base, older))
+    let at: (base.toNat() = a.top.toNat()) = cong_fn(λ (x: u64) => x.toNat(), Arena::alloc_fresh(a, size, base, got).left);
+    Inl(omega(at, older))
+}
+
+// Where the window fits, the answer is `Got` of the old top.
+theorem Arena::alloc_got(a: Arena, size: u64, f: Arena::Fits(a, size)): Arena::alloc(a, size).value = Got(a.top) {
+    cong_fn(λ (r: Mutated<Arena, Alloc>) => r.value, Arena::alloc::True(a, size, f))
 }
 
 // At the limit, the answer is `Full` and the arena is as it was.
-theorem Arena::alloc_full(a: Arena, size: u64, over: a.limit.toNat() < a.top.toNat() + size.toNat()): Arena::alloc(a, size) = Mutated(a, ARENA_FULL()) {
+theorem Arena::alloc_full(a: Arena, size: u64, over: a.limit.toNat() < a.top.toNat() + size.toNat()): Arena::alloc(a, size) = Mutated(a, Full) {
     Arena::alloc::False(a, size, λ f => {
         let below: ((a.top + size).toNat() <= a.limit.toNat()) = f.right.right.right;
         false_elim(omega(Arena::fits_sum(a, size, f), below, over))

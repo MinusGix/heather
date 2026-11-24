@@ -1,7 +1,8 @@
 // Memory a `runtime fn` owns, as an arena inside the one span it writes
 // (issues/runtime-arena-in-span.md, docs/native/rung2-spans-design.md §5):
 // a laid header of the top and the limit, then the heap. Allocation
-// compares and adds, answering a window's base or `Full`; a window is two
+// compares and adds, answering `Got(base)` or `Full` (`Alloc`, two words:
+// its tag and the base); a window is two
 // words `(base, count)`, read and stored at element `i` through the heap
 // array's accessor at the word index `base + i`; reset moves the top back
 // to a mark; and a vector is a header of three heap words (its window's
@@ -25,8 +26,15 @@
 //   lands the record becomes `Arena(size) { top, heap: [u64; size.toNat()] }`
 //   and the limit is the carried `size`; the laws are stated at the heap's
 //   words and carry over with `16` replaced by the count.
-// - `Full` is the word `2^64 - 1`. A successful base is at most 16, so the
-//   two never meet (`arena_laws.hthr`'s `alloc_fresh`).
+// - The outcome is an enum, `Got(base)` or `Full`, returned in two words
+//   (its tag word and its payload's slot, as a plain function returns one;
+//   docs/native/runtime-fn-setups-design.md §16.21), not a base with a
+//   word no base can be standing for `Full`. A named enum rather than
+//   `Option<u64>`: it says what the absence is, and the type table holds
+//   enums by their own global (a generic type applied has no entry). One
+//   word would do where the type knew the base below `2^64 - 1` (a niche,
+//   docs/native/layout-design.md §12): not built, as it does not matter
+//   for these calls.
 //
 // What the generator does not take yet shapes three spellings, each noted
 // where it stands: the tests that keep the heap's indexes in bounds are
@@ -45,16 +53,19 @@ import runtime_data;
 
 laid record Arena { top: u64, limit: u64, heap: [u64; 16] }
 
-// A window of `size` words at the top, or `Full` (`2^64 - 1`) where the
+// What an allocation answers: a window's base, or that the arena is full.
+inductive Alloc { Got(base: u64), Full }
+
+// A window of `size` words at the top, `Got(base)`, or `Full` where the
 // limit, or the heap, is passed; the top is the next window's base. The
 // test reads the limit within the heap and the top within the limit first,
 // so the sum it then compares does not wrap.
-runtime fn Arena::alloc(mut self a: Arena, size: u64) → u64 {
+runtime fn Arena::alloc(mut self a: Arena, size: u64) → Alloc {
     if fits: a.limit <= 16 ∧ a.top <= a.limit ∧ size <= a.limit ∧ a.top + size <= a.limit {
         let base = a.top;
         a.top := a.top + size;
-        base
-    } else { 18446744073709551615 }
+        Got(base)
+    } else { Full }
 }
 
 // Back to a mark taken earlier (a top at most the present one): every
@@ -111,10 +122,10 @@ runtime fn Arena::grow(mut self a: Arena, h: u64) → u64 {
 }
 
 // A vector of capacity `cap`: its header and its window, allocated together
-// at the top, the header's base just past it and its length 0. The header's
-// base, or `Full`. (`h < 14` is implied by the first test; it is written
-// for the heap index's bound.)
-runtime fn Arena::new_vec(mut self a: Arena, cap: u64) → u64 {
+// at the top, the header's base just past it and its length 0. `Got` of the
+// header's base, or `Full`. (`h < 14` is implied by the first test; it is
+// written for the heap index's bound.)
+runtime fn Arena::new_vec(mut self a: Arena, cap: u64) → Alloc {
     if fits: a.limit <= 16 ∧ a.top <= a.limit ∧ cap <= a.limit ∧ a.top + 3 + cap <= a.limit {
         let h = a.top;
         if hb: h < 14 {
@@ -122,9 +133,9 @@ runtime fn Arena::new_vec(mut self a: Arena, cap: u64) → u64 {
             a.heap := a.heap.put(h, h + 3);
             a.heap := a.heap.put(h + 1, cap);
             a.heap := a.heap.put(h + 2, 0);
-            h
-        } else { 18446744073709551615 }
-    } else { 18446744073709551615 }
+            Got(h)
+        } else { Full }
+    } else { Full }
 }
 
 // Item `len` of the window at `base` set to `x`, the length one more.
