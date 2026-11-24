@@ -482,6 +482,11 @@ pub(crate) enum Unfold {
     /// length (`be_value([b0, b1, b2, b3])`). Past the budget the call stays
     /// an atom, named in omega's failure report.
     ArithmeticBody,
+    /// A call at open arguments `omega` would take as an atom, followed
+    /// through its δ step and the β steps instantiating its parameters for
+    /// a body headed by arithmetic (`dist(a, b)` is `(b + 4 - a) % 4`). Short:
+    /// past the parameters the walk would enter the arithmetic itself.
+    OpenArithmetic,
     /// A tactic's `Spell`: a term followed through its head definition until
     /// a call is at the head again, which may run a small decision (a
     /// `match` on `Nat::equation(64, w)` at a literal) on the way.
@@ -494,7 +499,7 @@ impl Unfold {
         match self {
             Unfold::OneStep => 1,
             Unfold::RingWrapper => 4,
-            Unfold::Comparison | Unfold::IndexRead => 8,
+            Unfold::Comparison | Unfold::IndexRead | Unfold::OpenArithmetic => 8,
             Unfold::HoleComparison | Unfold::MatchedArm | Unfold::WordShape => 16,
             Unfold::InstanceBit | Unfold::LiteralEmbedding => 32,
             Unfold::Proposition | Unfold::RuleGoal | Unfold::StuckScrutinee | Unfold::NextHead | Unfold::RecursiveArm => 64,
