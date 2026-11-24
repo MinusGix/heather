@@ -196,7 +196,6 @@ theorem add_up_value(own: List<u8>, t: Tally, length, i, acc: u64, holds: Tally:
 // ---------------------------------------------------------------------------
 // What is refused, each by its reason.
 
-
 // expect-error: must `decreases` a 64-bit word's `toNat`
 runtime fn Tally::slow(mut self t: Tally, i: u64) → u64
     decreases (8 - i).toNat() + 1 {
