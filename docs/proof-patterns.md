@@ -390,6 +390,19 @@ should read is `docs/library/program-and-proof-style.md`.
   `i.toNat() < 64` by conversion, so a typed `let lt: (i.toNat() < 64) =
   omega` is accepted for it. They are `simp` laws too, with the hypothesis
   found in scope (`issues/definition-branch-equations.md`).
+- **Never let the kernel reduce a loop node's meaning past its head.** A
+  node's meaning (`Tm::sem_in` at a `Tm::Loop`) is `Loop::rounds` at a
+  numeral fuel, and a reduction that forces its head runs one pass, then the
+  next, without end: the kernel runs out of fuel instead of answering. Two
+  traps were found by 3g (`docs/language/loop-combinator-design.md` §6.8):
+  comparing two loops' meanings by `refl`, even ones that differ only in an
+  argument their passes never read, unrolls `rounds`, so state the one-step
+  unfolding once as its own lemma (`Tm::sem_in_loop`) and compare each side
+  through it with `trans`/`sym`; and a cast of a meaning against the meaning
+  itself (`cast(ty, W64, sem(node)) = sem(node)`) forces the head to reduce
+  the cast, while cast against cast converts argument by argument, so end
+  the pin in `Ty::cast_self` spelled with the meaning's own cast. The same
+  holds for any recursion at a large numeral bound.
 
 ## 5. Names and syntax
 
