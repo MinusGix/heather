@@ -955,6 +955,32 @@ pub const INDUCT_CASES: &str = "\0induct-cases";
 /// as [`SPLIT_ALL_GOALS`] is (issues/cases-on-hypothesis-tactic.md).
 pub const CASES_HYPOTHESIS: &str = "\0cases-hypothesis";
 
+/// Parser-generated head for anonymous `suffices P by justify; <rest>`
+/// (issues/block-suffices-statement.md). Arguments: `TyLit(P)`, `justify`,
+/// and `<rest>`. Named `suffices h: P by justify; <rest>` lowers directly
+/// to `{ have h: P = <rest>; justify }`.
+pub const SUFFICES: &str = "\0suffices";
+
+/// Parser-generated head for `require [h:] P;` inside `within W for x { … }`
+/// (issues/proof-worlds-native-inside.md). Lowered by `within::lower_pointwise`
+/// into `let h <- W::synth(λ x => P);`; refused elsewhere by the elaborator.
+pub const REQUIRE: &str = "\0require";
+
+/// Field-name prefix for positional `let ⟨p1, p2, …⟩ = e;` patterns stored
+/// in [`Stmt::LetRecord`] (issues/conjunction-facts-read-by-counting.md).
+/// Unspellable by the surface lexer, so it never collides with a record's
+/// real field names while every AST walker keeps treating `LetRecord` uniformly.
+pub const POSITIONAL_FIELD_PREFIX: &str = "\0pos:";
+
+/// Marker field name for a nullary positional pattern `let ⟨⟩ = e;`,
+/// distinguishing it from partial named `let {} = e;`.
+pub const POSITIONAL_EMPTY: &str = "\0pos:empty";
+
+/// Positional field sentinel for slot `index` of a `let ⟨…⟩` pattern.
+pub fn positional_field_name(index: usize) -> String {
+    format!("{POSITIONAL_FIELD_PREFIX}{index}")
+}
+
 /// One name of `cases h as …`: the equation of one split, and the names of
 /// its surviving constructor's fields.
 #[derive(Debug, Clone, PartialEq, Eq)]

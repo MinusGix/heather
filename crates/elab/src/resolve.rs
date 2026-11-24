@@ -305,7 +305,13 @@ impl ResolutionMut<'_> {
             v.position(abs)
                 .and_then(|g| self.names.global_name_at(g as u32).map(str::to_string))
         };
-        let Some((relation, heads)) = proposition_key(conclusion, &name_of) else {
+        let conclusion_here = conclusion.shift_global(1);
+        let Some((relation, heads)) = proposition_key(conclusion, &name_of).or_else(|| {
+            let unspelled = self.unspell_here(&conclusion_here);
+            let target = unspelled.as_ref().unwrap_or(&conclusion_here);
+            self.tag_of(target)
+                .map(|ind| (crate::names::qkey(&ind.scope.module, &ind.name), Vec::new()))
+        }) else {
             return refuse(format!(
                 "the conclusion of `{}` is not a relation applied to arguments \
                  (`0 < a * b`), so no goal could select it as an evidence rule",
@@ -510,6 +516,9 @@ impl Resolution<'_> {
         // class; use the declaration identity carried by the tag instead.
         let ckey = crate::names::qkey(&ind.scope.module, &ind.name);
         if !self.traits.has_class(&ckey) {
+            if !self.traits.evidence_rules(&ckey).is_empty() {
+                return self.resolve_proposition(cx, goal, lvl, span, depth, tr);
+            }
             tr.push(line(
                 depth,
                 "no-class",
@@ -805,7 +814,12 @@ impl Resolution<'_> {
             self.global_abs_of(v)
                 .and_then(|abs| self.names.global_name_at(abs as u32).map(str::to_string))
         };
-        let Some((relation, mut heads)) = proposition_key(goal, &name_of) else {
+        let Some((relation, mut heads)) = proposition_key(goal, &name_of).or_else(|| {
+            let unspelled = self.unspell_here(goal);
+            let target = unspelled.as_ref().unwrap_or(goal);
+            self.tag_of(target)
+                .map(|ind| (crate::names::qkey(&ind.scope.module, &ind.name), Vec::new()))
+        }) else {
             tr.push(line(depth, "no-rule", "the goal is not a relation applied to arguments"));
             return None;
         };
@@ -1962,11 +1976,43 @@ struct Measure {
 impl Measure {
     fn of(ty: &Type, under: u32) -> Measure {
         let mut m = Measure { size: 0, occurrences: Default::default() };
-        match ty {
-            Type::El { tm, .. } => m.term(tm, under),
-            _ => m.size = usize::MAX / 2,
-        }
+        m.ty(ty, under);
         m
+    }
+
+    fn ty(&mut self, ty: &Type, under: u32) {
+        match ty {
+            Type::El { tm, .. } => self.term(tm, under),
+            Type::Pi { dom, cod, .. } => {
+                self.size += 1;
+                self.ty(dom, under);
+                self.ty(cod, under + 1);
+            }
+            Type::Sigma { fst, snd, .. } => {
+                self.size += 1;
+                self.ty(fst, under);
+                self.ty(snd, under + 1);
+            }
+            Type::Sum { lhs, rhs, .. } => {
+                self.size += 1;
+                self.ty(lhs, under);
+                self.ty(rhs, under);
+            }
+            Type::Id { ty, lhs, rhs, .. } | Type::SEq { ty, lhs, rhs, .. } => {
+                self.size += 1;
+                self.ty(ty, under);
+                self.term(lhs, under);
+                self.term(rhs, under);
+            }
+            Type::Squash { ty, .. } => {
+                self.size += 1;
+                self.ty(ty, under);
+            }
+            Type::Nat | Type::Unit { .. } | Type::Empty { .. } | Type::Ty(_) => {
+                self.size += 1;
+            }
+            _ => self.size = self.size.saturating_add(usize::MAX / 4),
+        }
     }
 
     fn term(&mut self, t: &Term, under: u32) {
@@ -1978,6 +2024,7 @@ impl Measure {
                 }
             }
             Term::Succ(x) => self.term(x, under),
+            Term::Lam { body, .. } => self.term(body, under + 1),
             _ => {
                 let (head, args) = crate::spelling::app_spine(t);
                 if !args.is_empty() {

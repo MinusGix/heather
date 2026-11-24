@@ -1029,11 +1029,19 @@
           "named": true
         },
         {
+          "type": "require_statement",
+          "named": true
+        },
+        {
           "type": "split_statement",
           "named": true
         },
         {
           "type": "statement_form",
+          "named": true
+        },
+        {
+          "type": "suffices_statement",
           "named": true
         }
       ]
@@ -5067,6 +5075,10 @@
       "required": false,
       "types": [
         {
+          "type": "anonymous_constructor_pattern",
+          "named": true
+        },
+        {
           "type": "destructure_pattern",
           "named": true
         }
@@ -5707,7 +5719,7 @@
         "required": true,
         "types": [
           {
-            "type": "identifier",
+            "type": "_pattern",
             "named": true
           }
         ]
@@ -6289,6 +6301,80 @@
     }
   },
   {
+    "type": "require_statement",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "(",
+            "named": false
+          },
+          {
+            "type": ")",
+            "named": false
+          },
+          {
+            "type": "_expression",
+            "named": true
+          },
+          {
+            "type": "declaration_big_operator_type",
+            "named": true
+          },
+          {
+            "type": "declaration_binary_type",
+            "named": true
+          },
+          {
+            "type": "declaration_call_type",
+            "named": true
+          },
+          {
+            "type": "declaration_function_type",
+            "named": true
+          },
+          {
+            "type": "declaration_index_type",
+            "named": true
+          },
+          {
+            "type": "declaration_inverse_type",
+            "named": true
+          },
+          {
+            "type": "declaration_member_type",
+            "named": true
+          },
+          {
+            "type": "declaration_prefix_type",
+            "named": true
+          },
+          {
+            "type": "declaration_quantified_type",
+            "named": true
+          },
+          {
+            "type": "declaration_type_application",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "requirement",
     "named": true,
     "fields": {
@@ -6626,6 +6712,90 @@
           "named": true
         }
       ]
+    }
+  },
+  {
+    "type": "suffices_statement",
+    "named": true,
+    "fields": {
+      "justification": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "_expression",
+            "named": true
+          }
+        ]
+      },
+      "name": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": true,
+        "required": true,
+        "types": [
+          {
+            "type": "(",
+            "named": false
+          },
+          {
+            "type": ")",
+            "named": false
+          },
+          {
+            "type": "_expression",
+            "named": true
+          },
+          {
+            "type": "declaration_big_operator_type",
+            "named": true
+          },
+          {
+            "type": "declaration_binary_type",
+            "named": true
+          },
+          {
+            "type": "declaration_call_type",
+            "named": true
+          },
+          {
+            "type": "declaration_function_type",
+            "named": true
+          },
+          {
+            "type": "declaration_index_type",
+            "named": true
+          },
+          {
+            "type": "declaration_inverse_type",
+            "named": true
+          },
+          {
+            "type": "declaration_member_type",
+            "named": true
+          },
+          {
+            "type": "declaration_prefix_type",
+            "named": true
+          },
+          {
+            "type": "declaration_quantified_type",
+            "named": true
+          },
+          {
+            "type": "declaration_type_application",
+            "named": true
+          }
+        ]
+      }
     }
   },
   {
@@ -7928,6 +8098,10 @@
     "named": false
   },
   {
+    "type": "require",
+    "named": false
+  },
+  {
     "type": "requires",
     "named": false
   },
@@ -7962,6 +8136,10 @@
   {
     "type": "string",
     "named": true
+  },
+  {
+    "type": "suffices",
+    "named": false
   },
   {
     "type": "theorem",

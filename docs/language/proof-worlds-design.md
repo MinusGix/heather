@@ -44,10 +44,10 @@ named `within` keep working everywhere):
 ```heather
 theorem creal_le_example(x, y: CReal): x <= y {
     within Dne {
-        let c <- Dne::em(x < y);
-        match c {
-            Inl(lt) => CReal::le_of_lt(lt),
-            Inr(nlt) => ...,
+        if lt: x < y {
+            CReal::le_of_lt(lt)
+        } else {
+            ... // lt : ¬(x < y)
         }
     }
 }
@@ -62,6 +62,17 @@ theorem creal_le_example(x, y: CReal): x <= y {
 Inside `{ body }`:
 - `let x <- e;`, `e;`, `(<- e)`, and `match <- e` work via Heather's existing
   `Bind::seq` lowering (`docs/language/sequencing-surface-design.md`).
+- **Native classical `if` inside `Dne`:** inside any `Dne<_>` goal (including
+  `within Dne { … }`), `if [h:] P { yes } else { no }` (and chained `else if`)
+  tries decidable `if` (`Decide<P>` / `Bool`) first; if no `Decide<P>` instance
+  exists and `P` is a valid proposition type, it falls back constructively to
+  `Bind::seq(Dne::em(P), λ #dne_em => match #dne_em { Inl(h) => yes, Inr(h) => no })`
+  with zero axioms.
+- **Direct `within Squash` on primitive `∥A∥`:** `Bind<λ (A: Type) => ∥A∥>` and
+  `Pointed<λ (A: Type) => ∥A∥>` resolve directly against `∥A∥` via
+  `constructor_spelling`, so `within Squash { let h <- q; … }` and
+  `within Squash::recover { let h <- q; … }` work directly on `q : ∥A∥` with no
+  wrapper record.
 - Tail leaves of `{ body }` (descending through nested blocks, `match` arm
   bodies, and `if` branches) are wrapped in `Pointed::ret(...)` automatically,
   so branches write ordinary proofs of `G` rather than repeating
@@ -83,10 +94,11 @@ within Eventually for n {
     combine_proof(n, u, v)
 }
 
-// Goal is `G` (does not mention `j`): automatically exits via `Eventually::extract`:
-within Eventually for j {
-    let g1 <- Eventually::of(1, ...);
-    let sc <- RatLip::eventually(W, hW, m);
+// Goal is `G` (does not mention `j`): `require` synthesizes eventual facts
+// from registered `evidence theorem`s and exits automatically via `extract_with`:
+within Eventually for j: Nat {
+    require g1: Rat::inv_pow2(j) + Rat::inv_pow2(j) <= 1;
+    require sc: W * Rat::inv_pow2(j) <= Rat::inv_pow2(m);
     let g = Rat::inv_pow2(j);
     let p = h.at(j);
     ... // proves G
@@ -94,7 +106,10 @@ within Eventually for j {
 ```
 
 An optional type annotation on the index binder is allowed:
-`within Eventually for n: Nat { ... }`.
+`within Eventually for n: Nat { ... }`. Inside `within W for x`, `require [h:] P;`
+is a contextual statement that lowers to `let h <- W::synth(λ x => P);`,
+resolving `Eventually<I>(o.le, λ x => P)` from registered `evidence theorem`s
+(using `DefaultOrder<I>`, e.g. `Nat::Le` for `Nat`).
 
 ---
 
@@ -155,9 +170,12 @@ Inside a pointwise world `W` (any type/namespace providing `W::always`,
 
 ## 5. Future extensions
 
-- **Filter instances beyond `Nat`:** `PosRat` under `>=` (`min`), `FinSet`
-  under `⊆` (`union`), and approaches (`issues/asymptotic-relations.md`).
-- **Deferred constraint collection (`require C(x)`):** solving algebraic
-  bounds on an index automatically rather than passing a witness `Eventually::of`.
+- **Filter instances beyond `Nat`, multi-index `within Eventually for m, n`,
+  and `Slack` world** (`issues/proof-worlds-multi-index-and-slack.md`): `PosRat`
+  under `>=` (`min`), `FinSet` under `⊆` (`union`), and approaches
+  (`issues/asymptotic-relations.md`).
+- **Native verification worlds** (`issues/proof-worlds-native-wp.md`):
+  weakest-precondition / framing (`within Wp`), stack-room budgets, and
+  coinductive bisimulation (`within Bisim`).
 - **Nested `let <-` inside `match`/`if` arms of `within W for x`:** lifting
   branch-local filter facts when needed.

@@ -103,6 +103,13 @@ instance<P, Q> SquashOut<And<P, Q>> requires sp: SquashOut<P>, sq: SquashOut<Q> 
     )
 }
 
+// Direct instances on primitive `∥A∥` so `within Squash { let h <- q; … }`
+// and `within Squash::recover { let h <- q; … }` need no wrapper record.
+instance Bind<λ (A: Type) => ∥A∥> { bind := λ {A} {B} q f => squash_bind(q, f) }
+instance Pointed<λ (A: Type) => ∥A∥> { pure := λ {A} a => squash(a) }
+
+fn Squash::exit<P>(q: ∥P∥, o: SquashOut<P> := infer) → P { o.out(q) }
+
 fn Trunc::exit<P>(q: Trunc<P>, o: SquashOut<P> := infer) → P { o.out(q.val) }
 
 fn Trunc::exit_dec<P: Decide>(q: Trunc<P>) → P { Squash::recover(q.val) }
@@ -191,6 +198,28 @@ fn Eventually::map<I>({le: I → I → Type}, {P, Q: I → Type},
     self e: Eventually<I>(le, P), f: (x: I) → P(x) → Q(x)) → Eventually<I>(le, Q)
 {
     Eventually(e.since, λ x hx => f(x, e.holds(x, hx)))
+}
+
+// Default directed preorder on an index type, used by `require` inside
+// `within Eventually for x`.
+class DefaultOrder<I> { le: I → I → Type }
+
+instance DefaultOrder<Nat> { le := Nat::Le }
+
+// Synthesize an eventual fact from registered `evidence theorem`s (or local scope),
+// targeted by `require [h:] P;` inside `within Eventually for x`.
+fn Eventually::synth<I>(
+    P: I → Type,
+    o: DefaultOrder<I> := infer,
+    e: Eventually<I>(o.le, P) := infer) → Eventually<I>(o.le, P)
+{
+    e
+}
+
+evidence theorem Eventually::at_least_ev({n: Nat}):
+    Eventually<Nat>(Nat::Le, λ x => n <= x)
+{
+    Eventually(n, λ x hx => hx)
 }
 
 fn Eventually::both<I>({le: I → I → Type}, {P, Q: I → Type},

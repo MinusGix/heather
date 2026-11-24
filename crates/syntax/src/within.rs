@@ -386,7 +386,41 @@ fn lower_pointwise(
     for stmt in block.stmts {
         match stmt {
             Stmt::Let { name, ty, expr, span: sspan, opaque } => {
+                // `require [h:] P;` inside `within W for x { … }`: lower to
+                // `let h <- W::synth(λ x => P);` (issues/proof-worlds-native-inside.md).
                 if !opaque
+                    && let ExprKind::App { head, args, named, .. } = &expr.kind
+                    && named.is_empty()
+                    && matches!(&head.kind, ExprKind::Var(n) if n == REQUIRE)
+                    && let [Expr { kind: ExprKind::TyLit(prop), span: pspan }] = args.as_slice()
+                {
+                    let mut non_index_inner = inner_vars.clone();
+                    non_index_inner.remove(&index_binder.name);
+                    if ty_mentions_any(prop, &non_index_inner) {
+                        return fail(
+                            *pspan,
+                            format!(
+                                "a `require` statement in `within {world_name} for {}` cannot depend on an earlier bound fact",
+                                index_binder.name
+                            ),
+                        );
+                    }
+                    let pred = Expr {
+                        kind: ExprKind::Lam {
+                            binders: vec![index_binder.clone()],
+                            body: Box::new(Expr {
+                                kind: ExprKind::TyLit(prop.clone()),
+                                span: *pspan,
+                            }),
+                        },
+                        span: *pspan,
+                    };
+                    let rhs = call(&format!("{world_name}::synth"), vec![pred], sspan);
+                    if name != "_" {
+                        inner_vars.insert(name.clone());
+                    }
+                    binds.push((BindTarget::Name { name, ty, span: sspan }, rhs));
+                } else if !opaque
                     && let Some(rhs) = unwrap_bind_marker(&expr)
                 {
                     if has_bind_marker(rhs) {

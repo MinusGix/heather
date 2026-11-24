@@ -1,0 +1,216 @@
+// Destructuring `let ⟨…⟩ = e;` (positional, nested, flat right-nested,
+// wildcards, and `let ⟨…⟩ <- e;`) and block-level `suffices [h:] P by justify;`
+// (issues/conjunction-facts-read-by-counting.md, issues/block-suffices-statement.md).
+import nat;
+import world;
+
+// ---------------------------------------------------------------------------
+// 1. Positional `let ⟨…⟩ = e;` on `And`, `Exists`, `Pair`, `Iff`, and user records.
+
+theorem and_pair<A, B>(h: A ∧ B): B ∧ A {
+    let ⟨a, b⟩ = h;
+    And(b, a)
+}
+
+// Flat right-nesting across 3 and 4 conjuncts.
+theorem and_triple<A, B, C>(h: A ∧ B ∧ C): C ∧ B ∧ A {
+    let ⟨a, b, c⟩ = h;
+    And(c, And(b, a))
+}
+
+theorem and_quad<A, B, C, D>(h: A ∧ B ∧ C ∧ D): D ∧ A {
+    let ⟨a, _, _, d⟩ = h;
+    And(d, a)
+}
+
+// Nested `⟨…⟩` patterns, including on the left component and inside `let { … }`.
+theorem and_nested_left<A, B, C>(h: (A ∧ B) ∧ C): A ∧ B ∧ C {
+    let ⟨⟨a, b⟩, c⟩ = h;
+    And(a, And(b, c))
+}
+
+theorem record_named_with_nested_angle<A, B, C>(h: (A ∧ B) ∧ C): B ∧ C {
+    let { left := ⟨_, b⟩, right := c } = h;
+    And(b, c)
+}
+
+// Dependent `Exists` + flat right-nesting into a conjunction under the existential.
+theorem exists_and_flat(P, Q: Nat → Type, h: ∃ n: Nat, P(n) ∧ Q(n)): ∃ n: Nat, Q(n) ∧ P(n) {
+    let ⟨n, hp, hq⟩ = h;
+    Exists(n, And(hq, hp))
+}
+
+// Dependent `Exists` with arithmetic proof.
+theorem exists_arith(h: ∃ n: Nat, (1 <= n) ∧ (n <= 5)): ∃ n: Nat, 2 <= n + 1 {
+    let ⟨n, h1, _⟩ = h;
+    Exists(n, omega)
+}
+
+// `Iff` and `Pair` and custom records (including 0-field and 3-field records).
+theorem iff_swap<P, Q>(h: P ↔ Q): Q ↔ P {
+    let ⟨mp, mpr⟩ = h;
+    Iff(mp := mpr, mpr := mp)
+}
+
+fn swap_pair<A, B>(p: Pair<A, B>) → Pair<B, A> {
+    let ⟨a, b⟩ = p;
+    Pair(b, a)
+}
+
+theorem swap_pair_literal(): swap_pair(Pair(1, 2)) = Pair(2, 1) { refl }
+theorem swap_pair_neutral<A, B>(a: A, b: B): swap_pair(Pair(a, b)) = Pair(b, a) { refl }
+
+record Triple<A, B, C> { x: A, y: B, z: C }
+
+fn triple_sum(t: Triple<Nat, Nat, Nat>) → Nat {
+    let ⟨a, b, c⟩ = t;
+    a + b + c
+}
+
+theorem triple_sum_literal(): triple_sum(Triple(2, 3, 4)) = 9 { refl }
+
+// 3-field record whose last field is itself a record: flat right-nesting peels it.
+theorem triple_tail_peel<A, B, C, D>(t: Triple<A, B, C ∧ D>): D ∧ A {
+    let ⟨a, _, _, d⟩ = t;
+    And(d, a)
+}
+
+// 0-field record and unused-discard preservation.
+record Marker {}
+
+fn drop_marker(u: Marker) → Nat {
+    let ⟨⟩ = u;
+    7
+}
+theorem drop_marker_literal(): drop_marker(Marker()) = 7 { refl }
+
+fn ignore_all<A, B>(p: Pair<A, B>) → Nat {
+    let ⟨_, _⟩ = p;
+    42
+}
+theorem ignore_all_literal(): ignore_all(Pair(1, 2)) = 42 { refl }
+
+// `let ⟨…⟩ <- e;` inside `within Eventually for n` and `within Option`.
+theorem eventually_destructure(
+    P, Q: Nat → Type,
+    h: Eventually<Nat>(Nat::Le, λ n => P(n) ∧ Q(n))):
+    Eventually<Nat>(Nat::Le, Q)
+{
+    within Eventually for n {
+        let ⟨_, hq⟩ <- h;
+        hq
+    }
+}
+
+fn opt_pair_sum(o: Option<Pair<Nat, Nat>>) → Option<Nat> {
+    within Option {
+        let ⟨a, b⟩ <- o;
+        a + b
+    }
+}
+theorem opt_pair_sum_literal(): opt_pair_sum(Some(Pair(3, 4))) = Some(7) { refl }
+theorem opt_pair_sum_none(): opt_pair_sum(None) = None { refl }
+
+// ---------------------------------------------------------------------------
+// 2. Block-level `suffices [h:] P by justify;`.
+
+// Named `suffices` with a term justification.
+theorem suffices_named_term(a, b: Nat, h: a <= b): a + 1 <= b + 1 {
+    suffices k: a <= b by omega;
+    h
+}
+
+// Named `suffices` with a helper function applied to `h`.
+theorem suffices_named_helper<A, B>(f: A → B, a: A): B {
+    suffices h: A by f(h);
+    a
+}
+
+// Named `suffices` with a block justification.
+theorem suffices_named_block(a, b: Nat, h: a = b): b + 1 = a + 1 {
+    suffices eq: a = b by {
+        rewrite(eq, refl)
+    };
+    h
+}
+
+// Anonymous `suffices` with a function `P → Goal`.
+theorem suffices_anon_fn<A, B>(f: A → B, a: A): B {
+    suffices A by f;
+    a
+}
+
+// Anonymous `suffices` with a tactic reading the anonymous hypothesis in scope.
+theorem suffices_anon_tactic(a, b: Nat, h: a <= b): a + 2 <= b + 2 {
+    suffices a <= b by omega;
+    h
+}
+
+// Chained `suffices` statements and `suffices` after `let`.
+theorem suffices_chained(a, b, c: Nat, h1: a <= b, h2: b <= c): a <= c + 1 {
+    let target = c + 1;
+    suffices h_ac: a <= c by omega;
+    suffices h_both: (a <= b) ∧ (b <= c) by {
+        let ⟨ab, bc⟩ = h_both;
+        omega
+    };
+    And(h1, h2)
+}
+
+// `suffices` inside `within Eventually for n`.
+theorem suffices_inside_eventually(k: Nat): Eventually<Nat>(Nat::Le, λ n => k <= n + 1) {
+    within Eventually for n {
+        let hk <- Eventually::at_least(k);
+        suffices h: k <= n by omega;
+        hk
+    }
+}
+
+// Contextual keyword safety: `suffices` stays a valid identifier everywhere.
+fn keep_suffices(suffices: Nat) → Nat {
+    let x = suffices + 1;
+    suffices + x
+}
+theorem keep_suffices_ok(): keep_suffices(3) = 7 { refl }
+
+// ---------------------------------------------------------------------------
+// 3. Negative controls.
+
+// expect-error: record type
+fn bad_angle_nat(n: Nat) → Nat {
+    let ⟨a, b⟩ = n;
+    a
+}
+
+// expect-error: has 2 fields
+fn bad_angle_too_few(p: Pair<Nat, Nat>) → Nat {
+    let ⟨a⟩ = p;
+    a
+}
+
+// expect-error: has 2 fields
+fn bad_angle_too_many(p: Pair<Nat, Nat>) → Nat {
+    let ⟨a, b, c⟩ = p;
+    a
+}
+
+// expect-error: has 2 fields
+fn bad_angle_empty_on_pair(p: Pair<Nat, Nat>) → Nat {
+    let ⟨⟩ = p;
+    0
+}
+
+// expect-error: irrefutable
+fn bad_angle_refutable(p: Pair<Option<Nat>, Nat>) → Nat {
+    let ⟨Some(a), _⟩ = p;
+    a
+}
+
+// expect-error: expected goal type
+fn bad_suffices_infer(n: Nat) → Nat {
+    let x = {
+        suffices 0 = 0 by 1;
+        refl
+    };
+    x
+}

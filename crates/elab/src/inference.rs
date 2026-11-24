@@ -270,6 +270,18 @@ impl Inference<'_> {
             if matches!(&head.kind, ExprKind::Var(name) if name == heather_syntax::WITHIN_FOR) {
                 return Bindings(self).elab_within_for_infer(cx, args, e.span);
             }
+            if matches!(&head.kind, ExprKind::Var(name) if name == heather_syntax::SUFFICES) {
+                return err(
+                    "a `suffices` statement needs an expected goal type; use it where the goal is known",
+                    e.span,
+                );
+            }
+            if matches!(&head.kind, ExprKind::Var(name) if name == heather_syntax::REQUIRE) {
+                return err(
+                    "`require` is only valid inside a pointwise `within W for x { … }` block",
+                    e.span,
+                );
+            }
         }
         if let Some(site) = cx.corec.as_ref()
             && recursion::surface_self_call(&site.selfref, e).is_some()

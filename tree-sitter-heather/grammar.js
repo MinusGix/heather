@@ -32,7 +32,7 @@ const PREC = {
 
 // Words that introduce a special form only before their fixed follower
 // (`contextual_identifier` below); elsewhere they are names.
-const CONTEXTUAL_WORDS = ['j', 'code', 'calc', 'apply', 'give', 'refl', 'by', 'have', 'with', 'within', 'cases'];
+const CONTEXTUAL_WORDS = ['j', 'code', 'calc', 'apply', 'give', 'refl', 'by', 'have', 'with', 'within', 'cases', 'suffices', 'require'];
 
 module.exports = grammar({
   name: 'heather',
@@ -66,6 +66,8 @@ module.exports = grammar({
     [$.match_code_expression, $.contextual_identifier],
     [$.calc_expression, $.contextual_identifier],
     [$.within_expression, $.contextual_identifier],
+    [$.suffices_statement, $.contextual_identifier],
+    [$.require_statement, $.contextual_identifier],
     [$.apply_expression, $.contextual_identifier],
     [$.j_expression, $.contextual_identifier],
     [$.refl_expression, $.contextual_identifier],
@@ -310,7 +312,7 @@ module.exports = grammar({
     repr_clause: $ => seq(optional('mk'), field('name', $.identifier), ':=', field('value', $._expression)),
 
     block: $ => seq('{',
-      repeat(choice($.let_statement, $.have_statement, $.cases_statement, $.expression_statement, $.assignment_statement, $.statement_form, $.exit_statement)),
+      repeat(choice($.let_statement, $.have_statement, $.cases_statement, $.suffices_statement, $.require_statement, $.expression_statement, $.assignment_statement, $.statement_form, $.exit_statement)),
       optional(choice(
         $.goal_combinators,
         seq(choice($.split_statement, field('result', $._expression)), repeat($.on_statement)),
@@ -325,7 +327,7 @@ module.exports = grammar({
     // docs/language/sequencing-surface-design.md §3.1).
     let_statement: $ => seq(
       // `let code x = e;` is the surface letbox (surface-v0 §4).
-      'let', optional(choice('mut', 'code')), choice(field('name', choice($.identifier, ...contextualWords($))), $.destructure_pattern),
+      'let', optional(choice('mut', 'code')), choice(field('name', choice($.identifier, ...contextualWords($))), $.destructure_pattern, $.anonymous_constructor_pattern),
       optional(seq(':', field('type', $._annotation_type))), choice('=', '<-', '←'), field('value', $._expression), ';',
     ),
     // `x := e;` reassigns a `let mut` local (§4).
@@ -360,7 +362,17 @@ module.exports = grammar({
       '{', commaSep1(choice($.identifier, $.named_destructure_field)), optional(','), '}',
     ),
     named_destructure_field: $ => seq(
-      field('field', $.identifier), ':=', field('name', $.identifier),
+      field('field', $.identifier), ':=', field('name', $._pattern),
+    ),
+    // `suffices [h:] P by justify;` (issues/block-suffices-statement.md).
+    suffices_statement: $ => seq(
+      'suffices', optional(seq(field('name', $.identifier), ':')),
+      field('type', $._declaration_type), 'by', field('justification', $._expression), ';',
+    ),
+    // `require [h:] P;` inside `within W for x { … }` (issues/proof-worlds-native-inside.md).
+    require_statement: $ => seq(
+      'require', optional(seq(field('name', $.identifier), ':')),
+      field('type', $._declaration_type), ';',
     ),
     // `cases h;` / `cases h as e1, e2(x, y);`: take the hypothesis apart
     // along the tests of the call it states; the rest of the block is every

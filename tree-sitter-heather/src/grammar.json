@@ -2172,6 +2172,24 @@
                 },
                 "named": true,
                 "value": "identifier"
+              },
+              {
+                "type": "ALIAS",
+                "content": {
+                  "type": "STRING",
+                  "value": "suffices"
+                },
+                "named": true,
+                "value": "identifier"
+              },
+              {
+                "type": "ALIAS",
+                "content": {
+                  "type": "STRING",
+                  "value": "require"
+                },
+                "named": true,
+                "value": "identifier"
               }
             ]
           }
@@ -2785,6 +2803,24 @@
                 },
                 "named": true,
                 "value": "identifier"
+              },
+              {
+                "type": "ALIAS",
+                "content": {
+                  "type": "STRING",
+                  "value": "suffices"
+                },
+                "named": true,
+                "value": "identifier"
+              },
+              {
+                "type": "ALIAS",
+                "content": {
+                  "type": "STRING",
+                  "value": "require"
+                },
+                "named": true,
+                "value": "identifier"
               }
             ]
           }
@@ -3067,6 +3103,14 @@
               },
               {
                 "type": "SYMBOL",
+                "name": "suffices_statement"
+              },
+              {
+                "type": "SYMBOL",
+                "name": "require_statement"
+              },
+              {
+                "type": "SYMBOL",
                 "name": "expression_statement"
               },
               {
@@ -3325,6 +3369,24 @@
                     },
                     "named": true,
                     "value": "identifier"
+                  },
+                  {
+                    "type": "ALIAS",
+                    "content": {
+                      "type": "STRING",
+                      "value": "suffices"
+                    },
+                    "named": true,
+                    "value": "identifier"
+                  },
+                  {
+                    "type": "ALIAS",
+                    "content": {
+                      "type": "STRING",
+                      "value": "require"
+                    },
+                    "named": true,
+                    "value": "identifier"
                   }
                 ]
               }
@@ -3332,6 +3394,10 @@
             {
               "type": "SYMBOL",
               "name": "destructure_pattern"
+            },
+            {
+              "type": "SYMBOL",
+              "name": "anonymous_constructor_pattern"
             }
           ]
         },
@@ -3818,8 +3884,112 @@
           "name": "name",
           "content": {
             "type": "SYMBOL",
-            "name": "identifier"
+            "name": "_pattern"
           }
+        }
+      ]
+    },
+    "suffices_statement": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "suffices"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "FIELD",
+                  "name": "name",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "identifier"
+                  }
+                },
+                {
+                  "type": "STRING",
+                  "value": ":"
+                }
+              ]
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "FIELD",
+          "name": "type",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_declaration_type"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": "by"
+        },
+        {
+          "type": "FIELD",
+          "name": "justification",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_expression"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": ";"
+        }
+      ]
+    },
+    "require_statement": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "STRING",
+          "value": "require"
+        },
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "FIELD",
+                  "name": "name",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "identifier"
+                  }
+                },
+                {
+                  "type": "STRING",
+                  "value": ":"
+                }
+              ]
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "FIELD",
+          "name": "type",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_declaration_type"
+          }
+        },
+        {
+          "type": "STRING",
+          "value": ";"
         }
       ]
     },
@@ -11670,6 +11840,24 @@
           },
           "named": true,
           "value": "identifier"
+        },
+        {
+          "type": "ALIAS",
+          "content": {
+            "type": "STRING",
+            "value": "suffices"
+          },
+          "named": true,
+          "value": "identifier"
+        },
+        {
+          "type": "ALIAS",
+          "content": {
+            "type": "STRING",
+            "value": "require"
+          },
+          "named": true,
+          "value": "identifier"
         }
       ]
     },
@@ -11942,6 +12130,14 @@
     ],
     [
       "within_expression",
+      "contextual_identifier"
+    ],
+    [
+      "suffices_statement",
+      "contextual_identifier"
+    ],
+    [
+      "require_statement",
       "contextual_identifier"
     ],
     [
