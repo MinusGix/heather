@@ -2305,3 +2305,92 @@ agreement is generated for plain words), and another entry beside such a
 root. Probes: `triple_agrees_at` in
 `lib/_tests/native/runtime/runtime_two_words_tests`, and
 `examples/x86-native/three_words.hthr` called from C.
+
+### 16.21 Several words from a function over a span, a `Bytes(n)` or a laid record (built 2026-11-24)
+
+Minus (2026-11-24): span functions answer several words, as plain
+functions already do. A function over a span (`FTm`), a `Bytes(n)` or a
+laid record answered one 64-bit word beside the span it leaves, so the
+arena's `alloc` spelled `Full` as the word `2^64 - 1`.
+
+**The plain conventions, unchanged.** A result of several words is
+returned as §16.16-17 return one: the first word at the function's
+result port, the words past it in `Function.also` (RDX, RCX, … inside a
+program, RAX:RDX to a caller), `Ending.rest` in the run. A record of
+64-bit words is its fields' words in order; an enum whose constructors
+carry 64-bit words is its tag word and then its payload's slots. Nothing
+is invented for spans: the meaning `FTm::sem` was already typed at any
+result code, `Mutated<List<u8>, r.sem(tys)>`.
+
+**What a span function returns.** `Ty::WordsOut` (rt_file_lower): a 64-bit
+word, a record whose fields are 64-bit words, or an enum whose slots are.
+Each word is a port the value is held at (`Ty::Holds` at `Named` and
+`Enum` is the fields from the port on), so the boundary adds no node: the
+code is the body's with `also := Ty::also_ports(result)` (`FFun::code_at`),
+and `Ty::words_out_reads` reads the first word and the rest off the ports.
+A narrow field or a bit slot, which the plain boundary widens
+(`Ty::widen`), stays refused here.
+
+**The statement: every word, at the boundary only.** `FTm::ended` and
+`FTm::Answers` state the first word with nothing beside it. They are what
+a callee inside a program and a loop's pass are held to, and the loop
+layer (`rt_*_loop.hthr`) is proved against them at any result code, so
+they are kept. The function's own boundary is stated by
+`FTm::ended_all`/`FTm::AnswersAll`, which add `rest :=
+Ty::rest_words(r, value)`; at a code with no words past its first the two
+are one (`FTm::answers_all_of`, `answers_of_all`, premised on
+`Ty::rest_words = Nil`). `FFun::lower_sound` and the class's `runs`
+(`CompileSpan`) state `AnswersAll`; a loop's instance
+(`compile_measured`, `compile_counted`) converts its one-word statement
+with `Ty::word_rest`, and a link reads a callee's `AnswersAll` back as the
+one-word `Answers` a call needs where the callee's result is one a call
+reads (`Ty::returned_rest`). `CompileSpan::source`, `FTm::uncurried` and
+`FTm::answers_all_at` are the all-words forms of what a link compares, so
+a one-word function's run is spelled as before by conversion.
+
+**What is published.** `f::runs_over` states a record's or an enum's run
+as `FTm::ended_all(tys, r, rest, f(span, length, …))`, every word; a
+one-word function's statement is unchanged (`FTm::end_of`).
+`T::m::runs_held` and `f::runs_bytes` keep their shape with `R` the
+result type (`Agrees<A, R>`, `Over<R>`, both already general).
+The generator's reflection of a span function or of a function of a laid
+record adds each record and enum it meets to the type table, as the
+plain route does (`runtime_span_reflect_in`, `runtime_held_reflect_in`;
+it was a loop's state alone), the function written out over its span
+ends in `Ty::sem(r, tys)`, which is the type by conversion, and a
+constructor with its fields (`Tm::Inject`) is written out as the enum's
+own constructor.
+
+**The arena** (`lib/native/runtime/arena.hthr`). `alloc` and `new_vec`
+answer `Alloc { Got(base: u64), Full }`: its tag word and the base,
+`Full` with its slot 0. A named enum rather than `Option<u64>`: it says
+what the absence is, and the type table holds an enum by its own global
+(a generic type applied has no entry). The laws are restated at the
+outcome (`alloc_fresh` and `alloc_apart` at `got: alloc(a, size).value =
+Got(base)`, `alloc_got` where it fits, `alloc_full` at `Full`), and the
+sentinel `ARENA_FULL` is gone.
+
+**Not taken yet**, each refused by name:
+
+- *A compiled caller of such a function.* A call inside a span function
+  reads one word (`FTm::call_sound` asks `Ty::Returned`), so the caller of
+  `alloc` is a Heather function for now (`alloc_then_store` in
+  `arena_laws_tests`). The plain route's `Tm::called` reads every word
+  back (`Ty::Back`); the span route's `Tm::called_word` would do the same
+  over `Writers`, with the record route's callee world
+  (`HWorld::Runs`, one word) widened to the callee's result type.
+- *A loop answering several words* (a loop's pass is the one-word
+  statement): with the loop combinator's round 4.
+- *A `match` on an enum inside a laid record's function* (`Tm::Pick` is
+  not written out over the span yet), and an enum or record parameter.
+- *`compile-x86` of a writer of several words* is refused rather than
+  certified at its first word (`runtime_shape`); its certificate would be
+  `Prog::ComputesBoth` over the written span.
+
+Probes: `lib/_tests/native/runtime/runtime_span_words_tests` (a span
+function returning a record and an enum, a laid record's `Got`/`Missing`
+and a record beside the record as it was, a `Bytes(n)` returning a
+record, each run and each published statement read at an open span), the
+arena rows of `runtime_ports_tests` (the outcome and the code's two words)
+and `arena_laws_tests` (a caller matching the outcome, and an arm that
+reads a payload `Full` does not carry, refused).

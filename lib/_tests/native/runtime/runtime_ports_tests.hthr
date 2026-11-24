@@ -15,8 +15,11 @@
 // nothing more. `program_eval` runs a row's compiled program in its theorem.
 import runtime_data;
 import function_ir_eval;
+import function_ir_state;
+import function_ir_run;
 import word_map;
 import word_map_laws;
+import arena;
 
 // ---------------------------------------------------------------------------
 // Rung 1: operations
@@ -137,7 +140,7 @@ runtime fn Bytes::port_find({n: u64}, self s: Bytes(n), b: u8) → u64 {
 // The same as a `while` whose test reads the span. A reader now: what it
 // waits on is the byte `b` beside the span (spans take and return 64-bit
 // words, issues/runtime-repr-narrow-words.md).
-// expect-error: it takes and returns 64-bit words for now
+// expect-error: it takes 64-bit words beside its record
 runtime fn Bytes::port_find_while({n: u64}, self s: Bytes(n), b: u8) → u64 {
     let mut i: u64 = 0;
     while i < s.len() && s[i] ≠ b decreases (n - i).toNat() { i := i + 1; }
@@ -274,7 +277,7 @@ runtime fn Bytes::port_set_add_tail({n: u64}, s: Bytes(n), key: u64) → Mutated
 }
 
 // The key as the byte it is, beside the span.
-// expect-error: it takes and returns 64-bit words for now, beside its record
+// expect-error: it takes 64-bit words beside its record
 runtime fn Bytes::port_set_insert_byte({n: u64}, s: Bytes(n), key: u8, j: u64) → Mutated<Bytes(n), u64> {
     if lt: j < s.len() {
         if s[j] = 0 { Mutated(s.put(j, key), 1) } else { Mutated(s, 0) }
@@ -402,6 +405,152 @@ theorem port_map_slot_key_runs(): WordMap::slot_key::bytes(WordMap::empty_bytes(
     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10,
      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
      0, 0, 0, 0, 0, 0, 0, 0] { refl }
+
+// ---------------------------------------------------------------------------
+// Rung 2: an arena in the written span (docs/native/rung2-spans-design.md §5)
+//
+// The arena is the library's (`Arena`, lib/native/runtime/arena.hthr): a
+// header of the top and the limit, then a heap of sixteen words, every
+// window `(base, count)` of it; a vector is a header of three heap words
+// (its window's base, its capacity, its length) and its window. What it
+// means is proved there over these compiled functions (`arena_laws.hthr`:
+// `alloc_below`, `alloc_fresh`, `store_apart`, `grow_abs`). These rows run
+// it on bytes.
+
+// An empty arena: top 0, limit 16, the heap zero.
+fn PORT_ARENA() → List<u8> { [0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0] ++ List::replicate(BitVec::ofNat(0), 128) }
+
+// Allocation: the first window at 0, the next at the old top 4, and the
+// top word moved to 7. The outcome is `Alloc` (`Got(base)` or `Full`), an
+// enum the code returns in two words.
+theorem port_arena_alloc_runs(): Arena::alloc::bytes(PORT_ARENA(), 144, 4).value = Got(0) ∧
+    Arena::alloc::bytes(Arena::alloc::bytes(PORT_ARENA(), 144, 4).after, 144, 3).value = Got(4) ∧
+    Arena::alloc::bytes(Arena::alloc::bytes(PORT_ARENA(), 144, 4).after, 144, 3).after.take(8) = [7, 0, 0, 0, 0, 0, 0, 0] {
+    ⟨refl, ⟨refl, refl⟩⟩
+}
+
+// `Full` at the limit, an answer and not an exit: the whole heap fits, one
+// word more does not, and the bytes are as they were.
+theorem port_arena_full_runs(): Arena::alloc::bytes(PORT_ARENA(), 144, 16).value = Got(0) ∧
+    Arena::alloc::bytes(PORT_ARENA(), 144, 17) = Mutated(PORT_ARENA(), Full) ∧
+    Arena::alloc::bytes(Arena::alloc::bytes(PORT_ARENA(), 144, 16).after, 144, 1).value = Full {
+    ⟨refl, ⟨refl, refl⟩⟩
+}
+
+// A vector of capacity 2 (its header at 0, its window at 3), pushed three
+// times: the third push finds it full, grows it into a window of four at
+// the top (5), copies 7 and 8 there, and stores 9. The bytes show the top
+// at 9, the header `[5, 4, 3]`, the old window `[7, 8]` left behind and
+// the new one `[7, 8, 9]`.
+fn PORT_VEC() → List<u8> { Arena::new_vec::bytes(PORT_ARENA(), 144, 2).after }
+fn PORT_VEC_TWO() → List<u8> { Arena::push::bytes(Arena::push::bytes(PORT_VEC(), 144, 0, 7).after, 144, 0, 8).after }
+
+theorem port_vec_grow_runs(): Arena::new_vec::bytes(PORT_ARENA(), 144, 2).value = Got(0) ∧
+    Arena::push::bytes(PORT_VEC_TWO(), 144, 0, 9).value = 1 ∧
+    Arena::push::bytes(PORT_VEC_TWO(), 144, 0, 9).after = List::append([9, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0], List::replicate(BitVec::ofNat(0), 64)) {
+    ⟨refl, ⟨refl, refl⟩⟩
+}
+
+// Read through the windows: the new one holds 7, 8, 9; past its length the
+// read is the window's word, past its count it is 0.
+theorem port_vec_read_runs(): Arena::read::bytes(Arena::push::bytes(PORT_VEC_TWO(), 144, 0, 9).after, 144, 5, 4, 2).value = 9 ∧
+    Arena::read::bytes(Arena::push::bytes(PORT_VEC_TWO(), 144, 0, 9).after, 144, 3, 2, 1).value = 8 ∧
+    Arena::read::bytes(Arena::push::bytes(PORT_VEC_TWO(), 144, 0, 9).after, 144, 5, 4, 4).value = 0 {
+    ⟨refl, ⟨refl, refl⟩⟩
+}
+
+// Growing past the limit: the fourth push fills the window of four, the
+// fifth needs a window of eight with seven words left, and answers 0 with
+// the bytes as they were.
+fn PORT_VEC_FOUR() → List<u8> { Arena::push::bytes(Arena::push::bytes(PORT_VEC_TWO(), 144, 0, 9).after, 144, 0, 10).after }
+
+theorem port_vec_full_runs(): Arena::push::bytes(PORT_VEC_FOUR(), 144, 0, 11) = Mutated(PORT_VEC_FOUR(), 0) { refl }
+
+// Reset to a mark: after two windows, the top back at 4 frees the second,
+// and the next allocation answers `Got(4)` again.
+fn PORT_TWO_WINDOWS() → List<u8> { Arena::alloc::bytes(Arena::alloc::bytes(PORT_ARENA(), 144, 4).after, 144, 3).after }
+
+theorem port_arena_reset_runs(): Arena::reset::bytes(PORT_TWO_WINDOWS(), 144, 4).value = 1 ∧
+    Arena::alloc::bytes(Arena::reset::bytes(PORT_TWO_WINDOWS(), 144, 4).after, 144, 2).value = Got(4) ∧
+    Arena::reset::bytes(PORT_TWO_WINDOWS(), 144, 9) = Mutated(PORT_TWO_WINDOWS(), 0) {
+    ⟨refl, ⟨refl, refl⟩⟩
+}
+
+fn ARENA_ALLOC_ROOT() → Nat { Arena::alloc::program.len() - 1 }
+
+// The code's two words: the tag (`Got` 0, `Full` 1) and the base, 0 where
+// the outcome carries none. The program's root is its last function,
+// after the accessors it calls.
+theorem port_arena_alloc_program(): program_run(Arena::alloc::program, [PORT_ARENA()], ARENA_ALLOC_ROOT(), [4096, 144, 4]).word = 0 ∧
+    program_run(Arena::alloc::program, [PORT_ARENA()], ARENA_ALLOC_ROOT(), [4096, 144, 4]).rest = [0] ∧
+    program_run(Arena::alloc::program, [PORT_TWO_WINDOWS()], ARENA_ALLOC_ROOT(), [4096, 144, 2]).rest = [7] ∧
+    program_run(Arena::alloc::program, [PORT_ARENA()], ARENA_ALLOC_ROOT(), [4096, 144, 17]) = Ending(1, [PORT_ARENA()], rest := [0]) {
+    ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩
+}
+
+// A negative control: a window kept past a reset is stale. `(0, 4)` is
+// allocated, the arena reset to 0, and `(0, 4)` allocated again; a store
+// through the new window is read through the old one, so the two are not
+// apart and `store_apart` does not apply (`arena_laws_tests.hthr` proves
+// they meet).
+fn PORT_REUSED() → List<u8> {
+    Arena::alloc::bytes(Arena::reset::bytes(Arena::alloc::bytes(PORT_ARENA(), 144, 4).after, 144, 0).after, 144, 4).after
+}
+
+theorem port_arena_stale_runs(): Arena::read::bytes(PORT_REUSED(), 144, 0, 4, 1).value = 0 ∧
+    Arena::read::bytes(Arena::store::bytes(PORT_REUSED(), 144, 0, 4, 1, 5).after, 144, 0, 4, 1).value = 5 {
+    ⟨refl, refl⟩
+}
+
+// What it publishes, at every arena the span holds.
+theorem port_arena_alloc_held(own: List<u8>, a: Arena, length, size: u64, holds: rt_held::Stored::Holds(Arena::stored(), own, length, a)):
+    Arena::alloc(a, size).value = Arena::alloc::bytes(own, length, size).value ∧
+    rt_held::Stored::Holds(Arena::stored(), Arena::alloc::bytes(own, length, size).after, length, Arena::alloc(a, size).after) {
+    let ran = Arena::alloc::runs_held(own, a, length, size, holds);
+    ⟨ran.value, ran.holds⟩
+}
+
+// The arena at a size chosen at run time, a laid record that takes it
+// (§3): allocation and a store through a window are straight-line and
+// compile, the size the word after the length word.
+laid record PortArena(size: u64) { top: u64, heap: [u64; size.toNat()] }
+
+runtime fn PortArena::alloc({size: u64}, mut self a: PortArena(size), n: u64) → Alloc {
+    if fits: a.top <= size ∧ n <= size - a.top { let base = a.top; a.top := a.top + n; Got(base) } else { Full }
+}
+
+runtime fn PortArena::store({size: u64}, mut self a: PortArena(size), base, count, i, x: u64) → u64 {
+    if lt: i < count { if inside: base + i < size { a.heap := a.heap.put(base + i, x); 1 } else { 0 } } else { 0 }
+}
+
+// Two words of heap: a window of one at 0, the top moved to 1; one of
+// three is `Full`; a store at element 0 of the window `(1, 1)`.
+theorem port_arena_sized_runs(): PortArena::alloc::bytes(List::replicate(BitVec::ofNat(0), 24), 24, 2, 1) =
+        Mutated([1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Got(0)) ∧
+    PortArena::alloc::bytes(List::replicate(BitVec::ofNat(0), 24), 24, 2, 3).value = Full ∧
+    PortArena::store::bytes(List::replicate(BitVec::ofNat(0), 24), 24, 2, 1, 1, 0, 6).after =
+        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0] {
+    ⟨refl, ⟨refl, refl⟩⟩
+}
+
+theorem port_arena_sized_held(size: u64, own: List<u8>, a: PortArena(size), length, n: u64, holds: rt_held::Stored::Holds(PortArena::stored(size), own, length, a)):
+    PortArena::alloc(a, n, size := size).value = PortArena::alloc::bytes(own, length, size, n).value {
+    PortArena::alloc::runs_held(size, own, a, length, n, holds).value
+}
+
+// The growing copy at a run-time size: a loop over a laid record that
+// takes parameters, which waits for the loop combinator's round 4
+// (loops-on-one-combinator). Until then the arena's heap is a literal
+// sixteen words.
+// expect-error: waits for the loop combinator
+runtime fn PortArena::copy_at({size: u64}, self a: PortArena(size), from, to, i, n: u64) → Mutated<PortArena(size), u64> decreases (n - i).toNat() {
+    if more: i < n {
+        if src: from + i < size {
+            if dst: to + i < size { @copy_at(size, a with { heap = a.heap.put(to + i, a.heap.at(from + i)) }, from, to, i + 1, n) }
+            else { Mutated(a, 0) }
+        } else { Mutated(a, 0) }
+    } else { Mutated(a, 1) }
+}
 
 // ---------------------------------------------------------------------------
 // Rung 3: inductive data

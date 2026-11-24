@@ -1,0 +1,171 @@
+// Memory a `runtime fn` owns, as an arena inside the one span it writes
+// (issues/runtime-arena-in-span.md, docs/native/rung2-spans-design.md §5):
+// a laid header of the top and the limit, then the heap. Allocation
+// compares and adds, answering `Got(base)` or `Full` (`Alloc`, two words:
+// its tag and the base); a window is two
+// words `(base, count)`, read and stored at element `i` through the heap
+// array's accessor at the word index `base + i`; reset moves the top back
+// to a mark; and a vector is a header of three heap words (its window's
+// base, its capacity, its length) whose push past the capacity grows it
+// into a window of twice the capacity and copies, all within the span. The
+// compiler's theorem needs nothing new: every function here is a function
+// of one laid record. What they mean is `arena_laws.hthr`.
+//
+// Why this representation (rung2-spans-design §5, "Built"):
+//
+// - The heap is words, not bytes: an array of words has a compiled
+//   accessor at a word index, and a byte array field has none
+//   (runtime-record-function-limits), so a window of words is read and
+//   stored as one element each.
+// - The heap is a literal sixteen words, not a parameter: the growing copy
+//   is a loop, and loops over a laid record that takes parameters wait for
+//   the loop combinator's round 4 (the ledger's `PortArena(size)`, whose
+//   straight-line `alloc` and `store` compile and whose copy is refused). A
+//   `Bytes(n)` span has loops but no words: each word would be eight byte
+//   reads and shifts, and the laws would be about bytes. When the loop round
+//   lands the record becomes `Arena(size) { top, heap: [u64; size.toNat()] }`
+//   and the limit is the carried `size`; the laws are stated at the heap's
+//   words and carry over with `16` replaced by the count.
+// - The outcome is an enum, `Got(base)` or `Full`, returned in two words
+//   (its tag word and its payload's slot, as a plain function returns one;
+//   docs/native/runtime-fn-setups-design.md §16.21), not a base with a
+//   word no base can be standing for `Full`. A named enum rather than
+//   `Option<u64>`: it says what the absence is, and the type table holds
+//   enums by their own global (a generic type applied has no entry). One
+//   word would do where the type knew the base below `2^64 - 1` (a niche,
+//   docs/native/layout-design.md §12): not built, as it does not matter
+//   for these calls.
+//
+// What the generator does not take yet shapes three spellings, each noted
+// where it stands: the tests that keep the heap's indexes in bounds are
+// written where an index is used (`h < 14`), as `bv_omega` does not read a
+// bound through a sum of words that may wrap; a read that only reads is a
+// function leaving the record as it was; and `push` is a call, a test of
+// its answer and a call, which has no branch equations (its laws are those
+// of `push_in` and `grow`).
+//
+// `logic` and `bool` are what the functions' branch equations are built
+// from; without them they are skipped.
+import logic;
+import bool;
+import omega;
+import runtime_data;
+
+laid record Arena { top: u64, limit: u64, heap: [u64; 16] }
+
+// What an allocation answers: a window's base, or that the arena is full.
+inductive Alloc { Got(base: u64), Full }
+
+// A window of `size` words at the top, `Got(base)`, or `Full` where the
+// limit, or the heap, is passed; the top is the next window's base. The
+// test reads the limit within the heap and the top within the limit first,
+// so the sum it then compares does not wrap.
+runtime fn Arena::alloc(mut self a: Arena, size: u64) → Alloc {
+    if fits: a.limit <= 16 ∧ a.top <= a.limit ∧ size <= a.limit ∧ a.top + size <= a.limit {
+        let base = a.top;
+        a.top := a.top + size;
+        Got(base)
+    } else { Full }
+}
+
+// Back to a mark taken earlier (a top at most the present one): every
+// window allocated since is free, and may be handed out again. 1 when
+// reset, 0 when the mark is past the top.
+runtime fn Arena::reset(mut self a: Arena, mark: u64) → u64 {
+    if ok: mark <= a.top { a.top := mark; 1 } else { 0 }
+}
+
+// Element `i` of the window `(base, count)`, 0 past its count. Spelled as a
+// function that leaves the record, since a tested read as the value of a
+// function that stores nothing is not taken yet
+// (runtime-record-function-limits).
+runtime fn Arena::read(self a: Arena, base, count, i: u64) → Mutated<Arena, u64> {
+    if lt: i < count { if inside: base + i < 16 { Mutated(a, a.heap.at(base + i)) } else { Mutated(a, 0) } } else { Mutated(a, 0) }
+}
+
+// Element `i` of the window `(base, count)` set to `x`: 1, or 0 past its
+// count and nothing stored.
+runtime fn Arena::store(mut self a: Arena, base, count, i, x: u64) → u64 {
+    if lt: i < count { if inside: base + i < 16 { a.heap := a.heap.put(base + i, x); 1 } else { 0 } } else { 0 }
+}
+
+// The copy that growing makes: elements `i ..< n` of the window at `from`
+// to the window at `to`, one store a pass. 1 when done.
+runtime fn Arena::copy_at(mut self a: Arena, from, to, i, n: u64) → u64 decreases (n - i).toNat() {
+    if more: i < n {
+        if src: from + i < 16 {
+            if dst: to + i < 16 {
+                a.heap := a.heap.put(to + i, a.heap.at(from + i));
+                a.copy_at(from, to, i + 1, n)
+            } else { 0 }
+        } else { 0 }
+    } else { 1 }
+}
+
+// Grow the vector whose header is at `h`: a window of twice its capacity at
+// the top, the header pointed at it, and its items copied. 1 when grown, 0
+// when the larger window passes the limit (the arena as it was). The old
+// window is left behind until a reset.
+runtime fn Arena::grow(mut self a: Arena, h: u64) → u64 {
+    if hb: h < 14 {
+        let base = a.heap.at(h);
+        let cap = a.heap.at(h + 1);
+        let len = a.heap.at(h + 2);
+        if fits: a.limit <= 16 ∧ a.top <= a.limit ∧ cap <= a.limit ∧ a.top + cap + cap <= a.limit {
+            let nb = a.top;
+            a.top := a.top + (cap + cap);
+            a.heap := a.heap.put(h, nb);
+            a.heap := a.heap.put(h + 1, cap + cap);
+            a.copy_at(base, nb, 0, len)
+        } else { 0 }
+    } else { 0 }
+}
+
+// A vector of capacity `cap`: its header and its window, allocated together
+// at the top, the header's base just past it and its length 0. `Got` of the
+// header's base, or `Full`. (`h < 14` is implied by the first test; it is
+// written for the heap index's bound.)
+runtime fn Arena::new_vec(mut self a: Arena, cap: u64) → Alloc {
+    if fits: a.limit <= 16 ∧ a.top <= a.limit ∧ cap <= a.limit ∧ a.top + 3 + cap <= a.limit {
+        let h = a.top;
+        if hb: h < 14 {
+            a.top := a.top + 3 + cap;
+            a.heap := a.heap.put(h, h + 3);
+            a.heap := a.heap.put(h + 1, cap);
+            a.heap := a.heap.put(h + 2, 0);
+            Got(h)
+        } else { Full }
+    } else { Full }
+}
+
+// Item `len` of the window at `base` set to `x`, the length one more.
+runtime fn Arena::put_item(mut self a: Arena, h, base, len, x: u64) → u64 {
+    if hb: h < 14 {
+        if inside: base + len < 16 {
+            a.heap := a.heap.put(base + len, x);
+            a.heap := a.heap.put(h + 2, len + 1);
+            1
+        } else { 0 }
+    } else { 0 }
+}
+
+// Push `x` where the window has room: 1, or 2 when it is full (nothing
+// changed), or 0 for a header outside the heap.
+runtime fn Arena::push_in(mut self a: Arena, h, x: u64) → u64 {
+    if hb: h < 14 {
+        let base = a.heap.at(h);
+        let cap = a.heap.at(h + 1);
+        let len = a.heap.at(h + 2);
+        if room: len < cap { a.put_item(h, base, len, x) } else { 2 }
+    } else { 0 }
+}
+
+// Push `x`, growing the vector first where it is full: 1 when pushed, 0
+// when growing passed the limit (the arena as it was).
+runtime fn Arena::push(mut self a: Arena, h, x: u64) → u64 {
+    let r = a.push_in(h, x);
+    if full: r = 2 {
+        let g = a.grow(h);
+        if grew: g = 1 { a.push_in(h, x) } else { 0 }
+    } else { r }
+}

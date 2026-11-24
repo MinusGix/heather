@@ -69,6 +69,125 @@ fn FTm::Answers(tys: Table, ps: List<Ty>, r: Ty, rest: List<List<BitVec(8)>>)
     }
 }
 
+// ---------------------------------------------------------------------------
+// Results of several words (docs/native/runtime-fn-setups-design.md §16.21)
+//
+// A function over a span returns its value as a plain function does
+// (§16.16-17): a record of 64-bit words in its fields' words, the first in
+// the result word and the rest beside it (`Function.also`, `Ending.rest`);
+// an enum whose constructors carry 64-bit words as its tag word and then its
+// payload's slots. `FTm::ended` and `FTm::Answers` above state the first
+// word alone with no words beside it, which is what a callee of a call and
+// a loop's pass are held to; the function's own boundary is stated by
+// `FTm::ended_all` and `FTm::AnswersAll`, which add the words past the first
+// (`Ty::rest_words`). At a code of one word the two are the same by
+// conversion.
+
+// What a computation's code answers when its meaning ends in `m`: every
+// word of the value, and the file with the span the meaning left.
+fn FTm::ended_all(tys: Table, r: Ty, rest: List<List<BitVec(8)>>, m: Mutated<List<BitVec(8)>, r.sem(tys)>) → Ending {
+    Ending(Ty::cast(tys, r, Word(64), m.value), Cons(m.after, rest), rest := Ty::rest_words(tys, r, m.value))
+}
+
+fn FTm::AnswersAll(tys: Table, ps: List<Ty>, r: Ty, rest: List<List<BitVec(8)>>)
+    → Ty::ArrowsTo(tys, ps, Mutated<List<BitVec(8)>, r.sem(tys)>) → (List<BitVec(64)> → Ending) → Type {
+    match ps {
+        Nil => λ m ans => ans(Nil) = FTm::ended_all(tys, r, rest, m),
+        Cons(p, more) => λ v ans => (x: BitVec(64)) →
+            FTm::AnswersAll(tys, more, r, rest, v(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws))),
+    }
+}
+
+// Where a code has no words past its first, the two statements are one.
+theorem FTm::answers_all_of(tys: Table, r: Ty, rest: List<List<BitVec(8)>>, one: (v: r.sem(tys)) → Ty::rest_words(tys, r, v) = Nil, ps: List<Ty>):
+    (F: Ty::ArrowsTo(tys, ps, Mutated<List<BitVec(8)>, r.sem(tys)>)) → (ans: List<BitVec(64)> → Ending) →
+    FTm::Answers(tys, ps, r, rest, F, ans) → FTm::AnswersAll(tys, ps, r, rest, F, ans) {
+    match ps {
+        Nil => λ m ans h => trans(h, cong_fn(λ (more: List<BitVec(64)>) => Ending(Ty::cast(tys, r, Word(64), m.value), Cons(m.after, rest), rest := more),
+            sym(one(m.value)))),
+        Cons(p, more) => λ v ans h x => FTm::answers_all_of(tys, r, rest, one, more, v(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)), h(x)),
+    }
+}
+
+theorem FTm::answers_of_all(tys: Table, r: Ty, rest: List<List<BitVec(8)>>, one: (v: r.sem(tys)) → Ty::rest_words(tys, r, v) = Nil, ps: List<Ty>):
+    (F: Ty::ArrowsTo(tys, ps, Mutated<List<BitVec(8)>, r.sem(tys)>)) → (ans: List<BitVec(64)> → Ending) →
+    FTm::AnswersAll(tys, ps, r, rest, F, ans) → FTm::Answers(tys, ps, r, rest, F, ans) {
+    match ps {
+        Nil => λ m ans h => trans(h, cong_fn(λ (more: List<BitVec(64)>) => Ending(Ty::cast(tys, r, Word(64), m.value), Cons(m.after, rest), rest := more),
+            one(m.value))),
+        Cons(p, more) => λ v ans h x => FTm::answers_of_all(tys, r, rest, one, more, v(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)), h(x)),
+    }
+}
+
+// An ending's three parts, each equal.
+theorem FTm::ending_eq({word, word2: BitVec(64)}, {left, left2: Buffers()}, {more, more2: List<BitVec(64)>}, p: word = word2, q: left = left2, r: more = more2):
+    Ending(word, left, rest := more) = Ending(word2, left2, rest := more2) {
+    trans(eq2(λ (x: BitVec(64)) (b: Buffers()) => Ending(x, b, rest := more), p, q), cong_fn(λ (ms: List<BitVec(64)>) => Ending(word2, left2, rest := ms), r))
+}
+
+// Fields with no tail have no words past the first.
+theorem Ty::bare_flats_words(fs: List<Ty>): Ty::Bare(fs) → (t: Ty::Flats(fs)) → Ty::flats_words(fs, t) = Nil {
+    match fs { Nil => λ _ t => refl, Cons(_, _) => λ never => false_elim(never) }
+}
+
+// A code a call reads back in one word has no words past it.
+theorem Ty::returned_rest(tys: Table, r: Ty): r.Returned(tys) → (v: r.sem(tys)) → Ty::rest_words(tys, r, v) = Nil {
+    match r {
+        Word(_) => λ _ v => refl,
+        Bit => λ never => false_elim(never),
+        ByteList(_) => λ never => false_elim(never),
+        Lines => λ never => false_elim(never),
+        Named(i) => λ e v => j(sym(tys.word_leaves(i, e)), λ g _ => (t: Ty::Flats(g)) → Ty::flats_tail_words(g, t) = Nil, λ t => refl)(tys.get(i, v)),
+        Count => λ never => false_elim(never),
+        Enum(i) => λ ok v => Ty::bare_flats_words(tys.ens(i).slots, ok.right, tys.ens(i).fields(v)),
+    }
+}
+
+// A code a function over a span returns in words: a 64-bit word, a record
+// whose fields are 64-bit words (one at least), or an enum whose payload's
+// slots are 64-bit words. Its words need no node at the boundary: each is
+// a port the value is held at.
+fn Ty::WordsOut(self t: Ty, tys: Table) → Type {
+    match t {
+        Word(w) => w = 64, Bit => False, ByteList(_) => False, Lines => False,
+        Named(i) => Ty::WordsOne(tys.fields(i)), Count => False, Enum(i) => Ty::Words(tys.ens(i).slots),
+    }
+}
+
+fn Ty::check_words_out(self t: Ty, tys: Table) → Option<t.WordsOut(tys)> {
+    match t as λ x => Option<x.WordsOut(tys)> {
+        Word(w) => match w.equation(64) { Inl(e) => Some(e), Inr(_) => None },
+        Bit => None, ByteList(_) => None, Lines => None,
+        Named(i) => Ty::check_words_one(tys.fields(i)),
+        Count => None,
+        Enum(i) => Ty::check_words(tys.ens(i).slots),
+    }
+}
+
+theorem Ty::words_one_cons(fs: List<Ty>): Ty::WordsOne(fs) → fs = Nil → False {
+    match fs { Nil => λ never _ => never, Cons(g, rest) => λ _ (bad: Cons(g, rest) = Nil) => absurd(bad) }
+}
+
+// A value of such a code held from `port`: the port's word is its first
+// word, and the ports past it (`Ty::also_ports`) hold the rest.
+theorem Ty::words_out_reads(tys: Table, values: Valuation(), port: Nat, t: Ty): t.WordsOut(tys) → (v: t.sem(tys)) → t.Holds(tys, values, port, v) →
+    (values(64, port) = Ty::cast(tys, t, Word(64), v)) ∧ (words_of(values, t.also_ports(tys, port)) = Ty::rest_words(tys, t, v)) {
+    match t {
+        Word(w) => λ e v h => ⟨Ty::one_word_reads(tys, values, port, Word(w), e, v, h), refl⟩,
+        Bit => λ never => false_elim(never),
+        ByteList(_) => λ never => false_elim(never),
+        Lines => λ never => false_elim(never),
+        Named(i) => λ ok v h => Ty::fields_words_split(values, tys.fields(i), port, tys.get(i, v), Ty::words_one_cons(tys.fields(i), ok),
+            Ty::ports_reads(values, tys.fields(i), port, Ty::words_one_all(tys.fields(i), ok), tys.get(i, v), h)),
+        Count => λ never => false_elim(never),
+        Enum(i) => λ ok v h => {
+            let x = values(64, port);
+            let tag: (x = RecInfo::enum_word(tys, i, v)) = trans(sym(BitVec::ofNat_toNat(64, x)), cong_fn(λ (m: Nat) => BitVec::ofNat(m, n := 64), h.left.left));
+            ⟨tag, Ty::ports_reads(values, tys.ens(i).slots, port + 1, ok, tys.ens(i).fields(v), h.right)⟩
+        },
+    }
+}
+
 // `call` answers the program: over every file `Cons(own, rest)`, the pure
 // functions with their meanings there, leaving it, and each computation of
 // a word signature with its meaning from `own`, at every rest of a file
@@ -1875,8 +1994,14 @@ theorem FTm::lower_sound(self t: FTm, fw: FWorld, base: Nat): (g: List<Ty>) → 
 
 fn FFun::context(self f: FFun) → List<Ty> { Ty::bind_onto(f.params, Nil) }
 
+// The code of a body lowered to `c`: the result's words are the ports its
+// value is held at (`Ty::also_ports` past the first; none for one word).
+fn FFun::code_at(tys: Table, f: FFun, c: Lowered) → Function {
+    Function(Fun::param_ids(f.params, 0), c.region, c.result, lent := f.lent, also := f.result.also_ports(tys, c.result))
+}
+
 fn FFun::lower_typed(self f: FFun, w: World, fsigs: List<Sig>, c: Lowered) → Option<Function> {
-    f.body.ty(w, fsigs, f.context()).check(f.result).and_then(λ _ => Some(Function(Fun::param_ids(f.params, 0), c.region, c.result, lent := f.lent)))
+    f.body.ty(w, fsigs, f.context()).check(f.result).and_then(λ _ => Some(FFun::code_at(w.tys, f, c)))
 }
 
 fn FFun::lower_body(self f: FFun, w: World, fsigs: List<Sig>, base: Nat) → Option<Function> {
@@ -1888,11 +2013,12 @@ fn FFun::lower_distinct(self f: FFun, w: World, fsigs: List<Sig>, base: Nat) →
 }
 
 fn FFun::lower_result(self f: FFun, w: World, fsigs: List<Sig>, base: Nat) → Option<Function> {
-    f.result.check_one_word(w.tys).and_then(λ _ => f.lower_distinct(w, fsigs, base))
+    f.result.check_words_out(w.tys).and_then(λ _ => f.lower_distinct(w, fsigs, base))
 }
 
-// A computation function of words to a word, lowered to a FunctionIR
-// function that writes its first lent buffer.
+// A computation function of words to words, lowered to a FunctionIR
+// function that writes its first lent buffer: its result a 64-bit word, or
+// a record or an enum of words returned in them (`Ty::WordsOut`).
 fn FFun::lower(self f: FFun, w: World, fsigs: List<Sig>, base: Nat) → Option<Function> {
     Ty::check_one_words(w.tys, f.params).and_then(λ _ => f.lower_result(w, fsigs, base))
 }
@@ -1911,6 +2037,18 @@ theorem FFun::curry_answers(tys: Table, r: Ty, rest: List<List<BitVec(8)>>, ps: 
     }
 }
 
+theorem FFun::curry_answers_all(tys: Table, r: Ty, rest: List<List<BitVec(8)>>, ps: List<Ty>): (g: List<Ty>) → (env: Env(tys, g)) →
+    (k: Env(tys, Ty::bind_onto(ps, g)) → Mutated<List<BitVec(8)>, r.sem(tys)>) → (ans: List<BitVec(64)> → Ending) →
+    ((xs: List<BitVec(64)>) → ans(xs) = FTm::ended_all(tys, r, rest, k(Ty::extend(tys, ps, g, env, xs)))) →
+    FTm::AnswersAll(tys, ps, r, rest, FFun::curry(tys, r, ps, g, env, k), ans) {
+    match ps {
+        Nil => λ g env k ans h => h(Nil),
+        Cons(p, later) => λ g env k ans h => λ x =>
+            FFun::curry_answers_all(tys, r, rest, later, Cons(p, g), Pair(Ty::cast(tys, Word(64), p, x), env), k, λ ws => ans(Cons(x, ws)),
+                λ ws => h(Cons(x, ws))),
+    }
+}
+
 // What a function's lowering promises: run on any words over any file
 // `Cons(own, rest)`, with calls answered by the program, it answers with
 // its meaning's value and leaves its meaning's span over the rest. As for
@@ -1921,7 +2059,7 @@ fn FFun::LowerHolds(self f: FFun, fw: FWorld, base: Nat, r: Option<Function>) �
     match r {
         None => True,
         Some(code) => (call: Writers()) → FTm::CallsAgree(fw, base, call) → (own: List<BitVec(8)>) →
-            FTm::Answers(fw.w.tys, f.params, f.result, fw.rest, f.meaning(fw, own), λ xs => code.run(call, xs, Cons(own, fw.rest))),
+            FTm::AnswersAll(fw.w.tys, f.params, f.result, fw.rest, f.meaning(fw, own), λ xs => code.run(call, xs, Cons(own, fw.rest))),
     }
 }
 
@@ -1933,13 +2071,13 @@ theorem FFun::lower_sound(self f: FFun, fw: FWorld, base: Nat): f.LowerHolds(fw,
     let next = Fun::past(f.params, 0);
     let body_ty = f.body.ty(fw.w, fw.fsigs, f.context());
     Option::and_then_elim(P, trivial, Ty::check_one_words(tys, f.params), λ _ => f.lower_result(fw.w, fw.fsigs, base), λ ok _ =>
-    Option::and_then_elim(P, trivial, f.result.check_one_word(tys), λ _ => f.lower_distinct(fw.w, fw.fsigs, base), λ er _ =>
+    Option::and_then_elim(P, trivial, f.result.check_words_out(tys), λ _ => f.lower_distinct(fw.w, fw.fsigs, base), λ er _ =>
     Option::and_then_elim(P, trivial, Tm::check_true(distinct(ids)), λ _ => f.lower_body(fw.w, fw.fsigs, base), λ apart _ =>
     Option::and_then_elim(P, trivial, f.body.lower(fw.w, fw.fsigs, base, f.context(), ports, next), λ c => f.lower_typed(fw.w, fw.fsigs, c), λ c lowered =>
-    Option::and_then_elim(P, trivial, body_ty.check(f.result), λ _ => Some(Function(ids, c.region, c.result, lent := f.lent)), λ eb _ =>
-        λ call agree own => FFun::curry_answers(tys, f.result, fw.rest, f.params, Nil, trivial,
+    Option::and_then_elim(P, trivial, body_ty.check(f.result), λ _ => Some(FFun::code_at(tys, f, c)), λ eb _ =>
+        λ call agree own => FFun::curry_answers_all(tys, f.result, fw.rest, f.params, Nil, trivial,
             λ env => FTm::recast(tys, body_ty, f.result, f.body.sem(fw, f.context(), env, own)),
-            λ xs => Function(ids, c.region, c.result, lent := f.lent).run(call, xs, Cons(own, fw.rest)), λ xs => {
+            λ xs => FFun::code_at(tys, f, c).run(call, xs, Cons(own, fw.rest)), λ xs => {
                 let values = Valuation::bind(Valuation::zero(), ids, xs);
                 let env = Ty::extend(tys, f.params, Nil, trivial, xs);
                 let end = c.region.run(call, values, Cons(own, fw.rest));
@@ -1948,9 +2086,8 @@ theorem FFun::lower_sound(self f: FFun, fw: FWorld, base: Nat): f.LowerHolds(fw,
                     FTm::lower_sound(f.body, fw, base, f.context(), ports, next))(call, agree, values, env, own,
                     Fun::env_extend_holds(tys, values, f.params, Nil, Nil, trivial, 0, xs, ok, trivial, Fun::bind_bound(ids, xs, apart)),
                     Fun::below_onto(tys, f.params, Nil, 0, Nil, ok, trivial));
-                eq2(λ (word: BitVec(64)) (left: Buffers()) => Ending(word, left),
-                    Ty::one_word_reads(tys, end.values, c.result, f.result, er, Ty::cast(tys, body_ty, f.result, m.value),
-                        Ty::cast_holds(tys, end.values, c.result, body_ty, f.result, eb, m.value, ran.right.right.right.left)),
-                    ran.right.right.right.right)
+                let read = Ty::words_out_reads(tys, end.values, c.result, f.result, er, Ty::cast(tys, body_ty, f.result, m.value),
+                    Ty::cast_holds(tys, end.values, c.result, body_ty, f.result, eb, m.value, ran.right.right.right.left));
+                FTm::ending_eq(read.left, ran.right.right.right.right, read.right)
             }))))))
 }

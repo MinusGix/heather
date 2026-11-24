@@ -56,6 +56,7 @@ As of this note:
 | Spans only read, besides the one written | `runtime-loop-over-several-spans` (closed) | the caller |
 | A window of a span lent to a callee | `FTm::Lend`, `function_ir_lower_views.hthr` | the lender |
 | The builder's arena of write-once line cells | `native_arena.hthr`, `native_build_arena.hthr` | the program's buffer |
+| An arena of words in the written span, windows of it, a vector that grows (§5, built 2026-11-24) | `arena.hthr`, `arena_laws.hthr` | the type (sixteen words) and the header's limit |
 
 and what it does not have: a span of anything but bytes with a run-time
 count (an array parameter `[u64; n]` "has no runtime layout"), more than
@@ -82,7 +83,7 @@ Written as a newcomer writes them, each refused (the ledger rows):
 | a store under an `if` with code after it | "the span through a branch that joins again" | inside a loop's pass, built 2026-11-24: the rest of the pass is written into each arm, and a loop's state of several words is a record the span's program holds (`loop-combinator-design` §6.4; `port_set_put`, `port_count_clear_word`); a byte beside the span keeps a loop lifted (`port_count_clear`), and a join in straight-line code waits on the shared control language (dogfooding plan §5.3b) |
 | `break` or `return` in a `for` (stop at the found slot) | "has no `break`, `continue` or `return` yet" | `loops-on-one-combinator` |
 | a span function that ends in a call of another | "ends in `Mutated(span, value)`…"; binding the call first works | `runtime-record-function-limits` |
-| a `u8` key beside the span | "takes and returns 64-bit words for now" | `runtime-repr-narrow-words` |
+| a `u8` key beside the span | "takes 64-bit words beside its record" | `runtime-repr-narrow-words` |
 | a table as a parameter, `mut t: [u64; 8]` | "a type with no runtime layout" | §3: built as a laid record that takes its count (`PortLimbs(n)`, straight-line; its loop waits for `loops-on-one-combinator`) |
 
 None of these is about memory. They are rung 1 and the generator's
@@ -315,6 +316,75 @@ written once while it is the top (`open_cell`/`push`/`close_cell`), and its
 cells in `rt`) stays rung 3's: cells with a tag and pointers between them
 are inductive data, and this note gives them their allocator.
 
+**Built (2026-11-24;** `lib/native/runtime/arena.hthr`, its laws
+`arena_laws.hthr`, ledger rows "an arena in the written span"). What the
+build settled or changed against the text above:
+
+- *The representation.* `laid record Arena { top: u64, limit: u64, heap:
+  [u64; 16] }`: the header as designed, the heap an array of words of a
+  literal count. Words, because an array of words has a compiled accessor
+  at a word index and a byte array field has none; a literal count,
+  because the growing copy is a loop and loops over a record that takes
+  parameters wait for the loop combinator's round 4. The ledger's
+  `PortArena(size)` shows the rest at a run-time size: its `alloc` and
+  `store` compile, its copy is refused by that reason. A `Bytes(n)` span
+  has loops but no words (each word eight byte reads, the laws about
+  bytes). When round 4 lands the record becomes `Arena(size)` with the
+  carried `size` as the limit, and the laws carry over with `16` replaced
+  by it.
+- *The outcome is an enum*, `Alloc { Got(base: u64), Full }` (2026-11-24,
+  `docs/native/runtime-fn-setups-design.md` §16.21): a function of a span
+  answers several words as a plain function does, here the tag word and
+  the base. As first built it answered one word and spelled `Full` as
+  `2^64 - 1`, a value no base could be but nothing in the type said so.
+  A niche (the same word, with the reason in the base's type) is designed
+  in `layout-design.md` §12 and not built: one word against two does not
+  matter for these calls. `alloc` tests the limit within the heap and the
+  top within the limit before the sum it compares, so the sum cannot
+  wrap.
+- *A window is read through the heap array's accessor*, at the word index
+  `base + i` with the window's own test `i < count` in the program: the
+  accessor's `read_at` is called with the array's place and count, not the
+  window's. A window's base as the accessor's would need an accessor at a
+  computed place, which the record verdict does not take (it wants a known
+  field).
+- *A vector lives in the arena*, a header of three heap words (its
+  window's base, its capacity, its length) beside its window, not a
+  `Window` and a fill mark held in words. A function answered one word
+  when this was built, so a push that moves the window leaves the new base
+  where the next call finds it (which a header in the heap does anyway; a
+  push answering its new window waits for a compiled caller of a function
+  of several words, `span-function-several-words`). `grow` takes a window of twice the capacity at the top,
+  points the header at it and copies; `push` is `push_in` (2 when full),
+  then `grow` and `push_in` again; past the limit it answers 0 with the
+  arena as it was.
+- *The laws, as proved* (over the functions; `runs_held` carries each to
+  the bytes): `alloc_below` is stronger than stated (allocation changes no
+  heap word at all); `alloc_fresh` gives the base of an answer `Got(base)`
+  as the old top, inside the limit and the heap, the top past it, and with
+  it `alloc_apart` (apart from every window below the old top),
+  `alloc_got` (where it fits, `Got` of the old top) and `alloc_full` (at
+  the limit, `Full` and the arena as it was); `store_apart` is stated at reads: a
+  store into `W` changes no read of a window `V` apart from it, both inside
+  the heap; `grow_abs` holds under `VecInv` (header and window below the
+  top and apart, length within capacity). `push_in_abs` adds that a push
+  with room appends. The copy's invariant is proved by induction on its
+  measure, since a `mut self` loop gets step equations and no `induct`
+  principle.
+- *Aliasing* is as the text says: the negative control keeps a window past
+  a reset, allocates it again, and shows the two meet (`¬Apart`) and a
+  store through one is read through the other
+  (`lib/_tests/native/runtime/arena_laws_tests.hthr`).
+- What the generator's limits shaped: a heap index's bound is tested where
+  the index is used (`h < 14`), as `bv_omega` does not read a bound through
+  a sum of words read from the heap; a read is spelled as a function that
+  leaves the record (a tested read as a non-storing function's value is
+  refused, `runtime-record-function-limits`); and `push`, a call, a test
+  of its answer and a call, gets no branch equations, so its meaning is
+  read off `push_in_abs` and `grow_abs` (a `push` whose arms call two
+  functions is refused by the elaborator,
+  `mut-self-arms-calling-two-functions`).
+
 ## 6. Several written spans
 
 `rt_file.hthr`'s computations write one span and read others; a call lends
@@ -416,7 +486,9 @@ Each step lands its ledger rows; none needs a decision beyond §10's.
 3. **Elements that are records** (§3) and **the vector** (§4) over 2; push
    answers `Full`. Customers: the token array, the growing vector.
 4. **The arena** (§5): `Arena`, `alloc`, `reset`, the four laws, the growing
-   vector over 2 and 3. Issue `runtime-arena-in-span`.
+   vector over 2 and 3. Issue `runtime-arena-in-span`. **Built**
+   (2026-11-24) at a heap of a literal sixteen words; at a run-time size
+   after the loop combinator's round 4.
 5. **The hash map's specification** (§7), first at fixed capacity over the
    ledger's table (built 2026-11-24, `runtime-hash-map-spec`), then
    rehashing over 4 (`runtime-hash-map-rehash`).

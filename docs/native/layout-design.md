@@ -1505,3 +1505,138 @@ keep it.
 
 Probes: `lib/_tests/native/runtime/runtime_held_params_tests.hthr`, and
 the ledger's `PortLimbs` rows (`runtime_ports_tests.hthr`).
+
+## 12. Niches: an enum in its payload's word where the type rules a value out (design, 2026-11-24)
+
+Minus (2026-11-24): special values are fine *when the type encodes them*.
+A sentinel (the arena's `Full` as `2^64 - 1`, before §16.21 of the
+setups design) is a value outside the type system: nothing says a base is
+never that word, and a caller that forgets the test reads `Full` as a
+base. A niche is the same word with the reason in the type: if a payload's
+type cannot take some value, an enum may use that value as another
+constructor's tag and be laid in the payload's word alone, as Rust lays
+`Option<&T>` or `Option<NonZeroU64>`. Status: design; measured for the
+arena (§12.5) and not built.
+
+### 12.1 Where the knowledge comes from
+
+From the payload's **type**, never from a function. "`alloc` never answers
+`2^64 - 1` as a base" is a theorem about `alloc`; using it to lay out the
+result would make every reader of the word depend on that theorem, which
+is a sentinel again. The type must say it:
+
+- **A word with a proof field**, as `Bytes(n)` carries `sized`: `record
+  Base { w: u64, inside: w.toNat() <= 16 }`. The proof field has no layout
+  (as `sized` has none), so a `Base` is held in one word, and every value
+  of it is a word at most 16.
+- **A bounded word type** `Below(n)` (a library record of that shape at a
+  parameter), or a refinement `{w: u64 | P(w)}` once the surface has one;
+  both are the record above under another spelling.
+
+What the layout reads off such a type is a **niche instance**, a class of
+the payload's type the declaration (or the library, for `Below(n)`)
+provides:
+
+```heather
+class Niche<T>(codec: T → BitVec(64)) {
+    // A word no value of `T` is held as, and that it is none.
+    word: BitVec(64),
+    outside: (v: T) → codec(v) ≠ word,
+}
+```
+
+`outside` is proved once per type, by `bv_omega` from the proof field
+(`v.w.toNat() <= 16` against `2^64 - 1`). An enum with `k` payload-free
+constructors needs `k` such words; `Niche` generalises to a list of words,
+pairwise distinct, each outside (the instance for `Below(n)` offers the
+words from `n` up).
+
+### 12.2 How the layout chooses
+
+When the type table builds an enum's entry (`EnumInfo`, rt.hthr; the
+generator's `runtime_enum_infos`), it looks for the shape Rust's rule
+covers and nothing wider: **exactly one constructor carries a payload, of
+one slot, whose type has a niche instance with as many words as the other
+constructors, and every other constructor carries nothing.** Then the
+enum is held in one word: the payload constructor as its slot's word, the
+`j`th payload-free constructor as the instance's `j`th word. Otherwise the
+layout is §16.16's (a tag word, then the slots).
+
+- **Automatic, recorded in the entry.** The choice is a function of the
+  declarations, made where the entry is built, and the entry says which
+  layout it is (`EnumInfo.niche: Option<…>`), so every judgment, the
+  lowering and a certificate read one decision. A C or Rust caller sees it
+  in the export's signature (`-> word` with the niche words named, against
+  `-> [word; 2]`); an export that must keep a two-word ABI while the
+  payload type gains a niche would need an opt-out, `repr(tagged)`, which
+  is not proposed until an export needs it.
+- **Reading the tag** is a compare against each niche word, the payload
+  constructor the default: the chain `Tm::Pick` already lowers to
+  (`Op::TagIs` compares the tag word against a constant), with the niche
+  word for the constant and the payload's word for the slot. No node is
+  new; `Pick`'s lowering takes the constant from the entry.
+- **Building** a payload-free constructor is a `Const` of its niche word;
+  the payload constructor is its slot's move, which is already the word.
+
+### 12.3 What the codec's laws need
+
+Today an enum's word is its tag (`EnumInfo::Names`: the word's `toNat` is
+the value's tag, at most the last), and its slots follow. With a niche,
+`Ty::Holds` at `Enum(i)` is instead `NicheHolds(x, v)`: `x` is the
+payload's word where `v` is the payload constructor, and the constructor's
+niche word otherwise. What each direction needs:
+
+- **Results and read-back** (`Table::back`, a word read back as the value
+  it names): `read(word(v)) = v` for every `v`. That is `outside` (a
+  payload's word is no niche word, so it reads back as the payload
+  constructor) and the niche words pairwise distinct. Nothing about words
+  that are no value is needed, as now.
+- **Parameters** (a word from a caller): a contract is stated at values
+  (`Ty::Takes` quantifies an enum by its value and passes its words, never
+  a word that is no value, §16.16), and the entry's admitted words
+  (`Ty::Admits`) are the niche words and the payload type's own admitted
+  words. A payload type with a proof field is admitted where the proof
+  holds, which the record's decidable predicate tests (`Decide`, as a
+  loop's facts are, span-record-design "Loops that take facts").
+- **A laid record field of such an enum** (eight bytes instead of
+  sixteen): the field's codec `Stored<E>` is the payload codec's `write`
+  composed with the niche choice, and its `round` law is the same two
+  facts at the byte level (`Stored::u64`'s round trip and `outside`).
+  Accessors read the word and compare, as the tag read does.
+- **The kernel and the lowering's proofs need nothing**: `Pick`, `Inject`
+  and `Holds` are proved at `EnumInfo`'s laws, and the niche is a second
+  way to discharge them.
+
+### 12.4 Where it would matter
+
+Not at a return. A result of two words is one more register (RDX), set
+by the arm that builds the value: one more instruction on each path, and
+nothing at the caller, which compares the tag word where it would compare
+the niche (§12.5). It matters where enums are **stored in bulk**: a laid
+array of `Option<Base>`, a table of outcomes, a hash map's
+`Option<Entry>` slots (`runtime-hash-map-spec`), where a niche halves the
+span. That is the case to build it for.
+
+### 12.5 Measured for the arena
+
+The allocation's decision and a caller of it, as plain functions through
+`compile-x86` (the span route does not export a writer of several words
+yet, and the boundary convention is the same), once with `Full` as the
+word `2^64 - 1` (what a niche would lay out) and once as `Got(base) |
+Full` in two words:
+
+| | one word | two words |
+|---|---|---|
+| allocation (certified bytes) | 72 | 83 |
+| a caller matching it, its own code | 30 | 30 |
+
+The difference is the result's second register: on the `Got` path a
+`mov eax, 0` beside the base's move, on the `Full` path two short moves
+where the one word was a ten-byte `movabs`. The branch is the same one,
+and the caller compares the tag word where it compared the sentinel, in
+code of the same size. Probe: a scratch module of `alloc_word`,
+`alloc_outcome`, `use_word`, `use_outcome` (four plain `runtime fn`s), as
+§16.21 of the setups design describes.
+
+**Not built**: one word against two does not matter for the arena's
+calls. Build it with the first laid array of an enum (§12.4).

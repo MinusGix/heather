@@ -594,6 +594,15 @@ fn {prefix}_field_widths() → List<Nat> {{ match {source}::rt.result {{
     // function at a time (`program_total_at`), read here so that no check
     // evaluates a callee to learn it.
     let outs = function_ir_source::evaluate_numbers(&fork, &format!("{probe}::{prefix}_outs")).map_err(|e| e.to_string())?;
+    // A writer of its span answering several words (a record or an enum of
+    // words, docs/native/runtime-fn-setups-design.md §16.21) states them at
+    // every file (`f::runs_over` at `FTm::ended_all`), but its certificate
+    // and its signature are a word and the span: refused by name rather
+    // than exported as its first word.
+    if spans == Spans::Written && outs.last().is_some_and(|more| *more > 0) {
+        return Err(format!("`{source}` stores into its span and returns {} words: compile-x86 exports a writer of one word beside its span \
+            (docs/native/runtime-fn-setups-design.md §16.21)", outs.last().map_or(1, |more| more + 1)));
+    }
     let table = format!("\n// How many words each function returns past its first, the last function's first.
 fn {prefix}_outs() → List<Nat> {{ [{}] }}\n", outs.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", "));
     let shape = runtime_shape_of(elab, prefix, owner, source, spans, lent, &fork, &numbers, more);
