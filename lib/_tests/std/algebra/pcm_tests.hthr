@@ -1,0 +1,121 @@
+// Probes of `lib/std/algebra/pcm.hthr` (issues/separation-algebra-ownership.md):
+// the generic laws and the separating conjunction used at the library's
+// instances (`Footprint`, `Share`), the product and pointwise dictionaries
+// at work, and the `¬` theorems a reader might expect to hold (an
+// exclusive-looking half share is not exclusive; a frame cannot be dropped
+// from a valid composite and leave an exclusive part with company). Tests,
+// not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import omega; import pair; import relation; import relation_props; import algebra_rel;
+import rat; import span_set; import pcm; import pcm_share; import footprint;
+
+// The class's derived laws reach a registered instance by search.
+theorem footprint_valid_r(f, g: Footprint, h: f.join(g).Valid()): g.Valid() {
+    Pcm::valid_r(Footprint::Same, Footprint::join, Footprint::Valid, f, g, h)
+}
+
+theorem share_compatible_symm(a, b: Share, h: Pcm::Compatible(Share::join, Share::Valid, a, b)):
+    Pcm::Compatible(Share::join, Share::Valid, b, a)
+{
+    Pcm::compatible_symm(Share::Same, Share::join, Share::Valid, a, b, h)
+}
+
+// The whole share may be replaced by any valid share: nothing else holds
+// part of it (a store under exclusive ownership).
+theorem whole_updates_to_half(): Pcm::Update(Share::join, Share::Valid, Share::whole(), Share::whole().half()) {
+    Pcm::update_exclusive(Share::Same, Share::join, Share::Valid, Share::whole(), Share::whole().half(),
+        Share::whole_exclusive(), omega)
+}
+
+// …and the update survives any frame composed beside it.
+theorem update_beside_frame(z: Share): Pcm::Update(Share::join, Share::Valid, Share::whole().join(z), Share::whole().half().join(z)) {
+    Pcm::update_frame(Share::Same, Share::join, Share::Valid, Share::whole(), Share::whole().half(), z, whole_updates_to_half())
+}
+
+// Separating conjunction at footprints: two owners split, swap and regroup.
+fn OwnsExactly(s: SpanSet, f: Footprint) → Type { f ≈ Footprint::own(s) }
+
+theorem owners_split(s, t: SpanSet, d: s.Disjoint(t)):
+    Sep<Footprint>(Footprint::Same, Footprint::join, λ f => OwnsExactly(s, f), λ f => OwnsExactly(t, f), Footprint::own(s.union(t)))
+{
+    Sep(Footprint::own(s), Footprint::own(t), Footprint::own_join(s, t, d), Footprint::own(s).same_refl(), Footprint::own(t).same_refl())
+}
+
+theorem owners_swap(s, t: SpanSet, d: s.Disjoint(t)):
+    Sep<Footprint>(Footprint::Same, Footprint::join, λ f => OwnsExactly(t, f), λ f => OwnsExactly(s, f), Footprint::own(s.union(t)))
+{
+    Sep::swap(Footprint::Same, Footprint::join, Footprint::Valid, λ f => OwnsExactly(s, f), λ f => OwnsExactly(t, f),
+        Footprint::own(s.union(t)), owners_split(s, t, d))
+}
+
+// A valid resource split by `∗` has valid sides, so the two owners are
+// disjoint: the reading an ownership judgment cites.
+theorem owners_apart(r: Footprint, ok: r.Valid(),
+    h: Sep<Footprint>(Footprint::Same, Footprint::join, λ f => f.Valid(), λ f => f.Valid(), r)): h.left.spans.Disjoint(h.right.spans)
+{
+    let whole: (h.left.join(h.right).Valid()) = Footprint::valid_respects(Footprint::same_sym(h.parts), ok);
+    h.left.apart_of_valid(h.right, whole)
+}
+
+// Emp is a unit of ∗ for a predicate that respects ≈.
+theorem emp_round_trip(s: SpanSet, f: Footprint, h: OwnsExactly(s, f)): OwnsExactly(s, f) {
+    let resp: Sep::Respects(Footprint::Same, λ g => OwnsExactly(s, g)) = λ x y e hx => Footprint::same_trans(Footprint::same_sym(e), hx);
+    Sep::emp_elim(Footprint::Same, Footprint::join, Footprint::Valid, λ g => OwnsExactly(s, g), resp, f,
+        Sep::emp_intro(Footprint::Same, Footprint::join, Footprint::Valid, λ g => OwnsExactly(s, g), f, h))
+}
+
+// Owning a composite is owning each part, and back.
+theorem own_round_trip(x, y, r: Share, h: Sep::Own(Share::Same, Share::join, x.join(y), r)): Sep::Own(Share::Same, Share::join, x.join(y), r) {
+    Sep::own_join(Share::Same, Share::join, Share::Valid, x, y, r, Sep::own_split(Share::Same, Share::join, Share::Valid, x, y, r, h))
+}
+
+// The product: a footprint beside the share held of it, composed side by side.
+fn Held() → Pcm<Pair<Footprint, Share>>(λ p q => Pcm::PairSame(Footprint::Same, Share::Same, p, q),
+    λ p q => Pcm::pair_op(Footprint::join, Share::join, p, q), λ p => Pcm::PairValid(Footprint::Valid, Share::Valid, p))
+{
+    Pcm::product(Footprint::Same, Footprint::join, Footprint::Valid, Share::Same, Share::join, Share::Valid)
+}
+
+theorem product_comm(p, q: Pair<Footprint, Share>):
+    Pcm::PairSame(Footprint::Same, Share::Same, Pcm::pair_op(Footprint::join, Share::join, p, q), Pcm::pair_op(Footprint::join, Share::join, q, p))
+{
+    Held().comm(p, q)
+}
+
+theorem product_valid_l(p, q: Pair<Footprint, Share>, h: Pcm::PairValid(Footprint::Valid, Share::Valid, Pcm::pair_op(Footprint::join, Share::join, p, q))):
+    Pcm::PairValid(Footprint::Valid, Share::Valid, p)
+{
+    Held().valid_l(p, q, h)
+}
+
+// Pointwise: a share per name, composed name by name.
+fn PerName() → Pcm<Nat → Share>(λ f g => Pcm::PointSame(Share::Same, f, g), λ f g => Pcm::point_op(Share::join, f, g),
+    λ f => Pcm::PointValid(Share::Valid, f))
+{
+    Pcm::pointwise<Nat, Share>(Share::Same, Share::join, Share::Valid)
+}
+
+theorem pointwise_unit_valid(): Pcm::PointValid(Share::Valid, PerName().unit) { PerName().valid_unit }
+
+theorem pointwise_halves(f: Nat → Share): Pcm::PointSame(Share::Same, Pcm::point_op(Share::join, λ n => f(n).half(), λ n => f(n).half()), f) {
+    λ n => f(n).halves()
+}
+
+// A half share is not exclusive: another half composes with it.
+theorem half_not_exclusive(): ¬Pcm::Exclusive(Share::Same, Share::join, Share::Valid, Share::whole().half()) {
+    λ ex => {
+        let ok: (Share::whole().half().join(Share::whole().half()).Valid()) = Share::whole().half_valid(omega);
+        let zero: (Share::whole().half().amount ≈ 0) = ex(Share::whole().half(), ok);
+        omega(zero)
+    }
+}
+
+// An update is not free: the whole cannot replace a half while another half
+// is held, so `Update(half, whole)` is false.
+theorem half_does_not_grow(): ¬Pcm::Update(Share::join, Share::Valid, Share::whole().half(), Share::whole()) {
+    λ up => {
+        let ok: (Share::whole().half().join(Share::whole().half()).Valid()) = Share::whole().half_valid(omega);
+        let grown: (Share::whole().join(Share::whole().half()).Valid()) = up(Share::whole().half(), ok);
+        Share::whole().half().whole_meets_share(omega, grown)
+    }
+}

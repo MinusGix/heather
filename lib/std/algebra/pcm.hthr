@@ -1,0 +1,346 @@
+// Partial commutative monoids: the separation algebra the ownership design
+// states its resources through (docs/language/ownership-design.md §10.3,
+// §10.7, §10.9; issues/separation-algebra-ownership.md;
+// docs/library/separation-algebra-design.md).
+//
+// A resource composes with another only when the two are compatible: two
+// exclusive claims on one byte do not, two read shares of it do, and a
+// read share and a write do not. The class states partiality the way a
+// total language can: the operation `∙` is total and a predicate `valid`
+// says which of its results are real. Two elements are compatible when
+// their composite is valid (`Pcm::Compatible`). Every law is modulo the
+// carrier's relation `≈`, as in `algebra_rel`, so a footprint compared by
+// its members and a fraction compared by cross-multiplication are
+// instances of one class; the monoid laws (associative, commutative, a
+// unit) are `CommMonoidRel`'s, inherited and not restated.
+//
+// What validity owes: the unit is valid, a part of a valid composite is
+// valid (`valid_l`; the other side is `Pcm::valid_r`), and validity
+// respects `≈`. That is all the frame theorems below use.
+//
+// The second half is the logic over a carrier: predicates `A → Type`, their
+// separating conjunction `Sep` (the resource splits into two compatible
+// parts, one for each side), its unit `Emp`, entailment, and the frame
+// theorems: a step that holds of a part holds of the part composed with any
+// frame (`Sep::frame`), and an update of a part that keeps every frame
+// valid keeps the composite valid (`Pcm::update_frame`).
+
+import logic;
+import relation;
+import relation_props;
+import algebra_rel;
+import pair;
+
+// ---------------------------------------------------------------------------
+// The class
+
+class Pcm<A>(same as ≈: A → A → Type, op as ∙: A → A → A, valid: A → Type) extends CommMonoidRel<A>(same, op) {
+    valid_unit: valid(unit),
+    valid_l: (x, y: A) → valid(x ∙ y) → valid(x),
+    valid_respects: (x, y: A) → x ≈ y → valid(x) → valid(y),
+}
+
+// ---------------------------------------------------------------------------
+// Compatibility, validity of parts, exclusive elements
+
+// Two elements compose when their composite is valid.
+fn Pcm::Compatible<A>(op: A → A → A, valid: A → Type, x, y: A) → Type { valid(op(x, y)) }
+
+// The right part of a valid composite is valid too.
+theorem Pcm::valid_r<A: Pcm(same, op, valid)>(same as ≈: A → A → Type, op as ∙: A → A → A, valid: A → Type,
+    x, y: A, h: valid(x ∙ y)): valid(y)
+{
+    A.valid_l(y, x, A.valid_respects(x ∙ y, y ∙ x, A.comm(x, y), h))
+}
+
+theorem Pcm::compatible_symm<A: Pcm(same, op, valid)>(same as ≈: A → A → Type, op as ∙: A → A → A, valid: A → Type,
+    x, y: A, h: Pcm::Compatible(op, valid, x, y)): Pcm::Compatible(op, valid, y, x)
+{
+    A.valid_respects(x ∙ y, y ∙ x, A.comm(x, y), h)
+}
+
+// The operation respects `≈` in both arguments at once.
+theorem Pcm::op_cong<A: Pcm(same, op, valid)>(same as ≈: A → A → Type, op as ∙: A → A → A, valid: A → Type,
+    x, x2, y, y2: A, hx: x ≈ x2, hy: y ≈ y2): x ∙ y ≈ x2 ∙ y2
+{
+    let left: (x ∙ y ≈ x2 ∙ y) = rel_cong(hx);
+    let right: (x2 ∙ y ≈ x2 ∙ y2) = rel_cong(hy);
+    A.rel_trans(x ∙ y, x2 ∙ y, x2 ∙ y2, left, right)
+}
+
+// Every valid element is compatible with the unit, on either side.
+theorem Pcm::compatible_unit<A: Pcm(same, op, valid)>(same as ≈: A → A → Type, op as ∙: A → A → A, valid: A → Type,
+    x: A, h: valid(x)): Pcm::Compatible(op, valid, x, A.unit)
+{
+    A.valid_respects(x, x ∙ A.unit, A.rel_sym(x ∙ A.unit, x, A.unit_r(x)), h)
+}
+
+// A valid composite of three has valid pairs: the inner pair, and the
+// outer element with either inner one.
+theorem Pcm::valid_inner<A: Pcm(same, op, valid)>(same as ≈: A → A → Type, op as ∙: A → A → A, valid: A → Type,
+    x, y, z: A, h: valid(x ∙ (y ∙ z))): valid(y ∙ z)
+{
+    Pcm::valid_r(same, op, valid, x, y ∙ z, h)
+}
+
+theorem Pcm::valid_outer<A: Pcm(same, op, valid)>(same as ≈: A → A → Type, op as ∙: A → A → A, valid: A → Type,
+    x, y, z: A, h: valid(x ∙ (y ∙ z))): valid(x ∙ y)
+{
+    A.valid_l(x ∙ y, z, A.valid_respects(x ∙ (y ∙ z), (x ∙ y) ∙ z, A.rel_sym((x ∙ y) ∙ z, x ∙ (y ∙ z), A.assoc(x, y, z)), h))
+}
+
+// An element is exclusive when the only thing it composes with is the
+// unit: a whole permission, an owned footprint. A frame of an exclusive
+// element is empty.
+fn Pcm::Exclusive<A: Pcm(same, op, valid)>(same as ≈: A → A → Type, op as ∙: A → A → A, valid: A → Type, x: A) → Type {
+    (y: A) → valid(x ∙ y) → y ≈ A.unit
+}
+
+// ---------------------------------------------------------------------------
+// Frame-preserving updates
+
+// `x` may be replaced by `y` when every frame that composed with `x`
+// composes with `y`: the step a write takes on the part it owns, leaving
+// what anyone else holds valid.
+fn Pcm::Update<A>(op: A → A → A, valid: A → Type, x, y: A) → Type {
+    (f: A) → valid(op(x, f)) → valid(op(y, f))
+}
+
+theorem Pcm::update_refl<A>(op: A → A → A, valid: A → Type, x: A): Pcm::Update(op, valid, x, x) { λ f h => h }
+
+theorem Pcm::update_trans<A>(op: A → A → A, valid: A → Type, x, y, z: A,
+    xy: Pcm::Update(op, valid, x, y), yz: Pcm::Update(op, valid, y, z)): Pcm::Update(op, valid, x, z)
+{
+    λ f h => yz(f, xy(f, h))
+}
+
+// An update of a part is an update of the part composed with anything: the
+// frame theorem of updates.
+theorem Pcm::update_frame<A: Pcm(same, op, valid)>(same as ≈: A → A → Type, op as ∙: A → A → A, valid: A → Type,
+    x, y, z: A, step: Pcm::Update(op, valid, x, y)): Pcm::Update(op, valid, x ∙ z, y ∙ z)
+{
+    λ f h => {
+        let inner: valid(x ∙ (z ∙ f)) = A.valid_respects((x ∙ z) ∙ f, x ∙ (z ∙ f), A.assoc(x, z, f), h);
+        let moved: valid(y ∙ (z ∙ f)) = step(z ∙ f, inner);
+        A.valid_respects(y ∙ (z ∙ f), (y ∙ z) ∙ f, A.rel_sym((y ∙ z) ∙ f, y ∙ (z ∙ f), A.assoc(y, z, f)), moved)
+    }
+}
+
+// An exclusive element may be replaced by any valid one: nothing else
+// holds a part of it to keep valid.
+theorem Pcm::update_exclusive<A: Pcm(same, op, valid)>(same as ≈: A → A → Type, op as ∙: A → A → A, valid: A → Type,
+    x, y: A, excl: Pcm::Exclusive(same, op, valid, x), ok: valid(y)): Pcm::Update(op, valid, x, y)
+{
+    λ f h => {
+        let empty: (f ≈ A.unit) = excl(f, h);
+        let back: (y ≈ y ∙ f) = A.rel_trans(y, y ∙ A.unit, y ∙ f,
+            A.rel_sym(y ∙ A.unit, y, A.unit_r(y)),
+            Pcm::op_cong(same, op, valid, y, y, A.unit, f, A.rel_refl(y), A.rel_sym(f, A.unit, empty)));
+        A.valid_respects(y, y ∙ f, back, ok)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Predicates over a carrier: separating conjunction and its frame
+
+// `P ∗ Q` holds of `r` when `r` splits into a part where `P` holds and a
+// part where `Q` holds. The split is up to `≈`. Validity is not part of
+// it: a predicate says what a resource is, and whether the resource is
+// real is `valid`'s (`Sep::valid_parts` reads it back).
+record Sep<A>(same: A → A → Type, op: A → A → A, P, Q: A → Type, r: A) {
+    left: A,
+    right: A,
+    parts: same(op(left, right), r),
+    holds_l: P(left),
+    holds_r: Q(right),
+}
+
+// The unit of `∗`: the empty resource.
+fn Sep::Emp<A: MonoidRel(same, op)>(same as ≈: A → A → Type, op as ∙: A → A → A, r: A) → Type { r ≈ A.unit }
+
+// `x` is part of `r`: what an owner of `x` may say about the whole.
+fn Sep::Own<A>(same: A → A → Type, op: A → A → A, x, r: A) → Type { Exists<A>(λ f => same(op(x, f), r)) }
+
+// A predicate that cannot tell `≈`-equal resources apart.
+fn Sep::Respects<A>(same: A → A → Type, P: A → Type) → Type { (x, y: A) → same(x, y) → P(x) → P(y) }
+
+// The frame rule: what holds of a part after a step holds of that part
+// beside any frame. Nothing about the carrier is used.
+theorem Sep::frame<A>(same: A → A → Type, op: A → A → A, P, P2, R: A → Type,
+    step: (x: A) → P(x) → P2(x), r: A, h: Sep<A>(same, op, P, R, r)): Sep<A>(same, op, P2, R, r)
+{
+    Sep(h.left, h.right, h.parts, step(h.left, h.holds_l), h.holds_r)
+}
+
+// Both sides may step: `∗` is monotone.
+theorem Sep::mono<A>(same: A → A → Type, op: A → A → A, P, P2, Q, Q2: A → Type,
+    sp: (x: A) → P(x) → P2(x), sq: (x: A) → Q(x) → Q2(x), r: A, h: Sep<A>(same, op, P, Q, r)):
+    Sep<A>(same, op, P2, Q2, r)
+{
+    Sep(h.left, h.right, h.parts, sp(h.left, h.holds_l), sq(h.right, h.holds_r))
+}
+
+theorem Sep::respects<A: Pcm(same, op, valid)>(same as ≈: A → A → Type, op as ∙: A → A → A, valid: A → Type,
+    P, Q: A → Type, r, r2: A, e: r ≈ r2, h: Sep<A>(same, op, P, Q, r)): Sep<A>(same, op, P, Q, r2)
+{
+    Sep(h.left, h.right, A.rel_trans(h.left ∙ h.right, r, r2, h.parts, e), h.holds_l, h.holds_r)
+}
+
+theorem Sep::swap<A: Pcm(same, op, valid)>(same as ≈: A → A → Type, op as ∙: A → A → A, valid: A → Type,
+    P, Q: A → Type, r: A, h: Sep<A>(same, op, P, Q, r)): Sep<A>(same, op, Q, P, r)
+{
+    Sep(h.right, h.left, A.rel_trans(h.right ∙ h.left, h.left ∙ h.right, r, A.comm(h.right, h.left), h.parts),
+        h.holds_r, h.holds_l)
+}
+
+// Regrouping, both ways. The inner split is handed to a lemma over its own
+// fields so the outer record is read once.
+theorem Sep::assoc_parts<A: Pcm(same, op, valid)>(same as ≈: A → A → Type, op as ∙: A → A → A, valid: A → Type,
+    P, Q, R: A → Type, a, c, r: A, outer: a ∙ c ≈ r, holds_c: R(c), inner: Sep<A>(same, op, P, Q, a)):
+    Sep<A>(same, op, P, λ x => Sep<A>(same, op, Q, R, x), r)
+{
+    let a1 = inner.left;
+    let a2 = inner.right;
+    let regroup: (a1 ∙ (a2 ∙ c) ≈ r) = A.rel_trans(a1 ∙ (a2 ∙ c), (a1 ∙ a2) ∙ c, r,
+        A.rel_sym((a1 ∙ a2) ∙ c, a1 ∙ (a2 ∙ c), A.assoc(a1, a2, c)),
+        A.rel_trans((a1 ∙ a2) ∙ c, a ∙ c, r, Pcm::op_cong(same, op, valid, a1 ∙ a2, a, c, c, inner.parts, A.rel_refl(c)), outer));
+    Sep(a1, a2 ∙ c, regroup, inner.holds_l, Sep(a2, c, A.rel_refl(a2 ∙ c), inner.holds_r, holds_c))
+}
+
+theorem Sep::regroup<A: Pcm(same, op, valid)>(same as ≈: A → A → Type, op as ∙: A → A → A, valid: A → Type,
+    P, Q, R: A → Type, r: A, h: Sep<A>(same, op, λ x => Sep<A>(same, op, P, Q, x), R, r)):
+    Sep<A>(same, op, P, λ x => Sep<A>(same, op, Q, R, x), r)
+{
+    Sep::assoc_parts(same, op, valid, P, Q, R, h.left, h.right, r, h.parts, h.holds_r, h.holds_l)
+}
+
+// The empty resource is a unit of `∗` for a predicate that respects `≈`.
+theorem Sep::emp_intro<A: Pcm(same, op, valid)>(same as ≈: A → A → Type, op as ∙: A → A → A, valid: A → Type,
+    P: A → Type, r: A, h: P(r)): Sep<A>(same, op, λ x => Sep::Emp(same, op, x), P, r)
+{
+    Sep(A.unit, r, A.unit_l(r), A.rel_refl(A.unit), h)
+}
+
+theorem Sep::emp_elim<A: Pcm(same, op, valid)>(same as ≈: A → A → Type, op as ∙: A → A → A, valid: A → Type,
+    P: A → Type, resp: Sep::Respects(same, P), r: A, h: Sep<A>(same, op, λ x => Sep::Emp(same, op, x), P, r)): P(r)
+{
+    let e = h.left;
+    let b = h.right;
+    let unit_part: (A.unit ∙ b ≈ e ∙ b) = Pcm::op_cong(same, op, valid, A.unit, e, b, b, A.rel_sym(e, A.unit, h.holds_l), A.rel_refl(b));
+    let same_r: (b ≈ r) = A.rel_trans(b, A.unit ∙ b, r, A.rel_sym(A.unit ∙ b, b, A.unit_l(b)),
+        A.rel_trans(A.unit ∙ b, e ∙ b, r, unit_part, h.parts));
+    resp(b, r, same_r, h.holds_r)
+}
+
+// A valid resource's parts are valid: what a holder of one side may assume.
+theorem Sep::valid_parts<A: Pcm(same, op, valid)>(same as ≈: A → A → Type, op as ∙: A → A → A, valid: A → Type,
+    P, Q: A → Type, r: A, ok: valid(r), h: Sep<A>(same, op, P, Q, r)): valid(h.left) ∧ valid(h.right)
+{
+    let whole: valid(h.left ∙ h.right) = A.valid_respects(r, h.left ∙ h.right, A.rel_sym(h.left ∙ h.right, r, h.parts), ok);
+    And(A.valid_l(h.left, h.right, whole), Pcm::valid_r(same, op, valid, h.left, h.right, whole))
+}
+
+// Owning a composite is owning each part, separately.
+theorem Sep::own_split<A: Pcm(same, op, valid)>(same as ≈: A → A → Type, op as ∙: A → A → A, valid: A → Type,
+    x, y, r: A, h: Sep::Own(same, op, x ∙ y, r)):
+    Sep<A>(same, op, λ s => Sep::Own(same, op, x, s), λ s => Sep::Own(same, op, y, s), r)
+{
+    let f = h.witness;
+    let regroup: ((x ∙ f) ∙ y ≈ r) = calc {
+        (x ∙ f) ∙ y
+            ≈ x ∙ (f ∙ y) := A.assoc(x, f, y),
+            ≈ x ∙ (y ∙ f) := Pcm::op_cong(same, op, valid, x, x, f ∙ y, y ∙ f, A.rel_refl(x), A.comm(f, y)),
+            ≈ (x ∙ y) ∙ f := A.rel_sym((x ∙ y) ∙ f, x ∙ (y ∙ f), A.assoc(x, y, f)),
+            ≈ r := h.proof,
+    };
+    Sep(x ∙ f, y, regroup, Exists(f, A.rel_refl(x ∙ f)), Exists(A.unit, A.unit_r(y)))
+}
+
+// …and the converse: two owned parts make an owned composite.
+theorem Sep::own_join_parts<A: Pcm(same, op, valid)>(same as ≈: A → A → Type, op as ∙: A → A → A, valid: A → Type,
+    x, y, l, m, r: A, joined: l ∙ m ≈ r, hl: Sep::Own(same, op, x, l), hm: Sep::Own(same, op, y, m)):
+    Sep::Own(same, op, x ∙ y, r)
+{
+    let f = hl.witness;
+    let g = hm.witness;
+    let regroup: ((x ∙ y) ∙ (f ∙ g) ≈ r) = calc {
+        (x ∙ y) ∙ (f ∙ g)
+            ≈ (x ∙ f) ∙ (y ∙ g) := CommMonoidRel::interchange(same, op, x, y, f, g),
+            ≈ l ∙ m := Pcm::op_cong(same, op, valid, x ∙ f, l, y ∙ g, m, hl.proof, hm.proof),
+            ≈ r := joined,
+    };
+    Exists(f ∙ g, regroup)
+}
+
+theorem Sep::own_join<A: Pcm(same, op, valid)>(same as ≈: A → A → Type, op as ∙: A → A → A, valid: A → Type,
+    x, y, r: A, h: Sep<A>(same, op, λ s => Sep::Own(same, op, x, s), λ s => Sep::Own(same, op, y, s), r)):
+    Sep::Own(same, op, x ∙ y, r)
+{
+    Sep::own_join_parts(same, op, valid, x, y, h.left, h.right, r, h.parts, h.holds_l, h.holds_r)
+}
+
+// ---------------------------------------------------------------------------
+// Products
+
+// A pair of resources, composed and validated side by side: a footprint
+// and the fraction held of it, or two stores' tokens.
+fn Pcm::PairSame<A, B>(sa: A → A → Type, sb: B → B → Type, p, q: Pair<A, B>) → Type { sa(p.fst, q.fst) ∧ sb(p.snd, q.snd) }
+
+fn Pcm::pair_op<A, B>(oa: A → A → A, ob: B → B → B, p, q: Pair<A, B>) → Pair<A, B> { Pair(oa(p.fst, q.fst), ob(p.snd, q.snd)) }
+
+fn Pcm::PairValid<A, B>(va: A → Type, vb: B → Type, p: Pair<A, B>) → Type { va(p.fst) ∧ vb(p.snd) }
+
+fn Pcm::product<A: Pcm(sa, oa, va), B: Pcm(sb, ob, vb)>(sa: A → A → Type, oa: A → A → A, va: A → Type,
+    sb: B → B → Type, ob: B → B → B, vb: B → Type) →
+    Pcm<Pair<A, B>>(λ p q => Pcm::PairSame(sa, sb, p, q), λ p q => Pcm::pair_op(oa, ob, p, q), λ p => Pcm::PairValid(va, vb, p))
+{
+    Pcm {
+        rel_refl: λ p => And(A.rel_refl(p.fst), B.rel_refl(p.snd)),
+        rel_sym: λ p q h => And(A.rel_sym(p.fst, q.fst, h.left), B.rel_sym(p.snd, q.snd, h.right)),
+        rel_trans: λ p q r h1 h2 => And(A.rel_trans(p.fst, q.fst, r.fst, h1.left, h2.left),
+            B.rel_trans(p.snd, q.snd, r.snd, h1.right, h2.right)),
+        respects2: λ p p2 hp q q2 hq => And(
+            Pcm::op_cong(sa, oa, va, p.fst, p2.fst, q.fst, q2.fst, hp.left, hq.left),
+            Pcm::op_cong(sb, ob, vb, p.snd, p2.snd, q.snd, q2.snd, hp.right, hq.right)),
+        assoc: λ p q r => And(A.assoc(p.fst, q.fst, r.fst), B.assoc(p.snd, q.snd, r.snd)),
+        unit: Pair(A.unit, B.unit),
+        unit_l: λ p => And(A.unit_l(p.fst), B.unit_l(p.snd)),
+        unit_r: λ p => And(A.unit_r(p.fst), B.unit_r(p.snd)),
+        comm: λ p q => And(A.comm(p.fst, q.fst), B.comm(p.snd, q.snd)),
+        valid_unit: And(A.valid_unit, B.valid_unit),
+        valid_l: λ p q h => And(A.valid_l(p.fst, q.fst, h.left), B.valid_l(p.snd, q.snd, h.right)),
+        valid_respects: λ p q e h => And(A.valid_respects(p.fst, q.fst, e.left, h.left),
+            B.valid_respects(p.snd, q.snd, e.right, h.right)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pointwise lifting
+
+// A resource at every index, composed and validated index by index: a
+// permission per address is the pointwise lifting of a permission. `≈` is
+// pointwise too, so no function extensionality is needed.
+fn Pcm::PointSame<X, A>(same: A → A → Type, f, g: X → A) → Type { (x: X) → same(f(x), g(x)) }
+
+fn Pcm::point_op<X, A>(op: A → A → A, f, g: X → A) → X → A { λ x => op(f(x), g(x)) }
+
+fn Pcm::PointValid<X, A>(valid: A → Type, f: X → A) → Type { (x: X) → valid(f(x)) }
+
+fn Pcm::pointwise<X, A: Pcm(same, op, valid)>(same: A → A → Type, op: A → A → A, valid: A → Type) →
+    Pcm<X → A>(λ f g => Pcm::PointSame(same, f, g), λ f g => Pcm::point_op(op, f, g), λ f => Pcm::PointValid(valid, f))
+{
+    Pcm {
+        rel_refl: λ f x => A.rel_refl(f(x)),
+        rel_sym: λ f g h x => A.rel_sym(f(x), g(x), h(x)),
+        rel_trans: λ f g k h1 h2 x => A.rel_trans(f(x), g(x), k(x), h1(x), h2(x)),
+        respects2: λ f f2 hf g g2 hg x => Pcm::op_cong(same, op, valid, f(x), f2(x), g(x), g2(x), hf(x), hg(x)),
+        assoc: λ f g k x => A.assoc(f(x), g(x), k(x)),
+        unit: λ (x: X) => A.unit,
+        unit_l: λ f x => A.unit_l(f(x)),
+        unit_r: λ f x => A.unit_r(f(x)),
+        comm: λ f g x => A.comm(f(x), g(x)),
+        valid_unit: λ x => A.valid_unit,
+        valid_l: λ f g h x => A.valid_l(f(x), g(x), h(x)),
+        valid_respects: λ f g e h x => A.valid_respects(f(x), g(x), e(x), h(x)),
+    }
+}
