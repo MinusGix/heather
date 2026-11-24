@@ -2778,7 +2778,7 @@ mod tests {
                 result: Box::new(var()), ons: vec![], span: sp() })), span: sp() });
             let (arm, arm_depth) = exprs(levels, 1, |e| Expr { kind: ExprKind::Match {
                 form: MatchForm::Match, generated: false, scrut: Box::new(var()), eqbind: None, motive: None,
-                arms: vec![Arm { ctor: "C".into(), default: false, binders: vec![], body: e, span: sp() }] }, span: sp() });
+                arms: vec![Arm { ctor: "C".into(), default: false, binders: vec![], body: e, span: sp() }], test: None }, span: sp() });
             let (arg, arg_depth) = exprs(levels, 1, |e| Expr { kind: ExprKind::App {
                 head: Box::new(var()), args: vec![e], named: vec![], explicit: false, goal_oriented: false }, span: sp() });
             let (ty, ty_depth) = exprs(levels, 2, |e| Expr {
