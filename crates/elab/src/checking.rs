@@ -56,6 +56,50 @@ impl std::ops::Deref for Checking<'_> {
 }
 
 impl Checking<'_> {
+    /// The decision procedures a `decreases` obligation defaults to:
+    /// `omega`, then `bv_omega` where the obligation is over the `toNat` of
+    /// a word. `omega`'s refusal is the diagnosis.
+    fn elab_measure_search(&self, cx: &Cx, expected: &Type, lvl: &Level, span: Span) -> R<Term> {
+        let tactic = |name: &str| Expr { kind: ExprKind::Var(name.into()), span };
+        let mark = (self.pass.warnings.borrow().len(), self.attempt.goal_arena.mark());
+        let stuck = match self.elab_check(cx, &tactic("omega"), expected, lvl) {
+            Ok(term) => return Ok(term),
+            Err(stuck) => stuck,
+        };
+        if !bv_omega::mentions_word(self, expected) {
+            return Err(stuck);
+        }
+        // Over words the default is `bv_omega`, which only a module
+        // that sees `bitvec_omega` has: say so, rather than leave
+        // the writer with `omega`'s model of a goal it cannot read.
+        if self.key_of("bitvec_omega::add_form").is_none() {
+            return Err(match stuck {
+                ElabError::Elab { msg, span } => ElabError::Elab {
+                    msg: format!(
+                        "{msg}\nhelp: the obligation is over words, which `bv_omega` reads; it \
+                         needs `import bitvec_omega;` (and `import bitvec_shift_nat;` for a \
+                         shift such as `x.shift_right(1)`)"
+                    ),
+                    span,
+                },
+                stuck => stuck,
+            });
+        }
+        self.pass.warnings.borrow_mut().truncate(mark.0);
+        self.attempt.goal_arena.rollback(mark.1);
+        match self.elab_check(cx, &tactic("bv_omega"), expected, lvl) {
+            Ok(term) => Ok(term),
+            Err(ElabError::Elab { msg: words, .. }) => match stuck {
+                ElabError::Elab { msg, span } => Err(ElabError::Elab {
+                    msg: format!("{msg}; over the words, {}", words.lines().next().unwrap_or_default()),
+                    span,
+                }),
+                stuck => Err(stuck),
+            },
+            Err(_) => Err(stuck),
+        }
+    }
+
     /// [`Elaborator::elab_check`] plus, where the caller knows it, the `(callee,
     /// parameter)` this expression is an argument for — the provenance and
     /// default name of any goal raised inside it.
@@ -1191,45 +1235,45 @@ impl Checking<'_> {
             // and where it is stuck on the `toNat` of a word, `bv_omega`
             // (issues/decreases-word-measures-by-hand.md). `omega`'s refusal
             // stays the diagnosis: it is what `Obligations::explain` rewords.
-            ExprKind::Var(name) if name == crate::measure::CLOSER => {
+            ExprKind::Var(name) if name == crate::measure::CLOSER || name == crate::measure::CLOSER_LEAF => {
                 let tactic = |name: &str| Expr { kind: ExprKind::Var(name.into()), span: e.span };
                 let mark = (self.pass.warnings.borrow().len(), self.attempt.goal_arena.mark());
-                let stuck = match self.elab_check(cx, &tactic("omega"), expected, lvl) {
+                let stuck = match self.elab_measure_search(cx, expected, lvl, e.span) {
                     Ok(term) => return Ok(term),
                     Err(stuck) => stuck,
                 };
-                if !bv_omega::mentions_word(self, expected) {
-                    return Err(stuck);
+                // A new measure that is an `if` (a `while` whose measure is
+                // assigned in each arm, a recursive call at `if c { a } else
+                // { b }`): the search sees the match as an atom. Split each
+                // stuck match, every arm with its test, and search again
+                // there, as Lean's `decreasing_tactic` splits
+                // (issues/while-decrease-through-branches.md). Only where a
+                // match is stuck, and the search's own refusal stays the
+                // diagnosis.
+                if name == crate::measure::CLOSER {
+                    let goal = goal_combinators::simplify_goal(self, cx, &crate::inductive::decoded(expected));
+                    let leaf = tactic(crate::measure::CLOSER_LEAF);
+                    if goal_combinators::split_stuck(self, cx, &goal, &leaf, e.span, true).is_some() {
+                        self.pass.warnings.borrow_mut().truncate(mark.0);
+                        self.attempt.goal_arena.rollback(mark.1);
+                        let split = Expr {
+                            kind: ExprKind::App {
+                                head: Box::new(tactic(goal_combinators::SPLIT_STUCK)),
+                                args: vec![leaf],
+                                named: vec![],
+                                explicit: false,
+                                goal_oriented: false,
+                            },
+                            span: e.span,
+                        };
+                        if let Ok(term) = self.elab_check(cx, &split, expected, lvl) {
+                            return Ok(term);
+                        }
+                        self.pass.warnings.borrow_mut().truncate(mark.0);
+                        self.attempt.goal_arena.rollback(mark.1);
+                    }
                 }
-                // Over words the default is `bv_omega`, which only a module
-                // that sees `bitvec_omega` has: say so, rather than leave
-                // the writer with `omega`'s model of a goal it cannot read.
-                if self.key_of("bitvec_omega::add_form").is_none() {
-                    return Err(match stuck {
-                        ElabError::Elab { msg, span } => ElabError::Elab {
-                            msg: format!(
-                                "{msg}\nhelp: the obligation is over words, which `bv_omega` reads; it \
-                                 needs `import bitvec_omega;` (and `import bitvec_shift_nat;` for a \
-                                 shift such as `x.shift_right(1)`)"
-                            ),
-                            span,
-                        },
-                        stuck => stuck,
-                    });
-                }
-                self.pass.warnings.borrow_mut().truncate(mark.0);
-                self.attempt.goal_arena.rollback(mark.1);
-                match self.elab_check(cx, &tactic("bv_omega"), expected, lvl) {
-                    Ok(term) => Ok(term),
-                    Err(ElabError::Elab { msg: words, .. }) => match stuck {
-                        ElabError::Elab { msg, span } => Err(ElabError::Elab {
-                            msg: format!("{msg}; over the words, {}", words.lines().next().unwrap_or_default()),
-                            span,
-                        }),
-                        stuck => Err(stuck),
-                    },
-                    Err(_) => Err(stuck),
-                }
+                Err(stuck)
             }
             // `known`: a hypothesis, a side of a conjunction, then the
             // arithmetic searches (docs/language/when-design.md §5).

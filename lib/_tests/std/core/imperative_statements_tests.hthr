@@ -416,6 +416,41 @@ fn stuck(n: Nat) → Nat {
     k
 }
 
+// The measure assigned through a branch (issues/while-decrease-through-
+// branches.md): a statement `if` assigning it in each arm, and an `if` as
+// its new value. The closer splits the `if` and finds each arm's decrease
+// with that arm's test.
+fn drain_arms(n: Nat) → Nat {
+    let mut k = n;
+    while 1 <= k decreases k { if k = 5 { k := 0 } else { k := k - 1 } }
+    k
+}
+theorem drain_arms_lit(): drain_arms(9) = 0 { refl }
+fn drain_tail(n: Nat) → Nat {
+    let mut k = n;
+    let mut steps = 0;
+    while 1 <= k decreases k { steps := steps + 1; k := if k = 5 { 0 } else { k - 1 } }
+    steps
+}
+theorem drain_tail_lit(): drain_tail(9) = 5 { refl }
+// Control: one arm keeps the measure, so that pass is refused.
+// expect-error: this pass of the loop must decrease the measure `k`
+fn drain_arms_stays(n: Nat) → Nat {
+    let mut k = n;
+    while 1 <= k decreases k { if k = 5 { k := k } else { k := k - 1 } }
+    k
+}
+
+// The same split serves a recursive call at an `if`.
+fn fall_if(n: Nat) → Nat decreases n {
+    if h: 1 <= n { fall_if(if n = 7 { 0 } else { n - 1 }) } else { n }
+}
+theorem fall_if_lit(): fall_if(9) = 0 { refl }
+// expect-error: must decrease the measure
+fn fall_if_stays(n: Nat) → Nat decreases n {
+    if h: 1 <= n { fall_if_stays(if n = 7 { n } else { n - 1 }) } else { n }
+}
+
 // ---- Ranges in a `for` header (§5.2) ----
 
 // `0..n` is `List::range(n)`, so the loop is a fold over it.
