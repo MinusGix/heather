@@ -607,6 +607,7 @@ fn StructuredRegion::Fits(self region: StructuredRegion, rooms: Nat → Nat, bou
         Conditional(_, _, _, _, when_true, when_false) => when_true.Fits(rooms, bound, avail) ∧ when_false.Fits(rooms, bound, avail),
         Call(callee, _, _, _) => callee + 1 <= bound → rooms(callee) + 24 <= avail,
         Loop(_, _, _, _, body, _, _, _, _) => body.Fits(rooms, bound, avail),
+        Until(_, _, body, _, _, _) => body.Fits(rooms, bound, avail),
         Lend(_, callee, _, _) => callee + 1 <= bound → rooms(callee) + 24 <= avail,
     }
 }
@@ -620,6 +621,7 @@ fn StructuredRegion::fits(self region: StructuredRegion, rooms: Nat → Nat, ava
         Conditional(_, _, _, _, when_true, when_false) => when_true.fits(rooms, avail) && when_false.fits(rooms, avail),
         Call(callee, _, _, _) => (rooms(callee) + 24).leb(avail),
         Loop(_, _, _, _, body, _, _, _, _) => body.fits(rooms, avail),
+        Until(_, _, body, _, _, _) => body.fits(rooms, avail),
         Lend(_, callee, _, _) => (rooms(callee) + 24).leb(avail),
     }
 }
@@ -639,6 +641,7 @@ theorem StructuredRegion::fits_sound(self region: StructuredRegion, rooms: Nat �
         },
         Call(callee, _, _, _) => λ ok _ => (rooms(callee) + 24).leb_sound(avail, ok),
         Loop(_, _, _, _, body, _, _, _, _) => λ ok => body.fits_sound(rooms, bound, avail, ok),
+        Until(_, _, body, _, _, _) => λ ok => body.fits_sound(rooms, bound, avail, ok),
         Lend(_, callee, _, _) => λ ok _ => (rooms(callee) + 24).leb_sound(avail, ok),
     }
 }
@@ -655,6 +658,7 @@ theorem StructuredRegion::fits_index(self region: StructuredRegion, bound, avail
         Conditional(_, _, _, _, when_true, when_false) => ⟨when_true.fits_index(bound, avail, enough), when_false.fits_index(bound, avail, enough)⟩,
         Call(callee, _, _, _) => λ below => { let fit: (136 * (callee + 1) + 24 <= avail) = { omega }; fit },
         Loop(_, _, _, _, body, _, _, _, _) => body.fits_index(bound, avail, enough),
+        Until(_, _, body, _, _, _) => body.fits_index(bound, avail, enough),
         Lend(_, callee, _, _) => λ below => { let fit: (136 * (callee + 1) + 24 <= avail) = { omega }; fit },
     }
 }
@@ -676,6 +680,7 @@ fn StructuredRegion::callee_room(self region: StructuredRegion, rooms: Nat → N
         Conditional(_, _, _, _, when_true, when_false) => when_true.callee_room(rooms).max(when_false.callee_room(rooms)),
         Call(callee, _, _, _) => rooms(callee) + 24,
         Loop(_, _, _, _, body, _, _, _, _) => body.callee_room(rooms),
+        Until(_, _, body, _, _, _) => body.callee_room(rooms),
         Lend(_, callee, _, _) => rooms(callee) + 24,
     }
 }
@@ -1730,6 +1735,8 @@ fn StructuredRegion::emit_calls(self region: StructuredRegion, saves: Nat, slots
                     Some(pass) => pass.loop_close(saves, entry.registers, count, exit, next, outputs, exhausted, names, short),
                 },
             },
+        // An unbounded loop has no code yet (docs/language/loop-combinator-design.md §6.9).
+        Until(_, _, _, _, _, _) => None,
     }
 }
 
@@ -2204,6 +2211,7 @@ theorem StructuredRegion::emit_calls_grows(self region: StructuredRegion, saves:
                     })(body.emit_calls_grows(saves, slots, short, bound, counts, carried_homes(loop_carried(homes, inputs, parameters, next)), loop_tested(prog, entry, names, short), entry.head, entry.registers.rest,
                         names + 4)),
             },
+        Until(_, _, _, _, _, _) => λ homes prog file placement names => trivial,
     }
 }
 
@@ -5723,6 +5731,7 @@ theorem StructuredRegion::emit_calls_runs<M>(self region: StructuredRegion, save
                         entry.head, entry.registers.rest, names + 4, from, to)),
             })(loop_entry_sound<M>(saves, values, file, inputs, limit, parameters, count, placement))
         },
+        Until(_, _, _, _, _, _) => λ allowed asks shallow homes prog file placement names before after => trivial,
     }
 }
 
@@ -6677,6 +6686,7 @@ theorem StructuredRegion::fits_shift(self region: StructuredRegion, rooms, other
             when_false.fits_shift(rooms, other, bound, avail, wider, grown, ok.right)⟩,
         Call(callee, _, _, _) => λ ok below => { let fit = ok(below); let more = grown(callee, below); omega },
         Loop(_, _, _, _, body, _, _, _, _) => λ ok => body.fits_shift(rooms, other, bound, avail, wider, grown, ok),
+        Until(_, _, body, _, _, _) => λ ok => body.fits_shift(rooms, other, bound, avail, wider, grown, ok),
         Lend(_, callee, _, _) => λ ok below => { let fit = ok(below); let more = grown(callee, below); omega },
     }
 }
@@ -7245,6 +7255,7 @@ fn StructuredRegion::uses_buffer(self region: StructuredRegion, b: Nat) → Bool
         Lend(_, _, _, _) => False,
         Call(_, _, _, _) => False,
         Loop(_, _, _, _, body, _, _, _, _) => body.uses_buffer(b),
+        Until(_, _, body, _, _, _) => body.uses_buffer(b),
     }
 }
 
@@ -7271,6 +7282,7 @@ fn StructuredRegion::home_reads(self region: StructuredRegion, homes: List<Lent>
         Loop(inputs, _, parameters, _, body, _, next, _, _) =>
             homes_touched(carried_homes(loop_carried(homes, inputs, parameters, next)), body) ++
                 body.home_reads(carried_homes(loop_carried(homes, inputs, parameters, next))),
+        Until(_, _, _, _, _, _) => [],
     }
 }
 
@@ -7945,6 +7957,7 @@ theorem StructuredRegion::lends_none(self region: StructuredRegion): region.lend
         Lend(_, _, _, _) => refl,
         Call(_, _, _, _) => refl,
         Loop(_, _, _, _, _, _, _, _, _) => refl,
+        Until(_, _, _, _, _, _) => refl,
     }
 }
 
@@ -8105,6 +8118,7 @@ theorem StructuredRegion::emit_calls_quiet(self region: StructuredRegion, saves:
                     })(body.emit_calls_quiet(saves, slots, short, bound, counts, loop_tested(prog, entry, names, short), entry.head, entry.registers.rest,
                         names + 4)),
             },
+        Until(_, _, _, _, _, _) => λ prog file placement names => trivial,
     }
 }
 

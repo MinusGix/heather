@@ -73,6 +73,36 @@ theorem loop_run_ext(step, other: Valuation() → Buffers() → State, same: (v:
     }
 }
 
+theorem until_run_ext(step, other: Valuation() → Buffers() → State, same: (v: Valuation()) → (held: Buffers()) → other(v, held) = step(v, held),
+    parameters: List<Nat>, exit: Nat, next: List<Nat>, fuel: Nat): (state: List<BitVec(64)>) → (buffers: Buffers()) →
+    until_run(other, parameters, exit, next, fuel, state, buffers) = until_run(step, parameters, exit, next, fuel, state, buffers) {
+    match fuel {
+        Zero => λ state buffers => refl,
+        Succ(rest) => λ state buffers => {
+            let entry = until_valuation(parameters, state);
+            let after = step(entry, buffers);
+            let later = match after.values(1, exit).head_bit() as λ b =>
+                    (match b as λ _ => LoopState {
+                        False => until_run(other, parameters, exit, next, rest, words_of(after.values, next), after.buffers),
+                        True => LoopState(LoopEnd(words_of(after.values, next), False), after.buffers),
+                    }) = (match b as λ _ => LoopState {
+                        False => until_run(step, parameters, exit, next, rest, words_of(after.values, next), after.buffers),
+                        True => LoopState(LoopEnd(words_of(after.values, next), False), after.buffers),
+                    }) {
+                False => until_run_ext(step, other, same, parameters, exit, next, rest, words_of(after.values, next), after.buffers),
+                True => refl,
+            };
+            j(sym(same(entry, buffers)), λ s _ => (match s.values(1, exit).head_bit() as λ _ => LoopState {
+                    False => until_run(other, parameters, exit, next, rest, words_of(s.values, next), s.buffers),
+                    True => LoopState(LoopEnd(words_of(s.values, next), False), s.buffers),
+                }) = (match after.values(1, exit).head_bit() as λ _ => LoopState {
+                    False => until_run(step, parameters, exit, next, rest, words_of(after.values, next), after.buffers),
+                    True => LoopState(LoopEnd(words_of(after.values, next), False), after.buffers),
+                }), later)
+        },
+    }
+}
+
 // The theorem: a renamed region runs as the region does with its calls
 // answered at the new names.
 theorem StructuredRegion::relabel_run(self region: StructuredRegion, call: Writers(), links: Nat → Nat): (values: Valuation()) → (buffers: Buffers()) →
@@ -112,6 +142,12 @@ theorem StructuredRegion::relabel_run(self region: StructuredRegion, call: Write
                     λ (pass: Valuation()) (held: Buffers()) => body.relabel(links).run(call, pass, held),
                     λ v held => body.relabel_run(call, links, v, held), parameters, count, exit, next, values(64, bound).toNat(),
                     words_of(values, inputs), buffers)),
+        Until(inputs, parameters, body, exit, next, outputs) => λ values buffers =>
+            cong_fn<LoopState, State>(λ end => State(Valuation::bind(values, outputs, end.end.state), end.buffers),
+                until_run_ext(λ (pass: Valuation()) (held: Buffers()) => body.run(Writers::relabel(call, links), pass, held),
+                    λ (pass: Valuation()) (held: Buffers()) => body.relabel(links).run(call, pass, held),
+                    λ v held => body.relabel_run(call, links, v, held), parameters, exit, next, until_passes(),
+                    words_of(values, inputs), buffers)),
     }
 }
 
@@ -144,6 +180,7 @@ theorem StructuredRegion::calls_fit_among(self region: StructuredRegion, arity: 
         Lend(views, callee, arguments, _) => λ ok => named(callee, (views_homes(views) ++ arguments).len(), ok),
         Call(callee, arguments, _, _) => λ ok => named(callee, arguments.len(), ok),
         Loop(_, _, _, _, body, _, _, _, _) => λ ok => body.calls_fit_among(arity, among, named, ok),
+        Until(_, _, body, _, _, _) => λ ok => body.calls_fit_among(arity, among, named, ok),
     }
 }
 

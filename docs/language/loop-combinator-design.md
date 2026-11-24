@@ -946,6 +946,41 @@ The work is several rounds, not one:
 - The allocator, the emitter and the certificate's decoder.
 - Every loop producer, then the linked assembly regenerated.
 
+**Round A as built: `Until`, FunctionIR's loop with no bound.** The
+counted `Loop` is not changed in place. A second constructor,
+`Until(inputs, parameters, body, exit, next, outputs)`, stands beside it.
+Its producers move onto it round by round, and `Loop` goes last, so each
+round stays green. (`Repeat` was taken: it is a native statement's.)
+
+- *Meaning.* `UntilHolds` is some number of passes (`UntilRuns`, which
+  has no case for none) from the inputs to the outputs. The file-threaded
+  relation is `UntilRunsOver`.
+- *Evaluation.* `until_eval` runs at a fuel that is the meaning's, not the
+  code's: `until_passes()`, which is `2^64`. Running out evaluates to the
+  state it got to, and that state is never read.
+- *Termination.* Running out is not *defined*. `until_defined` is false
+  at no fuel, and `defined_over`, which every soundness theorem already
+  takes, carries it, so the region's termination is the hypothesis §6.9
+  asks for. `until_defined_of_measure` discharges it once: a pass defined
+  wherever an invariant holds, and a measure that the passes going round
+  lower. `until_word_within` gives that a 64-bit word's `toNat` is within
+  the fuel.
+- *Not total.* `total_at`, `quiet` and `placeless` are false for `Until`,
+  since its termination is never a property of its nodes, and so are their
+  lemmas.
+- *The passes.* Analyses read its body. Replay, inlining and the
+  optimizer's plans take it whole (`Same`, `Stay`), for now.
+- *No code yet.* The native layers refuse it (`emit_calls`, `code`,
+  `scoped`), each with its proof's case vacuous. It is spelled with tag 9,
+  which the Rust decoders do not read yet.
+- *A probe split.* `uneven_shallow_exits` (native_compile_tests) sat at the
+  kernel's budget. One more constructor in every match tipped it over by
+  a sliver, so it is now stage theorems.
+
+Left for round B: `Until`'s code and its proof in the native layers, its
+spelling in the decoders, its replay and inlining inside the body, and its
+placeless check. The counted loop's users move in round C.
+
 **Built: a pass that answers several words** (step 3's first half, kept
 as small as the extra pass allows).
 

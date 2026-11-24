@@ -384,6 +384,7 @@ fn StructuredRegion::called(self region: StructuredRegion) → List<Nat> {
         Conditional(_, _, _, _, when_true, when_false) => when_true.called() ++ when_false.called(),
         Call(callee, _, _, _) => [callee],
         Loop(_, _, _, _, body, _, _, _, _) => body.called(),
+        Until(_, _, body, _, _, _) => body.called(),
         Lend(_, callee, _, _) => [callee],
     }
 }
@@ -1288,6 +1289,8 @@ fn StructuredRegion::code(self region: StructuredRegion, p: Prog, layout: Layout
                 x.prog.else_label(again, leave).computes(layout, set, loop_down(count, exhausted), x.names).and_then(λ d =>
                 then(d.prog, Jmp(head)).label(leave).computes(layout, out, moves(outputs, parameters), d.names))))))))
         },
+        // An unbounded loop has no code yet (docs/language/loop-combinator-design.md §6.9).
+        Until(_, _, _, _, _, _) => None,
     }
 }
 
@@ -1349,6 +1352,7 @@ fn Stmt::pair_known(self first: Stmt, rest: Stmt, homes: Homes, out: List<Nat>) 
             Lend(_, _, _, _) => Nil,
             Call(_, _, _, _) => Nil,
             Loop(_, _, _, _, _, _, _, _, _) => Nil,
+            Until(_, _, _, _, _, _) => Nil,
         },
         Invoke(_) => Nil,
         Then(_, _) => Nil,
@@ -2105,6 +2109,8 @@ fn StructuredRegion::kind(self region: StructuredRegion) → Nat {
         Lend(_, _, _, _) => 6,
         Call(_, _, _, _) => 4,
         Loop(_, _, _, _, _, _, _, _, _) => 5,
+        // Not taken yet (docs/language/loop-combinator-design.md §6.9).
+        Until(_, _, _, _, _, _) => 7,
     }
 }
 
@@ -2138,6 +2144,7 @@ fn parts_refusal(layout: Layout, region: StructuredRegion) → List<Nat> {
             Nil => match parts_refusal(layout, body) { Nil => [13, 0, 0], Cons(reason, details) => Cons(reason, details) },
             Cons(reason, details) => Cons(reason, details),
         },
+        Until(_, _, _, _, _, _) => [0, 7, 0],
     }
 }
 
@@ -2305,6 +2312,7 @@ fn StructuredRegion::names_after(self region: StructuredRegion, names: Nat) → 
         Lend(_, _, _, _) => names,
         Call(_, _, _, _) => names,
         Loop(_, _, _, _, body, _, _, _, _) => body.names_after(Succ(Succ(Succ(Succ(names))))),
+        Until(_, _, body, _, _, _) => body.names_after(Succ(Succ(names))),
     }
 }
 

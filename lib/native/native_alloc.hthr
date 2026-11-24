@@ -335,6 +335,7 @@ fn StructuredRegion::touches(self region: StructuredRegion) → List<Nat> {
         Lend(views, _, _, result) => nodes_writes(views_nodes(views)) ++ [result],
         Call(_, _, result, also) => Cons(result, also),
         Loop(_, _, parameters, count, body, _, _, outputs, exhausted) => Cons(count, Cons(exhausted, parameters ++ (outputs ++ body.touches()))),
+        Until(_, parameters, body, _, _, outputs) => parameters ++ (outputs ++ body.touches()),
     }
 }
 
@@ -351,6 +352,7 @@ fn StructuredRegion::named(self region: StructuredRegion) → List<Nat> {
             nodes_words(loop_entry(bound, count, inputs, parameters)) ++ (nodes_words(loop_zero(count, exhausted)) ++
             (nodes_words(moves(parameters, next)) ++ (nodes_words(loop_stop(exhausted)) ++ (nodes_words(loop_down(count, exhausted)) ++
             (nodes_words(moves(outputs, parameters)) ++ Cons(exit, body.named())))))),
+        Until(inputs, parameters, body, exit, next, outputs) => Cons(exit, inputs ++ (parameters ++ (next ++ (outputs ++ body.named())))),
     }
 }
 
@@ -395,6 +397,9 @@ fn Homes::region_checked(self homes: Homes, region: StructuredRegion, out: List<
             homes.leaf_checked(loop_zero(count, exhausted), Cons(exhausted, b.union(done))).and_then(λ head =>
             homes.closed(head, set, loop_entry(bound, count, inputs, parameters))))))))
         },
+        // An unbounded loop has no code yet (docs/language/loop-combinator-design.md
+        // §6.9): checked as a call, its inputs read and its outputs written.
+        Until(inputs, _, _, _, _, outputs) => Some(inputs.union(out.minus(outputs))),
     }
 }
 
@@ -535,6 +540,7 @@ fn Homes::region_needs(self homes: Homes, region: StructuredRegion, out: List<Na
             let had = match b.sets.nth(count) { None => set, Some(held) => held };
             Needs(nodes_live_in(loop_entry(bound, count, inputs, parameters), set), b.sets.put(count, had.union(head), []))
         },
+        Until(inputs, _, _, _, _, outputs) => Needs(inputs.union(out.minus(outputs)), sets),
     }
 }
 
@@ -749,6 +755,7 @@ fn Homes::region_graph(self homes: Homes, region: StructuredRegion, out: List<Na
             let head = leaf_graph(loop_zero(count, exhausted), Cons(exhausted, b.live.union(done.live)), b.of);
             leaf_graph(loop_entry(bound, count, inputs, parameters), set, head.of)
         },
+        Until(inputs, _, _, _, _, outputs) => Graph(inputs.union(out.minus(outputs)), of.all_written(outputs, out)),
     }
 }
 
@@ -813,6 +820,7 @@ fn StructuredRegion::weighed(self region: StructuredRegion, loop_weight, scale: 
                 body.weighed(loop_weight, inner, entered).bump(exit, inner));
             nodes_weights(loop_stop(exhausted) ++ moves(outputs, parameters), scale, passes)
         },
+        Until(inputs, _, _, _, _, outputs) => weights.bump_all(inputs ++ outputs, scale),
     }
 }
 
@@ -1292,6 +1300,10 @@ theorem StructuredRegion::checked_inside(self region: StructuredRegion, loops: L
                                             entry.leaf_checked_inside(loops, set, m, set_in, s0))
                                     }))))))
         },
+        Until(inputs, parameters, body, exit, next, outputs) => λ out so sw =>
+            inputs.inside_union(out.minus(outputs), m,
+                λ i x => sw(i, Inr(inputs.mem_append_l(parameters ++ (next ++ (outputs ++ body.named())), i, x))),
+                out.inside_minus(outputs, m, so)),
     }
 }
 

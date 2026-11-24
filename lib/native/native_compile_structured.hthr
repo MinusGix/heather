@@ -247,6 +247,13 @@ theorem StructuredRegion::meaning_frame(self region: StructuredRegion, call: Wri
                     absent_append_intro(x, outputs, [exhausted], p4.left, Bool::is_true_and_intro(x.differs(exhausted), True, known, trivial)));
             Env::settle_frame(word_ports(outputs) ++ [Port(exhausted, 1)], Env(env.words, after.buffers, env.args), after.values, x, fresh)
         },
+        Until(inputs, parameters, body, exit, next, outputs) => λ env x h => {
+            let after = Until(inputs, parameters, body, exit, next, outputs).run(call, env.valuation(), env.buffers);
+            let p3 = absent_append(x, parameters, outputs ++ body.touches(), h);
+            let p4 = absent_append(x, outputs, body.touches(), p3.right);
+            Env::settle_frame(word_ports(outputs), Env(env.words, after.buffers, env.args), after.values, x,
+                j(sym(word_port_ids(outputs)), λ l _ => absent(x, l).IsTrue(), p4.left))
+        },
     }
 }
 
@@ -297,6 +304,8 @@ fn StructuredRegion::Ok(self region: StructuredRegion) → Type {
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => body.Ok() ∧
             (LoopShape(inputs, parameters, count, body, exit, next, outputs, exhausted) ∧
             Exists<Scope>(λ bs => (body.scoped(Scope::pass(parameters, count)) = Some(bs)) ∧ (bs.bit(exit) && bs.all_defined(next)).IsTrue())),
+        // Not taken yet (docs/language/loop-combinator-design.md §6.9).
+        Until(_, _, _, _, _, _) => False,
     }
 }
 
@@ -323,6 +332,7 @@ theorem StructuredRegion::ok_of_scoped(self region: StructuredRegion): (s, t: Sc
             let shape = StructuredRegion::loop_shaped(inputs, bound, parameters, count, body, exit, next, outputs, exhausted, parts.right);
             ⟨body.ok_of_scoped(Scope::pass(parameters, count), bs, got), ⟨shape, Exists(bs, ⟨got, Bool::is_true_of_eq(bits)⟩)⟩⟩
         },
+        Until(_, _, _, _, _, _) => λ s t none => absurd(none),
     }
 }
 
@@ -480,6 +490,7 @@ theorem StructuredRegion::within_code(self region: StructuredRegion, layout: Lay
             calc { k.x.prog <= xl := Exists(2, refl), <= c.prog := Prog::within_trans(xl.within_computes(layout, set, loop_down(count, exhausted), k.x.names, k.d, k.d_is),
             calc { k.d.prog <= dj := Exists(2, refl), <= c.prog := dj.within_computes(layout, out, moves(outputs, parameters), k.d.names, c, k.c_is), }), })))), }))))
         },
+        Until(_, _, _, _, _, _) => λ p out names c none => absurd(none),
     }
 }
 
@@ -1248,5 +1259,6 @@ theorem StructuredRegion::code_runs(self region: StructuredRegion, t: Target, ca
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ ok p out names c emitted within live checked =>
             t.loop_goes(call, inputs, bound, parameters, count, body, exit, next, outputs, exhausted, p, out, names, c, live, emitted, within, checked, ok,
                 body.code_runs(t, call, fns, ok.left)),
+        Until(_, _, _, _, _, _) => λ never p out names c emitted within live checked => false_elim(never),
     }
 }

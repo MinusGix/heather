@@ -72,6 +72,7 @@ fn StructuredRegion::stored(self region: StructuredRegion, marks: List<Bool>) â†
         Lend(views, _, _, _) => views_stored(views, marks),
         Call(_, _, _, _) => marks,
         Loop(_, _, _, _, body, _, _, _, _) => body.stored(marks),
+        Until(_, _, body, _, _, _) => body.stored(marks),
     }
 }
 
@@ -86,6 +87,7 @@ fn StructuredRegion::passes_on(self region: StructuredRegion, callees: List<Nat>
         Lend(_, _, _, _) => callees,
         Call(callee, _, _, _) => Cons(callee, callees),
         Loop(_, _, _, _, body, _, _, _, _) => body.passes_on(callees),
+        Until(_, _, body, _, _, _) => body.passes_on(callees),
     }
 }
 

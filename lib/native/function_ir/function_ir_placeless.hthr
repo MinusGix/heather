@@ -537,6 +537,7 @@ fn StructuredRegion::taints(self region: StructuredRegion, hidden: List<Nat>) �
         Lend(views, _, _, _) => views_taints(views, hidden),
         Call(_, _, _, _) => hidden,
         Loop(inputs, _, _, _, _, _, _, outputs, _) => taint_onto(outputs, mask_of(inputs, hidden), hidden),
+        Until(inputs, _, _, _, _, outputs) => taint_onto(outputs, mask_of(inputs, hidden), hidden),
     }
 }
 
@@ -560,6 +561,9 @@ fn StructuredRegion::placeless(self region: StructuredRegion, lent: Nat → Nat,
             && (body.placeless(lent, taint_onto(parameters, mask_of(inputs, hidden), []))
             && (absent(exit, body.taints(taint_onto(parameters, mask_of(inputs, hidden), [])))
             && mask_covers(mask_of(next, body.taints(taint_onto(parameters, mask_of(inputs, hidden), []))), mask_of(inputs, hidden)))),
+        // Not checked for an unbounded loop yet: a function lent a buffer
+        // keeps its loops counted (docs/language/loop-combinator-design.md §6.9).
+        Until(_, _, _, _, _, _) => False,
     }
 }
 
@@ -665,6 +669,7 @@ theorem StructuredRegion::eval_apart(self region: StructuredRegion, buffers: Buf
                             loop_eval(step, parameters, count, exit, next, m, words_of(other, inputs)).state), exhausted,
                         bit_value(loop_eval(step, parameters, count, exit, next, m, words_of(other, inputs)).exhausted))), core)
         },
+        Until(_, _, _, _, _, _) => λ hidden ok values other apart => false_elim(ok),
     }
 }
 
@@ -1088,6 +1093,7 @@ theorem StructuredRegion::run_apart(self region: StructuredRegion, call: Writers
             j(sym(passes), λ m _ => State::Apart(taint_onto(outputs, mask, hidden), out(values, end),
                 out(other, loop_run(step, parameters, count, exit, next, m, words_of(other, inputs), buffers))), core)
         },
+        Until(_, _, _, _, _, _) => λ hidden ok values other buffers apart => false_elim(ok),
     }
 }
 

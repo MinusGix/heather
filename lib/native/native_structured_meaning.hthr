@@ -57,6 +57,7 @@ fn StructuredRegion::meaning(self region: StructuredRegion, call: Writers(), env
         Call(callee, arguments, result, also) => env.compute(call, Call(callee, arguments, result, also)),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
             env.compute(call, Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted)),
+        Until(inputs, parameters, body, exit, next, outputs) => env.compute(call, Until(inputs, parameters, body, exit, next, outputs)),
     }
 }
 
@@ -529,6 +530,9 @@ theorem StructuredRegion::run_frame(self region: StructuredRegion, call: Writers
                     x.differs_ne(exhausted, ex.left)),
                 Valuation::bind_frame(values, outputs, end.end.state, w, x, j(word_port_ids(outputs), λ l _ => absent(x, l).IsTrue(), parts.left)))
         },
+        Until(inputs, parameters, body, exit, next, outputs) => λ values buffers w x h =>
+            Valuation::bind_frame(values, outputs, until_run(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held), parameters, exit,
+                next, until_passes(), words_of(values, inputs), buffers).end.state, w, x, j(word_port_ids(outputs), λ l _ => absent(x, l).IsTrue(), h)),
     }
 }
 
@@ -998,6 +1002,7 @@ theorem StructuredRegion::faithful(self region: StructuredRegion, call: Writers(
                     ports, m0, env, s.looped(outputs, exhausted)), settles0)
             }
         },
+        Until(_, _, _, _, _, _) => λ s t none => absurd(none),
     }
 }
 

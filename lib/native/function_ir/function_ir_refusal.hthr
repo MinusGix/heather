@@ -165,6 +165,9 @@ fn StructuredRegion::shown(self region: StructuredRegion) → String {
         Loop(inputs, limit, parameters, count, body, exit, next, outputs, exhausted) =>
             "loop (state " ++ refusal_numbers(parameters) ++ " from " ++ refusal_numbers(inputs) ++ "; next " ++ refusal_numbers(next)
                 ++ "; count " ++ refusal_number(count) ++ "; exit " ++ refusal_number(exit) ++ ") { " ++ body.shown() ++ "} ",
+        Until(inputs, parameters, body, exit, next, outputs) =>
+            "until (state " ++ refusal_numbers(parameters) ++ " from " ++ refusal_numbers(inputs) ++ "; next " ++ refusal_numbers(next)
+                ++ "; exit " ++ refusal_number(exit) ++ ") { " ++ body.shown() ++ "} ",
     }
 }
 
@@ -326,6 +329,7 @@ fn StructuredRegion::refusal(self region: StructuredRegion, saves: Nat, slots: N
                     },
                 },
             },
+        Until(_, _, _, _, _, _) => "an unbounded loop, which has no code yet",
     }
 }
 

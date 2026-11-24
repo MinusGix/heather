@@ -147,6 +147,7 @@ fn StructuredRegion::loop_shape(self region: StructuredRegion) → Bool {
         Conditional(_, _, _, _, _, _) => False,
         Lend(_, _, _, _) => False,
         Call(_, _, _, _) => False,
+        Until(_, _, _, _, _, _) => False,
     }
 }
 
@@ -188,6 +189,8 @@ fn StructuredRegion::scoped(self region: StructuredRegion, s: Scope) → Option<
                     True => Some(s.looped(outputs, exhausted)),
                 }),
             },
+        // An unbounded loop has no code yet (docs/language/loop-combinator-design.md §6.9).
+        Until(_, _, _, _, _, _) => None,
     }
 }
 

@@ -400,6 +400,7 @@ fn StructuredRegion::missing(self region: StructuredRegion, names: List<RuleEntr
             shared(body.missing(names, seen.carried(inputs, parameters, next, parameters, Seen::start(seen.indexes, seen.joins.ends, seen.tables).wanting(seen.wants))), λ inner =>
                 Missing(inner.said, seen.carried(inputs, parameters, next, outputs, seen.wanting(inner.seen.wants)).forgetting())),
         Lend(_, _, _, _) => Missing(λ after => after, seen.forgetting()),
+        Until(_, _, _, _, _, _) => Missing(λ after => after, seen.forgetting()),
     }
 }
 

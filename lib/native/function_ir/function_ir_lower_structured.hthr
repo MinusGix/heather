@@ -150,6 +150,8 @@ fn StructuredRegion::emit(self region: StructuredRegion, prog: Prog, file: File,
         Call(_, _, _, _) => None,
         // So does a loop, emitted with them: function_ir_lower_calls.
         Loop(_, _, _, _, _, _, _, _, _) => None,
+        // An unbounded loop has no code yet (docs/language/loop-combinator-design.md §6.9).
+        Until(_, _, _, _, _, _) => None,
     }
 }
 
@@ -387,6 +389,7 @@ theorem StructuredRegion::emit_emits<M>(self region: StructuredRegion, site: Sit
         Lend(_, _, _, _) => λ prog file placement names => trivial,
         Call(_, _, _, _) => λ prog file placement names => trivial,
         Loop(_, _, _, _, _, _, _, _, _) => λ prog file placement names => trivial,
+        Until(_, _, _, _, _, _) => λ prog file placement names => trivial,
     }
 }
 
@@ -551,6 +554,7 @@ fn StructuredRegion::reads(self region: StructuredRegion) → List<Nat> {
         Lend(views, _, arguments, _) => reads_of(views_nodes(views), views_homes(views) ++ arguments),
         Call(_, arguments, _, _) => arguments,
         Loop(inputs, bound, _, _, _, _, _, _, _) => Cons(bound, inputs),
+        Until(inputs, _, _, _, _, _) => inputs,
     }
 }
 
@@ -564,6 +568,7 @@ fn StructuredRegion::rows_write(self region: StructuredRegion) → List<Gpr> {
         Lend(views, _, _, _) => rows_write_in(views_nodes(views)),
         Call(_, _, _, _) => [],
         Loop(_, _, _, _, body, _, _, _, _) => body.rows_write(),
+        Until(_, _, body, _, _, _) => body.rows_write(),
     }
 }
 
@@ -576,6 +581,7 @@ fn StructuredRegion::calls(self region: StructuredRegion) → Bool {
         Lend(_, _, _, _) => True,
         Call(_, _, _, _) => True,
         Loop(_, _, _, _, body, _, _, _, _) => body.calls(),
+        Until(_, _, body, _, _, _) => body.calls(),
     }
 }
 
@@ -593,6 +599,7 @@ fn StructuredRegion::read_past_call(self region: StructuredRegion) → List<Nat>
         Lend(_, _, _, _) => [],
         Call(_, _, _, _) => [],
         Loop(_, _, _, _, _, _, _, _, _) => [],
+        Until(_, _, _, _, _, _) => [],
     }
 }
 
@@ -665,6 +672,7 @@ fn StructuredRegion::ends_comparing(self region: StructuredRegion, id: Nat) → 
         Lend(_, _, _, _) => False,
         Call(_, _, _, _) => False,
         Loop(_, _, _, _, _, _, _, _, _) => False,
+        Until(_, _, _, _, _, _) => False,
     }
 }
 
@@ -697,6 +705,7 @@ fn StructuredRegion::register_reads(self region: StructuredRegion, folds: Reads(
         Call(_, arguments, _, _) => arguments,
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
             Cons(bound, inputs ++ (tested_exit(body, exit) ++ (next ++ body.register_reads(folds)))),
+        Until(inputs, _, body, exit, next, _) => inputs ++ (tested_exit(body, exit) ++ (next ++ body.register_reads(folds))),
     }
 }
 
@@ -724,6 +733,10 @@ fn StructuredRegion::conditions(self region: StructuredRegion) → List<Nat> {
         Lend(_, _, _, _) => [],
         Call(_, _, _, _) => [],
         Loop(_, _, _, _, body, exit, _, _, _) => match body.ends_comparing(exit) {
+            True => Cons(exit, body.conditions()),
+            False => body.conditions(),
+        },
+        Until(_, _, body, exit, _, _) => match body.ends_comparing(exit) {
             True => Cons(exit, body.conditions()),
             False => body.conditions(),
         },
@@ -800,6 +813,7 @@ fn StructuredRegion::folds_in(self region: StructuredRegion, reads, conditions: 
         Lend(_, _, _, _) => [],
         Call(_, _, _, _) => [],
         Loop(_, _, _, _, body, _, _, _, _) => body.folds_in(reads, conditions),
+        Until(_, _, body, _, _, _) => body.folds_in(reads, conditions),
     }
 }
 
@@ -812,6 +826,7 @@ fn StructuredRegion::folded_rights(self region: StructuredRegion, reads, conditi
         Lend(_, _, _, _) => [],
         Call(_, _, _, _) => [],
         Loop(_, _, _, _, body, _, _, _, _) => body.folded_rights(reads, conditions),
+        Until(_, _, body, _, _, _) => body.folded_rights(reads, conditions),
     }
 }
 
@@ -1217,6 +1232,8 @@ fn StructuredRegion::plan_in(self region: StructuredRegion, file: File, after: R
                         Planned(into_all(state) ++ Cons(Into(counter), Cons(Into(flag), pass.placement)), out)
                     }))))
         },
+        // Not emitted yet (`emit` refuses it), so nothing is planned.
+        Until(_, _, _, _, _, _) => Planned([], File::empty()),
     }
 }
 

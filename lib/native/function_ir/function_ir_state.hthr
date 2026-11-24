@@ -408,6 +408,52 @@ theorem loop_run_empty(run_step: Valuation() → Buffers() → State, step: Valu
     }
 }
 
+// `until_eval` with the buffers carried from pass to pass.
+fn until_run(step: Valuation() → Buffers() → State, parameters: List<Nat>, exit: Nat, next: List<Nat>, fuel: Nat) →
+    List<BitVec(64)> → Buffers() → LoopState {
+    match fuel {
+        Zero => λ state buffers => LoopState(LoopEnd(state, True), buffers),
+        Succ(rest) => λ state buffers => {
+            let after = step(until_valuation(parameters, state), buffers);
+            match after.values(1, exit).head_bit() {
+                False => until_run(step, parameters, exit, next, rest, words_of(after.values, next), after.buffers),
+                True => LoopState(LoopEnd(words_of(after.values, next), False), after.buffers),
+            }
+        },
+    }
+}
+
+theorem until_run_empty(run_step: Valuation() → Buffers() → State, step: Valuation() → Valuation(),
+    same: (v: Valuation()) → run_step(v, Nil) = State(step(v), Nil), parameters: List<Nat>, exit: Nat, next: List<Nat>,
+    fuel: Nat): (state: List<BitVec(64)>) →
+    until_run(run_step, parameters, exit, next, fuel, state, Nil) = LoopState(until_eval(step, parameters, exit, next, fuel, state), Nil) {
+    match fuel {
+        Zero => λ state => refl,
+        Succ(rest) => λ state => {
+            let before = until_valuation(parameters, state);
+            let after = step(before);
+            let ends = match after(1, exit).head_bit() as λ b =>
+                    (match b as λ _ => LoopState {
+                        False => until_run(run_step, parameters, exit, next, rest, words_of(after, next), Nil),
+                        True => LoopState(LoopEnd(words_of(after, next), False), Nil),
+                    }) = LoopState(match b {
+                        False => until_eval(step, parameters, exit, next, rest, words_of(after, next)),
+                        True => LoopEnd(words_of(after, next), False),
+                    }, Nil) {
+                False => until_run_empty(run_step, step, same, parameters, exit, next, rest, words_of(after, next)),
+                True => refl,
+            };
+            j(sym(same(before)), λ s _ => (match s.values(1, exit).head_bit() as λ _ => LoopState {
+                    False => until_run(run_step, parameters, exit, next, rest, words_of(s.values, next), s.buffers),
+                    True => LoopState(LoopEnd(words_of(s.values, next), False), s.buffers),
+                }) = LoopState(match after(1, exit).head_bit() {
+                    False => until_eval(step, parameters, exit, next, rest, words_of(after, next)),
+                    True => LoopEnd(words_of(after, next), False),
+                }, Nil), ends)
+        },
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Structured regions
 
@@ -472,6 +518,11 @@ fn StructuredRegion::run(self region: StructuredRegion, call: Writers(), values:
                 values(64, bound).toNat(), words_of(values, inputs), buffers);
             State(Valuation::set(Valuation::bind(values, outputs, end.end.state), exhausted, bit_value(end.end.exhausted)), end.buffers)
         },
+        Until(inputs, parameters, body, exit, next, outputs) => {
+            let end = until_run(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held), parameters, exit, next,
+                until_passes(), words_of(values, inputs), buffers);
+            State(Valuation::bind(values, outputs, end.end.state), end.buffers)
+        },
     }
 }
 
@@ -497,6 +548,23 @@ fn loop_run_defined(step: Valuation() → Buffers() → State, defined: Valuatio
             let after = step(before, buffers);
             defined(before, buffers) && match after.values(1, exit).head_bit() {
                 False => loop_run_defined(step, defined, parameters, count, exit, next, rest, words_of(after.values, next), after.buffers),
+                True => True,
+            }
+        },
+    }
+}
+
+// Whether the loop leaves within its fuel, every pass defined: running out
+// is not (`until_defined`).
+fn until_run_defined(step: Valuation() → Buffers() → State, defined: Valuation() → Buffers() → Bool, parameters: List<Nat>,
+    exit: Nat, next: List<Nat>, fuel: Nat) → List<BitVec(64)> → Buffers() → Bool {
+    match fuel {
+        Zero => λ state buffers => False,
+        Succ(rest) => λ state buffers => {
+            let before = until_valuation(parameters, state);
+            let after = step(before, buffers);
+            defined(before, buffers) && match after.values(1, exit).head_bit() {
+                False => until_run_defined(step, defined, parameters, exit, next, rest, words_of(after.values, next), after.buffers),
                 True => True,
             }
         },
@@ -533,5 +601,9 @@ fn StructuredRegion::run_defined(self region: StructuredRegion, call: Writers(),
             loop_run_defined(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held),
                 λ (pass: Valuation()) (held: Buffers()) => body.run_defined(call, defines, pass, held), parameters, count, exit, next,
                 values(64, bound).toNat(), words_of(values, inputs), buffers),
+        Until(inputs, parameters, body, exit, next, _) =>
+            until_run_defined(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held),
+                λ (pass: Valuation()) (held: Buffers()) => body.run_defined(call, defines, pass, held), parameters, exit, next,
+                until_passes(), words_of(values, inputs), buffers),
     }
 }
