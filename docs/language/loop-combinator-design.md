@@ -876,6 +876,12 @@ wrong compiler.
 3. **One loop node in the shared term language** and its relation
    (§6) over `Function::run`; `runtime fn` reflection reads `Loop(…).run`;
    delete `Tm::lower_tail`, `Fun::Guarded`, `rt_loop`'s two loop theorems.
+   *Status (2026-11-24):* 3a–3f built; 3g's node, its lowering and
+   soundness, its pin lemma, and written tail recursion over 64-bit words
+   on it are built (§6.8). Left: `while` onto the node (a record state),
+   the node's pin at words that are not 64-bit, then 3h. The span and
+   laid-record recursions (the ledger's tail calls) need the node in `FTm`,
+   which is round 4.
 4. **The other four loop files onto it** (`rt_file_loop`, `rt_held_loop`,
    `rt_bytes_loop`, and `rt_io_loop` via `Io::iterate`), with the shared
    `FTm`/`ETm` core of the dogfooding plan §5.3b; delete their companions.
