@@ -1349,3 +1349,70 @@ theorem WordMap::get_remove_other(m: WordMap, inv: WordMapInv(m), k, i: u64, ne:
     trans(WordMap::get_is(WordMap::remove(m, k).after, r.inv, i),
         trans(cong_fn(λ (o: Option<u64>) => o.unwrap_or(0), trans(r.get(i), m.abs().assoc_get_remove_other(k, i, ne))), sym(WordMap::get_is(m, inv, i))))
 }
+
+// ---------------------------------------------------------------------------
+// The empty table.
+
+fn WordMap::empty() → WordMap { WordMap(0, [0, 0, 0, 0], [0, 0, 0, 0]) }
+
+theorem WordMap::empty_key(s: Nat, inside: s < 4): WordMap::empty().key(s) = 0 {
+    (match s as λ u => u < 4 → WordMap::empty().key(u) = 0 {
+        Zero => λ _ => refl,
+        Succ(Zero) => λ _ => refl,
+        Succ(Succ(Zero)) => λ _ => refl,
+        Succ(Succ(Succ(Zero))) => λ _ => refl,
+        Succ(Succ(Succ(Succ(q)))) => λ (big: q + 4 < 4) => false_elim(WordMap::past_slots(q, big)),
+    })(inside)
+}
+
+theorem WordMap::empty_inv(): WordMapInv(WordMap::empty()) {
+    WordMapInv(λ s t x s4 t4 a xnz before => false_elim(xnz(trans(sym(a), WordMap::empty_key(s, s4)))),
+        λ s t s4 t4 occupied same => false_elim(occupied(WordMap::empty_key(s, s4))),
+        refl, omega)
+}
+
+theorem WordMap::empty_abs(): WordMap::empty().abs() = Nil { refl }
+
+// ---------------------------------------------------------------------------
+// Negative controls.
+
+// A probe that skips the home slot is not the lookup: at the table holding
+// key 9 (home slot 2) it misses.
+fn WordMap::get_skipping(self m: WordMap, k: u64) → u64 { WordMap::find_at(m, k, (word_map_home(k) + 1).band(3), 4) }
+
+theorem WordMap::nine_not_zero(h: BitVec::ofNat(9, n := 64) = BitVec::ofNat(0)): False { bv_omega }
+
+theorem WordMap::four_not_zero(h: BitVec::ofNat(4, n := 64) = BitVec::ofNat(0)): False { bv_omega }
+
+theorem WordMap::zero_not_seven(h: BitVec::ofNat(0, n := 64) = BitVec::ofNat(7)): False { bv_omega }
+
+theorem WordMap::skipping_home_is_wrong(): ¬((m: WordMap) → WordMapInv(m) → (k: u64) → m.get_skipping(k) = m.get(k)) {
+    λ claim => {
+        let e = WordMap::empty();
+        let t = WordMap::insert(e, 9, 7).after;
+        let nz: (¬(BitVec::ofNat(9, n := 64) = 0)) = λ h => WordMap::nine_not_zero(h);
+        let put: (WordMap::insert(e, 9, 7).value = 1) = refl;
+        let ok: (¬(WordMap::insert(e, 9, 7).value = 2)) = λ two => WordMap::one_not_two(trans(sym(put), two));
+        let found: (t.get(9) = 7) = WordMap::get_insert_same(e, WordMap::empty_inv(), 9, 7, nz, ok);
+        let missed: (t.get_skipping(9) = 0) = refl;
+        WordMap::zero_not_seven(trans(sym(missed), trans(claim(t, WordMap::insert_inv(e, WordMap::empty_inv(), 9, 7, nz), 9), found)))
+    }
+}
+
+// Why the invariant keeps a slot empty: at a full table, backward shifting
+// runs out of slots to look at before it meets an empty one. Here key 2
+// (home 0) is removed from slot 0, keys 1 (home 2, wrapped round to slot 1)
+// and 4 (home 1) move up, and the hole is never cleared: key 4 is left
+// stored twice.
+fn WordMap::full_table() → WordMap { WordMap(4, [2, 1, 4, 3], [10, 20, 30, 40]) }
+
+theorem WordMap::shift_at_full_is_wrong(): ¬WordMapInv(WordMap::remove(WordMap::full_table(), 2).after) {
+    λ inv => {
+        let n = WordMap::remove(WordMap::full_table(), 2).after;
+        let one: (n.key(1) = 4) = refl;
+        let two: (n.key(2) = 4) = refl;
+        let four: (¬(BitVec::ofNat(4, n := 64) = 0)) = λ h => WordMap::four_not_zero(h);
+        let same: (1 = 2) = inv.distinct(1, 2, omega, omega, λ z => four(trans(sym(one), z)), trans(one, sym(two)));
+        absurd(same)
+    }
+}
