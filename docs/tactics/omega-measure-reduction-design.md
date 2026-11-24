@@ -1036,6 +1036,15 @@ Two things changed:
   again), and the word map's lemmas over five remainders got several times
   slower. It was withdrawn.
 
+Measured with `scripts/perf ab` on `word_map_laws.hthr` against the tree
+before this round (cold, width 1, the module's arithmetic rewritten with
+it): the proofs whose `omega` sits in a deep context gated in a fraction of
+their time (`shift_move`, `shift_skip`), the module's gate and total fell
+by a quarter or so, and local substitution nodes by a tenth over the whole
+check, imports included; the distance lemmas themselves did not move. A
+distance step moved inline (`step_before_back` into `adds_next`) cost more
+than the lemma and its call: the context still widens the certificate.
+
 What the context still changes besides width: the subtraction split
 (§16) takes the facts newest first, up to `SUB_SPLIT_LIMIT`, whatever atoms
 they share with the goal. Two of the word map's one-off distance steps,

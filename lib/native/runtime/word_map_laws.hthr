@@ -27,10 +27,10 @@
 // `WordMap::dist(a, b) = (b + 4 - a) % 4`, which `omega` reads as its body.
 // Each probe is proved by applying its function's `induct` principle to a
 // motive with one stated lemma per case (the principle's case binders carry
-// no test names, so `induct`'s arms cannot cite them). A distance step used
-// in several places is a small lemma over bare numbers; one used once is
-// `omega` where it is needed (its proof is lifted into a lemma of its own at
-// the gate, docs/tactics/omega-measure-reduction-design.md §27).
+// no test names, so `induct`'s arms cannot cite them). A distance step is a
+// small lemma over bare numbers: inline, `omega`'s certificate is as wide as
+// every distance in scope, and its subtraction splits may go to unrelated
+// ones (docs/tactics/omega-measure-reduction-design.md §27).
 import logic;
 import bool;
 import nat;
