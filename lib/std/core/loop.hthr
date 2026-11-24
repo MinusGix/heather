@@ -305,18 +305,19 @@ fn Loop::rounds<A, B>(fuel: Nat, F: (A → B) → A → B, stuck: A → B, a: A)
 // A recursion given fuel answers as the function it unfolds: where each
 // round, its recursion answered by anything that agrees with `f` below the
 // measure, is `f` (what a function's own `f::ext` and `f::irrel` give), the
-// run with `n` rounds is `f` wherever the measure is at most `n`. Past its
+// run with `n` rounds is `f` wherever the measure is at most `n`, over the
+// states `ok` holds of (a function's words: as many as its parameters). Past its
 // rounds it runs one more, its recursion answered by `junk`, which a state
 // at measure 0 never asks. The fuel side of `fixpoint_unique`: how a
 // function defined by recursion is pinned to a loop node's meaning
 // (docs/language/loop-combinator-design.md §6.7).
-theorem Loop::rounds_agree<A, B>(m: A → Nat, f: A → B, P: (A → B) → A → B, junk: A → B,
-    pass: (a: A) → (k: A → B) → ((b: A) → m(b) < m(a) → k(b) = f(b)) → P(k, a) = f(a), n: Nat):
-    (a: A) → m(a) <= n → Loop::rounds(n, P, λ (x: A) => P(junk, x), a) = f(a) {
+theorem Loop::rounds_agree<A, B>(m: A → Nat, ok: A → Type, f: A → B, P: (A → B) → A → B, junk: A → B,
+    pass: (a: A) → ok(a) → (k: A → B) → ((b: A) → ok(b) → m(b) < m(a) → k(b) = f(b)) → P(k, a) = f(a), n: Nat):
+    (a: A) → ok(a) → m(a) <= n → Loop::rounds(n, P, λ (x: A) => P(junk, x), a) = f(a) {
     match n {
-        Zero => λ a h => pass(a, junk, λ b lt => false_elim(Nat::not_succ_le_zero(m(b), Nat::le_trans(m(b) + 1, m(a), 0, lt, h)))),
-        Succ(k) => λ a h => pass(a, λ (b: A) => Loop::rounds(k, P, λ (x: A) => P(junk, x), b), λ b lt =>
-            Loop::rounds_agree(m, f, P, junk, pass, k, b, m(b).lt_succ_iff_le(k).mp(Nat::lt_of_lt_of_le(m(b), m(a), k + 1, lt, h)))),
+        Zero => λ a oa h => pass(a, oa, junk, λ b _ lt => false_elim(Nat::not_succ_le_zero(m(b), Nat::le_trans(m(b) + 1, m(a), 0, lt, h)))),
+        Succ(k) => λ a oa h => pass(a, oa, λ (b: A) => Loop::rounds(k, P, λ (x: A) => P(junk, x), b), λ b ob lt =>
+            Loop::rounds_agree(m, ok, f, P, junk, pass, k, b, ob, m(b).lt_succ_iff_le(k).mp(Nat::lt_of_lt_of_le(m(b), m(a), k + 1, lt, h)))),
     }
 }
 

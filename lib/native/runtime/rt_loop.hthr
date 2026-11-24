@@ -1285,6 +1285,32 @@ fn Tm::calls_after(self t: Tm) → Tm {
 // A function as its own callee.
 fn Fun::own_callee(self f: Fun) → Fun { Fun(f.params, f.result, f.body.calls_after(), f.lent) }
 
+// A term with each call of the function itself in tail position (entry 0)
+// going round a loop at the result's code `res` instead: a measured
+// recursion's body as a loop node's pass (docs/language/loop-combinator-design.md
+// §6.8). A call of itself anywhere else stays one, which the judgment
+// refuses.
+fn Tm::again_of(self t: Tm, res: Ty) → Tm {
+    match t {
+        Let(e, body) => Let(e, body.again_of(res)),
+        If(c, yes, no) => If(c, yes.again_of(res), no.again_of(res)),
+        IfEq(c, yes, no) => IfEq(c, yes.again_of(res), no.again_of(res)),
+        Call(f, args) => match f { Zero => Again(res, args), Succ(_) => Call(f, args) },
+        _ => t,
+    }
+}
+
+// The variables of `n` parameters, the first first: a function's own
+// arguments as a loop's state.
+fn Tm::params_vars(n: Nat) → List<Nat> { List::range(n).rev() }
+
+// Whether every code is a 64-bit word: what the node's pin is built for
+// today (the casts at the function's boundary are then the word itself).
+fn Ty::all_word64(ts: List<Ty>) → Bool {
+    match ts { Nil => True, Cons(t, rest) => t.same(Word(64)) && Ty::all_word64(rest) }
+}
+
+
 fn Fun::shape_words(p: Ty, rest: List<Ty>, body: Tm) → RtShape {
     match p {
         Count => match rest {
@@ -1319,6 +1345,26 @@ fn Fun::shape(self f: Fun) → RtShape {
         Word(_) => f.shape_params(),
         Named(_) => f.shape_params(),
         _ => Plain,
+    }
+}
+
+// A measured recursion lent nothing, of 64-bit words, that calls itself
+// only last, reflected as one loop node over its parameters: its body once,
+// a call of itself a going round. Any other function is as it was (one
+// that calls itself elsewhere is its own callee, `Fun::own_callee`).
+fn Fun::as_node(self f: Fun) → Fun {
+    match f.shape() {
+        Measured(ks, _, _, body) => match ks {
+            Nil => match f.lent {
+                Zero => match Ty::all_word64(Cons(f.result, f.params)) && !body.calls_self_inside() {
+                    True => Fun(f.params, f.result, Loop(Tm::params_vars(f.params.len()), body.again_of(f.result)), 0),
+                    False => f,
+                },
+                Succ(_) => f,
+            },
+            Cons(_, _) => f,
+        },
+        _ => f,
     }
 }
 

@@ -768,6 +768,43 @@ fn Setup::compile_measured<F>(s: Setup, ks: List<Ty>, w0: Ty, wrest: List<Ty>, r
         Setup::checked_fits(s, Setup::measured_fun(ks, w0, wrest, res, body, lent), w, ok))
 }
 
+// ---------------------------------------------------------------------------
+// A measured recursion written as a loop node
+// (docs/language/loop-combinator-design.md §6.8): its reflection is the node
+// over its words (`Fun::as_node`), a plain function, and its pin is its
+// unfolding read through the node's rounds (`loop::Loop::rounds_agree`).
+
+// What the function owes at a world: the node's pass, its going round
+// answered by anything that agrees with the function below the measure, is
+// the function. `Fun::Guarded`'s statement, for the node; the generator
+// proves it from the function's own `f::ext` and `f::irrel`.
+fn Setup::NodePass(ws: List<Ty>, body: Tm, w: World, h: Ty::Arrows(w.tys, ws, body.ty(w, Ty::bind_onto(ws, Nil))), m: List<BitVec(64)> → Nat) → Type {
+    Ty::ForWords(ws, λ (xs: List<BitVec(64)>) => (k: List<BitVec(64)> → body.ty(w, Ty::bind_onto(ws, Nil)).sem(w.tys)) →
+        ((ys: List<BitVec(64)>) → ys.len() = ws.len() → m(ys) < m(xs) → k(ys) = Ty::apply(w.tys, ws, body.ty(w, Ty::bind_onto(ws, Nil)), h, ys)) →
+        Tm::loop_body(w, ws, body, k, xs) = Ty::apply(w.tys, ws, body.ty(w, Ty::bind_onto(ws, Nil)), h, xs))
+}
+
+// The empty environment at a world: what a function's parameters are
+// bound onto, spelled with its world so that its table is known.
+fn Setup::no_env(w: World) → Env(w.tys, []) { trivial }
+
+// The node's rounds are the function, at the words of its arguments.
+theorem Setup::node_means(ws: List<Ty>, body: Tm, w: World, h: Ty::Arrows(w.tys, ws, body.ty(w, Ty::bind_onto(ws, Nil))), m: List<BitVec(64)> → Nat,
+    pass: Setup::NodePass(ws, body, w, h, m), xs: List<BitVec(64)>, len: xs.len() = ws.len(), within: m(xs) <= Tm::passes()):
+    loop::Loop::rounds(Tm::passes(), λ (k: List<BitVec(64)> → body.ty(w, Ty::bind_onto(ws, Nil)).sem(w.tys)) (ys: List<BitVec(64)>) => Tm::loop_body(w, ws, body, k, ys),
+        λ (ys: List<BitVec(64)>) => Tm::loop_body(w, ws, body,
+            λ (zs: List<BitVec(64)>) => Ty::cast(w.tys, Word(64), body.ty(w, Ty::bind_onto(ws, Nil)), zs.head_or(BitVec::zero())), ys), xs) =
+        Ty::apply(w.tys, ws, body.ty(w, Ty::bind_onto(ws, Nil)), h, xs) {
+    let res = body.ty(w, Ty::bind_onto(ws, Nil));
+    let Q = λ (ys: List<BitVec(64)>) => (k: List<BitVec(64)> → res.sem(w.tys)) →
+        ((zs: List<BitVec(64)>) → zs.len() = ws.len() → m(zs) < m(ys) → k(zs) = Ty::apply(w.tys, ws, res, h, zs)) →
+        Tm::loop_body(w, ws, body, k, ys) = Ty::apply(w.tys, ws, res, h, ys);
+    loop::Loop::rounds_agree(m, λ (ys: List<BitVec(64)>) => ys.len() = ws.len(), λ (ys: List<BitVec(64)>) => Ty::apply(w.tys, ws, res, h, ys),
+        λ (k: List<BitVec(64)> → res.sem(w.tys)) (ys: List<BitVec(64)>) => Tm::loop_body(w, ws, body, k, ys),
+        λ (zs: List<BitVec(64)>) => Ty::cast(w.tys, Word(64), res, zs.head_or(BitVec::zero())),
+        λ a oa k agree => Ty::for_words_at(ws, Q, pass, a, oa, k, agree), Tm::passes(), xs, len, within)
+}
+
 // What else the generator cites for a measured instance, named here for the
 // same reason.
 
@@ -2803,6 +2840,107 @@ fn runtime_own_instance(name: String, f: GlobalRef, rfun: Fun, setup, world_e, t
     pure(ap(compile, [Blank, setup, rt_e, world_e, table_e, Global(f), typed, pinned, verdict, ap(rfl, [Blank, runtime_at(shapes, 0)])]))
 }
 
+// A measured recursion reflected as a loop node (`Fun::as_node`): its pin
+// is its unfolding read through the node's rounds. At each file `b` and
+// words `x…`, the meaning is the node's rounds (`Tm::sem_in_loop`), which
+// are the function (`Setup::node_means`), from the node's pass
+// (`Setup::NodePass`) proved from the function's own `f::ext` and
+// `f::irrel` as `Guarded` is (`runtime_measured_instance`), and the measure
+// a word's `toNat`, at most the passes (`Tm::word_within`).
+fn runtime_node_instance(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes, shapes: List<Expr>, setup, world_e, table_e, typed, rt_e, count: Expr,
+    reprs: List<ReprEntry>, inits: List<Nat>, body: Tm) → Tac<Expr> {
+    let compile <- runtime_global(name_of(Setup::compile));
+    let pinned_g <- runtime_global(name_of(Setup::Pinned));
+    let pass_g <- runtime_global(name_of(Setup::NodePass));
+    let means_g <- runtime_global(name_of(Setup::node_means));
+    let sem_loop_g <- runtime_global(name_of(Tm::sem_in_loop));
+    let no_label_g <- runtime_global(name_of(Tm::no_label));
+    let world_at_g <- runtime_global(name_of(World::at));
+    let within_g <- runtime_global(name_of(Tm::word_within));
+    let extend_g <- runtime_global(name_of(Ty::extend));
+    let rfl <- runtime_global("tactic::rfl");
+    let sym_g <- runtime_global(name_of(Setup::eq_sym));
+    let trans_g <- runtime_global(name_of(Setup::eq_trans));
+    let lt_succ <- runtime_global(name_of(Setup::lt_succ));
+    let on_words <- runtime_global(name_of(Ty::on_words));
+    let rec <- runtime_global(name ++ "::rec");
+    let ext <- runtime_global(name ++ "::ext");
+    let irrel <- runtime_global(name ++ "::irrel");
+    let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
+    let verdict <- runtime_verdict();
+    let word_list <- runtime_ctors_at(ts.words);
+    let ws = rfun.params;
+    let n = ws.len();
+    let ws_e = Ty::quotes(ws, q);
+    let body_e = Tm::quote(body, q);
+    let list: List<LocalRef> → Expr = λ ys => RtQ::seq(word_list, runtime_embs(reprs, ws, runtime_locals(ys)));
+    let len_refl = ap(rfl, [Blank, NatLit(n)]);
+    // The measure, as a function of the words.
+    let zs <- runtime_params(ts.word, ws, None, 0);
+    let mu_z <- runtime_measure_at(rec, runtime_args(count, reprs, ws, runtime_locals(zs)));
+    let m_e <- runtime_held(ap(on_words, [ws_e, runtime_lams(zs, Hd(mu_z))]), "a measure");
+    // The pin's binders, opened off its statement: the file, then the
+    // function's own parameters.
+    let words: List<String> = List::range(n).map(λ i => "x".append(decimal_name(2, i)));
+    let p_t <- as_type(ap(pinned_g, [Blank, Global(f), rt_e, world_e, table_e, typed])).or_fail("runtime: `" ++ name ++ "`'s pin: ");
+    let opened <- runtime_open_n(64, p_t, Cons("b", words));
+    let b = opened.fst.head_or(LocalRef(0));
+    let xs = opened.fst.drop(1);
+    let w_b = ap(world_at_g, [world_e, table_e, Local(b)]);
+    // The node's pass at this file, its binders opened off its statement:
+    // the words, the going round `k`, and what `k` agrees with.
+    let s_t <- as_type(ap(pass_g, [ws_e, body_e, w_b, Global(f), m_e])).or_fail("runtime: `" ++ name ++ "`'s pass: ");
+    let names = words.append(["k", "hyp"]);
+    let os <- runtime_open_n(64, s_t, names);
+    let vs = os.fst.take(n);
+    let k_ref = os.fst.nth(n).unwrap_or(LocalRef(0));
+    let hyp = os.fst.nth(n + 1).unwrap_or(LocalRef(0));
+    let types <- runtime_local_types(vs);
+    let mu_v <- runtime_measure_at(rec, runtime_args(count, reprs, ws, runtime_locals(vs)));
+    let n_e = Hd(mu_v);
+    // `g1 = λ y… p => f::rec(N, y…, p)`.
+    let ys1 <- runtime_params_at(types, Some(hyp), 0);
+    let d1 <- runtime_bound_dom(rec, n_e, runtime_locals(ys1));
+    let p1 <- assume(Hd(d1), "p", Some(ys1.rev().head_or(hyp))).or_fail("runtime: a bound proof: ");
+    let g1 = runtime_lams(ys1.append([p1.ref]), ap(rec, Cons(n_e, runtime_locals(ys1).append([Local(p1.ref)]))));
+    // `g2 = λ y… _ => k([y…])`.
+    let ys2 <- runtime_params_at(types, Some(hyp), 0);
+    let d2 <- runtime_bound_dom(rec, n_e, runtime_locals(ys2));
+    let p2 <- assume(Hd(d2), "q", Some(ys2.rev().head_or(hyp))).or_fail("runtime: a bound proof: ");
+    let g2 = runtime_lams(ys2.append([p2.ref]), ap(Local(k_ref), [list(ys2)]));
+    // They agree: `f::irrel` on the left, the hypothesis on the right.
+    let ys3 <- runtime_params_at(types, Some(hyp), 0);
+    let d3 <- runtime_bound_dom(rec, n_e, runtime_locals(ys3));
+    let mu_y <- runtime_measure_of(d3);
+    let p3 <- assume(Hd(d3), "p", Some(ys3.rev().head_or(hyp))).or_fail("runtime: a bound proof: ");
+    let q3 <- assume(Hd(d3), "q", Some(p3.ref)).or_fail("runtime: a bound proof: ");
+    let irr = ap(irrel, Cons(n_e, Cons(Blank, runtime_locals(ys3).append([Local(p3.ref), ap(lt_succ, [Hd(mu_y)])]))));
+    let hy = ap(Local(hyp), [list(ys3), len_refl, Local(p3.ref)]);
+    let hg = runtime_lams(ys3.append([p3.ref, q3.ref]), ap(trans_g, [Blank, Blank, Blank, Blank, irr, ap(sym_g, [Blank, Blank, Blank, hy])]));
+    let lt_n = ap(lt_succ, [n_e]);
+    let pass <- runtime_held(runtime_lams(vs.append([k_ref, hyp]),
+        ap(sym_g, [Blank, Blank, Blank, ap(ext, Cons(n_e, Cons(n_e, Cons(g1, Cons(g2, Cons(hg, runtime_locals(vs).append([lt_n, lt_n])))))))])), "a loop node's pass");
+    // The measure at the arguments is a word's `toNat`.
+    let mu_x <- runtime_measure_at(rec, runtime_args(count, reprs, ws, runtime_locals(xs)));
+    let word_x <- runtime_measured_word(mu_x);
+    let no_env <- runtime_global(name_of(Setup::no_env));
+    let env_e = ap(extend_g, [Blank, ws_e, Ty::quotes([], q), ap(no_env, [w_b]), list(xs)]);
+    let sem_loop_e = ap(sem_loop_g, [q.nat_list(inits), body_e, w_b, ap(no_label_g, [Blank]), Ty::quotes(Ty::bind_onto(ws, Nil), q), env_e]);
+    let means_e = ap(means_g, [ws_e, body_e, w_b, Global(f), m_e, pass, list(xs), len_refl, ap(within_g, [Hd(word_x)])]);
+    // The meaning reads the node's value at the function's result code,
+    // which is the node's own: `Ty::cast_self` spells it so, and the pin's
+    // check compares the meaning's cast with it argument by argument (with
+    // the cast left to reduce, the kernel would run the loop's passes).
+    let cast_self_g <- runtime_global(name_of(Ty::cast_self));
+    let sem_g <- runtime_global(name_of(Tm::sem));
+    let node_e = Tm::quote(Tm::Loop(inits, body), q);
+    let sem_e = ap(sem_g, [node_e, w_b, Ty::quotes(Ty::bind_onto(ws, Nil), q), env_e]);
+    let read = ap(sym_g, [Blank, Blank, Blank, ap(cast_self_g, [Blank, Ty::quote(rfun.result, q), sem_e])]);
+    let pinned = runtime_lams(Cons(b, xs), ap(trans_g, [Blank, Blank, Blank, Blank,
+        ap(sym_g, [Blank, Blank, Blank, ap(trans_g, [Blank, Blank, Blank, Blank, sem_loop_e, means_e])]), read]));
+    pure(ap(compile, [Blank, setup, rt_e, world_e, table_e, Global(f), typed, pinned, verdict, ap(rfl, [Blank, runtime_at(shapes, 0)])]))
+}
+
 // The `Compile(f)` instance, by the reflection's shape. `table_e` is the
 // function's table at each file: its world's own for a function lent
 // nothing, `Setup::lent_callees` for one lent spans.
@@ -2815,12 +2953,16 @@ fn runtime_instance(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes, 
     let typed = ap(typed_refl, [Blank, Global(f)]);
     let alike_every <- runtime_global(name_of(Setup::alike_every));
     match rfun.shape() {
-        Plain => runtime_global(name_of(Setup::compile)).bind(λ compile => {
-            // The pin: the function itself at every file, or it at each
-            // file's spans.
-            let pinned: Expr = ap(alike_every, [Blank, Global(f), world_e, table_e, NatLit(rfun.lent), Ty::quotes(rfun.params, q), Ty::quote(rfun.result, q), typed]);
-            pure(ap(compile, [Blank, setup, rt_e, world_e, table_e, Global(f), typed, pinned, verdict, ap(rfl, [Blank, runtime_at(shapes, 0)])]))
-        }),
+        Plain => match rfun.body {
+            // A measured recursion as a loop node (`Fun::as_node`).
+            Loop(inits, body) => runtime_node_instance(name, f, rfun, q, ts, shapes, setup, world_e, table_e, typed, rt_e, count, reprs, inits, body),
+            _ => runtime_global(name_of(Setup::compile)).bind(λ compile => {
+                // The pin: the function itself at every file, or it at each
+                // file's spans.
+                let pinned: Expr = ap(alike_every, [Blank, Global(f), world_e, table_e, NatLit(rfun.lent), Ty::quotes(rfun.params, q), Ty::quote(rfun.result, q), typed]);
+                pure(ap(compile, [Blank, setup, rt_e, world_e, table_e, Global(f), typed, pinned, verdict, ap(rfl, [Blank, runtime_at(shapes, 0)])]))
+            }),
+        },
         Fuel(w0, wrest, zero, succ) => match rfun.body {
             Case(c, _, _) => runtime_fuel_instance(f, q, ts, shapes, setup, world_e, table_e, typed, count, reprs, w0, wrest, rfun.result, c, zero, succ),
             _ => runtime_fail("a fuel recursion whose body is not its fuel's `match`"),
@@ -4197,9 +4339,14 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
                 // each argument and not by `refl` (`Setup::Pinned`).
                 True => [],
                 False => match rfun.shape() {
-                    Plain => [Decl(AsTheorem, name ++ "::reflects", runtime_params_of(xs),
-                        Equation(ap(ap(meaning, [rt_e, world_e]), runtime_locals(xs)), ap(Global(f), runtime_locals(xs))),
-                        ap(rfl, [Blank, ap(Global(f), runtime_locals(xs))]))],
+                    // A measured recursion as a loop node is its meaning
+                    // through its rounds, which its instance's pin states.
+                    Plain => match rfun.body {
+                        Loop(_, _) => [],
+                        _ => [Decl(AsTheorem, name ++ "::reflects", runtime_params_of(xs),
+                            Equation(ap(ap(meaning, [rt_e, world_e]), runtime_locals(xs)), ap(Global(f), runtime_locals(xs))),
+                            ap(rfl, [Blank, ap(Global(f), runtime_locals(xs))]))],
+                    },
                     _ => [],
                 },
             };
@@ -6079,7 +6226,8 @@ fn runtime_reads(name: String, f: GlobalRef, levels: Nat := 0, stack: Nat := 0) 
     let k = found.fst;
     let reprs = k.reprs;
     let reflected = found.snd.fst;
-    let rfun = reflected.fst;
+    // A measured recursion of words is one loop node (docs/language/loop-combinator-design.md §6.8).
+    let rfun = reflected.fst.as_node();
     let checked <- runtime_check_carriers(k, reprs);
     let recs <- runtime_rec_shapes(k, k.recs);
     let sigs = Cons(rfun.sig(), callee_sigs);

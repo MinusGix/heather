@@ -8,7 +8,7 @@ loop's state of several words, a loop that only reads its span, and a
 statement `if` that joins inside a pass, §6.4; one pointwise pin on every
 route, and uniqueness of a well-founded fixpoint, §6.6). The fork round 3
 met, decided 2026-11-24, is §6.5, and what is left of the round, 3g and 3h,
-follows it; rounds 4 and 5 (§8) are the rest of the migration. Thread "Rebuild loops on
+follows it (3g's node, lowering and soundness built, §6.8); rounds 4 and 5 (§8) are the rest of the migration. Thread "Rebuild loops on
 one combinator", 2026-11-19, from the dogfooding review
 (`docs/native/dogfooding-plan.md`, PR #804).
 
@@ -753,6 +753,105 @@ did not see, from reading the code the node has to sit in:
    the result held in one word), which is every written tail recursion on
    the `Tm` route; a `while` over a record state moves onto it when the
    pass moves cells, and until then stays on `Iterate`.
+
+### 6.8 3g as built: the node, its lowering and soundness, the pin lemma
+
+**The node** (`rt.hthr`). `Tm::Loop(inits, body)`: the state is the words
+of variables `inits`, and `body` sees the state and nothing else (bound as
+a function sees its parameters). What a loop reads of its context is a
+state word its passes hand on unchanged, so a loop carries no context and
+needs none of `Iterate`'s carry. `Tm::Again(res, args)` goes round at the
+state the variables `args` hold; it names the loop's result code so that
+no term's code depends on the loop around it. The meaning is
+`Tm::sem_in(t, w, lab)`, a term under the innermost loop's continuation
+(finding 1 of §6.7); `Tm::sem` is it at `Tm::no_label`. A loop's meaning is
+`Loop::rounds(Tm::passes(), pass, stuck, words)`, the fuel recursion
+(`loop.hthr`), its pass the body under the label `Tm::round(res, again)`,
+and past its passes one more pass whose going round answers the state's
+first word (finding 2).
+
+**One lowering for a value and a pass.** `Tm::lower` is
+`Tm::lower_in(t, w, None, …)`; `Some(PassAt(res, flag, nexts))` lowers a
+loop's pass: a leaf is checked at the loop's code and moved out with the
+flag 1 (`Tm::leaf_at`), a branch writes the flag and the next words in both
+arms (`Tm::branch_at`, tail mode's `tail_branch`), a bound term may not go
+round (`Tm::bound_at`), and `Again` moves the state's words with the flag 0
+(tail mode's `lower_again`). A value may hold a loop and a loop's leaves
+are values, so the two are one recursion, as the meaning is one with its
+label. Its soundness is one induction over both modes
+(`Tm::lower_in_sound`): a pass leaves the term's meaning under the loop's
+label whatever the continuation (`Tm::PassHolds`); a term that goes round
+no loop of its own means the same under any label
+(`Tm::sem_in_unlabelled`). Tail mode's pass helpers moved from `rt_loop`
+to `rt_lower` for it; tail mode itself (`lower_tail`, `tail_sound`) is
+untouched and goes with the measured shape in 3h.
+
+**The region** (`Tm::loop_region`): a FunctionIR loop of `Tm::passes()`
+passes over the state's words (`Tm::loop_core`), and where it runs out a
+second loop node of one pass, so that the extra pass runs on its own
+parameters as every pass does and needs no frame reasoning; the answer is
+the first output of whichever ran last. Its soundness (`Tm::loop_sound`)
+is the pass's (`Tm::core_pass`) and an induction over the passes
+(`Tm::rounds_agree`, `Tm::core_runs`), never a measure: the measure
+appears only in the pin. Finding 2's cost is the pass lowered twice; a
+loop in a loop's pass is lowered twice per copy.
+
+**The pin lemma** (`loop.hthr`, `Loop::rounds_agree`): a run whose every
+round, its recursion answered by anything that agrees with `f` below the
+measure, is `f`, is `f` wherever the measure is at most the fuel. It is
+the fuel side of `fixpoint_unique`, and its one per-function hypothesis is
+the shape `Fun::Guarded` has today, which a function's `f::ext` and
+`f::irrel` give. A measure that is a word's `toNat` is at most
+`Tm::passes()` (`Tm::word_within`).
+
+**Probe** (`lib/_tests/native/runtime/rt_loop_tests.hthr`): `count_down`
+written as the node lowers, its meaning is `count_down` by
+`Loop::rounds_agree` with the pass from `count_down::ext` and
+`count_down::irrel`, and a wrong pass is refused.
+
+**A conversion trap.** Two loops' meanings that differ only in an argument
+their passes never read (two labels) ran the kernel out of fuel when
+compared by `refl`: it unrolled `Loop::rounds` at its numeral fuel. Each
+side's one-step unfolding is its own lemma (`Tm::sem_in_loop`) and the two
+are compared through it.
+
+**A written tail recursion on the node (step 2).** A measured recursion
+lent nothing, of 64-bit words, is reflected as one node over its
+parameters (`Fun::as_node`, `rt_loop.hthr`): its body once, each call of
+itself in tail position `Again` (`Tm::again_of`), so the function is plain
+and the generator's judgment reads the body as a pass. Its instance
+(`runtime_node_instance`, `runtime.hthr`) pins it at each file and word:
+the meaning is the node's rounds (`Tm::sem_in_loop`), which are the
+function (`Setup::node_means`, `Loop::rounds_agree` at the function's
+words) from the node's pass, `Setup::NodePass`, which the generator proves
+from `f::ext` and `f::irrel` exactly as it proves `Guarded`, and the
+measure a word's `toNat` (`Tm::word_within`). No `f::reflects` is
+published for it: the pin is the theorem. `runtime_loop_tests`'
+`count_down`, `count_down_odd` and `count_up_to_64` compile this way, and
+`examples/x86-native/loop_measure.hthr`'s `triangle` over `count_down`
+compiles to certified x86 (217 bytes; the extra pass is a second copy of
+the loop's body).
+
+**A second conversion trap, found by the pin.** A cast of a loop's meaning
+compared with the meaning itself (`cast(ty, W64, sem(node)) = sem(node)`)
+ran the kernel out of fuel: reducing the cast forces the meaning's head,
+and the meaning's head is the loop's next pass, at a numeral fuel, without
+end. The same comparison between two casts is argument by argument. So the
+pin ends in `Ty::cast_self`, spelled so that its statement has the
+meaning's own cast, and the kernel never reduces a node's meaning in a pin.
+The rule for any proof about a node: never let the kernel reduce
+`Tm::sem` of a `Loop` past its head; state the node's meaning through
+`Tm::sem_in_loop` and compare loops at `Loop::rounds`.
+
+Still on the measured route (`Fun::Guarded`, tail mode): a recursion lent
+a span (the homes it keeps), one whose words are not all 64-bit (records
+held in a word, narrower words), and every span, laid-record and `Bytes(n)`
+recursion (finding 3). Those are what 3h's deletion waits on.
+
+**Still to do in 3g:** `while` onto the node (step 3), which needs a state
+of records (a `while`'s state is the record `f#State`) or the reflector
+spelling a record state as its words, and the node's pin for words that
+are not 64-bit (the boundary's casts).
 
 ## 7. Bootstrapping
 
