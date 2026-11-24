@@ -731,6 +731,7 @@ impl Checking<'_> {
                 arms,
                 eqbind,
                 generated,
+                test: _,
             } => (|| {
                 // Stage-2 motive synthesis (issues/elab-stage2-metas.md,
                 // docs/elaborator/goal-motive-synthesis-design.md): abstract the

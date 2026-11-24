@@ -1421,6 +1421,7 @@ impl Inference<'_> {
                 arms,
                 eqbind,
                 generated,
+                test: _,
             } => {
                 let (scrut_t, scrut_ty, scrut_lvl) = self.elab_infer(cx, scrut)?;
                 // An indexed scrutinee's motive binds the index too
@@ -1560,6 +1561,7 @@ impl Inference<'_> {
                 arms,
                 eqbind,
                 generated,
+                test: _,
             } => {
                 if *form == MatchForm::If && eqbind.is_none() {
                     match matching::infer_if_constant_motive(

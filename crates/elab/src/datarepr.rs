@@ -1593,6 +1593,7 @@ pub(crate) fn mentions_free(e: &Expr, names: &[String], bound: &mut Vec<String>)
             arms,
             form: _,
             generated: _,
+            test: _,
         } => {
             if mentions_free(scrut, names, bound)
                 || motive

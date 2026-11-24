@@ -777,6 +777,7 @@ mod count_holes_impl {
                 eqbind: _,
                 form: _,
                 generated: _,
+                test: _,
             } => {
                 expr(scrut, n);
                 if let Some(m) = motive {

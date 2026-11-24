@@ -156,6 +156,7 @@ fn split_on(scrut: &str, arms: Vec<Arm>, span: Span) -> Expr {
             eqbind: None,
             motive: None,
             arms,
+            test: None,
         },
         span,
     }
@@ -258,7 +259,7 @@ impl Meaning<'_> {
 fn replace_refl(e: Expr, leaf: &Expr) -> Expr {
     match e.kind {
         ExprKind::Refl => leaf.clone(),
-        ExprKind::Match { form, generated, scrut, eqbind, motive, arms } => Expr {
+        ExprKind::Match { form, generated, scrut, eqbind, motive, arms, test } => Expr {
             kind: ExprKind::Match {
                 form,
                 generated,
@@ -266,6 +267,7 @@ fn replace_refl(e: Expr, leaf: &Expr) -> Expr {
                 eqbind,
                 motive,
                 arms: arms.into_iter().map(|a| Arm { body: replace_refl(a.body, leaf), ..a }).collect(),
+                test: test.clone(),
             },
             span: e.span,
         },

@@ -934,6 +934,7 @@ pub(crate) fn lower(
             eqbind: None,
             motive: None,
             arms: Vec::new(),
+            test: None,
         },
         span,
     };
@@ -971,6 +972,7 @@ pub(crate) fn lower(
                     span: decl.body.span,
                 },
             ],
+            test: None,
         },
         span,
     };
@@ -1359,6 +1361,7 @@ pub(crate) fn lower_group(
             eqbind: None,
             motive: None,
             arms: Vec::new(),
+            test: None,
         },
         span,
     };
@@ -1411,6 +1414,7 @@ pub(crate) fn lower_group(
                     span: first.body.span,
                 },
             ],
+            test: None,
         },
         span,
     };
@@ -2810,6 +2814,7 @@ impl<'a> Rewrite<'a> {
                 eqbind,
                 motive,
                 arms,
+                test,
             } => {
                 if !self.found_only
                     && !matches!(scrut.kind, ExprKind::Var(_))
@@ -2892,6 +2897,7 @@ impl<'a> Rewrite<'a> {
                     eqbind,
                     motive: motive.as_ref().map(|m| Box::new(self.expr(m))),
                     arms,
+                    test: test.clone(),
                 }
             }
             ExprKind::MatchCode {
@@ -3367,6 +3373,7 @@ pub(crate) fn subst(e: &Expr, map: &[(&str, &Expr)], bound: &mut Vec<String>) ->
             eqbind,
             motive,
             arms,
+            test,
         } => ExprKind::Match {
             form: *form,
             generated: *generated,
@@ -3392,6 +3399,7 @@ pub(crate) fn subst(e: &Expr, map: &[(&str, &Expr)], bound: &mut Vec<String>) ->
                     }
                 })
                 .collect(),
+            test: test.clone(),
         },
         // `j` and blocks are not measure shapes, but the companions of
         // `docs/language/recursion/decreases-unfolding-design.md` §4 push substitutions through
@@ -4430,6 +4438,7 @@ impl Respell<'_> {
                     eqbind: None,
                     motive: Some(Box::new(lam(&[&b], ty_lit(motive_body, span), span))),
                     arms: arms_out,
+                    test: None,
                 },
                 span,
             };
@@ -4457,6 +4466,7 @@ impl Respell<'_> {
                 eqbind: None,
                 motive: Some(Box::new(lam(&[&s], ty_lit(goal, span), span))),
                 arms: proof_arms,
+                test: None,
             },
             span,
         };
@@ -4569,6 +4579,7 @@ impl Respell<'_> {
                 eqbind: None,
                 motive: Some(Box::new(motive)),
                 arms: out,
+                test: None,
             },
             span,
         };
@@ -4694,6 +4705,7 @@ impl Respell<'_> {
                     eqbind: None,
                     motive: Some(Box::new(lam(&[&z], ty_lit(motive_ty, span), span))),
                     arms: conv_arms,
+                    test: None,
                 },
                 span,
             };
@@ -4789,6 +4801,7 @@ impl Respell<'_> {
                 eqbind: None,
                 motive: Some(Box::new(motive)),
                 arms: out,
+                test: None,
             },
             span,
         };
@@ -5187,6 +5200,7 @@ pub(crate) fn companions(
             eqbind: None,
             motive: None,
             arms: Vec::new(),
+            test: None,
         },
         span,
     };
@@ -5256,6 +5270,7 @@ pub(crate) fn companions(
                     span,
                 },
             ],
+            test: None,
         },
         span,
     };
@@ -5293,6 +5308,7 @@ pub(crate) fn companions(
                     span,
                 },
             ],
+            test: None,
         },
         span,
     };
@@ -5451,7 +5467,7 @@ pub(crate) fn step_equations(decl: &Decl, name: &str) -> Result<Vec<Lowered>, St
         Stmt::LetRecord { .. } => Err(()),
     }).collect::<Result<_, _>>().map_err(|_| "the body destructures a record before its test".to_string())?;
     let top = &top;
-    let ExprKind::Match { scrut, eqbind: Some(eq), motive: None, arms, .. } = &top.kind else {
+    let ExprKind::Match { scrut, eqbind: Some(eq), motive: None, arms, test, .. } = &top.kind else {
         return Err("the body is not a test with an equation (`if h: P`, `match h: b`)".into());
     };
     let arm = |ctor: &str| arms.iter().find(|a| a.ctor == ctor && !a.default && a.binders.is_empty());
@@ -5517,7 +5533,7 @@ pub(crate) fn step_equations(decl: &Decl, name: &str) -> Result<Vec<Lowered>, St
                         _ => None,
                     },
                     _ => None,
-                }.or_else(|| heather_syntax::if_bit_written(eq).map(str::to_string));
+                }.or_else(|| test.clone());
                 let name = fresh_hyp(evidence.as_deref().unwrap_or("h"));
                 let ty = if truth {
                     prop.clone()

@@ -3778,6 +3778,7 @@ impl Parser {
                         eqbind: None,
                         motive: None,
                         arms,
+                        test: None,
                     },
                     span: open_cases.join(close_cases),
                 };
@@ -4035,6 +4036,7 @@ impl Parser {
                     eqbind,
                     motive,
                     arms,
+                    test: None,
                 },
                 span,
             },
@@ -6841,6 +6843,7 @@ impl Parser {
                 eqbind,
                 motive,
                 arms,
+                test: None,
             },
             span: start.join(end),
         })
@@ -6976,12 +6979,7 @@ impl Parser {
         // either way.
         let eqbind = evidence.as_ref().map(|_| {
             let hidden = self.hygienic("if_bit");
-            let id = &hidden["#if_bit".len()..];
-            match (yes_names, no_names) {
-                (true, true) => hidden,
-                (false, false) => crate::ast::if_bit_unnamed(id, evidence.as_deref().unwrap_or_default()),
-                _ => format!("__if_bit{id}"),
-            }
+            if yes_names && no_names { hidden } else { format!("__if_bit{}", &hidden["#if_bit".len()..]) }
         });
         // A branch that never names the evidence binds none: the function
         // is then a plain convoy, which a proof that cases the same test can
@@ -7022,6 +7020,7 @@ impl Parser {
                 eqbind,
                 motive: None,
                 arms,
+                test: evidence,
             },
             span,
         })
@@ -7103,6 +7102,7 @@ impl Parser {
                 eqbind: evidence.map(|_| EQUATION.into()),
                 motive: None,
                 arms,
+                test: None,
             },
             span,
         })
