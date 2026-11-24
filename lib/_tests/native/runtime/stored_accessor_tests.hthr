@@ -50,10 +50,15 @@ theorem read_by_u32(span: List<u8>, length, i: u64): read_by(Stored::u32_be(), s
 
 theorem read_by_u64(span: List<u8>, length, i: u64): read_by(Stored::u64_be(), span, length, i) = span.u64_be_within(length, i) { refl }
 
-// The other byte order is another term at the same type, and has no
-// accessor yet.
+// The other byte order is another term at the same type, with an
+// accessor of its own, found by its codec's term.
+theorem read_by_le(span: List<u8>, length, i: u64): read_by(Stored::u32_le(), span, length, i) = span.u32_le_within(length, i) { refl }
+
+theorem read_by_le64(span: List<u8>, length, i: u64): read_by(Stored::u64_le(), span, length, i) = span.u64_le_within(length, i) { refl }
+
+// A codec with no accessor is refused by resolution.
 // expect-error: no instance
-theorem read_by_le(span: List<u8>, length, i: u64): read_by(Stored::u32_le(), span, length, i) = 0 { refl }
+theorem read_by_u16(span: List<u8>, length, i: u64): read_by(Stored::u16_le(), span, length, i) = 0 { refl }
 
 // The generic law at a field of SHA-256's context: the count, a word of
 // eight bytes, and a schedule word, four bytes read widened.

@@ -55,6 +55,10 @@
 // An array's element at an index that is a word is an accessor of its
 // own (`Indexes`, `Stores`): the code tests the index against the array's
 // count, so the element is the total one, the array's where it has it.
+// An array whose count is a word a laid record's parameter is, carried
+// beside the span, has marks of its own (`Spans`, `Fills`), found by its
+// offset alone; this module's verdict refuses them, and
+// `rt_held_counted.hthr` judges and proves them.
 // Not here yet: a lend, and a byte stored outside a field.
 import logic;
 import bool;
@@ -86,6 +90,13 @@ inductive Reader<A> {
     Plain,
     Reads(width: Nat, fields: List<Pair<Nat, A → BitVec(width)>>),
     Indexes(width: Nat, arrays: List<Pair<Nat, List<Pair<Nat, A → BitVec(64) → BitVec(width)>>>>),
+    // Or of arrays whose count is the word a record's parameter is,
+    // carried beside the span (docs/native/rung2-spans-design.md §3): each
+    // array by its offset and then its count and element, the count not
+    // compared with the operand, which is the parameter's own variable,
+    // the one after the length word. Only `rt_held_counted.hthr`'s verdict
+    // takes it, which knows that variable's word.
+    Spans(width: Nat, arrays: List<Pair<Nat, Pair<Nat, A → BitVec(64) → BitVec(width)>>>),
 }
 
 // What a computation of the program is to one: not held, the store of a
@@ -102,6 +113,9 @@ inductive Writer<A> {
     // offset and count: it takes the span's place, its length word, the
     // offset, the count, the index and the word.
     Stores(width: Nat, arrays: List<Pair<Nat, List<Pair<Nat, A → BitVec(64) → BitVec(width) → A>>>>),
+    // The store into an element of an array counted by a carried word, as
+    // `Spans` reads one.
+    Fills(width: Nat, arrays: List<Pair<Nat, Pair<Nat, A → BitVec(64) → BitVec(width) → A>>>),
 }
 
 // The marks of a program's functions, in the order of its tables; a
@@ -195,6 +209,10 @@ fn Reader::value<A>(self r: Reader<A>, tys: Table, to: Ty, a: A, g: List<Ty>, en
                 Some(get) => Ty::cast(tys, Word(width), to, get(a, FTm::word(tys, g, env, FTm::arg(args, 4)))),
             },
         },
+        Spans(width, arrays) => match FTm::field(arrays, FTm::word(tys, g, env, FTm::third(args)).toNat()) {
+            None => plain,
+            Some(counted) => Ty::cast(tys, Word(width), to, counted.snd(a, FTm::word(tys, g, env, FTm::arg(args, 4)))),
+        },
     }
 }
 
@@ -248,6 +266,11 @@ fn Writer::state<A>(self w: Writer<A>, tys: Table, args: List<Nat>, g: List<Ty>,
                     Ty::cast(tys, Ty::at(g, FTm::arg(args, 5)), Word(width), Env::get(tys, g, env, FTm::arg(args, 5)))),
             },
         },
+        Fills(width, arrays) => match FTm::field(arrays, FTm::word(tys, g, env, FTm::third(args)).toNat()) {
+            None => a,
+            Some(counted) => counted.snd(a, FTm::word(tys, g, env, FTm::arg(args, 4)),
+                Ty::cast(tys, Ty::at(g, FTm::arg(args, 5)), Word(width), Env::get(tys, g, env, FTm::arg(args, 5)))),
+        },
     }
 }
 
@@ -265,6 +288,7 @@ fn Writer::answer<A>(self w: Writer<A>, tys: Table, args: List<Nat>, g: List<Ty>
         Writes(_, _) => plain,
         Runs(_, run) => Ty::cast(tys, Word(64), to, run(a, FTm::words(tys, g, env, FTm::operands(args))).value),
         Stores(_, _) => plain,
+        Fills(_, _) => plain,
     }
 }
 
@@ -662,6 +686,7 @@ fn Reader::Owes<A>(self r: Reader<A>, P: (width: Nat) → Nat → (A → BitVec(
         Plain => True,
         Reads(width, fields) => FTm::Fields(fields, P(width)),
         Indexes(width, arrays) => FTm::Fields(arrays, λ (base: Nat) (counted: List<Pair<Nat, A → BitVec(64) → BitVec(width)>>) => FTm::Fields(counted, R(width, base))),
+        Spans(width, arrays) => FTm::Fields(arrays, λ (base: Nat) (counted: Pair<Nat, A → BitVec(64) → BitVec(width)>) => R(width, base, counted.fst, counted.snd)),
     }
 }
 
@@ -679,6 +704,7 @@ fn Writer::Owes<A>(self w: Writer<A>, P: (width: Nat) → Nat → (A → BitVec(
         Writes(width, fields) => FTm::Fields(fields, P(width)),
         Runs(words, run) => Q(words, run),
         Stores(width, arrays) => FTm::Fields(arrays, λ (base: Nat) (counted: List<Pair<Nat, A → BitVec(64) → BitVec(width) → A>>) => FTm::Fields(counted, S(width, base))),
+        Fills(width, arrays) => FTm::Fields(arrays, λ (base: Nat) (counted: Pair<Nat, A → BitVec(64) → BitVec(width) → A>) => S(width, base, counted.fst, counted.snd)),
     }
 }
 
@@ -725,7 +751,7 @@ record Sound<A>(hw: HWorld<A>, whole: Stored<A>) {
 // A bound term a held function may have: a reader is called on the
 // span's own length word, the variable `len`.
 fn Reader::lent<A>(self r: Reader<A>, args: List<Nat>, len: Nat) → Bool {
-    match r { Plain => True, Reads(_, _) => FTm::read_args(args, len), Indexes(_, _) => FTm::index_args(args, len) }
+    match r { Plain => True, Reads(_, _) => FTm::read_args(args, len), Indexes(_, _) => FTm::index_args(args, len), Spans(_, _) => False }
 }
 
 fn Tm::kept<A>(self e: Tm, hw: HWorld<A>, len: Nat) → Bool {
@@ -744,6 +770,7 @@ fn Writer::lent<A>(self w: Writer<A>, tys: Table, args: List<Nat>, len: Nat, kno
         Writes(_, fields) => FTm::write_args(args, len) && FTm::known_field(tys, fields, known, FTm::third(args)),
         Runs(words, _) => FTm::run_args(args, len, words),
         Stores(_, arrays) => FTm::store_args(args, len) && FTm::known_array(tys, arrays, known, FTm::third(args), FTm::arg(args, 3)),
+        Fills(_, _) => False,
     }
 }
 
@@ -791,6 +818,7 @@ theorem Tm::reader_ok<A>(self e: Tm, hw: HWorld<A>, whole: Stored<A>, sound: Sou
                     FTm::value(hw.fw, own, Call(f, args), g, env)) = FTm::value(hw.fw, own, Call(f, args), g, env)) =
                 λ r => match r {
                     Plain => λ _ _ => refl,
+                    Spans(_, _) => λ _ never => false_elim(never),
                     Indexes(width, arrays) => λ indexes lent =>
                         FTm::index_args_elim(args, len,
                             λ (xs: List<Nat>) => (Indexes(width, arrays).value(hw.fw.w.tys, Sig::at(hw.fw.w.sigs, f).result, a, g, env, xs,
@@ -898,6 +926,7 @@ theorem FTm::call_kept<A>(hw: HWorld<A>, whole: Stored<A>, sound: Sound<A>(hw, w
         ∧ whole.Holds(FTm::called(hw.fw, g, env, f, args, own).after, FTm::word(hw.fw.w.tys, g, env, len), w.state(hw.fw.w.tys, args, g, env, a))) =
         λ w => match w {
             Apart => λ _ never => false_elim(never),
+            Fills(_, _) => λ _ never => false_elim(never),
             Writes(width, fields) => λ writes lent => {
                 let two = FTm::write_args(args, len).is_true_and(FTm::known_field(hw.fw.w.tys, fields, known, FTm::third(args)), lent);
                 And(refl, FTm::write_args_elim(args, len,
