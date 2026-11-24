@@ -1,0 +1,307 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Heather",
+  "scopeName": "source.heather",
+  "fileTypes": ["hthr"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#literals" },
+    { "include": "#import" },
+    { "include": "#declarations" },
+    { "include": "#keywords" },
+    { "include": "#builtins" },
+    { "include": "#holes" },
+    { "include": "#names" },
+    { "include": "#operators" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "comment": "A refusal the gate expects: `// expect-error: <what the error says>`.",
+          "match": "(//)\\s*(expect-error)(?:(:)|\\s*(\\((?:kernel|mismatch)\\)))?(.*)$",
+          "name": "comment.line.double-slash.heather",
+          "captures": {
+            "1": { "name": "punctuation.definition.comment.heather" },
+            "2": { "name": "keyword.other.directive.expect-error.heather" },
+            "3": { "name": "punctuation.separator.heather" },
+            "4": { "name": "keyword.other.directive.expect-error.heather" }
+          }
+        },
+        {
+          "begin": "//",
+          "beginCaptures": { "0": { "name": "punctuation.definition.comment.heather" } },
+          "end": "$",
+          "name": "comment.line.double-slash.heather",
+          "patterns": [
+            { "match": "`[^`]*`", "name": "markup.inline.raw.heather" },
+            { "match": "\\b(TODO|FIXME|XXX|NOTE)\\b", "name": "keyword.other.todo.heather" }
+          ]
+        }
+      ]
+    },
+
+    "literals": {
+      "patterns": [
+        {
+          "begin": "b\"",
+          "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.heather" } },
+          "end": "\"|$",
+          "endCaptures": { "0": { "name": "punctuation.definition.string.end.heather" } },
+          "name": "string.quoted.double.byte.heather",
+          "patterns": [ { "include": "#byte-escapes" } ]
+        },
+        {
+          "match": "b'(?:\\\\(?:[ntr\\\\'\"0]|x[0-9A-Fa-f]{2})|[^'\\\\\\r\\n])'",
+          "name": "string.quoted.single.byte.heather",
+          "captures": { "0": { "patterns": [ { "include": "#byte-escapes" } ] } }
+        },
+        {
+          "begin": "\"",
+          "beginCaptures": { "0": { "name": "punctuation.definition.string.begin.heather" } },
+          "end": "\"|$",
+          "endCaptures": { "0": { "name": "punctuation.definition.string.end.heather" } },
+          "name": "string.quoted.double.heather",
+          "patterns": [ { "include": "#escapes" } ]
+        },
+        {
+          "match": "'(?:\\\\(?:[ntr\\\\'\"0]|u\\{[0-9A-Fa-f]+\\})|[^'\\\\\\r\\n])'",
+          "name": "string.quoted.single.char.heather",
+          "captures": { "0": { "patterns": [ { "include": "#escapes" } ] } }
+        },
+        {
+          "comment": "Numerals as crates/syntax/src/lexer.rs reads them: hex (with a p-exponent fraction), octal, binary, decimal with fraction or exponent, and an optional `u`/`i` width suffix.",
+          "match": "(?<![\\w])(?:0x[0-9A-Fa-f][0-9A-Fa-f_]*(?:(?:\\.[0-9A-Fa-f][0-9A-Fa-f_]*)?[pP][+-]?[0-9][0-9_]*)?|0o[0-7][0-7_]*|0b[01][01_]*|[0-9][0-9_]*(?:\\.[0-9][0-9_]*)?(?:[eE][+-]?[0-9][0-9_]*)?)((?:[ui](?:0|[1-9][0-9]*))?)\\b",
+          "name": "constant.numeric.heather",
+          "captures": { "1": { "name": "storage.type.numeric.heather" } }
+        }
+      ]
+    },
+
+    "escapes": {
+      "match": "\\\\(?:[ntr\\\\'\"0]|u\\{[0-9A-Fa-f]+\\})",
+      "name": "constant.character.escape.heather"
+    },
+
+    "byte-escapes": {
+      "match": "\\\\(?:[ntr\\\\'\"0]|x[0-9A-Fa-f]{2})",
+      "name": "constant.character.escape.heather"
+    },
+
+    "import": {
+      "match": "^\\s*(?:(export)\\s+)?(import)\\s+([A-Za-z_][\\w]*(?:(?:::|/|\\.)[A-Za-z_][\\w]*)*)",
+      "captures": {
+        "1": { "name": "storage.modifier.export.heather" },
+        "2": { "name": "keyword.control.import.heather" },
+        "3": { "name": "entity.name.namespace.heather" }
+      }
+    },
+
+    "declarations": {
+      "patterns": [
+        {
+          "comment": "A generator-prefixed declaration: `rule theorem`, `register def`, `regex def`, … — the prefix names the generator.",
+          "match": "^\\s*(?!(?:runtime|partial|meta|evidence|interface|let|export|pub)\\b)([a-z_][\\w]*)\\s+(?=(?:fn|theorem|def|axiom|record)\\b)",
+          "captures": { "1": { "name": "entity.name.function.macro.generator.heather" } }
+        },
+        {
+          "match": "\\b(fn|theorem|axiom|def)\\s+((?:[A-Za-z_][\\w]*::)*)([A-Za-z_][\\w]*)",
+          "captures": {
+            "1": { "name": "storage.type.function.heather" },
+            "2": { "patterns": [ { "include": "#path-segments" } ] },
+            "3": { "name": "entity.name.function.heather" }
+          }
+        },
+        {
+          "match": "\\b(inductive|codata|record|class|datarepr)\\s+((?:[A-Za-z_][\\w]*::)*)([A-Za-z_][\\w]*)",
+          "captures": {
+            "1": { "name": "storage.type.heather" },
+            "2": { "patterns": [ { "include": "#path-segments" } ] },
+            "3": { "name": "entity.name.type.heather" }
+          }
+        },
+        {
+          "match": "\\b(impl)\\s+([A-Za-z_][\\w]*)",
+          "captures": {
+            "1": { "name": "storage.type.impl.heather" },
+            "2": { "name": "entity.name.function.heather" }
+          }
+        },
+        {
+          "match": "\\b(instance)\\s+([A-Za-z_][\\w]*)",
+          "captures": {
+            "1": { "name": "storage.type.instance.heather" },
+            "2": { "name": "entity.name.type.heather" }
+          }
+        }
+      ]
+    },
+
+    "path-segments": {
+      "patterns": [
+        { "match": "[A-Z][\\w]*", "name": "entity.name.type.heather" },
+        { "match": "[a-z_][\\w]*", "name": "entity.name.namespace.heather" },
+        { "match": "::", "name": "punctuation.separator.namespace.heather" }
+      ]
+    },
+
+    "keywords": {
+      "comment": "Heather's keywords are contextual (crates/syntax/src/parser.rs), so a word used as a field, a named argument or a member — `within: …`, `prefix.written` — is left alone.",
+      "patterns": [
+        {
+          "match": "(?<![.\\w])(if|else|match|while|for|break|continue|return)\\b(?!\\s*:(?![:=])|\\.|::)",
+          "name": "keyword.control.heather"
+        },
+        {
+          "match": "(?<![.\\w])(fn|theorem|axiom|def|inductive|codata|record|class|instance|impl|datarepr|designation|section|generate|interface)\\b(?!\\s*:(?![:=])|\\.|::)",
+          "name": "storage.type.heather"
+        },
+        {
+          "match": "(?<![.\\w])(runtime|partial|meta|evidence|export|mut|prefix|postfix)\\b(?!\\s*:(?![:=])|\\.|::)",
+          "name": "storage.modifier.heather"
+        },
+        {
+          "match": "(?<![.\\w])(let|have|suffices|requires|require|assuming|extends|with|within|as|at|on|by|calc|code|infer|mk|decreases|decreasing|depth|invariant|varies|unfolding|given|context)\\b(?!\\s*:(?![:=])|\\.|::)",
+          "name": "keyword.other.heather"
+        },
+        {
+          "comment": "Goal-directed words, styled apart like the Zed extension's @preproc.",
+          "match": "(?<![.\\w])(apply|give|split|split_all|induct|cases|all_goals)\\b(?!\\s*:(?![:=])|\\.|::)",
+          "name": "keyword.other.tactic.heather"
+        },
+        {
+          "match": "λ|∀|∃|∑|∏|(?<![.\\w])fun\\b(?!\\s*:(?![:=]))",
+          "name": "keyword.other.binder.heather"
+        }
+      ]
+    },
+
+    "builtins": {
+      "patterns": [
+        {
+          "match": "(?<![.\\w])(Type)\\b(?!::)",
+          "name": "support.type.universe.heather"
+        },
+        {
+          "match": "(?<![.\\w])(Code|Ctx|TyCode|Squash)\\b(?!::)",
+          "name": "support.type.builtin.heather"
+        },
+        {
+          "match": "(?<![.\\w])(squash_ind)\\b",
+          "name": "support.function.builtin.heather"
+        },
+        {
+          "comment": "The J eliminator, written `j(…)`.",
+          "match": "(?<![.\\w])(j)(?=\\s*\\()",
+          "name": "support.function.builtin.heather"
+        },
+        {
+          "match": "(?<![.\\w])(refl|True|False)\\b(?!::)",
+          "name": "constant.language.heather"
+        },
+        {
+          "match": "(?<![.\\w])(self)\\b",
+          "name": "variable.language.self.heather"
+        }
+      ]
+    },
+
+    "holes": {
+      "patterns": [
+        {
+          "comment": "`?name` and bare `?` holes; a `?` right after an expression is propagation, an operator.",
+          "match": "(?<![\\w)\\]?])\\?(?:[A-Za-z_][\\w]*)?",
+          "name": "variable.other.hole.heather"
+        },
+        {
+          "match": "·[₀₁₂₃₄₅₆₇₈₉]*",
+          "name": "variable.language.argument-slot.heather"
+        }
+      ]
+    },
+
+    "names": {
+      "patterns": [
+        {
+          "comment": "Leading segments of a path: `Nat::`, `List::`, `bitvec::`.",
+          "match": "\\b([A-Za-z_][\\w]*)(::)",
+          "captures": {
+            "1": { "patterns": [ { "include": "#path-segments" } ] },
+            "2": { "name": "punctuation.separator.namespace.heather" }
+          }
+        },
+        {
+          "comment": "Capitalized names are types and constructors by convention.",
+          "match": "\\b[A-Z][\\w]*\\b",
+          "name": "entity.name.type.heather"
+        },
+        {
+          "match": "\\b([a-z_][\\w]*)(?=\\s*(?:<[^<>=]*>)?\\()",
+          "name": "entity.name.function.call.heather"
+        },
+        {
+          "match": "(?<=\\.)([a-z_][\\w]*)\\b",
+          "name": "variable.other.property.heather"
+        },
+        {
+          "comment": "A named argument or record field: `field := value`.",
+          "match": "\\b([a-z_][\\w]*)\\s*(?=:=)",
+          "name": "variable.other.property.heather"
+        },
+        {
+          "match": "\\b[a-z_][\\w]*\\b",
+          "name": "variable.other.heather"
+        }
+      ]
+    },
+
+    "operators": {
+      "patterns": [
+        {
+          "match": ":=",
+          "name": "keyword.operator.assignment.heather"
+        },
+        {
+          "comment": "`@f(…)`: a call with every argument explicit.",
+          "match": "@",
+          "name": "keyword.operator.explicit.heather"
+        },
+        {
+          "match": "\\.\\.=?",
+          "name": "keyword.operator.range.heather"
+        },
+        {
+          "match": "=>|->|→|<-|←|<->|↔|\\|-|⊢|↦",
+          "name": "keyword.operator.arrow.heather"
+        },
+        {
+          "match": "&&|\\|\\||∧|∨|¬|!",
+          "name": "keyword.operator.logical.heather"
+        },
+        {
+          "match": "<=|>=|==|!=|≠|≤|≥|≈|≡|∈|∉|⊆|<|>|=",
+          "name": "keyword.operator.comparison.heather"
+        },
+        {
+          "match": "\\+\\+|<<|>>|[-+*/%&^~]|⊕|∙|⊔|⊓|∘|×|∪|∩|∣|↑|⁻¹|\\?|\\|",
+          "name": "keyword.operator.heather"
+        }
+      ]
+    },
+
+    "punctuation": {
+      "patterns": [
+        { "match": "∥", "name": "punctuation.definition.squash.heather" },
+        { "match": "[⟨⟩⟦⟧]", "name": "punctuation.definition.anonymous-constructor.heather" },
+        { "match": "[{}]", "name": "punctuation.section.braces.heather" },
+        { "match": "[()]", "name": "punctuation.section.parens.heather" },
+        { "match": "[\\[\\]]", "name": "punctuation.section.brackets.heather" },
+        { "match": ",", "name": "punctuation.separator.comma.heather" },
+        { "match": ";", "name": "punctuation.terminator.heather" },
+        { "match": ":", "name": "punctuation.separator.colon.heather" },
+        { "match": "\\.", "name": "punctuation.accessor.heather" }
+      ]
+    }
+  }
+}
