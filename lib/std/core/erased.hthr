@@ -1,0 +1,27 @@
+// A value with no runtime presence (docs/language/ownership-design.md
+// §10.6 to §10.8, §13): a generation, a region's token, a key's version.
+// It is part of what a function means and of what its theorems state, and
+// a `runtime fn` that takes one as a parameter is compiled to code that
+// does not (issues/runtime-erased-parameters.md): the reflector drops the
+// parameter, the generator states every theorem of the function at each
+// value of it, and a body that computes with it (reads `g.value` into a
+// result, branches on it) is refused by name, since the code has nothing
+// to compute from.
+//
+// Why a wrapper type and not a mark on the binder: a type needs no parser,
+// reaches every shape of `runtime fn` through the one place the reflector
+// reads a parameter's type, and travels with the value into callers and
+// records. A proof needs no wrapper: a parameter whose type is a
+// proposition (`∥P∥`, any two of whose inhabitants are one term) is erased
+// the same way. `Erased<A>` is for data, whose inhabitants differ, so the
+// meaning may depend on it where the code may not.
+//
+// Nothing makes `Erased<A>` opaque to proofs: `g.value` is an ordinary
+// field, and a theorem about a function that takes one reads it freely.
+record Erased<A> { value: A }
+
+// The value a function threads unchanged, as erased state is: a method
+// that keeps its generation returns the one it was given.
+theorem Erased::eta<A>(g: Erased<A>): Erased(g.value) = g {
+    match g { Erased(_) => refl }
+}
