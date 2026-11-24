@@ -285,6 +285,24 @@ fn Emitted::close_refusal(self pass: Emitted, registers: LoopRegisters, count, e
     }
 }
 
+// What an unbounded loop's close refuses, as `close_refusal` says it of a
+// counted loop's; its exit is a bit or a comparison the file knows
+// (`File::branch_test`).
+fn Emitted::until_close_refusal(self pass: Emitted, registers: UntilRegisters, exit: Nat, next, outputs: List<Nat>) → String {
+    let held = ", where " ++ pass.file.shown();
+    match pass.file.branch_test(exit) {
+        None => "the end of an unbounded loop's pass: its exit bit " ++ refusal_number(exit)
+            ++ " is in no register, nor a comparison the registers hold the operands of" ++ held,
+        Some(_) => match pass.file.move_outputs(word_ports(next), registers.state) {
+            None => "the end of an unbounded loop's pass: a next state word (" ++ refusal_numbers(next) ++ ") is in no register" ++ held,
+            Some(_) => match input_file(word_ports(outputs), registers.state) {
+                None => "the end of an unbounded loop: its outputs (" ++ refusal_numbers(outputs) ++ ") are not one to each state register",
+                Some(_) => "the end of an unbounded loop's pass: the moves into the state's registers" ++ held,
+            },
+        },
+    }
+}
+
 // `StructuredRegion::emit_calls`, answering the way to what it refuses.
 fn StructuredRegion::refusal(self region: StructuredRegion, saves: Nat, slots: Nat, short: List<Nat>, prog: Prog, file: File, placement: List<Place>, names, bound: Nat,
     counts: List<Nat>, homes: List<Lent>) → String {
@@ -329,7 +347,20 @@ fn StructuredRegion::refusal(self region: StructuredRegion, saves: Nat, slots: N
                     },
                 },
             },
-        Until(_, _, _, _, _, _) => "an unbounded loop, which has no code yet",
+        Until(inputs, parameters, body, exit, next, outputs) =>
+            match file.until_entry(saves, inputs, parameters, placement) {
+                None => "the entry of an unbounded loop: an input (" ++ refusal_numbers(inputs)
+                    ++ ") is in no register, or the placement has no register for each state word, where " ++ file.shown(),
+                Some(entry) => match body.emit_calls(saves, slots, short, until_head(prog, entry, names), entry.head, entry.registers.rest,
+                    names + 3, bound, counts, carried_homes(loop_carried(homes, inputs, parameters, next))) {
+                    None => "in an unbounded loop's pass, " ++ body.refusal(saves, slots, short, until_head(prog, entry, names), entry.head,
+                        entry.registers.rest, names + 3, bound, counts, carried_homes(loop_carried(homes, inputs, parameters, next))),
+                    Some(pass) => match pass.until_close(saves, entry.registers, exit, next, outputs, names, short) {
+                        None => pass.until_close_refusal(entry.registers, exit, next, outputs),
+                        Some(_) => "nothing in the unbounded loop",
+                    },
+                },
+            },
     }
 }
 
