@@ -400,8 +400,10 @@ build settled or changed against the text above:
 ## 6. Several written spans
 
 `rt_file.hthr`'s computations write one span and read others; a call lends
-windows of them (`FTm::Lend`), and two views of one buffer are lowered only
-when the written one is the buffer's only view (`views-of-one-buffer-apart`).
+windows of them (`FTm::Lend`). FunctionIR lowers a written view beside
+other views of its buffer where the path knows them apart
+(`views-of-one-buffer-apart`); `rt`'s reflector still refuses a window to
+read of the span the call writes.
 A program statement lends its first buffers whole
 (`statement-lends-named-buffers`).
 

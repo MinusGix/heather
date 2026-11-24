@@ -390,13 +390,18 @@ window past the end is shorter). The lowering accepts a lend
   renaming, needs no comparison;
 - a view's `home` is a home the scope holds for its buffer
   (`homes_length`);
-- a written view is of a buffer no other view of the same lend is of
-  (`views_alone`). That it is of a buffer the scope may write is not the
-  lowering's to check: it is what the function needs (`stores`), which its
-  row of marks answers. The machine law is wider (below): two views of one
-  buffer that share no byte may be lent apart, one of them to write, which
-  is `split_at_mut`. The IR's check can grow to it now that a path knows
-  endpoints ordered (`issues/views-of-one-buffer-apart.md`);
+- no two written views are of one buffer (`views_written_alone`), and a
+  written view and another view of its buffer are known apart
+  (`views_apart`): one's `end` is the other's `start` (one value, as
+  `split_at` makes them), an arm taken on the way says one's end is at most
+  the other's start (`File::at_most`), or the two are constants in order
+  (`File::constants_ordered`). What the check gives is a fact about the
+  values (`ViewsApart`, carried in `Lendable.apart`), which is the machine
+  law's `Viewed.alone` (below): two views of one buffer that share no byte
+  are lent at once, one of them to write. That a written view is of a
+  buffer the scope may write is not the lowering's to check: it is what
+  the function needs (`stores`), which its row of marks answers
+  (`issues/views-of-one-buffer-apart.md`);
 - the callee takes no more buffers than there are views
   (`args_lend` against `views_lents`).
 

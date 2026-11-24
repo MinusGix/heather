@@ -11,9 +11,12 @@
 //   each known of the path taken (`File::at_most`) or by what the value is
 //   (the constant 0, the buffer's own length). The lowering checks it
 //   (`views_lendable`);
-// - a view to write shares its buffer with no other view. The lowering
-//   checks it (`views_alone`; `views_lent` is the two checks and that there
-//   is a view at all);
+// - a view to write shares no byte with another view: no two views to
+//   write are of one buffer (`views_written_alone`), and a view to write
+//   and another view of its buffer are known apart, one's end the other's
+//   start or a comparison on the path saying one ends by where the other
+//   starts (`views_apart`, giving `ViewsApart` of the values). The lowering
+//   checks it (`views_lent` is the checks and that there is a view at all);
 // - a view to write is of a buffer the scope may write. That is not a
 //   check of the lowering's: a lend stores into its written views' buffers
 //   (`views_store`), and the region's theorem asks that the lending lets
@@ -107,50 +110,6 @@ theorem view_written_present(found: Option<View>, none: found = None, written: v
 // ---------------------------------------------------------------------------
 // Which views share a buffer
 
-// No view is of buffer `b`.
-fn views_miss(views: List<View>, b: Nat) → Bool {
-    match views { Nil => True, Cons(view, rest) => !view.buffer.same(b) && views_miss(rest, b) }
-}
-
-// A view to write shares its buffer with no other view: none after it is
-// of its buffer, and no view to write after a view to read is of that
-// one's.
-fn views_alone(views: List<View>) → Bool {
-    match views {
-        Nil => True,
-        Cons(view, rest) => (match view.written { False => !views_store(rest, view.buffer), True => views_miss(rest, view.buffer) }) &&
-            views_alone(rest),
-    }
-}
-
-theorem views_miss_at(views: List<View>, b: Nat): views_miss(views, b).IsTrue() → (v: Nat) →
-    (view_buffer(views.nth(v)) ≠ b) ∨ (views.nth(v) = None) {
-    match views {
-        Nil => λ _ v => Inr(refl),
-        Cons(view, rest) => λ miss v => {
-            let both = Bool::is_true_and(!view.buffer.same(b), views_miss(rest, b), miss);
-            match v {
-                Zero => Inl(λ same => view.buffer.same(b).is_true_not(both.left,
-                    Bool::is_true_of_eq(j(same, λ c _ => view.buffer.same(c) = True, view.buffer.same_self())))),
-                Succ(k) => views_miss_at(rest, b, both.right, k),
-            }
-        },
-    }
-}
-
-theorem views_miss_unstored(views: List<View>, b: Nat): views_miss(views, b).IsTrue() → ¬views_store(views, b).IsTrue() {
-    match views {
-        Nil => λ _ no => no,
-        Cons(view, rest) => λ miss stores => {
-            let both = Bool::is_true_and(!view.buffer.same(b), views_miss(rest, b), miss);
-            match Bool::is_true_or(view.written && view.buffer.same(b), views_store(rest, b), stores) {
-                Inl(here) => view.buffer.same(b).is_true_not(both.left, Bool::is_true_and(view.written, view.buffer.same(b), here).right),
-                Inr(later) => views_miss_unstored(rest, b, both.right, later),
-            }
-        },
-    }
-}
-
 // A buffer the views store into is some view's to write.
 theorem views_store_at(views: List<View>, c: Nat): views_store(views, c).IsTrue() →
     Exists<Nat>(λ k => (view_written(views.nth(k)) = True) ∧ (view_buffer(views.nth(k)) = c)) {
@@ -188,38 +147,214 @@ theorem views_unstored_at(views: List<View>, c: Nat, unstored: ¬views_store(vie
     λ same => unstored(j(same, λ b _ => views_store(views, b).IsTrue(), views_stored(views, v, written)))
 }
 
-// A view to write and another view: of two buffers, or the other is none.
-theorem views_alone_at(views: List<View>): views_alone(views).IsTrue() → (v, u: Nat) → view_written(views.nth(v)) = True → v ≠ u →
-    (view_buffer(views.nth(v)) ≠ view_buffer(views.nth(u))) ∨ (views.nth(u) = None) {
+// No two views to write are of one buffer: no view after a view to write
+// is to write into its buffer.
+fn views_written_alone(views: List<View>) → Bool {
+    match views {
+        Nil => True,
+        Cons(view, rest) => (match view.written { False => True, True => !views_store(rest, view.buffer) }) && views_written_alone(rest),
+    }
+}
+
+// A view to write at the head: no later view to write is of its buffer.
+theorem View::unstored_after(self view: View, rest: List<View>,
+    head: (match view.written { False => True, True => !views_store(rest, view.buffer) }).IsTrue(), written: view.written = True, k: Nat,
+    later: view_written(rest.nth(k)) = True, same: view_buffer(rest.nth(k)) = view.buffer): False {
+    let unstored: (!views_store(rest, view.buffer)).IsTrue() =
+        j(written, λ w _ => (match w { False => True, True => !views_store(rest, view.buffer) }).IsTrue(), head);
+    views_store(rest, view.buffer).is_true_not(unstored, j(same, λ c _ => views_store(rest, c).IsTrue(), views_stored(rest, k, later)))
+}
+
+// Two views to write of one buffer are one view.
+theorem views_written_alone_at(views: List<View>): views_written_alone(views).IsTrue() → (k, u: Nat) → view_written(views.nth(k)) = True →
+    view_written(views.nth(u)) = True → view_buffer(views.nth(u)) = view_buffer(views.nth(k)) → u = k {
+    match views {
+        Nil => λ _ k u no _ _ => absurd(no),
+        Cons(view, rest) => λ alone k u => {
+            let both = Bool::is_true_and(match view.written { False => True, True => !views_store(rest, view.buffer) }, views_written_alone(rest), alone);
+            match k {
+                Zero => match u {
+                    Zero => λ _ _ _ => refl,
+                    Succ(m) => λ written later same => false_elim(view.unstored_after(rest, both.left, written, m, later, same)),
+                },
+                Succ(i) => match u {
+                    Zero => λ later written same => false_elim(view.unstored_after(rest, both.left, written, i, later, sym(same))),
+                    Succ(m) => λ written later same =>
+                        cong_fn<Nat, Nat>(λ n => n + 1, views_written_alone_at(rest, both.right, i, m, written, later, same)),
+                },
+            }
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Views of one buffer, known apart
+//
+// A view to write and another view of its buffer are lent at once where
+// the path knows them apart: one's end is the other's start (the same
+// value, as `split_at` makes them), an arm taken on the way here compared
+// the two (`File::at_most`), or both are constants in order. What that gives is a fact about the
+// values (`ViewsApart`), which is what the machine asks (`Viewed.alone`).
+
+// Where a view ends in its buffer.
+fn view_until(found: Option<View>, values: Valuation()) → Nat { match found { None => 0, Some(view) => values(64, view.end).toNat() } }
+
+// The file knows both values as constants, the first at most the second
+// as words.
+fn File::constants_ordered(self file: File, low, high: Nat) → Bool {
+    match known_value(file.known, low) {
+        None => False,
+        Some(a) => match known_value(file.known, high) {
+            None => False,
+            Some(b) => a.mod(Nat::pow(2, 64)).leb(b.mod(Nat::pow(2, 64))),
+        },
+    }
+}
+
+theorem File::constants_ordered_sound(self file: File, values: Valuation(), gprs: Gprs, low, high: Nat, represents: file.Represents(values, gprs)):
+    file.constants_ordered(low, high).IsTrue() → values(64, low).toNat() <= values(64, high).toNat() {
+    (match known_value(file.known, low) as λ found => known_value(file.known, low) = found → (match found {
+            None => False,
+            Some(a) => match known_value(file.known, high) {
+                None => False,
+                Some(b) => a.mod(Nat::pow(2, 64)).leb(b.mod(Nat::pow(2, 64))),
+            },
+        }).IsTrue() → values(64, low).toNat() <= values(64, high).toNat() {
+        None => λ _ no => false_elim(no),
+        Some(a) => λ found_low => (match known_value(file.known, high) as λ other => known_value(file.known, high) = other → (match other {
+                None => False,
+                Some(b) => a.mod(Nat::pow(2, 64)).leb(b.mod(Nat::pow(2, 64))),
+            }).IsTrue() → values(64, low).toNat() <= values(64, high).toNat() {
+            None => λ _ no => false_elim(no),
+            Some(b) => λ found_high ok => {
+                let at_low: (values(64, low) = BitVec::ofNat(a)) = known_value_holds(values, low, a, file.known, found_low, represents.right);
+                let at_high: (values(64, high) = BitVec::ofNat(b)) = known_value_holds(values, high, b, file.known, found_high, represents.right);
+                let low_is: (values(64, low).toNat() = a.mod(Nat::pow(2, 64))) =
+                    trans(cong_fn<BitVec(64), Nat>(λ w => w.toNat(), at_low), BitVec::toNat_ofNat_mod(64, a));
+                let high_is: (values(64, high).toNat() = b.mod(Nat::pow(2, 64))) =
+                    trans(cong_fn<BitVec(64), Nat>(λ w => w.toNat(), at_high), BitVec::toNat_ofNat_mod(64, b));
+                let ordered: (a.mod(Nat::pow(2, 64)) <= b.mod(Nat::pow(2, 64))) = Nat::leb_sound(a.mod(Nat::pow(2, 64)), b.mod(Nat::pow(2, 64)), ok);
+                let fits: (values(64, low).toNat() <= values(64, high).toNat()) = omega(low_is, high_is, ordered);
+                fits
+            },
+        })(refl),
+    })(refl)
+}
+
+// The file knows the value `end` is at most the value `start`: they are
+// one value, a comparison on the path says so, or both are constants.
+fn File::ends_by(self file: File, end, start: Nat) → Bool {
+    (end.same(start) || file.at_most(end, start)) || file.constants_ordered(end, start)
+}
+
+theorem File::ends_by_sound(self file: File, values: Valuation(), gprs: Gprs, end, start: Nat, represents: file.Represents(values, gprs),
+    known: file.ends_by(end, start).IsTrue()): values(64, end).toNat() <= values(64, start).toNat() {
+    match Bool::is_true_or(end.same(start) || file.at_most(end, start), file.constants_ordered(end, start), known) {
+        Inl(either) => match Bool::is_true_or(end.same(start), file.at_most(end, start), either) {
+            Inl(same) => j(end.same_sound(start, eq_true_of_is_true(end.same(start), same)), λ id _ => values(64, end).toNat() <= values(64, id).toNat(),
+                values(64, end).toNat().le_refl()),
+            Inr(at_most) => file.at_most_sound(values, gprs, end, start, represents, at_most),
+        },
+        Inr(constants) => file.constants_ordered_sound(values, gprs, end, start, represents, constants),
+    }
+}
+
+// Two views the path knows apart: of two buffers, or both to read, or one
+// ends at most where the other starts.
+fn View::apart(self view: View, other: View, file: File) → Bool {
+    (!view.buffer.same(other.buffer) || !(view.written || other.written)) ||
+        (file.ends_by(view.end, other.start) || file.ends_by(other.end, view.start))
+}
+
+fn View::apart_found(self view: View, found: Option<View>, file: File) → Bool {
+    match found { None => True, Some(other) => view.apart(other, file) }
+}
+
+// A view the path knows apart from each of `rest`.
+fn View::apart_from(self view: View, rest: List<View>, file: File) → Bool {
+    match rest { Nil => True, Cons(other, later) => view.apart(other, file) && view.apart_from(later, file) }
+}
+
+// Each two views of a call the path knows apart.
+fn views_apart(views: List<View>, file: File) → Bool {
+    match views { Nil => True, Cons(view, rest) => view.apart_from(rest, file) && views_apart(rest, file) }
+}
+
+// What that says of the values: two views are of two buffers, or one ends
+// at most where the other starts. No view ends at 0.
+fn ViewsApart(found, other: Option<View>, values: Valuation()) → Type {
+    (view_buffer(found) ≠ view_buffer(other)) ∨
+        ((view_until(found, values) <= view_from(other, values)) ∨ (view_until(other, values) <= view_from(found, values)))
+}
+
+theorem views_apart_swap(found, other: Option<View>, values: Valuation(), apart: ViewsApart(found, other, values)): ViewsApart(other, found, values) {
+    match apart {
+        Inl(differ) => Inl(λ same => differ(sym(same))),
+        Inr(ordered) => Inr(match ordered { Inl(before) => Inr(before), Inr(after) => Inl(after) }),
+    }
+}
+
+// Two views known apart, one of them to write, are apart.
+theorem View::apart_sound(self view: View, other: View, file: File, values: Valuation(), gprs: Gprs, represents: file.Represents(values, gprs),
+    apart: view.apart(other, file).IsTrue(), writes: (view.written || other.written).IsTrue()): ViewsApart(Some(view), Some(other), values) {
+    match Bool::is_true_or(!view.buffer.same(other.buffer) || !(view.written || other.written),
+            file.ends_by(view.end, other.start) || file.ends_by(other.end, view.start), apart) {
+        Inl(either) => match Bool::is_true_or(!view.buffer.same(other.buffer), !(view.written || other.written), either) {
+            Inl(differ) => Inl(λ (same: view.buffer = other.buffer) => view.buffer.same(other.buffer).is_true_not(differ,
+                Bool::is_true_of_eq(j(same, λ c _ => view.buffer.same(c) = True, view.buffer.same_self())))),
+            Inr(reads) => false_elim((view.written || other.written).is_true_not(reads, writes)),
+        },
+        Inr(ordered) => Inr(match Bool::is_true_or(file.ends_by(view.end, other.start), file.ends_by(other.end, view.start), ordered) {
+            Inl(before) => Inl(file.ends_by_sound(values, gprs, view.end, other.start, represents, before)),
+            Inr(after) => Inr(file.ends_by_sound(values, gprs, other.end, view.start, represents, after)),
+        }),
+    }
+}
+
+theorem View::apart_found_sound(self view: View, found: Option<View>, file: File, values: Valuation(), gprs: Gprs,
+    represents: file.Represents(values, gprs)):
+    view.apart_found(found, file).IsTrue() → (view.written || view_written(found)).IsTrue() → ViewsApart(Some(view), found, values) {
+    match found {
+        None => λ _ _ => {
+            let low: (0 <= values(64, view.start).toNat()) = omega();
+            Inr(Inr(low))
+        },
+        Some(other) => λ apart writes => view.apart_sound(other, file, values, gprs, represents, apart, writes),
+    }
+}
+
+theorem View::apart_from_at(self view: View, rest: List<View>, file: File): view.apart_from(rest, file).IsTrue() → (k: Nat) →
+    view.apart_found(rest.nth(k), file).IsTrue() {
+    match rest {
+        Nil => λ _ k => trivial,
+        Cons(other, later) => λ apart k => {
+            let both = Bool::is_true_and(view.apart(other, file), view.apart_from(later, file), apart);
+            match k { Zero => both.left, Succ(i) => view.apart_from_at(later, file, both.right, i) }
+        },
+    }
+}
+
+// A view to write and any other view of a call the path knows apart are
+// apart.
+theorem views_apart_at(views: List<View>, file: File, values: Valuation(), gprs: Gprs, represents: file.Represents(values, gprs)):
+    views_apart(views, file).IsTrue() → (v, u: Nat) → view_written(views.nth(v)) = True → v ≠ u → ViewsApart(views.nth(v), views.nth(u), values) {
     match views {
         Nil => λ _ v u no _ => absurd(no),
-        Cons(view, rest) => λ alone v u => {
-            let both = Bool::is_true_and(match view.written { False => !views_store(rest, view.buffer), True => views_miss(rest, view.buffer) },
-                views_alone(rest), alone);
+        Cons(view, rest) => λ apart v u => {
+            let both = Bool::is_true_and(view.apart_from(rest, file), views_apart(rest, file), apart);
             match v {
                 Zero => match u {
                     Zero => λ _ differ => false_elim(differ(refl)),
-                    Succ(k) => λ written _ => {
-                        let miss: views_miss(rest, view.buffer).IsTrue() = j(written,
-                            λ w _ => (match w { False => !views_store(rest, view.buffer), True => views_miss(rest, view.buffer) }).IsTrue(), both.left);
-                        match views_miss_at(rest, view.buffer, miss, k) {
-                            Inl(other) => Inl(λ same => other(sym(same))),
-                            Inr(none) => Inr(none),
-                        }
-                    },
+                    Succ(k) => λ written _ => view.apart_found_sound(rest.nth(k), file, values, gprs, represents,
+                        view.apart_from_at(rest, file, both.left, k),
+                        Bool::is_true_or_l(view.written, view_written(rest.nth(k)), Bool::is_true_of_eq(written))),
                 },
                 Succ(i) => match u {
-                    Zero => λ written _ => Inl((match view.written as λ w =>
-                        (match w { False => !views_store(rest, view.buffer), True => views_miss(rest, view.buffer) }).IsTrue() →
-                        view_buffer(rest.nth(i)) ≠ view.buffer {
-                        False => λ unstored same => views_store(rest, view.buffer).is_true_not(unstored,
-                            j(same, λ b _ => views_store(rest, b).IsTrue(), views_stored(rest, i, written))),
-                        True => λ miss => match views_miss_at(rest, view.buffer, miss, i) {
-                            Inl(other) => other,
-                            Inr(none) => λ _ => view_written_present(rest.nth(i), none, written),
-                        },
-                    })(both.left)),
-                    Succ(k) => λ written differ => views_alone_at(rest, both.right, i, k, written, λ same => differ(cong_fn<Nat, Nat>(λ n => n + 1, same))),
+                    Zero => λ written _ => views_apart_swap(Some(view), rest.nth(i), values,
+                        view.apart_found_sound(rest.nth(i), file, values, gprs, represents, view.apart_from_at(rest, file, both.left, i),
+                            Bool::is_true_or_r(view.written, view_written(rest.nth(i)), Bool::is_true_of_eq(written)))),
+                    Succ(k) => λ written differ => views_apart_at(rest, file, values, gprs, represents, both.right, i, k, written,
+                        λ same => differ(cong_fn<Nat, Nat>(λ n => n + 1, same))),
                 },
             }
         },
@@ -316,24 +451,23 @@ theorem put_views_unstored(views: List<View>, values: Valuation(), c: Nat): ¬vi
     }
 }
 
-// The buffer of view `k`, a view to write alone in its buffer: the
+// The buffer of view `k`, the only view to write of its buffer: the
 // buffer's bytes with the view's window replaced by what the callee left
 // of its buffer `k`.
-theorem put_views_stored(views: List<View>, values: Valuation()): views_alone(views).IsTrue() → (k: Nat) →
+theorem put_views_stored(views: List<View>, values: Valuation()): views_written_alone(views).IsTrue() → (k: Nat) →
     view_written(views.nth(k)) = True → (after, held: Buffers()) → view_buffer(views.nth(k)) < held.len() →
     buffer_bytes(put_views(views, values, after, held), view_buffer(views.nth(k))) =
         buffer_bytes(held, view_buffer(views.nth(k))).put_window(view_from(views.nth(k), values), buffer_bytes(after, k)) {
     match views {
         Nil => λ _ k no after held _ => absurd(no),
         Cons(view, rest) => λ alone k => {
-            let both = Bool::is_true_and(match view.written { False => !views_store(rest, view.buffer), True => views_miss(rest, view.buffer) },
-                views_alone(rest), alone);
+            let both = Bool::is_true_and(match view.written { False => True, True => !views_store(rest, view.buffer) }, views_written_alone(rest), alone);
             match k {
                 Zero => λ written after held inside => {
                     let later: Buffers() = match after { Nil => Nil, Cons(_, tail) => tail };
-                    let miss: views_miss(rest, view.buffer).IsTrue() = j(written,
-                        λ w _ => (match w { False => !views_store(rest, view.buffer), True => views_miss(rest, view.buffer) }).IsTrue(), both.left);
-                    trans(put_views_unstored(rest, values, view.buffer, views_miss_unstored(rest, view.buffer, miss), later,
+                    let unstored: (!views_store(rest, view.buffer)).IsTrue() =
+                        j(written, λ w _ => (match w { False => True, True => !views_store(rest, view.buffer) }).IsTrue(), both.left);
+                    trans(put_views_unstored(rest, values, view.buffer, λ stores => views_store(rest, view.buffer).is_true_not(unstored, stores), later,
                             view.put(values, buffer_bytes(after, 0), held)),
                         trans(cong_fn<Buffers(), List<BitVec(8)>>(λ put => buffer_bytes(put, view.buffer),
                                 view.put_written(values, buffer_bytes(after, 0), held, written)),
@@ -344,11 +478,7 @@ theorem put_views_stored(views: List<View>, values: Valuation()): views_alone(vi
                     let later: Buffers() = match after { Nil => Nil, Cons(_, tail) => tail };
                     let c = view_buffer(rest.nth(i));
                     let put = view.put(values, buffer_bytes(after, 0), held);
-                    let other: (view.written = True → view.buffer ≠ c) = λ head =>
-                        match views_alone_at(Cons(view, rest), alone, 0, i + 1, head, λ same => absurd(same)) {
-                            Inl(differs) => differs,
-                            Inr(none) => λ _ => view_written_present(rest.nth(i), none, written),
-                        };
+                    let other: (view.written = True → view.buffer ≠ c) = λ head same => view.unstored_after(rest, both.left, head, i, written, sym(same));
                     let kept: (buffer_bytes(put, c) = buffer_bytes(held, c)) = view.put_other(values, buffer_bytes(after, 0), held, c, other);
                     let still: (c < put.len()) = j(sym(view.put_len(values, buffer_bytes(after, 0), held)), λ n _ => c < n, inside);
                     trans(put_views_stored(rest, values, both.right, i, written, later, put, still),
@@ -459,6 +589,20 @@ theorem view_inside(values: Valuation(), addresses: List<BitVec(64)>, buffers: B
             let fits: (values(64, view.start).toNat() + view.bytes(values, buffers).len() <= buffer_bytes(buffers, view.buffer).len()) =
                 omega(len, low, high);
             fits
+        },
+    }
+}
+
+// A view's end is its start and its length.
+theorem view_ends(values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(), found: Option<View>):
+    ViewIs(found, values, addresses, buffers) → view_from(found, values) + view_bytes(found, values, buffers).len() = view_until(found, values) {
+    match found {
+        None => λ _ => refl,
+        Some(view) => λ is => {
+            let len = view.len_bytes(values, addresses, buffers, buffers, λ b => refl, is);
+            let low: (values(64, view.start).toNat() <= values(64, view.end).toNat()) = is.left.right.left;
+            let ends: (values(64, view.start).toNat() + view.bytes(values, buffers).len() = values(64, view.end).toNat()) = omega(len, low);
+            ends
         },
     }
 }
@@ -575,11 +719,13 @@ fn lend_spans(views: List<View>, values: Valuation(), buffers: Buffers()) → Sp
 }
 
 // What makes views lendable by a scope lent `buffers` at `addresses`, to
-// write where `written`: each fits and is bound by its nodes, a view to
-// write is alone in its buffer, and the scope may write what the views do.
+// write where `written`: each fits and is bound by its nodes, no two views
+// to write are of one buffer, a view to write is apart from every other
+// view, and the scope may write what the views do.
 record Lendable(views: List<View>, values: Valuation(), addresses: List<BitVec(64)>, buffers: Buffers(), written: Nat → Bool) {
     each: (v: Nat) → ViewIs(views.nth(v), values, addresses, buffers),
-    alone: views_alone(views).IsTrue(),
+    alone: views_written_alone(views).IsTrue(),
+    apart: (v, u: Nat) → view_written(views.nth(v)) = True → v ≠ u → ViewsApart(views.nth(v), views.nth(u), values),
     allowed: (b: Nat) → views_store(views, b).IsTrue() → written(b) = True,
 }
 
@@ -589,10 +735,24 @@ theorem Lendable::parts({views: List<View>}, {values: Valuation()}, {addresses: 
     Viewed(
         inside := λ v => view_inside(values, addresses, buffers, views.nth(v), lendable.each(v)),
         allowed := λ v marks => lendable.allowed(view_buffer(views.nth(v)), views_stored(views, v, marks)),
-        alone := λ v u marks differ => match views_alone_at(views, lendable.alone, v, u, marks, differ) {
+        alone := λ v u marks differ => match lendable.apart(v, u, marks, differ) {
             Inl(other) => Inl(other),
-            Inr(none) => Inr(Inr(j(sym(none), λ f _ => view_from(f, values) + view_bytes(f, values, buffers).len() <= view_from(views.nth(v), values),
-                zero_least(view_from(views.nth(v), values))))),
+            Inr(ordered) => {
+                let ends_v = view_ends(values, addresses, buffers, views.nth(v), lendable.each(v));
+                let ends_u = view_ends(values, addresses, buffers, views.nth(u), lendable.each(u));
+                Inr(match ordered {
+                    Inl(before) => {
+                        let fits: (view_from(views.nth(v), values) + view_bytes(views.nth(v), values, buffers).len() <= view_from(views.nth(u), values)) =
+                            omega(before, ends_v);
+                        Inl(fits)
+                    },
+                    Inr(after) => {
+                        let fits: (view_from(views.nth(u), values) + view_bytes(views.nth(u), values, buffers).len() <= view_from(views.nth(v), values)) =
+                            omega(after, ends_u);
+                        Inr(fits)
+                    },
+                })
+            },
         },
     )
 }
@@ -726,13 +886,7 @@ theorem Lendable::put_reads_at<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess
         Inl(in_file) => {
             let put = put_views_stored(views, values, lendable.alone, k, marks, left, held, in_file);
             let only: ((u: Nat) → view_written(views.nth(u)) = True → view_buffer(views.nth(u)) = b → u = k) = λ u marks_u same_buffer =>
-                match u.eq_dec(k) {
-                    Inl(same_u) => same_u,
-                    Inr(differ) => match views_alone_at(views, lendable.alone, k, u, marks, λ eq => differ(sym(eq))) {
-                        Inl(other) => false_elim(other(sym(same_buffer))),
-                        Inr(none) => false_elim(view_written_present(views.nth(u), none, marks_u)),
-                    },
-                };
+                views_written_alone_at(views, lendable.alone, k, u, marks, marks_u, same_buffer);
             let now_k: Readable(data, after, next_rip(address_of(addresses, b), start), ys) =
                 j(lendable.at_view(k, λ none => view_written_present(views.nth(k), none, marks)), λ a _ => Readable(data, after, a, ys), now(k));
             let reads: Readable(data, after, address_of(addresses, b), xs.put_window(start, ys)) =
@@ -906,27 +1060,33 @@ theorem views_lendable_fit(views: List<View>, file: File, homes: List<Lent>, val
 theorem views_lendable_sound(views: List<View>, file: File, homes: List<Lent>, values: Valuation(), gprs: Gprs,
     addresses: List<BitVec(64)>, buffers, over: Buffers(), written: Nat → Bool, represents: file.Represents(values, gprs),
     held: HomesHold(homes, values, addresses, buffers), lendable: views_lendable(views, file, homes).IsTrue(),
-    alone: views_alone(views).IsTrue(), bound: NodesHoldOver(over, values, views_nodes(views)),
+    alone: views_written_alone(views).IsTrue(), apart: views_apart(views, file).IsTrue(), bound: NodesHoldOver(over, values, views_nodes(views)),
     allowed: (b: Nat) → views_store(views, b).IsTrue() → written(b) = True): Lendable(views, values, addresses, buffers, written) {
     Lendable(
         each := views_are(views, values, addresses, buffers, over,
             views_lendable_fit(views, file, homes, values, gprs, addresses, buffers, represents, held, lendable), bound),
         alone := alone,
+        apart := views_apart_at(views, file, values, gprs, represents, apart),
         allowed := allowed,
     )
 }
 
 // What a call over views is lowered under: some view (a call over none is
-// a call), each one lendable, a view to write alone in its buffer.
+// a call), each one lendable, no two to write of one buffer, and each view
+// to write known apart from the others.
 fn views_lent(views: List<View>, file: File, homes: List<Lent>) → Bool {
-    match views { Nil => False, Cons(_, _) => views_lendable(views, file, homes) && views_alone(views) }
+    match views { Nil => False, Cons(_, _) => (views_lendable(views, file, homes) && views_written_alone(views)) && views_apart(views, file) }
 }
 
-theorem views_lent_parts(views: List<View>, file: File, homes: List<Lent>):
-    views_lent(views, file, homes).IsTrue() → views_lendable(views, file, homes).IsTrue() ∧ views_alone(views).IsTrue() {
+theorem views_lent_parts(views: List<View>, file: File, homes: List<Lent>): views_lent(views, file, homes).IsTrue() →
+    (views_lendable(views, file, homes).IsTrue() ∧ views_written_alone(views).IsTrue()) ∧ views_apart(views, file).IsTrue() {
     match views {
         Nil => λ no => false_elim(no),
-        Cons(view, rest) => λ ok => Bool::is_true_and(views_lendable(Cons(view, rest), file, homes), views_alone(Cons(view, rest)), ok),
+        Cons(view, rest) => λ ok => {
+            let both = Bool::is_true_and(views_lendable(Cons(view, rest), file, homes) && views_written_alone(Cons(view, rest)),
+                views_apart(Cons(view, rest), file), ok);
+            ⟨Bool::is_true_and(views_lendable(Cons(view, rest), file, homes), views_written_alone(Cons(view, rest)), both.left), both.right⟩
+        },
     }
 }
 
