@@ -25,12 +25,12 @@
 // The proofs are at the table's capacity, four slots, which the compiled
 // functions fix (`[u64; 4]`, `band(3)`); distances between slots are
 // `WordMap::dist(a, b) = (b + 4 - a) % 4`, which `omega` reads as its body.
-// Each probe is proved by applying its function's `induct` principle to a
-// motive with one stated lemma per case (the principle's case binders carry
-// no test names, so `induct`'s arms cannot cite them). A distance step is a
-// small lemma over bare numbers: inline, `omega`'s certificate is as wide as
-// every distance in scope, and its subtraction splits may go to unrelated
-// ones (docs/tactics/omega-measure-reduction-design.md §27).
+// Each probe is proved by `induct` along its function, an arm per branch
+// citing the branch's tests by the names the function gave them (`empty`,
+// `hit`, `moves`). A distance step is a small lemma over bare numbers:
+// inline, `omega`'s certificate is as wide as every distance in scope, and
+// its subtraction splits may go to unrelated ones
+// (docs/tactics/omega-measure-reduction-design.md §27).
 import logic;
 import bool;
 import nat;
@@ -249,72 +249,45 @@ fn WordMap::Finds(m: WordMap, k: u64, s: Nat, j, left: u64) → Type {
     m.find_at(k, j, left) = m.val(s)
 }
 
-theorem WordMap::finds_empty(m: WordMap, k: u64, s: Nat, s4: s < 4, at: m.key(s) = k, nz: ¬(k = 0), j, left: u64, empty: m.key(j.toNat()) = 0):
-    WordMap::Finds(m, k, s, j, left)
-{
-    λ j4 budget clear => {
-        match Nat::eq_dec(j.toNat(), s) {
-            Inl(same) => false_elim(nz(trans(sym(at), trans(cong_fn(λ (q: Nat) => m.key(q), sym(same)), empty)))),
-            Inr(_) => match clear(j.toNat(), j4, omega) { And(occupied, _) => false_elim(occupied(empty)) },
-        }
-    }
-}
-
-theorem WordMap::finds_hit(m: WordMap, k: u64, s: Nat, s4: s < 4, j, left: u64, hit: m.key(j.toNat()) = k, eq: m.find_at(k, j, left) = m.val(j.toNat())):
-    WordMap::Finds(m, k, s, j, left)
-{
-    λ j4 budget clear => trans(eq, match Nat::eq_dec(j.toNat(), s) {
-        Inl(same) => cong_fn(λ (q: Nat) => m.val(q), same),
-        Inr(_) => match clear(j.toNat(), j4, omega) { And(_, other) => false_elim(other(hit)) },
-    })
-}
-
-theorem WordMap::finds_next(m: WordMap, k: u64, s: Nat, s4: s < 4, at: m.key(s) = k, j, left: u64, more: 0 < left, hit: ¬(m.key(j.toNat()) = k),
-    eq: m.find_at(k, j, left) = m.find_at(k, (j + 1).band(3), left - 1), ih: WordMap::Finds(m, k, s, (j + 1).band(3), left - 1)):
-    WordMap::Finds(m, k, s, j, left)
-{
-    λ j4 budget clear => {
-        let nj = WordMap::next_slot(j, j4);
-        let dl: ((left - 1).toNat() = left.toNat() - 1) = bv_omega;
-        let other: (¬(j.toNat() = s)) = λ e => hit(trans(cong_fn(λ (q: Nat) => m.key(q), e), at));
-        trans(eq, ih(omega(nj), WordMap::step_budget(j.toNat(), s, ((j + 1).band(3)).toNat(), left.toNat(), (left - 1).toNat(), j4, s4, nj, dl, other, budget),
-            λ t t4 before => clear(t, t4, WordMap::step_before(j.toNat(), s, t, ((j + 1).band(3)).toNat(), j4, s4, t4, nj, other, before))))
-    }
-}
-
 theorem WordMap::find_found(m: WordMap, k: u64, s: Nat, s4: s < 4, at: m.key(s) = k, nz: ¬(k = 0), j, left: u64): WordMap::Finds(m, k, s, j, left) {
-    WordMap::find_at::induct(m, k, λ (j: u64) (left: u64) => WordMap::Finds(m, k, s, j, left),
-        λ j left more lt empty eq => WordMap::finds_empty(m, k, s, s4, at, nz, j, left, empty),
-        λ j left more lt empty hit eq => WordMap::finds_hit(m, k, s, s4, j, left, hit, eq),
-        λ j left more lt empty hit eq ih => WordMap::finds_next(m, k, s, s4, at, j, left, more, hit, eq, ih),
-        λ j left more lt eq => λ j4 budget clear => false_elim(lt(j4)),
-        λ j left more eq => λ j4 budget clear => false_elim(omega(more, budget)),
-        j, left)
+    induct WordMap::find_at(m, k, j, left) {
+        True::True::True => λ j4 budget clear => {
+            let empty: (m.key(j.toNat()) = 0) = empty;
+            match Nat::eq_dec(j.toNat(), s) {
+                Inl(same) => false_elim(nz(trans(sym(at), trans(cong_fn(λ (q: Nat) => m.key(q), sym(same)), empty)))),
+                Inr(_) => match clear(j.toNat(), j4, omega) { And(occupied, _) => false_elim(occupied(empty)) },
+            }
+        },
+        True::True::False::True => λ j4 budget clear => {
+            let eq: (m.find_at(k, j, left) = m.val(j.toNat())) = eq;
+            trans(eq, match Nat::eq_dec(j.toNat(), s) {
+                Inl(same) => cong_fn(λ (q: Nat) => m.val(q), same),
+                Inr(_) => match clear(j.toNat(), j4, omega) { And(_, other) => false_elim(other(hit)) },
+            })
+        },
+        True::True::False::False => λ j4 budget clear => {
+            let nj = WordMap::next_slot(j, j4);
+            let dl: ((left - 1).toNat() = left.toNat() - 1) = bv_omega;
+            let other: (¬(j.toNat() = s)) = λ e => hit(trans(cong_fn(λ (q: Nat) => m.key(q), e), at));
+            trans(eq, ih(omega(nj), WordMap::step_budget(j.toNat(), s, ((j + 1).band(3)).toNat(), left.toNat(), (left - 1).toNat(), j4, s4, nj, dl, other, budget),
+                λ t t4 before => clear(t, t4, WordMap::step_before(j.toNat(), s, t, ((j + 1).band(3)).toNat(), j4, s4, t4, nj, other, before))))
+        },
+        True::False => λ j4 budget clear => false_elim(lt(j4)),
+        False => λ j4 budget clear => false_elim(omega(more, budget)),
+    }
 }
 
 // A probe for a key no slot holds answers 0.
 fn WordMap::Misses(m: WordMap, k: u64, j, left: u64) → Type { j.toNat() < 4 → m.find_at(k, j, left) = 0 }
 
-theorem WordMap::misses_hit(m: WordMap, k: u64, none: (t: Nat) → t < 4 → m.key(t) = k → m.key(t) = 0, j, left: u64,
-    empty: ¬(m.key(j.toNat()) = 0), hit: m.key(j.toNat()) = k): WordMap::Misses(m, k, j, left)
-{
-    λ j4 => false_elim(empty(none(j.toNat(), j4, hit)))
-}
-
-theorem WordMap::misses_next(m: WordMap, k: u64, j, left: u64, eq: m.find_at(k, j, left) = m.find_at(k, (j + 1).band(3), left - 1),
-    ih: WordMap::Misses(m, k, (j + 1).band(3), left - 1)): WordMap::Misses(m, k, j, left)
-{
-    λ j4 => trans(eq, ih(omega(WordMap::next_slot(j, j4))))
-}
-
 theorem WordMap::find_absent(m: WordMap, k: u64, none: (t: Nat) → t < 4 → m.key(t) = k → m.key(t) = 0, j, left: u64): WordMap::Misses(m, k, j, left) {
-    WordMap::find_at::induct(m, k, λ (j: u64) (left: u64) => WordMap::Misses(m, k, j, left),
-        λ j left more lt empty eq => λ j4 => eq,
-        λ j left more lt empty hit eq => WordMap::misses_hit(m, k, none, j, left, empty, hit),
-        λ j left more lt empty hit eq ih => WordMap::misses_next(m, k, j, left, eq, ih),
-        λ j left more lt eq => λ j4 => eq,
-        λ j left more eq => λ j4 => eq,
-        j, left)
+    induct WordMap::find_at(m, k, j, left) {
+        True::True::True => λ j4 => eq,
+        True::True::False::True => λ j4 => false_elim(empty(none(j.toNat(), j4, hit))),
+        True::True::False::False => λ j4 => trans(eq, ih(omega(WordMap::next_slot(j, j4)))),
+        True::False => λ j4 => eq,
+        False => λ j4 => eq,
+    }
 }
 
 // Where a key is: at a slot, or at none.
@@ -491,38 +464,28 @@ theorem WordMap::replaces_empty(m: WordMap, k, v: u64, s: Nat, s4: s < 4, at: m.
     }
 }
 
-theorem WordMap::replaces_hit(m: WordMap, k, v: u64, s: Nat, s4: s < 4, j, left: u64, hit: m.key(j.toNat()) = k,
-    eq: WordMap::insert_at(m, k, v, j, left) = Mutated(m.replaced(j.toNat(), v), 0)): WordMap::Replaces(m, k, v, s, j, left)
-{
-    λ j4 budget clear => trans(eq, match Nat::eq_dec(j.toNat(), s) {
-        Inl(same) => cong_fn(λ (q: Nat) => Mutated(m.replaced(q, v), 0), same),
-        Inr(_) => match clear(j.toNat(), j4, omega) { And(_, other) => false_elim(other(hit)) },
-    })
-}
-
-theorem WordMap::replaces_next(m: WordMap, k, v: u64, s: Nat, s4: s < 4, at: m.key(s) = k, j, left: u64, more: 0 < left, hit: ¬(m.key(j.toNat()) = k),
-    eq: WordMap::insert_at(m, k, v, j, left) = WordMap::insert_at(m, k, v, (j + 1).band(3), left - 1), ih: WordMap::Replaces(m, k, v, s, (j + 1).band(3), left - 1)):
-    WordMap::Replaces(m, k, v, s, j, left)
-{
-    λ j4 budget clear => {
-        let nj = WordMap::next_slot(j, j4);
-        let dl: ((left - 1).toNat() = left.toNat() - 1) = bv_omega;
-        let other: (¬(j.toNat() = s)) = λ e => hit(trans(cong_fn(λ (q: Nat) => m.key(q), e), at));
-        trans(eq, ih(omega(nj), WordMap::step_budget(j.toNat(), s, ((j + 1).band(3)).toNat(), left.toNat(), (left - 1).toNat(), j4, s4, nj, dl, other, budget),
-            λ t t4 before => clear(t, t4, WordMap::step_before(j.toNat(), s, t, ((j + 1).band(3)).toNat(), j4, s4, t4, nj, other, before))))
-    }
-}
-
 // An insert of a stored key replaces its value where it is.
 theorem WordMap::insert_replaces(m: WordMap, k, v: u64, s: Nat, s4: s < 4, at: m.key(s) = k, nz: ¬(k = 0), j, left: u64): WordMap::Replaces(m, k, v, s, j, left) {
-    WordMap::insert_at::induct(m, k, v, λ (j: u64) (left: u64) => WordMap::Replaces(m, k, v, s, j, left),
-        λ j left more lt empty room eq => WordMap::replaces_empty(m, k, v, s, s4, at, nz, j, left, empty),
-        λ j left more lt empty room eq => WordMap::replaces_empty(m, k, v, s, s4, at, nz, j, left, empty),
-        λ j left more lt empty hit eq => WordMap::replaces_hit(m, k, v, s, s4, j, left, hit, eq),
-        λ j left more lt empty hit eq ih => WordMap::replaces_next(m, k, v, s, s4, at, j, left, more, hit, eq, ih),
-        λ j left more lt eq => λ j4 budget clear => false_elim(lt(j4)),
-        λ j left more eq => λ j4 budget clear => false_elim(omega(more, budget)),
-        j, left)
+    induct WordMap::insert_at(m, k, v, j, left) {
+        True::True::True::True => WordMap::replaces_empty(m, k, v, s, s4, at, nz, j, left, empty),
+        True::True::True::False => WordMap::replaces_empty(m, k, v, s, s4, at, nz, j, left, empty),
+        True::True::False::True => λ j4 budget clear => {
+            let eq: (WordMap::insert_at(m, k, v, j, left) = Mutated(m.replaced(j.toNat(), v), 0)) = eq;
+            trans(eq, match Nat::eq_dec(j.toNat(), s) {
+                Inl(same) => cong_fn(λ (q: Nat) => Mutated(m.replaced(q, v), 0), same),
+                Inr(_) => match clear(j.toNat(), j4, omega) { And(_, other) => false_elim(other(hit)) },
+            })
+        },
+        True::True::False::False => λ j4 budget clear => {
+            let nj = WordMap::next_slot(j, j4);
+            let dl: ((left - 1).toNat() = left.toNat() - 1) = bv_omega;
+            let other: (¬(j.toNat() = s)) = λ e => hit(trans(cong_fn(λ (q: Nat) => m.key(q), e), at));
+            trans(eq, ih(omega(nj), WordMap::step_budget(j.toNat(), s, ((j + 1).band(3)).toNat(), left.toNat(), (left - 1).toNat(), j4, s4, nj, dl, other, budget),
+                λ t t4 before => clear(t, t4, WordMap::step_before(j.toNat(), s, t, ((j + 1).band(3)).toNat(), j4, s4, t4, nj, other, before))))
+        },
+        True::False => λ j4 budget clear => false_elim(lt(j4)),
+        False => λ j4 budget clear => false_elim(omega(more, budget)),
+    }
 }
 
 // Slot `e`, empty, is the first empty one a probe from `j0` meets.
@@ -538,47 +501,38 @@ fn WordMap::Adds(m: WordMap, k, v: u64, j, left: u64) → Type {
        And<¬(m.count.toNat() < 3), WordMap::insert_at(m, k, v, j, left) = Mutated(m, 2)>>
 }
 
-theorem WordMap::adds_room(m: WordMap, k, v: u64, j, left: u64, empty: m.key(j.toNat()) = 0, room: m.count.toNat() < 3,
-    eq: WordMap::insert_at(m, k, v, j, left) = Mutated(m.filled(j.toNat(), k, v), 1)): WordMap::Adds(m, k, v, j, left)
-{
-    λ j4 spare => Inl(Exists(j.toNat(), And(FirstEmpty(j4, empty, λ t t4 before => false_elim(omega(before, j4))), And(room, eq))))
-}
-
-theorem WordMap::adds_next(m: WordMap, k, v: u64, j, left: u64, more: 0 < left, empty: ¬(m.key(j.toNat()) = 0),
-    eq: WordMap::insert_at(m, k, v, j, left) = WordMap::insert_at(m, k, v, (j + 1).band(3), left - 1), ih: WordMap::Adds(m, k, v, (j + 1).band(3), left - 1)):
-    WordMap::Adds(m, k, v, j, left)
-{
-    λ j4 spare => {
-        let nj = WordMap::next_slot(j, j4);
-        let dl: ((left - 1).toNat() = left.toNat() - 1) = bv_omega;
-        let e = spare.witness;
-        let other: (¬(j.toNat() = e)) = λ same => empty(trans(cong_fn(λ (q: Nat) => m.key(q), same), spare.proof.right.left));
-        let closer = WordMap::step_budget(j.toNat(), e, ((j + 1).band(3)).toNat(), left.toNat(), (left - 1).toNat(), j4, spare.proof.left, nj, dl, other, spare.proof.right.right);
-        match ih(omega(nj), Exists(e, And(spare.proof.left, And(spare.proof.right.left, closer)))) {
-            Inl(found) => {
-                let f = found.proof.left;
-                let further: (¬(j.toNat() = found.witness)) = λ same => empty(trans(cong_fn(λ (q: Nat) => m.key(q), same), f.empty));
-                Inl(Exists(found.witness, And(FirstEmpty(f.inside, f.empty, λ t t4 before => match Nat::eq_dec(t, j.toNat()) {
-                    Inl(here) => λ z => empty(trans(cong_fn(λ (q: Nat) => m.key(q), sym(here)), z)),
-                    Inr(away) => f.path(t, t4, WordMap::step_before_back(j.toNat(), found.witness, t, ((j + 1).band(3)).toNat(), j4, f.inside, t4, nj, further, away, before)),
-                }), And(found.proof.right.left, trans(eq, found.proof.right.right)))))
-            },
-            Inr(full) => Inr(And(full.left, trans(eq, full.right))),
-        }
-    }
-}
-
 // An insert of a key no slot holds fills the first empty slot of its probe,
 // or answers full and leaves the table.
 theorem WordMap::insert_adds(m: WordMap, k, v: u64, none: (t: Nat) → t < 4 → ¬(m.key(t) = k), j, left: u64): WordMap::Adds(m, k, v, j, left) {
-    WordMap::insert_at::induct(m, k, v, λ (j: u64) (left: u64) => WordMap::Adds(m, k, v, j, left),
-        λ j left more lt empty room eq => WordMap::adds_room(m, k, v, j, left, empty, room, eq),
-        λ j left more lt empty room eq => λ j4 spare => Inr(And(room, eq)),
-        λ j left more lt empty hit eq => λ j4 spare => false_elim(none(j.toNat(), j4, hit)),
-        λ j left more lt empty hit eq ih => WordMap::adds_next(m, k, v, j, left, more, empty, eq, ih),
-        λ j left more lt eq => λ j4 spare => false_elim(lt(j4)),
-        λ j left more eq => λ j4 spare => false_elim(omega(more, spare.proof.right.right)),
-        j, left)
+    induct WordMap::insert_at(m, k, v, j, left) {
+        True::True::True::True => λ j4 spare => {
+            let empty: (m.key(j.toNat()) = 0) = empty;
+            Inl(Exists(j.toNat(), And(FirstEmpty(j4, empty, λ t t4 before => false_elim(omega(before, j4))), And(room, eq))))
+        },
+        True::True::True::False => λ j4 spare => Inr(And(room, eq)),
+        True::True::False::True => λ j4 spare => false_elim(none(j.toNat(), j4, hit)),
+        True::True::False::False => λ j4 spare => {
+            let empty: (¬(m.key(j.toNat()) = 0)) = empty;
+            let nj = WordMap::next_slot(j, j4);
+            let dl: ((left - 1).toNat() = left.toNat() - 1) = bv_omega;
+            let e = spare.witness;
+            let other: (¬(j.toNat() = e)) = λ same => empty(trans(cong_fn(λ (q: Nat) => m.key(q), same), spare.proof.right.left));
+            let closer = WordMap::step_budget(j.toNat(), e, ((j + 1).band(3)).toNat(), left.toNat(), (left - 1).toNat(), j4, spare.proof.left, nj, dl, other, spare.proof.right.right);
+            match ih(omega(nj), Exists(e, And(spare.proof.left, And(spare.proof.right.left, closer)))) {
+                Inl(found) => {
+                    let f = found.proof.left;
+                    let further: (¬(j.toNat() = found.witness)) = λ same => empty(trans(cong_fn(λ (q: Nat) => m.key(q), same), f.empty));
+                    Inl(Exists(found.witness, And(FirstEmpty(f.inside, f.empty, λ t t4 before => match Nat::eq_dec(t, j.toNat()) {
+                        Inl(here) => λ z => empty(trans(cong_fn(λ (q: Nat) => m.key(q), sym(here)), z)),
+                        Inr(away) => f.path(t, t4, WordMap::step_before_back(j.toNat(), found.witness, t, ((j + 1).band(3)).toNat(), j4, f.inside, t4, nj, further, away, before)),
+                    }), And(found.proof.right.left, trans(eq, found.proof.right.right)))))
+                },
+                Inr(full) => Inr(And(full.left, trans(eq, full.right))),
+            }
+        },
+        True::False => λ j4 spare => false_elim(lt(j4)),
+        False => λ j4 spare => false_elim(omega(more, spare.proof.right.right)),
+    }
 }
 
 // Reads of the slots after an insert.
@@ -618,11 +572,7 @@ theorem WordMap::spare(m: WordMap, inv: WordMapInv(m)): Exists(λ (e: Nat) => An
 }
 
 // An insert is the probe from the key's home slot.
-theorem WordMap::mutated_eta(r: Mutated<WordMap, u64>): Mutated(r.after, r.value) = r { refl }
-
-theorem WordMap::insert_is(m: WordMap, k, v: u64): WordMap::insert(m, k, v) = WordMap::insert_at(m, k, v, word_map_home(k), 4) {
-    WordMap::mutated_eta(WordMap::insert_at(m, k, v, word_map_home(k), 4))
-}
+theorem WordMap::insert_is(m: WordMap, k, v: u64): WordMap::insert(m, k, v) = WordMap::insert_at(m, k, v, word_map_home(k), 4) { refl }
 
 // What an insert did.
 inductive Inserted(m: WordMap, k, v: u64) {
@@ -1158,68 +1108,42 @@ fn WordMap::Shifts(o: WordMap, k: u64, i0, z: Nat, m: WordMap, i, j, left: u64) 
     ShiftInv(o, k, i0, z, m, i.toNat(), j.toNat(), left.toNat()) → Removed(o, k, WordMap::shift_at(m, i, j, left).after)
 }
 
-theorem WordMap::shifts_stop(o: WordMap, oinv: WordMapInv(o), k: u64, nz: ¬(k = 0), i0, z: Nat, m: WordMap, i, j, left: u64,
-    empty: m.key(j.toNat()) = 0, eq: WordMap::shift_at(m, i, j, left) = Mutated(m.cleared(i.toNat()), 1)): WordMap::Shifts(o, k, i0, z, m, i, j, left)
-{
-    λ st => j(sym(cong_fn(λ (r: Mutated<WordMap, u64>) => r.after, eq)), λ y _ => Removed(o, k, y),
-        WordMap::shift_stop(o, oinv, k, nz, i0, z, m, i.toNat(), j.toNat(), left.toNat(), st, empty))
-}
-
-theorem WordMap::shifts_move(o: WordMap, k: u64, i0, z: Nat, m: WordMap, i, j, left: u64, more: 0 < left, occupied: ¬(m.key(j.toNat()) = 0),
-    moves: (j - i).band(3) <= (j - word_map_home(m.key(j.toNat()))).band(3),
-    eq: WordMap::shift_at(m, i, j, left) = WordMap::shift_at(m.moved(i.toNat(), j.toNat()), j, (j + 1).band(3), left - 1),
-    ih: WordMap::Shifts(o, k, i0, z, m.moved(i.toNat(), j.toNat()), j, (j + 1).band(3), left - 1)): WordMap::Shifts(o, k, i0, z, m, i, j, left)
-{
-    λ st => {
-        let h = word_map_home(m.key(j.toNat()));
-        let words: (((j - i).band(3)).toNat() <= ((j - h).band(3)).toNat()) = moves;
-        let d1 = WordMap::slot_dist(j, i, st.j4, st.i4);
-        let d2 = WordMap::slot_dist(j, h, st.j4, word_map_home_below(m.key(j.toNat())));
-        let mv: (((j.toNat() + 4 - i.toNat()) % 4) <= ((j.toNat() + 4 - h.toNat()) % 4)) = omega(words, d1, d2);
-        let dl: ((left - 1).toNat() = left.toNat() - 1) = bv_omega;
-        let next = WordMap::shift_move(o, k, i0, z, m, i.toNat(), j.toNat(), left.toNat(), st, occupied, mv,
-            ((j + 1).band(3)).toNat(), (left - 1).toNat(), WordMap::next_slot(j, st.j4), dl);
-        j(sym(cong_fn(λ (r: Mutated<WordMap, u64>) => r.after, eq)), λ y _ => Removed(o, k, y), ih(next))
-    }
-}
-
-theorem WordMap::shifts_skip(o: WordMap, k: u64, i0, z: Nat, m: WordMap, i, j, left: u64, more: 0 < left, occupied: ¬(m.key(j.toNat()) = 0),
-    stays: ¬((j - i).band(3) <= (j - word_map_home(m.key(j.toNat()))).band(3)),
-    eq: WordMap::shift_at(m, i, j, left) = WordMap::shift_at(m, i, (j + 1).band(3), left - 1),
-    ih: WordMap::Shifts(o, k, i0, z, m, i, (j + 1).band(3), left - 1)): WordMap::Shifts(o, k, i0, z, m, i, j, left)
-{
-    λ st => {
-        let h = word_map_home(m.key(j.toNat()));
-        let words: (¬(((j - i).band(3)).toNat() <= ((j - h).band(3)).toNat())) = stays;
-        let d1 = WordMap::slot_dist(j, i, st.j4, st.i4);
-        let d2 = WordMap::slot_dist(j, h, st.j4, word_map_home_below(m.key(j.toNat())));
-        let sv: (((j.toNat() + 4 - h.toNat()) % 4) < ((j.toNat() + 4 - i.toNat()) % 4)) = omega(words, d1, d2);
-        let dl: ((left - 1).toNat() = left.toNat() - 1) = bv_omega;
-        let next = WordMap::shift_skip(o, k, i0, z, m, i.toNat(), j.toNat(), left.toNat(), st, occupied, sv,
-            ((j + 1).band(3)).toNat(), (left - 1).toNat(), WordMap::next_slot(j, st.j4), dl);
-        j(sym(cong_fn(λ (r: Mutated<WordMap, u64>) => r.after, eq)), λ y _ => Removed(o, k, y), ih(next))
-    }
-}
-
-theorem WordMap::shifts_spent(o: WordMap, k: u64, i0, z: Nat, m: WordMap, i, j, left: u64, more: ¬(0 < left)): WordMap::Shifts(o, k, i0, z, m, i, j, left) {
-    λ st => {
-        let s0: (((j.toNat() + 4 - i0) % 4) + left.toNat() = 4) = st.steps;
-        let l0: (left.toNat() = 0) = bv_omega;
-        false_elim(omega(s0, l0))
-    }
-}
-
 theorem WordMap::shift_removes(o: WordMap, oinv: WordMapInv(o), k: u64, nz: ¬(k = 0), i0, z: Nat, m: WordMap, i, j, left: u64):
     WordMap::Shifts(o, k, i0, z, m, i, j, left)
 {
-    WordMap::shift_at::induct(λ (m: WordMap) (i: u64) (j: u64) (left: u64) => WordMap::Shifts(o, k, i0, z, m, i, j, left),
-        λ m i j left more lt li empty eq => WordMap::shifts_stop(o, oinv, k, nz, i0, z, m, i, j, left, empty, eq),
-        λ m i j left more lt li empty moves eq ih => WordMap::shifts_move(o, k, i0, z, m, i, j, left, more, empty, moves, eq, ih),
-        λ m i j left more lt li empty moves eq ih => WordMap::shifts_skip(o, k, i0, z, m, i, j, left, more, empty, moves, eq, ih),
-        λ m i j left more lt li eq => λ st => false_elim(li(st.i4)),
-        λ m i j left more lt eq => λ st => false_elim(lt(st.j4)),
-        λ m i j left more eq => WordMap::shifts_spent(o, k, i0, z, m, i, j, left, more),
-        m, i, j, left)
+    induct WordMap::shift_at(m, i, j, left) {
+        True::True::True::True => λ st => j(sym(cong_fn(λ (r: Mutated<WordMap, u64>) => r.after, eq)), λ y _ => Removed(o, k, y),
+            WordMap::shift_stop(o, oinv, k, nz, i0, z, m, i.toNat(), j.toNat(), left.toNat(), st, empty)),
+        True::True::True::False::True => λ st => {
+            let h = word_map_home(m.key(j.toNat()));
+            let words: (((j - i).band(3)).toNat() <= ((j - h).band(3)).toNat()) = moves;
+            let d1 = WordMap::slot_dist(j, i, st.j4, st.i4);
+            let d2 = WordMap::slot_dist(j, h, st.j4, word_map_home_below(m.key(j.toNat())));
+            let mv: (((j.toNat() + 4 - i.toNat()) % 4) <= ((j.toNat() + 4 - h.toNat()) % 4)) = omega(words, d1, d2);
+            let dl: ((left - 1).toNat() = left.toNat() - 1) = bv_omega;
+            let next = WordMap::shift_move(o, k, i0, z, m, i.toNat(), j.toNat(), left.toNat(), st, empty, mv,
+                ((j + 1).band(3)).toNat(), (left - 1).toNat(), WordMap::next_slot(j, st.j4), dl);
+            j(sym(cong_fn(λ (r: Mutated<WordMap, u64>) => r.after, eq)), λ y _ => Removed(o, k, y), ih(next))
+        },
+        True::True::True::False::False => λ st => {
+            let h = word_map_home(m.key(j.toNat()));
+            let words: (¬(((j - i).band(3)).toNat() <= ((j - h).band(3)).toNat())) = moves;
+            let d1 = WordMap::slot_dist(j, i, st.j4, st.i4);
+            let d2 = WordMap::slot_dist(j, h, st.j4, word_map_home_below(m.key(j.toNat())));
+            let sv: (((j.toNat() + 4 - h.toNat()) % 4) < ((j.toNat() + 4 - i.toNat()) % 4)) = omega(words, d1, d2);
+            let dl: ((left - 1).toNat() = left.toNat() - 1) = bv_omega;
+            let next = WordMap::shift_skip(o, k, i0, z, m, i.toNat(), j.toNat(), left.toNat(), st, empty, sv,
+                ((j + 1).band(3)).toNat(), (left - 1).toNat(), WordMap::next_slot(j, st.j4), dl);
+            j(sym(cong_fn(λ (r: Mutated<WordMap, u64>) => r.after, eq)), λ y _ => Removed(o, k, y), ih(next))
+        },
+        True::True::False => λ st => false_elim(li(st.i4)),
+        True::False => λ st => false_elim(lt(st.j4)),
+        False => λ st => {
+            let s0: (((j.toNat() + 4 - i0) % 4) + left.toNat() = 4) = st.steps;
+            let l0: (left.toNat() = 0) = bv_omega;
+            false_elim(omega(s0, l0))
+        },
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1229,13 +1153,13 @@ fn WordMap::Keeps(m: WordMap, k: u64, j, left: u64) → Type { j.toNat() < 4 →
 
 // A removal of a key no slot holds leaves the table.
 theorem WordMap::remove_absent(m: WordMap, k: u64, none: (t: Nat) → t < 4 → m.key(t) = k → m.key(t) = 0, j, left: u64): WordMap::Keeps(m, k, j, left) {
-    WordMap::remove_at::induct(m, k, λ (j: u64) (left: u64) => WordMap::Keeps(m, k, j, left),
-        λ j left more lt empty eq => λ j4 => eq,
-        λ j left more lt empty hit eq => λ j4 => false_elim(empty(none(j.toNat(), j4, hit))),
-        λ j left more lt empty hit eq ih => λ j4 => trans(eq, ih(omega(WordMap::next_slot(j, j4)))),
-        λ j left more lt eq => λ j4 => eq,
-        λ j left more eq => λ j4 => eq,
-        j, left)
+    induct WordMap::remove_at(m, k, j, left) {
+        True::True::True => λ j4 => eq,
+        True::True::False::True => λ j4 => false_elim(empty(none(j.toNat(), j4, hit))),
+        True::True::False::False => λ j4 => trans(eq, ih(omega(WordMap::next_slot(j, j4)))),
+        True::False => λ j4 => eq,
+        False => λ j4 => eq,
+    }
 }
 
 fn WordMap::Reaches(m: WordMap, k: u64, s: Nat, j, left: u64) → Type {
@@ -1244,53 +1168,34 @@ fn WordMap::Reaches(m: WordMap, k: u64, s: Nat, j, left: u64) → Type {
     Exists(λ (jj: u64) => And<jj.toNat() = s, WordMap::remove_at(m, k, j, left).after = WordMap::shift_at(m, jj, (jj + 1).band(3), 3).after>)
 }
 
-theorem WordMap::reaches_empty(m: WordMap, k: u64, s: Nat, s4: s < 4, at: m.key(s) = k, nz: ¬(k = 0), j, left: u64, empty: m.key(j.toNat()) = 0):
-    WordMap::Reaches(m, k, s, j, left)
-{
-    λ j4 budget clear => match Nat::eq_dec(j.toNat(), s) {
-        Inl(same) => false_elim(nz(trans(sym(at), trans(cong_fn(λ (q: Nat) => m.key(q), sym(same)), empty)))),
-        Inr(_) => match clear(j.toNat(), j4, omega) { And(occupied, _) => false_elim(occupied(empty)) },
-    }
-}
-
-theorem WordMap::reaches_hit(m: WordMap, k: u64, s: Nat, s4: s < 4, j, left: u64, hit: m.key(j.toNat()) = k,
-    eq: WordMap::remove_at(m, k, j, left) = Mutated(WordMap::shift_at(m, j, (j + 1).band(3), 3).after, WordMap::shift_at(m, j, (j + 1).band(3), 3).value)):
-    WordMap::Reaches(m, k, s, j, left)
-{
-    λ j4 budget clear => match Nat::eq_dec(j.toNat(), s) {
-        Inl(same) => Exists(j, And(same, cong_fn(λ (r: Mutated<WordMap, u64>) => r.after, eq))),
-        Inr(_) => match clear(j.toNat(), j4, omega) { And(_, other) => false_elim(other(hit)) },
-    }
-}
-
-theorem WordMap::reaches_next(m: WordMap, k: u64, s: Nat, s4: s < 4, at: m.key(s) = k, j, left: u64, more: 0 < left, hit: ¬(m.key(j.toNat()) = k),
-    eq: WordMap::remove_at(m, k, j, left) = WordMap::remove_at(m, k, (j + 1).band(3), left - 1), ih: WordMap::Reaches(m, k, s, (j + 1).band(3), left - 1)):
-    WordMap::Reaches(m, k, s, j, left)
-{
-    λ j4 budget clear => {
-        let nj = WordMap::next_slot(j, j4);
-        let dl: ((left - 1).toNat() = left.toNat() - 1) = bv_omega;
-        let other: (¬(j.toNat() = s)) = λ e => hit(trans(cong_fn(λ (q: Nat) => m.key(q), e), at));
-        let found = ih(omega(nj), WordMap::step_budget(j.toNat(), s, ((j + 1).band(3)).toNat(), left.toNat(), (left - 1).toNat(), j4, s4, nj, dl, other, budget),
-            λ t t4 before => clear(t, t4, WordMap::step_before(j.toNat(), s, t, ((j + 1).band(3)).toNat(), j4, s4, t4, nj, other, before)));
-        Exists(found.witness, And(found.proof.left, trans(cong_fn(λ (r: Mutated<WordMap, u64>) => r.after, eq), found.proof.right)))
-    }
-}
-
 // A removal of a stored key finds its slot and shifts from there.
 theorem WordMap::remove_found(m: WordMap, k: u64, s: Nat, s4: s < 4, at: m.key(s) = k, nz: ¬(k = 0), j, left: u64): WordMap::Reaches(m, k, s, j, left) {
-    WordMap::remove_at::induct(m, k, λ (j: u64) (left: u64) => WordMap::Reaches(m, k, s, j, left),
-        λ j left more lt empty eq => WordMap::reaches_empty(m, k, s, s4, at, nz, j, left, empty),
-        λ j left more lt empty hit eq => WordMap::reaches_hit(m, k, s, s4, j, left, hit, eq),
-        λ j left more lt empty hit eq ih => WordMap::reaches_next(m, k, s, s4, at, j, left, more, hit, eq, ih),
-        λ j left more lt eq => λ j4 budget clear => false_elim(lt(j4)),
-        λ j left more eq => λ j4 budget clear => false_elim(omega(more, budget)),
-        j, left)
+    induct WordMap::remove_at(m, k, j, left) {
+        True::True::True => λ j4 budget clear => {
+            let empty: (m.key(j.toNat()) = 0) = empty;
+            match Nat::eq_dec(j.toNat(), s) {
+                Inl(same) => false_elim(nz(trans(sym(at), trans(cong_fn(λ (q: Nat) => m.key(q), sym(same)), empty)))),
+                Inr(_) => match clear(j.toNat(), j4, omega) { And(occupied, _) => false_elim(occupied(empty)) },
+            }
+        },
+        True::True::False::True => λ j4 budget clear => match Nat::eq_dec(j.toNat(), s) {
+            Inl(same) => Exists(j, And(same, cong_fn(λ (r: Mutated<WordMap, u64>) => r.after, eq))),
+            Inr(_) => match clear(j.toNat(), j4, omega) { And(_, other) => false_elim(other(hit)) },
+        },
+        True::True::False::False => λ j4 budget clear => {
+            let nj = WordMap::next_slot(j, j4);
+            let dl: ((left - 1).toNat() = left.toNat() - 1) = bv_omega;
+            let other: (¬(j.toNat() = s)) = λ e => hit(trans(cong_fn(λ (q: Nat) => m.key(q), e), at));
+            let found = ih(omega(nj), WordMap::step_budget(j.toNat(), s, ((j + 1).band(3)).toNat(), left.toNat(), (left - 1).toNat(), j4, s4, nj, dl, other, budget),
+                λ t t4 before => clear(t, t4, WordMap::step_before(j.toNat(), s, t, ((j + 1).band(3)).toNat(), j4, s4, t4, nj, other, before)));
+            Exists(found.witness, And(found.proof.left, trans(cong_fn(λ (r: Mutated<WordMap, u64>) => r.after, eq), found.proof.right)))
+        },
+        True::False => λ j4 budget clear => false_elim(lt(j4)),
+        False => λ j4 budget clear => false_elim(omega(more, budget)),
+    }
 }
 
-theorem WordMap::remove_is(m: WordMap, k: u64): WordMap::remove(m, k) = WordMap::remove_at(m, k, word_map_home(k), 4) {
-    WordMap::mutated_eta(WordMap::remove_at(m, k, word_map_home(k), 4))
-}
+theorem WordMap::remove_is(m: WordMap, k: u64): WordMap::remove(m, k) = WordMap::remove_at(m, k, word_map_home(k), 4) { refl }
 
 // A table with no slot holding `k` is itself with `k` removed.
 theorem WordMap::removed_absent(m: WordMap, inv: WordMapInv(m), k: u64, none: (t: Nat) → t < 4 → m.key(t) = k → m.key(t) = 0): Removed(m, k, m) {

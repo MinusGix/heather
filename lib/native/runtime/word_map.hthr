@@ -13,10 +13,6 @@
 // three of the four are taken. Backward shifting stops at an empty slot, and
 // at a full table it is wrong (`word_map_laws.hthr`'s negative control), as
 // Knuth's Algorithm R (TAOCP 6.4) takes fewer keys than slots.
-// `logic` and `bool` are what the functions' branch equations and
-// `induct` principles are built from; without them they are skipped.
-import logic;
-import bool;
 import omega;
 import runtime_data;
 

@@ -6976,7 +6976,12 @@ impl Parser {
         // either way.
         let eqbind = evidence.as_ref().map(|_| {
             let hidden = self.hygienic("if_bit");
-            if yes_names && no_names { hidden } else { format!("__if_bit{}", &hidden["#if_bit".len()..]) }
+            let id = &hidden["#if_bit".len()..];
+            match (yes_names, no_names) {
+                (true, true) => hidden,
+                (false, false) => crate::ast::if_bit_unnamed(id, evidence.as_deref().unwrap_or_default()),
+                _ => format!("__if_bit{id}"),
+            }
         });
         // A branch that never names the evidence binds none: the function
         // is then a plain convoy, which a proof that cases the same test can

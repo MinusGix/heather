@@ -121,6 +121,19 @@ enum TmProgress<T> {
 /// the other side was advanced past.
 const MEET_STEPS: usize = 64;
 
+/// How far down a pair's right-nested Σ [`Conv::eta_before_unfolding`]
+/// looks for a component that projects the other side's spine.
+const ETA_FIELD_DEPTH: usize = 4;
+
+/// The fuel [`Conv::eta_before_unfolding`]'s attempt may spend, nested
+/// attempts included. A wrapper's fields meet in under a thousand steps (the
+/// word map's `insert_is` in the kernel gate, an attempt nested in one);
+/// an attempt that would not meet is cut off here rather than charged its
+/// whole failure, which inside a laid record's accessor checks
+/// (`Sha256::close`, about a hundred attempts) added up past the
+/// comparison's budget.
+const ETA_FUEL: u64 = 4096;
+
 /// The last few spines one side of a conversion was advanced past, each
 /// at its head ([`Conv::tm_w`]): the other side, reducing, may arrive at one
 /// of those heads, and meets the spine there. Each is tried once.
@@ -2135,14 +2148,26 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
                     // may still arrive at (`Passed`): then this side first
                     // looks for one, a head at a time
                     // (`Conv::meet_on_the_way`).
+                    //
+                    // And unless the other side is a pair at a Σ (a record's
+                    // constructor) whose first field is a projection of this
+                    // very spine: then η compares its fields with this
+                    // side's projections first, and they meet without
+                    // unfolding it (`Conv::eta_before_unfolding`).
                     (Some(_), None) => {
                         if self.meet_on_the_way(env, &wa, &mut passed_b, false)? {
+                            return Ok(TmProgress::Done);
+                        }
+                        if D::is_pair(&wb) && self.eta_before_unfolding(env, &wa, &wb, w, true)? {
                             return Ok(TmProgress::Done);
                         }
                         wa = self.delta_to_head_tm(env, wa)?;
                     }
                     (None, Some(_)) => {
                         if self.meet_on_the_way(env, &wb, &mut passed_a, true)? {
+                            return Ok(TmProgress::Done);
+                        }
+                        if D::is_pair(&wa) && self.eta_before_unfolding(env, &wa, &wb, w, false)? {
                             return Ok(TmProgress::Done);
                         }
                         wb = self.delta_to_head_tm(env, wb)?;
@@ -2221,6 +2246,102 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
             return self.tm_nf(env, &wa, &wb, &w, l);
         }
         self.tm_nf(env, &wa, &wb, w, l)
+    }
+
+    /// Σ-η between a pair and a δ-stuck term, tried before the stuck side
+    /// is unfolded ([`Conv::tm_w`]'s headless-other-side arms). A wrapper
+    /// `f(x) = let r = g(x, 4); Mutated(r.after, r.value)` against `g(x, 4)`
+    /// meets field by field at `g(x, 4)`'s own spine, where unfolding `g`
+    /// first ran a measured recursion at its literal out of fuel
+    /// (issues/arithmetic-definition-opaque-at-open-arguments.md, item 3).
+    ///
+    /// Tried only where it is known to meet: the type's view is a Σ (a
+    /// vector, a `Vec` view, keeps its own arm, so a machine word is never
+    /// compared a component at a time here), and the pair's first field is
+    /// stuck at the other side's defined head, directly or past newer heads
+    /// (a record's projection function) — a projection of the very spine,
+    /// as a wrapper's is. Field-by-field η against a stuck side
+    /// in general can exhaust the budget where one unfolding would not (a
+    /// laid record's stores against its accessor's function,
+    /// `runtime_held_array_tests`), and exhaustion is not a verdict to fall
+    /// back from. A strategy change with no semantic content: η is the rule
+    /// the Σ arm applies anyway once the stuck side is unfolded, and a
+    /// failed attempt falls through to that unfolding with
+    /// [`Conv::delta_lazy`]'s guard semantics (fuel spent, not refunded),
+    /// and so does one that exhausts its small allowance of the fuel
+    /// ([`ETA_FUEL`]).
+    fn eta_before_unfolding(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, w: &D::Ty, stuck_is_a: bool) -> R<bool> {
+        let (stuck, pair) = if stuck_is_a { (a, b) } else { (b, a) };
+        let Some(target) = D::delta_head(self, env, stuck) else { return Ok(false) };
+        let unfolded;
+        let w = if D::delta_head_ty(self, env, w).is_some() {
+            let w = D::delta_ty(self, env, w)?;
+            unfolded = self.delta_to_head_ty(env, w)?;
+            &unfolded
+        } else {
+            w
+        };
+        if !self.projects_spine(env, pair, w, target, ETA_FIELD_DEPTH)? {
+            return Ok(false);
+        }
+        // The attempt runs on a small allowance of the fuel, and running
+        // out of it is no verdict: the allowance is charged and the stuck
+        // side unfolds as it would have. Every rule stays total and
+        // every verdict is η's or the unfolding's; what the slice bounds
+        // is the cost of a guess that the fields meet (a laid record's
+        // stores can share a spine with the accessor they are compared
+        // with and still meet only after unfolding, `Sha256::close`).
+        let vw = D::view_ty(self, env, w);
+        let total = self.fuel;
+        let slice = ETA_FUEL.min(total);
+        self.fuel = slice;
+        let tried = self.delta_lazy(|c| c.tm_nf_sigma(env, a, b, &vw).map(drop));
+        self.fuel = total - (slice - self.fuel);
+        match tried {
+            Ok(met) => Ok(met.is_some()),
+            Err(ConvError::OutOfFuel) if self.fuel > 0 => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Whether a component of the pair `p : w`, down its right-nested Σ to
+    /// `depth` levels (a record's encoding may lead with a proof-irrelevant
+    /// component), is stuck at `target`, directly or past newer heads.
+    fn projects_spine(&mut self, env: &Env<'v>, p: &D::Tm, w: &D::Ty, target: GlobalVar, depth: usize) -> R<bool> {
+        let vw = D::view_ty(self, env, w);
+        let TyView::Sigma { fst_level, snd_level, fst, snd } = &vw else {
+            return Ok(false);
+        };
+        let (f, _) = D::eta_proj(self, env, true, p, p, fst_level, snd_level, fst, snd)?;
+        if self.reaches_head(env, &f, target)? {
+            return Ok(true);
+        }
+        let (s, _) = D::eta_proj(self, env, false, p, p, fst_level, snd_level, fst, snd)?;
+        if depth == 0 {
+            return Ok(false);
+        }
+        let ws = D::whnf_tm_opaque(self, env, &s)?;
+        if !D::is_pair(&ws) {
+            return self.reaches_head(env, &s, target);
+        }
+        let snd_ty = D::inst_ty(self, env, env, snd, &[f])?;
+        let wty = D::whnf_ty(self, env, &snd_ty)?;
+        self.projects_spine(env, &ws, &wty, target, depth - 1)
+    }
+
+    /// Whether `t` is stuck at `target`, or reaches it by single δ-steps
+    /// through newer heads (a body mentions only older globals, so only a
+    /// newer head can still arrive there), within [`MEET_STEPS`].
+    fn reaches_head(&mut self, env: &Env<'v>, t: &D::TmC, target: GlobalVar) -> R<bool> {
+        let mut t = D::whnf_tm_opaque(self, env, t)?;
+        for _ in 0..MEET_STEPS {
+            match D::delta_head(self, env, &t) {
+                Some(h) if h == target => return Ok(true),
+                Some(h) if h.newer_than(target) => t = D::delta_tm(self, env, &t)?,
+                _ => return Ok(false),
+            }
+        }
+        Ok(false)
     }
 
     /// `Γ ⊢ k ≈ k' : Nat @ 0` — the length/arity comparison the `Vec`, `Fin`
