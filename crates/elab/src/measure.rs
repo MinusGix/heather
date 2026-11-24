@@ -5517,7 +5517,7 @@ pub(crate) fn step_equations(decl: &Decl, name: &str) -> Result<Vec<Lowered>, St
                         _ => None,
                     },
                     _ => None,
-                };
+                }.or_else(|| heather_syntax::if_bit_written(eq).map(str::to_string));
                 let name = fresh_hyp(evidence.as_deref().unwrap_or("h"));
                 let ty = if truth {
                     prop.clone()

@@ -408,7 +408,12 @@ impl Walk<'_> {
             let stated = inline_ty(lets, &prop)?;
             // The name `if less:` gives, read off whichever branch binds it:
             // a branch that never uses it binds none.
-            let written = evidence_name(arm).or_else(|| evidence_name(if truth { t.no } else { t.yes })).map(str::to_string);
+            // A branch that never uses it binds none, and where neither
+            // does the convoy's private equation keeps the name.
+            let written = evidence_name(arm)
+                .or_else(|| evidence_name(if truth { t.no } else { t.yes }))
+                .or_else(|| t.convoy.and_then(|c| heather_syntax::if_bit_written(c)))
+                .map(str::to_string);
             let name = self.fresh(evidence_name(arm).unwrap_or("h"));
             let ty = if truth { stated.clone() } else { not_ty(stated.clone()) };
             let lemma = if truth { "bool::decide_bit_of" } else { "bool::decide_bit_of_not" };
