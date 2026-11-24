@@ -150,7 +150,7 @@ fn StructuredRegion::emit(self region: StructuredRegion, prog: Prog, file: File,
         Call(_, _, _, _) => None,
         // So does a loop, emitted with them: function_ir_lower_calls.
         Loop(_, _, _, _, _, _, _, _, _) => None,
-        // An unbounded loop has no code yet (docs/language/loop-combinator-design.md §6.9).
+        // And an unbounded loop (docs/language/loop-combinator-design.md §6.9).
         Until(_, _, _, _, _, _) => None,
     }
 }
@@ -1059,6 +1059,16 @@ fn File::loop_places(self file: File, inputs, live: List<Nat>, pool: List<Gpr>, 
     })
 }
 
+// An unbounded loop's registers: its state's alone, chosen as a counted
+// loop's are.
+fn File::until_places(self file: File, inputs: List<Nat>, pool: List<Gpr>, calls: Bool) → List<Gpr> {
+    shared(file.loop_state(inputs, inputs, pool, pool, []), λ (plain: List<Gpr>) => match calls {
+        False => plain,
+        True => shared(file.loop_state(inputs, inputs, pool_saved(pool) ++ pool_unsaved(pool), pool_saved(pool), []), λ (kept: List<Gpr>) =>
+            match apart_of_rax(kept) { True => kept, False => plain }),
+    })
+}
+
 // What a caller saves around a call: the caller-saved registers but RAX,
 // slot `k` holding the `k`th.
 fn saved_registers() → List<Gpr> { [Rcx, Rdx, Rsi, Rdi, R8, R9, R10, R11] }
@@ -1156,7 +1166,9 @@ fn StructuredRegion::crossed_in(self region: StructuredRegion, after, crossed: R
 // barrier: the file after it is the outputs' and the exhausted bit's, and
 // nothing of a pass is read after a call that follows the pass (what the
 // close reads, it moves before the next pass begins), so the body is
-// planned with nothing `crossed` but what its own calls cross.
+// planned with nothing `crossed` but what its own calls cross. An
+// unbounded loop is planned the same way with its state's registers alone:
+// it has no counter and no flag (`until_registers`).
 //
 // A branch's arms are planned one after the other from the same file, and
 // the code keeps of them only the registers they agree on (`File::meet`).
@@ -1232,8 +1244,21 @@ fn StructuredRegion::plan_in(self region: StructuredRegion, file: File, after: R
                         Planned(into_all(state) ++ Cons(Into(counter), Cons(Into(flag), pass.placement)), out)
                     }))))
         },
-        // Not emitted yet (`emit` refuses it), so nothing is planned.
-        Until(_, _, _, _, _, _) => Planned([], File::empty()),
+        Until(inputs, parameters, body, exit, next, outputs) => {
+            let read = reads_from(compared_exit(folds, exit) ++ next);
+            shared(file.until_places(inputs, pool, sure && body.calls()), λ (state: List<Gpr>) => {
+                let head = match input_file(word_ports(parameters), state) {
+                    None => File::empty(),
+                    Some(h) => h,
+                };
+                let pass = body.plan_in(head, read, word_ports(next), state, pool, folds, MEmpty, apart, sure, True, writes);
+                let out = match input_file(word_ports(outputs), state) {
+                    None => File::empty(),
+                    Some(o) => o,
+                };
+                Planned(into_all(state) ++ pass.placement, out)
+            })
+        },
     }
 }
 
