@@ -3840,6 +3840,99 @@ fn split_max_min(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, Stri
     Ok(None)
 }
 
+/// The facts a division split binds (`__omega_dm{k}_case`, the divisor's
+/// case, then `__omega_dm{k}_mod`, the remainder's first fact, which names
+/// the pair the split settled, and the rest).
+const DIVMOD_CASE: &str = "__omega_dm";
+
+/// The Nat `x % n` and `x / n` reads in `tm` whose divisor is not a literal,
+/// outermost first, each as its dividend and divisor; through any
+/// application, as `nat_subtractions` reads, and a binder's body is not
+/// entered. A literal divisor's reads are reflected with their facts already.
+fn nat_open_divisions(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, out: &mut Vec<(Rc<Term>, Rc<Term>)>) {
+    if let Term::Succ(inner) = &**tm {
+        return nat_open_divisions(elab, cx, inner, out);
+    }
+    for name in ["nat::Nat::mod", "nat::Nat::div"] {
+        if let Some(args) = named_args(elab, tm, name)
+            && let [dividend, divisor] = args.as_slice()
+            && nat_term_source(elab, cx, divisor).is_ok_and(|source| integer_source(&source).is_none())
+        {
+            out.push((Rc::clone(dividend), Rc::clone(divisor)));
+        }
+    }
+    if is_field_read(elab, tm) {
+        if let Some(field) = field_as_put(elab, cx, tm) {
+            nat_open_divisions(elab, cx, &field, out);
+        }
+        return;
+    }
+    let (head, args) = app_spine(tm);
+    if matches!(head, Term::GlobalTm { .. }) {
+        for arg in args {
+            nat_open_divisions(elab, cx, arg, out);
+        }
+    }
+}
+
+/// A Nat `x % n` or `x / n` a fact reads as an atom, its divisor not a
+/// literal, split by `omega::nat_divmod_elim` into the divisor's two cases:
+/// `n = 0` with `x % n = x` and `x / n = 0`, or `0 < n` with `x % n < n`,
+/// `x % n <= x` and `x / n <= x`; both with `x / n * n + x % n = x` (the
+/// product one atom more). Each branch is `omega` again, so both reads stay atoms that
+/// the case's facts constrain, and a goal that closes without them never
+/// pays for them; a `0 < n` or `n ≠ 0` in scope refutes the zero branch at
+/// once. A pair a case fact already names is settled
+/// (issues/omega-nonliteral-div-mod-facts.md, design §25).
+fn split_nat_division(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, String> {
+    const LEMMA: &str = "omega::nat_divmod_elim";
+    if elab.key_of(LEMMA).is_none() {
+        return Ok(None);
+    }
+    let facts = local_facts(elab, cx);
+    let spelled_pairs = |ty: &Type| {
+        let mut found = Vec::new();
+        if let Some((_, left, right)) = integral_sides(elab, cx, ty) {
+            let mut pairs = Vec::new();
+            nat_open_divisions(elab, cx, &left, &mut pairs);
+            nat_open_divisions(elab, cx, &right, &mut pairs);
+            found.extend(pairs.into_iter().filter_map(|(dividend, divisor)| {
+                Some((nat_term_source(elab, cx, &dividend).ok()?, nat_term_source(elab, cx, &divisor).ok()?))
+            }));
+        }
+        found
+    };
+    let settling: Vec<_> = facts
+        .iter()
+        .filter(|(name, _)| name.starts_with(DIVMOD_CASE) && name.ends_with("_mod"))
+        .collect();
+    if settling.len() >= SUB_SPLIT_LIMIT {
+        return Ok(None);
+    }
+    let settled: std::collections::HashSet<(String, String)> =
+        settling.iter().filter_map(|(_, ty)| spelled_pairs(ty).into_iter().next()).collect();
+    let k = settling.len();
+    for (_, ty) in facts.iter().rev() {
+        let Some((x, n)) = spelled_pairs(ty).into_iter().find(|pair| !settled.contains(pair)) else {
+            continue;
+        };
+        let p = format!("{DIVMOD_CASE}{k}");
+        let source = format!(
+            "{LEMMA}({x}, {n}, \
+             {p}_case {p}_mod {p}_div {p}_link ⊢ omega, \
+             {p}_case {p}_mod {p}_mod_le {p}_div_le {p}_link ⊢ omega)",
+        );
+        return Ok(Some(Certificate {
+            atoms: None,
+            guards: None,
+            expr: parse_generated_expr(&source)?,
+            source,
+            report: wrapper_report(LEMMA, 1),
+        }));
+    }
+    Ok(None)
+}
+
 /// The names a Bool-guard round binds (`split_bool_guards`): its parts
 /// (`__omega_guard{k}_{i}`, read in the round, never again), the guards it
 /// leaves for the next round (`__omega_open{k}_{i}`), and the facts it binds
@@ -4695,6 +4788,9 @@ fn refute_spelled(
             return Ok(certificate);
         }
         if record_failure && let Some(certificate) = split_max_min(elab, cx)? {
+            return Ok(certificate);
+        }
+        if record_failure && let Some(certificate) = split_nat_division(elab, cx)? {
             return Ok(certificate);
         }
         let local_types = local_facts(elab, cx)

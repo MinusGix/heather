@@ -1,6 +1,6 @@
 ---
 title: omega knows nothing of Nat x % n and x / n at a divisor that is not a literal
-status: open
+status: closed
 labels: [proofs,omega,tactics]
 area: tactics
 created: 2026-11-24
@@ -36,3 +36,25 @@ whether the extra hypotheses widen every call's relevance layers (they
 should join the layer of the atom that introduced them), and whether a
 `d ≠ 0`/`0 < d` guard should instead select the plain fact over the
 disjunction.
+
+## Log
+
+- 2026-11-24: fixed. `omega` splits a Nat `x % n`/`x / n` read whose divisor is not a
+  literal by `omega::nat_divmod_elim(x, n, …)` (`omega.hthr`), the divisor's
+  two cases: `n = 0` with `x % n = x`, `x / n = 0`, or `0 < n` with
+  `x % n < n`, `x % n <= x`, `x / n <= x`; both with the link
+  `x / n * n + x % n = x` (the product one atom). `split_nat_division`
+  (`omega_cert.rs`) is the last failure-only fallback, after `split_max_min`,
+  settled by the pair's spelling, limit six, as §16 splits `a - b`; so the
+  facts join no relevance layer (they exist only in the branches) and a
+  `0 < n`/`n ≠ 0`/`if h: 0 < n` in scope refutes the zero branch rather than
+  selecting a plain fact. New laws `Nat::mod_le`, `Nat::div_le` (any divisor)
+  in `nat.hthr`. Design §25 (docs/tactics/omega-measure-reduction-design.md).
+  Probes `div_open_*` and four refused controls in
+  `lib/_tests/std/tactic/omega_tests.hthr`. Cost: nothing for a goal that
+  closes without the facts; a refusal over `p` open pairs runs `2^p` small
+  leaves (milliseconds). Left, owing nothing: the link over a non-literal
+  divisor is linear only in the product atom, so a goal that multiplies
+  `x / n` by a bound on `n` (`x / n * 2 <= x` under `2 <= n`) is nonlinear;
+  Lean's `omega` stops at the same place, and such a proof cites
+  `Nat::div_lt_of_lt_mul`/`le_div_of_mul_le`.

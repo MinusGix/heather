@@ -903,3 +903,50 @@ its scrutinee bound first) is now ascribed at its parameter's type
 (`measure::typed_arguments`). Probes and a control whose one arm keeps the
 measure are in `lib/_tests/std/core/imperative_statements_tests.hthr`
 (Nat) and `lib/_tests/std/tactic/bitvec_omega_tests.hthr` (words).
+
+## 25. `x % n` and `x / n` by a divisor that is not a literal (2026-11-24)
+
+`issues/omega-nonliteral-div-mod-facts.md`. At a literal divisor `c` a Nat
+`x % c` and `x / c` are read through a quotient atom with its division
+bounds (`NatMod`/`NatDiv`); at any other divisor both were opaque atoms, so
+`x % n <= x`, `x % n < n` under `0 < n` and `x / n <= x` had models. They
+are now split as §16 splits `a - b`, by the divisor's two cases:
+`omega::nat_divmod_elim(x, n, …)` gives `n = 0` with `x % n = x` and
+`x / n = 0`, or `0 < n` with `x % n < n`, `x % n <= x` and `x / n <= x`; both
+with the link `x / n * n + x % n = x`, which holds at every divisor. It is bound as
+`__omega_dm{k}_case`, `_mod`, `_div`/`_mod_le`, `_div_le` and `_link`. The
+reads stay atoms; the product `x / n * n` is one atom more, so the link
+serves a goal that spells that product (`x / n * n <= x`,
+`x < x / n * n + n` under `0 < n`) and nothing that needs it multiplied out.
+A `0 < n`, `n ≠ 0` or `if h: 0 < n` in scope refutes the zero branch at once,
+so no guard has to choose a plain fact over the split. The lemma cites
+`Nat::mod_lt`, `Nat::div_mul_add_mod`, `Nat::mod_zero`/`div_zero` and the
+two laws added beside them in `nat.hthr`, `Nat::mod_le` and `Nat::div_le`
+(any divisor); the certificate never unfolds `divmod`.
+
+This is the word side's idea (`docs/tactics/bv-omega-design.md` §3.1, its
+`d <= 0 ∨ r < d` disjunctions) one level down, written as `omega`'s own
+splits are rather than as hypotheses: `bv_omega` states facts as source
+before it calls `omega`, while `omega` reflects the context it is given, so
+its facts enter where its other fallbacks do. `split_nat_division` is the
+last of them, after `split_max_min`, in the attempt that answers only and
+after CutSat found a model. A goal that closes without the facts never pays
+for them, and the extra hypotheses never widen a relevance layer: they exist
+only inside the branches, each a fresh `omega`. Reads are found as §16 finds
+subtractions (the sides `integral_sides` reads, through `Succ`, applied
+globals and fields as put, never under a binder, newest fact first), and a
+read whose divisor spells as an integer literal is left to the reflection's
+own facts. A pair, compared by the spelling of its dividend and divisor, is
+settled once a `_mod` fact in scope names it; past six such facts nothing
+more is split. A refused goal over `p` open pairs runs `2^p` leaves, each a
+small linear problem (a few milliseconds for two pairs).
+
+Left: over a divisor that is not a literal the link is linear only in the
+product atom. What follows from the link and the bounds as they stand
+closes (`x < x / n * n + n` under `0 < n`), but a goal that needs the
+product multiplied out, such as `x / n * 2 <= x` under `2 <= n` (which scales
+`x / n` by a bound on `n`), or `x / n` compared across two divisors, is
+nonlinear and stays out of reach: `nlinarith` territory
+(docs/tactics/nonlinear-arithmetic-design.md). Probes (`div_open_*`)
+and refused controls (`x % n < n` with nothing known, `x / n < x`,
+`x % n < x`, `x / n * n = x`) are in `lib/_tests/std/tactic/omega_tests.hthr`.
