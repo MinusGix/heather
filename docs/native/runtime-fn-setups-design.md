@@ -1704,7 +1704,7 @@ second field's port in `also`, `Fun::lower_sound` reads the first word
 meets reprs (`rt_with_reprs` reruns the walk with the record added, its
 `RecInfo` built from its constructor and its fields' projections, both round
 trips `refl`). Linking: `program_linked_also` and `Compile::root_also`, with
-the instance's agreement on the second word `Setup::plain_agrees_also`. The
+the instance's agreement on the second word `Setup::agrees_also` (`plain_agrees_also` before loop-combinator-design §6.6). The
 generator publishes `f::agrees` for the first field, `f::agrees_also` for
 the second, and `f::fields`, the fields' names, which `compile-x86` spells
 the answer with. Probes: `lib/_tests/native/runtime/runtime_two_words_tests`

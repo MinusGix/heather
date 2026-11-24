@@ -426,7 +426,7 @@ that neither is needed, and what follows is the form that was built.
   spelled-out reflection, at a cost that climbed steeply with a numeral
   inside it (issues/conversion-respelled-world-compares-reflection.md,
   `docs/proof-patterns.md` §2). The builders' proofs are opaque theorems
-  (`Setup::plain_agrees`, `fuel_agrees`, `measured_agrees`), so an
+  (`Setup::agrees`, `fuel_agrees`, `measured_agrees`), so an
   instance is a constructor applied to them.
 
   A length word is a parameter of the Heather function and not the
@@ -509,7 +509,7 @@ that neither is needed, and what follows is the form that was built.
   `Setup::lent_callees`: entry 0 the function at each file's spans, the
   spanless functions it calls after it, and its world is that table at
   the empty file. A function without a loop is pinned at every file
-  (`Setup::lent_every`, and `f::reflects` is stated over the file). A
+  (`Setup::alike_every` since loop-combinator-design §6.6, and `f::reflects` is stated over the file). A
   loop over its spans proves `Setup::GuardedSpans`, the keyed family of
   §2.3's step 2 (its worlds the files, its recursion keyed by a file's
   first spans), with the generator's usual proof from `f::ext` and

@@ -3,11 +3,12 @@
 Status: **rounds 1, 2 and 3a merged** (the combinator and its rule; a
 `while` outside a `runtime fn` elaborates to it, §5; the reflector read a
 twin of the step, §6.1); **stages 3b and 3c built** (one loop node in the
-runtime terms, §6.2; one over a span, §6.3); **stage 3d in review** (a span
+runtime terms, §6.2; one over a span, §6.3); **stages 3d to 3f in review** (a span
 loop's state of several words, a loop that only reads its span, and a
-statement `if` that joins inside a pass, §6.4). What is left of round 3,
-and the fork it met, decided 2026-11-24, is §6.5; rounds 4 and 5 (§8) are the rest of the
-migration. Thread "Rebuild loops on
+statement `if` that joins inside a pass, §6.4; one pointwise pin on every
+route, and uniqueness of a well-founded fixpoint, §6.6). The fork round 3
+met, decided 2026-11-24, is §6.5, and what is left of the round, 3g and 3h,
+follows it; rounds 4 and 5 (§8) are the rest of the migration. Thread "Rebuild loops on
 one combinator", 2026-11-19, from the dogfooding review
 (`docs/native/dogfooding-plan.md`, PR #804).
 
@@ -583,6 +584,62 @@ Stages, each leaving the gates green:
 
 Round 4 (the loop files onto the node) follows as planned, and joins the
 same rule: a record or span loop's pin is pointwise like every other.
+
+### 6.6 Stages 3e and 3f as built
+
+**3e: one pin, pointwise, on every route.** The measurement this stage was
+for came out as hoped: **one congruence lemma per statement form, none per
+function.**
+
+| Route | Pin before | Pin now | Congruence it needs |
+|---|---|---|---|
+| plain and own-callee (`Setup::compile`) | an equation of curried functions per file (`Setup::at_every`, `lent_every`), or `Setup::Pinned` in a second constructor (`compile_recursive`) | `Setup::Pinned` only, one constructor; `Setup::alike_every` (`Ty::alike_refl`) where the body is the meaning | `Ty::answers_words_alike` (existed); `Setup::agrees_also` derives from it |
+| span and `Bytes(n)` (`FFun::compile`) | an equation per rest of file and own span | `FFun::Pinned`: `Ty::AlikeTo` over the words; `FFun::source_alike` by conversion, `FFun::pinned_of_eq` for a function written out over its bytes (its equation read pointwise) | `FTm::answers_alike` (new) |
+| laid record (`rt_held`) | at a given environment, own span and record | unchanged: already pointwise | none |
+| `Io` programs (`f::bridge`) | per `io` and buffers | unchanged | none |
+| measured (`Fun::Guarded`, `FFun::compile_counted`) | its own | unchanged: deleted in 3h | — |
+
+Generic: `Ty::alike_refl`, `Ty::AlikeTo`, `Ty::alike_to_refl`,
+`Ty::alike_to_of_eq` (`rt_lower.hthr`). Removed: `Setup::plain_agrees`,
+`Setup::compile_recursive`, `Setup::at_every`, `Setup::lent_every`
+(`recursive_agrees` is now `Setup::agrees`, `plain_agrees_also`
+`Setup::agrees_also`). The kernel's work is the same: the pin's check
+still compares the function with its reflection's meaning by conversion,
+now under `Ty::Alike`'s binders instead of as an equation of functions.
+One diagnostic changed: a wrong claim about a runtime fn's program
+(`runtime_sint_tests`' `zext32_is_not_sext`) is still refused by the kernel,
+but the elaborator's probe that words a mismatch (it compares the program
+spelled by name with the agreement's program spelled out) now runs past its
+budget, so the refusal is the kernel's own message; that row expects
+`(kernel)` now.
+
+**3f: uniqueness of a well-founded fixpoint** (`loop.hthr`). A recursion
+over `A` with measure `m` is a step `F: (a: A) → ((b: A) → m(b) < m(a) →
+B) → B`. `fixpoint_unique(m, F, ext, f, g, fe, ge, a): f(a) = g(a)` where
+`f` and `g` each satisfy `x(a) = F(a, λ b _ => x(b))` and `ext:
+FixpointExt(m, F)` says the step reads its recursion only at its values
+(there is no funext, so this is a hypothesis; for a reflection's meaning
+it is proved once over the term language, for a function by its `f::ext`
+companion). It is the bounded induction `Loop::unique_within` was, over
+any step. `Loop::unique` is restated as its case at `Loop::fix`, the
+loop's step as a recursion's (`Loop::fix_ext`), with `Loop::run_unfold`
+as the loop's equation; `Loop::unique_within` is gone.
+
+**What 3g needs, found on the way.** The loop node of §6.2 is
+`Iterate(init, test, body)`: one test, and a stop answers the state. A
+tail recursion written by hand has several exits, each answering its own
+value, and several calls of itself. Two ways to read it into the node:
+(a) a state that is an enum `Go(args) | Out(r)` (the node carries an enum
+as its tag word and slots), its test `is Go`, its body the recursion's
+body with `Again(ā)` as `Go(ā)` and a returned value as `Out(e)`; or (b)
+a node whose body's leaves are `Again(ā)` and `Done(e)`, the shape §6
+first drew, with a meaning, lowering and soundness of its own. (a) reuses
+everything the node has; its one new piece is the enum, which is not a
+type the program declares, so the table needs an entry the generator
+makes. (b) is the cleaner node and is new proof work in `rt_lower`. The
+pin is then `fixpoint_unique` at `f`'s step (from its `f::ext`) and the
+meaning's (one-pass unfolding by conversion, `FixpointExt` once over
+`Loop::steps` within `Loop::passes()`, by `Loop::steps_stays`).
 
 ## 7. Bootstrapping
 
