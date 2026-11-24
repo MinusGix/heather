@@ -1,0 +1,412 @@
+// The word map's slot for a key as a path (docs/language/ownership-design.md
+// §6's third example, §10.4): what `get_mut` on a hash map hands out is
+// the slot holding the key, read and written through the table.
+//
+// - `WordMap::slot_path(k)` reads the value in the slot whose key is `k`
+//   and writes it there; it is valid exactly where some slot holds `k`
+//   (`slot_valid`, `slot_of_valid`), with no junk default: absent, the read
+//   answers nothing and a write changes nothing. Its laws hold at every
+//   table (`slot_laws`), the slot being found by the keys alone, which a
+//   write to a value leaves.
+// - Under `WordMapInv` it is what the compiled functions do: `get` is its
+//   read, 0 where it is not valid (`get_is_slot`), and `insert` of a key
+//   that is stored is its write, answering 0 (`insert_is_slot`).
+// - Slots of two different keys are apart at every table (`slots_apart`),
+//   so a value read for one key is kept by an insert of another that is
+//   stored (`insert_keeps_other`); the negative control is a key's slot,
+//   which is not apart from itself (`slot_not_apart_self`).
+import logic;
+import bool;
+import nat;
+import option;
+import list;
+import vector;
+import algebra;
+import omega;
+import bitvec_omega;
+import runtime_data;
+import word_map;
+import word_map_laws;
+import path;
+
+// ---------------------------------------------------------------------------
+// The slot of a key, found by the keys alone
+
+// The first of the `n` slots from `s` whose key is `k`.
+fn WordMap::find_slot(keys: [u64; 4], k: u64, s, n: Nat) → Option<Nat> {
+    match n {
+        Zero => None,
+        Succ(r) => match BitVec::eq_dec(vector_get(keys, s, BitVec::ofNat(0)), k) {
+            Inl(_) => Some(s),
+            Inr(_) => WordMap::find_slot(keys, k, s + 1, r),
+        },
+    }
+}
+
+// The slot holding `k` among `keys`; none for the empty key 0.
+fn WordMap::slot_in(keys: [u64; 4], k: u64) → Option<Nat> {
+    match BitVec::eq_dec(k, BitVec::ofNat(0)) { Inl(_) => None, Inr(_) => WordMap::find_slot(keys, k, 0, 4) }
+}
+
+fn WordMap::slot(self m: WordMap, k: u64) → Option<Nat> { WordMap::slot_in(m.keys, k) }
+
+theorem WordMap::find_slot_at(keys: [u64; 4], k: u64, n: Nat): (s, t: Nat) → WordMap::find_slot(keys, k, s, n) = Some(t) →
+    And<And<s <= t, t < s + n>, vector_get(keys, t, BitVec::ofNat(0)) = k>
+{
+    match n {
+        Zero => λ s t no => absurd(no),
+        Succ(_, ih) => λ s t => match BitVec::eq_dec(vector_get(keys, s, BitVec::ofNat(0)), k) {
+            Inl(hit) => λ found => {
+                let same: (s = t) = Option::some_inj(s, t, found);
+                And(And(omega(same), omega(same)), j(same, λ q _ => vector_get(keys, q, BitVec::ofNat(0)) = k, hit))
+            },
+            Inr(_) => λ found => {
+                let later = ih(s + 1, t, found);
+                And(And(omega(later.left.left), omega(later.left.right)), later.right)
+            },
+        },
+    }
+}
+
+theorem WordMap::find_slot_none(keys: [u64; 4], k: u64, n: Nat): (s: Nat) → WordMap::find_slot(keys, k, s, n) = None →
+    (t: Nat) → s <= t → t < s + n → ¬(vector_get(keys, t, BitVec::ofNat(0)) = k)
+{
+    match n {
+        Zero => λ s none t low high => false_elim(omega(low, high)),
+        Succ(_, ih) => λ s => match BitVec::eq_dec(vector_get(keys, s, BitVec::ofNat(0)), k) {
+            Inl(_) => λ none => absurd(none),
+            Inr(miss) => λ none t low high => match Nat::eq_dec(t, s) {
+                Inl(here) => j(sym(here), λ q _ => ¬(vector_get(keys, q, BitVec::ofNat(0)) = k), miss),
+                Inr(later) => ih(s + 1, none, t, omega(low, later), omega(high)),
+            },
+        },
+    }
+}
+
+// A key the table holds has a slot, the one holding it.
+theorem WordMap::find_slot_some(keys: [u64; 4], k: u64, n: Nat): (s, t: Nat) → s <= t → t < s + n → vector_get(keys, t, BitVec::ofNat(0)) = k →
+    Exists<Nat>(λ u => WordMap::find_slot(keys, k, s, n) = Some(u))
+{
+    match n {
+        Zero => λ s t low high _ => false_elim(omega(low, high)),
+        Succ(r, ih) => λ s t (low: s <= t) (high: t < s + Succ(r)) at => match BitVec::eq_dec(vector_get(keys, s, BitVec::ofNat(0)), k) {
+            Inl(_) => Exists(s, refl),
+            Inr(miss) => match Nat::eq_dec(t, s) {
+                Inl(here) => false_elim(miss(j(here, λ q _ => vector_get(keys, q, BitVec::ofNat(0)) = k, at))),
+                Inr(later) => ih(s + 1, t, omega(low, later), omega(high), at),
+            },
+        },
+    }
+}
+
+theorem WordMap::slot_in_at(keys: [u64; 4], k: u64, s: Nat): WordMap::slot_in(keys, k) = Some(s) →
+    And<And<s < 4, vector_get(keys, s, BitVec::ofNat(0)) = k>, ¬(k = 0)>
+{
+    match BitVec::eq_dec(k, BitVec::ofNat(0)) {
+        Inl(_) => λ found => absurd(found),
+        Inr(nz) => λ found => {
+            let at = WordMap::find_slot_at(keys, k, 4, 0, s, found);
+            And(And(omega(at.left.right), at.right), nz)
+        },
+    }
+}
+
+theorem WordMap::slot_at(self m: WordMap, k: u64, s: Nat, found: m.slot(k) = Some(s)): And<And<s < 4, m.key(s) = k>, ¬(k = 0)> {
+    WordMap::slot_in_at(m.keys, k, s, found)
+}
+
+// No slot holds a key that has none, unless it is the empty key.
+theorem WordMap::slot_in_none(keys: [u64; 4], k: u64): WordMap::slot_in(keys, k) = None → (t: Nat) → t < 4 → vector_get(keys, t, BitVec::ofNat(0)) = k → k = 0 {
+    match BitVec::eq_dec(k, BitVec::ofNat(0)) {
+        Inl(z) => λ _ t _ _ => z,
+        Inr(_) => λ none t t4 at => false_elim(WordMap::find_slot_none(keys, k, 4, 0, none, t, omega, omega(t4), at)),
+    }
+}
+
+// A key a slot holds has a slot.
+theorem WordMap::slot_in_some(keys: [u64; 4], k: u64, t: Nat, t4: t < 4, at: vector_get(keys, t, BitVec::ofNat(0)) = k, nz: ¬(k = 0)):
+    Exists<Nat>(λ u => WordMap::slot_in(keys, k) = Some(u))
+{
+    match BitVec::eq_dec(k, BitVec::ofNat(0)) {
+        Inl(z) => false_elim(nz(z)),
+        Inr(_) => WordMap::find_slot_some(keys, k, 4, 0, t, omega, omega(t4), at),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The path
+
+// The write at the slot found: the value replaced there, nothing where
+// there is none.
+fn WordMap::slot_write(m: WordMap, o: Option<Nat>, v: u64) → WordMap { match o { Some(s) => m.replaced(s, v), None => m } }
+
+fn WordMap::slot_path(k: u64) → Path<WordMap, u64> {
+    Path<WordMap, u64>(
+        get := λ (m: WordMap) => m.slot(k).map(λ (s: Nat) => m.val(s)),
+        set := λ (m: WordMap) => λ (v: u64) => WordMap::slot_write(m, m.slot(k), v),
+    )
+}
+
+theorem WordMap::slot_get_at(m: WordMap, k: u64, s: Nat, found: m.slot(k) = Some(s)): WordMap::slot_path(k).get(m) = Some(m.val(s)) {
+    cong_fn(λ (o: Option<Nat>) => o.map(λ (t: Nat) => m.val(t)), found)
+}
+
+theorem WordMap::slot_set_at(m: WordMap, k: u64, s: Nat, found: m.slot(k) = Some(s), v: u64): WordMap::slot_path(k).set(m, v) = m.replaced(s, v) {
+    cong_fn(λ (o: Option<Nat>) => WordMap::slot_write(m, o, v), found)
+}
+
+theorem WordMap::slot_get_none(m: WordMap, k: u64, none: m.slot(k) = None): WordMap::slot_path(k).get(m) = None {
+    cong_fn(λ (o: Option<Nat>) => o.map(λ (t: Nat) => m.val(t)), none)
+}
+
+theorem WordMap::slot_set_none(m: WordMap, k: u64, none: m.slot(k) = None, v: u64): WordMap::slot_path(k).set(m, v) = m {
+    cong_fn(λ (o: Option<Nat>) => WordMap::slot_write(m, o, v), none)
+}
+
+// A write through a slot changes no key, so no key's slot.
+theorem WordMap::slot_set_keys(m: WordMap, k: u64, v: u64): (o: Option<Nat>) → m.slot(k) = o → WordMap::slot_path(k).set(m, v).keys = m.keys {
+    λ o => match o {
+        Some(s) => λ e => cong_fn(λ (n: WordMap) => n.keys, WordMap::slot_set_at(m, k, s, e, v)),
+        None => λ e => cong_fn(λ (n: WordMap) => n.keys, WordMap::slot_set_none(m, k, e, v)),
+    }
+}
+
+theorem WordMap::slot_after_set(m: WordMap, k, other: u64, v: u64): WordMap::slot_path(k).set(m, v).slot(other) = m.slot(other) {
+    cong_fn(λ (ks: [u64; 4]) => WordMap::slot_in(ks, other), WordMap::slot_set_keys(m, k, v, m.slot(k), refl))
+}
+
+// The laws, case by case on the slot.
+theorem WordMap::slot_set_get_of(m: WordMap, k: u64, a, v: u64): (o: Option<Nat>) → m.slot(k) = o →
+    WordMap::slot_path(k).get(m) = Some(a) → WordMap::slot_path(k).get(WordMap::slot_path(k).set(m, v)) = Some(v)
+{
+    λ o => match o {
+        Some(s) => λ e _ => {
+            let s4: (s < 4) = WordMap::slot_at(m, k, s, e).left.left;
+            let n = m.replaced(s, v);
+            let found: (n.slot(k) = Some(s)) = e;
+            trans(cong_fn(λ (x: WordMap) => WordMap::slot_path(k).get(x), WordMap::slot_set_at(m, k, s, e, v)),
+                trans(WordMap::slot_get_at(n, k, s, found), cong_fn(λ (w: u64) => Some(w), WordMap::replaced_val_same(m, s, v, s4))))
+        },
+        None => λ e h => absurd(trans(sym(WordMap::slot_get_none(m, k, e)), h)),
+    }
+}
+
+theorem WordMap::slot_get_set_of(m: WordMap, k: u64, a: u64): (o: Option<Nat>) → m.slot(k) = o →
+    WordMap::slot_path(k).get(m) = Some(a) → WordMap::slot_path(k).set(m, a) = m
+{
+    λ o => match o {
+        Some(s) => λ e h => {
+            let s4: (s < 4) = WordMap::slot_at(m, k, s, e).left.left;
+            let read: (m.val(s) = a) = Option::some_inj(m.val(s), a, trans(sym(WordMap::slot_get_at(m, k, s, e)), h));
+            trans(WordMap::slot_set_at(m, k, s, e, a),
+                trans(cong_fn(λ (w: u64) => m.replaced(s, w), sym(read)),
+                    cong_fn(λ (vs: [u64; 4]) => WordMap(m.count, m.keys, vs), vector_update_self(4, m.vals, s, BitVec::ofNat(0), s4))))
+        },
+        None => λ e h => absurd(trans(sym(WordMap::slot_get_none(m, k, e)), h)),
+    }
+}
+
+theorem WordMap::slot_set_set_of(m: WordMap, k: u64, v, w: u64): (o: Option<Nat>) → m.slot(k) = o →
+    WordMap::slot_path(k).set(WordMap::slot_path(k).set(m, v), w) = WordMap::slot_path(k).set(m, w)
+{
+    λ o => match o {
+        Some(s) => λ e => {
+            let n = m.replaced(s, v);
+            let found: (n.slot(k) = Some(s)) = e;
+            trans(cong_fn(λ (x: WordMap) => WordMap::slot_path(k).set(x, w), WordMap::slot_set_at(m, k, s, e, v)),
+                trans(WordMap::slot_set_at(n, k, s, found, w),
+                    trans(cong_fn(λ (vs: [u64; 4]) => WordMap(m.count, m.keys, vs), vector_update_update_same(4, m.vals, s, v, w)),
+                        sym(WordMap::slot_set_at(m, k, s, e, w)))))
+        },
+        None => λ e => cong_fn(λ (x: WordMap) => WordMap::slot_path(k).set(x, w), WordMap::slot_set_none(m, k, e, v)),
+    }
+}
+
+theorem WordMap::slot_set_none_of(m: WordMap, k: u64, v: u64): (o: Option<Nat>) → m.slot(k) = o →
+    WordMap::slot_path(k).get(m) = None → WordMap::slot_path(k).set(m, v) = m
+{
+    λ o => match o {
+        Some(s) => λ e h => absurd(trans(sym(h), WordMap::slot_get_at(m, k, s, e))),
+        None => λ e _ => WordMap::slot_set_none(m, k, e, v),
+    }
+}
+
+// The slot of a key is a lawful path at every table.
+theorem WordMap::slot_laws(k: u64): PathLaws<WordMap, u64>(WordMap::slot_path(k)) {
+    PathLaws(
+        λ m a v h => WordMap::slot_set_get_of(m, k, a, v, m.slot(k), refl, h),
+        λ m a h => WordMap::slot_get_set_of(m, k, a, m.slot(k), refl, h),
+        λ m v w => WordMap::slot_set_set_of(m, k, v, w, m.slot(k), refl),
+        λ m v h => WordMap::slot_set_none_of(m, k, v, m.slot(k), refl, h),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Validity: some slot holds the key
+
+theorem WordMap::slot_valid(m: WordMap, k: u64, s: Nat, s4: s < 4, at: m.key(s) = k, nz: ¬(k = 0)): WordMap::slot_path(k).Valid(m) {
+    let found = WordMap::slot_in_some(m.keys, k, s, s4, at, nz);
+    Exists(m.val(found.witness), WordMap::slot_get_at(m, k, found.witness, found.proof))
+}
+
+theorem WordMap::slot_of_valid_at(m: WordMap, k: u64): (o: Option<Nat>) → m.slot(k) = o → WordMap::slot_path(k).Valid(m) →
+    Exists(λ (s: Nat) => And<m.slot(k) = Some(s), And<And<s < 4, m.key(s) = k>, ¬(k = 0)>>)
+{
+    λ o => match o {
+        Some(s) => λ e _ => Exists(s, And(e, WordMap::slot_at(m, k, s, e))),
+        None => λ e valid => absurd(trans(sym(WordMap::slot_get_none(m, k, e)), valid.proof)),
+    }
+}
+
+// A valid slot is a slot that holds the key, which is not the empty key.
+theorem WordMap::slot_of_valid(m: WordMap, k: u64, valid: WordMap::slot_path(k).Valid(m)):
+    Exists(λ (s: Nat) => And<m.slot(k) = Some(s), And<And<s < 4, m.key(s) = k>, ¬(k = 0)>>)
+{
+    WordMap::slot_of_valid_at(m, k, m.slot(k), refl, valid)
+}
+
+// ---------------------------------------------------------------------------
+// What the compiled functions are, read through the slot
+
+// `get` is the slot's read, 0 where the key has no slot.
+theorem WordMap::get_is_slot_of(m: WordMap, inv: WordMapInv(m), k: u64): (o: Option<Nat>) → m.slot(k) = o →
+    m.get(k) = WordMap::slot_path(k).get(m).unwrap_or(0)
+{
+    λ o => match o {
+        Some(s) => λ e => {
+            let at = WordMap::slot_at(m, k, s, e);
+            trans(WordMap::get_stored(m, inv, k, s, at.left.left, at.left.right, at.right),
+                sym(cong_fn(λ (r: Option<u64>) => r.unwrap_or(0), WordMap::slot_get_at(m, k, s, e))))
+        },
+        None => λ e => {
+            let none: ((t: Nat) → t < 4 → m.key(t) = k → k = 0) = WordMap::slot_in_none(m.keys, k, e);
+            trans(WordMap::get_is(m, inv, k),
+                trans(cong_fn(λ (r: Option<u64>) => r.unwrap_or(0), WordMap::abs_get_none(m, k, none)),
+                    sym(cong_fn(λ (r: Option<u64>) => r.unwrap_or(0), WordMap::slot_get_none(m, k, e)))))
+        },
+    }
+}
+
+theorem WordMap::get_is_slot(m: WordMap, inv: WordMapInv(m), k: u64): m.get(k) = WordMap::slot_path(k).get(m).unwrap_or(0) {
+    WordMap::get_is_slot_of(m, inv, k, m.slot(k), refl)
+}
+
+// `insert` of a key the table holds is the slot's write, answering 0.
+theorem WordMap::insert_at_slot(m: WordMap, inv: WordMapInv(m), k, v: u64, s: Nat, found: m.slot(k) = Some(s)):
+    WordMap::insert(m, k, v) = Mutated(WordMap::slot_path(k).set(m, v), 0)
+{
+    let at = WordMap::slot_at(m, k, s, found);
+    let s4: (s < 4) = at.left.left;
+    let here: (m.key(s) = k) = at.left.right;
+    let nz: ¬(k = 0) = at.right;
+    let h = word_map_home(k);
+    let h4: (h.toNat() < 4) = word_map_home_below(k);
+    let clear: ((t: Nat) → t < 4 → ((t + 4 - h.toNat()) % 4) < ((s + 4 - h.toNat()) % 4) → And<¬(m.key(t) = 0), ¬(m.key(t) = k)>) =
+        λ t t4 before => And(inv.reach(s, t, k, s4, t4, here, nz, before), λ again =>
+            WordMap::not_before_self(t, s, h.toNat(), inv.distinct(t, s, t4, s4, λ z => nz(trans(sym(again), z)), trans(again, sym(here))), before));
+    trans(WordMap::insert_is(m, k, v),
+        trans(WordMap::insert_replaces(m, k, v, s, s4, here, nz, h, 4, h4, omega(s4, h4), clear),
+            cong_fn(λ (n: WordMap) => Mutated(n, BitVec::ofNat(0)), sym(WordMap::slot_set_at(m, k, s, found, v)))))
+}
+
+theorem WordMap::insert_is_slot(m: WordMap, inv: WordMapInv(m), k, v: u64, valid: WordMap::slot_path(k).Valid(m)):
+    WordMap::insert(m, k, v) = Mutated(WordMap::slot_path(k).set(m, v), 0)
+{
+    let found = WordMap::slot_of_valid(m, k, valid);
+    WordMap::insert_at_slot(m, inv, k, v, found.witness, found.proof.left)
+}
+
+// ---------------------------------------------------------------------------
+// Slots of different keys are apart
+
+theorem WordMap::slot_read_other_of(m: WordMap, k1, k2: u64, ne: ¬(k1 = k2), v: u64, s2: Nat, found2: m.slot(k2) = Some(s2)):
+    (o: Option<Nat>) → m.slot(k1) = o → WordMap::slot_path(k1).get(m.replaced(s2, v)) = WordMap::slot_path(k1).get(m)
+{
+    λ o => match o {
+        Some(s1) => λ e => {
+            let at1 = WordMap::slot_at(m, k1, s1, e);
+            let at2 = WordMap::slot_at(m, k2, s2, found2);
+            let apart: ¬(s1 = s2) = λ same => ne(trans(sym(at1.left.right), trans(cong_fn(λ (q: Nat) => m.key(q), same), at2.left.right)));
+            let found: (m.replaced(s2, v).slot(k1) = Some(s1)) = e;
+            trans(WordMap::slot_get_at(m.replaced(s2, v), k1, s1, found),
+                trans(cong_fn(λ (w: u64) => Some(w), WordMap::replaced_val_other(m, s2, v, s1, apart)), sym(WordMap::slot_get_at(m, k1, s1, e))))
+        },
+        None => λ e => {
+            let none: (m.replaced(s2, v).slot(k1) = None) = e;
+            trans(WordMap::slot_get_none(m.replaced(s2, v), k1, none), sym(WordMap::slot_get_none(m, k1, e)))
+        },
+    }
+}
+
+// A write through the slot of `k2` leaves what the slot of `k1` reads.
+theorem WordMap::slot_read_other(m: WordMap, k1, k2: u64, ne: ¬(k1 = k2), v: u64): (o: Option<Nat>) → m.slot(k2) = o →
+    WordMap::slot_path(k1).get(WordMap::slot_path(k2).set(m, v)) = WordMap::slot_path(k1).get(m)
+{
+    λ o => match o {
+        Some(s2) => λ e => trans(cong_fn(λ (x: WordMap) => WordMap::slot_path(k1).get(x), WordMap::slot_set_at(m, k2, s2, e, v)),
+            WordMap::slot_read_other_of(m, k1, k2, ne, v, s2, e, m.slot(k1), refl)),
+        None => λ e => cong_fn(λ (x: WordMap) => WordMap::slot_path(k1).get(x), WordMap::slot_set_none(m, k2, e, v)),
+    }
+}
+
+theorem WordMap::slot_commute_of(m: WordMap, k1, k2: u64, ne: ¬(k1 = k2), a, b: u64): (o1, o2: Option<Nat>) → m.slot(k1) = o1 → m.slot(k2) = o2 →
+    WordMap::slot_path(k1).set(WordMap::slot_path(k2).set(m, b), a) = WordMap::slot_path(k2).set(WordMap::slot_path(k1).set(m, a), b)
+{
+    λ o1 o2 => match o1 {
+        Some(s1) => match o2 {
+            Some(s2) => λ e1 e2 => {
+                let at1 = WordMap::slot_at(m, k1, s1, e1);
+                let at2 = WordMap::slot_at(m, k2, s2, e2);
+                let apart: ¬(s2 = s1) = λ same => ne(trans(sym(at1.left.right), trans(cong_fn(λ (q: Nat) => m.key(q), sym(same)), at2.left.right)));
+                let f1: (m.replaced(s2, b).slot(k1) = Some(s1)) = e1;
+                let f2: (m.replaced(s1, a).slot(k2) = Some(s2)) = e2;
+                trans(cong_fn(λ (x: WordMap) => WordMap::slot_path(k1).set(x, a), WordMap::slot_set_at(m, k2, s2, e2, b)),
+                    trans(WordMap::slot_set_at(m.replaced(s2, b), k1, s1, f1, a),
+                        trans(cong_fn(λ (vs: [u64; 4]) => WordMap(m.count, m.keys, vs), vector_update_update_apart(4, m.vals, s2, s1, b, a, apart)),
+                            trans(sym(WordMap::slot_set_at(m.replaced(s1, a), k2, s2, f2, b)),
+                                cong_fn(λ (x: WordMap) => WordMap::slot_path(k2).set(x, b), sym(WordMap::slot_set_at(m, k1, s1, e1, a)))))))
+            },
+            None => λ e1 e2 => {
+                let f2: (WordMap::slot_path(k1).set(m, a).slot(k2) = None) = trans(WordMap::slot_after_set(m, k1, k2, a), e2);
+                trans(cong_fn(λ (x: WordMap) => WordMap::slot_path(k1).set(x, a), WordMap::slot_set_none(m, k2, e2, b)),
+                    sym(WordMap::slot_set_none(WordMap::slot_path(k1).set(m, a), k2, f2, b)))
+            },
+        },
+        None => λ e1 e2 => {
+            let f1: (WordMap::slot_path(k2).set(m, b).slot(k1) = None) = trans(WordMap::slot_after_set(m, k2, k1, b), e1);
+            trans(WordMap::slot_set_none(WordMap::slot_path(k2).set(m, b), k1, f1, a),
+                cong_fn(λ (x: WordMap) => WordMap::slot_path(k2).set(x, b), sym(WordMap::slot_set_none(m, k1, e1, a))))
+        },
+    }
+}
+
+// The slots of two different keys are apart, at every table.
+theorem WordMap::slots_apart(k1, k2: u64, ne: ¬(k1 = k2)): Apart<WordMap, u64, u64>(WordMap::slot_path(k1), WordMap::slot_path(k2)) {
+    Apart(
+        λ m v => WordMap::slot_read_other(m, k1, k2, ne, v, m.slot(k2), refl),
+        λ m v => WordMap::slot_read_other(m, k2, k1, λ e => ne(sym(e)), v, m.slot(k1), refl),
+        λ m a b => WordMap::slot_commute_of(m, k1, k2, ne, a, b, m.slot(k1), m.slot(k2), refl, refl),
+    )
+}
+
+// So a value read for `k1` is still read after an insert of another key the
+// table holds: `get_mut` of one key while the map is written at another.
+theorem WordMap::insert_keeps_other(m: WordMap, inv: WordMapInv(m), k1, k2, v: u64, ne: ¬(k1 = k2), valid: WordMap::slot_path(k2).Valid(m)):
+    WordMap::slot_path(k1).Keeps(m, WordMap::insert(m, k2, v).after)
+{
+    j(sym(WordMap::insert_is_slot(m, inv, k2, v, valid)), λ r _ => WordMap::slot_path(k1).Keeps(m, r.after),
+        WordMap::slots_apart(k1, k2, ne).keeps(m, v))
+}
+
+// ---------------------------------------------------------------------------
+// The negative control: a key's slot is not apart from itself
+
+theorem WordMap::one_not_seven(e: BitVec::ofNat(1, n := 64) = BitVec::ofNat(7)): False { bv_omega }
+
+theorem WordMap::slot_not_apart_self(): ¬Apart<WordMap, u64, u64>(WordMap::slot_path(5), WordMap::slot_path(5)) {
+    λ apart => {
+        let m = WordMap(1, [5, 0, 0, 0], [7, 0, 0, 0]);
+        let same: (Some(BitVec::ofNat(1, n := 64)) = Some(BitVec::ofNat(7))) = apart.left_after_right(m, 1);
+        WordMap::one_not_seven(Option::some_inj(BitVec::ofNat(1), BitVec::ofNat(7), same))
+    }
+}
