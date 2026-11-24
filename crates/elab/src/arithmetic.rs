@@ -305,7 +305,7 @@ impl<T> AtomTable<T> {
     }
 }
 
-fn gcd(mut a: Z, mut b: Z) -> Z {
+pub(crate) fn gcd(mut a: Z, mut b: Z) -> Z {
     debug_assert!(a >= 0 && b >= 0);
     while b != 0 {
         (a, b) = (b, a % b);

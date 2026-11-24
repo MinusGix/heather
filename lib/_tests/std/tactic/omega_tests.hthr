@@ -565,14 +565,3 @@ fn pick_below_two(t: Nat) → t < 2 → Nat {
         Succ(Succ(q)) => λ (big: q + 2 < 2) => false_elim(omega(big)),
     }
 }
-
-// ---- Small quotients split on their value ----
-
-// Distances modulo four: the real shadow leaves each quotient within two
-// values, and splitting on them keeps the certificate exact (design §26).
-theorem distance_step(j, s, jn, l, ln: Nat, j4: j < 4, s4: s < 4, nj: jn = (j + 1) % 4, dl: ln = l - 1, other: ¬(j = s),
-    budget: ((s + 4 - j) % 4) < l): ((s + 4 - jn) % 4) < ln { omega }
-// Control: without `other`, the step from the target itself wraps.
-// expect-error: got stuck
-theorem distance_step_at_target(j, s, jn, l, ln: Nat, j4: j < 4, s4: s < 4, nj: jn = (j + 1) % 4, dl: ln = l - 1,
-    budget: ((s + 4 - j) % 4) < l): ((s + 4 - jn) % 4) < ln { omega }

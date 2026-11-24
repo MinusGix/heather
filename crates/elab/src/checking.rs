@@ -1972,9 +1972,6 @@ impl Checking<'_> {
             span: span,
         })?;
         cert.report.phases = phases;
-        if std::env::var_os("HEATHER_OMEGA_DUMP_TMP").is_some() {
-            eprintln!("OMEGA depth={} len={} atoms={} assumptions={} splits={} lemmas={:?}\n  {}", outer_depth, cert.source.len(), cert.report.atoms, cert.report.assumptions, cert.report.logical_splits, cert.report.used_lemmas, &cert.source[..cert.source.len().min(400)]);
-        }
         self.pass.omega_reports.borrow_mut().push(cert.report);
         // A written call is lifted into a lemma of its own, as `bv_omega`'s
         // proof is (docs/tactics/bv-omega-design.md §6): the gate checks the

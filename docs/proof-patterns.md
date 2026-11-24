@@ -181,10 +181,10 @@ should read is `docs/library/program-and-proof-style.md`.
   constructor (`Sha2::ending(z, l).len()` is `Succ` of its tail's length,
   `spelled(Cons(w, rest)).len()` four successors of `spelled(rest).len()`),
   follows a definition to its arithmetic (`x.doubled(0)` is `x`, a fold
-  over `[b0, b1, b2, b3]` the sum it builds) at closed arguments only (a
-  defined distance `dist(a, b) = (b + 4 - a) % 4` at open ones is an atom:
-  write the arithmetic out,
-  [[arithmetic-definition-opaque-at-open-arguments]]), and states every word's range
+  over `[b0, b1, b2, b3]` the sum it builds; a non-recursive one whose body
+  is arithmetic at open arguments too: a defined distance `dist(a, b) =
+  (b + 4 - a) % 4` is its body, subtraction split and all, design §26),
+  and states every word's range
   `w.toNat() < 2^n` at a literal width, met in the goal or only in a fact,
   so no `toNat_lt_pow` beside a `bv_omega` either
   ([[omega-opens-closed-terms]], design §22). Each opening is bounded; a
@@ -195,13 +195,27 @@ should read is `docs/library/program-and-proof-style.md`.
   The kernel converts the atoms' definitions. omega does read a field at
   closed arguments as what was put there (`Lay::of(3).size` meets
   `Lay::of(3).cap`), so a failure there is a missing fact, not an atom.
-- **It reads every hypothesis in scope.** Keep its context small: put
-  arithmetic in small lemmas, never `omega` inside a stretch or with `Rat`
-  facts in scope. Inside a claim of trees (a `Goes` built from nested
-  lets and lambdas) even a one-fact `omega` read the whole context and
-  took minutes; stating the step's arithmetic as a lemma over bare
-  numbers (native_compile_perform's `push_arith`) made it free. `omega(h, …)` names the load-bearing facts; whether it
-  should read *only* those is [[omega-listed-facts-only]], an open decision.
+- **It reads every hypothesis in scope**, and each atom a fact brings
+  widens every row of the certificate. A written `omega`'s proof is lifted
+  into a lemma of its own at the gate (design §27), so an inline call is no
+  longer re-checked and substituted with the body under every binder: write
+  the arithmetic where it is used. What still costs is the certificate's
+  width: a context with many unrelated facts over the same atoms, or `Rat`
+  facts (unfolded into Int cross products), still pays for them, and a
+  lemma stated over bare numbers is still the cheaper form for a step used
+  many times. `omega(h, …)` names the load-bearing facts (an `Exists`'s
+  `.proof` is read only when named); whether it should read *only* those is
+  [[omega-listed-facts-only]], an open decision.
+- **Remainders by a literal with subtractions inside are its costly
+  shape.** `(s + 4 - j) % 4` is a subtraction split under a quotient atom,
+  and the real shadow fails on integrality, so each leaf is a CutSat case
+  analysis: a lemma about slot distances costs seconds even over bare
+  numbers. Name a fact once and cite it rather than re-deriving it.
+- **No hand proof for a word under a low mask.** `bv_omega` reads
+  `x & (2^k - 1)` as `toNat(x) % 2^k`, and a masked sum or difference
+  through its wrap (`(j - i) & 3` is `(j + 4 - i) % 4` for slots below
+  four, borrow and all), so no `toNat_band_low_mask` or
+  `toNat_sub_mod`/`mod_pow_mod` chain (bv-omega-design §3.2).
 - **Products of `pow` terms: restate the step over variables.** `omega`
   over `Nat` facts whose atoms are `m * pow(2, …)` products re-reads their
   structure; the same facts handed to a lemma over bare `Nat`/`Int`
