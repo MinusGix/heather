@@ -458,6 +458,11 @@ over its span:
   node, the shared control language of the dogfooding plan §5.3b. Copying
   the tail was chosen for passes because their tail is short (the next
   state, a counter's increment), and it needs no new meaning or proof.
+  **Accepted as the stopgap (Minus, 2026-11-24).** Its cost: a pass with
+  several joins in sequence copies the rest of the pass at each one, so
+  its code grows exponentially in the number of joins in a row (nested
+  joins, a join inside an arm, copy only their own arm's tail). The span
+  language's join node (dogfooding plan §5.3b) remains the real fix.
 - A generator's request budget is ten times a tactic's
   (`GENERATOR_REQUEST_BUDGET`, `crates/elab/src/host.rs`): the insert row,
   three arms of stores, made more than ten thousand requests.
