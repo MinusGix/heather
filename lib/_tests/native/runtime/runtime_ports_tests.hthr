@@ -8,12 +8,12 @@
 // Each row says what it ports and the rung of the plan's ladder (§4) it
 // waits on: 1 the scalar core, 2 spans of anything, 3 inductive data,
 // 4 functional Heather. Nothing here is imported from outside.
-// `runtime` reexports the words and spans, and a type's methods reach the
-// whole closure (docs/language/modules-design.md §3.7). `[u64; n]`'s `at`
-// is `stored_words`', which builds on `runtime` and so is not under it.
-// `program_eval` runs a row's compiled program in its theorem.
-import runtime;
-import stored_words;
+// `runtime_data` reexports `runtime`'s words and spans and the `laid`
+// generator, and brings in what a function of a span or a laid record
+// publishes; a type's methods reach the whole closure
+// (docs/language/modules-design.md §3.7), so `[u64; n]`'s `at` needs
+// nothing more. `program_eval` runs a row's compiled program in its theorem.
+import runtime_data;
 import function_ir_eval;
 
 // ---------------------------------------------------------------------------
@@ -169,6 +169,136 @@ runtime fn Bytes::port_copy_from({n, m: u64}, mut self dst: Bytes(n), src: Bytes
         i := i + 1;
     }
     i
+}
+
+// ---------------------------------------------------------------------------
+// Rung 2: a hash table of fixed capacity (docs/native/rung2-spans-design.md)
+//
+// The shapes a hash map is made of, as `crates/elab`'s registries and the
+// cache's tables hold them: a slot from a hash, linear probing, an insert
+// that stores under a test and a lookup that only reads. The compiled rows
+// are written in the shape the generator takes today (a probe that ends in
+// its own call, each arm its own `Mutated`); the refused rows are the same
+// code as a newcomer writes it.
+
+// A set of bytes over a lent span: 0 is an empty slot, probing from `j`,
+// `left` slots still to try. 1 when the key was put, 0 when it was there,
+// 2 when the table is full.
+runtime fn Bytes::port_set_insert({n: u64}, s: Bytes(n), key, j, left: u64) → Mutated<Bytes(n), u64>
+    decreases left.toNat() {
+    if more: 0 < left {
+        if lt: j < s.len() {
+            if s[j] = 0 { Mutated(s.put(j, key.truncate(8, 56)), 1) }
+            else if s[j].zero_extend(56) = key { Mutated(s, 0) }
+            else { @port_set_insert(n, s, key, if j + 1 = n { 0 } else { j + 1 }, left - 1) }
+        } else { Mutated(s, 2) }
+    } else { Mutated(s, 2) }
+}
+
+theorem port_set_insert_runs(): (Bytes::port_set_insert(Bytes([0, 7, 0, 0], refl), 9, 1, 4, n := 4).after).bytes = [0, 7, 9, 0] ∧
+    (Bytes::port_set_insert(Bytes([7, 9, 4, 1], refl), 9, 3, 4, n := 4)).value = 0 ∧
+    (Bytes::port_set_insert(Bytes([7, 9, 4, 1], refl), 8, 3, 4, n := 4)).value = 2 {
+    ⟨refl, ⟨refl, refl⟩⟩
+}
+
+// The start slot hashed from the key, then the probe: a call of another
+// function of the span, bound and handed on.
+runtime fn Bytes::port_set_add({n: u64}, s: Bytes(n), key: u64) → Mutated<Bytes(n), u64> {
+    if ok: 0 < n { let r = Bytes::port_set_insert(s, key, (key * 31) % n, n); Mutated(r.after, r.value) } else { Mutated(s, 2) }
+}
+
+theorem port_set_add_runs(): (Bytes::port_set_add(Bytes([0, 0, 0, 0, 0], refl), 9, n := 5).after).bytes = [0, 0, 0, 0, 9] { refl }
+
+// The same tail call written without the binding.
+// expect-error: a function over a span ends in `Mutated(span, value)`
+runtime fn Bytes::port_set_add_tail({n: u64}, s: Bytes(n), key: u64) → Mutated<Bytes(n), u64> {
+    if ok: 0 < n { Bytes::port_set_insert(s, key, (key * 31) % n, n) } else { Mutated(s, 2) }
+}
+
+// The key as the byte it is, beside the span.
+// expect-error: it takes and returns 64-bit words for now, beside its record
+runtime fn Bytes::port_set_insert_byte({n: u64}, s: Bytes(n), key: u8, j: u64) → Mutated<Bytes(n), u64> {
+    if lt: j < s.len() {
+        if s[j] = 0 { Mutated(s.put(j, key), 1) } else { Mutated(s, 0) }
+    } else { Mutated(s, 2) }
+}
+
+// The insert as a `while` over `mut self`, its measure assigned in the arms.
+// expect-error: must decrease the measure
+runtime fn Bytes::port_set_put({n: u64}, mut self s: Bytes(n), key, start: u64) → u64 {
+    let mut j = start;
+    let mut left = n;
+    let mut res: u64 = 2;
+    while 0 < left decreases left.toNat() {
+        if lt: j < s.len() {
+            if s[j] = 0 { s[j] := key.truncate(8, 56); res := 1; left := 0; }
+            else if s[j].zero_extend(56) = key { res := 0; left := 0; }
+            else { j := if j + 1 = n { 0 } else { j + 1 }; left := left - 1; }
+        } else { left := 0; }
+    }
+    res
+}
+
+// A map of words in one laid record: its keys and values side by side, 0
+// the empty key, the slot the top two bits of a Fibonacci hash.
+laid(endian := BigEndian) record PortMap { count: u64, keys: [u64; 4], vals: [u64; 4] }
+
+runtime fn PortMap::insert_at(self m: PortMap, k, v, j, left: u64) → Mutated<PortMap, u64> decreases left.toNat() {
+    if more: 0 < left {
+        if lt: j < 4 {
+            if m.keys.at(j) = 0 { Mutated(m with { keys = m.keys.put(j, k), vals = m.vals.put(j, v), count = m.count + 1 }, 1) }
+            else if m.keys.at(j) = k { Mutated(m with { vals = m.vals.put(j, v) }, 0) }
+            else { @insert_at(m, k, v, (j + 1).band(3), left - 1) }
+        } else { Mutated(m, 2) }
+    } else { Mutated(m, 2) }
+}
+
+runtime fn PortMap::insert(self m: PortMap, k, v: u64) → Mutated<PortMap, u64> {
+    let r = PortMap::insert_at(m, k, v, (k * 11400714819323198485).shift_right(62), 4);
+    Mutated(r.after, r.value)
+}
+
+// A lookup, which changes nothing, spelled as a function that leaves the
+// record as it was.
+runtime fn PortMap::get_at(self m: PortMap, k, j, left: u64) → Mutated<PortMap, u64> decreases left.toNat() {
+    if more: 0 < left {
+        if lt: j < 4 {
+            if m.keys.at(j) = 0 { Mutated(m, 0) }
+            else if m.keys.at(j) = k { Mutated(m, m.vals.at(j)) }
+            else { @get_at(m, k, (j + 1).band(3), left - 1) }
+        } else { Mutated(m, 0) }
+    } else { Mutated(m, 0) }
+}
+
+fn PORT_MAP_EMPTY() → List<u8> { List::replicate(BitVec::ofNat(0), 72) }
+
+// Key 9 hashes to slot 2: its key word is the fourth, its value the
+// eighth, and the count is one.
+theorem port_map_insert_runs(): PortMap::insert::bytes(PORT_MAP_EMPTY(), 72, 9, 7).after =
+    [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9,
+     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7,
+     0, 0, 0, 0, 0, 0, 0, 0] { refl }
+
+theorem port_map_get_runs(): PortMap::get_at::bytes(PortMap::insert::bytes(PORT_MAP_EMPTY(), 72, 9, 7).after, 72, 9, 2, 4).value = 7 { refl }
+
+// The lookup as it is: a loop that only reads the record, answering a word.
+// expect-error: a loop that only reads the record is not taken yet
+runtime fn PortMap::find_at(self m: PortMap, k, j, left: u64) → u64 decreases left.toNat() {
+    if more: 0 < left {
+        if lt: j < 4 {
+            if m.keys.at(j) = 0 { 0 }
+            else if m.keys.at(j) = k { m.vals.at(j) }
+            else { m.find_at(k, (j + 1).band(3), left - 1) }
+        } else { 0 }
+    } else { 0 }
+}
+
+// The slot as the remainder it is: `k % 4 < 4` is not found by the default
+// search, which reads the remainder as an atom.
+// expect-error: `put`'s `inside` was left to its default
+runtime fn PortMap::slot_key(mut self m: PortMap, k: u64) → u64 {
+    m.keys := m.keys.put(k % 4, k);
+    0
 }
 
 // ---------------------------------------------------------------------------

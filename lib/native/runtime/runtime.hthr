@@ -3865,7 +3865,7 @@ fn runtime_span_parts(q: RtQ, l: Linking, insts: List<Pair<Expr, Expr>>, sl: Spa
 // file is compared environment by environment, twice per value bound.)
 
 fn runtime_held_ref(name: String) → Tac<Expr> {
-    lookup(name).or_fail("runtime: `" ++ name ++ "` is not in scope (a runtime fn of a laid record needs `import rt_held; import rt_held_fields; import stored_accessor;` and the modules they import): ")
+    lookup(name).or_fail("runtime: `" ++ name ++ "` is not in scope (a runtime fn of a laid record needs `import runtime_data;`): ")
         .bind(λ g => pure(Global(g)))
 }
 
@@ -5281,7 +5281,7 @@ fn runtime_held_names() → Tac<HeldNames> {
         <- runtime_held_ref("rt_held::HWorld::marked"), <- runtime_held_ref("rt_held::HWorld::none"), <- runtime_held_ref("rt_held::HWorld::more"), <- runtime_held_ref("rt_held::HWorld::bound"),
         <- runtime_held_ref("rt_held::HWorld::owed"), <- runtime_held_ref("rt_held::Sound::of"), <- runtime_held_ref("rt_held::FFun::held_agrees"), <- runtime_held_ref("rt_held_fields::Stored::read_entry"),
         <- runtime_held_ref("rt_held_fields::Stored::write_entry"), <- runtime_held_ref("rt_held_fields::HWorld::reads_field"), <- runtime_held_ref("rt_held_fields::HWorld::writes_field"), <- runtime_held_ref("rt_held::FTm::held"),
-        <- runtime_held_ref("rt_held::FTm::kept"), <- runtime_held_ref(name_of(Ty::bind_onto)), <- runtime_held_ref("rt_held::Stored::Holds"), <- runtime_held_ref("Agrees"),
+        <- runtime_held_ref("rt_held::FTm::kept"), <- runtime_held_ref(name_of(Ty::bind_onto)), <- runtime_held_ref("rt_held::Stored::Holds"), <- runtime_held_ref("rt_held::Agrees"),
         <- runtime_held_ref("rt_held::Reader::indexed"), <- runtime_held_ref("rt_held::Writer::indexed"), <- runtime_held_ref("rt_held_fields::Stored::index_entry"), <- runtime_held_ref("rt_held_fields::Stored::store_entry"),
         <- runtime_held_ref("rt_held_fields::HWorld::indexes_array"), <- runtime_held_ref("rt_held_fields::HWorld::stores_array"), <- runtime_held_ref("rt_held_fields::Part::byte_entry"),
         <- runtime_held_ref("rt_held_fields::HWorld::stores_bytes_array")))
@@ -5799,7 +5799,7 @@ fn runtime_record(name: String, f: GlobalRef) → Tac<List<Decl>> {
 // A function of a `Bytes(n)` (docs/native/span-record-design.md)
 
 fn runtime_bytes_ref(name: String) → Tac<Expr> {
-    lookup(name).or_fail("runtime: `" ++ name ++ "` is not in scope (a runtime fn of a `Bytes(n)` needs `import rt_bytes; import rt_held;` and the modules they import): ")
+    lookup(name).or_fail("runtime: `" ++ name ++ "` is not in scope (a runtime fn of a `Bytes(n)` needs `import runtime_data;`): ")
         .bind(λ g => pure(Global(g)))
 }
 
