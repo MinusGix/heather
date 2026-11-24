@@ -165,6 +165,9 @@ theorem WordMap::step_budget(j, s, jn, l, ln: Nat, j4: j < 4, s4: s < 4, nj: jn 
 theorem WordMap::step_before(j, s, t, jn: Nat, j4: j < 4, s4: s < 4, t4: t < 4, nj: jn = (j + 1) % 4, other: ¬(j = s),
     before: WordMap::dist(jn, t) < WordMap::dist(jn, s)): WordMap::dist(j, t) < WordMap::dist(j, s) { omega }
 
+theorem WordMap::step_before_back(j, s, t, jn: Nat, j4: j < 4, s4: s < 4, t4: t < 4, nj: jn = (j + 1) % 4, other: ¬(j = s), away: ¬(t = j),
+    before: WordMap::dist(j, t) < WordMap::dist(j, s)): WordMap::dist(jn, t) < WordMap::dist(jn, s) { omega }
+
 // ---------------------------------------------------------------------------
 // The table's lookups, read off its slots.
 
@@ -557,7 +560,7 @@ theorem WordMap::adds_next(m: WordMap, k, v: u64, j, left: u64, more: 0 < left, 
                 let further: (¬(j.toNat() = found.witness)) = λ same => empty(trans(cong_fn(λ (q: Nat) => m.key(q), same), f.empty));
                 Inl(Exists(found.witness, And(FirstEmpty(f.inside, f.empty, λ t t4 before => match Nat::eq_dec(t, j.toNat()) {
                     Inl(here) => λ z => empty(trans(cong_fn(λ (q: Nat) => m.key(q), sym(here)), z)),
-                    Inr(away) => f.path(t, t4, omega(j4, f.inside, t4, nj, further, away, before)),
+                    Inr(away) => f.path(t, t4, WordMap::step_before_back(j.toNat(), found.witness, t, ((j + 1).band(3)).toNat(), j4, f.inside, t4, nj, further, away, before)),
                 }), And(found.proof.right.left, trans(eq, found.proof.right.right)))))
             },
             Inr(full) => Inr(And(full.left, trans(eq, full.right))),
