@@ -1,6 +1,6 @@
 ---
 title: Stores, keys and generations: shared mutation's meaning, with the arena's windows as typed handles
-status: open
+status: closed
 labels: [ownership,library,native]
 area: heather-in-heather
 milestone: [nh-ownership]
@@ -44,3 +44,6 @@ The arena's laws are restated over typed handles with the existing ones as conse
   - The arena's checked route is not a word compare without a layout change; left to [[arena-runtime-generation]].
 
   Residue filed: [[arena-runtime-generation]], [[arena-handles-push-and-new-vec]], [[runtime-record-erased-fields]], [[mutated-result-dot-call-diagnostic]] (a dot call of a plain-`self` function answering `Mutated` is refused as a `mut self` call, with its message lost under `.value`; the library spells those calls qualified).
+- 2026-11-24: Verified: `scripts/test --pr` gave `== suite: 914 passed, 1 failed, 1 ignored ==`; the library gate (`crates/cli/tests/library.rs`) and `lib_closures` passed. The one failure was `frontend_bench_smoke`'s "split exceeds the run it came from" for `scale/declarations`, a wall-clock phase split under load, which passed alone right after (`== suite: 5 passed, 0 failed, 0 ignored ==`); nothing it measures is in this change.
+
+  Aligned with `ownership-paths` (its `Path::Valid` is `Exists a. get = Some(a)`): `Store::valid_exists` and `Store::exists_valid` state the key's validity in that form both ways, so the later key-as-path-step is a definition. Nothing in `arena.hthr` or the `arena_laws.hthr` names that package cites was renamed.

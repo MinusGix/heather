@@ -74,6 +74,20 @@ fn Store::get<V>(self s: Store<V>, k: Key) → Option<V> { s.slots.nth(k.index).
 // A key is valid where the partial read answers.
 fn Store::Valid<V>(self s: Store<V>, k: Key) → Type { s.get(k).is_some().IsTrue() }
 
+// The same validity in the form `ownership-paths` states a path's
+// (`Path::Valid`: the partial read answers some value), both ways, so a key
+// as a path step is a definition and not a proof.
+theorem Store::valid_exists<V>(self s: Store<V>, k: Key, valid: s.Valid(k)): Exists<V>(λ a => s.get(k) = Some(a)) {
+    match s.get(k) as λ o => (o.is_some().IsTrue() → Exists<V>(λ a => o = Some(a))) {
+        None => λ never => false_elim(never),
+        Some(a) => λ _ => Exists(a, refl),
+    }(valid)
+}
+
+theorem Store::exists_valid<V>(self s: Store<V>, k: Key, a: V, e: s.get(k) = Some(a)): s.Valid(k) {
+    j(sym(e), λ o _ => o.is_some().IsTrue(), trivial)
+}
+
 // The read under a proof of validity: no default answer to state laws about.
 fn Store::read<V>(self s: Store<V>, k: Key, valid: s.Valid(k) := known) → V { s.get(k).get(valid) }
 
