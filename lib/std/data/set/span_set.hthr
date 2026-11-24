@@ -401,6 +401,70 @@ theorem SpanSet::disjoint_complete(self a, b: SpanSet, d: a.Disjoint(b)): a.disj
     })
 }
 
+// Members of a union, in and out (the forms `disjoint`'s laws below read).
+theorem SpanSet::union_has_l(self a, b: SpanSet, x: Nat, h: a.has(x).IsTrue()): a.union(b).has(x).IsTrue() {
+    j(sym(a.union_has(b, x)), λ v _ => v.IsTrue(), omega(h))
+}
+
+theorem SpanSet::union_has_r(self a, b: SpanSet, x: Nat, h: b.has(x).IsTrue()): a.union(b).has(x).IsTrue() {
+    j(sym(a.union_has(b, x)), λ v _ => v.IsTrue(), omega(h))
+}
+
+theorem SpanSet::union_has_parts(self a, b: SpanSet, x: Nat, h: a.union(b).has(x).IsTrue()): (a.has(x) || b.has(x)).IsTrue() {
+    j(a.union_has(b, x), λ v _ => v.IsTrue(), h)
+}
+
+// Disjointness is symmetric, decided or stated.
+theorem SpanSet::disjoint_symm(self a, b: SpanSet, d: a.Disjoint(b)): b.Disjoint(a) { λ x hb ha => d(x, ha, hb) }
+
+theorem SpanSet::disjoint_comm(self a, b: SpanSet): a.disjoint(b) = b.disjoint(a) {
+    a.disjoint(b).eq_of_is_true_iff(b.disjoint(a),
+        λ h => b.disjoint_complete(a, a.disjoint_symm(b, a.disjoint_sound(b, h))),
+        λ h => a.disjoint_complete(b, b.disjoint_symm(a, b.disjoint_sound(a, h))))
+}
+
+// A union is apart from a set exactly when both its halves are: the law a
+// composition of footprints regroups by (`lib/std/data/set/footprint.hthr`).
+theorem SpanSet::union_disjoint(self a, b, c: SpanSet): a.union(b).disjoint(c) = a.disjoint(c) && b.disjoint(c) {
+    a.union(b).disjoint(c).eq_of_is_true_iff(a.disjoint(c) && b.disjoint(c),
+        λ h => {
+            let d = a.union(b).disjoint_sound(c, h);
+            let da: (a.disjoint(c).IsTrue()) = a.disjoint_complete(c, λ x ha hc => d(x, a.union_has_l(b, x, ha), hc));
+            let db: (b.disjoint(c).IsTrue()) = b.disjoint_complete(c, λ x hb hc => d(x, a.union_has_r(b, x, hb), hc));
+            omega(da, db)
+        },
+        λ h => {
+            let da = a.disjoint_sound(c, omega(h));
+            let db = b.disjoint_sound(c, omega(h));
+            a.union(b).disjoint_complete(c, λ x hab hc => {
+                let parts = a.union_has_parts(b, x, hab);
+                match a.has(x).is_true_dec() {
+                    Inl(ha) => da(x, ha, hc),
+                    Inr(na) => db(x, omega(parts, na), hc),
+                }
+            })
+        })
+}
+
+theorem SpanSet::disjoint_union(self a, b, c: SpanSet): a.disjoint(b.union(c)) = a.disjoint(b) && a.disjoint(c) {
+    let l: (a.disjoint(b.union(c)) = b.union(c).disjoint(a)) = a.disjoint_comm(b.union(c));
+    let m: (b.union(c).disjoint(a) = b.disjoint(a) && c.disjoint(a)) = b.union_disjoint(c, a);
+    let r: (b.disjoint(a) && c.disjoint(a) = a.disjoint(b) && a.disjoint(c)) =
+        j(b.disjoint_comm(a), λ v _ => b.disjoint(a) && c.disjoint(a) = v && a.disjoint(c),
+            j(c.disjoint_comm(a), λ v _ => b.disjoint(a) && c.disjoint(a) = b.disjoint(a) && v, refl));
+    trans(l, trans(m, r))
+}
+
+// Sets with the same members are apart from the same sets.
+theorem SpanSet::disjoint_same(self a, a2, b: SpanSet, e: (x: Nat) → a.has(x) = a2.has(x)): a.disjoint(b) = a2.disjoint(b) {
+    a.disjoint(b).eq_of_is_true_iff(a2.disjoint(b),
+        λ h => a2.disjoint_complete(b, λ x ha hb => a.disjoint_sound(b, h)(x, j(sym(e(x)), λ v _ => v.IsTrue(), ha), hb)),
+        λ h => a.disjoint_complete(b, λ x ha hb => a2.disjoint_sound(b, h)(x, j(e(x), λ v _ => v.IsTrue(), ha), hb)))
+}
+
+// The empty set is apart from everything.
+theorem SpanSet::empty_disjoint(self a: SpanSet): SpanSet::empty().disjoint(a) = True { refl }
+
 // ---------------------------------------------------------------------------
 // Packing: sizes laid out one after another
 

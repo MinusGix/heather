@@ -570,7 +570,7 @@ Read off the code on 2026-11-24.
 | Linearity | The reflector's refusals for the world and the span (`rt_reflect.hthr`). No judgment over `FTm`, `ETm` or held code: only pure `Fun` goes through `Setup`. |
 | Typed references | None in compiled code. A window is two words, a vector handle a `u64`, laid records nest by value. In the meaning, a window and a vector are handles with keys into erased claims (`arena_handles.hthr`, §10.7 "Built"). |
 | Lenses | `Location`, `LocationLaws`, `Disjoint` (`lib/std/machine/location.hthr`), total only; `Part` and `Stored` for laid records. |
-| Footprints | `Span`, `SpanSet` with deciders (`span_set.hthr`); no separation algebra. |
+| Footprints | `Span`, `SpanSet` with deciders (`span_set.hthr`); the separation algebra over them, fractions, an access map and the store frame theorem (`docs/library/separation-algebra-design.md`, built 2026-11-24 in the first wave). |
 | `mut` in the surface | A parser desugaring; the AST's `Param` has no mode, and a `mut self` method is known by its `Mutated` result type alone. `&` is an infix token only. |
 | Erased parameters | Trailing squashed arguments of a call are dropped; a laid-record `runtime fn` cannot take a proof parameter (`runtime-record-function-limits`), which is why the arena's `read` and `store` are ordinary functions. |
 | `Copy`, `Clone` | No class. |

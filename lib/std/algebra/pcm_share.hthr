@@ -1,0 +1,163 @@
+// Fractional permissions: a share of a read permission, as a separation
+// algebra (`pcm`; docs/library/separation-algebra-design.md §3,
+// docs/language/ownership-design.md §10.3, §10.9).
+//
+// A share is a nonnegative rational; shares compose by adding, and a
+// composite is valid while it is at most one. One is the whole: what an
+// owned value or a live path holds, exclusive (`Share::whole_exclusive`).
+// Anything less is a frozen view's read share, and two of those always
+// compose while they total at most one, so a view can be copied by halving
+// its share (`Share::halves`) and the whole is recovered when every half
+// comes back (`Share::whole_of_halves`). No share composes with the whole
+// except nothing (`Share::whole_meets_share` refutes the rest).
+//
+// Why rationals: a frozen view is copyable (§10.8), so its share must split
+// again and again; counting permissions (a source that lends `n` unit
+// tokens) cannot split a token, and a dyadic carrier would buy nothing over
+// `Rat`, whose order, `≈` and `ring` are already there. The nonnegativity is
+// a field, so the carrier holds no negative share and a part of a valid
+// composite is valid without a case on signs.
+
+import logic;
+import bool;
+import nat;
+import int;
+import omega;
+import ring;
+import relation;
+import relation_props;
+import algebra_rel;
+import rat;
+import pcm;
+
+record Share { amount: Rat, nonneg: 0 <= amount }
+
+fn Share::Same(a, b: Share) → Type { a.amount ≈ b.amount }
+
+designation ≈ at Share := Share::Same
+
+fn Share::join(self a, b: Share) → Share { Share(a.amount + b.amount, Rat::add_nonneg(a.nonneg, b.nonneg)) }
+
+// At most the whole: the law form, and its decision.
+fn Share::Valid(self a: Share) → Type { a.amount <= 1 }
+
+fn Share::valid(self a: Share) → Bool { a.amount.le_bool(1) }
+
+theorem Share::valid_sound(self a: Share, h: a.valid() = True): a.Valid() { a.amount.le_of_bool(1, h) }
+
+theorem Share::valid_complete(self a: Share, h: a.Valid()): a.valid() = True {
+    match e: a.valid() {
+        True => refl,
+        False => absurd_of(h, a.amount.not_le_of_bool(1, e)),
+    }
+}
+
+// Nothing, a positive read share, and the whole.
+fn Share::none() → Share { Share(0, Rat::le_refl(0)) }
+
+fn Share::whole() → Share { Share(1, omega) }
+
+// Half of a share: what a copied view holds, each copy one half.
+fn Share::half(self a: Share) → Share { Share(a.amount * Rat::inv_succ(1), Rat::mul_nonneg(a.nonneg, omega)) }
+
+// ---------------------------------------------------------------------------
+// The laws
+
+theorem Share::same_refl(self a: Share): a ≈ a { a.amount.same_refl() }
+
+theorem Share::same_sym({a, b: Share}, h: a ≈ b): b ≈ a { Rat::same_sym(h) }
+
+theorem Share::same_trans({a, b, c: Share}, h1: a ≈ b, h2: b ≈ c): a ≈ c { Rat::same_trans(h1, h2) }
+
+theorem Share::join_respects({a, a2, b, b2: Share}, ha: a ≈ a2, hb: b ≈ b2): a.join(b) ≈ a2.join(b2) {
+    Rat::add_respects(ha, hb)
+}
+
+theorem Share::join_assoc(self a, b, c: Share): a.join(b).join(c) ≈ a.join(b.join(c)) { a.amount.add_assoc(b.amount, c.amount) }
+
+theorem Share::join_comm(self a, b: Share): a.join(b) ≈ b.join(a) { a.amount.add_comm(b.amount) }
+
+theorem Share::none_join(self a: Share): Share::none().join(a) ≈ a { a.amount.zero_add() }
+
+theorem Share::join_none(self a: Share): a.join(Share::none()) ≈ a { a.amount.add_zero() }
+
+theorem Share::valid_none(): Share::none().Valid() { omega }
+
+// A part of a valid composite is valid: the other part is not negative.
+theorem Share::valid_left(self a, b: Share, h: a.join(b).Valid()): a.Valid() {
+    let total: (a.amount + b.amount <= 1) = h;
+    let other: (0 <= b.amount) = b.nonneg;
+    let r: (a.amount <= 1) = linarith(total, other);
+    r
+}
+
+theorem Share::valid_respects({a, b: Share}, e: a ≈ b, h: a.Valid()): b.Valid() {
+    Rat::le_respects(e, Rat::same_refl(1), h)
+}
+
+instance Pcm<Share>(Share::Same, Share::join, Share::Valid) {
+    rel_refl := λ a => a.same_refl(),
+    rel_sym := λ a b h => Share::same_sym(h),
+    rel_trans := λ a b c h1 h2 => Share::same_trans(h1, h2),
+    respects2 := λ a a2 ha b b2 hb => Share::join_respects(ha, hb),
+    assoc := Share::join_assoc,
+    unit := Share::none(),
+    unit_l := Share::none_join,
+    unit_r := Share::join_none,
+    comm := Share::join_comm,
+    valid_unit := Share::valid_none(),
+    valid_l := Share::valid_left,
+    valid_respects := λ a b e h => Share::valid_respects(e, h),
+}
+
+// ---------------------------------------------------------------------------
+// Splitting and recovering
+
+// Two halves make the share they came from.
+theorem Share::halves(self a: Share): a.half().join(a.half()) ≈ a {
+    let two: (Rat::inv_succ(1) + Rat::inv_succ(1) ≈ 1) = Rat::inv_succ_half(0);
+    let r: (a.amount * Rat::inv_succ(1) + a.amount * Rat::inv_succ(1) ≈ a.amount) = ring(two);
+    r
+}
+
+// The whole, copied once and recovered.
+theorem Share::whole_of_halves(): Share::whole().half().join(Share::whole().half()) ≈ Share::whole() {
+    Share::whole().halves()
+}
+
+// Any share splits at any amount it covers.
+fn Share::take(self a: Share, r: Rat, low: 0 <= r) → Share { Share(r, low) }
+
+fn Share::rest(self a: Share, r: Rat, high: r <= a.amount) → Share { Share(a.amount - r, Rat::sub_nonneg(high)) }
+
+theorem Share::take_rest(self a: Share, r: Rat, low: 0 <= r, high: r <= a.amount): a.take(r, low).join(a.rest(r, high)) ≈ a {
+    let e: (r + (a.amount - r) ≈ a.amount) = ring;
+    e
+}
+
+// A half of a valid share is valid, and composes with the other half.
+theorem Share::half_valid(self a: Share, h: a.Valid()): a.half().join(a.half()).Valid() {
+    Share::valid_respects(Share::same_sym(a.halves()), h)
+}
+
+// The whole is exclusive: what composes with it is nothing.
+theorem Share::whole_exclusive(): Pcm::Exclusive(Share::Same, Share::join, Share::Valid, Share::whole()) {
+    λ b h => {
+        let low: (0 <= b.amount) = b.nonneg;
+        let high: (1 + b.amount <= 1) = h;
+        let le: (b.amount <= 0) = linarith(low, high);
+        Rat::le_antisymm(le, low)
+    }
+}
+
+// …so a positive share and the whole do not compose: a frozen view and a
+// live path to the same place are refused.
+theorem Share::whole_meets_share(self b: Share, pos: 0 < b.amount): ¬Share::whole().join(b).Valid() {
+    λ h => {
+        let high: (1 + b.amount <= 1) = h;
+        Rat::not_le_of_lt(pos, linarith(high))
+    }
+}
+
+// Two read shares compose while they total at most the whole.
+theorem Share::shares_compose(self a, b: Share, total: a.amount + b.amount <= 1): a.join(b).Valid() { total }
