@@ -31,3 +31,7 @@ docs/native/rung2-spans-design.md §7:
   keys): backward shifting needs an empty slot to stop at
   (`WordMap::shift_at_full_is_wrong`). With rehashing the full answer goes
   away and the load factor keeps the slot.
+
+## Log
+
+- 2026-11-24: The arena is built ([[runtime-arena-in-span]], `lib/native/runtime/arena.hthr`, `arena_laws.hthr`) at a heap of sixteen words: rehashing can take its larger table's window with `Arena::alloc` (`alloc_fresh`/`alloc_apart`: apart from the old table), fill it while the old table's reads stay put (`store_apart`), and state the reinsertion loop's invariant as `Arena::copies` states the copy's (induction on the measure, words inside and outside the window). What it cannot use yet: a table of a run-time capacity in a window needs the loop combinator's round 4 (loops over a record that takes parameters), and entries that are records need [[runtime-span-of-codec]]'s elements.
