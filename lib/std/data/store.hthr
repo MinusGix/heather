@@ -1,0 +1,646 @@
+// Stores and keys: the pure meaning of shared mutation
+// (docs/language/ownership-design.md §10.7, issues/ownership-stores-and-keys.md).
+//
+// A shared structure (a graph, a cache, an arena of nodes naming each
+// other) means a store and keys into it. A key copies freely; reading and
+// writing need the store. A key's validity is a proposition about the
+// store's value and the key, stated as **the partial read answers**
+// (`Valid(s, k)` is `s.get(k).is_some()` being `True`), the form the paths
+// of `ownership-paths` state their validity in, so a key is one more step
+// of a path.
+//
+// - A store is a list of slots, each `Live(gen, value)` or `Free(gen)`; a
+//   key names a slot and the generation it was handed out at.
+// - `alloc` puts a value in the first free slot (or a new one at the end)
+//   and answers its key: the key reads the value (`alloc_reads`), was not
+//   valid before (`alloc_fresh`), and every key valid before reads what it
+//   read (`alloc_keeps`).
+// - `put` through a key changes what that key reads (`put_reads`) and no
+//   other slot (`put_other`), and keeps every key's validity (`put_valid`).
+// - `free` ends a key's validity (`free_ends`) and leaves every other slot
+//   (`free_other`). Freeing moves the slot's generation past the key's, so
+//   the key is `Stale`, and nothing makes a stale key valid again: a later
+//   `alloc` that reuses the slot answers a key of the new generation, and
+//   the old key reads nothing (`stale_after_reuse`). Without generations it
+//   would read the new value (the negative control in
+//   lib/_tests/std/data/store_tests.hthr).
+//
+// The generation is the obligation's evidence in two forms (vision
+// principle 13). Statically it is erased state: `read` and `write` take a
+// proof of `Valid` (found by `known` from a hypothesis or a guard in scope),
+// and neither the slot's generation nor the key's is read. At run time the
+// same generation is kept and compared: `check` is the comparison, proved
+// to decide `Valid` (`check_decides`), and `checked` is the access that
+// tests it, a `When` whose `Present` carries the proof the static access
+// takes. One obligation, two producers.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import when;
+import omega;
+
+inductive Slot<V> { Live(gen: Nat, value: V), Free(gen: Nat) }
+
+record Key { index: Nat, gen: Nat }
+
+record Store<V> { slots: List<Slot<V>> }
+
+fn Slot::gen<V>(self s: Slot<V>) → Nat { match s { Live(g, _) => g, Free(g) => g } }
+
+// The generation compare: the slot is live at generation `g`.
+fn Slot::holds<V>(self s: Slot<V>, g: Nat) → Bool { match s { Live(h, _) => h.same(g), Free(_) => False } }
+
+// What the slot answers a key of generation `g`.
+fn Slot::answer<V>(self s: Slot<V>, g: Nat) → Option<V> { match s { Live(h, v) => h.same(g).then(Some(v)), Free(_) => None } }
+
+// The slot written through a key of generation `g` (unchanged where the
+// key is not the slot's).
+fn Slot::written<V>(self s: Slot<V>, g: Nat, v: V) → Slot<V> { match s { Live(h, w) => Live(h, h.same(g).select(v, w)), Free(h) => Free(h) } }
+
+// A live slot at generation `h` freed where the compare `c` said the key is
+// the slot's: free at the next generation, so no key handed out before reads
+// it again.
+fn Slot::freed_by<V>(c: Bool, h: Nat, w: V) → Slot<V> { match c { True => Free(h + 1), False => Live(h, w) } }
+
+fn Slot::freed<V>(self s: Slot<V>, g: Nat) → Slot<V> { match s { Live(h, w) => Slot::freed_by(h.same(g), h, w), Free(h) => Free(h) } }
+
+fn Store::empty<V>() → Store<V> { Store(Nil) }
+
+// The partial read through a key.
+fn Store::get<V>(self s: Store<V>, k: Key) → Option<V> { s.slots.nth(k.index).and_then(λ (sl: Slot<V>) => sl.answer(k.gen)) }
+
+// A key is valid where the partial read answers.
+fn Store::Valid<V>(self s: Store<V>, k: Key) → Type { s.get(k).is_some().IsTrue() }
+
+// The same validity in the form `ownership-paths` states a path's
+// (`Path::Valid`: the partial read answers some value), both ways, so a key
+// as a path step is a definition and not a proof.
+theorem Store::valid_exists<V>(self s: Store<V>, k: Key, valid: s.Valid(k)): Exists<V>(λ a => s.get(k) = Some(a)) {
+    match s.get(k) as λ o => (o.is_some().IsTrue() → Exists<V>(λ a => o = Some(a))) {
+        None => λ never => false_elim(never),
+        Some(a) => λ _ => Exists(a, refl),
+    }(valid)
+}
+
+theorem Store::exists_valid<V>(self s: Store<V>, k: Key, a: V, e: s.get(k) = Some(a)): s.Valid(k) {
+    j(sym(e), λ o _ => o.is_some().IsTrue(), trivial)
+}
+
+// The read under a proof of validity: no default answer to state laws about.
+fn Store::read<V>(self s: Store<V>, k: Key, valid: s.Valid(k) := known) → V { s.get(k).get(valid) }
+
+// The partial write through a key: the store unchanged where the key is
+// not valid.
+fn Store::put<V>(self s: Store<V>, k: Key, v: V) → Store<V> { Store(s.slots.update(k.index, λ (sl: Slot<V>) => sl.written(k.gen, v))) }
+
+// The write under a proof of validity.
+fn Store::write<V>(self s: Store<V>, k: Key, v: V, valid: s.Valid(k) := known) → Store<V> { s.put(k, v) }
+
+fn Store::free<V>(self s: Store<V>, k: Key) → Store<V> { Store(s.slots.update(k.index, λ (sl: Slot<V>) => sl.freed(k.gen))) }
+
+// The first free slot made live, or a new slot at the end; its key.
+fn Store::shifted<V>(x: Slot<V>, r: Mutated<List<Slot<V>>, Key>) → Mutated<List<Slot<V>>, Key> {
+    Mutated(Cons(x, r.after), Key(r.value.index + 1, r.value.gen))
+}
+
+fn Store::place<V>(xs: List<Slot<V>>, v: V) → Mutated<List<Slot<V>>, Key> {
+    match xs {
+        Nil => Mutated([Live(0, v)], Key(0, 0)),
+        Cons(x, t) => match x {
+            Free(g) => Mutated(Cons(Live(g, v), t), Key(0, g)),
+            Live(g, w) => Store::shifted(Live(g, w), Store::place(t, v)),
+        },
+    }
+}
+
+fn Store::lift<V>(r: Mutated<List<Slot<V>>, Key>) → Mutated<Store<V>, Key> { Mutated(Store(r.after), r.value) }
+
+fn Store::alloc<V>(self s: Store<V>, v: V) → Mutated<Store<V>, Key> { Store::lift(Store::place(s.slots, v)) }
+
+// The run-time check: the key's generation compared with its slot's.
+fn Store::check<V>(self s: Store<V>, k: Key) → Bool { s.slots.nth(k.index).is_some_and(λ (sl: Slot<V>) => sl.holds(k.gen)) }
+
+// A key behind its slot's generation: freed, and never valid again.
+fn Store::stale<V>(self s: Store<V>, k: Key) → Bool { s.slots.nth(k.index).is_some_and(λ (sl: Slot<V>) => (k.gen + 1).leb(sl.gen())) }
+
+fn Store::Stale<V>(self s: Store<V>, k: Key) → Type { s.stale(k).IsTrue() }
+
+// ---------------------------------------------------------------------------
+// One slot
+
+theorem Slot::answer_is_holds<V>(self sl: Slot<V>, g: Nat): sl.answer(g).is_some() = sl.holds(g) {
+    match sl {
+        Live(h, _) => match e: h.same(g) { True => refl, False => refl },
+        Free(_) => refl,
+    }
+}
+
+theorem Bool::then_false<A>(self c: Bool, x: Option<A>, e: c = False): c.then(x) = None { j(sym(e), λ d _ => d.then(x) = None, refl) }
+
+theorem Slot::written_answer<V>(self sl: Slot<V>, g: Nat, v: V, live: sl.holds(g) = True): sl.written(g, v).answer(g) = Some(v) {
+    match sl as λ s => (s.holds(g) = True → s.written(g, v).answer(g) = Some(v)) {
+        Live(_, w) => λ live => j(sym(live), λ c _ => c.then(Some(c.select(v, w))) = Some(v), refl),
+        Free(_) => λ live => absurd(live),
+    }(live)
+}
+
+// A write keeps the slot's generation, and whether a key of any generation
+// is live there.
+theorem Slot::live_answer<V>(h: Nat, v: V): Live(h, v).answer(h) = Some(v) { j(sym(h.same_self()), λ c _ => c.then(Some(v)) = Some(v), refl) }
+
+theorem Slot::written_gen<V>(self sl: Slot<V>, g: Nat, v: V): sl.written(g, v).gen() = sl.gen() {
+    match sl { Live(_, _) => refl, Free(_) => refl }
+}
+
+theorem Slot::written_holds<V>(self sl: Slot<V>, g, g2: Nat, v: V): sl.written(g, v).holds(g2) = sl.holds(g2) {
+    match sl { Live(_, _) => refl, Free(_) => refl }
+}
+
+theorem Slot::freed_by_answer<V>(c: Bool, h, g: Nat, w: V, e: h.same(g) = c): Slot::freed_by(c, h, w).answer(g) = None {
+    match c as λ d => (h.same(g) = d → Slot::freed_by(d, h, w).answer(g) = None) {
+        True => λ _ => refl,
+        False => λ e => h.same(g).then_false(Some(w), e),
+    }(e)
+}
+
+theorem Slot::freed_answer<V>(self sl: Slot<V>, g: Nat): sl.freed(g).answer(g) = None {
+    match sl {
+        Live(h, w) => Slot::freed_by_answer(h.same(g), h, g, w, refl),
+        Free(_) => refl,
+    }
+}
+
+theorem Slot::freed_by_gen<V>(c: Bool, h: Nat, w: V): h <= Slot::freed_by(c, h, w).gen() {
+    match c {
+        True => { let n: (Slot::freed_by<V>(True, h, w).gen() = h + 1) = refl; omega(n) },
+        False => { let n: (Slot::freed_by(False, h, w).gen() = h) = refl; omega(n) },
+    }
+}
+
+theorem Slot::freed_gen<V>(self sl: Slot<V>, g: Nat): sl.gen() <= sl.freed(g).gen() {
+    match sl {
+        Live(h, w) => Slot::freed_by_gen(h.same(g), h, w),
+        Free(h) => { let n: (h <= h) = omega; n },
+    }
+}
+
+// Freeing a live slot puts its generation past the key's.
+theorem Slot::freed_past<V>(self sl: Slot<V>, g: Nat, live: sl.holds(g) = True): g + 1 <= sl.freed(g).gen() {
+    match sl as λ s => (s.holds(g) = True → g + 1 <= s.freed(g).gen()) {
+        Live(h, w) => λ live => {
+            let at: (h = g) = h.same_sound(g, live);
+            let n: (Slot::freed_by(h.same(g), h, w).gen() = h + 1) = j(sym(live), λ c _ => Slot::freed_by(c, h, w).gen() = h + 1, refl);
+            omega(at, n)
+        },
+        Free(_) => λ live => absurd(live),
+    }(live)
+}
+
+// A slot whose generation is past `g` answers no key of generation `g`.
+theorem Slot::past_answer<V>(self sl: Slot<V>, g: Nat, past: g + 1 <= sl.gen()): sl.answer(g) = None {
+    match sl as λ s => (g + 1 <= s.gen() → s.answer(g) = None) {
+        Live(h, v) => λ past => {
+            let pg: (g + 1 <= h) = past;
+            match e: h.same(g) {
+                True => { let at: (h = g) = h.same_sound(g, e); false_elim(omega(at, pg)) },
+                False => h.same(g).then_false(Some(v), e),
+            }
+        },
+        Free(_) => λ _ => refl,
+    }(past)
+}
+
+// ---------------------------------------------------------------------------
+// Reading a slot through an optional lookup
+
+theorem Store::answer_some<V>(o: Option<Slot<V>>, g: Nat): o.and_then(λ (sl: Slot<V>) => sl.answer(g)).is_some() = o.is_some_and(λ (sl: Slot<V>) => sl.holds(g)) {
+    match o { None => refl, Some(sl) => sl.answer_is_holds(g) }
+}
+
+// `check` decides `Valid`: the generation compare is the partial read's
+// test, without the read.
+theorem Store::check_decides<V>(self s: Store<V>, k: Key): s.check(k) = s.get(k).is_some() {
+    sym(Store::answer_some(s.slots.nth(k.index), k.gen))
+}
+
+theorem Store::check_valid<V>(self s: Store<V>, k: Key, e: s.check(k) = True): s.Valid(k) {
+    Bool::is_true_of_eq(trans(sym(s.check_decides(k)), e))
+}
+
+theorem Store::check_invalid<V>(self s: Store<V>, k: Key, e: s.check(k) = False): ¬s.Valid(k) {
+    λ valid => {
+        let t: (s.get(k).is_some() = True) = eq_true_of_is_true(s.get(k).is_some(), valid);
+        absurd(trans(sym(e), trans(s.check_decides(k), t)))
+    }
+}
+
+// What a key that is not valid reads.
+theorem Store::get_none<V>(self s: Store<V>, k: Key, invalid: ¬s.Valid(k)): s.get(k) = None {
+    match s.get(k) as λ o => (¬o.is_some().IsTrue() → o = None) {
+        None => λ _ => refl,
+        Some(_) => λ n => false_elim(n(trivial)),
+    }(invalid)
+}
+
+// What a valid key reads, as an equation.
+theorem Store::read_get<V>(self s: Store<V>, k: Key, valid: s.Valid(k)): s.get(k) = Some(s.read(k, valid := valid)) {
+    match s.get(k) as λ o => ((p: o.is_some().IsTrue()) → o = Some(o.get(p))) {
+        None => λ p => false_elim(p),
+        Some(_) => λ _ => refl,
+    }(valid)
+}
+
+// The checked access: the generation compared at run time, and the read
+// under the proof the compare gave. `checked_by` takes the compare's bit
+// as a parameter, so a proof about it cases on that bit
+// (`When::of_bit`'s reason).
+fn Store::checked_by<V>(self s: Store<V>, k: Key, c: Bool, e: s.check(k) = c) → When<V, s.Valid(k)> {
+    match c as λ d => (s.check(k) = d → When<V, s.Valid(k)>) {
+        True => λ e => Present(s.read(k, valid := s.check_valid(k, e)), s.check_valid(k, e)),
+        False => λ e => Absent(s.check_invalid(k, e)),
+    }(e)
+}
+
+fn Store::checked<V>(self s: Store<V>, k: Key) → When<V, s.Valid(k)> { s.checked_by(k, s.check(k), refl) }
+
+theorem Store::checked_by_option<V>(self s: Store<V>, k: Key, c: Bool, e: s.check(k) = c): s.checked_by(k, c, e).option() = s.get(k) {
+    match c as λ d => ((e: s.check(k) = d) → s.checked_by(k, d, e).option() = s.get(k)) {
+        True => λ e => sym(s.read_get(k, s.check_valid(k, e))),
+        False => λ e => sym(s.get_none(k, s.check_invalid(k, e))),
+    }(e)
+}
+
+// The checked access answers exactly the partial read.
+theorem Store::checked_option<V>(self s: Store<V>, k: Key): s.checked(k).option() = s.get(k) { s.checked_by_option(k, s.check(k), refl) }
+
+// ---------------------------------------------------------------------------
+// Allocation
+
+// What `place` does: the slot it answers was free (or past the end) at the
+// key's generation, is live with the value after, and every other slot is
+// as it was.
+record Placed<V>(xs: List<Slot<V>>, v: V, r: Mutated<List<Slot<V>>, Key>) {
+    before: Or<xs.nth(r.value.index) = None, xs.nth(r.value.index) = Some(Free(r.value.gen))>,
+    at: r.after.nth(r.value.index) = Some(Live(r.value.gen, v)),
+    other: (j: Nat) → ¬(j = r.value.index) → r.after.nth(j) = xs.nth(j),
+}
+
+theorem Store::place_spec<V>(xs: List<Slot<V>>, v: V): Placed(xs, v, Store::place(xs, v)) {
+    match xs {
+        Nil => Placed(Inl(refl), refl, λ j => match j { Zero => λ ne => false_elim(ne(refl)), Succ(_) => λ _ => refl }),
+        Cons(x, t) => match x {
+            Free(_) => Placed(Inr(refl), refl, λ j => match j { Zero => λ ne => false_elim(ne(refl)), Succ(_) => λ _ => refl }),
+            Live(_, _) => {
+                let ih = Store::place_spec(t, v);
+                Placed(ih.before, ih.at, λ j => match j {
+                    Zero => λ _ => refl,
+                    Succ(m) => λ ne => ih.other(m, λ e => ne(cong_fn<Nat, Nat>(λ n => n + 1, e))),
+                })
+            },
+        },
+    }
+}
+
+theorem Store::alloc_spec<V>(self s: Store<V>, v: V): Placed(s.slots, v, Store::place(s.slots, v)) { Store::place_spec(s.slots, v) }
+
+// The key allocated reads the value.
+theorem Store::alloc_reads<V>(self s: Store<V>, v: V): Store::alloc(s, v).after.get(Store::alloc(s, v).value) = Some(v) {
+    let p = s.alloc_spec(v);
+    let r = Store::place(s.slots, v);
+    trans(cong_fn(λ (o: Option<Slot<V>>) => o.and_then(λ (sl: Slot<V>) => sl.answer(r.value.gen)), p.at),
+        Slot::live_answer(r.value.gen, v))
+}
+
+theorem Store::alloc_valid<V>(self s: Store<V>, v: V): Store::alloc(s, v).after.Valid(Store::alloc(s, v).value) {
+    Bool::is_true_of_eq(cong_fn(λ (o: Option<V>) => o.is_some(), s.alloc_reads(v)))
+}
+
+// Before the allocation, no key of the slot it answers read anything.
+theorem Store::alloc_none_before<V>(self s: Store<V>, v: V, g: Nat): s.get(Key(Store::alloc(s, v).value.index, g)) = None {
+    let r = Store::place(s.slots, v);
+    match s.alloc_spec(v).before {
+        Inl(none) => cong_fn(λ (o: Option<Slot<V>>) => o.and_then(λ (sl: Slot<V>) => sl.answer(g)), none),
+        Inr(free) => cong_fn(λ (o: Option<Slot<V>>) => o.and_then(λ (sl: Slot<V>) => sl.answer(g)), free),
+    }
+}
+
+// `alloc_fresh`: the key allocated was not valid before.
+theorem Store::alloc_fresh<V>(self s: Store<V>, v: V): ¬s.Valid(Store::alloc(s, v).value) {
+    λ valid => {
+        let none: (s.get(Key(Store::alloc(s, v).value.index, Store::alloc(s, v).value.gen)) = None) = s.alloc_none_before(v, Store::alloc(s, v).value.gen);
+        let t: (s.get(Store::alloc(s, v).value).is_some() = True) = eq_true_of_is_true(s.get(Store::alloc(s, v).value).is_some(), valid);
+        absurd(trans(sym(t), cong_fn(λ (o: Option<V>) => o.is_some(), none)))
+    }
+}
+
+// Every slot but the one allocated reads as it did.
+theorem Store::alloc_other<V>(self s: Store<V>, v: V, k: Key, ne: ¬(k.index = Store::alloc(s, v).value.index)): Store::alloc(s, v).after.get(k) = s.get(k) {
+    cong_fn(λ (o: Option<Slot<V>>) => o.and_then(λ (sl: Slot<V>) => sl.answer(k.gen)), s.alloc_spec(v).other(k.index, ne))
+}
+
+// `alloc_keeps`: every key valid before reads what it read.
+theorem Store::alloc_keeps<V>(self s: Store<V>, v: V, k: Key, valid: s.Valid(k)): Store::alloc(s, v).after.get(k) = s.get(k) {
+    match Nat::eq_dec(k.index, Store::alloc(s, v).value.index) {
+        Inr(ne) => s.alloc_other(v, k, ne),
+        Inl(same) => {
+            let none: (s.get(Key(Store::alloc(s, v).value.index, k.gen)) = None) = s.alloc_none_before(v, k.gen);
+            let moved: (s.get(k) = s.get(Key(Store::alloc(s, v).value.index, k.gen))) = cong_fn(λ (i: Nat) => s.get(Key(i, k.gen)), same);
+            let t: (s.get(k).is_some() = True) = eq_true_of_is_true(s.get(k).is_some(), valid);
+            absurd(trans(sym(t), cong_fn(λ (o: Option<V>) => o.is_some(), trans(moved, none))))
+        },
+    }
+}
+
+// A key valid before an allocation names another slot than the key allocated.
+theorem Store::alloc_index_fresh<V>(self s: Store<V>, v: V, k: Key, valid: s.Valid(k)): ¬(k.index = Store::alloc(s, v).value.index) {
+    λ same => {
+        let none: (s.get(Key(Store::alloc(s, v).value.index, k.gen)) = None) = s.alloc_none_before(v, k.gen);
+        let moved: (s.get(k) = s.get(Key(Store::alloc(s, v).value.index, k.gen))) = cong_fn(λ (i: Nat) => s.get(Key(i, k.gen)), same);
+        j(trans(moved, none), λ o _ => o.is_some().IsTrue(), valid)
+    }
+}
+
+theorem Store::alloc_keeps_valid<V>(self s: Store<V>, v: V, k: Key, valid: s.Valid(k)): Store::alloc(s, v).after.Valid(k) {
+    j(sym(s.alloc_keeps(v, k, valid)), λ o _ => o.is_some().IsTrue(), valid)
+}
+
+// ---------------------------------------------------------------------------
+// A write through a key
+
+theorem Store::nth_update_map<A>(xs: List<A>, i: Nat, f: A → A): xs.update(i, f).nth(i) = xs.nth(i).map(f) {
+    match xs.nth(i) as λ o => (xs.nth(i) = o → xs.update(i, f).nth(i) = o.map(f)) {
+        None => λ none => xs.nth_update_none(i, f, none),
+        Some(x) => λ some => xs.nth_update_here(i, f, x, some),
+    }(refl)
+}
+
+theorem Store::valid_holds<V>(self s: Store<V>, k: Key, valid: s.Valid(k)): s.slots.nth(k.index).is_some_and(λ (sl: Slot<V>) => sl.holds(k.gen)) = True {
+    trans(s.check_decides(k), eq_true_of_is_true(s.get(k).is_some(), valid))
+}
+
+theorem Store::put_reads_at<V>(o: Option<Slot<V>>, g: Nat, v: V, live: o.is_some_and(λ (sl: Slot<V>) => sl.holds(g)) = True):
+    o.map(λ (sl: Slot<V>) => sl.written(g, v)).and_then(λ (sl: Slot<V>) => sl.answer(g)) = Some(v)
+{
+    match o as λ p => (p.is_some_and(λ (sl: Slot<V>) => sl.holds(g)) = True → p.map(λ (sl: Slot<V>) => sl.written(g, v)).and_then(λ (sl: Slot<V>) => sl.answer(g)) = Some(v)) {
+        None => λ live => absurd(live),
+        Some(sl) => λ live => sl.written_answer(g, v, live),
+    }(live)
+}
+
+// `put_reads`: a write through a valid key is what it reads.
+theorem Store::put_reads<V>(self s: Store<V>, k: Key, v: V, valid: s.Valid(k)): s.put(k, v).get(k) = Some(v) {
+    trans(cong_fn(λ (o: Option<Slot<V>>) => o.and_then(λ (sl: Slot<V>) => sl.answer(k.gen)),
+            Store::nth_update_map(s.slots, k.index, λ (sl: Slot<V>) => sl.written(k.gen, v))),
+        Store::put_reads_at(s.slots.nth(k.index), k.gen, v, s.valid_holds(k, valid)))
+}
+
+// `put_other`: a write leaves every other slot.
+theorem Store::put_other<V>(self s: Store<V>, k: Key, v: V, k2: Key, ne: ¬(k2.index = k.index)): s.put(k, v).get(k2) = s.get(k2) {
+    cong_fn(λ (o: Option<Slot<V>>) => o.and_then(λ (sl: Slot<V>) => sl.answer(k2.gen)),
+        s.slots.nth_update_other(k.index, λ (sl: Slot<V>) => sl.written(k.gen, v), k2.index, ne))
+}
+
+theorem Store::put_holds_at<V>(o: Option<Slot<V>>, g, g2: Nat, v: V):
+    o.map(λ (sl: Slot<V>) => sl.written(g, v)).is_some_and(λ (sl: Slot<V>) => sl.holds(g2)) = o.is_some_and(λ (sl: Slot<V>) => sl.holds(g2))
+{
+    match o { None => refl, Some(sl) => sl.written_holds(g, g2, v) }
+}
+
+// `put_valid`: a write keeps every key's validity, either way.
+theorem Store::put_check<V>(self s: Store<V>, k: Key, v: V, k2: Key): s.put(k, v).check(k2) = s.check(k2) {
+    match Nat::eq_dec(k2.index, k.index) {
+        Inr(ne) => cong_fn(λ (o: Option<Slot<V>>) => o.is_some_and(λ (sl: Slot<V>) => sl.holds(k2.gen)),
+            s.slots.nth_update_other(k.index, λ (sl: Slot<V>) => sl.written(k.gen, v), k2.index, ne)),
+        Inl(same) => j(same, λ i _ => Store<V>(s.slots.update(i, λ (sl: Slot<V>) => sl.written(k.gen, v))).check(k2) = s.check(k2),
+            trans(cong_fn(λ (o: Option<Slot<V>>) => o.is_some_and(λ (sl: Slot<V>) => sl.holds(k2.gen)),
+                    Store::nth_update_map(s.slots, k2.index, λ (sl: Slot<V>) => sl.written(k.gen, v))),
+                Store::put_holds_at(s.slots.nth(k2.index), k.gen, k2.gen, v))),
+    }
+}
+
+theorem Store::put_valid<V>(self s: Store<V>, k: Key, v: V, k2: Key, valid: s.Valid(k2)): s.put(k, v).Valid(k2) {
+    Store::check_valid(s.put(k, v), k2, trans(s.put_check(k, v, k2), s.valid_holds(k2, valid)))
+}
+
+// ---------------------------------------------------------------------------
+// Freeing, and generations
+
+// `free_ends`: a key freed reads nothing.
+theorem Store::free_ends<V>(self s: Store<V>, k: Key): ¬s.free(k).Valid(k) {
+    let none: (s.free(k).get(k) = None) = trans(cong_fn(λ (o: Option<Slot<V>>) => o.and_then(λ (sl: Slot<V>) => sl.answer(k.gen)),
+            Store::nth_update_map(s.slots, k.index, λ (sl: Slot<V>) => sl.freed(k.gen))),
+        match s.slots.nth(k.index) as λ o => (o.map(λ (sl: Slot<V>) => sl.freed(k.gen)).and_then(λ (sl: Slot<V>) => sl.answer(k.gen)) = None) {
+            None => refl,
+            Some(sl) => sl.freed_answer(k.gen),
+        });
+    λ valid => j(none, λ o _ => o.is_some().IsTrue(), valid)
+}
+
+// `free_other`: freeing leaves every other slot.
+theorem Store::free_other<V>(self s: Store<V>, k: Key, k2: Key, ne: ¬(k2.index = k.index)): s.free(k).get(k2) = s.get(k2) {
+    cong_fn(λ (o: Option<Slot<V>>) => o.and_then(λ (sl: Slot<V>) => sl.answer(k2.gen)),
+        s.slots.nth_update_other(k.index, λ (sl: Slot<V>) => sl.freed(k.gen), k2.index, ne))
+}
+
+theorem Store::free_keeps_valid<V>(self s: Store<V>, k: Key, k2: Key, ne: ¬(k2.index = k.index), valid: s.Valid(k2)): s.free(k).Valid(k2) {
+    j(sym(s.free_other(k, k2, ne)), λ o _ => o.is_some().IsTrue(), valid)
+}
+
+// A stale key reads nothing.
+theorem Store::stale_invalid<V>(self s: Store<V>, k: Key, stale: s.Stale(k)): ¬s.Valid(k) {
+    let none: (s.get(k) = None) = match s.slots.nth(k.index) as λ o => (o.is_some_and(λ (sl: Slot<V>) => (k.gen + 1).leb(sl.gen())).IsTrue() →
+            o.and_then(λ (sl: Slot<V>) => sl.answer(k.gen)) = None) {
+        None => λ _ => refl,
+        Some(sl) => λ past => sl.past_answer(k.gen, (k.gen + 1).leb_sound(sl.gen(), past)),
+    }(stale);
+    λ valid => j(none, λ o _ => o.is_some().IsTrue(), valid)
+}
+
+// Freeing a valid key makes it stale.
+theorem Store::free_stales<V>(self s: Store<V>, k: Key, valid: s.Valid(k)): s.free(k).Stale(k) {
+    let moved: (s.free(k).stale(k) = s.slots.nth(k.index).map(λ (sl: Slot<V>) => sl.freed(k.gen)).is_some_and(λ (sl: Slot<V>) => (k.gen + 1).leb(sl.gen()))) =
+        cong_fn(λ (o: Option<Slot<V>>) => o.is_some_and(λ (sl: Slot<V>) => (k.gen + 1).leb(sl.gen())),
+            Store::nth_update_map(s.slots, k.index, λ (sl: Slot<V>) => sl.freed(k.gen)));
+    let at: (s.slots.nth(k.index).map(λ (sl: Slot<V>) => sl.freed(k.gen)).is_some_and(λ (sl: Slot<V>) => (k.gen + 1).leb(sl.gen())).IsTrue()) =
+        match s.slots.nth(k.index) as λ o => (o.is_some_and(λ (sl: Slot<V>) => sl.holds(k.gen)) = True →
+                o.map(λ (sl: Slot<V>) => sl.freed(k.gen)).is_some_and(λ (sl: Slot<V>) => (k.gen + 1).leb(sl.gen())).IsTrue()) {
+            None => λ live => absurd(live),
+            Some(sl) => λ live => (k.gen + 1).leb_complete(sl.freed(k.gen).gen(), sl.freed_past(k.gen, live)),
+        }(s.valid_holds(k, valid));
+    j(sym(moved), λ b _ => b.IsTrue(), at)
+}
+
+// An update by a step that never lowers a slot's generation keeps every
+// stale key stale.
+theorem Store::stale_kept_at<V>(o: Option<Slot<V>>, f: Slot<V> → Slot<V>, mono: (sl: Slot<V>) → sl.gen() <= f(sl).gen(), g: Nat,
+    stale: o.is_some_and(λ (sl: Slot<V>) => (g + 1).leb(sl.gen())).IsTrue()):
+    o.map(f).is_some_and(λ (sl: Slot<V>) => (g + 1).leb(sl.gen())).IsTrue()
+{
+    match o as λ p => (p.is_some_and(λ (sl: Slot<V>) => (g + 1).leb(sl.gen())).IsTrue() → p.map(f).is_some_and(λ (sl: Slot<V>) => (g + 1).leb(sl.gen())).IsTrue()) {
+        None => λ never => never,
+        Some(sl) => λ past => (g + 1).leb_complete(f(sl).gen(), { let b = (g + 1).leb_sound(sl.gen(), past); let m = mono(sl); omega(b, m) }),
+    }(stale)
+}
+
+theorem Store::update_stale<V>(self s: Store<V>, i: Nat, f: Slot<V> → Slot<V>, mono: (sl: Slot<V>) → sl.gen() <= f(sl).gen(), k: Key, stale: s.Stale(k)):
+    Store<V>(s.slots.update(i, f)).Stale(k)
+{
+    match Nat::eq_dec(k.index, i) {
+        Inr(ne) => j(sym(cong_fn(λ (o: Option<Slot<V>>) => o.is_some_and(λ (sl: Slot<V>) => (k.gen + 1).leb(sl.gen())), s.slots.nth_update_other(i, f, k.index, ne))),
+            λ b _ => b.IsTrue(), stale),
+        Inl(same) => j(same, λ q _ => Store<V>(s.slots.update(q, f)).Stale(k),
+            j(sym(cong_fn(λ (o: Option<Slot<V>>) => o.is_some_and(λ (sl: Slot<V>) => (k.gen + 1).leb(sl.gen())), Store::nth_update_map(s.slots, k.index, f))),
+                λ b _ => b.IsTrue(), Store::stale_kept_at(s.slots.nth(k.index), f, mono, k.gen, stale))),
+    }
+}
+
+theorem Store::put_keeps_stale<V>(self s: Store<V>, k: Key, v: V, k2: Key, stale: s.Stale(k2)): s.put(k, v).Stale(k2) {
+    s.update_stale(k.index, λ (sl: Slot<V>) => sl.written(k.gen, v), λ sl => j(sym(sl.written_gen(k.gen, v)), λ n _ => sl.gen() <= n, Nat::le_refl(sl.gen())), k2, stale)
+}
+
+theorem Store::free_keeps_stale<V>(self s: Store<V>, k: Key, k2: Key, stale: s.Stale(k2)): s.free(k).Stale(k2) {
+    s.update_stale(k.index, λ (sl: Slot<V>) => sl.freed(k.gen), λ sl => sl.freed_gen(k.gen), k2, stale)
+}
+
+theorem Store::alloc_keeps_stale<V>(self s: Store<V>, v: V, k: Key, stale: s.Stale(k)): Store::alloc(s, v).after.Stale(k) {
+    let p = s.alloc_spec(v);
+    let r = Store::place(s.slots, v);
+    match Nat::eq_dec(k.index, r.value.index) {
+        Inr(ne) => j(sym(cong_fn(λ (o: Option<Slot<V>>) => o.is_some_and(λ (sl: Slot<V>) => (k.gen + 1).leb(sl.gen())), p.other(k.index, ne))),
+            λ b _ => b.IsTrue(), stale),
+        Inl(same) => {
+            // The slot was free at the key's generation (or past the end, where
+            // nothing is stale), and is live at that generation after.
+            let before: (s.slots.nth(r.value.index).is_some_and(λ (sl: Slot<V>) => (k.gen + 1).leb(sl.gen())).IsTrue()) =
+                j(same, λ q _ => s.slots.nth(q).is_some_and(λ (sl: Slot<V>) => (k.gen + 1).leb(sl.gen())).IsTrue(), stale);
+            let gen_same: (s.slots.nth(r.value.index).is_some_and(λ (sl: Slot<V>) => (k.gen + 1).leb(sl.gen())) =
+                    r.after.nth(r.value.index).is_some_and(λ (sl: Slot<V>) => (k.gen + 1).leb(sl.gen()))) =
+                trans(match p.before {
+                        Inl(none) => false_elim(j(none, λ o _ => o.is_some_and(λ (sl: Slot<V>) => (k.gen + 1).leb(sl.gen())).IsTrue(), before)),
+                        Inr(free) => cong_fn(λ (o: Option<Slot<V>>) => o.is_some_and(λ (sl: Slot<V>) => (k.gen + 1).leb(sl.gen())), free),
+                    },
+                    sym(cong_fn(λ (o: Option<Slot<V>>) => o.is_some_and(λ (sl: Slot<V>) => (k.gen + 1).leb(sl.gen())), p.at)));
+            let after: (r.after.nth(r.value.index).is_some_and(λ (sl: Slot<V>) => (k.gen + 1).leb(sl.gen())).IsTrue()) =
+                j(gen_same, λ b _ => b.IsTrue(), before);
+            j(sym(same), λ q _ => r.after.nth(q).is_some_and(λ (sl: Slot<V>) => (k.gen + 1).leb(sl.gen())).IsTrue(), after)
+        },
+    }
+}
+
+// `stale_after_reuse`: a key freed and its slot handed out again reads
+// nothing, though the new key names the same slot. The generation is what
+// tells them apart.
+theorem Store::stale_after_reuse<V>(self s: Store<V>, k: Key, v: V, valid: s.Valid(k)): ¬Store::alloc(s.free(k), v).after.Valid(k) {
+    Store::stale_invalid(Store::alloc(s.free(k), v).after, k, Store::alloc_keeps_stale(s.free(k), v, k, s.free_stales(k, valid)))
+}
+
+// What a key reads after an allocation: the value allocated, at the key
+// handed out, or what it read before.
+theorem Store::alloc_get_cases<V>(self s: Store<V>, v: V, k: Key, c: V, e: Store::alloc(s, v).after.get(k) = Some(c)):
+    Or<And<k.index = Store::alloc(s, v).value.index, c = v>, s.get(k) = Some(c)>
+{
+    let r = Store::place(s.slots, v);
+    match Nat::eq_dec(k.index, r.value.index) {
+        Inr(ne) => Inr(trans(sym(s.alloc_other(v, k, ne)), e)),
+        Inl(same) => {
+            let at: (r.after.nth(k.index) = Some(Live(r.value.gen, v))) = j(sym(same), λ q _ => r.after.nth(q) = Some(Live(r.value.gen, v)), s.alloc_spec(v).at);
+            let read: (Live(r.value.gen, v).answer(k.gen) = Some(c)) =
+                trans(sym(cong_fn(λ (o: Option<Slot<V>>) => o.and_then(λ (sl: Slot<V>) => sl.answer(k.gen)), at)), e);
+            Inl(And(same, sym(Option::some_inj(v, c, Bool::then_some(r.value.gen.same(k.gen), Some(v), c, read).right))))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Freeing every value a test refuses (an arena's reset, read as keys)
+
+fn Slot::kept_by<V>(c: Bool, g: Nat, v: V) → Slot<V> { match c { True => Live(g, v), False => Free(g + 1) } }
+
+fn Slot::kept<V>(self sl: Slot<V>, keep: V → Bool) → Slot<V> { match sl { Live(g, v) => Slot::kept_by(keep(v), g, v), Free(g) => Free(g) } }
+
+fn Store::retain<V>(self s: Store<V>, keep: V → Bool) → Store<V> { Store(s.slots.map(λ (sl: Slot<V>) => sl.kept(keep))) }
+
+theorem Store::nth_map<A>(xs: List<A>, f: A → A): (i: Nat) → xs.map(f).nth(i) = xs.nth(i).map(f) {
+    match xs {
+        Nil => λ i => refl,
+        Cons(_, t) => λ i => match i { Zero => refl, Succ(m) => Store::nth_map(t, f, m) },
+    }
+}
+
+theorem Bool::then_none<A>(self d: Bool): d.then(None<A>()) = None { match d { True => refl, False => refl } }
+
+theorem Bool::then_and_then<A, B>(self d: Bool, v: A, f: A → Option<B>): d.then(Some(v)).and_then(f) = d.then(f(v)) { match d { True => refl, False => refl } }
+
+theorem Slot::kept_by_answer<V>(c: Bool, g, gg: Nat, v: V): Slot::kept_by(c, g, v).answer(gg) = g.same(gg).then(c.then(Some(v))) {
+    match c { True => refl, False => sym(g.same(gg).then_none()) }
+}
+
+theorem Slot::kept_answer<V>(self sl: Slot<V>, keep: V → Bool, gg: Nat):
+    sl.kept(keep).answer(gg) = sl.answer(gg).and_then(λ (u: V) => keep(u).then(Some(u)))
+{
+    match sl {
+        Live(g, v) => trans(Slot::kept_by_answer(keep(v), g, gg, v), sym(g.same(gg).then_and_then(v, λ (u: V) => keep(u).then(Some(u))))),
+        Free(_) => refl,
+    }
+}
+
+// `retain_get`: a key reads what it read, where the test keeps it, and
+// nothing where it does not.
+theorem Store::retain_get<V>(self s: Store<V>, keep: V → Bool, k: Key):
+    s.retain(keep).get(k) = s.get(k).and_then(λ (u: V) => keep(u).then(Some(u)))
+{
+    trans(cong_fn(λ (o: Option<Slot<V>>) => o.and_then(λ (sl: Slot<V>) => sl.answer(k.gen)), Store::nth_map(s.slots, λ (sl: Slot<V>) => sl.kept(keep), k.index)),
+        match s.slots.nth(k.index) as λ o => (o.map(λ (sl: Slot<V>) => sl.kept(keep)).and_then(λ (sl: Slot<V>) => sl.answer(k.gen)) =
+                o.and_then(λ (sl: Slot<V>) => sl.answer(k.gen)).and_then(λ (u: V) => keep(u).then(Some(u)))) {
+            None => refl,
+            Some(sl) => sl.kept_answer(keep, k.gen),
+        })
+}
+
+// A key that reads a value after `retain` read it before, and the test kept it.
+theorem Store::retain_some<V>(self s: Store<V>, keep: V → Bool, k: Key, c: V, e: s.retain(keep).get(k) = Some(c)): And<s.get(k) = Some(c), keep(c) = True> {
+    let e2: (s.get(k).and_then(λ (u: V) => keep(u).then(Some(u))) = Some(c)) = trans(sym(s.retain_get(keep, k)), e);
+    match s.get(k) as λ o => (o.and_then(λ (u: V) => keep(u).then(Some(u))) = Some(c) → And<o = Some(c), keep(c) = True>) {
+        None => λ n => absurd(n),
+        Some(u) => λ t => {
+            let p = Bool::then_some(keep(u), Some(u), c, t);
+            j(Option::some_inj(u, c, p.right), λ z _ => And<Some(u) = Some(z), keep(z) = True>, And(refl, p.left))
+        },
+    }(e2)
+}
+
+// Freeing never makes a key read: what a key reads after a free it read
+// before.
+theorem Slot::freed_by_some<V>(c0: Bool, h, g2: Nat, w, c: V, e: Slot::freed_by(c0, h, w).answer(g2) = Some(c)): Live(h, w).answer(g2) = Some(c) {
+    match c0 as λ d => (Slot::freed_by(d, h, w).answer(g2) = Some(c) → Live(h, w).answer(g2) = Some(c)) {
+        True => λ e => absurd(e),
+        False => λ e => e,
+    }(e)
+}
+
+theorem Slot::freed_answer_some<V>(self sl: Slot<V>, g, g2: Nat, c: V, e: sl.freed(g).answer(g2) = Some(c)): sl.answer(g2) = Some(c) {
+    match sl as λ s => (s.freed(g).answer(g2) = Some(c) → s.answer(g2) = Some(c)) {
+        Live(h, w) => λ e => Slot::freed_by_some(h.same(g), h, g2, w, c, e),
+        Free(_) => λ e => e,
+    }(e)
+}
+
+theorem Store::free_some<V>(self s: Store<V>, k, k2: Key, c: V, e: s.free(k).get(k2) = Some(c)): s.get(k2) = Some(c) {
+    match Nat::eq_dec(k2.index, k.index) {
+        Inr(ne) => trans(sym(s.free_other(k, k2, ne)), e),
+        Inl(same) => {
+            let at: (Store<V>(s.slots.update(k2.index, λ (sl: Slot<V>) => sl.freed(k.gen))).get(k2) = Some(c)) =
+                j(sym(same), λ i _ => Store<V>(s.slots.update(i, λ (sl: Slot<V>) => sl.freed(k.gen))).get(k2) = Some(c), e);
+            let mapped: (s.slots.nth(k2.index).map(λ (sl: Slot<V>) => sl.freed(k.gen)).and_then(λ (sl: Slot<V>) => sl.answer(k2.gen)) = Some(c)) =
+                trans(sym(cong_fn(λ (o: Option<Slot<V>>) => o.and_then(λ (sl: Slot<V>) => sl.answer(k2.gen)),
+                    Store::nth_update_map(s.slots, k2.index, λ (sl: Slot<V>) => sl.freed(k.gen)))), at);
+            match s.slots.nth(k2.index) as λ o => (o.map(λ (sl: Slot<V>) => sl.freed(k.gen)).and_then(λ (sl: Slot<V>) => sl.answer(k2.gen)) = Some(c) →
+                    o.and_then(λ (sl: Slot<V>) => sl.answer(k2.gen)) = Some(c)) {
+                None => λ x => x,
+                Some(sl) => λ x => sl.freed_answer_some(k.gen, k2.gen, c, x),
+            }(mapped)
+        },
+    }
+}

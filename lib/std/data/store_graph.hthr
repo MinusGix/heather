@@ -1,0 +1,118 @@
+// A graph with shared nodes and mutation over a store
+// (docs/language/ownership-design.md §6 example 6, §10.7;
+// issues/ownership-stores-and-keys.md). A node holds a value and the keys
+// of its successors; two nodes may name one successor, and a write through
+// its key is seen through every edge that names it. The pure meaning is the
+// store and its keys; sharing is two equal keys, and nothing aliases.
+//
+// The write is made two ways, discharging the one obligation (vision
+// principle 13):
+//
+// - **Statically**: `bump` takes a proof that the key is valid, found by
+//   `known` from a hypothesis in scope; `bump_shared` proves the write seen
+//   through both edges at an open store.
+// - **Checked**: `bump_checked` compares the key's generation at run time
+//   (`Store::check`) and writes only where it matched. Where the key is
+//   valid it is `bump` (`bump_checked_valid`), so the same theorem holds of
+//   it (`bump_checked_shared`); where it is not, the store is unchanged
+//   (`bump_checked_invalid`).
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import when;
+import omega;
+import store;
+
+record Node { value: Nat, next: List<Key> }
+
+// A graph is a store of nodes; its operations are members of this name.
+fn Graph() → Type { Store<Node> }
+
+// The node at `k` with its value one more.
+fn Node::bumped(self n: Node) → Node { Node(n.value + 1, n.next) }
+
+fn Graph::bump(s: Store<Node>, k: Key, valid: s.Valid(k) := known) → Store<Node> { s.write(k, s.read(k).bumped()) }
+
+// The `i`th successor of the node at `a`, and the node it names.
+fn Graph::edge(s: Store<Node>, a: Key, i: Nat) → Option<Key> { s.get(a).and_then(λ (n: Node) => n.next.nth(i)) }
+
+fn Graph::follow(s: Store<Node>, a: Key, i: Nat) → Option<Node> { Graph::edge(s, a, i).and_then(λ (k: Key) => s.get(k)) }
+
+// A write through `c` leaves the node at another key, so its edges.
+theorem Graph::bump_edge(s: Store<Node>, a, c: Key, i: Nat, vc: s.Valid(c), other: ¬(a.index = c.index)):
+    Graph::edge(Graph::bump(s, c), a, i) = Graph::edge(s, a, i)
+{
+    cong_fn(λ (o: Option<Node>) => o.and_then(λ (n: Node) => n.next.nth(i)), s.put_other(c, s.read(c).bumped(), a, other))
+}
+
+// Following an edge that names `c` after the write reads the written node.
+theorem Graph::bump_follow(s: Store<Node>, a, c: Key, i: Nat, vc: s.Valid(c), edge: Graph::edge(s, a, i) = Some(c), other: ¬(a.index = c.index)):
+    Graph::follow(Graph::bump(s, c), a, i) = Some(s.read(c).bumped())
+{
+    let moved: (Graph::edge(Graph::bump(s, c), a, i) = Some(c)) = trans(Graph::bump_edge(s, a, c, i, vc, other), edge);
+    trans(cong_fn(λ (o: Option<Key>) => o.and_then(λ (k: Key) => Graph::bump(s, c).get(k)), moved), s.put_reads(c, s.read(c).bumped(), vc))
+}
+
+// `bump_shared`: two nodes whose edges name one node see one write.
+theorem Graph::bump_shared(s: Store<Node>, a, b, c: Key, i, j: Nat, vc: s.Valid(c), ea: Graph::edge(s, a, i) = Some(c), eb: Graph::edge(s, b, j) = Some(c),
+    na: ¬(a.index = c.index), nb: ¬(b.index = c.index)):
+    And<Graph::follow(Graph::bump(s, c), a, i) = Some(s.read(c).bumped()), Graph::follow(Graph::bump(s, c), b, j) = Some(s.read(c).bumped())>
+{
+    And(Graph::bump_follow(s, a, c, i, vc, ea, na), Graph::bump_follow(s, b, c, j, vc, eb, nb))
+}
+
+// Every key valid before the write is valid after it.
+theorem Graph::bump_keeps(s: Store<Node>, c, k: Key, vc: s.Valid(c), valid: s.Valid(k)): Graph::bump(s, c).Valid(k) {
+    s.put_valid(c, s.read(c).bumped(), k, valid)
+}
+
+// ---------------------------------------------------------------------------
+// The checked write
+
+fn Graph::bump_checked_by(s: Store<Node>, k: Key, c: Bool, e: s.check(k) = c) → Store<Node> {
+    match c as λ d => (s.check(k) = d → Store<Node>) {
+        True => λ e => Graph::bump(s, k, valid := s.check_valid(k, e)),
+        False => λ _ => s,
+    }(e)
+}
+
+// The generation compared, and the write made where it matched.
+fn Graph::bump_checked(s: Store<Node>, k: Key) → Store<Node> { Graph::bump_checked_by(s, k, s.check(k), refl) }
+
+theorem Graph::bump_checked_by_valid(s: Store<Node>, k: Key, valid: s.Valid(k), c: Bool, e: s.check(k) = c):
+    Graph::bump_checked_by(s, k, c, e) = Graph::bump(s, k, valid := valid)
+{
+    match c as λ d => ((e: s.check(k) = d) → Graph::bump_checked_by(s, k, d, e) = Graph::bump(s, k, valid := valid)) {
+        True => λ e => cong_fn(λ (p: s.Valid(k)) => Graph::bump(s, k, valid := p), Bool::is_true_unique(s.get(k).is_some(), s.check_valid(k, e), valid)),
+        False => λ e => false_elim(s.check_invalid(k, e, valid)),
+    }(e)
+}
+
+// `bump_checked_valid`: where the key is valid the checked write is the
+// static one, whatever proof the static one was given.
+theorem Graph::bump_checked_valid(s: Store<Node>, k: Key, valid: s.Valid(k)): Graph::bump_checked(s, k) = Graph::bump(s, k, valid := valid) {
+    Graph::bump_checked_by_valid(s, k, valid, s.check(k), refl)
+}
+
+theorem Graph::bump_checked_by_invalid(s: Store<Node>, k: Key, invalid: ¬s.Valid(k), c: Bool, e: s.check(k) = c): Graph::bump_checked_by(s, k, c, e) = s {
+    match c as λ d => ((e: s.check(k) = d) → Graph::bump_checked_by(s, k, d, e) = s) {
+        True => λ e => false_elim(invalid(s.check_valid(k, e))),
+        False => λ _ => refl,
+    }(e)
+}
+
+// `bump_checked_invalid`: a stale key writes nothing.
+theorem Graph::bump_checked_invalid(s: Store<Node>, k: Key, invalid: ¬s.Valid(k)): Graph::bump_checked(s, k) = s {
+    Graph::bump_checked_by_invalid(s, k, invalid, s.check(k), refl)
+}
+
+// `bump_checked_shared`: the shared write, made through the checked access.
+theorem Graph::bump_checked_shared(s: Store<Node>, a, b, c: Key, i, j: Nat, vc: s.Valid(c), ea: Graph::edge(s, a, i) = Some(c),
+    eb: Graph::edge(s, b, j) = Some(c), na: ¬(a.index = c.index), nb: ¬(b.index = c.index)):
+    And<Graph::follow(Graph::bump_checked(s, c), a, i) = Some(s.read(c).bumped()), Graph::follow(Graph::bump_checked(s, c), b, j) = Some(s.read(c).bumped())>
+{
+    j(sym(Graph::bump_checked_valid(s, c, vc)), λ t _ => And<Graph::follow(t, a, i) = Some(s.read(c).bumped()), Graph::follow(t, b, j) = Some(s.read(c).bumped())>,
+        Graph::bump_shared(s, a, b, c, i, j, vc, ea, eb, na, nb))
+}

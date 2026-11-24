@@ -466,6 +466,47 @@ kept at run time and compared is the helper; a reference count is the other
 helper. Permission tokens of §5 are the store itself, split where paths are
 apart (`separation-algebra-ownership`, built with fractions in mind).
 
+**Built (2026-11-24, `ownership-stores-and-keys`).** What the build
+settled or changed against the text above:
+
+- *The store* (`lib/std/data/store.hthr`) is a list of slots, each
+  `Live(gen, value)` or `Free(gen)`; a key is a slot and a generation.
+  `Valid(s, k)` is `s.get(k).is_some()` being `True`: the partial read
+  answers, the form `ownership-paths` states a path's validity in. `read`
+  and `write` take it (found by `known`); `alloc` takes the first free slot
+  or a new one, `free` moves the slot's generation past the key's, and a
+  key behind its slot's generation is `Stale`, which no operation undoes
+  (`stale_after_reuse`). `check`, the generation compare, is proved to
+  decide `Valid` (`check_decides`), and `checked` is the access that tests
+  it, a `When` whose `Present` carries the proof the static access takes.
+  `retain` frees every value a test refuses: an arena's reset read as keys.
+- *The generation is the slot's, not the store's.* One counter for the whole
+  store would not do for the arena: a reset frees only the windows above
+  its mark, and those below keep their keys across it. A generation per
+  slot is exact for both.
+- *The arena* (`lib/native/runtime/arena_handles.hthr`): a `Heap` is the
+  laid `Arena` and, beside it, erased claims (a `Store<Claim>`) with the
+  invariant tying them to it. A window is its two words and a key, valid
+  where the key's read answers the window it says. Two valid windows of
+  different keys are apart, so `store_apart` over handles takes no `Apart`
+  premise: aliasing became a fact read off validity, as §10.6 says. A
+  vector is a header window and a data window; `grow` claims the new data
+  window and releases the old. The arena's own functions and laws are
+  untouched, and the handle laws are read through them (`Arena::store_apart`,
+  `grow_abs`).
+- *The stale window* is a `¬` theorem (`stale_window_invalid`) and a read
+  or store through it is refused naming `Heap::Valid`
+  (`lib/_tests/native/runtime/arena_handles_tests.hthr`); `stale_windows_meet`
+  stands beside it, the same two windows meeting as words.
+- *§6 example 6* is `lib/std/data/store_graph.hthr`: the shared write proved
+  at an open store, and the checked write proved equal to it wherever the
+  key is valid and a no-op where it is not.
+- *The arena's checked route is not O(1).* The claims are history, so
+  keeping them at run time is a table, not a word compare. A run-time
+  generation for the arena wants a word per window in the heap (Vale's
+  layout), which changes `arena.hthr`'s layout: left to
+  `arena-runtime-generation`.
+
 A home is a root and a path. A local's home is not observable until it is
 borrowed, and two owned values never share one. Pointer equality is
 equality of paths. An address as a number is machine-level code against the
@@ -527,7 +568,7 @@ Read off the code on 2026-11-24.
 | Borrows for a call | `FTm::Lend` and `FView`; FunctionIR `View`; machine `Loan`, `Viewed`. A written view must be its buffer's only view (`views-of-one-buffer-apart`). |
 | Several written spans | Not built (`rung2-spans-design.md` §6). |
 | Linearity | The reflector's refusals for the world and the span (`rt_reflect.hthr`). No judgment over `FTm`, `ETm` or held code: only pure `Fun` goes through `Setup`. |
-| Typed references | None. A window is two words, a vector handle a `u64`, laid records nest by value. |
+| Typed references | None in compiled code. A window is two words, a vector handle a `u64`, laid records nest by value. In the meaning, a window and a vector are handles with keys into erased claims (`arena_handles.hthr`, §10.7 "Built"). |
 | Lenses | `Location`, `LocationLaws`, `Disjoint` (`lib/std/machine/location.hthr`), total only; `Part` and `Stored` for laid records. |
 | Footprints | `Span`, `SpanSet` with deciders (`span_set.hthr`); no separation algebra. |
 | `mut` in the surface | A parser desugaring; the AST's `Param` has no mode, and a `mut self` method is known by its `Mutated` result type alone. `&` is an infix token only. |
@@ -585,7 +626,17 @@ as a helper; addresses as numbers.
 3. How a frozen view carries its path when pointer equality on it is asked.
 4. Erased state that a `mut self` method changes (an arena's generation):
    an erased field of the receiver, or a parameter of its type that the
-   method's result may change.
+   method's result may change. **Settled for the arena (2026-11-24): an
+   erased field beside the laid record** (`Heap { arena, claims, ok }`,
+   `arena_handles.hthr`). A `mut self` method answers `Mutated<Self, R>`,
+   whose `after` has the receiver's own type, so a parameter the method
+   changes cannot be said without a Σ in every result; and the claims are
+   history (which allocation a window came from), which no function of the
+   arena's words recovers, so they cannot be a parameter computed from it.
+   The laid record stays as compiled; the erased fields are what proofs
+   read. Open still: how the reflector drops them (`runtime-erased-parameters`
+   drops erased parameters; erased fields are the same question one level
+   in).
 5. The shape of the checker's annotations, and which of them a module's
    interface keeps.
 6. The milestone's done-when (`docs/roadmap.md`, `nh-ownership`), to restate

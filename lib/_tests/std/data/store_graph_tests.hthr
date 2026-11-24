@@ -1,0 +1,57 @@
+// Probes of `store_graph.hthr` at a closed graph: `a` and `b` both name
+// `c`; `c` bumped statically and through the checked access, seen through
+// both edges; then `c` freed and its slot reused, where the checked bump
+// through the stale key writes nothing and the static one is refused.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import when;
+import omega;
+import store;
+import store_graph;
+
+fn G0() → Mutated<Store<Node>, Key> { Store::alloc(Store::empty(), Node(10, [])) }
+
+fn C() → Key { G0().value }
+
+fn G1() → Mutated<Store<Node>, Key> { Store::alloc(G0().after, Node(1, [C()])) }
+
+fn A() → Key { G1().value }
+
+fn G2() → Mutated<Store<Node>, Key> { Store::alloc(G1().after, Node(2, [C()])) }
+
+fn B() → Key { G2().value }
+
+fn S() → Store<Node> { G2().after }
+
+theorem shared(): (Graph::edge(S(), A(), 0) = Some(C())) ∧ (Graph::edge(S(), B(), 0) = Some(C())) { ⟨refl, refl⟩ }
+
+// Statically: the proof given, the write seen through both edges.
+theorem static_seen(): (Graph::follow(Graph::bump(S(), C(), valid := trivial), A(), 0) = Some(Node(11, []))) ∧
+    (Graph::follow(Graph::bump(S(), C(), valid := trivial), B(), 0) = Some(Node(11, [])))
+{
+    ⟨refl, refl⟩
+}
+
+// Checked: the generation compared, the same.
+theorem checked_seen(): (Graph::follow(Graph::bump_checked(S(), C()), A(), 0) = Some(Node(11, []))) ∧
+    (Graph::follow(Graph::bump_checked(S(), C()), B(), 0) = Some(Node(11, [])))
+{
+    ⟨refl, refl⟩
+}
+
+// `c` freed and its slot handed to `d`: the old key is stale.
+fn REUSED() → Mutated<Store<Node>, Key> { Store::alloc(S().free(C()), Node(99, [])) }
+
+theorem slot_reused(): REUSED().value.index = C().index { refl }
+
+theorem stale_c(): ¬REUSED().after.Valid(C()) { λ valid => valid }
+
+// The checked bump through the stale key writes nothing; `d` keeps 99.
+theorem checked_stale_unchanged(): Graph::bump_checked(REUSED().after, C()).get(REUSED().value) = Some(Node(99, [])) { refl }
+
+// The static bump through it is refused, the obligation named.
+// expect-error: `bump`'s `valid` was left to its default, which did not give `store::Store::Valid((REUSED).after, C)` here
+fn static_stale() → Store<Node> { Graph::bump(REUSED().after, C()) }

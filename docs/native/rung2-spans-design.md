@@ -302,7 +302,11 @@ Under the default setup such theorems take the windows' disjointness as a
 hypothesis, discharged per program by the laws above; under `nh-ownership`
 the judgment discharges it once (the `Unique` fact,
 `facts-on-demand-design` §7). The line arena avoids the question by writing
-each cell once; a growing vector cannot.
+each cell once; a growing vector cannot. Over typed handles (`arena_handles.hthr`,
+`ownership-design.md` §10.7 "Built") the hypothesis is gone: a window is
+valid by a key into erased claims, two valid windows of different keys are
+apart, and a window used after the reset that ended it has no proof of
+validity, so its use is refused.
 
 **Exhaustion.** `Full` is an answer, not an exit: a function has no exit.
 A Rust caller that receives it lends a larger span and calls again (an

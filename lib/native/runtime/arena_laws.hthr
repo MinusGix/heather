@@ -32,6 +32,12 @@
 // (`lib/_tests/native/runtime/arena_laws_tests.hthr`): it meets the window
 // handed out again, and a store through one is read through the other.
 //
+// Over typed handles, where a window is valid by a key and two valid
+// windows are apart without a premise, the laws are restated in
+// `arena_handles.hthr`, which reads them through these (and through
+// `alloc_limit`, `alloc_full_same`, `reset_top_cases` and `grow_cases`,
+// here for it).
+//
 // Each function is cited by its branch equations (`Arena::alloc::True`, …),
 // its tests decided at the toNat of its words (`le_dec`, `lt_dec`); a sum
 // of words is a sum of numbers where the tests bound it (`small_sum`).
@@ -184,6 +190,36 @@ theorem Arena::reset_heap(a: Arena, mark: u64): Arena::reset(a, mark).after.heap
 
 theorem Arena::reset_top(a: Arena, mark: u64, ok: mark.toNat() <= a.top.toNat()): Arena::reset(a, mark).after.top = mark {
     cong_fn(λ (r: Mutated<Arena, u64>) => r.after.top, Arena::reset::True(a, mark, ok))
+}
+
+// Neither moves the limit; a refused allocation leaves the arena as it was,
+// and a reset leaves the top at the mark or where it was.
+theorem Arena::alloc_limit(a: Arena, size: u64): Arena::alloc(a, size).after.limit = a.limit {
+    match Arena::fits_dec(a, size) {
+        Inl(f) => cong_fn(λ (r: Mutated<Arena, Alloc>) => r.after.limit, Arena::alloc::True(a, size, f)),
+        Inr(nf) => cong_fn(λ (r: Mutated<Arena, Alloc>) => r.after.limit, Arena::alloc::False(a, size, nf)),
+    }
+}
+
+theorem Arena::alloc_full_same(a: Arena, size: u64, full: Arena::alloc(a, size).value = Full): Arena::alloc(a, size).after = a {
+    match Arena::fits_dec(a, size) {
+        Inl(f) => absurd(trans(sym(full), Arena::alloc_got(a, size, f))),
+        Inr(nf) => cong_fn(λ (r: Mutated<Arena, Alloc>) => r.after, Arena::alloc::False(a, size, nf)),
+    }
+}
+
+theorem Arena::reset_limit(a: Arena, mark: u64): Arena::reset(a, mark).after.limit = a.limit {
+    match Arena::le_dec(mark, a.top) {
+        Inl(ok) => cong_fn(λ (r: Mutated<Arena, u64>) => r.after.limit, Arena::reset::True(a, mark, ok)),
+        Inr(no) => cong_fn(λ (r: Mutated<Arena, u64>) => r.after.limit, Arena::reset::False(a, mark, no)),
+    }
+}
+
+theorem Arena::reset_top_cases(a: Arena, mark: u64): Or<And<Arena::reset(a, mark).after.top = mark, mark.toNat() <= a.top.toNat()>, Arena::reset(a, mark).after.top = a.top> {
+    match Arena::le_dec(mark, a.top) {
+        Inl(ok) => Inl(And(cong_fn(λ (r: Mutated<Arena, u64>) => r.after.top, Arena::reset::True(a, mark, ok)), ok)),
+        Inr(no) => Inr(cong_fn(λ (r: Mutated<Arena, u64>) => r.after.top, Arena::reset::False(a, mark, no))),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -405,6 +441,66 @@ theorem Arena::grow_abs(a: Arena, h: u64, inv: VecInv(a, h), grew: Arena::grow(a
                     Arena::slice_ext(r.after, a, a.cell(h + 2).toNat(), a.top.toNat(), a.cell(h).toNat(), same)));
             j(sym(Arena::grow_eq(a, h, hb, f)), λ s _ => s.after.vec(h) = a.vec(h), on_r)
         },
+    }
+}
+
+// What a grow that answered moved: the top past a window of twice the
+// capacity at the old top, the header pointed at it with the capacity
+// doubled and the length kept, and every word below the old top but the
+// header's base and capacity as it was. A grow that did not fit leaves the
+// arena as it was and answers 0 (`grow_cases`).
+record Grown(a: Arena, h: u64, r: Mutated<Arena, u64>) {
+    value: r.value = 1,
+    room: a.top.toNat() + (a.cell(h + 1).toNat() + a.cell(h + 1).toNat()) <= a.limit.toNat(),
+    top: r.after.top.toNat() = a.top.toNat() + (a.cell(h + 1).toNat() + a.cell(h + 1).toNat()),
+    limit: r.after.limit = a.limit,
+    base: r.after.cell(h) = a.top,
+    cap: r.after.cell(h + 1) = a.cell(h + 1) + a.cell(h + 1),
+    len: r.after.cell(h + 2) = a.cell(h + 2),
+    kept: (q: Nat) → q < a.top.toNat() → ¬(q = h.toNat()) → ¬(q = h.toNat() + 1) → r.after.word(q) = a.word(q),
+}
+
+theorem Arena::grow_moves(a: Arena, h: u64, inv: VecInv(a, h), hb: h < 14, f: Arena::GrowFits(a, h)): Grown(a, h, Arena::grow(a, h)) {
+    let hn: (h.toNat() < 14) = hb;
+    let e1: ((h + 1).toNat() = h.toNat() + 1) = bv_omega;
+    let e2: ((h + 2).toNat() = h.toNat() + 2) = bv_omega;
+    let cap = a.cell(h + 1);
+    let cn: (cap.toNat() <= a.limit.toNat()) = f.right.right.left;
+    let s1 = Arena::small_sum(a.top, cap, omega(cn, inv.top, inv.limit));
+    let s2 = Arena::small_sum(a.top + cap, cap, omega(s1, cn, inv.top, inv.limit));
+    let room: ((a.top + cap + cap).toNat() <= a.limit.toNat()) = f.right.right.right;
+    let cc = Arena::small_sum(cap, cap, omega(cn, inv.limit));
+    let st = Arena::small_sum(a.top, cap + cap, omega(cc, cn, s1, s2, room, inv.limit));
+    let z: (BitVec::ofNat(0, n := 64).toNat() = 0) = refl;
+    let x0 = a.grown(h);
+    let cp = Arena::copies(a.cell(h), a.top, a.cell(h + 2),
+        omega(inv.window, inv.len, inv.top, inv.limit), omega(s1, s2, room, inv.len, inv.limit), Inl(omega(inv.window, inv.len)),
+        a.cell(h + 2).toNat(), x0, BitVec::ofNat(0), omega(z), omega(z));
+    let r = Arena::copy_at(x0, a.cell(h), a.top, BitVec::ofNat(0), a.cell(h + 2));
+    let hd: ((q: Nat) → q < a.top.toNat() → r.after.word(q) = x0.word(q)) = λ q below => cp.kept(q, Inl(omega(below, z)));
+    let x0_other: ((q: Nat) → ¬(q = h.toNat()) → ¬(q = h.toNat() + 1) → x0.word(q) = a.word(q)) = λ q n0 n1 =>
+        trans(vector_get_update_other(16, vector_update(a.heap, h.toNat(), a.top), (h + 1).toNat(), q, cap + cap, BitVec::ofNat(0), λ e => n1(trans(e, e1))),
+            vector_get_update_other(16, a.heap, h.toNat(), q, a.top, BitVec::ofNat(0), n0));
+    let c0: (r.after.cell(h) = a.top) = trans(hd(h.toNat(), omega(inv.header)),
+        trans(vector_get_update_other(16, vector_update(a.heap, h.toNat(), a.top), (h + 1).toNat(), h.toNat(), cap + cap, BitVec::ofNat(0), λ e => omega(e, e1)),
+            vector_get_update_same(16, a.heap, h.toNat(), a.top, BitVec::ofNat(0), omega(hn))));
+    let c1: (r.after.cell(h + 1) = cap + cap) = trans(hd((h + 1).toNat(), omega(e1, inv.header)),
+        vector_get_update_same(16, vector_update(a.heap, h.toNat(), a.top), (h + 1).toNat(), cap + cap, BitVec::ofNat(0), omega(e1, hn)));
+    let c2: (r.after.cell(h + 2) = a.cell(h + 2)) = trans(cong_fn(λ (q: Nat) => r.after.word(q), e2),
+        trans(hd(h.toNat() + 2, omega(inv.header)), trans(x0_other(h.toNat() + 2, λ e => omega(e), λ e => omega(e)), cong_fn(λ (q: Nat) => a.word(q), sym(e2)))));
+    let sum: ((a.top + (cap + cap)).toNat() = a.top.toNat() + (cap.toNat() + cap.toNat())) = omega(st, cc);
+    let topn: (r.after.top.toNat() = a.top.toNat() + (cap.toNat() + cap.toNat())) = trans(cong_fn(λ (x: u64) => x.toNat(), cp.top), sum);
+    let on_r: Grown(a, h, r) = Grown(cp.value, omega(s1, s2, room), topn, cp.limit, c0, c1, c2,
+        λ q below n0 n1 => trans(hd(q, below), x0_other(q, n0, n1)));
+    j(sym(Arena::grow_eq(a, h, hb, f)), λ s _ => Grown(a, h, s), on_r)
+}
+
+theorem Arena::grow_cases(a: Arena, h: u64, inv: VecInv(a, h)): Or<Grown(a, h, Arena::grow(a, h)), Arena::grow(a, h) = Mutated(a, BitVec::ofNat(0))> {
+    let hn: (h.toNat() < 14) = omega(inv.header, inv.top, inv.limit);
+    let hb: (h < 14) = hn;
+    match Arena::grow_fits_dec(a, h) {
+        Inl(f) => Inl(Arena::grow_moves(a, h, inv, hb, f)),
+        Inr(nf) => Inr(Arena::grow::True::False(a, h, hb, nf)),
     }
 }
 

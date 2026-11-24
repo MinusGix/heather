@@ -1,0 +1,108 @@
+// Probes of `store.hthr`: a store at closed values (allocation, a write,
+// a free and a reuse of the slot), the laws at an open store and an open
+// value type, the two producers of validity (a proof found in scope, and
+// the generation compared), and the negative controls: a stale key is not
+// valid (a `¬` theorem), its read is refused with the reason, and a read by
+// the slot alone, without the generation, would answer the new value.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import when;
+import omega;
+import store;
+
+// ---------------------------------------------------------------------------
+// Closed: 5 and 7 allocated, the first freed, 9 allocated into its slot.
+
+fn ONE() → Mutated<Store<Nat>, Key> { Store::alloc(Store::empty(), 5) }
+
+fn TWO() → Mutated<Store<Nat>, Key> { Store::alloc(ONE().after, 7) }
+
+fn FREED() → Store<Nat> { TWO().after.free(ONE().value) }
+
+fn REUSED() → Mutated<Store<Nat>, Key> { Store::alloc(FREED(), 9) }
+
+theorem keys_handed_out(): (ONE().value = Key(0, 0)) ∧ (TWO().value = Key(1, 0)) ∧ (REUSED().value = Key(0, 1)) { ⟨refl, ⟨refl, refl⟩⟩ }
+
+theorem both_read(): (TWO().after.get(ONE().value) = Some(5)) ∧ (TWO().after.get(TWO().value) = Some(7)) { ⟨refl, refl⟩ }
+
+// A write through the second key, read back, and the first untouched.
+theorem write_reads(): (TWO().after.put(TWO().value, 8).get(TWO().value) = Some(8)) ∧ (TWO().after.put(TWO().value, 8).get(ONE().value) = Some(5)) { ⟨refl, refl⟩ }
+
+// The reused slot: the new key reads 9, the second key still reads 7.
+theorem reuse_reads(): (REUSED().after.get(REUSED().value) = Some(9)) ∧ (REUSED().after.get(TWO().value) = Some(7)) { ⟨refl, refl⟩ }
+
+// The negative control at the type: the first key names the slot the new
+// key names, and is not valid.
+theorem same_slot(): ONE().value.index = REUSED().value.index { refl }
+
+theorem stale_key_invalid(): ¬REUSED().after.Valid(ONE().value) { λ valid => valid }
+
+// The law that gives it at an open store, here at the closed one.
+theorem stale_key_by_law(): ¬REUSED().after.Valid(ONE().value) {
+    TWO().after.stale_after_reuse(ONE().value, 9, trivial)
+}
+
+// Without the generation, the slot alone answers the new value through the
+// stale key: what the generation refuses.
+fn Store::by_slot<V>(self s: Store<V>, i: Nat) → Option<V> {
+    s.slots.nth(i).and_then(λ (sl: Slot<V>) => match sl { Live(_, v) => Some(v), Free(_) => None })
+}
+
+theorem slot_alone_reads_new(): REUSED().after.by_slot(ONE().value.index) = Some(9) { refl }
+
+theorem generation_refuses(): REUSED().after.get(ONE().value) = None { refl }
+
+// The read through the stale key, its validity left to `known`: refused,
+// with the obligation named.
+// expect-error: `read`'s `valid` was left to its default, which did not give `store::Store::Valid((REUSED).after, (ONE).value)` here
+fn stale_read() → Nat { REUSED().after.read(ONE().value) }
+
+// The checked access at both keys: the compare answers absent for the stale
+// key, present with 9 for the new one.
+theorem checked_stale(): REUSED().after.checked(ONE().value).is_present() = False { refl }
+
+theorem checked_new(): REUSED().after.checked(REUSED().value).option() = Some(9) { refl }
+
+// ---------------------------------------------------------------------------
+// Open: the laws at an open store of an open value type.
+
+// A proof found in scope: the hypothesis is what `known` finds.
+fn read_known<V>(s: Store<V>, k: Key, valid: s.Valid(k)) → V { s.read(k) }
+
+// With nothing in scope, the read is refused.
+// expect-error: `known` found no hypothesis `store::Store::Valid(__caller_s, __caller_k)` in scope
+fn read_unknown<V>(s: Store<V>, k: Key) → V { s.read(k) }
+
+// The generation compared: a guard on `check` gives the proof the read takes.
+fn read_checked<V>(s: Store<V>, k: Key, d: V) → V {
+    match e: s.check(k) { True => s.read(k, valid := s.check_valid(k, e)), False => d }
+}
+
+// The key allocated, read in a checking position under `alloc_valid`.
+theorem alloc_then_read<V>(s: Store<V>, v: V):
+    Store::alloc(s, v).after.read(Store::alloc(s, v).value, valid := Store::alloc_valid(s, v)) = v
+{
+    Option::some_inj(Store::alloc(s, v).after.read(Store::alloc(s, v).value, valid := Store::alloc_valid(s, v)), v, trans(sym(Store::read_get(Store::alloc(s, v).after, Store::alloc(s, v).value, Store::alloc_valid(s, v))), Store::alloc_reads(s, v)))
+}
+
+// Two keys of an open store, a write through one: the other reads as it
+// did, and both stay valid.
+theorem write_one_keeps_other<V>(s: Store<V>, k1, k2: Key, v: V, apart: ¬(k2.index = k1.index), valid: s.Valid(k2)):
+    (s.put(k1, v).get(k2) = s.get(k2)) ∧ s.put(k1, v).Valid(k2)
+{
+    ⟨s.put_other(k1, v, k2, apart), s.put_valid(k1, v, k2, valid)⟩
+}
+
+// A freed key stays invalid through any write and any allocation after.
+theorem freed_stays_invalid<V>(s: Store<V>, k, k2: Key, v, w: V, valid: s.Valid(k)):
+    ¬Store::alloc(s.free(k).put(k2, w), v).after.Valid(k)
+{
+    Store::stale_invalid(Store::alloc(s.free(k).put(k2, w), v).after, k,
+        Store::alloc_keeps_stale(s.free(k).put(k2, w), v, k, s.free(k).put_keeps_stale(k2, w, k, s.free_stales(k, valid))))
+}
+
+// The checked access agrees with the partial read at an open store.
+theorem checked_is_get<V>(s: Store<V>, k: Key): s.checked(k).option() = s.get(k) { s.checked_option(k) }
