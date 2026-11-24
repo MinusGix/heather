@@ -959,18 +959,136 @@ fn rt_file_again(names: FileNames, args: List<Handle>) → Tac<List<Handle>> {
     }
 }
 
+// ---------------------------------------------------------------------------
+// A function of a `Bytes(n)` that only reads it
+
+// Whether a function of a `Bytes(n)` only reads it: its type ends in a
+// value, not in `Mutated`. The code of the value, where it does.
+fn rt_file_reads(fuel: Nat, k: Known, names: FileNames, t: Handle) → Tac<Option<Ty>> {
+    match names.bytes {
+        None => pure(None),
+        Some(_) => match fuel {
+            Zero => rt_refuse("more parameters than the reflector's fuel"),
+            Succ(f) => view(t).bind(λ v => match v {
+                HPi(_) => open(t, "x").bind(λ c => rt_accepted("a parameter", c)).bind(λ o => rt_file_reads(f, k, names, o.body)),
+                HGlobal(g, _, _) => match g.id.same(names.mutated) { True => pure(None), False => k.ty(t).bind(λ r => pure(Some(r))) },
+                _ => k.ty(t).bind(λ r => pure(Some(r))),
+            }),
+        },
+    }
+}
+
+// Whether `g` is a function of a `Bytes(n)` that only reads it and is
+// compiled as one (`g::bytes`).
+fn rt_file_reader(k: Known, names: FileNames, g: GlobalRef, name: String) → Tac<Bool> {
+    let compiled <- rt_file_code_of(g, name);
+    match compiled.id.same(g.id) {
+        True => pure(False),
+        False => infer(Global(g)).bind(λ c => match c {
+            Refused(_) => pure(False),
+            Accepted(t) => rt_file_reads(64, k, names, t).bind(λ r => pure(match r { Some(_) => True, None => False })),
+        }),
+    }
+}
+
+// The calls in a value of functions of a `Bytes(n)` that only read it,
+// the innermost first. Not under a `λ` or in a `match`'s arms, whose
+// locals a call made before the value could not read.
+fn rt_file_read_calls(fuel: Nat, k: Known, names: FileNames, hs: List<Handle>) → Tac<List<Handle>> {
+    match fuel {
+        Zero => rt_refuse("the value is deeper than the reflector's fuel"),
+        Succ(f) => match hs {
+            Nil => pure([]),
+            Cons(h, rest) => {
+                let v <- view(h);
+                let here: Tac<List<Handle>> = match v {
+                    HGlobal(g, name, args) => rt_file_read_calls(f, k, names, args).bind(λ inner =>
+                        rt_file_reader(k, names, g, name).bind(λ r => pure(match r { True => inner ++ [h], False => inner }))),
+                    HLocal(_, args) => rt_file_read_calls(f, k, names, args),
+                    HField(of, _, args) => rt_file_read_calls(f, k, names, Cons(of, args)),
+                    HMatch(scrut) => rt_file_read_calls(f, k, names, [scrut]),
+                    _ => pure([]),
+                };
+                let found <- here;
+                let more <- rt_file_read_calls(f, k, names, rest);
+                pure(found ++ more)
+            },
+        },
+    }
+}
+
+// Each such call made, as a call that writes is (`rt_file_call`), with
+// the span left as it was: its word is bound where the value reads the
+// call (`st.handles`).
+fn rt_file_read_made(fuel: Nat, k: Known, names: FileNames, w: FWalk, cs: List<Handle>) → Tac<FWalk> {
+    match cs {
+        Nil => pure(w),
+        Cons(c, rest) => view(c).bind(λ v => match v {
+            HGlobal(g, name, args) => {
+                let targs <- rt_file_threaded(names, args);
+                let ops <- rt_file_ops(names, targs);
+                match ops {
+                    Cons(length, more) => {
+                        let found <- rt_file_callee(k, w.cfuns, g, name);
+                        let kk = k.at_file(w.fk);
+                        let words <- rt_data_args(more);
+                        let rl <- rt_go(fuel, kk, w.st, length, True);
+                        match RSt::level(rl.snd).same(1) {
+                            False => rt_file_length("a call that reads"),
+                            True => {
+                                let reads <- rt_call_lent(64, kk, words);
+                                let r <- rt_lent_args(λ s a => rt_go(fuel, kk, s, a, True), kk, rl.fst, 1, reads, words);
+                                let st = r.fst;
+                                let after = st.written(st.depth + 1);
+                                rt_file_read_made(fuel, k, names, FWalk(RSt(after.depth, after.lets, after.memo, Cons(Pair(c.id, st.depth), after.handles), after.locals, after.funs),
+                                    Cons(FCall(found.snd, Cons(st.index(0), Cons(st.index(1), st.indices(r.snd)))), FSeg::lets(st.lets) ++ w.segs),
+                                    w.fk, w.done, found.fst), rest)
+                            },
+                        }
+                    },
+                    Nil => rt_refuse("`" ++ name ++ "` without its span's length word"),
+                }
+            },
+            _ => rt_refuse("a call that reads the span, of something other than a function"),
+        }),
+    }
+}
+
+// A value a function of a `Bytes(n)` that only reads it answers, beside
+// the span as it was: the calls in it of functions that only read made
+// first, then the value.
+fn rt_file_value(fuel: Nat, k: Known, names: FileNames, w: FWalk, h: Handle) → Tac<FileEnd> {
+    let cs <- rt_file_read_calls(fuel, k, names, [h]);
+    let w1 <- rt_file_read_made(fuel, k, names, w, cs);
+    let r <- rt_go(fuel, k.at_file(w1.fk), w1.st, h, True);
+    pure(FileEnd(FSeg::close(FSeg::lets(r.fst.lets) ++ w1.segs, FTm::Pure(Var(r.fst.index(RSt::level(r.snd))))), r.fst.funs, w1.cfuns))
+}
+
+// Whether a reader's arm is a branch or its own call, which the walk
+// reads as a writer's are, and not its value.
+fn rt_file_arm(ih: Option<Nat>, v: Head) → Bool {
+    match v {
+        HMatch(_) => True,
+        HLocal(x, _) => ih.map(λ i => i.same(x.id)).unwrap_or(False),
+        _ => False,
+    }
+}
+
 // A body in tail position. `ih` is the local a measured step calls itself
 // through and `arity` the words that call passes, the span and its length
-// word first.
-fn rt_file_tail(fuel: Nat, k: Known, names: FileNames, ih: Option<Nat>, arity: Nat, w: FWalk, h: Handle) → Tac<FileEnd> {
+// word first. `reads`: the function only reads its `Bytes(n)`, and an arm
+// that is not a branch or its own call is its value (`rt_file_value`).
+fn rt_file_tail(fuel: Nat, k: Known, names: FileNames, ih: Option<Nat>, arity: Nat, reads: Bool, w: FWalk, h: Handle) → Tac<FileEnd> {
     match fuel {
         Zero => rt_refuse("the body is deeper than the reflector's fuel"),
-        Succ(f) => view(h).bind(λ v => match v {
+        Succ(f) => view(h).bind(λ v => match reads && !rt_file_arm(ih, v) {
+          True => rt_file_value(f, k, names, w, h),
+          False => match v {
             HCtor(ty, _, _, fields) => match ty.id.same(names.mutated) {
                 False => rt_file_ends(),
                 True => match fields.rev() {
                     Cons(value, Cons(after, _)) => {
-                        let w1 <- rt_file_upto(f, k, names, w, after, [value], λ w2 b => rt_file_tail(f, k, names, None, 0, w2, b));
+                        let w1 <- rt_file_upto(f, k, names, w, after, [value], λ w2 b => rt_file_tail(f, k, names, None, 0, False, w2, b));
                         let r <- rt_go(f, k.at_file(w1.fk), w1.st, value, False);
                         pure(FileEnd(FSeg::close(FSeg::lets(r.fst.lets) ++ w1.segs, FTm::Pure(r.snd)), r.fst.funs, w1.cfuns))
                     },
@@ -986,8 +1104,8 @@ fn rt_file_tail(fuel: Nat, k: Known, names: FileNames, ih: Option<Nat>, arity: N
                         let yes_h <- rt_arm(m, 1);
                         let no_h <- rt_arm(m, 0);
                         let base = RSt(rc.fst.depth, [], rc.fst.memo, rc.fst.handles, rc.fst.locals, rc.fst.funs);
-                        let ry <- rt_file_tail(f, k, names, ih, arity, FWalk(base, [], w.fk, w.done, w.cfuns), yes_h);
-                        let rn <- rt_file_tail(f, k, names, ih, arity, FWalk(base.with_funs(ry.funs), [], w.fk, w.done, ry.cfuns), no_h);
+                        let ry <- rt_file_tail(f, k, names, ih, arity, reads, FWalk(base, [], w.fk, w.done, w.cfuns), yes_h);
+                        let rn <- rt_file_tail(f, k, names, ih, arity, reads, FWalk(base.with_funs(ry.funs), [], w.fk, w.done, ry.cfuns), no_h);
                         let c = rc.fst.index(RSt::level(rc.snd));
                         let node: FTm = match m.args { Nil => FTm::If(c, ry.term, rn.term), Cons(_, _) => FTm::IfEq(c, ry.term, rn.term) };
                         pure(FileEnd(FSeg::close(FSeg::lets(rc.fst.lets) ++ w.segs, node), rn.funs, rn.cfuns))
@@ -999,7 +1117,7 @@ fn rt_file_tail(fuel: Nat, k: Known, names: FileNames, ih: Option<Nat>, arity: N
                 False => rt_file_ends(),
                 True => rt_file_again(names, args.take(arity)).bind(λ again => match again {
                     Cons(after, Cons(length, rest)) => {
-                        let w1 <- rt_file_upto(f, k, names, w, after, rest, λ w2 b => rt_file_tail(f, k, names, None, 0, w2, b));
+                        let w1 <- rt_file_upto(f, k, names, w, after, rest, λ w2 b => rt_file_tail(f, k, names, None, 0, False, w2, b));
                         let kk = k.at_file(w1.fk);
                         let rl <- rt_go(f, kk, w1.st, length, True);
                         match RSt::level(rl.snd).same(1) {
@@ -1016,6 +1134,7 @@ fn rt_file_tail(fuel: Nat, k: Known, names: FileNames, ih: Option<Nat>, arity: N
                 }),
             },
             _ => rt_file_ends(),
+          },
         }),
     }
 }
@@ -1121,12 +1240,16 @@ record FileReflected { reflected: FFun, funs: List<Nat>, cfuns: List<Nat> }
 
 fn rt_file_reflect_plain(fuel: Nat, k: Known, names: FileNames, cfuns: List<Nat>, g: Nat) → Tac<FileReflected> {
     let t <- infer(Global(GlobalRef(g))).bind(λ c => rt_accepted("its type", c));
-    let result <- rt_file_result(fuel, k, names, t);
+    let reads <- rt_file_reads(fuel, k, names, t);
+    let result <- match reads { Some(r) => pure(r), None => rt_file_result(fuel, k, names, t) };
     let b <- body(GlobalRef(g)).bind(λ c => rt_accepted("its body", c));
     let p <- rt_file_params(fuel, None, k, names, b);
     let codes <- rt_file_codes(p.fst.snd);
     let span <- rt_file_span(p.fst.fst.locals);
-    let r <- rt_file_tail(fuel, k.lending(codes.fst), names, None, 0, FWalk(p.fst.fst, [], FileKnown::start(span, []), 0, cfuns), p.snd);
+    let r <- match reads {
+        Some(_) => rt_file_value(fuel, k.lending(codes.fst), names, FWalk(p.fst.fst, [], FileKnown::start(span, []), 0, cfuns), p.snd),
+        None => rt_file_tail(fuel, k.lending(codes.fst), names, None, 0, False, FWalk(p.fst.fst, [], FileKnown::start(span, []), 0, cfuns), p.snd),
+    };
     pure(FileReflected(FFun(codes.snd, result, r.term, codes.fst), r.funs, r.cfuns))
 }
 
@@ -1135,7 +1258,8 @@ fn rt_file_reflect_plain(fuel: Nat, k: Known, names: FileNames, cfuns: List<Nat>
 // itself on the span as the pass left it.
 fn rt_file_reflect_measured(fuel: Nat, k: Known, names: FileNames, cfuns: List<Nat>, g: Nat, step: Nat) → Tac<FileReflected> {
     let t <- infer(Global(GlobalRef(g))).bind(λ c => rt_accepted("its type", c));
-    let result <- rt_file_result(fuel, k, names, t);
+    let reads <- rt_file_reads(fuel, k, names, t);
+    let result <- match reads { Some(r) => pure(r), None => rt_file_result(fuel, k, names, t) };
     let n <- rt_arity(fuel, t);
     let b <- body(GlobalRef(step)).bind(λ c => rt_accepted("its step's body", c));
     let o1 <- open(b, "k").bind(λ c => rt_accepted("its step's bound", c));
@@ -1144,7 +1268,7 @@ fn rt_file_reflect_measured(fuel: Nat, k: Known, names: FileNames, cfuns: List<N
     let codes <- rt_file_codes(p.fst.snd);
     let span <- rt_file_span(p.fst.fst.locals);
     let o3 <- open(p.snd, "h").bind(λ c => rt_accepted("its step's measure proof", c));
-    let r <- rt_file_tail(fuel, k.lending(codes.fst), names, Some(o2.local.ref.id), n, FWalk(p.fst.fst, [], FileKnown::start(span, []), 0, cfuns),
+    let r <- rt_file_tail(fuel, k.lending(codes.fst), names, Some(o2.local.ref.id), n, match reads { Some(_) => True, None => False }, FWalk(p.fst.fst, [], FileKnown::start(span, []), 0, cfuns),
         o3.body);
     pure(FileReflected(FFun(codes.snd, result, r.term, codes.fst), r.funs, r.cfuns))
 }

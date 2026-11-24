@@ -172,7 +172,10 @@ record SelfCall { ih: Nat, head: List<Nat>, slots: List<Nat>, varied: List<Nat> 
 // `narrow` of `read_at` at the word the array begins at, its count and
 // the index: the accessor's checked read, 0 past the count.
 // `under` is the local a new one is assumed under where the terms live.
-record ElementTerm { count: Nat, base: Nat, stride: Nat, read: Expr, narrow: Expr, read_at: Expr, under: LocalRef }
+// `counted`: the term the array's count is where it is not a literal,
+// the word a laid record's parameter is (docs/native/rung2-spans-design.md
+// §3); `count` is then 0 and no element is read at a numeral.
+record ElementTerm { count: Nat, base: Nat, stride: Nat, read: Expr, narrow: Expr, read_at: Expr, under: LocalRef, counted: Option<Expr> }
 
 // What an element's read stands for: a term, and for a read at a word
 // the local that stands in it for the index beside the index itself. The
@@ -1002,7 +1005,7 @@ fn ElementTerm::reads_at(self e: ElementTerm, i: Handle) → Tac<ElementRead> {
     let word_t <- as_type(App(Global(bitvec), NatLit(64))).bind(λ c => rt_accepted("a word's type", c));
     let x <- assume(Hd(word_t), "index", Some(e.under)).bind(λ c => rt_accepted("an index's local", c));
     let word: Nat → Expr = λ n => App(App(Global(of_nat), NatLit(64)), NatLit(n));
-    let read <- next_spelling(App(App(App(e.read_at, word(e.base)), word(e.count)), Local(x.ref))).bind(λ c => rt_accepted("an accessor's read of an element at a word", c));
+    let read <- next_spelling(App(App(App(e.read_at, word(e.base)), e.counted.unwrap_or(word(e.count))), Local(x.ref))).bind(λ c => rt_accepted("an accessor's read of an element at a word", c));
     let value <- next_spelling(App(e.narrow, Hd(read))).bind(λ c => rt_accepted("an accessor's read at its element's width", c));
     pure(ElementRead(value, Some(Pair(x.ref.id, i))))
 }

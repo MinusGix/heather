@@ -3,7 +3,7 @@
 // back to it over a word measure (issues/decreases-word-measures-by-hand.md).
 // Tests, not library: nothing outside lib/_tests imports this module
 // (docs/test-value-audit.md §4.5).
-import logic; import bool; import nat; import int; import omega; import bitvec; import bitvec_nat; import bitvec_omega; import bitvec_shift_nat; import list; import loop;
+import logic; import bool; import nat; import int; import omega; import bitvec; import bitvec_nat; import bitvec_omega; import bitvec_shift_nat; import bitvec_div; import list; import loop;
 
 // ---- The test, read from the context as it is written ----
 
@@ -25,6 +25,9 @@ theorem lt_prop(i: BitVec(64), h: i < 64):
 theorem le_prop(i: BitVec(64), h: i <= 63): i.toNat() + 1 <= 64 { bv_omega }
 // Two words, neither a literal.
 theorem lt_prop_words(i, j: BitVec(64), h: i < j): (j - (i + 1)).toNat() < (j - i).toNat() { bv_omega }
+// A literal at an open width: its fit `0 < 2^w` is over no atom but is no
+// comparison of literals, so `omega` proves it, from a leaf's range.
+theorem lt_prop_open_zero(w: Nat, n: BitVec(w), h: 0 < n): 1 <= n.toNat() { bv_omega }
 // In a checking position.
 theorem lt_prop_checking(i: BitVec(64), h: i < 64): i.toNat() < 64 {
     let below: (i.toNat() < 64) = bv_omega;
@@ -171,6 +174,43 @@ fn sum_below(k: BitVec(64)) → BitVec(64) {
 theorem sum_below_lit(): sum_below(60) = 246 { refl }
 theorem sum_below_done(): sum_below(64) = 0 { refl }
 
+// The measure assigned through a branch (issues/while-decrease-through-
+// branches.md): the closer splits the `if` at its word test and finds each
+// arm's decrease beside that arm's comparison.
+fn dec_arms(x: u64) → u64 {
+    let mut left = x;
+    while 0 < left decreases left.toNat() {
+        if left = 5 { left := 0; } else { left := left - 1; }
+    }
+    left
+}
+theorem dec_arms_lit(): dec_arms(9) = 0 { refl }
+fn dec_tail(x: u64) → u64 {
+    let mut left = x;
+    let mut r: u64 = 0;
+    while 0 < left decreases left.toNat() {
+        r := r + 1;
+        left := if left = 5 { 0 } else { left - 1 };
+    }
+    r
+}
+theorem dec_tail_lit(): dec_tail(9) = 5 { refl }
+// Control: one arm keeps the measure.
+// expect-error: must decrease the measure
+fn dec_stays(x: u64) → u64 {
+    let mut left = x;
+    while 0 < left decreases left.toNat() {
+        if left = 5 { left := left; } else { left := left - 1; }
+    }
+    left
+}
+// A recursive call at an `if` over words: the argument is read at its
+// parameter's type, so the arm `0` is a word.
+fn fall_if_word(n: BitVec(64)) → BitVec(64) decreases n.toNat() {
+    if h: 0 < n { fall_if_word(if n = 7 { 0 } else { n - 1 }) } else { n }
+}
+theorem fall_if_word_lit(): fall_if_word(9) = 0 { refl }
+
 // Negative control: the measure does not fall when the counter counts up
 // past the bound the test does not check.
 // expect-error: must decrease the measure
@@ -309,9 +349,8 @@ theorem search_in_result_and_body(j: BitVec(64), h: j < 48): word_below(j + 16, 
 // lifted proof spelled as the search that found it.
 // expect-error: ?rest : word_below(j + ofNat(16), inside := bv_omega) = j + ofNat(16)
 theorem search_goal_left_open(j: BitVec(64), h: j < 48): word_below(j + 16, inside := bv_omega) = j + 16 { ?rest }
-// `omega`'s certificate is inline, not lifted, and has no spelling: `…`, not
-// the kernel term, and the rest of the statement still spelled.
-// expect-error: ?rest : toNat(word_below(j + ofNat(16), inside := bv_omega)) + nat_below(n + 1, inside := …) = toNat(j + ofNat(16)) + (n + 1)
+// A written `omega`'s proof is lifted too, and spelled as the search.
+// expect-error: ?rest : toNat(word_below(j + ofNat(16), inside := bv_omega)) + nat_below(n + 1, inside := omega) = toNat(j + ofNat(16)) + (n + 1)
 theorem searches_left_open(j: BitVec(64), n: Nat, h: j < 48, k: n < 10):
     word_below(j + 16, inside := bv_omega).toNat() + nat_below(n + 1, inside := omega) = (j + 16).toNat() + (n + 1) { ?rest }
 // A goal another goal's statement mentions is spelled by its name.
@@ -381,6 +420,47 @@ theorem halving_steps_lit(): halving_steps(0, 8) = 4 { refl }
 // Negative control: at zero the half is not smaller.
 // expect-error: got stuck
 theorem shr_smaller_wrong(x: BitVec(64)): x >> 1 < x { bv_omega }
+
+// ---- A remainder and a quotient are known by their laws ----
+
+// `x % d` and `x / d` are atoms with facts beside them (`bitvec_div`'s
+// `toNat_urem_*`, `toNat_udiv_*`): a hash table's slot `hash % 8` is below
+// the capacity with nothing in scope, the literal divisor read as its value.
+theorem rem_lit(k: u64): (k % 8).toNat() < 8 { bv_omega }
+theorem rem_lit_word(k: u64): k % 8 < 8 { bv_omega }
+theorem rem_lit_next(k: u64): (k % 8 + 1).toNat() <= 8 { bv_omega }
+theorem rem_lit_of_sum(a, b: u64): ((a + b) % 16).toNat() < 16 { bv_omega }
+// The remainder is at most the dividend, whatever the divisor.
+theorem rem_le(k, n: u64): k % n <= k { bv_omega }
+// A divisor of run-time value, under the test that puts it on the path:
+// `0 < n` or `n ≠ 0` as the proposition, or over its value.
+theorem rem_by_pos(k, n: u64, h: 0 < n): k % n < n { bv_omega }
+theorem rem_by_ne(k, n: u64, h: n ≠ 0): k % n < n { bv_omega }
+theorem rem_by_pos_nat(k, n: u64, h: 0 < n.toNat()): (k % n).toNat() < n.toNat() { bv_omega }
+fn rem_by_test(k, n: u64) → Bool { if h: 0 < n { let below: ((k % n).toNat() < n.toNat()) = bv_omega; True } else { False } }
+// An open width.
+theorem rem_open(w: Nat, k, n: BitVec(w), h: 0 < n): k % n < n { bv_omega }
+// The quotient: at most the dividend away from a zero divisor, and over a
+// literal divisor the two bounds of `x >> k`, with the link `x = q·c + r`
+// when the remainder is here too.
+theorem div_lit_le(k: u64): k / 8 <= k { bv_omega }
+theorem div_by_pos_le(k, n: u64, h: 0 < n): k / n <= k { bv_omega }
+theorem div_lit_scaled(k: u64): (k / 8).toNat() * 8 <= k.toNat() { bv_omega }
+theorem div_lit_above(k: u64): k.toNat() < (k / 8).toNat() * 8 + 8 { bv_omega }
+theorem div_rem_link(k: u64): (k / 8).toNat() * 8 + (k % 8).toNat() = k.toNat() { bv_omega }
+theorem div_of_rem(k: u64): (k % 64) / 8 < 8 { bv_omega }
+
+// Negative controls: by zero the remainder is the dividend and the
+// quotient all ones, so neither bound holds with nothing known of `n`.
+// expect-error: got stuck
+theorem rem_by_unknown(k, n: u64): k % n < n { bv_omega }
+// expect-error: got stuck
+theorem div_by_unknown(k, n: u64): k / n <= k { bv_omega }
+// The remainder can reach `c - 1`, and the quotient's product falls short.
+// expect-error: got stuck
+theorem rem_lit_too_tight(k: u64): (k % 8).toNat() < 7 { bv_omega }
+// expect-error: got stuck
+theorem div_lit_not_exact(k: u64): (k / 8).toNat() * 8 = k.toNat() { bv_omega }
 
 // ---- `omega` reads a word's comparison bit as the comparison ----
 // (issues/omega-if-bit-word-comparison.md). An `if x < y` branch that does
@@ -467,3 +547,26 @@ theorem built_field_open(w, x: u64, h: x < w, k: w <= 20): Step::Both(Next(Span(
 // Control: `x + 2` may pass 10, so the field is refused.
 // expect-error: got stuck
 theorem built_field_past(x: u64, h: x < 10): Step::Holds(Next(Span(lo := x + 2, hi := 10))) { bv_omega }
+
+// ---- Arithmetic modulo a power of two (issues/bv-omega-word-arithmetic-modulo.md) ----
+
+// A low mask is the value modulo `2^k`, not only a bound: the next slot of a
+// four-slot table.
+theorem mask_is_mod(x: BitVec(64)): x.band(3).toNat() = x.toNat() % 4 { bv_omega }
+theorem mask_next_slot(j: BitVec(64), j4: j.toNat() < 4): ((j + 1).band(3)).toNat() = (j.toNat() + 1) % 4 { bv_omega }
+// At an open input too: the sum may wrap, and the mask keeps its low bits.
+theorem mask_of_sum(j: BitVec(64)): ((j + 1).band(255)).toNat() = (j.toNat() + 1) % 256 { bv_omega }
+// A masked difference that may borrow: its low bits are the difference
+// with the borrow added back, `(j + 4 - i) % 4` for slots below four.
+theorem masked_difference(j, i: BitVec(64), j4: j.toNat() < 4, i4: i.toNat() < 4):
+    ((j - i).band(3)).toNat() = (j.toNat() + 4 - i.toNat()) % 4 { bv_omega }
+// At an open width of the operands it is the full `2^64` that comes back.
+theorem masked_difference_open(j, i: BitVec(64)):
+    ((j - i).band(15)).toNat() = (j.toNat() + 18446744073709551616 - i.toNat()) % 16 { bv_omega }
+// Control: a mask that is not `2^k - 1` is still only a bound.
+// expect-error: got stuck
+theorem mask_not_low(x: BitVec(64)): x.band(5).toNat() = x.toNat() % 6 { bv_omega }
+// Control: the difference's remainder is not the truncated one.
+// expect-error: got stuck
+theorem masked_difference_truncated(j, i: BitVec(64), j4: j.toNat() < 4, i4: i.toNat() < 4):
+    ((j - i).band(3)).toNat() = (j.toNat() - i.toNat()) % 4 { bv_omega }

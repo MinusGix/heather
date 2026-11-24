@@ -1,0 +1,34 @@
+// `runtime fn`s over data: `import runtime_data;` is enough to write one
+// over a `Bytes(n)` span, a `laid record`, or an array field of one.
+//
+// `import runtime;` is enough for a `runtime fn` of words. A function of a
+// span or a laid record publishes theorems that cite the span and record
+// meanings (`rt_bytes`, `rt_held` and their loops) and the codecs'
+// accessors (`stored_accessor`, `stored_words`), and the generator finds
+// them by their qualified names in the importer's scope
+// (`runtime_held_ref`, `runtime_bytes_ref` in `runtime.hthr`). Those
+// modules cannot sit under `runtime`: `stored_accessor` and `stored_words`
+// are themselves written with `runtime fn`, so they import it. This module
+// sits above them all.
+//
+// Only what a function's source writes is exported: `runtime`'s words and
+// spans, the `laid` generator, and `stored_words`, whose `Vec` methods are
+// an array field's elements (`v.at(i)`, `v.put(i, x)`). A method is found
+// in the modules the importer reaches through exports, not in its whole
+// closure, so these three are exported; everything the generator cites is
+// reached by its qualified name, so the rest is imported plainly and keeps
+// its names out of the importer's scope.
+import stored;
+import part;
+import layout;
+import rt_held;
+import rt_held_fields;
+import rt_held_loop;
+import rt_held_counted;
+import stored_accessor;
+import bytes;
+import rt_bytes;
+import rt_bytes_loop;
+export import runtime;
+export import laid;
+export import stored_words;

@@ -777,6 +777,7 @@ mod count_holes_impl {
                 eqbind: _,
                 form: _,
                 generated: _,
+                test: _,
             } => {
                 expr(scrut, n);
                 if let Some(m) = motive {
@@ -883,7 +884,8 @@ const DISCHARGE_RUNS: u32 = 8;
 
 fn tactic_slot_score(e: &Expr) -> u32 {
     match &e.kind {
-        ExprKind::Var(v) if v == "omega" || v == "positivity" => OMEGA_ATOM_SLOTS,
+        // Its atom lists, and its proof lifted (`checking.rs`'s `elab_omega`).
+        ExprKind::Var(v) if v == "omega" || v == "positivity" => OMEGA_ATOM_SLOTS + 1,
         ExprKind::Var(v) if v == "bv_omega" => 1 + BV_OMEGA_ATOM_SLOTS,
         ExprKind::Var(v) if v == crate::measure::CLOSER || v == crate::tested::KNOWN => OMEGA_ATOM_SLOTS + 1 + BV_OMEGA_ATOM_SLOTS,
         _ => 0,

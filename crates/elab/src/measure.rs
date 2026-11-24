@@ -99,6 +99,10 @@ impl Obligations {
 /// (`Checking::elab_measure_closer`, issues/decreases-word-measures-by-hand.md).
 pub(crate) const CLOSER: &str = "__measure_closer";
 
+/// The closer at a leaf of the split it makes when the new measure is an
+/// `if` (issues/while-decrease-through-branches.md): the search alone.
+pub(crate) const CLOSER_LEAF: &str = "__measure_closer_leaf";
+
 const K: &str = "__dec_k";
 const IH: &str = "__dec_ih";
 const H: &str = "__dec_h";
@@ -930,6 +934,7 @@ pub(crate) fn lower(
             eqbind: None,
             motive: None,
             arms: Vec::new(),
+            test: None,
         },
         span,
     };
@@ -967,6 +972,7 @@ pub(crate) fn lower(
                     span: decl.body.span,
                 },
             ],
+            test: None,
         },
         span,
     };
@@ -1355,6 +1361,7 @@ pub(crate) fn lower_group(
             eqbind: None,
             motive: None,
             arms: Vec::new(),
+            test: None,
         },
         span,
     };
@@ -1407,6 +1414,7 @@ pub(crate) fn lower_group(
                     span: first.body.span,
                 },
             ],
+            test: None,
         },
         span,
     };
@@ -1920,9 +1928,10 @@ impl<'a> Rewrite<'a> {
         let (passed, spill) = args.split_at(positions.len());
         // e[ȳ]: the callee's measure with each of *its* parameters replaced by
         // the argument written at that position.
+        let typed = typed_arguments(&positions.iter().map(|&j| &tparams[j]).collect::<Vec<_>>(), passed);
         let map: Vec<(&str, &Expr)> = positions
             .iter()
-            .zip(passed)
+            .zip(&typed)
             .map(|(&j, a)| (tparams[j].name.as_str(), a))
             .collect();
         let to = &self.members[target];
@@ -2805,6 +2814,7 @@ impl<'a> Rewrite<'a> {
                 eqbind,
                 motive,
                 arms,
+                test,
             } => {
                 if !self.found_only
                     && !matches!(scrut.kind, ExprKind::Var(_))
@@ -2887,6 +2897,7 @@ impl<'a> Rewrite<'a> {
                     eqbind,
                     motive: motive.as_ref().map(|m| Box::new(self.expr(m))),
                     arms,
+                    test: test.clone(),
                 }
             }
             ExprKind::MatchCode {
@@ -3239,6 +3250,26 @@ pub(crate) fn pat_names(p: &Pat, out: &mut Vec<String>) {
     }
 }
 
+/// The arguments of a recursive call as the measure is stated at them: an
+/// `if` or `match` (a block, once the body is rewritten: its scrutinee is
+/// bound first) ascribed at its parameter's type, which the substituted
+/// measure would otherwise infer from an arm (`(if c { 0 } else { n - 1
+/// }).toNat()` read its `0` as a `Nat`, and `toNat` was then no method of
+/// it; issues/while-decrease-through-branches.md). The type is stated over
+/// the call's own arguments, as the parameters before it are passed.
+fn typed_arguments(params: &[&Param], args: &[Expr]) -> Vec<Expr> {
+    args.iter()
+        .enumerate()
+        .map(|(i, a)| match (&a.kind, params.get(i)) {
+            (ExprKind::Match { .. } | ExprKind::Block(_), Some(p)) => {
+                let ty = params[..i].iter().zip(args).fold(p.ty.clone(), |ty, (q, b)| subst_surface_ty(&ty, &q.name, b));
+                Expr { kind: ExprKind::Ascribe { expr: Box::new(a.clone()), ty: Box::new(ty) }, span: a.span }
+            }
+            _ => a.clone(),
+        })
+        .collect()
+}
+
 /// `e[ȳ/x̄]`: the measure with each parameter name replaced by an argument
 /// expression, stopping under a binder that shadows the name. Capture the
 /// other way — an argument mentioning a name the measure binds — is not
@@ -3342,6 +3373,7 @@ pub(crate) fn subst(e: &Expr, map: &[(&str, &Expr)], bound: &mut Vec<String>) ->
             eqbind,
             motive,
             arms,
+            test,
         } => ExprKind::Match {
             form: *form,
             generated: *generated,
@@ -3367,6 +3399,7 @@ pub(crate) fn subst(e: &Expr, map: &[(&str, &Expr)], bound: &mut Vec<String>) ->
                     }
                 })
                 .collect(),
+            test: test.clone(),
         },
         // `j` and blocks are not measure shapes, but the companions of
         // `docs/language/recursion/decreases-unfolding-design.md` §4 push substitutions through
@@ -4405,6 +4438,7 @@ impl Respell<'_> {
                     eqbind: None,
                     motive: Some(Box::new(lam(&[&b], ty_lit(motive_body, span), span))),
                     arms: arms_out,
+                    test: None,
                 },
                 span,
             };
@@ -4432,6 +4466,7 @@ impl Respell<'_> {
                 eqbind: None,
                 motive: Some(Box::new(lam(&[&s], ty_lit(goal, span), span))),
                 arms: proof_arms,
+                test: None,
             },
             span,
         };
@@ -4544,6 +4579,7 @@ impl Respell<'_> {
                 eqbind: None,
                 motive: Some(Box::new(motive)),
                 arms: out,
+                test: None,
             },
             span,
         };
@@ -4669,6 +4705,7 @@ impl Respell<'_> {
                     eqbind: None,
                     motive: Some(Box::new(lam(&[&z], ty_lit(motive_ty, span), span))),
                     arms: conv_arms,
+                    test: None,
                 },
                 span,
             };
@@ -4764,6 +4801,7 @@ impl Respell<'_> {
                 eqbind: None,
                 motive: Some(Box::new(motive)),
                 arms: out,
+                test: None,
             },
             span,
         };
@@ -4793,12 +4831,13 @@ impl Respell<'_> {
                 return Err("a recursive call inside another recursive call's arguments".into());
             }
         }
+        let typed = typed_arguments(&self.rw.params.iter().copied().collect::<Vec<_>>(), args);
         let map: Vec<(&str, &Expr)> = self
             .rw
             .params
             .iter()
             .map(|p| p.name.as_str())
-            .zip(args)
+            .zip(&typed)
             .collect();
         // `e[ȳ]` — built from the *unsubstituted* measure, then pushed through
         // the enclosing arms' patterns, so it reads as the rewritten body's
@@ -5161,6 +5200,7 @@ pub(crate) fn companions(
             eqbind: None,
             motive: None,
             arms: Vec::new(),
+            test: None,
         },
         span,
     };
@@ -5230,6 +5270,7 @@ pub(crate) fn companions(
                     span,
                 },
             ],
+            test: None,
         },
         span,
     };
@@ -5267,6 +5308,7 @@ pub(crate) fn companions(
                     span,
                 },
             ],
+            test: None,
         },
         span,
     };
@@ -5425,7 +5467,7 @@ pub(crate) fn step_equations(decl: &Decl, name: &str) -> Result<Vec<Lowered>, St
         Stmt::LetRecord { .. } => Err(()),
     }).collect::<Result<_, _>>().map_err(|_| "the body destructures a record before its test".to_string())?;
     let top = &top;
-    let ExprKind::Match { scrut, eqbind: Some(eq), motive: None, arms, .. } = &top.kind else {
+    let ExprKind::Match { scrut, eqbind: Some(eq), motive: None, arms, test, .. } = &top.kind else {
         return Err("the body is not a test with an equation (`if h: P`, `match h: b`)".into());
     };
     let arm = |ctor: &str| arms.iter().find(|a| a.ctor == ctor && !a.default && a.binders.is_empty());
@@ -5491,12 +5533,12 @@ pub(crate) fn step_equations(decl: &Decl, name: &str) -> Result<Vec<Lowered>, St
                         _ => None,
                     },
                     _ => None,
-                };
+                }.or_else(|| test.clone());
                 let name = fresh_hyp(evidence.as_deref().unwrap_or("h"));
                 let ty = if truth {
                     prop.clone()
                 } else {
-                    arrow(None, prop.clone(), Ty { kind: TyKind::Named { name: "False".into(), args: Vec::new() }, span }, span)
+                    arrow(None, prop.clone(), Ty { kind: TyKind::Named { name: "logic::False".into(), args: Vec::new() }, span }, span)
                 };
                 let lemma = if truth { "bool::decide_bit_of" } else { "bool::decide_bit_of_not" };
                 let head = Expr { kind: ExprKind::TyApp { head: Box::new(var(lemma, span)), args: vec![prop.clone()] }, span };

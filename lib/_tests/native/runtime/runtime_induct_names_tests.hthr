@@ -1,0 +1,103 @@
+// A `runtime fn`'s induction principle names its cases' tests as the
+// source does (issues/runtime-fn-induct-test-names.md): `if more: …` binds
+// `more` in an `induct` arm though the function's body never names it, and
+// a case λ applied by hand types its binders past the motive's β-redex.
+// Tests, not library.
+import logic;
+import bool;
+import omega;
+import bitvec_omega;
+import runtime_data;
+
+laid(endian := BigEndian) record T { keys: [u64; 4] }
+
+// The word map's probe (`word_map.hthr`'s `find_at`), answering 1 at a hit:
+// no branch names its tests' evidence.
+runtime fn T::scan(self m: T, k, j, left: u64) → u64 decreases left.toNat() {
+    if more: 0 < left {
+        if lt: j < 4 {
+            if empty: m.keys.at(j) = 0 { 0 }
+            else if hit: m.keys.at(j) = k { 1 }
+            else { m.scan(k, (j + 1).band(3), left - 1) }
+        } else { 0 }
+    } else { 0 }
+}
+
+theorem T::zero_not_one(h: BitVec::ofNat(0, n := 64) = BitVec::ofNat(1)): False { bv_omega }
+
+// A hit was within the budget: the arms cite `more` and `lt` by name.
+theorem T::scan_budget(m: T, k, j, left: u64): T::scan(m, k, j, left) = 1 → 0 < left {
+    induct T::scan(m, k, j, left) {
+        True::True::True => λ e => false_elim(T::zero_not_one(e)),
+        True::True::False::True => λ _ => more,
+        True::True::False::False => λ _ => more,
+        True::False => λ e => false_elim(T::zero_not_one(e)),
+        False => λ e => false_elim(T::zero_not_one(e)),
+    }
+}
+
+// A hit was at a slot whose key is `k`, which is not empty: `empty` and
+// `hit` are the arm's.
+theorem T::scan_hit(m: T, k, j, left: u64, nz: ¬(k = 0)): T::scan(m, k, j, left) = 1 → j < 4 {
+    induct T::scan(m, k, j, left) {
+        True::True::True => λ e => false_elim(T::zero_not_one(e)),
+        True::True::False::True => {
+            let z: (¬(m.keys.at(j) = 0)) = empty;
+            let w: (m.keys.at(j) = k) = hit;
+            λ _ => lt
+        },
+        True::True::False::False => λ e => lt,
+        True::False => λ e => false_elim(T::zero_not_one(e)),
+        False => λ e => false_elim(T::zero_not_one(e)),
+    }
+}
+
+// The principle applied by hand: the motive's body is a Π, and a case's
+// binders past `motive(j, left)` take its domains.
+theorem T::scan_by_hand(m: T, k, j, left: u64): T::scan(m, k, j, left) = 1 → 0 < left {
+    T::scan::induct(m, k, λ (j: u64) (left: u64) => T::scan(m, k, j, left) = 1 → 0 < left,
+        λ j left more lt empty eq e => false_elim(T::zero_not_one(trans(sym(eq), e))),
+        λ j left more lt empty hit eq e => more,
+        λ j left more lt empty hit eq ih e => more,
+        λ j left more lt eq e => false_elim(T::zero_not_one(trans(sym(eq), e))),
+        λ j left more eq e => false_elim(T::zero_not_one(trans(sym(eq), e))),
+        j, left)
+}
+
+// A case's binder past the motive read as a record: its type is the
+// motive's domain, not a guess.
+theorem T::scan_by_hand_record(m: T, k, j, left: u64): And<T::scan(m, k, j, left) = 1, True> → 0 < left {
+    T::scan::induct(m, k, λ (j: u64) (left: u64) => And<T::scan(m, k, j, left) = 1, True> → 0 < left,
+        λ j left more lt empty eq p => false_elim(T::zero_not_one(trans(sym(eq), p.left))),
+        λ j left more lt empty hit eq p => more,
+        λ j left more lt empty hit eq ih p => more,
+        λ j left more lt eq p => false_elim(T::zero_not_one(trans(sym(eq), p.left))),
+        λ j left more eq p => false_elim(T::zero_not_one(trans(sym(eq), p.left))),
+        j, left)
+}
+
+// The motive's body a defined proposition whose body is the Π.
+fn T::Hits(m: T, k, j, left: u64) → Type { And<T::scan(m, k, j, left) = 1, True> → 0 < left }
+
+theorem T::scan_by_hand_defined(m: T, k, j, left: u64): T::Hits(m, k, j, left) {
+    T::scan::induct(m, k, λ (j: u64) (left: u64) => T::Hits(m, k, j, left),
+        λ j left more lt empty eq p => false_elim(T::zero_not_one(trans(sym(eq), p.left))),
+        λ j left more lt empty hit eq p => more,
+        λ j left more lt empty hit eq ih p => more,
+        λ j left more lt eq p => false_elim(T::zero_not_one(trans(sym(eq), p.left))),
+        λ j left more eq p => false_elim(T::zero_not_one(trans(sym(eq), p.left))),
+        j, left)
+}
+
+// Negative control: a test is in scope only on its own path; the case
+// past the budget has no `lt`.
+// expect-error: unbound name `lt`
+theorem T::scan_no_lt(m: T, k, j, left: u64): T::scan(m, k, j, left) = 1 → 0 < left {
+    induct T::scan(m, k, j, left) {
+        True::True::True => λ e => false_elim(T::zero_not_one(e)),
+        True::True::False::True => λ _ => more,
+        True::True::False::False => λ _ => more,
+        True::False => λ e => false_elim(T::zero_not_one(e)),
+        False => λ e => false_elim(lt),
+    }
+}

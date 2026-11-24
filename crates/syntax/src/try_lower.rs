@@ -349,19 +349,19 @@ impl Lower {
                 let cont = Expr { kind:ExprKind::Block(Box::new(Block { stmts:vec![statement],result:Box::new(rest),ons:vec![],span })),span };
                 self.cps(input,&s,cont)
             }
-            ExprKind::Match { form,generated,scrut,eqbind,motive,arms } if !arms_bind => {
+            ExprKind::Match { form,generated,scrut,eqbind,motive,arms, test } if !arms_bind => {
                 let (s,v) = self.identity(span);
-                let matched = Expr { kind:ExprKind::Match { form,generated,scrut:Box::new(v),eqbind,motive,arms },span };
+                let matched = Expr { kind:ExprKind::Match { form,generated,scrut:Box::new(v),eqbind,motive,arms, test },span };
                 self.cps(*scrut,&s,plug(k,slot,&matched))
             }
-            ExprKind::Match { form,generated,scrut,eqbind,motive,mut arms } => {
+            ExprKind::Match { form,generated,scrut,eqbind,motive,mut arms, test } => {
                 let identity = matches!(&k.kind,ExprKind::Var(n) if n == slot);
                 if !identity && motive.is_some() { return fail(span,&format!("{} in a non-tail match with a written motive is not supported; move the match to a helper returning the carrier",self.p.what)); }
                 for a in &mut arms {
                     a.body = self.cps(a.body.clone(),slot,k.clone())?;
                 }
                 let (s,v) = self.identity(span);
-                let cont = Expr { kind:ExprKind::Match { form,generated,scrut:Box::new(v),eqbind,motive,arms },span };
+                let cont = Expr { kind:ExprKind::Match { form,generated,scrut:Box::new(v),eqbind,motive,arms, test },span };
                 self.cps(*scrut,&s,cont)
             }
             ExprKind::App { .. } | ExprKind::Dot { .. } | ExprKind::Index { .. }

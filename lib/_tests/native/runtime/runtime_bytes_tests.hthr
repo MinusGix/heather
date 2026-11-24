@@ -120,3 +120,63 @@ runtime fn Bytes::zero_upto({n: u64}, mut self s: Bytes(n), stop: u64, inside: �
     }
     n
 }
+
+// ---------------------------------------------------------------------------
+// Functions that only read the record (docs/native/span-record-design.md,
+// "Functions that only read"): each is compiled as a writer that stores
+// nothing, and `f::runs_bytes` states its word beside the record as it was
+// (`HWorld::unchanged`), so the code leaves the bytes as they were.
+
+runtime fn Bytes::first_two({n: u64}, self s: Bytes(n), inside: ∥1 < s.len()∥ := bv_omega) → u64 { ↑s[0] + ↑s[1] }
+
+theorem first_two_bytes(): Bytes::first_two::bytes([3, 4, 5], 3) = Mutated([3, 4, 5], 7) { refl }
+
+theorem first_two_over({n: u64}, s: Bytes(n), inside: ∥1 < s.len()∥):
+    Over<u64>(n, HWorld::unchanged(s, Bytes::first_two(s, inside := inside)), Bytes::first_two::bytes(s.bytes, n)) {
+    Bytes::first_two::runs_bytes(n, s, inside, [])
+}
+
+// A `while` whose test reads the span: the loop is lifted, a loop that
+// only reads, and the function calls it.
+runtime fn Bytes::find_word({n: u64}, self s: Bytes(n), b: u64) → u64 {
+    let mut i: u64 = 0;
+    while i < s.len() && s[i].zero_extend(56) ≠ b decreases (n - i).toNat() { i := i + 1; }
+    i
+}
+
+theorem find_word_bytes(): Bytes::find_word::bytes([3, 4, 5], 3, 5) = Mutated([3, 4, 5], 2) ∧
+    Bytes::find_word::bytes([3, 4, 5], 3, 9) = Mutated([3, 4, 5], 3) ∧ Bytes::find_word::bytes([], 0, 9) = Mutated([], 0) {
+    ⟨refl, ⟨refl, refl⟩⟩
+}
+
+// A reader written as its own recursion.
+runtime fn Bytes::count_from({n: u64}, self s: Bytes(n), key, i, c: u64) → u64 decreases (n - i).toNat() {
+    if h: i < s.len() { @count_from(n, s, key, i + 1, if s[i].zero_extend(56) = key { c + 1 } else { c }) } else { c }
+}
+
+theorem count_from_bytes(): Bytes::count_from::bytes([7, 1, 7], 3, 7, 0, 0) = Mutated([7, 1, 7], 2) { refl }
+
+// At every record, and so at an open one: the function's word is the
+// code's, and the bytes are as they were.
+theorem count_from_over({n: u64}, s: Bytes(n), key, i, c: u64):
+    Bytes::count_from(s, key, i, c) = (Bytes::count_from::bytes(s.bytes, n, key, i, c)).value ∧
+    s.bytes = (Bytes::count_from::bytes(s.bytes, n, key, i, c)).after {
+    let ran = Bytes::count_from::runs_bytes(n, s, key, i, c, []);
+    ⟨ran.value, ran.after⟩
+}
+
+// A reader calling a reader twice, the second at a computed operand.
+runtime fn Bytes::count_two({n: u64}, self s: Bytes(n), a, b: u64) → u64 { s.count_from(a, 0, 0) + s.count_from(b + 1, 0, 0) }
+
+theorem count_two_bytes(): Bytes::count_two::bytes([7, 1, 7], 3, 7, 0) = Mutated([7, 1, 7], 3) { refl }
+
+theorem count_two_over({n: u64}, s: Bytes(n), a, b: u64):
+    Bytes::count_two(s, a, b) = (Bytes::count_two::bytes(s.bytes, n, a, b)).value {
+    Bytes::count_two::runs_bytes(n, s, a, b, []).value
+}
+
+// A reader whose measure is not a word's `toNat`.
+// expect-error: must `decreases` a 64-bit word's `toNat`
+runtime fn Bytes::count_slow({n: u64}, self s: Bytes(n), i, c: u64) → u64 decreases (n - i).toNat() + 1 {
+    if h: i < s.len() { @count_slow(n, s, i + 1, c + 1) } else { c }
+}

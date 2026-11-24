@@ -184,7 +184,20 @@ at a goal `G`, in a block's result position.
 Arms are named by the case's path: `True`, `False`, `Cons`, and `Cons::True`
 for a constructor test followed by a `Bool` one. In an arm the tests on the
 way are in scope under the names the function gave them (`if less: …` binds
-`less`), so an arm reads like the branch it is about.
+`less`), so an arm reads like the branch it is about. That holds where no
+branch cites its test: the `if h:` lowering binds the evidence only in a
+branch that names it, so the `match` it lowers to carries the name as data
+(`ExprKind::Match::test`), which the equations' reading takes, every pass
+that rebuilds the node carries, and a module image stores; nothing that
+computes the function's term reads it (issues/runtime-fn-induct-test-names.md;
+a `runtime fn` probe such as `WordMap::find_at`, whose branches cite none of
+their tests, was the case).
+
+**What the equations cite** they spell by qualified name (`bool::Bool::
+convoy_true`, `bool::decide_bit_of`, `logic::False`), reached through the
+module's import closure, so a module needs no import for them; one that
+reaches neither module is told which to import, under every designed name
+(issues/branch-equations-silent-without-logic.md).
 
 **An arm left out** is the default leaf: `known` (a hypothesis, a side of a
 conjunction, then `omega` and `bv_omega`, `docs/language/when-design.md` §5)
@@ -265,6 +278,16 @@ So the two kinds are built at different times:
   function is the one written (a `decreases` function's is its lowering,
   which is why those are built with the function). Later declarations, and
   importers, find it by its designated name.
+
+**A measured function's principle is a `decreases` theorem**, lowered by
+the same route as the function (`elab_measure_decl_as`), so it pays that
+route's costs again: a `runtime fn` probe over a laid record has its index
+proofs lifted (`measure::lift_found`) for the function and again for the
+principle, whose IH arguments inline the function's updates, and the
+second lifting re-elaborates its telescope per query. On
+`lib/native/runtime/word_map.hthr` that one stage was the largest cost of a
+cold check (issues/principle-found-proof-lifting-cost.md has the stage
+table).
 
 Two modules that both import `f` may each build `f::induct`, and a third
 that imports both then sees two declarations of `f#induct`. They are built

@@ -272,6 +272,10 @@ impl Bindings<'_> {
                         span: no_arm.span,
                     },
                 ],
+                // A match on `Dne::em`'s `Or`, whose arms bind the
+                // hypotheses in their own patterns: not the `if h:` match
+                // that carries a test's name.
+                test: None,
             },
             span,
         };

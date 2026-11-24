@@ -251,6 +251,10 @@ struct Lift<'a> {
     free: bool,
     /// Each combinator loop's decrease: its span and the measure written.
     decreases: Vec<(Span, String)>,
+    /// The span of a `mut self` method that the last loop lifted carries
+    /// though it only reads it ([`Lift::adopt_span`]): no `\0proj` reads it
+    /// back, so [`Lift::block_after`] rebinds it to the loop's `after`.
+    adopted: Option<String>,
 }
 
 /// An invariant fact after its loop: `fact` over the loop's state, the
@@ -450,6 +454,42 @@ impl<'a> Lift<'a> {
         (vars.contains(&r.name.as_str()) && (is_span(&r.ty) || is_bytes(&r.ty))).then(|| r.clone())
     }
 
+    /// A `runtime fn`'s loop that reads the span its `mut self` receiver
+    /// is but stores nothing into it: the parser has not threaded the span,
+    /// so it is a capture. It is carried as the loop's state all the same,
+    /// unchanged, so the loop is written in place over `Mutated<span, S>`
+    /// (`Lift::lift_steps_over`) and its body runs under its test, as a
+    /// loop that stores does; the capture is moved to the state.
+    fn adopt_span<'v>(&mut self, vars: &mut Vec<&'v str>, state_tys: &mut Vec<Ty>, captures: &mut Vec<(String, Ty)>)
+    where
+        'a: 'v,
+    {
+        let decl: &'a Decl = self.decl;
+        let Some(r) = decl.params.iter().find(|p| p.is_self) else { return };
+        if self.free || vars.contains(&r.name.as_str()) || !self.solver_params().is_empty() {
+            return;
+        }
+        let Some(at) = captures.iter().position(|(n, _)| *n == r.name) else { return };
+        if !matches!(&decl.result.kind, TyKind::Named { name, .. } if name == heather_syntax::MUTATED_RECORD) || !(is_span(&r.ty) || is_bytes(&r.ty)) {
+            return;
+        }
+        // Only where the rest is words, as the loop written in place needs:
+        // otherwise the loop is lifted as before, the span a capture.
+        let mut kept = captures.clone();
+        let (_, t) = kept.remove(at);
+        let mut tys = state_tys.clone();
+        tys.push(t);
+        let mut implied = kept.clone();
+        self.implicit_captures(&mut implied, tys.iter());
+        if !(state_tys.iter().all(is_u64) && implied.iter().all(|(_, t)| is_u64(t))) {
+            return;
+        }
+        *captures = kept;
+        *state_tys = tys;
+        vars.push(r.name.as_str());
+        self.adopted = Some(r.name.clone());
+    }
+
     /// The name of a loop lifted as a method of the receiver's type,
     /// `T::f_loop`, or `T::f_loop2`, … where `f` has several.
     fn method_name(&self) -> String {
@@ -514,6 +554,16 @@ impl<'a> Lift<'a> {
                     };
                     scope.push(Local { name: name.clone(), written: ty.clone(), value: Some(expr.clone()) });
                     stmts.push(Stmt::Let { name: name.clone(), ty, expr, span, opaque });
+                    // A span the loop carried though it only read it: the
+                    // code after it reads the span the loop left.
+                    if let Some(r) = self.adopted.take() {
+                        let after = Expr {
+                            kind: ExprKind::Dot { recv: Box::new(var(&name, span)), name: "after".into(), tyargs: vec![], args: None, named: vec![] },
+                            span,
+                        };
+                        scope.push(Local { name: r.clone(), written: None, value: Some(after.clone()) });
+                        stmts.push(Stmt::Let { name: r, ty: None, expr: after, span, opaque: false });
+                    }
                     // The loop's invariant, at its result: read by the code
                     // after it as the facts in scope (`s[j] := key` after a
                     // loop that keeps `j <= i`).
@@ -579,6 +629,7 @@ impl<'a> Lift<'a> {
                             Arm { ctor: "Return".into(), default: false, binders: vec![Pat::Var { name: "#r".into(), span }], body: var("#r", span), span },
                             Arm { ctor: "_".into(), default: true, binders: vec![], body: rest, span },
                         ],
+                        test: None,
                     },
                     span,
                 }
@@ -630,7 +681,7 @@ impl<'a> Lift<'a> {
                 let mut inner = scope.clone();
                 Ok(Expr { kind: ExprKind::Block(Box::new(self.block(*b, &mut inner)?)), span })
             }
-            ExprKind::Match { form, generated, scrut, eqbind, motive, arms } => {
+            ExprKind::Match { form, generated, scrut, eqbind, motive, arms, test } => {
                 let mut out: Vec<Arm> = Vec::with_capacity(arms.len());
                 for mut arm in arms {
                     // A test's own equation, which a lifted loop's `if` binds
@@ -653,7 +704,7 @@ impl<'a> Lift<'a> {
                     arm.body = body?;
                     out.push(arm);
                 }
-                Ok(Expr { kind: ExprKind::Match { form, generated, scrut, eqbind, motive, arms: out }, span })
+                Ok(Expr { kind: ExprKind::Match { form, generated, scrut, eqbind, motive, arms: out, test: test.clone() }, span })
             }
             _ => err("a `for` here is not supported yet: write it as a statement of the function's body", span),
         }
@@ -886,6 +937,10 @@ impl Lift<'_> {
                 );
             };
             captures.push((b.name.clone(), t));
+        }
+        let mut vars = vars;
+        if invariant.is_none() && measured_word(measure).is_some() {
+            self.adopt_span(&mut vars, &mut state_tys, &mut captures);
         }
         self.implicit_captures(&mut captures, state_tys.iter());
         // The invariant's facts: parameters `__invN_k: ∥P_k∥` after the
@@ -1409,15 +1464,42 @@ impl Lift<'_> {
             None => body.stmts.clone(),
             Some(_) => measure::rebind_marked(&body.stmts, body.result.span, false).map_err(|m| crate::ElabError::Elab { msg: m, span })?,
         };
+        // A pass whose span goes through a statement `if`/`match` that
+        // joins: the rest of the pass, down to its next state, is written
+        // into each arm, so each ends in its own state (`tail_into_join`).
+        // `split` is the pass up to the join, and the join ending in the
+        // next state.
+        let split: Option<(Vec<Stmt>, Expr)> = receiver
+            .as_ref()
+            .and_then(|_| tail_into_join(&stmts, &state_of(next.clone(), body.result.span)));
         // The test and next state, reading the words off `w` (the state, or
         // `__loop_v` under `Loop::after`).
         let turn_args = |w: &str, t: &str| -> Vec<Expr> {
-            let tested = block(reads_words(w, cond.span), joined.clone(), cond.span);
+            // Over a span with several words, the test reads the state's
+            // fields where it names a word: bound by `let`s of its own,
+            // its `i` would be another local than the body's, and the
+            // body's searches (`s[i]`'s `i < s.len()`) could not read the
+            // test's equation.
+            let tested = if receiver.is_some() && !single {
+                let fields: Vec<(String, Expr)> = vars.iter().map(|v| (v.clone(), field_of(w, v, cond.span))).collect();
+                let map: Vec<(&str, &Expr)> = fields.iter().map(|(n, e)| (n.as_str(), e)).collect();
+                measure::subst(&joined, &map, &mut Vec::new())
+            } else {
+                block(reads_words(w, cond.span), joined.clone(), cond.span)
+            };
             let mut round = body.clone();
-            round.stmts = stmts.clone();
             let end = round.result.span;
+            match &split {
+                None => {
+                    round.stmts = stmts.clone();
+                    *round.result = state_of(next.clone(), end);
+                }
+                Some((before, joined)) => {
+                    round.stmts = before.clone();
+                    *round.result = joined.clone();
+                }
+            }
             round.stmts.splice(0..0, reads_words(w, body.span));
-            *round.result = state_of(next.clone(), end);
             vec![tested, lam("__loop_h", None, Expr { kind: ExprKind::Block(Box::new(round)), span: body.span }, body.span), var(t, span)]
         };
         let turn_body = |t: &str| -> Expr {
@@ -1434,7 +1516,19 @@ impl Lift<'_> {
                         },
                         span,
                     };
-                    call(var("loop::Loop::after", span), vec![var(t, span), k], span)
+                    // Its type arguments written: `T`, the pass's
+                    // `Step<S>`, is not determined by the state, and a
+                    // body's method call (`s[i].zero_extend(56)`) is not
+                    // resolved under an open result.
+                    let rty = receiver.as_ref().expect("a receiver").1.clone();
+                    let after = Expr {
+                        kind: ExprKind::TyApp {
+                            head: Box::new(var("loop::Loop::after", span)),
+                            args: vec![rty, words_ty.clone(), named_ty("loop::Step", vec![state_ty.clone()], span)],
+                        },
+                        span,
+                    };
+                    call(after, vec![var(t, span), k], span)
                 }
             }
         };
@@ -1477,7 +1571,16 @@ impl Lift<'_> {
             )
         };
         let at = measure.span;
-        let next_of: Vec<(String, Expr)> = vars.iter().cloned().zip(next.iter().cloned()).collect();
+        // Through a join, each word of the next state is read off the join
+        // itself, so the decrease names the arms' states, which the closer
+        // splits.
+        let next_of: Vec<(String, Expr)> = match &split {
+            None => vars.iter().cloned().zip(next.iter().cloned()).collect(),
+            Some((_, joined)) => {
+                let value = field_of_expr(joined.clone(), "value", at);
+                vars.iter().map(|v| (v.clone(), if single { value.clone() } else { field_of_expr(value.clone(), v, at) })).collect()
+            }
+        };
         let next_map: Vec<(&str, &Expr)> = next_of.iter().map(|(n, e)| (n.as_str(), e)).collect();
         let now_of: Vec<(String, Expr)> = vars
             .iter()
@@ -1507,14 +1610,15 @@ impl Lift<'_> {
         };
         self.decreases.push((at, crate::traits::render_expr(measure)));
         let mut again = body.clone();
-        again.stmts = stmts.clone();
+        again.stmts = match &split { None => stmts.clone(), Some((before, _)) => before.clone() };
         let end = again.result.span;
+        let next_state = match &split { None => state_of(next.clone(), end), Some((_, joined)) => joined.clone() };
         let lower = Expr {
             kind: ExprKind::App {
                 head: Box::new(var("loop::Lower", end)),
                 args: vec![],
                 named: vec![
-                    heather_syntax::NamedArg { name: "next".into(), name_span: end, expr: state_of(next.clone(), end), span: end },
+                    heather_syntax::NamedArg { name: "next".into(), name_span: end, expr: next_state, span: end },
                     heather_syntax::NamedArg { name: "less".into(), name_span: end, expr: found(&lt, at), span: end },
                 ],
                 explicit: false,
@@ -1824,6 +1928,7 @@ impl Lift<'_> {
                         eqbind: None,
                         motive: None,
                         arms,
+                        test: None,
                     },
                     span,
                 };
@@ -1886,6 +1991,7 @@ impl Lift<'_> {
                         Arm { ctor: "True".into(), default: false, binders: vec![], body: out, span },
                         Arm { ctor: "False".into(), default: false, binders: vec![], body: otherwise(), span },
                     ],
+                    test: None,
                 },
                 span,
             };
@@ -1967,6 +2073,105 @@ fn is_word_ty(t: &Ty) -> bool {
             _ => false,
         },
         _ => false,
+    }
+}
+
+fn field_of_expr(recv: Expr, name: &str, at: Span) -> Expr {
+    Expr { kind: ExprKind::Dot { recv: Box::new(recv), name: name.to_string(), tyargs: vec![], args: None, named: vec![] }, span: at }
+}
+
+/// Whether `e` is a statement form's join (`crates/syntax/src/imperative.rs`,
+/// `join`): a `match` whose arms are blocks, each ending in the state it
+/// leaves, a local or `Mutated(v₁, Mutated(v₂, …))` of locals.
+fn is_join(e: &Expr) -> bool {
+    let ExprKind::Match { arms, .. } = &e.kind else { return false };
+    !arms.is_empty() && arms.iter().all(|a| matches!(&a.body.kind, ExprKind::Block(b) if is_state(&b.result)))
+}
+
+fn is_state(x: &Expr) -> bool {
+    match &x.kind {
+        ExprKind::Var(_) => true,
+        ExprKind::App { head, args, named, .. } if named.is_empty() && matches!(&head.kind, ExprKind::Var(h) if h == heather_syntax::MUTATED_RECORD) => {
+            args.len() == 2 && args.iter().all(is_state)
+        }
+        _ => false,
+    }
+}
+
+/// A loop's pass `stmts; result` that goes through a statement `if`/`match`
+/// that joins again: the statements before the first such join, and the
+/// join with the rest of the pass (the statements after it
+/// and `result`, the next state) written into each arm, after the arm's
+/// own `let` of the join's name. A join inside an arm is written the same
+/// way. The span reflector reads a branch whose arms each end in their own
+/// result; one that joins again it cannot name (`rt_file_reflect.hthr`),
+/// whether the span or only words go through it. The rest is copied once
+/// per arm; in a pass it is the code down to the next state.
+fn tail_into_join(stmts: &[Stmt], result: &Expr) -> Option<(Vec<Stmt>, Expr)> {
+    let j = stmts.iter().position(|s| matches!(s, Stmt::Let { expr, .. } if is_join(expr)))?;
+    let Stmt::Let { name, ty, expr, span, opaque } = &stmts[j] else { return None };
+    let ExprKind::Match { form, generated, scrut, eqbind, motive, arms, test } = &expr.kind else { return None };
+    let tail = &stmts[j + 1..];
+    let arms: Vec<Arm> = arms
+        .iter()
+        .map(|arm| {
+            let ExprKind::Block(b) = &arm.body.kind else { unreachable!("a join's arm is a block (`is_join`)") };
+            let mut inner: Vec<Stmt> = b.stmts.clone();
+            // The arm's state is a literal `Mutated(v₁, …)`: each local
+            // the join's reads take out of it (`#stage.after`,
+            // `#stage.value.after`, …) is read off it here, so the span
+            // after the arm is the arm's own, not a field of a record.
+            let read = |e: &Expr| read_off(e, name, &b.result);
+            let reads_all = tail.iter().take_while(|t| matches!(t, Stmt::Let { expr, .. } if read(expr).is_some())).count();
+            if reads_all == 0 || !name.starts_with('#') {
+                inner.push(Stmt::Let { name: name.clone(), ty: ty.clone(), expr: (*b.result).clone(), span: *span, opaque: *opaque });
+                inner.extend(tail.iter().cloned());
+            } else {
+                for t in &tail[..reads_all] {
+                    let Stmt::Let { name: v, ty, expr, span, opaque } = t else { unreachable!("a read (`take_while`)") };
+                    inner.push(Stmt::Let { name: v.clone(), ty: ty.clone(), expr: read(expr).expect("a read"), span: *span, opaque: *opaque });
+                }
+                inner.extend(tail[reads_all..].iter().cloned());
+            }
+            let (stmts, result) = tail_into_join(&inner, result).unwrap_or((inner, result.clone()));
+            let block = Block { stmts, result: Box::new(result), ons: b.ons.clone(), span: b.span };
+            Arm { body: Expr { kind: ExprKind::Block(Box::new(block)), span: arm.body.span }, ..arm.clone() }
+        })
+        .collect();
+    let joined = Expr {
+        kind: ExprKind::Match {
+            form: form.clone(),
+            generated: *generated,
+            scrut: scrut.clone(),
+            eqbind: eqbind.clone(),
+            motive: motive.clone(),
+            arms,
+            test: test.clone(),
+        },
+        span: expr.span,
+    };
+    Some((stmts[..j].to_vec(), joined))
+}
+
+/// `e`, a read of the state named `name` (`name`, `name.after`,
+/// `name.value.after`, …), taken out of the literal state `state` it is
+/// bound to: `None` where `e` is not such a read or `state` is not literal
+/// down to it.
+fn read_off(e: &Expr, name: &str, state: &Expr) -> Option<Expr> {
+    match &e.kind {
+        ExprKind::Var(n) if n == name => Some(state.clone()),
+        ExprKind::Dot { recv, name: field, args: None, .. } if field == "after" || field == "value" => {
+            let whole = read_off(recv, name, state)?;
+            match &whole.kind {
+                ExprKind::App { head, args, named, .. }
+                    if named.is_empty() && args.len() == 2 && matches!(&head.kind, ExprKind::Var(h) if h == heather_syntax::MUTATED_RECORD) =>
+                {
+                    Some(args[if field == "after" { 0 } else { 1 }].clone())
+                }
+                _ => None,
+            }
+        }
+        _ => None,
     }
 }
 
@@ -2116,6 +2321,10 @@ impl Lift<'_> {
                 );
             };
             captures.push((b.name.clone(), t));
+        }
+        let mut vars = vars;
+        if free.is_empty() && is_u64(&word) {
+            self.adopt_span(&mut vars, &mut state_tys, &mut captures);
         }
         self.implicit_captures(&mut captures, state_tys.iter());
         // In a `runtime fn`, a count over words whose state and captures
@@ -2309,6 +2518,7 @@ impl Lift<'_> {
                     Arm { ctor: "True".into(), default: false, binders: vec![], body: Expr { kind: ExprKind::Block(Box::new(again)), span: body.span }, span },
                     Arm { ctor: "False".into(), default: false, binders: vec![], body: done, span },
                 ],
+                test: None,
             },
             span,
         };
@@ -2521,9 +2731,9 @@ fn leaves(e: Expr, f: &dyn Fn(&str, Vec<Expr>, Span) -> Expr) -> Expr {
             *b.result = leaves(r, f);
             Expr { kind: ExprKind::Block(b), span }
         }
-        ExprKind::Match { form, generated, scrut, eqbind, motive, arms } => {
+        ExprKind::Match { form, generated, scrut, eqbind, motive, arms, test } => {
             let arms = arms.into_iter().map(|mut a| { a.body = leaves(a.body, f); a }).collect();
-            Expr { kind: ExprKind::Match { form, generated, scrut, eqbind, motive, arms }, span }
+            Expr { kind: ExprKind::Match { form, generated, scrut, eqbind, motive, arms, test: test.clone() }, span }
         }
         kind => Expr { kind, span },
     }
@@ -2545,6 +2755,7 @@ pub(crate) fn lower(decl: &Decl, tys: &dyn BinderTys, ranges: Ranges, free: bool
     // equation is the measure lowering's own `f_unfold`, not §7.1's.
     let measured = decl.decreases.is_some();
     let mut lift = Lift {
+        adopted: None,
         decl,
         tys,
         ranges,

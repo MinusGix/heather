@@ -245,6 +245,68 @@ theorem BitVec::udiv_zero(n: Nat, a: BitVec(n)): a.udiv(BitVec::zero()) = BitVec
         trans(BitVec::snoc_false_toNat(n, BitVec::zero()), BitVec::zero_toNat(n)), n, a)
 }
 
+// ---------------------------------------------------------------------------
+// The laws as `bv_omega` states them beside a quotient or a remainder it
+// keeps as an atom (docs/tactics/bv-omega-design.md §3), each over the
+// words' values. A divisor that may be zero gives its bound as a
+// disjunction, which `omega` splits only when it needs to; a divisor whose
+// value `c` is known (`ofNat` of a literal within the width) gives it
+// plainly, through `value: d.toNat() = c`.
+
+// The remainder is at most the dividend, whatever the divisor.
+theorem BitVec::toNat_urem_le(n: Nat, a, d: BitVec(n)): a.urem(d).toNat() <= a.toNat() {
+    DivMod::rem_le(a.toNat(), d.toNat(), a.udiv(d).toNat(), a.urem(d).toNat(), BitVec::udivrem_spec(n, a, d))
+}
+
+// The remainder is below the divisor, unless the divisor is zero.
+theorem BitVec::toNat_urem_lt_or(n: Nat, a, d: BitVec(n)): d.toNat() <= 0 ∨ a.urem(d).toNat() < d.toNat() {
+    BitVec::udivrem_spec(n, a, d).right
+}
+
+// The quotient is at most the dividend, unless the divisor is zero: by
+// zero it is all ones.
+theorem BitVec::toNat_udiv_le_or(n: Nat, a, d: BitVec(n)): d.toNat() <= 0 ∨ a.udiv(d).toNat() <= a.toNat() {
+    match Nat::lt_or_ge(0, d.toNat()) {
+        Inl(positive) => Inr(DivMod::quot_le(a.toNat(), d.toNat(), a.udiv(d).toNat(), a.urem(d).toNat(),
+            BitVec::udivrem_spec(n, a, d), positive)),
+        Inr(zero) => Inl(zero),
+    }
+}
+
+theorem BitVec::toNat_urem_lt_value(n: Nat, a, d: BitVec(n), c: Nat, value: d.toNat() = c, positive: 0 < c):
+    a.urem(d).toNat() < c
+{
+    let below: (a.urem(d).toNat() < d.toNat()) = DivMod::rem_lt(a.toNat(), d.toNat(), a.udiv(d).toNat(), a.urem(d).toNat(),
+        BitVec::udivrem_spec(n, a, d), rewrite(value, positive));
+    rewrite(sym(value), below)
+}
+
+// The quotient as the two bounds a linear search reads, as for `x >> k`
+// (`bitvec_shift_nat`'s `toNat_shift_right_le`).
+theorem BitVec::toNat_udiv_mul_le_value(n: Nat, a, d: BitVec(n), c: Nat, value: d.toNat() = c):
+    a.udiv(d).toNat() * c <= a.toNat()
+{
+    rewrite(sym(value), rewrite(sym(BitVec::udivrem_spec(n, a, d).left),
+        Nat::le_add_l(a.udiv(d).toNat() * d.toNat(), a.urem(d).toNat())))
+}
+
+theorem BitVec::toNat_udiv_lt_value(n: Nat, a, d: BitVec(n), c: Nat, value: d.toNat() = c, positive: 0 < c):
+    a.toNat() < a.udiv(d).toNat() * c + c
+{
+    let q = a.udiv(d).toNat();
+    let r = a.urem(d).toNat();
+    let sp = BitVec::udivrem_spec(n, a, d);
+    let below: (r < d.toNat()) = DivMod::rem_lt(a.toNat(), d.toNat(), q, r, sp, rewrite(value, positive));
+    rewrite(sym(value), j(sp.left, λ y _ => y + 1 <= q * d.toNat() + d.toNat(), (q * d.toNat()).add_le_mono_l(r + 1, d.toNat(), below)))
+}
+
+// `a = (a / d)·c + a % d`, the Euclidean link over a known divisor.
+theorem BitVec::udiv_urem_value(n: Nat, a, d: BitVec(n), c: Nat, value: d.toNat() = c):
+    a.toNat() = a.udiv(d).toNat() * c + a.urem(d).toNat()
+{
+    rewrite(sym(value), BitVec::udiv_urem_toNat(n, a, d))
+}
+
 // `a / b` and `a % b` at an unsigned word; at a signed one they are
 // `SInt::div`'s truncating pair (lib/std/bitvec/sint.hthr).
 designation / at BitVec(n) := BitVec::udiv

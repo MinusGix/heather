@@ -1318,6 +1318,16 @@ pub enum ExprKind {
         /// bespoke `as z -> T`, which overloaded `->`.
         motive: Option<Box<Expr>>,
         arms: Vec<Arm>,
+        /// The name an `if h: P` gives its test, as the source wrote it:
+        /// `Some("h")` on the match `if h:` lowers to, `None` on every
+        /// other. The lowering binds `h` only in a branch that names it, so
+        /// this is where a body that never cites its tests keeps their
+        /// names; the branch equations, `f::step` and `f::induct` read their
+        /// hypotheses' names from it (issues/runtime-fn-induct-test-names.md).
+        /// Read by those generators only: nothing that computes the
+        /// function's term consults it, and a pass that rebuilds the node
+        /// carries it.
+        test: Option<String>,
     },
     /// `match code e as T { zero => …, succ(t) => …, _ => … }` — intensional
     /// analysis of code by the kernel's code recursor

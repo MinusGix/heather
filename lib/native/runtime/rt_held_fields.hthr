@@ -240,6 +240,34 @@ theorem HWorld::stores_array<A, B: Accessor(codec)>(self hw: HWorld<A>, {whole: 
             codec.held_store(n, p, same, FTm::word(hw.fw.w.tys, g, env, b), FTm::word(hw.fw.w.tys, g, env, c), FTm::word(hw.fw.w.tys, g, env, i), here, counted, own, FTm::word(hw.fw.w.tys, g, env, length), a, FTm::word(hw.fw.w.tys, g, env, v), holds)), trivial)
 }
 
+// An array counted by a carried word (`rt_held_counted.hthr`): the same
+// entries with one count each, which the verdict does not compare, and
+// what each owes, the same as at a literal count.
+fn Stored::span_entry<A, B: Accessor(codec)>({whole: Stored<A>}, self codec: Stored<B>, n: Nat, p: Part<A, [B; n]>(whole)) → Pair<Nat, Pair<Nat, A → BitVec(64) → BitVec(64)>> {
+    Pair(p.offset, Pair(n, λ (a: A) (i: BitVec(64)) => B.wide(vector_get(p.of(a), i.toNat(), B.narrow(0)))))
+}
+
+fn Stored::fill_entry<A, B: Accessor(codec)>({whole: Stored<A>}, self codec: Stored<B>, n: Nat, p: Part<A, [B; n]>(whole)) → Pair<Nat, Pair<Nat, A → BitVec(64) → BitVec(64) → A>> {
+    Pair(p.offset, Pair(n, λ (a: A) (i: BitVec(64)) (word: BitVec(64)) => p.with(a, vector_update(p.of(a), i.toNat(), B.narrow(word)))))
+}
+
+theorem HWorld::spans_array<A, B: Accessor(codec)>(self hw: HWorld<A>, {whole: Stored<A>}, codec: Stored<B>, n: Nat, p: Part<A, [B; n]>(whole), same: codec.array(n) = p.codec, f: Nat,
+    bridge: (λ (place: Nat) (length: Nat) (b: Nat) (c: Nat) (i: Nat) (own: List<u8>) (g: List<Ty>) (env: Env(hw.fw.w.tys, g)) => FTm::read(hw.fw, own, f, [place, length, b, c, i], g, env))
+        = (λ (place: Nat) (length: Nat) (b: Nat) (c: Nat) (i: Nat) (own: List<u8>) (g: List<Ty>) (env: Env(hw.fw.w.tys, g)) =>
+            Ty::cast(hw.fw.w.tys, Word(64), Sig::at(hw.fw.w.sigs, f).result, B.read_at(own, FTm::word(hw.fw.w.tys, g, env, length), FTm::word(hw.fw.w.tys, g, env, b), FTm::word(hw.fw.w.tys, g, env, c), FTm::word(hw.fw.w.tys, g, env, i))))):
+    hw.Indexes(whole, f, 64, codec.span_entry(n, p).fst, codec.span_entry(n, p).snd.fst, codec.span_entry(n, p).snd.snd) {
+    hw.indexes_array(codec, n, p, same, f, bridge).left
+}
+
+theorem HWorld::fills_array<A, B: Accessor(codec)>(self hw: HWorld<A>, {whole: Stored<A>}, codec: Stored<B>, n: Nat, p: Part<A, [B; n]>(whole), same: codec.array(n) = p.codec, f: Nat,
+    bridge: (λ (place: Nat) (length: Nat) (b: Nat) (c: Nat) (i: Nat) (v: Nat) (own: List<u8>) (g: List<Ty>) (env: Env(hw.fw.w.tys, g)) =>
+            FTm::called(hw.fw, g, env, f, [place, length, b, c, i, v], own).after)
+        = (λ (place: Nat) (length: Nat) (b: Nat) (c: Nat) (i: Nat) (v: Nat) (own: List<u8>) (g: List<Ty>) (env: Env(hw.fw.w.tys, g)) =>
+            B.write_at(own, FTm::word(hw.fw.w.tys, g, env, length), FTm::word(hw.fw.w.tys, g, env, b), FTm::word(hw.fw.w.tys, g, env, c), FTm::word(hw.fw.w.tys, g, env, i), FTm::word(hw.fw.w.tys, g, env, v)).after)):
+    hw.Stores(whole, f, 64, codec.fill_entry(n, p).fst, codec.fill_entry(n, p).snd.fst, codec.fill_entry(n, p).snd.snd) {
+    hw.stores_array(codec, n, p, same, f, bridge).left
+}
+
 // The checked store of a byte into an array of big-endian words of four
 // bytes leaves the span holding the record with that byte of the array
 // replaced: the store is the word's store with the byte changed

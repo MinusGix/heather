@@ -142,7 +142,7 @@ class CompileSpan<F>(f: F) {
     code: Function,
     runs: (rest: List<List<BitVec(8)>>) → (call: Writers()) →
         FTm::CallsAgree(FWorld::of(world, callees, fsigs, writers, rest), world.sigs.len(), call) → (own: List<BitVec(8)>) →
-        FTm::Answers(world.tys, reflected.params, reflected.result, rest,
+        FTm::AnswersAll(world.tys, reflected.params, reflected.result, rest,
             FTm::source_at(world.tys, reflected.lent, reflected.params, reflected.result, typed, f, rest, own), λ xs => code.run(call, xs, Cons(own, rest))),
 }
 
@@ -151,10 +151,10 @@ class CompileSpan<F>(f: F) {
 
 theorem FFun::lowered_answers(self f: FFun, fw: FWorld, base: Nat, r: Option<Function>): Setup::lowers(r).IsTrue() → f.LowerHolds(fw, base, r) →
     (call: Writers()) → FTm::CallsAgree(fw, base, call) → (own: List<BitVec(8)>) →
-    FTm::Answers(fw.w.tys, f.params, f.result, fw.rest, f.meaning(fw, own), λ xs => Setup::code_of(r).run(call, xs, Cons(own, fw.rest))) {
+    FTm::AnswersAll(fw.w.tys, f.params, f.result, fw.rest, f.meaning(fw, own), λ xs => Setup::code_of(r).run(call, xs, Cons(own, fw.rest))) {
     match r as λ o => Setup::lowers(o).IsTrue() → f.LowerHolds(fw, base, o) → (call: Writers()) → FTm::CallsAgree(fw, base, call) →
         (own: List<BitVec(8)>) →
-        FTm::Answers(fw.w.tys, f.params, f.result, fw.rest, f.meaning(fw, own), λ xs => Setup::code_of(o).run(call, xs, Cons(own, fw.rest))) {
+        FTm::AnswersAll(fw.w.tys, f.params, f.result, fw.rest, f.meaning(fw, own), λ xs => Setup::code_of(o).run(call, xs, Cons(own, fw.rest))) {
         None => λ never _ => false_elim(never),
         Some(code) => λ _ holds => holds,
     }
@@ -173,10 +173,10 @@ theorem FFun::plain_runs<F>(f: F, rt: FFun, w: World, callees: (b: Buffers()) �
     ok: Setup::lowers(rt.lower(w, fsigs, w.sigs.len())) = True):
     (rest: List<List<BitVec(8)>>) → (call: Writers()) → FTm::CallsAgree(FWorld::of(w, callees, fsigs, writers, rest), w.sigs.len(), call) →
     (own: List<BitVec(8)>) →
-    FTm::Answers(w.tys, rt.params, rt.result, rest, FTm::source_at(w.tys, rt.lent, rt.params, rt.result, typed, f, rest, own),
+    FTm::AnswersAll(w.tys, rt.params, rt.result, rest, FTm::source_at(w.tys, rt.lent, rt.params, rt.result, typed, f, rest, own),
         λ xs => rt.code(w, fsigs).run(call, xs, Cons(own, rest))) {
     λ rest call agree own =>
-        j(sym(pinned(rest, own)), λ g _ => FTm::Answers(w.tys, rt.params, rt.result, rest, g, λ xs => rt.code(w, fsigs).run(call, xs, Cons(own, rest))),
+        j(sym(pinned(rest, own)), λ g _ => FTm::AnswersAll(w.tys, rt.params, rt.result, rest, g, λ xs => rt.code(w, fsigs).run(call, xs, Cons(own, rest))),
             rt.lowered_answers(FWorld::of(w, callees, fsigs, writers, rest), w.sigs.len(), rt.lower(w, fsigs, w.sigs.len()), Bool::is_true_of_eq(ok),
                 rt.lower_sound(FWorld::of(w, callees, fsigs, writers, rest), w.sigs.len()), call, agree, own))
 }
@@ -221,6 +221,10 @@ theorem FFun::measured_runs<F>(f: F, ks: List<Ty>, w0: Ty, wrest: List<Ty>, res:
             FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, f, rest), m(rest), bounded(rest), guarded(rest)))
 }
 
+// A 64-bit word has no words past it: what a loop's instance is given,
+// a loop returning one word (`FFun::compile_measured`).
+theorem Ty::word_rest(tys: Table): (v: Word(64).sem(tys)) → Ty::rest_words(tys, Word(64), v) = Nil { λ _ => refl }
+
 // `f` after the reflection and the tables, as in `FFun::compile`.
 fn FFun::compile_measured<F>(ks: List<Ty>, w0: Ty, wrest: List<Ty>, res: Ty, body: FTm, lent: Nat, w: World,
     callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), fsigs: List<Sig>, writers: (rest: List<List<BitVec(8)>>) → FTm::Sems(w.tys, fsigs), f: F,
@@ -229,9 +233,13 @@ fn FFun::compile_measured<F>(ks: List<Ty>, w0: Ty, wrest: List<Ty>, res: Ty, bod
     bounded: (rest: List<List<BitVec(8)>>) → FFun::Bounded(ks ++ Cons(w0, wrest), m(rest)),
     guarded: (rest: List<List<BitVec(8)>>) → FFun::Guarded(ks ++ Cons(w0, wrest), res, body, FWorld::of(w, callees, fsigs, writers, rest),
         FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, f, rest), m(rest)),
-    ok: Setup::lowers(FFun::lower_measured(ks, w0, wrest, body, res, w, fsigs, w.sigs.len(), lent)) = True) → CompileSpan<F>(f) {
+    ok: Setup::lowers(FFun::lower_measured(ks, w0, wrest, body, res, w, fsigs, w.sigs.len(), lent)) = True,
+    one: (v: res.sem(w.tys)) → Ty::rest_words(w.tys, res, v) = Nil) → CompileSpan<F>(f) {
     CompileSpan(FFun::measured(ks, w0, wrest, res, body, lent), w, callees, fsigs, writers, typed, FFun::measured_code(ks, w0, wrest, res, body, lent, w, fsigs),
-        FFun::measured_runs(f, ks, w0, wrest, res, body, lent, w, callees, fsigs, writers, typed, m, bounded, guarded, ok))
+        λ rest call agree own => FTm::answers_all_of(w.tys, res, rest, one, ks ++ Cons(w0, wrest),
+            FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, f, rest, own),
+            λ xs => FFun::measured_code(ks, w0, wrest, res, body, lent, w, fsigs).run(call, xs, Cons(own, rest)),
+            FFun::measured_runs(f, ks, w0, wrest, res, body, lent, w, callees, fsigs, writers, typed, m, bounded, guarded, ok, rest, call, agree, own)))
 }
 
 // A loop given as the passes its code counts (`FFun::rounds`,
@@ -267,10 +275,14 @@ fn FFun::compile_counted<F>(ks: List<Ty>, w0: Ty, wrest: List<Ty>, res: Ty, body
         λ (g: F) => FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, g, rest), pass),
     stops: (rest: List<List<BitVec(8)>>) → FFun::Stops(ks.len(), ks ++ Cons(w0, wrest), res, w.tys,
         λ (g: F) => FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, g, rest), stop),
-    ok: Setup::lowers(FFun::lower_measured(ks, w0, wrest, body, res, w, fsigs, w.sigs.len(), lent)) = True)
+    ok: Setup::lowers(FFun::lower_measured(ks, w0, wrest, body, res, w, fsigs, w.sigs.len(), lent)) = True,
+    one: (v: res.sem(w.tys)) → Ty::rest_words(w.tys, res, v) = Nil)
     → CompileSpan<F>(FFun::rounds(Fun::meas_passes(), pass, stop)) {
     CompileSpan(FFun::measured(ks, w0, wrest, res, body, lent), w, callees, fsigs, writers, typed, FFun::measured_code(ks, w0, wrest, res, body, lent, w, fsigs),
-        FFun::counted_runs(ks, w0, wrest, res, body, lent, w, callees, fsigs, writers, typed, pass, stop, passes, stops, ok))
+        λ rest call agree own => FTm::answers_all_of(w.tys, res, rest, one, ks ++ Cons(w0, wrest),
+            FTm::source_at(w.tys, lent, ks ++ Cons(w0, wrest), res, typed, FFun::rounds(Fun::meas_passes(), pass, stop), rest, own),
+            λ xs => FFun::measured_code(ks, w0, wrest, res, body, lent, w, fsigs).run(call, xs, Cons(own, rest)),
+            FFun::counted_runs(ks, w0, wrest, res, body, lent, w, callees, fsigs, writers, typed, pass, stop, passes, stops, ok, rest, call, agree, own)))
 }
 
 // The spans a function that writes reads, at a rest of the file, as a rest
@@ -372,7 +384,14 @@ fn Compile::span_source<F>(f: F, c: Compile<F>(f), rest: List<List<BitVec(8)>>) 
     λ own xs => Ending::of(Compile::uncurried(f, c, Cons(own, rest), xs), Cons(own, rest))
 }
 
-// A function that writes: its meaning from the span, as a word and the
+// A computation's meaning on words and a span: its value, and the span it
+// leaves (`FFun::uncurry` with the value read as a word).
+fn FFun::uncurry_all(tys: Table, ps: List<Ty>, r: Ty, h: FTm::Sem(tys, Sig(ps, r)), xs: List<BitVec(64)>, own: List<BitVec(8)>)
+    → Mutated<List<BitVec(8)>, r.sem(tys)> {
+    Ty::apply_to(tys, ps, Mutated<List<BitVec(8)>, r.sem(tys)>, h(own), xs)
+}
+
+// A function that writes: its meaning from the span, as its words and the
 // span it leaves over the rest.
 fn CompileSpan::sem<F>(f: F, c: CompileSpan<F>(f), rest: List<List<BitVec(8)>>) → FTm::Sem(c.world.tys, Sig(c.reflected.params, c.reflected.result)) {
     FTm::source_at(c.world.tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed, f, rest)
@@ -383,7 +402,7 @@ fn CompileSpan::sem<F>(f: F, c: CompileSpan<F>(f), rest: List<List<BitVec(8)>>) 
 // (lib/native/runtime/runtime.hthr).
 fn CompileSpan::source<F>(f: F, c: CompileSpan<F>(f), rest: List<List<BitVec(8)>>) → List<BitVec(8)> → List<BitVec(64)> → Ending {
     match c {
-        CompileSpan(reflected, World(tys, _, _, _), _, _, _, typed, _, _) => λ own xs => FTm::end_of(rest, FFun::uncurry(tys,
+        CompileSpan(reflected, World(tys, _, _, _), _, _, _, typed, _, _) => λ own xs => FTm::ended_all(tys, reflected.result, rest, FFun::uncurry_all(tys,
             reflected.params, reflected.result, FTm::source_at(tys, reflected.lent, reflected.params, reflected.result, typed, f, rest), xs, own)),
     }
 }
@@ -397,7 +416,7 @@ fn FTm::uncurried(tys: Table, rest: List<List<BitVec(8)>>, own: List<BitVec(8)>,
     → FTm::Sems(tys, sigs) → List<List<BitVec(64)> → Ending> {
     match sigs {
         Nil => λ _ => Nil,
-        Cons(s, more) => λ ws => Cons(λ xs => FTm::end_of(rest, FFun::uncurry(tys, s.params, s.result, ws.fst, xs, own)),
+        Cons(s, more) => λ ws => Cons(λ xs => FTm::ended_all(tys, s.result, rest, FFun::uncurry_all(tys, s.params, s.result, ws.fst, xs, own)),
             FTm::uncurried(tys, rest, own, more, ws.snd)),
     }
 }
@@ -406,24 +425,37 @@ fn FTm::uncurried(tys: Table, rest: List<List<BitVec(8)>>, own: List<BitVec(8)>,
 // What a table's links give
 
 // What answers like a computation's meaning ends, on as many words as
-// parameters, as its uncurried form does.
-theorem FTm::answers_at(tys: Table, r: Ty, rest: List<List<BitVec(8)>>, ps: List<Ty>):
-    (F: Ty::ArrowsTo(tys, ps, Mutated<List<BitVec(8)>, r.sem(tys)>)) → (ans: List<BitVec(64)> → Ending) → FTm::Answers(tys, ps, r, rest, F, ans) →
+// parameters, as its uncurried form does: every word of its value.
+theorem FTm::answers_all_at(tys: Table, r: Ty, rest: List<List<BitVec(8)>>, ps: List<Ty>):
+    (F: Ty::ArrowsTo(tys, ps, Mutated<List<BitVec(8)>, r.sem(tys)>)) → (ans: List<BitVec(64)> → Ending) → FTm::AnswersAll(tys, ps, r, rest, F, ans) →
     (words: List<BitVec(64)>) → words.len() = ps.len() →
-    ans(words) = FTm::end_of(rest, FTm::recast(tys, r, Word(64), Ty::apply_to(tys, ps, Mutated<List<BitVec(8)>, r.sem(tys)>, F, words))) {
+    ans(words) = FTm::ended_all(tys, r, rest, Ty::apply_to(tys, ps, Mutated<List<BitVec(8)>, r.sem(tys)>, F, words)) {
     match ps {
         Nil => λ F ans held words => match words as λ ws => ws.len() = 0 →
-            ans(ws) = FTm::end_of(rest, FTm::recast(tys, r, Word(64), Ty::apply_to(tys, Nil, Mutated<List<BitVec(8)>, r.sem(tys)>, F, ws))) {
+            ans(ws) = FTm::ended_all(tys, r, rest, Ty::apply_to(tys, Nil, Mutated<List<BitVec(8)>, r.sem(tys)>, F, ws)) {
             Nil => λ _ => held,
             Cons(_, more) => λ (bad: more.len() + 1 = 0) => false_elim(more.len().succ_ne_zero(bad)),
         },
         Cons(p, later) => λ F ans held words => match words as λ ws => ws.len() = later.len() + 1 →
-            ans(ws) = FTm::end_of(rest, FTm::recast(tys, r, Word(64), Ty::apply_to(tys, Cons(p, later), Mutated<List<BitVec(8)>, r.sem(tys)>, F, ws))) {
+            ans(ws) = FTm::ended_all(tys, r, rest, Ty::apply_to(tys, Cons(p, later), Mutated<List<BitVec(8)>, r.sem(tys)>, F, ws)) {
             Nil => λ (bad: 0 = later.len() + 1) => false_elim(later.len().zero_ne_succ(bad)),
             Cons(x, more) => λ (same: more.len() + 1 = later.len() + 1) =>
-                FTm::answers_at(tys, r, rest, later, F(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)), held(x), more,
+                FTm::answers_all_at(tys, r, rest, later, F(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)), held(x), more,
                     Nat::succ_inj(more.len(), later.len(), same)),
         },
+    }
+}
+
+// What answers like the uncurried meaning on as many words as parameters
+// answers like the meaning, every word (`FFun::answers_of_uncurry`).
+theorem FFun::answers_all_of_uncurry(tys: Table, r: Ty, rest: List<List<BitVec(8)>>, ps: List<Ty>):
+    (F: Ty::ArrowsTo(tys, ps, Mutated<List<BitVec(8)>, r.sem(tys)>)) → (ans: List<BitVec(64)> → Ending) →
+    ((xs: List<BitVec(64)>) → xs.len() = ps.len() → ans(xs) = FTm::ended_all(tys, r, rest, Ty::apply_to(tys, ps, Mutated<List<BitVec(8)>, r.sem(tys)>, F, xs))) →
+    FTm::AnswersAll(tys, ps, r, rest, F, ans) {
+    match ps {
+        Nil => λ F ans h => h(Nil, refl),
+        Cons(p, later) => λ F ans h => λ x => FFun::answers_all_of_uncurry(tys, r, rest, later, F(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)),
+            λ ws len => h(Cons(x, ws), cong_fn(λ (n: Nat) => n + 1, len))),
     }
 }
 
@@ -517,9 +549,10 @@ theorem FTm::links_answer(tys: Table, rest: List<List<BitVec(8)>>, own: List<Bit
                 match k as λ i => Sig::at(Cons(s, later), i).Words(tys) →
                     FTm::Answers(tys, Sig::at(Cons(s, later), i).params, Sig::at(Cons(s, later), i).result, rest,
                         FTm::get(tys, Cons(s, later), ws, i, own), λ xs => ans(link_at(Cons(l, ls), i), xs)) {
-                    Zero => λ ok => FFun::answers_of_uncurry(tys, s.result, rest, s.params, ws.fst(own), λ xs => ans(l, xs), λ xs len =>
+                    Zero => λ ok => FTm::answers_of_all(tys, s.result, rest, Ty::returned_rest(tys, s.result, ok.right), s.params, ws.fst(own), λ xs => ans(l, xs),
+                        FFun::answers_all_of_uncurry(tys, s.result, rest, s.params, ws.fst(own), λ xs => ans(l, xs), λ xs len =>
                         trans(agree(l, xs, j(trans(Ty::helds_spans(tys, s.params, ok.left), sym(len)), λ m _ => arity_fits(arity(l), m).IsTrue(), parts.left)),
-                            cong_fn(λ (g: List<BitVec(64)> → Ending) => g(xs), heads))),
+                            cong_fn(λ (g: List<BitVec(64)> → Ending) => g(xs), heads)))),
                     Succ(i) => λ ok => FTm::links_answer(tys, rest, own, held, srcs, ans, arity, agree, later, ws.snd, ls, tails, parts.right, i, ok),
                 }
             },
@@ -637,7 +670,7 @@ theorem CompileSpan::spanned<F>(f: F, c: CompileSpan<F>(f),
                 FTm::links_answer(c.world.tys, r, o, Cons(o, r), srcs(r, o), λ m xs => call(Cons(o, r), m, xs), arity,
                     λ m xs fits => sourced.left(span_pair(o, r), m, xs, fits), c.fsigs, c.writers(r), comps, written(r, o), fitted, k, ok))⟩⟩;
         trans(c.code.relabel_run(call, link_at(links), words, Cons(own, rest)),
-            FTm::answers_at(c.world.tys, c.reflected.result, rest, c.reflected.params, CompileSpan::sem(f, c, rest, own),
+            FTm::answers_all_at(c.world.tys, c.reflected.result, rest, c.reflected.params, CompileSpan::sem(f, c, rest, own),
                 λ xs => c.code.run(other, xs, Cons(own, rest)), c.runs(rest, other, agree, own), words,
                 sym(c.reflected.params.len().matches_eq(words.len(), n))))
     }, λ never _ _ => false_elim(never)⟩

@@ -170,15 +170,43 @@ def TALLY_BYTES: List<u8> = [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2];
 theorem twice_bytes(): Tally::twice::bytes(TALLY_BYTES, 16, 3) = Mutated([0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 9], 16) { refl }
 
 // ---------------------------------------------------------------------------
-// What is refused, each by its reason.
+// A call of a function that only reads the record: the callee's code is
+// called as a writer's is, and its theorem states its word beside the
+// record as it was, so the caller's record is the one it had.
 
 runtime fn Tally::get(self t: Tally) → u64 { t.count }
 
-// expect-error: which only reads the record, is not reflected yet
 runtime fn Tally::peek(mut self t: Tally, x: u64) → u64 {
     let a = t.get();
     t.bump(a)
 }
+
+// A reader calling a reader, after a store and inside a sum.
+runtime fn Tally::sum_get(self t: Tally, x: u64) → u64 { t.get() + x + t.get() }
+
+runtime fn Tally::set_get(mut self t: Tally, x: u64) → u64 {
+    t.count := x;
+    t.get() + 1
+}
+
+theorem peek_bytes(): Tally::peek::bytes(TALLY_BYTES, 16, 0) = Tally::bump::bytes(TALLY_BYTES, 16, 1) { refl }
+
+theorem sum_get_bytes(): Tally::sum_get::bytes(TALLY_BYTES, 16, 5) = Mutated(TALLY_BYTES, 7) { refl }
+
+theorem set_get_bytes(): Tally::set_get::bytes(TALLY_BYTES, 16, 4) = Mutated([0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 2], 5) { refl }
+
+theorem sum_get_held(own: List<u8>, t: Tally, length, x: u64, holds: Tally::stored().Holds(own, length, t)):
+    Agrees<Tally, u64>(Tally::stored(), length, HWorld::unchanged(t, Tally::sum_get(t, x)), Tally::sum_get::bytes(own, length, x)) {
+    Tally::sum_get::runs_held(own, t, length, x, holds)
+}
+
+theorem set_get_held(own: List<u8>, t: Tally, length, x: u64, holds: Tally::stored().Holds(own, length, t)):
+    Agrees<Tally, u64>(Tally::stored(), length, Tally::set_get(t, x), Tally::set_get::bytes(own, length, x)) {
+    Tally::set_get::runs_held(own, t, length, x, holds)
+}
+
+// ---------------------------------------------------------------------------
+// What is refused, each by its reason.
 
 // expect-error: a record a function left behind is built on again
 runtime fn Tally::back(self t: Tally, x: u64) → Mutated<Tally, u64> {

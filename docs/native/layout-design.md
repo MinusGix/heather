@@ -1130,10 +1130,44 @@ the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
      meet only at the count's end.
 
    A loop calls other functions of the record, and a function calls a
-   loop, each by the other's theorem. Not taken: a loop that only reads
-   the record, a self-call that is not the end, and a loop whose ending
-   arm stores into the record (the `decreases` companions are not made
-   for that shape, `issues/decreases-no-companions-ending-arm-store.md`).
+   loop, each by the other's theorem. Not taken: a self-call that is not
+   the end, and a loop whose ending arm stores into the record (the
+   `decreases` companions are not made for that shape,
+   `issues/decreases-no-companions-ending-arm-store.md`).
+
+   **A function that only reads the record** (`self t: T`, answering a
+   word) is built, loops included (`Tally::count_up`, `Tally::add_up` in
+   the loop probes; `WordMap::find_at`, a hash table's lookup, in
+   `lib/native/runtime/word_map.hthr`). What it publishes is the writer's
+   statement at its word beside the record as it was:
+   `T::m::runs_held(own, t, length, …, holds) : Agrees(whole, length,
+   HWorld::unchanged(t, T::m(t, …)), T::m::bytes(own, length, …))`, so
+   `.value` is the agreement of the word and `.holds` says the span
+   still holds `t`. Its code is a writer's that stores nothing.
+
+   - *Theory* (`rt_held_loop.hthr`, "A loop that only reads the
+     record"). A reader's step answers a word, so its body is pinned to
+     it read for the value: `FFun::HeldReads`, the body's held meaning
+     with `done` the end's `.value` and the self-call answered by a
+     word, is the step by conversion as a writer's body read whole is.
+     `FFun::reads_guarded` turns that into the writer's equation
+     (`FFun::HeldGuarded`) at `HWorld::unchanged`, once: a body with no
+     store, call, lend or loop node (`FTm::still`, decided by
+     evaluation) ends at the record it began at or goes round on it
+     (`FTm::still_keeps`), and a pass that goes round reads every
+     answer alike at its state, so that state is below the measure
+     (`FFun::falls_value`), where the answer is the function's beside
+     the record. `FFun::counted_held` then applies unchanged.
+   - *Reflector.* A reader's arm that is neither a branch nor its own
+     call is its value beside the record as it was (`rt_held_tail`'s
+     `reads`).
+   - *Generator* (`runtime_held_counted`). The function's equation is
+     opened at its word, with the same binders and the same proof from
+     `ext` and `irrel`, and wrapped by `reads_guarded`.
+
+   Not taken: a reader loop that calls another function of the record
+   (`FTm::still` refuses every call, which a reader's call would not
+   need).
 
    **A call of another function of the record** is built
    (`lib/_tests/native/runtime/runtime_held_call_tests.hthr`). `t.m(x)`
@@ -1164,9 +1198,14 @@ the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
      (`HWorld::of_record`), and the linker reads there whose tables a
      callee's are.
 
-   A caller's program is its callee's and itself. Not taken yet: a
-   callee that only reads the record, and what the issue lists beside
-   it.
+   A caller's program is its callee's and itself. **A callee that only
+   reads the record** is called as a writer is (probes `Tally::peek`,
+   `Tally::sum_get`, `Tally::set_get`): its code over the span, its word
+   bound where a value reads the call (the reflector's `st.handles`),
+   and the record the span holds left as it was, so it is not among the
+   calls that changed it. Its mark is `Runs` at its word beside the
+   record as it was, which is what its `runs_held` states. Not taken yet:
+   what the issue lists.
 5. Later, each its own issue: padding-preserving `put`; loads and stores
    wider than a byte; the comparisons a known size makes unnecessary.
 
@@ -1222,9 +1261,10 @@ with none is refused as "no instance".
 the word a value is held as (`wide`, `narrow`, and that a value is kept
 by its word), the `runtime fn` that reads the codec's value and the one
 that stores it, and the two theorems that tie them to `get` and `put`
-under a length word. Instances for `Stored::u32_be()` and
-`Stored::u64_be()`, which are the words that have compiled code
-(`stored_words.hthr`). Over it, the laws at a part of what a span holds
+under a length word. Instances for `Stored::u32_be()`,
+`Stored::u64_be()`, `Stored::u32_le()` and `Stored::u64_le()`, which are
+the words that have compiled code (`stored_words.hthr`; the little-endian
+pair since 2026-11-24, §11.4). Over it, the laws at a part of what a span holds
 for every codec with an accessor (`Stored::read_at_part`,
 `Stored::write_at_part`), which are the four width-specific theorems of
 `stored_words.hthr` as one pair. Stage B's reflector (§9.4) finds a
@@ -1358,3 +1398,245 @@ Minus as a decision. The recommendation: the accessor class with stage
 B's reflector (§9.5 round 3), the layout class once words have their
 instance, and the shape left as this checked prototype until a program
 needs to hold a layout.
+
+## 11. Records that take parameters (built 2026-11-24)
+
+Minus's decision for rung 2 (`docs/native/rung2-spans-design.md` §3): a
+span of anything is a `laid record` that takes parameters, not a type of
+its own.
+
+```heather
+laid record Limbs(n: u64)     { w: [u64; n.toNat()] }
+laid record Vector(cap: u64)  { len: u64, items: [u64; cap.toNat()] }
+```
+
+### 11.1 The declaration
+
+`laid` (`lib/std/machine/laid.hthr`) takes a record whose parameters are
+words or `Nat`s. `T::stored(p…)` and each `T::f_part(p…)` take them and are
+the same composition at them: `Stored::array` already took any count, so
+the codec of `Limbs(n)` is §6.2's at `n.toNat()`, and every law of a part
+holds at an open count with nothing proved again (probes in
+`lib/_tests/std/machine/laid_tests.hthr`: a field's part read at an open
+capacity, the size `(n.toNat() * 8).round_up(8)`, the bytes at a count of
+three).
+
+- **Only the last field's size may depend on the parameters**, like C's
+  flexible array member. Every other field then lies at an offset that is a
+  numeral whatever they are, so `T::f_at` is still a numeral; the host
+  computes numerals of closed terms only, so the generator computes it with
+  the parameters at their zeros (each abstracted and applied where it is
+  bound, `laid_closed`). A field whose size depends on them and is not last
+  is refused with that reason. A field is judged so by its type (an array
+  whose count is not a numeral, or a record applied to anything but
+  numerals), not by comparing sizes, so the refusal does not depend on
+  which values are tried.
+- A field whose type is another parameterized laid record is stored by
+  `R::stored` applied to its arguments.
+
+### 11.2 Which parameters the code takes
+
+Read off the layout, not an annotation:
+
+- **Erased.** A parameter no array counts by (a tag, a refinement) is not a
+  word of the code: `runtime fn Tagged::sum({k: u64}, mut self t: Tagged(k),
+  d: u64)` compiles to code over the span, its length word and `d`, and
+  `runs_held` holds at every `k`. A body that reads such a parameter's value
+  is refused (it is not runtime data).
+- **Carried.** A parameter an array's count is the `toNat()` of is a word
+  the code takes **right after the length word**: `Limbs::dec_at::bytes(own,
+  length, n, i, borrow)`. It is passed, never stored in the span. A count
+  computed from parameters (`(n + 1).toNat()`) is refused for now.
+
+The reflector (`rt_held_reflect.hthr`) opens the parameters before the
+record, binds the carried one's local to that operand, and re-reads the
+record's fields at fresh locals of the parameters, which the generator
+states every declaration under (the marks, what they owe and `runs_held`
+are functions of them, `T::m::runs_held(n, own, t, length, …, holds)`). An
+element of the carried array is `t.w.at(i)` and `t.w := t.w.put(i, x)`, the
+`Vec` methods with their found proofs; the accessor's checked read and
+store are called with the carried word as the count. There is no element
+at a numeral index of such an array (its count is no numeral).
+
+### 11.3 The theory: a count the verdict cannot compare
+
+The literal-count marks (`Indexes`, `Stores`, §9.5) find an array by its
+offset and its count, and the verdict reads both off the literals that
+bound them. A carried count is an open word: at the pin, the held meaning
+would compare `n.toNat()` with `n.toNat()` by `Nat::same` and stay stuck,
+and the verdict, computed by evaluation, could not compare it either. So:
+
+- **Two more marks** (`rt_held.hthr`): `Spans` and `Fills`, an array by its
+  offset and then one count and its element. Their meaning does not compare
+  the count operand with anything; the old verdict refuses them, so every
+  theorem that existed (and `rt_held_loop.hthr`) is unchanged but for an
+  absurd case.
+- **A verdict that knows which variable the count is**
+  (`rt_held_counted.hthr`, `FTm::kept_counted`): the count operand must be
+  the variable after the length word, `len - 1` at every depth (both move
+  together under a binder). It is a comparison of variable numbers, decided
+  by evaluation like the rest.
+- **Two premises the agreement carries** (`FTm::held_runs_counted`):
+  `FTm::Counts`, that this variable's word is `w`, threaded beside the
+  length word (`FTm::counts_more`); and `HWorld::Counted`, that every such
+  mark counts `w.toNat()` elements. At a function both are `refl`: the
+  variable is the function's own parameter, and the marks are built with
+  that count.
+- **What a mark owes is the literal-count lemma's** (`HWorld::spans_array`,
+  `fills_array` in `rt_held_fields.hthr`, each `indexes_array` or
+  `stores_array` at the open count), so nothing about an element is proved
+  again.
+
+`FFun::held_agrees_counted` is what a function's `runs_held` applies.
+Calls between functions of a parameterized record, a span read beside a
+carried count, and loops over such records are refused, each by name; the
+loops wait for `loops-on-one-combinator` (round 4), which moves the loop
+layer.
+
+### 11.4 Byte order
+
+`laid`'s default, little-endian, now compiles: `Stored::u32_le()` and
+`u64_le()` have accessors (`stored_words.hthr`: the word reads, stores and
+checked element accessors, each proved the codec's by `be_join_32` at the
+bytes reversed; instances in `stored_accessor.hthr`). A word read from a
+default-order record is the word a Rust `&[u64]` holds there (probes
+`pair_swap_runs`, `le_u64_read`). Records that said `endian := BigEndian`
+keep it.
+
+Probes: `lib/_tests/native/runtime/runtime_held_params_tests.hthr`, and
+the ledger's `PortLimbs` rows (`runtime_ports_tests.hthr`).
+
+## 12. Niches: an enum in its payload's word where the type rules a value out (design, 2026-11-24)
+
+Minus (2026-11-24): special values are fine *when the type encodes them*.
+A sentinel (the arena's `Full` as `2^64 - 1`, before §16.21 of the
+setups design) is a value outside the type system: nothing says a base is
+never that word, and a caller that forgets the test reads `Full` as a
+base. A niche is the same word with the reason in the type: if a payload's
+type cannot take some value, an enum may use that value as another
+constructor's tag and be laid in the payload's word alone, as Rust lays
+`Option<&T>` or `Option<NonZeroU64>`. Status: design; measured for the
+arena (§12.5) and not built.
+
+### 12.1 Where the knowledge comes from
+
+From the payload's **type**, never from a function. "`alloc` never answers
+`2^64 - 1` as a base" is a theorem about `alloc`; using it to lay out the
+result would make every reader of the word depend on that theorem, which
+is a sentinel again. The type must say it:
+
+- **A word with a proof field**, as `Bytes(n)` carries `sized`: `record
+  Base { w: u64, inside: w.toNat() <= 16 }`. The proof field has no layout
+  (as `sized` has none), so a `Base` is held in one word, and every value
+  of it is a word at most 16.
+- **A bounded word type** `Below(n)` (a library record of that shape at a
+  parameter), or a refinement `{w: u64 | P(w)}` once the surface has one;
+  both are the record above under another spelling.
+
+What the layout reads off such a type is a **niche instance**, a class of
+the payload's type the declaration (or the library, for `Below(n)`)
+provides:
+
+```heather
+class Niche<T>(codec: T → BitVec(64)) {
+    // A word no value of `T` is held as, and that it is none.
+    word: BitVec(64),
+    outside: (v: T) → codec(v) ≠ word,
+}
+```
+
+`outside` is proved once per type, by `bv_omega` from the proof field
+(`v.w.toNat() <= 16` against `2^64 - 1`). An enum with `k` payload-free
+constructors needs `k` such words; `Niche` generalises to a list of words,
+pairwise distinct, each outside (the instance for `Below(n)` offers the
+words from `n` up).
+
+### 12.2 How the layout chooses
+
+When the type table builds an enum's entry (`EnumInfo`, rt.hthr; the
+generator's `runtime_enum_infos`), it looks for the shape Rust's rule
+covers and nothing wider: **exactly one constructor carries a payload, of
+one slot, whose type has a niche instance with as many words as the other
+constructors, and every other constructor carries nothing.** Then the
+enum is held in one word: the payload constructor as its slot's word, the
+`j`th payload-free constructor as the instance's `j`th word. Otherwise the
+layout is §16.16's (a tag word, then the slots).
+
+- **Automatic, recorded in the entry.** The choice is a function of the
+  declarations, made where the entry is built, and the entry says which
+  layout it is (`EnumInfo.niche: Option<…>`), so every judgment, the
+  lowering and a certificate read one decision. A C or Rust caller sees it
+  in the export's signature (`-> word` with the niche words named, against
+  `-> [word; 2]`); an export that must keep a two-word ABI while the
+  payload type gains a niche would need an opt-out, `repr(tagged)`, which
+  is not proposed until an export needs it.
+- **Reading the tag** is a compare against each niche word, the payload
+  constructor the default: the chain `Tm::Pick` already lowers to
+  (`Op::TagIs` compares the tag word against a constant), with the niche
+  word for the constant and the payload's word for the slot. No node is
+  new; `Pick`'s lowering takes the constant from the entry.
+- **Building** a payload-free constructor is a `Const` of its niche word;
+  the payload constructor is its slot's move, which is already the word.
+
+### 12.3 What the codec's laws need
+
+Today an enum's word is its tag (`EnumInfo::Names`: the word's `toNat` is
+the value's tag, at most the last), and its slots follow. With a niche,
+`Ty::Holds` at `Enum(i)` is instead `NicheHolds(x, v)`: `x` is the
+payload's word where `v` is the payload constructor, and the constructor's
+niche word otherwise. What each direction needs:
+
+- **Results and read-back** (`Table::back`, a word read back as the value
+  it names): `read(word(v)) = v` for every `v`. That is `outside` (a
+  payload's word is no niche word, so it reads back as the payload
+  constructor) and the niche words pairwise distinct. Nothing about words
+  that are no value is needed, as now.
+- **Parameters** (a word from a caller): a contract is stated at values
+  (`Ty::Takes` quantifies an enum by its value and passes its words, never
+  a word that is no value, §16.16), and the entry's admitted words
+  (`Ty::Admits`) are the niche words and the payload type's own admitted
+  words. A payload type with a proof field is admitted where the proof
+  holds, which the record's decidable predicate tests (`Decide`, as a
+  loop's facts are, span-record-design "Loops that take facts").
+- **A laid record field of such an enum** (eight bytes instead of
+  sixteen): the field's codec `Stored<E>` is the payload codec's `write`
+  composed with the niche choice, and its `round` law is the same two
+  facts at the byte level (`Stored::u64`'s round trip and `outside`).
+  Accessors read the word and compare, as the tag read does.
+- **The kernel and the lowering's proofs need nothing**: `Pick`, `Inject`
+  and `Holds` are proved at `EnumInfo`'s laws, and the niche is a second
+  way to discharge them.
+
+### 12.4 Where it would matter
+
+Not at a return. A result of two words is one more register (RDX), set
+by the arm that builds the value: one more instruction on each path, and
+nothing at the caller, which compares the tag word where it would compare
+the niche (§12.5). It matters where enums are **stored in bulk**: a laid
+array of `Option<Base>`, a table of outcomes, a hash map's
+`Option<Entry>` slots (`runtime-hash-map-spec`), where a niche halves the
+span. That is the case to build it for.
+
+### 12.5 Measured for the arena
+
+The allocation's decision and a caller of it, as plain functions through
+`compile-x86` (the span route does not export a writer of several words
+yet, and the boundary convention is the same), once with `Full` as the
+word `2^64 - 1` (what a niche would lay out) and once as `Got(base) |
+Full` in two words:
+
+| | one word | two words |
+|---|---|---|
+| allocation (certified bytes) | 72 | 83 |
+| a caller matching it, its own code | 30 | 30 |
+
+The difference is the result's second register: on the `Got` path a
+`mov eax, 0` beside the base's move, on the `Full` path two short moves
+where the one word was a ten-byte `movabs`. The branch is the same one,
+and the caller compares the tag word where it compared the sentinel, in
+code of the same size. Probe: a scratch module of `alloc_word`,
+`alloc_outcome`, `use_word`, `use_outcome` (four plain `runtime fn`s), as
+§16.21 of the setups design describes.
+
+**Not built**: one word against two does not matter for the arena's
+calls. Build it with the first laid array of an enum (§12.4).

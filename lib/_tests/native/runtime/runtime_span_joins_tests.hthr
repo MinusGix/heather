@@ -1,0 +1,79 @@
+// Probes of loops written in place over a span (docs/language/
+// loop-combinator-design.md §6.4): a state of several words beside the span
+// is a record the span's program holds, a loop that only reads its
+// `mut self` span carries it unchanged, and a statement `if` that joins
+// inside a pass has the rest of the pass written into each arm. Each is a
+// compiled `runtime fn` with a run by `refl` beneath it; the last is a
+// negative control.
+import runtime_data;
+import function_ir_eval;
+
+// Two words and a span it only reads, by a `while`: the test's
+// `i < s.len()` is what `s[i]` finds its proof from.
+runtime fn Bytes::sum_two({n: u64}, mut self s: Bytes(n)) → u64 {
+    let mut c: u64 = 0;
+    let mut i: u64 = 0;
+    while i < s.len() decreases (n - i).toNat() { c := c + s[i].zero_extend(56); i := i + 1; }
+    c
+}
+
+theorem sum_two_runs(): Bytes::sum_two::bytes([3, 4, 250], 3) = Mutated([3, 4, 250], 257) ∧ Bytes::sum_two::bytes([], 0) = Mutated([], 0) {
+    ⟨refl, refl⟩
+}
+
+// What it publishes: at every record, the code answers the sum.
+theorem sum_two_over({n: u64}, s: Bytes(n)): Bytes::sum_two(s).value = (Bytes::sum_two::bytes(s.bytes, n)).value {
+    let ran = Bytes::sum_two::runs_bytes(n, s, []);
+    ran.value
+}
+
+// The same over a `List<u8>` span and its length word.
+runtime fn List::sum_two(mut self s: List<u8>, n: u64) → u64 {
+    let mut c: u64 = 0;
+    let mut i: u64 = 0;
+    while i < n decreases (n - i).toNat() { c := c + s.byte_within(n, i).zero_extend(56); i := i + 1; }
+    c
+}
+
+theorem list_sum_two_runs(): (List::sum_two([1, 2, 3], 3)).value = 6 { refl }
+
+// A store under an `if` with code after it, one word beside the span.
+runtime fn Bytes::clear_sevens({n: u64}, mut self s: Bytes(n)) → u64 {
+    let mut i: u64 = 0;
+    while i < s.len() decreases (n - i).toNat() {
+        if s[i] = 7 { s[i] := 0; }
+        i := i + 1;
+    }
+    i
+}
+
+theorem clear_sevens_runs(): Bytes::clear_sevens::bytes([7, 1, 7], 3) = Mutated([0, 1, 0], 3) ∧ Bytes::clear_sevens::bytes([], 0) = Mutated([], 0) {
+    ⟨refl, refl⟩
+}
+
+// An `if` inside an arm, the inner one joining words only, the outer the
+// span and words.
+runtime fn Bytes::mark_first({n: u64}, mut self s: Bytes(n), key: u64) → u64 {
+    let mut i: u64 = 0;
+    let mut found: u64 = 0;
+    while i < s.len() decreases (n - i).toNat() {
+        if s[i].zero_extend(56) = key {
+            if found = 0 { s[i] := 1; found := 1; } else { found := found + 1; }
+        }
+        i := i + 1;
+    }
+    found
+}
+
+theorem mark_first_runs(): Bytes::mark_first::bytes([5, 9, 9, 9], 4, 9) = Mutated([5, 1, 9, 9], 3) { refl }
+
+// A pass that, through one arm, does not lower the measure is refused where
+// the decrease is asked for, whichever arm the store is in.
+// expect-error: this pass of the loop must decrease the measure
+runtime fn Bytes::clear_stuck({n: u64}, mut self s: Bytes(n)) → u64 {
+    let mut i: u64 = 0;
+    while i < s.len() decreases (n - i).toNat() {
+        if s[i] = 7 { s[i] := 0; i := i + 1; }
+    }
+    i
+}

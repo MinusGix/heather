@@ -1,0 +1,29 @@
+// A recursion's equations and `induct` principle are proved from `bool`'s
+// and `logic`'s lemmas, which they cite by qualified name, reached through
+// the module's import closure: a module that imports nothing still gets
+// them (issues/branch-equations-silent-without-logic.md). Where a module
+// does not reach them, the refusal names the import. Tests, not library:
+// this file imports nothing.
+
+fn drain(n: Nat) → Nat {
+    match n {
+        Zero => Zero,
+        Succ(k) => drain(k),
+    }
+}
+
+theorem drain_zero(n: Nat): drain(n) = Zero {
+    induct drain(n) {
+        Zero => refl,
+        Succ => ih,
+    }
+}
+
+// Negative control: the principle proves only what holds.
+// expect-error: is expected here
+theorem drain_same(n: Nat): drain(n) = n {
+    induct drain(n) {
+        Zero => refl,
+        Succ => ih,
+    }
+}

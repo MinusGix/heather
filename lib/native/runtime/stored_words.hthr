@@ -10,12 +10,15 @@
 // one a caller has: the index and the word's size are inside the length
 // word, and for a store the length word is inside the span.
 //
-// Big-endian words of four and eight bytes are here because SHA-256's
-// context is made of them (`lib/native/crypto/sha256_block.hthr`). The
-// other widths and the other byte order follow the same two steps: the
-// bytes joined by shifts are the codec's word (`BitVec::be_join_32`), and
-// the span's entries at `at`, `at + 1`, … are the window's
-// (`List::vector_of_window`, `List::put_window_update_from`).
+// Words of four and eight bytes in both orders are here: big-endian
+// because SHA-256's context is made of them
+// (`lib/native/crypto/sha256_block.hthr`), little-endian because it is
+// the machine's and `laid`'s default (what a Rust `&[u64]` holds). The
+// other widths follow the same two steps: the bytes joined by shifts are
+// the codec's word (`BitVec::be_join_32`, which the little-endian proofs
+// read at the bytes reversed), and the span's entries at `at`, `at + 1`,
+// … are the window's (`List::vector_of_window`,
+// `List::put_window_update_from`).
 //
 // The last section is the same at a part (`lib/std/machine/part.hthr`):
 // a word read where a field lies is the field of the record the span
@@ -215,6 +218,150 @@ theorem List::put_u64_be_within_stored(self span: List<u8>, length, i, word: u64
 }
 
 // ---------------------------------------------------------------------------
+// Little-endian words of four bytes
+//
+// The machine's order and `laid`'s default (docs/native/rung2-spans-design.md
+// §3): the least significant byte first, what a Rust `&[u32]` or `&[u64]`
+// holds on x86. The proofs are the big-endian ones read through the
+// bytes' reversal: four bytes joined by shifts, the last the most
+// significant, are the big-endian word of the bytes reversed
+// (`BitVec::be_join_32` at them), which is the little-endian word of the
+// bytes by computation (`of_bytes_be` is `of_bytes_le` of the reverse).
+
+// The four bytes from `i` as a word, the first the least significant,
+// each read under the span's length word.
+runtime fn List::u32_le_within(self span: List<u8>, length, i: u64) → u64 {
+    span.byte_within(length, i + 3).zero_extend(56) << 24
+        | span.byte_within(length, i + 2).zero_extend(56) << 16
+        | span.byte_within(length, i + 1).zero_extend(56) << 8
+        | span.byte_within(length, i).zero_extend(56)
+}
+
+// A word's low four bytes stored from `i`, the least significant first.
+runtime fn List::put_u32_le_within(mut self span: List<u8>, length, i, word: u64) → u64 {
+    span.put_within(length, i, word.truncate(8, 56));
+    span.put_within(length, i + 1, (word >> 8).truncate(8, 56));
+    span.put_within(length, i + 2, (word >> 16).truncate(8, 56));
+    span.put_within(length, i + 3, (word >> 24).truncate(8, 56));
+    word
+}
+
+// Inside the length word, the read is the four entries joined, low first.
+theorem List::u32_le_within_entries(self span: List<u8>, length, i: u64, inside: i.toNat() + 4 <= length.toNat()):
+    span.u32_le_within(length, i) = BitVec::of_bytes_le(span.vector_at(i.toNat(), 4, BitVec::ofNat(0))).zero_extend(32) {
+    let at = i.toNat();
+    let zero: u8 = BitVec::ofNat(0);
+    let e0: (span.byte_within(length, i) = span.nth(at).unwrap_or(zero)) = span.byte_within_inside(length, i, omega);
+    let e1: (span.byte_within(length, i + 1) = span.nth(at + 1).unwrap_or(zero)) = span.byte_within_at(length, i, 1, omega);
+    let e2: (span.byte_within(length, i + 2) = span.nth(at + 2).unwrap_or(zero)) = span.byte_within_at(length, i, 2, omega);
+    let e3: (span.byte_within(length, i + 3) = span.nth(at + 3).unwrap_or(zero)) = span.byte_within_at(length, i, 3, omega);
+    let read: ((span.byte_within(length, i + 3).zero_extend(56) << 24 | span.byte_within(length, i + 2).zero_extend(56) << 16
+            | span.byte_within(length, i + 1).zero_extend(56) << 8 | span.byte_within(length, i).zero_extend(56))
+        = (span.nth(at + 3).unwrap_or(zero).zero_extend(56) << 24 | span.nth(at + 2).unwrap_or(zero).zero_extend(56) << 16
+            | span.nth(at + 1).unwrap_or(zero).zero_extend(56) << 8 | span.nth(at).unwrap_or(zero).zero_extend(56))) =
+        rewrite(e0, rewrite(e1, rewrite(e2, rewrite(e3, refl))));
+    trans(read, BitVec::be_join_32(span.nth(at + 3).unwrap_or(zero), span.nth(at + 2).unwrap_or(zero), span.nth(at + 1).unwrap_or(zero), span.nth(at).unwrap_or(zero)))
+}
+
+// The run-time read of a little-endian `u32` is the codec's, widened.
+theorem List::u32_le_within_stored(self span: List<u8>, length, i: u64, inside: i.toNat() + 4 <= length.toNat()):
+    span.u32_le_within(length, i) = Stored::u32_le().get(span, i.toNat()).zero_extend(32) {
+    trans(span.u32_le_within_entries(length, i, inside),
+        cong_fn(λ (w: u32) => w.zero_extend(32), sym(Stored::get_le_bytes(4, span, i.toNat()))))
+}
+
+// Inside the length word, the store is the word's low four bytes stored
+// one at a time, the least significant first.
+theorem List::put_u32_le_within_entries(self span: List<u8>, length, i, word: u64, inside: i.toNat() + 4 <= length.toNat()):
+    List::put_u32_le_within(span, length, i, word) = Mutated(span.update_from(i.toNat(), vector_entries(word.truncate(32, 32).bytes_le(4))), word) {
+    let at = i.toNat();
+    let v0: u8 = word.truncate(8, 56);
+    let v1: u8 = (word >> 8).truncate(8, 56);
+    let v2: u8 = (word >> 16).truncate(8, 56);
+    let v3: u8 = (word >> 24).truncate(8, 56);
+    let s1 = span.update(at, λ _ => v0);
+    let s2 = s1.update(at + 1, λ _ => v1);
+    let s3 = s2.update(at + 2, λ _ => v2);
+    let e0: (span.with_byte_within(length, i, v0) = s1) = span.with_byte_within_inside(length, i, v0, omega);
+    let e1: (s1.with_byte_within(length, i + 1, v1) = s2) = s1.with_byte_within_at(length, i, 1, v1, omega);
+    let e2: (s2.with_byte_within(length, i + 2, v2) = s3) = s2.with_byte_within_at(length, i, 2, v2, omega);
+    let e3: (s3.with_byte_within(length, i + 3, v3) = s3.update(at + 3, λ _ => v3)) = s3.with_byte_within_at(length, i, 3, v3, omega);
+    let stores: (span.with_byte_within(length, i, v0).with_byte_within(length, i + 1, v1).with_byte_within(length, i + 2, v2).with_byte_within(length, i + 3, v3)
+        = span.update_from(at, [v0, v1, v2, v3])) = rewrite(e0, rewrite(e1, rewrite(e2, e3)));
+    cong_fn(λ (bytes: List<u8>) => Mutated(bytes, word), stores)
+}
+
+// The run-time store of a little-endian `u32` is the codec's, of the
+// word's low half, where the length word is within the span.
+theorem List::put_u32_le_within_stored(self span: List<u8>, length, i, word: u64, inside: i.toNat() + 4 <= length.toNat(), own: length.toNat() <= span.len()):
+    List::put_u32_le_within(span, length, i, word) = Mutated(Stored::u32_le().put(span, i.toNat(), word.truncate(32, 32)), word) {
+    trans(span.put_u32_le_within_entries(length, i, word, inside),
+        cong_fn(λ (bytes: List<u8>) => Mutated(bytes, word), sym(Stored::put_le_bytes(4, span, i.toNat(), word.truncate(32, 32), omega))))
+}
+
+// ---------------------------------------------------------------------------
+// Little-endian words of eight bytes
+
+// The eight bytes from `i` as a word, the first the least significant:
+// the high half is the second four.
+runtime fn List::u64_le_within(self span: List<u8>, length, i: u64) → u64 {
+    span.u32_le_within(length, i + 4) << 32 | span.u32_le_within(length, i)
+}
+
+// A word's eight bytes stored from `i`, the least significant first.
+runtime fn List::put_u64_le_within(mut self span: List<u8>, length, i, word: u64) → u64 {
+    span.put_u32_le_within(length, i, word);
+    span.put_u32_le_within(length, i + 4, word >> 32);
+    word
+}
+
+// The run-time read of a little-endian `u64` is the codec's.
+theorem List::u64_le_within_stored(self span: List<u8>, length, i: u64, inside: i.toNat() + 8 <= length.toNat()):
+    span.u64_le_within(length, i) = Stored::u64_le().get(span, i.toNat()) {
+    let at = i.toNat();
+    let zero: u8 = BitVec::ofNat(0);
+    let next: ((i + 4).toNat() = at + 4) = BitVec::toNat_add_below(64, i, length, 4, omega);
+    let low: (span.u32_le_within(length, i) = BitVec::of_bytes_le(span.vector_at(at, 4, zero)).zero_extend(32)) = span.u32_le_within_entries(length, i, omega);
+    let room: (at + 4 + 4 <= length.toNat()) = omega;
+    let high: (span.u32_le_within(length, i + 4) = BitVec::of_bytes_le(span.vector_at(at + 4, 4, zero)).zero_extend(32)) =
+        j(next, λ n _ => span.u32_le_within(length, i + 4) = BitVec::of_bytes_le(span.vector_at(n, 4, zero)).zero_extend(32),
+            span.u32_le_within_entries(length, i + 4, j(sym(next), λ n _ => n + 4 <= length.toNat(), room)));
+    let read: ((span.u32_le_within(length, i + 4) << 32 | span.u32_le_within(length, i))
+        = (BitVec::of_bytes_le(span.vector_at(at + 4, 4, zero)).zero_extend(32) << 32 | BitVec::of_bytes_le(span.vector_at(at, 4, zero)).zero_extend(32))) =
+        rewrite(high, rewrite(low, refl));
+    let joined = BitVec::be_join_64(span.nth(at + 7).unwrap_or(zero), span.nth(at + 6).unwrap_or(zero), span.nth(at + 5).unwrap_or(zero), span.nth(at + 4).unwrap_or(zero),
+        span.nth(at + 3).unwrap_or(zero), span.nth(at + 2).unwrap_or(zero), span.nth(at + 1).unwrap_or(zero), span.nth(at).unwrap_or(zero));
+    trans(read, trans(joined, sym(Stored::get_le_bytes(8, span, at))))
+}
+
+// Inside the length word, the store is the word's eight bytes stored one
+// at a time, the least significant first.
+theorem List::put_u64_le_within_entries(self span: List<u8>, length, i, word: u64, inside: i.toNat() + 8 <= length.toNat()):
+    List::put_u64_le_within(span, length, i, word) = Mutated(span.update_from(i.toNat(), vector_entries(word.bytes_le(8))), word) {
+    let at = i.toNat();
+    let next: ((i + 4).toNat() = at + 4) = BitVec::toNat_add_below(64, i, length, 4, omega);
+    let low_bytes = vector_entries(word.truncate(32, 32).bytes_le(4));
+    let high_bytes = vector_entries((word >> 32).truncate(32, 32).bytes_le(4));
+    let half = span.update_from(at, low_bytes);
+    let first: (List::put_u32_le_within(span, length, i, word) = Mutated(half, word)) = span.put_u32_le_within_entries(length, i, word, omega);
+    let room: (at + 4 + 4 <= length.toNat()) = omega;
+    let second: (List::put_u32_le_within(half, length, i + 4, word >> 32) = Mutated(half.update_from(at + 4, high_bytes), word >> 32)) =
+        j(next, λ n _ => List::put_u32_le_within(half, length, i + 4, word >> 32) = Mutated(half.update_from(n, high_bytes), word >> 32),
+            half.put_u32_le_within_entries(length, i + 4, word >> 32, j(sym(next), λ n _ => n + 4 <= length.toNat(), room)));
+    let stores: (Mutated(List::put_u32_le_within(List::put_u32_le_within(span, length, i, word).after, length, i + 4, word >> 32).after, word)
+        = Mutated(half.update_from(at + 4, high_bytes), word)) = rewrite(first, rewrite(second, refl));
+    stores
+}
+
+// The run-time store of a little-endian `u64` is the codec's, where the
+// length word is within the span.
+theorem List::put_u64_le_within_stored(self span: List<u8>, length, i, word: u64, inside: i.toNat() + 8 <= length.toNat(), own: length.toNat() <= span.len()):
+    List::put_u64_le_within(span, length, i, word) = Mutated(Stored::u64_le().put(span, i.toNat(), word), word) {
+    trans(span.put_u64_le_within_entries(length, i, word, inside),
+        cong_fn(λ (bytes: List<u8>) => Mutated(bytes, word), sym(Stored::put_le_bytes(8, span, i.toNat(), word, omega))))
+}
+
+// ---------------------------------------------------------------------------
 // At a part of what the span holds
 
 // A word read by compiled code where a part lies is the part of the
@@ -392,6 +539,135 @@ theorem List::put_u64_be_at_within_past(self span: List<u8>, length, base, count
     List::put_u64_be_at_within(span, length, base, count, i, word) = Mutated(span, word) {
     (match i.unsigned_lt_bit(count) as λ b => i.unsigned_lt_bit(count) = b →
         (match b { False => Mutated(span, word), True => List::put_u64_be_within(span, length, base + i.shift_left(3), word) }) = Mutated(span, word) {
+        False => λ _ => refl,
+        True => λ yes => {
+            let below: (i.toNat() < count.toNat()) = BitVec::borrow_sub_of_bit_true(64, i, count, yes);
+            let never: False = omega;
+            false_elim(never)
+        },
+    })(refl)
+}
+
+// The same at little-endian words.
+
+// Element `i` of `count` little-endian words of four bytes from `base`,
+// widened: 0 where the array has no such element. The index is tested
+// against the count, and the read is under the span's length word.
+runtime fn List::u32_le_at_within(self span: List<u8>, length, base, count, i: u64) → u64 {
+    if i < count { span.u32_le_within(length, base + (i << 2)) } else { 0 }
+}
+
+// A word's low four bytes stored as element `i`; nothing is stored where
+// the array has no such element.
+runtime fn List::put_u32_le_at_within(mut self span: List<u8>, length, base, count, i, word: u64) → u64 {
+    if i < count { span.put_u32_le_within(length, base + (i << 2), word) } else { word }
+}
+
+// Where the array has the element and it is inside the length word, the
+// read is the codec's where the element lies, widened.
+theorem List::u32_le_at_within_stored(self span: List<u8>, length, base, count, i: u64, below: i.toNat() < count.toNat(),
+    inside: i.toNat() * 4 + base.toNat() + 4 <= length.toNat()):
+    span.u32_le_at_within(length, base, count, i) = Stored::u32_le().get(span, i.toNat() * 4 + base.toNat()).zero_extend(32) {
+    let at = base + i.shift_left(2);
+    let yes: (i.unsigned_lt_bit(count) = True) = BitVec::borrow_sub_bit_of_borrow(64, i, count, below);
+    let place: (at.toNat() = i.toNat() * 4 + base.toNat()) = BitVec::element_place(base, length, i, 2, 3, inside);
+    let read: ((match i.unsigned_lt_bit(count) { False => BitVec::ofNat(0, n := 64), True => span.u32_le_within(length, at) }) = span.u32_le_within(length, at)) = rewrite(yes, refl);
+    trans(read, trans(span.u32_le_within_stored(length, at, j(sym(place), λ n _ => n + 4 <= length.toNat(), inside)),
+        cong_fn(λ (n: Nat) => Stored::u32_le().get(span, n).zero_extend(32), place)))
+}
+
+// Past the count nothing is read.
+theorem List::u32_le_at_within_past(self span: List<u8>, length, base, count, i: u64, past: count.toNat() <= i.toNat()):
+    span.u32_le_at_within(length, base, count, i) = 0 {
+    (match i.unsigned_lt_bit(count) as λ b => i.unsigned_lt_bit(count) = b → (match b { False => BitVec::ofNat(0, n := 64), True => span.u32_le_within(length, base + i.shift_left(2)) }) = 0 {
+        False => λ _ => refl,
+        True => λ yes => {
+            let below: (i.toNat() < count.toNat()) = BitVec::borrow_sub_of_bit_true(64, i, count, yes);
+            let never: False = omega;
+            false_elim(never)
+        },
+    })(refl)
+}
+
+// The store is the codec's where the element lies, of the word's low
+// half, where the length word is within the span.
+theorem List::put_u32_le_at_within_stored(self span: List<u8>, length, base, count, i, word: u64, below: i.toNat() < count.toNat(),
+    inside: i.toNat() * 4 + base.toNat() + 4 <= length.toNat(), own: length.toNat() <= span.len()):
+    List::put_u32_le_at_within(span, length, base, count, i, word) = Mutated(Stored::u32_le().put(span, i.toNat() * 4 + base.toNat(), word.truncate(32, 32)), word) {
+    let at = base + i.shift_left(2);
+    let yes: (i.unsigned_lt_bit(count) = True) = BitVec::borrow_sub_bit_of_borrow(64, i, count, below);
+    let place: (at.toNat() = i.toNat() * 4 + base.toNat()) = BitVec::element_place(base, length, i, 2, 3, inside);
+    let stored: ((match i.unsigned_lt_bit(count) { False => Mutated(span, word), True => List::put_u32_le_within(span, length, at, word) }) = List::put_u32_le_within(span, length, at, word)) =
+        rewrite(yes, refl);
+    trans(stored, trans(span.put_u32_le_within_stored(length, at, word, j(sym(place), λ n _ => n + 4 <= length.toNat(), inside), own),
+        cong_fn(λ (n: Nat) => Mutated(Stored::u32_le().put(span, n, word.truncate(32, 32)), word), place)))
+}
+
+// Past the count nothing is stored.
+theorem List::put_u32_le_at_within_past(self span: List<u8>, length, base, count, i, word: u64, past: count.toNat() <= i.toNat()):
+    List::put_u32_le_at_within(span, length, base, count, i, word) = Mutated(span, word) {
+    (match i.unsigned_lt_bit(count) as λ b => i.unsigned_lt_bit(count) = b →
+        (match b { False => Mutated(span, word), True => List::put_u32_le_within(span, length, base + i.shift_left(2), word) }) = Mutated(span, word) {
+        False => λ _ => refl,
+        True => λ yes => {
+            let below: (i.toNat() < count.toNat()) = BitVec::borrow_sub_of_bit_true(64, i, count, yes);
+            let never: False = omega;
+            false_elim(never)
+        },
+    })(refl)
+}
+
+// The same for words of eight bytes: 0 where the array has no such element. The index is tested
+// against the count, and the read is under the span's length word.
+runtime fn List::u64_le_at_within(self span: List<u8>, length, base, count, i: u64) → u64 {
+    if i < count { span.u64_le_within(length, base + (i << 3)) } else { 0 }
+}
+
+// A word stored as element `i`; nothing is stored where
+// the array has no such element.
+runtime fn List::put_u64_le_at_within(mut self span: List<u8>, length, base, count, i, word: u64) → u64 {
+    if i < count { span.put_u64_le_within(length, base + (i << 3), word) } else { word }
+}
+
+theorem List::u64_le_at_within_stored(self span: List<u8>, length, base, count, i: u64, below: i.toNat() < count.toNat(),
+    inside: i.toNat() * 8 + base.toNat() + 8 <= length.toNat()):
+    span.u64_le_at_within(length, base, count, i) = Stored::u64_le().get(span, i.toNat() * 8 + base.toNat()) {
+    let at = base + i.shift_left(3);
+    let yes: (i.unsigned_lt_bit(count) = True) = BitVec::borrow_sub_bit_of_borrow(64, i, count, below);
+    let place: (at.toNat() = i.toNat() * 8 + base.toNat()) = BitVec::element_place(base, length, i, 3, 7, inside);
+    let read: ((match i.unsigned_lt_bit(count) { False => BitVec::ofNat(0, n := 64), True => span.u64_le_within(length, at) }) = span.u64_le_within(length, at)) = rewrite(yes, refl);
+    trans(read, trans(span.u64_le_within_stored(length, at, j(sym(place), λ n _ => n + 8 <= length.toNat(), inside)),
+        cong_fn(λ (n: Nat) => Stored::u64_le().get(span, n), place)))
+}
+
+theorem List::u64_le_at_within_past(self span: List<u8>, length, base, count, i: u64, past: count.toNat() <= i.toNat()):
+    span.u64_le_at_within(length, base, count, i) = 0 {
+    (match i.unsigned_lt_bit(count) as λ b => i.unsigned_lt_bit(count) = b → (match b { False => BitVec::ofNat(0, n := 64), True => span.u64_le_within(length, base + i.shift_left(3)) }) = 0 {
+        False => λ _ => refl,
+        True => λ yes => {
+            let below: (i.toNat() < count.toNat()) = BitVec::borrow_sub_of_bit_true(64, i, count, yes);
+            let never: False = omega;
+            false_elim(never)
+        },
+    })(refl)
+}
+
+theorem List::put_u64_le_at_within_stored(self span: List<u8>, length, base, count, i, word: u64, below: i.toNat() < count.toNat(),
+    inside: i.toNat() * 8 + base.toNat() + 8 <= length.toNat(), own: length.toNat() <= span.len()):
+    List::put_u64_le_at_within(span, length, base, count, i, word) = Mutated(Stored::u64_le().put(span, i.toNat() * 8 + base.toNat(), word), word) {
+    let at = base + i.shift_left(3);
+    let yes: (i.unsigned_lt_bit(count) = True) = BitVec::borrow_sub_bit_of_borrow(64, i, count, below);
+    let place: (at.toNat() = i.toNat() * 8 + base.toNat()) = BitVec::element_place(base, length, i, 3, 7, inside);
+    let stored: ((match i.unsigned_lt_bit(count) { False => Mutated(span, word), True => List::put_u64_le_within(span, length, at, word) }) = List::put_u64_le_within(span, length, at, word)) =
+        rewrite(yes, refl);
+    trans(stored, trans(span.put_u64_le_within_stored(length, at, word, j(sym(place), λ n _ => n + 8 <= length.toNat(), inside), own),
+        cong_fn(λ (n: Nat) => Mutated(Stored::u64_le().put(span, n, word), word), place)))
+}
+
+theorem List::put_u64_le_at_within_past(self span: List<u8>, length, base, count, i, word: u64, past: count.toNat() <= i.toNat()):
+    List::put_u64_le_at_within(span, length, base, count, i, word) = Mutated(span, word) {
+    (match i.unsigned_lt_bit(count) as λ b => i.unsigned_lt_bit(count) = b →
+        (match b { False => Mutated(span, word), True => List::put_u64_le_within(span, length, base + i.shift_left(3), word) }) = Mutated(span, word) {
         False => λ _ => refl,
         True => λ yes => {
             let below: (i.toNat() < count.toNat()) = BitVec::borrow_sub_of_bit_true(64, i, count, yes);

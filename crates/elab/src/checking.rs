@@ -56,6 +56,50 @@ impl std::ops::Deref for Checking<'_> {
 }
 
 impl Checking<'_> {
+    /// The decision procedures a `decreases` obligation defaults to:
+    /// `omega`, then `bv_omega` where the obligation is over the `toNat` of
+    /// a word. `omega`'s refusal is the diagnosis.
+    fn elab_measure_search(&self, cx: &Cx, expected: &Type, lvl: &Level, span: Span) -> R<Term> {
+        let tactic = |name: &str| Expr { kind: ExprKind::Var(name.into()), span };
+        let mark = (self.pass.warnings.borrow().len(), self.attempt.goal_arena.mark());
+        let stuck = match self.elab_check(cx, &tactic("omega"), expected, lvl) {
+            Ok(term) => return Ok(term),
+            Err(stuck) => stuck,
+        };
+        if !bv_omega::mentions_word(self, expected) {
+            return Err(stuck);
+        }
+        // Over words the default is `bv_omega`, which only a module
+        // that sees `bitvec_omega` has: say so, rather than leave
+        // the writer with `omega`'s model of a goal it cannot read.
+        if self.key_of("bitvec_omega::add_form").is_none() {
+            return Err(match stuck {
+                ElabError::Elab { msg, span } => ElabError::Elab {
+                    msg: format!(
+                        "{msg}\nhelp: the obligation is over words, which `bv_omega` reads; it \
+                         needs `import bitvec_omega;` (and `import bitvec_shift_nat;` for a \
+                         shift such as `x.shift_right(1)`)"
+                    ),
+                    span,
+                },
+                stuck => stuck,
+            });
+        }
+        self.pass.warnings.borrow_mut().truncate(mark.0);
+        self.attempt.goal_arena.rollback(mark.1);
+        match self.elab_check(cx, &tactic("bv_omega"), expected, lvl) {
+            Ok(term) => Ok(term),
+            Err(ElabError::Elab { msg: words, .. }) => match stuck {
+                ElabError::Elab { msg, span } => Err(ElabError::Elab {
+                    msg: format!("{msg}; over the words, {}", words.lines().next().unwrap_or_default()),
+                    span,
+                }),
+                stuck => Err(stuck),
+            },
+            Err(_) => Err(stuck),
+        }
+    }
+
     /// [`Elaborator::elab_check`] plus, where the caller knows it, the `(callee,
     /// parameter)` this expression is an argument for — the provenance and
     /// default name of any goal raised inside it.
@@ -687,6 +731,7 @@ impl Checking<'_> {
                 arms,
                 eqbind,
                 generated,
+                test: _,
             } => (|| {
                 // Stage-2 motive synthesis (issues/elab-stage2-metas.md,
                 // docs/elaborator/goal-motive-synthesis-design.md): abstract the
@@ -1239,45 +1284,45 @@ impl Checking<'_> {
             // and where it is stuck on the `toNat` of a word, `bv_omega`
             // (issues/decreases-word-measures-by-hand.md). `omega`'s refusal
             // stays the diagnosis: it is what `Obligations::explain` rewords.
-            ExprKind::Var(name) if name == crate::measure::CLOSER => {
+            ExprKind::Var(name) if name == crate::measure::CLOSER || name == crate::measure::CLOSER_LEAF => {
                 let tactic = |name: &str| Expr { kind: ExprKind::Var(name.into()), span: e.span };
                 let mark = (self.pass.warnings.borrow().len(), self.attempt.goal_arena.mark());
-                let stuck = match self.elab_check(cx, &tactic("omega"), expected, lvl) {
+                let stuck = match self.elab_measure_search(cx, expected, lvl, e.span) {
                     Ok(term) => return Ok(term),
                     Err(stuck) => stuck,
                 };
-                if !bv_omega::mentions_word(self, expected) {
-                    return Err(stuck);
+                // A new measure that is an `if` (a `while` whose measure is
+                // assigned in each arm, a recursive call at `if c { a } else
+                // { b }`): the search sees the match as an atom. Split each
+                // stuck match, every arm with its test, and search again
+                // there, as Lean's `decreasing_tactic` splits
+                // (issues/while-decrease-through-branches.md). Only where a
+                // match is stuck, and the search's own refusal stays the
+                // diagnosis.
+                if name == crate::measure::CLOSER {
+                    let goal = goal_combinators::simplify_goal(self, cx, &crate::inductive::decoded(expected));
+                    let leaf = tactic(crate::measure::CLOSER_LEAF);
+                    if goal_combinators::split_stuck(self, cx, &goal, &leaf, e.span, true).is_some() {
+                        self.pass.warnings.borrow_mut().truncate(mark.0);
+                        self.attempt.goal_arena.rollback(mark.1);
+                        let split = Expr {
+                            kind: ExprKind::App {
+                                head: Box::new(tactic(goal_combinators::SPLIT_STUCK)),
+                                args: vec![leaf],
+                                named: vec![],
+                                explicit: false,
+                                goal_oriented: false,
+                            },
+                            span: e.span,
+                        };
+                        if let Ok(term) = self.elab_check(cx, &split, expected, lvl) {
+                            return Ok(term);
+                        }
+                        self.pass.warnings.borrow_mut().truncate(mark.0);
+                        self.attempt.goal_arena.rollback(mark.1);
+                    }
                 }
-                // Over words the default is `bv_omega`, which only a module
-                // that sees `bitvec_omega` has: say so, rather than leave
-                // the writer with `omega`'s model of a goal it cannot read.
-                if self.key_of("bitvec_omega::add_form").is_none() {
-                    return Err(match stuck {
-                        ElabError::Elab { msg, span } => ElabError::Elab {
-                            msg: format!(
-                                "{msg}\nhelp: the obligation is over words, which `bv_omega` reads; it \
-                                 needs `import bitvec_omega;` (and `import bitvec_shift_nat;` for a \
-                                 shift such as `x.shift_right(1)`)"
-                            ),
-                            span,
-                        },
-                        stuck => stuck,
-                    });
-                }
-                self.pass.warnings.borrow_mut().truncate(mark.0);
-                self.attempt.goal_arena.rollback(mark.1);
-                match self.elab_check(cx, &tactic("bv_omega"), expected, lvl) {
-                    Ok(term) => Ok(term),
-                    Err(ElabError::Elab { msg: words, .. }) => match stuck {
-                        ElabError::Elab { msg, span } => Err(ElabError::Elab {
-                            msg: format!("{msg}; over the words, {}", words.lines().next().unwrap_or_default()),
-                            span,
-                        }),
-                        stuck => Err(stuck),
-                    },
-                    Err(_) => Err(stuck),
-                }
+                Err(stuck)
             }
             // `known`: a hypothesis, a side of a conjunction, then the
             // arithmetic searches (docs/language/when-design.md §5).
@@ -1432,7 +1477,7 @@ impl Checking<'_> {
                     Ok(term) => Ok(self
                         .attempt
                         .goal_arena
-                        .allocate_proved(&Declarations(self).emitted_cx(cx), expected.clone(), lvl.clone(), term.clone(), e.span)
+                        .allocate_proved("bv_omega", &Declarations(self).emitted_cx(cx), expected.clone(), lvl.clone(), term.clone(), e.span)
                         .unwrap_or(term)),
                     Err(last) => {
                         // Name the side condition that failed, not only the goal
@@ -1858,20 +1903,22 @@ impl Checking<'_> {
         }
         let outer_depth = self.scope.omega_depth.get();
         let written_cx = cx;
-        let source_cx = omega_cert::source_context(cx);
-        let cx = source_cx.as_ref();
+        let mut source_cx = omega_cert::source_context(cx);
         let _certificate_scope = omega_cert::CertificateScope::enter(&self.scope.omega_depth);
         omega_cert::reset_phases();
         let reconstruct_guard = stats::guard(stats::Timer::OmegaReconstruct);
-        let mut cert = omega_cert::reconstruct(
-            self,
-            cx,
-            expected,
-            name != "__omega_diseq_branch",
-            name != "__omega_connective_branch",
-            true,
-        )
-        .map_err(|detail| {
+        let flags = (name != "__omega_diseq_branch", name != "__omega_connective_branch");
+        let mut cert = omega_cert::reconstruct(self, source_cx.as_ref(), expected, flags.0, flags.1, true);
+        // A certificate that spelled a generated binder (`#p1`, which a
+        // nested pattern's written name aliases) does not parse: once more
+        // with every generated binder named
+        // (issues/omega-unspellable-local-in-scope.md).
+        if matches!(&cert, Err(detail) if detail.contains("unexpected character '#'")) {
+            source_cx = omega_cert::source_context_naming(written_cx, true);
+            cert = omega_cert::reconstruct(self, source_cx.as_ref(), expected, flags.0, flags.1, true);
+        }
+        let cx = source_cx.as_ref();
+        let mut cert = cert.map_err(|detail| {
             // Stuck: an arm equation not yet in scope might be the missing
             // fact (docs/language/matching/dependent-match-compiler-design.md §4.3.1).
             Inference(self).want_match_equations(written_cx);
@@ -1977,6 +2024,21 @@ impl Checking<'_> {
         })?;
         cert.report.phases = phases;
         self.pass.omega_reports.borrow_mut().push(cert.report);
+        // A written call is lifted into a lemma of its own, as `bv_omega`'s
+        // proof is (docs/tactics/bv-omega-design.md §6): the gate checks the
+        // certificate once, in its context, and the body carries only a
+        // reference, so the certificate is not substituted along with the
+        // body under every enclosing binder and `let`
+        // (issues/runtime-hash-map-spec.md: minutes inline, milliseconds
+        // as a lemma). The calls inside a certificate, and those a
+        // generated proof makes, stay inline: their proof is lifted whole.
+        if outer_depth == 0 && !self.in_generated() {
+            return Ok(self
+                .attempt
+                .goal_arena
+                .allocate_proved("omega", &Declarations(self).emitted_cx(written_cx), expected.clone(), lvl.clone(), term.clone(), span)
+                .unwrap_or(term));
+        }
         Ok(term)
     }
 

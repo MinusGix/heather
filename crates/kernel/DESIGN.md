@@ -420,6 +420,38 @@ single-steps a bounded number of heads looking for one before the
 transparent run (`Conv::meet_on_the_way`). The same unfoldings and fuel
 otherwise; a remembered spine is tried once.
 
+A sixth (2026-11-24,
+`issues/arithmetic-definition-opaque-at-open-arguments.md` item 3): **a
+pair against a δ-stuck side tries Σ-η first.** The headless-other-side arm
+above unfolds the stuck side to a form with no defined head before the
+type-directed Σ arm sees either, which for a wrapper `f(x) = let r = g(x,
+4); ⟨r.after, r.value⟩` against `g(x, 4)` runs `g`'s measured recursion at
+its literal. When the headless side is a pair, the type's view is a Σ
+(not a `Vec`, whose arm is its own), and a component of the pair (down its
+right-nested Σ a few levels, since a record's encoding may lead with an
+irrelevant one) is stuck at the other side's head, directly or past newer
+heads such as a record's projection function, `Conv::eta_before_unfolding`
+compares the pair's fields with the stuck side's projections under
+`delta_lazy`'s guard, and they meet at `g(x, 4)`'s spine; a failure falls
+through to the unfolding. Two bounds keep it to that case. The shape test:
+tried against every pair, field-by-field η exhausted the budget where one
+unfolding would not (a laid record's stores against its accessor's
+function in `runtime_held_array_tests`, `Sha256::run`'s accessors). And an
+allowance: the attempt, nested ones included, runs on at most `ETA_FUEL`
+steps, and running out of that is not a verdict, so the allowance is
+charged and the stuck side unfolds as before; inside `Sha256::close`'s
+accessor checks about a hundred attempts that passed the shape test and
+still did not meet had each been charged its whole failure. A wrapper's
+fields meet in under a thousand steps. `ETA_FUEL` (4096) and
+`ETA_FIELD_DEPTH` (4) are **strategy constants that bound time, not
+verdicts**, as `MEET_STEPS` is: changing either changes how much a
+comparison tries before it unfolds, never what it accepts or refuses, since
+an attempt that is cut off falls through to the unfolding it would have
+taken. A structural criterion for when field-by-field η meets, one needing
+no constant, would be preferred if one appears. η is the rule the Σ arm applies anyway once the stuck side is
+unfolded, so this is the second kind of acceleration below: the same
+verdicts, fewer unfoldings.
+
 **Acceleration policy** (`issues/kernel-acceleration-policy.md`). Three
 kinds of acceleration are distinguished, and only the first two grow:
 *representation changes with an adequacy argument* (saturated runs — the

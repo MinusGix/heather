@@ -8,13 +8,18 @@
 // Each row says what it ports and the rung of the plan's ladder (§4) it
 // waits on: 1 the scalar core, 2 spans of anything, 3 inductive data,
 // 4 functional Heather. Nothing here is imported from outside.
-// `runtime` reexports the words and spans, and a type's methods reach the
-// whole closure (docs/language/modules-design.md §3.7). `[u64; n]`'s `at`
-// is `stored_words`', which builds on `runtime` and so is not under it.
-// `program_eval` runs a row's compiled program in its theorem.
-import runtime;
-import stored_words;
+// `runtime_data` reexports `runtime`'s words and spans and the `laid`
+// generator, and brings in what a function of a span or a laid record
+// publishes; a type's methods reach the whole closure
+// (docs/language/modules-design.md §3.7), so `[u64; n]`'s `at` needs
+// nothing more. `program_eval` runs a row's compiled program in its theorem.
+import runtime_data;
 import function_ir_eval;
+import function_ir_state;
+import function_ir_run;
+import word_map;
+import word_map_laws;
+import arena;
 
 // ---------------------------------------------------------------------------
 // Rung 1: operations
@@ -102,12 +107,25 @@ runtime fn port_bits(n: u64) → u64 {
 
 theorem port_bits_runs(): port_bits(255) = 8 { refl }
 
-// A read-only loop over a span that carries its length (a checksum).
-// expect-error: a function over a span returns
+// A read-only loop over a span that carries its length (a checksum). Its
+// loop is lifted (`Bytes::port_sum::run`), a loop that only reads, and the
+// function calls it; each is compiled as a writer that stores nothing.
 runtime fn Bytes::port_sum({n: u64}, self s: Bytes(n)) → u64 {
     let mut h: u64 = 0;
     for i in 0..s.len() { h := h + ↑s[i]; }
     h
+}
+
+theorem port_sum_runs(): Bytes::port_sum::bytes([3, 4, 250], 3) = Mutated([3, 4, 250], 257) ∧ Bytes::port_sum::bytes([], 0) = Mutated([], 0) {
+    ⟨refl, refl⟩
+}
+
+// What it publishes: at every record, the code answers the sum and
+// leaves the bytes as they were.
+theorem port_sum_over({n: u64}, s: Bytes(n)):
+    Bytes::port_sum(s) = (Bytes::port_sum::bytes(s.bytes, n)).value ∧ s.bytes = (Bytes::port_sum::bytes(s.bytes, n)).after {
+    let ran = Bytes::port_sum::runs_bytes(n, s, []);
+    ⟨ran.value, ran.after⟩
 }
 
 // `memchr`: leave the loop where the byte is found.
@@ -119,8 +137,10 @@ runtime fn Bytes::port_find({n: u64}, self s: Bytes(n), b: u8) → u64 {
     n
 }
 
-// The same as a `while` whose test reads the span.
-// expect-error: a function over a span returns
+// The same as a `while` whose test reads the span. A reader now: what it
+// waits on is the byte `b` beside the span (spans take and return 64-bit
+// words, issues/runtime-repr-narrow-words.md).
+// expect-error: it takes 64-bit words beside its record
 runtime fn Bytes::port_find_while({n: u64}, self s: Bytes(n), b: u8) → u64 {
     let mut i: u64 = 0;
     while i < s.len() && s[i] ≠ b decreases (n - i).toNat() { i := i + 1; }
@@ -128,12 +148,25 @@ runtime fn Bytes::port_find_while({n: u64}, self s: Bytes(n), b: u8) → u64 {
 }
 
 // Count a byte and clear it: a store under an `if`, with code after it.
+// A loop written in place takes only words beside its span, so with the
+// byte `b` it is still lifted, and the lifted loop's pass cannot join
+// (issues/runtime-repr-narrow-words.md); the word row below compiles.
 // expect-error: the span through a branch that joins again
 runtime fn Bytes::port_count_clear({n: u64}, mut self s: Bytes(n), b: u8) → u64 {
     let mut c: u64 = 0;
     for i in 0..s.len() { if s[i] = b { c := c + 1; s[i] := 0; } }
     c
 }
+
+// The same with the byte as a word: the count and the index are the loop's
+// state beside the span, a record of two words.
+runtime fn Bytes::port_count_clear_word({n: u64}, mut self s: Bytes(n), b: u64) → u64 {
+    let mut c: u64 = 0;
+    for i in 0..s.len() { if s[i] = b.truncate(8, 56) { c := c + 1; s[i] := 0; } }
+    c
+}
+
+theorem port_count_clear_word_runs(): Bytes::port_count_clear_word::bytes([7, 1, 7], 3, 7) = Mutated([0, 1, 0], 2) { refl }
 
 // Nesting depth, the shape of recursive descent: a call of itself that is
 // not the last thing it does, over a lent span.
@@ -148,16 +181,44 @@ runtime fn List::port_depth(self s: List<u8>, n, i: u64) → u64 decreases (n - 
 // ---------------------------------------------------------------------------
 // Rung 2: spans of anything, several at once
 
-// `Numeral::pred`: a borrow walking up the limbs.
-// expect-error: a type with no runtime layout
-runtime fn port_pred_limbs(mut limbs: [u64; 4]) → u64 {
-    let mut borrow: u64 = 1;
-    for i in 0..4 {
-        let old = limbs[i];
-        limbs[i] := old - borrow;
-        borrow := if old < borrow { 1 } else { 0 };
-    }
-    borrow
+// `Numeral::pred`: a borrow walking up the limbs, as many as the word `n`
+// says (docs/native/rung2-spans-design.md §3): a laid record that takes
+// the count, carried as a word beside the span.
+laid record PortLimbs(n: u64) { w: [u64; n.toNat()] }
+
+// One step: limb `i` less the borrow, and the borrow out.
+runtime fn PortLimbs::borrow_at({n: u64}, mut self l: PortLimbs(n), i, borrow: u64) → u64 {
+    if h: i < n {
+        let old = l.w.at(i);
+        l.w := l.w.put(i, old - borrow);
+        if old < borrow { 1 } else { 0 }
+    } else { borrow }
+}
+
+// At two limbs and at one: the code takes the span, its length word, `n`
+// and the operands, and stores the limb little-endian.
+theorem port_borrow_at_runs(): PortLimbs::borrow_at::bytes([0, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0], 16, 2, 0, 1).value = 1 ∧
+    PortLimbs::borrow_at::bytes([0, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0], 16, 2, 1, 1).after = [0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0] ∧
+    PortLimbs::borrow_at::bytes([3, 0, 0, 0, 0, 0, 0, 0], 8, 1, 0, 1).after = [2, 0, 0, 0, 0, 0, 0, 0] {
+    ⟨refl, ⟨refl, refl⟩⟩
+}
+
+// What it publishes, at every count.
+theorem port_borrow_at_held(n: u64, own: List<u8>, l: PortLimbs(n), length, i, borrow: u64, holds: rt_held::Stored::Holds(PortLimbs::stored(n), own, length, l)):
+    PortLimbs::borrow_at(l, i, borrow, n := n).value = PortLimbs::borrow_at::bytes(own, length, n, i, borrow).value ∧
+    rt_held::Stored::Holds(PortLimbs::stored(n), PortLimbs::borrow_at::bytes(own, length, n, i, borrow).after, length, PortLimbs::borrow_at(l, i, borrow, n := n).after) {
+    let ran = PortLimbs::borrow_at::runs_held(n, own, l, length, i, borrow, holds);
+    ⟨ran.value, ran.holds⟩
+}
+
+// The walk itself, a loop over the limbs. Loops over a laid record that
+// takes parameters wait for the loop combinator (loops-on-one-combinator).
+// expect-error: waits for the loop combinator
+runtime fn PortLimbs::port_pred_limbs({n: u64}, self l: PortLimbs(n), i, borrow: u64) → Mutated<PortLimbs(n), u64> decreases (n - i).toNat() {
+    if h: i < n {
+        let old = l.w.at(i);
+        @port_pred_limbs(n, l with { w = l.w.put(i, old - borrow) }, i + 1, if old < borrow { 1 } else { 0 })
+    } else { Mutated(l, borrow) }
 }
 
 // `memcpy`: one span read, another written.
@@ -172,10 +233,316 @@ runtime fn Bytes::port_copy_from({n, m: u64}, mut self dst: Bytes(n), src: Bytes
 }
 
 // ---------------------------------------------------------------------------
+// Rung 2: a hash table of fixed capacity (docs/native/rung2-spans-design.md)
+//
+// The shapes a hash map is made of, as `crates/elab`'s registries and the
+// cache's tables hold them: a slot from a hash, linear probing, an insert
+// that stores under a test and a lookup that only reads. The compiled rows
+// are written in the shape the generator takes today (a probe that ends in
+// its own call, each arm its own `Mutated`); the refused rows are the same
+// code as a newcomer writes it.
+
+// A set of bytes over a lent span: 0 is an empty slot, probing from `j`,
+// `left` slots still to try. 1 when the key was put, 0 when it was there,
+// 2 when the table is full.
+runtime fn Bytes::port_set_insert({n: u64}, s: Bytes(n), key, j, left: u64) → Mutated<Bytes(n), u64>
+    decreases left.toNat() {
+    if more: 0 < left {
+        if lt: j < s.len() {
+            if s[j] = 0 { Mutated(s.put(j, key.truncate(8, 56)), 1) }
+            else if s[j].zero_extend(56) = key { Mutated(s, 0) }
+            else { @port_set_insert(n, s, key, if j + 1 = n { 0 } else { j + 1 }, left - 1) }
+        } else { Mutated(s, 2) }
+    } else { Mutated(s, 2) }
+}
+
+theorem port_set_insert_runs(): (Bytes::port_set_insert(Bytes([0, 7, 0, 0], refl), 9, 1, 4, n := 4).after).bytes = [0, 7, 9, 0] ∧
+    (Bytes::port_set_insert(Bytes([7, 9, 4, 1], refl), 9, 3, 4, n := 4)).value = 0 ∧
+    (Bytes::port_set_insert(Bytes([7, 9, 4, 1], refl), 8, 3, 4, n := 4)).value = 2 {
+    ⟨refl, ⟨refl, refl⟩⟩
+}
+
+// The start slot hashed from the key, then the probe: a call of another
+// function of the span, bound and handed on.
+runtime fn Bytes::port_set_add({n: u64}, s: Bytes(n), key: u64) → Mutated<Bytes(n), u64> {
+    if ok: 0 < n { let r = Bytes::port_set_insert(s, key, (key * 31) % n, n); Mutated(r.after, r.value) } else { Mutated(s, 2) }
+}
+
+theorem port_set_add_runs(): (Bytes::port_set_add(Bytes([0, 0, 0, 0, 0], refl), 9, n := 5).after).bytes = [0, 0, 0, 0, 9] { refl }
+
+// The same tail call written without the binding.
+// expect-error: a function over a span ends in `Mutated(span, value)`
+runtime fn Bytes::port_set_add_tail({n: u64}, s: Bytes(n), key: u64) → Mutated<Bytes(n), u64> {
+    if ok: 0 < n { Bytes::port_set_insert(s, key, (key * 31) % n, n) } else { Mutated(s, 2) }
+}
+
+// The key as the byte it is, beside the span.
+// expect-error: it takes 64-bit words beside its record
+runtime fn Bytes::port_set_insert_byte({n: u64}, s: Bytes(n), key: u8, j: u64) → Mutated<Bytes(n), u64> {
+    if lt: j < s.len() {
+        if s[j] = 0 { Mutated(s.put(j, key), 1) } else { Mutated(s, 0) }
+    } else { Mutated(s, 2) }
+}
+
+// The insert as a `while` over `mut self`, its measure assigned in the arms.
+// Its decrease is found, each arm's with that arm's tests
+// (issues/while-decrease-through-branches.md); its state, three words beside
+// the span, is a record the span's program holds, and the code after each
+// `if` is written into its arms (docs/language/loop-combinator-design.md
+// §6.4).
+runtime fn Bytes::port_set_put({n: u64}, mut self s: Bytes(n), key, start: u64) → u64 {
+    let mut j = start;
+    let mut left = n;
+    let mut res: u64 = 2;
+    while 0 < left decreases left.toNat() {
+        if lt: j < s.len() {
+            if s[j] = 0 { s[j] := key.truncate(8, 56); res := 1; left := 0; }
+            else if s[j].zero_extend(56) = key { res := 0; left := 0; }
+            else { j := if j + 1 = n { 0 } else { j + 1 }; left := left - 1; }
+        } else { left := 0; }
+    }
+    res
+}
+
+// Put at the first empty slot, found where the key already is, and full.
+theorem port_set_put_runs(): Bytes::port_set_put::bytes([0, 7, 0, 0], 4, 9, 1) = Mutated([0, 7, 9, 0], 1) ∧
+    Bytes::port_set_put::bytes([7, 9, 4, 1], 4, 9, 3) = Mutated([7, 9, 4, 1], 0) ∧
+    Bytes::port_set_put::bytes([7, 9, 4, 1], 4, 8, 3) = Mutated([7, 9, 4, 1], 2) {
+    ⟨refl, ⟨refl, refl⟩⟩
+}
+
+// A map of words in one laid record: its keys and values side by side, 0
+// the empty key, the slot the top two bits of a Fibonacci hash. The table
+// is the library's (`WordMap`, lib/native/runtime/word_map.hthr), and what
+// it means is proved there over these same compiled functions
+// (`word_map_laws.hthr`: under its invariant the table is the association
+// list of its occupied slots, `insert` is `assoc_set` at every lookup and
+// `remove` is `assoc_remove`). These rows run it.
+
+// Key 9 hashes to slot 2: its key word is the fourth, its value the
+// eighth, and the count is one.
+theorem port_map_insert_runs(): WordMap::insert::bytes(WordMap::empty_bytes(), 72, 9, 7).after =
+    [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9,
+     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7,
+     0, 0, 0, 0, 0, 0, 0, 0] { refl }
+
+// A lookup, which changes nothing, spelled as a function that leaves the
+// record as it was.
+runtime fn WordMap::get_at(self m: WordMap, k, j, left: u64) → Mutated<WordMap, u64> decreases left.toNat() {
+    if more: 0 < left {
+        if lt: j < 4 {
+            if m.keys.at(j) = 0 { Mutated(m, 0) }
+            else if m.keys.at(j) = k { Mutated(m, m.vals.at(j)) }
+            else { @get_at(m, k, (j + 1).band(3), left - 1) }
+        } else { Mutated(m, 0) }
+    } else { Mutated(m, 0) }
+}
+
+theorem port_map_get_runs(): WordMap::get_at::bytes(WordMap::insert::bytes(WordMap::empty_bytes(), 72, 9, 7).after, 72, 9, 2, 4).value = 7 { refl }
+
+fn PORT_MAP_TWO() → List<u8> { WordMap::insert::bytes(WordMap::insert::bytes(WordMap::empty_bytes(), 72, 9, 7).after, 72, 17, 5).after }
+
+// The lookup as it is, a loop that only reads the record: found at its
+// slot, found past a taken slot (17 hashes to 2 as well), and missed at an
+// empty one; the bytes are as they were.
+theorem port_map_find_runs(): WordMap::find_at::bytes(PORT_MAP_TWO(), 72, 9, 2, 4).value = 7 { refl }
+
+theorem port_map_find_past_runs(): WordMap::find_at::bytes(PORT_MAP_TWO(), 72, 17, 2, 4).value = 5 { refl }
+
+theorem port_map_find_miss_runs(): WordMap::find_at::bytes(PORT_MAP_TWO(), 72, 4, 1, 4).value = 0 { refl }
+
+// The span after the lookup: the count, keys 9 and 17 at slots 2 and 3,
+// their values 7 and 5, as the inserts left them.
+theorem port_map_find_still_runs(): WordMap::find_at::bytes(PORT_MAP_TWO(), 72, 9, 2, 4).after =
+    [0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9,
+     0, 0, 0, 0, 0, 0, 0, 17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7,
+     0, 0, 0, 0, 0, 0, 0, 5] { refl }
+
+// Removal by backward shifting: 9 removed from slot 2, 17 moves up from
+// slot 3 into its home slot, and slot 3's key is cleared (its value word
+// is left, as a slot with key 0 holds nothing).
+theorem port_map_remove_runs(): WordMap::remove::bytes(PORT_MAP_TWO(), 72, 9).after =
+    [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 17,
+     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5,
+     0, 0, 0, 0, 0, 0, 0, 5] { refl }
+
+// What it publishes: where the span holds a map, the code answers the
+// lookup, and the span holds the map as it was. (`Holds` is `rt_held`'s,
+// which the ledger reaches only by its qualified name.)
+theorem port_map_find_held(own: List<u8>, m: WordMap, length, k, j, left: u64, holds: rt_held::Stored::Holds(WordMap::stored(), own, length, m)):
+    WordMap::find_at(m, k, j, left) = WordMap::find_at::bytes(own, length, k, j, left).value ∧
+    rt_held::Stored::Holds(WordMap::stored(), WordMap::find_at::bytes(own, length, k, j, left).after, length, m) {
+    let ran = WordMap::find_at::runs_held(own, m, length, k, j, left, holds);
+    ⟨ran.value, ran.holds⟩
+}
+
+// And with the specification: the bytes' lookup, at a table that keeps the
+// invariant, is `assoc_get` of its occupied slots (`WordMap::get_is`).
+theorem port_map_get_meant(own: List<u8>, m: WordMap, length, k: u64, holds: rt_held::Stored::Holds(WordMap::stored(), own, length, m), inv: WordMapInv(m)):
+    WordMap::find_at::bytes(own, length, k, word_map_home(k), 4).value = m.abs().assoc_get(k).unwrap_or(0) {
+    trans(sym(WordMap::find_at::runs_held(own, m, length, k, word_map_home(k), 4, holds).value), WordMap::get_is(m, inv, k))
+}
+
+// A lookup whose measure is not a word's `toNat`.
+// expect-error: must `decreases` a 64-bit word's `toNat`
+runtime fn WordMap::find_slow(self m: WordMap, k, j, left: u64) → u64 decreases left.toNat() + 1 {
+    if more: 0 < left {
+        if lt: j < 4 {
+            if m.keys.at(j) = k { m.vals.at(j) } else { m.find_slow(k, (j + 1).band(3), left - 1) }
+        } else { 0 }
+    } else { 0 }
+}
+
+// The slot as the remainder it is: `k % 4 < 4` is found by the default
+// search from the remainder's law (docs/tactics/bv-omega-design.md §3.1).
+runtime fn WordMap::slot_key(mut self m: WordMap, k: u64) → u64 {
+    m.keys := m.keys.put(k % 4, k);
+    0
+}
+
+// Key 10 is stored in slot 2, the fourth word of the record.
+theorem port_map_slot_key_runs(): WordMap::slot_key::bytes(WordMap::empty_bytes(), 72, 10).after =
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10,
+     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+     0, 0, 0, 0, 0, 0, 0, 0] { refl }
+
+// ---------------------------------------------------------------------------
+// Rung 2: an arena in the written span (docs/native/rung2-spans-design.md §5)
+//
+// The arena is the library's (`Arena`, lib/native/runtime/arena.hthr): a
+// header of the top and the limit, then a heap of sixteen words, every
+// window `(base, count)` of it; a vector is a header of three heap words
+// (its window's base, its capacity, its length) and its window. What it
+// means is proved there over these compiled functions (`arena_laws.hthr`:
+// `alloc_below`, `alloc_fresh`, `store_apart`, `grow_abs`). These rows run
+// it on bytes.
+
+// An empty arena: top 0, limit 16, the heap zero.
+fn PORT_ARENA() → List<u8> { [0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0] ++ List::replicate(BitVec::ofNat(0), 128) }
+
+// Allocation: the first window at 0, the next at the old top 4, and the
+// top word moved to 7. The outcome is `Alloc` (`Got(base)` or `Full`), an
+// enum the code returns in two words.
+theorem port_arena_alloc_runs(): Arena::alloc::bytes(PORT_ARENA(), 144, 4).value = Got(0) ∧
+    Arena::alloc::bytes(Arena::alloc::bytes(PORT_ARENA(), 144, 4).after, 144, 3).value = Got(4) ∧
+    Arena::alloc::bytes(Arena::alloc::bytes(PORT_ARENA(), 144, 4).after, 144, 3).after.take(8) = [7, 0, 0, 0, 0, 0, 0, 0] {
+    ⟨refl, ⟨refl, refl⟩⟩
+}
+
+// `Full` at the limit, an answer and not an exit: the whole heap fits, one
+// word more does not, and the bytes are as they were.
+theorem port_arena_full_runs(): Arena::alloc::bytes(PORT_ARENA(), 144, 16).value = Got(0) ∧
+    Arena::alloc::bytes(PORT_ARENA(), 144, 17) = Mutated(PORT_ARENA(), Full) ∧
+    Arena::alloc::bytes(Arena::alloc::bytes(PORT_ARENA(), 144, 16).after, 144, 1).value = Full {
+    ⟨refl, ⟨refl, refl⟩⟩
+}
+
+// A vector of capacity 2 (its header at 0, its window at 3), pushed three
+// times: the third push finds it full, grows it into a window of four at
+// the top (5), copies 7 and 8 there, and stores 9. The bytes show the top
+// at 9, the header `[5, 4, 3]`, the old window `[7, 8]` left behind and
+// the new one `[7, 8, 9]`.
+fn PORT_VEC() → List<u8> { Arena::new_vec::bytes(PORT_ARENA(), 144, 2).after }
+fn PORT_VEC_TWO() → List<u8> { Arena::push::bytes(Arena::push::bytes(PORT_VEC(), 144, 0, 7).after, 144, 0, 8).after }
+
+theorem port_vec_grow_runs(): Arena::new_vec::bytes(PORT_ARENA(), 144, 2).value = Got(0) ∧
+    Arena::push::bytes(PORT_VEC_TWO(), 144, 0, 9).value = 1 ∧
+    Arena::push::bytes(PORT_VEC_TWO(), 144, 0, 9).after = List::append([9, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 0, 0, 9, 0, 0, 0, 0, 0, 0, 0], List::replicate(BitVec::ofNat(0), 64)) {
+    ⟨refl, ⟨refl, refl⟩⟩
+}
+
+// Growing past the limit: the fourth push fills the window of four, the
+// fifth needs a window of eight with seven words left, and answers 0 with
+// the bytes as they were.
+fn PORT_VEC_FOUR() → List<u8> { Arena::push::bytes(Arena::push::bytes(PORT_VEC_TWO(), 144, 0, 9).after, 144, 0, 10).after }
+
+theorem port_vec_full_runs(): Arena::push::bytes(PORT_VEC_FOUR(), 144, 0, 11) = Mutated(PORT_VEC_FOUR(), 0) { refl }
+
+// Reset to a mark: after two windows, the top back at 4 frees the second,
+// and the next allocation answers `Got(4)` again.
+fn PORT_TWO_WINDOWS() → List<u8> { Arena::alloc::bytes(Arena::alloc::bytes(PORT_ARENA(), 144, 4).after, 144, 3).after }
+
+theorem port_arena_reset_runs(): Arena::reset::bytes(PORT_TWO_WINDOWS(), 144, 4).value = 1 ∧
+    Arena::alloc::bytes(Arena::reset::bytes(PORT_TWO_WINDOWS(), 144, 4).after, 144, 2).value = Got(4) ∧
+    Arena::reset::bytes(PORT_TWO_WINDOWS(), 144, 9) = Mutated(PORT_TWO_WINDOWS(), 0) {
+    ⟨refl, ⟨refl, refl⟩⟩
+}
+
+fn ARENA_ALLOC_ROOT() → Nat { Arena::alloc::program.len() - 1 }
+
+// The code's two words: the tag (`Got` 0, `Full` 1) and the base, 0 where
+// the outcome carries none. The program's root is its last function,
+// after the accessors it calls.
+theorem port_arena_alloc_program(): program_run(Arena::alloc::program, [PORT_ARENA()], ARENA_ALLOC_ROOT(), [4096, 144, 4]).word = 0 ∧
+    program_run(Arena::alloc::program, [PORT_ARENA()], ARENA_ALLOC_ROOT(), [4096, 144, 4]).rest = [0] ∧
+    program_run(Arena::alloc::program, [PORT_TWO_WINDOWS()], ARENA_ALLOC_ROOT(), [4096, 144, 2]).rest = [7] ∧
+    program_run(Arena::alloc::program, [PORT_ARENA()], ARENA_ALLOC_ROOT(), [4096, 144, 17]) = Ending(1, [PORT_ARENA()], rest := [0]) {
+    ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩
+}
+
+// A window's element is read and stored under found proofs that it is
+// inside the window and the window inside the heap (`Arena::read`,
+// `Arena::store`), with no junk default past the count. As a `runtime fn`
+// that takes the proofs it is refused: a function of a laid record does not
+// take a proof parameter yet (runtime-record-function-limits). Compiled code
+// reads a window under its own tests, as `push_in` and `copy_at` do. The
+// stale window kept past a reset is the negative control of
+// `arena_laws_tests.hthr`, with an index read without a test.
+// expect-error: a type with no runtime layout
+runtime fn Arena::port_read(self a: Arena, base, count, i: u64, inside: ∥i.toNat() < count.toNat()∥ := bv_omega,
+    fits: ∥base.toNat() + count.toNat() <= 16∥ := bv_omega) → u64 {
+    a.heap.at(base + i)
+}
+
+// What it publishes, at every arena the span holds.
+theorem port_arena_alloc_held(own: List<u8>, a: Arena, length, size: u64, holds: rt_held::Stored::Holds(Arena::stored(), own, length, a)):
+    Arena::alloc(a, size).value = Arena::alloc::bytes(own, length, size).value ∧
+    rt_held::Stored::Holds(Arena::stored(), Arena::alloc::bytes(own, length, size).after, length, Arena::alloc(a, size).after) {
+    let ran = Arena::alloc::runs_held(own, a, length, size, holds);
+    ⟨ran.value, ran.holds⟩
+}
+
+// The arena at a size chosen at run time, a laid record that takes it
+// (§3): allocation is straight-line and compiles, the size the word after
+// the length word.
+laid record PortArena(size: u64) { top: u64, heap: [u64; size.toNat()] }
+
+runtime fn PortArena::alloc({size: u64}, mut self a: PortArena(size), n: u64) → Alloc {
+    if fits: a.top <= size ∧ n <= size - a.top { let base = a.top; a.top := a.top + n; Got(base) } else { Full }
+}
+
+// Two words of heap: a window of one at 0, the top moved to 1; one of
+// three is `Full`.
+theorem port_arena_sized_runs(): PortArena::alloc::bytes(List::replicate(BitVec::ofNat(0), 24), 24, 2, 1) =
+        Mutated([1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], Got(0)) ∧
+    PortArena::alloc::bytes(List::replicate(BitVec::ofNat(0), 24), 24, 2, 3).value = Full {
+    ⟨refl, refl⟩
+}
+
+theorem port_arena_sized_held(size: u64, own: List<u8>, a: PortArena(size), length, n: u64, holds: rt_held::Stored::Holds(PortArena::stored(size), own, length, a)):
+    PortArena::alloc(a, n, size := size).value = PortArena::alloc::bytes(own, length, size, n).value {
+    PortArena::alloc::runs_held(size, own, a, length, n, holds).value
+}
+
+// The growing copy at a run-time size: a loop over a laid record that
+// takes parameters, which waits for the loop combinator's round 4
+// (loops-on-one-combinator). Until then the arena's heap is a literal
+// sixteen words.
+// expect-error: waits for the loop combinator
+runtime fn PortArena::copy_at({size: u64}, self a: PortArena(size), from, to, i, n: u64) → Mutated<PortArena(size), u64> decreases (n - i).toNat() {
+    if more: i < n {
+        if src: from + i < size {
+            if dst: to + i < size { @copy_at(size, a with { heap = a.heap.put(to + i, a.heap.at(from + i)) }, from, to, i + 1, n) }
+            else { Mutated(a, 0) }
+        } else { Mutated(a, 0) }
+    } else { Mutated(a, 1) }
+}
+
+// ---------------------------------------------------------------------------
 // Rung 3: inductive data
 
 // Where a byte occurs, as a list.
-// expect-error: a function over a span returns
+// expect-error: a list of these has no runtime layout
 runtime fn Bytes::port_positions({n: u64}, self s: Bytes(n), b: u8) → List<u64> {
     let mut out: List<u64> = [];
     for i in 0..s.len() { if s[i] = b { out := Cons(i, out); } }
@@ -186,7 +553,7 @@ runtime fn Bytes::port_positions({n: u64}, self s: Bytes(n), b: u8) → List<u64
 // Rung 4: functional Heather
 
 // A count as the number it is.
-// expect-error: a function over a span returns
+// expect-error: `add` is an ordinary fn
 runtime fn Bytes::port_count({n: u64}, self s: Bytes(n), b: u8) → Nat {
     let mut c: Nat = 0;
     for i in 0..s.len() { if s[i] = b { c := c + 1; } }

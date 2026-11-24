@@ -233,6 +233,12 @@ impl<'a, 'v> Reader<'a, 'v> {
 /// and may loop; fuel bounds each evaluation, this bounds the conversation.
 const REQUEST_BUDGET: usize = 10_000;
 
+/// A generator's: its requests grow with the declaration it reads (the
+/// runtime generator asks about each node of a reflected body and each
+/// proof it assembles), so a function of several stores in several arms is
+/// past a tactic's budget while still finite.
+const GENERATOR_REQUEST_BUDGET: usize = 100_000;
+
 /// Nodes of one returned `Expr`, and characters of one `String`, the host
 /// will read before declining (the runaway discipline: the value is produced
 /// by library code and may be arbitrarily large). A generator's reply holds
@@ -2415,8 +2421,9 @@ impl Host<'_> {
     fn drive(&self, run: &mut Run, speaker: &mut dyn Speaker) -> Result<Ended, String> {
         let span = run.span;
         let what = if run.generator { "generator" } else { "tactic" };
+        let budget = if run.generator { GENERATOR_REQUEST_BUDGET } else { REQUEST_BUDGET };
         let mut step = speaker.start();
-        for answered in 0..REQUEST_BUDGET {
+        for answered in 0..budget {
             let request = match step {
                 Err(msg) => return Err(format!("{msg}, after {answered} requests")),
                 Ok(Step::Done(e)) => return Ok(Ended::Result(e)),
@@ -2479,7 +2486,7 @@ impl Host<'_> {
             };
             step = speaker.resume(answer);
         }
-        Err(format!("the {what} made more than {REQUEST_BUDGET} requests without finishing"))
+        Err(format!("the {what} made more than {budget} requests without finishing"))
     }
 
     /// The tactic's result as a proof of the goal: elaborated, compared with

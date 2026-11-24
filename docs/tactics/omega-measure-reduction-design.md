@@ -875,3 +875,188 @@ before. A Bool equation is also read either way round (`True = b` as
 `lib/_tests/std/tactic/bitvec_omega_tests.hthr` ("`omega` reads a word's
 comparison bit"); `examples/sort/sort.hthr`'s `insert_at_inserts` states
 its `ab` and `ba` by `omega`.
+
+## 24. A measure through an `if` (2026-11-24)
+
+`issues/while-decrease-through-branches.md`. A `while` whose measure is
+assigned in each arm of an `if` (or set to an `if`), and a recursive call
+at an `if`-valued argument, owe `m(if c { a } else { b }) < m(x)`. Neither
+search splits the match: `omega` reads `m(if …)` as an atom unrelated to
+`m(x)`, and `bv_omega` takes the word apart only through arithmetic. The
+closer (`Checking::elab_measure_search` beside the `CLOSER` arm,
+`crates/elab/src/checking.rs`) now falls back, once both searches have
+failed and only where `split_all`'s search finds a stuck match in the goal,
+to `split_all`'s stuck-match step with the searches alone at each leaf
+(`measure::CLOSER_LEAF`): each arm gets its test's equation, and over
+words its Nat reading, so `left = 5` gives `toNat(left) = 5` beside the
+arm's `0 < toNat(left)`. Lean's `decreasing_tactic` splits the same way. A
+split whose leaves fail leaves the searches' first refusal as the
+diagnosis, so `Obligations::explain` and the loop's rewording read it as
+before. The fallback costs only an obligation that would otherwise be
+refused.
+
+A recursive call's arguments are substituted into the measure as written,
+and an `if` there infers its type from an arm: `(if n = 7 { 0 } else { n -
+1 }).toNat()` read `0` as a `Nat`, and `toNat` was no method of it. An
+argument that is a match or a block (an `if` once the body is rewritten,
+its scrutinee bound first) is now ascribed at its parameter's type
+(`measure::typed_arguments`). Probes and a control whose one arm keeps the
+measure are in `lib/_tests/std/core/imperative_statements_tests.hthr`
+(Nat) and `lib/_tests/std/tactic/bitvec_omega_tests.hthr` (words).
+
+## 25. `x % n` and `x / n` by a divisor that is not a literal (2026-11-24)
+
+`issues/omega-nonliteral-div-mod-facts.md`. At a literal divisor `c` a Nat
+`x % c` and `x / c` are read through a quotient atom with its division
+bounds (`NatMod`/`NatDiv`); at any other divisor both were opaque atoms, so
+`x % n <= x`, `x % n < n` under `0 < n` and `x / n <= x` had models. They
+are now split as §16 splits `a - b`, by the divisor's two cases:
+`omega::nat_divmod_elim(x, n, …)` gives `n = 0` with `x % n = x` and
+`x / n = 0`, or `0 < n` with `x % n < n`, `x % n <= x` and `x / n <= x`; both
+with the link `x / n * n + x % n = x`, which holds at every divisor. It is bound as
+`__omega_dm{k}_case`, `_mod`, `_div`/`_mod_le`, `_div_le` and `_link`. The
+reads stay atoms; the product `x / n * n` is one atom more, so the link
+serves a goal that spells that product (`x / n * n <= x`,
+`x < x / n * n + n` under `0 < n`) and nothing that needs it multiplied out.
+A `0 < n`, `n ≠ 0` or `if h: 0 < n` in scope refutes the zero branch at once,
+so no guard has to choose a plain fact over the split. The lemma cites
+`Nat::mod_lt`, `Nat::div_mul_add_mod`, `Nat::mod_zero`/`div_zero` and the
+two laws added beside them in `nat.hthr`, `Nat::mod_le` and `Nat::div_le`
+(any divisor); the certificate never unfolds `divmod`.
+
+This is the word side's idea (`docs/tactics/bv-omega-design.md` §3.1, its
+`d <= 0 ∨ r < d` disjunctions) one level down, written as `omega`'s own
+splits are rather than as hypotheses: `bv_omega` states facts as source
+before it calls `omega`, while `omega` reflects the context it is given, so
+its facts enter where its other fallbacks do. `split_nat_division` is the
+last of them, after `split_max_min`, in the attempt that answers only and
+after CutSat found a model. A goal that closes without the facts never pays
+for them, and the extra hypotheses never widen a relevance layer: they exist
+only inside the branches, each a fresh `omega`. Reads are found as §16 finds
+subtractions (the sides `integral_sides` reads, through `Succ`, applied
+globals and fields as put, never under a binder, newest fact first), and a
+read whose divisor spells as an integer literal is left to the reflection's
+own facts. A pair, compared by the spelling of its dividend and divisor, is
+settled once a `_mod` fact in scope names it; past six such facts nothing
+more is split. A refused goal over `p` open pairs runs `2^p` leaves, each a
+small linear problem (a few milliseconds for two pairs).
+
+Left: over a divisor that is not a literal the link is linear only in the
+product atom. What follows from the link and the bounds as they stand
+closes (`x < x / n * n + n` under `0 < n`), but a goal that needs the
+product multiplied out, such as `x / n * 2 <= x` under `2 <= n` (which scales
+`x / n` by a bound on `n`), or `x / n` compared across two divisors, is
+nonlinear and stays out of reach: `nlinarith` territory
+(docs/tactics/nonlinear-arithmetic-design.md). Probes (`div_open_*`)
+and refused controls (`x % n < n` with nothing known, `x / n < x`,
+`x % n < x`, `x / n * n = x`) are in `lib/_tests/std/tactic/omega_tests.hthr`.
+
+## 26. Definitions at open arguments, and what has no spelling (2026-11-24)
+
+`issues/arithmetic-definition-opaque-at-open-arguments.md` (item 1),
+`issues/omega-unspellable-local-in-scope.md`. Both met naming the distance
+between two slots of the word map, `fn WordMap::dist(a, b: Nat) → Nat {
+(b + 4 - a) % 4 }`.
+
+- **A definition at open arguments.** §2's gate let a call through only
+  where an argument is a constructor or a literal, so `dist(j, s)` was an
+  atom and `omega` found a model with `dist(j, s) = 0`. A call at open
+  arguments is now walked a few head reducts (`Unfold::OpenArithmetic`: the
+  δ step and the β steps instantiating its parameters) for a body built
+  from `+`, `*`, `-`, `div`, `mod`, successors and literals over the call's
+  own arguments alone, and read as that body (`open_arithmetic_body`). A
+  body that calls further definitions is not opened: `CReal::bound(x)`, a
+  quotient of `x.at(0)`'s fields, is a quantity `creal`'s facts are stated
+  about, and opened it no longer met them. A recursive definition is stuck
+  on its `match` long before an arithmetic head, so it stays an atom and
+  pays only the short walk; a word's `toNat` is never walked. The subtraction
+  split (§16) looks through the same opening, so `b + 4 - a` inside
+  `dist` is split as a written one is. The certificate still spells
+  `dist(a, b)`; the checker converts it by the same δ step.
+- **A generated binder.** A nested pattern binds its variable under a
+  generated name (`#p1`) that the written `q` aliases, and a fact's type
+  mentions the binder. Spelled raw, the certificate did not parse
+  ("unexpected character '#'"). A certificate that fails so is built once
+  more with every generated binder named `__omega_hidden_N`, as a shadowed
+  one is named (`source_context_naming`); such a binder is still not read
+  as a fact itself. Only on that failure: a generated binder is also a
+  structure's instance dictionary, and named it hides the operations
+  `ring`, `linarith` and `omega` read by their plain spelling (`difference`
+  and `creal` failed that way when every call named them).
+- **A term with no spelling that a `let` names.** `let jj = reached.witness`,
+  where `reached` is bound to a call one of whose arguments the speller
+  cannot write, left `jj.toNat()` without a spelling, and the goal with it
+  ("could not spell a natural expression"). Where the plain spelling fails,
+  the term is spelled again with every subterm that is a visible `let`'s
+  value written as the `let`'s name (`spell_term_source_aliased`); the
+  name reads back to the same term where the certificate is parsed. Asked
+  only after the plain spelling failed. A term neither names is still a
+  refusal, and the refusal now quotes it and says to bind it.
+
+Probes and controls: `lib/_tests/std/tactic/omega_tests.hthr` ("Definitions
+at open arguments": a recursive definition stays an atom, a false claim
+about the body is refused; "Locals with no spelling").
+
+## 27. A written `omega` lifted, and where an inline call's cost goes (2026-11-24)
+
+`issues/runtime-hash-map-spec.md` reported one inline `omega` in
+`WordMap::adds_next`'s nested `λ` taking minutes, against milliseconds for
+the same facts as a lemma, and `docs/proof-patterns.md` §3 made "keep its
+context small" a rule users must follow. Reproduced on the current tree,
+the gap is not of that order: each of the two arithmetic steps of
+`adds_next` written inline, with the facts it reads, cost a small constant
+factor over its lemma plus the lemma's call. What dominates, inline or not,
+is the certificate: a slot distance `(s + 4 - j) % 4` is a truncated
+subtraction (§16, a split) under a remainder by four (a quotient atom),
+and the real shadow fails on integrality, so each leaf is a CutSat
+refutation, a case analysis spelled over every atom of the leaf. The lemma
+over bare numbers is seconds too; the context adds atoms and facts to every
+leaf, which widens every row and lengthens the case analysis.
+
+Two things changed:
+
+- **A written `omega` lifts its proof** into a proved slot of the
+  declaration, as `bv_omega` does (docs/tactics/bv-omega-design.md §6;
+  where the slot's context or statement does not check on its own, as for
+  a `λ r f => omega` whose binder types the coinductive goal's checking
+  direction supplied, `lift_proved` keeps that proof inline; and a
+  `simp_only` discharger, which is tried per side condition and
+  kernel-checked in the goal world, is elaborated in a generated scope, so
+  an `omega` in it stays inline):
+  the gate checks the certificate once, as its own item in the
+  declaration's context, and the body holds a reference. The certificate
+  is no longer substituted along with the body under each enclosing
+  binder and `let`. A call inside a certificate or a generated proof stays
+  inline. `count_tactic_slots` reserves one more slot per `omega`; a proved
+  slot records its tactic, so an open goal shows `inside := omega`.
+- **Nothing else about the search.** A split on a quotient that the real
+  shadow pins within a few values (`0 <= (x + 4 - y) / 4 <= 1`), tried
+  before CutSat, made a lone distance lemma cheaper, but the branches
+  multiply with the number of remainders (each branch is a full `omega`
+  again), and the word map's lemmas over five remainders got several times
+  slower. It was withdrawn.
+
+Measured with `scripts/perf ab` on `word_map_laws.hthr` against the tree
+before this round (cold, width 1, the module's arithmetic rewritten with
+it): the proofs whose `omega` sits in a deep context gated in a fraction of
+their time (`shift_move`, `shift_skip`), the module's gate and total fell
+by a quarter or so, and local substitution nodes by a tenth over the whole
+check, imports included; the distance lemmas themselves did not move. A
+distance step moved inline (`step_before_back` into `adds_next`) cost more
+than the lemma and its call: the context still widens the certificate.
+
+What the context still changes besides width: the subtraction split
+(§16) takes the facts newest first, up to `SUB_SPLIT_LIMIT`, whatever atoms
+they share with the goal. Two of the word map's one-off distance steps,
+written inline in a context of `ShiftInv`'s distances, spent the splits on
+facts over other slots and got stuck; as lemmas over bare numbers they
+close. A split ordered by connection to the goal (the relevance layers'
+reach) would let them move inline.
+
+Left, in the order the measurements point at: the split order above;
+rows sized by the atoms the
+refutation used rather than every atom reflected (`issues/bv-omega-check-cost.md`
+cost 1, now `omega`'s own), and a cheaper certificate for a CutSat leaf.
+Whether a narrowed call reads only its listed facts
+(`issues/omega-listed-facts-only.md`) is a separate lever on the same
+width: it would shrink a leaf's atoms to what the call names.

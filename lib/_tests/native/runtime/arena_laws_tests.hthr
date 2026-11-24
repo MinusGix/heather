@@ -1,0 +1,102 @@
+// Probes of `arena_laws.hthr`: the laws together at an open arena, and a
+// window kept past a reset as the negative control.
+import logic;
+import bool;
+import nat;
+import list;
+import vector;
+import algebra;
+import omega;
+import runtime_data;
+import arena;
+import arena_laws;
+
+// At an open arena: a window allocated above every older window takes a
+// store that no read of an older window sees. `alloc_apart` gives the
+// premise `store_apart` takes, in a checking position; the base is the one
+// the outcome carries (`Got(base)`), with an open base, and `alloc_inside`
+// at it is the proof the store takes that its window is inside the heap.
+theorem fresh_store_unseen(a: Arena, size, base, i, x, b, c, k: u64, got: Arena::alloc(a, size).value = Got(base),
+    li: i.toNat() < size.toNat(), lk: k.toNat() < c.toNat(), older: b.toNat() + c.toNat() <= a.top.toNat(), small: a.top.toNat() <= 16):
+    Arena::read(Arena::store(Arena::alloc(a, size).after, base, size, i, x, fits := squash(Arena::alloc_inside(a, size, base, got))), b, c, k) =
+        Arena::read(Arena::alloc(a, size).after, b, c, k)
+{
+    let apart: Arena::Apart(base.toNat(), size.toNat(), b.toNat(), c.toNat()) =
+        match Arena::alloc_apart(a, size, base, got, b.toNat(), c.toNat(), older) { Inl(p) => Inr(p), Inr(p) => Inl(p) };
+    Arena::store_apart(Arena::alloc(a, size).after, base, size, i, x, b, c, k,
+        li, Arena::alloc_inside(a, size, base, got), lk, omega(older, small), apart)
+}
+
+// A caller takes the outcome apart: where it is `Got(base)`, the base and
+// `alloc_inside` at it are what a store into the window takes, and the
+// store is read back at the old top; where it is `Full`, there is no base
+// and the arena is as it was. (Stated as theorems: a `match` on the outcome
+// whose `Got` arm stores needs the arm's equation to reach `alloc_inside`.)
+theorem alloc_then_store_got(a: Arena, size, base, x: u64, got: Arena::alloc(a, size).value = Got(base), pos: 0 < size.toNat()):
+    And<base = a.top, Arena::read(Arena::store(Arena::alloc(a, size).after, base, size, 0, x, fits := squash(Arena::alloc_inside(a, size, base, got))),
+        base, size, 0, fits := squash(Arena::alloc_inside(a, size, base, got))) = x>
+{
+    And(Arena::alloc_fresh(a, size, base, got).left,
+        Arena::read_store_same(Arena::alloc(a, size).after, base, size, 0, x, pos, Arena::alloc_inside(a, size, base, got)))
+}
+
+theorem alloc_then_store_full(a: Arena, size: u64, over: a.limit.toNat() < a.top.toNat() + size.toNat()):
+    And<Arena::alloc(a, size).value = Full, Arena::alloc(a, size).after = a>
+{
+    let eq = Arena::alloc_full(a, size, over);
+    And(cong_fn(λ (m: Mutated<Arena, Alloc>) => m.value, eq), cong_fn(λ (m: Mutated<Arena, Alloc>) => m.after, eq))
+}
+
+// The negative control at the type: `Full` carries no base, so an arm
+// that reads one is refused.
+// expect-error: unbound name `base`
+fn full_base(a: Arena, size: u64) → u64 { match Arena::alloc(a, size).value { Got(base) => base, Full => base } }
+
+// The negative control. `(0, 4)` allocated, the arena reset to 0, `(0, 4)`
+// allocated again: the old window and the new one meet, so `store_apart`'s
+// premise fails, and its conclusion does too (a store through the new
+// window is read through the old).
+fn STALE_EMPTY() → Arena { Arena(BitVec::ofNat(0), BitVec::ofNat(16), List::replicate(BitVec::ofNat(0, n := 64), 16).vector_of(16, BitVec::ofNat(0))) }
+
+fn STALE_FIRST() → Mutated<Arena, Alloc> { Arena::alloc(STALE_EMPTY(), 4) }
+
+fn STALE_SECOND() → Mutated<Arena, Alloc> { Arena::alloc(Arena::reset(STALE_FIRST().after, 0).after, 4) }
+
+// Each base, as the outcome carries it (both are `Got`).
+fn STALE_ONE() → u64 { STALE_FIRST().value.base_or(16) }
+
+fn STALE_TWO() → u64 { STALE_SECOND().value.base_or(16) }
+
+theorem stale_both_got(): (STALE_FIRST().value = Got(0)) ∧ (STALE_SECOND().value = Got(0)) { ⟨refl, refl⟩ }
+
+theorem stale_windows_meet(): ¬Arena::Apart(STALE_ONE().toNat(), 4, STALE_TWO().toNat(), 4) {
+    let b1: (STALE_ONE().toNat() = 0) = refl;
+    let b2: (STALE_TWO().toNat() = 0) = refl;
+    λ apart => match apart { Inl(p) => omega(p, b1, b2), Inr(p) => omega(p, b1, b2) }
+}
+
+theorem zero_not_five(e: BitVec::ofNat(0, n := 64) = BitVec::ofNat(5)): False { bv_omega }
+
+// Both windows are `(0, 4)` (`stale_both_got`); their fits are given by
+// name, from the bases' values.
+theorem stale_one_fits(): STALE_ONE().toNat() + 4 <= 16 { let b: (STALE_ONE().toNat() = 0) = refl; omega(b) }
+
+theorem stale_two_fits(): STALE_TWO().toNat() + 4 <= 16 { let b: (STALE_TWO().toNat() = 0) = refl; omega(b) }
+
+theorem stale_store_seen(): ¬(Arena::read(Arena::store(STALE_SECOND().after, STALE_TWO(), 4, 1, 5, fits := squash(stale_two_fits())), STALE_ONE(), 4, 1,
+        fits := squash(stale_one_fits())) =
+    Arena::read(STALE_SECOND().after, STALE_ONE(), 4, 1, fits := squash(stale_one_fits())))
+{
+    let seen: (Arena::read(Arena::store(STALE_SECOND().after, STALE_TWO(), 4, 1, 5, fits := squash(stale_two_fits())), STALE_ONE(), 4, 1,
+        fits := squash(stale_one_fits())) = BitVec::ofNat(5)) = refl;
+    let before: (Arena::read(STALE_SECOND().after, STALE_ONE(), 4, 1, fits := squash(stale_one_fits())) = BitVec::ofNat(0)) = refl;
+    λ e => zero_not_five(trans(sym(before), trans(sym(e), seen)))
+}
+
+// A negative control for the found proof: an element of a window with no
+// test that it is inside is refused, not read as 0.
+// expect-error: was left to its default
+fn untested_read(a: Arena, i: u64) → u64 { a.read(0, 4, i) }
+
+// With the caller's own test it is found.
+fn tested_read(a: Arena, i: u64) → u64 { if h: i < 4 { a.read(0, 4, i) } else { 0 } }

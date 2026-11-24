@@ -3855,6 +3855,7 @@ impl Parser {
                         eqbind: None,
                         motive: None,
                         arms,
+                        test: None,
                     },
                     span: open_cases.join(close_cases),
                 };
@@ -4188,6 +4189,7 @@ impl Parser {
                     eqbind,
                     motive,
                     arms,
+                    test: None,
                 },
                 span,
             },
@@ -7078,6 +7080,7 @@ impl Parser {
                 eqbind,
                 motive,
                 arms,
+                test: None,
             },
             span: start.join(end),
         })
@@ -7254,6 +7257,7 @@ impl Parser {
                 eqbind,
                 motive: None,
                 arms,
+                test: evidence,
             },
             span,
         })
@@ -7335,6 +7339,7 @@ impl Parser {
                 eqbind: evidence.map(|_| EQUATION.into()),
                 motive: None,
                 arms,
+                test: None,
             },
             span,
         })

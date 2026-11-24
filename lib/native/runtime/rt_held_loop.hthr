@@ -469,3 +469,158 @@ theorem Agrees::bare<A>(whole: Stored<A>, n: BitVec(64), tys: Table, h: Mutated<
     ag: Agrees<A, BitVec(64)>(whole, n, h, FTm::recast(tys, Word(64), Word(64), m))): Agrees<A, BitVec(64)>(whole, n, h, m) {
     Agrees(ag.value, ag.holds)
 }
+
+// ---------------------------------------------------------------------------
+// A loop that only reads the record
+
+// A loop that only reads its record answers a word, and its function of
+// the record is that word beside the record as it was
+// (`HWorld::unchanged`). Its step's arms are words and its own call, so
+// its body read for the value (`done` the end's `.value`, the self-call
+// answered by a word) is the step by conversion, as a writer's body read
+// whole is its step. `FFun::reads_guarded` turns that equation into the
+// writer's (`FFun::HeldGuarded`, at `unchanged`), and the loop is then
+// proved as a writer is: its code is a writer's that stores nothing.
+
+// Whether a body leaves the record as it found it: no store, no call
+// that may write, nothing lent and no loop node.
+fn FTm::still(self t: FTm) → Bool {
+    match t {
+        Pure(_) => True,
+        Let(_, body) => body.still(),
+        If(_, yes, no) => yes.still() && no.still(),
+        IfEq(_, yes, no) => yes.still() && no.still(),
+        Put(_, _, _, _) => False,
+        Call(_, _, _) => False,
+        Again(_) => True,
+        Lend(_, _, _, _) => False,
+        Loop(_, _, _, _) => False,
+    }
+}
+
+// A pass that leaves the record: it ends at the record it began at, or
+// goes round on it.
+fn Pass::Keeps<A, R>(a: A, p: Pass<A, R>) → Type {
+    match p { Ends(m) => m.after = a, Goes(_, b) => b = a }
+}
+
+theorem FTm::still_keeps<A>(self t: FTm, hw: HWorld<A>, res: Ty): t.still().IsTrue() → (g: List<Ty>) → (env: Env(hw.fw.w.tys, g)) →
+    (own: List<BitVec(8)>) → (a: A) → Pass::Keeps<A, res.sem(hw.fw.w.tys)>(a, t.held_pass(hw, res, g, env, own, a)) {
+    match t {
+        Pure(_) => λ _ g env own a => refl,
+        Let(e, body) => λ still g env own a =>
+            body.still_keeps(hw, res, still, Cons(e.ty(hw.fw.w, g), g), Pair(FTm::held_value(hw, own, e, g, env, a), env), own, a),
+        If(c, yes, no) => λ still g env own a => {
+            let both = yes.still().is_true_and(no.still(), still);
+            let by_case: ((b: Bool) → Pass::Keeps<A, res.sem(hw.fw.w.tys)>(a,
+                match b { False => no.held_pass(hw, res, g, env, own, a), True => yes.held_pass(hw, res, g, env, own, a) })) =
+                λ b => match b {
+                    False => no.still_keeps(hw, res, both.right, g, env, own, a),
+                    True => yes.still_keeps(hw, res, both.left, g, env, own, a),
+                };
+            by_case(Ty::cast(hw.fw.w.tys, Ty::at(g, c), Bit, Env::get(hw.fw.w.tys, g, env, c)))
+        },
+        IfEq(c, yes, no) => λ still g env own a => {
+            let both = yes.still().is_true_and(no.still(), still);
+            let by_case: ((b: Bool) → Pass::Keeps<A, res.sem(hw.fw.w.tys)>(a,
+                Tm::convoy(Pass<A, res.sem(hw.fw.w.tys)>, b, yes.held_pass(hw, res, g, env, own, a), no.held_pass(hw, res, g, env, own, a)))) =
+                λ b => match b {
+                    False => no.still_keeps(hw, res, both.right, g, env, own, a),
+                    True => yes.still_keeps(hw, res, both.left, g, env, own, a),
+                };
+            by_case(Ty::cast(hw.fw.w.tys, Ty::at(g, c), Bit, Env::get(hw.fw.w.tys, g, env, c)))
+        },
+        Put(_, _, _, _) => λ still => false_elim(still),
+        Call(_, _, _) => λ still => false_elim(still),
+        Again(_) => λ _ g env own a => refl,
+        Lend(_, _, _, _) => λ still => false_elim(still),
+        Loop(_, _, _, _) => λ still => false_elim(still),
+    }
+}
+
+// A pair is its parts.
+theorem Mutated::of_parts<A, R>(m: Mutated<A, R>, a: A, v: R, after: m.after = a, value: m.value = v): m = Mutated(a, v) {
+    (match m as λ m2 => m2.after = a → m2.value = v → m2 = Mutated(a, v) {
+        Mutated(x, y) => λ ea ev => trans(cong_fn(λ (z: A) => Mutated(z, y), ea), cong_fn(λ (u: R) => Mutated(a, u), ev)),
+    })(after, value)
+}
+
+// `FFun::falls` for an answer that is a word.
+theorem FFun::falls_value<A>(f: A → List<BitVec(64)> → BitVec(64), m: A → List<BitVec(64)> → Nat, bound: Nat, b: A, zs: List<BitVec(64)>,
+    result: BitVec(64),
+    all: (again: A → List<BitVec(64)> → BitVec(64)) → ((c: A) → (us: List<BitVec(64)>) → m(c, us) < bound → again(c, us) = f(c, us)) →
+        result = again(b, zs)): m(b, zs) < bound {
+    let below = λ (c: A) (us: List<BitVec(64)>) => (m(c, us) + 1).leb(bound);
+    let other = λ (v: BitVec(64)) (c: A) (us: List<BitVec(64)>) => match below(c, us) { False => v, True => f(c, us) };
+    let agrees = λ (v: BitVec(64)) (c: A) (us: List<BitVec(64)>) (lt: m(c, us) < bound) =>
+        cong_fn(λ (t: Bool) => match t { False => v, True => f(c, us) }, Nat::leb_true(m(c, us) + 1, bound, lt));
+    let zero: BitVec(64) = BitVec::ofNat(0);
+    let one: BitVec(64) = BitVec::ofNat(1);
+    (match below(b, zs) as λ t => (below(b, zs) = t) → m(b, zs) < bound {
+        False => λ e => {
+            let at = λ (v: BitVec(64)) => trans(all(other(v), agrees(v)),
+                cong_fn(λ (t: Bool) => match t { False => v, True => f(b, zs) }, e));
+            let same: (zero = one) = trans(sym(at(zero)), at(one));
+            let words: (zero.toNat() = one.toNat()) = cong_fn(λ (x: BitVec(64)) => x.toNat(), same);
+            false_elim(Nat::zero_ne_succ(0, trans(sym(BitVec::toNat_ofNat(64, 0, trivial)), trans(words, BitVec::toNat_ofNat(64, 1, trivial)))))
+        },
+        True => λ e => Nat::leb_sound(m(b, zs) + 1, bound, Bool::is_true_of_eq(e)),
+    })(refl)
+}
+
+// The equation of a loop that only reads the record, at its value: the
+// body read for the value, its self-call answered by any word that agrees
+// with the function below the measure, is the function. `f` and the
+// measure are of the record and the operands.
+fn FFun::HeldReads<A>(hw: HWorld<A>, ws: List<Ty>, body: FTm, f: A → List<BitVec(64)> → BitVec(64), m: A → List<BitVec(64)> → Nat) → Type {
+    Ty::ForWords(ws, λ (xs: List<BitVec(64)>) => (own: List<BitVec(8)>) → (a: A) → (again: A → List<BitVec(64)> → BitVec(64)) →
+        ((b: A) → (zs: List<BitVec(64)>) → m(b, zs) < m(a, xs.drop(2)) → again(b, zs) = f(b, zs)) →
+        body.tail_held(hw, Word(64), λ (e: Mutated<A, BitVec(64)>) => e.value, λ (ys: List<BitVec(64)>) (b: A) => again(b, ys.drop(2)),
+            Ty::bind_onto(ws, Nil), Ty::extend(hw.fw.w.tys, ws, Nil, trivial, xs), own, a) = f(a, xs.drop(2)))
+}
+
+// A body that leaves the record and satisfies its equation at the value
+// satisfies the writer's equation at the value beside the record as it
+// was. A pass that goes round reads every answer alike at its state, so
+// that state is below the measure (`FFun::falls_value`), where the
+// answer is the function's, beside the record.
+theorem FFun::reads_guarded<A>(hw: HWorld<A>, ws: List<Ty>, body: FTm, still: body.still().IsTrue(), f: A → List<BitVec(64)> → BitVec(64),
+    m: A → List<BitVec(64)> → Nat, reads: FFun::HeldReads(hw, ws, body, f, m)):
+    FFun::HeldGuarded(hw, ws, body, λ (a: A) (zs: List<BitVec(64)>) => HWorld::unchanged(a, f(a, zs)), m) {
+    let tys = hw.fw.w.tys;
+    let ctx = Ty::bind_onto(ws, Nil);
+    Ty::for_words_of(ws, λ (xs: List<BitVec(64)>) => (own: List<BitVec(8)>) → (a: A) → (again: A → List<BitVec(64)> → Mutated<A, BitVec(64)>) →
+        ((b: A) → (zs: List<BitVec(64)>) → m(b, zs) < m(a, xs.drop(2)) → again(b, zs) = HWorld::unchanged(b, f(b, zs))) →
+        body.tail_held(hw, Word(64), λ (e: Mutated<A, BitVec(64)>) => e, λ (ys: List<BitVec(64)>) (b: A) => again(b, ys.drop(2)),
+            ctx, Ty::extend(tys, ws, Nil, trivial, xs), own, a) = HWorld::unchanged(a, f(a, xs.drop(2))),
+        λ xs fits own a again hyp => {
+            let env = Ty::extend(tys, ws, Nil, trivial, xs);
+            let here = f(a, xs.drop(2));
+            let Below = λ (u: A → List<BitVec(64)> → BitVec(64)) => (b: A) → (zs: List<BitVec(64)>) → m(b, zs) < m(a, xs.drop(2)) → u(b, zs) = f(b, zs);
+            let read = λ (u: A → List<BitVec(64)> → BitVec(64)) (ys: List<BitVec(64)>) (b: A) => u(b, ys.drop(2));
+            let at_value = λ (e: Mutated<A, BitVec(64)>) => e.value;
+            let equation = Ty::for_words_at(ws, λ (zs: List<BitVec(64)>) => (p: List<BitVec(8)>) → (c: A) → (u: A → List<BitVec(64)> → BitVec(64)) →
+                ((b: A) → (us: List<BitVec(64)>) → m(b, us) < m(c, zs.drop(2)) → u(b, us) = f(b, us)) →
+                body.tail_held(hw, Word(64), λ (e: Mutated<A, BitVec(64)>) => e.value, λ (ys: List<BitVec(64)>) (b: A) => u(b, ys.drop(2)),
+                    ctx, Ty::extend(tys, ws, Nil, trivial, zs), p, c) = f(c, zs.drop(2)), reads, xs, fits)(own, a);
+            // Read for the value, the body is its pass read for the value.
+            let valued = λ (u: A → List<BitVec(64)> → BitVec(64)) (below: Below(u)) =>
+                trans(sym(FTm::tail_held_pass(body, hw, Word(64), at_value, read(u), ctx, env, own, a)), equation(u, below));
+            let again_v = λ (b: A) (zs: List<BitVec(64)>) => again(b, zs).value;
+            let below_v: Below(again_v) = λ b zs lt => cong_fn(λ (e: Mutated<A, BitVec(64)>) => e.value, hyp(b, zs, lt));
+            let whole = λ (ys: List<BitVec(64)>) (b: A) => again(b, ys.drop(2));
+            let cases = match body.held_pass(hw, Word(64), ctx, env, own, a) as λ p => Pass::Keeps<A, BitVec(64)>(a, p) →
+                ((u: A → List<BitVec(64)> → BitVec(64)) → Below(u) → p.fold(at_value, read(u)) = here) →
+                p.fold(λ (e: Mutated<A, BitVec(64)>) => e, whole) = HWorld::unchanged(a, here) {
+                Ends(mm) => λ kept by => Mutated::of_parts(mm, a, here, kept, by(again_v, below_v)),
+                Goes(ys, b) => λ kept by => {
+                    let lt = FFun::falls_value(f, m, m(a, xs.drop(2)), b, ys.drop(2), here, λ u bu => sym(by(u, bu)));
+                    let same: (f(b, ys.drop(2)) = here) = trans(sym(below_v(b, ys.drop(2), lt)), by(again_v, below_v));
+                    trans(hyp(b, ys.drop(2), lt), j(kept, λ x _ => HWorld::unchanged(b, f(b, ys.drop(2))) = HWorld::unchanged(x, here),
+                        cong_fn(λ (v: BitVec(64)) => HWorld::unchanged(b, v), same)))
+                },
+            };
+            trans(FTm::tail_held_pass(body, hw, Word(64), λ (e: Mutated<A, BitVec(64)>) => e, whole, ctx, env, own, a),
+                cases(body.still_keeps(hw, Word(64), still, ctx, env, own, a), valued))
+        })
+}

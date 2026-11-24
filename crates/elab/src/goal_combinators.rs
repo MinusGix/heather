@@ -102,6 +102,7 @@ fn tree(locals: &[FiniteLocal], leaf: &Expr, span: Span, depth: usize) -> Expr {
                     span,
                 })
                 .collect(),
+            test: None,
         },
         span,
     }
