@@ -20,14 +20,17 @@ meaning, addresses appear only where a level is tied to the machine (§2.5).
   `lib/_tests/native/runtime/runtime_ports_tests.hthr`, "a hash table of
   fixed capacity"). What stops it being *written* the natural way is a
   short list of surface gaps (§2), each now pinned by a ledger row.
-- **A span of elements with a run-time count is a record and a second
-  meaning, not new code.** The codec accessor class already reads and
-  writes an element at a base and count that are words
-  (`Accessor::read_at`/`write_at`, `stored_accessor.hthr`). What is
-  missing is `Span<A>(n)`, the analogue of `Bytes(n)` for any element with
-  an accessor, and its meaning over the record (§3).
-- **A vector is a span with a fill mark**, and pushing past its capacity is
-  an outcome the function answers, never a precondition (§4).
+- **Spans of anything are laid records that take parameters** (Minus,
+  2026-11-24: a general feature, not a type of its own). A parameter that
+  sizes an array is carried at run time as a word, one that does not reach
+  the layout is erased; the parameter counts elements; a variable array
+  stands last in the first version. The codec laws already hold at an open
+  count, and the accessor already reads at a base and count that are words
+  (`Accessor::read_at`, `stored_accessor.hthr`); what is new is in the
+  generator. Little-endian accessors make `laid`'s default compile (§3).
+- **A vector is a parameterized laid record with a fill mark**, and pushing
+  past its capacity is an outcome the function answers, never a
+  precondition (§4).
 - **Memory a function owns is an arena inside its one written span.** The
   arena's top is a field of a header at the span's start; an allocation is a
   window `(base, count)`; growing a vector is allocating a larger window and
@@ -87,56 +90,117 @@ coverage, and they are what a port meets first. The first two rows were
 closed in the round that wrote this note, and the third's elaborator half; the table keeps them so the
 ledger's history reads.
 
-## 3. A span of elements: `Span<A>(n)`
+## 3. Laid records that take parameters
+
+Decided by Minus (2026-11-24): spans of anything are a general feature of
+`laid record`, not a type of their own ("less magic types, more powerful
+language features"). An earlier draft of this section proposed a
+`Span<A>(n)` record with a meaning of its own; it would have been a second
+mechanism beside laid records, and every customer with a header (a fill
+mark, a count, an arena's top) would have needed both.
 
 ```heather
-record Span<A>(n: u64) { items: List<A>, sized: items.len() = n.toNat() }
-fn Span::len<A>({n: u64}, self s: Span<A>(n)) → u64 { n }
-fn Span::at<A>({n}, self s: Span<A>(n), i: u64, inside: ∥i < s.len()∥ := bv_omega) → A
-fn Span::put<A>({n}, self s: Span<A>(n), i: u64, a: A, inside: ∥i < s.len()∥ := bv_omega) → Span<A>(n)
+laid record Limbs(n: u64)     { w: [u64; n.toNat()] }
+laid record Vector(cap: u64)  { len: u64, items: [u64; cap.toNat()] }
+laid record Table(cap: u64)   { count: u64, entries: [Entry; cap.toNat()] }
+laid record Arena(size: u64)  { top: u64, heap: [u8; size.toNat()] }
 ```
 
-The same decisions as `Bytes(n)` (span-record-design): the count is in the
-type, `sized` is a plain field so `n` is inferred, `s[i]` is `s.at(i)` and
-`s[i] := e` is `s := s.put(i, e)`, and an index takes a found proof.
+Today `laid` takes only a record without parameters ("`Limbs` is not a
+type with no parameters"), so every size is a literal.
 
-**Its meaning is held, not threaded.** `Bytes(n)` holds its bytes, and
-`FTm::over` threads them by conversion. A span of `A` holds values, and the
-bytes hold them by the element codec: the span's bytes are
-`codec.put` of each item at `i * stride`. That is `rt_held`'s shape (a
-record the span holds, `Stored::Holds`), with the record's array field
-replaced by a list whose count is the word `n`. So the second meaning is
-`FTm::held` at a codec of a run-time-counted array, and its leaf cases are
-the accessor's laws at an open base and count, which the class already
-states (`reads_at`, `writes_at`, `reads_past`, `writes_past`). What is new
-is one codec, "`n` items of `c`" with `n` a word (`Stored::array` takes a
-`Nat` the type fixes), and its holds relation.
+**Which parameters are carried.** A parameter the layout depends on is
+carried at run time; one it does not depend on is erased. The layout is
+computed from the declaration (`Stored<T(p…)>`'s `layout`, a function of
+the parameters), so the generator reads off which parameters it mentions:
 
-**What it costs in the code.** An element's offset is `i * stride + base`.
-A stride that is a power of two is a shift; otherwise it is the multiply
-row (`Operation::Mul`). The accessor's own test of `i` against the count is
-taken on every access today and is never false where a proof was found;
-dropping it is `layout-design` §9.5's next step and applies here unchanged.
+- a parameter that sizes an array (`n` in `[u64; n.toNat()]`) is a word the
+  code takes beside the span's place and length, as `Bytes(n)`'s length
+  word is: passed, not stored in the span's bytes;
+- a parameter that does not reach the layout (a phantom index, a bound that
+  only refines a field's type, a proof) is not passed at all.
 
-**Naming.** The dogfooding plan says `Words(n)`. `Words` is already a type
-function in `rt_io_program.hthr` (a curried function of `k` words), and the
-element is not always a word: a span of a laid record (a token, a hash
-table's entry `{key, value}`) is the same construction at a record's codec.
-So: `Span<A>(n)`, with `Span<u64>(n)` for words. `Bytes(n)` stays as it is
-(`u8` has no accessor, and its meaning by conversion is cheaper); whether it
-becomes `Span<u8>(n)` is a later cleanup.
+A count read from the bytes themselves (a length-prefixed message, where a
+field holds the count) is a different thing: the field and the count are
+tied by an invariant, not by the type. It is left for a customer
+(`layout-design` §10.3 notes that `Shape` has no size read from bytes
+either).
 
-**Customers.** `numeral`'s limbs (`port_pred_limbs`, ledger row 11), the
-token array, and the hash table with a run-time capacity.
+**The parameter counts elements** (Minus, 2026-11-24). The span's length
+word is in bytes; the record's premise is that its size, an expression in
+the parameters, fits: `size(n) <= length <= span.len()`
+(`Stored::Holds`, with the size now open). Because the premise is over
+`Nat` and `length` is a word, every offset `base + i * stride` with
+`i < n` is below `2^64`, so the code's offset arithmetic cannot wrap, and
+the proofs say so once.
 
-## 4. A span that grows: the fill mark
+**The meaning needs no new theory.** `Stored::array(s, n)` already takes
+any `Nat`, and its laws hold at an open count, so `laid`'s codec for a
+parameterized record is the same composition with `n.toNat()` in place of
+a literal. An element is `t.items.at(i)` and `t.items := t.items.put(i, x)`
+(`Vec::at`/`Vec::put`, `stored_words.hthr`), under a found proof of
+`i.toNat() < n.toNat()`, and the reflector maps them to the accessor's
+`read_at(span, length, base, count, i)` with the count the parameter's
+word where it is a literal today. The accessor's laws (`reads_at`,
+`writes_at`) are stated at an open base and count already. What is new is
+in the generator: the record's size and the trailing array's count as
+terms in the parameter words, the parameter words among the code's
+operands, and `runs_held` stated at every value of them.
+
+**Where a variable array may stand.** In the first version, only last, like
+C's flexible array member: every other field keeps a literal offset, and
+only the trailing array's count is open. The design does not depend on it:
+offsets are layout expressions (`layout-design` §4's run-time twins of the
+layout functions), and an array of open size in the middle makes the
+fields after it start at a computed base. That is the general case, built
+when a customer needs it (two parallel arrays, `keys[cap]` and
+`vals[cap]`, are one; a table of entries does not need it).
+
+**Elements that are records.** `[Entry; cap]` with `Entry` a laid record:
+field `f` of element `i` lies at `base + i * stride + offset(f)`, a `Part`
+through the array's element and then the field (`Part::through`). The
+accessor class finds the field's codec as it does for a field of a record.
+Needed for the hash table's entries and the token array; arrays of words
+come first.
+
+**Byte order.** `laid`'s default is already little-endian, but only
+big-endian words have compiled accessors (`Stored::u32_be`, `u64_be`,
+chosen for SHA-256), which is why every compiled record in the tree says
+`endian := BigEndian`. Little-endian accessors (`u32_le`, `u64_le`) make
+the default compile, cost no byte swap on x86, and match what Rust lends:
+a `&mut [u64]` is little-endian, so an exported function over limbs reads
+Rust's values as they are. Big-endian stays an opt-in, as SHA-256 has it
+(Minus, 2026-11-24).
+
+**What the code costs.** An element's offset is `i * stride + base`: a shift
+where the stride is a power of two, the multiply row otherwise
+(`Operation::Mul`). The accessor tests `i` against the count on every access
+today, which is never false where a proof was found; dropping it is
+`layout-design` §9.5's next step and applies unchanged.
+
+**`Bytes(n)` stays** as it is: its meaning is its bytes by conversion,
+which is cheaper than a held meaning. It could later be
+`laid record Bytes(n: u64) { b: [u8; n.toNat()] }` once a byte has an
+accessor and the conversion route is kept for it.
+
+**Element types are fixed per declaration** in the first version. A record
+generic in its element (`Vector<A>(cap)`) has a layout that depends on
+`A`'s codec, and generics by specialisation are rung 4's (dogfooding plan
+§4); until then a vector is declared per element type.
+
+**Customers.** `numeral`'s limbs (`port_pred_limbs`, ledger row 11, over
+`Limbs(n)`), the token array (elements that are records), and the hash
+table with a capacity chosen at run time (§7).
+
+## 4. A vector: the fill mark
+
+A vector is a parameterized laid record (§3), nothing more:
 
 ```heather
-laid record Filled<A>(cap: u64) { len: u64, items: Span<A>(cap) }   // illustrative
+laid record Vector(cap: u64) { len: u64, items: [u64; cap.toNat()] }
 ```
 
-A vector of capacity `cap` is a span of `cap` items and a word `len ≤ cap`.
-Its meaning is the first `len` items, a `List<A>`:
+Its meaning is the first `len` items, a `List<u64>`, under `len <= cap`:
 
 - `get(i)` takes `i < len`, found as every index is;
 - `push(x)` stores at `len` and increments it when `len < cap`, and
@@ -146,9 +210,9 @@ Its meaning is the first `len` items, a `List<A>`:
   argument could discharge;
 - `pop`, `truncate`, `clear` change only `len`.
 
-Laid as one record, the fill mark and the items sit in the one span the
-function writes, so a function of a vector is a function of a laid record
-today, with `items` an array whose count is the word `cap` (§3).
+The fill mark and the items sit in the one span the function writes, so a
+function of a vector is a function of a laid record, with `cap` the word
+§3 passes.
 
 ## 5. Memory a function owns: an arena in its one span
 
@@ -275,8 +339,8 @@ The proofs are loops over a measure, so they are ordinary induction on
 `left`. `datarepr` earns its place when generic code over `List` or a map
 interface is to run on the table (transfer), which is rung 4's.
 
-**With §3 and §5**: the table's slots are a `Span<Entry>(cap)` in a window
-of the arena, and a full table (or a load factor reached) allocates a window
+**With §3 and §5**: the table is a `Table(cap)` laid record whose trailing
+array holds its entries, in a window of the arena, and a full table (or a load factor reached) allocates a window
 of twice the capacity and reinserts every entry, the old window left until
 reset. Deletion takes tombstones or backward shifting; backward shifting
 keeps the invariant above without a third slot state and is preferred.
@@ -300,11 +364,15 @@ Each step lands its ledger rows; none needs a decision beyond §10's.
 1. **The surface gaps of §2** that rung 1 does not already own: readers,
    the remainder's bound and the `while` decrease (all three built
    2026-11-24).
-2. **`Span<A>(n)`** (§3): the codec of a run-time count, its holds
-   relation, the reflector's reading of `s[i]` on it, the generator's
-   `runs_held` at it. Customer: `numeral`'s limbs. Issue `runtime-span-of-codec`.
-3. **The fill mark** (§4) as a laid record over 2; push answers `Full`.
-   Customer: the token array.
+2. **Laid records that take parameters** (§3): `laid` over a record with
+   word parameters and a trailing array of open count, the parameter words
+   among the code's operands, `runs_held` at every value of them, and the
+   little-endian accessors. Customer: `numeral`'s limbs. Issue
+   `runtime-span-of-codec`. Its straight-line half touches no loop layer;
+   loops over such records wait for the loop combinator's round 4, which
+   moves `rt_held_loop`.
+3. **Elements that are records** (§3) and **the vector** (§4) over 2; push
+   answers `Full`. Customers: the token array, the growing vector.
 4. **The arena** (§5): `Arena`, `alloc`, `reset`, the four laws, the growing
    vector over 2 and 3. Issue `runtime-arena-in-span`.
 5. **The hash map's specification** (§7), first at fixed capacity over the
@@ -332,7 +400,10 @@ Steps 2 and 5's first half are independent and can run in parallel.
 2. **The arena in the written span** rather than memory from the system
    first (§5). Recommended: yes; `mmap` keeps its issue for standalone
    programs.
-3. **`Span<A>(n)` as the name** for rung 2's "spans of anything" in place
-   of `Words(n)` (§3). Recommended: yes.
+3. **Spans of anything.** Answered (Minus, 2026-11-24): a general feature
+   of `laid record`, its parameters carried where they size the layout and
+   erased where they do not, counting elements, the variable array last in
+   the first version with a design that allows it anywhere, and
+   little-endian the default (§3).
 4. **Hash map correctness as theorems about the function**, against
    `assoc`, before any `datarepr` (§7). Recommended: yes.
