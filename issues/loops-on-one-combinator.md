@@ -5,7 +5,7 @@ labels: [loops, elaborator, native, runtime-fn]
 area: heather-in-heather
 milestone: [nh-front]
 created: 2026-11-19
-updated: 2026-11-19
+updated: 2026-11-24
 ---
 
 Design: `docs/language/loop-combinator-design.md`. Round 1 (the combinator
@@ -35,3 +35,4 @@ built. Left, each a PR for Minus (§8 of the design):
 - 2026-11-19: round 2's `while` built: outside a `runtime fn` it is
   `Loop(…).run` over `f::State` with `f::step`; the whole library passes.
   A `mut self` method's loops and a counted `for` are still lifted (next).
+- 2026-11-24: 2026-11-24: a `while` whose measure is assigned through an `if` is refused though every arm decreases it ([[while-decrease-through-branches]]): the search does not split the branch. Found by the hash table rows of the ledger (docs/native/rung2-spans-design.md §2).

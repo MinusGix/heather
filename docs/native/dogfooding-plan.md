@@ -374,7 +374,9 @@ later step opens with a design note or a prototype for Minus, as marked.
 5. **The control language** (§5.3b). *A design note for Minus first*, with
    the loop as its worked example, as the issue asks.
 6. **Rung 2** with `numeral` as its customer. *A design note first*: spans
-   of words and laid records, several spans, the growing span.
+   of words and laid records, several spans, the growing span. Written:
+   `docs/native/rung2-spans-design.md` (2026-11-24), with memory a function
+   owns as an arena in its one span and the hash map as a customer.
 7. **Rungs 3 and 4**, by question 3's answer.
 
 Already moving and unchanged by this plan: the call-depth and stack-room

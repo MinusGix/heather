@@ -6,7 +6,7 @@ area: heather-in-heather
 milestone: [nh-heap]
 blocked-by: [effects-uniqueness-surface]
 created: 2026-11-02
-updated: 2026-11-12
+updated: 2026-11-24
 ---
 
 The front-end half of [[native-heap-arena]] (docs/native/native-heap-arena-design.md
@@ -49,3 +49,4 @@ builder versions, and the builder versions are deleted.
 - 2026-11-05: gardener: cites a file it shares with [[datarepr-guarded-images]] (`lib/native/native_arena.hthr`); [[native-arena-cell-codecs]] (`lib/native/native_arena.hthr`); [[native-sort-gate-rail]] (`crates/cli/tests/native_tools.rs`); [[native-tool-test-cold-certificate-rail]] (`crates/cli/tests/native_tools.rs`).
 - 2026-11-09: 2026-11-09: sort's spec (sorted permutation under the byte-lexicographic order) needs [[sorting-order-theory]] (docs/surveys/native-mathematics-survey.md §8).
 - 2026-11-12: Views are built below `rt` and in its file layer (PR #551, [[source-buffers-as-views]], closed): a function lends a window of a span to a callee (`Lend` in the IR, `FTm::Lend` in `rt_file.hthr`, read from `span.window(a, b)` and `span.put_window(a, part)`), and a program's statement reaches it by calling a function that lends (`tail_c_window`, `lib/native/native_tools.hthr`). What this issue owes of it is step V5b of `docs/native/native-library-exports-design.md` §3.1: a `Bytes` value lowered as a view of the arena buffer (its start and its end as two words), so that a line passed to a callee is lent and not copied. The pieces it meets: a lender's first view is the span it writes (`FTm::own_first`), so a pure reader of a line needs the read-only lend that [[statement-lends-named-buffers]] describes for statements; and a view's bounds are known to the function compiler only from comparisons on the path, so a line's bounds come with the test that they lie in the arena.
+- 2026-11-24: 2026-11-24: docs/native/rung2-spans-design.md §5 gives rung 2 an allocator inside the one written span ([[runtime-arena-in-span]]); this issue's cells (tagged, with pointers) stay rung 3's and take their windows from it.
