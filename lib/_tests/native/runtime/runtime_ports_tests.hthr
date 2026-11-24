@@ -143,12 +143,25 @@ runtime fn Bytes::port_find_while({n: u64}, self s: Bytes(n), b: u8) → u64 {
 }
 
 // Count a byte and clear it: a store under an `if`, with code after it.
+// A loop written in place takes only words beside its span, so with the
+// byte `b` it is still lifted, and the lifted loop's pass cannot join
+// (issues/runtime-repr-narrow-words.md); the word row below compiles.
 // expect-error: the span through a branch that joins again
 runtime fn Bytes::port_count_clear({n: u64}, mut self s: Bytes(n), b: u8) → u64 {
     let mut c: u64 = 0;
     for i in 0..s.len() { if s[i] = b { c := c + 1; s[i] := 0; } }
     c
 }
+
+// The same with the byte as a word: the count and the index are the loop's
+// state beside the span, a record of two words.
+runtime fn Bytes::port_count_clear_word({n: u64}, mut self s: Bytes(n), b: u64) → u64 {
+    let mut c: u64 = 0;
+    for i in 0..s.len() { if s[i] = b.truncate(8, 56) { c := c + 1; s[i] := 0; } }
+    c
+}
+
+theorem port_count_clear_word_runs(): Bytes::port_count_clear_word::bytes([7, 1, 7], 3, 7) = Mutated([0, 1, 0], 2) { refl }
 
 // Nesting depth, the shape of recursive descent: a call of itself that is
 // not the last thing it does, over a lent span.
@@ -240,9 +253,10 @@ runtime fn Bytes::port_set_insert_byte({n: u64}, s: Bytes(n), key: u8, j: u64) �
 
 // The insert as a `while` over `mut self`, its measure assigned in the arms.
 // Its decrease is found, each arm's with that arm's tests
-// (issues/while-decrease-through-branches.md); the generator does not lay
-// out the loop's state.
-// expect-error: `Bytes::port_set_put#State` has no runtime layout
+// (issues/while-decrease-through-branches.md); its state, three words beside
+// the span, is a record the span's program holds, and the code after each
+// `if` is written into its arms (docs/language/loop-combinator-design.md
+// §6.4).
 runtime fn Bytes::port_set_put({n: u64}, mut self s: Bytes(n), key, start: u64) → u64 {
     let mut j = start;
     let mut left = n;
@@ -255,6 +269,13 @@ runtime fn Bytes::port_set_put({n: u64}, mut self s: Bytes(n), key, start: u64) 
         } else { left := 0; }
     }
     res
+}
+
+// Put at the first empty slot, found where the key already is, and full.
+theorem port_set_put_runs(): Bytes::port_set_put::bytes([0, 7, 0, 0], 4, 9, 1) = Mutated([0, 7, 9, 0], 1) ∧
+    Bytes::port_set_put::bytes([7, 9, 4, 1], 4, 9, 3) = Mutated([7, 9, 4, 1], 0) ∧
+    Bytes::port_set_put::bytes([7, 9, 4, 1], 4, 8, 3) = Mutated([7, 9, 4, 1], 2) {
+    ⟨refl, ⟨refl, refl⟩⟩
 }
 
 // A map of words in one laid record: its keys and values side by side, 0
