@@ -1,6 +1,6 @@
 ---
 title: Paths and validity: the meaning of a live borrow, with split_at_mut and the word map's slot as theorems
-status: open
+status: closed
 labels: [ownership,library,design]
 area: heather-in-heather
 milestone: [nh-ownership]
@@ -47,3 +47,4 @@ The module and its probes pass the library gate, each example above is a theorem
   - Laid out in new modules rather than `word_map_laws.hthr`/`arena_laws.hthr`, to stay out of the files other packages edit. `arena_paths.hthr` cites `Arena::push_in`, `grow`, `copy_at` and `VecInv`, `copies`, `grow_eq` from `arena_laws.hthr`: if [[ownership-stores-and-keys]] renames those, this module follows.
 
   Residue: footprints beyond list indexes (record fields as byte spans through `Part`, elements of windows, keys) filed as [[ownership-paths-footprints]]. `Arena::push` itself has no branch equations (arena.hthr says why), so the growing push is stated at its `grow`.
+- 2026-11-24: Verified: `scripts/test --pr` — `== suite: 4125 passed, 0 failed, 3 ignored ==`. Done-when met; residue in [[ownership-paths-footprints]].
