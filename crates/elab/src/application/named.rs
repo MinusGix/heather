@@ -397,6 +397,7 @@ mod tests {
             implicit,
             is_type: false,
             is_self: false,
+            mode: Default::default(),
             skel: None,
             solver: None,
             default: None,

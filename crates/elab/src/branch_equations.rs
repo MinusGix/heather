@@ -976,6 +976,7 @@ pub(crate) fn branch_equations(decl: &Decl, self_name: &str, reading: Reading, f
                 default: None,
                 origin: ParamOrigin::Written,
                 symbol: None,
+                mode: Default::default(),
                 span,
             });
         }

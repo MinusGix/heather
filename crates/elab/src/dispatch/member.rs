@@ -393,7 +393,7 @@ impl Members<'_> {
     /// Preferring the member would mean that adding `D::name` to a library
     /// silently reinterprets an existing `t.name(…)`, which is the one thing
     /// the growth invariant forbids (docs/language/modules-design.md §4).
-    fn member_head(
+    pub(crate) fn member_head(
         &self,
         cx: &Cx,
         recv: &Expr,

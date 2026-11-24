@@ -302,6 +302,9 @@ impl Inference<'_> {
         if let Some(part) = statements::mut_call_part(self.0, cx, e) {
             return part;
         }
+        if let Some(call) = crate::path_calls::PathCalls(self.0).read(cx, e) {
+            return call;
+        }
         let (term, ty, level) = self.elab_infer_written(cx, e, expected)?;
         Ok((self.reduced_decision(cx, e, term), ty, level))
     }

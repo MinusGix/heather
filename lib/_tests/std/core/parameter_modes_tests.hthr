@@ -1,0 +1,304 @@
+// Probes of a parameter's mode (docs/language/sequencing-surface-design.md
+// §24, docs/language/ownership-design.md §10.3,
+// issues/ownership-parameter-modes.md): `x: &T` recorded with no change of
+// meaning, `x: &mut T` on any parameter and several per function, and a call
+// passing `&mut place`, which rebinds each place as a `mut self` receiver
+// is. Each form at literal and neutral inputs, at an open type, through a
+// field path, a loop and a branch, with the refusals the elaborator makes;
+// the parse-time ones (a place that is not one, an immutable local, two
+// `&mut` of overlapping places) are in crates/syntax/tests/parameter_modes.rs,
+// since a parse error refuses the whole file. Tests, not library: nothing
+// outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import list; import option; import tactic; import bitvec; import bitvec_omega;
+
+record Counter { n: Nat, log: List<Nat> }
+
+record Two { left: Nat, right: Nat }
+
+// ---------------------------------------------------------------------------
+// A frozen view means the value: the function is the one with `c: Counter`.
+
+fn peek(c: &Counter) → Nat { c.n }
+theorem peek_lit(): peek(Counter(4, [])) = 4 { refl }
+theorem peek_open(c: Counter): peek(c) = c.n { refl }
+
+fn first_or<A>(xs: &List<A>, d: A) → A {
+    match xs { Nil => d, Cons(x, _) => x }
+}
+theorem first_or_open<A>(x, d: A, xs: List<A>): first_or(Cons(x, xs), d) = x { refl }
+
+// ---------------------------------------------------------------------------
+// One live path: its value after the call beside the answer, `Mutated<T, R>`,
+// which is `mut self`'s shape.
+
+fn add_into(acc: &mut Nat, k: Nat) → Nat {
+    acc := acc + k;
+    acc
+}
+theorem add_into_kernel(a, k: Nat): add_into(a, k) = Mutated(a + k, a + k) { refl }
+theorem add_into_after(a: Nat): add_into(a, 2).after = a + 2 { refl }
+
+// An open type: the path keeps its parameter's type.
+fn put_front<A>(xs: &mut List<A>, x: A) → A {
+    xs := Cons(x, xs);
+    x
+}
+theorem put_front_open<A>(xs: List<A>, x: A): put_front(xs, x).after = Cons(x, xs) { refl }
+
+// ---------------------------------------------------------------------------
+// Several live paths: the values after nest in parameter order, the answer
+// innermost.
+
+fn swap_sum(a: &mut Nat, b: &mut Nat) → Nat {
+    let t = a;
+    a := b;
+    b := t;
+    a + b
+}
+theorem swap_sum_kernel(x, y: Nat): swap_sum(x, y) = Mutated(y, Mutated(x, y + x)) { refl }
+
+// A run of names shares the mode with the type.
+fn bump_both(a, b: &mut Nat, by: Nat) → True {
+    a := a + by;
+    b := b + by;
+}
+theorem bump_both_kernel(x, y: Nat): bump_both(x, y, 1) = Mutated(x + 1, Mutated(y + 1, trivial)) { refl }
+
+// Called without `&mut`, a function with live paths gives its record, as
+// `@Fd::read(fd, n)` gives a `mut self` method's.
+theorem swap_sum_record(): swap_sum(1, 2).value.after = 1 { refl }
+
+// ---------------------------------------------------------------------------
+// Call sites: `&mut place` rebinds the place after the call.
+
+fn use_swap(x, y: Nat) → Nat {
+    let mut p = x;
+    let mut q = y;
+    let s = swap_sum(&mut p, &mut q);
+    s + p * 10 + q
+}
+theorem use_swap_lit(): use_swap(1, 2) = 3 + 20 + 1 { refl }
+theorem use_swap_open(x, y: Nat): use_swap(x, y) = (y + x) + y * 10 + x { refl }
+
+// As a statement, the answer dropped; and an annotated `let`.
+fn use_statement(x: Nat) → Nat {
+    let mut p = x;
+    add_into(&mut p, 3);
+    let r: Nat = add_into(&mut p, 4);
+    r + p
+}
+theorem use_statement_lit(): use_statement(1) = 8 + 8 { refl }
+theorem use_statement_open(x: Nat): use_statement(x) = (x + 3 + 4) + (x + 3 + 4) { refl }
+
+// A field path is a place (§20), and two different fields of one record are
+// apart.
+fn use_fields(t: Two) → Nat {
+    let mut u = t;
+    swap_sum(&mut u.left, &mut u.right);
+    add_into(&mut u.left, 100);
+    u.left
+}
+theorem use_fields_lit(): use_fields(Two(1, 2)) = 102 { refl }
+theorem use_fields_open(a, b: Nat): use_fields(Two(a, b)) = b + 100 { refl }
+
+fn use_counter(c: Counter) → Counter {
+    let mut d = c;
+    add_into(&mut d.n, 1);
+    d
+}
+theorem use_counter_open(c: Counter): use_counter(c) = Counter(c.n + 1, c.log) { refl }
+
+// A `mut` parameter, and a `&mut` parameter passed on to another call.
+fn bump_local(mut x: Nat) → Nat {
+    add_into(&mut x, 1);
+    x
+}
+theorem bump_local_open(x: Nat): bump_local(x) = x + 1 { refl }
+
+fn twice(a: &mut Nat) → True {
+    add_into(&mut a, 1);
+    add_into(&mut a, 1);
+}
+theorem twice_open(x: Nat): twice(x).after = x + 1 + 1 { refl }
+
+// The call that ends a block is its value, the places rebound first.
+fn bump_tail(mut x: Nat) → Nat { add_into(&mut x, 3) }
+theorem bump_tail_open(x: Nat): bump_tail(x) = x + 3 { refl }
+
+// In a loop's body: the place is the loop's state.
+fn sum_into(xs: List<Nat>) → Nat {
+    let mut acc = 0;
+    for x in xs {
+        add_into(&mut acc, x);
+    }
+    acc
+}
+theorem sum_into_lit(): sum_into([1, 2, 3]) = 6 { refl }
+
+// In a statement `if`: the place is joined.
+fn bump_when(x: Nat, b: Bool) → Nat {
+    let mut p = x;
+    if b { add_into(&mut p, 5); }
+    p
+}
+theorem bump_when_true(x: Nat): bump_when(x, True) = x + 5 { refl }
+theorem bump_when_false(x: Nat): bump_when(x, False) = x { refl }
+
+// A recursion that lends its own paths on: one path, then two.
+fn count_down(acc: &mut Nat, n: Nat) → Nat decreases n {
+    match n {
+        Zero => acc,
+        Succ(k) => {
+            add_into(&mut acc, 1);
+            count_down(&mut acc, k)
+        },
+    }
+}
+theorem count_down_lit(): count_down(0, 3) = Mutated(3, 3) { refl }
+
+fn split_count(a: &mut Nat, b: &mut Nat, xs: List<Bool>) → Nat decreases xs.len() {
+    match xs {
+        Nil => a + b,
+        Cons(x, rest) => {
+            // Bound first: read only by a statement `if`, the payload is
+            // reported unused (issues/unused-payload-lint-statement-if-decreases.md).
+            let left = x;
+            if left { a := a + 1; } else { b := b + 1; }
+            split_count(&mut a, &mut b, rest)
+        },
+    }
+}
+theorem split_count_lit(): split_count(0, 0, [True, False, True]) = Mutated(2, Mutated(1, 3)) { refl }
+
+// A loop over words whose state is a path that is not a receiver: lifted
+// as a plain loop, not as a method of the `self` parameter's type.
+record Step { by: u64 }
+fn Step::run(self s: Step, total: &mut u64) → u64 {
+    for i in 0..3 {
+        total := total + s.by;
+    }
+    total
+}
+theorem step_run_lit(): Step::run(Step(2), 1).after = 7 { refl }
+
+// ---------------------------------------------------------------------------
+// The body of a function with live paths ends as a `mut self` body does.
+
+// A branch whose arms update a path returns the paths per arm (§19.2).
+fn bump_if(a: &mut Nat, b: Bool) → Bool {
+    if b {
+        a := a + 1;
+        True
+    } else {
+        False
+    }
+}
+theorem bump_if_true(x: Nat): bump_if(x, True) = Mutated(x + 1, True) { refl }
+theorem bump_if_false(x: Nat): bump_if(x, False) = Mutated(x, False) { refl }
+
+// `return` leaves with every path as the body has threaded it.
+fn add_until_zero(a: &mut Nat, b: &mut Nat, xs: List<Nat>) → Bool {
+    for x in xs {
+        if x = 0 { return Bool::False }
+        a := a + x;
+        b := b + 1;
+    }
+    Bool::True
+}
+theorem add_until_zero_stops(): add_until_zero(0, 0, [3, 4, 0, 5]) = Mutated(7, Mutated(2, Bool::False)) { refl }
+theorem add_until_zero_runs(): add_until_zero(0, 0, [3]) = Mutated(3, Mutated(1, Bool::True)) { refl }
+
+// ---------------------------------------------------------------------------
+// `self x: &mut T` spells `mut self x: T`: a method call on a `let mut`
+// local updates it.
+
+fn Counter::tick(self c: &mut Counter, by: Nat) → Nat {
+    c := Counter(c.n + by, Cons(by, c.log));
+    c.n
+}
+theorem tick_kernel(c: Counter): Counter::tick(c, 1) = Mutated(Counter(c.n + 1, Cons(1, c.log)), c.n + 1) { refl }
+
+fn run_ticks(start: Nat) → Nat {
+    let mut c = Counter(start, []);
+    let a = c.tick(2);
+    c.tick(3);
+    a + c.n
+}
+theorem run_ticks_open(s: Nat): run_ticks(s) = (s + 2) + (s + 2 + 3) { refl }
+
+// ---------------------------------------------------------------------------
+// Refusals the elaborator makes.
+
+fn plain(k: Nat) → Nat { k + 1 }
+
+// expect-error: `plain`'s parameter `k` is not `&mut`, so nothing comes back to the place lent it
+fn lend_to_owned(x: Nat) → Nat {
+    let mut p = x;
+    let r = plain(&mut p);
+    r
+}
+
+// expect-error: `swap_sum` takes `b` as `&mut`, so its argument is a place it lends back
+fn missing_lend(x: Nat) → Nat {
+    let mut p = x;
+    let r = swap_sum(&mut p, 3);
+    r
+}
+
+// expect-error: a `&mut` argument is lent by a call that is a statement, a `let`'s value or a block's end
+fn lend_inside(x: Nat) → Nat {
+    let mut p = x;
+    let r = add_into(&mut p, 1) + 1;
+    r
+}
+
+// expect-error: `swap_sum`'s receiver is a `&mut` parameter, and a method call threads its receiver alone
+fn lend_by_method(x: Nat) → Nat {
+    let mut p = x;
+    let mut q = x;
+    let r = p.swap_sum(&mut q);
+    r
+}
+
+// ---------------------------------------------------------------------------
+// A generator reads the modes a declaration wrote (`tactic::modes`): one per
+// parameter of its table, type parameters included, in order.
+
+fn mode_code(m: ParamMode) → Nat { match m { ByValue => 0, FrozenView => 1, LivePath => 2 } }
+
+fn same_modes(ms: List<ParamMode>, want: List<Nat>) → Bool {
+    match ms {
+        Nil => match want { Nil => True, Cons(_, _) => False },
+        Cons(m, rest) => match want {
+            Nil => False,
+            Cons(w, more) => mode_code(m).same(w) && same_modes(rest, more),
+        },
+    }
+}
+
+fn modes_are(name: String, want: List<Nat>) → Tac<Expr> {
+    let g <- lookup(name).or_fail("lookup: ");
+    let ms <- modes(g).or_fail("modes: ");
+    let t <- resolve("trivial").or_fail("");
+    match same_modes(ms, want) {
+        True => exact(Hd(t)),
+        False => fail("the modes are not the ones written", []),
+    }
+}
+
+theorem peek_modes(): True { by modes_are("peek", [1]) }
+theorem first_or_modes(): True { by modes_are("first_or", [0, 1, 0]) }
+theorem swap_sum_modes(): True { by modes_are("swap_sum", [2, 2]) }
+theorem bump_both_modes(): True { by modes_are("bump_both", [2, 2, 0]) }
+theorem bump_local_modes(): True { by modes_are("bump_local", [0]) }
+theorem tick_modes(): True { by modes_are("Counter::tick", [2, 0]) }
+
+// `mut self` records the live path it has always been.
+fn Counter::tally(mut self c: Counter, by: Nat) → Nat {
+    c := Counter(c.n + by, c.log);
+    c.n
+}
+theorem tally_modes(): True { by modes_are("Counter::tally", [2, 0]) }
+
+// expect-error: the modes are not the ones written
+theorem plain_modes_wrong(): True { by modes_are("plain", [2]) }

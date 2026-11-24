@@ -18,7 +18,7 @@ use heather_kernel::term::{Numeral,
 };
 use heather_syntax::{
     Arm, Block, ClassRef, Decl, DeclKind, Expr, ExprKind, FieldDecl, LamBinder, MatchForm,
-    NamedArg, OnStmt, OnTarget, OpFixity, Param, ParamOrigin, Pat, RecordLitField,
+    NamedArg, OnStmt, OnTarget, OpFixity, Param, ParamMode, ParamOrigin, Pat, RecordLitField,
     RecordPatField, SlotPath, Solver, Span, Stmt, Ty, TyKind, TyParam,
 };
 
@@ -33,8 +33,8 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x28";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x22";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x29";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x23";
 
 /// The two encodings' versions, image then interface: what a module cache
 /// key covers, so a bump of either is a clean miss for every reader rather
@@ -1663,7 +1663,18 @@ fn put_param(w: &mut Writer, param: &Param) {
     w.byte(match param.origin {
         ParamOrigin::Written => 0, ParamOrigin::InlineConstraint => 1, ParamOrigin::Assuming => 2,
     });
-    w.option(param.symbol.as_ref(), |w, s| w.string(s)); put_span(w, param.span);
+    w.option(param.symbol.as_ref(), |w, s| w.string(s)); put_mode(w, param.mode); put_span(w, param.span);
+}
+
+fn put_mode(w: &mut Writer, mode: ParamMode) {
+    w.byte(match mode { ParamMode::Owned => 0, ParamMode::View => 1, ParamMode::Path => 2 });
+}
+
+fn get_mode(r: &mut Reader<'_>) -> Result<ParamMode, ModuleImageDecodeError> {
+    match r.byte()? {
+        0 => Ok(ParamMode::Owned), 1 => Ok(ParamMode::View), 2 => Ok(ParamMode::Path),
+        tag => Err(ModuleImageDecodeError::InvalidTag { sort: "parameter mode", tag }),
+    }
 }
 
 fn get_param(r: &mut Reader<'_>) -> Result<Param, ModuleImageDecodeError> {
@@ -1682,7 +1693,7 @@ fn get_param(r: &mut Reader<'_>) -> Result<Param, ModuleImageDecodeError> {
     };
     Ok(Param {
         name, ty, implicit, is_self, solver, default, origin,
-        symbol: r.option(Reader::string)?, span: get_span(r)?,
+        symbol: r.option(Reader::string)?, mode: get_mode(r)?, span: get_span(r)?,
     })
 }
 
@@ -1781,6 +1792,7 @@ fn get_skel(r: &mut Reader<'_>) -> Result<Skel, ModuleImageDecodeError> {
 
 fn put_param_meta(w: &mut Writer, param: &ParamMeta) {
     w.string(&param.name); w.bool(param.implicit); w.bool(param.is_type); w.bool(param.is_self);
+    put_mode(w, param.mode);
     w.option(param.skel.as_deref(), put_skel); w.option(param.solver.as_deref(), put_ty);
     w.option(param.default.as_deref(), |w, default| {
         put_expr(w, &default.expr); put_scope(w, &default.scope);
@@ -1791,6 +1803,7 @@ fn put_param_meta(w: &mut Writer, param: &ParamMeta) {
 fn get_param_meta(r: &mut Reader<'_>) -> Result<ParamMeta, ModuleImageDecodeError> {
     Ok(ParamMeta {
         name: r.string()?, implicit: r.bool()?, is_type: r.bool()?, is_self: r.bool()?,
+        mode: get_mode(r)?,
         skel: r.option(|r| Ok(Rc::new(get_skel(r)?)))?,
         solver: r.option(|r| Ok(Rc::new(get_ty(r)?)))?,
         default: r.option(|r| Ok(Rc::new(ParamDefault {
@@ -3147,6 +3160,37 @@ fn twice_zero(f: Z -> Z) -> Z { twice(Z0, f) }
             .replay_module_delta(&decoded, &identity)
             .expect("recheck and publish registry-rich image");
         assert_eq!(target.psi(), source.psi());
+    }
+
+    /// A parameter's mode (docs/language/sequencing-surface-design.md §24)
+    /// survives the image: the replayed parameter table keeps what was
+    /// written, found by name and by the global's place (`tactic::modes`).
+    #[test]
+    fn parameter_modes_roundtrip_and_replay() {
+        use heather_syntax::ParamMode::{Owned, Path, View};
+        let mut source = Elaborator::with_prelude().expect("build prelude");
+        let prefix = source.psi().clone();
+        let identity = ModuleDependencyIdentity::new(vec![[0x5a; 32]]);
+        let delta = source
+            .elab_module_delta(
+                "modes",
+                "fn f<A>(a: &mut Nat, b: &A, c: Nat) -> Nat { a := c; c }",
+                identity.clone(),
+            )
+            .expect("build modes delta");
+        let bytes = delta.to_image_bytes();
+        let decoded = ModuleDelta::from_image_bytes(&bytes, prefix, ModuleImageLimits::default())
+            .expect("decode modes image");
+        assert_eq!(decoded.to_image_bytes(), bytes);
+        let mut target = Elaborator::with_prelude().expect("rebuild prelude");
+        target.replay_module_delta(&decoded, &identity).expect("replay modes image");
+        let key = crate::names::qkey("modes", "f");
+        let info = target.names.global(&key).expect("f is registered");
+        let modes: Vec<_> = info.params.iter().map(|p| p.mode).collect();
+        assert_eq!(modes, [Owned, Path, View, Owned]);
+        // What the host's `Modes` request reads, by the global's place.
+        let by_abs: Vec<_> = target.names.params_at(info.abs).expect("a table").iter().map(|p| p.mode).collect();
+        assert_eq!(by_abs, modes);
     }
 
     #[test]

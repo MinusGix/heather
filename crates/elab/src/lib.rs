@@ -252,6 +252,7 @@ pub use module_image::{ModuleImageDecodeError, ModuleImageLimits, image_format};
 pub use session::SemanticImage;
 mod slots;
 mod statements;
+mod path_calls;
 
 pub use stats::{ItemTiming, ScopeKind};
 mod surface;

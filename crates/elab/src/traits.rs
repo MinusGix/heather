@@ -1844,6 +1844,7 @@ impl ClassesMut<'_> {
                     default: None,
                     origin: heather_syntax::ParamOrigin::Written,
                     symbol: None,
+                    mode: Default::default(),
                     span: kind.span,
                 }),
             }
@@ -2614,6 +2615,7 @@ impl ClassesMut<'_> {
                                 name,
                                 ty: subst_ty(&sub, &v.ty),
                                 symbol: None,
+                                mode: Default::default(),
                                 default: None,
                                 solver: None,
                                 ..v.clone()
@@ -2864,6 +2866,7 @@ impl Classes<'_> {
                         // advertisement to its users' binders
                         // (issues/class-default-operators.md owns that).
                         symbol: None,
+                        mode: Default::default(),
                         span: p.span,
                     });
                     index.push(var(&name, p.span));
@@ -2915,6 +2918,7 @@ impl Classes<'_> {
                     default: None,
                     origin: heather_syntax::ParamOrigin::Written,
                     symbol: None,
+                    mode: Default::default(),
                     span: p.span,
                 });
                 index.push(var(&name, p.span));

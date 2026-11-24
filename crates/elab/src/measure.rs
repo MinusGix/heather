@@ -627,6 +627,7 @@ fn param(name: &str, ty: Ty, span: Span) -> Param {
         default: None,
         origin: ParamOrigin::Written,
         symbol: None,
+        mode: Default::default(),
         span,
     }
 }
@@ -643,6 +644,7 @@ fn value_params(decl: &Decl) -> Vec<Param> {
             solver: None,
             default: None,
             symbol: None,
+            mode: Default::default(),
             ..p.clone()
         })
         .collect()
@@ -5580,6 +5582,7 @@ pub(crate) fn step_equations(decl: &Decl, name: &str) -> Result<Vec<Lowered>, St
             default: None,
             origin: ParamOrigin::Written,
             symbol: None,
+            mode: Default::default(),
             span,
         });
         let steps = truth == yes_steps;

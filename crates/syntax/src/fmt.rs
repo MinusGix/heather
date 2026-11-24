@@ -67,7 +67,15 @@ pub fn format_source(src: &str) -> String {
             // many. A run of them is the author lining a column up — 27 of
             // them across four library files, `tm_lam(dom, b)            =>`
             // and the like — and re-deciding that is not formatting.
-            out.push_str(match gap_between(tok, next, roles.as_ref()) {
+            // `x: &T`, `x: &mut T` and `f(&mut a)`: an `&` at the head of
+            // an annotation or an argument is a mode, written tight to what
+            // it marks (docs/language/sequencing-surface-design.md §24). An
+            // `&` after an operand is the infix operator as before.
+            let mode = matches!(tok.kind, TokKind::Amp)
+                && i > 0
+                && matches!(toks[i - 1].kind, TokKind::Colon | TokKind::LParen | TokKind::Comma)
+                && !matches!(next.kind, TokKind::Comma | TokKind::RParen);
+            out.push_str(match if mode { Gap::Tight } else { gap_between(tok, next, roles.as_ref()) } {
                 Gap::Tight => "",
                 Gap::Space if raw.is_empty() => " ",
                 Gap::Space | Gap::Keep => raw,

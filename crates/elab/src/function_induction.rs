@@ -170,6 +170,7 @@ fn param(name: &str, ty: Ty, span: Span) -> Param {
         default: None,
         origin: ParamOrigin::Written,
         symbol: None,
+        mode: Default::default(),
         span,
     }
 }
