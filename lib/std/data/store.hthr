@@ -339,6 +339,15 @@ theorem Store::alloc_keeps<V>(self s: Store<V>, v: V, k: Key, valid: s.Valid(k))
     }
 }
 
+// A key valid before an allocation names another slot than the key allocated.
+theorem Store::alloc_index_fresh<V>(self s: Store<V>, v: V, k: Key, valid: s.Valid(k)): ¬(k.index = Store::alloc(s, v).value.index) {
+    λ same => {
+        let none: (s.get(Key(Store::alloc(s, v).value.index, k.gen)) = None) = s.alloc_none_before(v, k.gen);
+        let moved: (s.get(k) = s.get(Key(Store::alloc(s, v).value.index, k.gen))) = cong_fn(λ (i: Nat) => s.get(Key(i, k.gen)), same);
+        j(trans(moved, none), λ o _ => o.is_some().IsTrue(), valid)
+    }
+}
+
 theorem Store::alloc_keeps_valid<V>(self s: Store<V>, v: V, k: Key, valid: s.Valid(k)): Store::alloc(s, v).after.Valid(k) {
     j(sym(s.alloc_keeps(v, k, valid)), λ o _ => o.is_some().IsTrue(), valid)
 }
@@ -511,4 +520,79 @@ theorem Store::alloc_keeps_stale<V>(self s: Store<V>, v: V, k: Key, stale: s.Sta
 // tells them apart.
 theorem Store::stale_after_reuse<V>(self s: Store<V>, k: Key, v: V, valid: s.Valid(k)): ¬Store::alloc(s.free(k), v).after.Valid(k) {
     Store::stale_invalid(Store::alloc(s.free(k), v).after, k, Store::alloc_keeps_stale(s.free(k), v, k, s.free_stales(k, valid)))
+}
+
+// What a key reads after an allocation: the value allocated, at the key
+// handed out, or what it read before.
+theorem Store::alloc_get_cases<V>(self s: Store<V>, v: V, k: Key, c: V, e: Store::alloc(s, v).after.get(k) = Some(c)):
+    Or<And<k.index = Store::alloc(s, v).value.index, c = v>, s.get(k) = Some(c)>
+{
+    let r = Store::place(s.slots, v);
+    match Nat::eq_dec(k.index, r.value.index) {
+        Inr(ne) => Inr(trans(sym(s.alloc_other(v, k, ne)), e)),
+        Inl(same) => {
+            let at: (r.after.nth(k.index) = Some(Live(r.value.gen, v))) = j(sym(same), λ q _ => r.after.nth(q) = Some(Live(r.value.gen, v)), s.alloc_spec(v).at);
+            let read: (Live(r.value.gen, v).answer(k.gen) = Some(c)) =
+                trans(sym(cong_fn(λ (o: Option<Slot<V>>) => o.and_then(λ (sl: Slot<V>) => sl.answer(k.gen)), at)), e);
+            Inl(And(same, sym(Option::some_inj(v, c, Bool::then_some(r.value.gen.same(k.gen), Some(v), c, read).right))))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Freeing every value a test refuses (an arena's reset, read as keys)
+
+fn Slot::kept_by<V>(c: Bool, g: Nat, v: V) → Slot<V> { match c { True => Live(g, v), False => Free(g + 1) } }
+
+fn Slot::kept<V>(self sl: Slot<V>, keep: V → Bool) → Slot<V> { match sl { Live(g, v) => Slot::kept_by(keep(v), g, v), Free(g) => Free(g) } }
+
+fn Store::retain<V>(self s: Store<V>, keep: V → Bool) → Store<V> { Store(s.slots.map(λ (sl: Slot<V>) => sl.kept(keep))) }
+
+theorem Store::nth_map<A>(xs: List<A>, f: A → A): (i: Nat) → xs.map(f).nth(i) = xs.nth(i).map(f) {
+    match xs {
+        Nil => λ i => refl,
+        Cons(_, t) => λ i => match i { Zero => refl, Succ(m) => Store::nth_map(t, f, m) },
+    }
+}
+
+theorem Bool::then_none<A>(self d: Bool): d.then(None<A>()) = None { match d { True => refl, False => refl } }
+
+theorem Bool::then_and_then<A, B>(self d: Bool, v: A, f: A → Option<B>): d.then(Some(v)).and_then(f) = d.then(f(v)) { match d { True => refl, False => refl } }
+
+theorem Slot::kept_by_answer<V>(c: Bool, g, gg: Nat, v: V): Slot::kept_by(c, g, v).answer(gg) = g.same(gg).then(c.then(Some(v))) {
+    match c { True => refl, False => sym(g.same(gg).then_none()) }
+}
+
+theorem Slot::kept_answer<V>(self sl: Slot<V>, keep: V → Bool, gg: Nat):
+    sl.kept(keep).answer(gg) = sl.answer(gg).and_then(λ (u: V) => keep(u).then(Some(u)))
+{
+    match sl {
+        Live(g, v) => trans(Slot::kept_by_answer(keep(v), g, gg, v), sym(g.same(gg).then_and_then(v, λ (u: V) => keep(u).then(Some(u))))),
+        Free(_) => refl,
+    }
+}
+
+// `retain_get`: a key reads what it read, where the test keeps it, and
+// nothing where it does not.
+theorem Store::retain_get<V>(self s: Store<V>, keep: V → Bool, k: Key):
+    s.retain(keep).get(k) = s.get(k).and_then(λ (u: V) => keep(u).then(Some(u)))
+{
+    trans(cong_fn(λ (o: Option<Slot<V>>) => o.and_then(λ (sl: Slot<V>) => sl.answer(k.gen)), Store::nth_map(s.slots, λ (sl: Slot<V>) => sl.kept(keep), k.index)),
+        match s.slots.nth(k.index) as λ o => (o.map(λ (sl: Slot<V>) => sl.kept(keep)).and_then(λ (sl: Slot<V>) => sl.answer(k.gen)) =
+                o.and_then(λ (sl: Slot<V>) => sl.answer(k.gen)).and_then(λ (u: V) => keep(u).then(Some(u)))) {
+            None => refl,
+            Some(sl) => sl.kept_answer(keep, k.gen),
+        })
+}
+
+// A key that reads a value after `retain` read it before, and the test kept it.
+theorem Store::retain_some<V>(self s: Store<V>, keep: V → Bool, k: Key, c: V, e: s.retain(keep).get(k) = Some(c)): And<s.get(k) = Some(c), keep(c) = True> {
+    let e2: (s.get(k).and_then(λ (u: V) => keep(u).then(Some(u))) = Some(c)) = trans(sym(s.retain_get(keep, k)), e);
+    match s.get(k) as λ o => (o.and_then(λ (u: V) => keep(u).then(Some(u))) = Some(c) → And<o = Some(c), keep(c) = True>) {
+        None => λ n => absurd(n),
+        Some(u) => λ t => {
+            let p = Bool::then_some(keep(u), Some(u), c, t);
+            j(Option::some_inj(u, c, p.right), λ z _ => And<Some(u) = Some(z), keep(z) = True>, And(refl, p.left))
+        },
+    }(e2)
 }

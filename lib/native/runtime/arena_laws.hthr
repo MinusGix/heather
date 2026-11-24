@@ -186,6 +186,36 @@ theorem Arena::reset_top(a: Arena, mark: u64, ok: mark.toNat() <= a.top.toNat())
     cong_fn(λ (r: Mutated<Arena, u64>) => r.after.top, Arena::reset::True(a, mark, ok))
 }
 
+// Neither moves the limit; a refused allocation leaves the arena as it was,
+// and a reset leaves the top at the mark or where it was.
+theorem Arena::alloc_limit(a: Arena, size: u64): Arena::alloc(a, size).after.limit = a.limit {
+    match Arena::fits_dec(a, size) {
+        Inl(f) => cong_fn(λ (r: Mutated<Arena, Alloc>) => r.after.limit, Arena::alloc::True(a, size, f)),
+        Inr(nf) => cong_fn(λ (r: Mutated<Arena, Alloc>) => r.after.limit, Arena::alloc::False(a, size, nf)),
+    }
+}
+
+theorem Arena::alloc_full_same(a: Arena, size: u64, full: Arena::alloc(a, size).value = Full): Arena::alloc(a, size).after = a {
+    match Arena::fits_dec(a, size) {
+        Inl(f) => absurd(trans(sym(full), Arena::alloc_got(a, size, f))),
+        Inr(nf) => cong_fn(λ (r: Mutated<Arena, Alloc>) => r.after, Arena::alloc::False(a, size, nf)),
+    }
+}
+
+theorem Arena::reset_limit(a: Arena, mark: u64): Arena::reset(a, mark).after.limit = a.limit {
+    match Arena::le_dec(mark, a.top) {
+        Inl(ok) => cong_fn(λ (r: Mutated<Arena, u64>) => r.after.limit, Arena::reset::True(a, mark, ok)),
+        Inr(no) => cong_fn(λ (r: Mutated<Arena, u64>) => r.after.limit, Arena::reset::False(a, mark, no)),
+    }
+}
+
+theorem Arena::reset_top_cases(a: Arena, mark: u64): Or<And<Arena::reset(a, mark).after.top = mark, mark.toNat() <= a.top.toNat()>, Arena::reset(a, mark).after.top = a.top> {
+    match Arena::le_dec(mark, a.top) {
+        Inl(ok) => Inl(And(cong_fn(λ (r: Mutated<Arena, u64>) => r.after.top, Arena::reset::True(a, mark, ok)), ok)),
+        Inr(no) => Inr(cong_fn(λ (r: Mutated<Arena, u64>) => r.after.top, Arena::reset::False(a, mark, no))),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Windows: a store into one leaves every window apart from it
 
