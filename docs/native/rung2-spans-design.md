@@ -73,8 +73,8 @@ Written as a newcomer writes them, each refused (the ledger rows):
 
 | Shape | Refusal | Owner |
 |---|---|---|
-| a lookup loop that only reads the record, or a reader of a `Bytes(n)` answering a word | "a loop that only reads the record is not taken yet"; "a function over a span returns `Mutated<…>`" | `runtime-record-function-limits` (in progress this round) |
-| the slot as `k % cap` | `bv_omega` reads `urem` as an atom, so `k % 4 < 4` is not found | in progress this round; a mask (`k.band(3)`) and a shift of the top bits are found today |
+| a lookup loop that only reads the record, or a reader of a `Bytes(n)` answering a word | "a loop that only reads the record is not taken yet"; "a function over a span returns `Mutated<…>`" | built 2026-11-24: a reader publishes the writer's statement at the record unchanged (`HWorld::unchanged`), loops included (`layout-design` §9.5, `span-record-design`); a reader loop that calls is left (`runtime-record-function-limits`) |
+| the slot as `k % cap` | `bv_omega` reads `urem` as an atom, so `k % 4 < 4` is not found | built 2026-11-24: `x % c < c` at a literal, `x % n < n` under `0 < n` or `n ≠ 0`, the quotient's bounds (`bv-omega-word-remainder-quotient`); a mask (`k.band(3)`) and a shift of the top bits were found before |
 | the insert as a `while` whose measure is assigned in its arms | "must decrease the measure": the search does not split the `if` | `while-decrease-through-branches` |
 | a store under an `if` with code after it | "the span through a branch that joins again" | the loop combinator rebuild (`loops-on-one-combinator`), dogfooding plan §5.3b |
 | `break` or `return` in a `for` (stop at the found slot) | "has no `break`, `continue` or `return` yet" | `loops-on-one-combinator` |
@@ -83,7 +83,9 @@ Written as a newcomer writes them, each refused (the ledger rows):
 | a table as a parameter, `mut t: [u64; 8]` | "a type with no runtime layout" | §3 |
 
 None of these is about memory. They are rung 1 and the generator's
-coverage, and they are what a port meets first.
+coverage, and they are what a port meets first. The first two rows were
+closed in the round that wrote this note; the table keeps them so the
+ledger's history reads.
 
 ## 3. A span of elements: `Span<A>(n)`
 
@@ -296,7 +298,7 @@ value type.
 Each step lands its ledger rows; none needs a decision beyond §10's.
 
 1. **The surface gaps of §2** that rung 1 does not already own: readers,
-   the remainder's bound (both under way), the `while` decrease
+   the remainder's bound (both built 2026-11-24), the `while` decrease
    (`while-decrease-through-branches`).
 2. **`Span<A>(n)`** (§3): the codec of a run-time count, its holds
    relation, the reflector's reading of `s[i]` on it, the generator's

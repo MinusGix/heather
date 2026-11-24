@@ -344,13 +344,18 @@ runtime fn PortMap::find_slow(self m: PortMap, k, j, left: u64) → u64 decrease
     } else { 0 }
 }
 
-// The slot as the remainder it is: `k % 4 < 4` is not found by the default
-// search, which reads the remainder as an atom.
-// expect-error: `put`'s `inside` was left to its default
+// The slot as the remainder it is: `k % 4 < 4` is found by the default
+// search from the remainder's law (docs/tactics/bv-omega-design.md §3.1).
 runtime fn PortMap::slot_key(mut self m: PortMap, k: u64) → u64 {
     m.keys := m.keys.put(k % 4, k);
     0
 }
+
+// Key 10 is stored in slot 2, the fourth word of the record.
+theorem port_map_slot_key_runs(): PortMap::slot_key::bytes(PORT_MAP_EMPTY(), 72, 10).after =
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10,
+     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+     0, 0, 0, 0, 0, 0, 0, 0] { refl }
 
 // ---------------------------------------------------------------------------
 // Rung 3: inductive data
