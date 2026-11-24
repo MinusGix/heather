@@ -1,0 +1,40 @@
+// Probes of `lib/std/algebra/pcm_share.hthr`: closed validity verdicts at
+// literal shares, splitting a view again and again, and the `¬` theorems
+// for the readings a client might expect (the whole and a half compose; two
+// wholes compose). Tests, not library: nothing outside lib/_tests imports
+// this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import omega; import rat; import pcm; import pcm_share;
+
+fn quarter() → Share { Share::whole().half().half() }
+
+// Closed verdicts evaluate.
+theorem whole_valid(): Share::whole().valid() = True { refl }
+theorem two_halves_valid(): Share::whole().half().join(Share::whole().half()).valid() = True { refl }
+theorem three_quarters_valid(): quarter().join(quarter()).join(quarter()).valid() = True { refl }
+theorem whole_and_quarter_invalid(): Share::whole().join(quarter()).valid() = False { refl }
+
+// The decision agrees with the law.
+theorem quarter_valid(): quarter().Valid() { quarter().valid_sound(refl) }
+
+// A copied view's copy splits again; four quarters are the whole.
+theorem quarters_whole(): quarter().join(quarter()).join(quarter().join(quarter())) ≈ Share::whole() {
+    let q = quarter();
+    let h = Share::whole().half();
+    Share::same_trans(Share::join_respects(q.join(q).same_refl(), h.halves()),
+        Share::same_trans(Share::join_respects(h.halves(), h.same_refl()), Share::whole().halves()))
+}
+
+// A split at any amount recomposes.
+theorem take_a_third(): Share::whole().take(Rat::inv_succ(2), omega).join(Share::whole().rest(Rat::inv_succ(2), omega)) ≈ Share::whole() {
+    Share::whole().take_rest(Rat::inv_succ(2), omega, omega)
+}
+
+// Not: the whole and a half compose.
+theorem whole_and_half(): ¬Share::whole().join(Share::whole().half()).Valid() {
+    Share::whole().half().whole_meets_share(omega)
+}
+
+// Not: two wholes compose.
+theorem two_wholes(): ¬Share::whole().join(Share::whole()).Valid() {
+    Share::whole().whole_meets_share(omega)
+}
