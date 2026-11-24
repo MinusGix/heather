@@ -2,9 +2,11 @@
 
 Status: **rounds 1, 2 and 3a merged** (the combinator and its rule; a
 `while` outside a `runtime fn` elaborates to it, §5; the reflector read a
-twin of the step, §6.1); **stage 3b in review** (one loop node in the
-runtime terms, `while` and counted `for` over words written as
-`Loop::steps`, §6.2). Stage 3c and rounds 4 and 5 (§8) are the rest of the
+twin of the step, §6.1); **stages 3b and 3c built** (one loop node in the
+runtime terms, §6.2; one over a span, §6.3); **stage 3d in review** (a span
+loop's state of several words, a loop that only reads its span, and a
+statement `if` that joins inside a pass, §6.4). What is left of round 3,
+and the fork it meets, is §6.5; rounds 4 and 5 (§8) are the rest of the
 migration. Thread "Rebuild loops on
 one combinator", 2026-11-19, from the dogfooding review
 (`docs/native/dogfooding-plan.md`, PR #804).
@@ -405,6 +407,111 @@ over a held record (SHA-256, `Sched`, `Tally`), loops whose locals are not
 all words, and `Io` loops. A recursion written as a tail call still lowers
 in tail mode, so `lower_tail`, `Fun::Guarded` and the companions stay until
 those move.
+
+### 6.4 Stage 3d as built: several words, a span only read, a join
+
+Three shapes the ledger's hash-table rows met
+(`docs/native/rung2-spans-design.md` §2), each now a loop written in place
+over its span:
+
+- **A state of several words beside the span.** The loop's state is
+  `Mutated<span, f#State>`, the record of its words. A span function's
+  program was built over `Table::none`, so the reflector refused the record
+  ("`f#State` has no runtime layout"). The span and `Bytes(n)` generators
+  now add the records the walk meets to the program's table
+  (`runtime_span_reflect`), but only a loop's state as the elaborator mints
+  it (`f#State`, `f#loopK_State`): any other record beside a span is refused
+  as before, so `Plain` and `Bytes` as parameters keep their refusals.
+  Nothing in the meanings or proofs changed: `FTm::Loop` already carried a
+  record of words (`Ty::Carries`), and the table was the one thing fixed.
+  The write-out of a `Bytes(n)` function spells a record built and a field
+  read as its meaning reduces to, the record's constructor and its
+  projections (its table entry's `mk` and `get`); a wrapper around
+  `Tm::sem` instead ran the instance's conversion out of fuel, the trap of
+  §6.2 (a pass that does not meet the meaning by its arguments is unrolled
+  once per pass).
+- **The test's fact in a body of several words.** The test bound the words
+  by `let`s of its own, so the body's `i` was another local than the
+  test's, and `s[i]`'s search could not read `i < s.len()`. Over a span
+  with several words the test now reads the state's fields directly.
+  `Loop::after`'s type arguments are written too: its result `T` is not
+  determined by the state, and a method call in the body
+  (`s[i].zero_extend(56)`) was not resolved under an open result.
+- **A loop that only reads its `mut self` span** (`Lift::adopt_span`). The
+  parser threads only what a loop assigns, so such a span was a capture,
+  not a word, and the loop fell back to the lifted form, whose body runs
+  hoisted above its test (a read `s[i]` then has no fact). The span is
+  carried as the loop's state, unchanged, and rebound to the loop's
+  `after` behind it.
+- **A statement `if`/`match` that joins inside a pass**
+  (`tail_into_join`). The join is `let #stage = match c { … ⇒ Mutated(s,
+  c) }; let s = #stage.after; …`, and the span reflector cannot name a span
+  through a branch that joins again. In a pass, what follows the join is
+  only the rest of the pass down to its next state, so the elaborator
+  writes it into each arm (each arm reading its locals straight off its own
+  `Mutated(…)`), and each arm ends in its own state, which the reflector
+  reads as an `If`. The step's next state is then the `match` itself, and
+  its decrease is found under each arm's tests (the closer splits an `if`,
+  `issues/while-decrease-through-branches.md`). The rest is copied once per
+  arm. **For Minus:** this is the join for loop passes only; a join with
+  real code after it in straight-line code still needs `FTm`'s own join
+  node, the shared control language of the dogfooding plan §5.3b. Copying
+  the tail was chosen for passes because their tail is short (the next
+  state, a counter's increment), and it needs no new meaning or proof.
+- A generator's request budget is ten times a tactic's
+  (`GENERATOR_REQUEST_BUDGET`, `crates/elab/src/host.rs`): the insert row,
+  three arms of stores, made more than ten thousand requests.
+
+What compiles: the ledger's `Bytes::port_set_put` (the insert as a `while`
+over `mut self`, three words, stores in two of three arms) and
+`Bytes::port_count_clear_word`; the probes `runtime_span_joins_tests`
+(a sum of two words over `Bytes(n)` and over `List<u8>`, a store under an
+`if` then code after it, an `if` inside an arm joining words only, and a
+negative control whose one arm does not lower the measure). Still refused:
+a loop written in place takes only 64-bit words beside its span, so a `u8`
+key (`port_count_clear`, `port_find_while`) keeps the loop lifted
+(`issues/runtime-repr-narrow-words.md`); `break` and `return` in a `for`.
+
+### 6.5 What is left of round 3, and its fork
+
+Still lifted the old way: loops with an `invariant`, `mut self` loops over
+a held record (round 4, `rt_held_loop`), loops whose captures or locals
+are not all words, and `Io` loops. And a recursion a user writes as a tail
+call still lowers in tail mode, so `Tm::lower_tail`, `Fun::Guarded` and
+the companions stay until it moves.
+
+**The fork.** §6 said a user's tail recursion is read as a loop through
+`Loop::unique`. Stage 3a found the pin of a `runtime fn` is a conversion,
+not a theorem (there is no funext), so a function whose meaning is
+`Loop::steps(…)` cannot be pinned to an `f` defined by `decreases`, though
+the two agree at every argument. Three ways on:
+
+1. **The elaborator writes a `runtime fn`'s tail recursion as the loop**,
+   as it writes a `while` (§6.2): `f`'s body becomes `Loop::steps` over a
+   state of its arguments (with several exits, an enum `Go(args) | Out(r)`,
+   which the loop node carries as its tag word and slots), and the
+   equations a proof cites (`f_unfold`, one per branch) are generated as
+   theorems by `Loop::steps_stays` and the step's decrease; `f::induct`
+   becomes `Loop::rule` at the step. The pin stays a conversion, callers
+   see `f` as it is, and `lower_tail`, `Fun::Guarded`, `rt_loop`'s two
+   loop theorems and the measured `FFun` path go.
+2. **The pin becomes pointwise**: `Setup::compile` takes `∀ x̄, meaning(x̄)
+   = f(x̄)`, proved by `Loop::unique` from `f`'s branch equations. `f`
+   stays as written, but every consumer of the pin (callers' tables, the
+   span and record publications, the linker's sources) changes from
+   conversion to rewriting.
+3. Keep tail mode for written recursion and steer ports to `while`. Nothing
+   is deleted.
+
+**Recommended: 1**, for Minus to confirm. It is §6.2's choice applied to
+the other spelling of the same loop, it keeps every proof the generator
+makes a conversion, and it moves the cost into the elaborator once instead
+of into each consumer of the pin. What it changes for users: a proof that
+unfolds `f` by `refl` on a closed argument still runs (the loop evaluates
+pass by pass), and one that rewrites by `f_unfold` cites a theorem instead
+of a definitional equation. It is the next stage (3e); the ports the
+ledger keeps as tail calls (`port_set_insert`, `PortMap::insert_at`) are
+its first customers, and the lexer's linked code its regression test.
 
 ## 7. Bootstrapping
 
