@@ -36,3 +36,4 @@ built. Left, each a PR for Minus (§8 of the design):
   `Loop(…).run` over `f::State` with `f::step`; the whole library passes.
   A `mut self` method's loops and a counted `for` are still lifted (next).
 - 2026-11-24: 2026-11-24: a `while` whose measure is assigned through an `if` is refused though every arm decreases it ([[while-decrease-through-branches]]): the search does not split the branch. Found by the hash table rows of the ledger (docs/native/rung2-spans-design.md §2).
+- 2026-11-24: [[while-decrease-through-branches]] is fixed: the decreases closer splits a stuck if in the obligation and searches each arm, so a while whose measure is assigned through an if is accepted.
