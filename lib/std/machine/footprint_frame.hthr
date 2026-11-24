@@ -1,0 +1,89 @@
+// The bridge from the separation algebra to memory: a store inside one
+// footprint keeps every predicate that holds of a footprint composed with
+// it (docs/library/separation-algebra-design.md §5,
+// docs/language/ownership-design.md §10.3 and §10.6).
+//
+// Memory itself needs no separation algebra (a store keeps every cell
+// outside its span: `Memory::get_set_span_outside`); what the algebra adds
+// is the reason two footprints are apart. An owner of `t` and a holder of
+// `g` whose footprints compose (`Footprint::own(t).join(g)` valid,
+// `lib/std/data/set/footprint.hthr`) are disjoint, so a store the owner
+// makes inside `t` leaves every cell of `g` as it was, and a predicate that
+// reads only `g`'s cells (`Footprint::Local`) still holds after it. This is
+// the frame rule of separation logic, stated against the byte memory model
+// through a `Numbering` (`memory.hthr`), so it holds of any address space
+// whose addresses are numbered: naturals, and words below their top.
+
+import logic;
+import bool;
+import nat;
+import omega;
+import vector;
+import span_set;
+import memory;
+import pcm;
+import footprint;
+
+// Two memories over one space agree on a footprint: same space and
+// permissions, and the same cell at every address whose number is in it.
+record AgreesOn<A, C>(space: Space<A>, top: Nat, nb: Numbering<A>(space, top), s: SpanSet, m, n: Memory<A, C>) {
+    same_space: n.space = m.space,
+    same_perms: n.perms = m.perms,
+    cells: (x: A) → s.has(nb.number(x)).IsTrue() → n.get(x) = m.get(x),
+}
+
+// A predicate on memories that reads only the cells of a footprint.
+fn Footprint::Local<A, C>(space: Space<A>, top: Nat, nb: Numbering<A>(space, top), s: SpanSet, Q: Memory<A, C> → Type) → Type {
+    (m, n: Memory<A, C>) → AgreesOn<A, C>(space, top, nb, s, m, n) → Q(m) → Q(n)
+}
+
+// A store whose span is apart from a footprint leaves the footprint's cells.
+theorem Footprint::store_agrees<A, C>(space: Space<A>, top: Nat, nb: Numbering<A>(space, top),
+    m: Memory<A, C>, sp: m.space = space, a: A, {k: Nat}, cs: [C; k], fits: nb.number(a) + k <= top,
+    s: SpanSet, apart: (y: Nat) → Span(nb.number(a), k).has(y).IsTrue() → s.has(y).IsTrue() → False):
+    AgreesOn<A, C>(space, top, nb, s, m, m.set_span(a, cs))
+{
+    AgreesOn(
+        same_space := refl,
+        same_perms := refl,
+        cells := λ x hx => {
+            let out: ¬Span(nb.number(a), k).has(nb.number(x)).IsTrue() = λ hin => apart(nb.number(x), hin, hx);
+            let away: ((p: Nat) → p < k → space.same(space.offset(a, p), x) = False) =
+                Numbering::outside(space, top, nb, a, k, fits, x, out);
+            let here: ((p: Nat) → p < k → m.space.same(m.space.offset(a, p), x) = False) =
+                j(sym(sp), λ sp2 _ => (p: Nat) → p < k → sp2.same(sp2.offset(a, p), x) = False, away);
+            m.get_set_span_outside(a, cs, x, here)
+        },
+    )
+}
+
+// The frame theorem: the owner of `t` stores inside `t`; a predicate local to
+// any footprint `g` that composes with `t` holds after the store if it held
+// before.
+theorem Footprint::store_keeps<A, C>(space: Space<A>, top: Nat, nb: Numbering<A>(space, top),
+    m: Memory<A, C>, sp: m.space = space, a: A, {k: Nat}, cs: [C; k], fits: nb.number(a) + k <= top,
+    t: SpanSet, inside: (y: Nat) → Span(nb.number(a), k).has(y).IsTrue() → t.has(y).IsTrue(),
+    g: Footprint, composed: Footprint::own(t).join(g).Valid(),
+    Q: Memory<A, C> → Type, local: Footprint::Local<A, C>(space, top, nb, g.spans, Q), holds: Q(m)): Q(m.set_span(a, cs))
+{
+    let d: (t.Disjoint(g.spans)) = Footprint::own(t).apart_of_valid(g, composed);
+    local(m, m.set_span(a, cs),
+        Footprint::store_agrees(space, top, nb, m, sp, a, cs, fits, g.spans, λ y hin hg => d(y, inside(y, hin), hg)),
+        holds)
+}
+
+// The same, read through the separating conjunction: a resource that is
+// the owner's `t` beside a frame where `P` holds. Every frame whose
+// predicate is local keeps it.
+theorem Footprint::store_keeps_sep<A, C>(space: Space<A>, top: Nat, nb: Numbering<A>(space, top),
+    m: Memory<A, C>, sp: m.space = space, a: A, {k: Nat}, cs: [C; k], fits: nb.number(a) + k <= top,
+    t: SpanSet, inside: (y: Nat) → Span(nb.number(a), k).has(y).IsTrue() → t.has(y).IsTrue(),
+    P: Footprint → Type, r: Footprint, ok: r.Valid(),
+    h: Sep<Footprint>(Footprint::Same, Footprint::join, λ f => f ≈ Footprint::own(t), P, r),
+    Q: Memory<A, C> → Type, local: Footprint::Local<A, C>(space, top, nb, h.right.spans, Q), holds: Q(m)): Q(m.set_span(a, cs))
+{
+    let whole: (h.left.join(h.right).Valid()) = Footprint::valid_respects(Footprint::same_sym(h.parts), ok);
+    let moved: (Footprint::own(t).join(h.right).Valid()) =
+        Footprint::valid_respects(Footprint::join_respects(h.holds_l, h.right.same_refl()), whole);
+    Footprint::store_keeps(space, top, nb, m, sp, a, cs, fits, t, inside, h.right, moved, Q, local, holds)
+}

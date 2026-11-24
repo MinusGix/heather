@@ -1,0 +1,50 @@
+// Probes of `lib/std/machine/footprint_frame.hthr`: the frame theorem at a
+// natural-number memory, an owner of `[0, 8)` storing four cells while a
+// predicate about cell 10 is held by a footprint composed beside it, both
+// directly and read through `∗`; and the negative control, that a footprint
+// over the stored cells does not compose with the owner's, so the theorem
+// has nothing to say there. Tests, not library: nothing outside lib/_tests
+// imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import omega; import list; import vector; import span_set; import memory; import pcm;
+import footprint; import footprint_frame;
+
+fn owned() → SpanSet { SpanSet::of(Span(0, 8)) }
+fn watched() → Footprint { Footprint::own(SpanSet::of(Span(10, 1))) }
+
+// Cell 10 holds `c`: a predicate that reads only `watched()`.
+fn TenIs(c: Nat, m: Memory<Nat, Nat>) → Type { m.get(10) = c }
+
+theorem ten_local(c: Nat): Footprint::Local<Nat, Nat>(Nat::space(), 12, Nat::numbering(12), watched().spans, λ m => TenIs(c, m)) {
+    λ m n agree h => trans(agree.cells(10, trivial), h)
+}
+
+theorem composed(): Footprint::own(owned()).join(watched()).Valid() { Footprint::own(owned()).join(watched()).valid_sound(refl) }
+
+theorem store_keeps_ten(m: Memory<Nat, Nat>, sp: m.space = Nat::space(), c, w: Nat, h: TenIs(c, m)):
+    TenIs(c, m.set_span(2, [w, w, w, w]))
+{
+    Footprint::store_keeps(Nat::space(), 12, Nat::numbering(12), m, sp, 2, [w, w, w, w], omega,
+        owned(), λ y hin => j(sym(SpanSet::of_has(Span(0, 8), y)), λ v _ => v.IsTrue(), omega(hin)),
+        watched(), composed(), λ m => TenIs(c, m), ten_local(c), h)
+}
+
+// The same through `∗`: a resource split into the owner's part and a frame.
+theorem store_keeps_ten_sep(m: Memory<Nat, Nat>, sp: m.space = Nat::space(), c, w: Nat, h: TenIs(c, m)):
+    TenIs(c, m.set_span(2, [w, w, w, w]))
+{
+    let r = Footprint::own(owned()).join(watched());
+    let halves: Sep<Footprint>(Footprint::Same, Footprint::join, λ f => f ≈ Footprint::own(owned()), λ f => f ≈ watched(), r) =
+        Sep(Footprint::own(owned()), watched(), r.same_refl(), Footprint::own(owned()).same_refl(), watched().same_refl());
+    Footprint::store_keeps_sep(Nat::space(), 12, Nat::numbering(12), m, sp, 2, [w, w, w, w], omega,
+        owned(), λ y hin => j(sym(SpanSet::of_has(Span(0, 8), y)), λ v _ => v.IsTrue(), omega(hin)),
+        λ f => f ≈ watched(), r, composed(), halves, λ m => TenIs(c, m), ten_local(c), h)
+}
+
+// The control: a frame over the stored cells does not compose with the
+// owner, so no frame theorem covers it.
+theorem overlapping_frame_refused(): Footprint::own(owned()).join(Footprint::own(SpanSet::of(Span(6, 4)))).valid() = False { refl }
+
+// …and the store does change what such a frame watches.
+fn sevens() → Memory<Nat, Nat> { Memory<Nat, Nat>(Nat::space(), λ x => 7, λ x => Perm::data()) }
+
+theorem overlapping_store_changes(): ¬(sevens().set_span(6, [0, 0]).get(6) = 7) { λ h => absurd(h) }
