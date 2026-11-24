@@ -1,0 +1,103 @@
+// Probes of `list_path`: elements and windows read and written at literal
+// lists by evaluation and at open ones by the laws, validity at both, a
+// field of an element as a composed path, apartness decided at literal and
+// at open indexes, and the refusals. Tests, not library: nothing imports
+// this module.
+import logic;
+import bool;
+import nat;
+import omega;
+import option;
+import pair;
+import list;
+import vector;
+import span_set;
+import location;
+import path;
+import list_path;
+
+// ---------------------------------------------------------------------------
+// At literal lists, by evaluation
+
+theorem elem_reads(): Path::elem<Nat>(1).get([10, 20, 30]) = Some(20) { refl }
+
+theorem elem_writes(): Path::elem<Nat>(1).set([10, 20, 30], 5) = [10, 5, 30] { refl }
+
+theorem elem_past_end(): Path::elem<Nat>(3).get([10, 20, 30]) = None { refl }
+
+theorem elem_past_end_writes_nothing(): Path::elem<Nat>(3).set([10, 20, 30], 5) = [10, 20, 30] { refl }
+
+theorem window_reads(): Path::window<Nat>(1, 2).get([1, 2, 3, 4]).map(λ (v: [Nat; 2]) => vector_entries(v)) = Some([2, 3]) { refl }
+
+theorem window_writes(): Path::window<Nat>(1, 2).set([1, 2, 3, 4], [7, 8]) = [1, 7, 8, 4] { refl }
+
+theorem window_past_end_writes_nothing(): Path::window<Nat>(3, 2).set([1, 2, 3, 4], [7, 8]) = [1, 2, 3, 4] { refl }
+
+// An empty window past the end is not valid either: `xs[5..5]` of four.
+theorem empty_window_past_end(): Path::window<Nat>(5, 0).valid([1, 2, 3, 4]) = False { refl }
+
+// The verdicts at closed spans.
+theorem verdict_apart(): Span(0, 2).apart(Span(2, 2)) = True { refl }
+
+theorem verdict_meets(): Span(0, 3).apart(Span(2, 2)) = False { refl }
+
+// ---------------------------------------------------------------------------
+// At open lists and an open element type
+
+theorem elem_valid_open<A>(xs: List<A>, i: Nat, inside: i < xs.len()): Path::elem<A>(i).Valid(xs) { Path::elem_valid(i, xs, inside) }
+
+theorem window_fits_open<A>(xs: List<A>, lo, n: Nat, valid: Path::window<A>(lo, n).Valid(xs)): lo + n <= xs.len() {
+    Path::window_valid_fits(lo, n, xs, valid)
+}
+
+// Read back after a write, at a neutral list, by the laws.
+theorem window_read_back<A>(xs: List<A>, lo, n: Nat, v: [A; n], fits: lo + n <= xs.len()):
+    Path::window<A>(lo, n).get(Path::window<A>(lo, n).set(xs, v)) = Some(v)
+{
+    let valid = Path::window_valid(lo, n, xs, fits);
+    Path::window_laws<A>(lo, n).set_get(xs, valid.witness, v, valid.proof)
+}
+
+// An element inside a window is apart from the window after it, found at
+// open indexes.
+theorem elem_apart_from_window<A>(i, lo, n: Nat, before: i < lo): Apart<List<A>, A, [A; n]>(Path::elem<A>(i), Path::window<A>(lo, n)) {
+    PathIn::apart_sound(Path::elem_in<A>(i), Path::window_in<A>(lo, n), omega(before))
+}
+
+// Holding element 0 while element 2 is stored, at an open list.
+theorem hold_open<A>(xs: List<A>, v: A): Path::elem<A>(0).Keeps(xs, Path::elem<A>(2).set(xs, v)) { Path::hold_while_store(xs, 0, 2, omega, v) }
+
+// split_at_mut at a literal list: the halves rebuild it.
+theorem split_literal(): Path::window<Nat>(2, 1).set(Path::window<Nat>(0, 2).set([1, 2, 3], [7, 8]), [9]) = [7, 8, 9] {
+    Path::split_rebuilds<Nat>(2, 1, [1, 2, 3], refl, [7, 8], [9])
+}
+
+// ---------------------------------------------------------------------------
+// A field of an element: a list of pairs
+
+fn fst_of<A, B>() → Location<Pair<A, B>, A> { Location<Pair<A, B>, A>(read := λ (p: Pair<A, B>) => p.fst, write := λ (p: Pair<A, B>) => λ (a: A) => Pair(a, p.snd)) }
+
+fn elem_fst<A, B>(i: Nat) → Path<List<Pair<A, B>>, A> { Path::elem<Pair<A, B>>(i).then(Path::of_location(fst_of<A, B>())) }
+
+theorem elem_fst_reads(): elem_fst<Nat, Nat>(1).get([Pair(1, 2), Pair(3, 4)]) = Some(3) { refl }
+
+theorem elem_fst_writes(): elem_fst<Nat, Nat>(1).set([Pair(1, 2), Pair(3, 4)], 9) = [Pair(1, 2), Pair(9, 4)] { refl }
+
+// The field lies in its element's span, so it is apart from every other
+// element, at open types and indexes.
+theorem field_apart_from_other<A, B>(i, k: Nat, ne: ¬(i = k)): Apart<List<Pair<A, B>>, A, Pair<A, B>>(elem_fst<A, B>(i), Path::elem<Pair<A, B>>(k)) {
+    PathIn::apart_sound(Path::elem_in<Pair<A, B>>(i).then(Path::of_location(fst_of<A, B>())), Path::elem_in<Pair<A, B>>(k), omega(ne))
+}
+
+// ---------------------------------------------------------------------------
+// Refusals
+
+// The decider does not find overlapping windows apart: its verdict is
+// False, so no found proof of it exists.
+// expect-error: `trivial` proves `True`
+theorem overlap_refused(): Apart<List<Nat>, [Nat; 2], [Nat; 2]>(Path::window<Nat>(0, 2), Path::window<Nat>(1, 2)) {
+    PathIn::apart_sound(Path::window_in<Nat>(0, 2), Path::window_in<Nat>(1, 2), trivial)
+}
+
+// And the claim itself is false.
+theorem overlap_false(): ¬Apart<List<Nat>, [Nat; 2], [Nat; 2]>(Path::window<Nat>(0, 2), Path::window<Nat>(1, 2)) { Path::overlap_not_apart() }

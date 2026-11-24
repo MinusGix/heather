@@ -1,0 +1,567 @@
+// Paths into a list: an element at an index and a window of a fixed
+// length, the steps whose apartness is a fact about numbers
+// (docs/language/ownership-design.md §10.2, §10.4, §10.6). Over `path.hthr`.
+//
+// - `Path::elem<A>(i)` reads element `i` and writes it; `Path::window<A>(lo, n)`
+//   reads the `n` elements from `lo` as a vector `[A; n]` and writes them
+//   back, the length of what is written fixed by its type, as a `&mut [T]`
+//   is. Both are lawful (`elem_laws`, `window_laws`) and valid exactly
+//   where they fit (`elem_valid_iff`, `window_valid_iff`): the obligation
+//   at a use is `i < xs.len()` or `lo + n <= xs.len()`.
+// - A footprint: `PathIn(p, span)` says a path reads and writes the list
+//   only at the indexes of a `Span` (span_set.hthr) and keeps its length.
+//   Each step lies in its span (`elem_in`, `window_in`), and so does every
+//   path composed after it (`PathIn::then`): a field of an element lies in
+//   the element's span.
+// - Apart, decided: two paths in spans the endpoint verdict finds apart are
+//   `Apart` (`PathIn::apart_sound`), so their writes commute and each keeps
+//   what the other reads. The verdict is `Span::apart`, sound and complete
+//   on spans: at open indexes a found proof (`omega`), at closed ones
+//   evaluation.
+// - The worked examples of the design's §6: `split_at_mut` (a list split
+//   at `k` is two windows apart, valid together, whose writes rebuild the
+//   whole as the two parts appended: `split_rebuilds`), and holding element
+//   `i` while storing element `j ≠ i` (`hold_while_store`). The negative
+//   controls are `¬` theorems: an element is not apart from itself, nor are
+//   two windows that overlap.
+
+import logic;
+import bool;
+import nat;
+import omega;
+import option;
+import list;
+import list_window;
+import vector;
+import span_set;
+import location;
+import path;
+
+// ---------------------------------------------------------------------------
+// The first `n` elements as a vector
+
+// The first `n` elements of `xs` as a vector, where it has `n`.
+fn List::prefix<A>(self xs: List<A>, n: Nat) → Option<[A; n]> {
+    (match n as λ j => List<A> → Option<[A; j]> {
+        Zero => λ ys => Some([]),
+        Succ(_, ih) => λ ys => match ys { Nil => None, Cons(h, t) => ih(t).map(λ v => cons(h, v)) },
+    })(xs)
+}
+
+// A vector's entries, whatever follows them, read back as the vector.
+theorem prefix_of_entries<A>(n: Nat): (v: [A; n]) → (rest: List<A>) → (vector_entries(v) ++ rest).prefix(n) = Some(v) {
+    match n as λ j => (v: [A; j]) → (rest: List<A>) → (vector_entries(v) ++ rest).prefix(j) = Some(v) {
+        Zero => λ v rest => refl,
+        Succ(m, ih) => λ (v: [A; Succ(m)]) (rest: List<A>) => cong_fn(λ (o: Option<[A; m]>) => o.map(λ (w: [A; m]) => cons(head(v), w)), ih(tail(v), rest)),
+    }
+}
+
+// What the prefix answers is the list's first `n` entries.
+theorem List::prefix_some<A>(n: Nat): (xs: List<A>) → (v: [A; n]) → xs.prefix(n) = Some(v) → vector_entries(v) = xs.take(n) {
+    match n as λ j => (xs: List<A>) → (v: [A; j]) → xs.prefix(j) = Some(v) → vector_entries(v) = xs.take(j) {
+        Zero => λ xs v h => sym(xs.take_zero()),
+        Succ(m, ih) => λ xs => match xs {
+            Nil => λ v h => absurd(h),
+            Cons(x, t) => λ v h => {
+                let step: ((o: Option<[A; m]>) → t.prefix(m) = o → o.map(λ (w: [A; m]) => cons(x, w)) = Some(v) →
+                        vector_entries(v) = Cons(x, t.take(m))) =
+                    λ o => match o {
+                        None => λ e hm => absurd(hm),
+                        Some(w) => λ e hm => trans(cong_fn(λ (u: [A; Succ(m)]) => vector_entries(u), sym(Option::some_inj(cons(x, w), v, hm))),
+                            List::cong_cons(x, ih(t, w, e))),
+                    };
+                step(t.prefix(m), refl, h)
+            },
+        },
+    }
+}
+
+// The prefix answers exactly where the list is long enough.
+theorem List::prefix_below<A>(n: Nat): (xs: List<A>) → (v: [A; n]) → xs.prefix(n) = Some(v) → n <= xs.len() {
+    match n as λ j => (xs: List<A>) → (v: [A; j]) → xs.prefix(j) = Some(v) → j <= xs.len() {
+        Zero => λ xs v h => omega,
+        Succ(m, ih) => λ xs => match xs {
+            Nil => λ v h => absurd(h),
+            Cons(x, t) => λ v h => {
+                let step: ((o: Option<[A; m]>) → t.prefix(m) = o → o.map(λ (w: [A; m]) => cons(x, w)) = Some(v) → m + 1 <= t.len() + 1) =
+                    λ o => match o {
+                        None => λ e hm => absurd(hm),
+                        Some(w) => λ e hm => { let below: (m <= t.len()) = ih(t, w, e); omega(below) },
+                    };
+                step(t.prefix(m), refl, h)
+            },
+        },
+    }
+}
+
+theorem List::prefix_present<A>(n: Nat): (xs: List<A>) → n <= xs.len() → Exists<[A; n]>(λ v => xs.prefix(n) = Some(v)) {
+    match n as λ j => (xs: List<A>) → j <= xs.len() → Exists<[A; j]>(λ v => xs.prefix(j) = Some(v)) {
+        Zero => λ xs _ => Exists([], refl),
+        Succ(m, ih) => λ xs => match xs {
+            Nil => λ no => false_elim(no),
+            Cons(x, t) => λ fits => {
+                let inner: (Exists<[A; m]>(λ w => t.prefix(m) = Some(w))) = ih(t, omega(fits));
+                Exists(cons(x, inner.witness), cong_fn(λ (o: Option<[A; m]>) => o.map(λ (w: [A; m]) => cons(x, w)), inner.proof))
+            },
+        },
+    }
+}
+
+// The prefix reads only the first `n` elements.
+theorem List::prefix_ext<A>(n: Nat): (xs, ys: List<A>) → ((k: Nat) → k < n → xs.nth(k) = ys.nth(k)) → xs.prefix(n) = ys.prefix(n) {
+    match n {
+        Zero => λ xs ys _ => refl,
+        Succ(m, ih) => λ xs ys => match xs {
+            Nil => match ys {
+                Nil => λ _ => refl,
+                Cons(_, _) => λ agree => absurd(agree(0, omega)),
+            },
+            Cons(x, s) => match ys {
+                Nil => λ agree => absurd(agree(0, omega)),
+                Cons(y, t) => λ agree => {
+                    let head: (x = y) = Option::some_inj(x, y, agree(0, omega));
+                    let rest: (s.prefix(m) = t.prefix(m)) = ih(s, t, λ k lt => agree(k + 1, omega(lt)));
+                    trans(cong_fn(λ (o: Option<[A; m]>) => o.map(λ (w: [A; m]) => cons(x, w)), rest),
+                        cong_fn(λ (c: A) => t.prefix(m).map(λ (w: [A; m]) => cons(c, w)), head))
+                },
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Lists that agree on a span
+
+// `xs` and `ys` hold the same at every index of `s`.
+fn List::Agree<A>(xs, ys: List<A>, s: Span) → Type { (k: Nat) → s.has(k).IsTrue() → xs.nth(k) = ys.nth(k) }
+
+// A path that reads and writes a list only inside `span`, and keeps its
+// length: what it reads depends only on the span, what it writes there only
+// on the value and the span, and outside the span it writes nothing.
+record PathIn<A, V>(p: Path<List<A>, V>, span: Span) {
+    shape: (xs: List<A>) → (v: V) → p.set(xs, v).len() = xs.len(),
+    frame: (xs: List<A>) → (v: V) → (k: Nat) → ¬span.has(k).IsTrue() → p.set(xs, v).nth(k) = xs.nth(k),
+    reads: (xs, ys: List<A>) → xs.len() = ys.len() → List::Agree(xs, ys, span) → p.get(xs) = p.get(ys),
+    writes: (xs, ys: List<A>) → (v: V) → xs.len() = ys.len() → List::Agree(xs, ys, span) →
+        (k: Nat) → span.has(k).IsTrue() → p.set(xs, v).nth(k) = p.set(ys, v).nth(k),
+}
+
+// ---------------------------------------------------------------------------
+// An element
+
+fn Path::elem<A>(i: Nat) → Path<List<A>, A> {
+    Path<List<A>, A>(get := λ (xs: List<A>) => xs.nth(i), set := λ (xs: List<A>) => λ (v: A) => xs.update(i, λ _ => v))
+}
+
+// A store at an index reads back as what was there, replaced.
+theorem List::nth_update_const<A>(self xs: List<A>): (i: Nat) → (v: A) → xs.update(i, λ _ => v).nth(i) = xs.nth(i).map(λ _ => v) {
+    match xs {
+        Nil => λ i v => refl,
+        Cons(_, t) => λ i => match i {
+            Zero => λ v => refl,
+            Succ(k) => λ v => t.nth_update_const(k, v),
+        },
+    }
+}
+
+theorem List::update_none<A>(self xs: List<A>): (i: Nat) → (f: A → A) → xs.nth(i) = None → xs.update(i, f) = xs {
+    match xs {
+        Nil => λ i f _ => refl,
+        Cons(h, t) => λ i => match i {
+            Zero => λ f no => absurd(no),
+            Succ(k) => λ f no => List::cong_cons(h, t.update_none(k, f, no)),
+        },
+    }
+}
+
+theorem Path::elem_laws<A>(i: Nat): PathLaws<List<A>, A>(Path::elem<A>(i)) {
+    PathLaws(
+        λ xs a v h => xs.nth_update_here(i, λ _ => v, a, h),
+        λ xs a h => xs.update_nth_self(i, a, h),
+        λ xs v w => xs.update_update_same(i, λ _ => v, λ _ => w),
+        λ xs v h => xs.update_none(i, λ _ => v, h),
+    )
+}
+
+theorem Path::elem_valid<A>(i: Nat, xs: List<A>, inside: i < xs.len()): Path::elem<A>(i).Valid(xs) { xs.nth_present(i, inside) }
+
+theorem Path::elem_inside<A>(i: Nat, xs: List<A>, valid: Path::elem<A>(i).Valid(xs)): i < xs.len() {
+    xs.nth_some_below(i, valid.witness, valid.proof)
+}
+
+theorem Path::elem_in<A>(i: Nat): PathIn<A, A>(Path::elem<A>(i), Span(i, 1)) {
+    PathIn(
+        λ xs v => xs.len_update(i, λ _ => v),
+        λ xs v k out => xs.nth_update_other(i, λ _ => v, k, λ e => out(omega(e))),
+        λ xs ys _ agree => agree(i, omega),
+        λ xs ys v _ agree k at => {
+            let here: (k = i) = omega(at);
+            let same: (xs.nth(i) = ys.nth(i)) = agree(i, omega);
+            j(sym(here), λ m _ => xs.update(i, λ _ => v).nth(m) = ys.update(i, λ _ => v).nth(m),
+                trans(xs.nth_update_const(i, v), trans(cong_fn(λ (o: Option<A>) => o.map(λ _ => v), same), sym(ys.nth_update_const(i, v)))))
+        },
+    )
+}
+
+// ---------------------------------------------------------------------------
+// A window
+
+// The window's write: the vector's entries over the `n` elements from `lo`,
+// where they fit; nothing where they do not.
+fn List::put_run<A>(self xs: List<A>, lo, n: Nat, v: [A; n]) → List<A> {
+    match (lo + n).leb(xs.len()) { True => xs.put_window(lo, vector_entries(v)), False => xs }
+}
+
+// The window's read: the `n` elements from `lo`, where they fit.
+fn List::run<A>(self xs: List<A>, lo, n: Nat) → Option<[A; n]> {
+    match (lo + n).leb(xs.len()) { True => xs.drop(lo).prefix(n), False => None }
+}
+
+fn Path::window<A>(lo, n: Nat) → Path<List<A>, [A; n]> {
+    Path<List<A>, [A; n]>(get := λ (xs: List<A>) => xs.run(lo, n), set := λ (xs: List<A>) => λ (v: [A; n]) => xs.put_run(lo, n, v))
+}
+
+theorem List::put_run_fits<A>(self xs: List<A>, lo, n: Nat, v: [A; n], fits: lo + n <= xs.len()): xs.put_run(lo, n, v) = xs.put_window(lo, vector_entries(v)) {
+    j(sym(Nat::leb_true(lo + n, xs.len(), fits)), λ b _ => (match b { True => xs.put_window(lo, vector_entries(v)), False => xs }) = xs.put_window(lo, vector_entries(v)), refl)
+}
+
+theorem List::put_run_past<A>(self xs: List<A>, lo, n: Nat, v: [A; n], past: xs.len() < lo + n): xs.put_run(lo, n, v) = xs {
+    j(sym(Nat::leb_false(lo + n, xs.len(), past)), λ b _ => (match b { True => xs.put_window(lo, vector_entries(v)), False => xs }) = xs, refl)
+}
+
+theorem List::run_fits<A>(self xs: List<A>, lo, n: Nat, fits: lo + n <= xs.len()): xs.run(lo, n) = xs.drop(lo).prefix(n) {
+    j(sym(Nat::leb_true(lo + n, xs.len(), fits)), λ b _ => (match b { True => xs.drop(lo).prefix(n), False => None<[A; n]>() }) = xs.drop(lo).prefix(n), refl)
+}
+
+theorem List::run_past<A>(self xs: List<A>, lo, n: Nat, past: xs.len() < lo + n): xs.run(lo, n) = None {
+    j(sym(Nat::leb_false(lo + n, xs.len(), past)), λ b _ => (match b { True => xs.drop(lo).prefix(n), False => None<[A; n]>() }) = None, refl)
+}
+
+theorem Path::window_valid_fits<A>(lo, n: Nat, xs: List<A>, valid: Path::window<A>(lo, n).Valid(xs)): lo + n <= xs.len() {
+    match Nat::le_dec(lo + n, xs.len()) {
+        Inl(fits) => fits,
+        Inr(past) => absurd(trans(sym(xs.run_past(lo, n, omega(past))), valid.proof)),
+    }
+}
+
+theorem Path::window_valid<A>(lo, n: Nat, xs: List<A>, fits: lo + n <= xs.len()): Path::window<A>(lo, n).Valid(xs) {
+    let p = List::prefix_present(n, xs.drop(lo), omega(fits, xs.len_drop(lo)));
+    Exists(p.witness, trans(xs.run_fits(lo, n, fits), p.proof))
+}
+
+// The entries a valid window reads are the list's window.
+theorem Path::window_entries<A>(lo, n: Nat, xs: List<A>, v: [A; n], at: Path::window<A>(lo, n).get(xs) = Some(v)):
+    vector_entries(v) = xs.window(lo, n + lo)
+{
+    let k: (n + lo - lo = n) = omega;
+    let fits: (lo + n <= xs.len()) = Path::window_valid_fits(lo, n, xs, Exists(v, at));
+    trans(List::prefix_some(n, xs.drop(lo), v, trans(sym(xs.run_fits(lo, n, fits)), at)), cong_fn(λ (m: Nat) => xs.drop(lo).take(m), sym(k)))
+}
+
+theorem Path::window_set_get<A>(lo, n: Nat, xs: List<A>, a, v: [A; n], at: Path::window<A>(lo, n).get(xs) = Some(a)):
+    Path::window<A>(lo, n).get(Path::window<A>(lo, n).set(xs, v)) = Some(v)
+{
+    let fits: (lo + n <= xs.len()) = Path::window_valid_fits(lo, n, xs, Exists(a, at));
+    let e = vector_entries(v);
+    let el: (e.len() = n) = vector_entries_len(n, v);
+    let front: (xs.take(lo).len() = lo) = xs.len_take(lo, omega(fits));
+    let written: (xs.put_run(lo, n, v) = xs.take(lo) ++ (e ++ xs.drop(e.len() + lo))) = xs.put_run_fits(lo, n, v, fits);
+    let dropped: ((xs.take(lo) ++ (e ++ xs.drop(e.len() + lo))).drop(lo) = e ++ xs.drop(e.len() + lo)) =
+        j(front, λ m _ => (xs.take(lo) ++ (e ++ xs.drop(e.len() + lo))).drop(m) = e ++ xs.drop(e.len() + lo),
+            xs.take(lo).drop_append_len(e ++ xs.drop(e.len() + lo)));
+    let kept: (xs.put_run(lo, n, v).len() = xs.len()) = trans(cong_fn(λ (ys: List<A>) => ys.len(), xs.put_run_fits(lo, n, v, fits)),
+        xs.len_put_window(lo, e, omega(el, fits)));
+    trans(xs.put_run(lo, n, v).run_fits(lo, n, omega(kept, fits)),
+        trans(cong_fn(λ (ys: List<A>) => ys.drop(lo).prefix(n), written),
+            trans(cong_fn(λ (ys: List<A>) => ys.prefix(n), dropped), prefix_of_entries(n, v, xs.drop(e.len() + lo)))))
+}
+
+theorem Path::window_get_set<A>(lo, n: Nat, xs: List<A>, a: [A; n], at: Path::window<A>(lo, n).get(xs) = Some(a)):
+    Path::window<A>(lo, n).set(xs, a) = xs
+{
+    let fits: (lo + n <= xs.len()) = Path::window_valid_fits(lo, n, xs, Exists(a, at));
+    trans(xs.put_run_fits(lo, n, a, fits),
+        trans(cong_fn(λ (w: List<A>) => xs.put_window(lo, w), Path::window_entries(lo, n, xs, a, at)), xs.put_window_window(lo, n + lo)))
+}
+
+// Two windows written at one place, the second as long as the first: the
+// second is what stays.
+theorem List::put_window_twice<A>(self xs: List<A>, lo: Nat, ys, zs: List<A>, same: ys.len() = zs.len(), fits: ys.len() + lo <= xs.len()):
+    xs.put_window(lo, ys).put_window(lo, zs) = xs.put_window(lo, zs)
+{
+    let front: (xs.take(lo).len() = lo) = xs.len_take(lo, omega(fits));
+    let w = xs.put_window(lo, ys);
+    let tw: (w.take(lo) = xs.take(lo)) =
+        j(front, λ m _ => (xs.take(lo) ++ (ys ++ xs.drop(ys.len() + lo))).take(m) = xs.take(lo), xs.take(lo).take_append_len(ys ++ xs.drop(ys.len() + lo)));
+    let at: (zs.len() + lo = ys.len() + xs.take(lo).len()) = omega(same, front);
+    let skip: ((xs.take(lo) ++ (ys ++ xs.drop(ys.len() + lo))).drop(ys.len() + xs.take(lo).len()) = xs.drop(ys.len() + lo)) =
+        trans(sym(w.drop_drop(xs.take(lo).len(), ys.len())),
+            trans(cong_fn(λ (t: List<A>) => t.drop(ys.len()), xs.take(lo).drop_append_len(ys ++ xs.drop(ys.len() + lo))),
+                ys.drop_append_len(xs.drop(ys.len() + lo))));
+    let dw: (w.drop(zs.len() + lo) = xs.drop(zs.len() + lo)) =
+        trans(cong_fn(λ (m: Nat) => w.drop(m), at), trans(skip, cong_fn(λ (m: Nat) => xs.drop(m + lo), same)));
+    trans(cong_fn(λ (t: List<A>) => t ++ (zs ++ w.drop(zs.len() + lo)), tw), cong_fn(λ (d: List<A>) => xs.take(lo) ++ (zs ++ d), dw))
+}
+
+theorem Path::window_set_set<A>(lo, n: Nat, xs: List<A>, v, w: [A; n]):
+    Path::window<A>(lo, n).set(Path::window<A>(lo, n).set(xs, v), w) = Path::window<A>(lo, n).set(xs, w)
+{
+    match Nat::le_dec(lo + n, xs.len()) {
+        Inl(fits) => {
+            let ev: (vector_entries(v).len() = n) = vector_entries_len(n, v);
+            let ew: (vector_entries(w).len() = n) = vector_entries_len(n, w);
+            let first: (xs.put_run(lo, n, v) = xs.put_window(lo, vector_entries(v))) = xs.put_run_fits(lo, n, v, fits);
+            let kept: (xs.put_window(lo, vector_entries(v)).len() = xs.len()) = xs.len_put_window(lo, vector_entries(v), omega(ev, fits));
+            let second: (xs.put_window(lo, vector_entries(v)).put_run(lo, n, w) = xs.put_window(lo, vector_entries(v)).put_window(lo, vector_entries(w))) =
+                xs.put_window(lo, vector_entries(v)).put_run_fits(lo, n, w, omega(kept, fits));
+            trans(cong_fn(λ (ys: List<A>) => ys.put_run(lo, n, w), first),
+                trans(second, trans(xs.put_window_twice(lo, vector_entries(v), vector_entries(w), omega(ev, ew), omega(ev, fits)),
+                    sym(xs.put_run_fits(lo, n, w, fits)))))
+        },
+        Inr(past) => {
+            let first: (xs.put_run(lo, n, v) = xs) = xs.put_run_past(lo, n, v, omega(past));
+            cong_fn(λ (ys: List<A>) => ys.put_run(lo, n, w), first)
+        },
+    }
+}
+
+theorem Path::window_laws<A>(lo, n: Nat): PathLaws<List<A>, [A; n]>(Path::window<A>(lo, n)) {
+    PathLaws(
+        λ xs a v h => Path::window_set_get(lo, n, xs, a, v, h),
+        λ xs a h => Path::window_get_set(lo, n, xs, a, h),
+        λ xs v w => Path::window_set_set(lo, n, xs, v, w),
+        λ xs v h => match Nat::le_dec(lo + n, xs.len()) {
+            Inl(fits) => absurd(trans(sym(h), Path::window_valid(lo, n, xs, fits).proof)),
+            Inr(past) => xs.put_run_past(lo, n, v, omega(past)),
+        },
+    )
+}
+
+theorem Path::window_in<A>(lo, n: Nat): PathIn<A, [A; n]>(Path::window<A>(lo, n), Span(lo, n)) {
+    PathIn(
+        λ xs v => match Nat::le_dec(lo + n, xs.len()) {
+            Inl(fits) => trans(cong_fn(λ (ys: List<A>) => ys.len(), xs.put_run_fits(lo, n, v, fits)),
+                xs.len_put_window(lo, vector_entries(v), omega(vector_entries_len(n, v), fits))),
+            Inr(past) => cong_fn(λ (ys: List<A>) => ys.len(), xs.put_run_past(lo, n, v, omega(past))),
+        },
+        λ xs v k out => match Nat::le_dec(lo + n, xs.len()) {
+            Inl(fits) => {
+                let el: (vector_entries(v).len() = n) = vector_entries_len(n, v);
+                let at: (xs.put_run(lo, n, v).nth(k) = xs.put_window(lo, vector_entries(v)).nth(k)) =
+                    cong_fn(λ (ys: List<A>) => ys.nth(k), xs.put_run_fits(lo, n, v, fits));
+                match Nat::lt_or_ge(k, lo) {
+                    Inl(before) => trans(at, xs.nth_put_window_before(lo, vector_entries(v), k, before, omega(fits))),
+                    Inr(from) => {
+                        let past: (k = (k - (n + lo)) + (vector_entries(v).len() + lo)) = omega(from, el, out);
+                        trans(at, j(sym(past), λ m _ => xs.put_window(lo, vector_entries(v)).nth(m) = xs.nth(m),
+                            xs.nth_put_window_after(lo, vector_entries(v), k - (n + lo), omega(fits))))
+                    },
+                }
+            },
+            Inr(past) => cong_fn(λ (ys: List<A>) => ys.nth(k), xs.put_run_past(lo, n, v, omega(past))),
+        },
+        λ xs ys len agree => match Nat::le_dec(lo + n, xs.len()) {
+            Inl(fits) => trans(xs.run_fits(lo, n, fits), trans(List::prefix_ext(n, xs.drop(lo), ys.drop(lo), λ k lt =>
+                trans(xs.nth_drop_add(lo, k), trans(agree(k + lo, omega(lt)), sym(ys.nth_drop_add(lo, k))))), sym(ys.run_fits(lo, n, omega(fits, len))))),
+            Inr(past) => trans(xs.run_past(lo, n, omega(past)), sym(ys.run_past(lo, n, omega(past, len)))),
+        },
+        λ xs ys v len agree k at => match Nat::le_dec(lo + n, xs.len()) {
+            Inl(fits) => {
+                let el: (vector_entries(v).len() = n) = vector_entries_len(n, v);
+                let off: (k = (k - lo) + lo) = omega(at);
+                let inside: (k - lo < vector_entries(v).len()) = omega(at, el);
+                let both: ((zs: List<A>) → lo + n <= zs.len() → zs.put_run(lo, n, v).nth(k) = vector_entries(v).nth(k - lo)) = λ zs zf =>
+                    trans(cong_fn(λ (us: List<A>) => us.nth(k), zs.put_run_fits(lo, n, v, zf)),
+                        j(sym(off), λ m _ => zs.put_window(lo, vector_entries(v)).nth(m) = vector_entries(v).nth(k - lo),
+                            zs.nth_put_window_inside(lo, vector_entries(v), k - lo, inside, omega(zf))));
+                trans(both(xs, fits), sym(both(ys, omega(fits, len))))
+            },
+            Inr(past) => trans(cong_fn(λ (us: List<A>) => us.nth(k), xs.put_run_past(lo, n, v, omega(past))),
+                trans(agree(k, at), sym(cong_fn(λ (us: List<A>) => us.nth(k), ys.put_run_past(lo, n, v, omega(past, len)))))),
+        },
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Composed paths stay in their outer span
+
+theorem PathIn::then_shape<A, V, W>(p: Path<List<A>, V>, q: Path<V, W>, sp: Span, pin: PathIn<A, V>(p, sp), xs: List<A>, w: W):
+    (o: Option<V>) → p.get(xs) = o → p.then(q).set(xs, w).len() = xs.len()
+{
+    λ o => match o {
+        Some(a) => λ e => trans(cong_fn(λ (ys: List<A>) => ys.len(), p.then_set_at(q, xs, a, e, w)), pin.shape(xs, q.set(a, w))),
+        None => λ e => cong_fn(λ (ys: List<A>) => ys.len(), p.then_set_none(q, xs, e, w)),
+    }
+}
+
+theorem PathIn::then_frame<A, V, W>(p: Path<List<A>, V>, q: Path<V, W>, sp: Span, pin: PathIn<A, V>(p, sp), xs: List<A>, w: W, k: Nat, out: ¬sp.has(k).IsTrue()):
+    (o: Option<V>) → p.get(xs) = o → p.then(q).set(xs, w).nth(k) = xs.nth(k)
+{
+    λ o => match o {
+        Some(a) => λ e => trans(cong_fn(λ (ys: List<A>) => ys.nth(k), p.then_set_at(q, xs, a, e, w)), pin.frame(xs, q.set(a, w), k, out)),
+        None => λ e => cong_fn(λ (ys: List<A>) => ys.nth(k), p.then_set_none(q, xs, e, w)),
+    }
+}
+
+theorem PathIn::then_writes<A, V, W>(p: Path<List<A>, V>, q: Path<V, W>, sp: Span, pin: PathIn<A, V>(p, sp), xs, ys: List<A>, w: W,
+    len: xs.len() = ys.len(), agree: List::Agree(xs, ys, sp), k: Nat, at: sp.has(k).IsTrue()):
+    (o: Option<V>) → p.get(xs) = o → p.get(ys) = o → p.then(q).set(xs, w).nth(k) = p.then(q).set(ys, w).nth(k)
+{
+    λ o => match o {
+        Some(a) => λ ex ey => trans(cong_fn(λ (zs: List<A>) => zs.nth(k), p.then_set_at(q, xs, a, ex, w)),
+            trans(pin.writes(xs, ys, q.set(a, w), len, agree, k, at), sym(cong_fn(λ (zs: List<A>) => zs.nth(k), p.then_set_at(q, ys, a, ey, w))))),
+        None => λ ex ey => trans(cong_fn(λ (zs: List<A>) => zs.nth(k), p.then_set_none(q, xs, ex, w)),
+            trans(agree(k, at), sym(cong_fn(λ (zs: List<A>) => zs.nth(k), p.then_set_none(q, ys, ey, w))))),
+    }
+}
+
+// A part of a part lies where the outer part does: a field of an element
+// lies in the element's span.
+theorem PathIn::then<A, V, W>({p: Path<List<A>, V>}, {sp: Span}, self pin: PathIn<A, V>(p, sp), q: Path<V, W>): PathIn<A, W>(p.then(q), sp) {
+    PathIn(
+        λ xs w => PathIn::then_shape(p, q, sp, pin, xs, w, p.get(xs), refl),
+        λ xs w k out => PathIn::then_frame(p, q, sp, pin, xs, w, k, out, p.get(xs), refl),
+        λ xs ys len agree => cong_fn(λ (o: Option<V>) => o.and_then(q.get), pin.reads(xs, ys, len, agree)),
+        λ xs ys w len agree k at => PathIn::then_writes(p, q, sp, pin, xs, ys, w, len, agree, k, at, p.get(xs), refl, sym(pin.reads(xs, ys, len, agree))),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Apart, decided by the spans
+
+// A write through a path in `sp` leaves every list agreeing with the old one
+// on a span apart from `sp`.
+theorem PathIn::agree_apart<A, V>({p: Path<List<A>, V>}, {sp: Span}, self pin: PathIn<A, V>(p, sp), sq: Span, d: sp.Disjoint(sq), xs: List<A>, v: V):
+    List::Agree(p.set(xs, v), xs, sq)
+{
+    λ k at => pin.frame(xs, v, k, λ inp => d(k, inp, at))
+}
+
+theorem PathIn::commute_at<A, V, W>({p: Path<List<A>, V>}, {q: Path<List<A>, W>}, {sp, sq: Span}, pin: PathIn<A, V>(p, sp), qin: PathIn<A, W>(q, sq),
+    d: sp.Disjoint(sq), xs: List<A>, a: V, b: W, k: Nat):
+    p.set(q.set(xs, b), a).nth(k) = q.set(p.set(xs, a), b).nth(k)
+{
+    let qb = q.set(xs, b);
+    let pa = p.set(xs, a);
+    match sp.has(k).is_true_dec() {
+        Inl(inp) => {
+            let left: (p.set(qb, a).nth(k) = pa.nth(k)) =
+                pin.writes(qb, xs, a, qin.shape(xs, b), qin.agree_apart(sp, Span::disjoint_symm(sp, sq, d), xs, b), k, inp);
+            trans(left, sym(qin.frame(pa, b, k, λ inq => d(k, inp, inq))))
+        },
+        Inr(outp) => match sq.has(k).is_true_dec() {
+            Inl(inq) => {
+                let right: (q.set(pa, b).nth(k) = qb.nth(k)) =
+                    qin.writes(pa, xs, b, pin.shape(xs, a), pin.agree_apart(sq, d, xs, a), k, inq);
+                trans(pin.frame(qb, a, k, outp), sym(right))
+            },
+            Inr(outq) => trans(pin.frame(qb, a, k, outp), trans(qin.frame(xs, b, k, outq), sym(trans(qin.frame(pa, b, k, outq), pin.frame(xs, a, k, outp))))),
+        },
+    }
+}
+
+// Paths in disjoint spans are apart.
+theorem PathIn::apart<A, V, W>({p: Path<List<A>, V>}, {q: Path<List<A>, W>}, {sp, sq: Span}, pin: PathIn<A, V>(p, sp), qin: PathIn<A, W>(q, sq),
+    d: sp.Disjoint(sq)): Apart<List<A>, V, W>(p, q)
+{
+    Apart(
+        λ xs b => pin.reads(q.set(xs, b), xs, qin.shape(xs, b), qin.agree_apart(sp, Span::disjoint_symm(sp, sq, d), xs, b)),
+        λ xs a => qin.reads(p.set(xs, a), xs, pin.shape(xs, a), pin.agree_apart(sq, d, xs, a)),
+        λ xs a b => {
+            let l1: (p.set(q.set(xs, b), a).len() = xs.len()) = trans(pin.shape(q.set(xs, b), a), qin.shape(xs, b));
+            let l2: (q.set(p.set(xs, a), b).len() = xs.len()) = trans(qin.shape(p.set(xs, a), b), pin.shape(xs, a));
+            p.set(q.set(xs, b), a).ext_nth(q.set(p.set(xs, a), b), trans(l1, sym(l2)),
+                λ k _ => PathIn::commute_at(pin, qin, d, xs, a, b, k))
+        },
+    )
+}
+
+// The decider: the endpoint verdict on the spans.
+theorem PathIn::apart_sound<A, V, W>({p: Path<List<A>, V>}, {q: Path<List<A>, W>}, {sp, sq: Span}, pin: PathIn<A, V>(p, sp), qin: PathIn<A, W>(q, sq),
+    verdict: sp.apart(sq).IsTrue()): Apart<List<A>, V, W>(p, q)
+{
+    PathIn::apart(pin, qin, sp.apart_sound(sq, verdict))
+}
+
+// ---------------------------------------------------------------------------
+// Holding element `i` while storing element `j`
+
+theorem Path::elems_apart<A>(i, k: Nat, ne: ¬(i = k)): Apart<List<A>, A, A>(Path::elem<A>(i), Path::elem<A>(k)) {
+    PathIn::apart_sound(Path::elem_in<A>(i), Path::elem_in<A>(k), omega(ne))
+}
+
+// A value read through element `i` is still read after a store to element
+// `k ≠ i`: the store keeps the path, so a frozen view of element `i` may be
+// held across it.
+theorem Path::hold_while_store<A>(xs: List<A>, i, k: Nat, ne: ¬(i = k), v: A): Path::elem<A>(i).Keeps(xs, Path::elem<A>(k).set(xs, v)) {
+    Path::elems_apart(i, k, ne).keeps(xs, v)
+}
+
+// The negative control: an element is not apart from itself.
+theorem Path::elem_not_apart_self(): ¬Apart<List<Nat>, Nat, Nat>(Path::elem<Nat>(0), Path::elem<Nat>(0)) {
+    λ apart => {
+        let same: (Some(1) = Some(0)) = apart.left_after_right([0], 1);
+        absurd(Option::some_inj(1, 0, same))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// split_at_mut
+
+// A list of `k + m` elements split at `k`: the two windows are apart.
+theorem Path::split_apart<A>(k, m: Nat): Apart<List<A>, [A; k], [A; m]>(Path::window<A>(0, k), Path::window<A>(k, m)) {
+    PathIn::apart_sound(Path::window_in<A>(0, k), Path::window_in<A>(k, m), omega)
+}
+
+// Both are valid where the list has `k + m` elements.
+theorem Path::split_valid<A>(k, m: Nat, xs: List<A>, len: xs.len() = k + m):
+    And<Path::window<A>(0, k).Valid(xs), Path::window<A>(k, m).Valid(xs)>
+{
+    And(Path::window_valid(0, k, xs, omega(len)), Path::window_valid(k, m, xs, omega(len)))
+}
+
+// Writing both halves rebuilds the whole: the list is the two vectors'
+// entries, one after the other.
+theorem Path::split_rebuilds<A>(k, m: Nat, xs: List<A>, len: xs.len() = k + m, l: [A; k], r: [A; m]):
+    Path::window<A>(k, m).set(Path::window<A>(0, k).set(xs, l), r) = vector_entries(l) ++ vector_entries(r)
+{
+    let el: (vector_entries(l).len() = k) = vector_entries_len(k, l);
+    let er: (vector_entries(r).len() = m) = vector_entries_len(m, r);
+    let first: (xs.put_run(0, k, l) = vector_entries(l) ++ xs.drop(vector_entries(l).len())) =
+        trans(xs.put_run_fits(0, k, l, omega(len)), xs.put_window_from_zero(vector_entries(l)));
+    let ys = vector_entries(l) ++ xs.drop(vector_entries(l).len());
+    let ylen: (ys.len() = k + m) = omega(vector_entries(l).len_append(xs.drop(vector_entries(l).len())), xs.len_drop(vector_entries(l).len()), el, len);
+    let front: (ys.take(k) = vector_entries(l)) =
+        j(el, λ n _ => ys.take(n) = vector_entries(l), vector_entries(l).take_append_len(xs.drop(vector_entries(l).len())));
+    let whole: (vector_entries(r).len() + k = ys.len()) = omega(er, ylen);
+    let back: (ys.drop(vector_entries(r).len() + k) = Nil) =
+        trans(cong_fn(λ (n: Nat) => ys.drop(n), whole), ys.drop_len());
+    let second: (ys.put_run(k, m, r) = ys.take(k) ++ (vector_entries(r) ++ ys.drop(vector_entries(r).len() + k))) =
+        ys.put_run_fits(k, m, r, omega(ylen));
+    trans(cong_fn(λ (zs: List<A>) => zs.put_run(k, m, r), first),
+        trans(second, trans(cong_fn(λ (t: List<A>) => t ++ (vector_entries(r) ++ ys.drop(vector_entries(r).len() + k)), front),
+            trans(cong_fn(λ (d: List<A>) => vector_entries(l) ++ (vector_entries(r) ++ d), back),
+                cong_fn(λ (t: List<A>) => vector_entries(l) ++ t, vector_entries(r).append_nil())))))
+}
+
+// And each half reads back what was written through it.
+theorem Path::split_reads<A>(k, m: Nat, xs: List<A>, len: xs.len() = k + m, l: [A; k], r: [A; m]):
+    And<Path::window<A>(0, k).get(Path::window<A>(k, m).set(Path::window<A>(0, k).set(xs, l), r)) = Some(l),
+        Path::window<A>(k, m).get(Path::window<A>(k, m).set(Path::window<A>(0, k).set(xs, l), r)) = Some(r)>
+{
+    let valid = Path::split_valid(k, m, xs, len);
+    Path::split_apart(k, m).both_read(Path::window_laws(0, k), Path::window_laws(k, m), xs, valid.left, valid.right, l, r)
+}
+
+// The negative control: windows that overlap are not apart, and the verdict
+// says so.
+theorem Path::overlap_verdict(): Span(0, 2).apart(Span(1, 2)) = False { refl }
+
+theorem Path::overlap_not_apart(): ¬Apart<List<Nat>, [Nat; 2], [Nat; 2]>(Path::window<Nat>(0, 2), Path::window<Nat>(1, 2)) {
+    λ apart => {
+        let same: (Path::window<Nat>(0, 2).get(Path::window<Nat>(1, 2).set([0, 0, 0], [1, 1])) = Path::window<Nat>(0, 2).get([0, 0, 0])) =
+            apart.left_after_right([0, 0, 0], [1, 1]);
+        let second: (1 = 0) = cong_fn(λ (o: Option<[Nat; 2]>) => o.map(λ (v: [Nat; 2]) => vector_get(v, 1, 0)).unwrap_or(0), same);
+        absurd(second)
+    }
+}

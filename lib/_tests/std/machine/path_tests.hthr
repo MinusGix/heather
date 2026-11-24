@@ -1,0 +1,91 @@
+// Probes of `path`: a location read as a path and back, composition at open
+// carriers, two fields of one part apart, and what keeps a path. Tests, not
+// library: nothing imports this module.
+import logic;
+import option;
+import pair;
+import list;
+import location;
+import path;
+
+// The two halves of a pair, as locations.
+fn first<A, B>() → Location<Pair<A, B>, A> { Location<Pair<A, B>, A>(read := λ (p: Pair<A, B>) => p.fst, write := λ (p: Pair<A, B>) => λ (a: A) => Pair(a, p.snd)) }
+fn second<A, B>() → Location<Pair<A, B>, B> { Location<Pair<A, B>, B>(read := λ (p: Pair<A, B>) => p.snd, write := λ (p: Pair<A, B>) => λ (b: B) => Pair(p.fst, b)) }
+
+theorem first_laws<A, B>(): LocationLaws<Pair<A, B>, A>(first<A, B>()) { LocationLaws(λ p => refl, λ p a => refl, λ p a b => refl) }
+theorem second_laws<A, B>(): LocationLaws<Pair<A, B>, B>(second<A, B>()) { LocationLaws(λ p => refl, λ p b => refl, λ p a b => refl) }
+theorem halves_disjoint<A, B>(): Disjoint<Pair<A, B>, A, B>(first<A, B>(), second<A, B>()) { Disjoint(λ p b => refl, λ p a => refl, λ p a b => refl) }
+
+// A location is a path that always answers, at an open carrier and owner.
+theorem location_answers<S, A>(l: Location<S, A>, s: S): Path::of_location(l).get(s) = Some(l.read(s)) { refl }
+
+theorem location_valid<S, A>(l: Location<S, A>, s: S): Path::of_location(l).Valid(s) { Path::of_location_valid(l, s) }
+
+// And back: a total path's location is the one it came from, field by field.
+theorem round_trip_read<S, A>(l: Location<S, A>, s: S): Path::of_location(l).location(Path::of_location_total(l)).read(s) = l.read(s) { refl }
+
+theorem round_trip_laws<S, A>(l: Location<S, A>, laws: LocationLaws<S, A>(l)): LocationLaws<S, A>(Path::of_location(l).location(Path::of_location_total(l))) {
+    Path::of_location(l).location_laws(Path::of_location_laws(l, laws), Path::of_location_total(l))
+}
+
+// Composition: the first of the second of a nested pair, read and written
+// at open element types, with its laws from the steps'.
+fn inner_first<A, B, C>() → Path<Pair<C, Pair<A, B>>, A> { Path::of_location(second<C, Pair<A, B>>()).then(Path::of_location(first<A, B>())) }
+
+theorem inner_first_reads<A, B, C>(c: C, a: A, b: B): inner_first<A, B, C>().get(Pair(c, Pair(a, b))) = Some(a) { refl }
+
+theorem inner_first_writes<A, B, C>(c: C, a, a2: A, b: B): inner_first<A, B, C>().set(Pair(c, Pair(a, b)), a2) = Pair(c, Pair(a2, b)) { refl }
+
+theorem inner_first_laws<A, B, C>(): PathLaws<Pair<C, Pair<A, B>>, A>(inner_first<A, B, C>()) {
+    Path::of_location(second<C, Pair<A, B>>()).then_laws(Path::of_location(first<A, B>()),
+        Path::of_location_laws(second<C, Pair<A, B>>(), second_laws<C, Pair<A, B>>()), Path::of_location_laws(first<A, B>(), first_laws<A, B>()))
+}
+
+// Lawful locations compose to a lawful location.
+theorem composed_laws<A, B, C>(): LocationLaws<Pair<C, Pair<A, B>>, A>(compose_location(second<C, Pair<A, B>>(), first<A, B>())) {
+    compose_location_laws(second<C, Pair<A, B>>(), first<A, B>(), second_laws<C, Pair<A, B>>(), first_laws<A, B>())
+}
+
+// Two fields of one part are apart in the owner, so a write to one keeps
+// what the other reads, at a neutral owner.
+theorem fields_apart<A, B, C>(): Apart<Pair<C, Pair<A, B>>, A, B>(
+    Path::of_location(second<C, Pair<A, B>>()).then(Path::of_location(first<A, B>())),
+    Path::of_location(second<C, Pair<A, B>>()).then(Path::of_location(second<A, B>())))
+{
+    Apart::under(Path::of_location(second<C, Pair<A, B>>()), Path::of_location_laws(second<C, Pair<A, B>>(), second_laws<C, Pair<A, B>>()),
+        Apart::of_disjoint(first<A, B>(), second<A, B>(), halves_disjoint<A, B>()))
+}
+
+theorem field_kept<A, B, C>(s: Pair<C, Pair<A, B>>, b: B):
+    inner_first<A, B, C>().Keeps(s, Path::of_location(second<C, Pair<A, B>>()).then(Path::of_location(second<A, B>())).set(s, b))
+{
+    fields_apart<A, B, C>().keeps(s, b)
+}
+
+// Apart total paths are disjoint locations again.
+theorem halves_back<A, B>(): Disjoint<Pair<A, B>, A, B>(Path::of_location(first<A, B>()).location(Path::of_location_total(first<A, B>())),
+    Path::of_location(second<A, B>()).location(Path::of_location_total(second<A, B>())))
+{
+    Apart::of_disjoint(first<A, B>(), second<A, B>(), halves_disjoint<A, B>()).disjoint(Path::of_location_total(first<A, B>()), Path::of_location_total(second<A, B>()))
+}
+
+// A path that is only sometimes there: the head of a list.
+fn head_path<A>() → Path<List<A>, A> {
+    Path<List<A>, A>(
+        get := λ (xs: List<A>) => match xs { Nil => None, Cons(h, _) => Some(h) },
+        set := λ (xs: List<A>) => λ (a: A) => match xs { Nil => Nil, Cons(_, t) => Cons(a, t) },
+    )
+}
+
+// Its validity is decided, at literals by evaluation.
+theorem head_valid(): head_path<Nat>().valid([1, 2]) = True { refl }
+
+theorem head_invalid(): head_path<Nat>().valid(Nil) = False { refl }
+
+theorem head_not_valid(): ¬head_path<Nat>().Valid(Nil) { λ v => absurd(v.proof) }
+
+// The negative control: what a path read in an owner it no longer reads is
+// not kept.
+theorem emptied_not_kept(): ¬head_path<Nat>().Keeps([1], Nil) {
+    head_path<Nat>().not_keeps([1], Nil, Exists(1, refl), head_not_valid())
+}
