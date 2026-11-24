@@ -1428,7 +1428,7 @@ impl Checking<'_> {
                     Ok(term) => Ok(self
                         .attempt
                         .goal_arena
-                        .allocate_proved(&Declarations(self).emitted_cx(cx), expected.clone(), lvl.clone(), term.clone(), e.span)
+                        .allocate_proved("bv_omega", &Declarations(self).emitted_cx(cx), expected.clone(), lvl.clone(), term.clone(), e.span)
                         .unwrap_or(term)),
                     Err(last) => {
                         // Name the side condition that failed, not only the goal
@@ -1972,6 +1972,9 @@ impl Checking<'_> {
             span: span,
         })?;
         cert.report.phases = phases;
+        if std::env::var_os("HEATHER_OMEGA_DUMP_TMP").is_some() {
+            eprintln!("OMEGA depth={} len={} atoms={} assumptions={} splits={} lemmas={:?}\n  {}", outer_depth, cert.source.len(), cert.report.atoms, cert.report.assumptions, cert.report.logical_splits, cert.report.used_lemmas, &cert.source[..cert.source.len().min(400)]);
+        }
         self.pass.omega_reports.borrow_mut().push(cert.report);
         // A written call is lifted into a lemma of its own, as `bv_omega`'s
         // proof is (docs/tactics/bv-omega-design.md §6): the gate checks the
@@ -1985,7 +1988,7 @@ impl Checking<'_> {
             return Ok(self
                 .attempt
                 .goal_arena
-                .allocate_proved(&Declarations(self).emitted_cx(written_cx), expected.clone(), lvl.clone(), term.clone(), span)
+                .allocate_proved("omega", &Declarations(self).emitted_cx(written_cx), expected.clone(), lvl.clone(), term.clone(), span)
                 .unwrap_or(term));
         }
         Ok(term)

@@ -201,6 +201,14 @@ theorem BitVec::toNat_band_low_mask(n: Nat): (k: Nat) → (x: BitVec(n)) → x.b
 // `2^k` with the borrow added back at the full width, which `bv_omega` reads
 // for `(j - i) & 3` (issues/bv-omega-word-arithmetic-modulo.md). The width
 // is `e + k`, so the remainder by `2^(e + k)` is under one by `2^k`.
+// The low `k` bits of a sum, wrapped or not: the sum modulo `2^k`.
+theorem BitVec::toNat_band_low_mask_add(k, e: Nat, a, b: BitVec(e + k)):
+    a.add(b).band(BitVec::low_mask(k)).toNat() = (a.toNat() + b.toNat()).mod(Nat::pow(2, k))
+{
+    trans(BitVec::toNat_band_low_mask(e + k, k, a.add(b)),
+        trans(Nat::cong(λ (v: Nat) => v.mod(Nat::pow(2, k)), BitVec::toNat_add_mod(e + k, a, b)), (a.toNat() + b.toNat()).mod_pow_mod(2, k, e)))
+}
+
 theorem BitVec::toNat_band_low_mask_sub(k, e: Nat, a, b: BitVec(e + k)):
     a.sub(b).band(BitVec::low_mask(k)).toNat() = (a.toNat() + Nat::pow(2, e + k) - b.toNat()).mod(Nat::pow(2, k))
 {

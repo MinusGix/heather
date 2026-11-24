@@ -950,6 +950,17 @@ theorem nat_sub_elim(a, b: Nat,
     }
 }
 
+// A value's two sides of `k`: `q <= k`, or `k < q`. A quotient the real
+// shadow leaves within a few values (`0 <= (x + 4 - y) / 4 <= 1`) is split
+// on it, so each branch is exact and needs no integer search
+// (docs/tactics/omega-measure-reduction-design.md §26).
+theorem nat_value_split(q, k: Nat, low: q <= k → False, high: k < q → False): False {
+    match k.lt_or_ge(q) {
+        Inl(lt) => high(lt),
+        Inr(ge) => low(ge),
+    }
+}
+
 // An integer's `toNat`, the same way: `0 <= x` with `OfNat(x.toNat()) = x`,
 // or `x < 0` with `x.toNat() = 0`. A `decreases x.toNat()` over an `Int`
 // local is read through it.

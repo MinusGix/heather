@@ -3582,6 +3582,69 @@ fn split_connective(elab: &Elaborator, cx: &Cx) -> Result<Option<Certificate>, S
     Ok(None)
 }
 
+/// The prefix of the facts a quotient split binds: `__omega_quot{k}_low`
+/// (`q <= v`) or `__omega_quot{k}_high` (`v < q`).
+const QUOT_CASE: &str = "__omega_quot";
+
+/// Quotient splits one goal may sit under.
+const QUOT_SPLIT_LIMIT: usize = 6;
+
+/// The widest range, in values, a quotient is split on.
+const QUOT_SPLIT_RANGE: Z = 4;
+
+/// A Nat quotient `x / c` (the atom `x % c` and `x / c` are read through)
+/// that the real shadow's frontier bounds to a few values, split on its
+/// least one by `omega::nat_value_split`: `q <= v` or `v < q`. The shadow
+/// is exact over the rationals and fails only on integrality, which a
+/// quotient pinned on both sides restores; each branch is again `omega`,
+/// and a range of more than two values is split again inside. Asked before
+/// CutSat, whose certificate for the same refutation is a case analysis
+/// over every atom it branched on: on `(s + 4 - j) % 4`-shaped distances,
+/// hundreds of kilobytes of source a leaf
+/// (issues/runtime-hash-map-spec.md: an inline `omega` in minutes).
+fn split_small_quotient(
+    elab: &Elaborator,
+    cx: &Cx,
+    residual: &[crate::omega::Fact],
+    atom_labels: &[String],
+) -> Result<Option<Certificate>, String> {
+    if elab.key_of("omega::nat_value_split").is_none() {
+        return Ok(None);
+    }
+    let splits = local_facts(elab, cx).iter().filter(|(name, _)| name.starts_with(QUOT_CASE)).count();
+    if splits >= QUOT_SPLIT_LIMIT {
+        return Ok(None);
+    }
+    for fact in residual {
+        let coefficients = fact.coeffs.as_slice();
+        let mut nonzero = coefficients.iter().enumerate().filter(|(_, c)| **c != 0);
+        let (Some((index, &c)), None) = (nonzero.next(), nonzero.next()) else { continue };
+        let (Some(lower), Some(upper)) = (fact.interval.lower, fact.interval.upper) else { continue };
+        let (lower, upper) = match c {
+            1 => (lower, upper),
+            -1 => (-upper, -lower),
+            _ => continue,
+        };
+        if lower < 0 || upper <= lower || upper - lower >= QUOT_SPLIT_RANGE {
+            continue;
+        }
+        let Some(label) = atom_labels.get(index).filter(|label| label.starts_with("nat::Nat::div(")) else { continue };
+        let source = format!(
+            "omega::nat_value_split({label}, {lower}, \
+             ({QUOT_CASE}{splits}_low: nat::Nat::Le({label}, {lower})) ⊢ omega, \
+             ({QUOT_CASE}{splits}_high: nat::Nat::Lt({lower}, {label})) ⊢ omega)",
+        );
+        return Ok(Some(Certificate {
+            atoms: None,
+            guards: None,
+            expr: parse_generated_expr(&source)?,
+            source,
+            report: wrapper_report("omega::nat_value_split", 1),
+        }));
+    }
+    Ok(None)
+}
+
 /// The prefix of the facts a subtraction split binds: `__omega_sub{k}_case`
 /// (`b <= a` or `a < b`) and `__omega_sub{k}_eq` (`(a - b) + b = a` or
 /// `a - b = 0`), `k` counting the splits already around the goal.
@@ -4772,6 +4835,9 @@ fn refute_spelled(
         let Outcome::NoContradiction { residual, stats } = &outcome else {
             unreachable!()
         };
+        if let Some(certificate) = split_small_quotient(elab, cx, residual, &atom_labels)? {
+            return Ok(certificate);
+        }
         let cut_answer = if allow_cutsat && cut_atom_sources.is_some() {
             reconstruct_cutsat(&reflected, &atoms_source, atom_count)?
         } else {
