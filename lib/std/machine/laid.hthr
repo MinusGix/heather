@@ -51,10 +51,19 @@
 // call, which is what the prefix is (docs/metaprogramming/value-definitions-design.md
 // §3.5).
 //
+// **A record may take parameters** (docs/native/rung2-spans-design.md §3),
+// words or `Nat`s: `laid record Limbs(n: u64) { w: [u64; n.toNat()] }`.
+// `T::stored` and each `T::f_part` then take them, the codec being the
+// same composition at them (`Stored::array` takes any count). A field
+// whose size depends on them stands last, like C's flexible array member,
+// so every offset, and `T::f_at`, is a numeral whatever they are; the host
+// computes it with the parameters at their zeros.
+//
 // Refused, each with its reason: a type that is not a record, a field
 // whose type has no codec to derive, a codec count that is not the field
 // count, a codec that does not store its field's type, a field whose type
-// mentions an earlier field.
+// mentions an earlier field, a parameter that is not a word or a `Nat`,
+// and a field whose size depends on the parameters that is not the last.
 import logic;
 import bool;
 import nat;
@@ -170,6 +179,34 @@ fn laid_held(e: Expr, what: String) → Tac<Expr> {
     match solved { True => pure(Hd(held)), False => fail("laid: " ++ what ++ " does not solve its hole", []) }
 }
 
+// The record's parameters as the generator holds them: each a local of
+// the published declarations, the last first to be under (`under`), and a
+// value of each (`samples`) at which a number that does not depend on
+// them (a field's offset) is computed, since the host computes numerals
+// of closed terms only.
+record LaidParams { locals: List<LocalRef>, samples: List<Expr>, under: Option<LocalRef> }
+
+// Each parameter abstracted and applied to its sample where it is bound,
+// the first outermost: `(λ x => (λ y => e)(t))(s)`.
+fn laid_closed(xs: List<LocalRef>, ss: List<Expr>, e: Expr) → Expr {
+    match xs {
+        Nil => e,
+        Cons(x, rest) => match ss { Nil => e, Cons(s, more) => App(Lam(x, laid_closed(rest, more, e)), s) },
+    }
+}
+
+// A term closed over the parameters at their samples.
+fn LaidParams::closed(self ps: LaidParams, e: Expr) → Expr { laid_closed(ps.locals, ps.samples, e) }
+
+
+fn LaidParams::decl(self ps: LaidParams) → List<Param> { ps.locals.map(λ x => Param(x, False)) }
+
+// A term held as one node where a record has no parameters (`laid_held`);
+// with parameters it stands as it is, a hole being solved at no local.
+fn LaidParams::held(self ps: LaidParams, e: Expr, what: String) → Tac<Expr> {
+    match ps.locals { Nil => laid_held(e, what), Cons(_, _) => pure(e) }
+}
+
 fn laid_named(a, b: String) → Bool { match string_eq_dec(a, b) { Inl(_) => True, Inr(_) => False } }
 
 // The library's codec of a word of `bits` bits in an order.
@@ -246,7 +283,7 @@ fn laid_derive(endian: Endian, field: String, ty: Handle, depth: Nat) → Tac<Ex
                         },
                         False => lookup(name ++ "::stored").or_fail("laid: field `" ++ field ++ "` is a `" ++ name
                             ++ "`, which has no layout: declare it `laid record " ++ name ++ "`, or name this record's codecs, `laid(codecs := […])`: ")
-                            .bind(λ g => pure(Global(g))),
+                            .bind(λ g => pure(apps(Global(g), args.map(λ a => Hd(a))))),
                     },
                 },
                 _ => fail("laid: field `" ++ field ++ "`: its type has no codec to derive: name the record's codecs, `laid(codecs := […])`", []),
@@ -268,7 +305,7 @@ fn laid_derived(endian: Endian, names: List<String>, tys: List<Handle>) → Tac<
     }
 }
 
-fn laid_fields(l: LaidLib, names: List<String>, tys: List<Handle>, codecs: List<Expr>, before: Option<LaidField>) → Tac<List<LaidField>> {
+fn laid_fields(ps: LaidParams, l: LaidLib, names: List<String>, tys: List<Handle>, codecs: List<Expr>, before: Option<LaidField>) → Tac<List<LaidField>> {
     match names {
         Nil => pure([]),
         Cons(n, ns) => match tys {
@@ -276,17 +313,17 @@ fn laid_fields(l: LaidLib, names: List<String>, tys: List<Handle>, codecs: List<
             Cons(t, ts) => match codecs {
                 Nil => pure([]),
                 Cons(given, cs) => {
-                    let c <- laid_held(given, "the codec given for `" ++ n ++ "`");
+                    let c <- ps.held(given, "the codec given for `" ++ n ++ "`");
                     match before {
                         None => {
                             let f = LaidField(n, Hd(t), c, Hd(t), c);
-                            laid_fields(l, ns, ts, cs, Some(f)).bind(λ rest => pure(Cons(f, rest)))
+                            laid_fields(ps, l, ns, ts, cs, Some(f)).bind(λ rest => pure(Cons(f, rest)))
                         },
                         Some(b) => {
-                            let upto <- laid_held(apps(l.then, [b.upto_ty, Hd(t), b.upto, c]), "the codec given for `" ++ n ++ "`");
+                            let upto <- ps.held(apps(l.then, [b.upto_ty, Hd(t), b.upto, c]), "the codec given for `" ++ n ++ "`");
                             let upto_ty <- laid_stores(upto, "the codec given for `" ++ n ++ "`");
                             let f = LaidField(n, Hd(t), c, upto_ty, upto);
-                            laid_fields(l, ns, ts, cs, Some(f)).bind(λ rest => pure(Cons(f, rest)))
+                            laid_fields(ps, l, ns, ts, cs, Some(f)).bind(λ rest => pure(Cons(f, rest)))
                         },
                     }
                 },
@@ -367,47 +404,140 @@ fn laid_pairs(l: LaidLib, fs: List<LaidField>, vs: List<Expr>, before: Option<Ex
     }
 }
 
-fn laid_parts(l: LaidLib, name: String, t: Expr, whole: Expr, last: LaidField, of: Expr, to: Expr, back: Expr, forth: Expr, rev: List<LaidField>, all: List<LaidField>) → Tac<List<Decl>> {
+fn laid_parts(ps: LaidParams, l: LaidLib, name: String, t: Expr, whole: Expr, last: LaidField, of: Expr, to: Expr, back: Expr, forth: Expr, rev: List<LaidField>, all: List<LaidField>) → Tac<List<Decl>> {
     match rev {
         Nil => pure([]),
         Cons(f, before) => {
             let k = all.len() - (before.len() + 1);
-            let part <- laid_held(apps(l.field, [last.upto_ty, t, f.ty, last.upto, laid_path(l, all, k), of, to, back, forth]), "field `" ++ f.name ++ "`");
+            let part <- ps.held(apps(l.field, [last.upto_ty, t, f.ty, last.upto, laid_path(l, all, k), of, to, back, forth]), "field `" ++ f.name ++ "`");
             let ty <- infer(part).or_fail("laid: field `" ++ f.name ++ "`: ");
-            let d = Decl(AsFunction, name ++ "::" ++ f.name ++ "_part", [], Hd(ty), part);
+            let d = Decl(AsFunction, name ++ "::" ++ f.name ++ "_part", ps.decl(), Hd(ty), part);
             // Where the field lies, as the word compiled code adds to where
             // the record begins: the part's offset computed here, so the
-            // value is a literal and a `runtime fn` reads it as one.
-            let offset <- numeral(apps(l.place, [t, f.ty, whole, part])).or_fail("laid: the offset of field `" ++ f.name ++ "` is not a numeral: ");
+            // value is a literal and a `runtime fn` reads it as one. With
+            // parameters it is computed at their samples: only the last
+            // field's size may depend on them, so no offset does.
+            let offset <- numeral(ps.closed(apps(l.place, [t, f.ty, whole, part]))).or_fail("laid: the offset of field `" ++ f.name ++ "` is not a numeral: ");
             let at = apps(l.word, [NatLit(64), NatLit(offset)]);
             let at_ty <- infer(at).or_fail("laid: field `" ++ f.name ++ "`: ");
             let a = Decl(AsValue, name ++ "::" ++ f.name ++ "_at", [], Hd(at_ty), at);
-            laid_parts(l, name, t, whole, last, of, to, back, forth, before, all).bind(λ ds => pure(ds ++ [d, a]))
+            laid_parts(ps, l, name, t, whole, last, of, to, back, forth, before, all).bind(λ ds => pure(ds ++ [d, a]))
         },
     }
 }
 
 // The record `h`, named `name`, stored as its fields, each by its codec.
-fn laid_out(h: Handle, name: String, c: CtorInfo, fs: Fields, mk: Handle, codecs: List<Expr>) → Tac<List<Decl>> {
+fn laid_out(lp: LaidParams, h: Handle, name: String, c: CtorInfo, fs: Fields, mk: Handle, codecs: List<Expr>) → Tac<List<Decl>> {
     let l <- laid_lib();
-    let lf <- laid_fields(l, fs.names, fs.tys, codecs, None);
+    let lf <- laid_fields(lp, l, fs.names, fs.tys, codecs, None);
     let rev = lf.rev();
     match rev {
         Nil => fail("laid: `" ++ name ++ "` has no fields, so there is nothing to lay out", []),
         Cons(last, _) => {
-            let p <- assume(last.upto_ty, "fields", None).or_fail("laid: ");
+            let p <- assume(last.upto_ty, "fields", lp.under).or_fail("laid: ");
             let ps <- laid_projections(Local(p.ref), lf.len());
-            let of <- laid_held(Lam(p.ref, apps(Hd(mk), ps)), "`" ++ name ++ "` of its fields");
-            let r <- assume(Hd(h), "value", None).or_fail("laid: ");
+            let of <- lp.held(Lam(p.ref, apps(Hd(mk), ps)), "`" ++ name ++ "` of its fields");
+            let r <- assume(Hd(h), "value", lp.under).or_fail("laid: ");
             let rf <- fields(Local(r.ref)).or_fail("laid: ");
             let nested <- laid_pairs(l, lf, laid_field_terms(rf.fields), None);
-            let to <- laid_held(Lam(r.ref, nested), "the fields of `" ++ name ++ "`");
+            let to <- lp.held(Lam(r.ref, nested), "the fields of `" ++ name ++ "`");
             let back = Lam(r.ref, apps(l.rfl, [Hd(h), Local(r.ref)]));
             let forth = Lam(p.ref, apps(l.rfl, [last.upto_ty, Local(p.ref)]));
-            let whole <- laid_held(apps(l.record, [last.upto_ty, Hd(h), last.upto, of, to, back]), "`" ++ name ++ "`'s codec");
+            let whole <- lp.held(apps(l.record, [last.upto_ty, Hd(h), last.upto, of, to, back]), "`" ++ name ++ "`'s codec");
             let whole_ty <- infer(whole).or_fail("laid: ");
-            let stored = Decl(AsFunction, name ++ "::stored", [], Hd(whole_ty), whole);
-            laid_parts(l, name, Hd(h), whole, last, of, to, back, forth, rev, rev).bind(λ parts => pure(Cons(stored, parts)))
+            let stored = Decl(AsFunction, name ++ "::stored", lp.decl(), Hd(whole_ty), whole);
+            laid_parts(lp, l, name, Hd(h), whole, last, of, to, back, forth, rev, rev).bind(λ parts => pure(Cons(stored, parts)))
+        },
+    }
+}
+
+// The parameters of the record's type, each a local under the one before
+// and a sample of it: a parameter is a word or a `Nat` (a record's size
+// may count by it), and a sample is its zero.
+fn laid_params(head: Expr, declared: String, fuel: Nat, under: Option<LocalRef>, ls: List<LocalRef>, samples: List<Expr>) → Tac<LaidParams> {
+    let done = LaidParams(ls, samples, under);
+    match fuel {
+        Zero => pure(done),
+        Succ(f) => {
+            let t <- infer(apps(head, ls.map(λ x => Local(x)))).or_fail("laid: `" ++ declared ++ "`: ");
+            let v <- view(t);
+            match v {
+                HPi(dom) => {
+                    let pname = "p" ++ decimal_name(ls.len() + 1, ls.len());
+                    let x <- assume(Hd(dom), pname, under).or_fail("laid: a parameter of `" ++ declared ++ "`: ");
+                    let dv <- view(dom);
+                    let sample: Tac<Expr> = match dv {
+                        HGlobal(_, tn, args) => match laid_named(tn, "BitVec") {
+                            True => match args {
+                                Cons(width, Nil) => laid_global("bitvec::BitVec::ofNat").bind(λ of => pure(apps(of, [Hd(width), NatLit(0)]))),
+                                _ => fail("laid: a parameter of `" ++ declared ++ "` is a `BitVec` of no width", []),
+                            },
+                            False => match laid_named(tn, "Nat") {
+                                True => pure(NatLit(0)),
+                                False => fail("laid: the parameter `" ++ pname ++ "` of `" ++ declared ++ "` is not a word or a `Nat`", []),
+                            },
+                        },
+                        _ => fail("laid: the parameter `" ++ pname ++ "` of `" ++ declared ++ "` is not a word or a `Nat`", []),
+                    };
+                    let sv <- sample;
+                    laid_params(head, declared, f, Some(x.ref), ls ++ [x.ref], samples ++ [sv])
+                },
+                _ => pure(done),
+            }
+        },
+    }
+}
+
+fn laid_any_open(args: List<Handle>) → Tac<Bool> {
+    match args {
+        Nil => pure(False),
+        Cons(a, rest) => view(a).bind(λ v => match v { HLit(_) => laid_any_open(rest), _ => pure(True) }),
+    }
+}
+
+// Whether a field's size may depend on the record's parameters: an array
+// whose count is not a numeral, an array of such, or a record applied to
+// anything but numerals.
+fn laid_variable(ty: Handle, depth: Nat) → Tac<Bool> {
+    match depth {
+        Zero => pure(True),
+        Succ(d) => {
+            let v <- view(ty);
+            match v {
+                HGlobal(_, name, args) => match laid_named(name, "BitVec") {
+                    True => pure(False),
+                    False => match laid_named(name, "Vec") {
+                        True => match laid_two_arguments(args) {
+                            None => pure(True),
+                            Some(an) => view(an.snd).bind(λ nv => match nv {
+                                HLit(_) => laid_variable(an.fst, d),
+                                _ => pure(True),
+                            }),
+                        },
+                        False => laid_any_open(args),
+                    },
+                },
+                _ => pure(False),
+            }
+        },
+    }
+}
+
+// A field whose size depends on the parameters stands last: every other
+// field then lies at an offset that is a numeral whatever they are.
+fn laid_last_varies(record: String, names: List<String>, tys: List<Handle>) → Tac<True> {
+    match names {
+        Nil => pure(trivial),
+        Cons(n, ns) => match tys {
+            Nil => pure(trivial),
+            Cons(t, ts) => match ns {
+                Nil => pure(trivial),
+                Cons(_, _) => laid_variable(t, 8).bind(λ varies => match varies {
+                    True => fail("laid: field `" ++ n ++ "` of `" ++ record ++ "` has a size that depends on the record's parameters and is not the last field: "
+                        ++ "a variable array stands last for now (a field after it would lie at an offset computed from them)", []),
+                    False => laid_last_varies(record, ns, ts),
+                }),
+            },
         },
     }
 }
@@ -417,9 +547,17 @@ fn laid_out(h: Handle, name: String, c: CtorInfo, fs: Fields, mk: Handle, codecs
 // `order` says who chooses where the fields lie, and `codecs`, where any
 // are given, are the fields' codecs, one for each in the order written,
 // and nothing is derived.
+//
+// A record may take parameters, words or `Nat`s
+// (docs/native/rung2-spans-design.md §3): `laid record Limbs(n: u64)
+// { w: [u64; n.toNat()] }`. Then `T::stored` and each `T::f_part` take
+// them, and the codec is the same composition at them; `Stored::array`
+// takes any count. Only the last field's size may depend on them, so
+// every offset, and so `T::f_at`, is a numeral whatever they are.
 fn laid(declared: String, endian: Endian := LittleEndian, order: FieldOrder := AnyOrder, codecs: List<Expr> := []) → Tac<List<Decl>> {
     let g <- lookup(declared).or_fail("laid: ");
-    let h <- as_type(Global(g)).or_fail("laid: `" ++ declared ++ "` is not a type with no parameters: ");
+    let ps <- laid_params(Global(g), declared, 8, None, [], []);
+    let h <- as_type(apps(Global(g), ps.locals.map(λ x => Local(x)))).or_fail("laid: `" ++ declared ++ "` is not a type: ");
     let name <- type_named(h);
     let cs <- ctors(h).or_fail("laid: ");
     match laid_only(cs) {
@@ -428,14 +566,14 @@ fn laid(declared: String, endian: Endian := LittleEndian, order: FieldOrder := A
             None => fail("laid: a field of `" ++ name ++ "` mentions an earlier field", []),
             Some(fs) => match c.ctor {
                 None => fail("laid: `" ++ name ++ "` is not a function of its fields", []),
-                Some(mk) => match codecs {
-                    Nil => laid_derived(endian, fs.names, fs.tys).bind(λ derived => laid_out(h, name, c, fs, mk, derived)),
+                Some(mk) => laid_last_varies(name, fs.names, fs.tys).bind(λ _ => match codecs {
+                    Nil => laid_derived(endian, fs.names, fs.tys).bind(λ derived => laid_out(ps, h, name, c, fs, mk, derived)),
                     Cons(_, _) => match fs.names.len().same(codecs.len()) {
                         False => fail("laid: `" ++ name ++ "` has " ++ decimal_name(fs.names.len() + 1, fs.names.len()) ++ " fields and "
                             ++ decimal_name(codecs.len() + 1, codecs.len()) ++ " codecs are given, one is wanted for each", []),
-                        True => laid_out(h, name, c, fs, mk, codecs),
+                        True => laid_out(ps, h, name, c, fs, mk, codecs),
                     },
-                },
+                }),
             },
         },
     }

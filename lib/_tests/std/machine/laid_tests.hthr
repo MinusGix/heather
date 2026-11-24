@@ -157,3 +157,54 @@ generate laid("Meters");
 // A name that is a generator.
 // expect-error: `lade` is not a generator in scope
 lade record Typo { a: u8 }
+
+// ---------------------------------------------------------------------------
+// Records that take parameters (docs/native/rung2-spans-design.md §3)
+
+// A span of limbs, the count a word: its codec and part take the count,
+// and the layout is the count's eight bytes each, open or not.
+laid record Limbs(n: u64) { w: [u64; n.toNat()] }
+
+theorem limbs_size(n: u64): (Limbs::stored(n)).layout.size = (n.toNat() * 8).round_up(8) { refl }
+theorem limbs_three(): (Limbs::stored(BitVec::ofNat(3))).layout = Layout(24, 3) { refl }
+theorem limbs_at(): Limbs::w_at = BitVec::ofNat(0) { refl }
+
+// The bytes of three limbs, the machine's order.
+theorem limbs_bytes(): vector_get((Limbs::stored(BitVec::ofNat(3))).get([1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 2, 1, 0, 0, 0, 0, 0, 0], 0).w, 2, BitVec::ofNat(0))
+    = BitVec::ofNat(0x0102) { refl }
+
+// A header before the array: the header's offsets are numerals, the
+// array's offset too, and the size grows with the capacity.
+laid record Vector(cap: u64) { len: u64, items: [u64; cap.toNat()] }
+
+theorem vector_items_at(): Vector::items_at = BitVec::ofNat(8) { refl }
+theorem vector_items_part(cap: u64): (Vector::items_part(cap)).offset = 8 { refl }
+theorem vector_size(cap: u64): (Vector::stored(cap)).layout.size = (cap.toNat() * 8 + 8).round_up(8) { refl }
+
+// The field's part at an open capacity reads the field of the record.
+theorem vector_len_reads(cap: u64, bytes: List<u8>):
+    Stored::u64_le().get(bytes, 0) = (Vector::stored(cap)).get(bytes, 0).len { (Vector::len_part(cap)).reads(bytes, 0) }
+
+// A parameter that does not reach the layout: the codec is the same at
+// every value of it.
+laid record Tagged(k: u64) { x: u64, y: u32 }
+
+theorem tagged_same(k, j: u64): (Tagged::stored(k)).layout = (Tagged::stored(j)).layout { refl }
+
+// Two parameters, a `Nat` among them.
+laid record Grid2(rows: Nat, cols: u64) { stamp: u32, cells: [u32; cols.toNat()] }
+
+theorem grid2_at(): Grid2::cells_at = BitVec::ofNat(4) { refl }
+
+// The size counts elements: a record of a different count is a
+// different type, and its layout another number.
+// expect-error(kernel): NotConvertible
+theorem limbs_count_matters(): (Limbs::stored(BitVec::ofNat(3))).layout = Layout(32, 3) { refl }
+
+// A variable array stands last.
+// expect-error: has a size that depends on the record's parameters and is not the last field
+laid record Middle(n: u64) { xs: [u64; n.toNat()], tail: u64 }
+
+// A parameter is a word or a `Nat`.
+// expect-error: is not a word or a `Nat`
+laid record ByBool(b: Bool) { x: u64 }
