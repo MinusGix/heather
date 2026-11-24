@@ -92,3 +92,4 @@ by a `¬` theorem at a closed table.
 
   Residue: the capacity as a parameter and rehashing,
   [[runtime-hash-map-rehash]].
+- 2026-11-24: Proof tooling round (branch `claude/proof-tooling-omega`): `band_three`, `past_slots`, `remove_reached` and `slot_dist`'s hand proof gone, `WordMap::dist` used in the distance lemmas, two one-off distance steps written as inline `omega`. Proof lines (non-blank, non-comment) 1162 → 1141. The minutes-long inline `omega` did not reproduce on the current tree: the inline premium over a lemma measured a small constant factor, the distance arithmetic itself (CutSat leaves over `% 4` with subtractions) costs seconds either way; written `omega` proofs are now lifted, which roughly halved the word map's in-context calls (design §27).
