@@ -1134,3 +1134,74 @@ theorem WordMap::shift_stop(o: WordMap, oinv: WordMapInv(o), k: u64, nz: ¬(k = 
     };
     Removed(ninv, get)
 }
+
+// ---------------------------------------------------------------------------
+// The compiled shift, along its recursion.
+
+fn WordMap::Shifts(o: WordMap, k: u64, i0, z: Nat, m: WordMap, i, j, left: u64) → Type {
+    ShiftInv(o, k, i0, z, m, i.toNat(), j.toNat(), left.toNat()) → Removed(o, k, WordMap::shift_at(m, i, j, left).after)
+}
+
+theorem WordMap::shifts_stop(o: WordMap, oinv: WordMapInv(o), k: u64, nz: ¬(k = 0), i0, z: Nat, m: WordMap, i, j, left: u64,
+    empty: m.key(j.toNat()) = 0, eq: WordMap::shift_at(m, i, j, left) = Mutated(m.cleared(i.toNat()), 1)): WordMap::Shifts(o, k, i0, z, m, i, j, left)
+{
+    λ st => j(sym(cong_fn(λ (r: Mutated<WordMap, u64>) => r.after, eq)), λ y _ => Removed(o, k, y),
+        WordMap::shift_stop(o, oinv, k, nz, i0, z, m, i.toNat(), j.toNat(), left.toNat(), st, empty))
+}
+
+theorem WordMap::shifts_move(o: WordMap, k: u64, i0, z: Nat, m: WordMap, i, j, left: u64, more: 0 < left, occupied: ¬(m.key(j.toNat()) = 0),
+    moves: (j - i).band(3) <= (j - word_map_home(m.key(j.toNat()))).band(3),
+    eq: WordMap::shift_at(m, i, j, left) = WordMap::shift_at(m.moved(i.toNat(), j.toNat()), j, (j + 1).band(3), left - 1),
+    ih: WordMap::Shifts(o, k, i0, z, m.moved(i.toNat(), j.toNat()), j, (j + 1).band(3), left - 1)): WordMap::Shifts(o, k, i0, z, m, i, j, left)
+{
+    λ st => {
+        let h = word_map_home(m.key(j.toNat()));
+        let words: (((j - i).band(3)).toNat() <= ((j - h).band(3)).toNat()) = moves;
+        let d1 = WordMap::slot_dist(j, i, st.j4, st.i4);
+        let d2 = WordMap::slot_dist(j, h, st.j4, word_map_home_below(m.key(j.toNat())));
+        let mv: (((j.toNat() + 4 - i.toNat()) % 4) <= ((j.toNat() + 4 - h.toNat()) % 4)) = omega(words, d1, d2);
+        let dl: ((left - 1).toNat() = left.toNat() - 1) = bv_omega;
+        let next = WordMap::shift_move(o, k, i0, z, m, i.toNat(), j.toNat(), left.toNat(), st, occupied, mv,
+            ((j + 1).band(3)).toNat(), (left - 1).toNat(), WordMap::next_slot(j, st.j4), dl);
+        j(sym(cong_fn(λ (r: Mutated<WordMap, u64>) => r.after, eq)), λ y _ => Removed(o, k, y), ih(next))
+    }
+}
+
+theorem WordMap::shifts_skip(o: WordMap, k: u64, i0, z: Nat, m: WordMap, i, j, left: u64, more: 0 < left, occupied: ¬(m.key(j.toNat()) = 0),
+    stays: ¬((j - i).band(3) <= (j - word_map_home(m.key(j.toNat()))).band(3)),
+    eq: WordMap::shift_at(m, i, j, left) = WordMap::shift_at(m, i, (j + 1).band(3), left - 1),
+    ih: WordMap::Shifts(o, k, i0, z, m, i, (j + 1).band(3), left - 1)): WordMap::Shifts(o, k, i0, z, m, i, j, left)
+{
+    λ st => {
+        let h = word_map_home(m.key(j.toNat()));
+        let words: (¬(((j - i).band(3)).toNat() <= ((j - h).band(3)).toNat())) = stays;
+        let d1 = WordMap::slot_dist(j, i, st.j4, st.i4);
+        let d2 = WordMap::slot_dist(j, h, st.j4, word_map_home_below(m.key(j.toNat())));
+        let sv: (((j.toNat() + 4 - h.toNat()) % 4) < ((j.toNat() + 4 - i.toNat()) % 4)) = omega(words, d1, d2);
+        let dl: ((left - 1).toNat() = left.toNat() - 1) = bv_omega;
+        let next = WordMap::shift_skip(o, k, i0, z, m, i.toNat(), j.toNat(), left.toNat(), st, occupied, sv,
+            ((j + 1).band(3)).toNat(), (left - 1).toNat(), WordMap::next_slot(j, st.j4), dl);
+        j(sym(cong_fn(λ (r: Mutated<WordMap, u64>) => r.after, eq)), λ y _ => Removed(o, k, y), ih(next))
+    }
+}
+
+theorem WordMap::shifts_spent(o: WordMap, k: u64, i0, z: Nat, m: WordMap, i, j, left: u64, more: ¬(0 < left)): WordMap::Shifts(o, k, i0, z, m, i, j, left) {
+    λ st => {
+        let s0: (((j.toNat() + 4 - i0) % 4) + left.toNat() = 4) = st.steps;
+        let l0: (left.toNat() = 0) = bv_omega;
+        false_elim(omega(s0, l0))
+    }
+}
+
+theorem WordMap::shift_removes(o: WordMap, oinv: WordMapInv(o), k: u64, nz: ¬(k = 0), i0, z: Nat, m: WordMap, i, j, left: u64):
+    WordMap::Shifts(o, k, i0, z, m, i, j, left)
+{
+    WordMap::shift_at::induct(λ (m: WordMap) (i: u64) (j: u64) (left: u64) => WordMap::Shifts(o, k, i0, z, m, i, j, left),
+        λ m i j left more lt li empty eq => WordMap::shifts_stop(o, oinv, k, nz, i0, z, m, i, j, left, empty, eq),
+        λ m i j left more lt li empty moves eq ih => WordMap::shifts_move(o, k, i0, z, m, i, j, left, more, empty, moves, eq, ih),
+        λ m i j left more lt li empty moves eq ih => WordMap::shifts_skip(o, k, i0, z, m, i, j, left, more, empty, moves, eq, ih),
+        λ m i j left more lt li eq => λ st => false_elim(li(st.i4)),
+        λ m i j left more lt eq => λ st => false_elim(lt(st.j4)),
+        λ m i j left more eq => WordMap::shifts_spent(o, k, i0, z, m, i, j, left, more),
+        m, i, j, left)
+}
