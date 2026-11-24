@@ -239,7 +239,10 @@ runtime fn Bytes::port_set_insert_byte({n: u64}, s: Bytes(n), key: u8, j: u64) â
 }
 
 // The insert as a `while` over `mut self`, its measure assigned in the arms.
-// expect-error: must decrease the measure
+// Its decrease is found, each arm's with that arm's tests
+// (issues/while-decrease-through-branches.md); the generator does not lay
+// out the loop's state.
+// expect-error: `Bytes::port_set_put#State` has no runtime layout
 runtime fn Bytes::port_set_put({n: u64}, mut self s: Bytes(n), key, start: u64) â†’ u64 {
     let mut j = start;
     let mut left = n;
