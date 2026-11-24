@@ -709,8 +709,56 @@ fn program_lent(functions: List<Function>) → Nat → Nat {
     }
 }
 
+// How many buffers the last function's callees are lent: the functions
+// before it and, where it calls itself, the function.
+fn program_last_lent(last: Function, earlier: List<Function>) → Nat → Nat {
+    self_table(program_lent(earlier), earlier.len(), last.levels, last.lent)
+}
+
 fn program_placeless(functions: List<Function>) → Bool {
-    match functions { Nil => True, Cons(last, earlier) => last.placeless(program_lent(earlier)) && program_placeless(earlier) }
+    match functions { Nil => True, Cons(last, earlier) => last.placeless(program_last_lent(last, earlier)) && program_placeless(earlier) }
+}
+
+// Where the answers below are alike at every address word, and the
+// function at a depth is, so are the answers with the function's own
+// number.
+theorem Function::tied_apart_at(self last: Function, below: Answers(), lent: Nat → Nat, k: Nat, buffers: Buffers(),
+    ih: (f: Nat) → (words, others: List<BitVec(64)>) → ListsApart(base_mask(lent(f)), words, others) → below(f, others) = below(f, words),
+    depth: Nat,
+    own: (words, others: List<BitVec(64)>) → ListsApart(base_mask(last.lent), words, others) →
+        last.level_words(below, k, depth, buffers)(others) = last.level_words(below, k, depth, buffers)(words)):
+    (f: Nat) → (words, others: List<BitVec(64)>) → ListsApart(base_mask(tie(lent, k, last.lent)(f)), words, others) →
+    last.tied_answers(below, k, depth, buffers)(f, others) = last.tied_answers(below, k, depth, buffers)(f, words) {
+    λ f words others => match f.eq_dec(k) as λ d =>
+        ListsApart(base_mask(match d as λ _ => Nat { Inl(_) => last.lent, Inr(_) => lent(f) }), words, others) →
+        (match d as λ _ => List<BitVec(64)> { Inl(_) => last.level_words(below, k, depth, buffers)(others), Inr(_) => below(f, others) }) =
+        (match d as λ _ => List<BitVec(64)> { Inl(_) => last.level_words(below, k, depth, buffers)(words), Inr(_) => below(f, words) }) {
+        Inl(_) => own(words, others),
+        Inr(_) => ih(f, words, others),
+    }
+}
+
+theorem Function::level_apart(self last: Function, below: Answers(), lent: Nat → Nat, k: Nat, buffers: Buffers(),
+    ih: (f: Nat) → (words, others: List<BitVec(64)>) → ListsApart(base_mask(lent(f)), words, others) → below(f, others) = below(f, words),
+    ok: last.placeless(tie(lent, k, last.lent)).IsTrue(), depth: Nat):
+    (words, others: List<BitVec(64)>) → ListsApart(base_mask(last.lent), words, others) →
+    last.level_words(below, k, depth, buffers)(others) = last.level_words(below, k, depth, buffers)(words) {
+    match depth {
+        Zero => λ words others _ => refl,
+        Succ(i) => λ words others apart => last.eval_apart(buffers, last.tied_answers(below, k, i, buffers), tie(lent, k, last.lent),
+            last.tied_apart_at(below, lent, k, buffers, ih, i, last.level_apart(below, lent, k, buffers, ih, ok, i)), ok, words, others, apart),
+    }
+}
+
+theorem Function::levels_apart(self last: Function, below: Answers(), lent: Nat → Nat, k: Nat, buffers: Buffers(),
+    ih: (f: Nat) → (words, others: List<BitVec(64)>) → ListsApart(base_mask(lent(f)), words, others) → below(f, others) = below(f, words)):
+    (levels: Nat) → last.placeless(self_table(lent, k, levels, last.lent)).IsTrue() →
+    (f: Nat) → (words, others: List<BitVec(64)>) → ListsApart(base_mask(self_table(lent, k, levels, last.lent)(f)), words, others) →
+    last.answers_at(below, k, levels, buffers)(f, others) = last.answers_at(below, k, levels, buffers)(f, words) {
+    λ levels => match levels {
+        Zero => λ _ => ih,
+        Succ(depth) => λ ok => last.tied_apart_at(below, lent, k, buffers, ih, depth, last.level_apart(below, lent, k, buffers, ih, ok, depth)),
+    }
 }
 
 // The theorem for programs: a placeless program's functions answer alike
@@ -721,14 +769,16 @@ theorem program_answers_placeless(buffers: Buffers(), functions: List<Function>)
     match functions {
         Nil => λ _ f words others _ => refl,
         Cons(last, earlier) => λ ok f words others => {
-            let parts = Bool::is_true_and(last.placeless(program_lent(earlier)), program_placeless(earlier), ok);
+            let parts = Bool::is_true_and(last.placeless(program_last_lent(last, earlier)), program_placeless(earlier), ok);
             let ih = program_answers_placeless(buffers, earlier, parts.right);
             let below = program_answers_over(buffers, earlier);
+            let tops = program_last_answers(buffers, last, earlier);
             match f.eq_dec(earlier.len()) as λ d =>
                 ListsApart(base_mask(match d { Inl(_) => last.lent, Inr(_) => program_lent(earlier, f) }), words, others) →
-                (match d as λ _ => List<BitVec(64)> { Inl(_) => last.eval_words(below, others, buffers := buffers), Inr(_) => below(f, others) }) =
-                (match d as λ _ => List<BitVec(64)> { Inl(_) => last.eval_words(below, words, buffers := buffers), Inr(_) => below(f, words) }) {
-                Inl(_) => λ h => last.eval_apart(buffers, below, program_lent(earlier), ih, parts.left, words, others, h),
+                (match d as λ _ => List<BitVec(64)> { Inl(_) => last.eval_words(tops, others, buffers := buffers), Inr(_) => below(f, others) }) =
+                (match d as λ _ => List<BitVec(64)> { Inl(_) => last.eval_words(tops, words, buffers := buffers), Inr(_) => below(f, words) }) {
+                Inl(_) => λ h => last.eval_apart(buffers, tops, program_last_lent(last, earlier),
+                    last.levels_apart(below, program_lent(earlier), earlier.len(), buffers, ih, last.levels, parts.left), parts.left, words, others, h),
                 Inr(_) => λ h => ih(f, words, others, h),
             }
         },
@@ -1062,6 +1112,48 @@ theorem Function::run_apart(self function: Function, call: Writers(), lent: Nat 
         ran.right)
 }
 
+theorem Function::tied_run_apart_at(self last: Function, below: Writers(), lent: Nat → Nat, k: Nat,
+    ih: (file: Buffers()) → (f: Nat) → (words, others: List<BitVec(64)>) → ListsApart(base_mask(lent(f)), words, others) →
+        below(file, f, others) = below(file, f, words),
+    depth: Nat,
+    own: (file: Buffers()) → (words, others: List<BitVec(64)>) → ListsApart(base_mask(last.lent), words, others) →
+        last.level_run(below, k, depth)(file, others) = last.level_run(below, k, depth)(file, words)):
+    (file: Buffers()) → (f: Nat) → (words, others: List<BitVec(64)>) → ListsApart(base_mask(tie(lent, k, last.lent)(f)), words, others) →
+    last.tied_writers(below, k, depth)(file, f, others) = last.tied_writers(below, k, depth)(file, f, words) {
+    λ file f words others => match f.eq_dec(k) as λ d =>
+        ListsApart(base_mask(match d as λ _ => Nat { Inl(_) => last.lent, Inr(_) => lent(f) }), words, others) →
+        (match d as λ _ => Ending { Inl(_) => last.level_run(below, k, depth)(file, others), Inr(_) => below(file, f, others) }) =
+        (match d as λ _ => Ending { Inl(_) => last.level_run(below, k, depth)(file, words), Inr(_) => below(file, f, words) }) {
+        Inl(_) => own(file, words, others),
+        Inr(_) => ih(file, f, words, others),
+    }
+}
+
+theorem Function::level_run_apart(self last: Function, below: Writers(), lent: Nat → Nat, k: Nat,
+    ih: (file: Buffers()) → (f: Nat) → (words, others: List<BitVec(64)>) → ListsApart(base_mask(lent(f)), words, others) →
+        below(file, f, others) = below(file, f, words),
+    ok: last.placeless(tie(lent, k, last.lent)).IsTrue(), depth: Nat):
+    (file: Buffers()) → (words, others: List<BitVec(64)>) → ListsApart(base_mask(last.lent), words, others) →
+    last.level_run(below, k, depth)(file, others) = last.level_run(below, k, depth)(file, words) {
+    match depth {
+        Zero => λ file words others _ => refl,
+        Succ(i) => λ file words others apart => last.run_apart(last.tied_writers(below, k, i), tie(lent, k, last.lent),
+            last.tied_run_apart_at(below, lent, k, ih, i, last.level_run_apart(below, lent, k, ih, ok, i)), ok, words, others, file, apart),
+    }
+}
+
+theorem Function::levels_run_apart(self last: Function, below: Writers(), lent: Nat → Nat, k: Nat,
+    ih: (file: Buffers()) → (f: Nat) → (words, others: List<BitVec(64)>) → ListsApart(base_mask(lent(f)), words, others) →
+        below(file, f, others) = below(file, f, words)):
+    (levels: Nat) → last.placeless(self_table(lent, k, levels, last.lent)).IsTrue() →
+    (file: Buffers()) → (f: Nat) → (words, others: List<BitVec(64)>) → ListsApart(base_mask(self_table(lent, k, levels, last.lent)(f)), words, others) →
+    last.writers_at(below, k, levels)(file, f, others) = last.writers_at(below, k, levels)(file, f, words) {
+    λ levels => match levels {
+        Zero => λ _ => ih,
+        Succ(depth) => λ ok => last.tied_run_apart_at(below, lent, k, ih, depth, last.level_run_apart(below, lent, k, ih, ok, depth)),
+    }
+}
+
 // The theorem for programs, the file threaded: a placeless program's
 // functions return one word and leave one file at every address word.
 theorem program_run_placeless(functions: List<Function>): program_placeless(functions).IsTrue() → (buffers: Buffers()) → (f: Nat) →
@@ -1070,14 +1162,16 @@ theorem program_run_placeless(functions: List<Function>): program_placeless(func
     match functions {
         Nil => λ _ buffers f words others _ => refl,
         Cons(last, earlier) => λ ok buffers f words others => {
-            let parts = Bool::is_true_and(last.placeless(program_lent(earlier)), program_placeless(earlier), ok);
+            let parts = Bool::is_true_and(last.placeless(program_last_lent(last, earlier)), program_placeless(earlier), ok);
             let ih = program_run_placeless(earlier, parts.right);
             let below = program_run(earlier);
+            let tops = program_last_writers(last, earlier);
             match f.eq_dec(earlier.len()) as λ d =>
                 ListsApart(base_mask(match d { Inl(_) => last.lent, Inr(_) => program_lent(earlier, f) }), words, others) →
-                (match d as λ _ => Ending { Inl(_) => last.run(below, others, buffers), Inr(_) => below(buffers, f, others) }) =
-                (match d as λ _ => Ending { Inl(_) => last.run(below, words, buffers), Inr(_) => below(buffers, f, words) }) {
-                Inl(_) => λ h => last.run_apart(below, program_lent(earlier), ih, parts.left, words, others, buffers, h),
+                (match d as λ _ => Ending { Inl(_) => last.run(tops, others, buffers), Inr(_) => below(buffers, f, others) }) =
+                (match d as λ _ => Ending { Inl(_) => last.run(tops, words, buffers), Inr(_) => below(buffers, f, words) }) {
+                Inl(_) => λ h => last.run_apart(tops, program_last_lent(last, earlier),
+                    last.levels_run_apart(below, program_lent(earlier), earlier.len(), ih, last.levels, parts.left), parts.left, words, others, buffers, h),
                 Inr(_) => λ h => ih(buffers, f, words, others, h),
             }
         },

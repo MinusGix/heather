@@ -242,11 +242,11 @@ fn sret_lending(counts: List<Nat>, address: BitVec(64), bytes: List<BitVec(8)>) 
 theorem program_effects_root(last: Function, earlier: List<Function>, arguments: List<BitVec(64)>, result: BitVec(64),
     rest: List<BitVec(64)>, before, after: Buffers()):
     program_effects(Cons(last, earlier), before, earlier.len(), arguments, result, rest, after) →
-    last.RunsBoth(program_effects(earlier), arguments, result, rest, before, after) {
+    last.RunsBoth(last.effects_at(program_effects(earlier), earlier.len(), last.levels), arguments, result, rest, before, after) {
     match earlier.len().eq_dec(earlier.len()) as λ d => (match d {
-            Inl(_) => last.RunsBoth(program_effects(earlier), arguments, result, rest, before, after),
+            Inl(_) => last.RunsBoth(last.effects_at(program_effects(earlier), earlier.len(), last.levels), arguments, result, rest, before, after),
             Inr(_) => program_effects(earlier, before, earlier.len(), arguments, result, rest, after),
-        }) → last.RunsBoth(program_effects(earlier), arguments, result, rest, before, after) {
+        }) → last.RunsBoth(last.effects_at(program_effects(earlier), earlier.len(), last.levels), arguments, result, rest, before, after) {
         Inl(_) => λ held => held,
         Inr(differs) => false_elim(differs(refl)),
     }
@@ -370,12 +370,12 @@ theorem program_answers_root(buffers: Buffers(), last: Function, earlier: List<F
     program_answers_over(buffers, Cons(last, earlier), earlier.len(), arguments) =
         Cons(program_eval_over(buffers, Cons(last, earlier), earlier.len(), arguments), program_eval_also_over(buffers, Cons(last, earlier), arguments)) {
     match earlier.len().eq_dec(earlier.len()) as λ d => (match d {
-            Inl(_) => last.eval_words(program_answers_over(buffers, earlier), arguments, buffers := buffers),
+            Inl(_) => last.eval_words(program_last_answers(buffers, last, earlier), arguments, buffers := buffers),
             Inr(_) => program_answers_over(buffers, earlier, earlier.len(), arguments),
         }) = Cons(first_word(match d {
-            Inl(_) => last.eval_words(program_answers_over(buffers, earlier), arguments, buffers := buffers),
+            Inl(_) => last.eval_words(program_last_answers(buffers, last, earlier), arguments, buffers := buffers),
             Inr(_) => program_answers_over(buffers, earlier, earlier.len(), arguments),
-        }), last.eval_also(program_answers_over(buffers, earlier), arguments, buffers := buffers)) {
+        }), last.eval_also(program_last_answers(buffers, last, earlier), arguments, buffers := buffers)) {
         Inl(_) => refl,
         Inr(differs) => false_elim(differs(refl)),
     }

@@ -1384,7 +1384,13 @@ record Fixed { length: Nat, bytes: Nat }
 // `fixed` set, the function is lent one span so (`lent` is 1) and its home
 // is its first parameter and `length`; only a program's last function,
 // which no call reaches, is (`program_unfixed`).
-record Function { parameters: List<Nat>, body: StructuredRegion, result: Nat, lent: Nat := 0, also: List<Nat> := [], fixed: Option<Fixed> := None }
+// `levels` is how many levels of the function answer a call of it
+// (docs/native/runtime-fn-recursion-design.md): a function that does not
+// call itself has none, its calls answered by the functions below it, and
+// one that does has its body at each of `levels` levels, each answering
+// its own number with the level under it, and the last with nothing.
+record Function { parameters: List<Nat>, body: StructuredRegion, result: Nat, lent: Nat := 0, also: List<Nat> := [], levels: Nat := 0,
+    fixed: Option<Fixed> := None }
 
 // Called on `arguments` over `buffers`, the function may return `result`:
 // some valuation binds its parameters to the arguments, satisfies its
@@ -1417,16 +1423,51 @@ theorem Function::computes_both_of(self function: Function, callees: Callees(), 
     Exists(ran.witness, ⟨ran.proof.left, ⟨ran.proof.right.left, ⟨ran.proof.right.right, refl⟩⟩⟩)
 }
 
+// A table of callees with function `k`'s row `own`, the others' rows
+// `below`'s.
+fn tie_callees(below: Callees(), k: Nat, own: List<BitVec(64)> → BitVec(64) → List<BitVec(64)> → Type) → Callees() {
+    λ f arguments result rest => match f.eq_dec(k) {
+        Inl(_) => own(arguments, result, rest),
+        Inr(_) => below(f, arguments, result, rest),
+    }
+}
+
+// What a function that calls itself (function `k`, over `below`) may
+// return `depth` levels deep: what its body computes with its own calls
+// answered one level down, and at no level nothing.
+fn Function::level_computes(self function: Function, below: Callees(), k, depth: Nat, buffers: Buffers()) →
+    List<BitVec(64)> → BitVec(64) → List<BitVec(64)> → Type {
+    match depth {
+        Zero => λ _ _ _ => False,
+        Succ(i) => λ arguments result rest => function.ComputesBoth(tie_callees(below, k, function.level_computes(below, k, i, buffers)),
+            arguments, result, rest, buffers := buffers),
+    }
+}
+
+// The callees `below` with function `k` answering its own number `depth`
+// levels deep.
+fn Function::tied_callees(self function: Function, below: Callees(), k, depth: Nat, buffers: Buffers()) → Callees() {
+    tie_callees(below, k, function.level_computes(below, k, depth, buffers))
+}
+
+// What answers the function's calls where it is function `k` over `below`,
+// at `levels` levels: `below` alone at none, and otherwise itself as well,
+// one level fewer deep.
+fn Function::callees_at(self function: Function, below: Callees(), k, levels: Nat, buffers: Buffers()) → Callees() {
+    match levels { Zero => below, Succ(depth) => function.tied_callees(below, k, depth, buffers) }
+}
+
 // A program lists its functions last first: function `f` is the one with
-// `f` functions after it, and calls only those, so a program cannot
-// recurse. What its functions return, each answering its calls by the
+// `f` functions after it, and calls those and itself (`Function.levels`
+// deep). What its functions return, each answering its calls by the
 // functions after it. Every function of a program reads the same buffers,
 // named by the same numbers.
 fn program_callees_over(buffers: Buffers(), functions: List<Function>) → Callees() {
     match functions {
         Nil => no_callees(),
         Cons(last, earlier) => λ f arguments result rest => match f.eq_dec(earlier.len()) {
-            Inl(_) => last.ComputesBoth(program_callees_over(buffers, earlier), arguments, result, rest, buffers := buffers),
+            Inl(_) => last.ComputesBoth(last.callees_at(program_callees_over(buffers, earlier), earlier.len(), last.levels, buffers), arguments, result, rest,
+                buffers := buffers),
             Inr(_) => program_callees_over(buffers, earlier)(f, arguments, result, rest),
         },
     }

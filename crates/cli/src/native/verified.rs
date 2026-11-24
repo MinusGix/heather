@@ -133,7 +133,20 @@ pub(super) struct Shape {
     /// it the source function, whose words its generator states at every
     /// file (`{source}::agrees_at`, `agrees_also_at`).
     pub sret: Option<(usize, String)>,
+    /// Whether a function of the program calls itself
+    /// (docs/native/runtime-fn-recursion-design.md): its generator links it
+    /// at one level and states the program at any more
+    /// (`{source}::agrees_where`), where it is defined. The program is then
+    /// the published one with its recursions at the compile's levels
+    /// (`program_deepened`), no theorem states it defined everywhere, and
+    /// `_agrees` and `_returns` take its definedness at their words as a
+    /// premise.
+    pub leveled: bool,
 }
+
+/// The stack a program with a function that calls itself may ask for
+/// below its return address where `--stack` does not say.
+pub(super) const DEFAULT_STACK: u64 = 65536;
 
 /// Whether `compile-x86` runs the optimizer over a program that is lent
 /// spans: it does unless `HEATHER_OPTIMIZE=off`, which is there to measure
@@ -186,6 +199,7 @@ impl Shape {
             enums: Vec::new(),
             table: String::new(),
             sret: None,
+            leveled: false,
         }
     }
 
@@ -210,8 +224,13 @@ impl Shape {
     /// function returns the value's tag word (`RecInfo::enum_word`), and
     /// where `slot` its payload's one slot in RDX (`RecInfo::enum_rest`,
     /// `{source}::agrees_also`).
+    ///
+    /// `more`, for a program with a function that calls itself: its
+    /// recursions run at `more + 1` levels (`program_deepened`), and its
+    /// agreement is the generator's at them, where the program is defined
+    /// (`{source}::agrees_where`).
     pub fn runtime(prefix: &str, owner: &str, source: &str, functions: usize, params: usize, arity: usize, widths: &[u64], fields: Option<&[(String, u64)]>,
-        enums: &[(usize, u64)], result: Option<u64>, slot: bool) -> Shape {
+        enums: &[(usize, u64)], result: Option<u64>, slot: bool, more: Option<u64>) -> Shape {
         let parameters = arguments(params);
         let table = format!("{source}::world.tys");
         let narrowed: Vec<String> = parameters.iter().enumerate()
@@ -238,9 +257,19 @@ impl Shape {
         let mut definitions = format!("import {owner};\nimport runtime;\n");
         // An enum's type and tag word are `rt`'s (`RecInfo::enum_at`, `enum_word`).
         if !enums.is_empty() || result.is_some() || fields.is_some_and(|fs| fs.iter().any(|(_, w)| *w >= ENUM_FIELD)) { definitions.push_str("import rt;\n"); }
-        definitions.push_str(&format!("\n// The program `runtime fn {source}` published, callees first: function `k` the one with `k` after it.
+        match more {
+            None => definitions.push_str(&format!("\n// The program `runtime fn {source}` published, callees first: function `k` the one with `k` after it.
 fn {prefix}_program() → List<Function> {{ {source}::program }}
-"));
+")),
+            Some(more) => {
+                definitions.insert_str(0, "import function_ir_levels;\n");
+                definitions.push_str(&format!("\n// The program `runtime fn {source}` published, callees first: function `k` the one with `k` after it. A function
+// of it calls itself, and is published at one level: here each such runs at {levels}, as many as the stack the code may
+// ask for holds (`program_deepened`, docs/native/runtime-fn-recursion-design.md).
+fn {prefix}_program() → List<Function> {{ program_deepened({source}::program, {more}) }}
+", levels = more + 1));
+            }
+        }
         for k in 0..functions {
             definitions.push_str(&format!("fn {prefix}_first_{k}() → List<Function> {{ {prefix}_program().drop({}) }}
 fn {prefix}_fn{k}() → Function {{ match {prefix}_first_{k}() {{ Nil => Setup::code_of(None), Cons(function, _) => function }} }}
@@ -248,7 +277,19 @@ fn {prefix}_fn{k}() → Function {{ match {prefix}_first_{k}() {{ Nil => Setup::
         }
         let typed = typed_enums(&parameters, enums, &table);
         let words = words_enums(&parameters, enums, &table);
-        let agreement = format!("{evaluable}
+        let agreement = match more {
+            // Where the program is defined at the words: within its
+            // levels, which the premise states by the program itself.
+            Some(more) => format!("{evaluable}
+// The program's function {f} evaluates to the source function wherever it is defined, which is where its recursions
+// stay within their levels: the generator's theorem, from each function's `Compile` instance
+// (`program_eval_deepened_where`).
+theorem {prefix}_agrees({typed}{comma}defined: program_defined({prefix}_program(), {f}, {words}).IsTrue()): program_eval({prefix}_program(), {f}, {words}) = {answer} {{
+    {source}::agrees_where({list}{comma}{more}, defined)
+}}
+", evaluable = evaluable_text_over(prefix, &format!("{prefix}_program()"), functions, &format!("{source}::arities"), &format!("{prefix}_outs()"), false),
+                f = functions - 1, list = parameters.join(", "), comma = if parameters.is_empty() { "" } else { ", " }),
+            None => format!("{evaluable}
 
 // The program's function {f} evaluates to the source function: the
 // generator's theorem, from each function's `Compile` instance.
@@ -267,9 +308,10 @@ theorem {prefix}_agrees_also({typed}): program_eval_also({prefix}_program(), {wo
 {quiet}
 ", list = parameters.join(", "), quiet = quiet_text(prefix, functions)),
                 None => String::new(),
-            });
+            }),
+        };
         if rest.is_some() { definitions.insert_str(0, "import function_ir_writes;\n"); }
-        Shape { functions, root: functions - 1, arity, params, definitions, agreement, answer, on: String::new(), lent: None, marks: None, tables: None, entries: Vec::new(), optimize: false, rest, enums: enums.to_vec(), table: format!("{source}::world.tys"), sret: None }
+        Shape { functions, root: functions - 1, arity, params, definitions, agreement, answer, on: String::new(), lent: None, marks: None, tables: None, entries: Vec::new(), optimize: false, rest, enums: enums.to_vec(), table: format!("{source}::world.tys"), sret: None, leveled: more.is_some() }
     }
 
     /// A `runtime fn` returning a record of three words or more, exported
@@ -315,10 +357,10 @@ fn {prefix}_fn{k}() → Function {{ match {prefix}_first_{k}() {{ Nil => Setup::
         let agreement = format!("{evaluable}
 
 {quiet}
-", evaluable = evaluable_text_over(prefix, &format!("{prefix}_program()"), m, &format!("Cons({}, {source}::arities)", arity + 1), &format!("Cons(0, {prefix}_outs())")),
+", evaluable = evaluable_text_over(prefix, &format!("{prefix}_program()"), m, &format!("Cons({}, {source}::arities)", arity + 1), &format!("Cons(0, {prefix}_outs())"), true),
             quiet = quiet_text_over(&format!("{prefix}_callees"), &format!("{source}::program"), functions));
         Shape { functions: m, root: functions, arity, params: arity, definitions, agreement, answer, on: String::new(), lent: Some((0..m).map(|k| u64::from(k == functions)).collect()), marks: None,
-            tables: None, entries: Vec::new(), optimize: false, rest: Some(rest), enums: Vec::new(), table, sret: Some((more, source.to_string())) }
+            tables: None, entries: Vec::new(), optimize: false, rest: Some(rest), enums: Vec::new(), table, sret: Some((more, source.to_string())), leveled: false }
     }
 
     /// A `runtime fn` that reads spans: its program is lent buffers
@@ -369,7 +411,7 @@ theorem {prefix}_agrees(now: Buffers(), {typed}): program_eval_over(now, {prefix
 }}
 ", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), f = functions - 1,
             list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, params: arity, definitions, agreement, answer, on, lent: Some(counts), marks: None, tables: None, entries: Vec::new(), optimize, rest: None, enums: Vec::new(), table: String::new(), sret: None }
+        Shape { functions, root: functions - 1, arity, params: arity, definitions, agreement, answer, on, lent: Some(counts), marks: None, tables: None, entries: Vec::new(), optimize, rest: None, enums: Vec::new(), table: String::new(), sret: None, leveled: false }
     }
 
     /// A `runtime fn` that stores into the first span it is lent: its
@@ -446,7 +488,7 @@ theorem {prefix}_runs(span: List<BitVec(8)>, rest: Buffers(), {typed}):
 ", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")),
             within = if tables.is_some() { marked_text(prefix, &stem) } else { within_text(prefix, &stem, functions) }, f = functions - 1,
             list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, params: arity, definitions, agreement, answer, on, lent: Some(counts), marks: Some(marks), tables, entries: Vec::new(), optimize, rest: None, enums: Vec::new(), table: String::new(), sret: None }
+        Shape { functions, root: functions - 1, arity, params: arity, definitions, agreement, answer, on, lent: Some(counts), marks: Some(marks), tables, entries: Vec::new(), optimize, rest: None, enums: Vec::new(), table: String::new(), sret: None, leveled: false }
     }
 }
 
@@ -455,7 +497,9 @@ theorem {prefix}_runs(span: List<BitVec(8)>, rest: Buffers(), {typed}):
 /// values; for one over spans, how many buffers each function of the
 /// program is lent as well, and for one that stores into them, which of
 /// the root's buffers the program stores into.
-pub(super) fn runtime_shape(elab: &Elaborator, prefix: &str, owner: &str, source: &str, spans: Spans) -> Result<Shape, String> {
+/// `more`: where a function of the program calls itself, how many levels
+/// its recursions run at past the first ([`levels_within`]).
+pub(super) fn runtime_shape(elab: &Elaborator, prefix: &str, owner: &str, source: &str, spans: Spans, more: u64) -> Result<Shape, String> {
     let probe = format!("{prefix}_shape");
     let lent = spans != Spans::None;
     // The rows' search is in a writer's scope: `runtime_file`, which every
@@ -506,12 +550,15 @@ fn {prefix}_field_widths() → List<Nat> {{ match {source}::rt.result {{
     let outs = function_ir_source::evaluate_numbers(&fork, &format!("{probe}::{prefix}_outs")).map_err(|e| e.to_string())?;
     let table = format!("\n// How many words each function returns past its first, the last function's first.
 fn {prefix}_outs() → List<Nat> {{ [{}] }}\n", outs.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", "));
-    let shape = runtime_shape_of(elab, prefix, owner, source, spans, lent, &fork, &numbers);
+    let shape = runtime_shape_of(elab, prefix, owner, source, spans, lent, &fork, &numbers, more);
     shape.map(|mut shape| { shape.definitions.push_str(&table); shape })
 }
 
 /// [`runtime_shape`] once its probe is read: `numbers` its counts.
-fn runtime_shape_of(elab: &Elaborator, prefix: &str, owner: &str, source: &str, spans: Spans, lent: bool, fork: &Elaborator, numbers: &[u64]) -> Result<Shape, String> {
+fn runtime_shape_of(elab: &Elaborator, prefix: &str, owner: &str, source: &str, spans: Spans, lent: bool, fork: &Elaborator, numbers: &[u64], more: u64) -> Result<Shape, String> {
+    // A program with a function that calls itself states its agreement
+    // where it is defined (`{source}::agrees_where`).
+    let leveled = elab.qualified_global(&format!("{source}::agrees_where")).is_some();
     match numbers[..] {
         [_, arity, ..] if arity > 8 => Err(format!("`{source}` takes {arity} words{}: compile-x86 passes at most eight, six in registers and two on the stack",
             if lent { ", an address and a length for each span among them" } else { "" })),
@@ -537,6 +584,10 @@ fn runtime_shape_of(elab: &Elaborator, prefix: &str, owner: &str, source: &str, 
             // A C caller is handed RAX and RDX: a record of more words is
             // returned through memory, by an export of its own (§16.20),
             // which takes the structure's address as its first word.
+            if leveled && also > 0 {
+                return Err(format!("`{source}` returns {} words and its program has a function that calls itself: compile-x86 exports such a \
+                    function of one word yet (docs/native/runtime-fn-recursion-design.md)", also + 1));
+            }
             if also > 1 {
                 if arity > 7 {
                     return Err(format!("`{source}` takes {arity} words and returns {} through memory: the structure's address is a word too, and \
@@ -561,7 +612,8 @@ fn runtime_shape_of(elab: &Elaborator, prefix: &str, owner: &str, source: &str, 
             // An enum result with its slot in RDX: no names to read.
             let slot = also && result.is_some();
             let fields = if also && !slot { Some(runtime_fields(fork, prefix, source, 2)?) } else { None };
-            Ok(Shape::runtime(prefix, owner, source, functions as usize, params as usize, arity as usize, widths, fields.as_deref(), &enums, result, slot))
+            Ok(Shape::runtime(prefix, owner, source, functions as usize, params as usize, arity as usize, widths, fields.as_deref(), &enums, result, slot,
+                leveled.then_some(more)))
         }
         [functions, arity, ref counts @ ..] if functions >= 1 && spans == Spans::Read && counts.len() == functions as usize =>
             Ok(Shape::runtime_lent(prefix, owner, source, functions as usize, arity as usize, counts.to_vec())),
@@ -636,6 +688,10 @@ fn runtime_fields(fork: &Elaborator, prefix: &str, source: &str, count: usize) -
 /// words whatever the root is lent.
 pub(super) fn runtime_entries(elab: &Elaborator, prefix: &str, owner: &str, source: &str, shape: &mut Shape, wanted: &[(String, String)]) -> Result<(), String> {
     if wanted.is_empty() { return Ok(()); }
+    if shape.leveled {
+        return Err(format!("`{source}`'s program has a function that calls itself: compile-x86 exports another function of a program only where \
+            the program is defined at every word (issues/linked-program-entries-limits.md)"));
+    }
     if shape.sret.is_some() {
         return Err(format!("`{source}` returns its record through memory: compile-x86 exports another function of a program only beside a \
             root returning its words in registers (issues/linked-program-entries-limits.md)"));
@@ -693,7 +749,7 @@ fn {prefix}_taken() → List<Nat> {{ {source}::arities }}\n");
 theorem {function}_native_agrees({typed}): {evaluated} = {named}({list}) {{
     cong_fn<List<BitVec(64)>, BitVec(64)>(λ l => first_word(l),
         program_linked_files_sources({prefix}_program(), {source}::arities, link_admits({source}::admits), link_sources_at({source}::sources), {source}::sourced,
-            Nil, {index}, [{list}], trivial, trivial))
+            trivial, Nil, {index}, [{list}], trivial, trivial))
 }}
 ", typed = typed(&parameters)));
         let imported = |text: &str| text.lines().any(|line| line.strip_prefix("import ").and_then(|rest| rest.strip_suffix(';')) == Some(module.as_str()));
@@ -1239,6 +1295,121 @@ theorem {prefix}_cut_keeps(f: Nat, alive: f.among({prefix}_opt_live()) = True): 
     Ok(Optimized { definitions: stated, statements, placements })
 }
 
+/// A program's functions planned: the placement, where each function's
+/// starts in it, and what each asks to save and how many call slots, which
+/// size its frame.
+struct Placed<'a> {
+    fork: Reading<'a>,
+    placement: Vec<String>,
+    starts_at: Vec<usize>,
+    saves: Vec<u64>,
+    slots: Vec<u64>,
+}
+
+fn place<'a>(elab: &'a Elaborator, answers: &'a Answers, prefix: &str, probe: &str, stem: &str, definitions: &str, placed: &[Option<Vec<u64>>], m: usize)
+    -> Result<Placed<'a>, String> {
+    // Evaluated on a fork, which only defines: the certificate's statements
+    // are the session's to check. A function at a time, each read from the
+    // literals the reads before it gave: every read is an evaluation of its
+    // own, so one that planned or emitted the whole program would hold all
+    // of it at once, and each of them again
+    // (issues/compile-x86-certificate-memory.md). The planner runs once per
+    // function; a function is emitted onto the code before it as a literal.
+    let mut plans = String::new();
+    for k in 0..m {
+        plans.push_str(&format!("fn {prefix}_plan_{k}() → List<Nat> {{ {stem}_fn{k}().plan().map(λ (place: Place) => place.number()) }}\n"));
+    }
+    // The last `d` items' numbers, as `Prog::numbers` writes them.
+    plans.push_str(&format!("fn {prefix}_top(p: Prog, d: Nat, after: List<Nat>) → List<Nat> {{
+    match d {{ Zero => after, Succ(j) => match p {{ Start => after, At(before, name, item) => {prefix}_top(before, j, Cons(name, item.numbers() ++ after)) }} }}
+}}
+// And their lengths.
+fn {prefix}_top_lens(p: Prog, d: Nat, after: List<Nat>) → List<Nat> {{
+    match d {{ Zero => after, Succ(j) => match p {{ Start => after, At(before, _, item) => {prefix}_top_lens(before, j, Cons(asm_len(item), after)) }} }}
+}}
+"));
+    let mut fork = Reading::new(elab, answers);
+    let first = format!("{definitions}{plans}");
+    fork.define(probe, &first);
+    let read = |fork: &mut Reading, module: &str, item: &str|
+        fork.read(&format!("{module}::{prefix}_{item}")).map_err(|e| format!("`{prefix}_{item}`: {e}"));
+    let mut placement = Vec::new();
+    // Where each function's placement starts in it.
+    let mut starts_at = Vec::with_capacity(m);
+    // What each function's placement asks it to save (`placement_saves`)
+    // and how many call slots it asks for (`placement_slots`, eight with no
+    // head), which its frame is sized by.
+    let (mut saves, mut slots) = (Vec::new(), Vec::new());
+    for k in 0..m {
+        // The optimizer's question already planned a function it kept.
+        let planned = match &placed[k] { Some(places) => places.clone(), None => read(&mut fork, probe, &format!("plan_{k}"))? };
+        starts_at.push(placement.len());
+        // `[Saving(s)]? [CallSlots(n)]?` heads the placement.
+        let saving = planned.first().filter(|&&n| (17..24).contains(&n)).map(|&n| n - 17);
+        saves.push(saving.unwrap_or(0));
+        slots.push(planned.get(usize::from(saving.is_some())).filter(|&&n| (24..33).contains(&n)).map_or(8, |&n| n - 24));
+        for n in planned {
+            placement.push(match n {
+                16 => "Folded".to_string(),
+                // A label whose jumps are short, what a call saves (a
+                // mask), a function's count of call slots and its count of
+                // saves (`Place::number`).
+                n if n >= 289 => format!("Short({})", n - 289),
+                n if n >= 33 => format!("Spilling({})", n - 33),
+                n if n >= 24 => format!("CallSlots({})", n - 24),
+                n if n >= 17 => format!("Saving({})", n - 17),
+                n => GPRS.get(n as usize).map(|gpr| format!("Into({gpr})")).ok_or_else(|| "a malformed placement".to_string())?,
+            });
+        }
+    }
+    Ok(Placed { fork, placement, starts_at, saves, slots })
+}
+
+/// How many levels past the first the recursions of `program` (stated at
+/// one level, [`Shape::leveled`]) run at within `budget` bytes of stack
+/// below its root's return address: the most at which the root's row of the
+/// room table is no more (`program_rooms_by`, a function that calls itself
+/// asking for a frame and a call's words a level). The table is read at one
+/// level and at two, as the placement sizes each frame, which gives a level's
+/// bytes; the answer is then read back, since a root over two recursions
+/// asks for the larger row and not their sum.
+pub(super) fn levels_within(elab: &Elaborator, answers: &Answers, prefix: &str, module: &str, program: &Shape, budget: u64) -> Result<u64, String> {
+    let mut imports = String::new();
+    for name in IMPORTS { imports.push_str(&format!("import {name};\n")); }
+    let definitions = format!("{imports}{}", program.definitions);
+    let m = program.functions;
+    let probe = format!("{module}_levels");
+    let Placed { mut fork, saves, slots, .. } = place(elab, answers, prefix, &probe, prefix, &definitions, &vec![None; m], m)?;
+    let numbers = |values: &[u64]| values.iter().map(|n| n.to_string()).collect::<Vec<_>>().join(", ");
+    let mut reads = 0;
+    let mut row_at = |fork: &mut Reading, more: u64| -> Result<u64, String> {
+        reads += 1;
+        let reading = format!("{probe}_rooms_{reads}");
+        fork.define(&reading, &format!("{imports}import function_ir_levels;\nimport {probe};
+fn {prefix}_rooms_at() → List<Nat> {{ program_rooms_by(program_deepened({prefix}_program(), {more}), λ (f: Nat) => rooms_at([{}], f), λ (f: Nat) => rooms_at([{}], f)) }}
+", numbers(&slots), numbers(&saves)));
+        let rows = fork.read(&format!("{reading}::{prefix}_rooms_at")).map_err(|e| format!("`{prefix}_rooms_at`: {e}"))?;
+        rows.get(program.root).copied().ok_or_else(|| "the program's room table did not read back".to_string())
+    };
+    let one = row_at(&mut fork, 0)?;
+    if one > budget {
+        return Err(format!("the function asks for {one} bytes of stack with each function that calls itself at one level, and may ask for {budget}: \
+            raise `--stack`"));
+    }
+    let two = row_at(&mut fork, 1)?;
+    // No level of a recursion is below the root.
+    if two <= one { return Ok(0); }
+    let step = two - one;
+    let mut more = (budget - one) / step;
+    // At most a few reads: each guess is the last less what it was over by.
+    for _ in 0..8 {
+        let row = row_at(&mut fork, more)?;
+        if row <= budget { return Ok(more); }
+        more = more.saturating_sub((row - budget).div_ceil(step).max(1));
+    }
+    Err(format!("no number of levels was found to fit {budget} bytes of stack"))
+}
+
 pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module: &str, program: &Shape, explain: Explain) -> Result<Compiled, String> {
     let f = program.root;
     let mut imports = String::new();
@@ -1269,60 +1440,9 @@ pub(super) fn compile(elab: &Elaborator, answers: &Answers, prefix: &str, module
     } else {
         format!("{stem}_fn{k}().emit({prog}, {k}, {places}, {names}, {prefix}_rooms())")
     };
-    // Evaluated on a fork, which only defines: the certificate's statements
-    // are the session's to check. A function at a time, each read from the
-    // literals the reads before it gave: every read is an evaluation of its
-    // own, so one that planned or emitted the whole program would hold all
-    // of it at once, and each of them again
-    // (issues/compile-x86-certificate-memory.md). The planner runs once per
-    // function; a function is emitted onto the code before it as a literal.
-    let mut plans = String::new();
-    for k in 0..m {
-        plans.push_str(&format!("fn {prefix}_plan_{k}() → List<Nat> {{ {stem}_fn{k}().plan().map(λ (place: Place) => place.number()) }}\n"));
-    }
-    // The last `d` items' numbers, as `Prog::numbers` writes them.
-    plans.push_str(&format!("fn {prefix}_top(p: Prog, d: Nat, after: List<Nat>) → List<Nat> {{
-    match d {{ Zero => after, Succ(j) => match p {{ Start => after, At(before, name, item) => {prefix}_top(before, j, Cons(name, item.numbers() ++ after)) }} }}
-}}
-// And their lengths.
-fn {prefix}_top_lens(p: Prog, d: Nat, after: List<Nat>) → List<Nat> {{
-    match d {{ Zero => after, Succ(j) => match p {{ Start => after, At(before, _, item) => {prefix}_top_lens(before, j, Cons(asm_len(item), after)) }} }}
-}}
-"));
-    let mut fork = Reading::new(elab, answers);
-    let first = format!("{definitions}{plans}");
-    fork.define(&probe, &first);
+    let Placed { mut fork, mut placement, mut starts_at, saves, slots } = place(elab, answers, prefix, &probe, &stem, &definitions, &placed, m)?;
     let read = |fork: &mut Reading, module: &str, item: &str|
         fork.read(&format!("{module}::{prefix}_{item}")).map_err(|e| format!("`{prefix}_{item}`: {e}"));
-    let mut placement = Vec::new();
-    // Where each function's placement starts in it.
-    let mut starts_at = Vec::with_capacity(m);
-    // What each function's placement asks it to save (`placement_saves`)
-    // and how many call slots it asks for (`placement_slots`, eight with no
-    // head), which its frame is sized by.
-    let (mut saves, mut slots) = (Vec::new(), Vec::new());
-    for k in 0..m {
-        // The optimizer's question already planned a function it kept.
-        let planned = match &placed[k] { Some(places) => places.clone(), None => read(&mut fork, &probe, &format!("plan_{k}"))? };
-        starts_at.push(placement.len());
-        // `[Saving(s)]? [CallSlots(n)]?` heads the placement.
-        let saving = planned.first().filter(|&&n| (17..24).contains(&n)).map(|&n| n - 17);
-        saves.push(saving.unwrap_or(0));
-        slots.push(planned.get(usize::from(saving.is_some())).filter(|&&n| (24..33).contains(&n)).map_or(8, |&n| n - 24));
-        for n in planned {
-            placement.push(match n {
-                16 => "Folded".to_string(),
-                // A label whose jumps are short, what a call saves (a
-                // mask), a function's count of call slots and its count of
-                // saves (`Place::number`).
-                n if n >= 289 => format!("Short({})", n - 289),
-                n if n >= 33 => format!("Spilling({})", n - 33),
-                n if n >= 24 => format!("CallSlots({})", n - 24),
-                n if n >= 17 => format!("Saving({})", n - 17),
-                n => GPRS.get(n as usize).map(|gpr| format!("Into({gpr})")).ok_or_else(|| "a malformed placement".to_string())?,
-            });
-        }
-    }
     let rest = |placement: &[String], left: usize| format!("[{}]", placement[placement.len() - left..].join(", "));
     // The room table the code is lowered under: each function's frame as
     // its placement sizes it, and its callees' rooms below
@@ -1762,16 +1882,22 @@ theorem {prefix}_returns<M>(machine: Machine<M>{comma}{typed}): {prefix}_code().
 // function's value in RAX, keeps the callee-saved registers and RSP, and
 // leaves memory as it was but for stores into its own room below that
 // address (`Stack::Wrote`): on every machine, loaded anywhere.
-theorem {prefix}_returns<M>(machine: Machine<M>{comma}{typed}): {prefix}_code().Computes(machine, {f}, {room}, {list}, {call}) {{
+theorem {prefix}_returns<M>(machine: Machine<M>{comma}{typed}{premise}): {prefix}_code().Computes(machine, {f}, {room}, {list}, {call}) {{
     compiled_computes<M>({prefix}_program(), {prefix}_placement(), {prefix}_rooms(), {prefix}_code(), {prefix}_lowers(), {prefix}_evaluable(),
-        machine, {f}, trivial, {list}, trivial, program_total_defined({prefix}_program(), Nil, {prefix}_defined_everywhere(), {f}, {list}), {call},
-        {prefix}_agrees({arguments}))
+        machine, {f}, trivial, {list}, trivial, {defined}, {call},
+        {prefix}_agrees({arguments}{passed}))
 }}
 {implements}", room = room(f), arguments = parameters.join(", "),
+            // A program with a function that calls itself computes it where
+            // it is defined: within its levels, a premise.
+            premise = if program.leveled { format!(", defined: program_defined({prefix}_program(), {f}, {list}).IsTrue()") } else { String::new() },
+            defined = if program.leveled { "defined".to_string() }
+                else { format!("program_total_defined({prefix}_program(), Nil, {prefix}_defined_everywhere(), {f}, {list})") },
+            passed = match (program.leveled, parameters.is_empty()) { (false, _) => "", (true, true) => "defined", (true, false) => ", defined" },
             // A function taking an enum is stated at its real values only,
             // each passed as its tag word: `Prog::Implements` is over every
             // word, so it is not stated of one.
-            implements = if program.enums.is_empty() { format!("
+            implements = if program.enums.is_empty() && !program.leveled { format!("
 // The same at every argument list: the code implements the source function
 // (`Prog::Implements`).
 theorem {prefix}_implements<M>(machine: Machine<M>): {prefix}_code().Implements(machine, {f}, {room}, {arity}, {spec}) {{
@@ -1854,13 +1980,16 @@ fn binders(parameters: &[String]) -> String {
 /// where reading them off the callees would force each callee's code
 /// (issues/compile-x86-certificate-memory.md).
 fn evaluable_text(prefix: &str, functions: usize, arities: &str) -> String {
-    evaluable_text_over(prefix, &format!("{prefix}_program()"), functions, arities, &format!("{prefix}_outs()"))
+    evaluable_text_over(prefix, &format!("{prefix}_program()"), functions, arities, &format!("{prefix}_outs()"), true)
 }
 
 /// [`evaluable_text`] of any program, spelled as `program`.
 /// `outs` the table of how many words each function returns past its
 /// first, the last function's first (`program_total_at`).
-pub(super) fn evaluable_text_over(prefix: &str, program: &str, functions: usize, arities: &str, outs: &str) -> String {
+/// `total`: whether to state it defined at every argument list
+/// (`{prefix}_defined_everywhere`), which a program with a function that
+/// calls itself is not.
+pub(super) fn evaluable_text_over(prefix: &str, program: &str, functions: usize, arities: &str, outs: &str, total: bool) -> String {
     let table = format!("{prefix}_arities()");
     let mut text = format!("// How many words each function takes, the last function's first.
 fn {prefix}_arities() → List<Nat> {{ {arities} }}
@@ -1879,6 +2008,7 @@ theorem {prefix}_scans_{k}(): program_scan_at({program}.drop({d}), {table}.drop(
 }}
 
 ", last = functions - 1));
+    if !total { return text; }
     // No node of the program requires anything of its operands, and each
     // call names as many words as its callee returns, so it is defined at
     // every argument list (`program_total_defined`), checked a function at
@@ -2013,7 +2143,7 @@ theorem {prefix}_sourced(): program_sourced({prefix}_program(), {sources}) {{
 // The program's function {f} evaluates to the source function.
 theorem {prefix}_agrees({typed}): program_eval({prefix}_program(), {f}, {list}) = {call} {{
     cong_fn<List<BitVec(64)>, BitVec(64)>(λ l => first_word(l),
-        program_eval_sources({prefix}_program(), {prefix}_evaluable(), {sources}, {prefix}_sourced(), {f}, {list}, trivial))
+        program_eval_sources({prefix}_program(), {prefix}_evaluable(), trivial, {sources}, {prefix}_sourced(), {f}, {list}, trivial))
 }}
 ")
 }

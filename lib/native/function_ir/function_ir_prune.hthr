@@ -113,6 +113,59 @@ theorem prune_len(live: Nat → Bool, functions: List<Function>): prune(function
     match functions { Nil => refl, Cons(_, earlier) => cong_fn<Nat, Nat>(λ n => n + 1, prune_len(live, earlier)) }
 }
 
+// A function that calls only live functions, among effects that are
+// weaker at the live ones: with its own number too, at each depth.
+theorem Function::tied_prunes_at(self last: Function, live: Nat → Bool, below, others: Effects(), k: Nat,
+    weaker: (before: Buffers()) → (f: Nat) → live(f) = True → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) →
+        (after: Buffers()) → below(before, f, arguments, result, extra, after) → others(before, f, arguments, result, extra, after),
+    depth: Nat,
+    own: (before: Buffers()) → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) → (after: Buffers()) →
+        last.level_runs(below, k, depth)(before, arguments, result, extra, after) → last.level_runs(others, k, depth)(before, arguments, result, extra, after)):
+    (before: Buffers()) → (f: Nat) → live(f) = True → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) →
+    (after: Buffers()) → last.tied_effects(below, k, depth)(before, f, arguments, result, extra, after) →
+    last.tied_effects(others, k, depth)(before, f, arguments, result, extra, after) {
+    λ before f alive arguments result extra after => match f.eq_dec(k) as λ d =>
+        (match d as λ _ => Type {
+            Inl(_) => last.level_runs(below, k, depth)(before, arguments, result, extra, after),
+            Inr(_) => below(before, f, arguments, result, extra, after),
+        }) →
+        (match d as λ _ => Type {
+            Inl(_) => last.level_runs(others, k, depth)(before, arguments, result, extra, after),
+            Inr(_) => others(before, f, arguments, result, extra, after),
+        }) {
+        Inl(_) => own(before, arguments, result, extra, after),
+        Inr(_) => weaker(before, f, alive, arguments, result, extra, after),
+    }
+}
+
+theorem Function::level_prunes(self last: Function, live: Nat → Bool, below, others: Effects(), k: Nat,
+    weaker: (before: Buffers()) → (f: Nat) → live(f) = True → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) →
+        (after: Buffers()) → below(before, f, arguments, result, extra, after) → others(before, f, arguments, result, extra, after),
+    only: last.body.calls_only(live) = True, depth: Nat):
+    (before: Buffers()) → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) → (after: Buffers()) →
+    last.level_runs(below, k, depth)(before, arguments, result, extra, after) → last.level_runs(others, k, depth)(before, arguments, result, extra, after) {
+    match depth {
+        Zero => λ before arguments result extra after never => never,
+        Succ(i) => λ before arguments result extra after ran => Exists(ran.witness, ⟨ran.proof.left, ⟨last.body.runs_weaken_within(live,
+            last.tied_effects(below, k, i), last.tied_effects(others, k, i),
+            last.tied_prunes_at(live, below, others, k, weaker, i, last.level_prunes(live, below, others, k, weaker, only, i)),
+            only, ran.witness, before, after, ran.proof.right.left), ran.proof.right.right⟩⟩),
+    }
+}
+
+theorem Function::levels_prunes(self last: Function, live: Nat → Bool, below, others: Effects(), k: Nat,
+    weaker: (before: Buffers()) → (f: Nat) → live(f) = True → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) →
+        (after: Buffers()) → below(before, f, arguments, result, extra, after) → others(before, f, arguments, result, extra, after),
+    only: last.body.calls_only(live) = True, levels: Nat):
+    (before: Buffers()) → (f: Nat) → live(f) = True → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) →
+    (after: Buffers()) → last.effects_at(below, k, levels)(before, f, arguments, result, extra, after) →
+    last.effects_at(others, k, levels)(before, f, arguments, result, extra, after) {
+    match levels {
+        Zero => weaker,
+        Succ(depth) => last.tied_prunes_at(live, below, others, k, weaker, depth, last.level_prunes(live, below, others, k, weaker, only, depth)),
+    }
+}
+
 // A live function of the pruned program may do whatever it did.
 theorem prune_sound(live: Nat → Bool, functions: List<Function>): program_closed(functions, live) = True → (before: Buffers()) → (f: Nat) →
     live(f) = True → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) → (after: Buffers()) →
@@ -122,35 +175,37 @@ theorem prune_sound(live: Nat → Bool, functions: List<Function>): program_clos
         Cons(last, earlier) => λ closed before f alive arguments result extra after => {
             let parts = Bool::and_true_parts(!live(earlier.len()) || last.body.calls_only(live), program_closed(earlier, live), closed);
             let below = prune_sound(live, earlier, parts.right);
+            let n = earlier.len();
+            let pruned = program_effects(prune(earlier, live));
+            let pick = λ (t: Bool) => match t { True => last, False => last.emptied() };
             let at = (match f.eq_dec(earlier.len()) as λ d =>
                 (match d {
-                    Inl(_) => last.RunsBoth(program_effects(earlier), arguments, result, extra, before, after),
+                    Inl(_) => last.RunsBoth(last.effects_at(program_effects(earlier), n, last.levels), arguments, result, extra, before, after),
                     Inr(_) => program_effects(earlier, before, f, arguments, result, extra, after),
                 }) →
                 (match d {
-                    Inl(_) => (match live(earlier.len()) { True => last, False => last.emptied() }).RunsBoth(program_effects(prune(earlier, live)),
-                        arguments, result, extra, before, after),
+                    Inl(_) => pick(live(n)).RunsBoth(pick(live(n)).effects_at(pruned, n, pick(live(n)).levels), arguments, result, extra, before, after),
                     Inr(_) => program_effects(prune(earlier, live), before, f, arguments, result, extra, after),
                 }) {
                 Inl(same) => λ ran => {
-                    let here: (live(earlier.len()) = True) = j(same, λ n _ => live(n) = True, alive);
+                    let here: (live(earlier.len()) = True) = j(same, λ m _ => live(m) = True, alive);
                     let only: (last.body.calls_only(live) = True) = j(here, λ t _ => (!t || last.body.calls_only(live)) = True, parts.left);
-                    let moved: last.RunsBoth(program_effects(prune(earlier, live)), arguments, result, extra, before, after) =
-                        Exists(ran.witness, ⟨ran.proof.left, ⟨last.body.runs_weaken_within(live, program_effects(earlier),
-                            program_effects(prune(earlier, live)), below, only, ran.witness, before, after, ran.proof.right.left), ran.proof.right.right⟩⟩);
-                    j(sym(here), λ t _ => (match t { True => last, False => last.emptied() }).RunsBoth(program_effects(prune(earlier, live)),
-                        arguments, result, extra, before, after), moved)
+                    let moved: last.RunsBoth(last.effects_at(pruned, n, last.levels), arguments, result, extra, before, after) =
+                        Exists(ran.witness, ⟨ran.proof.left, ⟨last.body.runs_weaken_within(live, last.effects_at(program_effects(earlier), n, last.levels),
+                            last.effects_at(pruned, n, last.levels),
+                            last.levels_prunes(live, program_effects(earlier), pruned, n, below, only, last.levels),
+                            only, ran.witness, before, after, ran.proof.right.left), ran.proof.right.right⟩⟩);
+                    j(sym(here), λ t _ => pick(t).RunsBoth(pick(t).effects_at(pruned, n, pick(t).levels), arguments, result, extra, before, after), moved)
                 },
                 Inr(_) => λ ran => below(before, f, alive, arguments, result, extra, after, ran),
             });
-            j(sym(prune_len(live, earlier)), λ n _ =>
+            j(sym(prune_len(live, earlier)), λ m _ =>
                 (match f.eq_dec(earlier.len()) {
-                    Inl(_) => last.RunsBoth(program_effects(earlier), arguments, result, extra, before, after),
+                    Inl(_) => last.RunsBoth(last.effects_at(program_effects(earlier), n, last.levels), arguments, result, extra, before, after),
                     Inr(_) => program_effects(earlier, before, f, arguments, result, extra, after),
                 }) →
-                (match f.eq_dec(n) {
-                    Inl(_) => (match live(earlier.len()) { True => last, False => last.emptied() }).RunsBoth(program_effects(prune(earlier, live)),
-                        arguments, result, extra, before, after),
+                (match f.eq_dec(m) {
+                    Inl(_) => pick(live(n)).RunsBoth(pick(live(n)).effects_at(pruned, m, pick(live(n)).levels), arguments, result, extra, before, after),
                     Inr(_) => program_effects(prune(earlier, live), before, f, arguments, result, extra, after),
                 }), at)
         },

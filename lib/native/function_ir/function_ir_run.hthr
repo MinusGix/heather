@@ -556,13 +556,62 @@ theorem Function::run_runs(self function: Function, effects: Effects(), call: Wr
         λ w id _ => refl, defined), ⟨refl, refl⟩⟩⟩)
 }
 
+// Writers with function `k`'s row `own`, the others' rows `below`'s.
+fn tie_writers(below: Writers(), k: Nat, own: Buffers() → List<BitVec(64)> → Ending) → Writers() {
+    λ buffers f arguments => match f.eq_dec(k) { Inl(_) => own(buffers, arguments), Inr(_) => below(buffers, f, arguments) }
+}
+
+// What a function that calls itself (function `k`, over `below`) runs to
+// `depth` levels deep: its body's run with its own calls answered one
+// level down, and at no level a zero word and the file as it was
+// (`Function::level_words`).
+fn Function::level_run(self function: Function, below: Writers(), k, depth: Nat) → Buffers() → List<BitVec(64)> → Ending {
+    match depth {
+        Zero => λ buffers _ => Ending(BitVec::zero(), buffers),
+        Succ(i) => λ buffers arguments => function.run(tie_writers(below, k, function.level_run(below, k, i)), arguments, buffers),
+    }
+}
+
+fn Function::tied_writers(self function: Function, below: Writers(), k, depth: Nat) → Writers() {
+    tie_writers(below, k, function.level_run(below, k, depth))
+}
+
+// What answers the function's calls where it is function `k` over `below`,
+// at `levels` levels (`Function::answers_at`).
+fn Function::writers_at(self function: Function, below: Writers(), k, levels: Nat) → Writers() {
+    match levels { Zero => below, Succ(depth) => function.tied_writers(below, k, depth) }
+}
+
+fn tie_run_defines(below: RunDefines(), k: Nat, own: Buffers() → List<BitVec(64)> → Bool) → RunDefines() {
+    λ buffers f arguments => match f.eq_dec(k) { Inl(_) => own(buffers, arguments), Inr(_) => below(buffers, f, arguments) }
+}
+
+// Whether the function's run is defined `depth` levels deep
+// (`Function::level_defined`).
+fn Function::level_run_defined(self function: Function, call: Writers(), below: RunDefines(), k, depth: Nat) → Buffers() → List<BitVec(64)> → Bool {
+    match depth {
+        Zero => λ _ _ => False,
+        Succ(i) => λ buffers arguments => function.run_defined(function.tied_writers(call, k, i),
+            tie_run_defines(below, k, function.level_run_defined(call, below, k, i)), arguments, buffers),
+    }
+}
+
+fn Function::tied_run_defines(self function: Function, call: Writers(), below: RunDefines(), k, depth: Nat) → RunDefines() {
+    tie_run_defines(below, k, function.level_run_defined(call, below, k, depth))
+}
+
+fn Function::run_defines_at(self function: Function, call: Writers(), below: RunDefines(), k, levels: Nat) → RunDefines() {
+    match levels { Zero => below, Succ(depth) => function.tied_run_defines(call, below, k, depth) }
+}
+
 // The functions of a program, each answering its calls by the ones after
-// it, over the one file: `program_eval_over` with the file threaded.
+// it and, as deep as it has levels, by itself, over the one file:
+// `program_eval_over` with the file threaded.
 fn program_run(functions: List<Function>) → Writers() {
     match functions {
         Nil => λ buffers _ _ => Ending(BitVec::zero(), buffers),
         Cons(last, earlier) => λ buffers f arguments => match f.eq_dec(earlier.len()) {
-            Inl(_) => last.run(program_run(earlier), arguments, buffers),
+            Inl(_) => last.run(last.writers_at(program_run(earlier), earlier.len(), last.levels), arguments, buffers),
             Inr(_) => program_run(earlier, buffers, f, arguments),
         },
     }
@@ -575,10 +624,11 @@ theorem program_run_rest_len(functions: List<Function>): (buffers: Buffers()) �
         Nil => λ _ _ _ => refl,
         Cons(last, earlier) => λ buffers f words => match f.eq_dec(earlier.len()) as λ d =>
             (match d as λ _ => Ending {
-                Inl(_) => last.run(program_run(earlier), words, buffers),
+                Inl(_) => last.run(last.writers_at(program_run(earlier), earlier.len(), last.levels), words, buffers),
                 Inr(_) => program_run(earlier, buffers, f, words),
             }).rest.len() = (match d as λ _ => Nat { Inl(_) => last.also.len(), Inr(_) => program_outs(earlier, f) }) {
-            Inl(_) => words_of_len(last.body.run(program_run(earlier), Valuation::bind(Valuation::zero(), last.parameters, words), buffers).values,
+            Inl(_) => words_of_len(last.body.run(last.writers_at(program_run(earlier), earlier.len(), last.levels),
+                    Valuation::bind(Valuation::zero(), last.parameters, words), buffers).values,
                 last.also),
             Inr(_) => program_run_rest_len(earlier, buffers, f, words),
         },
@@ -591,10 +641,19 @@ fn program_run_defined(functions: List<Function>) → RunDefines() {
     match functions {
         Nil => λ _ _ _ => True,
         Cons(last, earlier) => λ buffers f arguments => match f.eq_dec(earlier.len()) {
-            Inl(_) => last.run_defined(program_run(earlier), program_run_defined(earlier), arguments, buffers),
+            Inl(_) => last.run_defined(last.writers_at(program_run(earlier), earlier.len(), last.levels),
+                last.run_defines_at(program_run(earlier), program_run_defined(earlier), earlier.len(), last.levels), arguments, buffers),
             Inr(_) => program_run_defined(earlier, buffers, f, arguments),
         },
     }
+}
+
+// What answers the last function's calls in a program's run, and whether
+// each is defined (`program_last_answers`).
+fn program_last_writers(last: Function, earlier: List<Function>) → Writers() { last.writers_at(program_run(earlier), earlier.len(), last.levels) }
+
+fn program_last_run_defines(last: Function, earlier: List<Function>) → RunDefines() {
+    last.run_defines_at(program_run(earlier), program_run_defined(earlier), earlier.len(), last.levels)
 }
 
 theorem loop_run_defined_all(step: Valuation() → Buffers() → State, defined: Valuation() → Buffers() → Bool,
@@ -694,18 +753,89 @@ theorem program_total_run_defined(functions: List<Function>): program_total(func
     match functions {
         Nil => λ _ _ _ _ => trivial,
         Cons(last, earlier) => λ total buffers f words => {
-            let parts = Bool::is_true_and(last.body.total_at(program_outs(earlier)), program_total(earlier), total);
+            let parts = Bool::is_true_and(last.levels.matches(0) && last.body.total_at(program_outs(earlier)), program_total(earlier), total);
+            let own = Bool::is_true_and(last.levels.matches(0), last.body.total_at(program_outs(earlier)), parts.left);
+            let none: (0 = last.levels) = sym(last.levels.matches_eq(0, own.left));
             let ih = program_total_run_defined(earlier, parts.right);
             match f.eq_dec(earlier.len()) as λ d => (match d as λ _ => Bool {
-                Inl(_) => last.run_defined(program_run(earlier), program_run_defined(earlier), words, buffers),
+                Inl(_) => last.run_defined(program_last_writers(last, earlier), program_last_run_defines(last, earlier), words, buffers),
                 Inr(_) => program_run_defined(earlier, buffers, f, words),
             }).IsTrue() {
-                Inl(_) => last.body.total_run_defined(program_run(earlier), program_run_defined(earlier), ih, program_outs(earlier),
-                    program_run_rest_len(earlier), parts.left,
-                    Valuation::bind(Valuation::zero(), last.parameters, words), buffers),
+                Inl(_) => j(none, λ l _ => last.run_defined(last.writers_at(program_run(earlier), earlier.len(), l),
+                        last.run_defines_at(program_run(earlier), program_run_defined(earlier), earlier.len(), l), words, buffers).IsTrue(),
+                    last.body.total_run_defined(program_run(earlier), program_run_defined(earlier), ih, program_outs(earlier),
+                        program_run_rest_len(earlier), own.right,
+                        Valuation::bind(Valuation::zero(), last.parameters, words), buffers)),
                 Inr(_) => ih(buffers, f, words),
             }
         },
+    }
+}
+
+// A function's levels run as its effects: where the tables below answer
+// each defined call with what its callee may return and leave, and the
+// function at a depth does, so do the tables with the function's own
+// number (`Function::tied_reads_at`).
+theorem Function::tied_runs_at(self last: Function, may: Effects(), below: Writers(), defines: RunDefines(), arity: Nat → Option<Nat>, k: Nat,
+    ih: (file: Buffers()) → (f: Nat) → (words: List<BitVec(64)>) → arity_fits(arity(f), words.len()).IsTrue() →
+        defines(file, f, words).IsTrue() → may(file, f, words, below(file, f, words).word, below(file, f, words).rest, below(file, f, words).buffers),
+    depth: Nat,
+    own: (file: Buffers()) → (words: List<BitVec(64)>) → arity_fits(Some(last.parameters.len()), words.len()).IsTrue() →
+        last.level_run_defined(below, defines, k, depth)(file, words).IsTrue() →
+        last.level_runs(may, k, depth)(file, words, last.level_run(below, k, depth)(file, words).word, last.level_run(below, k, depth)(file, words).rest,
+            last.level_run(below, k, depth)(file, words).buffers)):
+    (file: Buffers()) → (f: Nat) → (words: List<BitVec(64)>) → arity_fits(tie(arity, k, Some(last.parameters.len()))(f), words.len()).IsTrue() →
+    last.tied_run_defines(below, defines, k, depth)(file, f, words).IsTrue() →
+    last.tied_effects(may, k, depth)(file, f, words, last.tied_writers(below, k, depth)(file, f, words).word,
+        last.tied_writers(below, k, depth)(file, f, words).rest, last.tied_writers(below, k, depth)(file, f, words).buffers) {
+    λ file f words => match f.eq_dec(k) as λ d =>
+        arity_fits((match d as λ _ => Option<Nat> { Inl(_) => Some(last.parameters.len()), Inr(_) => arity(f) }), words.len()).IsTrue() →
+        (match d as λ _ => Bool { Inl(_) => last.level_run_defined(below, defines, k, depth)(file, words), Inr(_) => defines(file, f, words) }).IsTrue() →
+        (match d as λ _ => Type {
+            Inl(_) => last.level_runs(may, k, depth)(file, words, (match d as λ _ => Ending { Inl(_) => last.level_run(below, k, depth)(file, words), Inr(_) => below(file, f, words) }).word,
+                (match d as λ _ => Ending { Inl(_) => last.level_run(below, k, depth)(file, words), Inr(_) => below(file, f, words) }).rest,
+                (match d as λ _ => Ending { Inl(_) => last.level_run(below, k, depth)(file, words), Inr(_) => below(file, f, words) }).buffers),
+            Inr(_) => may(file, f, words, (match d as λ _ => Ending { Inl(_) => last.level_run(below, k, depth)(file, words), Inr(_) => below(file, f, words) }).word,
+                (match d as λ _ => Ending { Inl(_) => last.level_run(below, k, depth)(file, words), Inr(_) => below(file, f, words) }).rest,
+                (match d as λ _ => Ending { Inl(_) => last.level_run(below, k, depth)(file, words), Inr(_) => below(file, f, words) }).buffers),
+        }) {
+        Inl(_) => own(file, words),
+        Inr(_) => ih(file, f, words),
+    }
+}
+
+// The function at each depth runs to what it may return and leave there.
+theorem Function::level_runs_sound(self last: Function, may: Effects(), below: Writers(), defines: RunDefines(), arity: Nat → Option<Nat>, k: Nat,
+    ih: (file: Buffers()) → (f: Nat) → (words: List<BitVec(64)>) → arity_fits(arity(f), words.len()).IsTrue() →
+        defines(file, f, words).IsTrue() → may(file, f, words, below(file, f, words).word, below(file, f, words).rest, below(file, f, words).buffers),
+    ok: last.evaluable(tie(arity, k, Some(last.parameters.len()))).IsTrue(), depth: Nat):
+    (file: Buffers()) → (words: List<BitVec(64)>) → arity_fits(Some(last.parameters.len()), words.len()).IsTrue() →
+    last.level_run_defined(below, defines, k, depth)(file, words).IsTrue() →
+    last.level_runs(may, k, depth)(file, words, last.level_run(below, k, depth)(file, words).word, last.level_run(below, k, depth)(file, words).rest,
+        last.level_run(below, k, depth)(file, words).buffers) {
+    match depth {
+        Zero => λ file words fits never => false_elim(never),
+        Succ(i) => λ file words fits defined => last.run_runs(last.tied_effects(may, k, i), last.tied_writers(below, k, i),
+            last.tied_run_defines(below, defines, k, i), tie(arity, k, Some(last.parameters.len())),
+            last.tied_runs_at(may, below, defines, arity, k, ih, i, last.level_runs_sound(may, below, defines, arity, k, ih, ok, i)),
+            ok, words, file, last.parameters.len().matches_eq(words.len(), fits), defined),
+    }
+}
+
+// The same at its levels, none or some.
+theorem Function::levels_runs(self last: Function, may: Effects(), below: Writers(), defines: RunDefines(), arity: Nat → Option<Nat>, k: Nat,
+    ih: (file: Buffers()) → (f: Nat) → (words: List<BitVec(64)>) → arity_fits(arity(f), words.len()).IsTrue() →
+        defines(file, f, words).IsTrue() → may(file, f, words, below(file, f, words).word, below(file, f, words).rest, below(file, f, words).buffers)):
+    (levels: Nat) → last.evaluable(self_table(arity, k, levels, Some(last.parameters.len()))).IsTrue() →
+    (file: Buffers()) → (f: Nat) → (words: List<BitVec(64)>) →
+    arity_fits(self_table(arity, k, levels, Some(last.parameters.len()))(f), words.len()).IsTrue() →
+    last.run_defines_at(below, defines, k, levels)(file, f, words).IsTrue() →
+    last.effects_at(may, k, levels)(file, f, words, last.writers_at(below, k, levels)(file, f, words).word,
+        last.writers_at(below, k, levels)(file, f, words).rest, last.writers_at(below, k, levels)(file, f, words).buffers) {
+    λ levels => match levels {
+        Zero => λ _ => ih,
+        Succ(depth) => λ ok => last.tied_runs_at(may, below, defines, arity, k, ih, depth,
+            last.level_runs_sound(may, below, defines, arity, k, ih, ok, depth)),
     }
 }
 
@@ -720,30 +850,33 @@ theorem program_run_effects(functions: List<Function>, ok: program_evaluable(fun
     match functions {
         Nil => λ before f words never _ => false_elim(never),
         Cons(last, earlier) => λ before f words => {
-            let parts = Bool::is_true_and(last.evaluable(program_arity(earlier)), program_evaluable(earlier), ok);
+            let parts = Bool::is_true_and(last.evaluable(program_last_arity(last, earlier)), program_evaluable(earlier), ok);
             let ih = program_run_effects(earlier, parts.right);
             let below = program_run(earlier);
             let may = program_effects(earlier);
             let defines = program_run_defined(earlier);
+            let tops = program_last_writers(last, earlier);
+            let mays = last.effects_at(may, earlier.len(), last.levels);
             match f.eq_dec(earlier.len()) as λ d =>
                 arity_fits(match d { Inl(_) => Some(last.parameters.len()), Inr(_) => program_arity(earlier, f) },
                     words.len()).IsTrue() →
                 (match d as λ _ => Bool {
-                    Inl(_) => last.run_defined(below, defines, words, before),
+                    Inl(_) => last.run_defined(tops, program_last_run_defines(last, earlier), words, before),
                     Inr(_) => defines(before, f, words),
                 }).IsTrue() →
                 (match d as λ _ => Type {
-                    Inl(_) => last.RunsBoth(may, words,
-                        (match d as λ _ => Ending { Inl(_) => last.run(below, words, before), Inr(_) => below(before, f, words) }).word,
-                        (match d as λ _ => Ending { Inl(_) => last.run(below, words, before), Inr(_) => below(before, f, words) }).rest, before,
-                        (match d as λ _ => Ending { Inl(_) => last.run(below, words, before), Inr(_) => below(before, f, words) }).buffers),
+                    Inl(_) => last.RunsBoth(mays, words,
+                        (match d as λ _ => Ending { Inl(_) => last.run(tops, words, before), Inr(_) => below(before, f, words) }).word,
+                        (match d as λ _ => Ending { Inl(_) => last.run(tops, words, before), Inr(_) => below(before, f, words) }).rest, before,
+                        (match d as λ _ => Ending { Inl(_) => last.run(tops, words, before), Inr(_) => below(before, f, words) }).buffers),
                     Inr(_) => may(before, f, words,
-                        (match d as λ _ => Ending { Inl(_) => last.run(below, words, before), Inr(_) => below(before, f, words) }).word,
-                        (match d as λ _ => Ending { Inl(_) => last.run(below, words, before), Inr(_) => below(before, f, words) }).rest,
-                        (match d as λ _ => Ending { Inl(_) => last.run(below, words, before), Inr(_) => below(before, f, words) }).buffers),
+                        (match d as λ _ => Ending { Inl(_) => last.run(tops, words, before), Inr(_) => below(before, f, words) }).word,
+                        (match d as λ _ => Ending { Inl(_) => last.run(tops, words, before), Inr(_) => below(before, f, words) }).rest,
+                        (match d as λ _ => Ending { Inl(_) => last.run(tops, words, before), Inr(_) => below(before, f, words) }).buffers),
                 }) {
-                Inl(_) => λ fits defined => last.run_runs(may, below, defines, program_arity(earlier), ih, parts.left, words, before,
-                    last.parameters.len().matches_eq(words.len(), fits), defined),
+                Inl(_) => λ fits defined => last.run_runs(mays, tops, program_last_run_defines(last, earlier), program_last_arity(last, earlier),
+                    last.levels_runs(may, below, defines, program_arity(earlier), earlier.len(), ih, last.levels, parts.left),
+                    parts.left, words, before, last.parameters.len().matches_eq(words.len(), fits), defined),
                 Inr(_) => λ fits defined => ih(before, f, words, fits, defined),
             }
         },
@@ -934,6 +1067,45 @@ theorem Function::run_quiet(self function: Function, call: Writers(), answers: A
         function.body.run_quiet(call, answers, buffers, still, quiet, Valuation::bind(Valuation::zero(), function.parameters, arguments)))
 }
 
+// A function that stores nothing, at each depth: with its own number its
+// tables run as they evaluate over the file, where the function at the
+// depth does.
+theorem Function::tied_still_at(self last: Function, below: Writers(), answers: Answers(), k: Nat, buffers: Buffers(),
+    ih: (f: Nat) → (words: List<BitVec(64)>) → below(buffers, f, words) = Ending::of(answers(f, words), buffers),
+    depth: Nat,
+    own: (words: List<BitVec(64)>) → last.level_run(below, k, depth)(buffers, words) = Ending::of(last.level_words(answers, k, depth, buffers)(words), buffers)):
+    (f: Nat) → (words: List<BitVec(64)>) →
+    last.tied_writers(below, k, depth)(buffers, f, words) = Ending::of(last.tied_answers(answers, k, depth, buffers)(f, words), buffers) {
+    λ f words => match f.eq_dec(k) as λ d =>
+        (match d as λ _ => Ending { Inl(_) => last.level_run(below, k, depth)(buffers, words), Inr(_) => below(buffers, f, words) }) =
+        Ending::of((match d as λ _ => List<BitVec(64)> { Inl(_) => last.level_words(answers, k, depth, buffers)(words), Inr(_) => answers(f, words) }), buffers) {
+        Inl(_) => own(words),
+        Inr(_) => ih(f, words),
+    }
+}
+
+theorem Function::level_still(self last: Function, below: Writers(), answers: Answers(), k: Nat, buffers: Buffers(),
+    ih: (f: Nat) → (words: List<BitVec(64)>) → below(buffers, f, words) = Ending::of(answers(f, words), buffers),
+    quiet: last.body.quiet().IsTrue(), depth: Nat):
+    (words: List<BitVec(64)>) → last.level_run(below, k, depth)(buffers, words) = Ending::of(last.level_words(answers, k, depth, buffers)(words), buffers) {
+    match depth {
+        Zero => λ words => refl,
+        Succ(i) => λ words => last.run_quiet(last.tied_writers(below, k, i), last.tied_answers(answers, k, i, buffers), buffers,
+            last.tied_still_at(below, answers, k, buffers, ih, i, last.level_still(below, answers, k, buffers, ih, quiet, i)), quiet, words),
+    }
+}
+
+theorem Function::levels_still(self last: Function, below: Writers(), answers: Answers(), k: Nat, buffers: Buffers(),
+    ih: (f: Nat) → (words: List<BitVec(64)>) → below(buffers, f, words) = Ending::of(answers(f, words), buffers),
+    quiet: last.body.quiet().IsTrue(), levels: Nat):
+    (f: Nat) → (words: List<BitVec(64)>) →
+    last.writers_at(below, k, levels)(buffers, f, words) = Ending::of(last.answers_at(answers, k, levels, buffers)(f, words), buffers) {
+    match levels {
+        Zero => ih,
+        Succ(depth) => last.tied_still_at(below, answers, k, buffers, ih, depth, last.level_still(below, answers, k, buffers, ih, quiet, depth)),
+    }
+}
+
 // The theorem for programs: one whose functions store nothing runs as it
 // evaluates over the file, and leaves it.
 theorem program_run_quiet(functions: List<Function>): program_quiet(functions).IsTrue() → (buffers: Buffers()) → (f: Nat) →
@@ -945,10 +1117,13 @@ theorem program_run_quiet(functions: List<Function>): program_quiet(functions).I
             let ih = program_run_quiet(earlier, parts.right, buffers);
             let below = program_run(earlier);
             let words_below = program_answers_over(buffers, earlier);
+            let tops = program_last_writers(last, earlier);
+            let words_tops = program_last_answers(buffers, last, earlier);
             match f.eq_dec(earlier.len()) as λ d =>
-                (match d as λ _ => Ending { Inl(_) => last.run(below, words, buffers), Inr(_) => below(buffers, f, words) }) =
-                Ending::of(match d { Inl(_) => last.eval_words(words_below, words, buffers := buffers), Inr(_) => words_below(f, words) }, buffers) {
-                Inl(_) => last.run_quiet(below, words_below, buffers, ih, parts.left, words),
+                (match d as λ _ => Ending { Inl(_) => last.run(tops, words, buffers), Inr(_) => below(buffers, f, words) }) =
+                Ending::of(match d { Inl(_) => last.eval_words(words_tops, words, buffers := buffers), Inr(_) => words_below(f, words) }, buffers) {
+                Inl(_) => last.run_quiet(tops, words_tops, buffers,
+                    last.levels_still(below, words_below, earlier.len(), buffers, ih, parts.left, last.levels), parts.left, words),
                 Inr(_) => ih(f, words),
             }
         },

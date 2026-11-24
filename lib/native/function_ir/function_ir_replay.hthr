@@ -2230,25 +2230,35 @@ theorem replay_region_sound(table: List<Rule>, effects: Effects(), region: Struc
 
 fn replay_function(table: List<Rule>, function: Function, plan: Plan) → Option<Function> {
     replay_region(table, function.body, Facts::none(), plan).and_then(λ r =>
-        Some(Function(function.parameters, r.region, function.result, lent := function.lent, also := function.also)))
+        Some(Function(function.parameters, r.region, function.result, lent := function.lent, also := function.also, levels := function.levels)))
 }
 
 theorem replay_function_sound(table: List<Rule>, function: Function, plan: Plan, replayed: Function,
     made: replay_function(table, function, plan) = Some(replayed), effects: Effects(), arguments: List<BitVec(64)>, result: BitVec(64),
     extra: List<BitVec(64)>, before, after: Buffers(), ran: function.RunsBoth(effects, arguments, result, extra, before, after)):
     replayed.RunsBoth(effects, arguments, result, extra, before, after) {
-    let got = Option::and_then_some(replay_region(table, function.body, Facts::none(), plan), λ (r: Regioned) => Some(Function(function.parameters, r.region, function.result, lent := function.lent, also := function.also)), replayed, made);
+    let got = Option::and_then_some(replay_region(table, function.body, Facts::none(), plan), λ (r: Regioned) => Some(Function(function.parameters, r.region, function.result, lent := function.lent, also := function.also, levels := function.levels)), replayed, made);
     let r = got.witness;
     let values = ran.witness;
     let ok = replay_region_sound(table, effects, function.body, Facts::none(), plan, r, got.proof.left, values, before, after,
         Facts::none_hold(values), trivial, ran.proof.right.left);
-    j(Option::some_inj(Function(function.parameters, r.region, function.result, lent := function.lent, also := function.also), replayed, got.proof.right),
+    j(Option::some_inj(Function(function.parameters, r.region, function.result, lent := function.lent, also := function.also, levels := function.levels), replayed, got.proof.right),
         λ g _ => g.RunsBoth(effects, arguments, result, extra, before, after), Exists(values, ⟨ran.proof.left, ⟨ok.left, ran.proof.right.right⟩⟩))
 }
 
-// The replayer as a stage: no function's rewriting reads its callees.
+theorem replay_function_levels(table: List<Rule>, function: Function, plan: Plan, replayed: Function,
+    made: replay_function(table, function, plan) = Some(replayed)): replayed.levels = function.levels {
+    let got = Option::and_then_some(replay_region(table, function.body, Facts::none(), plan), λ (r: Regioned) => Some(Function(function.parameters, r.region, function.result, lent := function.lent, also := function.also, levels := function.levels)), replayed, made);
+    j(Option::some_inj(Function(function.parameters, got.witness.region, function.result, lent := function.lent, also := function.also, levels := function.levels), replayed, got.proof.right),
+        λ g _ => g.levels = function.levels, refl)
+}
+
+// The replayer as a stage: no function's rewriting reads its callees, so
+// it holds over whatever answers the function's calls, the function itself
+// where it calls itself.
 fn replay_stage(table: List<Rule>) → Stage<Plan> {
     Stage(λ callees function plan => replay_function(table, function, plan),
-        λ callees old plan new made arguments result extra before after ran =>
-            replay_function_sound(table, old, plan, new, made, program_effects(callees), arguments, result, extra, before, after, ran))
+        λ callees old plan new made effects alike => ⟨replay_function_levels(table, old, plan, new, made),
+            λ arguments result extra before after ran =>
+                replay_function_sound(table, old, plan, new, made, effects, arguments, result, extra, before, after, ran)⟩)
 }

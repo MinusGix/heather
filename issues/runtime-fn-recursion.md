@@ -5,7 +5,7 @@ labels: [native,runtime,recursion,design]
 area: heather-in-heather
 milestone: [nh-procedures]
 created: 2026-11-11
-updated: 2026-11-21
+updated: 2026-11-22
 ---
 
 A `runtime fn` that calls itself other than last is refused: `rt` turns
@@ -37,6 +37,14 @@ this issue first proposed.
   theorem `f::depth`; rewrites off the stack (the accumulator) are the
   optimizer's, at a new level for procedures, with an opt-in heap stack;
   a call with its room reserved keeps a recursion's callers regions.
+- Built 2026-11-22 (note §10): a recursion over words is an ordinary
+  function of its program, live a number of levels deep
+  (`Function.levels`). `compile-x86 --stack <bytes>` compiles one and a
+  caller of one, and C links them (`examples/x86-native/recursion.hthr`).
+  Left (§10.6): the definedness premise restated as the depth bound
+  `f::depth`, statements calling a recursion through its program and
+  with them the removal of the procedure lane, and a recursion over a
+  lent span (`port_depth`).
 - Then calls between `Io` functions ([[rt-effectful-callees]]) with a
   buffer contract, and recursion over `Io` through them.
 

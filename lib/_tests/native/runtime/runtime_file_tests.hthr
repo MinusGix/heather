@@ -163,14 +163,14 @@ theorem linked_raises(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, place,
     program_run(linked_program(), Cons(span, rest), 2, [place, length, i]) =
         Ending(raise_from(span, length, i).value, Cons(raise_from(span, length, i).after, rest)) {
     program_spanned_answers(linked_program(), [3, 1, 1], [False, True, True], span_file, span_sources(linked_srcs()),
-        linked_spanned(), span_pair(span, rest), 2, [place, length, i], trivial)
+        linked_spanned(), trivial, span_pair(span, rest), 2, [place, length, i], trivial)
 }
 
 // And `raise`, function 1, returns its word and leaves the file.
 theorem linked_raise(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, x: BitVec(64)):
     program_run(linked_program(), Cons(span, rest), 1, [x]) = Ending(raise(x), Cons(span, rest)) {
     program_spanned_answers(linked_program(), [3, 1, 1], [False, True, True], span_file, span_sources(linked_srcs()),
-        linked_spanned(), span_pair(span, rest), 1, [x], trivial)
+        linked_spanned(), trivial, span_pair(span, rest), 1, [x], trivial)
 }
 
 // ---------------------------------------------------------------------------

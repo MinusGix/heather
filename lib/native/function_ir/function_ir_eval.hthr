@@ -1427,6 +1427,63 @@ theorem Function::eval_answers(self function: Function, call, other: Answers(), 
     function.eval_answers_over(Nil, call, other, arity, answers, ok, arguments)
 }
 
+// A table with function `k`'s row `own`, the others' rows `below`'s.
+fn tie<A>(below: Nat → A, k: Nat, own: A) → Nat → A { λ (f: Nat) => match f.eq_dec(k) { Inl(_) => own, Inr(_) => below(f) } }
+
+fn tie_answers(below: Answers(), k: Nat, own: List<BitVec(64)> → List<BitVec(64)>) → Answers() {
+    λ f arguments => match f.eq_dec(k) { Inl(_) => own(arguments), Inr(_) => below(f, arguments) }
+}
+
+// The words a function that calls itself (function `k`, over `below`)
+// returns `depth` levels deep: its body's with its own calls answered one
+// level down, and at no level one zero word (`Function::level_computes`).
+fn Function::level_words(self function: Function, below: Answers(), k, depth: Nat, buffers: Buffers()) → List<BitVec(64)> → List<BitVec(64)> {
+    match depth {
+        Zero => λ _ => [BitVec::zero()],
+        Succ(i) => λ arguments => function.eval_words(tie_answers(below, k, function.level_words(below, k, i, buffers)), arguments, buffers := buffers),
+    }
+}
+
+// The answers `below` with function `k` answering its own number `depth`
+// levels deep (`Function::tied_callees`).
+fn Function::tied_answers(self function: Function, below: Answers(), k, depth: Nat, buffers: Buffers()) → Answers() {
+    tie_answers(below, k, function.level_words(below, k, depth, buffers))
+}
+
+// What answers the function's calls where it is function `k` over `below`,
+// at `levels` levels (`Function::callees_at`).
+fn Function::answers_at(self function: Function, below: Answers(), k, levels: Nat, buffers: Buffers()) → Answers() {
+    match levels { Zero => below, Succ(depth) => function.tied_answers(below, k, depth, buffers) }
+}
+
+fn tie_defines(below: Defines(), k: Nat, own: List<BitVec(64)> → Bool) → Defines() {
+    λ f arguments => match f.eq_dec(k) { Inl(_) => own(arguments), Inr(_) => below(f, arguments) }
+}
+
+// Whether the function is defined `depth` levels deep: where its body is
+// with its own calls asked one level down, and at no level nowhere.
+fn Function::level_defined(self function: Function, call: Answers(), below: Defines(), k, depth: Nat, buffers: Buffers()) → List<BitVec(64)> → Bool {
+    match depth {
+        Zero => λ _ => False,
+        Succ(i) => λ arguments => function.defined(function.tied_answers(call, k, i, buffers),
+            tie_defines(below, k, function.level_defined(call, below, k, i, buffers)), arguments, buffers := buffers),
+    }
+}
+
+fn Function::tied_defines(self function: Function, call: Answers(), below: Defines(), k, depth: Nat, buffers: Buffers()) → Defines() {
+    tie_defines(below, k, function.level_defined(call, below, k, depth, buffers))
+}
+
+fn Function::defines_at(self function: Function, call: Answers(), below: Defines(), k, levels: Nat, buffers: Buffers()) → Defines() {
+    match levels { Zero => below, Succ(depth) => function.tied_defines(call, below, k, depth, buffers) }
+}
+
+// A table of the functions below a function, with the function's own entry
+// at `k` where it has levels: what its body's calls are checked against.
+fn self_table<A>(below: Nat → A, k, levels: Nat, own: A) → Nat → A {
+    match levels { Zero => below, Succ(_) => tie(below, k, own) }
+}
+
 // A program's functions, each answering its calls by the functions after
 // it, as `program_callees` orders them, all over the same buffers: the
 // words each returns (`Function::eval_words`; one zero word at a number no
@@ -1435,7 +1492,7 @@ fn program_answers_over(buffers: Buffers(), functions: List<Function>) → Answe
     match functions {
         Nil => λ _ _ => [BitVec::zero()],
         Cons(last, earlier) => λ f arguments => match f.eq_dec(earlier.len()) {
-            Inl(_) => last.eval_words(program_answers_over(buffers, earlier), arguments, buffers := buffers),
+            Inl(_) => last.eval_words(last.answers_at(program_answers_over(buffers, earlier), earlier.len(), last.levels, buffers), arguments, buffers := buffers),
             Inr(_) => program_answers_over(buffers, earlier)(f, arguments),
         },
     }
@@ -1470,10 +1527,10 @@ theorem program_answers_len(buffers: Buffers(), functions: List<Function>): (f: 
         Nil => λ f words => refl,
         Cons(last, earlier) => λ f words => match f.eq_dec(earlier.len()) as λ d =>
             (match d as λ _ => List<BitVec(64)> {
-                Inl(_) => last.eval_words(program_answers_over(buffers, earlier), words, buffers := buffers),
+                Inl(_) => last.eval_words(last.answers_at(program_answers_over(buffers, earlier), earlier.len(), last.levels, buffers), words, buffers := buffers),
                 Inr(_) => program_answers_over(buffers, earlier)(f, words),
             }).tail().len() = (match d as λ _ => Nat { Inl(_) => last.also.len(), Inr(_) => program_outs(earlier, f) }) {
-            Inl(_) => last.eval_words_len(program_answers_over(buffers, earlier), words, buffers),
+            Inl(_) => last.eval_words_len(last.answers_at(program_answers_over(buffers, earlier), earlier.len(), last.levels, buffers), words, buffers),
             Inr(_) => program_answers_len(buffers, earlier, f, words),
         },
     }
@@ -1485,8 +1542,9 @@ fn program_defined_over(buffers: Buffers(), functions: List<Function>) → Defin
     match functions {
         Nil => λ _ _ => True,
         Cons(last, earlier) => λ f arguments => match f.eq_dec(earlier.len()) {
-            Inl(_) => last.defined(program_answers_over(buffers, earlier), program_defined_over(buffers, earlier), arguments,
-                buffers := buffers),
+            Inl(_) => last.defined(last.answers_at(program_answers_over(buffers, earlier), earlier.len(), last.levels, buffers),
+                last.defines_at(program_answers_over(buffers, earlier), program_defined_over(buffers, earlier), earlier.len(), last.levels, buffers),
+                arguments, buffers := buffers),
             Inr(_) => program_defined_over(buffers, earlier)(f, arguments),
         },
     }
@@ -1494,22 +1552,48 @@ fn program_defined_over(buffers: Buffers(), functions: List<Function>) → Defin
 
 fn program_defined(functions: List<Function>) → Defines() { program_defined_over(Nil, functions) }
 
+// What answers the last function's calls in a program, and whether each is
+// defined: the functions before it, and itself as deep as it has levels.
+fn program_last_answers(buffers: Buffers(), last: Function, earlier: List<Function>) → Answers() {
+    last.answers_at(program_answers_over(buffers, earlier), earlier.len(), last.levels, buffers)
+}
+
+fn program_last_defines(buffers: Buffers(), last: Function, earlier: List<Function>) → Defines() {
+    last.defines_at(program_answers_over(buffers, earlier), program_defined_over(buffers, earlier), earlier.len(), last.levels, buffers)
+}
+
 // At the last function's own number, the program is defined where that
 // function is.
 theorem program_defined_last(buffers: Buffers(), last: Function, earlier: List<Function>, words: List<BitVec(64)>):
     program_defined_over(buffers, Cons(last, earlier))(earlier.len(), words).IsTrue() →
-    last.defined(program_answers_over(buffers, earlier), program_defined_over(buffers, earlier), words, buffers := buffers).IsTrue() {
+    last.defined(program_last_answers(buffers, last, earlier), program_last_defines(buffers, last, earlier), words, buffers := buffers).IsTrue() {
     match earlier.len().eq_dec(earlier.len()) as λ d => (match d as λ _ => Bool {
-            Inl(_) => last.defined(program_answers_over(buffers, earlier), program_defined_over(buffers, earlier), words, buffers := buffers),
+            Inl(_) => last.defined(program_last_answers(buffers, last, earlier), program_last_defines(buffers, last, earlier), words, buffers := buffers),
             Inr(_) => program_defined_over(buffers, earlier)(earlier.len(), words),
-        }).IsTrue() → last.defined(program_answers_over(buffers, earlier), program_defined_over(buffers, earlier), words, buffers := buffers).IsTrue() {
+        }).IsTrue() → last.defined(program_last_answers(buffers, last, earlier), program_last_defines(buffers, last, earlier), words, buffers := buffers).IsTrue() {
         Inl(_) => λ h => h,
         Inr(ne) => λ _ => false_elim(ne(refl)),
     }
 }
 
+// Whether no function has levels: no function calls itself.
+fn program_flat(functions: List<Function>) → Bool {
+    match functions { Nil => True, Cons(last, earlier) => last.levels.matches(0) && program_flat(earlier) }
+}
+
+// A function with no levels is answered by the functions below it alone.
+theorem Function::flat_answers(self function: Function, flat: function.levels = 0, P: Answers() → Type, below: Answers(), k: Nat, buffers: Buffers(),
+    holds: P(below)): P(function.answers_at(below, k, function.levels, buffers)) {
+    j(sym(flat), λ l _ => P(function.answers_at(below, k, l, buffers)), holds)
+}
+
+// No node of the program requires anything, and no function has levels (a
+// function that calls itself is defined only as deep as it has them).
 fn program_total(functions: List<Function>) → Bool {
-    match functions { Nil => True, Cons(last, earlier) => last.body.total_at(program_outs(earlier)) && program_total(earlier) }
+    match functions {
+        Nil => True,
+        Cons(last, earlier) => (last.levels.matches(0) && last.body.total_at(program_outs(earlier))) && program_total(earlier),
+    }
 }
 
 // A program none of whose nodes requires anything is defined everywhere.
@@ -1518,14 +1602,20 @@ theorem program_total_defined(functions: List<Function>, buffers: Buffers()): pr
     match functions {
         Nil => λ _ _ _ => trivial,
         Cons(last, earlier) => λ total f words => {
-            let parts = Bool::is_true_and(last.body.total_at(program_outs(earlier)), program_total(earlier), total);
+            let parts = Bool::is_true_and(last.levels.matches(0) && last.body.total_at(program_outs(earlier)), program_total(earlier), total);
+            let own = Bool::is_true_and(last.levels.matches(0), last.body.total_at(program_outs(earlier)), parts.left);
+            let flat: (0 = last.levels) = sym(last.levels.matches_eq(0, own.left));
             let ih = program_total_defined(earlier, buffers, parts.right);
+            let below = program_answers_over(buffers, earlier);
+            let defines = program_defined_over(buffers, earlier);
             match f.eq_dec(earlier.len()) as λ d => (match d as λ _ => Bool {
-                Inl(_) => last.defined(program_answers_over(buffers, earlier), program_defined_over(buffers, earlier), words, buffers := buffers),
+                Inl(_) => last.defined(program_last_answers(buffers, last, earlier), program_last_defines(buffers, last, earlier), words, buffers := buffers),
                 Inr(_) => program_defined_over(buffers, earlier)(f, words),
             }).IsTrue() {
-                Inl(_) => last.body.total_defined(buffers, program_answers_over(buffers, earlier), program_defined_over(buffers, earlier), ih,
-                    program_outs(earlier), program_answers_len(buffers, earlier), parts.left, Valuation::bind(Valuation::zero(), last.parameters, words)),
+                Inl(_) => j(flat, λ l _ => last.defined(last.answers_at(below, earlier.len(), l, buffers),
+                        last.defines_at(below, defines, earlier.len(), l, buffers), words, buffers := buffers).IsTrue(),
+                    last.body.total_defined(buffers, below, defines, ih,
+                        program_outs(earlier), program_answers_len(buffers, earlier), own.right, Valuation::bind(Valuation::zero(), last.parameters, words))),
                 Inr(_) => ih(f, words),
             }
         },
@@ -1551,7 +1641,7 @@ fn linked_outs(functions: List<Function>, outs: List<Nat>) → Nat → Nat {
 // The function's entry of the table is its own count, and its body is
 // total with its callees' counts read off the rest of the table.
 fn Function::total_with(self last: Function, earlier: List<Function>, outs: List<Nat>) → Bool {
-    outs.head_or(0).matches(last.also.len()) && last.body.total_at(linked_outs(earlier, outs.tail()))
+    outs.head_or(0).matches(last.also.len()) && (last.levels.matches(0) && last.body.total_at(linked_outs(earlier, outs.tail())))
 }
 
 fn program_total_at(functions: List<Function>, outs: List<Nat>) → Bool {
@@ -1586,7 +1676,8 @@ theorem program_total_at_outs(functions: List<Function>): (outs: List<Nat>) → 
         Nil => λ outs ok f => refl,
         Cons(last, earlier) => λ outs ok f => {
             let parts = Bool::is_true_and(last.total_with(earlier, outs), program_total_at(earlier, outs.tail()), ok);
-            let own = Bool::is_true_and(outs.head_or(0).matches(last.also.len()), last.body.total_at(linked_outs(earlier, outs.tail())), parts.left).left;
+            let own = Bool::is_true_and(outs.head_or(0).matches(last.also.len()),
+                last.levels.matches(0) && last.body.total_at(linked_outs(earlier, outs.tail())), parts.left).left;
             match f.eq_dec(earlier.len()) as λ d =>
                 (match d as λ _ => Nat { Inl(_) => outs.head_or(0), Inr(_) => linked_outs(earlier, outs.tail(), f) })
                 = (match d as λ _ => Nat { Inl(_) => last.also.len(), Inr(_) => program_outs(earlier, f) }) {
@@ -1603,10 +1694,13 @@ theorem program_total_at_total(functions: List<Function>): (outs: List<Nat>) →
         Nil => λ _ _ => trivial,
         Cons(last, earlier) => λ outs ok => {
             let parts = Bool::is_true_and(last.total_with(earlier, outs), program_total_at(earlier, outs.tail()), ok);
-            let own = Bool::is_true_and(outs.head_or(0).matches(last.also.len()), last.body.total_at(linked_outs(earlier, outs.tail())), parts.left).right;
-            Bool::is_true_and_intro(last.body.total_at(program_outs(earlier)), program_total(earlier),
-                j(last.body.total_at_same(linked_outs(earlier, outs.tail()), program_outs(earlier), program_total_at_outs(earlier, outs.tail(), parts.right)),
-                    λ b _ => Bool::IsTrue(b), own),
+            let own = Bool::is_true_and(last.levels.matches(0), last.body.total_at(linked_outs(earlier, outs.tail())),
+                Bool::is_true_and(outs.head_or(0).matches(last.also.len()),
+                    last.levels.matches(0) && last.body.total_at(linked_outs(earlier, outs.tail())), parts.left).right);
+            Bool::is_true_and_intro(last.levels.matches(0) && last.body.total_at(program_outs(earlier)), program_total(earlier),
+                Bool::is_true_and_intro(last.levels.matches(0), last.body.total_at(program_outs(earlier)), own.left,
+                    j(last.body.total_at_same(linked_outs(earlier, outs.tail()), program_outs(earlier), program_total_at_outs(earlier, outs.tail(), parts.right)),
+                        λ b _ => Bool::IsTrue(b), own.right)),
                 program_total_at_total(earlier, outs.tail(), parts.right))
         },
     }
@@ -1656,10 +1750,16 @@ fn program_arity(functions: List<Function>) → Nat → Option<Nat> {
     }
 }
 
+// How many words each function the last function may call takes: the
+// functions before it, and itself where it has levels.
+fn program_last_arity(last: Function, earlier: List<Function>) → Nat → Option<Nat> {
+    self_table(program_arity(earlier), earlier.len(), last.levels, Some(last.parameters.len()))
+}
+
 fn program_evaluable(functions: List<Function>) → Bool {
     match functions {
         Nil => True,
-        Cons(last, earlier) => last.evaluable(program_arity(earlier)) && program_evaluable(earlier),
+        Cons(last, earlier) => last.evaluable(program_last_arity(last, earlier)) && program_evaluable(earlier),
     }
 }
 
@@ -1827,13 +1927,13 @@ theorem Function::relabel_eval_words_over(self function: Function, buffers: Buff
 // function returns two words returns in RDX (`compiled_returns_both`,
 // function_ir_compile).
 fn program_eval_also(functions: List<Function>, arguments: List<BitVec(64)>) → List<BitVec(64)> {
-    match functions { Nil => Nil, Cons(last, earlier) => last.eval_also(program_answers(earlier), arguments) }
+    match functions { Nil => Nil, Cons(last, earlier) => last.eval_also(program_last_answers(Nil, last, earlier), arguments) }
 }
 
 // The same over a file: what the export of a structure of several words
 // calls its function over (docs/native/runtime-fn-setups-design.md §16.20).
 fn program_eval_also_over(buffers: Buffers(), functions: List<Function>, arguments: List<BitVec(64)>) → List<BitVec(64)> {
-    match functions { Nil => Nil, Cons(last, earlier) => last.eval_also(program_answers_over(buffers, earlier), arguments, buffers := buffers) }
+    match functions { Nil => Nil, Cons(last, earlier) => last.eval_also(program_last_answers(buffers, last, earlier), arguments, buffers := buffers) }
 }
 
 // Renamed calls fit wherever the renaming carries every arity over: what a
@@ -1894,7 +1994,7 @@ fn program_sourced(functions: List<Function>, sources: Answers()) → Type {
 fn program_calls_fit(functions: List<Function>) → Bool {
     match functions {
         Nil => True,
-        Cons(last, earlier) => last.calls_fit(program_arity(earlier)) && program_calls_fit(earlier),
+        Cons(last, earlier) => last.calls_fit(program_last_arity(last, earlier)) && program_calls_fit(earlier),
     }
 }
 
@@ -1902,32 +2002,41 @@ theorem program_evaluable_calls_fit(functions: List<Function>): program_evaluabl
     match functions {
         Nil => λ _ => trivial,
         Cons(last, earlier) => λ ok => {
-            let parts = Bool::is_true_and(last.evaluable(program_arity(earlier)), program_evaluable(earlier), ok);
-            Bool::is_true_and_intro(last.calls_fit(program_arity(earlier)), program_calls_fit(earlier),
-                last.evaluable_calls_fit(program_arity(earlier), parts.left), program_evaluable_calls_fit(earlier, parts.right))
+            let parts = Bool::is_true_and(last.evaluable(program_last_arity(last, earlier)), program_evaluable(earlier), ok);
+            Bool::is_true_and_intro(last.calls_fit(program_last_arity(last, earlier)), program_calls_fit(earlier),
+                last.evaluable_calls_fit(program_last_arity(last, earlier), parts.left), program_evaluable_calls_fit(earlier, parts.right))
         },
     }
 }
 
-// `program_eval_sources` from `program_calls_fit` alone: what a runtime fn's
-// `f::agrees` links its program with (issues/runtime-fn-caller-agreement-fuel.md).
-theorem program_fit_sources(functions: List<Function>, ok: program_calls_fit(functions).IsTrue(), sources: Answers(),
+// `program_eval_sources` from `program_calls_fit` alone, for a program no
+// function of which has levels (`program_flat`): one that calls itself
+// answers with its source only as deep as its levels reach
+// (`program_ranked_sources`).
+theorem program_fit_sources(functions: List<Function>, ok: program_calls_fit(functions).IsTrue(), flat: program_flat(functions).IsTrue(), sources: Answers(),
     sourced: program_sourced(functions, sources)):
     (f: Nat) → (words: List<BitVec(64)>) → arity_fits(program_arity(functions, f), words.len()).IsTrue() →
         program_answers(functions, f, words) = sources(f, words) {
     match functions {
         Nil => λ f words never => false_elim(never),
         Cons(last, earlier) => λ f words => {
-            let parts = Bool::is_true_and(last.calls_fit(program_arity(earlier)), program_calls_fit(earlier), ok);
-            let ih = program_fit_sources(earlier, parts.right, sources, sourced.right);
+            let parts = Bool::is_true_and(last.calls_fit(program_last_arity(last, earlier)), program_calls_fit(earlier), ok);
+            let flats = Bool::is_true_and(last.levels.matches(0), program_flat(earlier), flat);
+            let none: (last.levels = 0) = last.levels.matches_eq(0, flats.left);
+            let fit: last.calls_fit(program_arity(earlier)).IsTrue() =
+                j(none, λ l _ => last.calls_fit(self_table(program_arity(earlier), earlier.len(), l, Some(last.parameters.len()))).IsTrue(), parts.left);
+            let ih = program_fit_sources(earlier, parts.right, flats.right, sources, sourced.right);
             (match f.eq_dec(earlier.len()) as λ d =>
                 arity_fits(match d { Inl(_) => Some(last.parameters.len()), Inr(_) => program_arity(earlier, f) },
                     words.len()).IsTrue() →
-                (match d as λ _ => List<BitVec(64)> { Inl(_) => last.eval_words(program_answers(earlier), words), Inr(_) => program_answers(earlier, f, words) }) =
-                    sources(f, words) {
-                Inl(e) => λ fits => trans(last.eval_words_answers(sources, program_answers(earlier), program_arity(earlier), ih, parts.left, words),
-                    j(sym(e), λ g _ => last.eval_words(sources, words) = sources(g, words),
-                        sourced.left(words, sym(last.parameters.len().matches_eq(words.len(), fits))))),
+                (match d as λ _ => List<BitVec(64)> {
+                    Inl(_) => last.eval_words(program_last_answers(Nil, last, earlier), words),
+                    Inr(_) => program_answers(earlier, f, words),
+                }) = sources(f, words) {
+                Inl(e) => λ fits => j(sym(none), λ l _ => last.eval_words(last.answers_at(program_answers(earlier), earlier.len(), l, Nil), words) = sources(f, words),
+                    trans(last.eval_words_answers(sources, program_answers(earlier), program_arity(earlier), ih, fit, words),
+                        j(sym(e), λ g _ => last.eval_words(sources, words) = sources(g, words),
+                            sourced.left(words, sym(last.parameters.len().matches_eq(words.len(), fits)))))),
                 Inr(_) => λ fits => ih(f, words, fits),
             })
         },
@@ -1950,39 +2059,6 @@ fn linked_arity(functions: List<Function>, arities: List<Nat>) → Nat → Optio
     }
 }
 
-fn program_linked(functions: List<Function>, arities: List<Nat>, sources: Answers()) → Type {
-    match functions {
-        Nil => True,
-        Cons(last, earlier) =>
-            (last.calls_fit(linked_arity(earlier, arities.tail())).IsTrue()
-                ∧ ((words: List<BitVec(64)>) → arity_fits(arities.nth(0), words.len()).IsTrue() →
-                    last.eval_words(sources, words) = sources(earlier.len(), words)))
-            ∧ program_linked(earlier, arities.tail(), sources),
-    }
-}
-
-theorem program_linked_sources(functions: List<Function>): (arities: List<Nat>) → (sources: Answers()) →
-    program_linked(functions, arities, sources) →
-    (f: Nat) → (words: List<BitVec(64)>) → arity_fits(linked_arity(functions, arities, f), words.len()).IsTrue() →
-        program_answers(functions, f, words) = sources(f, words) {
-    match functions {
-        Nil => λ arities sources linked f words never => false_elim(never),
-        Cons(last, earlier) => λ arities sources linked f words => {
-            let ih = program_linked_sources(earlier, arities.tail(), sources, linked.right);
-            (match f.eq_dec(earlier.len()) as λ d =>
-                arity_fits(match d { Inl(_) => arities.nth(0), Inr(_) => linked_arity(earlier, arities.tail(), f) },
-                    words.len()).IsTrue() →
-                (match d as λ _ => List<BitVec(64)> { Inl(_) => last.eval_words(program_answers(earlier), words), Inr(_) => program_answers(earlier, f, words) }) =
-                    sources(f, words) {
-                Inl(e) => λ fits => trans(
-                    last.eval_words_answers(sources, program_answers(earlier), linked_arity(earlier, arities.tail()), ih, linked.left.left, words),
-                    j(sym(e), λ g _ => last.eval_words(sources, words) = sources(g, words), linked.left.right(words, fits))),
-                Inr(_) => λ fits => ih(f, words, fits),
-            })
-        },
-    }
-}
-
 // Calls `call` answers with `sources`' answers on every word list of a fitting
 // arity that `admits` admits: a function's contract, which passes only the
 // words its parameters admit (an enum's tags, every word of a word).
@@ -1998,36 +2074,53 @@ fn Answers::Agree(call, sources: Answers(), arity: Nat → Option<Nat>, admits: 
 // callees' sources on the words they admit: so a function is never asked
 // what it does with a word no caller passes. That a function's calls fit
 // is no file's matter and is stated once.
+// The table a linked program's last function's calls fit: the functions
+// before it, and itself where it has levels (`program_last_arity`).
+fn linked_last_arity(last: Function, earlier: List<Function>, arities: List<Nat>) → Nat → Option<Nat> {
+    self_table(linked_arity(earlier, arities.tail()), earlier.len(), last.levels, arities.nth(0))
+}
+
 fn program_linked_files(functions: List<Function>, arities: List<Nat>, admits: Nat → List<BitVec(64)> → Type, sources: Buffers() → Answers()) → Type {
     match functions {
         Nil => True,
         Cons(last, earlier) =>
-            (last.calls_fit(linked_arity(earlier, arities.tail())).IsTrue()
-                ∧ ((buffers: Buffers()) → (call: Answers()) → Answers::Agree(call, sources(buffers), linked_arity(earlier, arities.tail()), admits) →
+            (last.calls_fit(linked_last_arity(last, earlier, arities)).IsTrue()
+                ∧ ((buffers: Buffers()) → (call: Answers()) → Answers::Agree(call, sources(buffers), linked_last_arity(last, earlier, arities), admits) →
                     (words: List<BitVec(64)>) → arity_fits(arities.nth(0), words.len()).IsTrue() → admits(earlier.len(), words) →
                     last.eval_words(call, words, buffers := buffers) = sources(buffers)(earlier.len(), words)))
             ∧ program_linked_files(earlier, arities.tail(), admits, sources),
     }
 }
 
-// A linked program answers with its sources on the words they admit.
+// A linked program no function of which has levels answers with its
+// sources on the words they admit.
 theorem program_linked_files_sources(functions: List<Function>): (arities: List<Nat>) → (admits: Nat → List<BitVec(64)> → Type) →
-    (sources: Buffers() → Answers()) → program_linked_files(functions, arities, admits, sources) → (buffers: Buffers()) →
+    (sources: Buffers() → Answers()) → program_linked_files(functions, arities, admits, sources) → program_flat(functions).IsTrue() → (buffers: Buffers()) →
     Answers::Agree(program_answers_over(buffers, functions), sources(buffers), linked_arity(functions, arities), admits) {
     match functions {
-        Nil => λ arities admits sources linked buffers f words never => false_elim(never),
-        Cons(last, earlier) => λ arities admits sources linked buffers f words => {
-            let ih = program_linked_files_sources(earlier, arities.tail(), admits, sources, linked.right, buffers);
+        Nil => λ arities admits sources linked flat buffers f words never => false_elim(never),
+        Cons(last, earlier) => λ arities admits sources linked flat buffers f words => {
+            let flats = Bool::is_true_and(last.levels.matches(0), program_flat(earlier), flat);
+            let none: (last.levels = 0) = last.levels.matches_eq(0, flats.left);
+            let ih = program_linked_files_sources(earlier, arities.tail(), admits, sources, linked.right, flats.right, buffers);
+            let below = program_answers_over(buffers, earlier);
+            let own = j(none, λ l _ => (call: Answers()) →
+                    Answers::Agree(call, sources(buffers), self_table(linked_arity(earlier, arities.tail()), earlier.len(), l, arities.nth(0)), admits) →
+                    (ws: List<BitVec(64)>) → arity_fits(arities.nth(0), ws.len()).IsTrue() → admits(earlier.len(), ws) →
+                    last.eval_words(call, ws, buffers := buffers) = sources(buffers)(earlier.len(), ws),
+                linked.left.right(buffers));
             (match f.eq_dec(earlier.len()) as λ d =>
                 arity_fits(match d { Inl(_) => arities.nth(0), Inr(_) => linked_arity(earlier, arities.tail(), f) },
                     words.len()).IsTrue() → admits(f, words) →
                 (match d as λ _ => List<BitVec(64)> {
-                    Inl(_) => last.eval_words(program_answers_over(buffers, earlier), words, buffers := buffers),
+                    Inl(_) => last.eval_words(program_last_answers(buffers, last, earlier), words, buffers := buffers),
                     Inr(_) => program_answers_over(buffers, earlier, f, words),
                 }) = sources(buffers)(f, words) {
                 Inl(e) => λ fits => j(sym(e), λ g _ => admits(g, words) →
-                        last.eval_words(program_answers_over(buffers, earlier), words, buffers := buffers) = sources(buffers)(g, words),
-                    linked.left.right(buffers, program_answers_over(buffers, earlier), ih, words, fits)),
+                        last.eval_words(program_last_answers(buffers, last, earlier), words, buffers := buffers) = sources(buffers)(g, words),
+                    λ admitted => j(sym(none), λ l _ => last.eval_words(last.answers_at(below, earlier.len(), l, buffers), words, buffers := buffers)
+                            = sources(buffers)(earlier.len(), words),
+                        own(below, ih, words, fits, admitted))),
                 Inr(_) => λ fits => ih(f, words, fits),
             })
         },
@@ -2037,18 +2130,20 @@ theorem program_linked_files_sources(functions: List<Function>): (arities: List<
 // Its first word, the one a caller of one word reads: what a `runtime fn`'s
 // `f::agrees` cites.
 theorem program_eval_linked_sources(functions: List<Function>, arities: List<Nat>, admits: Nat → List<BitVec(64)> → Type,
-    sources: Buffers() → Answers(), linked: program_linked_files(functions, arities, admits, sources), buffers: Buffers(), f: Nat,
+    sources: Buffers() → Answers(), linked: program_linked_files(functions, arities, admits, sources), flat: program_flat(functions).IsTrue(),
+    buffers: Buffers(), f: Nat,
     words: List<BitVec(64)>, fits: arity_fits(linked_arity(functions, arities, f), words.len()).IsTrue(), admitted: admits(f, words)):
     program_eval_over(buffers, functions)(f, words) = first_word(sources(buffers)(f, words)) {
-    cong_fn(λ (ws: List<BitVec(64)>) => first_word(ws), program_linked_files_sources(functions, arities, admits, sources, linked, buffers, f, words, fits, admitted))
+    cong_fn(λ (ws: List<BitVec(64)>) => first_word(ws),
+        program_linked_files_sources(functions, arities, admits, sources, linked, flat, buffers, f, words, fits, admitted))
 }
 
 // For a program checked whole (`program_evaluable`).
-theorem program_eval_sources(functions: List<Function>, ok: program_evaluable(functions).IsTrue(), sources: Answers(),
-    sourced: program_sourced(functions, sources)):
+theorem program_eval_sources(functions: List<Function>, ok: program_evaluable(functions).IsTrue(), flat: program_flat(functions).IsTrue(),
+    sources: Answers(), sourced: program_sourced(functions, sources)):
     (f: Nat) → (words: List<BitVec(64)>) → arity_fits(program_arity(functions, f), words.len()).IsTrue() →
         program_answers(functions, f, words) = sources(f, words) {
-    program_fit_sources(functions, program_evaluable_calls_fit(functions, ok), sources, sourced)
+    program_fit_sources(functions, program_evaluable_calls_fit(functions, ok), flat, sources, sourced)
 }
 
 // An evaluable function, its calls answered by results its callees may
@@ -2075,6 +2170,75 @@ theorem Function::eval_computes(self function: Function, callees: Callees(), cal
         λ w id _ => refl, defined), ⟨refl, refl⟩⟩⟩⟩
 }
 
+// A function's levels read as its callees: where the tables below answer
+// each defined call with a result its callee may return, and the function
+// at a depth answers so, so do the tables with the function's own number.
+theorem Function::tied_reads_at(self last: Function, may: Callees(), below: Answers(), defines: Defines(), arity: Nat → Option<Nat>, k: Nat,
+    buffers: Buffers(),
+    ih: (f: Nat) → (words: List<BitVec(64)>) → arity_fits(arity(f), words.len()).IsTrue() → defines(f, words).IsTrue() →
+        may(f, words, first_word(below(f, words)), below(f, words).tail()),
+    depth: Nat,
+    own: (words: List<BitVec(64)>) → arity_fits(Some(last.parameters.len()), words.len()).IsTrue() →
+        last.level_defined(below, defines, k, depth, buffers)(words).IsTrue() →
+        last.level_computes(may, k, depth, buffers)(words, first_word(last.level_words(below, k, depth, buffers)(words)),
+            last.level_words(below, k, depth, buffers)(words).tail())):
+    (f: Nat) → (words: List<BitVec(64)>) → arity_fits(tie(arity, k, Some(last.parameters.len()))(f), words.len()).IsTrue() →
+    last.tied_defines(below, defines, k, depth, buffers)(f, words).IsTrue() →
+    last.tied_callees(may, k, depth, buffers)(f, words, first_word(last.tied_answers(below, k, depth, buffers)(f, words)),
+        last.tied_answers(below, k, depth, buffers)(f, words).tail()) {
+    λ f words => match f.eq_dec(k) as λ d =>
+        arity_fits((match d as λ _ => Option<Nat> { Inl(_) => Some(last.parameters.len()), Inr(_) => arity(f) }), words.len()).IsTrue() →
+        (match d as λ _ => Bool { Inl(_) => last.level_defined(below, defines, k, depth, buffers)(words), Inr(_) => defines(f, words) }).IsTrue() →
+        (match d as λ _ => Type {
+            Inl(_) => last.level_computes(may, k, depth, buffers)(words,
+                first_word(match d as λ _ => List<BitVec(64)> { Inl(_) => last.level_words(below, k, depth, buffers)(words), Inr(_) => below(f, words) }),
+                (match d as λ _ => List<BitVec(64)> { Inl(_) => last.level_words(below, k, depth, buffers)(words), Inr(_) => below(f, words) }).tail()),
+            Inr(_) => may(f, words,
+                first_word(match d as λ _ => List<BitVec(64)> { Inl(_) => last.level_words(below, k, depth, buffers)(words), Inr(_) => below(f, words) }),
+                (match d as λ _ => List<BitVec(64)> { Inl(_) => last.level_words(below, k, depth, buffers)(words), Inr(_) => below(f, words) }).tail()),
+        }) {
+        Inl(_) => own(words),
+        Inr(_) => ih(f, words),
+    }
+}
+
+// The function at each depth answers a defined call with a result it may
+// return there.
+theorem Function::level_reads(self last: Function, may: Callees(), below: Answers(), defines: Defines(), arity: Nat → Option<Nat>, k: Nat,
+    buffers: Buffers(),
+    ih: (f: Nat) → (words: List<BitVec(64)>) → arity_fits(arity(f), words.len()).IsTrue() → defines(f, words).IsTrue() →
+        may(f, words, first_word(below(f, words)), below(f, words).tail()),
+    ok: last.evaluable(tie(arity, k, Some(last.parameters.len()))).IsTrue(), depth: Nat):
+    (words: List<BitVec(64)>) → arity_fits(Some(last.parameters.len()), words.len()).IsTrue() →
+    last.level_defined(below, defines, k, depth, buffers)(words).IsTrue() →
+    last.level_computes(may, k, depth, buffers)(words, first_word(last.level_words(below, k, depth, buffers)(words)),
+        last.level_words(below, k, depth, buffers)(words).tail()) {
+    match depth {
+        Zero => λ words fits never => false_elim(never),
+        Succ(i) => λ words fits defined => last.eval_computes(last.tied_callees(may, k, i, buffers), last.tied_answers(below, k, i, buffers),
+            tie(arity, k, Some(last.parameters.len())), buffers, last.tied_defines(below, defines, k, i, buffers),
+            last.tied_reads_at(may, below, defines, arity, k, buffers, ih, i, last.level_reads(may, below, defines, arity, k, buffers, ih, ok, i)),
+            ok, words, last.parameters.len().matches_eq(words.len(), fits), defined),
+    }
+}
+
+// The same at its levels, none or some.
+theorem Function::levels_reads(self last: Function, may: Callees(), below: Answers(), defines: Defines(), arity: Nat → Option<Nat>, k: Nat,
+    buffers: Buffers(),
+    ih: (f: Nat) → (words: List<BitVec(64)>) → arity_fits(arity(f), words.len()).IsTrue() → defines(f, words).IsTrue() →
+        may(f, words, first_word(below(f, words)), below(f, words).tail())):
+    (levels: Nat) → last.evaluable(self_table(arity, k, levels, Some(last.parameters.len()))).IsTrue() →
+    (f: Nat) → (words: List<BitVec(64)>) → arity_fits(self_table(arity, k, levels, Some(last.parameters.len()))(f), words.len()).IsTrue() →
+    last.defines_at(below, defines, k, levels, buffers)(f, words).IsTrue() →
+    last.callees_at(may, k, levels, buffers)(f, words, first_word(last.answers_at(below, k, levels, buffers)(f, words)),
+        last.answers_at(below, k, levels, buffers)(f, words).tail()) {
+    λ levels => match levels {
+        Zero => λ _ => ih,
+        Succ(depth) => λ ok => last.tied_reads_at(may, below, defines, arity, k, buffers, ih, depth,
+            last.level_reads(may, below, defines, arity, k, buffers, ih, ok, depth)),
+    }
+}
+
 // The theorem for programs: what `program_eval_over` returns over `buffers`
 // for a call of the right arity is a result the function may return over
 // them.
@@ -2086,27 +2250,31 @@ theorem program_eval_reads(functions: List<Function>, buffers: Buffers(), ok: pr
     match functions {
         Nil => λ f words never _ => false_elim(never),
         Cons(last, earlier) => λ f words => {
-            let parts = Bool::is_true_and(last.evaluable(program_arity(earlier)), program_evaluable(earlier), ok);
+            let parts = Bool::is_true_and(last.evaluable(program_last_arity(last, earlier)), program_evaluable(earlier), ok);
             let ih = program_eval_reads(earlier, buffers, parts.right);
             let below = program_answers_over(buffers, earlier);
             let may = program_callees_over(buffers, earlier);
             let defines = program_defined_over(buffers, earlier);
+            let tops = program_last_answers(buffers, last, earlier);
+            let mays = last.callees_at(may, earlier.len(), last.levels, buffers);
             match f.eq_dec(earlier.len()) as λ d =>
                 arity_fits(match d { Inl(_) => Some(last.parameters.len()), Inr(_) => program_arity(earlier, f) },
                     words.len()).IsTrue() →
                 (match d as λ _ => Bool {
-                    Inl(_) => last.defined(below, defines, words, buffers := buffers),
+                    Inl(_) => last.defined(tops, program_last_defines(buffers, last, earlier), words, buffers := buffers),
                     Inr(_) => defines(f, words),
                 }).IsTrue() →
                 (match d as λ _ => Type {
-                    Inl(_) => last.ComputesBoth(may, words,
-                        first_word(match d { Inl(_) => last.eval_words(below, words, buffers := buffers), Inr(_) => below(f, words) }),
-                        (match d { Inl(_) => last.eval_words(below, words, buffers := buffers), Inr(_) => below(f, words) }).tail(), buffers := buffers),
+                    Inl(_) => last.ComputesBoth(mays, words,
+                        first_word(match d { Inl(_) => last.eval_words(tops, words, buffers := buffers), Inr(_) => below(f, words) }),
+                        (match d { Inl(_) => last.eval_words(tops, words, buffers := buffers), Inr(_) => below(f, words) }).tail(), buffers := buffers),
                     Inr(_) => may(f, words,
-                        first_word(match d { Inl(_) => last.eval_words(below, words, buffers := buffers), Inr(_) => below(f, words) }),
-                        (match d { Inl(_) => last.eval_words(below, words, buffers := buffers), Inr(_) => below(f, words) }).tail()),
+                        first_word(match d { Inl(_) => last.eval_words(tops, words, buffers := buffers), Inr(_) => below(f, words) }),
+                        (match d { Inl(_) => last.eval_words(tops, words, buffers := buffers), Inr(_) => below(f, words) }).tail()),
                 }) {
-                Inl(_) => λ fits defined => last.eval_computes(may, below, program_arity(earlier), buffers, defines, ih,
+                Inl(_) => λ fits defined => last.eval_computes(mays, tops, program_last_arity(last, earlier), buffers,
+                    program_last_defines(buffers, last, earlier),
+                    last.levels_reads(may, below, defines, program_arity(earlier), earlier.len(), buffers, ih, last.levels, parts.left),
                     parts.left, words, last.parameters.len().matches_eq(words.len(), fits), defined),
                 Inr(_) => λ fits defined => ih(f, words, fits, defined),
             }
@@ -2789,7 +2957,7 @@ theorem Function::evaluable_arity(self function: Function, arity, other: Nat →
 
 // A function's scan at the table, and its own entry of it.
 fn Function::scan_at(self last: Function, earlier: List<Function>, arities: List<Nat>) → Bool {
-    last.scan(linked_arity(earlier, arities.tail())) && arity_fits(arities.nth(0), last.parameters.len())
+    last.scan(linked_last_arity(last, earlier, arities)) && arity_fits(arities.nth(0), last.parameters.len())
 }
 
 fn program_scan_at(functions: List<Function>, arities: List<Nat>) → Bool {
@@ -2806,7 +2974,7 @@ theorem program_scan_at_arity(functions: List<Function>): (arities: List<Nat>) �
         Nil => λ arities ok k => refl,
         Cons(last, earlier) => λ arities ok k => {
             let parts = Bool::is_true_and(last.scan_at(earlier, arities), program_scan_at(earlier, arities.tail()), ok);
-            let own = Bool::is_true_and(last.scan(linked_arity(earlier, arities.tail())), arity_fits(arities.nth(0), last.parameters.len()),
+            let own = Bool::is_true_and(last.scan(linked_last_arity(last, earlier, arities)), arity_fits(arities.nth(0), last.parameters.len()),
                 parts.left).right;
             let entry: (arities.nth(0) = Some(last.parameters.len())) =
                 (match arities.nth(0) as λ a => arity_fits(a, last.parameters.len()).IsTrue() → a = Some(last.parameters.len()) {
@@ -2823,18 +2991,30 @@ theorem program_scan_at_arity(functions: List<Function>): (arities: List<Nat>) �
     }
 }
 
+// The table the last function was scanned at is the program's, with the
+// function's own entry or without.
+theorem scan_last_arity(last: Function, earlier: List<Function>, arities: List<Nat>, ok: program_scan_at(Cons(last, earlier), arities).IsTrue()):
+    (levels: Nat) → (g: Nat) → self_table(linked_arity(earlier, arities.tail()), earlier.len(), levels, arities.nth(0))(g) =
+        self_table(program_arity(earlier), earlier.len(), levels, Some(last.parameters.len()))(g) {
+    λ levels => match levels {
+        Zero => program_scan_at_arity(earlier, arities.tail(),
+            Bool::is_true_and(last.scan_at(earlier, arities), program_scan_at(earlier, arities.tail()), ok).right),
+        Succ(_) => program_scan_at_arity(Cons(last, earlier), arities, ok),
+    }
+}
+
 theorem program_scan_at_evaluable(functions: List<Function>): (arities: List<Nat>) → program_scan_at(functions, arities).IsTrue() →
     program_evaluable(functions).IsTrue() {
     match functions {
         Nil => λ _ _ => trivial,
         Cons(last, earlier) => λ arities ok => {
             let parts = Bool::is_true_and(last.scan_at(earlier, arities), program_scan_at(earlier, arities.tail()), ok);
-            let scanned = Bool::is_true_and(last.scan(linked_arity(earlier, arities.tail())), arity_fits(arities.nth(0), last.parameters.len()),
+            let scanned = Bool::is_true_and(last.scan(linked_last_arity(last, earlier, arities)), arity_fits(arities.nth(0), last.parameters.len()),
                 parts.left).left;
-            Bool::is_true_and_intro(last.evaluable(program_arity(earlier)), program_evaluable(earlier),
-                last.evaluable_arity(linked_arity(earlier, arities.tail()), program_arity(earlier),
-                    program_scan_at_arity(earlier, arities.tail(), parts.right),
-                    last.scan_evaluable(linked_arity(earlier, arities.tail()), scanned)),
+            Bool::is_true_and_intro(last.evaluable(program_last_arity(last, earlier)), program_evaluable(earlier),
+                last.evaluable_arity(linked_last_arity(last, earlier, arities), program_last_arity(last, earlier),
+                    scan_last_arity(last, earlier, arities, ok, last.levels),
+                    last.scan_evaluable(linked_last_arity(last, earlier, arities), scanned)),
                 program_scan_at_evaluable(earlier, arities.tail(), parts.right))
         },
     }

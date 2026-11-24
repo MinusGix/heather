@@ -65,6 +65,7 @@ import function_ir;
 import function_ir_operation;
 import function_ir_eval;
 import rt_loop;
+import function_ir_levels;
 import rt_ptm;
 import rt_file;
 import rt_file_reflect;
@@ -590,6 +591,48 @@ fn Setup::compile<F>(s: Setup, rt: Fun, w: World, callees: (b: Buffers()) → Si
     ok: s.checked(rt, w) = True, plain: rt.shape() = Plain) → Compile<F>(f)
 {
     Compile(rt, w, callees, typed, s.code(rt, w), Setup::plain_agrees(f, s, rt, w, callees, typed, pinned, ok, plain), Setup::checked_fits(s, rt, w, ok))
+}
+
+// The pin of a function that calls itself and is its own callee
+// (`Fun::own_callee`): it and its reflection's meaning alike at every
+// argument, over every file. The meaning answers the call of itself with
+// the function, so this is the function's unfolding equation, which a
+// function that `decreases` has at each argument and not as a function.
+fn Setup::Pinned<F>(f: F, rt: Fun, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs),
+    typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(w.at(callees, b).tys, rt.lent, rt.params, rt.result))) → Type {
+    (b: Buffers()) → Ty::Alike(w.at(callees, b).tys, rt.params, rt.result,
+        Ty::lent_at(w.at(callees, b).tys, rt.lent, rt.params, rt.result, typed(b), f, b), rt.meaning(w.at(callees, b)))
+}
+
+// `Setup::plain_agrees` from that pin.
+theorem Setup::recursive_agrees<F>(f: F, s: Setup, rt: Fun, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs),
+    typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(w.at(callees, b).tys, rt.lent, rt.params, rt.result)),
+    pinned: Setup::Pinned(f, rt, w, callees, typed),
+    ok: s.checked(rt, w) = True, plain: rt.shape() = Plain):
+    (b: Buffers()) → (call: Answers()) → Tm::CallsAgree(w.at(callees, b), call) →
+    Ty::AnswersWords(w.at(callees, b).tys, rt.params, rt.result, Ty::lent_at(w.at(callees, b).tys, rt.lent, rt.params, rt.result, typed(b), f, b),
+        λ xs => s.code(rt, w).eval_words(call, xs, buffers := b)) {
+    λ b call agree =>
+        Ty::answers_words_alike(w.at(callees, b).tys, rt.params, rt.result,
+            Ty::lent_at(w.at(callees, b).tys, rt.lent, rt.params, rt.result, typed(b), f, b), rt.meaning(w.at(callees, b)),
+            λ xs => s.code(rt, w).eval_words(call, xs, buffers := b), pinned(b),
+            j(s.static(rt, w, callees(b), b), λ r _ => Ty::AnswersWords(w.at(callees, b).tys, rt.params, rt.result, rt.meaning(w.at(callees, b)),
+                    λ xs => Setup::code_of(r).eval_words(call, xs, buffers := b)),
+                Setup::code_answers(s, rt, w.at(callees, b),
+                    Setup::lowered_over(s, rt, w, callees(b), b, Setup::checked_lowered(s, rt, w, ok)), plain, call, agree)))
+}
+
+// The instance of a function that calls itself, from its reflection as its
+// own callee. Its agreement is `Setup::compile`'s, at any calls that answer
+// its table: one entry of which is the function, so a program that links
+// its code gives it levels (`Compile::linked_self`) and answers as it only
+// where defined (`program_linked_where`).
+fn Setup::compile_recursive<F>(s: Setup, rt: Fun, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), f: F,
+    typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(w.at(callees, b).tys, rt.lent, rt.params, rt.result)),
+    pinned: Setup::Pinned(f, rt, w, callees, typed),
+    ok: s.checked(rt, w) = True, plain: rt.shape() = Plain) → Compile<F>(f)
+{
+    Compile(rt, w, callees, typed, s.code(rt, w), Setup::recursive_agrees(f, s, rt, w, callees, typed, pinned, ok, plain), Setup::checked_fits(s, rt, w, ok))
 }
 
 // A fuel recursion's instance (design §16.11): no pin (the function at an
@@ -1296,6 +1339,35 @@ theorem Compile::part<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<List<B
     }⟩
 }
 
+// The code of an instance that is its own callee, in a program: at one
+// level, which marks it (`program_deepened` gives it more).
+fn Compile::linked_self<F>(f: F, c: Compile<F>(f), links: List<Nat>) → Function { Compile::linked(f, c, links).leveled(1) }
+
+// The arities such a function `k` of a program is linked against: those of
+// the functions before it, and its own. Its own is read as the program's
+// statement reads it, the first of the arities from it on: read as
+// `arities.nth(k - 1)`, the two met as `nth` of two lists one entry apart,
+// which the kernel compares entry against the next entry before it
+// unfolds either, one function's arity against another's
+// (issues/runtime-link-compares-functions.md).
+fn link_arity_self(functions: List<Function>, arities: List<Nat>, k: Nat) → Nat → Option<Nat> {
+    tie(linked_arity(functions.drop(k), arities.drop(k)), functions.drop(k).len(), arities.drop(k - 1).nth(0))
+}
+
+// `Compile::part` of it: the same check, against a table its own entry is
+// in.
+theorem Compile::part_self<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<List<BitVec(64)> → List<BitVec(64)>>, adm: List<List<BitVec(64)> → Bool>,
+    links: List<Nat>, arity: Nat → Option<Nat>,
+    linked: (b: Buffers()) → links.map(λ (n: Nat) => link_source(srcs(b), n)) = Compile::table(f, c, b),
+    admitted: links.map(λ (n: Nat) => link_admit(adm, n)) = Compile::admit_table(f, c),
+    named: Sig::links_fit(c.world.tys, c.world.sigs.tail(), links.tail(), arity).IsTrue()):
+    Compile::linked_self(f, c, links).calls_fit(arity).IsTrue()
+    ∧ ((b: Buffers()) → (call: Answers()) → Answers::Agree(call, link_sources(srcs(b)), arity, link_admits(adm)) →
+        (words: List<BitVec(64)>) → arity_fits(Some(Compile::arity(f, c)), words.len()).IsTrue() → Compile::admits(f, c, words).IsTrue() →
+        Compile::linked_self(f, c, links).eval_words(call, words, buffers := b) = Compile::uncurried(f, c, b, words)) {
+    Compile::part(f, c, srcs, adm, links, arity, linked, admitted, named)
+}
+
 // A program whose last function is an instance's code: the program's
 // words past the first (`program_eval_also`) are the function's, at no
 // file, on the words it admits. `linked`, `admitted` and `named` are what
@@ -1309,12 +1381,13 @@ theorem Compile::root_also<F>(f: F, c: Compile<F>(f), srcs: Buffers() → List<L
     earlier: List<Function>, arities: List<Nat>,
     sourced: program_linked_files(Cons(Compile::linked(f, c, links), earlier), arities, link_admits(adm), link_sources_at(srcs)),
     named: Sig::links_fit(c.world.tys, c.world.sigs.tail(), links.tail(), linked_arity(earlier, arities.tail())).IsTrue(),
+    flat: program_flat(earlier).IsTrue(),
     words: List<BitVec(64)>, n: arity_fits(Some(Compile::arity(f, c)), words.len()).IsTrue(), admits: Compile::admits(f, c, words).IsTrue()):
     program_eval_also(Cons(Compile::linked(f, c, links), earlier), words) =
         Ty::rest_words(c.world.at(c.callees, Nil).tys, c.reflected.result, Ty::apply_words(c.world.at(c.callees, Nil).tys, c.reflected.params, c.reflected.result,
             Ty::lent_at(c.world.at(c.callees, Nil).tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed(Nil), f, Nil), words)) {
     let call = program_answers_over(Nil, earlier);
-    let agree = program_linked_files_sources(earlier, arities.tail(), link_admits(adm), link_sources_at(srcs), sourced.right, Nil);
+    let agree = program_linked_files_sources(earlier, arities.tail(), link_admits(adm), link_sources_at(srcs), sourced.right, flat, Nil);
     cong_fn(λ (xs: List<BitVec(64)>) => xs.tail(),
         Compile::part(f, c, srcs, adm, links, linked_arity(earlier, arities.tail()), linked, admitted, named).right(Nil, call, agree, words, n, admits))
 }
@@ -1328,13 +1401,14 @@ theorem Compile::root_also_at<F>(f: F, c: Compile<F>(f), srcs: Buffers() → Lis
     admitted: links.map(λ (n: Nat) => link_admit(adm, n)) = Compile::admit_table(f, c),
     earlier: List<Function>, arities: List<Nat>,
     sourced: program_linked_files(Cons(Compile::linked(f, c, links), earlier), arities, link_admits(adm), link_sources_at(srcs)),
-    named: Sig::links_fit(c.world.tys, c.world.sigs.tail(), links.tail(), linked_arity(earlier, arities.tail())).IsTrue(), b: Buffers(),
+    named: Sig::links_fit(c.world.tys, c.world.sigs.tail(), links.tail(), linked_arity(earlier, arities.tail())).IsTrue(),
+    flat: program_flat(earlier).IsTrue(), b: Buffers(),
     words: List<BitVec(64)>, n: arity_fits(Some(Compile::arity(f, c)), words.len()).IsTrue(), admits: Compile::admits(f, c, words).IsTrue()):
     program_eval_also_over(b, Cons(Compile::linked(f, c, links), earlier), words) =
         Ty::rest_words(c.world.at(c.callees, b).tys, c.reflected.result, Ty::apply_words(c.world.at(c.callees, b).tys, c.reflected.params, c.reflected.result,
             Ty::lent_at(c.world.at(c.callees, b).tys, c.reflected.lent, c.reflected.params, c.reflected.result, c.typed(b), f, b), words)) {
     let call = program_answers_over(b, earlier);
-    let agree = program_linked_files_sources(earlier, arities.tail(), link_admits(adm), link_sources_at(srcs), sourced.right, b);
+    let agree = program_linked_files_sources(earlier, arities.tail(), link_admits(adm), link_sources_at(srcs), sourced.right, flat, b);
     cong_fn(λ (xs: List<BitVec(64)>) => xs.tail(),
         Compile::part(f, c, srcs, adm, links, linked_arity(earlier, arities.tail()), linked, admitted, named).right(b, call, agree, words, n, admits))
 }
@@ -1723,9 +1797,11 @@ fn runtime_link(fuel: Nat, k: Known, stack: List<LinkFrame>, l: Linking) → Tac
                 Nil => runtime_link(more, k, rest, Linking(l.order ++ [fr.g], l.names ++ [fr.name], l.tables ++ [fr.table], l.reads ++ [fr.reads])),
                 Cons(c, cs) => {
                     let later = Cons(LinkFrame(fr.g, fr.name, fr.table, cs, fr.reads), rest);
-                    match Known::index(l.order, c, 0) {
-                        Some(_) => runtime_link(more, k, later, l),
-                        None => runtime_name_of(c).bind(λ n => runtime_frame(c, n).bind(λ frame =>
+                    // A function that is its own callee (`Fun::own_callee`)
+                    // is placed once, after the others it calls.
+                    match c.same(fr.g) || Known::index(l.order, c, 0).is_some() {
+                        True => runtime_link(more, k, later, l),
+                        False => runtime_name_of(c).bind(λ n => runtime_frame(c, n).bind(λ frame =>
                             runtime_link(more, k, Cons(frame, later), l))),
                     }
                 },
@@ -1770,7 +1846,24 @@ fn runtime_held(e: Expr, what: String) → Tac<Expr> {
 // (`Compile::admits`), as `srcs` lists the functions.
 // `root`: the last function's arguments to `Compile::part` up to its
 // arity, what `Compile::root_also` takes before its agreement.
-record Linked { program: Expr, srcs: Expr, arities: Expr, sourced: Expr, statement: Expr, root: List<Expr>, adm: Expr }
+// `leveled`: whether a function of the program is its own callee, linked at
+// one level (`Compile::linked_self`): such a program answers as its
+// sources only where defined (`program_eval_deepened_where`).
+record Linked { program: Expr, srcs: Expr, arities: Expr, sourced: Expr, statement: Expr, root: List<Expr>, adm: Expr, leveled: Bool := False }
+
+// Whether a table is that of a function that is its own callee: it lists
+// the function twice (`Fun::own_callee`). A function that writes a span is
+// not in its own table.
+fn Linking::own_callee(table: List<Nat>, reads: Option<Nat>) → Bool {
+    match reads {
+        Some(_) => False,
+        None => match table { Cons(g, rest) => match rest { Cons(h, _) => g.same(h), Nil => False }, Nil => False },
+    }
+}
+
+fn Linking::own_callees(self l: Linking) → List<Bool> {
+    List::range(l.tables.len()).map(λ i => Linking::own_callee(l.tables.nth(i).unwrap_or([]), l.reads.nth(i).unwrap_or(None)))
+}
 
 // Each function's type, read once: what `Compile`'s members take first.
 // Spelled, not left to inference (`Blank`), in everything the link applies:
@@ -1804,6 +1897,11 @@ fn runtime_linked(q: RtQ, ts: RtTypes, l: Linking, insts: List<Pair<Expr, Expr>>
     let part <- runtime_global(name_of(Compile::part));
     let arity_of <- runtime_global(name_of(Compile::arity));
     let arity_at <- runtime_global(name_of(link_arity));
+    let linked_self <- runtime_global(name_of(Compile::linked_self));
+    let part_self <- runtime_global(name_of(Compile::part_self));
+    let arity_self <- runtime_global(name_of(link_arity_self));
+    let owns = l.own_callees();
+    let own: Nat → Bool = λ i => owns.nth(i).unwrap_or(False);
     let both <- runtime_global(name_of(link_both));
     let every <- runtime_global(name_of(link_every_table));
     let files_nil <- runtime_global(name_of(link_files_nil));
@@ -1826,12 +1924,15 @@ fn runtime_linked(q: RtQ, ts: RtTypes, l: Linking, insts: List<Pair<Expr, Expr>>
     let srcs <- runtime_held(indices.foldr(λ i acc => ap(files_cons, [ap(uncurried, of(i)), acc]), files_nil), "the program's sources");
     let adm <- runtime_held(indices.foldr(λ i acc => ap(admits_cons, [ap(admits, of(i)), acc]), admits_nil), "the program's admitted words");
     let last_first = indices.rev();
-    let program <- runtime_held(RtQ::seq(fn_ctors, last_first.map(λ i => ap(linked, of(i) ++ [runtime_at(links, i)]))), "the program");
+    let program <- runtime_held(RtQ::seq(fn_ctors, last_first.map(λ i => ap(match own(i) { True => linked_self, False => linked }, of(i) ++ [runtime_at(links, i)]))),
+        "the program");
     let arities <- runtime_held(RtQ::seq(q.nats, last_first.map(λ i => ap(arity_of, of(i)))), "the program's arities");
     // Function `i` is `insts.len() - 1 - i` from the last, and is linked
     // against the functions before it.
-    let parts = last_first.map(λ i => ap(part, of(i) ++ [srcs, adm, runtime_at(links, i),
-        ap(arity_at, [program, arities, NatLit(insts.len() - i)]), ap(every, [ap(table, of(i))]), ap(same_admits, [ap(admit_table, of(i))]), Hd(trivial_h)]));
+    // One that is its own callee is linked against itself too.
+    let parts = last_first.map(λ i => ap(match own(i) { True => part_self, False => part }, of(i) ++ [srcs, adm, runtime_at(links, i),
+        ap(match own(i) { True => arity_self, False => arity_at }, [program, arities, NatLit(insts.len() - i)]),
+        ap(every, [ap(table, of(i))]), ap(same_admits, [ap(admit_table, of(i))]), Hd(trivial_h)]));
     let proof <- runtime_conjoined(both, parts, Hd(trivial_h));
     // The proof is cited by two members of the group (`f::sourced`, and
     // `f::agrees` at the last function). Held at its statement, each
@@ -1842,7 +1943,7 @@ fn runtime_linked(q: RtQ, ts: RtTypes, l: Linking, insts: List<Pair<Expr, Expr>>
     match solved {
         True => pure(Linked(program, srcs, arities, Hd(held), Hd(statement),
             of(insts.len() - 1) ++ [srcs, adm, runtime_at(links, insts.len() - 1), ap(every, [ap(table, of(insts.len() - 1))]),
-                ap(same_admits, [ap(admit_table, of(insts.len() - 1))])], adm)),
+                ap(same_admits, [ap(admit_table, of(insts.len() - 1))])], adm, leveled := owns.any_bit(λ o => o))),
         False => runtime_fail("the program's linking does not prove its statement"),
     }
 }
@@ -2242,6 +2343,67 @@ fn runtime_measured_instance(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, sh
     };
     pure(ap(compile, [Blank, setup, Ty::quotes(ks, q), Ty::quote(moved.head_or(Bit), q), Ty::quotes(moved.drop(1), q), res_e, body_e, NatLit(lent),
         world_e, table_e, Global(f), typed, shaped, m_e, bounded, guarded, verdict]))
+}
+
+fn runtime_local_types(xs: List<LocalRef>) → Tac<List<Handle>> {
+    match xs {
+        Nil => pure([]),
+        Cons(x, rest) => infer(Local(x)).or_fail("runtime: a parameter's type: ").bind(λ t => runtime_local_types(rest).bind(λ ts => pure(Cons(t, ts)))),
+    }
+}
+
+// The instance of a function that calls itself, reflected as its own
+// callee (`Fun::own_callee`; docs/native/runtime-fn-recursion-design.md).
+// Its pin (`Setup::Pinned`) is its unfolding at each argument: `f::ext` at
+// the recursion `f::rec` below the measure and at `f` itself, the two
+// alike by `f::irrel`. The first is `f` at the arguments and the second
+// its step at `f`, which is what the reflection's meaning unfolds to, its
+// call of itself answered by the function.
+fn runtime_own_instance(name: String, f: GlobalRef, rfun: Fun, setup, world_e, table_e, rt_e: Expr) → Tac<Expr> {
+    let compile <- runtime_global(name_of(Setup::compile_recursive));
+    let pinned_g <- runtime_global(name_of(Setup::Pinned));
+    let rfl <- runtime_global("tactic::rfl");
+    let typed_refl <- runtime_global(name_of(Setup::typed_refl));
+    let lt_succ <- runtime_global(name_of(Setup::lt_succ));
+    let rec <- runtime_global(name ++ "::rec");
+    let ext <- runtime_global(name ++ "::ext");
+    let irrel <- runtime_global(name ++ "::irrel");
+    let verdict <- runtime_verdict();
+    let shapes <- runtime_type_of(name_of(runtime_w_shape)).bind(λ h => runtime_ctors_at(h));
+    let typed = ap(typed_refl, [Blank, Global(f)]);
+    // The pin's binders, opened off its statement: the file, then the
+    // function's own parameters.
+    let p_t <- as_type(ap(pinned_g, [Blank, Global(f), rt_e, world_e, table_e, typed])).or_fail("runtime: `" ++ name ++ "`'s pin: ");
+    let words: List<String> = List::range(rfun.params.len()).map(λ i => "x".append(decimal_name(2, i)));
+    let opened <- runtime_open_n(64, p_t, Cons("b", words));
+    let first = opened.fst.head_or(LocalRef(0));
+    let xs = opened.fst.drop(1);
+    let last = xs.rev().head_or(first);
+    let types <- runtime_local_types(xs);
+    let mu_x <- runtime_measure_at(rec, runtime_locals(xs));
+    let n_e = Hd(mu_x);
+    // `g1 = λ y… p => f::rec(N, y…, p)`.
+    let ys1 <- runtime_params_at(types, Some(last), 0);
+    let d1 <- runtime_bound_dom(rec, n_e, runtime_locals(ys1));
+    let p1 <- assume(Hd(d1), "p", Some(ys1.rev().head_or(last))).or_fail("runtime: a bound proof: ");
+    let g1 = runtime_lams(ys1.append([p1.ref]), ap(rec, Cons(n_e, runtime_locals(ys1).append([Local(p1.ref)]))));
+    // `g2 = λ y… _ => f(y…)`.
+    let ys2 <- runtime_params_at(types, Some(last), 0);
+    let d2 <- runtime_bound_dom(rec, n_e, runtime_locals(ys2));
+    let p2 <- assume(Hd(d2), "q", Some(ys2.rev().head_or(last))).or_fail("runtime: a bound proof: ");
+    let g2 = runtime_lams(ys2.append([p2.ref]), ap(Global(f), runtime_locals(ys2)));
+    // They agree: `f::irrel`, the function being its recursion one above
+    // the measure.
+    let ys3 <- runtime_params_at(types, Some(last), 0);
+    let d3 <- runtime_bound_dom(rec, n_e, runtime_locals(ys3));
+    let mu_y <- runtime_measure_of(d3);
+    let p3 <- assume(Hd(d3), "p", Some(ys3.rev().head_or(last))).or_fail("runtime: a bound proof: ");
+    let q3 <- assume(Hd(d3), "q", Some(p3.ref)).or_fail("runtime: a bound proof: ");
+    let hg = runtime_lams(ys3.append([p3.ref, q3.ref]),
+        ap(irrel, Cons(n_e, Cons(Blank, runtime_locals(ys3).append([Local(p3.ref), ap(lt_succ, [Hd(mu_y)])])))));
+    let lt_n = ap(lt_succ, [n_e]);
+    let pinned = runtime_lams(Cons(first, xs), ap(ext, Cons(n_e, Cons(n_e, Cons(g1, Cons(g2, Cons(hg, runtime_locals(xs).append([lt_n, lt_n]))))))));
+    pure(ap(compile, [Blank, setup, rt_e, world_e, table_e, Global(f), typed, pinned, verdict, ap(rfl, [Blank, runtime_at(shapes, 0)])]))
 }
 
 // The `Compile(f)` instance, by the reflection's shape. `table_e` is the
@@ -2733,7 +2895,7 @@ fn runtime_also_decls(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes
                 // Its words admitted as `f::agrees` has them, and each enum
                 // parameter's value stated as there.
                 let lhs = ap(eval_also, [linked.program, words_e]);
-                let proof <- finish(lhs, ap(root_also, linked.root ++ [ap(tail, [Blank, linked.program]), linked.arities, linked.sourced, Hd(trivial_h),
+                let proof <- finish(lhs, ap(root_also, linked.root ++ [ap(tail, [Blank, linked.program]), linked.arities, linked.sourced, Hd(trivial_h), Hd(trivial_h),
                     words_e, Hd(trivial_h), admitted]));
                 // The record's fields' names, as `f::names` spells names:
                 // what `compile-x86` states the two words as.
@@ -2965,8 +3127,10 @@ fn runtime_at_enums(trivial_e, tys_e: Expr, reprs_n: Nat, recs: List<RecShape>, 
 
 // `lents` says how many spans each function of `funs` is lent (the function
 // itself first).
+// `own`: the function is its own callee (`Fun::own_callee`, `funs` listing
+// it twice), its instance `runtime_own_instance`'s.
 fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs: List<Nat>, lents: List<Nat>, l: Linking, reprs: List<ReprEntry>,
-    recs: List<RecShape> := []) → Tac<List<Decl>> {
+    recs: List<RecShape> := [], own: Bool := False) → Tac<List<Decl>> {
     let ts <- runtime_type_handles();
     let q <- runtime_quoting(ts);
     // `refl` at a closed term, its type given: checked against a statement
@@ -3008,7 +3172,10 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
     };
     let table_e: Expr = match rfun.lent { Zero => ap(fixed, [world_e]), Succ(_) => lent_table };
     let code_e = ap(code_of, [setup, rt_e, world_e]);
-    let built <- runtime_instance(name, f, rfun, q, ts, setup, world_e, table_e, rt_e, count, reprs);
+    let built <- match own as λ _ => Tac<Expr> {
+        True => runtime_own_instance(name, f, rfun, setup, world_e, table_e, rt_e),
+        False => runtime_instance(name, f, rfun, q, ts, setup, world_e, table_e, rt_e, count, reprs),
+    };
     let instance_t <- infer(built).or_fail("runtime: `" ++ name ++ "`'s instance: ");
     // Held as a hole solved by it: a loop's instance abstracts locals opened
     // here, and a `Lam` reifies only where its local was opened, while a
@@ -3077,11 +3244,16 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
             // meaning is one step of it, which is the function only at a
             // constructor fuel (or a measure's bound), so its instance rests on its
             // equations instead.
-            let pin: List<Decl> = match rfun.shape() {
-                Plain => [Decl(AsTheorem, name ++ "::reflects", runtime_params_of(xs),
-                    Equation(ap(ap(meaning, [rt_e, world_e]), runtime_locals(xs)), ap(Global(f), runtime_locals(xs))),
-                    ap(rfl, [Blank, ap(Global(f), runtime_locals(xs))]))],
-                _ => [],
+            let pin: List<Decl> = match own {
+                // One that is its own callee is its reflection's meaning at
+                // each argument and not by `refl` (`Setup::Pinned`).
+                True => [],
+                False => match rfun.shape() {
+                    Plain => [Decl(AsTheorem, name ++ "::reflects", runtime_params_of(xs),
+                        Equation(ap(ap(meaning, [rt_e, world_e]), runtime_locals(xs)), ap(Global(f), runtime_locals(xs))),
+                        ap(rfl, [Blank, ap(Global(f), runtime_locals(xs))]))],
+                    _ => [],
+                },
             };
             // A function lent nothing: its program at the empty file, which
             // is `program_eval`.
@@ -3097,7 +3269,36 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
             let admits_of <- runtime_global(name_of(link_admits));
             let admitting <- runtime_admitting(Hd(trivial_h), tys_e, q);
             let admitted <- runtime_admitted(admitting, rfun.params, at_ys, tails);
-            let evaluated = ap(eval_sources, [linked.program, linked.arities, ap(admits_of, [linked.adm]), ap(sources, [linked.srcs]), linked.sourced, no_file, root,
+            // A program with a function that calls itself answers as its
+            // sources where it is defined, at whatever levels its
+            // recursions are given (`program_eval_deepened_where`): its
+            // agreement is `f::agrees_where`, at any number of levels more
+            // than the one it is published at, its definedness a premise.
+            let where_tail <- match linked.leveled as λ _ => Tac<Option<List<Decl>>> {
+                False => pure(None),
+                True => {
+                    let eval_where <- runtime_global(name_of(program_eval_deepened_where));
+                    let deepened <- runtime_global(name_of(program_deepened));
+                    let defined_g <- runtime_global(name_of(program_defined));
+                    let is_true <- runtime_global(name_of(Bool::IsTrue));
+                    let nat_h <- runtime_type_of(name_of(runtime_w_nat));
+                    let more <- assume(Hd(nat_h), "more", ys.last()).or_fail("runtime: a number of levels: ");
+                    let deep = ap(deepened, [linked.program, Local(more.ref)]);
+                    let defined_t <- as_type(ap(is_true, [ap(defined_g, [deep, root, words_e])])).or_fail("runtime: `" ++ name ++ "`'s definedness: ");
+                    let d <- assume(Hd(defined_t), "defined", Some(more.ref)).or_fail("runtime: `" ++ name ++ "`'s definedness: ");
+                    let lhs_where = ap(program_eval, [deep, root, words_e]);
+                    let evaluated_where = ap(eval_where, [linked.program, linked.arities, ap(admits_of, [linked.adm]), ap(sources, [linked.srcs]), linked.sourced,
+                        Local(more.ref), no_file, root, words_e, Hd(trivial_h), admitted, Local(d.ref)]);
+                    let agreed_where <- runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), recs, rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs_where,
+                        λ args => runtime_agree_rhs(low, wide, count, reprs, recs, rfun, f, args).bind(λ e => pure(runtime_enum_result(enum_word, tys_e, rfun.result, e))),
+                        evaluated_where, Some(d.ref));
+                    pure(Some([Decl(AsTheorem, name ++ "::agrees_where", runtime_params_of(ys.append([more.ref, d.ref])), Equation(lhs_where, first), agreed_where)]))
+                },
+            };
+            match where_tail {
+            Some(agreed_where) => pure(head.append(pin).append(made).append(linked_decls).append(agreed_where)),
+            None => {
+            let evaluated = ap(eval_sources, [linked.program, linked.arities, ap(admits_of, [linked.adm]), ap(sources, [linked.srcs]), linked.sourced, Hd(trivial_h), no_file, root,
                 words_e, Hd(trivial_h), admitted]);
             let agreed <- runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), recs, rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs,
                 λ args => runtime_agree_rhs(low, wide, count, reprs, recs, rfun, f, args).bind(λ e => pure(runtime_enum_result(enum_word, tys_e, rfun.result, e))),
@@ -3147,7 +3348,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
                         let params_at = runtime_params_of(ys ++ [c.ref]);
                         let lhs_at = ap(program_eval_over, [Local(c.ref), linked.program, root, words_e]);
                         let evaluated_at = ap(eval_sources, [linked.program, linked.arities, ap(admits_of, [linked.adm]), ap(sources, [linked.srcs]), linked.sourced,
-                            Local(c.ref), root, words_e, Hd(trivial_h), admitted]);
+                            Hd(trivial_h), Local(c.ref), root, words_e, Hd(trivial_h), admitted]);
                         let agreed_at <- runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), recs, rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs_at,
                             λ args => runtime_agree_rhs(low, wide, count, reprs, recs, rfun, f, args).bind(λ e => pure(runtime_enum_result(enum_word, tys_e, rfun.result, e))),
                             evaluated_at, Some(c.ref));
@@ -3156,7 +3357,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
                         let tail_e <- runtime_global(name_of(List::tail));
                         let lhs_also_at = ap(eval_also_over, [Local(c.ref), linked.program, words_e]);
                         let also_at <- runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), recs, rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs_also_at,
-                            rest_at, ap(root_also_at, linked.root ++ [ap(tail_e, [Blank, linked.program]), linked.arities, linked.sourced, Hd(trivial_h), Local(c.ref),
+                            rest_at, ap(root_also_at, linked.root ++ [ap(tail_e, [Blank, linked.program]), linked.arities, linked.sourced, Hd(trivial_h), Hd(trivial_h), Local(c.ref),
                                 words_e, Hd(trivial_h), admitted]), Some(c.ref));
                         pure([Decl(AsTheorem, name ++ "::agrees_at", params_at, Equation(lhs_at, first), agreed_at),
                             Decl(AsTheorem, name ++ "::agrees_also_at", params_at, Equation(lhs_also_at, rest_e), also_at)])
@@ -3164,6 +3365,8 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
                 },
             };
             pure(head.append(pin).append(made).append(linked_decls).append(tail).append(also).append(at_file))
+            },
+            }
         },
         // A function lent spans: its pin and its program's agreement are at
         // every file (the reflection's meaning in the world there, and the
@@ -3172,6 +3375,10 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
         // An enum or a record parameter is stated at its value, as for a
         // function lent nothing (`runtime_at_enums`).
         Succ(_) => {
+            let flat <- match linked.leveled as λ _ => Tac<True> {
+                True => runtime_fail("`" ++ name ++ "` is lent a span and its program has a function that calls itself: a recursion over a lent span is not compiled yet"),
+                False => pure(trivial),
+            };
             let buffers_h <- runtime_type_of(name_of(runtime_w_buffers));
             let world_at <- runtime_global(name_of(World::at));
             let span <- runtime_global(name_of(List::span));
@@ -3197,7 +3404,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
             let admitting <- runtime_admitting(Hd(trivial_h), tys_e, q);
             let admitted <- runtime_admitted(admitting, rfun.params, at_ys, tails);
             let lhs = ap(program_eval_over, [Local(c.ref), linked.program, root, words_e]);
-            let evaluated = ap(eval_sources, [linked.program, linked.arities, ap(admits_of, [linked.adm]), ap(sources, [linked.srcs]), linked.sourced, Local(c.ref), root,
+            let evaluated = ap(eval_sources, [linked.program, linked.arities, ap(admits_of, [linked.adm]), ap(sources, [linked.srcs]), linked.sourced, Hd(trivial_h), Local(c.ref), root,
                 words_e, Hd(trivial_h), admitted]);
             let agreed <- runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), recs, rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs,
                 λ args => pure(runtime_result(reprs, rfun.result, ap(Global(f), at_file(args)))), evaluated, match ys.last() { Some(y) => Some(y), None => Some(c.ref) });
@@ -4259,7 +4466,7 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
     let file_e = ap(runtime_at(buffers, 1), [Local(span1.ref), Local(rest1.ref)]);
     let ran = ap(program_run, [sl.program, file_e, root, words_e]);
     let ended: Expr → Expr = λ g => ap(end_of, [Local(rest1.ref), ap(g, own_at(Local(span1.ref), Local(rest1.ref), Cons(place1.ref, xs1)))]);
-    let answered = ap(answers, [Blank, sl.program, sl.arities, sl.stills, span_file, ap(span_sources, [sl.srcs]), parts,
+    let answered = ap(answers, [Blank, sl.program, sl.arities, sl.stills, span_file, ap(span_sources, [sl.srcs]), parts, Hd(trivial_h),
         ap(span_pair, [Local(span1.ref), Local(rest1.ref)]), root, words_e, Hd(trivial_h)]);
     // What the link answers with is the function through its instance
     // (`CompileSpan::source`), on the code's words. For a function written
@@ -4889,12 +5096,11 @@ fn runtime_recursive_callee(name: String, rfun: Fun, callees: List<Nat>, sigs: L
     let procs <- runtime_procedure_callees(callees, sigs);
     match procs {
         Nil => pure(None),
+        // Any other caller of a recursion is an ordinary function, linked
+        // to the recursion's own instance.
         Cons(p, _) => match rfun.params {
-            Cons(_, _) => runtime_fail("`" ++ name ++ "` calls `" ++ p.fst ++ "`, which calls itself, so it is a call between statements: only a program's `main` over no words calls one yet (docs/native/runtime-fn-recursion-design.md §2)"),
-            Nil => match callees.len().same(1) {
-                True => pure(Some(p)),
-                False => runtime_fail("`" ++ name ++ "` calls `" ++ p.fst ++ "`, which calls itself, and other functions: a program's `main` that calls a recursion calls it alone, yet"),
-            },
+            Cons(_, _) => pure(None),
+            Nil => match callees.len().same(1) { True => pure(Some(p)), False => pure(None) },
         },
     }
 }
@@ -4902,12 +5108,37 @@ fn runtime_recursive_callee(name: String, rfun: Fun, callees: List<Nat>, sigs: L
 fn runtime_judged(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, world: World, k: Known, reflected: Pair<Fun, List<Nat>>, lents: List<Nat>,
     reprs: List<ReprEntry>, recs: List<RecShape>, callee_sigs: List<Sig>) → Tac<List<Decl>> {
     match Fun::judge(rfun, world) {
-        // A call of itself that is not its last act: a procedure, where it
-        // calls nothing else.
-        Refused(why) => match (match callee_sigs { Nil => rfun.recursive_ptm(), Cons(_, _) => None }) {
-            Some(p) => runtime_recursive(name, f, rfun, p),
-            None => fail("`" ++ name ++ "` cannot be a runtime fn under the default setup: " ++ why, []),
-        },
+        // A function that `decreases` and whose call of itself is not its
+        // last act: its own callee (`Fun::own_callee`), an ordinary
+        // function of words whose table lists it twice. A tail call the
+        // loop's judgment refuses stays refused with its reason, and so
+        // does a recursion lent a span, which is not built.
+        Refused(why) => lookup(name ++ "::body").bind(λ step => match (match step { Accepted(_) => rfun.body.calls_self_inside(), Refused(_) => False }) {
+            False => fail("`" ++ name ++ "` cannot be a runtime fn under the default setup: " ++ why, []),
+            True => match rfun.lent {
+                Succ(_) => fail("`" ++ name ++ "` cannot be a runtime fn under the default setup: " ++ why ++ ", in a function lent a span (a recursion over a lent span is not compiled yet)", []),
+                Zero => {
+                    let callee = rfun.own_callee();
+                    let table = Cons(f.id, reflected.snd);
+                    let sigs2 = Cons(rfun.sig(), sigs);
+                    let world2 = World(world.tys, sigs2, Sig::sems_default(world.tys, sigs2));
+                    match Fun::judge(callee, world2) {
+                        Refused(why2) => fail("`" ++ name ++ "` cannot be a runtime fn under the default setup: " ++ why2, []),
+                        Ok => match Setup::lowers(Fun::lower_any(callee, world2)) {
+                            False => fail("`" ++ name ++ "`: the default setup's lowering refused it though its judgment accepted it (a gap in `Fun::judge`)", []),
+                            True => runtime_link(4096, k, [LinkFrame(f.id, name, table, table.drop(1), None)], Linking([], [], [], [])).bind(λ l =>
+                                runtime_publish(name, f, callee, sigs2, table, Cons(rfun.lent, lents), l, reprs, recs := recs, own := True)).bind(λ decls =>
+                                // The procedure lane's theorems beside them, until
+                                // statements call a recursion through its program.
+                                match (match callee_sigs { Nil => rfun.recursive_ptm(), Cons(_, _) => None }) {
+                                    Some(p) => runtime_recursive(name, f, rfun, p).bind(λ old => pure(decls.append(old.drop(1)))),
+                                    None => pure(decls),
+                                }),
+                        },
+                    }
+                },
+            },
+        }),
         Ok => match Setup::lowers(Fun::lower_any(rfun, world)) {
             False => fail("`" ++ name ++ "`: the default setup's lowering refused it though its judgment accepted it (a gap in `Fun::judge`)", []),
             True => runtime_link(4096, k, [LinkFrame(f.id, name, reflected.snd, reflected.snd.drop(1), None)], Linking([], [], [], [])).bind(λ l =>

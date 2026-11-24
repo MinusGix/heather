@@ -153,7 +153,7 @@ theorem compiled_computes_both<M>(last: Function, earlier: List<Function>, place
     lowered: lower_program_roomed(Cons(last, earlier), placement, [], rooms) = Some(code),
     evaluable: program_evaluable(Cons(last, earlier)).IsTrue(), quiet: program_quiet(Cons(last, earlier)).IsTrue(),
     machine: Machine<M>, arguments: List<BitVec(64)>, count: last.parameters.len() = arguments.len(), answer: BitVec(64), rest: List<BitVec(64)>,
-    evaluates: last.eval(program_answers(earlier), arguments) = answer, evaluates_rest: program_eval_also(Cons(last, earlier), arguments) = rest,
+    evaluates: last.eval(program_last_answers(Nil, last, earlier), arguments) = answer, evaluates_rest: program_eval_also(Cons(last, earlier), arguments) = rest,
     defined: program_defined(Cons(last, earlier), earlier.len(), arguments).IsTrue()):
     code.ComputesBoth(machine, earlier.len(), rooms(earlier.len()), arguments, answer, rest) {
     λ origin bytes => compiled_returns_both<M>(last, earlier, placement, rooms, code, lowered, evaluable, quiet, machine.fetch, machine.data, bytes, origin,

@@ -1723,6 +1723,28 @@ theorem Ty::takes_map(tys: Table, p: Ty): (K, L: List<BitVec(64)> → p.sem(tys)
     }
 }
 
+// Two curried meanings alike at every argument: what stands for their
+// equality where one is a function that `decreases`, equal to its body's
+// meaning at each argument and not as a function.
+fn Ty::Alike(tys: Table, ps: List<Ty>, r: Ty) → Ty::Arrows(tys, ps, r) → Ty::Arrows(tys, ps, r) → Type {
+    match ps {
+        Nil => λ v u => v = u,
+        Cons(p, rest) => λ v u => (a: p.sem(tys)) → Ty::Alike(tys, rest, r, v(a), u(a)),
+    }
+}
+
+// What answers every word like one of them answers them like the other.
+theorem Ty::answers_words_alike(tys: Table, ps: List<Ty>, r: Ty): (v, u: Ty::Arrows(tys, ps, r)) → (ans: List<BitVec(64)> → List<BitVec(64)>) →
+    Ty::Alike(tys, ps, r, v, u) → Ty::AnswersWords(tys, ps, r, u, ans) → Ty::AnswersWords(tys, ps, r, v, ans) {
+    match ps {
+        Nil => λ v u ans same h => trans(h, cong_fn(λ (x: r.sem(tys)) => Ty::result_words(tys, r, x), sym(same))),
+        Cons(p, rest) => λ v u ans same => Ty::takes_map(tys, p,
+            λ ws a => Ty::AnswersWords(tys, rest, r, u(a), λ more => ans(ws ++ more)),
+            λ ws a => Ty::AnswersWords(tys, rest, r, v(a), λ more => ans(ws ++ more)),
+            λ ws a inner => Ty::answers_words_alike(tys, rest, r, v(a), u(a), λ more => ans(ws ++ more), same(a), inner)),
+    }
+}
+
 // The first word of every word answered.
 theorem Ty::answers_words_first(tys: Table, ps: List<Ty>, r: Ty): (v: Ty::Arrows(tys, ps, r)) → (ans: List<BitVec(64)> → List<BitVec(64)>) →
     Ty::AnswersWords(tys, ps, r, v, ans) → Ty::Answers(tys, ps, r, v, λ ws => first_word(ans(ws))) {

@@ -32,11 +32,152 @@ import omega;
 import option;
 import pair;
 
-// Whatever `old` may do over the functions `callees`, `new` may.
-fn Rewrites(callees: List<Function>, old, new: Function) → Type {
-    (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) → (before, after: Buffers()) →
-        old.RunsBoth(program_effects(callees), arguments, result, extra, before, after) →
-        new.RunsBoth(program_effects(callees), arguments, result, extra, before, after)
+theorem Function::runs_weaken(self function: Function, effects, weaker: Effects(),
+    implies: (before: Buffers()) → (f: Nat) → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) → (after: Buffers()) →
+        effects(before, f, arguments, result, extra, after) → weaker(before, f, arguments, result, extra, after),
+    arguments: List<BitVec(64)>, result: BitVec(64), extra: List<BitVec(64)>, before, after: Buffers(), ran: function.RunsBoth(effects, arguments, result, extra, before, after)):
+    function.RunsBoth(weaker, arguments, result, extra, before, after) {
+    Exists(ran.witness, ⟨ran.proof.left, ⟨function.body.runs_weaken(effects, weaker, implies, ran.witness, before, after, ran.proof.right.left),
+        ran.proof.right.right⟩⟩)
+}
+
+// Effects that do, at the functions below `bound`, what `others` do: what a
+// function's calls are answered by wherever it is rewritten, the functions
+// before it as the program has them and, where it calls itself, its own
+// number as well (`Function::tied_effects`).
+fn Effects::Alike(effects, others: Effects(), bound: Nat) → Type {
+    (before: Buffers()) → (f: Nat) → f + 1 <= bound → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) →
+    (after: Buffers()) →
+        (effects(before, f, arguments, result, extra, after) → others(before, f, arguments, result, extra, after)) ∧
+        (others(before, f, arguments, result, extra, after) → effects(before, f, arguments, result, extra, after))
+}
+
+theorem Effects::alike_self(effects: Effects(), bound: Nat): Effects::Alike(effects, effects, bound) {
+    λ before f under arguments result extra after => ⟨λ h => h, λ h => h⟩
+}
+
+theorem below_differs(f, k: Nat, under: f + 1 <= k, same: f = k): False { omega }
+
+// A table with function `k`'s own row does below `k` what the table does.
+theorem tie_effects_alike(others: Effects(), k: Nat, own: Buffers() → List<BitVec(64)> → BitVec(64) → List<BitVec(64)> → Buffers() → Type):
+    Effects::Alike(tie_effects(others, k, own), others, k) {
+    λ before f under arguments result extra after => match f.eq_dec(k) as λ d =>
+        ((match d as λ _ => Type { Inl(_) => own(before, arguments, result, extra, after), Inr(_) => others(before, f, arguments, result, extra, after) }) →
+            others(before, f, arguments, result, extra, after)) ∧
+        (others(before, f, arguments, result, extra, after) →
+            (match d as λ _ => Type { Inl(_) => own(before, arguments, result, extra, after), Inr(_) => others(before, f, arguments, result, extra, after) })) {
+        Inl(same) => false_elim(below_differs(f, k, under, same)),
+        Inr(_) => ⟨λ h => h, λ h => h⟩,
+    }
+}
+
+// Row by row: what a tied table does, one whose rows do more does.
+theorem tie_effects_map(below, others: Effects(), k: Nat,
+    own, more: Buffers() → List<BitVec(64)> → BitVec(64) → List<BitVec(64)> → Buffers() → Type,
+    weaker: (before: Buffers()) → (f: Nat) → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) → (after: Buffers()) →
+        below(before, f, arguments, result, extra, after) → others(before, f, arguments, result, extra, after),
+    grows: (before: Buffers()) → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) → (after: Buffers()) →
+        own(before, arguments, result, extra, after) → more(before, arguments, result, extra, after)):
+    (before: Buffers()) → (f: Nat) → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) → (after: Buffers()) →
+    tie_effects(below, k, own, before, f, arguments, result, extra, after) → tie_effects(others, k, more, before, f, arguments, result, extra, after) {
+    λ before f arguments result extra after => match f.eq_dec(k) as λ d =>
+        (match d as λ _ => Type { Inl(_) => own(before, arguments, result, extra, after), Inr(_) => below(before, f, arguments, result, extra, after) }) →
+        (match d as λ _ => Type { Inl(_) => more(before, arguments, result, extra, after), Inr(_) => others(before, f, arguments, result, extra, after) }) {
+        Inl(_) => grows(before, arguments, result, extra, after),
+        Inr(_) => weaker(before, f, arguments, result, extra, after),
+    }
+}
+
+// What a function does at a depth it does one level deeper.
+theorem Function::level_runs_more(self function: Function, below: Effects(), k, depth: Nat):
+    (before: Buffers()) → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) → (after: Buffers()) →
+    function.level_runs(below, k, depth)(before, arguments, result, extra, after) →
+    function.level_runs(below, k, depth + 1)(before, arguments, result, extra, after) {
+    match depth {
+        Zero => λ before arguments result extra after never => false_elim(never),
+        Succ(i) => λ before arguments result extra after ran => function.runs_weaken(function.tied_effects(below, k, i), function.tied_effects(below, k, i + 1),
+            tie_effects_map(below, below, k, function.level_runs(below, k, i), function.level_runs(below, k, i + 1), λ b f a r t e h => h,
+                function.level_runs_more(below, k, i)),
+            arguments, result, extra, before, after, ran),
+    }
+}
+
+// Whatever `old` may do over the functions `callees`, `new` may, as deep
+// as `old` calls itself: over any effects that do what the callees do at
+// the callees' numbers.
+fn Rewrites(callees: List<Function>, old, new: Function) → Type<1> {
+    (effects: Effects()) → Effects::Alike(effects, program_effects(callees), callees.len()) →
+        (new.levels = old.levels) ∧ ((arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) → (before, after: Buffers()) →
+        old.RunsBoth(effects, arguments, result, extra, before, after) →
+        new.RunsBoth(effects, arguments, result, extra, before, after))
+}
+
+theorem Rewrites::same(callees: List<Function>, old: Function): Rewrites(callees, old, old) {
+    λ effects alike => ⟨refl, λ arguments result extra before after ran => ran⟩
+}
+
+theorem Rewrites::then(callees: List<Function>, old, mid, new: Function, first: Rewrites(callees, old, mid), second: Rewrites(callees, mid, new)):
+    Rewrites(callees, old, new) {
+    λ effects alike => ⟨trans(second(effects, alike).left, first(effects, alike).left), λ arguments result extra before after ran =>
+        second(effects, alike).right(arguments, result, extra, before, after, first(effects, alike).right(arguments, result, extra, before, after, ran))⟩
+}
+
+// Over the callees themselves.
+theorem Rewrites::runs(callees: List<Function>, old, new: Function, law: Rewrites(callees, old, new), arguments: List<BitVec(64)>, result: BitVec(64),
+    extra: List<BitVec(64)>, before, after: Buffers(), ran: old.RunsBoth(program_effects(callees), arguments, result, extra, before, after)):
+    new.RunsBoth(program_effects(callees), arguments, result, extra, before, after) {
+    law(program_effects(callees), Effects::alike_self(program_effects(callees), callees.len())).right(arguments, result, extra, before, after, ran)
+}
+
+// A rewritten function calls itself as deep as it did.
+theorem Rewrites::levels(callees: List<Function>, old, new: Function, law: Rewrites(callees, old, new)): new.levels = old.levels {
+    law(program_effects(callees), Effects::alike_self(program_effects(callees), callees.len())).left
+}
+
+// A rewritten function at each depth: what the old one does there over
+// `below`, the new one does over `others`, which do what `below` do.
+theorem Function::level_rewrites(self old: Function, new: Function, below, others: Effects(), k: Nat,
+    weaker: (before: Buffers()) → (f: Nat) → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) → (after: Buffers()) →
+        below(before, f, arguments, result, extra, after) → others(before, f, arguments, result, extra, after),
+    law: (effects: Effects()) → Effects::Alike(effects, others, k) →
+        (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) → (before, after: Buffers()) →
+        old.RunsBoth(effects, arguments, result, extra, before, after) → new.RunsBoth(effects, arguments, result, extra, before, after),
+    depth: Nat):
+    (before: Buffers()) → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) → (after: Buffers()) →
+    old.level_runs(below, k, depth)(before, arguments, result, extra, after) → new.level_runs(others, k, depth)(before, arguments, result, extra, after) {
+    match depth {
+        Zero => λ before arguments result extra after never => never,
+        Succ(i) => λ before arguments result extra after ran =>
+            law(new.tied_effects(others, k, i), tie_effects_alike(others, k, new.level_runs(others, k, i)), arguments, result, extra, before, after,
+                old.runs_weaken(old.tied_effects(below, k, i), new.tied_effects(others, k, i),
+                    tie_effects_map(below, others, k, old.level_runs(below, k, i), new.level_runs(others, k, i), weaker,
+                        old.level_rewrites(new, below, others, k, weaker, law, i)),
+                    arguments, result, extra, before, after, ran)),
+    }
+}
+
+// The same of what answers its calls, at its levels.
+theorem Function::levels_rewrites(self old: Function, new: Function, below, others: Effects(), k: Nat,
+    weaker: (before: Buffers()) → (f: Nat) → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) → (after: Buffers()) →
+        below(before, f, arguments, result, extra, after) → others(before, f, arguments, result, extra, after),
+    law: (effects: Effects()) → Effects::Alike(effects, others, k) →
+        (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) → (before, after: Buffers()) →
+        old.RunsBoth(effects, arguments, result, extra, before, after) → new.RunsBoth(effects, arguments, result, extra, before, after),
+    levels: Nat):
+    (before: Buffers()) → (f: Nat) → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) → (after: Buffers()) →
+    old.effects_at(below, k, levels)(before, f, arguments, result, extra, after) → new.effects_at(others, k, levels)(before, f, arguments, result, extra, after) {
+    match levels {
+        Zero => weaker,
+        Succ(depth) => tie_effects_map(below, others, k, old.level_runs(below, k, depth), new.level_runs(others, k, depth), weaker,
+            old.level_rewrites(new, below, others, k, weaker, law, depth)),
+    }
+}
+
+theorem Function::effects_at_alike(self function: Function, others: Effects(), k, levels: Nat): Effects::Alike(function.effects_at(others, k, levels), others, k) {
+    match levels {
+        Zero => Effects::alike_self(others, k),
+        Succ(depth) => tie_effects_alike(others, k, function.level_runs(others, k, depth)),
+    }
 }
 
 record Stage<P> {
@@ -109,27 +250,37 @@ theorem Stage::run_sound<P>(self stage: Stage<P>, functions: List<Function>): (p
                 let g = b.witness;
                 let same = stage.run_len(earlier, rest, gs, a.proof.left);
                 let below = stage.run_sound(earlier, rest, gs, a.proof.left);
+                let made_g = stage.sound(gs, last, plan, g, b.proof.left);
+                let n = earlier.len();
+                let law = j(same, λ m _ => (effects: Effects()) → Effects::Alike(effects, program_effects(gs), m) →
+                    (xs: List<BitVec(64)>) → (r: BitVec(64)) → (more: List<BitVec(64)>) → (file, left: Buffers()) →
+                    last.RunsBoth(effects, xs, r, more, file, left) → g.RunsBoth(effects, xs, r, more, file, left),
+                    λ effects alike => made_g(effects, alike).right);
+                let kept = Rewrites::levels(gs, last, g, made_g);
                 let at = (match f.eq_dec(earlier.len()) as λ d =>
                     (match d {
-                        Inl(_) => last.RunsBoth(program_effects(earlier), arguments, result, extra, before, after),
+                        Inl(_) => last.RunsBoth(last.effects_at(program_effects(earlier), n, last.levels), arguments, result, extra, before, after),
                         Inr(_) => program_effects(earlier, before, f, arguments, result, extra, after),
                     }) →
                     (match d {
-                        Inl(_) => g.RunsBoth(program_effects(gs), arguments, result, extra, before, after),
+                        Inl(_) => g.RunsBoth(g.effects_at(program_effects(gs), n, g.levels), arguments, result, extra, before, after),
                         Inr(_) => program_effects(gs, before, f, arguments, result, extra, after),
                     }) {
-                    Inl(_) => λ ran => stage.sound(gs, last, plan, g, b.proof.left, arguments, result, extra, before, after,
-                        Exists(ran.witness, ⟨ran.proof.left, ⟨last.body.runs_weaken(program_effects(earlier), program_effects(gs), below,
-                            ran.witness, before, after, ran.proof.right.left), ran.proof.right.right⟩⟩)),
+                    Inl(_) => λ ran => j(sym(kept), λ l _ => g.RunsBoth(g.effects_at(program_effects(gs), n, l), arguments, result, extra, before, after),
+                        law(g.effects_at(program_effects(gs), n, last.levels), g.effects_at_alike(program_effects(gs), n, last.levels),
+                            arguments, result, extra, before, after,
+                            last.runs_weaken(last.effects_at(program_effects(earlier), n, last.levels), g.effects_at(program_effects(gs), n, last.levels),
+                                last.levels_rewrites(g, program_effects(earlier), program_effects(gs), n, below, law, last.levels),
+                                arguments, result, extra, before, after, ran))),
                     Inr(_) => λ ran => below(before, f, arguments, result, extra, after, ran),
                 });
-                let moved = j(sym(same), λ n _ =>
+                let moved = j(sym(same), λ m _ =>
                     (match f.eq_dec(earlier.len()) {
-                        Inl(_) => last.RunsBoth(program_effects(earlier), arguments, result, extra, before, after),
+                        Inl(_) => last.RunsBoth(last.effects_at(program_effects(earlier), n, last.levels), arguments, result, extra, before, after),
                         Inr(_) => program_effects(earlier, before, f, arguments, result, extra, after),
                     }) →
-                    (match f.eq_dec(n) {
-                        Inl(_) => g.RunsBoth(program_effects(gs), arguments, result, extra, before, after),
+                    (match f.eq_dec(m) {
+                        Inl(_) => g.RunsBoth(g.effects_at(program_effects(gs), m, g.levels), arguments, result, extra, before, after),
                         Inr(_) => program_effects(gs, before, f, arguments, result, extra, after),
                     }), at);
                 j(Option::some_inj(Cons(g, gs), new, b.proof.right), λ out _ =>
@@ -156,10 +307,10 @@ theorem Stage::run_then<P, Q>(first: Stage<P>, second: Stage<Q>, functions, betw
 // both is stated once a function.
 fn Stage::then<P, Q>(self first: Stage<P>, second: Stage<Q>) → Stage<Pair<P, Q>> {
     Stage(λ callees old plan => first.rewrite(callees, old, plan.fst).and_then(λ mid => second.rewrite(callees, mid, plan.snd)),
-        λ callees old plan new made arguments result extra before after ran => {
+        λ callees old plan new made => {
             let a = Option::and_then_some(first.rewrite(callees, old, plan.fst), λ (mid: Function) => second.rewrite(callees, mid, plan.snd), new, made);
-            second.sound(callees, a.witness, plan.snd, new, a.proof.right, arguments, result, extra, before, after,
-                first.sound(callees, old, plan.fst, a.witness, a.proof.left, arguments, result, extra, before, after, ran))
+            Rewrites::then(callees, old, a.witness, new, first.sound(callees, old, plan.fst, a.witness, a.proof.left),
+                second.sound(callees, a.witness, plan.snd, new, a.proof.right))
         })
 }
 
@@ -178,8 +329,7 @@ theorem Stage::then_made<P, Q>(self first: Stage<P>, second: Stage<Q>, callees: 
 fn Stage::maybe<P>(self stage: Stage<P>) → Stage<Option<P>> {
     Stage(λ callees old plan => match plan { None => Some(old), Some(p) => stage.rewrite(callees, old, p) },
         λ callees old plan => match plan {
-            None => λ new made arguments result extra before after ran =>
-                j(Option::some_inj(old, new, made), λ g _ => g.RunsBoth(program_effects(callees), arguments, result, extra, before, after), ran),
+            None => λ new made => j(Option::some_inj(old, new, made), λ g _ => Rewrites(callees, old, g), Rewrites::same(callees, old)),
             Some(p) => stage.sound(callees, old, p),
         })
 }
@@ -205,12 +355,11 @@ fn rewrite_many<P>(rewrite: List<Function> → Function → P → Option<Functio
 theorem Stage::many_sound<P>(self stage: Stage<P>, callees: List<Function>, plans: List<P>): (old, new: Function) →
     rewrite_many(stage.rewrite, callees, plans, old) = Some(new) → Rewrites(callees, old, new) {
     match plans {
-        Nil => λ old new made arguments result extra before after ran =>
-            j(Option::some_inj(old, new, made), λ g _ => g.RunsBoth(program_effects(callees), arguments, result, extra, before, after), ran),
-        Cons(plan, rest) => λ old new made arguments result extra before after ran => {
+        Nil => λ old new made => j(Option::some_inj(old, new, made), λ g _ => Rewrites(callees, old, g), Rewrites::same(callees, old)),
+        Cons(plan, rest) => λ old new made => {
             let a = Option::and_then_some(stage.rewrite(callees, old, plan), rewrite_many(stage.rewrite, callees, rest), new, made);
-            stage.many_sound(callees, rest, a.witness, new, a.proof.right, arguments, result, extra, before, after,
-                stage.sound(callees, old, plan, a.witness, a.proof.left, arguments, result, extra, before, after, ran))
+            Rewrites::then(callees, old, a.witness, new, stage.sound(callees, old, plan, a.witness, a.proof.left),
+                stage.many_sound(callees, rest, a.witness, new, a.proof.right))
         },
     }
 }
@@ -275,7 +424,7 @@ theorem program_effects_past(functions: List<Function>): (f: Nat) → functions.
         Cons(last, earlier) => λ f past before arguments result extra after =>
             (match f.eq_dec(earlier.len()) as λ d =>
                 (match d {
-                    Inl(_) => last.RunsBoth(program_effects(earlier), arguments, result, extra, before, after),
+                    Inl(_) => last.RunsBoth(last.effects_at(program_effects(earlier), earlier.len(), last.levels), arguments, result, extra, before, after),
                     Inr(_) => program_effects(earlier, before, f, arguments, result, extra, after),
                 }) → False {
                 Inl(same) => λ _ => past_same(earlier.len(), f, same, past),
@@ -290,7 +439,7 @@ theorem program_effects_more(last: Function, earlier: List<Function>, before: Bu
     program_effects(earlier, before, f, arguments, result, extra, after) → program_effects(Cons(last, earlier), before, f, arguments, result, extra, after) {
     (match f.eq_dec(earlier.len()) as λ d => program_effects(earlier, before, f, arguments, result, extra, after) →
         (match d {
-            Inl(_) => last.RunsBoth(program_effects(earlier), arguments, result, extra, before, after),
+            Inl(_) => last.RunsBoth(last.effects_at(program_effects(earlier), earlier.len(), last.levels), arguments, result, extra, before, after),
             Inr(_) => program_effects(earlier, before, f, arguments, result, extra, after),
         }) {
         Inl(same) => λ ran => false_elim(program_effects_past(earlier, f, past_of_same(earlier.len(), f, same), before, arguments, result, extra, after, ran)),
@@ -298,13 +447,29 @@ theorem program_effects_more(last: Function, earlier: List<Function>, before: Bu
     })
 }
 
-theorem Function::runs_weaken(self function: Function, effects, weaker: Effects(),
-    implies: (before: Buffers()) → (f: Nat) → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) → (after: Buffers()) →
-        effects(before, f, arguments, result, extra, after) → weaker(before, f, arguments, result, extra, after),
-    arguments: List<BitVec(64)>, result: BitVec(64), extra: List<BitVec(64)>, before, after: Buffers(), ran: function.RunsBoth(effects, arguments, result, extra, before, after)):
-    function.RunsBoth(weaker, arguments, result, extra, before, after) {
-    Exists(ran.witness, ⟨ran.proof.left, ⟨function.body.runs_weaken(effects, weaker, implies, ran.witness, before, after, ran.proof.right.left),
-        ran.proof.right.right⟩⟩)
+// What answers the last function's calls, the program answers: the
+// functions before it as they did, and the function itself, at any depth
+// its levels reach, as the program has it.
+theorem program_effects_enter(last: Function, earlier: List<Function>): (levels: Nat) → levels = last.levels →
+    (before: Buffers()) → (f: Nat) → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) → (after: Buffers()) →
+    last.effects_at(program_effects(earlier), earlier.len(), levels)(before, f, arguments, result, extra, after) →
+    program_effects(Cons(last, earlier), before, f, arguments, result, extra, after) {
+    λ levels => match levels {
+        Zero => λ _ before f arguments result extra after => program_effects_more(last, earlier, before, f, arguments, result, extra, after),
+        Succ(depth) => λ at before f arguments result extra after => match f.eq_dec(earlier.len()) as λ d =>
+            (match d as λ _ => Type {
+                Inl(_) => last.level_runs(program_effects(earlier), earlier.len(), depth)(before, arguments, result, extra, after),
+                Inr(_) => program_effects(earlier, before, f, arguments, result, extra, after),
+            }) →
+            (match d as λ _ => Type {
+                Inl(_) => last.RunsBoth(last.effects_at(program_effects(earlier), earlier.len(), last.levels), arguments, result, extra, before, after),
+                Inr(_) => program_effects(earlier, before, f, arguments, result, extra, after),
+            }) {
+            Inl(_) => λ ran => j(at, λ l _ => last.RunsBoth(last.effects_at(program_effects(earlier), earlier.len(), l), arguments, result, extra, before, after),
+                last.level_runs_more(program_effects(earlier), earlier.len(), depth, before, arguments, result, extra, after, ran)),
+            Inr(_) => λ ran => ran,
+        },
+    }
 }
 
 // A call the program answers is a run of the function it names, over the
@@ -317,18 +482,46 @@ theorem program_effects_function(functions: List<Function>): (before: Buffers())
         Cons(last, earlier) => λ before f arguments result extra after =>
             (match f.eq_dec(earlier.len()) as λ d =>
                 (match d {
-                    Inl(_) => last.RunsBoth(program_effects(earlier), arguments, result, extra, before, after),
+                    Inl(_) => last.RunsBoth(last.effects_at(program_effects(earlier), earlier.len(), last.levels), arguments, result, extra, before, after),
                     Inr(_) => program_effects(earlier, before, f, arguments, result, extra, after),
                 }) →
                 Exists<Function>(λ g => ((match d { Inl(_) => Some(last), Inr(_) => program_function(earlier, f) }) = Some(g)) ∧
                     g.RunsBoth(program_effects(Cons(last, earlier)), arguments, result, extra, before, after)) {
-                Inl(_) => λ ran => Exists(last, ⟨refl, last.runs_weaken(program_effects(earlier), program_effects(Cons(last, earlier)),
-                    λ b g a r t e => program_effects_more(last, earlier, b, g, a, r, t, e), arguments, result, extra, before, after, ran)⟩),
+                Inl(_) => λ ran => Exists(last, ⟨refl, last.runs_weaken(last.effects_at(program_effects(earlier), earlier.len(), last.levels),
+                    program_effects(Cons(last, earlier)), program_effects_enter(last, earlier, last.levels, refl), arguments, result, extra, before, after, ran)⟩),
                 Inr(_) => λ ran => {
                     let found = program_effects_function(earlier, before, f, arguments, result, extra, after, ran);
                     Exists(found.witness, ⟨found.proof.left, found.witness.runs_weaken(program_effects(earlier), program_effects(Cons(last, earlier)),
                         λ b g a r t e => program_effects_more(last, earlier, b, g, a, r, t, e), arguments, result, extra, before, after, found.proof.right)⟩)
                 },
             }),
+    }
+}
+
+theorem same_under(f, n: Nat, same: f = n): f + 1 <= n + 1 { omega }
+theorem under_more(f, n: Nat, under: f + 1 <= n): f + 1 <= n + 1 { omega }
+theorem less_under(f, n: Nat, less: f < n): f + 1 <= n { omega }
+
+// A function a program has is at a number below its length.
+theorem program_function_under(functions: List<Function>): (f: Nat) → (g: Function) → program_function(functions, f) = Some(g) →
+    f + 1 <= functions.len() {
+    match functions {
+        Nil => λ f g found => absurd(found),
+        Cons(last, earlier) => λ f g => match f.eq_dec(earlier.len()) as λ d =>
+            (match d as λ _ => Option<Function> { Inl(_) => Some(last), Inr(_) => program_function(earlier, f) }) = Some(g) → f + 1 <= earlier.len() + 1 {
+            Inl(same) => λ _ => same_under(f, earlier.len(), same),
+            Inr(_) => λ found => under_more(f, earlier.len(), program_function_under(earlier, f, g, found)),
+        },
+    }
+}
+
+// Effects alike a program's do whatever the program does, at every
+// number: past its end the program does nothing.
+theorem Effects::alike_over(effects: Effects(), functions: List<Function>, alike: Effects::Alike(effects, program_effects(functions), functions.len())):
+    (before: Buffers()) → (f: Nat) → (arguments: List<BitVec(64)>) → (result: BitVec(64)) → (extra: List<BitVec(64)>) → (after: Buffers()) →
+    program_effects(functions, before, f, arguments, result, extra, after) → effects(before, f, arguments, result, extra, after) {
+    λ before f arguments result extra after ran => match f.lt_or_ge(functions.len()) {
+        Inl(less) => alike(before, f, less_under(f, functions.len(), less), arguments, result, extra, after).right(ran),
+        Inr(past) => false_elim(program_effects_past(functions, f, past, before, arguments, result, extra, after, ran)),
     }
 }

@@ -177,6 +177,12 @@ fn linked_still(functions: List<Function>, stills: List<Bool>) → Nat → Bool 
     }
 }
 
+// The functions the last function may call and stay still: the ones
+// before it that are marked and, where it calls itself, the function.
+fn linked_last_still(last: Function, earlier: List<Function>, stills: List<Bool>) → Nat → Bool {
+    self_table(linked_still(earlier, stills.tail()), earlier.len(), last.levels, True)
+}
+
 // Whether each function marked still stores nothing and calls only
 // functions marked still: decided once for a program, by evaluation.
 fn program_stills(functions: List<Function>, stills: List<Bool>) → Bool {
@@ -184,8 +190,48 @@ fn program_stills(functions: List<Function>, stills: List<Bool>) → Bool {
         Nil => True,
         Cons(last, earlier) => (match stills.head_or(False) {
             False => True,
-            True => last.body.quiet() && last.body.calls_among(linked_still(earlier, stills.tail())),
+            True => last.body.quiet() && last.body.calls_among(linked_last_still(last, earlier, stills)),
         }) && program_stills(earlier, stills.tail()),
+    }
+}
+
+// Where the functions below that are marked leave the file, and the
+// function at a depth does, so do the marked ones with the function's own
+// number.
+theorem Function::tied_leaves_at(self last: Function, below: Writers(), among: Nat → Bool, k: Nat, buffers: Buffers(),
+    ih: (f: Nat) → among(f).IsTrue() → (words: List<BitVec(64)>) → below(buffers, f, words).buffers = buffers,
+    depth: Nat,
+    own: (words: List<BitVec(64)>) → last.level_run(below, k, depth)(buffers, words).buffers = buffers):
+    (f: Nat) → tie(among, k, True)(f).IsTrue() → (words: List<BitVec(64)>) → last.tied_writers(below, k, depth)(buffers, f, words).buffers = buffers {
+    λ f => match f.eq_dec(k) as λ d =>
+        (match d as λ _ => Bool { Inl(_) => True, Inr(_) => among(f) }).IsTrue() → (words: List<BitVec(64)>) →
+        (match d as λ _ => Ending { Inl(_) => last.level_run(below, k, depth)(buffers, words), Inr(_) => below(buffers, f, words) }).buffers = buffers {
+        Inl(_) => λ _ words => own(words),
+        Inr(_) => λ marked words => ih(f, marked, words),
+    }
+}
+
+theorem Function::level_leaves(self last: Function, below: Writers(), among: Nat → Bool, k: Nat, buffers: Buffers(),
+    ih: (f: Nat) → among(f).IsTrue() → (words: List<BitVec(64)>) → below(buffers, f, words).buffers = buffers,
+    quiet: last.body.quiet().IsTrue(), fits: last.body.calls_among(tie(among, k, True)).IsTrue(), depth: Nat):
+    (words: List<BitVec(64)>) → last.level_run(below, k, depth)(buffers, words).buffers = buffers {
+    match depth {
+        Zero => λ words => refl,
+        Succ(i) => λ words => cong_fn<Ending, Buffers()>(λ end => end.buffers,
+            last.run_still(last.tied_writers(below, k, i), buffers, tie(among, k, True),
+                last.tied_leaves_at(below, among, k, buffers, ih, i, last.level_leaves(below, among, k, buffers, ih, quiet, fits, i)), quiet, fits, words)),
+    }
+}
+
+theorem Function::levels_leaves(self last: Function, below: Writers(), among: Nat → Bool, k: Nat, buffers: Buffers(),
+    ih: (f: Nat) → among(f).IsTrue() → (words: List<BitVec(64)>) → below(buffers, f, words).buffers = buffers,
+    quiet: last.body.quiet().IsTrue()):
+    (levels: Nat) → last.body.calls_among(self_table(among, k, levels, True)).IsTrue() →
+    (f: Nat) → self_table(among, k, levels, True)(f).IsTrue() → (words: List<BitVec(64)>) →
+    last.writers_at(below, k, levels)(buffers, f, words).buffers = buffers {
+    λ levels => match levels {
+        Zero => λ _ => ih,
+        Succ(depth) => λ fits => last.tied_leaves_at(below, among, k, buffers, ih, depth, last.level_leaves(below, among, k, buffers, ih, quiet, fits, depth)),
     }
 }
 
@@ -197,7 +243,8 @@ theorem program_run_still(functions: List<Function>): (stills: List<Bool>) → p
     match functions {
         Nil => λ stills _ buffers f never words => false_elim(never),
         Cons(last, earlier) => λ stills ok buffers f => {
-            let among = linked_still(earlier, stills.tail());
+            let among = linked_last_still(last, earlier, stills);
+            let tops = program_last_writers(last, earlier);
             let parts = Bool::is_true_and(match stills.head_or(False) { False => True, True => last.body.quiet() && last.body.calls_among(among) },
                 program_stills(earlier, stills.tail()), ok);
             let below = program_run(earlier);
@@ -211,11 +258,13 @@ theorem program_run_still(functions: List<Function>): (stills: List<Bool>) → p
             match f.eq_dec(earlier.len()) as λ d =>
                 (match d { Inl(_) => stills.head_or(False), Inr(_) => linked_still(earlier, stills.tail(), f) }).IsTrue() →
                 (words: List<BitVec(64)>) →
-                (match d as λ _ => Ending { Inl(_) => last.run(below, words, buffers), Inr(_) => below(buffers, f, words) }).buffers = buffers {
+                (match d as λ _ => Ending { Inl(_) => last.run(tops, words, buffers), Inr(_) => below(buffers, f, words) }).buffers = buffers {
                 Inl(_) => λ marked words => {
                     let both = Bool::is_true_and(last.body.quiet(), last.body.calls_among(among), own(marked));
                     cong_fn<Ending, Buffers()>(λ end => end.buffers,
-                        last.run_still(below, buffers, among, λ g m ws => ih(g, m, ws), both.left, both.right, words))
+                        last.run_still(tops, buffers, among,
+                            last.levels_leaves(below, linked_still(earlier, stills.tail()), earlier.len(), buffers, λ g m ws => ih(g, m, ws), both.left,
+                                last.levels, both.right), both.left, both.right, words))
                 },
                 Inr(_) => λ marked words => ih(f, marked, words),
             }
@@ -275,27 +324,34 @@ fn program_spanned<S>(functions: List<Function>, arities: List<Nat>, stills: Lis
     }
 }
 
-// The theorem: such a program's run answers as `sources` says.
+// The theorem: such a program's run answers as `sources` says, where no
+// function of it calls itself.
 theorem program_spanned_sources<S>(functions: List<Function>): (arities: List<Nat>) → (stills: List<Bool>) → (emb: S → Buffers()) →
     (sources: S → Nat → List<BitVec(64)> → Ending) → program_spanned(functions, arities, stills, emb, sources) →
+    program_flat(functions).IsTrue() →
     Writers::Sourced(program_run(functions), emb, sources, linked_arity(functions, arities), linked_still(functions, stills)) {
     match functions {
-        Nil => λ arities stills emb sources _ => ⟨λ s f words never => false_elim(never), λ s f never words => false_elim(never)⟩,
-        Cons(last, earlier) => λ arities stills emb sources linked => {
+        Nil => λ arities stills emb sources _ _ => ⟨λ s f words never => false_elim(never), λ s f never words => false_elim(never)⟩,
+        Cons(last, earlier) => λ arities stills emb sources linked flat => {
+            let flats = Bool::is_true_and(last.levels.matches(0), program_flat(earlier), flat);
+            let none: (last.levels = 0) = last.levels.matches_eq(0, flats.left);
             let below = program_run(earlier);
-            let ih = program_spanned_sources(earlier, arities.tail(), stills.tail(), emb, sources, linked.right);
+            let tops = program_last_writers(last, earlier);
+            let ih = program_spanned_sources(earlier, arities.tail(), stills.tail(), emb, sources, linked.right, flats.right);
             let part = linked.left(below, ih);
             ⟨λ s f words => (match f.eq_dec(earlier.len()) as λ d =>
                     arity_fits(match d { Inl(_) => arities.nth(0), Inr(_) => linked_arity(earlier, arities.tail(), f) }, words.len()).IsTrue() →
-                    (match d as λ _ => Ending { Inl(_) => last.run(below, words, emb(s)), Inr(_) => below(emb(s), f, words) }) = sources(s, f, words) {
-                    Inl(e) => λ fits => j(sym(e), λ g _ => last.run(below, words, emb(s)) = sources(s, g, words), part.left(s, words, fits)),
+                    (match d as λ _ => Ending { Inl(_) => last.run(tops, words, emb(s)), Inr(_) => below(emb(s), f, words) }) = sources(s, f, words) {
+                    Inl(e) => λ fits => j(sym(none), λ l _ => last.run(last.writers_at(below, earlier.len(), l), words, emb(s)) = sources(s, f, words),
+                        j(sym(e), λ g _ => last.run(below, words, emb(s)) = sources(s, g, words), part.left(s, words, fits))),
                     Inr(_) => λ fits => ih.left(s, f, words, fits),
                 }),
             λ s f => (match f.eq_dec(earlier.len()) as λ d =>
                     (match d { Inl(_) => stills.head_or(False), Inr(_) => linked_still(earlier, stills.tail(), f) }).IsTrue() →
                     (words: List<BitVec(64)>) →
-                    (match d as λ _ => Ending { Inl(_) => last.run(below, words, emb(s)), Inr(_) => below(emb(s), f, words) }).buffers = emb(s) {
-                    Inl(_) => λ marked words => part.right(marked, s, words),
+                    (match d as λ _ => Ending { Inl(_) => last.run(tops, words, emb(s)), Inr(_) => below(emb(s), f, words) }).buffers = emb(s) {
+                    Inl(_) => λ marked words => j(sym(none), λ l _ => last.run(last.writers_at(below, earlier.len(), l), words, emb(s)).buffers = emb(s),
+                        part.right(marked, s, words)),
                     Inr(_) => λ marked words => ih.right(s, f, marked, words),
                 })⟩
         },
@@ -305,16 +361,18 @@ theorem program_spanned_sources<S>(functions: List<Function>): (arities: List<Na
 // The two halves, as a program's function is cited: what it ends in on as
 // many words as it takes, and that one marked still leaves the file.
 theorem program_spanned_answers<S>(functions: List<Function>, arities: List<Nat>, stills: List<Bool>, emb: S → Buffers(),
-    sources: S → Nat → List<BitVec(64)> → Ending, linked: program_spanned(functions, arities, stills, emb, sources), s: S, f: Nat,
+    sources: S → Nat → List<BitVec(64)> → Ending, linked: program_spanned(functions, arities, stills, emb, sources),
+    flat: program_flat(functions).IsTrue(), s: S, f: Nat,
     words: List<BitVec(64)>, fits: arity_fits(linked_arity(functions, arities, f), words.len()).IsTrue()):
     program_run(functions, emb(s), f, words) = sources(s, f, words) {
-    let sourced = program_spanned_sources<S>(functions, arities, stills, emb, sources, linked);
+    let sourced = program_spanned_sources<S>(functions, arities, stills, emb, sources, linked, flat);
     sourced.left(s, f, words, fits)
 }
 
 theorem program_spanned_still<S>(functions: List<Function>, arities: List<Nat>, stills: List<Bool>, emb: S → Buffers(),
-    sources: S → Nat → List<BitVec(64)> → Ending, linked: program_spanned(functions, arities, stills, emb, sources), s: S, f: Nat,
+    sources: S → Nat → List<BitVec(64)> → Ending, linked: program_spanned(functions, arities, stills, emb, sources),
+    flat: program_flat(functions).IsTrue(), s: S, f: Nat,
     marked: linked_still(functions, stills, f).IsTrue(), words: List<BitVec(64)>): program_run(functions, emb(s), f, words).buffers = emb(s) {
-    let sourced = program_spanned_sources<S>(functions, arities, stills, emb, sources, linked);
+    let sourced = program_spanned_sources<S>(functions, arities, stills, emb, sources, linked, flat);
     sourced.right(s, f, marked, words)
 }
