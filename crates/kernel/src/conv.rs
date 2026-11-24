@@ -125,6 +125,15 @@ const MEET_STEPS: usize = 64;
 /// looks for a component that projects the other side's spine.
 const ETA_FIELD_DEPTH: usize = 4;
 
+/// The fuel [`Conv::eta_before_unfolding`]'s attempt may spend, nested
+/// attempts included. A wrapper's fields meet in under a thousand steps (the
+/// word map's `insert_is` in the kernel gate, an attempt nested in one);
+/// an attempt that would not meet is cut off here rather than charged its
+/// whole failure, which inside a laid record's accessor checks
+/// (`Sha256::close`, about a hundred attempts) added up past the
+/// comparison's budget.
+const ETA_FUEL: u64 = 4096;
+
 /// The last few spines one side of a conversion was advanced past, each
 /// at its head ([`Conv::tm_w`]): the other side, reducing, may arrive at one
 /// of those heads, and meets the spine there. Each is tried once.
@@ -2258,7 +2267,9 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
     /// back from. A strategy change with no semantic content: η is the rule
     /// the Σ arm applies anyway once the stuck side is unfolded, and a
     /// failed attempt falls through to that unfolding with
-    /// [`Conv::delta_lazy`]'s guard semantics (fuel spent, not refunded).
+    /// [`Conv::delta_lazy`]'s guard semantics (fuel spent, not refunded),
+    /// and so does one that exhausts its small allowance of the fuel
+    /// ([`ETA_FUEL`]).
     fn eta_before_unfolding(&mut self, env: &Env<'v>, a: &D::Tm, b: &D::Tm, w: &D::Ty, stuck_is_a: bool) -> R<bool> {
         let (stuck, pair) = if stuck_is_a { (a, b) } else { (b, a) };
         let Some(target) = D::delta_head(self, env, stuck) else { return Ok(false) };
@@ -2273,8 +2284,24 @@ impl<'v, D: Dom<'v>> Conv<'v, D> {
         if !self.projects_spine(env, pair, w, target, ETA_FIELD_DEPTH)? {
             return Ok(false);
         }
+        // The attempt runs on a small allowance of the fuel, and running
+        // out of it is no verdict: the allowance is charged and the stuck
+        // side unfolds as it would have. Every rule stays total and
+        // every verdict is η's or the unfolding's; what the slice bounds
+        // is the cost of a guess that the fields meet (a laid record's
+        // stores can share a spine with the accessor they are compared
+        // with and still meet only after unfolding, `Sha256::close`).
         let vw = D::view_ty(self, env, w);
-        Ok(self.delta_lazy(|c| c.tm_nf_sigma(env, a, b, &vw).map(drop))?.is_some())
+        let total = self.fuel;
+        let slice = ETA_FUEL.min(total);
+        self.fuel = slice;
+        let tried = self.delta_lazy(|c| c.tm_nf_sigma(env, a, b, &vw).map(drop));
+        self.fuel = total - (slice - self.fuel);
+        match tried {
+            Ok(met) => Ok(met.is_some()),
+            Err(ConvError::OutOfFuel) if self.fuel > 0 => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 
     /// Whether a component of the pair `p : w`, down its right-nested Σ to

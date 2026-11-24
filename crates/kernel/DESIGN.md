@@ -433,11 +433,17 @@ irrelevant one) is stuck at the other side's head, directly or past newer
 heads such as a record's projection function, `Conv::eta_before_unfolding`
 compares the pair's fields with the stuck side's projections under
 `delta_lazy`'s guard, and they meet at `g(x, 4)`'s spine; a failure falls
-through to the unfolding. The shape test is what keeps it to that case:
+through to the unfolding. Two bounds keep it to that case. The shape test:
 tried against every pair, field-by-field η exhausted the budget where one
 unfolding would not (a laid record's stores against its accessor's
-function in `runtime_held_array_tests`, `Sha256::run`'s accessors), and
-exhaustion is not a verdict the guard falls back from. η is the rule the Σ arm applies anyway once the stuck side is
+function in `runtime_held_array_tests`, `Sha256::run`'s accessors). And an
+allowance: the attempt, nested ones included, runs on at most `ETA_FUEL`
+steps, and running out of that is not a verdict, so the allowance is
+charged and the stuck side unfolds as before; inside `Sha256::close`'s
+accessor checks about a hundred attempts that passed the shape test and
+still did not meet had each been charged its whole failure. A wrapper's
+fields meet in under a thousand steps. Like `MEET_STEPS`, the allowance is
+a constant of the strategy, not of any verdict. η is the rule the Σ arm applies anyway once the stuck side is
 unfolded, so this is the second kind of acceleration below: the same
 verdicts, fewer unfoldings.
 
