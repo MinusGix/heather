@@ -5522,7 +5522,7 @@ pub(crate) fn step_equations(decl: &Decl, name: &str) -> Result<Vec<Lowered>, St
                 let ty = if truth {
                     prop.clone()
                 } else {
-                    arrow(None, prop.clone(), Ty { kind: TyKind::Named { name: "False".into(), args: Vec::new() }, span }, span)
+                    arrow(None, prop.clone(), Ty { kind: TyKind::Named { name: "logic::False".into(), args: Vec::new() }, span }, span)
                 };
                 let lemma = if truth { "bool::decide_bit_of" } else { "bool::decide_bit_of_not" };
                 let head = Expr { kind: ExprKind::TyApp { head: Box::new(var(lemma, span)), args: vec![prop.clone()] }, span };

@@ -106,8 +106,17 @@ impl DeclarationsMut<'_> {
     /// `designate` says so: a recursion's principle (`function_induction`)
     /// is elaborated from them first, and spells them by their minted names.
     fn elab_branch_equations(&mut self, decl: &Decl, recursion: branch_equations::Recursion, designate: bool) -> Option<Vec<branch_equations::BranchEquation>> {
-        let needs = ["bool::Bool::convoy_true", "bool::Bool::picked_true", "bool::decide_bit_of", "bool::decide_bit_of_not"];
-        if needs.iter().any(|n| !matches!(NameLookup(self).resolve_declared(n), NameRes::Found(_))) {
+        // The equations spell what they are proved from by qualified name,
+        // which a module reaches through its import closure
+        // (issues/branch-equations-silent-without-logic.md); one that does
+        // not reach them is told which import builds them.
+        let needs = ["bool::Bool::convoy_true", "bool::Bool::picked_true", "bool::decide_bit_of", "bool::decide_bit_of_not", "logic::False"];
+        if let Some(missing) = needs.iter().find(|n| !matches!(NameLookup(self).resolve_declared(n), NameRes::Found(_))) {
+            let module = missing.split("::").next().unwrap_or(missing);
+            let why = format!("`{missing}` is not reached from this module: `import {module};`");
+            for name in branch_equations::head_names(decl) {
+                self.pass.unfold_refusals.borrow_mut().entry(name).or_insert_with(|| why.clone());
+            }
             return None;
         }
         let self_name = base_name(&decl.name).to_string();
@@ -1262,7 +1271,7 @@ impl DeclarationsMut<'_> {
     /// neither; a refusal is recorded under the designed spelling, which a
     /// reference then reports.
     fn elab_step_equations(&mut self, decl: &Decl, self_name: &str) {
-        let needs = ["bool::Bool::convoy_true", "bool::Bool::convoy_false", "bool::decide_bit_of", "bool::decide_bit_of_not"];
+        let needs = ["bool::Bool::convoy_true", "bool::Bool::convoy_false", "bool::decide_bit_of", "bool::decide_bit_of_not", "logic::False"];
         let designed = [format!("{}::step", decl.name), format!("{}::done", decl.name)];
         let refuse = |this: &mut Self, why: String| {
             for n in &designed {
@@ -1270,7 +1279,8 @@ impl DeclarationsMut<'_> {
             }
         };
         if let Some(missing) = needs.iter().find(|n| !matches!(NameLookup(self).resolve_declared(n), NameRes::Found(_))) {
-            return refuse(self, format!("`{missing}` is not in scope: `import bool;`"));
+            let module = missing.split("::").next().unwrap_or(missing);
+            return refuse(self, format!("`{missing}` is not reached from this module: `import {module};`"));
         }
         let parts = match measure::step_equations(decl, self_name) {
             Ok(parts) => parts,

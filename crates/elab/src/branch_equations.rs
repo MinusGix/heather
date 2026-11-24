@@ -244,7 +244,7 @@ fn evidence_name(arm: &Expr) -> Option<&str> {
 
 fn not_ty(p: Ty) -> Ty {
     let span = p.span;
-    arrow(None, p, Ty { kind: TyKind::Named { name: "False".into(), args: Vec::new() }, span }, span)
+    arrow(None, p, Ty { kind: TyKind::Named { name: "logic::False".into(), args: Vec::new() }, span }, span)
 }
 
 fn ty_app_call(name: &str, ty: Ty, args: Vec<Expr>, span: heather_syntax::Span) -> Expr {
