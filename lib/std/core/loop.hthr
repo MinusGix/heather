@@ -124,31 +124,62 @@ theorem Loop::rule<S, R>(self l: Loop<S, R>, I: S → Type, Q: R → Type,
     l.rule_within(I, Q, keeps, l.measure(s) + 1, s, Nat::lt_succ_self(l.measure(s)), start)
 }
 
-// A function that answers as the loop does at every pass is the loop, at a
-// number of passes.
-theorem Loop::unique_within<S, R>(self l: Loop<S, R>, g: S → R,
-    same: (s: S) → g(s) = (match l.step(s) { Again(b) => g(b.next), Done(r) => r }), k: Nat): (s: S) → (h: l.measure(s) < k) → g(s) = l.within(k, s, h)
+// ---------------------------------------------------------------------------
+// Uniqueness of a well-founded fixpoint
+// (docs/language/loop-combinator-design.md §6.5).
+//
+// A recursion over `A` with measure `m` is a step `F`: its answer at `a`,
+// given an answer at every argument whose measure is below `a`'s. Two
+// functions that each satisfy the step's equation are equal at every
+// argument, provided the step reads its recursion only at its values
+// (`FixpointExt`; there is no funext). This is how a function defined by
+// recursion is pinned to its compiled code: the code's meaning and the
+// function satisfy the same equation. A loop is its case (`Loop::unique`).
+
+// The step reads its recursion only at its values below the measure.
+fn FixpointExt<A, B>(m: A → Nat, F: (a: A) → ((b: A) → m(b) < m(a) → B) → B) → Type {
+    (a: A) → (h1, h2: (b: A) → m(b) < m(a) → B) → ((b: A) → (p: m(b) < m(a)) → h1(b, p) = h2(b, p)) → F(a, h1) = F(a, h2)
+}
+
+// Below a bound on the measure.
+theorem fixpoint_unique_within<A, B>(m: A → Nat, F: (a: A) → ((b: A) → m(b) < m(a) → B) → B, ext: FixpointExt(m, F), f, g: A → B,
+    fe: (a: A) → f(a) = F(a, λ b _ => f(b)), ge: (a: A) → g(a) = F(a, λ b _ => g(b)), k: Nat): (a: A) → m(a) < k → f(a) = g(a)
 {
     match k {
-        Zero => λ s h => false_elim(Nat::not_succ_le_zero(l.measure(s), h)),
-        Succ(j) => λ s h => trans(same(s), match l.step(s) as λ p =>
-            (match p { Again(b) => g(b.next), Done(r) => r }) = (match p {
-                Again(b) => l.within(j, b.next, Nat::lt_of_lt_of_le(l.measure(b.next), l.measure(s), j, b.less.recover(), h)),
-                Done(r) => r,
-            }) {
-            Again(b) => Loop::unique_within(l, g, same, j, b.next, Nat::lt_of_lt_of_le(l.measure(b.next), l.measure(s), j, b.less.recover(), h)),
-            Done(_) => refl,
-        }),
+        Zero => λ a h => false_elim(Nat::not_succ_le_zero(m(a), h)),
+        Succ(j) => λ a h => trans(fe(a), trans(ext(a, λ b _ => f(b), λ b _ => g(b),
+            λ b p => fixpoint_unique_within(m, F, ext, f, g, fe, ge, j, b, Nat::lt_of_lt_of_le(m(b), m(a), j, p, h))), sym(ge(a)))),
+    }
+}
+
+// Two fixpoints of one step are equal at every argument.
+theorem fixpoint_unique<A, B>(m: A → Nat, F: (a: A) → ((b: A) → m(b) < m(a) → B) → B, ext: FixpointExt(m, F), f, g: A → B,
+    fe: (a: A) → f(a) = F(a, λ b _ => f(b)), ge: (a: A) → g(a) = F(a, λ b _ => g(b)), a: A): f(a) = g(a)
+{
+    fixpoint_unique_within(m, F, ext, f, g, fe, ge, m(a) + 1, a, Nat::lt_succ_self(m(a)))
+}
+
+// A loop's step as a recursion's: a pass that goes round answers with the
+// recursion at the next state, which its `less` puts below.
+fn Loop::fix<S, R>(self l: Loop<S, R>) → (s: S) → ((t: S) → l.measure(t) < l.measure(s) → R) → R {
+    λ s rec => match l.step(s) { Again(b) => rec(b.next, b.less.recover()), Done(r) => r }
+}
+
+theorem Loop::fix_ext<S, R>(self l: Loop<S, R>): FixpointExt(l.measure, l.fix()) {
+    λ s h1 h2 same => match l.step(s) as λ p =>
+        (match p { Again(b) => h1(b.next, b.less.recover()), Done(r) => r }) = (match p { Again(b) => h2(b.next, b.less.recover()), Done(r) => r }) {
+        Again(b) => same(b.next, b.less.recover()),
+        Done(_) => refl,
     }
 }
 
 // A function that answers as the loop does at every pass is the loop: how
 // a recursion that calls itself last is read as a loop, from its own
-// unfolding equation.
+// unfolding equation. The case of `fixpoint_unique` at the loop's step.
 theorem Loop::unique<S, R>(self l: Loop<S, R>, g: S → R,
     same: (s: S) → g(s) = (match l.step(s) { Again(b) => g(b.next), Done(r) => r }), s: S): g(s) = l.run(s)
 {
-    l.unique_within(g, same, l.measure(s) + 1, s, Nat::lt_succ_self(l.measure(s)))
+    fixpoint_unique(l.measure, l.fix(), l.fix_ext(), g, λ t => l.run(t), same, λ t => l.run_unfold(t), s)
 }
 
 // ---------------------------------------------------------------------------
