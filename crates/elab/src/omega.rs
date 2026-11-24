@@ -89,6 +89,18 @@ impl Interval {
         }
     }
 
+    /// Whether `k · v` is bounded below and above, for `v` in this
+    /// interval: its sides, swapped by a negative `k`. The bounds are not
+    /// scaled, which at a `2^64` coefficient beside a bound near `2^64`
+    /// overflowed only to learn which sides exist.
+    fn scaled_sides(self, k: Z) -> (bool, bool) {
+        if k >= 0 {
+            (self.lower.is_some(), self.upper.is_some())
+        } else {
+            (self.upper.is_some(), self.lower.is_some())
+        }
+    }
+
     fn scale(self, k: Z) -> R<Self> {
         if k == 0 {
             return Ok(if self.is_impossible() {
@@ -723,12 +735,12 @@ impl Problem {
                     continue;
                 }
                 mentioned = true;
-                let scaled = fact.interval.scale(c)?;
-                if scaled.lower.is_some() {
+                let (has_lower, has_upper) = fact.interval.scaled_sides(c);
+                if has_lower {
                     lower += 1;
                     lower_exact &= c.unsigned_abs() == 1;
                 }
-                if scaled.upper.is_some() {
+                if has_upper {
                     upper += 1;
                     upper_exact &= c.unsigned_abs() == 1;
                 }
@@ -762,11 +774,11 @@ impl Problem {
                 irrelevant.push(fact);
                 continue;
             }
-            let scaled = fact.interval.scale(coefficient)?;
-            if scaled.lower.is_some() {
+            let (has_lower, has_upper) = fact.interval.scaled_sides(coefficient);
+            if has_lower {
                 lower.push((fact.clone(), coefficient));
             }
-            if scaled.upper.is_some() {
+            if has_upper {
                 upper.push((fact, coefficient));
             }
         }
@@ -777,7 +789,12 @@ impl Problem {
         }
         for (low, b) in &lower {
             for (high, a) in &upper {
-                let combined = Fact::combo(*a, low, neg(*b)?, high, &mut self.dag)?;
+                // Scaled by the least common multiple, not the product:
+                // two bounds at `2^64 * q` combine at `1` and `1`, where
+                // the product of the coefficients would leave 128 bits
+                // (issues/bv-omega-word-arithmetic-modulo.md).
+                let g = crate::arithmetic::gcd(a.abs(), b.abs()).max(1);
+                let combined = Fact::combo(*a / g, low, neg(*b / g)?, high, &mut self.dag)?;
                 debug_assert_eq!(combined.coeffs.get(var), 0);
                 self.stats.combinations += 1;
                 self.insert(combined)?;

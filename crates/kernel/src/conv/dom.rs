@@ -507,6 +507,11 @@ pub(super) trait Dom<'v>: Sized {
     /// [`Dom::delta_head`] has answered `Some`.
     fn is_application_spine(w: &Self::Tm) -> bool;
 
+    /// Is this weak head normal term a pair — a record's constructor, or a
+    /// step of a vector's encoding? [`Conv::tm_w`] tries Σ-η against it
+    /// before unfolding a δ-stuck other side.
+    fn is_pair(w: &Self::Tm) -> bool;
+
     // -- views --------------------------------------------------------------
 
     /// The two views. Unlike every other accessor these are **total**: they
@@ -1127,6 +1132,10 @@ impl<'v> Dom<'v> for Syn {
         super::delta_head_ty(w, cv.defs(env))
     }
 
+
+    fn is_pair(w: &Rc<Term>) -> bool {
+        matches!(&**w, Term::Pair { .. } | Term::PairAt { .. })
+    }
 
     fn is_application_spine(w: &Rc<Term>) -> bool {
         let mut t: &Term = w;

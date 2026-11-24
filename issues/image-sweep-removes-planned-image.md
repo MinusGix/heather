@@ -4,7 +4,7 @@ status: closed
 labels: [tooling,infrastructure,cache]
 area: infrastructure
 created: 2026-11-11
-updated: 2026-11-12
+updated: 2026-11-24
 ---
 
 A run that has planned to replay a module from the image store fails if
@@ -43,3 +43,4 @@ budget is this race: rerun the test.
 
 - 2026-11-11: Seen again on a suite run over a store past its budget (`target/cli-check-images` at 4.5 GiB of 4 GiB): `compiled_yes_takes_its_line_as_gnu_yes` failed with "the image of `char` is gone from the store", and a rerun of `native_tools` alone failed the same way, so on such a store a rerun does not help. Deleting images older than a day (`find target/cli-check-images -name '*.hmi' -mmin +1440 -delete`, 2.2 GiB left) and rerunning passed, 19 of 19. Until one of the options above is taken, that trim is the workaround, not a rerun.
 - 2026-11-12: Seen again 2026-11-12 on PR #551, and this time it repeats: `compiled_yes_takes_its_line_as_gnu_yes` failed under `scripts/test --pr` with "the image of `char` is gone from the store", failed again with the same message when `native_tools` was run on its own (its twenty tests share the store), and passed run alone. `target/cli-check-images` was 5.2 GiB on disk against the 4 GiB budget, after a day of rounds that each re-imaged the library, so every publish swept and `char`, an image nothing had rewritten, was among the oldest. So a store at its budget stays there and the race stops being rare: until the loader rebuilds on a miss, the remedy for a red with this message is to clear `target/cli-check-images` and not only to rerun.
+- 2026-11-24: 2026-11-24: a sibling failure in moving an image over another dependency world is [[image-move-fails-under-concurrent-rewrite]].

@@ -75,6 +75,21 @@ so a round can read the argument instead of re-making it.
     instance level (`docs/archive/surface-v3.md` §3).
 12. **The Right Way first.** Design is argued on semantics and principle,
     then cost (Minus, 2026-10-22).
+13. **A runtime check is a proof checked at another time; the proof takes
+    primacy** (Minus, 2026-11-24). A primitive states what it needs as a
+    proof obligation (an index inside its span, a loop's termination by a
+    measure that decreases), and a form that checks at run time (a guard, a
+    counted loop that ends at a literal bound) is a helper that discharges
+    the obligation for the code that wants it, not the primitive. A case the
+    obligation rules out is absurd and emits no code: a loop's pass budget
+    running out is refuted by its measure, not lowered as an extra pass
+    (`docs/language/loop-combinator-design.md` §6.8). §2.5's guarded
+    accesses and found proofs (`InBounds`) are this applied to memory, and
+    "junk values as a default API are usually a mistake"
+    (`docs/native/span-record-design.md`) is it applied to an API's answers.
+    Where the obligation, the fact behind it and the runtime check run out,
+    the answer is an outcome in the type (`Got(base) | Full`), never a
+    sentinel the type does not mark.
 
 ---
 

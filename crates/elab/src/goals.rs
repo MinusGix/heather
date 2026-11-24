@@ -484,7 +484,7 @@ impl GoalArena {
     /// reference. `None` keeps the proof inline: no capacity reserved, a
     /// frozen arena, an open context, or the same site met again in another
     /// context.
-    pub(super) fn allocate_proved(&self, cx: &Cx, ty: Type, level: Level, proof: Term, span: Span) -> Option<Term> {
+    pub(super) fn allocate_proved(&self, tactic: &str, cx: &Cx, ty: Type, level: Level, proof: Term, span: Span) -> Option<Term> {
         if self.frozen.get() || !matches!(cx.gamma.base, CtxBase::Nil) {
             return None;
         }
@@ -504,7 +504,9 @@ impl GoalArena {
                     return None;
                 }
                 goals.push(Goal {
-                    name: format!("#proved{k}"),
+                    // The tactic after the slot, for the reader
+                    // ([`Self::slot_spelling`]).
+                    name: format!("#proved{k}/{tactic}"),
                     cx: cx.clone(),
                     ty,
                     level,
@@ -674,7 +676,7 @@ impl GoalArena {
 
     /// How a reader is shown a reference to slot `k`
     /// (`display::Speller::goal_slot`): a lifted proof by the tactic that
-    /// found it (only `bv_omega` lifts one, `checking.rs`), a goal by its
+    /// found it (`bv_omega` and a written `omega` lift theirs, `checking.rs`), a goal by its
     /// name. A named value (`omega`'s atom list) and the padding past the
     /// allocated slots have no spelling.
     pub(super) fn slot_spelling(&self, k: usize) -> Option<String> {
@@ -684,7 +686,7 @@ impl GoalArena {
         let goals = self.entries.try_borrow().ok()?;
         let goal = goals.get(k)?;
         match &goal.state {
-            GoalState::Proved(_) => Some("bv_omega".to_string()),
+            GoalState::Proved(_) => goal.name.rsplit_once('/').map(|(_, tactic)| tactic.to_string()),
             GoalState::Open | GoalState::Solved(_) => Some(format!("?{}", goal.name)),
             GoalState::Transparent(..) => None,
         }

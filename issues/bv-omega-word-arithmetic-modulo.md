@@ -35,3 +35,11 @@ arithmetic modulo four on words, and `bv_omega` reads neither.
 width as `(a + 2^n - b) % 2^n` with the borrow a case of the division
 variable rather than a refusal; `omega`'s coefficients are wide enough for
 `2^64` times a small modulus (the arithmetic of every word fact).
+
+## Log
+
+- 2026-11-24: Proof tooling round (branch `claude/proof-tooling-omega`). Done:
+  - A low mask reads as the remainder: `x & (2^k - 1)` at a literal width states `toNat(x) % 2^k` (`toNat_band_low_mask`) in place of the bound; a masked sum or difference is read through its wrap, `(toNat(a) + toNat(b)) % 2^k` and `(toNat(a) + 2^w - toNat(b)) % 2^k` (new `BitVec::toNat_band_low_mask_add`/`_sub` in `bitvec_shift_nat`), so the carry or borrow is a case of the remainder's quotient and the operation owes no side condition (docs/tactics/bv-omega-design.md §3.2). `WordMap::band_three` is gone, `next_slot` and `slot_dist` are `{ bv_omega }`.
+  - `omega`'s Fourier–Motzkin step no longer overflows at a `2^64` coefficient beside a bound near `2^64`: it scaled the interval only to learn which sides exist (now read off the sign), and it combines bounds by their lcm, not their product.
+
+  Left: a bare `a - b` that may borrow, with no mask, is still a side condition (the wrap is stated only under a low mask); and CutSat's own resolution still overflows 128 bits on `((j + 2^64 - i) % 2^64) % 4` once the real shadow has failed (it multiplies `2^64`-scale coefficients). The word map no longer meets either. Probes and controls: `lib/_tests/std/tactic/bitvec_omega_tests.hthr` ("Arithmetic modulo a power of two").

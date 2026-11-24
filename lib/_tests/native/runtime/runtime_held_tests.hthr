@@ -189,7 +189,7 @@ theorem init_holds(own: List<u8>, s: State, length: u64, holds: State::stored().
 
 record Plain { count: u64 }
 
-// expect-error: `Plain` has no runtime layout
+// expect-error: a function over a span takes the span first
 runtime fn Plain::bump(mut self p: Plain) → u64 {
     p.count := p.count + 1;
     p.count
@@ -212,7 +212,7 @@ runtime fn Tally::choose(self t: Tally, limit: u64) → Mutated<Tally, u64> {
     Mutated(match t.count.unsigned_lt_bit(limit) { False => t, True => t with { count = limit } }, limit)
 }
 
-// expect-error: it answers a 64-bit word for now, beside its record
+// expect-error: it answers a 64-bit word beside its record, a record of them
 runtime fn Tally::low(mut self t: Tally) → u32 {
     t.count := 0;
     5

@@ -440,7 +440,7 @@ fn List::poke_plain(mut self span: List<BitVec(8)>, length, i, v: BitVec(64)) �
 runtime fn List::poke_through(mut self span: List<BitVec(8)>, length, i, v: BitVec(64)) → BitVec(64) { span.poke_plain(length, i, v) }
 
 // A byte across the boundary: the code takes 64-bit words.
-// expect-error: it takes and returns 64-bit words for now, beside its span
+// expect-error: it takes 64-bit words beside its span, and returns a 64-bit word
 runtime fn List::poke_byte(mut self span: List<BitVec(8)>, length, i: BitVec(64), v: BitVec(8)) → BitVec(64) {
     span.put_within(length, i, v);
     i

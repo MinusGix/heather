@@ -790,6 +790,10 @@ impl<'v> Dom<'v> for Values {
         }
     }
 
+    fn is_pair(w: &&'v Val<'v>) -> bool {
+        matches!(&**w, Val::Pair { .. })
+    }
+
     fn is_application_spine(w: &&'v Val<'v>) -> bool {
         match &**w {
             Val::Neutral(n) => n.spine.iter_rev().all(|e| {

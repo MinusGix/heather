@@ -1,6 +1,6 @@
 ---
 title: induct on a runtime fn: case binders lose the test names, and case λs cannot see past the motive
-status: open
+status: closed
 labels: [tactics,runtime]
 area: tactics
 created: 2026-11-24
@@ -37,3 +37,25 @@ The principle's case binders named as the function's tests (and `h`, `eq`,
 `ih` as elsewhere), so `induct`'s arms work for `runtime fn`s; and a case
 λ checked against `motive(x̄)` with the β-redex reduced before its binders
 are introduced.
+
+## Log
+
+- 2026-11-24: 2026-11-24: Fixed (551817a). Cause: `if more: P` lowers to a convoy that
+  binds `let more = decide_true<P>(…)` only in a branch that names `more`
+  (parser.rs, the `if h:` lowering); `find_at`'s branches cite none of their
+  tests, so nothing carried the names and the equations numbered them `h`,
+  `h3`, …. Where neither branch names the evidence, the convoy's private
+  equation is now `__if_bitN_more` (`heather_syntax::if_bit_unnamed`), and
+  `branch_equations::Walk::hypothesis` and `measure::step_equations` take the
+  written name from it (`if_bit_written`); the function's term is unchanged.
+  Not `runtime fn`-specific: a plain `fn` whose branches never cite their
+  tests lost them too, so a loop route that defines a tail-recursive
+  `runtime fn` differently keeps the names as long as its principle is read
+  off the written `if h:` (docs/language/loop-combinator-design.md §6.5).
+
+  Item 2 (untyped binders past the motive) did not reproduce with the names
+  fixed: `T::scan_by_hand_record` and `T::scan_by_hand_defined` apply the
+  principle by hand with a case λ whose binder past `motive(j, left)` is read
+  as a record (`p.left`), the motive's body a literal Π and a defined
+  proposition. Probe: lib/_tests/native/runtime/runtime_induct_names_tests.hthr.
+  `word_map_laws.hthr`'s seven probes are `induct` arms now (0a6a79c).

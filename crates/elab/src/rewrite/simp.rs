@@ -968,7 +968,11 @@ impl Simps<'_> {
         }
         let by = by?;
         let mark = self.attempt.mark();
-        let attempt = self.elab_check(cx, by, ty, level);
+        // In a generated scope: a discharger is tried at each side condition
+        // and its proof kernel-checked here, in the goal world, so a written
+        // `omega` in it stays inline rather than lifting into a slot the
+        // check below does not accept (`checking.rs`'s `elab_omega`).
+        let attempt = self.generated_scope(|me| me.elab_check(cx, by, ty, level));
         match attempt {
             Ok(proof) if self.checks(cx, &proof, ty, level) => Some(proof),
             _ => {

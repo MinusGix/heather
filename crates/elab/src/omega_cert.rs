@@ -894,23 +894,42 @@ fn coefficient_source(source: &str) -> Option<Vec<Z>> {
 /// Only the surface name table changes: the kernel context, alias terms and
 /// goal keep their original de Bruijn indices. This lets a certificate use an
 /// outer fact without spelling its variable as an unrelated inner binder.
+///
+/// A generated binder (`#p1`, the variable a nested pattern binds before the
+/// written name aliases it; `#ih`) gets a name too, `__omega_hidden_N`: a
+/// fact's type can mention one, and spelled raw it stopped the call with
+/// "unexpected character '#'"
+/// (issues/omega-unspellable-local-in-scope.md). Such a binder is still not
+/// read as a fact itself ([`local_fact_entries`]).
 pub(crate) fn source_context(cx: &Cx) -> std::borrow::Cow<'_, Cx> {
-    let shadowed: Vec<_> = cx.names.iter().enumerate().filter_map(|(pos, name)| {
-        (!name.starts_with('#')
-            && (cx.names.iter().skip(pos + 1).any(|later| later == name)
-                || cx.aliases.iter_inner().any(|alias| alias.name == *name && alias.depth > pos)))
+    source_context_naming(cx, false)
+}
+
+/// [`source_context`], with every generated binder named as well: what
+/// `omega` retries with when a certificate spelled a generated name and did
+/// not parse. Only then, since a generated binder is also a structure's
+/// instance dictionary, whose operations `ring` and `omega` itself read by
+/// the spelling the plain context gives them.
+pub(crate) fn source_context_naming(cx: &Cx, hidden: bool) -> std::borrow::Cow<'_, Cx> {
+    let renamed: Vec<_> = cx.names.iter().enumerate().filter_map(|(pos, name)| {
+        if name.starts_with('#') {
+            return hidden.then_some(pos);
+        }
+        (cx.names.iter().skip(pos + 1).any(|later| later == name)
+            || cx.aliases.iter_inner().any(|alias| alias.name == *name && alias.depth > pos))
             .then_some(pos)
     }).collect();
-    if shadowed.is_empty() {
+    if renamed.is_empty() {
         return std::borrow::Cow::Borrowed(cx);
     }
     let mut used: std::collections::HashSet<String> = cx.names.iter().map(str::to_string)
         .chain(cx.aliases.iter_inner().map(|alias| alias.name.clone())).collect();
     let mut fresh = std::collections::HashMap::new();
     let mut next = 0;
-    for pos in shadowed {
+    for pos in renamed {
+        let prefix = if cx.names.iter().nth(pos).is_some_and(|name| name.starts_with('#')) { HIDDEN } else { "__omega_local_" };
         loop {
-            let name = format!("__omega_local_{next}");
+            let name = format!("{prefix}{next}");
             next += 1;
             if used.insert(name.clone()) {
                 fresh.insert(pos, name);
@@ -927,6 +946,9 @@ pub(crate) fn source_context(cx: &Cx) -> std::borrow::Cow<'_, Cx> {
     });
     std::borrow::Cow::Owned(named)
 }
+
+/// The prefix [`source_context`] names a generated binder by.
+const HIDDEN: &str = "__omega_hidden_";
 
 // Resolve each visible name once through the same binder/alias precedence as
 // ordinary expressions. Alias types are weakened to this context by resolve.
@@ -951,7 +973,7 @@ pub(crate) fn local_fact_entries(elab: &Elaborator, cx: &Cx) -> Vec<LocalFact> {
     let mut seen = std::collections::HashSet::new();
     let mut facts = Vec::new();
     for name in cx.names.iter().chain(cx.aliases.iter().map(|alias| alias.name.as_str())) {
-        if name.starts_with('#') || !seen.insert(name.to_string()) {
+        if name.starts_with('#') || name.starts_with(HIDDEN) || !seen.insert(name.to_string()) {
             continue;
         }
         if let Ok((term, ty, level)) = elab.resolve_reading(cx, name, heather_syntax::Span { start: 0, end: 0 }) {
@@ -1331,7 +1353,8 @@ fn int_term_source(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Result<String, 
         }
     }
     elab.spell_term_source(cx, tm)
-        .ok_or_else(|| "Omega could not spell an integer expression".to_string())
+        .or_else(|| elab.spell_term_source_aliased(cx, tm))
+        .ok_or_else(|| format!("Omega could not spell an integer expression: `{}` has no source spelling here; bind it with a `let` it can be named by", elab.display_rough_term(cx, tm, &[])))
 }
 
 pub(crate) fn nat_term_source(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Result<String, String> {
@@ -1355,7 +1378,8 @@ pub(crate) fn nat_term_source(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>) -> Resu
         }
     }
     elab.spell_term_source(cx, tm)
-        .ok_or_else(|| "Omega could not spell a natural expression".to_string())
+        .or_else(|| elab.spell_term_source_aliased(cx, tm))
+        .ok_or_else(|| format!("Omega could not spell a natural expression: `{}` has no source spelling here; bind it with a `let` it can be named by", elab.display_rough_term(cx, tm, &[])))
 }
 
 /// The arithmetic a projection out of a value computes to
@@ -1916,9 +1940,7 @@ fn reduce_and_name(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) -> Opt
     // arguments is a constructor value. Everything else — a call at a
     // variable, a projection out of a neutral — is left exactly as it was,
     // and pays no reduction.
-    if !matches!(head, Term::GlobalTm { .. })
-        || !args.iter().any(|arg| is_ctor_value(arg) || matches!(&***arg, Term::NatLit(_)))
-    {
+    if !matches!(head, Term::GlobalTm { .. }) {
         return None;
     }
     // The operations `omega` reads, splits or keeps as atoms on purpose are
@@ -1926,6 +1948,9 @@ fn reduce_and_name(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) -> Opt
     // atom, and `sub`, `min`, `max` have their case splits.
     if NAT_PRIMITIVES.iter().any(|name| named_args(elab, tm, name).is_some()) {
         return None;
+    }
+    if !args.iter().any(|arg| is_ctor_value(arg) || matches!(&***arg, Term::NatLit(_))) {
+        return open_arithmetic_body(elab, cx, tm, depth);
     }
     // A word's value is `bv_omega`'s atom, and the gate above lets every one
     // through: the width is a numeral argument. `toNat` folds over the
@@ -1942,6 +1967,58 @@ fn reduce_and_name(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) -> Opt
     let candidates = recursive_field_candidates(elab, cx, tm);
     let named = named_arithmetic_reduct(elab, cx, tm, &candidates, depth)?;
     (*named != **tm).then_some(named)
+}
+
+/// A call at open arguments whose definition's body is arithmetic,
+/// `dist(a, b)` for `fn dist(a, b: Nat) → Nat { (b + 4 - a) % 4 }`, read as
+/// that body (issues/arithmetic-definition-opaque-at-open-arguments.md):
+/// the first few head reducts are walked (`Unfold::OpenArithmetic`, the δ
+/// step and the β steps that instantiate the parameters) for one headed by
+/// `+`, `*`, `div`, `mod` or a successor whose leaves spell. A recursive
+/// definition is stuck on its match at an open argument long before an
+/// arithmetic head, and a word's `toNat` folds over bits, so neither pays
+/// more than the short walk. The certificate spells the call, and the
+/// checker converts it at the body by the same δ step.
+fn open_arithmetic_body(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, depth: u32) -> Option<Rc<Term>> {
+    if named_args(elab, tm, "bitvec::BitVec::toNat").is_some() {
+        return None;
+    }
+    let oracle = elab.goal_oracle();
+    let (_, args) = app_spine(tm);
+    for reduct in oracle.unfold(&cx.gamma, tm, Unfold::OpenArithmetic) {
+        if !arithmetic_head(elab, &reduct) {
+            continue;
+        }
+        // Only arithmetic over literals and the call's own arguments: a body
+        // that calls further definitions (`bound(x)` is a quotient of
+        // `x.at(0)`'s fields) is a quantity its own facts are stated about,
+        // and opened it would no longer meet them.
+        if !over_arguments(elab, &reduct, &args) {
+            return None;
+        }
+        let named = named_arithmetic_shape(elab, cx, &Rc::new(reduct), &[], depth)?;
+        return (*named != **tm).then_some(named);
+    }
+    None
+}
+
+/// Whether `tm` is built from `+`, `*`, `-`, `div`, `mod`, successors and
+/// literals over `args` alone.
+fn over_arguments(elab: &Elaborator, tm: &Term, args: &[&Rc<Term>]) -> bool {
+    match tm {
+        Term::Zero | Term::NatLit(_) => return true,
+        Term::Succ(inner) => return over_arguments(elab, inner, args),
+        _ => {}
+    }
+    if args.iter().any(|arg| ***arg == *tm) {
+        return true;
+    }
+    for name in ["nat::Nat::add", "nat::Nat::mul", "nat::Nat::sub", "nat::Nat::div", "nat::Nat::mod"] {
+        if let Some(operands) = named_args(elab, tm, name) {
+            return operands.len() == 2 && operands.iter().all(|operand| over_arguments(elab, operand, args));
+        }
+    }
+    false
 }
 
 /// The bounded weak head of a global call when it is `Succ` of a leaf that
@@ -3572,8 +3649,17 @@ fn nat_subtractions(elab: &Elaborator, cx: &Cx, tm: &Rc<Term>, out: &mut Vec<Rc<
     }
     let (head, args) = app_spine(tm);
     if matches!(head, Term::GlobalTm { .. }) {
-        for arg in args {
+        for arg in &args {
             nat_subtractions(elab, cx, arg, out);
+        }
+        // A definition the reflection opens at open arguments is read as
+        // its body, and so is any subtraction in it: `dist(a, b)` is
+        // `(b + 4 - a) % 4`.
+        if !NAT_PRIMITIVES.iter().any(|name| named_args(elab, tm, name).is_some())
+            && !args.iter().any(|arg| is_ctor_value(arg) || matches!(&***arg, Term::NatLit(_)))
+            && let Some(body) = open_arithmetic_body(elab, cx, tm, 1)
+        {
+            nat_subtractions(elab, cx, &body, out);
         }
     }
 }

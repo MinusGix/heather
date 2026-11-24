@@ -181,10 +181,10 @@ should read is `docs/library/program-and-proof-style.md`.
   constructor (`Sha2::ending(z, l).len()` is `Succ` of its tail's length,
   `spelled(Cons(w, rest)).len()` four successors of `spelled(rest).len()`),
   follows a definition to its arithmetic (`x.doubled(0)` is `x`, a fold
-  over `[b0, b1, b2, b3]` the sum it builds) at closed arguments only (a
-  defined distance `dist(a, b) = (b + 4 - a) % 4` at open ones is an atom:
-  write the arithmetic out,
-  [[arithmetic-definition-opaque-at-open-arguments]]), and states every word's range
+  over `[b0, b1, b2, b3]` the sum it builds; a non-recursive one whose body
+  is arithmetic at open arguments too: a defined distance `dist(a, b) =
+  (b + 4 - a) % 4` is its body, subtraction split and all, design §26),
+  and states every word's range
   `w.toNat() < 2^n` at a literal width, met in the goal or only in a fact,
   so no `toNat_lt_pow` beside a `bv_omega` either
   ([[omega-opens-closed-terms]], design §22). Each opening is bounded; a
@@ -195,13 +195,32 @@ should read is `docs/library/program-and-proof-style.md`.
   The kernel converts the atoms' definitions. omega does read a field at
   closed arguments as what was put there (`Lay::of(3).size` meets
   `Lay::of(3).cap`), so a failure there is a missing fact, not an atom.
-- **It reads every hypothesis in scope.** Keep its context small: put
-  arithmetic in small lemmas, never `omega` inside a stretch or with `Rat`
-  facts in scope. Inside a claim of trees (a `Goes` built from nested
-  lets and lambdas) even a one-fact `omega` read the whole context and
-  took minutes; stating the step's arithmetic as a lemma over bare
-  numbers (native_compile_perform's `push_arith`) made it free. `omega(h, …)` names the load-bearing facts; whether it
-  should read *only* those is [[omega-listed-facts-only]], an open decision.
+- **It reads every hypothesis in scope**, and each atom a fact brings
+  widens every row of the certificate. A written `omega`'s proof is lifted
+  into a lemma of its own at the gate (design §27), so an inline call is no
+  longer substituted with the body under every binder: that halved or
+  better the word map's proofs with `omega` in deep contexts. What still costs is the
+  certificate's width: a context with many unrelated facts over the same
+  atoms, or `Rat` facts (unfolded into Int cross products), still pays for
+  them. And the truncated-subtraction split (design §16) takes facts
+  newest first, at most six deep: in a context holding many distances an
+  inline call can spend them on unrelated facts and get stuck where the
+  same facts as a lemma close. Measured on the word map, a remainder step
+  inline cost more than its lemma and the call together: state it as a
+  lemma over bare numbers, as `step_before_back` and `moved_clear` in
+  `word_map_laws.hthr` are. `omega(h, …)` names the load-bearing facts (an `Exists`'s
+  `.proof` is read only when named); whether it should read *only* those is
+  [[omega-listed-facts-only]], an open decision.
+- **Remainders by a literal with subtractions inside are its costly
+  shape.** `(s + 4 - j) % 4` is a subtraction split under a quotient atom,
+  and the real shadow fails on integrality, so each leaf is a CutSat case
+  analysis: a lemma about slot distances costs seconds even over bare
+  numbers. Name a fact once and cite it rather than re-deriving it.
+- **No hand proof for a word under a low mask.** `bv_omega` reads
+  `x & (2^k - 1)` as `toNat(x) % 2^k`, and a masked sum or difference
+  through its wrap (`(j - i) & 3` is `(j + 4 - i) % 4` for slots below
+  four, borrow and all), so no `toNat_band_low_mask` or
+  `toNat_sub_mod`/`mod_pow_mod` chain (bv-omega-design §3.2).
 - **Products of `pow` terms: restate the step over variables.** `omega`
   over `Nat` facts whose atoms are `m * pow(2, …)` products re-reads their
   structure; the same facts handed to a lemma over bare `Nat`/`Int`
@@ -343,23 +362,23 @@ should read is `docs/library/program-and-proof-style.md`.
   closed count computes, and `BitVec::run_up_invariant` carries what each
   step keeps (`lib/_tests/native/crypto/sha256_schedule_tests.hthr`,
   `issues/loop-invariant-rules.md`).
-- **A `runtime fn`'s induction is its principle applied by hand, with a
-  stated lemma per case.** Its `f::induct` case binders carry no test
-  names, so `induct`'s arms cannot cite `empty` or `hit`, and a case λ's
-  binders past the motive get no types
-  ([[runtime-fn-induct-test-names]]). Write the motive's body as a `fn …
-  → Type`, one theorem per case whose result is it, and pass
-  `λ x̄ tests eq => case(…)` (`WordMap::find_found`,
-  `lib/native/runtime/word_map_laws.hthr`). A module whose `decreases`
-  functions should get equations at all imports `logic` and `bool`;
-  without them they are skipped silently
-  ([[branch-equations-silent-without-logic]]).
-- **`refl` between a wrapper and the measured call it makes at a literal
-  runs out of fuel; state record η at a neutral record.**
+- **A `runtime fn`'s induction is `induct` with an arm per branch, citing
+  the branch's tests by name.** `induct WordMap::find_at(m, k, j, left) {
+  True::True::False::True => … hit …, … }`: an arm sees `more`, `lt`,
+  `empty`, `hit` as the source wrote them, though the body cites none of
+  them ([[runtime-fn-induct-test-names]]). A test's hypothesis is stated as
+  the function wrote it (`m.keys.at(j) = 0`); restate it at the spelling a
+  lemma wants with a typed `let` (`let empty: (m.key(j.toNat()) = 0) =
+  empty;`). A goal stated through a definition (`WordMap::Finds(…)`, whose
+  body is a Π) is fine: the arm's block is a `λ` over it
+  (`lib/native/runtime/word_map_laws.hthr`). The equations and the
+  principle need no import beyond the function's own: they cite `bool` and
+  `logic` by qualified name ([[branch-equations-silent-without-logic]]).
+- **`refl` between a wrapper and the measured call it makes is fine.**
   `f(x) = g(x, 4)` where `f`'s body is `let r = g(x, 4); Mutated(r.after,
-  r.value)` is refused: the kernel unfolds `g` at the literal before
-  η-expanding. `mutated_eta(r): Mutated(r.after, r.value) = r { refl }`
-  instantiated at `g(x, 4)` converts at once (`WordMap::insert_is`).
+  r.value)` converts by record η at `g(x, 4)`'s own spine, before the
+  kernel would unfold `g` at the literal (`WordMap::insert_is`;
+  `Conv::eta_before_unfolding`).
 - **A function that tests is cited by its branch equations, never
   restated.** A `fn` whose body (after its `let`s) is an `if`, `if h:` or a
   `match` on a `Bool` has `f::True(x̄, h: P)` and `f::False(x̄, h: ¬P)`:

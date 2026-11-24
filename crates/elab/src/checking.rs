@@ -1428,7 +1428,7 @@ impl Checking<'_> {
                     Ok(term) => Ok(self
                         .attempt
                         .goal_arena
-                        .allocate_proved(&Declarations(self).emitted_cx(cx), expected.clone(), lvl.clone(), term.clone(), e.span)
+                        .allocate_proved("bv_omega", &Declarations(self).emitted_cx(cx), expected.clone(), lvl.clone(), term.clone(), e.span)
                         .unwrap_or(term)),
                     Err(last) => {
                         // Name the side condition that failed, not only the goal
@@ -1854,20 +1854,22 @@ impl Checking<'_> {
         }
         let outer_depth = self.scope.omega_depth.get();
         let written_cx = cx;
-        let source_cx = omega_cert::source_context(cx);
-        let cx = source_cx.as_ref();
+        let mut source_cx = omega_cert::source_context(cx);
         let _certificate_scope = omega_cert::CertificateScope::enter(&self.scope.omega_depth);
         omega_cert::reset_phases();
         let reconstruct_guard = stats::guard(stats::Timer::OmegaReconstruct);
-        let mut cert = omega_cert::reconstruct(
-            self,
-            cx,
-            expected,
-            name != "__omega_diseq_branch",
-            name != "__omega_connective_branch",
-            true,
-        )
-        .map_err(|detail| {
+        let flags = (name != "__omega_diseq_branch", name != "__omega_connective_branch");
+        let mut cert = omega_cert::reconstruct(self, source_cx.as_ref(), expected, flags.0, flags.1, true);
+        // A certificate that spelled a generated binder (`#p1`, which a
+        // nested pattern's written name aliases) does not parse: once more
+        // with every generated binder named
+        // (issues/omega-unspellable-local-in-scope.md).
+        if matches!(&cert, Err(detail) if detail.contains("unexpected character '#'")) {
+            source_cx = omega_cert::source_context_naming(written_cx, true);
+            cert = omega_cert::reconstruct(self, source_cx.as_ref(), expected, flags.0, flags.1, true);
+        }
+        let cx = source_cx.as_ref();
+        let mut cert = cert.map_err(|detail| {
             // Stuck: an arm equation not yet in scope might be the missing
             // fact (docs/language/matching/dependent-match-compiler-design.md §4.3.1).
             Inference(self).want_match_equations(written_cx);
@@ -1973,6 +1975,21 @@ impl Checking<'_> {
         })?;
         cert.report.phases = phases;
         self.pass.omega_reports.borrow_mut().push(cert.report);
+        // A written call is lifted into a lemma of its own, as `bv_omega`'s
+        // proof is (docs/tactics/bv-omega-design.md §6): the gate checks the
+        // certificate once, in its context, and the body carries only a
+        // reference, so the certificate is not substituted along with the
+        // body under every enclosing binder and `let`
+        // (issues/runtime-hash-map-spec.md: minutes inline, milliseconds
+        // as a lemma). The calls inside a certificate, and those a
+        // generated proof makes, stay inline: their proof is lifted whole.
+        if outer_depth == 0 && !self.in_generated() {
+            return Ok(self
+                .attempt
+                .goal_arena
+                .allocate_proved("omega", &Declarations(self).emitted_cx(written_cx), expected.clone(), lvl.clone(), term.clone(), span)
+                .unwrap_or(term));
+        }
         Ok(term)
     }
 

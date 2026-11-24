@@ -1,0 +1,49 @@
+// A `runtime fn` in a module that imports only `runtime_data` has its
+// branch equations, `f::step` and `f::induct`: they cite `bool` and `logic`
+// by qualified name, reached through the import closure
+// (issues/branch-equations-silent-without-logic.md). Tests, not library.
+import runtime_data;
+
+laid(endian := BigEndian) record T { keys: [u64; 4] }
+
+runtime fn T::scan(self m: T, k, j, left: u64) → u64 decreases left.toNat() {
+    if more: 0 < left {
+        if lt: j < 4 {
+            if empty: m.keys.at(j) = 0 { 0 }
+            else if hit: m.keys.at(j) = k { 1 }
+            else { m.scan(k, (j + 1).band(3), left - 1) }
+        } else { 0 }
+    } else { 0 }
+}
+
+// The step equation and a branch equation, by their designed names.
+theorem T::scan_spent(m: T, k, j: u64): T::scan(m, k, j, 0) = 0 { refl }
+
+theorem T::scan_hit_eq(m: T, k, j, left: u64, more: 0 < left, lt: j < 4, empty: ¬(m.keys.at(j) = 0), hit: m.keys.at(j) = k):
+    T::scan(m, k, j, left) = 1
+{
+    T::scan::True::True::False::True(m, k, j, left, more, lt, empty, hit)
+}
+
+// Every answer is 0 or 1, by induction along the probe.
+theorem T::scan_bit(m: T, k, j, left: u64): Or<T::scan(m, k, j, left) = 0, T::scan(m, k, j, left) = 1> {
+    induct T::scan(m, k, j, left) {
+        True::True::True => Inl(refl),
+        True::True::False::True => Inr(refl),
+        True::True::False::False => ih,
+        True::False => Inl(refl),
+        False => Inl(refl),
+    }
+}
+
+// Negative control: a hit answers 1, not 0.
+// expect-error: are not
+theorem T::scan_zero(m: T, k, j, left: u64): T::scan(m, k, j, left) = 0 {
+    induct T::scan(m, k, j, left) {
+        True::True::True => refl,
+        True::True::False::True => refl,
+        True::True::False::False => ih,
+        True::False => refl,
+        False => refl,
+    }
+}

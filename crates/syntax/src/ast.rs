@@ -940,6 +940,23 @@ pub struct Expr {
 /// never collide with this checking-form marker.
 pub const SPLIT_ALL_GOALS: &str = "\0split-all-goals";
 
+/// The private equation an `if h: P` convoys when neither branch names
+/// `h`: `__if_bitN_h`, lexable (a tactic spells it back as source) and
+/// carrying the written name, which the function's term no longer binds
+/// but its branch equations and `induct` cases are named by
+/// (issues/runtime-fn-induct-test-names.md).
+pub fn if_bit_unnamed(id: &str, written: &str) -> String {
+    format!("__if_bit{id}_{written}")
+}
+
+/// The test name [`if_bit_unnamed`] kept, if `eqbind` is one.
+pub fn if_bit_written(eqbind: &str) -> Option<&str> {
+    let rest = eqbind.strip_prefix("__if_bit")?;
+    let digits = rest.bytes().take_while(u8::is_ascii_digit).count();
+    let name = rest[digits..].strip_prefix('_')?;
+    (digits > 0 && !name.is_empty()).then_some(name)
+}
+
 /// Parser-generated heads for `induct f(x̄); all_goals { ... }` (arguments:
 /// the call, the block) and `induct f(x̄) { C => e, … }` (argument: a `match`
 /// on the call whose arms are the cases). Unspellable, as

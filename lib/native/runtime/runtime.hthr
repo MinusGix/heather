@@ -4623,7 +4623,8 @@ fn runtime_check_enum_fields(tys: Table, recs: List<RecShape>) → Tac<True> {
 //   |                | read), likewise                                       |
 //   | `f::runs_over` | the program run on `[place, length, xs…]` over any    |
 //   |                | file `Cons(span, rest)` ends in `f(span, length,      |
-//   |                | xs…)`'s word and its span over `rest`                 |
+//   |                | xs…)`'s word and its span over `rest` (every word of  |
+//   |                | a record or an enum, `FTm::ended_all`)                |
 
 def runtime_w_ftm: FTm = FTm::Pure(Var(0));
 def runtime_w_ffun: FFun = FFun([], Bit, FTm::Pure(Var(0)));
@@ -4783,6 +4784,7 @@ record SpanE { tys: Expr, sigs: Expr, world: Expr, reads: Expr, fsigs: Expr, wri
 // places the loop was entered with, and is keyed by the spans it is at.
 fn runtime_span_measured(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, e: SpanE, body_e: Expr, ws: List<Ty>, res: Ty, lent: Nat) → Tac<Expr> {
     let compile <- runtime_span_ref("runtime_file::FFun::compile_measured");
+    let one_word <- runtime_span_ref("runtime_file::Ty::word_rest");
     let family <- runtime_span_ref("runtime_file::FFun::GuardedSpans");
     let from_family <- runtime_span_ref("runtime_file::FFun::guarded_spans");
     let measure_at <- runtime_span_ref("runtime_file::FFun::measure_at");
@@ -4886,7 +4888,7 @@ fn runtime_span_measured(name: String, f: GlobalRef, q: RtQ, ts: RtTypes, e: Spa
     // `Guarded` at each rest of the file, through the spans read there.
     let guarded = ap(from_family, [Blank, Global(f), ws_e, res_e, body_e, NatLit(lent), e.world, e.reads, e.fsigs, e.writes, e.typed, m_e, proved]);
     pure(ap(compile, [Blank, Ty::quotes(ks, q), Ty::quote(moved.head_or(Bit), q), Ty::quotes(moved.drop(1), q), res_e, body_e, NatLit(lent),
-        e.world, e.reads, e.fsigs, e.writes, Global(f), e.typed, ap(measure_at, [NatLit(lent), m_e]), bounded, guarded, verdict]))
+        e.world, e.reads, e.fsigs, e.writes, Global(f), e.typed, ap(measure_at, [NatLit(lent), m_e]), bounded, guarded, verdict, ap(one_word, [Blank])]))
 }
 
 // The program's parts, held once each (`runtime_held`): the functions (the
@@ -5098,7 +5100,16 @@ fn SpanWriting::value(self cx: SpanWriting, span: Expr, env: List<Expr>, g: List
                 Some(p) => pure(p),
             })),
         },
-        _ => runtime_held_refused(cx.name, "a value of its reflection is of a form that is not written out yet (a branch on an equation, a fold)"),
+        // A constructor of an enum on its fields: the enum's own
+        // constructor, which its table entry's `of` reduces to.
+        Inject(i, k, args) => match cx.recs.nth(i) {
+            None => runtime_fail("`" ++ cx.name ++ "`'s reflection builds an enum its table does not hold"),
+            Some(r) => match r.ctors.nth(k) {
+                None => runtime_fail("`" ++ cx.name ++ "`'s reflection builds a constructor `" ++ r.name ++ "` does not have"),
+                Some(c) => cx.vars(env, args).bind(λ es => pure(ap(c, es))),
+            },
+        },
+        _ => runtime_held_refused(cx.name, "a value of its reflection is of a form that is not written out yet (a branch on an equation, a match on an enum, a fold)"),
     }
 }
 
@@ -5338,6 +5349,8 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
     let fworld <- runtime_span_ref("runtime_file::FWorld::of");
     let meaning <- runtime_span_ref(name_of(FFun::meaning));
     let end_of <- runtime_span_ref("rt_file_loop::FTm::end_of");
+    let ended_all <- runtime_span_ref("rt_file_lower::FTm::ended_all");
+    let uncurry_all <- runtime_span_ref("runtime_file::FFun::uncurry_all");
     let program_run <- runtime_span_ref("function_ir_run::program_run");
     let answers <- runtime_span_ref("function_ir_link::program_spanned_answers");
     let span_file <- runtime_span_ref("runtime_file::span_file");
@@ -5395,7 +5408,10 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
             let mutated <- runtime_global("Mutated");
             let span_c <- assume(Hd(bytes_h), "span", None).or_fail("runtime: a span: ");
             let xs_c <- runtime_own_params(ts.word, bytes_h, lent, own_words.len(), Some(span_c.ref), 0);
-            let t <- as_type(Pi(span_c.ref, xs_c.foldr(λ x acc => Pi(x, acc), ap(mutated, [Hd(bytes_h), Hd(ts.word)])))).or_fail("runtime: `" ++ name ++ "`'s type over its span: ");
+            // Its value is a word, or a record or an enum of words read at
+            // the table (`Ty::sem`), which is the type itself by conversion.
+            let value_t: Expr = match rfun.result.is_word64() { True => Hd(ts.word), False => ap(ty_sem, [res_e, tys_e]) };
+            let t <- as_type(Pi(span_c.ref, xs_c.foldr(λ x acc => Pi(x, acc), ap(mutated, [Hd(bytes_h), value_t])))).or_fail("runtime: `" ++ name ++ "`'s type over its span: ");
             let named <- runtime_held_ref("rt_held::HWorld::written");
             // A loop is written a pass at a time: the body as a function
             // of the passes after it (`FFun::rounds`).
@@ -5549,8 +5565,9 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
                 let xs = opened.fst.take(rfun.params.len());
                 let own = opened.fst.nth(rfun.params.len()).unwrap_or(rest_s.ref);
                 let stops = Lam(rest_s.ref, runtime_lams(opened.fst, ap(rfl, [Blank, ap(spent, [NatLit(lent + lent), RtQ::seq(word_list, runtime_locals(xs)), Local(own)])])));
+                let one_word <- runtime_span_ref("runtime_file::Ty::word_rest");
                 pure(ap(compile, [Hd(ft), ks_e, w0_e, wrest_e, res_e, body_e, NatLit(lent), world_e, reads_e, fsigs_e, writes_e, e.typed,
-                    o.pass(own_callees), o.stop, o.pinned, stops, verdict]))
+                    o.pass(own_callees), o.stop, o.pinned, stops, verdict, ap(one_word, [Blank])]))
             },
         },
     };
@@ -5604,7 +5621,13 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
     let words_e = RtQ::seq(word_list, Cons(Local(place1.ref), runtime_locals(xs1)));
     let file_e = ap(runtime_at(buffers, 1), [Local(span1.ref), Local(rest1.ref)]);
     let ran = ap(program_run, [sl.program, file_e, root, words_e]);
-    let ended: Expr → Expr = λ g => ap(end_of, [Local(rest1.ref), ap(g, own_at(Local(span1.ref), Local(rest1.ref), Cons(place1.ref, xs1)))]);
+    // A word and its span, or every word of a record's or an enum's value
+    // (`FTm::ended_all`).
+    let ending: Expr → Expr = λ m => match rfun.result.is_word64() {
+        True => ap(end_of, [Local(rest1.ref), m]),
+        False => ap(ended_all, [tys_e, res_e, Local(rest1.ref), m]),
+    };
+    let ended: Expr → Expr = λ g => ending(ap(g, own_at(Local(span1.ref), Local(rest1.ref), Cons(place1.ref, xs1))));
     let answered = ap(answers, [Blank, sl.program, sl.arities, sl.stills, span_file, ap(span_sources, [sl.srcs]), parts, Hd(trivial_h),
         ap(span_pair, [Local(span1.ref), Local(rest1.ref)]), root, words_e, Hd(trivial_h)]);
     // What the link answers with is the function through its instance
@@ -5616,10 +5639,9 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
         None => pure(answered),
         Some(o) => {
             let at <- runtime_held_ref("rt_held::HWorld::at");
-            let uncurry <- runtime_span_ref("rt_file_loop::FFun::uncurry");
             let source_at <- runtime_span_ref("runtime_file::FTm::source_at");
             let trans <- runtime_global("trans");
-            let sourced: List<Expr> → Expr = λ es => ap(end_of, [Local(rest1.ref), ap(uncurry, [tys_e, params_e, res_e,
+            let sourced: List<Expr> → Expr = λ es => ap(ended_all, [tys_e, res_e, Local(rest1.ref), ap(uncurry_all, [tys_e, params_e, res_e,
                 ap(source_at, [Hd(o.ty), tys_e, NatLit(lent), params_e, res_e, ap(typed_once, [Hd(o.ty), o.compiled(es)]), o.compiled(es), Local(rest1.ref)]),
                 words_e, Local(span1.ref)])]);
             // A loop's is the function on its own values with the
@@ -5634,7 +5656,7 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
                     λ es => ap(rfl, [Blank, ended(o.compiled(es))])),
                 True => {
                     let g <- assume(Hd(o.ty), "g", Some(xs1.rev().head_or(place1.ref))).or_fail("runtime: a function over a span: ");
-                    let sourced_g = ap(end_of, [Local(rest1.ref), ap(uncurry, [tys_e, params_e, res_e,
+                    let sourced_g = ap(ended_all, [tys_e, res_e, Local(rest1.ref), ap(uncurry_all, [tys_e, params_e, res_e,
                         ap(source_at, [Hd(o.ty), tys_e, NatLit(lent), params_e, res_e, ap(typed_once, [Hd(o.ty), Local(g.ref)]), Local(g.ref), Local(rest1.ref)]),
                         words_e, Local(span1.ref)])]);
                     let st <- as_type(Equation(sourced_g, ended(Local(g.ref)))).or_fail("runtime: `" ++ name ++ "`'s answer at a function: ");
@@ -5707,24 +5729,37 @@ fn runtime_loop_state_name(cs: List<Char>) → Bool {
     }
 }
 
-// A span function's reflection, a loop's state of several words
-// (`f#State`) added to the table as the walk meets it (each time the walk
-// stops for one, it is appended and the walk runs again). Any other record,
-// an enum and a type held by its `datarepr` have no layout beside a span,
-// as before records were discovered.
+// A record or an enum a span function's walk met, added to its table where
+// it has a layout of words (each field a word, a bit or an enum): a record
+// of a list, as a `Bytes(n)` passed by value is, has none beside a span.
+fn runtime_code_laid(t: Ty) → Bool { match t { ByteList(_) => False, Lines => False, Count => False, _ => True } }
+
+fn runtime_span_entry(k: Known, rest: List<Char>, alts: Bool) → Tac<Known> {
+    let none: Tac<Known> = rt_refuse("`" ++ String(rest) ++ "` has no runtime layout under the reflected fragment");
+    let k2 <- rt_with_entry(k, rest, alts);
+    let shaped <- attempt(runtime_rec_shapes(k2, k2.recs.drop(k.recs.len())));
+    match shaped {
+        Done(rs) => match rs.any_bit(λ (r: RecShape) => r.codes.any_bit(λ (c: Ty) => !runtime_code_laid(c))) { False => pure(k2), True => none },
+        Failed(_, _) => none,
+    }
+}
+
+// A span function's reflection, the records and enums it meets added to
+// the table as the walk meets them (each time the walk stops for one, it is
+// appended and the walk runs again): a loop's state of several words
+// (`f#State`), and a record or an enum the function builds or returns
+// (docs/native/runtime-fn-setups-design.md §16.21). A type held by its
+// `datarepr` has no layout beside a span.
 fn runtime_span_reflect_in(fuel: Nat, k: Known, names: FileNames, f: GlobalRef, name: String) → Tac<Pair<Known, FileReflected>> {
     match fuel {
-        Zero => runtime_fail("`" ++ name ++ "`: more loop states than the reflector reads"),
-        Succ(more) => attempt(rt_no_records(rt_file_reflect_one(k, names, [], f.id, name))).bind(λ o => match o {
+        Zero => runtime_fail("`" ++ name ++ "`: more records and enums than the reflector reads"),
+        Succ(more) => attempt(rt_file_reflect_one(k, names, [], f.id, name)).bind(λ o => match o {
             Done(r) => pure(Pair(k, r)),
-            Failed(msg, notes) => match rt_strip(("rt: `").chars, msg.chars) {
-                None => fail(msg, notes),
-                Some(rest) => {
-                    let rec = rt_split_tick(rest, []);
-                    match runtime_loop_state_name(rec).and(rt_strip("` has no runtime layout".chars, rt_after_tick(rest)).is_some()) {
-                        False => fail(msg, notes),
-                        True => rt_with_entry(k, rec, False).bind(λ k2 => runtime_span_reflect_in(more, k2, names, f, name)),
-                    }
+            Failed(msg, notes) => match rt_strip(("rt: " ++ rt_rec_marker()).chars, msg.chars) {
+                Some(rest) => runtime_span_entry(k, rest, False).bind(λ k2 => runtime_span_reflect_in(more, k2, names, f, name)),
+                None => match rt_strip(("rt: " ++ rt_enum_marker()).chars, msg.chars) {
+                    Some(rest) => runtime_span_entry(k, rest, True).bind(λ k2 => runtime_span_reflect_in(more, k2, names, f, name)),
+                    None => fail(msg, notes),
                 },
             },
         }),
@@ -5733,6 +5768,16 @@ fn runtime_span_reflect_in(fuel: Nat, k: Known, names: FileNames, f: GlobalRef, 
 
 fn runtime_span_reflect(name: String, f: GlobalRef, names: FileNames) → Tac<Pair<Known, FileReflected>> {
     rt_known_in([], [], True).bind(λ k0 => runtime_span_reflect_in(8, k0, names, f, name))
+}
+
+// Whether a function over a span returns its value in words, each a port
+// it is held at (`Ty::WordsOut`, rt_file_lower.hthr): a 64-bit word, a
+// record of 64-bit words, or an enum whose constructors carry them.
+fn runtime_words_out(tys: Table, t: Ty) → Bool {
+    match t {
+        Word(w) => w.same(64), Bit => False, ByteList(_) => False, Lines => False,
+        Named(i) => Ty::check_words_one(tys.fields(i)).is_some(), Count => False, Enum(i) => Ty::check_words(tys.ens(i).slots).is_some(),
+    }
 }
 
 // A function that writes a span: its code takes and returns 64-bit words
@@ -5750,12 +5795,16 @@ fn runtime_span(name: String, f: GlobalRef) → Tac<List<Decl>> {
     let step <- lookup(name ++ "::body");
     let measured: Bool = match step { Accepted(_) => True, Refused(_) => False };
     let table = r.funs ++ r.cfuns;
-    match Ty::all_word64(rfun.params).and(rfun.result.is_word64()) {
-        False => runtime_span_refused(name, "it takes and returns 64-bit words for now, beside its span"),
-        True => match measured.and(rfun.params.len().leb(rfun.lent + rfun.lent)) {
+    let tys = runtime_shapes_with([], recs);
+    match Ty::all_word64(rfun.params).and(runtime_words_out(tys, rfun.result)) {
+        False => runtime_span_refused(name, "it takes 64-bit words beside its span, and returns a 64-bit word, a record of them or an enum whose constructors carry them"),
+        True => match measured.and(rfun.result.is_word64().not()) {
+          True => runtime_span_refused(name, "a loop answers one 64-bit word for now (a loop answering several waits for the loop combinator)"),
+          False => match measured.and(rfun.params.len().leb(rfun.lent + rfun.lent)) {
             True => runtime_span_refused(name, "a loop over a span moves at least one word from pass to pass"),
             False => runtime_link(4096, k, [LinkFrame(f.id, name, table, table, Some(r.funs.len()))], Linking([], [], [], [])).bind(λ l =>
                 runtime_span_publish(name, f, rfun, measured, r.funs, read_sigs, r.cfuns, write_sigs, l, False, False, λ _ => pure([]), recs := recs)),
+          },
         },
     }
 }
@@ -6594,7 +6643,7 @@ fn runtime_held_straight(name: String, f: GlobalRef, r: HeldReflected, parts: Sp
         Decl(held_form, name ++ "::held", runtime_params_of(r.params), Hd(marked_t), s.hw),
         Decl(AsTheorem, name ++ "::sound", runtime_params_of(r.params), Hd(sound_t), s.sound),
         Decl(AsTheorem, name ++ "::runs_held", runtime_params_of(r.params ++ Cons(own0.ref, Cons(t0.ref, all0.append([holds0.ref])))),
-            ap(n.agreement, [record, Hd(ts.word), whole, Local(length0), spec, code]), proof)])
+            ap(n.agreement, [record, Blank, whole, Local(length0), spec, code]), proof)])
 }
 
 // The record-level theorem of a loop. Its bytes are the pass iterated as
@@ -6959,23 +7008,48 @@ fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanPa
 
 // A function of a laid record: its code takes the span's place and its
 // length word, then 64-bit words, and answers one.
+fn runtime_held_reflect_in(fuel: Nat, k: Known, names: FileNames, f: GlobalRef, name: String) → Tac<Pair<Known, HeldReflected>> {
+    match fuel {
+        Zero => runtime_fail("`" ++ name ++ "`: more records and enums than the reflector reads"),
+        Succ(more) => attempt(rt_held_reflect_one(k, names, f, name)).bind(λ o => match o {
+            Done(r) => pure(Pair(k, r)),
+            Failed(msg, notes) => match rt_strip(("rt: " ++ rt_rec_marker()).chars, msg.chars) {
+                Some(rest) => runtime_span_entry(k, rest, False).bind(λ k2 => runtime_held_reflect_in(more, k2, names, f, name)),
+                None => match rt_strip(("rt: " ++ rt_enum_marker()).chars, msg.chars) {
+                    Some(rest) => runtime_span_entry(k, rest, True).bind(λ k2 => runtime_held_reflect_in(more, k2, names, f, name)),
+                    None => fail(msg, notes),
+                },
+            },
+        }),
+    }
+}
+
 fn runtime_record(name: String, f: GlobalRef) → Tac<List<Decl>> {
-    let k <- rt_known_in([], [], True);
+    let k0 <- rt_known_in([], [], True);
     let names <- rt_file_names();
-    let r <- rt_no_records(rt_held_reflect_one(k, names, f, name));
+    // The records and enums the function builds or returns are added to
+    // the table as the walk meets them, as a span function's are.
+    let found <- runtime_held_reflect_in(8, k0, names, f, name);
+    let k = found.fst;
+    let r = found.snd;
+    let recs <- runtime_rec_shapes(k, k.recs);
+    let tys = runtime_shapes_with([], recs);
     let rfun = r.reflected;
     let read_sigs <- runtime_sigs(k, r.funs);
     let write_sigs <- runtime_span_sigs(k, names, r.cfuns);
     let table = r.funs ++ r.cfuns;
     let called_with_params: Bool = match r.params { Nil => False, Cons(_, _) => match r.calls { Nil => False, Cons(_, _) => True } };
-    match rfun.result.is_word64() {
-        False => runtime_held_refused(name, "it answers a 64-bit word for now, beside its record"),
+    match runtime_words_out(tys, rfun.result).and(r.measured.and(rfun.result.is_word64().not()).not()) {
+        False => runtime_held_refused(name, match runtime_words_out(tys, rfun.result) {
+            True => "a loop answers one 64-bit word for now (a loop answering several waits for the loop combinator)",
+            False => "it answers a 64-bit word beside its record, a record of them or an enum whose constructors carry them",
+        }),
         True => match called_with_params {
           True => runtime_held_refused(name, "a call of another function of a laid record that takes parameters is not taken yet"),
           False => match r.measured.and(r.operands.leb(r.spans + r.spans)) {
             True => runtime_held_refused(name, "a loop moves at least one word from pass to pass"),
             False => runtime_link(4096, k, [LinkFrame(f.id, name, table, table, Some(r.funs.len()))], Linking([], [], [], [])).bind(λ l =>
-                runtime_span_publish(name, f, rfun, r.measured, r.funs, read_sigs, r.cfuns, write_sigs, l, True, False, λ parts => runtime_held_more(name, f, r, parts))),
+                runtime_span_publish(name, f, rfun, r.measured, r.funs, read_sigs, r.cfuns, write_sigs, l, True, False, λ parts => runtime_held_more(name, f, r, parts), recs := recs)),
           },
         },
     }
@@ -7575,8 +7649,12 @@ fn runtime_bytes(name: String, f: GlobalRef) → Tac<List<Decl>> {
     let step <- lookup(name ++ "::body");
     let measured: Bool = match step { Accepted(_) => True, Refused(_) => False };
     let table = r.funs ++ r.cfuns;
-    match Ty::all_word64(rfun.params).and(rfun.result.is_word64()) {
-        False => runtime_bytes_refused(name, "it takes and returns 64-bit words for now, beside its record"),
+    let tys = runtime_shapes_with([], recs);
+    match Ty::all_word64(rfun.params).and(runtime_words_out(tys, rfun.result)).and(measured.and(rfun.result.is_word64().not()).not()) {
+        False => runtime_bytes_refused(name, match Ty::all_word64(rfun.params).and(runtime_words_out(tys, rfun.result)) {
+            True => "a loop answers one 64-bit word for now (a loop answering several waits for the loop combinator)",
+            False => "it takes 64-bit words beside its record, and returns a 64-bit word, a record of them or an enum whose constructors carry them",
+        }),
         True => runtime_link(4096, k, [LinkFrame(f.id, name, table, table, Some(r.funs.len()))], Linking([], [], [], [])).bind(λ l =>
             runtime_span_publish(name, f, rfun, measured, r.funs, read_sigs, r.cfuns, write_sigs, l, True, True, λ parts => runtime_bytes_more(name, f, rfun, measured, !writes, parts, r.cfuns, write_sigs), recs := recs)),
     }
