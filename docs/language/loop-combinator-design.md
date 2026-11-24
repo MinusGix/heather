@@ -636,8 +636,21 @@ a node whose body's leaves are `Again(ā)` and `Done(e)`, the shape §6
 first drew, with a meaning, lowering and soundness of its own. (a) reuses
 everything the node has; its one new piece is the enum, which is not a
 type the program declares, so the table needs an entry the generator
-makes. (b) is the cleaner node and is new proof work in `rt_lower`. The
-pin is then `fixpoint_unique` at `f`'s step (from its `f::ext`) and the
+makes. (b) is the cleaner node and is new proof work in `rt_lower`.
+
+**Decided (the main session, 2026-11-24, under Minus's principle of the
+most elegant method and the least special-casing; for Minus to revisit):
+(b), as the one node, not a second one.** (a)'s enum is a type only the
+generator knows. A node whose body's leaves are `Again(ā)` and `Done(e)` is
+the combinator's own `Pass` shape: a `while`, which elaborates to
+`Loop(m, step).run(init)` with a step returning `Again` or `Done`, reflects
+to it, and `Iterate` (one test, a stop answering the state) is its special
+case. So 3g builds that node in `rt_lower` (meaning, lowering, soundness:
+the pass relation of §6, proved once), moves `while` and the span loops
+onto it, and 3h deletes `Iterate` with `Tm::lower_tail` and `Fun::Guarded`;
+`Iterate` stays only while the migration needs it. Where the proofs come
+easiest as a generalisation of `Iterate`'s (a test and a stop as a step of
+two leaves), they are written that way. The pin is then `fixpoint_unique` at `f`'s step (from its `f::ext`) and the
 meaning's (one-pass unfolding by conversion, `FixpointExt` once over
 `Loop::steps` within `Loop::passes()`, by `Loop::steps_stays`).
 
