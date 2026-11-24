@@ -1062,3 +1062,75 @@ theorem WordMap::shift_move(o: WordMap, k: u64, i0, z: Nat, m: WordMap, i, j, l:
     ShiftInv(st.j4, omega(nj), st.i04, st.z4, omega(cn, st.steps, dl), omega(cn), omega(cn, before_z), gap, stale,
         reach, cross, distinct, there, back, trans(same_use, st.used), st.count)
 }
+
+// A table that is `o` with `k` removed: it keeps the invariant, and every
+// lookup is `assoc_remove`'s.
+record Removed(o: WordMap, k: u64, n: WordMap) {
+    inv: WordMapInv(n),
+    get: (x: u64) → n.abs().assoc_get(x) = o.abs().assoc_remove(k).assoc_get(x),
+}
+
+// The shift meets an empty slot: the hole is cleared.
+theorem WordMap::shift_stop(o: WordMap, oinv: WordMapInv(o), k: u64, nz: ¬(k = 0), i0, z: Nat, m: WordMap, i, j, l: Nat,
+    st: ShiftInv(o, k, i0, z, m, i, j, l), empty: m.key(j) = 0): Removed(o, k, m.cleared(i))
+{
+    let n = m.cleared(i);
+    let ni: (n.key(i) = 0) = WordMap::cleared_key_same(m, i, st.i4);
+    let ji: (¬(j = i)) = λ e => WordMap::count_apart(i0, i, j, st.i04, st.i4, st.j4, st.hole)(sym(e));
+    let off = λ (s: Nat) (x: u64) (a: n.key(s) = x) (xnz: ¬(x = 0)) =>
+        (λ (si: s = i) => xnz(trans(sym(a), trans(cong_fn(λ (q: Nat) => n.key(q), si), ni))) : ¬(s = i));
+    let reach = λ (s: Nat) (t: Nat) (x: u64) (s4: s < 4) (t4: t < 4) (a: n.key(s) = x) (xnz: ¬(x = 0))
+        (before: ((t + 4 - word_map_home(x).toNat()) % 4) < ((s + 4 - word_map_home(x).toNat()) % 4)) => {
+        let sni = off(s, x, a, xnz);
+        let ma: (m.key(s) = x) = trans(sym(WordMap::cleared_key_other(m, i, s, sni)), a);
+        match Nat::eq_dec(t, i) as λ _ => ¬(n.key(t) = 0) {
+            Inl(ti) => {
+                let at_i = j(ti, λ q _ => ((q + 4 - word_map_home(x).toNat()) % 4) < ((s + 4 - word_map_home(x).toNat()) % 4), before);
+                let later = st.cross(s, x, s4, sni, ma, xnz, at_i);
+                let sj: (¬(s = j)) = λ e => xnz(trans(sym(ma), trans(cong_fn(λ (q: Nat) => m.key(q), e), empty)));
+                let js: (((j + 4 - i0) % 4) < ((s + 4 - i0) % 4)) = omega(later, sj, s4, st.j4, st.i04);
+                let on_j = WordMap::passes_next(i0, word_map_home(x).toNat(), i, j, s, st.i04, word_map_home_below(x), st.i4, st.j4, s4, st.hole, js, at_i);
+                false_elim(st.reach(s, j, x, s4, st.j4, sni, ma, xnz, on_j, ji)(empty))
+            },
+            Inr(tni) => λ z0 => st.reach(s, t, x, s4, t4, sni, ma, xnz, before, tni)(trans(sym(WordMap::cleared_key_other(m, i, t, tni)), z0)),
+        }
+    };
+    let distinct: n.Distinct() = λ s t s4 t4 occ same => {
+        let sni: (¬(s = i)) = λ si => occ(trans(cong_fn(λ (q: Nat) => n.key(q), si), ni));
+        let tni: (¬(t = i)) = λ ti => occ(trans(same, trans(cong_fn(λ (q: Nat) => n.key(q), ti), ni)));
+        st.distinct(s, t, s4, t4, sni, tni, λ z0 => occ(trans(WordMap::cleared_key_other(m, i, s, sni), z0)),
+            trans(sym(WordMap::cleared_key_other(m, i, s, sni)), trans(same, WordMap::cleared_key_other(m, i, t, tni))))
+    };
+    let fewer = WordMap::used_fill(n, m, i, ni, st.stale, 4, 0, omega, omega(st.i4), λ t lo hi ti => And(
+        λ z0 => trans(sym(WordMap::cleared_key_other(m, i, t, ti)), z0), λ z0 => trans(WordMap::cleared_key_other(m, i, t, ti), z0)));
+    let one: (1 <= o.count.toNat()) = omega(oinv.count, st.used, fewer);
+    let down: ((o.count - 1).toNat() = o.count.toNat() - 1) = bv_omega;
+    let count0: ((o.count - 1).toNat() = n.used(0, 4)) = omega(down, oinv.count, st.used, fewer);
+    let room0: ((o.count - 1).toNat() < 4) = omega(down, oinv.room);
+    let count = j(sym(st.count), λ c _ => (c - 1).toNat() = n.used(0, 4), count0);
+    let room = j(sym(st.count), λ c _ => (c - 1).toNat() < 4, room0);
+    let ninv = WordMapInv(reach, distinct, count, room);
+    let get = λ (x: u64) => match BitVec::eq_dec(x, k) as λ _ => n.abs().assoc_get(x) = o.abs().assoc_remove(k).assoc_get(x) {
+        Inl(xk) => {
+            let none = n.abs_get_none(k, λ t t4 a => match Nat::eq_dec(t, i) {
+                Inl(ti) => trans(sym(a), trans(cong_fn(λ (q: Nat) => n.key(q), ti), ni)),
+                Inr(tni) => false_elim((st.there(k, m.val(t), t, t4, tni, RowAt(trans(sym(WordMap::cleared_key_other(m, i, t, tni)), a), nz, refl)).left)(refl)),
+            });
+            trans(cong_fn(λ (y: u64) => n.abs().assoc_get(y), xk), trans(none, trans(sym(o.abs().assoc_get_remove_same(k)), cong_fn(λ (y: u64) => o.abs().assoc_remove(k).assoc_get(y), sym(xk)))))
+        },
+        Inr(ne) => {
+            let into: WordMap::Moves(o, n, x) = λ w t t4 row => {
+                let found = st.back(x, w, t, t4, ne, row);
+                let u = found.witness;
+                let ui: (¬(u = i)) = found.proof.left.right;
+                Exists(u, And(found.proof.left.left, RowAt(trans(WordMap::cleared_key_other(m, i, u, ui), found.proof.right.at), found.proof.right.nz, found.proof.right.val)))
+            };
+            let from: WordMap::Moves(n, o, x) = λ w t t4 row => {
+                let ti = off(t, x, row.at, row.nz);
+                (st.there(x, w, t, t4, ti, RowAt(trans(sym(WordMap::cleared_key_other(m, i, t, ti)), row.at), row.nz, row.val))).right
+            };
+            trans(WordMap::abs_get_same(o, n, oinv.distinct, distinct, x, into, from), sym(o.abs().assoc_get_remove_other(k, x, ne)))
+        },
+    };
+    Removed(ninv, get)
+}
