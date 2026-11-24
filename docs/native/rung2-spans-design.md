@@ -83,7 +83,7 @@ Written as a newcomer writes them, each refused (the ledger rows):
 | a store under an `if` with code after it | "the span through a branch that joins again" | inside a loop's pass, built 2026-11-24: the rest of the pass is written into each arm, and a loop's state of several words is a record the span's program holds (`loop-combinator-design` §6.4; `port_set_put`, `port_count_clear_word`); a byte beside the span keeps a loop lifted (`port_count_clear`), and a join in straight-line code waits on the shared control language (dogfooding plan §5.3b) |
 | `break` or `return` in a `for` (stop at the found slot) | "has no `break`, `continue` or `return` yet" | `loops-on-one-combinator` |
 | a span function that ends in a call of another | "ends in `Mutated(span, value)`…"; binding the call first works | `runtime-record-function-limits` |
-| a `u8` key beside the span | "takes and returns 64-bit words for now" | `runtime-repr-narrow-words` |
+| a `u8` key beside the span | "takes 64-bit words beside its record" | `runtime-repr-narrow-words` |
 | a table as a parameter, `mut t: [u64; 8]` | "a type with no runtime layout" | §3: built as a laid record that takes its count (`PortLimbs(n)`, straight-line; its loop waits for `loops-on-one-combinator`) |
 
 None of these is about memory. They are rung 1 and the generator's
@@ -332,11 +332,16 @@ build settled or changed against the text above:
   bytes). When round 4 lands the record becomes `Arena(size)` with the
   carried `size` as the limit, and the laws carry over with `16` replaced
   by it.
-- *`Full` is a word*, `2^64 - 1`: a function of a span answers one word, so
-  `Outcome<u64>` is spelled by a value no base can be (a base is at most
-  the heap's count, `alloc_fresh`). `alloc` tests the limit within the
-  heap and the top within the limit before the sum it compares, so the sum
-  cannot wrap.
+- *The outcome is an enum*, `Alloc { Got(base: u64), Full }` (2026-11-24,
+  `docs/native/runtime-fn-setups-design.md` §16.21): a function of a span
+  answers several words as a plain function does, here the tag word and
+  the base. As first built it answered one word and spelled `Full` as
+  `2^64 - 1`, a value no base could be but nothing in the type said so.
+  A niche (the same word, with the reason in the base's type) is designed
+  in `layout-design.md` §12 and not built: one word against two does not
+  matter for these calls. `alloc` tests the limit within the heap and the
+  top within the limit before the sum it compares, so the sum cannot
+  wrap.
 - *A window is read through the heap array's accessor*, at the word index
   `base + i`: the accessor's `read_at` is called with the array's place and
   count, not the window's. A window's base as the accessor's would need an
@@ -350,9 +355,11 @@ build settled or changed against the text above:
   tests (`push_in`, `copy_at`).
 - *A vector lives in the arena*, a header of three heap words (its
   window's base, its capacity, its length) beside its window, not a
-  `Window` and a fill mark held in words. A function answers one word, so
-  a push that moves the window has to leave the new base where the next
-  call finds it. `grow` takes a window of twice the capacity at the top,
+  `Window` and a fill mark held in words. A function answered one word
+  when this was built, so a push that moves the window leaves the new base
+  where the next call finds it (which a header in the heap does anyway; a
+  push answering its new window waits for a compiled caller of a function
+  of several words, `span-function-several-words`). `grow` takes a window of twice the capacity at the top,
   points the header at it and copies; `push` is `push_in` (2 when full),
   then `grow` and `push_in` again; past the limit it answers 0 with the
   arena as it was. Accepted as the default (Minus, 2026-11-24): one header
@@ -364,10 +371,11 @@ build settled or changed against the text above:
   results of several words and ownership exist.
 - *The laws, as proved* (over the functions; `runs_held` carries each to
   the bytes): `alloc_below` is stronger than stated (allocation changes no
-  heap word at all); `alloc_fresh` gives the base as the old top, inside the
-  limit and the heap, the top past it, and with it `alloc_apart` (apart
-  from every window below the old top) and `alloc_full` (at the limit,
-  `Full` and the arena as it was); `store_apart` is stated at reads: a
+  heap word at all); `alloc_fresh` gives the base of an answer `Got(base)`
+  as the old top, inside the limit and the heap, the top past it, and with
+  it `alloc_apart` (apart from every window below the old top),
+  `alloc_got` (where it fits, `Got` of the old top) and `alloc_full` (at
+  the limit, `Full` and the arena as it was); `store_apart` is stated at reads: a
   store into `W` changes no read of a window `V` apart from it, both inside
   the heap, each element under its found proof (`read_store_same` reads
   back what was stored); `grow_abs` holds under `VecInv` (header and window below the
