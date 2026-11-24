@@ -848,10 +848,29 @@ a span (the homes it keeps), one whose words are not all 64-bit (records
 held in a word, narrower words), and every span, laid-record and `Bytes(n)`
 recursion (finding 3). Those are what 3h's deletion waits on.
 
-**Still to do in 3g:** `while` onto the node (step 3), which needs a state
-of records (a `while`'s state is the record `f#State`) or the reflector
-spelling a record state as its words, and the node's pin for words that
-are not 64-bit (the boundary's casts).
+**Still to do in 3g:** `while` onto the node (step 3), and the node's pin
+for words that are not 64-bit (the boundary's casts). What step 3 needs,
+found while building step 1:
+
+- *A record state and a record answer.* A `while`'s state is the record
+  `f#State` and its answer is that state; the node's state is words and
+  its answer one word. Either the pass learns to leave several words (a
+  `Done` leaf moving each word of a record, `PassHolds` over a record
+  answer), or the reflector spells the state as its fields and the code
+  after the loop reads the fields off the node's words. The first keeps
+  the node one node; the second keeps the pass one word and needs the
+  answer to be a field read, which a `while` whose value is used whole is
+  not.
+- *The pin is no longer `refl`.* A `while`'s function is written with
+  `Loop::steps`, whose stop answers the state, so its meaning equals the
+  node's rounds only where the measure bounds the passes; the pin becomes
+  `Loop::steps_stays` and `Loop::rounds_agree` meeting at `Loop::run`
+  (both are `l.run` within the measure), proved once for a `Step::turn`
+  step. That is a theorem per loop the elaborator already has the pieces
+  of (`f::loop::runs`).
+- Once both are done, `Iterate` and its carry (`Tm::carry`,
+  `Tm::iterate_holds`) can go, and the span language's `FTm::Loop` follows
+  the same way in round 4.
 
 ## 7. Bootstrapping
 
