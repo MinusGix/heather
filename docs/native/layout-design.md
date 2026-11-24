@@ -1137,8 +1137,8 @@ the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
 
    **A function that only reads the record** (`self t: T`, answering a
    word) is built, loops included (`Tally::count_up`, `Tally::add_up` in
-   the loop probes; `PortMap::find_at`, a hash table's lookup, in
-   `runtime_ports_tests.hthr`). What it publishes is the writer's
+   the loop probes; `WordMap::find_at`, a hash table's lookup, in
+   `lib/native/runtime/word_map.hthr`). What it publishes is the writer's
    statement at its word beside the record as it was:
    `T::m::runs_held(own, t, length, …, holds) : Agrees(whole, length,
    HWorld::unchanged(t, T::m(t, …)), T::m::bytes(own, length, …))`, so

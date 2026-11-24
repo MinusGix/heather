@@ -15,6 +15,8 @@
 // nothing more. `program_eval` runs a row's compiled program in its theorem.
 import runtime_data;
 import function_ir_eval;
+import word_map;
+import word_map_laws;
 
 // ---------------------------------------------------------------------------
 // Rung 1: operations
@@ -279,27 +281,23 @@ theorem port_set_put_runs(): Bytes::port_set_put::bytes([0, 7, 0, 0], 4, 9, 1) =
 }
 
 // A map of words in one laid record: its keys and values side by side, 0
-// the empty key, the slot the top two bits of a Fibonacci hash.
-laid(endian := BigEndian) record PortMap { count: u64, keys: [u64; 4], vals: [u64; 4] }
+// the empty key, the slot the top two bits of a Fibonacci hash. The table
+// is the library's (`WordMap`, lib/native/runtime/word_map.hthr), and what
+// it means is proved there over these same compiled functions
+// (`word_map_laws.hthr`: under its invariant the table is the association
+// list of its occupied slots, `insert` is `assoc_set` at every lookup and
+// `remove` is `assoc_remove`). These rows run it.
 
-runtime fn PortMap::insert_at(self m: PortMap, k, v, j, left: u64) → Mutated<PortMap, u64> decreases left.toNat() {
-    if more: 0 < left {
-        if lt: j < 4 {
-            if m.keys.at(j) = 0 { Mutated(m with { keys = m.keys.put(j, k), vals = m.vals.put(j, v), count = m.count + 1 }, 1) }
-            else if m.keys.at(j) = k { Mutated(m with { vals = m.vals.put(j, v) }, 0) }
-            else { @insert_at(m, k, v, (j + 1).band(3), left - 1) }
-        } else { Mutated(m, 2) }
-    } else { Mutated(m, 2) }
-}
-
-runtime fn PortMap::insert(self m: PortMap, k, v: u64) → Mutated<PortMap, u64> {
-    let r = PortMap::insert_at(m, k, v, (k * 11400714819323198485).shift_right(62), 4);
-    Mutated(r.after, r.value)
-}
+// Key 9 hashes to slot 2: its key word is the fourth, its value the
+// eighth, and the count is one.
+theorem port_map_insert_runs(): WordMap::insert::bytes(WordMap::empty_bytes(), 72, 9, 7).after =
+    [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9,
+     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7,
+     0, 0, 0, 0, 0, 0, 0, 0] { refl }
 
 // A lookup, which changes nothing, spelled as a function that leaves the
 // record as it was.
-runtime fn PortMap::get_at(self m: PortMap, k, j, left: u64) → Mutated<PortMap, u64> decreases left.toNat() {
+runtime fn WordMap::get_at(self m: WordMap, k, j, left: u64) → Mutated<WordMap, u64> decreases left.toNat() {
     if more: 0 < left {
         if lt: j < 4 {
             if m.keys.at(j) = 0 { Mutated(m, 0) }
@@ -309,58 +307,54 @@ runtime fn PortMap::get_at(self m: PortMap, k, j, left: u64) → Mutated<PortMap
     } else { Mutated(m, 0) }
 }
 
-fn PORT_MAP_EMPTY() → List<u8> { List::replicate(BitVec::ofNat(0), 72) }
+theorem port_map_get_runs(): WordMap::get_at::bytes(WordMap::insert::bytes(WordMap::empty_bytes(), 72, 9, 7).after, 72, 9, 2, 4).value = 7 { refl }
 
-// Key 9 hashes to slot 2: its key word is the fourth, its value the
-// eighth, and the count is one.
-theorem port_map_insert_runs(): PortMap::insert::bytes(PORT_MAP_EMPTY(), 72, 9, 7).after =
-    [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9,
-     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7,
-     0, 0, 0, 0, 0, 0, 0, 0] { refl }
+fn PORT_MAP_TWO() → List<u8> { WordMap::insert::bytes(WordMap::insert::bytes(WordMap::empty_bytes(), 72, 9, 7).after, 72, 17, 5).after }
 
-theorem port_map_get_runs(): PortMap::get_at::bytes(PortMap::insert::bytes(PORT_MAP_EMPTY(), 72, 9, 7).after, 72, 9, 2, 4).value = 7 { refl }
+// The lookup as it is, a loop that only reads the record: found at its
+// slot, found past a taken slot (17 hashes to 2 as well), and missed at an
+// empty one; the bytes are as they were.
+theorem port_map_find_runs(): WordMap::find_at::bytes(PORT_MAP_TWO(), 72, 9, 2, 4).value = 7 { refl }
 
-// The lookup as it is: a loop that only reads the record, answering a word.
-runtime fn PortMap::find_at(self m: PortMap, k, j, left: u64) → u64 decreases left.toNat() {
-    if more: 0 < left {
-        if lt: j < 4 {
-            if m.keys.at(j) = 0 { 0 }
-            else if m.keys.at(j) = k { m.vals.at(j) }
-            else { m.find_at(k, (j + 1).band(3), left - 1) }
-        } else { 0 }
-    } else { 0 }
-}
+theorem port_map_find_past_runs(): WordMap::find_at::bytes(PORT_MAP_TWO(), 72, 17, 2, 4).value = 5 { refl }
 
-fn PORT_MAP_TWO() → List<u8> { PortMap::insert::bytes(PortMap::insert::bytes(PORT_MAP_EMPTY(), 72, 9, 7).after, 72, 17, 5).after }
-
-// Found at its slot, found past a taken slot (17 hashes to 2 as well),
-// and missed at an empty one; the bytes are as they were.
-theorem port_map_find_runs(): PortMap::find_at::bytes(PORT_MAP_TWO(), 72, 9, 2, 4).value = 7 { refl }
-
-theorem port_map_find_past_runs(): PortMap::find_at::bytes(PORT_MAP_TWO(), 72, 17, 2, 4).value = 5 { refl }
-
-theorem port_map_find_miss_runs(): PortMap::find_at::bytes(PORT_MAP_TWO(), 72, 4, 1, 4).value = 0 { refl }
+theorem port_map_find_miss_runs(): WordMap::find_at::bytes(PORT_MAP_TWO(), 72, 4, 1, 4).value = 0 { refl }
 
 // The span after the lookup: the count, keys 9 and 17 at slots 2 and 3,
 // their values 7 and 5, as the inserts left them.
-theorem port_map_find_still_runs(): PortMap::find_at::bytes(PORT_MAP_TWO(), 72, 9, 2, 4).after =
+theorem port_map_find_still_runs(): WordMap::find_at::bytes(PORT_MAP_TWO(), 72, 9, 2, 4).after =
     [0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9,
      0, 0, 0, 0, 0, 0, 0, 17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7,
+     0, 0, 0, 0, 0, 0, 0, 5] { refl }
+
+// Removal by backward shifting: 9 removed from slot 2, 17 moves up from
+// slot 3 into its home slot, and slot 3's key is cleared (its value word
+// is left, as a slot with key 0 holds nothing).
+theorem port_map_remove_runs(): WordMap::remove::bytes(PORT_MAP_TWO(), 72, 9).after =
+    [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 17,
+     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 5,
      0, 0, 0, 0, 0, 0, 0, 5] { refl }
 
 // What it publishes: where the span holds a map, the code answers the
 // lookup, and the span holds the map as it was. (`Holds` is `rt_held`'s,
 // which the ledger reaches only by its qualified name.)
-theorem port_map_find_held(own: List<u8>, m: PortMap, length, k, j, left: u64, holds: rt_held::Stored::Holds(PortMap::stored(), own, length, m)):
-    PortMap::find_at(m, k, j, left) = PortMap::find_at::bytes(own, length, k, j, left).value ∧
-    rt_held::Stored::Holds(PortMap::stored(), PortMap::find_at::bytes(own, length, k, j, left).after, length, m) {
-    let ran = PortMap::find_at::runs_held(own, m, length, k, j, left, holds);
+theorem port_map_find_held(own: List<u8>, m: WordMap, length, k, j, left: u64, holds: rt_held::Stored::Holds(WordMap::stored(), own, length, m)):
+    WordMap::find_at(m, k, j, left) = WordMap::find_at::bytes(own, length, k, j, left).value ∧
+    rt_held::Stored::Holds(WordMap::stored(), WordMap::find_at::bytes(own, length, k, j, left).after, length, m) {
+    let ran = WordMap::find_at::runs_held(own, m, length, k, j, left, holds);
     ⟨ran.value, ran.holds⟩
+}
+
+// And with the specification: the bytes' lookup, at a table that keeps the
+// invariant, is `assoc_get` of its occupied slots (`WordMap::get_is`).
+theorem port_map_get_meant(own: List<u8>, m: WordMap, length, k: u64, holds: rt_held::Stored::Holds(WordMap::stored(), own, length, m), inv: WordMapInv(m)):
+    WordMap::find_at::bytes(own, length, k, word_map_home(k), 4).value = m.abs().assoc_get(k).unwrap_or(0) {
+    trans(sym(WordMap::find_at::runs_held(own, m, length, k, word_map_home(k), 4, holds).value), WordMap::get_is(m, inv, k))
 }
 
 // A lookup whose measure is not a word's `toNat`.
 // expect-error: must `decreases` a 64-bit word's `toNat`
-runtime fn PortMap::find_slow(self m: PortMap, k, j, left: u64) → u64 decreases left.toNat() + 1 {
+runtime fn WordMap::find_slow(self m: WordMap, k, j, left: u64) → u64 decreases left.toNat() + 1 {
     if more: 0 < left {
         if lt: j < 4 {
             if m.keys.at(j) = k { m.vals.at(j) } else { m.find_slow(k, (j + 1).band(3), left - 1) }
@@ -370,13 +364,13 @@ runtime fn PortMap::find_slow(self m: PortMap, k, j, left: u64) → u64 decrease
 
 // The slot as the remainder it is: `k % 4 < 4` is found by the default
 // search from the remainder's law (docs/tactics/bv-omega-design.md §3.1).
-runtime fn PortMap::slot_key(mut self m: PortMap, k: u64) → u64 {
+runtime fn WordMap::slot_key(mut self m: WordMap, k: u64) → u64 {
     m.keys := m.keys.put(k % 4, k);
     0
 }
 
 // Key 10 is stored in slot 2, the fourth word of the record.
-theorem port_map_slot_key_runs(): PortMap::slot_key::bytes(PORT_MAP_EMPTY(), 72, 10).after =
+theorem port_map_slot_key_runs(): WordMap::slot_key::bytes(WordMap::empty_bytes(), 72, 10).after =
     [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 10,
      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
      0, 0, 0, 0, 0, 0, 0, 0] { refl }

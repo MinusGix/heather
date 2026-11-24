@@ -181,7 +181,10 @@ should read is `docs/library/program-and-proof-style.md`.
   constructor (`Sha2::ending(z, l).len()` is `Succ` of its tail's length,
   `spelled(Cons(w, rest)).len()` four successors of `spelled(rest).len()`),
   follows a definition to its arithmetic (`x.doubled(0)` is `x`, a fold
-  over `[b0, b1, b2, b3]` the sum it builds), and states every word's range
+  over `[b0, b1, b2, b3]` the sum it builds) at closed arguments only (a
+  defined distance `dist(a, b) = (b + 4 - a) % 4` at open ones is an atom:
+  write the arithmetic out,
+  [[arithmetic-definition-opaque-at-open-arguments]]), and states every word's range
   `w.toNat() < 2^n` at a literal width, met in the goal or only in a fact,
   so no `toNat_lt_pow` beside a `bv_omega` either
   ([[omega-opens-closed-terms]], design §22). Each opening is bounded; a
@@ -340,6 +343,23 @@ should read is `docs/library/program-and-proof-style.md`.
   closed count computes, and `BitVec::run_up_invariant` carries what each
   step keeps (`lib/_tests/native/crypto/sha256_schedule_tests.hthr`,
   `issues/loop-invariant-rules.md`).
+- **A `runtime fn`'s induction is its principle applied by hand, with a
+  stated lemma per case.** Its `f::induct` case binders carry no test
+  names, so `induct`'s arms cannot cite `empty` or `hit`, and a case λ's
+  binders past the motive get no types
+  ([[runtime-fn-induct-test-names]]). Write the motive's body as a `fn …
+  → Type`, one theorem per case whose result is it, and pass
+  `λ x̄ tests eq => case(…)` (`WordMap::find_found`,
+  `lib/native/runtime/word_map_laws.hthr`). A module whose `decreases`
+  functions should get equations at all imports `logic` and `bool`;
+  without them they are skipped silently
+  ([[branch-equations-silent-without-logic]]).
+- **`refl` between a wrapper and the measured call it makes at a literal
+  runs out of fuel; state record η at a neutral record.**
+  `f(x) = g(x, 4)` where `f`'s body is `let r = g(x, 4); Mutated(r.after,
+  r.value)` is refused: the kernel unfolds `g` at the literal before
+  η-expanding. `mutated_eta(r): Mutated(r.after, r.value) = r { refl }`
+  instantiated at `g(x, 4)` converts at once (`WordMap::insert_is`).
 - **A function that tests is cited by its branch equations, never
   restated.** A `fn` whose body (after its `let`s) is an `if`, `if h:` or a
   `match` on a `Bool` has `f::True(x̄, h: P)` and `f::False(x̄, h: ¬P)`:
