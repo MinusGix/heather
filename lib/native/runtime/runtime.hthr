@@ -791,7 +791,7 @@ theorem Setup::node_means(ws: List<Ty>, body: Tm, w: World, h: Ty::Arrows(w.tys,
     pass: Setup::NodePass(ws, body, w, h, m), xs: List<BitVec(64)>, len: xs.len() = ws.len(), within: m(xs) <= Tm::passes()):
     loop::Loop::rounds(Tm::passes(), λ (k: List<BitVec(64)> → body.ty(w, Ty::bind_onto(ws, Nil)).sem(w.tys)) (ys: List<BitVec(64)>) => Tm::loop_body(w, ws, body, k, ys),
         λ (ys: List<BitVec(64)>) => Tm::loop_body(w, ws, body,
-            λ (zs: List<BitVec(64)>) => Ty::cast(w.tys, Word(64), body.ty(w, Ty::bind_onto(ws, Nil)), zs.head_or(BitVec::zero())), ys), xs) =
+            λ (zs: List<BitVec(64)>) => Ty::read_words(body.ty(w, Ty::bind_onto(ws, Nil)), w.tys, zs), ys), xs) =
         Ty::apply(w.tys, ws, body.ty(w, Ty::bind_onto(ws, Nil)), h, xs) {
     let res = body.ty(w, Ty::bind_onto(ws, Nil));
     let Q = λ (ys: List<BitVec(64)>) => (k: List<BitVec(64)> → res.sem(w.tys)) →
@@ -799,7 +799,7 @@ theorem Setup::node_means(ws: List<Ty>, body: Tm, w: World, h: Ty::Arrows(w.tys,
         Tm::loop_body(w, ws, body, k, ys) = Ty::apply(w.tys, ws, res, h, ys);
     loop::Loop::rounds_agree(m, λ (ys: List<BitVec(64)>) => ys.len() = ws.len(), λ (ys: List<BitVec(64)>) => Ty::apply(w.tys, ws, res, h, ys),
         λ (k: List<BitVec(64)> → res.sem(w.tys)) (ys: List<BitVec(64)>) => Tm::loop_body(w, ws, body, k, ys),
-        λ (zs: List<BitVec(64)>) => Ty::cast(w.tys, Word(64), res, zs.head_or(BitVec::zero())),
+        λ (zs: List<BitVec(64)>) => Ty::read_words(res, w.tys, zs),
         λ a oa k agree => Ty::for_words_at(ws, Q, pass, a, oa, k, agree), Tm::passes(), xs, len, within)
 }
 

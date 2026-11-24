@@ -872,6 +872,99 @@ found while building step 1:
   `Tm::iterate_holds`) can go, and the span language's `FTm::Loop` follows
   the same way in round 4.
 
+### 6.9 The pass budget is a proof, not code; a pass of several words
+
+**The principle** (Minus, 2026-11-24; `docs/compilation-vision.md`,
+settled principle 13): a runtime check is a proof checked at another time,
+and the proof takes primacy. A loop states its termination as an
+obligation (a measure that decreases on every pass that goes round),
+discharged once; a case the obligation rules out is absurd and emits no
+code. A loop counted to a literal bound is a helper that discharges the
+obligation for code that wants one, not the primitive.
+
+**Where the counter lives: in the code, all the way down.** §6.8's extra
+pass is not only in the node's meaning:
+
+- FunctionIR's `Loop` takes the bound as an input port, binds the passes
+  left to `count` on every pass and answers an `exhausted` bit; `LoopRuns`
+  recurses on the passes left.
+- The allocator emits the count's test and decrement on every pass
+  (`loop_zero`, `loop_down`, `loop_stop` in `crates/cli/src/native/allocator.rs`).
+- The x86 proofs (`native_compile_structured`, `native_structured_meaning`)
+  relate the machine's loop to FunctionIR's evaluator, which is total
+  because of the count (`loop_eval(…, remaining, …)`).
+
+The extra pass cannot simply go while the counter stays. With the count at
+`2^64 - 1`, `loop_runs_unexhausted` refutes exhaustion only for a measure
+below the passes left. A measure that is a 64-bit word's `toNat` reaches
+`2^64 - 1`, and its last pass (the one that leaves) is the `2^64`-th.
+
+**The change, as planned** (its order against rounds 3h and 4 is Minus's
+call, asked 2026-11-24):
+
+1. FunctionIR's `Loop` loses `bound`, `count` and `exhausted`. Its meaning
+   becomes a relation, the loop ends after some number of passes, with no
+   case for running out. A run that halts then has its result.
+2. Termination becomes a hypothesis of the lowering's soundness, which the
+   runtime-fn layer discharges once from the node's measure (the pin
+   already has it through `Loop::rounds_agree`). The machine-level proof
+   inducts on the passes the relation gives.
+3. Today's counted loop becomes a helper: an ordinary state word,
+   decremented in the body, whose exit is taken at zero. It discharges the
+   obligation for the loops that want a literal bound: the lexer, crypto,
+   and the bytes, held and file loops.
+4. The node loses its extra pass and its second core. Nested loops stop
+   doubling, and a loop's code is its body and the jump back.
+
+The work is several rounds, not one:
+
+- FunctionIR's core, its evaluator and its passes. Most passes lose three
+  fields mechanically; the relational meaning and the evaluator are the
+  risk.
+- The native structured layer and its proofs.
+- The allocator, the emitter and the certificate's decoder.
+- Every loop producer, then the linked assembly regenerated.
+
+**Built: a pass that answers several words** (step 3's first half, kept
+as small as the extra pass allows).
+
+- *The answer.* A node's answer is a `Ty::Answer`: a 64-bit word, or a
+  record of 64-bit words with one field at least. It is held at its ids
+  (`Ty::ids`), and the leaf moves them to the first of the next words.
+  Every other next word gets a copy of the first id (`Tm::fill`), so a
+  branch's arms both write each one.
+- *The statement.* The pass's statement is in words: `Tm::leaves`, at
+  `Ty::result_words`, takes the first `res.span` next words.
+- *The extra pass.* The meaning's extra pass, going round, answers the
+  state read as the answer (`Ty::read_words`, moved into `rt`). An
+  answer's words read back as itself (`Ty::answer_round`), so the extra
+  pass's end is the state's first words (`Tm::extra_end`). An enum is not
+  an answer yet: a word past its last tag reads back as another
+  constructor.
+- *Tail mode.* Tail mode keeps its one-word `Tm::leave` and `Tm::out`
+  until 3h deletes it.
+- *The loop's exit.* After the loop, the answer is still moved out in one
+  word (`lower_loop_at` checks `res.check_one_word`). Generalizing that
+  exit is a move of each word in both of the exhaustion branch's arms, and
+  (2) deletes that branch; so it waits on (2)'s order.
+
+**What `while` onto the node still needs** (step 3's second half):
+
+- *Its state as words.* A `while` is an expression,
+  `Loop::steps(Loop::passes(), λ s => Step::turn(c, λ h => next, s), init)`,
+  over a state of any code, and its test and next state may read the
+  function's context. The node's body sees only its state (`Tm::inside`).
+  So the reflector spells the record state's fields, and every context
+  variable the loop reads, as one-word state words. It re-indexes the test
+  and the next state onto them: the test's two arms become `Again` of the
+  next fields and the read-only words, and `Make` of the fields. A context
+  word that is not one 64-bit word keeps the loop on `Iterate` until the
+  node's state widens.
+- *Its pin.* The pin is a rewrite inside f's body at the loop's position,
+  not `refl`. That position is where `Iterate`'s meaning is `Loop::steps`
+  itself. `Loop::steps_stays` and `Loop::rounds_agree` meet at `Loop::run`,
+  from `f::loop::runs`, under the congruence of the context around the loop.
+
 ## 7. Bootstrapping
 
 Minus's fear: a bug that infects the next version. The loop's meaning is

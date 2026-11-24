@@ -178,10 +178,6 @@ fn Ty::check_words_out(self t: Ty, tys: Table) → Option<t.WordsOut(tys)> {
     }
 }
 
-theorem Ty::words_one_cons(fs: List<Ty>): Ty::WordsOne(fs) → fs = Nil → False {
-    match fs { Nil => λ never _ => never, Cons(g, rest) => λ _ (bad: Cons(g, rest) = Nil) => absurd(bad) }
-}
-
 // A value of such a code held from `port`: the port's word is its first
 // word, and the ports past it (`Ty::also_ports`) hold the rest.
 theorem Ty::words_out_reads(tys: Table, values: Valuation(), port: Nat, t: Ty): t.WordsOut(tys) → (v: t.sem(tys)) → t.Holds(tys, values, port, v) →

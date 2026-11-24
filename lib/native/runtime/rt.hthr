@@ -814,6 +814,26 @@ fn Ty::cast(tys: Table, a, b: Ty, v: a.sem(tys)) → b.sem(tys) {
     match a.equation(b) { Inl(e) => j(e, λ x _ => x.sem(tys), v), Inr(_) => Ty::convert(tys, a, b, v) }
 }
 
+// A payload read off words, one slot a word (zero past the words' end).
+fn Ty::flats_of_words(fs: List<Ty>, ws: List<BitVec(64)>) → Ty::Flats(fs) {
+    match fs { Nil => trivial, Cons(f, rest) => Pair(f.word_at(ws.head_or(BitVec::zero()), EnumInfo::nones), Ty::flats_of_words(rest, ws.tail())) }
+}
+
+// A code's words read back as its value: the first as the code reads a
+// word (`Ty::cast`); at an enum, the tag word as its constructor (the last
+// past it) and the slots after it as the payload's.
+fn Ty::read_words(self p: Ty, tys: Table, ws: List<BitVec(64)>) → p.sem(tys) {
+    match p as λ q => q.sem(tys) {
+        Word(w) => Ty::cast(tys, Word(64), Word(w), ws.head_or(BitVec::zero())),
+        Bit => Ty::cast(tys, Word(64), Bit, ws.head_or(BitVec::zero())),
+        ByteList(n) => Ty::cast(tys, Word(64), ByteList(n), ws.head_or(BitVec::zero())),
+        Lines => Ty::cast(tys, Word(64), Lines, ws.head_or(BitVec::zero())),
+        Named(i) => tys.mk(i, Ty::flats_of_words(tys.fields(i), ws)),
+        Count => Ty::cast(tys, Word(64), Count, ws.head_or(BitVec::zero())),
+        Enum(i) => tys.ens(i).of(ws.head_or(BitVec::zero()).toNat().min(tys.ens(i).last), Ty::flats_of_words(tys.ens(i).slots, ws.tail())),
+    }
+}
+
 // The curried function type of a signature.
 fn Ty::Arrows(tys: Table, ps: List<Ty>, r: Ty) → Type {
     match ps { Nil => r.sem(tys), Cons(p, rest) => p.sem(tys) → Ty::Arrows(tys, rest, r) }
@@ -1324,15 +1344,15 @@ fn Tm::sem_in(self t: Tm, w: World, lab: Tm::Label(w.tys)) → (g: List<Ty>) →
             Env::get(w.tys, g, env, init)),
         Again(res, args) => λ g env => lab(res, Tm::words(w, g, env, args)),
         // A pass is the body read under the loop's own continuation. Out of
-        // passes, one more runs, its going round answering the first word
-        // of the state it names (what the loop's code does once its count
-        // is spent, `Tm::lower_loop`).
+        // passes, one more runs, its going round answering the state it
+        // names read as the answer (`Ty::read_words`: what the loop's code
+        // does once its count is spent, `Tm::lower_loop`).
         Loop(inits, body) => λ g env => loop::Loop::rounds(Tm::passes(),
             λ (again: List<BitVec(64)> → body.ty(w, Tm::inside(g, inits)).sem(w.tys)) (xs: List<BitVec(64)>) =>
                 body.sem_in(w, Tm::round(w.tys, body.ty(w, Tm::inside(g, inits)), again), Tm::inside(g, inits),
                     Ty::extend(w.tys, Tm::state(g, inits), Nil, trivial, xs)),
             λ (xs: List<BitVec(64)>) => body.sem_in(w,
-                Tm::round(w.tys, body.ty(w, Tm::inside(g, inits)), λ ys => Ty::cast(w.tys, Word(64), body.ty(w, Tm::inside(g, inits)), ys.head_or(BitVec::zero()))),
+                Tm::round(w.tys, body.ty(w, Tm::inside(g, inits)), λ ys => Ty::read_words(body.ty(w, Tm::inside(g, inits)), w.tys, ys)),
                 Tm::inside(g, inits), Ty::extend(w.tys, Tm::state(g, inits), Nil, trivial, xs)),
             Tm::words(w, g, env, inits)),
     }
