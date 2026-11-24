@@ -13,18 +13,17 @@ import arena_laws;
 
 // At an open arena: a window allocated above every older window takes a
 // store that no read of an older window sees. `alloc_apart` gives the
-// premise `store_apart` takes, in a checking position.
+// premise `store_apart` takes, in a checking position, and `alloc_inside`
+// the proof the store takes that its window is inside the heap.
 theorem fresh_store_unseen(a: Arena, size, i, x, b, c, k: u64, ok: ¬(Arena::alloc(a, size).value = ARENA_FULL()),
-    older: b.toNat() + c.toNat() <= a.top.toNat()):
-    Arena::read(Arena::store(Arena::alloc(a, size).after, Arena::alloc(a, size).value, size, i, x).after, b, c, k).value =
-        Arena::read(Arena::alloc(a, size).after, b, c, k).value
+    li: i.toNat() < size.toNat(), lk: k.toNat() < c.toNat(), older: b.toNat() + c.toNat() <= a.top.toNat(), small: a.top.toNat() <= 16):
+    Arena::read(Arena::store(Arena::alloc(a, size).after, Arena::alloc(a, size).value, size, i, x, fits := squash(Arena::alloc_inside(a, size, ok))), b, c, k) =
+        Arena::read(Arena::alloc(a, size).after, b, c, k)
 {
-    let fresh = Arena::alloc_fresh(a, size, ok);
-    let base: (Arena::alloc(a, size).value.toNat() = a.top.toNat()) = cong_fn(λ (v: u64) => v.toNat(), fresh.left);
     let apart: Arena::Apart(Arena::alloc(a, size).value.toNat(), size.toNat(), b.toNat(), c.toNat()) =
         match Arena::alloc_apart(a, size, ok, b.toNat(), c.toNat(), older) { Inl(p) => Inr(p), Inr(p) => Inl(p) };
     Arena::store_apart(Arena::alloc(a, size).after, Arena::alloc(a, size).value, size, i, x, b, c, k,
-        omega(base, fresh.right.left, fresh.right.right.left), omega(older, fresh.right.left, fresh.right.right.left), apart)
+        li, Arena::alloc_inside(a, size, ok), lk, omega(older, small), apart)
 }
 
 // The negative control. `(0, 4)` allocated, the arena reset to 0, `(0, 4)`
@@ -45,10 +44,21 @@ theorem stale_windows_meet(): ¬Arena::Apart(STALE_FIRST().value.toNat(), 4, STA
 
 theorem zero_not_five(e: BitVec::ofNat(0, n := 64) = BitVec::ofNat(5)): False { bv_omega }
 
-theorem stale_store_seen(): ¬(Arena::read(Arena::store(STALE_SECOND().after, STALE_SECOND().value, 4, 1, 5).after, STALE_FIRST().value, 4, 1).value =
-    Arena::read(STALE_SECOND().after, STALE_FIRST().value, 4, 1).value)
-{
-    let seen: (Arena::read(Arena::store(STALE_SECOND().after, STALE_SECOND().value, 4, 1, 5).after, STALE_FIRST().value, 4, 1).value = BitVec::ofNat(5)) = refl;
-    let before: (Arena::read(STALE_SECOND().after, STALE_FIRST().value, 4, 1).value = BitVec::ofNat(0)) = refl;
+// Both windows are `(0, 4)`, so the reads and the store are at literals,
+// their proofs found by evaluation.
+theorem stale_store_seen(): ¬(Arena::read(Arena::store(STALE_SECOND().after, 0, 4, 1, 5), 0, 4, 1) = Arena::read(STALE_SECOND().after, 0, 4, 1)) {
+    let seen: (Arena::read(Arena::store(STALE_SECOND().after, 0, 4, 1, 5), 0, 4, 1) = BitVec::ofNat(5)) = refl;
+    let before: (Arena::read(STALE_SECOND().after, 0, 4, 1) = BitVec::ofNat(0)) = refl;
     λ e => zero_not_five(trans(sym(before), trans(sym(e), seen)))
 }
+
+// The window's bases, as handed out, are those literals.
+theorem stale_bases(): And<STALE_FIRST().value = 0, STALE_SECOND().value = 0> { And(refl, refl) }
+
+// A negative control for the found proof: an element of a window with no
+// test that it is inside is refused, not read as 0.
+// expect-error: was left to its default
+fn untested_read(a: Arena, i: u64) → u64 { a.read(0, 4, i) }
+
+// With the caller's own test it is found.
+fn tested_read(a: Arena, i: u64) → u64 { if h: i < 4 { a.read(0, 4, i) } else { 0 } }

@@ -448,14 +448,6 @@ theorem port_vec_grow_runs(): Arena::new_vec::bytes(PORT_ARENA(), 144, 2).value 
     ⟨refl, ⟨refl, refl⟩⟩
 }
 
-// Read through the windows: the new one holds 7, 8, 9; past its length the
-// read is the window's word, past its count it is 0.
-theorem port_vec_read_runs(): Arena::read::bytes(Arena::push::bytes(PORT_VEC_TWO(), 144, 0, 9).after, 144, 5, 4, 2).value = 9 ∧
-    Arena::read::bytes(Arena::push::bytes(PORT_VEC_TWO(), 144, 0, 9).after, 144, 3, 2, 1).value = 8 ∧
-    Arena::read::bytes(Arena::push::bytes(PORT_VEC_TWO(), 144, 0, 9).after, 144, 5, 4, 4).value = 0 {
-    ⟨refl, ⟨refl, refl⟩⟩
-}
-
 // Growing past the limit: the fourth push fills the window of four, the
 // fifth needs a window of eight with seven words left, and answers 0 with
 // the bytes as they were.
@@ -473,18 +465,18 @@ theorem port_arena_reset_runs(): Arena::reset::bytes(PORT_TWO_WINDOWS(), 144, 4)
     ⟨refl, ⟨refl, refl⟩⟩
 }
 
-// A negative control: a window kept past a reset is stale. `(0, 4)` is
-// allocated, the arena reset to 0, and `(0, 4)` allocated again; a store
-// through the new window is read through the old one, so the two are not
-// apart and `store_apart` does not apply (`arena_laws_tests.hthr` proves
-// they meet).
-fn PORT_REUSED() → List<u8> {
-    Arena::alloc::bytes(Arena::reset::bytes(Arena::alloc::bytes(PORT_ARENA(), 144, 4).after, 144, 0).after, 144, 4).after
-}
-
-theorem port_arena_stale_runs(): Arena::read::bytes(PORT_REUSED(), 144, 0, 4, 1).value = 0 ∧
-    Arena::read::bytes(Arena::store::bytes(PORT_REUSED(), 144, 0, 4, 1, 5).after, 144, 0, 4, 1).value = 5 {
-    ⟨refl, refl⟩
+// A window's element is read and stored under found proofs that it is
+// inside the window and the window inside the heap (`Arena::read`,
+// `Arena::store`), with no junk default past the count. As a `runtime fn`
+// that takes the proofs it is refused: a function of a laid record does not
+// take a proof parameter yet (runtime-record-function-limits). Compiled code
+// reads a window under its own tests, as `push_in` and `copy_at` do. The
+// stale window kept past a reset is the negative control of
+// `arena_laws_tests.hthr`, with an index read without a test.
+// expect-error: a type with no runtime layout
+runtime fn Arena::port_read(self a: Arena, base, count, i: u64, inside: ∥i.toNat() < count.toNat()∥ := bv_omega,
+    fits: ∥base.toNat() + count.toNat() <= 16∥ := bv_omega) → u64 {
+    a.heap.at(base + i)
 }
 
 // What it publishes, at every arena the span holds.
@@ -496,26 +488,20 @@ theorem port_arena_alloc_held(own: List<u8>, a: Arena, length, size: u64, holds:
 }
 
 // The arena at a size chosen at run time, a laid record that takes it
-// (§3): allocation and a store through a window are straight-line and
-// compile, the size the word after the length word.
+// (§3): allocation is straight-line and compiles, the size the word after
+// the length word.
 laid record PortArena(size: u64) { top: u64, heap: [u64; size.toNat()] }
 
 runtime fn PortArena::alloc({size: u64}, mut self a: PortArena(size), n: u64) → u64 {
     if fits: a.top <= size ∧ n <= size - a.top { let base = a.top; a.top := a.top + n; base } else { 18446744073709551615 }
 }
 
-runtime fn PortArena::store({size: u64}, mut self a: PortArena(size), base, count, i, x: u64) → u64 {
-    if lt: i < count { if inside: base + i < size { a.heap := a.heap.put(base + i, x); 1 } else { 0 } } else { 0 }
-}
-
 // Two words of heap: a window of one at 0, the top moved to 1; one of
-// three is `Full`; a store at element 0 of the window `(1, 1)`.
+// three is `Full`.
 theorem port_arena_sized_runs(): PortArena::alloc::bytes(List::replicate(BitVec::ofNat(0), 24), 24, 2, 1) =
         Mutated([1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], 0) ∧
-    PortArena::alloc::bytes(List::replicate(BitVec::ofNat(0), 24), 24, 2, 3).value = 18446744073709551615 ∧
-    PortArena::store::bytes(List::replicate(BitVec::ofNat(0), 24), 24, 2, 1, 1, 0, 6).after =
-        [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0] {
-    ⟨refl, ⟨refl, refl⟩⟩
+    PortArena::alloc::bytes(List::replicate(BitVec::ofNat(0), 24), 24, 2, 3).value = 18446744073709551615 {
+    ⟨refl, refl⟩
 }
 
 theorem port_arena_sized_held(size: u64, own: List<u8>, a: PortArena(size), length, n: u64, holds: rt_held::Stored::Holds(PortArena::stored(size), own, length, a)):

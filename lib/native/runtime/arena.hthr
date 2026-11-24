@@ -3,7 +3,8 @@
 // a laid header of the top and the limit, then the heap. Allocation
 // compares and adds, answering a window's base or `Full`; a window is two
 // words `(base, count)`, read and stored at element `i` through the heap
-// array's accessor at the word index `base + i`; reset moves the top back
+// array's accessor at the word index `base + i`, under found proofs that
+// the index is inside the window (no junk default); reset moves the top back
 // to a mark; and a vector is a header of three heap words (its window's
 // base, its capacity, its length) whose push past the capacity grows it
 // into a window of twice the capacity and copies, all within the span. The
@@ -31,8 +32,9 @@
 // What the generator does not take yet shapes three spellings, each noted
 // where it stands: the tests that keep the heap's indexes in bounds are
 // written where an index is used (`h < 14`), as `bv_omega` does not read a
-// bound through a sum of words that may wrap; a read that only reads is a
-// function leaving the record as it was; and `push` is a call, a test of
+// bound through a sum of words that may wrap; a window's `read` and `store`
+// take found proofs, so they are ordinary functions until a function of a
+// record takes a proof parameter; and `push` is a call, a test of
 // its answer and a call, which has no branch equations (its laws are those
 // of `push_in` and `grow`).
 //
@@ -64,18 +66,27 @@ runtime fn Arena::reset(mut self a: Arena, mark: u64) → u64 {
     if ok: mark <= a.top { a.top := mark; 1 } else { 0 }
 }
 
-// Element `i` of the window `(base, count)`, 0 past its count. Spelled as a
-// function that leaves the record, since a tested read as the value of a
-// function that stores nothing is not taken yet
-// (runtime-record-function-limits).
-runtime fn Arena::read(self a: Arena, base, count, i: u64) → Mutated<Arena, u64> {
-    if lt: i < count { if inside: base + i < 16 { Mutated(a, a.heap.at(base + i)) } else { Mutated(a, 0) } } else { Mutated(a, 0) }
+// Element `i` of the window `(base, count)`, under found proofs that `i` is
+// inside the window and the window inside the heap: a caller's own test of
+// `i < len` supplies the first, as for `Bytes::at` and `Vec::at`. There is
+// no junk default past the count (span-record-design: junk values as a
+// default API are a sign of needing better automation).
+//
+// These two are ordinary functions, not `runtime fn`s: a function of a laid
+// record does not take a proof parameter yet ("a type with no runtime
+// layout", runtime-record-function-limits; the ledger pins it). Compiled
+// code reads and stores a window as `push_in` and `copy_at` do, the heap
+// array's element at `base + i` under the caller's own tests, which is the
+// term these two are.
+fn Arena::read(self a: Arena, base, count, i: u64, inside: ∥i.toNat() < count.toNat()∥ := bv_omega,
+    fits: ∥base.toNat() + count.toNat() <= 16∥ := bv_omega) → u64 {
+    a.heap.at(base + i)
 }
 
-// Element `i` of the window `(base, count)` set to `x`: 1, or 0 past its
-// count and nothing stored.
-runtime fn Arena::store(mut self a: Arena, base, count, i, x: u64) → u64 {
-    if lt: i < count { if inside: base + i < 16 { a.heap := a.heap.put(base + i, x); 1 } else { 0 } } else { 0 }
+// Element `i` of the window `(base, count)` set to `x`, under the same proofs.
+fn Arena::store(self a: Arena, base, count, i, x: u64, inside: ∥i.toNat() < count.toNat()∥ := bv_omega,
+    fits: ∥base.toNat() + count.toNat() <= 16∥ := bv_omega) → Arena {
+    a with { heap = a.heap.put(base + i, x) }
 }
 
 // The copy that growing makes: elements `i ..< n` of the window at `from`

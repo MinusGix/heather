@@ -338,11 +338,16 @@ build settled or changed against the text above:
   heap and the top within the limit before the sum it compares, so the sum
   cannot wrap.
 - *A window is read through the heap array's accessor*, at the word index
-  `base + i` with the window's own test `i < count` in the program: the
-  accessor's `read_at` is called with the array's place and count, not the
-  window's. A window's base as the accessor's would need an accessor at a
-  computed place, which the record verdict does not take (it wants a known
-  field).
+  `base + i`: the accessor's `read_at` is called with the array's place and
+  count, not the window's. A window's base as the accessor's would need an
+  accessor at a computed place, which the record verdict does not take (it
+  wants a known field). `Arena::read` and `Arena::store` take found proofs
+  that `i < count` and that the window is inside the heap, as `Bytes::at`
+  and `Vec::at` do, with no junk default past the count (Minus,
+  2026-11-24). A function of a laid record does not take a proof parameter
+  yet, so these two are ordinary functions and the compiled form is a
+  refused ledger row; compiled code reads and stores a window under its own
+  tests (`push_in`, `copy_at`).
 - *A vector lives in the arena*, a header of three heap words (its
   window's base, its capacity, its length) beside its window, not a
   `Window` and a fill mark held in words. A function answers one word, so
@@ -350,7 +355,13 @@ build settled or changed against the text above:
   call finds it. `grow` takes a window of twice the capacity at the top,
   points the header at it and copies; `push` is `push_in` (2 when full),
   then `grow` and `push_in` again; past the limit it answers 0 with the
-  arena as it was.
+  arena as it was. Accepted as the default (Minus, 2026-11-24): one header
+  per vector, so `h` is a stable reference across growth and the laws
+  compose by location; a header held by value could be copied, and the
+  copy that did not push would name a window grown away from it (the
+  aliasing below). A header held by value (in registers, returned from
+  calls) comes later as a second placement of the same laid record, once
+  results of several words and ownership exist.
 - *The laws, as proved* (over the functions; `runs_held` carries each to
   the bytes): `alloc_below` is stronger than stated (allocation changes no
   heap word at all); `alloc_fresh` gives the base as the old top, inside the
@@ -358,7 +369,8 @@ build settled or changed against the text above:
   from every window below the old top) and `alloc_full` (at the limit,
   `Full` and the arena as it was); `store_apart` is stated at reads: a
   store into `W` changes no read of a window `V` apart from it, both inside
-  the heap; `grow_abs` holds under `VecInv` (header and window below the
+  the heap, each element under its found proof (`read_store_same` reads
+  back what was stored); `grow_abs` holds under `VecInv` (header and window below the
   top and apart, length within capacity). `push_in_abs` adds that a push
   with room appends. The copy's invariant is proved by induction on its
   measure, since a `mut self` loop gets step equations and no `induct`
@@ -369,9 +381,9 @@ build settled or changed against the text above:
   (`lib/_tests/native/runtime/arena_laws_tests.hthr`).
 - What the generator's limits shaped: a heap index's bound is tested where
   the index is used (`h < 14`), as `bv_omega` does not read a bound through
-  a sum of words read from the heap; a read is spelled as a function that
-  leaves the record (a tested read as a non-storing function's value is
-  refused, `runtime-record-function-limits`); and `push`, a call, a test
+  a sum of words read from the heap; a window's `read` and `store` are
+  ordinary functions until a function of a record takes a proof parameter
+  (`runtime-record-function-limits`); and `push`, a call, a test
   of its answer and a call, gets no branch equations, so its meaning is
   read off `push_in_abs` and `grow_abs` (a `push` whose arms call two
   functions is refused by the elaborator,
