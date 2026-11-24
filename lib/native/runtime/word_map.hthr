@@ -1,0 +1,98 @@
+// A map of words at a fixed capacity, compiled (issues/runtime-hash-map-spec.md,
+// docs/native/rung2-spans-design.md §7): open addressing in one laid record,
+// its keys and values side by side, 0 the empty key, the slot the top two bits
+// of a Fibonacci hash, linear probing, deletion by backward shifting.
+//
+// The functions are written in the shape the generator takes today: a probe
+// ends in its own call, each arm its own `Mutated`, and a lookup that only
+// reads answers a word. What they mean is `word_map_laws.hthr`: a table
+// satisfying `WordMap::Inv` is the association list of its occupied slots,
+// and each function here is the `assoc.hthr` operation on it.
+//
+// The table keeps one slot empty: an insert of a new key answers full when
+// three of the four are taken. Backward shifting stops at an empty slot, and
+// at a full table it is wrong (`word_map_laws.hthr`'s negative control), as
+// Knuth's Algorithm R (TAOCP 6.4) takes fewer keys than slots.
+// `logic` and `bool` are what the functions' branch equations and
+// `induct` principles are built from; without them they are skipped.
+import logic;
+import bool;
+import omega;
+import runtime_data;
+
+laid(endian := BigEndian) record WordMap { count: u64, keys: [u64; 4], vals: [u64; 4] }
+
+// The home slot of a key: the top two bits of its Fibonacci hash.
+runtime fn word_map_home(k: u64) → u64 { (k * 11400714819323198485).shift_right(62) }
+
+// Insert from slot `j` with `left` slots still to try: 1 when the key was
+// put in an empty slot, 0 when its value was replaced, 2 when the table is
+// full.
+runtime fn WordMap::insert_at(self m: WordMap, k, v, j, left: u64) → Mutated<WordMap, u64> decreases left.toNat() {
+    if more: 0 < left {
+        if lt: j < 4 {
+            if empty: m.keys.at(j) = 0 {
+                if room: m.count < 3 { Mutated(m with { keys = m.keys.put(j, k), vals = m.vals.put(j, v), count = m.count + 1 }, 1) }
+                else { Mutated(m, 2) }
+            }
+            else if hit: m.keys.at(j) = k { Mutated(m with { vals = m.vals.put(j, v) }, 0) }
+            else { @insert_at(m, k, v, (j + 1).band(3), left - 1) }
+        } else { Mutated(m, 2) }
+    } else { Mutated(m, 2) }
+}
+
+runtime fn WordMap::insert(self m: WordMap, k, v: u64) → Mutated<WordMap, u64> {
+    let r = WordMap::insert_at(m, k, v, word_map_home(k), 4);
+    Mutated(r.after, r.value)
+}
+
+// A lookup from slot `j`: the value, or 0 where the key is not stored.
+runtime fn WordMap::find_at(self m: WordMap, k, j, left: u64) → u64 decreases left.toNat() {
+    if more: 0 < left {
+        if lt: j < 4 {
+            if empty: m.keys.at(j) = 0 { 0 }
+            else if hit: m.keys.at(j) = k { m.vals.at(j) }
+            else { m.find_at(k, (j + 1).band(3), left - 1) }
+        } else { 0 }
+    } else { 0 }
+}
+
+runtime fn WordMap::get(self m: WordMap, k: u64) → u64 { m.find_at(k, word_map_home(k), 4) }
+
+// Backward shifting: `i` is the hole, its key not yet cleared, and `j` the
+// slot looked at next. An entry whose probe passed the hole moves into it,
+// leaving its own slot the hole; the first empty slot ends the shift, the
+// hole cleared and the count one less. 1 when done, 2 past the budget.
+runtime fn WordMap::shift_at(self m: WordMap, i, j, left: u64) → Mutated<WordMap, u64> decreases left.toNat() {
+    if more: 0 < left {
+        if lt: j < 4 {
+            if li: i < 4 {
+                if empty: m.keys.at(j) = 0 { Mutated(m with { keys = m.keys.put(i, 0), count = m.count - 1 }, 1) }
+                else if moves: (j - i).band(3) <= (j - word_map_home(m.keys.at(j))).band(3) {
+                    @shift_at(m with { keys = m.keys.put(i, m.keys.at(j)), vals = m.vals.put(i, m.vals.at(j)) }, j, (j + 1).band(3), left - 1)
+                }
+                else { @shift_at(m, i, (j + 1).band(3), left - 1) }
+            } else { Mutated(m, 2) }
+        } else { Mutated(m, 2) }
+    } else { Mutated(m, 2) }
+}
+
+// Remove from slot `j`: find the key, then shift into its slot. 1 when it
+// was removed, 0 when it was not stored.
+runtime fn WordMap::remove_at(self m: WordMap, k, j, left: u64) → Mutated<WordMap, u64> decreases left.toNat() {
+    if more: 0 < left {
+        if lt: j < 4 {
+            if empty: m.keys.at(j) = 0 { Mutated(m, 0) }
+            else if hit: m.keys.at(j) = k { let r = WordMap::shift_at(m, j, (j + 1).band(3), 3); Mutated(r.after, r.value) }
+            else { @remove_at(m, k, (j + 1).band(3), left - 1) }
+        } else { Mutated(m, 0) }
+    } else { Mutated(m, 0) }
+}
+
+runtime fn WordMap::remove(self m: WordMap, k: u64) → Mutated<WordMap, u64> {
+    let r = WordMap::remove_at(m, k, word_map_home(k), 4);
+    Mutated(r.after, r.value)
+}
+
+// The empty table's bytes: the count, four keys and four values, all zero.
+fn WordMap::empty_bytes() → List<u8> { List::replicate(BitVec::ofNat(0), 72) }

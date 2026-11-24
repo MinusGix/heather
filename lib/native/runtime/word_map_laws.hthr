@@ -1,0 +1,257 @@
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import vector;
+import assoc;
+import omega;
+import bitvec_omega;
+import bitvec_shift_nat;
+import runtime_data;
+import word_map;
+
+// ---------------------------------------------------------------------------
+// The slots as numbers.
+
+fn WordMap::key(self m: WordMap, s: Nat) → u64 { vector_get(m.keys, s, BitVec::ofNat(0)) }
+
+fn WordMap::val(self m: WordMap, s: Nat) → u64 { vector_get(m.vals, s, BitVec::ofNat(0)) }
+
+// The rows of the `n` slots from `s` that hold a key, in slot order.
+fn WordMap::rows(self m: WordMap, s, n: Nat) → List<Pair<u64, u64>> {
+    match n {
+        Zero => Nil,
+        Succ(r) => match BitVec::eq_dec(m.key(s), BitVec::ofNat(0)) {
+            Inl(_) => m.rows(s + 1, r),
+            Inr(_) => Cons(Pair(m.key(s), m.val(s)), m.rows(s + 1, r)),
+        },
+    }
+}
+
+// What the table stands for: the association list of its occupied slots.
+fn WordMap::abs(self m: WordMap) → List<Pair<u64, u64>> { m.rows(0, 4) }
+
+// Key `x` stored at slot `t` with value `w`.
+record RowAt(m: WordMap, x, w: u64, t: Nat) { at: m.key(t) = x, nz: ¬(x = 0), val: m.val(t) = w }
+
+// A key no slot of `s .. s + n` holds is not in their rows.
+theorem WordMap::rows_none(self m: WordMap, x: u64, n: Nat): (s: Nat) → ((t: Nat) → s <= t → t < s + n → m.key(t) = x → x = 0) → m.rows(s, n).assoc_get(x) = None {
+    match n {
+        Zero => λ s none => refl,
+        Succ(r, ih) => λ s none => match BitVec::eq_dec(m.key(s), BitVec::ofNat(0)) as λ d =>
+            (match d { Inl(_) => m.rows(s + 1, r), Inr(_) => Cons(Pair(m.key(s), m.val(s)), m.rows(s + 1, r)) }).assoc_get(x) = None
+        {
+            Inl(_) => ih(s + 1, λ t lo hi at => none(t, omega, omega, at)),
+            Inr(nz) => {
+                let miss: (¬(x = m.key(s))) = λ e => nz(trans(sym(e), none(s, omega, omega, sym(e))));
+                trans(m.rows(s + 1, r).assoc_get_miss(Pair(m.key(s), m.val(s)), x, miss), ih(s + 1, λ t lo hi at => none(t, omega, omega, at)))
+            },
+        },
+    }
+}
+
+// A key one slot of `s .. s + n` holds, and no other, is that slot's value.
+theorem WordMap::rows_some(self m: WordMap, x: u64, t0: Nat, nz: ¬(x = 0), at: m.key(t0) = x, n: Nat):
+    (s: Nat) → s <= t0 → t0 < s + n → ((t: Nat) → s <= t → t < s + n → m.key(t) = x → t = t0) → m.rows(s, n).assoc_get(x) = Some(m.val(t0))
+{
+    match n {
+        Zero => λ s lo hi only => false_elim(omega),
+        Succ(r, ih) => λ s lo hi only => match BitVec::eq_dec(m.key(s), BitVec::ofNat(0)) as λ d =>
+            (match d { Inl(_) => m.rows(s + 1, r), Inr(_) => Cons(Pair(m.key(s), m.val(s)), m.rows(s + 1, r)) }).assoc_get(x) = Some(m.val(t0))
+        {
+            Inl(z) => {
+                let other: (¬(s = t0)) = λ e => nz(trans(sym(at), trans(cong_fn(λ (q: Nat) => m.key(q), sym(e)), z)));
+                ih(s + 1, omega, omega, λ t lo2 hi2 a => only(t, omega, omega, a))
+            },
+            Inr(occupied) => match BitVec::eq_dec(x, m.key(s)) {
+                Inl(e) => {
+                    let here: (s = t0) = only(s, omega, omega, sym(e));
+                    cong_fn(λ (q: Nat) => Some(m.val(q)), here)
+                },
+                Inr(miss) => {
+                    let other: (¬(s = t0)) = λ e => miss(trans(sym(at), cong_fn(λ (q: Nat) => m.key(q), sym(e))));
+                    ih(s + 1, omega, omega, λ t lo2 hi2 a => only(t, omega, omega, a))
+                },
+            },
+        },
+    }
+}
+
+// A row of the rows is a slot's.
+theorem WordMap::rows_row(self m: WordMap, x, w: u64, n: Nat): (s: Nat) → Mem(Pair(x, w), m.rows(s, n)) →
+    Exists(λ (t: Nat) => And<And<s <= t, t < s + n>, RowAt(m, x, w, t)>)
+{
+    match n {
+        Zero => λ s none => false_elim(none),
+        Succ(r, ih) => λ s => match BitVec::eq_dec(m.key(s), BitVec::ofNat(0)) as λ d =>
+            Mem(Pair(x, w), match d { Inl(_) => m.rows(s + 1, r), Inr(_) => Cons(Pair(m.key(s), m.val(s)), m.rows(s + 1, r)) }) →
+            Exists(λ (t: Nat) => And<And<s <= t, t < s + Succ(r)>, RowAt(m, x, w, t)>)
+        {
+            Inl(_) => λ later => {
+                let found = ih(s + 1, later);
+                Exists(found.witness, And(And(omega(found.proof.left.left), omega(found.proof.left.right)), found.proof.right))
+            },
+            Inr(occupied) => λ mem => match mem {
+                Inl(e) => {
+                    let k: (x = m.key(s)) = cong_fn(λ (p: Pair<u64, u64>) => p.fst, e);
+                    let v: (w = m.val(s)) = cong_fn(λ (p: Pair<u64, u64>) => p.snd, e);
+                    Exists(s, And(And(omega, omega), RowAt(sym(k), λ z => occupied(trans(sym(k), z)), sym(v))))
+                },
+                Inr(later) => {
+                    let found = ih(s + 1, later);
+                    Exists(found.witness, And(And(omega(found.proof.left.left), omega(found.proof.left.right)), found.proof.right))
+                },
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Slots as words: the next slot, and the home slot's range.
+
+theorem WordMap::band_three(x: u64): x.band(3).toNat() = x.toNat() % 4 {
+    let mask: (BitVec::ofNat(3, n := 64) = BitVec::low_mask(2)) = refl;
+    trans(cong_fn(λ (y: u64) => x.band(y).toNat(), mask), BitVec::toNat_band_low_mask(64, 2, x))
+}
+
+theorem WordMap::next_slot(j: u64, inside: j.toNat() < 4): ((j + 1).band(3)).toNat() = (j.toNat() + 1) % 4 {
+    let up: ((j + 1).toNat() = j.toNat() + 1) = bv_omega;
+    trans(WordMap::band_three(j + 1), cong_fn(λ (q: Nat) => q % 4, up))
+}
+
+theorem word_map_home_below(k: u64): word_map_home(k).toNat() < 4 {
+    let is: (word_map_home(k) = (k * 11400714819323198485).shift_right(62)) = refl;
+    let below: ((k * 11400714819323198485).shift_right(62).toNat() < 4) = bv_omega;
+    rewrite(sym(is), in := below)
+}
+
+// ---------------------------------------------------------------------------
+// The table's lookups, read off its slots.
+
+fn WordMap::Distinct(self m: WordMap) → Type { (s, t: Nat) → s < 4 → t < 4 → ¬(m.key(s) = 0) → m.key(s) = m.key(t) → s = t }
+
+theorem WordMap::abs_get_at(self m: WordMap, distinct: m.Distinct(), x, w: u64, t: Nat, inside: t < 4, row: RowAt(m, x, w, t)): m.abs().assoc_get(x) = Some(w) {
+    let only = λ (u: Nat) (lo: 0 <= u) (hi: u < 0 + 4) (a: m.key(u) = x) =>
+        distinct(u, t, omega, inside, λ z => row.nz(trans(sym(a), z)), trans(a, sym(row.at)));
+    trans(m.rows_some(x, t, row.nz, row.at, 4, 0, omega, omega, only), cong_fn(λ (v: u64) => Some(v), row.val))
+}
+
+theorem WordMap::abs_get_none(self m: WordMap, x: u64, none: (t: Nat) → t < 4 → m.key(t) = x → x = 0): m.abs().assoc_get(x) = None {
+    m.rows_none(x, 4, 0, λ t lo hi a => none(t, omega, a))
+}
+
+theorem WordMap::abs_get_row(self m: WordMap, x, w: u64, h: m.abs().assoc_get(x) = Some(w)): Exists(λ (t: Nat) => And<t < 4, RowAt(m, x, w, t)>) {
+    let found = m.rows_row(x, w, 4, 0, m.abs().assoc_get_row(x, w, h));
+    Exists(found.witness, And(omega(found.proof.left.right), found.proof.right))
+}
+
+// Two tables whose slots hold the key `x` with the same values agree at
+// `x`, wherever the slots are.
+fn WordMap::Moves(m, n: WordMap, x: u64) → Type {
+    (w: u64) → (t: Nat) → t < 4 → RowAt(m, x, w, t) → Exists(λ (u: Nat) => And<u < 4, RowAt(n, x, w, u)>)
+}
+
+theorem WordMap::abs_get_same(m, n: WordMap, dm: m.Distinct(), dn: n.Distinct(), x: u64, there: WordMap::Moves(m, n, x), back: WordMap::Moves(n, m, x)):
+    n.abs().assoc_get(x) = m.abs().assoc_get(x)
+{
+    match h: m.abs().assoc_get(x) {
+        Some(w) => {
+            let row = m.abs_get_row(x, w, h);
+            let moved = there(w, row.witness, row.proof.left, row.proof.right);
+            n.abs_get_at(dn, x, w, moved.witness, moved.proof.left, moved.proof.right)
+        },
+        None => n.abs_get_none(x, λ t inside a => match BitVec::eq_dec(x, BitVec::ofNat(0)) {
+            Inl(z) => z,
+            Inr(nz) => {
+                let moved = back(n.val(t), t, inside, RowAt(a, nz, refl));
+                let some = m.abs_get_at(dm, x, n.val(t), moved.witness, moved.proof.left, moved.proof.right);
+                Option::none_ne_some(n.val(t), trans(sym(h), some), x = BitVec::ofNat(0))
+            },
+        }),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The probing invariant.
+
+// The home slot as a number.
+fn WordMap::home(k: u64) → Nat { word_map_home(k).toNat() }
+
+// The slots a probe for `k` passes before it reaches slot `s`.
+fn WordMap::Before(k: u64, t, s: Nat) → Type { ((t + 4 - WordMap::home(k)) % 4) < ((s + 4 - WordMap::home(k)) % 4) }
+
+// The number of the `n` slots from `s` that hold a key.
+fn WordMap::used(self m: WordMap, s, n: Nat) → Nat {
+    match n {
+        Zero => 0,
+        Succ(r) => match BitVec::eq_dec(m.key(s), BitVec::ofNat(0)) {
+            Inl(_) => m.used(s + 1, r),
+            Inr(_) => m.used(s + 1, r) + 1,
+        },
+    }
+}
+
+record WordMapInv(m: WordMap) {
+    // Every stored key is reached from its home without passing an empty slot.
+    reach: (s, t: Nat) → s < 4 → t < 4 → ¬(m.key(s) = 0) → WordMap::Before(m.key(s), t, s) → ¬(m.key(t) = 0),
+    // No key is stored twice.
+    distinct: m.Distinct(),
+    // The count is the number of occupied slots, and one slot is empty.
+    count: m.count.toNat() = m.used(0, 4),
+    room: m.count.toNat() < 4,
+}
+
+// ---------------------------------------------------------------------------
+// Lookup.
+
+// A probe from `j` that passes only occupied slots of other keys before the
+// key's slot `s`, within its budget, answers the slot's value.
+fn WordMap::Finds(m: WordMap, k: u64, s: Nat, j, left: u64) → Type {
+    j.toNat() < 4 → ((s + 4 - j.toNat()) % 4) < left.toNat() →
+    ((t: Nat) → t < 4 → ((t + 4 - j.toNat()) % 4) < ((s + 4 - j.toNat()) % 4) → And<¬(m.key(t) = 0), ¬(m.key(t) = k)>) →
+    m.find_at(k, j, left) = m.val(s)
+}
+
+theorem WordMap::finds_empty(m: WordMap, k: u64, s: Nat, s4: s < 4, at: m.key(s) = k, nz: ¬(k = 0), j, left: u64, empty: m.key(j.toNat()) = 0):
+    WordMap::Finds(m, k, s, j, left)
+{
+    λ j4 budget clear => {
+        match Nat::eq_dec(j.toNat(), s) {
+            Inl(same) => false_elim(nz(trans(sym(at), trans(cong_fn(λ (q: Nat) => m.key(q), sym(same)), empty)))),
+            Inr(other) => match clear(j.toNat(), j4, omega) { And(occupied, _) => false_elim(occupied(empty)) },
+        }
+    }
+}
+
+theorem WordMap::finds_hit(m: WordMap, k: u64, s: Nat, s4: s < 4, j, left: u64, hit: m.key(j.toNat()) = k, eq: m.find_at(k, j, left) = m.val(j.toNat())):
+    WordMap::Finds(m, k, s, j, left)
+{
+    λ j4 budget clear => trans(eq, match Nat::eq_dec(j.toNat(), s) {
+        Inl(same) => cong_fn(λ (q: Nat) => m.val(q), same),
+        Inr(other) => match clear(j.toNat(), j4, omega) { And(_, other) => false_elim(other(hit)) },
+    })
+}
+
+theorem WordMap::finds_next(m: WordMap, k: u64, s: Nat, s4: s < 4, at: m.key(s) = k, j, left: u64, more: 0 < left, hit: ¬(m.key(j.toNat()) = k),
+    eq: m.find_at(k, j, left) = m.find_at(k, (j + 1).band(3), left - 1), ih: WordMap::Finds(m, k, s, (j + 1).band(3), left - 1)):
+    WordMap::Finds(m, k, s, j, left)
+{
+    λ j4 budget clear => {
+        let nj = WordMap::next_slot(j, j4);
+        let dl: ((left - 1).toNat() = left.toNat() - 1) = bv_omega;
+        let other: (¬(j.toNat() = s)) = λ e => hit(trans(cong_fn(λ (q: Nat) => m.key(q), e), at));
+        trans(eq, ih(omega(nj), omega(nj, dl, budget, other, s4), λ t t4 before => clear(t, t4, omega(nj, other, before, s4))))
+    }
+}
+
+theorem WordMap::find_found(m: WordMap, k: u64, s: Nat, s4: s < 4, at: m.key(s) = k, nz: ¬(k = 0), j, left: u64): WordMap::Finds(m, k, s, j, left) {
+    WordMap::find_at::induct(m, k, λ (j: u64) (left: u64) => WordMap::Finds(m, k, s, j, left),
+        λ j left more lt empty eq => WordMap::finds_empty(m, k, s, s4, at, nz, j, left, empty),
+        λ j left more lt empty hit eq => WordMap::finds_hit(m, k, s, s4, j, left, hit, eq),
+        λ j left more lt empty hit eq ih => WordMap::finds_next(m, k, s, s4, at, j, left, more, hit, eq, ih),
+        λ j left more lt eq => λ j4 budget clear => false_elim(lt(j4)),
+        λ j left more eq => λ j4 budget clear => false_elim(omega(more, budget)),
+        j, left)
+}
