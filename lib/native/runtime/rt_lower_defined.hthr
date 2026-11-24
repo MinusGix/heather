@@ -1,0 +1,948 @@
+// Which calls a lowered term makes (docs/native/runtime-fn-recursion-design.md
+// §10.6).
+//
+// `Tm::lower_sound` says what a term's code computes. This module says
+// where the code is defined (`StructuredRegion::defined_over`): the code
+// asks its callees exactly where the term's meaning calls them, on the
+// path its tests take, with the words of the arguments the meaning passes.
+//
+// `Tm::calls_ok` reads a term at an environment and asks an oracle, a test
+// per function of the program, at each call the meaning makes there. Where
+// every such test holds, and the oracle's tests are what `defines` answers
+// on words (`Tm::OkDefines`), the lowered region is defined
+// (`Tm::lower_defined`). A recursion's oracle is its rank: a call of
+// itself at a lower rank (`runtime`).
+//
+// The nodes the code runs around its calls require nothing (a divide is
+// the one node that does, `Node::total`), which is a fact about the code
+// and is checked on it: `Tm::quiet_in` walks a term and its region
+// together, and at a closed term is an evaluation.
+
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import rt;
+import function_ir;
+import function_ir_eval;
+import function_ir_levels;
+import rt_lower;
+
+// ---------------------------------------------------------------------------
+// The calls a term's meaning makes
+
+// A test per function of the program, of its arguments: whether a call of
+// it is allowed.
+fn Tm::Oracle(w: World) → Type { (f: Nat) → Ty::Arrows(w.tys, Sig::at(w.sigs, f).params, Bit) }
+
+// Whether every call the term's meaning makes at the environment is one
+// the oracle allows: a `let`'s term and then its body with the term's
+// value bound, the arm a test takes, an enum's arms with its constructor
+// bound. A loop's body is not read: a loop that calls is not `quiet_in`.
+fn Tm::calls_ok(self t: Tm, w: World, ok: Tm::Oracle(w)) → (g: List<Ty>) → Env(w.tys, g) → Bool {
+    match t {
+        Let(e, body) => λ g env => e.calls_ok(w, ok, g, env) && body.calls_ok(w, ok, Cons(e.ty(w, g), g), Pair(e.sem(w, g, env), env)),
+        If(c, yes, no) => λ g env => match Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c)) {
+            False => no.calls_ok(w, ok, g, env),
+            True => yes.calls_ok(w, ok, g, env),
+        },
+        IfEq(c, yes, no) => λ g env => match Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c)) {
+            False => no.calls_ok(w, ok, g, env),
+            True => yes.calls_ok(w, ok, g, env),
+        },
+        Call(f, args) => λ g env => Tm::apply(w, g, env, Bit, Sig::at(w.sigs, f).params, ok(f), args),
+        Pick(i, c, arms, _) => λ g env => arms.calls_ok(w, ok, Cons(Enum(i), g),
+            Pair(w.tys.ens(i).of(w.tys.ens(i).tag(Ty::cast(w.tys, Ty::at(g, c), Enum(i), Env::get(w.tys, g, env, c))),
+                w.tys.ens(i).fields(Ty::cast(w.tys, Ty::at(g, c), Enum(i), Env::get(w.tys, g, env, c)))), env)),
+        _ => λ g env => True,
+    }
+}
+
+// The oracle's tests are what `defines` answers on words: on the words of
+// any arguments, the test's bit.
+fn Tm::OkDefines(w: World, ok: Tm::Oracle(w), defines: Defines()) → Type {
+    (f: Nat) → Sig::at(w.sigs, f).Sends(w.tys) →
+        Ty::AnswersWords(w.tys, Sig::at(w.sigs, f).params, Bit, ok(f), λ ws => Ty::result_words(w.tys, Bit, defines(f, ws)))
+}
+
+// A bit's words name it.
+theorem Ty::bit_word_back(tys: Table, b: Bool): Ty::cast(tys, Word(64), Bit, first_word(Ty::result_words(tys, Bit, b))) = b {
+    match b { False => refl, True => refl }
+}
+
+theorem Ty::bit_words_inj(tys: Table, a, b: Bool, e: Ty::result_words(tys, Bit, a) = Ty::result_words(tys, Bit, b)): a = b {
+    trans(sym(Ty::bit_word_back(tys, a)),
+        trans(cong_fn(λ (l: List<BitVec(64)>) => Ty::cast(tys, Word(64), Bit, first_word(l)), e), Ty::bit_word_back(tys, b)))
+}
+
+// ---------------------------------------------------------------------------
+// The code around the calls requires nothing
+
+// A region of nodes that require nothing around calls, none of them in a
+// loop: what a call's lowering is (its widenings, the call, its moves).
+fn StructuredRegion::calm(self region: StructuredRegion) → Bool {
+    match region {
+        Compose(prefix, continuation) => prefix.calm() && continuation.calm(),
+        Call(_, _, _, _) => True,
+        _ => region.quiet(),
+    }
+}
+
+// A branch's arm: the arm's own code, then moves.
+fn Tm::quiet_arm(region: StructuredRegion, inner: StructuredRegion → Bool) → Bool {
+    match region { Compose(arm, moves) => inner(arm) && moves.quiet(), _ => False }
+}
+
+// The term's region, walked with the term: every node outside a call
+// requires nothing, and a call is only where the term calls. A term that
+// is not a `let`, a branch, an enum's `match` or a call has no call in its
+// region at all (`StructuredRegion::quiet`).
+fn Tm::quiet_in(self t: Tm, region: StructuredRegion) → Bool {
+    match t {
+        Let(e, body) => match region { Compose(first, then) => e.quiet_in(first) && body.quiet_in(then), _ => False },
+        If(_, yes, no) => match region {
+            Conditional(_, _, _, _, when_true, when_false) =>
+                Tm::quiet_arm(when_true, λ r => yes.quiet_in(r)) && Tm::quiet_arm(when_false, λ r => no.quiet_in(r)),
+            _ => False,
+        },
+        IfEq(_, yes, no) => match region {
+            Conditional(_, _, _, _, when_true, when_false) =>
+                Tm::quiet_arm(when_true, λ r => yes.quiet_in(r)) && Tm::quiet_arm(when_false, λ r => no.quiet_in(r)),
+            _ => False,
+        },
+        Call(_, _) => region.calm(),
+        Pick(_, _, arms, _) => arms.quiet_in(region),
+        _ => region.quiet(),
+    }
+}
+
+// Nodes that require nothing, then a region.
+theorem Tm::sent_then_defined(buffers: Buffers(), call: Answers(), defines: Defines(), values: Valuation(), c: Lowered): (nodes: List<Node>) →
+    nodes_total(nodes).IsTrue() → c.region.defined_over(buffers, call, defines, eval_nodes_over(buffers, nodes, values)).IsTrue() →
+    Tm::sent_then(nodes, c).region.defined_over(buffers, call, defines, values).IsTrue() {
+    λ nodes => match nodes {
+        Nil => λ _ h => h,
+        Cons(n, rest) => λ total h => Bool::is_true_and_intro(nodes_defined_over(buffers, Cons(n, rest), values),
+            c.region.defined_over(buffers, call, defines, eval_nodes_over(buffers, Cons(n, rest), values)),
+            nodes_total_defined(Cons(n, rest), buffers, total, values), h),
+    }
+}
+
+theorem Tm::sent_calm(c: Lowered): (nodes: List<Node>) → Tm::sent_then(nodes, c).region.calm().IsTrue() →
+    nodes_total(nodes).IsTrue() ∧ c.region.calm().IsTrue() {
+    λ nodes => match nodes {
+        Nil => λ h => ⟨trivial, h⟩,
+        Cons(n, rest) => λ h => Bool::is_true_and(nodes_total(Cons(n, rest)), c.region.calm(), h),
+    }
+}
+
+// A call's region is defined where its callee is, at the words passed, and
+// answers as many words as the call names.
+theorem Tm::called_defined(tys: Table, r: Ty, f: Nat, qs: List<Nat>, next: Nat, buffers: Buffers(), call: Answers(), defines: Defines(),
+    values: Valuation(), calm: Tm::called(tys, r, f, qs, next).region.calm().IsTrue(),
+    defined: defines(f, words_of(values, qs)).IsTrue(),
+    counted: call(f, words_of(values, qs)).tail().len().matches(r.also_ports(tys, next).len()).IsTrue()):
+    Tm::called(tys, r, f, qs, next).region.defined_over(buffers, call, defines, values).IsTrue() {
+    let moves = r.moves(tys, r.past(tys, next), next);
+    let asked = function_ir::Call(f, qs, next, r.also_ports(tys, next));
+    let total = Bool::is_true_and(True, nodes_total(moves), calm).right;
+    Bool::is_true_and_intro(asked.defined_over(buffers, call, defines, values),
+        nodes_region(moves).defined_over(buffers, call, defines, asked.eval_over(buffers, call, values)),
+        Bool::is_true_and_intro(defines(f, words_of(values, qs)), call(f, words_of(values, qs)).tail().len().matches(r.also_ports(tys, next).len()),
+            defined, counted),
+        nodes_total_defined(moves, buffers, total, asked.eval_over(buffers, call, values)))
+}
+
+// ---------------------------------------------------------------------------
+// The lowered region is defined where the meaning's calls are allowed
+
+// What a lowering promises of its region's requirements: from any
+// valuation where the environment holds, with calls answered by the
+// program's meanings and `defines` answering the oracle's tests, a region
+// whose own nodes require nothing is defined where the calls the meaning
+// makes are allowed.
+fn Tm::DefinedHolds(self t: Tm, w: World, ok: Tm::Oracle(w), g: List<Ty>, ports: List<Nat>, next: Nat, r: Option<Lowered>) → Type {
+    match r {
+        None => True,
+        Some(c) => (call: Answers()) → Tm::CallsAgree(w, call) → (defines: Defines()) → Tm::OkDefines(w, ok, defines) →
+            (values: Valuation()) → (env: Env(w.tys, g)) → EnvHolds(w.tys, values, g, ports, env) → Below(w.tys, g, ports, next) →
+            t.quiet_in(c.region).IsTrue() → t.calls_ok(w, ok, g, env).IsTrue() →
+            c.region.defined_over(w.spans, call, defines, values).IsTrue(),
+    }
+}
+
+// A term with no call: its region requires nothing.
+theorem Tm::leaf_defined(self t: Tm, w: World, ok: Tm::Oracle(w), g: List<Ty>, ports: List<Nat>, next: Nat,
+    same: (region: StructuredRegion) → t.quiet_in(region) = region.quiet()): (r: Option<Lowered>) → t.DefinedHolds(w, ok, g, ports, next, r) {
+    λ r => match r as λ o => t.DefinedHolds(w, ok, g, ports, next, o) {
+        None => trivial,
+        Some(c) => λ call agree defines oks values env held below quiet _ =>
+            c.region.quiet_defined(w.spans, call, defines, j(same(c.region), λ b _ => b.IsTrue(), quiet), values),
+    }
+}
+
+// A branch: the arm the test takes, then its moves.
+theorem Tm::if_defined(c: Nat, yes, no: Tm, w: World, ok: Tm::Oracle(w),
+    ih_yes: (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) → Tm::DefinedHolds(yes, w, ok, g, ports, next, Tm::lower(yes, w, g, ports, next)),
+    ih_no: (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) → Tm::DefinedHolds(no, w, ok, g, ports, next, Tm::lower(no, w, g, ports, next)),
+    g: List<Ty>, ports: List<Nat>, next: Nat):
+    Tm::DefinedHolds(If(c, yes, no), w, ok, g, ports, next, Tm::lower(If(c, yes, no), w, g, ports, next)) {
+    let P = λ (r: Option<Lowered>) => Tm::DefinedHolds(If(c, yes, no), w, ok, g, ports, next, r);
+    let ty_yes = Tm::ty(yes, w, g);
+    let ty_no = Tm::ty(no, w, g);
+    Option::and_then_elim(P, trivial, Tm::lower(yes, w, g, ports, next),
+        λ ly => Tm::lower(no, w, g, ports, ly.next).and_then(λ ln => Tm::lower_branch(w.tys, g, ports, c, ty_yes, ty_no, ly, ln)), λ ly lowered_yes =>
+    Option::and_then_elim(P, trivial, Tm::lower(no, w, g, ports, ly.next), λ ln => Tm::lower_branch(w.tys, g, ports, c, ty_yes, ty_no, ly, ln),
+        λ ln lowered_no =>
+    Option::and_then_elim(P, trivial, port_at(ports, c), λ pc => Tm::branch_checked(w.tys, g, c, ty_yes, ty_no, pc, ly, ln), λ pc at_c =>
+    Option::and_then_elim(P, trivial, Ty::at(g, c).check(Bit), λ _ => Tm::branch_typed(w.tys, ty_yes, ty_no, pc, ly, ln), λ ec _ =>
+    Option::and_then_elim(P, trivial, ty_no.check(ty_yes), λ _ => Some(Tm::branch_lowered(w.tys, ty_yes, pc, ly, ln)), λ en _ =>
+        λ call agree defines oks values env held below quiet calls => {
+            let out = ln.next;
+            let first = j(lowered_yes, λ r _ => Tm::LowerHolds(yes, w, g, ports, next, r),
+                Tm::lower_sound(yes, w, g, ports, next))(call, agree, values, env, held, below);
+            let moves_yes = ty_yes.moves(w.tys, out, ly.result);
+            let moves_no = ty_yes.moves(w.tys, out, ln.result);
+            let when_true = Compose(ly.region, nodes_region(moves_yes));
+            let when_false = Compose(ln.region, nodes_region(moves_no));
+            let q = Bool::is_true_and(Tm::quiet_arm(when_true, λ r => yes.quiet_in(r)), Tm::quiet_arm(when_false, λ r => no.quiet_in(r)), quiet);
+            let qy = Bool::is_true_and(yes.quiet_in(ly.region), nodes_region(moves_yes).quiet(), q.left);
+            let qn = Bool::is_true_and(no.quiet_in(ln.region), nodes_region(moves_no).quiet(), q.right);
+            let scrutinee = Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c));
+            let bit = Tm::operand(w, g, ports, values, env, held, c, pc, at_c, Bit, ec);
+            let chosen: (values(1, pc).head_bit() = scrutinee) = trans(cong_fn(λ (x: BitVec(1)) => x.head_bit(), bit), BitVec::head_bit_ofBool(scrutinee));
+            let on_yes = when_true.defined_over(w.spans, call, defines, values);
+            let on_no = when_false.defined_over(w.spans, call, defines, values);
+            let taken: ((match scrutinee as λ _ => Bool { False => on_no, True => on_yes }).IsTrue()) =
+                (match scrutinee as λ b => (match b as λ _ => Bool { False => no.calls_ok(w, ok, g, env), True => yes.calls_ok(w, ok, g, env) }).IsTrue() →
+                    (match b as λ _ => Bool { False => on_no, True => on_yes }).IsTrue() {
+                    True => λ cy => Bool::is_true_and_intro(ly.region.defined_over(w.spans, call, defines, values),
+                        nodes_region(moves_yes).defined_over(w.spans, call, defines, ly.region.eval_over(w.spans, call, values)),
+                        j(lowered_yes, λ r _ => Tm::DefinedHolds(yes, w, ok, g, ports, next, r), ih_yes(g, ports, next))(
+                            call, agree, defines, oks, values, env, held, below, qy.left, cy),
+                        nodes_total_defined(moves_yes, w.spans, qy.right, ly.region.eval_over(w.spans, call, values))),
+                    False => λ cn => Bool::is_true_and_intro(ln.region.defined_over(w.spans, call, defines, values),
+                        nodes_region(moves_no).defined_over(w.spans, call, defines, ln.region.eval_over(w.spans, call, values)),
+                        j(lowered_no, λ r _ => Tm::DefinedHolds(no, w, ok, g, ports, ly.next, r), ih_no(g, ports, ly.next))(
+                            call, agree, defines, oks, values, env, held, below_mono(w.tys, g, next, ly.next, first.left, ports, below), qn.left, cn),
+                        nodes_total_defined(moves_no, w.spans, qn.right, ln.region.eval_over(w.spans, call, values))),
+                })(calls);
+            j(sym(chosen), λ b _ => (match b as λ _ => Bool { False => on_no, True => on_yes }).IsTrue(), taken)
+        })))))
+}
+
+// A call: its callee is defined at the words passed, since the oracle
+// allows the meaning's arguments and those words are theirs.
+theorem Tm::call_defined(w: World, ok: Tm::Oracle(w), g: List<Ty>, ports: List<Nat>, next, f: Nat, args: List<Nat>):
+    Tm::DefinedHolds(Call(f, args), w, ok, g, ports, next, Tm::lower_call(w, g, ports, next, f, args)) {
+    let r = Sig::at(w.sigs, f).result;
+    let ps = Sig::at(w.sigs, f).params;
+    let P = λ (o: Option<Lowered>) => Tm::DefinedHolds(Call(f, args), w, ok, g, ports, next, o);
+    Option::and_then_elim(P, trivial, Ty::check_sents(w.tys, ps), λ _ => Tm::lower_call_result(w, g, ports, next, f, args), λ sends _ =>
+    Option::and_then_elim(P, trivial, r.check_back(w.tys), λ _ => Tm::lower_call_args(w, g, ports, next, f, args), λ er _ =>
+    Option::and_then_elim(P, trivial, Tm::send_args(w.tys, g, ports, ps, args, next), λ s => Tm::lower_call_at(w, r, f, s), λ s e_s =>
+    Option::and_then_elim(P, trivial, Tm::check_true(distinct(Cons(s.next, r.also_ports(w.tys, s.next)))),
+        λ _ => Some(Tm::sent_then(s.nodes, Tm::called(w.tys, r, f, s.ports, s.next))), λ apart _ =>
+        λ call agree defines oks values env held below quiet calls => {
+            let at = s.next;
+            let sent = eval_nodes_over(w.spans, s.nodes, values);
+            let c = Tm::called(w.tys, r, f, s.ports, at);
+            let calm = Tm::sent_calm(c, s.nodes, quiet);
+            let meaning = Tm::apply(w, g, env, r, ps, Sig::get(w.tys, w.sigs, w.callees, f), args);
+            let passed = words_of(sent, s.ports);
+            let answered: (call(f, passed) = Ty::result_words(w.tys, r, meaning)) =
+                Tm::send_answers(w, g, ports, w.spans, env, r, ps, args, next, s, e_s, values, held, below,
+                    Sig::get(w.tys, w.sigs, w.callees, f), λ ws => call(f, ws), agree(f, ⟨sends, er⟩));
+            let allowed: (Ty::result_words(w.tys, Bit, defines(f, passed)) = Ty::result_words(w.tys, Bit, Tm::apply(w, g, env, Bit, ps, ok(f), args))) =
+                Tm::send_answers(w, g, ports, w.spans, env, Bit, ps, args, next, s, e_s, values, held, below,
+                    ok(f), λ ws => Ty::result_words(w.tys, Bit, defines(f, ws)), oks(f, ⟨sends, er⟩));
+            let defined: (defines(f, passed).IsTrue()) =
+                j(sym(Ty::bit_words_inj(w.tys, defines(f, passed), Tm::apply(w, g, env, Bit, ps, ok(f), args), allowed)), λ b _ => b.IsTrue(), calls);
+            let also = r.also_ports(w.tys, at);
+            let len: (Ty::result_words(w.tys, r, meaning).tail().len() = also.len()) = sym(Nat::succ_inj(also.len(),
+                Ty::result_words(w.tys, r, meaning).tail().len(), Ty::back_len(w.tys, r, at, meaning)));
+            let counted: (call(f, passed).tail().len().matches(also.len()).IsTrue()) =
+                j(sym(answered), λ a _ => a.tail().len().matches(also.len()).IsTrue(),
+                    Ty::result_words(w.tys, r, meaning).tail().len().matches_of_eq(also.len(), len));
+            Tm::sent_then_defined(w.spans, call, defines, values, c, s.nodes, calm.left,
+                Tm::called_defined(w.tys, r, f, s.ports, at, w.spans, call, defines, sent, calm.right, defined, counted))
+        }))))
+}
+
+// An enum's `match`: its arms, with the constructor bound.
+theorem Tm::pick_defined(i, c: Nat, arms: Tm, eq: Bool, w: World, ok: Tm::Oracle(w),
+    ih: (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) → Tm::DefinedHolds(arms, w, ok, g, ports, next, Tm::lower(arms, w, g, ports, next)),
+    g: List<Ty>, ports: List<Nat>, next: Nat):
+    Tm::DefinedHolds(Pick(i, c, arms, eq), w, ok, g, ports, next, Tm::lower(Pick(i, c, arms, eq), w, g, ports, next)) {
+    let P = λ (r: Option<Lowered>) => Tm::DefinedHolds(Pick(i, c, arms, eq), w, ok, g, ports, next, r);
+    let inner = Cons(Enum(i), g);
+    Option::and_then_elim(P, trivial, port_at(ports, c),
+        λ pc => Ty::at(g, c).check(Enum(i)).and_then(λ _ => Tm::lower(arms, w, inner, Cons(pc, ports), next)), λ pc at_c =>
+    Option::and_then_elim(P, trivial, Ty::at(g, c).check(Enum(i)), λ _ => Tm::lower(arms, w, inner, Cons(pc, ports), next), λ ec _ =>
+    (match Tm::lower(arms, w, inner, Cons(pc, ports), next) as λ r => Tm::lower(arms, w, inner, Cons(pc, ports), next) = r → P(r) {
+      None => λ _ => trivial,
+      Some(l) => λ lowered => λ call agree defines oks values env held below quiet calls => {
+            let e = w.tys.ens(i);
+            let v = Ty::cast(w.tys, Ty::at(g, c), Enum(i), Env::get(w.tys, g, env, c));
+            let held_v: Enum(i).Holds(w.tys, values, pc, v) = Tm::operand(w, g, ports, values, env, held, c, pc, at_c, Enum(i), ec);
+            let held_of: Enum(i).Holds(w.tys, values, pc, e.of(e.tag(v), e.fields(v))) =
+                j(sym(e.of_tag(v)), λ u _ => Enum(i).Holds(w.tys, values, pc, u), held_v);
+            let pc_below: Enum(i).Below(w.tys, pc, next) =
+                Ty::below_cast(w.tys, Ty::at(g, c), Enum(i), ec, pc, next, below_at(w.tys, g, ports, next, below, c, pc, at_c));
+            j(lowered, λ r _ => Tm::DefinedHolds(arms, w, ok, inner, Cons(pc, ports), next, r), ih(inner, Cons(pc, ports), next))(
+                call, agree, defines, oks, values, Pair(e.of(e.tag(v), e.fields(v)), env), ⟨held_of, held⟩, ⟨pc_below, below⟩, quiet, calls)
+        },
+    })(refl)))
+}
+
+theorem Tm::lower_defined(self t: Tm, w: World, ok: Tm::Oracle(w)): (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →
+    Tm::DefinedHolds(t, w, ok, g, ports, next, Tm::lower(t, w, g, ports, next)) {
+    match t {
+        Var(i) => λ g ports next => Tm::leaf_defined(Var(i), w, ok, g, ports, next, λ region => refl, Tm::lower(Var(i), w, g, ports, next)),
+        Lit(c, n) => λ g ports next => Tm::leaf_defined(Lit(c, n), w, ok, g, ports, next, λ region => refl, Tm::lower(Lit(c, n), w, g, ports, next)),
+        Prim(op, args) => λ g ports next =>
+            Tm::leaf_defined(Prim(op, args), w, ok, g, ports, next, λ region => refl, Tm::lower(Prim(op, args), w, g, ports, next)),
+        Let(e, body) => λ g ports next => {
+            let P = λ (r: Option<Lowered>) => Tm::DefinedHolds(Let(e, body), w, ok, g, ports, next, r);
+            let inner = Cons(Tm::ty(e, w, g), g);
+            Option::and_then_elim(P, trivial, Tm::lower(e, w, g, ports, next),
+                λ le => Tm::lower(body, w, inner, Cons(le.result, ports), le.next).and_then(λ lb => Tm::compose(le, lb)), λ le lowered_e =>
+            Option::and_then_elim(P, trivial, Tm::lower(body, w, inner, Cons(le.result, ports), le.next), λ lb => Tm::compose(le, lb),
+                λ lb lowered_body => λ call agree defines oks values env held below quiet calls => {
+                    let q = Bool::is_true_and(e.quiet_in(le.region), body.quiet_in(lb.region), quiet);
+                    let k = Bool::is_true_and(e.calls_ok(w, ok, g, env), body.calls_ok(w, ok, inner, Pair(Tm::sem(e, w, g, env), env)), calls);
+                    let first = j(lowered_e, λ r _ => Tm::LowerHolds(e, w, g, ports, next, r),
+                        Tm::lower_sound(e, w, g, ports, next))(call, agree, values, env, held, below);
+                    let mid = le.region.eval(call, values, buffers := w.spans);
+                    let d1 = j(lowered_e, λ r _ => Tm::DefinedHolds(e, w, ok, g, ports, next, r),
+                        Tm::lower_defined(e, w, ok, g, ports, next))(call, agree, defines, oks, values, env, held, below, q.left, k.left);
+                    let d2 = j(lowered_body, λ r _ => Tm::DefinedHolds(body, w, ok, inner, Cons(le.result, ports), le.next, r),
+                        Tm::lower_defined(body, w, ok, inner, Cons(le.result, ports), le.next))(call, agree, defines, oks, mid, Pair(Tm::sem(e, w, g, env), env),
+                        ⟨first.right.right.right, env_holds_keeps(w.tys, g, values, mid, next, first.right.right.left, ports, env, below, held)⟩,
+                        ⟨first.right.left, below_mono(w.tys, g, next, le.next, first.left, ports, below)⟩, q.right, k.right);
+                    Bool::is_true_and_intro(le.region.defined_over(w.spans, call, defines, values), lb.region.defined_over(w.spans, call, defines, mid), d1, d2)
+                }))
+        },
+        If(c, yes, no) => λ g ports next => Tm::if_defined(c, yes, no, w, ok,
+            λ g2 ports2 next2 => Tm::lower_defined(yes, w, ok, g2, ports2, next2), λ g2 ports2 next2 => Tm::lower_defined(no, w, ok, g2, ports2, next2),
+            g, ports, next),
+        IfEq(c, yes, no) => λ g ports next => Tm::if_defined(c, yes, no, w, ok,
+            λ g2 ports2 next2 => Tm::lower_defined(yes, w, ok, g2, ports2, next2), λ g2 ports2 next2 => Tm::lower_defined(no, w, ok, g2, ports2, next2),
+            g, ports, next),
+        Make(i, args) => λ g ports next => Tm::leaf_defined(Make(i, args), w, ok, g, ports, next, λ region => refl, Tm::lower(Make(i, args), w, g, ports, next)),
+        Field(i, k, of) => λ g ports next =>
+            Tm::leaf_defined(Field(i, k, of), w, ok, g, ports, next, λ region => refl, Tm::lower(Field(i, k, of), w, g, ports, next)),
+        Call(f, args) => λ g ports next => Tm::call_defined(w, ok, g, ports, next, f, args),
+        Fold(_, _, _) => λ g ports next => trivial,
+        Case(_, _, _) => λ g ports next => trivial,
+        Byte(k, i, length) => λ g ports next =>
+            Tm::leaf_defined(Byte(k, i, length), w, ok, g, ports, next, λ region => refl, Tm::lower(Byte(k, i, length), w, g, ports, next)),
+        Pick(i, c, arms, eq) => λ g ports next => Tm::pick_defined(i, c, arms, eq, w, ok,
+            λ g2 ports2 next2 => Tm::lower_defined(arms, w, ok, g2, ports2, next2), g, ports, next),
+        Inject(i, k, args) => λ g ports next =>
+            Tm::leaf_defined(Inject(i, k, args), w, ok, g, ports, next, λ region => refl, Tm::lower(Inject(i, k, args), w, g, ports, next)),
+        Slot(i, j, of) => λ g ports next =>
+            Tm::leaf_defined(Slot(i, j, of), w, ok, g, ports, next, λ region => refl, Tm::lower(Slot(i, j, of), w, g, ports, next)),
+        Iterate(init, test, body) => λ g ports next => Tm::leaf_defined(Iterate(init, test, body), w, ok, g, ports, next, λ region => refl,
+            Tm::lower(Iterate(init, test, body), w, g, ports, next)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A function's code: the entry's nodes, the body, the result's widening
+
+// A region, then nodes that require nothing.
+theorem Tm::then_nodes_defined(buffers: Buffers(), call: Answers(), defines: Defines(), values: Valuation(), region: StructuredRegion,
+    nodes: List<Node>, total: nodes_total(nodes).IsTrue(), h: region.defined_over(buffers, call, defines, values).IsTrue()):
+    Compose(region, nodes_region(nodes)).defined_over(buffers, call, defines, values).IsTrue() {
+    Bool::is_true_and_intro(region.defined_over(buffers, call, defines, values),
+        nodes_region(nodes).defined_over(buffers, call, defines, region.eval_over(buffers, call, values)), h,
+        nodes_total_defined(nodes, buffers, total, region.eval_over(buffers, call, values)))
+}
+
+// The widening a result takes at the boundary is read off the code with
+// nothing before it (`bare`): its nodes are the same after any code.
+fn Ty::widen_bare(self t: Ty, tys: Table, result, next: Nat) → Bool { t.widen(tys, Lowered(nodes_region(Nil), result, next)).region.quiet() }
+
+theorem Ty::widen_by_defined(w: Nat, buffers: Buffers(), call: function_ir_eval::Answers(), defines: Defines(), values: Valuation(), c: Lowered): (o: (w = 64) ∨ True) →
+    Ty::widen_by(w, o, Lowered(nodes_region(Nil), c.result, c.next)).region.quiet().IsTrue() → c.region.defined_over(buffers, call, defines, values).IsTrue() →
+    Ty::widen_by(w, o, c).region.defined_over(buffers, call, defines, values).IsTrue() {
+    λ o => match o {
+        Inl(_) => λ _ h => h,
+        Inr(_) => λ quiet h => Tm::then_nodes_defined(buffers, call, defines, values, c.region, [Resize(w, 64, c.next, c.result)],
+            Bool::is_true_and(True, nodes_total([Resize(w, 64, c.next, c.result)]), quiet).right, h),
+    }
+}
+
+theorem Ty::widen_fields_defined(fs: List<Ty>, buffers: Buffers(), call: function_ir_eval::Answers(), defines: Defines(), values: Valuation(), c: Lowered):
+    Ty::widen_fields(fs, Lowered(nodes_region(Nil), c.result, c.next)).region.quiet().IsTrue() → c.region.defined_over(buffers, call, defines, values).IsTrue() →
+    Ty::widen_fields(fs, c).region.defined_over(buffers, call, defines, values).IsTrue() {
+    let nodes = Ty::widen_slots(fs, c.next, c.result);
+    let bare = Lowered(nodes_region(Nil), c.result, c.next);
+    (match Ty::slots_narrow(fs) as λ b =>
+        (match b as λ _ => Lowered { False => bare, True => Lowered(Compose(bare.region, nodes_region(nodes)), c.next, c.next + fs.len()) }).region.quiet().IsTrue() →
+        c.region.defined_over(buffers, call, defines, values).IsTrue() →
+        (match b as λ _ => Lowered { False => c, True => Lowered(Compose(c.region, nodes_region(nodes)), c.next, c.next + fs.len()) }).region
+            .defined_over(buffers, call, defines, values).IsTrue() {
+        False => λ _ h => h,
+        True => λ quiet h => Tm::then_nodes_defined(buffers, call, defines, values, c.region, nodes, Bool::is_true_and(True, nodes_total(nodes), quiet).right, h),
+    })
+}
+
+theorem Ty::widen_defined(self t: Ty, tys: Table, buffers: Buffers(), call: function_ir_eval::Answers(), defines: Defines(), values: Valuation(), c: Lowered):
+    t.widen_bare(tys, c.result, c.next).IsTrue() → c.region.defined_over(buffers, call, defines, values).IsTrue() →
+    t.widen(tys, c).region.defined_over(buffers, call, defines, values).IsTrue() {
+    match t {
+        Word(w) => Ty::widen_by_defined(w, buffers, call, defines, values, c, w.equation(64)),
+        Bit => Ty::widen_by_defined(1, buffers, call, defines, values, c, Inr(trivial)),
+        ByteList(_) => λ _ h => h,
+        Lines => λ _ h => h,
+        Named(i) => Ty::widen_fields_defined(tys.fields(i), buffers, call, defines, values, c),
+        Count => λ _ h => h,
+        Enum(i) => Ty::widen_fields_defined(Cons(Word(64), tys.ens(i).slots), buffers, call, defines, values, c),
+    }
+}
+
+theorem Fun::entered_defined(buffers: Buffers(), call: Answers(), defines: Defines(), values: Valuation(), c: Lowered): (nodes: List<Node>) →
+    nodes_total(nodes).IsTrue() → c.region.defined_over(buffers, call, defines, eval_nodes_over(buffers, nodes, values)).IsTrue() →
+    Fun::entered(nodes, c).region.defined_over(buffers, call, defines, values).IsTrue() {
+    λ nodes => match nodes {
+        Nil => λ _ h => h,
+        Cons(n, rest) => λ total h => Bool::is_true_and_intro(nodes_defined_over(buffers, Cons(n, rest), values),
+            c.region.defined_over(buffers, call, defines, eval_nodes_over(buffers, Cons(n, rest), values)),
+            nodes_total_defined(Cons(n, rest), buffers, total, values), h),
+    }
+}
+
+// What `Fun::quiet` asks of a body's code `c`: the body's own walk, the
+// entry's nodes and the result's widening.
+fn Fun::quiet_at(self f: Fun, w: World, c: Lowered) → Bool {
+    f.body.quiet_in(c.region) && (nodes_total(f.entry_of(w.tys).nodes)
+        && f.result.widen_bare(w.tys, Fun::entered(f.entry_of(w.tys).nodes, c).result, Fun::entered(f.entry_of(w.tys).nodes, c).next))
+}
+
+// The function's code requires nothing outside the calls its body makes:
+// at a closed function, an evaluation of its lowering.
+fn Fun::quiet(self f: Fun, w: World) → Bool {
+    match f.body.lower(w, f.context(), f.entry_of(w.tys).ports, f.entry_of(w.tys).next) { None => False, Some(c) => f.quiet_at(w, c) }
+}
+
+// What a function's lowering promises of its requirements: called on any
+// words its parameters admit, it is defined where the calls its body's
+// meaning makes on them are allowed.
+fn Fun::DefinedHolds(self f: Fun, w: World, ok: Tm::Oracle(w), r: Option<Function>) → Type {
+    match r {
+        None => True,
+        Some(code) => (call: Answers()) → Tm::CallsAgree(w, call) → (defines: Defines()) → Tm::OkDefines(w, ok, defines) →
+            (xs: List<BitVec(64)>) → Ty::AdmitsAll(w.tys, f.params, xs) → f.quiet(w).IsTrue() →
+            f.body.calls_ok(w, ok, f.context(), Ty::extend_words(w.tys, f.params, Nil, trivial, xs)).IsTrue() →
+            code.defined(call, defines, xs, buffers := w.spans).IsTrue(),
+    }
+}
+
+theorem Fun::lower_defined(self f: Fun, w: World, ok: Tm::Oracle(w)): f.DefinedHolds(w, ok, f.lower(w)) {
+    let P = λ (r: Option<Function>) => f.DefinedHolds(w, ok, r);
+    let ids = Fun::word_ids(w.tys, f.params, 0);
+    let e = f.entry_of(w.tys);
+    Option::and_then_elim(P, trivial, Ty::check_edges(w.tys, f.params), λ _ => f.lower_result(w), λ edges _ =>
+    Option::and_then_elim(P, trivial, f.result.check_out(w.tys), λ _ => f.lower_distinct(w), λ er _ =>
+    Option::and_then_elim(P, trivial, Tm::check_true(distinct(ids)), λ _ => f.lower_body(w), λ apart _ =>
+    Option::and_then_elim(P, trivial, f.body.lower(w, f.context(), e.ports, e.next), λ c => f.lower_typed(w, c), λ c lowered =>
+    Option::and_then_elim(P, trivial, Tm::ty(f.body, w, f.context()).check(f.result), λ _ => Some(f.code_of(w.tys, e, c)), λ eb _ =>
+        λ call agree defines oks xs admitted quiet calls => {
+            let values = Valuation::bind(Valuation::zero(), ids, xs);
+            let env = Ty::extend_words(w.tys, f.params, Nil, trivial, xs);
+            let entered = Fun::entry_holds(w.tys, w.spans, f.params, Nil, Nil, trivial, 0, Fun::words_past(w.tys, f.params, 0), xs, values, edges, admitted, trivial, trivial,
+                Fun::bind_bound(ids, xs, apart), Fun::words_past(w.tys, f.params, 0).le_refl());
+            let inside = eval_nodes_over(w.spans, e.nodes, values);
+            let found: (f.quiet_at(w, c).IsTrue()) =
+                j(lowered, λ r _ => (match r as λ _ => Bool { None => False, Some(c2) => f.quiet_at(w, c2) }).IsTrue(), quiet);
+            let after = Fun::entered(e.nodes, c);
+            let q = Bool::is_true_and(f.body.quiet_in(c.region), nodes_total(e.nodes) && f.result.widen_bare(w.tys, after.result, after.next), found);
+            let q2 = Bool::is_true_and(nodes_total(e.nodes), f.result.widen_bare(w.tys, after.result, after.next), q.right);
+            let body = j(lowered, λ r _ => Tm::DefinedHolds(f.body, w, ok, f.context(), e.ports, e.next, r),
+                Tm::lower_defined(f.body, w, ok, f.context(), e.ports, e.next))(call, agree, defines, oks, inside, env, entered.left, entered.right, q.left, calls);
+            f.result.widen_defined(w.tys, w.spans, call, defines, values, after, q2.right,
+                Fun::entered_defined(w.spans, call, defines, values, c, e.nodes, q2.left, body))
+        })))))
+}
+
+// ---------------------------------------------------------------------------
+// A recursion's oracle: its rank
+
+// A curried function of a signature's operands into any type, applied to
+// words the plain way (`Ty::apply_words`).
+fn Ty::apply_words_to(tys: Table, ps: List<Ty>, R: Type) → Ty::ArrowsTo(tys, ps, R) → List<BitVec(64)> → R {
+    match ps {
+        Nil => λ v ws => v,
+        Cons(p, rest) => λ v ws => Ty::apply_words_to(tys, rest, R, v(Ty::read_words(p, tys, ws)), Ty::skip(p.span(tys), ws)),
+    }
+}
+
+// Such a function, then a function of its result.
+fn Ty::arrows_map(tys: Table, ps: List<Ty>, R: Type, r: Ty, h: R → r.sem(tys)) → Ty::ArrowsTo(tys, ps, R) → Ty::Arrows(tys, ps, r) {
+    match ps { Nil => λ v => h(v), Cons(p, rest) => λ v => λ (a: p.sem(tys)) => Ty::arrows_map(tys, rest, R, r, h, v(a)) }
+}
+
+theorem Ty::apply_words_map(tys: Table, ps: List<Ty>, R: Type, r: Ty, h: R → r.sem(tys)): (v: Ty::ArrowsTo(tys, ps, R)) → (ws: List<BitVec(64)>) →
+    Ty::apply_words(tys, ps, r, Ty::arrows_map(tys, ps, R, r, h, v), ws) = h(Ty::apply_words_to(tys, ps, R, v, ws)) {
+    match ps {
+        Nil => λ v ws => refl,
+        Cons(p, rest) => λ v ws => Ty::apply_words_map(tys, rest, R, r, h, v(Ty::read_words(p, tys, ws)), Ty::skip(p.span(tys), ws)),
+    }
+}
+
+// One answer at every argument.
+fn Ty::arrows_const(tys: Table, ps: List<Ty>, r: Ty, v: r.sem(tys)) → Ty::Arrows(tys, ps, r) {
+    match ps { Nil => v, Cons(p, rest) => λ (_: p.sem(tys)) => Ty::arrows_const(tys, rest, r, v) }
+}
+
+theorem Ty::apply_words_const(tys: Table, ps: List<Ty>, r: Ty, v: r.sem(tys)): (ws: List<BitVec(64)>) →
+    Ty::apply_words(tys, ps, r, Ty::arrows_const(tys, ps, r, v), ws) = v {
+    match ps { Nil => λ ws => refl, Cons(p, rest) => λ ws => Ty::apply_words_const(tys, rest, r, v, Ty::skip(p.span(tys), ws)) }
+}
+
+// A function of an environment, curried, applied to words: the function at
+// the environment the words are.
+theorem Ty::apply_words_curry(tys: Table, r: Ty, ps: List<Ty>): (g: List<Ty>) → (env: Env(tys, g)) → (k: Env(tys, Ty::bind_onto(ps, g)) → r.sem(tys)) →
+    (ws: List<BitVec(64)>) → Ty::apply_words(tys, ps, r, Ty::curry(tys, r, ps, g, env, k), ws) = k(Ty::extend_words(tys, ps, g, env, ws)) {
+    match ps {
+        Nil => λ g env k ws => refl,
+        Cons(p, rest) => λ g env k ws => Ty::apply_words_curry(tys, r, rest, Cons(p, g), Pair(Ty::read_words(p, tys, ws), env), k, Ty::skip(p.span(tys), ws)),
+    }
+}
+
+// What an oracle's tests answer on words: on words a function's parameters
+// admit, its test at the arguments the words are (`Ty::apply_words`). A
+// call passes the words of real arguments, which are admitted, so nothing
+// is asked at any others.
+fn Tm::defines_of(w: World, ok: Tm::Oracle(w)) → Defines() {
+    λ i ws => Ty::admits_all(w.tys, Sig::at(w.sigs, i).params, ws) && Ty::apply_words(w.tys, Sig::at(w.sigs, i).params, Bit, ok(i), ws)
+}
+
+// The function of the program entry `i` of a table names (`runtime`'s
+// `link_at`).
+fn Tm::linked_at(links: List<Nat>, i: Nat) → Nat { match links.nth(i) { None => 0, Some(n) => n } }
+
+// ---------------------------------------------------------------------------
+// A test per callee
+//
+// A function that calls a recursion is defined where its calls stay within
+// the recursion's levels: a test of its own arguments. Its oracle is its
+// callees' tests, one per entry of its table after its own.
+
+// A typed test per signature.
+fn Tm::Tests(tys: Table, sigs: List<Sig>) → Type {
+    match sigs { Nil => True, Cons(s, rest) => Pair<Ty::Arrows(tys, s.params, Bit), Tm::Tests(tys, rest)> }
+}
+
+// Past the end, the test that never holds (no call names such an entry).
+fn Tm::test_at(tys: Table, sigs: List<Sig>) → Tm::Tests(tys, sigs) → (i: Nat) → Ty::Arrows(tys, Sig::at(sigs, i).params, Bit) {
+    match sigs {
+        Nil => λ _ i => False,
+        Cons(_, rest) => λ ts i => match i { Zero => ts.fst, Succ(k) => Tm::test_at(tys, rest, ts.snd, k) },
+    }
+}
+
+// Tests for a table's entries after its first, and after its first two (a
+// function that is its own callee is both).
+fn Tm::test_after(tys: Table, sigs: List<Sig>) → Tm::Tests(tys, sigs.tail()) → (i: Nat) → Ty::Arrows(tys, Sig::at(sigs, i + 1).params, Bit) {
+    match sigs { Nil => λ _ i => False, Cons(_, rest) => λ ts i => Tm::test_at(tys, rest, ts, i) }
+}
+
+fn Tm::test_after_own(tys: Table, sigs: List<Sig>) → Tm::Tests(tys, sigs.tail().tail()) → (i: Nat) → Ty::Arrows(tys, Sig::at(sigs, i + 2).params, Bit) {
+    match sigs { Nil => λ _ i => False, Cons(_, rest) => λ ts i => Tm::test_after(tys, rest, ts, i) }
+}
+
+// A test on words: on words its parameters admit, the test at the
+// arguments the words are (`Tm::defines_of`'s shape).
+fn Ty::tested(tys: Table, ps: List<Ty>, test: Ty::Arrows(tys, ps, Bit)) → List<BitVec(64)> → Bool {
+    λ ws => Ty::admits_all(tys, ps, ws) && Ty::apply_words(tys, ps, Bit, test, ws)
+}
+
+// The tests of a table on words, an entry each.
+fn Sig::tested(tys: Table, sigs: List<Sig>) → Tm::Tests(tys, sigs) → List<List<BitVec(64)> → Bool> {
+    match sigs { Nil => λ _ => Nil, Cons(s, rest) => λ ts => Cons(Ty::tested(tys, s.params, ts.fst), Sig::tested(tys, rest, ts.snd)) }
+}
+
+// Function `k` of a program's tests on words; none past its end.
+fn Tm::tested_at(tests: List<List<BitVec(64)> → Bool>, k: Nat) → List<BitVec(64)> → Bool {
+    match tests.nth(k) { None => λ _ => Bool::False, Some(t) => t }
+}
+
+// The same below function `k` of the program: no test at `k` or past it.
+fn Tm::tested_below(tests: List<List<BitVec(64)> → Bool>, k, n: Nat) → List<BitVec(64)> → Bool {
+    match (n + 1).leb(k) { False => λ _ => Bool::False, True => Tm::tested_at(tests, n) }
+}
+
+theorem Tm::tested_below_at(tests: List<List<BitVec(64)> → Bool>, k, n: Nat, ws: List<BitVec(64)>):
+    Tm::tested_below(tests, k, n, ws).IsTrue() → n < k ∧ Tm::tested_at(tests, n, ws).IsTrue() {
+    let at = λ (b: Bool) => (match b as λ _ => List<BitVec(64)> → Bool { False => λ _ => Bool::False, True => Tm::tested_at(tests, n) })(ws).IsTrue();
+    λ held => {
+        let here: at((n + 1).leb(k)) = held;
+        match h: (n + 1).leb(k) {
+            False => false_elim(j(h, λ b _ => at(b), here)),
+            True => ⟨Nat::le_of_leb(n + 1, k, h), j(h, λ b _ => at(b), here)⟩,
+        }
+    }
+}
+
+// Where `links` names, for each entry of a table, a function of the
+// program with that entry's test (`pick` of its number), an entry's test
+// on words is the named function's.
+theorem Sig::tests_linked(tys: Table, pick: Nat → List<BitVec(64)> → Bool, sigs: List<Sig>): (oks: Tm::Tests(tys, sigs)) → (links: List<Nat>) →
+    links.map(pick) = Sig::tested(tys, sigs, oks) →
+    (k: Nat) → (words: List<BitVec(64)>) → Ty::tested(tys, Sig::at(sigs, k).params, Tm::test_at(tys, sigs, oks, k), words).IsTrue() →
+    pick(Tm::linked_at(links, k), words).IsTrue() {
+    match sigs {
+        Nil => λ oks links linked k words never => false_elim(never),
+        Cons(s, rest) => λ oks links => match links as λ ls => ls.map(pick) = Sig::tested(tys, Cons(s, rest), oks) →
+            (k: Nat) → (words: List<BitVec(64)>) → Ty::tested(tys, Sig::at(Cons(s, rest), k).params, Tm::test_at(tys, Cons(s, rest), oks, k), words).IsTrue() →
+            pick(Tm::linked_at(ls, k), words).IsTrue() {
+            Nil => λ linked => false_elim(List::nil_ne_cons(Sig::tested(tys, rest, oks.snd), Ty::tested(tys, s.params, oks.fst), linked)),
+            Cons(l, ls) => λ linked k => {
+                let heads = cong_fn(λ (fs: List<List<BitVec(64)> → Bool>) => fs.head_or(λ (_: List<BitVec(64)>) => Bool::False), linked);
+                let tails = cong_fn(λ (fs: List<List<BitVec(64)> → Bool>) => fs.tail(), linked);
+                match k as λ i => (words: List<BitVec(64)>) →
+                    Ty::tested(tys, Sig::at(Cons(s, rest), i).params, Tm::test_at(tys, Cons(s, rest), oks, i), words).IsTrue() →
+                    pick(Tm::linked_at(Cons(l, ls), i), words).IsTrue() {
+                    Zero => λ words h => j(sym(heads), λ g _ => g(words).IsTrue(), h),
+                    Succ(i) => λ words h => Sig::tests_linked(tys, pick, rest, oks.snd, ls, tails, i, words, h),
+                }
+            },
+        },
+    }
+}
+
+theorem Tm::linked_at_tail(links: List<Nat>, k: Nat): Tm::linked_at(links.tail(), k) = Tm::linked_at(links, k + 1) {
+    match links { Nil => refl, Cons(_, _) => refl }
+}
+
+// The same for the entries after a table's first.
+theorem Sig::tests_linked_after(tys: Table, pick: Nat → List<BitVec(64)> → Bool, sigs: List<Sig>): (oks: Tm::Tests(tys, sigs.tail())) → (links: List<Nat>) →
+    links.tail().map(pick) = Sig::tested(tys, sigs.tail(), oks) →
+    (k: Nat) → (words: List<BitVec(64)>) → Ty::tested(tys, Sig::at(sigs, k + 1).params, Tm::test_after(tys, sigs, oks, k), words).IsTrue() →
+    pick(Tm::linked_at(links, k + 1), words).IsTrue() {
+    match sigs {
+        Nil => λ oks links linked k words never => false_elim(never),
+        Cons(_, rest) => λ oks links linked k words h => j(Tm::linked_at_tail(links, k), λ n _ => pick(n, words).IsTrue(),
+            Sig::tests_linked(tys, pick, rest, oks, links.tail(), linked, k, words, h)),
+    }
+}
+
+// And after its first two.
+theorem Sig::tests_linked_after_own(tys: Table, pick: Nat → List<BitVec(64)> → Bool, sigs: List<Sig>): (oks: Tm::Tests(tys, sigs.tail().tail())) →
+    (links: List<Nat>) → links.tail().tail().map(pick) = Sig::tested(tys, sigs.tail().tail(), oks) →
+    (k: Nat) → (words: List<BitVec(64)>) → Ty::tested(tys, Sig::at(sigs, k + 2).params, Tm::test_after_own(tys, sigs, oks, k), words).IsTrue() →
+    pick(Tm::linked_at(links, k + 2), words).IsTrue() {
+    match sigs {
+        Nil => λ oks links linked k words never => false_elim(never),
+        Cons(_, rest) => λ oks links linked k words h => j(Tm::linked_at_tail(links, k + 1), λ n _ => pick(n, words).IsTrue(),
+            Sig::tests_linked_after(tys, pick, rest, oks, links.tail(), linked, k, words, h)),
+    }
+}
+
+// The oracle of a function over its callees' tests `oks`: a call of an
+// entry after the first is allowed where that entry's test holds, and
+// entry 0 (the function itself as every table's first, which no code
+// calls) never.
+fn Tm::callees_oracle(w: World, oks: Tm::Tests(w.tys, w.sigs.tail())) → Tm::Oracle(w) {
+    λ i => match i as λ n => Ty::Arrows(w.tys, Sig::at(w.sigs, n).params, Bit) {
+        Zero => Ty::arrows_const(w.tys, Sig::at(w.sigs, 0).params, Bit, False),
+        Succ(j) => Tm::test_after(w.tys, w.sigs, oks, j),
+    }
+}
+
+// Where that oracle's tests hold on words, the program's functions are
+// defined as the linked code asks them: `sound`, each function's test
+// implies it, and `tested`, the entries' tests are the functions' `links`
+// names.
+theorem Tm::callees_oracle_widens(w: World, links: List<Nat>, oks: Tm::Tests(w.tys, w.sigs.tail()), tests: List<List<BitVec(64)> → Bool>,
+    tested: links.tail().map(Tm::tested_at(tests)) = Sig::tested(w.tys, w.sigs.tail(), oks), below: Defines(),
+    sound: (f: Nat) → (ws: List<BitVec(64)>) → Tm::tested_at(tests, f, ws).IsTrue() → below(f, ws).IsTrue()):
+    (i: Nat) → (ws: List<BitVec(64)>) → Tm::defines_of(w, Tm::callees_oracle(w, oks), i, ws).IsTrue() → below(Tm::linked_at(links, i), ws).IsTrue() {
+    let oracle = Tm::callees_oracle(w, oks);
+    λ i => match i as λ n => (ws: List<BitVec(64)>) → Tm::defines_of(w, oracle, n, ws).IsTrue() → below(Tm::linked_at(links, n), ws).IsTrue() {
+        Zero => λ ws d => false_elim(j(Ty::apply_words_const(w.tys, Sig::at(w.sigs, 0).params, Bit, False, ws), λ b _ => b.IsTrue(),
+            Bool::is_true_and(Ty::admits_all(w.tys, Sig::at(w.sigs, 0).params, ws), Ty::apply_words(w.tys, Sig::at(w.sigs, 0).params, Bit, oracle(0), ws), d).right)),
+        Succ(k) => λ ws d => sound(Tm::linked_at(links, k + 1), ws, Sig::tests_linked_after(w.tys, Tm::tested_at(tests), w.sigs, oks, links, tested, k, ws, d)),
+    }
+}
+
+// The oracle of a function that is its own callee: a call of itself (entry
+// 1 of its table) is allowed at a measure below `bound`, a call of another
+// function where that function's test `oks` holds, and entry 0 never. It
+// names no program: the decrease proved against it is the function's, in
+// whatever program it is linked.
+fn Tm::rank_oracle(w: World, oks: Tm::Tests(w.tys, w.sigs.tail().tail()), measure: Ty::ArrowsTo(w.tys, Sig::at(w.sigs, 1).params, Nat), bound: Nat)
+    → Tm::Oracle(w) {
+    λ i => match i as λ n => Ty::Arrows(w.tys, Sig::at(w.sigs, n).params, Bit) {
+        Zero => Ty::arrows_const(w.tys, Sig::at(w.sigs, 0).params, Bit, False),
+        Succ(j) => match j as λ n => Ty::Arrows(w.tys, Sig::at(w.sigs, n + 1).params, Bit) {
+            Zero => Ty::arrows_map(w.tys, Sig::at(w.sigs, 1).params, Nat, Bit, λ (m: Nat) => (m + 1).leb(bound), measure),
+            Succ(l) => Tm::test_after_own(w.tys, w.sigs, oks, l),
+        },
+    }
+}
+
+theorem tie_defines_own(below: Defines(), k: Nat, own: List<BitVec(64)> → Bool, ws: List<BitVec(64)>, h: own(ws).IsTrue()):
+    tie_defines(below, k, own, k, ws).IsTrue() {
+    (match k.eq_dec(k) as λ d => Bool::IsTrue(match d { Inl(_) => own(ws), Inr(_) => below(k, ws) }) {
+        Inl(_) => h,
+        Inr(ne) => false_elim(ne(refl)),
+    })
+}
+
+theorem tie_defines_other(below: Defines(), k: Nat, own: List<BitVec(64)> → Bool, f: Nat, ws: List<BitVec(64)>, ne: f ≠ k, h: below(f, ws).IsTrue()):
+    tie_defines(below, k, own, f, ws).IsTrue() {
+    (match f.eq_dec(k) as λ d => Bool::IsTrue(match d { Inl(_) => own(ws), Inr(_) => below(f, ws) }) {
+        Inl(e) => false_elim(ne(e)),
+        Inr(_) => h,
+    })
+}
+
+// Where that oracle's tests hold on words, the program's functions are
+// defined as the linked code asks them: the function itself, function `k`,
+// at admitted words of a lower rank (`lower`), and the functions before it
+// where their tests hold (`sound`). `tested`: the entries after the first
+// two are functions before `k` with the entries' tests.
+theorem Tm::rank_oracle_widens(w: World, links: List<Nat>, k: Nat, oks: Tm::Tests(w.tys, w.sigs.tail().tail()),
+    measure: Ty::ArrowsTo(w.tys, Sig::at(w.sigs, 1).params, Nat), bound: Nat,
+    below: Defines(), own: List<BitVec(64)> → Bool, self: links.nth(1) = Some(k),
+    lower: (ws: List<BitVec(64)>) → Ty::AdmitsAll(w.tys, Sig::at(w.sigs, 1).params, ws) →
+        (Ty::apply_words_to(w.tys, Sig::at(w.sigs, 1).params, Nat, measure, ws) < bound) → own(ws).IsTrue(),
+    tests: List<List<BitVec(64)> → Bool>,
+    tested: links.tail().tail().map(Tm::tested_below(tests, k)) = Sig::tested(w.tys, w.sigs.tail().tail(), oks),
+    sound: (f: Nat) → (ws: List<BitVec(64)>) → Tm::tested_at(tests, f, ws).IsTrue() → below(f, ws).IsTrue()):
+    (i: Nat) → (ws: List<BitVec(64)>) → Tm::defines_of(w, Tm::rank_oracle(w, oks, measure, bound), i, ws).IsTrue() →
+    tie_defines(below, k, own, Tm::linked_at(links, i), ws).IsTrue() {
+    let oracle = Tm::rank_oracle(w, oks, measure, bound);
+    λ i => match i as λ n => (ws: List<BitVec(64)>) → Tm::defines_of(w, oracle, n, ws).IsTrue() → tie_defines(below, k, own, Tm::linked_at(links, n), ws).IsTrue() {
+        Zero => λ ws d => false_elim(j(Ty::apply_words_const(w.tys, Sig::at(w.sigs, 0).params, Bit, False, ws), λ b _ => b.IsTrue(),
+            Bool::is_true_and(Ty::admits_all(w.tys, Sig::at(w.sigs, 0).params, ws), Ty::apply_words(w.tys, Sig::at(w.sigs, 0).params, Bit, oracle(0), ws), d).right)),
+        Succ(j0) => match j0 as λ n => (ws: List<BitVec(64)>) → Tm::defines_of(w, oracle, n + 1, ws).IsTrue() →
+            tie_defines(below, k, own, Tm::linked_at(links, n + 1), ws).IsTrue() {
+            Zero => λ ws d => {
+                let ps = Sig::at(w.sigs, 1).params;
+                let parts = Bool::is_true_and(Ty::admits_all(w.tys, ps, ws), Ty::apply_words(w.tys, ps, Bit, oracle(1), ws), d);
+                let rank = Ty::apply_words_to(w.tys, ps, Nat, measure, ws);
+                let test: ((rank + 1).leb(bound).IsTrue()) =
+                    j(Ty::apply_words_map(w.tys, ps, Nat, Bit, λ (m: Nat) => (m + 1).leb(bound), measure, ws), λ b _ => b.IsTrue(), parts.right);
+                let at_self: (Tm::linked_at(links, 1) = k) = cong_fn(λ (o: Option<Nat>) => match o { None => 0, Some(n) => n }, self);
+                j(sym(at_self), λ n _ => tie_defines(below, k, own, n, ws).IsTrue(),
+                    tie_defines_own(below, k, own, ws, lower(ws, Ty::admits_all_sound(w.tys, ps, ws, parts.left),
+                        Nat::le_of_leb(rank + 1, bound, eq_true_of_is_true((rank + 1).leb(bound), test)))))
+            },
+            Succ(l) => λ ws d => {
+                let n = Tm::linked_at(links, l + 2);
+                let found = Tm::tested_below_at(tests, k, n, ws,
+                    Sig::tests_linked_after_own(w.tys, Tm::tested_below(tests, k), w.sigs, oks, links, tested, l, ws, d));
+                tie_defines_other(below, k, own, n, ws, Nat::ne_of_lt(n, k, found.left), sound(n, ws, found.right))
+            },
+        },
+    }
+}
+
+// The code's checks read the world's type table and signatures alone, as
+// its lowering does (`Fun::lower_static`).
+theorem Fun::quiet_static(self f: Fun, w: World, cs: Sig::Sems(w.tys, w.sigs), spans: List<List<BitVec(8)>>): f.quiet(w.over(cs, spans)) = f.quiet(w) {
+    cong_fn(λ (r: Option<Lowered>) => match r { None => False, Some(c) => f.quiet_at(w, c) },
+        Tm::lower_static(f.body, w, cs, spans, f.context(), f.entry_of(w.tys).ports, f.entry_of(w.tys).next))
+}
+
+// ---------------------------------------------------------------------------
+// The decrease, read off a body
+//
+// What a generator composes a proof of `Tm::calls_ok` from, one lemma per
+// node it has to prove something at: a `let` from its term and its body, a
+// branch in each arm with its test's equation. A term with no call is
+// `trivial`, and a call of the function itself is `Tm::below_rank` of its
+// decrease.
+
+theorem Tm::calls_ok_let(e, body: Tm, w: World, ok: Tm::Oracle(w), g: List<Ty>, env: Env(w.tys, g), first: e.calls_ok(w, ok, g, env).IsTrue(),
+    rest: body.calls_ok(w, ok, Cons(e.ty(w, g), g), Pair(e.sem(w, g, env), env)).IsTrue()): Tm::calls_ok(Let(e, body), w, ok, g, env).IsTrue() {
+    Bool::is_true_and_intro(e.calls_ok(w, ok, g, env), body.calls_ok(w, ok, Cons(e.ty(w, g), g), Pair(e.sem(w, g, env), env)), first, rest)
+}
+
+theorem Tm::calls_ok_if(c: Nat, yes, no: Tm, w: World, ok: Tm::Oracle(w), g: List<Ty>, env: Env(w.tys, g),
+    on_yes: Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c)) = True → yes.calls_ok(w, ok, g, env).IsTrue(),
+    on_no: Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c)) = False → no.calls_ok(w, ok, g, env).IsTrue()):
+    Tm::calls_ok(If(c, yes, no), w, ok, g, env).IsTrue() {
+    let at = λ (b: Bool) => (match b as λ _ => Bool { False => no.calls_ok(w, ok, g, env), True => yes.calls_ok(w, ok, g, env) }).IsTrue();
+    match h: Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c)) {
+        True => j(sym(h), λ b _ => at(b), on_yes(h)),
+        False => j(sym(h), λ b _ => at(b), on_no(h)),
+    }
+}
+
+theorem Tm::calls_ok_ifeq(c: Nat, yes, no: Tm, w: World, ok: Tm::Oracle(w), g: List<Ty>, env: Env(w.tys, g),
+    on_yes: Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c)) = True → yes.calls_ok(w, ok, g, env).IsTrue(),
+    on_no: Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c)) = False → no.calls_ok(w, ok, g, env).IsTrue()):
+    Tm::calls_ok(IfEq(c, yes, no), w, ok, g, env).IsTrue() {
+    Tm::calls_ok_if(c, yes, no, w, ok, g, env, on_yes, on_no)
+}
+
+// A call of the function itself is allowed, from its decrease: below the
+// caller's rank.
+theorem Tm::below_rank(a, b: Nat, lt: a < b): (a + 1).leb(b).IsTrue() { (a + 1).leb_complete(b, lt) }
+
+// The same, stated at the call: what a generator checks a decrease against.
+theorem Tm::calls_ok_call(f: Nat, args: List<Nat>, w: World, ok: Tm::Oracle(w), g: List<Ty>, env: Env(w.tys, g),
+    here: Tm::apply(w, g, env, Bit, Sig::at(w.sigs, f).params, ok(f), args).IsTrue()): Tm::calls_ok(rt::Call(f, args), w, ok, g, env).IsTrue() {
+    here
+}
+
+// Whether a term's meaning can make a call at all.
+fn Tm::has_call(self t: Tm) → Bool {
+    match t {
+        Let(e, body) => e.has_call() || body.has_call(),
+        If(_, yes, no) => yes.has_call() || no.has_call(),
+        IfEq(_, yes, no) => yes.has_call() || no.has_call(),
+        Call(_, _) => True,
+        Pick(_, _, arms, _) => arms.has_call(),
+        _ => False,
+    }
+}
+
+// A term with no call asks no oracle anything.
+theorem Tm::calls_ok_none(self t: Tm, w: World, ok: Tm::Oracle(w)): (g: List<Ty>) → (env: Env(w.tys, g)) → t.has_call() = False →
+    t.calls_ok(w, ok, g, env).IsTrue() {
+    match t {
+        Let(e, body) => λ g env none => {
+            let parts = Bool::or_false_parts(e.has_call(), body.has_call(), none);
+            Tm::calls_ok_let(e, body, w, ok, g, env, e.calls_ok_none(w, ok, g, env, parts.left),
+                body.calls_ok_none(w, ok, Cons(e.ty(w, g), g), Pair(e.sem(w, g, env), env), parts.right))
+        },
+        If(c, yes, no) => λ g env none => {
+            let parts = Bool::or_false_parts(yes.has_call(), no.has_call(), none);
+            Tm::calls_ok_if(c, yes, no, w, ok, g, env, λ _ => yes.calls_ok_none(w, ok, g, env, parts.left), λ _ => no.calls_ok_none(w, ok, g, env, parts.right))
+        },
+        IfEq(c, yes, no) => λ g env none => {
+            let parts = Bool::or_false_parts(yes.has_call(), no.has_call(), none);
+            Tm::calls_ok_if(c, yes, no, w, ok, g, env, λ _ => yes.calls_ok_none(w, ok, g, env, parts.left), λ _ => no.calls_ok_none(w, ok, g, env, parts.right))
+        },
+        Call(_, _) => λ g env (none: True = False) => absurd(none),
+        Pick(i, c, arms, _) => λ g env none => arms.calls_ok_none(w, ok, Cons(Enum(i), g),
+            Pair(w.tys.ens(i).of(w.tys.ens(i).tag(Ty::cast(w.tys, Ty::at(g, c), Enum(i), Env::get(w.tys, g, env, c))),
+                w.tys.ens(i).fields(Ty::cast(w.tys, Ty::at(g, c), Enum(i), Env::get(w.tys, g, env, c)))), env), none),
+        _ => λ g env none => trivial,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A function whose callees are asked nothing
+//
+// A function all of whose callees are defined on whatever they admit asks
+// its oracle nothing: every test is the one that always holds
+// (`Tm::tests_true`). That its calls are then allowed is a check of the
+// term alone (`Tm::calls_all`): each names an entry of the table after the
+// first and passes as many variables as the entry takes.
+
+// The tests that always hold.
+fn Tm::tests_true(tys: Table, sigs: List<Sig>) → Tm::Tests(tys, sigs) {
+    match sigs { Nil => trivial, Cons(s, rest) => Pair(Ty::arrows_const(tys, s.params, Bit, True), Tm::tests_true(tys, rest)) }
+}
+
+// Whether a table has an entry `i`.
+fn Sig::has(sigs: List<Sig>, i: Nat) → Bool {
+    match sigs { Nil => False, Cons(_, rest) => match i { Zero => True, Succ(k) => Sig::has(rest, k) } }
+}
+
+theorem Tm::test_at_true(tys: Table, sigs: List<Sig>): (i: Nat) → (Sig::has(sigs, i) = True) →
+    Tm::test_at(tys, sigs, Tm::tests_true(tys, sigs), i) = Ty::arrows_const(tys, Sig::at(sigs, i).params, Bit, True) {
+    match sigs {
+        Nil => λ i never => absurd(sym(never)),
+        Cons(s, rest) => λ i => match i as λ n => (Sig::has(Cons(s, rest), n) = True) →
+            Tm::test_at(tys, Cons(s, rest), Tm::tests_true(tys, Cons(s, rest)), n) = Ty::arrows_const(tys, Sig::at(Cons(s, rest), n).params, Bit, True) {
+            Zero => λ _ => refl,
+            Succ(k) => λ has => Tm::test_at_true(tys, rest, k, has),
+        },
+    }
+}
+
+theorem Tm::test_after_true(tys: Table, sigs: List<Sig>): (i: Nat) → (Sig::has(sigs, i + 1) = True) →
+    Tm::test_after(tys, sigs, Tm::tests_true(tys, sigs.tail()), i) = Ty::arrows_const(tys, Sig::at(sigs, i + 1).params, Bit, True) {
+    match sigs {
+        Nil => λ i never => absurd(sym(never)),
+        Cons(_, rest) => λ i has => Tm::test_at_true(tys, rest, i, has),
+    }
+}
+
+// Whether a call passes at least as many variables as its callee takes
+// (`Tm::apply` answers the code's default short of them).
+fn Tm::args_reach(ps: List<Ty>, args: List<Nat>) → Bool {
+    match ps { Nil => True, Cons(_, rest) => match args { Nil => False, Cons(_, more) => Tm::args_reach(rest, more) } }
+}
+
+theorem Tm::apply_const(w: World, g: List<Ty>, env: Env(w.tys, g), r: Ty, v: r.sem(w.tys), ps: List<Ty>): (args: List<Nat>) →
+    (Tm::args_reach(ps, args) = True) → Tm::apply(w, g, env, r, ps, Ty::arrows_const(w.tys, ps, r, v), args) = v {
+    match ps {
+        Nil => λ args _ => refl,
+        Cons(p, rest) => λ args => match args as λ vs => (Tm::args_reach(Cons(p, rest), vs) = True) →
+            Tm::apply(w, g, env, r, Cons(p, rest), Ty::arrows_const(w.tys, Cons(p, rest), r, v), vs) = v {
+            Nil => λ never => absurd(sym(never)),
+            Cons(a, more) => λ reach => Tm::apply_const(w, g, env, r, v, rest, more, reach),
+        },
+    }
+}
+
+// A call of an entry after the first, with the variables it takes.
+fn Tm::call_fits(sigs: List<Sig>, f: Nat, args: List<Nat>) → Bool {
+    match f { Zero => False, Succ(k) => Sig::has(sigs, k + 1) && Tm::args_reach(Sig::at(sigs, k + 1).params, args) }
+}
+
+theorem Tm::call_fits_ok(w: World, g: List<Ty>, env: Env(w.tys, g), f: Nat, args: List<Nat>, fits: Tm::call_fits(w.sigs, f, args) = True):
+    Tm::apply(w, g, env, Bit, Sig::at(w.sigs, f).params, Tm::callees_oracle(w, Tm::tests_true(w.tys, w.sigs.tail()), f), args).IsTrue() {
+    (match f as λ n => (Tm::call_fits(w.sigs, n, args) = True) →
+        Tm::apply(w, g, env, Bit, Sig::at(w.sigs, n).params, Tm::callees_oracle(w, Tm::tests_true(w.tys, w.sigs.tail()), n), args).IsTrue() {
+        Zero => λ never => absurd(sym(never)),
+        Succ(k) => λ both => {
+            let ps = Sig::at(w.sigs, k + 1).params;
+            let parts = Bool::and_true_parts(Sig::has(w.sigs, k + 1), Tm::args_reach(ps, args), both);
+            let always = Tm::test_after_true(w.tys, w.sigs, k, parts.left);
+            j(sym(always), λ t _ => Tm::apply(w, g, env, Bit, ps, t, args).IsTrue(),
+                Bool::is_true_of_eq(Tm::apply_const(w, g, env, Bit, True, ps, args, parts.right)))
+        },
+    })(fits)
+}
+
+// Whether every call of the term is such a call.
+fn Tm::calls_all(self t: Tm, sigs: List<Sig>) → Bool {
+    match t {
+        Let(e, body) => e.calls_all(sigs) && body.calls_all(sigs),
+        If(_, yes, no) => yes.calls_all(sigs) && no.calls_all(sigs),
+        IfEq(_, yes, no) => yes.calls_all(sigs) && no.calls_all(sigs),
+        Call(f, args) => Tm::call_fits(sigs, f, args),
+        Pick(_, _, arms, _) => arms.calls_all(sigs),
+        _ => True,
+    }
+}
+
+// Such a term's calls are allowed by the oracle that asks nothing.
+theorem Tm::calls_ok_all(self t: Tm, w: World): (g: List<Ty>) → (env: Env(w.tys, g)) → t.calls_all(w.sigs) = True →
+    t.calls_ok(w, Tm::callees_oracle(w, Tm::tests_true(w.tys, w.sigs.tail())), g, env).IsTrue() {
+    let ok = Tm::callees_oracle(w, Tm::tests_true(w.tys, w.sigs.tail()));
+    match t {
+        Let(e, body) => λ g env all => {
+            let parts = Bool::and_true_parts(e.calls_all(w.sigs), body.calls_all(w.sigs), all);
+            Tm::calls_ok_let(e, body, w, ok, g, env, e.calls_ok_all(w, g, env, parts.left),
+                body.calls_ok_all(w, Cons(e.ty(w, g), g), Pair(e.sem(w, g, env), env), parts.right))
+        },
+        If(c, yes, no) => λ g env all => {
+            let parts = Bool::and_true_parts(yes.calls_all(w.sigs), no.calls_all(w.sigs), all);
+            Tm::calls_ok_if(c, yes, no, w, ok, g, env, λ _ => yes.calls_ok_all(w, g, env, parts.left), λ _ => no.calls_ok_all(w, g, env, parts.right))
+        },
+        IfEq(c, yes, no) => λ g env all => {
+            let parts = Bool::and_true_parts(yes.calls_all(w.sigs), no.calls_all(w.sigs), all);
+            Tm::calls_ok_if(c, yes, no, w, ok, g, env, λ _ => yes.calls_ok_all(w, g, env, parts.left), λ _ => no.calls_ok_all(w, g, env, parts.right))
+        },
+        Call(f, args) => λ g env all => Tm::calls_ok_call(f, args, w, ok, g, env, Tm::call_fits_ok(w, g, env, f, args, all)),
+        Pick(i, c, arms, _) => λ g env all => arms.calls_ok_all(w, Cons(Enum(i), g),
+            Pair(w.tys.ens(i).of(w.tys.ens(i).tag(Ty::cast(w.tys, Ty::at(g, c), Enum(i), Env::get(w.tys, g, env, c))),
+                w.tys.ens(i).fields(Ty::cast(w.tys, Ty::at(g, c), Enum(i), Env::get(w.tys, g, env, c)))), env), all),
+        _ => λ g env all => trivial,
+    }
+}

@@ -1,0 +1,208 @@
+// Probes of a recursion's depth bound (docs/native/runtime-fn-recursion-design.md
+// §10.6): a recursion's program, given `more` levels past its first, is
+// defined wherever the function's measure is at most `more`, and answers as
+// the function there. Tests, not library: nothing outside lib/_tests
+// imports this module (docs/test-value-audit.md §4.5).
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import bitvec;
+import bitvec_nat;
+import rt;
+import rt_lower;
+import rt_lower_defined;
+import function_ir;
+import function_ir_eval;
+import function_ir_levels;
+import runtime;
+
+// `n + (n - 1) + … + 0`: the call under a method call.
+runtime fn rsum(n: u64) → u64 decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => BitVec::ofNat(0),
+        False => n.add(rsum(n.sub(BitVec::ofNat(1)))),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+// What `Compile::ranked_code` evaluates at the instance: the code's
+// nodes around its calls require nothing, and the instance's code is the
+// default lowering's.
+theorem rsum_quiet(): rsum::rt.quiet(rsum::world) = True { refl }
+
+theorem rsum_coded(): rsum::compile.code = Setup::default().code(rsum::rt, rsum::world) { refl }
+
+// The recursion is defined, and answers as the function, wherever its
+// measure is at most the levels past the first: no premise about the
+// program is left.
+theorem rsum_defined(n: u64, more: Nat, within: n.toNat() <= more): program_defined(program_deepened(rsum::program, more), 0, [n]).IsTrue() {
+    rsum::defined_within(n, more, within)
+}
+
+theorem rsum_agrees(n: u64, more: Nat, within: n.toNat() <= more): program_eval(program_deepened(rsum::program, more), 0, [n]) = rsum(n) {
+    rsum::agrees_within(n, more, within)
+}
+
+// The bound is the one the levels give: one level short, the program is
+// not defined (negative control).
+theorem rsum_short(): program_defined(program_deepened(rsum::program, 2), 0, [BitVec::ofNat(3)]) = False { refl }
+
+// Two parameters, the measure reading the second, and a `let` before the
+// call.
+runtime fn rpair(acc: u64, n: u64) → u64 decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => acc,
+        False => {
+            let next = acc.add(n);
+            rpair(next, n.sub(BitVec::ofNat(1))).add(BitVec::ofNat(1))
+        },
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+theorem rpair_agrees(acc, n: u64, more: Nat, within: n.toNat() <= more):
+    program_eval(program_deepened(rpair::program, more), 0, [acc, n]) = rpair(acc, n) {
+    rpair::agrees_within(acc, n, more, within)
+}
+
+// A recursion that calls another function: the callee is before it in the
+// program, and is defined everywhere.
+runtime fn plus_one(x: u64) → u64 { x.add(BitVec::ofNat(1)) }
+
+runtime fn rcall(n: u64) → u64 decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => BitVec::ofNat(0),
+        False => plus_one(rcall(n.sub(BitVec::ofNat(1)))),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+theorem rcall_defined(n: u64, more: Nat, within: n.toNat() <= more): program_defined(program_deepened(rcall::program, more), 1, [n]).IsTrue() {
+    rcall::defined_within(n, more, within)
+}
+
+theorem rcall_agrees(n: u64, more: Nat, within: n.toNat() <= more): program_eval(program_deepened(rcall::program, more), 1, [n]) = rcall(n) {
+    rcall::agrees_within(n, more, within)
+}
+
+// The measure, as a function of the parameters: what a certificate states
+// its bound by.
+theorem rpair_measure(acc, n: u64): rpair::measure(acc, n) = n.toNat() { refl }
+
+theorem rpair_defined(acc, n: u64, within: rpair::measure(acc, n) <= 7): program_defined(program_deepened(rpair::program, 7), 0, [acc, n]).IsTrue() {
+    rpair::defined_within(acc, n, 7, within)
+}
+
+// A recursion whose callee is a recursion has no bound read off it yet: its
+// agreement keeps its premise.
+runtime fn router(n: u64) → u64 decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => BitVec::ofNat(0),
+        False => rsum(n).add(router(n.sub(BitVec::ofNat(1)))),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+theorem router_where(n: u64, more: Nat, defined: program_defined(program_deepened(router::program, more), 1, [n]).IsTrue()):
+    program_eval(program_deepened(router::program, more), 1, [n]) = router(n) {
+    router::agrees_where(n, more, defined)
+}
+
+// expect-error: agrees_within
+theorem router_within(): True = True {
+    let _ = router::agrees_within;
+    refl
+}
+
+// A function that calls a recursion (docs/native/runtime-fn-recursion-design.md
+// §10.7): its test is its calls within the levels, `rsum_two::within`, and
+// its program is defined, and answers as it, where the test holds.
+runtime fn rsum_two(a, b: u64) → u64 { rsum(a).add(rsum(b)) }
+
+// The test reads as each call's measure within the levels.
+theorem rsum_two_within(a, b: u64, more: Nat): rsum_two::within(more, a, b) = (a.toNat().leb(more) && (b.toNat().leb(more) && True)) { refl }
+
+theorem rsum_two_defined(a, b: u64, more: Nat, within: rsum_two::within(more, a, b).IsTrue()):
+    program_defined(program_deepened(rsum_two::program, more), 1, [a, b]).IsTrue() {
+    rsum_two::defined_within(a, b, more, within)
+}
+
+theorem rsum_two_agrees(a, b: u64, more: Nat, within: rsum_two::within(more, a, b).IsTrue()):
+    program_eval(program_deepened(rsum_two::program, more), 1, [a, b]) = rsum_two(a, b) {
+    rsum_two::agrees_within(a, b, more, within)
+}
+
+// At closed arguments the test evaluates, so nothing is left to prove; one
+// level short it is false, and so is the program's definedness (negative
+// controls).
+theorem rsum_two_at(): program_eval(program_deepened(rsum_two::program, 3), 1, [BitVec::ofNat(3), BitVec::ofNat(2)]) = rsum_two(BitVec::ofNat(3), BitVec::ofNat(2)) {
+    rsum_two::agrees_within(BitVec::ofNat(3), BitVec::ofNat(2), 3, trivial)
+}
+
+theorem rsum_two_short(): rsum_two::within(2, BitVec::ofNat(3), BitVec::ofNat(2)) = False { refl }
+
+theorem rsum_two_undefined(): program_defined(program_deepened(rsum_two::program, 2), 1, [BitVec::ofNat(3), BitVec::ofNat(2)]) = False { refl }
+
+// The test follows the path taken: a call in one arm is asked for only
+// where that arm runs.
+runtime fn pick(c, n: u64) → u64 {
+    match c.eq_bit(BitVec::ofNat(0)) { True => plus_one(c), False => rsum(n) }
+}
+
+theorem pick_within(c, n: u64, more: Nat): pick::within(more, c, n) = (match c.eq_bit(BitVec::ofNat(0)) { False => n.toNat().leb(more), True => True }) { refl }
+
+theorem pick_agrees_zero(n: u64): program_eval(program_deepened(pick::program, 0), 2, [BitVec::ofNat(0), n]) = pick(BitVec::ofNat(0), n) {
+    pick::agrees_within(BitVec::ofNat(0), n, 0, trivial)
+}
+
+// A caller of a caller, with functions that ask nothing between: its test
+// is its callee's at the arguments it passes.
+runtime fn outer(a: u64) → u64 { plus_one(rsum_two(a, plus_one(a))) }
+
+theorem outer_within(a: u64, more: Nat): outer::within(more, a) = (True && (rsum_two::within(more, a, plus_one(a)) && True)) { refl }
+
+theorem outer_agrees(a: u64, more: Nat, within: outer::within(more, a).IsTrue()):
+    program_eval(program_deepened(outer::program, more), 3, [a]) = outer(a) {
+    outer::agrees_within(a, more, within)
+}
+
+// A caller of a recursion that calls a function: the recursion's part is
+// its own in every program (`rcall::defined_below`).
+runtime fn rcall_twice(n: u64) → u64 { rcall(rcall(n)) }
+
+theorem rcall_twice_agrees(n: u64, more: Nat, within: rcall_twice::within(more, n).IsTrue()):
+    program_eval(program_deepened(rcall_twice::program, more), 2, [n]) = rcall_twice(n) {
+    rcall_twice::agrees_within(n, more, within)
+}
+
+// A recursion with no bound read off it leaves its callers their premise.
+runtime fn router_caller(n: u64) → u64 { router(n) }
+
+theorem router_caller_where(n: u64, more: Nat, defined: program_defined(program_deepened(router_caller::program, more), 2, [n]).IsTrue()):
+    program_eval(program_deepened(router_caller::program, more), 2, [n]) = router_caller(n) {
+    router_caller::agrees_where(n, more, defined)
+}
+
+// expect-error: `router_caller::agrees_within` is qualified by `router_caller`, which is neither an imported module
+theorem router_caller_within(): True = True {
+    let _ = router_caller::agrees_within;
+    refl
+}
+
+// A caller of its recursion's type whose value is the recursion at a
+// computed argument: its program's linking reads each function's arity at
+// its own place in the list (`link_arity_self`), where it once compared
+// the caller's arity with the recursion's, two functions of one type.
+runtime fn rsum_again(n: u64) → u64 { rsum(rsum(n)) }
+
+// The second call is asked at the first's result.
+theorem rsum_again_within(n: u64, more: Nat): rsum_again::within(more, n) = (n.toNat().leb(more) && rsum(n).toNat().leb(more)) { refl }
+
+runtime fn rsum_next(n: u64) → u64 { rsum(plus_one(n)) }
+
+theorem rsum_next_agrees(n: u64, more: Nat, within: rsum_next::within(more, n).IsTrue()):
+    program_eval(program_deepened(rsum_next::program, more), 2, [n]) = rsum_next(n) {
+    rsum_next::agrees_within(n, more, within)
+}

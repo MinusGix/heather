@@ -21,6 +21,7 @@
 
 import function_ir;
 import function_ir_eval;
+import function_ir_operation;
 import bitvec;
 import bool;
 import list;
@@ -386,6 +387,21 @@ theorem program_deepened_len(functions: List<Function>, more: Nat): program_deep
     match functions { Nil => refl, Cons(_, earlier) => cong_fn(λ (n: Nat) => n + 1, program_deepened_len(earlier, more)) }
 }
 
+// A program proved defined at every word has no levels, and is itself at
+// any number more.
+theorem program_deepened_total(functions: List<Function>, more: Nat): program_total(functions).IsTrue() → program_deepened(functions, more) = functions {
+    match functions {
+        Nil => λ _ => refl,
+        Cons(last, earlier) => λ total => {
+            let parts = Bool::is_true_and(last.levels.matches(0) && last.body.total_at(program_outs(earlier)), program_total(earlier), total);
+            let own = Bool::is_true_and(last.levels.matches(0), last.body.total_at(program_outs(earlier)), parts.left);
+            let flat: (last.levels = 0) = last.levels.matches_eq(0, own.left);
+            let same: (last.deepened(more) = last) = j(sym(flat), λ n _ => last.deepened_at(n, more) = last, refl);
+            eq2(λ (f: Function) (rest: List<Function>) => Cons(f, rest), same, program_deepened_total(earlier, more, parts.right))
+        },
+    }
+}
+
 theorem linked_arity_deepened(functions: List<Function>, more: Nat): (arities: List<Nat>) →
     linked_arity(program_deepened(functions, more), arities) = linked_arity(functions, arities) {
     match functions {
@@ -451,4 +467,558 @@ theorem program_eval_deepened_where(functions: List<Function>, arities: List<Nat
     program_eval_linked_where(program_deepened(functions, more), arities, admits, sources,
         program_linked_files_deepened(functions, more, arities, admits, sources, linked), buffers, f, words,
         j(sym(linked_arity_deepened(functions, more, arities)), λ t _ => arity_fits(t(f), words.len()).IsTrue(), fits), admitted, defined)
+}
+
+// ---------------------------------------------------------------------------
+// Defined wherever a rank is below the levels
+//
+// Where a program with a recursion is defined is a fact about its code
+// (`program_defined_over`), which a certificate cannot ask its reader to
+// check. A rank says it instead: a function whose calls of itself are each
+// at a lower rank than the words it was called with is defined at every
+// word list whose rank is below its levels (`Function::level_defined_by_rank`),
+// by induction on the levels. The descent is asked over a table that
+// answers as the sources, since a rank is a fact about the source, and a
+// level's own answers are right only where the level under it is defined.
+// So the descent is applied to the answers patched with the sources, as
+// the linking is, and what is defined over one table is defined over any
+// that answers alike where defined (`StructuredRegion::defined_where_over`).
+
+theorem Node::defined_same(self node: Node, values, other: Valuation(), same: Valuation::Same(values, other)):
+    node.defined(other) = node.defined(values) {
+    match node {
+        Apply(op, width, _, left, right) => eq2(λ (x: BitVec(width)) (y: BitVec(width)) => op.requires_bit(x, y), same(width, left), same(width, right)),
+        _ => refl,
+    }
+}
+
+theorem nodes_defined_same_over(buffers: Buffers(), nodes: List<Node>): (values, other: Valuation()) → Valuation::Same(values, other) →
+    nodes_defined_over(buffers, nodes, other) = nodes_defined_over(buffers, nodes, values) {
+    match nodes {
+        Nil => λ values other same => refl,
+        Cons(node, rest) => λ values other same => eq2(λ (a: Bool) (b: Bool) => a && b, node.defined_same(values, other, same),
+            nodes_defined_same_over(buffers, rest, node.step(values, buffers := buffers), node.step(other, buffers := buffers),
+                Valuation::set_same(values, other, same, node_output(node).id, node.value(values, buffers := buffers), node.value(other, buffers := buffers),
+                    node.value_same_over(buffers, values, other, same)))),
+    }
+}
+
+// Loops whose passes agree and stay defined wherever a pass is defined are
+// defined alike.
+theorem loop_defined_same_where(step, other_step: Valuation() → Valuation(), defined, other_defined: Valuation() → Bool,
+    same: (v: Valuation()) → defined(v).IsTrue() → Valuation::Same(step(v), other_step(v)),
+    also: (v: Valuation()) → defined(v).IsTrue() → other_defined(v).IsTrue(),
+    parameters: List<Nat>, count, exit: Nat, next: List<Nat>, remaining: Nat):
+    (state: List<BitVec(64)>) → loop_defined(step, defined, parameters, count, exit, next, remaining, state).IsTrue() →
+    loop_defined(other_step, other_defined, parameters, count, exit, next, remaining, state).IsTrue() {
+    match remaining {
+        Zero => λ state all => trivial,
+        Succ(rest) => λ state all => {
+            let entry = pass_valuation(parameters, count, rest + 1, state);
+            let after = step(entry);
+            let halves = Bool::is_true_and(defined(entry), match after(1, exit).head_bit() {
+                False => loop_defined(step, defined, parameters, count, exit, next, rest, words_of(after, next)),
+                True => True,
+            }, all);
+            let alike = same(entry, halves.left);
+            let bit: (other_step(entry, 1, exit).head_bit() = after(1, exit).head_bit()) =
+                cong_fn(λ (x: BitVec(1)) => x.head_bit(), alike(1, exit));
+            let words: (words_of(other_step(entry), next) = words_of(after, next)) =
+                words_agree(next, after, other_step(entry), λ id _ => alike(64, id));
+            let later = (match after(1, exit).head_bit() as λ b =>
+                (match b as λ _ => Bool {
+                    False => loop_defined(step, defined, parameters, count, exit, next, rest, words_of(after, next)),
+                    True => True,
+                }).IsTrue() →
+                (match b as λ _ => Bool {
+                    False => loop_defined(other_step, other_defined, parameters, count, exit, next, rest, words_of(after, next)),
+                    True => True,
+                }).IsTrue() {
+                False => λ l => loop_defined_same_where(step, other_step, defined, other_defined, same, also, parameters, count, exit, next, rest,
+                    words_of(after, next), l),
+                True => λ _ => trivial,
+            })(halves.right);
+            let read = j(sym(words), λ ws _ => (match after(1, exit).head_bit() as λ _ => Bool {
+                    False => loop_defined(other_step, other_defined, parameters, count, exit, next, rest, ws),
+                    True => True,
+                }).IsTrue(), later);
+            let moved = j(sym(bit), λ b _ => (match b as λ _ => Bool {
+                    False => loop_defined(other_step, other_defined, parameters, count, exit, next, rest, words_of(other_step(entry), next)),
+                    True => True,
+                }).IsTrue(), read);
+            Bool::is_true_and_intro(other_defined(entry), match other_step(entry, 1, exit).head_bit() {
+                    False => loop_defined(other_step, other_defined, parameters, count, exit, next, rest, words_of(other_step(entry), next)),
+                    True => True,
+                }, also(entry, halves.left), moved)
+        },
+    }
+}
+
+// The theorem: a region defined at a valuation is defined from any
+// agreeing valuation, over calls answered alike wherever `defines` says a
+// callee is defined, and by any `wider` that says so wherever `defines`
+// does. `StructuredRegion::eval_where_over` for whether the evaluation is
+// defined.
+theorem StructuredRegion::defined_where_over(self region: StructuredRegion, buffers: Buffers(), call, other: Answers(), defines, wider: Defines(),
+    answers: (f: Nat) → (words: List<BitVec(64)>) → defines(f, words).IsTrue() → other(f, words) = call(f, words),
+    widens: (f: Nat) → (words: List<BitVec(64)>) → defines(f, words).IsTrue() → wider(f, words).IsTrue()):
+    (values, others: Valuation()) → Valuation::Same(values, others) → region.defined_over(buffers, call, defines, values).IsTrue() →
+    region.defined_over(buffers, other, wider, others).IsTrue() {
+    match region {
+        Dataflow(body) => λ values others same ok =>
+            j(sym(nodes_defined_same_over(buffers, body.nodes, values, others, same)), λ b _ => b.IsTrue(), ok),
+        Sequence(prefix, continuation) => λ values others same ok => {
+            let parts = Bool::is_true_and(prefix.defined(values, buffers := buffers),
+                continuation.defined_over(buffers, call, defines, prefix.eval(values, buffers := buffers)), ok);
+            Bool::is_true_and_intro(prefix.defined(others, buffers := buffers),
+                continuation.defined_over(buffers, other, wider, prefix.eval(others, buffers := buffers)),
+                j(sym(nodes_defined_same_over(buffers, prefix.nodes, values, others, same)), λ b _ => b.IsTrue(), parts.left),
+                continuation.defined_where_over(buffers, call, other, defines, wider, answers, widens, prefix.eval(values, buffers := buffers),
+                    prefix.eval(others, buffers := buffers), eval_nodes_same_over(buffers, prefix.nodes, values, others, same), parts.right))
+        },
+        Compose(prefix, continuation) => λ values others same ok => {
+            let parts = Bool::is_true_and(prefix.defined_over(buffers, call, defines, values),
+                continuation.defined_over(buffers, call, defines, prefix.eval_over(buffers, call, values)), ok);
+            Bool::is_true_and_intro(prefix.defined_over(buffers, other, wider, others),
+                continuation.defined_over(buffers, other, wider, prefix.eval_over(buffers, other, others)),
+                prefix.defined_where_over(buffers, call, other, defines, wider, answers, widens, values, others, same, parts.left),
+                continuation.defined_where_over(buffers, call, other, defines, wider, answers, widens, prefix.eval_over(buffers, call, values),
+                    prefix.eval_over(buffers, other, others),
+                    prefix.eval_where_over(buffers, call, other, defines, answers, values, others, same, parts.left), parts.right))
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => λ values others same ok => {
+            let bit: (values(1, condition).head_bit() = others(1, condition).head_bit()) =
+                sym(cong_fn(λ (x: BitVec(1)) => x.head_bit(), same(1, condition)));
+            let aligned = (match values(1, condition).head_bit() as λ b =>
+                (match b as λ _ => Bool {
+                    False => when_false.defined_over(buffers, call, defines, values),
+                    True => when_true.defined_over(buffers, call, defines, values),
+                }).IsTrue() →
+                (match b as λ _ => Bool {
+                    False => when_false.defined_over(buffers, other, wider, others),
+                    True => when_true.defined_over(buffers, other, wider, others),
+                }).IsTrue() {
+                False => λ d => when_false.defined_where_over(buffers, call, other, defines, wider, answers, widens, values, others, same, d),
+                True => λ d => when_true.defined_where_over(buffers, call, other, defines, wider, answers, widens, values, others, same, d),
+            })(ok);
+            j(bit, λ b _ => (match b as λ _ => Bool {
+                    False => when_false.defined_over(buffers, other, wider, others),
+                    True => when_true.defined_over(buffers, other, wider, others),
+                }).IsTrue(), aligned)
+        },
+        Lend(views, callee, arguments, result) => λ values others same ok => {
+            let nodes = views_nodes(views);
+            let args = views_homes(views) ++ arguments;
+            let first = eval_nodes_over(buffers, nodes, values);
+            let second = eval_nodes_over(buffers, nodes, others);
+            let alike = eval_nodes_same_over(buffers, nodes, values, others, same);
+            let words = words_of(first, args);
+            let read: (words_of(second, args) = words) = words_agree(args, first, second, λ id _ => alike(64, id));
+            let parts = Bool::is_true_and(nodes_defined_over(buffers, nodes, values), defines(callee, words), ok);
+            Bool::is_true_and_intro(nodes_defined_over(buffers, nodes, others), wider(callee, words_of(second, args)),
+                j(sym(nodes_defined_same_over(buffers, nodes, values, others, same)), λ b _ => b.IsTrue(), parts.left),
+                j(sym(read), λ ws _ => wider(callee, ws).IsTrue(), widens(callee, words, parts.right)))
+        },
+        Call(callee, arguments, result, also) => λ values others same ok => {
+            let words = words_of(values, arguments);
+            let read: (words_of(others, arguments) = words) = words_agree(arguments, values, others, λ id _ => same(64, id));
+            let parts = Bool::is_true_and(defines(callee, words), call(callee, words).tail().len().matches(also.len()), ok);
+            let answered: (other(callee, words) = call(callee, words)) = answers(callee, words, parts.left);
+            let here: (wider(callee, words) && other(callee, words).tail().len().matches(also.len())).IsTrue() =
+                Bool::is_true_and_intro(wider(callee, words), other(callee, words).tail().len().matches(also.len()), widens(callee, words, parts.left),
+                    j(sym(answered), λ a _ => a.tail().len().matches(also.len()).IsTrue(), parts.right));
+            j(sym(read), λ ws _ => (wider(callee, ws) && other(callee, ws).tail().len().matches(also.len())).IsTrue(), here)
+        },
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ values others same ok => {
+            let step = λ (pass: Valuation()) => body.eval_over(buffers, call, pass);
+            let other_step = λ (pass: Valuation()) => body.eval_over(buffers, other, pass);
+            let defined = λ (pass: Valuation()) => body.defined_over(buffers, call, defines, pass);
+            let other_defined = λ (pass: Valuation()) => body.defined_over(buffers, other, wider, pass);
+            let ran = loop_defined_same_where(step, other_step, defined, other_defined,
+                λ v d => body.eval_where_over(buffers, call, other, defines, answers, v, v, λ w id => refl, d),
+                λ v d => body.defined_where_over(buffers, call, other, defines, wider, answers, widens, v, v, λ w id => refl, d),
+                parameters, count, exit, next, values(64, bound).toNat(), words_of(values, inputs), ok);
+            let counted = j(sym(cong_fn(λ (x: BitVec(64)) => x.toNat(), same(64, bound))), λ n _ =>
+                loop_defined(other_step, other_defined, parameters, count, exit, next, n, words_of(values, inputs)).IsTrue(), ran);
+            j(sym(words_agree(inputs, values, others, λ id _ => same(64, id))), λ ws _ =>
+                loop_defined(other_step, other_defined, parameters, count, exit, next, others(64, bound).toNat(), ws).IsTrue(), counted)
+        },
+    }
+}
+
+// A region with no call and no node that requires anything: defined at
+// every valuation, whatever answers its callers' calls.
+fn StructuredRegion::quiet(self region: StructuredRegion) → Bool {
+    match region {
+        Dataflow(body) => nodes_total(body.nodes),
+        Sequence(prefix, continuation) => nodes_total(prefix.nodes) && continuation.quiet(),
+        Compose(prefix, continuation) => prefix.quiet() && continuation.quiet(),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.quiet() && when_false.quiet(),
+        Lend(_, _, _, _) => False,
+        Call(_, _, _, _) => False,
+        Loop(_, _, _, _, body, _, _, _, _) => body.quiet(),
+    }
+}
+
+theorem StructuredRegion::quiet_defined(self region: StructuredRegion, buffers: Buffers(), call: Answers(), defines: Defines()):
+    region.quiet().IsTrue() → (values: Valuation()) → region.defined_over(buffers, call, defines, values).IsTrue() {
+    match region {
+        Dataflow(body) => λ quiet values => nodes_total_defined(body.nodes, buffers, quiet, values),
+        Sequence(prefix, continuation) => λ quiet values => {
+            let parts = Bool::is_true_and(nodes_total(prefix.nodes), continuation.quiet(), quiet);
+            Bool::is_true_and_intro(prefix.defined(values, buffers := buffers),
+                continuation.defined_over(buffers, call, defines, prefix.eval(values, buffers := buffers)),
+                nodes_total_defined(prefix.nodes, buffers, parts.left, values),
+                continuation.quiet_defined(buffers, call, defines, parts.right, prefix.eval(values, buffers := buffers)))
+        },
+        Compose(prefix, continuation) => λ quiet values => {
+            let parts = Bool::is_true_and(prefix.quiet(), continuation.quiet(), quiet);
+            Bool::is_true_and_intro(prefix.defined_over(buffers, call, defines, values),
+                continuation.defined_over(buffers, call, defines, prefix.eval_over(buffers, call, values)),
+                prefix.quiet_defined(buffers, call, defines, parts.left, values),
+                continuation.quiet_defined(buffers, call, defines, parts.right, prefix.eval_over(buffers, call, values)))
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => λ quiet values => {
+            let parts = Bool::is_true_and(when_true.quiet(), when_false.quiet(), quiet);
+            match values(1, condition).head_bit() as λ b => (match b as λ _ => Bool {
+                False => when_false.defined_over(buffers, call, defines, values),
+                True => when_true.defined_over(buffers, call, defines, values),
+            }).IsTrue() {
+                False => when_false.quiet_defined(buffers, call, defines, parts.right, values),
+                True => when_true.quiet_defined(buffers, call, defines, parts.left, values),
+            }
+        },
+        Lend(_, _, _, _) => λ never _ => false_elim(never),
+        Call(_, _, _, _) => λ never _ => false_elim(never),
+        Loop(inputs, bound, parameters, count, body, exit, next, _, _) => λ quiet values =>
+            loop_defined_all(λ (pass: Valuation()) => body.eval_over(buffers, call, pass),
+                λ (pass: Valuation()) => body.defined_over(buffers, call, defines, pass),
+                λ pass => body.quiet_defined(buffers, call, defines, quiet, pass), parameters, count, exit, next,
+                values(64, bound).toNat(), words_of(values, inputs)),
+    }
+}
+
+// Whether a callee is defined, asked at its renamed function
+// (`Answers::relabel`).
+fn Defines::relabel(defines: Defines(), links: Nat → Nat) → Defines() { λ f words => defines(links(f), words) }
+
+// A region defined with its calls answered and asked at their renamed
+// functions is defined, renamed, over the calls themselves
+// (`StructuredRegion::relabel_eval_over`).
+theorem StructuredRegion::relabel_defined_over(self region: StructuredRegion, buffers: Buffers(), call: Answers(), defines: Defines(), links: Nat → Nat):
+    (values, others: Valuation()) → Valuation::Same(values, others) →
+    region.defined_over(buffers, Answers::relabel(call, links), Defines::relabel(defines, links), values).IsTrue() →
+    region.relabel(links).defined_over(buffers, call, defines, others).IsTrue() {
+    match region {
+        Dataflow(body) => λ values others same ok =>
+            j(sym(nodes_defined_same_over(buffers, body.nodes, values, others, same)), λ b _ => b.IsTrue(), ok),
+        Sequence(prefix, continuation) => λ values others same ok => {
+            let parts = Bool::is_true_and(prefix.defined(values, buffers := buffers),
+                continuation.defined_over(buffers, Answers::relabel(call, links), Defines::relabel(defines, links), prefix.eval(values, buffers := buffers)), ok);
+            Bool::is_true_and_intro(prefix.defined(others, buffers := buffers),
+                continuation.relabel(links).defined_over(buffers, call, defines, prefix.eval(others, buffers := buffers)),
+                j(sym(nodes_defined_same_over(buffers, prefix.nodes, values, others, same)), λ b _ => b.IsTrue(), parts.left),
+                continuation.relabel_defined_over(buffers, call, defines, links, prefix.eval(values, buffers := buffers),
+                    prefix.eval(others, buffers := buffers), eval_nodes_same_over(buffers, prefix.nodes, values, others, same), parts.right))
+        },
+        Compose(prefix, continuation) => λ values others same ok => {
+            let parts = Bool::is_true_and(prefix.defined_over(buffers, Answers::relabel(call, links), Defines::relabel(defines, links), values),
+                continuation.defined_over(buffers, Answers::relabel(call, links), Defines::relabel(defines, links),
+                    prefix.eval_over(buffers, Answers::relabel(call, links), values)), ok);
+            Bool::is_true_and_intro(prefix.relabel(links).defined_over(buffers, call, defines, others),
+                continuation.relabel(links).defined_over(buffers, call, defines, prefix.relabel(links).eval_over(buffers, call, others)),
+                prefix.relabel_defined_over(buffers, call, defines, links, values, others, same, parts.left),
+                continuation.relabel_defined_over(buffers, call, defines, links, prefix.eval_over(buffers, Answers::relabel(call, links), values),
+                    prefix.relabel(links).eval_over(buffers, call, others), prefix.relabel_eval_over(buffers, call, links, values, others, same), parts.right))
+        },
+        Conditional(_, condition, _, _, when_true, when_false) => λ values others same ok => {
+            let bit: (values(1, condition).head_bit() = others(1, condition).head_bit()) =
+                sym(cong_fn(λ (x: BitVec(1)) => x.head_bit(), same(1, condition)));
+            let aligned = (match values(1, condition).head_bit() as λ b =>
+                (match b as λ _ => Bool {
+                    False => when_false.defined_over(buffers, Answers::relabel(call, links), Defines::relabel(defines, links), values),
+                    True => when_true.defined_over(buffers, Answers::relabel(call, links), Defines::relabel(defines, links), values),
+                }).IsTrue() →
+                (match b as λ _ => Bool {
+                    False => when_false.relabel(links).defined_over(buffers, call, defines, others),
+                    True => when_true.relabel(links).defined_over(buffers, call, defines, others),
+                }).IsTrue() {
+                False => λ d => when_false.relabel_defined_over(buffers, call, defines, links, values, others, same, d),
+                True => λ d => when_true.relabel_defined_over(buffers, call, defines, links, values, others, same, d),
+            })(ok);
+            j(bit, λ b _ => (match b as λ _ => Bool {
+                    False => when_false.relabel(links).defined_over(buffers, call, defines, others),
+                    True => when_true.relabel(links).defined_over(buffers, call, defines, others),
+                }).IsTrue(), aligned)
+        },
+        Lend(views, callee, arguments, result) => λ values others same ok => {
+            let nodes = views_nodes(views);
+            let args = views_homes(views) ++ arguments;
+            let first = eval_nodes_over(buffers, nodes, values);
+            let second = eval_nodes_over(buffers, nodes, others);
+            let alike = eval_nodes_same_over(buffers, nodes, values, others, same);
+            let words = words_of(first, args);
+            let read: (words_of(second, args) = words) = words_agree(args, first, second, λ id _ => alike(64, id));
+            let parts = Bool::is_true_and(nodes_defined_over(buffers, nodes, values), defines(links(callee), words), ok);
+            Bool::is_true_and_intro(nodes_defined_over(buffers, nodes, others), defines(links(callee), words_of(second, args)),
+                j(sym(nodes_defined_same_over(buffers, nodes, values, others, same)), λ b _ => b.IsTrue(), parts.left),
+                j(sym(read), λ ws _ => defines(links(callee), ws).IsTrue(), parts.right))
+        },
+        Call(callee, arguments, result, also) => λ values others same ok => {
+            let words = words_of(values, arguments);
+            let read: (words_of(others, arguments) = words) = words_agree(arguments, values, others, λ id _ => same(64, id));
+            let here: (defines(links(callee), words) && call(links(callee), words).tail().len().matches(also.len())).IsTrue() = ok;
+            j(sym(read), λ ws _ => (defines(links(callee), ws) && call(links(callee), ws).tail().len().matches(also.len())).IsTrue(), here)
+        },
+        Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ values others same ok => {
+            let step = λ (pass: Valuation()) => body.eval_over(buffers, Answers::relabel(call, links), pass);
+            let other_step = λ (pass: Valuation()) => body.relabel(links).eval_over(buffers, call, pass);
+            let defined = λ (pass: Valuation()) => body.defined_over(buffers, Answers::relabel(call, links), Defines::relabel(defines, links), pass);
+            let other_defined = λ (pass: Valuation()) => body.relabel(links).defined_over(buffers, call, defines, pass);
+            let ran = loop_defined_same_where(step, other_step, defined, other_defined,
+                λ v d => body.relabel_eval_over(buffers, call, links, v, v, λ w id => refl),
+                λ v d => body.relabel_defined_over(buffers, call, defines, links, v, v, λ w id => refl, d),
+                parameters, count, exit, next, values(64, bound).toNat(), words_of(values, inputs), ok);
+            let counted = j(sym(cong_fn(λ (x: BitVec(64)) => x.toNat(), same(64, bound))), λ n _ =>
+                loop_defined(other_step, other_defined, parameters, count, exit, next, n, words_of(values, inputs)).IsTrue(), ran);
+            j(sym(words_agree(inputs, values, others, λ id _ => same(64, id))), λ ws _ =>
+                loop_defined(other_step, other_defined, parameters, count, exit, next, others(64, bound).toNat(), ws).IsTrue(), counted)
+        },
+    }
+}
+
+// A function's, renamed.
+theorem Function::relabel_defined(self function: Function, buffers: Buffers(), call: Answers(), defines: Defines(), links: Nat → Nat,
+    words: List<BitVec(64)>, ok: function.defined(Answers::relabel(call, links), Defines::relabel(defines, links), words, buffers := buffers).IsTrue()):
+    function.relabel(links).defined(call, defines, words, buffers := buffers).IsTrue() {
+    let bound = Valuation::bind(Valuation::zero(), function.parameters, words);
+    function.body.relabel_defined_over(buffers, call, defines, links, bound, bound, λ w id => refl, ok)
+}
+
+// What a rank promises of function `k`'s code: over any table `Good`
+// accepts, the function is defined at the words `Admits` admits, given
+// that it is defined itself (`own`) at every such word list of lower rank.
+// Its callees below are asked through `below_defines`.
+fn Function::Descends(self function: Function, buffers: Buffers(), below_defines: Defines(), k: Nat, rank: List<BitVec(64)> → Nat,
+    Good: Answers() → Type, Admits: List<BitVec(64)> → Type) → Type {
+    (call: Answers()) → Good(call) → (own: List<BitVec(64)> → Bool) → (words: List<BitVec(64)>) → Admits(words) →
+        ((lower: List<BitVec(64)>) → Admits(lower) → (rank(lower) < rank(words)) → own(lower).IsTrue()) →
+        function.defined(call, tie_defines(below_defines, k, own), words, buffers := buffers).IsTrue()
+}
+
+// A function whose code descends by a rank is defined, `depth` levels
+// deep, at every word list of rank below `depth`.
+theorem Function::level_defined_by_rank(self function: Function, buffers: Buffers(), below: Answers(), below_defines: Defines(), sources: Answers(),
+    arity: Nat → Option<Nat>, admits: Nat → List<BitVec(64)> → Type, k: Nat, own: Option<Nat>, rank: List<BitVec(64)> → Nat,
+    clause: (c: Answers()) → Answers::Agree(c, sources, tie(arity, k, own), admits) → (words: List<BitVec(64)>) → arity_fits(own, words.len()).IsTrue() →
+        admits(k, words) → function.eval_words(c, words, buffers := buffers) = sources(k, words),
+    under: Answers::AgreeWhere(below, sources, arity, admits, below_defines), Admits: List<BitVec(64)> → Type,
+    descends: function.Descends(buffers, below_defines, k, rank, λ (c: Answers()) => Answers::Agree(c, sources, tie(arity, k, own), admits), Admits),
+    depth: Nat): (words: List<BitVec(64)>) → Admits(words) → (rank(words) < depth) →
+    function.level_defined(below, below_defines, k, depth, buffers)(words).IsTrue() {
+    match depth {
+        Zero => λ words _ never => false_elim(never),
+        Succ(i) => λ words admitted within => {
+            let call = function.tied_answers(below, k, i, buffers);
+            let defines = function.tied_defines(below, below_defines, k, i, buffers);
+            let agree = function.tied_where_at(buffers, below, below_defines, sources, arity, admits, k, own, under, i,
+                function.level_where(buffers, below, below_defines, sources, arity, admits, k, own, clause, under, i));
+            let patched = Answers::patched(call, sources, defines);
+            let le: (rank(words) <= i) = within;
+            let over = descends(patched, Answers::patched_agree(call, sources, tie(arity, k, own), admits, defines, agree),
+                function.level_defined(below, below_defines, k, i, buffers), words, admitted,
+                λ lower ok below_rank => function.level_defined_by_rank(buffers, below, below_defines, sources, arity, admits, k, own, rank, clause, under,
+                    Admits, descends, i, lower, ok, Nat::lt_of_lt_of_le(rank(lower), rank(words), i, below_rank, le)));
+            let start = Valuation::bind(Valuation::zero(), function.parameters, words);
+            function.body.defined_where_over(buffers, patched, call, defines, defines,
+                λ f ws d => sym(Answers::patched_where(call, sources, defines, f, ws, d)), λ f ws d => d, start, start, λ w id => refl, over)
+        },
+    }
+}
+
+// The program: its last function, one whose code descends by a rank, is
+// defined at every word list whose rank is below its levels.
+theorem program_defined_by_rank(last: Function, earlier: List<Function>, arities: List<Nat>, admits: Nat → List<BitVec(64)> → Type,
+    sources: Buffers() → Answers(), linked: program_linked_files(Cons(last, earlier), arities, admits, sources), buffers: Buffers(),
+    rank: List<BitVec(64)> → Nat, Admits: List<BitVec(64)> → Type,
+    descends: last.Descends(buffers, program_defined_over(buffers, earlier), earlier.len(), rank,
+        λ (c: Answers()) => Answers::Agree(c, sources(buffers), tie(linked_arity(earlier, arities.tail()), earlier.len(), arities.nth(0)), admits), Admits),
+    words: List<BitVec(64)>, admitted: Admits(words), within: rank(words) < last.levels):
+    program_defined_over(buffers, Cons(last, earlier))(earlier.len(), words).IsTrue() {
+    let below = program_answers_over(buffers, earlier);
+    let below_defines = program_defined_over(buffers, earlier);
+    let arity = linked_arity(earlier, arities.tail());
+    let n = earlier.len();
+    let under = program_linked_where(earlier, arities.tail(), admits, sources, linked.right, buffers);
+    let own = (match last.levels as λ l =>
+        ((c: Answers()) → Answers::Agree(c, sources(buffers), self_table(arity, n, l, arities.nth(0)), admits) → (ws: List<BitVec(64)>) →
+            arity_fits(arities.nth(0), ws.len()).IsTrue() → admits(n, ws) → last.eval_words(c, ws, buffers := buffers) = sources(buffers)(n, ws)) →
+        (rank(words) < l) →
+        last.defined(last.answers_at(below, n, l, buffers), last.defines_at(below, below_defines, n, l, buffers), words, buffers := buffers).IsTrue() {
+        Zero => λ _ never => false_elim(never),
+        Succ(depth) => λ clause lt => last.level_defined_by_rank(buffers, below, below_defines, sources(buffers), arity, admits, n, arities.nth(0), rank,
+            clause, under, Admits, descends, depth + 1, words, admitted, lt),
+    })(linked.left.right(buffers), within);
+    (match n.eq_dec(n) as λ d => (match d as λ _ => Bool {
+            Inl(_) => last.defined(last.answers_at(below, n, last.levels, buffers), last.defines_at(below, below_defines, n, last.levels, buffers),
+                words, buffers := buffers),
+            Inr(_) => below_defines(n, words),
+        }).IsTrue() {
+        Inl(_) => own,
+        Inr(differ) => false_elim(differ(refl)),
+    })
+}
+
+// At more levels: a recursion published at one level, its program given
+// `more + 1`, is defined at every word list of rank at most `more`. The
+// descent is asked of the function as published, over the functions below
+// it at their levels.
+theorem program_defined_deepened_by_rank(last: Function, earlier: List<Function>, arities: List<Nat>, admits: Nat → List<BitVec(64)> → Type,
+    sources: Buffers() → Answers(), linked: program_linked_files(Cons(last, earlier), arities, admits, sources), more: Nat, buffers: Buffers(),
+    rank: List<BitVec(64)> → Nat, Admits: List<BitVec(64)> → Type, level: Nat, leveled: last.levels = level + 1,
+    descends: last.Descends(buffers, program_defined_over(buffers, program_deepened(earlier, more)), earlier.len(), rank,
+        λ (c: Answers()) => Answers::Agree(c, sources(buffers), tie(linked_arity(earlier, arities.tail()), earlier.len(), arities.nth(0)), admits), Admits),
+    words: List<BitVec(64)>, admitted: Admits(words), within: rank(words) <= more):
+    program_defined_over(buffers, program_deepened(Cons(last, earlier), more))(earlier.len(), words).IsTrue() {
+    let deep = last.leveled(more + 1);
+    let under = program_deepened(earlier, more);
+    let relinked: program_linked_files(Cons(deep, under), arities, admits, sources) =
+        j(leveled, λ l _ => program_linked_files(Cons(last.deepened_at(l, more), under), arities, admits, sources),
+            program_linked_files_deepened(Cons(last, earlier), more, arities, admits, sources, linked));
+    let named = j(sym(linked_arity_deepened(earlier, more, arities.tail())), λ t _ =>
+        deep.Descends(buffers, program_defined_over(buffers, under), earlier.len(), rank,
+            λ (c: Answers()) => Answers::Agree(c, sources(buffers), tie(t, earlier.len(), arities.nth(0)), admits), Admits), descends);
+    let counted = j(sym(program_deepened_len(earlier, more)), λ n _ =>
+        deep.Descends(buffers, program_defined_over(buffers, under), n, rank,
+            λ (c: Answers()) => Answers::Agree(c, sources(buffers), tie(linked_arity(under, arities.tail()), n, arities.nth(0)), admits), Admits), named);
+    let there = program_defined_by_rank(deep, under, arities, admits, sources, relinked, buffers, rank, Admits, counted, words, admitted, within);
+    let here = j(program_deepened_len(earlier, more), λ n _ => program_defined_over(buffers, Cons(deep, under))(n, words).IsTrue(), there);
+    j(sym(leveled), λ l _ => program_defined_over(buffers, Cons(last.deepened_at(l, more), under))(earlier.len(), words).IsTrue(), here)
+}
+
+// ---------------------------------------------------------------------------
+// Tests: where every function of a program is defined
+//
+// A function that calls a recursion is defined where its calls stay within
+// the recursion's levels, which is a test of its own arguments. A test per
+// function, `tests`, is sound for a program at `more` levels past each
+// recursion's first when each function is defined on the words that pass
+// its test (`program_within`): a test includes what the function admits. It is proved a function at a
+// time, each over the functions before it: one with no levels by its
+// code's definedness wherever the earlier functions' tests are sound
+// (`program_within_flat`), a recursion by its descent by a rank
+// (`program_within_leveled`).
+
+fn program_within(functions: List<Function>, more: Nat, tests: Defines()) → Type {
+    (f: Nat) → (words: List<BitVec(64)>) → tests(f, words).IsTrue() →
+        program_defined_over(Nil, program_deepened(functions, more), f, words).IsTrue()
+}
+
+theorem program_within_nil(more: Nat, tests: Defines()): program_within(Nil, more, tests) {
+    λ f words _ => trivial
+}
+
+// A program at one of its numbers: the last function's definedness at its
+// own, the earlier functions' at any other.
+theorem program_defined_cons(buffers: Buffers(), last: Function, earlier: List<Function>, f: Nat, words: List<BitVec(64)>,
+    own: f = earlier.len() →
+        last.defined(program_last_answers(buffers, last, earlier), program_last_defines(buffers, last, earlier), words, buffers := buffers).IsTrue(),
+    other: program_defined_over(buffers, earlier, f, words).IsTrue()): program_defined_over(buffers, Cons(last, earlier), f, words).IsTrue() {
+    (match f.eq_dec(earlier.len()) as λ d => (match d as λ _ => Bool {
+            Inl(_) => last.defined(program_last_answers(buffers, last, earlier), program_last_defines(buffers, last, earlier), words, buffers := buffers),
+            Inr(_) => program_defined_over(buffers, earlier, f, words),
+        }).IsTrue() {
+        Inl(e) => own(e),
+        Inr(_) => other,
+    })
+}
+
+// A function with no levels. `part`: its code is defined on the words
+// that pass its test, over any calls that answer the sources and
+// any callees' definedness the earlier functions' tests are sound for.
+theorem program_within_flat(last: Function, earlier: List<Function>, arities: List<Nat>, admits: Nat → List<BitVec(64)> → Type,
+    sources: Buffers() → Answers(), linked: program_linked_files(Cons(last, earlier), arities, admits, sources), more: Nat, tests: Defines(),
+    flat: last.levels = 0,
+    part: (call: Answers()) → Answers::Agree(call, sources(Nil), linked_arity(earlier, arities.tail()), admits) → (below: Defines()) →
+        ((f: Nat) → (ws: List<BitVec(64)>) → tests(f, ws).IsTrue() → below(f, ws).IsTrue()) →
+        (words: List<BitVec(64)>) → tests(earlier.len(), words).IsTrue() → last.defined(call, below, words).IsTrue(),
+    rest: program_within(earlier, more, tests)): program_within(Cons(last, earlier), more, tests) {
+    λ f words test => {
+        let under = program_deepened(earlier, more);
+        let deep = last.deepened(more);
+        program_defined_cons(Nil, deep, under, f, words,
+            λ e => {
+                let at: (f = earlier.len()) = trans(e, program_deepened_len(earlier, more));
+                let below = program_answers_over(Nil, under);
+                let defines = program_defined_over(Nil, under);
+                let relinked = program_linked_files_deepened(earlier, more, arities.tail(), admits, sources, linked.right);
+                let named = j(linked_arity_deepened(earlier, more, arities.tail()), λ t _ => Answers::AgreeWhere(below, sources(Nil), t, admits, defines),
+                    program_linked_where(under, arities.tail(), admits, sources, relinked, Nil));
+                let patched = Answers::patched(below, sources(Nil), defines);
+                let over = part(patched, Answers::patched_agree(below, sources(Nil), linked_arity(earlier, arities.tail()), admits, defines, named), defines, rest,
+                    words, j(at, λ x _ => tests(x, words).IsTrue(), test));
+                let start = Valuation::bind(Valuation::zero(), last.parameters, words);
+                let moved: (last.defined(below, defines, words).IsTrue()) = last.body.defined_where_over(Nil, patched, below, defines, defines,
+                    λ g ws d => sym(Answers::patched_where(below, sources(Nil), defines, g, ws, d)), λ g ws d => d, start, start, λ w id => refl, over);
+                let at_levels = j(sym(flat), λ l _ =>
+                    last.defined(last.answers_at(below, under.len(), l, Nil), last.defines_at(below, defines, under.len(), l, Nil), words).IsTrue(), moved);
+                let same: (deep = last) = j(sym(flat), λ n _ => last.deepened_at(n, more) = last, refl);
+                j(sym(same), λ d _ => d.defined(program_last_answers(Nil, d, under), program_last_defines(Nil, d, under), words).IsTrue(), at_levels)
+            },
+            rest(f, words, test))
+    }
+}
+
+// A recursion, published at one level. `ranked`: its test bounds its rank
+// by `more`; `part`: its code descends by the rank (`Function::Descends`)
+// over any callees' definedness the earlier functions' tests are sound for.
+theorem program_within_leveled(last: Function, earlier: List<Function>, arities: List<Nat>, admits: Nat → List<BitVec(64)> → Type,
+    sources: Buffers() → Answers(), linked: program_linked_files(Cons(last, earlier), arities, admits, sources), more: Nat, tests: Defines(),
+    level: Nat, leveled: last.levels = level + 1, rank: List<BitVec(64)> → Nat, Admits: List<BitVec(64)> → Type,
+    ranked: (words: List<BitVec(64)>) → tests(earlier.len(), words).IsTrue() → Admits(words) ∧ rank(words) <= more,
+    part: (below: Defines()) → ((f: Nat) → (ws: List<BitVec(64)>) → tests(f, ws).IsTrue() → below(f, ws).IsTrue()) →
+        last.Descends(Nil, below, earlier.len(), rank,
+            λ (c: Answers()) => Answers::Agree(c, sources(Nil), tie(linked_arity(earlier, arities.tail()), earlier.len(), arities.nth(0)), admits), Admits),
+    rest: program_within(earlier, more, tests)): program_within(Cons(last, earlier), more, tests) {
+    λ f words test => {
+        let under = program_deepened(earlier, more);
+        let deep = last.deepened(more);
+        program_defined_cons(Nil, deep, under, f, words,
+            λ e => {
+                let at: (f = earlier.len()) = trans(e, program_deepened_len(earlier, more));
+                let facts = ranked(words, j(at, λ x _ => tests(x, words).IsTrue(), test));
+                let whole = program_defined_deepened_by_rank(last, earlier, arities, admits, sources, linked, more, Nil, rank, Admits, level, leveled,
+                    part(program_defined_over(Nil, under), rest), words, facts.left, facts.right);
+                program_defined_last(Nil, deep, under, words,
+                    j(sym(program_deepened_len(earlier, more)), λ n _ => program_defined_over(Nil, Cons(deep, under), n, words).IsTrue(), whole))
+            },
+            rest(f, words, test))
+    }
+}
+
+// One function's part of a program's tests: with the program linked and the
+// tests sound for the functions before it, they are sound with it.
+fn program_within_step(last: Function, earlier: List<Function>, arities: List<Nat>, admits: Nat → List<BitVec(64)> → Type, sources: Buffers() → Answers(),
+    more: Nat, tests: Defines()) → Type {
+    program_linked_files(Cons(last, earlier), arities, admits, sources) → program_within(earlier, more, tests) → program_within(Cons(last, earlier), more, tests)
+}
+
+// A part per function, the last function's first.
+fn program_within_steps(functions: List<Function>, arities: List<Nat>, admits: Nat → List<BitVec(64)> → Type, sources: Buffers() → Answers(),
+    more: Nat, tests: Defines()) → Type {
+    match functions {
+        Nil => True,
+        Cons(last, earlier) => program_within_step(last, earlier, arities, admits, sources, more, tests)
+            ∧ program_within_steps(earlier, arities.tail(), admits, sources, more, tests),
+    }
+}
+
+theorem program_within_of_steps(functions: List<Function>): (arities: List<Nat>) → (admits: Nat → List<BitVec(64)> → Type) →
+    (sources: Buffers() → Answers()) → (more: Nat) → (tests: Defines()) → program_linked_files(functions, arities, admits, sources) →
+    program_within_steps(functions, arities, admits, sources, more, tests) → program_within(functions, more, tests) {
+    match functions {
+        Nil => λ arities admits sources more tests _ _ => program_within_nil(more, tests),
+        Cons(last, earlier) => λ arities admits sources more tests linked steps =>
+            steps.left(linked, program_within_of_steps(earlier, arities.tail(), admits, sources, more, tests, linked.right, steps.right)),
+    }
 }

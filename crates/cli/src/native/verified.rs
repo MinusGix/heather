@@ -142,6 +142,14 @@ pub(super) struct Shape {
     /// `_agrees` and `_returns` take its definedness at their words as a
     /// premise.
     pub leveled: bool,
+    /// Where the generator states such a program defined from its root
+    /// (`{source}::defined_within`): the bound. For a recursion,
+    /// `{source}::measure(a0, …) <= more`, its own measure at most the
+    /// levels past the first; for a function that calls one,
+    /// `{source}::within(more, a0, …).IsTrue()`, its calls within them.
+    /// `_agrees` and `_returns` then take it in place of the definedness,
+    /// and `_defined` states the definedness from it.
+    pub within: Option<String>,
 }
 
 /// The stack a program with a function that calls itself may ask for
@@ -175,6 +183,14 @@ pub(super) struct Entry {
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum Spans { None, Read, Written }
 
+/// How the generator states where a program with a recursion is defined
+/// (docs/native/runtime-fn-recursion-design.md §10.6, §10.7): by the
+/// program itself (`{source}::agrees_where` alone), by the root's measure
+/// (a recursion, `{source}::measure`), or by the root's test of its
+/// arguments (a function that calls one, `{source}::within`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum Bound { Program, Measure, Test }
+
 impl Shape {
     /// The Rust reflector's program, its agreement generated here.
     pub fn reflected(prefix: &str, program: &function_ir_source::ReflectedProgram) -> Shape {
@@ -199,7 +215,7 @@ impl Shape {
             enums: Vec::new(),
             table: String::new(),
             sret: None,
-            leveled: false,
+            leveled: false, within: None,
         }
     }
 
@@ -228,9 +244,11 @@ impl Shape {
     /// `more`, for a program with a function that calls itself: its
     /// recursions run at `more + 1` levels (`program_deepened`), and its
     /// agreement is the generator's at them, where the program is defined
-    /// (`{source}::agrees_where`).
+    /// (`{source}::agrees_where`). `bound`: whether the generator states that
+    /// definedness from the function's measure or its test
+    /// (`{source}::agrees_within`), the agreement's premise then.
     pub fn runtime(prefix: &str, owner: &str, source: &str, functions: usize, params: usize, arity: usize, widths: &[u64], fields: Option<&[(String, u64)]>,
-        enums: &[(usize, u64)], result: Option<u64>, slot: bool, more: Option<u64>) -> Shape {
+        enums: &[(usize, u64)], result: Option<u64>, slot: bool, more: Option<u64>, bound: Bound) -> Shape {
         let parameters = arguments(params);
         let table = format!("{source}::world.tys");
         let narrowed: Vec<String> = parameters.iter().enumerate()
@@ -277,10 +295,38 @@ fn {prefix}_fn{k}() → Function {{ match {prefix}_first_{k}() {{ Nil => Setup::
         }
         let typed = typed_enums(&parameters, enums, &table);
         let words = words_enums(&parameters, enums, &table);
-        let agreement = match more {
+        let within = match (more, bound) {
+            (Some(more), Bound::Measure) => Some(format!("{source}::measure({}) <= {more}", narrowed.join(", "))),
+            (Some(more), Bound::Test) => Some(format!("{source}::within({})", std::iter::once(more.to_string()).chain(narrowed.iter().cloned()).collect::<Vec<_>>().join(", ")) + ".IsTrue()"),
+            _ => None,
+        };
+        // What the bound says, for the certificate's reader.
+        let stated = match (more, bound) {
+            (Some(more), Bound::Test) => format!("the source function's calls stay within {more}, its recursions' levels past the
+// first (`{source}::within`): the generator's theorem, from each function's test of its arguments (`link_defined_within`)."),
+            (Some(more), _) => format!("the source function's measure is at most {more}, its levels past the
+// first: the generator's theorem, from the function's own decrease at each call of itself (`link_defined_within`)."),
+            _ => String::new(),
+        };
+        let agreement = match (more, &within) {
+            // Where the root's bound holds: the generator read each
+            // recursion's decrease off its body, so the program is defined
+            // there (`{source}::defined_within`).
+            (Some(more), Some(bound)) => format!("{evaluable}
+// The program's function {f} is defined wherever {stated}
+theorem {prefix}_defined({typed}{comma}within: {bound}): program_defined({prefix}_program(), {f}, {words}).IsTrue() {{
+    {source}::defined_within({list}{comma}{more}, within)
+}}
+
+// And evaluates to the source function there (`program_eval_deepened_where`).
+theorem {prefix}_agrees({typed}{comma}within: {bound}): program_eval({prefix}_program(), {f}, {words}) = {answer} {{
+    {source}::agrees_within({list}{comma}{more}, within)
+}}
+", evaluable = evaluable_text_over(prefix, &format!("{prefix}_program()"), functions, &format!("{source}::arities"), &format!("{prefix}_outs()"), false),
+                f = functions - 1, list = parameters.join(", "), comma = if parameters.is_empty() { "" } else { ", " }),
             // Where the program is defined at the words: within its
             // levels, which the premise states by the program itself.
-            Some(more) => format!("{evaluable}
+            (Some(more), None) => format!("{evaluable}
 // The program's function {f} evaluates to the source function wherever it is defined, which is where its recursions
 // stay within their levels: the generator's theorem, from each function's `Compile` instance
 // (`program_eval_deepened_where`).
@@ -289,7 +335,7 @@ theorem {prefix}_agrees({typed}{comma}defined: program_defined({prefix}_program(
 }}
 ", evaluable = evaluable_text_over(prefix, &format!("{prefix}_program()"), functions, &format!("{source}::arities"), &format!("{prefix}_outs()"), false),
                 f = functions - 1, list = parameters.join(", "), comma = if parameters.is_empty() { "" } else { ", " }),
-            None => format!("{evaluable}
+            (None, _) => format!("{evaluable}
 
 // The program's function {f} evaluates to the source function: the
 // generator's theorem, from each function's `Compile` instance.
@@ -311,7 +357,7 @@ theorem {prefix}_agrees_also({typed}): program_eval_also({prefix}_program(), {wo
             }),
         };
         if rest.is_some() { definitions.insert_str(0, "import function_ir_writes;\n"); }
-        Shape { functions, root: functions - 1, arity, params, definitions, agreement, answer, on: String::new(), lent: None, marks: None, tables: None, entries: Vec::new(), optimize: false, rest, enums: enums.to_vec(), table: format!("{source}::world.tys"), sret: None, leveled: more.is_some() }
+        Shape { functions, root: functions - 1, arity, params, definitions, agreement, answer, on: String::new(), lent: None, marks: None, tables: None, entries: Vec::new(), optimize: false, rest, enums: enums.to_vec(), table: format!("{source}::world.tys"), sret: None, leveled: more.is_some(), within }
     }
 
     /// A `runtime fn` returning a record of three words or more, exported
@@ -360,7 +406,7 @@ fn {prefix}_fn{k}() → Function {{ match {prefix}_first_{k}() {{ Nil => Setup::
 ", evaluable = evaluable_text_over(prefix, &format!("{prefix}_program()"), m, &format!("Cons({}, {source}::arities)", arity + 1), &format!("Cons(0, {prefix}_outs())"), true),
             quiet = quiet_text_over(&format!("{prefix}_callees"), &format!("{source}::program"), functions));
         Shape { functions: m, root: functions, arity, params: arity, definitions, agreement, answer, on: String::new(), lent: Some((0..m).map(|k| u64::from(k == functions)).collect()), marks: None,
-            tables: None, entries: Vec::new(), optimize: false, rest: Some(rest), enums: Vec::new(), table, sret: Some((more, source.to_string())), leveled: false }
+            tables: None, entries: Vec::new(), optimize: false, rest: Some(rest), enums: Vec::new(), table, sret: Some((more, source.to_string())), leveled: false, within: None }
     }
 
     /// A `runtime fn` that reads spans: its program is lent buffers
@@ -411,7 +457,7 @@ theorem {prefix}_agrees(now: Buffers(), {typed}): program_eval_over(now, {prefix
 }}
 ", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), f = functions - 1,
             list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, params: arity, definitions, agreement, answer, on, lent: Some(counts), marks: None, tables: None, entries: Vec::new(), optimize, rest: None, enums: Vec::new(), table: String::new(), sret: None, leveled: false }
+        Shape { functions, root: functions - 1, arity, params: arity, definitions, agreement, answer, on, lent: Some(counts), marks: None, tables: None, entries: Vec::new(), optimize, rest: None, enums: Vec::new(), table: String::new(), sret: None, leveled: false, within: None }
     }
 
     /// A `runtime fn` that stores into the first span it is lent: its
@@ -488,7 +534,7 @@ theorem {prefix}_runs(span: List<BitVec(8)>, rest: Buffers(), {typed}):
 ", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")),
             within = if tables.is_some() { marked_text(prefix, &stem) } else { within_text(prefix, &stem, functions) }, f = functions - 1,
             list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, params: arity, definitions, agreement, answer, on, lent: Some(counts), marks: Some(marks), tables, entries: Vec::new(), optimize, rest: None, enums: Vec::new(), table: String::new(), sret: None, leveled: false }
+        Shape { functions, root: functions - 1, arity, params: arity, definitions, agreement, answer, on, lent: Some(counts), marks: Some(marks), tables, entries: Vec::new(), optimize, rest: None, enums: Vec::new(), table: String::new(), sret: None, leveled: false, within: None }
     }
 }
 
@@ -612,8 +658,12 @@ fn runtime_shape_of(elab: &Elaborator, prefix: &str, owner: &str, source: &str, 
             // An enum result with its slot in RDX: no names to read.
             let slot = also && result.is_some();
             let fields = if also && !slot { Some(runtime_fields(fork, prefix, source, 2)?) } else { None };
+            // Where the generator states the program defined from its
+            // root: a recursion's measure, or a caller's test.
+            let bound = if elab.qualified_global(&format!("{source}::agrees_within")).is_none() { Bound::Program }
+                else if elab.qualified_global(&format!("{source}::within")).is_some() { Bound::Test } else { Bound::Measure };
             Ok(Shape::runtime(prefix, owner, source, functions as usize, params as usize, arity as usize, widths, fields.as_deref(), &enums, result, slot,
-                leveled.then_some(more)))
+                leveled.then_some(more), bound))
         }
         [functions, arity, ref counts @ ..] if functions >= 1 && spans == Spans::Read && counts.len() == functions as usize =>
             Ok(Shape::runtime_lent(prefix, owner, source, functions as usize, arity as usize, counts.to_vec())),
@@ -1890,10 +1940,21 @@ theorem {prefix}_returns<M>(machine: Machine<M>{comma}{typed}{premise}): {prefix
 {implements}", room = room(f), arguments = parameters.join(", "),
             // A program with a function that calls itself computes it where
             // it is defined: within its levels, a premise.
-            premise = if program.leveled { format!(", defined: program_defined({prefix}_program(), {f}, {list}).IsTrue()") } else { String::new() },
-            defined = if program.leveled { "defined".to_string() }
-                else { format!("program_total_defined({prefix}_program(), Nil, {prefix}_defined_everywhere(), {f}, {list})") },
-            passed = match (program.leveled, parameters.is_empty()) { (false, _) => "", (true, true) => "defined", (true, false) => ", defined" },
+            // Where the generator states it from the root, the premise
+            // is the root's bound: its measure's, or its test.
+            premise = match (&program.within, program.leveled) {
+                (Some(bound), _) => format!(", within: {bound}"),
+                (None, true) => format!(", defined: program_defined({prefix}_program(), {f}, {list}).IsTrue()"),
+                (None, false) => String::new(),
+            },
+            defined = match (&program.within, program.leveled) {
+                (Some(_), _) => format!("{prefix}_defined({}{}within)", parameters.join(", "), if parameters.is_empty() { "" } else { ", " }),
+                (None, true) => "defined".to_string(),
+                (None, false) => format!("program_total_defined({prefix}_program(), Nil, {prefix}_defined_everywhere(), {f}, {list})"),
+            },
+            passed = match (program.leveled, program.within.is_some(), parameters.is_empty()) {
+                (false, _, _) => "", (true, true, true) => "within", (true, true, false) => ", within",
+                (true, false, true) => "defined", (true, false, false) => ", defined" },
             // A function taking an enum is stated at its real values only,
             // each passed as its tag word: `Prog::Implements` is over every
             // word, so it is not stated of one.
