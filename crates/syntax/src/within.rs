@@ -79,7 +79,7 @@ fn wrap_tail_leaves(e: Expr) -> Expr {
             b.result = Box::new(wrap_tail_leaves(*b.result));
             Expr { kind: ExprKind::Block(b), span }
         }
-        ExprKind::Match { form, generated, scrut, eqbind, motive, mut arms } => {
+        ExprKind::Match { form, generated, scrut, eqbind, motive, mut arms, test } => {
             for arm in &mut arms {
                 let arm_span = arm.body.span;
                 let body = std::mem::replace(
@@ -88,7 +88,7 @@ fn wrap_tail_leaves(e: Expr) -> Expr {
                 );
                 arm.body = wrap_tail_leaves(body);
             }
-            Expr { kind: ExprKind::Match { form, generated, scrut, eqbind, motive, arms }, span }
+            Expr { kind: ExprKind::Match { form, generated, scrut, eqbind, motive, arms, test }, span }
         }
         ExprKind::App { head, mut args, named, explicit, goal_oriented } => {
             // Already wrapped in `Pointed::ret`: keep as-is.
