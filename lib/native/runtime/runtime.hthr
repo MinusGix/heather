@@ -231,8 +231,6 @@ fn Tm::judge_in(self t: Tm, sigs: List<Sig>, tys: Table, pass: Bool) → Verdict
 // What the default setup lowers (as a value, outside every loop's pass).
 fn Tm::judge(self t: Tm, sigs: List<Sig>, tys: Table) → Verdict { t.judge_in(sigs, tys, False) }
 
-
-
 // A loop's pass: calls of itself only in tail position.
 fn Tm::judge_tail(self t: Tm, sigs: List<Sig>, tys: Table) → Verdict {
     match t {

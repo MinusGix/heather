@@ -4139,8 +4139,6 @@ theorem Tm::sem_in_unlabelled(self t: Tm, w: World, l1, l2: Tm::Label(w.tys)): t
     }
 }
 
-
-
 // ---------------------------------------------------------------------------
 // Soundness.
 
@@ -7146,7 +7144,6 @@ theorem Ty::out_pieces(tys: Table, call: function_ir_eval::Answers(), buffers: B
 // in order; the last is variable 0, so the context's ports are the ids
 // reversed, and the body takes fresh ids above them.
 
-
 fn Fun::context(self f: Fun) → List<Ty> { Ty::bind_onto(f.params, Nil) }
 
 fn Fun::word_ids(tys: Table, ps: List<Ty>, m: Nat) → List<Nat> {
@@ -7287,7 +7284,6 @@ theorem Ty::curry_answers(tys: Table, r: Ty, ps: List<Ty>): (g: List<Ty>) → (e
     }
 }
 
-
 theorem Fun::bound_frame(values, after: Valuation(), ids: List<Nat>): (xs: List<BitVec(64)>) →
     ((id: Nat) → Mem(id, ids) → after(64, id) = values(64, id)) → Fun::BoundWords(values, ids, xs) → Fun::BoundWords(after, ids, xs) {
     match ids {
@@ -7416,8 +7412,6 @@ theorem Fun::word_ids_below(tys: Table, ps: List<Ty>): (m, id: Nat) → Mem(id, 
         },
     }
 }
-
-
 
 // What binding a parameter's words at its own ids leaves: the code's
 // value, read off the words, held at its port, and its ports below the

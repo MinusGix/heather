@@ -386,7 +386,6 @@ theorem Tm::tail_sound(self t: Tm, w: World, skip: Nat, res: Ty, er: res.OneWord
     }
 }
 
-
 // ---------------------------------------------------------------------------
 // A loop whose passes are below a bound: `loop_eval_agrees`, with each pass
 // told it is one of at most `bound` (a fuel recursion's pass holds its fuel
@@ -480,7 +479,6 @@ fn Ty::uncurry(tys: Table, ps: List<Ty>, r: Ty) → Ty::Arrows(tys, ps, r) → L
 fn Fun::post(x, rr, o0: Nat, exhausted: StructuredRegion) → StructuredRegion {
     branch(x, Ports([Port(rr, 64)]), exhausted, nodes_region([Move(64, rr, o0)]))
 }
-
 
 // Leaving: the outputs are the kept words `ko` and then the moved ones, of
 // which the first, at `o0`, is the result.
@@ -879,8 +877,6 @@ fn Fun::MeasuredHolds(ws: List<Ty>, res: Ty, w: World, h: Ty::Arrows(w.tys, ws, 
             (res.OneWord(w.tys) ∧ (code.also = Nil)),
     }
 }
-
-
 
 // What a pass leaves moves with its continuation, pointwise: `simp` crosses
 // the continuation's `λ` by it.
@@ -1309,7 +1305,6 @@ fn Tm::params_vars(n: Nat) → List<Nat> { List::range(n).rev() }
 fn Ty::all_word64(ts: List<Ty>) → Bool {
     match ts { Nil => True, Cons(t, rest) => t.same(Word(64)) && Ty::all_word64(rest) }
 }
-
 
 fn Fun::shape_words(p: Ty, rest: List<Ty>, body: Tm) → RtShape {
     match p {
