@@ -214,7 +214,8 @@ Not stated: the link over a divisor that is not a literal, `x = q * d + r`,
 which is a product of two atoms. `omega` would keep `q * d` as an atom of
 its own, so it would serve only a goal that spells that product over Nat;
 a goal over words spells it `x / d * d`, a multiplication of words, which
-the walk does not take apart.
+the walk does not take apart. `omega` itself reads Nat `%` and `/` only at
+a literal divisor (issues/omega-nonliteral-div-mod-facts.md).
 
 ## 4. Scope
 
