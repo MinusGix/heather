@@ -471,6 +471,10 @@ negative control whose one arm does not lower the measure). Still refused:
 a loop written in place takes only 64-bit words beside its span, so a `u8`
 key (`port_count_clear`, `port_find_while`) keeps the loop lifted
 (`issues/runtime-repr-narrow-words.md`); `break` and `return` in a `for`.
+And `compile-x86` exports a `mut self` function only where its program
+marks its span written, so one that only reads its span (the adopted
+span's loop, or any `mut self` function that stores nothing) is checked
+and published but not exported to x86 (`crates/cli/src/native/verified.rs`).
 
 ### 6.5 What is left of round 3, and its fork
 
