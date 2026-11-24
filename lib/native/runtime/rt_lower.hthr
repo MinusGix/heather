@@ -1733,6 +1733,41 @@ fn Ty::Alike(tys: Table, ps: List<Ty>, r: Ty) → Ty::Arrows(tys, ps, r) → Ty:
     }
 }
 
+// Every function is alike itself: the pin of a function whose body is its
+// reflection's meaning, checked against `Setup::Pinned` by conversion.
+theorem Ty::alike_refl(tys: Table, ps: List<Ty>, r: Ty): (v: Ty::Arrows(tys, ps, r)) → Ty::Alike(tys, ps, r, v, v) {
+    match ps {
+        Nil => λ v => refl,
+        Cons(p, rest) => λ v a => Ty::alike_refl(tys, rest, r, v(a)),
+    }
+}
+
+// Curried functions to any result `R`, alike at every argument: the pin of
+// a function over a span (`FFun::Pinned`), whose result is not a code.
+fn Ty::AlikeTo(tys: Table, ps: List<Ty>, R: Type) → Ty::ArrowsTo(tys, ps, R) → Ty::ArrowsTo(tys, ps, R) → Type {
+    match ps {
+        Nil => λ v u => v = u,
+        Cons(p, rest) => λ v u => (a: p.sem(tys)) → Ty::AlikeTo(tys, rest, R, v(a), u(a)),
+    }
+}
+
+theorem Ty::alike_to_refl(tys: Table, ps: List<Ty>, R: Type): (v: Ty::ArrowsTo(tys, ps, R)) → Ty::AlikeTo(tys, ps, R, v, v) {
+    match ps {
+        Nil => λ v => refl,
+        Cons(p, rest) => λ v a => Ty::alike_to_refl(tys, rest, R, v(a)),
+    }
+}
+
+// Two functions equal are alike: a pin proved as an equation of functions
+// (a function written out over its bytes, `runtime`'s `SpanWritten`) read
+// pointwise.
+theorem Ty::alike_to_of_eq(tys: Table, ps: List<Ty>, R: Type): (v, u: Ty::ArrowsTo(tys, ps, R)) → v = u → Ty::AlikeTo(tys, ps, R, v, u) {
+    match ps {
+        Nil => λ v u e => e,
+        Cons(p, rest) => λ v u e a => Ty::alike_to_of_eq(tys, rest, R, v(a), u(a), cong_fn(λ (g: Ty::ArrowsTo(tys, Cons(p, rest), R)) => g(a), e)),
+    }
+}
+
 // What answers every word like one of them answers them like the other.
 theorem Ty::answers_words_alike(tys: Table, ps: List<Ty>, r: Ty): (v, u: Ty::Arrows(tys, ps, r)) → (ans: List<BitVec(64)> → List<BitVec(64)>) →
     Ty::Alike(tys, ps, r, v, u) → Ty::AnswersWords(tys, ps, r, u, ans) → Ty::AnswersWords(tys, ps, r, v, ans) {

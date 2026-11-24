@@ -509,18 +509,6 @@ fn World::fixed(self w: World) → (b: Buffers()) → Sig::Sems(w.tys, w.sigs) {
 // a theorem: `retype` along it must compute.
 fn Setup::typed_refl<F>(f: F) → (b: Buffers()) → Itself(F) = Itself(F) { λ _ => refl }
 
-// `x = x` at every file: the pin of a function lent nothing, spelled with
-// no binder.
-theorem Setup::at_every<A>(x: A): (b: Buffers()) → x = x { λ _ => refl }
-
-// The same for a function lent spans: it at each file, spelled with no
-// binder.
-theorem Setup::lent_every<F>(f: F, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), lent: Nat, ps: List<Ty>, r: Ty,
-    typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(w.at(callees, b).tys, lent, ps, r))):
-    (b: Buffers()) → Ty::lent_at(w.at(callees, b).tys, lent, ps, r, typed(b), f, b) = Ty::lent_at(w.at(callees, b).tys, lent, ps, r, typed(b), f, b) {
-    λ _ => refl
-}
-
 // `Itself(F) = Itself(F)` at no file: `typed` for a table's entry, which
 // is stated before its world is.
 fn Setup::typed_once<F>(f: F) → Itself(F) = Itself(F) { refl }
@@ -536,13 +524,35 @@ fn Setup::lent_callees<F>(f: F, tys: Table, lent: Nat, ps: List<Ty>, r: Ty, type
     λ b => Pair(Ty::lent_at(tys, lent, ps, r, typed, f, b), rest(b))
 }
 
-// A runtime fn's instance, from its reflection: the default setup's code
+// The pin of a runtime fn: it and its reflection's meaning alike at every
+// argument, over every file (docs/language/loop-combinator-design.md §6.5).
+// It is the only pin. Where `f`'s body is the reflection's meaning it is
+// `Setup::alike_every`, which the kernel checks by conversion (the
+// reflection's meaning unfolds to `f`'s body node for node,
+// docs/native/runtime-fn-setups-design.md §4.3). Where `f` calls itself and
+// is its own callee (`Fun::own_callee`), the meaning answers the call of
+// itself with the function, so this is the function's unfolding equation,
+// which a function that `decreases` has at each argument and not as a
+// function.
+fn Setup::Pinned<F>(f: F, rt: Fun, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs),
+    typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(w.at(callees, b).tys, rt.lent, rt.params, rt.result))) → Type {
+    (b: Buffers()) → Ty::Alike(w.at(callees, b).tys, rt.params, rt.result,
+        Ty::lent_at(w.at(callees, b).tys, rt.lent, rt.params, rt.result, typed(b), f, b), rt.meaning(w.at(callees, b)))
+}
+
+// The pin of a function whose body is its reflection's meaning: it alike
+// itself at each file's spans, spelled with no binder.
+theorem Setup::alike_every<F>(f: F, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), lent: Nat, ps: List<Ty>, r: Ty,
+    typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(w.at(callees, b).tys, lent, ps, r))):
+    (b: Buffers()) → Ty::Alike(w.at(callees, b).tys, ps, r, Ty::lent_at(w.at(callees, b).tys, lent, ps, r, typed(b), f, b),
+        Ty::lent_at(w.at(callees, b).tys, lent, ps, r, typed(b), f, b)) {
+    λ b => Ty::alike_refl(w.at(callees, b).tys, ps, r, Ty::lent_at(w.at(callees, b).tys, lent, ps, r, typed(b), f, b))
+}
+
+// A runtime fn's agreement, from its reflection: the default setup's code
 // and the agreement `Setup::code_answers` gives at each file, carried to
-// `f` along the pin and to the one code along `static`. At a runtime fn
-// `typed` and `pinned` are both `refl`, which the kernel checks by
-// conversion (the reflection's meaning unfolds to `f`'s body node for node,
-// docs/native/runtime-fn-setups-design.md §4.3), and `ok` and `plain` are
-// evaluation, once, at `w`.
+// `f` along the pin and to the one code along `static`. `ok` and `plain`
+// are evaluation, once, at `w`.
 //
 // The agreement is a theorem of its own, stated as the class states it: a
 // generated instance is checked with `Setup::compile` unfolded at the
@@ -550,63 +560,7 @@ fn Setup::lent_callees<F>(f: F, tys: Table, lent: Nat, ps: List<Ty>, r: Ty, type
 // application whose statement is the field's type letter for letter, where
 // the proof spelled in place would have the kernel compare the reflection's
 // code at two spellings of one world.
-theorem Setup::plain_agrees<F>(f: F, s: Setup, rt: Fun, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs),
-    typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(w.at(callees, b).tys, rt.lent, rt.params, rt.result)),
-    pinned: (b: Buffers()) → Ty::lent_at(w.at(callees, b).tys, rt.lent, rt.params, rt.result, typed(b), f, b) = rt.meaning(w.at(callees, b)),
-    ok: s.checked(rt, w) = True, plain: rt.shape() = Plain):
-    (b: Buffers()) → (call: Answers()) → Tm::CallsAgree(w.at(callees, b), call) →
-    Ty::AnswersWords(w.at(callees, b).tys, rt.params, rt.result, Ty::lent_at(w.at(callees, b).tys, rt.lent, rt.params, rt.result, typed(b), f, b),
-        λ xs => s.code(rt, w).eval_words(call, xs, buffers := b)) {
-    λ b call agree =>
-        j(sym(pinned(b)), λ g _ => Ty::AnswersWords(w.at(callees, b).tys, rt.params, rt.result, g, λ xs => s.code(rt, w).eval_words(call, xs, buffers := b)),
-            j(s.static(rt, w, callees(b), b), λ r _ => Ty::AnswersWords(w.at(callees, b).tys, rt.params, rt.result, rt.meaning(w.at(callees, b)),
-                    λ xs => Setup::code_of(r).eval_words(call, xs, buffers := b)),
-                Setup::code_answers(s, rt, w.at(callees, b),
-                    Setup::lowered_over(s, rt, w, callees(b), b, Setup::checked_lowered(s, rt, w, ok)), plain, call, agree)))
-}
-
-// The words past the first a plain function's code returns
-// (`Function::eval_also`): the meaning's (`Ty::rest_words`), read off every
-// word (`Ty::answers_words_also`). What `f::agrees_also` cites.
-theorem Setup::plain_agrees_also<F>(f: F, rt: Fun, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs),
-    typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(w.at(callees, b).tys, rt.lent, rt.params, rt.result)),
-    pinned: (b: Buffers()) → Ty::lent_at(w.at(callees, b).tys, rt.lent, rt.params, rt.result, typed(b), f, b) = rt.meaning(w.at(callees, b)),
-    ok: Setup::default().checked(rt, w) = True, plain: rt.shape() = Plain):
-    (b: Buffers()) → (call: Answers()) → Tm::CallsAgree(w.at(callees, b), call) →
-    Ty::AnswersAlso(w.at(callees, b).tys, rt.params, rt.result, Ty::lent_at(w.at(callees, b).tys, rt.lent, rt.params, rt.result, typed(b), f, b),
-        λ xs => Setup::default().code(rt, w).eval_also(call, xs, buffers := b)) {
-    λ b call agree => Ty::answers_words_also(w.at(callees, b).tys, rt.params, rt.result,
-        Ty::lent_at(w.at(callees, b).tys, rt.lent, rt.params, rt.result, typed(b), f, b),
-        λ xs => Setup::default().code(rt, w).eval_words(call, xs, buffers := b),
-        Setup::plain_agrees(f, Setup::default(), rt, w, callees, typed, pinned, ok, plain, b, call, agree))
-}
-
-// `f` comes after the reflection and the table. Two instances met in a link
-// are two applications of this function, which the kernel compares argument
-// by argument before it unfolds either: two different functions are then
-// told apart at their reflections, which are data, and the functions
-// themselves are never compared (issues/runtime-link-compares-functions.md).
-fn Setup::compile<F>(s: Setup, rt: Fun, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), f: F,
-    typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(w.at(callees, b).tys, rt.lent, rt.params, rt.result)),
-    pinned: (b: Buffers()) → Ty::lent_at(w.at(callees, b).tys, rt.lent, rt.params, rt.result, typed(b), f, b) = rt.meaning(w.at(callees, b)),
-    ok: s.checked(rt, w) = True, plain: rt.shape() = Plain) → Compile<F>(f)
-{
-    Compile(rt, w, callees, typed, s.code(rt, w), Setup::plain_agrees(f, s, rt, w, callees, typed, pinned, ok, plain), Setup::checked_fits(s, rt, w, ok))
-}
-
-// The pin of a function that calls itself and is its own callee
-// (`Fun::own_callee`): it and its reflection's meaning alike at every
-// argument, over every file. The meaning answers the call of itself with
-// the function, so this is the function's unfolding equation, which a
-// function that `decreases` has at each argument and not as a function.
-fn Setup::Pinned<F>(f: F, rt: Fun, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs),
-    typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(w.at(callees, b).tys, rt.lent, rt.params, rt.result))) → Type {
-    (b: Buffers()) → Ty::Alike(w.at(callees, b).tys, rt.params, rt.result,
-        Ty::lent_at(w.at(callees, b).tys, rt.lent, rt.params, rt.result, typed(b), f, b), rt.meaning(w.at(callees, b)))
-}
-
-// `Setup::plain_agrees` from that pin.
-theorem Setup::recursive_agrees<F>(f: F, s: Setup, rt: Fun, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs),
+theorem Setup::agrees<F>(f: F, s: Setup, rt: Fun, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs),
     typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(w.at(callees, b).tys, rt.lent, rt.params, rt.result)),
     pinned: Setup::Pinned(f, rt, w, callees, typed),
     ok: s.checked(rt, w) = True, plain: rt.shape() = Plain):
@@ -623,17 +577,37 @@ theorem Setup::recursive_agrees<F>(f: F, s: Setup, rt: Fun, w: World, callees: (
                     Setup::lowered_over(s, rt, w, callees(b), b, Setup::checked_lowered(s, rt, w, ok)), plain, call, agree)))
 }
 
-// The instance of a function that calls itself, from its reflection as its
-// own callee. Its agreement is `Setup::compile`'s, at any calls that answer
-// its table: one entry of which is the function, so a program that links
-// its code gives it levels (`Compile::linked_self`) and answers as it only
-// where defined (`program_linked_where`).
-fn Setup::compile_recursive<F>(s: Setup, rt: Fun, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), f: F,
+// The words past the first a plain function's code returns
+// (`Function::eval_also`): the meaning's (`Ty::rest_words`), read off every
+// word (`Ty::answers_words_also`).
+theorem Setup::agrees_also<F>(f: F, rt: Fun, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs),
+    typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(w.at(callees, b).tys, rt.lent, rt.params, rt.result)),
+    pinned: Setup::Pinned(f, rt, w, callees, typed),
+    ok: Setup::default().checked(rt, w) = True, plain: rt.shape() = Plain):
+    (b: Buffers()) → (call: Answers()) → Tm::CallsAgree(w.at(callees, b), call) →
+    Ty::AnswersAlso(w.at(callees, b).tys, rt.params, rt.result, Ty::lent_at(w.at(callees, b).tys, rt.lent, rt.params, rt.result, typed(b), f, b),
+        λ xs => Setup::default().code(rt, w).eval_also(call, xs, buffers := b)) {
+    λ b call agree => Ty::answers_words_also(w.at(callees, b).tys, rt.params, rt.result,
+        Ty::lent_at(w.at(callees, b).tys, rt.lent, rt.params, rt.result, typed(b), f, b),
+        λ xs => Setup::default().code(rt, w).eval_words(call, xs, buffers := b),
+        Setup::agrees(f, Setup::default(), rt, w, callees, typed, pinned, ok, plain, b, call, agree))
+}
+
+// `f` comes after the reflection and the table. Two instances met in a link
+// are two applications of this function, which the kernel compares argument
+// by argument before it unfolds either: two different functions are then
+// told apart at their reflections, which are data, and the functions
+// themselves are never compared (issues/runtime-link-compares-functions.md).
+// A function that calls itself and is its own callee is compiled here too:
+// one entry of its table is the function, so a program that links its code
+// gives it levels (`Compile::linked_self`) and answers as it only where
+// defined (`program_linked_where`).
+fn Setup::compile<F>(s: Setup, rt: Fun, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), f: F,
     typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(w.at(callees, b).tys, rt.lent, rt.params, rt.result)),
     pinned: Setup::Pinned(f, rt, w, callees, typed),
     ok: s.checked(rt, w) = True, plain: rt.shape() = Plain) → Compile<F>(f)
 {
-    Compile(rt, w, callees, typed, s.code(rt, w), Setup::recursive_agrees(f, s, rt, w, callees, typed, pinned, ok, plain), Setup::checked_fits(s, rt, w, ok))
+    Compile(rt, w, callees, typed, s.code(rt, w), Setup::agrees(f, s, rt, w, callees, typed, pinned, ok, plain), Setup::checked_fits(s, rt, w, ok))
 }
 
 // A fuel recursion's instance (design §16.11): no pin (the function at an
@@ -2770,7 +2744,7 @@ fn runtime_local_types(xs: List<LocalRef>) → Tac<List<Handle>> {
 // its step at `f`, which is what the reflection's meaning unfolds to, its
 // call of itself answered by the function.
 fn runtime_own_instance(name: String, f: GlobalRef, rfun: Fun, setup, world_e, table_e, rt_e: Expr) → Tac<Expr> {
-    let compile <- runtime_global(name_of(Setup::compile_recursive));
+    let compile <- runtime_global(name_of(Setup::compile));
     let pinned_g <- runtime_global(name_of(Setup::Pinned));
     let rfl <- runtime_global("tactic::rfl");
     let typed_refl <- runtime_global(name_of(Setup::typed_refl));
@@ -2826,16 +2800,12 @@ fn runtime_instance(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes, 
     let verdict <- runtime_verdict();
     let shapes <- runtime_type_of(name_of(runtime_w_shape)).bind(λ h => runtime_ctors_at(h));
     let typed = ap(typed_refl, [Blank, Global(f)]);
-    let at_every <- runtime_global(name_of(Setup::at_every));
-    let lent_every <- runtime_global(name_of(Setup::lent_every));
+    let alike_every <- runtime_global(name_of(Setup::alike_every));
     match rfun.shape() {
         Plain => runtime_global(name_of(Setup::compile)).bind(λ compile => {
             // The pin: the function itself at every file, or it at each
             // file's spans.
-            let pinned: Expr = match rfun.lent {
-                Zero => ap(at_every, [Blank, Global(f)]),
-                Succ(_) => ap(lent_every, [Blank, Global(f), world_e, table_e, NatLit(rfun.lent), Ty::quotes(rfun.params, q), Ty::quote(rfun.result, q), typed]),
-            };
+            let pinned: Expr = ap(alike_every, [Blank, Global(f), world_e, table_e, NatLit(rfun.lent), Ty::quotes(rfun.params, q), Ty::quote(rfun.result, q), typed]);
             pure(ap(compile, [Blank, setup, rt_e, world_e, table_e, Global(f), typed, pinned, verdict, ap(rfl, [Blank, runtime_at(shapes, 0)])]))
         }),
         Fuel(w0, wrest, zero, succ) => match rfun.body {
@@ -5394,9 +5364,16 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
     };
     let code_e <- code;
     let instance: Tac<Expr> = match measured {
-        False => runtime_span_ref("runtime_file::FFun::compile").bind(λ compile =>
+        False => runtime_span_ref("runtime_file::FFun::source_alike").bind(λ source_alike =>
+            runtime_span_ref("runtime_file::FFun::pinned_of_eq").bind(λ pinned_of_eq =>
+            runtime_span_ref("runtime_file::FFun::compile").bind(λ compile =>
             pure(ap(compile, [ft_e, rt_e, world_e, reads_e, fsigs_e, writes_e, fe, e.typed,
-                match out { None => ap(every, [ft_e, fe, tys_e, NatLit(lent), params_e, res_e, e.typed]), Some(o) => o.pinned }, verdict]))),
+                match out {
+                    None => ap(source_alike, [ft_e, fe, tys_e, NatLit(lent), params_e, res_e, e.typed]),
+                    // A function written out is pinned as an equation at
+                    // each rest of the file and span, read pointwise.
+                    Some(o) => ap(pinned_of_eq, [ft_e, fe, rt_e, world_e, reads_e, fsigs_e, writes_e, e.typed, o.pinned]),
+                }, verdict]))))),
         True => match out {
             None => runtime_span_measured(name, f, q, ts, e, body_e, rfun.params, rfun.result, lent),
             // A loop written out: the passes its code counts.

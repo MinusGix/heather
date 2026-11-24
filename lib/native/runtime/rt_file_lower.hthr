@@ -69,6 +69,20 @@ fn FTm::Answers(tys: Table, ps: List<Ty>, r: Ty, rest: List<List<BitVec(8)>>)
     }
 }
 
+// What answers like one of two functions alike at every argument answers
+// like the other: the one congruence the span route's pin needs
+// (docs/language/loop-combinator-design.md §6.5).
+theorem FTm::answers_alike(tys: Table, ps: List<Ty>, r: Ty, rest: List<List<BitVec(8)>>):
+    (v, u: Ty::ArrowsTo(tys, ps, Mutated<List<BitVec(8)>, r.sem(tys)>)) → (ans: List<BitVec(64)> → Ending) →
+    Ty::AlikeTo(tys, ps, Mutated<List<BitVec(8)>, r.sem(tys)>, v, u) → FTm::Answers(tys, ps, r, rest, u, ans) → FTm::Answers(tys, ps, r, rest, v, ans) {
+    match ps {
+        Nil => λ v u ans same h => trans(h, cong_fn(λ (m: Mutated<List<BitVec(8)>, r.sem(tys)>) => FTm::ended(tys, r, rest, m), sym(same))),
+        Cons(p, more) => λ v u ans same h x =>
+            FTm::answers_alike(tys, more, r, rest, v(Ty::cast(tys, Word(64), p, x)), u(Ty::cast(tys, Word(64), p, x)), λ ws => ans(Cons(x, ws)),
+                same(Ty::cast(tys, Word(64), p, x)), h(x)),
+    }
+}
+
 // `call` answers the program: over every file `Cons(own, rest)`, the pure
 // functions with their meanings there, leaving it, and each computation of
 // a word signature with its meaning from `own`, at every rest of a file

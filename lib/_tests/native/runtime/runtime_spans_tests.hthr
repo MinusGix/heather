@@ -43,10 +43,11 @@ fn peek_rt() → Fun { Fun([Word(64), Word(64), Word(64)], Word(64), Let(Byte(0,
 
 fn peek_base() → World { World(Table::none(), [], trivial) }
 
-// The instance. The pin is `refl` at every file: the reflection's meaning
-// at the file `f` reads `f`'s span 0, which is what `peek` is handed.
+// The instance. The pin is `refl` at every file and every argument: the
+// reflection's meaning at the file `f` reads `f`'s span 0, which is what
+// `peek` is handed.
 fn peek_compile() → Compile<List<BitVec(8)> → BitVec(64) → BitVec(64) → BitVec(64)>(peek) {
-    Setup::compile(Setup::default(), peek_rt(), peek_base(), peek_base().fixed(), peek, λ f => refl, λ f => refl, refl, refl)
+    Setup::compile(Setup::default(), peek_rt(), peek_base(), peek_base().fixed(), peek, λ f => refl, λ f a b c => refl, refl, refl)
 }
 
 instance Compile<List<BitVec(8)> → BitVec(64) → BitVec(64) → BitVec(64)>(peek) {
