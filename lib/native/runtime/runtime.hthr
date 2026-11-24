@@ -221,6 +221,8 @@ fn Tm::judge(self t: Tm, sigs: List<Sig>, tys: Table) → Verdict {
         // A `while` loop: its state and the context it reads are carried
         // as words (`Tm::lower_iterate`).
         Iterate(_, test, body) => test.judge(sigs, tys).and(body.judge(sigs, tys)),
+        Again(_, _) => Refused("going round a loop outside a loop's pass"),
+        Loop(_, _) => Refused("a loop that answers a value: its lowering is not built yet (docs/language/loop-combinator-design.md §6.7)"),
     }
 }
 
@@ -243,6 +245,8 @@ fn Tm::judge_tail(self t: Tm, sigs: List<Sig>, tys: Table) → Verdict {
         Inject(i, k, args) => Inject(i, k, args).judge(sigs, tys),
         Slot(i, j, of) => Slot(i, j, of).judge(sigs, tys),
         Iterate(init, test, body) => Iterate(init, test, body).judge(sigs, tys),
+        Again(r, args) => Tm::Again(r, args).judge(sigs, tys),
+        Loop(inits, body) => Tm::Loop(inits, body).judge(sigs, tys),
     }
 }
 
@@ -1945,6 +1949,8 @@ fn Tm::quote(self t: Tm, q: RtQ) → Expr {
         Inject(i, k, args) => ap(runtime_at(q.tm, 13), [NatLit(i), NatLit(k), q.nat_list(args)]),
         Slot(i, j, of) => ap(runtime_at(q.tm, 14), [NatLit(i), NatLit(j), NatLit(of)]),
         Iterate(init, test, body) => ap(runtime_at(q.tm, 15), [NatLit(init), test.quote(q), body.quote(q)]),
+        Again(res, args) => ap(runtime_at(q.tm, 16), [Ty::quote(res, q), q.nat_list(args)]),
+        Loop(inits, body) => ap(runtime_at(q.tm, 17), [q.nat_list(inits), body.quote(q)]),
     }
 }
 

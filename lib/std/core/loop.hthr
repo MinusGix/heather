@@ -294,6 +294,14 @@ theorem Loop::steps_stays<S>(self l: Loop<S, S>, step: S → Step<S>, same: (s: 
     }
 }
 
+// A recursion given `fuel` rounds, as a loop that answers a value runs
+// (`rt::Tm`'s `Loop` node, docs/language/loop-combinator-design.md §6.7):
+// each round is `F` with its recursion the run one round fewer, and past
+// the last `stuck` answers.
+fn Loop::rounds<A, B>(fuel: Nat, F: (A → B) → A → B, stuck: A → B, a: A) → B {
+    match fuel { Zero => stuck(a), Succ(k) => F(λ (b: A) => Loop::rounds(k, F, stuck, b), a) }
+}
+
 // A step's state read through `f`.
 fn Step::map<S, T>(f: S → T, self q: Step<S>) → Step<T> {
     match q { Next(s) => Next(f(s)), Stop(s) => Stop(f(s)) }

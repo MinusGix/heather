@@ -701,6 +701,59 @@ So 3g is mostly moving, not building:
 The one genuinely new proof is step 1's loop over passes with an answer
 leaf, which `iterate_holds` gives the shape of.
 
+**Accepted (Minus, 2026-11-24).** `Tm::lower_tail` and `Tm::tail_sound`
+stay, renamed `Tm::lower_pass` and `Tm::pass_sound`, as the node's pass.
+What 3h deletes is tail mode as a mode of a whole function: the `Measured`
+shape, `Fun::Guarded`, `rt_loop`'s two loop theorems and the measured
+`FFun` path.
+
+**What building it found (3g, 2026-11-24).** Four things the plan above
+did not see, from reading the code the node has to sit in:
+
+1. **The node's meaning cannot call `tail_sem`.** `Tm::tail_sem` is
+   defined over `Tm::sem` (a leaf's value is `Tm::sem` of it), so
+   `Tm::sem`'s own case for the node cannot be written through it: the
+   two would recurse into each other across modules, and the node's body
+   is not a direct subterm of `tail_sem`'s leaves. The term language needs
+   what a denotational semantics of loops with labels has: the meaning of
+   a term *under the continuation of the innermost loop around it*.
+   `Tm::sem_in(t, w, lab)` is that meaning (`Again(res, ā)` answers
+   `lab(res, ā's words)`), and `Tm::sem(t, w)` is `t.sem_in(w,
+   Tm::no_label(w.tys))`, so every existing statement about `Tm::sem`
+   still holds by conversion. A structural recursion may pass a changed
+   argument to its recursive call inside a function it hands a combinator
+   (a loop's body read under a new label), which is what the node's case
+   does. The label is a separate argument, not a field of `World`: a
+   term's code (`Tm::ty`) must not depend on it, or every statement about
+   a loop body's meaning would be between two types.
+2. **Running out of passes cannot answer the state.** `Iterate`'s stop
+   answers the state, so a loop out of fuel answers what a stop would, and
+   a measure at most the fuel suffices (`Loop::steps_stays`). A `Done(e)`
+   leaf answers a value the state does not hold, so the fixpoint pin needs
+   the measure *below* the fuel, and a word's `toNat` reaches `2^64 - 1`,
+   the passes a FunctionIR loop can count. The measured route meets the
+   same edge with one more pass after the loop is exhausted
+   (`Fun::meas_tail2`); the node does the same (its meaning's out-of-fuel
+   answer is one more pass), which lowers the pass twice. A loop node in a
+   pass's second copy is copied again, so code grows exponentially in the
+   nesting of answering loops; a `while` (whose stops answer the state)
+   needs no second copy.
+3. **The first customers are not on the `Tm` route.**
+   `Bytes::port_set_insert` is a span function (`FFun`, its tail call
+   lowered by `rt_file_loop`'s measured path) and `WordMap::insert_at`
+   (and the ports' `WordMap` probes) are laid-record functions whose tail
+   pass is `rt_held_loop`'s. A node in `Tm` serves neither: they need the
+   node in `FTm`, which is round 4's work (§8). On the `Tm` route, the
+   written tail recursions are word functions (`count_down`, `rsum_from`,
+   `doubled`, `i64_sum_down` in `lib/_tests/native/runtime/`), and those
+   are the node's first customers.
+4. **The state is words, at first.** Tail mode's pass moves one word per
+   argument and leaves one word; `Iterate` carries a record of words as its
+   cells. The node starts with tail mode's shape (each state variable and
+   the result held in one word), which is every written tail recursion on
+   the `Tm` route; a `while` over a record state moves onto it when the
+   pass moves cells, and until then stays on `Iterate`.
+
 ## 7. Bootstrapping
 
 Minus's fear: a bug that infects the next version. The loop's meaning is

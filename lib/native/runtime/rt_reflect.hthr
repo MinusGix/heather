@@ -2820,6 +2820,8 @@ fn Tm::show(self t: Tm) → String {
         Inject(i, k, args) => "Inject(" ++ rt_nat(i) ++ ", " ++ rt_nat(k) ++ ", [" ++ rt_nats(args) ++ "])",
         Slot(i, j, of) => "Slot(" ++ rt_nat(i) ++ ", " ++ rt_nat(j) ++ ", " ++ rt_nat(of) ++ ")",
         Iterate(init, test, body) => "Iterate(" ++ rt_nat(init) ++ ", " ++ test.show() ++ ", " ++ body.show() ++ ")",
+        Again(res, args) => "Again(" ++ res.show() ++ ", [" ++ rt_nats(args) ++ "])",
+        Loop(inits, body) => "Loop([" ++ rt_nats(inits) ++ "], " ++ body.show() ++ ")",
     }
 }
 
