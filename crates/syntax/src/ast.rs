@@ -698,7 +698,31 @@ pub struct Param {
     ///
     /// `None` for every parameter written before this grammar existed.
     pub symbol: Option<String>,
+    /// How the caller's argument is accessed (docs/language/ownership-design.md
+    /// §10.3): owned (`x: T`), a frozen view (`x: &T`) or a live path
+    /// (`x: &mut T`, and `mut self x: T`). Recorded as written, so the
+    /// judgment that reads it (a library's) sees the declaration's intent; the
+    /// type is `T` in every mode.
+    pub mode: ParamMode,
     pub span: Span,
+}
+
+/// A parameter's access mode (docs/language/ownership-design.md §10.3,
+/// docs/language/sequencing-surface-design.md §24). The meaning of the first
+/// two is the value; a live path's is the value going in and its value after
+/// the call coming back out beside the answer (`Mutated`), which is what
+/// `mut self` has always meant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ParamMode {
+    /// `x: T`, and `mut x: T` (whose `mut` lets the body rebind `x`; the
+    /// caller hands over the value either way).
+    #[default]
+    Owned,
+    /// `x: &T`: a frozen view, meaning the value.
+    View,
+    /// `x: &mut T` or `mut self x: T`: a live path, whose value after the
+    /// call is returned to the caller's place.
+    Path,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

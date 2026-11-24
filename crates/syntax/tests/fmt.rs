@@ -322,3 +322,13 @@ fn inverse_hugs_and_power_is_spaced() {
         "fn f(x: Rat) -> Rat { x⁻¹ ^ 2 * x⁻¹ }\n"
     );
 }
+
+#[test]
+fn a_mode_hugs_what_it_marks() {
+    // docs/language/sequencing-surface-design.md §24: `&` and `&mut` at the
+    // head of an annotation or an argument; the infix `&` keeps its spaces.
+    let src = "fn f(a: & A, b: & mut B) -> N { g(& mut b, x & y) }\n";
+    assert_eq!(format_source(src), "fn f(a: &A, b: &mut B) -> N { g(&mut b, x & y) }\n");
+    // A designation reference keeps its `&` alone.
+    assert_eq!(format_source("fn f() -> R { g(&, x) }\n"), "fn f() -> R { g(&, x) }\n");
+}

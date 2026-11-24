@@ -2071,6 +2071,7 @@ impl DeclarationsMut<'_> {
                     implicit: true,
                     is_type: true,
                     is_self: false,
+                    mode: Default::default(),
                     skel: None,
                     solver: None,
                     default: None,
@@ -2080,6 +2081,7 @@ impl DeclarationsMut<'_> {
                     implicit: p.implicit,
                     is_type: false,
                     is_self: p.is_self,
+                    mode: p.mode,
                     // The parameter's own domain skeleton — what argument
                     // lambdas are checked against and what suppresses
                     // bare-reference insertion at this argument (§5.3/§6.1).

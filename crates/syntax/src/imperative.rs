@@ -83,6 +83,18 @@ pub const MUTATED_VALUE: &str = "\0mutated_value";
 /// not to return `Mutated`, a same-named one of another type, it is
 /// `Mutated(x, x.m(a))`.)
 pub const MUTATED_WHOLE: &str = "\0mutated_whole";
+/// `&mut place` as a call's argument (docs/language/sequencing-surface-design.md
+/// §24): `\0mutarg(place)`, read only where the call is a statement, a
+/// `let`'s value or a block's end, which [`expand_path_call`] turns into
+/// the call and the places' rebinding. One left anywhere else is refused by
+/// the elaborator, naming where it may stand.
+pub const MUTARG: &str = "\0mutarg";
+/// A call with `&mut` arguments, once its statement is expanded:
+/// `\0pathcall(f(\0mutarg(a), x))`, whose value is the callee's
+/// `Mutated` nest. The elaborator checks each marked argument against a
+/// live-path parameter of the callee and elaborates the call with the
+/// markers dropped.
+pub const PATHCALL: &str = "\0pathcall";
 /// A function body after a loop that may `return`: `\0after(#forN, { rest })`,
 /// the loop's `Return` value or else the rest.
 pub const AFTER: &str = "\0after";
@@ -122,6 +134,11 @@ fn unmark<'e>(e: &'e Expr, marker: &str) -> Option<&'e Expr> {
         }
         _ => None,
     }
+}
+
+/// The input of a call marked by one of `markers`, and which.
+pub(crate) fn unmark_any<'e>(e: &'e Expr, markers: &[&'static str]) -> Option<(&'static str, &'e Expr)> {
+    markers.iter().find_map(|m| unmark(e, m).map(|v| (*m, v)))
 }
 
 pub(crate) fn unit(span: Span) -> Expr { var(UNIT, span) }
@@ -484,8 +501,22 @@ fn arm_names(pats: &[Pat], eqbind: Option<&str>, out: &mut Vec<String>) {
 /// statements or its own tail; one that rebinds the name instead (a `let`,
 /// a pattern variable) makes the answer no for the whole branch, since the
 /// name at that arm's end would not be the receiver.
-pub(crate) fn tail_updates(arms: &[Arm], eqbind: Option<&str>, x: &str) -> bool {
-    matches!(touch_arms(arms, eqbind, x), Touch::Updates)
+///
+/// With several live paths (§24) the receivers are taken together: some arm
+/// updates one of them, and no arm rebinds any.
+pub(crate) fn tail_updates(arms: &[Arm], eqbind: Option<&str>, xs: &[String]) -> bool {
+    let all = xs.iter().fold(Touch::No, |all, x| all.and(touch_arms(arms, eqbind, x)));
+    matches!(all, Touch::Updates)
+}
+
+/// The value of a body that returns its live paths `xs` beside `value`:
+/// `Mutated(x, value)` for one, and for several the values after nested in
+/// parameter order with the answer innermost, `Mutated(a, Mutated(b,
+/// value))` (docs/language/sequencing-surface-design.md §8.2, §24). Every
+/// node carries `value`'s span, as the one-receiver record always has.
+pub(crate) fn mutated_nest(xs: &[String], value: Expr, record: &str) -> Expr {
+    let span = value.span;
+    xs.iter().rev().fold(value, |value, x| call(record, vec![var(x, span), value], span))
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -843,7 +874,7 @@ pub(crate) fn lower_returns(mut body: Block) -> Block {
 /// it or assigns it. A returning loop is a statement of the body, or of a
 /// `\0after` rest below one; one anywhere else is refused after this by
 /// [`reject_residue`], as in pure code.
-pub(crate) fn return_receiver(body: &mut Block, receiver: &str, record: &str) {
+pub(crate) fn return_receiver(body: &mut Block, receiver: &[String], record: &str) {
     for s in &mut body.stmts {
         let Stmt::Let { expr, .. } = s else { continue };
         if !is_loop(expr) || !returns(expr) { continue; }
@@ -866,12 +897,12 @@ pub(crate) fn return_receiver(body: &mut Block, receiver: &str, record: &str) {
 
 /// The leaves of a tail-lowered loop body sit in the result of a block or
 /// of a `match` arm, and nowhere else (the tree [`tail`] builds).
-fn wrap_ret_leaves(e: &mut Expr, receiver: &str, record: &str) {
+fn wrap_ret_leaves(e: &mut Expr, receiver: &[String], record: &str) {
     match &mut e.kind {
         ExprKind::App { head, args, .. } if matches!(&head.kind, ExprKind::Var(n) if n == RET) && args.len() == 1 => {
             let span = args[0].span;
             let value = std::mem::replace(&mut args[0], unit(span));
-            args[0] = call(record, vec![var(receiver, span), value], span);
+            args[0] = mutated_nest(receiver, value, record);
         }
         ExprKind::Block(b) => wrap_ret_leaves(&mut b.result, receiver, record),
         ExprKind::Match { arms, .. } => {
@@ -1070,4 +1101,151 @@ fn carrier_step(cond: &Expr, body: &Block, env: &[String], vars: &[String], x: &
         },
         span,
     })
+}
+
+
+/// The arguments of a call as written: `f(ā)`'s and `x.m(ā)`'s, positional
+/// ones only.
+fn written_args(call: &Expr) -> Option<&[Expr]> {
+    match &call.kind {
+        ExprKind::App { args, .. } => Some(args),
+        ExprKind::Dot { args: Some(args), .. } => Some(args),
+        _ => None,
+    }
+}
+
+/// The places a call lends with `&mut` (§24), in argument order: empty
+/// when the call writes none at its top.
+pub(crate) fn path_places(call: &Expr) -> Vec<&Expr> {
+    written_args(call).into_iter().flatten().filter_map(|a| unmark(a, MUTARG)).collect()
+}
+
+/// One step of a place below its root: a field, or an element.
+enum PlaceStep<'e> {
+    Field(&'e str),
+    Index,
+}
+
+/// A place as its root and its steps (`x.f[i].g`: `x`, then `f`, an
+/// element, `g`), for [`check_apart`]. `None` for what is no place.
+fn place_steps(place: &Expr) -> Option<(&str, Vec<PlaceStep<'_>>)> {
+    match &place.kind {
+        ExprKind::Var(x) => Some((x, Vec::new())),
+        ExprKind::Dot { recv, name, args: None, tyargs, named } if tyargs.is_empty() && named.is_empty() => {
+            let (root, mut steps) = place_steps(recv)?;
+            steps.push(PlaceStep::Field(name));
+            Some((root, steps))
+        }
+        ExprKind::Index { recv, .. } => {
+            let (root, mut steps) = place_steps(recv)?;
+            steps.push(PlaceStep::Index);
+            Some((root, steps))
+        }
+        _ => None,
+    }
+}
+
+/// A place as written, for a message: `x.f[i]`, an index that is not a
+/// name shown as `…`.
+pub(crate) fn place_shown(place: &Expr) -> String {
+    match &place.kind {
+        ExprKind::Var(x) => x.clone(),
+        ExprKind::Dot { recv, name, .. } => format!("{}.{name}", place_shown(recv)),
+        ExprKind::Index { recv, idx } => match &idx.kind {
+            ExprKind::Var(i) => format!("{}[{i}]", place_shown(recv)),
+            _ => format!("{}[…]", place_shown(recv)),
+        },
+        _ => "_".to_string(),
+    }
+}
+
+/// The places one call lends `&mut` are apart (docs/language/ownership-design.md
+/// §10.3): a callee whose meaning gives each live-path parameter its own
+/// value hands each back to its place, so two places that overlap would
+/// each be written with a different value. Two paths are apart when they
+/// part at two different fields; one that is a prefix of the other (the
+/// same place, or a place and a part of it) overlaps; and two that part at
+/// an element are apart only by a proof that the indices differ, which is
+/// the judgment's request (`Apart`) and is not asked yet, so they are
+/// refused saying so.
+pub(crate) fn check_apart(places: &[&Expr]) -> R<()> {
+    let steps: Vec<_> = places.iter().map(|p| place_steps(p).expect("a `&mut` argument is a place")).collect();
+    for (j, (rj, sj)) in steps.iter().enumerate() {
+        for (i, (ri, si)) in steps[..j].iter().enumerate() {
+            if ri != rj { continue; }
+            let (a, b) = (place_shown(places[i]), place_shown(places[j]));
+            let parted = si.iter().zip(sj.iter()).find_map(|(x, y)| match (x, y) {
+                (PlaceStep::Field(f), PlaceStep::Field(g)) if f == g => None,
+                (PlaceStep::Field(_), PlaceStep::Field(_)) => Some(true),
+                _ => Some(false),
+            });
+            match parted {
+                Some(true) => {}
+                Some(false) => {
+                    return fail(places[j].span, format!(
+                        "`{a}` and `{b}` are passed to two `&mut` parameters and differ only by an index: \
+                         they are apart when their indices differ, which is a proof the ownership judgment \
+                         will ask for (`Apart`, docs/language/ownership-design.md §10.6) and which is not \
+                         asked yet. Lend the owner once instead"));
+                }
+                None if a == b => {
+                    return fail(places[j].span, format!(
+                        "`{a}` is passed to two `&mut` parameters: each comes back to its place with a value \
+                         of its own, so the places of one call must be apart \
+                         (docs/language/ownership-design.md §10.3)"));
+                }
+                None => {
+                    return fail(places[j].span, format!(
+                        "`{a}` and `{b}` overlap, one inside the other, and are passed to two `&mut` \
+                         parameters: each comes back to its place with a value of its own, so the places \
+                         of one call must be apart (docs/language/ownership-design.md §10.3)"));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// A call with `&mut` arguments where it is a statement (`f(&mut a);`, at a
+/// `#seq` name) or a `let`'s value (`let r = f(&mut a, &mut b.g);`), as the
+/// statements that run it (§24):
+///
+/// ```text
+/// let #path = \0pathcall(f(\0mutarg(a), \0mutarg(b.g)));
+/// a := #path.after;
+/// b.g := #path.value.after;
+/// let r = #path.value.value;
+/// ```
+///
+/// Each place is rebound as an assignment, so the rules of `:=` are the
+/// rules of a lent place: a `let mut` local or `mut` parameter of a scope
+/// that threads it, with field paths and elements (§20, §21), and "is not
+/// mutable" where it is not. `wrap` re-marks the answer's `let` (`let mut
+/// r = …` is `\0mut`).
+pub(crate) fn expand_path_call(
+    tmp: String,
+    answer: Option<(String, Option<Ty>, Option<&str>)>,
+    call: Expr,
+    span: Span,
+) -> R<Vec<Stmt>> {
+    let places: Vec<Expr> = path_places(&call).into_iter().cloned().collect();
+    check_apart(&places.iter().collect::<Vec<_>>())?;
+    let cspan = call.span;
+    let mut out = vec![Stmt::Let { name: tmp.clone(), ty: None, expr: marked(PATHCALL, call, cspan), span, opaque: false }];
+    let field = |e: Expr, name: &str| {
+        let span = e.span;
+        Expr { kind: ExprKind::Dot { recv: Box::new(e), name: name.into(), tyargs: vec![], args: None, named: vec![] }, span }
+    };
+    let mut rest = var(&tmp, cspan);
+    for place in &places {
+        let after = field(rest.clone(), "after");
+        let (root, value) = place_update(place, after).expect("a `&mut` argument is a place");
+        out.push(Stmt::Let { name: root, ty: None, expr: marked(ASSIGN, value, place.span), span: place.span, opaque: false });
+        rest = field(rest, "value");
+    }
+    if let Some((name, ty, wrap)) = answer {
+        let expr = match wrap { Some(m) => marked(m, rest, cspan), None => rest };
+        out.push(Stmt::Let { name, ty, expr, span, opaque: false });
+    }
+    Ok(out)
 }

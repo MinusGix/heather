@@ -1641,3 +1641,137 @@ reading `s[i]` and `s[j]` with no invariant at all; and
   span: such a function's code takes 64-bit words
   (`issues/runtime-repr-narrow-words.md`), so the probes carry the key
   as a `u64`.
+
+## 24. Parameter modes, and `&mut` at a call, as built (2026-11-24)
+
+`issues/ownership-parameter-modes.md`, the surface half of
+`docs/language/ownership-design.md` §10.3. `mut` on a parameter had been a
+parser desugaring the AST did not keep, and a `mut self` method was known
+only by its `Mutated` result. Now a parameter's mode is part of the
+declaration, any parameter may be a live path, and a call lends places.
+Probes: `lib/_tests/std/core/parameter_modes_tests.hthr`; parse-level facts
+and refusals in `crates/syntax/tests/parameter_modes.rs`.
+
+### 24.1 The mode a parameter keeps
+
+`Param::mode` (`crates/syntax/src/ast.rs`) is one of
+
+| Written | Mode | The parameter's type | Meaning |
+|---|---|---|---|
+| `x: T`, `mut x: T` | `Owned` | `T` | the value (`mut` lets the body rebind `x`) |
+| `x: &T` | `View` | `T` | the value, recorded as a frozen view |
+| `x: &mut T`, `mut self x: T`, `self x: &mut T` | `Path` | `T` | the value in; its value after the call back out beside the answer |
+
+`&` is read only at the head of a parameter's annotation, where no type
+starts with it; elsewhere it is still the infix operator, and `(&, …)` a
+designation reference. The mode reaches the elaborator's parameter table
+(`ParamMeta::mode`), the module image and the interface signature (both
+encodings' versions bumped), and a generator: `tactic::modes(g)` (the
+request `Modes`) answers one `ParamMode` (`ByValue`, `FrozenView`,
+`LivePath`) per parameter of `g`'s table, type parameters and implicit ones
+included, so the list lines up with the `λ`s `body(g)` opens. A judgment
+over reflected code reads the declaration's intent there; the type cannot
+tell `x: &T` from `x: T`, by design (§13.2 of the ownership note leans to
+a transparent view).
+
+`mut self x: T` is recorded as `Path`, and `self x: &mut T` (`self: &mut
+T`) is the same declaration: the same body, result and method call. Nothing
+about `mut self` changed: its result, its body's end (§8.2, §19, §22) and
+its calls are built by the code that built them, now run over a list of
+paths that has one entry.
+
+### 24.2 Several live paths
+
+```heather
+fn swap_sum(a: &mut Nat, b: &mut Nat) → Nat {
+    let t = a;
+    a := b;
+    b := t;
+    a + b
+}
+// kernel type: Nat → Nat → Mutated<Nat, Mutated<Nat, Nat>>
+```
+
+**The result nests `Mutated` in parameter order, the answer innermost.**
+One path is `Mutated<T, R>`, exactly `mut self`'s, so a function with one
+`&mut` parameter and a `mut self` method have one shape. Nesting reuses the
+record the whole surface already threads (a statement form's join state is
+`Mutated(v₁, Mutated(v₂, …))`, §5.1), needs no record minted per function,
+and keeps `.after`, `.value.after`, `.value.value` readable in a proof.
+A record of the values after with named fields was the alternative; it
+would be a type per signature, which a generator would have to name.
+
+Each path is `let mut` in the body, and the body ends as a `mut self` body
+does, with the list of paths for the one receiver: `Mutated(a, Mutated(b,
+value))` at the end, per arm of a tail branch where some arm updates one of
+them (§19.2, read over all of them: an arm that rebinds any path's name
+keeps the branch a value), and at a `return` (§22). The method's own call
+as the body's result (§19.3) stays the one-receiver case.
+
+### 24.3 A call lends places: `f(&mut a, &mut b.g)`
+
+`&mut place` is an argument written at the top of a call that is a
+statement, a `let`'s value or a block's end. The parser expands it where
+the statement is read (`imperative::expand_path_call`):
+
+```heather
+let r = swap_sum(&mut p, &mut u.left);
+// let #path = \0pathcall(swap_sum(\0mutarg(p), \0mutarg(u.left)));
+// p := #path.after;
+// u.left := #path.value.after;     (u := u with { left = … }, §20)
+// let r = #path.value.value;
+```
+
+So a lent place follows exactly the rules of `:=`: a `let mut` local or
+`mut` (or `&mut`) parameter of a scope that threads it, through field paths
+and elements (§20, §21), across loops and statement forms, and refused with
+"is not mutable" where it is not. The statement form drops the answer, as a
+`mut self` call's statement does; a block that ends in the call has the
+answer as its value.
+
+The elaborator reads `\0pathcall` (`crates/elab/src/path_calls.rs`): it
+holds each lent argument to the callee's recorded modes (a `&mut` parameter
+exactly where an argument is lent, the receiver of a method call excluded),
+elaborates the call with the markers dropped, and checks its type has one
+`Mutated` per lent place. A callee with no recorded table (its own
+recursion, a local function) gets the type check alone. Called with no
+`&mut` at all, a function with live paths is an ordinary call and gives its
+record, as `@Fd::read(fd, n)` does.
+
+**The places of one call are apart** (ownership note §10.3: this static
+meaning gives each parameter a value of its own, which comes back to its
+place). Two places that part at different fields are apart; the same place
+twice, or a place and a part of it, is refused; two that part at an element
+(`&mut u[i], &mut u[j]`) are refused saying that a proof the indices differ
+is what the ownership judgment will ask (`Apart`, §10.6), which is not
+asked yet.
+
+Refusals, each probed: a lent expression that is no place, a named `&mut`
+argument, an immutable or λ-captured place, overlapping places (parse time,
+Rust tests); a `&mut` argument to a parameter that is not `&mut`, a `&mut`
+parameter given a value, a `&mut` inside another expression, and a method
+call whose receiver is a `&mut` parameter (elaboration, `expect-error`
+probes). At a declaration: `&mut` or `&` on an implicit parameter, `mut`
+beside `&mut` or `&`, a default on `&mut`, `&mut` on a theorem, and a `mut
+self` method with another `&mut` parameter.
+
+This is notation and bookkeeping. Nothing here checks who else reaches a
+place: that is the judgment over reflected code (vision principle 7), which
+reads the modes this records.
+
+### 24.4 Not built
+
+`issues/parameter-modes-residue.md` owns these.
+
+- A `mut self` method with other `&mut` parameters, and lending places
+  through a method call whose receiver is a path (`a.g(&mut b)` where
+  `g`'s receiver is `&mut`): the method call threads one receiver.
+- `&mut` where the call is not a statement, a `let`'s value or a block's
+  end: a binding `let x <- f(&mut a);`, `return f(&mut a);`, an arm that is
+  a bare call, an operand.
+- Two elements of one owner lent at once, which waits for the judgment's
+  `Apart` request.
+- A spelling for lending a frozen view at a call (`f(&a)`): a view means
+  the value, so the call passes the value today.
+- A generator publishing a declaration with modes (`tactic::Param` has no
+  mode), and a callee's own recursion checked against its modes.

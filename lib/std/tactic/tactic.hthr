@@ -219,6 +219,14 @@ inductive DeclForm {
 
 record Param { x: LocalRef, implicit: Bool }
 
+// How a declared parameter's argument is accessed, as the declaration wrote
+// it (docs/language/ownership-design.md §10.3,
+// docs/language/sequencing-surface-design.md §24): owned (`x: T`), a frozen
+// view (`x: &T`), or a live path (`x: &mut T`, `mut self x: T`), whose value
+// after the call comes back beside the answer. The type is `T` in every
+// mode, so this is read off the declaration (`Modes`), never its type.
+inductive ParamMode { ByValue, FrozenView, LivePath }
+
 record Decl { form: DeclForm, name: String, params: List<Param>, result: Expr, body: Expr }
 
 // ---------------------------------------------------------------------------
@@ -403,6 +411,12 @@ inductive Req {
     // which a generator builds a function from. Refused where `goal`
     // mentions `e` (`Cases` is the split for that).
     Branches(e: Expr, goal: Handle),
+    // The modes of a declared global's parameters, one per parameter of its
+    // table in order (type parameters and implicit ones included, as the
+    // `λ`s of its `Body` open), as written: what a judgment over reflected
+    // code reads a parameter's access from. Refused for a global with no
+    // declared parameter table (a constructor, a type).
+    Modes(g: GlobalRef),
 }
 
 // What the solver found (`Sat`).
@@ -456,6 +470,7 @@ fn Resp(r: Req) → Type {
         Numeral(_) => Checked<Handle>,
         Sat(_, _) => Checked<SatVerdict>,
         Branches(_, _) => Checked<Split>,
+        Modes(_) => Checked<List<ParamMode>>,
     }
 }
 
@@ -539,6 +554,8 @@ fn holes(e: Expr, n: Nat) → Tac<Checked<List<Handle>>> { ask(Holes(e, n)) }
 
 fn body(g: GlobalRef) → Tac<Checked<Handle>> { ask(Body(g)) }
 
+fn modes(g: GlobalRef) → Tac<Checked<List<ParamMode>>> { ask(Modes(g)) }
+
 fn arms(h: Handle) → Tac<Checked<MatchInfo>> { ask(Arms(h)) }
 fn synth(goal: Handle) → Tac<Checked<Handle>> { ask(Synth(goal)) }
 fn spine(h: Handle) → Tac<Checked<SpineInfo>> { ask(Spine(h)) }
@@ -591,6 +608,7 @@ inductive Answer {
     ASpine(c: Checked<SpineInfo>),
     AFields(c: Checked<Projected>),
     ASat(c: Checked<SatVerdict>),
+    AModes(c: Checked<List<ParamMode>>),
 }
 
 inductive Fit<R> { Mismatch, Fits(a: R) }
@@ -636,6 +654,7 @@ fn fit(r: Req, a: Answer) → Fit<Resp(r)> {
         Numeral(_) => match a { AHandle(c) => Fits(c), _ => Mismatch },
         Sat(_, _) => match a { ASat(c) => Fits(c), _ => Mismatch },
         Branches(_, _) => match a { ASplit(c) => Fits(c), _ => Mismatch },
+        Modes(_) => match a { AModes(c) => Fits(c), _ => Mismatch },
     }
 }
 
@@ -1046,6 +1065,7 @@ fn host_tag(t: Tac<Expr>) → Nat {
             Numeral(_) => 37,
             Sat(_, _) => 38,
             Branches(_, _) => 39,
+            Modes(_) => 40,
         },
     }
 }
@@ -1101,6 +1121,7 @@ fn host_handle(t: Tac<Expr>) → Nat {
             Constructor(goal) => goal.id,
             Ctors(ty) => ty.id,
             Body(g) => g.id,
+            Modes(g) => g.id,
             Arms(h) => h.id,
             Synth(goal) => goal.id,
             Spine(h) => h.id,
@@ -1513,6 +1534,20 @@ fn host_sat_model_next(a: Answer, b: Nat) → Answer {
 }
 
 fn host_sat_refused(why: String) → Answer { ASat(Refused(why)) }
+
+// `Modes`' answer, a parameter at a time: 0 owned, 1 a frozen view, 2 a
+// live path.
+fn host_modes() → Answer { AModes(Accepted([])) }
+
+fn host_modes_next(a: Answer, m: Nat) → Answer {
+    let mode = match m { Zero => ByValue, Succ(k) => match k { Zero => FrozenView, Succ(_) => LivePath } };
+    match a {
+        AModes(c) => match c { Accepted(ms) => AModes(Accepted(ms ++ [mode])), Refused(_) => a },
+        _ => a,
+    }
+}
+
+fn host_no_modes(why: String) → Answer { AModes(Refused(why)) }
 
 fn host_unit() → Answer { AUnit }
 

@@ -210,6 +210,17 @@ fn found_at_entry(fact: &Param, at: Span) -> Expr {
     }
 }
 
+/// The receiver a `Mutated` result returns: the `self` parameter, unless
+/// another parameter is a live path (`x: &mut T`,
+/// docs/language/sequencing-surface-design.md §24), whose value the result
+/// carries instead.
+fn mut_receiver(decl: &Decl) -> Option<&Param> {
+    if decl.params.iter().any(|p| p.mode == heather_syntax::ParamMode::Path && !p.is_self) {
+        return None;
+    }
+    decl.params.iter().find(|p| p.is_self)
+}
+
 fn param(name: &str, ty: Ty, span: Span) -> Param {
     Param {
         name: name.into(),
@@ -220,6 +231,7 @@ fn param(name: &str, ty: Ty, span: Span) -> Param {
         default: None,
         origin: ParamOrigin::Written,
         symbol: None,
+        mode: Default::default(),
         span,
     }
 }
@@ -419,7 +431,7 @@ impl<'a> Lift<'a> {
         if !matches!(&self.decl.result.kind, TyKind::Named { name, .. } if name == heather_syntax::MUTATED_RECORD) {
             return None;
         }
-        let r = self.decl.params.iter().find(|p| p.is_self)?;
+        let r = mut_receiver(self.decl)?;
         let at = vars.iter().position(|v| *v == r.name)?;
         match vars.len() {
             1 => Some((r.clone(), None)),
@@ -450,7 +462,7 @@ impl<'a> Lift<'a> {
         if !matches!(&self.decl.result.kind, TyKind::Named { name, .. } if name == heather_syntax::MUTATED_RECORD) {
             return None;
         }
-        let r = self.decl.params.iter().find(|p| p.is_self)?;
+        let r = mut_receiver(self.decl)?;
         (vars.contains(&r.name.as_str()) && (is_span(&r.ty) || is_bytes(&r.ty))).then(|| r.clone())
     }
 
@@ -465,7 +477,7 @@ impl<'a> Lift<'a> {
         'a: 'v,
     {
         let decl: &'a Decl = self.decl;
-        let Some(r) = decl.params.iter().find(|p| p.is_self) else { return };
+        let Some(r) = mut_receiver(decl) else { return };
         if self.free || vars.contains(&r.name.as_str()) || !self.solver_params().is_empty() {
             return;
         }

@@ -1340,6 +1340,7 @@ pub(crate) fn elab_self_call(
                 implicit: self_ref.params[p].1,
                 is_type: false,
                 is_self: false,
+                mode: Default::default(),
                 skel: None,
                 solver: None,
                 default: None,

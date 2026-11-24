@@ -530,6 +530,8 @@ pub enum Request {
     /// A closed clause list, given to the SAT solver, and how many
     /// variables' values a model reports.
     Sat(RExpr, u64),
+    /// A declared global's parameter modes, by its reference.
+    Modes(u64),
 }
 
 /// The solver's verdict, as `Sat` answers it (`tactic::SatVerdict`): a
@@ -615,6 +617,8 @@ pub enum Answer {
     /// projection (`Fields`).
     Fields(Result<(u64, Vec<(String, u64)>), String>),
     Sat(Result<SatView, String>),
+    /// A declared global's parameter modes (`Modes`), in its table's order.
+    Modes(Result<Vec<heather_syntax::ParamMode>, String>),
 }
 
 /// Where a tactic is after its last answer.
@@ -1073,6 +1077,19 @@ impl<B: Values> Interpreted<B> {
                 Ok(out)
             }
             Answer::Sat(Err(why)) => self.call("host_sat_refused", vec![self.string_value(why)?]),
+            Answer::Modes(Ok(modes)) => {
+                let mut out = self.call("host_modes", vec![])?;
+                for m in modes {
+                    let code = match m {
+                        heather_syntax::ParamMode::Owned => 0,
+                        heather_syntax::ParamMode::View => 1,
+                        heather_syntax::ParamMode::Path => 2,
+                    };
+                    out = self.call("host_modes_next", vec![out, self.lit(code)])?;
+                }
+                Ok(out)
+            }
+            Answer::Modes(Err(why)) => self.call("host_no_modes", vec![self.string_value(why)?]),
         }
     }
 
@@ -1217,6 +1234,7 @@ impl<B: Values> Interpreted<B> {
                 let e = self.expr(self.call("host_lhs", vec![tree])?, &mut budget)?;
                 Ok(Step::Ask(Request::Branches(e, self.nat_of("host_handle", vec![tree])?)))
             }
+            40 => Ok(Step::Ask(Request::Modes(self.nat_of("host_handle", vec![tree])?))),
             other => Err(format!("a request tree with tag {other}")),
         }
     }
@@ -2461,6 +2479,7 @@ impl Host<'_> {
                 Request::AsType(e) => Answer::Handle(refusable(self.as_type_request(run, &e))?),
                 Request::Holes(e, n) => Answer::Holes(refusable(self.holes_request(run, &e, n))?),
                 Request::Body(g) => Answer::Handle(refusable(self.body_request(run, g))?),
+                Request::Modes(g) => Answer::Modes(refusable(self.modes_request(run, g))?),
                 Request::Arms(h) => Answer::Arms(refusable(self.arms_request(run, h))?),
                 Request::Synth(h) => Answer::Handle(refusable(self.synth_request(run, h, span))?),
                 Request::Spine(h) => Answer::Spine(refusable(self.spine_request(run, h))?),
@@ -2910,6 +2929,22 @@ impl Host<'_> {
     /// `Body(g)`: the elaborated value of the definition `g` stands for, at
     /// the root. Only a closed, monomorphic definition with a body has one:
     /// a theorem's proof is discarded once checked and an axiom has none.
+    /// `Modes(g)`: the access mode each parameter of `g`'s table was
+    /// declared with (docs/language/sequencing-surface-design.md §24), type
+    /// parameters and implicit ones included, so the list lines up with the
+    /// `λ`s `Body` opens. Refused for a global with no declared table.
+    fn modes_request(&self, run: &mut Run, g: u64) -> Result<Vec<heather_syntax::ParamMode>, Fault> {
+        let key = run.globals.get(g as usize).cloned().ok_or_else(|| Fault::Ill(format!("{g} is not a global this run issued")))?;
+        let GlobalKey::At(abs) = key else {
+            return Err(Fault::Ill("a type or a kernel former declares no parameters".into()));
+        };
+        let name = self.global_name_at(abs as usize).unwrap_or_else(|| "this global".into());
+        let Some(params) = self.names.params_at(abs as u32) else {
+            return Err(Fault::Ill(format!("`{name}` has no declared parameter table")));
+        };
+        Ok(params.iter().map(|p| p.mode).collect())
+    }
+
     fn body_request(&self, run: &mut Run, g: u64) -> Result<u64, Fault> {
         let key = run.globals.get(g as usize).cloned().ok_or_else(|| Fault::Ill(format!("{g} is not a global this run issued")))?;
         let GlobalKey::At(abs) = key else {
@@ -5356,6 +5391,7 @@ impl HostMut<'_> {
                 default: None,
                 origin: ParamOrigin::Written,
                 symbol: None,
+                mode: Default::default(),
                 span,
             })
             .collect();

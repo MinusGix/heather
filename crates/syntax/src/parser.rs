@@ -635,6 +635,7 @@ fn positivity_param(name: &str, span: Span) -> Param {
         default: None,
         origin: ParamOrigin::Written,
         symbol: None,
+        mode: Default::default(),
         span,
     }
 }
@@ -1600,6 +1601,7 @@ impl Parser {
                 default: None,
                 origin: ParamOrigin::Assuming,
                 symbol: None,
+                mode: Default::default(),
                 span,
             });
             if !matches!(self.peek(), TokKind::Comma) {
@@ -2293,6 +2295,7 @@ impl Parser {
                 default: None,
                 origin: if named { ParamOrigin::Written } else { ParamOrigin::InlineConstraint },
                 symbol: None,
+                mode: Default::default(),
                 span,
             });
             if !matches!(self.peek(), TokKind::Comma) {
@@ -2470,6 +2473,7 @@ impl Parser {
             default: None,
             origin: ParamOrigin::InlineConstraint,
             symbol: None,
+            mode: Default::default(),
             span,
         })
     }
@@ -2624,6 +2628,7 @@ impl Parser {
                         default: None,
                         origin: ParamOrigin::Written,
                         symbol: None,
+                        mode: Default::default(),
                     });
                 }
                 Some(ty) => {
@@ -2757,6 +2762,7 @@ impl Parser {
                     default: None,
                     origin: ParamOrigin::Written,
                     symbol: None,
+                    mode: Default::default(),
                     span: fspan,
                     ..v.clone()
                 })
@@ -2770,6 +2776,7 @@ impl Parser {
                 default: None,
                 origin: ParamOrigin::Written,
                 symbol: None,
+                mode: Default::default(),
                 span: fspan,
             });
             let project = |n: &str| Expr {
@@ -2936,6 +2943,7 @@ impl Parser {
                     default: default.clone(),
                     origin: ParamOrigin::Written,
                     symbol,
+                    mode: Default::default(),
                     span: nsp.join(ty.span),
                 });
             }
@@ -3107,6 +3115,7 @@ impl Parser {
             // and `g as ∙, h: A -> A -> A` gives the symbol to `g` alone. The
             // annotation is the only thing the run shares.
             let mut names: Vec<(String, Span, bool, Option<String>)> = Vec::new();
+            let mut written_mut: Vec<String> = Vec::new();
             loop {
                 // `self p: T` marks the parameter a method receiver fills
                 // (issues/method-receiver-position.md). `self: T` marks *and*
@@ -3180,6 +3189,7 @@ impl Parser {
                 if is_mut {
                     self.mut_params.push((pname.clone(), is_self));
                 }
+                if is_mut { written_mut.push(pname.clone()); }
                 names.push((pname, psp, is_self, symbol));
                 if !(matches!(self.peek(), TokKind::Comma)
                     && matches!(self.nth(1), TokKind::Ident(_)))
@@ -3189,6 +3199,52 @@ impl Parser {
                 self.bump();
             }
             self.expect(&TokKind::Colon, "`:`")?;
+            // `x: &T`, `x: &mut T` — the parameter's access mode
+            // (docs/language/ownership-design.md §10.3,
+            // docs/language/sequencing-surface-design.md §24). Only here, at
+            // the head of a parameter's annotation: no type starts with `&`,
+            // so the prefix is free, and the type is `T` in every mode. A
+            // live path is passed in and comes back out beside the result,
+            // as a `mut self` receiver does; a frozen view means the value.
+            let mode_sp = self.peek_span();
+            let mode = if matches!(self.peek(), TokKind::Amp) {
+                self.bump();
+                if self.at_kw("mut") && !matches!(self.nth(1), TokKind::Comma | TokKind::RParen | TokKind::ColonEq) {
+                    self.bump();
+                    ParamMode::Path
+                } else {
+                    ParamMode::View
+                }
+            } else {
+                ParamMode::Owned
+            };
+            if mode != ParamMode::Owned {
+                let spelled = if mode == ParamMode::Path { "&mut" } else { "&" };
+                if implicit {
+                    return Err(ParseError {
+                        msg: format!("an implicit parameter cannot be `{spelled}`: it has no argument \
+                                      slot for a caller to lend"),
+                        span: mode_sp,
+                    });
+                }
+                if let Some(x) = written_mut.first() {
+                    return Err(ParseError {
+                        msg: if mode == ParamMode::Path {
+                            format!("`{x}` is written both `mut` and `&mut`: a `&mut` parameter is already \
+                                     updated by the body and returned to its caller, so drop the `mut`")
+                        } else {
+                            format!("`mut {x}: &T` asks a frozen view to be reassigned: a view means the \
+                                     value as lent, so take `{x}: T` to rebind it")
+                        },
+                        span: mode_sp,
+                    });
+                }
+                if mode == ParamMode::Path {
+                    for (n, ..) in &names {
+                        self.mut_params.push((n.clone(), true));
+                    }
+                }
+            }
             let ty = self.ty()?;
             let mut span = names[0].1.join(ty.span);
             // `hx: P := infer` — a solver default
@@ -3230,6 +3286,14 @@ impl Parser {
                         span: eq.join(filled),
                     });
                 }
+                if mode == ParamMode::Path {
+                    return Err(ParseError {
+                        msg: "a `&mut` parameter takes no default: its argument is the caller's \
+                              place, which the call updates"
+                            .into(),
+                        span: eq.join(filled),
+                    });
+                }
                 if names.iter().any(|(_, _, s, _)| *s) {
                     return Err(ParseError {
                         msg: format!(
@@ -3264,6 +3328,9 @@ impl Parser {
                 });
             }
             for (name, nsp, is_self, symbol) in names {
+                // `mut self x: T` is the live-path receiver it has always
+                // been, recorded as `self x: &mut T` would be.
+                let mode = if is_self && written_mut.contains(&name) { ParamMode::Path } else { mode };
                 let fact = positive.as_ref().map(|_| positivity_param(&name, ty.span));
                 params.push(Param {
                     name,
@@ -3274,6 +3341,7 @@ impl Parser {
                     default: default.clone(),
                     origin: ParamOrigin::Written,
                     symbol,
+                    mode,
                     span: nsp.join(span),
                 });
                 params.extend(fact);
@@ -3426,16 +3494,34 @@ impl Parser {
         // A `mut self` method returns its receiver beside its result
         // (docs/language/sequencing-surface-design.md §8.2): `fn Io::read(mut self io:
         // Io, …) → R` has kernel type `Io → … → Mutated<Io, R>`.
-        let mut_self = mut_params.iter().find(|(_, s)| *s).map(|(n, _)| n.clone());
+        //
+        // Every live path does (`x: &mut T`, §24): with several, the values
+        // after nest in parameter order, the answer innermost, `Mutated<A,
+        // Mutated<B, R>>`, which is the state a statement form's join
+        // threads. One path is `Mutated<T, R>` whichever way it is written.
+        let paths: Vec<String> = mut_params.iter().filter(|(_, p)| *p).map(|(n, _)| n.clone()).collect();
+        let mut_self = params.iter().find(|p| p.is_self && p.mode == ParamMode::Path).map(|p| p.name.clone());
         if !mut_params.is_empty() && kind != DeclKind::Fn {
             return Err(ParseError {
                 msg: "only a `fn` takes `mut` parameters: a theorem's parameters are not updated".into(),
                 span: result.span,
             });
         }
-        if let Some(receiver) = &mut_self {
+        if let Some(receiver) = &mut_self
+            && let Some(other) = paths.iter().find(|n| *n != receiver)
+        {
+            return Err(ParseError {
+                msg: format!(
+                    "a `mut self` method takes no other `&mut` parameter yet: `{other}` would come back \
+                     beside `{receiver}`, and a method call threads its receiver alone. Take `{receiver}: \
+                     &mut` without `self` and call the function as `f(&mut {receiver}, &mut {other}, …)`"
+                ),
+                span: result.span,
+            });
+        }
+        for receiver in paths.iter().rev() {
             let receiver_ty = params.iter().find(|p| &p.name == receiver).map(|p| p.ty.clone())
-                .expect("a `mut self` parameter is in the list");
+                .expect("a live-path parameter is in the list");
             let span = result.span;
             result = Ty { kind: TyKind::Named { name: MUTATED_RECORD.into(), args: vec![receiver_ty, result] }, span };
         }
@@ -3531,8 +3617,8 @@ impl Parser {
         let mut body = crate::imperative::lower_returns(body);
         // A `mut self` method's `return e` leaves with its receiver as it
         // stands there, `Mutated(x, e)`, as the body's own end does (§8.2).
-        if let Some(receiver) = &mut_self {
-            crate::imperative::return_receiver(&mut body, receiver, MUTATED_RECORD);
+        if !paths.is_empty() {
+            crate::imperative::return_receiver(&mut body, &paths, MUTATED_RECORD);
         }
         crate::imperative::reject_residue(&body)?;
         let (tyvars, params) = self.splice_sections(&name, name_span, tyvars, params, leading, &result)?;
@@ -3641,7 +3727,8 @@ impl Parser {
         let fn_body = std::mem::take(&mut self.fn_body);
         let defer = std::mem::take(&mut self.defer_binds);
         let saved = self.mutables.len();
-        let receiver = pending.as_ref().and_then(|ps| ps.iter().find(|(_, s)| *s)).map(|(n, _)| n.clone());
+        let receivers: Vec<String> =
+            pending.iter().flatten().filter(|(_, p)| *p).map(|(n, _)| n.clone()).collect();
         if let Some(ps) = &pending {
             self.mutables.extend(ps.iter().map(|(n, _)| n.clone()));
         }
@@ -3650,21 +3737,9 @@ impl Parser {
         let block = if fn_body {
             // `return e` outside a loop ends the body (§5.5); in a `mut
             // self` method it leaves with the receiver as it stands there,
-            // as the body's own end does (§8.2).
-            let ret = |value: Expr| match &receiver {
-                Some(x) => {
-                    let span = value.span;
-                    Expr {
-                        kind: ExprKind::App {
-                            head: Box::new(Expr { kind: ExprKind::Var(MUTATED_RECORD.into()), span }),
-                            args: vec![Expr { kind: ExprKind::Var(x.clone()), span }, value],
-                            named: vec![], explicit: false, goal_oriented: false,
-                        },
-                        span,
-                    }
-                }
-                None => value,
-            };
+            // as the body's own end does (§8.2), and with every live path
+            // so (§24).
+            let ret = |value: Expr| crate::imperative::mutated_nest(&receivers, value, MUTATED_RECORD);
             crate::imperative::lower_body(block?, &ret, &mut self.next_hygienic)?
         } else {
             crate::imperative::lower_block(block?, &mut self.next_hygienic)?
@@ -3673,6 +3748,31 @@ impl Parser {
             return Ok(block);
         }
         crate::try_lower::binds_in_block(block, &mut self.next_hygienic)
+    }
+
+    /// Push a `let` read by [`Self::let_stmt`], expanding it when its value
+    /// is a call that lends places `&mut` (§24): `let r = f(&mut a);` runs
+    /// the call, rebinds `a`, and binds `r` to the answer. A `let mut r`
+    /// keeps its marker on the answer's `let`; a call on a mutable local's
+    /// method is a candidate no longer, since the arguments' places are what
+    /// it updates (the elaborator refuses a `mut self` callee here).
+    fn push_expanding_paths(&mut self, stmts: &mut Vec<Stmt>, stmt: Stmt) -> R<()> {
+        let Stmt::Let { name, ty, expr, span, opaque: false } = stmt else {
+            stmts.push(stmt);
+            return Ok(());
+        };
+        let (wrap, value) = match crate::imperative::unmark_any(&expr, &[crate::imperative::MUT, crate::imperative::MUTCALL]) {
+            Some((m, v)) => (Some(m), v.clone()),
+            None => (None, expr.clone()),
+        };
+        if crate::imperative::path_places(&value).is_empty() {
+            stmts.push(Stmt::Let { name, ty, expr, span, opaque: false });
+            return Ok(());
+        }
+        let wrap = wrap.filter(|m| *m == crate::imperative::MUT);
+        let tmp = self.hygienic("path");
+        stmts.extend(crate::imperative::expand_path_call(tmp, Some((name, ty, wrap)), value, span)?);
+        Ok(())
     }
 
     /// Is `e` a method call on a `let mut` local or `mut` parameter in
@@ -3705,9 +3805,15 @@ impl Parser {
         }
         let parsed = self.block_statements(&mut stmts)?;
         let mut block = self.block_tail(open, stmts, parsed)?;
-        // A result that updates its receiver is bound first, so the local
-        // is updated before the block ends (§8.2).
-        if self.mut_receiver(&block.result) {
+        // A result that lends places `&mut` is bound first, and the places
+        // rebound, before the block ends (§24).
+        if !crate::imperative::path_places(&block.result).is_empty() {
+            let span = block.result.span;
+            let name = self.hygienic("pathres");
+            let call = std::mem::replace(&mut *block.result, Expr { kind: ExprKind::Var(name.clone()), span });
+            let tmp = self.hygienic("path");
+            block.stmts.extend(crate::imperative::expand_path_call(tmp, Some((name, None, None)), call, span)?);
+        } else if self.mut_receiver(&block.result) {
             let span = block.result.span;
             let name = self.hygienic("tail");
             let call = std::mem::replace(&mut *block.result, Expr { kind: ExprKind::Var(name.clone()), span });
@@ -3725,8 +3831,9 @@ impl Parser {
             }).collect();
             head.append(&mut block.stmts);
             block.stmts = head;
-            if let Some((receiver, _)) = ps.iter().find(|(_, s)| *s) {
-                self.receiver_end(&mut block, receiver);
+            let receivers: Vec<String> = ps.iter().filter(|(_, p)| *p).map(|(n, _)| n.clone()).collect();
+            if !receivers.is_empty() {
+                self.receiver_end(&mut block, &receivers);
             }
         }
         Ok(block)
@@ -3744,9 +3851,9 @@ impl Parser {
     /// receiver, where it ends the body or such an arm, is the whole result
     /// ([`crate::imperative::MUTATED_WHOLE`]), so the recursion is a tail
     /// call.
-    fn receiver_end(&mut self, block: &mut Block, receiver: &str) {
+    fn receiver_end(&mut self, block: &mut Block, receivers: &[String]) {
         if let ExprKind::Match { motive: None, arms, eqbind, .. } = &mut block.result.kind
-            && crate::imperative::tail_updates(arms, eqbind.as_deref(), receiver)
+            && crate::imperative::tail_updates(arms, eqbind.as_deref(), receivers)
         {
             for arm in arms.iter_mut() {
                 let span = arm.body.span;
@@ -3756,7 +3863,7 @@ impl Parser {
                         // An arm that is a bare call on the receiver: bound
                         // first, as a block's result is (§8.2).
                         let call = Expr { kind, span };
-                        if crate::imperative::receiver_call(&call, receiver) {
+                        if receivers.iter().any(|x| crate::imperative::receiver_call(&call, x)) {
                             let name = self.hygienic("tail");
                             let bound = Stmt::Let {
                                 name: name.clone(), ty: None,
@@ -3768,12 +3875,13 @@ impl Parser {
                         }
                     }
                 };
-                self.receiver_end(&mut body, receiver);
+                self.receiver_end(&mut body, receivers);
                 arm.body.kind = ExprKind::Block(Box::new(body));
             }
             return;
         }
         if let Some(method) = self.own_method.clone()
+            && let [receiver] = receivers
             && let Some(call) = crate::imperative::take_own_call(block, receiver, &method)
         {
             let span = call.span;
@@ -3788,11 +3896,7 @@ impl Parser {
         } else {
             std::mem::replace(&mut *block.result, Expr { kind: ExprKind::Var("trivial".into()), span })
         };
-        let var = |n: &str| Expr { kind: ExprKind::Var(n.into()), span };
-        block.result = Box::new(Expr {
-            kind: ExprKind::App { head: Box::new(var(MUTATED_RECORD)), args: vec![var(receiver), value], named: vec![], explicit: false, goal_oriented: false },
-            span,
-        });
+        block.result = Box::new(crate::imperative::mutated_nest(receivers, value, MUTATED_RECORD));
     }
 
     /// [`Self::block_body`] after its statements: the result (`parsed` when
@@ -4517,7 +4621,8 @@ impl Parser {
     fn block_statements(&mut self, stmts: &mut Vec<Stmt>) -> R<Option<Expr>> {
         loop {
             if self.at_stmt() {
-                stmts.push(self.let_stmt()?);
+                let stmt = self.let_stmt()?;
+                self.push_expanding_paths(stmts, stmt)?;
                 continue;
             }
             if self.at_require() {
@@ -4653,6 +4758,12 @@ impl Parser {
             let name = self.hygienic("seq");
             // `x.m(a);` on a mutable `x` updates it (§8.2); any other
             // expression statement is a bind.
+            // `f(&mut a);` runs the call and rebinds the places it lends
+            // (§24); its answer is dropped, as a `mut self` method's is.
+            if !crate::imperative::path_places(&expr).is_empty() {
+                stmts.extend(crate::imperative::expand_path_call(name, None, expr, span)?);
+                continue;
+            }
             let expr = if self.mut_receiver(&expr) {
                 crate::imperative::marked(crate::imperative::MUTCALL, expr, marked)
             } else {
@@ -6930,6 +7041,13 @@ impl Parser {
                 if p.at_named_arg() {
                     let (name, name_span) = p.ident("a named argument's parameter name")?;
                     p.expect(&TokKind::ColonEq, "`:=` (a named argument)")?;
+                    if p.at_path_arg() {
+                        return Err(ParseError {
+                            msg: format!("a `&mut` argument is positional: write it where `{name}` stands in \
+                                          the parameter list (docs/language/sequencing-surface-design.md §24)"),
+                            span: p.peek_span(),
+                        });
+                    }
                     let expr = p.expr()?;
                     let span = name_span.join(expr.span);
                     named.push(NamedArg { name, name_span, expr, span });
@@ -6954,9 +7072,29 @@ impl Parser {
                     // what an operator token in argument-initial position
                     // always is
                     // (docs/language/classes/operation-indexed-classes-design.md §7).
-                    match p.op_symbol_arg() {
-                        Some(e) => args.push(e),
-                        None => args.push(p.expr()?),
+                    // `&mut place` — lend a place to a live-path parameter
+                    // (§24). Read before the designation reference, which an
+                    // `&` followed by `mut` and a place never is.
+                    if p.at_path_arg() {
+                        let start = p.bump().span;
+                        p.bump();
+                        let place = p.expr()?;
+                        if crate::imperative::place_root(&place).is_none() {
+                            return Err(ParseError {
+                                msg: "`&mut` lends a place: a `let mut` local or `mut` parameter, a field \
+                                      path of one, `&mut x.f`, or an element, `&mut x[i]` \
+                                      (docs/language/sequencing-surface-design.md §24)"
+                                    .into(),
+                                span: place.span,
+                            });
+                        }
+                        let span = start.join(place.span);
+                        args.push(crate::imperative::marked(crate::imperative::MUTARG, place, span));
+                    } else {
+                        match p.op_symbol_arg() {
+                            Some(e) => args.push(e),
+                            None => args.push(p.expr()?),
+                        }
                     }
                 }
                 if !matches!(p.peek(), TokKind::Comma) {
@@ -6967,6 +7105,14 @@ impl Parser {
             let end = p.expect(&TokKind::RParen, "`)`")?;
             Ok((args, named, end))
         })
+    }
+
+    /// `&mut` at the head of an argument, followed by something to lend:
+    /// `(&, …)` and `(&)` stay designation references.
+    fn at_path_arg(&self) -> bool {
+        matches!(self.peek(), TokKind::Amp)
+            && matches!(self.nth(1), TokKind::Ident(m) if m == "mut")
+            && !matches!(self.nth(2), TokKind::Comma | TokKind::RParen)
     }
 
     /// `x :=` at the head of an argument. Two tokens, no lookahead beyond

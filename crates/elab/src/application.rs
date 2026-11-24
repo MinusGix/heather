@@ -900,6 +900,10 @@ pub(crate) struct ParamMeta {
     pub(crate) is_type: bool,
     /// Written `self p: T`, identifying the method receiver position.
     pub(crate) is_self: bool,
+    /// The parameter's access mode as written (`x: &T`, `x: &mut T`,
+    /// docs/language/ownership-design.md §10.3); `Owned` for a type
+    /// parameter and every synthesized table.
+    pub(crate) mode: heather_syntax::ParamMode,
     /// Callable metadata for the parameter's own written domain.
     pub(crate) skel: Option<Rc<Skel>>,
     /// A `requires`/`:= infer` parameter filled by trait resolution.
@@ -933,6 +937,7 @@ pub(crate) fn skel_params(skel: &Skel) -> Rc<Vec<ParamMeta>> {
                 implicit: b.implicit,
                 is_type: b.is_type,
                 is_self: false,
+                mode: Default::default(),
                 skel: b.dom.clone(),
                 solver: None,
                 default: None,
@@ -2105,6 +2110,7 @@ mod tests {
                 implicit: true,
                 is_type: false,
                 is_self: false,
+                mode: Default::default(),
                 skel: None,
                 solver: None,
                 default: None,
@@ -2114,6 +2120,7 @@ mod tests {
                 implicit: false,
                 is_type: false,
                 is_self: false,
+                mode: Default::default(),
                 skel: None,
                 solver: None,
                 default: None,
@@ -2188,6 +2195,7 @@ mod tests {
             implicit,
             is_type: false,
             is_self: false,
+            mode: Default::default(),
             skel: None,
             solver: None,
             default: None,
