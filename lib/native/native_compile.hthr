@@ -1250,6 +1250,10 @@ fn Layout::call_fits(self layout: Layout, out: List<Nat>, index: Nat, args, resu
 // bit tested, the loop leaves with `exhausted` clear when it is set, and
 // otherwise puts one in `exhausted`, takes it from the count and goes back
 // to the head. At the end the outputs are moved from the parameters.
+// An unbounded loop has one label, its head, and no count: the parameters
+// moved from the inputs; at the head the body; the parameters moved from
+// `next`; the exit bit tested, back to the head when it is clear; then the
+// outputs moved from the parameters.
 fn StructuredRegion::code(self region: StructuredRegion, p: Prog, layout: Layout, out: List<Nat>, names: Nat) → Option<Compiled> {
     let homes = layout.homes;
     match region {
@@ -1289,8 +1293,17 @@ fn StructuredRegion::code(self region: StructuredRegion, p: Prog, layout: Layout
                 x.prog.else_label(again, leave).computes(layout, set, loop_down(count, exhausted), x.names).and_then(λ d =>
                 then(d.prog, Jmp(head)).label(leave).computes(layout, out, moves(outputs, parameters), d.names))))))))
         },
-        // An unbounded loop has no code yet (docs/language/loop-combinator-design.md §6.9).
-        Until(_, _, _, _, _, _) => None,
+        Until(inputs, parameters, body, exit, next, outputs) => {
+            let head = Succ(names);
+            let set = homes.loop_set(exit);
+            let done = nodes_live_in(moves(outputs, parameters), out);
+            let after = nodes_live_in(moves(parameters, next), Cons(exit, done.union(set)));
+            (layout.word_fits(exit) && until_keeps(out, outputs, parameters ++ body.touches())).guard(
+                p.computes(layout, set, moves(parameters, inputs), head).and_then(λ e =>
+                body.code(e.prog.label(head), layout, after, e.names).and_then(λ b =>
+                b.prog.computes(layout, Cons(exit, done.union(set)), moves(parameters, next), b.names).and_then(λ m =>
+                m.prog.tests(layout, exit, head).computes(layout, out, moves(outputs, parameters), m.names)))))
+        },
     }
 }
 
@@ -1956,7 +1969,8 @@ fn Source::compile(self src: Source, low: BitVec(64), homes: Homes, bodies: List
 //      (native_structured: a node not at width 64 or reading a word not
 //      written before it, a branch on a bit that may not be its word's low
 //      bit, or a loop not in counted form): its kind (1 Sequence,
-//      2 Compose, 3 Conditional, 4 Call, 5 Loop)
+//      2 Compose, 3 Conditional, 4 Call, 5 Loop, 6 Lend, 7 an unbounded
+//      loop, which a statement does not take yet wherever it is)
 //   1  a leaf needs more registers than the pool holds (needed, the pool:
 //      the registers no word lives in)
 //   2  a leaf's nodes are not in evaluation order
@@ -2109,7 +2123,6 @@ fn StructuredRegion::kind(self region: StructuredRegion) → Nat {
         Lend(_, _, _, _) => 6,
         Call(_, _, _, _) => 4,
         Loop(_, _, _, _, _, _, _, _, _) => 5,
-        // Not taken yet (docs/language/loop-combinator-design.md §6.9).
         Until(_, _, _, _, _, _) => 7,
     }
 }
@@ -2144,7 +2157,10 @@ fn parts_refusal(layout: Layout, region: StructuredRegion) → List<Nat> {
             Nil => match parts_refusal(layout, body) { Nil => [13, 0, 0], Cons(reason, details) => Cons(reason, details) },
             Cons(reason, details) => Cons(reason, details),
         },
-        Until(_, _, _, _, _, _) => [0, 7, 0],
+        Until(_, _, body, exit, _, _) => match ids_refusal(layout, [exit]) {
+            Nil => match parts_refusal(layout, body) { Nil => [13, 0, 0], Cons(reason, details) => Cons(reason, details) },
+            Cons(reason, details) => Cons(reason, details),
+        },
     }
 }
 
@@ -2152,7 +2168,8 @@ fn region_refusal(layout: Layout, region: StructuredRegion, out: List<Nat>) → 
     match region {
         Dataflow(body) => computes_refusal(layout, body.nodes),
         _ => match region.scopes() {
-            False => [0, region.kind(), 0],
+            // A statement's unbounded loop is named as itself, wherever it is.
+            False => match region.until_free() { False => [0, 7, 0], True => [0, region.kind(), 0] },
             True => match region.code(Start, layout, out, 0) { Some(_) => [], None => parts_refusal(layout, region) },
         },
     }
@@ -2302,7 +2319,8 @@ fn List::names_after(self nodes: List<Node>, names: Nat) → Nat {
     match nodes { Nil => names, Cons(node, rest) => rest.names_after(node.names_after(names)) }
 }
 
-// A region's: a conditional takes two, a loop four, then their parts.
+// A region's: a conditional takes two, a loop four, an unbounded loop
+// one, then their parts.
 fn StructuredRegion::names_after(self region: StructuredRegion, names: Nat) → Nat {
     match region {
         Dataflow(body) => body.nodes.names_after(names),
@@ -2312,7 +2330,7 @@ fn StructuredRegion::names_after(self region: StructuredRegion, names: Nat) → 
         Lend(_, _, _, _) => names,
         Call(_, _, _, _) => names,
         Loop(_, _, _, _, body, _, _, _, _) => body.names_after(Succ(Succ(Succ(Succ(names))))),
-        Until(_, _, body, _, _, _) => body.names_after(Succ(Succ(names))),
+        Until(_, _, body, _, _, _) => body.names_after(Succ(names)),
     }
 }
 
