@@ -492,7 +492,6 @@ fn rt_erased_used() → String {
     "an erased parameter (`Erased<A>`) used as runtime data: the code does not take it, so a function may pass it on and state with it, but not compute from it"
 }
 
-
 // The `match` `h` is, itself: a field read of its record (`Arms`' `path`)
 // is a statement `if`'s joined locals, which only an effectful walk reads
 // (`rt_if_make`).
