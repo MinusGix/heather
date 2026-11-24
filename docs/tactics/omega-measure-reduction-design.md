@@ -1019,7 +1019,10 @@ Two things changed:
   declaration, as `bv_omega` does (docs/tactics/bv-omega-design.md §6;
   where the slot's context or statement does not check on its own, as for
   a `λ r f => omega` whose binder types the coinductive goal's checking
-  direction supplied, `lift_proved` keeps that proof inline):
+  direction supplied, `lift_proved` keeps that proof inline; and a
+  `simp_only` discharger, which is tried per side condition and
+  kernel-checked in the goal world, is elaborated in a generated scope, so
+  an `omega` in it stays inline):
   the gate checks the certificate once, as its own item in the
   declaration's context, and the body holds a reference. The certificate
   is no longer substituted along with the body under each enclosing
