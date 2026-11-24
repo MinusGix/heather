@@ -36,3 +36,40 @@ theorem pair_swap_held(own: List<u8>, p: Pair64, length: u64, holds: rt_held::St
     Pair64::swap(p).value = Pair64::swap::bytes(own, length).value {
     Pair64::swap::runs_held(own, p, length, holds).value
 }
+
+// ---------------------------------------------------------------------------
+// A parameter that does not reach the layout is erased
+
+// `k` refines nothing the bytes hold: a tag a caller keeps apart.
+laid record Tagged(k: u64) { x: u64, y: u64 }
+
+runtime fn Tagged::sum({k: u64}, mut self t: Tagged(k), d: u64) → u64 {
+    t.x := t.x + d;
+    t.x + t.y
+}
+
+// The code takes the span, its length word and `d`, and no `k`: the same
+// code at every tag.
+theorem tagged_sum_runs(): Tagged::sum::bytes([1, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0], w(16), w(5)).value = w(8) { refl }
+
+// What it publishes holds at every value of `k`, a neutral one included.
+theorem tagged_sum_held(k: u64, own: List<u8>, t: Tagged(k), length, d: u64, holds: rt_held::Stored::Holds(Tagged::stored(k), own, length, t)):
+    Tagged::sum(t, d, k := k).value = Tagged::sum::bytes(own, length, d).value ∧
+    rt_held::Stored::Holds(Tagged::stored(k), Tagged::sum::bytes(own, length, d).after, length, Tagged::sum(t, d, k := k).after) {
+    let ran = Tagged::sum::runs_held(k, own, t, length, d, holds);
+    ⟨ran.value, ran.holds⟩
+}
+
+// And at a literal one.
+theorem tagged_sum_at_seven(own: List<u8>, t: Tagged(BitVec::ofNat(7)), length, d: u64, holds: rt_held::Stored::Holds(Tagged::stored(BitVec::ofNat(7)), own, length, t)):
+    Tagged::sum(t, d, k := BitVec::ofNat(7)).value = Tagged::sum::bytes(own, length, d).value {
+    Tagged::sum::runs_held(BitVec::ofNat(7), own, t, length, d, holds).value
+}
+
+// The code takes the span, its length word and `d`, and no word for `k`.
+fn tagged_code() → (List<u8> → u64 → u64 → Mutated<List<u8>, u64>) { Tagged::sum::bytes }
+
+// A body that reads the erased parameter's value needs it as a word the
+// code takes, which an erased parameter is not.
+// expect-error: a local that is not runtime data
+runtime fn Tagged::tag({k: u64}, self t: Tagged(k)) → u64 { k }
