@@ -420,6 +420,20 @@ single-steps a bounded number of heads looking for one before the
 transparent run (`Conv::meet_on_the_way`). The same unfoldings and fuel
 otherwise; a remembered spine is tried once.
 
+A sixth (2026-11-24,
+`issues/arithmetic-definition-opaque-at-open-arguments.md` item 3): **a
+pair against a δ-stuck side tries Σ-η first.** The headless-other-side arm
+above unfolds the stuck side to a form with no defined head before the
+type-directed Σ arm sees either, which for a wrapper `f(x) = let r = g(x,
+4); ⟨r.after, r.value⟩` against `g(x, 4)` runs `g`'s measured recursion at
+its literal. When the headless side is a pair and the type's view is a Σ
+(not a `Vec`, whose arm is its own), `Conv::eta_before_unfolding` compares
+the pair's fields with the stuck side's projections under `delta_lazy`'s
+guard, and they meet at `g(x, 4)`'s spine; a failure falls through to the
+unfolding. η is the rule the Σ arm applies anyway once the stuck side is
+unfolded, so this is the second kind of acceleration below: the same
+verdicts, fewer unfoldings.
+
 **Acceleration policy** (`issues/kernel-acceleration-policy.md`). Three
 kinds of acceleration are distinguished, and only the first two grow:
 *representation changes with an adequacy argument* (saturated runs — the

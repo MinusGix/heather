@@ -92,3 +92,4 @@ by a `¬` theorem at a closed table.
 
   Residue: the capacity as a parameter and rehashing,
   [[runtime-hash-map-rehash]].
+- 2026-11-24: 2026-11-24: Cost list, the induction items: [[runtime-fn-induct-test-names]] and [[branch-equations-silent-without-logic]] closed, [[arithmetic-definition-opaque-at-open-arguments]] items 2 and 3 done; word_map_laws.hthr's probes are induct arms and mutated_eta is gone (1447 -> 1352 lines). The cold-check cost is [[principle-found-proof-lifting-cost]].

@@ -343,23 +343,23 @@ should read is `docs/library/program-and-proof-style.md`.
   closed count computes, and `BitVec::run_up_invariant` carries what each
   step keeps (`lib/_tests/native/crypto/sha256_schedule_tests.hthr`,
   `issues/loop-invariant-rules.md`).
-- **A `runtime fn`'s induction is its principle applied by hand, with a
-  stated lemma per case.** Its `f::induct` case binders carry no test
-  names, so `induct`'s arms cannot cite `empty` or `hit`, and a case λ's
-  binders past the motive get no types
-  ([[runtime-fn-induct-test-names]]). Write the motive's body as a `fn …
-  → Type`, one theorem per case whose result is it, and pass
-  `λ x̄ tests eq => case(…)` (`WordMap::find_found`,
-  `lib/native/runtime/word_map_laws.hthr`). A module whose `decreases`
-  functions should get equations at all imports `logic` and `bool`;
-  without them they are skipped silently
-  ([[branch-equations-silent-without-logic]]).
-- **`refl` between a wrapper and the measured call it makes at a literal
-  runs out of fuel; state record η at a neutral record.**
+- **A `runtime fn`'s induction is `induct` with an arm per branch, citing
+  the branch's tests by name.** `induct WordMap::find_at(m, k, j, left) {
+  True::True::False::True => … hit …, … }`: an arm sees `more`, `lt`,
+  `empty`, `hit` as the source wrote them, though the body cites none of
+  them ([[runtime-fn-induct-test-names]]). A test's hypothesis is stated as
+  the function wrote it (`m.keys.at(j) = 0`); restate it at the spelling a
+  lemma wants with a typed `let` (`let empty: (m.key(j.toNat()) = 0) =
+  empty;`). A goal stated through a definition (`WordMap::Finds(…)`, whose
+  body is a Π) is fine: the arm's block is a `λ` over it
+  (`lib/native/runtime/word_map_laws.hthr`). The equations and the
+  principle need no import beyond the function's own: they cite `bool` and
+  `logic` by qualified name ([[branch-equations-silent-without-logic]]).
+- **`refl` between a wrapper and the measured call it makes is fine.**
   `f(x) = g(x, 4)` where `f`'s body is `let r = g(x, 4); Mutated(r.after,
-  r.value)` is refused: the kernel unfolds `g` at the literal before
-  η-expanding. `mutated_eta(r): Mutated(r.after, r.value) = r { refl }`
-  instantiated at `g(x, 4)` converts at once (`WordMap::insert_is`).
+  r.value)` converts by record η at `g(x, 4)`'s own spine, before the
+  kernel would unfold `g` at the literal (`WordMap::insert_is`;
+  `Conv::eta_before_unfolding`).
 - **A function that tests is cited by its branch equations, never
   restated.** A `fn` whose body (after its `let`s) is an `if`, `if h:` or a
   `match` on a `Bool` has `f::True(x̄, h: P)` and `f::False(x̄, h: ¬P)`:

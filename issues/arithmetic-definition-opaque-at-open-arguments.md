@@ -38,3 +38,29 @@ naming the distance between two slots of a table, `(b + 4 - a) % 4`:
 arguments too; the kernel's lazy δ prefers unfolding a definition whose
 body is the other side's head (`Before` against `Nat::Lt`), and prefers
 record η to unfolding a measured recursion at a literal.
+
+## Log
+
+- 2026-11-24: 2026-11-24 (items 2 and 3; item 1 is the omega thread's):
+
+  Item 3 fixed (2d35946). In `Conv::tm_w`, a δ-stuck side against a side
+  with no defined head was unfolded transparently before the type-directed
+  Σ-η arm saw either; against a pair at a Σ (`Mutated(r.after, r.value)`)
+  that ran `insert_at`'s measured recursion at its literal 4.
+  `Conv::eta_before_unfolding` now tries Σ-η there first, under
+  `delta_lazy`'s guard, only where the type's view is a Σ (a `Vec` keeps its
+  own arm), so `fst(insert_at(…))` meets the pair's `r.after` at the same
+  spine. `WordMap::insert_is`/`remove_is` are `refl` and
+  `WordMap::mutated_eta` is gone. Probe:
+  lib/_tests/native/runtime/word_map_tests.hthr, with a negative control
+  (a wrong second field, refused by the kernel).
+
+  Item 2 does not reproduce on this tree: `Before(k, t, found.witness)`
+  against a proof of the unfolded inequality, directly and through a second
+  definition (`home(k)`, as the original spelled it), converts at once by
+  the newer-head rule (`Before` unfolds to `Nat::Lt`, then the spines meet);
+  the reversed proof is refused promptly as a mismatch (same probe). The
+  original refusal quoted a *difference* ("differs at …"), so it was most
+  likely a wrong proof whose refutation went to the kernel, where deciding
+  non-convertibility unfolds `%` at open arguments; no heuristic change made.
+  Left open for item 1.
