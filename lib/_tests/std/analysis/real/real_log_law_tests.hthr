@@ -1,4 +1,4 @@
-// Probes of `lib/std/analysis/real_log_law.hthr`: log at real arguments
+// Probes of `lib/std/analysis/real/real_log_law.hthr`: log at real arguments
 // and its laws, read at concrete and neutral reals. Tests, not library:
 // nothing outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
 import logic; import bool; import nat; import int; import list; import relation; import relation_props; import algebra;

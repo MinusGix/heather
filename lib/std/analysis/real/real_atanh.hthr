@@ -15,7 +15,7 @@
 //   `r^n·n <= 1` and the Archimedean property.
 //
 // The reals' atanh is these polynomials' limit
-// (lib/std/analysis/real_log.hthr).
+// (lib/std/analysis/real/real_log.hthr).
 
 import logic;
 import nat;

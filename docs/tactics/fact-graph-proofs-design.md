@@ -17,7 +17,7 @@ Today a proof in Heather either spells out low-level term plumbing
 (`same_trans`, `cong_fn`, `ofRat_*`, `j` transports, `.left`/`.right`
 projections) or delegates a closed subproblem to a single decision procedure
 (`omega`, `linarith`, `ring`, `simp_only`). In a real proof like
-`CReal::exp_sub_lin_near` (`lib/std/analysis/real_exp.hthr`), over 80% of the
+`CReal::exp_sub_lin_near` (`lib/std/analysis/real/real_exp.hthr`), over 80% of the
 lines carry zero mathematical entropy: they move casts past operators, split
 and reassemble `AbsLe` conjunctions, propagate positivity, and chain
 transitivity/respects steps.

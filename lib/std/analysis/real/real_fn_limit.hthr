@@ -1,5 +1,5 @@
 // Two derivative rules that build on the mean value inequality
-// (lib/std/analysis/real_fn.hthr; issues/exp-log-inverse.md):
+// (lib/std/analysis/real/real_fn.hthr; issues/exp-log-inverse.md):
 //
 // - **Uniform limits** (`DerivOn::of_approx`). If `f` and `g` are uniform
 //   limits on a convex `D` of `F(n)` and its derivatives `G(n)`, and `g` is

@@ -21,14 +21,14 @@ each built-in proof world native inside syntax:
    lowering to `let h <- W::synth(λ x => P);`, backed by `DefaultOrder<I>`,
    `Eventually::synth`, and record-keyed `evidence theorem` resolution
    (`crates/syntax/src/{parser.rs,within.rs}`, `crates/elab/src/resolve.rs`,
-   `lib/std/core/world.hthr`, `lib/std/analysis/real_exp.hthr`).
+   `lib/std/core/world.hthr`, `lib/std/analysis/real/real_exp.hthr`).
 3. **Direct `within Squash { let h <- q; … }` on primitive `∥A∥`:** primitive
    `λ (A: Type) => ∥A∥` carrier in `traits.rs` and `gendefs.rs` (`constructor_spelling`),
    with `Bind<λ (A: Type) => ∥A∥>`, `Pointed<λ (A: Type) => ∥A∥>`, and
    `Squash::exit` in `lib/std/core/world.hthr` — no `Trunc::of` wrapper required.
 
 Verified in `lib/_tests/std/core/world_tests.hthr` and
-`lib/std/analysis/real_exp.hthr` with `--review --deny-axioms`.
+`lib/std/analysis/real/real_exp.hthr` with `--review --deny-axioms`.
 
 
 
