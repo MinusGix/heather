@@ -817,6 +817,7 @@ impl MutualRec<'_> {
                 eqbind: None,
                 motive: None,
                 arms,
+                test: None,
             },
             span,
         };
@@ -1050,6 +1051,7 @@ fn mot_decl(g: &Group, level: u64) -> Decl {
             eqbind: None,
             motive: None,
             arms,
+            test: None,
         },
         span,
     };
@@ -1337,7 +1339,7 @@ impl<'a, 'g> Calls<'a, 'g> {
             }
             ExprKind::CollectionLit(xs) => ExprKind::CollectionLit(xs.iter().map(|x| self.expr(x)).collect()),
             ExprKind::Eq(a, b) => ExprKind::Eq(Box::new(self.expr(a)), Box::new(self.expr(b))),
-            ExprKind::Match { form, generated, scrut, eqbind, motive, arms } => ExprKind::Match {
+            ExprKind::Match { form, generated, scrut, eqbind, motive, arms, test } => ExprKind::Match {
                 form: *form,
                 generated: *generated,
                 scrut: Box::new(self.expr(scrut)),
@@ -1347,6 +1349,7 @@ impl<'a, 'g> Calls<'a, 'g> {
                     let at = self.receiver_member(scrut);
                     arms.iter().map(|a| self.arm(a, eqbind.as_ref(), at)).collect()
                 },
+                test: test.clone(),
             },
             ExprKind::MatchCode { scrut, motive, arms } => ExprKind::MatchCode {
                 scrut: Box::new(self.expr(scrut)),

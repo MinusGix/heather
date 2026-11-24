@@ -442,8 +442,13 @@ steps, and running out of that is not a verdict, so the allowance is
 charged and the stuck side unfolds as before; inside `Sha256::close`'s
 accessor checks about a hundred attempts that passed the shape test and
 still did not meet had each been charged its whole failure. A wrapper's
-fields meet in under a thousand steps. Like `MEET_STEPS`, the allowance is
-a constant of the strategy, not of any verdict. η is the rule the Σ arm applies anyway once the stuck side is
+fields meet in under a thousand steps. `ETA_FUEL` (4096) and
+`ETA_FIELD_DEPTH` (4) are **strategy constants that bound time, not
+verdicts**, as `MEET_STEPS` is: changing either changes how much a
+comparison tries before it unfolds, never what it accepts or refuses, since
+an attempt that is cut off falls through to the unfolding it would have
+taken. A structural criterion for when field-by-field η meets, one needing
+no constant, would be preferred if one appears. η is the rule the Σ arm applies anyway once the stuck side is
 unfolded, so this is the second kind of acceleration below: the same
 verdicts, fewer unfoldings.
 

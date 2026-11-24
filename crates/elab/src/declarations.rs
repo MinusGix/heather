@@ -748,6 +748,7 @@ impl Declarations<'_> {
                     eqbind: None,
                     motive: None,
                     arms,
+                    test: None,
                 },
                 span,
             }),

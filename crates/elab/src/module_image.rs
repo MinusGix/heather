@@ -33,8 +33,8 @@ use crate::resolve::DerivedInst;
 use crate::slots::Slot;
 use crate::traits::{ClassInfo, DesignationInfo, EvidenceRule, InstanceInfo};
 
-const MAGIC: &[u8; 8] = b"HTHMOD\0\x27";
-const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x21";
+const MAGIC: &[u8; 8] = b"HTHMOD\0\x28";
+const INTERFACE_MAGIC: &[u8; 8] = b"HTHIFC\0\x22";
 
 /// The two encodings' versions, image then interface: what a module cache
 /// key covers, so a bump of either is a clean miss for every reader rather
@@ -1472,10 +1472,11 @@ fn put_expr(w: &mut Writer, expr: &Expr) {
         ExprKind::Refl => w.byte(11),
         ExprKind::AutoRefl => w.byte(12),
         ExprKind::Hole(name) => { w.byte(13); w.option(name.as_ref(), |w, s| w.string(s)); }
-        ExprKind::Match { form, generated, scrut, eqbind, motive, arms } => {
+        ExprKind::Match { form, generated, scrut, eqbind, motive, arms, test } => {
             w.byte(14); put_match_form(w, *form); w.bool(*generated); put_expr(w, scrut);
             w.option(eqbind.as_ref(), |w, s| w.string(s));
             w.option(motive.as_deref(), put_expr); w.vec(arms, put_arm);
+            w.option(test.as_ref(), |w, s| w.string(s));
         }
         ExprKind::MatchCode { scrut, motive, arms } => {
             w.byte(15); put_expr(w, scrut); put_ty(w, motive); w.vec(arms, put_arm);
@@ -1540,7 +1541,7 @@ fn get_expr(r: &mut Reader<'_>) -> Result<Expr, ModuleImageDecodeError> {
             14 => ExprKind::Match {
                 form: get_match_form(r)?, generated: r.bool()?, scrut: Box::new(get_expr(r)?),
                 eqbind: r.option(Reader::string)?, motive: r.option(|r| Ok(Box::new(get_expr(r)?)))?,
-                arms: r.vec(get_arm)?,
+                arms: r.vec(get_arm)?, test: r.option(Reader::string)?
             },
             15 => ExprKind::MatchCode {
                 scrut: Box::new(get_expr(r)?), motive: Box::new(get_ty(r)?), arms: r.vec(get_arm)?,

@@ -629,6 +629,7 @@ impl<'a> Lift<'a> {
                             Arm { ctor: "Return".into(), default: false, binders: vec![Pat::Var { name: "#r".into(), span }], body: var("#r", span), span },
                             Arm { ctor: "_".into(), default: true, binders: vec![], body: rest, span },
                         ],
+                        test: None,
                     },
                     span,
                 }
@@ -680,7 +681,7 @@ impl<'a> Lift<'a> {
                 let mut inner = scope.clone();
                 Ok(Expr { kind: ExprKind::Block(Box::new(self.block(*b, &mut inner)?)), span })
             }
-            ExprKind::Match { form, generated, scrut, eqbind, motive, arms } => {
+            ExprKind::Match { form, generated, scrut, eqbind, motive, arms, test } => {
                 let mut out: Vec<Arm> = Vec::with_capacity(arms.len());
                 for mut arm in arms {
                     // A test's own equation, which a lifted loop's `if` binds
@@ -703,7 +704,7 @@ impl<'a> Lift<'a> {
                     arm.body = body?;
                     out.push(arm);
                 }
-                Ok(Expr { kind: ExprKind::Match { form, generated, scrut, eqbind, motive, arms: out }, span })
+                Ok(Expr { kind: ExprKind::Match { form, generated, scrut, eqbind, motive, arms: out, test: test.clone() }, span })
             }
             _ => err("a `for` here is not supported yet: write it as a statement of the function's body", span),
         }
@@ -1927,6 +1928,7 @@ impl Lift<'_> {
                         eqbind: None,
                         motive: None,
                         arms,
+                        test: None,
                     },
                     span,
                 };
@@ -1989,6 +1991,7 @@ impl Lift<'_> {
                         Arm { ctor: "True".into(), default: false, binders: vec![], body: out, span },
                         Arm { ctor: "False".into(), default: false, binders: vec![], body: otherwise(), span },
                     ],
+                    test: None,
                 },
                 span,
             };
@@ -2107,7 +2110,7 @@ fn is_state(x: &Expr) -> bool {
 fn tail_into_join(stmts: &[Stmt], result: &Expr) -> Option<(Vec<Stmt>, Expr)> {
     let j = stmts.iter().position(|s| matches!(s, Stmt::Let { expr, .. } if is_join(expr)))?;
     let Stmt::Let { name, ty, expr, span, opaque } = &stmts[j] else { return None };
-    let ExprKind::Match { form, generated, scrut, eqbind, motive, arms } = &expr.kind else { return None };
+    let ExprKind::Match { form, generated, scrut, eqbind, motive, arms, test } = &expr.kind else { return None };
     let tail = &stmts[j + 1..];
     let arms: Vec<Arm> = arms
         .iter()
@@ -2143,6 +2146,7 @@ fn tail_into_join(stmts: &[Stmt], result: &Expr) -> Option<(Vec<Stmt>, Expr)> {
             eqbind: eqbind.clone(),
             motive: motive.clone(),
             arms,
+            test: test.clone(),
         },
         span: expr.span,
     };
@@ -2514,6 +2518,7 @@ impl Lift<'_> {
                     Arm { ctor: "True".into(), default: false, binders: vec![], body: Expr { kind: ExprKind::Block(Box::new(again)), span: body.span }, span },
                     Arm { ctor: "False".into(), default: false, binders: vec![], body: done, span },
                 ],
+                test: None,
             },
             span,
         };
@@ -2726,9 +2731,9 @@ fn leaves(e: Expr, f: &dyn Fn(&str, Vec<Expr>, Span) -> Expr) -> Expr {
             *b.result = leaves(r, f);
             Expr { kind: ExprKind::Block(b), span }
         }
-        ExprKind::Match { form, generated, scrut, eqbind, motive, arms } => {
+        ExprKind::Match { form, generated, scrut, eqbind, motive, arms, test } => {
             let arms = arms.into_iter().map(|mut a| { a.body = leaves(a.body, f); a }).collect();
-            Expr { kind: ExprKind::Match { form, generated, scrut, eqbind, motive, arms }, span }
+            Expr { kind: ExprKind::Match { form, generated, scrut, eqbind, motive, arms, test: test.clone() }, span }
         }
         kind => Expr { kind, span },
     }

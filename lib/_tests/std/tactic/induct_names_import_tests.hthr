@@ -1,0 +1,25 @@
+// `induct` along an imported structural recursion cites the test by the
+// name its source gave it, which no branch of the source cites
+// (`induct_names_source_tests`; issues/runtime-fn-induct-test-names.md).
+// Tests, not library.
+import logic; import nat; import omega; import list; import induct_names_source_tests;
+
+theorem count_big_le(xs: List<Nat>): count_big(xs) <= xs.len() {
+    induct count_big(xs) {
+        Cons::True => {
+            let b: (3 < x) = big;
+            omega
+        },
+    }
+}
+
+// Negative control: the `else` case has the test's negation, not the test.
+// expect-error: is expected here
+theorem count_big_wrong(xs: List<Nat>): count_big(xs) <= xs.len() {
+    induct count_big(xs) {
+        Cons::False => {
+            let b: (3 < x) = big;
+            omega
+        },
+    }
+}

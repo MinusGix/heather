@@ -3868,6 +3868,7 @@ fn recursion_at_top_hoisted(decl: &Decl, dec: usize, ind: &inductive::Inductive)
                 eqbind: None,
                 motive: None,
                 arms,
+                test: None,
             },
             span,
         }),

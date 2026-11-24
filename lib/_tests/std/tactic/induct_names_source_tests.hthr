@@ -1,0 +1,13 @@
+// A structural recursion whose `if big:` no branch cites, for
+// `induct_names_import_tests`: the importer builds `count_big::induct`
+// from the declaration this module's image stores, and the test's name
+// travels with it (issues/runtime-fn-induct-test-names.md). Tests, not
+// library.
+import logic; import nat; import omega; import list;
+
+fn count_big(xs: List<Nat>) → Nat {
+    match xs {
+        Nil => 0,
+        Cons(x, t) => if big: 3 < x { count_big(t) + 1 } else { count_big(t) },
+    }
+}

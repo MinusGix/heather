@@ -186,10 +186,12 @@ for a constructor test followed by a `Bool` one. In an arm the tests on the
 way are in scope under the names the function gave them (`if less: …` binds
 `less`), so an arm reads like the branch it is about. That holds where no
 branch cites its test: the `if h:` lowering binds the evidence only in a
-branch that names it, and where neither does, the convoy's private equation
-keeps the name (`__if_bitN_less`, `heather_syntax::if_bit_unnamed`), which
-the equations' reading takes (issues/runtime-fn-induct-test-names.md; a
-`runtime fn` probe such as `WordMap::find_at` was the case).
+branch that names it, so the `match` it lowers to carries the name as data
+(`ExprKind::Match::test`), which the equations' reading takes, every pass
+that rebuilds the node carries, and a module image stores; nothing that
+computes the function's term reads it (issues/runtime-fn-induct-test-names.md;
+a `runtime fn` probe such as `WordMap::find_at`, whose branches cite none of
+their tests, was the case).
 
 **What the equations cite** they spell by qualified name (`bool::Bool::
 convoy_true`, `bool::decide_bit_of`, `logic::False`), reached through the

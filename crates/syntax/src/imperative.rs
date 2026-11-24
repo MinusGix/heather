@@ -1049,7 +1049,7 @@ fn carrier_step(cond: &Expr, body: &Block, env: &[String], vars: &[String], x: &
         Arm { ctor: "False".into(), default: false, binders: vec![], body: ret("Step::Break", span), span },
     ];
     let decide = Expr {
-        kind: ExprKind::Match { form: MatchForm::Match, generated: true, scrut: Box::new(cond.clone()), eqbind: None, motive: None, arms },
+        kind: ExprKind::Match { form: MatchForm::Match, generated: true, scrut: Box::new(cond.clone()), eqbind: None, motive: None, arms, test: None },
         span,
     };
     let s = format!("{}#s", x.name);

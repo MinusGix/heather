@@ -1152,6 +1152,7 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
             eqbind,
             motive,
             arms,
+            test,
         } => Match {
             form: *form,
             generated: *generated,
@@ -1168,6 +1169,7 @@ fn rename_expr(m: &Ren, e: &Expr) -> Expr {
                     span: a.span,
                 })
                 .collect(),
+            test: test.clone(),
         },
         // A `match code` cannot appear in a class member's body — the renamer
         // walks program-layer declarations and `match code` is layer-m only —

@@ -781,6 +781,7 @@ impl Patterns<'_> {
                 eqbind: None,
                 motive: None,
                 arms: out,
+                test: None,
             },
             // The whole match's span: a missing-arm error inside a *generated*
             // level has nowhere better to point (§3.4).
@@ -1487,6 +1488,7 @@ fn fill(e: Expr, bodies: &[Option<Expr>]) -> Expr {
             eqbind,
             motive,
             arms,
+            test,
         } => Expr {
             kind: ExprKind::Match {
                 form,
@@ -1495,6 +1497,7 @@ fn fill(e: Expr, bodies: &[Option<Expr>]) -> Expr {
                 eqbind,
                 motive,
                 arms: arms.into_iter().map(|a| fill_arm(a, bodies)).collect(),
+                test: test.clone(),
             },
             span: e.span,
         },
