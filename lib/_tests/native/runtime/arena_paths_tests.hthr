@@ -1,0 +1,56 @@
+// Probes of `arena_paths.hthr`: an element of a vector read at a literal
+// arena by evaluation, kept by a push with room and lost by growing, and
+// both at an open arena under the vector's invariant. Tests, not library:
+// nothing imports this module.
+import logic;
+import bool;
+import nat;
+import option;
+import list;
+import vector;
+import algebra;
+import omega;
+import runtime_data;
+import arena;
+import arena_laws;
+import path;
+import arena_paths;
+
+// A vector with its header at 0 (base 3, capacity 2, length 1) holding 7,
+// the top at 5.
+fn one_item() → Arena { Arena(5, 16, [3, 2, 1, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]) }
+
+// The same vector full: length 2, holding 7 and 8.
+fn full() → Arena { Arena(5, 16, [3, 2, 2, 7, 8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]) }
+
+theorem reads_first(): Arena::elem_path(0, 3, 0).get(one_item()) = Some(7) { refl }
+
+// Past the length there is no element, and a path taken in another window
+// reads nothing.
+theorem past_length(): Arena::elem_path(0, 3, 1).valid(one_item()) = False { refl }
+
+theorem other_window(): Arena::elem_path(0, 4, 0).valid(one_item()) = False { refl }
+
+// A push with room keeps the first element where it was.
+theorem kept_by_push(): Arena::elem_path(0, 3, 0).get(Arena::push_in(one_item(), 0, 9).after) = Some(7) { refl }
+
+// Growing moves the vector to a window at the top, 5: the element taken at 3
+// is gone, and the vector's first element is read again in the new window.
+theorem lost_by_grow(): Arena::elem_path(0, 3, 0).valid(Arena::grow(full(), 0).after) = False { refl }
+
+theorem found_again(): Arena::elem_path(0, 5, 0).get(Arena::grow(full(), 0).after) = Some(7) { refl }
+
+// At an open arena under the invariant: an element below the length is
+// valid in the window the header points at, a push with room keeps what it
+// reads, and growing keeps nothing.
+theorem push_keeps_open(a: Arena, h, x: u64, inv: VecInv(a, h), room: a.cell(h + 2).toNat() < a.cell(h + 1).toNat(), i: Nat, below: i < a.cell(h + 2).toNat()):
+    Arena::elem_path(h, a.cell(h), i).Valid(Arena::push_in(a, h, x).after)
+{
+    Arena::elem_path(h, a.cell(h), i).keeps_valid(a, Arena::push_in(a, h, x).after, Arena::push_in_keeps(a, h, x, inv, room, a.cell(h), i), Arena::elem_valid(a, h, inv, i, below))
+}
+
+theorem grow_loses_open(a: Arena, h: u64, inv: VecInv(a, h), grew: Arena::grow(a, h).value = 1, i: Nat, below: i < a.cell(h + 2).toNat()):
+    ¬Arena::elem_path(h, a.cell(h), i).Keeps(a, Arena::grow(a, h).after)
+{
+    Arena::grow_not_keeps(a, h, inv, grew, i, Arena::elem_valid(a, h, inv, i, below))
+}

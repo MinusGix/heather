@@ -362,3 +362,41 @@ theorem vector_entries_snoc<A>(n: Nat): (xs: [A; n]) → (x: A) → vector_entri
         Succ(_, ih) => λ xs x => cong_fn(λ (t: List<A>) => Cons(head(xs), t), ih(tail(xs), x)),
     }
 }
+
+// An entry written over itself leaves the vector as it was.
+theorem vector_update_self<A>(n: Nat, v: [A; n], i: Nat, pad: A, inside: i < n): vector_update(v, i, vector_get(v, i, pad)) = v {
+    vector_ext(n, vector_update(v, i, vector_get(v, i, pad)), v, λ k at => match Nat::eq_dec(k, i) {
+        Inl(same) => trans(vector_index_update_same(n, v, i, k, vector_get(v, i, pad), at, same),
+            trans(cong_fn(λ (m: Nat) => vector_get(v, m, pad), sym(same)), vector_get_inside(n, v, k, pad, at))),
+        Inr(other) => vector_index_update_other(n, v, i, k, vector_get(v, i, pad), at, other),
+    })
+}
+
+// Of two writes to one entry, the second is what stays.
+theorem vector_update_update_same<A>(n: Nat, v: [A; n], i: Nat, a, b: A): vector_update(vector_update(v, i, a), i, b) = vector_update(v, i, b) {
+    vector_ext(n, vector_update(vector_update(v, i, a), i, b), vector_update(v, i, b), λ k at => match Nat::eq_dec(k, i) {
+        Inl(same) => trans(vector_index_update_same(n, vector_update(v, i, a), i, k, b, at, same), sym(vector_index_update_same(n, v, i, k, b, at, same))),
+        Inr(other) => trans(vector_index_update_other(n, vector_update(v, i, a), i, k, b, at, other),
+            trans(vector_index_update_other(n, v, i, k, a, at, other), sym(vector_index_update_other(n, v, i, k, b, at, other)))),
+    })
+}
+
+// Writes to two different entries commute.
+theorem vector_update_update_apart<A>(n: Nat, v: [A; n], i, k: Nat, a, b: A, apart: ¬(i = k)):
+    vector_update(vector_update(v, i, a), k, b) = vector_update(vector_update(v, k, b), i, a)
+{
+    vector_ext(n, vector_update(vector_update(v, i, a), k, b), vector_update(vector_update(v, k, b), i, a), λ m at => match Nat::eq_dec(m, i) {
+        Inl(at_i) => {
+            let not_k: ¬(m = k) = λ e => apart(trans(sym(at_i), e));
+            trans(vector_index_update_other(n, vector_update(v, i, a), k, m, b, at, not_k),
+                trans(vector_index_update_same(n, v, i, m, a, at, at_i), sym(vector_index_update_same(n, vector_update(v, k, b), i, m, a, at, at_i))))
+        },
+        Inr(not_i) => match Nat::eq_dec(m, k) {
+            Inl(at_k) => trans(vector_index_update_same(n, vector_update(v, i, a), k, m, b, at, at_k),
+                trans(sym(vector_index_update_same(n, v, k, m, b, at, at_k)), sym(vector_index_update_other(n, vector_update(v, k, b), i, m, a, at, not_i)))),
+            Inr(not_k) => trans(vector_index_update_other(n, vector_update(v, i, a), k, m, b, at, not_k),
+                trans(vector_index_update_other(n, v, i, m, a, at, not_i),
+                    trans(sym(vector_index_update_other(n, v, k, m, b, at, not_k)), sym(vector_index_update_other(n, vector_update(v, k, b), i, m, a, at, not_i))))),
+        },
+    })
+}

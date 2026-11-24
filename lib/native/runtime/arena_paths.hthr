@@ -1,0 +1,321 @@
+// Paths into the arena's vector (docs/language/ownership-design.md §10.6):
+// what a push keeps. An element of the vector whose header is at `h` is a
+// path into the arena, and it names the window it was taken in, `b`: what a
+// pointer to the element is. It is valid while the header still points at
+// `b`, the element is below the length, and the word is in the heap apart
+// from the header (`Arena::elem_path`, lawful at every arena:
+// `elem_laws`). Under `VecInv` every element below the length is valid
+// (`elem_valid`).
+//
+// - A push where the window has room keeps every path into the vector
+//   (`push_in_keeps`): the header's base is unchanged, the length grows,
+//   and the words below it are as they were.
+// - Growing moves the vector to a new window at the old top, so it keeps
+//   none (`grow_loses`, `grow_not_keeps`): the header no longer points at
+//   `b`. A push that grows is `grow` and then `push_in` (`Arena::push`);
+//   its `grow` is where every path is lost. The meaning of the vector is
+//   unchanged by both (`push_in_abs`, `grow_abs`): what changed is its home,
+//   which is why capacity is a fact about a home and not a field of the
+//   value (§10.6).
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import vector;
+import algebra;
+import omega;
+import bitvec_nat;
+import bitvec_omega;
+import runtime_data;
+import arena;
+import arena_laws;
+import path;
+
+// ---------------------------------------------------------------------------
+// An element of the vector at `h`, taken in the window at `b`
+
+// What the element needs of the header's length: it is below it, the word
+// is in the heap, the header is in the heap, and the word is apart from
+// the header.
+fn Arena::elem_fits(len, h, b: u64, i: Nat) → Bool {
+    (i + 1).leb(len.toNat()) && (b.toNat() + i + 1).leb(16) && (h.toNat() + 3).leb(16) &&
+        ((b.toNat() + i + 1).leb(h.toNat()) || (h.toNat() + 3).leb(b.toNat() + i))
+}
+
+// And the header points at `b`.
+fn Arena::elem_ok_at(base, len, h, b: u64, i: Nat) → Bool {
+    match BitVec::eq_dec(base, b) { Inl(_) => Arena::elem_fits(len, h, b, i), Inr(_) => False }
+}
+
+fn Arena::elem_ok(self a: Arena, h, b: u64, i: Nat) → Bool { Arena::elem_ok_at(a.cell(h), a.cell(h + 2), h, b, i) }
+
+fn Arena::elem_read(a: Arena, ok: Bool, at: Nat) → Option<u64> { match ok { True => Some(a.word(at)), False => None } }
+
+fn Arena::elem_write(a: Arena, ok: Bool, at: Nat, x: u64) → Arena {
+    match ok { True => Arena(a.top, a.limit, vector_update(a.heap, at, x)), False => a }
+}
+
+fn Arena::elem_path(h, b: u64, i: Nat) → Path<Arena, u64> {
+    Path<Arena, u64>(
+        get := λ (a: Arena) => Arena::elem_read(a, a.elem_ok(h, b, i), b.toNat() + i),
+        set := λ (a: Arena) => λ (x: u64) => Arena::elem_write(a, a.elem_ok(h, b, i), b.toNat() + i, x),
+    )
+}
+
+theorem Arena::elem_ok_at_elim(base, len, h, b: u64, i: Nat): Arena::elem_ok_at(base, len, h, b, i) = True →
+    And<base = b, Arena::elem_fits(len, h, b, i).IsTrue()>
+{
+    match BitVec::eq_dec(base, b) {
+        Inl(same) => λ e => And(same, Bool::is_true_of_eq(e)),
+        Inr(_) => λ e => absurd(e),
+    }
+}
+
+theorem Arena::elem_ok_at_intro(base, len, h, b: u64, i: Nat, same: base = b, fits: Arena::elem_fits(len, h, b, i).IsTrue()):
+    Arena::elem_ok_at(base, len, h, b, i) = True
+{
+    match BitVec::eq_dec(base, b) {
+        Inl(_) => eq_true_of_is_true(Arena::elem_fits(len, h, b, i), fits),
+        Inr(other) => false_elim(other(same)),
+    }
+}
+
+theorem Arena::elem_get_ok(a: Arena, h, b: u64, i: Nat, ok: a.elem_ok(h, b, i) = True): Arena::elem_path(h, b, i).get(a) = Some(a.word(b.toNat() + i)) {
+    cong_fn(λ (o: Bool) => Arena::elem_read(a, o, b.toNat() + i), ok)
+}
+
+theorem Arena::elem_set_ok(a: Arena, h, b: u64, i: Nat, ok: a.elem_ok(h, b, i) = True, x: u64):
+    Arena::elem_path(h, b, i).set(a, x) = Arena(a.top, a.limit, vector_update(a.heap, b.toNat() + i, x))
+{
+    cong_fn(λ (o: Bool) => Arena::elem_write(a, o, b.toNat() + i, x), ok)
+}
+
+theorem Arena::elem_get_not(a: Arena, h, b: u64, i: Nat, no: a.elem_ok(h, b, i) = False): Arena::elem_path(h, b, i).get(a) = None {
+    cong_fn(λ (o: Bool) => Arena::elem_read(a, o, b.toNat() + i), no)
+}
+
+theorem Arena::elem_set_not(a: Arena, h, b: u64, i: Nat, no: a.elem_ok(h, b, i) = False, x: u64): Arena::elem_path(h, b, i).set(a, x) = a {
+    cong_fn(λ (o: Bool) => Arena::elem_write(a, o, b.toNat() + i, x), no)
+}
+
+// The header's words of an arena that differs from `a` only at a word apart
+// from them, and so whether a path is valid there.
+theorem Arena::elem_ok_same(a, c: Arena, h, b: u64, i: Nat, base: c.cell(h) = a.cell(h), len: c.cell(h + 2) = a.cell(h + 2)):
+    c.elem_ok(h, b, i) = a.elem_ok(h, b, i)
+{
+    cong_args(λ (x: u64) => λ (y: u64) => Arena::elem_ok_at(x, y, h, b, i), base, len)
+}
+
+// A write through a valid element leaves the header, so the path valid.
+theorem Arena::elem_ok_written(a: Arena, h, b: u64, i: Nat, ok: a.elem_ok(h, b, i) = True, x: u64):
+    Arena(a.top, a.limit, vector_update(a.heap, b.toNat() + i, x)).elem_ok(h, b, i) = True
+{
+    let facts = Arena::elem_ok_at_elim(a.cell(h), a.cell(h + 2), h, b, i, ok);
+    let fits: (Arena::elem_fits(a.cell(h + 2), h, b, i).IsTrue()) = facts.right;
+    let small: (h.toNat() < 14) = omega(fits);
+    let h2: ((h + 2).toNat() = h.toNat() + 2) = bv_omega;
+    let base: (vector_get(vector_update(a.heap, b.toNat() + i, x), h.toNat(), BitVec::ofNat(0)) = a.cell(h)) =
+        vector_get_update_other(16, a.heap, b.toNat() + i, h.toNat(), x, BitVec::ofNat(0), λ e => omega(e, fits));
+    let len: (vector_get(vector_update(a.heap, b.toNat() + i, x), (h + 2).toNat(), BitVec::ofNat(0)) = a.cell(h + 2)) =
+        vector_get_update_other(16, a.heap, b.toNat() + i, (h + 2).toNat(), x, BitVec::ofNat(0), λ e => omega(e, h2, fits));
+    trans(Arena::elem_ok_same(a, Arena(a.top, a.limit, vector_update(a.heap, b.toNat() + i, x)), h, b, i, base, len), ok)
+}
+
+// ---------------------------------------------------------------------------
+// The laws, case by case on whether the path is valid
+
+theorem Arena::elem_word_inside(a: Arena, h, b: u64, i: Nat, ok: a.elem_ok(h, b, i) = True): b.toNat() + i < 16 {
+    let fits: (Arena::elem_fits(a.cell(h + 2), h, b, i).IsTrue()) = Arena::elem_ok_at_elim(a.cell(h), a.cell(h + 2), h, b, i, ok).right;
+    omega(fits)
+}
+
+theorem Arena::elem_set_get_of(a: Arena, h, b: u64, i: Nat, y, x: u64): (o: Bool) → a.elem_ok(h, b, i) = o →
+    Arena::elem_path(h, b, i).get(a) = Some(y) → Arena::elem_path(h, b, i).get(Arena::elem_path(h, b, i).set(a, x)) = Some(x)
+{
+    λ o => match o {
+        True => λ ok _ => {
+            let c = Arena(a.top, a.limit, vector_update(a.heap, b.toNat() + i, x));
+            trans(cong_fn(λ (d: Arena) => Arena::elem_path(h, b, i).get(d), Arena::elem_set_ok(a, h, b, i, ok, x)),
+                trans(Arena::elem_get_ok(c, h, b, i, Arena::elem_ok_written(a, h, b, i, ok, x)),
+                    cong_fn(λ (w: u64) => Some(w), vector_get_update_same(16, a.heap, b.toNat() + i, x, BitVec::ofNat(0), Arena::elem_word_inside(a, h, b, i, ok)))))
+        },
+        False => λ no h1 => absurd(trans(sym(Arena::elem_get_not(a, h, b, i, no)), h1)),
+    }
+}
+
+theorem Arena::elem_get_set_of(a: Arena, h, b: u64, i: Nat, y: u64): (o: Bool) → a.elem_ok(h, b, i) = o →
+    Arena::elem_path(h, b, i).get(a) = Some(y) → Arena::elem_path(h, b, i).set(a, y) = a
+{
+    λ o => match o {
+        True => λ ok h1 => {
+            let read: (a.word(b.toNat() + i) = y) = Option::some_inj(a.word(b.toNat() + i), y, trans(sym(Arena::elem_get_ok(a, h, b, i, ok)), h1));
+            trans(Arena::elem_set_ok(a, h, b, i, ok, y),
+                trans(cong_fn(λ (w: u64) => Arena(a.top, a.limit, vector_update(a.heap, b.toNat() + i, w)), sym(read)),
+                    cong_fn(λ (hp: [u64; 16]) => Arena(a.top, a.limit, hp), vector_update_self(16, a.heap, b.toNat() + i, BitVec::ofNat(0), Arena::elem_word_inside(a, h, b, i, ok)))))
+        },
+        False => λ no h1 => absurd(trans(sym(Arena::elem_get_not(a, h, b, i, no)), h1)),
+    }
+}
+
+theorem Arena::elem_set_set_of(a: Arena, h, b: u64, i: Nat, x, z: u64): (o: Bool) → a.elem_ok(h, b, i) = o →
+    Arena::elem_path(h, b, i).set(Arena::elem_path(h, b, i).set(a, x), z) = Arena::elem_path(h, b, i).set(a, z)
+{
+    λ o => match o {
+        True => λ ok => {
+            let c = Arena(a.top, a.limit, vector_update(a.heap, b.toNat() + i, x));
+            trans(cong_fn(λ (d: Arena) => Arena::elem_path(h, b, i).set(d, z), Arena::elem_set_ok(a, h, b, i, ok, x)),
+                trans(Arena::elem_set_ok(c, h, b, i, Arena::elem_ok_written(a, h, b, i, ok, x), z),
+                    trans(cong_fn(λ (hp: [u64; 16]) => Arena(a.top, a.limit, hp), vector_update_update_same(16, a.heap, b.toNat() + i, x, z)),
+                        sym(Arena::elem_set_ok(a, h, b, i, ok, z)))))
+        },
+        False => λ no => cong_fn(λ (d: Arena) => Arena::elem_path(h, b, i).set(d, z), Arena::elem_set_not(a, h, b, i, no, x)),
+    }
+}
+
+theorem Arena::elem_set_none_of(a: Arena, h, b: u64, i: Nat, x: u64): (o: Bool) → a.elem_ok(h, b, i) = o →
+    Arena::elem_path(h, b, i).get(a) = None → Arena::elem_path(h, b, i).set(a, x) = a
+{
+    λ o => match o {
+        True => λ ok none => absurd(trans(sym(none), Arena::elem_get_ok(a, h, b, i, ok))),
+        False => λ no _ => Arena::elem_set_not(a, h, b, i, no, x),
+    }
+}
+
+theorem Arena::elem_laws(h, b: u64, i: Nat): PathLaws<Arena, u64>(Arena::elem_path(h, b, i)) {
+    PathLaws(
+        λ a y x e => Arena::elem_set_get_of(a, h, b, i, y, x, a.elem_ok(h, b, i), refl, e),
+        λ a y e => Arena::elem_get_set_of(a, h, b, i, y, a.elem_ok(h, b, i), refl, e),
+        λ a x z => Arena::elem_set_set_of(a, h, b, i, x, z, a.elem_ok(h, b, i), refl),
+        λ a x e => Arena::elem_set_none_of(a, h, b, i, x, a.elem_ok(h, b, i), refl, e),
+    )
+}
+
+// A valid element is one whose path checks.
+theorem Arena::elem_ok_of_valid(a: Arena, h, b: u64, i: Nat): (o: Bool) → a.elem_ok(h, b, i) = o → Arena::elem_path(h, b, i).Valid(a) → a.elem_ok(h, b, i) = True {
+    λ o => match o {
+        True => λ ok _ => ok,
+        False => λ no valid => absurd(trans(sym(Arena::elem_get_not(a, h, b, i, no)), valid.proof)),
+    }
+}
+
+// Under the vector's invariant, every element below the length is valid in
+// the window the header points at.
+theorem Arena::elem_valid(a: Arena, h: u64, inv: VecInv(a, h), i: Nat, below: i < a.cell(h + 2).toNat()): Arena::elem_path(h, a.cell(h), i).Valid(a) {
+    let fits: (Arena::elem_fits(a.cell(h + 2), h, a.cell(h), i).IsTrue()) = match inv.apart {
+        Inl(before) => omega(below, before, inv.window, inv.len, inv.header, inv.top, inv.limit),
+        Inr(after) => omega(below, after, inv.window, inv.len, inv.header, inv.top, inv.limit),
+    };
+    let ok: (a.elem_ok(h, a.cell(h), i) = True) = Arena::elem_ok_at_intro(a.cell(h), a.cell(h + 2), h, a.cell(h), i, refl, fits);
+    Exists(a.word(a.cell(h).toNat() + i), Arena::elem_get_ok(a, h, a.cell(h), i, ok))
+}
+
+// ---------------------------------------------------------------------------
+// A push with room keeps every path
+
+// What `push_in` does where the window has room: the item at the length,
+// the length one more.
+theorem Arena::push_in_eq(a: Arena, h, x: u64, inv: VecInv(a, h), lr: a.cell(h + 2).toNat() < a.cell(h + 1).toNat()):
+    Arena::push_in(a, h, x) = Mutated(Arena(a.top, a.limit,
+        vector_update(vector_update(a.heap, (a.cell(h) + a.cell(h + 2)).toNat(), x), (h + 2).toNat(), a.cell(h + 2) + 1)), BitVec::ofNat(1))
+{
+    let hn: (h.toNat() < 14) = omega(inv.header, inv.top, inv.limit);
+    let hb: (h < 14) = hn;
+    let b = a.cell(h);
+    let l = a.cell(h + 2);
+    let room: (a.cell(h + 2) < a.cell(h + 1)) = lr;
+    let sum = Arena::small_sum(b, l, omega(lr, inv.window, inv.top, inv.limit));
+    let inside: ((b + l).toNat() < 16) = omega(sum, lr, inv.window, inv.top, inv.limit);
+    trans(Arena::push_in::True::True(a, h, x, hb, room), cong_fn(λ (r: Mutated<Arena, u64>) => Mutated(r.after, r.value), Arena::put_item::True::True(a, h, b, l, x, hb, inside)))
+}
+
+theorem Arena::push_in_keeps(a: Arena, h, x: u64, inv: VecInv(a, h), lr: a.cell(h + 2).toNat() < a.cell(h + 1).toNat(), b: u64, i: Nat):
+    Arena::elem_path(h, b, i).Keeps(a, Arena::push_in(a, h, x).after)
+{
+    λ y held => {
+        let ok: (a.elem_ok(h, b, i) = True) = Arena::elem_ok_of_valid(a, h, b, i, a.elem_ok(h, b, i), refl, Exists(y, held));
+        let facts = Arena::elem_ok_at_elim(a.cell(h), a.cell(h + 2), h, b, i, ok);
+        let fits: (Arena::elem_fits(a.cell(h + 2), h, b, i).IsTrue()) = facts.right;
+        let base: (a.cell(h) = b) = facts.left;
+        let l = a.cell(h + 2);
+        let sum = Arena::small_sum(a.cell(h), l, omega(lr, inv.window, inv.top, inv.limit));
+        let l1 = Arena::small_sum(l, BitVec::ofNat(1), omega(lr, inv.window, inv.top, inv.limit));
+        let hn: (h.toNat() < 14) = omega(inv.header, inv.top, inv.limit);
+        let e2: ((h + 2).toNat() = h.toNat() + 2) = bv_omega;
+        let bn: (a.cell(h).toNat() = b.toNat()) = cong_fn(λ (u: u64) => u.toNat(), base);
+        let at = b.toNat() + i;
+        let mid = vector_update(a.heap, (a.cell(h) + l).toNat(), x);
+        let c = Arena(a.top, a.limit, vector_update(mid, (h + 2).toNat(), l + 1));
+        // The item written is past `i`, the length word is the header's.
+        let ne_item: ¬(at = (a.cell(h) + l).toNat()) = λ e => omega(e, sum, bn, fits);
+        let ne_len: ¬(at = (h + 2).toNat()) = λ e => omega(e, e2, fits);
+        let ne_hl: ¬(h.toNat() = (a.cell(h) + l).toNat()) = λ e => match inv.apart { Inl(p) => omega(e, sum, p), Inr(p) => omega(e, sum, p, lr) };
+        let word: (c.word(at) = a.word(at)) = trans(vector_get_update_other(16, mid, (h + 2).toNat(), at, l + 1, BitVec::ofNat(0), ne_len),
+            vector_get_update_other(16, a.heap, (a.cell(h) + l).toNat(), at, x, BitVec::ofNat(0), ne_item));
+        let cbase: (c.cell(h) = a.cell(h)) = trans(vector_get_update_other(16, mid, (h + 2).toNat(), h.toNat(), l + 1, BitVec::ofNat(0), λ e => omega(e, e2)),
+            vector_get_update_other(16, a.heap, (a.cell(h) + l).toNat(), h.toNat(), x, BitVec::ofNat(0), ne_hl));
+        let clen: (c.cell(h + 2) = l + 1) = vector_get_update_same(16, mid, (h + 2).toNat(), l + 1, BitVec::ofNat(0), omega(e2, inv.header, inv.top, inv.limit));
+        let cfits: (Arena::elem_fits(l + 1, h, b, i).IsTrue()) = omega(fits, l1);
+        let cok: (c.elem_ok(h, b, i) = True) = trans(cong_args(λ (u: u64) => λ (w: u64) => Arena::elem_ok_at(u, w, h, b, i), cbase, clen),
+            Arena::elem_ok_at_intro(a.cell(h), l + 1, h, b, i, base, cfits));
+        let read: (Arena::elem_path(h, b, i).get(c) = Some(y)) = trans(Arena::elem_get_ok(c, h, b, i, cok),
+            trans(cong_fn(λ (w: u64) => Some(w), word), trans(sym(Arena::elem_get_ok(a, h, b, i, ok)), held)));
+        j(sym(Arena::push_in_eq(a, h, x, inv, lr)), λ r _ => Arena::elem_path(h, b, i).get(r.after) = Some(y), read)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Growing keeps none
+
+// Where `grow` answers 1, the header points at the old top.
+theorem Arena::grow_base(a: Arena, h: u64, inv: VecInv(a, h), grew: Arena::grow(a, h).value = 1): Arena::grow(a, h).after.cell(h) = a.top {
+    let hn: (h.toNat() < 14) = omega(inv.header, inv.top, inv.limit);
+    let hb: (h < 14) = hn;
+    let e1: ((h + 1).toNat() = h.toNat() + 1) = bv_omega;
+    match Arena::grow_fits_dec(a, h) {
+        Inr(nf) => false_elim(Arena::zero_not_one(trans(sym(cong_fn(λ (r: Mutated<Arena, u64>) => r.value, Arena::grow::True::False(a, h, hb, nf))), grew))),
+        Inl(f) => {
+            let cap = a.cell(h + 1);
+            let cn: (cap.toNat() <= a.limit.toNat()) = f.right.right.left;
+            let s1 = Arena::small_sum(a.top, cap, omega(cn, inv.top, inv.limit));
+            let s2 = Arena::small_sum(a.top + cap, cap, omega(s1, cn, inv.top, inv.limit));
+            let room: ((a.top + cap + cap).toNat() <= a.limit.toNat()) = f.right.right.right;
+            let z: (BitVec::ofNat(0, n := 64).toNat() = 0) = refl;
+            let x0 = a.grown(h);
+            let cp = Arena::copies(a.cell(h), a.top, a.cell(h + 2),
+                omega(inv.window, inv.len, inv.top, inv.limit), omega(s1, s2, room, inv.len, inv.limit), Inl(omega(inv.window, inv.len)),
+                a.cell(h + 2).toNat(), x0, BitVec::ofNat(0), omega(z), omega(z));
+            let r = Arena::copy_at(x0, a.cell(h), a.top, BitVec::ofNat(0), a.cell(h + 2));
+            let c0: (r.after.cell(h) = a.top) = trans(cp.kept(h.toNat(), Inl(omega(inv.header, z))),
+                trans(vector_get_update_other(16, vector_update(a.heap, h.toNat(), a.top), (h + 1).toNat(), h.toNat(), cap + cap, BitVec::ofNat(0), λ e => omega(e, e1)),
+                    vector_get_update_same(16, a.heap, h.toNat(), a.top, BitVec::ofNat(0), omega(hn))));
+            j(sym(Arena::grow_eq(a, h, hb, f)), λ s _ => s.after.cell(h) = a.top, c0)
+        },
+    }
+}
+
+// So no element valid in the old window is valid after growing: the
+// header points past it.
+theorem Arena::grow_loses(a: Arena, h: u64, inv: VecInv(a, h), grew: Arena::grow(a, h).value = 1, i: Nat,
+    valid: Arena::elem_path(h, a.cell(h), i).Valid(a)): ¬Arena::elem_path(h, a.cell(h), i).Valid(Arena::grow(a, h).after)
+{
+    let ok: (a.elem_ok(h, a.cell(h), i) = True) = Arena::elem_ok_of_valid(a, h, a.cell(h), i, a.elem_ok(h, a.cell(h), i), refl, valid);
+    let fits: (Arena::elem_fits(a.cell(h + 2), h, a.cell(h), i).IsTrue()) = Arena::elem_ok_at_elim(a.cell(h), a.cell(h + 2), h, a.cell(h), i, ok).right;
+    let past: (a.cell(h).toNat() < a.top.toNat()) = omega(fits, inv.len, inv.window);
+    λ later => {
+        let after = Arena::grow(a, h).after;
+        let ok2: (after.elem_ok(h, a.cell(h), i) = True) = Arena::elem_ok_of_valid(after, h, a.cell(h), i, after.elem_ok(h, a.cell(h), i), refl, later);
+        let moved: (a.top = a.cell(h)) = trans(sym(Arena::grow_base(a, h, inv, grew)), Arena::elem_ok_at_elim(after.cell(h), after.cell(h + 2), h, a.cell(h), i, ok2).left);
+        let same: (a.top.toNat() = a.cell(h).toNat()) = cong_fn(λ (u: u64) => u.toNat(), moved);
+        omega(same, past)
+    }
+}
+
+// A growing push keeps no path into the vector it grew: the negative
+// control beside `push_in_keeps`.
+theorem Arena::grow_not_keeps(a: Arena, h: u64, inv: VecInv(a, h), grew: Arena::grow(a, h).value = 1, i: Nat,
+    valid: Arena::elem_path(h, a.cell(h), i).Valid(a)): ¬Arena::elem_path(h, a.cell(h), i).Keeps(a, Arena::grow(a, h).after)
+{
+    Arena::elem_path(h, a.cell(h), i).not_keeps(a, Arena::grow(a, h).after, valid, Arena::grow_loses(a, h, inv, grew, i, valid))
+}

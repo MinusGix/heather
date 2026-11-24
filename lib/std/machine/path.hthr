@@ -1,0 +1,418 @@
+// Paths: the meaning of a live borrow (docs/language/ownership-design.md
+// §10.4, §10.6). A path names a part of an owner, with a partial read and a
+// partial write: a lens held as data, which `Location` (location.hthr) is
+// where it is total. Reading through it is `p.get(owner)`, writing is
+// `owner := p.set(owner, v)`.
+//
+// - `PathLaws` is the certification, as `LocationLaws` is for a location:
+//   a write through a valid path is read back, writing back what was read
+//   changes nothing, the second of two writes is what stays, and a write
+//   through an invalid path changes nothing (so `set` is total and every
+//   law holds at every owner, valid or not).
+// - `Valid(owner)` is "the partial read answers" (`Path::Valid`), with a
+//   decider (`valid_dec`). It is the obligation at each use of a path.
+// - A location is a path that always answers (`Path::of_location`), and a
+//   path that always answers is a location (`Path::location`), each with
+//   its laws carried across.
+// - Paths compose (`Path::then`): a part of a part, valid where both
+//   steps are, with lawful steps composing to a lawful path.
+// - `Apart(p, q)` is the partial `Disjoint`: each write leaves what the
+//   other reads, and the writes commute. Two locations disjoint are apart
+//   as paths (`Apart::of_disjoint`), and two total paths apart are
+//   disjoint as locations (`Apart::disjoint`).
+// - What an operation keeps: `p.Keeps(before, after)` says every value `p`
+//   read in `before` it reads in `after`, so it keeps `p` valid
+//   (`keeps_valid`). A write through a path apart keeps it (`Apart::keeps`).
+//
+// Paths into a list (an element, a window) and the decider that finds two
+// of them apart from their spans are `list_path.hthr`; the word map's slot
+// for a key is `word_map_paths.hthr`, the arena vector's elements
+// `arena_paths.hthr`.
+
+import logic;
+import option;
+import list;
+import location;
+
+// A part of an `S` that is a `V`, which may be absent: what it reads, and
+// the owner with it written.
+record Path<S, V> { get: S → Option<V>, set: S → V → S }
+
+record PathLaws<S, V>(p: Path<S, V>) {
+    set_get: (s: S) → (a, v: V) → p.get(s) = Some(a) → p.get(p.set(s, v)) = Some(v),
+    get_set: (s: S) → (a: V) → p.get(s) = Some(a) → p.set(s, a) = s,
+    set_set: (s: S) → (v, w: V) → p.set(p.set(s, v), w) = p.set(s, w),
+    set_none: (s: S) → (v: V) → p.get(s) = None → p.set(s, v) = s,
+}
+
+// ---------------------------------------------------------------------------
+// Validity
+
+// The path is valid in `s`: its read answers.
+fn Path::Valid<S, V>(self p: Path<S, V>, s: S) → Type { Exists<V>(λ a => p.get(s) = Some(a)) }
+
+// The verdict, and that it decides `Valid` both ways.
+fn Path::valid<S, V>(self p: Path<S, V>, s: S) → Bool { p.get(s).is_some() }
+
+theorem Path::valid_of<S, V>(self p: Path<S, V>, s: S): (o: Option<V>) → p.get(s) = o → Or<p.Valid(s), ¬p.Valid(s)> {
+    λ o => match o {
+        Some(a) => λ e => Inl(Exists(a, e)),
+        None => λ e => Inr(λ v => absurd(trans(sym(e), v.proof))),
+    }
+}
+
+theorem Path::valid_dec<S, V>(self p: Path<S, V>, s: S): Or<p.Valid(s), ¬p.Valid(s)> { p.valid_of(s, p.get(s), refl) }
+
+theorem Path::valid_sound_of<S, V>(self p: Path<S, V>, s: S): (o: Option<V>) → p.get(s) = o → o.is_some().IsTrue() → p.Valid(s) {
+    λ o => match o {
+        Some(a) => λ e _ => Exists(a, e),
+        None => λ e no => false_elim(no),
+    }
+}
+
+theorem Path::valid_sound<S, V>(self p: Path<S, V>, s: S, h: p.valid(s).IsTrue()): p.Valid(s) { p.valid_sound_of(s, p.get(s), refl, h) }
+
+theorem Path::valid_complete<S, V>(self p: Path<S, V>, s: S, v: p.Valid(s)): p.valid(s).IsTrue() {
+    j(sym(v.proof), λ o _ => o.is_some().IsTrue(), trivial)
+}
+
+// A path that is not valid reads nothing.
+theorem Path::none_of_invalid<S, V>(self p: Path<S, V>, s: S): (o: Option<V>) → p.get(s) = o → ¬p.Valid(s) → p.get(s) = None {
+    λ o => match o {
+        Some(a) => λ e no => false_elim(no(Exists(a, e))),
+        None => λ e _ => e,
+    }
+}
+
+// The laws under validity: a valid path's write is read back and keeps it
+// valid.
+theorem PathLaws::valid_set<S, V>({p: Path<S, V>}, self laws: PathLaws<S, V>(p), s: S, v: V, valid: p.Valid(s)): p.Valid(p.set(s, v)) {
+    Exists(v, laws.set_get(s, valid.witness, v, valid.proof))
+}
+
+// A write through an invalid path changes nothing.
+theorem PathLaws::set_invalid<S, V>({p: Path<S, V>}, self laws: PathLaws<S, V>(p), s: S, v: V, invalid: ¬p.Valid(s)): p.set(s, v) = s {
+    laws.set_none(s, v, p.none_of_invalid(s, p.get(s), refl, invalid))
+}
+
+// ---------------------------------------------------------------------------
+// Locations: the paths that always answer
+
+fn Path::of_location<S, A>(l: Location<S, A>) → Path<S, A> {
+    Path<S, A>(get := λ (s: S) => Some(l.read(s)), set := l.write)
+}
+
+theorem Path::of_location_laws<S, A>(l: Location<S, A>, laws: LocationLaws<S, A>(l)): PathLaws<S, A>(Path::of_location(l)) {
+    PathLaws(
+        λ s a v _ => cong_fn(λ (x: A) => Some(x), laws.put_get(s, v)),
+        λ s a h => trans(cong_fn(λ (x: A) => l.write(s, x), sym(Option::some_inj(l.read(s), a, h))), laws.get_put(s)),
+        λ s v w => laws.put_put(s, v, w),
+        λ s v h => absurd(h),
+    )
+}
+
+theorem Path::of_location_valid<S, A>(l: Location<S, A>, s: S): Path::of_location(l).Valid(s) { Exists(l.read(s), refl) }
+
+// Lawful locations compose to a lawful location: the composition of law
+// records `location.hthr` leaves to this layer.
+theorem compose_location_laws<S, A, B>(outer: Location<S, A>, inner: Location<A, B>, ol: LocationLaws<S, A>(outer), il: LocationLaws<A, B>(inner)):
+    LocationLaws<S, B>(compose_location(outer, inner))
+{
+    LocationLaws(
+        λ s => trans(cong_fn(λ (a: A) => outer.write(s, a), il.get_put(outer.read(s))), ol.get_put(s)),
+        λ s b => trans(cong_fn(λ (a: A) => inner.read(a), ol.put_get(s, inner.write(outer.read(s), b))), il.put_get(outer.read(s), b)),
+        λ s b1 b2 => {
+            let a = outer.read(s);
+            let s1 = outer.write(s, inner.write(a, b1));
+            let read1: (outer.read(s1) = inner.write(a, b1)) = ol.put_get(s, inner.write(a, b1));
+            trans(cong_fn(λ (x: A) => outer.write(s1, inner.write(x, b2)), read1),
+                trans(cong_fn(λ (x: A) => outer.write(s1, x), il.put_put(a, b1, b2)), ol.put_put(s, inner.write(a, b1), inner.write(a, b2))))
+        },
+    )
+}
+
+// A path that answers at every owner, and what it answers.
+record PathTotal<S, V>(p: Path<S, V>) { read: S → V, reads: (s: S) → p.get(s) = Some(read(s)) }
+
+fn Path::location<S, V>(self p: Path<S, V>, total: PathTotal<S, V>(p)) → Location<S, V> {
+    Location<S, V>(read := total.read, write := p.set)
+}
+
+theorem Path::location_laws<S, V>(self p: Path<S, V>, laws: PathLaws<S, V>(p), total: PathTotal<S, V>(p)): LocationLaws<S, V>(p.location(total)) {
+    LocationLaws(
+        λ s => laws.get_set(s, total.read(s), total.reads(s)),
+        λ s v => Option::some_inj(total.read(p.set(s, v)), v,
+            trans(sym(total.reads(p.set(s, v))), laws.set_get(s, total.read(s), v, total.reads(s)))),
+        λ s v w => laws.set_set(s, v, w),
+    )
+}
+
+fn Path::of_location_total<S, A>(l: Location<S, A>) → PathTotal<S, A>(Path::of_location(l)) {
+    PathTotal(l.read, λ s => refl)
+}
+
+// ---------------------------------------------------------------------------
+// Composition: a part of a part
+
+// The write of `then`, at what the outer path read.
+fn Path::then_set<S, A, B>(p: Path<S, A>, q: Path<A, B>, s: S, o: Option<A>, b: B) → S {
+    match o { Some(a) => p.set(s, q.set(a, b)), None => s }
+}
+
+fn Path::then<S, A, B>(self p: Path<S, A>, q: Path<A, B>) → Path<S, B> {
+    Path<S, B>(
+        get := λ (s: S) => p.get(s).and_then(q.get),
+        set := λ (s: S) => λ (b: B) => Path::then_set(p, q, s, p.get(s), b),
+    )
+}
+
+// Through an outer part that reads `a`, the composed path is the inner one
+// at `a`.
+theorem Path::then_get_at<S, A, B>(self p: Path<S, A>, q: Path<A, B>, s: S, a: A, at: p.get(s) = Some(a)):
+    p.then(q).get(s) = q.get(a)
+{
+    cong_fn(λ (o: Option<A>) => o.and_then(q.get), at)
+}
+
+theorem Path::then_set_at<S, A, B>(self p: Path<S, A>, q: Path<A, B>, s: S, a: A, at: p.get(s) = Some(a), b: B):
+    p.then(q).set(s, b) = p.set(s, q.set(a, b))
+{
+    cong_fn(λ (o: Option<A>) => Path::then_set(p, q, s, o, b), at)
+}
+
+theorem Path::then_get_none<S, A, B>(self p: Path<S, A>, q: Path<A, B>, s: S, none: p.get(s) = None): p.then(q).get(s) = None {
+    cong_fn(λ (o: Option<A>) => o.and_then(q.get), none)
+}
+
+theorem Path::then_set_none<S, A, B>(self p: Path<S, A>, q: Path<A, B>, s: S, none: p.get(s) = None, b: B): p.then(q).set(s, b) = s {
+    cong_fn(λ (o: Option<A>) => Path::then_set(p, q, s, o, b), none)
+}
+
+// The composed path is valid exactly where both steps are.
+theorem Path::then_valid<S, A, B>(self p: Path<S, A>, q: Path<A, B>, s: S, a: A, at: p.get(s) = Some(a), inner: q.Valid(a)): p.then(q).Valid(s) {
+    Exists(inner.witness, trans(p.then_get_at(q, s, a, at), inner.proof))
+}
+
+theorem Path::then_valid_outer<S, A, B>(self p: Path<S, A>, q: Path<A, B>, s: S): (o: Option<A>) → p.get(s) = o → p.then(q).Valid(s) → p.Valid(s) {
+    λ o => match o {
+        Some(a) => λ e _ => Exists(a, e),
+        None => λ e v => absurd(trans(sym(p.then_get_none(q, s, e)), v.proof)),
+    }
+}
+
+// The laws, case by case on what the outer path reads.
+theorem Path::then_set_get_of<S, A, B>(self p: Path<S, A>, q: Path<A, B>, pl: PathLaws<S, A>(p), ql: PathLaws<A, B>(q), s: S, c, b: B):
+    (o: Option<A>) → p.get(s) = o → p.then(q).get(s) = Some(c) → p.then(q).get(p.then(q).set(s, b)) = Some(b)
+{
+    λ o => match o {
+        Some(a) => λ e h => {
+            let inner: (q.get(a) = Some(c)) = trans(sym(p.then_get_at(q, s, a, e)), h);
+            let after: (p.get(p.set(s, q.set(a, b))) = Some(q.set(a, b))) = pl.set_get(s, a, q.set(a, b), e);
+            let written: (p.then(q).set(s, b) = p.set(s, q.set(a, b))) = p.then_set_at(q, s, a, e, b);
+            j(sym(written), λ t _ => p.then(q).get(t) = Some(b),
+                trans(p.then_get_at(q, p.set(s, q.set(a, b)), q.set(a, b), after), ql.set_get(a, c, b, inner)))
+        },
+        None => λ e h => absurd(trans(sym(p.then_get_none(q, s, e)), h)),
+    }
+}
+
+theorem Path::then_get_set_of<S, A, B>(self p: Path<S, A>, q: Path<A, B>, pl: PathLaws<S, A>(p), ql: PathLaws<A, B>(q), s: S, c: B):
+    (o: Option<A>) → p.get(s) = o → p.then(q).get(s) = Some(c) → p.then(q).set(s, c) = s
+{
+    λ o => match o {
+        Some(a) => λ e h => {
+            let inner: (q.get(a) = Some(c)) = trans(sym(p.then_get_at(q, s, a, e)), h);
+            trans(p.then_set_at(q, s, a, e, c), trans(cong_fn(λ (x: A) => p.set(s, x), ql.get_set(a, c, inner)), pl.get_set(s, a, e)))
+        },
+        None => λ e h => absurd(trans(sym(p.then_get_none(q, s, e)), h)),
+    }
+}
+
+theorem Path::then_set_set_of<S, A, B>(self p: Path<S, A>, q: Path<A, B>, pl: PathLaws<S, A>(p), ql: PathLaws<A, B>(q), s: S, v, w: B):
+    (o: Option<A>) → p.get(s) = o → p.then(q).set(p.then(q).set(s, v), w) = p.then(q).set(s, w)
+{
+    λ o => match o {
+        Some(a) => λ e => {
+            let s1 = p.set(s, q.set(a, v));
+            let first: (p.then(q).set(s, v) = s1) = p.then_set_at(q, s, a, e, v);
+            let read1: (p.get(s1) = Some(q.set(a, v))) = pl.set_get(s, a, q.set(a, v), e);
+            let second: (p.then(q).set(s1, w) = p.set(s1, q.set(q.set(a, v), w))) = p.then_set_at(q, s1, q.set(a, v), read1, w);
+            let inner: (p.set(s1, q.set(q.set(a, v), w)) = p.set(s1, q.set(a, w))) = cong_fn(λ (x: A) => p.set(s1, x), ql.set_set(a, v, w));
+            let outer: (p.set(s1, q.set(a, w)) = p.set(s, q.set(a, w))) = pl.set_set(s, q.set(a, v), q.set(a, w));
+            trans(cong_fn(λ (t: S) => p.then(q).set(t, w), first),
+                trans(second, trans(inner, trans(outer, sym(p.then_set_at(q, s, a, e, w))))))
+        },
+        None => λ e => {
+            let first: (p.then(q).set(s, v) = s) = p.then_set_none(q, s, e, v);
+            cong_fn(λ (t: S) => p.then(q).set(t, w), first)
+        },
+    }
+}
+
+theorem Path::then_set_none_of<S, A, B>(self p: Path<S, A>, q: Path<A, B>, pl: PathLaws<S, A>(p), ql: PathLaws<A, B>(q), s: S, v: B):
+    (o: Option<A>) → p.get(s) = o → p.then(q).get(s) = None → p.then(q).set(s, v) = s
+{
+    λ o => match o {
+        Some(a) => λ e h => {
+            let inner: (q.get(a) = None) = trans(sym(p.then_get_at(q, s, a, e)), h);
+            trans(p.then_set_at(q, s, a, e, v), trans(cong_fn(λ (x: A) => p.set(s, x), ql.set_none(a, v, inner)), pl.get_set(s, a, e)))
+        },
+        None => λ e h => p.then_set_none(q, s, e, v),
+    }
+}
+
+// Lawful steps compose to a lawful path.
+theorem Path::then_laws<S, A, B>(self p: Path<S, A>, q: Path<A, B>, pl: PathLaws<S, A>(p), ql: PathLaws<A, B>(q)): PathLaws<S, B>(p.then(q)) {
+    PathLaws(
+        λ s c b h => p.then_set_get_of(q, pl, ql, s, c, b, p.get(s), refl, h),
+        λ s c h => p.then_get_set_of(q, pl, ql, s, c, p.get(s), refl, h),
+        λ s v w => p.then_set_set_of(q, pl, ql, s, v, w, p.get(s), refl),
+        λ s v h => p.then_set_none_of(q, pl, ql, s, v, p.get(s), refl, h),
+    )
+}
+
+// A location after a location is the composed location (`compose_location`)
+// read as a path.
+theorem Path::then_of_location_get<S, A, B>(outer: Location<S, A>, inner: Location<A, B>, s: S):
+    Path::of_location(outer).then(Path::of_location(inner)).get(s) = Path::of_location(compose_location(outer, inner)).get(s)
+{ refl }
+
+theorem Path::then_of_location_set<S, A, B>(outer: Location<S, A>, inner: Location<A, B>, s: S, b: B):
+    Path::of_location(outer).then(Path::of_location(inner)).set(s, b) = Path::of_location(compose_location(outer, inner)).set(s, b)
+{ refl }
+
+// ---------------------------------------------------------------------------
+// Apart: two paths whose writes do not meet
+
+// Each write leaves what the other reads, and the two writes commute: the
+// partial `Disjoint`.
+record Apart<S, A, B>(left: Path<S, A>, right: Path<S, B>) {
+    left_after_right: (s: S) → (v: B) → left.get(right.set(s, v)) = left.get(s),
+    right_after_left: (s: S) → (v: A) → right.get(left.set(s, v)) = right.get(s),
+    writes_commute: (s: S) → (a: A) → (b: B) → left.set(right.set(s, b), a) = right.set(left.set(s, a), b),
+}
+
+theorem Apart::symm<S, A, B>({p: Path<S, A>}, {q: Path<S, B>}, self apart: Apart<S, A, B>(p, q)): Apart<S, B, A>(q, p) {
+    Apart(
+        apart.right_after_left,
+        apart.left_after_right,
+        λ s b a => sym(apart.writes_commute(s, a, b)),
+    )
+}
+
+// Two disjoint locations are apart as paths.
+theorem Apart::of_disjoint<S, A, B>(l: Location<S, A>, r: Location<S, B>, d: Disjoint<S, A, B>(l, r)):
+    Apart<S, A, B>(Path::of_location(l), Path::of_location(r))
+{
+    Apart(
+        λ s v => cong_fn(λ (x: A) => Some(x), d.left_after_right(s, v)),
+        λ s v => cong_fn(λ (x: B) => Some(x), d.right_after_left(s, v)),
+        d.writes_commute,
+    )
+}
+
+// Two total paths apart are disjoint as locations.
+theorem Apart::disjoint<S, A, B>({p: Path<S, A>}, {q: Path<S, B>}, self apart: Apart<S, A, B>(p, q), tp: PathTotal<S, A>(p), tq: PathTotal<S, B>(q)):
+    Disjoint<S, A, B>(p.location(tp), q.location(tq))
+{
+    Disjoint(
+        λ s v => Option::some_inj(tp.read(q.set(s, v)), tp.read(s),
+            trans(sym(tp.reads(q.set(s, v))), trans(apart.left_after_right(s, v), tp.reads(s)))),
+        λ s v => Option::some_inj(tq.read(p.set(s, v)), tq.read(s),
+            trans(sym(tq.reads(p.set(s, v))), trans(apart.right_after_left(s, v), tq.reads(s)))),
+        apart.writes_commute,
+    )
+}
+
+// Apart paths' writes in either order give one owner, which reads back both
+// values where both paths were valid.
+theorem Apart::both_read<S, A, B>({p: Path<S, A>}, {q: Path<S, B>}, self apart: Apart<S, A, B>(p, q),
+    pl: PathLaws<S, A>(p), ql: PathLaws<S, B>(q), s: S, vp: p.Valid(s), vq: q.Valid(s), a: A, b: B):
+    And<p.get(q.set(p.set(s, a), b)) = Some(a), q.get(q.set(p.set(s, a), b)) = Some(b)>
+{
+    let s1 = p.set(s, a);
+    let read_p: (p.get(s1) = Some(a)) = pl.set_get(s, vp.witness, a, vp.proof);
+    let still_q: (q.get(s1) = Some(vq.witness)) = trans(apart.right_after_left(s, a), vq.proof);
+    And(trans(apart.left_after_right(s1, b), read_p), ql.set_get(s1, vq.witness, b, still_q))
+}
+
+// Two parts apart inside one part are apart in the owner: two fields of one
+// element, a field of a field beside another.
+theorem Apart::under_read<S, A, B, C>(p: Path<S, A>, pl: PathLaws<S, A>(p), {q: Path<A, B>}, {r: Path<A, C>}, inner: Apart<A, B, C>(q, r), s: S, v: C):
+    (o: Option<A>) → p.get(s) = o → p.then(q).get(p.then(r).set(s, v)) = p.then(q).get(s)
+{
+    λ o => match o {
+        Some(a) => λ e => {
+            let written: (p.then(r).set(s, v) = p.set(s, r.set(a, v))) = p.then_set_at(r, s, a, e, v);
+            let read: (p.get(p.set(s, r.set(a, v))) = Some(r.set(a, v))) = pl.set_get(s, a, r.set(a, v), e);
+            trans(cong_fn(λ (t: S) => p.then(q).get(t), written),
+                trans(p.then_get_at(q, p.set(s, r.set(a, v)), r.set(a, v), read), trans(inner.left_after_right(a, v), sym(p.then_get_at(q, s, a, e)))))
+        },
+        None => λ e => cong_fn(λ (t: S) => p.then(q).get(t), p.then_set_none(r, s, e, v)),
+    }
+}
+
+theorem Apart::under_commute<S, A, B, C>(p: Path<S, A>, pl: PathLaws<S, A>(p), {q: Path<A, B>}, {r: Path<A, C>}, inner: Apart<A, B, C>(q, r), s: S, b: B, c: C):
+    (o: Option<A>) → p.get(s) = o → p.then(q).set(p.then(r).set(s, c), b) = p.then(r).set(p.then(q).set(s, b), c)
+{
+    λ o => match o {
+        Some(a) => λ e => {
+            let sr = p.set(s, r.set(a, c));
+            let sq = p.set(s, q.set(a, b));
+            let read_r: (p.get(sr) = Some(r.set(a, c))) = pl.set_get(s, a, r.set(a, c), e);
+            let read_q: (p.get(sq) = Some(q.set(a, b))) = pl.set_get(s, a, q.set(a, b), e);
+            let left: (p.then(q).set(p.then(r).set(s, c), b) = p.set(s, q.set(r.set(a, c), b))) =
+                trans(cong_fn(λ (t: S) => p.then(q).set(t, b), p.then_set_at(r, s, a, e, c)),
+                    trans(p.then_set_at(q, sr, r.set(a, c), read_r, b), pl.set_set(s, r.set(a, c), q.set(r.set(a, c), b))));
+            let right: (p.then(r).set(p.then(q).set(s, b), c) = p.set(s, r.set(q.set(a, b), c))) =
+                trans(cong_fn(λ (t: S) => p.then(r).set(t, c), p.then_set_at(q, s, a, e, b)),
+                    trans(p.then_set_at(r, sq, q.set(a, b), read_q, c), pl.set_set(s, q.set(a, b), r.set(q.set(a, b), c))));
+            trans(left, trans(cong_fn(λ (x: A) => p.set(s, x), inner.writes_commute(a, b, c)), sym(right)))
+        },
+        None => λ e => trans(cong_fn(λ (t: S) => p.then(q).set(t, b), p.then_set_none(r, s, e, c)),
+            trans(p.then_set_none(q, s, e, b), trans(sym(p.then_set_none(r, s, e, c)), cong_fn(λ (t: S) => p.then(r).set(t, c), sym(p.then_set_none(q, s, e, b)))))),
+    }
+}
+
+theorem Apart::under<S, A, B, C>(p: Path<S, A>, pl: PathLaws<S, A>(p), {q: Path<A, B>}, {r: Path<A, C>}, inner: Apart<A, B, C>(q, r)):
+    Apart<S, B, C>(p.then(q), p.then(r))
+{
+    Apart(
+        λ s v => Apart::under_read(p, pl, inner, s, v, p.get(s), refl),
+        λ s v => Apart::under_read(p, pl, Apart::symm(inner), s, v, p.get(s), refl),
+        λ s b c => Apart::under_commute(p, pl, inner, s, b, c, p.get(s), refl),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// What an operation keeps
+
+// `after` keeps the path `p` of `before`: every value `p` reads in `before`
+// it reads in `after`.
+fn Path::Keeps<S, V>(self p: Path<S, V>, before, after: S) → Type { (a: V) → p.get(before) = Some(a) → p.get(after) = Some(a) }
+
+// What keeps a path keeps it valid.
+theorem Path::keeps_valid<S, V>(self p: Path<S, V>, before, after: S, keeps: p.Keeps(before, after), valid: p.Valid(before)): p.Valid(after) {
+    Exists(valid.witness, keeps(valid.witness, valid.proof))
+}
+
+theorem Path::keeps_refl<S, V>(self p: Path<S, V>, s: S): p.Keeps(s, s) { λ a h => h }
+
+theorem Path::keeps_trans<S, V>(self p: Path<S, V>, s, t, u: S, st: p.Keeps(s, t), tu: p.Keeps(t, u)): p.Keeps(s, u) {
+    λ a h => tu(a, st(a, h))
+}
+
+// An owner that reads alike through the path keeps it.
+theorem Path::keeps_of_get<S, V>(self p: Path<S, V>, before, after: S, same: p.get(after) = p.get(before)): p.Keeps(before, after) {
+    λ a h => trans(same, h)
+}
+
+// A write through a path apart keeps it.
+theorem Apart::keeps<S, A, B>({p: Path<S, A>}, {q: Path<S, B>}, self apart: Apart<S, A, B>(p, q), s: S, v: B): p.Keeps(s, q.set(s, v)) {
+    p.keeps_of_get(s, q.set(s, v), apart.left_after_right(s, v))
+}
+
+// A path that is not kept valid is not kept.
+theorem Path::not_keeps<S, V>(self p: Path<S, V>, before, after: S, valid: p.Valid(before), lost: ¬p.Valid(after)): ¬p.Keeps(before, after) {
+    λ keeps => lost(p.keeps_valid(before, after, keeps, valid))
+}

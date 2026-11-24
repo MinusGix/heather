@@ -1,0 +1,52 @@
+// Probes of `word_map_paths`: the slot of a key read and written at a
+// literal table by evaluation, and at an open table through the compiled
+// functions: an insert of one key read back through the slot, and a value
+// held for one key across an insert of another. Tests, not library: nothing
+// imports this module.
+import logic;
+import bool;
+import nat;
+import option;
+import list;
+import vector;
+import algebra;
+import runtime_data;
+import word_map;
+import word_map_laws;
+import path;
+import word_map_paths;
+
+// A table holding 5 ↦ 7 in its first slot and 9 ↦ 3 in its third.
+fn two() → WordMap { WordMap(2, [5, 0, 9, 0], [7, 0, 3, 0]) }
+
+theorem slot_reads(): WordMap::slot_path(9).get(two()) = Some(3) { refl }
+
+theorem slot_absent(): WordMap::slot_path(6).get(two()) = None { refl }
+
+// The empty key has no slot, though empty slots hold it.
+theorem empty_key_absent(): WordMap::slot_path(0).get(two()) = None { refl }
+
+theorem slot_writes(): WordMap::slot_path(9).set(two(), 4) = WordMap(2, [5, 0, 9, 0], [7, 0, 4, 0]) { refl }
+
+theorem absent_writes_nothing(): WordMap::slot_path(6).set(two(), 4) = two() { refl }
+
+// At an open table under the invariant: an insert of a stored key is read
+// back through `get`, both being the slot's.
+theorem insert_read_back(m: WordMap, inv: WordMapInv(m), k, v: u64, valid: WordMap::slot_path(k).Valid(m)):
+    WordMap::slot_path(k).get(WordMap::insert(m, k, v).after) = Some(v)
+{
+    j(sym(WordMap::insert_is_slot(m, inv, k, v, valid)), λ r _ => WordMap::slot_path(k).get(r.after) = Some(v),
+        WordMap::slot_laws(k).set_get(m, valid.witness, v, valid.proof))
+}
+
+// `get_mut` of `k1` held across an insert at `k2`: what `get` answered for
+// `k1` before, it answers after.
+theorem held_across_insert(m: WordMap, inv: WordMapInv(m), k1, k2, v, a: u64, ne: ¬(k1 = k2),
+    valid2: WordMap::slot_path(k2).Valid(m), held: WordMap::slot_path(k1).get(m) = Some(a)):
+    WordMap::slot_path(k1).get(WordMap::insert(m, k2, v).after) = Some(a)
+{
+    WordMap::insert_keeps_other(m, inv, k1, k2, v, ne, valid2, a, held)
+}
+
+// The negative control, cited: one key's slot is not apart from itself.
+theorem same_key_not_apart(): ¬Apart<WordMap, u64, u64>(WordMap::slot_path(5), WordMap::slot_path(5)) { WordMap::slot_not_apart_self() }
