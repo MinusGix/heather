@@ -64,3 +64,4 @@ record η to unfolding a measured recursion at a literal.
   likely a wrong proof whose refutation went to the kernel, where deciding
   non-convertibility unfolds `%` at open arguments; no heuristic change made.
   Left open for item 1.
+- 2026-11-24: 2026-11-24: Item 3, narrowed after the whole-library gate (65ab503, 5de6efe): tried against every pair, the η attempt exhausted the budget in laid-record accessor checks (runtime_held_array_tests' Sums::nudge, Sha256::run, Sha256::close). It now runs only where a component of the pair, down its right-nested Σ, is stuck at the other side's head (directly or past newer heads, a record's projection), and on a fixed allowance (ETA_FUEL, 4096 steps, nested attempts included) whose exhaustion is not a verdict. Kernel lanes and the library gate are green with both.
