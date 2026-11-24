@@ -426,11 +426,18 @@ pair against a δ-stuck side tries Σ-η first.** The headless-other-side arm
 above unfolds the stuck side to a form with no defined head before the
 type-directed Σ arm sees either, which for a wrapper `f(x) = let r = g(x,
 4); ⟨r.after, r.value⟩` against `g(x, 4)` runs `g`'s measured recursion at
-its literal. When the headless side is a pair and the type's view is a Σ
-(not a `Vec`, whose arm is its own), `Conv::eta_before_unfolding` compares
-the pair's fields with the stuck side's projections under `delta_lazy`'s
-guard, and they meet at `g(x, 4)`'s spine; a failure falls through to the
-unfolding. η is the rule the Σ arm applies anyway once the stuck side is
+its literal. When the headless side is a pair, the type's view is a Σ
+(not a `Vec`, whose arm is its own), and a component of the pair (down its
+right-nested Σ a few levels, since a record's encoding may lead with an
+irrelevant one) is stuck at the other side's head, directly or past newer
+heads such as a record's projection function, `Conv::eta_before_unfolding`
+compares the pair's fields with the stuck side's projections under
+`delta_lazy`'s guard, and they meet at `g(x, 4)`'s spine; a failure falls
+through to the unfolding. The shape test is what keeps it to that case:
+tried against every pair, field-by-field η exhausted the budget where one
+unfolding would not (a laid record's stores against its accessor's
+function in `runtime_held_array_tests`, `Sha256::run`'s accessors), and
+exhaustion is not a verdict the guard falls back from. η is the rule the Σ arm applies anyway once the stuck side is
 unfolded, so this is the second kind of acceleration below: the same
 verdicts, fewer unfoldings.
 
