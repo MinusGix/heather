@@ -148,4 +148,206 @@ impl Bindings<'_> {
         };
         ElabError::Elab { msg, span: input.span }
     }
+
+    /// Does `expected` WHNF to an application of the declared world type
+    /// `world_name` (or the primitive `Squash`)?
+    fn expected_is_world(
+        &self,
+        cx: &Cx,
+        world_name: &str,
+        expected: &heather_kernel::term::Type,
+        span: heather_syntax::Span,
+    ) -> bool {
+        let Some(carrier) = crate::dispatch::Carriers(self.0).carrier_of_ty(cx, expected, span) else {
+            return false;
+        };
+        if world_name == "Squash" {
+            return carrier.key == "Squash";
+        }
+        if let Some(ind) = self.lookup_inductive(world_name) {
+            return carrier.key == crate::names::qkey(&ind.scope.module, &ind.name);
+        }
+        carrier.written == world_name || carrier.key == world_name
+    }
+
+    fn call_unary(head: Expr, arg: Expr, span: heather_syntax::Span) -> Expr {
+        Expr {
+            kind: ExprKind::App {
+                head: Box::new(head),
+                args: vec![arg],
+                named: Vec::new(),
+                explicit: false,
+                goal_oriented: false,
+            },
+            span,
+        }
+    }
+
+    /// Elaborate `within W { body }` in checking position
+    /// (docs/language/proof-worlds-design.md §2.1).
+    pub(crate) fn elab_within_check(
+        &self,
+        cx: &Cx,
+        world: &Expr,
+        body: &Expr,
+        expected: &heather_kernel::term::Type,
+        lvl: &heather_kernel::level::Level,
+        span: heather_syntax::Span,
+    ) -> crate::R<heather_kernel::term::Term> {
+        if let ExprKind::Var(world_name) = &world.kind {
+            if self.expected_is_world(cx, world_name, expected, span) {
+                return self.elab_check(cx, body, expected, lvl);
+            }
+            let exit_name = format!("{world_name}::exit");
+            if self.lookup_global(&exit_name).is_some() {
+                let exit_call = Self::call_unary(
+                    Expr { kind: ExprKind::Var(exit_name), span: world.span },
+                    body.clone(),
+                    span,
+                );
+                return self.elab_check(cx, &exit_call, expected, lvl);
+            }
+        }
+        let exit_call = Self::call_unary(world.clone(), body.clone(), span);
+        self.elab_check(cx, &exit_call, expected, lvl)
+    }
+
+    /// Elaborate `within W { body }` in inference position.
+    pub(crate) fn elab_within_infer(
+        &self,
+        cx: &Cx,
+        world: &Expr,
+        body: &Expr,
+        expected: Option<&heather_kernel::term::Type>,
+        span: heather_syntax::Span,
+    ) -> crate::R<(
+        heather_kernel::term::Term,
+        heather_kernel::term::Type,
+        heather_kernel::level::Level,
+    )> {
+        if let ExprKind::Var(world_name) = &world.kind {
+            if let Some(exp) = expected
+                && self.expected_is_world(cx, world_name, exp, span)
+            {
+                return self.elab_infer(cx, body);
+            }
+            let exit_name = format!("{world_name}::exit");
+            if self.lookup_global(&exit_name).is_some() {
+                let exit_call = Self::call_unary(
+                    Expr { kind: ExprKind::Var(exit_name), span: world.span },
+                    body.clone(),
+                    span,
+                );
+                return self.elab_infer(cx, &exit_call);
+            }
+        }
+        let exit_call = Self::call_unary(world.clone(), body.clone(), span);
+        self.elab_infer(cx, &exit_call)
+    }
+
+    fn call_args(head: Expr, args: Vec<Expr>, span: heather_syntax::Span) -> Expr {
+        Expr {
+            kind: ExprKind::App {
+                head: Box::new(head),
+                args,
+                named: Vec::new(),
+                explicit: false,
+                goal_oriented: false,
+            },
+            span,
+        }
+    }
+
+    /// Elaborate `within W for x { body }` in checking position
+    /// (docs/language/proof-worlds-design.md §3).
+    pub(crate) fn elab_within_for_check(
+        &self,
+        cx: &Cx,
+        args: &[Expr],
+        expected: &heather_kernel::term::Type,
+        lvl: &heather_kernel::level::Level,
+        span: heather_syntax::Span,
+    ) -> crate::R<heather_kernel::term::Term> {
+        let Some(world) = args.first() else {
+            return crate::err("`within … for` expects a world and a block", span);
+        };
+        let ExprKind::Var(world_name) = &world.kind else {
+            return crate::err(
+                "a pointwise `within W for x { … }` needs a world name `W`",
+                world.span,
+            );
+        };
+        let stays_in_world = self.expected_is_world(cx, world_name, expected, span);
+        let lowered = match args {
+            [_, lam] => {
+                let always = Self::call_unary(
+                    Expr { kind: ExprKind::Var(format!("{world_name}::always")), span: world.span },
+                    lam.clone(),
+                    span,
+                );
+                if stays_in_world {
+                    always
+                } else {
+                    Self::call_unary(
+                        Expr {
+                            kind: ExprKind::Var(format!("{world_name}::extract")),
+                            span: world.span,
+                        },
+                        always,
+                        span,
+                    )
+                }
+            }
+            [_, combined, lam] => {
+                let callee = if stays_in_world {
+                    format!("{world_name}::map")
+                } else {
+                    format!("{world_name}::extract_with")
+                };
+                Self::call_args(
+                    Expr { kind: ExprKind::Var(callee), span: world.span },
+                    vec![combined.clone(), lam.clone()],
+                    span,
+                )
+            }
+            _ => return crate::err("`within … for` expects a world and a block", span),
+        };
+        self.elab_check(cx, &lowered, expected, lvl)
+    }
+
+    /// Elaborate `within W for x { body }` in inference position: produces `W(Q)`.
+    pub(crate) fn elab_within_for_infer(
+        &self,
+        cx: &Cx,
+        args: &[Expr],
+        span: heather_syntax::Span,
+    ) -> crate::R<(
+        heather_kernel::term::Term,
+        heather_kernel::term::Type,
+        heather_kernel::level::Level,
+    )> {
+        let Some(world) = args.first() else {
+            return crate::err("`within … for` expects a world and a block", span);
+        };
+        let ExprKind::Var(world_name) = &world.kind else {
+            return crate::err(
+                "a pointwise `within W for x { … }` needs a world name `W`",
+                world.span,
+            );
+        };
+        let lowered = match args {
+            [_, lam] => Self::call_unary(
+                Expr { kind: ExprKind::Var(format!("{world_name}::always")), span: world.span },
+                lam.clone(),
+                span,
+            ),
+            [_, combined, lam] => Self::call_args(
+                Expr { kind: ExprKind::Var(format!("{world_name}::map")), span: world.span },
+                vec![combined.clone(), lam.clone()],
+                span,
+            ),
+            _ => return crate::err("`within … for` expects a world and a block", span),
+        };
+        self.elab_infer(cx, &lowered)
+    }
 }

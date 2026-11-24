@@ -72,6 +72,24 @@ fn call(name: &str, args: Vec<Expr>, span: Span) -> Expr {
 pub(crate) fn bind_marker(input: Expr, span: Span) -> Expr {
     Expr { kind:ExprKind::App { head:Box::new(var(BIND,span)),args:vec![input],named:vec![],explicit:false,goal_oriented:false },span }
 }
+/// If `e` is a parser-emitted bind marker `(<- inner)`, return `inner`.
+pub(crate) fn unwrap_bind_marker(e: &Expr) -> Option<&Expr> {
+    let ExprKind::App { head, args, named, explicit: false, goal_oriented: false } = &e.kind else {
+        return None;
+    };
+    if !named.is_empty() || args.len() != 1 {
+        return None;
+    }
+    if matches!(&head.kind, ExprKind::Var(n) if n == BIND) {
+        Some(&args[0])
+    } else {
+        None
+    }
+}
+/// Does `e` contain any unlowered `(<- …)` bind marker?
+pub(crate) fn has_bind_marker(e: &Expr) -> bool {
+    BINDING.contains(e)
+}
 impl Protocol {
     fn bind(self, input: Expr, slot: &str, body: Expr, span: Span) -> Expr {
         // A continuation that only re-binds the slot under a written

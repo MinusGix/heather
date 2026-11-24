@@ -551,6 +551,13 @@ impl Holes<'_> {
                 self.ty(b1, b2, md + 1)
             }
             (
+                Type::Squash { level: l1, ty: a1 },
+                Type::Squash { level: l2, ty: a2 },
+            ) => {
+                (l1 == l2).then_some(())?;
+                self.ty(a1, a2, md)
+            }
+            (
                 Type::Wf { shape: s1, arity: _, level: v1 },
                 Type::Wf { shape: s2, arity: _, level: v2 },
             ) => {

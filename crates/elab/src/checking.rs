@@ -1060,6 +1060,21 @@ impl Checking<'_> {
                 };
                 Host(self).run_by(cx, tactic, expected, lvl, e.span)
             }
+            // `within W { body }` and `within W for x { body }`
+            // (docs/language/proof-worlds-design.md).
+            ExprKind::App { head, args, .. }
+                if matches!(&head.kind, ExprKind::Var(name) if name == heather_syntax::WITHIN) =>
+            {
+                let [world, body] = args.as_slice() else {
+                    return err("`within` expects a world and a block", e.span);
+                };
+                Bindings(self).elab_within_check(cx, world, body, expected, lvl, e.span)
+            }
+            ExprKind::App { head, args, .. }
+                if matches!(&head.kind, ExprKind::Var(name) if name == heather_syntax::WITHIN_FOR) =>
+            {
+                Bindings(self).elab_within_for_check(cx, args, expected, lvl, e.span)
+            }
             // `rewrite(h, …, e)` rewrites the goal along equations, writing
             // `j`'s motive by abstracting each left side
             // (docs/tactics/equation-rewrite-design.md).

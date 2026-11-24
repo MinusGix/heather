@@ -5,7 +5,7 @@
     "give", "have", "impl", "import", "inductive", "infer", "instance", "j", "let", "match", "mut",
     "meta", "mk", "on", "postfix", "prefix", "record", "refl", "by",
     "requires", "assuming", "section", "self", "split", "split_all", "induct", "cases",
-    "theorem", "generate", "def", "break", "continue", "return", "while", "Squash", "squash_ind", "decreases", "depth", "decreasing", "invariant", "with", "varies", "interface", "unfolding", "partial"
+    "theorem", "generate", "def", "break", "continue", "return", "while", "Squash", "squash_ind", "decreases", "depth", "decreasing", "invariant", "with", "within", "varies", "interface", "unfolding", "partial"
   ],
   "rejected_fixed_tokens": ["=="]
 }

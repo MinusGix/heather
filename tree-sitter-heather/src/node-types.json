@@ -206,6 +206,10 @@
       {
         "type": "vector_type",
         "named": true
+      },
+      {
+        "type": "within_expression",
+        "named": true
       }
     ]
   },
@@ -7373,6 +7377,156 @@
     }
   },
   {
+    "type": "within_expression",
+    "named": true,
+    "fields": {
+      "binder": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "identifier",
+            "named": true
+          }
+        ]
+      },
+      "body": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "block",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "anonymous_constructor_expression",
+            "named": true
+          },
+          {
+            "type": "argument_slot",
+            "named": true
+          },
+          {
+            "type": "bind_expression",
+            "named": true
+          },
+          {
+            "type": "boolean_reflection_expression",
+            "named": true
+          },
+          {
+            "type": "builtin_type",
+            "named": true
+          },
+          {
+            "type": "byte_character",
+            "named": true
+          },
+          {
+            "type": "byte_string",
+            "named": true
+          },
+          {
+            "type": "character",
+            "named": true
+          },
+          {
+            "type": "contextual_identifier",
+            "named": true
+          },
+          {
+            "type": "explicit_call_expression",
+            "named": true
+          },
+          {
+            "type": "head_binary_expression",
+            "named": true
+          },
+          {
+            "type": "head_call_expression",
+            "named": true
+          },
+          {
+            "type": "head_index_expression",
+            "named": true
+          },
+          {
+            "type": "head_inverse_expression",
+            "named": true
+          },
+          {
+            "type": "head_member_expression",
+            "named": true
+          },
+          {
+            "type": "head_prefix_expression",
+            "named": true
+          },
+          {
+            "type": "head_propagation_expression",
+            "named": true
+          },
+          {
+            "type": "head_type_application",
+            "named": true
+          },
+          {
+            "type": "hole",
+            "named": true
+          },
+          {
+            "type": "identifier",
+            "named": true
+          },
+          {
+            "type": "number",
+            "named": true
+          },
+          {
+            "type": "parenthesized_expression",
+            "named": true
+          },
+          {
+            "type": "qualified_identifier",
+            "named": true
+          },
+          {
+            "type": "string",
+            "named": true
+          },
+          {
+            "type": "universe",
+            "named": true
+          },
+          {
+            "type": "vector_expression",
+            "named": true
+          }
+        ]
+      },
+      "world": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "call_expression",
+            "named": true
+          },
+          {
+            "type": "qualified_identifier",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
     "type": "!",
     "named": false
   },
@@ -7827,6 +7981,10 @@
   },
   {
     "type": "with",
+    "named": false
+  },
+  {
+    "type": "within",
     "named": false
   },
   {

@@ -32,7 +32,7 @@ const PREC = {
 
 // Words that introduce a special form only before their fixed follower
 // (`contextual_identifier` below); elsewhere they are names.
-const CONTEXTUAL_WORDS = ['j', 'code', 'calc', 'apply', 'give', 'refl', 'by', 'have', 'with', 'cases'];
+const CONTEXTUAL_WORDS = ['j', 'code', 'calc', 'apply', 'give', 'refl', 'by', 'have', 'with', 'within', 'cases'];
 
 module.exports = grammar({
   name: 'heather',
@@ -65,6 +65,7 @@ module.exports = grammar({
     // one that consumes the arm block wins.
     [$.match_code_expression, $.contextual_identifier],
     [$.calc_expression, $.contextual_identifier],
+    [$.within_expression, $.contextual_identifier],
     [$.apply_expression, $.contextual_identifier],
     [$.j_expression, $.contextual_identifier],
     [$.refl_expression, $.contextual_identifier],
@@ -595,6 +596,7 @@ module.exports = grammar({
       $.squash_ind_expression,
       $.refl_expression,
       $.by_expression,
+      $.within_expression,
       $.explicit_call_expression,
       $.record_expression,
       $.record_update_expression,
@@ -722,6 +724,14 @@ module.exports = grammar({
     by_tactic_call: $ => prec.left(PREC.POSTFIX, seq(
       field('function', $._qualified_name), repeat1(field('arguments', $.argument_list)),
     )),
+
+    // `within W { … }` or `within W for x [: T] { … }` (docs/language/proof-worlds-design.md).
+    within_expression: $ => seq(
+      'within',
+      field('world', choice($._qualified_name, alias($.by_tactic_call, $.call_expression))),
+      optional(seq('for', field('binder', $.identifier), optional(seq(':', field('type', $._head_expression))))),
+      field('body', $.block),
+    ),
 
     explicit_call_expression: $ => prec(PREC.POSTFIX, seq('@', $._qualified_name, optional($.type_arguments), $.argument_list)),
     propagation_expression: $ => prec.left(PREC.POSTFIX, seq(field('value', $._expression), token.immediate('?'))),

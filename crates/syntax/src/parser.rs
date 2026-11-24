@@ -6313,6 +6313,13 @@ impl Parser {
                 span,
             });
         }
+        // `within W { … }` or `within W for x [: T] { … }`: scoped proof world
+        // (docs/language/proof-worlds-design.md). Rule 1: only when a name
+        // follows, so locals, parameters and methods named `within` keep
+        // reading as themselves.
+        if self.at_kw("within") && matches!(self.nth(1), TokKind::Ident(_)) {
+            return self.within_expr();
+        }
         if self.at_kw("j") && matches!(self.nth(1), TokKind::LParen) {
             return self.j_expr();
         }
@@ -7419,6 +7426,29 @@ impl Parser {
             },
             span: start.join(end),
         })
+    }
+
+    /// `within W { … }` or `within W for x [: T] { … }` — scoped proof worlds
+    /// (docs/language/proof-worlds-design.md).
+    fn within_expr(&mut self) -> R<Expr> {
+        let start = self.bump().span; // `within`
+        let world = self.with_record_lit(true, |p| p.postfix())?;
+        let binder = if self.eat_kw("for") {
+            let (name, nspan) = self.ident("index binder after `for`")?;
+            let ty = if matches!(self.peek(), TokKind::Colon) {
+                self.bump();
+                Some(self.with_record_lit(true, |p| p.ty())?)
+            } else {
+                None
+            };
+            let span = ty.as_ref().map_or(nspan, |t| nspan.join(t.span));
+            Some(LamBinder { name, ty, implicit: false, span })
+        } else {
+            None
+        };
+        self.defer_binds = true;
+        let block = self.block()?;
+        crate::within::lower(world, binder, block, start, &mut self.next_hygienic)
     }
 
     /// One calc step's relation token.
