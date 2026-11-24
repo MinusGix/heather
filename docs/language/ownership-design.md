@@ -479,8 +479,8 @@ Read off the code on 2026-11-24.
 | Updates in place | Only the one written span of an `FTm` computation, a laid record's fields and `Bytes(n)`, justified structurally: the span is never a value (`rt_file.hthr`). |
 | Buffers as values | `Op::Get`, `Op::Set` are refused by the default judgment and not lowered. |
 | `Unique`, `Owned`, `WritePlan` | Built over `rt` (`lib/lang/facts/`); no lowering consumes them (`unique-fact`). |
-| Borrows for a call | `FTm::Lend` and `FView`; FunctionIR `View`; machine `Loan`, `Viewed`. A written view and another view of its buffer are lowered where the path knows them apart, by value or a comparison on the path, and `ViewsApart` is the fact that licenses the call (`views-of-one-buffer-apart`). |
-| Several written spans | Not built (`rung2-spans-design.md` §6). |
+| Borrows for a call | `FTm::Lend` and `FView`; FunctionIR `View`; machine `Loan`, `Viewed`. Views of one buffer, any of them written (`split_at_mut`), are lowered where the path knows them apart, by value or a comparison on the path; `ViewsApart` is the fact that licenses the call (`views-of-one-buffer-apart`). |
+| Several written spans | In FunctionIR and the machine, built (several written views, of one buffer or several); in `rt`'s meaning, not built (`rung2-spans-design.md` §6). |
 | Linearity | The reflector's refusals for the world and the span (`rt_reflect.hthr`). No judgment over `FTm`, `ETm` or held code: only pure `Fun` goes through `Setup`. |
 | Typed references | None. A window is two words, a vector handle a `u64`, laid records nest by value. |
 | Lenses | `Location`, `LocationLaws`, `Disjoint` (`lib/std/machine/location.hthr`), total only; `Part` and `Stored` for laid records. |

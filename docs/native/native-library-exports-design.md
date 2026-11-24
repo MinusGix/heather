@@ -390,15 +390,16 @@ window past the end is shorter). The lowering accepts a lend
   renaming, needs no comparison;
 - a view's `home` is a home the scope holds for its buffer
   (`homes_length`);
-- no two written views are of one buffer (`views_written_alone`), and a
-  written view and another view of its buffer are known apart
-  (`views_apart`): one's `end` is the other's `start` (one value, as
+- a written view and another view of its buffer, to read or to write,
+  are known apart (`views_apart`): one's `end` is the other's `start` (one value, as
   `split_at` makes them), an arm taken on the way says one's end is at most
   the other's start (`File::at_most`), or the two are constants in order
   (`File::constants_ordered`). What the check gives is a fact about the
   values (`ViewsApart`, carried in `Lendable.apart`), which is the machine
-  law's `Viewed.alone` (below): two views of one buffer that share no byte
-  are lent at once, one of them to write. That a written view is of a
+  law's `Viewed.alone` (below): views of one buffer that share no byte
+  are lent at once, any of them to write (`split_at_mut`). Afterwards the
+  buffer reads, byte by byte, what the view covering a byte left there and
+  elsewhere what it held (`Loan::view_windows_reads`, `put_views_at`). That a written view is of a
   buffer the scope may write is not the lowering's to check: it is what
   the function needs (`stores`), which its row of marks answers
   (`issues/views-of-one-buffer-apart.md`);

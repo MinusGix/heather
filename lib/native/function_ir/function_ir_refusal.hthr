@@ -282,14 +282,11 @@ fn File::lend_refusal(self file: File, saves: Nat, slots: Nat, prog: Prog, views
             Nil => call ++ "it has no view, and a call over none is written as a call",
             Cons(_, _) => match views_lendable(views, first.file, homes) {
                 False => call ++ views_refusal(views, first.file, homes),
-                True => match views_written_alone(views) {
-                    False => call ++ "two views to write are of one buffer",
-                    True => match views_apart(views, first.file) {
-                        False => call ++ views_apart_refusal(views, first.file),
-                        True => match (callee + 1).leb(bound) && !args_lend(views_lents(views), lent_count(counts, callee), 0, views_homes(views) ++ arguments) {
-                            True => call ++ "the callee is lent more buffers than the call has views",
-                            False => call ++ first.file.call_refusal(slots, first.placement, callee, views_homes(views) ++ arguments, bound, counts, views_lents(views)),
-                        },
+                True => match views_apart(views, first.file) {
+                    False => call ++ views_apart_refusal(views, first.file),
+                    True => match (callee + 1).leb(bound) && !args_lend(views_lents(views), lent_count(counts, callee), 0, views_homes(views) ++ arguments) {
+                        True => call ++ "the callee is lent more buffers than the call has views",
+                        False => call ++ first.file.call_refusal(slots, first.placement, callee, views_homes(views) ++ arguments, bound, counts, views_lents(views)),
                     },
                 },
             },

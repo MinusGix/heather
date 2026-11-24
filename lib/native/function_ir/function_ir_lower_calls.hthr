@@ -4810,8 +4810,8 @@ theorem File::emit_lend_runs<M>(self file: File, saves: Nat, slots: Nat, site: S
                                 λ eight slotted below lend count few moved holds g0 represents rsp_g0 k at => {
                                     let still = nodes_run_still(values, nodes, before, mid, views_nodes_quiet(views), holds.left.left);
                                     let lendable = views_lendable_sound(views, first.file, homes, values, g0, lending.addresses,
-                                        lending.buffers, before, lending.written, represents, holds.left.right, checks.left.left, checks.left.right,
-                                        checks.right, still.right, allowed);
+                                        lending.buffers, before, lending.written, represents, holds.left.right, checks.left, checks.right,
+                                        still.right, allowed);
                                     lend_step<M>(call_saves(first.placement), slots, eight, slotted, site, laid, stack, top, effects, rooms, bound, avail, lending, loan, needs, calls, values, d, s0, room,
                                         fits, under, moved, views, callee, below, deeper(below), count, few, args, result, asks, lendable, lend, mid, left,
                                         holds.right, g0, k, at)

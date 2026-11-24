@@ -21,7 +21,9 @@
 //   the lender's that no written view covers reads as it did.
 // - Reading through a view (`readable_window`), and a span after its view
 //   was written (`readable_put_window`): the list of bytes with its window
-//   replaced (`List::put_window`, list_window).
+//   replaced (`List::put_window`, list_window). A span several views to
+//   write are of: byte by byte, each covered byte what its view reads now
+//   (`Loan::view_windows_reads`).
 // - `Loan::onto`, `Stack::wrote_in_onto`: the same under other numbers.
 //   The views as spans are `Views::spans`; a callee's buffers are spans it
 //   numbers itself, no longer than the views and lying where they do, and
@@ -315,6 +317,50 @@ theorem Loan::view_written_reads<M>({fetch: FetchAccess<M>}, {data: ByteReadAcce
                     Inl(below) => Inl(below),
                     Inr(past) => Inr(omega(past, same_len)),
                 }), before, after, wrote))
+}
+
+// A byte `t` of span `c` after the stores, as the list `zs` says it: a
+// view to write of `c` covers it and `zs` has what that view reads now
+// (`ys(v)`), or no view to write of `c` covers it and `zs` has what the
+// span read before (`xs`).
+fn ViewCovers(views: Views, c, t: Nat, ys: Nat → List<BitVec(8)>, xs, zs: List<BitVec(8)>) → Type {
+    Exists<Nat>(λ v => (views.written(v) = True ∧ views.of(v) = c) ∧
+        ((views.start(v) <= t ∧ t < views.start(v) + ys(v).len()) ∧ zs.nth(t) = ys(v).nth(t - views.start(v)))) ∨
+    (((v: Nat) → views.written(v) = True → views.of(v) = c → (t < views.start(v)) ∨ (views.start(v) + views.size(v) <= t)) ∧
+        zs.nth(t) = xs.nth(t))
+}
+
+// A span any number of views to write are of: after the stores it reads
+// the list that has, at each byte, what the view covering it reads now,
+// or what the span read before where none covers it. (The views to write
+// of one span lie apart, `Viewed.alone`, so one view covers a byte.)
+theorem Loan::view_windows_reads<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat},
+    {spans: Spans}, self loan: Loan<M>(fetch, data, stack, top, spans), views: Views, viewed: Viewed(views, spans), i: Nat, low: i <= top,
+    c: Nat, xs, zs: List<BitVec(8)>, ys: Nat → List<BitVec(8)>, same_len: zs.len() = xs.len(), fits: xs.len() <= spans.size(c),
+    before, after: M, wrote: stack.WroteIn(i, views.spans(spans), before, after), was: Readable(data, before, spans.at(c), xs),
+    now: (v: Nat) → views.written(v) = True → views.of(v) = c → Readable(data, after, views.spans(spans).at(v), ys(v)),
+    covers: (t: Nat) → t < xs.len() → ViewCovers(views, c, t, ys, xs, zs)): Readable(data, after, spans.at(c), zs) {
+    ⟨j(sym(same_len), λ n _ => spans.at(c).toNat() + n <= Nat::pow(2, 47), was.left),
+     λ t short => {
+        let in_xs: (t < xs.len()) = j(same_len, λ n _ => t < n, short);
+        match covers(t, in_xs) {
+            Inl(found) => {
+                let v = found.witness;
+                let from: (views.start(v) <= t) = found.proof.right.left.left;
+                let inside: (t < views.start(v) + ys(v).len()) = found.proof.right.left.right;
+                let parts: (views.start(v) + (t - views.start(v)) = t) = omega(from);
+                let reads: (data.read(after, next_rip(views.spans(spans).at(v), t - views.start(v))) = ys(v).nth(t - views.start(v))) =
+                    now(v, found.proof.left.left, found.proof.left.right).right(t - views.start(v), omega(from, inside));
+                let at: (next_rip(views.spans(spans).at(v), t - views.start(v)) = next_rip(spans.at(c), t)) =
+                    trans(rip_compose(spans.at(views.of(v)), views.start(v), t - views.start(v)),
+                        trans(cong_fn<Nat, BitVec(64)>(λ n => next_rip(spans.at(views.of(v)), n), parts),
+                            cong_fn<Nat, BitVec(64)>(λ b => next_rip(spans.at(b), t), found.proof.left.right)));
+                trans(cong_fn<BitVec(64), Option<BitVec(8)>>(λ a => data.read(after, a), sym(at)), trans(reads, sym(found.proof.right.right)))
+            },
+            Inr(outside) => trans(loan.view_outside(views, viewed, i, low, c, t, omega(in_xs, fits), outside.left, before, after, wrote),
+                trans(was.right(t, in_xs), sym(outside.right))),
+        }
+     }⟩
 }
 
 // ---------------------------------------------------------------------------
