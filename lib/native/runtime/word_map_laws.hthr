@@ -816,3 +816,44 @@ theorem WordMap::get_insert_other(m: WordMap, inv: WordMapInv(m), k, v: u64, nz:
         trans(cong_fn(λ (o: Option<u64>) => o.unwrap_or(0), trans(WordMap::insert_get(m, inv, k, v, nz, ok, i), m.abs().assoc_get_set_other(k, v, i, ne))),
             sym(WordMap::get_is(m, inv, i))))
 }
+
+// ---------------------------------------------------------------------------
+// Removal by backward shifting: the distances it reasons with.
+
+// The shift's test, `(j - i).band(3)`, is the steps from `i` to `j`.
+theorem WordMap::slot_dist(j, i: u64, j4: j.toNat() < 4, i4: i.toNat() < 4): ((j - i).band(3)).toNat() = (j.toNat() + 4 - i.toNat()) % 4 {
+    let x = j.toNat() + Nat::pow(2, 64) - i.toNat();
+    let low: (x.mod(Nat::pow(2, 64)).mod(4) = x.mod(4)) = x.mod_pow_mod(2, 2, 62);
+    let p64: (Nat::pow(2, 64) = 18446744073709551616) = refl;
+    let shifted: ((j.toNat() + 18446744073709551616 - i.toNat()) % 4 = (j.toNat() + 4 - i.toNat()) % 4) = omega(j4, i4);
+    trans(WordMap::band_three(j - i), trans(cong_fn(λ (q: Nat) => q % 4, BitVec::toNat_sub_mod(64, j, i)), trans(low, rewrite(sym(p64), in := shifted))))
+}
+
+// An entry that moves into the hole `i` (the hole on its probe) is reached
+// at `i` past only the slots it passed to reach `j`.
+theorem WordMap::moved_path(h, i, j, t: Nat, h4: h < 4, i4: i < 4, j4: j < 4, t4: t < 4, ij: ¬(i = j),
+    moves: ((j + 4 - i) % 4) <= ((j + 4 - h) % 4), before: ((t + 4 - h) % 4) < ((i + 4 - h) % 4)): ((t + 4 - h) % 4) < ((j + 4 - h) % 4) { omega }
+
+// Its slot `j`, the new hole, is not on its new probe.
+theorem WordMap::moved_clear(h, i, j: Nat, h4: h < 4, i4: i < 4, j4: j < 4, ij: ¬(i = j),
+    moves: ((j + 4 - i) % 4) <= ((j + 4 - h) % 4), before: ((j + 4 - h) % 4) < ((i + 4 - h) % 4)): False { omega }
+
+// An entry that stays did not pass the hole.
+theorem WordMap::stays_clear(h, i, j: Nat, h4: h < 4, i4: i < 4, j4: j < 4,
+    stays: ((j + 4 - h) % 4) < ((j + 4 - i) % 4), before: ((i + 4 - h) % 4) < ((j + 4 - h) % 4)): False { omega }
+
+// Counting from the removed slot `i0`: a probe that passes `j` to reach a
+// slot counted before `j` passes `z`, counted after it.
+theorem WordMap::wraps_past(i0, h, j, s, z: Nat, i04: i0 < 4, h4: h < 4, j4: j < 4, s4: s < 4, z4: z < 4,
+    sj: ((s + 4 - i0) % 4) < ((j + 4 - i0) % 4), jz: ((j + 4 - i0) % 4) < ((z + 4 - i0) % 4),
+    before: ((j + 4 - h) % 4) < ((s + 4 - h) % 4)): ((z + 4 - h) % 4) < ((s + 4 - h) % 4) { omega }
+
+// A probe that passes the hole `i` to reach a slot counted after `j`
+// passes `j`.
+theorem WordMap::passes_next(i0, h, i, j, s: Nat, i04: i0 < 4, h4: h < 4, i4: i < 4, j4: j < 4, s4: s < 4,
+    ij: ((i + 4 - i0) % 4) < ((j + 4 - i0) % 4), js: ((j + 4 - i0) % 4) < ((s + 4 - i0) % 4),
+    before: ((i + 4 - h) % 4) < ((s + 4 - h) % 4)): ((j + 4 - h) % 4) < ((s + 4 - h) % 4) { omega }
+
+// The next slot, counted from `i0`, is one further while it is before `z`.
+theorem WordMap::count_next(i0, j, jn, z: Nat, i04: i0 < 4, j4: j < 4, z4: z < 4, nj: jn = (j + 1) % 4,
+    jz: ((j + 4 - i0) % 4) < ((z + 4 - i0) % 4)): ((jn + 4 - i0) % 4) = ((j + 4 - i0) % 4) + 1 { omega }
