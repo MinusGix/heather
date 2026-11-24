@@ -30,7 +30,7 @@ CLAUDE.md says when each one applies.
 | `tactics/` | `rewrite`, `simp`, `grind`, `omega`, `linarith`, `ring`, `calc`, `norm_num`, `mono`, `induct`, `bv_decide` |
 | `native/` | The compiler: program logic, FunctionIR, one compiler, procedures, exports, layout, `runtime fn` setups, datarepr, the emitted code's benchmarks |
 | `itrees/` | Interaction trees and coinductive itrees |
-| `library/` | Library design: algebra, orders, division, reals (`creal.md`), float, strings, the parser, lib layout and style |
+| `library/` | Library design: algebra, the separation algebra (`separation-algebra-design.md`), orders, division, reals (`creal.md`), float, strings, the parser, lib layout and style |
 | `showcase/` | Checked example programs (`showcases.tsv` lists them) and the prose around them: subtypes, setoids, relational contexts, the calculator |
 | `infrastructure/` | Testing architecture, caches and module images, module DAG builds, `--only`, instrumentation, benchmarking |
 | `surveys/` | Paper and outside-system surveys, and whole-library assessments |
