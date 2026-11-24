@@ -7367,13 +7367,28 @@ fn runtime_bytes(name: String, f: GlobalRef) → Tac<List<Decl>> {
     }
 }
 
+// How many binders a type's type has: the parameters a type takes.
+fn runtime_pi_count(fuel: Nat, t: Handle) → Tac<Nat> {
+    match fuel {
+        Zero => pure(0),
+        Succ(f) => view(t).bind(λ v => match v {
+            HPi(_) => open(t, "p").bind(λ oc => match oc { Refused(_) => pure(0), Accepted(o) => runtime_pi_count(f, o.body).bind(λ k => pure(k + 1)) }),
+            _ => pure(0),
+        }),
+    }
+}
+
 fn runtime_laid_after(fuel: Nat, t: Handle, before: Nat) → Tac<Bool> {
     match fuel {
         Zero => pure(False),
         Succ(f) => view(t).bind(λ v => match v {
             HPi(dom) => view(dom).bind(λ dv => match dv {
-                HGlobal(_, tname, args) => lookup(tname ++ "::stored").bind(λ s => match s {
-                    Accepted(_) => pure(True),
+                HGlobal(tg, tname, args) => lookup(tname ++ "::stored").bind(λ s => match s {
+                    // A laid record taking as many parameters as come before it.
+                    Accepted(_) => infer(Global(tg)).bind(λ c => match c {
+                        Refused(_) => pure(False),
+                        Accepted(kind) => runtime_pi_count(4, kind).bind(λ k => pure(k.same(before))),
+                    }),
                     Refused(_) => open(t, "p").bind(λ oc => match oc { Refused(_) => pure(False), Accepted(o) => runtime_laid_after(f, o.body, before + 1) }),
                 }),
                 _ => open(t, "p").bind(λ oc => match oc { Refused(_) => pure(False), Accepted(o) => runtime_laid_after(f, o.body, before + 1) }),
@@ -7392,7 +7407,6 @@ fn runtime_of_laid(f: GlobalRef) → Tac<Bool> {
         Accepted(t) => runtime_laid_after(4, t, 0),
     })
 }
-
 
 // `runtime fn f`: a function whose first parameter is a record laid over
 // bytes is over the span that holds the record; of the others, one whose

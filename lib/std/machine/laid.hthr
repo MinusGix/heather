@@ -198,7 +198,6 @@ fn laid_closed(xs: List<LocalRef>, ss: List<Expr>, e: Expr) → Expr {
 // A term closed over the parameters at their samples.
 fn LaidParams::closed(self ps: LaidParams, e: Expr) → Expr { laid_closed(ps.locals, ps.samples, e) }
 
-
 fn LaidParams::decl(self ps: LaidParams) → List<Param> { ps.locals.map(λ x => Param(x, False)) }
 
 // A term held as one node where a record has no parameters (`laid_held`);
