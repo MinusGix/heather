@@ -128,6 +128,18 @@ theorem word_map_home_below(k: u64): word_map_home(k).toNat() < 4 {
 }
 
 // ---------------------------------------------------------------------------
+// One probe step in distances: from `j` to `jn`, the next slot.
+
+theorem WordMap::step_budget(j, s, jn, l, ln: Nat, j4: j < 4, s4: s < 4, nj: jn = (j + 1) % 4, dl: ln = l - 1, other: ¬(j = s),
+    budget: ((s + 4 - j) % 4) < l): ((s + 4 - jn) % 4) < ln { omega }
+
+theorem WordMap::step_before(j, s, t, jn: Nat, j4: j < 4, s4: s < 4, t4: t < 4, nj: jn = (j + 1) % 4, other: ¬(j = s),
+    before: ((t + 4 - jn) % 4) < ((s + 4 - jn) % 4)): ((t + 4 - j) % 4) < ((s + 4 - j) % 4) { omega }
+
+theorem WordMap::step_before_back(j, s, t, jn: Nat, j4: j < 4, s4: s < 4, t4: t < 4, nj: jn = (j + 1) % 4, other: ¬(j = s), away: ¬(t = j),
+    before: ((t + 4 - j) % 4) < ((s + 4 - j) % 4)): ((t + 4 - jn) % 4) < ((s + 4 - jn) % 4) { omega }
+
+// ---------------------------------------------------------------------------
 // The table's lookups, read off its slots.
 
 fn WordMap::Distinct(self m: WordMap) → Type { (s, t: Nat) → s < 4 → t < 4 → ¬(m.key(s) = 0) → m.key(s) = m.key(t) → s = t }
@@ -242,7 +254,8 @@ theorem WordMap::finds_next(m: WordMap, k: u64, s: Nat, s4: s < 4, at: m.key(s) 
         let nj = WordMap::next_slot(j, j4);
         let dl: ((left - 1).toNat() = left.toNat() - 1) = bv_omega;
         let other: (¬(j.toNat() = s)) = λ e => hit(trans(cong_fn(λ (q: Nat) => m.key(q), e), at));
-        trans(eq, ih(omega(nj), omega(nj, dl, budget, other, s4), λ t t4 before => clear(t, t4, omega(nj, other, before, s4))))
+        trans(eq, ih(omega(nj), WordMap::step_budget(j.toNat(), s, ((j + 1).band(3)).toNat(), left.toNat(), (left - 1).toNat(), j4, s4, nj, dl, other, budget),
+            λ t t4 before => clear(t, t4, WordMap::step_before(j.toNat(), s, t, ((j + 1).band(3)).toNat(), j4, s4, t4, nj, other, before))))
     }
 }
 
@@ -477,7 +490,8 @@ theorem WordMap::replaces_next(m: WordMap, k, v: u64, s: Nat, s4: s < 4, at: m.k
         let nj = WordMap::next_slot(j, j4);
         let dl: ((left - 1).toNat() = left.toNat() - 1) = bv_omega;
         let other: (¬(j.toNat() = s)) = λ e => hit(trans(cong_fn(λ (q: Nat) => m.key(q), e), at));
-        trans(eq, ih(omega(nj), omega(nj, dl, budget, other, s4), λ t t4 before => clear(t, t4, omega(nj, other, before, s4))))
+        trans(eq, ih(omega(nj), WordMap::step_budget(j.toNat(), s, ((j + 1).band(3)).toNat(), left.toNat(), (left - 1).toNat(), j4, s4, nj, dl, other, budget),
+            λ t t4 before => clear(t, t4, WordMap::step_before(j.toNat(), s, t, ((j + 1).band(3)).toNat(), j4, s4, t4, nj, other, before))))
     }
 }
 
@@ -521,14 +535,14 @@ theorem WordMap::adds_next(m: WordMap, k, v: u64, j, left: u64, more: 0 < left, 
         let dl: ((left - 1).toNat() = left.toNat() - 1) = bv_omega;
         let e = spare.witness;
         let other: (¬(j.toNat() = e)) = λ same => empty(trans(cong_fn(λ (q: Nat) => m.key(q), same), spare.proof.right.left));
-        let closer: (((e + 4 - ((j + 1).band(3)).toNat()) % 4) < (left - 1).toNat()) = omega(nj, dl, other, spare.proof.left, spare.proof.right.right, j4);
+        let closer = WordMap::step_budget(j.toNat(), e, ((j + 1).band(3)).toNat(), left.toNat(), (left - 1).toNat(), j4, spare.proof.left, nj, dl, other, spare.proof.right.right);
         match ih(omega(nj), Exists(e, And(spare.proof.left, And(spare.proof.right.left, closer)))) {
             Inl(found) => {
                 let f = found.proof.left;
                 let further: (¬(j.toNat() = found.witness)) = λ same => empty(trans(cong_fn(λ (q: Nat) => m.key(q), same), f.empty));
                 Inl(Exists(found.witness, And(FirstEmpty(f.inside, f.empty, λ t t4 before => match Nat::eq_dec(t, j.toNat()) {
                     Inl(here) => λ z => empty(trans(cong_fn(λ (q: Nat) => m.key(q), sym(here)), z)),
-                    Inr(away) => f.path(t, t4, omega(nj, further, away, before, f.inside, j4)),
+                    Inr(away) => f.path(t, t4, WordMap::step_before_back(j.toNat(), found.witness, t, ((j + 1).band(3)).toNat(), j4, f.inside, t4, nj, further, away, before)),
                 }), And(found.proof.right.left, trans(eq, found.proof.right.right)))))
             },
             Inr(full) => Inr(And(full.left, trans(eq, full.right))),
