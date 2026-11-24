@@ -89,7 +89,7 @@ theorem Prog::within_args(self p: Prog, layout: Layout, out: List<Nat>, index, b
 // A structured region is emitted only where it is scoped from every word.
 theorem StructuredRegion::region_extends(self region: StructuredRegion, layout: Layout, p: Prog, out: List<Nat>, names: Nat, c: Compiled,
     emitted: (match region.scopes() { False => None, True => region.code(p, layout, out, names) }) = Some(c)): p.Within(c.prog) {
-    cases emitted as scoped;
+    cases emitted as scoped, free;
     region.within_code(layout, p, out, names, c, emitted)
 }
 
@@ -314,7 +314,9 @@ theorem StructuredRegion::region_runs(self region: StructuredRegion, t: Target, 
         let tree = k(Onward(env.compute(call, region)));
         match scoped: region.scoped(Scope::all()) {
             None => absurd(emitted),
-            Some(st) => {
+            Some(st) => match free: region.until_free() {
+              False => absurd(emitted),
+              True => {
                 let same = region.compute_same(call, st, scoped, env);
                 let goes = t.at_like(prog_len(c.prog), out, tree, env.compute(call, region), region.meaning(call, env),
                     env.compute(call, region).like_sym(region.meaning(call, env), out, env.compute(call, region).like_of_same(region.meaning(call, env), out, same)),
@@ -323,9 +325,10 @@ theorem StructuredRegion::region_runs(self region: StructuredRegion, t: Target, 
                         Bool::IsTrue(match o { None => False, Some(_) => True }) →
                         t.At(prog_len(p), match o { None => out, Some(l) => l }, tree, env) {
                     None => λ _ never => false_elim(never),
-                    Some(l) => λ got _ => region.code_runs(t, call, fns, region.ok_of_scoped(Scope::all(), st, scoped), p, out, names, c, emitted, within, l, got,
-                        env, tree, goes),
+                    Some(l) => λ got _ => region.code_runs(t, call, fns, region.ok_of_scoped(call, Bool::is_true_of_eq(free), Scope::all(), st, scoped),
+                        p, out, names, c, emitted, within, l, got, env, tree, goes),
                 })(refl, checked)
+              },
             },
         }
     }

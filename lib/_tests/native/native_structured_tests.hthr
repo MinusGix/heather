@@ -7,6 +7,8 @@ import native_compile;
 import native_structured;
 import native_alloc;
 import function_ir;
+import function_ir_eval;
+import function_ir_state;
 import linux_x86_64_image;
 import bitvec;
 import list;
@@ -61,3 +63,50 @@ fn clobbers() → Source { Source::of([Buffer(16)], Then(ops([Const(64, 1, 3), C
 
 theorem uncounted_refused(): refused(uncounted()) = [2, 0, 0, 5, 0] { refl }
 theorem clobbers_refused(): refused(clobbers()) = [2, 0, 13, 0, 0] { refl }
+
+// An unbounded loop (`Until`, docs/language/loop-combinator-design.md
+// §6.9): a word counted down to zero, with no count of the loop's own.
+// Words: 1 the start, 3 the parameter, 5 the exit bit, 6 the next value,
+// 7 the value at the end; 10 and 11 the body's.
+fn count_down_body() → StructuredRegion { Dataflow(leaf([Const(64, 10, 1), Sub(64, 6, 3, 10), Const(64, 11, 0), Equal(64, 5, 6, 11)])) }
+fn count_down() → StructuredRegion { Until([1], [3], count_down_body(), 5, [6], [7]) }
+
+fn count_down_src(n: Nat) → Source { Source::of([], Then(ops([Const(64, 1, n)]), Then(Compute(count_down()), Exit(7)))) }
+
+fn cd_homes() → Homes { Homes::slots(count_down_src(3)) }
+fn cd_layout() → Layout { count_down_src(3).layout(low(), cd_homes(), SpillAll().frames(count_down_src(3))) }
+
+fn Option::taken<A>(self o: Option<A>) → Bool { match o { None => False, Some(_) => True } }
+
+// It scopes, its words are checked with its head's set (keyed by its
+// exit), and its code is its body and the jump back.
+theorem count_down_scoped(): count_down().scoped(Scope::all()).taken() = True { refl }
+theorem count_down_checked(): cd_homes().region_checked(count_down(), [7]).taken() = True { refl }
+theorem count_down_code(): count_down().code(Start, cd_layout(), [7], 0).taken() = True { refl }
+
+// Its meaning from 3: three passes, the last leaving with 0, well within
+// the passes the meaning gives it, so it ends (`until_run_defined`, what
+// `StructuredRegion::until_halts` asks from every state).
+fn cd_step() → Valuation() → Buffers() → State {
+    λ (pass: Valuation()) (held: Buffers()) => count_down_body().run(Readers::quiet(λ _ _ _ => []), pass, held)
+}
+theorem count_down_ends(): until_run_defined(cd_step(), λ _ _ => True, [3], 5, [6], until_passes(), [BitVec::ofNat(3)], []) = True { refl }
+theorem count_down_runs(): until_run(cd_step(), [3], 5, [6], until_passes(), [BitVec::ofNat(3)], []).end.state = [BitVec::ofNat(0)] { refl }
+
+// A statement does not take it yet: its code runs as its meaning where it
+// ends (`StructuredRegion::Ok`), and a statement's meaning has no place for
+// one that does not (reason 0, kind 7).
+theorem count_down_statement(): count_down().scopes() = False { refl }
+theorem count_down_refused(): refused(count_down_src(3)) = [2, 0, 0, 7, 0] { refl }
+
+// Negative controls: an exit that is one of its parameters, and a body
+// that reads a word outside its pass (word 1), do not scope.
+fn exit_moved() → StructuredRegion {
+    Until([1], [5], Dataflow(leaf([Const(64, 10, 1), Sub(64, 6, 5, 10), Const(64, 11, 0), Equal(64, 5, 6, 11)])), 5, [6], [7])
+}
+fn reads_outside() → StructuredRegion {
+    Until([1], [3], Dataflow(leaf([Sub(64, 6, 3, 1), Const(64, 11, 0), Equal(64, 5, 6, 11)])), 5, [6], [7])
+}
+
+theorem exit_moved_unscoped(): exit_moved().scoped(Scope::all()).taken() = False { refl }
+theorem reads_outside_unscoped(): reads_outside().scoped(Scope::all()).taken() = False { refl }

@@ -611,6 +611,22 @@ theorem loop_run_len(step: Valuation() → Buffers() → State, parameters: List
     }
 }
 
+theorem until_run_len(step: Valuation() → Buffers() → State, parameters: List<Nat>, exit: Nat, next: List<Nat>, n: Nat, nl: next.len() = n,
+    fuel: Nat): (state: List<BitVec(64)>) → (buffers: Buffers()) → state.len() = n →
+    until_run(step, parameters, exit, next, fuel, state, buffers).end.state.len() = n {
+    match fuel {
+        Zero => λ state buffers sl => sl,
+        Succ(rest) => λ state buffers sl => {
+            let after = step(until_valuation(parameters, state), buffers);
+            let wl: (words_of(after.values, next).len() = n) = trans(words_of_len(after.values, next), nl);
+            match after.values(1, exit).head_bit() {
+                False => until_run_len(step, parameters, exit, next, n, nl, rest, words_of(after.values, next), after.buffers, wl),
+                True => wl,
+            }
+        },
+    }
+}
+
 // Ids bound to as many words read the words, whatever was under them.
 theorem Valuation::bind_bound(ids: List<Nat>): (words: List<BitVec(64)>) → words.len() = ids.len() → (v1, v2: Valuation()) → (w, o: Nat) → Mem(o, ids) →
     Valuation::bind(v1, ids, words)(w, o) = Valuation::bind(v2, ids, words)(w, o) {
@@ -779,6 +795,60 @@ theorem StructuredRegion::loop_settles(env: Env, values: Valuation(), s: Scope, 
     ⟨sym(kept.left), ⟨⟨numbers, ⟨trans(kv.left, sym(kept.left)), trans(kv.right, sym(kept.right))⟩⟩, agrees_after⟩⟩
 }
 
+// An unbounded loop's outputs, settled from a run over a valuation that
+// agrees with the environment, as from one over the environment's own.
+theorem StructuredRegion::until_settles(env: Env, values: Valuation(), s: Scope, agrees: Valuation::Agrees(values, env, s),
+    outputs: List<Nat>, e: LoopState, len: e.end.state.len() = outputs.len()):
+    Settles(State(Valuation::bind(values, outputs, e.end.state), e.buffers), word_ports(outputs),
+        Env(env.words, e.buffers, env.args).settle(Valuation::bind(env.valuation(), outputs, e.end.state), word_ports(outputs)),
+        env, s.until_looped(outputs)) {
+    let st = e.end.state;
+    let ports = word_ports(outputs);
+    let v = Valuation::bind(values, outputs, st);
+    let v0 = Valuation::bind(env.valuation(), outputs, st);
+    let base = Env(env.words, e.buffers, env.args);
+    let m = base.settle(v0, ports);
+    let kept = Env::settle_kept(ports, base, v0);
+    let kv = Env::settle_kept(ports, base, v);
+    let ids_eq: (port_ids(ports) = outputs) = word_port_ids(outputs);
+    let at = λ (i: Nat) (mi: Mem(i, port_ids(ports))) (w: Nat) =>
+        Valuation::bind_bound(outputs, st, len, values, env.valuation(), w, i, j(ids_eq, λ l _ => Mem(i, l), mi));
+    let numbers = λ (i: Nat) => (match absent(i, port_ids(ports)) as λ c => absent(i, port_ids(ports)) = c → base.settle(v, ports).number(i) = m.number(i) {
+        True => λ h => {
+            let fresh: absent(i, port_ids(ports)).IsTrue() = j(sym(h), λ c _ => c.IsTrue(), trivial);
+            trans(Env::settle_frame(ports, base, v, i, fresh), sym(Env::settle_frame(ports, base, v0, i, fresh)))
+        },
+        False => λ h => Env::settle_at(ports, base, base, v, v0, i, refl, λ w => at(i, absent_false_mem(i, port_ids(ports), h), w)),
+    })(refl);
+    let agrees_after: Valuation::Agrees(v, m, s.until_looped(outputs)) = λ x def => match held: outputs.holds(x) {
+        True => {
+            let mo = outputs.holds_mem(x, held);
+            let widths = λ (port: Port) (mp: Mem(port, ports)) (named: port.id = x) => word_ports_mem(outputs, port, mp).right;
+            let mx: Mem(x, port_ids(ports)) = j(sym(ids_eq), λ l _ => Mem(x, l), mo);
+            let word_number: (m.number(x) = v0(64, x).toNat()) = Env::settle_width(ports, base, v0, x, 64, widths, mx);
+            let same64: (v0(64, x) = v(64, x)) = sym(at(x, mx, 64));
+            let word_eq: (m.word(x) = v(64, x)) = trans(cong_fn<Nat, BitVec(64)>(λ n => BitVec::ofNat(n), word_number),
+                trans(BitVec::ofNat_toNat(64, v0(64, x)), same64));
+            ⟨sym(word_eq), λ _ => trans(Valuation::bind_coherent(outputs, st, len, values, x, mo),
+                sym(cong_fn(λ (y: BitVec(64)) => y.head_bit(), word_eq)))⟩
+        },
+        False => {
+            let sdef: s.defined(x).IsTrue() = j(held, λ b _ => (b || s.defined(x)).IsTrue(), def);
+            let out_absent = outputs.holds_false_absent(x, held);
+            let fresh: absent(x, port_ids(ports)).IsTrue() = j(sym(ids_eq), λ l _ => absent(x, l).IsTrue(), out_absent);
+            let kept_number: (m.number(x) = env.number(x)) = Env::settle_frame(ports, base, v0, x, fresh);
+            let kept_word: (m.word(x) = env.word(x)) = cong_fn<Nat, BitVec(64)>(λ n => BitVec::ofNat(n), kept_number);
+            let frame = λ (w: Nat) => Valuation::bind_frame(values, outputs, st, w, x, out_absent);
+            let a = agrees(x, sdef);
+            ⟨trans(frame(64), trans(a.left, sym(kept_word))),
+                λ nl => trans(cong_fn(λ (y: BitVec(1)) => y.head_bit(), frame(1)),
+                    trans(a.right(j(held, λ b _ => (!(match b { True => False, False => s.loose(x) })).IsTrue(), nl)),
+                        sym(cong_fn(λ (y: BitVec(64)) => y.head_bit(), kept_word))))⟩
+        },
+    };
+    ⟨sym(kept.left), ⟨⟨numbers, ⟨trans(kv.left, sym(kept.left)), trans(kv.right, sym(kept.right))⟩⟩, agrees_after⟩⟩
+}
+
 // A call's result and the file it left, settled from a run over a
 // valuation that agrees with the environment, as from one over the
 // environment's own.
@@ -882,6 +952,42 @@ theorem StructuredRegion::loop_shaped(inputs: List<Nat>, bound: Nat, parameters:
     let pm = Bool::is_true_and(m1, m2 && m3, p4.left);
     let pm2 = Bool::is_true_and(m2, m3, pm.right);
     LoopShape(pl.left, pl2.left, pl2.right, pd.left, pd.right, pc.left, pc2.left, pc2.right, pe.left, pe2.left, pe2.right, pm.left, pm2.left, pm2.right, p4.right)
+}
+
+// An unbounded loop in its form (`StructuredRegion::until_shape`), its facts
+// apart.
+record UntilShape(inputs: List<Nat>, parameters: List<Nat>, body: StructuredRegion, exit: Nat, next: List<Nat>, outputs: List<Nat>) {
+    inputs_len: inputs.len().matches(parameters.len()).IsTrue(),
+    next_len: next.len().matches(parameters.len()).IsTrue(),
+    outputs_len: outputs.len().matches(parameters.len()).IsTrue(),
+    parameters_distinct: distinct(parameters).IsTrue(),
+    outputs_distinct: distinct(outputs).IsTrue(),
+    exit_parameters: absent(exit, parameters).IsTrue(),
+    entry_ordered: moves_ordered(parameters, inputs).IsTrue(),
+    next_ordered: moves_ordered(parameters, next).IsTrue(),
+    outputs_ordered: moves_ordered(outputs, parameters).IsTrue(),
+}
+
+theorem StructuredRegion::until_shaped(inputs: List<Nat>, parameters: List<Nat>, body: StructuredRegion, exit: Nat, next, outputs: List<Nat>,
+    ok: Until(inputs, parameters, body, exit, next, outputs).until_shape().IsTrue()): UntilShape(inputs, parameters, body, exit, next, outputs) {
+    let l1 = inputs.len().matches(parameters.len());
+    let l2 = next.len().matches(parameters.len());
+    let l3 = outputs.len().matches(parameters.len());
+    let d1 = distinct(parameters);
+    let d2 = distinct(outputs);
+    let e3 = absent(exit, parameters);
+    let m1 = moves_ordered(parameters, inputs);
+    let m2 = moves_ordered(parameters, next);
+    let m3 = moves_ordered(outputs, parameters);
+    let p0 = Bool::is_true_and(l1 && (l2 && l3), (d1 && d2) && (e3 && (m1 && (m2 && m3))), ok);
+    let pl = Bool::is_true_and(l1, l2 && l3, p0.left);
+    let pl2 = Bool::is_true_and(l2, l3, pl.right);
+    let p1 = Bool::is_true_and(d1 && d2, e3 && (m1 && (m2 && m3)), p0.right);
+    let pd = Bool::is_true_and(d1, d2, p1.left);
+    let p2 = Bool::is_true_and(e3, m1 && (m2 && m3), p1.right);
+    let pm = Bool::is_true_and(m1, m2 && m3, p2.right);
+    let pm2 = Bool::is_true_and(m2, m3, pm.right);
+    UntilShape(pl.left, pl2.left, pl2.right, pd.left, pd.right, p2.left, pm.left, pm2.left, pm2.right)
 }
 
 // The theorem: a scoped region's run settles as its meaning.
@@ -1002,7 +1108,30 @@ theorem StructuredRegion::faithful(self region: StructuredRegion, call: Writers(
                     ports, m0, env, s.looped(outputs, exhausted)), settles0)
             }
         },
-        Until(_, _, _, _, _, _) => λ s t none => absurd(none),
+        Until(inputs, parameters, body, exit, next, outputs) => λ s t scoped => {
+            let r = Until(inputs, parameters, body, exit, next, outputs);
+            cases scoped as ok, got(bs), bits;
+            λ values env agrees => {
+                let parts = Bool::is_true_and(s.all_defined(inputs), r.until_shape(), Bool::is_true_of_eq(ok));
+                let shape = StructuredRegion::until_shaped(inputs, parameters, body, exit, next, outputs, parts.right);
+                let step = λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held);
+                let ur = λ (st: List<BitVec(64)>) => until_run(step, parameters, exit, next, until_passes(), st, env.buffers);
+                let e0 = ur(words_of(env.valuation(), inputs));
+                let inputs_eq: (words_of(values, inputs) = words_of(env.valuation(), inputs)) =
+                    words_agree(inputs, env.valuation(), values, λ id m => agrees(id, s.all_defined_mem(inputs, parts.left, id, m)).left);
+                let params_len = parameters.len();
+                let outputs_len: (outputs.len() = params_len) = Nat::matches_eq(outputs.len(), params_len, shape.outputs_len);
+                let next_len: (next.len() = outputs.len()) = trans(Nat::matches_eq(next.len(), params_len, shape.next_len), sym(outputs_len));
+                let start_len: (words_of(env.valuation(), inputs).len() = outputs.len()) = trans(words_of_len(env.valuation(), inputs),
+                    trans(Nat::matches_eq(inputs.len(), params_len, shape.inputs_len), sym(outputs_len)));
+                let len0 = until_run_len(step, parameters, exit, next, outputs.len(), next_len, until_passes(), words_of(env.valuation(), inputs),
+                    env.buffers, start_len);
+                let settles0 = StructuredRegion::until_settles(env, values, s, agrees, outputs, e0, len0);
+                let m0 = Env(env.words, e0.buffers, env.args).settle(Valuation::bind(env.valuation(), outputs, e0.end.state), word_ports(outputs));
+                j(sym(cong_fn(ur, inputs_eq)), λ e _ => Settles(State(Valuation::bind(values, outputs, e.end.state), e.buffers),
+                    word_ports(outputs), m0, env, s.until_looped(outputs)), settles0)
+            }
+        },
     }
 }
 
