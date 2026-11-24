@@ -262,6 +262,20 @@ A reflector needs (issue `runtime-body-reflection-requests`):
   it, because the pin is proved against `f` by conversion and propositions
   are irrelevant to what `f` returns. Where `f`'s result depends on a proof
   computationally (a `match` on an equality), the reflector refuses.
+
+  *As built (2026-11-24, `issues/runtime-erased-parameters.md`):* a
+  parameter is erased wherever it stands when its type is a proposition
+  (two locals of it convert, so a squash `∥P∥` is one) or `Erased<A>`
+  (data the meaning reads and the code does not carry,
+  `lib/std/core/erased.hthr`). The reflector binds it to no variable, so a
+  use as data is refused by name; a call's erased arguments are dropped at
+  any position. Where the code is the reflection written out (a laid
+  record's function, a `Bytes(n)`'s), the published theorem takes a local
+  for each erased parameter where the function does and the pin is the
+  same conversion at those locals, so it holds at every value of them. A
+  plain function and a span writer are compiled from the function itself,
+  typed by its signature, and taking an erased parameter is refused there
+  (`issues/runtime-erased-pure-shadow.md`).
 - **Names.** Globals the setup knows are primitives (§7.1) become `Prim`
   nodes. Runtime fns become `Call`s (§9.2). Any other global is a refusal
   ("`Nat::max` is an ordinary fn: mark it `runtime fn`, or the default setup
