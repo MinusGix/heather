@@ -353,8 +353,89 @@ impl<'a> Walk<'a> {
             self.mask_bound(&w, word, &spelled)?;
             self.zero_extend_value(word, &spelled)?;
             self.shift_right_value(&w, word, &spelled)?;
+            self.division_value(&w, word, &spelled)?;
         }
         Ok(Some(index))
+    }
+
+    /// A quotient or remainder of words, `x / d` or `x % d`, is a leaf: its
+    /// long division has no form. Beside its range it gets the laws over
+    /// its value (`bitvec_div`): `x % d <= x`, and `x % d < d` and
+    /// `x / d <= x` unless `d` is zero, each a disjunction `omega` splits
+    /// only when it needs to, so a test `0 < d` or `d ≠ 0` on the path
+    /// supplies the divisor. A divisor `ofNat(c)` of a positive literal
+    /// within a literal width has the value `c` and states them plainly:
+    /// `x % c < c`, and `x / c` as the two bounds `q * c <= x < q * c + c`,
+    /// as `x >> k` is read. Where both halves of one such division are
+    /// words here, the link `x = q * c + r` too. `x` and a divisor that may
+    /// be zero are words of their own.
+    fn division_value(&mut self, w: &str, word: &Rc<Term>, spelled: &str) -> Result<(), String> {
+        const DIV: &str = "bitvec_div::BitVec::udiv";
+        const REM: &str = "bitvec_div::BitVec::urem";
+        let (args, remainder) = match named_args(self.elab, word, REM) {
+            Some(args) => (args, true),
+            None => match named_args(self.elab, word, DIV) {
+                Some(args) => (args, false),
+                None => return Ok(()),
+            },
+        };
+        let [_, x, d] = args.as_slice() else { return Ok(()) };
+        let (Some(xs), Some(ds)) = (self.elab.spell_term_source(self.cx, x), self.elab.spell_term_source(self.cx, d)) else {
+            return Ok(());
+        };
+        if self.word_at(w.to_string(), x)?.is_none() {
+            return Ok(());
+        }
+        let value = format!("bitvec::BitVec::toNat({spelled})");
+        let dividend = format!("bitvec::BitVec::toNat({xs})");
+        // `ofNat(c)` reads as `c` when `c < 2^w`, which the checker decides.
+        let known = named_args(self.elab, d, "bitvec::BitVec::ofNat")
+            .and_then(|args| args.get(1).and_then(|c| self.literal(c)))
+            .filter(|c| *c > 0 && w.parse::<u32>().is_ok_and(|width| width >= 127 || *c < 1i128 << width));
+        let lemma = |name: &str| format!("bitvec_div::BitVec::{name}");
+        let mut facts = Vec::new();
+        if remainder {
+            facts.push((le(&value, &dividend), format!("{}({w}, {xs}, {ds})", lemma("toNat_urem_le"))));
+        }
+        match known {
+            Some(c) => {
+                let fit = format!("bitvec::BitVec::toNat_ofNat({w}, {c}, trivial)");
+                if remainder {
+                    facts.push((lt(&value, &c.to_string()), format!("{}({w}, {xs}, {ds}, {c}, {fit}, trivial)", lemma("toNat_urem_lt_value"))));
+                } else {
+                    let scaled = mul(&value, &c.to_string());
+                    facts.push((le(&scaled, &dividend), format!("{}({w}, {xs}, {ds}, {c}, {fit})", lemma("toNat_udiv_mul_le_value"))));
+                    facts.push((lt(&dividend, &add(&scaled, &c.to_string())),
+                        format!("{}({w}, {xs}, {ds}, {c}, {fit}, trivial)", lemma("toNat_udiv_lt_value"))));
+                }
+                let other = if remainder { DIV } else { REM };
+                let companion = format!("{other}({xs}, {ds})");
+                if self.node_index.contains_key(&companion) {
+                    let (q, r) = if remainder { (companion.as_str(), spelled) } else { (spelled, companion.as_str()) };
+                    let link = format!("{dividend} = {}",
+                        add(&mul(&format!("bitvec::BitVec::toNat({q})"), &c.to_string()), &format!("bitvec::BitVec::toNat({r})")));
+                    facts.push((link, format!("{}({w}, {xs}, {ds}, {c}, {fit})", lemma("udiv_urem_value"))));
+                }
+            }
+            None => {
+                if self.word_at(w.to_string(), d)?.is_none() {
+                    return Ok(());
+                }
+                let zero = le(&format!("bitvec::BitVec::toNat({ds})"), "0");
+                let (bound, name) = if remainder {
+                    (lt(&value, &format!("bitvec::BitVec::toNat({ds})")), "toNat_urem_lt_or")
+                } else {
+                    (le(&value, &dividend), "toNat_udiv_le_or")
+                };
+                facts.push((format!("logic::Or<{zero}, {bound}>"), format!("{}({w}, {xs}, {ds})", lemma(name))));
+            }
+        }
+        for (statement, proof) in facts {
+            if !self.bridges.iter().any(|(_, other, _)| other == &statement) {
+                self.bridges.push((format!("__bv_divided{}", self.bridges.len()), statement, proof));
+            }
+        }
+        Ok(())
     }
 
     /// A word masked by another, `x & y`, is at most the mask
@@ -476,6 +557,11 @@ impl<'a> Walk<'a> {
             return shape;
         }
         if matches!(crate::spelling::app_spine(word).0, Term::Var(_)) {
+            return Shape::Leaf;
+        }
+        // A quotient or remainder is known by its laws (`division_value`);
+        // its long division steps to nothing the walk takes apart.
+        if ["bitvec_div::BitVec::udiv", "bitvec_div::BitVec::urem"].iter().any(|name| named_args(self.elab, word, name).is_some()) {
             return Shape::Leaf;
         }
         let oracle = self.elab.goal_oracle();
@@ -904,7 +990,9 @@ impl<'w, 'a> Emitter<'w, 'a> {
             } else {
                 format!("`{}` may overflow {} bits", node.word, node.width)
             };
-            let closed = p.terms.is_empty() && q.terms.is_empty();
+            // Over no atoms, and `2^n` a literal power: at an open width
+            // `omega` proves it, from a leaf's range.
+            let closed = p.terms.is_empty() && q.terms.is_empty() && node.width.parse::<u64>().is_ok();
             BoundFrom::Obligation(self.obligation(n, statement, shown, why, closed))
         };
         self.bound_from[n] = Some(from);
@@ -1262,10 +1350,20 @@ fn word_fact(elab: &Elaborator, cx: &Cx, name: &str, ty: &Type) -> Option<WordFa
                     return Some(WordFact { args, relation, swapped: false, lemma, proof: name.to_string() });
                 }
             }
-            None
+            negated_word_fact(elab, cx, name, ty)
         }
-        _ => None,
+        _ => negated_word_fact(elab, cx, name, ty),
     }
+}
+
+/// A disequation of words, `d ≠ 0`, as `≠` of their values: a divisor's
+/// test that a remainder's bound reads (`division_value`).
+fn negated_word_fact(elab: &Elaborator, cx: &Cx, name: &str, ty: &Type) -> Option<WordFact> {
+    let domain = crate::omega_cert::negated_domain(elab, cx, ty)?;
+    let decoded = crate::inductive::decoded(&domain).into_owned();
+    let Type::Id { lhs, rhs, .. } = &decoded else { return None };
+    let width = word_width(elab, cx, &decoded, lhs)?;
+    Some(WordFact { args: vec![width, Rc::clone(lhs), Rc::clone(rhs)], relation: Relation::Ne, swapped: false, lemma: "toNat_ne_of_ne", proof: name.to_string() })
 }
 
 /// The width of the words an equation `ty` relates, when they are words;

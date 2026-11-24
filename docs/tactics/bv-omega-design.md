@@ -122,6 +122,7 @@ classifies `t` by its head:
 | a definition | its reduct's, under a step budget |
 | `BitVec::band(x, y)` | a leaf, beside its range `toNat(x & y) <= m` when `y` is `ofNat(m)` with `m` a literal, else `<= toNat(y)` with `y` walked (`toNat_band_ofNat_le`, `toNat_band_le_right`; `issues/bv-omega-masked-word-bound.md`) |
 | `BitVec::shift_right(x, k)`, `k` a numeral | a leaf, beside `q * 2^k <= toNat(x) < q * 2^k + 2^k` for its value `q`, with `x` walked (`toNat_shift_right_le`, `toNat_shift_right_lt`, where `bitvec_shift_nat` is loaded): the midpoint `lo + ((hi - lo) >> 1)` |
+| `BitVec::urem(x, d)` / `udiv(x, d)` (`x % d`, `x / d`) | a leaf, never stepped, beside its laws over its value, with `x` walked (§3.1) |
 | a destructor of a value built in place (`Range(lo := x + 1, …).lo`) | what it projects, under the same budget |
 | a local | a leaf |
 | anything else | a leaf |
@@ -182,6 +183,40 @@ This lets a comparison against `ofNat(c)` justify a subtraction's no-borrow
 condition over `c`. When that bound fails, the comparison supplies no equation
 equating the operand's value with the Nat it was built from.
 
+### 3.1 Remainders and quotients
+
+A remainder or a quotient of words has no form: its long division
+(`bitvec_div`) steps to a match on a comparison of bits, which a reduct
+budget only pays for. So `x % d` and `x / d` are leaves, and the walk
+states beside each what a hash table's slot index and a span's chunk count
+need, every fact a lemma of `bitvec_div` over the words' values:
+
+- `x % d <= x`, whatever the divisor (`toNat_urem_le`): by zero the
+  remainder is the dividend.
+- A divisor `ofNat(c)` of a positive literal within a literal width has the
+  value `c`, through `toNat_ofNat(w, c, trivial)`, and its facts are plain:
+  `x % c < c` (`toNat_urem_lt_value`), and for `x / c` the two bounds
+  `q * c <= x < q * c + c` (`toNat_udiv_mul_le_value`,
+  `toNat_udiv_lt_value`), as `x >> k` is read. Where both `x / c` and
+  `x % c` are words of the call, the link `x = q * c + r`
+  (`udiv_urem_value`).
+- Any other divisor `d` is a word of its own, and its bounds hold only away
+  from zero, so each is a disjunction: `d <= 0 ∨ x % d < d`
+  (`toNat_urem_lt_or`, the second half of `DivMod::Spec`) and
+  `d <= 0 ∨ x / d <= x` (`toNat_udiv_le_or`). `omega` splits a disjunction
+  only after refuting without splits has failed, so a call that does not
+  need the bound pays nothing for it, and one that does needs the divisor
+  known positive: a test `0 < d` on the path, its value's `0 < d.toNat()`,
+  or `d ≠ 0`, which is read like the other comparisons in scope, as
+  `toNat(d) ≠ toNat(0)` (`toNat_ne_of_ne`).
+
+Not stated: the link over a divisor that is not a literal, `x = q * d + r`,
+which is a product of two atoms. `omega` would keep `q * d` as an atom of
+its own, so it would serve only a goal that spells that product over Nat;
+a goal over words spells it `x / d * d`, a multiplication of words, which
+the walk does not take apart. `omega` itself reads Nat `%` and `/` only at
+a literal divisor (issues/omega-nonliteral-div-mod-facts.md).
+
 ## 4. Scope
 
 - Goals: whatever `omega` accepts, over the lifted atoms, and a word's fact
@@ -194,8 +229,9 @@ equating the operand's value with the Nat it was built from.
   `unsigned_lt_of_nat`, …). Each bridge is an ordinary lemma application
   over a checking-position `bv_omega` subgoal.
 - Operations: `add`, `sub`, `ofNat`, `word_of_nat`, `take_low`, `drop_low`,
-  and definitions that step to them; `x & y`, `zero_extend` and `x >> k` at
-  a numeral `k` as leaves with facts beside them (§3's table).
+  and definitions that step to them; `x & y`, `zero_extend`, `x >> k` at
+  a numeral `k`, `x % d` and `x / d` as leaves with facts beside them (§3's
+  table, §3.1).
 - Goals read through their reducts: a defined proposition that mentions no
   word (`p.Holds()` whose match is on a constructor) is unfolded until one
   does, as `omega` unfolds one; and a subterm with no source spelling, such
