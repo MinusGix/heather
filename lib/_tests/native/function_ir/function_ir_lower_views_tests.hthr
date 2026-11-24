@@ -4,7 +4,8 @@
 // callee a window of its buffer to write, one that lends two windows of
 // one buffer, one to read and one to write, the code each lowers to, the
 // contract each meets at every lending of its counts, and what is
-// refused. Tests, not library: nothing imports this module.
+// refused: two views of one buffer, one to write, the path does not know
+// apart. Tests, not library: nothing imports this module.
 import function_ir;
 import function_ir_eval;
 import function_ir_state;
@@ -269,12 +270,14 @@ theorem crossed_whole_lowers(): lower_program_lent(crossed_whole(), plan_program
 theorem crossed_whole_marked(): program_marked(crossed_whole(), [[False, True], [True, False]]) = True { refl }
 
 // ---------------------------------------------------------------------------
-// What is refused, and what the report says of each
-// (`Function::refused`, function_ir_refusal)
+// Two views of one buffer, one to write, known apart
+// (issues/views-of-one-buffer-apart.md)
 
-// Two views of one buffer, one of them to write. The meaning says what it
-// does, and the lowering refuses it: a view to write is the only view of
-// its buffer (issues/views-of-one-buffer-apart.md).
+// halves_at(address, length, mid, i): `carry_at(i)` from the bytes of its
+// buffer before `mid`, lent to read, into the bytes from `mid` on, lent to
+// write; or 512 where `mid` is past the buffer. The halves are apart
+// because one's end is the other's start: the one value `mid`, as
+// `split_at` makes them.
 fn halves_at() → Function {
     Function(parameters := [0, 1, 2, 3], lent := 1, result := 9,
         body := then([Const(width := 64, output := 4, value := 0), UnsignedLessThan(width := 64, output := 10, left := 1, right := 2)],
@@ -284,11 +287,269 @@ fn halves_at() → Function {
                     leaf([Move(64, 9, 11)])))))
 }
 fn halving() → List<Function> { [halves_at(), carry_at()] }
+
+theorem halving_evaluable(): program_evaluable(halving()).IsTrue() { trivial }
+
+// What it means: byte 1 of the first half lands at byte 1 of the second;
+// at another `mid` the halves are elsewhere; past the buffer nothing is
+// lent.
 theorem halving_runs(a: BitVec(64)): program_run(halving(), five(), 1, [a, w(5), w(2), w(1)]) =
     Ending(w(2), [[b(1), b(2), b(3), b(2), b(5)]]) { refl }
-theorem halving_refused(): lower_program_lent(halving(), plan_program(halving()), [2, 1]) = None { refl }
-theorem halving_refused_why(): halves_at().refused(1, halves_at().plan(), 2, [2, 1], index_rooms()) =
-    "where 10 is false, the call of function 0 over views (buffer 0 from 4 to 2, buffer 0 from 2 to 1 written): a view to write shares its buffer with another view" { refl }
+theorem halving_elsewhere(a: BitVec(64)): program_run(halving(), five(), 1, [a, w(5), w(1), w(0)]) =
+    Ending(w(1), [[b(1), b(1), b(3), b(4), b(5)]]) { refl }
+theorem halving_past(a: BitVec(64)): program_run(halving(), five(), 1, [a, w(5), w(6), w(0)]) = Ending(w(512), five()) { refl }
+
+theorem halving_present(): lower_program_lent(halving(), plan_program(halving()), [2, 1]).is_some().IsTrue() { trivial }
+fn halving_program() → Prog { lower_program_lent(halving(), plan_program(halving()), [2, 1]).get(halving_present()) }
+theorem halving_lowers(): lower_program_lent(halving(), plan_program(halving()), [2, 1]) = Some(halving_program()) {
+    Option::some_get(lower_program_lent(halving(), plan_program(halving()), [2, 1]), halving_present())
+}
+
+// The callee needs its buffer 1, the second half, to write; the lender its
+// buffer 0, of which that half is.
+theorem halving_marked(): program_marked(halving(), [[False, True], [True]]) = True { refl }
+theorem halving_callee_row(): program_marked(halving(), [[True, True], [True]]) = False { refl }
+
+// The code, over five bytes lent to be written wherever the laws let them
+// lie: it returns 2, and the bytes with 2 at 3 are the file in memory.
+theorem halving_carries<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, a: BitVec(64), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, Lending::writing([2, 1], addresses, five(), [True]).spans())):
+    Site<M>(fetch, data, halving_program(), last, origin).Returns(stack, asm_labels(halving_program())(2),
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed([a, w(5), w(2), w(1)], i, s) ∧ 184 <= i) ∧
+            stack.LentOver(Lending::writing([2, 1], addresses, five(), [True]), top, 1, [a, w(5), w(2), w(1)], five())(i, s),
+        stack.AnsweredBoth(Lending::writing([2, 1], addresses, five(), [True]), w(2), [], [[b(1), b(2), b(3), b(2), b(5)]])) {
+    compiled_returns_marked<M>(halving(), plan_program(halving()), program_room(halving()), [2, 1], addresses, [[False, True], [True]], halving_program(),
+        halving_lowers(), halving_evaluable(), trivial, fetch, data, last, origin, stack, top, five(), 1, trivial, loan, [a, w(5), w(2), w(1)], trivial,
+        program_total_run_defined(halving(), trivial, five(), 1, [a, w(5), w(2), w(1)]), Ending(w(2), [[b(1), b(2), b(3), b(2), b(5)]]), halving_runs(a))
+}
+
+// The same at every file: what the run answers at any bytes, any length
+// and any `mid` is what the code leaves, the split point open.
+theorem halving_carries_open<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, file: Buffers(), a, length, mid, i: BitVec(64), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, Lending::writing([2, 1], addresses, file, [True]).spans())):
+    Site<M>(fetch, data, halving_program(), last, origin).Returns(stack, asm_labels(halving_program())(2),
+        λ (k: Nat) (s: MachineState<M>) => (stack.Passed([a, length, mid, i], k, s) ∧ 184 <= k) ∧
+            stack.LentOver(Lending::writing([2, 1], addresses, file, [True]), top, 1, [a, length, mid, i], file)(k, s),
+        stack.AnsweredBoth(Lending::writing([2, 1], addresses, file, [True]), program_run(halving(), file, 1, [a, length, mid, i]).word, [],
+            program_run(halving(), file, 1, [a, length, mid, i]).buffers)) {
+    compiled_returns_marked<M>(halving(), plan_program(halving()), program_room(halving()), [2, 1], addresses, [[False, True], [True]], halving_program(),
+        halving_lowers(), halving_evaluable(), trivial, fetch, data, last, origin, stack, top, file, 1, trivial, loan, [a, length, mid, i], trivial,
+        program_total_run_defined(halving(), trivial, file, 1, [a, length, mid, i]), program_run(halving(), file, 1, [a, length, mid, i]), refl)
+}
+
+// halves_fixed(address, length, i): the same split at the literal 2. One
+// constant is both halves' bound.
+fn halves_fixed() → Function {
+    Function(parameters := [0, 1, 3], lent := 1, result := 9,
+        body := then([Const(width := 64, output := 4, value := 0), Const(width := 64, output := 2, value := 2),
+                UnsignedLessThan(width := 64, output := 10, left := 1, right := 2)],
+            when(10, 9, leaf([Const(width := 64, output := 9, value := 512)]),
+                Compose(Lend([View(buffer := 0, home := 0, start := 4, end := 2, written := False, base := 5, length := 6),
+                        View(buffer := 0, home := 0, start := 2, end := 1, written := True, base := 7, length := 8)], 0, [3], 11),
+                    leaf([Move(64, 9, 11)])))))
+}
+fn halving_fixed() → List<Function> { [halves_fixed(), carry_at()] }
+theorem halving_fixed_runs(a: BitVec(64)): program_run(halving_fixed(), five(), 1, [a, w(5), w(0)]) =
+    Ending(w(1), [[b(1), b(2), b(1), b(4), b(5)]]) { refl }
+theorem halving_fixed_lowers(): lower_program_lent(halving_fixed(), plan_program(halving_fixed()), [2, 1]).is_some().IsTrue() { trivial }
+
+// gapped(address, length, i): bytes 0 up to 2 lent to read and bytes 3 on
+// lent to write, the bounds two constants: apart because 2 is at most 3.
+fn gapped(low, high: Nat) → Function {
+    Function(parameters := [0, 1, 3], lent := 1, result := 9,
+        body := then([Const(width := 64, output := 4, value := 0), Const(width := 64, output := 2, value := low),
+                Const(width := 64, output := 12, value := high), UnsignedLessThan(width := 64, output := 10, left := 1, right := 12)],
+            when(10, 9, leaf([Const(width := 64, output := 9, value := 512)]),
+                then([UnsignedLessThan(width := 64, output := 13, left := 1, right := 2)],
+                    when(13, 9, leaf([Const(width := 64, output := 9, value := 512)]),
+                        Compose(Lend([View(buffer := 0, home := 0, start := 4, end := 2, written := False, base := 5, length := 6),
+                                View(buffer := 0, home := 0, start := 12, end := 1, written := True, base := 7, length := 8)], 0, [3], 11),
+                            leaf([Move(64, 9, 11)])))))))
+}
+theorem gapped_runs(a: BitVec(64)): program_run([gapped(2, 3), carry_at()], five(), 1, [a, w(5), w(1)]) =
+    Ending(w(2), [[b(1), b(2), b(3), b(4), b(2)]]) { refl }
+theorem gapped_lowers(): lower_program_lent([gapped(2, 3), carry_at()], plan_program([gapped(2, 3), carry_at()]), [2, 1]).is_some().IsTrue() { trivial }
+
+// compared(address, length, end, start, i): the half to read ends at
+// `end` and the half to write starts at `start`, two values: they are
+// apart where an arm says `end` is at most `start`. Each is compared with
+// the length first; the third comparison is `left < right`, and the lend
+// is where it is false.
+fn compared_by(left, right: Nat) → Function {
+    Function(parameters := [0, 1, 2, 12, 3], lent := 1, result := 9,
+        body := then([Const(width := 64, output := 4, value := 0), UnsignedLessThan(width := 64, output := 10, left := 1, right := 2)],
+            when(10, 9, leaf([Const(width := 64, output := 9, value := 512)]),
+                then([UnsignedLessThan(width := 64, output := 14, left := 1, right := 12)],
+                    when(14, 9, leaf([Const(width := 64, output := 9, value := 512)]),
+                        then([UnsignedLessThan(width := 64, output := 13, left := left, right := right)],
+                            when(13, 9, leaf([Const(width := 64, output := 9, value := 512)]),
+                                Compose(Lend([View(buffer := 0, home := 0, start := 4, end := 2, written := False, base := 5, length := 6),
+                                        View(buffer := 0, home := 0, start := 12, end := 1, written := True, base := 7, length := 8)], 0, [3], 11),
+                                    leaf([Move(64, 9, 11)])))))))))
+}
+fn comparing() → List<Function> { [compared_by(12, 2), carry_at()] }
+theorem comparing_runs(a: BitVec(64)): program_run(comparing(), five(), 1, [a, w(5), w(2), w(3), w(1)]) =
+    Ending(w(2), [[b(1), b(2), b(3), b(4), b(2)]]) { refl }
+theorem comparing_lowers(): lower_program_lent(comparing(), plan_program(comparing()), [2, 1]).is_some().IsTrue() { trivial }
+
+// ---------------------------------------------------------------------------
+// Two views to write of one buffer, known apart: `split_at_mut`
+
+// exchange_at(address, length, address, length, i): the byte at `i` of
+// its buffer 1 moved to `i` of its buffer 0, and `i`'s low byte stored in
+// its place, returning the byte moved; or 256 where `i` is past either.
+// It stores into both its buffers.
+fn exchange_at() → Function {
+    Function(parameters := [0, 1, 2, 3, 4], lent := 2, result := 6,
+        body := then([UnsignedLessThan(width := 64, output := 10, left := 4, right := 1)],
+            when(10, 6,
+                then([UnsignedLessThan(width := 64, output := 11, left := 4, right := 3)],
+                    when(11, 6,
+                        then([BufferLoad(output := 5, buffer := 1, index := 4)],
+                            then([BufferStore(output := 6, buffer := 0, index := 4, value := 5)],
+                                leaf([BufferStore(output := 12, buffer := 1, index := 4, value := 4)]))),
+                        leaf([Const(width := 64, output := 6, value := 256)]))),
+                leaf([Const(width := 64, output := 6, value := 256)]))))
+}
+
+// splits_at(address, length, mid, i): `exchange_at(i)` over the bytes
+// before `mid` and the bytes from `mid` on, both lent to write; or 512
+// where `mid` is past the buffer. Apart because one's end is the other's
+// start.
+fn splits_at() → Function {
+    Function(parameters := [0, 1, 2, 3], lent := 1, result := 9,
+        body := then([Const(width := 64, output := 4, value := 0), UnsignedLessThan(width := 64, output := 10, left := 1, right := 2)],
+            when(10, 9, leaf([Const(width := 64, output := 9, value := 512)]),
+                Compose(Lend([View(buffer := 0, home := 0, start := 4, end := 2, written := True, base := 5, length := 6),
+                        View(buffer := 0, home := 0, start := 2, end := 1, written := True, base := 7, length := 8)], 0, [3], 11),
+                    leaf([Move(64, 9, 11)])))))
+}
+fn splitting() → List<Function> { [splits_at(), exchange_at()] }
+
+theorem splitting_evaluable(): program_evaluable(splitting()).IsTrue() { trivial }
+
+// What it means: at `mid` 2, byte 1 of the second half (4) moved to byte
+// 1 of the first, and 1 left in its place; at `mid` 1, byte 0 of each;
+// past the buffer nothing is lent.
+theorem splitting_runs(a: BitVec(64)): program_run(splitting(), five(), 1, [a, w(5), w(2), w(1)]) =
+    Ending(w(4), [[b(1), b(4), b(3), b(1), b(5)]]) { refl }
+theorem splitting_elsewhere(a: BitVec(64)): program_run(splitting(), five(), 1, [a, w(5), w(1), w(0)]) =
+    Ending(w(2), [[b(2), b(0), b(3), b(4), b(5)]]) { refl }
+theorem splitting_past(a: BitVec(64)): program_run(splitting(), five(), 1, [a, w(5), w(6), w(0)]) = Ending(w(512), five()) { refl }
+
+theorem splitting_present(): lower_program_lent(splitting(), plan_program(splitting()), [2, 1]).is_some().IsTrue() { trivial }
+fn splitting_program() → Prog { lower_program_lent(splitting(), plan_program(splitting()), [2, 1]).get(splitting_present()) }
+theorem splitting_lowers(): lower_program_lent(splitting(), plan_program(splitting()), [2, 1]) = Some(splitting_program()) {
+    Option::some_get(lower_program_lent(splitting(), plan_program(splitting()), [2, 1]), splitting_present())
+}
+
+// The callee needs both its buffers to write, and the lender its buffer 0.
+theorem splitting_marked(): program_marked(splitting(), [[True, True], [True]]) = True { refl }
+theorem splitting_callee_row(): program_marked(splitting(), [[False, True], [True]]) = False { refl }
+
+// The code, over five bytes lent to be written: it returns 4, and both
+// halves written are the file in memory.
+theorem splitting_swaps<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, a: BitVec(64), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, Lending::writing([2, 1], addresses, five(), [True]).spans())):
+    Site<M>(fetch, data, splitting_program(), last, origin).Returns(stack, asm_labels(splitting_program())(2),
+        λ (i: Nat) (s: MachineState<M>) => (stack.Passed([a, w(5), w(2), w(1)], i, s) ∧ 184 <= i) ∧
+            stack.LentOver(Lending::writing([2, 1], addresses, five(), [True]), top, 1, [a, w(5), w(2), w(1)], five())(i, s),
+        stack.AnsweredBoth(Lending::writing([2, 1], addresses, five(), [True]), w(4), [], [[b(1), b(4), b(3), b(1), b(5)]])) {
+    compiled_returns_marked<M>(splitting(), plan_program(splitting()), program_room(splitting()), [2, 1], addresses, [[True, True], [True]],
+        splitting_program(), splitting_lowers(), splitting_evaluable(), trivial, fetch, data, last, origin, stack, top, five(), 1, trivial, loan,
+        [a, w(5), w(2), w(1)], trivial, program_total_run_defined(splitting(), trivial, five(), 1, [a, w(5), w(2), w(1)]),
+        Ending(w(4), [[b(1), b(4), b(3), b(1), b(5)]]), splitting_runs(a))
+}
+
+// At any file and words, the split point open.
+theorem splitting_swaps_open<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, file: Buffers(), a, length, mid, i: BitVec(64), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, Lending::writing([2, 1], addresses, file, [True]).spans())):
+    Site<M>(fetch, data, splitting_program(), last, origin).Returns(stack, asm_labels(splitting_program())(2),
+        λ (k: Nat) (s: MachineState<M>) => (stack.Passed([a, length, mid, i], k, s) ∧ 184 <= k) ∧
+            stack.LentOver(Lending::writing([2, 1], addresses, file, [True]), top, 1, [a, length, mid, i], file)(k, s),
+        stack.AnsweredBoth(Lending::writing([2, 1], addresses, file, [True]), program_run(splitting(), file, 1, [a, length, mid, i]).word, [],
+            program_run(splitting(), file, 1, [a, length, mid, i]).buffers)) {
+    compiled_returns_marked<M>(splitting(), plan_program(splitting()), program_room(splitting()), [2, 1], addresses, [[True, True], [True]],
+        splitting_program(), splitting_lowers(), splitting_evaluable(), trivial, fetch, data, last, origin, stack, top, file, 1, trivial, loan,
+        [a, length, mid, i], trivial, program_total_run_defined(splitting(), trivial, file, 1, [a, length, mid, i]),
+        program_run(splitting(), file, 1, [a, length, mid, i]), refl)
+}
+
+// The same at the literal 2, two constants for the bounds: apart because
+// 2 is at most 2.
+fn splits_fixed() → Function {
+    Function(parameters := [0, 1, 3], lent := 1, result := 9,
+        body := then([Const(width := 64, output := 4, value := 0), Const(width := 64, output := 2, value := 2),
+                Const(width := 64, output := 12, value := 2), UnsignedLessThan(width := 64, output := 10, left := 1, right := 12)],
+            when(10, 9, leaf([Const(width := 64, output := 9, value := 512)]),
+                then([UnsignedLessThan(width := 64, output := 13, left := 1, right := 2)],
+                    when(13, 9, leaf([Const(width := 64, output := 9, value := 512)]),
+                        Compose(Lend([View(buffer := 0, home := 0, start := 4, end := 2, written := True, base := 5, length := 6),
+                                View(buffer := 0, home := 0, start := 12, end := 1, written := True, base := 7, length := 8)], 0, [3], 11),
+                            leaf([Move(64, 9, 11)])))))))
+}
+fn splitting_fixed() → List<Function> { [splits_fixed(), exchange_at()] }
+theorem splitting_fixed_runs(a: BitVec(64)): program_run(splitting_fixed(), five(), 1, [a, w(5), w(0)]) =
+    Ending(w(3), [[b(3), b(2), b(0), b(4), b(5)]]) { refl }
+theorem splitting_fixed_lowers(): lower_program_lent(splitting_fixed(), plan_program(splitting_fixed()), [2, 1]).is_some().IsTrue() { trivial }
+
+// ---------------------------------------------------------------------------
+// What is refused, and what the report says of each
+// (`Function::refused`, function_ir_refusal)
+
+// The controls of the halves. Two views that overlap, one to write: the
+// one to read runs to the buffer's end, past where the one to write
+// starts. The meaning still says what it does; the lowering refuses it.
+fn overlapping() → Function {
+    Function(parameters := [0, 1, 2, 3], lent := 1, result := 9,
+        body := then([Const(width := 64, output := 4, value := 0), UnsignedLessThan(width := 64, output := 10, left := 1, right := 2)],
+            when(10, 9, leaf([Const(width := 64, output := 9, value := 512)]),
+                Compose(Lend([View(buffer := 0, home := 0, start := 4, end := 1, written := False, base := 5, length := 6),
+                        View(buffer := 0, home := 0, start := 2, end := 1, written := True, base := 7, length := 8)], 0, [3], 11),
+                    leaf([Move(64, 9, 11)])))))
+}
+fn overlapped() → List<Function> { [overlapping(), carry_at()] }
+theorem overlapped_runs(a: BitVec(64)): program_run(overlapped(), five(), 1, [a, w(5), w(2), w(1)]) =
+    Ending(w(2), [[b(1), b(2), b(3), b(2), b(5)]]) { refl }
+theorem overlapped_refused(): lower_program_lent(overlapped(), plan_program(overlapped()), [2, 1]) = None { refl }
+theorem overlapped_why(): overlapping().refused(1, overlapping().plan(), 2, [2, 1], index_rooms()) =
+    "where 10 is false, the call of function 0 over views (buffer 0 from 4 to 1, buffer 0 from 2 to 1 written): its views buffer 0 from 4 to 1 and buffer 0 from 2 to 1 written share a buffer, and nothing says that one ends at most where the other starts: neither's end is the other's start, no arm taken on the way here compares them, and they are not two constants in order" { refl }
+
+// Two constants out of order: the half to read ends at 3 and the half to
+// write starts at 2.
+theorem gapped_crossed_runs(a: BitVec(64)): program_run([gapped(3, 2), carry_at()], five(), 1, [a, w(5), w(1)]) =
+    Ending(w(2), [[b(1), b(2), b(3), b(2), b(5)]]) { refl }
+theorem gapped_crossed_refused(): lower_program_lent([gapped(3, 2), carry_at()], plan_program([gapped(3, 2), carry_at()]), [2, 1]) = None { refl }
+
+// The comparison the wrong way round: an arm says `end` is less than
+// `start` or not, and the lend is where it is not, which is no two windows
+// apart.
+fn backwards() → List<Function> { [compared_by(2, 12), carry_at()] }
+theorem backwards_refused(): lower_program_lent(backwards(), plan_program(backwards()), [2, 1]) = None { refl }
+theorem backwards_why(): compared_by(2, 12).refused(1, compared_by(2, 12).plan(), 2, [2, 1], index_rooms()) =
+    "where 10 is false, where 14 is false, where 13 is false, the call of function 0 over views (buffer 0 from 4 to 2, buffer 0 from 12 to 1 written): its views buffer 0 from 4 to 2 and buffer 0 from 12 to 1 written share a buffer, and nothing says that one ends at most where the other starts: neither's end is the other's start, no arm taken on the way here compares them, and they are not two constants in order" { refl }
+
+// Two views to write that overlap: the first runs to the buffer's end,
+// past where the second starts. The meaning says what it does (the view
+// put back last wins); the lowering refuses it, naming the two.
+fn overlapping_written() → Function {
+    Function(parameters := [0, 1, 2, 3], lent := 1, result := 9,
+        body := then([Const(width := 64, output := 4, value := 0), UnsignedLessThan(width := 64, output := 10, left := 1, right := 2)],
+            when(10, 9, leaf([Const(width := 64, output := 9, value := 512)]),
+                Compose(Lend([View(buffer := 0, home := 0, start := 4, end := 1, written := True, base := 5, length := 6),
+                        View(buffer := 0, home := 0, start := 2, end := 1, written := True, base := 7, length := 8)], 0, [3], 11),
+                    leaf([Move(64, 9, 11)])))))
+}
+fn overlapped_written() → List<Function> { [overlapping_written(), exchange_at()] }
+theorem overlapped_written_runs(a: BitVec(64)): program_run(overlapped_written(), five(), 1, [a, w(5), w(2), w(1)]) =
+    Ending(w(4), [[b(1), b(4), b(3), b(1), b(5)]]) { refl }
+theorem overlapped_written_refused(): lower_program_lent(overlapped_written(), plan_program(overlapped_written()), [2, 1]) = None { refl }
+theorem overlapped_written_why(): overlapping_written().refused(1, overlapping_written().plan(), 2, [2, 1], index_rooms()) =
+    "where 10 is false, the call of function 0 over views (buffer 0 from 4 to 1 written, buffer 0 from 2 to 1 written): its views buffer 0 from 4 to 1 written and buffer 0 from 2 to 1 written share a buffer, and nothing says that one ends at most where the other starts: neither's end is the other's start, no arm taken on the way here compares them, and they are not two constants in order" { refl }
 
 // A window whose bounds no comparison on the way says.
 fn unguarded() → Function {
@@ -345,13 +606,18 @@ theorem viewless_why(): viewless().refused(1, viewless().plan(), 2, [1, 1], inde
 
 fn window(buffer: Nat, written: Bool) → View { View(buffer := buffer, home := 0, start := 2, end := 3, written := written, base := 6, length := 7) }
 
-// A view to write is alone in its buffer, whichever comes first; views to
-// read share one.
-theorem alone_apart(): views_alone([window(0, True), window(1, True)]) = True { refl }
-theorem alone_reading(): views_alone([window(0, False), window(0, False)]) = True { refl }
-theorem alone_written_first(): views_alone([window(0, True), window(0, False)]) = False { refl }
-theorem alone_written_last(): views_alone([window(0, False), window(0, True)]) = False { refl }
-theorem alone_both_written(): views_alone([window(0, True), window(0, True)]) = False { refl }
+// A view to write and another of its buffer, with no file to say where
+// they lie: apart only where one's end is the other's start, whichever
+// comes first. Views of two buffers, or two to read, are apart.
+fn span(start, end: Nat, written: Bool) → View { View(buffer := 0, home := 0, start := start, end := end, written := written, base := 6, length := 7) }
+theorem apart_buffers(): views_apart([window(0, True), window(1, False)], File::empty()) = True { refl }
+theorem apart_reading(): views_apart([window(0, False), window(0, False)], File::empty()) = True { refl }
+theorem apart_same_window(): views_apart([window(0, True), window(0, False)], File::empty()) = False { refl }
+theorem apart_split(): views_apart([span(2, 3, False), span(3, 4, True)], File::empty()) = True { refl }
+theorem apart_split_back(): views_apart([span(3, 4, True), span(2, 3, False)], File::empty()) = True { refl }
+theorem apart_unknown(): views_apart([span(2, 3, False), span(4, 5, True)], File::empty()) = False { refl }
+theorem apart_both_written(): views_apart([span(2, 3, True), span(3, 4, True)], File::empty()) = True { refl }
+theorem apart_both_same_window(): views_apart([window(0, True), window(0, True)], File::empty()) = False { refl }
 
 // The homes a callee's buffers are checked against are the views', by
 // position.

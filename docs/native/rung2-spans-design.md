@@ -404,8 +404,10 @@ build settled or changed against the text above:
 ## 6. Several written spans
 
 `rt_file.hthr`'s computations write one span and read others; a call lends
-windows of them (`FTm::Lend`), and two views of one buffer are lowered only
-when the written one is the buffer's only view (`views-of-one-buffer-apart`).
+windows of them (`FTm::Lend`). FunctionIR lowers views of one buffer, any
+of them written, where the path knows them apart, and puts every written
+window back (`views-of-one-buffer-apart`); `rt`'s reflector still refuses
+a window to read of the span the call writes.
 A program statement lends its first buffers whole
 (`statement-lends-named-buffers`).
 
@@ -414,9 +416,9 @@ together are two windows of one arena. So rung 2 does not wait on two
 written spans. They are wanted when a function is handed two buffers it did
 not allocate and writes both (a `memcpy` between buffers its caller owns,
 ledger row 15; a codec reading one image and writing another). Then the
-meaning threads a list of spans, `put_views` puts back several windows, and
-`Loan::view_written_reads` is stated for a set of windows: the third bullet
-of `views-of-one-buffer-apart`. Four home words per two spans make register
+meaning threads a list of spans. Below it nothing is missing: FunctionIR's
+`put_views` puts back several windows and `Loan::view_windows_reads` is
+stated for any set of them (`views-of-one-buffer-apart`). Four home words per two spans make register
 pressure the first cost (`function-ir-values-in-kept-registers`).
 
 ## 7. The hash map

@@ -141,11 +141,15 @@ fn File::shown(self file: File) → String { file.shown_in(scratch_pool() ++ kep
 
 // A call's views: each a window of a buffer, marked where the callee may
 // store into it.
+fn View::shown(self view: View) → String {
+    "buffer " ++ refusal_number(view.buffer) ++ " from " ++ refusal_number(view.start) ++ " to " ++ refusal_number(view.end)
+        ++ (match view.written { False => "", True => " written" })
+}
+
 fn views_shown(views: List<View>) → String {
     match views {
         Nil => "",
-        Cons(view, rest) => "buffer " ++ refusal_number(view.buffer) ++ " from " ++ refusal_number(view.start) ++ " to " ++ refusal_number(view.end)
-            ++ (match view.written { False => "", True => " written" }) ++ (match rest { Nil => "", Cons(_, _) => ", " }) ++ views_shown(rest),
+        Cons(view, rest) => view.shown() ++ (match rest { Nil => "", Cons(_, _) => ", " }) ++ views_shown(rest),
     }
 }
 
@@ -245,6 +249,29 @@ fn views_refusal(views: List<View>, file: File, homes: List<Lent>) → String {
     }
 }
 
+// The first two views of a call over views that share a buffer, one of
+// them to write, and that the path does not know apart (`View::apart`).
+fn View::apart_refusal(self view: View, rest: List<View>, file: File) → String {
+    match rest {
+        Nil => "no two views are refused",
+        Cons(other, later) => match view.apart(other, file) {
+            True => view.apart_refusal(later, file),
+            False => "its views " ++ view.shown() ++ " and " ++ other.shown() ++ " share a buffer, and nothing says that one ends at most where the "
+                ++ "other starts: neither's end is the other's start, no arm taken on the way here compares them, and they are not two constants in order",
+        },
+    }
+}
+
+fn views_apart_refusal(views: List<View>, file: File) → String {
+    match views {
+        Nil => "no two views are refused",
+        Cons(view, rest) => match view.apart_from(rest, file) {
+            True => views_apart_refusal(rest, file),
+            False => view.apart_refusal(rest, file),
+        },
+    }
+}
+
 // `File::emit_lend`, saying which of its tests refuses.
 fn File::lend_refusal(self file: File, saves: Nat, slots: Nat, prog: Prog, views: List<View>, callee: Nat, arguments: List<Nat>, placement: List<Place>,
     names, bound: Nat, counts: List<Nat>, homes: List<Lent>) → String {
@@ -255,8 +282,8 @@ fn File::lend_refusal(self file: File, saves: Nat, slots: Nat, prog: Prog, views
             Nil => call ++ "it has no view, and a call over none is written as a call",
             Cons(_, _) => match views_lendable(views, first.file, homes) {
                 False => call ++ views_refusal(views, first.file, homes),
-                True => match views_alone(views) {
-                    False => call ++ "a view to write shares its buffer with another view",
+                True => match views_apart(views, first.file) {
+                    False => call ++ views_apart_refusal(views, first.file),
                     True => match (callee + 1).leb(bound) && !args_lend(views_lents(views), lent_count(counts, callee), 0, views_homes(views) ++ arguments) {
                         True => call ++ "the callee is lent more buffers than the call has views",
                         False => call ++ first.file.call_refusal(slots, first.placement, callee, views_homes(views) ++ arguments, bound, counts, views_lents(views)),
