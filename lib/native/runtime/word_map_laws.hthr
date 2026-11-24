@@ -1,3 +1,34 @@
+// What the compiled word map is (issues/runtime-hash-map-spec.md,
+// docs/native/rung2-spans-design.md §7): a `runtime fn` is the Heather
+// function its agreement certifies, so "this table is a finite map" is a
+// theorem about `WordMap::insert`, `get`, `remove` as Heather functions,
+// against `assoc.hthr`'s laws, with no `datarepr` between.
+//
+// - `abs(m)` is the association list of the occupied slots, in slot order;
+//   a lookup in it is read off the slots (`abs_get_at`, `abs_get_none`).
+// - `WordMapInv(m)`: every stored key is reached from its home slot without
+//   passing an empty one, no key is stored twice, `count` is the number of
+//   occupied slots, and one slot is empty (the count is below four).
+// - `get_is`: under the invariant, `get` is `assoc_get` (0 where absent).
+// - `insert_inv`, `insert_full` (the full answer only at three keys, the
+//   table left as it was), `insert_get` (every lookup is `assoc_set`'s: not
+//   list equality, as `assoc_set` shadows by consing), and the two laws
+//   `get_insert_same`, `get_insert_other`.
+// - `remove_spec` (the invariant kept, every lookup `assoc_remove`'s) and
+//   `get_remove_same`, `get_remove_other`: deletion by backward shifting,
+//   proved by induction along the compiled shift with `ShiftInv`.
+// - Negative controls: a probe that skips the home slot misses
+//   (`skipping_home_is_wrong`), and backward shifting at a full table
+//   leaves a key stored twice (`shift_at_full_is_wrong`), which is why the
+//   invariant keeps a slot empty.
+//
+// The proofs are at the table's capacity, four slots, which the compiled
+// functions fix (`[u64; 4]`, `band(3)`); distances between slots are
+// `(b + 4 - a) % 4`. Each probe is proved by applying its function's
+// `induct` principle to a motive with one stated lemma per case (the
+// principle's case binders carry no test names, so `induct`'s arms cannot
+// cite them). Arithmetic on slot distances sits in small lemmas over bare
+// numbers: inline `omega` in a large context cost minutes to check.
 import logic;
 import bool;
 import nat;
@@ -58,14 +89,12 @@ theorem WordMap::rows_some(self m: WordMap, x: u64, t0: Nat, nz: ¬(x = 0), at: 
 {
     match n {
         Zero => λ s lo hi only => false_elim(omega),
-        Succ(r, ih) => λ s lo hi only => match BitVec::eq_dec(m.key(s), BitVec::ofNat(0)) as λ d =>
-            (match d { Inl(_) => m.rows(s + 1, r), Inr(_) => Cons(Pair(m.key(s), m.val(s)), m.rows(s + 1, r)) }).assoc_get(x) = Some(m.val(t0))
-        {
+        Succ(_, ih) => λ s lo hi only => match BitVec::eq_dec(m.key(s), BitVec::ofNat(0)) {
             Inl(z) => {
                 let other: (¬(s = t0)) = λ e => nz(trans(sym(at), trans(cong_fn(λ (q: Nat) => m.key(q), sym(e)), z)));
                 ih(s + 1, omega, omega, λ t lo2 hi2 a => only(t, omega, omega, a))
             },
-            Inr(occupied) => match BitVec::eq_dec(x, m.key(s)) {
+            Inr(_) => match BitVec::eq_dec(x, m.key(s)) {
                 Inl(e) => {
                     let here: (s = t0) = only(s, omega, omega, sym(e));
                     cong_fn(λ (q: Nat) => Some(m.val(q)), here)
@@ -228,7 +257,7 @@ theorem WordMap::finds_empty(m: WordMap, k: u64, s: Nat, s4: s < 4, at: m.key(s)
     λ j4 budget clear => {
         match Nat::eq_dec(j.toNat(), s) {
             Inl(same) => false_elim(nz(trans(sym(at), trans(cong_fn(λ (q: Nat) => m.key(q), sym(same)), empty)))),
-            Inr(other) => match clear(j.toNat(), j4, omega) { And(occupied, _) => false_elim(occupied(empty)) },
+            Inr(_) => match clear(j.toNat(), j4, omega) { And(occupied, _) => false_elim(occupied(empty)) },
         }
     }
 }
@@ -238,7 +267,7 @@ theorem WordMap::finds_hit(m: WordMap, k: u64, s: Nat, s4: s < 4, j, left: u64, 
 {
     λ j4 budget clear => trans(eq, match Nat::eq_dec(j.toNat(), s) {
         Inl(same) => cong_fn(λ (q: Nat) => m.val(q), same),
-        Inr(other) => match clear(j.toNat(), j4, omega) { And(_, other) => false_elim(other(hit)) },
+        Inr(_) => match clear(j.toNat(), j4, omega) { And(_, other) => false_elim(other(hit)) },
     })
 }
 
@@ -302,13 +331,13 @@ theorem WordMap::locate(self m: WordMap, k: u64): Or<Exists(λ (t: Nat) => And<t
                 Inl(e2) => Inl(Exists(2, And(omega, e2))),
                 Inr(n2) => match BitVec::eq_dec(m.key(3), k) {
                     Inl(e3) => Inl(Exists(3, And(omega, e3))),
-                    Inr(n3) => Inr(λ t t4 => match t as λ u => u < 4 → ¬(m.key(u) = k) {
+                    Inr(n3) => Inr(λ t => match t {
                         Zero => λ _ => n0,
                         Succ(Zero) => λ _ => n1,
                         Succ(Succ(Zero)) => λ _ => n2,
                         Succ(Succ(Succ(Zero))) => λ _ => n3,
                         Succ(Succ(Succ(Succ(q)))) => λ (big: q + 4 < 4) => false_elim(WordMap::past_slots(q, big)),
-                    }(t4)),
+                    }),
                 },
             },
         },
@@ -462,7 +491,7 @@ theorem WordMap::replaces_empty(m: WordMap, k, v: u64, s: Nat, s4: s < 4, at: m.
 {
     λ j4 budget clear => match Nat::eq_dec(j.toNat(), s) {
         Inl(same) => false_elim(nz(trans(sym(at), trans(cong_fn(λ (q: Nat) => m.key(q), sym(same)), empty)))),
-        Inr(other) => match clear(j.toNat(), j4, omega) { And(occupied, _) => false_elim(occupied(empty)) },
+        Inr(_) => match clear(j.toNat(), j4, omega) { And(occupied, _) => false_elim(occupied(empty)) },
     }
 }
 
@@ -471,7 +500,7 @@ theorem WordMap::replaces_hit(m: WordMap, k, v: u64, s: Nat, s4: s < 4, j, left:
 {
     λ j4 budget clear => trans(eq, match Nat::eq_dec(j.toNat(), s) {
         Inl(same) => cong_fn(λ (q: Nat) => Mutated(m.replaced(q, v), 0), same),
-        Inr(other) => match clear(j.toNat(), j4, omega) { And(_, other) => false_elim(other(hit)) },
+        Inr(_) => match clear(j.toNat(), j4, omega) { And(_, other) => false_elim(other(hit)) },
     })
 }
 
@@ -765,9 +794,9 @@ theorem WordMap::value_of(m: WordMap, k, v: u64, n: WordMap, c: u64, eq: WordMap
 
 theorem WordMap::insert_inv(m: WordMap, inv: WordMapInv(m), k, v: u64, nz: ¬(k = 0)): WordMapInv(WordMap::insert(m, k, v).after) {
     match WordMap::insert_cases(m, inv, k, v, nz) {
-        Replaced(s, s4, at, eq) => j(sym(WordMap::after_of(m, k, v, m.replaced(s, v), 0, eq)), λ y _ => WordMapInv(y), WordMap::replaced_inv(m, inv, s, v)),
+        Replaced(s, _, _, eq) => j(sym(WordMap::after_of(m, k, v, m.replaced(s, v), 0, eq)), λ y _ => WordMapInv(y), WordMap::replaced_inv(m, inv, s, v)),
         Added(e, first, room, none, eq) => j(sym(WordMap::after_of(m, k, v, m.filled(e, k, v), 1, eq)), λ y _ => WordMapInv(y), WordMap::filled_inv(m, inv, k, v, nz, e, first, room, none)),
-        Full(full, eq) => j(sym(WordMap::after_of(m, k, v, m, 2, eq)), λ y _ => WordMapInv(y), inv),
+        Full(_, eq) => j(sym(WordMap::after_of(m, k, v, m, 2, eq)), λ y _ => WordMapInv(y), inv),
     }
 }
 
@@ -780,8 +809,8 @@ theorem WordMap::insert_full(m: WordMap, inv: WordMapInv(m), k, v: u64, nz: ¬(k
     And<m.count.toNat() = 3, WordMap::insert(m, k, v).after = m>
 {
     match WordMap::insert_cases(m, inv, k, v, nz) {
-        Replaced(s, s4, at, eq) => false_elim(WordMap::zero_not_two(trans(sym(WordMap::value_of(m, k, v, m.replaced(s, v), 0, eq)), full))),
-        Added(e, first, room, none, eq) => false_elim(WordMap::one_not_two(trans(sym(WordMap::value_of(m, k, v, m.filled(e, k, v), 1, eq)), full))),
+        Replaced(s, _, _, eq) => false_elim(WordMap::zero_not_two(trans(sym(WordMap::value_of(m, k, v, m.replaced(s, v), 0, eq)), full))),
+        Added(e, _, _, _, eq) => false_elim(WordMap::one_not_two(trans(sym(WordMap::value_of(m, k, v, m.filled(e, k, v), 1, eq)), full))),
         Full(no_room, eq) => And(omega(no_room, inv.room), WordMap::after_of(m, k, v, m, 2, eq)),
     }
 }
@@ -795,7 +824,7 @@ theorem WordMap::insert_get(m: WordMap, inv: WordMapInv(m), k, v: u64, nz: ¬(k 
             WordMap::replaced_get(m, inv, k, v, nz, s, s4, at, i)),
         Added(e, first, room, none, eq) => trans(cong_fn(λ (y: WordMap) => y.abs().assoc_get(i), WordMap::after_of(m, k, v, m.filled(e, k, v), 1, eq)),
             WordMap::filled_get(m, inv, k, v, nz, e, first, room, none, i)),
-        Full(no_room, eq) => false_elim(ok(WordMap::value_of(m, k, v, m, 2, eq))),
+        Full(_, eq) => false_elim(ok(WordMap::value_of(m, k, v, m, 2, eq))),
     }
 }
 
@@ -1076,9 +1105,9 @@ theorem WordMap::shift_stop(o: WordMap, oinv: WordMapInv(o), k: u64, nz: ¬(k = 
 {
     let n = m.cleared(i);
     let ni: (n.key(i) = 0) = WordMap::cleared_key_same(m, i, st.i4);
-    let ji: (¬(j = i)) = λ e => WordMap::count_apart(i0, i, j, st.i04, st.i4, st.j4, st.hole)(sym(e));
+    let ji: (¬(j = i)) = λ e => WordMap::count_apart(i0, i, j, st.i04, st.i4, st.j4, st.hole, sym(e));
     let off = λ (s: Nat) (x: u64) (a: n.key(s) = x) (xnz: ¬(x = 0)) =>
-        (λ (si: s = i) => xnz(trans(sym(a), trans(cong_fn(λ (q: Nat) => n.key(q), si), ni))) : ¬(s = i));
+        (λ (si: s = i) => xnz(trans(sym(a), trans(cong_fn(λ (q: Nat) => n.key(q), si), ni))): ¬(s = i));
     let reach = λ (s: Nat) (t: Nat) (x: u64) (s4: s < 4) (t4: t < 4) (a: n.key(s) = x) (xnz: ¬(x = 0))
         (before: ((t + 4 - word_map_home(x).toNat()) % 4) < ((s + 4 - word_map_home(x).toNat()) % 4)) => {
         let sni = off(s, x, a, xnz);
@@ -1233,7 +1262,7 @@ theorem WordMap::reaches_empty(m: WordMap, k: u64, s: Nat, s4: s < 4, at: m.key(
 {
     λ j4 budget clear => match Nat::eq_dec(j.toNat(), s) {
         Inl(same) => false_elim(nz(trans(sym(at), trans(cong_fn(λ (q: Nat) => m.key(q), sym(same)), empty)))),
-        Inr(other) => match clear(j.toNat(), j4, omega) { And(occupied, _) => false_elim(occupied(empty)) },
+        Inr(_) => match clear(j.toNat(), j4, omega) { And(occupied, _) => false_elim(occupied(empty)) },
     }
 }
 
@@ -1243,7 +1272,7 @@ theorem WordMap::reaches_hit(m: WordMap, k: u64, s: Nat, s4: s < 4, j, left: u64
 {
     λ j4 budget clear => match Nat::eq_dec(j.toNat(), s) {
         Inl(same) => Exists(j, And(same, cong_fn(λ (r: Mutated<WordMap, u64>) => r.after, eq))),
-        Inr(other) => match clear(j.toNat(), j4, omega) { And(_, other) => false_elim(other(hit)) },
+        Inr(_) => match clear(j.toNat(), j4, omega) { And(_, other) => false_elim(other(hit)) },
     }
 }
 
