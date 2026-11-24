@@ -963,6 +963,28 @@ theorem int_to_nat_elim(x: Int,
     }(left, right)
 }
 
+// A division by a divisor that is not a literal, at its two cases: `n = 0`
+// with `x % n = x` and `x / n = 0`, or `0 < n` with the remainder below the
+// divisor and both at most the dividend; each with the link through the
+// product, which holds at every divisor (an atom: `x / n * n` is two atoms
+// multiplied). Both reads stay atoms; `omega`
+// splits here only after failing without these facts
+// (issues/omega-nonliteral-div-mod-facts.md).
+theorem nat_divmod_elim(x, n: Nat,
+    zero: n = 0 → x.mod(n) = x → x.div(n) = 0 → x.div(n) * n + x.mod(n) = x → False,
+    positive: 0 < n → x.mod(n) < n → x.mod(n) <= x → x.div(n) <= x →
+        x.div(n) * n + x.mod(n) = x → False): False
+{
+    match n as λ m => (m = 0 → x.mod(m) = x → x.div(m) = 0 → x.div(m) * m + x.mod(m) = x → False) →
+        (0 < m → x.mod(m) < m → x.mod(m) <= x → x.div(m) <= x →
+            x.div(m) * m + x.mod(m) = x → False) → False
+    {
+        Zero => λ z _ => z(refl, x.mod_zero(), x.div_zero(), x.div_mul_add_mod(0)),
+        Succ(d) => λ _ p => p(trivial, x.mod_lt(d + 1), x.mod_le(d + 1), x.div_le(d + 1),
+            x.div_mul_add_mod(d + 1)),
+    }(zero, positive)
+}
+
 // A `max`/`min` read's two cases, by the order of its arguments: `a <= b`
 // with the read equal to `b` (`max`) or `a` (`min`), or `b <= a` with the
 // other. The read stays an atom in both, so the certificate cites the

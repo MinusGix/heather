@@ -2378,6 +2378,26 @@ theorem DivMod::quot_le(n, d, q, r: Nat, sp: DivMod::Spec(n, d, MkDivMod(q, r)),
     Nat::le_trans(q, q * d, n, scaled, rewrite(sym(sp.left), Nat::le_add_l(q * d, r)))
 }
 
+// The remainder and the quotient are at most the dividend, whatever the
+// divisor: by zero they are the dividend and nothing. `omega` states both
+// beside a division by a divisor that is not a literal
+// (`omega::nat_divmod_elim`).
+theorem Nat::mod_le(self n, divisor: Nat): n.mod(divisor) <= n {
+    j(n.div_mul_add_mod(divisor), λ y _ => n.mod(divisor) <= y,
+        Nat::le_add_r(n.div(divisor) * divisor, n.mod(divisor)))
+}
+
+theorem Nat::div_le(self n, divisor: Nat): n.div(divisor) <= n {
+    match divisor {
+        Zero => j(sym(n.div_zero()), λ y _ => y <= n, n.nonneg()),
+        Succ(d) => Nat::le_trans(n.div(d + 1), n.div(d + 1) * (d + 1), n,
+            j(n.div(d + 1).add_left_zero(), λ y _ => y <= n.div(d + 1) * (d + 1),
+                n.div(d + 1).mul_le_mono_l(1, d + 1, trivial)),
+            j(n.div_mul_add_mod(d + 1), λ y _ => n.div(d + 1) * (d + 1) <= y,
+                Nat::le_add_l(n.div(d + 1) * (d + 1), n.mod(d + 1)))),
+    }
+}
+
 // A positive quotient as large as the dividend leaves the divisor at most one.
 theorem DivMod::divisor_le_one(n, d, q, r: Nat, sp: DivMod::Spec(n, d, MkDivMod(q, r)), small: n <= q, positive: 0 < q): d <= 1 {
     let below: (q * d <= q) = Nat::le_trans(q * d, n, q, rewrite(sym(sp.left), Nat::le_add_l(q * d, r)), small);

@@ -504,3 +504,36 @@ theorem closed_numeral(n: Nat, h: n < List::replicate(True, 300).len()): n < 301
 // Control: a computation past the bound stays an atom, and the report names it.
 // expect-error: did not compute within 4096 steps
 theorem closed_past_bound(n: Nat, h: n < List::replicate(True, 100000).len()): n < 100001 { omega }
+
+// `x % n` and `x / n` by a divisor that is not a literal are atoms, split
+// on need by the divisor's two cases (`omega::nat_divmod_elim`,
+// issues/omega-nonliteral-div-mod-facts.md, §25 of the design): the
+// remainder and quotient are at most the dividend whatever the divisor, and
+// the remainder is below a divisor known positive.
+theorem div_open_mod_le(x, n: Nat): x % n <= x { omega }
+theorem div_open_div_le(x, n: Nat): x / n <= x { omega }
+theorem div_open_div_le_pos(x, n: Nat, h: 0 < n): x / n <= x { omega }
+theorem div_open_mod_lt(x, n: Nat, h: 0 < n): x % n < n { omega }
+theorem div_open_mod_lt_ne(x, n: Nat, h: n ≠ 0): x % n < n { omega }
+theorem div_open_mod_lt_one(x, n: Nat, h: 1 <= n): x % n + 1 <= n { omega }
+fn div_open_by_test(x, n: Nat) → Bool { if h: 0 < n { let below: (x % n < n) = omega; True } else { False } }
+fn div_open_by_bool(x, n: Nat) → Bool { if 0 < n { let below: (x % n < n) = omega; True } else { False } }
+// A compound dividend and divisor, and two pairs in one goal.
+theorem div_open_compound(a, b, n: Nat, h: 0 < n + b): (a + 1) % (n + b) < n + b { omega }
+theorem div_open_two_pairs(x, y, n, m: Nat, hn: 0 < n, hm: 0 < m): x % n + y % m < n + m { omega }
+// The link `x / n * n + x % n = x` holds at every divisor; the product is
+// one atom.
+theorem div_open_scaled_le(x, n: Nat): x / n * n <= x { omega }
+theorem div_open_link(x, n: Nat): x / n * n + x % n = x { omega }
+theorem div_open_above(x, n: Nat, h: 0 < n): x < x / n * n + n { omega }
+// A literal divisor still reads as before, beside an open one.
+theorem div_open_beside_literal(x, n: Nat, h: 0 < n): x % n + x % 4 < n + 4 { omega }
+// Controls: false at `n = 0`, at `n = 1`, and the link without its remainder.
+// expect-error: `omega` got stuck
+theorem div_open_mod_lt_unknown(x, n: Nat): x % n < n { omega }
+// expect-error: `omega` got stuck
+theorem div_open_div_lt(x, n: Nat, h: 0 < n): x / n < x { omega }
+// expect-error: `omega` got stuck
+theorem div_open_mod_lt_dividend(x, n: Nat, h: 0 < n): x % n < x { omega }
+// expect-error: `omega` got stuck
+theorem div_open_scaled_exact(x, n: Nat, h: 0 < n): x / n * n = x { omega }
