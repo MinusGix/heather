@@ -1,4 +1,4 @@
-// Probes of `lib/std/analysis/real_fn.hthr`: the generic rules read at
+// Probes of `lib/std/analysis/real/real_fn.hthr`: the generic rules read at
 // `Rat` and at `CReal`, on the concrete domain `|x| <= 1`, and a refutation
 // that keeps `DerivOn` from being vacuous. Tests, not library: nothing
 // outside lib/_tests imports this module (docs/test-value-audit.md §4.5).

@@ -1063,6 +1063,83 @@ impl Parser {
             }
     }
 
+    /// `suffices [h:] P by justify;`: contextual statement head
+    /// (issues/block-suffices-statement.md). Scans ahead at bracket depth 0
+    /// for `by` before `;` / `}` / `:=`, so a local named `suffices`
+    /// (`suffices`, `suffices(a)`, `suffices + 1`, `suffices := e`) stays an
+    /// ordinary identifier everywhere.
+    fn at_suffices(&self) -> bool {
+        if !self.at_kw("suffices") {
+            return false;
+        }
+        let mut depth: usize = 0;
+        let mut i = self.pos + 1;
+        while let Some(tok) = self.toks.get(i) {
+            match &tok.kind {
+                TokKind::LParen | TokKind::LBracket | TokKind::LBrace | TokKind::LAngle => {
+                    depth += 1;
+                }
+                TokKind::RParen | TokKind::RBracket | TokKind::RBrace | TokKind::RAngle => {
+                    if depth == 0 {
+                        return false;
+                    }
+                    depth -= 1;
+                }
+                TokKind::Semi | TokKind::ColonEq | TokKind::Eof if depth == 0 => return false,
+                TokKind::Ident(w) if depth == 0 && w == "by" => return true,
+                _ => {}
+            }
+            i += 1;
+        }
+        false
+    }
+
+    /// `require [h:] P;` — contextual pointwise-world statement
+    /// (issues/proof-worlds-native-inside.md). Does not steal locals named
+    /// `require` (`require`, `require(x)`, `require.f`, `require := e`,
+    /// `require = e`, `require;`).
+    fn at_require(&self) -> bool {
+        if !self.at_kw("require") {
+            return false;
+        }
+        let next = self.nth(1);
+        if matches!(
+            next,
+            TokKind::LParen
+                | TokKind::Dot
+                | TokKind::Semi
+                | TokKind::ColonEq
+                | TokKind::RBrace
+                | TokKind::Eq
+                | TokKind::LArrow
+                | TokKind::Comma
+                | TokKind::Eof
+        ) {
+            return false;
+        }
+        // Must end with `;` at bracket depth 0 before `}` or `:=`.
+        let mut depth: usize = 0;
+        let mut i = self.pos + 1;
+        while let Some(tok) = self.toks.get(i) {
+            match &tok.kind {
+                TokKind::LParen | TokKind::LBracket | TokKind::LBrace | TokKind::LAngle => {
+                    depth += 1;
+                }
+                TokKind::RParen | TokKind::RBracket | TokKind::RBrace | TokKind::RAngle => {
+                    if depth == 0 {
+                        return false;
+                    }
+                    depth -= 1;
+                }
+                TokKind::ColonEq | TokKind::Eof if depth == 0 => return false,
+                TokKind::Semi if depth == 0 => return true,
+                _ => {}
+            }
+            i += 1;
+        }
+        false
+    }
+
     /// `op as ∙` — the **body spelling** a declaring binder installs
     /// (issues/binder-symbol-as-notation.md). Read directly after the binder's
     /// name, before its `:`.
@@ -3899,6 +3976,82 @@ impl Parser {
             };
             return Ok(Block { stmts, result: Box::new(result), ons, span: open.join(close) });
         }
+        // `suffices [h:] P by justify; <rest>` — forward-readable backward
+        // reasoning (issues/block-suffices-statement.md). Named form lowers to
+        // `{ have h: P = <rest>; justify }`; anonymous form lowers to
+        // `\0suffices(TyLit(P), justify, <rest>)` so both `justify: Goal`
+        // (reading an opaque hypothesis of type `P`) and `justify: P → Goal`
+        // work seamlessly.
+        if self.at_suffices() {
+            let start = self.bump().span; // `suffices`
+            let binder = if matches!(self.peek(), TokKind::Ident(_))
+                && matches!(self.nth(1), TokKind::Colon)
+            {
+                let (name, _) = self.binder_ident("`suffices` hypothesis name")?;
+                self.bump(); // `:`
+                Some(name)
+            } else {
+                None
+            };
+            let prop = self.with_record_lit(true, |p| p.ty())?;
+            let prop_span = prop.span;
+            if !self.eat_kw("by") {
+                return self.err("`suffices` expects `by <justification>;` after its statement");
+            }
+            let justify = self.expr()?;
+            let semi = self.expect(&TokKind::Semi, "`;` after `suffices … by …`")?;
+            let mut body_stmts = Vec::new();
+            let parsed = self.block_statements(&mut body_stmts)?;
+            let mut rest_block = self.block_tail(semi, body_stmts, parsed)?;
+            let ons = std::mem::take(&mut rest_block.ons);
+            let close = rest_block.span;
+            let rest_expr = if rest_block.stmts.is_empty() {
+                *rest_block.result
+            } else {
+                let inner = if self.defer_binds {
+                    rest_block
+                } else {
+                    crate::try_lower::binds_in_block(rest_block, &mut self.next_hygienic)?
+                };
+                Expr { kind: ExprKind::Block(Box::new(inner)), span: semi.join(close) }
+            };
+            let span = start.join(close);
+            let result = match binder {
+                Some(name) => {
+                    let have_stmt = Stmt::Let {
+                        name,
+                        ty: Some(prop),
+                        expr: rest_expr,
+                        span,
+                        opaque: true,
+                    };
+                    Expr {
+                        kind: ExprKind::Block(Box::new(Block {
+                            stmts: vec![have_stmt],
+                            result: Box::new(justify),
+                            ons: Vec::new(),
+                            span,
+                        })),
+                        span,
+                    }
+                }
+                None => Expr {
+                    kind: ExprKind::App {
+                        head: Box::new(Expr { kind: ExprKind::Var(SUFFICES.into()), span: start }),
+                        args: vec![
+                            Expr { kind: ExprKind::TyLit(Box::new(prop)), span: prop_span },
+                            justify,
+                            rest_expr,
+                        ],
+                        named: Vec::new(),
+                        explicit: false,
+                        goal_oriented: false,
+                    },
+                    span,
+                },
+            };
+            return Ok(Block { stmts, result: Box::new(result), ons, span: open.join(close) });
+        }
         // `x ⊢ ...` at a block's result scopes over the REST of that block,
         // including its `let`s. This is the long-proof face of the sequent
         // expression: `{ x ⊢ let y = e; body }` lowers to
@@ -4088,6 +4241,48 @@ impl Parser {
             let expr = self.expr()?;
             let expr = if bound { let span = expr.span; crate::try_lower::bind_marker(expr, span) } else { expr };
             let end = self.expect(&TokKind::Semi, "`;` to end the `let`")?;
+            return Ok(Stmt::LetRecord { fields, expr, span: start.join(end) });
+        }
+        // `let ⟨a, b⟩ = e;` / `let ⟨a, b, c⟩ = e;` / `let ⟨a, b⟩ <- e;` —
+        // positional record destructuring (issues/conjunction-facts-read-by-counting.md).
+        // Unambiguous against `let x = …`: a binding name cannot start with `⟨`.
+        if matches!(self.peek(), TokKind::LAngle) {
+            let (ctor_name, pat_span, args) = self.anonymous_constructor_pat()?;
+            if ctor_name != ANON_CTOR_ONLY {
+                return Err(ParseError {
+                    msg: "a destructuring `let ⟨…⟩` pattern is irrefutable and cannot use \
+                          `⟨x|⟩` or `⟨|y⟩`; use `match` or `if let`"
+                        .into(),
+                    span: pat_span,
+                });
+            }
+            let bound = self.eat_bind_arrow();
+            if !bound {
+                self.expect_eq("`let` pattern")?;
+            }
+            let expr = self.expr()?;
+            let expr = if bound {
+                let span = expr.span;
+                crate::try_lower::bind_marker(expr, span)
+            } else {
+                expr
+            };
+            let end = self.expect(&TokKind::Semi, "`;` to end the `let`")?;
+            let fields = if args.is_empty() {
+                vec![RecordPatField {
+                    name: POSITIONAL_EMPTY.into(),
+                    pat: Pat::Var { name: "_".into(), span: pat_span },
+                    span: pat_span,
+                }]
+            } else {
+                args.into_iter()
+                    .enumerate()
+                    .map(|(i, pat)| {
+                        let span = pat.span();
+                        RecordPatField { name: positional_field_name(i), pat, span }
+                    })
+                    .collect()
+            };
             return Ok(Stmt::LetRecord { fields, expr, span: start.join(end) });
         }
         // `let code x = e;` — the surface letbox (surface-v0 §4). Unambiguous
@@ -4325,11 +4520,16 @@ impl Parser {
                 stmts.push(self.let_stmt()?);
                 continue;
             }
+            if self.at_require() {
+                stmts.push(self.require_stmt()?);
+                continue;
+            }
             if matches!(self.peek(), TokKind::RBrace | TokKind::Eof)
                 || self.at_kw("split")
                 || self.at_kw("split_all")
                 || self.at_induct()
                 || self.at_cases()
+                || self.at_suffices()
                 || self.at_kw("on")
                 || self.at_sequent_binders()
             {
@@ -4492,6 +4692,36 @@ impl Parser {
         let expr = self.expr()?;
         let end = self.expect(&TokKind::Semi, "`;` to end the `have`")?;
         Ok(Stmt::Let { name, ty, expr, span: start.join(end), opaque: true })
+    }
+
+    /// `require [h:] P;` — synthesize an eventual fact inside a pointwise
+    /// `within W for x { … }` block (issues/proof-worlds-native-inside.md).
+    fn require_stmt(&mut self) -> R<Stmt> {
+        let start = self.bump().span; // `require`
+        let name = if matches!(self.peek(), TokKind::Ident(_))
+            && matches!(self.nth(1), TokKind::Colon)
+        {
+            let (n, _) = self.binder_ident("`require` binding name")?;
+            self.bump(); // `:`
+            n
+        } else {
+            "_".to_string()
+        };
+        let prop = self.with_record_lit(true, |p| p.ty())?;
+        let prop_span = prop.span;
+        let end = self.expect(&TokKind::Semi, "`;` to end `require`")?;
+        let span = start.join(end);
+        let expr = Expr {
+            kind: ExprKind::App {
+                head: Box::new(Expr { kind: ExprKind::Var(REQUIRE.into()), span: start }),
+                args: vec![Expr { kind: ExprKind::TyLit(Box::new(prop)), span: prop_span }],
+                named: Vec::new(),
+                explicit: false,
+                goal_oriented: false,
+            },
+            span,
+        };
+        Ok(Stmt::Let { name, ty: None, expr, span, opaque: false })
     }
 
     fn on_stmt(&mut self) -> R<OnStmt> {
@@ -6315,6 +6545,13 @@ impl Parser {
                 span,
             });
         }
+        // `within W { … }` or `within W for x [: T] { … }`: scoped proof world
+        // (docs/language/proof-worlds-design.md). Rule 1: only when a name
+        // follows, so locals, parameters and methods named `within` keep
+        // reading as themselves.
+        if self.at_kw("within") && matches!(self.nth(1), TokKind::Ident(_)) {
+            return self.within_expr();
+        }
         if self.at_kw("j") && matches!(self.nth(1), TokKind::LParen) {
             return self.j_expr();
         }
@@ -7424,6 +7661,29 @@ impl Parser {
             },
             span: start.join(end),
         })
+    }
+
+    /// `within W { … }` or `within W for x [: T] { … }` — scoped proof worlds
+    /// (docs/language/proof-worlds-design.md).
+    fn within_expr(&mut self) -> R<Expr> {
+        let start = self.bump().span; // `within`
+        let world = self.with_record_lit(true, |p| p.postfix())?;
+        let binder = if self.eat_kw("for") {
+            let (name, nspan) = self.ident("index binder after `for`")?;
+            let ty = if matches!(self.peek(), TokKind::Colon) {
+                self.bump();
+                Some(self.with_record_lit(true, |p| p.ty())?)
+            } else {
+                None
+            };
+            let span = ty.as_ref().map_or(nspan, |t| nspan.join(t.span));
+            Some(LamBinder { name, ty, implicit: false, span })
+        } else {
+            None
+        };
+        self.defer_binds = true;
+        let block = self.block()?;
+        crate::within::lower(world, binder, block, start, &mut self.next_hygienic)
     }
 
     /// One calc step's relation token.
@@ -10251,6 +10511,41 @@ mod tests {
         assert_eq!(fields, vec![("a".into(), false), ("n".into(), false), ("n_pos".into(), true)]);
         let e = parse_file("inductive Q { Mk(Pos<Nat>) }").unwrap_err();
         assert!(e.msg.contains("a `Pos<A>` field needs a name"), "{}", e.msg);
+    }
+
+    #[test]
+    fn angle_destructure_let_and_refusals() {
+        let d = decl_of("fn f(p: Nat) -> Nat { let ⟨a, b, c⟩ = p; a }");
+        let Stmt::LetRecord { fields, .. } = &d.body.stmts[0] else {
+            panic!("expected LetRecord");
+        };
+        assert_eq!(fields.len(), 3);
+        assert!(fields[0].name.starts_with(POSITIONAL_FIELD_PREFIX));
+
+        let e = parse_file("fn f(p: Nat) -> Nat { let ⟨a|⟩ = p; a }").unwrap_err();
+        assert!(e.msg.contains("irrefutable"), "{}", e.msg);
+
+        let e = parse_file("fn f(p: Nat) -> Nat { let ⟨|b⟩ = p; b }").unwrap_err();
+        assert!(e.msg.contains("irrefutable"), "{}", e.msg);
+    }
+
+    #[test]
+    fn suffices_and_require_are_contextual_keywords() {
+        let d = decl_of("fn f(suffices: Nat, require: Nat) -> Nat { suffices + require }");
+        assert_eq!(d.params.len(), 2);
+
+        let d = decl_of("theorem t(a: Nat): a = a { suffices a = a by refl; refl }");
+        let ExprKind::App { head, args, .. } = &d.body.result.kind else {
+            panic!("expected anonymous suffices app");
+        };
+        assert!(matches!(&head.kind, ExprKind::Var(n) if n == SUFFICES));
+        assert_eq!(args.len(), 3);
+
+        let e = parse_file(
+            "theorem t(e: Nat): Nat { within Eventually for n { let h <- e; require k: h = n; n } }",
+        )
+        .unwrap_err();
+        assert!(e.msg.contains("cannot depend on an earlier bound fact"), "{}", e.msg);
     }
 }
 

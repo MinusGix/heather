@@ -1,10 +1,11 @@
 ---
 title: Deep conjunction facts are read by counting .right; name them
-status: open
+status: closed
 labels: [surface,proofs,ergonomics]
 area: language
 created: 2026-10-04
-updated: 2026-11-08
+updated: 2026-11-24
+closed: 2026-11-24
 ---
 
 Raised by Minus (2026-10-04) over
@@ -59,3 +60,4 @@ helps with both: it names each fact once, at the point it is taken apart.
 
 - 2026-10-21: The code cited above (crates/elab/tests/fixtures/open_read_close.hthr, examples/x86-native/wc.hthr) was burned in B1 ([[native-burn-process-stack]]; last at 189659d, tag native-v0); the language ask stands on its own.
 - 2026-11-08: Stdlib awkwardness survey (docs/surveys/stdlib-math-awkwardness-survey.md §7): probed 2026-11-08, `let ⟨n, a, b⟩ = h;` is still a parse error (`expected let binding name, found LAngle`), while `match h { ⟨n, ⟨a, b⟩⟩ => … }` works. Math libraries: 59 chains of three or more `.left`/`.right`, 60 nested `Exists(…) => match` arms (36 in creal.hthr), 904 `.witness`/`.proof` reads.
+- 2026-11-24: Implemented positional destructuring `let ⟨p1, p2, …⟩ = e;` and `let ⟨p1, p2, …⟩ <- e;` (`crates/syntax/src/parser.rs`, `crates/elab/src/statements.rs`, `tree-sitter-heather/grammar.js`), supporting single-constructor records (`And`, `Exists`, `Pair`, `Iff`, user records), nested `⟨…⟩` (also inside `let { f := ⟨…⟩ } = e;`), wildcards `_`, 0-field `let ⟨⟩ = e;`, and flat right-nesting (`let ⟨a, b, c⟩ = e;` against `A ∧ B ∧ C` or `∃ x, P(x) ∧ Q(x)`). Verified in `lib/_tests/std/core/destructure_suffices_tests.hthr`.

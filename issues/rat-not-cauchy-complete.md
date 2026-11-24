@@ -10,7 +10,7 @@ updated: 2026-11-06
 
 `CauchyComplete` (lib/std/analysis/sequence.hthr) has its consumer
 (`Contraction::fixed_point`) and its instance at `CReal`
-(lib/std/analysis/real_complete.hthr). The carrier expected not to inhabit
+(lib/std/analysis/real/real_complete.hthr). The carrier expected not to inhabit
 it, `Rat`, is so far only refused for lack of an instance
 (`lib/_tests/std/analysis/sequence_tests.hthr`, `rat_fixed_point_refused`).
 State it as a `¬` theorem: no function sends every Cauchy sequence of

@@ -36,6 +36,7 @@ import omega;
 import tactic;
 import linarith;
 import ring;
+import world;
 
 // exp(d) - 1 - d is the series from its third term, whose k-th term
 // d^(k+2)/(k+2)! is at most d²·D^k/k! in size.
@@ -105,11 +106,25 @@ theorem CReal::exp_rat_sub_lin(d, D: Rat, hd: d.abs() <= D):
     And(linarith(CReal::ofRat_le(lo), dom.left, r), linarith(CReal::ofRat_le(sc), dom.right, r))
 }
 
+// Eventually (from j >= 1 onward), `2·2^-j <= 1`.
+evidence theorem inv_pow2_double_le_one(): Eventually<Nat>(Nat::Le, λ j => Rat::inv_pow2(j) + Rat::inv_pow2(j) <= 1) {
+    Eventually::of(1, λ j hj => match j {
+        Zero => absurd_of(hj, omega),
+        Succ(k) => linarith(Rat::inv_pow2_half(k), Rat::inv_pow2_le_one(k)),
+    })
+}
+
+// Eventually (from `m + W.abs_ceil().width()` onward), `W · 2^-j <= 2^-m`.
+evidence theorem rat_lip_scaled_eventually({W: Rat}, hW: 0 <= W := infer, {m: Nat}):
+    Eventually<Nat>(Nat::Le, λ j => W * Rat::inv_pow2(j) <= Rat::inv_pow2(m))
+{
+    Eventually::of(m + W.abs_ceil().width(), λ j hj => RatLip::scaled(W, hW, m, j, hj))
+}
+
 // The second-order bound at a real, within a slack: |h| <= k <= 1/2 gives
 // exp(h) - 1 - h within C·k² + 2^-m, with C = exp_reach(1). `h` is read at
-// its j-th term `p`, `g = 2^-j` away, with j large enough that the gaps
-// (exp's Lipschitz bound `L·g`, the term's own `g`, and `C·2g` from
-// widening `k` to `k + g`) sum below 2^-m.
+// its j-th term `p`, `g = 2^-j` away, inside `within Eventually for j: Nat` so
+// `require` synthesizes and combines the two thresholds automatically.
 theorem CReal::exp_sub_lin_near(h, k: CReal, hk: AbsLe(h, k), k2: k + k <= 1, m: Nat):
     -(CReal::ofRat(CReal::exp_reach(1)) * (k * k)) <= CReal::exp(h) - 1 - h + CReal::ofRat(Rat::inv_pow2(m))
         ∧ CReal::exp(h) - 1 - h <= CReal::ofRat(CReal::exp_reach(1)) * (k * k) + CReal::ofRat(Rat::inv_pow2(m))
@@ -126,64 +141,63 @@ theorem CReal::exp_sub_lin_near(h, k: CReal, hk: AbsLe(h, k), k2: k + k <= 1, m:
     };
     let W = L + Cc + Cc + 1;
     let hW: (0 <= W) = linarith(hL, hC);
-    let j0 = m + W.abs_ceil().width();
-    let j = j0 + 1;
-    let g = Rat::inv_pow2(j);
-    let p = h.at(j);
-    let g0: (0 <= g) = Rat::inv_pow2_nonneg(j);
-    let gh: (g + g ≈ Rat::inv_pow2(j0)) = Rat::inv_pow2_half(j0);
-    let g1: (g + g <= 1) = linarith(gh, Rat::inv_pow2_le_one(j0));
-    let sc: (W * g <= Rat::inv_pow2(m)) = RatLip::scaled(W, hW, m, j, omega);
-    let hl: (CReal::ofRat(p - g) <= h) = h.term_sub_le(j);
-    let hh: (h <= CReal::ofRat(p + g)) = h.le_term_add(j);
-    let kl: (-k <= h) = hk.left;
-    let kr: (h <= k) = hk.right;
-    let G = CReal::ofRat(g);
-    let P = CReal::ofRat(p);
-    let A = CReal::ofRat(Cc);
-    let sl: (P - G <= h) = linarith(hl, CReal::ofRat_sub(p, g));
-    let sh: (h <= P + G) = linarith(hh, CReal::ofRat_add(p, g));
-    let G0: (0 <= G) = CReal::ofRat_le(g0);
-    let G1: (G + G <= 1) = linarith(CReal::ofRat_le(g1), CReal::ofRat_add(g, g));
-    let A0: (0 <= A) = CReal::ofRat_le(hC);
-    let pu: (P <= CReal::ofRat(1)) = linarith(sl, kr, k2, G1);
-    let pd: (CReal::ofRat(-1) <= P) = linarith(sh, kl, k2, G1, CReal::ofRat_neg(1));
-    let ap: (p.abs() <= 1) = Rat::abs_le(linarith(CReal::le_of_ofRat_le(pd)), CReal::le_of_ofRat_le(pu));
-    let rat = CReal::exp_rat_sub_lin(p, 1, ap);
-    let dev = CReal::exp_dev(h, p, g, B, hx, hx(j), hl, hh);
-    let sq: (0 <= p * p) = OrderedRing::sq_nonneg(p);
-    let pp: (p.abs() * p.abs() ≈ p * p) = Rat::same_trans(Rat::same_sym(p.abs_mul(p)), (p * p).abs_of_nonneg(sq));
-    let e1: (CReal::ofRat((p.abs() * p.abs()) * Cc) ≈ A * (P * P)) =
-        CReal::same_trans(CReal::ofRat_respects(ring(pp)), CReal::same_trans(CReal::ofRat_mul(Cc, p * p),
-            CReal::mul_respects(CReal::same_refl(A), CReal::ofRat_mul(p, p))));
-    let e2: (CReal::ofRat(-((p.abs() * p.abs()) * Cc)) ≈ -(A * (P * P))) =
-        CReal::same_trans(CReal::ofRat_neg((p.abs() * p.abs()) * Cc), CReal::neg_respects(e1));
-    let wl: (-(k + G) <= P) = linarith(sh, kl);
-    let wr: (P <= k + G) = linarith(sl, kr);
-    let wide: AbsLe(P, k + G) = LocatedAddGroup::abs_le_intro(P, k + G, wl, wr);
-    let f1: (P * P <= (k + G) * (k + G)) = (OrderedField::abs_le_mul(P, P, k + G, k + G, wide, wide)).right;
-    let k0: (0 <= k) = LocatedAddGroup::abs_le_nonneg(h, k, hk);
-    let f2: ((k + k) * G <= 1 * G) = OrderedSemiring::mul_le_mono_r(k + k, 1, G, k2, G0);
-    let f3: (G * G <= G * 1) = OrderedSemiring::mul_le_mono_l(G, 1, G, linarith(G1, G0), G0);
-    let f4: (A * (P * P) <= A * (k * k + G + G)) = OrderedSemiring::mul_le_mono_l(P * P, k * k + G + G, A, linarith(f1, f2, f3), A0);
-    let f5: (0 <= A * (P * P)) = OrderedSemiring::mul_nonneg(A, P * P, A0, OrderedRing::sq_nonneg(P));
-    let slack: (CReal::ofRat(L * g) + A * (G + G) + G <= CReal::ofRat(Rat::inv_pow2(m))) = {
-        let w: (L * g + Cc * (g + g) + g <= Rat::inv_pow2(m)) = linarith(sc);
-        let c: (CReal::ofRat(L * g + Cc * (g + g) + g) ≈ CReal::ofRat(L * g) + A * (G + G) + G) =
-            CReal::same_trans(CReal::ofRat_add(L * g + Cc * (g + g), g),
-                CReal::add_respects(CReal::same_trans(CReal::ofRat_add(L * g, Cc * (g + g)),
-                    CReal::add_respects(CReal::same_refl(CReal::ofRat(L * g)),
-                        CReal::same_trans(CReal::ofRat_mul(Cc, g + g), CReal::mul_respects(CReal::same_refl(A), CReal::ofRat_add(g, g))))),
-                    CReal::same_refl(G)));
-        linarith(CReal::ofRat_le(w), c)
-    };
-    let lg0: (0 <= CReal::ofRat(L * g)) = CReal::ofRat_le(Rat::mul_nonneg(hL, g0));
-    let dl: (-CReal::ofRat(L * g) <= CReal::exp(h) - CReal::exp_rat(p)) = linarith(dev.left, CReal::ofRat_neg(L * g));
-    let lo: (-(A * (k * k)) <= CReal::exp(h) - 1 - h + CReal::ofRat(Rat::inv_pow2(m))) =
-        linarith(dl, rat.left, e2, f4, sh, slack, f5);
-    let hi: (CReal::exp(h) - 1 - h <= A * (k * k) + CReal::ofRat(Rat::inv_pow2(m))) =
-        linarith(dev.right, rat.right, e1, f4, sl, slack);
-    And(lo, hi)
+    within Eventually for j: Nat {
+        require g1: Rat::inv_pow2(j) + Rat::inv_pow2(j) <= 1;
+        require sc: W * Rat::inv_pow2(j) <= Rat::inv_pow2(m);
+        let g = Rat::inv_pow2(j);
+        let p = h.at(j);
+        let g0: (0 <= g) = Rat::inv_pow2_nonneg(j);
+        let hl: (CReal::ofRat(p - g) <= h) = h.term_sub_le(j);
+        let hh: (h <= CReal::ofRat(p + g)) = h.le_term_add(j);
+        let ⟨kl0, kr⟩ = hk;
+        let kl: (-k <= h) = kl0;
+        let G = CReal::ofRat(g);
+        let P = CReal::ofRat(p);
+        let A = CReal::ofRat(Cc);
+        let sl: (P - G <= h) = linarith(hl, CReal::ofRat_sub(p, g));
+        let sh: (h <= P + G) = linarith(hh, CReal::ofRat_add(p, g));
+        let G0: (0 <= G) = CReal::ofRat_le(g0);
+        let G1: (G + G <= 1) = linarith(CReal::ofRat_le(g1), CReal::ofRat_add(g, g));
+        let A0: (0 <= A) = CReal::ofRat_le(hC);
+        let pu: (P <= CReal::ofRat(1)) = linarith(sl, kr, k2, G1);
+        let pd: (CReal::ofRat(-1) <= P) = linarith(sh, kl, k2, G1, CReal::ofRat_neg(1));
+        let ap: (p.abs() <= 1) = Rat::abs_le(linarith(CReal::le_of_ofRat_le(pd)), CReal::le_of_ofRat_le(pu));
+        let rat = CReal::exp_rat_sub_lin(p, 1, ap);
+        let dev = CReal::exp_dev(h, p, g, B, hx, hx(j), hl, hh);
+        let sq: (0 <= p * p) = OrderedRing::sq_nonneg(p);
+        let pp: (p.abs() * p.abs() ≈ p * p) = Rat::same_trans(Rat::same_sym(p.abs_mul(p)), (p * p).abs_of_nonneg(sq));
+        let e1: (CReal::ofRat((p.abs() * p.abs()) * Cc) ≈ A * (P * P)) =
+            CReal::same_trans(CReal::ofRat_respects(ring(pp)), CReal::same_trans(CReal::ofRat_mul(Cc, p * p),
+                CReal::mul_respects(CReal::same_refl(A), CReal::ofRat_mul(p, p))));
+        let e2: (CReal::ofRat(-((p.abs() * p.abs()) * Cc)) ≈ -(A * (P * P))) =
+            CReal::same_trans(CReal::ofRat_neg((p.abs() * p.abs()) * Cc), CReal::neg_respects(e1));
+        let wl: (-(k + G) <= P) = linarith(sh, kl);
+        let wr: (P <= k + G) = linarith(sl, kr);
+        let wide: AbsLe(P, k + G) = LocatedAddGroup::abs_le_intro(P, k + G, wl, wr);
+        let f1: (P * P <= (k + G) * (k + G)) = (OrderedField::abs_le_mul(P, P, k + G, k + G, wide, wide)).right;
+        let k0: (0 <= k) = LocatedAddGroup::abs_le_nonneg(h, k, hk);
+        let f2: ((k + k) * G <= 1 * G) = OrderedSemiring::mul_le_mono_r(k + k, 1, G, k2, G0);
+        let f3: (G * G <= G * 1) = OrderedSemiring::mul_le_mono_l(G, 1, G, linarith(G1, G0), G0);
+        let f4: (A * (P * P) <= A * (k * k + G + G)) = OrderedSemiring::mul_le_mono_l(P * P, k * k + G + G, A, linarith(f1, f2, f3), A0);
+        let f5: (0 <= A * (P * P)) = OrderedSemiring::mul_nonneg(A, P * P, A0, OrderedRing::sq_nonneg(P));
+        let slack: (CReal::ofRat(L * g) + A * (G + G) + G <= CReal::ofRat(Rat::inv_pow2(m))) = {
+            let w: (L * g + Cc * (g + g) + g <= Rat::inv_pow2(m)) = linarith(sc);
+            let c: (CReal::ofRat(L * g + Cc * (g + g) + g) ≈ CReal::ofRat(L * g) + A * (G + G) + G) =
+                CReal::same_trans(CReal::ofRat_add(L * g + Cc * (g + g), g),
+                    CReal::add_respects(CReal::same_trans(CReal::ofRat_add(L * g, Cc * (g + g)),
+                        CReal::add_respects(CReal::same_refl(CReal::ofRat(L * g)),
+                            CReal::same_trans(CReal::ofRat_mul(Cc, g + g), CReal::mul_respects(CReal::same_refl(A), CReal::ofRat_add(g, g))))),
+                        CReal::same_refl(G)));
+            linarith(CReal::ofRat_le(w), c)
+        };
+        let lg0: (0 <= CReal::ofRat(L * g)) = CReal::ofRat_le(Rat::mul_nonneg(hL, g0));
+        let dl: (-CReal::ofRat(L * g) <= CReal::exp(h) - CReal::exp_rat(p)) = linarith(dev.left, CReal::ofRat_neg(L * g));
+        let lo: (-(A * (k * k)) <= CReal::exp(h) - 1 - h + CReal::ofRat(Rat::inv_pow2(m))) =
+            linarith(dl, rat.left, e2, f4, sh, slack, f5);
+        let hi: (CReal::exp(h) - 1 - h <= A * (k * k) + CReal::ofRat(Rat::inv_pow2(m))) =
+            linarith(dev.right, rat.right, e1, f4, sl, slack);
+        And(lo, hi)
+    }
 }
 
 // The second-order bound at a real: |h| <= k <= 1/2 gives

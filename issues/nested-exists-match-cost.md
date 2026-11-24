@@ -9,7 +9,7 @@ updated: 2026-10-31
 ---
 
 The product rule of the uniform derivative (`DerivOn::mul`,
-`lib/std/analysis/real_fn.hthr`) picks eleven moduli in sequence, each from
+`lib/std/analysis/real/real_fn.hthr`) picks eleven moduli in sequence, each from
 an `∃` that the previous ones feed. Written as eleven nested
 `match … { Exists(d, a) => … }`, the theorem took 120 s to elaborate. The
 kernel gate then exhausted the 8 GiB address-space rail, with a stack of

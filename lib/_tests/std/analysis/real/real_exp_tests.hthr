@@ -1,4 +1,4 @@
-// Probes of `lib/std/analysis/real_exp.hthr`: exp's derivative and the mean
+// Probes of `lib/std/analysis/real/real_exp.hthr`: exp's derivative and the mean
 // value inequality it gives, read on concrete intervals. Tests, not
 // library: nothing outside lib/_tests imports this module
 // (docs/test-value-audit.md §4.5).

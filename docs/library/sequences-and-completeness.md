@@ -1,7 +1,7 @@
 # Sequences, limits and completeness over an ordered field
 
 Round note for `lib/std/analysis/sequence.hthr` and
-`lib/std/analysis/real_complete.hthr` (issue
+`lib/std/analysis/real/real_complete.hthr` (issue
 [real-completeness-interfaces](../../issues/real-completeness-interfaces.md),
 milestone `math-reals`). It records what the round built, how the
 completeness notions relate constructively, and what comes next. The

@@ -148,4 +148,448 @@ impl Bindings<'_> {
         };
         ElabError::Elab { msg, span: input.span }
     }
+
+    /// Does `expected` WHNF to an application of the declared world type
+    /// `world_name` (or the primitive `Squash`)?
+    fn expected_is_world(
+        &self,
+        cx: &Cx,
+        world_name: &str,
+        expected: &heather_kernel::term::Type,
+        span: heather_syntax::Span,
+    ) -> bool {
+        let Some(carrier) = crate::dispatch::Carriers(self.0).carrier_of_ty(cx, expected, span) else {
+            return false;
+        };
+        if world_name == "Squash" {
+            return carrier.key == "Squash";
+        }
+        if let Some(ind) = self.lookup_inductive(world_name) {
+            return carrier.key == crate::names::qkey(&ind.scope.module, &ind.name);
+        }
+        carrier.written == world_name || carrier.key == world_name
+    }
+
+    fn call_unary(head: Expr, arg: Expr, span: heather_syntax::Span) -> Expr {
+        Expr {
+            kind: ExprKind::App {
+                head: Box::new(head),
+                args: vec![arg],
+                named: Vec::new(),
+                explicit: false,
+                goal_oriented: false,
+            },
+            span,
+        }
+    }
+
+    /// Does `expected` WHNF to `Dne<_>`?
+    pub(crate) fn is_dne_expected(
+        &self,
+        cx: &Cx,
+        expected: &heather_kernel::term::Type,
+        span: heather_syntax::Span,
+    ) -> bool {
+        self.expected_is_world(cx, "Dne", expected, span)
+    }
+
+    /// Strip a parser-inserted `let h = decide_true<P>(e); body` (or
+    /// `decide_false`) wrapper from an `if` branch so classical `Dne::em`
+    /// can bind `h` directly in `Inl(h)` / `Inr(h)`.
+    fn strip_if_evidence(body: &Expr, expected_head: &str) -> (String, Expr) {
+        if let ExprKind::Block(b) = &body.kind
+            && b.ons.is_empty()
+            && b.stmts.len() == 1
+            && let Stmt::Let { name, ty: None, expr, opaque: false, .. } = &b.stmts[0]
+            && crate::surface::lowered_condition(expr)
+                .is_some_and(|c| c.head == expected_head)
+        {
+            return (name.clone(), (*b.result).clone());
+        }
+        ("_".to_string(), body.clone())
+    }
+
+    /// Classical `if [h:] P { yes } else { no }` inside a `Dne<_>` goal
+    /// (issues/proof-worlds-native-inside.md). Called only after decidable
+    /// `if` elaboration (`Decide<P>` / `Bool` / mixed) fails, so decidable
+    /// conditions are untouched. Lowers constructively to
+    /// `Bind::seq(Dne::em(P), λ #dne_em => match #dne_em { Inl(h) => yes, Inr(h) => no })`.
+    pub(crate) fn try_classical_if(
+        &self,
+        cx: &Cx,
+        scrut: &Expr,
+        arms: &[heather_syntax::Arm],
+        expected: &heather_kernel::term::Type,
+        lvl: &heather_kernel::level::Level,
+        span: heather_syntax::Span,
+    ) -> Option<crate::R<heather_kernel::term::Term>> {
+        use heather_syntax::{Arm, LamBinder, MatchForm, Pat};
+
+        if self.lookup_global("Dne::em").is_none() {
+            return None;
+        }
+        let cond = crate::surface::lowered_condition(scrut)?;
+        if cond.head != "decide_bit" {
+            return None;
+        }
+        // Only fall back when the condition is actually a valid proposition
+        // type, so ill-typed conditions like `if 5` keep their existing error.
+        if !self.probe(|| self.elab_ty(cx, &cond.ty).is_ok()) {
+            return None;
+        }
+        let yes_arm = arms.iter().find(|a| a.ctor == "True")?;
+        let no_arm = arms.iter().find(|a| a.ctor == "False")?;
+        let (yes_name, yes_body) = Self::strip_if_evidence(&yes_arm.body, "decide_true");
+        let (no_name, no_body) = Self::strip_if_evidence(&no_arm.body, "decide_false");
+
+        let em_var = "#dne_em".to_string();
+        let prop_span = cond.ty.span;
+        let em_call = Self::call_unary(
+            Expr { kind: ExprKind::Var("Dne::em".into()), span: prop_span },
+            Expr { kind: ExprKind::TyLit(Box::new(cond.ty)), span: prop_span },
+            scrut.span,
+        );
+        let match_em = Expr {
+            kind: ExprKind::Match {
+                form: MatchForm::Match,
+                generated: true,
+                scrut: Box::new(Expr { kind: ExprKind::Var(em_var.clone()), span }),
+                eqbind: None,
+                motive: None,
+                arms: vec![
+                    Arm {
+                        ctor: "Inl".into(),
+                        default: false,
+                        binders: vec![Pat::Var { name: yes_name, span: yes_arm.span }],
+                        body: yes_body,
+                        span: yes_arm.span,
+                    },
+                    Arm {
+                        ctor: "Inr".into(),
+                        default: false,
+                        binders: vec![Pat::Var { name: no_name, span: no_arm.span }],
+                        body: no_body,
+                        span: no_arm.span,
+                    },
+                ],
+            },
+            span,
+        };
+        let cont = Expr {
+            kind: ExprKind::Lam {
+                binders: vec![LamBinder { name: em_var, ty: None, implicit: false, span }],
+                body: Box::new(match_em),
+            },
+            span,
+        };
+        let lowered = Self::call_args(
+            Expr { kind: ExprKind::Var(heather_syntax::BIND_SEQ.into()), span },
+            vec![em_call, cont],
+            span,
+        );
+        Some(self.elab_check(cx, &lowered, expected, lvl))
+    }
+
+    /// Elaborate `within W { body }` in checking position
+    /// (docs/language/proof-worlds-design.md §2.1).
+    pub(crate) fn elab_within_check(
+        &self,
+        cx: &Cx,
+        world: &Expr,
+        body: &Expr,
+        expected: &heather_kernel::term::Type,
+        lvl: &heather_kernel::level::Level,
+        span: heather_syntax::Span,
+    ) -> crate::R<heather_kernel::term::Term> {
+        if let ExprKind::Var(world_name) = &world.kind {
+            if self.expected_is_world(cx, world_name, expected, span) {
+                return self.elab_check(cx, body, expected, lvl);
+            }
+            let exit_name = format!("{world_name}::exit");
+            if self.lookup_global(&exit_name).is_some() {
+                let exit_call = Self::call_unary(
+                    Expr { kind: ExprKind::Var(exit_name), span: world.span },
+                    body.clone(),
+                    span,
+                );
+                return self.elab_check(cx, &exit_call, expected, lvl);
+            }
+        }
+        let exit_call = Self::call_unary(world.clone(), body.clone(), span);
+        self.elab_check(cx, &exit_call, expected, lvl)
+    }
+
+    /// Elaborate `within W { body }` in inference position.
+    pub(crate) fn elab_within_infer(
+        &self,
+        cx: &Cx,
+        world: &Expr,
+        body: &Expr,
+        expected: Option<&heather_kernel::term::Type>,
+        span: heather_syntax::Span,
+    ) -> crate::R<(
+        heather_kernel::term::Term,
+        heather_kernel::term::Type,
+        heather_kernel::level::Level,
+    )> {
+        if let ExprKind::Var(world_name) = &world.kind {
+            if let Some(exp) = expected
+                && self.expected_is_world(cx, world_name, exp, span)
+            {
+                return self.elab_infer(cx, body);
+            }
+            let exit_name = format!("{world_name}::exit");
+            if self.lookup_global(&exit_name).is_some() {
+                let exit_call = Self::call_unary(
+                    Expr { kind: ExprKind::Var(exit_name), span: world.span },
+                    body.clone(),
+                    span,
+                );
+                return self.elab_infer(cx, &exit_call);
+            }
+        }
+        let exit_call = Self::call_unary(world.clone(), body.clone(), span);
+        self.elab_infer(cx, &exit_call)
+    }
+
+    fn call_args(head: Expr, args: Vec<Expr>, span: heather_syntax::Span) -> Expr {
+        Expr {
+            kind: ExprKind::App {
+                head: Box::new(head),
+                args,
+                named: Vec::new(),
+                explicit: false,
+                goal_oriented: false,
+            },
+            span,
+        }
+    }
+
+    /// Elaborate `within W for x { body }` in checking position
+    /// (docs/language/proof-worlds-design.md §3).
+    pub(crate) fn elab_within_for_check(
+        &self,
+        cx: &Cx,
+        args: &[Expr],
+        expected: &heather_kernel::term::Type,
+        lvl: &heather_kernel::level::Level,
+        span: heather_syntax::Span,
+    ) -> crate::R<heather_kernel::term::Term> {
+        let Some(world) = args.first() else {
+            return crate::err("`within … for` expects a world and a block", span);
+        };
+        let ExprKind::Var(world_name) = &world.kind else {
+            return crate::err(
+                "a pointwise `within W for x { … }` needs a world name `W`",
+                world.span,
+            );
+        };
+        let stays_in_world = self.expected_is_world(cx, world_name, expected, span);
+        let lowered = match args {
+            [_, lam] => {
+                let always = Self::call_unary(
+                    Expr { kind: ExprKind::Var(format!("{world_name}::always")), span: world.span },
+                    lam.clone(),
+                    span,
+                );
+                if stays_in_world {
+                    always
+                } else {
+                    Self::call_unary(
+                        Expr {
+                            kind: ExprKind::Var(format!("{world_name}::extract")),
+                            span: world.span,
+                        },
+                        always,
+                        span,
+                    )
+                }
+            }
+            [_, combined, lam] => {
+                let callee = if stays_in_world {
+                    format!("{world_name}::map")
+                } else {
+                    format!("{world_name}::extract_with")
+                };
+                Self::call_args(
+                    Expr { kind: ExprKind::Var(callee), span: world.span },
+                    vec![combined.clone(), lam.clone()],
+                    span,
+                )
+            }
+            _ => return crate::err("`within … for` expects a world and a block", span),
+        };
+        self.elab_check(cx, &lowered, expected, lvl)
+    }
+
+    /// Elaborate `within W for x { body }` in inference position: produces `W(Q)`.
+    pub(crate) fn elab_within_for_infer(
+        &self,
+        cx: &Cx,
+        args: &[Expr],
+        span: heather_syntax::Span,
+    ) -> crate::R<(
+        heather_kernel::term::Term,
+        heather_kernel::term::Type,
+        heather_kernel::level::Level,
+    )> {
+        let Some(world) = args.first() else {
+            return crate::err("`within … for` expects a world and a block", span);
+        };
+        let ExprKind::Var(world_name) = &world.kind else {
+            return crate::err(
+                "a pointwise `within W for x { … }` needs a world name `W`",
+                world.span,
+            );
+        };
+        let lowered = match args {
+            [_, lam] => Self::call_unary(
+                Expr { kind: ExprKind::Var(format!("{world_name}::always")), span: world.span },
+                lam.clone(),
+                span,
+            ),
+            [_, combined, lam] => Self::call_args(
+                Expr { kind: ExprKind::Var(format!("{world_name}::map")), span: world.span },
+                vec![combined.clone(), lam.clone()],
+                span,
+            ),
+            _ => return crate::err("`within … for` expects a world and a block", span),
+        };
+        self.elab_infer(cx, &lowered)
+    }
+
+    /// Elaborate anonymous `suffices P by justify; <rest>`
+    /// (issues/block-suffices-statement.md). Checks `<rest>` at `P`, then tries
+    /// `justify` either at `expected` with an opaque local `__suffices : P` in
+    /// scope (for tactics such as `omega`/`linarith`) or as a function
+    /// `P → expected` applied to `<rest>`.
+    pub(crate) fn elab_suffices(
+        &self,
+        cx: &Cx,
+        args: &[Expr],
+        expected: &heather_kernel::term::Type,
+        lvl: &heather_kernel::level::Level,
+        span: heather_syntax::Span,
+    ) -> crate::R<heather_kernel::term::Term> {
+        use heather_kernel::level::Level;
+        use heather_kernel::rc::Rc;
+        use heather_kernel::term::{Term, Type};
+
+        let [prop_expr, justify, rest] = args else {
+            return crate::err("internal `suffices` form has the wrong arity", span);
+        };
+        let ExprKind::TyLit(prop_ty) = &prop_expr.kind else {
+            return crate::err("internal `suffices` form expects a type", prop_expr.span);
+        };
+        let (p_ty, p_lvl) = self.elab_ty(cx, prop_ty)?;
+        let p_term = self.elab_check(cx, rest, &p_ty, &p_lvl)?;
+
+        let mut inner_cx = cx.clone();
+        inner_cx.push("__suffices".to_string(), p_ty.clone(), p_lvl.clone());
+        let expected_in = expected.shift_local(1);
+
+        let checks_at = |target_cx: &Cx, term: &Term, goal: &Type, goal_lvl: &Level| -> bool {
+            let psi = self.goal_psi();
+            crate::stats::time_kernel(|| {
+                heather_kernel::typing::check_term(
+                    &psi,
+                    0,
+                    heather_kernel::layer::Layer::Code,
+                    &target_cx.gamma,
+                    term,
+                    goal,
+                    goal_lvl,
+                    self.policy.fuel,
+                )
+                .is_ok()
+            })
+        };
+
+        let direct = self.probe_unless(|| {
+            match self.elab_check(&inner_cx, justify, &expected_in, lvl) {
+                Ok(t) if checks_at(&inner_cx, &t, &expected_in, lvl) => (Ok(Some(t)), true),
+                Ok(_) => (Ok(None), false),
+                Err(e) => (Err(e), false),
+            }
+        });
+        if let Ok(Some(j_term)) = direct {
+            let dom_ann = Rc::new(self.annotation_type(cx, &p_ty, 0));
+            let cod_ann = Rc::new(expected_in);
+            return Ok(Term::App {
+                fun: Rc::new(Term::Lam {
+                    dom_level: p_lvl.clone(),
+                    cod_level: lvl.clone(),
+                    dom: Rc::clone(&dom_ann),
+                    body: Rc::new(j_term),
+                }),
+                dom_level: p_lvl,
+                cod_level: lvl.clone(),
+                dom: dom_ann,
+                cod: cod_ann,
+                arg: Rc::new(p_term),
+            });
+        }
+
+        let fn_dom = Rc::new(self.annotation_type(cx, &p_ty, 0));
+        let fn_cod = Rc::new(expected.shift_local(1));
+        let fn_ty = Type::Pi {
+            dom_level: p_lvl.clone(),
+            cod_level: lvl.clone(),
+            dom: Rc::clone(&fn_dom),
+            cod: Rc::clone(&fn_cod),
+        };
+        let fn_lvl = Level::max(p_lvl.clone(), lvl.clone());
+        let as_fn = self.probe_unless(|| {
+            match self.elab_check(cx, justify, &fn_ty, &fn_lvl) {
+                Ok(t) if checks_at(cx, &t, &fn_ty, &fn_lvl) => (Ok(Some(t)), true),
+                Ok(_) => (Ok(None), false),
+                Err(e) => (Err(e), false),
+            }
+        });
+        if let Ok(Some(f_term)) = as_fn {
+            return Ok(Term::App {
+                fun: Rc::new(f_term),
+                dom_level: p_lvl,
+                cod_level: lvl.clone(),
+                dom: fn_dom,
+                cod: fn_cod,
+                arg: Rc::new(p_term),
+            });
+        }
+        // Neither reading checked: re-run the matching one unprobed so its
+        // diagnostic or deferred checking note reaches the user.
+        let is_fn = self.probe(|| {
+            self.elab_infer(cx, justify)
+                .ok()
+                .is_some_and(|(_, t, _)| matches!(&*crate::inductive::decoded(&t), Type::Pi { .. }))
+        });
+        if is_fn {
+            let f_term = self.elab_check(cx, justify, &fn_ty, &fn_lvl)?;
+            Ok(Term::App {
+                fun: Rc::new(f_term),
+                dom_level: p_lvl,
+                cod_level: lvl.clone(),
+                dom: fn_dom,
+                cod: fn_cod,
+                arg: Rc::new(p_term),
+            })
+        } else {
+            let j_term = self.elab_check(&inner_cx, justify, &expected_in, lvl)?;
+            let dom_ann = Rc::new(self.annotation_type(cx, &p_ty, 0));
+            let cod_ann = Rc::new(expected_in);
+            Ok(Term::App {
+                fun: Rc::new(Term::Lam {
+                    dom_level: p_lvl.clone(),
+                    cod_level: lvl.clone(),
+                    dom: Rc::clone(&dom_ann),
+                    body: Rc::new(j_term),
+                }),
+                dom_level: p_lvl,
+                cod_level: lvl.clone(),
+                dom: dom_ann,
+                cod: cod_ann,
+                arg: Rc::new(p_term),
+            })
+        }
+    }
 }

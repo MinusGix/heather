@@ -1,0 +1,402 @@
+// Probes of scoped proof worlds (`within W { … }` and `within W for x { … }`,
+// docs/language/proof-worlds-design.md, issues/proof-worlds.md):
+// constructive double negation (`Dne`), propositional truncation (`Trunc`),
+// monadic worlds (`Option` and custom exit functions), and pointwise filters
+// (`Eventually` over `Directed`), tested across literal, neutral, open-type,
+// checking/inference, nested-world, and negative-control axes.
+// Tests, not library: nothing outside lib/_tests imports this module.
+
+import logic;
+import bool;
+import nat;
+import option;
+import pair;
+import omega;
+import world;
+import creal;
+
+// ---------------------------------------------------------------------------
+// 1. Constructive classicality: `within Dne { … }` (zero axioms).
+
+// Excluded middle inside `Dne` proving a negated goal (open `P`, `Q`).
+theorem dne_pierce_not<P, Q>(f: P → ¬Q, g: ¬P → ¬Q): ¬Q {
+    within Dne {
+        let c <- Dne::em(P);
+        match c {
+            Inl(hp) => f(hp),
+            Inr(hnp) => g(hnp),
+        }
+    }
+}
+
+// Nested `let <-` inside a `match` arm, proving a conjunction of stable goals.
+theorem dne_nested_split<P, Q, R>(h1: P → Q → ¬R, h2: P → ¬Q → ¬R, h3: ¬P → ¬R): ¬R ∧ ¬R {
+    within Dne {
+        let c <- Dne::em(P);
+        match c {
+            Inl(hp) => {
+                let d <- Dne::em(Q);
+                match d {
+                    Inl(hq) => And(h1(hp, hq), h1(hp, hq)),
+                    Inr(hnq) => And(h2(hp, hnq), h2(hp, hnq)),
+                }
+            },
+            Inr(hnp) => And(h3(hnp), h3(hnp)),
+        }
+    }
+}
+
+// Returning `Dne<P>` directly when the expected type is already `Dne`: no exit.
+theorem dne_stay_inside<P, Q>(f: P → Q, g: ¬P → Q): Dne<Q> {
+    within Dne {
+        let c <- Dne::em(P);
+        match c {
+            Inl(hp) => f(hp),
+            Inr(hnp) => g(hnp),
+        }
+    }
+}
+
+// Tail `(<- m)` passes an inner `Dne` computation through directly.
+theorem dne_tail_bind<P>(f: ¬P → False): ¬¬P {
+    let m: Dne<P> = within Dne { <- Dne::by_contradiction(f) };
+    m.run
+}
+
+// Exiting `Dne` at a `Nat::Le` goal (literal and neutral).
+theorem dne_nat_le_literal(): 2 <= 5 {
+    within Dne {
+        let c <- Dne::em(2 = 5);
+        match c {
+            Inl(_) => omega,
+            Inr(_) => omega,
+        }
+    }
+}
+
+theorem dne_nat_le_neutral(a, b: Nat, h: ¬(b < a)): a <= b {
+    within Dne {
+        let c <- Dne::em(a <= b);
+        match c {
+            Inl(ok) => ok,
+            Inr(_) => false_elim(h(omega)),
+        }
+    }
+}
+
+// Exiting `Dne` at any `Decide` goal through `Dne::exit_dec`.
+theorem dne_decidable_eq(a, b: Nat, h: ¬(a ≠ b)): a = b {
+    within Dne::exit_dec {
+        let c <- Dne::em(a = b);
+        match c {
+            Inl(eq) => eq,
+            Inr(neq) => false_elim(h(neq)),
+        }
+    }
+}
+
+// Real-analysis example: `CReal::Le(x, y)` is `¬(y < x)`, so `Stable` resolves
+// automatically and classical `if` works on `CReal` with zero axioms.
+theorem creal_le_via_dne(x, y: CReal, h1: x < y → x <= y, h2: ¬(x < y) → x <= y): x <= y {
+    within Dne {
+        if lt: x < y { h1(lt) } else { h2(lt) }
+    }
+}
+
+// Classical `if` without an evidence binder, and chained `else if` inside `within Dne`.
+theorem creal_dne_if_unlabelled(
+    x, y: CReal,
+    h: x <= y): x <= y
+{
+    within Dne {
+        if x < y { h } else { h }
+    }
+}
+
+theorem creal_dne_else_if(
+    x, y: CReal,
+    h1: x < y → x <= y,
+    h2: y < x → x <= y,
+    h3: ¬(x < y) → ¬(y < x) → x <= y): x <= y
+{
+    within Dne {
+        if lt: x < y {
+            h1(lt)
+        } else if gt: y < x {
+            h2(gt)
+        } else {
+            h3(lt, gt)
+        }
+    }
+}
+
+// Decidable `if` inside `within Dne` still uses `Decide` first.
+theorem dne_decidable_if(a, b: Nat): a <= b ∨ b <= a {
+    within Dne::exit_dec {
+        if h: a <= b {
+            Inl(h)
+        } else {
+            Inr(omega)
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 2. Propositional truncation (`Squash` directly, and `Trunc` wrapper).
+
+theorem squash_direct_absurd<A>(q: ∥False∥): A {
+    false_elim(within Squash {
+        let f <- q;
+        f
+    })
+}
+
+theorem squash_direct_recover_dec(n: Nat, q: ∥0 < n∥): 0 < n {
+    within Squash::recover {
+        let h <- q;
+        h
+    }
+}
+
+theorem squash_direct_stays_in_world<A, B>(q: ∥A∥, f: A → B): ∥B∥ {
+    within Squash {
+        let a <- q;
+        f(a)
+    }
+}
+
+theorem trunc_absurd<A>(q: ∥False∥): A {
+    false_elim(within Trunc {
+        let f <- Trunc::of(q);
+        f
+    })
+}
+
+theorem trunc_recover_dec(n: Nat, q: ∥0 < n∥): 0 < n {
+    within Trunc::exit_dec {
+        let h <- Trunc::of(q);
+        h
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 3. Monadic worlds (`Option`) and custom user exit functions.
+
+fn add_opt_within(x, y: Option<Nat>) → Option<Nat> {
+    within Option {
+        let a <- x;
+        let b <- y;
+        a + b
+    }
+}
+
+theorem add_opt_within_literal(): add_opt_within(Some(2), Some(3)) = Some(5) { refl }
+theorem add_opt_within_none(y: Option<Nat>): add_opt_within(None, y) = None { refl }
+theorem add_opt_within_unfolds(x, y: Option<Nat>):
+    add_opt_within(x, y) = x.and_then(λ a => y.and_then(λ b => Some(a + b))) { refl }
+
+fn or_zero(o: Option<Nat>) → Nat { o.unwrap_or(0) }
+
+fn add_or_zero(x, y: Option<Nat>) → Nat {
+    within or_zero {
+        let a <- x;
+        let b <- y;
+        a + b
+    }
+}
+
+theorem add_or_zero_some(): add_or_zero(Some(4), Some(5)) = 9 { refl }
+theorem add_or_zero_none(y: Option<Nat>): add_or_zero(None, y) = 0 { refl }
+
+// Inference position on a custom exit function.
+fn add_or_zero_inferred_val() → Nat {
+    let r = within or_zero {
+        let a <- Some(3);
+        let b <- Some(4);
+        a + b
+    };
+    r
+}
+theorem add_or_zero_inferred(): add_or_zero_inferred_val() = 7 { refl }
+
+// ---------------------------------------------------------------------------
+// 4. Pointwise filter world: `within Eventually for n { … }`.
+
+// Combining two eventual facts with zero `Nat::max` or `le_trans` plumbing
+// (open predicates `A`, `B`, `C`).
+theorem eventually_combine(
+    A, B, C: Nat → Type,
+    ha: Eventually<Nat>(Nat::Le, A),
+    hb: Eventually<Nat>(Nat::Le, B),
+    step: (n: Nat) → A(n) → B(n) → C(n)):
+    Eventually<Nat>(Nat::Le, C)
+{
+    within Eventually for n {
+        let a <- ha;
+        let b <- hb;
+        step(n, a, b)
+    }
+}
+
+// Outer pure `let` (before `<-`), inner pure `let` (mentioning `n`), and
+// record destructuring `let { left, right } <- e;`.
+theorem eventually_outer_and_inner(
+    p: Eventually<Nat>(Nat::Le, λ n => (1 <= n) ∧ (2 <= n)),
+    q: Eventually<Nat>(Nat::Le, λ n => 3 <= n)):
+    Eventually<Nat>(Nat::Le, λ n => 6 <= n + n)
+{
+    within Eventually for n {
+        let six = 6;
+        let { left, right } <- p;
+        let r <- q;
+        let doubled = n + n;
+        let ok: (six <= doubled) = omega;
+        ok
+    }
+}
+
+// Constant outer goal `G` (does not mention `n`): automatically exits via
+// `Eventually::extract`. Works at open `G` and at literal bounds.
+theorem eventually_extract_open<G>(
+    A, B: Nat → Type,
+    ha: Eventually<Nat>(Nat::Le, A),
+    hb: Eventually<Nat>(Nat::Le, B),
+    finish: (n: Nat) → A(n) → B(n) → G): G
+{
+    within Eventually for n {
+        let a <- ha;
+        let b <- hb;
+        finish(n, a, b)
+    }
+}
+
+theorem eventually_threshold_sum(k1, k2: Nat): ∃ n: Nat, k1 <= n ∧ k2 <= n {
+    within Eventually for n {
+        let h1 <- Eventually::at_least(k1);
+        let h2 <- Eventually::at_least(k2);
+        Exists(n, And(h1, h2))
+    }
+}
+
+// Inference position for `within Eventually for n`: yields `Eventually`.
+theorem eventually_inferred(k1, k2: Nat): ∃ n: Nat, k1 <= n ∧ k2 <= n {
+    let ev = within Eventually for n {
+        let h1 <- Eventually::at_least(k1);
+        let h2 <- Eventually::at_least(k2);
+        And(h1, h2)
+    };
+    Exists(ev.since, ev.holds(ev.since, ev.since.le_refl()))
+}
+
+// Nesting two proof worlds: `within Dne` inside `within Eventually for n`,
+// with an inline λ predicate (`λ n => ¬Q(n)` — no helper alias needed,
+// issues/predicate-lambda-unification.md).
+theorem nested_dne_inside_eventually(
+    P, Q: Nat → Type,
+    hp: Eventually<Nat>(Nat::Le, P),
+    f: (n: Nat) → P(n) → Q(n) → ¬Q(n),
+    g: (n: Nat) → P(n) → ¬Q(n) → ¬Q(n)):
+    Eventually<Nat>(Nat::Le, λ n => ¬Q(n))
+{
+    within Eventually for n {
+        let p <- hp;
+        within Dne {
+            let c <- Dne::em(Q(n));
+            match c {
+                Inl(hq) => f(n, p, hq),
+                Inr(hnq) => g(n, p, hnq),
+            }
+        }
+    }
+}
+
+// Inline λ predicates on BOTH hypothesis and conclusion sides (`¬P(n)` → `¬Q(n)`,
+// nested `¬¬P(n)`, and `AbsLe(xs(n) - l, e)`).
+theorem eventually_inline_neg(
+    P, Q: Nat → Type,
+    hp: Eventually<Nat>(Nat::Le, λ n => ¬P(n)),
+    step: (n: Nat) → ¬P(n) → ¬Q(n)):
+    Eventually<Nat>(Nat::Le, λ n => ¬Q(n))
+{
+    within Eventually for n {
+        let p <- hp;
+        step(n, p)
+    }
+}
+
+theorem eventually_inline_double_neg(
+    P: Nat → Type,
+    hp: Eventually<Nat>(Nat::Le, λ n => ¬¬P(n)),
+    step: (n: Nat) → ¬¬P(n) → ¬¬¬¬P(n)):
+    Eventually<Nat>(Nat::Le, λ n => ¬¬¬¬P(n))
+{
+    within Eventually for n {
+        let p <- hp;
+        step(n, p)
+    }
+}
+
+fn CloseAt(x, e: CReal) → Type { (-e <= x) ∧ (x <= e) }
+
+theorem eventually_inline_close_at(
+    xs: Nat → CReal, l, e: CReal,
+    h: Eventually<Nat>(Nat::Le, λ n => CloseAt(xs(n) - l, e))):
+    Eventually<Nat>(Nat::Le, λ n => CloseAt(xs(n) - l, e))
+{
+    within Eventually for n {
+        let hn <- h;
+        hn
+    }
+}
+
+// `require [h:] P;` inside `within Eventually for n: Nat` synthesizes eventual
+// facts from registered `evidence theorem`s.
+theorem eventually_require_at_least(k1, k2: Nat): ∃ n: Nat, k1 <= n ∧ k2 <= n {
+    within Eventually for n: Nat {
+        require h1: k1 <= n;
+        require h2: k2 <= n;
+        Exists(n, And(h1, h2))
+    }
+}
+
+// Local evidence theorem synthesized by `require`.
+evidence theorem ev_double_ge({k: Nat}):
+    Eventually<Nat>(Nat::Le, λ n => k <= n + n)
+{
+    Eventually(k, λ n hn => omega)
+}
+
+theorem eventually_require_custom(k: Nat): Eventually<Nat>(Nat::Le, λ n => k <= n + n + 1) {
+    within Eventually for n: Nat {
+        require h: k <= n + n;
+        let ok: (k <= n + n + 1) = omega;
+        ok
+    }
+}
+
+// Contextual keyword safety: `require` stays a valid variable/parameter name.
+fn keep_require(require: Nat) → Nat { require + 1 }
+theorem keep_require_ok(): keep_require(4) = 5 { refl }
+
+// ---------------------------------------------------------------------------
+// 5. Contextual keyword safety: `within` stays a valid variable/parameter name.
+
+fn keep_within(within: Nat) → Nat { within + 1 }
+theorem keep_within_ok(): keep_within(4) = 5 { refl }
+
+// ---------------------------------------------------------------------------
+// 6. Negative controls.
+
+// expect-error: Stable
+theorem bad_dne_unstable<P>(h: ¬¬P): P {
+    within Dne {
+        let p <- Dne::of(h);
+        p
+    }
+}
+
+// expect-error: only valid inside a pointwise
+theorem bad_require_outside(n: Nat): n = n {
+    require h: 0 <= n;
+    refl
+}

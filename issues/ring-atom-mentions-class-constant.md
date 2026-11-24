@@ -16,7 +16,7 @@ spelled with the elaborator's placeholder (`#constraint0`, `#op*@0_4`), and
 the atom list is re-read as text:
 
 ```heather
-// lib/std/analysis/real_fn.hthr defines OrderedField::half(e) = e * recip(1 + 1, …)
+// lib/std/analysis/real/real_fn.hthr defines OrderedField::half(e) = e * recip(1 + 1, …)
 section<K: OrderedField(≈, <, <=, +, *)> {
 theorem t(d: K, s: OrderedField::half(K.multiplicative.unit) + OrderedField::half(K.multiplicative.unit) ≈ K.multiplicative.unit):
     OrderedField::half(K.multiplicative.unit) * d + OrderedField::half(K.multiplicative.unit) * d ≈ d
@@ -35,7 +35,7 @@ Three shapes met in the real-functions round:
 The workaround is to generalize the atom away: name it as a lemma
 parameter (`t: K` with `t + t ≈ 1`), or wrap the product in a named
 function (`OrderedField::npow`). Both are in
-`lib/std/analysis/real_fn.hthr` and its tests.
+`lib/std/analysis/real/real_fn.hthr` and its tests.
 
 Shape of a fix: [[ring-field-read-atom-spelling]] already names atoms that
 do not spell by an alias bound to the term (`__ring_a{i}`); the class

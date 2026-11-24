@@ -717,11 +717,26 @@ fn elaborate_record_let(
     span: Span,
 ) -> R<LetValue> {
     let (term, record_type, record_level) = elab.infer_statement_expression(cx, expression)?;
+    let whole = LetValue::new(Rc::new(term), record_type.clone(), record_level);
+    let value = Rc::clone(&whole.term);
+
+    // Positional `let ⟨p1, p2, …⟩ = e;` patterns
+    // (issues/conjunction-facts-read-by-counting.md).
+    if let Some(first) = fields.first()
+        && first.name.starts_with(heather_syntax::POSITIONAL_FIELD_PREFIX)
+    {
+        let pats: Vec<&Pat> = if first.name == heather_syntax::POSITIONAL_EMPTY {
+            Vec::new()
+        } else {
+            fields.iter().map(|f| &f.pat).collect()
+        };
+        bind_positional_fields(elab, cx, &whole.spliced, value, &record_type, &pats, span)?;
+        return Ok(whole);
+    }
+
     let Some(record) = elab.record_for_destructuring(cx, &record_type, span) else {
         return err("a `let { … }` pattern needs a record on the right", span);
     };
-    let whole = LetValue::new(Rc::new(term), record_type.clone(), record_level);
-    let value = Rc::clone(&whole.term);
     let mut selected = vec![None; record.ctors[0].fields.len()];
     for field in fields {
         let Some(index) = record.field_index(&field.name) else {
@@ -745,18 +760,7 @@ fn elaborate_record_let(
     // order is presentation only.
     for (index, field) in selected.into_iter().enumerate() {
         let Some(field) = field else { continue };
-        let Pat::Var {
-            name,
-            span: pattern_span,
-        } = &field.pat
-        else {
-            return err(
-                "a record `let` field is irrefutable: its right side must be a \
-                 name or `_`; use `match` or `if let` for a constructor pattern",
-                field.pat.span(),
-            );
-        };
-        if name == "_" {
+        if matches!(&field.pat, Pat::Var { name, .. } if name == "_") {
             continue;
         }
         let (term, ty, level) = elab.project_destructured_field(
@@ -765,21 +769,174 @@ fn elaborate_record_let(
             &record_type,
             Rc::clone(&value),
             index,
-            *pattern_span,
+            field.pat.span(),
         )?;
-        // A use of any field splices a projection of the whole value.
-        cx.aliases.push(Rc::new(Alias {
-            spliced: Some(Rc::clone(&whole.spliced)),
-            skel: skel_of_ty(&record.ctors[0].fields[index].1),
-            name: name.clone(),
-            depth: cx.names.len(),
-            term: Rc::new(term),
-            ty,
+        bind_record_pat(
+            elab,
+            cx,
+            &whole.spliced,
+            Rc::new(term),
+            &ty,
             level,
-            shifted: Default::default(),
-        }));
+            skel_of_ty(&record.ctors[0].fields[index].1),
+            &field.pat,
+        )?;
     }
     Ok(whole)
+}
+
+/// Bind one irrefutable pattern (`name`, `_`, or nested `⟨…⟩`) against a
+/// projected record field, sharing `whole_spliced` with the root `LetValue`.
+#[allow(clippy::too_many_arguments)]
+fn bind_record_pat(
+    elab: &impl StatementElab,
+    cx: &mut Cx,
+    whole_spliced: &Rc<AtomicBool>,
+    value: Rc<Term>,
+    ty: &Type,
+    level: Level,
+    skel: Option<Rc<Skel>>,
+    pat: &Pat,
+) -> R<()> {
+    match pat {
+        Pat::Var { name, .. } => {
+            if name == "_" {
+                return Ok(());
+            }
+            cx.aliases.push(Rc::new(Alias {
+                spliced: Some(Rc::clone(whole_spliced)),
+                skel,
+                name: name.clone(),
+                depth: cx.names.len(),
+                term: value,
+                ty: ty.clone(),
+                level,
+                shifted: Default::default(),
+            }));
+            Ok(())
+        }
+        Pat::Ctor { name, args, span } if name == heather_syntax::ANON_CTOR_ONLY => {
+            let pats: Vec<&Pat> = args.iter().collect();
+            bind_positional_fields(elab, cx, whole_spliced, value, ty, &pats, *span)
+        }
+        _ => err(
+            "a record `let` field is irrefutable: use a name, `_`, or nested `⟨…⟩`; \
+             use `match` or `if let` for a constructor pattern",
+            pat.span(),
+        ),
+    }
+}
+
+/// Bind positional patterns `pats` against `value : record_type`.
+/// When `pats.len() > n_fields` and `n_fields >= 2`, the final field is peeled
+/// recursively as a right-nested record (`let ⟨a, b, c⟩ = e;` on `A ∧ B ∧ C`
+/// or `∃ x, P(x) ∧ Q(x)`).
+fn bind_positional_fields(
+    elab: &impl StatementElab,
+    cx: &mut Cx,
+    whole_spliced: &Rc<AtomicBool>,
+    value: Rc<Term>,
+    record_type: &Type,
+    pats: &[&Pat],
+    span: Span,
+) -> R<()> {
+    let Some(record) = elab.record_for_destructuring(cx, record_type, span) else {
+        return err("a `let ⟨…⟩` pattern needs a record type on the right", span);
+    };
+    let n_fields = record.ctors[0].fields.len();
+    if pats.len() == n_fields {
+        for (index, pat) in pats.iter().enumerate() {
+            if matches!(pat, Pat::Var { name, .. } if name == "_") {
+                continue;
+            }
+            let (term, ty, level) = elab.project_destructured_field(
+                cx,
+                &record,
+                record_type,
+                Rc::clone(&value),
+                index,
+                pat.span(),
+            )?;
+            bind_record_pat(
+                elab,
+                cx,
+                whole_spliced,
+                Rc::new(term),
+                &ty,
+                level,
+                skel_of_ty(&record.ctors[0].fields[index].1),
+                pat,
+            )?;
+        }
+        return Ok(());
+    }
+    if pats.len() > n_fields && n_fields >= 2 {
+        let last_idx = n_fields - 1;
+        for (index, pat) in pats[..last_idx].iter().enumerate() {
+            if matches!(pat, Pat::Var { name, .. } if name == "_") {
+                continue;
+            }
+            let (term, ty, level) = elab.project_destructured_field(
+                cx,
+                &record,
+                record_type,
+                Rc::clone(&value),
+                index,
+                pat.span(),
+            )?;
+            bind_record_pat(
+                elab,
+                cx,
+                whole_spliced,
+                Rc::new(term),
+                &ty,
+                level,
+                skel_of_ty(&record.ctors[0].fields[index].1),
+                pat,
+            )?;
+        }
+        let tail_pats = &pats[last_idx..];
+        let tail_span = tail_pats[0].span().join(tail_pats[tail_pats.len() - 1].span());
+        let (tail_term, tail_ty, _) = elab.project_destructured_field(
+            cx,
+            &record,
+            record_type,
+            Rc::clone(&value),
+            last_idx,
+            tail_span,
+        )?;
+        if elab.record_for_destructuring(cx, &tail_ty, tail_span).is_none() {
+            return err(
+                format!(
+                    "`{}` has {} fields, not {} (and its last field is not a record that can absorb the remaining {} patterns)",
+                    record.name,
+                    n_fields,
+                    pats.len(),
+                    tail_pats.len()
+                ),
+                span,
+            );
+        }
+        return bind_positional_fields(
+            elab,
+            cx,
+            whole_spliced,
+            Rc::new(tail_term),
+            &tail_ty,
+            tail_pats,
+            tail_span,
+        );
+    }
+    err(
+        format!(
+            "`{}` has {} field{}, but this `let ⟨…⟩` pattern gives {}",
+            record.name,
+            n_fields,
+            if n_fields == 1 { "" } else { "s" },
+            pats.len()
+        ),
+        span,
+    )
 }
 
 #[cfg(test)]

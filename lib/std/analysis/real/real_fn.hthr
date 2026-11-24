@@ -5,7 +5,7 @@
 //
 // Everything is stated once over a section's `K: OrderedField(≈, <, <=, +,
 // *)`, so every theorem reads at `Rat` and at `CReal` alike
-// (lib/_tests/std/analysis/real_fn_tests.hthr). Nothing is decided: there is
+// (lib/_tests/std/analysis/real/real_fn_tests.hthr). Nothing is decided: there is
 // no `abs`, no `min` and no sign test. A bound `|z| <= e` is the predicate
 // `AbsLe(z, e)`; a modulus is data, a positive `δ` produced from a positive
 // `ε`; and where a proof wants the smaller of two moduli it takes a positive
