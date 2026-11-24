@@ -124,7 +124,6 @@ theorem Access::whole_of_halves(s: SpanSet):
 // ---------------------------------------------------------------------------
 // What composes
 
-
 theorem Access::pick_valid(a: Bool): (b: Bool) → (q, r: Share) → q.Valid() → r.Valid() →
     (a.IsTrue() → b.IsTrue() → q.join(r).Valid()) → Access::pick(a, q).join(Access::pick(b, r)).Valid()
 {
