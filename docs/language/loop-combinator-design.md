@@ -654,6 +654,53 @@ two leaves), they are written that way. The pin is then `fixpoint_unique` at `f`
 meaning's (one-pass unfolding by conversion, `FixpointExt` once over
 `Loop::steps` within `Loop::passes()`, by `Loop::steps_stays`).
 
+### 6.7 3g's node: what already exists
+
+Reading `rt_loop.hthr` for the node's proofs: **the pass with `Again` and
+`Done` leaves is already built, as tail mode.** `Tm::tail_sem` is a pass's
+meaning with its calls of itself (`Call(0, ā)`) answered by a continuation
+`again` and every other leaf a value: exactly `Again(ā)` and `Done(e)`.
+`Tm::lower_tail` is that pass's lowering (a leaf that goes round moves `ā`
+to the loop's next ports with the flag 0, one that leaves moves its value
+with the flag 1), and `Tm::tail_sound` its soundness for any `again`: the
+pass relation of §6, proved once. What makes it "tail mode" rather than
+the node is only where it sits: it is a whole function's shape
+(`Fun.shape() = Measured`), and the loop around the pass is justified by
+`Fun::Guarded` (the function's `f::ext` and `f::irrel`) instead of by the
+pin.
+
+So 3g is mostly moving, not building:
+
+1. **The node is a term.** `Tm::Loop(inits, body)`: the state's words are
+   variables `inits`, `body` sees them as its innermost variables, and a
+   leaf of `body` that goes round is a new leaf `Again(ā)` (not `Call(0,
+   …)`, which inside a function names the function). Its meaning is
+   `Loop::steps(Loop::passes(), …)` of the pass `body.tail_sem` with
+   `again` the next state: `Step`'s `Next` on `Again`, `Stop` on `Done`
+   (the state type then carries the answer: `Step<S>` is generalised to
+   `Pass`'s two payloads, `Next(s) | Stop(r)`, as `loop.hthr`'s `Pass`
+   already is). Its lowering is `lower_tail` inside a FunctionIR loop
+   region, as `Tm::lower_iterate` places `Iterate`'s pass; its soundness
+   is `tail_sound` per pass and `Tm::iterate_holds`'s induction on the
+   passes, generalised from a test and a stop to the two leaves.
+2. **A written tail recursion reflects to `Loop(params, body)`**: its body
+   once, a call of itself in tail position an `Again` leaf, so the function
+   is plain (`Fun.shape() = Plain`, no `Measured` shape). Its pin is
+   `fixpoint_unique` at `f`'s step (`f::ext`) and at the meaning's
+   (`Loop::steps` within the measure by `Loop::steps_stays`, its
+   `FixpointExt` once over `tail_sem`).
+3. **`while`** reflects to the same node (`Step::turn`'s test and stop are
+   a `Pass` of two leaves), then `Iterate` goes; then the span language's
+   `FTm::Loop` the same way (its `FTm::Again` leaf exists already).
+4. **3h**: `Fun.shape()`'s `Measured`, `Fun::Guarded`, `rt_loop`'s two
+   loop theorems and the measured `FFun` path are deleted. `lower_tail`
+   and `tail_sound` are not deleted but renamed as the node's pass
+   (`Tm::lower_pass`, `Tm::pass_sound`): tail mode as a *function's* mode
+   is what goes.
+
+The one genuinely new proof is step 1's loop over passes with an answer
+leaf, which `iterate_holds` gives the shape of.
+
 ## 7. Bootstrapping
 
 Minus's fear: a bug that infects the next version. The loop's meaning is
