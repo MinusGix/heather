@@ -1130,10 +1130,44 @@ the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
      meet only at the count's end.
 
    A loop calls other functions of the record, and a function calls a
-   loop, each by the other's theorem. Not taken: a loop that only reads
-   the record, a self-call that is not the end, and a loop whose ending
-   arm stores into the record (the `decreases` companions are not made
-   for that shape, `issues/decreases-no-companions-ending-arm-store.md`).
+   loop, each by the other's theorem. Not taken: a self-call that is not
+   the end, and a loop whose ending arm stores into the record (the
+   `decreases` companions are not made for that shape,
+   `issues/decreases-no-companions-ending-arm-store.md`).
+
+   **A function that only reads the record** (`self t: T`, answering a
+   word) is built, loops included (`Tally::count_up`, `Tally::add_up` in
+   the loop probes; `PortMap::find_at`, a hash table's lookup, in
+   `runtime_ports_tests.hthr`). What it publishes is the writer's
+   statement at its word beside the record as it was:
+   `T::m::runs_held(own, t, length, …, holds) : Agrees(whole, length,
+   HWorld::unchanged(t, T::m(t, …)), T::m::bytes(own, length, …))`, so
+   `.value` is the agreement of the word and `.holds` says the span
+   still holds `t`. Its code is a writer's that stores nothing.
+
+   - *Theory* (`rt_held_loop.hthr`, "A loop that only reads the
+     record"). A reader's step answers a word, so its body is pinned to
+     it read for the value: `FFun::HeldReads`, the body's held meaning
+     with `done` the end's `.value` and the self-call answered by a
+     word, is the step by conversion as a writer's body read whole is.
+     `FFun::reads_guarded` turns that into the writer's equation
+     (`FFun::HeldGuarded`) at `HWorld::unchanged`, once: a body with no
+     store, call, lend or loop node (`FTm::still`, decided by
+     evaluation) ends at the record it began at or goes round on it
+     (`FTm::still_keeps`), and a pass that goes round reads every
+     answer alike at its state, so that state is below the measure
+     (`FFun::falls_value`), where the answer is the function's beside
+     the record. `FFun::counted_held` then applies unchanged.
+   - *Reflector.* A reader's arm that is neither a branch nor its own
+     call is its value beside the record as it was (`rt_held_tail`'s
+     `reads`).
+   - *Generator* (`runtime_held_counted`). The function's equation is
+     opened at its word, with the same binders and the same proof from
+     `ext` and `irrel`, and wrapped by `reads_guarded`.
+
+   Not taken: a reader loop that calls another function of the record
+   (`FTm::still` refuses every call, which a reader's call would not
+   need).
 
    **A call of another function of the record** is built
    (`lib/_tests/native/runtime/runtime_held_call_tests.hthr`). `t.m(x)`
@@ -1164,9 +1198,14 @@ the two leaf theorems say (`issues/runtime-repr-narrow-words.md`).
      (`HWorld::of_record`), and the linker reads there whose tables a
      callee's are.
 
-   A caller's program is its callee's and itself. Not taken yet: a
-   callee that only reads the record, and what the issue lists beside
-   it.
+   A caller's program is its callee's and itself. **A callee that only
+   reads the record** is called as a writer is (probes `Tally::peek`,
+   `Tally::sum_get`, `Tally::set_get`): its code over the span, its word
+   bound where a value reads the call (the reflector's `st.handles`),
+   and the record the span holds left as it was, so it is not among the
+   calls that changed it. Its mark is `Runs` at its word beside the
+   record as it was, which is what its `runs_held` states. Not taken yet:
+   what the issue lists.
 5. Later, each its own issue: padding-preserving `put`; loads and stores
    wider than a byte; the comparisons a known size makes unnecessary.
 
