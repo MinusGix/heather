@@ -1,0 +1,454 @@
+// What the compiled arena is (issues/runtime-arena-in-span.md,
+// docs/native/rung2-spans-design.md §5): theorems about `arena.hthr`'s
+// functions as Heather functions, which their agreements certify the code
+// to be (`T::m::runs_held`), so each holds of the bytes wherever the span
+// holds an arena.
+//
+// The four laws, the line arena's `extend_abs` and `cons_abs` generalised:
+//
+// - `alloc_below`: allocation changes no word of the heap, so none below the
+//   old top: every window allocated before survives every later allocation.
+// - `alloc_fresh`: a window allocated (an answer other than `Full`) is at
+//   the old top and inside the limit and the heap, and the top moves past
+//   it; so it is apart from every window below the old top (`alloc_apart`).
+//   At the limit the answer is `Full` and the arena is as it was
+//   (`alloc_full`).
+// - `store_apart`: a store into a window changes no read of a window apart
+//   from it (both inside the heap).
+// - `grow_abs`: where growing answers 1, the vector holds what it held.
+//
+// With them: `push_in_abs` (a push with room appends), `reset_heap` and
+// `reset_top`, and the copy's invariant (`copies`, by induction on its
+// measure: the copy is a `decreases` loop with step equations and no
+// `induct` principle, being a `mut self` function).
+//
+// Windows are numbers: `(base, count)` at `Nat`, apart when one ends where
+// the other begins or before (`Apart`), decided by `omega` at open windows
+// and by evaluation at closed ones, never inside the compiler. A window
+// copied and used after a reset is the negative control
+// (`lib/_tests/native/runtime/arena_laws_tests.hthr`): it meets the window
+// handed out again, and a store through one is read through the other.
+//
+// Each function is cited by its branch equations (`Arena::alloc::True`, …),
+// its tests decided at the toNat of its words (`le_dec`, `lt_dec`); a sum
+// of words is a sum of numbers where the tests bound it (`small_sum`).
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import vector;
+import algebra;
+import omega;
+import bitvec_nat;
+import bitvec_omega;
+import runtime_data;
+import arena;
+
+// ---------------------------------------------------------------------------
+// The heap's words, windows as numbers
+
+// Word `j` of the heap (0 past it).
+fn Arena::word(self a: Arena, j: Nat) → u64 { vector_get(a.heap, j, BitVec::ofNat(0)) }
+
+// The windows `(b, c)` and `(b2, c2)` share no word.
+fn Arena::Apart(b, c, b2, c2: Nat) → Type { Or<b + c <= b2, b2 + c2 <= b> }
+
+// The `n` words from `base`.
+fn Arena::slice(self a: Arena, base, n: Nat) → List<u64> { match n { Zero => Nil, Succ(k) => Cons(a.word(base), a.slice(base + 1, k)) } }
+
+theorem Arena::slice_ext(a, b: Arena, n: Nat): (s, t: Nat) → ((k: Nat) → k < n → a.word(s + k) = b.word(t + k)) → a.slice(s, n) = b.slice(t, n) {
+    match n {
+        Zero => λ s t same => refl,
+        Succ(m, ih) => λ s t same => {
+            let head: (a.word(s) = b.word(t)) = same(0, omega);
+            let tail: (a.slice(s + 1, m) = b.slice(t + 1, m)) = ih(s + 1, t + 1, λ k lt => {
+                let e: (a.word(s + (k + 1)) = b.word(t + (k + 1))) = same(k + 1, omega);
+                let l: (s + 1 + k = s + (k + 1)) = omega;
+                let r: (t + (k + 1) = t + 1 + k) = omega;
+                trans(cong_fn(λ (q: Nat) => a.word(q), l), trans(e, cong_fn(λ (q: Nat) => b.word(q), r)))
+            });
+            trans(cong_fn(λ (x: u64) => Cons(x, a.slice(s + 1, m)), head), cong_fn(λ (l: List<u64>) => Cons(b.word(t), l), tail))
+        },
+    }
+}
+
+// The tests the functions make, decided at their words' numbers.
+theorem Arena::le_dec(x, y: u64): Or<x <= y, ¬(x <= y)> { Nat::le_dec(x.toNat(), y.toNat()) }
+
+theorem Arena::and_dec<P, Q>(p: Or<P, ¬P>, q: Or<Q, ¬Q>): Or<And<P, Q>, ¬And<P, Q>> {
+    match p {
+        Inl(x) => match q { Inl(y) => Inl(And(x, y)), Inr(ny) => Inr(λ pq => ny(pq.right)) },
+        Inr(nx) => Inr(λ pq => nx(pq.left)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Allocation
+
+// What `alloc` tests.
+fn Arena::Fits(a: Arena, size: u64) → Type { And<a.limit <= 16, And<a.top <= a.limit, And<size <= a.limit, a.top + size <= a.limit>>> }
+
+theorem Arena::fits_dec(a: Arena, size: u64): Or<Arena::Fits(a, size), ¬Arena::Fits(a, size)> {
+    Arena::and_dec(Arena::le_dec(a.limit, 16), Arena::and_dec(Arena::le_dec(a.top, a.limit), Arena::and_dec(Arena::le_dec(size, a.limit), Arena::le_dec(a.top + size, a.limit))))
+}
+
+// `alloc_below`: allocation changes no word of the heap.
+theorem Arena::alloc_below(a: Arena, size: u64): Arena::alloc(a, size).after.heap = a.heap {
+    match Arena::fits_dec(a, size) {
+        Inl(f) => cong_fn(λ (r: Mutated<Arena, u64>) => r.after.heap, Arena::alloc::True(a, size, f)),
+        Inr(nf) => cong_fn(λ (r: Mutated<Arena, u64>) => r.after.heap, Arena::alloc::False(a, size, nf)),
+    }
+}
+
+theorem Arena::fits_sum(a: Arena, size: u64, f: Arena::Fits(a, size)): (a.top + size).toNat() = a.top.toNat() + size.toNat() {
+    BitVec::toNat_add_of_lt(64, a.top, size, omega(f.left, f.right.left, f.right.right.left))
+}
+
+theorem Arena::lt_dec(x, y: u64): Or<x < y, ¬(x < y)> {
+    match Nat::le_dec(y.toNat(), x.toNat()) {
+        Inl(ge) => Inr(λ lt => { let l: (x.toNat() < y.toNat()) = lt; false_elim(omega(ge, l)) }),
+        Inr(nge) => { let l: (x.toNat() < y.toNat()) = omega(nge); Inl(l) },
+    }
+}
+
+fn ARENA_FULL() → u64 { BitVec::ofNat(18446744073709551615) }
+
+// `alloc_fresh`: an allocation that did not answer `Full` answered a window
+// at the old top, inside the limit and the heap, and moved the top past it.
+theorem Arena::alloc_fresh(a: Arena, size: u64, ok: ¬(Arena::alloc(a, size).value = ARENA_FULL())):
+    And<Arena::alloc(a, size).value = a.top, And<a.top.toNat() + size.toNat() <= a.limit.toNat(), And<a.limit.toNat() <= 16,
+        Arena::alloc(a, size).after.top.toNat() = a.top.toNat() + size.toNat()>>>
+{
+    match Arena::fits_dec(a, size) {
+        Inl(f) => {
+            let eq = Arena::alloc::True(a, size, f);
+            let sum = Arena::fits_sum(a, size, f);
+            let lim: (a.limit.toNat() <= 16) = f.left;
+            let below: ((a.top + size).toNat() <= a.limit.toNat()) = f.right.right.right;
+            And(cong_fn(λ (r: Mutated<Arena, u64>) => r.value, eq), And(omega(sum, below), And(lim, trans(cong_fn(λ (r: Mutated<Arena, u64>) => r.after.top.toNat(), eq), sum))))
+        },
+        Inr(nf) => false_elim(ok(cong_fn(λ (r: Mutated<Arena, u64>) => r.value, Arena::alloc::False(a, size, nf)))),
+    }
+}
+
+// So a window allocated is apart from every window below the old top.
+theorem Arena::alloc_apart(a: Arena, size: u64, ok: ¬(Arena::alloc(a, size).value = ARENA_FULL()), b, c: Nat, older: b + c <= a.top.toNat()):
+    Arena::Apart(b, c, Arena::alloc(a, size).value.toNat(), size.toNat())
+{
+    let base: (Arena::alloc(a, size).value.toNat() = a.top.toNat()) = cong_fn(λ (x: u64) => x.toNat(), Arena::alloc_fresh(a, size, ok).left);
+    Inl(omega(base, older))
+}
+
+// At the limit, the answer is `Full` and the arena is as it was.
+theorem Arena::alloc_full(a: Arena, size: u64, over: a.limit.toNat() < a.top.toNat() + size.toNat()): Arena::alloc(a, size) = Mutated(a, ARENA_FULL()) {
+    Arena::alloc::False(a, size, λ f => {
+        let below: ((a.top + size).toNat() <= a.limit.toNat()) = f.right.right.right;
+        false_elim(omega(Arena::fits_sum(a, size, f), below, over))
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Reset
+
+theorem Arena::reset_heap(a: Arena, mark: u64): Arena::reset(a, mark).after.heap = a.heap {
+    match Arena::le_dec(mark, a.top) {
+        Inl(ok) => cong_fn(λ (r: Mutated<Arena, u64>) => r.after.heap, Arena::reset::True(a, mark, ok)),
+        Inr(no) => cong_fn(λ (r: Mutated<Arena, u64>) => r.after.heap, Arena::reset::False(a, mark, no)),
+    }
+}
+
+theorem Arena::reset_top(a: Arena, mark: u64, ok: mark.toNat() <= a.top.toNat()): Arena::reset(a, mark).after.top = mark {
+    cong_fn(λ (r: Mutated<Arena, u64>) => r.after.top, Arena::reset::True(a, mark, ok))
+}
+
+// ---------------------------------------------------------------------------
+// Windows: a store into one leaves every window apart from it
+
+theorem Arena::word_put_same(x: Arena, p: Nat, v: u64, inside: p < 16): Arena(x.top, x.limit, vector_update(x.heap, p, v)).word(p) = v {
+    vector_get_update_same(16, x.heap, p, v, BitVec::ofNat(0), inside)
+}
+
+theorem Arena::word_put_other(x: Arena, p: Nat, v: u64, q: Nat, other: ¬(q = p)): Arena(x.top, x.limit, vector_update(x.heap, p, v)).word(q) = x.word(q) {
+    vector_get_update_other(16, x.heap, p, q, v, BitVec::ofNat(0), other)
+}
+
+theorem Arena::sum_inside(b, k: u64, bound: Nat, inside: b.toNat() + k.toNat() <= bound, small: bound <= 16): (b + k).toNat() = b.toNat() + k.toNat() {
+    BitVec::toNat_add_of_lt(64, b, k, omega(inside, small))
+}
+
+// A store changes no word outside its window.
+theorem Arena::store_word(a: Arena, b, c, i, x: u64, j: Nat, inW: b.toNat() + c.toNat() <= 16, outside: Or<j < b.toNat(), b.toNat() + c.toNat() <= j>):
+    Arena::store(a, b, c, i, x).after.word(j) = a.word(j)
+{
+    match Arena::lt_dec(i, c) {
+        Inl(lt) => match Arena::lt_dec(b + i, 16) {
+            Inl(inside) => {
+                let li: (i.toNat() < c.toNat()) = lt;
+                let sum = Arena::sum_inside(b, i, 16, omega(li, inW), omega);
+                let other: (¬(j = (b + i).toNat())) = λ e => match outside { Inl(lo) => omega(e, sum, lo), Inr(hi) => omega(e, sum, hi, li) };
+                trans(cong_fn(λ (r: Mutated<Arena, u64>) => r.after.word(j), Arena::store::True::True(a, b, c, i, x, lt, inside)),
+                    Arena::word_put_other(a, (b + i).toNat(), x, j, other))
+            },
+            Inr(no) => cong_fn(λ (r: Mutated<Arena, u64>) => r.after.word(j), Arena::store::True::False(a, b, c, i, x, lt, no)),
+        },
+        Inr(no) => cong_fn(λ (r: Mutated<Arena, u64>) => r.after.word(j), Arena::store::False(a, b, c, i, x, no)),
+    }
+}
+
+// Two arenas that agree on a window's words read it alike.
+theorem Arena::read_same(y, z: Arena, b, c, k: u64, inV: b.toNat() + c.toNat() <= 16,
+    same: (j: Nat) → b.toNat() <= j → j < b.toNat() + c.toNat() → y.word(j) = z.word(j)):
+    Arena::read(y, b, c, k).value = Arena::read(z, b, c, k).value
+{
+    match Arena::lt_dec(k, c) {
+        Inl(lt) => match Arena::lt_dec(b + k, 16) {
+            Inl(inside) => {
+                let lk: (k.toNat() < c.toNat()) = lt;
+                let sum = Arena::sum_inside(b, k, 16, omega(lk, inV), omega);
+                trans(cong_fn(λ (r: Mutated<Arena, u64>) => r.value, Arena::read::True::True(y, b, c, k, lt, inside)),
+                    trans(same((b + k).toNat(), omega(sum), omega(sum, lk)),
+                        sym(cong_fn(λ (r: Mutated<Arena, u64>) => r.value, Arena::read::True::True(z, b, c, k, lt, inside)))))
+            },
+            Inr(no) => trans(cong_fn(λ (r: Mutated<Arena, u64>) => r.value, Arena::read::True::False(y, b, c, k, lt, no)),
+                sym(cong_fn(λ (r: Mutated<Arena, u64>) => r.value, Arena::read::True::False(z, b, c, k, lt, no)))),
+        },
+        Inr(no) => trans(cong_fn(λ (r: Mutated<Arena, u64>) => r.value, Arena::read::False(y, b, c, k, no)),
+            sym(cong_fn(λ (r: Mutated<Arena, u64>) => r.value, Arena::read::False(z, b, c, k, no)))),
+    }
+}
+
+// `store_apart`: a store into window `W` leaves every read of a window `V`
+// apart from it.
+theorem Arena::store_apart(a: Arena, b, c, i, x, b2, c2, k: u64, inW: b.toNat() + c.toNat() <= 16, inV: b2.toNat() + c2.toNat() <= 16,
+    apart: Arena::Apart(b.toNat(), c.toNat(), b2.toNat(), c2.toNat())):
+    Arena::read(Arena::store(a, b, c, i, x).after, b2, c2, k).value = Arena::read(a, b2, c2, k).value
+{
+    Arena::read_same(Arena::store(a, b, c, i, x).after, a, b2, c2, k, inV, λ j lo hi =>
+        Arena::store_word(a, b, c, i, x, j, inW, match apart { Inl(before) => Inr(omega(before, lo)), Inr(after) => Inl(omega(after, hi)) }))
+}
+
+// ---------------------------------------------------------------------------
+theorem Arena::zero_not_one(e: BitVec::ofNat(0, n := 64) = BitVec::ofNat(1)): False { bv_omega }
+
+// The copy
+
+theorem Arena::small_sum(b, k: u64, inside: b.toNat() + k.toNat() <= 64): (b + k).toNat() = b.toNat() + k.toNat() {
+    BitVec::toNat_add_of_lt(64, b, k, omega(inside))
+}
+
+// What a copy from element `i` on answers in `r`: 1; the top and the limit
+// as they were; the window at `to` holding `from`'s words from `i` on; and
+// every word outside `to + i .. to + n` as it was.
+record CopiesTo(x: Arena, from, to, i, n: u64, r: Mutated<Arena, u64>) {
+    value: r.value = 1,
+    top: r.after.top = x.top,
+    limit: r.after.limit = x.limit,
+    copied: (k: Nat) → i.toNat() <= k → k < n.toNat() → r.after.word(to.toNat() + k) = x.word(from.toNat() + k),
+    kept: (j: Nat) → Or<j < to.toNat() + i.toNat(), to.toNat() + n.toNat() <= j> → r.after.word(j) = x.word(j),
+}
+
+// The arena after one pass of the copy.
+fn Arena::moved(self x: Arena, from, to, i: u64) → Arena {
+    Arena(x.top, x.limit, vector_update(x.heap, (to + i).toNat(), vector_get(x.heap, (from + i).toNat(), BitVec::ofNat(0))))
+}
+
+theorem Arena::copies_done(x: Arena, from, to, i, n: u64, done: i.toNat() = n.toNat()): CopiesTo(x, from, to, i, n, Arena::copy_at(x, from, to, i, n)) {
+    let no: ¬(i < n) = λ lt => { let l: (i.toNat() < n.toNat()) = lt; omega(l, done) };
+    j(sym(Arena::copy_at::False(x, from, to, i, n, no)), λ r _ => CopiesTo(x, from, to, i, n, r),
+        CopiesTo(refl, refl, refl, λ k lo hi => false_elim(omega(lo, hi, done)), λ q _ => refl))
+}
+
+theorem Arena::copies_step(x: Arena, from, to, i, n: u64, fin: from.toNat() + n.toNat() <= 16, tin: to.toNat() + n.toNat() <= 16,
+    apart: Arena::Apart(from.toNat(), n.toNat(), to.toNat(), n.toNat()), li: i.toNat() < n.toNat(),
+    ih: CopiesTo(x.moved(from, to, i), from, to, i + 1, n, Arena::copy_at(x.moved(from, to, i), from, to, i + 1, n))):
+    CopiesTo(x, from, to, i, n, Arena::copy_at(x, from, to, i, n))
+{
+    let si = Arena::small_sum(from, i, omega(fin, li));
+    let ti = Arena::small_sum(to, i, omega(tin, li));
+    let i1: ((i + 1).toNat() = i.toNat() + 1) = bv_omega;
+    let lt: (i < n) = li;
+    let sb: ((from + i).toNat() < 16) = omega(si, fin, li);
+    let tb: ((to + i).toNat() < 16) = omega(ti, tin, li);
+    let eq = Arena::copy_at::True::True::True(x, from, to, i, n, lt, sb, tb);
+    let y = x.moved(from, to, i);
+    let r = Arena::copy_at(y, from, to, i + 1, n);
+    let at_new: (y.word((to + i).toNat()) = x.word((from + i).toNat())) = Arena::word_put_same(x, (to + i).toNat(), x.word((from + i).toNat()), tb);
+    let away: ((q: Nat) → ¬(q = (to + i).toNat()) → y.word(q) = x.word(q)) = λ q ne => Arena::word_put_other(x, (to + i).toNat(), x.word((from + i).toNat()), q, ne);
+    let copied: ((k: Nat) → i.toNat() <= k → k < n.toNat() → r.after.word(to.toNat() + k) = x.word(from.toNat() + k)) = λ k lo hi => match Nat::eq_dec(k, i.toNat()) {
+        Inl(here) => {
+            let left: (r.after.word(to.toNat() + k) = y.word(to.toNat() + k)) = ih.kept(to.toNat() + k, Inl(omega(here, i1)));
+            let pos: (to.toNat() + k = (to + i).toNat()) = omega(here, ti);
+            let src: ((from + i).toNat() = from.toNat() + k) = omega(here, si);
+            trans(left, trans(cong_fn(λ (q: Nat) => y.word(q), pos), trans(at_new, cong_fn(λ (q: Nat) => x.word(q), src))))
+        },
+        Inr(later) => {
+            let left: (r.after.word(to.toNat() + k) = y.word(from.toNat() + k)) = ih.copied(k, omega(i1, lo, later), hi);
+            let ne: ¬(from.toNat() + k = (to + i).toNat()) = λ e => match apart { Inl(b) => omega(e, ti, b, hi), Inr(b) => omega(e, ti, b, li) };
+            trans(left, away(from.toNat() + k, ne))
+        },
+    };
+    let kept: ((q: Nat) → Or<q < to.toNat() + i.toNat(), to.toNat() + n.toNat() <= q> → r.after.word(q) = x.word(q)) = λ q out => {
+        let left: (r.after.word(q) = y.word(q)) = ih.kept(q, match out { Inl(b) => Inl(omega(b, i1)), Inr(b) => Inr(b) });
+        let ne: ¬(q = (to + i).toNat()) = λ e => match out { Inl(b) => omega(e, ti, b), Inr(b) => omega(e, ti, b, li) };
+        trans(left, away(q, ne))
+    };
+    j(sym(eq), λ s _ => CopiesTo(x, from, to, i, n, s), CopiesTo(ih.value, ih.top, ih.limit, copied, kept))
+}
+
+// The copy, from element `i`, of two windows apart inside the heap.
+theorem Arena::copies(from, to, n: u64, fin: from.toNat() + n.toNat() <= 16, tin: to.toNat() + n.toNat() <= 16,
+    apart: Arena::Apart(from.toNat(), n.toNat(), to.toNat(), n.toNat()), m: Nat):
+    (x: Arena) → (i: u64) → i.toNat() <= n.toNat() → n.toNat() - i.toNat() = m → CopiesTo(x, from, to, i, n, Arena::copy_at(x, from, to, i, n))
+{
+    match m {
+        Zero => λ x i le gap => Arena::copies_done(x, from, to, i, n, omega(le, gap)),
+        Succ(_, ih) => λ x i le gap => {
+            let li: (i.toNat() < n.toNat()) = omega(gap);
+            let i1: ((i + 1).toNat() = i.toNat() + 1) = bv_omega;
+            Arena::copies_step(x, from, to, i, n, fin, tin, apart, li,
+                ih(x.moved(from, to, i), i + 1, omega(i1, li), omega(i1, gap, li)))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A vector: a header of three words at `h` (its window's base, its capacity
+// and its length) and the window
+
+fn Arena::cell(self a: Arena, i: u64) → u64 { vector_get(a.heap, i.toNat(), BitVec::ofNat(0)) }
+
+// What the vector at `h` holds: the first `len` words of its window.
+fn Arena::vec(self a: Arena, h: u64) → List<u64> { a.slice(a.cell(h).toNat(), a.cell(h + 2).toNat()) }
+
+// A vector well placed: its header and its window below the top and apart,
+// its length within its capacity, the top within the limit and the heap.
+record VecInv(a: Arena, h: u64) {
+    header: h.toNat() + 3 <= a.top.toNat(),
+    window: a.cell(h).toNat() + a.cell(h + 1).toNat() <= a.top.toNat(),
+    len: a.cell(h + 2).toNat() <= a.cell(h + 1).toNat(),
+    apart: Arena::Apart(h.toNat(), 3, a.cell(h).toNat(), a.cell(h + 1).toNat()),
+    top: a.top.toNat() <= a.limit.toNat(),
+    limit: a.limit.toNat() <= 16,
+}
+
+fn Arena::GrowFits(a: Arena, h: u64) → Type {
+    And<a.limit <= 16, And<a.top <= a.limit, And<a.cell(h + 1) <= a.limit, a.top + a.cell(h + 1) + a.cell(h + 1) <= a.limit>>>
+}
+
+theorem Arena::grow_fits_dec(a: Arena, h: u64): Or<Arena::GrowFits(a, h), ¬Arena::GrowFits(a, h)> {
+    Arena::and_dec(Arena::le_dec(a.limit, 16), Arena::and_dec(Arena::le_dec(a.top, a.limit),
+        Arena::and_dec(Arena::le_dec(a.cell(h + 1), a.limit), Arena::le_dec(a.top + a.cell(h + 1) + a.cell(h + 1), a.limit))))
+}
+
+// The arena as `grow` hands it to the copy: the top past a window of twice
+// the capacity, and the header's base and capacity those of the new window.
+fn Arena::grown(self a: Arena, h: u64) → Arena {
+    Arena(a.top + (a.cell(h + 1) + a.cell(h + 1)), a.limit,
+        vector_update(vector_update(a.heap, h.toNat(), a.top), (h + 1).toNat(), a.cell(h + 1) + a.cell(h + 1)))
+}
+
+theorem Arena::grow_eq(a: Arena, h: u64, hb: h < 14, fits: Arena::GrowFits(a, h)):
+    Arena::grow(a, h) = Arena::copy_at(a.grown(h), a.cell(h), a.top, BitVec::ofNat(0), a.cell(h + 2))
+{
+    Arena::grow::True::True(a, h, hb, fits)
+}
+
+// `grow_abs`: where `grow` answers 1, the vector holds what it held.
+theorem Arena::grow_abs(a: Arena, h: u64, inv: VecInv(a, h), grew: Arena::grow(a, h).value = 1): Arena::grow(a, h).after.vec(h) = a.vec(h) {
+    let hn: (h.toNat() < 14) = omega(inv.header, inv.top, inv.limit);
+    let hb: (h < 14) = hn;
+    let e1: ((h + 1).toNat() = h.toNat() + 1) = bv_omega;
+    let e2: ((h + 2).toNat() = h.toNat() + 2) = bv_omega;
+    match Arena::grow_fits_dec(a, h) {
+        Inr(nf) => false_elim(Arena::zero_not_one(trans(sym(cong_fn(λ (r: Mutated<Arena, u64>) => r.value, Arena::grow::True::False(a, h, hb, nf))), grew))),
+        Inl(f) => {
+            let cap = a.cell(h + 1);
+            let cn: (cap.toNat() <= a.limit.toNat()) = f.right.right.left;
+            let s1 = Arena::small_sum(a.top, cap, omega(cn, inv.top, inv.limit));
+            let s2 = Arena::small_sum(a.top + cap, cap, omega(s1, cn, inv.top, inv.limit));
+            let room: ((a.top + cap + cap).toNat() <= a.limit.toNat()) = f.right.right.right;
+            let z: (BitVec::ofNat(0, n := 64).toNat() = 0) = refl;
+            let x0 = a.grown(h);
+            let cp = Arena::copies(a.cell(h), a.top, a.cell(h + 2),
+                omega(inv.window, inv.len, inv.top, inv.limit), omega(s1, s2, room, inv.len, inv.limit), Inl(omega(inv.window, inv.len)),
+                a.cell(h + 2).toNat(), x0, BitVec::ofNat(0), omega(z), omega(z));
+            let r = Arena::copy_at(x0, a.cell(h), a.top, BitVec::ofNat(0), a.cell(h + 2));
+            // The header's words outside the new window, read in `x0`.
+            let hd: ((q: Nat) → q < a.top.toNat() → r.after.word(q) = x0.word(q)) = λ q below => cp.kept(q, Inl(omega(below, z)));
+            let x0_other: ((q: Nat) → ¬(q = h.toNat()) → ¬(q = h.toNat() + 1) → x0.word(q) = a.word(q)) = λ q n0 n1 =>
+                trans(vector_get_update_other(16, vector_update(a.heap, h.toNat(), a.top), (h + 1).toNat(), q, cap + cap, BitVec::ofNat(0), λ e => n1(trans(e, e1))),
+                    vector_get_update_other(16, a.heap, h.toNat(), q, a.top, BitVec::ofNat(0), n0));
+            let c0: (r.after.cell(h) = a.top) = trans(hd(h.toNat(), omega(inv.header)),
+                trans(vector_get_update_other(16, vector_update(a.heap, h.toNat(), a.top), (h + 1).toNat(), h.toNat(), cap + cap, BitVec::ofNat(0), λ e => omega(e, e1)),
+                    vector_get_update_same(16, a.heap, h.toNat(), a.top, BitVec::ofNat(0), omega(hn))));
+            let c2: (r.after.cell(h + 2) = a.cell(h + 2)) = trans(cong_fn(λ (q: Nat) => r.after.word(q), e2),
+                trans(hd(h.toNat() + 2, omega(inv.header)), trans(x0_other(h.toNat() + 2, λ e => omega(e), λ e => omega(e)), cong_fn(λ (q: Nat) => a.word(q), sym(e2)))));
+            let same: ((k: Nat) → k < a.cell(h + 2).toNat() → r.after.word(a.top.toNat() + k) = a.word(a.cell(h).toNat() + k)) = λ k lt => {
+                let moved: (r.after.word(a.top.toNat() + k) = x0.word(a.cell(h).toNat() + k)) = cp.copied(k, omega(z), lt);
+                let n0: ¬(a.cell(h).toNat() + k = h.toNat()) = λ e => match inv.apart { Inl(b) => omega(e, b), Inr(b) => omega(e, b, lt, inv.len) };
+                let n1: ¬(a.cell(h).toNat() + k = h.toNat() + 1) = λ e => match inv.apart { Inl(b) => omega(e, b), Inr(b) => omega(e, b, lt, inv.len) };
+                trans(moved, x0_other(a.cell(h).toNat() + k, n0, n1))
+            };
+            let on_r: (r.after.vec(h) = a.vec(h)) = trans(cong_fn(λ (u: u64) => r.after.slice(u.toNat(), r.after.cell(h + 2).toNat()), c0),
+                trans(cong_fn(λ (u: u64) => r.after.slice(a.top.toNat(), u.toNat()), c2),
+                    Arena::slice_ext(r.after, a, a.cell(h + 2).toNat(), a.top.toNat(), a.cell(h).toNat(), same)));
+            j(sym(Arena::grow_eq(a, h, hb, f)), λ s _ => s.after.vec(h) = a.vec(h), on_r)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A push within the capacity
+
+theorem Arena::slice_snoc(a: Arena, n: Nat): (s: Nat) → a.slice(s, n + 1) = List::append(a.slice(s, n), [a.word(s + n)]) {
+    match n {
+        Zero => λ s => refl,
+        Succ(m, ih) => λ s => {
+            let e: (s + 1 + m = s + (m + 1)) = omega;
+            let at: (a.word(s + 1 + m) = a.word(s + (m + 1))) = cong_fn(λ (q: Nat) => a.word(q), e);
+            cong_fn(λ (l: List<u64>) => Cons(a.word(s), l), trans(ih(s + 1), cong_fn(λ (w: u64) => List::append(a.slice(s + 1, m), [w]), at)))
+        },
+    }
+}
+
+// A push where the window has room: it answers 1, and the vector holds what
+// it held and then `x`.
+theorem Arena::push_in_abs(a: Arena, h, x: u64, inv: VecInv(a, h), lr: a.cell(h + 2).toNat() < a.cell(h + 1).toNat()):
+    And<Arena::push_in(a, h, x).value = 1, Arena::push_in(a, h, x).after.vec(h) = List::append(a.vec(h), [x])>
+{
+    let hn: (h.toNat() < 14) = omega(inv.header, inv.top, inv.limit);
+    let hb: (h < 14) = hn;
+    let e2: ((h + 2).toNat() = h.toNat() + 2) = bv_omega;
+    let b = a.cell(h);
+    let l = a.cell(h + 2);
+    let room: (a.cell(h + 2) < a.cell(h + 1)) = lr;
+    let sum = Arena::small_sum(b, l, omega(lr, inv.window, inv.top, inv.limit));
+    let inside: ((b + l).toNat() < 16) = omega(sum, lr, inv.window, inv.top, inv.limit);
+    let l1 = Arena::small_sum(l, BitVec::ofNat(1), omega(lr, inv.window, inv.top, inv.limit));
+    let y = Arena(a.top, a.limit, vector_update(vector_update(a.heap, (b + l).toNat(), x), (h + 2).toNat(), l + 1));
+    let eq: (Arena::push_in(a, h, x) = Mutated(y, BitVec::ofNat(1))) =
+        trans(Arena::push_in::True::True(a, h, x, hb, room), cong_fn(λ (r: Mutated<Arena, u64>) => Mutated(r.after, r.value), Arena::put_item::True::True(a, h, b, l, x, hb, inside)));
+    // The header's length word and the new item's word are apart, and both
+    // apart from every other word of the window and the header's base.
+    let ne_hl: ¬((b + l).toNat() = (h + 2).toNat()) = λ e => match inv.apart { Inl(p) => omega(e, sum, e2, p), Inr(p) => omega(e, sum, e2, p, lr) };
+    let y_other: ((q: Nat) → ¬(q = (b + l).toNat()) → ¬(q = (h + 2).toNat()) → y.word(q) = a.word(q)) = λ q n0 n2 =>
+        trans(vector_get_update_other(16, vector_update(a.heap, (b + l).toNat(), x), (h + 2).toNat(), q, l + 1, BitVec::ofNat(0), n2),
+            vector_get_update_other(16, a.heap, (b + l).toNat(), q, x, BitVec::ofNat(0), n0));
+    let c0: (y.cell(h) = b) = y_other(h.toNat(), λ e => match inv.apart { Inl(p) => omega(e, sum, p), Inr(p) => omega(e, sum, p, lr) }, λ e => omega(e, e2));
+    let c2: (y.cell(h + 2) = l + 1) = vector_get_update_same(16, vector_update(a.heap, (b + l).toNat(), x), (h + 2).toNat(), l + 1, BitVec::ofNat(0), omega(e2, hn));
+    let last: (y.word(b.toNat() + l.toNat()) = x) = trans(cong_fn(λ (q: Nat) => y.word(q), sym(sum)),
+        trans(vector_get_update_other(16, vector_update(a.heap, (b + l).toNat(), x), (h + 2).toNat(), (b + l).toNat(), l + 1, BitVec::ofNat(0), ne_hl),
+            vector_get_update_same(16, a.heap, (b + l).toNat(), x, BitVec::ofNat(0), inside)));
+    let first: (y.slice(b.toNat(), l.toNat()) = a.slice(b.toNat(), l.toNat())) = Arena::slice_ext(y, a, l.toNat(), b.toNat(), b.toNat(), λ k lt =>
+        y_other(b.toNat() + k, λ e => omega(e, sum, lt), λ e => match inv.apart { Inl(p) => omega(e, e2, p), Inr(p) => omega(e, e2, p, lt, lr) }));
+    let on_y: (y.vec(h) = List::append(a.vec(h), [x])) =
+        trans(cong_fn(λ (u: u64) => y.slice(u.toNat(), y.cell(h + 2).toNat()), c0),
+        trans(cong_fn(λ (u: u64) => y.slice(b.toNat(), u.toNat()), c2),
+        trans(cong_fn(λ (q: Nat) => y.slice(b.toNat(), q), l1),
+        trans(Arena::slice_snoc(y, l.toNat(), b.toNat()),
+        trans(cong_fn(λ (w: u64) => List::append(y.slice(b.toNat(), l.toNat()), [w]), last),
+            cong_fn(λ (s: List<u64>) => List::append(s, [x]), first))))));
+    j(sym(eq), λ r _ => And<r.value = 1, r.after.vec(h) = List::append(a.vec(h), [x])>, And(refl, on_y))
+}
