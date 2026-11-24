@@ -1,0 +1,402 @@
+// The held meaning's agreement for a laid record that takes a parameter
+// sizing its last array (docs/native/rung2-spans-design.md §3,
+// docs/native/layout-design.md §11): `laid record Limbs(n: u64)
+// { w: [u64; n.toNat()] }`.
+//
+// The parameter is carried at run time as a word beside the span's place
+// and length, the code's first operand after the length word, and an
+// element's accessor is called with that word as the array's count. A
+// count that is a literal is read off the literal that bound it
+// (`rt_held.hthr`'s `Indexes`, `Stores`); a carried count is an open word,
+// which no verdict computed by evaluation can compare with a mark. So the
+// marks of such an array (`Spans`, `Fills`) are found by the array's
+// offset alone, and what the verdict checks instead is *which variable*
+// the count is: the one after the length word, `len - 1` at every depth
+// (both shift together under a binder). The agreement then takes two
+// premises the old one has no room for:
+//
+// - `FTm::Counts`: that variable's word is `w`, the parameter;
+// - `HWorld::Counted`: every such mark's count is `w.toNat()`.
+//
+// The generator states the first at the function's own parameters, where
+// it is `refl`, and the second at marks it builds with that count, where
+// it is `refl` too. Everything else is `rt_held.hthr`'s: a mark of any
+// other kind is judged by its verdict and proved by its theorems, which
+// this module calls; their verdict refuses the new marks, so a loop
+// (`rt_held_loop.hthr`) does not take a carried count yet.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import bitvec_nat;
+import nat_map;
+import list_window;
+import layout;
+import stored;
+import rt;
+import rt_lower;
+import rt_file;
+import rt_held;
+
+// ---------------------------------------------------------------------------
+// The carried count's variable
+
+// Whether `c` is the variable after the length word `len`.
+fn FTm::count_at(c, len: Nat) → Bool { match len { Zero => False, Succ(m) => c.same(m) } }
+
+// Whether a call's count operand, its fourth, is that variable.
+fn FTm::count_arg(args: List<Nat>, len: Nat) → Bool { FTm::count_at(FTm::arg(args, 3), len) }
+
+// The variable after the length word is the word `w`.
+fn FTm::Counts(tys: Table, g: List<Ty>, env: Env(tys, g), len: Nat, w: BitVec(64)) → Type {
+    match len { Zero => False, Succ(m) => FTm::word(tys, g, env, m) = w }
+}
+
+// Under one more variable, the length word and the count's variable are
+// each one further, and the count's word is the same.
+theorem FTm::counts_more(tys: Table, g: List<Ty>, env: Env(tys, g), w: BitVec(64), t: Ty, x: t.sem(tys)): (len: Nat) → FTm::Counts(tys, g, env, len, w) →
+    FTm::Counts(tys, Cons(t, g), Pair(x, env), len + 1, w) {
+    λ len => match len {
+        Zero => λ never => false_elim(never),
+        Succ(m) => λ counts => counts,
+    }
+}
+
+// A variable the verdict found to be the count's is the word `w`.
+theorem FTm::count_word(tys: Table, g: List<Ty>, env: Env(tys, g), c: Nat, w: BitVec(64)): (len: Nat) → FTm::Counts(tys, g, env, len, w) →
+    FTm::count_at(c, len).IsTrue() → FTm::word(tys, g, env, c) = w {
+    λ len => match len {
+        Zero => λ never _ => false_elim(never),
+        Succ(m) => λ counts at => trans(cong_fn(λ (v: Nat) => FTm::word(tys, g, env, v), c.same_sound(m, eq_true_of_is_true(c.same(m), at))), counts),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The marks' counts
+
+fn Reader::Counted<A>(self r: Reader<A>, w: BitVec(64)) → Type {
+    match r {
+        Spans(width, arrays) => FTm::Fields(arrays, λ (base: Nat) (counted: Pair<Nat, A → BitVec(64) → BitVec(width)>) => counted.fst = w.toNat()),
+        _ => True,
+    }
+}
+
+fn Writer::Counted<A>(self wr: Writer<A>, w: BitVec(64)) → Type {
+    match wr {
+        Fills(width, arrays) => FTm::Fields(arrays, λ (base: Nat) (counted: Pair<Nat, A → BitVec(64) → BitVec(width) → A>) => counted.fst = w.toNat()),
+        _ => True,
+    }
+}
+
+fn Reader::AllCounted<A>(rs: List<Reader<A>>, w: BitVec(64)) → Type { match rs { Nil => True, Cons(r, rest) => r.Counted(w) ∧ Reader::AllCounted(rest, w) } }
+
+fn Writer::AllCounted<A>(ws: List<Writer<A>>, w: BitVec(64)) → Type { match ws { Nil => True, Cons(x, rest) => x.Counted(w) ∧ Writer::AllCounted(rest, w) } }
+
+// Every mark of a carried count counts `w`'s elements.
+fn HWorld::Counted<A>(self hw: HWorld<A>, w: BitVec(64)) → Type { Reader::AllCounted(hw.readers, w) ∧ Writer::AllCounted(hw.writers, w) }
+
+theorem Reader::counted_at<A>(rs: List<Reader<A>>, w: BitVec(64)): Reader::AllCounted(rs, w) → (f: Nat) → Reader::at(rs, f).Counted(w) {
+    match rs {
+        Nil => λ _ f => trivial,
+        Cons(r, rest) => λ all f => match f { Zero => all.left, Succ(k) => Reader::counted_at(rest, w, all.right, k) },
+    }
+}
+
+theorem Writer::counted_at<A>(ws: List<Writer<A>>, w: BitVec(64)): Writer::AllCounted(ws, w) → (f: Nat) → Writer::at(ws, f).Counted(w) {
+    match ws {
+        Nil => λ _ f => trivial,
+        Cons(x, rest) => λ all f => match f { Zero => all.left, Succ(k) => Writer::counted_at(rest, w, all.right, k) },
+    }
+}
+
+// Two things of every field are one of the two together.
+theorem FTm::fields_both<X>(fields: List<Pair<Nat, X>>, P, Q: Nat → X → Type): FTm::Fields(fields, P) → FTm::Fields(fields, Q) →
+    FTm::Fields(fields, λ (n: Nat) (x: X) => P(n, x) ∧ Q(n, x)) {
+    match fields {
+        Nil => λ _ _ => trivial,
+        Cons(f, rest) => λ p q => And(And(p.left, q.left), FTm::fields_both(rest, P, Q, p.right, q.right)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The verdict
+
+fn Reader::lent_counted<A>(self r: Reader<A>, args: List<Nat>, len: Nat) → Bool {
+    match r {
+        Spans(_, _) => FTm::index_args(args, len) && FTm::count_arg(args, len),
+        _ => r.lent(args, len),
+    }
+}
+
+fn Tm::kept_counted<A>(self e: Tm, hw: HWorld<A>, len: Nat) → Bool {
+    match e {
+        Call(f, args) => Reader::at(hw.readers, f).lent_counted(args, len),
+        _ => True,
+    }
+}
+
+fn Writer::lent_counted<A>(self wr: Writer<A>, tys: Table, args: List<Nat>, len: Nat, known: List<Option<Pair<Ty, Nat>>>) → Bool {
+    match wr {
+        Fills(_, arrays) => FTm::store_args(args, len) && (FTm::count_arg(args, len) && FTm::known_field(tys, arrays, known, FTm::third(args))),
+        _ => wr.lent(tys, args, len, known),
+    }
+}
+
+// `FTm::kept` with the carried count's marks taken.
+fn FTm::kept_counted<A>(self t: FTm, hw: HWorld<A>) → Nat → List<Option<Pair<Ty, Nat>>> → Bool {
+    match t {
+        Pure(_) => λ len known => True,
+        Let(e, body) => λ len known => e.kept_counted(hw, len) && body.kept_counted(hw, len + 1, Cons(e.literal(), known)),
+        If(_, yes, no) => λ len known => yes.kept_counted(hw, len, known) && no.kept_counted(hw, len, known),
+        IfEq(_, yes, no) => λ len known => yes.kept_counted(hw, len, known) && no.kept_counted(hw, len, known),
+        Put(_, _, _, _) => λ len known => False,
+        Call(f, args, body) => λ len known => Writer::at(hw.writers, f).lent_counted(hw.fw.w.tys, args, len, known) && body.kept_counted(hw, len + 1, Cons(None, known)),
+        Again(_) => λ len known => False,
+        Lend(_, _, _, _) => λ len known => False,
+        Loop(_, _, _, _) => λ len known => False,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A bound read and a call
+
+theorem Tm::reader_ok_counted<A>(self e: Tm, hw: HWorld<A>, whole: Stored<A>, sound: Sound<A>(hw, whole), len: Nat, kept: e.kept_counted(hw, len).IsTrue(),
+    w: BitVec(64), counted: hw.Counted(w), own: List<BitVec(8)>, a: A, g: List<Ty>, env: Env(hw.fw.w.tys, g),
+    counts: FTm::Counts(hw.fw.w.tys, g, env, len, w), holds: whole.Holds(own, FTm::word(hw.fw.w.tys, g, env, len), a)):
+    FTm::held_value(hw, own, e, g, env, a) = FTm::value(hw.fw, own, e, g, env) {
+    match e {
+        Call(f, args) => {
+            let plain = FTm::value(hw.fw, own, Call(f, args), g, env);
+            let res = Sig::at(hw.fw.w.sigs, f).result;
+            let P = λ (f: Nat) (width: Nat) (at: Nat) (get: A → BitVec(width)) => hw.Reads(whole, f, width, at, get);
+            let R = λ (f: Nat) (width: Nat) (base: Nat) (count: Nat) (get: A → BitVec(64) → BitVec(width)) => hw.Indexes(whole, f, width, base, count, get);
+            let by_case: ((r: Reader<A>) → Reader::at(hw.readers, f) = r → r.Owes(P(f), R(f)) → r.Counted(w) → r.lent_counted(args, len).IsTrue() →
+                r.value(hw.fw.w.tys, res, a, g, env, args, plain) = plain) =
+                λ r => match r {
+                    Spans(width, arrays) => λ _ owes cnt lent => {
+                        let two = FTm::index_args(args, len).is_true_and(FTm::count_arg(args, len), lent);
+                        FTm::index_args_elim(args, len,
+                            λ (xs: List<Nat>) => FTm::count_arg(xs, len).IsTrue() → (Spans(width, arrays).value(hw.fw.w.tys, res, a, g, env, xs,
+                                FTm::value(hw.fw, own, Call(f, xs), g, env)) = FTm::value(hw.fw, own, Call(f, xs), g, env)),
+                            λ place b c i => λ at => {
+                                let is_w: (FTm::word(hw.fw.w.tys, g, env, c) = w) = FTm::count_word(hw.fw.w.tys, g, env, c, w, len, counts, at);
+                                FTm::field_case(arrays,
+                                    λ (base: Nat) (cx: Pair<Nat, A → BitVec(64) → BitVec(width)>) => R(f, width, base, cx.fst, cx.snd) ∧ cx.fst = w.toNat(),
+                                    FTm::word(hw.fw.w.tys, g, env, b).toNat(),
+                                    λ (o: Option<Pair<Nat, A → BitVec(64) → BitVec(width)>>) => ((match o {
+                                        None => FTm::value(hw.fw, own, Call(f, [place, len, b, c, i]), g, env),
+                                        Some(cx) => Ty::cast(hw.fw.w.tys, Word(width), res, cx.snd(a, FTm::word(hw.fw.w.tys, g, env, i))),
+                                    }) = FTm::value(hw.fw, own, Call(f, [place, len, b, c, i]), g, env)),
+                                    refl,
+                                    λ cx both => {
+                                        let here: (FTm::word(hw.fw.w.tys, g, env, c).toNat() = cx.fst) = trans(cong_fn(λ (x: BitVec(64)) => x.toNat(), is_w), sym(both.right));
+                                        sym(trans(FTm::value_read(hw.fw, own, f, [place, len, b, c, i], g, env),
+                                            both.left(place, len, b, c, i, own, a, g, env, holds, refl, here)))
+                                    },
+                                    FTm::fields_both(arrays,
+                                        λ (base: Nat) (cx: Pair<Nat, A → BitVec(64) → BitVec(width)>) => R(f, width, base, cx.fst, cx.snd),
+                                        λ (base: Nat) (cx: Pair<Nat, A → BitVec(64) → BitVec(width)>) => cx.fst = w.toNat(), owes, cnt))
+                            },
+                            two.left)(two.right)
+                    },
+                    Plain => λ is _ _ lent => j(is, λ x _ => x.value(hw.fw.w.tys, res, a, g, env, args, plain) = plain,
+                        Tm::reader_ok(Call(f, args), hw, whole, sound, len, j(sym(is), λ x _ => x.lent(args, len).IsTrue(), lent), own, a, g, env, holds)),
+                    Reads(width, fields) => λ is _ _ lent => j(is, λ x _ => x.value(hw.fw.w.tys, res, a, g, env, args, plain) = plain,
+                        Tm::reader_ok(Call(f, args), hw, whole, sound, len, j(sym(is), λ x _ => x.lent(args, len).IsTrue(), lent), own, a, g, env, holds)),
+                    Indexes(width, arrays) => λ is _ _ lent => j(is, λ x _ => x.value(hw.fw.w.tys, res, a, g, env, args, plain) = plain,
+                        Tm::reader_ok(Call(f, args), hw, whole, sound, len, j(sym(is), λ x _ => x.lent(args, len).IsTrue(), lent), own, a, g, env, holds)),
+                };
+            by_case(Reader::at(hw.readers, f), refl, Reader::all_at(hw.readers, P, R, sound.readers, f), Reader::counted_at(hw.readers, w, counted.left, f), kept)
+        },
+        Var(i) => refl,
+        Lit(c, n) => refl,
+        Prim(op, xs) => refl,
+        Let(x, body) => refl,
+        If(c, yes, no) => refl,
+        IfEq(c, yes, no) => refl,
+        Make(i, xs) => refl,
+        Field(i, k, of) => refl,
+        Fold(over, init, step) => refl,
+        Case(c, zero, succ) => refl,
+        Byte(k, i, length) => refl,
+        Pick(_, _, _, _) => refl,
+        Inject(_, _, _) => refl,
+        Slot(_, _, _) => refl,
+        Iterate(_, _, _) => refl,
+    }
+}
+
+theorem FTm::call_kept_counted<A>(hw: HWorld<A>, whole: Stored<A>, sound: Sound<A>(hw, whole), f: Nat, args: List<Nat>, len: Nat,
+    known: List<Option<Pair<Ty, Nat>>>, lent: Writer::at(hw.writers, f).lent_counted(hw.fw.w.tys, args, len, known).IsTrue(), w: BitVec(64), counted: hw.Counted(w),
+    g: List<Ty>, env: Env(hw.fw.w.tys, g), knows: FTm::Knows(hw.fw.w.tys, g, env, known), counts: FTm::Counts(hw.fw.w.tys, g, env, len, w), own: List<BitVec(8)>, a: A,
+    holds: whole.Holds(own, FTm::word(hw.fw.w.tys, g, env, len), a)):
+    (FTm::held_answer(hw, f, args, g, env, a, FTm::called(hw.fw, g, env, f, args, own).value) = FTm::called(hw.fw, g, env, f, args, own).value)
+        ∧ whole.Holds(FTm::called(hw.fw, g, env, f, args, own).after, FTm::word(hw.fw.w.tys, g, env, len), FTm::held_state(hw, f, args, g, env, a)) {
+    let tys = hw.fw.w.tys;
+    let res = Sig::at(hw.fw.fsigs, f).result;
+    let called = FTm::called(hw.fw, g, env, f, args, own);
+    let P = λ (f: Nat) (width: Nat) (at: Nat) (set: A → BitVec(width) → A) => hw.Writes(whole, f, width, at, set);
+    let Q = λ (f: Nat) (words: Nat) (run: A → List<BitVec(64)> → Mutated<A, BitVec(64)>) => hw.Runs(whole, f, words, run);
+    let S = λ (f: Nat) (width: Nat) (base: Nat) (count: Nat) (set: A → BitVec(64) → BitVec(width) → A) => hw.Stores(whole, f, width, base, count, set);
+    let Goal: Writer<A> → Type = λ x => (x.answer(tys, args, g, env, a, res, called.value) = called.value)
+        ∧ whole.Holds(called.after, FTm::word(tys, g, env, len), x.state(tys, args, g, env, a));
+    let old: ((x: Writer<A>) → Writer::at(hw.writers, f) = x → x.lent(tys, args, len, known).IsTrue() → Goal(x)) = λ x is l =>
+        j(is, λ y _ => Goal(y), FTm::call_kept(hw, whole, sound, f, args, len, known, j(sym(is), λ y _ => y.lent(tys, args, len, known).IsTrue(), l), g, env, knows, own, a, holds));
+    let by_case: ((x: Writer<A>) → Writer::at(hw.writers, f) = x → x.Owes(P(f), Q(f), S(f)) → x.Counted(w) → x.lent_counted(tys, args, len, known).IsTrue() → Goal(x)) =
+        λ x => match x {
+            Fills(width, arrays) => λ _ owes cnt l => {
+                let parts = FTm::store_args(args, len).is_true_and(FTm::count_arg(args, len) && FTm::known_field(tys, arrays, known, FTm::third(args)), l);
+                let rest = FTm::count_arg(args, len).is_true_and(FTm::known_field(tys, arrays, known, FTm::third(args)), parts.right);
+                And(refl, FTm::store_args_elim(args, len,
+                    λ (xs: List<Nat>) => FTm::count_arg(xs, len).IsTrue() → FTm::known_field(tys, arrays, known, FTm::third(xs)).IsTrue() →
+                        whole.Holds(FTm::called(hw.fw, g, env, f, xs, own).after, FTm::word(tys, g, env, len), Fills(width, arrays).state(tys, xs, g, env, a)),
+                    λ place b c i v => λ at found => {
+                        let is_w: (FTm::word(tys, g, env, c) = w) = FTm::count_word(tys, g, env, c, w, len, counts, at);
+                        FTm::field_case(arrays,
+                            λ (base: Nat) (cx: Pair<Nat, A → BitVec(64) → BitVec(width) → A>) => S(f, width, base, cx.fst, cx.snd) ∧ cx.fst = w.toNat(),
+                            FTm::word(tys, g, env, b).toNat(),
+                            λ (o: Option<Pair<Nat, A → BitVec(64) → BitVec(width) → A>>) => ((match o { None => False, Some(_) => True }).IsTrue() →
+                                whole.Holds(FTm::called(hw.fw, g, env, f, [place, len, b, c, i, v], own).after, FTm::word(tys, g, env, len),
+                                    match o {
+                                        None => a,
+                                        Some(cx) => cx.snd(a, FTm::word(tys, g, env, i), Ty::cast(tys, Ty::at(g, v), Word(width), Env::get(tys, g, env, v))),
+                                    })),
+                            λ never => false_elim(never),
+                            λ cx both _ => {
+                                let here: (FTm::word(tys, g, env, c).toNat() = cx.fst) = trans(cong_fn(λ (y: BitVec(64)) => y.toNat(), is_w), sym(both.right));
+                                both.left(place, len, b, c, i, v, own, a, g, env, holds, refl, here)
+                            },
+                            FTm::fields_both(arrays,
+                                λ (base: Nat) (cx: Pair<Nat, A → BitVec(64) → BitVec(width) → A>) => S(f, width, base, cx.fst, cx.snd),
+                                λ (base: Nat) (cx: Pair<Nat, A → BitVec(64) → BitVec(width) → A>) => cx.fst = w.toNat(), owes, cnt))
+                            (FTm::known_found(tys, g, env, known, knows, arrays, b, found))
+                    },
+                    parts.left)(rest.left)(rest.right))
+            },
+            Apart => λ is _ _ l => old(Apart, is, l),
+            Writes(width, fields) => λ is _ _ l => old(Writes(width, fields), is, l),
+            Runs(words, run) => λ is _ _ l => old(Runs(words, run), is, l),
+            Stores(width, arrays) => λ is _ _ l => old(Stores(width, arrays), is, l),
+        };
+    by_case(Writer::at(hw.writers, f), refl, Writer::all_at(hw.writers, P, Q, S, sound.writers, f), Writer::counted_at(hw.writers, w, counted.right, f), lent)
+}
+
+// ---------------------------------------------------------------------------
+// The agreement
+
+// `FTm::held_runs` with the carried count's marks: the same induction, the
+// count's variable carried along beside the length word's.
+theorem FTm::held_runs_counted<A>(self t: FTm, hw: HWorld<A>, whole: Stored<A>, sound: Sound<A>(hw, whole), w: BitVec(64), counted: hw.Counted(w)):
+    (len: Nat) → (known: List<Option<Pair<Ty, Nat>>>) →
+    t.kept_counted(hw, len, known).IsTrue() → (g: List<Ty>) → (env: Env(hw.fw.w.tys, g)) → FTm::Knows(hw.fw.w.tys, g, env, known) →
+    FTm::Counts(hw.fw.w.tys, g, env, len, w) → (own: List<BitVec(8)>) → (a: A) → whole.Holds(own, FTm::word(hw.fw.w.tys, g, env, len), a) →
+    Agrees<A, t.ty(hw.fw.w, hw.fw.fsigs, g).sem(hw.fw.w.tys)>(whole, FTm::word(hw.fw.w.tys, g, env, len), t.held(hw, g, env, own, a), t.sem(hw.fw, g, env, own)) {
+    match t {
+        Pure(v) => λ len known _ g env knows counts own a holds => Agrees(refl, holds),
+        Let(e, body) => λ len known kept g env knows counts own a holds => {
+            let both = e.kept_counted(hw, len).is_true_and(body.kept_counted(hw, len + 1, Cons(e.literal(), known)), kept);
+            let same = e.reader_ok_counted(hw, whole, sound, len, both.left, w, counted, own, a, g, env, counts, holds);
+            let ran = body.held_runs_counted(hw, whole, sound, w, counted, len + 1, Cons(e.literal(), known), both.right, Cons(e.ty(hw.fw.w, g), g),
+                Pair(FTm::value(hw.fw, own, e, g, env), env), e.literal_known(hw.fw, own, g, env, known, knows),
+                FTm::counts_more(hw.fw.w.tys, g, env, w, e.ty(hw.fw.w, g), FTm::value(hw.fw, own, e, g, env), len, counts), own, a, holds);
+            let goal: Agrees<A, body.ty(hw.fw.w, hw.fw.fsigs, Cons(e.ty(hw.fw.w, g), g)).sem(hw.fw.w.tys)>(whole, FTm::word(hw.fw.w.tys, g, env, len),
+                body.held(hw, Cons(e.ty(hw.fw.w, g), g), Pair(FTm::held_value(hw, own, e, g, env, a), env), own, a),
+                body.sem(hw.fw, Cons(e.ty(hw.fw.w, g), g), Pair(FTm::value(hw.fw, own, e, g, env), env), own)) = rewrite(same, ran);
+            goal
+        },
+        If(c, yes, no) => λ len known kept g env knows counts own a holds => {
+            let both = yes.kept_counted(hw, len, known).is_true_and(no.kept_counted(hw, len, known), kept);
+            let by_case: ((b: Bool) → Agrees<A, yes.ty(hw.fw.w, hw.fw.fsigs, g).sem(hw.fw.w.tys)>(whole, FTm::word(hw.fw.w.tys, g, env, len),
+                match b {
+                    False => FTm::held_recast(hw.fw.w.tys, no.ty(hw.fw.w, hw.fw.fsigs, g), yes.ty(hw.fw.w, hw.fw.fsigs, g), no.held(hw, g, env, own, a)),
+                    True => yes.held(hw, g, env, own, a),
+                },
+                match b {
+                    False => FTm::recast(hw.fw.w.tys, no.ty(hw.fw.w, hw.fw.fsigs, g), yes.ty(hw.fw.w, hw.fw.fsigs, g), no.sem(hw.fw, g, env, own)),
+                    True => yes.sem(hw.fw, g, env, own),
+                })) =
+                λ b => match b {
+                    False => Agrees::recast(whole, FTm::word(hw.fw.w.tys, g, env, len), hw.fw.w.tys, no.ty(hw.fw.w, hw.fw.fsigs, g), yes.ty(hw.fw.w, hw.fw.fsigs, g),
+                        no.held(hw, g, env, own, a), no.sem(hw.fw, g, env, own), no.held_runs_counted(hw, whole, sound, w, counted, len, known, both.right, g, env, knows, counts, own, a, holds)),
+                    True => yes.held_runs_counted(hw, whole, sound, w, counted, len, known, both.left, g, env, knows, counts, own, a, holds),
+                };
+            by_case(Ty::cast(hw.fw.w.tys, Ty::at(g, c), Bit, Env::get(hw.fw.w.tys, g, env, c)))
+        },
+        IfEq(c, yes, no) => λ len known kept g env knows counts own a holds => {
+            let both = yes.kept_counted(hw, len, known).is_true_and(no.kept_counted(hw, len, known), kept);
+            let by_case: ((b: Bool) → Agrees<A, yes.ty(hw.fw.w, hw.fw.fsigs, g).sem(hw.fw.w.tys)>(whole, FTm::word(hw.fw.w.tys, g, env, len),
+                Tm::convoy(Mutated<A, yes.ty(hw.fw.w, hw.fw.fsigs, g).sem(hw.fw.w.tys)>, b, yes.held(hw, g, env, own, a),
+                    FTm::held_recast(hw.fw.w.tys, no.ty(hw.fw.w, hw.fw.fsigs, g), yes.ty(hw.fw.w, hw.fw.fsigs, g), no.held(hw, g, env, own, a))),
+                Tm::convoy(Mutated<List<BitVec(8)>, yes.ty(hw.fw.w, hw.fw.fsigs, g).sem(hw.fw.w.tys)>, b, yes.sem(hw.fw, g, env, own),
+                    FTm::recast(hw.fw.w.tys, no.ty(hw.fw.w, hw.fw.fsigs, g), yes.ty(hw.fw.w, hw.fw.fsigs, g), no.sem(hw.fw, g, env, own))))) =
+                λ b => match b {
+                    False => Agrees::recast(whole, FTm::word(hw.fw.w.tys, g, env, len), hw.fw.w.tys, no.ty(hw.fw.w, hw.fw.fsigs, g), yes.ty(hw.fw.w, hw.fw.fsigs, g),
+                        no.held(hw, g, env, own, a), no.sem(hw.fw, g, env, own), no.held_runs_counted(hw, whole, sound, w, counted, len, known, both.right, g, env, knows, counts, own, a, holds)),
+                    True => yes.held_runs_counted(hw, whole, sound, w, counted, len, known, both.left, g, env, knows, counts, own, a, holds),
+                };
+            by_case(Ty::cast(hw.fw.w.tys, Ty::at(g, c), Bit, Env::get(hw.fw.w.tys, g, env, c)))
+        },
+        Put(_, _, _, _) => λ len known kept => false_elim(kept),
+        Call(f, args, body) => λ len known kept g env knows counts own a holds => {
+            let both = Writer::at(hw.writers, f).lent_counted(hw.fw.w.tys, args, len, known).is_true_and(body.kept_counted(hw, len + 1, Cons(None, known)), kept);
+            let got = FTm::call_kept_counted(hw, whole, sound, f, args, len, known, both.left, w, counted, g, env, knows, counts, own, a, holds);
+            let ran = body.held_runs_counted(hw, whole, sound, w, counted, len + 1, Cons(None, known), both.right, Cons(Sig::at(hw.fw.fsigs, f).result, g),
+                Pair(FTm::called(hw.fw, g, env, f, args, own).value, env),
+                FTm::knows_more(hw.fw.w.tys, g, env, known, knows, Sig::at(hw.fw.fsigs, f).result, FTm::called(hw.fw, g, env, f, args, own).value),
+                FTm::counts_more(hw.fw.w.tys, g, env, w, Sig::at(hw.fw.fsigs, f).result, FTm::called(hw.fw, g, env, f, args, own).value, len, counts),
+                FTm::called(hw.fw, g, env, f, args, own).after, FTm::held_state(hw, f, args, g, env, a), got.right);
+            let same: (FTm::held_answer(hw, f, args, g, env, a, FTm::called(hw.fw, g, env, f, args, own).value) = FTm::called(hw.fw, g, env, f, args, own).value) = got.left;
+            let goal: Agrees<A, body.ty(hw.fw.w, hw.fw.fsigs, Cons(Sig::at(hw.fw.fsigs, f).result, g)).sem(hw.fw.w.tys)>(whole, FTm::word(hw.fw.w.tys, g, env, len),
+                body.held(hw, Cons(Sig::at(hw.fw.fsigs, f).result, g),
+                    Pair(FTm::held_answer(hw, f, args, g, env, a, FTm::called(hw.fw, g, env, f, args, own).value), env),
+                    FTm::called(hw.fw, g, env, f, args, own).after, FTm::held_state(hw, f, args, g, env, a)),
+                body.sem(hw.fw, Cons(Sig::at(hw.fw.fsigs, f).result, g), Pair(FTm::called(hw.fw, g, env, f, args, own).value, env),
+                    FTm::called(hw.fw, g, env, f, args, own).after)) = rewrite(same, ran);
+            goal
+        },
+        Again(_) => λ len known kept => false_elim(kept),
+        Lend(_, _, _, _) => λ len known kept => false_elim(kept),
+        Loop(_, _, _, _) => λ len known kept => false_elim(kept),
+    }
+}
+
+// A function's agreement with the function of the record it was
+// reflected from (`FFun::held_agrees`), with a carried count: the word
+// `w` is the variable after the length word at the function's own
+// environment (`counts`, `refl` there) and every mark of an array it
+// counts counts its elements (`counted`, `refl` at marks built so).
+theorem FFun::held_agrees_counted<A>(self f: FFun, hw: HWorld<A>, whole: Stored<A>, sound: Sound<A>(hw, whole), len: Nat, w: BitVec(64), counted: hw.Counted(w),
+    kept: f.body.kept_counted(hw, len, Nil).IsTrue(),
+    typed: f.body.ty(hw.fw.w, hw.fw.fsigs, Ty::bind_onto(f.params, Nil)) = f.result, env: Env(hw.fw.w.tys, Ty::bind_onto(f.params, Nil)), own: List<BitVec(8)>, a: A,
+    counts: FTm::Counts(hw.fw.w.tys, Ty::bind_onto(f.params, Nil), env, len, w),
+    holds: whole.Holds(own, FTm::word(hw.fw.w.tys, Ty::bind_onto(f.params, Nil), env, len), a),
+    spec: Mutated<A, f.result.sem(hw.fw.w.tys)>,
+    pinned: j(typed, λ z _ => Mutated<A, z.sem(hw.fw.w.tys)>, f.body.held(hw, Ty::bind_onto(f.params, Nil), env, own, a)) = spec,
+    code: Mutated<List<BitVec(8)>, f.result.sem(hw.fw.w.tys)>, reflects: FFun::bytes(f, hw.fw, env, own) = code):
+    Agrees<A, f.result.sem(hw.fw.w.tys)>(whole, FTm::word(hw.fw.w.tys, Ty::bind_onto(f.params, Nil), env, len), spec, code) {
+    let g = Ty::bind_onto(f.params, Nil);
+    let ran = f.body.held_runs_counted(hw, whole, sound, w, counted, len, Nil, kept, g, env, FTm::knows_nothing(hw.fw.w.tys, g, env), counts, own, a, holds);
+    let cast = Agrees::recast(whole, FTm::word(hw.fw.w.tys, g, env, len), hw.fw.w.tys, f.body.ty(hw.fw.w, hw.fw.fsigs, g), f.result,
+        f.body.held(hw, g, env, own, a), f.body.sem(hw.fw, g, env, own), ran);
+    let typed_run = Agrees::along(whole, FTm::word(hw.fw.w.tys, g, env, len),
+        FTm::held_recast(hw.fw.w.tys, f.body.ty(hw.fw.w, hw.fw.fsigs, g), f.result, f.body.held(hw, g, env, own, a)),
+        j(typed, λ z _ => Mutated<A, z.sem(hw.fw.w.tys)>, f.body.held(hw, g, env, own, a)),
+        FFun::bytes(f, hw.fw, env, own), FFun::bytes(f, hw.fw, env, own),
+        FTm::held_recast_along(hw.fw.w.tys, f.body.ty(hw.fw.w, hw.fw.fsigs, g), f.result, typed, f.body.held(hw, g, env, own, a)),
+        refl, cast);
+    Agrees::along(whole, FTm::word(hw.fw.w.tys, g, env, len),
+        j(typed, λ z _ => Mutated<A, z.sem(hw.fw.w.tys)>, f.body.held(hw, g, env, own, a)), spec,
+        FFun::bytes(f, hw.fw, env, own), code, pinned, reflects, typed_run)
+}
+
+// What a generator applies: the carried count's marks, one array each.
+fn Reader::spanned<A>(arrays: List<Pair<Nat, Pair<Nat, A → BitVec(64) → BitVec(64)>>>) → Reader<A> { Spans(64, arrays) }
+
+fn Writer::filled<A>(arrays: List<Pair<Nat, Pair<Nat, A → BitVec(64) → BitVec(64) → A>>>) → Writer<A> { Fills(64, arrays) }
+
+// One array as such a mark's entry: where it begins, its count and its
+// element at a word.
+fn HWorld::span_entry<X>(base, count: Nat, x: X) → Pair<Nat, Pair<Nat, X>> { Pair(base, Pair(count, x)) }

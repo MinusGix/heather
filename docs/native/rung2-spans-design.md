@@ -83,7 +83,7 @@ Written as a newcomer writes them, each refused (the ledger rows):
 | `break` or `return` in a `for` (stop at the found slot) | "has no `break`, `continue` or `return` yet" | `loops-on-one-combinator` |
 | a span function that ends in a call of another | "ends in `Mutated(span, value)`…"; binding the call first works | `runtime-record-function-limits` |
 | a `u8` key beside the span | "takes and returns 64-bit words for now" | `runtime-repr-narrow-words` |
-| a table as a parameter, `mut t: [u64; 8]` | "a type with no runtime layout" | §3 |
+| a table as a parameter, `mut t: [u64; 8]` | "a type with no runtime layout" | §3: built as a laid record that takes its count (`PortLimbs(n)`, straight-line; its loop waits for `loops-on-one-combinator`) |
 
 None of these is about memory. They are rung 1 and the generator's
 coverage, and they are what a port meets first. The first two rows were
@@ -191,6 +191,29 @@ generic in its element (`Vector<A>(cap)`) has a layout that depends on
 **Customers.** `numeral`'s limbs (`port_pred_limbs`, ledger row 11, over
 `Limbs(n)`), the token array (elements that are records), and the hash
 table with a capacity chosen at run time (§7).
+
+**Built (2026-11-24, straight-line half;** `layout-design` §11). What the
+build settled or changed against the text above:
+
+- *Which parameter is carried* is read off the field types: a parameter an
+  array's count is the `toNat()` of. It is the code's operand right after
+  the length word (`Limbs::dec_at::bytes(own, length, n, i, borrow)`), and
+  `runs_held` takes it as the record's parameter, so no second word stands
+  for it. A count computed from parameters is refused for now.
+- *The theory needed one thing the text did not foresee*: a carried count
+  cannot be compared with a mark's count, neither by the held meaning (at
+  the pin it is `n.toNat().same(n.toNat())`, stuck) nor by a verdict
+  computed by evaluation. So such an array's marks are found by offset
+  alone, and the verdict checks instead that the count operand *is* the
+  variable after the length word; the agreement carries that variable's
+  word and that the marks count it (`rt_held_counted.hthr`). The existing
+  marks and theorems are unchanged.
+- *Middle arrays* are refused by type, not by trying values: a field whose
+  type's size may depend on the parameters must be last.
+- Not taken yet, each refused by name: loops over such records (after
+  `loops-on-one-combinator`'s round 4: ledger row `port_pred_limbs`), calls
+  between their functions, a span read beside a carried count, and an
+  accessor that reaches both a literal-count array and a carried one.
 
 ## 4. A vector: the fill mark
 
@@ -368,9 +391,9 @@ Each step lands its ledger rows; none needs a decision beyond §10's.
    word parameters and a trailing array of open count, the parameter words
    among the code's operands, `runs_held` at every value of them, and the
    little-endian accessors. Customer: `numeral`'s limbs. Issue
-   `runtime-span-of-codec`. Its straight-line half touches no loop layer;
-   loops over such records wait for the loop combinator's round 4, which
-   moves `rt_held_loop`.
+   `runtime-span-of-codec`. **The straight-line half is built**
+   (2026-11-24); loops over such records wait for the loop combinator's
+   round 4, which moves `rt_held_loop`.
 3. **Elements that are records** (§3) and **the vector** (§4) over 2; push
    answers `Full`. Customers: the token array, the growing vector.
 4. **The arena** (§5): `Arena`, `alloc`, `reset`, the four laws, the growing

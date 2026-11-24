@@ -6237,8 +6237,13 @@ fn runtime_held_each<A, B>(xs: List<A>, f: A → Tac<B>) → Tac<List<B>> {
 // The marked world and what it owes are each a function of the rest of
 // the file, the spans the function only reads: `files` are that list's
 // constructors, and `no_file` the empty one.
+// What a record whose parameter counts an array adds
+// (`rt_held_counted.hthr`): the parameter's word, that every mark of the
+// array counts its elements, the verdict and the agreement that take it.
+record HeldCarried { w: Expr, counted: Expr, kept: Expr, agrees: Expr }
+
 record HeldSaid { n: HeldNames, ts: RtTypes, bytes: Handle, rfl: Expr, yes: Expr, zero: Expr, end: Expr, record: Expr, whole: Expr, hw: Expr,
-    marked_t: Handle, sound_t: Handle, sound: Expr, files: List<Expr>, no_file: Expr, buffers: Handle, span_at: Expr }
+    marked_t: Handle, sound_t: Handle, sound: Expr, files: List<Expr>, no_file: Expr, buffers: Handle, span_at: Expr, carried: Option<HeldCarried> }
 
 // A statement with every mention of each function of the record a
 // function calls a parameter, the first callee the innermost.
@@ -6280,7 +6285,10 @@ fn runtime_held_straight(name: String, f: GlobalRef, r: HeldReflected, parts: Sp
     // The verdict, by evaluation: the length word is the variable under
     // the function's operands.
     let len = NatLit(r.operands);
-    let kept <- defeq(ap(n.kept, [record, parts.body, ap(s.hw, [s.no_file]), len, ap(n.none, [Blank])]), yes);
+    // A record whose parameter counts an array is judged by the counted
+    // verdict, which takes that array's marks (`rt_held_counted.hthr`).
+    let kept_e = match s.carried { None => n.kept, Some(c) => c.kept };
+    let kept <- defeq(ap(kept_e, [record, parts.body, ap(s.hw, [s.no_file]), len, ap(n.none, [Blank])]), yes);
     let kept_checked <- match kept {
         True => pure(trivial),
         False => runtime_held_refused(name, "its reads and stores are not a held function's (an accessor is called on the span's own length word, and a store's offset is a literal a field lies at)"),
@@ -6291,21 +6299,25 @@ fn runtime_held_straight(name: String, f: GlobalRef, r: HeldReflected, parts: Sp
     // After the record's span and its length word, each span the function
     // only reads, its bytes, with its length word, and then the words. The
     // file is those spans, and the word in a read span's place is not read.
-    let all0 <- runtime_own_params(ts.word, bytes_h, lent, r.operands + 1, Some(t0.ref), 0);
+    // A carried parameter's word is the parameter itself, the code's
+    // operand after the length word.
+    let carried_vars: List<Expr> = match s.carried { None => [], Some(c) => [c.w] };
+    let all0 <- runtime_own_params(ts.word, bytes_h, lent, r.operands + 1 - carried_vars.len(), Some(t0.ref), 0);
     let length0 = all0.head_or(t0.ref);
     let xs0 = all0.drop(1);
+    let code_vars: List<Expr> = Cons(Local(length0), carried_vars ++ runtime_locals(xs0));
     let last0 = all0.rev().head_or(t0.ref);
     let holds0 <- assume(ap(n.holds, [record, whole, Local(own0.ref), Local(length0), Local(t0.ref)]), "holds", Some(last0)).or_fail("runtime: a span that holds a record: ");
     let file = RtQ::seq(s.files, runtime_read_spans(lent, runtime_locals(all0), 0));
     let hw = ap(s.hw, [file]);
     let sound_e = ap(s.sound, [file]);
-    let env = runtime_at_places(lent, runtime_locals(all0), 0, λ _ => zero).foldl(λ acc x => ap(n.bound, [Blank, Blank, x, acc]), ap(n.bound, [Blank, Blank, zero, end]));
+    let env = runtime_at_places(lent, code_vars, 0, λ _ => zero).foldl(λ acc x => ap(n.bound, [Blank, Blank, x, acc]), ap(n.bound, [Blank, Blank, zero, end]));
     // The function of the record: one that only reads it answers its
     // value beside the record as it was.
     let unchanged <- runtime_held_ref("rt_held::HWorld::unchanged");
     let applied = ap(Global(f), runtime_locals(r.params) ++ Cons(Local(t0.ref), runtime_locals(xs0)));
     let spec = match r.changes { True => applied, False => ap(unchanged, [Blank, Blank, Local(t0.ref), applied]) };
-    let code = ap(parts.compiled, Cons(Local(own0.ref), Cons(Local(length0), runtime_locals(xs0))));
+    let code = ap(parts.compiled, Cons(Local(own0.ref), code_vars));
     let g_e = ap(n.bind_onto, [parts.params, parts.no_tys]);
     // The body's code is its result's by a proof that computes: the pin
     // is read along it.
@@ -6351,10 +6363,17 @@ fn runtime_held_straight(name: String, f: GlobalRef, r: HeldReflected, parts: Sp
     let bytes_of <- runtime_held_ref("rt_held::FFun::bytes");
     let reflects <- runtime_at_each(at, parts.callees, [], Some(holds0.ref), λ es _ =>
         as_type(Equation(ap(bytes_of, [parts.rt, parts.world_of(es, file), env, Local(own0.ref)]),
-            ap(parts.compiled_of(es), Cons(Local(own0.ref), Cons(Local(length0), runtime_locals(xs0))))))
+            ap(parts.compiled_of(es), Cons(Local(own0.ref), code_vars))))
             .or_fail("runtime: `" ++ name ++ "`'s byte meaning at its callees: ").bind(λ h => pure(Hd(h))),
-        λ es => ap(rfl, [Blank, ap(parts.compiled_of(es), Cons(Local(own0.ref), Cons(Local(length0), runtime_locals(xs0))))]));
-    let proof = ap(n.agrees, [record, parts.rt, hw, whole, sound_e, len, end, ap(same, [Blank, Blank]), env, Local(own0.ref), Local(t0.ref), Local(holds0.ref), spec, pin_proof, code, reflects]);
+        λ es => ap(rfl, [Blank, ap(parts.compiled_of(es), Cons(Local(own0.ref), code_vars))]));
+    // With a carried parameter, the agreement also takes that its word is
+    // the variable after the length word (`refl` at the function's own
+    // environment) and that the marks count its elements.
+    let proof = match s.carried {
+        None => ap(n.agrees, [record, parts.rt, hw, whole, sound_e, len, end, ap(same, [Blank, Blank]), env, Local(own0.ref), Local(t0.ref), Local(holds0.ref), spec, pin_proof, code, reflects]),
+        Some(c) => ap(c.agrees, [record, parts.rt, hw, whole, sound_e, len, c.w, c.counted, end, ap(same, [Blank, Blank]), env, Local(own0.ref), Local(t0.ref),
+            ap(rfl, [Blank, c.w]), Local(holds0.ref), spec, pin_proof, code, reflects]),
+    };
     // A record that takes parameters: the marks and what they owe are
     // functions of them, and the theorem holds at every value of them.
     let held_form = match r.params { Nil => AsValue, Cons(_, _) => AsFunction };
@@ -6598,11 +6617,38 @@ fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanPa
     // where it begins and its count in bytes.
     let writers_bytes: List<List<HeldEach>> = r.cfuns.map(λ g => runtime_held_arrays(r.fields, λ e => match e.at.bytes { None => False, Some(by) => by.writer.id.same(g) }));
     let byte_array: HeldEach → Expr = λ e => ap(n.byte_entry, [record, whole, NatLit(e.term.count), e.at.part]);
-    let array: Expr → HeldEach → Expr = λ of e => ap(of, [record, e.ty, whole, e.codec, e.instance, NatLit(e.term.count), e.at.part]);
+    // An array counted by the record's carried parameter is marked by the
+    // counted theory's marks (`rt_held_counted.hthr`), its count the
+    // parameter's: an accessor reaches arrays of one kind or the other.
+    let count_of <- runtime_global(name_of(runtime_count));
+    let carried_w: Expr = match r.carried { None => Blank, Some(ix) => r.params.nth(ix).map(λ p => Local(p)).unwrap_or(Blank) };
+    let count_e: HeldEach → Expr = λ e => match e.at.carried { True => ap(count_of, [carried_w]), False => NatLit(e.term.count) };
+    let carried_of: List<HeldEach> → Bool = λ es => es.any_bit(λ e => e.at.carried);
+    let mixed: Bool = readers_at.any_bit(λ es => carried_of(es) && es.any_bit(λ e => !e.at.carried))
+        || writers_at.any_bit(λ es => carried_of(es) && es.any_bit(λ e => !e.at.carried));
+    let unmixed <- match mixed {
+        True => runtime_held_refused(name, "one accessor reaches an array of a literal count and one counted by a parameter"),
+        False => pure(trivial),
+    };
+    let cn: Tac<Option<List<Expr>>> = match r.carried {
+        None => pure(None),
+        Some(_) => runtime_held_each<String, Expr>(["rt_held_counted::Reader::spanned", "rt_held_counted::Writer::filled", "rt_held_fields::Stored::span_entry", "rt_held_fields::Stored::fill_entry",
+            "rt_held_fields::HWorld::spans_array", "rt_held_fields::HWorld::fills_array", "rt_held_counted::FTm::kept_counted", "rt_held_counted::FFun::held_agrees_counted"],
+            λ nm => runtime_held_ref(nm)).bind(λ es => pure(Some(es))),
+    };
+    let carried_names <- cn;
+    let cname: Nat → Expr = λ i => match carried_names { None => Blank, Some(es) => es.nth(i).unwrap_or(Blank) };
+    let array: Expr → HeldEach → Expr = λ of e => match e.at.carried {
+        True => ap(of, [record, e.ty, whole, e.codec, e.instance, count_e(e), e.at.part]),
+        False => ap(of, [record, e.ty, whole, e.codec, e.instance, NatLit(e.term.count), e.at.part]),
+    };
     let readers_e = runtime_held_list(n.more, n.none, List::range(readers.len()).map(λ j => match readers.nth(j).unwrap_or([]) {
         Nil => match readers_at.nth(j).unwrap_or([]) {
             Nil => ap(n.plain, [record]),
-            Cons(e, more) => ap(n.reader_at, [record, runtime_held_list(n.more, n.none, Cons(e, more).map(λ e => array(n.index_entry, e)))]),
+            Cons(e, more) => match carried_of(Cons(e, more)) {
+                True => ap(cname(0), [record, runtime_held_list(n.more, n.none, Cons(e, more).map(λ e => array(cname(2), e)))]),
+                False => ap(n.reader_at, [record, runtime_held_list(n.more, n.none, Cons(e, more).map(λ e => array(n.index_entry, e)))]),
+            },
         },
         Cons(a, more) => ap(n.reader_of, [record, runtime_held_list(n.more, n.none, Cons(a, more).map(λ a => entry(n.read_entry, a)))]),
     }));
@@ -6625,7 +6671,10 @@ fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanPa
                     Nil => ap(n.apart, [record]),
                     Cons(e, more) => ap(n.writer_at, [record, runtime_held_list(n.more, n.none, Cons(e, more).map(byte_array))]),
                 },
-                Cons(e, more) => ap(n.writer_at, [record, runtime_held_list(n.more, n.none, Cons(e, more).map(λ e => array(n.store_entry, e)))]),
+                Cons(e, more) => match carried_of(Cons(e, more)) {
+                    True => ap(cname(1), [record, runtime_held_list(n.more, n.none, Cons(e, more).map(λ e => array(cname(3), e)))]),
+                    False => ap(n.writer_at, [record, runtime_held_list(n.more, n.none, Cons(e, more).map(λ e => array(n.store_entry, e)))]),
+                },
             },
             Cons(a, more) => ap(n.writer_of, [record, runtime_held_list(n.more, n.none, Cons(a, more).map(λ a => entry(n.write_entry, a)))]),
         },
@@ -6639,10 +6688,13 @@ fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanPa
     // What an array's checked accessor owes: one application of the
     // array's lemma, at the array's part and the function's place.
     let owes_at: Expr → Nat → List<HeldEach> → Expr = λ lemma j es =>
-        runtime_held_tuple(n.owed, end, es.map(λ e => ap(lemma, [record, e.ty, hw, whole, e.codec, e.instance, NatLit(e.term.count), e.at.part, by_refl, NatLit(j), by_refl])));
+        runtime_held_tuple(n.owed, end, es.map(λ e => ap(lemma, [record, e.ty, hw, whole, e.codec, e.instance, count_e(e), e.at.part, by_refl, NatLit(j), by_refl])));
     let owes: Expr → List<List<HeldAccess>> → Expr = λ field fss =>
         runtime_held_tuple(n.owed, end, List::range(fss.len()).map(λ j => match fss.nth(j).unwrap_or([]) {
-            Nil => owes_at(n.indexes_array, j, readers_at.nth(j).unwrap_or([])),
+            Nil => match carried_of(readers_at.nth(j).unwrap_or([])) {
+                True => owes_at(cname(4), j, readers_at.nth(j).unwrap_or([])),
+                False => owes_at(n.indexes_array, j, readers_at.nth(j).unwrap_or([])),
+            },
             Cons(a, more) => runtime_held_tuple(n.owed, end, Cons(a, more).map(λ a => ap(field, [record, a.ty, hw, whole, a.codec, a.instance, a.part, by_refl, NatLit(j), by_refl]))),
         }));
     let q <- runtime_quoting(ts);
@@ -6664,7 +6716,10 @@ fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanPa
             Nil => match writers_at.nth(j).unwrap_or([]) {
                 Nil => runtime_held_tuple(n.owed, end, writers_bytes.nth(j).unwrap_or([]).map(λ e =>
                     ap(n.stores_bytes_array, [record, hw, whole, NatLit(e.term.count), e.at.part, by_refl, NatLit(j), by_refl]))),
-                Cons(e, more) => owes_at(n.stores_array, j, Cons(e, more)),
+                Cons(e, more) => match carried_of(Cons(e, more)) {
+                    True => owes_at(cname(5), j, Cons(e, more)),
+                    False => owes_at(n.stores_array, j, Cons(e, more)),
+                },
             },
             Cons(a, more) => runtime_held_tuple(n.owed, end, Cons(a, more).map(λ a => ap(n.writes_field, [record, a.ty, hw, whole, a.codec, a.instance, a.part, by_refl, NatLit(j), by_refl]))),
         },
@@ -6672,7 +6727,14 @@ fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanPa
     let sound = Lam(rest0.ref, ap(n.sound_of, [record, hw, whole, owes(n.reads_field, readers), owes_writers]));
     let sound_t <- infer(sound).or_fail("runtime: `" ++ name ++ "`: what its accessors owe at the record's fields (a field's accessor is a function of the program that reads or stores its codec's word): ");
     let sound_e <- runtime_held_over(r.params, sound, "what `" ++ name ++ "`'s marks owe");
-    let said = HeldSaid(n, ts, bytes_h, rfl, yes, zero, end, record, whole, hw_of_rest, marked_t, sound_t, sound_e, files, no_file, buffers_h, span_at);
+    // Every mark of the carried array counts the parameter's elements: one
+    // `refl` for each array of each such mark, `trivial` for every other.
+    let counted_of: List<List<HeldEach>> → Expr = λ ess => runtime_held_tuple(n.owed, end, ess.map(λ es => match carried_of(es) {
+        True => runtime_held_tuple(n.owed, end, es.map(λ _ => ap(rfl, [Blank, ap(count_of, [carried_w])]))),
+        False => end,
+    }));
+    let carried = r.carried.map(λ _ => HeldCarried(carried_w, ap(n.owed, [Blank, Blank, counted_of(readers_at), counted_of(writers_at)]), cname(6), cname(7)));
+    let said = HeldSaid(n, ts, bytes_h, rfl, yes, zero, end, record, whole, hw_of_rest, marked_t, sound_t, sound_e, files, no_file, buffers_h, span_at, carried);
     match r.measured {
         False => runtime_held_straight(name, f, r, parts, said),
         True => match parts.counted {

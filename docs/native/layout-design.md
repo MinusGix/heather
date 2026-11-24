@@ -1261,9 +1261,10 @@ with none is refused as "no instance".
 the word a value is held as (`wide`, `narrow`, and that a value is kept
 by its word), the `runtime fn` that reads the codec's value and the one
 that stores it, and the two theorems that tie them to `get` and `put`
-under a length word. Instances for `Stored::u32_be()` and
-`Stored::u64_be()`, which are the words that have compiled code
-(`stored_words.hthr`). Over it, the laws at a part of what a span holds
+under a length word. Instances for `Stored::u32_be()`,
+`Stored::u64_be()`, `Stored::u32_le()` and `Stored::u64_le()`, which are
+the words that have compiled code (`stored_words.hthr`; the little-endian
+pair since 2026-11-24, §11.4). Over it, the laws at a part of what a span holds
 for every codec with an accessor (`Stored::read_at_part`,
 `Stored::write_at_part`), which are the four width-specific theorems of
 `stored_words.hthr` as one pair. Stage B's reflector (§9.4) finds a
@@ -1397,3 +1398,110 @@ Minus as a decision. The recommendation: the accessor class with stage
 B's reflector (§9.5 round 3), the layout class once words have their
 instance, and the shape left as this checked prototype until a program
 needs to hold a layout.
+
+## 11. Records that take parameters (built 2026-11-24)
+
+Minus's decision for rung 2 (`docs/native/rung2-spans-design.md` §3): a
+span of anything is a `laid record` that takes parameters, not a type of
+its own.
+
+```heather
+laid record Limbs(n: u64)     { w: [u64; n.toNat()] }
+laid record Vector(cap: u64)  { len: u64, items: [u64; cap.toNat()] }
+```
+
+### 11.1 The declaration
+
+`laid` (`lib/std/machine/laid.hthr`) takes a record whose parameters are
+words or `Nat`s. `T::stored(p…)` and each `T::f_part(p…)` take them and are
+the same composition at them: `Stored::array` already took any count, so
+the codec of `Limbs(n)` is §6.2's at `n.toNat()`, and every law of a part
+holds at an open count with nothing proved again (probes in
+`lib/_tests/std/machine/laid_tests.hthr`: a field's part read at an open
+capacity, the size `(n.toNat() * 8).round_up(8)`, the bytes at a count of
+three).
+
+- **Only the last field's size may depend on the parameters**, like C's
+  flexible array member. Every other field then lies at an offset that is a
+  numeral whatever they are, so `T::f_at` is still a numeral; the host
+  computes numerals of closed terms only, so the generator computes it with
+  the parameters at their zeros (each abstracted and applied where it is
+  bound, `laid_closed`). A field whose size depends on them and is not last
+  is refused with that reason. A field is judged so by its type (an array
+  whose count is not a numeral, or a record applied to anything but
+  numerals), not by comparing sizes, so the refusal does not depend on
+  which values are tried.
+- A field whose type is another parameterized laid record is stored by
+  `R::stored` applied to its arguments.
+
+### 11.2 Which parameters the code takes
+
+Read off the layout, not an annotation:
+
+- **Erased.** A parameter no array counts by (a tag, a refinement) is not a
+  word of the code: `runtime fn Tagged::sum({k: u64}, mut self t: Tagged(k),
+  d: u64)` compiles to code over the span, its length word and `d`, and
+  `runs_held` holds at every `k`. A body that reads such a parameter's value
+  is refused (it is not runtime data).
+- **Carried.** A parameter an array's count is the `toNat()` of is a word
+  the code takes **right after the length word**: `Limbs::dec_at::bytes(own,
+  length, n, i, borrow)`. It is passed, never stored in the span. A count
+  computed from parameters (`(n + 1).toNat()`) is refused for now.
+
+The reflector (`rt_held_reflect.hthr`) opens the parameters before the
+record, binds the carried one's local to that operand, and re-reads the
+record's fields at fresh locals of the parameters, which the generator
+states every declaration under (the marks, what they owe and `runs_held`
+are functions of them, `T::m::runs_held(n, own, t, length, …, holds)`). An
+element of the carried array is `t.w.at(i)` and `t.w := t.w.put(i, x)`, the
+`Vec` methods with their found proofs; the accessor's checked read and
+store are called with the carried word as the count. There is no element
+at a numeral index of such an array (its count is no numeral).
+
+### 11.3 The theory: a count the verdict cannot compare
+
+The literal-count marks (`Indexes`, `Stores`, §9.5) find an array by its
+offset and its count, and the verdict reads both off the literals that
+bound them. A carried count is an open word: at the pin, the held meaning
+would compare `n.toNat()` with `n.toNat()` by `Nat::same` and stay stuck,
+and the verdict, computed by evaluation, could not compare it either. So:
+
+- **Two more marks** (`rt_held.hthr`): `Spans` and `Fills`, an array by its
+  offset and then one count and its element. Their meaning does not compare
+  the count operand with anything; the old verdict refuses them, so every
+  theorem that existed (and `rt_held_loop.hthr`) is unchanged but for an
+  absurd case.
+- **A verdict that knows which variable the count is**
+  (`rt_held_counted.hthr`, `FTm::kept_counted`): the count operand must be
+  the variable after the length word, `len - 1` at every depth (both move
+  together under a binder). It is a comparison of variable numbers, decided
+  by evaluation like the rest.
+- **Two premises the agreement carries** (`FTm::held_runs_counted`):
+  `FTm::Counts`, that this variable's word is `w`, threaded beside the
+  length word (`FTm::counts_more`); and `HWorld::Counted`, that every such
+  mark counts `w.toNat()` elements. At a function both are `refl`: the
+  variable is the function's own parameter, and the marks are built with
+  that count.
+- **What a mark owes is the literal-count lemma's** (`HWorld::spans_array`,
+  `fills_array` in `rt_held_fields.hthr`, each `indexes_array` or
+  `stores_array` at the open count), so nothing about an element is proved
+  again.
+
+`FFun::held_agrees_counted` is what a function's `runs_held` applies.
+Calls between functions of a parameterized record, a span read beside a
+carried count, and loops over such records are refused, each by name; the
+loops wait for `loops-on-one-combinator` (round 4), which moves the loop
+layer.
+
+### 11.4 Byte order
+
+`laid`'s default, little-endian, now compiles: `Stored::u32_le()` and
+`u64_le()` have accessors (`stored_words.hthr`: the word reads, stores and
+checked element accessors, each proved the codec's by `be_join_32` at the
+bytes reversed; instances in `stored_accessor.hthr`). A word read from a
+default-order record is the word a Rust `&[u64]` holds there (probes
+`pair_swap_runs`, `le_u64_read`). Records that said `endian := BigEndian`
+keep it.
+
+Probes: `lib/_tests/native/runtime/runtime_held_params_tests.hthr`, and
+the ledger's `PortLimbs` rows (`runtime_ports_tests.hthr`).

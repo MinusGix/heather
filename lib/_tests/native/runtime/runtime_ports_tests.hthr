@@ -163,16 +163,44 @@ runtime fn List::port_depth(self s: List<u8>, n, i: u64) → u64 decreases (n - 
 // ---------------------------------------------------------------------------
 // Rung 2: spans of anything, several at once
 
-// `Numeral::pred`: a borrow walking up the limbs.
-// expect-error: a type with no runtime layout
-runtime fn port_pred_limbs(mut limbs: [u64; 4]) → u64 {
-    let mut borrow: u64 = 1;
-    for i in 0..4 {
-        let old = limbs[i];
-        limbs[i] := old - borrow;
-        borrow := if old < borrow { 1 } else { 0 };
-    }
-    borrow
+// `Numeral::pred`: a borrow walking up the limbs, as many as the word `n`
+// says (docs/native/rung2-spans-design.md §3): a laid record that takes
+// the count, carried as a word beside the span.
+laid record PortLimbs(n: u64) { w: [u64; n.toNat()] }
+
+// One step: limb `i` less the borrow, and the borrow out.
+runtime fn PortLimbs::borrow_at({n: u64}, mut self l: PortLimbs(n), i, borrow: u64) → u64 {
+    if h: i < n {
+        let old = l.w.at(i);
+        l.w := l.w.put(i, old - borrow);
+        if old < borrow { 1 } else { 0 }
+    } else { borrow }
+}
+
+// At two limbs and at one: the code takes the span, its length word, `n`
+// and the operands, and stores the limb little-endian.
+theorem port_borrow_at_runs(): PortLimbs::borrow_at::bytes([0, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0], 16, 2, 0, 1).value = 1 ∧
+    PortLimbs::borrow_at::bytes([0, 0, 0, 0, 0, 0, 0, 0, 5, 0, 0, 0, 0, 0, 0, 0], 16, 2, 1, 1).after = [0, 0, 0, 0, 0, 0, 0, 0, 4, 0, 0, 0, 0, 0, 0, 0] ∧
+    PortLimbs::borrow_at::bytes([3, 0, 0, 0, 0, 0, 0, 0], 8, 1, 0, 1).after = [2, 0, 0, 0, 0, 0, 0, 0] {
+    ⟨refl, ⟨refl, refl⟩⟩
+}
+
+// What it publishes, at every count.
+theorem port_borrow_at_held(n: u64, own: List<u8>, l: PortLimbs(n), length, i, borrow: u64, holds: rt_held::Stored::Holds(PortLimbs::stored(n), own, length, l)):
+    PortLimbs::borrow_at(l, i, borrow, n := n).value = PortLimbs::borrow_at::bytes(own, length, n, i, borrow).value ∧
+    rt_held::Stored::Holds(PortLimbs::stored(n), PortLimbs::borrow_at::bytes(own, length, n, i, borrow).after, length, PortLimbs::borrow_at(l, i, borrow, n := n).after) {
+    let ran = PortLimbs::borrow_at::runs_held(n, own, l, length, i, borrow, holds);
+    ⟨ran.value, ran.holds⟩
+}
+
+// The walk itself, a loop over the limbs. Loops over a laid record that
+// takes parameters wait for the loop combinator (loops-on-one-combinator).
+// expect-error: waits for the loop combinator
+runtime fn PortLimbs::port_pred_limbs({n: u64}, self l: PortLimbs(n), i, borrow: u64) → Mutated<PortLimbs(n), u64> decreases (n - i).toNat() {
+    if h: i < n {
+        let old = l.w.at(i);
+        @port_pred_limbs(n, l with { w = l.w.put(i, old - borrow) }, i + 1, if old < borrow { 1 } else { 0 })
+    } else { Mutated(l, borrow) }
 }
 
 // `memcpy`: one span read, another written.

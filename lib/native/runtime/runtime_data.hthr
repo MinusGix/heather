@@ -24,6 +24,7 @@ import layout;
 import rt_held;
 import rt_held_fields;
 import rt_held_loop;
+import rt_held_counted;
 import stored_accessor;
 import bytes;
 import rt_bytes;

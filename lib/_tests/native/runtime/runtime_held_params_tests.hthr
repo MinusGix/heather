@@ -73,3 +73,86 @@ fn tagged_code() → (List<u8> → u64 → u64 → Mutated<List<u8>, u64>) { Tag
 // code takes, which an erased parameter is not.
 // expect-error: a local that is not runtime data
 runtime fn Tagged::tag({k: u64}, self t: Tagged(k)) → u64 { k }
+
+// ---------------------------------------------------------------------------
+// A parameter that counts an array is carried
+
+// Limbs of a number, as `numeral`'s are: as many as the word `n` says,
+// the machine's order, what a Rust `&mut [u64]` of length `n` is.
+laid record Limbs(n: u64) { w: [u64; n.toNat()] }
+
+// One step of a borrow walking up the limbs (`Numeral::pred`): limb `i`
+// less the borrow, and the borrow out. The index is inside by the test.
+runtime fn Limbs::dec_at({n: u64}, mut self l: Limbs(n), i, borrow: u64) → u64 {
+    if h: i < n {
+        let old = l.w.at(i);
+        l.w := l.w.put(i, old - borrow);
+        if old < borrow { 1 } else { 0 }
+    } else { borrow }
+}
+
+// The code takes the span, its length word, `n` and the operands.
+fn dec_code() → (List<u8> → u64 → u64 → u64 → u64 → Mutated<List<u8>, u64>) { Limbs::dec_at::bytes }
+
+// Two limbs, 0 and 5: the first borrows and passes the borrow on.
+fn TWO_LIMBS() → List<u8> { [b(0), b(0), b(0), b(0), b(0), b(0), b(0), b(0), b(5), b(0), b(0), b(0), b(0), b(0), b(0), b(0)] }
+
+theorem dec_two_runs(): Limbs::dec_at::bytes(TWO_LIMBS(), w(16), w(2), w(0), w(1)).value = w(1) ∧
+    Limbs::dec_at::bytes(TWO_LIMBS(), w(16), w(2), w(0), w(1)).after =
+        [b(0xff), b(0xff), b(0xff), b(0xff), b(0xff), b(0xff), b(0xff), b(0xff), b(5), b(0), b(0), b(0), b(0), b(0), b(0), b(0)] {
+    ⟨refl, refl⟩
+}
+
+// Three limbs: the third, 7, takes the borrow and stops it.
+fn THREE_LIMBS() → List<u8> { TWO_LIMBS() ++ [b(7), b(0), b(0), b(0), b(0), b(0), b(0), b(0)] }
+
+theorem dec_three_runs(): Limbs::dec_at::bytes(THREE_LIMBS(), w(24), w(3), w(2), w(1)).value = w(0) ∧
+    Limbs::dec_at::bytes(THREE_LIMBS(), w(24), w(3), w(2), w(1)).after = TWO_LIMBS() ++ [b(6), b(0), b(0), b(0), b(0), b(0), b(0), b(0)] {
+    ⟨refl, refl⟩
+}
+
+// Past the count the code stores nothing: limb 2 of two limbs is not
+// there, though the span is long enough to hold it.
+theorem dec_past_count_runs(): Limbs::dec_at::bytes(THREE_LIMBS(), w(24), w(2), w(2), w(1)).after = THREE_LIMBS() { refl }
+
+// What it publishes, at every count: where the span holds `n` limbs, the
+// code answers what the function answers and leaves the limbs it leaves.
+theorem dec_held(n: u64, own: List<u8>, l: Limbs(n), length, i, borrow: u64, holds: rt_held::Stored::Holds(Limbs::stored(n), own, length, l)):
+    Limbs::dec_at(l, i, borrow, n := n).value = Limbs::dec_at::bytes(own, length, n, i, borrow).value ∧
+    rt_held::Stored::Holds(Limbs::stored(n), Limbs::dec_at::bytes(own, length, n, i, borrow).after, length, Limbs::dec_at(l, i, borrow, n := n).after) {
+    let ran = Limbs::dec_at::runs_held(n, own, l, length, i, borrow, holds);
+    ⟨ran.value, ran.holds⟩
+}
+
+// A limb read without a test bounding its index: no proof is found.
+// expect-error: `at`'s `inside` was left to its default, which did not give
+runtime fn Limbs::loose({n: u64}, mut self l: Limbs(n), i: u64) → u64 { l.w.at(i) }
+
+// A test against another bound does not bound it either.
+// expect-error: `put`'s `inside` was left to its default, which did not give
+runtime fn Limbs::wrong({n: u64}, mut self l: Limbs(n), i, m: u64) → u64 {
+    if h: i < m { l.w := l.w.put(i, 0); 1 } else { 0 }
+}
+
+// A header before the array: the count's word, and a field at a numeral.
+laid record Vector(cap: u64) { len: u64, items: [u64; cap.toNat()] }
+
+runtime fn Vector::push({cap: u64}, mut self v: Vector(cap), x: u64) → u64 {
+    if h: v.len < cap {
+        v.items := v.items.put(v.len, x);
+        v.len := v.len + 1;
+        1
+    } else { 0 }
+}
+
+theorem vector_push_runs(): Vector::push::bytes([b(1), b(0), b(0), b(0), b(0), b(0), b(0), b(0), b(9), b(0), b(0), b(0), b(0), b(0), b(0), b(0),
+        b(0), b(0), b(0), b(0), b(0), b(0), b(0), b(0)], w(24), w(2), w(4)).after =
+    [b(2), b(0), b(0), b(0), b(0), b(0), b(0), b(0), b(9), b(0), b(0), b(0), b(0), b(0), b(0), b(0), b(4), b(0), b(0), b(0), b(0), b(0), b(0), b(0)] { refl }
+
+// Full: nothing stored.
+theorem vector_push_full_runs(): Vector::push::bytes([b(1), b(0), b(0), b(0), b(0), b(0), b(0), b(0), b(9), b(0), b(0), b(0), b(0), b(0), b(0), b(0)], w(16), w(1), w(4)).value = w(0) { refl }
+
+theorem vector_push_held(cap: u64, own: List<u8>, v: Vector(cap), length, x: u64, holds: rt_held::Stored::Holds(Vector::stored(cap), own, length, v)):
+    Vector::push(v, x, cap := cap).value = Vector::push::bytes(own, length, cap, x).value {
+    Vector::push::runs_held(cap, own, v, length, x, holds).value
+}
