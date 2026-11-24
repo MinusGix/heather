@@ -2020,12 +2020,16 @@ fn runtime_callees(pair: Expr, unit: Expr, gs: List<Nat>) → Expr {
 
 // A callee's signature, read off its type: the words its code takes (two
 // for each span it is lent, `rt_lent`), and how many spans it is lent.
-fn runtime_sig_from(fuel: Nat, k: Known, t: Handle, ps: List<Ty>) → Tac<Pair<Nat, Sig>> {
+// An erased parameter (`rt_erased_param`) is none of its words.
+fn runtime_sig_from(fuel: Nat, k: Known, t: Handle, ps: List<Ty>, under: Option<LocalRef>) → Tac<Pair<Nat, Sig>> {
     match fuel {
         Zero => runtime_fail("a callee with more parameters than the generator reads"),
         Succ(f) => view(t).bind(λ v => match v {
-            HPi(dom) => k.ty(dom).bind(λ p => open(t, "x").or_fail("runtime: a callee's type: ").bind(λ o =>
-                runtime_sig_from(f, k, o.body, ps ++ [p]))),
+            HPi(dom) => rt_erased_param(dom, under).bind(λ erased => match erased {
+                True => open(t, "e").or_fail("runtime: a callee's type: ").bind(λ o => runtime_sig_from(f, k, o.body, ps, Some(o.local.ref))),
+                False => k.ty(dom).bind(λ p => open(t, "x").or_fail("runtime: a callee's type: ").bind(λ o =>
+                    runtime_sig_from(f, k, o.body, ps ++ [p], Some(o.local.ref)))),
+            }),
             _ => k.ty(t).bind(λ r => { let lent = rt_lent(ps); pure(Pair(lent.fst, Sig(lent.snd, r))) }),
         }),
     }
@@ -2035,7 +2039,7 @@ fn runtime_sigs(k: Known, gs: List<Nat>) → Tac<List<Pair<Nat, Sig>>> {
     match gs {
         Nil => pure([]),
         Cons(g, rest) => infer(Global(GlobalRef(g))).or_fail("runtime: a callee's type: ").bind(λ t =>
-            runtime_sig_from(64, k, t, []).bind(λ s => runtime_sigs(k, rest).bind(λ ss => pure(Cons(s, ss))))),
+            runtime_sig_from(64, k, t, [], None).bind(λ s => runtime_sigs(k, rest).bind(λ ss => pure(Cons(s, ss))))),
     }
 }
 
@@ -4644,17 +4648,18 @@ fn runtime_span_sig_from(fuel: Nat, k: Known, names: FileNames, t: Handle, ps: L
     match fuel {
         Zero => runtime_fail("a callee with more parameters than the generator reads"),
         Succ(f) => view(t).bind(λ v => match v {
-            HPi(dom) => view(dom).bind(λ dv => match dv {
+            HPi(dom) => view(dom).bind(λ dv => rt_is_erased_ty(dom).bind(λ erased => match dv {
                 // A proof (a squashed condition): the code does not take it.
                 HOther => open(t, "x").or_fail("runtime: a callee's type: ").bind(λ o => runtime_span_sig_from(f, k, names, o.body, ps)),
-                _ => runtime_bytes_sig_at(k, names, t, ps).bind(λ at_bytes => match at_bytes {
+                // Nor an `Erased<A>`.
+                _ => match erased { True => open(t, "x").or_fail("runtime: a callee's type: ").bind(λ o => runtime_span_sig_from(f, k, names, o.body, ps)), False => runtime_bytes_sig_at(k, names, t, ps).bind(λ at_bytes => match at_bytes {
                     // A function of a `Bytes(n)`: its code takes the
                     // record's bytes and `n`.
                     Some(after) => runtime_span_sig_from(f, k, names, after, [ByteList(0), Word(64)]),
                     None => k.ty(dom).bind(λ p => open(t, "x").or_fail("runtime: a callee's type: ").bind(λ o =>
                         runtime_span_sig_from(f, k, names, o.body, ps ++ [p]))),
-                }),
-            }),
+                }) },
+            })),
             _ => rt_file_result(4, k, names, t).bind(λ r => rt_file_codes(ps).bind(λ codes => pure(Pair(codes.fst, Sig(codes.snd, r))))),
         }),
     }
@@ -5695,6 +5700,16 @@ fn runtime_words_out(tys: Table, t: Ty) → Bool {
 // for now (a count or a type held by its repr across such a function's
 // boundary is not generated yet).
 fn runtime_span(name: String, f: GlobalRef) → Tac<List<Decl>> {
+    // Its code is compiled from the function itself, typed by its own
+    // signature, so one taking an erased parameter needs a shadow, as a
+    // function of words does (issues/runtime-erased-pure-shadow.md).
+    let f_t <- infer(Global(f)).or_fail("runtime: `" ++ name ++ "`'s type: ");
+    let erasing <- rt_takes_erased(64, f_t, None);
+    let unerased <- match erasing {
+        True => runtime_fail("`" ++ name ++ "`: a function over a span that takes an erased parameter (a proof, an `Erased<A>`) is not compiled yet; "
+            ++ "a function of a laid record or of a `Bytes(n)` takes one (issues/runtime-erased-pure-shadow.md)"),
+        False => pure(trivial),
+    };
     let names <- rt_file_names();
     let found <- runtime_span_reflect(name, f, names);
     let k = found.fst;
@@ -6173,6 +6188,16 @@ fn runtime_judged(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, world:
 }
 
 fn runtime_reads(name: String, f: GlobalRef, levels: Nat := 0, stack: Nat := 0) → Tac<List<Decl>> {
+    // A function of words taking an erased parameter would be compiled as
+    // its shadow, its reflection's meaning; that is not built
+    // (issues/runtime-erased-pure-shadow.md).
+    let f_t <- infer(Global(f)).or_fail("runtime: `" ++ name ++ "`'s type: ");
+    let erasing <- rt_takes_erased(64, f_t, None);
+    let unerased <- match erasing {
+        True => runtime_fail("`" ++ name ++ "`: a function of words that takes an erased parameter (a proof, an `Erased<A>`) is not compiled yet, nor one lent a span; "
+            ++ "a function of a laid record or of a `Bytes(n)` takes one (issues/runtime-erased-pure-shadow.md)"),
+        False => pure(trivial),
+    };
     let k0 <- rt_known_in([name], [], True);
     // The reflection and its callees' signatures, the types held by their
     // reprs added to the table as the walk meets them (design §16.13).
@@ -7007,11 +7032,13 @@ fn runtime_of_bytes(f: GlobalRef) → Tac<Bool> {
 
 // The parameters of a function's type that are words, by their locals:
 // the others are proofs (squashed conditions), which the code does not take.
+// A proof (whose type `View` shows no layer of) or an `Erased<A>` is none of
+// them, wherever it stands (issues/runtime-erased-parameters.md).
 fn runtime_bytes_words(xs: List<LocalRef>) → Tac<List<LocalRef>> {
     match xs {
         Nil => pure([]),
         Cons(x, rest) => infer(Local(x)).or_fail("runtime: a parameter's type: ").bind(λ t => view(t).bind(λ v =>
-            runtime_bytes_words(rest).bind(λ more => pure(match v { HOther => more, _ => Cons(x, more) })))),
+            rt_is_erased_ty(t).bind(λ erased => runtime_bytes_words(rest).bind(λ more => pure(match v { HOther => more, _ => match erased { True => more, False => Cons(x, more) } }))))),
     }
 }
 

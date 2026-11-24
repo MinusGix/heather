@@ -2562,17 +2562,25 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
 // A function: its parameters (the body's leading `λ`s), its result's code,
 // and its body as a term.
 
-fn rt_params(fuel: Nat, k: Known, st: RSt, tys: List<Ty>, b: Handle) → Tac<Pair<Pair<RSt, List<Ty>>, Handle>> {
+// An erased parameter (`rt_erased_param`) is opened and bound to no
+// variable: the code does not take it, and a use of it as runtime data is
+// refused.
+fn rt_params_under(fuel: Nat, k: Known, st: RSt, tys: List<Ty>, b: Handle, under: Option<LocalRef>) → Tac<Pair<Pair<RSt, List<Ty>>, Handle>> {
     match fuel {
         Zero => rt_refuse("more parameters than the reflector's fuel"),
         Succ(f) => view(b).bind(λ v => match v {
-            HLam(dom) => k.ty(dom).bind(λ t => open(b, "x").bind(λ c => rt_accepted("a parameter", c)).bind(λ o =>
-                rt_params(f, k, RSt(st.depth + 1, st.lets, st.memo, st.handles, Cons(Pair(o.local.ref.id, st.depth), st.locals), st.funs),
-                    tys ++ [t], o.body))),
+            HLam(dom) => rt_erased_param(dom, under).bind(λ erased => match erased {
+                True => open(b, "e").bind(λ c => rt_accepted("an erased parameter", c)).bind(λ o => rt_params_under(f, k, st, tys, o.body, Some(o.local.ref))),
+                False => k.ty(dom).bind(λ t => open(b, "x").bind(λ c => rt_accepted("a parameter", c)).bind(λ o =>
+                    rt_params_under(f, k, RSt(st.depth + 1, st.lets, st.memo, st.handles, Cons(Pair(o.local.ref.id, st.depth), st.locals), st.funs),
+                        tys ++ [t], o.body, Some(o.local.ref)))),
+            }),
             _ => pure(Pair(Pair(st, tys), b)),
         }),
     }
 }
+
+fn rt_params(fuel: Nat, k: Known, st: RSt, tys: List<Ty>, b: Handle) → Tac<Pair<Pair<RSt, List<Ty>>, Handle>> { rt_params_under(fuel, k, st, tys, b, None) }
 
 // The spans a function is lent, read off its parameters' codes: each
 // leading byte list followed by a 64-bit word is a span and its length

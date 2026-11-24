@@ -128,3 +128,31 @@ runtime fn Slots::get_first(self s: Slots) → u64 { s.get(0, 0) }
 runtime fn Slots::sum_from(self s: Slots, i, acc: u64, g: Erased<u64>) → u64 decreases (4 - i).toNat() {
     if h: i < 4 { s.sum_from(i + 1, acc + s.heap.at(i), g) } else { acc }
 }
+
+// ---------------------------------------------------------------------------
+// A function of words taking a proof: not compiled yet
+
+// It would be compiled as its shadow, its reflection's meaning, which its
+// callers' tables would list (issues/runtime-erased-pure-shadow.md).
+// expect-error: a function of words that takes an erased parameter
+runtime fn erased_div(n, d: u64, nonzero: ∥0 < d.toNat()∥ := bv_omega) → u64 { n / d }
+
+// expect-error: a function of words that takes an erased parameter
+runtime fn erased_pick(g: Erased<u64>, x: u64) → u64 { x }
+
+// Nor one over a span: its code is compiled from the function itself.
+// expect-error: a function over a span that takes an erased parameter
+runtime fn List::erased_put(mut self s: List<u8>, n, i: u64, inside: ∥i < n∥ := bv_omega, x: u64) → u64 {
+    s.put_u64_be_within(n, i, x);
+    1
+}
+
+// ---------------------------------------------------------------------------
+// A `Bytes(n)`: a proof in the middle, and an erased datum
+
+runtime fn erased_byte({n: u64}, self s: Bytes(n), g: Erased<u64>, i: u64, inside: ∥i < s.len()∥ := bv_omega, k: u64) → u64 { ↑s.at(i) + k }
+
+// The code takes the span, its length word, `i` and `k`.
+fn erased_byte_code() → (List<u8> → u64 → u64 → u64 → Mutated<List<u8>, u64>) { erased_byte::bytes }
+
+theorem erased_byte_runs(): erased_byte::bytes([b(5), b(6), b(7)], w(3), w(1), w(10)).value = w(16) { refl }

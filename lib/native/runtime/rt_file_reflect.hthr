@@ -930,7 +930,7 @@ fn rt_file_words(hs: List<Handle>) → Tac<List<Handle>> {
         Nil => pure([]),
         Cons(h, rest) => infer(Hd(h)).bind(λ c => rt_file_words(rest).bind(λ more => match c {
             Refused(_) => pure(Cons(h, more)),
-            Accepted(t) => view(t).bind(λ v => pure(match v { HOther => more, _ => Cons(h, more) })),
+            Accepted(t) => view(t).bind(λ v => rt_is_erased_ty(t).bind(λ erased => pure(match v { HOther => more, _ => match erased { True => more, False => Cons(h, more) } }))),
         })),
     }
 }
@@ -1179,11 +1179,15 @@ fn rt_params_proved(fuel: Nat, count: Option<Nat>, k: Known, st: RSt, tys: List<
         Succ(f) => match count.map(λ c => c.same(0)).unwrap_or(False) {
             True => pure(Pair(Pair(st, tys), b)),
             False => view(b).bind(λ v => match v {
-                HLam(dom) => view(dom).bind(λ dv => open(b, "x").bind(λ c => rt_accepted("a parameter", c)).bind(λ o => match dv {
+                // An `Erased<A>` likewise (issues/runtime-erased-parameters.md).
+                HLam(dom) => view(dom).bind(λ dv => rt_is_erased_ty(dom).bind(λ erased => open(b, "x").bind(λ c => rt_accepted("a parameter", c)).bind(λ o => match dv {
                     HOther => rt_params_proved(f, count.map(λ c => c.pred()), k, st, tys, o.body),
-                    _ => k.ty(dom).bind(λ t => rt_params_proved(f, count.map(λ c => c.pred()), k,
+                    _ => match erased {
+                      True => rt_params_proved(f, count.map(λ c => c.pred()), k, st, tys, o.body),
+                      False => k.ty(dom).bind(λ t => rt_params_proved(f, count.map(λ c => c.pred()), k,
                         RSt(Succ(st.depth), st.lets, st.memo, st.handles, Cons(Pair(o.local.ref.id, st.depth), st.locals), st.funs), tys ++ [t], o.body)),
-                })),
+                    },
+                }))),
                 _ => match count {
                     None => pure(Pair(Pair(st, tys), b)),
                     Some(_) => rt_refuse("a step with fewer parameters than its function"),
