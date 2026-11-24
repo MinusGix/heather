@@ -6,7 +6,7 @@ twin of the step, §6.1); **stages 3b and 3c built** (one loop node in the
 runtime terms, §6.2; one over a span, §6.3); **stage 3d in review** (a span
 loop's state of several words, a loop that only reads its span, and a
 statement `if` that joins inside a pass, §6.4). What is left of round 3,
-and the fork it meets, is §6.5; rounds 4 and 5 (§8) are the rest of the
+and the fork it met, decided 2026-11-24, is §6.5; rounds 4 and 5 (§8) are the rest of the
 migration. Thread "Rebuild loops on
 one combinator", 2026-11-19, from the dogfooding review
 (`docs/native/dogfooding-plan.md`, PR #804).
@@ -507,15 +507,77 @@ the two agree at every argument. Three ways on:
 3. Keep tail mode for written recursion and steer ports to `while`. Nothing
    is deleted.
 
-**Recommended: 1**, for Minus to confirm. It is §6.2's choice applied to
-the other spelling of the same loop, it keeps every proof the generator
-makes a conversion, and it moves the cost into the elaborator once instead
-of into each consumer of the pin. What it changes for users: a proof that
-unfolds `f` by `refl` on a closed argument still runs (the loop evaluates
-pass by pass), and one that rewrites by `f_unfold` cites a theorem instead
-of a definitional equation. It is the next stage (3e); the ports the
-ledger keeps as tail calls (`port_set_insert`, `PortMap::insert_at`) are
-its first customers, and the lexer's linked code its regression test.
+**Decided (Minus, 2026-11-24): none of the three as posed, but the rule
+option 2 is a case of, for every function.** The aim is the most elegant
+method, easiest to work with and least special-cased.
+
+> The pin is always the function's own unfolding equation, pointwise.
+> Whether a self-call becomes a jump or a call is the lowering's choice,
+> not the definition's.
+
+1. **`f` is what the user wrote.** `runtime fn` is a marker and never
+   changes what `f` is; no source elaborates differently under it, and
+   adding a call of itself that is not last does not change how `f` is
+   defined.
+2. **The reflection reads the body once.** A call of itself in tail
+   position is an `Again` leaf of the loop node, any other call of itself
+   is a call (the procedure route, `runtime-fn-recursion-design.md` §10),
+   and a value returned is `Done`. A `while` (which elaborates to
+   `Loop(…).run`) and a tail recursion written by hand reflect to the same
+   node: both are a tail-recursive function.
+3. **The pin is pointwise everywhere**, `∀ x̄, meaning(x̄) = f(x̄)`
+   (`Setup::Pinned`, built for the procedure route), and it is the only
+   pin. Its proof depends only on how `f` is defined:
+   - where `f`'s body is the reflection's meaning (a function without
+     recursion, a `while`), it is `refl`, the check conversion makes today;
+   - where `f` is defined by recursion, it is one library theorem proved
+     once, **uniqueness of a well-founded fixpoint**: a function that
+     satisfies `f`'s unfolding equation, with the measure decreasing at
+     each call, is `f`. `Loop::unique` is its case for a loop. Per
+     function, the inputs are `f`'s unfolding equation (generated already)
+     and the reflection's one-pass meaning (by conversion).
+4. **Tail-call elimination is a lowering, proved once** by the loop node's
+   pass relation (§6); a call that is not last lowers as a call.
+
+What it removes: the split between a pin by conversion and a pointwise pin;
+tail mode (`Tm::lower_tail`), `Fun::Guarded` and the measured `FFun` path;
+the distinction between `while` and written recursion in the compiler;
+option 1's elaboration that depends on context and on the shape of calls.
+What stays: `Loop` and `Loop::rule` as the library for reasoning about
+loops (the invariant goes in, the invariant and the exit test come out),
+`while` as their sugar, and `f::induct` and unfolding by `refl` on `f` as
+written, so proofs about functions are untouched
+(`lib/native/runtime/word_map_laws.hthr` among them).
+
+What it costs: the span, laid-record and `Bytes(n)` publications each move
+their pin to the pointwise form (`Compile` did in the procedure round); the
+expectation, to confirm in the first step, is one congruence lemma per
+statement form ("this statement carries along `∀ x̄, f(x̄) = g(x̄)`"), not
+one per function. Fixpoint uniqueness proved once. A generated application
+of it per recursive function, unmeasured. And every recursive `runtime fn`
+needs its unfolding equation present, which
+`issues/branch-equations-silent-without-logic.md` shows can go missing
+silently today.
+
+Stages, each leaving the gates green:
+
+- **3e.** `Setup::Pinned` the pin of every publication route, proved by
+  `refl` throughout: no behaviour changes, and the gates check the
+  migration. If the congruences turn out per function rather than per
+  statement form, stop here and report: that is the risk this stage
+  measures.
+- **3f.** Uniqueness of a well-founded fixpoint for measured recursion,
+  with `Loop::unique` restated as its case.
+- **3g.** The reflector reads a written tail recursion into the loop node,
+  its pin by uniqueness. First customers: the ledger's tail calls
+  (`Bytes::port_set_insert`, `PortMap::insert_at`, `WordMap::insert_at`);
+  regression test: the linked lexer (`crates/linked`, `scripts/linked
+  --check`).
+- **3h.** Delete `Tm::lower_tail`, `Fun::Guarded`, `rt_loop`'s two loop
+  theorems and the measured `FFun` path.
+
+Round 4 (the loop files onto the node) follows as planned, and joins the
+same rule: a record or span loop's pin is pointwise like every other.
 
 ## 7. Bootstrapping
 
