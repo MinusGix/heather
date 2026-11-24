@@ -372,6 +372,37 @@ This is also the program written with indices into a vector or a slot map
 when lifetimes get hard elsewhere. Here that program is the meaning, and
 facts recover the pointer.
 
+**Built** (`ownership-paths`, `lib/std/machine/path.hthr`). A path is
+`Path<S, V> { get: S → Option<V>, set: S → V → S }` with `PathLaws`, the
+optional-lens laws: a write through a valid path is read back, writing back
+what was read changes nothing, the second of two writes stays, and a write
+through an invalid path changes nothing. So the partial write is total and
+every law holds at every owner; validity is about the read alone. A
+location is a path that always answers and a path that always answers is a
+location, each with its laws carried across; paths compose (`then`), and
+lawful locations compose to a lawful location. Two choices the note left
+open, taken there:
+
+- **A slice's value has its length in its type.** A window of a list is a
+  `Path<List<A>, [A; n]>` (`list_path.hthr`): a write cannot change the
+  shape, as a store through `&mut [T]` cannot, and the laws need no
+  side condition on the value. A window must fit to be valid, the empty
+  one too: `xs[5..5]` of four elements is not valid, as in Rust.
+- **Apart is a fact about the meaning; spans decide it.** `Apart(p, q)` is
+  the partial `Disjoint` (each write leaves what the other reads, the writes
+  commute). The decider is over footprints: `PathIn(p, span)` says a path of
+  a list reads and writes only at a `Span`'s indexes, every path composed
+  after it lies there too, and `Span::apart` on two footprints gives
+  `Apart` (sound; complete on spans, not on paths). Two fields of one
+  element share a span and are apart by their own `Disjoint`
+  (`Apart::under`), not by the decider.
+
+The worked examples are theorems: `split_at_mut` (`split_apart`,
+`split_rebuilds`, `split_reads`), holding element `i` while storing `j ≠ i`
+(`hold_while_store`), and the word map's slot for a key
+(`word_map_paths.hthr`), lawful at every table and, under `WordMapInv`,
+the read of `get` and the write of `insert` of a stored key.
+
 ### 10.5 Regions are named by what is borrowed
 
 `&{self} V` says the result borrows from `self`; a set of places is a region
@@ -398,6 +429,20 @@ that reallocates, an enum that changes variant, an arena reset. So:
   a frozen view it is the obligation of §10.3.
 
 Capacity is therefore a fact about a home, not a field of the value.
+
+**What the vector showed** (`ownership-paths`, `arena_paths.hthr`). A
+push keeps every path into the vector's *value*: element `i` of the list is
+element `i` after any push, growing or not. What a growing push breaks is a
+path that names the home, which is what a pointer is. So a live path into
+an owner whose storage can move names where it was taken: the arena
+vector's element is `elem_path(h, b, i)`, the header at `h`, the window at
+`b`, element `i`, valid while the header still points at `b`. Validity is
+stated over the home (the arena), and the vector's meaning is unchanged by
+both pushes (`push_in_abs`, `grow_abs`): a push with room keeps the path
+(`push_in_keeps`), growing does not (`grow_loses`, `grow_not_keeps`).
+"What an operation keeps" is a relation between two owners,
+`p.Keeps(before, after)`, so an operation with a precondition (room in the
+window) states it under that precondition.
 
 **Producers of `Valid`**, cheapest first, in the order facts already take:
 a region discipline over the reflected code (decidable, the common case); a
@@ -545,3 +590,8 @@ as a helper; addresses as numbers.
    interface keeps.
 6. The milestone's done-when (`docs/roadmap.md`, `nh-ownership`), to restate
    once the first wave has shown what holds.
+7. Footprints beyond a list's indexes: a laid record's `Part` already
+   carries a byte offset and size with read and frame laws
+   (`lib/std/machine/part.hthr`) that are `PathIn`'s over bytes, so a
+   field's path could be decided apart by its byte span. Not joined yet
+   (`ownership-paths-footprints`).

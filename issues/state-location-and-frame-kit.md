@@ -4,7 +4,7 @@ status: open
 labels: [stdlib,logic,semantics,design]
 area: heather-in-heather
 created: 2026-08-25
-updated: 2026-11-09
+updated: 2026-11-24
 ---
 
 Specifications that update structured state repeatedly need a common way to
@@ -67,3 +67,4 @@ syntax.  The round should decide from written proofs, not from terminology.
 
 - 2026-09-08: The reusable callee customer (`cb877f2`) needed generic read-after-write/read-after-other-write and seven explicit instruction-field lemmas. Generalize these into the core location kit where appropriate; [[state-projection-conversion-cost]] separately investigates whether the kernel unnecessarily revisits state history.
 - 2026-11-09: 2026-11-09: docs/surveys/native-mathematics-survey.md counts about 265 citations of point-update laws over five store types (Valuation::set_other/set_here, read_gpr_other, Memory::get_set_*, nat_map_get_set_*, Env::*_set_other), each kit separate; a generic point update over decidable equality would serve all five. Footprints as address sets are [[address-interval-sets]]; exclusive ownership is [[separation-algebra-ownership]].
+- 2026-11-24: [[ownership-paths]] landed the composition of law records (`compose_location_laws`, `lib/std/machine/path.hthr`) and the partial-access bridge: a `Path` is a partial lens with its own laws, a location is a path that always answers and a total path is a location (`of_location_laws`, `location_laws`); nested and disjoint fields are probed in `lib/_tests/std/machine/path_tests.hthr`. Still here: the frame statement over state relations and the overlapping bit slices.
