@@ -1011,11 +1011,30 @@ fn rt_held_answer(w: HeldWalk, st: RSt, segs: List<FSeg>, cfuns: List<Nat>, leve
     HeldEnd(FSeg::close(FSeg::lets(st.lets) ++ segs, FTm::Pure(Var(st.index(level)))), st.funs, cfuns, w.held)
 }
 
-// A body in tail position.
-fn rt_held_tail(fuel: Nat, cx: HeldCx, w: HeldWalk, h: Handle) → Tac<HeldEnd> {
+// Whether a reader's arm is a branch or its own call, which the walk
+// reads as a writer's are, and not its value.
+fn rt_held_arm(cx: HeldCx, v: Head) → Bool {
+    match v {
+        HMatch(_) => True,
+        HLocal(x, _) => cx.ih.map(λ i => i.same(x.id)).unwrap_or(False),
+        _ => False,
+    }
+}
+
+// A body in tail position. `reads`: the function only reads the record,
+// a loop whose arms are its value or its own call: an arm that is neither
+// is the value beside the record as it was, `Mutated(record, value)` as a
+// writer spells it.
+fn rt_held_tail(fuel: Nat, cx: HeldCx, w: HeldWalk, reads: Bool, h: Handle) → Tac<HeldEnd> {
     match fuel {
         Zero => rt_refuse("the body is deeper than the reflector's fuel"),
-        Succ(f) => view(h).bind(λ v => match v {
+        Succ(f) => view(h).bind(λ v => match reads && !rt_held_arm(cx, v) {
+          True => {
+            let ready <- rt_held_do(f, cx.rooted([h]), w, Ready([h]));
+            let rv <- rt_go(f, cx.known(ready.w), ready.w.st, h, True);
+            pure(rt_held_answer(ready.w, rv.fst, ready.w.segs, ready.w.cfuns, RSt::level(rv.snd)))
+          },
+          False => match v {
             HCtor(cty, _, _, values) => match cty.id.same(cx.names.mutated) {
                 False => rt_held_ends(),
                 True => match values.rev() {
@@ -1042,8 +1061,8 @@ fn rt_held_tail(fuel: Nat, cx: HeldCx, w: HeldWalk, h: Handle) → Tac<HeldEnd> 
                         let ready <- rt_held_do(f, cx.rooted([m.scrut, yes_h, no_h]), w, Ready([m.scrut]));
                         let rc <- rt_go(f, cx.known(ready.w), ready.w.st, m.scrut, True);
                         let base = RSt(rc.fst.depth, [], rc.fst.memo, rc.fst.handles, rc.fst.locals, rc.fst.funs);
-                        let ry <- rt_held_tail(f, cx, HeldWalk(base, [], ready.w.cfuns, ready.w.calls, ready.w.now, ready.w.held), yes_h);
-                        let rn <- rt_held_tail(f, cx, HeldWalk(base.with_funs(ry.funs), [], ry.cfuns, ready.w.calls, ready.w.now, ry.held), no_h);
+                        let ry <- rt_held_tail(f, cx, HeldWalk(base, [], ready.w.cfuns, ready.w.calls, ready.w.now, ready.w.held), reads, yes_h);
+                        let rn <- rt_held_tail(f, cx, HeldWalk(base.with_funs(ry.funs), [], ry.cfuns, ready.w.calls, ready.w.now, ry.held), reads, no_h);
                         let c = rc.fst.index(RSt::level(rc.snd));
                         let node: FTm = match m.args { Nil => FTm::If(c, ry.term, rn.term), Cons(_, _) => FTm::IfEq(c, ry.term, rn.term) };
                         pure(HeldEnd(FSeg::close(FSeg::lets(rc.fst.lets) ++ ready.w.segs, node), rn.funs, rn.cfuns, rn.held))
@@ -1087,6 +1106,7 @@ fn rt_held_tail(fuel: Nat, cx: HeldCx, w: HeldWalk, h: Handle) → Tac<HeldEnd> 
                 },
             },
             _ => rt_held_ends(),
+          },
         }),
     }
 }
@@ -1268,9 +1288,11 @@ fn rt_held_reflect_one(k: Known, names: FileNames, g: GlobalRef, name: String) �
     // values too: the function of the record is its value beside the
     // record as it was, and a branch around that is not a branch inside it.
     let walked: Tac<HeldEnd> = match result.fst {
-        True => rt_held_tail(fuel, cx, w, ws.body),
+        True => rt_held_tail(fuel, cx, w, False, ws.body),
+        // A loop that only reads: each arm its value beside the record as
+        // it was, or its own call.
         False => match en.snd {
-            Some(_) => rt_refuse("a loop that only reads the record is not taken yet: give it `mut self`"),
+            Some(_) => rt_held_tail(fuel, cx, w, True, ws.body),
             None => rt_go(fuel, cx.known(w), st, ws.body, True).bind(λ rv =>
                 pure(HeldEnd(FSeg::close(FSeg::lets(rv.fst.lets), FTm::Pure(Var(rv.fst.index(RSt::level(rv.snd))))), rv.fst.funs, [], []))),
         },

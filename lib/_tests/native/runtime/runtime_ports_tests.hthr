@@ -102,12 +102,25 @@ runtime fn port_bits(n: u64) → u64 {
 
 theorem port_bits_runs(): port_bits(255) = 8 { refl }
 
-// A read-only loop over a span that carries its length (a checksum).
-// expect-error: a function over a span returns
+// A read-only loop over a span that carries its length (a checksum). Its
+// loop is lifted (`Bytes::port_sum::run`), a loop that only reads, and the
+// function calls it; each is compiled as a writer that stores nothing.
 runtime fn Bytes::port_sum({n: u64}, self s: Bytes(n)) → u64 {
     let mut h: u64 = 0;
     for i in 0..s.len() { h := h + ↑s[i]; }
     h
+}
+
+theorem port_sum_runs(): Bytes::port_sum::bytes([3, 4, 250], 3) = Mutated([3, 4, 250], 257) ∧ Bytes::port_sum::bytes([], 0) = Mutated([], 0) {
+    ⟨refl, refl⟩
+}
+
+// What it publishes: at every record, the code answers the sum and
+// leaves the bytes as they were.
+theorem port_sum_over({n: u64}, s: Bytes(n)):
+    Bytes::port_sum(s) = (Bytes::port_sum::bytes(s.bytes, n)).value ∧ s.bytes = (Bytes::port_sum::bytes(s.bytes, n)).after {
+    let ran = Bytes::port_sum::runs_bytes(n, s, []);
+    ⟨ran.value, ran.after⟩
 }
 
 // `memchr`: leave the loop where the byte is found.
@@ -119,8 +132,10 @@ runtime fn Bytes::port_find({n: u64}, self s: Bytes(n), b: u8) → u64 {
     n
 }
 
-// The same as a `while` whose test reads the span.
-// expect-error: a function over a span returns
+// The same as a `while` whose test reads the span. A reader now: what it
+// waits on is the byte `b` beside the span (spans take and return 64-bit
+// words, issues/runtime-repr-narrow-words.md).
+// expect-error: it takes and returns 64-bit words for now
 runtime fn Bytes::port_find_while({n: u64}, self s: Bytes(n), b: u8) → u64 {
     let mut i: u64 = 0;
     while i < s.len() && s[i] ≠ b decreases (n - i).toNat() { i := i + 1; }
@@ -282,13 +297,49 @@ theorem port_map_insert_runs(): PortMap::insert::bytes(PORT_MAP_EMPTY(), 72, 9, 
 theorem port_map_get_runs(): PortMap::get_at::bytes(PortMap::insert::bytes(PORT_MAP_EMPTY(), 72, 9, 7).after, 72, 9, 2, 4).value = 7 { refl }
 
 // The lookup as it is: a loop that only reads the record, answering a word.
-// expect-error: a loop that only reads the record is not taken yet
 runtime fn PortMap::find_at(self m: PortMap, k, j, left: u64) → u64 decreases left.toNat() {
     if more: 0 < left {
         if lt: j < 4 {
             if m.keys.at(j) = 0 { 0 }
             else if m.keys.at(j) = k { m.vals.at(j) }
             else { m.find_at(k, (j + 1).band(3), left - 1) }
+        } else { 0 }
+    } else { 0 }
+}
+
+fn PORT_MAP_TWO() → List<u8> { PortMap::insert::bytes(PortMap::insert::bytes(PORT_MAP_EMPTY(), 72, 9, 7).after, 72, 17, 5).after }
+
+// Found at its slot, found past a taken slot (17 hashes to 2 as well),
+// and missed at an empty one; the bytes are as they were.
+theorem port_map_find_runs(): PortMap::find_at::bytes(PORT_MAP_TWO(), 72, 9, 2, 4).value = 7 { refl }
+
+theorem port_map_find_past_runs(): PortMap::find_at::bytes(PORT_MAP_TWO(), 72, 17, 2, 4).value = 5 { refl }
+
+theorem port_map_find_miss_runs(): PortMap::find_at::bytes(PORT_MAP_TWO(), 72, 4, 1, 4).value = 0 { refl }
+
+// The span after the lookup: the count, keys 9 and 17 at slots 2 and 3,
+// their values 7 and 5, as the inserts left them.
+theorem port_map_find_still_runs(): PortMap::find_at::bytes(PORT_MAP_TWO(), 72, 9, 2, 4).after =
+    [0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 9,
+     0, 0, 0, 0, 0, 0, 0, 17, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7,
+     0, 0, 0, 0, 0, 0, 0, 5] { refl }
+
+// What it publishes: where the span holds a map, the code answers the
+// lookup, and the span holds the map as it was. (`Holds` is `rt_held`'s,
+// which the ledger reaches only by its qualified name.)
+theorem port_map_find_held(own: List<u8>, m: PortMap, length, k, j, left: u64, holds: rt_held::Stored::Holds(PortMap::stored(), own, length, m)):
+    PortMap::find_at(m, k, j, left) = PortMap::find_at::bytes(own, length, k, j, left).value ∧
+    rt_held::Stored::Holds(PortMap::stored(), PortMap::find_at::bytes(own, length, k, j, left).after, length, m) {
+    let ran = PortMap::find_at::runs_held(own, m, length, k, j, left, holds);
+    ⟨ran.value, ran.holds⟩
+}
+
+// A lookup whose measure is not a word's `toNat`.
+// expect-error: must `decreases` a 64-bit word's `toNat`
+runtime fn PortMap::find_slow(self m: PortMap, k, j, left: u64) → u64 decreases left.toNat() + 1 {
+    if more: 0 < left {
+        if lt: j < 4 {
+            if m.keys.at(j) = k { m.vals.at(j) } else { m.find_slow(k, (j + 1).band(3), left - 1) }
         } else { 0 }
     } else { 0 }
 }
@@ -305,7 +356,7 @@ runtime fn PortMap::slot_key(mut self m: PortMap, k: u64) → u64 {
 // Rung 3: inductive data
 
 // Where a byte occurs, as a list.
-// expect-error: a function over a span returns
+// expect-error: a list of these has no runtime layout
 runtime fn Bytes::port_positions({n: u64}, self s: Bytes(n), b: u8) → List<u64> {
     let mut out: List<u64> = [];
     for i in 0..s.len() { if s[i] = b { out := Cons(i, out); } }
@@ -316,7 +367,7 @@ runtime fn Bytes::port_positions({n: u64}, self s: Bytes(n), b: u8) → List<u64
 // Rung 4: functional Heather
 
 // A count as the number it is.
-// expect-error: a function over a span returns
+// expect-error: `add` is an ordinary fn
 runtime fn Bytes::port_count({n: u64}, self s: Bytes(n), b: u8) → Nat {
     let mut c: Nat = 0;
     for i in 0..s.len() { if s[i] = b { c := c + 1; } }

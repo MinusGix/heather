@@ -162,13 +162,40 @@ def TALLY_BYTES: List<u8> = [0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 2];
 theorem fill_bytes(): Tally::fill::bytes(TALLY_BYTES, 16, 5) = Mutated([0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 20], 1) { refl }
 
 // ---------------------------------------------------------------------------
-// What is refused, each by its reason.
+// A loop that only reads the record: its function of the record is its
+// word beside the record as it was (`HWorld::unchanged`), and it is
+// compiled as a writer that stores nothing (`FFun::reads_guarded`).
 
-// expect-error: a loop that only reads the record is not taken yet
 runtime fn Tally::count_up(self t: Tally, i: u64) → u64
     decreases (8 - i).toNat() {
     if h: i < 8 { t.count_up(i + 1) } else { t.count }
 }
+
+// An operand carried round, a field read on each pass.
+runtime fn Tally::add_up(self t: Tally, i, acc: u64) → u64
+    decreases (4 - i).toNat() {
+    if h: i < 4 { t.add_up(i + 1, acc + t.total) } else { acc + t.count }
+}
+
+theorem count_up_bytes(): Tally::count_up::bytes(TALLY_BYTES, 16, 0) = Mutated(TALLY_BYTES, 1) { refl }
+
+theorem add_up_bytes(): Tally::add_up::bytes(TALLY_BYTES, 16, 1, 10) = Mutated(TALLY_BYTES, 17) { refl }
+
+// Restated at any record: the code answers the function's word, and the
+// span holds the record as it was.
+theorem add_up_held(own: List<u8>, t: Tally, length, i, acc: u64, holds: Tally::stored().Holds(own, length, t)):
+    Agrees<Tally, u64>(Tally::stored(), length, HWorld::unchanged(t, Tally::add_up(t, i, acc)), Tally::add_up::bytes(own, length, i, acc)) {
+    Tally::add_up::runs_held(own, t, length, i, acc, holds)
+}
+
+theorem add_up_value(own: List<u8>, t: Tally, length, i, acc: u64, holds: Tally::stored().Holds(own, length, t)):
+    Tally::add_up(t, i, acc) = Tally::add_up::bytes(own, length, i, acc).value {
+    Tally::add_up::runs_held(own, t, length, i, acc, holds).value
+}
+
+// ---------------------------------------------------------------------------
+// What is refused, each by its reason.
+
 
 // expect-error: must `decreases` a 64-bit word's `toNat`
 runtime fn Tally::slow(mut self t: Tally, i: u64) → u64
