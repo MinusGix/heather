@@ -182,6 +182,50 @@ call `c(args, q)` is not the guarded run by conversion (the test is stuck
 on the caller's words). What it needs is the facts at each call:
 `issues/span-caller-of-fact-taking-loop.md`.
 
+## Functions that only read (built 2026-11-24)
+
+A function of a `Bytes(n)` that takes it as `self s: Bytes(n)` and answers
+a word (a checksum, a search, a count) is a reader. It is compiled as a
+writer that stores nothing, and `f::runs_bytes` states it as the writer's
+statement at its word beside the record as it was:
+
+```
+f::runs_bytes(n, s, …, facts, rest) : Over<u64>(n, HWorld::unchanged(s, f(s, …)), f::bytes(s.bytes, n, …))
+```
+
+so `.value` is the agreement of the word and `.after` says the code
+leaves the bytes as they were (`s.bytes = (f::bytes(s.bytes, n, …)).after`).
+Probes: `runtime_bytes_tests.hthr` ("Functions that only read the
+record") and `Bytes::port_sum` in `runtime_ports_tests.hthr`.
+
+- **Without a loop** the body is one value, branches included, and its
+  computation answers it at the span as it was (`rt_file_value`); the
+  pin is by conversion as a writer's is.
+- **A loop** (a lifted `for` or `while` over a read-only receiver, or a
+  `decreases` function written as one) is read from its step with each
+  arm that is not a branch or its own call its value
+  (`rt_file_tail`'s `reads`). Its equation is opened at its word,
+  `FFun::OverReads`, which is its step by conversion, and
+  `FFun::reads_guarded_over` (`rt_bytes_loop.hthr`, proved once) turns
+  it into the writer's `FFun::OverGuarded` at `HWorld::unchanged`: a
+  body with no store, call, lend or loop node (`FTm::still`) ends at the
+  record it began at or goes round on it (`FTm::still_keeps_over`), and a
+  pass that goes round is below the measure and at a state its test
+  passes (`FFun::falls_over_value`). Where the facts fail the reader
+  answers 0 (`FFun::when`'s other arm). `FFun::counted_over` then
+  applies unchanged.
+- **A call of a reader** inside a value (`port_sum` calls its lifted
+  loop, `count_two` a reader twice) is made before the value, as a call
+  that writes is, and its word bound where the value reads the call
+  (`rt_file_read_calls`, `rt_file_read_made`). The caller's world states
+  the callee over the record as its word beside the record as it was
+  (`runtime_bytes_world`), which is what the callee's `runs_bytes` says.
+
+The `while` whose test reads the span (`while i < s.len() && s[i] ≠ b`)
+needed nothing more. What the ledger's `port_find_while` still waits on
+is its `b: u8` beside the span (a span function takes and returns 64-bit
+words, `issues/runtime-repr-narrow-words.md`).
+
 ## Not built
 
 - A caller of a loop that takes facts (the sort's outer loop calls its
@@ -192,3 +236,5 @@ on the caller's words). What it needs is the facts at each call:
   64-bit words for now; `issues/runtime-repr-narrow-words.md`).
 - A loop whose state is two locals besides the receiver (its state record
   has no runtime layout yet).
+- A reader loop that calls another function (`FTm::still` refuses every
+  call), and a reader called from a writer of a `Bytes(n)`.
