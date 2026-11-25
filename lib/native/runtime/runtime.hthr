@@ -2294,7 +2294,8 @@ fn runtime_held(e: Expr, what: String) → Tac<Expr> {
 // one level (`Compile::linked_self`): such a program answers as its
 // sources only where defined (`program_eval_deepened_where`).
 // `fronts`: each function's such arguments, the first function's first:
-// what a part of the program's tests is stated over.
+// what a part of the program's tests is stated over (a leveled program's,
+// or a flat one's holding a loop node).
 record Linked { program: Expr, srcs: Expr, arities: Expr, sourced: Expr, statement: Expr, root: List<Expr>, adm: Expr, leveled: Bool := False,
     fronts: List<List<Expr>> := [] }
 
@@ -2391,7 +2392,7 @@ fn runtime_linked(q: RtQ, ts: RtTypes, l: Linking, insts: List<Pair<Expr, Expr>>
     let leveled = owns.any_bit(λ o => o);
     match solved {
         True => pure(Linked(program, srcs, arities, Hd(held), Hd(statement), front(insts.len() - 1), adm, leveled := leveled,
-            fronts := match leveled { True => indices.map(front), False => [] })),
+            fronts := indices.map(front))),
         False => runtime_fail("the program's linking does not prove its statement"),
     }
 }
@@ -2922,6 +2923,14 @@ fn runtime_node_pass(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes,
     let pass <- runtime_held(runtime_lams(vs.append([k_ref, hyp]),
         ap(sym_g, [Blank, Blank, Blank, ap(ext, Cons(n_e, Cons(n_e, Cons(g1, Cons(g2, Cons(hg, runtime_locals(vs).append([lt_n, lt_n])))))))])), "a loop node's pass");
     pure(pass)
+}
+
+// Whether a program holds a loop node: one of its functions has `f::ends`.
+fn runtime_any_ends(names: List<String>) → Tac<Bool> {
+    match names {
+        Nil => pure(False),
+        Cons(n, rest) => lookup(n ++ "::ends").bind(λ found => match found { Accepted(_) => pure(True), Refused(_) => runtime_any_ends(rest) }),
+    }
 }
 
 // A node's `f::ends` (`Tm::NodeEnds`, what its code's definedness takes):
@@ -4501,6 +4510,32 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
                     pure(Some(Cons(where_decl, within_decls)))
                 },
             };
+            // A program with no recursion that holds a loop node is not
+            // total (an `Until` is defined only where it ends), so its
+            // definedness is stated as a recursion's is, from each
+            // function's part, a node's from its measure (`f::ends`): at
+            // any levels, which a flat program does not read
+            // (`f::defined_within`).
+            let has_node <- match node_ends { Some(_) => pure(True), None => runtime_any_ends(l.names) };
+            let flat_within <- match linked.leveled || !has_node as λ _ => Tac<List<Decl>> {
+                True => pure([]),
+                False => {
+                    let deepened <- runtime_global(name_of(program_deepened));
+                    let defined_g <- runtime_global(name_of(program_defined));
+                    let is_true <- runtime_global(name_of(Bool::IsTrue));
+                    let nat_h <- runtime_type_of(name_of(runtime_w_nat));
+                    let more <- assume(Hd(nat_h), "more", ys.last()).or_fail("runtime: a number of levels: ");
+                    let deep = ap(deepened, [linked.program, Local(more.ref)]);
+                    let defined_t <- as_type(ap(is_true, [ap(defined_g, [deep, root, words_e])])).or_fail("runtime: `" ++ name ++ "`'s definedness: ");
+                    runtime_within(name, rfun, q, ts, l, linked, root, tys_e, rt_e, code_e, own_types,
+                        runtime_narrow_args(low, rfun.params, runtime_args(count, reprs, rfun.params, at_ys)), more.ref, words_e, admitted, own, node_ends).bind(λ r =>
+                        match r {
+                            None => pure([]),
+                            Some(p) => pure(p.decls ++ [
+                                Decl(AsTheorem, name ++ "::defined_within", runtime_params_of(ys.append([more.ref, p.within])), Hd(defined_t), p.proof)]),
+                        })
+                },
+            };
             match where_tail {
             Some(agreed_where) => pure(head.append(pin).append(made).append(linked_decls).append(agreed_where)),
             None => {
@@ -4570,7 +4605,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
                     },
                 },
             };
-            pure(head.append(pin).append(made).append(linked_decls).append(tail).append(also).append(at_file))
+            pure(head.append(pin).append(made).append(linked_decls).append(tail).append(also).append(at_file).append(flat_within))
             },
             }
         },

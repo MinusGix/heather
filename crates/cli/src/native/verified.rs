@@ -150,6 +150,12 @@ pub(super) struct Shape {
     /// `_agrees` and `_returns` then take it in place of the definedness,
     /// and `_defined` states the definedness from it.
     pub within: Option<String>,
+    /// A program with no function that calls itself but with a loop node:
+    /// not total, since a node's `Until` is defined only where it ends, so
+    /// `_defined_flat` states it defined at every word from the generator's
+    /// `{source}::defined_within`, each node's part from its measure
+    /// (docs/language/loop-combinator-design.md §6.9).
+    pub flat: bool,
 }
 
 /// The stack a program with a function that calls itself may ask for
@@ -215,7 +221,7 @@ impl Shape {
             enums: Vec::new(),
             table: String::new(),
             sret: None,
-            leveled: false, within: None,
+            leveled: false, within: None, flat: false,
         }
     }
 
@@ -248,7 +254,7 @@ impl Shape {
     /// definedness from the function's measure or its test
     /// (`{source}::agrees_within`), the agreement's premise then.
     pub fn runtime(prefix: &str, owner: &str, source: &str, functions: usize, params: usize, arity: usize, widths: &[u64], fields: Option<&[(String, u64)]>,
-        enums: &[(usize, u64)], result: Option<u64>, slot: bool, more: Option<u64>, bound: Bound) -> Shape {
+        enums: &[(usize, u64)], result: Option<u64>, slot: bool, more: Option<u64>, bound: Bound, flat: bool) -> Shape {
         let parameters = arguments(params);
         let table = format!("{source}::world.tys");
         let narrowed: Vec<String> = parameters.iter().enumerate()
@@ -342,7 +348,16 @@ theorem {prefix}_agrees({typed}{comma}defined: program_defined({prefix}_program(
 theorem {prefix}_agrees({typed}): program_eval({prefix}_program(), {f}, {words}) = {answer} {{
     {source}::agrees({list})
 }}
-{also}", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), f = functions - 1, list = parameters.join(", "),
+{flat}{also}", evaluable = evaluable_text_over(prefix, &format!("{prefix}_program()"), functions, &format!("{source}::arities"), &format!("{prefix}_outs()"), !flat),
+            f = functions - 1, list = parameters.join(", "),
+            flat = if flat { format!("
+// The program holds a loop node, defined where it ends: at every word, from
+// each function's part, a node's from its measure (`{source}::defined_within`,
+// at any levels, which a program with no recursion does not read).
+theorem {prefix}_defined_flat({typed}): program_defined({prefix}_program(), {f}, {words}).IsTrue() {{
+    {source}::defined_within({list}{comma}0, trivial)
+}}
+", f = functions - 1, list = parameters.join(", "), comma = if parameters.is_empty() { "" } else { ", " }) } else { String::new() },
             also = match &rest {
                 Some(rest) => format!("
 // And the words it returns after the first, the record's fields after its
@@ -357,7 +372,7 @@ theorem {prefix}_agrees_also({typed}): program_eval_also({prefix}_program(), {wo
             }),
         };
         if rest.is_some() { definitions.insert_str(0, "import function_ir_writes;\n"); }
-        Shape { functions, root: functions - 1, arity, params, definitions, agreement, answer, on: String::new(), lent: None, marks: None, tables: None, entries: Vec::new(), optimize: false, rest, enums: enums.to_vec(), table: format!("{source}::world.tys"), sret: None, leveled: more.is_some(), within }
+        Shape { functions, root: functions - 1, arity, params, definitions, agreement, answer, on: String::new(), lent: None, marks: None, tables: None, entries: Vec::new(), optimize: false, rest, enums: enums.to_vec(), table: format!("{source}::world.tys"), sret: None, leveled: more.is_some(), within, flat }
     }
 
     /// A `runtime fn` returning a record of three words or more, exported
@@ -406,7 +421,7 @@ fn {prefix}_fn{k}() → Function {{ match {prefix}_first_{k}() {{ Nil => Setup::
 ", evaluable = evaluable_text_over(prefix, &format!("{prefix}_program()"), m, &format!("Cons({}, {source}::arities)", arity + 1), &format!("Cons(0, {prefix}_outs())"), true),
             quiet = quiet_text_over(&format!("{prefix}_callees"), &format!("{source}::program"), functions));
         Shape { functions: m, root: functions, arity, params: arity, definitions, agreement, answer, on: String::new(), lent: Some((0..m).map(|k| u64::from(k == functions)).collect()), marks: None,
-            tables: None, entries: Vec::new(), optimize: false, rest: Some(rest), enums: Vec::new(), table, sret: Some((more, source.to_string())), leveled: false, within: None }
+            tables: None, entries: Vec::new(), optimize: false, rest: Some(rest), enums: Vec::new(), table, sret: Some((more, source.to_string())), leveled: false, within: None, flat: false }
     }
 
     /// A `runtime fn` that reads spans: its program is lent buffers
@@ -457,7 +472,7 @@ theorem {prefix}_agrees(now: Buffers(), {typed}): program_eval_over(now, {prefix
 }}
 ", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")), f = functions - 1,
             list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, params: arity, definitions, agreement, answer, on, lent: Some(counts), marks: None, tables: None, entries: Vec::new(), optimize, rest: None, enums: Vec::new(), table: String::new(), sret: None, leveled: false, within: None }
+        Shape { functions, root: functions - 1, arity, params: arity, definitions, agreement, answer, on, lent: Some(counts), marks: None, tables: None, entries: Vec::new(), optimize, rest: None, enums: Vec::new(), table: String::new(), sret: None, leveled: false, within: None, flat: false }
     }
 
     /// A `runtime fn` that stores into the first span it is lent: its
@@ -534,7 +549,7 @@ theorem {prefix}_runs(span: List<BitVec(8)>, rest: Buffers(), {typed}):
 ", evaluable = evaluable_text(prefix, functions, &format!("{source}::arities")),
             within = if tables.is_some() { marked_text(prefix, &stem) } else { within_text(prefix, &stem, functions) }, f = functions - 1,
             list = parameters.join(", "));
-        Shape { functions, root: functions - 1, arity, params: arity, definitions, agreement, answer, on, lent: Some(counts), marks: Some(marks), tables, entries: Vec::new(), optimize, rest: None, enums: Vec::new(), table: String::new(), sret: None, leveled: false, within: None }
+        Shape { functions, root: functions - 1, arity, params: arity, definitions, agreement, answer, on, lent: Some(counts), marks: Some(marks), tables, entries: Vec::new(), optimize, rest: None, enums: Vec::new(), table: String::new(), sret: None, leveled: false, within: None, flat: false }
     }
 }
 
@@ -672,7 +687,7 @@ fn runtime_shape_of(elab: &Elaborator, prefix: &str, owner: &str, source: &str, 
             let bound = if elab.qualified_global(&format!("{source}::agrees_within")).is_none() { Bound::Program }
                 else if elab.qualified_global(&format!("{source}::within")).is_some() { Bound::Test } else { Bound::Measure };
             Ok(Shape::runtime(prefix, owner, source, functions as usize, params as usize, arity as usize, widths, fields.as_deref(), &enums, result, slot,
-                leveled.then_some(more), bound))
+                leveled.then_some(more), bound, !leveled && elab.qualified_global(&format!("{source}::defined_within")).is_some()))
         }
         [functions, arity, ref counts @ ..] if functions >= 1 && spans == Spans::Read && counts.len() == functions as usize =>
             Ok(Shape::runtime_lent(prefix, owner, source, functions as usize, arity as usize, counts.to_vec())),
@@ -1959,6 +1974,7 @@ theorem {prefix}_returns<M>(machine: Machine<M>{comma}{typed}{premise}): {prefix
             defined = match (&program.within, program.leveled) {
                 (Some(_), _) => format!("{prefix}_defined({}{}within)", parameters.join(", "), if parameters.is_empty() { "" } else { ", " }),
                 (None, true) => "defined".to_string(),
+                (None, false) if program.flat => format!("{prefix}_defined_flat({})", parameters.join(", ")),
                 (None, false) => format!("program_total_defined({prefix}_program(), Nil, {prefix}_defined_everywhere(), {f}, {list})"),
             },
             passed = match (program.leveled, program.within.is_some(), parameters.is_empty()) {
