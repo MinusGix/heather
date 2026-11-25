@@ -1160,15 +1160,34 @@ statement, if the simulation through `put_window` after `window` is costly
 enough that eager write-back is the wrong meaning, or if the checker's cost
 grows with the call depth.
 
-### 15.7 Not settled
+### 15.7 Settled by Minus, 2026-11-25, and what is still open
 
-1. What happens when memory runs out, and whether the default promises
-   reuse from `dead` (§15.5): Minus's.
-2. Typed cells and references down to the machine (§15.5): Minus's.
+- **When memory runs out**: room is a premise of the machine theorem, the
+  stop is a defined one, and the room a function needs is something a
+  theorem can bound (the peak of live sizes of its level-2 run), so a caller
+  or an export can discharge the premise. How bounds are stated and found
+  is to be designed; it should be done elegantly, not bolted on.
+- **The death of a container may have code**, and the default promises
+  reuse from `dead`. The aim is to do it better than Rust: no drop flags
+  (a death is static, inserted on the arm that did not move), no user code
+  run at a drop, no walk where the elements are plain or the container is
+  in a stated region, a traversal that cannot overflow the stack, and a
+  thing that must be closed (a file) is a type that may not be dropped, so
+  its closing and its error are written.
+- **References stay references down to the machine**: typed cells, an
+  injection of blocks at the last step, placelessness a property of the
+  language.
+
+Still open:
+
+1. How memory bounds are stated, found and discharged at an export.
+2. The design of deaths: what code a type's death is, where it may be
+   elided, and the bulk forms.
 3. That the inference rule's answer checks whenever any annotation does
    (§15.3): argued, to be proved with the judgment.
 4. Whether an owner may read a part it has lent to write, which eager
    write-back would make sound. Kept refused at first.
+5. The order in which the levels are built and the customers ported.
 
 ### 15.8 What a signature records
 
