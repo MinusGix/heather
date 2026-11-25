@@ -1193,26 +1193,72 @@ as small as the extra pass allows).
 - *Tail mode.* Tail mode keeps its one-word `Tm::leave` and `Tm::out`
   until 3h deletes it.
 - *The loop's exit.* After the loop, the answer is still moved out in one
-  word (`lower_loop_at` checks `res.check_one_word`). Generalizing that
-  exit is a move of each word in both of the exhaustion branch's arms, and
-  (2) deletes that branch; so it waits on (2)'s order.
+  word. *Since round D, stage 2:* the exit is the first outputs, as many
+  as the answer spans (it must fit in the state, `Tm::lower_loop_at`
+  checks), held by `Ty::answer_holds`; no branch was left to move them in.
 
-**What `while` onto the node still needs** (step 3's second half):
+**Round D, stage 2 as built: a `while` over a word is a loop node**
+(`lib/native/runtime/rt_while.hthr`).
 
-- *Its state as words.* A `while` is an expression,
-  `Loop::steps(Loop::passes(), λ s => Step::turn(c, λ h => next, s), init)`,
-  over a state of any code, and its test and next state may read the
-  function's context. The node's body sees only its state (`Tm::inside`).
-  So the reflector spells the record state's fields, and every context
-  variable the loop reads, as one-word state words. It re-indexes the test
-  and the next state onto them: the test's two arms become `Again` of the
-  next fields and the read-only words, and `Make` of the fields. A context
-  word that is not one 64-bit word keeps the loop on `Iterate` until the
-  node's state widens.
-- *Its pin.* The pin is a rewrite inside f's body at the loop's position,
-  not `refl`. That position is where `Iterate`'s meaning is `Loop::steps`
-  itself. `Loop::steps_stays` and `Loop::rounds_agree` meet at `Loop::run`,
-  from `f::loop::runs`, under the congruence of the context around the loop.
+- *Which loop it is.* `Iterate` carries the variables the loop reads of
+  its context (`caps`) and which of the elaborator's loops it is
+  (`loopn`). The reflector finds them by the loop's reasoning
+  declarations (`rt_loop_found`). It applies each candidate
+  `f::loop…::runs` to holes and the loop's start, unifies its left side
+  with the written loop, and reads the captures off `f::loop…::of(c̄)` on
+  its right. The captures are those `f::loop::runs` takes, in its order,
+  measure-only ones included. A loop written by hand has none and stays an
+  `Iterate`.
+- *The node.* `Tm::nodes` writes each `Iterate` that fits as
+  `Tm::while_tm`: a node over the loop's word and its captures, whose pass
+  is `let s = word; let go = test; if go { let s' = next; again(s', c̄) }
+  else { s }`. It fits when the loop is the elaborator's, its state and
+  captures are 64-bit words, and its test and next state read nothing of
+  the context but the captures (`Tm::while_fits`). The node's code is the
+  state's own by definition, whatever the test and next state are.
+  `Tm::nodes` looks into `let`s and both kinds of `if`. A loop under a
+  `match`, or inside another loop, stays an `Iterate`.
+- *The pin, at one loop.* The node runs `2^64` rounds and the written loop
+  `2^64 - 1` passes, so the two meet at `Loop::run` of the loop's measure
+  and not by conversion. A loop owes a `Tm::WhileLoop`:
+  - `h`, the loop's `f::loop::of(c̄).run`, as a function of the state's
+    words;
+  - its measure, `f::loop::measure`, a word's `toNat`
+    (`Tm::word_within`);
+  - the node's pass pinned to `h` under it. This is `Tm::while_pass`,
+    from `Loop::run_when` (a `while` pass is the run where its going round
+    is, below the measure) and `f::loop::same`;
+  - `h` at the start is the written loop, by `f::loop::runs`.
+
+  `Tm::while_agree` turns it into the node's meaning (`Tm::sem_in_loop`,
+  `Tm::node_means`) being the written loop's.
+- *The pin, through the context.* `Tm::sem_with` reads a term with each
+  `Iterate` answered by an oracle (`Tm::Loops`). Two oracles that agree
+  at each loop, at every environment there, give one meaning
+  (`Tm::sem_with_agree`).
+  - With the written loop's oracle it is the function, by conversion.
+  - With the node's, it is the nodes' body's meaning: `Tm::nodes_sem`, at
+    every term. It is proved once, transported along `Tm::nodes_ty`,
+    because the kernel cannot decide it at a closed term: comparing two
+    loops' meanings whose contexts differ only up to evaluation unrolls
+    their rounds.
+
+  `Setup::pinned_nodes` assembles the pin from the written body's own pin,
+  the loops' evidence, and one evaluation (`Tm::nodes(t) = tn`).
+  `Tm::ends_of_ev` gives `f::ends`.
+- *The generator.* It writes a function's body as nodes when it is plain,
+  lent nothing and holds no tail node (`runtime_reads`), and keeps the
+  written body beside it for the pin. Each loop's evidence is built from
+  its declarations (`runtime_while_loop`). The next state comes from
+  `f::loop::same`'s `Step::turn` by unifying a hole with its next state
+  applied to a local proof of the test: the next state does not read that
+  proof.
+- *Not yet.* A `while` over a record state (two or more locals, a counted
+  `for`) stays an `Iterate`. Its node's start words are the record's
+  fields, read by `let`s around the node. Those make the node's code the
+  state's only up to evaluation, which `Tm::loops_nodes` and the proofs
+  above read definitionally. So `Iterate`'s lowering stays until they
+  move too.
 
 ## 7. Bootstrapping
 
