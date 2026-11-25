@@ -319,7 +319,6 @@ fn sig_at(sigs: List<Sig>, g: Nat) → Sig { sigs.nth(g).unwrap_or(Func::none().
 
 fn sigs_of(fns: List<Func>) → List<Sig> { fns.map(λ f => f.sig()) }
 
-
 record LView { t: Nat, md: Mode, region: Region }
 
 // What the checker defers: an obligation of `atom.hthr` (here two windows
