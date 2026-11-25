@@ -1,6 +1,6 @@
 ---
 title: The x86 memory contract stated once: Loan, WroteIn, Injected and Sub, with the older tiers as instances
-status: open
+status: closed
 labels: [native,x86,memory,ownership]
 area: heather-in-heather
 milestone: [nh-ownership]
