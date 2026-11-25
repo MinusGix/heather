@@ -1,0 +1,377 @@
+// The universal value as a native value tagged with its code
+// (docs/language/ownership-design.md §18.4 item 4,
+// issues/ownership-coded-values.md).
+//
+// A `Shape` is a closed, first-order code: a word, a sequence of a shape,
+// or a named type, an index into an environment of types. `El(tys, c)`
+// decodes a code by large elimination: `El(tys, SSeq(c))` is
+// `List<El(tys, c)>` and `El(tys, SNamed(k))` the `k`th type of `tys`,
+// definitionally. A type parameter `T` of a generic function and a user
+// record are both named. A second environment, after the first, gives each
+// named type its structure (`Struct`): opaque, or a record's fields, each
+// a shape and a `Path` from the record to the field's decoding, with an
+// inhabitant either way. `Dyn(tys)` is a code with a value of its decoding.
+//
+// - **The decision computes.** `Shape::dec` is a `fn` whose `Inl` holds a
+//   proof built from `refl` by `fn`s (`Shape::cong_seq`, `Nat::cong_succ`),
+//   so at two closed equal codes it is `Inl(refl)` by evaluation, and the
+//   cast `Shape::cast` (`j` along it) is the identity there. At one code,
+//   `Shape::dec_self` is `Inl(refl)` by induction on the code: no unique
+//   identity proofs.
+// - **Reads and writes whose code is the code's alone.** The meaning reads
+//   a step totally (`Dyn::at`: an absent element is the code's inhabitant,
+//   `Dyn::dflt`) and writes by modifying (`Dyn::over`: the step's part
+//   handed to a function, put back where its result has the part's code).
+//   The code of what either produces is a function of the codes alone, so
+//   along a place of closed codes every code stays closed and every
+//   dispatch reduces, and what is left is the native operation on the
+//   value inside: `ps[i].x` is `ps.nth(i).unwrap_or(d).x`.
+// - **The step model.** `Dyn::path` is each selection as a `Path<Dyn, Dyn>`,
+//   for `steps.hthr`'s `StepModel<Dyn>`. Its laws as `StepModelLaws` states
+//   them cannot hold: a fit there is a property of the written value alone
+//   (`fits: Sel → S → Bool`), and here whether a write is read back depends
+//   on the code of the part it replaces. `Dyn::elem_not_lawful` is the
+//   refutation, for every fit.
+import logic;
+import bool;
+import nat;
+import option;
+import list;
+import list_window;
+import span_set;
+import store;
+import path;
+import list_path;
+import store_path;
+import atom;
+import steps;
+
+// ---------------------------------------------------------------------------
+// Codes, and their decision
+
+inductive Shape { SWord, SSeq(a: Shape), SNamed(k: Nat) }
+
+fn Nat::cong_succ({a, b: Nat}, e: a = b) → Succ(a) = Succ(b) { j(e, λ c _ => Succ(a) = Succ(c), refl) }
+
+fn Nat::pred_eq({a, b: Nat}, e: Succ(a) = Succ(b)) → a = b { j(e, λ c _ => a = c.pred(), refl) }
+
+// Equality of two numbers, decided with a proof the kernel reduces: at two
+// equal literals, `Inl(refl)`.
+fn Nat::dec(a, b: Nat) → Or<a = b, ¬(a = b)> {
+    match a {
+        Zero => match b { Zero => Inl(refl), Succ(_) => Inr(λ no => absurd(no)) },
+        Succ(a1) => match b {
+            Zero => Inr(λ no => absurd(no)),
+            Succ(b1) => match Nat::dec(a1, b1) { Inl(e) => Inl(Nat::cong_succ(e)), Inr(ne) => Inr(λ h => ne(Nat::pred_eq(h))) },
+        },
+    }
+}
+
+fn Shape::cong_seq({a, b: Shape}, e: a = b) → SSeq(a) = SSeq(b) { j(e, λ c _ => SSeq(a) = SSeq(c), refl) }
+
+fn Shape::cong_named({k, l: Nat}, e: k = l) → SNamed(k) = SNamed(l) { j(e, λ c _ => SNamed(k) = SNamed(c), refl) }
+
+fn Shape::elem_of(self c: Shape) → Shape { match c { SSeq(a) => a, _ => SWord } }
+
+fn Shape::name_of(self c: Shape) → Nat { match c { SNamed(k) => k, _ => 0 } }
+
+fn Shape::seq_inj({a, b: Shape}, e: SSeq(a) = SSeq(b)) → a = b { j(e, λ c _ => a = c.elem_of(), refl) }
+
+fn Shape::named_inj({k, l: Nat}, e: SNamed(k) = SNamed(l)) → k = l { j(e, λ c _ => k = c.name_of(), refl) }
+
+fn Shape::dec(a, b: Shape) → Or<a = b, ¬(a = b)> {
+    match a {
+        SWord => match b { SWord => Inl(refl), SSeq(_) => Inr(λ no => absurd(no)), SNamed(_) => Inr(λ no => absurd(no)) },
+        SSeq(a1) => match b {
+            SSeq(b1) => match Shape::dec(a1, b1) { Inl(e) => Inl(Shape::cong_seq(e)), Inr(ne) => Inr(λ h => ne(Shape::seq_inj(h))) },
+            SWord => Inr(λ no => absurd(no)),
+            SNamed(_) => Inr(λ no => absurd(no)),
+        },
+        SNamed(k) => match b {
+            SNamed(l) => match Nat::dec(k, l) { Inl(e) => Inl(Shape::cong_named(e)), Inr(ne) => Inr(λ h => ne(Shape::named_inj(h))) },
+            SWord => Inr(λ no => absurd(no)),
+            SSeq(_) => Inr(λ no => absurd(no)),
+        },
+    }
+}
+
+// At one number, the decision is `refl`: by induction, no unique identity
+// proofs.
+theorem Nat::dec_self(k: Nat): Nat::dec(k, k) = Inl(refl) {
+    match k {
+        Zero => refl,
+        Succ(k1) => j(sym(Nat::dec_self(k1)), λ o _ => (match o { Inl(e) => Inl(Nat::cong_succ(e)), Inr(ne) => Inr(λ h => ne(Nat::pred_eq(h))) }) = Inl<(Succ(k1) = Succ(k1)), ¬(Succ(k1) = Succ(k1))>(refl), refl),
+    }
+}
+
+theorem Shape::dec_self(c: Shape): Shape::dec(c, c) = Inl(refl) {
+    match c {
+        SWord => refl,
+        SSeq(a) => j(sym(Shape::dec_self(a)), λ o _ => (match o { Inl(e) => Inl(Shape::cong_seq(e)), Inr(ne) => Inr(λ h => ne(Shape::seq_inj(h))) }) = Inl<(SSeq(a) = SSeq(a)), ¬(SSeq(a) = SSeq(a))>(refl), refl),
+        SNamed(k) => j(sym(Nat::dec_self(k)), λ o _ => (match o { Inl(e) => Inl(Shape::cong_named(e)), Inr(ne) => Inr(λ h => ne(Shape::named_inj(h))) }) = Inl<(SNamed(k) = SNamed(k)), ¬(SNamed(k) = SNamed(k))>(refl), refl),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The decoding, and the two environments
+
+// The `k`th type of the environment, `True` past its end.
+fn ty_at(tys: List<Type>, k: Nat) → Type { match tys { Nil => True, Cons(t, rest) => match k { Zero => t, Succ(k1) => ty_at(rest, k1) } } }
+
+fn El(tys: List<Type>, c: Shape) → Type {
+    match c { SWord => Nat, SSeq(a) => List<El(tys, a)>, SNamed(k) => ty_at(tys, k) }
+}
+
+// The cast between two codes found equal: the identity at `refl`.
+fn Shape::cast(tys: List<Type>, {a, b: Shape}, e: a = b, x: El(tys, a)) → El(tys, b) { j(e, λ c _ => El(tys, c), x) }
+
+// A record's field: its shape, and the path from the record to it.
+record Field(tys: List<Type>, T: Type) { shape: Shape, path: Path<T, El(tys, shape)> }
+
+// A named type's structure, with an inhabitant: what a derived instance
+// supplies. Opaque (a type parameter), or a record's fields.
+inductive Struct(tys: List<Type>, T: Type) { Opaque(d: T), Fields(d: T, fs: List<Field(tys, T)>) }
+
+fn Struct::dflt(tys: List<Type>, {T: Type}, self st: Struct(tys, T)) → T { match st { Opaque(d) => d, Fields(d, _) => d } }
+
+// The structures of an environment's types, stated after it.
+fn Strs(tys: List<Type>) → Type { (k: Nat) → Struct(tys, ty_at(tys, k)) }
+
+// A code with a value of its decoding.
+record Dyn(tys: List<Type>) { code: Shape, val: El(tys, code) }
+
+// Every code's inhabitant: a word's 0, an empty sequence, a named type's
+// own.
+fn Dyn::dflt(tys: List<Type>, strs: Strs(tys), c: Shape) → El(tys, c) {
+    match c { SWord => 0, SSeq(_) => Nil, SNamed(k) => Struct::dflt(tys, strs(k)) }
+}
+
+// What `e` holds, where its code is `a`; `x` otherwise.
+fn Dyn::back(tys: List<Type>, a: Shape, e: Dyn(tys), x: El(tys, a)) → El(tys, a) {
+    match Shape::dec(e.code, a) { Inl(h) => Shape::cast(tys, h, e.val), Inr(_) => x }
+}
+
+// What `e` holds as a value at code `a`, the inhabitant otherwise: how a
+// native callee takes its argument.
+fn Dyn::as_code(tys: List<Type>, strs: Strs(tys), a: Shape, e: Dyn(tys)) → El(tys, a) { Dyn::back(tys, a, e, Dyn::dflt(tys, strs, a)) }
+
+fn Dyn::word(tys: List<Type>, e: Dyn(tys)) → Nat { Dyn::back(tys, SWord, e, 0) }
+
+fn Dyn::size(tys: List<Type>, e: Dyn(tys)) → Nat {
+    (match e.code as λ c => El(tys, c) → Nat { SSeq(_) => λ v => List::len(v), SWord => λ _ => 0, SNamed(_) => λ _ => 0 })(e.val)
+}
+
+// ---------------------------------------------------------------------------
+// The words: parameters by position, the body's newest first
+
+record Env { args: List<Nat>, m: Nat, locals: List<Nat> }
+
+fn Env::start(ws: List<Nat>) → Env { Env(ws, 0, Nil) }
+
+fn Env::n(self e: Env) → Nat { e.args.len() + e.m }
+
+fn Env::push(self e: Env, a: Nat) → Env { Env(e.args, e.m + 1, Cons(a, e.locals)) }
+
+fn Env::get(self e: Env, w: Nat) → Nat {
+    match (w + 1).leb(e.args.len()) { True => word(e.args, w), False => word(e.locals, e.n() - (w + 1)) }
+}
+
+fn Atom::at(self a: Atom, e: Env) → Nat { match a { Lit(n) => n, Var(w) => e.get(w) } }
+
+fn Step::sel_in(self a: Step, e: Env) → Sel {
+    match a {
+        SField(i) => OnField(i),
+        SElem(i) => OnSeq(SeqOne(i.at(e))),
+        SWindow(lo, n) => OnSeq(SeqRun(lo.at(e), n.at(e))),
+        SKey(i, g) => OnKey(Key(i.at(e), g.at(e))),
+        SVariant(c) => OnVariant(c),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// One step, read and modified: the meaning's
+//
+// The code of what each produces is a function of the code and the
+// selection alone: a step that does not fit reads the word 0 and writes
+// nothing.
+
+fn Dyn::field_at(tys: List<Type>, strs: Strs(tys), {T: Type}, st: Struct(tys, T), i: Nat, v: T) → Dyn(tys) {
+    match st {
+        Opaque(_) => Dyn(SWord, 0),
+        Fields(_, fs) => match fs.nth(i) { Some(f) => Dyn(f.shape, f.path.get(v).unwrap_or(Dyn::dflt(tys, strs, f.shape))), None => Dyn(SWord, 0) },
+    }
+}
+
+fn Dyn::at(tys: List<Type>, strs: Strs(tys), sel: Sel, d: Dyn(tys)) → Dyn(tys) {
+    (match d.code as λ c => El(tys, c) → Dyn(tys) {
+        SWord => λ _ => Dyn(SWord, 0),
+        SSeq(a) => λ v => match sel {
+            OnSeq(x) => match x { SeqOne(i) => Dyn(a, v.nth(i).unwrap_or(Dyn::dflt(tys, strs, a))), SeqRun(lo, n) => Dyn(SSeq(a), v.drop(lo).take(n)) },
+            _ => Dyn(SWord, 0),
+        },
+        SNamed(k) => λ v => match sel { OnField(i) => Dyn::field_at(tys, strs, strs(k), i, v), _ => Dyn(SWord, 0) },
+    })(d.val)
+}
+
+fn Dyn::field_over(tys: List<Type>, {T: Type}, st: Struct(tys, T), i: Nat, g: Dyn(tys) → Dyn(tys), v: T) → T {
+    match st {
+        Opaque(_) => v,
+        Fields(_, fs) => match fs.nth(i) {
+            Some(f) => match f.path.get(v) { Some(y) => f.path.set(v, Dyn::back(tys, f.shape, g(Dyn(f.shape, y)), y)), None => v },
+            None => v,
+        },
+    }
+}
+
+fn Dyn::over(tys: List<Type>, strs: Strs(tys), sel: Sel, g: Dyn(tys) → Dyn(tys), d: Dyn(tys)) → Dyn(tys) {
+    (match d.code as λ c => El(tys, c) → Dyn(tys) {
+        SWord => λ v => Dyn(SWord, v),
+        SSeq(a) => λ v => Dyn(SSeq(a), match sel {
+            OnSeq(x) => match x {
+                SeqOne(i) => v.update(i, λ y => Dyn::back(tys, a, g(Dyn(a, y)), y)),
+                SeqRun(lo, n) => v.put_window(lo, Dyn::back(tys, SSeq(a), g(Dyn(SSeq(a), v.drop(lo).take(n))), v.drop(lo).take(n))),
+            },
+            _ => v,
+        }),
+        SNamed(k) => λ v => Dyn(SNamed(k), match sel { OnField(i) => Dyn::field_over(tys, strs(k), i, g, v), _ => v }),
+    })(d.val)
+}
+
+// A place's steps from a root, read and modified.
+fn Dyn::read(tys: List<Type>, strs: Strs(tys), e: Env, xs: List<Step>, d: Dyn(tys)) → Dyn(tys) {
+    match xs { Nil => d, Cons(a, rest) => Dyn::read(tys, strs, e, rest, Dyn::at(tys, strs, a.sel_in(e), d)) }
+}
+
+fn Dyn::write(tys: List<Type>, strs: Strs(tys), e: Env, xs: List<Step>, g: Dyn(tys) → Dyn(tys), d: Dyn(tys)) → Dyn(tys) {
+    match xs { Nil => g(d), Cons(a, rest) => Dyn::over(tys, strs, a.sel_in(e), λ x => Dyn::write(tys, strs, e, rest, g, x), d) }
+}
+
+// ---------------------------------------------------------------------------
+// A small meaning over an environment of `Dyn`s
+//
+// A fixture, only as large as the probes need: objects are the function's
+// object parameters, each a `Dyn`; words are an `Env`. A place is an
+// object and steps. A statement reads the word at a place, writes a word or
+// the value at another place at a place, adds two words, or calls a native
+// callee with the values at places and words, binding its word. A branch is
+// the convoy a source's `if h: i < p.len()` elaborates to, carrying what
+// follows into each arm (`mean_then`, as in the checker's).
+
+record Place { root: Nat, steps: List<Step> }
+
+inductive Src { FromWord(a: Atom), FromPlace(p: Place) }
+
+inductive Stmt { Get(p: Place), Put(p: Place, v: Src), Add(a: Atom, b: Atom), Call(g: Nat, ps: List<Place>, args: List<Atom>) }
+
+// A branch's test: the word `a` is below the length at `p`.
+inductive Cond { LtLen(a: Atom, p: Place) }
+
+inductive Body { End, Do(o: Stmt, rest: Body), If(cd: Cond, a: Body, b: Body, rest: Body) }
+
+fn seq(ops: List<Stmt>) → Body { match ops { Nil => End, Cons(o, rest) => Do(o, seq(rest)) } }
+
+inductive Ret { RWord(a: Atom), RPlace(p: Place) }
+
+record Func { body: Body, ret: Ret }
+
+// The native callees: from the values passed and the words, a word.
+fn World(tys: List<Type>) → Type { Nat → List<Dyn(tys)> → List<Nat> → Nat }
+
+record Sem(tys: List<Type>) { objs: List<Dyn(tys)>, words: Env }
+
+fn obj_at(tys: List<Type>, objs: List<Dyn(tys)>, r: Nat) → Dyn(tys) { objs.nth(r).unwrap_or(Dyn(SWord, 0)) }
+
+fn Place::val(self p: Place, tys: List<Type>, strs: Strs(tys), s: Sem(tys)) → Dyn(tys) { Dyn::read(tys, strs, s.words, p.steps, obj_at(tys, s.objs, p.root)) }
+
+fn Src::val(self v: Src, tys: List<Type>, strs: Strs(tys), s: Sem(tys)) → Dyn(tys) { match v { FromWord(a) => Dyn(SWord, a.at(s.words)), FromPlace(p) => p.val(tys, strs, s) } }
+
+fn Sem::bind(tys: List<Type>, self s: Sem(tys), a: Nat) → Sem(tys) { Sem(s.objs, s.words.push(a)) }
+
+fn Stmt::eval1(self o: Stmt, tys: List<Type>, strs: Strs(tys), w: World(tys), s: Sem(tys)) → Sem(tys) {
+    match o {
+        Get(p) => Sem::bind(tys, s, Dyn::word(tys, p.val(tys, strs, s))),
+        Put(p, v) => Sem(s.objs.update(p.root, λ d => Dyn::write(tys, strs, s.words, p.steps, λ _ => v.val(tys, strs, s), d)), s.words),
+        Add(a, b) => Sem::bind(tys, s, a.at(s.words) + b.at(s.words)),
+        Call(g, ps, args) => Sem::bind(tys, s, w(g, ps.map(λ p => p.val(tys, strs, s)), args.map(λ a => a.at(s.words)))),
+    }
+}
+
+// What `if h: c { y } else { n }` elaborates to: a match on the test's bit
+// that hands each arm the bit's equation.
+fn convoy<A>(c: Bool, y, n: A) → A { (match c as λ d => c = d → A { True => λ _ => y, False => λ _ => n })(refl) }
+
+fn Cond::test(self cd: Cond, tys: List<Type>, strs: Strs(tys), s: Sem(tys)) → Bool {
+    match cd { LtLen(a, p) => decide_bit<a.at(s.words) < Dyn::size(tys, p.val(tys, strs, s))>() }
+}
+
+fn mean_then<R>(tys: List<Type>, strs: Strs(tys), w: World(tys), ops: Body, s: Sem(tys), k: Sem(tys) → R) → R {
+    match ops {
+        End => k(s),
+        Do(o, rest) => mean_then(tys, strs, w, rest, o.eval1(tys, strs, w, s), k),
+        If(cd, a, b, rest) => convoy(cd.test(tys, strs, s), mean_then(tys, strs, w, a, s, λ x => mean_then(tys, strs, w, rest, x, k)),
+            mean_then(tys, strs, w, b, s, λ x => mean_then(tys, strs, w, rest, x, k))),
+    }
+}
+
+// What a function means: its objects afterwards, the word it answers, and
+// the value at the place it answers.
+record MOut(tys: List<Type>) { objs: List<Dyn(tys)>, word: Nat, val: Dyn(tys) }
+
+fn Ret::out(self r: Ret, tys: List<Type>, strs: Strs(tys), s: Sem(tys)) → MOut(tys) {
+    match r { RWord(a) => MOut(s.objs, a.at(s.words), Dyn(SWord, a.at(s.words))), RPlace(p) => MOut(s.objs, 0, p.val(tys, strs, s)) }
+}
+
+fn mean_fn(tys: List<Type>, strs: Strs(tys), w: World(tys), f: Func, objs: List<Dyn(tys)>, ws: List<Nat>) → MOut(tys) {
+    mean_then(tys, strs, w, f.body, Sem(objs, Env::start(ws)), λ s => f.ret.out(tys, strs, s))
+}
+
+// ---------------------------------------------------------------------------
+// Residuals, as the source writes them, at the state their site reads
+
+// An index inside what a place holds; a callee's precondition at the values
+// passed and the words.
+inductive Owed { Inside(p: Place, i: Atom), Pre(g: Nat, ps: List<Place>, args: List<Atom>) }
+
+fn Pres(tys: List<Type>) → Type<1> { Nat → List<Dyn(tys)> → List<Nat> → Type }
+
+fn Owed::Holds(self o: Owed, tys: List<Type>, strs: Strs(tys), pres: Pres(tys), s: Sem(tys)) → Type {
+    match o {
+        Inside(p, i) => ∥i.at(s.words) < Dyn::size(tys, p.val(tys, strs, s))∥,
+        Pre(g, ps, args) => pres(g, ps.map(λ p => p.val(tys, strs, s)), args.map(λ a => a.at(s.words))),
+    }
+}
+
+fn Owed::Then(rs: List<Owed>, tys: List<Type>, strs: Strs(tys), pres: Pres(tys), s: Sem(tys), tail: Type) → Type {
+    match rs { Nil => tail, Cons(r, rest) => r.Holds(tys, strs, pres, s) ∧ Owed::Then(rest, tys, strs, pres, s, tail) }
+}
+
+fn Cases(c: Bool, x, y: Type) → Type { match c { True => x, False => y } }
+
+theorem cases(c: Bool, {x, y: Type}, yes: c = True → x, no: c = False → y): Cases(c, x, y) {
+    (match c as λ d => c = d → Cases(d, x, y) { True => λ e => yes(e), False => λ e => no(e) })(refl)
+}
+
+inductive Owes { OEnd, ODo(here: List<Owed>, rest: Owes), OIf(a: Owes, b: Owes, rest: Owes) }
+
+fn Owes::Holds(self d: Owes, tys: List<Type>, strs: Strs(tys), w: World(tys), pres: Pres(tys), ops: Body, s: Sem(tys), after: Sem(tys) → Type) → Type {
+    match ops {
+        End => after(s),
+        Do(o, r) => match d { ODo(here, dr) => Owed::Then(here, tys, strs, pres, s, dr.Holds(tys, strs, w, pres, r, o.eval1(tys, strs, w, s), after)), _ => False },
+        If(cd, a, b, r) => match d {
+            OIf(da, db, dr) => Cases(cd.test(tys, strs, s), da.Holds(tys, strs, w, pres, a, s, λ x => dr.Holds(tys, strs, w, pres, r, x, after)),
+                db.Holds(tys, strs, w, pres, b, s, λ x => dr.Holds(tys, strs, w, pres, r, x, after))),
+            _ => False,
+        },
+    }
+}
+
+fn Owes::Due(self d: Owes, tys: List<Type>, strs: Strs(tys), w: World(tys), pres: Pres(tys), f: Func, objs: List<Dyn(tys)>, ws: List<Nat>) → Type {
+    d.Holds(tys, strs, w, pres, f.body, Sem(objs, Env::start(ws)), λ _ => True)
+}
+
+// The word a function answers, read inside the continuation: a branch is
+// then a convoy at `Nat`, as the source's `if h:` is, where `.word` of
+// `mean_fn`'s would project out of a convoy over the whole output and stop.
+fn mean_word(tys: List<Type>, strs: Strs(tys), w: World(tys), f: Func, objs: List<Dyn(tys)>, ws: List<Nat>) → Nat {
+    mean_then(tys, strs, w, f.body, Sem(objs, Env::start(ws)), λ s => f.ret.out(tys, strs, s).word)
+}
