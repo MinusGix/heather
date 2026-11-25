@@ -1797,12 +1797,30 @@ is about words and control only: its invariant is registers alone. The
 call, loop and frame proofs of `function_ir_lower_calls` reach memory
 through one clause, `Stack::Trail` in `EmitsOver`, and use it only for
 its stability under the frame's own stores. So they can be cited by a new
-memory layer once that clause is a parameter with that one law. Whether
-to make that generalisation is open (the issue's log states it exactly).
+memory layer once that clause is a parameter with that one law, which
+is now so (below).
 `StructuredRegion` itself is not reused: its leaves have buffer nodes and
 its meaning is relational. The new language states its own regions with
 the same shapes so that the lowering can reuse the emission and the
 word-and-control theorems.
+
+**The generalisation, made** (stage 2, `issues/lowering-generic-in-memory.md`;
+`docs/native/native-one-compiler-design.md` §2.8). The memory clause is a
+parameter `Mem: S → M → Type` over a state type, the trail is
+`WroteIn ∧ Mem`, and its one law is stability under the frame's own
+stores (`Stack::ClauseStable`). The emission lemmas, the conditional, the
+call sequence (with the callee's contract any `Pre`, `Post` and two
+hypotheses relating it to the caller's clause), the function's three
+stages and the loop's passes are proved once over it. FunctionIR's
+statements are the instance at `Buffers()` and the file in memory, each a
+one-line derivation, so no certificate changed; the bytes level's is
+`Injected` at the contract's heap, whose law is `Loan::stable_injected`.
+Every theorem the reading listed used the clause only through that law,
+except the CALL, which also relates the callee's clause to the caller's:
+that is a hypothesis, as it was for a call over views. The loop's passes
+became one induction on any measure, the run's fuel for a plain loop and
+the passes left for the bounded one; the bounded loop's head is the plain
+one with the counter as one more register.
 
 **The language** (`bytes_level`, as revised the same day by the
 coordinator's round on the world and non-terminating loops). Values are
