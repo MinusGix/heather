@@ -332,6 +332,26 @@ theorem Tm::words_len(w: World, g: List<Ty>, env: Env(w.tys, g), vs: List<Nat>):
     }
 }
 
+// The function a node's pass is pinned to, at the loop's start.
+fn Tm::while_app(w: World, g: List<Ty>, init: Nat, test, body: Tm, caps: List<Nat>,
+    h: Ty::Arrows(w.tys, Tm::state(g, Cons(init, caps)), Tm::while_body(g, init, test, body, caps).ty(w, Ty::bind_onto(Tm::state(g, Cons(init, caps)), Nil))),
+    env: Env(w.tys, g)) → Tm::while_body(g, init, test, body, caps).ty(w, Ty::bind_onto(Tm::state(g, Cons(init, caps)), Nil)).sem(w.tys) {
+    Ty::apply(w.tys, Tm::state(g, Cons(init, caps)), Tm::while_body(g, init, test, body, caps).ty(w, Ty::bind_onto(Tm::state(g, Cons(init, caps)), Nil)), h,
+        Tm::words(w, g, env, Cons(init, caps)))
+}
+
+// The function a node's pass is pinned to, at any words.
+fn Tm::while_apply(w: World, g: List<Ty>, init: Nat, test, body: Tm, caps: List<Nat>,
+    h: Ty::Arrows(w.tys, Tm::state(g, Cons(init, caps)), Tm::while_body(g, init, test, body, caps).ty(w, Ty::bind_onto(Tm::state(g, Cons(init, caps)), Nil))),
+    ys: List<BitVec(64)>) → Tm::while_body(g, init, test, body, caps).ty(w, Ty::bind_onto(Tm::state(g, Cons(init, caps)), Nil)).sem(w.tys) {
+    Ty::apply(w.tys, Tm::state(g, Cons(init, caps)), Tm::while_body(g, init, test, body, caps).ty(w, Ty::bind_onto(Tm::state(g, Cons(init, caps)), Nil)), h, ys)
+}
+
+// Variable `k`'s word as `Ty::apply` hands it to a function of words.
+fn Tm::cap_word(w: World, g: List<Ty>, env: Env(w.tys, g), k: Nat) → BitVec(64) {
+    Ty::cast(w.tys, Word(64), Word(64), Ty::cast(w.tys, Ty::at(g, k), Word(64), Env::get(w.tys, g, env, k)))
+}
+
 // What pins a `while` read as a node, at a world: the function of its
 // state it computes (`h`, the elaborator's `f::loop::of(c̄).run`), a measure
 // of the state that is a word's `toNat`, the node's pass pinned to `h`
@@ -342,9 +362,7 @@ record Tm::WhileLoop(w: World, g: List<Ty>, init: Nat, test: Tm, body: Tm, caps:
     m: List<BitVec(64)> → Nat,
     bound: Ty::ForWords(Tm::state(g, Cons(init, caps)), λ (xs: List<BitVec(64)>) => m(xs) <= Tm::passes()),
     pass: Tm::NodePass(Tm::state(g, Cons(init, caps)), Tm::while_body(g, init, test, body, caps), w, h, m),
-    agree: (env: Env(w.tys, g)) → Ty::apply(w.tys, Tm::state(g, Cons(init, caps)),
-        Tm::while_body(g, init, test, body, caps).ty(w, Ty::bind_onto(Tm::state(g, Cons(init, caps)), Nil)), h, Tm::words(w, g, env, Cons(init, caps)))
-        = Tm::loops_written(w)(g, init, test, body, caps, loopn, env),
+    agree: (env: Env(w.tys, g)) → Tm::while_app(w, g, init, test, body, caps, h, env) = Tm::loops_written(w)(g, init, test, body, caps, loopn, env),
 }
 
 // What a term's `while`s read as nodes owe: each its `Tm::WhileLoop`. A
@@ -354,7 +372,7 @@ fn Tm::WhileEv(self t: Tm, w: World, g: List<Ty>) → Type {
         Let(e, body) => e.WhileEv(w, g) ∧ body.WhileEv(w, Cons(e.ty(w, g), g)),
         If(_, yes, no) => yes.WhileEv(w, g) ∧ no.WhileEv(w, g),
         IfEq(_, yes, no) => yes.WhileEv(w, g) ∧ no.WhileEv(w, g),
-        Pick(_, _, arms, _) => arms.nodeless() = True,
+        Pick(_, _, arms, _) => arms.nodeless().IsTrue(),
         Iterate(init, test, body, caps, loopn) => match Tm::while_fits(w, g, init, test, body, caps, loopn) {
             True => Tm::WhileLoop(w, g, init, test, body, caps, loopn),
             False => True,
@@ -363,6 +381,12 @@ fn Tm::WhileEv(self t: Tm, w: World, g: List<Ty>) → Type {
         _ => True,
     }
 }
+
+theorem Tm::while_app_is(w: World, g: List<Ty>, init: Nat, test, body: Tm, caps: List<Nat>,
+    h: Ty::Arrows(w.tys, Tm::state(g, Cons(init, caps)), Tm::while_body(g, init, test, body, caps).ty(w, Ty::bind_onto(Tm::state(g, Cons(init, caps)), Nil))),
+    env: Env(w.tys, g)):
+    Ty::apply(w.tys, Tm::state(g, Cons(init, caps)), Tm::while_body(g, init, test, body, caps).ty(w, Ty::bind_onto(Tm::state(g, Cons(init, caps)), Nil)), h,
+        Tm::words(w, g, env, Cons(init, caps))) = Tm::while_app(w, g, init, test, body, caps, h, env) { refl }
 
 // Each loop read as a node agrees with the loop written: the node's rounds
 // are `h` (`Tm::node_means`), which at the start is the written loop.
@@ -377,7 +401,7 @@ theorem Tm::while_agree(w: World, g: List<Ty>, init: Nat, test, body: Tm, caps: 
     trans(Tm::sem_in_loop(inits, nb, w, Tm::no_label(w.tys), g, env),
     trans(Tm::node_means(sg, nb, w, ev.h, ev.m, ev.pass, Tm::words(w, g, env, inits), len,
             Ty::for_words_at(sg, λ (xs: List<BitVec(64)>) => ev.m(xs) <= Tm::passes(), ev.bound, Tm::words(w, g, env, inits), len)),
-        ev.agree(env))))
+        trans(Tm::while_app_is(w, g, init, test, body, caps, ev.h, env), ev.agree(env)))))
 }
 
 theorem Tm::agree_of_ev(self t: Tm, w: World): (g: List<Ty>) → t.WhileEv(w, g) → t.LoopsAgree(w, Tm::loops_nodes(w), Tm::loops_written(w), g) {
@@ -450,7 +474,7 @@ theorem Tm::ends_of_ev(self t: Tm, w: World): (g: List<Ty>) → t.WhileEv(w, g) 
                 Tm::ends_of_ev(body, w, Cons(e.ty(w, g), g), ev.right))⟩,
         If(_, yes, no) => λ g ev => ⟨Tm::ends_of_ev(yes, w, g, ev.left), Tm::ends_of_ev(no, w, g, ev.right)⟩,
         IfEq(_, yes, no) => λ g ev => ⟨Tm::ends_of_ev(yes, w, g, ev.left), Tm::ends_of_ev(no, w, g, ev.right)⟩,
-        Pick(i, _, arms, _) => λ g ev => Tm::ends_free(arms, w, Cons(Enum(i), g), Bool::is_true_of_eq(ev)),
+        Pick(i, _, arms, _) => λ g ev => Tm::ends_free(arms, w, Cons(Enum(i), g), ev),
         Iterate(init, test, body, caps, loopn) => λ g =>
             (match Tm::while_fits(w, g, init, test, body, caps, loopn) as λ b =>
                 (match b as λ _ => Type { True => Tm::WhileLoop(w, g, init, test, body, caps, loopn), False => True }) →
@@ -480,4 +504,214 @@ theorem Ty::alike_trans(tys: Table, ps: List<Ty>, r: Ty): (a, b, c: Ty::Arrows(t
         Nil => λ a b c ab bc => trans(ab, bc),
         Cons(p, rest) => λ a b c ab bc x => Ty::alike_trans(tys, rest, r, a(x), b(x), c(x), ab(x), bc(x)),
     }
+}
+
+theorem Ty::alike_sym(tys: Table, ps: List<Ty>, r: Ty): (a, b: Ty::Arrows(tys, ps, r)) → Ty::Alike(tys, ps, r, a, b) → Ty::Alike(tys, ps, r, b, a) {
+    match ps {
+        Nil => λ a b ab => sym(ab),
+        Cons(p, rest) => λ a b ab x => Ty::alike_sym(tys, rest, r, a(x), b(x), ab(x)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// What the generator applies, so that it writes applications and no
+// binders of its own.
+
+// A `while` pass over a word state, its captures `cs` handed on: the
+// node's pass at `x` is the loop's run, where its going round agrees with
+// the run below the measure.
+theorem Tm::while_pass(l: loop::Loop<BitVec(64), BitVec(64)>, x: BitVec(64), cs: List<BitVec(64)>, go: Bool, next: (go = True) → BitVec(64),
+    same: loop::Pass::step(l.measure, x, l.step(x)) = loop::Step::turn(go, next, x), n: BitVec(64), nn: (e: go = True) → n = next(e),
+    k: List<BitVec(64)> → BitVec(64), N: Nat,
+    M: List<BitVec(64)> → Nat, H: List<BitVec(64)> → BitVec(64),
+    hyp: (ys: List<BitVec(64)>) → ys.len() = N → M(ys) < M(Cons(x, cs)) → k(ys) = H(ys), len: Cons(n, cs).len() = N,
+    mn: M(Cons(n, cs)) = l.measure(n), mx: M(Cons(x, cs)) = l.measure(x), hn: H(Cons(n, cs)) = l.run(n)):
+    (match go { False => x, True => k(Cons(n, cs)) }) = l.run(x) {
+    let when: (loop::Pass::step(l.measure, x, l.step(x)) = loop::Step::when(go, n, x)) =
+        trans(same, loop::Step::turn_ext(go, next, λ _ => n, λ e => sym(nn(e)), x));
+    loop::Loop::run_when(l, x, go, n, when, λ (t: BitVec(64)) => k(Cons(t, cs)), λ _ lt =>
+        trans(hyp(Cons(n, cs), len, j(sym(mx), λ v _ => M(Cons(n, cs)) < v, j(sym(mn), λ v _ => v < l.measure(x), lt))), hn))
+}
+
+theorem Tm::while_loop(w: World, g: List<Ty>, init: Nat, test, body: Tm, caps: List<Nat>, loopn: Nat,
+    h: Ty::Arrows(w.tys, Tm::state(g, Cons(init, caps)), Tm::while_body(g, init, test, body, caps).ty(w, Ty::bind_onto(Tm::state(g, Cons(init, caps)), Nil))),
+    m: List<BitVec(64)> → Nat,
+    bound: Ty::ForWords(Tm::state(g, Cons(init, caps)), λ (xs: List<BitVec(64)>) => m(xs) <= Tm::passes()),
+    pass: Tm::NodePass(Tm::state(g, Cons(init, caps)), Tm::while_body(g, init, test, body, caps), w, h, m),
+    agree: (env: Env(w.tys, g)) → Tm::while_app(w, g, init, test, body, caps, h, env) = Tm::loops_written(w)(g, init, test, body, caps, loopn, env)):
+    Tm::WhileLoop(w, g, init, test, body, caps, loopn) {
+    Tm::WhileLoop(h := h, m := m, bound := bound, pass := pass, agree := agree)
+}
+
+theorem Tm::ev_both(A, B: Type, a: A, b: B): A ∧ B { ⟨a, b⟩ }
+
+// A term's nodes end, read off the term they are written from.
+theorem Tm::ends_at(t, tn: Tm, w: World, g: List<Ty>, eq: t.nodes(w, g) = tn, e: Tm::Ends(t.nodes(w, g), w, g)): Tm::Ends(tn, w, g) {
+    j(eq, λ x _ => Tm::Ends(x, w, g), e)
+}
+
+// A binder's type the generator spells: a test that holds.
+fn Tm::Holds(go: Bool) → Type { go = True }
+
+// A binder's type the generator spells: an environment of a context.
+fn Tm::EnvOf(w: World, g: List<Ty>) → Type { Env(w.tys, g) }
+
+// The two sides of a function's body with nodes read by the nodes' oracle:
+// the nodes' body's own meaning, and the written body's with each loop
+// answered by its node. One by conversion at a closed term.
+fn Tm::nodes_lhs(w: World, ps: List<Ty>, r: Ty, t: Tm, env: Env(w.tys, Ty::bind_onto(ps, Nil))) → r.sem(w.tys) {
+    Ty::cast(w.tys, t.nodes(w, Ty::bind_onto(ps, Nil)).ty(w, Ty::bind_onto(ps, Nil)), r, Tm::sem(t.nodes(w, Ty::bind_onto(ps, Nil)), w, Ty::bind_onto(ps, Nil), env))
+}
+
+fn Tm::nodes_rhs(w: World, ps: List<Ty>, r: Ty, t: Tm, env: Env(w.tys, Ty::bind_onto(ps, Nil))) → r.sem(w.tys) {
+    Ty::cast(w.tys, t.ty(w, Ty::bind_onto(ps, Nil)), r, t.sem_with(w, Tm::loops_nodes(w), Ty::bind_onto(ps, Nil), env))
+}
+
+// ---------------------------------------------------------------------------
+// The nodes' body means what the written body means with each loop
+// answered by its node, at any term: so that a function's pin never asks
+// the kernel to compare two loops' meanings (which unrolls them).
+
+fn Tm::convoy_on(T: Type, c: Bool, yes, no: T, b: Bool, e: c = b) → T {
+    (match b as λ b2 => (c = b2) → T { False => λ _ => no, True => λ _ => yes })(e)
+}
+
+theorem Tm::convoy_is(T: Type, c: Bool, yes, no: T): Tm::convoy(T, c, yes, no) = (match c { False => no, True => yes }) {
+    (match c as λ b => (e: c = b) → Tm::convoy_on(T, c, yes, no, b, e) = (match b { False => no, True => yes }) {
+        False => λ _ => refl,
+        True => λ _ => refl,
+    })(refl)
+}
+
+// A cast of a cast, where the first lands at the second's source.
+theorem Ty::cast_cast(tys: Table, a, b, c: Ty, v: a.sem(tys), e: a = b): Ty::cast(tys, b, c, Ty::cast(tys, a, b, v)) = Ty::cast(tys, a, c, v) {
+    (j(e, λ x _ => (u: a.sem(tys)) → Ty::cast(tys, x, c, Ty::cast(tys, a, x, u)) = Ty::cast(tys, a, c, u),
+        λ u => cong_fn(λ (z: a.sem(tys)) => Ty::cast(tys, a, c, z), Ty::cast_self(tys, a, u))))(v)
+}
+
+// The branch of an `if` the nodes' body takes is the written one's.
+theorem Tm::nodes_branch(tys: Table, y2, y, n2, n: Ty, ey: y2 = y, en: n2 = n, x: Bool, sy: y2.sem(tys), sn: n2.sem(tys), wy: y.sem(tys), wn: n.sem(tys),
+    hy: Ty::cast(tys, y2, y, sy) = wy, hn: Ty::cast(tys, n2, n, sn) = wn):
+    Ty::cast(tys, y2, y, match x { False => Ty::cast(tys, n2, y2, sn), True => sy }) = (match x { False => Ty::cast(tys, n, y, wn), True => wy }) {
+    (match x as λ b => Ty::cast(tys, y2, y, match b { False => Ty::cast(tys, n2, y2, sn), True => sy }) = (match b { False => Ty::cast(tys, n, y, wn), True => wy }) {
+        True => hy,
+        False => {
+            let step1: (Ty::cast(tys, y2, y, Ty::cast(tys, n2, y2, sn)) = Ty::cast(tys, n2, y, sn)) = j(sym(ey),
+                λ z _ => Ty::cast(tys, z, y, Ty::cast(tys, n2, z, sn)) = Ty::cast(tys, n2, y, sn), Ty::cast_self(tys, y, Ty::cast(tys, n2, y, sn)));
+            let step2: (Ty::cast(tys, n2, y, sn) = Ty::cast(tys, n, y, Ty::cast(tys, n2, n, sn))) = sym(Ty::cast_cast(tys, n2, n, y, sn, en));
+            trans(step1, trans(step2, cong_fn(λ (z: n.sem(tys)) => Ty::cast(tys, n, y, z), hn)))
+        },
+    })
+}
+
+// What `Tm::nodes_sem` states of a term `t` at an environment.
+fn Tm::NodesSem(self t: Tm, w: World, g: List<Ty>, env: Env(w.tys, g)) → Type {
+    Ty::cast(w.tys, t.nodes(w, g).ty(w, g), t.ty(w, g), Tm::sem(t.nodes(w, g), w, g, env)) = t.sem_with(w, Tm::loops_nodes(w), g, env)
+}
+
+theorem Tm::nodes_let(e, b: Tm, w: World, g: List<Ty>, env: Env(w.tys, g), he: e.NodesSem(w, g, env),
+    hb: (u: e.ty(w, g).sem(w.tys)) → b.NodesSem(w, Cons(e.ty(w, g), g), Pair(u, env))): Let(e, b).NodesSem(w, g, env) {
+    let g1 = Cons(e.ty(w, g), g);
+    let E2 = e.nodes(w, g);
+    let B2 = b.nodes(w, g1);
+    let base = λ (u: e.ty(w, g).sem(w.tys)) => cong_fn(λ (z: e.ty(w, g).sem(w.tys)) =>
+            Ty::cast(w.tys, B2.ty(w, g1), b.ty(w, g1), B2.sem_in(w, Tm::no_label(w.tys), g1, Pair(z, env))),
+        sym(Ty::cast_self(w.tys, e.ty(w, g), u)));
+    let moved = j(sym(Tm::nodes_ty(e, w, g)), λ X _ => (u: X.sem(w.tys)) →
+            Ty::cast(w.tys, B2.ty(w, Cons(X, g)), b.ty(w, g1), B2.sem_in(w, Tm::no_label(w.tys), Cons(X, g), Pair(u, env)))
+            = Ty::cast(w.tys, B2.ty(w, g1), b.ty(w, g1), B2.sem_in(w, Tm::no_label(w.tys), g1, Pair(Ty::cast(w.tys, X, e.ty(w, g), u), env))),
+        base);
+    let r: (Ty::cast(w.tys, B2.ty(w, Cons(E2.ty(w, g), g)), b.ty(w, g1), B2.sem_in(w, Tm::no_label(w.tys), Cons(E2.ty(w, g), g), Pair(E2.sem_in(w, Tm::no_label(w.tys), g, env), env)))
+        = b.sem_with(w, Tm::loops_nodes(w), g1, Pair(e.sem_with(w, Tm::loops_nodes(w), g, env), env))) =
+        trans(moved(E2.sem_in(w, Tm::no_label(w.tys), g, env)),
+            trans(cong_fn(λ (z: e.ty(w, g).sem(w.tys)) => Ty::cast(w.tys, B2.ty(w, g1), b.ty(w, g1), B2.sem_in(w, Tm::no_label(w.tys), g1, Pair(z, env))), he),
+                hb(e.sem_with(w, Tm::loops_nodes(w), g, env))));
+    r
+}
+
+theorem Tm::nodes_if(c: Nat, y, n: Tm, w: World, g: List<Ty>, env: Env(w.tys, g), hy: y.NodesSem(w, g, env), hn: n.NodesSem(w, g, env)):
+    If(c, y, n).NodesSem(w, g, env) {
+    let r: (Ty::cast(w.tys, y.nodes(w, g).ty(w, g), y.ty(w, g), match Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c)) {
+            False => Ty::cast(w.tys, n.nodes(w, g).ty(w, g), y.nodes(w, g).ty(w, g), Tm::sem(n.nodes(w, g), w, g, env)),
+            True => Tm::sem(y.nodes(w, g), w, g, env),
+        }) = (match Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c)) {
+            False => Ty::cast(w.tys, n.ty(w, g), y.ty(w, g), n.sem_with(w, Tm::loops_nodes(w), g, env)),
+            True => y.sem_with(w, Tm::loops_nodes(w), g, env),
+        })) =
+        Tm::nodes_branch(w.tys, y.nodes(w, g).ty(w, g), y.ty(w, g), n.nodes(w, g).ty(w, g), n.ty(w, g), Tm::nodes_ty(y, w, g), Tm::nodes_ty(n, w, g),
+            Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c)), Tm::sem(y.nodes(w, g), w, g, env), Tm::sem(n.nodes(w, g), w, g, env),
+            y.sem_with(w, Tm::loops_nodes(w), g, env), n.sem_with(w, Tm::loops_nodes(w), g, env), hy, hn);
+    r
+}
+
+theorem Tm::nodes_ifeq(c: Nat, y, n: Tm, w: World, g: List<Ty>, env: Env(w.tys, g), hy: y.NodesSem(w, g, env), hn: n.NodesSem(w, g, env)):
+    IfEq(c, y, n).NodesSem(w, g, env) {
+    let x = Ty::cast(w.tys, Ty::at(g, c), Bit, Env::get(w.tys, g, env, c));
+    let Y2 = y.nodes(w, g);
+    let N2 = n.nodes(w, g);
+    let L = Tm::loops_nodes(w);
+    let left: (Tm::convoy(Y2.ty(w, g).sem(w.tys), x, Tm::sem(Y2, w, g, env), Ty::cast(w.tys, N2.ty(w, g), Y2.ty(w, g), Tm::sem(N2, w, g, env)))
+        = (match x { False => Ty::cast(w.tys, N2.ty(w, g), Y2.ty(w, g), Tm::sem(N2, w, g, env)), True => Tm::sem(Y2, w, g, env) })) =
+        Tm::convoy_is(Y2.ty(w, g).sem(w.tys), x, Tm::sem(Y2, w, g, env), Ty::cast(w.tys, N2.ty(w, g), Y2.ty(w, g), Tm::sem(N2, w, g, env)));
+    let right: (Tm::convoy(y.ty(w, g).sem(w.tys), x, y.sem_with(w, L, g, env), Ty::cast(w.tys, n.ty(w, g), y.ty(w, g), n.sem_with(w, L, g, env)))
+        = (match x { False => Ty::cast(w.tys, n.ty(w, g), y.ty(w, g), n.sem_with(w, L, g, env)), True => y.sem_with(w, L, g, env) })) =
+        Tm::convoy_is(y.ty(w, g).sem(w.tys), x, y.sem_with(w, L, g, env), Ty::cast(w.tys, n.ty(w, g), y.ty(w, g), n.sem_with(w, L, g, env)));
+    let mid = Tm::nodes_branch(w.tys, Y2.ty(w, g), y.ty(w, g), N2.ty(w, g), n.ty(w, g), Tm::nodes_ty(y, w, g), Tm::nodes_ty(n, w, g),
+        x, Tm::sem(Y2, w, g, env), Tm::sem(N2, w, g, env), y.sem_with(w, L, g, env), n.sem_with(w, L, g, env), hy, hn);
+    let r: (Ty::cast(w.tys, Y2.ty(w, g), y.ty(w, g), Tm::convoy(Y2.ty(w, g).sem(w.tys), x, Tm::sem(Y2, w, g, env), Ty::cast(w.tys, N2.ty(w, g), Y2.ty(w, g), Tm::sem(N2, w, g, env))))
+        = Tm::convoy(y.ty(w, g).sem(w.tys), x, y.sem_with(w, L, g, env), Ty::cast(w.tys, n.ty(w, g), y.ty(w, g), n.sem_with(w, L, g, env)))) =
+        trans(cong_fn(λ (z: Y2.ty(w, g).sem(w.tys)) => Ty::cast(w.tys, Y2.ty(w, g), y.ty(w, g), z), left), trans(mid, sym(right)));
+    r
+}
+
+theorem Tm::nodes_iterate(init: Nat, test, body: Tm, caps: List<Nat>, loopn: Nat, w: World, g: List<Ty>, env: Env(w.tys, g)):
+    Iterate(init, test, body, caps, loopn).NodesSem(w, g, env) {
+    (match Tm::while_fits(w, g, init, test, body, caps, loopn) as λ b =>
+        Ty::cast(w.tys, (match b { True => Tm::while_tm(g, init, test, body, caps), False => Iterate(init, test, body, caps, loopn) }).ty(w, g), Ty::at(g, init),
+            Tm::sem(match b { True => Tm::while_tm(g, init, test, body, caps), False => Iterate(init, test, body, caps, loopn) }, w, g, env))
+        = (match b as λ _ => Ty::at(g, init).sem(w.tys) {
+            True => Tm::sem(Tm::while_tm(g, init, test, body, caps), w, g, env),
+            False => Tm::sem(Iterate(init, test, body, caps, loopn), w, g, env),
+        }) {
+        True => Ty::cast_self(w.tys, Ty::at(g, init), Tm::sem(Tm::while_tm(g, init, test, body, caps), w, g, env)),
+        False => Ty::cast_self(w.tys, Ty::at(g, init), Tm::sem(Iterate(init, test, body, caps, loopn), w, g, env)),
+    })
+}
+
+theorem Tm::nodes_leaf(t: Tm, w: World, g: List<Ty>, env: Env(w.tys, g), same_nodes: t.nodes(w, g) = t,
+    leaf: t.sem_with(w, Tm::loops_nodes(w), g, env) = Tm::sem(t, w, g, env)): t.NodesSem(w, g, env) {
+    j(sym(same_nodes), λ x _ => Ty::cast(w.tys, x.ty(w, g), t.ty(w, g), Tm::sem(x, w, g, env)) = t.sem_with(w, Tm::loops_nodes(w), g, env),
+        trans(Ty::cast_self(w.tys, t.ty(w, g), Tm::sem(t, w, g, env)), sym(leaf)))
+}
+
+theorem Tm::nodes_sem(self t: Tm, w: World): (g: List<Ty>) → (env: Env(w.tys, g)) → t.NodesSem(w, g, env) {
+    match t {
+        Let(e, body) => λ g env => Tm::nodes_let(e, body, w, g, env, Tm::nodes_sem(e, w, g, env),
+            λ u => Tm::nodes_sem(body, w, Cons(e.ty(w, g), g), Pair(u, env))),
+        If(c, yes, no) => λ g env => Tm::nodes_if(c, yes, no, w, g, env, Tm::nodes_sem(yes, w, g, env), Tm::nodes_sem(no, w, g, env)),
+        IfEq(c, yes, no) => λ g env => Tm::nodes_ifeq(c, yes, no, w, g, env, Tm::nodes_sem(yes, w, g, env), Tm::nodes_sem(no, w, g, env)),
+        Iterate(init, test, body, caps, loopn) => λ g env => Tm::nodes_iterate(init, test, body, caps, loopn, w, g, env),
+        Var(i) => λ g env => Tm::nodes_leaf(Var(i), w, g, env, refl, refl),
+        Lit(c, n) => λ g env => Tm::nodes_leaf(Lit(c, n), w, g, env, refl, refl),
+        Prim(op, args) => λ g env => Tm::nodes_leaf(Prim(op, args), w, g, env, refl, refl),
+        Make(i, args) => λ g env => Tm::nodes_leaf(Make(i, args), w, g, env, refl, refl),
+        Field(i, k, of) => λ g env => Tm::nodes_leaf(Field(i, k, of), w, g, env, refl, refl),
+        Call(f, args) => λ g env => Tm::nodes_leaf(Call(f, args), w, g, env, refl, refl),
+        Fold(over, init, step) => λ g env => Tm::nodes_leaf(Fold(over, init, step), w, g, env, refl, refl),
+        Case(c, zero, succ) => λ g env => Tm::nodes_leaf(Case(c, zero, succ), w, g, env, refl, refl),
+        Byte(k, i, length) => λ g env => Tm::nodes_leaf(Byte(k, i, length), w, g, env, refl, refl),
+        Pick(i, c, arms, eq) => λ g env => Tm::nodes_leaf(Pick(i, c, arms, eq), w, g, env, refl, refl),
+        Inject(i, k, args) => λ g env => Tm::nodes_leaf(Inject(i, k, args), w, g, env, refl, refl),
+        Slot(i, j, of) => λ g env => Tm::nodes_leaf(Slot(i, j, of), w, g, env, refl, refl),
+        Again(res, args) => λ g env => Tm::nodes_leaf(Again(res, args), w, g, env, refl, refl),
+        Loop(inits, body) => λ g env => Tm::nodes_leaf(Loop(inits, body), w, g, env, refl, Tm::with_loop(inits, body, w, Tm::loops_nodes(w), g, env)),
+    }
+}
+
+// The two sides `Setup::pinned_nodes` meets, one at every term.
+theorem Tm::nodes_same(w: World, ps: List<Ty>, r: Ty, t: Tm, env: Env(w.tys, Ty::bind_onto(ps, Nil))):
+    Tm::nodes_lhs(w, ps, r, t, env) = Tm::nodes_rhs(w, ps, r, t, env) {
+    let g = Ty::bind_onto(ps, Nil);
+    sym(trans(cong_fn(λ (z: t.ty(w, g).sem(w.tys)) => Ty::cast(w.tys, t.ty(w, g), r, z), sym(Tm::nodes_sem(t, w, g, env))),
+        Ty::cast_cast(w.tys, t.nodes(w, g).ty(w, g), t.ty(w, g), r, Tm::sem(t.nodes(w, g), w, g, env), Tm::nodes_ty(t, w, g))))
 }

@@ -559,6 +559,37 @@ theorem Setup::alike_every<F>(f: F, w: World, callees: (b: Buffers()) → Sig::S
     λ b => Ty::alike_refl(w.at(callees, b).tys, ps, r, Ty::lent_at(w.at(callees, b).tys, lent, ps, r, typed(b), f, b))
 }
 
+// The pin of a function whose `while`s are loop nodes (`Tm::nodes`,
+// docs/language/loop-combinator-design.md §6.9): alike its body as written
+// (`written`, as a plain function's pin is), whose loops meet the nodes'
+// at `Loop::run` (`ev`, `Tm::agree_of_ev`), and that body with its loops
+// answered by the nodes is the nodes' body (`Tm::nodes_same`, and `eq`, by
+// evaluation).
+theorem Setup::pinned_nodes<F>(f: F, w: World, callees: (b: Buffers()) → Sig::Sems(w.tys, w.sigs), lent: Nat, ps: List<Ty>, r: Ty,
+    typed: (b: Buffers()) → Itself(F) = Itself(Ty::Lent(w.at(callees, b).tys, lent, ps, r)), t, tn: Tm,
+    written: (b: Buffers()) → Ty::Alike(w.at(callees, b).tys, ps, r, Ty::lent_at(w.at(callees, b).tys, lent, ps, r, typed(b), f, b),
+        Ty::curry(w.at(callees, b).tys, r, ps, Nil, trivial, λ env => Ty::cast(w.at(callees, b).tys, t.ty(w.at(callees, b), Ty::bind_onto(ps, Nil)), r,
+            t.sem_with(w.at(callees, b), Tm::loops_written(w.at(callees, b)), Ty::bind_onto(ps, Nil), env)))),
+    ev: (b: Buffers()) → t.WhileEv(w.at(callees, b), Ty::bind_onto(ps, Nil)),
+    eq: (b: Buffers()) → t.nodes(w.at(callees, b), Ty::bind_onto(ps, Nil)) = tn):
+    Setup::Pinned(f, Fun(ps, r, tn, lent), w, callees, typed) {
+    λ b => {
+        let wb = w.at(callees, b);
+        let g = Ty::bind_onto(ps, Nil);
+        let k_nodes = λ (env: Env(wb.tys, g)) => Ty::cast(wb.tys, t.ty(wb, g), r, t.sem_with(wb, Tm::loops_nodes(wb), g, env));
+        let k_written = λ (env: Env(wb.tys, g)) => Ty::cast(wb.tys, t.ty(wb, g), r, t.sem_with(wb, Tm::loops_written(wb), g, env));
+        let k_sem = λ (env: Env(wb.tys, g)) => Ty::cast(wb.tys, t.nodes(wb, g).ty(wb, g), r, Tm::sem(t.nodes(wb, g), wb, g, env));
+        let middle = Ty::alike_sym(wb.tys, ps, r, Ty::curry(wb.tys, r, ps, Nil, trivial, k_nodes), Ty::curry(wb.tys, r, ps, Nil, trivial, k_written),
+            Tm::alike_with(wb, ps, r, t, Tm::loops_nodes(wb), Tm::loops_written(wb), Tm::agree_of_ev(t, wb, g, ev(b))));
+        let last = j(eq(b), λ x _ => Ty::Alike(wb.tys, ps, r, Ty::curry(wb.tys, r, ps, Nil, trivial, k_nodes), Fun(ps, r, x, lent).meaning(wb)),
+            Ty::alike_curry(wb.tys, r, ps, Nil, trivial, k_nodes, k_sem, λ env => sym(Tm::nodes_same(wb, ps, r, t, env))));
+        Ty::alike_trans(wb.tys, ps, r, Ty::lent_at(wb.tys, lent, ps, r, typed(b), f, b), Ty::curry(wb.tys, r, ps, Nil, trivial, k_written),
+            Fun(ps, r, tn, lent).meaning(wb), written(b),
+            Ty::alike_trans(wb.tys, ps, r, Ty::curry(wb.tys, r, ps, Nil, trivial, k_written), Ty::curry(wb.tys, r, ps, Nil, trivial, k_nodes),
+                Fun(ps, r, tn, lent).meaning(wb), middle, last))
+    }
+}
+
 // A runtime fn's agreement, from its reflection: the default setup's code
 // and the agreement `Setup::code_answers` gives at each file, carried to
 // `f` along the pin and to the one code along `static`. `ok` and `plain`
@@ -3005,10 +3036,182 @@ fn runtime_node_instance(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTy
     pure(ap(compile, [Blank, setup, rt_e, world_e, table_e, Global(f), typed, pinned, verdict, ap(rfl, [Blank, runtime_at(shapes, 0)])]))
 }
 
+// ---------------------------------------------------------------------------
+// A function whose `while`s are loop nodes (`Tm::nodes`,
+// docs/language/loop-combinator-design.md §6.9)
+
+// One loop's `Tm::WhileLoop` at the world `w_e`, from the elaborator's
+// declarations for it (`f::loop…::of`, `::measure`, `::count`, `::same`,
+// `::runs`): the function its node computes is the loop's `run`, its
+// measure the loop's, a word's `toNat`; its pass is `Tm::while_pass`, and
+// at the start the function is the written loop by `f::loop…::runs`. Its
+// binders are opened under `under`.
+fn runtime_while_loop(name: String, q: RtQ, ts: RtTypes, w_e: Expr, under: LocalRef, g: List<Ty>, init: Nat, test, body: Tm, caps: List<Nat>, loopn: Nat)
+    → Tac<Expr> {
+    let lname = rt_loop_name(name, loopn);
+    let of_g <- runtime_global(lname ++ "::of");
+    let measure_g <- runtime_global(lname ++ "::measure");
+    let count_g <- runtime_global(lname ++ "::count");
+    let same_g <- runtime_global(lname ++ "::same");
+    let runs_g <- runtime_global(lname ++ "::runs");
+    let run_g <- runtime_global(name_of(loop::Loop::run));
+    let on_words <- runtime_global(name_of(Ty::on_words));
+    let within_g <- runtime_global(name_of(Tm::word_within));
+    let pass_g <- runtime_global(name_of(Tm::NodePass));
+    let state_g <- runtime_global(name_of(Tm::state));
+    let body_g <- runtime_global(name_of(Tm::while_body));
+    let while_pass_g <- runtime_global(name_of(Tm::while_pass));
+    let while_loop_g <- runtime_global(name_of(Tm::while_loop));
+    let cap_word_g <- runtime_global(name_of(Tm::cap_word));
+    let apply_g <- runtime_global(name_of(Tm::while_apply));
+    let holds_g <- runtime_global(name_of(Tm::Holds));
+    let env_of_g <- runtime_global(name_of(Tm::EnvOf));
+    let rfl <- runtime_global("tactic::rfl");
+    let sym_g <- runtime_global(name_of(Setup::eq_sym));
+    let trans_g <- runtime_global(name_of(Setup::eq_trans));
+    let word_list <- runtime_ctors_at(ts.words);
+    let inits = Cons(init, caps);
+    let sg = Tm::state(g, inits);
+    let n = caps.len();
+    let g_e = Ty::quotes(g, q);
+    let test_e = Tm::quote(test, q);
+    let body_e = Tm::quote(body, q);
+    let caps_e = q.nat_list(caps);
+    let sg_e = ap(state_g, [g_e, q.nat_list(inits)]);
+    let nb_e = ap(body_g, [g_e, NatLit(init), test_e, body_e, caps_e]);
+    let first = λ (xs: List<LocalRef>) => Local(xs.head_or(under));
+    let rest = λ (xs: List<LocalRef>) => runtime_locals(xs.drop(1));
+    // The function the node computes: the loop's run at its captures.
+    let xs1 <- runtime_params(ts.word, sg, Some(under), 0);
+    let h_e = runtime_lams(xs1, ap(run_g, [Hd(ts.word), Hd(ts.word), ap(of_g, rest(xs1)), first(xs1)]));
+    // Its measure, and that it is a word's `toNat`.
+    let xs2 <- runtime_params(ts.word, sg, Some(under), 0);
+    let m_e = ap(on_words, [sg_e, runtime_lams(xs2, ap(measure_g, rest(xs2).append([first(xs2)])))]);
+    let xs3 <- runtime_params(ts.word, sg, Some(under), 0);
+    let bound_e = runtime_lams(xs3, ap(within_g, [ap(count_g, rest(xs3).append([first(xs3)]))]));
+    // The pass, its binders opened off its statement: the words, the going
+    // round `k`, and what `k` agrees with.
+    let s_t <- as_type(ap(pass_g, [sg_e, nb_e, w_e, h_e, m_e])).or_fail("runtime: `" ++ lname ++ "`'s pass: ");
+    let names = List::range(n + 1).map(λ i => "x".append(decimal_name(2, i))).append(["k", "hyp"]);
+    let os <- runtime_open_n(64, s_t, names);
+    let vs = os.fst.take(n + 1);
+    let k_ref = os.fst.nth(n + 1).unwrap_or(under);
+    let hyp = os.fst.nth(n + 2).unwrap_or(under);
+    // The next word: `f::loop…::same`'s `Step::turn` goes on with it where
+    // its test holds, which its next state does not read.
+    let same_e = ap(same_g, rest(vs).append([first(vs)]));
+    let same_t <- infer(same_e).or_fail("runtime: `" ++ lname ++ "::same`: ");
+    let turn <- view(same_t).bind(λ v => match v as λ _ => Tac<Pair<Handle, Handle>> {
+        HEq(_, rhs) => view(rhs).bind(λ vr => match vr as λ _ => Tac<Pair<Handle, Handle>> {
+            HGlobal(_, _, targs) => match targs {
+                Cons(go, Cons(next, _)) => pure(Pair(go, next)),
+                _ => runtime_fail("`" ++ lname ++ "::same` is not a `Step::turn`"),
+            },
+            _ => runtime_fail("`" ++ lname ++ "::same` is not a `Step::turn`"),
+        }),
+        _ => runtime_fail("`" ++ lname ++ "::same` is not an equation"),
+    });
+    let bool_t <- infer(Hd(turn.fst)).or_fail("runtime: `" ++ lname ++ "`'s test: ");
+    let bools <- runtime_ctors_at(bool_t);
+    let e <- assume(Equation(Hd(turn.fst), runtime_at(bools, 1)), "e", Some(hyp)).or_fail("runtime: `" ++ lname ++ "`'s test: ");
+    // The next word, held where the loop's word is: the next state where
+    // the test holds, which does not read the proof that it does.
+    let word_here <- infer(first(vs)).or_fail("runtime: `" ++ lname ++ "`'s word: ");
+    let next_hole <- hole(word_here).or_fail("runtime: `" ++ lname ++ "`'s next word: ");
+    let found_next <- defeq(App(Hd(turn.snd), Local(e.ref)), Hd(next_hole));
+    let next_e <- match found_next { True => pure(Hd(next_hole)), False => runtime_fail("`" ++ lname ++ "`'s next state reads its test's proof") };
+    // The measure and the function again, as the pass's body reads them
+    // (a `Lam` is written where its binders are opened).
+    let xs5 <- runtime_params(ts.word, sg, Some(hyp), 0);
+    let m_in = ap(on_words, [sg_e, runtime_lams(xs5, ap(measure_g, rest(xs5).append([first(xs5)])))]);
+    let xs6 <- runtime_params(ts.word, sg, Some(hyp), 0);
+    let h_in = runtime_lams(xs6, ap(run_g, [Hd(ts.word), Hd(ts.word), ap(of_g, rest(xs6)), first(xs6)]));
+    let pass_e = runtime_lams(os.fst, ap(while_pass_g, [ap(of_g, rest(vs)), first(vs), RtQ::seq(word_list, rest(vs)), Blank, Blank,
+        same_e, next_e, Lam(e.ref, ap(rfl, [Blank, next_e])), Local(k_ref), Blank, m_in, ap(apply_g, [w_e, g_e, NatLit(init), test_e, body_e, caps_e, h_in]),
+        Local(hyp), ap(rfl, [Blank, NatLit(n + 1)]), ap(rfl, [Blank, Blank]), ap(rfl, [Blank, Blank]), ap(rfl, [Blank, Blank])]));
+    // At the start, the function is the written loop.
+    let env <- assume(ap(env_of_g, [w_e, g_e]), "env", Some(under)).or_fail("runtime: `" ++ lname ++ "`'s environment: ");
+    let cw = λ (k: Nat) => ap(cap_word_g, [w_e, g_e, Local(env.ref), NatLit(k)]);
+    let run_e = ap(run_g, [Hd(ts.word), Hd(ts.word), ap(of_g, caps.map(cw)), cw(init)]);
+    let agree_e = Lam(env.ref, ap(trans_g, [Blank, Blank, Blank, Blank, ap(rfl, [Blank, run_e]),
+        ap(sym_g, [Blank, Blank, Blank, ap(runs_g, caps.map(cw).append([cw(init)]))])]));
+    pure(ap(while_loop_g, [w_e, g_e, NatLit(init), test_e, body_e, caps_e, NatLit(loopn), h_e, m_e, bound_e, pass_e, agree_e]))
+}
+
+// A term's loops' evidence at the world `w_e` (`Tm::WhileEv`), along the
+// parts `Tm::nodes` looks into.
+fn runtime_while_ev(name: String, q: RtQ, ts: RtTypes, world: World, w_e: Expr, under: LocalRef, t: Tm, g: List<Ty>) → Tac<Expr> {
+    let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
+    let both <- runtime_global(name_of(Tm::ev_both));
+    match t {
+        Let(e, body) => runtime_while_ev(name, q, ts, world, w_e, under, e, g).bind(λ ea =>
+            runtime_while_ev(name, q, ts, world, w_e, under, body, Cons(e.ty(world, g), g)).bind(λ eb => pure(ap(both, [Blank, Blank, ea, eb])))),
+        If(_, yes, no) => runtime_while_ev(name, q, ts, world, w_e, under, yes, g).bind(λ ea =>
+            runtime_while_ev(name, q, ts, world, w_e, under, no, g).bind(λ eb => pure(ap(both, [Blank, Blank, ea, eb])))),
+        IfEq(_, yes, no) => runtime_while_ev(name, q, ts, world, w_e, under, yes, g).bind(λ ea =>
+            runtime_while_ev(name, q, ts, world, w_e, under, no, g).bind(λ eb => pure(ap(both, [Blank, Blank, ea, eb])))),
+        Iterate(init, test, body, caps, loopn) => match Tm::while_fits(world, g, init, test, body, caps, loopn) {
+            True => runtime_while_loop(name, q, ts, w_e, under, g, init, test, body, caps, loopn),
+            False => pure(Hd(trivial_h)),
+        },
+        _ => pure(Hd(trivial_h)),
+    }
+}
+
+// The loops' evidence at each file, `λ b => …` (`Setup::pinned_nodes`).
+fn runtime_while_ev_fn(name: String, q: RtQ, ts: RtTypes, world: World, world_e, table_e: Expr, written: Tm, g: List<Ty>) → Tac<Expr> {
+    let world_at_g <- runtime_global(name_of(World::at));
+    let no_file <- runtime_global(name_of(runtime_w_buffers));
+    let buf <- infer(no_file).or_fail("runtime: a file: ");
+    let b <- assume(Hd(buf), "b", None).or_fail("runtime: a file: ");
+    let tree <- runtime_while_ev(name, q, ts, world, ap(world_at_g, [world_e, table_e, Local(b.ref)]), b.ref, written, g);
+    pure(Lam(b.ref, tree))
+}
+
+// The pin of a function whose `while`s are nodes (`Setup::pinned_nodes`):
+// its written body alike the function as a plain function's is, its loops'
+// evidence, and its nodes' body by evaluation and by conversion.
+fn runtime_while_pin(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes, world: World, world_e, table_e, typed: Expr, written: Tm) → Tac<Expr> {
+    let pinned_g <- runtime_global(name_of(Setup::pinned_nodes));
+    let alike_every <- runtime_global(name_of(Setup::alike_every));
+    let world_at_g <- runtime_global(name_of(World::at));
+    let no_file <- runtime_global(name_of(runtime_w_buffers));
+    let rfl <- runtime_global("tactic::rfl");
+    let buf <- infer(no_file).or_fail("runtime: a file: ");
+    let g = Ty::bind_onto(rfun.params, Nil);
+    let ps_e = Ty::quotes(rfun.params, q);
+    let r_e = Ty::quote(rfun.result, q);
+    let t_e = Tm::quote(written, q);
+    let tn_e = Tm::quote(rfun.body, q);
+    let written_e = ap(alike_every, [Blank, Global(f), world_e, table_e, NatLit(rfun.lent), ps_e, r_e, typed]);
+    let ev_fn <- runtime_while_ev_fn(name, q, ts, world, world_e, table_e, written, g);
+    let b2 <- assume(Hd(buf), "b", None).or_fail("runtime: a file: ");
+    let eq_fn = Lam(b2.ref, ap(rfl, [Blank, tn_e]));
+    pure(ap(pinned_g, [Blank, Global(f), world_e, table_e, NatLit(rfun.lent), ps_e, r_e, typed, t_e, tn_e, written_e, ev_fn, eq_fn]))
+}
+
+// Its `f::ends`: its nodes end (`Tm::ends_of_ev`), at the world of the
+// empty file.
+fn runtime_while_ends(name: String, rfun: Fun, q: RtQ, ts: RtTypes, world: World, world_e, table_e: Expr, written: Tm) → Tac<Expr> {
+    let ends_at_g <- runtime_global(name_of(Tm::ends_at));
+    let ends_of_ev_g <- runtime_global(name_of(Tm::ends_of_ev));
+    let world_at_g <- runtime_global(name_of(World::at));
+    let no_file <- runtime_global(name_of(runtime_w_buffers));
+    let rfl <- runtime_global("tactic::rfl");
+    let g = Ty::bind_onto(rfun.params, Nil);
+    let g_e = Ty::quotes(g, q);
+    let t_e = Tm::quote(written, q);
+    let tn_e = Tm::quote(rfun.body, q);
+    let w_nil = ap(world_at_g, [world_e, table_e, no_file]);
+    let ev_fn <- runtime_while_ev_fn(name, q, ts, world, world_e, table_e, written, g);
+    pure(ap(ends_at_g, [t_e, tn_e, w_nil, g_e, ap(rfl, [Blank, tn_e]), ap(ends_of_ev_g, [t_e, w_nil, g_e, ap(ev_fn, [no_file])])]))
+}
+
 // The `Compile(f)` instance, by the reflection's shape. `table_e` is the
 // function's table at each file: its world's own for a function lent
 // nothing, `Setup::lent_callees` for one lent spans.
-fn runtime_instance(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes, setup, world_e, table_e, rt_e, count: Expr, reprs: List<ReprEntry>) → Tac<Expr> {
+fn runtime_instance(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes, setup, world_e, table_e, rt_e, count: Expr, reprs: List<ReprEntry>,
+    written: Option<Pair<Tm, World>> := None) → Tac<Expr> {
     let rfl <- runtime_global("tactic::rfl");
     let typed_refl <- runtime_global(name_of(Setup::typed_refl));
     let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
@@ -3017,7 +3220,11 @@ fn runtime_instance(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes, 
     let typed = ap(typed_refl, [Blank, Global(f)]);
     let alike_every <- runtime_global(name_of(Setup::alike_every));
     match rfun.shape() {
-        Plain => match rfun.body {
+        Plain => match written {
+          // A function whose `while`s are loop nodes.
+          Some(wr) => runtime_global(name_of(Setup::compile)).bind(λ compile => runtime_while_pin(name, f, rfun, q, ts, wr.snd, world_e, table_e, typed, wr.fst).bind(λ pinned =>
+              pure(ap(compile, [Blank, setup, rt_e, world_e, table_e, Global(f), typed, pinned, verdict, ap(rfl, [Blank, runtime_at(shapes, 0)])])))),
+          None => match rfun.body {
             // A measured recursion as a loop node (`Fun::as_node`).
             Loop(inits, body) => runtime_node_instance(name, f, rfun, q, ts, shapes, setup, world_e, table_e, typed, rt_e, count, reprs, inits, body),
             _ => runtime_global(name_of(Setup::compile)).bind(λ compile => {
@@ -3026,6 +3233,7 @@ fn runtime_instance(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes, 
                 let pinned: Expr = ap(alike_every, [Blank, Global(f), world_e, table_e, NatLit(rfun.lent), Ty::quotes(rfun.params, q), Ty::quote(rfun.result, q), typed]);
                 pure(ap(compile, [Blank, setup, rt_e, world_e, table_e, Global(f), typed, pinned, verdict, ap(rfl, [Blank, runtime_at(shapes, 0)])]))
             }),
+          },
         },
         Fuel(w0, wrest, zero, succ) => match rfun.body {
             Case(c, _, _) => runtime_fuel_instance(f, q, ts, shapes, setup, world_e, table_e, typed, count, reprs, w0, wrest, rfun.result, c, zero, succ),
@@ -4291,7 +4499,7 @@ fn runtime_within(name: String, rfun: Fun, q: RtQ, ts: RtTypes, l: Linking, link
 // `own`: the function is its own callee (`Fun::own_callee`, `funs` listing
 // it twice), its instance `runtime_own_instance`'s.
 fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs: List<Nat>, lents: List<Nat>, l: Linking, reprs: List<ReprEntry>,
-    recs: List<RecShape> := [], own: Bool := False) → Tac<List<Decl>> {
+    recs: List<RecShape> := [], own: Bool := False, written: Option<Pair<Tm, World>> := None) → Tac<List<Decl>> {
     let ts <- runtime_type_handles();
     let q <- runtime_quoting(ts);
     // `refl` at a closed term, its type given: checked against a statement
@@ -4335,7 +4543,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
     let code_e = ap(code_of, [setup, rt_e, world_e]);
     let built <- match own as λ _ => Tac<Expr> {
         True => runtime_own_instance(name, f, rfun, setup, world_e, table_e, rt_e),
-        False => runtime_instance(name, f, rfun, q, ts, setup, world_e, table_e, rt_e, count, reprs),
+        False => runtime_instance(name, f, rfun, q, ts, setup, world_e, table_e, rt_e, count, reprs, written := written),
     };
     let instance_t <- infer(built).or_fail("runtime: `" ++ name ++ "`'s instance: ");
     // Held as a hole solved by it: a loop's instance abstracts locals opened
@@ -4353,9 +4561,12 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
     // what its code's definedness takes (`f::ends`).
     let node_ends <- match own as λ _ => Tac<Option<Expr>> {
         True => pure(None),
-        False => match rfun.body {
-            Loop(_, node_body) => runtime_node_ends(name, f, rfun, q, ts, world_e, table_e, count, reprs, node_body).bind(λ e => pure(Some(e))),
-            _ => pure(None),
+        False => match written {
+            Some(wr) => runtime_while_ends(name, rfun, q, ts, wr.snd, world_e, table_e, wr.fst).bind(λ e => runtime_held(e, "`" ++ name ++ "`'s loops' ending")).bind(λ e => pure(Some(e))),
+            None => match rfun.body {
+                Loop(_, node_body) => runtime_node_ends(name, f, rfun, q, ts, world_e, table_e, count, reprs, node_body).bind(λ e => pure(Some(e))),
+                _ => pure(None),
+            },
         },
     };
     let ends_decls <- match node_ends as λ _ => Tac<List<Decl>> {
@@ -4426,9 +4637,9 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
                 False => match rfun.shape() {
                     // A measured recursion as a loop node is its meaning
                     // through its rounds, which its instance's pin states.
-                    Plain => match rfun.body {
-                        Loop(_, _) => [],
-                        _ => [Decl(AsTheorem, name ++ "::reflects", runtime_params_of(xs),
+                    Plain => match (match written { Some(_) => True, None => match rfun.body { Loop(_, _) => True, _ => False } }) {
+                        True => [],
+                        False => [Decl(AsTheorem, name ++ "::reflects", runtime_params_of(xs),
                             Equation(ap(ap(meaning, [rt_e, world_e]), runtime_locals(xs)), ap(Global(f), runtime_locals(xs))),
                             ap(rfl, [Blank, ap(Global(f), runtime_locals(xs))]))],
                     },
@@ -6333,7 +6544,7 @@ fn runtime_recursive_callee(name: String, rfun: Fun, callees: List<Nat>, sigs: L
 }
 
 fn runtime_judged(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, world: World, k: Known, reflected: Pair<Fun, List<Nat>>, lents: List<Nat>,
-    reprs: List<ReprEntry>, recs: List<RecShape>, callee_sigs: List<Sig>) → Tac<List<Decl>> {
+    reprs: List<ReprEntry>, recs: List<RecShape>, callee_sigs: List<Sig>, written: Option<Pair<Tm, World>> := None) → Tac<List<Decl>> {
     match Fun::judge(rfun, world) {
         // A function that `decreases` and whose call of itself is not its
         // last act: its own callee (`Fun::own_callee`), an ordinary
@@ -6369,7 +6580,7 @@ fn runtime_judged(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, world:
         Ok => match Setup::lowers(Fun::lower_any(rfun, world)) {
             False => fail("`" ++ name ++ "`: the default setup's lowering refused it though its judgment accepted it (a gap in `Fun::judge`)", []),
             True => runtime_link(4096, k, [LinkFrame(f.id, name, reflected.snd, reflected.snd.drop(1), None)], Linking([], [], [], [])).bind(λ l =>
-                runtime_publish(name, f, rfun, sigs, reflected.snd, lents, l, reprs, recs := recs)),
+                runtime_publish(name, f, rfun, sigs, reflected.snd, lents, l, reprs, recs := recs, written := written)),
         },
     }
 }
@@ -6401,7 +6612,17 @@ fn runtime_reads(name: String, f: GlobalRef, levels: Nat := 0, stack: Nat := 0) 
         Some(callee) => runtime_recursive_main(name, f, rfun, callee.fst, callee.snd, levels, stack),
         None => match stack {
             Succ(_) => runtime_fail("`" ++ name ++ "`: a stack budget, `stack := b`, is stated of a program that calls a recursion, whose depth is what it bounds"),
-            Zero => runtime_judged(name, f, rfun, sigs, world, k, reflected, lents, reprs, recs, callee_sigs),
+            Zero => {
+                // A plain function's `while`s that fit are loop nodes, its
+                // body as written kept for its pin (`Tm::nodes`).
+                let nodes = rfun.body.nodes(world, Ty::bind_onto(rfun.params, Nil));
+                let as_nodes = match rfun.shape() { Plain => rfun.lent.same(0) && rfun.body.nodeless() && !nodes.same(rfun.body), _ => False };
+                match as_nodes {
+                    True => runtime_judged(name, f, Fun(rfun.params, rfun.result, nodes, rfun.lent), sigs, world, k, reflected, lents, reprs, recs, callee_sigs,
+                        written := Some(Pair(rfun.body, world))),
+                    False => runtime_judged(name, f, rfun, sigs, world, k, reflected, lents, reprs, recs, callee_sigs),
+                }
+            },
         },
     }
 }

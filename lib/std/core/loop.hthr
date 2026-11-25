@@ -379,6 +379,20 @@ theorem Step::turn_map<S, T>(f: S → T, go: Bool, next1: (go = True) → S, nex
     { False => λ _ => refl, True => λ e => j(same(e), λ t _ => Step::Next(f(next1(e))) = Step::Next(t), refl) })(refl)
 }
 
+// A pass at a test known to be `b`.
+fn Step::turn_on<S>(go: Bool, next: (go = True) → S, s: S, b: Bool, e: go = b) → Step<S> {
+    (match b as λ b2 => (go = b2) → Step<S> { False => λ _ => Stop(s), True => λ e2 => Next(next(e2)) })(e)
+}
+
+// Two next states that agree wherever the test holds make one pass.
+theorem Step::turn_ext<S>(go: Bool, next1, next2: (go = True) → S, same: (e: go = True) → next1(e) = next2(e), s: S):
+    Step::turn(go, next1, s) = Step::turn(go, next2, s) {
+    (match go as λ b => (e: go = b) → Step::turn_on(go, next1, s, b, e) = Step::turn_on(go, next2, s, b, e) {
+        False => λ _ => refl,
+        True => λ e => j(same(e), λ t _ => Step::Next(next1(e)) = Step::Next(t), refl),
+    })(refl)
+}
+
 // A loop simulated through `f`: where each pass read through `f` is the
 // other loop's pass at the state `f` reads, the two iterate alike. What a
 // loop's second meaning (over a record, forgetting facts) is proved by,
