@@ -157,6 +157,8 @@ fn FTm::kept_counted<A>(self t: FTm, hw: HWorld<A>) → Nat → List<Option<Pair
         Again(_) => λ len known => False,
         Lend(_, _, _, _) => λ len known => False,
         Loop(_, _, _, _) => λ len known => False,
+        Node(_, _) => λ len known => False,
+        Next(_, _) => λ len known => False,
     }
 }
 
@@ -362,6 +364,8 @@ theorem FTm::held_runs_counted<A>(self t: FTm, hw: HWorld<A>, whole: Stored<A>, 
         Again(_) => λ len known kept => false_elim(kept),
         Lend(_, _, _, _) => λ len known kept => false_elim(kept),
         Loop(_, _, _, _) => λ len known kept => false_elim(kept),
+        Node(_, _) => λ len known kept => false_elim(kept),
+        Next(_, _) => λ len known kept => false_elim(kept),
     }
 }
 

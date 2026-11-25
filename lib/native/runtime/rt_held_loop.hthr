@@ -89,6 +89,8 @@ fn FTm::tail_pass(self t: FTm, fw: FWorld, res: Ty) → (g: List<Ty>) → Env(fw
         Loop(init, test, body, rest) => λ g env own => FTm::bind_at(fw.w.tys, g, Ty::at(g, init),
             FTm::iterated(fw, g, init, test, body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => body.sem(fw, Cons(Ty::at(g, init), g), e, o), env, own),
             env, λ e o => rest.tail_pass(fw, res, Cons(Ty::at(g, init), g), e, o)),
+        Node(_, _) => λ g env own => Ends(Mutated(own, res.default(fw.w.tys))),
+        Next(_, _) => λ g env own => Ends(Mutated(own, res.default(fw.w.tys))),
     }
 }
 
@@ -127,6 +129,8 @@ theorem FTm::tail_sem_pass(self t: FTm, fw: FWorld, res: Ty, again: FTm::Round(f
             FTm::bind_at_after(fw.w.tys, g, Ty::at(g, init), FTm::iterated(fw, g, init, test, body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => body.sem(fw, Cons(Ty::at(g, init), g), e, o), env, own), env,
                 λ e o => rest.tail_pass(fw, res, Cons(Ty::at(g, init), g), e, o),
                 λ (p: Pass<List<BitVec(8)>, res.sem(fw.w.tys)>) => p.fold(λ (m: Mutated<List<BitVec(8)>, res.sem(fw.w.tys)>) => m, again))),
+        Node(_, _) => λ g env own => refl,
+        Next(_, _) => λ g env own => refl,
     }
 }
 
@@ -158,6 +162,8 @@ fn FTm::tail_held<A, S>(self t: FTm, hw: HWorld<A>, res: Ty, done: Mutated<A, re
         Lend(f, views, args, body) => λ g env own a => shared(FTm::lent(hw.fw, g, env, f, views, args, own), λ m =>
             body.tail_held(hw, res, done, again, Cons(Sig::at(hw.fw.fsigs, f).result, g), Pair(m.value, env), m.after, a)),
         Loop(_, _, _, _) => λ g env own a => done(Mutated(a, res.default(hw.fw.w.tys))),
+        Node(_, _) => λ g env own a => done(Mutated(a, res.default(hw.fw.w.tys))),
+        Next(_, _) => λ g env own a => done(Mutated(a, res.default(hw.fw.w.tys))),
     }
 }
 
@@ -196,6 +202,8 @@ theorem FTm::tail_held_pass<A, S>(self t: FTm, hw: HWorld<A>, res: Ty, done: Mut
         Lend(f, views, args, body) => λ g env own a => FTm::tail_held_pass(body, hw, res, done, again, Cons(Sig::at(hw.fw.fsigs, f).result, g),
             Pair(FTm::lent(hw.fw, g, env, f, views, args, own).value, env), FTm::lent(hw.fw, g, env, f, views, args, own).after, a),
         Loop(_, _, _, _) => λ g env own a => refl,
+        Node(_, _) => λ g env own a => refl,
+        Next(_, _) => λ g env own a => refl,
     }
 }
 
@@ -213,6 +221,8 @@ fn FTm::tail_kept<A>(self t: FTm, hw: HWorld<A>, words: Nat) → Nat → List<Op
         Again(args) => λ len known => FTm::run_args(args, len, words),
         Lend(_, _, _, _) => λ len known => False,
         Loop(_, _, _, _) => λ len known => False,
+        Node(_, _) => λ len known => False,
+        Next(_, _) => λ len known => False,
     }
 }
 
@@ -299,6 +309,8 @@ theorem FTm::tail_held_runs<A>(self t: FTm, hw: HWorld<A>, whole: Stored<A>, sou
                 kept),
         Lend(_, _, _, _) => λ len known kept => false_elim(kept),
         Loop(_, _, _, _) => λ len known kept => false_elim(kept),
+        Node(_, _) => λ len known kept => false_elim(kept),
+        Next(_, _) => λ len known kept => false_elim(kept),
     }
 }
 
@@ -495,6 +507,8 @@ fn FTm::still(self t: FTm) → Bool {
         Again(_) => True,
         Lend(_, _, _, _) => False,
         Loop(_, _, _, _) => False,
+        Node(_, _) => False,
+        Next(_, _) => False,
     }
 }
 
@@ -535,6 +549,8 @@ theorem FTm::still_keeps<A>(self t: FTm, hw: HWorld<A>, res: Ty): t.still().IsTr
         Again(_) => λ _ g env own a => refl,
         Lend(_, _, _, _) => λ still => false_elim(still),
         Loop(_, _, _, _) => λ still => false_elim(still),
+        Node(_, _) => λ still => false_elim(still),
+        Next(_, _) => λ still => false_elim(still),
     }
 }
 

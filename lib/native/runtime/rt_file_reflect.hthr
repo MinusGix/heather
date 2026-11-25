@@ -1339,6 +1339,8 @@ fn FTm::same(self t: FTm) → FTm → Bool {
             Loop(init2, test2, body2, rest2) => init.same(init2).and(test.same(test2)).and(body.same(body2)).and(rest.same(rest2)),
             _ => False,
         },
+        Node(inits, body) => λ u => match u { Node(inits2, body2) => Tm::nats_same(inits, inits2).and(body.same(body2)), _ => False },
+        Next(res, args) => λ u => match u { Next(res2, args2) => res.same(res2).and(Tm::nats_same(args, args2)), _ => False },
     }
 }
 
@@ -1369,6 +1371,8 @@ fn FTm::show(self t: FTm) → String {
         Again(args) => "Again([" ++ rt_nats(args) ++ "])",
         Lend(f, views, args, body) => "Lend(" ++ rt_nat(f) ++ ", [" ++ FView::shows(views) ++ "], [" ++ rt_nats(args) ++ "], " ++ body.show() ++ ")",
         Loop(init, test, body, rest) => "Loop(" ++ rt_nat(init) ++ ", " ++ test.show() ++ ", " ++ body.show() ++ ", " ++ rest.show() ++ ")",
+        Node(inits, body) => "Node([" ++ rt_nats(inits) ++ "], " ++ body.show() ++ ")",
+        Next(res, args) => "Next(" ++ res.show() ++ ", [" ++ rt_nats(args) ++ "])",
     }
 }
 

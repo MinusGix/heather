@@ -329,6 +329,8 @@ fn FTm::held<A>(self t: FTm, hw: HWorld<A>) → (g: List<Ty>) → Env(hw.fw.w.ty
             shared(FTm::lent(hw.fw, g, env, f, views, args, own), λ m =>
                 body.held(hw, Cons(Sig::at(hw.fw.fsigs, f).result, g), Pair(m.value, env), m.after, a)),
         Loop(init, test, body, rest) => λ g env own a => Mutated(a, FTm::sem(Loop(init, test, body, rest), hw.fw, g, env, own).value),
+        Node(inits, body) => λ g env own a => Mutated(a, FTm::sem(Node(inits, body), hw.fw, g, env, own).value),
+        Next(res, args) => λ g env own a => Mutated(a, FTm::sem(Next(res, args), hw.fw, g, env, own).value),
     }
 }
 
@@ -790,6 +792,8 @@ fn FTm::kept<A>(self t: FTm, hw: HWorld<A>) → Nat → List<Option<Pair<Ty, Nat
         Again(_) => λ len known => False,
         Lend(_, _, _, _) => λ len known => False,
         Loop(_, _, _, _) => λ len known => False,
+        Node(_, _) => λ len known => False,
+        Next(_, _) => λ len known => False,
     }
 }
 
@@ -1082,6 +1086,8 @@ theorem FTm::held_runs<A>(self t: FTm, hw: HWorld<A>, whole: Stored<A>, sound: S
         Again(_) => λ len known kept => false_elim(kept),
         Lend(_, _, _, _) => λ len known kept => false_elim(kept),
         Loop(_, _, _, _) => λ len known kept => false_elim(kept),
+        Node(_, _) => λ len known kept => false_elim(kept),
+        Next(_, _) => λ len known kept => false_elim(kept),
     }
 }
 

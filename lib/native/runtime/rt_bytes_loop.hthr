@@ -75,6 +75,8 @@ fn FTm::tail_over<S>(self t: FTm, bw: BWorld, res: Ty, n: BitVec(64), done: Muta
         Lend(f, _, _, body) => λ g env s =>
             body.tail_over(bw, res, n, done, again, Cons(Sig::at(bw.fw.fsigs, f).result, g), Pair(Sig::at(bw.fw.fsigs, f).result.default(bw.fw.w.tys), env), s),
         Loop(_, _, _, _) => λ g env s => done(Mutated(s, res.default(bw.fw.w.tys))),
+        Node(_, _) => λ g env s => done(Mutated(s, res.default(bw.fw.w.tys))),
+        Next(_, _) => λ g env s => done(Mutated(s, res.default(bw.fw.w.tys))),
     }
 }
 
@@ -111,6 +113,8 @@ theorem FTm::tail_over_pass<S>(self t: FTm, bw: BWorld, res: Ty, n: BitVec(64), 
         Lend(f, _, _, body) => λ g env s => FTm::tail_over_pass(body, bw, res, n, done, again, Cons(Sig::at(bw.fw.fsigs, f).result, g),
             Pair(Sig::at(bw.fw.fsigs, f).result.default(bw.fw.w.tys), env), s),
         Loop(_, _, _, _) => λ g env s => refl,
+        Node(_, _) => λ g env s => refl,
+        Next(_, _) => λ g env s => refl,
     }
 }
 
@@ -131,6 +135,8 @@ fn FTm::tail_over_ok(self t: FTm, words: Nat) → Nat → Bool {
         Again(args) => λ len => FTm::run_args(args, len, words),
         Lend(_, _, _, _) => λ len => False,
         Loop(_, _, _, _) => λ len => False,
+        Node(_, _) => λ len => False,
+        Next(_, _) => λ len => False,
     }
 }
 
@@ -213,6 +219,8 @@ theorem FTm::tail_over_runs(self t: FTm, bw: BWorld, world: bw.Agrees(), res: Ty
                 ok),
         Lend(_, _, _, _) => λ len ok => false_elim(ok),
         Loop(_, _, _, _) => λ len ok => false_elim(ok),
+        Node(_, _) => λ len ok => false_elim(ok),
+        Next(_, _) => λ len ok => false_elim(ok),
     }
 }
 
@@ -519,6 +527,8 @@ theorem FTm::still_keeps_over(self t: FTm, bw: BWorld, res: Ty, n: BitVec(64)): 
         Again(_) => λ _ g env s => refl,
         Lend(_, _, _, _) => λ still => false_elim(still),
         Loop(_, _, _, _) => λ still => false_elim(still),
+        Node(_, _) => λ still => false_elim(still),
+        Next(_, _) => λ still => false_elim(still),
     }
 }
 

@@ -1261,6 +1261,8 @@ fn FTm::Within(self t: FTm, keep: Nat → Bool) → Type {
         Lend(_, _, _, _) => False,
         Loop(init, test, body, rest) => (keep(init) = True) ∧
             (test.Within(Tm::under(keep)) ∧ (body.Within(Tm::under(keep)) ∧ rest.Within(Tm::under(keep)))),
+        Node(_, _) => False,
+        Next(_, args) => Tm::AllKept(args, keep),
     }
 }
 
@@ -1276,6 +1278,8 @@ fn FTm::check_within(self t: FTm) → (keep: Nat → Bool) → Option<t.Within(k
         Lend(_, _, _, _) => λ keep => None,
         Loop(init, test, body, rest) => λ keep => Tm::both(Tm::kept_at(keep, init),
             Tm::both(test.check_within(Tm::under(keep)), Tm::both(body.check_within(Tm::under(keep)), rest.check_within(Tm::under(keep))))),
+        Node(_, _) => λ keep => None,
+        Next(_, args) => λ keep => Tm::check_all_kept(args, keep),
     }
 }
 
@@ -1291,6 +1295,8 @@ fn FTm::vars(self t: FTm) → List<Nat> {
         Again(args) => args,
         Lend(_, _, _, _) => Nil,
         Loop(init, test, body, rest) => Cons(init, Tm::unbind(test.vars()) ++ (Tm::unbind(body.vars()) ++ Tm::unbind(rest.vars()))),
+        Node(inits, _) => inits,
+        Next(_, args) => args,
     }
 }
 
@@ -1402,6 +1408,9 @@ theorem FTm::sem_kept(self t: FTm, fw: FWorld): (keep: Nat → Bool) → (g: Lis
             trans(cong_fn(λ (m: M) => rest.sem(fw, inner, Pair(m.value, e1), m.after), same_end),
                 FTm::sem_kept(rest, fw, Tm::under(keep), inner, Pair(m2.value, e1), Pair(m2.value, e2), m2.after, h.right.right.right, under(m2.value)))
         },
+        Node(_, _) => λ keep g e1 e2 own h a => false_elim(h),
+        // Outside every node, going round answers nothing the context gives.
+        Next(_, _) => λ keep g e1 e2 own h a => refl,
     }
 }
 
@@ -1769,6 +1778,10 @@ fn FTm::lower(self t: FTm, w: World, fsigs: List<Sig>, base: Nat, g: List<Ty>, p
         Loop(init, test, body, rest) => port_at(ports, init).and_then(λ pi =>
             FTm::lower_loop(w, fsigs, base, g, ports, next, init, pi, test, body, λ ps k => FTm::lower(body, w, fsigs, base, Cons(Ty::at(g, init), g), ps, k)).and_then(λ ll =>
             FTm::lower(rest, w, fsigs, base, Cons(Ty::at(g, init), g), Cons(ll.result, ports), ll.next).and_then(λ lr => Tm::compose(ll, lr)))),
+        // A loop node is not lowered yet (docs/language/loop-combinator-design.md
+        // §6.10), and going round is never a value.
+        Node(_, _) => None,
+        Next(_, _) => None,
     }
 }
 
@@ -2005,6 +2018,8 @@ theorem FTm::lower_sound(self t: FTm, fw: FWorld, base: Nat): (g: List<Ty>) → 
         Loop(init, test, body, rest) => λ g ports next => FTm::loop_case_sound(fw, base, g, ports, next, init, test, body, rest,
             λ ps k => FTm::lower_sound(body, fw, base, Cons(Ty::at(g, init), g), ps, k),
             λ ps k => FTm::lower_sound(rest, fw, base, Cons(Ty::at(g, init), g), ps, k)),
+        Node(_, _) => λ g ports next => trivial,
+        Next(_, _) => λ g ports next => trivial,
     }
 }
 

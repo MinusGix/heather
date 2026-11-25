@@ -5114,6 +5114,8 @@ fn FTm::quote(self t: FTm, q: RtQ, cs: FtQ) → Expr {
         Lend(f, views, args, body) => ap(runtime_at(cs.tm, 7),
             [NatLit(f), RtQ::seq(cs.views, views.map(λ view => view.quote(cs))), q.nat_list(args), body.quote(q, cs)]),
         Loop(init, test, body, rest) => ap(runtime_at(cs.tm, 8), [NatLit(init), test.quote(q), body.quote(q, cs), rest.quote(q, cs)]),
+        Node(inits, body) => ap(runtime_at(cs.tm, 9), [q.nat_list(inits), body.quote(q, cs)]),
+        Next(res, args) => ap(runtime_at(cs.tm, 10), [Ty::quote(res, q), q.nat_list(args)]),
     }
 }
 
@@ -5546,6 +5548,8 @@ fn FTm::loops(self t: FTm) → Bool {
         Again(_) => False,
         Lend(_, _, _, body) => body.loops(),
         Loop(_, _, _, _) => True,
+        Node(_, _) => True,
+        Next(_, _) => False,
     }
 }
 

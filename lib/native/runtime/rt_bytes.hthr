@@ -149,6 +149,9 @@ fn FTm::over(self t: FTm, bw: BWorld) → (g: List<Ty>) → Env(bw.fw.w.tys, g) 
                 λ e s2 => rest.over(bw, Cons(Ty::at(g, init), g), e, n, s2),
                 FTm::over_iterated(bw, g, init, test, body.ty(bw.fw.w, bw.fw.fsigs, Cons(Ty::at(g, init), g)), n,
                     λ e s2 => body.over(bw, Cons(Ty::at(g, init), g), e, n, s2), env, s), env),
+        // A loop node is not read over a record yet (`FTm::over_ok`).
+        Node(inits, body) => λ g env n s => Mutated(s, body.ty(bw.fw.w, bw.fw.fsigs, Tm::inside(g, inits)).default(bw.fw.w.tys)),
+        Next(res, _) => λ g env n s => Mutated(s, res.default(bw.fw.w.tys)),
     }
 }
 
@@ -206,6 +209,8 @@ fn FTm::over_ok(self t: FTm) → Nat → Bool {
         Again(_) => λ len => False,
         Lend(_, _, _, _) => λ len => False,
         Loop(_, _, body, rest) => λ len => body.over_ok(Succ(len)) && rest.over_ok(Succ(len)),
+        Node(_, _) => λ len => False,
+        Next(_, _) => λ len => False,
     }
 }
 
@@ -357,6 +362,8 @@ theorem FTm::over_runs(self t: FTm, bw: BWorld, world: bw.Agrees()): (len: Nat) 
         },
         Again(_) => λ len ok => false_elim(ok),
         Lend(_, _, _, _) => λ len ok => false_elim(ok),
+        Node(_, _) => λ len ok => false_elim(ok),
+        Next(_, _) => λ len ok => false_elim(ok),
         Loop(init, test, body, rest) => λ len ok g env n known s => {
             let both = body.over_ok(Succ(len)).is_true_and(rest.over_ok(Succ(len)), ok);
             FTm::over_loop_runs(body, rest, bw, g, env, init, test, n,

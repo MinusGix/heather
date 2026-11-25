@@ -75,6 +75,10 @@ fn FTm::tail_sem(self t: FTm, fw: FWorld, res: Ty, again: FTm::Round(fw.w.tys, r
         Loop(init, test, body, rest) => λ g env own => FTm::bind_at(fw.w.tys, g, Ty::at(g, init),
             FTm::iterated(fw, g, init, test, body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => body.sem(fw, Cons(Ty::at(g, init), g), e, o), env, own),
             env, λ e o => rest.tail_sem(fw, res, again, Cons(Ty::at(g, init), g), e, o)),
+        // A loop node is not a tail pass's (docs/language/loop-combinator-design.md
+        // §6.10): its lowering refuses it.
+        Node(_, _) => λ g env own => Mutated(own, res.default(fw.w.tys)),
+        Next(_, _) => λ g env own => Mutated(own, res.default(fw.w.tys)),
     }
 }
 
@@ -118,6 +122,8 @@ theorem FTm::tail_sem_ext(self t: FTm, fw: FWorld, res: Ty, k1, k2: FTm::Round(f
             FTm::iterated(fw, g, init, test, body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => body.sem(fw, Cons(Ty::at(g, init), g), e, o), env, own),
             env, λ e o => rest.tail_sem(fw, res, k1, Cons(Ty::at(g, init), g), e, o), λ e o => rest.tail_sem(fw, res, k2, Cons(Ty::at(g, init), g), e, o),
             λ e o => FTm::tail_sem_ext(rest, fw, res, k1, k2, same, Cons(Ty::at(g, init), g), e, o)),
+        Node(_, _) => λ g env own => refl,
+        Next(_, _) => λ g env own => refl,
     }
 }
 
@@ -469,6 +475,8 @@ fn FTm::lower_tail(self t: FTm, w: World, fsigs: List<Sig>, base: Nat, res: Ty, 
             FTm::lower_tail(body, w, fsigs, base, res, flag, kept, nexts, Cons(Sig::at(fsigs, f).result, g), Cons(lc.result, ports), lc.next)
                 .and_then(λ lb => Tm::compose(lc, lb))),
         Loop(_, _, _, _) => None,
+        Node(_, _) => None,
+        Next(_, _) => None,
     }
 }
 
@@ -584,6 +592,8 @@ theorem FTm::tail_sound(self t: FTm, fw: FWorld, base: Nat, res: Ty, er: res.One
                         FTm::tail_sound(body, fw, base, res, er, flag, kept, nexts, inner, Cons(lc.result, ports), lc.next)))))
         },
         Loop(_, _, _, _) => λ g ports next => trivial,
+        Node(_, _) => λ g ports next => trivial,
+        Next(_, _) => λ g ports next => trivial,
     }
 }
 

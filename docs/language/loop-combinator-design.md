@@ -1411,6 +1411,21 @@ proofs over an abstract leaf. (B) is worth its own design note, after
 (A)'s step a shows what the leaf interface must offer: the meaning of a
 leaf at a span, its lowering, and its soundness.
 
+**Taken: (A)** (the parent session, 2026-11-25, with Minus away; (B) stays
+open for its own note).
+
+**Step a1 as built: the constructors and the meaning.** `FTm::Node(inits,
+body)` and `FTm::Next(res, args)` sit beside `FTm::Loop` and the self-call
+`FTm::Again` (both go in later steps, so step a only adds). The meaning is
+`FTm::sem_in(t, fw, lab)` under an `FTm::Label` (going round at words from
+a span); `FTm::sem` is it at `FTm::no_label`, so every statement about
+`FTm::sem` holds by conversion. A node is `Loop::rounds(Tm::rounds(), …)`
+of `FTm::node_pass`, its state `Mutated<span, words>`, and out of rounds
+it answers its state's words read at its code, as `Tm::Loop` does. Every
+lowering refuses the two (`FTm::lower`, tail mode, the held and `Bytes(n)`
+paths' checks), and a node is not read inside an old `FTm::Loop`
+(`FTm::Within` is `False` at it, as `Tm`'s is).
+
 ## 7. Bootstrapping
 
 Minus's fear: a bug that infects the next version. The loop's meaning is

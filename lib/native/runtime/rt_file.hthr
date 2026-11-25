@@ -189,6 +189,15 @@ inductive FTm {
     // and `body` (the next state) see the state as variable 0, and `rest`
     // sees the state the loop ends at as variable 0.
     Loop(init: Nat, test: Tm, body: FTm, rest: FTm),
+    // A loop node (docs/language/loop-combinator-design.md §6.10), as
+    // `Tm::Loop` is with the span threaded through its state: the state is
+    // the span and the words of `inits`, and `body`, a pass, sees only those
+    // words, bound in order. A pass goes round where it ends in `Next`, and
+    // leaves with any other leaf's value and the span it left.
+    Node(inits: List<Nat>, body: FTm),
+    // Going round a node at the words of `args`, the span as it is; read at
+    // the code `res`, the node's.
+    Next(res: Ty, args: List<Nat>),
 }
 
 // A computation function: `lent` spans, the first the one it writes.
@@ -273,6 +282,8 @@ fn FTm::ty(self t: FTm, w: World, fsigs: List<Sig>, g: List<Ty>) → Ty {
         Again(_) => Sig::at(fsigs, 0).result,
         Lend(f, _, _, body) => body.ty(w, fsigs, Cons(Sig::at(fsigs, f).result, g)),
         Loop(init, _, _, rest) => rest.ty(w, fsigs, Cons(Ty::at(g, init), g)),
+        Node(inits, body) => body.ty(w, fsigs, Tm::inside(g, inits)),
+        Next(res, _) => res,
     }
 }
 
@@ -411,34 +422,71 @@ fn FTm::bind_at<S>(tys: Table, g: List<Ty>, st: Ty, m: Mutated<List<BitVec(8)>, 
     loop::Loop::after(m, λ o v => k(Pair(v, env), o))
 }
 
-// The meaning: a function threading the written span's bytes, at the code
-// the computation returns.
-fn FTm::sem(self t: FTm, fw: FWorld) → (g: List<Ty>) → Env(fw.w.tys, g) → List<BitVec(8)>
+// A node's continuation, as `Tm::Label` is with the span: what going round
+// at some words from some span answers, at the code a leaf names.
+fn FTm::Label(tys: Table) → Type { (r: Ty) → List<BitVec(64)> → List<BitVec(8)> → Mutated<List<BitVec(8)>, r.sem(tys)> }
+
+fn FTm::no_label(tys: Table) → FTm::Label(tys) { λ r _ own => Mutated(own, r.default(tys)) }
+
+// A node's continuation `again`, at its result code `res`, as a label.
+fn FTm::round(tys: Table, res: Ty, again: Mutated<List<BitVec(8)>, List<BitVec(64)>> → Mutated<List<BitVec(8)>, res.sem(tys)>) → FTm::Label(tys) {
+    λ r ys own => FTm::recast(tys, res, r, again(Mutated(own, ys)))
+}
+
+// A node's pass at a state, under the continuation `again`: its body read
+// under the label `again` makes, the state's words bound in order.
+fn FTm::node_pass(fw: FWorld, g: List<Ty>, inits: List<Nat>, body: FTm,
+    run: FTm::Label(fw.w.tys) → Env(fw.w.tys, Tm::inside(g, inits)) → List<BitVec(8)>
+        → Mutated<List<BitVec(8)>, body.ty(fw.w, fw.fsigs, Tm::inside(g, inits)).sem(fw.w.tys)>,
+    again: Mutated<List<BitVec(8)>, List<BitVec(64)>> → Mutated<List<BitVec(8)>, body.ty(fw.w, fw.fsigs, Tm::inside(g, inits)).sem(fw.w.tys)>,
+    st: Mutated<List<BitVec(8)>, List<BitVec(64)>>) → Mutated<List<BitVec(8)>, body.ty(fw.w, fw.fsigs, Tm::inside(g, inits)).sem(fw.w.tys)> {
+    run(FTm::round(fw.w.tys, body.ty(fw.w, fw.fsigs, Tm::inside(g, inits)), again),
+        Ty::extend(fw.w.tys, Tm::state(g, inits), Nil, trivial, st.value), st.after)
+}
+
+// The meaning under a node's continuation `lab`: a function threading the
+// written span's bytes, at the code the computation returns. A node is
+// `Tm::rounds()` rounds of its pass; out of them it answers its state read
+// as the answer, as `Tm::Loop` does.
+fn FTm::sem_in(self t: FTm, fw: FWorld, lab: FTm::Label(fw.w.tys)) → (g: List<Ty>) → Env(fw.w.tys, g) → List<BitVec(8)>
     → Mutated<List<BitVec(8)>, t.ty(fw.w, fw.fsigs, g).sem(fw.w.tys)> {
     match t {
         Pure(v) => λ g env own => Mutated(own, FTm::value(fw, own, v, g, env)),
-        Let(e, body) => λ g env own => body.sem(fw, Cons(e.ty(fw.w, g), g), Pair(FTm::value(fw, own, e, g, env), env), own),
+        Let(e, body) => λ g env own => body.sem_in(fw, lab, Cons(e.ty(fw.w, g), g), Pair(FTm::value(fw, own, e, g, env), env), own),
         If(c, yes, no) => λ g env own =>
             match Ty::cast(fw.w.tys, Ty::at(g, c), Bit, Env::get(fw.w.tys, g, env, c)) {
-                False => FTm::recast(fw.w.tys, no.ty(fw.w, fw.fsigs, g), yes.ty(fw.w, fw.fsigs, g), no.sem(fw, g, env, own)),
-                True => yes.sem(fw, g, env, own),
+                False => FTm::recast(fw.w.tys, no.ty(fw.w, fw.fsigs, g), yes.ty(fw.w, fw.fsigs, g), no.sem_in(fw, lab, g, env, own)),
+                True => yes.sem_in(fw, lab, g, env, own),
             },
         IfEq(c, yes, no) => λ g env own =>
             Tm::convoy(Mutated<List<BitVec(8)>, yes.ty(fw.w, fw.fsigs, g).sem(fw.w.tys)>,
-                Ty::cast(fw.w.tys, Ty::at(g, c), Bit, Env::get(fw.w.tys, g, env, c)), yes.sem(fw, g, env, own),
-                FTm::recast(fw.w.tys, no.ty(fw.w, fw.fsigs, g), yes.ty(fw.w, fw.fsigs, g), no.sem(fw, g, env, own))),
-        Put(i, length, v, body) => λ g env own => body.sem(fw, g, env, FTm::put(fw.w.tys, g, env, i, length, v, own)),
+                Ty::cast(fw.w.tys, Ty::at(g, c), Bit, Env::get(fw.w.tys, g, env, c)), yes.sem_in(fw, lab, g, env, own),
+                FTm::recast(fw.w.tys, no.ty(fw.w, fw.fsigs, g), yes.ty(fw.w, fw.fsigs, g), no.sem_in(fw, lab, g, env, own))),
+        Put(i, length, v, body) => λ g env own => body.sem_in(fw, lab, g, env, FTm::put(fw.w.tys, g, env, i, length, v, own)),
         Call(f, args, body) => λ g env own =>
             shared(FTm::called(fw, g, env, f, args, own), λ m =>
-                body.sem(fw, Cons(Sig::at(fw.fsigs, f).result, g), Pair(m.value, env), m.after)),
+                body.sem_in(fw, lab, Cons(Sig::at(fw.fsigs, f).result, g), Pair(m.value, env), m.after)),
         Again(args) => λ g env own => FTm::called(fw, g, env, 0, args, own),
         Lend(f, views, args, body) => λ g env own =>
             shared(FTm::lent(fw, g, env, f, views, args, own), λ m =>
-                body.sem(fw, Cons(Sig::at(fw.fsigs, f).result, g), Pair(m.value, env), m.after)),
+                body.sem_in(fw, lab, Cons(Sig::at(fw.fsigs, f).result, g), Pair(m.value, env), m.after)),
         Loop(init, test, body, rest) => λ g env own =>
-            FTm::rest_of(fw, g, Ty::at(g, init), rest.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => rest.sem(fw, Cons(Ty::at(g, init), g), e, o),
-                FTm::iterated(fw, g, init, test, body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => body.sem(fw, Cons(Ty::at(g, init), g), e, o), env, own), env),
+            FTm::rest_of(fw, g, Ty::at(g, init), rest.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => rest.sem_in(fw, lab, Cons(Ty::at(g, init), g), e, o),
+                FTm::iterated(fw, g, init, test, body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => body.sem_in(fw, lab, Cons(Ty::at(g, init), g), e, o), env, own), env),
+        Node(inits, body) => λ g env own => loop::Loop::rounds(Tm::rounds(),
+            λ (again: Mutated<List<BitVec(8)>, List<BitVec(64)>> → Mutated<List<BitVec(8)>, body.ty(fw.w, fw.fsigs, Tm::inside(g, inits)).sem(fw.w.tys)>)
+              (st: Mutated<List<BitVec(8)>, List<BitVec(64)>>) =>
+                FTm::node_pass(fw, g, inits, body, λ l e o => body.sem_in(fw, l, Tm::inside(g, inits), e, o), again, st),
+            λ (st: Mutated<List<BitVec(8)>, List<BitVec(64)>>) => Mutated(st.after, Ty::read_words(body.ty(fw.w, fw.fsigs, Tm::inside(g, inits)), fw.w.tys, st.value)),
+            Mutated(own, Tm::words(fw.w, g, env, inits))),
+        Next(res, args) => λ g env own => lab(res, Tm::words(fw.w, g, env, args), own),
     }
+}
+
+// The meaning outside every node.
+fn FTm::sem(self t: FTm, fw: FWorld) → (g: List<Ty>) → Env(fw.w.tys, g) → List<BitVec(8)>
+    → Mutated<List<BitVec(8)>, t.ty(fw.w, fw.fsigs, g).sem(fw.w.tys)> {
+    t.sem_in(fw, FTm::no_label(fw.w.tys))
 }
 
 // A computation function's meaning: its body under its parameters,
