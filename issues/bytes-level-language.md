@@ -92,3 +92,35 @@ The language, `run`, validity and `run_renames` pass the library gate with the p
   - **Evaluation shape, on the experiment's closure heap** (asked for by the coordinator). With k stores into one block and then a load, the cost is linear: 5.4k to 49k kernel steps for k = 8 to 128. With k stores into one block, each followed by a load of another, it is quadratic: 7.4k, 12.8k, 25k, 57k and 149k steps. So blocks as a list by number is the linear form; the contract's heap is changing to it.
   - **Cost now.** Own declarations: `bytes_memory` about 1.0 s (its largest item, `placed_undefined_zero`, is 0.47 s, mostly `omega`), `bytes_level` 0.44 s, `bytes_level_renames` 0.46 s, `bytes_level_fuel` 0.08 s and `bytes_level_canonical` 0.14 s. A probe's run is at most about 8k kernel steps.
   - **Not yet moved to the contract's heap.** That waits for the coordinator's reconciliation. My heap operations the contract lacks (`take`, `put` with pointers and flags, the typed `copy`, `read_bytes`, `open`) are stated over the heap's fields and `set_block`. They go beside the contract's operations when it lands.
+- 2026-11-25: The two readings as tables, from which the rest of stage 2 is assigned.
+
+  **1. The structured lowering and the frame and call proofs.** The full reading is the first entry of this log (round 1, the reading). In brief:
+
+  | Group | Theorems | What their statements are over | For the new layer |
+  |---|---|---|---|
+  | Structured lowering (`function_ir_lower_structured`) | `Emits`, `emits_seq`, `may_emit_seq`, `emit_nodes_emits`, `branch_emits`, `StructuredRegion::emit_emits`, `finish_lowers`, `lower_lowers`, `lower_correct`; the join `File::meet`/`meet_left`/`meet_right` | registers only (`Site::Runs` over `Gprs`); tied to `StructuredRegion`/`StructuredRegionHolds` only in the facts | cite as is: word leaves through `lower_nodes`/`lower_nodes_keeps`/`lower_nodes_guards`; the arm-selection facts of `branch_emits` are restated for `Body::Branch` |
+  | Registers, slots, frame arithmetic (`function_ir_lower_calls`, about 170) | `call_restores`, `args_restored`, `answer_slot_rep`, `answered_slot_rep`, `saves_restored`, `saved_fit`, `frame_allocated`/`freed`/`down`/`up`/`still`, `moved_rsp_*`, `prologue_moves`, `Stack::lowered_at`/`raised_at`/`passes_*`, `compare_selects`, `Gpr::tests_zero_at`, `emits_in_seq`/`weaken`, `kept_block_emits`, `emit_kept_nodes_emits`, every `*_grows`, `Function::roomy_*`, `level_room_*` | words and the frame's own `Wrote` | cite as is |
+  | Generic in `keep: M → Type` | `epilogue_moves`, `epilogue_moves_words`, `result_moves`, `loop_rounds`, `loop_stops`, `loop_enters`, `loop_marks`, `loop_leaves` (and `Stack::LoopHead`/`LoopPassed`) | any memory invariant | cite at `keep := WroteIn ∧ Injected` (the loop ones per table 2) |
+  | Through `EmitsOver` (the file in the statement) | `emits_over_seq`/`weaken`/`still`/`at`/`some`, `branch_emits_over`, `call_spills`, `call_stages`, `call_moves`, `call_raises`, `call_returns`, `call_finishes`, `call_emits`, `call_step`, `lend_step`, `Site::loop_passes`, `loop_body_runs`, `loop_emits`, `loop_close_emits`, `emit_calls_runs`, `function_enters`, `function_closes`, `function_runs`, `program_step`, `lower_program_*_correct` | `Stack::Trail(lending, d, entry, now: Buffers())`, used only for stability under the frame's own stores (`stack.trail_store`, `Stack::stable_in_memory`) and the `WroteIn` lemmas | generic after one change: the memory clause of `EmitsOver`, `ArgsReady`, `Called`, `Entered`, `Closed` a parameter `Mem: S → M → Type` with `(now) → stack.Stable(w, Mem(now))`, and `Site::loop_passes` over a state type `S`; otherwise restated |
+  | The file's own lemmas | `Stack::in_memory_put`/`span`/`lent`/`wrote`/`same`, `trail_put`/`span`/`store`, `store_emits`, `load_emits`, `wide_*_emits` | `Buffers()` by number | replaced, not cited: one `Injected` lemma for `take` and one for `put` |
+
+  **2. Loops when the bound goes** (`function_ir_lower_calls` unless named):
+
+  | Theorem | Fate | Why |
+  |---|---|---|
+  | `loop_body_runs` | survives as is | one pass, from the head's state to the passed file; no counter in it |
+  | `loop_leaves` | survives as is | exit bit set: the state moved out, the jump to the join |
+  | `loop_exit_sound`, `loop_exit_out_sound`, `loop_exit_back_sound` | survive as is | the exit test's lowering is the exit bit's, not the count's |
+  | `Stack::LoopHead`, `Stack::LoopPassed` (the head and passed invariants) | survive with the counter cut out | `LoopHead` states `read_gpr(counter) = remaining`; without it, the state registers and `keep` |
+  | `loop_entry_sound`, `loop_entry_at_sound`, `loop_entry_with_sound` | survive with the counter cut out | they move the state into its registers and set the counter to the bound; only the state's moves remain |
+  | `loop_rounds` | survives with the counter cut out | exit clear: the state moved round, then `AddRI8 counter, -1` and `JMP H`; the step goes |
+  | `loop_close_emits`, `loop_emits` | survive with the counter and `exhausted` cut out | they compose the pieces above; the `exhausted` output and its flag go |
+  | `Site::loop_passes` | survives, its induction changed | an induction on the passes left becomes one on the run's fuel: a run that answers took finitely many passes |
+  | `loop_counter_zero`, `loop_counter_nonzero`, `loop_counter_step` | go | the counter's own arithmetic |
+  | `loop_stops` | goes | "no passes left, the head jumps to X": no bound, no X |
+  | `loop_enters` | goes | "passes left, fall through": the head falls through always |
+  | `loop_marks` | goes | X sets the `exhausted` flag |
+  | `LoopRegisters.counter`, `.flag`, `LoopRegisters::apart_sound` (its counter part) | go (the counter and flag); the state registers survive | |
+  | `function_ir.hthr`'s `loop_runs_unexhausted`, `loop_runs_weaken`, `LoopRuns`, `LoopHolds` | go from the language; the measure argument becomes a separate termination fact | the bounded relational meaning; termination is no longer part of the meaning |
+  | `function_ir_loop.hthr` (`loop_run`, `LoopFolds`, `step_fold_*`, `fold_body_*`) | does not carry over | a budgeted read-only loop interface that the lowering does not use |
+  | optimizer rules (`function_ir_rule*`, `_optimize`, `_pass`) | unaffected | none states `LoopRuns` or the bound |
