@@ -6827,8 +6827,57 @@ fn runtime_held_under(stated, rfl: Expr, stmt: Handle, n: Nat) → Tac<Expr> {
     }
 }
 
+// What a function written out over its record publishes
+// (issues/runtime-record-calls-erased.md): `T::n::words`, and
+// `T::n::runs_words`, its code's agreement with it at every span that
+// holds a record, the same `FFun::held_agrees` as `runs_held` with the
+// pin read against the function written out, which takes no erased
+// parameter. Where that pin is not found by conversion nothing is added,
+// and a caller is refused.
+fn runtime_held_worded(name: String, r: HeldReflected, parts: SpanParts, s: HeldSaid, we: Expr) → Tac<List<Decl>> {
+    let n = s.n;
+    let ts = s.ts;
+    let record = s.record;
+    let len = NatLit(r.operands);
+    let own1 <- assume(Hd(s.bytes), "own", None).or_fail("runtime: a span: ");
+    let t1 <- assume(record, "held", Some(own1.ref)).or_fail("runtime: a record: ");
+    let all1 <- runtime_own_params(ts.word, s.bytes, 1, r.operands + 1, Some(t1.ref), 0);
+    let length1 = all1.head_or(t1.ref);
+    let xs1 = all1.drop(1);
+    let holds1 <- assume(ap(n.holds, [record, s.whole, Local(own1.ref), Local(length1), Local(t1.ref)]), "holds", Some(all1.rev().head_or(t1.ref)))
+        .or_fail("runtime: a span that holds a record: ");
+    let file = RtQ::seq(s.files, runtime_read_spans(1, runtime_locals(all1), 0));
+    let hw = ap(s.hw, [file]);
+    let code_vars: List<Expr> = runtime_locals(all1);
+    let env = runtime_at_places(1, code_vars, 0, λ _ => s.zero).foldl(λ acc x => ap(n.bound, [Blank, Blank, x, acc]), ap(n.bound, [Blank, Blank, s.zero, s.end]));
+    let spec = ap(we, Cons(Local(t1.ref), runtime_locals(xs1)));
+    let code = ap(parts.compiled, Cons(Local(own1.ref), code_vars));
+    let g_e = ap(n.bind_onto, [parts.params, parts.no_tys]);
+    let same <- runtime_global(name_of(runtime_self));
+    let pinned <- defeq(ap(n.held, [record, parts.body, hw, g_e, env, Local(own1.ref), Local(t1.ref)]), spec);
+    match pinned {
+        False => pure([]),
+        True => {
+            let at <- runtime_held_ref("rt_held::HWorld::at");
+            let bytes_of <- runtime_held_ref("rt_held::FFun::bytes");
+            let reflects <- runtime_at_each(at, parts.callees, [], Some(holds1.ref), λ es _ =>
+                as_type(Equation(ap(bytes_of, [parts.rt, parts.world_of(es, file), env, Local(own1.ref)]),
+                    ap(parts.compiled_of(es), Cons(Local(own1.ref), code_vars))))
+                    .or_fail("runtime: `" ++ name ++ "`'s byte meaning at its callees: ").bind(λ h => pure(Hd(h))),
+                λ es => ap(s.rfl, [Blank, ap(parts.compiled_of(es), Cons(Local(own1.ref), code_vars))]));
+            let proof = ap(n.agrees, [record, parts.rt, hw, s.whole, ap(s.sound, [file]), len, s.end, ap(same, [Blank, Blank]), env, Local(own1.ref), Local(t1.ref),
+                Local(holds1.ref), spec, ap(s.rfl, [Blank, Blank]), code, reflects]);
+            let we_t <- infer(we).or_fail("runtime: `" ++ name ++ "` written out over its record: ");
+            pure([
+                Decl(AsValue, name ++ "::words", [], Hd(we_t), we),
+                Decl(AsTheorem, name ++ "::runs_words", runtime_params_of(Cons(own1.ref, Cons(t1.ref, all1.append([holds1.ref])))),
+                    ap(n.agreement, [record, Blank, s.whole, Local(length1), spec, code]), proof)])
+        },
+    }
+}
+
 // The record-level theorem of a function that does not go round.
-fn runtime_held_straight(name: String, f: GlobalRef, r: HeldReflected, parts: SpanParts, s: HeldSaid) → Tac<List<Decl>> {
+fn runtime_held_straight(name: String, f: GlobalRef, r: HeldReflected, parts: SpanParts, s: HeldSaid, words: Option<Expr> := None) → Tac<List<Decl>> {
     let n = s.n;
     let ts = s.ts;
     let bytes_h = s.bytes;
@@ -6943,11 +6992,13 @@ fn runtime_held_straight(name: String, f: GlobalRef, r: HeldReflected, parts: Sp
     // A record that takes parameters: the marks and what they owe are
     // functions of them, and the theorem holds at every value of them.
     let held_form = match r.params { Nil => AsValue, Cons(_, _) => AsFunction };
+    let worded_t: Tac<List<Decl>> = match words { None => pure([]), Some(we) => runtime_held_worded(name, r, parts, s, we) };
+    let worded <- worded_t;
     pure([
         Decl(held_form, name ++ "::held", runtime_params_of(r.params), Hd(marked_t), s.hw),
         Decl(AsTheorem, name ++ "::sound", runtime_params_of(r.params), Hd(sound_t), s.sound),
         Decl(AsTheorem, name ++ "::runs_held", runtime_params_of(r.params ++ Cons(own0.ref, Cons(t0.ref, own_args.ordered.append([holds0.ref])))),
-            ap(n.agreement, [record, Blank, whole, Local(length0), spec, code]), proof)])
+            ap(n.agreement, [record, Blank, whole, Local(length0), spec, code]), proof)] ++ worded)
 }
 
 // The record-level theorem of a loop. Its bytes are the pass iterated as
@@ -7137,6 +7188,152 @@ fn runtime_held_counted(name: String, f: GlobalRef, r: HeldReflected, parts: Spa
             ap(n.agreement, [s.record, Hd(ts.word), s.whole, Local(length0), spec, code]), proof)])
 }
 
+// ---------------------------------------------------------------------------
+// A function of a laid record written out over the record
+// (issues/runtime-record-calls-erased.md)
+//
+// A function of the record that takes an erased parameter has its held
+// meaning written out as `T::n::words(t, xs…)`: a function of the record
+// and the code's words with no erased parameter and no span, which a
+// caller's mark names in place of `T::n` (no proof exists at an arbitrary
+// word). Each value is bound once; a read of a marked reader is that
+// mark's field or element of the record (`Reader::read_at`), a marked
+// writer's store the record with it set (`Writer::set_at`,
+// `Writer::store_at`), a call of another function of the record that
+// function at the record (its own `words` where it takes an erased
+// parameter); everything else is written as a plain function's
+// reflection is (`RtWriting::value`). Its pin against the held meaning
+// unfolds the meaning once against a λ with no world in it.
+
+// What a computation of the program is to the writing: a store into a
+// field or an array by its mark, or another function of the record.
+inductive HeldWrites { WSet(mark: Expr), WStore(mark: Expr), WRuns(c: HeldCall), WNone }
+
+// What writing out reads: the plain writing for values, the code's
+// table, the computations' signatures, each reader's mark (`None` where it
+// is plain) and each computation's kind, and the names it spells with.
+record HeldWriting { v: RtWriting, fsigs: List<Sig>, readers: List<Option<Expr>>, writers: List<HeldWrites>, read_at: Expr, set_at: Expr, store_at: Expr,
+    after: Expr, once: Expr, unchanged: Expr, words: List<Expr>, zero: Expr, record: Expr }
+
+fn HeldWriting::refused<A>(self cx: HeldWriting, why: String) → Tac<A> {
+    fail("`" ++ cx.v.name ++ "`'s function of the record is not written out: " ++ why, [])
+}
+
+// A placeholder for a word a store answers, which a held meaning never
+// reads: compared with the meaning, a body that reads it fails its pin.
+fn HeldWriting::unread(self cx: HeldWriting, t: Ty) → Tac<Expr> {
+    match t.is_word64() { True => pure(cx.zero), False => cx.refused("a store answers a value that is not a word") }
+}
+
+// A computation at the record `a`, under `under`; `env` is each
+// variable's term, the most recent first, and `g` their codes.
+fn HeldWriting::written(self cx: HeldWriting, a: Expr, env: List<Expr>, g: List<Ty>, under: LocalRef, t: FTm) → Tac<Expr> {
+    match t {
+        Pure(v) => cx.v.value(env, g, Some(under), v).bind(λ e => pure(ap(cx.unchanged, [Blank, Blank, a, e]))),
+        Let(e, body) => {
+            let ty = e.ty(cx.v.world, g);
+            let plain: Tac<Expr> = cx.v.value(env, g, Some(under), e);
+            // A marked reader reads the record, at its operands' words.
+            let value: Tac<Expr> = match e {
+                Call(f, args) => match cx.readers.nth(f).unwrap_or(None) {
+                    None => plain,
+                    Some(mark) => cx.v.vars(env, args.drop(2)).bind(λ ws => pure(ap(cx.read_at, [Blank, mark, cx.v.tys_e, Ty::quote(ty, cx.v.q), a,
+                        RtQ::seq(cx.words, ws), ap(cx.v.lit, [Ty::quote(ty, cx.v.q), NatLit(0), cx.v.tys_e])]))),
+                },
+                _ => plain,
+            };
+            let value_e <- value;
+            let x <- assume(cx.v.sem(ty), "x", Some(under)).or_fail("runtime: a value bound: ");
+            let rest <- cx.written(a, Cons(Local(x.ref), env), Cons(ty, g), x.ref, body);
+            pure(ap(cx.once, [Blank, Blank, value_e, Lam(x.ref, rest)]))
+        },
+        If(c, yes, no) => {
+            let c_e <- cx.v.var(env, c);
+            let yes_e <- cx.written(a, env, g, under, yes);
+            let no_e <- cx.written(a, env, g, under, no);
+            pure(ap(cx.v.either, [Blank, c_e, yes_e, no_e]))
+        },
+        IfEq(c, yes, no) => {
+            let c_e <- cx.v.var(env, c);
+            let yes_e <- cx.written(a, env, g, under, yes);
+            let no_e <- cx.written(a, env, g, under, no);
+            pure(ap(cx.v.convoy, [Blank, c_e, yes_e, no_e]))
+        },
+        Call(f, args, body) => {
+            let result = Sig::at(cx.fsigs, f).result;
+            // What follows a store: the record it leaves, and a word it
+            // answers that nothing reads.
+            let stored: Expr → Tac<Expr> = λ set => {
+                let left <- assume(cx.record, "held", Some(under)).or_fail("runtime: a record: ");
+                let unread <- cx.unread(result);
+                let rest <- cx.written(Local(left.ref), Cons(unread, env), Cons(result, g), left.ref, body);
+                pure(ap(cx.once, [Blank, Blank, set, Lam(left.ref, rest)]))
+            };
+            match cx.writers.nth(f).unwrap_or(WNone) {
+                WNone => cx.refused("it makes a call that is no field's store and no function of the record"),
+                // Its answer is a word: what the function of the record
+                // answers beside the record it leaves (`HWorld::after`).
+                WRuns(c) => match result.is_word64() {
+                    False => cx.refused("a function of the record it calls answers what is not a word"),
+                    True => {
+                        let ws <- cx.v.vars(env, args.drop(2));
+                        let spec <- runtime_held_spec(c, a, ws);
+                        let left <- assume(cx.record, "held", Some(under)).or_fail("runtime: a record: ");
+                        let x <- assume(cx.v.sem(result), "x", Some(left.ref)).or_fail("runtime: a word answered: ");
+                        let rest <- cx.written(Local(left.ref), Cons(Local(x.ref), env), Cons(result, g), x.ref, body);
+                        pure(ap(cx.after, [Blank, Blank, Blank, spec, Lam(left.ref, Lam(x.ref, rest))]))
+                    },
+                },
+                WSet(mark) => match args {
+                    Cons(_, Cons(_, Cons(off, Cons(v, Nil)))) => {
+                        let off_e <- cx.v.var(env, off);
+                        let v_e <- cx.v.var(env, v);
+                        let set = ap(cx.set_at, [Blank, mark, cx.v.tys_e, Ty::quote(Ty::at(g, v), cx.v.q), a, off_e, v_e]);
+                        stored(set)
+                    },
+                    _ => cx.refused("a field's store with operands that are not a place, a length word, an offset and a word"),
+                },
+                WStore(mark) => match args {
+                    Cons(_, Cons(_, Cons(off, Cons(count, Cons(i, Cons(v, Nil)))))) => {
+                        let es <- cx.v.vars(env, [off, count, i, v]);
+                        let set = ap(cx.store_at, Cons(Blank, Cons(mark, Cons(cx.v.tys_e, Cons(Ty::quote(Ty::at(g, v), cx.v.q), Cons(a, es))))));
+                        stored(set)
+                    },
+                    _ => cx.refused("an element's store with operands that are not a place, a length word, an offset, a count, an index and a word"),
+                },
+            }
+        },
+        _ => cx.refused("its reflection stores a byte, lends a span or loops"),
+    }
+}
+
+// `T::n::words`: the function written out at a record and the code's
+// words after its span's place and length word. Those two are read by no
+// value of a held meaning (a mark's read and store take them only as
+// operands), and are written as the word 0: a body that reads them fails
+// its pin, which the kernel checks.
+fn runtime_held_words(name: String, r: HeldReflected, record: Expr, readers: List<Option<Expr>>, writers: List<HeldWrites>, read_sigs: List<Pair<Nat, Sig>>,
+    write_sigs: List<Pair<Nat, Sig>>, recs: List<RecShape>) → Tac<Expr> {
+    let ts <- runtime_type_handles();
+    let q <- runtime_quoting(ts);
+    let tys_both <- runtime_tys(ts.word, q, [], recs);
+    let tys = runtime_shapes_with([], recs);
+    let sigs: List<Sig> = read_sigs.map(λ p => p.snd);
+    let zero <- runtime_global(name_of(runtime_w_word));
+    let word_list <- runtime_ctors_at(ts.words);
+    let v = RtWriting(name, q, tys_both.fst, World(tys, sigs, Sig::sems_default(tys, sigs)), r.funs.map(λ g => Global(GlobalRef(g))), ts.word,
+        <- runtime_global(name_of(Ty::sem)), <- runtime_global(name_of(Tm::lit)), <- runtime_global(name_of(Op::sem)),
+        <- runtime_global(name_of(Setup::once)), <- runtime_global(name_of(Setup::either)), <- runtime_global(name_of(Tm::convoy)), recs);
+    let cx = HeldWriting(v, write_sigs.map(λ p => p.snd), readers, writers, <- runtime_held_ref("rt_held::Reader::read_at"), <- runtime_held_ref("rt_held::Writer::set_at"),
+        <- runtime_held_ref("rt_held::Writer::store_at"), <- runtime_held_ref("rt_held::HWorld::after"), <- runtime_held_ref("rt_held::HWorld::once"),
+        <- runtime_held_ref("rt_held::HWorld::unchanged"), word_list, zero, record);
+    let rfun = r.reflected;
+    let t <- assume(record, "held", None).or_fail("runtime: a record: ");
+    let xs <- runtime_params(ts.word, rfun.params.drop(2), Some(t.ref), 0);
+    let body <- cx.written(Local(t.ref), runtime_locals(xs).rev().append([zero, zero]), Ty::bind_onto(rfun.params, []), xs.rev().head_or(t.ref), rfun.body);
+    runtime_held(Lam(t.ref, runtime_lams(xs, body)), "`" ++ name ++ "` written out over its record")
+}
+
 // What is published beside the span's: the marks, what they owe, and the
 // record-level theorem.
 // `runtime_held` of a term that mentions the record's parameters: held
@@ -7148,7 +7345,8 @@ fn runtime_held_over(ps: List<LocalRef>, e: Expr, what: String) → Tac<Expr> {
     }
 }
 
-fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanParts) → Tac<List<Decl>> {
+fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanParts, read_sigs: List<Pair<Nat, Sig>> := [], write_sigs: List<Pair<Nat, Sig>> := [],
+    recs: List<RecShape> := []) → Tac<List<Decl>> {
     let n <- runtime_held_names();
     let ts <- runtime_type_handles();
     let bytes_h <- runtime_type_of(name_of(runtime_w_bytes));
@@ -7208,7 +7406,7 @@ fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanPa
         True => ap(of, [record, e.ty, whole, e.codec, e.instance, count_e(e), e.at.part]),
         False => ap(of, [record, e.ty, whole, e.codec, e.instance, NatLit(e.term.count), e.at.part]),
     };
-    let readers_e = runtime_held_list(n.more, n.none, List::range(readers.len()).map(λ j => match readers.nth(j).unwrap_or([]) {
+    let reader_items: List<Expr> = List::range(readers.len()).map(λ j => match readers.nth(j).unwrap_or([]) {
         Nil => match readers_at.nth(j).unwrap_or([]) {
             Nil => ap(n.plain, [record]),
             Cons(e, more) => match carried_of(Cons(e, more)) {
@@ -7217,7 +7415,8 @@ fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanPa
             },
         },
         Cons(a, more) => ap(n.reader_of, [record, runtime_held_list(n.more, n.none, Cons(a, more).map(λ a => entry(n.read_entry, a)))]),
-    }));
+    });
+    let readers_e = runtime_held_list(n.more, n.none, reader_items);
     // A computation that is a function of the record is marked with that
     // function.
     let called: List<Option<HeldCall>> = r.cfuns.map(λ g => r.calls.filter(λ c => c.bytes.same(g)).head());
@@ -7229,7 +7428,7 @@ fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanPa
         Some(call) => runtime_held_run(record, Hd(word_list), call, rest0.ref, span_of).bind(λ e =>
             runtime_held(Lam(rest0.ref, e), "`" ++ name ++ "`'s mark for `" ++ call.name ++ "`").bind(λ held => pure(Some(ap(held, [Local(rest0.ref)]))))),
     });
-    let writers_e = runtime_held_list(n.more, n.none, List::range(writers.len()).map(λ j => match runs.nth(j).unwrap_or(None) {
+    let writer_items: List<Expr> = List::range(writers.len()).map(λ j => match runs.nth(j).unwrap_or(None) {
         Some(run) => run,
         None => match writers.nth(j).unwrap_or([]) {
             Nil => match writers_at.nth(j).unwrap_or([]) {
@@ -7244,7 +7443,35 @@ fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanPa
             },
             Cons(a, more) => ap(n.writer_of, [record, runtime_held_list(n.more, n.none, Cons(a, more).map(λ a => entry(n.write_entry, a)))]),
         },
-    }));
+    });
+    let writers_e = runtime_held_list(n.more, n.none, writer_items);
+    // A function that takes an erased parameter is also written out over
+    // its record (`T::n::words`), which a caller's mark names: each
+    // reader's and writer's mark read where its call is. Where it is not
+    // written out (a shape the writing does not take), it is published as
+    // before, and a caller is refused naming why.
+    let f_t <- infer(Global(f)).or_fail("runtime: `" ++ name ++ "`'s type: ");
+    let erasing <- rt_takes_erased(64, f_t, None);
+    let plainly: Bool = match r.params { Nil => r.spans.same(0) && !r.measured && r.carried.is_none(), Cons(_, _) => False };
+    let reader_marks: List<Option<Expr>> = List::range(readers.len()).map(λ j => match readers.nth(j).unwrap_or([]) {
+        Nil => match readers_at.nth(j).unwrap_or([]) { Nil => None, Cons(_, _) => reader_items.nth(j) },
+        Cons(_, _) => reader_items.nth(j),
+    });
+    let writer_marks: List<HeldWrites> = List::range(writers.len()).map(λ j => match called.nth(j).unwrap_or(None) {
+        Some(c) => WRuns(c),
+        None => match writers.nth(j).unwrap_or([]) {
+            Cons(_, _) => writer_items.nth(j).map(λ e => WSet(e)).unwrap_or(WNone),
+            Nil => match writers_at.nth(j).unwrap_or([]) { Cons(_, _) => writer_items.nth(j).map(λ e => WStore(e)).unwrap_or(WNone), Nil => WNone },
+        },
+    });
+    let words_t: Tac<Option<Expr>> = match erasing && plainly {
+        False => pure(None),
+        True => attempt(runtime_held_words(name, r, record, reader_marks, writer_marks, read_sigs, write_sigs, recs)).bind(λ o => match o {
+            Done(e) => pure(Some(e)),
+            Failed(_, _) => pure(None),
+        }),
+    };
+    let words_e <- words_t;
     let marked = Lam(rest0.ref, ap(n.marked, [record, parts.world(Local(rest0.ref)), readers_e, writers_e]));
     let marked_t <- infer(marked).or_fail("runtime: `" ++ name ++ "`'s marks: ");
     // Held as holes solved by them, so that each is one term wherever it
@@ -7302,7 +7529,7 @@ fn runtime_held_more(name: String, f: GlobalRef, r: HeldReflected, parts: SpanPa
     let carried = r.carried.map(λ _ => HeldCarried(carried_w, ap(n.owed, [Blank, Blank, counted_of(readers_at), counted_of(writers_at)]), cname(6), cname(7)));
     let said = HeldSaid(n, ts, bytes_h, rfl, yes, zero, end, record, whole, hw_of_rest, marked_t, sound_t, sound_e, files, no_file, buffers_h, span_at, carried);
     match r.measured {
-        False => runtime_held_straight(name, f, r, parts, said),
+        False => runtime_held_straight(name, f, r, parts, said, words := words_e),
         True => match parts.counted {
             Some(c) => runtime_held_counted(name, f, r, parts, c, said),
             None => runtime_held_refused(name, "its loop was not written out as the passes its code counts"),
@@ -7353,7 +7580,7 @@ fn runtime_record(name: String, f: GlobalRef) → Tac<List<Decl>> {
           False => match r.measured.and(r.operands.leb(r.spans + r.spans)) {
             True => runtime_held_refused(name, "a loop moves at least one word from pass to pass"),
             False => runtime_link(4096, k, [LinkFrame(f.id, name, table, table, Some(r.funs.len()))], Linking([], [], [], [])).bind(λ l =>
-                runtime_span_publish(name, f, rfun, r.measured, r.funs, read_sigs, r.cfuns, write_sigs, l, True, False, λ parts => runtime_held_more(name, f, r, parts), recs := recs)),
+                runtime_span_publish(name, f, rfun, r.measured, r.funs, read_sigs, r.cfuns, write_sigs, l, True, False, λ parts => runtime_held_more(name, f, r, parts, read_sigs := read_sigs, write_sigs := write_sigs, recs := recs), recs := recs)),
           },
         },
     }

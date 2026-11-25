@@ -1164,6 +1164,50 @@ fn FTm::operand(ws: List<BitVec(64)>, i: Nat) → BitVec(64) {
     }
 }
 
+// A function of the record written out (`T::n::words`,
+// issues/runtime-record-calls-erased.md) reads and stores through a
+// mark at the words of the call's operands after the span's place and
+// its length word, which it has without an environment: what
+// `Reader::value` and `Writer::state` answer there, each reducing to the
+// same field's function at a literal offset. Nothing here is a meaning:
+// no function that does not write one out names them.
+fn Reader::read_at<A>(self r: Reader<A>, tys: Table, to: Ty, a: A, ws: List<BitVec(64)>, plain: to.sem(tys)) → to.sem(tys) {
+    match r {
+        Plain => plain,
+        Reads(width, fields) => match FTm::field(fields, FTm::operand(ws, 0).toNat()) { None => plain, Some(get) => Ty::cast(tys, Word(width), to, get(a)) },
+        Indexes(width, arrays) => match FTm::field(arrays, FTm::operand(ws, 0).toNat()) {
+            None => plain,
+            Some(counted) => match FTm::field(counted, FTm::operand(ws, 1).toNat()) {
+                None => plain,
+                Some(get) => Ty::cast(tys, Word(width), to, get(a, FTm::operand(ws, 2))),
+            },
+        },
+        Spans(width, arrays) => match FTm::field(arrays, FTm::operand(ws, 0).toNat()) {
+            None => plain,
+            Some(counted) => Ty::cast(tys, Word(width), to, counted.snd(a, FTm::operand(ws, 2))),
+        },
+    }
+}
+
+// A field's store at its offset's word, of a value of code `from`.
+fn Writer::set_at<A>(self w: Writer<A>, tys: Table, from: Ty, a: A, offset: BitVec(64), v: from.sem(tys)) → A {
+    match w {
+        Writes(width, fields) => match FTm::field(fields, offset.toNat()) { None => a, Some(set) => set(a, Ty::cast(tys, from, Word(width), v)) },
+        _ => a,
+    }
+}
+
+// An array element's store at the array's offset, its count and the index.
+fn Writer::store_at<A>(self w: Writer<A>, tys: Table, from: Ty, a: A, offset, count, i: BitVec(64), v: from.sem(tys)) → A {
+    match w {
+        Stores(width, arrays) => match FTm::field(arrays, offset.toNat()) {
+            None => a,
+            Some(counted) => match FTm::field(counted, count.toNat()) { None => a, Some(set) => set(a, i, Ty::cast(tys, from, Word(width), v)) },
+        },
+        _ => a,
+    }
+}
+
 // What a generator states a held callee's promise with: a variable, a
 // scope and an environment's types, a variable's word, and the callee's
 // own agreement (its `runs_held`) as the promise words it, the function
