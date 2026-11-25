@@ -76,7 +76,7 @@ fn FTm::tail_over<S>(self t: FTm, bw: BWorld, res: Ty, n: BitVec(64), done: Muta
             body.tail_over(bw, res, n, done, again, Cons(Sig::at(bw.fw.fsigs, f).result, g), Pair(Sig::at(bw.fw.fsigs, f).result.default(bw.fw.w.tys), env), s),
         Loop(_, _, _, _) => λ g env s => done(Mutated(s, res.default(bw.fw.w.tys))),
         Node(_, _) => λ g env s => done(Mutated(s, res.default(bw.fw.w.tys))),
-        Next(_, _) => λ g env s => done(Mutated(s, res.default(bw.fw.w.tys))),
+        Next(_, args) => λ g env s => again(Tm::words(bw.fw.w, g, env, args), s),
     }
 }
 

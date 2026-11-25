@@ -1426,6 +1426,35 @@ lowering refuses the two (`FTm::lower`, tail mode, the held and `Bytes(n)`
 paths' checks), and a node is not read inside an old `FTm::Loop`
 (`FTm::Within` is `False` at it, as `Tm`'s is).
 
+**Step a2 as built: the node's lowering and soundness.**
+- *Tail mode is the node's pass.* `FTm::tail_sem`, `FTm::lower_tail`,
+  `FTm::tail_sound` and their helpers moved from `rt_file_loop` into
+  `rt_file_lower`, ahead of `FTm::lower`, which now calls them. `Next` is
+  tail mode's going round, as the self-call `Again` still is for the
+  measured path until step b.
+- *The bridge.* `FTm::sem_in_tail`: a body that tail mode lowers as a pass
+  (`FTm::PassOk`, checked by `FTm::check_pass`: every leaf and `Next` at
+  the node's code, and no self-call, node or old loop) means under the
+  node's label what tail mode means under the same continuation
+  (`FTm::as_round`).
+- *The code.* `FTm::lower_node` is one `Until` over the state's words,
+  laid out as `Tm::lower_loop_at`'s (`Tm::loop_region`), its pass
+  `FTm::lower_tail` with nothing kept in place: the span is in the file,
+  and every state word moves. For now the state's words and the answer
+  are each one word.
+- *Soundness.* Three theorems:
+  - `FTm::node_pass_runs`: one pass of the `Until` is the meaning's pass,
+    from `tail_sound` and the bridge;
+  - `FTm::node_runs`: by induction on the fuel, the `Until`'s end (its
+    first word and the file, `FTm::node_end`) is the meaning's rounds,
+    whether it leaves or runs out;
+  - `FTm::node_sound`: the node's `FTm::LowerHolds`, which
+    `FTm::lower_sound` cites.
+- *Probe.* `rt_file_tests`' `fill_rt` (`while i < length { s[i] := v; i
+  += 1 }`) lowers, means and runs alike. A node going round at another
+  code than it answers is refused, and so is one whose pass calls the
+  function itself.
+
 ## 7. Bootstrapping
 
 Minus's fear: a bug that infects the next version. The loop's meaning is

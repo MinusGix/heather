@@ -45,6 +45,11 @@ import function_ir_eval;
 import function_ir_state;
 import function_ir_writes;
 import function_ir_run;
+import rt_loop;
+import function_ir_compile;
+import bitvec_nat;
+import dec_set;
+import set_tactic;
 
 // ---------------------------------------------------------------------------
 // What the calls are answered with
@@ -1749,6 +1754,877 @@ theorem FTm::loop_holds(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, ne
 // ---------------------------------------------------------------------------
 // The lowering
 
+// ---------------------------------------------------------------------------
+// The tail meaning
+
+// What a self-call is answered with: on the arguments' words and the span
+// as it is, the span left and the value at the result's code.
+fn FTm::Round(tys: Table, res: Ty) → Type { List<BitVec(64)> → List<BitVec(8)> → Mutated<List<BitVec(8)>, res.sem(tys)> }
+
+// A loop step's meaning at the function's result code `res`: `t` with its
+// self-call answered by `again`, the arguments read as the words a call
+// passes, and a value it ends in read at `res`. At a closed term it unfolds
+// as `FTm::sem` does, so a step's equation with the function's body is a
+// conversion.
+fn FTm::tail_sem(self t: FTm, fw: FWorld, res: Ty, again: FTm::Round(fw.w.tys, res)) → (g: List<Ty>) → Env(fw.w.tys, g) → List<BitVec(8)>
+    → Mutated<List<BitVec(8)>, res.sem(fw.w.tys)> {
+    match t {
+        Pure(v) => λ g env own => Mutated(own, Ty::cast(fw.w.tys, v.ty(fw.w, g), res, FTm::value(fw, own, v, g, env))),
+        Let(e, body) => λ g env own => body.tail_sem(fw, res, again, Cons(e.ty(fw.w, g), g), Pair(FTm::value(fw, own, e, g, env), env), own),
+        If(c, yes, no) => λ g env own => match Ty::cast(fw.w.tys, Ty::at(g, c), Bit, Env::get(fw.w.tys, g, env, c)) {
+            False => no.tail_sem(fw, res, again, g, env, own),
+            True => yes.tail_sem(fw, res, again, g, env, own),
+        },
+        IfEq(c, yes, no) => λ g env own => Tm::convoy(Mutated<List<BitVec(8)>, res.sem(fw.w.tys)>,
+            Ty::cast(fw.w.tys, Ty::at(g, c), Bit, Env::get(fw.w.tys, g, env, c)), yes.tail_sem(fw, res, again, g, env, own),
+            no.tail_sem(fw, res, again, g, env, own)),
+        Put(i, length, v, body) => λ g env own => body.tail_sem(fw, res, again, g, env, FTm::put(fw.w.tys, g, env, i, length, v, own)),
+        Call(f, args, body) => λ g env own => shared(FTm::called(fw, g, env, f, args, own), λ m =>
+            body.tail_sem(fw, res, again, Cons(Sig::at(fw.fsigs, f).result, g), Pair(m.value, env), m.after)),
+        Again(args) => λ g env own => again(Tm::words(fw.w, g, env, args), own),
+        Lend(f, views, args, body) => λ g env own => shared(FTm::lent(fw, g, env, f, views, args, own), λ m =>
+            body.tail_sem(fw, res, again, Cons(Sig::at(fw.fsigs, f).result, g), Pair(m.value, env), m.after)),
+        Loop(init, test, body, rest) => λ g env own => FTm::bind_at(fw.w.tys, g, Ty::at(g, init),
+            FTm::iterated(fw, g, init, test, body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => body.sem(fw, Cons(Ty::at(g, init), g), e, o), env, own),
+            env, λ e o => rest.tail_sem(fw, res, again, Cons(Ty::at(g, init), g), e, o)),
+        // A loop node is not a tail pass's (docs/language/loop-combinator-design.md
+        // §6.10): its lowering refuses it.
+        Node(_, _) => λ g env own => Mutated(own, res.default(fw.w.tys)),
+        // Going round a node is the pass's going round, as a self-call is.
+        Next(_, args) => λ g env own => again(Tm::words(fw.w, g, env, args), own),
+    }
+}
+
+// Two continuations that agree go on alike after a loop.
+theorem FTm::bind_at_ext<S>(tys: Table, g: List<Ty>, st: Ty, m: Mutated<List<BitVec(8)>, st.sem(tys)>, env: Env(tys, g),
+    k1, k2: Env(tys, Cons(st, g)) → List<BitVec(8)> → S, same: (e: Env(tys, Cons(st, g))) → (o: List<BitVec(8)>) → k1(e, o) = k2(e, o)):
+    FTm::bind_at(tys, g, st, m, env, k1) = FTm::bind_at(tys, g, st, m, env, k2) {
+    same(Pair(m.value, env), m.after)
+}
+
+// What follows a loop, read through `f`.
+theorem FTm::bind_at_after<S, T>(tys: Table, g: List<Ty>, st: Ty, m: Mutated<List<BitVec(8)>, st.sem(tys)>, env: Env(tys, g),
+    k: Env(tys, Cons(st, g)) → List<BitVec(8)> → S, f: S → T):
+    FTm::bind_at(tys, g, st, m, env, λ e o => f(k(e, o))) = f(FTm::bind_at(tys, g, st, m, env, k)) { refl }
+
+// A step's meaning reads its recursion only at the calls it makes: two
+// recursions that answer alike give one meaning.
+theorem FTm::tail_sem_ext(self t: FTm, fw: FWorld, res: Ty, k1, k2: FTm::Round(fw.w.tys, res),
+    same: (ys: List<BitVec(64)>) → (o: List<BitVec(8)>) → k1(ys, o) = k2(ys, o)): (g: List<Ty>) → (env: Env(fw.w.tys, g)) → (own: List<BitVec(8)>) →
+    t.tail_sem(fw, res, k1, g, env, own) = t.tail_sem(fw, res, k2, g, env, own) {
+    match t {
+        Pure(_) => λ g env own => refl,
+        Let(e, body) => λ g env own =>
+            FTm::tail_sem_ext(body, fw, res, k1, k2, same, Cons(e.ty(fw.w, g), g), Pair(FTm::value(fw, own, e, g, env), env), own),
+        If(c, yes, no) => λ g env own => match Ty::cast(fw.w.tys, Ty::at(g, c), Bit, Env::get(fw.w.tys, g, env, c)) as λ bit =>
+            (match bit { False => no.tail_sem(fw, res, k1, g, env, own), True => yes.tail_sem(fw, res, k1, g, env, own) }) =
+                (match bit { False => no.tail_sem(fw, res, k2, g, env, own), True => yes.tail_sem(fw, res, k2, g, env, own) }) {
+            False => FTm::tail_sem_ext(no, fw, res, k1, k2, same, g, env, own),
+            True => FTm::tail_sem_ext(yes, fw, res, k1, k2, same, g, env, own),
+        },
+        IfEq(c, yes, no) => λ g env own => eq2(λ (y: Mutated<List<BitVec(8)>, res.sem(fw.w.tys)>) (n: Mutated<List<BitVec(8)>, res.sem(fw.w.tys)>) =>
+                Tm::convoy(Mutated<List<BitVec(8)>, res.sem(fw.w.tys)>, Ty::cast(fw.w.tys, Ty::at(g, c), Bit, Env::get(fw.w.tys, g, env, c)), y, n),
+            FTm::tail_sem_ext(yes, fw, res, k1, k2, same, g, env, own), FTm::tail_sem_ext(no, fw, res, k1, k2, same, g, env, own)),
+        Put(i, length, v, body) => λ g env own => FTm::tail_sem_ext(body, fw, res, k1, k2, same, g, env, FTm::put(fw.w.tys, g, env, i, length, v, own)),
+        Call(f, args, body) => λ g env own => FTm::tail_sem_ext(body, fw, res, k1, k2, same, Cons(Sig::at(fw.fsigs, f).result, g),
+            Pair(FTm::called(fw, g, env, f, args, own).value, env), FTm::called(fw, g, env, f, args, own).after),
+        Again(args) => λ g env own => same(Tm::words(fw.w, g, env, args), own),
+        Lend(f, views, args, body) => λ g env own => FTm::tail_sem_ext(body, fw, res, k1, k2, same, Cons(Sig::at(fw.fsigs, f).result, g),
+            Pair(FTm::lent(fw, g, env, f, views, args, own).value, env), FTm::lent(fw, g, env, f, views, args, own).after),
+        Loop(init, test, body, rest) => λ g env own => FTm::bind_at_ext(fw.w.tys, g, Ty::at(g, init),
+            FTm::iterated(fw, g, init, test, body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => body.sem(fw, Cons(Ty::at(g, init), g), e, o), env, own),
+            env, λ e o => rest.tail_sem(fw, res, k1, Cons(Ty::at(g, init), g), e, o), λ e o => rest.tail_sem(fw, res, k2, Cons(Ty::at(g, init), g), e, o),
+            λ e o => FTm::tail_sem_ext(rest, fw, res, k1, k2, same, Cons(Ty::at(g, init), g), e, o)),
+        Node(_, _) => λ g env own => refl,
+        Next(_, args) => λ g env own => same(Tm::words(fw.w, g, env, args), own),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A node's pass as tail mode's (docs/language/loop-combinator-design.md §6.10)
+
+// A node's body that tail mode lowers as its pass: every value it leaves
+// with is at the node's code `R`, it goes round only by `Next` at `R`, and
+// it holds no self-call, no node and no old loop.
+fn FTm::PassOk(self t: FTm, w: World, fsigs: List<Sig>, R: Ty) → List<Ty> → Type {
+    match t {
+        Pure(v) => λ g => v.ty(w, g) = R,
+        Let(e, body) => λ g => body.PassOk(w, fsigs, R, Cons(e.ty(w, g), g)),
+        If(_, yes, no) => λ g => (yes.ty(w, fsigs, g) = R) ∧ (yes.PassOk(w, fsigs, R, g) ∧ no.PassOk(w, fsigs, R, g)),
+        IfEq(_, yes, no) => λ g => (yes.ty(w, fsigs, g) = R) ∧ (yes.PassOk(w, fsigs, R, g) ∧ no.PassOk(w, fsigs, R, g)),
+        Put(_, _, _, body) => λ g => body.PassOk(w, fsigs, R, g),
+        Call(f, _, body) => λ g => body.PassOk(w, fsigs, R, Cons(Sig::at(fsigs, f).result, g)),
+        Again(_) => λ g => False,
+        Lend(f, _, _, body) => λ g => body.PassOk(w, fsigs, R, Cons(Sig::at(fsigs, f).result, g)),
+        Loop(_, _, _, _) => λ g => False,
+        Node(_, _) => λ g => False,
+        Next(res, _) => λ g => res = R,
+    }
+}
+
+fn FTm::check_pass(self t: FTm, w: World, fsigs: List<Sig>, R: Ty) → (g: List<Ty>) → Option<t.PassOk(w, fsigs, R, g)> {
+    match t as λ u => (g: List<Ty>) → Option<u.PassOk(w, fsigs, R, g)> {
+        Pure(v) => λ g => v.ty(w, g).check(R),
+        Let(e, body) => λ g => body.check_pass(w, fsigs, R, Cons(e.ty(w, g), g)),
+        If(_, yes, no) => λ g => Tm::both(yes.ty(w, fsigs, g).check(R), Tm::both(yes.check_pass(w, fsigs, R, g), no.check_pass(w, fsigs, R, g))),
+        IfEq(_, yes, no) => λ g => Tm::both(yes.ty(w, fsigs, g).check(R), Tm::both(yes.check_pass(w, fsigs, R, g), no.check_pass(w, fsigs, R, g))),
+        Put(_, _, _, body) => λ g => body.check_pass(w, fsigs, R, g),
+        Call(f, _, body) => λ g => body.check_pass(w, fsigs, R, Cons(Sig::at(fsigs, f).result, g)),
+        Again(_) => λ g => None,
+        Lend(f, _, _, body) => λ g => body.check_pass(w, fsigs, R, Cons(Sig::at(fsigs, f).result, g)),
+        Loop(_, _, _, _) => λ g => None,
+        Node(_, _) => λ g => None,
+        Next(res, _) => λ g => res.check(R),
+    }
+}
+
+// A node's continuation as tail mode's: going round at words from a span.
+fn FTm::as_round(tys: Table, R: Ty, again: Mutated<List<BitVec(8)>, List<BitVec(64)>> → Mutated<List<BitVec(8)>, R.sem(tys)>) → FTm::Round(tys, R) {
+    λ ys o => again(Mutated(o, ys))
+}
+
+// A value read at its own code is itself, through a recast.
+theorem FTm::recast_self(tys: Table, a: Ty, m: Mutated<List<BitVec(8)>, a.sem(tys)>): FTm::recast(tys, a, a, m) = m {
+    cong_fn(λ (v: a.sem(tys)) => Mutated(m.after, v), Ty::cast_self(tys, a, m.value))
+}
+
+// Where the yes arm is at `R`, the no arm's value recast through it is
+// recast straight to `R`.
+theorem FTm::recast_through(tys: Table, Y, N, R: Ty, e: Y = R, m: Mutated<List<BitVec(8)>, N.sem(tys)>):
+    FTm::recast(tys, Y, R, FTm::recast(tys, N, Y, m)) = FTm::recast(tys, N, R, m) {
+    j(sym(e), λ T _ => FTm::recast(tys, T, R, FTm::recast(tys, N, T, m)) = FTm::recast(tys, N, R, m),
+        FTm::recast_self(tys, R, FTm::recast(tys, N, R, m)))
+}
+
+// A node's body under the node's label, read at the node's code, is its
+// tail meaning: the label's going round is tail mode's.
+theorem FTm::sem_in_tail(self t: FTm, fw: FWorld, R: Ty, A: Mutated<List<BitVec(8)>, List<BitVec(64)>> → Mutated<List<BitVec(8)>, R.sem(fw.w.tys)>):
+    (g: List<Ty>) → t.PassOk(fw.w, fw.fsigs, R, g) → (env: Env(fw.w.tys, g)) → (own: List<BitVec(8)>) →
+    FTm::recast(fw.w.tys, t.ty(fw.w, fw.fsigs, g), R, t.sem_in(fw, FTm::round(fw.w.tys, R, A), g, env, own))
+        = t.tail_sem(fw, R, FTm::as_round(fw.w.tys, R, A), g, env, own) {
+    let tys = fw.w.tys;
+    let lab = FTm::round(tys, R, A);
+    let K = FTm::as_round(tys, R, A);
+    match t {
+        Pure(v) => λ g ok env own => refl,
+        Let(e, body) => λ g ok env own => FTm::sem_in_tail(body, fw, R, A, Cons(e.ty(fw.w, g), g), ok, Pair(FTm::value(fw, own, e, g, env), env), own),
+        If(c, yes, no) => λ g ok env own => {
+            let Y = yes.ty(fw.w, fw.fsigs, g);
+            let N = no.ty(fw.w, fw.fsigs, g);
+            (match Ty::cast(tys, Ty::at(g, c), Bit, Env::get(tys, g, env, c)) as λ b =>
+                FTm::recast(tys, Y, R, match b { False => FTm::recast(tys, N, Y, no.sem_in(fw, lab, g, env, own)), True => yes.sem_in(fw, lab, g, env, own) })
+                    = (match b { False => no.tail_sem(fw, R, K, g, env, own), True => yes.tail_sem(fw, R, K, g, env, own) }) {
+                False => trans(FTm::recast_through(tys, Y, N, R, ok.left, no.sem_in(fw, lab, g, env, own)), FTm::sem_in_tail(no, fw, R, A, g, ok.right.right, env, own)),
+                True => FTm::sem_in_tail(yes, fw, R, A, g, ok.right.left, env, own),
+            })
+        },
+        IfEq(c, yes, no) => λ g ok env own => {
+            let Y = yes.ty(fw.w, fw.fsigs, g);
+            let N = no.ty(fw.w, fw.fsigs, g);
+            let T = Mutated<List<BitVec(8)>, Y.sem(tys)>;
+            let x = Ty::cast(tys, Ty::at(g, c), Bit, Env::get(tys, g, env, c));
+            let ys = yes.sem_in(fw, lab, g, env, own);
+            let ns = FTm::recast(tys, N, Y, no.sem_in(fw, lab, g, env, own));
+            trans(cong_fn(λ (m: T) => FTm::recast(tys, Y, R, m), Tm::convoy_match(T, x, ys, ns)),
+            trans((match x as λ b => FTm::recast(tys, Y, R, match b { False => ns, True => ys })
+                    = (match b { False => no.tail_sem(fw, R, K, g, env, own), True => yes.tail_sem(fw, R, K, g, env, own) }) {
+                False => trans(FTm::recast_through(tys, Y, N, R, ok.left, no.sem_in(fw, lab, g, env, own)), FTm::sem_in_tail(no, fw, R, A, g, ok.right.right, env, own)),
+                True => FTm::sem_in_tail(yes, fw, R, A, g, ok.right.left, env, own),
+            }), sym(Tm::convoy_match(Mutated<List<BitVec(8)>, R.sem(tys)>, x, yes.tail_sem(fw, R, K, g, env, own), no.tail_sem(fw, R, K, g, env, own)))))
+        },
+        Put(i, length, v, body) => λ g ok env own => FTm::sem_in_tail(body, fw, R, A, g, ok, env, FTm::put(tys, g, env, i, length, v, own)),
+        Call(f, args, body) => λ g ok env own => FTm::sem_in_tail(body, fw, R, A, Cons(Sig::at(fw.fsigs, f).result, g), ok,
+            Pair(FTm::called(fw, g, env, f, args, own).value, env), FTm::called(fw, g, env, f, args, own).after),
+        Again(_) => λ g ok => false_elim(ok),
+        Lend(f, views, args, body) => λ g ok env own => FTm::sem_in_tail(body, fw, R, A, Cons(Sig::at(fw.fsigs, f).result, g), ok,
+            Pair(FTm::lent(fw, g, env, f, views, args, own).value, env), FTm::lent(fw, g, env, f, views, args, own).after),
+        Loop(_, _, _, _) => λ g ok => false_elim(ok),
+        Node(_, _) => λ g ok => false_elim(ok),
+        Next(res, args) => λ g ok env own =>
+            j(sym(ok), λ T _ => FTm::recast(tys, T, R, FTm::recast(tys, R, T, A(Mutated(own, Tm::words(fw.w, g, env, args))))) = A(Mutated(own, Tm::words(fw.w, g, env, args))),
+                trans(FTm::recast_self(tys, R, FTm::recast(tys, R, R, A(Mutated(own, Tm::words(fw.w, g, env, args))))),
+                    FTm::recast_self(tys, R, A(Mutated(own, Tm::words(fw.w, g, env, args)))))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// What a pass leaves
+
+// A file whose spans after the first are `rest`.
+fn FTm::Spanned(rest: List<List<BitVec(8)>>, file: Buffers()) → Type { file = Cons(buffer_bytes(file, 0), rest) }
+
+// What a pass leaves for the loop: where the flag is 1 the result, the
+// first of `nexts`, and the file; otherwise the continuation on the next
+// state (`kept` in place, then `nexts`) and the file (`Tm::leave` with the
+// file carried).
+fn FTm::leave(end: State, flag: Nat, kept, nexts: List<Nat>, again: List<BitVec(64)> → Buffers() → Ending) → Ending {
+    match end.values(64, flag).eq_bit(BitVec::ofNat(1)) {
+        False => again(words_of(end.values, kept) ++ words_of(end.values, nexts), end.buffers),
+        True => Ending(words_of(end.values, nexts).head_or(BitVec::zero()), end.buffers),
+    }
+}
+
+// A self-call's answer as the loop's continuation: from the file's first
+// span, ending as a computation's code does.
+fn FTm::resume(tys: Table, res: Ty, rest: List<List<BitVec(8)>>, again: FTm::Round(tys, res)) → List<BitVec(64)> → Buffers() → Ending {
+    λ ys file => FTm::ended(tys, res, rest, again(ys, buffer_bytes(file, 0)))
+}
+
+// A pass that ended in `end` took the turn `out`: the file's other spans
+// are as they were, and whatever answers the self-call, what the pass
+// leaves is what `out` ends in.
+fn FTm::Turn(tys: Table, res: Ty, rest: List<List<BitVec(8)>>, flag: Nat, kept, nexts: List<Nat>, end: State,
+    out: FTm::Round(tys, res) → Mutated<List<BitVec(8)>, res.sem(tys)>) → Type {
+    FTm::Spanned(rest, end.buffers) ∧ ((again: FTm::Round(tys, res)) →
+        FTm::leave(end, flag, kept, nexts, FTm::resume(tys, res, rest, again)) = FTm::ended(tys, res, rest, out(again)))
+}
+
+// A region that ran to `mid`, then a pass from there.
+theorem FTm::turn_after(tys: Table, res: Ty, rest: List<List<BitVec(8)>>, flag: Nat, kept, nexts: List<Nat>, pre, post: StructuredRegion,
+    call: Writers(), values: Valuation(), file: Buffers(), mid: State, out: FTm::Round(tys, res) → Mutated<List<BitVec(8)>, res.sem(tys)>,
+    at: pre.run(call, values, file) = mid, then: FTm::Turn(tys, res, rest, flag, kept, nexts, post.run(call, mid.values, mid.buffers), out)):
+    FTm::Turn(tys, res, rest, flag, kept, nexts, Compose(pre, post).run(call, values, file), out) {
+    j(sym(at), λ s _ => FTm::Turn(tys, res, rest, flag, kept, nexts, post.run(call, s.values, s.buffers), out), then)
+}
+
+// A branch's pass is the arm's the bit chooses.
+theorem FTm::turn_branch(tys: Table, res: Ty, rest: List<List<BitVec(8)>>, flag: Nat, kept, nexts: List<Nat>, values: Valuation(),
+    condition: Nat, outputs: Ports, when_true, when_false: StructuredRegion, call: Writers(), file: Buffers(), b: Bool,
+    yes, no: FTm::Round(tys, res) → Mutated<List<BitVec(8)>, res.sem(tys)>, h: values(1, condition).head_bit() = b,
+    turn_true: FTm::Turn(tys, res, rest, flag, kept, nexts, when_true.run(call, values, file), yes),
+    turn_false: FTm::Turn(tys, res, rest, flag, kept, nexts, when_false.run(call, values, file), no)):
+    FTm::Turn(tys, res, rest, flag, kept, nexts, branch(condition, outputs, when_true, when_false).run(call, values, file),
+        λ again => match b { False => no(again), True => yes(again) }) {
+    let on = when_true.run(call, values, file);
+    let off = when_false.run(call, values, file);
+    let chosen = λ (x: Bool) => State(λ w id => match x { False => off.values(w, id), True => on.values(w, id) },
+        match x { False => off.buffers, True => on.buffers });
+    j(sym(h), λ x _ => FTm::Turn(tys, res, rest, flag, kept, nexts, chosen(x), λ again => match b { False => no(again), True => yes(again) }),
+        match b as λ x => FTm::Turn(tys, res, rest, flag, kept, nexts, chosen(x), λ again => match x { False => no(again), True => yes(again) }) {
+            False => turn_false,
+            True => turn_true,
+        })
+}
+
+// What a lowered pass promises, whatever it is a pass of: over any file
+// `Cons(own, rest)`, from any valuation where the environment holds and
+// the ports are below `next`, with calls answered by the program, `next`
+// grows and the run takes the turn `m`.
+fn FTm::TurnHolds(fw: FWorld, base: Nat, res: Ty, flag: Nat, kept, nexts: List<Nat>, g: List<Ty>, ports: List<Nat>, next: Nat,
+    m: FTm::Round(fw.w.tys, res) → Env(fw.w.tys, g) → List<BitVec(8)> → Mutated<List<BitVec(8)>, res.sem(fw.w.tys)>, r: Option<Lowered>) → Type {
+    match r {
+        None => True,
+        Some(c) => (call: Writers()) → FTm::CallsAgree(fw, base, call) → (values: Valuation()) → (env: Env(fw.w.tys, g)) →
+            (own: List<BitVec(8)>) → EnvHolds(fw.w.tys, values, g, ports, env) → Below(fw.w.tys, g, ports, next) →
+            (next <= c.next) ∧ FTm::Turn(fw.w.tys, res, fw.rest, flag, kept, nexts, c.region.run(call, values, Cons(own, fw.rest)),
+                λ again => m(again, env, own)),
+    }
+}
+
+// The same promise of a meaning that is equal everywhere.
+theorem FTm::turn_holds_same(fw: FWorld, base: Nat, res: Ty, flag: Nat, kept, nexts: List<Nat>, g: List<Ty>, ports: List<Nat>, next: Nat,
+    m1, m2: FTm::Round(fw.w.tys, res) → Env(fw.w.tys, g) → List<BitVec(8)> → Mutated<List<BitVec(8)>, res.sem(fw.w.tys)>,
+    same: (again: FTm::Round(fw.w.tys, res)) → (env: Env(fw.w.tys, g)) → (own: List<BitVec(8)>) → m1(again, env, own) = m2(again, env, own)):
+    (r: Option<Lowered>) → FTm::TurnHolds(fw, base, res, flag, kept, nexts, g, ports, next, m1, r) →
+        FTm::TurnHolds(fw, base, res, flag, kept, nexts, g, ports, next, m2, r) {
+    λ r => match r as λ q => FTm::TurnHolds(fw, base, res, flag, kept, nexts, g, ports, next, m1, q) →
+        FTm::TurnHolds(fw, base, res, flag, kept, nexts, g, ports, next, m2, q) {
+        None => λ _ => trivial,
+        Some(c) => λ h call agree values env own held below => {
+            let x = h(call, agree, values, env, own, held, below);
+            ⟨x.left, ⟨x.right.left, λ again => trans(x.right.right(again),
+                cong_fn(λ (m: Mutated<List<BitVec(8)>, res.sem(fw.w.tys)>) => FTm::ended(fw.w.tys, res, fw.rest, m), same(again, env, own)))⟩⟩
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The cases
+
+// A step whose value the pass binds: the pass runs from the span the step
+// left.
+theorem FTm::tail_bind_sound(fw: FWorld, base: Nat, res: Ty, flag: Nat, kept, nexts: List<Nat>, g: List<Ty>, ports: List<Nat>, next: Nat, a: Ty,
+    ma: Env(fw.w.tys, g) → List<BitVec(8)> → Mutated<List<BitVec(8)>, a.sem(fw.w.tys)>,
+    mb: FTm::Round(fw.w.tys, res) → Env(fw.w.tys, Cons(a, g)) → List<BitVec(8)> → Mutated<List<BitVec(8)>, res.sem(fw.w.tys)>, lc, lb: Lowered,
+    first: FTm::StepHolds(fw, base, g, ports, next, a, ma, Some(lc)),
+    then: FTm::TurnHolds(fw, base, res, flag, kept, nexts, Cons(a, g), Cons(lc.result, ports), lc.next, mb, Some(lb))):
+    FTm::TurnHolds(fw, base, res, flag, kept, nexts, g, ports, next,
+        λ again env own => mb(again, Pair(ma(env, own).value, env), ma(env, own).after), Tm::compose(lc, lb)) {
+    λ call agree values env own held below => {
+        let file: Buffers() = Cons(own, fw.rest);
+        let one = first(call, agree, values, env, own, held, below);
+        let mid = lc.region.run(call, values, file);
+        let m = ma(env, own);
+        let two = then(call, agree, mid.values, Pair(m.value, env), m.after,
+            ⟨one.right.right.right.left, env_holds_keeps(fw.w.tys, g, values, mid.values, next, one.right.right.left, ports, env, below, held)⟩,
+            ⟨one.right.left, below_mono(fw.w.tys, g, next, lc.next, one.left, ports, below)⟩);
+        ⟨Nat::le_trans(next, lc.next, lb.next, one.left, two.left),
+            FTm::turn_after(fw.w.tys, res, fw.rest, flag, kept, nexts, lc.region, lb.region, call, values, file, State(mid.values, Cons(m.after, fw.rest)),
+                λ again => mb(again, Pair(m.value, env), m.after), mid.left(Cons(m.after, fw.rest), one.right.right.right.right), two.right)⟩
+    }
+}
+
+// A store, then the pass from the span it left.
+theorem FTm::tail_put_sound(fw: FWorld, base: Nat, res: Ty, flag: Nat, kept, nexts: List<Nat>, g: List<Ty>, ports: List<Nat>, next, i, length, v: Nat,
+    at: PutAt, found: FTm::PutAtHolds(g, ports, i, length, v, Some(at)),
+    mb: FTm::Round(fw.w.tys, res) → Env(fw.w.tys, g) → List<BitVec(8)> → Mutated<List<BitVec(8)>, res.sem(fw.w.tys)>, lb: Lowered,
+    then: FTm::TurnHolds(fw, base, res, flag, kept, nexts, g, ports, next + 3, mb, Some(lb))):
+    FTm::TurnHolds(fw, base, res, flag, kept, nexts, g, ports, next,
+        λ again env own => mb(again, env, FTm::put(fw.w.tys, g, env, i, length, v, own)), FTm::put_then(at, next, lb)) {
+    λ call agree values env own held below => {
+        let tys = fw.w.tys;
+        let file: Buffers() = Cons(own, fw.rest);
+        let index = Ty::cast(tys, Ty::at(g, i), Word(64), Env::get(tys, g, env, i));
+        let bound = Ty::cast(tys, Ty::at(g, length), Word(64), Env::get(tys, g, env, length));
+        let byte = Ty::cast(tys, Ty::at(g, v), Word(8), Env::get(tys, g, env, v));
+        let region = FTm::put_region(at.index, at.length, at.value, next);
+        let put = region.run(call, values, file);
+        let ran = FTm::put_runs(call, values, own, fw.rest, at.index, at.length, at.value, next, index, bound, byte,
+            Tm::operand(fw.w, g, ports, values, env, held, i, at.index, found.left.left, Word(64), found.left.right),
+            Tm::operand(fw.w, g, ports, values, env, held, length, at.length, found.right.left.left, Word(64), found.right.left.right),
+            Tm::operand(fw.w, g, ports, values, env, held, v, at.value, found.right.right.left, Word(8), found.right.right.right),
+            Ty::below_cast(tys, Ty::at(g, i), Word(64), found.left.right, at.index, next, below_at(tys, g, ports, next, below, i, at.index, found.left.left)),
+            Ty::below_cast(tys, Ty::at(g, v), Word(8), found.right.right.right, at.value, next,
+                below_at(tys, g, ports, next, below, v, at.value, found.right.right.left)));
+        let later = next + 3;
+        let step: (next <= later) = Nat::le_succ_r(next, next + 2, Nat::le_succ_r(next, next + 1, Nat::le_succ_r(next, next, next.le_refl())));
+        let written = own.with_byte_within(bound, index, byte);
+        let two = then(call, agree, put.values, env, written, env_holds_keeps(tys, g, values, put.values, next, ran.left, ports, env, below, held),
+            below_mono(tys, g, next, later, step, ports, below));
+        ⟨Nat::le_trans(next, later, lb.next, step, two.left),
+            FTm::turn_after(tys, res, fw.rest, flag, kept, nexts, region, lb.region, call, values, file, State(put.values, Cons(written, fw.rest)),
+                λ again => mb(again, env, written), put.left(Cons(written, fw.rest), ran.right), two.right)⟩
+    }
+}
+
+// A branch of a pass, from what each arm's pass promises.
+theorem FTm::tail_if_sound(fw: FWorld, base: Nat, res: Ty, flag: Nat, kept, nexts: List<Nat>, g: List<Ty>, ports: List<Nat>, next, c: Nat,
+    my, mn: FTm::Round(fw.w.tys, res) → Env(fw.w.tys, g) → List<BitVec(8)> → Mutated<List<BitVec(8)>, res.sem(fw.w.tys)>, ly, ln: Lowered,
+    first: FTm::TurnHolds(fw, base, res, flag, kept, nexts, g, ports, next, my, Some(ly)),
+    second: FTm::TurnHolds(fw, base, res, flag, kept, nexts, g, ports, ly.next, mn, Some(ln))):
+    FTm::TurnHolds(fw, base, res, flag, kept, nexts, g, ports, next,
+        λ again env own => match Ty::cast(fw.w.tys, Ty::at(g, c), Bit, Env::get(fw.w.tys, g, env, c)) {
+            False => mn(again, env, own),
+            True => my(again, env, own),
+        }, Tm::tail_branch(g, ports, c, flag, nexts, ly, ln)) {
+    let tys = fw.w.tys;
+    let P = λ (r: Option<Lowered>) => FTm::TurnHolds(fw, base, res, flag, kept, nexts, g, ports, next,
+        λ again env own => match Ty::cast(tys, Ty::at(g, c), Bit, Env::get(tys, g, env, c)) {
+            False => mn(again, env, own),
+            True => my(again, env, own),
+        }, r);
+    let outs = Ports(word_ports(Cons(flag, nexts)));
+    Option::and_then_elim(P, trivial, port_at(ports, c),
+        λ pc => Ty::at(g, c).check(Bit).and_then(λ _ => Some(Lowered(branch(pc, outs, ly.region, ln.region), flag, ln.next))), λ pc at_c =>
+    Option::and_then_elim(P, trivial, Ty::at(g, c).check(Bit), λ _ => Some(Lowered(branch(pc, outs, ly.region, ln.region), flag, ln.next)),
+        λ ec _ =>
+        λ call agree values env own held below => {
+            let file: Buffers() = Cons(own, fw.rest);
+            let one = first(call, agree, values, env, own, held, below);
+            let two = second(call, agree, values, env, own, held, below_mono(tys, g, next, ly.next, one.left, ports, below));
+            let scrutinee = Ty::cast(tys, Ty::at(g, c), Bit, Env::get(tys, g, env, c));
+            let bit = Tm::operand(fw.w, g, ports, values, env, held, c, pc, at_c, Bit, ec);
+            let chosen = trans(cong_fn(λ (x: BitVec(1)) => x.head_bit(), bit), BitVec::head_bit_ofBool(scrutinee));
+            ⟨Nat::le_trans(next, ly.next, ln.next, one.left, two.left),
+                FTm::turn_branch(tys, res, fw.rest, flag, kept, nexts, values, pc, outs, ly.region, ln.region, call, file, scrutinee,
+                    λ again => my(again, env, own), λ again => mn(again, env, own), chosen, one.right, two.right)⟩
+        }))
+}
+
+// Moves store nothing.
+theorem Tm::moves_to_quiet(ns: List<Nat>): (qs: List<Nat>) → nodes_quiet(Tm::moves_to(ns, qs)).IsTrue() {
+    match ns {
+        Nil => λ qs => trivial,
+        Cons(n, rest) => λ qs => match qs as λ q2 => nodes_quiet(Tm::moves_to(Cons(n, rest), q2)).IsTrue() {
+            Nil => trivial,
+            Cons(q, more) => Tm::moves_to_quiet(rest, more),
+        },
+    }
+}
+
+// A value the pass ends in: the term's region, its word moved to the first
+// of `nexts`, the flag 1.
+fn FTm::lower_leaf(v: Tm, w: World, base: Nat, res: Ty, flag: Nat, nexts: List<Nat>, g: List<Ty>, ports: List<Nat>, next: Nat) → Option<Lowered> {
+    FTm::lower_value(v, w, base, g, ports, next).and_then(λ l => v.ty(w, g).check(res).and_then(λ _ => Tm::leave_at(flag, nexts, l)))
+}
+
+theorem FTm::tail_leaf_sound(v: Tm, fw: FWorld, base: Nat, res: Ty, er: res.OneWord(fw.w.tys), flag: Nat, kept, nexts: List<Nat>, g: List<Ty>,
+    ports: List<Nat>, next: Nat):
+    FTm::TurnHolds(fw, base, res, flag, kept, nexts, g, ports, next,
+        λ again env own => Mutated(own, Ty::cast(fw.w.tys, v.ty(fw.w, g), res, FTm::value(fw, own, v, g, env))),
+        FTm::lower_leaf(v, fw.w, base, res, flag, nexts, g, ports, next)) {
+    let tys = fw.w.tys;
+    let vty = v.ty(fw.w, g);
+    let M = λ (again: FTm::Round(tys, res)) (env: Env(tys, g)) (own: List<BitVec(8)>) =>
+        Mutated(own, Ty::cast(tys, vty, res, FTm::value(fw, own, v, g, env)));
+    match nexts as λ ns => FTm::TurnHolds(fw, base, res, flag, kept, ns, g, ports, next, M, FTm::lower_leaf(v, fw.w, base, res, flag, ns, g, ports, next)) {
+        Nil => {
+            let P = λ (r: Option<Lowered>) => FTm::TurnHolds(fw, base, res, flag, kept, Nil, g, ports, next, M, r);
+            Option::and_then_elim(P, trivial, FTm::lower_value(v, fw.w, base, g, ports, next),
+                λ l => vty.check(res).and_then(λ _ => Tm::leave_at(flag, Nil, l)), λ l _ =>
+            Option::and_then_elim(P, trivial, vty.check(res), λ _ => Tm::leave_at(flag, Nil, l), λ _ _ => trivial))
+        },
+        Cons(n0, rest) => {
+            let ns = Cons(n0, rest);
+            let P = λ (r: Option<Lowered>) => FTm::TurnHolds(fw, base, res, flag, kept, ns, g, ports, next, M, r);
+            Option::and_then_elim(P, trivial, FTm::lower_value(v, fw.w, base, g, ports, next),
+                λ l => vty.check(res).and_then(λ _ => Tm::leave_at(flag, ns, l)), λ l lowered =>
+            Option::and_then_elim(P, trivial, vty.check(res), λ _ => Tm::leave_at(flag, ns, l), λ e _ =>
+            Option::and_then_elim(P, trivial, Tm::check_true(distinct(Cons(flag, Cons(n0, rest)))),
+                λ _ => Some(Lowered(Tm::leave_region(l, flag, n0, rest), flag, l.next)), λ apart _ =>
+                λ call agree values env own held below => {
+                    let file: Buffers() = Cons(own, fw.rest);
+                    let value = FTm::value(fw, own, v, g, env);
+                    let ran = j(lowered, λ r _ => FTm::ValueHolds(v, fw, base, g, ports, next, r), FTm::value_sound(v, fw, base, g, ports, next))(
+                        call, agree, values, env, own, held, below);
+                    let p1 = Bool::is_true_and(absent(flag, Cons(n0, rest)), distinct(Cons(n0, rest)), apart);
+                    let pf = Bool::is_true_and(flag.differs(n0), absent(flag, rest), p1.left);
+                    let pn = Bool::is_true_and(absent(n0, rest), distinct(rest), p1.right);
+                    let end = l.region.run(call, values, file);
+                    let mid = end.values;
+                    let moved = Valuation::set(mid, n0, λ wd => mid(wd, l.result));
+                    let copies = Tm::moves_to(rest, Tm::copies(rest, n0));
+                    let moves = Cons(Move(64, n0, l.result), copies);
+                    let copied = eval_nodes_over(file, copies, moved);
+                    let after = Valuation::set(copied, flag, λ wd => BitVec::ofNat(1));
+                    let at_flag: (after(64, flag) = BitVec::ofNat(1)) = Valuation::set_here(copied, flag, λ wd => BitVec::ofNat(1), 64);
+                    let at_n0: (after(64, n0) = mid(64, l.result)) = trans(
+                        Valuation::set_other(copied, flag, λ wd => BitVec::ofNat(1), 64, n0, λ same => Nat::differs_ne(flag, n0, pf.left, sym(same))), trans(
+                        eval_nodes_frame(copies, file, moved, 64, n0, Tm::moves_to_writes(rest, Tm::copies(rest, n0), n0, pn.left)),
+                        Valuation::set_here(mid, n0, λ wd => mid(wd, l.result), 64)));
+                    let held_one: vty.OneWord(tys) = j(sym(e), λ x _ => x.OneWord(tys), er);
+                    let word: (mid(64, l.result) = Tm::out(tys, res, Ty::cast(tys, vty, res, value))) =
+                        trans(Ty::one_word_reads(tys, mid, l.result, vty, held_one, value, ran.right.right.right.left),
+                            sym(Tm::out_cast(tys, vty, res, e, value)));
+                    let out = λ (again: FTm::Round(tys, res)) => M(again, env, own);
+                    let last: FTm::Turn(tys, res, fw.rest, flag, kept, ns, State(after, file), out) = ⟨refl, λ again =>
+                        trans(cong_fn(λ (x: BitVec(64)) => match x.eq_bit(BitVec::ofNat(1)) {
+                                False => FTm::resume(tys, res, fw.rest, again, words_of(after, kept) ++ words_of(after, ns), file),
+                                True => Ending(words_of(after, ns).head_or(BitVec::zero()), file) }, at_flag),
+                            cong_fn(λ (x: BitVec(64)) => Ending(x, file), trans(at_n0, word)))⟩;
+                    ⟨ran.left, FTm::turn_after(tys, res, fw.rest, flag, kept, ns, l.region,
+                        Compose(nodes_region(moves), nodes_region([Const(64, flag, 1)])), call, values, file, State(mid, file), out,
+                        end.left(file, ran.right.right.right.right),
+                        FTm::turn_after(tys, res, fw.rest, flag, kept, ns, nodes_region(moves), nodes_region([Const(64, flag, 1)]), call, mid, file,
+                            State(eval_nodes_over(file, moves, mid), file), out,
+                            run_nodes_quiet(moves, Tm::moves_to_quiet(rest, Tm::copies(rest, n0)), mid, file), last))⟩
+                })))
+        },
+    }
+}
+
+// Going round: the self-call's arguments moved to `nexts`, the flag 0, the
+// span as it is.
+theorem FTm::tail_again_sound(fw: FWorld, base: Nat, res: Ty, flag: Nat, kept, nexts: List<Nat>, g: List<Ty>, ports: List<Nat>, next: Nat,
+    args: List<Nat>):
+    FTm::TurnHolds(fw, base, res, flag, kept, nexts, g, ports, next, λ again env own => again(Tm::words(fw.w, g, env, args), own),
+        Tm::self_args(fw.w, g, ports, args).and_then(λ qs => Tm::lower_again(flag, kept, nexts, next, qs))) {
+    let tys = fw.w.tys;
+    let P = λ (r: Option<Lowered>) => FTm::TurnHolds(fw, base, res, flag, kept, nexts, g, ports, next,
+        λ again env own => again(Tm::words(fw.w, g, env, args), own), r);
+    Option::and_then_elim(P, trivial, Tm::self_args(fw.w, g, ports, args), λ qs => Tm::lower_again(flag, kept, nexts, next, qs), λ qs e_qs =>
+    Option::and_then_elim(P, trivial, Tm::split_kept(kept, qs), λ moved =>
+        Tm::check_true((distinct(Cons(flag, nexts)) && (disjoint(Cons(flag, nexts), moved) && nexts.len().matches(moved.len()))) &&
+            disjoint(Cons(flag, nexts), kept))
+            .and_then(λ _ => Some(Lowered(Tm::again_region(flag, nexts, moved), flag, next))), λ moved e_moved =>
+    Option::and_then_elim(P, trivial,
+        Tm::check_true((distinct(Cons(flag, nexts)) && (disjoint(Cons(flag, nexts), moved) && nexts.len().matches(moved.len()))) &&
+            disjoint(Cons(flag, nexts), kept)),
+        λ _ => Some(Lowered(Tm::again_region(flag, nexts, moved), flag, next)), λ ok _ =>
+        λ call agree values env own held below => {
+            let file: Buffers() = Cons(own, fw.rest);
+            let both = Bool::is_true_and(distinct(Cons(flag, nexts)) && (disjoint(Cons(flag, nexts), moved) && nexts.len().matches(moved.len())),
+                disjoint(Cons(flag, nexts), kept), ok);
+            let parts = Bool::is_true_and(distinct(Cons(flag, nexts)), disjoint(Cons(flag, nexts), moved) && nexts.len().matches(moved.len()), both.left);
+            let rest = Bool::is_true_and(disjoint(Cons(flag, nexts), moved), nexts.len().matches(moved.len()), parts.right);
+            let apart = Bool::is_true_and(absent(flag, nexts), distinct(nexts), parts.left);
+            let moves = Tm::moves_to(nexts, moved);
+            let shifted = eval_nodes_over(file, moves, values);
+            let after = Valuation::set(shifted, flag, λ wd => BitVec::ofNat(0));
+            let at_flag: (after(64, flag) = BitVec::ofNat(0)) = Valuation::set_here(shifted, flag, λ wd => BitVec::ofNat(0), 64);
+            // The flag is none of `nexts`.
+            let unflagged: (words_of(after, nexts) = words_of(shifted, nexts)) = words_agree(nexts, shifted, after, λ y m =>
+                Valuation::set_other(shifted, flag, λ wd => BitVec::ofNat(0), 64, y, λ e => absent_mem(flag, nexts, apart.left, y, m, sym(e))));
+            let moved_words: (words_of(after, nexts) = words_of(values, moved)) = trans(unflagged,
+                Tm::moves_to_words(nexts, file, moved, values, apart.right, Tm::disjoint_tail(flag, nexts, moved, rest.left),
+                    nexts.len().matches_eq(moved.len(), rest.right)));
+            // Nothing written is one of `kept`.
+            let kept_words: (words_of(after, kept) = words_of(values, kept)) = words_agree(kept, values, after, λ y m => {
+                let out = Bool::is_true_and(y.differs(flag), absent(y, nexts), disjoint_mem(Cons(flag, nexts), kept, both.right, y, m));
+                trans(Valuation::set_other(shifted, flag, λ wd => BitVec::ofNat(0), 64, y, y.differs_ne(flag, out.left)),
+                    eval_nodes_frame(moves, file, values, 64, y, Tm::moves_to_writes(nexts, moved, y, out.right)))
+            });
+            let state: (words_of(after, kept) ++ words_of(after, nexts) = Tm::words(fw.w, g, env, args)) = trans(
+                eq2(λ (a: List<BitVec(64)>) (b: List<BitVec(64)>) => a ++ b, kept_words, moved_words),
+                trans(Tm::split_kept_words(values, kept, qs, moved, e_moved), Tm::self_args_sound(fw.w, g, ports, values, env, held, args, qs, e_qs)));
+            let out = λ (again: FTm::Round(tys, res)) => again(Tm::words(fw.w, g, env, args), own);
+            let last: FTm::Turn(tys, res, fw.rest, flag, kept, nexts, State(after, file), out) = ⟨refl, λ again =>
+                trans(cong_fn(λ (x: BitVec(64)) => match x.eq_bit(BitVec::ofNat(1)) {
+                        False => FTm::resume(tys, res, fw.rest, again, words_of(after, kept) ++ words_of(after, nexts), file),
+                        True => Ending(words_of(after, nexts).head_or(BitVec::zero()), file) }, at_flag),
+                    cong_fn(λ (ws: List<BitVec(64)>) => FTm::ended(tys, res, fw.rest, again(ws, own)), state))⟩;
+            ⟨next.le_refl(), FTm::turn_after(tys, res, fw.rest, flag, kept, nexts, nodes_region(moves), nodes_region([Const(64, flag, 0)]), call, values,
+                file, State(shifted, file), out, run_nodes_quiet(moves, Tm::moves_to_quiet(nexts, moved), values, file), last)⟩
+        })))
+}
+
+// ---------------------------------------------------------------------------
+// A pass
+
+// `t` in tail mode. The flag and `nexts` are ports below `next` that
+// nothing in the context is held at (checked where the self-call goes
+// round, whose arguments are moved there); `kept` are handed on in place.
+fn FTm::lower_tail(self t: FTm, w: World, fsigs: List<Sig>, base: Nat, res: Ty, flag: Nat, kept, nexts: List<Nat>, g: List<Ty>, ports: List<Nat>,
+    next: Nat) → Option<Lowered> {
+    match t {
+        Pure(v) => FTm::lower_leaf(v, w, base, res, flag, nexts, g, ports, next),
+        Let(e, body) => FTm::lower_value(e, w, base, g, ports, next).and_then(λ le =>
+            FTm::lower_tail(body, w, fsigs, base, res, flag, kept, nexts, Cons(e.ty(w, g), g), Cons(le.result, ports), le.next)
+                .and_then(λ lb => Tm::compose(le, lb))),
+        If(c, yes, no) => FTm::lower_tail(yes, w, fsigs, base, res, flag, kept, nexts, g, ports, next).and_then(λ ly =>
+            FTm::lower_tail(no, w, fsigs, base, res, flag, kept, nexts, g, ports, ly.next).and_then(λ ln => Tm::tail_branch(g, ports, c, flag, nexts, ly, ln))),
+        IfEq(c, yes, no) => FTm::lower_tail(yes, w, fsigs, base, res, flag, kept, nexts, g, ports, next).and_then(λ ly =>
+            FTm::lower_tail(no, w, fsigs, base, res, flag, kept, nexts, g, ports, ly.next).and_then(λ ln => Tm::tail_branch(g, ports, c, flag, nexts, ly, ln))),
+        Put(i, length, v, body) => FTm::put_ports(g, ports, i, length, v).and_then(λ at =>
+            FTm::lower_tail(body, w, fsigs, base, res, flag, kept, nexts, g, ports, next + 3).and_then(λ lb => FTm::put_then(at, next, lb))),
+        Call(f, args, body) => FTm::lower_call(w, fsigs, base, g, ports, next, f, args).and_then(λ lc =>
+            FTm::lower_tail(body, w, fsigs, base, res, flag, kept, nexts, Cons(Sig::at(fsigs, f).result, g), Cons(lc.result, ports), lc.next)
+                .and_then(λ lb => Tm::compose(lc, lb))),
+        Again(args) => Tm::self_args(w, g, ports, args).and_then(λ qs => Tm::lower_again(flag, kept, nexts, next, qs)),
+        Lend(f, views, args, body) => FTm::lower_lend(w, fsigs, base, g, ports, next, f, views, args).and_then(λ lc =>
+            FTm::lower_tail(body, w, fsigs, base, res, flag, kept, nexts, Cons(Sig::at(fsigs, f).result, g), Cons(lc.result, ports), lc.next)
+                .and_then(λ lb => Tm::compose(lc, lb))),
+        Loop(_, _, _, _) => None,
+        Node(_, _) => None,
+        Next(_, args) => Tm::self_args(w, g, ports, args).and_then(λ qs => Tm::lower_again(flag, kept, nexts, next, qs)),
+    }
+}
+
+// What a pass promises: the turn of `FTm::tail_sem`.
+fn FTm::TailHolds(self t: FTm, fw: FWorld, base: Nat, res: Ty, flag: Nat, kept, nexts: List<Nat>, g: List<Ty>, ports: List<Nat>, next: Nat,
+    r: Option<Lowered>) → Type {
+    FTm::TurnHolds(fw, base, res, flag, kept, nexts, g, ports, next, λ again env own => t.tail_sem(fw, res, again, g, env, own), r)
+}
+
+// A branch's two arms lowered in tail mode, then the branch.
+theorem FTm::tail_arms_sound(c: Nat, yes, no: FTm, fw: FWorld, base: Nat, res: Ty, flag: Nat, kept, nexts: List<Nat>,
+    ih_yes: (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →
+        FTm::TailHolds(yes, fw, base, res, flag, kept, nexts, g, ports, next, FTm::lower_tail(yes, fw.w, fw.fsigs, base, res, flag, kept, nexts, g, ports, next)),
+    ih_no: (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →
+        FTm::TailHolds(no, fw, base, res, flag, kept, nexts, g, ports, next, FTm::lower_tail(no, fw.w, fw.fsigs, base, res, flag, kept, nexts, g, ports, next)),
+    g: List<Ty>, ports: List<Nat>, next: Nat):
+    FTm::TailHolds(If(c, yes, no), fw, base, res, flag, kept, nexts, g, ports, next,
+        FTm::lower_tail(If(c, yes, no), fw.w, fw.fsigs, base, res, flag, kept, nexts, g, ports, next)) {
+    let P = λ (r: Option<Lowered>) => FTm::TailHolds(If(c, yes, no), fw, base, res, flag, kept, nexts, g, ports, next, r);
+    Option::and_then_elim(P, trivial, FTm::lower_tail(yes, fw.w, fw.fsigs, base, res, flag, kept, nexts, g, ports, next),
+        λ ly => FTm::lower_tail(no, fw.w, fw.fsigs, base, res, flag, kept, nexts, g, ports, ly.next).and_then(λ ln =>
+            Tm::tail_branch(g, ports, c, flag, nexts, ly, ln)),
+        λ ly lowered_yes =>
+    Option::and_then_elim(P, trivial, FTm::lower_tail(no, fw.w, fw.fsigs, base, res, flag, kept, nexts, g, ports, ly.next),
+        λ ln => Tm::tail_branch(g, ports, c, flag, nexts, ly, ln), λ ln lowered_no =>
+        FTm::tail_if_sound(fw, base, res, flag, kept, nexts, g, ports, next, c, λ again env own => yes.tail_sem(fw, res, again, g, env, own),
+            λ again env own => no.tail_sem(fw, res, again, g, env, own), ly, ln,
+            j(lowered_yes, λ r _ => FTm::TailHolds(yes, fw, base, res, flag, kept, nexts, g, ports, next, r), ih_yes(g, ports, next)),
+            j(lowered_no, λ r _ => FTm::TailHolds(no, fw, base, res, flag, kept, nexts, g, ports, ly.next, r), ih_no(g, ports, ly.next)))))
+}
+
+// What a pass runs to, wherever the result's code is held in one word.
+theorem FTm::tail_sound(self t: FTm, fw: FWorld, base: Nat, res: Ty, er: res.OneWord(fw.w.tys), flag: Nat, kept, nexts: List<Nat>): (g: List<Ty>) →
+    (ports: List<Nat>) → (next: Nat) →
+    FTm::TailHolds(t, fw, base, res, flag, kept, nexts, g, ports, next, FTm::lower_tail(t, fw.w, fw.fsigs, base, res, flag, kept, nexts, g, ports, next)) {
+    match t {
+        Pure(v) => λ g ports next => FTm::tail_leaf_sound(v, fw, base, res, er, flag, kept, nexts, g, ports, next),
+        Let(e, body) => λ g ports next => {
+            let P = λ (r: Option<Lowered>) => FTm::TailHolds(Let(e, body), fw, base, res, flag, kept, nexts, g, ports, next, r);
+            let inner = Cons(e.ty(fw.w, g), g);
+            Option::and_then_elim(P, trivial, FTm::lower_value(e, fw.w, base, g, ports, next),
+                λ le => FTm::lower_tail(body, fw.w, fw.fsigs, base, res, flag, kept, nexts, inner, Cons(le.result, ports), le.next)
+                    .and_then(λ lb => Tm::compose(le, lb)),
+                λ le lowered_e =>
+            Option::and_then_elim(P, trivial, FTm::lower_tail(body, fw.w, fw.fsigs, base, res, flag, kept, nexts, inner, Cons(le.result, ports), le.next),
+                λ lb => Tm::compose(le, lb), λ lb lowered_body =>
+                FTm::tail_bind_sound(fw, base, res, flag, kept, nexts, g, ports, next, e.ty(fw.w, g),
+                    λ env own => Mutated(own, FTm::value(fw, own, e, g, env)), λ again env own => body.tail_sem(fw, res, again, inner, env, own), le, lb,
+                    j(lowered_e, λ r _ => FTm::ValueHolds(e, fw, base, g, ports, next, r), FTm::value_sound(e, fw, base, g, ports, next)),
+                    j(lowered_body, λ r _ => FTm::TailHolds(body, fw, base, res, flag, kept, nexts, inner, Cons(le.result, ports), le.next, r),
+                        FTm::tail_sound(body, fw, base, res, er, flag, kept, nexts, inner, Cons(le.result, ports), le.next)))))
+        },
+        If(c, yes, no) => λ g ports next => FTm::tail_arms_sound(c, yes, no, fw, base, res, flag, kept, nexts,
+            λ g2 ports2 next2 => FTm::tail_sound(yes, fw, base, res, er, flag, kept, nexts, g2, ports2, next2),
+            λ g2 ports2 next2 => FTm::tail_sound(no, fw, base, res, er, flag, kept, nexts, g2, ports2, next2), g, ports, next),
+        IfEq(c, yes, no) => λ g ports next => FTm::turn_holds_same(fw, base, res, flag, kept, nexts, g, ports, next,
+            λ again env own => FTm::tail_sem(If(c, yes, no), fw, res, again, g, env, own),
+            λ again env own => FTm::tail_sem(IfEq(c, yes, no), fw, res, again, g, env, own),
+            λ again env own => sym(Tm::convoy_match(Mutated<List<BitVec(8)>, res.sem(fw.w.tys)>,
+                Ty::cast(fw.w.tys, Ty::at(g, c), Bit, Env::get(fw.w.tys, g, env, c)), yes.tail_sem(fw, res, again, g, env, own),
+                no.tail_sem(fw, res, again, g, env, own))),
+            FTm::lower_tail(If(c, yes, no), fw.w, fw.fsigs, base, res, flag, kept, nexts, g, ports, next),
+            FTm::tail_arms_sound(c, yes, no, fw, base, res, flag, kept, nexts,
+                λ g2 ports2 next2 => FTm::tail_sound(yes, fw, base, res, er, flag, kept, nexts, g2, ports2, next2),
+                λ g2 ports2 next2 => FTm::tail_sound(no, fw, base, res, er, flag, kept, nexts, g2, ports2, next2), g, ports, next)),
+        Put(i, length, v, body) => λ g ports next => {
+            let P = λ (r: Option<Lowered>) => FTm::TailHolds(Put(i, length, v, body), fw, base, res, flag, kept, nexts, g, ports, next, r);
+            let later = next + 3;
+            Option::and_then_elim(P, trivial, FTm::put_ports(g, ports, i, length, v),
+                λ at => FTm::lower_tail(body, fw.w, fw.fsigs, base, res, flag, kept, nexts, g, ports, later).and_then(λ lb => FTm::put_then(at, next, lb)),
+                λ at found =>
+            Option::and_then_elim(P, trivial, FTm::lower_tail(body, fw.w, fw.fsigs, base, res, flag, kept, nexts, g, ports, later),
+                λ lb => FTm::put_then(at, next, lb), λ lb lowered_body =>
+                FTm::tail_put_sound(fw, base, res, flag, kept, nexts, g, ports, next, i, length, v, at,
+                    j(found, λ r _ => FTm::PutAtHolds(g, ports, i, length, v, r), FTm::put_ports_sound(g, ports, i, length, v)),
+                    λ again env own => body.tail_sem(fw, res, again, g, env, own), lb,
+                    j(lowered_body, λ r _ => FTm::TailHolds(body, fw, base, res, flag, kept, nexts, g, ports, later, r),
+                        FTm::tail_sound(body, fw, base, res, er, flag, kept, nexts, g, ports, later)))))
+        },
+        Call(f, args, body) => λ g ports next => {
+            let P = λ (r: Option<Lowered>) => FTm::TailHolds(Call(f, args, body), fw, base, res, flag, kept, nexts, g, ports, next, r);
+            let result = Sig::at(fw.fsigs, f).result;
+            let inner = Cons(result, g);
+            Option::and_then_elim(P, trivial, FTm::lower_call(fw.w, fw.fsigs, base, g, ports, next, f, args),
+                λ lc => FTm::lower_tail(body, fw.w, fw.fsigs, base, res, flag, kept, nexts, inner, Cons(lc.result, ports), lc.next)
+                    .and_then(λ lb => Tm::compose(lc, lb)),
+                λ lc lowered_call =>
+            Option::and_then_elim(P, trivial, FTm::lower_tail(body, fw.w, fw.fsigs, base, res, flag, kept, nexts, inner, Cons(lc.result, ports), lc.next),
+                λ lb => Tm::compose(lc, lb), λ lb lowered_body =>
+                FTm::tail_bind_sound(fw, base, res, flag, kept, nexts, g, ports, next, result, λ env own => FTm::called(fw, g, env, f, args, own),
+                    λ again env own => body.tail_sem(fw, res, again, inner, env, own), lc, lb,
+                    j(lowered_call, λ r _ => FTm::StepHolds(fw, base, g, ports, next, result, λ env own => FTm::called(fw, g, env, f, args, own), r),
+                        FTm::call_sound(fw, base, g, ports, next, f, args)),
+                    j(lowered_body, λ r _ => FTm::TailHolds(body, fw, base, res, flag, kept, nexts, inner, Cons(lc.result, ports), lc.next, r),
+                        FTm::tail_sound(body, fw, base, res, er, flag, kept, nexts, inner, Cons(lc.result, ports), lc.next)))))
+        },
+        Again(args) => λ g ports next => FTm::tail_again_sound(fw, base, res, flag, kept, nexts, g, ports, next, args),
+        Lend(f, views, args, body) => λ g ports next => {
+            let P = λ (r: Option<Lowered>) => FTm::TailHolds(Lend(f, views, args, body), fw, base, res, flag, kept, nexts, g, ports, next, r);
+            let result = Sig::at(fw.fsigs, f).result;
+            let inner = Cons(result, g);
+            Option::and_then_elim(P, trivial, FTm::lower_lend(fw.w, fw.fsigs, base, g, ports, next, f, views, args),
+                λ lc => FTm::lower_tail(body, fw.w, fw.fsigs, base, res, flag, kept, nexts, inner, Cons(lc.result, ports), lc.next)
+                    .and_then(λ lb => Tm::compose(lc, lb)),
+                λ lc lowered_lend =>
+            Option::and_then_elim(P, trivial, FTm::lower_tail(body, fw.w, fw.fsigs, base, res, flag, kept, nexts, inner, Cons(lc.result, ports), lc.next),
+                λ lb => Tm::compose(lc, lb), λ lb lowered_body =>
+                FTm::tail_bind_sound(fw, base, res, flag, kept, nexts, g, ports, next, result, λ env own => FTm::lent(fw, g, env, f, views, args, own),
+                    λ again env own => body.tail_sem(fw, res, again, inner, env, own), lc, lb,
+                    j(lowered_lend, λ r _ => FTm::StepHolds(fw, base, g, ports, next, result, λ env own => FTm::lent(fw, g, env, f, views, args, own), r),
+                        FTm::lend_sound(fw, base, g, ports, next, f, views, args)),
+                    j(lowered_body, λ r _ => FTm::TailHolds(body, fw, base, res, flag, kept, nexts, inner, Cons(lc.result, ports), lc.next, r),
+                        FTm::tail_sound(body, fw, base, res, er, flag, kept, nexts, inner, Cons(lc.result, ports), lc.next)))))
+        },
+        Loop(_, _, _, _) => λ g ports next => trivial,
+        Node(_, _) => λ g ports next => trivial,
+        Next(_, args) => λ g ports next => FTm::tail_again_sound(fw, base, res, flag, kept, nexts, g, ports, next, args),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The loop node (docs/language/loop-combinator-design.md §6.10): one
+// `Until` over the state's words, its pass the body in tail mode (nothing
+// kept in place: the span is in the file, every word moves), as
+// `Tm::lower_loop_at` places `Tm`'s.
+
+// A code held in one word, read off words and back: the first word.
+theorem FTm::read_one(tys: Table, R: Ty, er: R.OneWord(tys), x: BitVec(64), ws: List<BitVec(64)>):
+    Ty::cast(tys, R, Word(64), Ty::read_words(R, tys, Cons(x, ws))) = x {
+    trans(cong_fn(λ (v: R.sem(tys)) => Ty::cast(tys, R, Word(64), v), (Ty::held_words(tys, R, Ty::one_word_held(tys, R, er), x, ws)).left),
+        Tm::out_into(tys, R, er, x))
+}
+
+// One pass of the node from the state `words_of(v, ps)` and the span
+// `own`: leaving, the first next word and the file; going round, the
+// continuation at the next words and the span left. That is the body's
+// meaning under the label of the continuation, and the file's other spans
+// are as they were.
+theorem FTm::node_pass_runs(sg: List<Ty>, body: FTm, fw: FWorld, base: Nat, ok: Ty::OneWords(fw.w.tys, sg), b: Nat, t: Lowered,
+    held_t: FTm::TailHolds(body, fw, base, body.ty(fw.w, fw.fsigs, Ty::bind_onto(sg, Nil)), Tm::loop_flag(sg, b), Nil, Tm::loop_ns(sg, b),
+        Ty::bind_onto(sg, Nil), Fun::ports_onto(sg, b + 1, Nil), Tm::loop_flag(sg, b) + 1, Some(t)),
+    pass_ok: body.PassOk(fw.w, fw.fsigs, body.ty(fw.w, fw.fsigs, Ty::bind_onto(sg, Nil)), Ty::bind_onto(sg, Nil)),
+    call: Writers(), agree: FTm::CallsAgree(fw, base, call),
+    A: Mutated<List<BitVec(8)>, List<BitVec(64)>> → Mutated<List<BitVec(8)>, body.ty(fw.w, fw.fsigs, Ty::bind_onto(sg, Nil)).sem(fw.w.tys)>,
+    v: Valuation(), own: List<BitVec(8)>):
+    (FTm::Spanned(fw.rest, Tm::loop_pass(Tm::loop_flag(sg, b), t).run(call, until_valuation(Fun::param_ids(sg, b + 1), words_of(v, Fun::param_ids(sg, b + 1))),
+        Cons(own, fw.rest)).buffers)) ∧
+    ((match Tm::loop_pass(Tm::loop_flag(sg, b), t).run(call, until_valuation(Fun::param_ids(sg, b + 1), words_of(v, Fun::param_ids(sg, b + 1))),
+            Cons(own, fw.rest)).values(1, t.next + 1).head_bit() {
+        False => FTm::resume(fw.w.tys, body.ty(fw.w, fw.fsigs, Ty::bind_onto(sg, Nil)), fw.rest,
+                FTm::as_round(fw.w.tys, body.ty(fw.w, fw.fsigs, Ty::bind_onto(sg, Nil)), A))(
+            words_of(Tm::loop_pass(Tm::loop_flag(sg, b), t).run(call, until_valuation(Fun::param_ids(sg, b + 1), words_of(v, Fun::param_ids(sg, b + 1))),
+                Cons(own, fw.rest)).values, Tm::loop_ns(sg, b)),
+            Tm::loop_pass(Tm::loop_flag(sg, b), t).run(call, until_valuation(Fun::param_ids(sg, b + 1), words_of(v, Fun::param_ids(sg, b + 1))),
+                Cons(own, fw.rest)).buffers),
+        True => Ending(words_of(Tm::loop_pass(Tm::loop_flag(sg, b), t).run(call, until_valuation(Fun::param_ids(sg, b + 1), words_of(v, Fun::param_ids(sg, b + 1))),
+                Cons(own, fw.rest)).values, Tm::loop_ns(sg, b)).head_or(BitVec::zero()),
+            Tm::loop_pass(Tm::loop_flag(sg, b), t).run(call, until_valuation(Fun::param_ids(sg, b + 1), words_of(v, Fun::param_ids(sg, b + 1))),
+                Cons(own, fw.rest)).buffers),
+    }) = FTm::ended(fw.w.tys, body.ty(fw.w, fw.fsigs, Ty::bind_onto(sg, Nil)), fw.rest,
+        body.sem_in(fw, FTm::round(fw.w.tys, body.ty(fw.w, fw.fsigs, Ty::bind_onto(sg, Nil)), A), Ty::bind_onto(sg, Nil),
+            Ty::extend(fw.w.tys, sg, Nil, trivial, words_of(v, Fun::param_ids(sg, b + 1))), own))) {
+    let tys = fw.w.tys;
+    let inner = Ty::bind_onto(sg, Nil);
+    let R = body.ty(fw.w, fw.fsigs, inner);
+    let ps = Fun::param_ids(sg, b + 1);
+    let c = Tm::loop_c(sg, b);
+    let ns = Tm::loop_ns(sg, b);
+    let flag = Tm::loop_flag(sg, b);
+    let ports = Fun::ports_onto(sg, b + 1, Nil);
+    let st = words_of(v, ps);
+    let len_st: (st.len() = sg.len()) = trans(words_of_len(v, ps), Fun::ids_len(sg, b + 1));
+    let counted = Valuation::zero();
+    let pv = Valuation::bind(counted, ps, st);
+    let env = Ty::extend(tys, sg, Nil, trivial, st);
+    let ids_len: (ps.len() = st.len()) = trans(Fun::ids_len(sg, b + 1), sym(len_st));
+    let held: EnvHolds(tys, pv, inner, ports, env) = Fun::env_extend_holds(tys, pv, sg, Nil, Nil, trivial, b + 1, st, ok, trivial,
+        Fun::bound_of_words(pv, ps, st, ids_len, words_of_bind(counted, ps, Fun::ids_distinct(sg, b + 1), st, ids_len)));
+    let c_flag: (c < flag + 1) = Nat::lt_of_lt_of_le(c, c + 1, flag + 1, c.lt_succ_self(), Nat::le_succ_r(c + 1, flag, Fun::past_ge(sg, c + 1)));
+    let below: Below(tys, inner, ports, flag + 1) = below_mono(tys, inner, c, flag + 1, Nat::le_of_lt(c, flag + 1, c_flag), ports,
+        Fun::below_onto(tys, sg, Nil, b + 1, Nil, ok, trivial));
+    let ran = held_t(call, agree, pv, env, own, held, below);
+    let end = t.region.run(call, pv, Cons(own, fw.rest));
+    let pv2 = end.values;
+    let pv2a = Valuation::set(pv2, t.next, λ wd => BitVec::ofNat(1));
+    let exit_value = bit_value(pv2a(64, flag).eq_bit(pv2a(64, t.next)));
+    let pv3 = Valuation::set(pv2a, t.next + 1, exit_value);
+    let flag_lt: (flag < t.next) = Nat::lt_of_lt_of_le(flag, flag + 1, t.next, flag.lt_succ_self(), ran.left);
+    let exit_bit: (pv3(1, t.next + 1).head_bit() = pv2(64, flag).eq_bit(BitVec::ofNat(1))) =
+        trans(cong_fn(λ (x: BitVec(1)) => x.head_bit(), Valuation::set_here(pv2a, t.next + 1, exit_value, 1)),
+            eq2(λ (a: BitVec(64)) (b2: BitVec(64)) => a.eq_bit(b2),
+                Valuation::set_other(pv2, t.next, λ wd => BitVec::ofNat(1), 64, flag, Nat::ne_of_lt(flag, t.next, flag_lt)),
+                Valuation::set_here(pv2, t.next, λ wd => BitVec::ofNat(1), 64)));
+    let ns_out = Fun::absent_ids(sg, c + 1, t.next, Inr(Nat::le_of_lt(flag, t.next, flag_lt)));
+    let ns_out2 = Fun::absent_ids(sg, c + 1, t.next + 1, Inr(Nat::le_succ_r(flag, t.next, Nat::le_of_lt(flag, t.next, flag_lt))));
+    let nexts_same: (words_of(pv3, ns) = words_of(pv2, ns)) = words_agree(ns, pv2, pv3, λ id mem =>
+        trans(Valuation::set_other(pv2a, t.next + 1, exit_value, 64, id, λ e => absent_mem(t.next + 1, ns, ns_out2, id, mem, sym(e))),
+            Valuation::set_other(pv2, t.next, λ wd => BitVec::ofNat(1), 64, id, λ e => absent_mem(t.next, ns, ns_out, id, mem, sym(e)))));
+    let K = FTm::as_round(tys, R, A);
+    let M = λ (bit: Bool) (s: List<BitVec(64)>) => match bit {
+        False => FTm::resume(tys, R, fw.rest, K)(s, end.buffers),
+        True => Ending(s.head_or(BitVec::zero()), end.buffers),
+    };
+    let turned = ran.right.right(K);
+    let meant: (FTm::ended(tys, R, fw.rest, body.tail_sem(fw, R, K, inner, env, own))
+        = FTm::ended(tys, R, fw.rest, body.sem_in(fw, FTm::round(tys, R, A), inner, env, own))) =
+        cong_fn(λ (m: Mutated<List<BitVec(8)>, R.sem(tys)>) => FTm::ended(tys, R, fw.rest, m),
+            trans(sym(FTm::sem_in_tail(body, fw, R, A, inner, pass_ok, env, own)),
+                FTm::recast_self(tys, R, body.sem_in(fw, FTm::round(tys, R, A), inner, env, own))));
+    ⟨ran.right.left, trans(eq2(M, exit_bit, nexts_same), trans(turned, meant))⟩
+}
+
+// The node's end as a computation's: the first word of its state and the
+// file, whether its passes left or ran out.
+fn FTm::node_end(ls: LoopState) → Ending { Ending(ls.end.state.head_or(BitVec::zero()), ls.buffers) }
+
+// The node's pass as its meaning reads it, at a state of words and a span.
+fn FTm::node_body(fw: FWorld, sg: List<Ty>, body: FTm,
+    again: Mutated<List<BitVec(8)>, List<BitVec(64)>> → Mutated<List<BitVec(8)>, body.ty(fw.w, fw.fsigs, Ty::bind_onto(sg, Nil)).sem(fw.w.tys)>,
+    st: Mutated<List<BitVec(8)>, List<BitVec(64)>>) → Mutated<List<BitVec(8)>, body.ty(fw.w, fw.fsigs, Ty::bind_onto(sg, Nil)).sem(fw.w.tys)> {
+    body.sem_in(fw, FTm::round(fw.w.tys, body.ty(fw.w, fw.fsigs, Ty::bind_onto(sg, Nil)), again), Ty::bind_onto(sg, Nil),
+        Ty::extend(fw.w.tys, sg, Nil, trivial, st.value), st.after)
+}
+
+// Its state read as its answer, where the passes run out.
+fn FTm::node_stuck(tys: Table, R: Ty, st: Mutated<List<BitVec(8)>, List<BitVec(64)>>) → Mutated<List<BitVec(8)>, R.sem(tys)> {
+    Mutated(st.after, Ty::read_words(R, tys, st.value))
+}
+
+// The node's `Until`, given `fuel` passes, ends as the meaning's rounds
+// do, from every state of its words and every span.
+theorem FTm::node_runs(s0: Ty, srest: List<Ty>, body: FTm, fw: FWorld, base: Nat, ok: Ty::OneWords(fw.w.tys, Cons(s0, srest)),
+    er: body.ty(fw.w, fw.fsigs, Ty::bind_onto(Cons(s0, srest), Nil)).OneWord(fw.w.tys), b: Nat, t: Lowered,
+    held_t: FTm::TailHolds(body, fw, base, body.ty(fw.w, fw.fsigs, Ty::bind_onto(Cons(s0, srest), Nil)), Tm::loop_flag(Cons(s0, srest), b), Nil,
+        Tm::loop_ns(Cons(s0, srest), b), Ty::bind_onto(Cons(s0, srest), Nil), Fun::ports_onto(Cons(s0, srest), b + 1, Nil), Tm::loop_flag(Cons(s0, srest), b) + 1, Some(t)),
+    pass_ok: body.PassOk(fw.w, fw.fsigs, body.ty(fw.w, fw.fsigs, Ty::bind_onto(Cons(s0, srest), Nil)), Ty::bind_onto(Cons(s0, srest), Nil)),
+    call: Writers(), agree: FTm::CallsAgree(fw, base, call), fuel: Nat): (v: Valuation()) → (own: List<BitVec(8)>) →
+    FTm::node_end(until_run(λ (pass: Valuation()) (held: Buffers()) => Tm::loop_pass(Tm::loop_flag(Cons(s0, srest), b), t).run(call, pass, held),
+        Fun::param_ids(Cons(s0, srest), b + 1), t.next + 1, Tm::loop_ns(Cons(s0, srest), b), fuel,
+        words_of(v, Fun::param_ids(Cons(s0, srest), b + 1)), Cons(own, fw.rest)))
+    = FTm::ended(fw.w.tys, body.ty(fw.w, fw.fsigs, Ty::bind_onto(Cons(s0, srest), Nil)), fw.rest,
+        loop::Loop::rounds(fuel, λ a st => FTm::node_body(fw, Cons(s0, srest), body, a, st),
+            λ st => FTm::node_stuck(fw.w.tys, body.ty(fw.w, fw.fsigs, Ty::bind_onto(Cons(s0, srest), Nil)), st),
+            Mutated(own, words_of(v, Fun::param_ids(Cons(s0, srest), b + 1))))) {
+    let sg = Cons(s0, srest);
+    let tys = fw.w.tys;
+    let R = body.ty(fw.w, fw.fsigs, Ty::bind_onto(sg, Nil));
+    let ps = Fun::param_ids(sg, b + 1);
+    let ns = Tm::loop_ns(sg, b);
+    let exit = t.next + 1;
+    let step = λ (pass: Valuation()) (held: Buffers()) => Tm::loop_pass(Tm::loop_flag(sg, b), t).run(call, pass, held);
+    let F = λ (a: Mutated<List<BitVec(8)>, List<BitVec(64)>> → Mutated<List<BitVec(8)>, R.sem(tys)>) (st: Mutated<List<BitVec(8)>, List<BitVec(64)>>) =>
+        FTm::node_body(fw, sg, body, a, st);
+    let junk = λ (st: Mutated<List<BitVec(8)>, List<BitVec(64)>>) => FTm::node_stuck(tys, R, st);
+    match fuel {
+        Zero => λ v own => cong_fn(λ (x: BitVec(64)) => Ending(x, Cons(own, fw.rest)),
+            sym(FTm::read_one(tys, R, er, v(64, b + 1), words_of(v, Fun::param_ids(srest, Fun::past([s0], b + 1)))))),
+        Succ(k) => λ v own => {
+            let st = words_of(v, ps);
+            let after = step(until_valuation(ps, st), Cons(own, fw.rest));
+            let nsw = words_of(after.values, ns);
+            let A = λ (s: Mutated<List<BitVec(8)>, List<BitVec(64)>>) => loop::Loop::rounds(k, F, junk, s);
+            let pass = FTm::node_pass_runs(sg, body, fw, base, ok, b, t, held_t, pass_ok, call, agree, A, v, own);
+            let own2 = buffer_bytes(after.buffers, 0);
+            let lengths: (ns.len() = ps.len()) = trans(Fun::ids_len(sg, Tm::loop_c(sg, b) + 1), sym(Fun::ids_len(sg, b + 1)));
+            let nsw_len: (nsw.len() = ps.len()) = trans(words_of_len(after.values, ns), lengths);
+            let rebound: (words_of(Valuation::bind(Valuation::zero(), ps, nsw), ps) = nsw) =
+                words_of_bind(Valuation::zero(), ps, Fun::ids_distinct(sg, b + 1), nsw, sym(nsw_len));
+            let ih0 = FTm::node_runs(s0, srest, body, fw, base, ok, er, b, t, held_t, pass_ok, call, agree, k,
+                Valuation::bind(Valuation::zero(), ps, nsw), own2);
+            let ih1: (FTm::node_end(until_run(step, ps, exit, ns, k, nsw, Cons(own2, fw.rest)))
+                = FTm::ended(tys, R, fw.rest, loop::Loop::rounds(k, F, junk, Mutated(own2, nsw)))) =
+                j(rebound, λ ws _ => FTm::node_end(until_run(step, ps, exit, ns, k, ws, Cons(own2, fw.rest)))
+                    = FTm::ended(tys, R, fw.rest, loop::Loop::rounds(k, F, junk, Mutated(own2, ws))), ih0);
+            let ih: (FTm::node_end(until_run(step, ps, exit, ns, k, nsw, after.buffers))
+                = FTm::ended(tys, R, fw.rest, loop::Loop::rounds(k, F, junk, Mutated(own2, nsw)))) =
+                j(sym(pass.left), λ file _ => FTm::node_end(until_run(step, ps, exit, ns, k, nsw, file))
+                    = FTm::ended(tys, R, fw.rest, loop::Loop::rounds(k, F, junk, Mutated(own2, nsw))), ih1);
+            let cases: (FTm::node_end(match after.values(1, exit).head_bit() {
+                    False => until_run(step, ps, exit, ns, k, nsw, after.buffers),
+                    True => LoopState(LoopEnd(nsw, False), after.buffers),
+                }) = (match after.values(1, exit).head_bit() {
+                    False => FTm::resume(tys, R, fw.rest, FTm::as_round(tys, R, A))(nsw, after.buffers),
+                    True => Ending(nsw.head_or(BitVec::zero()), after.buffers),
+                })) =
+                (match after.values(1, exit).head_bit() as λ bit =>
+                    FTm::node_end(match bit { False => until_run(step, ps, exit, ns, k, nsw, after.buffers), True => LoopState(LoopEnd(nsw, False), after.buffers) })
+                        = (match bit { False => FTm::resume(tys, R, fw.rest, FTm::as_round(tys, R, A))(nsw, after.buffers),
+                            True => Ending(nsw.head_or(BitVec::zero()), after.buffers) }) {
+                    False => ih,
+                    True => refl,
+                });
+            trans(cases, pass.right)
+        },
+    }
+}
+
+// A one-word code is one a word returned at its port holds.
+theorem FTm::one_returned(tys: Table, t: Ty): t.OneWord(tys) → t.Returned(tys) {
+    match t {
+        Word(_) => λ e => e,
+        Bit => λ never => false_elim(never),
+        ByteList(_) => λ never => false_elim(never),
+        Lines => λ never => false_elim(never),
+        Named(_) => λ e => e,
+        Count => λ never => false_elim(never),
+        Enum(_) => λ never => false_elim(never),
+    }
+}
+
+// The node at a state of at least one word, each held in one word, its
+// answer one word, its body a pass tail mode lowers.
+fn FTm::lower_node_at(w: World, fsigs: List<Sig>, base: Nat, g: List<Ty>, ports: List<Nat>, next: Nat, i0: Nat, irest: List<Nat>, body: FTm) → Option<Lowered> {
+    Tm::self_args(w, g, ports, Cons(i0, irest)).and_then(λ qs =>
+    Ty::check_one_words(w.tys, Tm::state(g, Cons(i0, irest))).and_then(λ _ =>
+    body.ty(w, fsigs, Tm::inside(g, Cons(i0, irest))).check_one_word(w.tys).and_then(λ _ =>
+    Tm::check_true(body.ty(w, fsigs, Tm::inside(g, Cons(i0, irest))).span(w.tys).leb(Tm::state(g, Cons(i0, irest)).len())).and_then(λ _ =>
+    body.check_pass(w, fsigs, body.ty(w, fsigs, Tm::inside(g, Cons(i0, irest))), Tm::inside(g, Cons(i0, irest))).and_then(λ _ =>
+    FTm::lower_tail(body, w, fsigs, base, body.ty(w, fsigs, Tm::inside(g, Cons(i0, irest))), Tm::loop_flag(Tm::state(g, Cons(i0, irest)), next), Nil,
+        Tm::loop_ns(Tm::state(g, Cons(i0, irest)), next), Tm::inside(g, Cons(i0, irest)), Fun::ports_onto(Tm::state(g, Cons(i0, irest)), next + 1, Nil),
+        Tm::loop_flag(Tm::state(g, Cons(i0, irest)), next) + 1).and_then(λ t =>
+    Some(Tm::loop_region(Tm::state(g, Cons(i0, irest)), qs, next, t))))))))
+}
+
+fn FTm::lower_node(w: World, fsigs: List<Sig>, base: Nat, g: List<Ty>, ports: List<Nat>, next: Nat, inits: List<Nat>, body: FTm) → Option<Lowered> {
+    match inits { Nil => None, Cons(i0, irest) => FTm::lower_node_at(w, fsigs, base, g, ports, next, i0, irest, body) }
+}
+
 fn FTm::lower(self t: FTm, w: World, fsigs: List<Sig>, base: Nat, g: List<Ty>, ports: List<Nat>, next: Nat) → Option<Lowered> {
     match t {
         Pure(v) => FTm::lower_value(v, w, base, g, ports, next),
@@ -1778,9 +2654,10 @@ fn FTm::lower(self t: FTm, w: World, fsigs: List<Sig>, base: Nat, g: List<Ty>, p
         Loop(init, test, body, rest) => port_at(ports, init).and_then(λ pi =>
             FTm::lower_loop(w, fsigs, base, g, ports, next, init, pi, test, body, λ ps k => FTm::lower(body, w, fsigs, base, Cons(Ty::at(g, init), g), ps, k)).and_then(λ ll =>
             FTm::lower(rest, w, fsigs, base, Cons(Ty::at(g, init), g), Cons(ll.result, ports), ll.next).and_then(λ lr => Tm::compose(ll, lr)))),
-        // A loop node is not lowered yet (docs/language/loop-combinator-design.md
-        // §6.10), and going round is never a value.
-        Node(_, _) => None,
+        // A loop node: one `Until`, its pass the body in tail mode
+        // (docs/language/loop-combinator-design.md §6.10). Going round is
+        // never a value.
+        Node(inits, body) => FTm::lower_node(w, fsigs, base, g, ports, next, inits, body),
         Next(_, _) => None,
     }
 }
@@ -1942,6 +2819,98 @@ theorem FTm::loop_case_sound(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat
     j(sym(FTm::lower_loop_eq(init, test, body, rest, fw.w, fw.fsigs, base, g, ports, next)), λ r _ => P(r), unfolded)
 }
 
+// The node's code runs to its meaning: its `Until` ends where the meaning's
+// rounds do (`FTm::node_runs`), its answer the first output.
+theorem FTm::node_sound(fw: FWorld, base: Nat, g: List<Ty>, ports: List<Nat>, next, i0: Nat, irest: List<Nat>, body: FTm):
+    FTm::LowerHolds(Node(Cons(i0, irest), body), fw, base, g, ports, next, FTm::lower_node_at(fw.w, fw.fsigs, base, g, ports, next, i0, irest, body)) {
+    let inits = Cons(i0, irest);
+    let tys = fw.w.tys;
+    let sg = Tm::state(g, inits);
+    let inner = Tm::inside(g, inits);
+    let R = body.ty(fw.w, fw.fsigs, inner);
+    let flag = Tm::loop_flag(sg, next);
+    let ns = Tm::loop_ns(sg, next);
+    let ports1 = Fun::ports_onto(sg, next + 1, Nil);
+    let span_ok = R.span(tys).leb(sg.len());
+    let lowered_tail = FTm::lower_tail(body, fw.w, fw.fsigs, base, R, flag, Nil, ns, inner, ports1, flag + 1);
+    let P = λ (r: Option<Lowered>) => FTm::LowerHolds(Node(inits, body), fw, base, g, ports, next, r);
+    Option::and_then_elim(P, trivial, Tm::self_args(fw.w, g, ports, inits), λ qs =>
+        Ty::check_one_words(tys, sg).and_then(λ _ => R.check_one_word(tys).and_then(λ _ => Tm::check_true(span_ok).and_then(λ _ =>
+        body.check_pass(fw.w, fw.fsigs, R, inner).and_then(λ _ => lowered_tail.and_then(λ t => Some(Tm::loop_region(sg, qs, next, t))))))), λ qs e_qs =>
+    Option::and_then_elim(P, trivial, Ty::check_one_words(tys, sg), λ _ => R.check_one_word(tys).and_then(λ _ => Tm::check_true(span_ok).and_then(λ _ =>
+        body.check_pass(fw.w, fw.fsigs, R, inner).and_then(λ _ => lowered_tail.and_then(λ t => Some(Tm::loop_region(sg, qs, next, t)))))), λ ok _ =>
+    Option::and_then_elim(P, trivial, R.check_one_word(tys), λ _ => Tm::check_true(span_ok).and_then(λ _ =>
+        body.check_pass(fw.w, fw.fsigs, R, inner).and_then(λ _ => lowered_tail.and_then(λ t => Some(Tm::loop_region(sg, qs, next, t))))), λ er _ =>
+    Option::and_then_elim(P, trivial, Tm::check_true(span_ok), λ _ =>
+        body.check_pass(fw.w, fw.fsigs, R, inner).and_then(λ _ => lowered_tail.and_then(λ t => Some(Tm::loop_region(sg, qs, next, t)))), λ fits _ =>
+    Option::and_then_elim(P, trivial, body.check_pass(fw.w, fw.fsigs, R, inner), λ _ =>
+        lowered_tail.and_then(λ t => Some(Tm::loop_region(sg, qs, next, t))), λ pass_ok _ =>
+    Option::and_then_elim(P, trivial, lowered_tail, λ t => Some(Tm::loop_region(sg, qs, next, t)), λ t lowered_t =>
+    λ call agree values env own held below => {
+        let o = t.next + 2;
+        let x = Tm::loop_x(sg, t);
+        let outs = Fun::param_ids(sg, o);
+        let rest = fw.rest;
+        let held_t = j(lowered_t, λ r _ => FTm::TailHolds(body, fw, base, R, flag, Nil, ns, inner, ports1, flag + 1, r),
+            FTm::tail_sound(body, fw, base, R, er, flag, Nil, ns, inner, ports1, flag + 1));
+        // The start: the words of the inits, and the pass's valuation of them.
+        let xs0 = Tm::words(fw.w, g, env, inits);
+        let len0: (xs0.len() = sg.len()) = trans(Tm::words_length(fw.w, g, env, inits), sym(List::len_map(inits, λ i => Ty::at(g, i))));
+        let ws0: (words_of(values, qs) = xs0) = Tm::self_args_sound(fw.w, g, ports, values, env, held, inits, qs, e_qs);
+        let ps1 = Fun::param_ids(sg, next + 1);
+        let xs = words_of(values, qs);
+        let xs_len: (ps1.len() = xs.len()) = trans(Fun::ids_len(sg, next + 1), sym(trans(cong_fn(λ (l: List<BitVec(64)>) => l.len(), ws0), len0)));
+        let v1 = Valuation::bind(Valuation::zero(), ps1, xs);
+        let rebound1: (words_of(v1, ps1) = xs) = words_of_bind(Valuation::zero(), ps1, Fun::ids_distinct(sg, next + 1), xs, xs_len);
+        let env1 = Ty::extend(tys, sg, Nil, trivial, xs);
+        let held1: EnvHolds(tys, v1, inner, ports1, env1) = Fun::env_extend_holds(tys, v1, sg, Nil, Nil, trivial, next + 1, xs, ok, trivial,
+            Fun::bound_of_words(v1, ps1, xs, xs_len, rebound1));
+        // The ids, in order.
+        let c1 = Tm::loop_c(sg, next);
+        let next_c1: (next < c1) = Fun::past_ge(sg, next + 1);
+        let c1_flag: (c1 < flag + 1) = Nat::lt_of_lt_of_le(c1, c1 + 1, flag + 1, c1.lt_succ_self(), Nat::le_succ_r(c1 + 1, flag, Fun::past_ge(sg, c1 + 1)));
+        let below1: Below(tys, inner, ports1, flag + 1) = below_mono(tys, inner, c1, flag + 1, Nat::le_of_lt(c1, flag + 1, c1_flag), ports1,
+            Fun::below_onto(tys, sg, Nil, next + 1, Nil, ok, trivial));
+        let flag_t: (flag + 1 <= t.next) = (held_t(call, agree, v1, env1, own, held1, below1)).left;
+        let next_o: (next < o) = Nat::lt_of_lt_of_le(next, c1, o, next_c1, Nat::le_trans(c1, t.next, o,
+            Nat::le_trans(c1, flag + 1, t.next, Nat::le_of_lt(c1, flag + 1, c1_flag), flag_t),
+            Nat::le_succ_r(t.next, t.next + 1, Nat::le_succ_r(t.next, t.next, t.next.le_refl()))));
+        let o_x: (o < x) = Tm::past_cons(Ty::at(g, i0), irest.map(λ i => Ty::at(g, i)), o);
+        let next_x: (next < x) = Nat::lt_trans(next, o, x, next_o, o_x);
+        // The `Until` ends as the meaning's rounds do.
+        let step = λ (pass: Valuation()) (heldb: Buffers()) => Tm::loop_pass(flag, t).run(call, pass, heldb);
+        let F = λ (a: Mutated<List<BitVec(8)>, List<BitVec(64)>> → Mutated<List<BitVec(8)>, R.sem(tys)>) (st: Mutated<List<BitVec(8)>, List<BitVec(64)>>) =>
+            FTm::node_body(fw, sg, body, a, st);
+        let junk = λ (st: Mutated<List<BitVec(8)>, List<BitVec(64)>>) => FTm::node_stuck(tys, R, st);
+        let ls = until_run(step, ps1, t.next + 1, ns, until_passes(), xs, Cons(own, rest));
+        let ran0 = FTm::node_runs(Ty::at(g, i0), irest.map(λ i => Ty::at(g, i)), body, fw, base, ok, er, next, t, held_t, pass_ok, call, agree, until_passes(), v1, own);
+        let ran1: (FTm::node_end(ls) = FTm::ended(tys, R, rest, loop::Loop::rounds(until_passes(), F, junk, Mutated(own, xs)))) =
+            j(rebound1, λ ws _ => FTm::node_end(until_run(step, ps1, t.next + 1, ns, until_passes(), ws, Cons(own, rest)))
+                = FTm::ended(tys, R, rest, loop::Loop::rounds(until_passes(), F, junk, Mutated(own, ws))), ran0);
+        let m = Node(inits, body).sem(fw, g, env, own);
+        let meaning: (loop::Loop::rounds(until_passes(), F, junk, Mutated(own, xs)) = m) =
+            cong_fn(λ (ws: List<BitVec(64)>) => loop::Loop::rounds(until_passes(), F, junk, Mutated(own, ws)), ws0);
+        let ends: (FTm::node_end(ls) = FTm::ended(tys, R, rest, m)) =
+            trans(ran1, cong_fn(λ (u: Mutated<List<BitVec(8)>, R.sem(tys)>) => FTm::ended(tys, R, rest, u), meaning));
+        let word_eq: (ls.end.state.head_or(BitVec::zero()) = Ty::cast(tys, R, Word(64), m.value)) = cong_fn(λ (e: Ending) => e.word, ends);
+        let buf_eq: (ls.buffers = Cons(m.after, rest)) = cong_fn(λ (e: Ending) => e.buffers, ends);
+        // The outputs hold the end's words.
+        let ns_len: (ns.len() = ps1.len()) = trans(Fun::ids_len(sg, c1 + 1), sym(Fun::ids_len(sg, next + 1)));
+        let st_len: (ls.end.state.len() = ps1.len()) = until_run_len(step, ps1, t.next + 1, ns, ns_len, until_passes(), xs, Cons(own, rest), sym(xs_len));
+        let fin = Valuation::bind(values, outs, ls.end.state);
+        let outs_len: (outs.len() = ls.end.state.len()) = trans(Fun::ids_len(sg, o), sym(trans(st_len, Fun::ids_len(sg, next + 1))));
+        let outs_words: (words_of(fin, outs) = ls.end.state) = words_of_bind(values, outs, Fun::ids_distinct(sg, o), ls.end.state, outs_len);
+        let at_o: (fin(64, o) = Ty::cast(tys, R, Word(64), m.value)) =
+            trans(cong_fn(λ (l: List<BitVec(64)>) => l.head_or(BitVec::zero()), outs_words), word_eq);
+        let holds: R.Holds(tys, fin, o, m.value) = Ty::returned_holds(tys, fin, o, R, FTm::one_returned(tys, R, er), m.value, at_o);
+        let keeps_all: Keeps(values, fin, next) = λ wd id below_id =>
+            Valuation::bind_frame(values, outs, ls.end.state, wd, id, Fun::absent_ids(sg, o, id, Inl(Nat::lt_trans(id, next, o, below_id, next_o))));
+        let le: (R.span(tys) <= sg.len()) = Nat::le_of_leb(R.span(tys), sg.len(), eq_true_of_is_true(R.span(tys).leb(sg.len()), fits));
+        ⟨Nat::le_of_lt(next, x, next_x), ⟨Ty::answer_below_past(tys, R, sg, o, Ty::one_word_answer(tys, R, er), le),
+            ⟨keeps_all, ⟨holds, buf_eq⟩⟩⟩⟩
+    }))))))
+}
+
 theorem FTm::lower_sound(self t: FTm, fw: FWorld, base: Nat): (g: List<Ty>) → (ports: List<Nat>) → (next: Nat) →
     FTm::LowerHolds(t, fw, base, g, ports, next, FTm::lower(t, fw.w, fw.fsigs, base, g, ports, next)) {
     match t {
@@ -2018,7 +2987,11 @@ theorem FTm::lower_sound(self t: FTm, fw: FWorld, base: Nat): (g: List<Ty>) → 
         Loop(init, test, body, rest) => λ g ports next => FTm::loop_case_sound(fw, base, g, ports, next, init, test, body, rest,
             λ ps k => FTm::lower_sound(body, fw, base, Cons(Ty::at(g, init), g), ps, k),
             λ ps k => FTm::lower_sound(rest, fw, base, Cons(Ty::at(g, init), g), ps, k)),
-        Node(_, _) => λ g ports next => trivial,
+        Node(inits, body) => λ g ports next => (match inits as λ is =>
+            FTm::LowerHolds(Node(is, body), fw, base, g, ports, next, FTm::lower(Node(is, body), fw.w, fw.fsigs, base, g, ports, next)) {
+            Nil => trivial,
+            Cons(i0, irest) => FTm::node_sound(fw, base, g, ports, next, i0, irest, body),
+        }),
         Next(_, _) => λ g ports next => trivial,
     }
 }

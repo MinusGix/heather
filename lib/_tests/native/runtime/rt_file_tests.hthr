@@ -299,3 +299,42 @@ theorem stores_unordered(xs: List<BitVec(8)>, n, i, x: BitVec(64), v, u: BitVec(
 {
     simp_only(List::with_byte_within_apart)
 }
+
+// ---------------------------------------------------------------------------
+// A loop node over the span (docs/language/loop-combinator-design.md §6.10):
+// `while i < length { s[i] := v; i := i + 1 } i`, its state the length, `i`
+// and `v`, its pass the body in tail mode, its code one `Until`.
+
+fn fill_body() → FTm {
+    Let(Prim(Ult(64), [1, 2]),
+        If(0,
+            Let(Prim(Trunc(8, 56), [1]),
+                Put(3, 4, 0,
+                    Let(Lit(Word(64), 1),
+                        Let(Prim(Add(64), [4, 0]),
+                            Next(Word(64), [6, 0, 4]))))),
+            Pure(Var(2))))
+}
+
+fn fill_rt() → FFun { FFun([Word(64), Word(64), Word(64), Word(64)], Word(64), Node([2, 1, 0], fill_body())) }
+
+fn fill_code() → Function { code_of(fill_rt().lower(bare(), [], 0)) }
+
+theorem fill_lowers(): fill_rt().lower(bare(), [], 0).is_some() = True { refl }
+
+// The meaning fills from `i` to the end and answers where it stopped.
+theorem fill_means(): FFun::meaning(fill_rt(), alone([]))([b(1), b(2), b(3)])(w(4096), w(3), w(1), w(9)) = Mutated([b(1), b(9), b(9)], w(3)) { refl }
+
+// The code runs to the same.
+theorem fill_runs(): program_run([fill_code()], [abc()], 0, [w(4096), w(3), w(1), w(9)]) = Ending(w(3), [[b(1), b(9), b(9)]]) { refl }
+theorem fill_none(): program_run([fill_code()], [abc()], 0, [w(4096), w(3), w(5), w(9)]) = Ending(w(5), [abc()]) { refl }
+
+// A node whose going round is at another code than it answers is refused.
+theorem fill_mixed_refused():
+    FFun([Word(64), Word(64), Word(64), Word(64)], Word(64),
+        Node([2, 1, 0], Let(Prim(Ult(64), [1, 2]), If(0, Next(Bit, [3, 2, 1]), Pure(Var(2)))))).lower(bare(), [], 0) = None { refl }
+
+// A node whose pass calls the function itself is refused: its pass goes
+// round only by `Next`.
+theorem fill_self_call_refused():
+    FFun([Word(64), Word(64), Word(64), Word(64)], Word(64), Node([2, 1, 0], Again([2, 1, 0]))).lower(bare(), [], 0) = None { refl }

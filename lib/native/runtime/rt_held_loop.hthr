@@ -90,7 +90,7 @@ fn FTm::tail_pass(self t: FTm, fw: FWorld, res: Ty) → (g: List<Ty>) → Env(fw
             FTm::iterated(fw, g, init, test, body.ty(fw.w, fw.fsigs, Cons(Ty::at(g, init), g)), λ e o => body.sem(fw, Cons(Ty::at(g, init), g), e, o), env, own),
             env, λ e o => rest.tail_pass(fw, res, Cons(Ty::at(g, init), g), e, o)),
         Node(_, _) => λ g env own => Ends(Mutated(own, res.default(fw.w.tys))),
-        Next(_, _) => λ g env own => Ends(Mutated(own, res.default(fw.w.tys))),
+        Next(_, args) => λ g env own => Goes(Tm::words(fw.w, g, env, args), own),
     }
 }
 
@@ -163,7 +163,7 @@ fn FTm::tail_held<A, S>(self t: FTm, hw: HWorld<A>, res: Ty, done: Mutated<A, re
             body.tail_held(hw, res, done, again, Cons(Sig::at(hw.fw.fsigs, f).result, g), Pair(m.value, env), m.after, a)),
         Loop(_, _, _, _) => λ g env own a => done(Mutated(a, res.default(hw.fw.w.tys))),
         Node(_, _) => λ g env own a => done(Mutated(a, res.default(hw.fw.w.tys))),
-        Next(_, _) => λ g env own a => done(Mutated(a, res.default(hw.fw.w.tys))),
+        Next(_, args) => λ g env own a => again(Tm::words(hw.fw.w, g, env, args), a),
     }
 }
 
