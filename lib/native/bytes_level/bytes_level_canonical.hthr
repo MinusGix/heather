@@ -147,20 +147,39 @@ theorem SysCall::run_canonical(self call: SysCall, blocks: Blocks, c: Config, ca
     }
 }
 
+theorem loop_pass_canonical(step: Nat → Config → Ran<Config>,
+    steps: (n: Nat) → (c: Config) → c.memory.Canonical() → RanAll<Config>(canonical_config, step(n, c)),
+    parameters: List<Typed>, exit: Nat, next: List<Typed>, fuel: Nat, later: List<Value> → Heap → Io → Ran<Ended>,
+    each: (state: List<Value>) → (m: Heap) → (io: Io) → m.Canonical() → RanAll<Ended>(canonical_ended, later(state, m, io))):
+    (state: List<Value>) → (m: Heap) → (io: Io) → m.Canonical() →
+    RanAll<Ended>(canonical_ended, loop_pass(step, parameters, exit, next, fuel, later, state, m, io)) {
+    λ state m io canonical => ran_all_of_any(canonical_ended, λ l =>
+        ran_all_then(canonical_config, canonical_ended, steps(fuel, Config(l, m, io), canonical), λ after h =>
+            ran_all_of_any(canonical_ended, λ more => match after.locals.words(1, exit).head_bit() {
+                False => each(more, after.memory, after.io, h),
+                True => h,
+            })))
+}
+
+theorem loop_later_canonical(step: Nat → Config → Ran<Config>,
+    steps: (n: Nat) → (c: Config) → c.memory.Canonical() → RanAll<Config>(canonical_config, step(n, c)),
+    parameters: List<Typed>, exit: Nat, next: List<Typed>, fuel: Nat):
+    (state: List<Value>) → (m: Heap) → (io: Io) → m.Canonical() →
+    RanAll<Ended>(canonical_ended, loop_later(step, parameters, exit, next, fuel, state, m, io)) {
+    match fuel {
+        Zero => λ state m io canonical => trivial,
+        Succ(rest) => loop_pass_canonical(step, steps, parameters, exit, next, rest, loop_later(step, parameters, exit, next, rest),
+            loop_later_canonical(step, steps, parameters, exit, next, rest)),
+    }
+}
+
 theorem loop_run_canonical(step: Nat → Config → Ran<Config>,
     steps: (n: Nat) → (c: Config) → c.memory.Canonical() → RanAll<Config>(canonical_config, step(n, c)),
     parameters: List<Typed>, exit: Nat, next: List<Typed>, fuel: Nat):
     (state: List<Value>) → (m: Heap) → (io: Io) → m.Canonical() →
     RanAll<Ended>(canonical_ended, loop_run(step, parameters, exit, next, fuel, state, m, io)) {
-    match fuel {
-        Zero => λ state m io canonical => trivial,
-        Succ(rest) => λ state m io canonical => ran_all_of_any(canonical_ended, λ l =>
-            ran_all_then(canonical_config, canonical_ended, steps(rest, Config(l, m, io), canonical), λ after h =>
-                ran_all_of_any(canonical_ended, λ later => match after.locals.words(1, exit).head_bit() {
-                    False => loop_run_canonical(step, steps, parameters, exit, next, rest, later, after.memory, after.io, h),
-                    True => h,
-                }))),
-    }
+    loop_pass_canonical(step, steps, parameters, exit, next, fuel, loop_later(step, parameters, exit, next, fuel),
+        loop_later_canonical(step, steps, parameters, exit, next, fuel))
 }
 
 theorem Body::run_canonical(self body: Body, blocks: Blocks, calls: Calls(), keeps: KeepsCanonical(calls)):

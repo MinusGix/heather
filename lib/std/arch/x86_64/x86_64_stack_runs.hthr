@@ -30,6 +30,7 @@ import logic;
 import nat;
 import option;
 import omega;
+import transition;
 
 // From `s`, a machine run to offset `to`, the program still resident, the
 // state satisfying `post`.
@@ -1058,6 +1059,196 @@ theorem Site::moves_reloads<M>(self site: Site<M>, stack: Stack<M>(site.fetch, s
                 λ (s: MachineState<M>) => (s.gprs = next) ∧ (frame(s.memory) ∧ stack.Saved(d, rest, k + 1, saved, s.memory)),
                 λ (t: MachineState<M>) => (t.gprs = restore(rest, saved, next)) ∧ frame(t.memory),
                 first, later)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Claims: runs that may make system calls (docs/language/ownership-design.md
+// §17.7)
+//
+// A run of the machine beside a world `W`, which only a system call
+// changes. What a system call does is the kernel's (`Kernel`): at a state,
+// the code makes a call and from every state the kernel may resume it in,
+// `P`. The machine's own steps are this module's; the contract's Linux
+// model is the one kernel with content (x86_64_call_contract's
+// `Site::linux_kernel`), and a claim at no system call needs none.
+//
+// `Site::Performs(writes, kernel, goal, calls, least)`: from a state, the
+// code reaches `goal` making at most `calls` system calls, and its machine
+// steps number at least `least` in total. Lower bounds add along a bind
+// (`performs_bind`); a run proved without counting has bound zero.
+
+record Running<M, W> { state: MachineState<M>, io: W }
+
+record Kernel<M, W> {
+    resumes: Running<M, W> → (Running<M, W> → Type) → Type,
+    monotone: (r: Running<M, W>) → (P, Q: Running<M, W> → Type) → ((u: Running<M, W>) → P(u) → Q(u)) → resumes(r, P) → resumes(r, Q),
+}
+
+fn Site::Performs<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, goal: Running<M, W> → Type, calls, least: Nat) →
+    Running<M, W> → Type {
+    match calls {
+        Zero => λ from => Exists<MachineState<M>>(λ t => Exists<Nat>(λ n => MachineRuns(site.fetch, site.data, writes, n, from.state, t) ∧
+            ((least <= n) ∧ goal(Running(t, from.io))))),
+        Succ(more) => λ from => Exists<MachineState<M>>(λ t => Exists<Nat>(λ n => MachineRuns(site.fetch, site.data, writes, n, from.state, t) ∧
+            (((least <= n) ∧ goal(Running(t, from.io))) ∨
+                kernel.resumes(Running(t, from.io), λ (u: Running<M, W>) => site.Performs(writes, kernel, goal, more, least - n, u))))),
+    }
+}
+
+// A smaller lower bound.
+theorem Site::performs_less<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, goal: Running<M, W> → Type, calls: Nat):
+    (least, fewer: Nat) → fewer <= least → (from: Running<M, W>) → site.Performs(writes, kernel, goal, calls, least, from) →
+    site.Performs(writes, kernel, goal, calls, fewer, from) {
+    match calls {
+        Zero => λ least fewer le from p => {
+            let n = p.proof.witness;
+            let at_least: (least <= n) = p.proof.proof.right.left;
+            Exists(p.witness, Exists(n, ⟨p.proof.proof.left, ⟨{ omega }, p.proof.proof.right.right⟩⟩))
+        },
+        Succ(more) => λ least fewer le from p => {
+            let t = p.witness;
+            let n = p.proof.witness;
+            Exists(t, Exists(n, ⟨p.proof.proof.left, match p.proof.proof.right {
+                Inl(reached) => {
+                    let at_least: (least <= n) = reached.left;
+                    Inl(⟨{ omega }, reached.right⟩)
+                },
+                Inr(called) => Inr(kernel.monotone(Running(t, from.io), λ (u: Running<M, W>) => site.Performs(writes, kernel, goal, more, least - n, u),
+                    λ (u: Running<M, W>) => site.Performs(writes, kernel, goal, more, fewer - n, u),
+                    λ u q => site.performs_less(writes, kernel, goal, more, least - n, fewer - n, { omega }, u, q), called)),
+            }⟩))
+        },
+    }
+}
+
+// One more system call allowed.
+theorem Site::performs_up<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, goal: Running<M, W> → Type, calls: Nat):
+    (least: Nat) → (from: Running<M, W>) → site.Performs(writes, kernel, goal, calls, least, from) →
+    site.Performs(writes, kernel, goal, Succ(calls), least, from) {
+    match calls {
+        Zero => λ least from p => Exists(p.witness, Exists(p.proof.witness, ⟨p.proof.proof.left, Inl(p.proof.proof.right)⟩)),
+        Succ(more) => λ least from p => {
+            let t = p.witness;
+            let n = p.proof.witness;
+            Exists(t, Exists(n, ⟨p.proof.proof.left, match p.proof.proof.right {
+                Inl(reached) => Inl(reached),
+                Inr(called) => Inr(kernel.monotone(Running(t, from.io), λ (u: Running<M, W>) => site.Performs(writes, kernel, goal, more, least - n, u),
+                    λ (u: Running<M, W>) => site.Performs(writes, kernel, goal, Succ(more), least - n, u),
+                    λ u q => site.performs_up(writes, kernel, goal, more, least - n, u, q), called)),
+            }⟩))
+        },
+    }
+}
+
+// More system calls allowed.
+theorem Site::performs_more<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, goal: Running<M, W> → Type, calls, least: Nat,
+    from: Running<M, W>, p: site.Performs(writes, kernel, goal, calls, least, from), extra: Nat):
+    site.Performs(writes, kernel, goal, calls + extra, least, from) {
+    match extra {
+        Zero => p,
+        Succ(e) => site.performs_up(writes, kernel, goal, calls + e, least, from, site.performs_more(writes, kernel, goal, calls, least, from, p, e)),
+    }
+}
+
+// A goal that follows from the goal.
+theorem Site::performs_weaken<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, goal, weaker: Running<M, W> → Type,
+    implies: (r: Running<M, W>) → goal(r) → weaker(r), calls: Nat):
+    (least: Nat) → (from: Running<M, W>) → site.Performs(writes, kernel, goal, calls, least, from) →
+    site.Performs(writes, kernel, weaker, calls, least, from) {
+    match calls {
+        Zero => λ least from p => Exists(p.witness, Exists(p.proof.witness, ⟨p.proof.proof.left, ⟨p.proof.proof.right.left,
+            implies(Running(p.witness, from.io), p.proof.proof.right.right)⟩⟩)),
+        Succ(more) => λ least from p => {
+            let t = p.witness;
+            let n = p.proof.witness;
+            Exists(t, Exists(n, ⟨p.proof.proof.left, match p.proof.proof.right {
+                Inl(reached) => Inl(⟨reached.left, implies(Running(t, from.io), reached.right)⟩),
+                Inr(called) => Inr(kernel.monotone(Running(t, from.io), λ (u: Running<M, W>) => site.Performs(writes, kernel, goal, more, least - n, u),
+                    λ (u: Running<M, W>) => site.Performs(writes, kernel, weaker, more, least - n, u),
+                    λ u q => site.performs_weaken(writes, kernel, goal, weaker, implies, more, least - n, u, q), called)),
+            }⟩))
+        },
+    }
+}
+
+// `k` machine steps before: they count.
+theorem Site::performs_prefix<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, goal: Running<M, W> → Type, calls: Nat):
+    (least, k: Nat) → (from: Running<M, W>) → (t: MachineState<M>) → MachineRuns(site.fetch, site.data, writes, k, from.state, t) →
+    site.Performs(writes, kernel, goal, calls, least, Running(t, from.io)) → site.Performs(writes, kernel, goal, calls, k + least, from) {
+    match calls {
+        Zero => λ least k from t first p => {
+            let n = p.proof.witness;
+            let at_least: (least <= n) = p.proof.proof.right.left;
+            Exists(p.witness, Exists(k + n, ⟨StarN::append(λ a b => MachineStep(site.fetch, site.data, writes, a, b), k, n, from.state, t, p.witness, first,
+                p.proof.proof.left), ⟨{ omega }, p.proof.proof.right.right⟩⟩))
+        },
+        Succ(more) => λ least k from t first p => {
+            let u = p.witness;
+            let n = p.proof.witness;
+            Exists(u, Exists(k + n, ⟨StarN::append(λ a b => MachineStep(site.fetch, site.data, writes, a, b), k, n, from.state, t, u, first,
+                p.proof.proof.left), match p.proof.proof.right {
+                Inl(reached) => {
+                    let at_least: (least <= n) = reached.left;
+                    Inl(⟨{ omega }, reached.right⟩)
+                },
+                Inr(called) => Inr(kernel.monotone(Running(u, from.io), λ (v: Running<M, W>) => site.Performs(writes, kernel, goal, more, least - n, v),
+                    λ (v: Running<M, W>) => site.Performs(writes, kernel, goal, more, (k + least) - (k + n), v),
+                    λ v q => site.performs_less(writes, kernel, goal, more, least - n, (k + least) - (k + n), { omega }, v, q), called)),
+            }⟩))
+        },
+    }
+}
+
+// Steps not counted before.
+theorem Site::performs_after<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, goal: Running<M, W> → Type, calls, least: Nat,
+    from: Running<M, W>, t: MachineState<M>, steps: MachineSteps(site.fetch, site.data, writes, from.state, t),
+    p: site.Performs(writes, kernel, goal, calls, least, Running(t, from.io))): site.Performs(writes, kernel, goal, calls, least, from) {
+    site.performs_less(writes, kernel, goal, calls, steps.witness + least, least, Nat::le_add_r(steps.witness, least), from,
+        site.performs_prefix(writes, kernel, goal, calls, least, steps.witness, from, t, steps.proof, p))
+}
+
+// A goal reached by machine steps alone, counted as none.
+theorem Site::performs_steps<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, goal: Running<M, W> → Type,
+    from: Running<M, W>, t: MachineState<M>, steps: MachineSteps(site.fetch, site.data, writes, from.state, t), reached: goal(Running(t, from.io))):
+    site.Performs(writes, kernel, goal, 0, 0, from) {
+    let n = steps.witness;
+    Exists(t, Exists(n, ⟨steps.proof, ⟨{ omega }, reached⟩⟩))
+}
+
+// The bind: from every goal state, a claim again. The system calls and the
+// lower bounds add.
+theorem Site::performs_bind<M, W>(self site: Site<M>, writes: ByteWrites<M>, kernel: Kernel<M, W>, goal, after: Running<M, W> → Type, calls2, least2: Nat,
+    then: (r: Running<M, W>) → goal(r) → site.Performs(writes, kernel, after, calls2, least2, r), calls: Nat):
+    (least: Nat) → (from: Running<M, W>) → site.Performs(writes, kernel, goal, calls, least, from) →
+    site.Performs(writes, kernel, after, calls2 + calls, least + least2, from) {
+    match calls {
+        Zero => λ least from p => {
+            let t = p.witness;
+            let n = p.proof.witness;
+            let at_least: (least <= n) = p.proof.proof.right.left;
+            site.performs_less(writes, kernel, after, calls2, n + least2, least + least2, { omega }, from,
+                site.performs_prefix(writes, kernel, after, calls2, least2, n, from, t, p.proof.proof.left,
+                    then(Running(t, from.io), p.proof.proof.right.right)))
+        },
+        Succ(more) => λ least from p => {
+            let t = p.witness;
+            let n = p.proof.witness;
+            match p.proof.proof.right {
+                Inl(reached) => {
+                    let at_least: (least <= n) = reached.left;
+                    site.performs_more(writes, kernel, after, calls2, least + least2, from,
+                        site.performs_less(writes, kernel, after, calls2, n + least2, least + least2, { omega }, from,
+                            site.performs_prefix(writes, kernel, after, calls2, least2, n, from, t, p.proof.proof.left, then(Running(t, from.io), reached.right))),
+                        Succ(more))
+                },
+                Inr(called) => Exists(t, Exists(n, ⟨p.proof.proof.left, Inr(kernel.monotone(Running(t, from.io),
+                    λ (u: Running<M, W>) => site.Performs(writes, kernel, goal, more, least - n, u),
+                    λ (u: Running<M, W>) => site.Performs(writes, kernel, after, calls2 + more, (least + least2) - n, u),
+                    λ u q => site.performs_less(writes, kernel, after, calls2 + more, (least - n) + least2, (least + least2) - n, { omega }, u,
+                        site.performs_bind(writes, kernel, goal, after, calls2, least2, then, more, least - n, u, q)), called))⟩)),
+            }
         },
     }
 }

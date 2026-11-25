@@ -829,45 +829,63 @@ theorem run_instrs_io(blocks: Blocks, instrs: List<Instr>): (c, after: Config) �
 // Calls that leave the world as they found it.
 fn Quiet(calls: Calls()) → Type { (f: Nat) → (args: List<Value>) → (heap: Heap) → (io: Io) → (a: Answer) → calls(f, args, heap, io) = Done(a) → a.io = io }
 
+theorem loop_pass_io(blocks: Blocks, calls: Calls(), inner: Body, parameters: List<Typed>, exit: Nat, next: List<Typed>,
+    passes: (rest: Nat) → (state: List<Value>) → (m: Heap) → (io: Io) → (l: Locals) → (after: Config) → pass_locals(parameters, state) = Some(l) →
+        inner.run(blocks, calls, rest, Config(l, m, io)) = Done(after) → after.io = io,
+    fuel: Nat, later: List<Value> → Heap → Io → Ran<Ended>,
+    each: (state: List<Value>) → (m: Heap) → (io: Io) → (end: Ended) → later(state, m, io) = Done(end) → end.io = io):
+    (state: List<Value>) → (m: Heap) → (io: Io) → (end: Ended) →
+    bytes_level::loop_pass(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, later, state, m, io) = Done(end) → end.io = io {
+    λ state m io end ran => {
+        let after_pass = λ (after: Config) => Ran::of(read_values(next, after.locals), after.io).then(λ (more: List<Value>) =>
+            match after.locals.words(1, exit).head_bit() {
+                False => later(more, after.memory, after.io),
+                True => Done(Ended(more, after.memory, after.io)),
+            });
+        let one = Ran::then_done<Locals, Ended>(Ran::of(pass_locals(parameters, state), io), λ (l: Locals) =>
+            inner.run(blocks, calls, fuel, Config(l, m, io)).then(after_pass), end, ran);
+        let l = one.witness;
+        let two = Ran::then_done<Config, Ended>(inner.run(blocks, calls, fuel, Config(l, m, io)), after_pass, end, one.proof.right);
+        let after = two.witness;
+        let three = Ran::then_done<List<Value>, Ended>(Ran::of(read_values(next, after.locals), after.io), λ (more: List<Value>) =>
+            match after.locals.words(1, exit).head_bit() {
+                False => later(more, after.memory, after.io),
+                True => Done(Ended(more, after.memory, after.io)),
+            }, end, two.proof.right);
+        let more = three.witness;
+        let pass_io: (after.io = io) = passes(fuel, state, m, io, l, after, Ran::of_done<Locals>(pass_locals(parameters, state), io, l, one.proof.left),
+            two.proof.left);
+        trans((match after.locals.words(1, exit).head_bit() as λ b => (match b {
+                False => later(more, after.memory, after.io),
+                True => Done(Ended(more, after.memory, after.io)),
+            }) = Done(end) → end.io = after.io {
+            True => λ e => cong_fn<Ended, Io>(λ x => x.io, sym(Ran::done_inj<Ended>(Ended(more, after.memory, after.io), end, e))),
+            False => λ e => each(more, after.memory, after.io, end, e),
+        })(three.proof.right), pass_io)
+    }
+}
+
+theorem loop_later_io(blocks: Blocks, calls: Calls(), inner: Body, parameters: List<Typed>, exit: Nat, next: List<Typed>,
+    passes: (rest: Nat) → (state: List<Value>) → (m: Heap) → (io: Io) → (l: Locals) → (after: Config) → pass_locals(parameters, state) = Some(l) →
+        inner.run(blocks, calls, rest, Config(l, m, io)) = Done(after) → after.io = io,
+    fuel: Nat):
+    (state: List<Value>) → (m: Heap) → (io: Io) → (end: Ended) →
+    bytes_level::loop_later(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, state, m, io) = Done(end) → end.io = io {
+    match fuel {
+        Zero => λ state m io end never => absurd(never),
+        Succ(rest) => loop_pass_io(blocks, calls, inner, parameters, exit, next, passes, rest,
+            bytes_level::loop_later(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, rest), loop_later_io(blocks, calls, inner, parameters, exit, next, passes, rest)),
+    }
+}
+
 theorem loop_run_io(blocks: Blocks, calls: Calls(), inner: Body, parameters: List<Typed>, exit: Nat, next: List<Typed>,
     passes: (rest: Nat) → (state: List<Value>) → (m: Heap) → (io: Io) → (l: Locals) → (after: Config) → pass_locals(parameters, state) = Some(l) →
         inner.run(blocks, calls, rest, Config(l, m, io)) = Done(after) → after.io = io,
-    fuel: Nat): (state: List<Value>) → (m: Heap) → (io: Io) → (end: Ended) →
+    fuel: Nat):
+    (state: List<Value>) → (m: Heap) → (io: Io) → (end: Ended) →
     bytes_level::loop_run(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, state, m, io) = Done(end) → end.io = io {
-    match fuel {
-        Zero => λ state m io end never => absurd(never),
-        Succ(rest) => λ state m io end ran => {
-            let step = λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass);
-            let one = Ran::then_done<Locals, Ended>(Ran::of(pass_locals(parameters, state), io), λ (l: Locals) =>
-                step(rest, Config(l, m, io)).then(λ (after: Config) => Ran::of(read_values(next, after.locals), after.io).then(λ (later: List<Value>) =>
-                    match after.locals.words(1, exit).head_bit() {
-                        False => bytes_level::loop_run(step, parameters, exit, next, rest, later, after.memory, after.io),
-                        True => Done(Ended(later, after.memory, after.io)),
-                    })), end, ran);
-            let l = one.witness;
-            let two = Ran::then_done<Config, Ended>(inner.run(blocks, calls, rest, Config(l, m, io)), λ (after: Config) =>
-                Ran::of(read_values(next, after.locals), after.io).then(λ (later: List<Value>) => match after.locals.words(1, exit).head_bit() {
-                    False => bytes_level::loop_run(step, parameters, exit, next, rest, later, after.memory, after.io),
-                    True => Done(Ended(later, after.memory, after.io)),
-                }), end, one.proof.right);
-            let after = two.witness;
-            let three = Ran::then_done<List<Value>, Ended>(Ran::of(read_values(next, after.locals), after.io), λ (later: List<Value>) =>
-                match after.locals.words(1, exit).head_bit() {
-                    False => bytes_level::loop_run(step, parameters, exit, next, rest, later, after.memory, after.io),
-                    True => Done(Ended(later, after.memory, after.io)),
-                }, end, two.proof.right);
-            let later = three.witness;
-            let pass_io: (after.io = io) = passes(rest, state, m, io, l, after, Ran::of_done<Locals>(pass_locals(parameters, state), io, l, one.proof.left),
-                two.proof.left);
-            trans((match after.locals.words(1, exit).head_bit() as λ b => (match b {
-                    False => bytes_level::loop_run(step, parameters, exit, next, rest, later, after.memory, after.io),
-                    True => Done(Ended(later, after.memory, after.io)),
-                }) = Done(end) → end.io = after.io {
-                True => λ e => cong_fn<Ended, Io>(λ x => x.io, sym(Ran::done_inj<Ended>(Ended(later, after.memory, after.io), end, e))),
-                False => λ e => loop_run_io(blocks, calls, inner, parameters, exit, next, passes, rest, later, after.memory, after.io, end, e),
-            })(three.proof.right), pass_io)
-        },
-    }
+    loop_pass_io(blocks, calls, inner, parameters, exit, next, passes, fuel,
+        bytes_level::loop_later(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel), loop_later_io(blocks, calls, inner, parameters, exit, next, passes, fuel))
 }
 
 theorem Body::run_io(self body: Body, blocks: Blocks, calls: Calls(), quiet: Quiet(calls), fuel: Nat): (used, used2: List<Nat>) → (c, after: Config) →
@@ -1128,9 +1146,10 @@ theorem program_meets_done<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.da
         let got = returns(s, here, resident, i, rsp, room, ⟨⟨passed, low⟩, ⟨high, inj⟩⟩, ret, saved);
         let post = got.proof.right.right.right.right;
         let world: (a.io = io) = program_quiet(p.routines, blocks, scoped, n, f, args, heap, io, a, ran);
-        Exists(0, Exists(got.witness, ⟨got.proof.left, ⟨⟨got.proof.right.left, ⟨got.proof.right.right.left, got.proof.right.right.right.left⟩⟩,
-            ⟨⟨answered_args(lower_values(spans, a.words), got.witness.gprs, post.left), post.right.left⟩,
-             ⟨⟨post.right.right.left, post.right.right.right⟩, sym(world)⟩⟩⟩⟩))
+        Exists(0, site.performs_steps(stack.writes, site.linux_kernel(stack), λ r => site.Returned(stack, spans, s, i, ret, a, r), Running(s, io),
+            got.witness, got.proof.left, ⟨⟨got.proof.right.left, ⟨got.proof.right.right.left, got.proof.right.right.right.left⟩⟩,
+                ⟨⟨answered_args(lower_values(spans, a.words), got.witness.gprs, post.left), post.right.left⟩,
+                 ⟨⟨post.right.right.left, post.right.right.right⟩, sym(world)⟩⟩⟩))
     }
 }
 
@@ -1199,52 +1218,71 @@ fn NoExit(calls: Calls()) → Type {
     (f: Nat) → (args: List<Value>) → (heap: Heap) → (io: Io) → (status: BitVec(64)) → (o: Io) → calls(f, args, heap, io) = Exited(status, o) → False
 }
 
+theorem loop_pass_no_exit(blocks: Blocks, calls: Calls(), inner: Body, parameters: List<Typed>, exit: Nat, next: List<Typed>,
+    passes: (rest: Nat) → (state: List<Value>) → (m: Heap) → (io: Io) → (l: Locals) → (status: BitVec(64)) → (o: Io) →
+        pass_locals(parameters, state) = Some(l) → inner.run(blocks, calls, rest, Config(l, m, io)) = Exited(status, o) → False,
+    fuel: Nat, later: List<Value> → Heap → Io → Ran<Ended>,
+    each: (state: List<Value>) → (m: Heap) → (io: Io) → (status: BitVec(64)) → (o: Io) → later(state, m, io) = Exited(status, o) → False):
+    (state: List<Value>) → (m: Heap) → (io: Io) → (status: BitVec(64)) → (o: Io) →
+    bytes_level::loop_pass(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, later, state, m, io) = Exited(status, o) → False {
+    λ state m io status o ran => {
+        let after_pass = λ (after: Config) => Ran::of(read_values(next, after.locals), after.io).then(λ (more: List<Value>) =>
+            match after.locals.words(1, exit).head_bit() {
+                False => later(more, after.memory, after.io),
+                True => Done(Ended(more, after.memory, after.io)),
+            });
+        match Ran::then_exited<Locals, Ended>(Ran::of(pass_locals(parameters, state), io), λ (l: Locals) =>
+            inner.run(blocks, calls, fuel, Config(l, m, io)).then(after_pass), status, o, ran) {
+            Inl(bad) => Ran::of_exited<Locals>(pass_locals(parameters, state), io, status, o, bad),
+            Inr(one) => {
+                let l = one.witness;
+                let bound = Ran::of_done<Locals>(pass_locals(parameters, state), io, l, one.proof.left);
+                match Ran::then_exited<Config, Ended>(inner.run(blocks, calls, fuel, Config(l, m, io)), after_pass, status, o, one.proof.right) {
+                    Inl(bad) => passes(fuel, state, m, io, l, status, o, bound, bad),
+                    Inr(two) => {
+                        let after = two.witness;
+                        match Ran::then_exited<List<Value>, Ended>(Ran::of(read_values(next, after.locals), after.io), λ (more: List<Value>) =>
+                            match after.locals.words(1, exit).head_bit() {
+                                False => later(more, after.memory, after.io),
+                                True => Done(Ended(more, after.memory, after.io)),
+                            }, status, o, two.proof.right) {
+                            Inl(bad) => Ran::of_exited<List<Value>>(read_values(next, after.locals), after.io, status, o, bad),
+                            Inr(three) => (match after.locals.words(1, exit).head_bit() as λ b => (match b {
+                                    False => later(three.witness, after.memory, after.io),
+                                    True => Done(Ended(three.witness, after.memory, after.io)),
+                                }) = Exited(status, o) → False {
+                                True => λ never => absurd(never),
+                                False => λ e => each(three.witness, after.memory, after.io, status, o, e),
+                            })(three.proof.right),
+                        }
+                    },
+                }
+            },
+        }
+    }
+}
+
+theorem loop_later_no_exit(blocks: Blocks, calls: Calls(), inner: Body, parameters: List<Typed>, exit: Nat, next: List<Typed>,
+    passes: (rest: Nat) → (state: List<Value>) → (m: Heap) → (io: Io) → (l: Locals) → (status: BitVec(64)) → (o: Io) →
+        pass_locals(parameters, state) = Some(l) → inner.run(blocks, calls, rest, Config(l, m, io)) = Exited(status, o) → False,
+    fuel: Nat):
+    (state: List<Value>) → (m: Heap) → (io: Io) → (status: BitVec(64)) → (o: Io) →
+    bytes_level::loop_later(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, state, m, io) = Exited(status, o) → False {
+    match fuel {
+        Zero => λ state m io status o never => absurd(never),
+        Succ(rest) => loop_pass_no_exit(blocks, calls, inner, parameters, exit, next, passes, rest,
+            bytes_level::loop_later(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, rest), loop_later_no_exit(blocks, calls, inner, parameters, exit, next, passes, rest)),
+    }
+}
+
 theorem loop_run_no_exit(blocks: Blocks, calls: Calls(), inner: Body, parameters: List<Typed>, exit: Nat, next: List<Typed>,
     passes: (rest: Nat) → (state: List<Value>) → (m: Heap) → (io: Io) → (l: Locals) → (status: BitVec(64)) → (o: Io) →
         pass_locals(parameters, state) = Some(l) → inner.run(blocks, calls, rest, Config(l, m, io)) = Exited(status, o) → False,
-    fuel: Nat): (state: List<Value>) → (m: Heap) → (io: Io) → (status: BitVec(64)) → (o: Io) →
-    bytes_level::loop_run(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, state, m, io) = Exited(status, o) →
-    False {
-    match fuel {
-        Zero => λ state m io status o never => absurd(never),
-        Succ(rest) => λ state m io status o ran => {
-            let step = λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass);
-            let after_pass = λ (after: Config) => Ran::of(read_values(next, after.locals), after.io).then(λ (later: List<Value>) =>
-                match after.locals.words(1, exit).head_bit() {
-                    False => bytes_level::loop_run(step, parameters, exit, next, rest, later, after.memory, after.io),
-                    True => Done(Ended(later, after.memory, after.io)),
-                });
-            match Ran::then_exited<Locals, Ended>(Ran::of(pass_locals(parameters, state), io), λ (l: Locals) =>
-                step(rest, Config(l, m, io)).then(after_pass), status, o, ran) {
-                Inl(bad) => Ran::of_exited<Locals>(pass_locals(parameters, state), io, status, o, bad),
-                Inr(one) => {
-                    let l = one.witness;
-                    let bound = Ran::of_done<Locals>(pass_locals(parameters, state), io, l, one.proof.left);
-                    match Ran::then_exited<Config, Ended>(inner.run(blocks, calls, rest, Config(l, m, io)), after_pass, status, o, one.proof.right) {
-                        Inl(bad) => passes(rest, state, m, io, l, status, o, bound, bad),
-                        Inr(two) => {
-                            let after = two.witness;
-                            match Ran::then_exited<List<Value>, Ended>(Ran::of(read_values(next, after.locals), after.io), λ (later: List<Value>) =>
-                                match after.locals.words(1, exit).head_bit() {
-                                    False => bytes_level::loop_run(step, parameters, exit, next, rest, later, after.memory, after.io),
-                                    True => Done(Ended(later, after.memory, after.io)),
-                                }, status, o, two.proof.right) {
-                                Inl(bad) => Ran::of_exited<List<Value>>(read_values(next, after.locals), after.io, status, o, bad),
-                                Inr(three) => (match after.locals.words(1, exit).head_bit() as λ b => (match b {
-                                        False => bytes_level::loop_run(step, parameters, exit, next, rest, three.witness, after.memory, after.io),
-                                        True => Done(Ended(three.witness, after.memory, after.io)),
-                                    }) = Exited(status, o) → False {
-                                    True => λ never => absurd(never),
-                                    False => λ e => loop_run_no_exit(blocks, calls, inner, parameters, exit, next, passes, rest, three.witness, after.memory,
-                                        after.io, status, o, e),
-                                })(three.proof.right),
-                            }
-                        },
-                    }
-                },
-            }
-        },
-    }
+    fuel: Nat):
+    (state: List<Value>) → (m: Heap) → (io: Io) → (status: BitVec(64)) → (o: Io) →
+    bytes_level::loop_run(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, state, m, io) = Exited(status, o) → False {
+    loop_pass_no_exit(blocks, calls, inner, parameters, exit, next, passes, fuel,
+        bytes_level::loop_later(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel), loop_later_no_exit(blocks, calls, inner, parameters, exit, next, passes, fuel))
 }
 
 theorem Body::run_no_exit(self body: Body, blocks: Blocks, calls: Calls(), none: NoExit(calls), fuel: Nat): (used, used2: List<Nat>) → (c: Config) →

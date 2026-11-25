@@ -835,77 +835,103 @@ fn PassFacts(Pass: Valuation() → Heap → Heap → Type, spans: Spans, paramet
         ((words_of(v, typed_ids(next)) = lower_values(spans, later)) ∧ (v(1, exit).head_bit() = after.locals.words(1, exit).head_bit())))
 }
 
-// One pass and what follows it.
-theorem loop_holds_step(blocks: Blocks, calls: Calls(), inner: Body, spans: Spans, Pass: Valuation() → Heap → Heap → Type, parameters: List<Typed>,
-    exit: Nat, next: List<Typed>, rest: Nat, state: List<Value>, m: Heap, end: Ended, after: Config, later: List<Value>, v: Valuation(),
+// One pass and what follows it: `n` passes left after it.
+theorem loop_holds_step(spans: Spans, Pass: Valuation() → Heap → Heap → Type, parameters: List<Typed>,
+    exit: Nat, next: List<Typed>, n: Nat, later: List<Value> → Heap → Io → Ran<Ended>, state: List<Value>, m: Heap, end: Ended, after: Config,
+    more: List<Value>, v: Valuation(),
     params: words_of(v, typed_ids(parameters)) = lower_values(spans, state), passed: Pass(v, m, after.memory),
-    nexts: words_of(v, typed_ids(next)) = lower_values(spans, later), bit: v(1, exit).head_bit() = after.locals.words(1, exit).head_bit(),
-    ih: (state: List<Value>) → (m: Heap) → (io: Io) → (end: Ended) →
-        loop_run(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, rest, state, m, io) = Done(end) →
-        PassesHold(Pass, parameters, exit, next, rest, lower_values(spans, state), m, lower_values(spans, end.state), end.memory),
+    nexts: words_of(v, typed_ids(next)) = lower_values(spans, more), bit: v(1, exit).head_bit() = after.locals.words(1, exit).head_bit(),
+    ih: (state: List<Value>) → (m: Heap) → (io: Io) → (end: Ended) → later(state, m, io) = Done(end) →
+        PassesHold(Pass, parameters, exit, next, n, lower_values(spans, state), m, lower_values(spans, end.state), end.memory),
     last: (match after.locals.words(1, exit).head_bit() {
-        False => loop_run(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, rest, later, after.memory, after.io),
-        True => Done(Ended(later, after.memory, after.io)),
+        False => later(more, after.memory, after.io),
+        True => Done(Ended(more, after.memory, after.io)),
     }) = Done(end)):
-    PassesHold(Pass, parameters, exit, next, Succ(rest), lower_values(spans, state), m, lower_values(spans, end.state), end.memory) {
+    PassesHold(Pass, parameters, exit, next, Succ(n), lower_values(spans, state), m, lower_values(spans, end.state), end.memory) {
     let P = λ (b: Bool) => match b {
         True => (lower_values(spans, end.state) = words_of(v, typed_ids(next))) ∧ (end.memory = after.memory),
-        False => PassesHold(Pass, parameters, exit, next, rest, words_of(v, typed_ids(next)), after.memory, lower_values(spans, end.state), end.memory),
+        False => PassesHold(Pass, parameters, exit, next, n, words_of(v, typed_ids(next)), after.memory, lower_values(spans, end.state), end.memory),
     };
     Exists(v, ⟨params, Exists(after.memory, ⟨passed, j(sym(bit), λ b _ => P(b),
         (match after.locals.words(1, exit).head_bit() as λ b => (match b {
-                False => loop_run(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, rest, later, after.memory, after.io),
-                True => Done(Ended(later, after.memory, after.io)),
+                False => later(more, after.memory, after.io),
+                True => Done(Ended(more, after.memory, after.io)),
             }) = Done(end) → P(b) {
             True => λ e => {
-                let s: (Ended(later, after.memory, after.io) = end) = Ran::done_inj<Ended>(Ended(later, after.memory, after.io), end, e);
+                let s: (Ended(more, after.memory, after.io) = end) = Ran::done_inj<Ended>(Ended(more, after.memory, after.io), end, e);
                 ⟨trans(cong_fn<Ended, List<BitVec(64)>>(λ x => lower_values(spans, x.state), sym(s)), sym(nexts)),
                  cong_fn<Ended, Heap>(λ x => x.memory, sym(s))⟩
             },
-            False => λ e => j(sym(nexts), λ x _ => PassesHold(Pass, parameters, exit, next, rest, x, after.memory, lower_values(spans, end.state), end.memory),
-                ih(later, after.memory, after.io, end, e)),
+            False => λ e => j(sym(nexts), λ x _ => PassesHold(Pass, parameters, exit, next, n, x, after.memory, lower_values(spans, end.state), end.memory),
+                ih(more, after.memory, after.io, end, e)),
         })(last))⟩)⟩)
 }
 
-// The passes, by induction on the fuel: each pass's facts give the loop's.
-theorem loop_holds_of(blocks: Blocks, calls: Calls(), inner: Body, spans: Spans, Pass: Valuation() → Heap → Heap → Type, parameters: List<Typed>, exit: Nat,
-    next: List<Typed>,
-    passes: (rest: Nat) → (state: List<Value>) → (m: Heap) → (io: Io) → (l: Locals) → (after: Config) → (later: List<Value>) →
+// Each pass's facts, at whatever fuel it ran.
+fn PassesFacts(blocks: Blocks, calls: Calls(), inner: Body, spans: Spans, Pass: Valuation() → Heap → Heap → Type, parameters: List<Typed>, exit: Nat,
+    next: List<Typed>) → Type {
+    (rest: Nat) → (state: List<Value>) → (m: Heap) → (io: Io) → (l: Locals) → (after: Config) → (more: List<Value>) →
         pass_locals(parameters, state) = Some(l) → inner.run(blocks, calls, rest, Config(l, m, io)) = Done(after) →
-        read_values(next, after.locals) = Some(later) → PassFacts(Pass, spans, parameters, exit, next, state, m, after, later),
-    fuel: Nat): (state: List<Value>) → (m: Heap) → (io: Io) → (end: Ended) →
-    loop_run(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, state, m, io) = Done(end) →
+        read_values(next, after.locals) = Some(more) → PassFacts(Pass, spans, parameters, exit, next, state, m, after, more)
+}
+
+// A pass that ran, then `later` with `n` passes left.
+theorem loop_pass_holds(blocks: Blocks, calls: Calls(), inner: Body, spans: Spans, Pass: Valuation() → Heap → Heap → Type, parameters: List<Typed>,
+    exit: Nat, next: List<Typed>, passes: PassesFacts(blocks, calls, inner, spans, Pass, parameters, exit, next), fuel, n: Nat,
+    later: List<Value> → Heap → Io → Ran<Ended>,
+    ih: (state: List<Value>) → (m: Heap) → (io: Io) → (end: Ended) → later(state, m, io) = Done(end) →
+        PassesHold(Pass, parameters, exit, next, n, lower_values(spans, state), m, lower_values(spans, end.state), end.memory)):
+    (state: List<Value>) → (m: Heap) → (io: Io) → (end: Ended) →
+    loop_pass(λ (k: Nat) (pass: Config) => inner.run(blocks, calls, k, pass), parameters, exit, next, fuel, later, state, m, io) = Done(end) →
+    PassesHold(Pass, parameters, exit, next, Succ(n), lower_values(spans, state), m, lower_values(spans, end.state), end.memory) {
+    λ state m io end ran => {
+        let after_pass = λ (after: Config) => Ran::of(read_values(next, after.locals), after.io).then(λ (more: List<Value>) =>
+            match after.locals.words(1, exit).head_bit() {
+                False => later(more, after.memory, after.io),
+                True => Done(Ended(more, after.memory, after.io)),
+            });
+        let one = Ran::then_done<Locals, Ended>(Ran::of(pass_locals(parameters, state), io), λ (l: Locals) =>
+            inner.run(blocks, calls, fuel, Config(l, m, io)).then(after_pass), end, ran);
+        let l = one.witness;
+        let two = Ran::then_done<Config, Ended>(inner.run(blocks, calls, fuel, Config(l, m, io)), after_pass, end, one.proof.right);
+        let after = two.witness;
+        let three = Ran::then_done<List<Value>, Ended>(Ran::of(read_values(next, after.locals), after.io), λ (more: List<Value>) =>
+            match after.locals.words(1, exit).head_bit() {
+                False => later(more, after.memory, after.io),
+                True => Done(Ended(more, after.memory, after.io)),
+            }, end, two.proof.right);
+        let more = three.witness;
+        let facts = passes(fuel, state, m, io, l, after, more, Ran::of_done<Locals>(pass_locals(parameters, state), io, l, one.proof.left), two.proof.left,
+            Ran::of_done<List<Value>>(read_values(next, after.locals), after.io, more, three.proof.left));
+        loop_holds_step(spans, Pass, parameters, exit, next, n, later, state, m, end, after, more, facts.witness,
+            facts.proof.left.left, facts.proof.left.right, facts.proof.right.left, facts.proof.right.right, ih, three.proof.right)
+    }
+}
+
+// The passes after the first, by induction on the fuel: at most `fuel`.
+theorem loop_later_holds(blocks: Blocks, calls: Calls(), inner: Body, spans: Spans, Pass: Valuation() → Heap → Heap → Type, parameters: List<Typed>,
+    exit: Nat, next: List<Typed>, passes: PassesFacts(blocks, calls, inner, spans, Pass, parameters, exit, next), fuel: Nat):
+    (state: List<Value>) → (m: Heap) → (io: Io) → (end: Ended) →
+    loop_later(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, state, m, io) = Done(end) →
     PassesHold(Pass, parameters, exit, next, fuel, lower_values(spans, state), m, lower_values(spans, end.state), end.memory) {
     match fuel {
         Zero => λ state m io end never => absurd(never),
-        Succ(rest) => λ state m io end ran => {
-            let step = λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass);
-            let one = Ran::then_done<Locals, Ended>(Ran::of(pass_locals(parameters, state), io), λ (l: Locals) =>
-                step(rest, Config(l, m, io)).then(λ (after: Config) => Ran::of(read_values(next, after.locals), after.io).then(λ (later: List<Value>) =>
-                    match after.locals.words(1, exit).head_bit() {
-                        False => loop_run(step, parameters, exit, next, rest, later, after.memory, after.io),
-                        True => Done(Ended(later, after.memory, after.io)),
-                    })), end, ran);
-            let l = one.witness;
-            let two = Ran::then_done<Config, Ended>(inner.run(blocks, calls, rest, Config(l, m, io)), λ (after: Config) =>
-                Ran::of(read_values(next, after.locals), after.io).then(λ (later: List<Value>) => match after.locals.words(1, exit).head_bit() {
-                    False => loop_run(step, parameters, exit, next, rest, later, after.memory, after.io),
-                    True => Done(Ended(later, after.memory, after.io)),
-                }), end, one.proof.right);
-            let after = two.witness;
-            let three = Ran::then_done<List<Value>, Ended>(Ran::of(read_values(next, after.locals), after.io), λ (later: List<Value>) =>
-                match after.locals.words(1, exit).head_bit() {
-                    False => loop_run(step, parameters, exit, next, rest, later, after.memory, after.io),
-                    True => Done(Ended(later, after.memory, after.io)),
-                }, end, two.proof.right);
-            let later = three.witness;
-            let facts = passes(rest, state, m, io, l, after, later, Ran::of_done<Locals>(pass_locals(parameters, state), io, l, one.proof.left), two.proof.left,
-                Ran::of_done<List<Value>>(read_values(next, after.locals), after.io, later, three.proof.left));
-            loop_holds_step(blocks, calls, inner, spans, Pass, parameters, exit, next, rest, state, m, end, after, later, facts.witness,
-                facts.proof.left.left, facts.proof.left.right, facts.proof.right.left, facts.proof.right.right,
-                loop_holds_of(blocks, calls, inner, spans, Pass, parameters, exit, next, passes, rest), three.proof.right)
-        },
+        Succ(rest) => loop_pass_holds(blocks, calls, inner, spans, Pass, parameters, exit, next, passes, rest, rest,
+            loop_later(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, rest),
+            loop_later_holds(blocks, calls, inner, spans, Pass, parameters, exit, next, passes, rest)),
     }
+}
+
+// The passes: each pass's facts give the loop's, at most one more pass
+// than the fuel.
+theorem loop_holds_of(blocks: Blocks, calls: Calls(), inner: Body, spans: Spans, Pass: Valuation() → Heap → Heap → Type, parameters: List<Typed>, exit: Nat,
+    next: List<Typed>, passes: PassesFacts(blocks, calls, inner, spans, Pass, parameters, exit, next), fuel: Nat):
+    (state: List<Value>) → (m: Heap) → (io: Io) → (end: Ended) →
+    loop_run(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, state, m, io) = Done(end) →
+    PassesHold(Pass, parameters, exit, next, Succ(fuel), lower_values(spans, state), m, lower_values(spans, end.state), end.memory) {
+    loop_pass_holds(blocks, calls, inner, spans, Pass, parameters, exit, next, passes, fuel, fuel,
+        loop_later(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel),
+        loop_later_holds(blocks, calls, inner, spans, Pass, parameters, exit, next, passes, fuel))
 }
 
 theorem empty_scoped(): Scoped(Locals::empty(), [], []) { ⟨trivial, λ id loc never => absurd(never)⟩ }
@@ -1134,10 +1160,10 @@ theorem loop_holds_close(blocks: Blocks, calls: Calls(), fuel: Nat, sigs: Nat �
     let outs = read_values_lower(spans, values, after.locals, bound, after_agrees, outputs, bind_kinds_has(outputs, kinds, bound, ck.outs), r.end.state,
         outs_read);
     let heap: (r.end.memory = after.memory) = sym(cong_fn<Config, Heap>(λ y => y.memory, r.lands));
-    Exists(fuel, j(heap, λ h _ => PassesHold(Pass, parameters, exit, next, fuel, words_of(values, typed_ids(inputs)), c.memory,
+    Exists(Succ(fuel), j(heap, λ h _ => PassesHold(Pass, parameters, exit, next, Succ(fuel), words_of(values, typed_ids(inputs)), c.memory,
             words_of(values, typed_ids(outputs)), h),
-        j(outs, λ x _ => PassesHold(Pass, parameters, exit, next, fuel, words_of(values, typed_ids(inputs)), c.memory, x, r.end.memory),
-            j(ins, λ x _ => PassesHold(Pass, parameters, exit, next, fuel, x, c.memory, lower_values(spans, r.end.state), r.end.memory), held))))
+        j(outs, λ x _ => PassesHold(Pass, parameters, exit, next, Succ(fuel), words_of(values, typed_ids(inputs)), c.memory, x, r.end.memory),
+            j(ins, λ x _ => PassesHold(Pass, parameters, exit, next, Succ(fuel), x, c.memory, lower_values(spans, r.end.state), r.end.memory), held))))
 }
 
 // A checked region's run, at a valuation that shows every id the scope has

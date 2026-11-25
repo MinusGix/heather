@@ -22,9 +22,11 @@
 //   site fact.
 // - Regions (`Body`): a leaf of nodes, a sequence, a branch on a one-bit
 //   word, a call, a loop, a system call (`Sys`) and an exit. A loop is a
-//   plain loop: no bound, its passes spent from the fuel. Calls spend fuel
-//   too, so routines may call each other and themselves freely: a program
-//   is tied by fuel. A system call asks the world a command built from words
+//   plain loop: no bound; its first pass runs at the loop's fuel and each
+//   turn back for another spends one. A call spends one too, so routines
+//   may call each other and themselves freely: a program is tied by fuel,
+//   and fuel is spent exactly where the machine takes a counted step (the
+//   turn's jump, the CALL; §17.7). A system call asks the world a command built from words
 //   and the bytes at a window, and its answer lands in a word and the heap;
 //   `read` and `write` are built, the others are a table to fill.
 // - One meaning, a family over fuel: `run(p, blocks, n, f, args, heap, io)`
@@ -263,18 +265,35 @@ record Ended { state: List<Value>, memory: Heap, io: Io }
 
 fn pass_locals(parameters: List<Typed>, state: List<Value>) → Option<Locals> { bind_values(parameters, state, Locals::empty()) }
 
-// The loop's passes from `state`, each a step at one fuel less.
-fn loop_run(step: Nat → Config → Ran<Config>, parameters: List<Typed>, exit: Nat, next: List<Typed>, fuel: Nat) →
+// One pass from `state` at `fuel`: the state bound to the parameters, the
+// body, the next state read; the exit bit set ends the loop there, and
+// otherwise `later` runs from the next state.
+fn loop_pass(step: Nat → Config → Ran<Config>, parameters: List<Typed>, exit: Nat, next: List<Typed>, fuel: Nat,
+    later: List<Value> → Heap → Io → Ran<Ended>) → List<Value> → Heap → Io → Ran<Ended> {
+    λ state m io => Ran::of(pass_locals(parameters, state), io).then(λ (l: Locals) =>
+        step(fuel, Config(l, m, io)).then(λ (after: Config) => Ran::of(read_values(next, after.locals), after.io).then(λ (more: List<Value>) =>
+            match after.locals.words(1, exit).head_bit() {
+                False => later(more, after.memory, after.io),
+                True => Done(Ended(more, after.memory, after.io)),
+            })))
+}
+
+// The passes after a first, at `fuel`: each turn back to the head spends
+// one, and the pass after it runs at the rest (docs/language/ownership-design.md
+// §17.7: fuel is spent where the machine takes a step, here the turn's jump).
+fn loop_later(step: Nat → Config → Ran<Config>, parameters: List<Typed>, exit: Nat, next: List<Typed>, fuel: Nat) →
     List<Value> → Heap → Io → Ran<Ended> {
     match fuel {
         Zero => λ state m io => Going(io),
-        Succ(rest) => λ state m io => Ran::of(pass_locals(parameters, state), io).then(λ (l: Locals) =>
-            step(rest, Config(l, m, io)).then(λ (after: Config) => Ran::of(read_values(next, after.locals), after.io).then(λ (later: List<Value>) =>
-                match after.locals.words(1, exit).head_bit() {
-                    False => loop_run(step, parameters, exit, next, rest, later, after.memory, after.io),
-                    True => Done(Ended(later, after.memory, after.io)),
-                }))),
+        Succ(rest) => loop_pass(step, parameters, exit, next, rest, loop_later(step, parameters, exit, next, rest)),
     }
+}
+
+// The loop's passes from `state`: the first at the loop's own fuel, each
+// later one after a turn that spends one.
+fn loop_run(step: Nat → Config → Ran<Config>, parameters: List<Typed>, exit: Nat, next: List<Typed>, fuel: Nat) →
+    List<Value> → Heap → Io → Ran<Ended> {
+    loop_pass(step, parameters, exit, next, fuel, loop_later(step, parameters, exit, next, fuel))
 }
 
 fn Body::run(self body: Body, blocks: Blocks, calls: Calls(), fuel: Nat, c: Config) → Ran<Config> {

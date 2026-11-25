@@ -343,15 +343,20 @@ fn count(n, from: Nat) → Ran<Answer> { run(Program([countdown()]), blocks(), n
 
 theorem countdown_valid(): Program([countdown()]).valid() = True { refl }
 
-// Three passes need the call's fuel and three more: at four it is going,
-theorem countdown_going(): going(count(3, 3)) = True { refl }
+// Three passes need the call's fuel and one for each turn back, two: at
+// two it is going,
+theorem countdown_going(): going(count(2, 3)) = True { refl }
 
-// and at four it is done with zero.
-theorem countdown_done(): answer_word(count(4, 3), 0) = Some(0) { refl }
+// and at three it is done with zero.
+theorem countdown_done(): answer_word(count(3, 3), 0) = Some(0) { refl }
+
+// The first pass runs at the loop's own fuel: one pass needs only the
+// call's.
+theorem countdown_one_pass(): answer_word(count(1, 1), 0) = Some(0) { refl }
 
 // Done stays done with more fuel: the theorem, at this program.
-theorem countdown_settled(more: Nat): count(4, 3).Below(count(4 + more, 3)) {
-    run_settled(Program([countdown()]), blocks(), 4, 0, [word(3)], memory(), io(), more)
+theorem countdown_settled(more: Nat): count(3, 3).Below(count(3 + more, 3)) {
+    run_settled(Program([countdown()]), blocks(), 3, 0, [word(3)], memory(), io(), more)
 }
 
 // ---------------------------------------------------------------------------
