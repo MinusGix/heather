@@ -121,3 +121,69 @@ theorem cloned_checked(): check(cloned(), [0, 1, 1]) = Some(Nil) { refl }
 theorem cloned_same_buffer_refused(): check(cloned(), [0, 0, 0]) = None { refl }
 
 theorem shared_parameters_refused(): check(Prog(2, 0, [Get(0, 1, Lit(0))]), [0, 0]) = None { refl }
+
+// ---------------------------------------------------------------------------
+// A longer program, for what the kernel pays: six rounds of a view of one
+// object, a set apart from it at literals, a set of the other object, a get,
+// a read of the view, and a set at the word `j`, which every live view of
+// the first object defers as a residual (1 + 2 + … + 6 of them).
+
+fn long() → Prog {
+    Prog(2, 2, [
+        View(0, 0, Lit(0), Lit(2)),
+        Set(2, 0, Lit(5), Lit(1)),
+        Set(3, 1, Var(1), Lit(2)),
+        Get(2, 2, Lit(0)),
+        Read(3, 0, Lit(1)),
+        Set(4, 2, Var(1), Lit(3)),
+        View(1, 4, Lit(0), Lit(2)),
+        Set(5, 4, Lit(5), Lit(1)),
+        Set(6, 3, Var(1), Lit(2)),
+        Get(4, 5, Lit(0)),
+        Read(5, 1, Lit(1)),
+        Set(7, 5, Var(1), Lit(3)),
+        View(2, 7, Lit(0), Lit(2)),
+        Set(8, 7, Lit(5), Lit(1)),
+        Set(9, 6, Var(1), Lit(2)),
+        Get(6, 8, Lit(0)),
+        Read(7, 2, Lit(1)),
+        Set(10, 8, Var(1), Lit(3)),
+        View(3, 10, Lit(0), Lit(2)),
+        Set(11, 10, Lit(5), Lit(1)),
+        Set(12, 9, Var(1), Lit(2)),
+        Get(8, 11, Lit(0)),
+        Read(9, 3, Lit(1)),
+        Set(13, 11, Var(1), Lit(3)),
+        View(4, 13, Lit(0), Lit(2)),
+        Set(14, 13, Lit(5), Lit(1)),
+        Set(15, 12, Var(1), Lit(2)),
+        Get(10, 14, Lit(0)),
+        Read(11, 4, Lit(1)),
+        Set(16, 14, Var(1), Lit(3)),
+        View(5, 16, Lit(0), Lit(2)),
+        Set(17, 16, Lit(5), Lit(1)),
+        Set(18, 15, Var(1), Lit(2)),
+        Get(12, 17, Lit(0)),
+        Read(13, 5, Lit(1)),
+        Set(19, 17, Var(1), Lit(3)),
+    ])
+}
+
+fn long_plan() → List<Nat> { [0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0] }
+
+fn long_residuals() → List<Residual> { List::replicate(Residual(Lit(0), Lit(2), Var(1)), 21) }
+
+theorem long_checked(): check(long(), long_plan()) = Some(long_residuals()) { refl }
+
+theorem all_replicate(n: Nat, r: Residual, ws: List<Nat>, h: r.Holds(ws)): Residual::All(List::replicate(r, n), ws) {
+    match n { Zero => trivial, Succ(k) => ⟨h, all_replicate(k, r, ws, h)⟩ }
+}
+
+// Every residual is one fact about `j`, from one hypothesis.
+theorem long_sound(xs, ys: List<Nat>, k, j: Nat, h: 2 <= j, file: List<List<Nat>>, rep: Rep(long(), long_plan(), Env([xs, ys], [k, j]), file)):
+    run2(long(), long_plan(), [k, j], file) = eval1(long(), Env([xs, ys], [k, j]))
+{
+    let apart: (Span(0, 2).apart(Span(j, 1)).IsTrue()) = omega(h);
+    check_sound(long(), long_plan(), long_residuals(), long_checked(), Env([xs, ys], [k, j]), file, rep,
+        all_replicate(21, Residual(Lit(0), Lit(2), Var(1)), eval1(long(), Env([xs, ys], [k, j])), apart))
+}
