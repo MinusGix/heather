@@ -2666,8 +2666,9 @@ to.** `docs/language/sequencing-surface-design.md` §5, §14, §19 and §22 are
 built: straight-line code as aliases, a statement `if` as one convoy over
 the packed locals its arms assign, a branch that ends a block, a
 continuation needed in more than one place bound once as a join point, a
-`while` as a generated sibling function over its state as separate
-parameters, a `for` as a fold of a named step. The reflector reflects that
+`while` as the library's loop combinator run on a named step
+(`docs/language/loop-combinator-design.md`), a `for` as a fold of a named
+step. The reflector reflects that
 lowered form one construct for one, so a pin is a conversion by
 construction and not by the luck of two designs agreeing. Where this
 section and that document differ about a form, that document holds and this
@@ -2719,8 +2720,12 @@ section is corrected.
   (`∥i.toNat() < count.toNat()∥`).
 - **The single sort** is `Dyn(tys)`, a code and a value of its decoding.
   A word is a `Dyn`, so the body has one kind of variable (§15.1) and one
-  environment (proposed: the experiment kept words apart; the build measures
-  one environment against two before fixing it). A variable's code is
+  environment. A newest-first list makes any long-lived variable dearer
+  with every binding after it (the build measured it on three axes:
+  parameters under locals, an object under words, a local under either),
+  so the environment is indexed, a variable named by its level, with a
+  logarithmic lookup, and reached by theorems only through `push`, `get`
+  and their two laws. A variable's code is
   static, a function of the body alone and never of a value, so no later
   dispatch waits on one.
 - **Steps are total, and stated once** (proposed). The step model is a
@@ -2787,8 +2792,10 @@ Func  = signature (§15.8), body
   where both arms view one root, its slot the convoy of the arms' steps;
   otherwise it is dead at the join.
 - **A loop is a function**, which is what the surface makes it: `while`
-  is the generated sibling over the state as separate parameters, calling
-  itself last; `for` is the fold of its step, pinned by the library's fold
+  is the library's loop combinator run on a named step over the state
+  (`docs/language/loop-combinator-design.md`; an earlier text here described
+  the generated sibling that design replaced), the step's round ending in
+  the loop's own call; `for` is the fold of its step, pinned by the library's fold
   lemma once. There is no loop node and no loop flag: a loop is a function
   whose body has a `Jump`. Its parameters are **the places live at its
   head, each with its state**: a word by value; a place by its mode; the
