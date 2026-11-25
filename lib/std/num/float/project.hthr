@@ -548,20 +548,21 @@ fn Format::sr_scaled(self F: Format, x: Rat, N: Nat) → Rat {
     (x.abs() - (F.trunc(x)).val().abs()) * Dyadic(1, N.int() - (F.trunc(x)).q()).rat()
 }
 
-// The floor, and the nearest with ties to even, of a nonnegative rational.
-fn Rat::floor_nat(self q: Rat) → Nat { q.num.natAbs().div(q.den) }
+// The floor, and the nearest with ties to even, of a nonnegative rational,
+// by binary long division (`Nat::div` counts the quotient out in units).
+fn Rat::floor_nat(self q: Rat) → Nat { match q.num.natAbs().ldiv(q.den) { MkDivMod(n, _) => n } }
 
-fn Rat::rnite_nat(self q: Rat) → Nat {
-    let n = q.floor_nat();
-    let r = q.num.natAbs().mod(q.den);
-    match (r + r + 1).le_dec(q.den) {
+fn Rat::rnite_pick(n, r, den: Nat) → Nat {
+    match (r + r + 1).le_dec(den) {
         Inl(_) => n,
-        Inr(_) => match (q.den + 1).le_dec(r + r) {
+        Inr(_) => match (den + 1).le_dec(r + r) {
             Inl(_) => n + 1,
             Inr(_) => match n.even_dec() { Inl(_) => n, Inr(_) => n + 1 },
         },
     }
 }
+
+fn Rat::rnite_nat(self q: Rat) → Nat { match q.num.natAbs().ldiv(q.den) { MkDivMod(n, r) => Rat::rnite_pick(n, r, q.den) } }
 
 fn Nat::ge_bit(self a, b: Nat) → Bool { match b.le_dec(a) { Inl(_) => True, Inr(_) => False } }
 
@@ -771,4 +772,174 @@ theorem Format::round_odd_even_exact(self F: Format, x: Rat, g: Finite(F), h: F.
         Inf(n, hh) => λ no _ => false_elim(no),
         NaN(hh) => λ no _ => false_elim(no),
     }(tz, h)
+}
+
+// ---------------------------------------------------------------------------
+// Round to odd and stochastic rounding through the saturation modes.
+//
+// Both choose between the truncation and the step away. Rounding to
+// precision with an unbounded exponent (report §4.7.4) leaves the range when
+// the value reaches the grid value after the largest float (`next_top`: the
+// truncation itself is past the range), or when it is past the largest float
+// and the rounding steps away. Round to odd steps away there exactly when the
+// largest float's code is even; a stochastic draw steps away by its bit,
+// which is always set from `next_top` on (`ν >= 1`).
+
+// The grid value after the largest float: `(max_mag + 1) · 2^qmax`.
+fn Format::next_top(self F: Format) → Rat { F.grid((((F.max_mag() + 1) * Nat::pow(2, F.span)) * 2).int()) }
+
+theorem Format::max_lt_next(self F: Format): (Finite::max_finite(F)).val() < F.next_top() {
+    let P = Nat::pow(2, F.span);
+    let pp: (0 < P) = Nat::pow_pos(a := 2, n := F.span);
+    let s: ((F.max_mag() + 1) * P = P + F.max_mag() * P) = F.max_mag().mul_succ_left(P);
+    let mh = Finite::max_H(F);
+    let lt: ((Finite::max_finite(F)).H() < (((F.max_mag() + 1) * P) * 2).int()) = omega;
+    Rat::lt_respects(Rat::same_sym((Finite::max_finite(F)).val_grid()), F.next_top().same_refl(), F.grid_lt((Finite::max_finite(F)).H(), (((F.max_mag() + 1) * P) * 2).int(), lt))
+}
+
+fn Format::OverDir(self F: Format, x: Rat, away: Bool) → Type { F.next_top() <= x ∨ ((Finite::max_finite(F)).val() < x ∧ away.IsTrue()) }
+
+fn Format::UnderDir(self F: Format, x: Rat, away: Bool) → Type { x <= -F.next_top() ∨ (x < -(Finite::max_finite(F)).val() ∧ away.IsTrue()) }
+
+fn Format::over_dir_dec(self F: Format, x: Rat, away: Bool) → F.OverDir(x, away) ∨ ¬F.OverDir(x, away) {
+    let M = (Finite::max_finite(F)).val();
+    match F.next_top().le_dec(x) {
+        Inl(n) => Inl(Inl(n)),
+        Inr(nn) => match x.le_dec(M) {
+            Inl(le) => Inr(λ o => match o { Inl(n) => nn(n), Inr(c) => Rat::not_le_of_lt(x := M, y := x, h := c.left)(le) }),
+            Inr(nle) => match away.is_true_dec() {
+                Inl(t) => Inl(Inr(And(Rat::lt_of_not_le(x := M, y := x, h := nle), t))),
+                Inr(nt) => Inr(λ o => match o { Inl(n) => nn(n), Inr(c) => nt(c.right) }),
+            },
+        },
+    }
+}
+
+fn Format::under_dir_dec(self F: Format, x: Rat, away: Bool) → F.UnderDir(x, away) ∨ ¬F.UnderDir(x, away) {
+    let M = (Finite::max_finite(F)).val();
+    match x.le_dec(-F.next_top()) {
+        Inl(n) => Inl(Inl(n)),
+        Inr(nn) => match (-M).le_dec(x) {
+            Inl(le) => Inr(λ o => match o { Inl(n) => nn(n), Inr(c) => Rat::not_le_of_lt(x := x, y := -M, h := c.left)(le) }),
+            Inr(nle) => match away.is_true_dec() {
+                Inl(t) => Inl(Inr(And(Rat::lt_of_not_le(x := x, y := -M, h := nle), t))),
+                Inr(nt) => Inr(λ o => match o { Inl(n) => nn(n), Inr(c) => nt(c.right) }),
+            },
+        },
+    }
+}
+
+// Saturate past the range, else the rounding's own result `r`.
+fn Format::project_dir_at(self F: Format, sat: Sat, x: Rat, away: Bool, r: Float(F)) → Float(F) {
+    match F.over_dir_dec(x, away) {
+        Inl(_) => F.sat_up(sat),
+        Inr(_) => match F.under_dir_dec(x, away) { Inl(_) => F.sat_down(sat), Inr(_) => r },
+    }
+}
+
+// The largest float's code is even, as a bit.
+fn Format::max_even_bit(self F: Format) → Bool { match Nat::even_dec(F.lsb(F.max_mag(), F.span)) { Inl(_) => True, Inr(_) => False } }
+
+fn Format::project_odd(self F: Format, sat: Sat, x: Rat) → Float(F) { F.project_dir_at(sat, x, F.max_even_bit(), F.round_odd(x)) }
+
+fn Format::project_sr_a(self F: Format, sat: Sat, x: Rat, N, R: Nat) → Float(F) {
+    let b = ((F.sr_scaled(x, N)).floor_nat() + R).ge_bit(Nat::pow(2, N));
+    F.project_dir_at(sat, x, b, F.round_dir(x, b))
+}
+
+fn Format::project_sr_b(self F: Format, sat: Sat, x: Rat, N, R: Nat) → Float(F) {
+    let b = ((F.sr_scaled(x, N + 1)).floor_nat() + (R + R + 1)).ge_bit(Nat::pow(2, N + 1));
+    F.project_dir_at(sat, x, b, F.round_dir(x, b))
+}
+
+fn Format::project_sr_c(self F: Format, sat: Sat, x: Rat, N, R: Nat) → Float(F) {
+    let b = ((F.sr_scaled(x, N)).rnite_nat() + R).ge_bit(Nat::pow(2, N));
+    F.project_dir_at(sat, x, b, F.round_dir(x, b))
+}
+
+// Inside the range the projection is the rounding.
+theorem Format::project_dir_in_range(self F: Format, sat: Sat, x: Rat, away: Bool, r: Float(F),
+    lo: -(Finite::max_finite(F)).val() <= x, hi: x <= (Finite::max_finite(F)).val()): F.project_dir_at(sat, x, away, r) = r
+{
+    let M = (Finite::max_finite(F)).val();
+    let mn = F.max_lt_next();
+    let no_up = λ (o: F.OverDir(x, away)) => match o {
+        Inl(n) => Rat::lt_irrefl(M, Rat::lt_of_lt_of_le(mn, Rat::le_trans(n, hi))),
+        Inr(c) => Rat::lt_irrefl(x, Rat::lt_of_le_of_lt(hi, c.left)),
+    };
+    let no_down = λ (u: F.UnderDir(x, away)) => match u {
+        Inl(n) => Rat::lt_irrefl(x, Rat::lt_of_le_of_lt(n, Rat::lt_of_lt_of_le(Rat::neg_lt(x := M, y := F.next_top(), h := mn), lo))),
+        Inr(c) => Rat::lt_irrefl(x, Rat::lt_of_lt_of_le(c.left, lo)),
+    };
+    match F.over_dir_dec(x, away) {
+        Inl(o) => false_elim(no_up(o)),
+        Inr(_) => match F.under_dir_dec(x, away) { Inl(u) => false_elim(no_down(u)), Inr(_) => refl },
+    }
+}
+
+// So round to odd's exactness carries over: inside the range an even
+// projected result is the value, under every saturation.
+theorem Format::project_odd_even_exact(self F: Format, sat: Sat, x: Rat, g: Finite(F), h: F.project_odd(sat, x) = Fin(g), ev: Finite::Even(g),
+    lo: -(Finite::max_finite(F)).val() <= x, hi: x <= (Finite::max_finite(F)).val()): g.val() ≈ x
+{
+    F.round_odd_even_exact(x, g, trans(sym(F.project_dir_in_range(sat, x, F.max_even_bit(), F.round_odd(x), lo, hi)), h), ev, lo, hi)
+}
+
+// Past the range on either side the saturated ends are faithful.
+theorem Format::max_below_dir(self F: Format, x: Rat, away: Bool, o: F.OverDir(x, away)): Finite::Below(x, Finite::max_finite(F)) {
+    let M = Finite::max_finite(F);
+    let le: (M.val() <= x) = match o { Inl(n) => Rat::le_of_lt(Rat::lt_of_lt_of_le(F.max_lt_next(), n)), Inr(c) => Rat::le_of_lt(c.left) };
+    And(le, λ g _ => Finite::le_max(g))
+}
+
+theorem Format::min_above_dir(self F: Format, x: Rat, away: Bool, u: F.UnderDir(x, away)): Finite::Above(x, -Finite::max_finite(F)) {
+    let M = Finite::max_finite(F);
+    let nv: ((-M).val() ≈ -M.val()) = Finite::val_neg(M);
+    let le: (x <= -M.val()) = match u {
+        Inl(n) => Rat::le_trans(n, Rat::le_of_lt(Rat::neg_lt(x := M.val(), y := F.next_top(), h := F.max_lt_next()))),
+        Inr(c) => Rat::le_of_lt(c.left),
+    };
+    And(Rat::le_respects(x.same_refl(), Rat::same_sym(nv), le), λ g _ => Rat::le_respects(Rat::same_sym(nv), g.val().same_refl(), Finite::neg_max_le(g)))
+}
+
+// A faithful rounding stays faithful through the saturation.
+theorem Format::project_dir_faithful(self F: Format, sat: Sat, x: Rat, away: Bool, r: Float(F),
+    fr: (g: Finite(F)) → r = Fin(g) → Finite::Below(x, g) ∨ Finite::Above(x, g),
+    g: Finite(F), h: F.project_dir_at(sat, x, away, r) = Fin(g)): Finite::Below(x, g) ∨ Finite::Above(x, g)
+{
+    let M = Finite::max_finite(F);
+    match F.over_dir_dec(x, away) as λ d => (match d { Inl(_) => F.sat_up(sat), Inr(_) => match F.under_dir_dec(x, away) { Inl(_) => F.sat_down(sat), Inr(_) => r } }) = Float::Fin(g)
+        → Finite::Below(x, g) ∨ Finite::Above(x, g)
+    {
+        Inl(o) => λ e => {
+            let gm: (g = M) = trans(sym(Float::fin_or_at(F.sat_up(sat), g, M, e)), F.sat_up_fin(sat));
+            Inl(j(sym(gm), λ v _ => Finite::Below(x, v), F.max_below_dir(x, away, o)))
+        },
+        Inr(_) => match F.under_dir_dec(x, away) as λ d2 => (match d2 { Inl(_) => F.sat_down(sat), Inr(_) => r }) = Float::Fin(g) → Finite::Below(x, g) ∨ Finite::Above(x, g) {
+            Inl(u) => λ e => {
+                let gm: (g = -M) = trans(sym(Float::fin_or_at(F.sat_down(sat), g, -M, e)), F.sat_down_fin(sat));
+                Inr(j(sym(gm), λ v _ => Finite::Above(x, v), F.min_above_dir(x, away, u)))
+            },
+            Inr(_) => λ e => fr(g, e),
+        },
+    }(h)
+}
+
+theorem Format::project_odd_faithful(self F: Format, sat: Sat, x: Rat, g: Finite(F), h: F.project_odd(sat, x) = Fin(g)): Finite::Below(x, g) ∨ Finite::Above(x, g) {
+    F.project_dir_faithful(sat, x, F.max_even_bit(), F.round_odd(x), λ g2 e2 => F.round_odd_faithful(x, g2, e2), g, h)
+}
+
+theorem Format::project_sr_a_faithful(self F: Format, sat: Sat, x: Rat, N, R: Nat, g: Finite(F), h: F.project_sr_a(sat, x, N, R) = Fin(g)): Finite::Below(x, g) ∨ Finite::Above(x, g) {
+    let b = ((F.sr_scaled(x, N)).floor_nat() + R).ge_bit(Nat::pow(2, N));
+    F.project_dir_faithful(sat, x, b, F.round_dir(x, b), λ g2 e2 => F.round_dir_faithful(x, b, g2, e2), g, h)
+}
+
+theorem Format::project_sr_b_faithful(self F: Format, sat: Sat, x: Rat, N, R: Nat, g: Finite(F), h: F.project_sr_b(sat, x, N, R) = Fin(g)): Finite::Below(x, g) ∨ Finite::Above(x, g) {
+    let b = ((F.sr_scaled(x, N + 1)).floor_nat() + (R + R + 1)).ge_bit(Nat::pow(2, N + 1));
+    F.project_dir_faithful(sat, x, b, F.round_dir(x, b), λ g2 e2 => F.round_dir_faithful(x, b, g2, e2), g, h)
+}
+
+theorem Format::project_sr_c_faithful(self F: Format, sat: Sat, x: Rat, N, R: Nat, g: Finite(F), h: F.project_sr_c(sat, x, N, R) = Fin(g)): Finite::Below(x, g) ∨ Finite::Above(x, g) {
+    let b = ((F.sr_scaled(x, N)).rnite_nat() + R).ge_bit(Nat::pow(2, N));
+    F.project_dir_faithful(sat, x, b, F.round_dir(x, b), λ g2 e2 => F.round_dir_faithful(x, b, g2, e2), g, h)
 }

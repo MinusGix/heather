@@ -112,3 +112,40 @@ theorem sra_neg(): Rat::Same(val_or(e2m1().round_sr_a(Rat(-5, 4), 2, 3), 99), Ra
 theorem sra_exact(): Rat::Same(val_or(e2m1().round_sr_a(Rat(3, 2), 2, 3), 99), Rat(3, 2)) { refl }
 // Of the four draws at ν·4 = 2, two step away.
 theorem sra_count(): Nat::count_away(2, 4, 4) = 2 { refl }
+
+// ---------------------------------------------------------------------------
+// Round to odd and stochastic rounding through saturation.
+
+// Binary8p3sf: largest float 57344 (odd code), next grid value 65536. Between
+// them round to odd keeps the odd largest float; from 65536 on it overflows,
+// which a finite domain under SatNone makes NaN.
+theorem odd_sf_keep(): Rat::Same(val_or(binary8p3sf().project_odd(SatNone, 60000), 99), 57344) { refl }
+theorem odd_sf_over(): (binary8p3sf().project_odd(SatNone, 65536)).is_nan() = True { refl }
+// Binary8p3se: the largest float 49152 is even, so just past it round to odd
+// steps away and overflows.
+theorem odd_se_over(): inf_bit(binary8p3se().project_odd(SatNone, 50000)) = True { refl }
+theorem odd_se_sat(): Rat::Same(val_or(binary8p3se().project_odd(SatFinite, 50000), 99), 49152) { refl }
+// E4M3 under SatNone no longer returns its even largest float for 460: the
+// step away overflows to NaN. SatFinite clamps, and there the even result is
+// inexact (the caveat of issues/float-round-to-odd.md).
+theorem odd_e4m3_none(): (e4m3().project_odd(SatNone, 460)).is_nan() = True { refl }
+theorem odd_e4m3_finite(): Rat::Same(val_or(e4m3().project_odd(SatFinite, 460), 99), 448) { refl }
+// In range nothing changes.
+theorem odd_in_range(): Rat::Same(val_or(e2m1().project_odd(SatNone, Rat(5, 4)), 99), Rat(3, 2)) { refl }
+
+// Stochastic rounding at Binary8p3se's top: 53248 is halfway to the next
+// grid value 57344, so two of the four draws step away and overflow.
+theorem sr_top_keep(): Rat::Same(val_or(binary8p3se().project_sr_a(SatNone, 53248, 2, 1), 99), 49152) { refl }
+theorem sr_top_over(): inf_bit(binary8p3se().project_sr_a(SatNone, 53248, 2, 2)) = True { refl }
+theorem sr_top_sat(): Rat::Same(val_or(binary8p3se().project_sr_a(SatFinite, 53248, 2, 2), 99), 49152) { refl }
+// Past the next grid value every draw overflows.
+theorem sr_past(): inf_bit(binary8p3se().project_sr_a(SatNone, 60000, 2, 0)) = True { refl }
+theorem sr_past_c(): inf_bit(binary8p3se().project_sr_c(SatNone, 60000, 2, 0)) = True { refl }
+theorem sr_past_b(): inf_bit(binary8p3se().project_sr_b(SatNone, 60000, 2, 0)) = True { refl }
+
+// The exactness theorem at work on an open value.
+theorem odd_exact_open(x: Rat, g: Finite(binary8p3se()), h: binary8p3se().project_odd(SatNone, x) = Float::Fin(g), ev: Finite::Even(g),
+    lo: -(Finite::max_finite(binary8p3se())).val() <= x, hi: x <= (Finite::max_finite(binary8p3se())).val()): g.val() ≈ x
+{
+    binary8p3se().project_odd_even_exact(SatNone, x, g, h, ev, lo, hi)
+}
