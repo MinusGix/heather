@@ -481,7 +481,7 @@ theorem Loan::program_runs<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}
 theorem load_byte_refused(s: State, output: Nat, loc: Loc, inside: touched(s.heap.shadow, loc.block, loc.offset, 1) = True):
     load_byte_at(s, output, Ref(loc)) = None {
     let unreadable: (s.heap.plain(loc, 1) = False) =
-        trans(cong_fn<Bool, Bool>(λ v => (loc.offset + 1).leb(s.heap.bytes(loc.block).len()) && !v, inside),
+        trans(cong_fn<Bool, Bool>(λ v => (loc.offset + 1).leb(s.heap.bytes(loc.block).len()) && (!v && s.heap.defined(loc.block, loc.offset, 1)), inside),
             Bool::and_false_r((loc.offset + 1).leb(s.heap.bytes(loc.block).len())));
     j(sym(unreadable), λ v _ => (match v { False => None, True => Some(s.set(output, Word(s.heap.byte(loc).zero_extend(56)))) }) =
         None<State>, refl)
@@ -493,7 +493,8 @@ theorem load_byte_refused(s: State, output: Nat, loc: Loc, inside: touched(s.hea
 theorem overlap_not_injected<M>(data: ByteReadAccess<M>, spans: Spans, heap: Heap, memory: M, b, i, c, k: Nat,
     in_b: i < spans.size(b), in_c: k < spans.size(c), shared: spans.byte(b, i) = spans.byte(c, k),
     plain_b: covered(heap.shadow, b, i) = False, plain_c: covered(heap.shadow, c, k) = False,
+    defined_b: heap.undefined(b, i) = False, defined_c: heap.undefined(c, k) = False,
     differ: heap.bytes(b).nth(i) ≠ heap.bytes(c).nth(k)): ¬Injected<M>(data, spans, heap, memory) {
-    λ inj => differ(trans(sym(inj.bytes(b, i, in_b, plain_b)),
-        trans(cong_fn<BitVec(64), Option<BitVec(8)>>(λ a => data.read(memory, a), shared), inj.bytes(c, k, in_c, plain_c))))
+    λ inj => differ(trans(sym(inj.bytes(b, i, in_b, plain_b, defined_b)),
+        trans(cong_fn<BitVec(64), Option<BitVec(8)>>(λ a => data.read(memory, a), shared), inj.bytes(c, k, in_c, plain_c, defined_c))))
 }

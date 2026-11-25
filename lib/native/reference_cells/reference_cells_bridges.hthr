@@ -60,11 +60,6 @@ theorem in_memory_word_stored<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<
 }
 
 // The heap of buffers: what the toy's operations are on it.
-theorem Heap::of_plain(buffers: Buffers(), loc: Loc, n: Nat):
-    Heap::of(buffers).plain(loc, n) = (loc.offset + n).leb(buffer_bytes(buffers, loc.block).len()) {
-    Bool::and_true_r((loc.offset + n).leb(buffer_bytes(buffers, loc.block).len()))
-}
-
 theorem Heap::of_fits(buffers: Buffers(), loc: Loc, n: Nat):
     Heap::of(buffers).fits(loc, n) = (loc.offset + n).leb(buffer_bytes(buffers, loc.block).len()) {
     Bool::and_true_r((loc.offset + n).leb(buffer_bytes(buffers, loc.block).len()))

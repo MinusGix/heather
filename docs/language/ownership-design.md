@@ -1559,12 +1559,20 @@ names its instances in `x86_64_memory_tiers.hthr`
   derived from the word store's; `Heap::Canonical` and its preservation are
   stated beside `Injected`, not inside it, so no operation lemma carries
   it.
+- A byte is plain, part of a reference, or undefined: `Heap.undefined`
+  is a per-byte set beside the shadow (a store clears its window, so no
+  range is ever split), `Injected` constrains only defined bytes, and is
+  stable under any change of memory at undefined, uncovered bytes
+  (`Injected::undefined_change`), which is what a failed `read` leaving
+  junk needs. Canonical includes zero under undefined bytes.
 - `Site::Meets` is stated against a meaning on words
   (`Nat → List<BitVec(64)> → Heap → Option<Returned>`): the bytes level's
   `Calls()` over values meets it through lowering each value to its word.
   The System V definitions it needs (`argument_registers`, `ArgsIn`,
   `Stack::Passed`, `callee_kept`, `answer_registers`) moved into the
-  module from FunctionIR's lowering.
+  module from FunctionIR's lowering. It is provisional: the clause for a
+  run still going and the world's place join it with the bytes level's
+  `run`.
 
 ### 17.3 The bytes level as the design wants it
 

@@ -103,6 +103,6 @@ fn ones() → List<BitVec(8)> { List::replicate(BitVec::ofNat(1), 16) }
 
 theorem overlapping_not_injected<M>(data: ByteReadAccess<M>, base: BitVec(64), memory: M):
     ¬Injected<M>(data, overlapping(base), Heap::of([zeros(), ones()]), memory) {
-    overlap_not_injected(data, overlapping(base), Heap::of([zeros(), ones()]), memory, 0, 8, 1, 0, trivial, trivial, refl, refl, refl,
+    overlap_not_injected(data, overlapping(base), Heap::of([zeros(), ones()]), memory, 0, 8, 1, 0, trivial, trivial, refl, refl, refl, refl, refl,
         λ same => absurd(cong_fn<Option<BitVec(8)>, Nat>(λ o => match o { None => 0, Some(byte) => byte.toNat() }, same)))
 }

@@ -1089,7 +1089,10 @@ stage 3 deletes both:
   fewer spans to write (`Sub::fewer`, the old `Loan::narrow`), a block
   carved from a supply (the experiment's `Carved::sub`).
 - **`Heap` and `Injected`**: blocks of bytes with a shadow of references
-  (`Pointer`), block `b` at span `b`. One lemma per memory operation:
+  (`Pointer`) and a set of undefined bytes (a fresh or dead block, a window
+  a failed `read` left junk in), block `b` at span `b`; the injection says
+  nothing of an undefined byte (`Injected::undefined_change`), and a store
+  defines its bytes. One lemma per memory operation:
   `Loan::store_injected` for a store of any width, `Loan::store_ref_injected`
   (the same machine store, the shadow saying a reference is there), and
   `Injected::reads` for a load of any width, with the machine's widths as

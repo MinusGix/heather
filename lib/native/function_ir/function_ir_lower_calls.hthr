@@ -749,14 +749,14 @@ fn Stack::InMemory<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self s
 
 // FunctionIR's buffers as a heap (x86_64_memory_contract): no block holds a
 // reference.
-fn Heap::of(buffers: Buffers()) → Heap { Heap(λ (b: Nat) => buffer_bytes(buffers, b), []) }
+fn Heap::of(buffers: Buffers()) → Heap { Heap(λ (b: Nat) => buffer_bytes(buffers, b), [], λ (_: Nat) (_: Nat) => False) }
 
 // The file in memory is the empty-shadow heap injected,
 theorem in_memory_injected<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, stack: Stack<M>(fetch, data), lending: Lending,
     now: Buffers(), memory: M, held: stack.InMemory(lending, now, memory)): Injected<M>(data, lending.spans(), Heap::of(now), memory) {
     Injected(
         sizes := λ b => held(b).left,
-        bytes := λ b k inside _ => {
+        bytes := λ b k inside _ _ => {
             let size: (lending.spans().size(b) = buffer_bytes(lending.buffers, b).len()) = refl;
             held(b).right.right(k, omega(inside, held(b).left, size))
         },
@@ -769,7 +769,7 @@ theorem in_memory_injected<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}
 theorem injected_in_memory<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, lending: Lending,
     loan: Loan<M>(fetch, data, stack, top, lending.spans()), now: Buffers(), memory: M,
     inj: Injected<M>(data, lending.spans(), Heap::of(now), memory)): stack.InMemory(lending, now, memory) {
-    λ b => ⟨inj.sizes(b), ⟨omega(loan.canonical(b), inj.sizes(b)), λ k short => inj.bytes(b, k, omega(short, inj.sizes(b)), refl)⟩⟩
+    λ b => ⟨inj.sizes(b), ⟨omega(loan.canonical(b), inj.sizes(b)), λ k short => inj.bytes(b, k, omega(short, inj.sizes(b)), refl, refl)⟩⟩
 }
 
 // A store into the heap of buffers is `store_span`, block for block, and
@@ -863,7 +863,8 @@ theorem Stack::in_memory_span<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<
             Nat::leb_eq_true(k + bytes.len(), buffer_bytes(now, b).len(), omega(fits, held(b).left)));
     let stored = loan.store_injected(Heap::of(now), memory, in_memory_injected(stack, lending, now, memory, held), loc, written, inside, bytes, ok);
     injected_in_memory(lending, loan, store_span(now, b, k, bytes), stack.writes.store(memory, lending.spans().byte(b, k), bytes),
-        stored.same_bytes(Heap::of(store_span(now, b, k, bytes)), λ c => sym(Heap::of_store(now, loc, bytes, omega(inside, held(b).left), c)), refl))
+        stored.same_bytes(Heap::of(store_span(now, b, k, bytes)), λ c => sym(Heap::of_store(now, loc, bytes, omega(inside, held(b).left), c)), refl,
+            λ c j => refl))
 }
 
 // The file in memory is any file whose buffers read the same.
