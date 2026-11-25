@@ -259,8 +259,8 @@ theorem StructuredRegion::meaning_frame(self region: StructuredRegion, call: Wri
                     absent_append_intro(x, outputs, [exhausted], p4.left, Bool::is_true_and_intro(x.differs(exhausted), True, known, trivial)));
             Env::settle_frame(word_ports(outputs) ++ [Port(exhausted, 1)], Env(env.words, after.buffers, env.args), after.values, x, fresh)
         },
-        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ env x h => {
-            let after = Until(inputs, parameters, body, exit, next, outputs, measure_at).run(call, env.valuation(), env.buffers);
+        Until(inputs, parameters, body, exit, next, outputs) => λ env x h => {
+            let after = Until(inputs, parameters, body, exit, next, outputs).run(call, env.valuation(), env.buffers);
             let p3 = absent_append(x, parameters, outputs ++ body.touches(), h);
             let p4 = absent_append(x, outputs, body.touches(), p3.right);
             Env::settle_frame(word_ports(outputs), Env(env.words, after.buffers, env.args), after.values, x,
@@ -317,7 +317,7 @@ fn StructuredRegion::Ok(self region: StructuredRegion, call: Writers()) → Type
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => body.Ok(call) ∧
             (LoopShape(inputs, parameters, count, body, exit, next, outputs, exhausted) ∧
             Exists<Scope>(λ bs => (body.scoped(Scope::pass(parameters, count)) = Some(bs)) ∧ (bs.bit(exit) && bs.all_defined(next)).IsTrue())),
-        Until(inputs, parameters, body, exit, next, outputs, measure_at) => body.Ok(call) ∧
+        Until(inputs, parameters, body, exit, next, outputs) => body.Ok(call) ∧
             (UntilShape(inputs, parameters, body, exit, next, outputs) ∧
             (Exists<Scope>(λ bs => (body.scoped(Scope::until_pass(parameters)) = Some(bs)) ∧ (bs.bit(exit) && bs.all_defined(next)).IsTrue()) ∧
             body.until_halts(call, parameters, exit, next))),
@@ -353,14 +353,14 @@ theorem StructuredRegion::ok_of_scoped(self region: StructuredRegion, call: Writ
             let shape = StructuredRegion::loop_shaped(inputs, bound, parameters, count, body, exit, next, outputs, exhausted, parts.right);
             ⟨body.ok_of_scoped(call, free, Scope::pass(parameters, count), bs, got), ⟨shape, Exists(bs, ⟨got, Bool::is_true_of_eq(bits)⟩)⟩⟩
         },
-        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ counted s t scoped => {
-            let r = Until(inputs, parameters, body, exit, next, outputs, measure_at);
+        Until(inputs, parameters, body, exit, next, outputs) => λ counted s t scoped => {
+            let r = Until(inputs, parameters, body, exit, next, outputs);
             let fr = Bool::both(counted);
             cases scoped as ok, got(bs), bits;
             let parts = Bool::is_true_and(s.all_defined(inputs), r.until_shape(), Bool::is_true_of_eq(ok));
-            let shape = StructuredRegion::until_shaped(inputs, parameters, body, exit, next, outputs, measure_at, parts.right);
+            let shape = StructuredRegion::until_shaped(inputs, parameters, body, exit, next, outputs, parts.right);
             ⟨body.ok_of_scoped(call, fr.right, Scope::until_pass(parameters), bs, got),
-                ⟨shape, ⟨Exists(bs, ⟨got, Bool::is_true_of_eq(bits)⟩), body.counts_halts(call, parameters, next, exit, measure_at, fr.left)⟩⟩⟩
+                ⟨shape, ⟨Exists(bs, ⟨got, Bool::is_true_of_eq(bits)⟩), body.counts_halts(call, parameters, next, exit, fr.left)⟩⟩⟩
         },
     }
 }
@@ -439,9 +439,9 @@ record UntilCode(p: Prog, layout: Layout, out: List<Nat>, names: Nat, inputs: Li
         .label(Succ(Succ(Succ(names)))).computes(layout, out, moves(outputs, parameters), m.names) = Some(c),
 }
 
-theorem StructuredRegion::until_code(inputs: List<Nat>, parameters: List<Nat>, body: StructuredRegion, exit: Nat, next, outputs: List<Nat>, measure_at: Nat,
+theorem StructuredRegion::until_code(inputs: List<Nat>, parameters: List<Nat>, body: StructuredRegion, exit: Nat, next, outputs: List<Nat>,
     p: Prog, layout: Layout, out: List<Nat>, names: Nat, c: Compiled,
-    emitted: Until(inputs, parameters, body, exit, next, outputs, measure_at).code(p, layout, out, names) = Some(c)):
+    emitted: Until(inputs, parameters, body, exit, next, outputs).code(p, layout, out, names) = Some(c)):
     UntilCode(p, layout, out, names, inputs, parameters, body, exit, next, outputs, layout.homes.loop_set(exit),
         nodes_live_in(moves(outputs, parameters), out),
         nodes_live_in(moves(parameters, next), Cons(exit, nodes_live_in(moves(outputs, parameters), out).union(layout.homes.loop_set(exit)))), c) {
@@ -560,8 +560,8 @@ theorem StructuredRegion::within_code(self region: StructuredRegion, layout: Lay
             calc { k.x.prog <= xl := Exists(2, refl), <= c.prog := Prog::within_trans(xl.within_computes(layout, set, loop_down(count, exhausted), k.x.names, k.d, k.d_is),
             calc { k.d.prog <= dj := Exists(2, refl), <= c.prog := dj.within_computes(layout, out, moves(outputs, parameters), k.d.names, c, k.c_is), }), })))), }))))
         },
-        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ p out names c emitted => {
-            let k = StructuredRegion::until_code(inputs, parameters, body, exit, next, outputs, measure_at, p, layout, out, names, c, emitted);
+        Until(inputs, parameters, body, exit, next, outputs) => λ p out names c emitted => {
+            let k = StructuredRegion::until_code(inputs, parameters, body, exit, next, outputs, p, layout, out, names, c, emitted);
             let head = Succ(names);
             let again = Succ(head);
             let leave = Succ(again);
@@ -913,8 +913,8 @@ record UntilChecked(homes: Homes, out: List<Nat>, inputs: List<Nat>, parameters:
     entry_ok: homes.leaf_checked(moves(parameters, inputs), set) = Some(live),
 }
 
-theorem Homes::until_checked(self homes: Homes, inputs: List<Nat>, parameters: List<Nat>, body: StructuredRegion, exit: Nat, next, outputs: List<Nat>, measure_at: Nat,
-    out, live: List<Nat>, checked: homes.region_checked(Until(inputs, parameters, body, exit, next, outputs, measure_at), out) = Some(live)):
+theorem Homes::until_checked(self homes: Homes, inputs: List<Nat>, parameters: List<Nat>, body: StructuredRegion, exit: Nat, next, outputs: List<Nat>,
+    out, live: List<Nat>, checked: homes.region_checked(Until(inputs, parameters, body, exit, next, outputs), out) = Some(live)):
     UntilChecked(homes, out, inputs, parameters, body, exit, next, outputs, homes.loop_set(exit), nodes_live_in(moves(outputs, parameters), out),
         nodes_live_in(moves(parameters, next), Cons(exit, nodes_live_in(moves(outputs, parameters), out).union(homes.loop_set(exit)))), live) {
     let set = homes.loop_set(exit);
@@ -1461,17 +1461,17 @@ theorem Target::until_head(self t: Target, call: Writers(), inputs: List<Nat>, p
 // parameters, the head runs the passes, and the exit's moves leave the
 // outputs and every word the loop never writes as the meaning does.
 theorem Target::until_goes(self t: Target, call: Writers(), inputs: List<Nat>, parameters: List<Nat>, body: StructuredRegion, exit: Nat,
-    next, outputs: List<Nat>, measure_at: Nat, p: Prog, out: List<Nat>, names: Nat, c: Compiled, live: List<Nat>,
-    emitted: Until(inputs, parameters, body, exit, next, outputs, measure_at).code(p, t.layout(), out, names) = Some(c),
+    next, outputs: List<Nat>, p: Prog, out: List<Nat>, names: Nat, c: Compiled, live: List<Nat>,
+    emitted: Until(inputs, parameters, body, exit, next, outputs).code(p, t.layout(), out, names) = Some(c),
     within: c.prog.Within(t.program),
-    checked: t.homes.region_checked(Until(inputs, parameters, body, exit, next, outputs, measure_at), out) = Some(live),
-    ok: Until(inputs, parameters, body, exit, next, outputs, measure_at).Ok(call),
+    checked: t.homes.region_checked(Until(inputs, parameters, body, exit, next, outputs), out) = Some(live),
+    ok: Until(inputs, parameters, body, exit, next, outputs).Ok(call),
     body_runs: (q: Prog) → (o: List<Nat>) → (n: Nat) → (bc: Compiled) → body.code(q, t.layout(), o, n) = Some(bc) → bc.prog.Within(t.program) →
         (l: List<Nat>) → t.homes.region_checked(body, o) = Some(l) → t.Computes(body, call, l, o, q, bc.prog)):
-    t.Computes(Until(inputs, parameters, body, exit, next, outputs, measure_at), call, live, out, p, c.prog) {
+    t.Computes(Until(inputs, parameters, body, exit, next, outputs), call, live, out, p, c.prog) {
     let layout = t.layout();
-    let k = StructuredRegion::until_code(inputs, parameters, body, exit, next, outputs, measure_at, p, layout, out, names, c, emitted);
-    let h = t.homes.until_checked(inputs, parameters, body, exit, next, outputs, measure_at, out, live, checked);
+    let k = StructuredRegion::until_code(inputs, parameters, body, exit, next, outputs, p, layout, out, names, c, emitted);
+    let h = t.homes.until_checked(inputs, parameters, body, exit, next, outputs, out, live, checked);
     let shape = ok.right.left;
     let head = Succ(names);
     let again = Succ(head);
@@ -1532,7 +1532,7 @@ theorem Target::until_goes(self t: Target, call: Writers(), inputs: List<Nat>, p
                 },
                 ⟨trans(os.right.right.left, trans(le.left, sym(lp.buffers))), trans(os.right.right.right, trans(le.right.left, sym(lp.args)))⟩⟩;
             t.leaf_goes(out, moves(outputs, parameters), dj, k.m.names, c, k.c_is, within, done, h.done_ok, moves_wide(outputs, parameters), now, tree,
-                t.at_like(prog_len(c.prog), out, tree, Until(inputs, parameters, body, exit, next, outputs, measure_at).meaning(call, env), eo, like, next_out))
+                t.at_like(prog_len(c.prog), out, tree, Until(inputs, parameters, body, exit, next, outputs).meaning(call, env), eo, like, next_out))
         };
         let e1 = env.steps(moves(parameters, inputs));
         let entered = Env::steps_moves(parameters, inputs, shape.entry_ordered, shape.parameters_distinct, inputs_len, env);
@@ -1654,8 +1654,8 @@ theorem StructuredRegion::code_runs(self region: StructuredRegion, t: Target, ca
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) => λ ok p out names c emitted within live checked =>
             t.loop_goes(call, inputs, bound, parameters, count, body, exit, next, outputs, exhausted, p, out, names, c, live, emitted, within, checked, ok,
                 body.code_runs(t, call, fns, ok.left)),
-        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ ok p out names c emitted within live checked =>
-            t.until_goes(call, inputs, parameters, body, exit, next, outputs, measure_at, p, out, names, c, live, emitted, within, checked, ok,
+        Until(inputs, parameters, body, exit, next, outputs) => λ ok p out names c emitted within live checked =>
+            t.until_goes(call, inputs, parameters, body, exit, next, outputs, p, out, names, c, live, emitted, within, checked, ok,
                 body.code_runs(t, call, fns, ok.left)),
     }
 }

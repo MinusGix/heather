@@ -142,7 +142,7 @@ theorem StructuredRegion::relabel_run(self region: StructuredRegion, call: Write
                     λ (pass: Valuation()) (held: Buffers()) => body.relabel(links).run(call, pass, held),
                     λ v held => body.relabel_run(call, links, v, held), parameters, count, exit, next, values(64, bound).toNat(),
                     words_of(values, inputs), buffers)),
-        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ values buffers =>
+        Until(inputs, parameters, body, exit, next, outputs) => λ values buffers =>
             cong_fn<LoopState, State>(λ end => State(Valuation::bind(values, outputs, end.end.state), end.buffers),
                 until_run_ext(λ (pass: Valuation()) (held: Buffers()) => body.run(Writers::relabel(call, links), pass, held),
                     λ (pass: Valuation()) (held: Buffers()) => body.relabel(links).run(call, pass, held),
@@ -180,7 +180,7 @@ theorem StructuredRegion::calls_fit_among(self region: StructuredRegion, arity: 
         Lend(views, callee, arguments, _) => λ ok => named(callee, (views_homes(views) ++ arguments).len(), ok),
         Call(callee, arguments, _, _) => λ ok => named(callee, arguments.len(), ok),
         Loop(_, _, _, _, body, _, _, _, _) => λ ok => body.calls_fit_among(arity, among, named, ok),
-        Until(_, _, body, _, _, _, measure_at) => λ ok => body.calls_fit_among(arity, among, named, ok),
+        Until(_, _, body, _, _, _) => λ ok => body.calls_fit_among(arity, among, named, ok),
     }
 }
 

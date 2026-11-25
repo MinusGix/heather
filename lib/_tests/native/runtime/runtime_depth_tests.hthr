@@ -206,3 +206,42 @@ theorem rsum_next_agrees(n: u64, more: Nat, within: rsum_next::within(more, n).I
     program_eval(program_deepened(rsum_next::program, more), 2, [n]) = rsum_next(n) {
     rsum_next::agrees_within(n, more, within)
 }
+
+// A recursion that calls a loop node: `down_node` compiles as one `Until`
+// (its own calls in tail position), whose code is defined where its
+// measure, carried by its pin, says it ends (`down_node::ends`,
+// `Tm::node_defined`, docs/language/loop-combinator-design.md §6.9). So
+// `rsum_nodes`'s program is defined at no premise past its levels.
+runtime fn down_node(n, acc: BitVec(64)) → BitVec(64) decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => acc,
+        False => down_node(n.sub(BitVec::ofNat(1)), acc.add(n)),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+runtime fn rsum_nodes(n: u64) → u64 decreases n.toNat() {
+    match h: n.eq_bit(BitVec::ofNat(0)) {
+        True => BitVec::ofNat(0),
+        False => down_node(n, BitVec::ofNat(0)).add(rsum_nodes(n.sub(BitVec::ofNat(1)))),
+    }
+    on ?dec1 := bitvec_nat::toNat_sub_one_lt(n, h);
+}
+
+theorem down_node_ends(): Compile::LoopsEnd(down_node, down_node::compile) { down_node::ends }
+
+theorem rsum_nodes_defined(n: u64, more: Nat, within: n.toNat() <= more): program_defined(program_deepened(rsum_nodes::program, more), 1, [n]).IsTrue() {
+    rsum_nodes::defined_within(n, more, within)
+}
+
+theorem rsum_nodes_agrees(n: u64, more: Nat, within: n.toNat() <= more): program_eval(program_deepened(rsum_nodes::program, more), 1, [n]) = rsum_nodes(n) {
+    rsum_nodes::agrees_within(n, more, within)
+}
+
+// The node's code is quiet: its pass requires nothing, and its ending is
+// what `down_node::ends` pays.
+theorem down_node_quiet(): down_node::rt.quiet(down_node::world) = True { refl }
+
+// Negative control: a node owes its measure, which nothing gives for free.
+// expect-error: `refl` needs both sides to be definitionally equal, but `nodeless((compile).reflected.body)` and `True` are not
+theorem down_node_free(): Compile::LoopsEnd(down_node, down_node::compile) { Compile::ends_free(down_node, down_node::compile, refl) }

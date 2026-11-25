@@ -321,6 +321,18 @@ theorem Loop::rounds_agree<A, B>(m: A → Nat, ok: A → Type, f: A → B, P: (A
     }
 }
 
+// Rounds above the measure are the function whatever answers past them:
+// each round's recursion lands below the measure, so `stuck` is never read.
+theorem Loop::rounds_agree_below<A, B>(m: A → Nat, ok: A → Type, f: A → B, P: (A → B) → A → B, stuck: A → B,
+    pass: (a: A) → ok(a) → (k: A → B) → ((b: A) → ok(b) → m(b) < m(a) → k(b) = f(b)) → P(k, a) = f(a), n: Nat):
+    (a: A) → ok(a) → m(a) < n → Loop::rounds(n, P, stuck, a) = f(a) {
+    match n {
+        Zero => λ a oa h => false_elim(Nat::not_succ_le_zero(m(a), h)),
+        Succ(k) => λ a oa h => pass(a, oa, λ (b: A) => Loop::rounds(k, P, stuck, b), λ b ob lt =>
+            Loop::rounds_agree_below(m, ok, f, P, stuck, pass, k, b, ob, Nat::lt_of_lt_of_le(m(b), m(a), k, lt, h))),
+    }
+}
+
 // A step's state read through `f`.
 fn Step::map<S, T>(f: S → T, self q: Step<S>) → Step<T> {
     match q { Next(s) => Next(f(s)), Stop(s) => Stop(f(s)) }

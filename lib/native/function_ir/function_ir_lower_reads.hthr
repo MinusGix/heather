@@ -1511,7 +1511,7 @@ fn StructuredRegion::lends(self region: StructuredRegion, homes: List<Lent>) →
         Loop(inputs, _, parameters, _, _, _, next, outputs, _) =>
             carried_out(loop_carried(homes, inputs, parameters, next), outputs) ++ homes,
         // Carries none out yet.
-        Until(_, _, _, _, _, _, _) => homes,
+        Until(_, _, _, _, _, _) => homes,
     }
 }
 
@@ -1535,7 +1535,7 @@ theorem StructuredRegion::lends_hold(self region: StructuredRegion, values: Valu
                         values, addresses, buffers, homes, held, inputs, parameters, count, exit, next, values(64, limit).toNat(),
                         words_of(values, outputs), values(1, exhausted).head_bit(), before, after, ran).right),
                 held),
-        Until(_, _, _, _, _, _, _) => λ homes before after held _ => held,
+        Until(_, _, _, _, _, _) => λ homes before after held _ => held,
     }
 }
 

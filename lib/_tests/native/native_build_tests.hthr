@@ -115,7 +115,7 @@ fn shout_pass() → StructuredRegion {
 }
 
 fn shout_loop() → StructuredRegion {
-    Until([3, 1, 0], [3, 1, 0], Compose(shout_pass(), Dataflow(Region::bare(counted_nodes(3, 3, 4, 5)))), 4, [3, 1, 0], [3, 1, 0], 0)
+    Until([3, 1, 0], [3, 1, 0], Compose(shout_pass(), Dataflow(Region::bare(counted_nodes(3, 3, 4, 5)))), 4, [3, 1, 0], [3, 1, 0])
 }
 
 fn shout_tail() → StructuredRegion {

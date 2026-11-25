@@ -48,7 +48,7 @@ fn countdown() → Function {
                 nodes := [Const(width := 64, output := 11, value := 1), Sub(width := 64, output := 12, left := 10, right := 11),
                     Const(width := 64, output := 13, value := 0), Equal(width := 64, output := 14, left := 12, right := 13)],
                 outputs := Ports([word(12), bit(14)]))),
-            exit := 14, next := [12], outputs := [1], measure := 0),
+            exit := 14, next := [12], outputs := [1]),
         result := 1)
 }
 
@@ -89,7 +89,7 @@ fn total() → Function {
                         Const(width := 64, output := 14, value := 0), Equal(width := 64, output := 15, left := 13, right := 14),
                         Add(width := 64, output := 16, left := 11, right := 10)],
                     outputs := Ports([word(13), word(16), bit(15)]))),
-                exit := 15, next := [13, 16], outputs := [2, 3], measure := 0)),
+                exit := 15, next := [13, 16], outputs := [2, 3])),
         result := 3)
 }
 
@@ -124,7 +124,7 @@ fn stray() → Function {
             body := Dataflow(Region(inputs := Ports([word(10)]),
                 nodes := [Const(width := 64, output := 11, value := 1), Sub(width := 64, output := 12, left := 10, right := 11)],
                 outputs := Ports([word(12)]))),
-            exit := 99, next := [12], outputs := [1], measure := 0),
+            exit := 99, next := [12], outputs := [1]),
         result := 1)
 }
 
