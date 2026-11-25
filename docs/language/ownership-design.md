@@ -2402,3 +2402,137 @@ signature alone: `fn f(xs: List<T>)` is a function on lists, usable in
 mathematics and proved about as one, with the instance found behind it.
 The machinery (instances and laws) is the same, and a `ListLike` class is
 an ordinary thing a library may also define.
+
+## 20. Where the experiments stop (2026-11-25)
+
+Written by the coordinating session after the checker's rebuild
+(`issues/ownership-site-facts-into-the-checker.md`) was read against §15 to
+§18. Five experiments and one rebuild have been spent on
+`lib/lang/ownership/call_check.hthr`. It answered what it was built to
+answer, and it is not the checker: one object per function, a list of
+numbers, windows as the only places, its own run over a file of lists, its
+own world built by depth. Each round reshaped most of its statements. Two
+more rounds were queued on it (several objects, loops), and three of the
+issues the rebuild filed are requests to change its meaning again. That is
+the feature being slid into. **The experiment module is not extended
+again.** What is still untested is tested in the modules that stay, against
+interfaces fixed first (§16's package 1), and `call_check.hthr` and
+`place_check.hthr` are deleted when their programs pass through those, as
+`lib/native/reference_cells/` was when the bytes level took its programs
+(§17.6).
+
+Four things about those interfaces are decided here, each from a defect the
+experiments showed. A fifth is under test.
+
+### 20.1 One text, two readings
+
+Every experiment proved one theorem about one body read twice: `eval1` and
+`run2` of the same statement, and §18.3's "there is no plan beyond the
+annotation". So level 1 and level 2 do not have a syntax each. There is one
+annotated body. Its *meaning* is the pure reading (values, no identity);
+its *run* is the level-2 reading (blocks, references, deaths). The checker
+is a function of the body, and `check_sound` is the agreement of the two
+readings. §16's "three interfaces" are therefore: the body with its
+annotation and signature record; the two readings, sharing one outcome type;
+the verdict. The bytes level's contract is the fourth and exists (stages 1
+and 2).
+
+### 20.2 One control skeleton, at every level
+
+The bytes level's body (§17.6) is a leaf of instructions, a sequence, a
+branch, a call, a loop that names its inputs, parameters, next values and
+outputs, a system call and an exit. FunctionIR's regions have that shape
+already. The body of §20.1 has the same skeleton, so the step from level 2
+to the bytes level is statement by statement, and a theorem about control
+(a branch's two cases, a loop by induction on fuel) is stated the same way
+at each level.
+
+### 20.3 A join binds its outputs
+
+The rebuilt checker's meaning carries what follows a branch into each arm:
+`If(cd, a, b, rest)` means `convoy(test, a then rest, b then rest)`, and
+what the function owes after the join is owed once per arm. Three things
+are wrong with that, and they are one defect.
+
+- *Cost.* What follows `k` branches in sequence is read `2^k` times: the
+  meaning's normal form and the proposition a function owes both double at
+  each open test. Every measurement so far was of straight-line bodies and
+  of one branch.
+- *The pin.* A source that continues after an `if` elaborates to the rest
+  over a convoy of values, which is not the convoy of two rests
+  (`issues/ownership-pin-after-join.md`). Only a function whose `if` is its
+  tail pins by `refl`.
+- *The discharge.* After its `if`, the source's proof at a later site is in
+  a context without the test, about the joined values. Owed once per arm,
+  the same residual is asked twice, each time about one arm's values.
+
+The join that matches the source is the one a compiler's intermediate form
+has: a branch names its outputs, and after it each output is the convoy of
+the two arms' values for it, `convoy(test, a's, b's)`, the term the source's
+own `let x = if h: … ` elaborates to. An arm's own bindings end with the
+arm. A view live after the join on both arms is an output like any other
+(its value the convoy, its region the union, §15.3). Residuals inside an arm
+are owed under its side of the test; residuals after the join are owed once,
+at the joined state, under no test. A function ending in an `if` is the
+case whose outputs are its results. In the once-theorem a branch is one
+case split on its test, where each output's convoy reduces. This replaces
+`mean_then` and the `OIf(a, b, rest)` reading of `Owes::Holds`; the verdict's
+tree keeps its shape.
+
+### 20.4 The world is clocked
+
+`prog_sound` builds a program's callees by depth, and at depth zero a call
+answers a made-up value (its argument, the word 0, an empty view), which
+every postcondition then has to allow
+(`issues/ownership-world-depth-zero-postconditions.md`): a callee that
+promises a nonempty view cannot be composed, and a recursive one not at
+all. This is §18.1 not yet applied to the checker. Both readings of a body
+take fuel and answer the bytes level's outcome (`Done`, `Exited`, `Going`,
+`Stuck`); out of fuel is `Going`, not a value. A function's safety speaks
+of the fuel at which its meaning is `Done`: there the run is `Done` with an
+answer that reads the meaning's, and a postcondition is a proposition of a
+`Done` answer only. So nothing is promised of the depth-zero world, and a
+loop (§18.4, item 2) and recursion are the same induction on fuel.
+
+A total source function's pin is then stated at enough fuel: for a
+straight-line body any fuel beyond its statement count, by evaluation; for a
+loop, by the one lemma that relates the source's recursion to the loop's
+iterations (§18.4, item 2's test).
+
+### 20.5 Under test: values typed by code
+
+Every experiment's object was a `List<Nat>`, so the meaning computed on the
+source's own values, the pin was `refl` and a residual was the source's
+proposition by conversion. With the universal value of
+`value_steps.hthr` (`Val`) neither survives for a real function: a read of
+an encoded list against the encoding of a read is a lemma per operation and
+per residual, and a generator would be writing proofs again.
+
+The sixth experiment (`issues/ownership-coded-values.md`, branch
+`claude/ownership-coded-values`) tests the alternative: the single sort of
+the step model is a native value tagged with its code. Codes are closed
+first-order data (a word, a sequence, a named type by index); a type
+environment decodes a named type to the source's own type, so a record and
+a type parameter are both names; a second environment gives a named record
+its fields as the library's paths with their laws, which is what a derived
+instance would supply and is the same mechanism as §19's representations.
+The reflected syntax stays untyped. If it holds, pins and discharges are
+conversions for records, lists of records and generic functions, and the
+once-theorem never looks inside a code. If it does not, the pin is a
+generated proof through an encoding and §18.4 item 1's result is restated.
+
+### 20.6 What follows
+
+1. The sixth experiment's result fixes the value sort.
+2. The interfaces of §20.1 are written as modules of definitions, with the
+   theorems' types stated and unproved, and reviewed against the five
+   experiments' programs before anything is proved over them.
+3. The checker, the two readings and `check_sound` are built once over
+   them, with several objects, places with steps, joins as §20.3 and loops
+   from the start: the cases the experiments left
+   (`issues/ownership-checker-several-objects.md`, §18.4 item 2) are this
+   build's first probes, not further rounds on the experiment.
+4. The issues that ask for changes to the experiment's meaning
+   (`ownership-pin-after-join`, `ownership-world-depth-zero-postconditions`,
+   `ownership-branch-on-object-length`, `ownership-write-bounds`) are
+   requirements on that build and are closed by it.

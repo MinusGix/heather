@@ -1,6 +1,6 @@
 ---
 title: The lowering's frame, call and loop theorems generic in their memory clause, with the old statements as an instance
-status: open
+status: closed
 labels: [native,function-ir,memory,ownership]
 area: heather-in-heather
 milestone: [nh-ownership]
@@ -68,3 +68,4 @@ The generic theorems and the old instance pass the suite with every existing cer
   **Cost** (fresh cache, kernel gate at width one, the same binary; `--timings` over the module's own items). Module's own items, before → after: kernel evaluation steps 10,376,195 → 10,219,827 (−1.5%), reduce steps 9,763,429 → 9,823,137 (+0.6%), items 533 → 556; seconds within the run-to-run spread (the check is dominated by its imports). Per item: `call_step` 619k steps → `call_step_by` 359k + its instance 223k (the instance is the conversion of the old statement against the generic one); `function_runs` 209k → `function_runs_by` 163k + instance 60k; no generic proof is dearer than the one it replaced.
 
   **Verified**: `scripts/linked --check`: every export unchanged (compiled), no file rewritten. `HEATHER_PR_NATIVE=all scripts/test --pr` on the final tree (merged with the coordinator's `f268505`): `== suite: 4139 passed, 0 failed, 3 ignored ==`.
+- 2026-11-25: Closed by the coordinating session: merged on the coordinating branch and verified there (`HEATHER_PR_NATIVE=all scripts/test --pr`: `== suite: 3518 passed, 0 failed, 2 ignored ==`; `scripts/linked --check` unchanged). Residue is in the issues its log names.

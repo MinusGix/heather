@@ -21,3 +21,7 @@ What the fourth experiment ([[ownership-checker-loans-and-joins]], `lib/lang/own
 ## Done when
 
 `check_sound` over a fragment with several objects, references into two owners, and a cell of references held across statements, each with an accepted program and a `¬` control, and the log answers whether place states still suffice.
+
+## Log
+
+- 2026-11-25: Not a further round on `call_check.hthr` (docs/language/ownership-design.md §20): the experiment module is not extended again. This is a requirement on the checker built once over the fixed interfaces (§20.6) and is closed by that build.

@@ -13,3 +13,7 @@ From [[ownership-site-facts-into-the-checker]]. Every element read now owes its 
 ## Done when
 
 `Set` and `Put` owe a bound the source discharges, or the design records why a total write needs none at the bytes level.
+
+## Log
+
+- 2026-11-25: Not a further round on `call_check.hthr` (docs/language/ownership-design.md §20): the experiment module is not extended again. This is a requirement on the checker built once over the fixed interfaces (§20.6) and is closed by that build.
