@@ -825,3 +825,41 @@ as a helper; addresses as numbers.
    so the generator keeps one route. Item 4 (an arena's generation changed
    by a `mut self` method) is then an `Erased` field of the receiver or a
    parameter of its type; neither is built yet.
+
+## 14. Decisions of 2026-11-25, and the design in progress
+
+Minus, in discussion after the second wave. These bind the judgment's design,
+which is being worked out before anything more of it is built.
+
+1. **Proofs are passed down and used; they are not compiled.** Today the
+   function compiler learns that two views are apart by re-reading the code
+   (`File.known`: constants, comparisons, the test of the arm taken;
+   `views_apart`), and a theorem proved once turns that answer into a
+   proposition. A found proof in the source reaches nothing below
+   reflection: every span read and store compiles with a comparison of the
+   index against the length even where the source proves the index inside.
+   The direction: a path's known facts are a context of hypotheses; `if a <=
+   b` adds one in its arm; a site that needs a fact carries "under this
+   path's hypotheses, P of the values"; today's lookup is one prover of it,
+   `omega` and a cited theorem are others, and a runtime check is an `if`
+   that adds the hypothesis. Reflection keeps an erased proof argument,
+   closed over the locals and hypotheses in scope, beside the code as the
+   site's fact, and each lowering carries site facts across by its agreement
+   theorem. A check the compiler makes of the code produces such a proof or
+   uses one in context.
+2. **One language, not four.** `Tm`, `FTm` (one written span), `ETm` (the
+   world) and `PTm`, with the held and `Bytes(n)` meanings, are instances of
+   one thing: a computation that threads a row of resources. That is §10.4's
+   store-passing meaning, so the language's redesign and the ownership
+   design are one project, and the judgment's result is what fills the row.
+   No more iterative extension of the four (`rt-several-written-spans` is
+   answered by the redesign, not by a patch). Order of work still open.
+3. **A resource is abstract**: anything with a threaded value. Bytes with a
+   typed view are one representation; the world and an erased token are
+   others.
+4. **Every obligation is a site fact** (lean: yes): bounds, validity,
+   apartness, dead after this use. Refusal or an inserted check is policy.
+5. **Regions are written in signatures and record declarations and inferred
+   as annotations in bodies** (lean, not committed; custom syntax is open if
+   it reads better).
+
