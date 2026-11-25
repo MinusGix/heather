@@ -1210,13 +1210,14 @@ grows with the call depth.
   injection of blocks at the last step, placelessness a property of the
   language.
 
+- **The first reclaiming allocator frees at the death**, so the bound is
+  the peak a reader can see; a lazy one stays possible as a policy under
+  the same laws.
+- **`defer` is for a release that cannot fail**; a close that can fail is
+  written as the bracket, so its error is combined.
+
 Still open:
 
-1. Whether the first reclaiming allocator frees at a death (a pause, and
-   the peak as the bound) or lazily (constant time, a weaker bound). Lean:
-   at the death, the one whose cost a reader can see.
-2. Whether `defer` is kept to a release that cannot fail (§15.10). Lean:
-   yes.
 3. That the inference rule's answer checks whenever any annotation does
    (§15.3): argued, to be proved with the judgment.
 4. Whether an owner may read a part it has lent to write, which eager
