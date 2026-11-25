@@ -24,3 +24,7 @@ One heap type and one set of memory operations serve the language and the contra
 ## What it assumes from elsewhere
 
 - **[[lowering-generic-in-memory]]** owns generalising the existing emission theorems so [[bytes-level-lowering]] can cite them; this issue changes none of `lib/native/function_ir`.
+
+## Log
+
+- 2026-11-25: The coordinating branch does not carry `lib/native/bytes_level/` until this issue lands. Stage 1 ([[x86-memory-contract]]) moved the heap out of `lib/native/reference_cells` into the contract module, renamed `Entry` to `Pointer` and made the blocks a list; [[bytes-level-language]] was built in parallel on the experiment's heap as a function (`set_block(m.heap.bytes, …)`, about ninety uses). Merged, `bytes_memory.hthr` does not elaborate (`Loc`, `Entry`, `Heap` unknown) and the whole-library gate fails on it. The language and its probes are on `claude/bytes-level-language` (head as merged at a431910) and on this issue's branch, which was cut with them present; moving them onto the contract's heap is this issue's first step, and they return to the coordinating branch with it.
