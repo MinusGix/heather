@@ -1163,3 +1163,189 @@ theorem step_view_call(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim:
                         Exec::viewed(m, r, ro), ws), after)));
     j(gd.right, λ q _ => Sim(k, q.next, CallView(g, x, args, t).eval1(k.w, s), CallView(g, x, args, t).run2(k.w, k.r, m), ws), at_m)
 }
+
+// ---------------------------------------------------------------------------
+// The checker is proved once
+
+// The functions a body calls.
+fn Stmt::calls(self o: Stmt, g: Nat) → Bool {
+    match o { CallMut(h, _, _, _, _, _, _) => h.same(g), CallView(h, _, _, _) => h.same(g), _ => False }
+}
+
+fn calls(ops: List<Stmt>, g: Nat) → Bool { match ops { Nil => False, Cons(o, rest) => o.calls(g) || calls(rest, g) } }
+
+// What a callee promises, for every function the statement calls.
+fn Callees(k: Frame, o: Stmt) → Type { (g: Nat) → o.calls(g) = True → FnSafe(sig_at(k.sigs, g), k.pres(g), k.w.mean(g), k.w.run(g)) }
+
+theorem Stmt::step(self o: Stmt, k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), pre: Prefix(s.words, ws), inr: InRef(k.file0, k.r),
+    callees: Callees(k, o), st: Next, ok: o.check(k.mode, k.sigs, c) = Some(st), hold: Owed::All(st.rs, k.pres, ws)):
+    Sim(k, st.next, o.eval1(k.w, s), o.run2(k.w, k.r, m), ws)
+{
+    (match o as λ e => Callees(k, e) → e.check(k.mode, k.sigs, c) = Some(st) → Sim(k, st.next, e.eval1(k.w, s), e.run2(k.w, k.r, m), ws) {
+        Set(y, x, i, v) => λ _ ok2 => step_set(k, c, s, m, ws, sim, pre, inr, y, x, i, v, st, ok2, hold),
+        Get(z, x, i) => λ _ ok2 => step_get(k, c, s, m, ws, sim, z, x, i, st, ok2),
+        View(t, x, lo, n) => λ _ ok2 => step_view(k, c, s, m, ws, sim, pre, t, x, lo, n, st, ok2),
+        Read(z, t, i) => λ _ ok2 => step_read(k, c, s, m, ws, sim, z, t, i, st, ok2),
+        Die(t) => λ _ ok2 => step_die(k, c, s, m, ws, sim, t, st, ok2),
+        CallMut(g, x, lo, n, args, y, z) => λ cl ok2 => step_mut(k, c, s, m, ws, sim, pre, inr, g, x, lo, n, args, y, z, cl(g, g.same_self()), st, ok2, hold),
+        CallView(g, x, args, t) => λ cl ok2 => step_view_call(k, c, s, m, ws, sim, pre, inr, g, x, args, t, cl(g, g.same_self()), st, ok2, hold),
+    })(callees, ok)
+}
+
+theorem Stmt::eval1_grows(self o: Stmt, w: World, s: Sem): Prefix(s.words, o.eval1(w, s).words) {
+    match o {
+        Set(_, _, _, _) => Prefix::same(s.words),
+        Get(_, x, i) => Prefix::snoc(s.words, word(list_at(s.objs, x), i.val(s.words))),
+        View(_, _, _, _) => Prefix::same(s.words),
+        Read(_, t, i) => Prefix::snoc(s.words, word(list_at(s.views, t), i.val(s.words))),
+        Die(_) => Prefix::same(s.words),
+        CallMut(g, x, lo, n, args, _, _) => Prefix::snoc(s.words, w.mean(g, window(list_at(s.objs, x), lo.val(s.words), n.val(s.words)), vals(args, s.words)).word),
+        CallView(_, _, _, _) => Prefix::same(s.words),
+    }
+}
+
+theorem mean_body_grows(w: World, ops: List<Stmt>): (s: Sem) → Prefix(s.words, mean_body(w, ops, s).words) {
+    match ops {
+        Nil => λ s => Prefix::same(s.words),
+        Cons(o, rest) => λ s => Prefix::chain(s.words, o.eval1(w, s).words, mean_body(w, rest, o.eval1(w, s)).words, o.eval1_grows(w, s), mean_body_grows(w, rest, o.eval1(w, s))),
+    }
+}
+
+theorem calls_head(o: Stmt, rest: List<Stmt>, g: Nat, h: o.calls(g) = True): calls(Cons(o, rest), g) = True {
+    j(sym(h), λ b _ => (b || calls(rest, g)) = True, refl)
+}
+
+theorem calls_rest(o: Stmt, rest: List<Stmt>, g: Nat, h: calls(rest, g) = True): calls(Cons(o, rest), g) = True {
+    match q: o.calls(g) { True => refl, False => h }
+}
+
+// The body, statement by statement.
+theorem check_body_sound(k: Frame, inr: InRef(k.file0, k.r), ops: List<Stmt>): (c: Places) → (s: Sem) → (m: Exec) → Sim(k, c, s, m, mean_body(k.w, ops, s).words) →
+    (rs: List<Owed>) → check_body(ops, k.mode, k.sigs, c) = Some(rs) → Owed::All(rs, k.pres, mean_body(k.w, ops, s).words) →
+    ((g: Nat) → calls(ops, g) = True → FnSafe(sig_at(k.sigs, g), k.pres(g), k.w.mean(g), k.w.run(g))) →
+    Exists<Places>(λ c2 => Sim(k, c2, mean_body(k.w, ops, s), run_body(k.w, k.r, ops, m), mean_body(k.w, ops, s).words))
+{
+    match ops {
+        Nil => λ c s m sim rs ok hold callees => Exists(c, sim),
+        Cons(o, rest) => λ c s m sim rs ok hold callees => {
+            let ws = mean_body(k.w, rest, o.eval1(k.w, s)).words;
+            let st = Option::and_then_some(o.check(k.mode, k.sigs, c), λ q => check_body(rest, k.mode, k.sigs, q.next).map(λ r2 => q.rs ++ r2), rs, ok);
+            let mp = option_map_some(check_body(rest, k.mode, k.sigs, st.witness.next), λ r2 => st.witness.rs ++ r2, rs, st.proof.right);
+            let parts = Owed::all_append(st.witness.rs, k.pres, mp.witness, ws, j(sym(mp.proof.right), λ q _ => Owed::All(q, k.pres, ws), hold));
+            let pre: Prefix(s.words, ws) = mean_body_grows(k.w, Cons(o, rest), s);
+            let sim2 = o.step(k, c, s, m, ws, sim, pre, inr, λ g h => callees(g, calls_head(o, rest, g, h)), st.witness, st.proof.left, parts.left);
+            check_body_sound(k, inr, rest, st.witness.next, o.eval1(k.w, s), o.run2(k.w, k.r, m), sim2, mp.witness, mp.proof.left, parts.right,
+                λ g h => callees(g, calls_rest(o, rest, g, h)))
+        },
+    }
+}
+
+// What a function answers, from the invariant at the end of its body.
+theorem Ret::answers(self ret: Ret, r: Ref, file: List<List<Nat>>, cur: List<Nat>, h: Holds(list_at(file, r.b), r.base, cur), len: cur.len() = r.len, ws, mws: List<Nat>, e: mws = ws):
+    (ret.vlo(r, mws) + ret.vn(r, mws) <= r.len) ∧ ((i: Nat) → call_check::word(ret.view(cur, ws), i) = rget(file, Ref(r.b, r.base + ret.vlo(r, mws), ret.vn(r, mws)), i))
+{
+    j(sym(e), λ q _ => (ret.vlo(r, q) + ret.vn(r, q) <= r.len) ∧ ((i: Nat) → call_check::word(ret.view(cur, ws), i) = rget(file, Ref(r.b, r.base + ret.vlo(r, q), ret.vn(r, q)), i)),
+        match ret {
+            RWord(_) => ⟨omega(), λ i => refl⟩,
+            RView(lo, n) => {
+                let inside: (lo.val(ws).min(r.len) + n.val(ws).min(r.len - lo.val(ws)) <= r.len) = omega();
+                ⟨inside, narrow_reads(file, r, cur, h, len, lo.val(ws), n.val(ws))⟩
+            },
+        })
+}
+
+theorem Mode::gives_back(self md: Mode, file0, file: List<List<Nat>>, r: Ref, arg, cur: List<Nat>, on: OnRef(file0, file, r, cur), fixed: md.writes() = False → cur = arg):
+    OnRef(file0, file, r, md.back(arg, cur)) ∧ (md.writes() = False → md.back(arg, cur) = arg)
+{
+    (match md as λ q => (q.writes() = False → cur = arg) → OnRef(file0, file, r, q.back(arg, cur)) ∧ (q.writes() = False → q.back(arg, cur) = arg) {
+        Reads => λ fx => ⟨j(fx(refl), λ l _ => OnRef(file0, file, r, l), on), λ _ => refl⟩,
+        Writes => λ _ => ⟨on, λ no => absurd(no)⟩,
+    })(fixed)
+}
+
+theorem Sim::ends({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>}, self sim: Sim(k, c, s, m, ws), f: Func, em: k.mode = f.mode):
+    Safe(f.mode, k.file0, k.r, k.arg, mean_out(f, k.arg, s), run_out(f, k.r, m))
+{
+    let cur = list_at(s.objs, c.top);
+    let last: (s.objs.len() - 1 = c.top) = omega(sim.top);
+    let ecur: (s.cur() = cur) = cong_fn(λ (q: Nat) => list_at(s.objs, q), last);
+    let md = f.mode.gives_back(k.file0, m.file, k.r, k.arg, cur, sim.on, j(em, λ q _ => q.writes() = False → cur = k.arg, sim.fixed));
+    let rt = f.ret.answers(k.r, m.file, cur, sim.on.holds, sim.on.len, s.words, m.words, sim.words);
+    j(sym(ecur), λ q _ => Safe(f.mode, k.file0, k.r, k.arg, MOut(f.mode.back(k.arg, q), f.ret.word(s.words), f.ret.view(q, s.words)), run_out(f, k.r, m)),
+        Safe(cong_fn(λ (w: List<Nat>) => f.ret.word(w), sim.words), md.left, md.right, rt.left, rt.right))
+}
+
+theorem check_sound(sigs: List<Sig>, pres: Nat → List<Nat> → Type, f: Func, rs: List<Owed>, ok: check_fn(sigs, f) = Some(rs), pre: List<Nat> → Type, w: World,
+    discharge: (arg, ws: List<Nat>) → ws.len() = f.words → pre(ws) → Owed::All(rs, pres, mean_body(w, f.body, Sem([arg], Nil, ws)).words),
+    callees: (g: Nat) → calls(f.body, g) = True → FnSafe(sig_at(sigs, g), pres(g), w.mean(g), w.run(g))):
+    FnSafe(f.sig(), pre, λ arg ws => mean_fn(w, f, arg, ws), λ file r ws => run_fn(w, f, file, r, ws))
+{
+    λ file r ws inr nw p => {
+        let arg = window(list_at(file, r.b), r.base, r.len);
+        let k = Frame(f.mode, sigs, pres, w, r, file, arg);
+        let s0 = Sem([arg], Nil, ws);
+        let m0 = Exec(file, Nil, ws);
+        let c0 = Places(0, Nil, 0, f.words);
+        let sim0: Sim(k, c0, s0, m0, mean_body(w, f.body, s0).words) = Sim(refl, sym(nw), refl, refl, refl, OnRef::start(file, r, inr), λ _ => refl, λ lv mem => false_elim(mem));
+        let fin = check_body_sound(k, inr, f.body, c0, s0, m0, sim0, rs, ok, discharge(arg, ws, nw, p), callees);
+        let at_end: Sim(k, fin.witness, mean_body(w, f.body, s0), run_body(w, r, f.body, m0), mean_body(w, f.body, s0).words) = fin.proof;
+        at_end.ends(f, refl)
+    }
+}
+
+// A call at depth zero: it does nothing, and keeps the promise of every
+// signature.
+theorem idle_safe(sig: Sig, pre: List<Nat> → Type): FnSafe(sig, pre, λ arg _ => MOut(arg, 0, Nil), λ file _ _ => ROut(file, 0, 0, 0)) {
+    λ file r ws inr _ _ => Safe(refl, OnRef::start(file, r, inr), λ _ => refl, omega(), λ i => refl)
+}
+
+// ---------------------------------------------------------------------------
+// A program: every function checked gives every function safe
+
+theorem sig_at_of(fns: List<Func>): (g: Nat) → sig_at(sigs_of(fns), g) = fn_at(fns, g).sig() {
+    match fns {
+        Nil => λ g => refl,
+        Cons(_, rest) => λ g => match g { Zero => refl, Succ(h) => sig_at_of(rest, h) },
+    }
+}
+
+theorem fn_at_past(fns: List<Func>, g: Nat, past: fns.len() <= g): fn_at(fns, g) = Func::none() {
+    cong_fn(λ (o: Option<Func>) => o.unwrap_or(Func::none()), fns.nth_past_end(g, past))
+}
+
+// Function `g` checks, and its residuals hold under its precondition in
+// every world.
+record Checks(fns: List<Func>, pres: Nat → List<Nat> → Type, g: Nat) {
+    rs: List<Owed>,
+    ok: check_fn(sigs_of(fns), fn_at(fns, g)) = Some(rs),
+    discharge: (w: World) → (arg, ws: List<Nat>) → ws.len() = fn_at(fns, g).words → pres(g, ws) → Owed::All(rs, pres, mean_body(w, fn_at(fns, g).body, Sem([arg], Nil, ws)).words),
+}
+
+fn ProgOk(fns: List<Func>, pres: Nat → List<Nat> → Type) → Type { (g: Nat) → g < fns.len() → Checks(fns, pres, g) }
+
+// Past the table, the function a table has nowhere checks with nothing owed.
+theorem prog_checks(fns: List<Func>, pres: Nat → List<Nat> → Type, ok: ProgOk(fns, pres), g: Nat): Checks(fns, pres, g) {
+    match q: (g + 1).leb(fns.len()) {
+        True => ok(g, omega(q)),
+        False => {
+            let e = fn_at_past(fns, g, omega(q));
+            Checks(Nil, j(sym(e), λ f _ => check_fn(sigs_of(fns), f) = Some(Nil), refl), λ w arg ws _ _ => trivial)
+        },
+    }
+}
+
+// At every depth of calls, every function of a checked program keeps its
+// promise: the caller's proof cites only the callees' promises.
+theorem prog_sound(fns: List<Func>, pres: Nat → List<Nat> → Type, ok: ProgOk(fns, pres), d: Nat): (g: Nat) →
+    FnSafe(sig_at(sigs_of(fns), g), pres(g), world(fns, d).mean(g), world(fns, d).run(g))
+{
+    match d {
+        Zero => λ g => idle_safe(sig_at(sigs_of(fns), g), pres(g)),
+        Succ(e) => λ g => {
+            let ch = prog_checks(fns, pres, ok, g);
+            let safe = check_sound(sigs_of(fns), pres, fn_at(fns, g), ch.rs, ch.ok, pres(g), world(fns, e), ch.discharge(world(fns, e)),
+                λ h _ => prog_sound(fns, pres, ok, e, h));
+            j(sym(sig_at_of(fns, g)), λ sg _ => FnSafe(sg, pres(g), world(fns, Succ(e)).mean(g), world(fns, Succ(e)).run(g)), safe)
+        },
+    }
+}
