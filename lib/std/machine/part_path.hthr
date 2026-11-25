@@ -1,0 +1,175 @@
+// A field of a laid record as a path with a byte-span footprint
+// (docs/language/ownership-design.md §10.4, §13.7;
+// issues/ownership-paths-footprints.md). A `Part` (`part.hthr`) says where
+// in a stored whole a field is, with `reads` and `frames` laws; read at the
+// whole's base `at`, it is a path into the bytes, and its footprint is the
+// field's bytes, so `Span::apart` decides two fields apart from the layout.
+//
+// - **A codec as a step** (`Stored::codec_path(s) : Path<[u8; size], A>`):
+//   the value the bytes of its size read, written as the bytes of the
+//   value. Total, and lawful where the codec is exact (`codec_laws`: a
+//   codec with padding writes the padding back as its own bytes, not as
+//   they were, so writing back what was read changes nothing only where
+//   `Stored::Exact` holds).
+// - **A stored value at a place** (`Stored::path(s, at)`): the window of
+//   the codec's size from `at`, then the codec. Lawful where the codec is
+//   exact (`path_laws`), reading `s.get` and writing `s.put` where it fits
+//   (`path_get`, `path_set`), and lying in `Span(at, size)` with no proof
+//   (`path_in`: `PathIn::then` of the window's footprint).
+// - **A field** (`Part::path(p, at)`): its codec's path at `p.offset + at`,
+//   in `Span(p.offset + at, size)` (`Part::path_in`). It reads the field of
+//   the whole (`Part::path_reads`, from `reads`), and the whole read after
+//   its write is the whole with the field replaced (`Part::path_writes`,
+//   from `frames`).
+// - **Two fields decided apart** (`Part::paths_apart`): by `Span::apart` on
+//   their offsets and sizes; at a closed layout the verdict is evaluation,
+//   at an open base too (`Part::paths_apart_at`: the verdict at base zero
+//   shifts), and at open codecs from the layout's own facts
+//   (`Part::pair_apart`: the two
+//   values of a pair, apart at any codecs by `Layout::offset_of_ge`).
+//   Apartness needs no exactness: `PathIn` says where a path reads and
+//   writes, whatever its laws.
+import logic;
+import bool;
+import nat;
+import omega;
+import option;
+import list;
+import list_window;
+import bitvec;
+import vector;
+import span_set;
+import layout;
+import stored;
+import part;
+import path;
+import list_path;
+import vector_path;
+
+// ---------------------------------------------------------------------------
+// A codec as a step
+
+fn Stored::codec_path<A>(s: Stored<A>) → Path<[u8; s.layout.size], A> {
+    Path<[u8; s.layout.size], A>(
+        get := λ (v: [u8; s.layout.size]) => Some(s.read(vector_entries(v))),
+        set := λ (v: [u8; s.layout.size]) => λ (a: A) => s.write(a).vector_of(s.layout.size, BitVec::ofNat(0)),
+    )
+}
+
+theorem Stored::codec_entries<A>(s: Stored<A>, a: A): vector_entries(s.write(a).vector_of(s.layout.size, BitVec::ofNat(0))) = s.write(a) {
+    List::entries_vector_of(s.layout.size, BitVec::ofNat(0), s.write(a), s.sized(a))
+}
+
+theorem Stored::codec_laws<A>(s: Stored<A>, exact: s.Exact()): PathLaws<[u8; s.layout.size], A>(Stored::codec_path(s)) {
+    PathLaws(
+        λ v c a h => cong_fn(λ (x: A) => Some(x), trans(cong_fn(s.read, Stored::codec_entries(s, a)), s.round(a))),
+        λ v c h => {
+            let read: (s.read(vector_entries(v)) = c) = Option::some_inj(s.read(vector_entries(v)), c, h);
+            trans(cong_fn(λ (x: A) => s.write(x).vector_of(s.layout.size, BitVec::ofNat(0)), sym(read)),
+                trans(cong_fn(λ (bs: List<u8>) => bs.vector_of(s.layout.size, BitVec::ofNat(0)), exact(vector_entries(v), vector_entries_len(s.layout.size, v))),
+                    vector_of_entries_exact(s.layout.size, BitVec::ofNat(0), v)))
+        },
+        λ v a b => refl,
+        λ v a h => absurd(h),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// A stored value at a place
+
+fn Stored::path<A>(self s: Stored<A>, at: Nat) → Path<List<u8>, A> { Path::window<u8>(at, s.layout.size).then(Stored::codec_path(s)) }
+
+theorem Stored::path_laws<A>(self s: Stored<A>, at: Nat, exact: s.Exact()): PathLaws<List<u8>, A>(s.path(at)) {
+    Path::window<u8>(at, s.layout.size).then_laws(Stored::codec_path(s), Path::window_laws<u8>(at, s.layout.size), Stored::codec_laws(s, exact))
+}
+
+theorem Stored::path_in<A>(self s: Stored<A>, at: Nat): PathIn<u8, A>(s.path(at), Span(at, s.layout.size)) {
+    Path::window_in<u8>(at, s.layout.size).then(Stored::codec_path(s))
+}
+
+// Where it fits, the path reads the stored value and writes the store.
+theorem Stored::path_get<A>(self s: Stored<A>, at: Nat, bytes: List<u8>, fits: s.layout.size + at <= bytes.len()): s.path(at).get(bytes) = Some(s.get(bytes, at)) {
+    let w = bytes.run_some(at, s.layout.size, omega(fits));
+    let size: (s.layout.size + at - at = s.layout.size) = omega;
+    trans(Path::window<u8>(at, s.layout.size).then_get_at(Stored::codec_path(s), bytes, w.witness, w.proof.left),
+        cong_fn(λ (bs: List<u8>) => Some(s.read(bs)), trans(w.proof.right, cong_fn(λ (n: Nat) => bytes.drop(at).take(n), sym(size)))))
+}
+
+theorem Stored::path_set<A>(self s: Stored<A>, at: Nat, bytes: List<u8>, fits: s.layout.size + at <= bytes.len(), a: A): s.path(at).set(bytes, a) = s.put(bytes, at, a) {
+    let w = bytes.run_some(at, s.layout.size, omega(fits));
+    trans(Path::window<u8>(at, s.layout.size).then_set_at(Stored::codec_path(s), bytes, w.witness, w.proof.left, a),
+        trans(bytes.put_run_fits(at, s.layout.size, s.write(a).vector_of(s.layout.size, BitVec::ofNat(0)), omega(fits)),
+            cong_fn(λ (bs: List<u8>) => bytes.put_window(at, bs), Stored::codec_entries(s, a))))
+}
+
+// Valid exactly where it fits.
+theorem Stored::path_valid<A>(self s: Stored<A>, at: Nat, bytes: List<u8>, fits: s.layout.size + at <= bytes.len()): s.path(at).Valid(bytes) {
+    Exists(s.get(bytes, at), s.path_get(at, bytes, fits))
+}
+
+theorem Stored::path_fits<A>(self s: Stored<A>, at: Nat, bytes: List<u8>, valid: s.path(at).Valid(bytes)): s.layout.size + at <= bytes.len() {
+    let outer: (Path::window<u8>(at, s.layout.size).Valid(bytes)) =
+        Path::window<u8>(at, s.layout.size).then_valid_outer(Stored::codec_path(s), bytes, Path::window<u8>(at, s.layout.size).get(bytes), refl, valid);
+    let f = Path::window_valid_fits<u8>(at, s.layout.size, bytes, outer);
+    omega(f)
+}
+
+// ---------------------------------------------------------------------------
+// A field of a laid record
+
+fn Part::path<A, B>({whole: Stored<A>}, self p: Part<A, B>(whole), at: Nat) → Path<List<u8>, B> { p.codec.path(p.offset + at) }
+
+theorem Part::path_laws<A, B>({whole: Stored<A>}, self p: Part<A, B>(whole), at: Nat, exact: p.codec.Exact()): PathLaws<List<u8>, B>(p.path(at)) {
+    p.codec.path_laws(p.offset + at, exact)
+}
+
+theorem Part::path_in<A, B>({whole: Stored<A>}, self p: Part<A, B>(whole), at: Nat): PathIn<u8, B>(p.path(at), Span(p.offset + at, p.codec.layout.size)) {
+    p.codec.path_in(p.offset + at)
+}
+
+// Where the whole fits, the field's path reads the field of the whole…
+theorem Part::path_reads<A, B>({whole: Stored<A>}, self p: Part<A, B>(whole), at: Nat, bytes: List<u8>, fits: whole.layout.size + at <= bytes.len()):
+    p.path(at).get(bytes) = Some(p.of(whole.get(bytes, at)))
+{
+    let inside = p.within;
+    trans(p.codec.path_get(p.offset + at, bytes, omega(inside, fits)), cong_fn(λ (b: B) => Some(b), p.reads(bytes, at)))
+}
+
+// …and the whole read after its write is the whole with the field
+// replaced.
+theorem Part::path_writes<A, B>({whole: Stored<A>}, self p: Part<A, B>(whole), at: Nat, bytes: List<u8>, fits: whole.layout.size + at <= bytes.len(), b: B):
+    whole.get(p.path(at).set(bytes, b), at) = p.with(whole.get(bytes, at), b)
+{
+    let inside = p.within;
+    trans(cong_fn(λ (bs: List<u8>) => whole.get(bs, at), p.codec.path_set(p.offset + at, bytes, omega(inside, fits), b)), p.get_put(bytes, at, b, fits))
+}
+
+// Two fields of one whole, decided apart by their byte spans.
+theorem Part::paths_apart<A, B, C>({whole: Stored<A>}, p: Part<A, B>(whole), q: Part<A, C>(whole), at: Nat,
+    verdict: Span(p.offset + at, p.codec.layout.size).apart(Span(q.offset + at, q.codec.layout.size)).IsTrue()):
+    Apart<List<u8>, B, C>(p.path(at), q.path(at))
+{
+    PathIn::apart_sound(p.path_in(at), q.path_in(at), verdict)
+}
+
+// The verdict does not depend on the whole's base: two fields found apart
+// at base zero are apart at every base, so at a closed layout and an open
+// base the verdict is still evaluated.
+theorem Span::apart_shift(a, n, b, m, at: Nat, verdict: Span(a, n).apart(Span(b, m)).IsTrue()): Span(a + at, n).apart(Span(b + at, m)).IsTrue() { omega(verdict) }
+
+theorem Part::paths_apart_at<A, B, C>({whole: Stored<A>}, p: Part<A, B>(whole), q: Part<A, C>(whole),
+    verdict: Span(p.offset, p.codec.layout.size).apart(Span(q.offset, q.codec.layout.size)).IsTrue(), at: Nat):
+    Apart<List<u8>, B, C>(p.path(at), q.path(at))
+{
+    Part::paths_apart(p, q, at, Span::apart_shift(p.offset, p.codec.layout.size, q.offset, q.codec.layout.size, at, verdict))
+}
+
+// The two values of a pair are apart at any codecs: the second starts at
+// or past the end of the first.
+theorem Part::pair_apart<A, B>(s: Stored<A>, t: Stored<B>, at: Nat): Apart<List<u8>, A, B>(Part::fst(s, t).path(at), Part::snd(s, t).path(at)) {
+    let room = s.layout.offset_of_ge(t.layout);
+    let o1: (Part::fst(s, t).offset = 0) = refl;
+    let c1: (Part::fst(s, t).codec.layout.size = s.layout.size) = refl;
+    let o2: (Part::snd(s, t).offset = s.layout.offset_of(t.layout)) = refl;
+    Part::paths_apart(Part::fst(s, t), Part::snd(s, t), at, omega(room, o1, c1, o2))
+}

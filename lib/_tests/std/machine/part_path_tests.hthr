@@ -1,0 +1,144 @@
+// Probes of `part_path`: a laid record's fields as paths with byte-span
+// footprints. At a closed layout (a header with padding), the fields'
+// spans by evaluation and two fields decided apart with no proof written;
+// a field read and written through its path at literal bytes; at open
+// codecs, the two values of a pair apart; and the negative controls: a
+// field is not apart from the whole it lies in, and the decider refuses
+// two overlapping parts. Tests, not library.
+import logic;
+import bool;
+import nat;
+import omega;
+import option;
+import pair;
+import list;
+import list_window;
+import bitvec;
+import vector;
+import bitvec_bytes;
+import span_set;
+import layout;
+import stored;
+import part;
+import path;
+import list_path;
+import part_path;
+
+// ---------------------------------------------------------------------------
+// A closed layout: a tag byte, padding, a length at 8, three flags at 16
+
+record Header { tag: u8, length: u64, flags: [u16; 3] }
+
+def HeaderFields: Type = Pair<Pair<u8, u64>, [u16; 3]>;
+
+fn Header::fields() → Stored<HeaderFields> { Stored::byte().then(Stored::u64_be()).then(Stored::u16_be().array(3)) }
+
+fn Header::of_fields(p: HeaderFields) → Header { Header(p.fst.fst, p.fst.snd, p.snd) }
+fn Header::to_fields(h: Header) → HeaderFields { Pair(Pair(h.tag, h.length), h.flags) }
+
+fn Header::stored() → Stored<Header> { Header::fields().record(Header::of_fields, Header::to_fields, λ h => refl) }
+
+fn Header::part<B>(p: Part<HeaderFields, B>(Header::fields())) → Part<Header, B>(Header::stored()) {
+    p.field(Header::of_fields, Header::to_fields, λ h => refl, λ p => refl)
+}
+
+fn Header::tag_part() → Part<Header, u8>(Header::stored()) {
+    Header::part(Part::fst(Stored::byte().then(Stored::u64_be()), Stored::u16_be().array(3)).then(Part::fst(Stored::byte(), Stored::u64_be())))
+}
+
+fn Header::length_part() → Part<Header, u64>(Header::stored()) {
+    Header::part(Part::fst(Stored::byte().then(Stored::u64_be()), Stored::u16_be().array(3)).then(Part::snd(Stored::byte(), Stored::u64_be())))
+}
+
+fn Header::flags_part() → Part<Header, [u16; 3]>(Header::stored()) {
+    Header::part(Part::snd(Stored::byte().then(Stored::u64_be()), Stored::u16_be().array(3)))
+}
+
+// Where the fields lie, by evaluation: their footprints are
+// `Span(offset + at, size)` (`Part::path_in`).
+theorem length_lies(): (Header::length_part().offset = 8) ∧ (Header::length_part().codec.layout.size = 8) { ⟨refl, refl⟩ }
+
+theorem flags_lie(): (Header::flags_part().offset = 16) ∧ (Header::flags_part().codec.layout.size = 6) { ⟨refl, refl⟩ }
+
+// Two fields apart with no proof written: the verdict is evaluated.
+theorem tag_length_apart(): Apart<List<u8>, u8, u64>(Header::tag_part().path(0), Header::length_part().path(0)) {
+    Part::paths_apart(Header::tag_part(), Header::length_part(), 0, trivial)
+}
+
+// At an open base, the verdict is still evaluated: it is taken at base
+// zero and shifted.
+theorem length_flags_apart(at: Nat): Apart<List<u8>, u64, [u16; 3]>(Header::length_part().path(at), Header::flags_part().path(at)) {
+    Part::paths_apart_at(Header::length_part(), Header::flags_part(), trivial, at)
+}
+
+// A field of a field: one flag, apart from the length. At an open index
+// the offset is `i * 2 + 16` by evaluation, and the verdict is `omega`'s.
+fn Header::flag(i: Nat, inside: i < 3) → Part<Header, u16>(Header::stored()) {
+    Header::flags_part().then(Part::element(Stored::u16_be(), 3, i, inside))
+}
+
+theorem flag_length_apart(at, i: Nat, inside: i < 3): Apart<List<u8>, u64, u16>(Header::length_part().path(at), Header::flag(i, inside).path(at)) {
+    let verdict: (Span(8 + at, 8).apart(Span(i * 2 + 16 + at, 2)).IsTrue()) = omega(inside);
+    Part::paths_apart(Header::length_part(), Header::flag(i, inside), at, verdict)
+}
+
+// Two flags at different indexes.
+theorem flags_apart(at, i, k: Nat, in_i: i < 3, in_k: k < 3, ne: i ≠ k): Apart<List<u8>, u16, u16>(Header::flag(i, in_i).path(at), Header::flag(k, in_k).path(at)) {
+    let verdict: (Span(i * 2 + 16 + at, 2).apart(Span(k * 2 + 16 + at, 2)).IsTrue()) = omega(ne);
+    Part::paths_apart(Header::flag(i, in_i), Header::flag(k, in_k), at, verdict)
+}
+
+// ---------------------------------------------------------------------------
+// Reading and writing at literal bytes
+
+fn BYTES() → List<u8> { [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 0, 1, 0, 2, 0, 3, 0, 0] }
+
+theorem length_reads(): Header::length_part().path(0).get(BYTES()) = Some(7) { refl }
+
+theorem length_writes(): Header::length_part().path(0).get(Header::length_part().path(0).set(BYTES(), 9)) = Some(9) { refl }
+
+// The tag is untouched by the length's write.
+theorem tag_untouched(): Header::tag_part().path(0).get(Header::length_part().path(0).set(BYTES(), 9)) = Some(1) { refl }
+
+// Past the end, the field's path reads nothing.
+theorem past_end(): Header::length_part().path(10).get(BYTES()) = None { refl }
+
+// ---------------------------------------------------------------------------
+// Open codecs
+
+theorem pair_open<A, B>(s: Stored<A>, t: Stored<B>, at: Nat): Apart<List<u8>, A, B>(Part::fst(s, t).path(at), Part::snd(s, t).path(at)) {
+    Part::pair_apart(s, t, at)
+}
+
+// The laws of a field whose codec is exact, at an open base.
+theorem length_laws(at: Nat): PathLaws<List<u8>, u64>(Header::length_part().path(at)) {
+    Header::length_part().path_laws(at, Stored::exact_aligned(Stored::be_bytes(8), 3, Stored::exact_be_bytes(8)))
+}
+
+// What a field's write leaves of the whole: the whole with the field.
+theorem length_writes_open(bytes: List<u8>, at: Nat, fits: 24 + at <= bytes.len(), n: u64):
+    Header::stored().get(Header::length_part().path(at).set(bytes, n), at) = Header::length_part().with(Header::stored().get(bytes, at), n)
+{
+    Header::length_part().path_writes(at, bytes, fits, n)
+}
+
+// ---------------------------------------------------------------------------
+// Negative controls
+
+// A field lies inside the whole: their spans meet.
+theorem whole_meets_length(): Span(0, 24).apart(Span(8, 8)) = False { refl }
+
+theorem length_not_apart_self(): ¬Apart<List<u8>, u64, u64>(Header::length_part().path(0), Header::length_part().path(0)) {
+    λ apart => {
+        let same: (Header::length_part().path(0).get(Header::length_part().path(0).set(BYTES(), 9)) = Header::length_part().path(0).get(BYTES())) =
+            apart.left_after_right(BYTES(), 9);
+        let nine: (Header::length_part().path(0).get(Header::length_part().path(0).set(BYTES(), 9)) = Some(9)) = refl;
+        let seven: (Header::length_part().path(0).get(BYTES()) = Some(7)) = refl;
+        absurd(cong_fn(λ (x: u64) => x.toNat(), Option::some_inj(9, 7, trans(sym(nine), trans(same, seven)))))
+    }
+}
+
+// expect-error: `trivial` proves `True`
+theorem whole_and_length_refused(): Apart<List<u8>, Header, u64>(Part::all(Header::stored()).path(0), Header::length_part().path(0)) {
+    Part::paths_apart(Part::all(Header::stored()), Header::length_part(), 0, trivial)
+}
