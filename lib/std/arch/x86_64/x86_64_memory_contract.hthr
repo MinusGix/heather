@@ -738,7 +738,25 @@ fn cleared(shadow: List<Pointer>, b, k, n: Nat) → List<Pointer> {
 // left junk in), and the injection says nothing of an undefined byte.
 // FunctionIR's buffers are a heap with an empty shadow and nothing
 // undefined (`Heap::of`, function_ir_lower_calls).
-record Heap { bytes: Nat → List<BitVec(8)>, shadow: List<Pointer>, undefined: Nat → Nat → Bool }
+//
+// The blocks are lists, by block number: each block's bytes, and its
+// undefined flags (a flag past the list's end is defined), so a store
+// updates a list and evaluating a run of stores is linear in it, where a
+// closure layered per store made it quadratic. A block past the end of
+// `blocks` reads as empty. The heap is used through `bytes` and
+// `undefined`, never its fields.
+record Heap { blocks: List<List<BitVec(8)>>, shadow: List<Pointer>, flags: List<List<Bool>> }
+
+fn Heap::bytes(self heap: Heap, b: Nat) → List<BitVec(8)> { match heap.blocks.nth(b) { None => [], Some(bytes) => bytes } }
+
+fn undefined_at(flags: List<Bool>, j: Nat) → Bool { match flags.nth(j) { None => False, Some(flag) => flag } }
+
+fn Heap::undefined(self heap: Heap, b, j: Nat) → Bool { match heap.flags.nth(b) { None => False, Some(flags) => undefined_at(flags, j) } }
+
+// The flags with the `n` from `k` cleared, the first of them at `i`.
+fn clear_from(flags: List<Bool>, i, k, n: Nat) → List<Bool> {
+    match flags { Nil => Nil, Cons(flag, rest) => Cons(flag && !(k.leb(i) && (i + 1).leb(k + n)), clear_from(rest, i + 1, k, n)) }
+}
 
 // No byte of the `n` from `k` of block `b` is undefined.
 fn Heap::defined(self heap: Heap, b, k, n: Nat) → Bool {
@@ -782,9 +800,9 @@ fn Heap::plain(self heap: Heap, loc: Loc, n: Nat) → Bool {
 // Bytes stored at `loc`: the pointers they overlap are gone, and the bytes
 // are defined.
 fn Heap::store(self heap: Heap, loc: Loc, bytes: List<BitVec(8)>) → Heap {
-    Heap(set_block(heap.bytes, loc.block, heap.bytes(loc.block).put_window(loc.offset, bytes)),
+    Heap(heap.blocks.update(loc.block, λ (xs: List<BitVec(8)>) => xs.put_window(loc.offset, bytes)),
         cleared(heap.shadow, loc.block, loc.offset, bytes.len()),
-        λ (c: Nat) (j: Nat) => heap.undefined(c, j) && !within(loc.block, loc.offset, bytes.len(), c, j))
+        heap.flags.update(loc.block, λ (flags: List<Bool>) => clear_from(flags, 0, loc.offset, bytes.len())))
 }
 
 fn Heap::store_word(self heap: Heap, loc: Loc, word: BitVec(64)) → Heap { heap.store(loc, word_bytes(word)) }
@@ -792,8 +810,8 @@ fn Heap::store_word(self heap: Heap, loc: Loc, word: BitVec(64)) → Heap { heap
 // A reference stored: its eight bytes zero, the shadow saying what is
 // there.
 fn Heap::store_ref(self heap: Heap, loc, target: Loc) → Heap {
-    Heap(heap.store_word(loc, BitVec::zero()).bytes, Cons(Pointer(loc.block, loc.offset, target), heap.store_word(loc, BitVec::zero()).shadow),
-        heap.store_word(loc, BitVec::zero()).undefined)
+    Heap(heap.store_word(loc, BitVec::zero()).blocks, Cons(Pointer(loc.block, loc.offset, target), heap.store_word(loc, BitVec::zero()).shadow),
+        heap.store_word(loc, BitVec::zero()).flags)
 }
 
 // ---------------------------------------------------------------------------
@@ -827,6 +845,69 @@ theorem set_block_other(bytes: Nat → List<BitVec(8)>, b: Nat, now: List<BitVec
     j(sym(c.same_false_of(b, differs)), λ v _ => (match v { True => now, False => bytes(c) }) = bytes(c), refl)
 }
 
+// An update at `i` reads, at `i`, what was there updated.
+theorem List::nth_update_map<A>(self xs: List<A>): (i: Nat) → (f: A → A) → xs.update(i, f).nth(i) = xs.nth(i).map(f) {
+    match xs {
+        Nil => λ i f => refl,
+        Cons(h, t) => λ i => match i { Zero => λ f => refl, Succ(k) => λ f => t.nth_update_map(k, f) },
+    }
+}
+
+// A store into a block that has the byte it starts at: the block is its
+// bytes with the stored ones written over them, every other block as it
+// was.
+theorem Heap::store_bytes(self heap: Heap, loc: Loc, bytes: List<BitVec(8)>, inside: loc.offset < heap.bytes(loc.block).len(), c: Nat):
+    heap.store(loc, bytes).bytes(c) = set_block(λ (d: Nat) => heap.bytes(d), loc.block, heap.bytes(loc.block).put_window(loc.offset, bytes), c) {
+    let f = λ (xs: List<BitVec(8)>) => xs.put_window(loc.offset, bytes);
+    let read = λ (o: Option<List<BitVec(8)>>) => match o { None => [], Some(xs) => xs };
+    match c.eq_dec(loc.block) {
+        Inr(differs) => trans(cong_fn<Option<List<BitVec(8)>>, List<BitVec(8)>>(read, heap.blocks.nth_update_other(loc.block, f, c, differs)),
+            sym(set_block_other(λ (d: Nat) => heap.bytes(d), loc.block, f(heap.bytes(loc.block)), c, differs))),
+        Inl(same) => j(sym(same), λ x _ => heap.store(loc, bytes).bytes(x) = set_block(λ (d: Nat) => heap.bytes(d), loc.block, f(heap.bytes(loc.block)), x),
+            trans((match heap.blocks.nth(loc.block) as λ o => heap.blocks.nth(loc.block) = o → loc.offset < read(o).len() →
+                    read(heap.blocks.update(loc.block, f).nth(loc.block)) = f(read(o)) {
+                    None => λ _ short => false_elim(short),
+                    Some(xs) => λ here _ => cong_fn<Option<List<BitVec(8)>>, List<BitVec(8)>>(read, heap.blocks.nth_update_here(loc.block, f, xs, here)),
+                })(refl, inside),
+                sym(set_block_here(λ (d: Nat) => heap.bytes(d), loc.block, f(heap.bytes(loc.block)))))),
+    }
+}
+
+// Clearing flags: a flag is the old one and not within the cleared bytes.
+theorem clear_from_at(flags: List<Bool>, i, k, n, j: Nat):
+    undefined_at(clear_from(flags, i, k, n), j) = undefined_at(flags, j) && !(k.leb(i + j) && (i + j + 1).leb(k + n)) {
+    match flags {
+        Nil => refl,
+        Cons(flag, rest) => match j {
+            Zero => refl,
+            Succ(m) => trans(clear_from_at(rest, i + 1, k, n, m),
+                cong_fn<Nat, Bool>(λ x => undefined_at(rest, m) && !(k.leb(x) && (x + 1).leb(k + n)), i.add_succ_left(m))),
+        },
+    }
+}
+
+// What a store leaves undefined: what was, outside the stored bytes.
+theorem Heap::store_undefined(self heap: Heap, loc: Loc, bytes: List<BitVec(8)>, c, j: Nat):
+    heap.store(loc, bytes).undefined(c, j) = heap.undefined(c, j) && !within(loc.block, loc.offset, bytes.len(), c, j) {
+    let f = λ (flags: List<Bool>) => clear_from(flags, 0, loc.offset, bytes.len());
+    let read = λ (o: Option<List<Bool>>) => match o { None => False, Some(flags) => undefined_at(flags, j) };
+    match c.eq_dec(loc.block) {
+        Inr(differs) => trans(cong_fn<Option<List<Bool>>, Bool>(read, heap.flags.nth_update_other(loc.block, f, c, differs)),
+            sym(trans(cong_fn<Bool, Bool>(λ v => heap.undefined(c, j) && !(v && (loc.offset.leb(j) && (j + 1).leb(loc.offset + bytes.len()))),
+                c.same_false_of(loc.block, differs)), Bool::and_true_r(heap.undefined(c, j))))),
+        Inl(same) => j(sym(same), λ x _ => heap.store(loc, bytes).undefined(x, j) = heap.undefined(x, j) && !within(loc.block, loc.offset, bytes.len(), x, j),
+            trans(cong_fn<Option<List<Bool>>, Bool>(read, heap.flags.nth_update_map(loc.block, f)),
+                trans((match heap.flags.nth(loc.block) as λ o => read(o.map(f)) = read(o) && !(loc.offset.leb(0 + j) && (0 + j + 1).leb(loc.offset + bytes.len())) {
+                        None => refl,
+                        Some(flags) => clear_from_at(flags, 0, loc.offset, bytes.len(), j),
+                    }),
+                    cong_fn<Bool, Bool>(λ v => read(heap.flags.nth(loc.block)) && !v,
+                        trans(cong_fn<Nat, Bool>(λ x => loc.offset.leb(x) && (x + 1).leb(loc.offset + bytes.len()), j.add_left_zero()),
+                            sym(trans(cong_fn<Bool, Bool>(λ t => t && (loc.offset.leb(j) && (j + 1).leb(loc.offset + bytes.len())), loc.block.same_self()),
+                                Bool::and_true_l(loc.offset.leb(j) && (j + 1).leb(loc.offset + bytes.len()))))))))),
+    }
+}
+
 // The byte at a place inside its block is present.
 theorem Heap::nth_byte(self heap: Heap, loc: Loc, inside: loc.offset < heap.bytes(loc.block).len()):
     heap.bytes(loc.block).nth(loc.offset) = Some(heap.byte(loc)) {
@@ -835,25 +916,25 @@ theorem Heap::nth_byte(self heap: Heap, loc: Loc, inside: loc.offset < heap.byte
 }
 
 // A store's bytes are as long as before, block for block.
-theorem Heap::store_len(self heap: Heap, loc: Loc, bytes: List<BitVec(8)>, fits: loc.offset + bytes.len() <= heap.bytes(loc.block).len(), c: Nat):
-    heap.store(loc, bytes).bytes(c).len() = heap.bytes(c).len() {
+theorem Heap::store_len(self heap: Heap, loc: Loc, bytes: List<BitVec(8)>, fits: loc.offset + bytes.len() <= heap.bytes(loc.block).len(),
+    inside: loc.offset < heap.bytes(loc.block).len(), c: Nat): heap.store(loc, bytes).bytes(c).len() = heap.bytes(c).len() {
     let now = heap.bytes(loc.block).put_window(loc.offset, bytes);
-    match c.eq_dec(loc.block) {
-        Inl(same) => j(sym(same), λ x _ => set_block(heap.bytes, loc.block, now, x).len() = heap.bytes(x).len(),
-            trans(cong_fn<List<BitVec(8)>, Nat>(λ l => l.len(), set_block_here(heap.bytes, loc.block, now)),
+    trans(cong_fn<List<BitVec(8)>, Nat>(λ l => l.len(), heap.store_bytes(loc, bytes, inside, c)), match c.eq_dec(loc.block) {
+        Inl(same) => j(sym(same), λ x _ => set_block(λ (d: Nat) => heap.bytes(d), loc.block, now, x).len() = heap.bytes(x).len(),
+            trans(cong_fn<List<BitVec(8)>, Nat>(λ l => l.len(), set_block_here(λ (d: Nat) => heap.bytes(d), loc.block, now)),
                 heap.bytes(loc.block).len_put_window(loc.offset, bytes, omega(fits)))),
-        Inr(differs) => cong_fn<List<BitVec(8)>, Nat>(λ l => l.len(), set_block_other(heap.bytes, loc.block, now, c, differs)),
-    }
+        Inr(differs) => cong_fn<List<BitVec(8)>, Nat>(λ l => l.len(), set_block_other(λ (d: Nat) => heap.bytes(d), loc.block, now, c, differs)),
+    })
 }
 
 // Outside the stored bytes, a store leaves a block's bytes.
 theorem Heap::store_outside(self heap: Heap, loc: Loc, bytes: List<BitVec(8)>, fits: loc.offset + bytes.len() <= heap.bytes(loc.block).len(),
-    c, i: Nat, outside: (loc.block ≠ c) ∨ ((i < loc.offset) ∨ (loc.offset + bytes.len() <= i))):
+    inside: loc.offset < heap.bytes(loc.block).len(), c, i: Nat, outside: (loc.block ≠ c) ∨ ((i < loc.offset) ∨ (loc.offset + bytes.len() <= i))):
     heap.store(loc, bytes).bytes(c).nth(i) = heap.bytes(c).nth(i) {
     let xs = heap.bytes(loc.block);
     let now = xs.put_window(loc.offset, bytes);
-    match c.eq_dec(loc.block) {
-        Inr(differs) => cong_fn<List<BitVec(8)>, Option<BitVec(8)>>(λ l => l.nth(i), set_block_other(heap.bytes, loc.block, now, c, differs)),
+    trans(cong_fn<List<BitVec(8)>, Option<BitVec(8)>>(λ l => l.nth(i), heap.store_bytes(loc, bytes, inside, c)), match c.eq_dec(loc.block) {
+        Inr(differs) => cong_fn<List<BitVec(8)>, Option<BitVec(8)>>(λ l => l.nth(i), set_block_other(λ (d: Nat) => heap.bytes(d), loc.block, now, c, differs)),
         Inl(same) => {
             let side: ((i < loc.offset) ∨ (loc.offset + bytes.len() <= i)) = match outside {
                 Inl(differs) => false_elim(differs(sym(same))),
@@ -867,10 +948,10 @@ theorem Heap::store_outside(self heap: Heap, loc: Loc, bytes: List<BitVec(8)>, f
                         xs.nth_put_window_after(loc.offset, bytes, i - (bytes.len() + loc.offset), omega(fits)))
                 },
             };
-            j(sym(same), λ x _ => set_block(heap.bytes, loc.block, now, x).nth(i) = heap.bytes(x).nth(i),
-                trans(cong_fn<List<BitVec(8)>, Option<BitVec(8)>>(λ l => l.nth(i), set_block_here(heap.bytes, loc.block, now)), here))
+            j(sym(same), λ x _ => set_block(λ (d: Nat) => heap.bytes(d), loc.block, now, x).nth(i) = heap.bytes(x).nth(i),
+                trans(cong_fn<List<BitVec(8)>, Option<BitVec(8)>>(λ l => l.nth(i), set_block_here(λ (d: Nat) => heap.bytes(d), loc.block, now)), here))
         },
-    }
+    })
 }
 
 // Inside them, it reads them.
@@ -879,8 +960,9 @@ theorem Heap::store_inside(self heap: Heap, loc: Loc, bytes: List<BitVec(8)>, fi
     let xs = heap.bytes(loc.block);
     let window: (xs.put_window(loc.offset, bytes).nth(t + loc.offset) = bytes.nth(t)) =
         xs.nth_put_window_inside(loc.offset, bytes, t, short, omega(fits));
-    trans(cong_fn<List<BitVec(8)>, Option<BitVec(8)>>(λ l => l.nth(loc.offset + t), set_block_here(heap.bytes, loc.block, xs.put_window(loc.offset, bytes))),
-        trans(cong_fn<Nat, Option<BitVec(8)>>(λ y => xs.put_window(loc.offset, bytes).nth(y), omega()), window))
+    trans(cong_fn<List<BitVec(8)>, Option<BitVec(8)>>(λ l => l.nth(loc.offset + t), heap.store_bytes(loc, bytes, omega(short, fits), loc.block)),
+    trans(cong_fn<List<BitVec(8)>, Option<BitVec(8)>>(λ l => l.nth(loc.offset + t), set_block_here(λ (d: Nat) => heap.bytes(d), loc.block, xs.put_window(loc.offset, bytes))),
+        trans(cong_fn<Nat, Option<BitVec(8)>>(λ y => xs.put_window(loc.offset, bytes).nth(y), omega()), window)))
 }
 
 // A byte not within `n` from `loc` is outside them.
@@ -923,8 +1005,9 @@ theorem within_false(b, k, n, c, j: Nat, outside: (b ≠ c) ∨ ((j < k) ∨ (k 
 theorem Heap::store_undefined_outside(self heap: Heap, loc: Loc, bytes: List<BitVec(8)>, c, j: Nat,
     outside: (loc.block ≠ c) ∨ ((j < loc.offset) ∨ (loc.offset + bytes.len() <= j))):
     heap.store(loc, bytes).undefined(c, j) = heap.undefined(c, j) {
-    trans(cong_fn<Bool, Bool>(λ v => heap.undefined(c, j) && !v, within_false(loc.block, loc.offset, bytes.len(), c, j, outside)),
-        Bool::and_true_r(heap.undefined(c, j)))
+    trans(heap.store_undefined(loc, bytes, c, j),
+        trans(cong_fn<Bool, Bool>(λ v => heap.undefined(c, j) && !v, within_false(loc.block, loc.offset, bytes.len(), c, j, outside)),
+            Bool::and_true_r(heap.undefined(c, j))))
 }
 
 // Defined bytes, one at a time.
@@ -1150,13 +1233,14 @@ fn Heap::Canonical(self heap: Heap) → Type {
 
 // A pointer the store does not overlap keeps its eight bytes.
 theorem Heap::canonical_kept(self heap: Heap, loc: Loc, bytes: List<BitVec(8)>, fits: loc.offset + bytes.len() <= heap.bytes(loc.block).len(),
+    inside: loc.offset < heap.bytes(loc.block).len(),
     e: Pointer, apart: e.overlaps(loc.block, loc.offset, bytes.len()) = False,
     zero: (e.at + 8 <= heap.bytes(e.block).len()) ∧ ((t: Nat) → t < 8 → heap.bytes(e.block).nth(e.at + t) = word_bytes(BitVec::zero()).nth(t))):
     (e.at + 8 <= heap.store(loc, bytes).bytes(e.block).len()) ∧
         ((t: Nat) → t < 8 → heap.store(loc, bytes).bytes(e.block).nth(e.at + t) = word_bytes(BitVec::zero()).nth(t)) {
     let side = e.apart_of(loc.block, loc.offset, bytes.len(), apart);
-    ⟨j(sym(heap.store_len(loc, bytes, fits, e.block)), λ l _ => e.at + 8 <= l, zero.left),
-     λ t short => trans(heap.store_outside(loc, bytes, fits, e.block, e.at + t, match side {
+    ⟨j(sym(heap.store_len(loc, bytes, fits, inside, e.block)), λ l _ => e.at + 8 <= l, zero.left),
+     λ t short => trans(heap.store_outside(loc, bytes, fits, inside, e.block, e.at + t, match side {
             Inl(differs) => Inl(differs),
             Inr(order) => Inr(match order { Inl(below) => Inl(omega(below, short)), Inr(above) => Inr(omega(above)) }),
         }), zero.right(t, short))⟩
@@ -1164,7 +1248,7 @@ theorem Heap::canonical_kept(self heap: Heap, loc: Loc, bytes: List<BitVec(8)>, 
 
 // Every store keeps the heap canonical,
 theorem Heap::canonical_store(self heap: Heap, canonical: heap.Canonical(), loc: Loc, bytes: List<BitVec(8)>,
-    fits: loc.offset + bytes.len() <= heap.bytes(loc.block).len()): heap.store(loc, bytes).Canonical() {
+    fits: loc.offset + bytes.len() <= heap.bytes(loc.block).len(), inside: loc.offset < heap.bytes(loc.block).len()): heap.store(loc, bytes).Canonical() {
     let b = loc.block;
     let k = loc.offset;
     let n = bytes.len();
@@ -1172,15 +1256,15 @@ theorem Heap::canonical_store(self heap: Heap, canonical: heap.Canonical(), loc:
     ⟨every_map(λ (e: Pointer) => P(e) ∧ (e.overlaps(b, k, n) = False),
         λ (e: Pointer) => (e.at + 8 <= heap.store(loc, bytes).bytes(e.block).len()) ∧
             ((t: Nat) → t < 8 → heap.store(loc, bytes).bytes(e.block).nth(e.at + t) = word_bytes(BitVec::zero()).nth(t)),
-        λ e both => heap.canonical_kept(loc, bytes, fits, e, both.right, both.left),
+        λ e both => heap.canonical_kept(loc, bytes, fits, inside, e, both.right, both.left),
         cleared(heap.shadow, b, k, n),
         every_both(P, λ (e: Pointer) => e.overlaps(b, k, n) = False, cleared(heap.shadow, b, k, n),
             every_cleared(P, b, k, n, heap.shadow, canonical.left), every_cleared_apart(b, k, n, heap.shadow))),
      λ c j undefined short => {
-        let parts = Bool::and_true_parts(heap.undefined(c, j), !within(b, k, n, c, j), undefined);
+        let parts = Bool::and_true_parts(heap.undefined(c, j), !within(b, k, n, c, j), trans(sym(heap.store_undefined(loc, bytes, c, j)), undefined));
         let outside = heap.outside_within(loc, n, c, j, Bool::false_of_not_true(parts.right));
-        let len: (heap.store(loc, bytes).bytes(c).len() = heap.bytes(c).len()) = heap.store_len(loc, bytes, fits, c);
-        trans(heap.store_outside(loc, bytes, fits, c, j, outside), canonical.right(c, j, parts.left, omega(short, len)))
+        let len: (heap.store(loc, bytes).bytes(c).len() = heap.bytes(c).len()) = heap.store_len(loc, bytes, fits, inside, c);
+        trans(heap.store_outside(loc, bytes, fits, inside, c, j, outside), canonical.right(c, j, parts.left, omega(short, len)))
      }⟩
 }
 
@@ -1188,8 +1272,8 @@ theorem Heap::canonical_store(self heap: Heap, canonical: heap.Canonical(), loc:
 theorem Heap::canonical_store_ref(self heap: Heap, canonical: heap.Canonical(), loc, target: Loc,
     fits: loc.offset + 8 <= heap.bytes(loc.block).len()): heap.store_ref(loc, target).Canonical() {
     let zeroed = heap.store_word(loc, BitVec::zero());
-    let len: (zeroed.bytes(loc.block).len() = heap.bytes(loc.block).len()) = heap.store_len(loc, word_bytes(BitVec::zero()), fits, loc.block);
-    let zero = heap.canonical_store(canonical, loc, word_bytes(BitVec::zero()), fits);
+    let len: (heap.store_ref(loc, target).bytes(loc.block).len() = heap.bytes(loc.block).len()) = heap.store_len(loc, word_bytes(BitVec::zero()), fits, omega(fits), loc.block);
+    let zero = heap.canonical_store(canonical, loc, word_bytes(BitVec::zero()), fits, omega(fits));
     ⟨⟨⟨omega(len, fits), λ t short => heap.store_inside(loc, word_bytes(BitVec::zero()), fits, t, short)⟩, zero.left⟩, zero.right⟩
 }
 
@@ -1288,7 +1372,7 @@ theorem Loan::store_injected<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M
     let span_fits: (k + n <= spans.size(b)) = omega(fits, inj.sizes(b));
     let after = stack.writes.store(memory, spans.byte(b, k), bytes);
     Injected(
-        sizes := λ c => trans(heap.store_len(loc, bytes, fits, c), inj.sizes(c)),
+        sizes := λ c => trans(heap.store_len(loc, bytes, fits, omega(inside, inj.sizes(b)), c), inj.sizes(c)),
         bytes := λ c i short none defined => {
             let kept = λ (outside: (b ≠ c) ∨ ((i < k) ∨ (k + n <= i))) => {
                 let old: (covered(heap.shadow, c, i) = False) = match uncovered_after_clearing(b, k, n, c, i, heap.shadow, uncut, none) {
@@ -1303,7 +1387,7 @@ theorem Loan::store_injected<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M
                 };
                 trans(loan.apart(memory, b, k, written, inside, bytes, span_fits, c, i, short, outside),
                     trans(inj.bytes(c, i, short, old, trans(sym(heap.store_undefined_outside(loc, bytes, c, i, outside)), defined)),
-                        sym(heap.store_outside(loc, bytes, fits, c, i, outside))))
+                        sym(heap.store_outside(loc, bytes, fits, omega(inside, inj.sizes(b)), c, i, outside))))
             };
             match b.eq_dec(c) {
                 Inr(differs) => kept(Inl(differs)),
@@ -1353,15 +1437,15 @@ theorem Loan::store_ref_injected<M>({fetch: FetchAccess<M>}, {data: ByteReadAcce
     let stored = loan.store_word_injected(heap, memory, inj, loc, written, ok, word);
     let pointer = Pointer(b, k, target);
     Injected(
-        sizes := λ c => trans(heap.store_len(loc, word_bytes(BitVec::zero()), fits, c), inj.sizes(c)),
+        sizes := λ c => trans(heap.store_len(loc, word_bytes(BitVec::zero()), fits, omega(fits), c), inj.sizes(c)),
         bytes := λ c i short none defined => {
             let halves = Bool::or_false_parts(pointer.covers(c, i), covered(cleared(heap.shadow, b, k, 8), c, i), none);
             let outside: ((b ≠ c) ∨ ((i < k) ∨ (k + 8 <= i))) = pointer.uncovers(c, i, halves.left);
             trans(stored.bytes(c, i, short, halves.right,
                     trans(heap.store_undefined_outside(loc, word_bytes(word), c, i, outside),
                         trans(sym(heap.store_undefined_outside(loc, word_bytes(BitVec::zero()), c, i, outside)), defined))),
-                trans(heap.store_outside(loc, word_bytes(word), fits, c, i, outside),
-                    sym(heap.store_outside(loc, word_bytes(BitVec::zero()), fits, c, i, outside))))
+                trans(heap.store_outside(loc, word_bytes(word), fits, omega(fits), c, i, outside),
+                    sym(heap.store_outside(loc, word_bytes(BitVec::zero()), fits, omega(fits), c, i, outside))))
         },
         refs := ⟨⟨span_fits, loan.word_stored(memory, b, k, written, span_fits, word)⟩, stored.refs⟩,
     )

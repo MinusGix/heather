@@ -274,12 +274,12 @@ theorem Renames::plain({r: Renaming}, {s, renamed: State}, self rel: Renames(r, 
 // The word and the byte read at the renamed place.
 theorem Renames::word({r: Renaming}, {s, renamed: State}, self rel: Renames(r, s, renamed), loc: Loc):
     renamed.heap.word(loc.rename(r)) = s.heap.word(loc) {
-    cong_fn<List<BitVec(8)>, BitVec(64)>(λ l => Heap(λ (_: Nat) => l, [], λ (_: Nat) (_: Nat) => False).word(Loc(0, loc.offset)), rel.block(loc.block))
+    cong_fn<List<BitVec(8)>, BitVec(64)>(λ l => Heap([l], [], []).word(Loc(0, loc.offset)), rel.block(loc.block))
 }
 
 theorem Renames::byte({r: Renaming}, {s, renamed: State}, self rel: Renames(r, s, renamed), loc: Loc):
     renamed.heap.byte(loc.rename(r)) = s.heap.byte(loc) {
-    cong_fn<List<BitVec(8)>, BitVec(8)>(λ l => Heap(λ (_: Nat) => l, [], λ (_: Nat) (_: Nat) => False).byte(Loc(0, loc.offset)), rel.block(loc.block))
+    cong_fn<List<BitVec(8)>, BitVec(8)>(λ l => Heap([l], [], []).byte(Loc(0, loc.offset)), rel.block(loc.block))
 }
 
 // Blocks set alike are renamed alike.
@@ -297,6 +297,28 @@ theorem rename_set_block(r: Renaming, bytes, renamed: Nat → List<BitVec(8)>, s
                 trans(same(c), sym(set_block_other(bytes, b, now, r.back(c), away))))
         },
     }
+}
+
+// A store, renamed: the renamed heap's store at the renamed place is the
+// store's, block for block and byte for byte.
+theorem Renames::stored_bytes({r: Renaming}, {s, renamed: State}, self rel: Renames(r, s, renamed), loc: Loc, bytes: List<BitVec(8)>,
+    inside: loc.offset < s.heap.bytes(loc.block).len(), c: Nat):
+    renamed.heap.store(loc.rename(r), bytes).bytes(c) = s.heap.store(loc, bytes).bytes(r.back(c)) {
+    let inside_r: (loc.offset < renamed.heap.bytes(r.there(loc.block)).len()) = j(sym(rel.block(loc.block)), λ l _ => loc.offset < l.len(), inside);
+    trans(renamed.heap.store_bytes(loc.rename(r), bytes, inside_r, c),
+        trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ l => set_block(λ (d: Nat) => renamed.heap.bytes(d), r.there(loc.block), l.put_window(loc.offset, bytes), c),
+                rel.block(loc.block)),
+            trans(rename_set_block(r, λ (d: Nat) => s.heap.bytes(d), λ (d: Nat) => renamed.heap.bytes(d), rel.bytes, loc.block,
+                    s.heap.bytes(loc.block).put_window(loc.offset, bytes), c),
+                sym(s.heap.store_bytes(loc, bytes, inside, r.back(c))))))
+}
+
+theorem Renames::stored_undefined({r: Renaming}, {s, renamed: State}, self rel: Renames(r, s, renamed), loc: Loc, bytes: List<BitVec(8)>, c, j: Nat):
+    renamed.heap.store(loc.rename(r), bytes).undefined(c, j) = s.heap.store(loc, bytes).undefined(r.back(c), j) {
+    trans(renamed.heap.store_undefined(loc.rename(r), bytes, c, j),
+        trans(Bool::and_cong(rel.undefined(c, j), cong_fn<Bool, Bool>(λ v => !(v && (loc.offset.leb(j) && (j + 1).leb(loc.offset + bytes.len()))),
+                r.same_back(c, loc.block))),
+            sym(s.heap.store_undefined(loc, bytes, r.back(c), j))))
 }
 
 // A value set alike.
@@ -327,24 +349,25 @@ theorem store_word_alike(r: Renaming, s, renamed: State, rel: Renames(r, s, rena
             Word(word) => j(sym(rel.fits(loc, 8)), λ v _ =>
                     Alike(r, match s.heap.fits(loc, 8) { False => None, True => Some(State(s.values, s.heap.store_word(loc, word))) },
                         match v { False => None, True => Some(State(renamed.values, renamed.heap.store_word(loc.rename(r), word))) }),
-                (match s.heap.fits(loc, 8) as λ v =>
+                (match s.heap.fits(loc, 8) as λ v => s.heap.fits(loc, 8) = v →
                     Alike(r, match v { False => None, True => Some(State(s.values, s.heap.store_word(loc, word))) },
                         match v { False => None, True => Some(State(renamed.values, renamed.heap.store_word(loc.rename(r), word))) }) {
-                    False => trivial,
-                    True => Renames(
-                        values := rel.values,
-                        bytes := λ c => {
-                            let now = s.heap.bytes(loc.block).put_window(loc.offset, word_bytes(word));
-                            trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ l => set_block(renamed.heap.bytes, r.there(loc.block), l.put_window(loc.offset, word_bytes(word)), c),
-                                    rel.block(loc.block)),
-                                rename_set_block(r, s.heap.bytes, renamed.heap.bytes, rel.bytes, loc.block, now, c))
-                        },
-                        shadow := trans(cong_fn<List<Pointer>, List<Pointer>>(λ sh => cleared(sh, r.there(loc.block), loc.offset, 8), rel.shadow),
-                            rename_cleared(r, loc.block, loc.offset, 8, s.heap.shadow)),
-                        undefined := λ c j => Bool::and_cong(rel.undefined(c, j), cong_fn<Bool, Bool>(λ v => !(v && (loc.offset.leb(j) && (j + 1).leb(loc.offset + 8))),
-                            r.same_back(c, loc.block))),
-                    ),
-                })),
+                    False => λ _ => trivial,
+                    True => λ ok => {
+                        let inside: (loc.offset < s.heap.bytes(loc.block).len()) = {
+                            let parts = Bool::and_true_parts((loc.offset + 8).leb(s.heap.bytes(loc.block).len()), !cut(s.heap.shadow, loc.block, loc.offset, 8), ok);
+                            let fits: (loc.offset + 8 <= s.heap.bytes(loc.block).len()) = Nat::le_of_leb_eq(loc.offset + 8, s.heap.bytes(loc.block).len(), parts.left);
+                            omega(fits)
+                        };
+                        Renames(
+                            values := rel.values,
+                            bytes := λ c => rel.stored_bytes(loc, word_bytes(word), inside, c),
+                            shadow := trans(cong_fn<List<Pointer>, List<Pointer>>(λ sh => cleared(sh, r.there(loc.block), loc.offset, 8), rel.shadow),
+                                rename_cleared(r, loc.block, loc.offset, 8, s.heap.shadow)),
+                            undefined := λ c j => rel.stored_undefined(loc, word_bytes(word), c, j),
+                        )
+                    },
+                })(refl)),
         },
     }
 }
@@ -358,26 +381,26 @@ theorem store_ref_alike(r: Renaming, s, renamed: State, rel: Renames(r, s, renam
             Ref(target) => j(sym(rel.fits(loc, 8)), λ v _ =>
                     Alike(r, match s.heap.fits(loc, 8) { False => None, True => Some(State(s.values, s.heap.store_ref(loc, target))) },
                         match v { False => None, True => Some(State(renamed.values, renamed.heap.store_ref(loc.rename(r), target.rename(r)))) }),
-                (match s.heap.fits(loc, 8) as λ v =>
+                (match s.heap.fits(loc, 8) as λ v => s.heap.fits(loc, 8) = v →
                     Alike(r, match v { False => None, True => Some(State(s.values, s.heap.store_ref(loc, target))) },
                         match v { False => None, True => Some(State(renamed.values, renamed.heap.store_ref(loc.rename(r), target.rename(r)))) }) {
-                    False => trivial,
-                    True => Renames(
-                        values := rel.values,
-                        bytes := λ c => {
-                            let now = s.heap.bytes(loc.block).put_window(loc.offset, word_bytes(BitVec::zero()));
-                            trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ l => set_block(renamed.heap.bytes, r.there(loc.block),
-                                        l.put_window(loc.offset, word_bytes(BitVec::zero())), c),
-                                    rel.block(loc.block)),
-                                rename_set_block(r, s.heap.bytes, renamed.heap.bytes, rel.bytes, loc.block, now, c))
-                        },
-                        shadow := cong_fn<List<Pointer>, List<Pointer>>(λ sh => Cons(Pointer(loc.block, loc.offset, target).rename(r), sh),
-                            trans(cong_fn<List<Pointer>, List<Pointer>>(λ sh => cleared(sh, r.there(loc.block), loc.offset, 8), rel.shadow),
-                                rename_cleared(r, loc.block, loc.offset, 8, s.heap.shadow))),
-                        undefined := λ c j => Bool::and_cong(rel.undefined(c, j), cong_fn<Bool, Bool>(λ v => !(v && (loc.offset.leb(j) && (j + 1).leb(loc.offset + 8))),
-                            r.same_back(c, loc.block))),
-                    ),
-                })),
+                    False => λ _ => trivial,
+                    True => λ ok => {
+                        let inside: (loc.offset < s.heap.bytes(loc.block).len()) = {
+                            let parts = Bool::and_true_parts((loc.offset + 8).leb(s.heap.bytes(loc.block).len()), !cut(s.heap.shadow, loc.block, loc.offset, 8), ok);
+                            let fits: (loc.offset + 8 <= s.heap.bytes(loc.block).len()) = Nat::le_of_leb_eq(loc.offset + 8, s.heap.bytes(loc.block).len(), parts.left);
+                            omega(fits)
+                        };
+                        Renames(
+                            values := rel.values,
+                            bytes := λ c => rel.stored_bytes(loc, word_bytes(BitVec::zero()), inside, c),
+                            shadow := cong_fn<List<Pointer>, List<Pointer>>(λ sh => Cons(Pointer(loc.block, loc.offset, target).rename(r), sh),
+                                trans(cong_fn<List<Pointer>, List<Pointer>>(λ sh => cleared(sh, r.there(loc.block), loc.offset, 8), rel.shadow),
+                                    rename_cleared(r, loc.block, loc.offset, 8, s.heap.shadow))),
+                            undefined := λ c j => rel.stored_undefined(loc, word_bytes(BitVec::zero()), c, j),
+                        )
+                    },
+                })(refl)),
         },
     }
 }

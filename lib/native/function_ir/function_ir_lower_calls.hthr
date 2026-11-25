@@ -748,7 +748,7 @@ fn Stack::InMemory<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, self s
 
 // FunctionIR's buffers as a heap (x86_64_memory_contract): no block holds a
 // reference.
-fn Heap::of(buffers: Buffers()) → Heap { Heap(λ (b: Nat) => buffer_bytes(buffers, b), [], λ (_: Nat) (_: Nat) => False) }
+fn Heap::of(buffers: Buffers()) → Heap { Heap(buffers, [], []) }
 
 // The file in memory is the empty-shadow heap injected,
 theorem in_memory_injected<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, stack: Stack<M>(fetch, data), lending: Lending,
@@ -775,15 +775,7 @@ theorem injected_in_memory<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}
 // leaves the shadow empty.
 theorem Heap::of_store(now: Buffers(), loc: Loc, bytes: List<BitVec(8)>, inside: loc.offset < buffer_bytes(now, loc.block).len(), c: Nat):
     Heap::of(now).store(loc, bytes).bytes(c) = buffer_bytes(store_span(now, loc.block, loc.offset, bytes), c) {
-    let window = buffer_bytes(now, loc.block).put_window(loc.offset, bytes);
-    match c.eq_dec(loc.block) {
-        Inl(same) => j(sym(same), λ x _ => set_block(λ (b: Nat) => buffer_bytes(now, b), loc.block, window, x) =
-                buffer_bytes(store_span(now, loc.block, loc.offset, bytes), x),
-            trans(set_block_here(λ (b: Nat) => buffer_bytes(now, b), loc.block, window),
-                sym(buffer_bytes_spanned(now, loc.block, loc.offset, bytes, inside)))),
-        Inr(differs) => trans(set_block_other(λ (b: Nat) => buffer_bytes(now, b), loc.block, window, c, differs),
-            sym(buffer_bytes_span_other(now, loc.block, loc.offset, bytes, c, λ same => differs(sym(same))))),
-    }
+    refl
 }
 
 // One byte stored is the span of one byte stored.

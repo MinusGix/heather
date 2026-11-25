@@ -1092,7 +1092,9 @@ stage 3 deletes both:
   (`Pointer`) and a set of undefined bytes (a fresh or dead block, a window
   a failed `read` left junk in), block `b` at span `b`; the injection says
   nothing of an undefined byte (`Injected::undefined_change`), and a store
-  defines its bytes. One lemma per memory operation:
+  defines its bytes. Blocks are lists updated by a store, so evaluating
+  a run is linear in its stores; the heap is used through `Heap::bytes`
+  and `Heap::undefined`, never its fields. One lemma per memory operation:
   `Loan::store_injected` for a store of any width, `Loan::store_ref_injected`
   (the same machine store, the shadow saying a reference is there), and
   `Injected::reads` for a load of any width, with the machine's widths as

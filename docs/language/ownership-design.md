@@ -1565,6 +1565,12 @@ names its instances in `x86_64_memory_tiers.hthr`
   stable under any change of memory at undefined, uncovered bytes
   (`Injected::undefined_change`), which is what a failed `read` leaving
   junk needs. Canonical includes zero under undefined bytes.
+- The heap's blocks are lists by block number (each block's bytes and its
+  undefined flags), updated as lists by a store, and read only through
+  `Heap::bytes` and `Heap::undefined`: a closure layered per store made
+  evaluating a run quadratic (measured: a run of k load-then-store steps
+  doubled to 2.2, 2.5, 2.8 times its steps at each doubling of k; as
+  lists, 1.9, 1.9, 2.0).
 - `Site::Meets` is stated against a meaning on words
   (`Nat → List<BitVec(64)> → Heap → Option<Returned>`): the bytes level's
   `Calls()` over values meets it through lowering each value to its word.
