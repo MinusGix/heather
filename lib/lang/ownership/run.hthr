@@ -151,11 +151,12 @@ fn Mach::push(tys: Nat → Type, m: Mach(tys), c: Cell(tys)) → Mach(tys) { Mac
 // The run of a program's functions at one fuel, as a callee sees it.
 fn Caller(tys: Nat → Type) → Type { Nat → List<Value(tys)> → Heap(tys) → Io → Ran(tys) }
 
-// What a caller hands over: a taken argument it owns is passed on, one it
-// does not own is copied; any other is passed as it is.
-fn Cell::pass(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), md: PMode, c: Cell(tys)) → Option<Value(tys)> {
-    match md {
-        ByTake => match c.own { True => Some(c.v), False => Value::get(tys, strs, h, c.v, Nil).map(λ d => Plain(d)) },
+// What a caller hands over: a taken argument it owns is passed on, unless
+// it is a word; a word and one it does not own are copied; any other is
+// passed as it is.
+fn Cell::pass(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), p: Param, c: Cell(tys)) → Option<Value(tys)> {
+    match p.mode {
+        ByTake => match c.own && (match p.code { SWord(_) => False, SNamed(_) => True }) { True => Some(c.v), False => Value::get(tys, strs, h, c.v, Nil).map(λ d => Plain(d)) },
         ByRead => Some(c.v),
         ByWrite => Some(c.v),
     }
@@ -164,7 +165,7 @@ fn Cell::pass(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), md: PMode, c: Ce
 fn Cell::pass_all(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), ps: List<Param>, cs: List<Cell(tys)>) → Option<List<Value(tys)>> {
     match cs {
         Nil => Some(Nil),
-        Cons(c, rest) => match Cell::pass(tys, strs, h, (ps.nth(0).unwrap_or(Param(SWord(WNat), ByRead))).mode, c) {
+        Cons(c, rest) => match Cell::pass(tys, strs, h, ps.nth(0).unwrap_or(Param(SWord(WNat), ByRead)), c) {
             Some(v) => Cell::pass_all(tys, strs, h, ps.drop(1), rest).map(λ vs => Cons(v, vs)),
             None => None,
         },

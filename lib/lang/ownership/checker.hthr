@@ -1,0 +1,851 @@
+// The checker (docs/language/ownership-design.md §15.3, §21.4, §23;
+// issues/ownership-checker.md item 2): an inhabitant of `verdict.hthr`'s
+// `Checker`, for objects whose nested parts are plain (no holes).
+//
+// One forward pass over the body, reading the signatures only. Its state
+// mirrors the meaning's environment, one entry per variable (the arguments
+// by position, the locals newest first), so it reaches a variable at the
+// meaning's cost, and a table of the live views:
+//
+// - **A variable** is plain (a copy: the run holds a plain value), holds an
+//   object (`KHold(o, access)`: an argument, a fresh object, a taken one), is
+//   a live view (its entries in the table), or is gone (taken, dead, or left
+//   stale by a join). The access is what the signature lends: to read, to
+//   write, or owned.
+// - **A view's entry** names its object, its region (steps from the object,
+//   atoms by level, so a region stored keeps its meaning as locals are
+//   pushed), its mode, its parent (the variable it was opened on) and its
+//   place there, and for a view to write whether it has been written back
+//   since it last changed (`back`, §15.2's eager write-back: the reflector
+//   writes a view back after each statement that changes it).
+// - **The licence.** An access of a variable at a place reads the object at
+//   the variable's region followed by the place's steps. A read needs every
+//   live view to write of that object apart from it, a write every live view;
+//   the variable itself and the views it is a view of (its ancestors) do
+//   not count. Apart is `Steps::apart`: closed, decided; open, owed as
+//   `RApart` naming its two sides.
+// - **The write-back** `Write(Place(p, at), w)` of a view `w` to write onto
+//   its own parent and place stores nothing in the run: it is licensed as
+//   it is, marks `w` written back, and changes `p`.
+// - **Residuals**: an accessor's precondition at every element or window
+//   step of a place read, written, taken or viewed (`RAccess`, one per such
+//   prefix); `RFits` at a write of a sequence; `RPre` and `RMeasure` at a
+//   call and a `Jump`; `RApart` from the licence.
+// - **A call** reads each argument it lends to read, writes each it lends to
+//   write, and moves each it takes that the caller owns (copies any other).
+//   Arguments lent where one writes are apart. Its results: a fresh object,
+//   a taken parameter back, or a read view of a parameter at the steps its
+//   signature names; then each written parameter's value, a view to write
+//   of the argument it lent, its whole, not yet written back.
+// - **A join** is the meet (§15.3): what each arm yields becomes the
+//   outputs; a variable from before the join an arm wrote or yielded is gone
+//   after it (the meaning goes back to its value before the join, the heap
+//   does not), one whose state the arms disagree on too; a read view chosen
+//   by the join keeps every arm's entries (its region the union), a view to
+//   write only where both arms hold it on one parent and place; any other
+//   view is dead, and a view to write dies only written back.
+// - **The code check is folded in**: `check` refuses what `Func::coded`
+//   refuses before its pass.
+import logic;
+import bool;
+import nat;
+import option;
+import list;
+import bitvec;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import body;
+import level2;
+import verdict;
+import linux_world;
+
+// ---------------------------------------------------------------------------
+// The state
+
+inductive Acc { AcRead, AcWrite, AcOwn }
+
+fn Acc::writes(self a: Acc) → Bool { match a { AcRead => False, AcWrite => True, AcOwn => True } }
+
+fn Acc::of(md: PMode) → Acc { match md { ByTake => AcOwn, ByRead => AcRead, ByWrite => AcWrite } }
+
+fn Acc::rank(self a: Acc) → Nat { match a { AcRead => 0, AcWrite => 1, AcOwn => 2 } }
+
+fn Acc::min(self a, b: Acc) → Acc { match a.rank().leb(b.rank()) { True => a, False => b } }
+
+fn Acc::same(self a, b: Acc) → Bool { a.rank().same(b.rank()) }
+
+inductive Role { KPlain, KHold(o: Nat, a: Acc), KView, KGone }
+
+fn Role::same(self a, b: Role) → Bool {
+    match a {
+        KPlain => match b { KPlain => True, _ => False },
+        KHold(o, x) => match b { KHold(o2, y) => o.same(o2) && x.same(y), _ => False },
+        KView => match b { KView => True, _ => False },
+        KGone => match b { KGone => True, _ => False },
+    }
+}
+
+fn Role::plain(self a: Role) → Bool { match a { KPlain => True, _ => False } }
+
+record CVar { code: Shape, role: Role }
+
+fn CVar::none() → CVar { CVar(SWord(WNat), KGone) }
+
+fn Mode::writes(self m: Mode) → Bool { match m { Reading => False, Writing => True } }
+
+fn Mode::same(self a, b: Mode) → Bool { match a { Reading => !b.writes(), Writing => b.writes() } }
+
+// A live view's entry: its variable's level, its object, its region there,
+// its mode, its parent's level and its place in the parent, and whether a
+// view to write has been written back since it last changed.
+record VEnt { lvl: Nat, obj: Nat, reg: List<Step>, mode: Mode, par: Nat, at: List<Step>, back: Bool }
+
+fn Steps::same(xs, ys: List<Step>) → Bool {
+    match xs { Nil => match ys { Nil => True, Cons(_, _) => False }, Cons(a, xr) => match ys { Nil => False, Cons(b, yr) => a.same(b) && Steps::same(xr, yr) } }
+}
+
+// The same view, but for whether it is written back.
+fn VEnt::alike(self e, f: VEnt) → Bool {
+    e.lvl.same(f.lvl) && e.obj.same(f.obj) && Steps::same(e.reg, f.reg) && e.mode.same(f.mode) && e.par.same(f.par) && Steps::same(e.at, f.at)
+}
+
+// The variables, as the meaning's environment holds them; their counts; the
+// live views; the next object; and, since the innermost join began, the
+// levels whose state changed and those written.
+record CSt { args: List<CVar>, locs: List<CVar>, na: Nat, nd: Nat, views: List<VEnt>, nobj: Nat, touched: List<Nat>, wrote: List<Nat> }
+
+// A variable's level: an argument its position, a local the count of
+// variables bound before it.
+fn CSt::lvl(self s: CSt, x: Var) → Option<Nat> {
+    match x { Arg(i) => (i + 1).leb(s.na).then(Some(i)), Loc(j) => (j + 1).leb(s.nd).then(Some(s.na + s.nd - 1 - j)) }
+}
+
+fn CSt::var(self s: CSt, l: Nat) → CVar {
+    match (l + 1).leb(s.na) { True => s.args.nth(l).unwrap_or(CVar::none()), False => s.locs.nth(s.na + s.nd - 1 - l).unwrap_or(CVar::none()) }
+}
+
+fn CSt::role(self s: CSt, l: Nat) → Role { (s.var(l)).role }
+
+fn Nat::member(self l: Nat, ls: List<Nat>) → Bool { match ls { Nil => False, Cons(k, rest) => k.same(l) || l.member(rest) } }
+
+fn CSt::set(self s: CSt, l: Nat, r: Role) → CSt {
+    match (l + 1).leb(s.na) {
+        True => CSt(s.args.update(l, λ c => CVar(c.code, r)), s.locs, s.na, s.nd, s.views, s.nobj, Cons(l, s.touched), s.wrote),
+        False => CSt(s.args, s.locs.update(s.na + s.nd - 1 - l, λ c => CVar(c.code, r)), s.na, s.nd, s.views, s.nobj, Cons(l, s.touched), s.wrote),
+    }
+}
+
+fn CSt::push(self s: CSt, c: CVar) → CSt { CSt(s.args, Cons(c, s.locs), s.na, s.nd + 1, s.views, s.nobj, s.touched, s.wrote) }
+
+fn CSt::push_all(self s: CSt, cs: List<CVar>) → CSt { match cs { Nil => s, Cons(c, rest) => s.push(c).push_all(rest) } }
+
+// The level the next binding takes.
+fn CSt::next(self s: CSt) → Nat { s.na + s.nd }
+
+fn CSt::with_views(self s: CSt, vs: List<VEnt>) → CSt { CSt(s.args, s.locs, s.na, s.nd, vs, s.nobj, s.touched, s.wrote) }
+
+fn CSt::fresh_obj(self s: CSt) → CSt { CSt(s.args, s.locs, s.na, s.nd, s.views, s.nobj + 1, s.touched, s.wrote) }
+
+fn CSt::written(self s: CSt, l: Nat) → CSt { CSt(s.args, s.locs, s.na, s.nd, s.views, s.nobj, Cons(l, s.touched), Cons(l, s.wrote)) }
+
+// The entries of a view variable.
+fn CSt::ents(self s: CSt, l: Nat) → List<VEnt> { s.views.filter(λ e => e.lvl.same(l)) }
+
+fn CSt::has_children(self s: CSt, l: Nat) → Bool { s.views.any_bit(λ e => e.par.same(l) && !e.lvl.same(l)) }
+
+fn CSt::has_obj_views(self s: CSt, o: Nat) → Bool { s.views.any_bit(λ e => e.obj.same(o)) }
+
+fn CSt::unsynced(self s: CSt, o: Nat) → Bool { s.views.any_bit(λ e => e.obj.same(o) && e.mode.writes() && !e.back) }
+
+// The variables an entry is a view of: its parent, and the parent's, while
+// they are views (a view's first entry names its parent's parent).
+fn CSt::anc_of(self s: CSt, e: VEnt, fuel: Nat) → List<Nat> {
+    match fuel {
+        Zero => Nil,
+        Succ(f) => match e.par.same(e.lvl) {
+            True => Nil,
+            False => Cons(e.par, match s.ents(e.par) { Cons(pe, _) => s.anc_of(pe, f), Nil => Nil }),
+        },
+    }
+}
+
+fn CSt::anc(self s: CSt, l: Nat) → List<Nat> { match s.ents(l) { Cons(e, _) => s.anc_of(e, s.views.len()), Nil => Nil } }
+
+// Two variables one of which is a view of the other (or one variable).
+fn CSt::related(self s: CSt, a, b: Nat) → Bool { a.same(b) || a.member(s.anc(b)) || b.member(s.anc(a)) }
+
+// ---------------------------------------------------------------------------
+// Atoms and steps, between the body's indices and the state's levels
+
+fn CSt::atom(self s: CSt, a: Atom) → Option<Atom> {
+    match a {
+        Lit(n) => Some(Lit(n)),
+        Var(w) => match (w + 1).leb(s.na) { True => Some(Var(w)), False => (w - s.na + 1).leb(s.nd).then(Some(Var(s.na + s.nd - 1 - (w - s.na)))) },
+    }
+}
+
+fn CSt::unatom(self s: CSt, a: Atom) → Atom {
+    match a { Lit(n) => Lit(n), Var(l) => match (l + 1).leb(s.na) { True => Var(l), False => Var(s.na + (s.nd - 1 - (l - s.na))) } }
+}
+
+// A step at levels; a key or a variant is not in this fragment.
+fn CSt::step(self s: CSt, a: Step) → Option<Step> {
+    match a {
+        SField(i) => Some(SField(i)),
+        SElem(i) => s.atom(i).map(λ j => SElem(j)),
+        SWindow(lo, n) => s.atom(lo).and_then(λ l2 => s.atom(n).map(λ n2 => SWindow(l2, n2))),
+        SKey(_, _) => None,
+        SVariant(_) => None,
+    }
+}
+
+fn CSt::steps(self s: CSt, xs: List<Step>) → Option<List<Step>> {
+    match xs { Nil => Some(Nil), Cons(a, rest) => s.step(a).and_then(λ b => s.steps(rest).map(λ bs => Cons(b, bs))) }
+}
+
+// The levels a step's atoms read.
+fn Atom::lvls(self a: Atom) → List<Nat> { match a { Lit(_) => Nil, Var(l) => [l] } }
+
+fn Step::lvls(self a: Step) → List<Nat> {
+    match a { SField(_) => Nil, SElem(i) => i.lvls(), SWindow(lo, n) => lo.lvls() ++ n.lvls(), SKey(i, g) => i.lvls() ++ g.lvls(), SVariant(_) => Nil }
+}
+
+fn Steps::lvls(xs: List<Step>) → List<Nat> { match xs { Nil => Nil, Cons(a, rest) => a.lvls() ++ Steps::lvls(rest) } }
+
+// A level some live view's region or place reads.
+fn CSt::in_regions(self s: CSt, l: Nat) → Bool { s.views.any_bit(λ e => l.member(Steps::lvls(e.reg)) || l.member(Steps::lvls(e.at))) }
+
+// An obligation of the decider as the residual a source discharges, its
+// atoms read at the site.
+fn CSt::owed(self s: CSt, o: Obligation) → Option<Residual> {
+    match o { Spans(lo1, n1, lo2, n2) => Some(RApart(s.unatom(lo1), s.unatom(n1), s.unatom(lo2), s.unatom(n2))), Keys(_, _, _, _) => None }
+}
+
+fn CSt::owed_all(self s: CSt, os: List<Obligation>) → Option<List<Residual>> {
+    match os { Nil => Some(Nil), Cons(o, rest) => s.owed(o).and_then(λ r => s.owed_all(rest).map(λ rs => Cons(r, rs))) }
+}
+
+// ---------------------------------------------------------------------------
+// Codes along a place
+
+// A step's part at a code, where the code has it.
+fn Shape::step_ok(tys: Nat → Type, strs: Strs(tys), a: Step, c: Shape) → Option<Shape> { Dyn::part(tys, strs, a.sel(Nil), c).map(λ pt => pt.t) }
+
+fn Shape::steps_ok(tys: Nat → Type, strs: Strs(tys), xs: List<Step>, c: Shape) → Option<Shape> {
+    match xs { Nil => Some(c), Cons(a, rest) => Shape::step_ok(tys, strs, a, c).and_then(λ c2 => Shape::steps_ok(tys, strs, rest, c2)) }
+}
+
+// A code whose values are sequences: a write there owes its fit.
+fn Shape::is_seq(tys: Nat → Type, strs: Strs(tys), c: Shape) → Bool {
+    match c { SWord(_) => False, SNamed(k) => match strs(k).kind { Sequence(_) => True, Opaque => False, Record(_) => False } }
+}
+
+// An element or a window: a step whose accessor asks something.
+fn Step::accesses(self a: Step) → Bool { match a { SElem(_) => True, SWindow(_, _) => True, SField(_) => False, SKey(_, _) => False, SVariant(_) => False } }
+
+// The accessors' preconditions along a place: one per prefix ending in an
+// element or a window, as the body spells it.
+fn Steps::access_from(r: Var, pre: List<Step>, xs: List<Step>) → List<Residual> {
+    match xs {
+        Nil => Nil,
+        Cons(a, rest) => match a.accesses() {
+            True => Cons(RAccess(Place(r, pre ++ [a])), Steps::access_from(r, pre ++ [a], rest)),
+            False => Steps::access_from(r, pre ++ [a], rest),
+        },
+    }
+}
+
+fn Place::accesses(self p: Place) → List<Residual> { Steps::access_from(p.root, Nil, p.steps) }
+
+// A value of this code moves when taken: anything but a word, which is
+// copied (the run copies it too, `Cell::pass`).
+fn Shape::moves(self c: Shape) → Bool { match c { SWord(_) => False, SNamed(_) => True } }
+
+// ---------------------------------------------------------------------------
+// The licence
+
+record Pl { obj: Nat, at: List<Step> }
+
+// Where a variable's access at `xs` lands: in its object; through each of a
+// view's entries; nowhere for a plain variable.
+fn CSt::places(self s: CSt, l: Nat, xs: List<Step>) → List<Pl> {
+    match s.role(l) {
+        KHold(o, _) => [Pl(o, xs)],
+        KView => (s.ents(l)).map(λ e => Pl(e.obj, e.reg ++ xs)),
+        KPlain => Nil,
+        KGone => Nil,
+    }
+}
+
+// One live view against one place: apart, decided or owed.
+fn CSt::against(self s: CSt, e: VEnt, p: Pl) → Option<List<Residual>> {
+    match e.obj.same(p.obj) { False => Some(Nil), True => Steps::apart(e.reg, p.at).and_then(λ os => s.owed_all(os)) }
+}
+
+fn CSt::against_all(self s: CSt, e: VEnt, ps: List<Pl>) → Option<List<Residual>> {
+    match ps { Nil => Some(Nil), Cons(p, rest) => s.against(e, p).and_then(λ r1 => s.against_all(e, rest).map(λ r2 => r1 ++ r2)) }
+}
+
+// An access in mode `md` by the variable `l` at the places `ps`. A holder's
+// meets every live view of its object; a view's only the views opened
+// through it, since every other live view was found apart from it when the
+// later of the two was opened (§15.3: a live view to write is apart from
+// every other live view). A read meets only views to write.
+fn CSt::meets(self s: CSt, l: Nat, md: Mode, e: VEnt) → Bool {
+    (md.writes() || e.mode.writes()) && !e.lvl.same(l) && match s.role(l) { KView => l.member(s.anc_of(e, s.views.len())), _ => True }
+}
+
+fn CSt::license(self s: CSt, vs: List<VEnt>, md: Mode, l: Nat, ps: List<Pl>) → Option<List<Residual>> {
+    match vs {
+        Nil => Some(Nil),
+        Cons(e, rest) => {
+            let here = match s.meets(l, md, e) { True => s.against_all(e, ps), False => Some(Nil) };
+            here.and_then(λ r1 => s.license(rest, md, l, ps).map(λ r2 => r1 ++ r2))
+        },
+    }
+}
+
+// A read of a variable at its steps `xs` (levels): it is there, the words its
+// atoms read are readable, and the licence.
+fn CSt::read_at(self s: CSt, l: Nat, xs: List<Step>) → Option<List<Residual>> {
+    match s.role(l) {
+        KGone => None,
+        _ => s.license(s.views, Reading, l, s.places(l, xs)),
+    }
+}
+
+// The atoms of steps at levels, each read as a whole word.
+fn CSt::atoms_ok(self s: CSt, ls: List<Nat>) → Option<List<Residual>> {
+    match ls { Nil => Some(Nil), Cons(l, rest) => s.read_at(l, Nil).and_then(λ r1 => s.atoms_ok(rest).map(λ r2 => r1 ++ r2)) }
+}
+
+// What a read of a place found: its code, its steps at levels, its root's
+// level, and what it owes.
+record Got { code: Shape, at: List<Step>, root: Nat, rs: List<Residual> }
+
+fn CSt::read(self s: CSt, tys: Nat → Type, strs: Strs(tys), p: Place) → Option<Got> {
+    s.lvl(p.root).and_then(λ l =>
+        s.steps(p.steps).and_then(λ xs =>
+            Shape::steps_ok(tys, strs, p.steps, (s.var(l)).code).and_then(λ c =>
+                s.atoms_ok(Steps::lvls(xs)).and_then(λ ra =>
+                    s.read_at(l, xs).map(λ rl => Got(c, xs, l, ra ++ rl ++ p.accesses()))))))
+}
+
+fn CSt::read_var(self s: CSt, tys: Nat → Type, strs: Strs(tys), x: Var) → Option<Got> { s.read(tys, strs, Place(x, Nil)) }
+
+fn CSt::read_vars(self s: CSt, tys: Nat → Type, strs: Strs(tys), xs: List<Var>) → Option<List<Residual>> {
+    match xs { Nil => Some(Nil), Cons(x, rest) => s.read_var(tys, strs, x).and_then(λ g => s.read_vars(tys, strs, rest).map(λ rs => g.rs ++ rs)) }
+}
+
+// A write by a variable at its steps: a holder of an object it may write,
+// or a view to write with one entry; plain is a copy's own.
+fn CSt::write_at(self s: CSt, l: Nat, xs: List<Step>) → Option<List<Residual>> {
+    match s.role(l) {
+        KGone => None,
+        KPlain => Some(Nil),
+        KHold(o, a) => a.writes().then(s.license(s.views, Writing, l, [Pl(o, xs)])),
+        KView => match s.ents(l) {
+            Cons(e, Nil) => e.mode.writes().then(s.license(s.views, Writing, l, [Pl(e.obj, e.reg ++ xs)])),
+            _ => None,
+        },
+    }
+}
+
+// A view to write `l` has changed: not written back.
+fn CSt::unback(self s: CSt, l: Nat) → CSt { s.with_views(s.views.map(λ e => match e.lvl.same(l) { True => VEnt(e.lvl, e.obj, e.reg, e.mode, e.par, e.at, False), False => e })) }
+
+fn CSt::backed(self s: CSt, l: Nat) → CSt { s.with_views(s.views.map(λ e => match e.lvl.same(l) { True => VEnt(e.lvl, e.obj, e.reg, e.mode, e.par, e.at, True), False => e })) }
+
+// A variable written: its state changed, and a view to write is no longer
+// written back.
+fn CSt::wrote_to(self s: CSt, l: Nat) → CSt { match s.role(l) { KPlain => s, _ => s.written(l).unback(l) } }
+
+// ---------------------------------------------------------------------------
+// Statements
+
+record Next { st: CSt, rs: List<Residual> }
+
+// Whether `Write(Place(root, xs), v)` writes a view to write back onto its
+// own parent and place.
+fn CSt::is_back(self s: CSt, root: Nat, xs: List<Step>, v: Nat) → Bool {
+    match s.ents(v) { Cons(e, Nil) => e.mode.writes() && e.par.same(root) && Steps::same(e.at, xs) && !v.same(root), _ => False }
+}
+
+fn CSt::write(self s: CSt, tys: Nat → Type, strs: Strs(tys), p: Place, v: Var) → Option<Next> {
+    s.read_var(tys, strs, v).and_then(λ gv =>
+        s.lvl(v).and_then(λ lv =>
+            s.lvl(p.root).and_then(λ l =>
+                s.steps(p.steps).and_then(λ xs =>
+                    Shape::steps_ok(tys, strs, p.steps, (s.var(l)).code).and_then(λ c =>
+                        s.atoms_ok(Steps::lvls(xs)).and_then(λ ra =>
+                            (!s.in_regions(l) && !(s.role(l)).same(KGone)).then(
+                                match s.is_back(l, xs, lv) {
+                                    True => Some(Next(s.backed(lv).wrote_to(l), gv.rs ++ ra)),
+                                    False => s.write_at(l, xs).map(λ rl =>
+                                        Next(s.wrote_to(l), gv.rs ++ ra ++ rl ++ p.accesses() ++ match Shape::is_seq(tys, strs, c) { True => [RFits(p, v)], False => Nil })),
+                                })))))))
+}
+
+fn CSt::view(self s: CSt, tys: Nat → Type, strs: Strs(tys), p: Place, md: Mode) → Option<Next> {
+    s.read(tys, strs, p).and_then(λ g =>
+        match s.role(g.root) {
+            KGone => None,
+            KPlain => Some(Next(s.push(CVar(g.code, KPlain)), g.rs)),
+            KHold(o, _) => match md {
+                Reading => Some(Next(s.with_views(Cons(VEnt(s.next(), o, g.at, Reading, g.root, g.at, True), s.views)).push(CVar(g.code, KView)), g.rs)),
+                Writing => s.write_at(g.root, g.at).map(λ rw =>
+                    Next(s.with_views(Cons(VEnt(s.next(), o, g.at, Writing, g.root, g.at, True), s.views)).push(CVar(g.code, KView)), g.rs ++ rw)),
+            },
+            KView => match md {
+                Reading => Some(Next(s.with_views((s.ents(g.root)).map(λ e => VEnt(s.next(), e.obj, e.reg ++ g.at, Reading, g.root, g.at, True)) ++ s.views).push(CVar(g.code, KView)), g.rs)),
+                Writing => s.write_at(g.root, g.at).and_then(λ rw => match s.ents(g.root) {
+                    Cons(e, Nil) => Some(Next(s.with_views(Cons(VEnt(s.next(), e.obj, e.reg ++ g.at, Writing, g.root, g.at, True), s.views)).push(CVar(g.code, KView)), g.rs ++ rw)),
+                    _ => None,
+                }),
+            },
+        })
+}
+
+// The entries of `l` handed to `l2`.
+fn CSt::rename(self s: CSt, l, l2: Nat) → CSt {
+    s.with_views(s.views.map(λ e => match e.lvl.same(l) { True => VEnt(l2, e.obj, e.reg, e.mode, e.par, e.at, e.back), False => e }))
+}
+
+fn CSt::take(self s: CSt, tys: Nat → Type, strs: Strs(tys), p: Place) → Option<Next> {
+    s.read(tys, strs, p).and_then(λ g =>
+        match p.steps {
+            Cons(_, _) => Some(Next(s.push(CVar(g.code, KPlain)), g.rs)),
+            Nil => match s.role(g.root) {
+                KGone => None,
+                KPlain => Some(Next(s.push(CVar(g.code, KPlain)), g.rs)),
+                KHold(o, a) => (!s.has_obj_views(o)).then(Some(Next(s.set(g.root, KGone).push(CVar(g.code, KHold(o, a))), g.rs))),
+                KView => (!s.has_children(g.root)).then(Some(Next(s.rename(g.root, s.next()).set(g.root, KGone).push(CVar(g.code, KView)), g.rs))),
+            },
+        })
+}
+
+fn CSt::death(self s: CSt, p: Place) → Option<Next> {
+    match p.steps {
+        Cons(_, _) => Some(Next(s, Nil)),
+        Nil => s.lvl(p.root).and_then(λ l => match s.role(l) {
+            KGone => None,
+            KPlain => Some(Next(s.set(l, KGone), Nil)),
+            KHold(o, _) => (!s.has_obj_views(o)).then(Some(Next(s.set(l, KGone), Nil))),
+            KView => (!s.has_children(l) && (s.ents(l)).all_bit(λ e => !e.mode.writes() || e.back)).then(
+                Some(Next(s.with_views(s.views.filter(λ e => !e.lvl.same(l))).set(l, KGone), Nil))),
+        }),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Calls
+
+// What one argument lends, by the callee's parameter: read, written, or
+// moved (an owned holder taken at a code that is not a word; a word, and
+// anything else taken, is a copy, a read).
+fn CSt::lend(self s: CSt, tys: Nat → Type, strs: Strs(tys), p: Param, x: Var) → Option<Next> {
+    s.read_var(tys, strs, x).and_then(λ g => match p.mode {
+        ByRead => Some(Next(s, g.rs)),
+        ByWrite => s.write_at(g.root, Nil).map(λ rw => Next(s, g.rs ++ rw)),
+        ByTake => match s.role(g.root) {
+            KHold(o, a) => match a.writes() && p.code.moves() {
+                True => match a { AcOwn => (!s.has_obj_views(o)).then(Some(Next(s.set(g.root, KGone), g.rs))), AcRead => Some(Next(s, g.rs)), AcWrite => Some(Next(s, g.rs)) },
+                False => Some(Next(s, g.rs)),
+            },
+            _ => Some(Next(s, g.rs)),
+        },
+    })
+}
+
+fn CSt::lend_all(self s: CSt, tys: Nat → Type, strs: Strs(tys), ps: List<Param>, xs: List<Var>) → Option<Next> {
+    match xs {
+        Nil => Some(Next(s, Nil)),
+        Cons(x, rest) => match ps {
+            Nil => None,
+            Cons(p, prest) => s.lend(tys, strs, p, x).and_then(λ n1 => n1.st.lend_all(tys, strs, prest, rest).map(λ n2 => Next(n2.st, n1.rs ++ n2.rs))),
+        },
+    }
+}
+
+// Each referring argument's level and places, and whether the callee may
+// change it.
+record Lent { l: Nat, ps: List<Pl>, ch: Bool }
+
+fn CSt::lent(self s: CSt, ps: List<Param>, xs: List<Var>) → List<Lent> {
+    match xs {
+        Nil => Nil,
+        Cons(x, rest) => {
+            let ch = match (ps.nth(0).unwrap_or(Param(SWord(WNat), ByRead))).mode { ByRead => False, ByWrite => True, ByTake => True };
+            Cons(match s.lvl(x) { Some(l) => Lent(l, s.places(l, Nil), ch), None => Lent(0, Nil, False) }, s.lent(ps.drop(1), rest))
+        },
+    }
+}
+
+// Two places of one object apart, decided or owed.
+fn CSt::apart_pl(self s: CSt, a, b: Pl) → Option<List<Residual>> {
+    match a.obj.same(b.obj) { False => Some(Nil), True => Steps::apart(a.at, b.at).and_then(λ os => s.owed_all(os)) }
+}
+
+fn CSt::apart_pls(self s: CSt, a: Pl, bs: List<Pl>) → Option<List<Residual>> {
+    match bs { Nil => Some(Nil), Cons(b, rest) => s.apart_pl(a, b).and_then(λ r1 => s.apart_pls(a, rest).map(λ r2 => r1 ++ r2)) }
+}
+
+fn CSt::apart_each(self s: CSt, ps, bs: List<Pl>) → Option<List<Residual>> {
+    match ps { Nil => Some(Nil), Cons(p, rest) => s.apart_pls(p, bs).and_then(λ r1 => s.apart_each(rest, bs).map(λ r2 => r1 ++ r2)) }
+}
+
+// Two arguments where one may change: apart, unless neither is a view of
+// the other and neither holds the object, since live views are apart.
+fn CSt::apart_lent(self s: CSt, a, b: Lent) → Option<List<Residual>> {
+    match (a.ch || b.ch) && (s.related(a.l, b.l) || !(s.role(a.l)).same(KView) || !(s.role(b.l)).same(KView)) { False => Some(Nil), True => s.apart_each(a.ps, b.ps) }
+}
+
+fn CSt::apart_one(self s: CSt, a: Lent, bs: List<Lent>) → Option<List<Residual>> {
+    match bs { Nil => Some(Nil), Cons(b, rest) => s.apart_lent(a, b).and_then(λ r1 => s.apart_one(a, rest).map(λ r2 => r1 ++ r2)) }
+}
+
+// Arguments lent where one may change are pairwise apart.
+fn CSt::apart_args(self s: CSt, ls: List<Lent>) → Option<List<Residual>> {
+    match ls { Nil => Some(Nil), Cons(a, rest) => s.apart_one(a, rest).and_then(λ r1 => s.apart_args(rest).map(λ r2 => r1 ++ r2)) }
+}
+
+// A callee's atom, which reads its own argument `k`, as the caller's at
+// levels: the argument passed there.
+fn CSt::subst_atom(self s: CSt, xs: List<Var>, a: Atom) → Option<Atom> {
+    match a { Lit(n) => Some(Lit(n)), Var(k) => xs.nth(k).and_then(λ x => s.lvl(x).map(λ l => Var(l))) }
+}
+
+fn CSt::subst_step(self s: CSt, xs: List<Var>, a: Step) → Option<Step> {
+    match a {
+        SField(i) => Some(SField(i)),
+        SElem(i) => s.subst_atom(xs, i).map(λ j => SElem(j)),
+        SWindow(lo, n) => s.subst_atom(xs, lo).and_then(λ l2 => s.subst_atom(xs, n).map(λ n2 => SWindow(l2, n2))),
+        SKey(_, _) => None,
+        SVariant(_) => None,
+    }
+}
+
+fn CSt::subst_steps(self s: CSt, xs: List<Var>, ys: List<Step>) → Option<List<Step>> {
+    match ys { Nil => Some(Nil), Cons(a, rest) => s.subst_step(xs, a).and_then(λ b => s.subst_steps(xs, rest).map(λ bs => Cons(b, bs))) }
+}
+
+// One result bound: `s0` is the state before the call (where the arguments
+// are read), `s` the state binding.
+fn CSt::result(self s: CSt, s0: CSt, sig: Sig, xs: List<Var>, r: Result) → Option<CSt> {
+    match r.origin {
+        OFresh => Some(s.push(CVar(r.code, KHold(s.nobj, AcOwn))).fresh_obj()),
+        OParam(i) => match (sig.params.nth(i).unwrap_or(Param(SWord(WNat), ByRead))).mode {
+            ByTake => match r.code.moves() {
+                False => Some(s.push(CVar(r.code, KPlain))),
+                True => xs.nth(i).and_then(λ x => s0.lvl(x)).and_then(λ l => match s0.role(l) {
+                    KHold(o, a) => match a { AcOwn => Some(s.push(CVar(r.code, KHold(o, AcOwn)))), AcRead => None, AcWrite => None },
+                    _ => None,
+                }),
+            },
+            ByRead => None,
+            ByWrite => None,
+        },
+        OView(i, steps) => match (sig.params.nth(i).unwrap_or(Param(SWord(WNat), ByTake))).mode {
+            ByRead => xs.nth(i).and_then(λ x => s0.lvl(x)).and_then(λ l => s0.subst_steps(xs, steps).and_then(λ at =>
+                match s0.role(l) {
+                    KPlain => Some(s.push(CVar(r.code, KPlain))),
+                    KGone => None,
+                    _ => Some(s.with_views((s0.places(l, at)).map(λ pl => VEnt(s.next(), pl.obj, pl.at, Reading, l, at, True)) ++ s.views).push(CVar(r.code, KView))),
+                })),
+            ByWrite => None,
+            ByTake => None,
+        },
+    }
+}
+
+fn CSt::results(self s: CSt, s0: CSt, sig: Sig, xs: List<Var>, rs: List<Result>) → Option<CSt> {
+    match rs { Nil => Some(s), Cons(r, rest) => s.result(s0, sig, xs, r).and_then(λ s2 => s2.results(s0, sig, xs, rest)) }
+}
+
+// Each written parameter's value after: a view to write of the argument it
+// lent, its whole, not yet written back; a plain argument's a plain value.
+fn CSt::slots(self s: CSt, s0: CSt, sig: Sig, xs: List<Var>, ws: List<Nat>) → Option<CSt> {
+    match ws {
+        Nil => Some(s),
+        Cons(i, rest) => xs.nth(i).and_then(λ x => s0.lvl(x)).and_then(λ l => {
+            let c = (sig.params.nth(i).unwrap_or(Param(SWord(WNat), ByRead))).code;
+            let s2 = match s0.role(l) {
+                KPlain => Some(s.push(CVar(c, KPlain))),
+                KGone => None,
+                _ => Some(s.with_views((s0.places(l, Nil)).map(λ pl => VEnt(s.next(), pl.obj, pl.at, Writing, l, Nil, False)) ++ s.views).push(CVar(c, KView))),
+            };
+            s2.and_then(λ s3 => s3.slots(s0, sig, xs, rest))
+        }),
+    }
+}
+
+fn CSt::call(self s: CSt, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, g: Nat, xs: List<Var>) → Option<Next> {
+    let sig = sigs(g);
+    s.lend_all(tys, strs, sig.params, xs).and_then(λ nl =>
+        s.apart_args(s.lent(sig.params, xs)).and_then(λ ra =>
+            nl.st.results(s, sig, xs, sig.results).and_then(λ s2 =>
+                s2.slots(s, sig, xs, sig.written()).map(λ s3 => Next(s3, nl.rs ++ ra ++ [RPre(g, xs), RMeasure(g, xs)])))))
+}
+
+fn Stmt::verdict(self st: Stmt, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, s: CSt) → Option<Next> {
+    match st {
+        Op(_, a, b) => s.read_var(tys, strs, a).and_then(λ ga => s.read_var(tys, strs, b).map(λ gb => Next(s.push(CVar(ga.code, KPlain)), ga.rs ++ gb.rs))),
+        Lit(w, _) => Some(Next(s.push(CVar(SWord(w), KPlain)), Nil)),
+        Read(p) => s.read(tys, strs, p).map(λ g => Next(s.push(CVar(g.code, KPlain)), g.rs)),
+        Write(p, v) => s.write(tys, strs, p, v),
+        View(p, md) => s.view(tys, strs, p, md),
+        Take(p) => s.take(tys, strs, p),
+        Fresh(c, n, v) => s.read_var(tys, strs, n).and_then(λ gn => s.read_var(tys, strs, v).map(λ gv => Next(s.push(CVar(c, KHold(s.nobj, AcOwn))).fresh_obj(), gn.rs ++ gv.rs))),
+        Call(g, xs, _) => s.call(tys, strs, sigs, g, xs),
+        Death(p) => s.death(p),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Leaves: a return, a `Jump`
+
+// A result as its origin promises: a plain value or an object the callee
+// owns (made here, or taken); the parameter's object; a read view of the parameter at the
+// steps named.
+fn CSt::returns(self s: CSt, l: Nat, r: Result) → Bool {
+    match r.origin {
+        OFresh => match s.role(l) { KPlain => True, KHold(_, a) => match a { AcOwn => True, AcRead => False, AcWrite => False }, KView => False, KGone => False },
+        OParam(i) => match s.role(l) { KHold(o, _) => o.same(i), _ => False },
+        OView(i, xs) => match s.ents(l) { Cons(e, Nil) => e.obj.same(i) && Steps::same(e.reg, xs) && !e.mode.writes(), _ => False },
+    }
+}
+
+fn CSt::returns_all(self s: CSt, ls: List<Nat>, rs: List<Result>) → Bool {
+    match rs { Nil => True, Cons(r, rest) => match ls { Nil => False, Cons(l, lr) => s.returns(l, r) && s.returns_all(lr, rest) } }
+}
+
+// Each written parameter's object back, held, and written back.
+fn CSt::gives_back(self s: CSt, ls: List<Nat>, ws: List<Nat>) → Bool {
+    match ws { Nil => True, Cons(i, rest) => match ls { Nil => False, Cons(l, lr) => (match s.role(l) { KHold(o, _) => o.same(i) && !s.unsynced(o), _ => False }) && s.gives_back(lr, rest) } }
+}
+
+fn CSt::lvls(self s: CSt, xs: List<Var>) → Option<List<Nat>> {
+    match xs { Nil => Some(Nil), Cons(x, rest) => s.lvl(x).and_then(λ l => s.lvls(rest).map(λ ls => Cons(l, ls))) }
+}
+
+// A return reads its variables owing nothing (a `Ret` owes nothing in the
+// verdict's tree), answers its results as their origins say, and gives
+// back each written parameter.
+fn CSt::ret(self s: CSt, tys: Nat → Type, strs: Strs(tys), sig: Sig, xs: List<Var>) → Bool {
+    match s.read_vars(tys, strs, xs) {
+        Some(rs) => match rs {
+            Nil => match s.lvls(xs) { Some(ls) => s.returns_all(ls, sig.results) && s.gives_back(ls.drop(sig.results.len()), sig.written()), None => False },
+            Cons(_, _) => False,
+        },
+        None => False,
+    }
+}
+
+// A `Jump` is a call of the function itself, last, passing each written
+// parameter's object and each returned parameter back in its own place.
+fn CSt::keeps_place(self s: CSt, xs: List<Var>, i: Nat) → Bool {
+    match xs.nth(i).and_then(λ x => s.lvl(x)) { Some(l) => match s.role(l) { KHold(o, _) => o.same(i), _ => False }, None => False }
+}
+
+fn Result::param(self r: Result) → List<Nat> { match r.origin { OParam(i) => [i], OView(i, _) => [i], OFresh => Nil } }
+
+fn CSt::jump(self s: CSt, tys: Nat → Type, strs: Strs(tys), sig: Sig, me: Nat, xs: List<Var>) → Option<List<Residual>> {
+    let kept = (sig.written() ++ sig.results.foldr(λ (r: Result) (acc: List<Nat>) => r.param() ++ acc, Nil)).all_bit(λ i => s.keeps_place(xs, i));
+    kept.then(s.lend_all(tys, strs, sig.params, xs).and_then(λ nl => s.apart_args(s.lent(sig.params, xs)).map(λ ra => nl.rs ++ ra ++ [RPre(me, xs), RMeasure(me, xs)])))
+}
+
+// ---------------------------------------------------------------------------
+// Joins: the meet
+
+// What an arm yields to its join: the state there and its outputs.
+record Yd { st: CSt, outs: List<Var> }
+
+// A body's verdict: what it owes, and what it yields to its join.
+record CRes { owes: Owes, yld: Option<Yd> }
+
+fn Yd::lvls(self y: Yd) → List<Nat> { match y.st.lvls(y.outs) { Some(ls) => ls, None => Nil } }
+
+// An entry kept through the join, or dropped: a view to write dropped must
+// be written back.
+fn VEnt::droppable(self e: VEnt) → Bool { !e.mode.writes() || e.back }
+
+// A variable from before the join, after it: a plain variable is the
+// meaning's again; one an arm yielded or wrote is gone (the meaning reads
+// its value before the join, the heap does not); one the arms agree on is
+// as they leave it; any other is gone.
+fn CSt::met_role(s0: CSt, y, n: Yd, l: Nat) → Role {
+    match s0.role(l) {
+        KPlain => KPlain,
+        _ => match l.member(y.lvls()) || l.member(n.lvls()) || l.member(y.st.wrote) || l.member(n.st.wrote) {
+            True => KGone,
+            False => {
+                let ry = y.st.role(l);
+                let rn = n.st.role(l);
+                match ry.same(rn) {
+                    False => KGone,
+                    True => match ry {
+                        KView => match ((y.st.ents(l)).len().same((n.st.ents(l)).len())) && (y.st.ents(l)).all_bit(λ e => (n.st.ents(l)).any_bit(λ f => e.alike(f))) { True => KView, False => KGone },
+                        _ => ry,
+                    },
+                }
+            },
+        },
+    }
+}
+
+// The roles of the variables from before the join that either arm touched
+// or yielded.
+fn CSt::met_roles(s: CSt, s0: CSt, y, n: Yd, ls: List<Nat>) → CSt {
+    match ls {
+        Nil => s,
+        Cons(l, rest) => match (l + 1).leb(s0.na + s0.nd) {
+            True => CSt::met_roles(s.set(l, CSt::met_role(s0, y, n, l)), s0, y, n, rest),
+            False => CSt::met_roles(s, s0, y, n, rest),
+        },
+    }
+}
+
+// An output's state, from the two variables the arms yield there (levels in
+// each arm's state), bound at level `lo` of the state after.
+record OutR { cv: CVar, ents: List<VEnt>, fresh: Bool }
+
+// The nearest variable from before the join (below level `lo`) an arm's
+// entry is a view of, so a view to write it descends from still meets it;
+// the output itself where there is none.
+fn CSt::pre_par(self s: CSt, e: VEnt, lo: Nat) → Nat {
+    match (s.anc_of(e, s.views.len())).filter(λ k => (k + 1).leb(lo)) { Cons(k, _) => k, Nil => lo }
+}
+
+fn CSt::out_role(s0: CSt, y, n: Yd, ly, ln, lo: Nat, nobj: Nat) → Option<OutR> {
+    let cy = y.st.var(ly);
+    let rn = n.st.role(ln);
+    match cy.role {
+        KGone => Some(OutR(CVar(cy.code, KGone), Nil, False)),
+        KPlain => match rn {
+            KGone => Some(OutR(CVar(cy.code, KGone), Nil, False)),
+            KPlain => Some(OutR(CVar(cy.code, KPlain), Nil, False)),
+            KHold(o2, _) => (!n.st.has_obj_views(o2)).then(Some(OutR(CVar(cy.code, KHold(nobj, AcOwn)), Nil, True))),
+            KView => None,
+        },
+        KHold(o1, a1) => match rn {
+            KGone => Some(OutR(CVar(cy.code, KGone), Nil, False)),
+            KPlain => (!y.st.has_obj_views(o1)).then(Some(OutR(CVar(cy.code, KHold(nobj, a1)), Nil, True))),
+            KHold(o2, a2) => match o1.same(o2) {
+                True => Some(OutR(CVar(cy.code, KHold(o1, a1.min(a2))), Nil, False)),
+                False => (!y.st.has_obj_views(o1) && !n.st.has_obj_views(o2)).then(Some(OutR(CVar(cy.code, KHold(nobj, a1.min(a2))), Nil, True))),
+            },
+            KView => None,
+        },
+        KView => match rn {
+            KGone => Some(OutR(CVar(cy.code, KGone), Nil, False)),
+            KView => {
+                let ey = y.st.ents(ly);
+                let en = n.st.ents(ln);
+                match ey.all_bit(λ e => !e.mode.writes()) && en.all_bit(λ e => !e.mode.writes()) {
+                    True => Some(OutR(CVar(cy.code, KView), ey.map(λ e => VEnt(lo, e.obj, e.reg, Reading, y.st.pre_par(e, lo), e.at, True)) ++ en.map(λ e => VEnt(lo, e.obj, e.reg, Reading, n.st.pre_par(e, lo), e.at, True)), False)),
+                    False => match ey {
+                        Cons(e, Nil) => match en {
+                            Cons(f, Nil) => (e.mode.writes() && f.mode.writes() && e.obj.same(f.obj) && Steps::same(e.reg, f.reg) && e.par.same(f.par) && Steps::same(e.at, f.at)
+                                && (e.par + 1).leb(s0.na + s0.nd)).then(Some(OutR(CVar(cy.code, KView), [VEnt(lo, e.obj, e.reg, Writing, e.par, e.at, e.back && f.back)], False))),
+                            _ => None,
+                        },
+                        _ => None,
+                    },
+                }
+            },
+            KPlain => None,
+            KHold(_, _) => None,
+        },
+    }
+}
+
+record Outs { cvs: List<CVar>, ents: List<VEnt>, nobj: Nat }
+
+fn CSt::outs(s0: CSt, y, n: Yd, ly, ln: List<Nat>, lo: Nat, nobj: Nat) → Option<Outs> {
+    match ly {
+        Nil => match ln { Nil => Some(Outs(Nil, Nil, nobj)), Cons(_, _) => None },
+        Cons(a, ry) => match ln {
+            Nil => None,
+            Cons(b, rn) => CSt::out_role(s0, y, n, a, b, lo, nobj).and_then(λ o =>
+                CSt::outs(s0, y, n, ry, rn, lo + 1, match o.fresh { True => nobj + 1, False => nobj }).map(λ rest => Outs(Cons(o.cv, rest.cvs), o.ents ++ rest.ents, rest.nobj))),
+        },
+    }
+}
+
+// The views of variables from before the join kept by it: an entry both
+// arms hold alike, of a variable still a view after it.
+fn CSt::kept(s: CSt, y, n: Yd) → List<VEnt> {
+    y.st.views.filter(λ e => (e.lvl + 1).leb(s.na + s.nd) && (match s.role(e.lvl) { KView => True, _ => False }) && n.st.views.any_bit(λ f => e.alike(f)))
+        .map(λ e => VEnt(e.lvl, e.obj, e.reg, e.mode, e.par, e.at, e.back && n.st.views.any_bit(λ f => e.alike(f) && f.back)))
+}
+
+// Every entry an arm holds that the join does not keep is dropped, and must
+// be droppable: kept ones are matched by variable and object.
+fn CSt::drops_ok(arm: List<VEnt>, kept: List<VEnt>) → Bool {
+    arm.all_bit(λ e => e.droppable() || kept.any_bit(λ f => e.obj.same(f.obj) && Steps::same(e.reg, f.reg) && e.mode.same(f.mode) && ((f.back && e.back) || (!f.back && !e.back))))
+}
+
+fn Nat::max2(a, b: Nat) → Nat { match a.leb(b) { True => b, False => a } }
+
+// The state after a join whose arms yield `y` and `n`, from the state
+// `s0` before it (whose touched and written lists it keeps, with the arms').
+fn CSt::meet(s0: CSt, y, n: Yd) → Option<CSt> {
+    let lo = s0.na + s0.nd;
+    y.st.lvls(y.outs).and_then(λ ly => n.st.lvls(n.outs).and_then(λ ln =>
+        CSt::outs(s0, y, n, ly, ln, lo, Nat::max2(y.st.nobj, n.st.nobj)).and_then(λ os => {
+            let roles = CSt::met_roles(s0, s0, y, n, y.st.touched ++ n.st.touched ++ ly ++ ln);
+            let kept = CSt::kept(roles, y, n);
+            let views = kept ++ os.ents;
+            (CSt::drops_ok(y.st.views, views) && CSt::drops_ok(n.st.views, views)).then(
+                Some(CSt(roles.args, roles.locs, roles.na, roles.nd, views, os.nobj, roles.touched ++ y.st.touched ++ n.st.touched, s0.wrote ++ y.st.wrote ++ n.st.wrote).push_all(os.cvs)))
+        })))
+}
+
+// The state an arm starts from: what changes in it is recorded afresh.
+fn CSt::arm(self s: CSt) → CSt { CSt(s.args, s.locs, s.na, s.nd, s.views, s.nobj, Nil, Nil) }
+
+fn CSt::joined(s0: CSt, oy, on: Option<Yd>) → Option<CSt> {
+    match oy {
+        None => match on { None => Some(s0), Some(n) => CSt::meet(s0, n, n) },
+        Some(y) => match on { None => CSt::meet(s0, y, y), Some(n) => CSt::meet(s0, y, n) },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Bodies, and the checker
+
+fn Body::verdict(self b: Body, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, me: Nat, s: CSt) → Option<CRes> {
+    match b {
+        Ret(xs) => s.ret(tys, strs, sigs(me), xs).then(Some(CRes(OEnd, None))),
+        Yield(xs) => Some(CRes(OEnd, Some(Yd(s, xs)))),
+        Jump(xs) => s.jump(tys, strs, sigs(me), me, xs).map(λ rs => CRes(OJump(rs), None)),
+        Do(st, rest) => st.verdict(tys, strs, sigs, s).and_then(λ nx => rest.verdict(tys, strs, sigs, me, nx.st).map(λ cr => CRes(ODo(nx.rs, cr.owes), cr.yld))),
+        Join(t, yes, no, rest) => {
+            let tv = match t as λ _ => List<Var> { TLt(a, c) => [a, c], TLe(a, c) => [a, c] };
+            match s.read_vars(tys, strs, tv) {
+                Some(trs) => match trs {
+                    Nil => yes.verdict(tys, strs, sigs, me, s.arm()).and_then(λ cy => no.verdict(tys, strs, sigs, me, s.arm()).and_then(λ cn =>
+                        CSt::joined(s, cy.yld, cn.yld).and_then(λ s1 => rest.verdict(tys, strs, sigs, me, s1).map(λ cr => CRes(OJoin(cy.owes, cn.owes, cr.owes), cr.yld))))),
+                    Cons(_, _) => None,
+                },
+                None => None,
+            }
+        },
+    }
+}
+
+// The state a function starts with: each argument holds an object of its
+// own, as its mode lends it.
+fn CSt::params(ps: List<Param>, i: Nat) → List<CVar> { match ps { Nil => Nil, Cons(p, rest) => Cons(CVar(p.code, KHold(i, Acc::of(p.mode))), CSt::params(rest, i + 1)) } }
+
+fn CSt::start(sig: Sig) → CSt { CSt(CSt::params(sig.params, 0), Nil, sig.params.len(), 0, Nil, sig.params.len(), Nil, Nil) }
+
+fn Func::verdict(self f: Func, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, me: Nat) → Option<Owes> { f.body.verdict(tys, strs, sigs, me, CSt::start(f.sig)).map(λ cr => cr.owes) }
+
+// The checker: the code check, then the pass.
+fn check(tys: Nat → Type) → Checker(tys) {
+    λ strs sigs g f => match f.coded(tys, strs, sigs, g) { True => f.verdict(tys, strs, sigs, g), False => None }
+}

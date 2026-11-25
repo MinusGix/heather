@@ -293,8 +293,8 @@ fn Stmt::code_step(self s: Stmt, tys: Nat → Type, strs: Strs(tys), sigs: Nat �
                 Record(_) => None,
             },
         },
-        Call(g, args, n) => match Shape::same_list(args.map(λ x => ce.get(x)), sigs(g).param_codes()) && n.same(sigs(g).results.len()) {
-            True => Some(ce.push_all(sigs(g).result_codes())),
+        Call(g, args, n) => match Shape::same_list(args.map(λ x => ce.get(x)), sigs(g).param_codes()) && n.same(sigs(g).ret_codes().len()) {
+            True => Some(ce.push_all(sigs(g).ret_codes())),
             False => None,
         },
         Death(_) => Some(ce),
