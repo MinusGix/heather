@@ -1,0 +1,1348 @@
+// The ownership checker's second experiment: a call that lends a window to
+// write, a call that answers a read view, and the once-theorem over both
+// (docs/language/ownership-design.md §15.6,
+// issues/ownership-checker-call-and-write-view.md).
+//
+// A function takes one list parameter, to read or to write (its `Mode`),
+// and words, and answers a word or a read view of its parameter. Its body
+// binds, in order, versions of the parameter, views and words:
+//
+// - `Set(y, x, i, v)` is `let y = x.set(i, v)`, in place.
+// - `Get(z, x, i)` reads element `i` of `x`.
+// - `View(t, x, lo, n)` is `let t = &x[lo..lo+n]`.
+// - `Read(z, t, i)` reads element `i` of the view `t`.
+// - `Die(t)` is the annotation that `t` dies here (§15.3): no code.
+// - `CallMut(g, x, lo, n, args, y, z)` is
+//   `let (w2, z) = g(&mut x[lo..lo+n], args); let y = x.put_window(lo, w2)`.
+// - `CallView(g, x, args, t)` is `let t = g(&x, args)`, a read view of `x`
+//   that `g` answers.
+//
+// `mean_fn` is the meaning: lists are values, a view is its window's value,
+// and a call that lends a window is window, call, `put_window`: §15.2's
+// eager write-back, in the meaning itself. `run_fn` is the run: the
+// function works on a reference (a buffer of the file, a base and a length)
+// with no copy; a window it lends is the reference narrowed, and a view a
+// callee answers is two words relative to the reference it was given, which
+// the caller rebases. Both are stated over a `World`, the meanings and runs
+// of the functions called, so a body's meaning and run never see a callee's
+// body.
+//
+// `check_fn` reads the signatures only. Its state is the one object's
+// (a function has one): which version holds it now, and the live views,
+// each with the region it freezes (a window, or the whole object for a
+// view a callee answered). A write or a lent window needs every live view
+// apart from it: decided at literals, deferred as a residual otherwise; a
+// call defers its callee's precondition.
+//
+// `FnSafe(sig, pre, mean, run)` is what a function promises a caller: from
+// any file, a reference in bounds and words meeting `pre`, the run answers
+// the meaning's word, its reference's window holds the meaning's value
+// afterwards and the file is unchanged outside it, and a view it answers
+// lies inside the reference and reads the meaning's view value.
+// `check_sound` gives `FnSafe` of a function whose verdict is `Some(rs)`,
+// whose residuals hold under its precondition, in any world whose functions
+// it calls are `FnSafe`. `prog_sound` ties the knot: in the world of a
+// program at any depth of calls, every function is `FnSafe`.
+import logic;
+import bool;
+import nat;
+import omega;
+import option;
+import list;
+import list_window;
+import span_set;
+import atom;
+
+// ---------------------------------------------------------------------------
+// The fragment
+
+fn list_at(xs: List<List<Nat>>, k: Nat) → List<Nat> { xs.nth(k).unwrap_or(Nil) }
+
+fn Atom::all_bound(args: List<Atom>, nw: Nat) → Bool {
+    match args { Nil => True, Cons(a, rest) => a.bound(nw) && Atom::all_bound(rest, nw) }
+}
+
+// A call's arguments, read.
+fn vals(args: List<Atom>, ws: List<Nat>) → List<Nat> { args.map(λ a => a.val(ws)) }
+
+inductive Mode { Reads, Writes }
+
+fn Mode::writes(self m: Mode) → Bool { match m { Reads => False, Writes => True } }
+
+inductive Stmt {
+    Set(y: Nat, x: Nat, i: Atom, v: Atom),
+    Get(z: Nat, x: Nat, i: Atom),
+    View(t: Nat, x: Nat, lo: Atom, n: Atom),
+    Read(z: Nat, t: Nat, i: Atom),
+    Die(t: Nat),
+    CallMut(g: Nat, x: Nat, lo: Atom, n: Atom, args: List<Atom>, y: Nat, z: Nat),
+    CallView(g: Nat, x: Nat, args: List<Atom>, t: Nat),
+}
+
+// What a function answers: a word, or the window `lo..lo+n` of its
+// parameter as a read view.
+inductive Ret { RWord(a: Atom), RView(lo: Atom, n: Atom) }
+
+record Func { mode: Mode, words: Nat, body: List<Stmt>, ret: Ret }
+
+// The function a table has nowhere: it reads its parameter and answers 0.
+fn Func::none() → Func { Func(Reads, 0, Nil, RWord(Lit(0))) }
+
+// ---------------------------------------------------------------------------
+// The meaning and the run of a call, as a world
+
+// What a call means: the parameter's value afterwards (a read parameter's
+// is what it was), the word answered, the view's value.
+record MOut { val: List<Nat>, word: Nat, view: List<Nat> }
+
+// What a call does: the file afterwards, the word answered, and the view
+// answered, relative to the reference the call was given.
+record ROut { file: List<List<Nat>>, word: Nat, lo: Nat, n: Nat }
+
+// A reference: a buffer of the file, a base and a length.
+record Ref { b: Nat, base: Nat, len: Nat }
+
+record World {
+    mean: Nat → List<Nat> → List<Nat> → MOut,
+    run: Nat → List<List<Nat>> → Ref → List<Nat> → ROut,
+}
+
+// ---------------------------------------------------------------------------
+// The meaning: lists are values
+
+fn window(xs: List<Nat>, lo, n: Nat) → List<Nat> { xs.drop(lo).take(n) }
+
+record Sem { objs: List<List<Nat>>, views: List<List<Nat>>, words: List<Nat> }
+
+// After a lent window's call: the eager write-back, and the word answered.
+fn Sem::lent(s: Sem, cur: List<Nat>, lo: Nat, o: MOut) → Sem { Sem(s.objs ++ [cur.put_window(lo, o.val)], s.views, s.words ++ [o.word]) }
+
+fn Stmt::eval1(self o: Stmt, w: World, s: Sem) → Sem {
+    match o {
+        Set(_, x, i, v) => Sem(s.objs ++ [list_at(s.objs, x).update(i.val(s.words), λ _ => v.val(s.words))], s.views, s.words),
+        Get(_, x, i) => Sem(s.objs, s.views, s.words ++ [word(list_at(s.objs, x), i.val(s.words))]),
+        View(_, x, lo, n) => Sem(s.objs, s.views ++ [window(list_at(s.objs, x), lo.val(s.words), n.val(s.words))], s.words),
+        Read(_, t, i) => Sem(s.objs, s.views, s.words ++ [word(list_at(s.views, t), i.val(s.words))]),
+        Die(_) => s,
+        CallMut(g, x, lo, n, args, _, _) => Sem::lent(s, list_at(s.objs, x), lo.val(s.words),
+            w.mean(g, window(list_at(s.objs, x), lo.val(s.words), n.val(s.words)), vals(args, s.words))),
+        CallView(g, x, args, _) => Sem(s.objs, s.views ++ [w.mean(g, list_at(s.objs, x), vals(args, s.words)).view], s.words),
+    }
+}
+
+fn mean_body(w: World, ops: List<Stmt>, s: Sem) → Sem {
+    match ops { Nil => s, Cons(o, rest) => mean_body(w, rest, o.eval1(w, s)) }
+}
+
+// The version that holds the object at the end: the last one bound.
+fn Sem::cur(self s: Sem) → List<Nat> { list_at(s.objs, s.objs.len() - 1) }
+
+fn Ret::word(self r: Ret, ws: List<Nat>) → Nat { match r { RWord(a) => a.val(ws), RView(_, _) => 0 } }
+
+fn Ret::view(self r: Ret, cur: List<Nat>, ws: List<Nat>) → List<Nat> { match r { RWord(_) => Nil, RView(lo, n) => window(cur, lo.val(ws), n.val(ws)) } }
+
+// A read parameter comes back as it went in: `&x` is `T` in and nothing
+// out (§15.2).
+fn Mode::back(self m: Mode, arg, cur: List<Nat>) → List<Nat> { match m { Reads => arg, Writes => cur } }
+
+fn mean_out(f: Func, arg: List<Nat>, s: Sem) → MOut { MOut(f.mode.back(arg, s.cur()), f.ret.word(s.words), f.ret.view(s.cur(), s.words)) }
+
+fn mean_fn(w: World, f: Func, arg, ws: List<Nat>) → MOut { mean_out(f, arg, mean_body(w, f.body, Sem([arg], Nil, ws))) }
+
+// ---------------------------------------------------------------------------
+// The run: one reference, no copy
+
+// A read through a reference: past its length, zero, as a window's value
+// reads.
+fn rget(file: List<List<Nat>>, v: Ref, i: Nat) → Nat {
+    match (i + 1).leb(v.len) { True => word(list_at(file, v.b), v.base + i), False => 0 }
+}
+
+// A store through a reference: past its length, nothing.
+fn store(xs: List<Nat>, r: Ref, i, v: Nat) → List<Nat> {
+    match (i + 1).leb(r.len) { True => xs.update(r.base + i, λ _ => v), False => xs }
+}
+
+// The window `lo..lo+n` of a reference, cut to it as the meaning's window
+// is cut to the list.
+fn narrow(r: Ref, lo, n: Nat) → Ref { Ref(r.b, r.base + lo.min(r.len), n.min(r.len - lo)) }
+
+fn ref_at(vs: List<Ref>, t: Nat) → Ref { vs.nth(t).unwrap_or(Ref(0, 0, 0)) }
+
+record Exec { file: List<List<Nat>>, views: List<Ref>, words: List<Nat> }
+
+fn Exec::lent(m: Exec, o: ROut) → Exec { Exec(o.file, m.views, m.words ++ [o.word]) }
+
+// A view a callee answered, rebased on the reference the caller gave it.
+fn Exec::viewed(m: Exec, r: Ref, o: ROut) → Exec { Exec(o.file, m.views ++ [Ref(r.b, r.base + o.lo, o.n)], m.words) }
+
+fn Stmt::run2(self o: Stmt, w: World, r: Ref, m: Exec) → Exec {
+    match o {
+        Set(_, _, i, v) => Exec(m.file.update(r.b, λ xs => store(xs, r, i.val(m.words), v.val(m.words))), m.views, m.words),
+        Get(_, _, i) => Exec(m.file, m.views, m.words ++ [rget(m.file, r, i.val(m.words))]),
+        View(_, _, lo, n) => Exec(m.file, m.views ++ [narrow(r, lo.val(m.words), n.val(m.words))], m.words),
+        Read(_, t, i) => Exec(m.file, m.views, m.words ++ [rget(m.file, ref_at(m.views, t), i.val(m.words))]),
+        Die(_) => m,
+        CallMut(g, _, lo, n, args, _, _) => Exec::lent(m, w.run(g, m.file, narrow(r, lo.val(m.words), n.val(m.words)), vals(args, m.words))),
+        CallView(g, _, args, _) => Exec::viewed(m, r, w.run(g, m.file, r, vals(args, m.words))),
+    }
+}
+
+fn run_body(w: World, r: Ref, ops: List<Stmt>, m: Exec) → Exec {
+    match ops { Nil => m, Cons(o, rest) => run_body(w, r, rest, o.run2(w, r, m)) }
+}
+
+// The view a function answers, relative to its reference: the window cut
+// to it.
+fn Ret::vlo(self ret: Ret, r: Ref, ws: List<Nat>) → Nat { match ret { RWord(_) => 0, RView(lo, _) => lo.val(ws).min(r.len) } }
+
+fn Ret::vn(self ret: Ret, r: Ref, ws: List<Nat>) → Nat { match ret { RWord(_) => 0, RView(lo, n) => n.val(ws).min(r.len - lo.val(ws)) } }
+
+fn run_out(f: Func, r: Ref, m: Exec) → ROut { ROut(m.file, f.ret.word(m.words), f.ret.vlo(r, m.words), f.ret.vn(r, m.words)) }
+
+fn run_fn(w: World, f: Func, file: List<List<Nat>>, r: Ref, ws: List<Nat>) → ROut { run_out(f, r, run_body(w, r, f.body, Exec(file, Nil, ws))) }
+
+// ---------------------------------------------------------------------------
+// A program: functions by number, and its world at a depth of calls
+
+fn fn_at(fns: List<Func>, g: Nat) → Func { fns.nth(g).unwrap_or(Func::none()) }
+
+// At depth zero a call does nothing and answers zero; at depth `d + 1` it
+// runs the callee's body at depth `d`.
+fn world(fns: List<Func>, d: Nat) → World {
+    match d {
+        Zero => World(λ _ arg _ => MOut(arg, 0, Nil), λ _ file _ _ => ROut(file, 0, 0, 0)),
+        Succ(e) => World(λ g arg ws => mean_fn(world(fns, e), fn_at(fns, g), arg, ws), λ g file r ws => run_fn(world(fns, e), fn_at(fns, g), file, r, ws)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The checker
+
+// What a caller reads of a callee: its mode, how many words it takes, and
+// what it answers (§15.8). Nothing of its body.
+inductive RetKind { KWord, KView }
+
+fn RetKind::is_view(self k: RetKind) → Bool { match k { KWord => False, KView => True } }
+
+record Sig { mode: Mode, words: Nat, ret: RetKind }
+
+fn Ret::kind(self r: Ret) → RetKind { match r { RWord(_) => KWord, RView(_, _) => KView } }
+
+fn Func::sig(self f: Func) → Sig { Sig(f.mode, f.words, f.ret.kind()) }
+
+fn sig_at(sigs: List<Sig>, g: Nat) → Sig { sigs.nth(g).unwrap_or(Func::none().sig()) }
+
+fn sigs_of(fns: List<Func>) → List<Sig> { fns.map(λ f => f.sig()) }
+
+// What a live view freezes: a window of the object, or the whole of it (a
+// view a callee answered, which the signature places only in its
+// parameter).
+inductive Region { Whole, Win(lo: Atom, n: Atom) }
+
+record LView { t: Nat, region: Region }
+
+// What the checker defers: an obligation of `atom.hthr` (here two windows
+// apart, `Spans`), or a callee's precondition at the call's arguments.
+inductive Owed { Due(o: Obligation), Pre(g: Nat, args: List<Atom>) }
+
+fn Owed::Holds(self o: Owed, pres: Nat → List<Nat> → Type, ws: List<Nat>) → Type {
+    match o {
+        Due(ob) => ob.Holds(ws),
+        Pre(g, args) => pres(g, vals(args, ws)),
+    }
+}
+
+fn dues(r: Option<List<Obligation>>) → Option<List<Owed>> { r.map(λ os => os.map(λ ob => Due(ob))) }
+
+fn Owed::All(rs: List<Owed>, pres: Nat → List<Nat> → Type, ws: List<Nat>) → Type {
+    match rs { Nil => True, Cons(r, rest) => r.Holds(pres, ws) ∧ Owed::All(rest, pres, ws) }
+}
+
+// One live view against a write to `lo..lo+n`.
+fn Region::license(self rg: Region, lo, n: Atom) → Option<List<Owed>> {
+    match rg {
+        Whole => None,
+        Win(a, b) => dues(Spans(a, b, lo, n).settle()),
+    }
+}
+
+fn license_live(live: List<LView>, lo, n: Atom) → Option<List<Owed>> {
+    match live {
+        Nil => Some(Nil),
+        Cons(lv, rest) => lv.region.license(lo, n).and_then(λ r1 => license_live(rest, lo, n).map(λ r2 => r1 ++ r2)),
+    }
+}
+
+fn find_live(live: List<LView>, t: Nat) → Option<Region> {
+    match live { Nil => None, Cons(lv, rest) => match lv.t.same(t) { True => Some(lv.region), False => find_live(rest, t) } }
+}
+
+fn kill(live: List<LView>, t: Nat) → List<LView> { live.filter(λ lv => !lv.t.same(t)) }
+
+// The one object's state: which version holds it, its live views, and the
+// next view and word to bind.
+record Places { top: Nat, live: List<LView>, nviews: Nat, nw: Nat }
+
+record Next { next: Places, rs: List<Owed> }
+
+fn check_mut(sg: Sig, mode: Mode, c: Places, g, x: Nat, lo, n: Atom, args: List<Atom>, y, z: Nat) → Option<Next> {
+    (((((mode.writes() && sg.mode.writes()) && !sg.ret.is_view()) && (x.same(c.top) && y.same(c.top + 1)))
+        && (z.same(c.nw) && (lo.bound(c.nw) && n.bound(c.nw)))) && (Atom::all_bound(args, c.nw) && args.len().same(sg.words))).then(
+        license_live(c.live, lo, n).map(λ rs => Next(Places(c.top + 1, c.live, c.nviews, c.nw + 1), rs ++ [Pre(g, args)])))
+}
+
+fn check_view(sg: Sig, c: Places, g, x: Nat, args: List<Atom>, t: Nat) → Option<Next> {
+    ((((!sg.mode.writes() && sg.ret.is_view()) && x.same(c.top)) && t.same(c.nviews)) && (Atom::all_bound(args, c.nw) && args.len().same(sg.words))).then(
+        Some(Next(Places(c.top, Cons(LView(t, Whole), c.live), c.nviews + 1, c.nw), [Pre(g, args)])))
+}
+
+fn Stmt::check(self o: Stmt, mode: Mode, sigs: List<Sig>, c: Places) → Option<Next> {
+    match o {
+        Set(y, x, i, v) =>
+            (((mode.writes() && (x.same(c.top) && y.same(c.top + 1))) && i.bound(c.nw)) && v.bound(c.nw)).then(
+                license_live(c.live, i, Lit(1)).map(λ rs => Next(Places(c.top + 1, c.live, c.nviews, c.nw), rs))),
+        Get(z, x, i) => ((x.same(c.top) && z.same(c.nw)) && i.bound(c.nw)).then(Some(Next(Places(c.top, c.live, c.nviews, c.nw + 1), Nil))),
+        View(t, x, lo, n) =>
+            (((x.same(c.top) && t.same(c.nviews)) && lo.bound(c.nw)) && n.bound(c.nw)).then(
+                Some(Next(Places(c.top, Cons(LView(t, Win(lo, n)), c.live), c.nviews + 1, c.nw), Nil))),
+        Read(z, t, i) => ((z.same(c.nw) && find_live(c.live, t).is_some()) && i.bound(c.nw)).then(Some(Next(Places(c.top, c.live, c.nviews, c.nw + 1), Nil))),
+        Die(t) => find_live(c.live, t).is_some().then(Some(Next(Places(c.top, kill(c.live, t), c.nviews, c.nw), Nil))),
+        CallMut(g, x, lo, n, args, y, z) => check_mut(sig_at(sigs, g), mode, c, g, x, lo, n, args, y, z),
+        CallView(g, x, args, t) => check_view(sig_at(sigs, g), c, g, x, args, t),
+    }
+}
+
+fn check_body(ops: List<Stmt>, mode: Mode, sigs: List<Sig>, c: Places) → Option<List<Owed>> {
+    match ops {
+        Nil => Some(Nil),
+        Cons(o, rest) => o.check(mode, sigs, c).and_then(λ st => check_body(rest, mode, sigs, st.next).map(λ rs => st.rs ++ rs)),
+    }
+}
+
+fn check_fn(sigs: List<Sig>, f: Func) → Option<List<Owed>> { check_body(f.body, f.mode, sigs, Places(0, Nil, 0, f.words)) }
+
+// ---------------------------------------------------------------------------
+// What a function promises
+
+// What a buffer holds at a reference, read as a list.
+fn Holds(buf: List<Nat>, base: Nat, cur: List<Nat>) → Type { (i: Nat) → i < cur.len() → buf.nth(base + i) = cur.nth(i) }
+
+// The reference is in the file.
+record InRef(file: List<List<Nat>>, r: Ref) {
+    buf: r.b < file.len(),
+    fits: r.base + r.len <= list_at(file, r.b).len(),
+}
+
+// `file` holds `cur` in the reference's window and is `file0` everywhere
+// else: the window holds the value, and outside it nothing changed.
+record OnRef(file0, file: List<List<Nat>>, r: Ref, cur: List<Nat>) {
+    len: cur.len() = r.len,
+    holds: Holds(list_at(file, r.b), r.base, cur),
+    out: (p: Nat) → ¬Span(r.base, r.len).has(p).IsTrue() → list_at(file, r.b).nth(p) = list_at(file0, r.b).nth(p),
+    other: (k: Nat) → k ≠ r.b → list_at(file, k) = list_at(file0, k),
+    shape: file.len() = file0.len(),
+    blen: list_at(file, r.b).len() = list_at(file0, r.b).len(),
+}
+
+// A call's promise at one file, reference and words: the run answers the
+// meaning's word; the window holds the meaning's value and nothing outside
+// it changed; a read parameter's value is what went in; and the view it
+// answers lies inside the reference and reads the meaning's view value.
+record Safe(mode: Mode, file: List<List<Nat>>, r: Ref, arg: List<Nat>, mo: MOut, ro: ROut) {
+    answer: ro.word = mo.word,
+    on: OnRef(file, ro.file, r, mo.val),
+    keeps: mode.writes() = False → mo.val = arg,
+    view_in: ro.lo + ro.n <= r.len,
+    view_reads: (i: Nat) → word(mo.view, i) = rget(ro.file, Ref(r.b, r.base + ro.lo, ro.n), i),
+}
+
+// A function's safety statement: from any file, a reference in bounds and
+// words meeting its precondition, the run and the meaning keep the promise.
+fn FnSafe(sig: Sig, pre: List<Nat> → Type, mean: List<Nat> → List<Nat> → MOut, run: List<List<Nat>> → Ref → List<Nat> → ROut) → Type {
+    (file: List<List<Nat>>) → (r: Ref) → (ws: List<Nat>) → InRef(file, r) → ws.len() = sig.words → pre(ws) →
+        Safe(sig.mode, file, r, window(list_at(file, r.b), r.base, r.len), mean(window(list_at(file, r.b), r.base, r.len), ws), run(file, r, ws))
+}
+
+// ---------------------------------------------------------------------------
+// Small facts
+
+fn Prefix(ws, big: List<Nat>) → Type { (ws.len() <= big.len()) ∧ ((w: Nat) → w < ws.len() → big.nth(w) = ws.nth(w)) }
+
+theorem Prefix::same(ws: List<Nat>): Prefix(ws, ws) { ⟨ws.len().le_refl(), λ w _ => refl⟩ }
+
+theorem Prefix::snoc(ws: List<Nat>, a: Nat): Prefix(ws, ws ++ [a]) {
+    ⟨j(sym(ws.len_append([a])), λ n _ => ws.len() <= n, omega()), λ w lt => ws.nth_append_below([a], w, lt)⟩
+}
+
+theorem Prefix::chain(a, b, c: List<Nat>, ab: Prefix(a, b), bc: Prefix(b, c)): Prefix(a, c) {
+    ⟨Nat::le_trans(a.len(), b.len(), c.len(), ab.left, bc.left),
+        λ w lt => prelude::trans(bc.right(w, Nat::lt_of_lt_of_le(w, a.len(), b.len(), lt, ab.left)), ab.right(w, lt))⟩
+}
+
+theorem Atom::val_stable(self a: Atom, ws, big: List<Nat>, pre: Prefix(ws, big), b: a.bound(ws.len()) = True): a.val(big) = a.val(ws) {
+    (match a as λ e => e.bound(ws.len()) = True → e.val(big) = e.val(ws) {
+        Lit(_) => λ _ => refl,
+        Var(w) => λ lt => cong_fn(λ (o: Option<Nat>) => o.unwrap_or(0), pre.right(w, omega(lt))),
+    })(b)
+}
+
+theorem Atom::vals_stable(args: List<Atom>, ws, big: List<Nat>, pre: Prefix(ws, big)): Atom::all_bound(args, ws.len()) = True → vals(args, big) = vals(args, ws) {
+    match args {
+        Nil => λ _ => refl,
+        Cons(a, rest) => λ b => {
+            let p = Bool::and_true_parts(a.bound(ws.len()), Atom::all_bound(rest, ws.len()), b);
+            prelude::trans(cong_fn(λ (x: Nat) => Cons(x, vals(rest, big)), a.val_stable(ws, big, pre, p.left)),
+                cong_fn(λ (xs: List<Nat>) => Cons(a.val(ws), xs), Atom::vals_stable(rest, ws, big, pre, p.right)))
+        },
+    }
+}
+
+theorem vals_len(args: List<Atom>, ws: List<Nat>): vals(args, ws).len() = args.len() { args.len_map(λ a => a.val(ws)) }
+
+theorem len_snoc<A>(xs: List<A>, a: A): (xs ++ [a]).len() = xs.len() + 1 { xs.len_append([a]) }
+
+theorem list_at_update_here(file: List<List<Nat>>, b: Nat, g: List<Nat> → List<Nat>, inside: b < file.len()): list_at(file.update(b, g), b) = g(list_at(file, b)) {
+    let at = file.nth_present(b, inside);
+    trans(cong_fn(λ (o: Option<List<Nat>>) => o.unwrap_or(Nil), file.nth_update_here(b, g, at.witness, at.proof)),
+        cong_fn(λ (o: Option<List<Nat>>) => g(o.unwrap_or(Nil)), sym(at.proof)))
+}
+
+theorem list_at_update_other(file: List<List<Nat>>, b: Nat, g: List<Nat> → List<Nat>, k: Nat, ne: k ≠ b): list_at(file.update(b, g), k) = list_at(file, k) {
+    cong_fn(λ (o: Option<List<Nat>>) => o.unwrap_or(Nil), file.nth_update_other(b, g, k, ne))
+}
+
+theorem list_at_snoc_below(xs: List<List<Nat>>, a: List<Nat>, k: Nat, lt: k < xs.len()): list_at(xs ++ [a], k) = list_at(xs, k) {
+    cong_fn(λ (o: Option<List<Nat>>) => o.unwrap_or(Nil), xs.nth_append_below([a], k, lt))
+}
+
+theorem list_at_snoc_at(xs: List<List<Nat>>, a: List<Nat>, k: Nat, at: xs.len() = k): list_at(xs ++ [a], k) = a {
+    cong_fn(λ (o: Option<List<Nat>>) => o.unwrap_or(Nil), xs.nth_append_at([a], k, at))
+}
+
+theorem ref_at_snoc_below(vs: List<Ref>, a: Ref, k: Nat, lt: k < vs.len()): ref_at(vs ++ [a], k) = ref_at(vs, k) {
+    cong_fn(λ (o: Option<Ref>) => o.unwrap_or(Ref(0, 0, 0)), vs.nth_append_below([a], k, lt))
+}
+
+theorem ref_at_snoc_at(vs: List<Ref>, a: Ref, k: Nat, at: vs.len() = k): ref_at(vs ++ [a], k) = a {
+    cong_fn(λ (o: Option<Ref>) => o.unwrap_or(Ref(0, 0, 0)), vs.nth_append_at([a], k, at))
+}
+
+theorem option_map_some<A, B>(o: Option<A>, f: A → B, b: B): o.map(f) = Some(b) → Exists<A>(λ a => (o = Some(a)) ∧ (f(a) = b)) {
+    match o { None => λ h => absurd(h), Some(a) => λ h => Exists(a, ⟨refl, Option::some_inj(f(a), b, h)⟩) }
+}
+
+theorem Next::of(g: Bool, next, st: Next, ok: g.then(Some(next)) = Some(st)): (g = True) ∧ (next = st) {
+    let p = g.then_some(Some(next), st, ok);
+    ⟨p.left, Option::some_inj(next, st, p.right)⟩
+}
+
+// ---------------------------------------------------------------------------
+// Windows
+
+theorem take_nth_past(xs: List<Nat>): (n, i: Nat) → n <= i → xs.take(n).nth(i) = None {
+    match xs {
+        Nil => λ n i _ => refl,
+        Cons(_, t) => λ n => match n {
+            Zero => λ i _ => refl,
+            Succ(m) => λ i => match i {
+                Zero => λ no => false_elim(no),
+                Succ(k) => λ le => take_nth_past(t, m, k, le),
+            },
+        },
+    }
+}
+
+theorem window_nth_in(xs: List<Nat>, lo, n, i: Nat, lt: i < n): window(xs, lo, n).nth(i) = xs.nth(i + lo) {
+    trans(xs.drop(lo).nth_take(n, i, lt), xs.nth_drop_add(lo, i))
+}
+
+theorem window_nth_out(xs: List<Nat>, lo, n, i: Nat, ge: n <= i): window(xs, lo, n).nth(i) = None { take_nth_past(xs.drop(lo), n, i, ge) }
+
+// Past the list, a window reads nothing either.
+theorem window_nth_end(xs: List<Nat>, lo, n, i: Nat, ge: xs.len() <= i + lo): window(xs, lo, n).nth(i) = None {
+    match q: (i + 1).leb(n) {
+        True => trans(window_nth_in(xs, lo, n, i, omega(q)), xs.nth_past_end(i + lo, ge)),
+        False => window_nth_out(xs, lo, n, i, omega(q)),
+    }
+}
+
+theorem window_len(xs: List<Nat>, lo, n: Nat): window(xs, lo, n).len() = n.min(xs.len() - lo) {
+    match q: n.leb(xs.drop(lo).len()) {
+        True => omega(xs.drop(lo).len_take(n, omega(q)), xs.len_drop(lo), q),
+        False => {
+            let e: (window(xs, lo, n).len() = xs.drop(lo).len()) = cong_fn(λ (l: List<Nat>) => l.len(), xs.drop(lo).take_all(n, omega(q)));
+            omega(e, xs.len_drop(lo), q)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A reference that holds a value
+
+// The reference's own window reads the value it holds.
+theorem whole_window(buf: List<Nat>, base: Nat, cur: List<Nat>, h: Holds(buf, base, cur), fits: base + cur.len() <= buf.len()): window(buf, base, cur.len()) = cur {
+    window(buf, base, cur.len()).ext_nth(cur, omega(window_len(buf, base, cur.len())),
+        λ k lt => {
+            let in_cur: (k < cur.len()) = omega(lt, window_len(buf, base, cur.len()));
+            let at: (k + base = base + k) = omega();
+            prelude::trans(window_nth_in(buf, base, cur.len(), k, in_cur),
+                prelude::trans(cong_fn(λ (p: Nat) => buf.nth(p), at), h(k, in_cur)))
+        })
+}
+
+// A window of it, cut to it, reads the value's window: narrowing a
+// reference is taking the meaning's window.
+theorem narrow_window(buf: List<Nat>, base: Nat, cur: List<Nat>, h: Holds(buf, base, cur), fits: base + cur.len() <= buf.len(), lo, n: Nat):
+    window(buf, base + lo.min(cur.len()), n.min(cur.len() - lo)) = window(cur, lo, n)
+{
+    let lens: (window(buf, base + lo.min(cur.len()), n.min(cur.len() - lo)).len() = window(cur, lo, n).len()) =
+        omega(window_len(buf, base + lo.min(cur.len()), n.min(cur.len() - lo)), window_len(cur, lo, n), fits);
+    window(buf, base + lo.min(cur.len()), n.min(cur.len() - lo)).ext_nth(window(cur, lo, n), lens,
+        λ k lt => {
+            let in_w: (k < n.min(cur.len() - lo)) = omega(lt, window_len(buf, base + lo.min(cur.len()), n.min(cur.len() - lo)));
+            let at: (k + (base + lo.min(cur.len())) = base + (k + lo)) = omega(in_w);
+            prelude::trans(window_nth_in(buf, base + lo.min(cur.len()), n.min(cur.len() - lo), k, in_w),
+                prelude::trans(cong_fn(λ (p: Nat) => buf.nth(p), at),
+                    prelude::trans(h(k + lo, omega(in_w)), sym(window_nth_in(cur, lo, n, k, omega(in_w))))))
+        })
+}
+
+// The narrowed reference reads the value's window, element by element.
+theorem narrow_reads(file: List<List<Nat>>, r: Ref, cur: List<Nat>, h: Holds(list_at(file, r.b), r.base, cur), len: cur.len() = r.len, lo, n: Nat):
+    (i: Nat) → word(window(cur, lo, n), i) = rget(file, narrow(r, lo, n), i)
+{
+    λ i => match q: (i + 1).leb(n.min(r.len - lo)) {
+        True => {
+            let inside: (i + lo < cur.len()) = omega(q, len);
+            let at: (r.base + (i + lo) = r.base + lo.min(r.len) + i) = omega(q);
+            cong_fn(λ (o: Option<Nat>) => o.unwrap_or(0),
+                prelude::trans(window_nth_in(cur, lo, n, i, omega(q)),
+                    prelude::trans(sym(h(i + lo, inside)), cong_fn(λ (p: Nat) => list_at(file, r.b).nth(p), at))))
+        },
+        False => match q2: (i + 1).leb(n) {
+            True => cong_fn(λ (o: Option<Nat>) => o.unwrap_or(0), window_nth_end(cur, lo, n, i, omega(q, q2, len))),
+            False => cong_fn(λ (o: Option<Nat>) => o.unwrap_or(0), window_nth_out(cur, lo, n, i, omega(q2))),
+        },
+    }
+}
+
+theorem narrow_window_at(buf: List<Nat>, base: Nat, cur: List<Nat>, h: Holds(buf, base, cur), fits: base + cur.len() <= buf.len(), len, lo, n: Nat, e: cur.len() = len):
+    window(buf, base + lo.min(len), n.min(len - lo)) = window(cur, lo, n)
+{
+    j(e, λ l _ => window(buf, base + lo.min(l), n.min(l - lo)) = window(cur, lo, n), narrow_window(buf, base, cur, h, fits, lo, n))
+}
+
+// A read through the reference reads the value it holds.
+theorem rget_holds(file: List<List<Nat>>, r: Ref, cur: List<Nat>, h: Holds(list_at(file, r.b), r.base, cur), len: cur.len() = r.len):
+    (i: Nat) → rget(file, r, i) = word(cur, i)
+{
+    λ i => match q: (i + 1).leb(r.len) {
+        True => cong_fn(λ (o: Option<Nat>) => o.unwrap_or(0), h(i, omega(q, len))),
+        False => cong_fn(λ (o: Option<Nat>) => o.unwrap_or(0), sym(cur.nth_past_end(i, omega(q, len)))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The write-back: a value's window replaced by what a call left there
+
+// A window written back where it was cut: an empty one changes nothing,
+// and the list keeps its length.
+theorem put_cut_nil(cur: List<Nat>, lo: Nat, ys: List<Nat>, e: ys.len() = 0): cur.put_window(lo, ys) = cur {
+    prelude::trans(cong_fn(λ (l: List<Nat>) => cur.put_window(lo, l), ys.nil_of_len_zero(e)), cur.put_window_nil(lo))
+}
+
+theorem put_cut_length(cur: List<Nat>, lo, n: Nat, ys: List<Nat>, e: ys.len() = n.min(cur.len() - lo)): cur.put_window(lo, ys).len() = cur.len() {
+    match q: (ys.len()).leb(0) {
+        True => cong_fn(λ (l: List<Nat>) => l.len(), put_cut_nil(cur, lo, ys, omega(q))),
+        False => cur.len_put_window(lo, ys, omega(q, e)),
+    }
+}
+
+// Inside the window, what the call left; outside it, what was there.
+theorem put_cut_in(cur: List<Nat>, lo, n: Nat, ys: List<Nat>, e: ys.len() = n.min(cur.len() - lo), i: Nat,
+    low: lo.min(cur.len()) <= i, high: i < lo.min(cur.len()) + ys.len()): cur.put_window(lo, ys).nth(i) = ys.nth(i - lo.min(cur.len()))
+{
+    let at: (i = (i - lo.min(cur.len())) + lo) = omega(low, high, e);
+    prelude::trans(cong_fn(λ (k: Nat) => cur.put_window(lo, ys).nth(k), at),
+        cur.nth_put_window_inside(lo, ys, i - lo.min(cur.len()), omega(low, high), omega(high, e)))
+}
+
+theorem put_cut_out(cur: List<Nat>, lo, n: Nat, ys: List<Nat>, e: ys.len() = n.min(cur.len() - lo), i: Nat,
+    out: ¬Span(lo.min(cur.len()), ys.len()).has(i).IsTrue()): cur.put_window(lo, ys).nth(i) = cur.nth(i)
+{
+    match q: (ys.len()).leb(0) {
+        True => cong_fn(λ (l: List<Nat>) => l.nth(i), put_cut_nil(cur, lo, ys, omega(q))),
+        False => match q2: (i + 1).leb(lo) {
+            True => cur.nth_put_window_before(lo, ys, i, omega(q2), omega(q, e)),
+            False => {
+                let at: (i = (i - (ys.len() + lo)) + (ys.len() + lo)) = omega(q, q2, e, out);
+                prelude::trans(cong_fn(λ (k: Nat) => cur.put_window(lo, ys).nth(k), at),
+                    prelude::trans(cur.nth_put_window_after(lo, ys, i - (ys.len() + lo), omega(q, e)), cong_fn(λ (k: Nat) => cur.nth(k), sym(at))))
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Facts about a held reference
+
+// At the start, the file holds the reference's own window.
+theorem OnRef::start(file: List<List<Nat>>, r: Ref, inr: InRef(file, r)): OnRef(file, file, r, window(list_at(file, r.b), r.base, r.len)) {
+    let wl: (window(list_at(file, r.b), r.base, r.len).len() = r.len) = omega(window_len(list_at(file, r.b), r.base, r.len), inr.fits);
+    OnRef(wl,
+        λ i lt => {
+            let at: (r.base + i = i + r.base) = omega();
+            prelude::trans(cong_fn(λ (k: Nat) => list_at(file, r.b).nth(k), at), sym(window_nth_in(list_at(file, r.b), r.base, r.len, i, omega(lt, wl))))
+        },
+        λ p _ => refl, λ k _ => refl, refl, refl)
+}
+
+// Two holds in a row, at one reference: the second one's.
+theorem OnRef::chain(file0, file1, file2: List<List<Nat>>, r: Ref, c1, c2: List<Nat>, a: OnRef(file0, file1, r, c1), b: OnRef(file1, file2, r, c2)): OnRef(file0, file2, r, c2) {
+    OnRef(b.len, b.holds,
+        λ p out => prelude::trans(b.out(p, out), a.out(p, out)),
+        λ k ne => prelude::trans(b.other(k, ne), a.other(k, ne)),
+        prelude::trans(b.shape, a.shape), prelude::trans(b.blen, a.blen))
+}
+
+// A file that holds what another held, at the same reference, is that file
+// in the reference's buffer.
+theorem OnRef::unchanged(file1, file2: List<List<Nat>>, r: Ref, cur: List<Nat>, before: Holds(list_at(file1, r.b), r.base, cur), on: OnRef(file1, file2, r, cur)):
+    (p: Nat) → list_at(file2, r.b).nth(p) = list_at(file1, r.b).nth(p)
+{
+    λ p => match q: Span(r.base, r.len).has(p) {
+        True => {
+            let at: (p = r.base + (p - r.base)) = omega(q);
+            let inside: (p - r.base < cur.len()) = omega(q, on.len);
+            prelude::trans(cong_fn(λ (k: Nat) => list_at(file2, r.b).nth(k), at),
+                prelude::trans(on.holds(p - r.base, inside), prelude::trans(sym(before(p - r.base, inside)), cong_fn(λ (k: Nat) => list_at(file1, r.b).nth(k), sym(at)))))
+        },
+        False => on.out(p, omega(q)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The licence
+
+// The span a live view freezes, in the reference's buffer.
+fn Region::span(self rg: Region, r: Ref, ws: List<Nat>) → Span { match rg { Whole => Span(r.base, r.len), Win(lo, n) => Span(r.base + lo.val(ws), n.val(ws)) } }
+
+// A write to `lo..lo+n` leaves the view alone: never for a whole-object
+// freeze, apart for a window.
+fn Region::Clear(self rg: Region, lo, n: Atom, ws: List<Nat>) → Type {
+    match rg { Whole => False, Win(a, b) => Span(a.val(ws), b.val(ws)).apart(Span(lo.val(ws), n.val(ws))).IsTrue() }
+}
+
+theorem Owed::all_append(rs: List<Owed>, pres: Nat → List<Nat> → Type): (qs: List<Owed>) → (ws: List<Nat>) → Owed::All(rs ++ qs, pres, ws) → Owed::All(rs, pres, ws) ∧ Owed::All(qs, pres, ws) {
+    match rs {
+        Nil => λ qs ws h => ⟨trivial, h⟩,
+        Cons(_, rest) => λ qs ws h => {
+            let p = Owed::all_append(rest, pres, qs, ws, h.right);
+            ⟨⟨h.left, p.left⟩, p.right⟩
+        },
+    }
+}
+
+theorem Owed::all_dues(os: List<Obligation>, pres: Nat → List<Nat> → Type, ws: List<Nat>): Owed::All(os.map(λ ob => Due(ob)), pres, ws) → Obligation::All(os, ws) {
+    match os {
+        Nil => λ _ => trivial,
+        Cons(_, rest) => λ h => ⟨h.left, Owed::all_dues(rest, pres, ws, h.right)⟩,
+    }
+}
+
+theorem win_license_sound(a, b, lo, n: Atom, pres: Nat → List<Nat> → Type, ws: List<Nat>, r1: List<Owed>, ok: Win(a, b).license(lo, n) = Some(r1),
+    hold: Owed::All(r1, pres, ws)): Win(a, b).Clear(lo, n, ws)
+{
+    let st = option_map_some(Spans(a, b, lo, n).settle(), λ os => os.map(λ ob => Due(ob)), r1, ok);
+    let owed: Owed::All(st.witness.map(λ ob => Due(ob)), pres, ws) = j(sym(st.proof.right), λ q _ => Owed::All(q, pres, ws), hold);
+    Spans(a, b, lo, n).settle_sound(ws, st.witness, st.proof.left, Owed::all_dues(st.witness, pres, ws, owed))
+}
+
+theorem Region::license_sound(self rg: Region, lo, n: Atom, pres: Nat → List<Nat> → Type, ws: List<Nat>, r1: List<Owed>, ok: rg.license(lo, n) = Some(r1),
+    hold: Owed::All(r1, pres, ws)): rg.Clear(lo, n, ws)
+{
+    (match rg as λ g => g.license(lo, n) = Some(r1) → g.Clear(lo, n, ws) {
+        Whole => λ no => absurd(no),
+        Win(a, b) => λ ok2 => win_license_sound(a, b, lo, n, pres, ws, r1, ok2, hold),
+    })(ok)
+}
+
+// Every live view is clear of the write.
+theorem license_live_sound(live: List<LView>, lo, n: Atom, pres: Nat → List<Nat> → Type, ws: List<Nat>): (rs: List<Owed>) → license_live(live, lo, n) = Some(rs) →
+    Owed::All(rs, pres, ws) → (lv: LView) → Mem(lv, live) → lv.region.Clear(lo, n, ws)
+{
+    match live {
+        Nil => λ rs ok hold lv m => false_elim(m),
+        Cons(h, rest) => λ rs ok hold => {
+            let st = Option::and_then_some(h.region.license(lo, n), λ r1 => license_live(rest, lo, n).map(λ r2 => r1 ++ r2), rs, ok);
+            let mp = option_map_some(license_live(rest, lo, n), λ r2 => st.witness ++ r2, rs, st.proof.right);
+            let parts = Owed::all_append(st.witness, pres, mp.witness, ws, j(sym(mp.proof.right), λ q _ => Owed::All(q, pres, ws), hold));
+            λ lv m => match m {
+                Inl(e) => j(sym(e), λ x _ => x.region.Clear(lo, n, ws), h.region.license_sound(lo, n, pres, ws, st.witness, st.proof.left, parts.left)),
+                Inr(m2) => license_live_sound(rest, lo, n, pres, ws, mp.witness, mp.proof.left, parts.right, lv, m2),
+            }
+        },
+    }
+}
+
+theorem find_live_sound(live: List<LView>, t: Nat): (rg: Region) → find_live(live, t) = Some(rg) → Mem(LView(t, rg), live) {
+    match live {
+        Nil => λ rg no => absurd(no),
+        Cons(lv, rest) => match q: lv.t.same(t) {
+            True => λ rg e => {
+                let et: (lv.t = t) = lv.t.same_sound(t, q);
+                let er: (lv.region = rg) = Option::some_inj(lv.region, rg, e);
+                Inl(j(sym(et), λ x _ => LView(t, rg) = LView(x, lv.region), j(sym(er), λ y _ => LView(t, rg) = LView(t, y), refl)))
+            },
+            False => λ rg e => Inr(find_live_sound(rest, t, rg, e)),
+        },
+    }
+}
+
+theorem some_of_is_some<A>(o: Option<A>, h: o.is_some() = True): Exists<A>(λ a => o = Some(a)) {
+    (match o as λ x => x.is_some() = True → Exists<A>(λ a => x = Some(a)) { None => λ no => absurd(no), Some(a) => λ _ => Exists(a, refl) })(h)
+}
+
+// ---------------------------------------------------------------------------
+// The invariant: a usable place reads its value
+
+// A live view of the checker, of the run and of the meaning agree: the
+// run's view is in the reference's buffer, inside the span the checker
+// freezes, and reads what the meaning's view holds.
+record ViewOk(rg: Region, v: Ref, val: List<Nat>, r: Ref, file: List<List<Nat>>, ws: List<Nat>) {
+    at_b: v.b = r.b,
+    within: Span(v.base, v.len).Within(rg.span(r, ws)),
+    reads: (i: Nat) → word(val, i) = rget(file, v, i),
+}
+
+// A view reads only its window: a file that agrees there keeps it.
+theorem ViewOk::reframe({rg: Region}, {v: Ref}, {val: List<Nat>}, {r: Ref}, {file: List<List<Nat>>}, {ws: List<Nat>}, self o: ViewOk(rg, v, val, r, file, ws),
+    file2: List<List<Nat>>, same: (p: Nat) → Span(v.base, v.len).has(p).IsTrue() → list_at(file2, r.b).nth(p) = list_at(file, r.b).nth(p)): ViewOk(rg, v, val, r, file2, ws)
+{
+    ViewOk(o.at_b, o.within, λ i => prelude::trans(o.reads(i), match q: (i + 1).leb(v.len) {
+        True => cong_fn(λ (x: Option<Nat>) => x.unwrap_or(0),
+            j(sym(o.at_b), λ b _ => list_at(file, b).nth(v.base + i) = list_at(file2, b).nth(v.base + i),
+                sym(same(v.base + i, Span(v.base, v.len).has_intro(v.base + i, omega(), omega(q)))))),
+        False => refl,
+    }))
+}
+
+// What a function's body keeps fixed: its frame.
+record Frame { mode: Mode, sigs: List<Sig>, pres: Nat → List<Nat> → Type, w: World, r: Ref, file0: List<List<Nat>>, arg: List<Nat> }
+
+// The simulation's invariant, in the words `ws` the meaning ends with: the
+// counts agree; the file holds the holder's value in the reference and its
+// first contents elsewhere; a read parameter is what it was; and each live
+// view reads its value.
+record Sim(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>) {
+    words: m.words = s.words,
+    nw: c.nw = s.words.len(),
+    top: s.objs.len() = c.top + 1,
+    nviews: s.views.len() = c.nviews,
+    mviews: m.views.len() = c.nviews,
+    on: OnRef(k.file0, m.file, k.r, list_at(s.objs, c.top)),
+    fixed: k.mode.writes() = False → list_at(s.objs, c.top) = k.arg,
+    views: (lv: LView) → Mem(lv, c.live) → (lv.t < c.nviews) ∧ ViewOk(lv.region, ref_at(m.views, lv.t), list_at(s.views, lv.t), k.r, m.file, ws),
+}
+
+// ---------------------------------------------------------------------------
+// Each statement keeps the invariant
+
+theorem Atom::bound_at(self a: Atom, c: Places, s: Sem, e: a.bound(c.nw) = True, nw: c.nw = s.words.len()): a.bound(s.words.len()) = True {
+    j(nw, λ n _ => a.bound(n) = True, e)
+}
+
+theorem ViewOk::moved(rg: Region, v, v2: Ref, val, val2: List<Nat>, r: Ref, file: List<List<Nat>>, ws: List<Nat>, e1: v = v2, e2: val = val2,
+    o: ViewOk(rg, v, val, r, file, ws)): ViewOk(rg, v2, val2, r, file, ws)
+{
+    j(e2, λ q _ => ViewOk(rg, v2, q, r, file, ws), j(e1, λ q _ => ViewOk(rg, q, val, r, file, ws), o))
+}
+
+// A statement that binds a word and changes nothing else.
+theorem Sim::said({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>}, self sim: Sim(k, c, s, m, ws), a, b: Nat, e: a = b):
+    Sim(k, Places(c.top, c.live, c.nviews, c.nw + 1), Sem(s.objs, s.views, s.words ++ [b]), Exec(m.file, m.views, m.words ++ [a]), ws)
+{
+    Sim(prelude::trans(cong_fn(λ (w: List<Nat>) => w ++ [a], sim.words), cong_fn(λ (x: Nat) => s.words ++ [x], e)),
+        prelude::trans(cong_fn(λ (n: Nat) => n + 1, sim.nw), sym(len_snoc(s.words, b))),
+        sim.top, sim.nviews, sim.mviews, sim.on, sim.fixed, sim.views)
+}
+
+theorem step_get(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), z, x: Nat, i: Atom, st: Next,
+    ok: Get(z, x, i).check(k.mode, k.sigs, c) = Some(st)): Sim(k, st.next, Get(z, x, i).eval1(k.w, s), Get(z, x, i).run2(k.w, k.r, m), ws)
+{
+    let next = Next(Places(c.top, c.live, c.nviews, c.nw + 1), Nil);
+    let g = Next::of((x.same(c.top) && z.same(c.nw)) && i.bound(c.nw), next, st, ok);
+    let g1 = Bool::and_true_parts(x.same(c.top) && z.same(c.nw), i.bound(c.nw), g.left);
+    let g2 = Bool::and_true_parts(x.same(c.top), z.same(c.nw), g1.left);
+    let ex: (x = c.top) = x.same_sound(c.top, g2.left);
+    let cur = list_at(s.objs, c.top);
+    let reads: (rget(m.file, k.r, i.val(m.words)) = word(list_at(s.objs, x), i.val(s.words))) =
+        prelude::trans(rget_holds(m.file, k.r, cur, sim.on.holds, sim.on.len, i.val(m.words)),
+            j(sym(ex), λ q _ => word(cur, i.val(m.words)) = word(list_at(s.objs, q), i.val(s.words)), cong_fn(λ (w: List<Nat>) => word(cur, i.val(w)), sim.words)));
+    j(g.right, λ q _ => Sim(k, q.next, Get(z, x, i).eval1(k.w, s), Get(z, x, i).run2(k.w, k.r, m), ws), sim.said(rget(m.file, k.r, i.val(m.words)), word(list_at(s.objs, x), i.val(s.words)), reads))
+}
+
+theorem step_read(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), z, t: Nat, i: Atom, st: Next,
+    ok: Read(z, t, i).check(k.mode, k.sigs, c) = Some(st)): Sim(k, st.next, Read(z, t, i).eval1(k.w, s), Read(z, t, i).run2(k.w, k.r, m), ws)
+{
+    let next = Next(Places(c.top, c.live, c.nviews, c.nw + 1), Nil);
+    let g = Next::of((z.same(c.nw) && find_live(c.live, t).is_some()) && i.bound(c.nw), next, st, ok);
+    let g1 = Bool::and_true_parts(z.same(c.nw) && find_live(c.live, t).is_some(), i.bound(c.nw), g.left);
+    let g2 = Bool::and_true_parts(z.same(c.nw), find_live(c.live, t).is_some(), g1.left);
+    let found = some_of_is_some(find_live(c.live, t), g2.right);
+    let o = sim.views(LView(t, found.witness), find_live_sound(c.live, t, found.witness, found.proof)).right;
+    let reads: (rget(m.file, ref_at(m.views, t), i.val(m.words)) = word(list_at(s.views, t), i.val(s.words))) =
+        j(sym(sim.words), λ q _ => rget(m.file, ref_at(m.views, t), i.val(q)) = word(list_at(s.views, t), i.val(s.words)), sym(o.reads(i.val(s.words))));
+    j(g.right, λ q _ => Sim(k, q.next, Read(z, t, i).eval1(k.w, s), Read(z, t, i).run2(k.w, k.r, m), ws),
+        sim.said(rget(m.file, ref_at(m.views, t), i.val(m.words)), word(list_at(s.views, t), i.val(s.words)), reads))
+}
+
+theorem step_die(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), t: Nat, st: Next,
+    ok: Die(t).check(k.mode, k.sigs, c) = Some(st)): Sim(k, st.next, Die(t).eval1(k.w, s), Die(t).run2(k.w, k.r, m), ws)
+{
+    let next = Next(Places(c.top, kill(c.live, t), c.nviews, c.nw), Nil);
+    let g = Next::of(find_live(c.live, t).is_some(), next, st, ok);
+    j(g.right, λ q _ => Sim(k, q.next, s, m, ws),
+        Sim(sim.words, sim.nw, sim.top, sim.nviews, sim.mviews, sim.on, sim.fixed,
+            λ lv mem => sim.views(lv, c.live.mem_filter(lv, λ (l: LView) => !l.t.same(t), mem))))
+}
+
+theorem step_view(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), pre: Prefix(s.words, ws),
+    t, x: Nat, lo, n: Atom, st: Next, ok: View(t, x, lo, n).check(k.mode, k.sigs, c) = Some(st)):
+    Sim(k, st.next, View(t, x, lo, n).eval1(k.w, s), View(t, x, lo, n).run2(k.w, k.r, m), ws)
+{
+    let nlv = LView(t, Win(lo, n));
+    let next = Next(Places(c.top, Cons(nlv, c.live), c.nviews + 1, c.nw), Nil);
+    let g = Next::of(((x.same(c.top) && t.same(c.nviews)) && lo.bound(c.nw)) && n.bound(c.nw), next, st, ok);
+    let g1 = Bool::and_true_parts((x.same(c.top) && t.same(c.nviews)) && lo.bound(c.nw), n.bound(c.nw), g.left);
+    let g2 = Bool::and_true_parts(x.same(c.top) && t.same(c.nviews), lo.bound(c.nw), g1.left);
+    let g3 = Bool::and_true_parts(x.same(c.top), t.same(c.nviews), g2.left);
+    let ex: (x = c.top) = x.same_sound(c.top, g3.left);
+    let et: (t = c.nviews) = t.same_sound(c.nviews, g3.right);
+    let lo_ws: (lo.val(ws) = lo.val(s.words)) = lo.val_stable(s.words, ws, pre, lo.bound_at(c, s, g2.right, sim.nw));
+    let n_ws: (n.val(ws) = n.val(s.words)) = n.val_stable(s.words, ws, pre, n.bound_at(c, s, g1.right, sim.nw));
+    let cur = list_at(s.objs, c.top);
+    let win = window(cur, lo.val(s.words), n.val(s.words));
+    let nr = narrow(k.r, lo.val(s.words), n.val(s.words));
+    let fresh: ViewOk(Win(lo, n), nr, win, k.r, m.file, ws) = ViewOk(refl,
+        λ p h => {
+            let inside: (Span(k.r.base + lo.val(ws), n.val(ws)).has(p).IsTrue()) = omega(h, lo_ws, n_ws);
+            inside
+        },
+        narrow_reads(m.file, k.r, cur, sim.on.holds, sim.on.len, lo.val(s.words), n.val(s.words)));
+    let views: ((lv: LView) → Mem(lv, Cons(nlv, c.live)) → (lv.t < c.nviews + 1) ∧ ViewOk(lv.region, ref_at(m.views ++ [nr], lv.t), list_at(s.views ++ [win], lv.t), k.r, m.file, ws)) =
+        λ lv mem => match mem {
+            Inl(e) => j(sym(e), λ l _ => (l.t < c.nviews + 1) ∧ ViewOk(l.region, ref_at(m.views ++ [nr], l.t), list_at(s.views ++ [win], l.t), k.r, m.file, ws),
+                ⟨omega(et), ViewOk::moved(Win(lo, n), nr, ref_at(m.views ++ [nr], t), win, list_at(s.views ++ [win], t), k.r, m.file, ws,
+                    sym(ref_at_snoc_at(m.views, nr, t, prelude::trans(sim.mviews, sym(et)))),
+                    sym(list_at_snoc_at(s.views, win, t, prelude::trans(sim.nviews, sym(et)))), fresh)⟩),
+            Inr(m2) => {
+                let old = sim.views(lv, m2);
+                ⟨omega(old.left), ViewOk::moved(lv.region, ref_at(m.views, lv.t), ref_at(m.views ++ [nr], lv.t), list_at(s.views, lv.t), list_at(s.views ++ [win], lv.t), k.r, m.file, ws,
+                    sym(ref_at_snoc_below(m.views, nr, lv.t, omega(old.left, sim.mviews))),
+                    sym(list_at_snoc_below(s.views, win, lv.t, omega(old.left, sim.nviews))), old.right)⟩
+            },
+        };
+    let after: Sim(k, next.next, Sem(s.objs, s.views ++ [win], s.words), Exec(m.file, m.views ++ [nr], m.words), ws) =
+        Sim(sim.words, sim.nw, sim.top,
+            prelude::trans(len_snoc(s.views, win), cong_fn(λ (q: Nat) => q + 1, sim.nviews)),
+            prelude::trans(len_snoc(m.views, nr), cong_fn(λ (q: Nat) => q + 1, sim.mviews)),
+            sim.on, sim.fixed, views);
+    let at_m: Sim(k, next.next, Sem(s.objs, s.views ++ [window(list_at(s.objs, x), lo.val(s.words), n.val(s.words))], s.words),
+        Exec(m.file, m.views ++ [narrow(k.r, lo.val(m.words), n.val(m.words))], m.words), ws) =
+        j(sym(ex), λ q _ => Sim(k, next.next, Sem(s.objs, s.views ++ [window(list_at(s.objs, q), lo.val(s.words), n.val(s.words))], s.words),
+                Exec(m.file, m.views ++ [narrow(k.r, lo.val(m.words), n.val(m.words))], m.words), ws),
+            j(sym(sim.words), λ q _ => Sim(k, next.next, Sem(s.objs, s.views ++ [win], s.words), Exec(m.file, m.views ++ [narrow(k.r, lo.val(q), n.val(q))], m.words), ws), after));
+    j(g.right, λ q _ => Sim(k, q.next, View(t, x, lo, n).eval1(k.w, s), View(t, x, lo, n).run2(k.w, k.r, m), ws), at_m)
+}
+
+// A store through the reference: what it writes, and what it leaves.
+theorem store_len(xs: List<Nat>, r: Ref, iv, vv: Nat): store(xs, r, iv, vv).len() = xs.len() {
+    match q: (iv + 1).leb(r.len) { True => xs.len_update(r.base + iv, λ _ => vv), False => refl }
+}
+
+theorem store_other(xs: List<Nat>, r: Ref, iv, vv, p: Nat, ne: iv < r.len → p ≠ r.base + iv): store(xs, r, iv, vv).nth(p) = xs.nth(p) {
+    match q: (iv + 1).leb(r.len) { True => xs.nth_update_other(r.base + iv, λ _ => vv, p, ne(omega(q))), False => refl }
+}
+
+theorem store_here(xs: List<Nat>, r: Ref, iv, vv: Nat, lt: iv < r.len, fits: r.base + iv < xs.len()): store(xs, r, iv, vv).nth(r.base + iv) = Some(vv) {
+    j(sym(Nat::leb_true(iv + 1, r.len, lt)), λ b _ => (match b { True => xs.update(r.base + iv, λ _ => vv), False => xs }).nth(r.base + iv) = Some(vv),
+        xs.nth_update_set(r.base + iv, vv, fits))
+}
+
+// A write the licence cleared misses every position of a live view.
+theorem Region::clear_misses(self rg: Region, lo, n: Atom, ws: List<Nat>, r, v: Ref, cl: rg.Clear(lo, n, ws), within: Span(v.base, v.len).Within(rg.span(r, ws)),
+    p: Nat, hp: Span(v.base, v.len).has(p).IsTrue()): ¬Span(r.base + lo.val(ws), n.val(ws)).has(p).IsTrue()
+{
+    (match rg as λ g => g.Clear(lo, n, ws) → Span(v.base, v.len).Within(g.span(r, ws)) → ¬Span(r.base + lo.val(ws), n.val(ws)).has(p).IsTrue() {
+        Whole => λ no _ => false_elim(no),
+        Win(a, b) => λ c2 w2 hit => {
+            let ap: (Span(a.val(ws), b.val(ws)).apart(Span(lo.val(ws), n.val(ws))).IsTrue()) = c2;
+            let inw: (Span(r.base + a.val(ws), b.val(ws)).has(p).IsTrue()) = w2(p, hp);
+            omega(ap, inw, hit)
+        },
+    })(cl, within)
+}
+
+// A store into the held value, apart from every live view.
+theorem Sim::stored({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>}, self sim: Sim(k, c, s, m, ws), inr: InRef(k.file0, k.r), writes: k.mode.writes() = True,
+    iv, vv: Nat, misses: (lv: LView) → Mem(lv, c.live) → (p: Nat) → Span(ref_at(m.views, lv.t).base, ref_at(m.views, lv.t).len).has(p).IsTrue() → p ≠ k.r.base + iv):
+    Sim(k, Places(c.top + 1, c.live, c.nviews, c.nw), Sem(s.objs ++ [list_at(s.objs, c.top).update(iv, λ _ => vv)], s.views, s.words),
+        Exec(m.file.update(k.r.b, λ xs => store(xs, k.r, iv, vv)), m.views, m.words), ws)
+{
+    let r = k.r;
+    let cur = list_at(s.objs, c.top);
+    let nv = cur.update(iv, λ _ => vv);
+    let gs = λ (xs: List<Nat>) => store(xs, r, iv, vv);
+    let inside: (r.b < m.file.len()) = omega(inr.buf, sim.on.shape);
+    let here: (list_at(m.file.update(r.b, gs), r.b) = store(list_at(m.file, r.b), r, iv, vv)) = list_at_update_here(m.file, r.b, gs, inside);
+    let fits: (r.base + r.len <= list_at(m.file, r.b).len()) = omega(inr.fits, sim.on.blen);
+    let at_top: (list_at(s.objs ++ [nv], c.top + 1) = nv) = list_at_snoc_at(s.objs, nv, c.top + 1, sim.top);
+    let nlen: (nv.len() = r.len) = prelude::trans(cur.len_update(iv, λ _ => vv), sim.on.len);
+    let holds: Holds(list_at(m.file.update(r.b, gs), r.b), r.base, nv) = λ i lt => prelude::trans(cong_fn(λ (l: List<Nat>) => l.nth(r.base + i), here),
+        match q: i.same(iv) {
+            True => {
+                let e: (i = iv) = i.same_sound(iv, q);
+                let lt2: (iv < r.len) = omega(e, lt, nlen);
+                j(sym(e), λ a _ => store(list_at(m.file, r.b), r, iv, vv).nth(r.base + a) = nv.nth(a),
+                    prelude::trans(store_here(list_at(m.file, r.b), r, iv, vv, lt2, omega(lt2, fits)), sym(cur.nth_update_set(iv, vv, omega(lt2, sim.on.len)))))
+            },
+            False => {
+                let ne: (i ≠ iv) = i.ne_of_same(iv, q);
+                prelude::trans(store_other(list_at(m.file, r.b), r, iv, vv, r.base + i, λ _ h => ne(omega(h))),
+                    prelude::trans(sim.on.holds(i, omega(lt, nlen, sim.on.len)), sym(cur.nth_update_other(iv, λ _ => vv, i, ne))))
+            },
+        });
+    let on: OnRef(k.file0, m.file.update(r.b, gs), r, list_at(s.objs ++ [nv], c.top + 1)) = j(sym(at_top), λ l _ => OnRef(k.file0, m.file.update(r.b, gs), r, l),
+        OnRef(nlen, holds,
+            λ p out => prelude::trans(cong_fn(λ (l: List<Nat>) => l.nth(p), here),
+                prelude::trans(store_other(list_at(m.file, r.b), r, iv, vv, p, λ lt h => out(omega(h, lt))), sim.on.out(p, out))),
+            λ k2 ne => prelude::trans(list_at_update_other(m.file, r.b, gs, k2, ne), sim.on.other(k2, ne)),
+            prelude::trans(m.file.len_update(r.b, gs), sim.on.shape),
+            prelude::trans(cong_fn(λ (l: List<Nat>) => l.len(), here), prelude::trans(store_len(list_at(m.file, r.b), r, iv, vv), sim.on.blen))));
+    Sim(sim.words, sim.nw, prelude::trans(len_snoc(s.objs, nv), cong_fn(λ (q: Nat) => q + 1, sim.top)), sim.nviews, sim.mviews, on,
+        λ no => absurd(prelude::trans(sym(writes), no)),
+        λ lv mem => {
+            let old = sim.views(lv, mem);
+            ⟨old.left, old.right.reframe(m.file.update(r.b, gs), λ p hp => prelude::trans(cong_fn(λ (l: List<Nat>) => l.nth(p), here),
+                store_other(list_at(m.file, r.b), r, iv, vv, p, λ _ => misses(lv, mem, p, hp))))⟩
+        })
+}
+
+theorem step_set(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), pre: Prefix(s.words, ws), inr: InRef(k.file0, k.r),
+    y, x: Nat, i, v: Atom, st: Next, ok: Set(y, x, i, v).check(k.mode, k.sigs, c) = Some(st), hold: Owed::All(st.rs, k.pres, ws)):
+    Sim(k, st.next, Set(y, x, i, v).eval1(k.w, s), Set(y, x, i, v).run2(k.w, k.r, m), ws)
+{
+    let guard = ((k.mode.writes() && (x.same(c.top) && y.same(c.top + 1))) && i.bound(c.nw)) && v.bound(c.nw);
+    let mk = λ (rs: List<Owed>) => Next(Places(c.top + 1, c.live, c.nviews, c.nw), rs);
+    let p = guard.then_some(license_live(c.live, i, Lit(1)).map(mk), st, ok);
+    let lic = option_map_some(license_live(c.live, i, Lit(1)), mk, st, p.right);
+    let hold_rs: Owed::All(lic.witness, k.pres, ws) = j(sym(lic.proof.right), λ q _ => Owed::All(q.rs, k.pres, ws), hold);
+    let g1 = Bool::and_true_parts((k.mode.writes() && (x.same(c.top) && y.same(c.top + 1))) && i.bound(c.nw), v.bound(c.nw), p.left);
+    let g2 = Bool::and_true_parts(k.mode.writes() && (x.same(c.top) && y.same(c.top + 1)), i.bound(c.nw), g1.left);
+    let g3 = Bool::and_true_parts(k.mode.writes(), x.same(c.top) && y.same(c.top + 1), g2.left);
+    let g4 = Bool::and_true_parts(x.same(c.top), y.same(c.top + 1), g3.right);
+    let ex: (x = c.top) = x.same_sound(c.top, g4.left);
+    let i_ws: (i.val(ws) = i.val(s.words)) = i.val_stable(s.words, ws, pre, i.bound_at(c, s, g2.right, sim.nw));
+    let misses = λ (lv: LView) (mem: Mem(lv, c.live)) (q: Nat) (hq: Span(ref_at(m.views, lv.t).base, ref_at(m.views, lv.t).len).has(q).IsTrue()) => {
+        let cl = license_live_sound(c.live, i, Lit(1), k.pres, ws, lic.witness, lic.proof.left, hold_rs, lv, mem);
+        let no: (¬Span(k.r.base + i.val(ws), 1).has(q).IsTrue()) = lv.region.clear_misses(i, Lit(1), ws, k.r, ref_at(m.views, lv.t), cl, sim.views(lv, mem).right.within, q, hq);
+        let ne: (q ≠ k.r.base + i.val(s.words)) = λ e => no(omega(e, i_ws));
+        ne
+    };
+    let after = sim.stored(inr, g3.left, i.val(s.words), v.val(s.words), misses);
+    let at_m: Sim(k, mk(lic.witness).next, Sem(s.objs ++ [list_at(s.objs, x).update(i.val(s.words), λ _ => v.val(s.words))], s.views, s.words),
+        Exec(m.file.update(k.r.b, λ xs => store(xs, k.r, i.val(m.words), v.val(m.words))), m.views, m.words), ws) =
+        j(sym(ex), λ q _ => Sim(k, mk(lic.witness).next, Sem(s.objs ++ [list_at(s.objs, q).update(i.val(s.words), λ _ => v.val(s.words))], s.views, s.words),
+                Exec(m.file.update(k.r.b, λ xs => store(xs, k.r, i.val(m.words), v.val(m.words))), m.views, m.words), ws),
+            j(sym(sim.words), λ q _ => Sim(k, mk(lic.witness).next, Sem(s.objs ++ [list_at(s.objs, c.top).update(i.val(s.words), λ _ => v.val(s.words))], s.views, s.words),
+                Exec(m.file.update(k.r.b, λ xs => store(xs, k.r, i.val(q), v.val(q))), m.views, m.words), ws), after));
+    j(lic.proof.right, λ q _ => Sim(k, q.next, Set(y, x, i, v).eval1(k.w, s), Set(y, x, i, v).run2(k.w, k.r, m), ws), at_m)
+}
+
+// One element of the write-back: inside the lent window, what the call
+// left; outside it, what the file held before.
+theorem written_at(file1, file2: List<List<Nat>>, r: Ref, cur: List<Nat>, lov, nv: Nat, ys: List<Nat>,
+    h1: Holds(list_at(file1, r.b), r.base, cur), len: cur.len() = r.len,
+    h2: Holds(list_at(file2, r.b), r.base + lov.min(r.len), ys),
+    out2: (p: Nat) → ¬Span(r.base + lov.min(r.len), nv.min(r.len - lov)).has(p).IsTrue() → list_at(file2, r.b).nth(p) = list_at(file1, r.b).nth(p),
+    ylen: ys.len() = nv.min(cur.len() - lov), i: Nat, lt: i < cur.len()): list_at(file2, r.b).nth(r.base + i) = cur.put_window(lov, ys).nth(i)
+{
+    match q: Span(lov.min(cur.len()), ys.len()).has(i) {
+        True => {
+            let inside: (i - lov.min(cur.len()) < ys.len()) = omega(q);
+            let at: (r.base + lov.min(r.len) + (i - lov.min(cur.len())) = r.base + i) = omega(q, len);
+            prelude::trans(cong_fn(λ (p: Nat) => list_at(file2, r.b).nth(p), sym(at)),
+                prelude::trans(h2(i - lov.min(cur.len()), inside), sym(put_cut_in(cur, lov, nv, ys, ylen, i, omega(q), omega(q)))))
+        },
+        False => {
+            let outside: (¬Span(r.base + lov.min(r.len), nv.min(r.len - lov)).has(r.base + i).IsTrue()) = λ hit => omega(hit, q, ylen, len);
+            prelude::trans(out2(r.base + i, outside), prelude::trans(h1(i, lt), sym(put_cut_out(cur, lov, nv, ys, ylen, i, omega(q)))))
+        },
+    }
+}
+
+// The write-back, over bare data: a file that holds `cur` at `r`, then a
+// call lent the window `lov..lov+nv` of `r` that leaves `ys` there and
+// nothing changed outside it, give a file that holds `cur` with that window
+// replaced by `ys`. This is the frame of a window of a window: the callee's
+// "outside my window nothing changed" is all the caller needs.
+theorem written_back(file0, file1, file2: List<List<Nat>>, r: Ref, cur: List<Nat>, lov, nv: Nat, ys: List<Nat>,
+    before: OnRef(file0, file1, r, cur), call: OnRef(file1, file2, narrow(r, lov, nv), ys)): OnRef(file0, file2, r, cur.put_window(lov, ys))
+{
+    let ylen: (ys.len() = nv.min(cur.len() - lov)) = omega(call.len, before.len);
+    let nlen: (cur.put_window(lov, ys).len() = r.len) = prelude::trans(put_cut_length(cur, lov, nv, ys, ylen), before.len);
+    OnRef(nlen, λ i lt => written_at(file1, file2, r, cur, lov, nv, ys, before.holds, before.len, call.holds, call.out, ylen, i, omega(lt, nlen, before.len)),
+        λ p out => prelude::trans(call.out(p, λ h => out(omega(h))), before.out(p, out)),
+        λ k2 ne => prelude::trans(call.other(k2, ne), before.other(k2, ne)),
+        prelude::trans(call.shape, before.shape), prelude::trans(call.blen, before.blen))
+}
+
+// A call that was lent the window `lov..lov+nv`: its promise, and nothing
+// else of it, gives the eager write-back; outside its window the call
+// changed nothing, which keeps every live view.
+theorem Sim::lent({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>}, self sim: Sim(k, c, s, m, ws), writes: k.mode.writes() = True,
+    lov, nv: Nat, md: Mode, mo: MOut, ro: ROut, safe: Safe(md, m.file, narrow(k.r, lov, nv), window(list_at(s.objs, c.top), lov, nv), mo, ro),
+    misses: (lv: LView) → Mem(lv, c.live) → (p: Nat) → Span(ref_at(m.views, lv.t).base, ref_at(m.views, lv.t).len).has(p).IsTrue() → ¬Span(k.r.base + lov, nv).has(p).IsTrue()):
+    Sim(k, Places(c.top + 1, c.live, c.nviews, c.nw + 1), Sem::lent(s, list_at(s.objs, c.top), lov, mo), Exec::lent(m, ro), ws)
+{
+    let nc = list_at(s.objs, c.top).put_window(lov, mo.val);
+    let at_top: (list_at(s.objs ++ [nc], c.top + 1) = nc) = list_at_snoc_at(s.objs, nc, c.top + 1, sim.top);
+    let on: OnRef(k.file0, ro.file, k.r, list_at(s.objs ++ [nc], c.top + 1)) = j(sym(at_top), λ l _ => OnRef(k.file0, ro.file, k.r, l),
+        written_back(k.file0, m.file, ro.file, k.r, list_at(s.objs, c.top), lov, nv, mo.val, sim.on, safe.on));
+    Sim(prelude::trans(cong_fn(λ (w: List<Nat>) => w ++ [ro.word], sim.words), cong_fn(λ (a: Nat) => s.words ++ [a], safe.answer)),
+        prelude::trans(cong_fn(λ (n: Nat) => n + 1, sim.nw), sym(len_snoc(s.words, mo.word))),
+        prelude::trans(len_snoc(s.objs, nc), cong_fn(λ (q: Nat) => q + 1, sim.top)), sim.nviews, sim.mviews, on,
+        λ no => absurd(prelude::trans(sym(writes), no)),
+        λ lv mem => ⟨sim.views(lv, mem).left, sim.views(lv, mem).right.reframe(ro.file, λ p hp => safe.on.out(p, λ h => misses(lv, mem, p, hp, omega(h))))⟩)
+}
+
+// A call that answered a read view of the whole object: the file is as it
+// was, and the view, rebased on the caller's reference, freezes the object.
+theorem Sim::viewed({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>}, self sim: Sim(k, c, s, m, ws), md: Mode, mo: MOut, ro: ROut,
+    safe: Safe(md, m.file, k.r, list_at(s.objs, c.top), mo, ro), keeps: mo.val = list_at(s.objs, c.top)):
+    Sim(k, Places(c.top, Cons(LView(c.nviews, Whole), c.live), c.nviews + 1, c.nw), Sem(s.objs, s.views ++ [mo.view], s.words),
+        Exec(ro.file, m.views ++ [Ref(k.r.b, k.r.base + ro.lo, ro.n)], m.words), ws)
+{
+    let r = k.r;
+    let cur = list_at(s.objs, c.top);
+    let nr = Ref(r.b, r.base + ro.lo, ro.n);
+    let t = c.nviews;
+    let after: OnRef(m.file, ro.file, r, cur) = j(keeps, λ l _ => OnRef(m.file, ro.file, r, l), safe.on);
+    let unchanged = OnRef::unchanged(m.file, ro.file, r, cur, sim.on.holds, after);
+    let fresh: ViewOk(Whole, nr, mo.view, r, ro.file, ws) = ViewOk(refl,
+        λ p h => {
+            let inside: (Span(r.base, r.len).has(p).IsTrue()) = omega(h, safe.view_in);
+            inside
+        }, safe.view_reads);
+    let views: ((lv: LView) → Mem(lv, Cons(LView(t, Whole), c.live)) → (lv.t < c.nviews + 1) ∧ ViewOk(lv.region, ref_at(m.views ++ [nr], lv.t), list_at(s.views ++ [mo.view], lv.t), r, ro.file, ws)) =
+        λ lv mem => match mem {
+            Inl(e) => j(sym(e), λ l _ => (l.t < c.nviews + 1) ∧ ViewOk(l.region, ref_at(m.views ++ [nr], l.t), list_at(s.views ++ [mo.view], l.t), r, ro.file, ws),
+                ⟨omega(), ViewOk::moved(Whole, nr, ref_at(m.views ++ [nr], t), mo.view, list_at(s.views ++ [mo.view], t), r, ro.file, ws,
+                    sym(ref_at_snoc_at(m.views, nr, t, sim.mviews)), sym(list_at_snoc_at(s.views, mo.view, t, sim.nviews)), fresh)⟩),
+            Inr(m2) => {
+                let old = sim.views(lv, m2);
+                ⟨omega(old.left), ViewOk::moved(lv.region, ref_at(m.views, lv.t), ref_at(m.views ++ [nr], lv.t), list_at(s.views, lv.t), list_at(s.views ++ [mo.view], lv.t), r, ro.file, ws,
+                    sym(ref_at_snoc_below(m.views, nr, lv.t, omega(old.left, sim.mviews))),
+                    sym(list_at_snoc_below(s.views, mo.view, lv.t, omega(old.left, sim.nviews))),
+                    old.right.reframe(ro.file, λ p _ => unchanged(p)))⟩
+            },
+        };
+    Sim(sim.words, sim.nw, sim.top,
+        prelude::trans(len_snoc(s.views, mo.view), cong_fn(λ (q: Nat) => q + 1, sim.nviews)),
+        prelude::trans(len_snoc(m.views, nr), cong_fn(λ (q: Nat) => q + 1, sim.mviews)),
+        OnRef::chain(k.file0, m.file, ro.file, r, cur, cur, sim.on, after), sim.fixed, views)
+}
+
+theorem false_of_not(b: Bool, h: (!b) = True): b = False {
+    (match b as λ x => (!x) = True → x = False { True => λ no => absurd(no), False => λ _ => refl })(h)
+}
+
+// The callee's precondition at the call's arguments, from its residual.
+theorem pre_at(pres: Nat → List<Nat> → Type, g: Nat, args: List<Atom>, ws, big: List<Nat>, pre: Prefix(ws, big), b: Atom::all_bound(args, ws.len()) = True,
+    h: Pre(g, args).Holds(pres, big)): pres(g, vals(args, ws))
+{
+    j(Atom::vals_stable(args, ws, big, pre, b), λ q _ => pres(g, q), h)
+}
+
+theorem step_mut(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), pre: Prefix(s.words, ws), inr: InRef(k.file0, k.r),
+    g, x: Nat, lo, n: Atom, args: List<Atom>, y, z: Nat, safe_g: FnSafe(sig_at(k.sigs, g), k.pres(g), k.w.mean(g), k.w.run(g)),
+    st: Next, ok: CallMut(g, x, lo, n, args, y, z).check(k.mode, k.sigs, c) = Some(st), hold: Owed::All(st.rs, k.pres, ws)):
+    Sim(k, st.next, CallMut(g, x, lo, n, args, y, z).eval1(k.w, s), CallMut(g, x, lo, n, args, y, z).run2(k.w, k.r, m), ws)
+{
+    let sg = sig_at(k.sigs, g);
+    let r = k.r;
+    let mk = λ (rs: List<Owed>) => Next(Places(c.top + 1, c.live, c.nviews, c.nw + 1), rs ++ [Pre(g, args)]);
+    let guard = ((((k.mode.writes() && sg.mode.writes()) && !sg.ret.is_view()) && (x.same(c.top) && y.same(c.top + 1)))
+        && (z.same(c.nw) && (lo.bound(c.nw) && n.bound(c.nw)))) && (Atom::all_bound(args, c.nw) && args.len().same(sg.words));
+    let p = guard.then_some(license_live(c.live, lo, n).map(mk), st, ok);
+    let lic = option_map_some(license_live(c.live, lo, n), mk, st, p.right);
+    let parts = Owed::all_append(lic.witness, k.pres, [Pre(g, args)], ws, j(sym(lic.proof.right), λ q _ => Owed::All(q.rs, k.pres, ws), hold));
+    let g1 = Bool::and_true_parts((((k.mode.writes() && sg.mode.writes()) && !sg.ret.is_view()) && (x.same(c.top) && y.same(c.top + 1)))
+        && (z.same(c.nw) && (lo.bound(c.nw) && n.bound(c.nw))), Atom::all_bound(args, c.nw) && args.len().same(sg.words), p.left);
+    let g2 = Bool::and_true_parts(((k.mode.writes() && sg.mode.writes()) && !sg.ret.is_view()) && (x.same(c.top) && y.same(c.top + 1)),
+        z.same(c.nw) && (lo.bound(c.nw) && n.bound(c.nw)), g1.left);
+    let g3 = Bool::and_true_parts((k.mode.writes() && sg.mode.writes()) && !sg.ret.is_view(), x.same(c.top) && y.same(c.top + 1), g2.left);
+    let g4 = Bool::and_true_parts(k.mode.writes() && sg.mode.writes(), !sg.ret.is_view(), g3.left);
+    let g5 = Bool::and_true_parts(k.mode.writes(), sg.mode.writes(), g4.left);
+    let g6 = Bool::and_true_parts(x.same(c.top), y.same(c.top + 1), g3.right);
+    let g7 = Bool::and_true_parts(z.same(c.nw), lo.bound(c.nw) && n.bound(c.nw), g2.right);
+    let g8 = Bool::and_true_parts(lo.bound(c.nw), n.bound(c.nw), g7.right);
+    let g9 = Bool::and_true_parts(Atom::all_bound(args, c.nw), args.len().same(sg.words), g1.right);
+    let ex: (x = c.top) = x.same_sound(c.top, g6.left);
+    let lo_ws: (lo.val(ws) = lo.val(s.words)) = lo.val_stable(s.words, ws, pre, lo.bound_at(c, s, g8.left, sim.nw));
+    let n_ws: (n.val(ws) = n.val(s.words)) = n.val_stable(s.words, ws, pre, n.bound_at(c, s, g8.right, sim.nw));
+    let lov = lo.val(s.words);
+    let nv = n.val(s.words);
+    let vs = vals(args, s.words);
+    let cur = list_at(s.objs, c.top);
+    let rn = narrow(r, lov, nv);
+    let fits: (r.base + cur.len() <= list_at(m.file, r.b).len()) = omega(inr.fits, sim.on.blen, sim.on.len);
+    let inref: InRef(m.file, rn) = InRef(omega(inr.buf, sim.on.shape), omega(inr.fits, sim.on.blen));
+    let nargs: (vs.len() = sg.words) = prelude::trans(vals_len(args, s.words), args.len().same_sound(sg.words, g9.right));
+    let callee_pre: k.pres(g, vs) = pre_at(k.pres, g, args, s.words, ws, pre, j(sim.nw, λ q _ => Atom::all_bound(args, q) = True, g9.left), parts.right.left);
+    let ro = k.w.run(g, m.file, rn, vs);
+    let arg_is: (window(list_at(m.file, r.b), r.base + lov.min(r.len), nv.min(r.len - lov)) = window(cur, lov, nv)) =
+        narrow_window_at(list_at(m.file, r.b), r.base, cur, sim.on.holds, fits, r.len, lov, nv, sim.on.len);
+    let safe: Safe(sg.mode, m.file, rn, window(cur, lov, nv), k.w.mean(g, window(cur, lov, nv), vs), ro) =
+        j(arg_is, λ q _ => Safe(sg.mode, m.file, rn, q, k.w.mean(g, q, vs), ro), safe_g(m.file, rn, vs, inref, nargs, callee_pre));
+    let misses = λ (lv: LView) (mem: Mem(lv, c.live)) (q: Nat) (hq: Span(ref_at(m.views, lv.t).base, ref_at(m.views, lv.t).len).has(q).IsTrue()) => {
+        let cl = license_live_sound(c.live, lo, n, k.pres, ws, lic.witness, lic.proof.left, parts.left, lv, mem);
+        let no = lv.region.clear_misses(lo, n, ws, r, ref_at(m.views, lv.t), cl, sim.views(lv, mem).right.within, q, hq);
+        let no2: (¬Span(r.base + lov, nv).has(q).IsTrue()) = λ h => no(omega(h, lo_ws, n_ws));
+        no2
+    };
+    let after = sim.lent(g5.left, lov, nv, sg.mode, k.w.mean(g, window(cur, lov, nv), vs), ro, safe, misses);
+    let at_m: Sim(k, mk(lic.witness).next, Sem::lent(s, list_at(s.objs, x), lov, k.w.mean(g, window(list_at(s.objs, x), lov, nv), vs)),
+        Exec::lent(m, k.w.run(g, m.file, narrow(r, lo.val(m.words), n.val(m.words)), vals(args, m.words))), ws) =
+        j(sym(ex), λ q _ => Sim(k, mk(lic.witness).next, Sem::lent(s, list_at(s.objs, q), lov, k.w.mean(g, window(list_at(s.objs, q), lov, nv), vs)),
+                Exec::lent(m, k.w.run(g, m.file, narrow(r, lo.val(m.words), n.val(m.words)), vals(args, m.words))), ws),
+            j(sym(sim.words), λ q _ => Sim(k, mk(lic.witness).next, Sem::lent(s, cur, lov, k.w.mean(g, window(cur, lov, nv), vs)),
+                Exec::lent(m, k.w.run(g, m.file, narrow(r, lo.val(q), n.val(q)), vals(args, q))), ws), after));
+    j(lic.proof.right, λ q _ => Sim(k, q.next, CallMut(g, x, lo, n, args, y, z).eval1(k.w, s), CallMut(g, x, lo, n, args, y, z).run2(k.w, k.r, m), ws), at_m)
+}
+
+theorem step_view_call(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), pre: Prefix(s.words, ws), inr: InRef(k.file0, k.r),
+    g, x: Nat, args: List<Atom>, t: Nat, safe_g: FnSafe(sig_at(k.sigs, g), k.pres(g), k.w.mean(g), k.w.run(g)),
+    st: Next, ok: CallView(g, x, args, t).check(k.mode, k.sigs, c) = Some(st), hold: Owed::All(st.rs, k.pres, ws)):
+    Sim(k, st.next, CallView(g, x, args, t).eval1(k.w, s), CallView(g, x, args, t).run2(k.w, k.r, m), ws)
+{
+    let sg = sig_at(k.sigs, g);
+    let r = k.r;
+    let next = Next(Places(c.top, Cons(LView(t, Whole), c.live), c.nviews + 1, c.nw), [Pre(g, args)]);
+    let gd = Next::of((((!sg.mode.writes() && sg.ret.is_view()) && x.same(c.top)) && t.same(c.nviews)) && (Atom::all_bound(args, c.nw) && args.len().same(sg.words)), next, st, ok);
+    let g1 = Bool::and_true_parts(((!sg.mode.writes() && sg.ret.is_view()) && x.same(c.top)) && t.same(c.nviews), Atom::all_bound(args, c.nw) && args.len().same(sg.words), gd.left);
+    let g2 = Bool::and_true_parts((!sg.mode.writes() && sg.ret.is_view()) && x.same(c.top), t.same(c.nviews), g1.left);
+    let g3 = Bool::and_true_parts(!sg.mode.writes() && sg.ret.is_view(), x.same(c.top), g2.left);
+    let g4 = Bool::and_true_parts(!sg.mode.writes(), sg.ret.is_view(), g3.left);
+    let g9 = Bool::and_true_parts(Atom::all_bound(args, c.nw), args.len().same(sg.words), g1.right);
+    let reads_only: (sg.mode.writes() = False) = false_of_not(sg.mode.writes(), g4.left);
+    let ex: (x = c.top) = x.same_sound(c.top, g3.right);
+    let et: (t = c.nviews) = t.same_sound(c.nviews, g2.right);
+    let hold2: Owed::All([Pre(g, args)], k.pres, ws) = j(sym(gd.right), λ q _ => Owed::All(q.rs, k.pres, ws), hold);
+    let vs = vals(args, s.words);
+    let cur = list_at(s.objs, c.top);
+    let fits: (r.base + cur.len() <= list_at(m.file, r.b).len()) = omega(inr.fits, sim.on.blen, sim.on.len);
+    let inref: InRef(m.file, r) = InRef(omega(inr.buf, sim.on.shape), omega(inr.fits, sim.on.blen));
+    let nargs: (vs.len() = sg.words) = prelude::trans(vals_len(args, s.words), args.len().same_sound(sg.words, g9.right));
+    let callee_pre: k.pres(g, vs) = pre_at(k.pres, g, args, s.words, ws, pre, j(sim.nw, λ q _ => Atom::all_bound(args, q) = True, g9.left), hold2.left);
+    let ro = k.w.run(g, m.file, r, vs);
+    let arg_is: (window(list_at(m.file, r.b), r.base, r.len) = cur) =
+        j(sim.on.len, λ l _ => window(list_at(m.file, r.b), r.base, l) = cur, whole_window(list_at(m.file, r.b), r.base, cur, sim.on.holds, fits));
+    let safe_w = safe_g(m.file, r, vs, inref, nargs, callee_pre);
+    let safe: Safe(sg.mode, m.file, r, cur, k.w.mean(g, cur, vs), ro) = j(arg_is, λ q _ => Safe(sg.mode, m.file, r, q, k.w.mean(g, q, vs), ro), safe_w);
+    let after = sim.viewed(sg.mode, k.w.mean(g, cur, vs), ro, safe, safe.keeps(reads_only));
+    let at_m: Sim(k, next.next, Sem(s.objs, s.views ++ [k.w.mean(g, list_at(s.objs, x), vs).view], s.words), Exec::viewed(m, r, k.w.run(g, m.file, r, vals(args, m.words))), ws) =
+        j(sym(ex), λ q _ => Sim(k, next.next, Sem(s.objs, s.views ++ [k.w.mean(g, list_at(s.objs, q), vs).view], s.words), Exec::viewed(m, r, k.w.run(g, m.file, r, vals(args, m.words))), ws),
+            j(sym(sim.words), λ q _ => Sim(k, next.next, Sem(s.objs, s.views ++ [k.w.mean(g, cur, vs).view], s.words), Exec::viewed(m, r, k.w.run(g, m.file, r, vals(args, q))), ws),
+                j(sym(et), λ q _ => Sim(k, Places(c.top, Cons(LView(q, Whole), c.live), c.nviews + 1, c.nw), Sem(s.objs, s.views ++ [k.w.mean(g, cur, vs).view], s.words),
+                        Exec::viewed(m, r, ro), ws), after)));
+    j(gd.right, λ q _ => Sim(k, q.next, CallView(g, x, args, t).eval1(k.w, s), CallView(g, x, args, t).run2(k.w, k.r, m), ws), at_m)
+}
+
+// ---------------------------------------------------------------------------
+// The checker is proved once
+
+// The functions a body calls.
+fn Stmt::calls(self o: Stmt, g: Nat) → Bool {
+    match o { CallMut(h, _, _, _, _, _, _) => h.same(g), CallView(h, _, _, _) => h.same(g), _ => False }
+}
+
+fn calls(ops: List<Stmt>, g: Nat) → Bool { match ops { Nil => False, Cons(o, rest) => o.calls(g) || calls(rest, g) } }
+
+// What a callee promises, for every function the statement calls.
+fn Callees(k: Frame, o: Stmt) → Type { (g: Nat) → o.calls(g) = True → FnSafe(sig_at(k.sigs, g), k.pres(g), k.w.mean(g), k.w.run(g)) }
+
+theorem Stmt::step(self o: Stmt, k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), pre: Prefix(s.words, ws), inr: InRef(k.file0, k.r),
+    callees: Callees(k, o), st: Next, ok: o.check(k.mode, k.sigs, c) = Some(st), hold: Owed::All(st.rs, k.pres, ws)):
+    Sim(k, st.next, o.eval1(k.w, s), o.run2(k.w, k.r, m), ws)
+{
+    (match o as λ e => Callees(k, e) → e.check(k.mode, k.sigs, c) = Some(st) → Sim(k, st.next, e.eval1(k.w, s), e.run2(k.w, k.r, m), ws) {
+        Set(y, x, i, v) => λ _ ok2 => step_set(k, c, s, m, ws, sim, pre, inr, y, x, i, v, st, ok2, hold),
+        Get(z, x, i) => λ _ ok2 => step_get(k, c, s, m, ws, sim, z, x, i, st, ok2),
+        View(t, x, lo, n) => λ _ ok2 => step_view(k, c, s, m, ws, sim, pre, t, x, lo, n, st, ok2),
+        Read(z, t, i) => λ _ ok2 => step_read(k, c, s, m, ws, sim, z, t, i, st, ok2),
+        Die(t) => λ _ ok2 => step_die(k, c, s, m, ws, sim, t, st, ok2),
+        CallMut(g, x, lo, n, args, y, z) => λ cl ok2 => step_mut(k, c, s, m, ws, sim, pre, inr, g, x, lo, n, args, y, z, cl(g, g.same_self()), st, ok2, hold),
+        CallView(g, x, args, t) => λ cl ok2 => step_view_call(k, c, s, m, ws, sim, pre, inr, g, x, args, t, cl(g, g.same_self()), st, ok2, hold),
+    })(callees, ok)
+}
+
+theorem Stmt::eval1_grows(self o: Stmt, w: World, s: Sem): Prefix(s.words, o.eval1(w, s).words) {
+    match o {
+        Set(_, _, _, _) => Prefix::same(s.words),
+        Get(_, x, i) => Prefix::snoc(s.words, word(list_at(s.objs, x), i.val(s.words))),
+        View(_, _, _, _) => Prefix::same(s.words),
+        Read(_, t, i) => Prefix::snoc(s.words, word(list_at(s.views, t), i.val(s.words))),
+        Die(_) => Prefix::same(s.words),
+        CallMut(g, x, lo, n, args, _, _) => Prefix::snoc(s.words, w.mean(g, window(list_at(s.objs, x), lo.val(s.words), n.val(s.words)), vals(args, s.words)).word),
+        CallView(_, _, _, _) => Prefix::same(s.words),
+    }
+}
+
+theorem mean_body_grows(w: World, ops: List<Stmt>): (s: Sem) → Prefix(s.words, mean_body(w, ops, s).words) {
+    match ops {
+        Nil => λ s => Prefix::same(s.words),
+        Cons(o, rest) => λ s => Prefix::chain(s.words, o.eval1(w, s).words, mean_body(w, rest, o.eval1(w, s)).words, o.eval1_grows(w, s), mean_body_grows(w, rest, o.eval1(w, s))),
+    }
+}
+
+theorem calls_head(o: Stmt, rest: List<Stmt>, g: Nat, h: o.calls(g) = True): calls(Cons(o, rest), g) = True {
+    j(sym(h), λ b _ => (b || calls(rest, g)) = True, refl)
+}
+
+theorem calls_rest(o: Stmt, rest: List<Stmt>, g: Nat, h: calls(rest, g) = True): calls(Cons(o, rest), g) = True {
+    match q: o.calls(g) { True => refl, False => h }
+}
+
+// The body, statement by statement.
+theorem check_body_sound(k: Frame, inr: InRef(k.file0, k.r), ops: List<Stmt>): (c: Places) → (s: Sem) → (m: Exec) → Sim(k, c, s, m, mean_body(k.w, ops, s).words) →
+    (rs: List<Owed>) → check_body(ops, k.mode, k.sigs, c) = Some(rs) → Owed::All(rs, k.pres, mean_body(k.w, ops, s).words) →
+    ((g: Nat) → calls(ops, g) = True → FnSafe(sig_at(k.sigs, g), k.pres(g), k.w.mean(g), k.w.run(g))) →
+    Exists<Places>(λ c2 => Sim(k, c2, mean_body(k.w, ops, s), run_body(k.w, k.r, ops, m), mean_body(k.w, ops, s).words))
+{
+    match ops {
+        Nil => λ c s m sim rs ok hold callees => Exists(c, sim),
+        Cons(o, rest) => λ c s m sim rs ok hold callees => {
+            let ws = mean_body(k.w, rest, o.eval1(k.w, s)).words;
+            let st = Option::and_then_some(o.check(k.mode, k.sigs, c), λ q => check_body(rest, k.mode, k.sigs, q.next).map(λ r2 => q.rs ++ r2), rs, ok);
+            let mp = option_map_some(check_body(rest, k.mode, k.sigs, st.witness.next), λ r2 => st.witness.rs ++ r2, rs, st.proof.right);
+            let parts = Owed::all_append(st.witness.rs, k.pres, mp.witness, ws, j(sym(mp.proof.right), λ q _ => Owed::All(q, k.pres, ws), hold));
+            let pre: Prefix(s.words, ws) = mean_body_grows(k.w, Cons(o, rest), s);
+            let sim2 = o.step(k, c, s, m, ws, sim, pre, inr, λ g h => callees(g, calls_head(o, rest, g, h)), st.witness, st.proof.left, parts.left);
+            check_body_sound(k, inr, rest, st.witness.next, o.eval1(k.w, s), o.run2(k.w, k.r, m), sim2, mp.witness, mp.proof.left, parts.right,
+                λ g h => callees(g, calls_rest(o, rest, g, h)))
+        },
+    }
+}
+
+// What a function answers, from the invariant at the end of its body.
+theorem Ret::answers(self ret: Ret, r: Ref, file: List<List<Nat>>, cur: List<Nat>, h: Holds(list_at(file, r.b), r.base, cur), len: cur.len() = r.len, ws, mws: List<Nat>, e: mws = ws):
+    (ret.vlo(r, mws) + ret.vn(r, mws) <= r.len) ∧ ((i: Nat) → atom::word(ret.view(cur, ws), i) = rget(file, Ref(r.b, r.base + ret.vlo(r, mws), ret.vn(r, mws)), i))
+{
+    j(sym(e), λ q _ => (ret.vlo(r, q) + ret.vn(r, q) <= r.len) ∧ ((i: Nat) → atom::word(ret.view(cur, ws), i) = rget(file, Ref(r.b, r.base + ret.vlo(r, q), ret.vn(r, q)), i)),
+        match ret {
+            RWord(_) => ⟨omega(), λ i => refl⟩,
+            RView(lo, n) => {
+                let inside: (lo.val(ws).min(r.len) + n.val(ws).min(r.len - lo.val(ws)) <= r.len) = omega();
+                ⟨inside, narrow_reads(file, r, cur, h, len, lo.val(ws), n.val(ws))⟩
+            },
+        })
+}
+
+theorem Mode::gives_back(self md: Mode, file0, file: List<List<Nat>>, r: Ref, arg, cur: List<Nat>, on: OnRef(file0, file, r, cur), fixed: md.writes() = False → cur = arg):
+    OnRef(file0, file, r, md.back(arg, cur)) ∧ (md.writes() = False → md.back(arg, cur) = arg)
+{
+    (match md as λ q => (q.writes() = False → cur = arg) → OnRef(file0, file, r, q.back(arg, cur)) ∧ (q.writes() = False → q.back(arg, cur) = arg) {
+        Reads => λ fx => ⟨j(fx(refl), λ l _ => OnRef(file0, file, r, l), on), λ _ => refl⟩,
+        Writes => λ _ => ⟨on, λ no => absurd(no)⟩,
+    })(fixed)
+}
+
+theorem Sim::ends({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>}, self sim: Sim(k, c, s, m, ws), f: Func, em: k.mode = f.mode):
+    Safe(f.mode, k.file0, k.r, k.arg, mean_out(f, k.arg, s), run_out(f, k.r, m))
+{
+    let cur = list_at(s.objs, c.top);
+    let last: (s.objs.len() - 1 = c.top) = omega(sim.top);
+    let ecur: (s.cur() = cur) = cong_fn(λ (q: Nat) => list_at(s.objs, q), last);
+    let md = f.mode.gives_back(k.file0, m.file, k.r, k.arg, cur, sim.on, j(em, λ q _ => q.writes() = False → cur = k.arg, sim.fixed));
+    let rt = f.ret.answers(k.r, m.file, cur, sim.on.holds, sim.on.len, s.words, m.words, sim.words);
+    j(sym(ecur), λ q _ => Safe(f.mode, k.file0, k.r, k.arg, MOut(f.mode.back(k.arg, q), f.ret.word(s.words), f.ret.view(q, s.words)), run_out(f, k.r, m)),
+        Safe(cong_fn(λ (w: List<Nat>) => f.ret.word(w), sim.words), md.left, md.right, rt.left, rt.right))
+}
+
+theorem check_sound(sigs: List<Sig>, pres: Nat → List<Nat> → Type, f: Func, rs: List<Owed>, ok: check_fn(sigs, f) = Some(rs), pre: List<Nat> → Type, w: World,
+    discharge: (arg, ws: List<Nat>) → ws.len() = f.words → pre(ws) → Owed::All(rs, pres, mean_body(w, f.body, Sem([arg], Nil, ws)).words),
+    callees: (g: Nat) → calls(f.body, g) = True → FnSafe(sig_at(sigs, g), pres(g), w.mean(g), w.run(g))):
+    FnSafe(f.sig(), pre, λ arg ws => mean_fn(w, f, arg, ws), λ file r ws => run_fn(w, f, file, r, ws))
+{
+    λ file r ws inr nw p => {
+        let arg = window(list_at(file, r.b), r.base, r.len);
+        let k = Frame(f.mode, sigs, pres, w, r, file, arg);
+        let s0 = Sem([arg], Nil, ws);
+        let m0 = Exec(file, Nil, ws);
+        let c0 = Places(0, Nil, 0, f.words);
+        let sim0: Sim(k, c0, s0, m0, mean_body(w, f.body, s0).words) = Sim(refl, sym(nw), refl, refl, refl, OnRef::start(file, r, inr), λ _ => refl, λ lv mem => false_elim(mem));
+        let fin = check_body_sound(k, inr, f.body, c0, s0, m0, sim0, rs, ok, discharge(arg, ws, nw, p), callees);
+        let at_end: Sim(k, fin.witness, mean_body(w, f.body, s0), run_body(w, r, f.body, m0), mean_body(w, f.body, s0).words) = fin.proof;
+        at_end.ends(f, refl)
+    }
+}
+
+// A call at depth zero: it does nothing, and keeps the promise of every
+// signature.
+theorem idle_safe(sig: Sig, pre: List<Nat> → Type): FnSafe(sig, pre, λ arg _ => MOut(arg, 0, Nil), λ file _ _ => ROut(file, 0, 0, 0)) {
+    λ file r ws inr _ _ => Safe(refl, OnRef::start(file, r, inr), λ _ => refl, omega(), λ i => refl)
+}
+
+// ---------------------------------------------------------------------------
+// A program: every function checked gives every function safe
+
+theorem sig_at_of(fns: List<Func>): (g: Nat) → sig_at(sigs_of(fns), g) = fn_at(fns, g).sig() {
+    match fns {
+        Nil => λ g => refl,
+        Cons(_, rest) => λ g => match g { Zero => refl, Succ(h) => sig_at_of(rest, h) },
+    }
+}
+
+theorem fn_at_past(fns: List<Func>, g: Nat, past: fns.len() <= g): fn_at(fns, g) = Func::none() {
+    cong_fn(λ (o: Option<Func>) => o.unwrap_or(Func::none()), fns.nth_past_end(g, past))
+}
+
+// Function `g` checks, and its residuals hold under its precondition in
+// every world.
+record Checks(fns: List<Func>, pres: Nat → List<Nat> → Type, g: Nat) {
+    rs: List<Owed>,
+    ok: check_fn(sigs_of(fns), fn_at(fns, g)) = Some(rs),
+    discharge: (w: World) → (arg, ws: List<Nat>) → ws.len() = fn_at(fns, g).words → pres(g, ws) → Owed::All(rs, pres, mean_body(w, fn_at(fns, g).body, Sem([arg], Nil, ws)).words),
+}
+
+fn ProgOk(fns: List<Func>, pres: Nat → List<Nat> → Type) → Type { (g: Nat) → g < fns.len() → Checks(fns, pres, g) }
+
+// Past the table, the function a table has nowhere checks with nothing owed.
+theorem prog_checks(fns: List<Func>, pres: Nat → List<Nat> → Type, ok: ProgOk(fns, pres), g: Nat): Checks(fns, pres, g) {
+    match q: (g + 1).leb(fns.len()) {
+        True => ok(g, omega(q)),
+        False => {
+            let e = fn_at_past(fns, g, omega(q));
+            Checks(Nil, j(sym(e), λ f _ => check_fn(sigs_of(fns), f) = Some(Nil), refl), λ w arg ws _ _ => trivial)
+        },
+    }
+}
+
+// At every depth of calls, every function of a checked program keeps its
+// promise: the caller's proof cites only the callees' promises.
+theorem prog_sound(fns: List<Func>, pres: Nat → List<Nat> → Type, ok: ProgOk(fns, pres), d: Nat): (g: Nat) →
+    FnSafe(sig_at(sigs_of(fns), g), pres(g), world(fns, d).mean(g), world(fns, d).run(g))
+{
+    match d {
+        Zero => λ g => idle_safe(sig_at(sigs_of(fns), g), pres(g)),
+        Succ(e) => λ g => {
+            let ch = prog_checks(fns, pres, ok, g);
+            let safe = check_sound(sigs_of(fns), pres, fn_at(fns, g), ch.rs, ch.ok, pres(g), world(fns, e), ch.discharge(world(fns, e)),
+                λ h _ => prog_sound(fns, pres, ok, e, h));
+            j(sym(sig_at_of(fns, g)), λ sg _ => FnSafe(sg, pres(g), world(fns, Succ(e)).mean(g), world(fns, Succ(e)).run(g)), safe)
+        },
+    }
+}

@@ -1,0 +1,195 @@
+// The three programs of the ownership checker's second experiment
+// (docs/language/ownership-design.md §15.6, lib/lang/ownership/call_check.hthr),
+// each with its control, and probes of the run's rebasing.
+import logic;
+import bool;
+import nat;
+import omega;
+import option;
+import list;
+import span_set;
+import atom;
+import call_check;
+
+fn no_pre() → Nat → List<Nat> → Type { λ _ _ => True }
+
+// ---------------------------------------------------------------------------
+// 1. A written window beside a held view:
+//    `let t = &v[0..k]; let (v1, z) = fill(&mut v[k..k+m], 7); t[0]`
+
+// fill(w: &mut [Nat], a): `let w1 = w.set(0, a); w1[0]`
+fn fill() → Func { Func(Writes, 1, [Set(1, 0, Lit(0), Var(0)), Get(1, 1, Lit(0))], RWord(Var(1))) }
+
+// The words are `k` (0) and `m` (1); the call binds word 2, the read word 3.
+fn written() → Func { Func(Writes, 2, [View(0, 0, Lit(0), Var(0)), CallMut(0, 0, Var(0), Var(1), [Lit(7)], 1, 2), Read(3, 0, Lit(0))], RWord(Var(3))) }
+
+fn p1() → List<Func> { [fill(), written()] }
+
+theorem fill_checked(): check_fn(sigs_of(p1()), fill()) = Some(Nil) { refl }
+
+// One residual, `Span(0, k)` apart from `Span(k, m)`, and fill's
+// precondition.
+theorem written_checked(): check_fn(sigs_of(p1()), written()) = Some([Due(Spans(Lit(0), Var(0), Var(0), Var(1))), Pre(0, [Lit(7)])]) { refl }
+
+// The residual holds in any words: `0 + k <= k`.
+theorem written_owed(ws: List<Nat>): Owed::All([Due(Spans(Lit(0), Var(0), Var(0), Var(1))), Pre(0, [Lit(7)])], no_pre(), ws) {
+    let apart: (Span(0, word(ws, 0)).apart(Span(word(ws, 0), word(ws, 1))).IsTrue()) = omega();
+    ⟨apart, ⟨trivial, trivial⟩⟩
+}
+
+// The caller's proof in any world, citing only fill's promise.
+theorem written_safe(w: World, fill_safe: FnSafe(fill().sig(), no_pre()(0), w.mean(0), w.run(0))):
+    FnSafe(written().sig(), λ _ => True, λ arg ws => mean_fn(w, written(), arg, ws), λ file r ws => run_fn(w, written(), file, r, ws))
+{
+    check_sound(sigs_of(p1()), no_pre(), written(), [Due(Spans(Lit(0), Var(0), Var(0), Var(1))), Pre(0, [Lit(7)])], written_checked(), λ _ => True, w,
+        λ arg ws _ _ => written_owed(mean_body(w, written().body, Sem([arg], Nil, ws)).words),
+        λ g => match g { Zero => λ _ => fill_safe, Succ(_) => λ no => absurd(no) })
+}
+
+theorem p1_ok(): ProgOk(p1(), no_pre()) {
+    λ g => match g {
+        Zero => λ _ => Checks(Nil, fill_checked(), λ w arg ws _ _ => trivial),
+        Succ(g1) => match g1 {
+            Zero => λ _ => Checks([Due(Spans(Lit(0), Var(0), Var(0), Var(1))), Pre(0, [Lit(7)])], written_checked(),
+                λ w arg ws _ _ => written_owed(mean_body(w, written().body, Sem([arg], Nil, ws)).words)),
+            Succ(_) => λ no => false_elim(omega(no)),
+        },
+    }
+}
+
+// The program's theorem: at every depth of calls.
+theorem written_sound(d: Nat): FnSafe(sig_at(sigs_of(p1()), 1), λ _ => True, world(p1(), d).mean(1), world(p1(), d).run(1)) {
+    prog_sound(p1(), no_pre(), p1_ok(), d, 1)
+}
+
+// The run inside a larger buffer, at base 2: no copy, the window written in
+// place, and the view reads what the meaning does.
+theorem written_runs(): run_fn(world(p1(), 2), written(), [[9, 9, 5, 6, 8, 9]], Ref(0, 2, 3), [1, 2]) = ROut([[9, 9, 5, 7, 8, 9]], 5, 0, 0) { refl }
+
+theorem written_means(): mean_fn(world(p1(), 2), written(), [5, 6, 8], [1, 2]) = MOut([5, 7, 8], 5, Nil) { refl }
+
+// The control: the window moved to start at `j = k - 1`. Accepted by a
+// residual that fails at `k = 1, m = 1, j = 0`, and there the runs differ:
+// the view reads 7 in the run and 5 in the meaning.
+fn moved() → Func { Func(Writes, 3, [View(0, 0, Lit(0), Var(0)), CallMut(0, 0, Var(2), Var(1), [Lit(7)], 1, 3), Read(4, 0, Lit(0))], RWord(Var(4))) }
+
+fn p1c() → List<Func> { [fill(), moved()] }
+
+theorem moved_checked(): check_fn(sigs_of(p1c()), moved()) = Some([Due(Spans(Lit(0), Var(0), Var(2), Var(1))), Pre(0, [Lit(7)])]) { refl }
+
+theorem moved_fails(): ¬Owed::All([Due(Spans(Lit(0), Var(0), Var(2), Var(1))), Pre(0, [Lit(7)])], no_pre(), mean_body(world(p1c(), 2), moved().body, Sem([[5, 6]], Nil, [1, 1, 0])).words) {
+    λ h => h.left
+}
+
+theorem moved_control(): ¬(run_fn(world(p1c(), 2), moved(), [[5, 6]], Ref(0, 0, 2), [1, 1, 0]).word = mean_fn(world(p1c(), 2), moved(), [5, 6], [1, 1, 0]).word) {
+    λ e => {
+        let at: (7 = 5) = e;
+        absurd(at)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 2. A returned view, frozen while it lives:
+//    `let t = first(&v); let a = t[0]; let b = v[0]; dead(t); let v1 = v.set(0, 9); v1[0]`
+
+// first(w: &[Nat]): `&w[0..1]`
+fn first() → Func { Func(Reads, 0, Nil, RView(Lit(0), Lit(1))) }
+
+fn returned() → Func {
+    Func(Writes, 0, [CallView(0, 0, Nil, 0), Read(0, 0, Lit(0)), Get(1, 0, Lit(0)), Die(0), Set(1, 0, Lit(0), Lit(9)), Get(2, 1, Lit(0))], RWord(Var(0)))
+}
+
+fn p2() → List<Func> { [first(), returned()] }
+
+theorem first_checked(): check_fn(sigs_of(p2()), first()) = Some(Nil) { refl }
+
+// The write after the view's death owes nothing; the call owes first's
+// precondition.
+theorem returned_checked(): check_fn(sigs_of(p2()), returned()) = Some([Pre(0, Nil)]) { refl }
+
+theorem p2_ok(): ProgOk(p2(), no_pre()) {
+    λ g => match g {
+        Zero => λ _ => Checks(Nil, first_checked(), λ w arg ws _ _ => trivial),
+        Succ(g1) => match g1 {
+            Zero => λ _ => Checks([Pre(0, Nil)], returned_checked(), λ w arg ws _ _ => ⟨trivial, trivial⟩),
+            Succ(_) => λ no => false_elim(omega(no)),
+        },
+    }
+}
+
+theorem returned_sound(d: Nat): FnSafe(sig_at(sigs_of(p2()), 1), λ _ => True, world(p2(), d).mean(1), world(p2(), d).run(1)) {
+    prog_sound(p2(), no_pre(), p2_ok(), d, 1)
+}
+
+// Rebasing: inside a buffer at base 2, the view first answers is
+// relative to the reference it was given, and the caller reads the right
+// element through it.
+theorem first_answers(): run_fn(world(p2(), 1), first(), [[1, 2, 5, 6]], Ref(0, 2, 2), Nil) = ROut([[1, 2, 5, 6]], 0, 0, 1) { refl }
+
+theorem returned_runs(): run_fn(world(p2(), 2), returned(), [[1, 2, 5, 6]], Ref(0, 2, 2), Nil) = ROut([[1, 2, 9, 6]], 5, 0, 0) { refl }
+
+theorem returned_means(): mean_fn(world(p2(), 2), returned(), [5, 6], Nil) = MOut([9, 6], 5, Nil) { refl }
+
+// The control: the write moved before the read of `t`, while the whole
+// object is frozen. Refused, and rightly: the view reads 9 in the run and 5
+// in the meaning.
+fn early() → Func {
+    Func(Writes, 0, [CallView(0, 0, Nil, 0), Set(1, 0, Lit(0), Lit(9)), Read(0, 0, Lit(0)), Die(0), Get(1, 1, Lit(0))], RWord(Var(0)))
+}
+
+fn p2c() → List<Func> { [first(), early()] }
+
+theorem early_refused(): check_fn(sigs_of(p2c()), early()) = None { refl }
+
+theorem early_control(): ¬(run_fn(world(p2c(), 2), early(), [[5, 6]], Ref(0, 0, 2), Nil).word = mean_fn(world(p2c(), 2), early(), [5, 6], Nil).word) {
+    λ e => {
+        let at: (9 = 5) = e;
+        absurd(at)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 3. A callee that breaks its signature: declared to read its parameter,
+//    its body sets a cell.
+
+fn liar() → Func { Func(Reads, 0, [Set(1, 0, Lit(0), Lit(9))], RView(Lit(0), Lit(1))) }
+
+// `let t = liar(&v); v[0]`
+fn trusting() → Func { Func(Writes, 0, [CallView(0, 0, Nil, 0), Get(0, 0, Lit(0))], RWord(Var(0))) }
+
+fn p3() → List<Func> { [liar(), trusting()] }
+
+// Its own check refuses it.
+theorem liar_refused(): check_fn(sigs_of(p3()), liar()) = None { refl }
+
+// The caller reads only the signature, so its verdict is the same as with
+// an honest callee.
+theorem trusting_checked(): check_fn(sigs_of(p3()), trusting()) = Some([Pre(0, Nil)]) { refl }
+
+// The program's theorem cannot be assembled: its premise is false.
+theorem p3_not_ok(): ¬ProgOk(p3(), no_pre()) {
+    λ ok => {
+        let c = ok(0, omega());
+        let no: (None<List<Owed>>() = Some(c.rs)) = prelude::trans(sym(liar_refused()), c.ok);
+        absurd(no)
+    }
+}
+
+// Nor does the liar keep the promise its signature makes: it writes the
+// reference it was lent to read.
+theorem liar_unsafe(): ¬FnSafe(liar().sig(), λ _ => True, world(p3(), 1).mean(0), world(p3(), 1).run(0)) {
+    λ safe => {
+        let s = safe([[5, 6]], Ref(0, 0, 2), Nil, InRef(omega(), omega()), refl, trivial);
+        let at: (Some(9) = Some(5)) = s.on.holds(0, omega());
+        let nine: (9 = 5) = Option::some_inj(9, 5, at);
+        absurd(nine)
+    }
+}
+
+// The control: with that callee the caller's runs differ (9 against 5).
+theorem trusting_control(): ¬(run_fn(world(p3(), 2), trusting(), [[5, 6]], Ref(0, 0, 2), Nil).word = mean_fn(world(p3(), 2), trusting(), [5, 6], Nil).word) {
+    λ e => {
+        let at: (9 = 5) = e;
+        absurd(at)
+    }
+}
