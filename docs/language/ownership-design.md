@@ -572,7 +572,7 @@ Read off the code on 2026-11-24.
 | Lenses | `Location`, `LocationLaws`, `Disjoint` (`lib/std/machine/location.hthr`), total only; `Part` and `Stored` for laid records. |
 | Footprints | `Span`, `SpanSet` with deciders (`span_set.hthr`); the separation algebra over them, fractions, an access map and the store frame theorem (`docs/library/separation-algebra-design.md`, built 2026-11-24 in the first wave). |
 | `mut` in the surface | A parser desugaring; the AST's `Param` has no mode, and a `mut self` method is known by its `Mutated` result type alone. `&` is an infix token only. **Since built** (`ownership-parameter-modes`, `sequencing-surface-design.md` §24): `Param::mode`, `x: &T` and `x: &mut T` on any parameter, `&mut place` at a call, the modes readable by a generator (`tactic::modes`). |
-| Erased parameters | A parameter whose type is a proposition (`∥P∥`) or `Erased<A>` is no word of the code wherever it stands, in a function of a laid record and one of a `Bytes(n)`; a call's erased arguments are dropped at any position. The arena's `read` and `store` are `runtime fn`s keeping their found proofs (`runtime-erased-parameters`, §13 item 8). A plain function of words, a span writer, and a compiled caller of a function that takes one are refused by name (`runtime-erased-pure-shadow`). |
+| Erased parameters | A parameter whose type is a proposition (`∥P∥`) or `Erased<A>` is no word of the code wherever it stands, in a function of a laid record and one of a `Bytes(n)`; a call's erased arguments are dropped at any position. The arena's `read` and `store` are `runtime fn`s keeping their found proofs (`runtime-erased-parameters`, §13 item 8). A plain function of words, a span writer, and a compiled caller of a function that takes one were refused by name; **since built** (`runtime-erased-pure-shadow`, §13 item 8), but for a laid record's function calling one of the record that takes one. |
 | `Copy`, `Clone` | No class. |
 
 In flux, and to be worked around rather than through: the loop combinator's
@@ -686,11 +686,21 @@ as a helper; addresses as numbers.
    pin hold at every proof. What is erased reaches compiled code as this:
    the reflector binds the parameter to no variable (a use of it as data is
    refused by name), and every theorem the generator publishes takes it
-   where the function does and holds at every value of it. A plain function
-   of words that takes one is not compiled yet: the shadow `f::erased` (its
-   reflection's meaning, listed in its callers' tables) was tried and taken
-   out, and `runtime-erased-pure-shadow` has where it stopped and the route
-   proposed instead. When the binder mode of
+   where the function does and holds at every value of it. *Built for every
+   shape but loops (2026-11-25, `runtime-erased-pure-shadow`):* a plain
+   function of words and a span writer that take one are compiled from
+   their reflection written out, a closed function of the code's words
+   (`f::words`, or `f::bytes` over a span), and a caller's table lists
+   that, so a compiled caller passes a found proof and its code has no
+   trace of it. What is stated of `f` (`f::reflects`, `f::agrees`,
+   `f::runs_over`) takes a local for each erased parameter where `f` does.
+   The shadow tried first (the reflection's *meaning* as the compiled
+   function) compared two meanings at two worlds, in its pin and in
+   linking; a written-out term has no world in it, so neither comparison
+   arises (`docs/native/runtime-fn-setups-design.md` §16.22). A function
+   of a laid record calling one of the record that takes an erased
+   parameter is still refused (`runtime-record-calls-erased`). When the
+   binder mode of
    `ownership-parameter-modes` lands, an erased mode can lower to this type,
    so the generator keeps one route. Item 4 (an arena's generation changed
    by a `mut self` method) is then an `Erased` field of the receiver or a

@@ -273,9 +273,9 @@ A reflector needs (issue `runtime-body-reflection-requests`):
   record's function, a `Bytes(n)`'s), the published theorem takes a local
   for each erased parameter where the function does and the pin is the
   same conversion at those locals, so it holds at every value of them. A
-  plain function and a span writer are compiled from the function itself,
-  typed by its signature, and taking an erased parameter is refused there
-  (`issues/runtime-erased-pure-shadow.md`).
+  plain function and a span writer that take one are compiled the same
+  way, from the reflection written out (§16.22,
+  `issues/runtime-erased-pure-shadow.md`).
 - **Names.** Globals the setup knows are primitives (§7.1) become `Prim`
   nodes. Runtime fns become `Call`s (§9.2). Any other global is a refusal
   ("`Nat::max` is an ordinary fn: mark it `runtime fn`, or the default setup
@@ -2408,3 +2408,73 @@ record, each run and each published statement read at an open span), the
 arena rows of `runtime_ports_tests` (the outcome and the code's two words)
 and `arena_laws_tests` (a caller matching the outcome, and an arm that
 reads a payload `Full` does not carry, refused).
+
+### 16.22 Erased parameters of a plain function and a span writer: compiled written out (built 2026-11-25)
+
+A plain function of words and a span writer that take an erased
+parameter (a proof, an `Erased<A>`, §3.3) were refused: each is compiled
+from the function itself, typed by its own signature (`Setup::compile`'s
+`typed`), and a caller's table lists the callee as a function of its
+words, so neither had room for a parameter the code does not take. They
+are now compiled the way a laid record's function is: from the
+reflection written out.
+
+- **A plain function** (`runtime_erasing`): its reflection is written out
+  as a closed function of the code's words, `f::words :=
+  Setup::of_erased(f, λ xs… => …)`, each node as the meaning reduces to
+  (`RtWriting::value`: an operator's `Op::sem`, a literal's `Tm::lit`, a
+  value bound through `Setup::once`, a branch through `Setup::either`, a
+  convoyed branch through `Tm::convoy`, a record's constructor and
+  projections, an enum's constructor, a call of the table's entry by its
+  global). `instance Compile(f::words)` is the ordinary plain instance at
+  that term, and the world's entry 0 is the term. `f::reflects` states the
+  meaning against `f` at a local for each erased parameter where `f` takes
+  it, by `refl`; `f::agrees` (and `agrees_also`, `agrees_at`) state the
+  program against `f` the same way, each checked by the one conversion of
+  the written-out body against `f`'s (linear in `f`).
+- **A caller** lists `g::words` where `g` published one (`rt_callee`), so
+  the call `g(x, p)` with a found proof reflects as `Call(j, [x])`, and the
+  caller's own pin compares `g(x, p)` with `g::words(x)` (the callee
+  unfolded once per call site). The linker reads `g::words` back to `g`'s
+  tables and instance (`runtime_erased_source`, `runtime_entry_id`), as it
+  reads `T::m::bytes` back to `T::m`.
+- **A span writer** takes the written-out path of a `Bytes(n)`'s function
+  (`runtime_span_publish` with `meant` and `raw`, `f::bytes :=
+  HWorld::of_record(f, …)`, so it needs `import runtime_data;`), and its
+  `f::reflects` and `f::runs_over` are stated against `f` at the erased
+  locals.
+- **A function that takes none publishes exactly what it did**: its mask
+  of erased binders is empty, the theorems' telescopes are
+  `runtime_params_at`'s, and every statement is at `f`.
+
+**Why the shadow failed and this does not.** The shadow tried first,
+`f::erased := f::rt.meaning(world)`, put a meaning where the function
+goes. The instance's pin at a neutral file then compared two meanings at
+`World(…, [])` and `World(…, b)`, argument by argument, failed at the
+file and unfolded both past the conversion budget; linking compared the
+shadow with itself at two worlds the same way and exhausted the
+address-space rail. A written-out term has no world in it: its pin is
+the meaning unfolded once against a λ that names the same globals, the
+conversion an ordinary function's pin already is, and the link meets
+`Global(g::words)` as it meets any callee. No lemma that a function lent
+nothing means the same at every file is needed, since no two meanings
+are compared.
+
+**Not built**, each refused by name: a loop or recursion taking an
+erased parameter (`issues/loops-on-one-combinator.md` round 4); a plain
+function lent a span or taking an enum or a record beside its erased
+parameter, or whose body has a `match` on an enum, a fold or a byte of a
+span (none is written out by `RtWriting` yet); a function of a laid
+record calling one of the record that takes an erased parameter. Each is
+in `issues/runtime-record-calls-erased.md` or
+`issues/runtime-erased-written-out-shapes.md`. `compile-x86` states an
+export's agreement at its words, so an export that itself takes an
+erased parameter is not certified yet (its callers are).
+
+Probes: `lib/_tests/native/runtime/runtime_erased_tests.hthr` (a proof
+after the words, an `Erased<List<Nat>>` first, two proofs around a let
+and a branch, each at literal words and open ones; callers finding the
+proof from a literal and from their own test, and one passing its own
+proof on; a record function calling a plain one; a span writer's bytes
+and its run at an open proof; controls: an erased value computed with, a
+missing proof, a loop).
