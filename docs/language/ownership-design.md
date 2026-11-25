@@ -1393,6 +1393,10 @@ costs a bracket.
 
 ## 16. The order of building
 
+**§17 supersedes this section's plan for the back half** (package 5 and
+"the typed-cells change is made additively"), and gives the stages. The
+other packages stand as the content of §17.5's stages 4 to 7.
+
 From the design partner's reading of the back half (sizes measured; how
 local the typed-cells change is in the two largest lowering modules is not
 yet known).
@@ -1486,3 +1490,124 @@ Package 5 is reordered by this: the id kinds and the per-node check first
 (the change that replaces a proved check), the new nodes over the injection
 second, then the per-state lending with package 6, and the call contracts
 last, when a customer passes a structure holding references to a callee.
+
+## 17. The back half's target, and the staging (2026-11-25, revised)
+
+This replaces §16's "the typed-cells change is made additively" and its
+package 5. It was written after Minus's charge (§14 item 18) and a reading
+of where the call contract is stated. §16's packages 1 to 4 and 6 to 11
+stand as the content of stages 4 to 7 below.
+
+### 17.1 Why the contract is stated ninety times
+
+Two causes. **Buffers are numbered per scope**: a callee's buffer `k` is its
+caller's view `k`, so every call that lends a window renumbers memory, and
+that alone is why `Lending`, `Site::CallsLent`, `Views`, `Viewed`,
+`Lendable`, the `Lend` node and experiment three's `Carved` exist (`Carved`
+and `Viewed` are one record, `Loan::carve` and `Loan::view` one proof: the
+experiment re-derived the views lemma under a new name). And **the meaning
+is stated several ways**: `Callees`, `Answers`, `Defines`, `Effects`,
+`Writers`, `Readers`, a relation or a function crossed with the file fixed
+or threaded, with definedness beside, and bridges proving one is another.
+At the machine the contract grew in tiers (`Unchanged`, `Wrote`, `WroteIn`
+over one lending, any lending, parts of spans), each derived from the next.
+
+### 17.2 The one statement
+
+At the bytes level, one partial function, a missing answer covering both
+"not defined" and "no meaning":
+
+```heather
+record Answer { words: List<Value>, heap: Heap }
+fn Calls() → Type { Nat → List<Value> → Heap → Option<Answer> }
+fn run(p: Program, f: Nat, args: List<Value>, heap: Heap) → Option<Answer>
+```
+
+A pass proves one thing, that every answer of its input is an answer of its
+output. At the machine, one contract over one lending for the whole run
+(`Site::Meets`): before the call the arguments are passed and the heap is
+injected into memory; after it the answer is in place, the kept registers
+are kept, the stores were inside the lending, and the answer's heap is
+injected. Since the injection after the call pins every byte of every
+block, "the callee left alone what it was not lent" is not a machine
+statement: it is a fact about the answer's heap, proved above.
+
+The lemma interface is one module: `Loan` and its laws; `WroteIn` with its
+order and frame rule; `Injected` with one lemma per memory operation; and
+`Sub` (a part of a span) used once, where an export's borrows are parts of
+its caller's spans. A reference in a lent block is then a change to
+`Injected` and its operation lemmas and to nothing else.
+
+### 17.3 The bytes level as the design wants it
+
+- **Values** are words and references (a block and a byte offset); a length
+  is a word beside a reference. Every id has a kind, checked by validity as
+  widths are. That check replaces the per-function `placeless`, and
+  placelessness is one theorem of the language (a run commutes with a
+  renaming of blocks).
+- **Memory is bytes with a shadow**, which is the right definition here and
+  not the cheap one: layout has happened, and memory is bytes some eight of
+  which are a reference. (Level 2 has typed cells and no sizes.) The bytes
+  under an entry are zero by invariant, so a heap is canonical.
+- **Blocks are few and fixed for a run**: the spans lent from outside and
+  the supply. Nothing creates a block here; a level-2 block is a window of
+  the supply, and `new` and `dead` are calls into the allocator, which is a
+  function of this language over the supply under its laws.
+- **Nodes**: the word operations as built; through a reference, a load and
+  a store at a width, a load and a store of a reference, an offset, a typed
+  range copy. No node names a buffer by number. A load or a store is
+  accepted under a site fact (in bounds, not cutting a reference, inside
+  what may be written), of which a comparison on the path is one prover.
+- **A call** is an ordinary call on values, under `Site::Meets`. A window is
+  two parameters. A system call is one more kind of callee, answered by the
+  world's model, in the contract from the first day.
+
+### 17.4 Against what is built, and the choice
+
+Of `lib/native/function_ir`: the word operations, the optimizer's rules,
+loops, certificates, register placement and the structured lowering are
+already the target; evaluation, the passes, linking, the compile theorem
+and exports are the target with a different memory; and `placeless`, views,
+lends, the buffer homes, the several meanings and the contract's tiers and
+bridges exist only because of how memory and calls were stated.
+
+**Chosen: a new memory and call layer beside the old, then one switch.**
+The new node type wraps the existing word nodes, whose lowering already
+proves the buffer-free case and is cited unedited; the memory nodes, calls
+under `Site::Meets`, loops, linking, the compile theorem, exports and the
+passes are new modules against one meaning. The additive shadow was
+rejected: it keeps every meaning and tier and adds one more, with buffer
+numbers and references both naming memory. The end state has the program
+compiler (`native_compile*`, `native_source*`, `native_build*`) folded in:
+with the world in `Calls`, the tools become functions over `Io` and that
+second compiler goes, which is where `native-one-compiler` was heading.
+
+Not yet known: whether the structured-control lowering and the frame proofs
+are generic in the body's invariant, so cited, or must be redone. Reading
+those two proofs opens stage 2.
+
+### 17.5 Stages
+
+The rule: **a layer exists once, and a customer is on exactly one
+pipeline.** Two pipelines may stand beside each other; one statement may
+not have two spellings in use.
+
+| Stage | Replaces or adds | Verified by |
+|---|---|---|
+| 1 | Replaces the x86 memory tiers and `x86_64_views` with the contract module; the old names survive only as abbreviations the old lowering cites | the suite; every existing certificate unchanged |
+| 2 | Adds the bytes level and its lowering beside FunctionIR's memory half, with a translation from the old programs (buffer `k` becomes a reference parameter) | its probes; every row of `crates/linked`'s exports compiled both ways gives the same assembly, or a reviewed difference |
+| 3 | Replaces: `compile-x86` goes through the new layer; the old memory and call modules, the buffer nodes and stage 1's abbreviations are deleted in the same change | `scripts/linked --check`; the native gates; the plain suite |
+| 4 | Adds level 1 (the checker), level 2 and `sharing_sound`, placement, cost, deaths: a library stack with no customer, landed package by package against fixed interfaces | the library gate; the experiments' programs through the real modules |
+| 5 | Adds the surface and the one reflector, not yet selected | probes; each existing customer's new declarations published beside the old in a scratch build, counting which library theorems fail to restate |
+| 6 | Replaces: `runtime fn` selects the new generator; every `runtime fn` moves at once; the four reflected languages, their meanings, the generator and the old facts are deleted in the same change | the plain suite; `scripts/linked` |
+| 7 | Replaces the library's old path vocabulary (`Footprint`, `KeyIn`, `PathSame`, the three `*_paths` modules), and the tools and the program compiler | the suite; the tools' tests |
+
+Stage 3 is the largest safe single move: no customer has a hand proof at
+the back half, every certificate is regenerated by the compile, and stage 2
+has shown the output is the same. Migrating the memory modules one at a
+time would put two heap types in one proof. Stage 6 is the riskier one,
+since customers cite generated names and the arena and the word map lean on
+the held meaning; stage 5's scratch build is its test.
+
+The experiments' modules (`place_check`, `call_check`, `reference_cells`)
+are deleted when the real modules exist.
