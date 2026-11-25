@@ -1,6 +1,6 @@
 ---
 title: References held in memory down to x86: a shadow beside the bytes and an injection of blocks
-status: open
+status: closed
 labels: [ownership,native,design]
 area: heather-in-heather
 milestone: [nh-ownership]
@@ -58,3 +58,4 @@ The toy's theorem is proved through to x86 for the one program, the controls are
 
   **Where it stops.** The theorem is over the instructions' normal steps, not fetched code at labels in a frame; that plumbing is the real lowering's and is the same for these instructions. The toy has no allocation (Q3 is answered by `Loan::carve` and `wrote_in_parents`, not by a program that allocates) and no call. Verification: each module checked cold with `--limits dev`; `scripts/test --pr` recorded in the next entry.
 - 2026-11-25: Verified: `scripts/test --pr` at 3b60ce6: `== suite: 4139 passed, 0 failed, 3 ignored ==` (the first run's one failure was the Heather formatter gate on a trailing blank line, fixed and the whole suite rerun).
+- 2026-11-25: 2026-11-25: Closed: its done-when was met in round 1, and its follow-ups are answered or superseded (`reference-cells-*`, closed today). The experiment's modules (`lib/native/reference_cells/`) and probes are deleted by [[bytes-level-on-the-contract]]: the heap is the contract's, the language is the bytes level, and the probes are re-expressed in `lib/_tests/native/bytes_level/bytes_level_tests.hthr` (`cells_*`, `word_of_reference_stuck`, `replaced_reads_word`, `reference_of_bytes_stuck`, the cut and copy probes) and `lib/_tests/std/arch/x86_64/x86_64_memory_contract_tests.hthr` (`overlapping_not_injected`). The toy lowering's probes (`copy_lowers`, `shared_register_refused`) have no counterpart until [[bytes-level-lowering]] exists; their subject is that issue's done-when.

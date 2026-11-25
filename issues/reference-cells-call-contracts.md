@@ -1,6 +1,6 @@
 ---
 title: References held across calls: the file in FunctionIR's call contracts with a shadow
-status: open
+status: closed
 labels: [ownership,native,design]
 area: heather-in-heather
 milestone: [nh-ownership]
@@ -26,3 +26,7 @@ A function that stores a reference into a block lent to a callee, and a callee t
 ## What it assumes from elsewhere
 
 - **[[ownership-reference-cells-spike]]** owns the injection (`Injected`) and the toy's store theorems. Assumed here: only that the injection at an empty shadow is `Stack::InMemory`.
+
+## Log
+
+- 2026-11-25: 2026-11-25: Closed, superseded ([[bytes-level-on-the-contract]]): the generalising route was taken, at the bytes level rather than in FunctionIR. A call there is an ordinary call on values over the one `Heap` (`x86_64_memory_contract`, a shadow of references included), under `Site::Meets` (`x86_64_call_contract`), so a reference stored in a block lent to a callee is read through by the callee as by any code. FunctionIR keeps `Buffers()` until stage 3 deletes its memory half; `Heap::of` and `in_memory_injected` remain its instance at an empty shadow. The compiled case is [[bytes-level-lowering]]'s.

@@ -1,0 +1,469 @@
+// The bytes level's memory (docs/language/ownership-design.md §17.3, §17.6;
+// issues/bytes-level-language.md, issues/bytes-level-on-the-contract.md):
+// the machine contract's heap, which blocks a run may write, and renaming.
+//
+// - A run's memory is x86_64_memory_contract's `Heap`: blocks of bytes by
+//   number, a shadow of the references held among them, and which bytes
+//   are undefined. Every operation is the contract's, one of two: a take
+//   (`Heap::take`) reads a piece, a put (`Heap::put`) writes one, where the
+//   range fits (`Heap::fits`: in its block, cutting no reference) and, for
+//   a put, its block may be written. A load of a word is `Heap::read_bytes`
+//   read as a number (`Heap::load`, little-endian as FunctionIR's
+//   `buffer_word`); a load of a reference is `Heap::load_ref`; a store of a
+//   word a put of `Piece::plain` bytes; a store of a reference a put of
+//   `Piece::reference`; a typed copy `Heap::copy`. Their site facts are the
+//   contract's (`Heap::take_some`, `put_some`, `read_bytes_some`,
+//   `copy_some`), and so are the canonical heap and its lemmas
+//   (`Heap::piece_canonical`, `Heap::placed_canonical`).
+// - What is fixed for a run about its blocks is apart from the heap
+//   (`Blocks`: which the run may store into), passed to a put as its
+//   `written`. At an injection under a lending, a block the run may write is
+//   a span the lending lets it write where `Blocks::Lent` holds; that is the
+//   one fact a lowering needs of it.
+// - Renaming blocks (`HeapRenamed`): a take of a renamed heap is the
+//   renamed take, a put the renamed put (`Heap::take_renames`,
+//   `put_renames`). Nothing here reads which block a reference names
+//   beyond following it.
+import x86_64_memory_contract;
+import x86_64_store;
+import bitvec;
+import bitvec_bytes;
+import vector;
+import bool;
+import list;
+import list_window;
+import logic;
+import nat;
+import option;
+import omega;
+
+// ---------------------------------------------------------------------------
+// Which blocks a run may write
+
+// What is fixed for a run about its blocks: which it may store into. (A
+// block's length is its bytes', which no operation changes.)
+record Blocks { written: Nat → Bool }
+
+// Every block the run may write is a span the lending lets it write: then
+// each put the run makes is a store the lending allows
+// (`Heap::put_lent`).
+fn Blocks::Lent(self blocks: Blocks, spans: Spans) → Type { (b: Nat) → blocks.written(b) = True → spans.written(b) = True }
+
+// A put the run makes, under a lending whose spans are as long as the
+// heap's blocks: a store into a written span, from a byte inside it, as far
+// as the span goes; the shape `Stack::Put` and `Loan::store_injected` ask.
+theorem Heap::put_lent(self heap: Heap, blocks: Blocks, spans: Spans, lent: blocks.Lent(spans), sizes: (b: Nat) → heap.bytes(b).len() = spans.size(b),
+    loc: Loc, piece: Piece, after: Heap, put: heap.put(blocks.written, loc, piece) = Some(after)):
+    (spans.written(loc.block) = True) ∧ ((loc.offset + piece.bytes.len() <= spans.size(loc.block)) ∧ (heap.placed(loc, piece) = after)) {
+    let facts = heap.put_some(blocks.written, loc, piece, after, put);
+    let fits = heap.fits_parts(loc, piece.bytes.len(), facts.right.left).left;
+    ⟨lent(loc.block, facts.left), ⟨omega(fits, sizes(loc.block)), facts.right.right⟩⟩
+}
+
+// ---------------------------------------------------------------------------
+// Words in bytes
+
+// The `n` bytes from the first as a number, the first the least
+// significant: what a load of `n` bytes reads (FunctionIR's `buffer_word`).
+fn little_endian(bytes: List<BitVec(8)>, n: Nat) → Nat { BitVec::of_bytes_le(bytes.vector_of(n, BitVec::zero())).toNat() }
+
+// The `n` low bytes of a word of `8 * n` bits, the least significant first:
+// what a store of `n` bytes writes (FunctionIR's `store_word`).
+fn word_piece(n: Nat, word: BitVec(8 * n)) → List<BitVec(8)> { vector_entries(word.bytes_le(n)) }
+
+// A load: plain bytes read as a number.
+fn Heap::load(self heap: Heap, loc: Loc, n: Nat) → Option<Nat> {
+    match heap.read_bytes(loc, n) { None => None, Some(bytes) => Some(little_endian(bytes, n)) }
+}
+
+theorem Heap::load_some(self heap: Heap, loc: Loc, n, x: Nat, loaded: heap.load(loc, n) = Some(x)):
+    Exists<List<BitVec(8)>>(λ bytes => (heap.read_bytes(loc, n) = Some(bytes)) ∧ (little_endian(bytes, n) = x)) {
+    (match heap.read_bytes(loc, n) as λ o => heap.read_bytes(loc, n) = o → (match o { None => None, Some(bytes) => Some(little_endian(bytes, n)) }) = Some(x) →
+            Exists<List<BitVec(8)>>(λ bytes => (heap.read_bytes(loc, n) = Some(bytes)) ∧ (little_endian(bytes, n) = x)) {
+        None => λ _ none => absurd(none),
+        Some(bytes) => λ read some => Exists(bytes, ⟨read, Option::some_inj(little_endian(bytes, n), x, some)⟩),
+    })(refl, loaded)
+}
+
+// ---------------------------------------------------------------------------
+// Canonical, kept by each operation (the contract's lemmas, at its partial
+// forms)
+
+theorem Heap::take_canonical(self heap: Heap, loc: Loc, n: Nat, piece: Piece, taken: heap.take(loc, n) = Some(piece), canonical: heap.Canonical()):
+    piece.Canonical() {
+    let facts = heap.take_some(loc, n, piece, taken);
+    j(facts.right, λ p _ => p.Canonical(), heap.piece_canonical(canonical, loc, n, heap.fits_parts(loc, n, facts.left).left))
+}
+
+theorem Heap::put_canonical(self heap: Heap, written: Nat → Bool, loc: Loc, piece: Piece, after: Heap, put: heap.put(written, loc, piece) = Some(after),
+    canonical: heap.Canonical(), piece_canonical: piece.Canonical()): after.Canonical() {
+    let facts = heap.put_some(written, loc, piece, after, put);
+    j(facts.right.right, λ a _ => a.Canonical(),
+        heap.placed_canonical(canonical, loc, piece, heap.fits_parts(loc, piece.bytes.len(), facts.right.left).left, piece_canonical))
+}
+
+// So every put of a canonical piece keeps a heap canonical, a copy among
+// them: what it puts is a take's piece.
+theorem Heap::copy_canonical(self heap: Heap, written: Nat → Bool, target, source: Loc, n: Nat, after: Heap,
+    copied: heap.copy(written, target, source, n) = Some(after), canonical: heap.Canonical()): after.Canonical() {
+    let facts = heap.copy_some(written, target, source, n, after, copied);
+    heap.put_canonical(written, target, heap.piece(source, n), after, facts.right, canonical,
+        heap.take_canonical(source, n, heap.piece(source, n), facts.left, canonical))
+}
+
+// ---------------------------------------------------------------------------
+// Renaming blocks
+
+record Renaming { there: Nat → Nat, back: Nat → Nat, back_there: (b: Nat) → back(there(b)) = b, there_back: (c: Nat) → there(back(c)) = c }
+
+fn Loc::rename(self loc: Loc, r: Renaming) → Loc { Loc(r.there(loc.block), loc.offset) }
+
+fn Pointer::rename(self e: Pointer, r: Renaming) → Pointer { Pointer(r.there(e.block), e.at, e.target.rename(r)) }
+
+fn rename_shadow(r: Renaming, shadow: List<Pointer>) → List<Pointer> {
+    match shadow { Nil => Nil, Cons(e, rest) => Cons(e.rename(r), rename_shadow(r, rest)) }
+}
+
+fn Slot::rename(self s: Slot, r: Renaming) → Slot { Slot(s.at, s.target.rename(r)) }
+
+fn rename_slots(r: Renaming, slots: List<Slot>) → List<Slot> {
+    match slots { Nil => Nil, Cons(s, rest) => Cons(s.rename(r), rename_slots(r, rest)) }
+}
+
+fn Piece::rename(self piece: Piece, r: Renaming) → Piece { Piece(piece.bytes, rename_slots(r, piece.slots), piece.undefined) }
+
+// `renamed` is `m` with every block `b` called `r.there(b)`.
+record HeapRenamed(r: Renaming, m, renamed: Heap) {
+    bytes: (c: Nat) → renamed.bytes(c) = m.bytes(r.back(c)),
+    shadow: renamed.shadow = rename_shadow(r, m.shadow),
+    undefined: (c, i: Nat) → renamed.undefined(c, i) = m.undefined(r.back(c), i),
+}
+
+// `renamed` is `blocks` with every block `b` called `r.there(b)`.
+record BlocksRenamed(r: Renaming, blocks, renamed: Blocks) {
+    written: (c: Nat) → renamed.written(c) = blocks.written(r.back(c)),
+}
+
+// Two answers related by `R`: both none, or both some and related.
+fn Related<T>(R: T → T → Type, left, right: Option<T>) → Type {
+    match left {
+        None => match right { None => True, Some(_) => False },
+        Some(a) => match right { None => False, Some(b) => R(a, b) },
+    }
+}
+
+fn heap_renamed(r: Renaming) → Heap → Heap → Type { λ (a: Heap) (b: Heap) => HeapRenamed(r, a, b) }
+
+// Two heaps alike: none both, or the second the first renamed.
+fn HeapAlike(r: Renaming, left, right: Option<Heap>) → Type { Related<Heap>(heap_renamed(r), left, right) }
+
+// What follows from related answers is related, where it follows from
+// related values: the three ways a run's steps are chained.
+theorem related_then<A, T>(Ra: A → A → Type, R: T → T → Type, {o, o2: Option<A>}, rel: Related<A>(Ra, o, o2), {k, k2: A → Option<T>},
+    each: (x, y: A) → Ra(x, y) → Related<T>(R, k(x), k2(y))): Related<T>(R, o.and_then(k), o2.and_then(k2)) {
+    (match o as λ a => (b: Option<A>) → Related<A>(Ra, a, b) → Related<T>(R, a.and_then(k), b.and_then(k2)) {
+        None => λ b => match b {
+            None => λ _ => trivial,
+            Some(_) => λ never => false_elim(never),
+        },
+        Some(x) => λ b => match b {
+            None => λ never => false_elim(never),
+            Some(y) => λ h => each(x, y, h),
+        },
+    })(o2, rel)
+}
+
+// The second the first renamed by `g`.
+theorem related_map_then<A, T>(R: T → T → Type, g: A → A, {o, o2: Option<A>}, same: o2 = o.map(g), {k, k2: A → Option<T>},
+    each: (x: A) → Related<T>(R, k(x), k2(g(x)))): Related<T>(R, o.and_then(k), o2.and_then(k2)) {
+    rewrite(same, match o { None => trivial, Some(x) => each(x) })
+}
+
+// The second the first.
+theorem related_same_then<A, T>(R: T → T → Type, {o, o2: Option<A>}, same: o2 = o, {k, k2: A → Option<T>},
+    each: (x: A) → Related<T>(R, k(x), k2(x))): Related<T>(R, o.and_then(k), o2.and_then(k2)) {
+    rewrite(same, match o { None => trivial, Some(x) => each(x) })
+}
+
+// Answers related by "the second is the first under `g`" are an equation.
+theorem related_eq_map<A>(g: A → A, {o, o2: Option<A>}, rel: Related<A>(λ (a: A) (b: A) => b = g(a), o, o2)): o2 = o.map(g) {
+    (match o as λ a => (b: Option<A>) → Related<A>(λ (x: A) (y: A) => y = g(x), a, b) → b = a.map(g) {
+        None => λ b => match b { None => λ _ => refl, Some(_) => λ never => false_elim(never) },
+        Some(_) => λ b => match b {
+            None => λ never => false_elim(never),
+            Some(_) => λ h => cong_fn<A, Option<A>>(λ v => Some(v), h),
+        },
+    })(o2, rel)
+}
+
+// What related answers say alike.
+theorem related_map_eq<T, B>(R: T → T → Type, f: T → B, alike: (a, b: T) → R(a, b) → f(b) = f(a), {o, o2: Option<T>}, rel: Related<T>(R, o, o2)):
+    o2.map(f) = o.map(f) {
+    (match o as λ a => (b: Option<T>) → Related<T>(R, a, b) → b.map(f) = a.map(f) {
+        None => λ b => match b { None => λ _ => refl, Some(_) => λ never => false_elim(never) },
+        Some(x) => λ b => match b {
+            None => λ never => false_elim(never),
+            Some(y) => λ h => cong_fn<B, Option<B>>(λ v => Some(v), alike(x, y, h)),
+        },
+    })(o2, rel)
+}
+
+theorem Renaming::there_same(self r: Renaming, a, b: Nat): r.there(a).same(r.there(b)) = a.same(b) {
+    match a.eq_dec(b) {
+        Inl(equal) => trans(r.there(a).same_of_eq(r.there(b), cong_fn<Nat, Nat>(λ x => r.there(x), equal)), sym(a.same_of_eq(b, equal))),
+        Inr(differs) => trans(r.there(a).same_false_of(r.there(b), λ same =>
+                differs(trans(sym(r.back_there(a)), trans(cong_fn<Nat, Nat>(λ x => r.back(x), same), r.back_there(b))))),
+            sym(a.same_false_of(b, differs))),
+    }
+}
+
+theorem HeapRenamed::block({r: Renaming}, {m, renamed: Heap}, self rel: HeapRenamed(r, m, renamed), b: Nat):
+    renamed.bytes(r.there(b)) = m.bytes(b) {
+    trans(rel.bytes(r.there(b)), cong_fn<Nat, List<BitVec(8)>>(λ x => m.bytes(x), r.back_there(b)))
+}
+
+theorem BlocksRenamed::writes({r: Renaming}, {blocks, renamed: Blocks}, self rel: BlocksRenamed(r, blocks, renamed), b: Nat):
+    renamed.written(r.there(b)) = blocks.written(b) {
+    trans(rel.written(r.there(b)), cong_fn<Nat, Bool>(λ x => blocks.written(x), r.back_there(b)))
+}
+
+theorem HeapRenamed::undefined_there({r: Renaming}, {m, renamed: Heap}, self rel: HeapRenamed(r, m, renamed), b, i: Nat):
+    renamed.undefined(r.there(b), i) = m.undefined(b, i) {
+    trans(rel.undefined(r.there(b), i), cong_fn<Nat, Bool>(λ x => m.undefined(x, i), r.back_there(b)))
+}
+
+theorem HeapRenamed::flags_at({r: Renaming}, {m, renamed: Heap}, self rel: HeapRenamed(r, m, renamed), b: Nat, n: Nat):
+    (k: Nat) → renamed.flags_at(r.there(b), k, n) = m.flags_at(b, k, n) {
+    match n {
+        Zero => λ k => refl,
+        Succ(rest) => λ k => trans(cong_fn<Bool, List<Bool>>(λ x => Cons(x, renamed.flags_at(r.there(b), k + 1, rest)), rel.undefined_there(b, k)),
+            cong_fn<List<Bool>, List<Bool>>(λ l => Cons(m.undefined(b, k), l), rel.flags_at(b, rest, k + 1))),
+    }
+}
+
+theorem Pointer::rename_overlaps(self e: Pointer, r: Renaming, b, k, n: Nat): e.rename(r).overlaps(r.there(b), k, n) = e.overlaps(b, k, n) {
+    cong_fn<Bool, Bool>(λ v => v && ((e.at + 1).leb(k + n) && (k + 1).leb(e.at + 8)), r.there_same(e.block, b))
+}
+
+theorem Pointer::rename_within(self e: Pointer, r: Renaming, b, k, n: Nat): e.rename(r).within(r.there(b), k, n) = e.within(b, k, n) {
+    cong_fn<Bool, Bool>(λ v => v && (k.leb(e.at) && (e.at + 8).leb(k + n)), r.there_same(e.block, b))
+}
+
+theorem Pointer::rename_cuts(self e: Pointer, r: Renaming, b, k, n: Nat): e.rename(r).cuts(r.there(b), k, n) = e.cuts(b, k, n) {
+    Bool::and_cong(e.rename_overlaps(r, b, k, n), cong_fn<Bool, Bool>(λ v => !v, e.rename_within(r, b, k, n)))
+}
+
+theorem rename_cut(r: Renaming, b, k, n: Nat, shadow: List<Pointer>): cut(rename_shadow(r, shadow), r.there(b), k, n) = cut(shadow, b, k, n) {
+    match shadow {
+        Nil => refl,
+        Cons(e, rest) => Bool::or_cong(e.rename_cuts(r, b, k, n), rename_cut(r, b, k, n, rest)),
+    }
+}
+
+theorem rename_cleared(r: Renaming, b, k, n: Nat, shadow: List<Pointer>):
+    cleared(rename_shadow(r, shadow), r.there(b), k, n) = rename_shadow(r, cleared(shadow, b, k, n)) {
+    match shadow {
+        Nil => refl,
+        Cons(e, rest) => j(sym(e.rename_overlaps(r, b, k, n)), λ v _ =>
+                (match v { True => cleared(rename_shadow(r, rest), r.there(b), k, n), False => Cons(e.rename(r), cleared(rename_shadow(r, rest), r.there(b), k, n)) }) =
+                    rename_shadow(r, match e.overlaps(b, k, n) { True => cleared(rest, b, k, n), False => Cons(e, cleared(rest, b, k, n)) }),
+            (match e.overlaps(b, k, n) as λ v =>
+                (match v { True => cleared(rename_shadow(r, rest), r.there(b), k, n), False => Cons(e.rename(r), cleared(rename_shadow(r, rest), r.there(b), k, n)) }) =
+                    rename_shadow(r, match v { True => cleared(rest, b, k, n), False => Cons(e, cleared(rest, b, k, n)) }) {
+                True => rename_cleared(r, b, k, n, rest),
+                False => cong_fn<List<Pointer>, List<Pointer>>(λ l => Cons(e.rename(r), l), rename_cleared(r, b, k, n, rest)),
+            })),
+    }
+}
+
+theorem rename_slots_within(r: Renaming, b, k, n: Nat, shadow: List<Pointer>):
+    slots_within(rename_shadow(r, shadow), r.there(b), k, n) = rename_slots(r, slots_within(shadow, b, k, n)) {
+    match shadow {
+        Nil => refl,
+        Cons(e, rest) => j(sym(e.rename_within(r, b, k, n)), λ v _ =>
+                (match v { True => Cons(Slot(e.at - k, e.target.rename(r)), slots_within(rename_shadow(r, rest), r.there(b), k, n)),
+                    False => slots_within(rename_shadow(r, rest), r.there(b), k, n) }) =
+                    rename_slots(r, match e.within(b, k, n) { True => Cons(Slot(e.at - k, e.target), slots_within(rest, b, k, n)),
+                        False => slots_within(rest, b, k, n) }),
+            (match e.within(b, k, n) as λ v =>
+                (match v { True => Cons(Slot(e.at - k, e.target.rename(r)), slots_within(rename_shadow(r, rest), r.there(b), k, n)),
+                    False => slots_within(rename_shadow(r, rest), r.there(b), k, n) }) =
+                    rename_slots(r, match v { True => Cons(Slot(e.at - k, e.target), slots_within(rest, b, k, n)), False => slots_within(rest, b, k, n) }) {
+                True => cong_fn<List<Slot>, List<Slot>>(λ l => Cons(Slot(e.at - k, e.target.rename(r)), l), rename_slots_within(r, b, k, n, rest)),
+                False => rename_slots_within(r, b, k, n, rest),
+            })),
+    }
+}
+
+theorem rename_pointers_of(r: Renaming, b, k: Nat, slots: List<Slot>):
+    pointers_of(rename_slots(r, slots), r.there(b), k) = rename_shadow(r, pointers_of(slots, b, k)) {
+    match slots {
+        Nil => refl,
+        Cons(s, rest) => cong_fn<List<Pointer>, List<Pointer>>(λ l => Cons(Pointer(r.there(b), k + s.at, s.target.rename(r)), l), rename_pointers_of(r, b, k, rest)),
+    }
+}
+
+theorem rename_shadow_append(r: Renaming, xs, ys: List<Pointer>): rename_shadow(r, xs ++ ys) = rename_shadow(r, xs) ++ rename_shadow(r, ys) {
+    match xs {
+        Nil => refl,
+        Cons(e, rest) => cong_fn<List<Pointer>, List<Pointer>>(λ l => Cons(e.rename(r), l), rename_shadow_append(r, rest, ys)),
+    }
+}
+
+// Blocks set alike are renamed alike.
+theorem rename_set_block(r: Renaming, bytes, renamed: Nat → List<BitVec(8)>, same: (c: Nat) → renamed(c) = bytes(r.back(c)),
+    b: Nat, now: List<BitVec(8)>, c: Nat): set_block(renamed, r.there(b), now, c) = set_block(bytes, b, now, r.back(c)) {
+    match c.eq_dec(r.there(b)) {
+        Inl(here) => {
+            let back: (r.back(c) = b) = trans(cong_fn<Nat, Nat>(λ x => r.back(x), here), r.back_there(b));
+            trans(j(sym(here), λ x _ => set_block(renamed, r.there(b), now, x) = now, set_block_here(renamed, r.there(b), now)),
+                sym(j(sym(back), λ x _ => set_block(bytes, b, now, x) = now, set_block_here(bytes, b, now))))
+        },
+        Inr(differs) => {
+            let away: (r.back(c) ≠ b) = λ back => differs(trans(sym(r.there_back(c)), cong_fn<Nat, Nat>(λ x => r.there(x), back)));
+            trans(set_block_other(renamed, r.there(b), now, c, differs),
+                trans(same(c), sym(set_block_other(bytes, b, now, r.back(c), away))))
+        },
+    }
+}
+
+theorem HeapRenamed::fits({r: Renaming}, {m, renamed: Heap}, self rel: HeapRenamed(r, m, renamed), loc: Loc, n: Nat):
+    renamed.fits(loc.rename(r), n) = m.fits(loc, n) {
+    Bool::and_cong(cong_fn<List<BitVec(8)>, Bool>(λ l => (loc.offset + n).leb(l.len()), rel.block(loc.block)),
+        cong_fn<Bool, Bool>(λ v => !v, trans(cong_fn<List<Pointer>, Bool>(λ sh => cut(sh, r.there(loc.block), loc.offset, n), rel.shadow),
+            rename_cut(r, loc.block, loc.offset, n, m.shadow))))
+}
+
+// A take of the renamed heap is the renamed take.
+theorem Heap::take_renames(self m: Heap, r: Renaming, renamed: Heap, rel: HeapRenamed(r, m, renamed), loc: Loc, n: Nat):
+    renamed.take(loc.rename(r), n) = m.take(loc, n).map(λ (p: Piece) => p.rename(r)) {
+    let window = λ (l: List<BitVec(8)>) => l.window(loc.offset, loc.offset + n);
+    let piece: (Piece(window(renamed.bytes(r.there(loc.block))), slots_within(renamed.shadow, r.there(loc.block), loc.offset, n),
+                renamed.flags_at(r.there(loc.block), loc.offset, n)) =
+            Piece(window(m.bytes(loc.block)), rename_slots(r, slots_within(m.shadow, loc.block, loc.offset, n)), m.flags_at(loc.block, loc.offset, n))) =
+        rewrite(rel.block(loc.block), rel.shadow, rename_slots_within(r, loc.block, loc.offset, n, m.shadow), rel.flags_at(loc.block, n, loc.offset), refl);
+    j(sym(rel.fits(loc, n)), λ v _ =>
+            (match v { False => None, True => Some(renamed.piece(loc.rename(r), n)) }) = m.take(loc, n).map(λ (p: Piece) => p.rename(r)),
+        (match m.fits(loc, n) as λ v =>
+            (match v { False => None, True => Some(renamed.piece(loc.rename(r), n)) }) =
+                (match v { False => None, True => Some(m.piece(loc, n)) }).map(λ (p: Piece) => p.rename(r)) {
+            False => refl,
+            True => cong_fn<Piece, Option<Piece>>(λ p => Some(p), piece),
+        }))
+}
+
+// A heap with a piece placed where it fits, renamed alike.
+theorem HeapRenamed::put_at({r: Renaming}, {m, renamed: Heap}, self rel: HeapRenamed(r, m, renamed), loc: Loc, piece: Piece,
+    fits: loc.offset + piece.bytes.len() <= m.bytes(loc.block).len()):
+    HeapRenamed(r, m.placed(loc, piece), renamed.placed(loc.rename(r), piece.rename(r))) {
+    let b = loc.block;
+    let k = loc.offset;
+    let now = m.bytes(b).put_window(k, piece.bytes);
+    let n = piece.bytes.len();
+    let fits2: (k + n <= renamed.bytes(r.there(b)).len()) = rewrite(rel.block(b), fits);
+    let shadow: (pointers_of(rename_slots(r, piece.slots), r.there(b), k) ++ cleared(renamed.shadow, r.there(b), k, n) =
+            rename_shadow(r, pointers_of(piece.slots, b, k) ++ cleared(m.shadow, b, k, n))) =
+        rewrite(rel.shadow, rename_cleared(r, b, k, n, m.shadow), rename_pointers_of(r, b, k, piece.slots),
+            sym(rename_shadow_append(r, pointers_of(piece.slots, b, k), cleared(m.shadow, b, k, n))));
+    HeapRenamed(
+        bytes := λ c => trans(renamed.placed_bytes(loc.rename(r), piece.rename(r), fits2, c),
+            trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ l => set_block(λ (d: Nat) => renamed.bytes(d), r.there(b), l.put_window(k, piece.bytes), c),
+                    rel.block(b)),
+                trans(rename_set_block(r, λ (d: Nat) => m.bytes(d), λ (d: Nat) => renamed.bytes(d), rel.bytes, b, now, c),
+                    sym(m.placed_bytes(loc, piece, fits, r.back(c)))))),
+        shadow := shadow,
+        undefined := λ c i => {
+            let rest = k.leb(i) && (i + 1).leb(k + n);
+            let same: (within(r.there(b), k, n, c, i) = within(b, k, n, r.back(c), i)) = cong_fn<Bool, Bool>(λ v => v && rest,
+                trans(cong_fn<Nat, Bool>(λ x => x.same(r.there(b)), sym(r.there_back(c))), r.there_same(r.back(c), b)));
+            trans(renamed.placed_undefined_at(loc.rename(r), piece.rename(r), c, i),
+                trans(j(sym(same), λ v _ => (match v as λ _ => Bool { True => undefined_at(piece.undefined, i - k), False => renamed.undefined(c, i) }) =
+                        (match within(b, k, n, r.back(c), i) as λ _ => Bool { True => undefined_at(piece.undefined, i - k), False => m.undefined(r.back(c), i) }),
+                    match within(b, k, n, r.back(c), i) as λ v => (match v as λ _ => Bool { True => undefined_at(piece.undefined, i - k), False => renamed.undefined(c, i) }) =
+                            (match v as λ _ => Bool { True => undefined_at(piece.undefined, i - k), False => m.undefined(r.back(c), i) }) {
+                        True => refl,
+                        False => rel.undefined(c, i),
+                    }),
+                    sym(m.placed_undefined_at(loc, piece, r.back(c), i))))
+        },
+    )
+}
+
+// A put into the renamed heap is the renamed put.
+theorem Heap::put_renames(self m: Heap, blocks: Blocks, r: Renaming, renamed: Heap, renamed_blocks: Blocks, rel: HeapRenamed(r, m, renamed),
+    blocks_renamed: BlocksRenamed(r, blocks, renamed_blocks), loc: Loc, piece: Piece):
+    HeapAlike(r, m.put(blocks.written, loc, piece), renamed.put(renamed_blocks.written, loc.rename(r), piece.rename(r))) {
+    let n = piece.bytes.len();
+    j(sym(Bool::and_cong(blocks_renamed.writes(loc.block), rel.fits(loc, n))), λ v _ =>
+            HeapAlike(r, m.put(blocks.written, loc, piece), match v { False => None, True => Some(renamed.placed(loc.rename(r), piece.rename(r))) }),
+        (match blocks.written(loc.block) && m.fits(loc, n) as λ v => (blocks.written(loc.block) && m.fits(loc, n)) = v →
+            HeapAlike(r, match v { False => None, True => Some(m.placed(loc, piece)) },
+                match v { False => None, True => Some(renamed.placed(loc.rename(r), piece.rename(r))) }) {
+            False => λ _ => trivial,
+            True => λ both => rel.put_at(loc, piece,
+                m.fits_parts(loc, n, Bool::and_true_parts(blocks.written(loc.block), m.fits(loc, n), both).right).left),
+        })(refl))
+}
+
+// So each operation, renamed. A read of plain bytes reads the same bytes.
+theorem Piece::rename_plain_bytes(self piece: Piece, r: Renaming): piece.rename(r).plain_bytes() = piece.plain_bytes() {
+    match piece.slots { Nil => refl, Cons(_, _) => refl }
+}
+
+theorem Heap::read_bytes_renames(self m: Heap, r: Renaming, renamed: Heap, rel: HeapRenamed(r, m, renamed), loc: Loc, n: Nat):
+    renamed.read_bytes(loc.rename(r), n) = m.read_bytes(loc, n) {
+    j(sym(m.take_renames(r, renamed, rel, loc, n)), λ o _ => (match o { None => None, Some(piece) => piece.plain_bytes() }) = m.read_bytes(loc, n),
+        match m.take(loc, n) as λ o =>
+            (match o.map(λ (p: Piece) => p.rename(r)) as λ _ => Option<List<BitVec(8)>> { None => None, Some(piece) => piece.plain_bytes() }) =
+                (match o { None => None, Some(piece) => piece.plain_bytes() }) {
+            None => refl,
+            Some(piece) => piece.rename_plain_bytes(r),
+        })
+}
+
+// A load reads the same number.
+theorem Heap::load_renames(self m: Heap, r: Renaming, renamed: Heap, rel: HeapRenamed(r, m, renamed), loc: Loc, n: Nat):
+    renamed.load(loc.rename(r), n) = m.load(loc, n) {
+    j(sym(m.read_bytes_renames(r, renamed, rel, loc, n)), λ o _ => (match o { None => None, Some(bytes) => Some(little_endian(bytes, n)) }) = m.load(loc, n),
+        refl)
+}
+
+theorem Piece::rename_referent(self piece: Piece, r: Renaming): piece.rename(r).referent() = piece.referent().map(λ (t: Loc) => t.rename(r)) {
+    match piece.slots {
+        Nil => refl,
+        Cons(s, rest) => match rest {
+            Nil => match s.at {
+                Zero => refl,
+                Succ(_) => refl,
+            },
+            Cons(_, _) => refl,
+        },
+    }
+}
+
+// A load of a reference reads the renamed reference.
+theorem Heap::load_ref_renames(self m: Heap, r: Renaming, renamed: Heap, rel: HeapRenamed(r, m, renamed), loc: Loc):
+    renamed.load_ref(loc.rename(r)) = m.load_ref(loc).map(λ (t: Loc) => t.rename(r)) {
+    j(sym(m.take_renames(r, renamed, rel, loc, 8)), λ o _ =>
+            (match o { None => None, Some(piece) => piece.referent() }) = m.load_ref(loc).map(λ (t: Loc) => t.rename(r)),
+        (match m.take(loc, 8) as λ o =>
+            (match o.map(λ (p: Piece) => p.rename(r)) as λ _ => Option<Loc> { None => None, Some(piece) => piece.referent() }) =
+                (match o { None => None, Some(piece) => piece.referent() }).map(λ (t: Loc) => t.rename(r)) {
+            None => refl,
+            Some(piece) => piece.rename_referent(r),
+        }))
+}
+
+theorem Heap::copy_renames(self m: Heap, blocks: Blocks, r: Renaming, renamed: Heap, renamed_blocks: Blocks, rel: HeapRenamed(r, m, renamed),
+    blocks_renamed: BlocksRenamed(r, blocks, renamed_blocks), target, source: Loc, n: Nat):
+    HeapAlike(r, m.copy(blocks.written, target, source, n), renamed.copy(renamed_blocks.written, target.rename(r), source.rename(r), n)) {
+    j(sym(m.take_renames(r, renamed, rel, source, n)), λ o _ =>
+            HeapAlike(r, m.copy(blocks.written, target, source, n),
+                match o { None => None, Some(piece) => renamed.put(renamed_blocks.written, target.rename(r), piece) }),
+        (match m.take(source, n) as λ o =>
+            HeapAlike(r, match o { None => None, Some(piece) => m.put(blocks.written, target, piece) },
+                match o.map(λ (p: Piece) => p.rename(r)) { None => None, Some(piece) => renamed.put(renamed_blocks.written, target.rename(r), piece) }) {
+            None => trivial,
+            Some(piece) => m.put_renames(blocks, r, renamed, renamed_blocks, rel, blocks_renamed, target, piece),
+        }))
+}

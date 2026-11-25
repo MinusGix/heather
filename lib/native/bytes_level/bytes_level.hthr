@@ -1,0 +1,680 @@
+// The bytes level (docs/language/ownership-design.md §17.2, §17.3, §17.6;
+// issues/bytes-level-language.md): FunctionIR's word operations beside
+// memory reached through references and the world, one meaning over fuel,
+// and validity by kinds.
+//
+// - A value is a word or a reference (x86_64_call_contract's `Value`: a
+//   block and a byte offset); a length is a word beside a reference. A routine's ids
+//   hold its values (`Locals`): its words in a FunctionIR valuation, so the
+//   word operations run as FunctionIR's evaluator runs them, and its
+//   references beside them. An id that was never given a reference holds
+//   none, and reading one there has no meaning.
+// - A run is at a configuration (`Config`): the ids, memory (the machine
+//   contract's `Heap`: blocks, a shadow of references, undefined bytes), and the world (linux_world's `Io`: a
+//   world and the exchanges so far). What is fixed for a run about its
+//   blocks (`Blocks`: which it may write) is beside the program, not in what
+//   a run answers.
+// - Nodes (`Instr`): a FunctionIR node that touches no buffer (`Compute`),
+//   and through a reference a load and a store of 1, 2, 4 or 8 bytes, a
+//   load and a store of a reference, an offset, and a typed range copy. No
+//   node names a buffer by number. Each memory node is one of
+//   bytes_memory's operations, so where it answers is that operation's
+//   site fact.
+// - Regions (`Body`): a leaf of nodes, a sequence, a branch on a one-bit
+//   word, a call, a loop, a system call (`Sys`) and an exit. A loop is a
+//   plain loop: no bound, its passes spent from the fuel. Calls spend fuel
+//   too, so routines may call each other and themselves freely: a program
+//   is tied by fuel. A system call asks the world a command built from words
+//   and the bytes at a window, and its answer lands in a word and the heap;
+//   `read` and `write` are built, the others are a table to fill.
+// - One meaning, a family over fuel: `run(p, blocks, n, f, args, heap, io)`
+//   is `Done` with an answer, `Exited` with a status and the world,
+//   `Going` with the world so far (not finished at this fuel), or `Stuck`
+//   (no meaning: a store that cuts a reference, a load of an undefined
+//   byte, a store into a block the run may not write). It is monotone in
+//   fuel (bytes_level_fuel). `Refines(p, q)`: every `Done` and `Exited` of
+//   `p` is one of `q`, every history `p` reaches while going is a prefix of
+//   one `q` reaches, and every history `q` reaches is a prefix of one `p`
+//   reaches unless `p` gets stuck.
+// - Validity (`Program::valid`): every id has a kind, and each node reads
+//   ids of the kinds it takes, each call passes and binds its callee's
+//   kinds, each loop's state keeps its kinds, and a system call's
+//   descriptor and count are words, so a command carries no reference. It
+//   is what replaces FunctionIR's per-function `placeless`.
+import bytes_memory;
+import x86_64_memory_contract;
+import x86_64_call_contract;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import linux_calls;
+import linux_world;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// Kinds and ids
+
+inductive ValueKind { WordKind, RefKind }
+
+fn ValueKind::same(self a: ValueKind, b: ValueKind) → Bool {
+    match a { WordKind => match b { WordKind => True, RefKind => False }, RefKind => match b { WordKind => False, RefKind => True } }
+}
+
+// An id and the kind of value it holds.
+record Typed { id: Nat, kind: ValueKind }
+
+fn word_id(id: Nat) → Typed { Typed(id, WordKind) }
+
+fn ref_id(id: Nat) → Typed { Typed(id, RefKind) }
+
+// ---------------------------------------------------------------------------
+// A function's values
+
+record Locals { words: Valuation(), refs: Nat → Option<Loc> }
+
+fn Locals::empty() → Locals { Locals(Valuation::zero(), λ (_: Nat) => None) }
+
+fn Locals::word(self l: Locals, id: Nat) → BitVec(64) { l.words(64, id) }
+
+fn Locals::set_word(self l: Locals, id: Nat, value: (w: Nat) → BitVec(w)) → Locals { Locals(Valuation::set(l.words, id, value), l.refs) }
+
+fn Locals::set_ref(self l: Locals, id: Nat, loc: Loc) → Locals {
+    Locals(l.words, λ (y: Nat) => match y.same(id) { True => Some(loc), False => l.refs(y) })
+}
+
+// The value at an id, read as its kind says.
+fn Locals::read(self l: Locals, v: Typed) → Option<Value> {
+    match v.kind { WordKind => Some(Word(l.word(v.id))), RefKind => l.refs(v.id).map(λ (loc: Loc) => Ref(loc)) }
+}
+
+fn read_values(vs: List<Typed>, l: Locals) → Option<List<Value>> {
+    match vs {
+        Nil => Some(Nil),
+        Cons(v, rest) => l.read(v).and_then(λ (x: Value) => read_values(rest, l).and_then(λ (xs: List<Value>) => Some(Cons(x, xs)))),
+    }
+}
+
+// A value bound at an id of its kind; nothing at one of the other kind.
+fn Locals::bind(self l: Locals, v: Typed, value: Value) → Option<Locals> {
+    match v.kind {
+        WordKind => match value { Word(w) => Some(l.set_word(v.id, word_value(w))), Ref(_) => None },
+        RefKind => match value { Word(_) => None, Ref(loc) => Some(l.set_ref(v.id, loc)) },
+    }
+}
+
+// Values bound one for one; nothing where the counts differ.
+fn bind_values(vs: List<Typed>, values: List<Value>, l: Locals) → Option<Locals> {
+    match vs {
+        Nil => match values { Nil => Some(l), Cons(_, _) => None },
+        Cons(v, rest) => match values {
+            Nil => None,
+            Cons(x, xs) => l.bind(v, x).and_then(λ (bound: Locals) => bind_values(rest, xs, bound)),
+        },
+    }
+}
+
+// Where a run is: its values, memory and the world.
+record Config { locals: Locals, memory: Heap, io: Io }
+
+// ---------------------------------------------------------------------------
+// Nodes
+
+// `place`, `target` and `source` name references; `bytes` is a load's or a
+// store's width in bytes (1, 2, 4 or 8, validity's); every other operand
+// names a word.
+inductive Instr {
+    // A FunctionIR node that touches no buffer, run as FunctionIR evaluates
+    // it (function_ir_eval's `Node::step`), where its operands meet its
+    // requirement (a divisor not zero).
+    Compute(node: Node),
+    // The `bytes` bytes at `place`, holding no reference and none undefined,
+    // as a word: the first the least significant.
+    Load(bytes: Nat, output: Nat, place: Nat),
+    // The low `bytes` bytes of the word `value` (read at `8 * bytes` bits)
+    // stored at `place`.
+    Store(bytes: Nat, place: Nat, value: Nat),
+    LoadRef(output: Nat, place: Nat),
+    StoreRef(place: Nat, value: Nat),
+    // The reference `amount` bytes past `place`.
+    Offset(output: Nat, place: Nat, amount: Nat),
+    // The `length` bytes at `source`, references and undefined bytes and
+    // all, written at `target`.
+    Copy(target: Nat, source: Nat, length: Nat),
+}
+
+// A node's effect: it changes the ids and memory, never the world, and
+// where it has no meaning there is none.
+fn Instr::step(self instr: Instr, blocks: Blocks, c: Config) → Option<Config> {
+    match instr {
+        Compute(node) => match node.pure() && node.defined(c.locals.words) {
+            False => None,
+            True => Some(Config(Locals(node.step(c.locals.words), c.locals.refs), c.memory, c.io)),
+        },
+        Load(bytes, output, place) => c.locals.refs(place).and_then(λ (loc: Loc) =>
+            c.memory.load(loc, bytes).and_then(λ (x: Nat) => Some(Config(c.locals.set_word(output, λ (w: Nat) => BitVec::ofNat(x)), c.memory, c.io)))),
+        Store(bytes, place, value) => c.locals.refs(place).and_then(λ (loc: Loc) =>
+            c.memory.put(blocks.written, loc, Piece::plain(word_piece(bytes, c.locals.words(8 * bytes, value)))).and_then(λ (m: Heap) => Some(Config(c.locals, m, c.io)))),
+        LoadRef(output, place) => c.locals.refs(place).and_then(λ (loc: Loc) =>
+            c.memory.load_ref(loc).and_then(λ (target: Loc) => Some(Config(c.locals.set_ref(output, target), c.memory, c.io)))),
+        StoreRef(place, value) => c.locals.refs(place).and_then(λ (loc: Loc) => c.locals.refs(value).and_then(λ (target: Loc) =>
+            c.memory.put(blocks.written, loc, Piece::reference(target)).and_then(λ (m: Heap) => Some(Config(c.locals, m, c.io))))),
+        Offset(output, place, amount) => c.locals.refs(place).and_then(λ (loc: Loc) =>
+            Some(Config(c.locals.set_ref(output, Loc(loc.block, loc.offset + c.locals.word(amount).toNat())), c.memory, c.io))),
+        Copy(target, source, length) => c.locals.refs(target).and_then(λ (to: Loc) => c.locals.refs(source).and_then(λ (from: Loc) =>
+            c.memory.copy(blocks.written, to, from, c.locals.word(length).toNat()).and_then(λ (m: Heap) => Some(Config(c.locals, m, c.io))))),
+    }
+}
+
+fn run_instrs(blocks: Blocks, instrs: List<Instr>, c: Config) → Option<Config> {
+    match instrs { Nil => Some(c), Cons(instr, rest) => instr.step(blocks, c).and_then(λ (after: Config) => run_instrs(blocks, rest, after)) }
+}
+
+// ---------------------------------------------------------------------------
+// System calls (CallShape's `Reads` and `Writes`, native_source, over a
+// reference and a length)
+
+// `fd`, `len` and `result` name words, `buf` a reference.
+inductive SysCall {
+    // Up to `len` bytes from `fd` into the window at `buf`; their count, or
+    // the errno negated, at `result`. The window must lie in a block the run
+    // may write and hold no reference. A failed read leaves it undefined.
+    Read(fd: Nat, buf: Nat, len: Nat, result: Nat),
+    // The `len` plain, defined bytes at `buf` to `fd`; the count written,
+    // or the errno negated, at `result`.
+    Write(fd: Nat, buf: Nat, len: Nat, result: Nat),
+}
+
+fn count_word(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+
+fn errno_word(errno: Nat) → BitVec(64) { BitVec::ofNat(errno).neg() }
+
+// A read's answer landed: the bytes at the window's start, or the window
+// undefined.
+fn read_landed(blocks: Blocks, c: Config, fd: BitVec(64), loc: Loc, n, result: Nat, answer: ReadResult) → Ran<Config> {
+    match answer {
+        ReadBytes(bytes) => Ran::of(c.memory.put(blocks.written, loc, Piece::plain(bytes.take(n))), c.io).then(λ (m: Heap) =>
+            Done(Config(c.locals.set_word(result, word_value(count_word(bytes.take(n).len()))), m, c.io.exchanged(ReadCmd(fd, n), ReadBytes(bytes))))),
+        ReadFailed(errno) => Ran::of(c.memory.put(blocks.written, loc, Piece::undefined(n)), c.io).then(λ (m: Heap) =>
+            Done(Config(c.locals.set_word(result, word_value(errno_word(errno))), m, c.io.exchanged(ReadCmd(fd, n), ReadFailed(errno))))),
+    }
+}
+
+fn no_slots(slots: List<Slot>) → Bool { match slots { Nil => True, Cons(_, _) => False } }
+
+// The window may be read into: written, inside its block, cutting and
+// holding no reference.
+fn Heap::open(self m: Heap, blocks: Blocks, loc: Loc, n: Nat) → Bool {
+    blocks.written(loc.block) && (m.fits(loc, n) && no_slots(slots_within(m.shadow, loc.block, loc.offset, n)))
+}
+
+fn read_into(blocks: Blocks, c: Config, fd: BitVec(64), loc: Loc, n, result: Nat) → Ran<Config> {
+    match c.memory.open(blocks, loc, n) {
+        False => Stuck(c.io),
+        True => read_landed(blocks, c, fd, loc, n, result, c.io.world(c.io.past, ReadCmd(fd, n))),
+    }
+}
+
+fn write_landed(c: Config, fd: BitVec(64), bytes: List<BitVec(8)>, result: Nat, answer: WriteResult) → Ran<Config> {
+    match answer {
+        Wrote(count) => Done(Config(c.locals.set_word(result, word_value(count_word(count))), c.memory, c.io.exchanged(WriteCmd(fd, bytes), Wrote(count)))),
+        WriteFailed(errno) =>
+            Done(Config(c.locals.set_word(result, word_value(errno_word(errno))), c.memory, c.io.exchanged(WriteCmd(fd, bytes), WriteFailed(errno)))),
+    }
+}
+
+fn SysCall::run(self call: SysCall, blocks: Blocks, c: Config) → Ran<Config> {
+    match call {
+        Read(fd, buf, len, result) => Ran::of(c.locals.refs(buf), c.io).then(λ (loc: Loc) =>
+            read_into(blocks, c, c.locals.word(fd), loc, c.locals.word(len).toNat(), result)),
+        Write(fd, buf, len, result) => Ran::of(c.locals.refs(buf), c.io).then(λ (loc: Loc) =>
+            Ran::of(c.memory.read_bytes(loc, c.locals.word(len).toNat()), c.io).then(λ (bytes: List<BitVec(8)>) =>
+                write_landed(c, c.locals.word(fd), bytes, result, c.io.world(c.io.past, WriteCmd(c.locals.word(fd), bytes))))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Regions, routines, programs
+
+inductive Body {
+    Leaf(instrs: List<Instr>),
+    Seq(first: Body, rest: Body),
+    // `yes` where the one-bit word `condition` is set, `no` where it is not.
+    Branch(condition: Nat, yes: Body, no: Body),
+    // Routine `callee` on the values at `arguments`, its answer's values
+    // bound at `results`.
+    Call(callee: Nat, arguments: List<Typed>, results: List<Typed>),
+    // The values at `inputs` start the state; each pass binds it to
+    // `parameters`, on ids of its own, and runs `body`; the bit `exit` set
+    // ends the loop with the values at `next`, which are otherwise the next
+    // pass's state. The final state is bound at `outputs`.
+    Loop(inputs: List<Typed>, parameters: List<Typed>, body: Body, exit: Nat, next: List<Typed>, outputs: List<Typed>),
+    Sys(call: SysCall),
+    // The run ends with the word `status`.
+    Exit(status: Nat),
+}
+
+// How a loop ends: its state, memory and the world.
+record Ended { state: List<Value>, memory: Heap, io: Io }
+
+fn pass_locals(parameters: List<Typed>, state: List<Value>) → Option<Locals> { bind_values(parameters, state, Locals::empty()) }
+
+// The loop's passes from `state`, each a step at one fuel less.
+fn loop_run(step: Nat → Config → Ran<Config>, parameters: List<Typed>, exit: Nat, next: List<Typed>, fuel: Nat) →
+    List<Value> → Heap → Io → Ran<Ended> {
+    match fuel {
+        Zero => λ state m io => Going(io),
+        Succ(rest) => λ state m io => Ran::of(pass_locals(parameters, state), io).then(λ (l: Locals) =>
+            step(rest, Config(l, m, io)).then(λ (after: Config) => Ran::of(read_values(next, after.locals), after.io).then(λ (later: List<Value>) =>
+                match after.locals.words(1, exit).head_bit() {
+                    False => loop_run(step, parameters, exit, next, rest, later, after.memory, after.io),
+                    True => Done(Ended(later, after.memory, after.io)),
+                }))),
+    }
+}
+
+fn Body::run(self body: Body, blocks: Blocks, calls: Calls(), fuel: Nat, c: Config) → Ran<Config> {
+    match body {
+        Leaf(instrs) => Ran::of(run_instrs(blocks, instrs, c), c.io),
+        Seq(first, rest) => first.run(blocks, calls, fuel, c).then(λ (mid: Config) => rest.run(blocks, calls, fuel, mid)),
+        Branch(condition, yes, no) => match c.locals.words(1, condition).head_bit() {
+            True => yes.run(blocks, calls, fuel, c),
+            False => no.run(blocks, calls, fuel, c),
+        },
+        Call(callee, arguments, results) => Ran::of(read_values(arguments, c.locals), c.io).then(λ (args: List<Value>) =>
+            calls(callee, args, c.memory, c.io).then(λ (answer: Answer) =>
+                Ran::of(bind_values(results, answer.words, c.locals), answer.io).then(λ (l: Locals) => Done(Config(l, answer.heap, answer.io))))),
+        Loop(inputs, parameters, inner, exit, next, outputs) => Ran::of(read_values(inputs, c.locals), c.io).then(λ (state: List<Value>) =>
+            loop_run(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, state, c.memory, c.io)
+                .then(λ (end: Ended) => Ran::of(bind_values(outputs, end.state, c.locals), end.io).then(λ (l: Locals) => Done(Config(l, end.memory, end.io))))),
+        Sys(call) => call.run(blocks, c),
+        Exit(status) => Exited(c.locals.word(status), c.io),
+    }
+}
+
+// A routine: its parameters, its body, and the ids it answers.
+record Routine { parameters: List<Typed>, body: Body, results: List<Typed> }
+
+// Routine `f` is the `f`th.
+record Program { routines: List<Routine> }
+
+fn Routine::call(self routine: Routine, blocks: Blocks, calls: Calls(), fuel: Nat, args: List<Value>, heap: Heap, io: Io) → Ran<Answer> {
+    Ran::of(bind_values(routine.parameters, args, Locals::empty()), io).then(λ (l: Locals) =>
+        routine.body.run(blocks, calls, fuel, Config(l, heap, io)).then(λ (after: Config) =>
+            Ran::of(read_values(routine.results, after.locals), after.io).then(λ (words: List<Value>) => Done(Answer(words, after.memory, after.io)))))
+}
+
+// What a program's routines answer at `fuel`: a call spends one, its body
+// runs at the rest, and calls in it are answered at the rest.
+fn program_calls(routines: List<Routine>, blocks: Blocks, fuel: Nat) → Calls() {
+    match fuel {
+        Zero => λ f args heap io => Going(io),
+        Succ(rest) => λ f args heap io => match routines.nth(f) {
+            None => Stuck(io),
+            Some(routine) => routine.call(blocks, program_calls(routines, blocks, rest), rest, args, heap, io),
+        },
+    }
+}
+
+// The meaning.
+fn run(p: Program, blocks: Blocks, fuel, f: Nat, args: List<Value>, heap: Heap, io: Io) → Ran<Answer> {
+    program_calls(p.routines, blocks, fuel, f, args, heap, io)
+}
+
+// ---------------------------------------------------------------------------
+// Refinement
+
+// Two heaps read alike: the same bytes, the same pointers, the same bytes
+// undefined.
+fn Heap::Same(self a: Heap, b: Heap) → Type {
+    ((c: Nat) → b.bytes(c) = a.bytes(c)) ∧ (((c, i: Nat) → b.undefined(c, i) = a.undefined(c, i)) ∧
+        ((e: Pointer) → (Mem(e, a.shadow) → Mem(e, b.shadow)) ∧ (Mem(e, b.shadow) → Mem(e, a.shadow))))
+}
+
+fn Answer::Same(self a: Answer, b: Answer) → Type { (b.words = a.words) ∧ (a.heap.Same(b.heap) ∧ (b.io = a.io)) }
+
+// Where `q` reaches `h`, `p` reaches a history `h` is a prefix of, or `p`
+// gets stuck after a prefix of `h`: what the input owes each history the
+// output has.
+fn Covers(p, q: Program, blocks: Blocks, f: Nat, args: List<Value>, heap: Heap, io: Io, h: List<Exchange>) → Type {
+    Exists<Nat>(λ n => Extends(run(p, blocks, n, f, args, heap, io).past(), h) ∨
+        Exists<List<Exchange>>(λ o => (stuck_after(run(p, blocks, n, f, args, heap, io)) = Some(o)) ∧ Extends(h, o)))
+}
+
+// `q` refines `p`, at every block facts, routine, arguments, heap and world:
+// every `Done` of `p` is one of `q`, alike; every exit of `p` is one of `q`;
+// every history `p` reaches while going is a prefix of one `q` reaches with
+// a meaning; every history `q` reaches with a meaning is a prefix of one `p`
+// reaches, unless `p` gets stuck after a prefix of it; and where `q` gets
+// stuck, `p` got stuck after a prefix of where. The last clause is what
+// makes the relation transitive: without it a stuck middle program says
+// nothing of an input that diverges silently (§17.6).
+fn Refines(p, q: Program) → Type {
+    (blocks: Blocks) → (f: Nat) → (args: List<Value>) → (heap: Heap) → (io: Io) →
+        (((n: Nat) → (a: Answer) → run(p, blocks, n, f, args, heap, io) = Done(a) →
+            Exists<Nat>(λ m => Exists<Answer>(λ b => (run(q, blocks, m, f, args, heap, io) = Done(b)) ∧ a.Same(b)))) ∧
+        (((n: Nat) → (status: BitVec(64)) → (o: Io) → run(p, blocks, n, f, args, heap, io) = Exited(status, o) →
+            Exists<Nat>(λ m => run(q, blocks, m, f, args, heap, io) = Exited(status, o))) ∧
+        (((n: Nat) → (o: Io) → run(p, blocks, n, f, args, heap, io) = Going(o) →
+            Exists<Nat>(λ m => Exists<List<Exchange>>(λ h => (history(run(q, blocks, m, f, args, heap, io)) = Some(h)) ∧ Extends(h, o.past)))) ∧
+        (((m: Nat) → (h: List<Exchange>) → history(run(q, blocks, m, f, args, heap, io)) = Some(h) → Covers(p, q, blocks, f, args, heap, io, h)) ∧
+        ((m: Nat) → (o: List<Exchange>) → stuck_after(run(q, blocks, m, f, args, heap, io)) = Some(o) →
+            Exists<Nat>(λ n => Exists<List<Exchange>>(λ o2 => (stuck_after(run(p, blocks, n, f, args, heap, io)) = Some(o2)) ∧ Extends(o, o2))))))))
+}
+
+theorem Heap::same_refl(self a: Heap): a.Same(a) { ⟨λ c => refl, ⟨λ c i => refl, λ e => ⟨λ m => m, λ m => m⟩⟩⟩ }
+
+theorem Heap::same_trans(self a: Heap, b, c: Heap, ab: a.Same(b), bc: b.Same(c)): a.Same(c) {
+    ⟨λ d => trans(bc.left(d), ab.left(d)), ⟨λ d i => trans(bc.right.left(d, i), ab.right.left(d, i)),
+        λ e => ⟨λ m => (bc.right.right(e)).left((ab.right.right(e)).left(m)), λ m => (ab.right.right(e)).right((bc.right.right(e)).right(m))⟩⟩⟩
+}
+
+theorem Answer::same_trans(self a: Answer, b, c: Answer, ab: a.Same(b), bc: b.Same(c)): a.Same(c) {
+    ⟨trans(bc.left, ab.left), ⟨a.heap.same_trans(b.heap, c.heap, ab.right.left, bc.right.left), trans(bc.right.right, ab.right.right)⟩⟩
+}
+
+theorem extends_refl(h: List<Exchange>): Extends(h, h) { Exists(Nil, refl) }
+
+theorem extends_trans(a, b, c: List<Exchange>, ab: Extends(a, b), bc: Extends(b, c)): Extends(a, c) {
+    Exists(ab.witness ++ bc.witness, trans(ab.proof, trans(cong_fn<List<Exchange>, List<Exchange>>(λ l => ab.witness ++ l, bc.proof),
+        sym(ab.witness.append_assoc(bc.witness, c)))))
+}
+
+// Two prefixes of one history: one is a prefix of the other.
+theorem suffixes_comparable(e1: List<Exchange>): (e2, o, h: List<Exchange>) → e1 ++ o = e2 ++ h → Extends(h, o) ∨ Extends(o, h) {
+    match e1 {
+        Nil => λ e2 o h same => Inr(Exists(e2, same)),
+        Cons(x, t) => λ e2 => match e2 {
+            Nil => λ o h same => Inl(Exists(Cons(x, t), sym(same))),
+            Cons(y, u) => λ o h same => suffixes_comparable(t, u, o, h,
+                cong_fn<List<Exchange>, List<Exchange>>(λ l => match l { Nil => Nil, Cons(_, r) => r }, same)),
+        },
+    }
+}
+
+theorem extends_comparable(x, o, h: List<Exchange>, xo: Extends(x, o), xh: Extends(x, h)): Extends(h, o) ∨ Extends(o, h) {
+    suffixes_comparable(xo.witness, xh.witness, o, h, trans(sym(xo.proof), xh.proof))
+}
+
+// What a run's outcome says of where it is.
+theorem history_past(r: Ran<Answer>, h: List<Exchange>, seen: history(r) = Some(h)): r.past() = h {
+    (match r as λ r0 => history(r0) = Some(h) → r0.past() = h {
+        Done(a) => λ s => Option::some_inj(a.io.past, h, s),
+        Exited(_, o) => λ s => Option::some_inj(o.past, h, s),
+        Going(o) => λ s => Option::some_inj(o.past, h, s),
+        Stuck(_) => λ never => absurd(never),
+    })(seen)
+}
+
+theorem stuck_past(r: Ran<Answer>, o: List<Exchange>, seen: stuck_after(r) = Some(o)): r.past() = o {
+    (match r as λ r0 => stuck_after(r0) = Some(o) → r0.past() = o {
+        Done(_) => λ never => absurd(never),
+        Exited(_, _) => λ never => absurd(never),
+        Going(_) => λ never => absurd(never),
+        Stuck(w) => λ s => Option::some_inj(w.past, o, s),
+    })(seen)
+}
+
+// A run has a meaning where it is, or is stuck there.
+theorem Ran::seen(self r: Ran<Answer>): (history(r) = Some(r.past())) ∨ (stuck_after(r) = Some(r.past())) {
+    match r { Done(_) => Inl(refl), Exited(_, _) => Inl(refl), Going(_) => Inl(refl), Stuck(_) => Inr(refl) }
+}
+
+theorem refines_refl(p: Program): Refines(p, p) {
+    λ blocks f args heap io => ⟨λ n a ran => Exists(n, Exists(a, ⟨ran, ⟨refl, ⟨a.heap.same_refl(), refl⟩⟩⟩)),
+        ⟨λ n status o ran => Exists(n, ran),
+         ⟨λ n o ran => Exists(n, Exists(o.past, ⟨rewrite(ran, refl), extends_refl(o.past)⟩)),
+          ⟨λ m h reached => Exists(m, Inl(j(sym(history_past(run(p, blocks, m, f, args, heap, io), h, reached)), λ x _ => Extends(x, h), extends_refl(h)))),
+           λ m o stuck => Exists(m, Exists(o, ⟨stuck, extends_refl(o)⟩))⟩⟩⟩⟩
+}
+
+// Where the output is, the input covers it: by the fourth clause where
+// the output is stuck, by the third where it has a meaning.
+theorem covers_at(p, q: Program, pq: Refines(p, q), blocks: Blocks, f: Nat, args: List<Value>, heap: Heap, io: Io, m: Nat, h: List<Exchange>,
+    later: Extends(run(q, blocks, m, f, args, heap, io).past(), h)): Covers(p, q, blocks, f, args, heap, io, h) {
+    let clauses = pq(blocks, f, args, heap, io);
+    let r = run(q, blocks, m, f, args, heap, io);
+    // From `p` covering `r.past()`, it covers `h`, a prefix of it.
+    let narrow = λ (n: Nat) (alt: Extends(run(p, blocks, n, f, args, heap, io).past(), r.past()) ∨
+            Exists<List<Exchange>>(λ o => (stuck_after(run(p, blocks, n, f, args, heap, io)) = Some(o)) ∧ Extends(r.past(), o))) =>
+        match alt as λ _ => Covers(p, q, blocks, f, args, heap, io, h) {
+            Inl(further) => Exists(n, Inl(extends_trans(run(p, blocks, n, f, args, heap, io).past(), r.past(), h, further, later))),
+            Inr(stuck) => match extends_comparable(r.past(), stuck.witness, h, stuck.proof.right, later) as λ _ => Covers(p, q, blocks, f, args, heap, io, h) {
+                Inl(before) => Exists(n, Inr(Exists(stuck.witness, ⟨stuck.proof.left, before⟩))),
+                Inr(after) => Exists(n, Inl(j(sym(stuck_past(run(p, blocks, n, f, args, heap, io), stuck.witness, stuck.proof.left)),
+                    λ x _ => Extends(x, h), after))),
+            },
+        };
+    match r.seen() {
+        Inl(seen) => {
+            let got = clauses.right.right.right.left(m, r.past(), seen);
+            narrow(got.witness, got.proof)
+        },
+        Inr(stuck) => {
+            let got = clauses.right.right.right.right(m, r.past(), stuck);
+            narrow(got.witness, Inr(Exists(got.proof.witness, got.proof.proof)))
+        },
+    }
+}
+
+// Refinement is transitive.
+theorem refines_trans(p, q, s: Program, pq: Refines(p, q), qs: Refines(q, s)): Refines(p, s) {
+    λ blocks f args heap io => {
+        let one = pq(blocks, f, args, heap, io);
+        let two = qs(blocks, f, args, heap, io);
+        ⟨λ n a ran => {
+            let b = one.left(n, a, ran);
+            let c = two.left(b.witness, b.proof.witness, b.proof.proof.left);
+            Exists(c.witness, Exists(c.proof.witness, ⟨c.proof.proof.left,
+                a.same_trans(b.proof.witness, c.proof.witness, b.proof.proof.right, c.proof.proof.right)⟩))
+         },
+         ⟨λ n status o ran => {
+            let b = one.right.left(n, status, o, ran);
+            two.right.left(b.witness, status, o, b.proof)
+          },
+          ⟨λ n o ran => {
+             let b = one.right.right.left(n, o, ran);
+             let m = b.witness;
+             let h = b.proof.witness;
+             let rq = run(q, blocks, m, f, args, heap, io);
+             (match rq as λ r0 => rq = r0 → history(r0) = Some(h) →
+                     Exists<Nat>(λ k => Exists<List<Exchange>>(λ h2 => (history(run(s, blocks, k, f, args, heap, io)) = Some(h2)) ∧ Extends(h2, o.past))) {
+                 Done(ans) => λ at seen => {
+                     let c = two.left(m, ans, at);
+                     let same: (c.proof.witness.io.past = h) = trans(cong_fn<Io, List<Exchange>>(λ w => w.past, c.proof.proof.right.right.right),
+                         Option::some_inj(ans.io.past, h, seen));
+                     Exists(c.witness, Exists(c.proof.witness.io.past, ⟨rewrite(c.proof.proof.left, refl),
+                         j(sym(same), λ x _ => Extends(x, o.past), b.proof.proof.right)⟩))
+                 },
+                 Exited(status, w) => λ at seen => {
+                     let c = two.right.left(m, status, w, at);
+                     Exists(c.witness, Exists(w.past, ⟨rewrite(c.proof, refl),
+                         j(sym(Option::some_inj(w.past, h, seen)), λ x _ => Extends(x, o.past), b.proof.proof.right)⟩))
+                 },
+                 Going(w) => λ at seen => {
+                     let c = two.right.right.left(m, w, at);
+                     Exists(c.witness, Exists(c.proof.witness, ⟨c.proof.proof.left,
+                         extends_trans(c.proof.witness, w.past, o.past, c.proof.proof.right,
+                             j(sym(Option::some_inj(w.past, h, seen)), λ x _ => Extends(x, o.past), b.proof.proof.right))⟩))
+                 },
+                 Stuck(_) => λ _ never => absurd(never),
+             })(refl, b.proof.proof.left)
+          },
+          ⟨λ m h reached => {
+              let c = two.right.right.right.left(m, h, reached);
+              match c.proof {
+                  Inl(further) => covers_at(p, q, pq, blocks, f, args, heap, io, c.witness, h, further),
+                  Inr(stuck) => {
+                      let d = one.right.right.right.right(c.witness, stuck.witness, stuck.proof.left);
+                      Exists(d.witness, Inr(Exists(d.proof.witness, ⟨d.proof.proof.left,
+                          extends_trans(h, stuck.witness, d.proof.witness, stuck.proof.right, d.proof.proof.right)⟩)))
+                  },
+              }
+           },
+           λ m o stuck => {
+              let c = two.right.right.right.right(m, o, stuck);
+              let d = one.right.right.right.right(c.witness, c.proof.witness, c.proof.proof.left);
+              Exists(d.witness, Exists(d.proof.witness, ⟨d.proof.proof.left,
+                  extends_trans(o, c.proof.witness, d.proof.witness, c.proof.proof.right, d.proof.proof.right)⟩))
+           }⟩⟩⟩⟩
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Validity: kinds
+
+// The ids bound so far and their kinds, the latest first.
+fn kind_of(kinds: List<Typed>, id: Nat) → Option<ValueKind> {
+    match kinds { Nil => None, Cons(v, rest) => match v.id.same(id) { True => Some(v.kind), False => kind_of(rest, id) } }
+}
+
+fn has_kind(kinds: List<Typed>, id: Nat, kind: ValueKind) → Bool {
+    match kind_of(kinds, id) { None => False, Some(k) => k.same(kind) }
+}
+
+fn has_kinds(kinds: List<Typed>, vs: List<Typed>) → Bool {
+    match vs { Nil => True, Cons(v, rest) => has_kind(kinds, v.id, v.kind) && has_kinds(kinds, rest) }
+}
+
+fn words_bound(kinds: List<Typed>, ids: List<Nat>) → Bool {
+    match ids { Nil => True, Cons(id, rest) => has_kind(kinds, id, WordKind) && words_bound(kinds, rest) }
+}
+
+// An id bound at a kind: refused where it already holds the other kind.
+fn bind_kind(kinds: List<Typed>, v: Typed) → Option<List<Typed>> {
+    match kind_of(kinds, v.id) { None => Some(Cons(v, kinds)), Some(k) => match k.same(v.kind) { True => Some(kinds), False => None } }
+}
+
+fn bind_kinds(kinds: List<Typed>, vs: List<Typed>) → Option<List<Typed>> {
+    match vs { Nil => Some(kinds), Cons(v, rest) => match bind_kind(kinds, v) { None => None, Some(more) => bind_kinds(more, rest) } }
+}
+
+fn kinds_of(vs: List<Typed>) → List<ValueKind> {
+    match vs { Nil => Nil, Cons(v, rest) => Cons(v.kind, kinds_of(rest)) }
+}
+
+fn same_kinds(a, b: List<ValueKind>) → Bool {
+    match a {
+        Nil => match b { Nil => True, Cons(_, _) => False },
+        Cons(x, xs) => match b { Nil => False, Cons(y, ys) => x.same(y) && same_kinds(xs, ys) },
+    }
+}
+
+// A load's or a store's width.
+fn width_ok(bytes: Nat) → Bool { bytes.same(1) || (bytes.same(2) || (bytes.same(4) || bytes.same(8))) }
+
+fn when_ok(ok: Bool, kinds: List<Typed>) → Option<List<Typed>> { match ok { False => None, True => Some(kinds) } }
+
+// What a node needs of the kinds bound before it, and what it binds.
+fn Instr::check(self instr: Instr, kinds: List<Typed>) → Option<List<Typed>> {
+    match instr {
+        Compute(node) => match node.pure() && words_bound(kinds, node.reads()) {
+            False => None,
+            True => bind_kind(kinds, word_id(node_output(node).id)),
+        },
+        Load(bytes, output, place) => match width_ok(bytes) && has_kind(kinds, place, RefKind) {
+            False => None,
+            True => bind_kind(kinds, word_id(output)),
+        },
+        Store(bytes, place, value) => when_ok(width_ok(bytes) && (has_kind(kinds, place, RefKind) && has_kind(kinds, value, WordKind)), kinds),
+        LoadRef(output, place) => match has_kind(kinds, place, RefKind) { False => None, True => bind_kind(kinds, ref_id(output)) },
+        StoreRef(place, value) => when_ok(has_kind(kinds, place, RefKind) && has_kind(kinds, value, RefKind), kinds),
+        Offset(output, place, amount) => match has_kind(kinds, place, RefKind) && has_kind(kinds, amount, WordKind) {
+            False => None,
+            True => bind_kind(kinds, ref_id(output)),
+        },
+        Copy(target, source, length) =>
+            when_ok(has_kind(kinds, target, RefKind) && (has_kind(kinds, source, RefKind) && has_kind(kinds, length, WordKind)), kinds),
+    }
+}
+
+fn check_instrs(instrs: List<Instr>, kinds: List<Typed>) → Option<List<Typed>> {
+    match instrs { Nil => Some(kinds), Cons(instr, rest) => match instr.check(kinds) { None => None, Some(after) => check_instrs(rest, after) } }
+}
+
+// What a routine takes and answers, by kind.
+record Signature { parameters: List<ValueKind>, results: List<ValueKind> }
+
+fn Routine::signature(self routine: Routine) → Signature { Signature(kinds_of(routine.parameters), kinds_of(routine.results)) }
+
+// A call's arguments and results are its callee's kinds.
+fn fits_signature(signatures: Nat → Option<Signature>, callee: Nat, arguments, results: List<Typed>) → Bool {
+    match signatures(callee) {
+        None => False,
+        Some(sig) => same_kinds(kinds_of(arguments), sig.parameters) && same_kinds(kinds_of(results), sig.results),
+    }
+}
+
+fn SysCall::check(self call: SysCall, kinds: List<Typed>) → Option<List<Typed>> {
+    match call {
+        Read(fd, buf, len, result) => match has_kind(kinds, fd, WordKind) && (has_kind(kinds, buf, RefKind) && has_kind(kinds, len, WordKind)) {
+            False => None,
+            True => bind_kind(kinds, word_id(result)),
+        },
+        Write(fd, buf, len, result) => match has_kind(kinds, fd, WordKind) && (has_kind(kinds, buf, RefKind) && has_kind(kinds, len, WordKind)) {
+            False => None,
+            True => bind_kind(kinds, word_id(result)),
+        },
+    }
+}
+
+// What both arms bound alike.
+fn meet_kinds(yes, no: List<Typed>) → List<Typed> { yes.filter(λ (v: Typed) => has_kind(no, v.id, v.kind)) }
+
+fn Body::check(self body: Body, signatures: Nat → Option<Signature>, kinds: List<Typed>) → Option<List<Typed>> {
+    match body {
+        Leaf(instrs) => check_instrs(instrs, kinds),
+        Seq(first, rest) => match first.check(signatures, kinds) { None => None, Some(mid) => rest.check(signatures, mid) },
+        Branch(condition, yes, no) => match has_kind(kinds, condition, WordKind) {
+            False => None,
+            True => match yes.check(signatures, kinds) {
+                None => None,
+                Some(after_yes) => match no.check(signatures, kinds) { None => None, Some(after_no) => Some(meet_kinds(after_yes, after_no)) },
+            },
+        },
+        Call(callee, arguments, results) => match has_kinds(kinds, arguments) && fits_signature(signatures, callee, arguments, results) {
+            False => None,
+            True => bind_kinds(kinds, results),
+        },
+        Loop(inputs, parameters, inner, exit, next, outputs) =>
+            match has_kinds(kinds, inputs) && (same_kinds(kinds_of(inputs), kinds_of(parameters)) &&
+                (same_kinds(kinds_of(next), kinds_of(parameters)) && same_kinds(kinds_of(outputs), kinds_of(parameters)))) {
+                False => None,
+                True => match bind_kinds([], parameters) {
+                    None => None,
+                    Some(start) => match inner.check(signatures, start) {
+                        None => None,
+                        Some(after) => match has_kinds(after, next) && has_kind(after, exit, WordKind) {
+                            False => None,
+                            True => bind_kinds(kinds, outputs),
+                        },
+                    },
+                },
+            },
+        Sys(call) => call.check(kinds),
+        Exit(status) => when_ok(has_kind(kinds, status, WordKind), kinds),
+    }
+}
+
+fn Routine::valid(self routine: Routine, signatures: Nat → Option<Signature>) → Bool {
+    match bind_kinds([], routine.parameters) {
+        None => False,
+        Some(start) => match routine.body.check(signatures, start) { None => False, Some(after) => has_kinds(after, routine.results) },
+    }
+}
+
+// The signatures of a program's routines by number.
+fn program_signatures(routines: List<Routine>) → Nat → Option<Signature> {
+    λ (f: Nat) => routines.nth(f).map(λ (routine: Routine) => routine.signature())
+}
+
+fn routines_valid(signatures: Nat → Option<Signature>, routines: List<Routine>) → Bool {
+    match routines { Nil => True, Cons(routine, rest) => routine.valid(signatures) && routines_valid(signatures, rest) }
+}
+
+// Each routine valid over every routine's signature.
+fn Program::valid(self p: Program) → Bool { routines_valid(program_signatures(p.routines), p.routines) }

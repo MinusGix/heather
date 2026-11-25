@@ -1644,7 +1644,8 @@ the kernel's cost of evaluating the checker on real functions; if it is
 bad, the checker runs on the untrusted evaluator, as reads do.
 
 **What the third experiment found** (2026-11-25,
-[[ownership-reference-cells-spike]], `lib/native/reference_cells/`). The
+[[ownership-reference-cells-spike]], `lib/native/reference_cells/`, deleted
+with `issues/bytes-level-on-the-contract.md`). The
 toy is proved through to x86's instruction steps: a reference stored, loaded
 back and read through, under any `Loan` of its blocks (`Loan::program_runs`),
 the meaning unchanged by renaming blocks (`run_renames`), and both controls
@@ -1773,9 +1774,9 @@ names its instances in `x86_64_memory_tiers.hthr`
   `Calls()` over values meets it through lowering each value to its word.
   The System V definitions it needs (`argument_registers`, `ArgsIn`,
   `Stack::Passed`, `callee_kept`, `answer_registers`) moved into the
-  module from FunctionIR's lowering. It is provisional: the clause for a
-  run still going and the world's place join it with the bytes level's
-  `run`.
+  module from FunctionIR's lowering. It was provisional; its final form,
+  over the bytes level's meaning with the world, is §17.6's second part
+  (`x86_64_call_contract`).
 
 ### 17.3 The bytes level as the design wants it
 
@@ -1849,7 +1850,8 @@ since customers cite generated names and the arena and the word map lean on
 the held meaning; stage 5's scratch build is its test.
 
 The experiments' modules (`place_check`, `call_check`, `reference_cells`)
-are deleted when the real modules exist.
+are deleted when the real modules exist (`reference_cells` on 2026-11-25,
+its probes re-expressed in the bytes level's and the contract's).
 
 ### 17.6 Stage 2's language as built (2026-11-25)
 
@@ -1888,17 +1890,17 @@ one with the counter as one more register.
 
 **The language** (`bytes_level`, as revised the same day by the
 coordinator's round on the world and non-terminating loops). Values are
-words and references (`reference_cells`' `Value`, until the heap's move).
+words and references (`x86_64_call_contract`'s `Value`).
 A run is at a configuration: a routine's ids (its words in a FunctionIR
 valuation, so a wrapped node (`Compute`) runs as FunctionIR's evaluator runs
-it, unedited, and references beside them), memory (the heap and its
-undefined bytes), and the world (`linux_world`'s `Io`). Nodes: `Compute`, a
+it, unedited, and references beside them), memory (the machine contract's
+`Heap`), and the world (`linux_world`'s `Io`). Nodes: `Compute`, a
 load and a store of 1, 2, 4 or 8 bytes, a reference's load and store,
 `Offset` and a typed `Copy`. Regions: a leaf, a sequence, a branch, a call,
 a plain loop, a system call (`Sys`: read and write so far) and `Exit`. The
 one meaning is a family over fuel, `run(p, blocks, n, f, args, heap, io) →
 Ran<Answer>`, where `Ran` is one of `Done`, `Exited`, `Going` with the world
-so far, or `Stuck` (no meaning). It is monotone in fuel (`run_monotone`,
+so far, or `Stuck` with the world it got stuck in (no meaning). It is monotone in fuel (`run_monotone`,
 `run_settled`, `bytes_level_fuel`). Calls and loop passes spend fuel, so
 routines are tied by fuel and not by levels. Validity checks every id's
 kind (`Program::valid`, a system call's descriptor and count among them),
@@ -1927,21 +1929,21 @@ open:
   start. A store is a put of bytes, a reference's store a put of eight zero
   bytes holding it, and a typed copy a take and a put. So there are two
   site facts and two renaming lemmas, and each lowering lemma will be one
-  `Injected` lemma per primitive.
+  `Injected` lemma per primitive. Since the second part these are the
+  contract's own operations, defined once (below).
 - *Canonical by construction*: a reference's bytes and an undefined byte
-  are zero (`Memory::Canonical`, kept by every put and so by every run:
+  are zero (`Heap::Canonical`, kept by every put and so by every run:
   `run_canonical`, `bytes_level_canonical`). That entries are apart from
   each other is kept by construction too but not yet stated; the passes'
   congruence needs it (`issues/bytes-level-passes.md`).
-- *`Refines` has three clauses* (the coordinator's): answers and exits of
-  `p` are `q`'s; a history `p` reaches while going is a prefix of one `q`
-  reaches; a history `q` reaches is a prefix of one `p` reaches unless `p`
-  gets stuck. Heaps are compared as they read (`Memory::Same`); there is no
-  function extensionality. `refines_refl` is proved. Transitivity does not
-  hold as stated: a stuck `q` lets the third clause of `(q, s)` say nothing,
-  while `p`, which `q` refines, may diverge silently. The usual repair is
-  CompCert's: `Stuck` carries the history it was stuck after, and the third
-  clause's exception is "`p` stuck after a prefix of that history".
+- *`Refines`* (the coordinator's three clauses, and a fourth from the
+  second part): answers and exits of `p` are `q`'s; a history `p` reaches
+  while going is a prefix of one `q` reaches; a history `q` reaches with a
+  meaning is a prefix of one `p` reaches unless `p` gets stuck after a
+  prefix of it; and where `q` gets stuck, `p` got stuck after a prefix of
+  where. Heaps are compared as they read (`Heap::Same`); there is no
+  function extensionality. `refines_refl` and `refines_trans` are proved
+  (below).
 - *Widths stay FunctionIR's*: validity checks kinds, not the widths of word
   nodes, which the leaf's lowering tracks as it does today.
 - *`Offset` adds a word as a number*: a reference below its block's start
@@ -1954,6 +1956,69 @@ linear in the language's constructors. `run` on the probes is a few
 thousand kernel steps per run. On the experiment's heap (blocks as a
 closure per store) a read of one block through stores into another is
 quadratic in the stores; blocks as a list by number is the linear form.
+
+**The second part: the language on the contract** (2026-11-25,
+`issues/bytes-level-on-the-contract.md`). One memory, a transitive
+refinement, and `Site::Meets` in its final form.
+
+- *One heap, one definition of each operation.* The language's memory is
+  the contract's `Heap` (blocks as lists by number, a shadow of pointers,
+  per-byte undefined flags), read through `Heap::bytes` and
+  `Heap::undefined`. Every operation is defined once, in the contract, as a
+  read or a write of a piece: `Heap::piece` and `Heap::placed` (the only
+  way a heap changes), with one site fact, `Heap::fits` (in its block,
+  cutting no reference: a range may hold references whole), and the
+  partial forms `take` and `put` (which also asks that the block may be
+  written, given as a function so that both the language's `Blocks` and a
+  lending's `Spans` are one). `read_bytes`, `load_ref` and `copy` are
+  takes and puts; the machine's `store` and `store_ref` are `placed` of a
+  plain and a reference piece. The direction chosen was the contract's
+  stores from `placed`, not the reverse: a put of a piece with several
+  references and its flags (a typed copy, a failed read's undefined window)
+  is not a composition of word and pointer stores, while each machine store
+  is one put. `placed` on an empty shadow and empty flags reduces to the
+  lists FunctionIR's `Heap::of` facts expect, so `function_ir_lower_calls`
+  checks unchanged. The contract's loads are stated from `read_bytes`
+  (`Injected::reads` and its widths) and `load_ref` (`ref_read`), so the
+  old `Heap::plain`, `byte`, `dword`, `word` and `found` are gone. One
+  `Heap::Canonical` (the language's form: zero under a pointer and under an
+  undefined byte), kept by every canonical piece placed
+  (`Heap::placed_canonical`) and carried by every piece
+  (`Heap::piece_canonical`). `Blocks` stays the language's;
+  `Heap::put_lent` is the one fact a lowering needs of it, that under
+  `Blocks::Lent(spans)` a put the run makes is a store the lending allows.
+  Renaming (`HeapRenamed`, `Heap::take_renames`, `put_renames`) and the
+  canonical run (`run_canonical`) are re-proved over the lists with their
+  statements unchanged.
+- *`Stuck` carries the world it was stuck in*, and `Refines` gains its
+  fourth clause. With the third clause alone transitivity fails twice:
+  where `q` is stuck, `(p, q)` says nothing of `p`, so a `p` that diverges
+  silently refines a `q` that gets stuck, which refines an `s` that writes
+  anything; and where `p` is stuck at a history extending one `s` reaches,
+  "stuck after a prefix" is false although `p` did reach it. So the third
+  clause counts a history `p` reaches stuck or not, and the fourth makes a
+  stuck output owe a stuck input at or before it. Two prefixes of one
+  history are comparable (`extends_comparable`), which is the step that
+  composes (`covers_at`); `refines_trans` follows.
+- *`Site::Meets` in its final form* lives in `x86_64_call_contract`, with
+  the meaning's `Value`, `Answer`, `Ran` and `Calls()`: FunctionIR's
+  lowering imports the memory contract and spells its own `Word` and
+  `Answer` bare, so those names cannot be declared there. The machine's
+  state carries the world (`Running`), a step is a machine step or a
+  system call the Linux model reads (`LinuxRequests`, `linux_answered`,
+  the world's answer one `LinuxCmd::Answers` allows), and the claim form
+  quantifies over every resumption as `LinuxResumes` does. Three clauses
+  at every fuel: done (`Site::MeetsDone`), exited (`MeetsExited`), going
+  (`MeetsGoing`, every world reached before the return a prefix of a
+  history the meaning reaches). The record `Returned` is gone. The probe
+  that `Site::CallsLent` gives the done clause at an empty shadow is
+  `calls_lent_meets_done`.
+- *Evaluation is linear on the lists in both shapes the first part
+  measured.* `run` with k one-byte stores into a block then a load of it:
+  5,061, 7,765, 13,173, 23,989 and 45,621 kernel steps for k = 8 to 128
+  (the closure heap: 5.4k to 49k). k rounds of a store into one block and a
+  load of another: 6,713, 11,633, 21,473, 41,153 and 80,513 (the closure
+  heap: 7.4k, 12.8k, 25k, 57k, 149k, quadratic).
 
 **What follows.** The lowering under `Site::Meets`
 (`issues/bytes-level-lowering.md`), the translation of FunctionIR programs

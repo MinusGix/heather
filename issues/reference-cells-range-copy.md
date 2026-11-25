@@ -1,6 +1,6 @@
 ---
 title: A copy of a record holding references whose layout is not static: a range copy moving shadow entries, or fragments
-status: open
+status: closed
 labels: [ownership,native,design]
 area: heather-in-heather
 milestone: [nh-ownership]
@@ -21,3 +21,7 @@ A generic move of a record holding references compiles with its theorem by one o
 ## What it assumes from elsewhere
 
 - **[[ownership-reference-cells-spike]]** owns the shadow and the cut refusal. Assumed here: only that an entry is eight whole bytes and a store may not cut one.
+
+## Log
+
+- 2026-11-25: 2026-11-25: Closed: the first route is the bytes level's typed `Copy` ([[bytes-level-language]]; one definition, `Heap::copy`, in `x86_64_memory_contract` since [[bytes-level-on-the-contract]]): a take of the range's piece (its bytes, every reference wholly inside it, its undefined bytes) and a put of it, refused where either range cuts a reference. No fragments. What remains is its lowering's injection lemma for a put of a piece holding references, filed as [[contract-put-of-a-piece-injected]].

@@ -1,6 +1,6 @@
 ---
 title: The lending threaded per state across an allocation: carved pieces in the body's invariant
-status: open
+status: closed
 labels: [ownership,native,design]
 area: heather-in-heather
 milestone: [nh-ownership]
@@ -20,3 +20,7 @@ A body that allocates a block from a supply span, stores into it and reads it ba
 
 - **[[ownership-reference-cells-spike]]** owns `Loan::carve` and `Stack::wrote_in_parents`. Assumed here: only those two statements.
 - **[[ownership-discipline-over-code]]** owns the allocator's laws (§15.5); assumed only that a block answered is apart from every live one and inside its supply.
+
+## Log
+
+- 2026-11-25: 2026-11-25: Closed, superseded by the design of `docs/language/ownership-design.md` §17.3 and the contract's `Sub` ([[x86-memory-contract]]): at the bytes level the blocks are fixed for a run (the lent spans and the supply), a level-2 block is a window of the supply, and allocation is a call into the allocator over it, so no lending grows during a run. A piece carved from a span is a `Sub` of it: `Loan::sub` and `Stack::wrote_in_up` are the experiment's `Loan::carve` and `Stack::wrote_in_parents` (both deleted with it in [[bytes-level-on-the-contract]]).
