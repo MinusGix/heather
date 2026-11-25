@@ -2093,7 +2093,10 @@ per function connects them.
      - any model lawful as stated stays lawful (`Val`'s included);
      - the decider's soundness holds by the same proof;
      - `Dyn`'s model is lawful from the structures' laws alone, with no
-       unique identity proofs.
+       unique identity proofs;
+     - a single-sorted step lemma (a store through a view keeps every view
+       the decider finds apart) follows from these laws without looking
+       inside a code.
 
    **The level-1 interface should therefore be:**
    - values are `Dyn` over a type environment and its structures, which a
