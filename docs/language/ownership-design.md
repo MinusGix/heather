@@ -1189,6 +1189,37 @@ statement, if the simulation through `put_window` after `window` is costly
 enough that eager write-back is the wrong meaning, or if the checker's cost
 grows with the call depth.
 
+**Result (2026-11-25).** Built as `lib/lang/ownership/call_check.hthr`, with
+its programs and controls in `lib/_tests/lang/ownership/call_check_tests.hthr`
+(`ownership-checker-call-and-write-view` has the log). A body's meaning and
+run are stated over a world of its callees' meanings and runs, so no body is
+reachable from a caller's proof: `check_sound` gives a function's `FnSafe`
+from a closed verdict, its residuals under its precondition, and `FnSafe` of
+what it calls, in any world; `prog_sound` gives every function of a checked
+program `FnSafe` at every depth of calls. None of the refuting conditions
+was met. The write-back is one lemma (`written_back`): the caller's "outside
+my reference nothing changed" and the callee's "outside my window nothing
+changed" compose pointwise, given that the callee's value has its window's
+length; it is a once-proof cost, nothing per program. Rebasing uses only the
+caller's own reference and the callee's "inside the reference". A verdict
+reads signatures only, and its cost does not grow with depth. Because a loan
+lasts one statement here, no window is `out` between statements and the
+invariant did not need weakening; inside the call's step the weakened
+invariant is two holds, the caller's outside the window and the callee's in
+it. What was added to the place states: a live view lies inside the span it
+freezes, and a read parameter comes back unchanged (what a callee that
+breaks its signature violates). Choices: the run cuts a window to its
+reference as the meaning's window is cut to its list, so no bound residual
+arises (Rust panics instead); a residual is a sum of "apart" and a callee's
+precondition, which is the proof parameter of §15.8; a view a callee answers
+freezes the whole parameter. The promise has no postcondition, so a residual
+over a callee's answer cannot yet be discharged
+(`ownership-fnsafe-postconditions`). The checker is linear in program length
+where the first experiment's was quadratic, from its representation
+(`place-check-name-lookup-cost`). What the checker needs next (a loan held
+across statements, a join, stored references) is
+`ownership-checker-loans-and-joins`.
+
 ### 15.7 Settled by Minus, 2026-11-25, and what is still open
 
 - **When memory runs out**: room is a premise of the machine theorem, the
