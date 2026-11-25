@@ -208,7 +208,6 @@ theorem related_map_eq<T, B>(R: T → T → Type, f: T → B, alike: (a, b: T) �
     })(o2, rel)
 }
 
-
 theorem Renaming::there_same(self r: Renaming, a, b: Nat): r.there(a).same(r.there(b)) = a.same(b) {
     match a.eq_dec(b) {
         Inl(equal) => trans(r.there(a).same_of_eq(r.there(b), cong_fn<Nat, Nat>(λ x => r.there(x), equal)), sym(a.same_of_eq(b, equal))),

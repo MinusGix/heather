@@ -262,4 +262,3 @@ theorem overlapping_not_injected<M>(data: ByteReadAccess<M>, base: BitVec(64), m
     overlap_not_injected(data, overlapping(base), zeros_ones(), memory, 0, 8, 1, 0, trivial, trivial, refl, refl, refl, refl, refl,
         λ same => absurd(cong_fn<Option<BitVec(8)>, Nat>(λ o => match o { None => 0, Some(byte) => byte.toNat() }, same)))
 }
-
