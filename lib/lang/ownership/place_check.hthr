@@ -1,0 +1,782 @@
+// The ownership checker on a straight-line fragment, and its once-theorem
+// (docs/language/ownership-design.md §15.6, issues/ownership-checker-spike.md).
+//
+// A program binds lists of numbers and words, in order:
+//
+// - `Set(y, x, i, v)` is `let y = x.set(i, v)`, in place: `y` takes `x`'s
+//   buffer, and `x` is gone.
+// - `Get(z, x, i)` reads element `i` of `x` into the word `z`.
+// - `View(t, x, lo, n)` is `let t = &x[lo..lo+n]`, a read view live to the
+//   end.
+// - `Read(z, t, i)` reads element `i` of the view `t`.
+// - `Clone(y, x)` copies `x` into a new buffer.
+//
+// Three name spaces, each bound in order from its parameters: lists
+// (objects), views, words. A binder must be the next name of its space.
+//
+// `eval1` is the meaning: lists are values, a view is its window's value.
+// `run2` runs over a file of numbered buffers: each object name has the
+// buffer the plan gives it, a set stores into it, a view is a buffer, an
+// offset and a length.
+//
+// `check` is one forward pass with a state per place, kept as two tables:
+// which name holds each buffer now (a name that does not hold its buffer is
+// gone; a buffer with no holder is free), and the views, each with the
+// buffer it reads and its window (a buffer some view reads is frozen, with
+// those viewers; one no view reads is whole). A read needs its name to
+// hold its buffer; a write too, and every view of the buffer apart from the
+// element written: decided where the atoms are literals, a residual where
+// they are not. It also checks the plan: a set's result has its source's
+// buffer, a clone's a free one, the parameters distinct ones.
+//
+// `check_sound`: a verdict `check(f, plan) = Some(rs)` and the residuals'
+// holding, in the words the meaning builds, give `run2 = eval1` from buffers
+// that hold the parameters' lists.
+import logic;
+import bool;
+import nat;
+import omega;
+import option;
+import list;
+import list_window;
+import span_set;
+import list_path;
+
+// ---------------------------------------------------------------------------
+// The fragment
+
+inductive Atom { Lit(n: Nat), Var(w: Nat) }
+
+inductive Op {
+    Set(y: Nat, x: Nat, i: Atom, v: Atom),
+    Get(z: Nat, x: Nat, i: Atom),
+    View(t: Nat, x: Nat, lo: Atom, n: Atom),
+    Read(z: Nat, t: Nat, i: Atom),
+    Clone(y: Nat, x: Nat),
+}
+
+// A program: how many list and word parameters it takes, and its body.
+record Prog { objs: Nat, words: Nat, body: List<Op> }
+
+// What it is run on.
+record Env { objs: List<List<Nat>>, words: List<Nat> }
+
+fn word(ws: List<Nat>, k: Nat) → Nat { ws.nth(k).unwrap_or(0) }
+
+fn list_at(xs: List<List<Nat>>, k: Nat) → List<Nat> { xs.nth(k).unwrap_or(Nil) }
+
+fn Atom::val(self a: Atom, ws: List<Nat>) → Nat { match a { Lit(n) => n, Var(w) => word(ws, w) } }
+
+// The atom reads only words bound before `nw`.
+fn Atom::bound(self a: Atom, nw: Nat) → Bool { match a { Lit(_) => True, Var(w) => (w + 1).leb(nw) } }
+
+// A literal: its value in no environment is its value in every one.
+fn Atom::closed(self a: Atom) → Bool { match a { Lit(_) => True, Var(_) => False } }
+
+// ---------------------------------------------------------------------------
+// The meaning: lists are values
+
+fn window(xs: List<Nat>, lo, n: Nat) → List<Nat> { xs.drop(lo).take(n) }
+
+record Vals { objs: List<List<Nat>>, views: List<List<Nat>>, words: List<Nat> }
+
+fn Op::eval1(self o: Op, s: Vals) → Vals {
+    match o {
+        Set(_, x, i, v) => Vals(s.objs ++ [list_at(s.objs, x).update(i.val(s.words), λ _ => v.val(s.words))], s.views, s.words),
+        Get(_, x, i) => Vals(s.objs, s.views, s.words ++ [word(list_at(s.objs, x), i.val(s.words))]),
+        View(_, x, lo, n) => Vals(s.objs, s.views ++ [window(list_at(s.objs, x), lo.val(s.words), n.val(s.words))], s.words),
+        Read(_, t, i) => Vals(s.objs, s.views, s.words ++ [word(list_at(s.views, t), i.val(s.words))]),
+        Clone(_, x) => Vals(s.objs ++ [list_at(s.objs, x)], s.views, s.words),
+    }
+}
+
+fn eval_ops(ops: List<Op>, s: Vals) → Vals {
+    match ops { Nil => s, Cons(o, rest) => eval_ops(rest, o.eval1(s)) }
+}
+
+// The words a program computes, its parameters first.
+fn eval1(f: Prog, env: Env) → List<Nat> { eval_ops(f.body, Vals(env.objs, Nil, env.words)).words }
+
+// ---------------------------------------------------------------------------
+// The run over buffers
+
+// A view: a buffer, an offset, a length. A read past its length is zero,
+// as the window's value is.
+record Buf { b: Nat, lo: Nat, n: Nat }
+
+fn Buf::read(self v: Buf, file: List<List<Nat>>, i: Nat) → Nat {
+    match (i + 1).leb(v.n) { True => word(list_at(file, v.b), v.lo + i), False => 0 }
+}
+
+fn buf_at(vs: List<Buf>, t: Nat) → Buf { vs.nth(t).unwrap_or(Buf(0, 0, 0)) }
+
+// The buffer the plan gives a name.
+fn home(plan: List<Nat>, x: Nat) → Nat { plan.nth(x).unwrap_or(0) }
+
+record Mach { file: List<List<Nat>>, views: List<Buf>, words: List<Nat> }
+
+fn Op::run2(self o: Op, plan: List<Nat>, m: Mach) → Mach {
+    match o {
+        Set(_, x, i, v) => Mach(m.file.update(home(plan, x), λ xs => xs.update(i.val(m.words), λ _ => v.val(m.words))), m.views, m.words),
+        Get(_, x, i) => Mach(m.file, m.views, m.words ++ [word(list_at(m.file, home(plan, x)), i.val(m.words))]),
+        View(_, x, lo, n) => Mach(m.file, m.views ++ [Buf(home(plan, x), lo.val(m.words), n.val(m.words))], m.words),
+        Read(_, t, i) => Mach(m.file, m.views, m.words ++ [buf_at(m.views, t).read(m.file, i.val(m.words))]),
+        Clone(y, x) => Mach(m.file.update(home(plan, y), λ _ => list_at(m.file, home(plan, x))), m.views, m.words),
+    }
+}
+
+fn run_ops(ops: List<Op>, plan: List<Nat>, m: Mach) → Mach {
+    match ops { Nil => m, Cons(o, rest) => run_ops(rest, plan, o.run2(plan, m)) }
+}
+
+fn run2(f: Prog, plan: List<Nat>, words: List<Nat>, file: List<List<Nat>>) → List<Nat> { run_ops(f.body, plan, Mach(file, Nil, words)).words }
+
+// ---------------------------------------------------------------------------
+// The checker
+
+// A view as the checker sees it: the buffer it reads and its window.
+record CView { b: Nat, lo: Atom, n: Atom }
+
+// Who holds each buffer.
+fn Holders() → Type { Nat → Option<Nat> }
+
+fn Holders::put(h: Holders(), b: Nat, x: Nat) → Holders() { λ k => match k.same(b) { True => Some(x), False => h(k) } }
+
+fn Holders::holds(h: Holders(), b, x: Nat) → Bool { match h(b) { None => False, Some(y) => y.same(x) } }
+
+fn Holders::free(h: Holders(), b: Nat) → Bool { match h(b) { None => True, Some(_) => False } }
+
+record CState { holders: Holders(), views: List<CView>, nobjs: Nat, nw: Nat }
+
+// What a write must be apart from: `Span(lo, n)` and `Span(i, 1)`.
+record Residual { lo: Atom, n: Atom, i: Atom }
+
+fn Residual::verdict(self r: Residual, ws: List<Nat>) → Bool { Span(r.lo.val(ws), r.n.val(ws)).apart(Span(r.i.val(ws), 1)) }
+
+fn Residual::Holds(self r: Residual, ws: List<Nat>) → Type { r.verdict(ws).IsTrue() }
+
+fn Residual::All(rs: List<Residual>, ws: List<Nat>) → Type {
+    match rs { Nil => True, Cons(r, rest) => r.Holds(ws) ∧ Residual::All(rest, ws) }
+}
+
+// One view against a write at `i`: nothing where the view reads another
+// buffer; where it reads this one, the verdict at literals, a residual
+// otherwise.
+fn license_here(lo, n, i: Atom) → Option<List<Residual>> {
+    match lo.closed() && n.closed() && i.closed() {
+        True => Residual(lo, n, i).verdict(Nil).then(Some(Nil)),
+        False => Some([Residual(lo, n, i)]),
+    }
+}
+
+fn CView::license(self c: CView, b: Nat, i: Atom) → Option<List<Residual>> {
+    match c.b.same(b) { False => Some(Nil), True => license_here(c.lo, c.n, i) }
+}
+
+fn license(vs: List<CView>, b: Nat, i: Atom) → Option<List<Residual>> {
+    match vs {
+        Nil => Some(Nil),
+        Cons(c, rest) => c.license(b, i).and_then(λ r1 => license(rest, b, i).map(λ r2 => r1 ++ r2)),
+    }
+}
+
+fn view_at(vs: List<CView>, t: Nat) → CView { vs.nth(t).unwrap_or(CView(0, Lit(0), Lit(0))) }
+
+// A checker step: the next state and the residuals it deferred.
+record Stepped { next: CState, rs: List<Residual> }
+
+fn Op::check(self o: Op, plan: List<Nat>, c: CState) → Option<Stepped> {
+    match o {
+        Set(y, x, i, v) =>
+            (y.same(c.nobjs) && Holders::holds(c.holders, home(plan, x), x) && home(plan, y).same(home(plan, x))
+                && i.bound(c.nw) && v.bound(c.nw)).then(
+                license(c.views, home(plan, x), i).map(λ rs =>
+                    Stepped(CState(Holders::put(c.holders, home(plan, x), y), c.views, c.nobjs + 1, c.nw), rs))),
+        Get(z, x, i) =>
+            (z.same(c.nw) && Holders::holds(c.holders, home(plan, x), x) && i.bound(c.nw)).then(
+                Some(Stepped(CState(c.holders, c.views, c.nobjs, c.nw + 1), Nil))),
+        View(t, x, lo, n) =>
+            (t.same(c.views.len()) && Holders::holds(c.holders, home(plan, x), x) && lo.bound(c.nw) && n.bound(c.nw)).then(
+                Some(Stepped(CState(c.holders, c.views ++ [CView(home(plan, x), lo, n)], c.nobjs, c.nw), Nil))),
+        Read(z, t, i) =>
+            (z.same(c.nw) && (t + 1).leb(c.views.len()) && i.bound(c.nw)).then(
+                Some(Stepped(CState(c.holders, c.views, c.nobjs, c.nw + 1), Nil))),
+        Clone(y, x) =>
+            (y.same(c.nobjs) && Holders::holds(c.holders, home(plan, x), x) && Holders::free(c.holders, home(plan, y))).then(
+                Some(Stepped(CState(Holders::put(c.holders, home(plan, y), y), c.views, c.nobjs + 1, c.nw), Nil))),
+    }
+}
+
+fn check_ops(ops: List<Op>, plan: List<Nat>, c: CState) → Option<List<Residual>> {
+    match ops {
+        Nil => Some(Nil),
+        Cons(o, rest) => o.check(plan, c).and_then(λ st => check_ops(rest, plan, st.next).map(λ rs => st.rs ++ rs)),
+    }
+}
+
+// The parameters' buffers, each free when its parameter takes it.
+fn holders_upto(plan: List<Nat>, k: Nat) → Option<Holders()> {
+    match k {
+        Zero => Some(λ _ => None),
+        Succ(j) => holders_upto(plan, j).and_then(λ h => Holders::free(h, home(plan, j)).then(Some(Holders::put(h, home(plan, j), j)))),
+    }
+}
+
+fn check(f: Prog, plan: List<Nat>) → Option<List<Residual>> {
+    holders_upto(plan, f.objs).and_then(λ h => check_ops(f.body, plan, CState(h, Nil, f.objs, f.words)))
+}
+
+// ---------------------------------------------------------------------------
+// Small facts the simulation reads
+
+theorem Holders::put_here(h: Holders(), b, x: Nat): Holders::put(h, b, x, b) = Some(x) {
+    j(sym(b.same_self()), λ q _ => (match q { True => Some(x), False => h(b) }) = Some(x), refl)
+}
+
+theorem Holders::put_other(h: Holders(), b, x, k: Nat, ne: k.same(b) = False): Holders::put(h, b, x, k) = h(k) {
+    j(sym(ne), λ q _ => (match q { True => Some(x), False => h(k) }) = h(k), refl)
+}
+
+theorem Holders::holds_sound(h: Holders(), b, x: Nat, e: Holders::holds(h, b, x) = True): h(b) = Some(x) {
+    (match h(b) as λ o => (match o { None => False, Some(y) => y.same(x) }) = True → o = Some(x) {
+        None => λ no => absurd(no),
+        Some(y) => λ yes => cong_fn(λ (n: Nat) => Some(n), y.same_sound(x, yes)),
+    })(e)
+}
+
+theorem Holders::free_sound(h: Holders(), b: Nat, e: Holders::free(h, b) = True): h(b) = None {
+    (match h(b) as λ o => (match o { None => True, Some(_) => False }) = True → o = None {
+        None => λ _ => refl,
+        Some(_) => λ no => absurd(no),
+    })(e)
+}
+
+theorem Holders::taken_of(h: Holders(), b, x: Nat, at: h(b) = Some(x)): Holders::free(h, b) = False {
+    j(sym(at), λ o _ => (match o { None => True, Some(_) => False }) = False, refl)
+}
+
+// A buffer some name holds stays held when a holder is put anywhere.
+theorem Holders::put_keeps_taken(h: Holders(), b, x, k: Nat, taken: Holders::free(h, k) = False): Holders::free(Holders::put(h, b, x), k) = False {
+    match q: k.same(b) {
+        True => refl,
+        False => taken,
+    }
+}
+
+theorem Holders::ne_of_free(h: Holders(), b, k: Nat, free: Holders::free(h, b) = True, taken: Holders::free(h, k) = False): k.same(b) = False {
+    match q: k.same(b) {
+        True => absurd(trans(sym(taken), j(sym(k.same_sound(b, q)), λ m _ => Holders::free(h, m) = True, free))),
+        False => refl,
+    }
+}
+
+// The words only grow.
+fn Prefix(ws, big: List<Nat>) → Type { (ws.len() <= big.len()) ∧ ((w: Nat) → w < ws.len() → big.nth(w) = ws.nth(w)) }
+
+theorem Prefix::same(ws: List<Nat>): Prefix(ws, ws) { ⟨ws.len().le_refl(), λ w _ => refl⟩ }
+
+theorem Prefix::snoc(ws: List<Nat>, a: Nat): Prefix(ws, ws ++ [a]) {
+    ⟨j(sym(ws.len_append([a])), λ n _ => ws.len() <= n, omega()), λ w lt => ws.nth_append_below([a], w, lt)⟩
+}
+
+theorem Prefix::chain(a, b, c: List<Nat>, ab: Prefix(a, b), bc: Prefix(b, c)): Prefix(a, c) {
+    ⟨Nat::le_trans(a.len(), b.len(), c.len(), ab.left, bc.left),
+        λ w lt => prelude::trans(bc.right(w, Nat::lt_of_lt_of_le(w, a.len(), b.len(), lt, ab.left)), ab.right(w, lt))⟩
+}
+
+theorem Op::eval1_grows(self o: Op, s: Vals): Prefix(s.words, o.eval1(s).words) {
+    match o {
+        Set(_, _, _, _) => Prefix::same(s.words),
+        Get(_, x, i) => Prefix::snoc(s.words, word(list_at(s.objs, x), i.val(s.words))),
+        View(_, _, _, _) => Prefix::same(s.words),
+        Read(_, t, i) => Prefix::snoc(s.words, word(list_at(s.views, t), i.val(s.words))),
+        Clone(_, _) => Prefix::same(s.words),
+    }
+}
+
+theorem eval_ops_grows(ops: List<Op>): (s: Vals) → Prefix(s.words, eval_ops(ops, s).words) {
+    match ops {
+        Nil => λ s => Prefix::same(s.words),
+        Cons(o, rest) => λ s => Prefix::chain(s.words, o.eval1(s).words, eval_ops(rest, o.eval1(s)).words, o.eval1_grows(s), eval_ops_grows(rest, o.eval1(s))),
+    }
+}
+
+// A bound atom reads the same in every extension of its words.
+theorem Atom::val_stable(self a: Atom, ws, big: List<Nat>, pre: Prefix(ws, big), b: a.bound(ws.len()) = True): a.val(big) = a.val(ws) {
+    (match a as λ e => e.bound(ws.len()) = True → e.val(big) = e.val(ws) {
+        Lit(_) => λ _ => refl,
+        Var(w) => λ lt => cong_fn(λ (o: Option<Nat>) => o.unwrap_or(0), pre.right(w, omega(lt))),
+    })(b)
+}
+
+theorem Atom::closed_val(self a: Atom, e: a.closed() = True, ws, vs: List<Nat>): a.val(ws) = a.val(vs) {
+    (match a as λ x => x.closed() = True → x.val(ws) = x.val(vs) { Lit(_) => λ _ => refl, Var(_) => λ no => absurd(no) })(e)
+}
+
+// Reading the window's value.
+theorem take_nth_past(xs: List<Nat>): (n, i: Nat) → n <= i → xs.take(n).nth(i) = None {
+    match xs {
+        Nil => λ n i _ => refl,
+        Cons(_, t) => λ n => match n {
+            Zero => λ i _ => refl,
+            Succ(m) => λ i => match i {
+                Zero => λ no => false_elim(no),
+                Succ(k) => λ le => take_nth_past(t, m, k, le),
+            },
+        },
+    }
+}
+
+theorem window_word(xs: List<Nat>, lo, n, i: Nat): word(window(xs, lo, n), i) = Buf(0, lo, n).read([xs], i) {
+    match q: (i + 1).leb(n) {
+        True => cong_fn(λ (o: Option<Nat>) => o.unwrap_or(0),
+            trans(xs.drop(lo).nth_take(n, i, Nat::leb_sound(i + 1, n, Bool::is_true_of_eq(q))),
+                trans(xs.nth_drop_add(lo, i), cong_fn(λ (k: Nat) => xs.nth(k), i.add_comm(lo))))),
+        False => cong_fn(λ (o: Option<Nat>) => o.unwrap_or(0), take_nth_past(xs.drop(lo), n, i, omega(q))),
+    }
+}
+
+// A view reads only its window.
+theorem Buf::read_frame(self v: Buf, file, file2: List<List<Nat>>,
+    same: (k: Nat) → k < v.n → word(list_at(file2, v.b), v.lo + k) = word(list_at(file, v.b), v.lo + k)):
+    (i: Nat) → v.read(file2, i) = v.read(file, i)
+{
+    λ i => match q: (i + 1).leb(v.n) {
+        True => same(i, Nat::leb_sound(i + 1, v.n, Bool::is_true_of_eq(q))),
+        False => refl,
+    }
+}
+
+theorem list_at_update_here(file: List<List<Nat>>, b: Nat, g: List<Nat> → List<Nat>, inside: b < file.len()): list_at(file.update(b, g), b) = g(list_at(file, b)) {
+    let at = file.nth_present(b, inside);
+    trans(cong_fn(λ (o: Option<List<Nat>>) => o.unwrap_or(Nil), file.nth_update_here(b, g, at.witness, at.proof)),
+        cong_fn(λ (o: Option<List<Nat>>) => g(o.unwrap_or(Nil)), sym(at.proof)))
+}
+
+theorem list_at_update_other(file: List<List<Nat>>, b: Nat, g: List<Nat> → List<Nat>, k: Nat, ne: k.same(b) = False): list_at(file.update(b, g), k) = list_at(file, k) {
+    cong_fn(λ (o: Option<List<Nat>>) => o.unwrap_or(Nil), file.nth_update_other(b, g, k, k.ne_of_same(b, ne)))
+}
+
+theorem list_at_snoc_below(xs: List<List<Nat>>, a: List<Nat>, k: Nat, lt: k < xs.len()): list_at(xs ++ [a], k) = list_at(xs, k) {
+    cong_fn(λ (o: Option<List<Nat>>) => o.unwrap_or(Nil), xs.nth_append_below([a], k, lt))
+}
+
+theorem list_at_snoc_at(xs: List<List<Nat>>, a: List<Nat>, k: Nat, at: xs.len() = k): list_at(xs ++ [a], k) = a {
+    cong_fn(λ (o: Option<List<Nat>>) => o.unwrap_or(Nil), xs.nth_append_at([a], k, at))
+}
+
+theorem len_snoc<A>(xs: List<A>, a: A): (xs ++ [a]).len() = xs.len() + 1 { xs.len_append([a]) }
+
+theorem option_map_some<A, B>(o: Option<A>, f: A → B, b: B): o.map(f) = Some(b) → Exists<A>(λ a => (o = Some(a)) ∧ (f(a) = b)) {
+    match o { None => λ h => absurd(h), Some(a) => λ h => Exists(a, ⟨refl, Option::some_inj(f(a), b, h)⟩) }
+}
+
+// ---------------------------------------------------------------------------
+// The residuals and the licence
+
+theorem Residual::all_append(rs: List<Residual>): (qs: List<Residual>) → (ws: List<Nat>) → Residual::All(rs ++ qs, ws) → Residual::All(rs, ws) ∧ Residual::All(qs, ws) {
+    match rs {
+        Nil => λ qs ws h => ⟨trivial, h⟩,
+        Cons(_, rest) => λ qs ws h => {
+            let p = Residual::all_append(rest, qs, ws, h.right);
+            ⟨⟨h.left, p.left⟩, p.right⟩
+        },
+    }
+}
+
+theorem Residual::deferred(r: Residual, r1: List<Residual>, ok: Some([r]) = Some(r1), ws: List<Nat>, hold: Residual::All(r1, ws)): r.Holds(ws) {
+    j(sym(Option::some_inj([r], r1, ok)), λ q _ => Residual::All(q, ws), hold).left
+}
+
+// What one view's licence gives: its window apart from the element written,
+// decided at literals, the residual's holding otherwise.
+theorem license_here_sound(lo, n, i: Atom, ws: List<Nat>): (r1: List<Residual>) → license_here(lo, n, i) = Some(r1) → Residual::All(r1, ws) → Residual(lo, n, i).Holds(ws) {
+    match lo {
+        Var(w) => λ r1 ok hold => Residual::deferred(Residual(Var(w), n, i), r1, ok, ws, hold),
+        Lit(a) => match n {
+            Var(w) => λ r1 ok hold => Residual::deferred(Residual(Lit(a), Var(w), i), r1, ok, ws, hold),
+            Lit(c) => match i {
+                Var(w) => λ r1 ok hold => Residual::deferred(Residual(Lit(a), Lit(c), Var(w)), r1, ok, ws, hold),
+                Lit(d) => λ r1 ok hold => Bool::is_true_of_eq(Bool::then_some(Residual(Lit(a), Lit(c), Lit(d)).verdict(Nil), Some(Nil), r1, ok).left),
+            },
+        },
+    }
+}
+
+theorem CView::license_sound(self c: CView, b: Nat, i: Atom, ws: List<Nat>, same: c.b.same(b) = True, r1: List<Residual>, ok: c.license(b, i) = Some(r1),
+    hold: Residual::All(r1, ws)): Residual(c.lo, c.n, i).Holds(ws)
+{
+    license_here_sound(c.lo, c.n, i, ws, r1,
+        j(same, λ q _ => (match q { False => Some(Nil), True => license_here(c.lo, c.n, i) }) = Some(r1), ok), hold)
+}
+
+// Every view of the buffer written is apart from the element written.
+theorem license_sound(vs: List<CView>, b: Nat, i: Atom, ws: List<Nat>): (rs: List<Residual>) → license(vs, b, i) = Some(rs) → Residual::All(rs, ws) →
+    (t: Nat) → t < vs.len() → view_at(vs, t).b.same(b) = True → Residual(view_at(vs, t).lo, view_at(vs, t).n, i).Holds(ws)
+{
+    match vs {
+        Nil => λ rs ok hold t lt => false_elim(lt),
+        Cons(c, rest) => λ rs ok hold => {
+            let st = Option::and_then_some(c.license(b, i), λ r1 => license(rest, b, i).map(λ r2 => r1 ++ r2), rs, ok);
+            let mp = option_map_some(license(rest, b, i), λ r2 => st.witness ++ r2, rs, st.proof.right);
+            let parts = Residual::all_append(st.witness, mp.witness, ws, j(sym(mp.proof.right), λ q _ => Residual::All(q, ws), hold));
+            λ t => match t {
+                Zero => λ _ same => c.license_sound(b, i, ws, same, st.witness, st.proof.left, parts.left),
+                Succ(k) => λ lt same => license_sound(rest, b, i, ws, mp.witness, mp.proof.left, parts.right, k, lt, same),
+            }
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The invariant: a usable place reads its value
+
+// A view of the checker, of the run and of the meaning agree: the run's
+// view is the checker's buffer and window, in the words the meaning builds;
+// its buffer is held; and it reads what the meaning's window holds.
+record ViewOk(cv: CView, v: Buf, val: List<Nat>, h: Holders(), file: List<List<Nat>>, ws: List<Nat>) {
+    at_b: v.b = cv.b,
+    at_lo: v.lo = cv.lo.val(ws),
+    at_n: v.n = cv.n.val(ws),
+    taken: Holders::free(h, cv.b) = False,
+    reads: (i: Nat) → word(val, i) = v.read(file, i),
+}
+
+// A held buffer: its holder is a name bound so far, the plan puts it there,
+// and the buffer holds the holder's value.
+record Held(plan: List<Nat>, b: Nat, x: Nat, nobjs: Nat, file, objs: List<List<Nat>>) {
+    home: home(plan, x) = b,
+    bound: x < nobjs,
+    value: list_at(file, b) = list_at(objs, x),
+}
+
+// The simulation's invariant, in the words `ws` the meaning ends with.
+record Inv(plan: List<Nat>, c: CState, s: Vals, m: Mach, ws: List<Nat>) {
+    words: m.words = s.words,
+    nw: c.nw = s.words.len(),
+    nobjs: c.nobjs = s.objs.len(),
+    nviews: c.views.len() = s.views.len(),
+    mviews: m.views.len() = s.views.len(),
+    room: (k: Nat) → home(plan, k) < m.file.len(),
+    held: (b, x: Nat) → c.holders(b) = Some(x) → Held(plan, b, x, c.nobjs, m.file, s.objs),
+    views: (t: Nat) → t < c.views.len() → ViewOk(view_at(c.views, t), buf_at(m.views, t), list_at(s.views, t), c.holders, m.file, ws),
+}
+
+theorem Stepped::of(g: Bool, next, st: Stepped, ok: g.then(Some(next)) = Some(st)): (g = True) ∧ (next = st) {
+    let p = g.then_some(Some(next), st, ok);
+    ⟨p.left, Option::some_inj(next, st, p.right)⟩
+}
+
+theorem Atom::bound_at(self a: Atom, c: CState, s: Vals, e: a.bound(c.nw) = True, nw: c.nw = s.words.len()): a.bound(s.words.len()) = True {
+    j(nw, λ n _ => a.bound(n) = True, e)
+}
+
+// A write at `iv` keeps every element of a window apart from it: the
+// element path's footprint (`Path::elem_in`) frames the window.
+theorem frame_write(xs: List<Nat>, iv, vv, lo, n, k: Nat, a, b, c: Nat, apart: Span(a, b).apart(Span(c, 1)).IsTrue(),
+    ea: lo = a, eb: n = b, ec: iv = c, lt: k < n): word(xs.update(iv, λ _ => vv), lo + k) = word(xs, lo + k)
+{
+    let d: (Span(iv, 1).Disjoint(Span(lo, n))) = λ p h1 h2 => omega(apart, ea, eb, ec, h1, h2);
+    cong_fn(λ (o: Option<Nat>) => o.unwrap_or(0),
+        PathIn::agree_apart(Path::elem_in<Nat>(iv), Span(lo, n), d, xs, vv, lo + k, Span(lo, n).has_intro(lo + k, omega(), omega(lt))))
+}
+
+// A step that stores into buffer `b` and passes it to the new name `y`:
+// what a set and a clone share. `frame` is what the store keeps of every
+// view.
+theorem Inv::moved({plan: List<Nat>}, {c: CState}, {s: Vals}, {m: Mach}, {ws: List<Nat>}, self inv: Inv(plan, c, s, m, ws), b, y: Nat, g: List<Nat> → List<Nat>, nv: List<Nat>,
+    at_y: y = c.nobjs, home_y: home(plan, y) = b, value: g(list_at(m.file, b)) = nv,
+    frame: (t: Nat) → t < c.views.len() → (k: Nat) → k < buf_at(m.views, t).n →
+        word(list_at(m.file.update(b, g), buf_at(m.views, t).b), buf_at(m.views, t).lo + k) = word(list_at(m.file, buf_at(m.views, t).b), buf_at(m.views, t).lo + k)):
+    Inv(plan, CState(Holders::put(c.holders, b, y), c.views, c.nobjs + 1, c.nw), Vals(s.objs ++ [nv], s.views, s.words), Mach(m.file.update(b, g), m.views, m.words), ws)
+{
+    let inside: (b < m.file.len()) = j(home_y, λ n _ => n < m.file.len(), inv.room(y));
+    let at_len: (s.objs.len() = y) = prelude::trans(sym(inv.nobjs), sym(at_y));
+    let held_y: Held(plan, b, y, c.nobjs + 1, m.file.update(b, g), s.objs ++ [nv]) =
+        Held(home_y, omega(at_y), prelude::trans(list_at_update_here(m.file, b, g, inside), prelude::trans(value, sym(list_at_snoc_at(s.objs, nv, y, at_len)))));
+    Inv(inv.words, inv.nw,
+        prelude::trans(cong_fn(λ (n: Nat) => n + 1, inv.nobjs), sym(len_snoc(s.objs, nv))),
+        inv.nviews, inv.mviews,
+        λ k => j(sym(m.file.len_update(b, g)), λ n _ => home(plan, k) < n, inv.room(k)),
+        λ b2 x2 => match q: b2.same(b) {
+            True => λ e => j(Option::some_inj(y, x2, e), λ z _ => Held(plan, b2, z, c.nobjs + 1, m.file.update(b, g), s.objs ++ [nv]),
+                j(sym(b2.same_sound(b, q)), λ bb _ => Held(plan, bb, y, c.nobjs + 1, m.file.update(b, g), s.objs ++ [nv]), held_y)),
+            False => λ e => {
+                let old = inv.held(b2, x2, e);
+                let below: (x2 < s.objs.len()) = j(inv.nobjs, λ n _ => x2 < n, old.bound);
+                Held(old.home, omega(old.bound),
+                    prelude::trans(list_at_update_other(m.file, b, g, b2, q), prelude::trans(old.value, sym(list_at_snoc_below(s.objs, nv, x2, below)))))
+            },
+        },
+        λ t lt => {
+            let o = inv.views(t, lt);
+            ViewOk(o.at_b, o.at_lo, o.at_n, Holders::put_keeps_taken(c.holders, b, y, view_at(c.views, t).b, o.taken),
+                λ i => prelude::trans(o.reads(i), sym(buf_at(m.views, t).read_frame(m.file, m.file.update(b, g), frame(t, lt), i))))
+        })
+}
+
+// ---------------------------------------------------------------------------
+// Each step keeps the invariant
+
+theorem step_get(plan: List<Nat>, c: CState, s: Vals, m: Mach, ws: List<Nat>, inv: Inv(plan, c, s, m, ws), z, x: Nat, i: Atom, st: Stepped,
+    ok: Get(z, x, i).check(plan, c) = Some(st)): Inv(plan, st.next, Get(z, x, i).eval1(s), Get(z, x, i).run2(plan, m), ws)
+{
+    let next = Stepped(CState(c.holders, c.views, c.nobjs, c.nw + 1), Nil);
+    let g = Stepped::of((z.same(c.nw) && Holders::holds(c.holders, home(plan, x), x)) && i.bound(c.nw), next, st, ok);
+    let g1 = Bool::and_true_parts(z.same(c.nw) && Holders::holds(c.holders, home(plan, x), x), i.bound(c.nw), g.left);
+    let g2 = Bool::and_true_parts(z.same(c.nw), Holders::holds(c.holders, home(plan, x), x), g1.left);
+    let hd = inv.held(home(plan, x), x, Holders::holds_sound(c.holders, home(plan, x), x, g2.right));
+    let words: (m.words ++ [word(list_at(m.file, home(plan, x)), i.val(m.words))] = s.words ++ [word(list_at(s.objs, x), i.val(s.words))]) =
+        j(sym(inv.words), λ w _ => w ++ [word(list_at(m.file, home(plan, x)), i.val(w))] = s.words ++ [word(list_at(s.objs, x), i.val(s.words))],
+            cong_fn(λ (l: List<Nat>) => s.words ++ [word(l, i.val(s.words))], hd.value));
+    j(g.right, λ q _ => Inv(plan, q.next, Get(z, x, i).eval1(s), Get(z, x, i).run2(plan, m), ws),
+        Inv(words, prelude::trans(cong_fn(λ (n: Nat) => n + 1, inv.nw), sym(len_snoc(s.words, word(list_at(s.objs, x), i.val(s.words))))),
+            inv.nobjs, inv.nviews, inv.mviews, inv.room, inv.held, inv.views))
+}
+
+theorem step_read(plan: List<Nat>, c: CState, s: Vals, m: Mach, ws: List<Nat>, inv: Inv(plan, c, s, m, ws), z, t: Nat, i: Atom, st: Stepped,
+    ok: Read(z, t, i).check(plan, c) = Some(st)): Inv(plan, st.next, Read(z, t, i).eval1(s), Read(z, t, i).run2(plan, m), ws)
+{
+    let next = Stepped(CState(c.holders, c.views, c.nobjs, c.nw + 1), Nil);
+    let g = Stepped::of((z.same(c.nw) && (t + 1).leb(c.views.len())) && i.bound(c.nw), next, st, ok);
+    let g1 = Bool::and_true_parts(z.same(c.nw) && (t + 1).leb(c.views.len()), i.bound(c.nw), g.left);
+    let g2 = Bool::and_true_parts(z.same(c.nw), (t + 1).leb(c.views.len()), g1.left);
+    let o = inv.views(t, Nat::leb_sound(t + 1, c.views.len(), Bool::is_true_of_eq(g2.right)));
+    let words: (m.words ++ [buf_at(m.views, t).read(m.file, i.val(m.words))] = s.words ++ [word(list_at(s.views, t), i.val(s.words))]) =
+        j(sym(inv.words), λ w _ => w ++ [buf_at(m.views, t).read(m.file, i.val(w))] = s.words ++ [word(list_at(s.views, t), i.val(s.words))],
+            cong_fn(λ (a: Nat) => s.words ++ [a], sym(o.reads(i.val(s.words)))));
+    j(g.right, λ q _ => Inv(plan, q.next, Read(z, t, i).eval1(s), Read(z, t, i).run2(plan, m), ws),
+        Inv(words, prelude::trans(cong_fn(λ (n: Nat) => n + 1, inv.nw), sym(len_snoc(s.words, word(list_at(s.views, t), i.val(s.words))))),
+            inv.nobjs, inv.nviews, inv.mviews, inv.room, inv.held, inv.views))
+}
+
+theorem ViewOk::moved(cv, cv2: CView, v, v2: Buf, val, val2: List<Nat>, h: Holders(), file: List<List<Nat>>, ws: List<Nat>,
+    e1: cv = cv2, e2: v = v2, e3: val = val2, o: ViewOk(cv, v, val, h, file, ws)): ViewOk(cv2, v2, val2, h, file, ws)
+{
+    j(e3, λ q _ => ViewOk(cv2, v2, q, h, file, ws), j(e2, λ q _ => ViewOk(cv2, q, val, h, file, ws), j(e1, λ q _ => ViewOk(q, v, val, h, file, ws), o)))
+}
+
+theorem view_at_snoc_below(vs: List<CView>, a: CView, k: Nat, lt: k < vs.len()): view_at(vs ++ [a], k) = view_at(vs, k) {
+    cong_fn(λ (o: Option<CView>) => o.unwrap_or(CView(0, Lit(0), Lit(0))), vs.nth_append_below([a], k, lt))
+}
+
+theorem view_at_snoc_at(vs: List<CView>, a: CView, k: Nat, at: vs.len() = k): view_at(vs ++ [a], k) = a {
+    cong_fn(λ (o: Option<CView>) => o.unwrap_or(CView(0, Lit(0), Lit(0))), vs.nth_append_at([a], k, at))
+}
+
+theorem buf_at_snoc_below(vs: List<Buf>, a: Buf, k: Nat, lt: k < vs.len()): buf_at(vs ++ [a], k) = buf_at(vs, k) {
+    cong_fn(λ (o: Option<Buf>) => o.unwrap_or(Buf(0, 0, 0)), vs.nth_append_below([a], k, lt))
+}
+
+theorem buf_at_snoc_at(vs: List<Buf>, a: Buf, k: Nat, at: vs.len() = k): buf_at(vs ++ [a], k) = a {
+    cong_fn(λ (o: Option<Buf>) => o.unwrap_or(Buf(0, 0, 0)), vs.nth_append_at([a], k, at))
+}
+
+theorem step_view(plan: List<Nat>, c: CState, s: Vals, m: Mach, ws: List<Nat>, inv: Inv(plan, c, s, m, ws), pre: Prefix(s.words, ws),
+    t, x: Nat, lo, n: Atom, st: Stepped, ok: View(t, x, lo, n).check(plan, c) = Some(st)):
+    Inv(plan, st.next, View(t, x, lo, n).eval1(s), View(t, x, lo, n).run2(plan, m), ws)
+{
+    let hx = home(plan, x);
+    let cv = CView(hx, lo, n);
+    let next = Stepped(CState(c.holders, c.views ++ [cv], c.nobjs, c.nw), Nil);
+    let g = Stepped::of(((t.same(c.views.len()) && Holders::holds(c.holders, hx, x)) && lo.bound(c.nw)) && n.bound(c.nw), next, st, ok);
+    let g1 = Bool::and_true_parts((t.same(c.views.len()) && Holders::holds(c.holders, hx, x)) && lo.bound(c.nw), n.bound(c.nw), g.left);
+    let g2 = Bool::and_true_parts(t.same(c.views.len()) && Holders::holds(c.holders, hx, x), lo.bound(c.nw), g1.left);
+    let g3 = Bool::and_true_parts(t.same(c.views.len()), Holders::holds(c.holders, hx, x), g2.left);
+    let at_x = Holders::holds_sound(c.holders, hx, x, g3.right);
+    let hd = inv.held(hx, x, at_x);
+    let lo_ws: (lo.val(ws) = lo.val(s.words)) = lo.val_stable(s.words, ws, pre, lo.bound_at(c, s, g2.right, inv.nw));
+    let n_ws: (n.val(ws) = n.val(s.words)) = n.val_stable(s.words, ws, pre, n.bound_at(c, s, g1.right, inv.nw));
+    let win = window(list_at(s.objs, x), lo.val(s.words), n.val(s.words));
+    let bv = Buf(hx, lo.val(m.words), n.val(m.words));
+    let reads: ((i: Nat) → word(win, i) = bv.read(m.file, i)) = λ i => prelude::trans(window_word(list_at(s.objs, x), lo.val(s.words), n.val(s.words), i),
+        j(sym(inv.words), λ w _ => Buf(0, lo.val(s.words), n.val(s.words)).read([list_at(s.objs, x)], i) = Buf(hx, lo.val(w), n.val(w)).read(m.file, i),
+            cong_fn(λ (l: List<Nat>) => Buf(0, lo.val(s.words), n.val(s.words)).read([l], i), sym(hd.value))));
+    let fresh: ViewOk(cv, bv, win, c.holders, m.file, ws) = ViewOk(refl,
+        prelude::trans(cong_fn(λ (w: List<Nat>) => lo.val(w), inv.words), sym(lo_ws)),
+        prelude::trans(cong_fn(λ (w: List<Nat>) => n.val(w), inv.words), sym(n_ws)),
+        Holders::taken_of(c.holders, hx, x, at_x), reads);
+    let lc: ((c.views ++ [cv]).len() = c.views.len() + 1) = len_snoc(c.views, cv);
+    let views: ((u: Nat) → u < (c.views ++ [cv]).len() → ViewOk(view_at(c.views ++ [cv], u), buf_at(m.views ++ [bv], u), list_at(s.views ++ [win], u), c.holders, m.file, ws)) =
+        λ u lt => match q: (u + 1).leb(c.views.len()) {
+            True => {
+                let below: (u < c.views.len()) = Nat::leb_sound(u + 1, c.views.len(), Bool::is_true_of_eq(q));
+                ViewOk::moved(view_at(c.views, u), view_at(c.views ++ [cv], u), buf_at(m.views, u), buf_at(m.views ++ [bv], u),
+                    list_at(s.views, u), list_at(s.views ++ [win], u), c.holders, m.file, ws,
+                    sym(view_at_snoc_below(c.views, cv, u, below)),
+                    sym(buf_at_snoc_below(m.views, bv, u, omega(below, inv.nviews, inv.mviews))),
+                    sym(list_at_snoc_below(s.views, win, u, omega(below, inv.nviews))),
+                    inv.views(u, below))
+            },
+            False => {
+                let at: (c.views.len() = u) = omega(q, lt, lc);
+                ViewOk::moved(cv, view_at(c.views ++ [cv], u), bv, buf_at(m.views ++ [bv], u), win, list_at(s.views ++ [win], u), c.holders, m.file, ws,
+                    sym(view_at_snoc_at(c.views, cv, u, at)),
+                    sym(buf_at_snoc_at(m.views, bv, u, omega(at, inv.nviews, inv.mviews))),
+                    sym(list_at_snoc_at(s.views, win, u, omega(at, inv.nviews))),
+                    fresh)
+            },
+        };
+    j(g.right, λ q _ => Inv(plan, q.next, View(t, x, lo, n).eval1(s), View(t, x, lo, n).run2(plan, m), ws),
+        Inv(inv.words, inv.nw, inv.nobjs,
+            prelude::trans(lc, prelude::trans(cong_fn(λ (k: Nat) => k + 1, inv.nviews), sym(len_snoc(s.views, win)))),
+            prelude::trans(len_snoc(m.views, bv), prelude::trans(cong_fn(λ (k: Nat) => k + 1, inv.mviews), sym(len_snoc(s.views, win)))),
+            inv.room, inv.held, views))
+}
+
+// A set: the licence frames every view of the buffer written, and the name
+// written passes the buffer on to its result.
+theorem step_set(plan: List<Nat>, c: CState, s: Vals, m: Mach, ws: List<Nat>, inv: Inv(plan, c, s, m, ws), pre: Prefix(s.words, ws),
+    y, x: Nat, i, v: Atom, st: Stepped, ok: Set(y, x, i, v).check(plan, c) = Some(st), hold: Residual::All(st.rs, ws)):
+    Inv(plan, st.next, Set(y, x, i, v).eval1(s), Set(y, x, i, v).run2(plan, m), ws)
+{
+    let hx = home(plan, x);
+    let guard = (((y.same(c.nobjs) && Holders::holds(c.holders, hx, x)) && home(plan, y).same(hx)) && i.bound(c.nw)) && v.bound(c.nw);
+    let mk = λ (rs: List<Residual>) => Stepped(CState(Holders::put(c.holders, hx, y), c.views, c.nobjs + 1, c.nw), rs);
+    let p = guard.then_some(license(c.views, hx, i).map(mk), st, ok);
+    let lic = option_map_some(license(c.views, hx, i), mk, st, p.right);
+    let rs = lic.witness;
+    let hold_rs: Residual::All(rs, ws) = j(sym(lic.proof.right), λ q _ => Residual::All(q.rs, ws), hold);
+    let g1 = Bool::and_true_parts(((y.same(c.nobjs) && Holders::holds(c.holders, hx, x)) && home(plan, y).same(hx)) && i.bound(c.nw), v.bound(c.nw), p.left);
+    let g2 = Bool::and_true_parts((y.same(c.nobjs) && Holders::holds(c.holders, hx, x)) && home(plan, y).same(hx), i.bound(c.nw), g1.left);
+    let g3 = Bool::and_true_parts(y.same(c.nobjs) && Holders::holds(c.holders, hx, x), home(plan, y).same(hx), g2.left);
+    let g4 = Bool::and_true_parts(y.same(c.nobjs), Holders::holds(c.holders, hx, x), g3.left);
+    let hd = inv.held(hx, x, Holders::holds_sound(c.holders, hx, x, g4.right));
+    let i_ws: (i.val(ws) = i.val(s.words)) = i.val_stable(s.words, ws, pre, i.bound_at(c, s, g2.right, inv.nw));
+    let iv = i.val(m.words);
+    let vv = v.val(m.words);
+    let gw = λ (xs: List<Nat>) => xs.update(iv, λ _ => vv);
+    let nv = list_at(s.objs, x).update(i.val(s.words), λ _ => v.val(s.words));
+    let value: (gw(list_at(m.file, hx)) = nv) =
+        j(sym(inv.words), λ w _ => list_at(m.file, hx).update(i.val(w), λ _ => v.val(w)) = nv,
+            cong_fn(λ (l: List<Nat>) => l.update(i.val(s.words), λ _ => v.val(s.words)), hd.value));
+    let inside: (hx < m.file.len()) = j(hd.home, λ n _ => n < m.file.len(), inv.room(x));
+    let frame = λ (t: Nat) (lt: t < c.views.len()) (k: Nat) (klt: k < buf_at(m.views, t).n) => {
+        let o = inv.views(t, lt);
+        let bt = buf_at(m.views, t);
+        match q: bt.b.same(hx) {
+            True => {
+                let eb: (bt.b = hx) = bt.b.same_sound(hx, q);
+                let cvsame: (view_at(c.views, t).b.same(hx) = True) = j(o.at_b, λ n _ => n.same(hx) = True, q);
+                let apart = license_sound(c.views, hx, i, ws, rs, lic.proof.left, hold_rs, t, lt, cvsame);
+                let iv_ws: (iv = i.val(ws)) = prelude::trans(cong_fn(λ (w: List<Nat>) => i.val(w), inv.words), sym(i_ws));
+                j(sym(eb), λ bb _ => word(list_at(m.file.update(hx, gw), bb), bt.lo + k) = word(list_at(m.file, bb), bt.lo + k),
+                    prelude::trans(cong_fn(λ (l: List<Nat>) => word(l, bt.lo + k), list_at_update_here(m.file, hx, gw, inside)),
+                        frame_write(list_at(m.file, hx), iv, vv, bt.lo, bt.n, k, view_at(c.views, t).lo.val(ws), view_at(c.views, t).n.val(ws), i.val(ws),
+                            apart, o.at_lo, o.at_n, iv_ws, klt)))
+            },
+            False => cong_fn(λ (l: List<Nat>) => word(l, bt.lo + k), list_at_update_other(m.file, hx, gw, bt.b, q)),
+        }
+    };
+    j(lic.proof.right, λ q _ => Inv(plan, q.next, Set(y, x, i, v).eval1(s), Set(y, x, i, v).run2(plan, m), ws),
+        inv.moved(hx, y, gw, nv, y.same_sound(c.nobjs, g4.left), home(plan, y).same_sound(hx, g3.right), value, frame))
+}
+
+// A clone: a free buffer, so no view reads it.
+theorem step_clone(plan: List<Nat>, c: CState, s: Vals, m: Mach, ws: List<Nat>, inv: Inv(plan, c, s, m, ws),
+    y, x: Nat, st: Stepped, ok: Clone(y, x).check(plan, c) = Some(st)): Inv(plan, st.next, Clone(y, x).eval1(s), Clone(y, x).run2(plan, m), ws)
+{
+    let hx = home(plan, x);
+    let hy = home(plan, y);
+    let next = Stepped(CState(Holders::put(c.holders, hy, y), c.views, c.nobjs + 1, c.nw), Nil);
+    let g = Stepped::of((y.same(c.nobjs) && Holders::holds(c.holders, hx, x)) && Holders::free(c.holders, hy), next, st, ok);
+    let g1 = Bool::and_true_parts(y.same(c.nobjs) && Holders::holds(c.holders, hx, x), Holders::free(c.holders, hy), g.left);
+    let g2 = Bool::and_true_parts(y.same(c.nobjs), Holders::holds(c.holders, hx, x), g1.left);
+    let hd = inv.held(hx, x, Holders::holds_sound(c.holders, hx, x, g2.right));
+    let gc = λ (_: List<Nat>) => list_at(m.file, hx);
+    let frame = λ (t: Nat) (lt: t < c.views.len()) (k: Nat) (klt: k < buf_at(m.views, t).n) => {
+        let o = inv.views(t, lt);
+        let ne: (view_at(c.views, t).b.same(hy) = False) = Holders::ne_of_free(c.holders, hy, view_at(c.views, t).b, g1.right, o.taken);
+        cong_fn(λ (l: List<Nat>) => word(l, buf_at(m.views, t).lo + k),
+            list_at_update_other(m.file, hy, gc, buf_at(m.views, t).b, j(sym(o.at_b), λ n _ => n.same(hy) = False, ne)))
+    };
+    j(g.right, λ q _ => Inv(plan, q.next, Clone(y, x).eval1(s), Clone(y, x).run2(plan, m), ws),
+        inv.moved(hy, y, gc, list_at(s.objs, x), y.same_sound(c.nobjs, g2.left), refl, hd.value, frame))
+}
+
+theorem Op::step(self o: Op, plan: List<Nat>, c: CState, s: Vals, m: Mach, ws: List<Nat>, inv: Inv(plan, c, s, m, ws), pre: Prefix(s.words, ws),
+    st: Stepped, ok: o.check(plan, c) = Some(st), hold: Residual::All(st.rs, ws)): Inv(plan, st.next, o.eval1(s), o.run2(plan, m), ws)
+{
+    (match o as λ e => e.check(plan, c) = Some(st) → Inv(plan, st.next, e.eval1(s), e.run2(plan, m), ws) {
+        Set(y, x, i, v) => λ ok2 => step_set(plan, c, s, m, ws, inv, pre, y, x, i, v, st, ok2, hold),
+        Get(z, x, i) => λ ok2 => step_get(plan, c, s, m, ws, inv, z, x, i, st, ok2),
+        View(t, x, lo, n) => λ ok2 => step_view(plan, c, s, m, ws, inv, pre, t, x, lo, n, st, ok2),
+        Read(z, t, i) => λ ok2 => step_read(plan, c, s, m, ws, inv, z, t, i, st, ok2),
+        Clone(y, x) => λ ok2 => step_clone(plan, c, s, m, ws, inv, y, x, st, ok2),
+    })(ok)
+}
+
+// ---------------------------------------------------------------------------
+// The checker is proved once
+
+theorem check_ops_sound(plan: List<Nat>, ops: List<Op>): (c: CState) → (s: Vals) → (m: Mach) → Inv(plan, c, s, m, eval_ops(ops, s).words) →
+    (rs: List<Residual>) → check_ops(ops, plan, c) = Some(rs) → Residual::All(rs, eval_ops(ops, s).words) → run_ops(ops, plan, m).words = eval_ops(ops, s).words
+{
+    match ops {
+        Nil => λ c s m inv rs ok hold => inv.words,
+        Cons(o, rest) => λ c s m inv rs ok hold => {
+            let ws = eval_ops(rest, o.eval1(s)).words;
+            let st = Option::and_then_some(o.check(plan, c), λ q => check_ops(rest, plan, q.next).map(λ r2 => q.rs ++ r2), rs, ok);
+            let mp = option_map_some(check_ops(rest, plan, st.witness.next), λ r2 => st.witness.rs ++ r2, rs, st.proof.right);
+            let parts = Residual::all_append(st.witness.rs, mp.witness, ws, j(sym(mp.proof.right), λ q _ => Residual::All(q, ws), hold));
+            let pre: Prefix(s.words, ws) = eval_ops_grows(Cons(o, rest), s);
+            let inv2 = o.step(plan, c, s, m, ws, inv, pre, st.witness, st.proof.left, parts.left);
+            check_ops_sound(plan, rest, st.witness.next, o.eval1(s), o.run2(plan, m), inv2, mp.witness, mp.proof.left, parts.right)
+        },
+    }
+}
+
+theorem holders_put_sound(plan: List<Nat>, g: Holders(), j0: Nat, old: (b, x: Nat) → g(b) = Some(x) → (home(plan, x) = b) ∧ (x < j0)):
+    (b, x: Nat) → Holders::put(g, home(plan, j0), j0, b) = Some(x) → (home(plan, x) = b) ∧ (x < j0 + 1)
+{
+    λ b x => match q: b.same(home(plan, j0)) {
+        True => λ e3 => {
+            let ex: (j0 = x) = Option::some_inj(j0, x, e3);
+            ⟨j(ex, λ z _ => home(plan, z) = b, sym(b.same_sound(home(plan, j0), q))), omega(ex)⟩
+        },
+        False => λ e3 => {
+            let o = old(b, x, e3);
+            ⟨o.left, omega(o.right)⟩
+        },
+    }
+}
+
+// The parameters' holders: parameter `k` holds its buffer, and nothing else
+// holds one.
+theorem holders_upto_sound(plan: List<Nat>, k: Nat): (h: Holders()) → holders_upto(plan, k) = Some(h) → (b, x: Nat) → h(b) = Some(x) → (home(plan, x) = b) ∧ (x < k) {
+    match k {
+        Zero => λ h ok b x e => Option::none_ne_some(x, prelude::trans(cong_fn(λ (f: Holders()) => f(b), Option::some_inj(λ _ => None, h, ok)), e), (home(plan, x) = b) ∧ (x < 0)),
+        Succ(j0, ih) => λ h ok => {
+            let st = Option::and_then_some(holders_upto(plan, j0), λ g => Holders::free(g, home(plan, j0)).then(Some(Holders::put(g, home(plan, j0), j0))), h, ok);
+            let p = Bool::then_some(Holders::free(st.witness, home(plan, j0)), Some(Holders::put(st.witness, home(plan, j0), j0)), h, st.proof.right);
+            let eh: (Holders::put(st.witness, home(plan, j0), j0) = h) = Option::some_inj(Holders::put(st.witness, home(plan, j0), j0), h, p.right);
+            λ b x e => holders_put_sound(plan, st.witness, j0, ih(st.witness, st.proof.left), b, x, prelude::trans(cong_fn(λ (f: Holders()) => f(b), eh), e))
+        },
+    }
+}
+
+// The run's inputs: each parameter's buffer holds its list, and every
+// buffer the plan names is in the file. That the parameters' buffers are
+// distinct is the checker's to see.
+record Rep(f: Prog, plan: List<Nat>, env: Env, file: List<List<Nat>>) {
+    objs: env.objs.len() = f.objs,
+    words: env.words.len() = f.words,
+    holds: (k: Nat) → k < f.objs → list_at(file, home(plan, k)) = list_at(env.objs, k),
+    room: (k: Nat) → home(plan, k) < file.len(),
+}
+
+theorem check_sound(f: Prog, plan: List<Nat>, rs: List<Residual>, ok: check(f, plan) = Some(rs), env: Env, file: List<List<Nat>>,
+    rep: Rep(f, plan, env, file), holds: Residual::All(rs, eval1(f, env))): run2(f, plan, env.words, file) = eval1(f, env)
+{
+    let s0 = Vals(env.objs, Nil, env.words);
+    let m0 = Mach(file, Nil, env.words);
+    let st = Option::and_then_some(holders_upto(plan, f.objs), λ h => check_ops(f.body, plan, CState(h, Nil, f.objs, f.words)), rs, ok);
+    let c0 = CState(st.witness, Nil, f.objs, f.words);
+    let inv: Inv(plan, c0, s0, m0, eval1(f, env)) = Inv(refl, sym(rep.words), sym(rep.objs), refl, refl, rep.room,
+        λ b x e => {
+            let p = holders_upto_sound(plan, f.objs, st.witness, st.proof.left, b, x, e);
+            Held(p.left, p.right, j(p.left, λ n _ => list_at(file, n) = list_at(env.objs, x), rep.holds(x, p.right)))
+        },
+        λ t lt => false_elim(lt));
+    check_ops_sound(plan, f.body, c0, s0, m0, inv, rs, st.proof.right, holds)
+}

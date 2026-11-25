@@ -1020,6 +1020,16 @@ The checker is one forward pass over the body with a state per place:
   it is a residual obligation. A key access emits `Valid`; an index its
   bound; a call the callee's precondition.
 
+The first experiment (§15.6) keeps the state per object, not per name: a
+table of which name holds each object now, and the views, each naming its
+object and window. A name is `gone` when it no longer holds its object, an
+object some view reads is `frozen` with those viewers, one none reads is
+`whole`. `let y = x.set(i, v)` passes the object from `x` to `y`, so a
+frozen window follows the object through its versions with nothing per
+version. Stated per name, as above, the invariant needs two more clauses
+(live names hold distinct objects; every live name on a view's object lists
+its window), which are this table rederived.
+
 A place is frozen while a live binding's type mentions it in a read region.
 A write under a frozen place is licensed where it is apart from it, so a
 view of `xs[0..8]` permits `xs[9] := s`. A collection states one region for
@@ -1144,6 +1154,25 @@ if residuals cannot be closed data with a cheap meaning, if following a
 name through its in-place updates makes frozen tracking awkward, or if the
 kernel cannot evaluate the checker at tolerable cost. It does not test
 write views, calls, stored references or placement.
+
+**Result (2026-11-25).** Built as `lib/lang/ownership/place_check.hthr`, with
+its programs and controls in `lib/_tests/lang/ownership/place_check_tests.hthr`
+(`ownership-checker-spike` has the log). `check_sound` is proved by a
+simulation whose invariant is the place states' meaning and nothing else:
+a held object's buffer holds its holder's value, and each view reads its
+window, its object held. No separation algebra, history or ghost state. The
+write under a frozen window is framed by `PathIn::agree_apart` over
+`Path::elem_in`. Residuals are closed data (`Span(lo, n)` apart from
+`Span(i, 1)` over atoms), read in the words the meaning ends with, and the
+second program's is one `omega` from `k <= j`. None of the four refuting
+conditions was met. Two choices the design did not state: a run's view
+carries its length (a read past it is zero, as the window's value is), so
+no bound residual arises in this fragment; and the checker checks the plan
+(a set's result on its source's buffer, a clone's on a free one, the
+parameters' distinct). The checker's closed verdict grows quadratically
+with program length, from unary name lookups rather than from the checker
+(`place-check-name-lookup-cost`). What the next experiment needs of
+these definitions is `ownership-checker-call-and-write-view`.
 
 **The second experiment** adds functions and two operations: a call that
 lends a window to write (in the meaning: window, call, `put_window`, the

@@ -1,0 +1,189 @@
+// The three programs of the ownership checker's first experiment
+// (docs/language/ownership-design.md §15.6, lib/lang/ownership/place_check.hthr),
+// each with its control, and probes of the verdict decided at literals.
+import logic;
+import bool;
+import nat;
+import omega;
+import option;
+import list;
+import span_set;
+import place_check;
+
+// ---------------------------------------------------------------------------
+// 1. Accepted, linear: `let x1 = x.set(0, 7); let x2 = x1.set(1, 8); x2[0]`
+
+fn linear() → Prog { Prog(1, 0, [Set(1, 0, Lit(0), Lit(7)), Set(2, 1, Lit(1), Lit(8)), Get(0, 2, Lit(0))]) }
+
+theorem linear_checked(): check(linear(), [0, 0, 0]) = Some(Nil) { refl }
+
+// No residual, so no premise beyond the run's inputs.
+theorem linear_sound(env: Env, file: List<List<Nat>>, rep: Rep(linear(), [0, 0, 0], env, file)): run2(linear(), [0, 0, 0], env.words, file) = eval1(linear(), env) {
+    check_sound(linear(), [0, 0, 0], Nil, linear_checked(), env, file, rep, trivial)
+}
+
+// ---------------------------------------------------------------------------
+// 2. Accepted by a site fact: `let t = &x[0..k]; let x1 = x.set(j, 9); t[0]`
+// with `k <= j`. The words are `k` (0) and `j` (1); the read binds word 2.
+
+fn frozen() → Prog { Prog(1, 2, [View(0, 0, Lit(0), Var(0)), Set(1, 0, Var(1), Lit(9)), Read(2, 0, Lit(0))]) }
+
+theorem frozen_checked(): check(frozen(), [0, 0]) = Some([Residual(Lit(0), Var(0), Var(1))]) { refl }
+
+// The residual, from the source's hypothesis, by one `omega`.
+theorem frozen_sound(xs: List<Nat>, k, j: Nat, h: k <= j, file: List<List<Nat>>, rep: Rep(frozen(), [0, 0], Env([xs], [k, j]), file)):
+    run2(frozen(), [0, 0], [k, j], file) = eval1(frozen(), Env([xs], [k, j]))
+{
+    let apart: (Span(0, k).apart(Span(j, 1)).IsTrue()) = omega(h);
+    check_sound(frozen(), [0, 0], [Residual(Lit(0), Var(0), Var(1))], frozen_checked(), Env([xs], [k, j]), file, rep, ⟨apart, trivial⟩)
+}
+
+// The control: at `k = 1, j = 0` every premise but the residual holds, the
+// residual fails, and the runs differ (the view reads 9, the meaning 5).
+theorem frozen_control_rep(): Rep(frozen(), [0, 0], Env([[5, 6]], [1, 0]), [[5, 6]]) {
+    Rep(refl, refl,
+        λ k => match k { Zero => λ _ => refl, Succ(_) => λ no => false_elim(omega(no)) },
+        λ k => match k { Zero => omega(), Succ(k1) => match k1 { Zero => omega(), Succ(_) => omega() } })
+}
+
+theorem frozen_control_fails(): ¬Residual::All([Residual(Lit(0), Var(0), Var(1))], eval1(frozen(), Env([[5, 6]], [1, 0]))) { λ h => h.left }
+
+theorem frozen_control(): ¬(run2(frozen(), [0, 0], [1, 0], [[5, 6]]) = eval1(frozen(), Env([[5, 6]], [1, 0]))) {
+    λ e => {
+        let at: (9 = 5) = cong_fn(λ (ws: List<Nat>) => word(ws, 2), e);
+        absurd(at)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 3. Refused: `let x1 = x.set(0, 7); x[0]`, a read of a name after its update.
+
+fn stale() → Prog { Prog(1, 0, [Set(1, 0, Lit(0), Lit(7)), Get(0, 0, Lit(0))]) }
+
+theorem stale_refused(): check(stale(), [0, 0]) = None { refl }
+
+// The control: the refusal is not spurious (the buffer holds 7, the meaning
+// reads 3).
+theorem stale_control(): ¬(run2(stale(), [0, 0], [], [[3]]) = eval1(stale(), Env([[3]], []))) {
+    λ e => {
+        let at: (7 = 3) = cong_fn(λ (ws: List<Nat>) => word(ws, 0), e);
+        absurd(at)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The verdict at literals, and the plan
+
+// A write under a view, apart at literals: no residual.
+fn beside() → Prog { Prog(1, 0, [View(0, 0, Lit(0), Lit(2)), Set(1, 0, Lit(2), Lit(9)), Read(0, 0, Lit(1))]) }
+
+theorem beside_checked(): check(beside(), [0, 0]) = Some(Nil) { refl }
+
+theorem beside_sound(env: Env, file: List<List<Nat>>, rep: Rep(beside(), [0, 0], env, file)): run2(beside(), [0, 0], env.words, file) = eval1(beside(), env) {
+    check_sound(beside(), [0, 0], Nil, beside_checked(), env, file, rep, trivial)
+}
+
+// Overlapping at literals: refused, and rightly (the view reads 9, the
+// meaning 6).
+fn inside() → Prog { Prog(1, 0, [View(0, 0, Lit(0), Lit(2)), Set(1, 0, Lit(1), Lit(9)), Read(0, 0, Lit(1))]) }
+
+theorem inside_refused(): check(inside(), [0, 0]) = None { refl }
+
+theorem inside_control(): ¬(run2(inside(), [0, 0], [], [[5, 6, 7]]) = eval1(inside(), Env([[5, 6, 7]], []))) {
+    λ e => {
+        let at: (9 = 6) = cong_fn(λ (ws: List<Nat>) => word(ws, 0), e);
+        absurd(at)
+    }
+}
+
+// The frozen window follows the object through two versions: a view of `x`,
+// then `x1 = x.set(…)`, `x2 = x1.set(…)`, each apart; then a write into
+// the window through `x2` is refused.
+fn versions() → Prog {
+    Prog(1, 0, [View(0, 0, Lit(1), Lit(2)), Set(1, 0, Lit(0), Lit(4)), Set(2, 1, Lit(3), Lit(5)), Read(0, 0, Lit(0))])
+}
+
+theorem versions_checked(): check(versions(), [0, 0, 0]) = Some(Nil) { refl }
+
+fn versions_bad() → Prog {
+    Prog(1, 0, [View(0, 0, Lit(1), Lit(2)), Set(1, 0, Lit(0), Lit(4)), Set(2, 1, Lit(2), Lit(5)), Read(0, 0, Lit(0))])
+}
+
+theorem versions_bad_refused(): check(versions_bad(), [0, 0, 0]) = None { refl }
+
+// A clone has a buffer of its own: a write to it is not under the view.
+fn cloned() → Prog { Prog(1, 0, [View(0, 0, Lit(0), Lit(2)), Clone(1, 0), Set(2, 1, Lit(0), Lit(9)), Read(0, 0, Lit(0))]) }
+
+theorem cloned_checked(): check(cloned(), [0, 1, 1]) = Some(Nil) { refl }
+
+// The plan is checked: a clone into the buffer its source holds is refused,
+// as are two parameters on one buffer.
+theorem cloned_same_buffer_refused(): check(cloned(), [0, 0, 0]) = None { refl }
+
+theorem shared_parameters_refused(): check(Prog(2, 0, [Get(0, 1, Lit(0))]), [0, 0]) = None { refl }
+
+// ---------------------------------------------------------------------------
+// A longer program, for what the kernel pays: six rounds of a view of one
+// object, a set apart from it at literals, a set of the other object, a get,
+// a read of the view, and a set at the word `j`, which every live view of
+// the first object defers as a residual (1 + 2 + … + 6 of them).
+
+fn long() → Prog {
+    Prog(2, 2, [
+        View(0, 0, Lit(0), Lit(2)),
+        Set(2, 0, Lit(5), Lit(1)),
+        Set(3, 1, Var(1), Lit(2)),
+        Get(2, 2, Lit(0)),
+        Read(3, 0, Lit(1)),
+        Set(4, 2, Var(1), Lit(3)),
+        View(1, 4, Lit(0), Lit(2)),
+        Set(5, 4, Lit(5), Lit(1)),
+        Set(6, 3, Var(1), Lit(2)),
+        Get(4, 5, Lit(0)),
+        Read(5, 1, Lit(1)),
+        Set(7, 5, Var(1), Lit(3)),
+        View(2, 7, Lit(0), Lit(2)),
+        Set(8, 7, Lit(5), Lit(1)),
+        Set(9, 6, Var(1), Lit(2)),
+        Get(6, 8, Lit(0)),
+        Read(7, 2, Lit(1)),
+        Set(10, 8, Var(1), Lit(3)),
+        View(3, 10, Lit(0), Lit(2)),
+        Set(11, 10, Lit(5), Lit(1)),
+        Set(12, 9, Var(1), Lit(2)),
+        Get(8, 11, Lit(0)),
+        Read(9, 3, Lit(1)),
+        Set(13, 11, Var(1), Lit(3)),
+        View(4, 13, Lit(0), Lit(2)),
+        Set(14, 13, Lit(5), Lit(1)),
+        Set(15, 12, Var(1), Lit(2)),
+        Get(10, 14, Lit(0)),
+        Read(11, 4, Lit(1)),
+        Set(16, 14, Var(1), Lit(3)),
+        View(5, 16, Lit(0), Lit(2)),
+        Set(17, 16, Lit(5), Lit(1)),
+        Set(18, 15, Var(1), Lit(2)),
+        Get(12, 17, Lit(0)),
+        Read(13, 5, Lit(1)),
+        Set(19, 17, Var(1), Lit(3)),
+    ])
+}
+
+fn long_plan() → List<Nat> { [0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0] }
+
+fn long_residuals() → List<Residual> { List::replicate(Residual(Lit(0), Lit(2), Var(1)), 21) }
+
+theorem long_checked(): check(long(), long_plan()) = Some(long_residuals()) { refl }
+
+theorem all_replicate(n: Nat, r: Residual, ws: List<Nat>, h: r.Holds(ws)): Residual::All(List::replicate(r, n), ws) {
+    match n { Zero => trivial, Succ(k) => ⟨h, all_replicate(k, r, ws, h)⟩ }
+}
+
+// Every residual is one fact about `j`, from one hypothesis.
+theorem long_sound(xs, ys: List<Nat>, k, j: Nat, h: 2 <= j, file: List<List<Nat>>, rep: Rep(long(), long_plan(), Env([xs, ys], [k, j]), file)):
+    run2(long(), long_plan(), [k, j], file) = eval1(long(), Env([xs, ys], [k, j]))
+{
+    let apart: (Span(0, 2).apart(Span(j, 1)).IsTrue()) = omega(h);
+    check_sound(long(), long_plan(), long_residuals(), long_checked(), Env([xs, ys], [k, j]), file, rep,
+        all_replicate(21, Residual(Lit(0), Lit(2), Var(1)), eval1(long(), Env([xs, ys], [k, j])), apart))
+}
