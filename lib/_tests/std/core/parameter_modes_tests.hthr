@@ -302,3 +302,33 @@ theorem tally_modes(): True { by modes_are("Counter::tally", [2, 0]) }
 
 // expect-error: the modes are not the ones written
 theorem plain_modes_wrong(): True { by modes_are("plain", [2]) }
+
+// ---------------------------------------------------------------------------
+// A dot call threads its receiver where the receiver was written a live path
+// (`mut self`, `self: &mut`), read from the callee's recorded modes, not from
+// its result (issues/mutated-result-dot-call-diagnostic.md). A plain `self`
+// whose result is a `Mutated` record answers that record, as its qualified
+// call does, also on a `let mut` local.
+
+fn Counter::split(self c: Counter, k: Nat) → Mutated<Counter, Nat> { Mutated(Counter(c.n + k, c.log), c.n) }
+theorem split_dotted(c: Counter): c.split(1).value = c.n { refl }
+theorem split_qualified(c: Counter): Counter::split(c, 1).value = c.n { refl }
+
+fn split_on_local(c: Counter) → Nat {
+    let mut d = c;
+    let r = d.split(2);
+    r.value + r.after.n + d.n
+}
+theorem split_on_local_open(c: Counter): split_on_local(c) = c.n + (c.n + 2) + c.n { refl }
+
+// expect-error: `split` is not a `mut self` method
+fn split_statement(c: Counter) → Nat {
+    let mut d = c;
+    d.split(2);
+    d.n
+}
+
+// Under a projection, a `mut self` call no statement threads is refused
+// with its own reason, not as a field the receiver lacks.
+// expect-error: `tally` is a `mut self` method, so it updates its receiver, and nothing here keeps the update
+theorem tally_projected(c: Counter): c.tally(1).value = c.n + 1 { refl }

@@ -1078,6 +1078,10 @@ impl statements::StatementElab for Elaborator {
         self.scoped_cell(|s| &s.mut_call_site, Some(call.span), || self.elab_infer(cx, call))
     }
 
+    fn threads_receiver(&self, cx: &Cx, call: &Expr) -> Option<bool> {
+        dispatch::Members(self).threads_receiver(cx, call)
+    }
+
     fn read_local(&self, cx: &Cx, name: &str, span: Span) -> R<(Term, Type, Level)> {
         self.resolve_reading(cx, name, span)
     }

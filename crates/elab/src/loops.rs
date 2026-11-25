@@ -1779,7 +1779,7 @@ impl Lift<'_> {
         // after only the captures its type names (`n` of `Bytes(n)`).
         let named = named_first(&mut captures, &r.ty);
         params.extend(captures[..named].iter().map(|(n, t)| param(n, t.clone(), span)));
-        params.push(Param { is_self: true, ..param(&r.name, r.ty.clone(), span) });
+        params.push(Param { is_self: true, mode: heather_syntax::ParamMode::Path, ..param(&r.name, r.ty.clone(), span) });
         params.extend(captures[named..].iter().map(|(n, t)| param(n, t.clone(), span)));
         params.push(param(o, o_ty.clone(), span));
         params.extend(facts.iter().cloned());
@@ -1912,7 +1912,7 @@ impl Lift<'_> {
         let at: Vec<Expr> = params.iter().map(|p| var(&p.name, span)).collect();
         let result = call(var(run, span), at, span);
         let tests = tests_of(cond).len();
-        let theorem_params: Vec<Param> = params.iter().map(|p| Param { is_self: false, ..p.clone() }).collect();
+        let theorem_params: Vec<Param> = params.iter().map(|p| Param { is_self: false, mode: Default::default(), ..p.clone() }).collect();
         facts
             .iter()
             .enumerate()
@@ -2411,7 +2411,7 @@ impl Lift<'_> {
             Some((r, other)) => {
                 // The receiver first, after only the captures its type names.
                 params.extend(captures[..named].iter().map(|(n, t)| param(n, t.clone(), span)));
-                params.push(Param { is_self: true, ..param(&r.name, r.ty.clone(), span) });
+                params.push(Param { is_self: true, mode: heather_syntax::ParamMode::Path, ..param(&r.name, r.ty.clone(), span) });
                 params.extend(captures[named..].iter().map(|(n, t)| param(n, t.clone(), span)));
                 let other = other.map(|k| (vars[k], state_tys[k].clone()));
                 if let Some((o, t)) = &other {

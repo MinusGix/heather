@@ -171,6 +171,15 @@ impl Members<'_> {
                 // the field against the binder's type
                 // (issues/field-projection-sections.md).
                 Err(e @ ElabError::ArgSlotEscape { .. }) => return Err(e),
+                // A receiver that is itself a call and was refused (a `mut
+                // self` method no statement threads, a wrong argument) is
+                // what went wrong: its refusal is the diagnosis, not the
+                // field (issues/mutated-result-dot-call-diagnostic.md).
+                Err(e @ ElabError::Elab { .. })
+                    if matches!(&recv.kind, ExprKind::App { .. } | ExprKind::Dot { args: Some(_), .. }) =>
+                {
+                    return Err(e);
+                }
                 Err(_) => format!(
                     "no field `{name}` here (and the receiver's type \
                                    could not be inferred)"
@@ -351,20 +360,15 @@ impl Members<'_> {
     /// parameter (docs/language/effects-capabilities-design.md §2.2), the call would
     /// give the `Mutated` record where its answer was meant, with the receiver
     /// unchanged, so it is refused here rather than where the record is
-    /// used. The test reads the callee's written result head, so the hot
-    /// dot-call path pays one surface lookup and no type is reduced.
+    /// used. The test reads the mode the callee's receiver was written with
+    /// ([`Self::receiver_mode_of`]): a function whose receiver is a plain
+    /// `self` and whose result is a `Mutated` record answers that record
+    /// (issues/mutated-result-dot-call-diagnostic.md).
     fn refuse_unthreaded_mut_call(&self, recv: &Expr, callee: &str, span: Span) -> R<()> {
         if self.scope.mut_call_site.get() == Some(span) {
             return Ok(());
         }
-        let Some(abs) = self.lookup_global(callee).map(|g| g.abs) else { return Ok(()) };
-        let Some((module, base)) = self.names.global_name_at(abs).and_then(|key| key.split_once("::")) else {
-            return Ok(());
-        };
-        let Some(decl) = self.names.surface_decl_in(module, base) else { return Ok(()) };
-        let mutated = matches!(&decl.result.kind,
-            heather_syntax::TyKind::Named { name, .. } if name == heather_syntax::MUTATED_RECORD);
-        if !mutated {
+        if self.receiver_mode_of(callee) != Some(heather_syntax::ParamMode::Path) {
             return Ok(());
         }
         let method = callee.rsplit("::").next().unwrap_or(callee);
@@ -381,6 +385,38 @@ impl Members<'_> {
             ),
             span,
         )
+    }
+
+    /// The mode of a committed global's receiver: the parameter a method
+    /// call fills with its receiver. `None` when `callee` has no table.
+    pub(crate) fn receiver_mode_of(&self, callee: &str) -> Option<heather_syntax::ParamMode> {
+        let table = Callables(self).params_of(callee);
+        if table.is_empty() {
+            return None;
+        }
+        let explicit: Vec<_> = table.iter().filter(|p| !p.implicit && !p.is_type).collect();
+        explicit.get(application::subject_index_in(&table)).map(|p| p.mode)
+    }
+
+    /// Does the method call `call` (`recv.m(ā)`) thread its receiver: is the
+    /// callee's receiver a live path (`mut self`, `self: &mut`, or a `&mut`
+    /// parameter in the receiver's place,
+    /// docs/language/sequencing-surface-design.md §24)? Read from the
+    /// recorded modes: the enclosing declaration's own (its recursion), or
+    /// the callee's table. `None` where neither is known (a local function,
+    /// a name the receiver's type does not resolve), and the caller then
+    /// reads the call's type.
+    pub(crate) fn threads_receiver(&self, cx: &Cx, call: &Expr) -> Option<bool> {
+        let ExprKind::Dot { recv, name, args: Some(_), .. } = &call.kind else { return None };
+        let own = |n: &str| cx.selfref.as_ref().filter(|s| s.matches(n)).map(|s| s.receiver_mode);
+        if let Some(mode) = own(name) {
+            return Some(mode == heather_syntax::ParamMode::Path);
+        }
+        let head = self.member_head(cx, recv, name, false, call.span).ok()?;
+        if let Some(mode) = own(&head) {
+            return Some(mode == heather_syntax::ParamMode::Path);
+        }
+        self.receiver_mode_of(&head).map(|m| m == heather_syntax::ParamMode::Path)
     }
 
     /// The callee of a method call, given the receiver: `name` itself, or
