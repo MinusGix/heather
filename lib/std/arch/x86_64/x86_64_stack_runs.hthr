@@ -700,6 +700,26 @@ theorem Site::moves_dword_load<M>(self site: Site<M>, writes: ByteWrites<M>, fit
     }
 }
 
+// A word loaded at a label, through a plain base (MOV r64, [base]): the
+// doubleword's lemma at eight bytes.
+theorem Site::moves_word_load<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
+    before: Prog, name: Nat, load: WordLoad, at: asm_back(site.program, k) = At(before, name, Load(load)),
+    pre, post: MachineState<M> → Type,
+    step: (s: MachineState<M>) → pre(s) → Exists<BitVec(64)>(λ word =>
+        (read_gpr(load.base, s.gprs).toNat() + 8 <= Nat::pow(2, 47)) ∧
+        ((read_word(site.data, s.memory, read_gpr(load.base, s.gprs)) = Some(word)) ∧ post(word_load_after(load, word, s))))):
+    site.Moves(writes, prog_len(before), prog_len(before) + word_load_bytes(load).len(), pre, post) {
+    λ s here resident holds => {
+        let found = step(s, holds);
+        let after = word_load_after(load, found.witness, s);
+        let one: FetchedStep(site.fetch, site.data, s, after) = Exists(EmitWordLoad(load),
+            ⟨site.item_fetched(fits, s, resident, k, before, name, Load(load), at, here),
+             Exists(found.witness, WordLoadStep(canonical := found.proof.left, present := found.proof.right.left, execution := refl))⟩);
+        Exists(after, ⟨machine_steps_of_fetched(site.fetch, site.data, writes, s, after, fetched_steps_one(site.fetch, site.data, s, after, one)),
+            ⟨site.rip_after(s, prog_len(before), word_load_bytes(load).len(), here), ⟨resident, found.proof.right.right⟩⟩⟩)
+    }
+}
+
 // A register's low four bytes stored at a label, through a plain base, to
 // four writable bytes that keep the code.
 theorem Site::moves_dword_store<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,

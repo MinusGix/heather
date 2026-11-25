@@ -1,6 +1,6 @@
 ---
 title: The bytes level's routines and calls lowered: one valuation per scope, function_runs_by, call_step_by, the done clause
-status: open
+status: closed
 labels: [native,function-ir,x86,memory,ownership]
 area: heather-in-heather
 milestone: [nh-ownership]
@@ -26,3 +26,17 @@ Items 4 and 6 of [[bytes-level-lowering]]: a routine's entry, exit and run, an o
 
 - **[[bytes-level-lowering]]** owns the node, leaf, sequence and branch lowering. Assumed: `Body::emit_emits` as stated.
 - **[[lowering-generic-in-memory]]** owns `function_runs_by`, `call_step_by`. Assumed: citable at `S := Heap`.
+
+## Log
+
+- 2026-11-25: Built (branch `claude/bytes-level-lowering-routines`). **Done clause proved for every routine of every program `Program::lower` returns, at every fuel, for programs without loops or system calls; `lend` and `both` compiled with their theorems.**
+
+  - **One valuation per scope** (`lib/native/bytes_level/bytes_level_scope.hthr`). The check is `Body::fresh` (no id bound twice along any path: both arms of a branch may bind an id, nothing after the branch may bind it again). The frame is `Frames` (a checked run changes only the ids it binds), the invariant `Scoped` (a word id holds no reference beside it, a reference id one, and references only at ids the scope bound), the witness the final locals lowered (`Locals::lower`, `Locals::Shows`, `agrees_of`). `Body::holds_of` turns a checked run into the facts `Body::emit_emits` takes; `leaf_agrees` gives `run_instrs_holds` its `RunAgrees` unedited.
+  - **A call** (`bytes_level_lower`): `File::emit_call` with no buffers, proved by `File::emit_call_steps_by` with each CALL by `call_step_by` at the heap's clause (`call_heap_step`, `call_heap_emits`); the callee's contract is `RoutinePre`/`RoutinePost`, its answer at the fuel the call was given (`run_answers`). `Body::Holds` gained the callees' answers and the `spare` id; `Body::emit_emits` gained `CalleesReturn` and FunctionIR's `CallFrame` framing (`Body::calls`, `Body::Fits`).
+  - **The routine** (`bytes_level_routines`): `routine_runs` is `function_runs_by` at the heap's clause around `Body::emit_emits`; `routine_body`/`routine_closes`/`routine_returns` the frame arithmetic and `Site::returns_by`, as FunctionIR's `function_body`. A routine with no results answers zero in RAX from an id its scope never binds (`ids_past`), since FunctionIR's call and function theorems have a word in RAX; `Site::Returned` says nothing of RAX then.
+  - **The program**: `emit_routines` at labels `1` on, `routine_rooms` (largest frame over the callees' rooms), `Program::lower` (checks validity and layout). `program_returns` is the one induction on fuel: at `n + 1` a routine's calls are answered at `n` and met by the hypothesis. `program_quiet`: a done run with no system call keeps its world. `lower_program_meets_done`: `Site::MeetsDone`.
+  - **Refused**: a routine calling itself or one above it (`Site::Entering`'s room is fixed for every fuel; the meaning ties recursion by fuel, so its depth is unbounded), and a scope binding an id twice. Probes and controls in `lib/_tests/native/bytes_level/bytes_level_routines_tests.hthr` (`lend_lowers`, `lend_meets_done`, `both_lowers`, `both_meets_done`, `self_call_refused`, `twice_refused`, `arms_fresh`, `after_arms_refused`).
+  - **Relocated**: `Site::moves_word_load` to `x86_64_stack_runs` beside `moves_dword_load`; `pure_emits` to `function_ir_lower_calls` beside the `EmitsBy` definitions (after them, as it uses them).
+  - **Cited as stated**: `function_runs_by`, `call_step_by`, `File::emit_call_steps_by`, `may_emit_by_seq`, `branch_emits_by`, `Site::returns_by`, `label_target`. None needed more than its statement.
+  - **Cost** (uncached, width one): `bytes_level_scope` 93 items 0.5 s; `bytes_level_routines` 97 items 2.4 s, 1.2M steps (dearest `Program::lower` and `routine_body`, each under 0.4 s; `routine_body` first ran out of fuel as one theorem and was split into `routine_body` and `routine_closes`); `bytes_level_lower` 123 items 4.0 s (dearest the emitters' definitions and `call_heap_step`, under 0.5 s each); probes 0.1 s.
+  - Verified: `scripts/linked --check` every export unchanged; `HEATHER_PR_NATIVE=all scripts/test --pr`: `== suite: 4139 passed, 0 failed, 3 ignored ==`.

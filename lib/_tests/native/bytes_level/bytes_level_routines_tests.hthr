@@ -1,0 +1,182 @@
+// Probes of the bytes level's routines lowered (lib/native/bytes_level/
+// bytes_level_routines.hthr; issues/bytes-level-lowering-routines.md): the
+// language's call probes (bytes_level_tests' `lend` and `both`) compiled,
+// each with the done clause of `Site::Meets` for every routine at every
+// fuel, and the controls: a routine that calls itself, one that binds an id
+// twice, and one whose room the table does not hold, refused.
+import bytes_level::{run};
+import bytes_memory;
+import bytes_level_lower;
+import bytes_level_scope;
+import bytes_level_routines;
+import x86_64_memory_contract;
+import x86_64_call_contract;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_lower;
+import function_ir_lower_structured;
+import function_ir_lower_reads;
+import function_ir_lower_calls;
+import x86_64;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_stack;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import linux_world;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+fn into(registers: List<Gpr>) → List<Place> { registers.map(λ (r: Gpr) => Into(r)) }
+
+fn lowers(p: Program, placement: List<Place>) → Bool { p.lower(placement).is_some() }
+
+// ---------------------------------------------------------------------------
+// A window passed as a reference and a length to a callee that writes it
+
+// Routine 0: 42 at the window's first byte and at its last; it answers
+// nothing, so its code answers zero in RAX.
+fn fill() → Routine {
+    Routine([ref_id(0), word_id(1)],
+        Leaf([Compute(Const(64, 2, 42)), Store(1, 0, 2), Compute(Const(64, 3, 1)), Compute(Sub(64, 4, 1, 3)), Offset(5, 0, 4), Store(1, 5, 2)]),
+        [])
+}
+
+// Routine 1: the window of `length` bytes from byte 4 of its block lent to
+// `fill`, then bytes 4, 5 and 6 read back.
+fn lend(length: Nat) → Routine {
+    Routine([ref_id(0)],
+        Seq(Leaf([Compute(Const(64, 1, 4)), Offset(2, 0, 1), Compute(Const(64, 3, length))]),
+            Seq(Call(0, [ref_id(2), word_id(3)], []),
+                Leaf([Load(1, 4, 2), Compute(Const(64, 5, 1)), Offset(6, 2, 5), Load(1, 7, 6), Compute(Const(64, 8, 2)), Offset(9, 2, 8),
+                    Load(1, 10, 9)]))),
+        [word_id(4), word_id(7), word_id(10)])
+}
+
+fn lend_program(length: Nat) → Program { Program([fill(), lend(length)]) }
+
+// `fill`'s nodes, its two stores' places skipped, its zero answer in RAX;
+// then `lend`'s.
+fn lend_places() → List<Place> {
+    into([Rax, Rax, Rcx, Rdx, R8, R8, Rax]) ++ into([Rax, Rcx, Rdx, Rsi, Rax, Rax, R8, Rax, Rax, R9])
+}
+
+theorem lend_lowers(): lowers(lend_program(3), lend_places()) = True { refl }
+
+theorem lend_meets_done<M>(program: Prog, lowered: lend_program(3).lower(lend_places()) = Some(program), fetch: FetchAccess<M>,
+    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans,
+    loan: Loan<M>(fetch, data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans)):
+    Site<M>(fetch, data, program, last, origin).MeetsDone(stack, spans, top, routine_rooms(lend_program(3).routines), 2,
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(lend_program(3), blocks, n, f, args, heap, io)) {
+    lower_program_meets_done<M>(lend_program(3), lend_places(), program, lowered, fetch, data, last, origin, stack, top, spans, loan, blocks, lent)
+}
+
+// ---------------------------------------------------------------------------
+// Two windows of one block written by one callee
+
+fn two() → Routine {
+    Routine([ref_id(0), ref_id(1)], Leaf([Compute(Const(64, 2, 1)), Store(1, 0, 2), Compute(Const(64, 3, 2)), Store(1, 1, 3)]), [])
+}
+
+fn both(apart: Nat) → Routine {
+    Routine([ref_id(0)],
+        Seq(Leaf([Compute(Const(64, 1, apart)), Offset(2, 0, 1)]), Seq(Call(0, [ref_id(0), ref_id(2)], []), Leaf([Load(1, 3, 0), Load(1, 4, 2)]))),
+        [word_id(3), word_id(4)])
+}
+
+fn both_program(apart: Nat) → Program { Program([two(), both(apart)]) }
+
+fn both_places() → List<Place> { into([Rax, Rax, Rcx, Rcx, Rax]) ++ into([Rax, Rcx, Rax, Rdx]) }
+
+theorem both_lowers(): lowers(both_program(8), both_places()) = True { refl }
+
+theorem both_meets_done<M>(program: Prog, lowered: both_program(8).lower(both_places()) = Some(program), fetch: FetchAccess<M>,
+    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans,
+    loan: Loan<M>(fetch, data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans)):
+    Site<M>(fetch, data, program, last, origin).MeetsDone(stack, spans, top, routine_rooms(both_program(8).routines), 2,
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(both_program(8), blocks, n, f, args, heap, io)) {
+    lower_program_meets_done<M>(both_program(8), both_places(), program, lowered, fetch, data, last, origin, stack, top, spans, loan, blocks, lent)
+}
+
+// ---------------------------------------------------------------------------
+// Controls
+
+// A routine that calls itself: the meaning ties it by fuel, but the
+// contract's room is one for every fuel, so the call is refused.
+fn again() → Routine { Routine([word_id(0)], Call(0, [word_id(0)], [word_id(1)]), [word_id(1)]) }
+
+theorem again_valid(): Program([again()]).valid() = True { refl }
+
+theorem self_call_refused(): lowers(Program([again()]), into([Rax])) = False { refl }
+
+// An id bound twice in one scope has no one valuation, and is refused.
+fn twice() → Routine { Routine([], Leaf([Compute(Const(64, 0, 1)), Compute(Const(64, 0, 2))]), [word_id(0)]) }
+
+theorem twice_valid(): Program([twice()]).valid() = True { refl }
+
+theorem twice_refused(): lowers(Program([twice()]), into([Rax, Rax])) = False { refl }
+
+// Both arms of a branch may bind one id; what follows may not bind it again.
+theorem arms_fresh(): Branch(0, Leaf([Compute(Const(64, 1, 1))]), Leaf([Compute(Const(64, 1, 2))])).fresh([0]) = Some([1, 0, 1, 0]) { refl }
+
+theorem after_arms_refused(): Seq(Branch(0, Leaf([Compute(Const(64, 1, 1))]), Leaf([Compute(Const(64, 1, 2))])), Leaf([Compute(Const(64, 1, 3))])).fresh([0]) =
+    None { refl }
+
+// ---------------------------------------------------------------------------
+// A plain loop, by the run's fuel (bytes_level_tests' `countdown`)
+
+fn countdown() → Routine {
+    Routine([word_id(0)],
+        Loop([word_id(0)], [word_id(1)],
+            Leaf([Compute(Const(64, 2, 1)), Compute(Sub(64, 3, 1, 2)), Compute(Const(64, 4, 0)), Compute(Equal(64, 5, 3, 4))]), 5, [word_id(3)],
+            [word_id(6)]),
+        [word_id(6)])
+}
+
+fn countdown_program() → Program { Program([countdown()]) }
+
+// The state in RCX, then the pass's nodes.
+fn countdown_places() → List<Place> { into([Rcx, Rax, Rdx, Rax, Rsi]) }
+
+theorem countdown_lowers(): lowers(countdown_program(), countdown_places()) = True { refl }
+
+theorem countdown_meets_done<M>(program: Prog, lowered: countdown_program().lower(countdown_places()) = Some(program), fetch: FetchAccess<M>,
+    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans,
+    loan: Loan<M>(fetch, data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans)):
+    Site<M>(fetch, data, program, last, origin).MeetsDone(stack, spans, top, routine_rooms(countdown_program().routines), 1,
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(countdown_program(), blocks, n, f, args, heap, io)) {
+    lower_program_meets_done<M>(countdown_program(), countdown_places(), program, lowered, fetch, data, last, origin, stack, top, spans, loan, blocks, lent)
+}
+
+// Control: an id a pass bound, bound again after the loop, is refused: the
+// pass's ids are counted bound in the routine's scope.
+fn countdown_reusing() → Routine {
+    Routine([word_id(0)],
+        Loop([word_id(0)], [word_id(1)],
+            Leaf([Compute(Const(64, 2, 1)), Compute(Sub(64, 3, 1, 2)), Compute(Const(64, 4, 0)), Compute(Equal(64, 5, 3, 4))]), 5, [word_id(3)],
+            [word_id(3)]),
+        [word_id(3)])
+}
+
+theorem countdown_reusing_valid(): Program([countdown_reusing()]).valid() = True { refl }
+
+theorem countdown_reusing_refused(): lowers(Program([countdown_reusing()]), countdown_places()) = False { refl }
+
+// The exited clause holds of every program the lowering returns: none
+// lowers an exit, so its meaning never exits.
+theorem countdown_meets_exited<M>(program: Prog, lowered: countdown_program().lower(countdown_places()) = Some(program), fetch: FetchAccess<M>,
+    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
+    Site<M>(fetch, data, program, last, origin).MeetsExited(stack, spans, top, routine_rooms(countdown_program().routines), 1,
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(countdown_program(), blocks, n, f, args, heap, io)) {
+    lower_program_meets_exited<M>(countdown_program(), countdown_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks)
+}
+
+// Control: a routine that exits is refused, so the clause is not had of it
+// by the lowering.
+theorem exits_refused(): lowers(Program([Routine([], Seq(Leaf([Compute(Const(64, 0, 3))]), Exit(0)), [])]), into([Rax])) = False { refl }

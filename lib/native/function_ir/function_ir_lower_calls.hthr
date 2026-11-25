@@ -2981,6 +2981,28 @@ fn MayEmitBy<M, S>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.d
     out.All(λ (emitted: Emitted) => EmitsBy<M, S>(saves, site, stack, spans, Mem, values, d, s0, prog, file, facts, before, after, emitted))
 }
 
+// Code that runs as one block, keeping the file's description and the
+// registers a body keeps, touches no memory: `EmitsBy` at any clause, from
+// a state to itself (`kept_block_emits`' content over the clause's trail).
+theorem pure_emits<M, S>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    spans: Spans, Mem: S → M → Type, values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File, facts: Type, lowered: Lowered,
+    keeps: Keeps<M>(values, file, facts, lowered), guards: Guards<M>(values, file, facts, lowered),
+    leaves: leaves_all(lowered.code, body_kept(saves)).IsTrue(), placement: List<Place>, names: Nat, now: S):
+    EmitsBy<M, S>(saves, site, stack, spans, Mem, values, d, s0, prog, file, facts, now, now,
+        Emitted(At(prog, 0, Asm::of_code(lowered.code)), lowered.file, placement, names)) {
+    let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ facts) ∧
+        (Kept(body_kept(saves), s0.gprs, g) ∧ stack.TrailBy(spans, Mem, d, s0.memory, now, m));
+    let post = λ (g: Gprs) (m: M) => lowered.file.Represents(values, g) ∧
+        (Kept(body_kept(saves), s0.gprs, g) ∧ stack.TrailBy(spans, Mem, d, s0.memory, now, m));
+    ⟨prog.within_then(0, Asm::of_code(lowered.code)),
+     λ within => site.moves_of_pure(stack.writes, prog_len(prog), prog_len(At(prog, 0, Asm::of_code(lowered.code))), pre, post,
+        λ memory => site.runs_code(laid, within.witness, prog, 0, lowered.code, within.proof,
+            λ (g: Gprs) => pre(g, memory), λ (g: Gprs) => post(g, memory),
+            λ x held => ⟨guards(x, held.left.left, held.left.right), ⟨keeps(x, held.left.left, held.left.right),
+                ⟨kept_trans(body_kept(saves), s0.gprs, x.gprs, execute_block_normal(lowered.code, x).gprs, held.right.left,
+                    execute_block_kept<M>(lowered.code, x, body_kept(saves), leaves)), held.right.right⟩⟩⟩))⟩
+}
+
 // FunctionIR's: from the file `before` in memory to the file `after` in
 // memory.
 fn EmitsOver<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.data), lending: Lending, values: Valuation(), d: Nat,

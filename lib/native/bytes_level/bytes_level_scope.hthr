@@ -1,0 +1,1244 @@
+// One valuation per scope (issues/bytes-level-lowering-routines.md): the
+// lowering's theorems are over one FunctionIR valuation for a routine's
+// body (`Locals::Agrees` at every node, bytes_level_lower), while the bytes
+// level's locals change as a run goes. Such a valuation exists exactly where
+// no id is bound twice in a scope, which the lowering checks
+// (`Body::fresh`, over every path: both arms of a branch may bind an id,
+// but nothing after the branch may bind it again).
+//
+// - The frame: a node, a region and a call's results change only the ids
+//   they bind (`Frames`), and a checked region binds only ids it was not
+//   given (`Scoped`: the kinds bound so far are held as validity says, a
+//   word with no reference beside it and a reference with one, and the
+//   locals hold references only at ids the scope has bound).
+// - The witness: the run's final locals, lowered (`Locals::lower`: a
+//   reference's address, a word itself). Every id bound on the way holds at
+//   the end what it held when bound, so the valuation agrees with the locals
+//   at every node (`Locals::Shows`, `agrees_of`).
+// - The bridge: a checked region's run, at that valuation, is its facts
+//   (`Body::holds_of`), the ones `Body::emit_emits` takes; a call's facts
+//   are the callee's answer at the fuel the run gave it (`run_answers`).
+import bytes_memory;
+import bytes_level;
+import bytes_level_lower;
+import x86_64_memory_contract;
+import x86_64_call_contract;
+import function_ir;
+import function_ir_eval;
+import linux_world;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// Outcomes
+
+theorem Ran::then_done<T, U>(r: Ran<T>, k: T → Ran<U>, x: U): r.then(k) = Done(x) → Exists<T>(λ a => (r = Done(a)) ∧ (k(a) = Done(x))) {
+    match r {
+        Done(a) => λ h => Exists(a, ⟨refl, h⟩),
+        Exited(_, _) => λ h => absurd(h),
+        Going(_) => λ h => absurd(h),
+        Stuck(_) => λ h => absurd(h),
+    }
+}
+
+theorem Ran::done_inj<T>(a, b: T, same: Done<T>(a) = Done<T>(b)): a = b {
+    cong_fn<Ran<T>, T>(λ r => match r { Done(x) => x, Exited(_, _) => a, Going(_) => a, Stuck(_) => a }, same)
+}
+
+theorem Ran::of_done<T>(o: Option<T>, io: Io, x: T): Ran::of(o, io) = Done(x) → o = Some(x) {
+    match o {
+        None => λ h => absurd(h),
+        Some(v) => λ h => cong_fn<T, Option<T>>(λ y => Some(y), Ran::done_inj<T>(v, x, h)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Ids bound in a scope
+
+fn listed(ids: List<Nat>, id: Nat) → Bool {
+    match ids { Nil => False, Cons(x, rest) => match x.same(id) { True => True, False => listed(rest, id) } }
+}
+
+theorem unlisted_absent(ids: List<Nat>, id: Nat): listed(ids, id) = False → Mem(id, ids) → False {
+    match ids {
+        Nil => λ _ m => m,
+        Cons(x, rest) => match s: x.same(id) {
+            True => λ never _ => absurd(never),
+            False => λ un m => match m {
+                Inl(here) => absurd(trans(sym(j(here, λ y _ => y.same(id) = True, id.same_self())), s)),
+                Inr(later) => unlisted_absent(rest, id, un, later),
+            },
+        },
+    }
+}
+
+// The id a node binds, at its kind.
+fn Instr::binds(self instr: Instr) → Option<Typed> {
+    match instr {
+        Compute(node) => Some(word_id(node_output(node).id)),
+        Load(_, output, _) => Some(word_id(output)),
+        Store(_, _, _) => None,
+        LoadRef(output, _) => Some(ref_id(output)),
+        StoreRef(_, _) => None,
+        Offset(output, _, _) => Some(ref_id(output)),
+        Copy(_, _, _) => None,
+    }
+}
+
+// An id bound where the scope has not bound it yet.
+fn fresh_id(used: List<Nat>, id: Nat) → Option<List<Nat>> { match listed(used, id) { True => None, False => Some(Cons(id, used)) } }
+
+fn fresh_ids(used: List<Nat>, ids: List<Nat>) → Option<List<Nat>> {
+    match ids { Nil => Some(used), Cons(id, rest) => match fresh_id(used, id) { None => None, Some(more) => fresh_ids(more, rest) } }
+}
+
+fn fresh_bind(used: List<Nat>, b: Option<Typed>) → Option<List<Nat>> { match b { None => Some(used), Some(v) => fresh_id(used, v.id) } }
+
+fn fresh_instrs(instrs: List<Instr>, used: List<Nat>) → Option<List<Nat>> {
+    match instrs {
+        Nil => Some(used),
+        Cons(instr, rest) => match fresh_bind(used, instr.binds()) { None => None, Some(more) => fresh_instrs(rest, more) },
+    }
+}
+
+// The lowering's check: no id is bound twice along any path of a scope.
+// Both arms of a branch are checked from what was bound before it, and
+// what follows it from what either bound. A loop's pass is a scope of its
+// own, from its parameters; the ids it binds are counted bound in the scope
+// the loop is in too, so that no later id is one a pass bound. System calls
+// and exits are not lowered yet, and refused here.
+fn Body::fresh(self body: Body, used: List<Nat>) → Option<List<Nat>> {
+    match body {
+        Leaf(instrs) => fresh_instrs(instrs, used),
+        Seq(first, rest) => match first.fresh(used) { None => None, Some(mid) => rest.fresh(mid) },
+        Branch(_, yes, no) => match yes.fresh(used) {
+            None => None,
+            Some(after_yes) => match no.fresh(used) { None => None, Some(after_no) => Some(after_yes ++ after_no) },
+        },
+        Call(_, _, results) => fresh_ids(used, typed_ids(results)),
+        Loop(_, parameters, inner, _, _, outputs) => match fresh_ids([], typed_ids(parameters)) {
+            None => None,
+            Some(start) => match inner.fresh(start) { None => None, Some(inside) => fresh_ids(used ++ inside, typed_ids(outputs)) },
+        },
+        Sys(_) => None,
+        Exit(_) => None,
+    }
+}
+
+theorem fresh_id_some(used: List<Nat>, id: Nat, out: List<Nat>, e: fresh_id(used, id) = Some(out)):
+    (listed(used, id) = False) ∧ (Cons(id, used) = out) {
+    (match listed(used, id) as λ b => listed(used, id) = b → (match b { True => None, False => Some(Cons(id, used)) }) = Some(out) →
+        (listed(used, id) = False) ∧ (Cons(id, used) = out) {
+        True => λ _ never => absurd(never),
+        False => λ s some => ⟨s, Option::some_inj(Cons(id, used), out, some)⟩,
+    })(refl, e)
+}
+
+// ---------------------------------------------------------------------------
+// Locals alike at an id
+
+fn Locals::Same(self a: Locals, b: Locals, id: Nat) → Type { ((w: Nat) → a.words(w, id) = b.words(w, id)) ∧ (a.refs(id) = b.refs(id)) }
+
+theorem Locals::same_refl(self a: Locals, id: Nat): a.Same(a, id) { ⟨λ w => refl, refl⟩ }
+
+theorem Locals::same_trans(self a: Locals, b, c: Locals, id: Nat, ab: a.Same(b, id), bc: b.Same(c, id)): a.Same(c, id) {
+    ⟨λ w => trans(ab.left(w), bc.left(w)), trans(ab.right, bc.right)⟩
+}
+
+theorem Locals::set_word_other(self l: Locals, out: Nat, value: (w: Nat) → BitVec(w), id: Nat, ne: id ≠ out): l.Same(l.set_word(out, value), id) {
+    ⟨λ w => sym(Valuation::set_other(l.words, out, value, w, id, ne)), refl⟩
+}
+
+theorem Locals::set_ref_other(self l: Locals, out: Nat, loc: Loc, id: Nat, ne: id ≠ out): l.Same(l.set_ref(out, loc), id) {
+    ⟨λ w => refl, sym(j(sym(id.same_false_of(out, ne)), λ b _ => (match b { True => Some(loc), False => l.refs(id) }) = l.refs(id), refl))⟩
+}
+
+theorem Locals::set_ref_here(self l: Locals, out: Nat, loc: Loc): l.set_ref(out, loc).refs(out) = Some(loc) {
+    j(sym(out.same_self()), λ b _ => (match b { True => Some(loc), False => l.refs(out) }) = Some(loc), refl)
+}
+
+// What binding an id did to the locals: set its word, or its reference.
+fn Binds(id: Nat, kind: ValueKind, before, after: Locals) → Type {
+    match kind {
+        WordKind => Exists<(w: Nat) → BitVec(w)>(λ value => after = before.set_word(id, value)),
+        RefKind => Exists<Loc>(λ loc => after = before.set_ref(id, loc)),
+    }
+}
+
+theorem binds_other(id: Nat, kind: ValueKind, before, after: Locals, other: Nat, ne: other ≠ id): Binds(id, kind, before, after) →
+    before.Same(after, other) {
+    match kind {
+        WordKind => λ b => j(sym(b.proof), λ l _ => before.Same(l, other), before.set_word_other(id, b.witness, other, ne)),
+        RefKind => λ b => j(sym(b.proof), λ l _ => before.Same(l, other), before.set_ref_other(id, b.witness, other, ne)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A scope's invariant
+
+// Validity's kind of an id, as the locals hold it: a word with no
+// reference at its id, a reference with one.
+fn KindHeld(l: Locals, v: Typed) → Type {
+    match v.kind { WordKind => l.refs(v.id) = None, RefKind => Exists<Loc>(λ loc => l.refs(v.id) = Some(loc)) }
+}
+
+// Every kind bound so far is of an id the scope bound, and held so.
+fn Locals::Kinded(self l: Locals, used: List<Nat>, kinds: List<Typed>) → Type {
+    match kinds { Nil => True, Cons(v, rest) => (Mem(v.id, used) ∧ KindHeld(l, v)) ∧ l.Kinded(used, rest) }
+}
+
+// References only at ids the scope bound.
+fn Locals::Fresh(self l: Locals, used: List<Nat>) → Type { (id: Nat) → (loc: Loc) → l.refs(id) = Some(loc) → Mem(id, used) }
+
+fn Scoped(l: Locals, used: List<Nat>, kinds: List<Typed>) → Type { l.Kinded(used, kinds) ∧ l.Fresh(used) }
+
+// From `before` to `after`, binding `used2` past `used`: every id the scope
+// had not newly bound is alike, and what was bound stays bound.
+fn Frames(before, after: Locals, used, used2: List<Nat>) → Type {
+    ((id: Nat) → (Mem(id, used2) → Mem(id, used)) → before.Same(after, id)) ∧ ((id: Nat) → Mem(id, used) → Mem(id, used2))
+}
+
+fn Scopes(before, after: Locals, used, used2: List<Nat>, bound: List<Typed>) → Type { Scoped(after, used2, bound) ∧ Frames(before, after, used, used2) }
+
+theorem frames_refl(l: Locals, used: List<Nat>): Frames(l, l, used, used) { ⟨λ id _ => l.same_refl(id), λ id m => m⟩ }
+
+theorem frames_trans(a, b, c: Locals, u1, u2, u3: List<Nat>, ab: Frames(a, b, u1, u2), bc: Frames(b, c, u2, u3)): Frames(a, c, u1, u3) {
+    ⟨λ id back => a.same_trans(b, c, id, ab.left(id, λ m2 => back(bc.right(id, m2))), bc.left(id, λ m3 => ab.right(id, back(m3)))),
+     λ id m => bc.right(id, ab.right(id, m))⟩
+}
+
+theorem kind_held_same(id: Nat, kind: ValueKind, a, b: Locals, same: a.Same(b, id)): KindHeld(a, Typed(id, kind)) → KindHeld(b, Typed(id, kind)) {
+    match kind {
+        WordKind => λ h => trans(sym(same.right), h),
+        RefKind => λ h => Exists(h.witness, trans(sym(same.right), h.proof)),
+    }
+}
+
+theorem Locals::kinded_same(self a: Locals, b: Locals, used: List<Nat>, same: (id: Nat) → Mem(id, used) → a.Same(b, id), kinds: List<Typed>):
+    a.Kinded(used, kinds) → b.Kinded(used, kinds) {
+    match kinds {
+        Nil => λ _ => trivial,
+        Cons(v, rest) => λ k => ⟨⟨k.left.left, kind_held_same(v.id, v.kind, a, b, same(v.id, k.left.left), k.left.right)⟩,
+            a.kinded_same(b, used, same, rest, k.right)⟩,
+    }
+}
+
+theorem Locals::kinded_widen(self l: Locals, used, wider: List<Nat>, grow: (id: Nat) → Mem(id, used) → Mem(id, wider), kinds: List<Typed>):
+    l.Kinded(used, kinds) → l.Kinded(wider, kinds) {
+    match kinds {
+        Nil => λ _ => trivial,
+        Cons(v, rest) => λ k => ⟨⟨grow(v.id, k.left.left), k.left.right⟩, l.kinded_widen(used, wider, grow, rest, k.right)⟩,
+    }
+}
+
+theorem Locals::fresh_widen(self l: Locals, used, wider: List<Nat>, grow: (id: Nat) → Mem(id, used) → Mem(id, wider), fresh: l.Fresh(used)):
+    l.Fresh(wider) {
+    λ id loc held => grow(id, fresh(id, loc, held))
+}
+
+// What both arms bound alike is among what the one that ran bound.
+theorem Locals::kinded_meet(self l: Locals, used: List<Nat>, no: List<Typed>, yes: List<Typed>): l.Kinded(used, yes) →
+    l.Kinded(used, yes.filter(λ (v: Typed) => has_kind(no, v.id, v.kind))) {
+    match yes {
+        Nil => λ _ => trivial,
+        Cons(v, rest) => λ k => (match has_kind(no, v.id, v.kind) as λ b =>
+            l.Kinded(used, match b { True => Cons(v, rest.filter(λ (x: Typed) => has_kind(no, x.id, x.kind))),
+                False => rest.filter(λ (x: Typed) => has_kind(no, x.id, x.kind)) }) {
+            True => ⟨k.left, l.kinded_meet(used, no, rest, k.right)⟩,
+            False => l.kinded_meet(used, no, rest, k.right),
+        }),
+    }
+}
+
+// An id the scope has not bound has no reference, and no kind.
+theorem Locals::fresh_none(self l: Locals, used: List<Nat>, fresh: l.Fresh(used), id: Nat, absent: Mem(id, used) → False): l.refs(id) = None {
+    (match l.refs(id) as λ o => l.refs(id) = o → o = None {
+        None => λ _ => refl,
+        Some(loc) => λ e => false_elim(absent(fresh(id, loc, e))),
+    })(refl)
+}
+
+theorem Locals::kind_absent(self l: Locals, used: List<Nat>, id: Nat, absent: Mem(id, used) → False, kinds: List<Typed>):
+    l.Kinded(used, kinds) → kind_of(kinds, id) = None {
+    match kinds {
+        Nil => λ _ => refl,
+        Cons(v, rest) => λ k => match s: v.id.same(id) {
+            True => false_elim(absent(j(v.id.same_sound(id, s), λ x _ => Mem(x, used), k.left.left))),
+            False => l.kind_absent(used, id, absent, rest, k.right),
+        },
+    }
+}
+
+theorem bind_kind_fresh(kinds: List<Typed>, v: Typed, bound: List<Typed>, none: kind_of(kinds, v.id) = None, bind: bind_kind(kinds, v) = Some(bound)):
+    Cons(v, kinds) = bound {
+    Option::some_inj(Cons(v, kinds), bound,
+        j(none, λ o _ => (match o { None => Some(Cons(v, kinds)), Some(k) => match k.same(v.kind) { True => Some(kinds), False => None } }) = Some(bound),
+            bind))
+}
+
+// One id bound where the scope had not bound it: the invariant holds of
+// the locals after, over the kinds validity binds, and nothing else moved.
+theorem scoped_bind(id: Nat, kind: ValueKind, before, after: Locals, used: List<Nat>, kinds, bound: List<Typed>, absent: listed(used, id) = False,
+    binds: Binds(id, kind, before, after), bind: bind_kind(kinds, Typed(id, kind)) = Some(bound), scoped: Scoped(before, used, kinds)):
+    Scopes(before, after, used, Cons(id, used), bound) {
+    let gone: (Mem(id, used) → False) = unlisted_absent(used, id, absent);
+    let others = λ (x: Nat) (m: Mem(x, used)) => binds_other(id, kind, before, after, x, λ e => gone(j(e, λ y _ => Mem(y, used), m)), binds);
+    let e: (Cons(Typed(id, kind), kinds) = bound) = bind_kind_fresh(kinds, Typed(id, kind), bound,
+        before.kind_absent(used, id, gone, kinds, scoped.left), bind);
+    let none: (before.refs(id) = None) = before.fresh_none(used, scoped.right, id, gone);
+    let held: KindHeld(after, Typed(id, kind)) = (match kind as λ k => Binds(id, k, before, after) → KindHeld(after, Typed(id, k)) {
+        WordKind => λ b => j(sym(b.proof), λ l _ => l.refs(id) = None, none),
+        RefKind => λ b => Exists(b.witness, j(sym(b.proof), λ l _ => l.refs(id) = Some(b.witness), before.set_ref_here(id, b.witness))),
+    })(binds);
+    let fresh: after.Fresh(Cons(id, used)) = λ x loc some => match x.eq_dec(id) {
+        Inl(here) => Inl(here),
+        Inr(ne) => Inr(scoped.right(x, loc, trans((binds_other(id, kind, before, after, x, ne, binds)).right, some))),
+    };
+    let kinded: after.Kinded(Cons(id, used), kinds) = after.kinded_widen(used, Cons(id, used), λ x m => Inr(m), kinds,
+        before.kinded_same(after, used, others, kinds, scoped.left));
+    ⟨j(e, λ b _ => Scoped(after, Cons(id, used), b), ⟨⟨⟨Inl(refl), held⟩, kinded⟩, fresh⟩),
+     ⟨λ x back => match x.eq_dec(id) {
+         Inl(here) => false_elim(gone(j(here, λ y _ => Mem(y, used), back(Inl(here))))),
+         Inr(ne) => binds_other(id, kind, before, after, x, ne, binds),
+      },
+      λ x m => Inr(m)⟩⟩
+}
+
+// ---------------------------------------------------------------------------
+// A node binds what `Instr::binds` says, and nothing else
+
+fn StepShape(b: Option<Typed>, before, after: Locals) → Type { match b { None => after = before, Some(v) => Binds(v.id, v.kind, before, after) } }
+
+fn CheckShape(b: Option<Typed>, kinds, bound: List<Typed>) → Type { match b { None => bound = kinds, Some(v) => bind_kind(kinds, v) = Some(bound) } }
+
+theorem Instr::step_shape(self instr: Instr, blocks: Blocks, c, after: Config, stepped: instr.step(blocks, c) = Some(after)):
+    StepShape(instr.binds(), c.locals, after.locals) {
+    match instr {
+        Compute(node) => {
+            let made = Some(Config(Locals(node.step(c.locals.words), c.locals.refs), c.memory, c.io));
+            match def: node.pure() && node.defined(c.locals.words) {
+                False => absurd(j(def, λ v _ => (match v { False => None, True => made }) = Some(after), stepped)),
+                True => {
+                    let e = Option::some_inj(Config(Locals(node.step(c.locals.words), c.locals.refs), c.memory, c.io), after,
+                        j(def, λ v _ => (match v { False => None, True => made }) = Some(after), stepped));
+                    Exists(node.value(c.locals.words), sym(cong_fn<Config, Locals>(λ y => y.locals, e)))
+                },
+            }
+        },
+        Load(bytes, output, place) => {
+            let first = Option::and_then_some(c.locals.refs(place), λ (loc: Loc) =>
+                c.memory.load(loc, bytes).and_then(λ (x: BitVec(64)) => Some(Config(c.locals.set_word(output, word_value(x)), c.memory, c.io))), after,
+                stepped);
+            let second = Option::and_then_some(c.memory.load(first.witness, bytes), λ (x: BitVec(64)) =>
+                Some(Config(c.locals.set_word(output, word_value(x)), c.memory, c.io)), after, first.proof.right);
+            Exists(word_value(second.witness), sym(cong_fn<Config, Locals>(λ y => y.locals,
+                Option::some_inj(Config(c.locals.set_word(output, word_value(second.witness)), c.memory, c.io), after, second.proof.right))))
+        },
+        Store(bytes, place, value) => {
+            let piece = λ (w: BitVec(64)) => Piece::plain(low_bytes(bytes, w));
+            let first = Option::and_then_some(c.locals.refs(place), λ (loc: Loc) =>
+                c.memory.put(blocks.written, loc, piece(c.locals.word(value))).and_then(λ (m: Heap) => Some(Config(c.locals, m, c.io))), after, stepped);
+            let second = Option::and_then_some(c.memory.put(blocks.written, first.witness, piece(c.locals.word(value))),
+                λ (m: Heap) => Some(Config(c.locals, m, c.io)), after, first.proof.right);
+            sym(cong_fn<Config, Locals>(λ y => y.locals, Option::some_inj(Config(c.locals, second.witness, c.io), after, second.proof.right)))
+        },
+        LoadRef(output, place) => {
+            let first = Option::and_then_some(c.locals.refs(place), λ (loc: Loc) =>
+                c.memory.load_ref(loc).and_then(λ (target: Loc) => Some(Config(c.locals.set_ref(output, target), c.memory, c.io))), after, stepped);
+            let second = Option::and_then_some(c.memory.load_ref(first.witness), λ (target: Loc) =>
+                Some(Config(c.locals.set_ref(output, target), c.memory, c.io)), after, first.proof.right);
+            Exists(second.witness, sym(cong_fn<Config, Locals>(λ y => y.locals,
+                Option::some_inj(Config(c.locals.set_ref(output, second.witness), c.memory, c.io), after, second.proof.right))))
+        },
+        StoreRef(place, value) => {
+            let first = Option::and_then_some(c.locals.refs(place), λ (loc: Loc) => c.locals.refs(value).and_then(λ (target: Loc) =>
+                c.memory.put(blocks.written, loc, Piece::reference(target)).and_then(λ (m: Heap) => Some(Config(c.locals, m, c.io)))), after, stepped);
+            let second = Option::and_then_some(c.locals.refs(value), λ (target: Loc) =>
+                c.memory.put(blocks.written, first.witness, Piece::reference(target)).and_then(λ (m: Heap) => Some(Config(c.locals, m, c.io))), after,
+                first.proof.right);
+            let third = Option::and_then_some(c.memory.put(blocks.written, first.witness, Piece::reference(second.witness)),
+                λ (m: Heap) => Some(Config(c.locals, m, c.io)), after, second.proof.right);
+            sym(cong_fn<Config, Locals>(λ y => y.locals, Option::some_inj(Config(c.locals, third.witness, c.io), after, third.proof.right)))
+        },
+        Offset(output, place, amount) => {
+            let moved = λ (loc: Loc) => Loc(loc.block, loc.offset + c.locals.word(amount).toNat());
+            let first = Option::and_then_some(c.locals.refs(place), λ (loc: Loc) =>
+                Some(Config(c.locals.set_ref(output, moved(loc)), c.memory, c.io)), after, stepped);
+            Exists(moved(first.witness), sym(cong_fn<Config, Locals>(λ y => y.locals,
+                Option::some_inj(Config(c.locals.set_ref(output, moved(first.witness)), c.memory, c.io), after, first.proof.right))))
+        },
+        Copy(target, source, length) => {
+            let n = c.locals.word(length).toNat();
+            let first = Option::and_then_some(c.locals.refs(target), λ (to: Loc) => c.locals.refs(source).and_then(λ (from: Loc) =>
+                c.memory.copy(blocks.written, to, from, n).and_then(λ (m: Heap) => Some(Config(c.locals, m, c.io)))), after, stepped);
+            let second = Option::and_then_some(c.locals.refs(source), λ (from: Loc) =>
+                c.memory.copy(blocks.written, first.witness, from, n).and_then(λ (m: Heap) => Some(Config(c.locals, m, c.io))), after, first.proof.right);
+            let third = Option::and_then_some(c.memory.copy(blocks.written, first.witness, second.witness, n),
+                λ (m: Heap) => Some(Config(c.locals, m, c.io)), after, second.proof.right);
+            sym(cong_fn<Config, Locals>(λ y => y.locals, Option::some_inj(Config(c.locals, third.witness, c.io), after, third.proof.right)))
+        },
+    }
+}
+
+theorem when_ok_some(ok: Bool, kinds, bound: List<Typed>): when_ok(ok, kinds) = Some(bound) → bound = kinds {
+    match ok { False => λ never => absurd(never), True => λ e => sym(Option::some_inj(kinds, bound, e)) }
+}
+
+theorem bind_when(ok: Bool, kinds, bound: List<Typed>, v: Typed): (match ok { False => None, True => bind_kind(kinds, v) }) = Some(bound) →
+    bind_kind(kinds, v) = Some(bound) {
+    match ok { False => λ never => absurd(never), True => λ e => e }
+}
+
+theorem Instr::check_shape(self instr: Instr, kinds, bound: List<Typed>, checked: instr.check(kinds) = Some(bound)): CheckShape(instr.binds(), kinds, bound) {
+    match instr {
+        Compute(node) => bind_when(node.pure() && words_bound(kinds, function_ir_eval::Node::reads(node)), kinds, bound, word_id(node_output(node).id),
+            checked),
+        Load(bytes, output, place) => bind_when(width_ok(bytes) && has_kind(kinds, place, RefKind), kinds, bound, word_id(output), checked),
+        Store(bytes, place, value) => when_ok_some(width_ok(bytes) && (has_kind(kinds, place, RefKind) && has_kind(kinds, value, WordKind)), kinds, bound,
+            checked),
+        LoadRef(output, place) => bind_when(has_kind(kinds, place, RefKind), kinds, bound, ref_id(output), checked),
+        StoreRef(place, value) => when_ok_some(has_kind(kinds, place, RefKind) && has_kind(kinds, value, RefKind), kinds, bound, checked),
+        Offset(output, place, amount) => bind_when(has_kind(kinds, place, RefKind) && has_kind(kinds, amount, WordKind), kinds, bound, ref_id(output),
+            checked),
+        Copy(target, source, length) =>
+            when_ok_some(has_kind(kinds, target, RefKind) && (has_kind(kinds, source, RefKind) && has_kind(kinds, length, WordKind)), kinds, bound, checked),
+    }
+}
+
+// A node's binding keeps the scope's invariant and frames the rest.
+theorem bind_scopes(b: Option<Typed>, before, after: Locals, used, used2: List<Nat>, kinds, bound: List<Typed>, scoped: Scoped(before, used, kinds)):
+    fresh_bind(used, b) = Some(used2) → StepShape(b, before, after) → CheckShape(b, kinds, bound) → Scopes(before, after, used, used2, bound) {
+    match b {
+        None => λ fresh shape checked => {
+            let u: (used = used2) = Option::some_inj(used, used2, fresh);
+            j(u, λ x _ => Scopes(before, after, used, x, bound),
+                j(sym(shape), λ l _ => Scopes(before, l, used, used, bound),
+                    ⟨j(sym(checked), λ k _ => Scoped(before, used, k), scoped), frames_refl(before, used)⟩))
+        },
+        Some(v) => λ fresh shape checked => {
+            let parts = fresh_id_some(used, v.id, used2, fresh);
+            j(parts.right, λ x _ => Scopes(before, after, used, x, bound),
+                scoped_bind(v.id, v.kind, before, after, used, kinds, bound, parts.left, shape, checked, scoped))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A leaf
+
+theorem leaf_scopes(blocks: Blocks, instrs: List<Instr>): (kinds, bound: List<Typed>) → (used, used2: List<Nat>) → (c, after: Config) →
+    check_instrs(instrs, kinds) = Some(bound) → fresh_instrs(instrs, used) = Some(used2) → run_instrs(blocks, instrs, c) = Some(after) →
+    Scoped(c.locals, used, kinds) → Scopes(c.locals, after.locals, used, used2, bound) {
+    match instrs {
+        Nil => λ kinds bound used used2 c after checked fresh ran scoped => {
+            let e: (c = after) = Option::some_inj(c, after, ran);
+            let k: (kinds = bound) = Option::some_inj(kinds, bound, checked);
+            let u: (used = used2) = Option::some_inj(used, used2, fresh);
+            j(e, λ x _ => Scopes(c.locals, x.locals, used, used2, bound), j(k, λ x _ => Scopes(c.locals, c.locals, used, used2, x),
+                j(u, λ x _ => Scopes(c.locals, c.locals, used, x, kinds), ⟨scoped, frames_refl(c.locals, used)⟩)))
+        },
+        Cons(instr, rest) => λ kinds bound used used2 c after checked fresh ran scoped => {
+            let checked_first = Option::and_then_some(instr.check(kinds), λ (k: List<Typed>) => check_instrs(rest, k), bound, checked);
+            let fresh_first = Option::and_then_some(fresh_bind(used, instr.binds()), λ (u: List<Nat>) => fresh_instrs(rest, u), used2, fresh);
+            let ran_first = Option::and_then_some(instr.step(blocks, c), λ (m: Config) => run_instrs(blocks, rest, m), after, ran);
+            let mid = ran_first.witness;
+            let one = bind_scopes(instr.binds(), c.locals, mid.locals, used, fresh_first.witness, kinds, checked_first.witness, scoped,
+                fresh_first.proof.left, instr.step_shape(blocks, c, mid, ran_first.proof.left), instr.check_shape(kinds, checked_first.witness,
+                    checked_first.proof.left));
+            let more = leaf_scopes(blocks, rest, checked_first.witness, bound, fresh_first.witness, used2, mid, after, checked_first.proof.right,
+                fresh_first.proof.right, ran_first.proof.right, one.left);
+            ⟨more.left, frames_trans(c.locals, mid.locals, after.locals, used, fresh_first.witness, used2, one.right, more.right)⟩
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The witness
+
+// What the valuation says of an id, as the locals hold it: a reference's
+// address, or the word at every width.
+fn ShowsAt(o: Option<Loc>, l: Locals, spans: Spans, values: Valuation(), id: Nat) → Type {
+    match o { Some(loc) => values(64, id) = loc.address(spans), None => (w: Nat) → values(w, id) = l.words(w, id) }
+}
+
+fn Locals::Shows(self l: Locals, spans: Spans, values: Valuation(), id: Nat) → Type { ShowsAt(l.refs(id), l, spans, values, id) }
+
+// The locals lowered: what the routine's valuation is.
+fn Locals::lower(self l: Locals, spans: Spans) → Valuation() {
+    λ w id => match l.refs(id) { Some(loc) => word_value(loc.address(spans), w), None => l.words(w, id) }
+}
+
+theorem shows_at_lower(o: Option<Loc>, l: Locals, spans: Spans, id: Nat, held: l.refs(id) = o):
+    ShowsAt(o, l, spans, l.lower(spans), id) {
+    (match o as λ x => l.refs(id) = x → ShowsAt(x, l, spans, l.lower(spans), id) {
+        Some(loc) => λ e => j(sym(e), λ r _ => (match r { Some(a) => word_value(a.address(spans), 64), None => l.words(64, id) }) = loc.address(spans), refl),
+        None => λ e w => j(sym(e), λ r _ => (match r { Some(a) => word_value(a.address(spans), w), None => l.words(w, id) }) = l.words(w, id), refl),
+    })(held)
+}
+
+// The lowered locals show every id.
+theorem Locals::lower_shows(self l: Locals, spans: Spans, id: Nat): l.Shows(spans, l.lower(spans), id) { shows_at_lower(l.refs(id), l, spans, id, refl) }
+
+theorem shows_words(o: Option<Loc>, a, b: Locals, spans: Spans, values: Valuation(), id: Nat, words: (w: Nat) → a.words(w, id) = b.words(w, id)):
+    ShowsAt(o, b, spans, values, id) → ShowsAt(o, a, spans, values, id) {
+    match o { Some(_) => λ h => h, None => λ h w => trans(h(w), sym(words(w))) }
+}
+
+// What a later state shows of an id alike in an earlier one, the earlier
+// shows.
+theorem Locals::shows_same(self a: Locals, b: Locals, spans: Spans, values: Valuation(), id: Nat, same: a.Same(b, id), shown: b.Shows(spans, values, id)):
+    a.Shows(spans, values, id) {
+    j(sym(same.right), λ o _ => ShowsAt(o, a, spans, values, id), shows_words(b.refs(id), a, b, spans, values, id, same.left, shown))
+}
+
+theorem lowers_of(id: Nat, kind: ValueKind, l: Locals, spans: Spans, values: Valuation(), shown: l.Shows(spans, values, id)):
+    KindHeld(l, Typed(id, kind)) → Typed(id, kind).Lowers(spans, values, l) {
+    match kind {
+        WordKind => λ held => j(held, λ o _ => ShowsAt(o, l, spans, values, id), shown),
+        RefKind => λ held => Exists(held.witness, ⟨held.proof, j(held.proof, λ o _ => ShowsAt(o, l, spans, values, id), shown)⟩),
+    }
+}
+
+// Where the valuation shows every id the scope bound, it agrees with the
+// locals at the kinds bound.
+theorem Locals::agrees_of(self l: Locals, spans: Spans, values: Valuation(), used: List<Nat>,
+    shows: (id: Nat) → Mem(id, used) → l.Shows(spans, values, id), kinds: List<Typed>): l.Kinded(used, kinds) → l.Agrees(spans, values, kinds) {
+    match kinds {
+        Nil => λ _ => trivial,
+        Cons(v, rest) => λ k => ⟨lowers_of(v.id, v.kind, l, spans, values, shows(v.id, k.left.left), k.left.right),
+            l.agrees_of(spans, values, used, shows, rest, k.right)⟩,
+    }
+}
+
+// What a state shows over the ids it bound, an earlier state of its scope
+// shows over the ids that one had bound.
+theorem shows_back(a, b: Locals, spans: Spans, values: Valuation(), used, used2: List<Nat>, frames: Frames(a, b, used, used2),
+    shows: (id: Nat) → Mem(id, used2) → b.Shows(spans, values, id)): (id: Nat) → Mem(id, used) → a.Shows(spans, values, id) {
+    λ id m => a.shows_same(b, spans, values, id, frames.left(id, λ _ => m), shows(id, frames.right(id, m)))
+}
+
+// A leaf's run agrees with the valuation at every node.
+theorem leaf_agrees(blocks: Blocks, spans: Spans, values: Valuation(), instrs: List<Instr>): (kinds, bound: List<Typed>) → (used, used2: List<Nat>) →
+    (c, after: Config) → check_instrs(instrs, kinds) = Some(bound) → fresh_instrs(instrs, used) = Some(used2) →
+    run_instrs(blocks, instrs, c) = Some(after) → Scoped(c.locals, used, kinds) → ((id: Nat) → Mem(id, used2) → after.locals.Shows(spans, values, id)) →
+    RunAgrees(spans, values, blocks, instrs, kinds, c) {
+    match instrs {
+        Nil => λ kinds bound used used2 c after checked fresh ran scoped shows => {
+            let e: (c = after) = Option::some_inj(c, after, ran);
+            let u: (used = used2) = Option::some_inj(used, used2, fresh);
+            c.locals.agrees_of(spans, values, used, λ id m => j(sym(e), λ x _ => x.locals.Shows(spans, values, id),
+                shows(id, j(u, λ x _ => Mem(id, x), m))), kinds, scoped.left)
+        },
+        Cons(instr, rest) => λ kinds bound used used2 c after checked fresh ran scoped shows => {
+            let whole = leaf_scopes(blocks, Cons(instr, rest), kinds, bound, used, used2, c, after, checked, fresh, ran, scoped);
+            let checked_first = Option::and_then_some(instr.check(kinds), λ (k: List<Typed>) => check_instrs(rest, k), bound, checked);
+            let fresh_first = Option::and_then_some(fresh_bind(used, instr.binds()), λ (u: List<Nat>) => fresh_instrs(rest, u), used2, fresh);
+            let ran_first = Option::and_then_some(instr.step(blocks, c), λ (m: Config) => run_instrs(blocks, rest, m), after, ran);
+            ⟨c.locals.agrees_of(spans, values, used, shows_back(c.locals, after.locals, spans, values, used, used2, whole.right, shows), kinds, scoped.left),
+             λ k checked_k mid stepped => {
+                let same_mid: (ran_first.witness = mid) = Option::some_inj(ran_first.witness, mid, trans(sym(ran_first.proof.left), stepped));
+                let same_k: (checked_first.witness = k) = Option::some_inj(checked_first.witness, k, trans(sym(checked_first.proof.left), checked_k));
+                let one = bind_scopes(instr.binds(), c.locals, mid.locals, used, fresh_first.witness, kinds, k, scoped, fresh_first.proof.left,
+                    instr.step_shape(blocks, c, mid, stepped), instr.check_shape(kinds, k, checked_k));
+                leaf_agrees(blocks, spans, values, rest, k, bound, fresh_first.witness, used2, mid, after,
+                    j(same_k, λ x _ => check_instrs(rest, x) = Some(bound), checked_first.proof.right), fresh_first.proof.right,
+                    j(same_mid, λ x _ => run_instrs(blocks, rest, x) = Some(after), ran_first.proof.right), one.left, shows)
+             }⟩
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A call's results
+
+theorem Locals::bind_binds(self l: Locals, id: Nat, kind: ValueKind, x: Value, after: Locals):
+    l.bind(Typed(id, kind), x) = Some(after) → Binds(id, kind, l, after) ∧ (after.read(Typed(id, kind)) = Some(x)) {
+    match kind {
+        WordKind => match x {
+            Word(w) => λ e => {
+                let s: (l.set_word(id, word_value(w)) = after) = Option::some_inj(l.set_word(id, word_value(w)), after, e);
+                ⟨Exists(word_value(w), sym(s)), j(s, λ a _ => a.read(Typed(id, WordKind)) = Some(Word(w)),
+                    cong_fn<BitVec(64), Option<Value>>(λ y => Some(Word(y)), Valuation::set_here(l.words, id, word_value(w), 64)))⟩
+            },
+            Ref(_) => λ never => absurd(never),
+        },
+        RefKind => match x {
+            Word(_) => λ never => absurd(never),
+            Ref(loc) => λ e => {
+                let s: (l.set_ref(id, loc) = after) = Option::some_inj(l.set_ref(id, loc), after, e);
+                ⟨Exists(loc, sym(s)), j(s, λ a _ => a.read(Typed(id, RefKind)) = Some(Ref(loc)),
+                    cong_fn<Option<Loc>, Option<Value>>(λ o => o.map(λ (t: Loc) => Ref(t)), l.set_ref_here(id, loc)))⟩
+            },
+        },
+    }
+}
+
+theorem Locals::read_same(self a: Locals, b: Locals, id: Nat, kind: ValueKind, same: a.Same(b, id)): a.read(Typed(id, kind)) = b.read(Typed(id, kind)) {
+    match kind {
+        WordKind => cong_fn<BitVec(64), Option<Value>>(λ y => Some(Word(y)), same.left(64)),
+        RefKind => cong_fn<Option<Loc>, Option<Value>>(λ o => o.map(λ (t: Loc) => Ref(t)), same.right),
+    }
+}
+
+// A call's results bound where the scope had not bound them: the invariant
+// kept, nothing else moved, and each result reads back as its value.
+theorem bind_values_scopes(results: List<Typed>): (ws: List<Value>) → (l, after: Locals) → (used, used2: List<Nat>) → (kinds, bound: List<Typed>) →
+    bind_values(results, ws, l) = Some(after) → fresh_ids(used, typed_ids(results)) = Some(used2) → bind_kinds(kinds, results) = Some(bound) →
+    Scoped(l, used, kinds) → Scopes(l, after, used, used2, bound) ∧ (read_values(results, after) = Some(ws)) {
+    match results {
+        Nil => λ ws l after used used2 kinds bound => match ws {
+            Nil => λ e fresh checked scoped => {
+                let s: (l = after) = Option::some_inj(l, after, e);
+                let u: (used = used2) = Option::some_inj(used, used2, fresh);
+                let k: (kinds = bound) = Option::some_inj(kinds, bound, checked);
+                ⟨j(s, λ x _ => Scopes(l, x, used, used2, bound), j(u, λ x _ => Scopes(l, l, used, x, bound),
+                    j(k, λ x _ => Scopes(l, l, used, used, x), ⟨scoped, frames_refl(l, used)⟩))), refl⟩
+            },
+            Cons(_, _) => λ never _ _ _ => absurd(never),
+        },
+        Cons(v, rest) => λ ws l after used used2 kinds bound => match ws {
+            Nil => λ never _ _ _ => absurd(never),
+            Cons(x, xs) => λ e fresh checked scoped => {
+                let bind_first = Option::and_then_some(l.bind(v, x), λ (b: Locals) => bind_values(rest, xs, b), after, e);
+                let fresh_first = Option::and_then_some(fresh_id(used, v.id), λ (u: List<Nat>) => fresh_ids(u, typed_ids(rest)), used2, fresh);
+                let checked_first = Option::and_then_some(bind_kind(kinds, v), λ (k: List<Typed>) => bind_kinds(k, rest), bound, checked);
+                let lb = bind_first.witness;
+                let first = l.bind_binds(v.id, v.kind, x, lb, bind_first.proof.left);
+                let parts = fresh_id_some(used, v.id, fresh_first.witness, fresh_first.proof.left);
+                let one = j(parts.right, λ u _ => Scopes(l, lb, used, u, checked_first.witness),
+                    scoped_bind(v.id, v.kind, l, lb, used, kinds, checked_first.witness, parts.left, first.left, checked_first.proof.left, scoped));
+                let more = bind_values_scopes(rest, xs, lb, after, fresh_first.witness, used2, checked_first.witness, bound, bind_first.proof.right,
+                    fresh_first.proof.right, checked_first.proof.right, one.left);
+                let here: Mem(v.id, fresh_first.witness) = j(parts.right, λ u _ => Mem(v.id, u), Inl(refl));
+                let kept: (after.read(v) = Some(x)) = trans(sym(lb.read_same(after, v.id, v.kind, more.left.right.left(v.id, λ _ => here))), first.right);
+                ⟨⟨more.left.left, frames_trans(l, lb, after, used, fresh_first.witness, used2, one.right, more.left.right)⟩,
+                 j(sym(kept), λ o _ => o.and_then(λ (y: Value) => read_values(rest, after).and_then(λ (ys: List<Value>) => Some(Cons(y, ys)))) =
+                        Some(Cons(x, xs)),
+                    j(sym(more.right), λ o _ => o.and_then(λ (ys: List<Value>) => Some(Cons(x, ys))) = Some(Cons(x, xs)), refl))⟩
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A region
+
+theorem true_of_some<T>(ok: Bool, x: Option<T>, y: T): (match ok { False => None, True => x }) = Some(y) → ok = True {
+    match ok { False => λ never => absurd(never), True => λ _ => refl }
+}
+
+theorem true_some<T>(ok: Bool, x: Option<T>, y: T): (match ok { False => None, True => x }) = Some(y) → x = Some(y) {
+    match ok { False => λ never => absurd(never), True => λ e => e }
+}
+
+theorem Locals::kinded_has(self l: Locals, used: List<Nat>, id: Nat, kind: ValueKind, kinds: List<Typed>):
+    has_kind(kinds, id, kind) = True → l.Kinded(used, kinds) → Mem(id, used) ∧ KindHeld(l, Typed(id, kind)) {
+    match kinds {
+        Nil => λ never _ => absurd(never),
+        Cons(v, rest) => λ has k => match s: v.id.same(id) {
+            True => {
+                let same_id: (v.id = id) = v.id.same_sound(id, s);
+                let same_kind: (v.kind = kind) = v.kind.same_sound(kind, has);
+                j(same_id, λ y _ => Mem(y, used) ∧ KindHeld(l, Typed(y, kind)),
+                    j(same_kind, λ q _ => Mem(v.id, used) ∧ KindHeld(l, Typed(v.id, q)), k.left))
+            },
+            False => l.kinded_has(used, id, kind, rest, has, k.right),
+        },
+    }
+}
+
+// What both arms bound alike is among what the other arm bound.
+theorem Locals::kinded_meet_other(self l: Locals, used: List<Nat>, no: List<Typed>, k: l.Kinded(used, no), yes: List<Typed>):
+    l.Kinded(used, yes.filter(λ (v: Typed) => has_kind(no, v.id, v.kind))) {
+    match yes {
+        Nil => trivial,
+        Cons(v, rest) => (match t: has_kind(no, v.id, v.kind) as λ b =>
+            l.Kinded(used, match b { True => Cons(v, rest.filter(λ (x: Typed) => has_kind(no, x.id, x.kind))),
+                False => rest.filter(λ (x: Typed) => has_kind(no, x.id, x.kind)) }) {
+            True => ⟨l.kinded_has(used, v.id, v.kind, no, t, k), l.kinded_meet_other(used, no, k, rest)⟩,
+            False => l.kinded_meet_other(used, no, k, rest),
+        }),
+    }
+}
+
+theorem frames_left(a, b: Locals, used, uy, un: List<Nat>, f: Frames(a, b, used, uy)): Frames(a, b, used, uy ++ un) {
+    ⟨λ id back => f.left(id, λ m => back(uy.mem_append_l(un, id, m))), λ id m => uy.mem_append_l(un, id, f.right(id, m))⟩
+}
+
+theorem frames_right(a, b: Locals, used, uy, un: List<Nat>, f: Frames(a, b, used, un)): Frames(a, b, used, uy ++ un) {
+    ⟨λ id back => f.left(id, λ m => back(uy.mem_append_r(un, id, m))), λ id m => uy.mem_append_r(un, id, f.right(id, m))⟩
+}
+
+// The arm that ran, its scope widened to both arms' and its kinds met.
+theorem branch_scopes_yes(a, b: Locals, used, uy, un: List<Nat>, ay, an: List<Typed>, s: Scopes(a, b, used, uy, ay)):
+    Scopes(a, b, used, uy ++ un, meet_kinds(ay, an)) {
+    let grow = λ (id: Nat) (m: Mem(id, uy)) => uy.mem_append_l(un, id, m);
+    ⟨⟨b.kinded_meet(uy ++ un, an, ay, b.kinded_widen(uy, uy ++ un, grow, ay, s.left.left)), b.fresh_widen(uy, uy ++ un, grow, s.left.right)⟩,
+     frames_left(a, b, used, uy, un, s.right)⟩
+}
+
+theorem branch_scopes_no(a, b: Locals, used, uy, un: List<Nat>, ay, an: List<Typed>, s: Scopes(a, b, used, un, an)):
+    Scopes(a, b, used, uy ++ un, meet_kinds(ay, an)) {
+    let grow = λ (id: Nat) (m: Mem(id, un)) => uy.mem_append_r(un, id, m);
+    ⟨⟨b.kinded_widen(un, uy ++ un, grow, meet_kinds(ay, an), b.kinded_meet_other(un, an, s.left.left, ay)), b.fresh_widen(un, uy ++ un, grow, s.left.right)⟩,
+     frames_right(a, b, used, uy, un, s.right)⟩
+}
+
+// A call's run, taken apart.
+record CallRan(calls: Calls(), callee: Nat, arguments, results: List<Typed>, c, after: Config) {
+    args: List<Value>,
+    answer: Answer,
+    read: read_values(arguments, c.locals) = Some(args),
+    answered: calls(callee, args, c.memory, c.io) = Done(answer),
+    locals: Locals,
+    bound: bind_values(results, answer.words, c.locals) = Some(locals),
+    lands: after = Config(locals, answer.heap, answer.io),
+}
+
+theorem call_ran(blocks: Blocks, calls: Calls(), fuel: Nat, callee: Nat, arguments, results: List<Typed>, c, after: Config,
+    ran: Body::Call(callee, arguments, results).run(blocks, calls, fuel, c) = Done(after)): CallRan(calls, callee, arguments, results, c, after) {
+    let one = Ran::then_done<List<Value>, Config>(Ran::of(read_values(arguments, c.locals), c.io), λ (args: List<Value>) =>
+        calls(callee, args, c.memory, c.io).then(λ (answer: Answer) =>
+            Ran::of(bind_values(results, answer.words, c.locals), answer.io).then(λ (l: Locals) => Done(Config(l, answer.heap, answer.io)))), after, ran);
+    let args = one.witness;
+    let two = Ran::then_done<Answer, Config>(calls(callee, args, c.memory, c.io), λ (answer: Answer) =>
+        Ran::of(bind_values(results, answer.words, c.locals), answer.io).then(λ (l: Locals) => Done(Config(l, answer.heap, answer.io))), after,
+        one.proof.right);
+    let a = two.witness;
+    let three = Ran::then_done<Locals, Config>(Ran::of(bind_values(results, a.words, c.locals), a.io), λ (l: Locals) => Done(Config(l, a.heap, a.io)), after,
+        two.proof.right);
+    CallRan(args := args, answer := a, read := Ran::of_done<List<Value>>(read_values(arguments, c.locals), c.io, args, one.proof.left),
+        answered := two.proof.left, locals := three.witness,
+        bound := Ran::of_done<Locals>(bind_values(results, a.words, c.locals), a.io, three.witness, three.proof.left),
+        lands := sym(Ran::done_inj<Config>(Config(three.witness, a.heap, a.io), after, three.proof.right)))
+}
+
+// ---------------------------------------------------------------------------
+// A plain loop: a pass is its own scope
+
+// A loop's run, taken apart.
+record LoopRan(blocks: Blocks, calls: Calls(), fuel: Nat, inputs, parameters: List<Typed>, inner: Body, exit: Nat, next, outputs: List<Typed>,
+    c, after: Config) {
+    state: List<Value>,
+    read: read_values(inputs, c.locals) = Some(state),
+    end: Ended,
+    looped: loop_run(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, state, c.memory, c.io) = Done(end),
+    locals: Locals,
+    bound: bind_values(outputs, end.state, c.locals) = Some(locals),
+    lands: after = Config(locals, end.memory, end.io),
+}
+
+theorem loop_ran(blocks: Blocks, calls: Calls(), fuel: Nat, inputs, parameters: List<Typed>, inner: Body, exit: Nat, next, outputs: List<Typed>,
+    c, after: Config, ran: Body::Loop(inputs, parameters, inner, exit, next, outputs).run(blocks, calls, fuel, c) = Done(after)):
+    LoopRan(blocks, calls, fuel, inputs, parameters, inner, exit, next, outputs, c, after) {
+    let step = λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass);
+    let one = Ran::then_done<List<Value>, Config>(Ran::of(read_values(inputs, c.locals), c.io), λ (state: List<Value>) =>
+        loop_run(step, parameters, exit, next, fuel, state, c.memory, c.io).then(λ (end: Ended) =>
+            Ran::of(bind_values(outputs, end.state, c.locals), end.io).then(λ (l: Locals) => Done(Config(l, end.memory, end.io)))), after, ran);
+    let state = one.witness;
+    let two = Ran::then_done<Ended, Config>(loop_run(step, parameters, exit, next, fuel, state, c.memory, c.io), λ (end: Ended) =>
+        Ran::of(bind_values(outputs, end.state, c.locals), end.io).then(λ (l: Locals) => Done(Config(l, end.memory, end.io))), after, one.proof.right);
+    let end = two.witness;
+    let three = Ran::then_done<Locals, Config>(Ran::of(bind_values(outputs, end.state, c.locals), end.io), λ (l: Locals) =>
+        Done(Config(l, end.memory, end.io)), after, two.proof.right);
+    LoopRan(state := state, read := Ran::of_done<List<Value>>(read_values(inputs, c.locals), c.io, state, one.proof.left), end := end,
+        looped := two.proof.left, locals := three.witness,
+        bound := Ran::of_done<Locals>(bind_values(outputs, end.state, c.locals), end.io, three.witness, three.proof.left),
+        lands := sym(Ran::done_inj<Config>(Config(three.witness, end.memory, end.io), after, three.proof.right)))
+}
+
+// A loop's checks, taken apart.
+record LoopChecked(sigs: Nat → Option<Signature>, kinds, bound: List<Typed>, inputs, parameters: List<Typed>, inner: Body, exit: Nat,
+    next, outputs: List<Typed>) {
+    inputs_had: has_kinds(kinds, inputs) = True,
+    start: List<Typed>,
+    params: bind_kinds([], parameters) = Some(start),
+    end: List<Typed>,
+    body: inner.check(sigs, start) = Some(end),
+    nexts: has_kinds(end, next) = True,
+    exits: has_kind(end, exit, WordKind) = True,
+    outs: bind_kinds(kinds, outputs) = Some(bound),
+}
+
+theorem loop_checked(sigs: Nat → Option<Signature>, kinds, bound: List<Typed>, inputs, parameters: List<Typed>, inner: Body, exit: Nat,
+    next, outputs: List<Typed>, checked: Body::Loop(inputs, parameters, inner, exit, next, outputs).check(sigs, kinds) = Some(bound)):
+    LoopChecked(sigs, kinds, bound, inputs, parameters, inner, exit, next, outputs) {
+    let ok = has_kinds(kinds, inputs) && (same_kinds(kinds_of(inputs), kinds_of(parameters)) &&
+        (same_kinds(kinds_of(next), kinds_of(parameters)) && same_kinds(kinds_of(outputs), kinds_of(parameters))));
+    let rest: Option<List<Typed>> = match bind_kinds([], parameters) {
+        None => None,
+        Some(start) => match inner.check(sigs, start) {
+            None => None,
+            Some(after) => match has_kinds(after, next) && has_kind(after, exit, WordKind) { False => None, True => bind_kinds(kinds, outputs) },
+        },
+    };
+    let had = Bool::and_true_parts(has_kinds(kinds, inputs), same_kinds(kinds_of(inputs), kinds_of(parameters)) &&
+        (same_kinds(kinds_of(next), kinds_of(parameters)) && same_kinds(kinds_of(outputs), kinds_of(parameters))),
+        true_of_some<List<Typed>>(ok, rest, bound, checked)).left;
+    let first = Option::and_then_some(bind_kinds([], parameters), λ (start: List<Typed>) => match inner.check(sigs, start) {
+            None => None,
+            Some(after) => match has_kinds(after, next) && has_kind(after, exit, WordKind) { False => None, True => bind_kinds(kinds, outputs) },
+        }, bound, true_some<List<Typed>>(ok, rest, bound, checked));
+    let second = Option::and_then_some(inner.check(sigs, first.witness), λ (after: List<Typed>) =>
+        match has_kinds(after, next) && has_kind(after, exit, WordKind) { False => None, True => bind_kinds(kinds, outputs) }, bound, first.proof.right);
+    let last = has_kinds(second.witness, next) && has_kind(second.witness, exit, WordKind);
+    let parts = Bool::and_true_parts(has_kinds(second.witness, next), has_kind(second.witness, exit, WordKind),
+        true_of_some<List<Typed>>(last, bind_kinds(kinds, outputs), bound, second.proof.right));
+    LoopChecked(inputs_had := had, start := first.witness, params := first.proof.left, end := second.witness, body := second.proof.left,
+        nexts := parts.left, exits := parts.right, outs := true_some<List<Typed>>(last, bind_kinds(kinds, outputs), bound, second.proof.right))
+}
+
+// A loop's scopes, taken apart.
+record LoopFresh(used, used2: List<Nat>, parameters: List<Typed>, inner: Body, outputs: List<Typed>) {
+    start: List<Nat>,
+    params: fresh_ids([], typed_ids(parameters)) = Some(start),
+    inside: List<Nat>,
+    body: inner.fresh(start) = Some(inside),
+    outs: fresh_ids(used ++ inside, typed_ids(outputs)) = Some(used2),
+}
+
+theorem loop_fresh(used, used2: List<Nat>, inputs, parameters: List<Typed>, inner: Body, exit: Nat, next, outputs: List<Typed>,
+    fresh: Body::Loop(inputs, parameters, inner, exit, next, outputs).fresh(used) = Some(used2)): LoopFresh(used, used2, parameters, inner, outputs) {
+    let first = Option::and_then_some(fresh_ids([], typed_ids(parameters)), λ (start: List<Nat>) =>
+        inner.fresh(start).and_then(λ (inside: List<Nat>) => fresh_ids(used ++ inside, typed_ids(outputs))), used2, fresh);
+    let second = Option::and_then_some(inner.fresh(first.witness), λ (inside: List<Nat>) => fresh_ids(used ++ inside, typed_ids(outputs)), used2,
+        first.proof.right);
+    LoopFresh(start := first.witness, params := first.proof.left, inside := second.witness, body := second.proof.left, outs := second.proof.right)
+}
+
+// The loop binds its outputs in the scope it is in; its passes' ids are
+// counted bound there too, so no id after it is one a pass bound.
+theorem loop_scopes(c, after: Config, used, used2: List<Nat>, kinds, bound: List<Typed>, outputs: List<Typed>, inside: List<Nat>, words: List<Value>,
+    l: Locals, bind: bind_values(outputs, words, c.locals) = Some(l), fresh: fresh_ids(used ++ inside, typed_ids(outputs)) = Some(used2),
+    checked: bind_kinds(kinds, outputs) = Some(bound), scoped: Scoped(c.locals, used, kinds), lands: after.locals = l):
+    (Scopes(c.locals, after.locals, used, used2, bound) ∧ (read_values(outputs, after.locals) = Some(words))) ∧
+        ((id: Nat) → Mem(id, inside) → Mem(id, used2)) {
+    let grow = λ (id: Nat) (m: Mem(id, used)) => used.mem_append_l(inside, id, m);
+    let wide: Scoped(c.locals, used ++ inside, kinds) = ⟨c.locals.kinded_widen(used, used ++ inside, grow, kinds, scoped.left),
+        c.locals.fresh_widen(used, used ++ inside, grow, scoped.right)⟩;
+    let bs = bind_values_scopes(outputs, words, c.locals, l, used ++ inside, used2, kinds, bound, bind, fresh, checked, wide);
+    ⟨j(sym(lands), λ x _ => Scopes(c.locals, x, used, used2, bound) ∧ (read_values(outputs, x) = Some(words)),
+        ⟨⟨bs.left.left, ⟨λ id back => bs.left.right.left(id, λ m => grow(id, back(m))), λ id m => bs.left.right.right(id, grow(id, m))⟩⟩, bs.right⟩),
+     λ id m => bs.left.right.right(id, used.mem_append_r(inside, id, m))⟩
+}
+
+// What a pass that ran gives: its valuation (its final locals lowered), at
+// which its parameters are the state's words, its body's facts hold, the
+// next words are its words at `next`, and its exit bit is the run's.
+fn PassFacts(Pass: Valuation() → Heap → Heap → Type, spans: Spans, parameters: List<Typed>, exit: Nat, next: List<Typed>, state: List<Value>, from: Heap,
+    after: Config, later: List<Value>) → Type {
+    Exists<Valuation()>(λ v => ((words_of(v, typed_ids(parameters)) = lower_values(spans, state)) ∧ Pass(v, from, after.memory)) ∧
+        ((words_of(v, typed_ids(next)) = lower_values(spans, later)) ∧ (v(1, exit).head_bit() = after.locals.words(1, exit).head_bit())))
+}
+
+// One pass and what follows it.
+theorem loop_holds_step(blocks: Blocks, calls: Calls(), inner: Body, spans: Spans, Pass: Valuation() → Heap → Heap → Type, parameters: List<Typed>,
+    exit: Nat, next: List<Typed>, rest: Nat, state: List<Value>, m: Heap, end: Ended, after: Config, later: List<Value>, v: Valuation(),
+    params: words_of(v, typed_ids(parameters)) = lower_values(spans, state), passed: Pass(v, m, after.memory),
+    nexts: words_of(v, typed_ids(next)) = lower_values(spans, later), bit: v(1, exit).head_bit() = after.locals.words(1, exit).head_bit(),
+    ih: (state: List<Value>) → (m: Heap) → (io: Io) → (end: Ended) →
+        loop_run(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, rest, state, m, io) = Done(end) →
+        PassesHold(Pass, parameters, exit, next, rest, lower_values(spans, state), m, lower_values(spans, end.state), end.memory),
+    last: (match after.locals.words(1, exit).head_bit() {
+        False => loop_run(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, rest, later, after.memory, after.io),
+        True => Done(Ended(later, after.memory, after.io)),
+    }) = Done(end)):
+    PassesHold(Pass, parameters, exit, next, Succ(rest), lower_values(spans, state), m, lower_values(spans, end.state), end.memory) {
+    let P = λ (b: Bool) => match b {
+        True => (lower_values(spans, end.state) = words_of(v, typed_ids(next))) ∧ (end.memory = after.memory),
+        False => PassesHold(Pass, parameters, exit, next, rest, words_of(v, typed_ids(next)), after.memory, lower_values(spans, end.state), end.memory),
+    };
+    Exists(v, ⟨params, Exists(after.memory, ⟨passed, j(sym(bit), λ b _ => P(b),
+        (match after.locals.words(1, exit).head_bit() as λ b => (match b {
+                False => loop_run(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, rest, later, after.memory, after.io),
+                True => Done(Ended(later, after.memory, after.io)),
+            }) = Done(end) → P(b) {
+            True => λ e => {
+                let s: (Ended(later, after.memory, after.io) = end) = Ran::done_inj<Ended>(Ended(later, after.memory, after.io), end, e);
+                ⟨trans(cong_fn<Ended, List<BitVec(64)>>(λ x => lower_values(spans, x.state), sym(s)), sym(nexts)),
+                 cong_fn<Ended, Heap>(λ x => x.memory, sym(s))⟩
+            },
+            False => λ e => j(sym(nexts), λ x _ => PassesHold(Pass, parameters, exit, next, rest, x, after.memory, lower_values(spans, end.state), end.memory),
+                ih(later, after.memory, after.io, end, e)),
+        })(last))⟩)⟩)
+}
+
+// The passes, by induction on the fuel: each pass's facts give the loop's.
+theorem loop_holds_of(blocks: Blocks, calls: Calls(), inner: Body, spans: Spans, Pass: Valuation() → Heap → Heap → Type, parameters: List<Typed>, exit: Nat,
+    next: List<Typed>,
+    passes: (rest: Nat) → (state: List<Value>) → (m: Heap) → (io: Io) → (l: Locals) → (after: Config) → (later: List<Value>) →
+        pass_locals(parameters, state) = Some(l) → inner.run(blocks, calls, rest, Config(l, m, io)) = Done(after) →
+        read_values(next, after.locals) = Some(later) → PassFacts(Pass, spans, parameters, exit, next, state, m, after, later),
+    fuel: Nat): (state: List<Value>) → (m: Heap) → (io: Io) → (end: Ended) →
+    loop_run(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, state, m, io) = Done(end) →
+    PassesHold(Pass, parameters, exit, next, fuel, lower_values(spans, state), m, lower_values(spans, end.state), end.memory) {
+    match fuel {
+        Zero => λ state m io end never => absurd(never),
+        Succ(rest) => λ state m io end ran => {
+            let step = λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass);
+            let one = Ran::then_done<Locals, Ended>(Ran::of(pass_locals(parameters, state), io), λ (l: Locals) =>
+                step(rest, Config(l, m, io)).then(λ (after: Config) => Ran::of(read_values(next, after.locals), after.io).then(λ (later: List<Value>) =>
+                    match after.locals.words(1, exit).head_bit() {
+                        False => loop_run(step, parameters, exit, next, rest, later, after.memory, after.io),
+                        True => Done(Ended(later, after.memory, after.io)),
+                    })), end, ran);
+            let l = one.witness;
+            let two = Ran::then_done<Config, Ended>(inner.run(blocks, calls, rest, Config(l, m, io)), λ (after: Config) =>
+                Ran::of(read_values(next, after.locals), after.io).then(λ (later: List<Value>) => match after.locals.words(1, exit).head_bit() {
+                    False => loop_run(step, parameters, exit, next, rest, later, after.memory, after.io),
+                    True => Done(Ended(later, after.memory, after.io)),
+                }), end, one.proof.right);
+            let after = two.witness;
+            let three = Ran::then_done<List<Value>, Ended>(Ran::of(read_values(next, after.locals), after.io), λ (later: List<Value>) =>
+                match after.locals.words(1, exit).head_bit() {
+                    False => loop_run(step, parameters, exit, next, rest, later, after.memory, after.io),
+                    True => Done(Ended(later, after.memory, after.io)),
+                }, end, two.proof.right);
+            let later = three.witness;
+            let facts = passes(rest, state, m, io, l, after, later, Ran::of_done<Locals>(pass_locals(parameters, state), io, l, one.proof.left), two.proof.left,
+                Ran::of_done<List<Value>>(read_values(next, after.locals), after.io, later, three.proof.left));
+            loop_holds_step(blocks, calls, inner, spans, Pass, parameters, exit, next, rest, state, m, end, after, later, facts.witness,
+                facts.proof.left.left, facts.proof.left.right, facts.proof.right.left, facts.proof.right.right,
+                loop_holds_of(blocks, calls, inner, spans, Pass, parameters, exit, next, passes, rest), three.proof.right)
+        },
+    }
+}
+
+theorem empty_scoped(): Scoped(Locals::empty(), [], []) { ⟨trivial, λ id loc never => absurd(never)⟩ }
+
+// An id the scope never binds is zero in the valuation.
+theorem spare_zero(start, end: Locals, spans: Spans, u0, used: List<Nat>, spare: Nat, absent: Mem(spare, used) → False,
+    first: Frames(Locals::empty(), start, [], u0), second: Frames(start, end, u0, used)): end.lower(spans)(64, spare) = BitVec::zero() {
+    let all = frames_trans(Locals::empty(), start, end, [], u0, used, first, second);
+    let same = all.left(spare, λ m => false_elim(absent(m)));
+    j(same.right, λ o _ => (match o { Some(loc) => word_value(loc.address(spans), 64), None => end.words(64, spare) }) = BitVec::zero(), sym(same.left(64)))
+}
+
+// A checked region's run keeps the scope's invariant and frames the rest.
+theorem Body::scopes(self body: Body, blocks: Blocks, calls: Calls(), fuel: Nat, sigs: Nat → Option<Signature>): (kinds, bound: List<Typed>) →
+    (used, used2: List<Nat>) → (c, after: Config) → body.check(sigs, kinds) = Some(bound) → body.fresh(used) = Some(used2) →
+    body.run(blocks, calls, fuel, c) = Done(after) → Scoped(c.locals, used, kinds) → Scopes(c.locals, after.locals, used, used2, bound) {
+    match body {
+        Leaf(instrs) => λ kinds bound used used2 c after checked fresh ran scoped =>
+            leaf_scopes(blocks, instrs, kinds, bound, used, used2, c, after, checked, fresh, Ran::of_done<Config>(run_instrs(blocks, instrs, c), c.io, after, ran),
+                scoped),
+        Seq(first, rest) => λ kinds bound used used2 c after checked fresh ran scoped => {
+            let checked_first = Option::and_then_some(first.check(sigs, kinds), λ (k: List<Typed>) => rest.check(sigs, k), bound, checked);
+            let fresh_first = Option::and_then_some(first.fresh(used), λ (u: List<Nat>) => rest.fresh(u), used2, fresh);
+            let ran_first = Ran::then_done<Config, Config>(first.run(blocks, calls, fuel, c), λ (mid: Config) => rest.run(blocks, calls, fuel, mid), after, ran);
+            let mid = ran_first.witness;
+            let one = first.scopes(blocks, calls, fuel, sigs, kinds, checked_first.witness, used, fresh_first.witness, c, mid, checked_first.proof.left,
+                fresh_first.proof.left, ran_first.proof.left, scoped);
+            let two = rest.scopes(blocks, calls, fuel, sigs, checked_first.witness, bound, fresh_first.witness, used2, mid, after, checked_first.proof.right,
+                fresh_first.proof.right, ran_first.proof.right, one.left);
+            ⟨two.left, frames_trans(c.locals, mid.locals, after.locals, used, fresh_first.witness, used2, one.right, two.right)⟩
+        },
+        Branch(condition, yes, no) => λ kinds bound used used2 c after checked fresh ran scoped => {
+            let checks = true_some<List<Typed>>(has_kind(kinds, condition, WordKind), match yes.check(sigs, kinds) {
+                None => None,
+                Some(after_yes) => match no.check(sigs, kinds) { None => None, Some(after_no) => Some(meet_kinds(after_yes, after_no)) },
+            }, bound, checked);
+            let checked_yes = Option::and_then_some(yes.check(sigs, kinds), λ (ay: List<Typed>) =>
+                no.check(sigs, kinds).and_then(λ (an: List<Typed>) => Some(meet_kinds(ay, an))), bound, checks);
+            let checked_no = Option::and_then_some(no.check(sigs, kinds), λ (an: List<Typed>) => Some(meet_kinds(checked_yes.witness, an)), bound,
+                checked_yes.proof.right);
+            let fresh_yes = Option::and_then_some(yes.fresh(used), λ (uy: List<Nat>) => no.fresh(used).and_then(λ (un: List<Nat>) => Some(uy ++ un)),
+                used2, fresh);
+            let fresh_no = Option::and_then_some(no.fresh(used), λ (un: List<Nat>) => Some(fresh_yes.witness ++ un), used2, fresh_yes.proof.right);
+            let ay = checked_yes.witness;
+            let an = checked_no.witness;
+            let uy = fresh_yes.witness;
+            let un = fresh_no.witness;
+            let k: (meet_kinds(ay, an) = bound) = Option::some_inj(meet_kinds(ay, an), bound, checked_no.proof.right);
+            let u: (uy ++ un = used2) = Option::some_inj(uy ++ un, used2, fresh_no.proof.right);
+            j(k, λ x _ => Scopes(c.locals, after.locals, used, used2, x), j(u, λ x _ => Scopes(c.locals, after.locals, used, x, meet_kinds(ay, an)),
+                (match c.locals.words(1, condition).head_bit() as λ bit =>
+                    (match bit { True => yes.run(blocks, calls, fuel, c), False => no.run(blocks, calls, fuel, c) }) = Done(after) →
+                    Scopes(c.locals, after.locals, used, uy ++ un, meet_kinds(ay, an)) {
+                    True => λ r => branch_scopes_yes(c.locals, after.locals, used, uy, un, ay, an,
+                        yes.scopes(blocks, calls, fuel, sigs, kinds, ay, used, uy, c, after, checked_yes.proof.left, fresh_yes.proof.left, r, scoped)),
+                    False => λ r => branch_scopes_no(c.locals, after.locals, used, uy, un, ay, an,
+                        no.scopes(blocks, calls, fuel, sigs, kinds, an, used, un, c, after, checked_no.proof.left, fresh_no.proof.left, r, scoped)),
+                })(ran)))
+        },
+        Call(callee, arguments, results) => λ kinds bound used used2 c after checked fresh ran scoped => {
+            let r = call_ran(blocks, calls, fuel, callee, arguments, results, c, after, ran);
+            let binds = true_some<List<Typed>>(has_kinds(kinds, arguments) && fits_signature(sigs, callee, arguments, results), bind_kinds(kinds, results),
+                bound, checked);
+            j(sym(cong_fn<Config, Locals>(λ y => y.locals, r.lands)), λ l _ => Scopes(c.locals, l, used, used2, bound),
+                (bind_values_scopes(results, r.answer.words, c.locals, r.locals, used, used2, kinds, bound, r.bound, fresh, binds, scoped)).left)
+        },
+        Loop(inputs, parameters, inner, exit, next, outputs) => λ kinds bound used used2 c after checked fresh ran scoped => {
+            let r = loop_ran(blocks, calls, fuel, inputs, parameters, inner, exit, next, outputs, c, after, ran);
+            let ck = loop_checked(sigs, kinds, bound, inputs, parameters, inner, exit, next, outputs, checked);
+            let fr = loop_fresh(used, used2, inputs, parameters, inner, exit, next, outputs, fresh);
+            (loop_scopes(c, after, used, used2, kinds, bound, outputs, fr.inside, r.end.state, r.locals, r.bound, fr.outs, ck.outs, scoped,
+                cong_fn<Config, Locals>(λ y => y.locals, r.lands))).left.left
+        },
+        Sys(_) => λ kinds bound used used2 c after checked never => absurd(never),
+        Exit(_) => λ kinds bound used used2 c after checked never => absurd(never),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The bridge: a run is its facts at the valuation
+
+// What a call's callee answers at the fuel the run gave it, in some world.
+fn run_answers(calls: Calls()) → RoutineAnswers() { λ f args heap a => Exists<Io>(λ io => calls(f, args, heap, io) = Done(a)) }
+
+theorem read_lower(id: Nat, kind: ValueKind, l: Locals, spans: Spans, values: Valuation(), x: Value): l.read(Typed(id, kind)) = Some(x) →
+    Typed(id, kind).Lowers(spans, values, l) → x.lower(spans) = values(64, id) {
+    match kind {
+        WordKind => λ read low => j(Option::some_inj(Word(l.words(64, id)), x, read), λ y _ => y.lower(spans) = values(64, id), sym(low(64))),
+        RefKind => λ read low => j(Option::some_inj(Ref(low.witness), x, j(low.proof.left, λ o _ => o.map(λ (t: Loc) => Ref(t)) = Some(x), read)),
+            λ y _ => y.lower(spans) = values(64, id), sym(low.proof.right)),
+    }
+}
+
+// Values read at ids of their kinds, lowered, are the valuation's words.
+theorem read_values_lower(spans: Spans, values: Valuation(), l: Locals, kinds: List<Typed>, agrees: l.Agrees(spans, values, kinds), vs: List<Typed>):
+    has_kinds(kinds, vs) = True → (xs: List<Value>) → read_values(vs, l) = Some(xs) → lower_values(spans, xs) = words_of(values, typed_ids(vs)) {
+    match vs {
+        Nil => λ _ xs read => j(Option::some_inj(Nil, xs, read), λ y _ => lower_values(spans, y) = Nil, refl),
+        Cons(v, rest) => λ has xs read => {
+            let parts = Bool::and_true_parts(has_kind(kinds, v.id, v.kind), has_kinds(kinds, rest), has);
+            let first = Option::and_then_some(l.read(v), λ (x: Value) => read_values(rest, l).and_then(λ (ys: List<Value>) => Some(Cons(x, ys))), xs, read);
+            let second = Option::and_then_some(read_values(rest, l), λ (ys: List<Value>) => Some(Cons(first.witness, ys)), xs, first.proof.right);
+            let low = read_lower(v.id, v.kind, l, spans, values, first.witness, first.proof.left,
+                l.agrees_at(spans, values, v.id, v.kind, kinds, parts.left, agrees));
+            j(Option::some_inj(Cons(first.witness, second.witness), xs, second.proof.right),
+                λ y _ => lower_values(spans, y) = words_of(values, typed_ids(Cons(v, rest))),
+                trans(cong_fn<BitVec(64), List<BitVec(64)>>(λ h => Cons(h, lower_values(spans, second.witness)), low),
+                    cong_fn<List<BitVec(64)>, List<BitVec(64)>>(λ t => Cons(values(64, v.id), t),
+                        read_values_lower(spans, values, l, kinds, agrees, rest, parts.right, second.witness, second.proof.left))))
+        },
+    }
+}
+
+// Binding keeps what was had.
+theorem bind_kind_keeps(kinds: List<Typed>, v: Typed, after: List<Typed>, id: Nat, kind: ValueKind, has: has_kind(kinds, id, kind) = True,
+    bound: bind_kind(kinds, v) = Some(after)): has_kind(after, id, kind) = True {
+    (match kind_of(kinds, v.id) as λ o => kind_of(kinds, v.id) = o →
+        (match o { None => Some(Cons(v, kinds)), Some(k) => match k.same(v.kind) { True => Some(kinds), False => None } }) = Some(after) →
+        has_kind(after, id, kind) = True {
+        None => λ none e => j(Option::some_inj(Cons(v, kinds), after, e), λ a _ => has_kind(a, id, kind) = True,
+            (match v.id.same(id) as λ b => v.id.same(id) = b →
+                (match (match b { True => Some(v.kind), False => kind_of(kinds, id) }) { None => False, Some(k) => k.same(kind) }) = True {
+                True => λ t => absurd(j(j(v.id.same_sound(id, t), λ x _ => kind_of(kinds, x) = None, none),
+                    λ o _ => (match o { None => False, Some(k) => k.same(kind) }) = True, has)),
+                False => λ _ => has,
+            })(refl)),
+        Some(k) => λ _ => match k.same(v.kind) {
+            True => λ e => j(Option::some_inj(kinds, after, e), λ a _ => has_kind(a, id, kind) = True, has),
+            False => λ never => absurd(never),
+        },
+    })(refl, bound)
+}
+
+theorem bind_kinds_keeps(vs: List<Typed>): (kinds, after: List<Typed>) → (id: Nat) → (kind: ValueKind) → has_kind(kinds, id, kind) = True →
+    bind_kinds(kinds, vs) = Some(after) → has_kind(after, id, kind) = True {
+    match vs {
+        Nil => λ kinds after id kind has e => j(Option::some_inj(kinds, after, e), λ a _ => has_kind(a, id, kind) = True, has),
+        Cons(v, rest) => λ kinds after id kind has e => {
+            let first = Option::and_then_some(bind_kind(kinds, v), λ (k: List<Typed>) => bind_kinds(k, rest), after, e);
+            bind_kinds_keeps(rest, first.witness, after, id, kind, bind_kind_keeps(kinds, v, first.witness, id, kind, has, first.proof.left),
+                first.proof.right)
+        },
+    }
+}
+
+theorem bind_kinds_has(vs: List<Typed>): (kinds, after: List<Typed>) → bind_kinds(kinds, vs) = Some(after) → has_kinds(after, vs) = True {
+    match vs {
+        Nil => λ kinds after _ => refl,
+        Cons(v, rest) => λ kinds after e => {
+            let first = Option::and_then_some(bind_kind(kinds, v), λ (k: List<Typed>) => bind_kinds(k, rest), after, e);
+            let here = bind_kinds_keeps(rest, first.witness, after, v.id, v.kind, bind_kind_has(v, kinds, first.witness, first.proof.left),
+                first.proof.right);
+            j(sym(here), λ b _ => (b && has_kinds(after, rest)) = True, bind_kinds_has(rest, first.witness, after, first.proof.right))
+        },
+    }
+}
+
+// Where a call's answer lands, from its words at the results' ids.
+theorem lands_words(results: List<Typed>, spare: Nat, values: Valuation(), zero: values(64, spare) = BitVec::zero()):
+    (answer_head(words_of(values, typed_ids(results))) = values(64, call_result(results, spare))) ∧
+        (answer_tail(words_of(values, typed_ids(results))) = words_of(values, call_also(results))) {
+    match results { Nil => ⟨sym(zero), refl⟩, Cons(_, _) => ⟨refl, refl⟩ }
+}
+
+// A call's run is its facts.
+theorem call_holds_of(blocks: Blocks, calls: Calls(), fuel: Nat, sigs: Nat → Option<Signature>, spans: Spans, values: Valuation(), spare: Nat,
+    zero: values(64, spare) = BitVec::zero(), callee: Nat, arguments, results: List<Typed>, kinds, bound: List<Typed>, used, used2: List<Nat>,
+    c, after: Config, checked: Body::Call(callee, arguments, results).check(sigs, kinds) = Some(bound),
+    fresh: fresh_ids(used, typed_ids(results)) = Some(used2), r: CallRan(calls, callee, arguments, results, c, after),
+    agrees: c.locals.Agrees(spans, values, kinds), scoped: Scoped(c.locals, used, kinds),
+    shows: (id: Nat) → Mem(id, used2) → after.locals.Shows(spans, values, id)):
+    Body::Call(callee, arguments, results).Holds(spans, blocks, values, run_answers(calls), spare, c.memory, after.memory) {
+    let ok = has_kinds(kinds, arguments) && fits_signature(sigs, callee, arguments, results);
+    let binds = true_some<List<Typed>>(ok, bind_kinds(kinds, results), bound, checked);
+    let has_args = Bool::and_true_parts(has_kinds(kinds, arguments), fits_signature(sigs, callee, arguments, results),
+        true_of_some<List<Typed>>(ok, bind_kinds(kinds, results), bound, checked)).left;
+    let landed = bind_values_scopes(results, r.answer.words, c.locals, r.locals, used, used2, kinds, bound, r.bound, fresh, binds, scoped);
+    let at = cong_fn<Config, Locals>(λ y => y.locals, r.lands);
+    let shown = λ (id: Nat) (m: Mem(id, used2)) => j(at, λ l _ => l.Shows(spans, values, id), shows(id, m));
+    let after_agrees = r.locals.agrees_of(spans, values, used2, shown, bound, landed.left.left.left);
+    let words = read_values_lower(spans, values, r.locals, bound, after_agrees, results, bind_kinds_has(results, kinds, bound, binds), r.answer.words,
+        landed.right);
+    let lands = lands_words(results, spare, values, zero);
+    Exists(r.args, Exists(r.answer, ⟨Exists(c.io, r.answered),
+        ⟨read_values_lower(spans, values, c.locals, kinds, agrees, arguments, has_args, r.args, r.read),
+         ⟨⟨trans(cong_fn<List<BitVec(64)>, BitVec(64)>(λ ws => answer_head(ws), words), lands.left),
+           trans(cong_fn<List<BitVec(64)>, List<BitVec(64)>>(λ ws => answer_tail(ws), words), lands.right)⟩,
+          sym(cong_fn<Config, Heap>(λ y => y.memory, r.lands))⟩⟩⟩))
+}
+
+// A pass's facts: its valuation is its final locals lowered.
+theorem pass_close(blocks: Blocks, calls: Calls(), spans: Spans, spare: Nat, parameters: List<Typed>, inner: Body, exit: Nat, next: List<Typed>,
+    start, end: List<Typed>, params: bind_kinds([], parameters) = Some(start), nexts: has_kinds(end, next) = True, exits: has_kind(end, exit, WordKind) = True,
+    p0, inside: List<Nat>, state: List<Value>, m: Heap, l: Locals, after: Config, later: List<Value>,
+    entered: Scopes(Locals::empty(), l, [], p0, start) ∧ (read_values(parameters, l) = Some(state)), scoped: Scopes(l, after.locals, p0, inside, end),
+    held: inner.Holds(spans, blocks, after.locals.lower(spans), run_answers(calls), spare, m, after.memory),
+    read: read_values(next, after.locals) = Some(later)):
+    PassFacts(λ (v: Valuation()) (from: Heap) (to: Heap) => inner.Holds(spans, blocks, v, run_answers(calls), spare, from, to), spans, parameters, exit, next,
+        state, m, after, later) {
+    let v = after.locals.lower(spans);
+    let shows = λ (id: Nat) (_: Mem(id, inside)) => after.locals.lower_shows(spans, id);
+    let start_agrees = l.agrees_of(spans, v, p0, shows_back(l, after.locals, spans, v, p0, inside, scoped.right, shows), start, entered.left.left.left);
+    let end_agrees = after.locals.agrees_of(spans, v, inside, shows, end, scoped.left.left);
+    Exists(v, ⟨⟨sym(read_values_lower(spans, v, l, start, start_agrees, parameters, bind_kinds_has(parameters, [], start, params), state, entered.right)),
+            held⟩,
+        ⟨sym(read_values_lower(spans, v, after.locals, end, end_agrees, next, nexts, later, read)),
+         cong_fn<BitVec(1), Bool>(λ x => x.head_bit(), after.locals.agrees_word(spans, v, end, exit, exits, end_agrees, 1))⟩⟩)
+}
+
+// A loop's run is its facts: the passes', by induction on the fuel, and
+// its inputs and outputs the valuation's words.
+theorem loop_holds_close(blocks: Blocks, calls: Calls(), fuel: Nat, sigs: Nat → Option<Signature>, spans: Spans, values: Valuation(), spare: Nat,
+    inputs, parameters: List<Typed>, inner: Body, exit: Nat, next, outputs: List<Typed>, kinds, bound: List<Typed>, c, after: Config,
+    r: LoopRan(blocks, calls, fuel, inputs, parameters, inner, exit, next, outputs, c, after),
+    ck: LoopChecked(sigs, kinds, bound, inputs, parameters, inner, exit, next, outputs),
+    agrees: c.locals.Agrees(spans, values, kinds), after_agrees: after.locals.Agrees(spans, values, bound),
+    outs_read: read_values(outputs, after.locals) = Some(r.end.state),
+    passes: (rest: Nat) → (state: List<Value>) → (m: Heap) → (io: Io) → (l: Locals) → (aft: Config) → (later: List<Value>) →
+        pass_locals(parameters, state) = Some(l) → inner.run(blocks, calls, rest, Config(l, m, io)) = Done(aft) → read_values(next, aft.locals) = Some(later) →
+        PassFacts(λ (v: Valuation()) (from: Heap) (to: Heap) => inner.Holds(spans, blocks, v, run_answers(calls), spare, from, to), spans, parameters, exit,
+            next, state, m, aft, later)):
+    Body::Loop(inputs, parameters, inner, exit, next, outputs).Holds(spans, blocks, values, run_answers(calls), spare, c.memory, after.memory) {
+    let Pass = λ (v: Valuation()) (from: Heap) (to: Heap) => inner.Holds(spans, blocks, v, run_answers(calls), spare, from, to);
+    let held = loop_holds_of(blocks, calls, inner, spans, Pass, parameters, exit, next, passes, fuel, r.state, c.memory, c.io, r.end, r.looped);
+    let ins = read_values_lower(spans, values, c.locals, kinds, agrees, inputs, ck.inputs_had, r.state, r.read);
+    let outs = read_values_lower(spans, values, after.locals, bound, after_agrees, outputs, bind_kinds_has(outputs, kinds, bound, ck.outs), r.end.state,
+        outs_read);
+    let heap: (r.end.memory = after.memory) = sym(cong_fn<Config, Heap>(λ y => y.memory, r.lands));
+    Exists(fuel, j(heap, λ h _ => PassesHold(Pass, parameters, exit, next, fuel, words_of(values, typed_ids(inputs)), c.memory,
+            words_of(values, typed_ids(outputs)), h),
+        j(outs, λ x _ => PassesHold(Pass, parameters, exit, next, fuel, words_of(values, typed_ids(inputs)), c.memory, x, r.end.memory),
+            j(ins, λ x _ => PassesHold(Pass, parameters, exit, next, fuel, x, c.memory, lower_values(spans, r.end.state), r.end.memory), held))))
+}
+
+// A checked region's run, at a valuation that shows every id the scope has
+// bound by its end, is its facts: the ones its code is proved under.
+theorem Body::holds_of(self body: Body, blocks: Blocks, calls: Calls(), fuel: Nat, sigs: Nat → Option<Signature>, spans: Spans, values: Valuation(),
+    spare: Nat, zero: values(64, spare) = BitVec::zero()): (kinds, bound: List<Typed>) → (used, used2: List<Nat>) → (c, after: Config) →
+    body.check(sigs, kinds) = Some(bound) → body.fresh(used) = Some(used2) → body.run(blocks, calls, fuel, c) = Done(after) →
+    Scoped(c.locals, used, kinds) → ((id: Nat) → Mem(id, used2) → after.locals.Shows(spans, values, id)) → (Mem(spare, used2) → False) →
+    body.Holds(spans, blocks, values, run_answers(calls), spare, c.memory, after.memory) {
+    match body {
+        Leaf(instrs) => λ kinds bound used used2 c after checked fresh ran scoped shows absent => {
+            let ran_leaf = Ran::of_done<Config>(run_instrs(blocks, instrs, c), c.io, after, ran);
+            run_instrs_holds(blocks, spans, values, instrs, kinds, bound, c, after, checked, ran_leaf,
+                leaf_agrees(blocks, spans, values, instrs, kinds, bound, used, used2, c, after, checked, fresh, ran_leaf, scoped, shows))
+        },
+        Seq(first, rest) => λ kinds bound used used2 c after checked fresh ran scoped shows absent => {
+            let checked_first = Option::and_then_some(first.check(sigs, kinds), λ (k: List<Typed>) => rest.check(sigs, k), bound, checked);
+            let fresh_first = Option::and_then_some(first.fresh(used), λ (u: List<Nat>) => rest.fresh(u), used2, fresh);
+            let ran_first = Ran::then_done<Config, Config>(first.run(blocks, calls, fuel, c), λ (mid: Config) => rest.run(blocks, calls, fuel, mid), after, ran);
+            let mid = ran_first.witness;
+            let one = first.scopes(blocks, calls, fuel, sigs, kinds, checked_first.witness, used, fresh_first.witness, c, mid, checked_first.proof.left,
+                fresh_first.proof.left, ran_first.proof.left, scoped);
+            let two = rest.scopes(blocks, calls, fuel, sigs, checked_first.witness, bound, fresh_first.witness, used2, mid, after, checked_first.proof.right,
+                fresh_first.proof.right, ran_first.proof.right, one.left);
+            Exists(mid.memory, ⟨first.holds_of(blocks, calls, fuel, sigs, spans, values, spare, zero, kinds, checked_first.witness, used, fresh_first.witness,
+                    c, mid, checked_first.proof.left, fresh_first.proof.left, ran_first.proof.left, scoped,
+                    shows_back(mid.locals, after.locals, spans, values, fresh_first.witness, used2, two.right, shows),
+                    λ m => absent(two.right.right(spare, m))),
+                rest.holds_of(blocks, calls, fuel, sigs, spans, values, spare, zero, checked_first.witness, bound, fresh_first.witness, used2, mid, after,
+                    checked_first.proof.right, fresh_first.proof.right, ran_first.proof.right, one.left, shows, absent)⟩)
+        },
+        Branch(condition, yes, no) => λ kinds bound used used2 c after checked fresh ran scoped shows absent => {
+            let inner: Option<List<Typed>> = match yes.check(sigs, kinds) {
+                None => None,
+                Some(after_yes) => match no.check(sigs, kinds) { None => None, Some(after_no) => Some(meet_kinds(after_yes, after_no)) },
+            };
+            let has = true_of_some<List<Typed>>(has_kind(kinds, condition, WordKind), inner, bound, checked);
+            let checks = true_some<List<Typed>>(has_kind(kinds, condition, WordKind), inner, bound, checked);
+            let checked_yes = Option::and_then_some(yes.check(sigs, kinds), λ (ay: List<Typed>) =>
+                no.check(sigs, kinds).and_then(λ (an: List<Typed>) => Some(meet_kinds(ay, an))), bound, checks);
+            let checked_no = Option::and_then_some(no.check(sigs, kinds), λ (an: List<Typed>) => Some(meet_kinds(checked_yes.witness, an)), bound,
+                checked_yes.proof.right);
+            let fresh_yes = Option::and_then_some(yes.fresh(used), λ (uy: List<Nat>) => no.fresh(used).and_then(λ (un: List<Nat>) => Some(uy ++ un)),
+                used2, fresh);
+            let fresh_no = Option::and_then_some(no.fresh(used), λ (un: List<Nat>) => Some(fresh_yes.witness ++ un), used2, fresh_yes.proof.right);
+            let uy = fresh_yes.witness;
+            let un = fresh_no.witness;
+            let u: (uy ++ un = used2) = Option::some_inj(uy ++ un, used2, fresh_no.proof.right);
+            let whole = Body::Branch(condition, yes, no).scopes(blocks, calls, fuel, sigs, kinds, bound, used, used2, c, after, checked, fresh, ran, scoped);
+            let agrees = c.locals.agrees_of(spans, values, used, shows_back(c.locals, after.locals, spans, values, used, used2, whole.right, shows), kinds,
+                scoped.left);
+            let word: (values(1, condition) = c.locals.words(1, condition)) = c.locals.agrees_word(spans, values, kinds, condition, has, agrees, 1);
+            let picked = λ (bit: Bool) => match bit {
+                True => yes.Holds(spans, blocks, values, run_answers(calls), spare, c.memory, after.memory),
+                False => no.Holds(spans, blocks, values, run_answers(calls), spare, c.memory, after.memory),
+            };
+            j(sym(cong_fn<BitVec(1), Bool>(λ x => x.head_bit(), word)), λ b _ => picked(b),
+                (match c.locals.words(1, condition).head_bit() as λ bit =>
+                    (match bit { True => yes.run(blocks, calls, fuel, c), False => no.run(blocks, calls, fuel, c) }) = Done(after) → picked(bit) {
+                    True => λ r => yes.holds_of(blocks, calls, fuel, sigs, spans, values, spare, zero, kinds, checked_yes.witness, used, uy, c, after,
+                        checked_yes.proof.left, fresh_yes.proof.left, r, scoped, λ id m => shows(id, j(u, λ x _ => Mem(id, x), uy.mem_append_l(un, id, m))),
+                        λ m => absent(j(u, λ x _ => Mem(spare, x), uy.mem_append_l(un, spare, m)))),
+                    False => λ r => no.holds_of(blocks, calls, fuel, sigs, spans, values, spare, zero, kinds, checked_no.witness, used, un, c, after,
+                        checked_no.proof.left, fresh_no.proof.left, r, scoped, λ id m => shows(id, j(u, λ x _ => Mem(id, x), uy.mem_append_r(un, id, m))),
+                        λ m => absent(j(u, λ x _ => Mem(spare, x), uy.mem_append_r(un, spare, m)))),
+                })(ran))
+        },
+        Call(callee, arguments, results) => λ kinds bound used used2 c after checked fresh ran scoped shows absent => {
+            let whole = Body::Call(callee, arguments, results).scopes(blocks, calls, fuel, sigs, kinds, bound, used, used2, c, after, checked, fresh, ran,
+                scoped);
+            call_holds_of(blocks, calls, fuel, sigs, spans, values, spare, zero, callee, arguments, results, kinds, bound, used, used2, c, after, checked, fresh,
+                call_ran(blocks, calls, fuel, callee, arguments, results, c, after, ran),
+                c.locals.agrees_of(spans, values, used, shows_back(c.locals, after.locals, spans, values, used, used2, whole.right, shows), kinds, scoped.left),
+                scoped, shows)
+        },
+        Loop(inputs, parameters, inner, exit, next, outputs) => λ kinds bound used used2 c after checked fresh ran scoped shows absent => {
+            let r = loop_ran(blocks, calls, fuel, inputs, parameters, inner, exit, next, outputs, c, after, ran);
+            let ck = loop_checked(sigs, kinds, bound, inputs, parameters, inner, exit, next, outputs, checked);
+            let fr = loop_fresh(used, used2, inputs, parameters, inner, exit, next, outputs, fresh);
+            let landed = loop_scopes(c, after, used, used2, kinds, bound, outputs, fr.inside, r.end.state, r.locals, r.bound, fr.outs, ck.outs, scoped,
+                cong_fn<Config, Locals>(λ y => y.locals, r.lands));
+            let absent_inside = λ (m: Mem(spare, fr.inside)) => absent(landed.right(spare, m));
+            loop_holds_close(blocks, calls, fuel, sigs, spans, values, spare, inputs, parameters, inner, exit, next, outputs, kinds, bound, c, after, r, ck,
+                c.locals.agrees_of(spans, values, used, shows_back(c.locals, after.locals, spans, values, used, used2, landed.left.left.right, shows), kinds,
+                    scoped.left),
+                after.locals.agrees_of(spans, values, used2, shows, bound, landed.left.left.left.left), landed.left.right,
+                λ rest st m io l aft later bound_l ran_inner read_next => {
+                    let entered = bind_values_scopes(parameters, st, Locals::empty(), l, [], fr.start, [], ck.start, bound_l, fr.params, ck.params,
+                        empty_scoped());
+                    let c0 = Config(l, m, io);
+                    let inside = inner.scopes(blocks, calls, rest, sigs, ck.start, ck.end, fr.start, fr.inside, c0, aft, ck.body, fr.body, ran_inner,
+                        entered.left.left);
+                    let zero = spare_zero(l, aft.locals, spans, fr.start, fr.inside, spare, absent_inside, entered.left.right, inside.right);
+                    pass_close(blocks, calls, spans, spare, parameters, inner, exit, next, ck.start, ck.end, ck.params, ck.nexts, ck.exits, fr.start, fr.inside,
+                        st, m, l, aft, later, entered, inside,
+                        inner.holds_of(blocks, calls, rest, sigs, spans, aft.locals.lower(spans), spare, zero, ck.start, ck.end, fr.start, fr.inside, c0, aft,
+                            ck.body, fr.body, ran_inner, entered.left.left, λ id _ => aft.locals.lower_shows(spans, id), absent_inside),
+                        read_next)
+                })
+        },
+        Sys(_) => λ kinds bound used used2 c after checked never => absurd(never),
+        Exit(_) => λ kinds bound used used2 c after checked never => absurd(never),
+    }
+}

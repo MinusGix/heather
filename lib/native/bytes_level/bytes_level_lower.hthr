@@ -80,28 +80,6 @@ theorem word_of_four(bytes: List<BitVec(8)>, len: bytes.len() = 4):
 }
 
 // ---------------------------------------------------------------------------
-// A word loaded through any plain base (MOV r64, [base]): the doubleword's
-// lemma (x86_64_stack_runs' `Site::moves_dword_load`) at eight bytes.
-
-theorem Site::moves_word_load<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
-    before: Prog, name: Nat, load: WordLoad, at: asm_back(site.program, k) = At(before, name, Load(load)),
-    pre, post: MachineState<M> → Type,
-    step: (s: MachineState<M>) → pre(s) → Exists<BitVec(64)>(λ word =>
-        (read_gpr(load.base, s.gprs).toNat() + 8 <= Nat::pow(2, 47)) ∧
-        ((read_word(site.data, s.memory, read_gpr(load.base, s.gprs)) = Some(word)) ∧ post(word_load_after(load, word, s))))):
-    site.Moves(writes, prog_len(before), prog_len(before) + word_load_bytes(load).len(), pre, post) {
-    λ s here resident holds => {
-        let found = step(s, holds);
-        let after = word_load_after(load, found.witness, s);
-        let one: FetchedStep(site.fetch, site.data, s, after) = Exists(EmitWordLoad(load),
-            ⟨site.item_fetched(fits, s, resident, k, before, name, Load(load), at, here),
-             Exists(found.witness, WordLoadStep(canonical := found.proof.left, present := found.proof.right.left, execution := refl))⟩);
-        Exists(after, ⟨machine_steps_of_fetched(site.fetch, site.data, writes, s, after, fetched_steps_one(site.fetch, site.data, s, after, one)),
-            ⟨site.rip_after(s, prog_len(before), word_load_bytes(load).len(), here), ⟨resident, found.proof.right.right⟩⟩⟩)
-    }
-}
-
-// ---------------------------------------------------------------------------
 // The memory clause
 
 // The heap is injected into memory over the lending's spans.
@@ -518,29 +496,6 @@ theorem offset_adds(spans: Spans, values: Valuation(), output, place, amount: Na
 
 // ---------------------------------------------------------------------------
 // A block of word nodes
-
-// Code that runs as one block, keeping the file's description and the
-// registers a body keeps, touches no memory: `EmitsBy` at any clause, from
-// a state to itself. (function_ir_lower_calls' `kept_block_emits` is the
-// same over the old trail.)
-theorem pure_emits<M, S>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
-    spans: Spans, Mem: S → M → Type, values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File, facts: Type, lowered: Lowered,
-    keeps: Keeps<M>(values, file, facts, lowered), guards: Guards<M>(values, file, facts, lowered),
-    leaves: leaves_all(lowered.code, body_kept(saves)).IsTrue(), placement: List<Place>, names: Nat, now: S):
-    EmitsBy<M, S>(saves, site, stack, spans, Mem, values, d, s0, prog, file, facts, now, now,
-        Emitted(At(prog, 0, Asm::of_code(lowered.code)), lowered.file, placement, names)) {
-    let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ facts) ∧
-        (Kept(body_kept(saves), s0.gprs, g) ∧ stack.TrailBy(spans, Mem, d, s0.memory, now, m));
-    let post = λ (g: Gprs) (m: M) => lowered.file.Represents(values, g) ∧
-        (Kept(body_kept(saves), s0.gprs, g) ∧ stack.TrailBy(spans, Mem, d, s0.memory, now, m));
-    ⟨prog.within_then(0, Asm::of_code(lowered.code)),
-     λ within => site.moves_of_pure(stack.writes, prog_len(prog), prog_len(At(prog, 0, Asm::of_code(lowered.code))), pre, post,
-        λ memory => site.runs_code(laid, within.witness, prog, 0, lowered.code, within.proof,
-            λ (g: Gprs) => pre(g, memory), λ (g: Gprs) => post(g, memory),
-            λ x held => ⟨guards(x, held.left.left, held.left.right), ⟨keeps(x, held.left.left, held.left.right),
-                ⟨kept_trans(body_kept(saves), s0.gprs, x.gprs, execute_block_normal(lowered.code, x).gprs, held.right.left,
-                    execute_block_kept<M>(lowered.code, x, body_kept(saves), leaves)), held.right.right⟩⟩⟩))⟩
-}
 
 // Word nodes as FunctionIR lowers them (`lower_nodes`), as one block the
 // body's kept registers survive, or nothing.
@@ -1384,113 +1339,847 @@ theorem run_instrs_holds(blocks: Blocks, spans: Spans, values: Valuation(), inst
 }
 
 // ---------------------------------------------------------------------------
-// Sequences and branches
+// Calls: what a callee answers, and what its code promises
 
-// A region's meaning at the valuation, from the heap `before` to `after`:
-// a leaf's nodes, a sequence through a heap between, and the arm the
-// condition's bit picks. Calls, loops, system calls and exits are not
-// lowered yet (issues/bytes-level-lowering.md) and mean nothing here.
-fn Body::Holds(self body: Body, spans: Spans, blocks: Blocks, values: Valuation(), before, after: Heap) → Type {
+// What routine `f` answers on values and a heap: the program's meaning at
+// one fuel, the world aside (`bytes_level_routines`).
+fn RoutineAnswers() → Type<1> { Nat → List<Value> → Heap → Answer → Type }
+
+fn typed_ids(vs: List<Typed>) → List<Nat> { match vs { Nil => Nil, Cons(v, rest) => Cons(v.id, typed_ids(rest)) } }
+
+// A routine's words as its code answers them: the first in RAX, the rest in
+// `answer_registers()`. One that answers none answers zero in RAX, so that
+// every call has a word there (FunctionIR's call and function theorems are
+// stated with one).
+fn answer_head(words: List<BitVec(64)>) → BitVec(64) { match words { Nil => BitVec::zero(), Cons(w, _) => w } }
+
+fn answer_tail(words: List<BitVec(64)>) → List<BitVec(64)> { match words { Nil => Nil, Cons(_, rest) => rest } }
+
+// Where a call's answer lands: its first result's id, or `spare` (an id the
+// scope never binds, zero in its valuation) where it has none; and the rest.
+fn call_result(results: List<Typed>, spare: Nat) → Nat { match results { Nil => spare, Cons(v, _) => v.id } }
+
+fn call_also(results: List<Typed>) → List<Nat> { match results { Nil => Nil, Cons(_, rest) => typed_ids(rest) } }
+
+// A call at the valuation: the arguments `args` are the words at its
+// arguments' ids, lowered, the answer `a`'s words land where the call says,
+// and the heap after it is the answer's.
+fn CallLands(spans: Spans, values: Valuation(), spare: Nat, arguments, results: List<Typed>, args: List<Value>, a: Answer, after: Heap) → Type {
+    (lower_values(spans, args) = words_of(values, typed_ids(arguments))) ∧
+        (((answer_head(lower_values(spans, a.words)) = values(64, call_result(results, spare))) ∧
+            (answer_tail(lower_values(spans, a.words)) = words_of(values, call_also(results)))) ∧ (a.heap = after))
+}
+
+// Routine `f` entered on `args` over `heap` at stack offset `i`: the
+// arguments passed lowered, room below for its frames, the lending's words
+// above, and the heap injected.
+fn RoutinePre<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, rooms: Nat → Nat, top, f: Nat, args: List<Value>,
+    heap: Heap) → Nat → MachineState<M> → Type {
+    λ i s => (stack.Passed(lower_values(spans, args), i, s) ∧ (rooms(f) <= i)) ∧ ((i + 8 <= top) ∧ Injected<M>(site.data, spans, heap, s.memory))
+}
+
+// And returned with `a`: its words in the answer registers, the callee-saved
+// registers kept, its stores inside the lending, and its heap injected.
+fn RoutinePost<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, a: Answer) → Nat → MachineState<M> → MachineState<M> → Type {
+    λ i s t => Answered(answer_head(lower_values(spans, a.words)), answer_tail(lower_values(spans, a.words)), t.gprs) ∧
+        (Kept(callee_kept(), s.gprs, t.gprs) ∧ (stack.WroteIn(i, spans, s.memory, t.memory) ∧ Injected<M>(site.data, spans, a.heap, t.memory)))
+}
+
+// Every routine below `bound`, wherever it answers, returns so at its label.
+fn CalleesReturn<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, rooms: Nat → Nat, top, bound: Nat, answers: RoutineAnswers()) → Type {
+    (f: Nat) → f + 1 <= bound → (args: List<Value>) → (heap: Heap) → (a: Answer) → answers(f, args, heap, a) →
+        site.Returns(stack, asm_labels(site.program)(f + 1), RoutinePre<M>(site, stack, spans, rooms, top, f, args, heap), RoutinePost<M>(site, stack, spans, a))
+}
+
+// Whether a region calls, and that every call of a routine below `bound`
+// has its room and the call's 24 bytes in `avail` (FunctionIR's
+// `StructuredRegion::Fits`).
+fn Body::calls(self body: Body) → Bool {
     match body {
-        Leaf(instrs) => InstrsHold(spans, blocks, values, instrs, before, after),
-        Seq(first, rest) => Exists<Heap>(λ mid => first.Holds(spans, blocks, values, before, mid) ∧ rest.Holds(spans, blocks, values, mid, after)),
-        Branch(condition, yes, no) => match values(1, condition).head_bit() {
-            True => yes.Holds(spans, blocks, values, before, after),
-            False => no.Holds(spans, blocks, values, before, after),
-        },
-        Call(_, _, _) => False,
-        Loop(_, _, _, _, _, _) => False,
+        Leaf(_) => False,
+        Seq(first, rest) => first.calls() || rest.calls(),
+        Branch(_, yes, no) => yes.calls() || no.calls(),
+        Call(_, _, _) => True,
+        Loop(_, _, inner, _, _, _) => inner.calls(),
         Sys(_) => False,
         Exit(_) => False,
     }
+}
+
+fn Body::Fits(self body: Body, rooms: Nat → Nat, bound, avail: Nat) → Type {
+    match body {
+        Leaf(_) => True,
+        Seq(first, rest) => first.Fits(rooms, bound, avail) ∧ rest.Fits(rooms, bound, avail),
+        Branch(_, yes, no) => yes.Fits(rooms, bound, avail) ∧ no.Fits(rooms, bound, avail),
+        Call(callee, _, _) => callee + 1 <= bound → rooms(callee) + 24 <= avail,
+        Loop(_, _, inner, _, _, _) => inner.Fits(rooms, bound, avail),
+        Sys(_) => True,
+        Exit(_) => True,
+    }
+}
+
+fn Body::fits(self body: Body, rooms: Nat → Nat, avail: Nat) → Bool {
+    match body {
+        Leaf(_) => True,
+        Seq(first, rest) => first.fits(rooms, avail) && rest.fits(rooms, avail),
+        Branch(_, yes, no) => yes.fits(rooms, avail) && no.fits(rooms, avail),
+        Call(callee, _, _) => (rooms(callee) + 24).leb(avail),
+        Loop(_, _, inner, _, _, _) => inner.fits(rooms, avail),
+        Sys(_) => True,
+        Exit(_) => True,
+    }
+}
+
+theorem Body::fits_sound(self body: Body, rooms: Nat → Nat, bound, avail: Nat): body.fits(rooms, avail).IsTrue() → body.Fits(rooms, bound, avail) {
+    match body {
+        Leaf(_) => λ _ => trivial,
+        Seq(first, rest) => λ ok => {
+            let parts = Bool::is_true_and(first.fits(rooms, avail), rest.fits(rooms, avail), ok);
+            ⟨first.fits_sound(rooms, bound, avail, parts.left), rest.fits_sound(rooms, bound, avail, parts.right)⟩
+        },
+        Branch(_, yes, no) => λ ok => {
+            let parts = Bool::is_true_and(yes.fits(rooms, avail), no.fits(rooms, avail), ok);
+            ⟨yes.fits_sound(rooms, bound, avail, parts.left), no.fits_sound(rooms, bound, avail, parts.right)⟩
+        },
+        Call(callee, _, _) => λ ok _ => (rooms(callee) + 24).leb_sound(avail, ok),
+        Loop(_, _, inner, _, _, _) => λ ok => inner.fits_sound(rooms, bound, avail, ok),
+        Sys(_) => λ _ => trivial,
+        Exit(_) => λ _ => trivial,
+    }
+}
+
+// The room a region's calls ask below a frame.
+fn Body::callee_room(self body: Body, rooms: Nat → Nat) → Nat {
+    match body {
+        Leaf(_) => 0,
+        Seq(first, rest) => first.callee_room(rooms).max(rest.callee_room(rooms)),
+        Branch(_, yes, no) => yes.callee_room(rooms).max(no.callee_room(rooms)),
+        Call(callee, _, _) => rooms(callee) + 24,
+        Loop(_, _, inner, _, _, _) => inner.callee_room(rooms),
+        Sys(_) => 0,
+        Exit(_) => 0,
+    }
+}
+
+// The CALL of a call whose callee answers `a` on `args`: the callee's
+// return (`CalleesReturn`) is its contract for `call_step_by`, cited as
+// stated at the heap's clause. Its precondition is the caller's clause and
+// the words passed; its postcondition gives the answer's words where the
+// call lands them and the answer's heap injected.
+theorem call_heap_step<M>(saved: List<Gpr>, slots: Nat, eight: saved.len() <= 8, slotted: saved.len() <= slots, site: Site<M>,
+    laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), rooms: Nat → Nat, bound, avail: Nat, answers: RoutineAnswers(),
+    callees: CalleesReturn<M>(site, stack, spans, rooms, top, bound, answers), values: Valuation(), spare: Nat, d: Nat, s0: MachineState<M>,
+    room: avail <= d, fits: d + 8 * slots <= stack.size, under: (d + 8 * slots) + 8 <= top, prog: Prog, callee: Nat, deep: 24 <= d,
+    below: callee + 1 <= bound, fit: rooms(callee) + 24 <= avail, count: Nat, few: count <= 2, arguments, results: List<Typed>, before, after: Heap,
+    args: List<Value>, a: Answer, answered: answers(callee, args, before, a), lands: CallLands(spans, values, spare, arguments, results, args, a, after),
+    g0: Gprs, k: Nat, at: asm_back(site.program, k) = At(prog, 0, CallTo(callee + 1))):
+    site.Moves(stack.writes, prog_len(prog), prog_len(prog) + 5,
+        λ (x: MachineState<M>) => stack.ArgsReadyBy(saved, spans, heap_in<M>(site.data, spans), d, slots, s0, before, g0, count,
+            words_of(values, typed_ids(arguments)), x),
+        λ (t: MachineState<M>) => stack.CalledBy(saved, spans, heap_in<M>(site.data, spans), d, slots, s0, after, g0, count,
+            values(64, call_result(results, spare)), words_of(values, call_also(results)), t)) {
+    let i = (d - 8 * count) - 8;
+    let low: (rooms(callee) <= i) = { omega };
+    let high: (i + 8 <= top) = { omega };
+    call_step_by<M, Heap>(saved, slots, eight, slotted, site, laid, stack, top, spans, heap_in<M>(site.data, spans), loan,
+        heap_in_stable<M>(stack, top, spans, loan), d, s0, fits, under, prog, callee, deep, count, few, words_of(values, typed_ids(arguments)),
+        values(64, call_result(results, spare)), words_of(values, call_also(results)), before, after,
+        RoutinePre<M>(site, stack, spans, rooms, top, callee, args, before), RoutinePost<M>(site, stack, spans, a),
+        callees(callee, below, args, before, a, answered),
+        λ u passed inj => ⟨⟨j(sym(lands.left), λ ws _ => stack.Passed(ws, i, u), passed), low⟩, ⟨high, inj⟩⟩,
+        λ u t inj post => ⟨⟨trans(post.left.left, lands.right.left.left),
+            j(lands.right.left.right, λ ws _ => ArgsIn(ws, answer_registers(), t.gprs), post.left.right)⟩,
+            ⟨post.right.left, ⟨post.right.right.left, j(lands.right.right, λ h _ => Injected<M>(site.data, spans, h, t.memory), post.right.right.right)⟩⟩⟩,
+        g0, k, at)
+}
+
+// ---------------------------------------------------------------------------
+// The plain loop: its meaning at the valuation and its code
+
+// A plain loop's passes at fuel `n`: each from the state's words, at a
+// valuation of its own whose parameters they are (a pass is its own scope),
+// its body's facts from the heap it starts at to the one it leaves; the
+// exit bit set ends with the next words, clear goes round at one fuel less.
+// At no fuel nothing ends.
+fn PassesHold(Pass: Valuation() → Heap → Heap → Type, parameters: List<Typed>, exit: Nat, next: List<Typed>, n: Nat, state: List<BitVec(64)>, from: Heap,
+    final: List<BitVec(64)>, to: Heap) → Type {
+    match n {
+        Zero => False,
+        Succ(m) => Exists<Valuation()>(λ v => (words_of(v, typed_ids(parameters)) = state) ∧ Exists<Heap>(λ mid => Pass(v, from, mid) ∧
+            match v(1, exit).head_bit() as λ _ => Type {
+                True => (final = words_of(v, typed_ids(next))) ∧ (to = mid),
+                False => PassesHold(Pass, parameters, exit, next, m, words_of(v, typed_ids(next)), mid, final, to),
+            })),
+    }
+}
+
+// The registers a loop's state is held in, one `Into` place each, and the
+// places after them.
+record LoopTaken { registers: List<Gpr>, rest: List<Place> }
+
+fn state_registers(placement: List<Place>, count: Nat) → Option<LoopTaken> {
+    match count {
+        Zero => Some(LoopTaken([], placement)),
+        Succ(more) => match placement {
+            Nil => None,
+            Cons(p, rest) => match p {
+                Into(r) => match state_registers(rest, more) { None => None, Some(t) => Some(LoopTaken(Cons(r, t.registers), t.rest)) },
+                Folded => None,
+                Saving(_) => None,
+                CallSlots(_) => None,
+                Spilling(_) => None,
+                Short(_) => None,
+            },
+        },
+    }
+}
+
+// The entry: the inputs moved into the state's registers, and the file a
+// pass starts from (its parameters there, nothing else).
+record PlainEntry { code: List<Instruction>, head: File }
+
+fn File::plain_entry(self file: File, saves: Nat, inputs, parameters: List<Nat>, registers: List<Gpr>) → Option<PlainEntry> {
+    match file.move_outputs(word_ports(inputs), registers) {
+        None => None,
+        Some(moves) => match moves.file.outputs_check(word_ports(inputs), registers) && leaves_all(moves.code, body_kept(saves)) {
+            False => None,
+            True => match input_file(word_ports(parameters), registers) { None => None, Some(head) => Some(PlainEntry(moves.code, head)) },
+        },
+    }
+}
+
+// The code after a pass: the exit bit's test, a jump to C where it is
+// clear; where set the next words moved into the state's registers and a
+// jump to J; at C the same moves and a jump to the head H; then J. Labels:
+// H is `names + 1`, C `names + 2`, J `names + 3`.
+fn plain_jumped(pass: Prog, test: Test, moves: List<Instruction>, names: Nat, short: List<Nat>) → Prog {
+    At(At(pass.branched_by(test, names + 2, shorts(short, names + 2)), 0, Block(moves)), 0, jmp_item(shorts(short, names + 3), names + 3))
+}
+
+fn plain_back(pass: Prog, test: Test, moves: List<Instruction>, names: Nat, short: List<Nat>) → Prog {
+    At(At(plain_jumped(pass, test, moves, names, short), names + 2, Block([])), 0, Block(moves))
+}
+
+fn plain_again(pass: Prog, test: Test, moves: List<Instruction>, names: Nat, short: List<Nat>) → Prog {
+    At(plain_back(pass, test, moves, names, short), 0, jmp_item(shorts(short, names + 1), names + 1))
+}
+
+fn plain_done(pass: Prog, test: Test, moves: List<Instruction>, names: Nat, short: List<Nat>) → Prog {
+    At(plain_again(pass, test, moves, names, short), names + 3, Block([]))
+}
+
+fn plain_head(prog: Prog, code: List<Instruction>, names: Nat) → Prog { At(At(prog, 0, Block(code)), names + 1, Block([])) }
+
+// After the pass: refused where the exit bit has no test, the next words do
+// not all reach the state's registers, or the moves touch a register the
+// body keeps. The file after the loop has its outputs in those registers.
+fn Emitted::plain_close(self pass: Emitted, saves: Nat, registers: List<Gpr>, exit: Nat, next, outputs: List<Nat>, names: Nat, short: List<Nat>) →
+    Option<Emitted> {
+    match pass.file.branch_test(exit) {
+        None => None,
+        Some(tested) => match pass.file.move_outputs(word_ports(next), registers) {
+            None => None,
+            Some(moves) => match moves.file.outputs_check(word_ports(next), registers) && leaves_all(moves.code, body_kept(saves)) {
+                False => None,
+                True => match input_file(word_ports(outputs), registers) {
+                    None => None,
+                    Some(out) => Some(Emitted(plain_done(pass.prog, tested.test, moves.code, names, short), out, pass.placement, pass.names)),
+                },
+            },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Sequences, branches and calls
+
+// A region's meaning at the valuation, from the heap `before` to `after`:
+// a leaf's nodes, a sequence through a heap between, the arm the
+// condition's bit picks, and a call: the values at its arguments, lowered,
+// are the valuation's words there, the callee answers them (`answers`, what
+// the program's routines answer at the fuel the call is made with), and its
+// answer's words, lowered, are the words at its results (`CallLands`); a
+// plain loop's passes at some fuel (`PassesHold`). System calls and exits are
+// not lowered yet and mean nothing here.
+fn Body::Holds(self body: Body, spans: Spans, blocks: Blocks, values: Valuation(), answers: RoutineAnswers(), spare: Nat, before, after: Heap) → Type {
+    match body {
+        Leaf(instrs) => InstrsHold(spans, blocks, values, instrs, before, after),
+        Seq(first, rest) => Exists<Heap>(λ mid => first.Holds(spans, blocks, values, answers, spare, before, mid) ∧
+            rest.Holds(spans, blocks, values, answers, spare, mid, after)),
+        Branch(condition, yes, no) => match values(1, condition).head_bit() {
+            True => yes.Holds(spans, blocks, values, answers, spare, before, after),
+            False => no.Holds(spans, blocks, values, answers, spare, before, after),
+        },
+        Call(callee, arguments, results) => Exists<List<Value>>(λ args => Exists<Answer>(λ a =>
+            answers(callee, args, before, a) ∧ CallLands(spans, values, spare, arguments, results, args, a, after))),
+        Loop(inputs, parameters, inner, exit, next, outputs) => Exists<Nat>(λ n => PassesHold(λ (v: Valuation()) (from: Heap) (to: Heap) =>
+            inner.Holds(spans, blocks, v, answers, spare, from, to), parameters, exit, next, n, words_of(values, typed_ids(inputs)), before,
+            words_of(values, typed_ids(outputs)), after)),
+        Sys(_) => False,
+        Exit(_) => False,
+    }
+}
+
+// A call's code: FunctionIR's (`File::emit_call`, lending no buffers),
+// proved by `File::emit_call_steps_by` at the heap's clause with each CALL
+// by `call_heap_step`.
+theorem call_heap_emits<M>(saves, slots: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    top: Nat, spans: Spans, loan: Loan<M>(site.fetch, site.data, stack, top, spans), rooms: Nat → Nat, bound, avail: Nat, answers: RoutineAnswers(),
+    callees: CalleesReturn<M>(site, stack, spans, rooms, top, bound, answers), blocks: Blocks, values: Valuation(), spare: Nat, d: Nat,
+    s0: MachineState<M>, rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d), room: avail <= d, deep: 24 <= d, fits: d + 8 * slots <= stack.size,
+    under: (d + 8 * slots) + 8 <= top, prog: Prog, file: File, callee: Nat, arguments, results: List<Typed>,
+    fit: callee + 1 <= bound → rooms(callee) + 24 <= avail, placement: List<Place>, names: Nat, before, after: Heap):
+    MayEmitHeap<M>(saves, site, stack, spans, values, d + 8 * slots, s0, prog, file,
+        Body::Call(callee, arguments, results).Holds(spans, blocks, values, answers, spare, before, after), before, after,
+        file.emit_call(slots, prog, callee, typed_ids(arguments), call_result(results, spare), call_also(results), placement, names, bound, [], [])) {
+    file.emit_call_steps_by<M, Heap>(saves, slots, site, laid, stack, top, bound, spans, heap_in<M>(site.data, spans),
+        heap_in_stable<M>(stack, top, spans, loan), values, d, s0, rsp0, fits, under, deep, prog, callee, typed_ids(arguments),
+        call_result(results, spare), call_also(results), placement, names, [], [],
+        Body::Call(callee, arguments, results).Holds(spans, blocks, values, answers, spare, before, after), before, after,
+        λ eight slotted below _ count few moved facts g0 _ _ k at => call_heap_step<M>(call_saves(placement), slots, eight, slotted, site, laid, stack, top,
+            spans, loan, rooms, bound, avail, answers, callees, values, spare, d, s0, room, fits, under, moved, callee, deep, below, fit(below), count, few,
+            arguments, results, before, after, facts.witness, facts.proof.witness, facts.proof.proof.left, facts.proof.proof.right, g0, k, at))
 }
 
 // A region's code: a leaf's nodes; a sequence's parts one after the other;
 // a branch as FunctionIR's conditional (the test of its bit, or of the
 // comparison the file knows it to be, the first arm, a jump to the join,
 // the second arm, the join, where only what both arms' files agree on
-// survives: `File::branch_test`, `File::meet`). `short` names the labels
-// whose jumps take their short form.
-fn Body::emit(self body: Body, saves: Nat, short: List<Nat>, prog: Prog, file: File, placement: List<Place>, names: Nat) → Option<Emitted> {
+// survives: `File::branch_test`, `File::meet`); a call as FunctionIR's,
+// lending no buffers, of a routine below `bound`, its frame's `slots`
+// call slots. `short` names the labels whose jumps take their short form.
+fn Body::emit(self body: Body, saves, slots: Nat, short: List<Nat>, bound, spare: Nat, prog: Prog, file: File, placement: List<Place>, names: Nat) →
+    Option<Emitted> {
     match body {
         Leaf(instrs) => emit_instrs(saves, prog, file, instrs, placement, names),
-        Seq(first, rest) => match first.emit(saves, short, prog, file, placement, names) {
+        Seq(first, rest) => match first.emit(saves, slots, short, bound, spare, prog, file, placement, names) {
             None => None,
-            Some(done) => rest.emit(saves, short, done.prog, done.file, done.placement, done.names),
+            Some(done) => rest.emit(saves, slots, short, bound, spare, done.prog, done.file, done.placement, done.names),
         },
         Branch(condition, yes, no) => match file.branch_test(condition) {
             None => None,
-            Some(tested) => match yes.emit(saves, short, prog.branched_by(tested.test, names + 1, shorts(short, names + 1)), file.know(Truth(condition)),
-                placement, names + 2) {
+            Some(tested) => match yes.emit(saves, slots, short, bound, spare, prog.branched_by(tested.test, names + 1, shorts(short, names + 1)),
+                file.know(Truth(condition)), placement, names + 2) {
                 None => None,
-                Some(left) => match no.emit(saves, short, left.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2)),
+                Some(left) => match no.emit(saves, slots, short, bound, spare, left.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2)),
                     file.know(Falsity(condition)), left.placement, left.names) {
                     None => None,
                     Some(right) => Some(Emitted(right.prog.join_label(names + 2), left.file.meet(right.file, file.known), right.placement, right.names)),
                 },
             },
         },
-        Call(_, _, _) => None,
-        Loop(_, _, _, _, _, _) => None,
+        Call(callee, arguments, results) =>
+            file.emit_call(slots, prog, callee, typed_ids(arguments), call_result(results, spare), call_also(results), placement, names, bound, [], []),
+        Loop(inputs, parameters, inner, exit, next, outputs) => match state_registers(placement, typed_ids(parameters).len()) {
+            None => None,
+            Some(taken) => match file.plain_entry(saves, typed_ids(inputs), typed_ids(parameters), taken.registers) {
+                None => None,
+                Some(entry) => match inner.emit(saves, slots, short, bound, spare, plain_head(prog, entry.code, names), entry.head, taken.rest, names + 4) {
+                    None => None,
+                    Some(pass) => pass.plain_close(saves, taken.registers, exit, typed_ids(next), typed_ids(outputs), names, short),
+                },
+            },
+        },
         Sys(_) => None,
         Exit(_) => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The plain loop's code meets its meaning
+
+// The exit bit set, after a pass: the test falls through, the next words
+// move into the state's registers, JMP J.
+theorem plain_leaves<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), keep: M → Type,
+    s0: MachineState<M>, pass: Prog, file: File, test: Test, exit: Nat, moves: List<Instruction>, ids: List<Nat>, registers: List<Gpr>, names: Nat,
+    short: List<Nat>, jumped_in: plain_jumped(pass, test, moves, names, short).Within(site.program),
+    c_lands: asm_target(site.program, names + 2) = prog_len(plain_jumped(pass, test, moves, names, short)),
+    j_at: Nat, j_lands: asm_target(site.program, names + 3) = j_at, values: Valuation(),
+    selects: (g: Gprs) → file.Represents(values, g) → test.taken(g) = !values(1, exit).head_bit(),
+    into: MovesInto<M>(saves, values, file, ids, registers, moves), set: values(1, exit).head_bit() = True):
+    site.Moves(stack.writes, prog_len(pass), j_at,
+        λ (s: MachineState<M>) => stack.LoopPassed(saves, keep, s0, file, values)(s.gprs, s.memory),
+        λ (t: MachineState<M>) => stack.LoopAt(saves, keep, s0, registers, words_of(values, ids))(t.gprs, t.memory)) {
+    let program = site.program;
+    let fits = program.laid_out_fits(laid);
+    let lands = program.laid_out_lands(laid);
+    let c_name = names + 2;
+    let j_name = names + 3;
+    let short_c = shorts(short, c_name);
+    let short_j = shorts(short, j_name);
+    let left = pass.branched_by(test, c_name, short_c);
+    let leave = At(left, 0, Block(moves));
+    let jumped = plain_jumped(pass, test, moves, names, short);
+    let leave_in = leave.within_before(0, jmp_item(short_j, j_name), program, jumped_in);
+    let left_in = left.within_before(0, Block(moves), program, leave_in);
+    let tested = pass.tested(test);
+    let test_in = tested.within_before(0, jcc_item(short_c, test.cc(), c_name), program, left_in);
+    let else_lands = j(c_lands, λ target _ => JccLands(asm_labels(program), prog_len(tested), short_c, test.cc(), c_name, target),
+        jcc_item_lands(asm_labels(program), left_in.witness, program, tested, 0, short_c, test.cc(), c_name, lands, left_in.proof));
+    let jump_lands = j(j_lands, λ target _ => JmpLands(asm_labels(program), prog_len(leave), short_j, j_name, target),
+        jmp_item_lands(asm_labels(program), jumped_in.witness, program, leave, 0, short_j, j_name, lands, jumped_in.proof));
+    let pre = stack.LoopPassed(saves, keep, s0, file, values);
+    let post = stack.LoopAt(saves, keep, s0, registers, words_of(values, ids));
+    site.moves_test_by(stack.writes, fits, pass, test, c_name, short_c, test_in.witness, test_in.proof, left_in.witness, left_in.proof,
+        prog_len(jumped), else_lands, j_at, pre, λ (t: MachineState<M>) => post(t.gprs, t.memory),
+        site.moves_trans(stack.writes, prog_len(left), prog_len(leave), j_at,
+            λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ test.taken(s.gprs) = False,
+            λ (s: MachineState<M>) => post(s.gprs, s.memory), λ (t: MachineState<M>) => post(t.gprs, t.memory),
+            site.moves_weaken(stack.writes, prog_len(left), prog_len(leave), λ (s: MachineState<M>) => pre(s.gprs, s.memory),
+                λ (t: MachineState<M>) => post(t.gprs, t.memory),
+                λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ test.taken(s.gprs) = False,
+                λ (t: MachineState<M>) => post(t.gprs, t.memory),
+                site.moves_block(stack.writes, fits, leave_in.witness, left, 0, moves, leave_in.proof,
+                    program.block_reads_at(laid, leave_in.witness, left, 0, moves, leave_in.proof), pre, post,
+                    λ s memory held => {
+                        let ran = into(s, held.left);
+                        ⟨ran.left, ⟨kept_trans(body_kept(saves), s0.gprs, s.gprs, execute_block_normal(moves, s).gprs, held.right.left, ran.right),
+                            held.right.right⟩⟩
+                    }),
+                λ s held => held.left, λ t held => held),
+            site.moves_jump_item(stack.writes, fits, jumped_in.witness, leave, 0, short_j, j_name, jumped_in.proof, j_at, jump_lands, post)),
+        site.moves_absurd(stack.writes, prog_len(jumped), j_at,
+            λ (s: MachineState<M>) => pre(s.gprs, s.memory) ∧ test.taken(s.gprs) = True,
+            λ (t: MachineState<M>) => post(t.gprs, t.memory),
+            λ s held => {
+                let bad: (True = False) = trans(sym(held.right), trans(selects(s.gprs, held.left.left), cong_fn<Bool, Bool>(λ b => !b, set)));
+                absurd(bad)
+            }))
+}
+
+// The exit bit clear: `loop_turns` (the test jumps to C, the moves there),
+// then JMP H.
+theorem plain_turns<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), keep: M → Type,
+    s0: MachineState<M>, pass: Prog, file: File, test: Test, exit: Nat, moves: List<Instruction>, ids: List<Nat>, registers: List<Gpr>, names: Nat,
+    short: List<Nat>, again_in: plain_again(pass, test, moves, names, short).Within(site.program),
+    c_lands: asm_target(site.program, names + 2) = prog_len(plain_jumped(pass, test, moves, names, short)),
+    h_at: Nat, h_lands: asm_target(site.program, names + 1) = h_at, values: Valuation(),
+    selects: (g: Gprs) → file.Represents(values, g) → test.taken(g) = !values(1, exit).head_bit(),
+    into: MovesInto<M>(saves, values, file, ids, registers, moves), clear: values(1, exit).head_bit() = False):
+    site.Moves(stack.writes, prog_len(pass), h_at,
+        λ (s: MachineState<M>) => stack.LoopPassed(saves, keep, s0, file, values)(s.gprs, s.memory),
+        λ (t: MachineState<M>) => stack.LoopAt(saves, keep, s0, registers, words_of(values, ids))(t.gprs, t.memory)) {
+    let program = site.program;
+    let back = plain_back(pass, test, moves, names, short);
+    let short_h = shorts(short, names + 1);
+    let back_in = back.within_before(0, jmp_item(short_h, names + 1), program, again_in);
+    let jump_lands = j(h_lands, λ target _ => JmpLands(asm_labels(program), prog_len(back), short_h, names + 1, target),
+        jmp_item_lands(asm_labels(program), again_in.witness, program, back, 0, short_h, names + 1, program.laid_out_lands(laid), again_in.proof));
+    let post = stack.LoopAt(saves, keep, s0, registers, words_of(values, ids));
+    site.moves_trans(stack.writes, prog_len(pass), prog_len(back), h_at,
+        λ (s: MachineState<M>) => stack.LoopPassed(saves, keep, s0, file, values)(s.gprs, s.memory),
+        λ (s: MachineState<M>) => post(s.gprs, s.memory), λ (t: MachineState<M>) => post(t.gprs, t.memory),
+        loop_turns<M>(saves, site, laid, stack, keep, s0, pass, file, test, exit, moves, ids, registers, plain_jumped(pass, test, moves, names, short),
+            names + 2, shorts(short, names + 2), Exists(2, refl), back_in, c_lands, values, selects, into, clear),
+        site.moves_jump_item(stack.writes, program.laid_out_fits(laid), again_in.witness, back, 0, short_h, names + 1, again_in.proof, h_at, jump_lands,
+            post))
+}
+
+// A label's item is empty.
+theorem label_len(p: Prog, name: Nat): prog_len(At(p, name, Block([]))) = prog_len(p) { refl }
+
+// The loop's head over the state `now` leaves: the state's words in their
+// registers, the trail over `now`.
+fn PlainAt<M>(saves: Nat, site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, w: Nat, s0: MachineState<M>, registers: List<Gpr>,
+    state: List<BitVec(64)>, now: Heap) → MachineState<M> → Type {
+    λ (s: MachineState<M>) => stack.LoopAt(saves, λ (x: M) => stack.TrailBy(spans, heap_in<M>(site.data, spans), w, s0.memory, now, x), s0, registers,
+        state)(s.gprs, s.memory)
+}
+
+// Where the loop's labels land, read off the code once.
+record PlainLabels<M>(site: Site<M>, prog: Prog, code: List<Instruction>, pass: Prog, test: Test, moves: List<Instruction>, names: Nat,
+    short: List<Nat>) {
+    again_in: plain_again(pass, test, moves, names, short).Within(site.program),
+    jumped_in: plain_jumped(pass, test, moves, names, short).Within(site.program),
+    c_lands: asm_target(site.program, names + 2) = prog_len(plain_jumped(pass, test, moves, names, short)),
+    h_lands: asm_target(site.program, names + 1) = prog_len(At(prog, 0, Block(code))),
+    j_lands: asm_target(site.program, names + 3) = prog_len(plain_again(pass, test, moves, names, short)),
+}
+
+theorem plain_labels<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), prog: Prog, code: List<Instruction>, pass: Prog, test: Test,
+    moves: List<Instruction>, names: Nat, short: List<Nat>, head_pass: plain_head(prog, code, names).Within(pass),
+    done_in: plain_done(pass, test, moves, names, short).Within(site.program)): PlainLabels<M>(site, prog, code, pass, test, moves, names, short) {
+    let program = site.program;
+    let unique = program.laid_out_unique(laid);
+    let jumped = plain_jumped(pass, test, moves, names, short);
+    let again = plain_again(pass, test, moves, names, short);
+    let again_in: again.Within(program) = again.within_before(names + 3, Block([]), program, done_in);
+    let c_in: At(jumped, names + 2, Block([])).Within(program) = Prog::within_trans(Exists(2, refl), again_in);
+    let head_in: plain_head(prog, code, names).Within(program) = Prog::within_trans(head_pass, Prog::within_trans(Exists(8, refl), done_in));
+    PlainLabels(again_in := again_in, jumped_in := Prog::within_trans(Exists(3, refl), again_in),
+        c_lands := label_target(c_in.witness, program, jumped, names + 1, Block([]), unique, c_in.proof),
+        h_lands := label_target(head_in.witness, program, At(prog, 0, Block(code)), names, Block([]), unique, head_in.proof),
+        j_lands := label_target(done_in.witness, program, again, names + 2, Block([]), unique, done_in.proof))
+}
+
+// One pass from the head: its body, then out to J or round to H.
+theorem plain_step<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), spans: Spans,
+    Pass: Valuation() → Heap → Heap → Type, w: Nat, s0: MachineState<M>, prog: Prog, code: List<Instruction>, head: File, registers: List<Gpr>,
+    parameters: List<Typed>, exit: Nat, next: List<Typed>, names: Nat, short: List<Nat>, pass: Emitted, test: Test, moves: List<Instruction>,
+    labels: PlainLabels<M>(site, prog, code, pass.prog, test, moves, names, short),
+    head_ok: (v: Valuation()) → (g: Gprs) → ArgsIn(words_of(v, typed_ids(parameters)), registers, g) → head.Represents(v, g),
+    pass_emits: (v: Valuation()) → (from, to: Heap) →
+        EmitsHeap<M>(saves, site, stack, spans, v, w, s0, plain_head(prog, code, names), head, Pass(v, from, to), from, to, pass),
+    pass_in: pass.prog.Within(site.program),
+    selects: (v: Valuation()) → (g: Gprs) → pass.file.Represents(v, g) → test.taken(g) = !v(1, exit).head_bit(),
+    into: (v: Valuation()) → MovesInto<M>(saves, v, pass.file, typed_ids(next), registers, moves),
+    final: List<BitVec(64)>, after: Heap, m: Nat, state: List<BitVec(64)>, now: Heap, v: Valuation(),
+    eq: words_of(v, typed_ids(parameters)) = state, mid: Heap, passed: Pass(v, now, mid),
+    rest: match v(1, exit).head_bit() {
+        True => (final = words_of(v, typed_ids(next))) ∧ (after = mid),
+        False => PassesHold(Pass, parameters, exit, next, m, words_of(v, typed_ids(next)), mid, final, after),
+    }):
+    site.Moves(stack.writes, prog_len(At(prog, 0, Block(code))), prog_len(plain_again(pass.prog, test, moves, names, short)),
+        PlainAt<M>(saves, site, stack, spans, w, s0, registers, state, now), PlainAt<M>(saves, site, stack, spans, w, s0, registers, final, after)) ∨
+    Exists<List<BitVec(64)>>(λ later => Exists<Heap>(λ left => PassesHold(Pass, parameters, exit, next, m, later, left, final, after) ∧
+        site.Moves(stack.writes, prog_len(At(prog, 0, Block(code))), prog_len(At(prog, 0, Block(code))),
+            PlainAt<M>(saves, site, stack, spans, w, s0, registers, state, now), PlainAt<M>(saves, site, stack, spans, w, s0, registers, later, left)))) {
+    let h_at = prog_len(At(prog, 0, Block(code)));
+    let j_at = prog_len(plain_again(pass.prog, test, moves, names, short));
+    let keep_mid = λ (x: M) => stack.TrailBy(spans, heap_in<M>(site.data, spans), w, s0.memory, mid, x);
+    let passed_at = λ (t: MachineState<M>) => stack.LoopPassed(saves, keep_mid, s0, pass.file, v)(t.gprs, t.memory);
+    let ran = loop_body_runs_by<M, Heap>(saves, site, stack, spans, heap_in<M>(site.data, spans), Pass, w, s0, plain_head(prog, code, names), head,
+        registers, typed_ids(parameters), head_ok, v, now, mid, pass, pass_emits(v, now, mid), pass_in, passed);
+    let start = j(eq, λ x _ => site.Moves(stack.writes, h_at, prog_len(pass.prog), PlainAt<M>(saves, site, stack, spans, w, s0, registers, x, now),
+        passed_at), ran);
+    (match v(1, exit).head_bit() as λ b => v(1, exit).head_bit() = b →
+        (match b {
+            True => (final = words_of(v, typed_ids(next))) ∧ (after = mid),
+            False => PassesHold(Pass, parameters, exit, next, m, words_of(v, typed_ids(next)), mid, final, after),
+        }) →
+        site.Moves(stack.writes, h_at, j_at, PlainAt<M>(saves, site, stack, spans, w, s0, registers, state, now),
+            PlainAt<M>(saves, site, stack, spans, w, s0, registers, final, after)) ∨
+        Exists<List<BitVec(64)>>(λ later => Exists<Heap>(λ left => PassesHold(Pass, parameters, exit, next, m, later, left, final, after) ∧
+            site.Moves(stack.writes, h_at, h_at, PlainAt<M>(saves, site, stack, spans, w, s0, registers, state, now),
+                PlainAt<M>(saves, site, stack, spans, w, s0, registers, later, left)))) {
+        True => λ set done => {
+            let out = plain_leaves<M>(saves, site, laid, stack, keep_mid, s0, pass.prog, pass.file, test, exit, moves, typed_ids(next), registers, names, short,
+                labels.jumped_in, labels.c_lands, j_at, labels.j_lands, v, selects(v), into(v), set);
+            Inl(site.moves_trans(stack.writes, h_at, prog_len(pass.prog), j_at, PlainAt<M>(saves, site, stack, spans, w, s0, registers, state, now),
+                passed_at, PlainAt<M>(saves, site, stack, spans, w, s0, registers, final, after), start,
+                j(sym(done.right), λ h _ => site.Moves(stack.writes, prog_len(pass.prog), j_at, passed_at,
+                        PlainAt<M>(saves, site, stack, spans, w, s0, registers, final, h)),
+                    j(sym(done.left), λ f _ => site.Moves(stack.writes, prog_len(pass.prog), j_at, passed_at,
+                        PlainAt<M>(saves, site, stack, spans, w, s0, registers, f, mid)), out))))
+        },
+        False => λ clear later => Inr(Exists(words_of(v, typed_ids(next)), Exists(mid, ⟨later,
+            site.moves_trans(stack.writes, h_at, prog_len(pass.prog), h_at, PlainAt<M>(saves, site, stack, spans, w, s0, registers, state, now), passed_at,
+                PlainAt<M>(saves, site, stack, spans, w, s0, registers, words_of(v, typed_ids(next)), mid), start,
+                plain_turns<M>(saves, site, laid, stack, keep_mid, s0, pass.prog, pass.file, test, exit, moves, typed_ids(next), registers, names, short,
+                    labels.again_in, labels.c_lands, h_at, labels.h_lands, v, selects(v), into(v), clear))⟩))),
+    })(refl, rest)
+}
+
+// The passes, by induction on the fuel (`Site::loop_iterates`).
+theorem plain_passes<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), spans: Spans,
+    Pass: Valuation() → Heap → Heap → Type, w: Nat, s0: MachineState<M>, prog: Prog, code: List<Instruction>, head: File, registers: List<Gpr>,
+    parameters: List<Typed>, exit: Nat, next: List<Typed>, names: Nat, short: List<Nat>, pass: Emitted, test: Test, moves: List<Instruction>,
+    labels: PlainLabels<M>(site, prog, code, pass.prog, test, moves, names, short),
+    head_ok: (v: Valuation()) → (g: Gprs) → ArgsIn(words_of(v, typed_ids(parameters)), registers, g) → head.Represents(v, g),
+    pass_emits: (v: Valuation()) → (from, to: Heap) →
+        EmitsHeap<M>(saves, site, stack, spans, v, w, s0, plain_head(prog, code, names), head, Pass(v, from, to), from, to, pass),
+    pass_in: pass.prog.Within(site.program),
+    selects: (v: Valuation()) → (g: Gprs) → pass.file.Represents(v, g) → test.taken(g) = !v(1, exit).head_bit(),
+    into: (v: Valuation()) → MovesInto<M>(saves, v, pass.file, typed_ids(next), registers, moves),
+    final: List<BitVec(64)>, after: Heap, n: Nat, state: List<BitVec(64)>, now: Heap,
+    ran: PassesHold(Pass, parameters, exit, next, n, state, now, final, after)):
+    site.Moves(stack.writes, prog_len(At(prog, 0, Block(code))), prog_len(plain_again(pass.prog, test, moves, names, short)),
+        PlainAt<M>(saves, site, stack, spans, w, s0, registers, state, now), PlainAt<M>(saves, site, stack, spans, w, s0, registers, final, after)) {
+    site.loop_iterates<M, Heap>(stack.writes, prog_len(At(prog, 0, Block(code))), prog_len(plain_again(pass.prog, test, moves, names, short)),
+        λ (_: Nat) (st: List<BitVec(64)>) (at: Heap) => PlainAt<M>(saves, site, stack, spans, w, s0, registers, st, at),
+        PlainAt<M>(saves, site, stack, spans, w, s0, registers, final, after),
+        λ (k: Nat) (st: List<BitVec(64)>) (at: Heap) => PassesHold(Pass, parameters, exit, next, k, st, at, final, after),
+        λ st at never => false_elim(never),
+        λ k st at holds => plain_step<M>(saves, site, laid, stack, spans, Pass, w, s0, prog, code, head, registers, parameters, exit, next, names, short, pass,
+            test, moves, labels, head_ok, pass_emits, pass_in, selects, into, final, after, k, st, at, holds.witness, holds.proof.left,
+            holds.proof.right.witness, holds.proof.right.proof.left, holds.proof.right.proof.right),
+        n, state, now, ran)
+}
+
+// The loop: the entry's moves, the passes, and the outputs in the state's
+// registers at J.
+theorem plain_loop_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), spans: Spans,
+    Pass: Valuation() → Heap → Heap → Type, values: Valuation(), w: Nat, s0: MachineState<M>, prog: Prog, file: File, inputs, parameters: List<Typed>,
+    exit: Nat, next, outputs: List<Typed>, names: Nat, short: List<Nat>, registers: List<Gpr>, entry: PlainEntry,
+    entered: MovesInto<M>(saves, values, file, typed_ids(inputs), registers, entry.code),
+    head_ok: (v: Valuation()) → (g: Gprs) → ArgsIn(words_of(v, typed_ids(parameters)), registers, g) → entry.head.Represents(v, g),
+    pass: Emitted,
+    pass_emits: (v: Valuation()) → (from, to: Heap) →
+        EmitsHeap<M>(saves, site, stack, spans, v, w, s0, plain_head(prog, entry.code, names), entry.head, Pass(v, from, to), from, to, pass),
+    tested: Tested(pass.file, exit), moves: List<Instruction>, into: (v: Valuation()) → MovesInto<M>(saves, v, pass.file, typed_ids(next), registers, moves),
+    out: File, out_ok: (g: Gprs) → ArgsIn(words_of(values, typed_ids(outputs)), registers, g) → out.Represents(values, g), before, after: Heap):
+    EmitsHeap<M>(saves, site, stack, spans, values, w, s0, prog, file,
+        Exists<Nat>(λ n => PassesHold(Pass, parameters, exit, next, n, words_of(values, typed_ids(inputs)), before, words_of(values, typed_ids(outputs)),
+            after)),
+        before, after, Emitted(plain_done(pass.prog, tested.test, moves, names, short), out, pass.placement, pass.names)) {
+    let program = site.program;
+    let code = entry.code;
+    let test = tested.test;
+    let head_pass: plain_head(prog, code, names).Within(pass.prog) = (pass_emits(values, before, before)).left;
+    let facts: Type = Exists<Nat>(λ n => PassesHold(Pass, parameters, exit, next, n, words_of(values, typed_ids(inputs)), before,
+        words_of(values, typed_ids(outputs)), after));
+    let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ facts) ∧
+        (Kept(body_kept(saves), s0.gprs, g) ∧ stack.TrailBy(spans, heap_in<M>(site.data, spans), w, s0.memory, before, m));
+    let into_head: prog.Within(plain_head(prog, code, names)) = Exists(2, refl);
+    let pass_done: pass.prog.Within(plain_done(pass.prog, test, moves, names, short)) = Exists(8, refl);
+    ⟨Prog::within_trans(into_head, Prog::within_trans(head_pass, pass_done)),
+     λ within s here resident held => {
+        let labels = plain_labels<M>(site, laid, prog, code, pass.prog, test, moves, names, short, head_pass, within);
+        let pass_in: pass.prog.Within(program) = Prog::within_trans(Exists(8, refl), within);
+        let entered_in: At(prog, 0, Block(code)).Within(program) = Prog::within_trans(Exists(1, refl), Prog::within_trans(head_pass, pass_in));
+        let entry_run = site.moves_block(stack.writes, program.laid_out_fits(laid), entered_in.witness, prog, 0, code, entered_in.proof,
+            program.block_reads_at(laid, entered_in.witness, prog, 0, code, entered_in.proof), pre,
+            λ (g: Gprs) (m: M) => stack.LoopAt(saves, λ (x: M) => stack.TrailBy(spans, heap_in<M>(site.data, spans), w, s0.memory, before, x), s0,
+                registers, words_of(values, typed_ids(inputs)))(g, m),
+            λ x memory held_x => {
+                let ran = entered(x, held_x.left.left);
+                ⟨ran.left, ⟨kept_trans(body_kept(saves), s0.gprs, x.gprs, execute_block_normal(code, x).gprs, held_x.right.left, ran.right),
+                    held_x.right.right⟩⟩
+            });
+        let passes = plain_passes<M>(saves, site, laid, stack, spans, Pass, w, s0, prog, code, entry.head, registers, parameters, exit, next, names, short,
+            pass, test, moves, labels, head_ok, pass_emits, pass_in, tested.selects, into, words_of(values, typed_ids(outputs)), after,
+            held.left.right.witness, words_of(values, typed_ids(inputs)), before, held.left.right.proof);
+        let got = site.moves_trans(stack.writes, prog_len(prog), prog_len(At(prog, 0, Block(code))), prog_len(plain_again(pass.prog, test, moves, names, short)),
+            λ (x: MachineState<M>) => pre(x.gprs, x.memory), PlainAt<M>(saves, site, stack, spans, w, s0, registers, words_of(values, typed_ids(inputs)), before),
+            PlainAt<M>(saves, site, stack, spans, w, s0, registers, words_of(values, typed_ids(outputs)), after), entry_run, passes)(s, here, resident, held);
+        let t = got.witness;
+        let at = got.proof.right.right.right;
+        Exists(t, ⟨got.proof.left, ⟨got.proof.right.left, ⟨got.proof.right.right.left, ⟨out_ok(t.gprs, at.left), at.right⟩⟩⟩⟩)
+     }⟩
+}
+
+// The entry's moves and the head's file.
+fn MayPlainEntry<M>(saves: Nat, values: Valuation(), file: File, inputs, parameters: List<Nat>, registers: List<Gpr>, out: Option<PlainEntry>) → Type {
+    out.All(λ (entry: PlainEntry) => MovesInto<M>(saves, values, file, inputs, registers, entry.code) ∧
+        ((v: Valuation()) → (g: Gprs) → ArgsIn(words_of(v, parameters), registers, g) → entry.head.Represents(v, g)))
+}
+
+theorem plain_entry_sound<M>(saves: Nat, values: Valuation(), file: File, inputs, parameters: List<Nat>, registers: List<Gpr>):
+    MayPlainEntry<M>(saves, values, file, inputs, parameters, registers, file.plain_entry(saves, inputs, parameters, registers)) {
+    (match file.move_outputs(word_ports(inputs), registers) as λ o => MayKeep<M>(values, file, True, o) →
+        MayPlainEntry<M>(saves, values, file, inputs, parameters, registers, match o {
+            None => None,
+            Some(moves) => match moves.file.outputs_check(word_ports(inputs), registers) && leaves_all(moves.code, body_kept(saves)) {
+                False => None,
+                True => match input_file(word_ports(parameters), registers) { None => None, Some(head) => Some(PlainEntry(moves.code, head)) },
+            },
+        }) {
+        None => λ _ => trivial,
+        Some(moves) => λ keeps => match checked: moves.file.outputs_check(word_ports(inputs), registers) && leaves_all(moves.code, body_kept(saves)) {
+            False => trivial,
+            True => {
+                let parts = Bool::is_true_and(moves.file.outputs_check(word_ports(inputs), registers), leaves_all(moves.code, body_kept(saves)),
+                    is_true_of_eq(moves.file.outputs_check(word_ports(inputs), registers) && leaves_all(moves.code, body_kept(saves)), checked));
+                (match input_file(word_ports(parameters), registers) as λ o =>
+                    ((v: Valuation()) → (g: Gprs) → PortsAt(v, word_ports(parameters), registers, g) → o.All(λ (f: File) => f.Represents(v, g))) →
+                    MayPlainEntry<M>(saves, values, file, inputs, parameters, registers, match o { None => None, Some(head) => Some(PlainEntry(moves.code, head)) }) {
+                    None => λ _ => trivial,
+                    Some(head) => λ head_ok => ⟨moves_into<M>(saves, values, file, inputs, registers, moves, keeps, parts.left, parts.right),
+                        λ v g args => head_ok(v, g, args_ports(v, parameters, registers, g, args))⟩,
+                })(λ v g placed => input_file_represents(v, g, word_ports(parameters), registers, placed))
+            },
+        },
+    })(move_outputs_keeps<M>(values, word_ports(inputs), file, registers))
+}
+
+// After the pass, as `Emitted::plain_close` checks it.
+theorem plain_close_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), spans: Spans,
+    Pass: Valuation() → Heap → Heap → Type, values: Valuation(), w: Nat, s0: MachineState<M>, prog: Prog, file: File, inputs, parameters: List<Typed>,
+    exit: Nat, next, outputs: List<Typed>, names: Nat, short: List<Nat>, registers: List<Gpr>, entry: PlainEntry,
+    entry_ok: MovesInto<M>(saves, values, file, typed_ids(inputs), registers, entry.code) ∧
+        ((v: Valuation()) → (g: Gprs) → ArgsIn(words_of(v, typed_ids(parameters)), registers, g) → entry.head.Represents(v, g)),
+    pass: Emitted,
+    pass_emits: (v: Valuation()) → (from, to: Heap) →
+        EmitsHeap<M>(saves, site, stack, spans, v, w, s0, plain_head(prog, entry.code, names), entry.head, Pass(v, from, to), from, to, pass),
+    before, after: Heap):
+    MayEmitHeap<M>(saves, site, stack, spans, values, w, s0, prog, file,
+        Exists<Nat>(λ n => PassesHold(Pass, parameters, exit, next, n, words_of(values, typed_ids(inputs)), before, words_of(values, typed_ids(outputs)),
+            after)),
+        before, after, pass.plain_close(saves, registers, exit, typed_ids(next), typed_ids(outputs), names, short)) {
+    let facts: Type = Exists<Nat>(λ n => PassesHold(Pass, parameters, exit, next, n, words_of(values, typed_ids(inputs)), before,
+        words_of(values, typed_ids(outputs)), after));
+    let nexts = word_ports(typed_ids(next));
+    let outs = word_ports(typed_ids(outputs));
+    match pass.file.branch_test(exit) as λ t => MayEmitHeap<M>(saves, site, stack, spans, values, w, s0, prog, file, facts, before, after, match t {
+            None => None,
+            Some(tested) => match pass.file.move_outputs(nexts, registers) {
+                None => None,
+                Some(moves) => match moves.file.outputs_check(nexts, registers) && leaves_all(moves.code, body_kept(saves)) {
+                    False => None,
+                    True => match input_file(outs, registers) {
+                        None => None,
+                        Some(out) => Some(Emitted(plain_done(pass.prog, tested.test, moves.code, names, short), out, pass.placement, pass.names)),
+                    },
+                },
+            },
+        }) {
+        None => trivial,
+        Some(tested) => (match pass.file.move_outputs(nexts, registers) as λ o => ((v: Valuation()) → MayKeep<M>(v, pass.file, True, o)) →
+            MayEmitHeap<M>(saves, site, stack, spans, values, w, s0, prog, file, facts, before, after, match o {
+                None => None,
+                Some(moves) => match moves.file.outputs_check(nexts, registers) && leaves_all(moves.code, body_kept(saves)) {
+                    False => None,
+                    True => match input_file(outs, registers) {
+                        None => None,
+                        Some(out) => Some(Emitted(plain_done(pass.prog, tested.test, moves.code, names, short), out, pass.placement, pass.names)),
+                    },
+                },
+            }) {
+            None => λ _ => trivial,
+            Some(moves) => λ keeps => match checked: moves.file.outputs_check(nexts, registers) && leaves_all(moves.code, body_kept(saves)) {
+                False => trivial,
+                True => {
+                    let parts = Bool::is_true_and(moves.file.outputs_check(nexts, registers), leaves_all(moves.code, body_kept(saves)),
+                        is_true_of_eq(moves.file.outputs_check(nexts, registers) && leaves_all(moves.code, body_kept(saves)), checked));
+                    (match input_file(outs, registers) as λ o =>
+                        ((g: Gprs) → PortsAt(values, outs, registers, g) → o.All(λ (f: File) => f.Represents(values, g))) →
+                        MayEmitHeap<M>(saves, site, stack, spans, values, w, s0, prog, file, facts, before, after, match o {
+                            None => None,
+                            Some(out) => Some(Emitted(plain_done(pass.prog, tested.test, moves.code, names, short), out, pass.placement, pass.names)),
+                        }) {
+                        None => λ _ => trivial,
+                        Some(out) => λ out_ok => plain_loop_emits<M>(saves, site, laid, stack, spans, Pass, values, w, s0, prog, file, inputs, parameters, exit,
+                            next, outputs, names, short, registers, entry, entry_ok.left, entry_ok.right, pass, pass_emits, tested, moves.code,
+                            λ v => moves_into<M>(saves, v, pass.file, typed_ids(next), registers, moves, keeps(v), parts.left, parts.right), out,
+                            λ g args => out_ok(g, args_ports(values, typed_ids(outputs), registers, g, args)), before, after),
+                    })(λ g placed => input_file_represents(values, g, outs, registers, placed))
+                },
+            },
+        })(λ v => move_outputs_keeps<M>(v, nexts, pass.file, registers)),
+    }
+}
+
+// The loop's code, as `Body::emit` checks it, from its body's emission at
+// every valuation (`inner_emits`, the region theorem at the pass's).
+theorem loop_heap_emits<M>(saves, slots: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    spans: Spans, blocks: Blocks, answers: RoutineAnswers(), values: Valuation(), spare, w: Nat, s0: MachineState<M>, short: List<Nat>, bound: Nat,
+    inputs, parameters: List<Typed>, inner: Body, exit: Nat, next, outputs: List<Typed>, prog: Prog, file: File, placement: List<Place>, names: Nat,
+    before, after: Heap,
+    inner_emits: (start: Prog) → (head: File) → (rest: List<Place>) → (v: Valuation()) → (from, to: Heap) →
+        MayEmitHeap<M>(saves, site, stack, spans, v, w, s0, start, head, inner.Holds(spans, blocks, v, answers, spare, from, to), from, to,
+            inner.emit(saves, slots, short, bound, spare, start, head, rest, names + 4))):
+    MayEmitHeap<M>(saves, site, stack, spans, values, w, s0, prog, file,
+        Body::Loop(inputs, parameters, inner, exit, next, outputs).Holds(spans, blocks, values, answers, spare, before, after), before, after,
+        match state_registers(placement, typed_ids(parameters).len()) {
+            None => None,
+            Some(taken) => match file.plain_entry(saves, typed_ids(inputs), typed_ids(parameters), taken.registers) {
+                None => None,
+                Some(entry) => match inner.emit(saves, slots, short, bound, spare, plain_head(prog, entry.code, names), entry.head, taken.rest, names + 4) {
+                    None => None,
+                    Some(pass) => pass.plain_close(saves, taken.registers, exit, typed_ids(next), typed_ids(outputs), names, short),
+                },
+            },
+        }) {
+    let Pass = λ (v: Valuation()) (from: Heap) (to: Heap) => inner.Holds(spans, blocks, v, answers, spare, from, to);
+    let facts = Body::Loop(inputs, parameters, inner, exit, next, outputs).Holds(spans, blocks, values, answers, spare, before, after);
+    match state_registers(placement, typed_ids(parameters).len()) as λ o => MayEmitHeap<M>(saves, site, stack, spans, values, w, s0, prog, file, facts,
+            before, after, match o {
+                None => None,
+                Some(taken) => match file.plain_entry(saves, typed_ids(inputs), typed_ids(parameters), taken.registers) {
+                    None => None,
+                    Some(entry) => match inner.emit(saves, slots, short, bound, spare, plain_head(prog, entry.code, names), entry.head, taken.rest, names + 4) {
+                        None => None,
+                        Some(pass) => pass.plain_close(saves, taken.registers, exit, typed_ids(next), typed_ids(outputs), names, short),
+                    },
+                },
+            }) {
+        None => trivial,
+        Some(taken) => (match file.plain_entry(saves, typed_ids(inputs), typed_ids(parameters), taken.registers) as λ e =>
+            MayPlainEntry<M>(saves, values, file, typed_ids(inputs), typed_ids(parameters), taken.registers, e) →
+            MayEmitHeap<M>(saves, site, stack, spans, values, w, s0, prog, file, facts, before, after, match e {
+                None => None,
+                Some(entry) => match inner.emit(saves, slots, short, bound, spare, plain_head(prog, entry.code, names), entry.head, taken.rest, names + 4) {
+                    None => None,
+                    Some(pass) => pass.plain_close(saves, taken.registers, exit, typed_ids(next), typed_ids(outputs), names, short),
+                },
+            }) {
+            None => λ _ => trivial,
+            Some(entry) => λ entry_ok => (match inner.emit(saves, slots, short, bound, spare, plain_head(prog, entry.code, names), entry.head, taken.rest,
+                    names + 4) as λ e =>
+                ((v: Valuation()) → (from, to: Heap) → MayEmitHeap<M>(saves, site, stack, spans, v, w, s0, plain_head(prog, entry.code, names), entry.head,
+                    Pass(v, from, to), from, to, e)) →
+                MayEmitHeap<M>(saves, site, stack, spans, values, w, s0, prog, file, facts, before, after, match e {
+                    None => None,
+                    Some(pass) => pass.plain_close(saves, taken.registers, exit, typed_ids(next), typed_ids(outputs), names, short),
+                }) {
+                None => λ _ => trivial,
+                Some(pass) => λ pass_emits => plain_close_emits<M>(saves, site, laid, stack, spans, Pass, values, w, s0, prog, file, inputs, parameters, exit, next,
+                    outputs, names, short, taken.registers, entry, entry_ok, pass, pass_emits, before, after),
+            })(λ v from to => inner_emits(plain_head(prog, entry.code, names), entry.head, taken.rest, v, from, to)),
+        })(plain_entry_sound<M>(saves, values, file, typed_ids(inputs), typed_ids(parameters), taken.registers)),
     }
 }
 
 // The branch: the generic conditional (`branch_emits_by`), the bit picking
 // the arm's facts.
 theorem branch_heap_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
-    spans: Spans, blocks: Blocks, values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File, condition: Nat, yes, no: Body,
-    before, after: Heap, tested: Tested(file, condition), names: Nat, short: List<Nat>, left, right: Emitted,
+    spans: Spans, blocks: Blocks, values: Valuation(), answers: RoutineAnswers(), spare: Nat, d: Nat, s0: MachineState<M>, prog: Prog, file: File,
+    condition: Nat, yes, no: Body, before, after: Heap, tested: Tested(file, condition), names: Nat, short: List<Nat>, left, right: Emitted,
     yes_emits: EmitsHeap<M>(saves, site, stack, spans, values, d, s0, prog.branched_by(tested.test, names + 1, shorts(short, names + 1)),
-        file.know(Truth(condition)), yes.Holds(spans, blocks, values, before, after), before, after, left),
+        file.know(Truth(condition)), yes.Holds(spans, blocks, values, answers, spare, before, after), before, after, left),
     no_emits: EmitsHeap<M>(saves, site, stack, spans, values, d, s0, left.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2)),
-        file.know(Falsity(condition)), no.Holds(spans, blocks, values, before, after), before, after, right)):
-    EmitsHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Body::Branch(condition, yes, no).Holds(spans, blocks, values, before, after),
+        file.know(Falsity(condition)), no.Holds(spans, blocks, values, answers, spare, before, after), before, after, right)):
+    EmitsHeap<M>(saves, site, stack, spans, values, d, s0, prog, file,
+        Body::Branch(condition, yes, no).Holds(spans, blocks, values, answers, spare, before, after),
         before, after, Emitted(right.prog.join_label(names + 2), left.file.meet(right.file, file.known), right.placement, right.names)) {
-    let picked = λ (b: Bool) => match b { True => yes.Holds(spans, blocks, values, before, after), False => no.Holds(spans, blocks, values, before, after) };
+    let picked = λ (b: Bool) => match b {
+        True => yes.Holds(spans, blocks, values, answers, spare, before, after),
+        False => no.Holds(spans, blocks, values, answers, spare, before, after),
+    };
     let bit = values(1, condition).head_bit();
     branch_emits_by<M, Heap>(saves, site, laid, stack, spans, heap_in<M>(site.data, spans), values, d, s0, prog, file, condition, picked(bit),
-        yes.Holds(spans, blocks, values, before, after), no.Holds(spans, blocks, values, before, after), before, after, tested, names, short, left, right,
-        yes_emits, no_emits,
+        yes.Holds(spans, blocks, values, answers, spare, before, after), no.Holds(spans, blocks, values, answers, spare, before, after), before, after,
+        tested, names, short, left, right, yes_emits, no_emits,
         λ h clear => j(function_ir_lower_calls::not_false(bit, clear), λ b _ => picked(b), h),
         λ h set => j(function_ir_lower_calls::not_true(bit, set), λ b _ => picked(b), h))
 }
 
-// A region's code meets its meaning, for every heap before and after.
-theorem Body::emit_emits<M>(self body: Body, saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
-    top: Nat, spans: Spans, loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), values: Valuation(),
-    d: Nat, s0: MachineState<M>, short: List<Nat>): (prog: Prog) → (file: File) → (placement: List<Place>) → (names: Nat) → (before, after: Heap) →
-    MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, body.Holds(spans, blocks, values, before, after), before, after,
-        body.emit(saves, short, prog, file, placement, names)) {
+// A region's code meets its meaning, for every heap before and after: its
+// calls against their callees' returns (`callees`), its frame at `d` with
+// `slots` call slots below it where it calls (`Stack::CallFrame`), the
+// body's own offset `w`.
+theorem Body::emit_emits<M>(self body: Body, saves, slots: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+    stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans, loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks,
+    lent: blocks.Lent(spans), rooms: Nat → Nat, bound, avail: Nat, answers: RoutineAnswers(),
+    callees: CalleesReturn<M>(site, stack, spans, rooms, top, bound, answers), values: Valuation(), spare: Nat, d, w: Nat, s0: MachineState<M>,
+    framing: body.calls().IsTrue() → stack.CallFrame(top, avail, d, slots, w, s0), short: List<Nat>):
+    body.Fits(rooms, bound, avail) → (prog: Prog) → (file: File) → (placement: List<Place>) → (names: Nat) → (before, after: Heap) →
+    MayEmitHeap<M>(saves, site, stack, spans, values, w, s0, prog, file, body.Holds(spans, blocks, values, answers, spare, before, after), before, after,
+        body.emit(saves, slots, short, bound, spare, prog, file, placement, names)) {
     let mem = heap_in<M>(site.data, spans);
     match body {
-        Leaf(instrs) => λ prog file placement names before after =>
-            emit_instrs_emits<M>(saves, site, laid, stack, top, spans, loan, blocks, lent, values, d, s0, instrs, prog, file, placement, names, before,
+        Leaf(instrs) => λ shallow prog file placement names before after =>
+            emit_instrs_emits<M>(saves, site, laid, stack, top, spans, loan, blocks, lent, values, w, s0, instrs, prog, file, placement, names, before,
                 after),
-        Seq(first, rest) => λ prog file placement names before after =>
-            (match first.emit(saves, short, prog, file, placement, names) as λ o =>
-                ((mid: Heap) → MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, first.Holds(spans, blocks, values, before, mid), before,
-                    mid, o)) →
-                MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Body::Seq(first, rest).Holds(spans, blocks, values, before, after),
-                    before, after, match o { None => None, Some(done) => rest.emit(saves, short, done.prog, done.file, done.placement, done.names) }) {
+        Seq(first, rest) => λ shallow prog file placement names before after =>
+            (match first.emit(saves, slots, short, bound, spare, prog, file, placement, names) as λ o =>
+                ((mid: Heap) → MayEmitHeap<M>(saves, site, stack, spans, values, w, s0, prog, file,
+                    first.Holds(spans, blocks, values, answers, spare, before, mid), before, mid, o)) →
+                MayEmitHeap<M>(saves, site, stack, spans, values, w, s0, prog, file,
+                    Body::Seq(first, rest).Holds(spans, blocks, values, answers, spare, before, after), before, after,
+                    match o { None => None, Some(done) => rest.emit(saves, slots, short, bound, spare, done.prog, done.file, done.placement, done.names) }) {
                 None => λ _ => trivial,
-                Some(done) => λ first_emits => may_emit_by_seq<M, Heap>(saves, site, stack, spans, mem, values, d, s0, prog, file,
-                    λ (mid: Heap) => first.Holds(spans, blocks, values, before, mid), λ (mid: Heap) => rest.Holds(spans, blocks, values, mid, after),
-                    before, after, done, first_emits, rest.emit(saves, short, done.prog, done.file, done.placement, done.names),
-                    λ mid => Body::emit_emits<M>(rest, saves, site, laid, stack, top, spans, loan, blocks, lent, values, d, s0, short, done.prog, done.file,
-                        done.placement, done.names, mid, after)),
-            })(λ mid => Body::emit_emits<M>(first, saves, site, laid, stack, top, spans, loan, blocks, lent, values, d, s0, short, prog, file, placement,
+                Some(done) => λ first_emits => may_emit_by_seq<M, Heap>(saves, site, stack, spans, mem, values, w, s0, prog, file,
+                    λ (mid: Heap) => first.Holds(spans, blocks, values, answers, spare, before, mid),
+                    λ (mid: Heap) => rest.Holds(spans, blocks, values, answers, spare, mid, after),
+                    before, after, done, first_emits, rest.emit(saves, slots, short, bound, spare, done.prog, done.file, done.placement, done.names),
+                    λ mid => Body::emit_emits<M>(rest, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees,
+                        values, spare, d, w, s0, λ c => framing(Bool::is_true_or_r(first.calls(), rest.calls(), c)), short, shallow.right, done.prog,
+                        done.file, done.placement, done.names, mid, after)),
+            })(λ mid => Body::emit_emits<M>(first, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees,
+                values, spare, d, w, s0, λ c => framing(Bool::is_true_or_l(first.calls(), rest.calls(), c)), short, shallow.left, prog, file, placement,
                 names, before, mid)),
-        Branch(condition, yes, no) => λ prog file placement names before after =>
-            (match file.branch_test(condition) as λ o => MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file,
-                    Body::Branch(condition, yes, no).Holds(spans, blocks, values, before, after), before, after, match o {
+        Branch(condition, yes, no) => λ shallow prog file placement names before after =>
+            (match file.branch_test(condition) as λ o => MayEmitHeap<M>(saves, site, stack, spans, values, w, s0, prog, file,
+                    Body::Branch(condition, yes, no).Holds(spans, blocks, values, answers, spare, before, after), before, after, match o {
                         None => None,
-                        Some(tested) => match yes.emit(saves, short, prog.branched_by(tested.test, names + 1, shorts(short, names + 1)),
+                        Some(tested) => match yes.emit(saves, slots, short, bound, spare, prog.branched_by(tested.test, names + 1, shorts(short, names + 1)),
                             file.know(Truth(condition)), placement, names + 2) {
                             None => None,
-                            Some(left) => match no.emit(saves, short, left.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2)),
-                                file.know(Falsity(condition)), left.placement, left.names) {
+                            Some(left) => match no.emit(saves, slots, short, bound, spare,
+                                left.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2)), file.know(Falsity(condition)), left.placement,
+                                left.names) {
                                 None => None,
                                 Some(right) => Some(Emitted(right.prog.join_label(names + 2), left.file.meet(right.file, file.known), right.placement,
                                     right.names)),
@@ -1500,14 +2189,15 @@ theorem Body::emit_emits<M>(self body: Body, saves: Nat, site: Site<M>, laid: si
                 None => trivial,
                 Some(tested) => {
                     let yes_prog = prog.branched_by(tested.test, names + 1, shorts(short, names + 1));
-                    (match yes.emit(saves, short, yes_prog, file.know(Truth(condition)), placement, names + 2) as λ o =>
-                        MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, yes_prog, file.know(Truth(condition)),
-                            yes.Holds(spans, blocks, values, before, after), before, after, o) →
-                        MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file,
-                            Body::Branch(condition, yes, no).Holds(spans, blocks, values, before, after), before, after, match o {
+                    (match yes.emit(saves, slots, short, bound, spare, yes_prog, file.know(Truth(condition)), placement, names + 2) as λ o =>
+                        MayEmitHeap<M>(saves, site, stack, spans, values, w, s0, yes_prog, file.know(Truth(condition)),
+                            yes.Holds(spans, blocks, values, answers, spare, before, after), before, after, o) →
+                        MayEmitHeap<M>(saves, site, stack, spans, values, w, s0, prog, file,
+                            Body::Branch(condition, yes, no).Holds(spans, blocks, values, answers, spare, before, after), before, after, match o {
                                 None => None,
-                                Some(left) => match no.emit(saves, short, left.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2)),
-                                    file.know(Falsity(condition)), left.placement, left.names) {
+                                Some(left) => match no.emit(saves, slots, short, bound, spare,
+                                    left.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2)), file.know(Falsity(condition)), left.placement,
+                                    left.names) {
                                     None => None,
                                     Some(right) => Some(Emitted(right.prog.join_label(names + 2), left.file.meet(right.file, file.known), right.placement,
                                         right.names)),
@@ -1516,28 +2206,42 @@ theorem Body::emit_emits<M>(self body: Body, saves: Nat, site: Site<M>, laid: si
                         None => λ _ => trivial,
                         Some(left) => λ yes_emits => {
                             let no_prog = left.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2));
-                            (match no.emit(saves, short, no_prog, file.know(Falsity(condition)), left.placement, left.names) as λ o =>
-                                MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, no_prog, file.know(Falsity(condition)),
-                                    no.Holds(spans, blocks, values, before, after), before, after, o) →
-                                MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file,
-                                    Body::Branch(condition, yes, no).Holds(spans, blocks, values, before, after), before, after, match o {
+                            (match no.emit(saves, slots, short, bound, spare, no_prog, file.know(Falsity(condition)), left.placement, left.names) as λ o =>
+                                MayEmitHeap<M>(saves, site, stack, spans, values, w, s0, no_prog, file.know(Falsity(condition)),
+                                    no.Holds(spans, blocks, values, answers, spare, before, after), before, after, o) →
+                                MayEmitHeap<M>(saves, site, stack, spans, values, w, s0, prog, file,
+                                    Body::Branch(condition, yes, no).Holds(spans, blocks, values, answers, spare, before, after), before, after, match o {
                                         None => None,
                                         Some(right) => Some(Emitted(right.prog.join_label(names + 2), left.file.meet(right.file, file.known),
                                             right.placement, right.names)),
                                     }) {
                                 None => λ _ => trivial,
-                                Some(right) => λ no_emits => branch_heap_emits<M>(saves, site, laid, stack, spans, blocks, values, d, s0, prog, file, condition,
-                                    yes, no, before, after, tested, names, short, left, right, yes_emits, no_emits),
-                            })(Body::emit_emits<M>(no, saves, site, laid, stack, top, spans, loan, blocks, lent, values, d, s0, short, no_prog,
+                                Some(right) => λ no_emits => branch_heap_emits<M>(saves, site, laid, stack, spans, blocks, values, answers, spare, w, s0, prog,
+                                    file, condition, yes, no, before, after, tested, names, short, left, right, yes_emits, no_emits),
+                            })(Body::emit_emits<M>(no, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees,
+                                values, spare, d, w, s0, λ c => framing(Bool::is_true_or_r(yes.calls(), no.calls(), c)), short, shallow.right, no_prog,
                                 file.know(Falsity(condition)), left.placement, left.names, before, after))
                         },
-                    })(Body::emit_emits<M>(yes, saves, site, laid, stack, top, spans, loan, blocks, lent, values, d, s0, short, yes_prog,
+                    })(Body::emit_emits<M>(yes, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees,
+                        values, spare, d, w, s0, λ c => framing(Bool::is_true_or_l(yes.calls(), no.calls(), c)), short, shallow.left, yes_prog,
                         file.know(Truth(condition)), placement, names + 2, before, after))
                 },
             }),
-        Call(_, _, _) => λ prog file placement names before after => trivial,
-        Loop(_, _, _, _, _, _) => λ prog file placement names before after => trivial,
-        Sys(_) => λ prog file placement names before after => trivial,
-        Exit(_) => λ prog file placement names before after => trivial,
+        Call(callee, arguments, results) => λ shallow prog file placement names before after => {
+            let frame = framing(trivial);
+            j(frame.right.right.right.left, λ x _ => MayEmitHeap<M>(saves, site, stack, spans, values, x, s0, prog, file,
+                    Body::Call(callee, arguments, results).Holds(spans, blocks, values, answers, spare, before, after), before, after,
+                    file.emit_call(slots, prog, callee, typed_ids(arguments), call_result(results, spare), call_also(results), placement, names, bound, [], [])),
+                call_heap_emits<M>(saves, slots, site, laid, stack, top, spans, loan, rooms, bound, avail, answers, callees, blocks, values, spare, d, s0,
+                    frame.left, frame.right.left, frame.right.right.left, frame.right.right.right.right.left, frame.right.right.right.right.right, prog, file,
+                    callee, arguments, results, shallow, placement, names, before, after))
+        },
+        Loop(inputs, parameters, inner, exit, next, outputs) => λ shallow prog file placement names before after =>
+            loop_heap_emits<M>(saves, slots, site, laid, stack, spans, blocks, answers, values, spare, w, s0, short, bound, inputs, parameters, inner, exit,
+                next, outputs, prog, file, placement, names, before, after,
+                λ start head rest v from to => Body::emit_emits<M>(inner, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail,
+                    answers, callees, v, spare, d, w, s0, framing, short, shallow, start, head, rest, names + 4, from, to)),
+        Sys(_) => λ shallow prog file placement names before after => trivial,
+        Exit(_) => λ shallow prog file placement names before after => trivial,
     }
 }

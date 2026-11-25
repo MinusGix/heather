@@ -2064,6 +2064,67 @@ the routine's frame, the done clause and the world are filed (below).
   `lower_nodes`. Two-byte accesses (no `MOVZX r, word` in the model) and the
   typed copy are refused.
 
+**The fourth part: routines, calls and the done clause** (2026-11-25,
+`issues/bytes-level-lowering-routines.md`; `bytes_level_scope`,
+`bytes_level_routines`).
+
+- *One valuation per scope, by a check.* The lowering refuses a routine
+  whose scope binds an id twice along any path (`Body::fresh`: both arms of
+  a branch may bind one id, nothing after the branch may bind it again).
+  A checked run then changes only the ids it binds (`Frames`), and its
+  final locals lowered (`Locals::lower`: a reference its address) are a
+  valuation agreeing with the locals at every node (`Locals::Shows`,
+  `agrees_of`); `Body::holds_of` turns the run into the facts
+  `Body::emit_emits` takes. The invariant carried is that a word id holds
+  no reference and a reference id one (`Scoped`).
+- *A call* is FunctionIR's call code (`File::emit_call`, no buffers lent),
+  proved by `File::emit_call_steps_by` and `call_step_by` at the heap's
+  clause, cited as stated: the callee's contract is its routine's return
+  (`RoutinePre`, `RoutinePost`), the answer at the fuel the run gave the
+  call (`run_answers`). Its facts are `CallLands`: the arguments lowered
+  are the valuation's words, the answer's words land at the results.
+- *A routine with no results answers zero in RAX* (a `Const` into an id
+  its scope never binds, `ids_past`), because FunctionIR's call and
+  function theorems have a word in RAX: the contract's `Site::Returned`
+  says nothing of RAX then, so this is a choice of the lowering's own
+  callee contract, not of the language's meaning.
+- *A routine* is `function_runs_by` at the heap's clause around
+  `Body::emit_emits` (`routine_runs`), FunctionIR's frame arithmetic and
+  `Site::returns_by` around that (`routine_body`, `routine_returns`).
+- *The done clause* (`lower_program_meets_done`): `Site::MeetsDone` for
+  every routine of every program `Program::lower` returns, at every fuel,
+  by one induction on the fuel (`program_returns`): at `n + 1` a routine's
+  calls are answered at `n`, so the callees' code meets them by the
+  hypothesis. A run done without a system call leaves the world alone
+  (`program_quiet`), so the code performs the answer at no system call.
+- *Recursion is refused.* The meaning ties routines by fuel, so a routine
+  may call itself; but `Site::Entering` fixes the room below the return
+  address (`rooms(f)`) for every fuel, and a routine that calls itself
+  needs room growing with the depth the fuel allows. So a routine calls
+  only those below it, as FunctionIR's functions without levels do, and
+  the room table (`routine_rooms`) is each routine's largest frame over its
+  callees' rooms.
+- *The plain loop* (`issues/bytes-level-lowering-loops.md`): its facts are
+  its passes at some fuel (`PassesHold`), each at a valuation of its own,
+  since a pass is a scope of its own from its parameters. Its code is the
+  inputs moved into the state's registers, a head H, the pass, the exit
+  bit's test (to C where clear), the next words moved in and a jump to J,
+  at C the same moves and a jump to H, then J (`plain_done`). The passes
+  are `Site::loop_iterates` on the run's fuel with `Stack::LoopAt` at the
+  head, a pass `loop_body_runs_by` and the turn `loop_turns`, cited as
+  stated; leaving is the loop's own (`plain_leaves`, the bounded loop's
+  `loop_leaves` without its flag). The ids a pass binds are counted bound
+  in the scope around the loop, so the routine's spare id is none of a
+  pass's and nothing after the loop rebinds one.
+- *The exited clause* holds of every program the lowering returns, and
+  vacuously: it lowers no exit and no system call, so its meaning never
+  exits (`program_no_exit`, `lower_program_meets_exited`). What remains of
+  the world (`issues/bytes-level-lowering-world.md`): the system call, which
+  needs the frame, call, loop and function theorems in the claim form
+  `Site::Performs` (all are over `Site::Moves`), and the going clause, a
+  statement about every state the code reaches, which none of the
+  existential theorems gives.
+
 **What follows.** The rest of the lowering under `Site::Meets`
 (`issues/bytes-level-lowering-routines.md`, `bytes-level-lowering-loops.md`,
 `bytes-level-lowering-world.md`), the translation of FunctionIR programs
