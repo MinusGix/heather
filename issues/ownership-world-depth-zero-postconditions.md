@@ -21,3 +21,4 @@ A world that states termination (the meaning clocked, §18.1) so `prog_sound` ne
 ## Log
 
 - 2026-11-25: Decided (docs/language/ownership-design.md §20.4): the world is clocked. Both readings of a body take fuel and answer the bytes level's outcome; out of fuel is `Going`, not a value, and a postcondition is a proposition of a `Done` answer only, so nothing is asked of a depth-zero answer. Not built on `call_check.hthr`: a requirement on the checker built over the fixed interfaces (§20.6), closed by it.
+- 2026-11-25: The interface this is built against is fixed in docs/language/ownership-design.md §21 (the build's probes: §21.5).

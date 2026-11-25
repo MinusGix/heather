@@ -21,3 +21,4 @@ A `Cond` reading the place's length (`a < |x|`), read in the meaning as the curr
 ## Log
 
 - 2026-11-25: Not a further round on `call_check.hthr` (docs/language/ownership-design.md §20): the experiment module is not extended again. This is a requirement on the checker built once over the fixed interfaces (§20.6) and is closed by that build.
+- 2026-11-25: The interface this is built against is fixed in docs/language/ownership-design.md §21 (the build's probes: §21.5).

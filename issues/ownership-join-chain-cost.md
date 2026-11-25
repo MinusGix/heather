@@ -19,3 +19,7 @@ Decide where the sharing is kept: a `let` the kernel keeps as a binding through 
 ## Done when
 
 The chain's pin and discharge are linear at doubling lengths, or the cost is shown to be the source's own with its issue in the elaborator's or the kernel's thread.
+
+## Log
+
+- 2026-11-25: Linked from docs/language/ownership-design.md §21.6: the joins of §21.2 read what follows once; this chain is what remains, and is the source's own cost.
