@@ -86,6 +86,22 @@ theorem hop_safe(w: World): FnSafeAt(hop_r().sig(), hop_pre(), λ arg ws => mean
         no_calls(hop_r().body, w, λ g => refl))
 }
 
+// The same discharge restated over the source's terms: the residuals'
+// conjunction written at the source's locals, proved by the source's
+// proofs, and moved to the reflected statement by one ascription. This is
+// the shape for many residuals: the one conversion of the whole
+// conjunction runs the meaning once, where a tuple at the reflected
+// statement converts each component against it separately and runs the
+// meaning once per residual (the issue's log has the measurements).
+fn hop_restated(xs: List<Nat>, i: Nat) → Type { ∥i < xs.len()∥ ∧ (∥word(xs, i) < xs.len()∥ ∧ True) }
+
+theorem hop_site_restated(w: World, xs: List<Nat>, i: Nat, inside: ∥i < xs.len()∥, next: ∥word(xs, i) < xs.len()∥):
+    Fact::All([Inside(0, Var(0)), Inside(0, Var(1))], no_pre(), mean_body(w, hop_r().body, Sem([xs], Nil, [i])))
+{
+    let at_source: hop_restated(xs, i) = ⟨inside, ⟨next, trivial⟩⟩;
+    at_source
+}
+
 // The second residual is the second read's, not the first's: a discharge
 // that cites the first read's proof there is refused.
 // expect-error(kernel)
@@ -175,6 +191,24 @@ theorem poke_yes_differs(): ¬(run_fn(world(Nil, 0), poke_yes(), [[5, 6]], Ref(0
         let at: (9 = 5) = e;
         absurd(at)
     }
+}
+
+// 2b. The view's length a `let`-bound read:
+//    `let k = xs[0]; let t = &xs[1..1+k]; if h: 1 + k <= j { xs[j] = 9; t[0] } else { … }`
+// The apartness residual reads word 1, bound by the read; `omega` takes the
+// read `xs[0]` as an atom, the hypothesis being the source's, carried and
+// not found.
+fn after_read_yes() → Func {
+    Func(Writes, 1, [Get(1, 0, Lit(0)), View(0, 0, Lit(1), Var(1)), Set(1, 0, Var(0), Lit(9)), Read(2, 0, Lit(0))], RWord(Var(2)))
+}
+
+theorem after_read_checked(): check_site(Nil, after_read_yes()) = Some([Owe(Due(Spans(Lit(1), Var(1), Var(0), Lit(1)))), Inside(0, Lit(0))]) { refl }
+
+theorem after_read_site(w: World, xs: List<Nat>, j: Nat, some: ∥0 < xs.len()∥, h: 1 + word(xs, 0) <= j):
+    Fact::All([Owe(Due(Spans(Lit(1), Var(1), Var(0), Lit(1)))), Inside(0, Lit(0))], no_pre(), mean_body(w, after_read_yes().body, Sem([xs], Nil, [j])))
+{
+    let apart: (Span(1, word(xs, 0)).apart(Span(j, 1)).IsTrue()) = omega(h);
+    ⟨apart, ⟨some, trivial⟩⟩
 }
 
 // ---------------------------------------------------------------------------
