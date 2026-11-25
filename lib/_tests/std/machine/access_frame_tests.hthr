@@ -1,0 +1,106 @@
+// Probes of `access_frame`: the frame theorems with a holding as the frame.
+// At a list: the holder of element 2 writes while a view of the first
+// element is live, and the view's predicate is kept, directly and through
+// `∗`; the two paths are apart because their holdings compose. At keys: a
+// key held whole beside another held at a half. Against a natural-number
+// memory: an owner of `[0, 8)` stores while a view of cell 10 at a half is
+// live. Negative controls: a holder of the viewed element does not compose
+// with the view, and a write through it changes what the view watches.
+// Tests, not library.
+import logic;
+import bool;
+import nat;
+import omega;
+import option;
+import list;
+import vector;
+import rat;
+import span_set;
+import memory;
+import pcm;
+import pcm_share;
+import access_map;
+import held;
+import path;
+import list_path;
+import store;
+import store_path;
+import access_frame;
+
+fn HALF() → Share { Share::whole().half() }
+
+theorem half_pos(): 0 < HALF().amount { linarith }
+
+// ---------------------------------------------------------------------------
+// At a list
+
+// The first element is 1: reads only `Span(0, 1)`.
+fn FirstIsOne(xs: List<Nat>) → Type { xs.nth(0) = Some(1) }
+
+theorem first_reads(xs, ys: List<Nat>, len: xs.len() = ys.len(), agree: List::Agree(xs, ys, Span(0, 1)), h: FirstIsOne(xs)): FirstIsOne(ys) {
+    trans(sym(agree(0, trivial)), h)
+}
+
+// The holder of element 2 beside a half of element 0: they compose.
+theorem holder_beside_view(): Held::own(Span(2, 1)).join(Held::at(Span(0, 1), HALF())).Valid() {
+    Held::own(Span(2, 1)).join(Held::at(Span(0, 1), HALF())).valid_sound(refl)
+}
+
+// So a write through element 2 keeps the view's predicate, at any list.
+theorem view_kept_open(xs: List<Nat>, v: Nat, h: FirstIsOne(xs)): FirstIsOne(Path::elem<Nat>(2).set(xs, v)) {
+    Held::view_kept(Path::elem_in<Nat>(2), Span(0, 1), HALF(), half_pos(), holder_beside_view(), λ ys => FirstIsOne(ys), first_reads, xs, v, h)
+}
+
+// The same through `∗`: the resource split into the holder's whole and the
+// view.
+theorem view_kept_sep(xs: List<Nat>, v: Nat, h: FirstIsOne(xs)): FirstIsOne(Path::elem<Nat>(2).set(xs, v)) {
+    let r = Held::own(Span(2, 1)).join(Held::at(Span(0, 1), HALF()));
+    let parts: Sep<Held>(Held::Same, Held::join, λ g => g ≈ Held::own(Span(2, 1)), λ g => g ≈ Held::at(Span(0, 1), HALF()), r) =
+        Sep(Held::own(Span(2, 1)), Held::at(Span(0, 1), HALF()), λ x => Held::share_at(r.parts, x).same_refl(),
+            λ x => Held::share_at(Held::own(Span(2, 1)).parts, x).same_refl(), λ x => Held::share_at(Held::at(Span(0, 1), HALF()).parts, x).same_refl());
+    Held::path_keeps_sep(Path::elem_in<Nat>(2), λ g => g ≈ Held::at(Span(0, 1), HALF()), r, holder_beside_view(), parts, λ ys => FirstIsOne(ys),
+        Held::local_of_span(Span(0, 1), HALF(), half_pos(), λ ys => FirstIsOne(ys), first_reads), xs, v, h)
+}
+
+// The holdings compose, so the paths are apart.
+theorem holder_view_apart(): Apart<List<Nat>, Nat, Nat>(Path::elem<Nat>(2), Path::elem<Nat>(0)) {
+    Held::apart_of_valid(Path::elem_in<Nat>(2), Path::elem_in<Nat>(0), HALF(), half_pos(), holder_beside_view())
+}
+
+// ---------------------------------------------------------------------------
+// At keys
+
+theorem keys_composed(): Held::own(Span(Key(0, 3).index, 1)).join(Held::key(Key(1, 0), HALF())).Valid() {
+    Held::own(Span(Key(0, 3).index, 1)).join(Held::key(Key(1, 0), HALF())).valid_sound(refl)
+}
+
+theorem keys_apart_by_holding(): Apart<Store<Nat>, Nat, Nat>(Store::key_path<Nat>(Key(0, 3)), Store::key_path<Nat>(Key(1, 0))) {
+    Held::keys_apart_of_valid(Key(0, 3), Key(1, 0), HALF(), half_pos(), keys_composed())
+}
+
+// ---------------------------------------------------------------------------
+// Against memory
+
+fn TenIs(c: Nat, m: Memory<Nat, Nat>) → Type { m.get(10) = c }
+
+fn VIEW() → Held { Held::at(Span(10, 1), HALF()) }
+
+theorem ten_local(c: Nat): Access::Local<Nat, Nat>(Nat::space(), 12, Nat::numbering(12), VIEW().access(), λ m => TenIs(c, m)) {
+    λ m n agree h => trans(agree.cells(10, Held::at_positive(Span(10, 1), HALF(), half_pos(), 10, trivial)), h)
+}
+
+theorem owner_beside_view(): Held::own(Span(0, 8)).join(VIEW()).Valid() { Held::own(Span(0, 8)).join(VIEW()).valid_sound(refl) }
+
+theorem store_keeps_ten(m: Memory<Nat, Nat>, sp: m.space = Nat::space(), c, w: Nat, h: TenIs(c, m)): TenIs(c, m.set_span(2, [w, w, w, w])) {
+    Held::store_keeps(Nat::space(), 12, Nat::numbering(12), m, sp, 2, [w, w, w, w], omega, Span(0, 8), λ y hin => omega(hin),
+        VIEW(), owner_beside_view(), λ m => TenIs(c, m), ten_local(c), h)
+}
+
+// ---------------------------------------------------------------------------
+// Negative controls
+
+// A holder of element 0 does not compose with the view of it.
+theorem holder_of_viewed_refused(): Held::own(Span(0, 1)).join(Held::at(Span(0, 1), HALF())).valid() = False { refl }
+
+// …and its write changes what the view watches.
+theorem write_over_view_changes(): ¬FirstIsOne(Path::elem<Nat>(0).set([1, 5, 7], 4)) { λ h => absurd(Option::some_inj(4, 1, h)) }

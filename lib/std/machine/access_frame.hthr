@@ -1,0 +1,200 @@
+// Frame theorems with an access-map frame: the separation algebra read at
+// paths and against memory (docs/library/separation-algebra-design.md §7;
+// docs/language/ownership-design.md §10.3, §10.6;
+// issues/separation-algebra-paths-instance.md).
+//
+// `footprint_frame.hthr` states the frame rule with an exclusive footprint
+// as the frame. Here the frame is a holding with shares (`Held`,
+// `access_map`'s `Access`), so the frame may be a frozen view: the frame's
+// predicate is local to the addresses where it holds a positive share, and
+// the writer holds its footprint whole.
+//
+// - **At paths** (`Held::path_keeps`): the holder of a path `p` (a
+//   footprint `sp`, `PathIn`) holds `Held::own(sp)`; beside any frame `f`
+//   with which that composes, every predicate on the list local to `f`'s
+//   positive addresses (`Held::Local`) is kept by any write through `p`.
+//   `Held::path_keeps_sep` reads the same through `Sep`. The path-level
+//   form of `Footprint::store_keeps`, citing the algebra
+//   (`Held::own_excludes`, from `Share::whole_meets_share`).
+// - **A frozen view stays frozen** (`Held::view_kept`): a view of `t` at a
+//   positive share beside the holder of `p` keeps every predicate that
+//   reads only `t` across `p`'s writes, and where the view is live a write
+//   over it does not compose (`Held::view_refuses_store`).
+// - **Paths composing where `Apart` holds** (`Held::apart_of_valid`): an
+//   owned path's holding composing with any positive holding of another
+//   path makes the two paths `Apart`. **Keys** likewise
+//   (`Held::keys_apart_of_valid`): a key held whole beside a key held at
+//   all are two keys, so their paths are apart.
+// - **Against memory** (`Access::store_keeps`): the owner of `t` stores
+//   inside `t`; a predicate local to an access frame `g` composed with
+//   `Access::whole(t)` holds after the store if it held before, through any
+//   `Numbering`. `Access::store_keeps_sep` reads the resource through `Sep`.
+//   A `Held` frame is an access frame (`Held::access`); its composite with
+//   `Held::own` is the access maps' composite by definition.
+import logic;
+import bool;
+import nat;
+import omega;
+import list;
+import vector;
+import rat;
+import span_set;
+import memory;
+import pcm;
+import pcm_share;
+import access_map;
+import held;
+import path;
+import list_path;
+import store;
+import store_path;
+
+// ---------------------------------------------------------------------------
+// At paths into a list
+
+// Two lists agree where a holding holds a positive share.
+fn Held::Agree<A>(f: Held, xs, ys: List<A>) → Type { (k: Nat) → 0 < Held::share_at(f.parts, k).amount → xs.nth(k) = ys.nth(k) }
+
+// A predicate on lists that reads only where `f` holds something.
+fn Held::Local<A>(f: Held, Q: List<A> → Type) → Type { (xs, ys: List<A>) → xs.len() = ys.len() → Held::Agree(f, xs, ys) → Q(xs) → Q(ys) }
+
+// The frame theorem at a path.
+theorem Held::path_keeps<A, V>({p: Path<List<A>, V>}, {sp: Span}, pin: PathIn<A, V>(p, sp), f: Held, composed: Held::own(sp).join(f).Valid(),
+    Q: List<A> → Type, local: Held::Local(f, Q), xs: List<A>, v: V, holds: Q(xs)): Q(p.set(xs, v))
+{
+    local(xs, p.set(xs, v), sym(pin.shape(xs, v)), λ k pos => sym(pin.frame(xs, v, k, λ inside => Held::own_excludes(sp, f, composed, k, inside, pos))), holds)
+}
+
+// The same with the resource given as the path's whole beside a frame.
+theorem Held::path_keeps_sep<A, V>({p: Path<List<A>, V>}, {sp: Span}, pin: PathIn<A, V>(p, sp), P: Held → Type, r: Held, ok: r.Valid(),
+    h: Sep<Held>(Held::Same, Held::join, λ g => g ≈ Held::own(sp), P, r), Q: List<A> → Type, local: Held::Local(h.right, Q), xs: List<A>, v: V, holds: Q(xs)):
+    Q(p.set(xs, v))
+{
+    let whole: h.left.join(h.right).Valid() = Held::valid_respects(λ x => Share::same_sym(h.parts(x)), ok);
+    let moved: Held::own(sp).join(h.right).Valid() = Held::valid_respects(Held::join_respects(h.holds_l, λ x => Held::share_at(h.right.parts, x).same_refl()), whole);
+    Held::path_keeps(pin, h.right, moved, Q, local, xs, v, holds)
+}
+
+// A view's holding is positive exactly on its span.
+theorem Held::at_positive(t: Span, q: Share, pos: 0 < q.amount, k: Nat, inside: t.has(k).IsTrue()): 0 < Held::share_at(Held::at(t, q).parts, k).amount {
+    let e: (Held::share_at(Held::at(t, q).parts, k) = q.join(Share::none())) = Held::at_in(t, q, Nil, k, inside);
+    let pos2: (0 < q.join(Share::none()).amount) = linarith(pos);
+    j(sym(e), λ u _ => 0 < u.amount, pos2)
+}
+
+// What reads only a view's span is local to the view.
+theorem Held::local_of_span<A>(t: Span, q: Share, pos: 0 < q.amount, Q: List<A> → Type,
+    reads: (xs, ys: List<A>) → xs.len() = ys.len() → List::Agree(xs, ys, t) → Q(xs) → Q(ys)): Held::Local(Held::at(t, q), Q)
+{
+    λ xs ys len agree hq => reads(xs, ys, len, λ k inside => agree(k, Held::at_positive(t, q, pos, k, inside)), hq)
+}
+
+// A frozen view stays frozen: beside the holder of `p`, what reads only the
+// view's span is kept by every write through `p`.
+theorem Held::view_kept<A, V>({p: Path<List<A>, V>}, {sp: Span}, pin: PathIn<A, V>(p, sp), t: Span, q: Share, pos: 0 < q.amount,
+    composed: Held::own(sp).join(Held::at(t, q)).Valid(), Q: List<A> → Type,
+    reads: (xs, ys: List<A>) → xs.len() = ys.len() → List::Agree(xs, ys, t) → Q(xs) → Q(ys), xs: List<A>, v: V, holds: Q(xs)): Q(p.set(xs, v))
+{
+    Held::path_keeps(pin, Held::at(t, q), composed, Q, Held::local_of_span(t, q, pos, Q, reads), xs, v, holds)
+}
+
+// Paths compose where they are apart: an owned path's holding beside any
+// positive holding of another path makes the two paths apart.
+theorem Held::apart_of_valid<A, V, W>({p: Path<List<A>, V>}, {r: Path<List<A>, W>}, {sp, sq: Span}, pin: PathIn<A, V>(p, sp), rin: PathIn<A, W>(r, sq),
+    q: Share, pos: 0 < q.amount, composed: Held::own(sp).join(Held::at(sq, q)).Valid()): Apart<List<A>, V, W>(p, r)
+{
+    PathIn::apart(pin, rin, λ x hp hq => Held::view_refuses_store(sp, sq, q, x, hp, hq, pos, composed))
+}
+
+// ---------------------------------------------------------------------------
+// Keys: a store's slots as the second address space
+
+// A key's footprint is its slot.
+fn Held::key(k: Key, q: Share) → Held { Held::at(Span(k.index, 1), q) }
+
+theorem Held::keys_apart_of_valid<V>(k1, k2: Key, q: Share, pos: 0 < q.amount, composed: Held::own(Span(k1.index, 1)).join(Held::key(k2, q)).Valid()):
+    Apart<Store<V>, V, V>(Store::key_path<V>(k1), Store::key_path<V>(k2))
+{
+    Store::keys_apart<V>(k1, k2, λ e => {
+        let same: (k1.index = k2.index) = cong_fn(λ (k: Key) => k.index, e);
+        Held::view_refuses_store(Span(k1.index, 1), Span(k2.index, 1), q, k1.index, omega, omega(same), pos, composed)
+    })
+}
+
+// And so are any paths under them.
+theorem Held::inside_apart_of_valid<V, B, C>(k1, k2: Key, q: Share, pos: 0 < q.amount, composed: Held::own(Span(k1.index, 1)).join(Held::key(k2, q)).Valid(),
+    q1: Path<V, B>, q2: Path<V, C>): Apart<Store<V>, B, C>(Store::key_then(k1, q1), Store::key_then(k2, q2))
+{
+    Held::keys_apart_of_valid<V>(k1, k2, q, pos, composed).then_both(q1, q2)
+}
+
+// ---------------------------------------------------------------------------
+// Against memory
+
+// Where a whole holds an address, a frame composed validly with it holds
+// nothing there.
+theorem Access::whole_excludes(t: SpanSet, g: Access, composed: Access::whole(t).join(g).Valid(), x: Nat, inside: t.has(x).IsTrue()): ¬(0 < g.at(x).amount) {
+    λ pos => g.at(x).whole_meets_share(pos,
+        j(eq_true_of_is_true(t.has(x), inside), λ b _ => Access::pick(b, Share::whole()).join(g.at(x)).Valid(), composed(x)))
+}
+
+// Two memories over one space agree where an access map holds a positive
+// share.
+record Access::AgreesOn<A, C>(space: Space<A>, top: Nat, nb: Numbering<A>(space, top), g: Access, m, n: Memory<A, C>) {
+    same_space: n.space = m.space,
+    same_perms: n.perms = m.perms,
+    cells: (x: A) → 0 < g.at(nb.number(x)).amount → n.get(x) = m.get(x),
+}
+
+// A predicate on memories that reads only where `g` holds something.
+fn Access::Local<A, C>(space: Space<A>, top: Nat, nb: Numbering<A>(space, top), g: Access, Q: Memory<A, C> → Type) → Type {
+    (m, n: Memory<A, C>) → Access::AgreesOn<A, C>(space, top, nb, g, m, n) → Q(m) → Q(n)
+}
+
+// The access-map frame theorem: the owner of `t` stores inside `t`; a
+// predicate local to any access frame that composes with `t`'s whole holds
+// after the store if it held before.
+theorem Access::store_keeps<A, C>(space: Space<A>, top: Nat, nb: Numbering<A>(space, top),
+    m: Memory<A, C>, sp: m.space = space, a: A, {k: Nat}, cs: [C; k], fits: nb.number(a) + k <= top,
+    t: SpanSet, inside: (y: Nat) → Span(nb.number(a), k).has(y).IsTrue() → t.has(y).IsTrue(),
+    g: Access, composed: Access::whole(t).join(g).Valid(),
+    Q: Memory<A, C> → Type, local: Access::Local<A, C>(space, top, nb, g, Q), holds: Q(m)): Q(m.set_span(a, cs))
+{
+    local(m, m.set_span(a, cs), Access::AgreesOn(
+        same_space := refl,
+        same_perms := refl,
+        cells := λ x pos => {
+            let out: ¬Span(nb.number(a), k).has(nb.number(x)).IsTrue() = λ hin => Access::whole_excludes(t, g, composed, nb.number(x), inside(nb.number(x), hin), pos);
+            let away: ((p: Nat) → p < k → space.same(space.offset(a, p), x) = False) = Numbering::outside(space, top, nb, a, k, fits, x, out);
+            let here: ((p: Nat) → p < k → m.space.same(m.space.offset(a, p), x) = False) =
+                j(sym(sp), λ sp2 _ => (p: Nat) → p < k → sp2.same(sp2.offset(a, p), x) = False, away);
+            m.get_set_span_outside(a, cs, x, here)
+        },
+    ), holds)
+}
+
+// The same, read through the separating conjunction: a resource that is the
+// owner's whole beside a frame where `P` holds.
+theorem Access::store_keeps_sep<A, C>(space: Space<A>, top: Nat, nb: Numbering<A>(space, top),
+    m: Memory<A, C>, sp: m.space = space, a: A, {k: Nat}, cs: [C; k], fits: nb.number(a) + k <= top,
+    t: SpanSet, inside: (y: Nat) → Span(nb.number(a), k).has(y).IsTrue() → t.has(y).IsTrue(),
+    P: Access → Type, r: Access, ok: r.Valid(),
+    h: Sep<Access>(Access::Same, Access::join, λ f => f ≈ Access::whole(t), P, r),
+    Q: Memory<A, C> → Type, local: Access::Local<A, C>(space, top, nb, h.right, Q), holds: Q(m)): Q(m.set_span(a, cs))
+{
+    let moved: (Access::whole(t).join(h.right).Valid()) =
+        λ x => Share::valid_respects(Share::join_respects(h.holds_l(x), h.right.at(x).same_refl()), Share::valid_respects(Share::same_sym(h.parts(x)), ok(x)));
+    Access::store_keeps(space, top, nb, m, sp, a, cs, fits, t, inside, h.right, moved, Q, local, holds)
+}
+
+// A holding frame is an access frame, and its composite with an owned
+// span is the access maps' composite.
+theorem Held::store_keeps<A, C>(space: Space<A>, top: Nat, nb: Numbering<A>(space, top),
+    m: Memory<A, C>, sp: m.space = space, a: A, {k: Nat}, cs: [C; k], fits: nb.number(a) + k <= top,
+    s: Span, inside: (y: Nat) → Span(nb.number(a), k).has(y).IsTrue() → s.has(y).IsTrue(),
+    f: Held, composed: Held::own(s).join(f).Valid(),
+    Q: Memory<A, C> → Type, local: Access::Local<A, C>(space, top, nb, f.access(), Q), holds: Q(m)): Q(m.set_span(a, cs))
+{
+    Access::store_keeps(space, top, nb, m, sp, a, cs, fits, SpanSet::of(s),
+        λ y hin => j(sym(SpanSet::of_has(s, y)), λ b _ => b.IsTrue(), inside(y, hin)), f.access(), composed, Q, local, holds)
+}

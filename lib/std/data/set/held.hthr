@@ -1,0 +1,274 @@
+// Holdings: finitely many footprints held at shares, the separation
+// algebra the ownership design states paths' tokens in
+// (docs/library/separation-algebra-design.md §7;
+// docs/language/ownership-design.md §10.3, §10.7;
+// issues/separation-algebra-paths-instance.md).
+//
+// A `Held` is a list of `Hold`s, each a footprint (`SpanSet`) and a share
+// (`pcm_share`). What it holds at an address is the sum of the shares of
+// the holds whose footprint has it (`Held::share_at`): the access map
+// (`access_map.hthr`) it denotes, `Held::access`. Composition is the
+// concatenation of the lists, `≈` and validity are the access map's, so the
+// class laws are the access map's read through `Held::share_at_append`.
+//
+// - **Why a list and not an `Access`**: an access map is a function, which
+//   evaluation cannot inspect; a holding is data, so its validity is
+//   decided (`Held::valid`, sound and complete: `valid_sound`,
+//   `valid_complete`) by checking every address below the last end of its
+//   spans (`Held::bound`), past which nothing is held. A judgment checks a
+//   closed holding by evaluation. Its cost is linear in that bound; a
+//   decider over the spans' endpoints alone would be linear in the number
+//   of spans and is left (issues/held-endpoint-decider.md).
+// - **Paths held with shares**: a path with a footprint (`PathIn`,
+//   `list_path.hthr`) is held as its span at a share: `Held::own(span)` for
+//   a live path or an owned value (the whole), `Held::at(span, q)` for a
+//   frozen view. Where an owned path's holding composes with any positive
+//   holding of another path, the two paths are `Apart`
+//   (`Held::apart_of_valid`): composing where `Apart` holds, through the
+//   footprints that decide it. Two views compose wherever their shares
+//   total at most one, apart or not: they only read.
+// - **Keys**, the second kind of footprint (`store_path.hthr`), are held the
+//   same way over the address space of a store's slots: a key's footprint
+//   is its slot, `Span(k.index, 1)` (`Held::key`), and a key held whole
+//   beside a key held at all names another slot (`Held::keys_apart_of_valid`).
+//   The two address spaces are two holdings; a resource holding both is
+//   their product (`Pcm::product`).
+// - **Exclusive on its footprint, frozen under a view**: an owned
+//   holding leaves any frame nothing on its footprint (`Held::own_excludes`),
+//   and a whole never composes with a positive view of an address it holds
+//   (`Held::view_refuses_store`, §10.3's obligation). The frame theorems
+//   that read these against a list and against memory are
+//   `lib/std/machine/access_frame.hthr`.
+import logic;
+import bool;
+import nat;
+import omega;
+import list;
+import relation;
+import relation_props;
+import algebra_rel;
+import rat;
+import span_set;
+import pcm;
+import pcm_share;
+import access_map;
+
+record Hold { spans: SpanSet, share: Share }
+
+record Held { parts: List<Hold> }
+
+// What the holds give at one address: the sum of the shares of those whose
+// footprint has it.
+fn Held::share_at(parts: List<Hold>, x: Nat) → Share {
+    match parts { Nil => Share::none(), Cons(h, rest) => Access::pick(h.spans.has(x), h.share).join(Held::share_at(rest, x)) }
+}
+
+// The access map a holding denotes.
+fn Held::access(self h: Held) → Access { Access(λ x => Held::share_at(h.parts, x)) }
+
+fn Held::Same(a, b: Held) → Type { (x: Nat) → Held::share_at(a.parts, x) ≈ Held::share_at(b.parts, x) }
+
+designation ≈ at Held := Held::Same
+
+fn Held::join(self a, b: Held) → Held { Held(a.parts ++ b.parts) }
+
+fn Held::Valid(self a: Held) → Type { (x: Nat) → Held::share_at(a.parts, x).Valid() }
+
+fn Held::none() → Held { Held(Nil) }
+
+// ---------------------------------------------------------------------------
+// The laws, through the sum over a concatenation
+
+theorem Held::share_at_append(xs: List<Hold>): (ys: List<Hold>) → (x: Nat) → Held::share_at(xs ++ ys, x) ≈ Held::share_at(xs, x).join(Held::share_at(ys, x)) {
+    match xs {
+        Nil => λ ys x => Share::same_sym(Held::share_at(ys, x).none_join()),
+        Cons(h, rest) => λ ys x => {
+            let p = Access::pick(h.spans.has(x), h.share);
+            Share::same_trans(Share::join_respects(p.same_refl(), Held::share_at_append(rest, ys, x)),
+                Share::same_sym(p.join_assoc(Held::share_at(rest, x), Held::share_at(ys, x))))
+        },
+    }
+}
+
+theorem Held::join_respects({a, a2, b, b2: Held}, ha: a ≈ a2, hb: b ≈ b2): a.join(b) ≈ a2.join(b2) {
+    λ x => Share::same_trans(Held::share_at_append(a.parts, b.parts, x),
+        Share::same_trans(Share::join_respects(ha(x), hb(x)), Share::same_sym(Held::share_at_append(a2.parts, b2.parts, x))))
+}
+
+theorem Held::join_assoc(self a, b, c: Held): a.join(b).join(c) ≈ a.join(b.join(c)) {
+    λ x => {
+        let ax = Held::share_at(a.parts, x);
+        let bx = Held::share_at(b.parts, x);
+        let cx = Held::share_at(c.parts, x);
+        let left: (Held::share_at((a.parts ++ b.parts) ++ c.parts, x) ≈ ax.join(bx).join(cx)) =
+            Share::same_trans(Held::share_at_append(a.parts ++ b.parts, c.parts, x), Share::join_respects(Held::share_at_append(a.parts, b.parts, x), cx.same_refl()));
+        let right: (Held::share_at(a.parts ++ (b.parts ++ c.parts), x) ≈ ax.join(bx.join(cx))) =
+            Share::same_trans(Held::share_at_append(a.parts, b.parts ++ c.parts, x), Share::join_respects(ax.same_refl(), Held::share_at_append(b.parts, c.parts, x)));
+        Share::same_trans(left, Share::same_trans(ax.join_assoc(bx, cx), Share::same_sym(right)))
+    }
+}
+
+theorem Held::join_comm(self a, b: Held): a.join(b) ≈ b.join(a) {
+    λ x => Share::same_trans(Held::share_at_append(a.parts, b.parts, x),
+        Share::same_trans(Held::share_at(a.parts, x).join_comm(Held::share_at(b.parts, x)), Share::same_sym(Held::share_at_append(b.parts, a.parts, x))))
+}
+
+theorem Held::join_none(self a: Held): a.join(Held::none()) ≈ a {
+    λ x => Share::same_trans(Held::share_at_append(a.parts, Nil, x), Held::share_at(a.parts, x).join_none())
+}
+
+theorem Held::valid_respects({a, b: Held}, e: a ≈ b, h: a.Valid()): b.Valid() { λ x => Share::valid_respects(e(x), h(x)) }
+
+theorem Held::valid_left(self a, b: Held, h: a.join(b).Valid()): a.Valid() {
+    λ x => Held::share_at(a.parts, x).valid_left(Held::share_at(b.parts, x), Share::valid_respects(Held::share_at_append(a.parts, b.parts, x), h(x)))
+}
+
+instance Pcm<Held>(Held::Same, Held::join, Held::Valid) {
+    rel_refl := λ a x => Held::share_at(a.parts, x).same_refl(),
+    rel_sym := λ a b h x => Share::same_sym(h(x)),
+    rel_trans := λ a b c h1 h2 x => Share::same_trans(h1(x), h2(x)),
+    respects2 := λ a a2 ha b b2 hb => Held::join_respects(ha, hb),
+    assoc := Held::join_assoc,
+    unit := Held::none(),
+    unit_l := λ a x => Held::share_at(a.parts, x).same_refl(),
+    unit_r := Held::join_none,
+    comm := Held::join_comm,
+    valid_unit := λ x => Share::valid_none(),
+    valid_l := Held::valid_left,
+    valid_respects := λ a b e h => Held::valid_respects(e, h),
+}
+
+// A holding is valid exactly where the access map it denotes is.
+theorem Held::access_valid(self h: Held, v: h.Valid()): h.access().Valid() { v }
+
+theorem Held::valid_of_access(self h: Held, v: h.access().Valid()): h.Valid() { v }
+
+// ---------------------------------------------------------------------------
+// Deciding validity
+
+// Past the end of every span, nothing is held.
+fn Held::ends(spans: List<Span>) → Nat { match spans { Nil => 0, Cons(s, rest) => (s.base + s.len).max(Held::ends(rest)) } }
+
+fn Held::bound(parts: List<Hold>) → Nat { match parts { Nil => 0, Cons(h, rest) => Held::ends(h.spans.spans).max(Held::bound(rest)) } }
+
+// The test `f` at every address below `n`.
+fn Held::all_below(n: Nat, f: Nat → Bool) → Bool { match n { Zero => True, Succ(m) => f(m) && Held::all_below(m, f) } }
+
+fn Held::valid(self h: Held) → Bool { Held::all_below(Held::bound(h.parts), λ x => Held::share_at(h.parts, x).valid()) }
+
+theorem Held::all_below_sound(n: Nat, f: Nat → Bool): Held::all_below(n, f) = True → (x: Nat) → x < n → f(x) = True {
+    match n {
+        Zero => λ _ x no => false_elim(omega(no)),
+        Succ(m) => λ yes x lt => {
+            let parts = f(m).and_true_parts(Held::all_below(m, f), yes);
+            match Nat::eq_dec(x, m) {
+                Inl(same) => trans(cong_fn(f, same), parts.left),
+                Inr(other) => Held::all_below_sound(m, f, parts.right, x, omega(lt, other)),
+            }
+        },
+    }
+}
+
+theorem Held::all_below_complete(n: Nat, f: Nat → Bool, each: (x: Nat) → x < n → f(x) = True): Held::all_below(n, f) = True {
+    match n {
+        Zero => refl,
+        Succ(m) => f(m).and_true_of(Held::all_below(m, f), each(m, omega), Held::all_below_complete(m, f, λ x lt => each(x, omega(lt)))),
+    }
+}
+
+theorem Held::ends_out(spans: List<Span>, x: Nat, past: Held::ends(spans) <= x): SpanSet::any(spans, x) = False {
+    match spans {
+        Nil => refl,
+        Cons(s, rest) => {
+            let here: (s.base + s.len <= Held::ends(Cons(s, rest))) = (s.base + s.len).le_max_l(Held::ends(rest));
+            let later: (Held::ends(rest) <= Held::ends(Cons(s, rest))) = (s.base + s.len).le_max_r(Held::ends(rest));
+            let no: (s.has(x) = False) = trans(cong_fn(λ (b: Bool) => s.base.leb(x) && b, (x + 1).leb_false(s.base + s.len, omega(here, past))), s.base.leb(x).and_false_r());
+            trans(cong_fn(λ (b: Bool) => b || SpanSet::any(rest, x), no), Held::ends_out(rest, x, omega(later, past)))
+        },
+    }
+}
+
+theorem Held::bound_out(parts: List<Hold>, x: Nat, past: Held::bound(parts) <= x): Held::share_at(parts, x).Valid() {
+    match parts {
+        Nil => Share::valid_none(),
+        Cons(h, rest) => {
+            let here: (Held::ends(h.spans.spans) <= Held::bound(Cons(h, rest))) = Held::ends(h.spans.spans).le_max_l(Held::bound(rest));
+            let later: (Held::bound(rest) <= Held::bound(Cons(h, rest))) = Held::ends(h.spans.spans).le_max_r(Held::bound(rest));
+            let no: (h.spans.has(x) = False) = Held::ends_out(h.spans.spans, x, omega(here, past));
+            let first: (Access::pick(h.spans.has(x), h.share) = Share::none()) = cong_fn(λ (b: Bool) => Access::pick(b, h.share), no);
+            let rest_valid: Held::share_at(rest, x).Valid() = Held::bound_out(rest, x, omega(later, past));
+            Share::valid_respects(Share::same_trans(Share::same_sym(Held::share_at(rest, x).none_join()),
+                j(sym(first), λ p _ => Share::none().join(Held::share_at(rest, x)) ≈ p.join(Held::share_at(rest, x)), Share::none().join(Held::share_at(rest, x)).same_refl())),
+                rest_valid)
+        },
+    }
+}
+
+theorem Held::valid_sound(self h: Held, yes: h.valid() = True): h.Valid() {
+    λ x => match Nat::lt_or_ge(x, Held::bound(h.parts)) {
+        Inl(below) => Held::share_at(h.parts, x).valid_sound(Held::all_below_sound(Held::bound(h.parts), λ y => Held::share_at(h.parts, y).valid(), yes, x, below)),
+        Inr(past) => Held::bound_out(h.parts, x, past),
+    }
+}
+
+theorem Held::valid_complete(self h: Held, v: h.Valid()): h.valid() = True {
+    Held::all_below_complete(Held::bound(h.parts), λ y => Held::share_at(h.parts, y).valid(), λ x _ => Held::share_at(h.parts, x).valid_complete(v(x)))
+}
+
+// ---------------------------------------------------------------------------
+// Paths held with shares
+
+// One footprint at a share: a frozen view's holding.
+fn Held::at(s: Span, q: Share) → Held { Held([Hold(SpanSet::of(s), q)]) }
+
+// The whole of a footprint: a live path's or an owned value's.
+fn Held::own(s: Span) → Held { Held::at(s, Share::whole()) }
+
+// What a single hold gives at an address inside its span, and outside.
+theorem Held::at_in(s: Span, q: Share, rest: List<Hold>, x: Nat, inside: s.has(x).IsTrue()):
+    Held::share_at(Cons(Hold(SpanSet::of(s), q), rest), x) = q.join(Held::share_at(rest, x))
+{
+    let has: (SpanSet::of(s).has(x) = True) = trans(SpanSet::of_has(s, x), eq_true_of_is_true(s.has(x), inside));
+    cong_fn(λ (b: Bool) => Access::pick(b, q).join(Held::share_at(rest, x)), has)
+}
+
+// Where a whole holds an address, a frame composed validly with it holds
+// nothing there.
+theorem Held::own_excludes(s: Span, f: Held, composed: Held::own(s).join(f).Valid(), x: Nat, inside: s.has(x).IsTrue()): ¬(0 < Held::share_at(f.parts, x).amount) {
+    λ pos => Held::share_at(f.parts, x).whole_meets_share(pos,
+        j(Held::at_in(s, Share::whole(), f.parts, x, inside), λ t _ => t.Valid(), composed(x)))
+}
+
+// A whole and a positive view of one address do not compose: a store is
+// refused where a frozen view is live.
+theorem Held::view_refuses_store(s, t: Span, q: Share, x: Nat, in_s: s.has(x).IsTrue(), in_t: t.has(x).IsTrue(), pos: 0 < q.amount):
+    ¬Held::own(s).join(Held::at(t, q)).Valid()
+{
+    let e: (Held::share_at(Held::at(t, q).parts, x) = q.join(Share::none())) = Held::at_in(t, q, Nil, x, in_t);
+    let pos2: (0 < q.join(Share::none()).amount) = linarith(pos);
+    λ composed => Held::own_excludes(s, Held::at(t, q), composed, x, in_s, j(sym(e), λ u _ => 0 < u.amount, pos2))
+}
+
+// Two views compose while their shares total at most one, however they
+// overlap.
+theorem Held::views_compose(s, t: Span, q, r: Share, total: q.join(r).Valid()): Held::at(s, q).join(Held::at(t, r)).Valid() {
+    λ x => {
+        let pq = Access::pick(SpanSet::of(s).has(x), q);
+        let pr = Access::pick(SpanSet::of(t).has(x), r);
+        Share::valid_respects(Share::same_sym(Share::join_respects(pq.same_refl(), pr.join_none())),
+            Access::views_compose(SpanSet::of(s), SpanSet::of(t), q, r, total, x))
+    }
+}
+
+// Owners of disjoint spans compose: each owns its footprint exclusively
+// beside the other.
+theorem Held::owns_compose(s, t: Span, d: s.Disjoint(t)): Held::own(s).join(Held::own(t)).Valid() {
+    let ds: (SpanSet::of(s).Disjoint(SpanSet::of(t))) = λ x hs ht =>
+        d(x, j(SpanSet::of_has(s, x), λ b _ => b.IsTrue(), hs), j(SpanSet::of_has(t, x), λ b _ => b.IsTrue(), ht));
+    λ x => {
+        let ps = Access::pick(SpanSet::of(s).has(x), Share::whole());
+        let pt = Access::pick(SpanSet::of(t).has(x), Share::whole());
+        Share::valid_respects(Share::same_sym(Share::join_respects(ps.same_refl(), pt.join_none())),
+            Access::of_disjoint(SpanSet::of(s), SpanSet::of(t), Share::whole(), Share::whole(), ds, omega, omega, x))
+    }
+}

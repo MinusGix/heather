@@ -3,8 +3,10 @@
 Status: **built** 2026-11-24 (the first wave of
 `docs/language/ownership-design.md` §12; issue `separation-algebra-ownership`).
 What is built is the algebra and its bridge to memory; the ownership
-soundness theorem that states uniqueness through it is the second wave's
-(§12, "Soundness").
+soundness theorem that states uniqueness through it is the third wave's
+(§12, "Soundness"). The algebra at paths, with a decider and the frame
+theorems with a holding as the frame, was added in the second wave (§7,
+2026-11-25).
 
 Read with: `docs/language/ownership-design.md` §10.3 (three kinds of
 access), §10.7 (tokens are the store split where paths are apart), §10.9
@@ -146,14 +148,63 @@ part is `Memory::get_set_span_outside` and `Numbering::outside`.
 
 ## 6. What is not here
 
-- **Stores and keys as the resource** (§10.7: a token is the store's value
-  split where paths are apart). Paths and `Apart` are `ownership-paths`'s;
-  the instance of `Pcm` at a store's paths waits on them
-  (`separation-algebra-paths-instance`).
-- **The access map against memory**: a frame theorem stated with an
-  `Access` frame (local to the addresses where the frame holds a positive
-  share) rather than a `Footprint` one, and a decider for `Access::Valid` of
-  holdings built from finitely many footprints. Filed with the paths
-  instance; nothing needs them before the soundness round.
 - **Soundness.** The invariant that every live name and path reads its
-  value, stated through this algebra (§12, second wave).
+  value, stated through this algebra (`docs/language/ownership-design.md`
+  §12, third wave). §7 gives it the elements to state ("this path's holder
+  owns it", "this view is frozen") and a frame theorem for each.
+- **A decider over endpoints.** `Held::valid` checks every address below
+  the last end; one over the spans' endpoints alone would cost the number of
+  spans, not the largest address (`held-endpoint-decider`).
+
+## 7. Holdings: the algebra at paths
+
+Built 2026-11-25 (`ownership-library-join`, the second wave; issue
+`separation-algebra-paths-instance`).
+
+**The carrier** (`lib/std/data/set/held.hthr`). A `Held` is a list of
+`Hold`s, each a footprint (`SpanSet`) and a share. What it holds at an
+address is the sum of the shares of the holds that have it
+(`Held::share_at`); that is an access map (`Held::access`), and `≈` and
+validity are the access map's. Composition is concatenation, so every
+class law is the access map's read through `Held::share_at_append`.
+
+- *Why a list of holds and not `Access`.* An access map is a function,
+  which evaluation cannot inspect; a holding is data. So validity has a
+  decider (`Held::valid`: every address below the last end of the spans,
+  past which nothing is held), sound and complete (`valid_sound`,
+  `valid_complete`), and a judgment checks a closed holding by evaluation.
+- *Why footprints and not paths in the carrier.* `Apart` of two paths is a
+  semantic relation with no decider in general, and paths have no
+  decidable equality; a carrier of paths could not decide its own
+  validity. A path enters through its footprint (`PathIn`, or `KeyIn` for a
+  key): its holder holds `Held::own(span)`, a frozen view `Held::at(span,
+  q)`. Composition is then sound for `Apart` (`Held::apart_of_valid`: an
+  owned path's holding beside any positive holding of another makes them
+  apart) and not complete: footprints over-approximate, and views compose
+  however they overlap, since they only read.
+- *Keys* are held the same way in the address space of a store's slots,
+  a key's footprint its slot (`Held::key`, `Held::keys_apart_of_valid`). A
+  resource holding bytes and keys is the product of two holdings
+  (`Pcm::product`).
+
+**What a holder may say.** An owned holding leaves any validly composed
+frame nothing on its footprint (`Held::own_excludes`); a whole beside a
+positive view of an address it holds does not compose
+(`Held::view_refuses_store`, §10.3's obligation); views compose while
+their shares total at most one (`Held::views_compose`).
+
+**The frame theorems with a holding as the frame**
+(`lib/std/machine/access_frame.hthr`):
+
+| Where | Theorem | Says |
+|---|---|---|
+| a path into a list | `Held::path_keeps` | the holder of `p` writes; a predicate local to the frame's positive addresses (`Held::Local`) is kept |
+| the same through `∗` | `Held::path_keeps_sep` | the resource split as `≈ Held::own(span)` beside a frame |
+| a frozen view | `Held::view_kept` | what reads only the view's span is kept by every write of a holder it composes with |
+| memory | `Access::store_keeps`, `Access::store_keeps_sep` | `Footprint::store_keeps` with an access frame: local to the frame's positive addresses, through any `Numbering` |
+| memory, a holding frame | `Held::store_keeps` | the same, the frame a `Held` (its composite with `Held::own` is the access maps' by definition) |
+
+Each cites the algebra only for why the writer's footprint and the frame's
+positive addresses are disjoint (`Share::whole_meets_share`); the rest is
+the path's footprint (`PathIn::frame`) or memory's
+(`Memory::get_set_span_outside`).

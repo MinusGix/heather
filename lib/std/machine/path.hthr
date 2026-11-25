@@ -416,3 +416,373 @@ theorem Apart::keeps<S, A, B>({p: Path<S, A>}, {q: Path<S, B>}, self apart: Apar
 theorem Path::not_keeps<S, V>(self p: Path<S, V>, before, after: S, valid: p.Valid(before), lost: ¬p.Valid(after)): ¬p.Keeps(before, after) {
     λ keeps => lost(p.keeps_valid(before, after, keeps, valid))
 }
+
+// ---------------------------------------------------------------------------
+// Two spellings of one path
+
+// `p` and `q` read and write alike at every owner: one path, spelled twice
+// (a composition regrouped, a step written through a guard). Laws,
+// validity, `Apart` and footprints carry across it (`PathLaws::respects`,
+// `Path::valid_respects`, `Apart::respects`); it is an equivalence
+// (`PathSame::same`, `symm`, `then`).
+record PathSame<S, V>(p, q: Path<S, V>) {
+    gets: (s: S) → p.get(s) = q.get(s),
+    sets: (s: S) → (v: V) → p.set(s, v) = q.set(s, v),
+}
+
+theorem PathSame::same<S, V>(p: Path<S, V>): PathSame<S, V>(p, p) { PathSame(λ s => refl, λ s v => refl) }
+
+theorem PathSame::symm<S, V>({p, q: Path<S, V>}, self e: PathSame<S, V>(p, q)): PathSame<S, V>(q, p) {
+    PathSame(λ s => sym(e.gets(s)), λ s v => sym(e.sets(s, v)))
+}
+
+theorem PathSame::then<S, V>({p, q, r: Path<S, V>}, self e: PathSame<S, V>(p, q), f: PathSame<S, V>(q, r)): PathSame<S, V>(p, r) {
+    PathSame(λ s => trans(e.gets(s), f.gets(s)), λ s v => trans(e.sets(s, v), f.sets(s, v)))
+}
+
+theorem PathLaws::respects<S, V>({p, q: Path<S, V>}, self laws: PathLaws<S, V>(p), e: PathSame<S, V>(p, q)): PathLaws<S, V>(q) {
+    PathLaws(
+        λ s a v h => trans(sym(cong_fn(λ (t: S) => q.get(t), e.sets(s, v))),
+            trans(sym(e.gets(p.set(s, v))), laws.set_get(s, a, v, trans(e.gets(s), h)))),
+        λ s a h => trans(sym(e.sets(s, a)), laws.get_set(s, a, trans(e.gets(s), h))),
+        λ s v w => trans(sym(cong_fn(λ (t: S) => q.set(t, w), e.sets(s, v))),
+            trans(sym(e.sets(p.set(s, v), w)), trans(laws.set_set(s, v, w), e.sets(s, w)))),
+        λ s v h => trans(sym(e.sets(s, v)), laws.set_none(s, v, trans(e.gets(s), h))),
+    )
+}
+
+theorem Path::valid_respects<S, V>({p, q: Path<S, V>}, e: PathSame<S, V>(p, q), s: S, valid: p.Valid(s)): q.Valid(s) {
+    Exists(valid.witness, trans(sym(e.gets(s)), valid.proof))
+}
+
+// `Apart` is a fact about what the paths do, so it holds of any spelling.
+theorem Apart::respects<S, A, B>({p, p2: Path<S, A>}, {q, q2: Path<S, B>}, self apart: Apart<S, A, B>(p, q),
+    ep: PathSame<S, A>(p, p2), eq: PathSame<S, B>(q, q2)): Apart<S, A, B>(p2, q2)
+{
+    Apart(
+        λ s v => trans(sym(ep.gets(q2.set(s, v))),
+            trans(cong_fn(λ (t: S) => p.get(t), sym(eq.sets(s, v))), trans(apart.left_after_right(s, v), ep.gets(s)))),
+        λ s v => trans(sym(eq.gets(p2.set(s, v))),
+            trans(cong_fn(λ (t: S) => q.get(t), sym(ep.sets(s, v))), trans(apart.right_after_left(s, v), eq.gets(s)))),
+        λ s a b => {
+            let left: (p2.set(q2.set(s, b), a) = p.set(q.set(s, b), a)) =
+                trans(cong_fn(λ (t: S) => p2.set(t, a), sym(eq.sets(s, b))), sym(ep.sets(q.set(s, b), a)));
+            let right: (q2.set(p2.set(s, a), b) = q.set(p.set(s, a), b)) =
+                trans(cong_fn(λ (t: S) => q2.set(t, b), sym(ep.sets(s, a))), sym(eq.sets(p.set(s, a), b)));
+            trans(left, trans(apart.writes_commute(s, a, b), sym(right)))
+        },
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Parts of parts apart
+
+// Under two parts apart, any parts are apart: a field of what one key
+// names beside a field of what another names, an element of one window
+// beside an element of another. (`Apart::under` is the other half: two
+// parts apart inside one part.) Nothing about the steps' laws is used.
+theorem Apart::then_read<S, A, B, C, D>({p: Path<S, A>}, {q: Path<S, B>}, apart: Apart<S, A, B>(p, q), r: Path<A, C>, t: Path<B, D>, s: S, v: D):
+    (o: Option<B>) → q.get(s) = o → p.then(r).get(q.then(t).set(s, v)) = p.then(r).get(s)
+{
+    λ o => match o {
+        Some(b) => λ e => trans(cong_fn(λ (u: S) => p.then(r).get(u), q.then_set_at(t, s, b, e, v)),
+            cong_fn(λ (x: Option<A>) => x.and_then(r.get), apart.left_after_right(s, t.set(b, v)))),
+        None => λ e => cong_fn(λ (u: S) => p.then(r).get(u), q.then_set_none(t, s, e, v)),
+    }
+}
+
+theorem Apart::then_commute<S, A, B, C, D>({p: Path<S, A>}, {q: Path<S, B>}, apart: Apart<S, A, B>(p, q), r: Path<A, C>, t: Path<B, D>, s: S, c: C, d: D):
+    (op: Option<A>) → p.get(s) = op → (oq: Option<B>) → q.get(s) = oq →
+    p.then(r).set(q.then(t).set(s, d), c) = q.then(t).set(p.then(r).set(s, c), d)
+{
+    λ op => match op {
+        Some(x) => λ ep oq => match oq {
+            Some(y) => λ eq => {
+                let s1 = q.set(s, t.set(y, d));
+                let s2 = p.set(s, r.set(x, c));
+                let p1: (p.get(s1) = Some(x)) = trans(apart.left_after_right(s, t.set(y, d)), ep);
+                let q2: (q.get(s2) = Some(y)) = trans(apart.right_after_left(s, r.set(x, c)), eq);
+                let left: (p.then(r).set(q.then(t).set(s, d), c) = p.set(s1, r.set(x, c))) =
+                    trans(cong_fn(λ (u: S) => p.then(r).set(u, c), q.then_set_at(t, s, y, eq, d)), p.then_set_at(r, s1, x, p1, c));
+                let right: (q.then(t).set(p.then(r).set(s, c), d) = q.set(s2, t.set(y, d))) =
+                    trans(cong_fn(λ (u: S) => q.then(t).set(u, d), p.then_set_at(r, s, x, ep, c)), q.then_set_at(t, s2, y, q2, d));
+                trans(left, trans(apart.writes_commute(s, r.set(x, c), t.set(y, d)), sym(right)))
+            },
+            None => λ eq => {
+                let s2 = p.set(s, r.set(x, c));
+                let q2: (q.get(s2) = None) = trans(apart.right_after_left(s, r.set(x, c)), eq);
+                let left: (p.then(r).set(q.then(t).set(s, d), c) = s2) =
+                    trans(cong_fn(λ (u: S) => p.then(r).set(u, c), q.then_set_none(t, s, eq, d)), p.then_set_at(r, s, x, ep, c));
+                let right: (q.then(t).set(p.then(r).set(s, c), d) = s2) =
+                    trans(cong_fn(λ (u: S) => q.then(t).set(u, d), p.then_set_at(r, s, x, ep, c)), q.then_set_none(t, s2, q2, d));
+                trans(left, sym(right))
+            },
+        },
+        None => λ ep oq => match oq {
+            Some(y) => λ eq => {
+                let s1 = q.set(s, t.set(y, d));
+                let p1: (p.get(s1) = None) = trans(apart.left_after_right(s, t.set(y, d)), ep);
+                let left: (p.then(r).set(q.then(t).set(s, d), c) = s1) =
+                    trans(cong_fn(λ (u: S) => p.then(r).set(u, c), q.then_set_at(t, s, y, eq, d)), p.then_set_none(r, s1, p1, c));
+                let right: (q.then(t).set(p.then(r).set(s, c), d) = s1) =
+                    trans(cong_fn(λ (u: S) => q.then(t).set(u, d), p.then_set_none(r, s, ep, c)), q.then_set_at(t, s, y, eq, d));
+                trans(left, sym(right))
+            },
+            None => λ eq => trans(cong_fn(λ (u: S) => p.then(r).set(u, c), q.then_set_none(t, s, eq, d)),
+                trans(p.then_set_none(r, s, ep, c), sym(trans(cong_fn(λ (u: S) => q.then(t).set(u, d), p.then_set_none(r, s, ep, c)), q.then_set_none(t, s, eq, d))))),
+        },
+    }
+}
+
+theorem Apart::then_both<S, A, B, C, D>({p: Path<S, A>}, {q: Path<S, B>}, self apart: Apart<S, A, B>(p, q), r: Path<A, C>, t: Path<B, D>):
+    Apart<S, C, D>(p.then(r), q.then(t))
+{
+    Apart(
+        λ s v => Apart::then_read(apart, r, t, s, v, q.get(s), refl),
+        λ s v => Apart::then_read(Apart::symm(apart), t, r, s, v, p.get(s), refl),
+        λ s c d => Apart::then_commute(apart, r, t, s, c, d, p.get(s), refl, q.get(s), refl),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Regrouping a composition
+
+theorem Path::then_assoc_get<S, A, B, C>(p: Path<S, A>, q: Path<A, B>, r: Path<B, C>, s: S):
+    (o: Option<A>) → p.get(s) = o → p.then(q).then(r).get(s) = p.then(q.then(r)).get(s)
+{
+    λ o => match o {
+        Some(_) => λ e => trans(cong_fn(λ (x: Option<A>) => x.and_then(q.get).and_then(r.get), e), sym(cong_fn(λ (x: Option<A>) => x.and_then(q.then(r).get), e))),
+        None => λ e => trans(cong_fn(λ (x: Option<A>) => x.and_then(q.get).and_then(r.get), e), sym(cong_fn(λ (x: Option<A>) => x.and_then(q.then(r).get), e))),
+    }
+}
+
+theorem Path::then_assoc_set<S, A, B, C>(p: Path<S, A>, q: Path<A, B>, r: Path<B, C>, pl: PathLaws<S, A>(p), s: S, c: C):
+    (o: Option<A>) → p.get(s) = o → p.then(q).then(r).set(s, c) = p.then(q.then(r)).set(s, c)
+{
+    λ o => match o {
+        Some(a) => λ e => {
+            let right: (p.then(q.then(r)).set(s, c) = p.set(s, q.then(r).set(a, c))) = p.then_set_at(q.then(r), s, a, e, c);
+            match ob: q.get(a) {
+                Some(b) => {
+                    let mid: (p.then(q).get(s) = Some(b)) = trans(p.then_get_at(q, s, a, e), ob);
+                    trans(p.then(q).then_set_at(r, s, b, mid, c), trans(p.then_set_at(q, s, a, e, r.set(b, c)),
+                        trans(cong_fn(λ (x: A) => p.set(s, x), sym(q.then_set_at(r, a, b, ob, c))), sym(right))))
+                },
+                None => {
+                    let mid: (p.then(q).get(s) = None) = trans(p.then_get_at(q, s, a, e), ob);
+                    trans(p.then(q).then_set_none(r, s, mid, c), trans(sym(pl.get_set(s, a, e)),
+                        trans(cong_fn(λ (x: A) => p.set(s, x), sym(q.then_set_none(r, a, ob, c))), sym(right))))
+                },
+            }
+        },
+        None => λ e => trans(p.then(q).then_set_none(r, s, p.then_get_none(q, s, e), c), sym(p.then_set_none(q.then(r), s, e, c))),
+    }
+}
+
+// A part of a part of a part is one path, however it is grouped (where the
+// outer step writes back what it read unchanged).
+theorem Path::then_assoc<S, A, B, C>(p: Path<S, A>, q: Path<A, B>, r: Path<B, C>, pl: PathLaws<S, A>(p)):
+    PathSame<S, C>(p.then(q).then(r), p.then(q.then(r)))
+{
+    PathSame(λ s => Path::then_assoc_get(p, q, r, s, p.get(s), refl), λ s c => Path::then_assoc_set(p, q, r, pl, s, c, p.get(s), refl))
+}
+
+// ---------------------------------------------------------------------------
+// A path behind a test
+
+// The read and the write where the test `c` passes, nothing where it fails.
+fn Path::gate_get<V>(c: Bool, o: Option<V>) → Option<V> { match c { True => o, False => None } }
+
+fn Path::gate_set<S>(c: Bool, s, t: S) → S { match c { True => t, False => s } }
+
+// `p` where `ok` holds of the owner: a handle's path behind the check that
+// its key still names it.
+fn Path::guard<S, V>(ok: S → Bool, p: Path<S, V>) → Path<S, V> {
+    Path<S, V>(get := λ (s: S) => Path::gate_get(ok(s), p.get(s)), set := λ (s: S) => λ (v: V) => Path::gate_set(ok(s), s, p.set(s, v)))
+}
+
+// A write through `q` does not change the test.
+fn Path::Stable<S, W>(ok: S → Bool, q: Path<S, W>) → Type { (s: S) → (w: W) → ok(q.set(s, w)) = ok(s) }
+
+theorem Path::guard_get_on<S, V>(ok: S → Bool, p: Path<S, V>, s: S, on: ok(s) = True): Path::guard(ok, p).get(s) = p.get(s) {
+    cong_fn(λ (c: Bool) => Path::gate_get(c, p.get(s)), on)
+}
+
+theorem Path::guard_set_on<S, V>(ok: S → Bool, p: Path<S, V>, s: S, on: ok(s) = True, v: V): Path::guard(ok, p).set(s, v) = p.set(s, v) {
+    cong_fn(λ (c: Bool) => Path::gate_set(c, s, p.set(s, v)), on)
+}
+
+theorem Path::guard_get_off<S, V>(ok: S → Bool, p: Path<S, V>, s: S, off: ok(s) = False): Path::guard(ok, p).get(s) = None {
+    cong_fn(λ (c: Bool) => Path::gate_get(c, p.get(s)), off)
+}
+
+theorem Path::guard_set_off<S, V>(ok: S → Bool, p: Path<S, V>, s: S, off: ok(s) = False, v: V): Path::guard(ok, p).set(s, v) = s {
+    cong_fn(λ (c: Bool) => Path::gate_set(c, s, p.set(s, v)), off)
+}
+
+// A guarded read that answers passed its test.
+theorem Path::guard_on_of<S, V>(ok: S → Bool, p: Path<S, V>, s: S, a: V): (c: Bool) → ok(s) = c → Path::guard(ok, p).get(s) = Some(a) → ok(s) = True {
+    λ c => match c {
+        True => λ e _ => e,
+        False => λ e h => absurd(trans(sym(Path::guard_get_off(ok, p, s, e)), h)),
+    }
+}
+
+theorem Path::guard_set_set_of<S, V>(ok: S → Bool, p: Path<S, V>, pl: PathLaws<S, V>(p), stable: Path::Stable(ok, p), s: S, v, w: V):
+    (c: Bool) → ok(s) = c → Path::guard(ok, p).set(Path::guard(ok, p).set(s, v), w) = Path::guard(ok, p).set(s, w)
+{
+    λ c => match c {
+        True => λ on => trans(cong_fn(λ (t: S) => Path::guard(ok, p).set(t, w), Path::guard_set_on(ok, p, s, on, v)),
+            trans(Path::guard_set_on(ok, p, p.set(s, v), trans(stable(s, v), on), w), trans(pl.set_set(s, v, w), sym(Path::guard_set_on(ok, p, s, on, w))))),
+        False => λ off => cong_fn(λ (t: S) => Path::guard(ok, p).set(t, w), Path::guard_set_off(ok, p, s, off, v)),
+    }
+}
+
+theorem Path::guard_set_none_of<S, V>(ok: S → Bool, p: Path<S, V>, pl: PathLaws<S, V>(p), s: S, v: V):
+    (c: Bool) → ok(s) = c → Path::guard(ok, p).get(s) = None → Path::guard(ok, p).set(s, v) = s
+{
+    λ c => match c {
+        True => λ on h => trans(Path::guard_set_on(ok, p, s, on, v), pl.set_none(s, v, trans(sym(Path::guard_get_on(ok, p, s, on)), h))),
+        False => λ off h => Path::guard_set_off(ok, p, s, off, v),
+    }
+}
+
+theorem Path::guard_laws<S, V>(ok: S → Bool, p: Path<S, V>, pl: PathLaws<S, V>(p), stable: Path::Stable(ok, p)): PathLaws<S, V>(Path::guard(ok, p)) {
+    PathLaws(
+        λ s a v h => {
+            let on: (ok(s) = True) = Path::guard_on_of(ok, p, s, a, ok(s), refl, h);
+            trans(cong_fn(λ (t: S) => Path::guard(ok, p).get(t), Path::guard_set_on(ok, p, s, on, v)),
+                trans(Path::guard_get_on(ok, p, p.set(s, v), trans(stable(s, v), on)), pl.set_get(s, a, v, trans(sym(Path::guard_get_on(ok, p, s, on)), h))))
+        },
+        λ s a h => {
+            let on: (ok(s) = True) = Path::guard_on_of(ok, p, s, a, ok(s), refl, h);
+            trans(Path::guard_set_on(ok, p, s, on, a), pl.get_set(s, a, trans(sym(Path::guard_get_on(ok, p, s, on)), h)))
+        },
+        λ s v w => Path::guard_set_set_of(ok, p, pl, stable, s, v, w, ok(s), refl),
+        λ s v h => Path::guard_set_none_of(ok, p, pl, s, v, ok(s), refl, h),
+    )
+}
+
+// Valid behind the test: the test passes and the path is valid.
+theorem Path::guard_valid<S, V>(ok: S → Bool, p: Path<S, V>, s: S, on: ok(s) = True, valid: p.Valid(s)): Path::guard(ok, p).Valid(s) {
+    Exists(valid.witness, trans(Path::guard_get_on(ok, p, s, on), valid.proof))
+}
+
+theorem Path::guard_valid_on<S, V>(ok: S → Bool, p: Path<S, V>, s: S, valid: Path::guard(ok, p).Valid(s)): ok(s) = True {
+    Path::guard_on_of(ok, p, s, valid.witness, ok(s), refl, valid.proof)
+}
+
+theorem Path::guard_valid_inner<S, V>(ok: S → Bool, p: Path<S, V>, s: S, valid: Path::guard(ok, p).Valid(s)): p.Valid(s) {
+    Exists(valid.witness, trans(sym(Path::guard_get_on(ok, p, s, Path::guard_valid_on(ok, p, s, valid))), valid.proof))
+}
+
+// A composition after a guard is the guarded composition.
+theorem Path::guard_then_get<S, A, B>(ok: S → Bool, p: Path<S, A>, q: Path<A, B>, s: S):
+    (c: Bool) → ok(s) = c → Path::guard(ok, p).then(q).get(s) = Path::guard(ok, p.then(q)).get(s)
+{
+    λ c => match c {
+        True => λ on => trans(cong_fn(λ (o: Option<A>) => o.and_then(q.get), Path::guard_get_on(ok, p, s, on)), sym(Path::guard_get_on(ok, p.then(q), s, on))),
+        False => λ off => trans(cong_fn(λ (o: Option<A>) => o.and_then(q.get), Path::guard_get_off(ok, p, s, off)), sym(Path::guard_get_off(ok, p.then(q), s, off))),
+    }
+}
+
+theorem Path::guard_then_set_on<S, A, B>(ok: S → Bool, p: Path<S, A>, q: Path<A, B>, s: S, b: B, on: ok(s) = True):
+    (o: Option<A>) → p.get(s) = o → Path::guard(ok, p).then(q).set(s, b) = Path::guard(ok, p.then(q)).set(s, b)
+{
+    λ o => match o {
+        Some(a) => λ oa => trans(Path::guard(ok, p).then_set_at(q, s, a, trans(Path::guard_get_on(ok, p, s, on), oa), b),
+            trans(Path::guard_set_on(ok, p, s, on, q.set(a, b)), trans(sym(p.then_set_at(q, s, a, oa, b)), sym(Path::guard_set_on(ok, p.then(q), s, on, b))))),
+        None => λ oa => trans(Path::guard(ok, p).then_set_none(q, s, trans(Path::guard_get_on(ok, p, s, on), oa), b),
+            trans(sym(p.then_set_none(q, s, oa, b)), sym(Path::guard_set_on(ok, p.then(q), s, on, b)))),
+    }
+}
+
+theorem Path::guard_then_set<S, A, B>(ok: S → Bool, p: Path<S, A>, q: Path<A, B>, s: S, b: B):
+    (c: Bool) → ok(s) = c → Path::guard(ok, p).then(q).set(s, b) = Path::guard(ok, p.then(q)).set(s, b)
+{
+    λ c => match c {
+        True => λ on => Path::guard_then_set_on(ok, p, q, s, b, on, p.get(s), refl),
+        False => λ off => trans(Path::guard(ok, p).then_set_none(q, s, Path::guard_get_off(ok, p, s, off), b), sym(Path::guard_set_off(ok, p.then(q), s, off, b))),
+    }
+}
+
+theorem Path::guard_then<S, A, B>(ok: S → Bool, p: Path<S, A>, q: Path<A, B>): PathSame<S, B>(Path::guard(ok, p).then(q), Path::guard(ok, p.then(q))) {
+    PathSame(λ s => Path::guard_then_get(ok, p, q, s, ok(s), refl), λ s b => Path::guard_then_set(ok, p, q, s, b, ok(s), refl))
+}
+
+// Two guarded paths are apart where the paths are and neither one's write
+// changes the other's test.
+theorem Path::guard_read<S, A, B>(ok1: S → Bool, ok2: S → Bool, {p: Path<S, A>}, {q: Path<S, B>}, apart: Apart<S, A, B>(p, q), s1: Path::Stable(ok1, q), s: S, v: B):
+    (c: Bool) → ok2(s) = c → Path::guard(ok1, p).get(Path::guard(ok2, q).set(s, v)) = Path::guard(ok1, p).get(s)
+{
+    λ c => match c {
+        True => λ on => trans(cong_fn(λ (t: S) => Path::guard(ok1, p).get(t), Path::guard_set_on(ok2, q, s, on, v)),
+            cong_args(λ (d: Bool) => λ (o: Option<A>) => Path::gate_get(d, o), s1(s, v), apart.left_after_right(s, v))),
+        False => λ off => cong_fn(λ (t: S) => Path::guard(ok1, p).get(t), Path::guard_set_off(ok2, q, s, off, v)),
+    }
+}
+
+theorem Path::guard_commute<S, A, B>(ok1: S → Bool, ok2: S → Bool, {p: Path<S, A>}, {q: Path<S, B>}, apart: Apart<S, A, B>(p, q),
+    s1: Path::Stable(ok1, q), s2: Path::Stable(ok2, p), s: S, a: A, b: B):
+    (c1: Bool) → ok1(s) = c1 → (c2: Bool) → ok2(s) = c2 →
+    Path::guard(ok1, p).set(Path::guard(ok2, q).set(s, b), a) = Path::guard(ok2, q).set(Path::guard(ok1, p).set(s, a), b)
+{
+    let g1 = Path::guard(ok1, p);
+    let g2 = Path::guard(ok2, q);
+    λ c1 => match c1 {
+        True => λ on1 c2 => match c2 {
+            True => λ on2 => trans(cong_fn(λ (t: S) => g1.set(t, a), Path::guard_set_on(ok2, q, s, on2, b)),
+                trans(Path::guard_set_on(ok1, p, q.set(s, b), trans(s1(s, b), on1), a),
+                    trans(apart.writes_commute(s, a, b), sym(trans(cong_fn(λ (t: S) => g2.set(t, b), Path::guard_set_on(ok1, p, s, on1, a)),
+                        Path::guard_set_on(ok2, q, p.set(s, a), trans(s2(s, a), on2), b)))))),
+            False => λ off2 => trans(cong_fn(λ (t: S) => g1.set(t, a), Path::guard_set_off(ok2, q, s, off2, b)),
+                trans(Path::guard_set_on(ok1, p, s, on1, a), sym(trans(cong_fn(λ (t: S) => g2.set(t, b), Path::guard_set_on(ok1, p, s, on1, a)),
+                    Path::guard_set_off(ok2, q, p.set(s, a), trans(s2(s, a), off2), b))))),
+        },
+        False => λ off1 c2 => match c2 {
+            True => λ on2 => trans(cong_fn(λ (t: S) => g1.set(t, a), Path::guard_set_on(ok2, q, s, on2, b)),
+                trans(Path::guard_set_off(ok1, p, q.set(s, b), trans(s1(s, b), off1), a),
+                    sym(trans(cong_fn(λ (t: S) => g2.set(t, b), Path::guard_set_off(ok1, p, s, off1, a)), Path::guard_set_on(ok2, q, s, on2, b))))),
+            False => λ off2 => trans(cong_fn(λ (t: S) => g1.set(t, a), Path::guard_set_off(ok2, q, s, off2, b)),
+                trans(Path::guard_set_off(ok1, p, s, off1, a), sym(trans(cong_fn(λ (t: S) => g2.set(t, b), Path::guard_set_off(ok1, p, s, off1, a)),
+                    Path::guard_set_off(ok2, q, s, off2, b))))),
+        },
+    }
+}
+
+theorem Path::guard_apart<S, A, B>(ok1: S → Bool, ok2: S → Bool, {p: Path<S, A>}, {q: Path<S, B>}, apart: Apart<S, A, B>(p, q),
+    s1: Path::Stable(ok1, q), s2: Path::Stable(ok2, p)): Apart<S, A, B>(Path::guard(ok1, p), Path::guard(ok2, q))
+{
+    Apart(
+        λ s v => Path::guard_read(ok1, ok2, apart, s1, s, v, ok2(s), refl),
+        λ s v => Path::guard_read(ok2, ok1, Apart::symm(apart), s2, s, v, ok1(s), refl),
+        λ s a b => Path::guard_commute(ok1, ok2, apart, s1, s2, s, a, b, ok1(s), refl, ok2(s), refl),
+    )
+}
+
+// Spellings carried through a guard and through a step taken first.
+theorem PathSame::guard<S, V>(ok: S → Bool, {p, q: Path<S, V>}, self e: PathSame<S, V>(p, q)): PathSame<S, V>(Path::guard(ok, p), Path::guard(ok, q)) {
+    PathSame(λ s => cong_fn(λ (o: Option<V>) => Path::gate_get(ok(s), o), e.gets(s)), λ s v => cong_fn(λ (t: S) => Path::gate_set(ok(s), s, t), e.sets(s, v)))
+}
+
+theorem PathSame::after_get<S, A, B>(p: Path<S, A>, {q, r: Path<A, B>}, e: PathSame<A, B>(q, r), s: S):
+    (o: Option<A>) → p.get(s) = o → p.then(q).get(s) = p.then(r).get(s)
+{
+    λ o => match o {
+        Some(a) => λ at => trans(p.then_get_at(q, s, a, at), trans(e.gets(a), sym(p.then_get_at(r, s, a, at)))),
+        None => λ at => trans(p.then_get_none(q, s, at), sym(p.then_get_none(r, s, at))),
+    }
+}
+
+theorem PathSame::after_set<S, A, B>(p: Path<S, A>, {q, r: Path<A, B>}, e: PathSame<A, B>(q, r), s: S, b: B):
+    (o: Option<A>) → p.get(s) = o → p.then(q).set(s, b) = p.then(r).set(s, b)
+{
+    λ o => match o {
+        Some(a) => λ at => trans(p.then_set_at(q, s, a, at, b), trans(cong_fn(λ (x: A) => p.set(s, x), e.sets(a, b)), sym(p.then_set_at(r, s, a, at, b)))),
+        None => λ at => trans(p.then_set_none(q, s, at, b), sym(p.then_set_none(r, s, at, b))),
+    }
+}
+
+theorem PathSame::after<S, A, B>(p: Path<S, A>, {q, r: Path<A, B>}, e: PathSame<A, B>(q, r)): PathSame<S, B>(p.then(q), p.then(r)) {
+    PathSame(λ s => PathSame::after_get(p, e, s, p.get(s), refl), λ s b => PathSame::after_set(p, e, s, b, p.get(s), refl))
+}

@@ -5,7 +5,7 @@ labels: [algebra,native,ownership]
 area: mathematics
 milestone: [nh-ownership]
 created: 2026-11-09
-updated: 2026-11-24
+updated: 2026-11-25
 ---
 
 Memory framing does not need a separation algebra: memory is a total
@@ -50,3 +50,4 @@ and an arena allocation hands out a footprint the caller owns exclusively.
   - `span_set.hthr`: `disjoint_comm`, `union_disjoint`, `disjoint_union`, `disjoint_same`, `empty_disjoint`, union membership forms (own commit).
   Decisions: partiality as validity of a total operation (the RA presentation), laws modulo `≈`, validity an index; products and pointwise lifting are dictionary functions, not generic instances (their indices are λs instance search cannot key on). Probes in `lib/_tests` mirror each module, with `¬` theorems (overlapping owners, whole beside a half, a store under a live view, a half is not exclusive, a half cannot grow to the whole).
   Done-when: not met yet. The soundness theorem stating uniqueness through the PCM is the second wave's, and the arena handing out an exclusive footprint waits on `ownership-stores-and-keys`; the issue stays open for both. Residue filed as [[separation-algebra-paths-instance]] (the instance at a store's paths, the access-map frame theorem, a decider for `Access::Valid`).
+- 2026-11-25: Second wave ([[ownership-library-join]], 2026-11-25): the instance at paths is built ([[separation-algebra-paths-instance]], closed), and an arena allocation hands out a footprint its caller owns exclusively (`Heap::alloc_owns`, `lib/native/runtime/arena_handle_paths.hthr`). What remains of the done-when is the soundness theorem stating uniqueness through the PCM, the third wave's (`docs/language/ownership-design.md` §12).

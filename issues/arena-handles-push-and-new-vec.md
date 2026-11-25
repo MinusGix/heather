@@ -5,7 +5,7 @@ labels: [ownership,native,library]
 area: heather-in-heather
 milestone: [nh-ownership]
 created: 2026-11-24
-updated: 2026-11-24
+updated: 2026-11-25
 ---
 
 [[ownership-stores-and-keys]] restated the arena's window laws and `grow` over typed handles (`lib/native/runtime/arena_handles.hthr`: `VecHandle`, `VecOk`, `Heap::grow` with `grow_keeps`, `grow_items`, `grow_ok`). Not restated yet:
@@ -16,3 +16,10 @@ updated: 2026-11-24
 ## What it assumes from elsewhere
 
 - **[[ownership-stores-and-keys]]** owns `VecOk`. Assumed here: only its fields.
+
+## Log
+
+- 2026-11-25: [[ownership-library-join]] (2026-11-25) did not build these: they did not fall out of the join. What the join gives them: a vector's element is a path (`Heap::vec_elem`, `lib/native/runtime/arena_handle_paths.hthr`) reading the vector's item (`vec_elem_items`) and what `Arena::elem_path` reads (`vec_elem_agrees`), and `Heap::store` is a path write (`store_is_elem`). What is still needed, narrowed:
+
+  - **`push_in` over handles**: `Heap::push_in(h, v, ok, x)` writing the arena by `Arena::push_in` (a `mut self` runtime fn answering `Mutated`) and keeping the claims; it needs `Arena::push_in(...).after` to keep `top` and `limit` (read off `Arena::push_in_eq` in `arena_paths.hthr`, which states the after-arena under `VecInv` and room) so `HeapInv` carries across, and a `VecOk` after (header words: base and capacity unchanged, length one more and within capacity). Then `push_in_keeps` (arena_paths) restated as every `Heap::vec_elem(v, i)` below the old length kept, through `vec_elem_agrees`.
+  - **`new_vec`** and **`push`** as before.

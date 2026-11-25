@@ -1,0 +1,198 @@
+// Probes of `arena_handle_paths`: an element of a window held by handle as
+// one composed path. At closed values: a window `X` of one word, a vector
+// (header `HW`, data `DW`) holding `[7]`, the element paths reading and
+// writing the heap, two elements decided apart by evaluation, and the
+// vector's element reading its item. At an open heap: one validity
+// statement, elements of valid windows of different keys apart, the
+// handle's store as the path's write. Negative controls: the stale window's
+// element is not valid as a path, an element is not apart from itself, and
+// the decider refuses two windows that meet. Tests, not library.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import vector;
+import algebra;
+import omega;
+import runtime_data;
+import span_set;
+import path;
+import list_path;
+import vector_path;
+import arena;
+import arena_laws;
+import store;
+import arena_handles;
+import arena_paths;
+import pcm_share;
+import held;
+import arena_handle_paths;
+
+// ---------------------------------------------------------------------------
+// Closed values
+
+fn EMPTY_ARENA() → Arena { Arena(BitVec::ofNat(0), BitVec::ofNat(16), List::replicate(BitVec::ofNat(0, n := 64), 16).vector_of(16, BitVec::ofNat(0))) }
+
+theorem empty_inv(): HeapInv(EMPTY_ARENA(), Store::empty()) {
+    HeapInv(omega, omega, λ _ _ e => absurd(e), λ _ _ _ _ e1 _ _ => absurd(e1))
+}
+
+fn EMPTY() → Heap { Heap(EMPTY_ARENA(), Store::empty(), empty_inv()) }
+
+fn NO_WINDOW() → Window { Window(0, 0, Key(0, 0)) }
+
+fn A1() → Mutated<Heap, Grant> { Heap::alloc(EMPTY(), 1) }
+
+fn X() → Window { A1().value.window_or(NO_WINDOW()) }
+
+fn A2() → Mutated<Heap, Grant> { Heap::alloc(A1().after, 3) }
+
+fn HW() → Window { A2().value.window_or(NO_WINDOW()) }
+
+fn A3() → Mutated<Heap, Grant> { Heap::alloc(A2().after, 2) }
+
+fn DW() → Window { A3().value.window_or(NO_WINDOW()) }
+
+theorem x0_in(): BitVec::ofNat(0, n := 64).toNat() < X().count.toNat() { let c: (X().count.toNat() = 1) = refl; omega(c) }
+
+theorem h_in(i: u64, small: i.toNat() < 3): i.toNat() < HW().count.toNat() { let c: (HW().count.toNat() = 3) = refl; omega(c, small) }
+
+theorem d0_in(): BitVec::ofNat(0, n := 64).toNat() < DW().count.toNat() { let c: (DW().count.toNat() = 2) = refl; omega(c) }
+
+// `X` holds 9; the header says data at 4, capacity 2, length 1; the data
+// window holds 7.
+fn H0() → Heap {
+    A3().after.store(X(), 0, 9, valid := refl, inside := squash(x0_in()))
+        .store(HW(), 0, 4, valid := refl, inside := squash(h_in(0, omega)))
+        .store(HW(), 1, 2, valid := refl, inside := squash(h_in(1, omega)))
+        .store(HW(), 2, 1, valid := refl, inside := squash(h_in(2, omega)))
+        .store(DW(), 0, 7, valid := refl, inside := squash(d0_in()))
+}
+
+// The element paths read the words, through the key and the index.
+theorem x_reads(): Heap::elem_path(X(), 0).get(H0()) = Some(9) { refl }
+
+theorem data_reads(): Heap::elem_path(DW(), 0).get(H0()) = Some(7) { refl }
+
+// A write through the data window's second element, read back, and `X`
+// untouched.
+theorem data_writes(): Heap::elem_path(DW(), 1).get(Heap::elem_path(DW(), 1).set(H0(), 5)) = Some(5) { refl }
+
+theorem x_untouched(): Heap::elem_path(X(), 0).get(Heap::elem_path(DW(), 1).set(H0(), 5)) = Some(9) { refl }
+
+// Past the window's count, the element reads nothing.
+theorem past_count(): Heap::elem_path(X(), 1).get(H0()) = None { refl }
+
+// Decided apart by evaluation: `X`'s word and the data window's.
+theorem x_data_apart(): Apart<Heap, u64, u64>(Heap::elem_path(X(), 0), Heap::elem_path(DW(), 1)) {
+    Heap::elems_apart(X(), DW(), 0, 1, trivial, trivial, trivial)
+}
+
+// The vector's element reads its item, and what the paths package's
+// element reads.
+fn V0() → VecHandle { VecHandle(HW(), DW()) }
+
+theorem apart_keys(): ¬(HW().key.index = DW().key.index) { let a: (HW().key.index = 1) = refl; let b: (DW().key.index = 2) = refl; λ e => omega(e, a, b) }
+
+theorem v0_ok(): VecOk(H0(), V0()) {
+    let l: (H0().arena.cell(HW().base + 2).toNat() = 1) = refl;
+    let c: (DW().count.toNat() = 2) = refl;
+    VecOk(refl, refl, refl, apart_keys(), refl, refl, omega(l, c))
+}
+
+theorem vec_item(): Heap::vec_elem(V0(), 0).get(H0()) = H0().items(V0()).nth(0) { H0().vec_elem_items(V0(), v0_ok(), 0, trivial) }
+
+theorem vec_agrees(): Heap::vec_elem(V0(), 0).get(H0()) = Arena::elem_path(HW().base, DW().base, 0).get(H0().arena) {
+    H0().vec_elem_agrees(V0(), v0_ok(), 0, trivial)
+}
+
+theorem vec_elem_is_valid(): Heap::vec_elem(V0(), 0).Valid(H0()) { H0().vec_elem_valid(V0(), v0_ok(), 0, trivial) }
+
+// ---------------------------------------------------------------------------
+// The stale window: `(0, 4)` granted, the heap reset to 0, `(0, 4)`
+// granted again into the same claim slot at the next generation.
+
+fn FIRST() → Mutated<Heap, Grant> { Heap::alloc(EMPTY(), 4) }
+
+fn W1() → Window { FIRST().value.window_or(NO_WINDOW()) }
+
+fn SECOND() → Mutated<Heap, Grant> { Heap::alloc(Heap::reset(FIRST().after, 0).after, 4) }
+
+fn W2() → Window { SECOND().value.window_or(NO_WINDOW()) }
+
+// The new window's element is a valid path; the stale one's is not, though
+// it names the same word.
+theorem fresh_elem_valid(): Heap::elem_path(W2(), 0).Valid(SECOND().after) { SECOND().after.elem_valid(W2(), 0, refl, trivial) }
+
+theorem stale_elem_invalid(): ¬Heap::elem_path(W1(), 0).Valid(SECOND().after) {
+    λ valid => absurd(SECOND().after.elem_valid_parts(W1(), 0, valid).left)
+}
+
+theorem stale_reads_nothing(): Heap::elem_path(W1(), 0).get(SECOND().after) = None { refl }
+
+// ---------------------------------------------------------------------------
+// At an open heap
+
+theorem elem_laws_open(w: Window, i: Nat): PathLaws<Heap, u64>(Heap::elem_path(w, i)) { Heap::elem_laws(w, i) }
+
+// One validity statement, both ways.
+theorem elem_valid_iff(h: Heap, w: Window, i: Nat): And<And<h.Valid(w), i < w.count.toNat()> → Heap::elem_path(w, i).Valid(h),
+    Heap::elem_path(w, i).Valid(h) → And<h.Valid(w), i < w.count.toNat()>>
+{
+    And(λ both => h.elem_valid(w, i, both.left, both.right), λ valid => h.elem_valid_parts(w, i, valid))
+}
+
+// A window granted by an allocation: its elements are apart from every
+// element of every window valid before, at every heap after.
+theorem granted_apart(h: Heap, size: u64, w, w2: Window, granted: Heap::alloc(h, size).value = Granted(w), valid2: h.Valid(w2), i, k: Nat,
+    in1: i < w.count.toNat(), in2: k < w2.count.toNat()):
+    Apart<Heap, u64, u64>(Heap::elem_path(w, i), Heap::elem_path(w2, k))
+{
+    Heap::alloc(h, size).after.valid_elems_apart(w, w2, i, k, Heap::alloc_valid(h, size, w, granted), Heap::alloc_keeps(h, size, w2, valid2),
+        λ e => Heap::alloc_other_key(h, size, w, granted, w2, valid2, sym(e)), in1, in2)
+}
+
+// The handle's store is the path's write, so every law of paths applies to
+// it: a store through `w` keeps every element of a valid window of another
+// key.
+theorem store_keeps_other(h: Heap, w, w2: Window, i, x: u64, k: Nat, valid: h.Valid(w), valid2: h.Valid(w2), li: i.toNat() < w.count.toNat(),
+    lk: k < w2.count.toNat(), other: ¬(w2.key.index = w.key.index)):
+    Heap::elem_path(w2, k).Keeps(h, h.store(w, i, x, valid := valid))
+{
+    let apart = h.valid_elems_apart(w2, w, k, i.toNat(), valid2, valid, other, lk, li);
+    j(sym(h.store_is_elem(w, i, x, valid, li)), λ t _ => Heap::elem_path(w2, k).Keeps(h, t), apart.keeps(h, x))
+}
+
+// What an allocation grants its caller owns exclusively beside every
+// window valid before; at closed values the holding is decided.
+theorem granted_owned(h: Heap, size: u64, w, w2: Window, granted: Heap::alloc(h, size).value = Granted(w), valid2: h.Valid(w2)):
+    Held::own(w.span()).join(Held::own(w2.span())).Valid()
+{
+    h.alloc_owns(size, w, granted, w2, valid2)
+}
+
+theorem x_data_owned(): Held::own(X().span()).join(Held::own(DW().span())).valid() = True { refl }
+
+// ---------------------------------------------------------------------------
+// Negative controls
+
+theorem x_not_apart_self(): ¬Apart<Heap, u64, u64>(Heap::elem_path(X(), 0), Heap::elem_path(X(), 0)) {
+    λ apart => {
+        let same: (Heap::elem_path(X(), 0).get(Heap::elem_path(X(), 0).set(H0(), 5)) = Heap::elem_path(X(), 0).get(H0())) = apart.left_after_right(H0(), 5);
+        let five: (Heap::elem_path(X(), 0).get(Heap::elem_path(X(), 0).set(H0(), 5)) = Some(5)) = refl;
+        absurd(cong_fn(λ (x: u64) => x.toNat(), Option::some_inj(5, 9, trans(sym(five), same))))
+    }
+}
+
+// The stale window and the new one name the same word: the spans meet, and
+// the decider refuses.
+theorem stale_span_meets(): Span(W1().base.toNat() + 0, 1).apart(Span(W2().base.toNat() + 0, 1)) = False { refl }
+
+// expect-error: `trivial` proves `True`
+theorem stale_and_fresh_refused(): Apart<Heap, u64, u64>(Heap::elem_path(W1(), 0), Heap::elem_path(W2(), 0)) {
+    Heap::elems_apart(W1(), W2(), 0, 0, trivial, trivial, trivial)
+}
+
+// Two windows over one word are not owned apart.
+theorem stale_and_fresh_not_owned(): Held::own(W1().span()).join(Held::own(W2().span())).valid() = False { refl }

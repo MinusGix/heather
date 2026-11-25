@@ -1,0 +1,299 @@
+// Paths into a vector, and paths under a window at their own span
+// (docs/language/ownership-design.md §10.4; issues/ownership-paths-footprints.md,
+// issues/ownership-library-join.md). Over `list_path.hthr`.
+//
+// - **A list path read in a vector** (`Path::in_vector(n, pad, q)`): a path
+//   into a list that keeps the list's length (`Path::Shapely`) is a path
+//   into a vector of `n`, through its entries. Lawful where `q` is
+//   (`in_vector_laws`), apart where `q`s are (`Apart::in_vector`). So the
+//   steps into a vector are the list's steps, not a second family to prove.
+// - **The vector's entry** (`Path::entry(n, i, pad) : Path<[A; n], A>`):
+//   `elem(i)` read in the vector; valid exactly below `n`
+//   (`entry_valid`, `entry_inside`); two entries apart by their indexes
+//   (`entries_apart`).
+// - **A path under a window** (`Path::under_window(lo, n, pad, q)`, the
+//   window of `n` from `lo` and then `q` in the vector it reads): where `q`
+//   lies in `s` inside the window's `n`, the composed path lies in
+//   `Span(lo + s.base, s.len)` (`PathIn::under_window`), not only in the
+//   window's span (which `PathIn::then` gives). An element of a window is
+//   the first instance (`PathIn::window_entry`: `Span(lo + i, 1)`), a window
+//   of a window the second (`PathIn::window_of_window`: the inner window
+//   lies where the one window from `lo + lo2` does). Two such paths are
+//   then decided apart by `Span::apart` (`PathIn::apart_sound`), an element
+//   of one window beside an element of another or of the same one.
+import logic;
+import bool;
+import nat;
+import omega;
+import option;
+import list;
+import list_window;
+import vector;
+import span_set;
+import path;
+import list_path;
+
+// ---------------------------------------------------------------------------
+// A list path read in a vector
+
+// The path keeps the length of the list it writes.
+fn Path::Shapely<A, V>(q: Path<List<A>, V>) → Type { (xs: List<A>) → (x: V) → q.set(xs, x).len() = xs.len() }
+
+fn Path::in_vector<A, V>(n: Nat, pad: A, q: Path<List<A>, V>) → Path<[A; n], V> {
+    Path<[A; n], V>(
+        get := λ (v: [A; n]) => q.get(vector_entries(v)),
+        set := λ (v: [A; n]) => λ (x: V) => q.set(vector_entries(v), x).vector_of(n, pad),
+    )
+}
+
+// What the vector holds after a write is what the list path wrote.
+theorem Path::in_vector_entries<A, V>(n: Nat, pad: A, q: Path<List<A>, V>, shape: Path::Shapely(q), v: [A; n], x: V):
+    vector_entries(Path::in_vector(n, pad, q).set(v, x)) = q.set(vector_entries(v), x)
+{
+    List::entries_vector_of(n, pad, q.set(vector_entries(v), x), trans(shape(vector_entries(v), x), vector_entries_len(n, v)))
+}
+
+theorem Path::in_vector_laws<A, V>(n: Nat, pad: A, q: Path<List<A>, V>, ql: PathLaws<List<A>, V>(q), shape: Path::Shapely(q)):
+    PathLaws<[A; n], V>(Path::in_vector(n, pad, q))
+{
+    PathLaws(
+        λ v a x h => trans(cong_fn(q.get, Path::in_vector_entries(n, pad, q, shape, v, x)), ql.set_get(vector_entries(v), a, x, h)),
+        λ v a h => trans(cong_fn(λ (ys: List<A>) => ys.vector_of(n, pad), ql.get_set(vector_entries(v), a, h)), vector_of_entries_exact(n, pad, v)),
+        λ v x y => cong_fn(λ (ys: List<A>) => ys.vector_of(n, pad),
+            trans(cong_fn(λ (ys: List<A>) => q.set(ys, y), Path::in_vector_entries(n, pad, q, shape, v, x)), ql.set_set(vector_entries(v), x, y))),
+        λ v x h => trans(cong_fn(λ (ys: List<A>) => ys.vector_of(n, pad), ql.set_none(vector_entries(v), x, h)), vector_of_entries_exact(n, pad, v)),
+    )
+}
+
+// List paths apart are apart in the vector.
+theorem Apart::in_vector<A, V, W>(n: Nat, pad: A, {p: Path<List<A>, V>}, {q: Path<List<A>, W>}, apart: Apart<List<A>, V, W>(p, q),
+    ps: Path::Shapely(p), qs: Path::Shapely(q)): Apart<[A; n], V, W>(Path::in_vector(n, pad, p), Path::in_vector(n, pad, q))
+{
+    Apart(
+        λ v y => trans(cong_fn(p.get, Path::in_vector_entries(n, pad, q, qs, v, y)), apart.left_after_right(vector_entries(v), y)),
+        λ v x => trans(cong_fn(q.get, Path::in_vector_entries(n, pad, p, ps, v, x)), apart.right_after_left(vector_entries(v), x)),
+        λ v x y => cong_fn(λ (ys: List<A>) => ys.vector_of(n, pad),
+            trans(cong_fn(λ (ys: List<A>) => p.set(ys, x), Path::in_vector_entries(n, pad, q, qs, v, y)),
+                trans(apart.writes_commute(vector_entries(v), x, y), sym(cong_fn(λ (ys: List<A>) => q.set(ys, y), Path::in_vector_entries(n, pad, p, ps, v, x)))))),
+    )
+}
+
+// A composition after a list path read in a vector is the composition
+// read in the vector.
+theorem Path::in_vector_then_set<A, V, W>(n: Nat, pad: A, p: Path<List<A>, V>, q: Path<V, W>, v: [A; n], x: W):
+    (o: Option<V>) → p.get(vector_entries(v)) = o → Path::in_vector(n, pad, p).then(q).set(v, x) = Path::in_vector(n, pad, p.then(q)).set(v, x)
+{
+    λ o => match o {
+        Some(a) => λ e => trans(Path::in_vector(n, pad, p).then_set_at(q, v, a, e, x),
+            cong_fn(λ (ys: List<A>) => ys.vector_of(n, pad), sym(p.then_set_at(q, vector_entries(v), a, e, x)))),
+        None => λ e => trans(Path::in_vector(n, pad, p).then_set_none(q, v, e, x),
+            trans(sym(vector_of_entries_exact(n, pad, v)), cong_fn(λ (ys: List<A>) => ys.vector_of(n, pad), sym(p.then_set_none(q, vector_entries(v), e, x))))),
+    }
+}
+
+theorem Path::in_vector_then<A, V, W>(n: Nat, pad: A, p: Path<List<A>, V>, q: Path<V, W>):
+    PathSame<[A; n], W>(Path::in_vector(n, pad, p).then(q), Path::in_vector(n, pad, p.then(q)))
+{
+    PathSame(λ v => refl, λ v x => Path::in_vector_then_set(n, pad, p, q, v, x, p.get(vector_entries(v)), refl))
+}
+
+// ---------------------------------------------------------------------------
+// An entry of a vector
+
+fn Path::entry<A>(n, i: Nat, pad: A) → Path<[A; n], A> { Path::in_vector(n, pad, Path::elem<A>(i)) }
+
+theorem Path::elem_shapely<A>(i: Nat): Path::Shapely(Path::elem<A>(i)) { Path::elem_in<A>(i).shape }
+
+theorem Path::window_shapely<A>(lo, n: Nat): Path::Shapely(Path::window<A>(lo, n)) { Path::window_in<A>(lo, n).shape }
+
+theorem Path::entry_laws<A>(n, i: Nat, pad: A): PathLaws<[A; n], A>(Path::entry(n, i, pad)) {
+    Path::in_vector_laws(n, pad, Path::elem<A>(i), Path::elem_laws<A>(i), Path::elem_shapely<A>(i))
+}
+
+// Valid exactly below the length, reading the vector's entry there.
+theorem Path::entry_reads<A>(n, i: Nat, pad: A, v: [A; n], inside: i < n): Path::entry(n, i, pad).get(v) = Some(vector_get(v, i, pad)) {
+    trans(vector_entries_nth(n, v, i, inside), cong_fn(λ (a: A) => Some(a), sym(vector_get_inside(n, v, i, pad, inside))))
+}
+
+theorem Path::entry_valid<A>(n, i: Nat, pad: A, v: [A; n], inside: i < n): Path::entry(n, i, pad).Valid(v) {
+    Exists(vector_get(v, i, pad), Path::entry_reads(n, i, pad, v, inside))
+}
+
+theorem Path::entry_inside<A>(n, i: Nat, pad: A, v: [A; n], valid: Path::entry(n, i, pad).Valid(v)): i < n {
+    let below: (i < vector_entries(v).len()) = Path::elem_inside<A>(i, vector_entries(v), valid);
+    omega(below, vector_entries_len(n, v))
+}
+
+theorem Path::entries_apart<A>(n, i, k: Nat, pad: A, ne: i ≠ k): Apart<[A; n], A, A>(Path::entry(n, i, pad), Path::entry(n, k, pad)) {
+    Apart::in_vector(n, pad, Path::elems_apart<A>(i, k, ne), Path::elem_shapely<A>(i), Path::elem_shapely<A>(k))
+}
+
+// ---------------------------------------------------------------------------
+// A path under a window
+
+fn Path::under_window<A, V>(lo, n: Nat, pad: A, q: Path<List<A>, V>) → Path<List<A>, V> { Path::window<A>(lo, n).then(Path::in_vector(n, pad, q)) }
+
+// What the window of `n` from `lo` holds, as a list.
+fn List::run_list<A>(self xs: List<A>, lo, n: Nat) → List<A> { xs.drop(lo).take(n) }
+
+theorem List::run_list_len<A>(self xs: List<A>, lo, n: Nat, fits: lo + n <= xs.len()): xs.run_list(lo, n).len() = n {
+    xs.drop(lo).len_take(n, omega(fits, xs.len_drop(lo)))
+}
+
+theorem List::run_list_nth<A>(self xs: List<A>, lo, n, j: Nat, inside: j < n): xs.run_list(lo, n).nth(j) = xs.nth(j + lo) {
+    trans(xs.drop(lo).nth_take(n, j, inside), xs.nth_drop_add(lo, j))
+}
+
+// Where the window fits, the window reads a vector whose entries are the run.
+theorem List::run_some<A>(self xs: List<A>, lo, n: Nat, fits: lo + n <= xs.len()):
+    Exists<[A; n]>(λ w => And<xs.run(lo, n) = Some(w), vector_entries(w) = xs.run_list(lo, n)>)
+{
+    let got = List::prefix_present(n, xs.drop(lo), omega(fits, xs.len_drop(lo)));
+    Exists(got.witness, And(trans(xs.run_fits(lo, n, fits), got.proof), List::prefix_some(n, xs.drop(lo), got.witness, got.proof)))
+}
+
+theorem Path::under_window_get<A, V>(lo, n: Nat, pad: A, q: Path<List<A>, V>, xs: List<A>, fits: lo + n <= xs.len()):
+    Path::under_window(lo, n, pad, q).get(xs) = q.get(xs.run_list(lo, n))
+{
+    let w = xs.run_some(lo, n, fits);
+    trans(Path::window<A>(lo, n).then_get_at(Path::in_vector(n, pad, q), xs, w.witness, w.proof.left), cong_fn(q.get, w.proof.right))
+}
+
+theorem Path::under_window_set<A, V>(lo, n: Nat, pad: A, q: Path<List<A>, V>, shape: Path::Shapely(q), xs: List<A>, fits: lo + n <= xs.len(), x: V):
+    Path::under_window(lo, n, pad, q).set(xs, x) = xs.put_window(lo, q.set(xs.run_list(lo, n), x))
+{
+    let w = xs.run_some(lo, n, fits);
+    let at: (Path::under_window(lo, n, pad, q).set(xs, x) = xs.put_run(lo, n, Path::in_vector(n, pad, q).set(w.witness, x))) =
+        Path::window<A>(lo, n).then_set_at(Path::in_vector(n, pad, q), xs, w.witness, w.proof.left, x);
+    trans(at, trans(xs.put_run_fits(lo, n, Path::in_vector(n, pad, q).set(w.witness, x), fits),
+        cong_fn(λ (ys: List<A>) => xs.put_window(lo, ys), trans(Path::in_vector_entries(n, pad, q, shape, w.witness, x),
+            cong_fn(λ (ys: List<A>) => q.set(ys, x), w.proof.right)))))
+}
+
+theorem Path::under_window_get_past<A, V>(lo, n: Nat, pad: A, q: Path<List<A>, V>, xs: List<A>, past: xs.len() < lo + n):
+    Path::under_window(lo, n, pad, q).get(xs) = None
+{
+    Path::window<A>(lo, n).then_get_none(Path::in_vector(n, pad, q), xs, xs.run_past(lo, n, past))
+}
+
+theorem Path::under_window_set_past<A, V>(lo, n: Nat, pad: A, q: Path<List<A>, V>, xs: List<A>, past: xs.len() < lo + n, x: V):
+    Path::under_window(lo, n, pad, q).set(xs, x) = xs
+{
+    Path::window<A>(lo, n).then_set_none(Path::in_vector(n, pad, q), xs, xs.run_past(lo, n, past), x)
+}
+
+// Inside the window, what a write of a run of `n` leaves at `k` is the run's
+// entry there.
+theorem List::put_window_at<A>(self xs: List<A>, lo, n, k: Nat, ys: List<A>, len: ys.len() = n, fits: lo + n <= xs.len(), low: lo <= k, high: k < lo + n):
+    xs.put_window(lo, ys).nth(k) = ys.nth(k - lo)
+{
+    let at: (k = (k - lo) + lo) = omega(low);
+    j(sym(at), λ m _ => xs.put_window(lo, ys).nth(m) = ys.nth(k - lo), xs.nth_put_window_inside(lo, ys, k - lo, omega(len, low, high), omega(fits)))
+}
+
+// The run's lists agree on `s` where the lists agree on the span shifted
+// by `lo`.
+theorem List::run_agree<A>(xs, ys: List<A>, lo, n: Nat, s: Span, within: s.base + s.len <= n, agree: List::Agree(xs, ys, Span(lo + s.base, s.len))):
+    List::Agree(xs.run_list(lo, n), ys.run_list(lo, n), s)
+{
+    λ j hs => trans(xs.run_list_nth(lo, n, j, omega(hs, within)), trans(agree(j + lo, omega(hs)), sym(ys.run_list_nth(lo, n, j, omega(hs, within)))))
+}
+
+theorem PathIn::under_window_frame<A, V>(lo, n: Nat, pad: A, {q: Path<List<A>, V>}, {s: Span}, qin: PathIn<A, V>(q, s), within: s.base + s.len <= n,
+    xs: List<A>, x: V, k: Nat, out: ¬Span(lo + s.base, s.len).has(k).IsTrue()): Path::under_window(lo, n, pad, q).set(xs, x).nth(k) = xs.nth(k)
+{
+    let outer: PathIn<A, V>(Path::under_window(lo, n, pad, q), Span(lo, n)) = Path::window_in<A>(lo, n).then(Path::in_vector(n, pad, q));
+    match Nat::le_dec(lo + n, xs.len()) {
+        Inr(past) => cong_fn(λ (zs: List<A>) => zs.nth(k), Path::under_window_set_past(lo, n, pad, q, xs, omega(past), x)),
+        Inl(fits) => match Span(lo, n).has(k).is_true_dec() {
+            Inr(outside) => outer.frame(xs, x, k, outside),
+            Inl(inside) => {
+                let run = xs.run_list(lo, n);
+                let rl: (run.len() = n) = xs.run_list_len(lo, n, fits);
+                let written: (q.set(run, x).len() = n) = trans(qin.shape(run, x), rl);
+                let at: (Path::under_window(lo, n, pad, q).set(xs, x).nth(k) = q.set(run, x).nth(k - lo)) =
+                    trans(cong_fn(λ (zs: List<A>) => zs.nth(k), Path::under_window_set(lo, n, pad, q, qin.shape, xs, fits, x)),
+                        xs.put_window_at(lo, n, k, q.set(run, x), written, fits, omega(inside), omega(inside)));
+                let kept: (q.set(run, x).nth(k - lo) = run.nth(k - lo)) = qin.frame(run, x, k - lo, λ hs => out(omega(hs, inside)));
+                let back: (k - lo + lo = k) = omega(inside);
+                trans(at, trans(kept, trans(xs.run_list_nth(lo, n, k - lo, omega(inside)), cong_fn(λ (m: Nat) => xs.nth(m), back))))
+            },
+        },
+    }
+}
+
+theorem PathIn::under_window_reads<A, V>(lo, n: Nat, pad: A, {q: Path<List<A>, V>}, {s: Span}, qin: PathIn<A, V>(q, s), within: s.base + s.len <= n,
+    xs, ys: List<A>, len: xs.len() = ys.len(), agree: List::Agree(xs, ys, Span(lo + s.base, s.len))):
+    Path::under_window(lo, n, pad, q).get(xs) = Path::under_window(lo, n, pad, q).get(ys)
+{
+    match Nat::le_dec(lo + n, xs.len()) {
+        Inr(past) => trans(Path::under_window_get_past(lo, n, pad, q, xs, omega(past)), sym(Path::under_window_get_past(lo, n, pad, q, ys, omega(past, len)))),
+        Inl(fits) => trans(Path::under_window_get(lo, n, pad, q, xs, fits),
+            trans(qin.reads(xs.run_list(lo, n), ys.run_list(lo, n), trans(xs.run_list_len(lo, n, fits), sym(ys.run_list_len(lo, n, omega(fits, len)))),
+                List::run_agree(xs, ys, lo, n, s, within, agree)),
+                sym(Path::under_window_get(lo, n, pad, q, ys, omega(fits, len))))),
+    }
+}
+
+theorem PathIn::under_window_writes<A, V>(lo, n: Nat, pad: A, {q: Path<List<A>, V>}, {s: Span}, qin: PathIn<A, V>(q, s), within: s.base + s.len <= n,
+    xs, ys: List<A>, x: V, len: xs.len() = ys.len(), agree: List::Agree(xs, ys, Span(lo + s.base, s.len)), k: Nat, at: Span(lo + s.base, s.len).has(k).IsTrue()):
+    Path::under_window(lo, n, pad, q).set(xs, x).nth(k) = Path::under_window(lo, n, pad, q).set(ys, x).nth(k)
+{
+    match Nat::le_dec(lo + n, xs.len()) {
+        Inr(past) => trans(cong_fn(λ (zs: List<A>) => zs.nth(k), Path::under_window_set_past(lo, n, pad, q, xs, omega(past), x)),
+            trans(agree(k, at), sym(cong_fn(λ (zs: List<A>) => zs.nth(k), Path::under_window_set_past(lo, n, pad, q, ys, omega(past, len), x))))),
+        Inl(fits) => {
+            let yfits: (lo + n <= ys.len()) = omega(fits, len);
+            let rx = xs.run_list(lo, n);
+            let ry = ys.run_list(lo, n);
+            let lx: (rx.len() = n) = xs.run_list_len(lo, n, fits);
+            let ly: (ry.len() = n) = ys.run_list_len(lo, n, yfits);
+            let left: (Path::under_window(lo, n, pad, q).set(xs, x).nth(k) = q.set(rx, x).nth(k - lo)) =
+                trans(cong_fn(λ (zs: List<A>) => zs.nth(k), Path::under_window_set(lo, n, pad, q, qin.shape, xs, fits, x)),
+                    xs.put_window_at(lo, n, k, q.set(rx, x), trans(qin.shape(rx, x), lx), fits, omega(at), omega(at, within)));
+            let right: (Path::under_window(lo, n, pad, q).set(ys, x).nth(k) = q.set(ry, x).nth(k - lo)) =
+                trans(cong_fn(λ (zs: List<A>) => zs.nth(k), Path::under_window_set(lo, n, pad, q, qin.shape, ys, yfits, x)),
+                    ys.put_window_at(lo, n, k, q.set(ry, x), trans(qin.shape(ry, x), ly), yfits, omega(at), omega(at, within)));
+            trans(left, trans(qin.writes(rx, ry, x, trans(lx, sym(ly)), List::run_agree(xs, ys, lo, n, s, within, agree), k - lo, omega(at)), sym(right)))
+        },
+    }
+}
+
+// A path under a window lies at its own span, shifted by the window's base.
+theorem PathIn::under_window<A, V>(lo, n: Nat, pad: A, {q: Path<List<A>, V>}, {s: Span}, qin: PathIn<A, V>(q, s), within: s.base + s.len <= n):
+    PathIn<A, V>(Path::under_window(lo, n, pad, q), Span(lo + s.base, s.len))
+{
+    PathIn(
+        (Path::window_in<A>(lo, n).then(Path::in_vector(n, pad, q))).shape,
+        λ xs x k out => PathIn::under_window_frame(lo, n, pad, qin, within, xs, x, k, out),
+        λ xs ys len agree => PathIn::under_window_reads(lo, n, pad, qin, within, xs, ys, len, agree),
+        λ xs ys x len agree k at => PathIn::under_window_writes(lo, n, pad, qin, within, xs, ys, x, len, agree, k, at),
+    )
+}
+
+// An element of a window: the window, then the vector's entry.
+theorem PathIn::window_entry<A>(lo, n, i: Nat, pad: A, inside: i < n): PathIn<A, A>(Path::window<A>(lo, n).then(Path::entry(n, i, pad)), Span(lo + i, 1)) {
+    PathIn::under_window(lo, n, pad, Path::elem_in<A>(i), omega(inside))
+}
+
+// A window of a window lies where the one window from `lo + lo2` does.
+theorem PathIn::window_of_window<A>(lo, n, lo2, m: Nat, pad: A, inside: lo2 + m <= n):
+    PathIn<A, [A; m]>(Path::under_window(lo, n, pad, Path::window<A>(lo2, m)), Span(lo + lo2, m))
+{
+    PathIn::under_window(lo, n, pad, Path::window_in<A>(lo2, m), inside)
+}
+
+// Where both fit, the element of the window reads what the list's element
+// at `lo + i` reads.
+theorem Path::window_entry_reads<A>(lo, n, i: Nat, pad: A, xs: List<A>, fits: lo + n <= xs.len(), inside: i < n):
+    Path::window<A>(lo, n).then(Path::entry(n, i, pad)).get(xs) = xs.nth(i + lo)
+{
+    trans(Path::under_window_get(lo, n, pad, Path::elem<A>(i), xs, fits), xs.run_list_nth(lo, n, i, inside))
+}
+
+// Two elements of windows, decided apart by their spans.
+theorem Path::window_entries_apart<A>(lo, n, i, lo2, n2, i2: Nat, pad: A, inside: i < n, inside2: i2 < n2, verdict: Span(lo + i, 1).apart(Span(lo2 + i2, 1)).IsTrue()):
+    Apart<List<A>, A, A>(Path::window<A>(lo, n).then(Path::entry(n, i, pad)), Path::window<A>(lo2, n2).then(Path::entry(n2, i2, pad)))
+{
+    PathIn::apart_sound(PathIn::window_entry(lo, n, i, pad, inside), PathIn::window_entry(lo2, n2, i2, pad, inside2), verdict)
+}

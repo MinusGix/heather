@@ -1,0 +1,365 @@
+// An element of a vector held by handle is one path: a key step, then an
+// index step (docs/language/ownership-design.md §10.4, §10.6, §10.7;
+// issues/ownership-library-join.md). The handles of `arena_handles.hthr`
+// and the paths of `path.hthr` meet here.
+//
+// - **The key step** (`Heap::window_path(w) : Path<Heap, [u64; n]>`, `n`
+//   the window's count): the window's words, behind the check that the
+//   window's key still names it (`Heap::holds`, which decides
+//   `Heap::Valid`: the claims' key read answers this window,
+//   `Store::key_path` of `store_path.hthr` read at the claims). Lawful
+//   (`window_laws`), and **valid exactly where the handle is**
+//   (`window_valid`, `valid_of_window`).
+// - **The index step** is a vector's entry (`Path::entry`,
+//   `vector_path.hthr`), so the element is
+//   `Heap::elem_path(w, i) = window_path(w).then(entry(n, i))`: lawful
+//   (`elem_laws`), with **one validity statement**, the handle valid and
+//   the index below its count (`elem_valid`, `elem_valid_parts`).
+// - **Its footprint** is the word `base + i` behind the key: the element is,
+//   spelled again (`elem_same`), the guarded heap path through
+//   `window(base, n).then(entry(n, i))` over the heap's words, which lies in
+//   `Span(base + i, 1)` (`PathIn::window_entry`). Two elements are decided
+//   apart by their spans (`elems_apart`); two elements of valid windows of
+//   different keys are apart at every heap (`valid_elems_apart`: the claims
+//   are apart, `Heap::valid_apart`), and so are two elements of one window
+//   at different indexes (`elems_apart_in`).
+// - **The handle's own read and store are the path's** (`read_is_elem`,
+//   `store_is_elem`): `Heap::read` answers what the element path reads and
+//   `Heap::store` is its write.
+// - **A vector's element** (`Heap::vec_elem(v, i)`, the element of the data
+//   window): valid below the length under `VecOk` (`vec_elem_valid`),
+//   reading the vector's item (`vec_elem_items`), and reading what the paths
+//   package's element (`Arena::elem_path` of `arena_paths.hthr`, taken in
+//   the window the header points at) reads (`vec_elem_agrees`). The two
+//   name one word; the handle's path carries the key, `elem_path` the
+//   window the header points at.
+import logic;
+import bool;
+import nat;
+import list;
+import list_window;
+import option;
+import pair;
+import vector;
+import omega;
+import bitvec_nat;
+import bitvec_omega;
+import runtime_data;
+import span_set;
+import location;
+import path;
+import list_path;
+import vector_path;
+import arena;
+import arena_laws;
+import store;
+import arena_handles;
+import arena_paths;
+import pcm_share;
+import held;
+
+// ---------------------------------------------------------------------------
+// The heap's words
+
+// A write of the words keeps the arena's top and limit and the claims, so
+// the invariant holds as it did.
+fn Heap::words() → Location<Heap, [u64; 16]> {
+    Location<Heap, [u64; 16]>(
+        read := λ (h: Heap) => h.arena.heap,
+        write := λ (h: Heap) => λ (hp: [u64; 16]) => Heap(Arena(h.arena.top, h.arena.limit, hp), h.claims, HeapInv(h.ok.limit, h.ok.top, h.ok.below, h.ok.apart)),
+    )
+}
+
+theorem Heap::words_laws(): LocationLaws<Heap, [u64; 16]>(Heap::words()) { LocationLaws(λ h => refl, λ h hp => refl, λ h a b => refl) }
+
+// A path into the list of the heap's words, as a path of the heap.
+fn Heap::word_path<V>(q: Path<List<u64>, V>) → Path<Heap, V> { Path::of_location(Heap::words()).then(Path::in_vector(16, BitVec::ofNat(0, n := 64), q)) }
+
+theorem Heap::word_path_laws<V>(q: Path<List<u64>, V>, ql: PathLaws<List<u64>, V>(q), shape: Path::Shapely(q)): PathLaws<Heap, V>(Heap::word_path(q)) {
+    Path::of_location(Heap::words()).then_laws(Path::in_vector(16, BitVec::ofNat(0, n := 64), q), Path::of_location_laws(Heap::words(), Heap::words_laws()),
+        Path::in_vector_laws(16, BitVec::ofNat(0, n := 64), q, ql, shape))
+}
+
+theorem Heap::words_len(self h: Heap): vector_entries(h.arena.heap).len() = 16 { vector_entries_len(16, h.arena.heap) }
+
+// ---------------------------------------------------------------------------
+// The key step: a window behind its key
+
+fn Claim::same(self c, d: Claim) → Bool { c.base.same(d.base) && c.count.same(d.count) }
+
+// The check that the window's key still names it: the claims' read at the
+// key answers this window.
+fn Heap::holds(w: Window) → Heap → Bool { λ (h: Heap) => h.claims.get(w.key).is_some_and(λ (c: Claim) => c.same(w.claim())) }
+
+theorem Heap::holds_of(w: Window, h: Heap): (o: Option<Claim>) → h.claims.get(w.key) = o → o.is_some_and(λ (c: Claim) => c.same(w.claim())) = True → h.Valid(w) {
+    λ o => match o {
+        None => λ e no => absurd(no),
+        Some(c) => λ e yes => {
+            let parts = c.base.same(w.claim().base).and_true_parts(c.count.same(w.claim().count), yes);
+            let b: (c.base = w.claim().base) = c.base.same_sound(w.claim().base, parts.left);
+            let n: (c.count = w.claim().count) = c.count.same_sound(w.claim().count, parts.right);
+            trans(e, cong_fn(λ (d: Claim) => Some(d), cong_args(λ (x: Nat) => λ (y: Nat) => Claim(x, y), b, n)))
+        },
+    }
+}
+
+// The check decides validity, both ways.
+theorem Heap::holds_sound(self h: Heap, w: Window, yes: Heap::holds(w, h) = True): h.Valid(w) { Heap::holds_of(w, h, h.claims.get(w.key), refl, yes) }
+
+theorem Heap::holds_complete(self h: Heap, w: Window, valid: h.Valid(w)): Heap::holds(w, h) = True {
+    trans(cong_fn(λ (o: Option<Claim>) => o.is_some_and(λ (c: Claim) => c.same(w.claim())), valid),
+        trans(cong_fn(λ (b: Bool) => b && w.claim().count.same(w.claim().count), w.claim().base.same_self()), w.claim().count.same_self()))
+}
+
+fn Heap::window_path(w: Window) → Path<Heap, [u64; w.count.toNat()]> {
+    Path::guard(Heap::holds(w), Heap::word_path(Path::window<u64>(w.base.toNat(), w.count.toNat())))
+}
+
+theorem Heap::window_laws(w: Window): PathLaws<Heap, [u64; w.count.toNat()]>(Heap::window_path(w)) {
+    Path::guard_laws(Heap::holds(w), Heap::word_path(Path::window<u64>(w.base.toNat(), w.count.toNat())),
+        Heap::word_path_laws(Path::window<u64>(w.base.toNat(), w.count.toNat()), Path::window_laws<u64>(w.base.toNat(), w.count.toNat()),
+            Path::window_shapely<u64>(w.base.toNat(), w.count.toNat())),
+        λ h v => refl)
+}
+
+// The key step is valid exactly where the handle is.
+theorem Heap::window_valid(self h: Heap, w: Window, valid: h.Valid(w)): Heap::window_path(w).Valid(h) {
+    let fits = h.fits(w, valid);
+    Path::guard_valid(Heap::holds(w), Heap::word_path(Path::window<u64>(w.base.toNat(), w.count.toNat())), h, h.holds_complete(w, valid),
+        Path::window_valid<u64>(w.base.toNat(), w.count.toNat(), vector_entries(h.arena.heap), omega(fits, h.words_len())))
+}
+
+theorem Heap::valid_of_window(self h: Heap, w: Window, valid: Heap::window_path(w).Valid(h)): h.Valid(w) {
+    h.holds_sound(w, Path::guard_valid_on(Heap::holds(w), Heap::word_path(Path::window<u64>(w.base.toNat(), w.count.toNat())), h, valid))
+}
+
+// ---------------------------------------------------------------------------
+// The index step: an element of the window
+
+fn Heap::elem_path(w: Window, i: Nat) → Path<Heap, u64> { Heap::window_path(w).then(Path::entry(w.count.toNat(), i, BitVec::ofNat(0, n := 64))) }
+
+theorem Heap::elem_laws(w: Window, i: Nat): PathLaws<Heap, u64>(Heap::elem_path(w, i)) {
+    Heap::window_path(w).then_laws(Path::entry(w.count.toNat(), i, BitVec::ofNat(0, n := 64)), Heap::window_laws(w), Path::entry_laws(w.count.toNat(), i, BitVec::ofNat(0, n := 64)))
+}
+
+// One validity statement: the handle valid and the index below its count.
+theorem Heap::elem_valid(self h: Heap, w: Window, i: Nat, valid: h.Valid(w), inside: i < w.count.toNat()): Heap::elem_path(w, i).Valid(h) {
+    let wv = h.window_valid(w, valid);
+    Heap::window_path(w).then_valid(Path::entry(w.count.toNat(), i, BitVec::ofNat(0, n := 64)), h, wv.witness, wv.proof,
+        Path::entry_valid(w.count.toNat(), i, BitVec::ofNat(0, n := 64), wv.witness, inside))
+}
+
+theorem Heap::elem_inside_of(w: Window, i: Nat, h: Heap, b: u64): (o: Option<[u64; w.count.toNat()]>) → Heap::window_path(w).get(h) = o →
+    Heap::elem_path(w, i).get(h) = Some(b) → i < w.count.toNat()
+{
+    λ o => match o {
+        None => λ e got => absurd(trans(sym(Heap::window_path(w).then_get_none(Path::entry(w.count.toNat(), i, BitVec::ofNat(0, n := 64)), h, e)), got)),
+        Some(a) => λ e got => Path::entry_inside(w.count.toNat(), i, BitVec::ofNat(0, n := 64), a,
+            Exists(b, trans(sym(Heap::window_path(w).then_get_at(Path::entry(w.count.toNat(), i, BitVec::ofNat(0, n := 64)), h, a, e)), got))),
+    }
+}
+
+theorem Heap::elem_valid_parts(self h: Heap, w: Window, i: Nat, valid: Heap::elem_path(w, i).Valid(h)): And<h.Valid(w), i < w.count.toNat()> {
+    And(h.valid_of_window(w, Heap::window_path(w).then_valid_outer(Path::entry(w.count.toNat(), i, BitVec::ofNat(0, n := 64)), h, Heap::window_path(w).get(h), refl, valid)),
+        Heap::elem_inside_of(w, i, h, valid.witness, Heap::window_path(w).get(h), refl, valid.proof))
+}
+
+// ---------------------------------------------------------------------------
+// Its footprint
+
+// The element over the list of the heap's words: a window, then the entry.
+fn Heap::elem_run(w: Window, i: Nat) → Path<List<u64>, u64> { Path::window<u64>(w.base.toNat(), w.count.toNat()).then(Path::entry(w.count.toNat(), i, BitVec::ofNat(0, n := 64))) }
+
+// The element, spelled as one guarded path over the heap's words.
+fn Heap::elem_words(w: Window, i: Nat) → Path<Heap, u64> { Path::guard(Heap::holds(w), Heap::word_path(Heap::elem_run(w, i))) }
+
+theorem Heap::elem_same(w: Window, i: Nat): PathSame<Heap, u64>(Heap::elem_path(w, i), Heap::elem_words(w, i)) {
+    let win = Path::window<u64>(w.base.toNat(), w.count.toNat());
+    let ent = Path::entry(w.count.toNat(), i, BitVec::ofNat(0, n := 64));
+    let iv = Path::in_vector(16, BitVec::ofNat(0, n := 64), win);
+    let words = Path::of_location(Heap::words());
+    let regroup: PathSame<Heap, u64>(words.then(iv).then(ent), words.then(iv.then(ent))) =
+        Path::then_assoc(words, iv, ent, Path::of_location_laws(Heap::words(), Heap::words_laws()));
+    let inner: PathSame<Heap, u64>(words.then(iv.then(ent)), Heap::word_path(Heap::elem_run(w, i))) =
+        PathSame::after(words, Path::in_vector_then(16, BitVec::ofNat(0, n := 64), win, ent));
+    PathSame::then(Path::guard_then(Heap::holds(w), words.then(iv), ent), PathSame::guard(Heap::holds(w), PathSame::then(regroup, inner)))
+}
+
+theorem Heap::elem_run_in(w: Window, i: Nat, inside: i < w.count.toNat()): PathIn<u64, u64>(Heap::elem_run(w, i), Span(w.base.toNat() + i, 1)) {
+    PathIn::window_entry(w.base.toNat(), w.count.toNat(), i, BitVec::ofNat(0, n := 64), inside)
+}
+
+// Two elements in spans the verdict finds apart are apart at every heap.
+theorem Heap::elems_apart(w1, w2: Window, i1, i2: Nat, in1: i1 < w1.count.toNat(), in2: i2 < w2.count.toNat(),
+    verdict: Span(w1.base.toNat() + i1, 1).apart(Span(w2.base.toNat() + i2, 1)).IsTrue()):
+    Apart<Heap, u64, u64>(Heap::elem_path(w1, i1), Heap::elem_path(w2, i2))
+{
+    let r1 = Heap::elem_run_in(w1, i1, in1);
+    let r2 = Heap::elem_run_in(w2, i2, in2);
+    let lists: Apart<List<u64>, u64, u64>(Heap::elem_run(w1, i1), Heap::elem_run(w2, i2)) = PathIn::apart_sound(r1, r2, verdict);
+    let vecs = Apart::in_vector(16, BitVec::ofNat(0, n := 64), lists, r1.shape, r2.shape);
+    let heaps = Apart::under(Path::of_location(Heap::words()), Path::of_location_laws(Heap::words(), Heap::words_laws()), vecs);
+    let guarded: Apart<Heap, u64, u64>(Heap::elem_words(w1, i1), Heap::elem_words(w2, i2)) =
+        Path::guard_apart(Heap::holds(w1), Heap::holds(w2), heaps, λ h v => refl, λ h v => refl);
+    guarded.respects(PathSame::symm(Heap::elem_same(w1, i1)), PathSame::symm(Heap::elem_same(w2, i2)))
+}
+
+// Two elements of valid windows of different keys: the claims are apart,
+// so the elements are, at every heap.
+theorem Heap::valid_elems_apart(self h: Heap, w1, w2: Window, i1, i2: Nat, valid1: h.Valid(w1), valid2: h.Valid(w2),
+    other: ¬(w1.key.index = w2.key.index), in1: i1 < w1.count.toNat(), in2: i2 < w2.count.toNat()):
+    Apart<Heap, u64, u64>(Heap::elem_path(w1, i1), Heap::elem_path(w2, i2))
+{
+    Heap::elems_apart(w1, w2, i1, i2, in1, in2, match h.valid_apart(w1, w2, valid1, valid2, other) {
+        Inl(before) => omega(before, in1),
+        Inr(after) => omega(after, in2),
+    })
+}
+
+// Two elements of one window at different indexes.
+theorem Heap::elems_apart_in(w: Window, i, k: Nat, in_i: i < w.count.toNat(), in_k: k < w.count.toNat(), ne: i ≠ k):
+    Apart<Heap, u64, u64>(Heap::elem_path(w, i), Heap::elem_path(w, k))
+{
+    Heap::elems_apart(w, w, i, k, in_i, in_k, omega(ne))
+}
+
+// ---------------------------------------------------------------------------
+// The handle's read and store are the path's
+
+// A valid element reads the heap's word at `base + i`.
+theorem Heap::elem_reads(self h: Heap, w: Window, i: Nat, valid: h.Valid(w), inside: i < w.count.toNat()):
+    Heap::elem_path(w, i).get(h) = Some(h.arena.word(i + w.base.toNat()))
+{
+    let fits = h.fits(w, valid);
+    let word: (vector_get(h.arena.heap, i + w.base.toNat(), BitVec::ofNat(0, n := 64)) = h.arena.word(i + w.base.toNat())) = refl;
+    let lt: (i + w.base.toNat() < 16) = omega(fits, inside);
+    let at: (vector_entries(h.arena.heap).nth(i + w.base.toNat()) = Some(h.arena.word(i + w.base.toNat()))) =
+        trans(vector_entries_nth(16, h.arena.heap, i + w.base.toNat(), lt),
+            cong_fn(λ (x: u64) => Some(x), trans(sym(vector_get_inside(16, h.arena.heap, i + w.base.toNat(), BitVec::ofNat(0, n := 64), lt)), word)));
+    trans(Heap::elem_same(w, i).gets(h), trans(Path::guard_get_on(Heap::holds(w), Heap::word_path(Heap::elem_run(w, i)), h, h.holds_complete(w, valid)),
+        trans(Path::window_entry_reads(w.base.toNat(), w.count.toNat(), i, BitVec::ofNat(0, n := 64), vector_entries(h.arena.heap), omega(fits, h.words_len()), inside), at)))
+}
+
+theorem Heap::read_is_elem(self h: Heap, w: Window, i: u64, valid: h.Valid(w), li: i.toNat() < w.count.toNat()):
+    Heap::elem_path(w, i.toNat()).get(h) = Some(h.read(w, i, valid := valid))
+{
+    let fits = h.fits(w, valid);
+    let sum: ((w.base + i).toNat() = w.base.toNat() + i.toNat()) = Arena::sum_inside(w.base, i, 16, omega(li, fits), omega);
+    let place: (i.toNat() + w.base.toNat() = (w.base + i).toNat()) = omega(sum);
+    trans(h.elem_reads(w, i.toNat(), valid, li), cong_fn(λ (j: Nat) => Some(h.arena.word(j)), place))
+}
+
+// The path's write over the list of the words is the list's update at
+// `base + i`.
+theorem Heap::elem_run_set(w: Window, i: Nat, inside: i < w.count.toNat(), xs: List<u64>, fits: w.base.toNat() + w.count.toNat() <= xs.len(), x: u64):
+    Heap::elem_run(w, i).set(xs, x) = xs.update(i + w.base.toNat(), λ _ => x)
+{
+    let r = Heap::elem_run_in(w, i, inside);
+    let laws: PathLaws<List<u64>, u64>(Heap::elem_run(w, i)) =
+        Path::window<u64>(w.base.toNat(), w.count.toNat()).then_laws(Path::entry(w.count.toNat(), i, BitVec::ofNat(0, n := 64)),
+            Path::window_laws<u64>(w.base.toNat(), w.count.toNat()), Path::entry_laws(w.count.toNat(), i, BitVec::ofNat(0, n := 64)));
+    let read: (Heap::elem_run(w, i).get(xs) = xs.nth(i + w.base.toNat())) = Path::window_entry_reads(w.base.toNat(), w.count.toNat(), i, BitVec::ofNat(0, n := 64), xs, fits, inside);
+    let here = xs.nth_present(i + w.base.toNat(), omega(fits, inside));
+    let len: (Heap::elem_run(w, i).set(xs, x).len() = xs.update(i + w.base.toNat(), λ _ => x).len()) =
+        trans(r.shape(xs, x), sym(xs.len_update(i + w.base.toNat(), λ _ => x)));
+    Heap::elem_run(w, i).set(xs, x).ext_nth(xs.update(i + w.base.toNat(), λ _ => x), len, λ k _ => match Nat::eq_dec(k, i + w.base.toNat()) {
+        Inl(same) => {
+            let written: (Heap::elem_run(w, i).get(Heap::elem_run(w, i).set(xs, x)) = Some(x)) = laws.set_get(xs, here.witness, x, trans(read, here.proof));
+            let at: (Heap::elem_run(w, i).set(xs, x).nth(i + w.base.toNat()) = Some(x)) =
+                trans(sym(Path::window_entry_reads(w.base.toNat(), w.count.toNat(), i, BitVec::ofNat(0, n := 64), Heap::elem_run(w, i).set(xs, x), omega(fits, r.shape(xs, x)), inside)), written);
+            let upd: (xs.update(i + w.base.toNat(), λ _ => x).nth(i + w.base.toNat()) = Some(x)) = xs.nth_update_here(i + w.base.toNat(), λ _ => x, here.witness, here.proof);
+            j(sym(same), λ m _ => Heap::elem_run(w, i).set(xs, x).nth(m) = xs.update(i + w.base.toNat(), λ _ => x).nth(m), trans(at, sym(upd)))
+        },
+        Inr(other) => trans(r.frame(xs, x, k, λ inn => other(omega(inn))), sym(xs.nth_update_other(i + w.base.toNat(), λ _ => x, k, other))),
+    })
+}
+
+theorem Heap::store_is_elem(self h: Heap, w: Window, i, x: u64, valid: h.Valid(w), li: i.toNat() < w.count.toNat()):
+    h.store(w, i, x, valid := valid) = Heap::elem_path(w, i.toNat()).set(h, x)
+{
+    let fits = h.fits(w, valid);
+    let sum: ((w.base + i).toNat() = i.toNat() + w.base.toNat()) = { let s = Arena::sum_inside(w.base, i, 16, omega(li, fits), omega); omega(s) };
+    let list: (Heap::elem_run(w, i.toNat()).set(vector_entries(h.arena.heap), x) = vector_entries(h.arena.heap).update(i.toNat() + w.base.toNat(), λ _ => x)) =
+        Heap::elem_run_set(w, i.toNat(), li, vector_entries(h.arena.heap), omega(fits, h.words_len()), x);
+    let heap: (vector_update(h.arena.heap, (w.base + i).toNat(), x) = Heap::elem_run(w, i.toNat()).set(vector_entries(h.arena.heap), x).vector_of(16, BitVec::ofNat(0, n := 64))) =
+        trans(sym(vector_of_entries_exact(16, BitVec::ofNat(0, n := 64), vector_update(h.arena.heap, (w.base + i).toNat(), x))),
+            cong_fn(λ (ys: List<u64>) => ys.vector_of(16, BitVec::ofNat(0, n := 64)),
+                trans(vector_entries_update(16, h.arena.heap, (w.base + i).toNat(), x),
+                    trans(cong_fn(λ (m: Nat) => vector_entries(h.arena.heap).update(m, λ _ => x), sum), sym(list)))));
+    trans(cong_fn(λ (hp: [u64; 16]) => Heap::words().write(h, hp), heap),
+        trans(sym(Path::guard_set_on(Heap::holds(w), Heap::word_path(Heap::elem_run(w, i.toNat())), h, h.holds_complete(w, valid), x)),
+            sym(Heap::elem_same(w, i.toNat()).sets(h, x))))
+}
+
+// ---------------------------------------------------------------------------
+// A vector's element
+
+fn Heap::vec_elem(v: VecHandle, i: Nat) → Path<Heap, u64> { Heap::elem_path(v.data, i) }
+
+// Valid below the length.
+theorem Heap::vec_elem_valid(self h: Heap, v: VecHandle, ok: VecOk(h, v), i: Nat, below: i < h.arena.cell(v.header.base + 2).toNat()): Heap::vec_elem(v, i).Valid(h) {
+    let len = ok.len;
+    h.elem_valid(v.data, i, ok.data, omega(below, len))
+}
+
+theorem Arena::slice_nth(a: Arena, n: Nat): (s, i: Nat) → i < n → a.slice(s, n).nth(i) = Some(a.word(s + i)) {
+    match n {
+        Zero => λ s i no => false_elim(omega(no)),
+        Succ(_, ih) => λ s i => match i {
+            Zero => λ _ => { let e: (s = s + 0) = omega; cong_fn(λ (k: Nat) => Some(a.word(k)), e) },
+            Succ(j) => λ lt => { let e: (s + 1 + j = s + (j + 1)) = omega; trans(ih(s + 1, j, omega(lt)), cong_fn(λ (k: Nat) => Some(a.word(k)), e)) },
+        },
+    }
+}
+
+// It reads the vector's item.
+theorem Heap::vec_elem_items(self h: Heap, v: VecHandle, ok: VecOk(h, v), i: Nat, below: i < h.arena.cell(v.header.base + 2).toNat()):
+    Heap::vec_elem(v, i).get(h) = h.items(v).nth(i)
+{
+    let len = ok.len;
+    let b: (h.arena.cell(v.header.base).toNat() = v.data.base.toNat()) = cong_fn(λ (x: u64) => x.toNat(), ok.base);
+    trans(h.elem_reads(v.data, i, ok.data, omega(below, len)),
+        trans(cong_fn(λ (k: Nat) => Some(h.arena.word(k)), { let e: (i + v.data.base.toNat() = h.arena.cell(v.header.base).toNat() + i) = omega(b); e }),
+            sym(Arena::slice_nth(h.arena, h.arena.cell(v.header.base + 2).toNat(), h.arena.cell(v.header.base).toNat(), i, below))))
+}
+
+// And what the paths package's element, taken in the window the header
+// points at, reads.
+theorem Heap::vec_elem_agrees(self h: Heap, v: VecHandle, ok: VecOk(h, v), i: Nat, below: i < h.arena.cell(v.header.base + 2).toNat()):
+    Heap::vec_elem(v, i).get(h) = Arena::elem_path(v.header.base, v.data.base, i).get(h.arena)
+{
+    let len = ok.len;
+    let a = h.arena;
+    let av: (Arena::elem_path(v.header.base, a.cell(v.header.base), i).Valid(a)) = Arena::elem_valid(a, v.header.base, h.vec_inv(v, ok), i, below);
+    let at: (Arena::elem_path(v.header.base, v.data.base, i).Valid(a)) = j(ok.base, λ b _ => Arena::elem_path(v.header.base, b, i).Valid(a), av);
+    let ok2: (a.elem_ok(v.header.base, v.data.base, i) = True) = Arena::elem_ok_of_valid(a, v.header.base, v.data.base, i, a.elem_ok(v.header.base, v.data.base, i), refl, at);
+    trans(h.elem_reads(v.data, i, ok.data, omega(below, len)),
+        trans(cong_fn(λ (k: Nat) => Some(a.word(k)), { let e: (i + v.data.base.toNat() = v.data.base.toNat() + i) = omega; e }), sym(Arena::elem_get_ok(a, v.header.base, v.data.base, i, ok2))))
+}
+
+// Two elements of a vector at different indexes are apart, and an element
+// of it is apart from an element of any other valid window of another key.
+theorem Heap::vec_elems_apart(v: VecHandle, i, k: Nat, in_i: i < v.data.count.toNat(), in_k: k < v.data.count.toNat(), ne: i ≠ k):
+    Apart<Heap, u64, u64>(Heap::vec_elem(v, i), Heap::vec_elem(v, k))
+{
+    Heap::elems_apart_in(v.data, i, k, in_i, in_k, ne)
+}
+
+// ---------------------------------------------------------------------------
+// What an allocation hands out is owned exclusively
+
+fn Window::span(self w: Window) → Span { Span(w.base.toNat(), w.count.toNat()) }
+
+theorem Heap::valid_owns(self h: Heap, w1, w2: Window, valid1: h.Valid(w1), valid2: h.Valid(w2), other: ¬(w1.key.index = w2.key.index)):
+    Held::own(w1.span()).join(Held::own(w2.span())).Valid()
+{
+    let ap = h.valid_apart(w1, w2, valid1, valid2, other);
+    Held::owns_compose(w1.span(), w2.span(), λ x h1 h2 => match ap { Inl(p) => omega(p, h1, h2), Inr(p) => omega(p, h1, h2) })
+}
+
+theorem Heap::alloc_owns(self h: Heap, size: u64, w: Window, granted: Heap::alloc(h, size).value = Granted(w), w2: Window, valid2: h.Valid(w2)):
+    Held::own(w.span()).join(Held::own(w2.span())).Valid()
+{
+    Heap::alloc(h, size).after.valid_owns(w, w2, Heap::alloc_valid(h, size, w, granted), Heap::alloc_keeps(h, size, w2, valid2),
+        λ e => Heap::alloc_other_key(h, size, w, granted, w2, valid2, sym(e)))
+}
