@@ -5,7 +5,7 @@ labels: [ownership,native,runtime-fn]
 area: heather-in-heather
 milestone: [nh-ownership]
 created: 2026-11-24
-updated: 2026-11-24
+updated: 2026-11-25
 ---
 
 A plain `runtime fn` of words, and a function over a span that writes it, cannot take an erased parameter (a proof, an `Erased<A>`): each is refused by name ("a function of words that takes an erased parameter … is not compiled yet", "a function over a span that takes an erased parameter …"; probes in `lib/_tests/native/runtime/runtime_erased_tests.hthr`). A function of a laid record and one of a `Bytes(n)` take them ([[runtime-erased-parameters]]). The difference is what each compiles: a record's or a `Bytes(n)`'s code is compiled from *the reflection written out* (`HWorld::of_record`, `o.compiled` in `runtime_span_publish`), a closed term with no proof in it, and only `runs_held` / `runs_bytes` mention the function, at every value of its erased parameters. A plain function's `Compile(f)` instance, and a span writer's, are typed by `f`'s own signature (`Setup::compile`'s `typed: Itself(F) = Itself(Ty::Lent(…))`), and a caller's table lists the callee itself as a total function of its words. Neither has room for a parameter the code does not take.
@@ -27,3 +27,7 @@ The alternative that avoids both: compile a plain function, too, from its reflec
 
 - **A function of a laid record calling one that takes an erased parameter** (refused, "a call of a function of a laid record that takes an erased parameter is not taken yet"): the caller's held meaning names the callee as a function of record and words (`Writer::runs`), the same gap at the record level. With the callee's reflection written out as its mark, the caller's pin would read the callee's code; what the mark owes would be `T::n::runs_held` at the call's proof, which the caller has where the call is written.
 - **Loops** taking an erased parameter wait for [[loops-on-one-combinator]] (round 4): the loop layer (`rt_held_loop`, `rt_bytes_loop`) hands the recursion its words, and an erased parameter would ride beside them.
+
+## Log
+
+- 2026-11-25: Second wave of `docs/language/ownership-design.md` §12: taken as its own round. It is on the critical path: the judgment's obligations (`Valid`, `Apart`) travel as erased proofs, so a compiled caller of a function that takes one is what lets them reach compiled code.

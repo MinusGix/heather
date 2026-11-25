@@ -595,15 +595,29 @@ package waiting on another.
 | Views of one buffer known apart, then two written views: `split_at_mut` through the machine | `views-of-one-buffer-apart` | FunctionIR, x86 views |
 | Proof and erased parameters of a laid-record `runtime fn`, so an access carries its obligation into compiled code | `runtime-erased-parameters` | reflector, generator |
 
-**Second wave**, each after what it names:
+**The first wave is built** (2026-11-24, merged on one branch and its suite
+green). What it showed missing between it and the discipline working end to
+end: a compiled function cannot call one that takes a proof
+(`runtime-erased-pure-shadow`); a `runtime fn` cannot say `split_at_mut`,
+since the reflector refuses a window of the span a call writes though the
+lowering takes it (`rt-window-of-the-written-span`); and nothing reads the
+modes the surface records.
 
-- `Copy`, `Clone` and the exact-clone extension, derived from a layout
-  (after `ownership-paths`; consumer: the judgment).
+**Second wave.** No package waits on another.
+
+| Package | Issue | Where |
+|---|---|---|
+| A plain function and a span writer taking an erased parameter, compiled from the reflection written out, so a compiled caller passes a found proof | `runtime-erased-pure-shadow` | generator, reflector |
+| A window to read, and a second to write, of the span a call writes: `split_at_mut` said in a `runtime fn` | `rt-window-of-the-written-span` | reflector, `FTm` |
+| `Copy`, `Clone` and the exact-clone extension, derived from a layout | `ownership-copy-clone` | library |
+| The first wave's libraries joined: a key as a path step, footprints for fields, the algebra at paths | `ownership-library-join` | library, pure |
+
+**Third wave**, designed against what the second produces:
+
 - **The judgment**: access kinds, moves and regions over reflected code,
-  raising `Valid` and `Apart` as fact requests, as a checker of annotations
-  with inference beside it (after paths, modes, and the one control
-  language). It replaces the reflector's linearity refusals and
-  `Program::owned`.
+  reading the modes (`tactic::modes`), raising `Valid` and `Apart` as fact
+  requests, as a checker of annotations with inference beside it. It
+  replaces the reflector's linearity refusals and `Program::owned`.
 - **Homes for owned values and the in-place lowering**: what `unique-fact`
   leaves, with a vector owned by a local living in the arena.
 - **Stored borrows**: place-named regions on records, frozen views in a
