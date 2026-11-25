@@ -770,17 +770,12 @@ fn Setup::compile_measured<F>(s: Setup, ks: List<Ty>, w0: Ty, wrest: List<Ty>, r
 // A measured recursion written as a loop node
 // (docs/language/loop-combinator-design.md §6.8): its reflection is the node
 // over its words (`Fun::as_node`), a plain function, and its pin is its
-// unfolding read through the node's rounds (`loop::Loop::rounds_agree`).
+// unfolding read through the node's rounds (`loop::Loop::rounds_agree_below`).
 
-// What the function owes at a world: the node's pass, its going round
-// answered by anything that agrees with the function below the measure, is
-// the function. `Fun::Guarded`'s statement, for the node; the generator
-// proves it from the function's own `f::ext` and `f::irrel`.
-fn Setup::NodePass(ws: List<Ty>, body: Tm, w: World, h: Ty::Arrows(w.tys, ws, body.ty(w, Ty::bind_onto(ws, Nil))), m: List<BitVec(64)> → Nat) → Type {
-    Ty::ForWords(ws, λ (xs: List<BitVec(64)>) => (k: List<BitVec(64)> → body.ty(w, Ty::bind_onto(ws, Nil)).sem(w.tys)) →
-        ((ys: List<BitVec(64)>) → ys.len() = ws.len() → m(ys) < m(xs) → k(ys) = Ty::apply(w.tys, ws, body.ty(w, Ty::bind_onto(ws, Nil)), h, ys)) →
-        Tm::loop_body(w, ws, body, k, xs) = Ty::apply(w.tys, ws, body.ty(w, Ty::bind_onto(ws, Nil)), h, xs))
-}
+// What the function owes at a world is `Tm::NodePass` (rt_lower_defined):
+// the node's pass, its going round answered by anything that agrees with
+// the function below the measure, is the function. The generator proves it
+// from the function's own `f::ext` and `f::irrel`.
 
 // The empty environment at a world: what a function's parameters are
 // bound onto, spelled with its world so that its table is known.
@@ -788,19 +783,25 @@ fn Setup::no_env(w: World) → Env(w.tys, []) { trivial }
 
 // The node's rounds are the function, at the words of its arguments.
 theorem Setup::node_means(ws: List<Ty>, body: Tm, w: World, h: Ty::Arrows(w.tys, ws, body.ty(w, Ty::bind_onto(ws, Nil))), m: List<BitVec(64)> → Nat,
-    pass: Setup::NodePass(ws, body, w, h, m), xs: List<BitVec(64)>, len: xs.len() = ws.len(), within: m(xs) <= Tm::passes()):
-    loop::Loop::rounds(Tm::passes(), λ (k: List<BitVec(64)> → body.ty(w, Ty::bind_onto(ws, Nil)).sem(w.tys)) (ys: List<BitVec(64)>) => Tm::loop_body(w, ws, body, k, ys),
-        λ (ys: List<BitVec(64)>) => Tm::loop_body(w, ws, body,
-            λ (zs: List<BitVec(64)>) => Ty::read_words(body.ty(w, Ty::bind_onto(ws, Nil)), w.tys, zs), ys), xs) =
+    pass: Tm::NodePass(ws, body, w, h, m), xs: List<BitVec(64)>, len: xs.len() = ws.len(), within: m(xs) <= Tm::passes()):
+    loop::Loop::rounds(Tm::rounds(), λ (k: List<BitVec(64)> → body.ty(w, Ty::bind_onto(ws, Nil)).sem(w.tys)) (ys: List<BitVec(64)>) => Tm::loop_body(w, ws, body, k, ys),
+        λ (zs: List<BitVec(64)>) => Ty::read_words(body.ty(w, Ty::bind_onto(ws, Nil)), w.tys, zs), xs) =
         Ty::apply(w.tys, ws, body.ty(w, Ty::bind_onto(ws, Nil)), h, xs) {
     let res = body.ty(w, Ty::bind_onto(ws, Nil));
     let Q = λ (ys: List<BitVec(64)>) => (k: List<BitVec(64)> → res.sem(w.tys)) →
         ((zs: List<BitVec(64)>) → zs.len() = ws.len() → m(zs) < m(ys) → k(zs) = Ty::apply(w.tys, ws, res, h, zs)) →
         Tm::loop_body(w, ws, body, k, ys) = Ty::apply(w.tys, ws, res, h, ys);
-    loop::Loop::rounds_agree(m, λ (ys: List<BitVec(64)>) => ys.len() = ws.len(), λ (ys: List<BitVec(64)>) => Ty::apply(w.tys, ws, res, h, ys),
+    loop::Loop::rounds_agree_below(m, λ (ys: List<BitVec(64)>) => ys.len() = ws.len(), λ (ys: List<BitVec(64)>) => Ty::apply(w.tys, ws, res, h, ys),
         λ (k: List<BitVec(64)> → res.sem(w.tys)) (ys: List<BitVec(64)>) => Tm::loop_body(w, ws, body, k, ys),
         λ (zs: List<BitVec(64)>) => Ty::read_words(res, w.tys, zs),
-        λ a oa k agree => Ty::for_words_at(ws, Q, pass, a, oa, k, agree), Tm::passes(), xs, len, within)
+        λ a oa k agree => Ty::for_words_at(ws, Q, pass, a, oa, k, agree), Tm::rounds(), xs, len, within)
+}
+
+// A node's measure and its pin, as what its code's definedness takes
+// (`Tm::NodeEnds`): a measured recursion's `f::ends`.
+theorem Setup::node_ends_of(ws: List<Ty>, body: Tm, w: World, h: Ty::Arrows(w.tys, ws, body.ty(w, Ty::bind_onto(ws, Nil))), m: List<BitVec(64)> → Nat,
+    bound: Ty::ForWords(ws, λ (xs: List<BitVec(64)>) => m(xs) <= Tm::passes()), pass: Tm::NodePass(ws, body, w, h, m)): Tm::NodeEnds(w, ws, body) {
+    Exists(m, ⟨bound, Exists(h, pass)⟩)
 }
 
 // What else the generator cites for a measured instance, named here for the
@@ -1409,7 +1410,7 @@ theorem Tm::ok_defines_of(w: World, ok: Tm::Oracle(w)): Tm::OkDefines(w, ok, Tm:
 theorem Setup::defined_of_lowered(f: Fun, w: World, ok: Tm::Oracle(w), r: Option<Function>): Setup::lowers(r).IsTrue() → f.DefinedHolds(w, ok, r) →
     (call: Answers()) → Tm::CallsAgree(w, call) → (defines: Defines()) → Tm::OkDefines(w, ok, defines) →
     (xs: List<BitVec(64)>) → Ty::AdmitsAll(w.tys, f.params, xs) → f.quiet(w).IsTrue() →
-    f.body.calls_ok(w, ok, f.context(), Ty::extend_words(w.tys, f.params, Nil, trivial, xs)).IsTrue() →
+    f.body.calls_ok(w, ok, f.context(), Ty::extend_words(w.tys, f.params, Nil, trivial, xs)).IsTrue() → Tm::Ends(f.body, w, f.context()) →
     Setup::code_of(r).defined(call, defines, xs, buffers := w.spans).IsTrue() {
     match r {
         None => λ never _ => false_elim(never),
@@ -1425,13 +1426,14 @@ theorem Setup::code_defined(rt: Fun, w: World, cs: Sig::Sems(w.tys, w.sigs), spa
     lowered: Setup::default().lowered(rt, w).IsTrue(), plain: rt.shape() = Plain, quiet: rt.quiet(w) = True,
     call: Answers(), agree: Tm::CallsAgree(w.over(cs, spans), call), defines: Defines(), oks: Tm::OkDefines(w.over(cs, spans), ok, defines),
     xs: List<BitVec(64)>, admitted: Ty::AdmitsAll(w.tys, rt.params, xs),
-    calls: rt.body.calls_ok(w.over(cs, spans), ok, rt.context(), Ty::extend_words(w.tys, rt.params, Nil, trivial, xs)).IsTrue()):
+    calls: rt.body.calls_ok(w.over(cs, spans), ok, rt.context(), Ty::extend_words(w.tys, rt.params, Nil, trivial, xs)).IsTrue(),
+    ends: Tm::Ends(rt.body, w.over(cs, spans), rt.context())):
     Setup::default().code(rt, w).defined(call, defines, xs, buffers := spans).IsTrue() {
     let v = w.over(cs, spans);
     let held: rt.DefinedHolds(v, ok, rt.lower_any(v)) = j(sym(plain), λ s _ => rt.DefinedHolds(v, ok, rt.lower_at(v, s)), rt.lower_defined(v, ok));
     let at_w: rt.DefinedHolds(v, ok, rt.lower_any(w)) = j(Fun::lower_any_static(rt, w, cs, spans), λ r _ => rt.DefinedHolds(v, ok, r), held);
     Setup::defined_of_lowered(rt, v, ok, rt.lower_any(w), lowered, at_w, call, agree, defines, oks, xs, admitted,
-        Bool::is_true_of_eq(trans(Fun::quiet_static(rt, w, cs, spans), quiet)), calls)
+        Bool::is_true_of_eq(trans(Fun::quiet_static(rt, w, cs, spans), quiet)), calls, ends)
 }
 
 // The rank of a function that is its own callee, on words: its measure at
@@ -1443,6 +1445,16 @@ fn Compile::rank<F>(f: F, c: Compile<F>(f), measure: Ty::ArrowsTo(c.world.tys, S
 // What a function's calls are read at: the world of its instance at no
 // file, and the environment its words are.
 fn Compile::descent_world<F>(f: F, c: Compile<F>(f)) → World { c.world.at(c.callees, Nil) }
+
+// What a compiled function's loop nodes owe for its code to be defined
+// (`Tm::Ends`): each its measure. A function with no node owes nothing
+// (`Compile::ends_free`); a measured recursion compiled as a node pays it
+// from its pin (`f::ends`).
+fn Compile::LoopsEnd<F>(f: F, c: Compile<F>(f)) → Type { Tm::Ends(c.reflected.body, Compile::descent_world(f, c), c.reflected.context()) }
+
+theorem Compile::ends_free<F>(f: F, c: Compile<F>(f), nodeless: c.reflected.body.nodeless() = True): Compile::LoopsEnd(f, c) {
+    Tm::ends_free(c.reflected.body, Compile::descent_world(f, c), c.reflected.context(), Bool::is_true_of_eq(nodeless))
+}
 
 fn Compile::descent_env<F>(f: F, c: Compile<F>(f), xs: List<BitVec(64)>) → Env(c.world.tys, c.reflected.context()) {
     Ty::extend_words(c.world.tys, c.reflected.params, Nil, trivial, xs)
@@ -1476,6 +1488,7 @@ theorem Compile::ranked_code<F>(f: F, c: Compile<F>(f),
     checked: Setup::default().checked(c.reflected, c.world) = True,
     plain: c.reflected.shape() = Plain,
     quiet: c.reflected.quiet(c.world) = True,
+    ends: Compile::LoopsEnd(f, c),
     sig: Sig::at(c.world.sigs, 1).params = c.reflected.params,
     measure: Ty::ArrowsTo(c.world.tys, Sig::at(c.world.sigs, 1).params, Nat),
     walked: (xs: List<BitVec(64)>) → c.reflected.body.calls_ok(Compile::descent_world(f, c), Compile::descent_oracle(f, c, measure, xs),
@@ -1485,7 +1498,7 @@ theorem Compile::ranked_code<F>(f: F, c: Compile<F>(f),
         let oracle = Compile::descent_oracle(f, c, measure, xs);
         let inner = Setup::code_defined(c.reflected, c.world, c.callees(Nil), Nil, oracle, Setup::checked_lowered(Setup::default(), c.reflected, c.world, checked),
             plain, quiet, call, agree, Tm::defines_of(at, oracle), Tm::ok_defines_of(at, oracle), xs,
-            j(sig, λ ps _ => Ty::AdmitsAll(c.world.tys, ps, xs), admits), walked(xs));
+            j(sig, λ ps _ => Ty::AdmitsAll(c.world.tys, ps, xs), admits), walked(xs), ends);
         j(sym(coded), λ fn_ _ => fn_.defined(call, Tm::defines_of(at, oracle), xs).IsTrue(), inner)
     }
 }
@@ -1639,6 +1652,7 @@ theorem Compile::walked_code<F>(f: F, c: Compile<F>(f),
     checked: Setup::default().checked(c.reflected, c.world) = True,
     plain: c.reflected.shape() = Plain,
     quiet: c.reflected.quiet(c.world) = True,
+    ends: Compile::LoopsEnd(f, c),
     oks: Tm::Tests(c.world.tys, c.world.sigs.tail()), test: Ty::Arrows(c.world.tys, c.reflected.params, Bit),
     walked: (xs: List<BitVec(64)>) → Ty::apply_words(c.world.tys, c.reflected.params, Bit, test, xs).IsTrue() →
         c.reflected.body.calls_ok(Compile::descent_world(f, c), Tm::callees_oracle(Compile::descent_world(f, c), oks),
@@ -1647,7 +1661,7 @@ theorem Compile::walked_code<F>(f: F, c: Compile<F>(f),
         let at = c.world.at(c.callees, Nil);
         let oracle = Tm::callees_oracle(at, oks);
         let inner = Setup::code_defined(c.reflected, c.world, c.callees(Nil), Nil, oracle, Setup::checked_lowered(Setup::default(), c.reflected, c.world, checked),
-            plain, quiet, call, agree, Tm::defines_of(at, oracle), Tm::ok_defines_of(at, oracle), xs, admits, walked(xs, holds));
+            plain, quiet, call, agree, Tm::defines_of(at, oracle), Tm::ok_defines_of(at, oracle), xs, admits, walked(xs, holds), ends);
         j(sym(coded), λ fn_ _ => fn_.defined(call, Tm::defines_of(at, oracle), xs).IsTrue(), inner)
     }
 }
@@ -1659,8 +1673,9 @@ theorem Compile::total_code<F>(f: F, c: Compile<F>(f),
     checked: Setup::default().checked(c.reflected, c.world) = True,
     plain: c.reflected.shape() = Plain,
     quiet: c.reflected.quiet(c.world) = True,
+    ends: Compile::LoopsEnd(f, c),
     all: c.reflected.body.calls_all(c.world.sigs) = True): Compile::DefinedWhere(f, c, Compile::asks_nothing(f, c), Compile::always(f, c)) {
-    Compile::walked_code(f, c, coded, checked, plain, quiet, Compile::asks_nothing(f, c), Compile::always(f, c),
+    Compile::walked_code(f, c, coded, checked, plain, quiet, ends, Compile::asks_nothing(f, c), Compile::always(f, c),
         λ xs _ => c.reflected.body.calls_ok_all(Compile::descent_world(f, c), c.reflected.context(), Compile::descent_env(f, c, xs), all))
 }
 
@@ -1671,8 +1686,9 @@ theorem Compile::test_code<F>(f: F, c: Compile<F>(f),
     checked: Setup::default().checked(c.reflected, c.world) = True,
     plain: c.reflected.shape() = Plain,
     quiet: c.reflected.quiet(c.world) = True,
+    ends: Compile::LoopsEnd(f, c),
     oks: Tm::Tests(c.world.tys, c.world.sigs.tail())): Compile::DefinedWhere(f, c, oks, Compile::test(f, c, oks)) {
-    Compile::walked_code(f, c, coded, checked, plain, quiet, oks, Compile::test(f, c, oks),
+    Compile::walked_code(f, c, coded, checked, plain, quiet, ends, oks, Compile::test(f, c, oks),
         λ xs holds => j(Ty::apply_words_curry(c.world.tys, Bit, c.reflected.params, Nil, trivial,
                 λ (env: Env(c.world.tys, c.reflected.context())) => c.reflected.body.calls_ok(Compile::descent_world(f, c),
                     Tm::callees_oracle(Compile::descent_world(f, c), oks), c.reflected.context(), env), xs),
@@ -2838,34 +2854,32 @@ fn runtime_own_instance(name: String, f: GlobalRef, rfun: Fun, setup, world_e, t
     pure(ap(compile, [Blank, setup, rt_e, world_e, table_e, Global(f), typed, pinned, verdict, ap(rfl, [Blank, runtime_at(shapes, 0)])]))
 }
 
-// A measured recursion reflected as a loop node (`Fun::as_node`): its pin
-// is its unfolding read through the node's rounds. At each file `b` and
-// words `x…`, the meaning is the node's rounds (`Tm::sem_in_loop`), which
-// are the function (`Setup::node_means`), from the node's pass
-// (`Setup::NodePass`) proved from the function's own `f::ext` and
-// `f::irrel` as `Guarded` is (`runtime_measured_instance`), and the measure
-// a word's `toNat`, at most the passes (`Tm::word_within`).
-fn runtime_node_instance(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes, shapes: List<Expr>, setup, world_e, table_e, typed, rt_e, count: Expr,
-    reprs: List<ReprEntry>, inits: List<Nat>, body: Tm) → Tac<Expr> {
-    let compile <- runtime_global(name_of(Setup::compile));
-    let pinned_g <- runtime_global(name_of(Setup::Pinned));
-    let pass_g <- runtime_global(name_of(Setup::NodePass));
-    let means_g <- runtime_global(name_of(Setup::node_means));
-    let sem_loop_g <- runtime_global(name_of(Tm::sem_in_loop));
-    let no_label_g <- runtime_global(name_of(Tm::no_label));
-    let world_at_g <- runtime_global(name_of(World::at));
-    let within_g <- runtime_global(name_of(Tm::word_within));
-    let extend_g <- runtime_global(name_of(Ty::extend));
+// The measure of a measured recursion compiled as a node, as a function of
+// its words.
+fn runtime_node_measure(name: String, rfun: Fun, q: RtQ, ts: RtTypes, count: Expr, reprs: List<ReprEntry>) → Tac<Expr> {
+    let on_words <- runtime_global(name_of(Ty::on_words));
+    let rec <- runtime_global(name ++ "::rec");
+    let ws = rfun.params;
+    let ws_e = Ty::quotes(ws, q);
+    // The measure, as a function of the words.
+    let zs <- runtime_params(ts.word, ws, None, 0);
+    let mu_z <- runtime_measure_at(rec, runtime_args(count, reprs, ws, runtime_locals(zs)));
+    let m_e <- runtime_held(ap(on_words, [ws_e, runtime_lams(zs, Hd(mu_z))]), "a measure");
+    pure(m_e)
+}
+
+// The node's pass pinned at the world `w_b` (`Tm::NodePass`), from the
+// function's own `f::ext` and `f::irrel`.
+fn runtime_node_pass(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes, count: Expr, reprs: List<ReprEntry>, body: Tm, w_b: Expr, m_e: Expr)
+    → Tac<Expr> {
+    let pass_g <- runtime_global(name_of(Tm::NodePass));
     let rfl <- runtime_global("tactic::rfl");
     let sym_g <- runtime_global(name_of(Setup::eq_sym));
     let trans_g <- runtime_global(name_of(Setup::eq_trans));
     let lt_succ <- runtime_global(name_of(Setup::lt_succ));
-    let on_words <- runtime_global(name_of(Ty::on_words));
     let rec <- runtime_global(name ++ "::rec");
     let ext <- runtime_global(name ++ "::ext");
     let irrel <- runtime_global(name ++ "::irrel");
-    let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
-    let verdict <- runtime_verdict();
     let word_list <- runtime_ctors_at(ts.words);
     let ws = rfun.params;
     let n = ws.len();
@@ -2873,18 +2887,7 @@ fn runtime_node_instance(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTy
     let body_e = Tm::quote(body, q);
     let list: List<LocalRef> → Expr = λ ys => RtQ::seq(word_list, runtime_embs(reprs, ws, runtime_locals(ys)));
     let len_refl = ap(rfl, [Blank, NatLit(n)]);
-    // The measure, as a function of the words.
-    let zs <- runtime_params(ts.word, ws, None, 0);
-    let mu_z <- runtime_measure_at(rec, runtime_args(count, reprs, ws, runtime_locals(zs)));
-    let m_e <- runtime_held(ap(on_words, [ws_e, runtime_lams(zs, Hd(mu_z))]), "a measure");
-    // The pin's binders, opened off its statement: the file, then the
-    // function's own parameters.
     let words: List<String> = List::range(n).map(λ i => "x".append(decimal_name(2, i)));
-    let p_t <- as_type(ap(pinned_g, [Blank, Global(f), rt_e, world_e, table_e, typed])).or_fail("runtime: `" ++ name ++ "`'s pin: ");
-    let opened <- runtime_open_n(64, p_t, Cons("b", words));
-    let b = opened.fst.head_or(LocalRef(0));
-    let xs = opened.fst.drop(1);
-    let w_b = ap(world_at_g, [world_e, table_e, Local(b)]);
     // The node's pass at this file, its binders opened off its statement:
     // the words, the going round `k`, and what `k` agrees with.
     let s_t <- as_type(ap(pass_g, [ws_e, body_e, w_b, Global(f), m_e])).or_fail("runtime: `" ++ name ++ "`'s pass: ");
@@ -2918,6 +2921,75 @@ fn runtime_node_instance(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTy
     let lt_n = ap(lt_succ, [n_e]);
     let pass <- runtime_held(runtime_lams(vs.append([k_ref, hyp]),
         ap(sym_g, [Blank, Blank, Blank, ap(ext, Cons(n_e, Cons(n_e, Cons(g1, Cons(g2, Cons(hg, runtime_locals(vs).append([lt_n, lt_n])))))))])), "a loop node's pass");
+    pure(pass)
+}
+
+// A node's `f::ends` (`Tm::NodeEnds`, what its code's definedness takes):
+// its measure, a word's `toNat` at every argument, and its pass pinned at
+// the world of the empty file, where its program is defined.
+fn runtime_node_ends(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes, world_e, table_e, count: Expr, reprs: List<ReprEntry>, body: Tm)
+    → Tac<Expr> {
+    let ends_of_g <- runtime_global(name_of(Setup::node_ends_of));
+    let world_at_g <- runtime_global(name_of(World::at));
+    let within_g <- runtime_global(name_of(Tm::word_within));
+    let no_file <- runtime_global(name_of(runtime_w_buffers));
+    let rec <- runtime_global(name ++ "::rec");
+    let ws = rfun.params;
+    let m_e <- runtime_node_measure(name, rfun, q, ts, count, reprs);
+    let w_nil = ap(world_at_g, [world_e, table_e, no_file]);
+    let pass <- runtime_node_pass(name, f, rfun, q, ts, count, reprs, body, w_nil, m_e);
+    let zs <- runtime_params(ts.word, ws, None, 0);
+    let mu_z <- runtime_measure_at(rec, runtime_args(count, reprs, ws, runtime_locals(zs)));
+    let word_z <- runtime_measured_word(mu_z);
+    let bound <- runtime_held(runtime_lams(zs, ap(within_g, [Hd(word_z)])), "a node's measure bound");
+    pure(ap(ends_of_g, [Ty::quotes(ws, q), Tm::quote(body, q), w_nil, Global(f), m_e, bound, pass]))
+}
+
+// A measured recursion reflected as a loop node (`Fun::as_node`): its pin
+// is its unfolding read through the node's rounds. At each file `b` and
+// words `x…`, the meaning is the node's rounds (`Tm::sem_in_loop`), which
+// are the function (`Setup::node_means`), from the node's pass
+// (`Tm::NodePass`) proved from the function's own `f::ext` and
+// `f::irrel` as `Guarded` is (`runtime_measured_instance`), and the measure
+// a word's `toNat`, at most the passes (`Tm::word_within`).
+fn runtime_node_instance(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes, shapes: List<Expr>, setup, world_e, table_e, typed, rt_e, count: Expr,
+    reprs: List<ReprEntry>, inits: List<Nat>, body: Tm) → Tac<Expr> {
+    let compile <- runtime_global(name_of(Setup::compile));
+    let pinned_g <- runtime_global(name_of(Setup::Pinned));
+    let pass_g <- runtime_global(name_of(Tm::NodePass));
+    let means_g <- runtime_global(name_of(Setup::node_means));
+    let sem_loop_g <- runtime_global(name_of(Tm::sem_in_loop));
+    let no_label_g <- runtime_global(name_of(Tm::no_label));
+    let world_at_g <- runtime_global(name_of(World::at));
+    let within_g <- runtime_global(name_of(Tm::word_within));
+    let extend_g <- runtime_global(name_of(Ty::extend));
+    let rfl <- runtime_global("tactic::rfl");
+    let sym_g <- runtime_global(name_of(Setup::eq_sym));
+    let trans_g <- runtime_global(name_of(Setup::eq_trans));
+    let lt_succ <- runtime_global(name_of(Setup::lt_succ));
+    let on_words <- runtime_global(name_of(Ty::on_words));
+    let rec <- runtime_global(name ++ "::rec");
+    let ext <- runtime_global(name ++ "::ext");
+    let irrel <- runtime_global(name ++ "::irrel");
+    let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
+    let verdict <- runtime_verdict();
+    let word_list <- runtime_ctors_at(ts.words);
+    let ws = rfun.params;
+    let n = ws.len();
+    let ws_e = Ty::quotes(ws, q);
+    let body_e = Tm::quote(body, q);
+    let list: List<LocalRef> → Expr = λ ys => RtQ::seq(word_list, runtime_embs(reprs, ws, runtime_locals(ys)));
+    let len_refl = ap(rfl, [Blank, NatLit(n)]);
+    let m_e <- runtime_node_measure(name, rfun, q, ts, count, reprs);
+    // The pin's binders, opened off its statement: the file, then the
+    // function's own parameters.
+    let words: List<String> = List::range(n).map(λ i => "x".append(decimal_name(2, i)));
+    let p_t <- as_type(ap(pinned_g, [Blank, Global(f), rt_e, world_e, table_e, typed])).or_fail("runtime: `" ++ name ++ "`'s pin: ");
+    let opened <- runtime_open_n(64, p_t, Cons("b", words));
+    let b = opened.fst.head_or(LocalRef(0));
+    let xs = opened.fst.drop(1);
+    let w_b = ap(world_at_g, [world_e, table_e, Local(b)]);
+    let pass <- runtime_node_pass(name, f, rfun, q, ts, count, reprs, body, w_b, m_e);
     // The measure at the arguments is a word's `toNat`.
     let mu_x <- runtime_measure_at(rec, runtime_args(count, reprs, ws, runtime_locals(xs)));
     let word_x <- runtime_measured_word(mu_x);
@@ -3919,6 +3991,7 @@ fn runtime_descent(name: String, rfun: Fun, q: RtQ, ts: RtTypes, inst: List<Expr
             let rfl <- runtime_global("tactic::rfl");
             let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
             let ranked_code <- runtime_global(name_of(Compile::ranked_code));
+            let ends_free <- runtime_global(name_of(Compile::ends_free));
             let world_g <- runtime_global(name_of(Compile::descent_world));
             let oracle_g <- runtime_global(name_of(Compile::descent_oracle));
             let env_g <- runtime_global(name_of(Compile::descent_env));
@@ -3949,7 +4022,7 @@ fn runtime_descent(name: String, rfun: Fun, q: RtQ, ts: RtTypes, inst: List<Expr
                 None => pure(None),
                 Some(body) => {
                     let yes = ap(rfl, [Blank, q.boolean(True)]);
-                    let proof = ap(ranked_code, inst ++ [ap(rfl, [Blank, code_e]), yes, ap(rfl, [Blank, runtime_at(shapes, 0)]), yes,
+                    let proof = ap(ranked_code, inst ++ [ap(rfl, [Blank, code_e]), yes, ap(rfl, [Blank, runtime_at(shapes, 0)]), yes, ap(ends_free, inst ++ [yes]),
                         ap(rfl, [Blank, Ty::quotes(rfun.params, q)]), measure, Lam(xs.ref, body)]);
                     let measure_t <- infer(measure).or_fail("runtime: `" ++ name ++ "`'s measure: ");
                     infer(proof).bind(λ c => match c {
@@ -3986,7 +4059,7 @@ fn runtime_descent(name: String, rfun: Fun, q: RtQ, ts: RtTypes, inst: List<Expr
 // What the assembly names.
 record RtTestG { code_of: Expr, total_code: Expr, test_code: Expr, always: Expr, asks_nothing: Expr, test: Expr, ranked: Expr, tested: Expr, as_test: Expr,
     callee_tests: Expr, other_tests: Expr, within_flat: Expr, within_leveled: Expr, earlier: Expr, arities: Expr, both: Expr, rfl: Expr, trivial: Expr,
-    yes: Expr, plain: Expr, pair: Expr, function_t: Expr, nth: Expr }
+    yes: Expr, plain: Expr, pair: Expr, function_t: Expr, nth: Expr, ends_free: Expr }
 
 fn runtime_test_globals(q: RtQ, ts: RtTypes) → Tac<RtTestG> {
     let code_of <- runtime_global(name_of(Compile::code_of));
@@ -4009,9 +4082,10 @@ fn runtime_test_globals(q: RtQ, ts: RtTypes) → Tac<RtTestG> {
     let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
     let pair <- runtime_global(name_of(Pair::of));
     let nth <- runtime_global(name_of(List::nth));
+    let ends_free <- runtime_global(name_of(Compile::ends_free));
     let shapes <- runtime_type_of(name_of(runtime_w_shape)).bind(λ h => runtime_ctors_at(h));
     pure(RtTestG(code_of, total_code, test_code, always, asks_nothing, test, ranked, tested, as_test, callee_tests, other_tests, within_flat, within_leveled,
-        earlier, arities, both, rfl, Hd(trivial_h), ap(rfl, [Blank, q.boolean(True)]), ap(rfl, [Blank, runtime_at(shapes, 0)]), pair, Hd(ts.function), nth))
+        earlier, arities, both, rfl, Hd(trivial_h), ap(rfl, [Blank, q.boolean(True)]), ap(rfl, [Blank, runtime_at(shapes, 0)]), pair, Hd(ts.function), nth, ends_free))
 }
 
 // One function's share: `kind` 0 asked nothing, 1 its calls' test, 2 a
@@ -4037,7 +4111,7 @@ fn runtime_oks(g: RtTestG, more: LocalRef, done: List<RtPart>, callees: List<Nat
 
 // `levels` is a local of no scope, which each held test abstracts: a test
 // is a function of the levels wherever it is read (`f::within` is one).
-fn runtime_part(g: RtTestG, front: List<Expr>, links: List<Nat>, own: Bool, name: String, more, levels: LocalRef, root: Option<Pair<Expr, Expr>>, last: Bool,
+fn runtime_part(g: RtTestG, front: List<Expr>, links: List<Nat>, own: Bool, name: String, more, levels: LocalRef, root: Option<Pair<Expr, Expr>>, root_ends: Option<Expr>, last: Bool,
     done: List<RtPart>) → Tac<Option<RtPart>> {
     let inst = front.take(3);
     match own {
@@ -4058,8 +4132,13 @@ fn runtime_part(g: RtTestG, front: List<Expr>, links: List<Nat>, own: Bool, name
                     pure(Some(RtPart(2, t, g.trivial, md.snd, md.fst)))),
             })
         },
-        False => {
-            let facts: List<Expr> = [ap(g.rfl, [g.function_t, ap(g.code_of, inst)]), g.yes, g.plain, g.yes];
+        // What its loop nodes owe (`Compile::LoopsEnd`): a node's measure from
+        // its pin (`f::ends`), or nothing where it has none.
+        False => (match (match last { True => root_ends, False => None }) as λ _ => Tac<Expr> {
+                Some(e) => pure(e),
+                None => lookup(name ++ "::ends").bind(λ found => pure(match found { Accepted(eg) => Global(eg), Refused(_) => ap(g.ends_free, inst ++ [g.yes]) })),
+            }).bind(λ ends_e => {
+            let facts: List<Expr> = [ap(g.rfl, [g.function_t, ap(g.code_of, inst)]), g.yes, g.plain, g.yes, ends_e];
             let callees = links.drop(1);
             let tested: Tac<Option<RtPart>> = match runtime_oks(g, more, done, callees) {
                 None => pure(None),
@@ -4083,20 +4162,20 @@ fn runtime_part(g: RtTestG, front: List<Expr>, links: List<Nat>, own: Bool, name
                     })
                 },
             }
-        },
+        }),
     }
 }
 
 fn runtime_parts(g: RtTestG, fuel: Nat, fronts: List<List<Expr>>, links: List<List<Nat>>, owns: List<Bool>, names: List<String>, more, levels: LocalRef,
-    root: Option<Pair<Expr, Expr>>, done: List<RtPart>) → Tac<Option<List<RtPart>>> {
+    root: Option<Pair<Expr, Expr>>, root_ends: Option<Expr>, done: List<RtPart>) → Tac<Option<List<RtPart>>> {
     match fuel {
         Zero => pure(Some(done)),
         Succ(fu) => {
             let i = done.len();
             runtime_part(g, fronts.nth(i).unwrap_or([]), links.nth(i).unwrap_or([]), owns.nth(i).unwrap_or(False), names.nth(i).unwrap_or(""), more, levels, root,
-                fu.same(0), done).bind(λ r => match r {
+                root_ends, fu.same(0), done).bind(λ r => match r {
                 None => pure(None),
-                Some(p) => runtime_parts(g, fu, fronts, links, owns, names, more, levels, root, done ++ [p]),
+                Some(p) => runtime_parts(g, fu, fronts, links, owns, names, more, levels, root, root_ends, done ++ [p]),
             })
         },
     }
@@ -4133,7 +4212,7 @@ fn runtime_steps(g: RtTestG, steps: List<Expr>) → Tac<Option<Expr>> {
 record RtWithin { within: LocalRef, proof: Expr, decls: List<Decl> }
 
 fn runtime_within(name: String, rfun: Fun, q: RtQ, ts: RtTypes, l: Linking, linked: Linked, root, tys_e, rt_e, code_e: Expr, own_types: List<Handle>,
-    at: List<Expr>, more: LocalRef, words_e, admitted: Expr, own: Bool) → Tac<Option<RtWithin>> {
+    at: List<Expr>, more: LocalRef, words_e, admitted: Expr, own: Bool, root_ends: Option<Expr>) → Tac<Option<RtWithin>> {
     let g <- runtime_test_globals(q, ts);
     let n = linked.fronts.len();
     let inst = linked.root.take(3);
@@ -4147,7 +4226,7 @@ fn runtime_within(name: String, rfun: Fun, q: RtQ, ts: RtTypes, l: Linking, link
             let nat_h <- runtime_type_of(name_of(runtime_w_nat));
             let levels <- assume(Hd(nat_h), "levels", None).or_fail("runtime: a number of levels: ");
             let parts <- runtime_parts(g, n, linked.fronts, l.tables.map(λ t => runtime_links(l.order, t)), l.own_callees(), l.names, more, levels.ref,
-                descent.map(λ d => Pair(d.measure, d.defined)), []);
+                descent.map(λ d => Pair(d.measure, d.defined)), root_ends, []);
             match parts {
                 None => pure(None),
                 Some(ps) => {
@@ -4276,9 +4355,23 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
         Decl(AsValue, name ++ "::world", [], Hd(ts.world), world_e),
         Decl(AsTheorem, name ++ "::judged", [], Equation(ap(judge, [rt_e, world_e]), runtime_at(verdicts, 0)),
             ap(rfl, [Blank, runtime_at(verdicts, 0)]))];
+    // A measured recursion compiled as a loop node: its measure and pin,
+    // what its code's definedness takes (`f::ends`).
+    let node_ends <- match own as λ _ => Tac<Option<Expr>> {
+        True => pure(None),
+        False => match rfun.body {
+            Loop(_, node_body) => runtime_node_ends(name, f, rfun, q, ts, world_e, table_e, count, reprs, node_body).bind(λ e => pure(Some(e))),
+            _ => pure(None),
+        },
+    };
+    let ends_decls <- match node_ends as λ _ => Tac<List<Decl>> {
+        None => pure([]),
+        Some(e) => infer(e).or_fail("runtime: `" ++ name ++ "`'s measure, as its code's definedness takes it: ").bind(λ t =>
+            pure([Decl(AsTheorem, name ++ "::ends", [], Hd(t), e)])),
+    };
     let made: List<Decl> = [
         Decl(AsValue, name ++ "::code", [], Hd(ts.function), code_e),
-        Decl(AsInstance("runtime::Compile", [Hd(ft)], [name]), name ++ "::compile", [], Hd(instance_t), instance_e)];
+        Decl(AsInstance("runtime::Compile", [Hd(ft)], [name]), name ++ "::compile", [], Hd(instance_t), instance_e)].append(ends_decls);
     let own_types <- runtime_own_types(ts.word, reprs, rfun.params, recs);
     let low_word <- runtime_global(name_of(runtime_low));
     let low_bit <- runtime_global(name_of(runtime_bit_low));
@@ -4391,7 +4484,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
                     // `f::defined_within`, and the agreement with it in
                     // place of the premise, `f::agrees_within`.
                     let within_decls <- runtime_within(name, rfun, q, ts, l, linked, root, tys_e, rt_e, code_e, own_types,
-                        runtime_narrow_args(low, rfun.params, runtime_args(count, reprs, rfun.params, at_ys)), more.ref, words_e, admitted, own).bind(λ r => match r {
+                        runtime_narrow_args(low, rfun.params, runtime_args(count, reprs, rfun.params, at_ys)), more.ref, words_e, admitted, own, node_ends).bind(λ r => match r {
                         None => pure([]),
                         Some(p) => {
                             let evaluated_within = ap(eval_where, [linked.program, linked.arities, ap(admits_of, [linked.adm]), ap(sources, [linked.srcs]),

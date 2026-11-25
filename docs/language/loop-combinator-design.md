@@ -1120,6 +1120,47 @@ round stays green. (`Repeat` was taken: it is a native statement's.)
   the state as `stuck` does, so the code's eval needs no measure. Only its
   definedness does.
 
+**Round D, stage 1 as built: the node is one `Until`.**
+
+- *Meaning.* `Tm::Loop`'s meaning is `Loop::rounds(Tm::rounds(), pass,
+  read_words, xs)`, where `Tm::rounds()` is `2^64`, as many as
+  `until_passes()`. Past its rounds it answers its state read back, as an
+  exhausted `Until` leaves it. The pin is `Loop::rounds_agree_below`: rounds
+  above the measure are the function, whatever answers past them. A word's
+  `toNat` is below `2^64`, so the extra pass and its off-by-one are gone.
+- *Code.* `Tm::loop_region` is one `Until` (`Tm::node_core`). It has no
+  bound word and no count, no exhausted bit, no second core and no branch
+  after it. The answer is the first output, the state's first word whether
+  the passes left or ran out (`Tm::extra_end`). The id layout is kept: the
+  bound's and count's ids are simply unused.
+- *Soundness.* `Tm::until_round_of` and `Tm::until_rounds_agree` are the
+  `Until` forms of the pass and the fuel recursion. `Tm::node_pass` is one
+  pass for any continuation, and `Tm::core_pass` is its instance at the
+  rounds. `Tm::loop_sound_at` lost its second core and its branch.
+- *Definedness.*
+  - The node's pass is `quiet`: `Tm::quiet_in` reads the `Until`'s pass.
+  - Its ending is a new premise of `Tm::DefinedHolds`, `Tm::Ends`. It is
+    structural: a term with no node owes nothing (`Tm::ends_free`, by
+    evaluation of `Tm::nodeless`). A node owes `Tm::NodeEnds`: a measure of
+    its words, at most a word's `toNat`, under which its pass is pinned
+    (`Tm::NodePass`, moved down from `Setup::NodePass`).
+  - `Tm::node_defined` turns that into `until_defined` by
+    `until_defined_of_measure`. A pass that goes round to `ys` answers its
+    continuation at `ys` (`Tm::node_pass`). Were `ys` not below the
+    measure, two continuations that agree with the pinned function below
+    it but answer `0` and `1` there would give the function two values.
+- *The generator.* A measured recursion compiled as a node gets
+  `f::ends` (`Setup::node_ends_of`): its measure, the generator's `word_within`
+  bound, and its pass pinned at the world of the empty file, all from what
+  it already builds for the pin (`runtime_node_measure`,
+  `runtime_node_pass`). `Compile::ranked_code`, `total_code`, `test_code`
+  and `walked_code` take `Compile::LoopsEnd`. A program's part reads a
+  callee's `f::ends`, its root's from the assembly, or `Compile::ends_free`.
+- *Probes.* `runtime_depth_tests`: `rsum_nodes`, a leveled recursion
+  calling the node `down_node`, is defined at no premise past its levels,
+  and agrees there. `down_node`'s code is quiet, and `ends_free` cannot
+  stand in for its measure (negative control).
+
 **Built: a pass that answers several words** (step 3's first half, kept
 as small as the extra pass allows).
 

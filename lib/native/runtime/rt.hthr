@@ -1259,6 +1259,10 @@ fn Tm::convoy(T: Type, c: Bool, yes: T, no: T) → T {
 // enough (`loop::Loop::steps_stays`).
 fn Tm::passes() → Nat { loop::Loop::passes() }
 
+// The rounds a loop node's meaning is given: `2^64`, one past a word's
+// `toNat`, as many as its code's `Until` (`until_passes`).
+fn Tm::rounds() → Nat { loop::Loop::passes() + 1 }
+
 // A word's `toNat` is at most the passes a loop is given: a loop whose
 // measure is one stops within them (`loop::Loop::steps_stays`).
 theorem Tm::word_within(w: BitVec(64)): w.toNat() <= loop::Loop::passes() { BitVec::toNat_lt_pow(64, w) }
@@ -1343,17 +1347,16 @@ fn Tm::sem_in(self t: Tm, w: World, lab: Tm::Label(w.tys)) → (g: List<Ty>) →
                 s),
             Env::get(w.tys, g, env, init)),
         Again(res, args) => λ g env => lab(res, Tm::words(w, g, env, args)),
-        // A pass is the body read under the loop's own continuation. Out of
-        // passes, one more runs, its going round answering the state it
-        // names read as the answer (`Ty::read_words`: what the loop's code
-        // does once its count is spent, `Tm::lower_loop`).
-        Loop(inits, body) => λ g env => loop::Loop::rounds(Tm::passes(),
+        // A pass is the body read under the loop's own continuation, for
+        // `Tm::rounds()` rounds. Out of them it answers its state read as
+        // the answer (`Ty::read_words`), as its code's `Until` leaves its
+        // state; a loop that carries its measure never gets there
+        // (docs/language/loop-combinator-design.md §6.9).
+        Loop(inits, body) => λ g env => loop::Loop::rounds(Tm::rounds(),
             λ (again: List<BitVec(64)> → body.ty(w, Tm::inside(g, inits)).sem(w.tys)) (xs: List<BitVec(64)>) =>
                 body.sem_in(w, Tm::round(w.tys, body.ty(w, Tm::inside(g, inits)), again), Tm::inside(g, inits),
                     Ty::extend(w.tys, Tm::state(g, inits), Nil, trivial, xs)),
-            λ (xs: List<BitVec(64)>) => body.sem_in(w,
-                Tm::round(w.tys, body.ty(w, Tm::inside(g, inits)), λ ys => Ty::read_words(body.ty(w, Tm::inside(g, inits)), w.tys, ys)),
-                Tm::inside(g, inits), Ty::extend(w.tys, Tm::state(g, inits), Nil, trivial, xs)),
+            λ (xs: List<BitVec(64)>) => Ty::read_words(body.ty(w, Tm::inside(g, inits)), w.tys, xs),
             Tm::words(w, g, env, inits)),
     }
 }
