@@ -67,6 +67,7 @@ import function_ir_eval;
 import rt_loop;
 import function_ir_levels;
 import rt_lower_defined;
+import rt_while;
 import rt_ptm;
 import rt_file;
 import rt_file_reflect;
@@ -780,22 +781,6 @@ fn Setup::compile_measured<F>(s: Setup, ks: List<Ty>, w0: Ty, wrest: List<Ty>, r
 // The empty environment at a world: what a function's parameters are
 // bound onto, spelled with its world so that its table is known.
 fn Setup::no_env(w: World) → Env(w.tys, []) { trivial }
-
-// The node's rounds are the function, at the words of its arguments.
-theorem Setup::node_means(ws: List<Ty>, body: Tm, w: World, h: Ty::Arrows(w.tys, ws, body.ty(w, Ty::bind_onto(ws, Nil))), m: List<BitVec(64)> → Nat,
-    pass: Tm::NodePass(ws, body, w, h, m), xs: List<BitVec(64)>, len: xs.len() = ws.len(), within: m(xs) <= Tm::passes()):
-    loop::Loop::rounds(Tm::rounds(), λ (k: List<BitVec(64)> → body.ty(w, Ty::bind_onto(ws, Nil)).sem(w.tys)) (ys: List<BitVec(64)>) => Tm::loop_body(w, ws, body, k, ys),
-        λ (zs: List<BitVec(64)>) => Ty::read_words(body.ty(w, Ty::bind_onto(ws, Nil)), w.tys, zs), xs) =
-        Ty::apply(w.tys, ws, body.ty(w, Ty::bind_onto(ws, Nil)), h, xs) {
-    let res = body.ty(w, Ty::bind_onto(ws, Nil));
-    let Q = λ (ys: List<BitVec(64)>) => (k: List<BitVec(64)> → res.sem(w.tys)) →
-        ((zs: List<BitVec(64)>) → zs.len() = ws.len() → m(zs) < m(ys) → k(zs) = Ty::apply(w.tys, ws, res, h, zs)) →
-        Tm::loop_body(w, ws, body, k, ys) = Ty::apply(w.tys, ws, res, h, ys);
-    loop::Loop::rounds_agree_below(m, λ (ys: List<BitVec(64)>) => ys.len() = ws.len(), λ (ys: List<BitVec(64)>) => Ty::apply(w.tys, ws, res, h, ys),
-        λ (k: List<BitVec(64)> → res.sem(w.tys)) (ys: List<BitVec(64)>) => Tm::loop_body(w, ws, body, k, ys),
-        λ (zs: List<BitVec(64)>) => Ty::read_words(res, w.tys, zs),
-        λ a oa k agree => Ty::for_words_at(ws, Q, pass, a, oa, k, agree), Tm::rounds(), xs, len, within)
-}
 
 // A node's measure and its pin, as what its code's definedness takes
 // (`Tm::NodeEnds`): a measured recursion's `f::ends`.
@@ -2957,7 +2942,7 @@ fn runtime_node_ends(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes,
 // A measured recursion reflected as a loop node (`Fun::as_node`): its pin
 // is its unfolding read through the node's rounds. At each file `b` and
 // words `x…`, the meaning is the node's rounds (`Tm::sem_in_loop`), which
-// are the function (`Setup::node_means`), from the node's pass
+// are the function (`Tm::node_means`), from the node's pass
 // (`Tm::NodePass`) proved from the function's own `f::ext` and
 // `f::irrel` as `Guarded` is (`runtime_measured_instance`), and the measure
 // a word's `toNat`, at most the passes (`Tm::word_within`).
@@ -2966,7 +2951,7 @@ fn runtime_node_instance(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTy
     let compile <- runtime_global(name_of(Setup::compile));
     let pinned_g <- runtime_global(name_of(Setup::Pinned));
     let pass_g <- runtime_global(name_of(Tm::NodePass));
-    let means_g <- runtime_global(name_of(Setup::node_means));
+    let means_g <- runtime_global(name_of(Tm::node_means));
     let sem_loop_g <- runtime_global(name_of(Tm::sem_in_loop));
     let no_label_g <- runtime_global(name_of(Tm::no_label));
     let world_at_g <- runtime_global(name_of(World::at));
