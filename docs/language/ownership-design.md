@@ -961,6 +961,14 @@ which is being worked out before anything more of it is built.
     without cause.
 
 
+18. **Ownership of the feature** (Minus, 2026-11-25): the coordinating
+    session owns this feature's design and its building, and brings back
+    results and real forks. The charge: make it elegant, and do not slide
+    into the feature by iterative extension, "because that way lies bugs
+    and poor design"; big dramatic moves are feasible. A thing stated in
+    many places is a sign it wants consolidating (the call contract over
+    buffers, stated in about ninety places, is the first such: §16).
+
 ## 15. The design as it stands (2026-11-25)
 
 One place to read the design after §14's decisions and two rounds of
