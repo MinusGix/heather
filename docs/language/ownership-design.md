@@ -1875,3 +1875,51 @@ an induction per function, if a specification-level proof cannot reach a
 representation-level residual mechanically, if the two instances need
 different modes at the specification level, or if the abstraction through
 the universal value costs the kernel too much per step.
+
+### 19.7 Minus on this tier, and what it settles (2026-11-25)
+
+Minus: common interfaces will just use `List<T>`, while code may name a
+concrete type, `Vector<T>` or `LinkedList<T>`; for inferring a
+representation he leans typeclass-like; he is unsure about a declared
+"List interface", which would be a `ListLike` class by another name; and
+`datarepr` may be altered where that is the better design.
+
+Settled from that, as the owner's reading:
+
+- **`Vector<T>` and `LinkedList<T>` are ordinary library types** with their
+  own checked methods. Code that cares names them, and then nothing is
+  inferred: ownership is fully determined by what is written.
+- **A representation is an instance, and so is an implementation.** A
+  class instance says a carrier represents a specification type (the
+  abstraction function and the invariant); an instance keyed on an
+  operation and a carrier says how that operation is implemented, with its
+  refinement. This is the pattern `Compile(f)` already uses, an instance
+  keyed on a function, and it is found by the resolution the language has.
+  There is no declaration form of its own, no required constructor images
+  and no fold anchor (§19.5's surplus goes; the images and the fold are
+  ordinary instances and lemmas where wanted).
+- **A representation for a `List<T>` is chosen as an instance is**: stated
+  (`as Vector`), forced by what the value is passed to or made by, or the
+  specification type's default instance. Code over `List<T>` is the casual
+  tier: it runs at the default with nothing written.
+- **There is no declared List interface.** "The List API" for a
+  representation is whichever functions on lists have an implementation
+  instance for it; a function with none is transferred through its own
+  body. A function general in its representation is checked, and its
+  sharing signature recorded, per instance. This replaces §19.3's "the
+  specification's interface is declared, with modes".
+
+What that last choice costs, so it can be revisited with evidence: an
+ownership refusal in a general function can appear only at one
+representation, as an error in a template does, where declared modes
+would check it once. If that bites, modes written on the list functions
+themselves are an annotation that adds the once-check without changing
+what code is written against.
+
+The difference from a `ListLike` class is what a signature says. A class
+abstracts over the type in the signature: `fn f<C: ListLike<T>>(xs: C)`,
+with theorems about `C` through its laws. A representation leaves the
+signature alone: `fn f(xs: List<T>)` is a function on lists, usable in
+mathematics and proved about as one, with the instance found behind it.
+The machinery (instances and laws) is the same, and a `ListLike` class is
+an ordinary thing a library may also define.
