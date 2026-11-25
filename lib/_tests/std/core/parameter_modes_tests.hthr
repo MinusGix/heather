@@ -527,3 +527,26 @@ fn lend_in_bind(x: Nat) → Option<Nat> {
     Some(r + p)
 }
 theorem lend_in_bind_open(x: Nat): lend_in_bind(x) = Some((x + 2) + (x + 2)) { refl }
+
+// ---------------------------------------------------------------------------
+// A recursion is held to the modes its declaration wrote, as any call is,
+// though its table is not registered while its body elaborates.
+
+// expect-error: `count_by`'s parameter `by` is not `&mut`
+fn count_by(acc: &mut Nat, by: Nat, n: Nat) → Nat decreases n {
+    match n {
+        Zero => acc,
+        Succ(k) => {
+            let mut b = by;
+            count_by(&mut acc, &mut b, k)
+        },
+    }
+}
+
+// expect-error: `count_both` takes `b` as `&mut`
+fn count_both(a: &mut Nat, b: &mut Nat, n: Nat) → Nat decreases n {
+    match n {
+        Zero => a,
+        Succ(k) => count_both(&mut a, 3, k),
+    }
+}

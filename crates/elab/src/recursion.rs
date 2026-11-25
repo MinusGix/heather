@@ -1434,6 +1434,10 @@ pub(crate) struct SelfRef {
     /// declaration's table, not registered while its body elaborates,
     /// cannot say.
     pub(crate) receiver_mode: heather_syntax::ParamMode,
+    /// Per entry of [`Self::params`]: whether it is written `self`, and its
+    /// mode, so a recursive call that lends places is held to the modes the
+    /// declaration wrote (docs/language/sequencing-surface-design.md §24).
+    pub(crate) modes: Vec<(bool, heather_syntax::ParamMode)>,
 }
 
 impl SelfRef {
@@ -1466,6 +1470,12 @@ impl SelfRef {
                 let slot = explicit.iter().position(|p| p.is_self).unwrap_or(0);
                 explicit.get(slot).map(|p| p.mode).unwrap_or_default()
             },
+            modes: decl
+                .tyvars
+                .iter()
+                .map(|_| (false, Default::default()))
+                .chain(decl.params.iter().map(|p| (p.is_self, p.mode)))
+                .collect(),
         }
     }
 
@@ -1875,6 +1885,7 @@ mod tests {
             n_tyvars: 0,
             receiver_slot: 0,
             receiver_mode: Default::default(),
+            modes: vec![(false, Default::default())],
         }));
         cx.guard = Some(Rc::new(Guard {
             dec: 0,
@@ -1904,6 +1915,7 @@ mod tests {
             n_tyvars: 0,
             receiver_slot: 0,
             receiver_mode: Default::default(),
+            modes: vec![(false, Default::default())],
         }));
         assert_eq!(descends_on_param(&cx, &Term::Var(LocalVar(0))), Some(0));
 

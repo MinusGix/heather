@@ -20,7 +20,7 @@ use heather_kernel::rc::Rc;
 use heather_kernel::term::{Term, Type};
 use heather_syntax::{Expr, ExprKind, ParamMode, Span};
 
-use crate::application::{subject_index_in, Callables, ParamMeta};
+use crate::application::{Callables, ParamMeta};
 use crate::dispatch::Members;
 use crate::statements::StatementElab;
 use crate::{err, Cx, Elaborator, R};
@@ -32,6 +32,20 @@ impl std::ops::Deref for PathCalls<'_> {
     fn deref(&self) -> &Elaborator {
         self.0
     }
+}
+
+/// A callee's parameter as the mode check reads it.
+struct Slot {
+    name: String,
+    implicit: bool,
+    is_type: bool,
+    is_self: bool,
+    mode: ParamMode,
+}
+
+/// A callee's last segment, as a message names it.
+fn shown_of(callee: &str) -> &str {
+    callee.rsplit("::").next().unwrap_or(callee)
 }
 
 /// The input of `marker(e)`.
@@ -127,8 +141,9 @@ impl PathCalls<'_> {
     }
 
     /// The callee's recorded modes against the lent arguments: a `&mut`
-    /// parameter where, and only where, an argument is lent. A callee with
-    /// no table (a local, its own recursion) is left to the type check.
+    /// parameter where, and only where, an argument is lent. Its own
+    /// recursion reads the modes its declaration wrote (`SelfRef::modes`); a
+    /// callee with neither (a local function) is left to the type check.
     fn check_modes(&self, cx: &Cx, call: &Expr, lent: &[bool], named: &[&str], candidate: bool, span: Span) -> R<()> {
         let (callee, method) = match &call.kind {
             ExprKind::App { head, .. } => match &head.kind {
@@ -138,14 +153,42 @@ impl PathCalls<'_> {
             ExprKind::Dot { recv, name, .. } => (Members(self).member_head(cx, recv, name, false, call.span)?, true),
             _ => return Ok(()),
         };
-        let table = Callables(self).params_of(&callee);
+        // The callee's parameters: its table, or the enclosing
+        // declaration's own while its body elaborates (its recursion).
+        let own = cx.selfref.as_ref().filter(|s| s.matches(&callee) || s.matches(shown_of(&callee)));
+        let table: Vec<Slot> = match own {
+            Some(s) => s
+                .params
+                .iter()
+                .zip(&s.modes)
+                .enumerate()
+                .map(|(i, ((name, implicit), (is_self, mode)))| Slot {
+                    name: name.clone(),
+                    implicit: *implicit,
+                    is_type: i < s.n_tyvars,
+                    is_self: *is_self,
+                    mode: *mode,
+                })
+                .collect(),
+            None => Callables(self)
+                .params_of(&callee)
+                .iter()
+                .map(|p: &ParamMeta| Slot {
+                    name: p.name.clone(),
+                    implicit: p.implicit,
+                    is_type: p.is_type,
+                    is_self: p.is_self,
+                    mode: p.mode,
+                })
+                .collect(),
+        };
         if table.is_empty() {
             return Ok(());
         }
-        let shown = callee.rsplit("::").next().unwrap_or(&callee);
-        let explicit: Vec<&ParamMeta> = table.iter().filter(|p| !p.implicit && !named.contains(&p.name.as_str())).collect();
-        let explicit: Vec<&ParamMeta> = if method {
-            let subject = subject_index_in(&table);
+        let shown = shown_of(&callee);
+        let explicit: Vec<&Slot> = table.iter().filter(|p| !p.implicit && !named.contains(&p.name.as_str())).collect();
+        let explicit: Vec<&Slot> = if method {
+            let subject = table.iter().filter(|p| !p.implicit && !p.is_type).position(|p| p.is_self).unwrap_or(0);
             if !candidate && explicit.get(subject).is_some_and(|p| p.mode == ParamMode::Path) {
                 return err(
                     format!(

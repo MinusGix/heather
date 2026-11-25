@@ -1943,9 +1943,46 @@ impl<'a> Rewrite<'a> {
             return call.clone();
         }
         let (passed, spill) = args.split_at(positions.len());
+        // A recursive call that lends places (§24) is held to the modes the
+        // callee wrote, as any call is (`PathCalls::check_modes`): its call
+        // site becomes the hypothesis, which has no table to read them from.
+        fn lent_at(a: &Expr) -> Option<&Expr> {
+            match &a.kind {
+                ExprKind::App { head, args, .. } if args.len() == 1 => {
+                    matches!(&head.kind, ExprKind::Var(n) if n == heather_syntax::MUTARG).then(|| &args[0])
+                }
+                _ => None,
+            }
+        }
+        if passed.iter().any(|a| lent_at(a).is_some()) {
+            for (a, &j) in passed.iter().zip(&positions) {
+                let path = tparams[j].mode == heather_syntax::ParamMode::Path;
+                let name = &tparams[j].name;
+                match (path, lent_at(a).is_some()) {
+                    (true, false) => self.fail(
+                        format!(
+                            "`{tname}` takes `{name}` as `&mut`, so its argument is a place it lends back: \
+                             write `&mut` before it, or call `{tname}` with no `&mut` at all for its \
+                             `Mutated` record"
+                        ),
+                        span,
+                    ),
+                    (false, true) => self.fail(
+                        format!(
+                            "`{tname}`'s parameter `{name}` is not `&mut`, so nothing comes back to the \
+                             place lent it: pass the value, without `&mut`"
+                        ),
+                        span,
+                    ),
+                    _ => {}
+                }
+            }
+        }
+        // The measure reads the value a lent place holds going in.
+        let values: Vec<Expr> = passed.iter().map(|a| lent_at(a).cloned().unwrap_or_else(|| a.clone())).collect();
         // e[ȳ]: the callee's measure with each of *its* parameters replaced by
         // the argument written at that position.
-        let typed = typed_arguments(&positions.iter().map(|&j| &tparams[j]).collect::<Vec<_>>(), passed);
+        let typed = typed_arguments(&positions.iter().map(|&j| &tparams[j]).collect::<Vec<_>>(), &values);
         let map: Vec<(&str, &Expr)> = positions
             .iter()
             .zip(&typed)
