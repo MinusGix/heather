@@ -1062,22 +1062,30 @@ round stays green. (`Repeat` was taken: it is a native statement's.)
   `ran_out` and the state, behind a test of its bound. Each pass sets
   `ran_out` to the negation of `stop`, so the last pass leaves it 1
   exactly where the passes ran out.
-- *Next: the runtime producers* (`rt_lower`'s `Iterate` and node, the
-  fuel and measured loops of `rt_loop`, `rt_file_lower`, `rt_file_loop`).
-  Their proofs read `loop_eval` and `loop_run` with the count and the
-  exhausted bit. The plan is to rebuild `Loop` as a derived form over
-  `Until` rather than re-prove each producer:
-  - `counted_loop(...)` is an `Until` over `parameters ++ [exhausted,
-    count]`, fed from `inputs ++ [bound, bound]`, with outputs
-    `outputs ++ [exhausted]`. `bind` zips a prefix, so the counter is
-    never written outside.
-  - Its pass is guarded, as `Loop`'s is: `e := 0 < count` (in the
-    exhausted word); if set, the body, then `count := count - 1; e := 0`;
-    if not, the state moved to `next`, `exit := 1; e := 1`.
-  - Every temporary lives in the pass's own valuation, so its meaning
-    equals `Loop`'s pointwise at every id. One simulation theorem then
-    carries the producers' proofs over. A second counted shape (the
-    guarded one, the counter its own measure) decides its ending.
+- *A limit of the measure.* `Until`'s measure is a parameter's position,
+  so a measure such as `(n - i).toNat()` needs a state word holding it,
+  recomputed on every pass. That is enough for a first version: the
+  counted helper and a `decreases` measure that is one word both fit.
+  Whether a measure written as an expression of the state is wanted later
+  is open.
+- *The runtime producers: held for a decision.* Every runtime producer of
+  `Loop` is already replaced or deleted in round D:
+  - `Iterate` goes when `while` reflects to the node;
+  - the node carries its measure;
+  - `rt_loop`'s fuel and measured theorems and the measured `FFun` path go
+    in 3h;
+  - `FTm::Loop` goes onto the `FTm` node.
+
+  So porting them in round C builds them twice, whether onto a derived
+  `counted_loop` or directly onto measure-carrying `Until`s. The direct
+  route cannot reach `Iterate`, which has no measure, nor the node, until
+  round D gives it one. The order proposed instead:
+  - round C closes with what is built;
+  - round D's node lowers straight to an `Until` carrying the node's
+    measure (the direct route, for the one producer that stays);
+  - deleting `Loop`, the allocator's `loop_zero`, `loop_down` and
+    `loop_stop`, and regenerating linked follow 3h, once nothing makes a
+    `Loop`.
 
 **Built: a pass that answers several words** (step 3's first half, kept
 as small as the extra pass allows).
