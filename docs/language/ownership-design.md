@@ -860,12 +860,12 @@ which is being worked out before anything more of it is built.
    theorem. A check the compiler makes of the code produces such a proof or
    uses one in context.
 2. **One language, not four.** `Tm`, `FTm` (one written span), `ETm` (the
-   world) and `PTm`, with the held and `Bytes(n)` meanings, are instances of
-   one thing: a computation that threads a row of resources. That is §10.4's
-   store-passing meaning, so the language's redesign and the ownership
-   design are one project, and the judgment's result is what fills the row.
-   No more iterative extension of the four (`rt-several-written-spans` is
-   answered by the redesign, not by a patch). Order of work still open.
+   world) and `PTm`, with the held and `Bytes(n)` meanings, are one thing,
+   so the language's redesign and the ownership design are one project. No
+   more iterative extension of the four (`rt-several-written-spans` is
+   answered by the redesign, not by a patch). The first reading here, "a
+   computation that threads a row of resources", is superseded by item 12:
+   there is no row and no second kind of variable.
 3. **A resource is abstract**: anything with a threaded value. Bytes with a
    typed view are one representation; the world and an erased token are
    others.
@@ -926,4 +926,28 @@ which is being worked out before anything more of it is built.
     level; its layout to the second. In a strict function sharing is
     determined by the source: share everywhere, copy only at a written
     `clone`, refuse where sharing has no licence.
+14. **`&mut T` is exclusive: it means the value, moved out of its place and
+    moved back when the borrow ends, with an erased slot that says where it
+    goes back and travels with the borrow.** This revises §10.3 and §10.4:
+    an exclusive borrow is not a path read through its owner, and two
+    overlapping `&mut`s are not accepted. `swap(&mut v[i], &mut v[j])` asks
+    `i ≠ j` (Minus: expected; you do have to know that). Mutation that
+    tolerates aliasing is keys into a store, with access an operation on the
+    store; §10.3's "live path" row describes those.
+15. **The obligation is that a name still reads its value at each use;
+    shares are how that is proved.** The separation algebra is the fast
+    prover and the language of a callee's contract, not the definition. The
+    holders form a tree: a part is split from a holder and joined back at
+    its death; a new object is a split from a supply, and its death a join.
+    A read-only view holds nothing and is licensed by its region being
+    frozen (lean: yes; precision being worked out).
+16. **An unannotated parameter takes the least access its uses need**,
+    recorded in the module's interface; a written mode is a demand checked
+    against it.
+17. **Old code is not a constraint.** The levels and the decisions above
+    stay; FunctionIR's upper part, the library's `Held`, `Path` and `Keeps`,
+    and the stores may be reshaped or replaced where the design wants it
+    (Minus: we own this repo and can write something truly beautiful). Item
+    10's "kept" means the lower back half's proved work is not thrown away
+    without cause.
 
