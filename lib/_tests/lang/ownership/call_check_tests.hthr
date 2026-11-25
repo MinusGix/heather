@@ -1,6 +1,8 @@
-// The three programs of the ownership checker's second experiment
+// The programs of the ownership checker over calls and loans
 // (docs/language/ownership-design.md §15.6, lib/lang/ownership/call_check.hthr),
-// each with its control, and probes of the run's rebasing.
+// each with its control: the second experiment's three (a written window,
+// a returned view, a lying callee), and the loans experiment's (a write
+// view held across statements).
 import logic;
 import bool;
 import nat;
@@ -15,13 +17,15 @@ fn no_pre() → Nat → List<Nat> → Type { λ _ _ => True }
 
 // ---------------------------------------------------------------------------
 // 1. A written window beside a held view:
-//    `let t = &v[0..k]; let (v1, z) = fill(&mut v[k..k+m], 7); t[0]`
+//    `let t = &v[0..k]; let w = &mut v[k..k+m]; let z = fill(w, 7); dead(w); t[0]`
 
-// fill(w: &mut [Nat], a): `let w1 = w.set(0, a); w1[0]`
-fn fill() → Func { Func(Writes, 1, [Set(1, 0, Lit(0), Var(0)), Get(1, 1, Lit(0))], RWord(Var(1))) }
+// fill(w: &mut [Nat], a): `w[0] := a; w[0]`
+fn fill() → Func { Func(Writes, 1, [Set(Lit(0), Var(0)), Get(1, Lit(0))], RWord(Var(1))) }
 
 // The words are `k` (0) and `m` (1); the call binds word 2, the read word 3.
-fn written() → Func { Func(Writes, 2, [View(0, 0, Lit(0), Var(0)), CallMut(0, 0, Var(0), Var(1), [Lit(7)], 1, 2), Read(3, 0, Lit(0))], RWord(Var(3))) }
+fn written() → Func {
+    Func(Writes, 2, [View(0, Reads, Lit(0), Var(0)), View(1, Writes, Var(0), Var(1)), CallMut(0, 1, [Lit(7)], 2), Die(1), Read(3, 0, Lit(0))], RWord(Var(3)))
+}
 
 fn p1() → List<Func> { [fill(), written()] }
 
@@ -42,7 +46,7 @@ theorem written_safe(w: World, fill_safe: FnSafe(fill().sig(), no_pre()(0), w.me
     FnSafe(written().sig(), λ _ => True, λ arg ws => mean_fn(w, written(), arg, ws), λ file r ws => run_fn(w, written(), file, r, ws))
 {
     check_sound(sigs_of(p1()), no_pre(), written(), [Due(Spans(Lit(0), Var(0), Var(0), Var(1))), Pre(0, [Lit(7)])], written_checked(), λ _ => True, w,
-        λ arg ws _ _ => written_owed(mean_body(w, written().body, Sem([arg], Nil, ws)).words),
+        λ arg ws _ _ => written_owed(mean_body(w, written().body, Sem(arg, Nil, Nil, ws)).words),
         λ g => match g { Zero => λ _ => fill_safe, Succ(_) => λ no => absurd(no) })
 }
 
@@ -51,7 +55,7 @@ theorem p1_ok(): ProgOk(p1(), no_pre()) {
         Zero => λ _ => Checks(Nil, fill_checked(), λ w arg ws _ _ => trivial),
         Succ(g1) => match g1 {
             Zero => λ _ => Checks([Due(Spans(Lit(0), Var(0), Var(0), Var(1))), Pre(0, [Lit(7)])], written_checked(),
-                λ w arg ws _ _ => written_owed(mean_body(w, written().body, Sem([arg], Nil, ws)).words)),
+                λ w arg ws _ _ => written_owed(mean_body(w, written().body, Sem(arg, Nil, Nil, ws)).words)),
             Succ(_) => λ no => false_elim(omega(no)),
         },
     }
@@ -71,13 +75,15 @@ theorem written_means(): mean_fn(world(p1(), 2), written(), [5, 6, 8], [1, 2]) =
 // The control: the window moved to start at `j = k - 1`. Accepted by a
 // residual that fails at `k = 1, m = 1, j = 0`, and there the runs differ:
 // the view reads 7 in the run and 5 in the meaning.
-fn moved() → Func { Func(Writes, 3, [View(0, 0, Lit(0), Var(0)), CallMut(0, 0, Var(2), Var(1), [Lit(7)], 1, 3), Read(4, 0, Lit(0))], RWord(Var(4))) }
+fn moved() → Func {
+    Func(Writes, 3, [View(0, Reads, Lit(0), Var(0)), View(1, Writes, Var(2), Var(1)), CallMut(0, 1, [Lit(7)], 3), Die(1), Read(4, 0, Lit(0))], RWord(Var(4)))
+}
 
 fn p1c() → List<Func> { [fill(), moved()] }
 
 theorem moved_checked(): check_fn(sigs_of(p1c()), moved()) = Some([Due(Spans(Lit(0), Var(0), Var(2), Var(1))), Pre(0, [Lit(7)])]) { refl }
 
-theorem moved_fails(): ¬Owed::All([Due(Spans(Lit(0), Var(0), Var(2), Var(1))), Pre(0, [Lit(7)])], no_pre(), mean_body(world(p1c(), 2), moved().body, Sem([[5, 6]], Nil, [1, 1, 0])).words) {
+theorem moved_fails(): ¬Owed::All([Due(Spans(Lit(0), Var(0), Var(2), Var(1))), Pre(0, [Lit(7)])], no_pre(), mean_body(world(p1c(), 2), moved().body, Sem([5, 6], Nil, Nil, [1, 1, 0])).words) {
     λ h => h.left
 }
 
@@ -90,13 +96,13 @@ theorem moved_control(): ¬(run_fn(world(p1c(), 2), moved(), [[5, 6]], Ref(0, 0,
 
 // ---------------------------------------------------------------------------
 // 2. A returned view, frozen while it lives:
-//    `let t = first(&v); let a = t[0]; let b = v[0]; dead(t); let v1 = v.set(0, 9); v1[0]`
+//    `let t = first(&v); let a = t[0]; let b = v[0]; dead(t); v[0] := 9; v[0]`
 
 // first(w: &[Nat]): `&w[0..1]`
 fn first() → Func { Func(Reads, 0, Nil, RView(Lit(0), Lit(1))) }
 
 fn returned() → Func {
-    Func(Writes, 0, [CallView(0, 0, Nil, 0), Read(0, 0, Lit(0)), Get(1, 0, Lit(0)), Die(0), Set(1, 0, Lit(0), Lit(9)), Get(2, 1, Lit(0))], RWord(Var(0)))
+    Func(Writes, 0, [CallView(0, Nil, 0), Read(0, 0, Lit(0)), Get(1, Lit(0)), Die(0), Set(Lit(0), Lit(9)), Get(2, Lit(0))], RWord(Var(0)))
 }
 
 fn p2() → List<Func> { [first(), returned()] }
@@ -134,7 +140,7 @@ theorem returned_means(): mean_fn(world(p2(), 2), returned(), [5, 6], Nil) = MOu
 // object is frozen. Refused, and rightly: the view reads 9 in the run and 5
 // in the meaning.
 fn early() → Func {
-    Func(Writes, 0, [CallView(0, 0, Nil, 0), Set(1, 0, Lit(0), Lit(9)), Read(0, 0, Lit(0)), Die(0), Get(1, 1, Lit(0))], RWord(Var(0)))
+    Func(Writes, 0, [CallView(0, Nil, 0), Set(Lit(0), Lit(9)), Read(0, 0, Lit(0)), Die(0), Get(1, Lit(0))], RWord(Var(0)))
 }
 
 fn p2c() → List<Func> { [first(), early()] }
@@ -152,10 +158,10 @@ theorem early_control(): ¬(run_fn(world(p2c(), 2), early(), [[5, 6]], Ref(0, 0,
 // 3. A callee that breaks its signature: declared to read its parameter,
 //    its body sets a cell.
 
-fn liar() → Func { Func(Reads, 0, [Set(1, 0, Lit(0), Lit(9))], RView(Lit(0), Lit(1))) }
+fn liar() → Func { Func(Reads, 0, [Set(Lit(0), Lit(9))], RView(Lit(0), Lit(1))) }
 
 // `let t = liar(&v); v[0]`
-fn trusting() → Func { Func(Writes, 0, [CallView(0, 0, Nil, 0), Get(0, 0, Lit(0))], RWord(Var(0))) }
+fn trusting() → Func { Func(Writes, 0, [CallView(0, Nil, 0), Get(0, Lit(0))], RWord(Var(0))) }
 
 fn p3() → List<Func> { [liar(), trusting()] }
 
@@ -193,3 +199,127 @@ theorem trusting_control(): ¬(run_fn(world(p3(), 2), trusting(), [[5, 6]], Ref(
         absurd(at)
     }
 }
+
+// ---------------------------------------------------------------------------
+// 4. A loan held across statements:
+//    `let t = &x[0..k]; let w = &mut x[k..k+m]; w[0] := 7; let a = x[0];
+//     w[1] := 4; let b = w[0]; let c = t[0]; dead(w); x[k]`
+//
+// While `w` lives its window is `out` between statements: the owner reads
+// beside it, a read view lives beside it, and each write through it goes
+// back to `x` at once in the meaning.
+
+fn loan() → Func {
+    Func(Writes, 2, [
+        View(0, Reads, Lit(0), Var(0)),
+        View(1, Writes, Var(0), Var(1)),
+        Put(1, Lit(0), Lit(7)),
+        Get(2, Lit(0)),
+        Put(1, Lit(1), Lit(4)),
+        Read(3, 1, Lit(0)),
+        Read(4, 0, Lit(0)),
+        Die(1),
+        Get(5, Var(0)),
+    ], RWord(Var(5)))
+}
+
+fn p4() → List<Func> { [loan()] }
+
+// The caller states `1 <= k`, which puts the owner's read of `x[0]` apart
+// from the loan.
+fn loan_pre() → Nat → List<Nat> → Type { λ _ ws => 1 <= word(ws, 0) }
+
+// Two residuals: the loan apart from `t` (`Span(0, k)` against
+// `Span(k, m)`), and the owner's read apart from the loan (`Span(k, m)`
+// against `Span(0, 1)`). The writes through `w` and the reads of it owe
+// nothing, and the read of `x[k]` after its death owes nothing.
+theorem loan_checked(): check_fn(sigs_of(p4()), loan()) = Some([Due(Spans(Lit(0), Var(0), Var(0), Var(1))), Due(Spans(Var(0), Var(1), Lit(0), Lit(1)))]) { refl }
+
+// The first holds in any words; the second from the precondition, read in
+// the words the meaning ends with.
+theorem loan_owed(ws, big: List<Nat>, len: ws.len() = 2, pre: Prefix(ws, big), h: 1 <= word(ws, 0)):
+    Owed::All([Due(Spans(Lit(0), Var(0), Var(0), Var(1))), Due(Spans(Var(0), Var(1), Lit(0), Lit(1)))], loan_pre(), big)
+{
+    let k_is: (word(big, 0) = word(ws, 0)) = Var(0).val_stable(ws, big, pre, j(sym(len), λ n _ => (1).leb(n) = True, refl));
+    let a1: (Span(0, word(big, 0)).apart(Span(word(big, 0), word(big, 1))).IsTrue()) = omega();
+    let a2: (Span(word(big, 0), word(big, 1)).apart(Span(0, 1)).IsTrue()) = omega(k_is, h);
+    ⟨a1, ⟨a2, trivial⟩⟩
+}
+
+theorem p4_ok(): ProgOk(p4(), loan_pre()) {
+    λ g => match g {
+        Zero => λ _ => Checks([Due(Spans(Lit(0), Var(0), Var(0), Var(1))), Due(Spans(Var(0), Var(1), Lit(0), Lit(1)))], loan_checked(),
+            λ w arg ws len h => loan_owed(ws, mean_body(w, loan().body, Sem(arg, Nil, Nil, ws)).words, len, mean_body_grows(w, loan().body, Sem(arg, Nil, Nil, ws)), h)),
+        Succ(_) => λ no => false_elim(omega(no)),
+    }
+}
+
+// The program's theorem: the loan's run agrees with the meaning wherever
+// `1 <= k`, at every depth.
+theorem loan_sound(d: Nat): FnSafe(sig_at(sigs_of(p4()), 0), loan_pre()(0), world(p4(), d).mean(0), world(p4(), d).run(0)) {
+    prog_sound(p4(), loan_pre(), p4_ok(), d, 0)
+}
+
+// Inside a larger buffer, at base 1: both writes in place, the read view and
+// the owner read beside the loan, and `x[k]` reads the loan's write after
+// its death.
+theorem loan_runs(): run_fn(world(p4(), 1), loan(), [[9, 5, 6, 8, 9]], Ref(0, 1, 3), [1, 2]) = ROut([[9, 5, 7, 4, 9]], 7, 0, 0) { refl }
+
+theorem loan_means(): mean_fn(world(p4(), 1), loan(), [5, 6, 8], [1, 2]) = MOut([5, 7, 4], 7, Nil) { refl }
+
+// The words each run bound: `a = 5`, `b = 7`, `c = 5`, `d = 7`, alike.
+theorem loan_words(): mean_body(world(p4(), 1), loan().body, Sem([5, 6, 8], Nil, Nil, [1, 2])).words = [1, 2, 5, 7, 5, 7] { refl }
+
+theorem loan_run_words(): run_body(world(p4(), 1), Ref(0, 1, 3), loan().body, Exec([[9, 5, 6, 8, 9]], Nil, [1, 2])).words = [1, 2, 5, 7, 5, 7] { refl }
+
+// Without the precondition the owner's read is of the lent part: at
+// `k = 0, m = 2` the second residual fails.
+theorem loan_needs_pre(): ¬Owed::All([Due(Spans(Lit(0), Var(0), Var(0), Var(1))), Due(Spans(Var(0), Var(1), Lit(0), Lit(1)))], loan_pre(),
+    mean_body(world(p4(), 1), loan().body, Sem([5, 6, 8], Nil, Nil, [0, 2])).words)
+{
+    λ h => h.right.left
+}
+
+// Yet there the runs agree: the owner reads the value the loan wrote, in the
+// run and in the meaning (7 both), as eager write-back makes it
+// (`Sim::owner_reads`). The refusal of an owner's read of a lent part is
+// policy, not soundness (§15.7, open item 4).
+theorem loan_unchecked_agrees(): run_fn(world(p4(), 1), loan(), [[5, 6, 8]], Ref(0, 0, 3), [0, 2]).word = mean_fn(world(p4(), 1), loan(), [5, 6, 8], [0, 2]).word { refl }
+
+theorem loan_unchecked_words(): mean_body(world(p4(), 1), loan().body, Sem([5, 6, 8], Nil, Nil, [0, 2])).words = [0, 2, 7, 7, 0, 7] { refl }
+
+// The control of the owner's read: a read of the lent part at literals is
+// refused outright, and would have been sound (the runs agree, 7 and 7).
+fn peek() → Func { Func(Writes, 0, [View(0, Writes, Lit(0), Lit(2)), Put(0, Lit(0), Lit(7)), Get(0, Lit(0)), Die(0)], RWord(Var(0))) }
+
+theorem peek_refused(): check_fn(sigs_of([peek()]), peek()) = None { refl }
+
+theorem peek_agrees(): run_fn(world([peek()], 1), peek(), [[5, 6]], Ref(0, 0, 2), Nil) = ROut([[7, 6]], 7, 0, 0) { refl }
+
+theorem peek_means(): mean_fn(world([peek()], 1), peek(), [5, 6], Nil) = MOut([7, 6], 7, Nil) { refl }
+
+// The control of the owner's write: a write inside the lent window is
+// refused, and rightly: the meaning's write-back of the loan's value puts
+// back what was there when it was lent, over the owner's write, while the
+// run keeps the owner's. `x[1]` reads 9 in the run and 6 in the meaning.
+fn clobber() → Func { Func(Writes, 0, [View(0, Writes, Lit(0), Lit(2)), Set(Lit(1), Lit(9)), Put(0, Lit(0), Lit(5)), Die(0), Get(0, Lit(1))], RWord(Var(0))) }
+
+theorem clobber_refused(): check_fn(sigs_of([clobber()]), clobber()) = None { refl }
+
+theorem clobber_control(): ¬(run_fn(world([clobber()], 1), clobber(), [[5, 6]], Ref(0, 0, 2), Nil).word = mean_fn(world([clobber()], 1), clobber(), [5, 6], Nil).word) {
+    λ e => {
+        let at: (9 = 6) = e;
+        absurd(at)
+    }
+}
+
+// A write through a loan after its death is refused: it is no longer lent.
+fn stale() → Func { Func(Writes, 0, [View(0, Writes, Lit(0), Lit(2)), Die(0), Put(0, Lit(0), Lit(5))], RWord(Lit(0))) }
+
+theorem stale_refused(): check_fn(sigs_of([stale()]), stale()) = None { refl }
+
+// A loan of a part of a read parameter is refused: `&mut` needs the place
+// to write.
+fn lend_read() → Func { Func(Reads, 0, [View(0, Writes, Lit(0), Lit(1)), Put(0, Lit(0), Lit(5))], RWord(Lit(0))) }
+
+theorem lend_read_refused(): check_fn(sigs_of([lend_read()]), lend_read()) = None { refl }

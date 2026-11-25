@@ -1040,6 +1040,16 @@ version. Stated per name, as above, the invariant needs two more clauses
 (live names hold distinct objects; every live name on a view's object lists
 its window), which are this table rederived.
 
+What `out(viewer)` stands for is exclusivity: a live write view is apart
+from every other live view. With eager write-back (§15.2) the holder's value
+inside an out window is the viewer's, so the invariant does not weaken while
+a loan lives: the object holds the holder's value everywhere, and each live
+write view holds its own value at the window its slot names, which are the
+same values there. A read of an `out` place by its owner would therefore be
+sound (the fourth experiment proves it, `Sim::owner_reads`); it is refused
+as policy (§15.7, item 4), and a write by the owner there is refused because
+the next write-back would put back what was lent over it.
+
 A place is frozen while a live binding's type mentions it in a read region.
 A write under a frozen place is licensed where it is apart from it, so a
 view of `xs[0..8]` permits `xs[9] := s`. A collection states one region for
@@ -1251,6 +1261,29 @@ where the first experiment's was quadratic, from its representation
 (`place-check-name-lookup-cost`). What the checker needs next (a loan held
 across statements, a join, stored references) is
 `ownership-checker-loans-and-joins`.
+
+**The fourth experiment** (`ownership-checker-loans-and-joins`) restructures
+`call_check.hthr` so one checker covers both earlier experiments' calls and
+what they left untested, each item landed and verified before the next.
+
+*A loan held across statements* (2026-11-25). The write parameter is now a
+place (`x[i] := v` means `x := x.set(i, v)`), not a chain of named versions:
+with one object per function the versions only counted writes, and a join
+could not have met two arms that wrote different numbers of times. A view is
+`View(t, md, lo, n)`, to read or to write; `Put(t, i, v)` writes through a
+write view; `CallMut(g, t, args, z)` lends a live write view to a callee, so
+the second experiment's one-statement loan is `View`, `CallMut`, `Die`. In
+the meaning a write view is its value and an erased slot (§15.2), and `Put`
+and `CallMut` write it back at once (`Sem::back`). The invariant did not
+weaken: the file holds the holder's value everywhere, each live write view
+holds its own value at the window its slot names (`Lent`), and a live write
+view is apart from every other live view (`Sim.excl`, what `out` means).
+`written_back` serves both a store through a view and a call lent one, so
+the write-back after a statement costs one write's proof whatever the
+loan's length. The owner's read of a lent part is refused and proved sound
+(`Sim::owner_reads`; `loan_unchecked_agrees` runs a program whose residual
+fails and whose runs agree); the owner's write inside the window is refused
+with `clobber_control` (the run reads 9, the meaning 6).
 
 ### 15.7 Settled by Minus, 2026-11-25, and what is still open
 
