@@ -1,6 +1,6 @@
 ---
 title: The IEEE P3109 formats in the float library
-status: open
+status: closed
 labels: [mathematics,floating-point,design]
 area: mathematics
 milestone: [float-p3109]
@@ -105,3 +105,5 @@ against.
 - 2026-11-25: Design round done: `docs/library/float-p3109-design.md` (D1 datum = `Float(F)` up to `≈`, no `-0` change; D2 unsigned = nonnegative half of a signed envelope; D3 `cut` replaces `reserves_top`, `frac_ok` dropped; D4 ties to the even code; D5 the overflow tie follows the largest float's parity; D6 saturation is the projection round's). Round 1 (`p3109-values`) landed: `lib/std/num/float/p3109.hthr` builds `Binary{K,P,s,d}` from the reserved-code count, and the P3109 interim report v4.1 and its value tables (github.com/P3109/Public) are the reference; the tests check extremes against the tables. Remaining: [[float-saturation-modes]], [[float-round-to-odd]], [[float-stochastic-rounding]], [[float-p3109-encoding]].
 - 2026-11-25: Round 2 (projection): saturation, unsigned projection, round to odd and stochastic rounding (pointwise, faithful), and Fast2Sum's overflow error landed; design §6.
 - 2026-11-25: Round 2 done: round to odd's exactness (round_odd_even_exact) and round to odd and stochastic rounding through the saturation modes landed; p3109-projection is done (design §6). Next: [[float-p3109-encoding]].
+- 2026-11-25: Round 3 (encoding) landed: decode is a bijection from the 2^K codes onto the data for every P3109 format, and every code of 19 formats matches the value tables (design §7). All three submilestones are done; float-p3109 is done.
+- 2026-11-25: Residue owned before closing: [[float-project-infinite-inputs]] (infinite inputs to the projection), [[float-double-rounding]], [[float-stochastic-rounding]] (expectations), and the BitVec reading of codes with the float-bits milestone.

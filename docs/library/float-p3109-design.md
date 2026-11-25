@@ -388,3 +388,64 @@ and `project_odd_even_exact` (exactness under every saturation mode) are
 the theorems. `Rat::floor_nat` uses binary long division: `Nat::div`
 counts its quotient out in units and ran out of fuel at Binary8p3se's top.
 
+## 7. Round 3 as landed (`p3109-encoding`, 2026-11-25)
+
+Module: `lib/std/num/float/p3109_codes.hthr`. Tests:
+`lib/_tests/std/num/float/p3109_codes_tests.hthr`, whose tables
+`scripts/p3109-tables` generates from the working group's CSV files.
+
+**A code is `bexp·half + mag`.** For a nonnegative finite float the P3109
+code `E·2^(P-1) + T` is `bexp·half + mag`: a normal float has `E = bexp + 1`
+and `T = mag - half`, and the subnormal row (`E = 0`, `bexp = 0`,
+`mag = T`) is the same formula. So decoding is one division by `half`
+(`code_mag`/`code_bexp`, by quotient and remainder) and encoding is
+`Finite::code`. Proved generically, for any format whose `span` and `cut`
+are the ones the largest finite code `N` fixes (`Format::p3109` builds them
+that way, so the hypotheses hold by computation):
+- `code_ok`: every code up to `N` is a canonical float;
+- `code_of_decode` and `decode_of_code`: the two are inverse;
+- `code_le`: every float's code is at most `N`, given that `N`'s float is
+  normal (`half <= N`, true of every valid P3109 format).
+
+**The whole code space.** `P3109Layout(F)` records a format's code facts:
+`K`, signedness, `N`, the `span`/`cut` equations, NaN, validity,
+`2^K = 2·2^(K-1)`, and how the specials fill the nonnegative half above `N`
+(`+∞` where there is one, then an unsigned format's NaN). `decode` is
+report §4.7.2 (a signed format's negative half is `2^(K-1) + m`: NaN at
+`m = 0`, which is the `-0` pattern, the negated floats, and then `-∞`), and
+`encode` is §4.7.6 (both zeros encode as 0). The theorems:
+- `encode_decode`: `encode(decode n) = n` for every `n < 2^K`;
+- `decode_encode`: `decode(encode r)` is the same datum as `r` for every
+  datum: the same value, the same infinity, or NaN (`Float::SameDatum`;
+  `Float::Same` makes NaN unequal to itself, which is IEEE comparison and
+  not datum identity);
+- `decode_datum`: every code decodes to a datum, and an unsigned format's
+  never to a negative float or `-∞`.
+
+So `decode` is a bijection between the `2^K` codes and the data up to value
+sameness, for every layout. `Format::p3109_layout(K, P, s, d, valid, k1)`
+builds the layout of every P3109 format from two facts a literal format
+closes by evaluation.
+
+**The tables.** Every code point of nineteen formats decodes to the value
+the working group's tables give and encodes back: all ten three-bit formats
+(precisions one to three, every signedness and domain) and nine eight-bit
+ones (`Binary8p1se`, `p1uf`, `p2se`, `p3se`, `p3sf`, `p3ue`, `p4se`, `p4sf`,
+`p5se`). The eight-bit tables are stage theorems of 16 codes, and 8 for
+`Binary8p3ue`, whose top codes cost the most: one 256-code theorem is past
+the kernel's budget.
+
+**Codes are naturals below `2^K`, not `BitVec(K)`.** The bijection is about
+the numbers. Reading them as bit vectors, and the IEEE interchange
+formats' encodings, are `float-bits`, which this round does not close.
+
+**Observations.**
+- A transport motive whose body is a `match` needs `as λ _ => Type`.
+- When a goal states a property of `f(n)` and `f`'s body is a `match`, an
+  unannotated `match` on the same scrutinee refines the goal into the
+  branch; give the motive when the proof is about `f(n)` as a whole
+  (`half_dec_unsigned`).
+- A motive that must abstract the same decision in two places (a
+  predicate defined by the same `match` as the function) did not; stating
+  one lemma per outcome (`half_dec_inf`, `half_dec_nan`) did.
+
