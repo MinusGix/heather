@@ -513,9 +513,10 @@ theorem port_arena_window_held(own: List<u8>, a: Arena, length, base, count, i, 
 // tests the index itself. `bv_omega` finds both proofs where the calls are
 // written; the code passes the window's words and nothing for them (the
 // callees are named in the meaning by their functions written out over the
-// record, `Arena::read::words`). The window is tested as a sum of naturals
-// in the proof, not as `base + count <= 16` in the code: a sum of words
-// may wrap, and `bv_omega` does not read a bound through one.
+// record, `Arena::read::words`). The fit is carried as a sum of naturals
+// in the proof, as a handle's invariant carries it; a test in the code is
+// `window_fits` (`port_arena_push_fit_runs` below), not `base + count <=
+// 16`, whose sum of words may wrap.
 runtime fn Arena::port_bump(mut self a: Arena, base, count, i: u64, fits: ∥base.toNat() + count.toNat() <= 16∥ := bv_omega) → u64 {
     if inside: i < count {
         let old = a.read(base, count, i);
@@ -553,6 +554,34 @@ theorem port_arena_first_runs(): Arena::port_first::bytes(PORT_VEC_TWO(), 144, 0
 theorem port_arena_first_held(own: List<u8>, a: Arena, length, i: u64, holds: rt_held::Stored::Holds(Arena::stored(), own, length, a)):
     Arena::port_first(a, i).value = Arena::port_first::bytes(own, length, i).value {
     Arena::port_first::runs_held(own, a, length, i, holds).value
+}
+
+// A push written through the window's `store` after the fitting check
+// (`Arena::push_fit`, `Arena::store_item`; issues/bv-omega-fits-through-wrapping-sum.md):
+// `store`'s `fits` is found from `window_fits(base, cap, 16)`, the test the
+// code runs, where the sum `base + cap <= 16` would not give it. Where the
+// window fits it is `push`: the same answer and the same bytes.
+theorem port_arena_push_fit_runs(): Arena::push_fit::bytes(PORT_VEC(), 144, 0, 7) = Arena::push::bytes(PORT_VEC(), 144, 0, 7) ∧
+    Arena::push_fit::bytes(PORT_VEC(), 144, 0, 7).value = 1 ∧
+    Arena::read::bytes(Arena::push_fit::bytes(PORT_VEC(), 144, 0, 7).after, 144, 3, 2, 0).value = 7 ∧
+    Arena::push_fit::bytes(PORT_VEC_TWO(), 144, 0, 9) = Mutated(PORT_VEC_TWO(), 2) {
+    ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩
+}
+
+// A header whose window wraps: base `2^64 - 1`, capacity 2, so the sum of
+// words `base + cap` is 1, under the limit. The check refuses it and the
+// arena is as it was.
+fn PORT_WRAPPED() → List<u8> {
+    [3, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255, 2, 0, 0, 0, 0, 0, 0, 0] ++ List::replicate(BitVec::ofNat(0), 112)
+}
+
+theorem port_arena_push_fit_wrapped(): Arena::push_fit::bytes(PORT_WRAPPED(), 144, 0, 9) = Mutated(PORT_WRAPPED(), 0) { refl }
+
+theorem port_arena_push_fit_held(own: List<u8>, a: Arena, length, h, x: u64, holds: rt_held::Stored::Holds(Arena::stored(), own, length, a)):
+    Arena::push_fit(a, h, x).value = Arena::push_fit::bytes(own, length, h, x).value ∧
+    rt_held::Stored::Holds(Arena::stored(), Arena::push_fit::bytes(own, length, h, x).after, length, Arena::push_fit(a, h, x).after) {
+    let ran = Arena::push_fit::runs_held(own, a, length, h, x, holds);
+    ⟨ran.value, ran.holds⟩
 }
 
 // What it publishes, at every arena the span holds.

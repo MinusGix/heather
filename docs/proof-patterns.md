@@ -221,6 +221,14 @@ should read is `docs/library/program-and-proof-style.md`.
   through its wrap (`(j - i) & 3` is `(j + 4 - i) % 4` for slots below
   four, borrow and all), so no `toNat_band_low_mask` or
   `toNat_sub_mod`/`mod_pow_mod` chain (bv-omega-design §3.2).
+- **A window that fits: test it without the sum.** `base + len <= 16`
+  on words does not give `base.toNat() + len.toNat() <= 16`, and
+  `bv_omega` refuses it because it is false (the sum wraps at `base =
+  2^64 - 1`, `len = 2`; its refusal says so). Test `len <= 16 ∧ base <=
+  16 - len`, or call `window_fits(base, len, 16)` (`word_fits`), which a
+  store's found `fits` reads; a carry test beside the sum, `base <= base +
+  len`, is read too (bv-omega-design §5.2,
+  [[bv-omega-fits-through-wrapping-sum]]).
 - **Products of `pow` terms: restate the step over variables.** `omega`
   over `Nat` facts whose atoms are `m * pow(2, …)` products re-reads their
   structure; the same facts handed to a lemma over bare `Nat`/`Int`

@@ -214,6 +214,16 @@ theorem unsigned_lt_prop(n: Nat, a, b: BitVec(n), h: a.unsigned_lt(b)): a.toNat(
 
 theorem unsigned_le_prop(n: Nat, a, b: BitVec(n), h: a.unsigned_le(b)): a.toNat() <= b.toNat() { h }
 
+// Their negations, as the other branch of an `if h: a <= b` states them
+// (issues/bv-omega-negated-word-order.md).
+theorem unsigned_not_le_prop(n: Nat, a, b: BitVec(n), h: ¬a.unsigned_le(b)): b.toNat() < a.toNat() {
+    Nat::lt_of_not_le(b.toNat(), a.toNat(), h)
+}
+
+theorem unsigned_not_lt_prop(n: Nat, a, b: BitVec(n), h: ¬a.unsigned_lt(b)): b.toNat() <= a.toNat() {
+    a.toNat().le_of_not_lt(b.toNat(), h)
+}
+
 // The same tests as goals: each from the Nat order over the values, which
 // `bv_omega` proves as a subgoal.
 theorem unsigned_lt_of_nat(n: Nat, a, b: BitVec(n), h: a.toNat() < b.toNat()): a.unsigned_lt(b) { h }

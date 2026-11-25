@@ -38,6 +38,11 @@ pub(crate) struct Generated {
     /// Whether a careful attempt differs from this one: the goal was read
     /// off a word's fact, or a fact was restated untried.
     pub retry: bool,
+    /// Sums and differences of words at a literal width whose side condition
+    /// failed where a fact in scope mentions them, so the careful attempt
+    /// left that fact out (§5.2): kept whole, a later round reads them
+    /// through their wrap. Each with its width where it is a sum.
+    pub wrapping: Vec<(String, Option<String>)>,
 }
 
 #[derive(Clone)]
@@ -55,6 +60,8 @@ pub(crate) struct Obligation {
     /// The words to keep as atoms when this side condition fails (§5.1):
     /// the innermost words under its own that a fact in scope mentions.
     pub atoms: Vec<String>,
+    /// The word it came from, as the walk spelled it.
+    pub word: String,
 }
 
 impl Obligation {
@@ -154,6 +161,9 @@ struct Walk<'a> {
     /// Words kept as atoms because taking them apart left a side condition
     /// `omega` could not prove (§5.1): leaves, whatever their head.
     opaque: HashSet<String>,
+    /// Sums and differences kept whole and read through their wrap (§5.2):
+    /// a fact in scope about one was left out where it may wrap.
+    wrapped: HashSet<String>,
 }
 
 impl<'a> Walk<'a> {
@@ -274,7 +284,7 @@ impl<'a> Walk<'a> {
             return Ok(Some(node));
         }
 
-        let shape = if self.opaque.contains(&spelled) {
+        let shape = if self.opaque.contains(&spelled) || self.wrapped.contains(&spelled) {
             Shape::Leaf
         } else if self.stated.contains(&spelled) {
             self.known(word).or_else(|| self.alias(word)).unwrap_or(Shape::Leaf)
@@ -350,6 +360,9 @@ impl<'a> Walk<'a> {
             }
         }
         if let Kind::Leaf = self.nodes[index].kind {
+            if self.wrapped.contains(&spelled) {
+                self.wrap_value(&w, word, &spelled)?;
+            }
             self.mask_bound(&w, word, &spelled)?;
             self.zero_extend_value(word, &spelled)?;
             self.shift_right_value(&w, word, &spelled)?;
@@ -434,6 +447,43 @@ impl<'a> Walk<'a> {
             if !self.bridges.iter().any(|(_, other, _)| other == &statement) {
                 self.bridges.push((format!("__bv_divided{}", self.bridges.len()), statement, proof));
             }
+        }
+        Ok(())
+    }
+
+    /// A sum or a difference kept whole (§5.2), at a literal width, is read
+    /// through its wrap: `toNat(a + b) = (toNat(a) + toNat(b)) % 2^w`
+    /// (`toNat_add_mod`) and `toNat(a - b) = (toNat(a) + 2^w - toNat(b)) %
+    /// 2^w` (`toNat_sub_mod`), its operands words of their own. The carry
+    /// or the borrow is then a case of the remainder's quotient, so a test
+    /// that rules it out (`base <= base + len`) is read, and a fact about
+    /// the word is taken with no side condition. Only for words a failed
+    /// attempt kept, so a proof that needed none is written as before.
+    fn wrap_value(&mut self, w: &str, word: &Rc<Term>, spelled: &str) -> Result<(), String> {
+        const ADD: &str = "bitvec_nat::BitVec::toNat_add_mod";
+        const SUB: &str = "bitvec_nat::BitVec::toNat_sub_mod";
+        let Some(width) = w.parse::<u32>().ok().filter(|width| *width < 127) else { return Ok(()) };
+        let (a, b, sum) = match self.shape(word) {
+            Shape::Add(a, b) => (a, b, true),
+            Shape::Sub(a, b) => (a, b, false),
+            _ => return Ok(()),
+        };
+        let lemma = if sum { ADD } else { SUB };
+        if self.elab.key_of(lemma).is_none() {
+            return Ok(());
+        }
+        let (Some(a_s), Some(b_s)) = (self.elab.spell_term_source(self.cx, &a), self.elab.spell_term_source(self.cx, &b)) else {
+            return Ok(());
+        };
+        if self.word_at(w.to_string(), &a)?.is_none() || self.word_at(w.to_string(), &b)?.is_none() {
+            return Ok(());
+        }
+        let power = (1i128 << width).to_string();
+        let (a_value, b_value) = (format!("bitvec::BitVec::toNat({a_s})"), format!("bitvec::BitVec::toNat({b_s})"));
+        let wrapped = if sum { add(&a_value, &b_value) } else { format!("nat::Nat::sub({}, {b_value})", add(&a_value, &power)) };
+        let statement = format!("bitvec::BitVec::toNat({spelled}) = nat::Nat::mod({wrapped}, {power})");
+        if !self.bridges.iter().any(|(_, other, _)| other == &statement) {
+            self.bridges.push((format!("__bv_wrap{}", self.bridges.len()), statement, format!("{lemma}({w}, {a_s}, {b_s})")));
         }
         Ok(())
     }
@@ -953,7 +1003,8 @@ impl<'w, 'a> Emitter<'w, 'a> {
     }
 
     fn obligation(&mut self, n: usize, statement: String, shown: String, why: String, closed: bool) -> usize {
-        self.obligations.push(Obligation { statement, shown, why, closed, probe: None, atoms: Vec::new() });
+        let word = self.walk.nodes[n].word.clone();
+        self.obligations.push(Obligation { statement, shown, why, closed, probe: None, atoms: Vec::new(), word });
         self.obligation_nodes.push(n);
         self.obligations.len() - 1
     }
@@ -1048,6 +1099,8 @@ impl<'w, 'a> Emitter<'w, 'a> {
             let node = &self.walk.nodes[n];
             let why = if let Kind::Value(..) = node.kind {
                 format!("`{}` does not fit {} bits", node.word, node.width)
+            } else if let Kind::Add(..) = node.kind {
+                format!("`{}` may overflow {} bits: {}", node.word, node.width, sum_wraps(&node.width))
             } else {
                 format!("`{}` may overflow {} bits", node.word, node.width)
             };
@@ -1417,11 +1470,46 @@ fn word_fact(elab: &Elaborator, cx: &Cx, name: &str, ty: &Type) -> Option<WordFa
     }
 }
 
+/// The check that a window fits under a limit without a sum that may wrap
+/// (`word_fits::window_fits`, issues/bv-omega-fits-through-wrapping-sum.md)
+/// equal to a constructor, either way round: its three words, whether it
+/// answered `True`, and the fact's proof as `window_fits(…) = c`. Read
+/// through `window_fits_sound` (`base + len <= limit` as numbers) or
+/// `window_fits_false` (`limit < base + len`), so a store's found proof
+/// comes from the test the code runs. Only where the law is in scope.
+fn window_check(elab: &Elaborator, cx: &Cx, name: &str, ty: &Type) -> Option<(Vec<Rc<Term>>, bool, String)> {
+    let Type::Id { lhs, rhs, .. } = ty else { return None };
+    for (flipped, side, flag) in [(false, lhs, rhs), (true, rhs, lhs)] {
+        let Some(args) = named_args(elab, side, "word_fits::window_fits") else { continue };
+        if args.len() != 3 { continue; }
+        let Some(yes) = bool_flag(elab, cx, flag) else { continue };
+        // Not inside `word_fits` before its laws exist.
+        if elab.key_of(if yes { "word_fits::window_fits_sound" } else { "word_fits::window_fits_false" }).is_none() {
+            return None;
+        }
+        let proof = if flipped { format!("sym({name})") } else { name.to_string() };
+        return Some((args.into_iter().cloned().collect(), yes, proof));
+    }
+    None
+}
+
 /// A disequation of words, `d ≠ 0`, as `≠` of their values: a divisor's
-/// test that a remainder's bound reads (`division_value`).
+/// test that a remainder's bound reads (`division_value`). A negated order,
+/// `¬(a <= b)` or `¬(a < b)` as the other branch of a test states it, as
+/// the order the other way round (issues/bv-omega-negated-word-order.md).
 fn negated_word_fact(elab: &Elaborator, cx: &Cx, name: &str, ty: &Type) -> Option<WordFact> {
     let domain = crate::omega_cert::negated_domain(elab, cx, ty)?;
     let decoded = crate::inductive::decoded(&domain).into_owned();
+    if let Type::El { tm, .. } = &decoded {
+        for (test, relation, lemma) in [("unsigned_le", Relation::Lt, "unsigned_not_le_prop"), ("unsigned_lt", Relation::Le, "unsigned_not_lt_prop")] {
+            if let Some(args) = named_args(elab, tm, &format!("bitvec::BitVec::{test}")).filter(|args| args.len() == 3) {
+                if elab.key_of(&format!("bitvec_omega::{lemma}")).is_none() {
+                    return None;
+                }
+                return Some(WordFact { args: args.into_iter().cloned().collect(), relation, swapped: true, lemma, proof: name.to_string() });
+            }
+        }
+    }
     let Type::Id { lhs, rhs, .. } = &decoded else { return None };
     let width = word_width(elab, cx, &decoded, lhs)?;
     Some(WordFact { args: vec![width, Rc::clone(lhs), Rc::clone(rhs)], relation: Relation::Ne, swapped: false, lemma: "toNat_ne_of_ne", proof: name.to_string() })
@@ -1515,8 +1603,10 @@ fn bridge_goal(elab: &Elaborator, cx: &Cx, expected: &Type) -> Option<String> {
 /// side conditions fail.
 ///
 /// `opaque` are words kept as atoms: an attempt whose side conditions over
-/// them failed is retried with them as leaves (§5.1).
-pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: bool, opaque: &HashSet<String>) -> Result<Generated, String> {
+/// them failed is retried with them as leaves (§5.1). `wrapped` are sums and
+/// differences kept whole and read through their wrap, where a fact about
+/// one was left out because it may wrap (§5.2).
+pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: bool, opaque: &HashSet<String>, wrapped: &HashSet<String>) -> Result<Generated, String> {
     // A goal that is a defined proposition (`p.Holds()` of a step whose
     // match is on a constructor) is read as the word relation it unfolds
     // to, as `omega` reads one; the proof is checked against the original.
@@ -1529,7 +1619,7 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: boo
     let restated = aliased_goal(elab, cx, expected);
     let expected = restated.as_ref().unwrap_or(expected);
     if let Some(source) = bridge_goal(elab, cx, expected) {
-        return Ok(Generated { source, prelude: String::new(), obligations: Vec::new(), retry: false });
+        return Ok(Generated { source, prelude: String::new(), obligations: Vec::new(), retry: false, wrapping: Vec::new() });
     }
     let mut walk = Walk {
         elab,
@@ -1545,6 +1635,7 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: boo
         bridges: Vec::new(),
         splits: HashMap::new(),
         opaque: opaque.clone(),
+        wrapped: wrapped.clone(),
     };
     let facts_in_scope = local_facts(elab, cx);
     for (name, ty) in &facts_in_scope {
@@ -1573,16 +1664,36 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: boo
     let fact_names: Vec<String> = facts_in_scope.iter().map(|(name, _)| name.clone()).collect();
     let fact_texts: Vec<String> = facts_in_scope.iter().filter_map(|(_, ty)| elab.spell_type_source(cx, ty)).collect();
     let mut pending = facts_in_scope;
+    let mut wrapping: Vec<(String, Option<String>)> = Vec::new();
     loop {
         let mut refused = Vec::new();
         let mut taken = false;
         for (name, ty) in pending {
-            let compared = word_fact(elab, cx, &name, &ty);
-            let is_comparison = compared.is_some();
+            let check = window_check(elab, cx, &name, &ty);
+            let compared = if check.is_some() { None } else { word_fact(elab, cx, &name, &ty) };
+            let is_comparison = compared.is_some() || check.is_some();
             if !is_comparison && !is_nat_relation(elab, cx, &ty) {
                 continue;
             }
             let before = walk.clone();
+            if let Some((args, fits, proof)) = check {
+                let mut spelled = Vec::new();
+                for operand in &args {
+                    if let Some(i) = walk.word_at("64".into(), operand)? {
+                        walk.found.push(i);
+                        comparison_value_bridge(&mut walk, i);
+                    }
+                    spelled.extend(elab.spell_term_source(cx, operand));
+                }
+                let [base, len, limit] = spelled.as_slice() else {
+                    walk = before;
+                    continue;
+                };
+                let (bt, lt_, mt) = (format!("bitvec::BitVec::toNat({base})"), format!("bitvec::BitVec::toNat({len})"), format!("bitvec::BitVec::toNat({limit})"));
+                let (statement, lemma) = if fits { (le(&add(&bt, &lt_), &mt), "window_fits_sound") } else { (lt(&mt, &add(&bt, &lt_)), "window_fits_false") };
+                walk.bridges.push((format!("__bv_compare{}", walk.bridges.len()), statement,
+                    format!("word_fits::{lemma}({base}, {len}, {limit}, {proof})")));
+            }
             if let Some(fact) = compared {
                 let [n, a, b] = fact.args.as_slice() else { continue };
                 for operand in [a, b] {
@@ -1623,7 +1734,17 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: boo
             all.extend(found.iter().copied());
             let new: Vec<Obligation> = plan_for(&walk, &stated, &all).into_iter().filter(|o| !old.contains(&o.statement)).collect();
             optimistic |= !careful && !new.is_empty();
-            if !careful || new.iter().all(|o| holds(elab, cx, &walk, o)) {
+            let failed = if careful { new.iter().find(|o| !holds(elab, cx, &walk, o)) } else { None };
+            if let Some(o) = failed
+                && let Some(&n) = walk.node_index.get(&o.word)
+                && let Kind::Add(..) | Kind::Sub(..) = walk.nodes[n].kind
+                && walk.nodes[n].width.parse::<u32>().is_ok()
+                && !wrapping.iter().any(|(w, _)| w == &o.word)
+            {
+                let sum = matches!(walk.nodes[n].kind, Kind::Add(..)).then(|| walk.nodes[n].width.clone());
+                wrapping.push((o.word.clone(), sum));
+            }
+            if failed.is_none() {
                 subjects.extend(found);
                 taken = true;
                 if !is_comparison { restated.push((name, ty)); }
@@ -1812,7 +1933,7 @@ pub(crate) fn generate(elab: &Elaborator, cx: &Cx, expected: &Type, careful: boo
     } else {
         source.push_str(&format!("__bv_goal({})\n}}", arguments.join(", ")));
     }
-    Ok(Generated { source, prelude, obligations: e.obligations, retry: optimistic })
+    Ok(Generated { source, prelude, obligations: e.obligations, retry: optimistic, wrapping })
 }
 
 /// Every side condition as one leaf of a *balanced* conjunction, proved in
@@ -1866,7 +1987,7 @@ fn generate_direct(walk: &Walk, stated: &[StatedBound], n: usize, flipped: bool,
         source.push_str("have __bv_obligations = trivial;\n");
     }
     source.push_str(&if flipped { format!("sym({proof})\n}}") } else { format!("{proof}\n}}") });
-    Generated { source, prelude, obligations: e.obligations, retry: true }
+    Generated { source, prelude, obligations: e.obligations, retry: true, wrapping: Vec::new() }
 }
 
 /// A fact that gives a word's value: `toNat(w) = v` or `v = toNat(w)`, with
@@ -1902,6 +2023,16 @@ fn prelude(walk: &Walk) -> String {
         out.push(format!("have {name}: ({statement}) = {proof};"));
     }
     out.join("\n")
+}
+
+/// What a refusal over a sum of words that may wrap says (§5.2): the
+/// reader's first guess is that the tactic is weak, and the claim is
+/// usually false there.
+pub(crate) fn sum_wraps(width: &str) -> String {
+    format!("a sum of words wraps past 2^{width}, so a test of `a + b` does not bound `a` and `b` \
+        (at `a = 2^{width} - 1`, `b = 2`, `a + b` is 1); test without the sum, \
+        `b <= limit ∧ a <= limit - b` or `word_fits::window_fits(a, b, limit)`, \
+        or rule the carry out beside it, `a <= a + b`")
 }
 
 /// A comparison against a Nat-built word must expose that word's value

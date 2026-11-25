@@ -1,6 +1,6 @@
 ---
 title: bv_omega and a window that fits: a word sum that may wrap, the spellings that are true, and the check that gives the proof
-status: open
+status: closed
 labels: [tactics,bitvec,ownership]
 area: heather-in-heather
 milestone: [nh-ownership]
@@ -27,3 +27,26 @@ The probe table is in the library, each true spelling is proved by `bv_omega` or
 
 - **[[runtime-record-calls-erased]]** (closed) gives a record function calling `Arena::store` with a found proof.
 - **[[bv-omega-word-arithmetic-modulo]]** owns masks and borrowing subtraction modulo a power of two; not this.
+
+## Log
+
+- 2026-11-25: Round (branch `claude/bv-omega-fits`). Done:
+
+    - **Probe table**, `lib/_tests/native/runtime/word_fits_tests.hthr`, goal `base.toNat() + len.toNat() <= 16` (or `<= limit.toNat()`):
+
+      | spelling | true? | `bv_omega` before | now |
+      |---|---|---|---|
+      | `len <= L ∧ base <= L - len` (and base first) | yes | proved | proved |
+      | `base <= 16 ∧ len <= 16 ∧ base + len <= 16` (alloc's) | yes | proved | proved |
+      | `base, len < 2^63 ∧ base + len <= 16` | yes | proved | proved |
+      | carry test `base <= base + len` (or `len <= …`, or the `<=` bit) beside the sum | yes | refused | proved |
+      | `window_fits(base, len, L) = True` | yes | refused | proved (and `= False` gives `L < base + len`) |
+      | `base + len < 16`, `base + len <= L` | no (`¬` theorem at `2^64 - 1`, `2`) | refused, goal step | refused, says the sum wraps |
+      | `base <= 16 ∧ base + len <= 16` | no (`¬` at `1`, `2^64 - 1`) | refused | refused, says the sum wraps |
+
+    - **Tactic** (bv-omega-design §5.2): a sum or difference at a literal width whose side condition failed where a fact mentions it was a fact left out, which also lost a carry test. It is now recorded (`Generated::wrapping`) and the next round keeps it whole and reads it through `toNat_add_mod`/`toNat_sub_mod`, so the facts about it are taken and the carry is a case of the remainder's quotient. Only those words: a word §5.1 keeps whole for another reason stays a plain leaf. A refusal over a sum that may overflow (diagnosed, or a goal step after such a fact was left out) now says a sum of words wraps, that a test of `a + b` does not bound `a` and `b`, and names `b <= limit ∧ a <= limit - b`, `window_fits`, or a carry test (`bv_omega::sum_wraps`).
+    - **The check**: `word_fits::window_fits(base, len, limit)`, a `runtime fn` testing `len <= limit ∧ base <= limit - len`, with `window_fits_sound` (`True` → `base + len <= limit` as numbers) and `window_fits_false`; `bv_omega` knows it by name (`window_check`, only where its law is in scope), so `if ok: window_fits(…)` gives a store's found `fits`. Choice taken: a Bool `runtime fn` read by name in the tactic, rather than an evidence rule: `store`'s `fits` is a plain Nat fact found by `bv_omega`, not a relation `infer` searches.
+    - **Customer**: `Arena::store_item(h, base, cap, len, x)` pushes through `Arena::store` after `window_fits(base, cap, 16)`, both proofs found; `Arena::push_fit` reads the header and calls it. Ledger rows `port_arena_push_fit_runs` (the same bytes as `push` where it fits), `port_arena_push_fit_wrapped` (a header at base `2^64 - 1`, cap 2, whose word sum is 1, is refused, the arena unchanged), `port_arena_push_fit_held`. `push_in`/`push` untouched.
+    - Also: `bv_omega` reads a negated order of words ([[bv-omega-negated-word-order]], filed and closed the same round). `docs/proof-patterns.md` §3 has the rule.
+
+    Left: the header words are parameters of `store_item` because a found proof does not read a test over a word bound by `let` to a heap read: [[found-proof-over-let-bound-read]].
