@@ -6,6 +6,7 @@
 // that cuts a reference answering nothing.
 import bytes_level::{run};
 import bytes_memory;
+import bytes_level_renames;
 import reference_cells;
 import function_ir;
 import bitvec;
@@ -189,3 +190,46 @@ theorem copy_moves_reference(): answer_word(copy_run(8), 0) = Some(9) { refl }
 
 // Control: four bytes of it cut it, and the copy answers nothing.
 theorem copy_cut_refused(): refused(copy_run(4)) = True { refl }
+
+// ---------------------------------------------------------------------------
+// Placelessness at one renaming: blocks 0 and 1 swapped
+
+fn swap(b: Nat) → Nat { match b { Zero => 1, Succ(c) => match c { Zero => 0, Succ(_) => b } } }
+
+theorem swap_swap(b: Nat): swap(swap(b)) = b {
+    match b { Zero => refl, Succ(c) => match c { Zero => refl, Succ(_) => refl } }
+}
+
+fn swapping() → Renaming { Renaming(swap, swap, swap_swap, swap_swap) }
+
+fn swapped() → Memory { Memory(Heap(λ (c: Nat) => memory().heap.bytes(swap(c)), []), λ (c: Nat) => memory().written(swap(c))) }
+
+theorem swapped_renamed(): MemoryRenamed(swapping(), memory(), swapped()) {
+    MemoryRenamed(bytes := λ c => refl, shadow := refl, written := λ c => refl)
+}
+
+fn cells_args() → List<Value> { [Ref(Loc(0, 0)), Ref(Loc(1, 2))] }
+
+// The theorem at the experiment's program: the swapped run answers the
+// same words,
+theorem cells_words_alike(): run(cells_program(), 0, rename_values(swapping(), cells_args()), swapped()).map(λ (a: Answer) => word_parts(a.words)) =
+    run(cells_program(), 0, cells_args(), memory()).map(λ (a: Answer) => word_parts(a.words)) {
+    bytes_level_renames::run_words_alike(swapping(), cells_program(), 0, cells_args(), memory(), swapped(), swapped_renamed())
+}
+
+// and it does answer: its references aim at the swapped blocks.
+theorem cells_swapped_reads_nine(): answer_word(run(cells_program(), 0, rename_values(swapping(), cells_args()), swapped()), 0) = Some(9) { refl }
+
+// Control: a reference answered is renamed, not the same. The routine
+// answers the reference it loaded back.
+fn answers_reference() → Program {
+    Program([Routine([ref_id(0), ref_id(1)], Leaf([StoreRef(0, 1), LoadRef(2, 0)]), [ref_id(2)])])
+}
+
+fn answer_block(o: Option<Answer>) → Option<Nat> {
+    match o { None => None, Some(a) => match a.words.nth(0) { None => None, Some(v) => match v { Word(_) => None, Ref(loc) => Some(loc.block) } } }
+}
+
+theorem reference_answered(): answer_block(run(answers_reference(), 0, cells_args(), memory())) = Some(1) { refl }
+
+theorem reference_answered_renamed(): answer_block(run(answers_reference(), 0, rename_values(swapping(), cells_args()), swapped())) = Some(0) { refl }
