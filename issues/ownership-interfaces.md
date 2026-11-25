@@ -30,3 +30,13 @@ The first package of the real ownership modules: the interfaces of `docs/languag
 ## Done when
 
 Items 1 to 6 have landed with `scripts/test --pr` green, or the package stopped after a landed item with what remains stated; `ownership-design.md` has a §22 "The interfaces as built".
+
+## Log
+
+- 2026-11-25: **Item 1 landed: the total step model, in place** (`lib/lang/ownership/steps.hthr`).
+  - `StepModel<S> { at, over, fits, like }`: a total read and a total modification per selection, a Boolean "this step fits this owner", and `like(sel, read, written)`, the relative fit (§21.1's "relative to what was read there": for a typed value its code, for a window its length). §21.1 lists three components; the laws need the fourth.
+  - `StepModelLaws`: `still` (a step that does not fit modifies nothing); where it fits, `over_at` (a modification whose result is like what was read is read back), `over_over` (two are one), `over_read` (a modification reads only what was read); `like_refl`; `keeps` (every modification keeps an owner like what it was like); `apart` (selections apart are `ApartAt`: a modification through either leaves the other's read, and the two commute, for any functions).
+  - Not a law: "a step that does not fit reads its owner back". The soundness never reads an unfit step, and at `Dyn` it is false beside a write (item 2's log).
+  - `Steps::at`, `Steps::over` compose the steps; `Steps::apart_sound` gives `Steps::Apart(m, ws, xs, ys)`, re-proved by `ApartAt::under` down the common prefix (a case split on the step's fit: where it fits, `over_at`/`over_over`/`over_read` with `keeps`; where not, `still`) and `ApartAt::then_both` after the difference. No `Path`, `PathLawsOn` or `KeepsFit` is used.
+  - The path-based model `value_steps.hthr` and `coded.hthr` were built on moved into `value_steps.hthr` as `PathModel` (renamed, verbatim), until both retire in item 6.
+  - `scripts/test --pr`: `== suite: 3518 passed, 0 failed, 2 ignored ==`.
