@@ -52,6 +52,13 @@ pub(crate) trait StatementElab {
         self.infer_statement_expression(cx, call)
     }
 
+    /// Whether the method call `call` threads its receiver, read from the
+    /// callee's recorded modes (`Members::threads_receiver`); `None` where
+    /// no mode is recorded, and the call's type decides.
+    fn threads_receiver(&self, _cx: &Cx, _call: &Expr) -> Option<bool> {
+        None
+    }
+
     /// A local or alias in scope, by name, read without recording a splice
     /// (`Elaborator::resolve_reading`): the right side of a renaming `let`.
     fn read_local(&self, cx: &Cx, name: &str, span: Span) -> R<(Term, Type, Level)>;
@@ -182,9 +189,7 @@ fn elaborate_mut_call(
     let receiver = &place_text(recv);
     let statement = name.starts_with("#seq");
     let (term, ty, level) = elab.infer_mut_call(cx, call)?;
-    let record = elab
-        .record_for_destructuring(cx, &ty, span)
-        .filter(|r| r.name == heather_syntax::MUTATED_RECORD);
+    let record = threaded_record(elab, cx, call, &ty, span)?;
     let Some(record) = record else {
         if statement {
             return err(
@@ -268,6 +273,31 @@ fn elaborate_mut_call(
     Ok(Some(whole))
 }
 
+/// The `Mutated` record a method call `x.m(ā)` of type `ty` answers when
+/// it threads its receiver, `None` when it does not. The callee's recorded
+/// receiver mode decides ([`StatementElab::threads_receiver`]): a `mut self`
+/// method (or `self: &mut`) threads, and a plain `self` whose result happens
+/// to be `Mutated` answers that record
+/// (issues/mutated-result-dot-call-diagnostic.md). Where no mode is recorded
+/// (a local function), a `Mutated` result threads, as it always has.
+fn threaded_record(
+    elab: &impl StatementElab,
+    cx: &Cx,
+    call: &Expr,
+    ty: &Type,
+    span: Span,
+) -> R<Option<Rc<Inductive>>> {
+    let record = elab
+        .record_for_destructuring(cx, ty, span)
+        .filter(|r| r.name == heather_syntax::MUTATED_RECORD);
+    match elab.threads_receiver(cx, call) {
+        None => Ok(record),
+        Some(false) => Ok(None),
+        Some(true) if record.is_some() => Ok(record),
+        Some(true) => err("a method whose receiver is `&mut` answers a `Mutated` record", span),
+    }
+}
+
 /// A place as written, `x.f.g`, for a message.
 fn place_text(place: &Expr) -> String {
     match &place.kind {
@@ -306,9 +336,7 @@ pub(crate) fn mut_call_part(elab: &impl StatementElab, cx: &Cx, e: &Expr) -> Opt
     let ExprKind::Dot { recv, .. } = &call.kind else { return Some(err("a marked call is a method call", e.span)) };
     Some((|| {
         let (term, ty, level) = elab.infer_mut_call(cx, call)?;
-        let record = elab
-            .record_for_destructuring(cx, &ty, e.span)
-            .filter(|r| r.name == heather_syntax::MUTATED_RECORD);
+        let record = threaded_record(elab, cx, call, &ty, e.span)?;
         match (record, part) {
             (Some(_), Part::Whole) => Ok((term, ty, level)),
             (Some(record), part) => {

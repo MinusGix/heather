@@ -205,12 +205,14 @@ moved.
   meant and leave the receiver unchanged, so it is refused at the call:
   "nothing here keeps the update". The test is on the dot-call path
   (`refuse_unthreaded_mut_call`, `crates/elab/src/dispatch/member.rs`),
-  which is hot, so it reads the callee's *written* result head, one surface
-  lookup and no reduction; the candidate `elaborate_mut_call` is inferring
-  is let through by its span (`DynamicScope::mut_call_site`). A method whose
-  written result is `Mutated<…>` by hand is refused the same way: that is
-  the same convention, decided by the same type. The qualified call
-  `T::m(y, a)` is the record, as before.
+  which is hot, so it reads the mode the callee's receiver was written
+  with (its parameter table, no reduction); the candidate
+  `elaborate_mut_call` is inferring is let through by its span
+  (`DynamicScope::mut_call_site`). A function written with a plain `self`
+  whose result is `Mutated<…>` by hand is not a `mut self` method: its dot
+  call answers the record, as its qualified call `T::m(y, a)` does
+  (sequencing-surface-design.md §24.4; until 2026-11-25 the written result
+  head decided, and refused it).
 
 An annotated `let p: T = x.m(a);` is a candidate like the unannotated one.
 The declaring block binds the call to a private `#mutcallN` and the

@@ -1555,7 +1555,10 @@ pub(crate) fn method_calls_as_calls(decl: &Decl, name: &str, tys: &dyn BinderTys
         return Ok(decl.clone());
     };
     let subject_ty = explicit[slot].ty.clone();
-    let mutated = matches!(&decl.result.kind, TyKind::Named { name, .. } if name == heather_syntax::MUTATED_RECORD);
+    // Whether the receiver comes back: its written mode (a `mut self`
+    // method, or a `&mut` parameter in its place), as a dot call reads it
+    // (`Members::threads_receiver`).
+    let mutated = explicit[slot].mode == heather_syntax::ParamMode::Path;
     // The binders a receiver may be typed over: the parameters and every
     // annotated `let`. The body is deshadowed, so one name is one binder.
     let mut scope = scope_of(decl);
@@ -1804,7 +1807,19 @@ impl MethodCalls<'_> {
         let ExprKind::Dot { recv, .. } = &inner.kind else { return None };
         let ExprKind::Var(receiver) = &recv.kind else { return None };
         let receiver = receiver.clone();
-        Some((receiver, self.call(inner)?))
+        let mut call = self.call(inner)?;
+        // A call that lends places as well (§24) stays a call that lends
+        // them, its receiver among them when it comes back.
+        if crate::path_calls::PathCalls::lends(&call) {
+            if self.mutated && let ExprKind::App { args, .. } = &mut call.kind {
+                let at = self.slot.min(args.len() - 1);
+                let span = args[at].span;
+                args[at] = app(var(heather_syntax::MUTARG, span), vec![args[at].clone()], span);
+            }
+            let span = call.span;
+            call = app(var(heather_syntax::PATHCALL, span), vec![call], span);
+        }
+        Some((receiver, call))
     }
 }
 
@@ -1928,9 +1943,46 @@ impl<'a> Rewrite<'a> {
             return call.clone();
         }
         let (passed, spill) = args.split_at(positions.len());
+        // A recursive call that lends places (§24) is held to the modes the
+        // callee wrote, as any call is (`PathCalls::check_modes`): its call
+        // site becomes the hypothesis, which has no table to read them from.
+        fn lent_at(a: &Expr) -> Option<&Expr> {
+            match &a.kind {
+                ExprKind::App { head, args, .. } if args.len() == 1 => {
+                    matches!(&head.kind, ExprKind::Var(n) if n == heather_syntax::MUTARG).then(|| &args[0])
+                }
+                _ => None,
+            }
+        }
+        if passed.iter().any(|a| lent_at(a).is_some()) {
+            for (a, &j) in passed.iter().zip(&positions) {
+                let path = tparams[j].mode == heather_syntax::ParamMode::Path;
+                let name = &tparams[j].name;
+                match (path, lent_at(a).is_some()) {
+                    (true, false) => self.fail(
+                        format!(
+                            "`{tname}` takes `{name}` as `&mut`, so its argument is a place it lends back: \
+                             write `&mut` before it, or call `{tname}` with no `&mut` at all for its \
+                             `Mutated` record"
+                        ),
+                        span,
+                    ),
+                    (false, true) => self.fail(
+                        format!(
+                            "`{tname}`'s parameter `{name}` is not `&mut`, so nothing comes back to the \
+                             place lent it: pass the value, without `&mut`"
+                        ),
+                        span,
+                    ),
+                    _ => {}
+                }
+            }
+        }
+        // The measure reads the value a lent place holds going in.
+        let values: Vec<Expr> = passed.iter().map(|a| lent_at(a).cloned().unwrap_or_else(|| a.clone())).collect();
         // e[ȳ]: the callee's measure with each of *its* parameters replaced by
         // the argument written at that position.
-        let typed = typed_arguments(&positions.iter().map(|&j| &tparams[j]).collect::<Vec<_>>(), passed);
+        let typed = typed_arguments(&positions.iter().map(|&j| &tparams[j]).collect::<Vec<_>>(), &values);
         let map: Vec<(&str, &Expr)> = positions
             .iter()
             .zip(&typed)
@@ -3584,7 +3636,11 @@ pub(crate) fn rebind_marked(stmts: &[Stmt], span: Span, strict: bool) -> Result<
                 let after = part(heather_syntax::MUTATED_AFTER);
                 out.push(plain(&receiver, subst(&update, &[(hole, &after)], &mut Vec::new())));
             }
-            // An unclaimed candidate is an ordinary call.
+            // An unclaimed candidate is an ordinary call; one that lends
+            // places (§24) still lends them.
+            Some((false, call)) if crate::path_calls::PathCalls::lends(call) => {
+                out.push(plain(name, app(var(heather_syntax::PATHCALL, span), vec![call.clone()], span)))
+            }
             Some((false, call)) => out.push(plain(name, call.clone())),
             None => out.push(st.clone()),
         }

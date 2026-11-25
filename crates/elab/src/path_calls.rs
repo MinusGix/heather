@@ -20,7 +20,7 @@ use heather_kernel::rc::Rc;
 use heather_kernel::term::{Term, Type};
 use heather_syntax::{Expr, ExprKind, ParamMode, Span};
 
-use crate::application::{subject_index_in, Callables, ParamMeta};
+use crate::application::{Callables, ParamMeta};
 use crate::dispatch::Members;
 use crate::statements::StatementElab;
 use crate::{err, Cx, Elaborator, R};
@@ -32,6 +32,20 @@ impl std::ops::Deref for PathCalls<'_> {
     fn deref(&self) -> &Elaborator {
         self.0
     }
+}
+
+/// A callee's parameter as the mode check reads it.
+struct Slot {
+    name: String,
+    implicit: bool,
+    is_type: bool,
+    is_self: bool,
+    mode: ParamMode,
+}
+
+/// A callee's last segment, as a message names it.
+fn shown_of(callee: &str) -> &str {
+    callee.rsplit("::").next().unwrap_or(callee)
 }
 
 /// The input of `marker(e)`.
@@ -50,17 +64,36 @@ impl PathCalls<'_> {
     pub(crate) fn read(&self, cx: &Cx, e: &Expr) -> Option<R<(Term, Type, Level)>> {
         if unmark(e, heather_syntax::MUTARG).is_some() {
             return Some(err(
-                "a `&mut` argument is lent by a call that is a statement, a `let`'s value or a block's \
-                 end, `let r = f(&mut a);`, where the place can be rebound after it: not inside another \
-                 expression (docs/language/sequencing-surface-design.md §24)",
+                "a `&mut` argument is lent by a call that surely runs before the statement around it, \
+                 where the place can be rebound after it: an argument, an operand, a receiver, the value \
+                 of a `let`, `return` or `:=`, or an arm of a branch that ends a block. Not under a `λ`, \
+                 in a branch's arm or a block in value position, or on the right of `&&` or `||`: bind \
+                 the call first, `let r = f(&mut a);` (docs/language/sequencing-surface-design.md §24)",
                 e.span,
             ));
         }
         let call = unmark(e, heather_syntax::PATHCALL)?;
-        Some(self.path_call(cx, call, e.span))
+        Some(self.path_call(cx, call, false, e.span))
     }
 
-    fn path_call(&self, cx: &Cx, call: &Expr, span: Span) -> R<(Term, Type, Level)> {
+    /// Does `call` lend a place at its top, `f(…, \0mutarg(a), …)`?
+    pub(crate) fn lends(call: &Expr) -> bool {
+        let args = match &call.kind {
+            ExprKind::App { args, .. } => args,
+            ExprKind::Dot { args: Some(args), .. } => args,
+            _ => return false,
+        };
+        args.iter().any(|a| unmark(a, heather_syntax::MUTARG).is_some())
+    }
+
+    /// A call that lends places, elaborated with the markers dropped once
+    /// each lent argument is held to the callee's modes. `candidate` is a
+    /// method call on a mutable place, which the statement that binds it
+    /// rebinds when the callee's receiver is a live path
+    /// (`statements::elaborate_mut_call`): its receiver may then be `&mut`,
+    /// and the call's type has one more `Mutated`, the receiver's,
+    /// outermost.
+    pub(crate) fn path_call(&self, cx: &Cx, call: &Expr, candidate: bool, span: Span) -> R<(Term, Type, Level)> {
         let (args, named, explicit) = match &call.kind {
             ExprKind::App { args, named, explicit, .. } => (args, named, *explicit),
             ExprKind::Dot { args: Some(args), named, .. } => (args, named, false),
@@ -77,11 +110,13 @@ impl PathCalls<'_> {
         }
         if !explicit {
             let named: Vec<&str> = named.iter().map(|n| n.name.as_str()).collect();
-            self.check_modes(cx, call, &lent, &named, span)?;
+            self.check_modes(cx, call, &lent, &named, candidate, span)?;
         }
         let (term, ty, level) = self.0.infer_mut_call(cx, &stripped)?;
-        // One `Mutated` per lent place, the answer innermost.
-        let count = lent.iter().filter(|l| **l).count();
+        // One `Mutated` per lent place, the answer innermost, and the
+        // receiver's outermost when it comes back.
+        let threaded = candidate && Members(self).threads_receiver(cx, &stripped) == Some(true);
+        let count = lent.iter().filter(|l| **l).count() + usize::from(threaded);
         let mut at = (Rc::new(term.clone()), ty.clone());
         for k in 0..count {
             let record = self
@@ -106,9 +141,10 @@ impl PathCalls<'_> {
     }
 
     /// The callee's recorded modes against the lent arguments: a `&mut`
-    /// parameter where, and only where, an argument is lent. A callee with
-    /// no table (a local, its own recursion) is left to the type check.
-    fn check_modes(&self, cx: &Cx, call: &Expr, lent: &[bool], named: &[&str], span: Span) -> R<()> {
+    /// parameter where, and only where, an argument is lent. Its own
+    /// recursion reads the modes its declaration wrote (`SelfRef::modes`); a
+    /// callee with neither (a local function) is left to the type check.
+    fn check_modes(&self, cx: &Cx, call: &Expr, lent: &[bool], named: &[&str], candidate: bool, span: Span) -> R<()> {
         let (callee, method) = match &call.kind {
             ExprKind::App { head, .. } => match &head.kind {
                 ExprKind::Var(f) if !cx.names.iter_inner().any(|n| n == f) => (f.clone(), false),
@@ -117,19 +153,49 @@ impl PathCalls<'_> {
             ExprKind::Dot { recv, name, .. } => (Members(self).member_head(cx, recv, name, false, call.span)?, true),
             _ => return Ok(()),
         };
-        let table = Callables(self).params_of(&callee);
+        // The callee's parameters: its table, or the enclosing
+        // declaration's own while its body elaborates (its recursion).
+        let own = cx.selfref.as_ref().filter(|s| s.matches(&callee) || s.matches(shown_of(&callee)));
+        let table: Vec<Slot> = match own {
+            Some(s) => s
+                .params
+                .iter()
+                .zip(&s.modes)
+                .enumerate()
+                .map(|(i, ((name, implicit), (is_self, mode)))| Slot {
+                    name: name.clone(),
+                    implicit: *implicit,
+                    is_type: i < s.n_tyvars,
+                    is_self: *is_self,
+                    mode: *mode,
+                })
+                .collect(),
+            None => Callables(self)
+                .params_of(&callee)
+                .iter()
+                .map(|p: &ParamMeta| Slot {
+                    name: p.name.clone(),
+                    implicit: p.implicit,
+                    is_type: p.is_type,
+                    is_self: p.is_self,
+                    mode: p.mode,
+                })
+                .collect(),
+        };
         if table.is_empty() {
             return Ok(());
         }
-        let shown = callee.rsplit("::").next().unwrap_or(&callee);
-        let explicit: Vec<&ParamMeta> = table.iter().filter(|p| !p.implicit && !named.contains(&p.name.as_str())).collect();
-        let explicit: Vec<&ParamMeta> = if method {
-            let subject = subject_index_in(&table);
-            if explicit.get(subject).is_some_and(|p| p.mode == ParamMode::Path) {
+        let shown = shown_of(&callee);
+        let explicit: Vec<&Slot> = table.iter().filter(|p| !p.implicit && !named.contains(&p.name.as_str())).collect();
+        let explicit: Vec<&Slot> = if method {
+            let subject = table.iter().filter(|p| !p.implicit && !p.is_type).position(|p| p.is_self).unwrap_or(0);
+            if !candidate && explicit.get(subject).is_some_and(|p| p.mode == ParamMode::Path) {
                 return err(
                     format!(
-                        "`{shown}`'s receiver is a `&mut` parameter, and a method call threads its receiver \
-                         alone: lend every place in the plain call, `{callee}(&mut …, …)`"
+                        "`{shown}`'s receiver is a `&mut` parameter, so it comes back to its place, and this \
+                         receiver is not one that can be rebound: call `{shown}` on a `let mut` local, a `mut` \
+                         or `&mut` parameter or a field path of one, or lend every place in the plain call, \
+                         `{callee}(&mut …, …)`"
                     ),
                     span,
                 );

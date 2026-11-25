@@ -758,6 +758,18 @@ as a helper; addresses as numbers.
    collides with `mut x` at the head of a binder; and a record of the
    values after per signature, which a generator would have to name. At a
    call, nothing marks a frozen view (`f(&a)`): it means the value.
+   *Extended by `parameter-modes-residue` (2026-11-25,
+   `sequencing-surface-design.md` §24.4–§24.6):* a `mut self` receiver
+   beside other `&mut` parameters is written first among them, so the one
+   rule (parameter order, answer innermost) puts it outermost, where a
+   method call rebinds it from; and whether a dot call rebinds its receiver
+   is the receiver's written mode, not a `Mutated` result (a plain `self`
+   answering `Mutated` answers that record). A call lending places may
+   stand wherever its statement surely runs it, which runs it first; a
+   place so lent is read nowhere else in the expression. `f(&a)` stays
+   unbuilt: as notation it should be held to a `&` parameter on every
+   route an argument meets its parameter, and it carries nothing until a
+   view's region is named.
 2. Whether `Ref` and `Mut` are transparent to the kernel (a frozen view
    unfolds to its type, the region a phantom the judgment reads) or opaque
    with coercions. Lean: transparent, so ordinary functions take a view with

@@ -245,16 +245,25 @@ fn missing_lend(x: Nat) → Nat {
     r
 }
 
-// expect-error: a `&mut` argument is lent by a call that is a statement, a `let`'s value or a block's end
-fn lend_inside(x: Nat) → Nat {
+// expect-error: a `&mut` argument is lent by a call that surely runs before the statement around it
+fn lend_under_lambda(x: Nat) → Nat {
     let mut p = x;
-    let r = add_into(&mut p, 1) + 1;
+    let f = λ (k: Nat) => add_into(&mut p, k);
+    f(1)
+}
+
+fn is_zero(n: Nat) → Bool { match n { Zero => True, Succ(_) => False } }
+
+// expect-error: a `&mut` argument is lent by a call that surely runs before the statement around it
+fn lend_under_or(x: Nat, b: Bool) → Bool {
+    let mut p = x;
+    let r = b || is_zero(add_into(&mut p, 1));
     r
 }
 
-// expect-error: `swap_sum`'s receiver is a `&mut` parameter, and a method call threads its receiver alone
-fn lend_by_method(x: Nat) → Nat {
-    let mut p = x;
+// expect-error: `swap_sum`'s receiver is a `&mut` parameter, so it comes back to its place, and this receiver is not one that can be rebound
+fn lend_by_fixed_receiver(x: Nat) → Nat {
+    let p = x;
     let mut q = x;
     let r = p.swap_sum(&mut q);
     r
@@ -302,3 +311,254 @@ theorem tally_modes(): True { by modes_are("Counter::tally", [2, 0]) }
 
 // expect-error: the modes are not the ones written
 theorem plain_modes_wrong(): True { by modes_are("plain", [2]) }
+
+// ---------------------------------------------------------------------------
+// A method call lends places (issues/parameter-modes-residue.md): a callee
+// whose receiver is a live path rebinds the receiver from the outermost
+// `Mutated` and the lent places from the ones inside it.
+
+// A function whose first parameter is `&mut`, called as a method of it.
+fn lend_by_method(x, y: Nat) → Nat {
+    let mut p = x;
+    let mut q = y;
+    let r = p.swap_sum(&mut q);
+    r + p * 10 + q
+}
+theorem lend_by_method_lit(): lend_by_method(1, 2) = 3 + 20 + 1 { refl }
+theorem lend_by_method_open(x, y: Nat): lend_by_method(x, y) = (y + x) + y * 10 + x { refl }
+
+// As a statement, and on two fields of one record (receiver and place apart).
+fn lend_by_fields(t: Two) → Nat {
+    let mut u = t;
+    u.left.swap_sum(&mut u.right);
+    u.left * 10 + u.right
+}
+theorem lend_by_fields_open(a, b: Nat): lend_by_fields(Two(a, b)) = b * 10 + a { refl }
+
+// `mut self` beside another live path: the receiver comes back outermost,
+// then the lent places in parameter order, the answer innermost.
+fn Counter::give(mut self c: Counter, into: &mut Nat, k: Nat) → Nat {
+    c := Counter(c.n + k, c.log);
+    into := into + c.n;
+    k
+}
+theorem give_kernel(c: Counter, a, k: Nat):
+    Counter::give(c, a, k) = Mutated(Counter(c.n + k, c.log), Mutated(a + (c.n + k), k)) { refl }
+theorem give_modes(): True { by modes_are("Counter::give", [2, 2, 0]) }
+
+fn use_give(c: Counter, a: Nat) → Nat {
+    let mut d = c;
+    let mut t = a;
+    let r = d.give(&mut t, 2);
+    d.give(&mut t, 3);
+    r + t + d.n
+}
+theorem use_give_open(c: Counter, a: Nat): use_give(c, a) = 2 + (a + (c.n + 2) + (c.n + 2 + 3)) + (c.n + 2 + 3) { refl }
+
+// In a loop, the receiver and the lent place are both its state.
+fn loop_give(c: Counter, xs: List<Nat>) → Nat {
+    let mut d = c;
+    let mut t = 0;
+    for x in xs { d.give(&mut t, x); }
+    t + d.n
+}
+theorem loop_give_lit(): loop_give(Counter(0, []), [1, 2]) = (1 + 3) + 3 { refl }
+
+// A plain receiver beside a lent place: the receiver is not rebound,
+// whether or not it could be.
+fn use_run(k: u64) → u64 {
+    let mut s = Step(k);
+    let mut t: u64 = 1;
+    let r = s.run(&mut t);
+    r + t + s.by
+}
+theorem use_run_lit(): use_run(2) = 16 { refl }
+fn use_run_fixed(k: u64) → u64 {
+    let s = Step(k);
+    let mut t: u64 = 1;
+    s.run(&mut t);
+    t
+}
+theorem use_run_fixed_lit(): use_run_fixed(2) = 7 { refl }
+
+// A recursion through both: a `mut self` method lending its other path on,
+// and a function whose `&mut` first parameter is the receiver.
+fn Counter::drain(mut self c: Counter, into: &mut Nat, n: Nat) → Nat decreases n {
+    match n {
+        Zero => into,
+        Succ(k) => {
+            c.give(&mut into, 1);
+            c.drain(&mut into, k)
+        },
+    }
+}
+theorem drain_lit(): Counter::drain(Counter(0, []), 0, 2) = Mutated(Counter(2, []), Mutated(1 + 2, 1 + 2)) { refl }
+
+fn Nat::count_into(a: &mut Nat, b: &mut Nat, n: Nat) → Nat decreases n {
+    match n {
+        Zero => a,
+        Succ(k) => {
+            a := a + 1;
+            a.count_into(&mut b, k)
+        },
+    }
+}
+theorem count_into_lit(): Nat::count_into(0, 5, 2) = Mutated(2, Mutated(5, 2)) { refl }
+
+// ---------------------------------------------------------------------------
+// A dot call threads its receiver where the receiver was written a live path
+// (`mut self`, `self: &mut`), read from the callee's recorded modes, not from
+// its result (issues/mutated-result-dot-call-diagnostic.md). A plain `self`
+// whose result is a `Mutated` record answers that record, as its qualified
+// call does, also on a `let mut` local.
+
+fn Counter::split(self c: Counter, k: Nat) → Mutated<Counter, Nat> { Mutated(Counter(c.n + k, c.log), c.n) }
+theorem split_dotted(c: Counter): c.split(1).value = c.n { refl }
+theorem split_qualified(c: Counter): Counter::split(c, 1).value = c.n { refl }
+
+fn split_on_local(c: Counter) → Nat {
+    let mut d = c;
+    let r = d.split(2);
+    r.value + r.after.n + d.n
+}
+theorem split_on_local_open(c: Counter): split_on_local(c) = c.n + (c.n + 2) + c.n { refl }
+
+// expect-error: `split` is not a `mut self` method
+fn split_statement(c: Counter) → Nat {
+    let mut d = c;
+    d.split(2);
+    d.n
+}
+
+// Under a projection, a `mut self` call no statement threads is refused
+// with its own reason, not as a field the receiver lacks.
+// expect-error: `tally` is a `mut self` method, so it updates its receiver, and nothing here keeps the update
+theorem tally_projected(c: Counter): c.tally(1).value = c.n + 1 { refl }
+
+// ---------------------------------------------------------------------------
+// A call that lends places where it is surely run, anywhere in a statement's
+// expression: it runs first, inner calls before outer and left to right,
+// and the expression reads its answer (issues/parameter-modes-residue.md).
+
+// An operand.
+fn lend_in_operand(x: Nat) → Nat {
+    let mut p = x;
+    let r = add_into(&mut p, 1) + 10;
+    r + p
+}
+theorem lend_in_operand_open(x: Nat): lend_in_operand(x) = (x + 1 + 10) + (x + 1) { refl }
+
+// An argument of a call that lends too: the inner call runs first.
+fn lend_in_argument(x: Nat) → Nat {
+    let mut p = x;
+    let mut q = x;
+    let r = add_into(&mut p, add_into(&mut q, 2));
+    r + q
+}
+theorem lend_in_argument_open(x: Nat): lend_in_argument(x) = (x + (x + 2)) + (x + 2) { refl }
+
+// A statement whose call takes another's answer.
+fn lend_in_statement(x: Nat) → Nat {
+    let mut p = x;
+    let mut q = x;
+    add_into(&mut p, add_into(&mut q, 1));
+    p + q
+}
+theorem lend_in_statement_open(x: Nat): lend_in_statement(x) = (x + (x + 1)) + (x + 1) { refl }
+
+// `return`: the places are rebound before the function leaves, and in a
+// function with a live path, the path returned is the one after.
+fn lend_in_return(x: Nat, b: Bool) → Nat {
+    let mut p = x;
+    if b { return add_into(&mut p, 5); }
+    p
+}
+theorem lend_in_return_true(x: Nat): lend_in_return(x, True) = x + 5 { refl }
+theorem lend_in_return_false(x: Nat): lend_in_return(x, False) = x { refl }
+
+fn lend_in_return_path(a: &mut Nat, b: Bool) → Nat {
+    if b { return add_into(&mut a, 5) + 1; }
+    0
+}
+theorem lend_in_return_path_true(x: Nat): lend_in_return_path(x, True) = Mutated(x + 5, x + 5 + 1) { refl }
+
+// An arm of a branch that ends a block (§19.1): the bare call, or an
+// expression holding it.
+fn lend_in_arm(x: Nat, b: Bool) → Nat {
+    let mut p = x;
+    match b {
+        True => add_into(&mut p, 3),
+        False => p,
+    }
+}
+theorem lend_in_arm_true(x: Nat): lend_in_arm(x, True) = x + 3 { refl }
+theorem lend_in_arm_false(x: Nat): lend_in_arm(x, False) = x { refl }
+
+fn lend_in_arm_path(a: &mut Nat, b: Bool) → Nat {
+    match b {
+        True => add_into(&mut a, 3) * 2,
+        False => 0,
+    }
+}
+theorem lend_in_arm_path_true(x: Nat): lend_in_arm_path(x, True) = Mutated(x + 3, (x + 3) * 2) { refl }
+theorem lend_in_arm_path_false(x: Nat): lend_in_arm_path(x, False) = Mutated(x, 0) { refl }
+
+// The value of an assignment, and a block's end inside an expression.
+fn lend_in_assignment(x: Nat) → Nat {
+    let mut p = x;
+    let mut q = 0;
+    q := add_into(&mut p, 4);
+    q + p
+}
+theorem lend_in_assignment_open(x: Nat): lend_in_assignment(x) = (x + 4) + (x + 4) { refl }
+
+fn zero() → Nat { 0 }
+fn lend_in_tail(mut x: Nat) → Nat { add_into(&mut x, 3) + zero() }
+theorem lend_in_tail_open(x: Nat): lend_in_tail(x) = x + 3 + 0 { refl }
+
+// A monadic bind binds the answer; the place is rebound beside it.
+fn some_into(acc: &mut Nat, k: Nat) → Option<Nat> {
+    acc := acc + k;
+    Some(acc)
+}
+fn lend_in_bind(x: Nat) → Option<Nat> {
+    let mut p = x;
+    let r <- some_into(&mut p, 2);
+    Some(r + p)
+}
+theorem lend_in_bind_open(x: Nat): lend_in_bind(x) = Some((x + 2) + (x + 2)) { refl }
+
+// `let _ <-` binds the answer and drops it: a `None` stops the block.
+fn none_into(acc: &mut Nat) → Option<Nat> {
+    acc := acc + 1;
+    None
+}
+fn lend_in_dropped_bind(x: Nat) → Option<Nat> {
+    let mut p = x;
+    let _ <- none_into(&mut p);
+    Some(p)
+}
+theorem lend_in_dropped_bind_open(x: Nat): lend_in_dropped_bind(x) = None { refl }
+
+// ---------------------------------------------------------------------------
+// A recursion is held to the modes its declaration wrote, as any call is,
+// though its table is not registered while its body elaborates.
+
+// expect-error: `count_by`'s parameter `by` is not `&mut`
+fn count_by(acc: &mut Nat, by: Nat, n: Nat) → Nat decreases n {
+    match n {
+        Zero => acc,
+        Succ(k) => {
+            let mut b = by;
+            count_by(&mut acc, &mut b, k)
+        },
+    }
+}
+
+// expect-error: `count_both` takes `b` as `&mut`
+fn count_both(a: &mut Nat, b: &mut Nat, n: Nat) → Nat decreases n {
+    match n {
+        Zero => a,
+        Succ(k) => count_both(&mut a, 3, k),
+    }
+}

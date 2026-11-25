@@ -198,7 +198,7 @@ fn ty_mentions_any(t: &Ty, vars: &BTreeSet<String>) -> bool {
     }
 }
 
-fn mentions_any(e: &Expr, vars: &BTreeSet<String>) -> bool {
+pub(crate) fn mentions_any(e: &Expr, vars: &BTreeSet<String>) -> bool {
     if vars.is_empty() {
         return false;
     }

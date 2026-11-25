@@ -146,6 +146,13 @@ fn the_places_of_one_call_are_apart() {
         "fn f(t: T, i: N, j: N) -> N { let mut u = t; g(&mut u.a[i].b, &mut u.a[j].c); 0 }",
         "differ only by an index",
     );
+    // A method call on a mutable place may rebind its receiver, which is then
+    // one of the call's places.
+    refused("fn f(t: T) -> N { let mut u = t; u.a.g(&mut u.a); 0 }", "`u.a` is passed to two `&mut` parameters");
+    refused("fn f(t: T) -> N { let mut u = t; u.g(&mut u.a); 0 }", "overlap, one inside the other");
+    decl("fn f(t: T) -> N { let mut u = t; u.a.g(&mut u.b); 0 }");
+    // On a receiver that is not mutable, the receiver is no place of the call.
+    decl("fn f(t: T) -> N { let mut u = t; t.g(&mut u); 0 }");
     // Different fields, and different roots, are apart.
     decl("fn f(t: T) -> N { let mut u = t; g(&mut u.a, &mut u.b); 0 }");
     decl("fn f(t: T) -> N { let mut u = t; let mut v = t; g(&mut u.a, &mut v.a); 0 }");
@@ -159,7 +166,50 @@ fn a_mode_is_written_where_an_argument_is_lent() {
     refused("fn f(mut x: &N) -> N { 0 }", "asks a frozen view to be reassigned");
     refused("fn f(x: &mut N := 1) -> N { 0 }", "a `&mut` parameter takes no default");
     refused("theorem t(x: &mut N): P { p }", "only a `fn` takes `mut` parameters");
-    refused("fn T::m(mut self t: T, b: &mut N) -> R { 0 }", "a `mut self` method takes no other `&mut` parameter yet");
+    // A `mut self` receiver beside other live paths stands first among them,
+    // so its value is the outermost `Mutated` a method call rebinds it from.
+    refused("fn T::m(b: &mut N, mut self t: T) -> R { 0 }", "a `mut self` receiver comes first among the `&mut` parameters");
+    let d = decl("fn T::m(mut self t: T, n: N, b: &mut B) -> R { n }");
+    let shown = nest(&d.result);
+    assert!(shown.len() == 3 && shown[0].contains("\"T\"") && shown[1].contains("\"B\""), "{shown:?}");
     // A frozen view is a theorem's parameter as well as a function's.
     decl("theorem t(x: &N): P { p }");
+}
+
+#[test]
+fn a_call_inside_an_expression_runs_first() {
+    // Each lent argument still stands inside the one call that lends it,
+    // and none is left in the expression around it.
+    for src in [
+        "fn f(x: N) -> N { let mut p = x; let r = g(&mut p) + 1; r }",
+        "fn f(x: N) -> N { let mut p = x; let mut q = x; let r = g(&mut p, g(&mut q)); r }",
+        "fn f(x: N, b: B) -> N { let mut p = x; if b { return g(&mut p); } p }",
+        "fn f(x: N, b: B) -> N { let mut p = x; match b { T => g(&mut p), F => p } }",
+        "fn f(x: N) -> N { let mut p = x; let mut q = x; q := g(&mut p); q }",
+        "fn f(x: N) -> N { let mut p = x; let r <- g(&mut p); r }",
+    ] {
+        let parsed = format!("{:?}", parse_file(src).unwrap_or_else(|e| panic!("{src}: {}", e.msg)));
+        assert_eq!(parsed.matches("\\0mutarg").count(), src.matches("&mut").count(), "{src}");
+        assert_eq!(parsed.matches("\\0pathcall").count(), src.matches("&mut").count(), "{src}");
+    }
+}
+
+#[test]
+fn a_place_lent_inside_an_expression_is_read_nowhere_else_in_it() {
+    // The call now runs before the whole expression, so a read of the place
+    // beside it would mean its value after the call.
+    refused("fn f(x: N) -> N { let mut p = x; let r = p + g(&mut p); r }", "`p` is lent `&mut` by a call inside this expression and read elsewhere in it");
+    refused("fn f(x: N) -> N { let mut p = x; g(&mut p, g(&mut p)); p }", "read elsewhere in it");
+    refused("fn f(x: N) -> N { let mut p = x; return h(p, g(&mut p)); }", "read elsewhere in it");
+    // The call's own arguments are read before it runs, as at a statement.
+    decl("fn f(x: N) -> N { let mut p = x; let r = g(&mut p, p) + 1; r }");
+    // Two calls lending one place run left to right.
+    decl("fn f(x: N) -> N { let mut p = x; let r = g(&mut p) + g(&mut p); r }");
+}
+
+#[test]
+fn an_arm_in_value_position_cannot_rebind_a_lent_place() {
+    // The arm lends the place, which only an arm of a branch that ends its
+    // block may rebind (§19.1).
+    refused("fn f(x: N, b: B) -> N { let mut p = x; let r = match b { T => g(&mut p), F => 0 }; r }", "is not mutable");
 }

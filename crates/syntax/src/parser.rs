@@ -530,6 +530,33 @@ fn decided(e: Expr) -> Expr {
     }
 }
 
+/// A lifted call (§24) as a read of its locals: its receiver left out
+/// where the call may rebind it.
+fn strip_receiver(call: &Expr, receiver: bool) -> Expr {
+    let mut c = call.clone();
+    if receiver && let ExprKind::Dot { recv, .. } = &mut c.kind {
+        **recv = Expr { kind: ExprKind::Var("_".into()), span: recv.span };
+    }
+    c
+}
+
+/// A lifted call with the places it lends left out: what it reads besides
+/// them, for [`Parser::hoist_path_calls`]'s test.
+fn strip_lent(call: &Expr) -> Expr {
+    let mut c = call.clone();
+    let args = match &mut c.kind {
+        ExprKind::App { args, .. } => args,
+        ExprKind::Dot { args: Some(args), .. } => args,
+        _ => return c,
+    };
+    for a in args.iter_mut() {
+        if crate::imperative::unmark_any(a, &[crate::imperative::MUTARG]).is_some() {
+            *a = Expr { kind: ExprKind::Var("_".into()), span: a.span };
+        }
+    }
+    c
+}
+
 fn op_call(sym: &str, fixity: OpFixity, args: Vec<Expr>, span: Span) -> Expr {
     let head = Expr { kind: ExprKind::OpSymbol { symbol: sym.to_string(), fixity }, span };
     Expr {
@@ -3507,14 +3534,19 @@ impl Parser {
                 span: result.span,
             });
         }
+        // A `mut self` receiver with other live paths (§24): the values
+        // after nest in parameter order, so the receiver is written first
+        // among them, which puts its value outermost, where a method call
+        // rebinds its receiver from (`x.m(&mut b)`).
         if let Some(receiver) = &mut_self
-            && let Some(other) = paths.iter().find(|n| *n != receiver)
+            && let Some(first) = paths.first()
+            && first != receiver
         {
             return Err(ParseError {
                 msg: format!(
-                    "a `mut self` method takes no other `&mut` parameter yet: `{other}` would come back \
-                     beside `{receiver}`, and a method call threads its receiver alone. Take `{receiver}: \
-                     &mut` without `self` and call the function as `f(&mut {receiver}, &mut {other}, …)`"
+                    "a `mut self` receiver comes first among the `&mut` parameters: `{first}` is written \
+                     before `{receiver}`, and a method call rebinds its receiver from the outermost \
+                     `Mutated`. Move `{receiver}` before `{first}`"
                 ),
                 span: result.span,
             });
@@ -3765,13 +3797,155 @@ impl Parser {
             Some((m, v)) => (Some(m), v.clone()),
             None => (None, expr.clone()),
         };
+        // `let x <- f(&mut a);` binds the call's answer.
+        let (bind, value) = match crate::imperative::unmark_any(&value, &[crate::try_lower::BIND]) {
+            Some((_, v)) => (true, v.clone()),
+            None => (false, value),
+        };
         if crate::imperative::path_places(&value).is_empty() {
+            // A call that lends places inside the value is run first (§24).
+            let mut expr = expr;
+            self.hoist_path_calls(&mut expr, stmts)?;
             stmts.push(Stmt::Let { name, ty, expr, span, opaque: false });
             return Ok(());
         }
-        let wrap = wrap.filter(|m| *m == crate::imperative::MUT);
+        let mut wraps: Vec<&str> = Vec::new();
+        if wrap == Some(crate::imperative::MUT) {
+            wraps.push(crate::imperative::MUT);
+        }
+        if bind {
+            wraps.push(crate::try_lower::BIND);
+        }
+        let mut value = value;
+        self.hoist_inside(&mut value, stmts)?;
         let tmp = self.hygienic("path");
-        stmts.extend(crate::imperative::expand_path_call(tmp, Some((name, ty, wrap)), value, span)?);
+        let receiver = self.mut_receiver(&value);
+        stmts.extend(crate::imperative::expand_path_call(tmp, Some((name, ty, &wraps)), value, receiver, span)?);
+        Ok(())
+    }
+
+    /// Lift every call that lends places `&mut` out of `e` (§24,
+    /// issues/parameter-modes-residue.md): each, inner calls first and left
+    /// to right, becomes the statements that run it and rebind its places
+    /// ([`crate::imperative::expand_path_call`]), pushed to `out`, and `e`
+    /// reads its answer by a private name. Only where `e` surely evaluates
+    /// the call: an argument, an operand, a receiver, a field of a literal,
+    /// an index, a scrutinee. Not under a `λ`, in an arm, a block, a type,
+    /// or the right side of `&&`/`||`, where the `&mut` is left for the
+    /// elaborator to refuse. A place lent this way must not be read
+    /// elsewhere in `e`: the call now runs before the whole of `e`, and
+    /// which value that read meant would be the order of evaluation's.
+    /// Whether anything was lifted.
+    fn hoist_path_calls(&mut self, e: &mut Expr, out: &mut Vec<Stmt>) -> R<bool> {
+        self.hoist_where(e, out, true)
+    }
+
+    /// [`Self::hoist_path_calls`] inside `e`, which is itself a call that
+    /// lends places and stays where it is: its arguments' calls run first.
+    fn hoist_inside(&mut self, e: &mut Expr, out: &mut Vec<Stmt>) -> R<()> {
+        self.hoist_where(e, out, false).map(|_| ())
+    }
+
+    fn hoist_where(&mut self, e: &mut Expr, out: &mut Vec<Stmt>, top: bool) -> R<bool> {
+        let mut lifted: Vec<(Expr, Vec<String>)> = Vec::new();
+        self.hoist_in(e, out, &mut lifted, top)?;
+        for (i, (_, roots)) in lifted.iter().enumerate() {
+            for x in roots {
+                let one: std::collections::BTreeSet<String> = [x.clone()].into_iter().collect();
+                let read = crate::within::mentions_any(e, &one)
+                    || lifted.iter().enumerate().any(|(j, (c, rs))| {
+                        // The call's own arguments are read before it runs,
+                        // whatever the order: only another's reads are
+                        // moved.
+                        if i == j {
+                            return false;
+                        }
+                        let c = if rs.contains(x) { strip_lent(c) } else { c.clone() };
+                        crate::within::mentions_any(&c, &one)
+                    });
+                if read {
+                    return Err(ParseError {
+                        msg: format!(
+                            "`{x}` is lent `&mut` by a call inside this expression and read elsewhere in it: \
+                             the call runs first, so which value that read means would be the order of \
+                             evaluation's. Bind the call first, `let r = f(&mut {x});`, and read `{x}` after it \
+                             (docs/language/sequencing-surface-design.md §24)"
+                        ),
+                        span: e.span,
+                    });
+                }
+            }
+        }
+        Ok(!lifted.is_empty())
+    }
+
+    fn hoist_in(&mut self, e: &mut Expr, out: &mut Vec<Stmt>, lifted: &mut Vec<(Expr, Vec<String>)>, this: bool) -> R<()> {
+        match &mut e.kind {
+            ExprKind::App { head, args, named, .. } => {
+                if matches!(&head.kind, ExprKind::Var(n) if n == crate::imperative::MUTARG) {
+                    return Ok(());
+                }
+                let lazy = matches!(&head.kind, ExprKind::OpSymbol { symbol, .. } if symbol == "&&" || symbol == "||");
+                self.hoist_in(head, out, lifted, true)?;
+                for (i, a) in args.iter_mut().enumerate() {
+                    if lazy && i > 0 {
+                        break;
+                    }
+                    self.hoist_in(a, out, lifted, true)?;
+                }
+                for n in named.iter_mut() {
+                    self.hoist_in(&mut n.expr, out, lifted, true)?;
+                }
+            }
+            ExprKind::Dot { recv, args, named, .. } => {
+                self.hoist_in(recv, out, lifted, true)?;
+                for a in args.iter_mut().flatten() {
+                    self.hoist_in(a, out, lifted, true)?;
+                }
+                for n in named.iter_mut() {
+                    self.hoist_in(&mut n.expr, out, lifted, true)?;
+                }
+            }
+            ExprKind::TyApp { head, .. } => self.hoist_in(head, out, lifted, true)?,
+            ExprKind::Index { recv, idx } => {
+                self.hoist_in(recv, out, lifted, true)?;
+                self.hoist_in(idx, out, lifted, true)?;
+            }
+            ExprKind::RecordLit { fields, .. } => {
+                for f in fields.iter_mut() {
+                    self.hoist_in(&mut f.expr, out, lifted, true)?;
+                }
+            }
+            ExprKind::RecordUpdate { base, fields } => {
+                self.hoist_in(base, out, lifted, true)?;
+                for f in fields.iter_mut() {
+                    self.hoist_in(&mut f.expr, out, lifted, true)?;
+                }
+            }
+            ExprKind::CollectionLit(xs) => {
+                for x in xs.iter_mut() {
+                    self.hoist_in(x, out, lifted, true)?;
+                }
+            }
+            ExprKind::Ascribe { expr, .. } => self.hoist_in(expr, out, lifted, true)?,
+            ExprKind::Match { scrut, .. } => self.hoist_in(scrut, out, lifted, true)?,
+            _ => {}
+        }
+        let places = crate::imperative::path_places(e);
+        if places.is_empty() || !this {
+            return Ok(());
+        }
+        let receiver = self.mut_receiver(e);
+        let mut roots: Vec<String> = places.iter().filter_map(|p| crate::imperative::place_root(p)).map(str::to_string).collect();
+        if receiver && let ExprKind::Dot { recv, .. } = &e.kind {
+            roots.extend(crate::imperative::place_root(recv).map(str::to_string));
+        }
+        let span = e.span;
+        let name = self.hygienic("pathres");
+        let tmp = self.hygienic("path");
+        let call = std::mem::replace(e, Expr { kind: ExprKind::Var(name.clone()), span });
+        lifted.push((strip_receiver(&call, receiver), roots));
+        out.extend(crate::imperative::expand_path_call(tmp, Some((name, None, &[])), call, receiver, span)?);
         Ok(())
     }
 
@@ -3805,14 +3979,11 @@ impl Parser {
         }
         let parsed = self.block_statements(&mut stmts)?;
         let mut block = self.block_tail(open, stmts, parsed)?;
-        // A result that lends places `&mut` is bound first, and the places
-        // rebound, before the block ends (§24).
-        if !crate::imperative::path_places(&block.result).is_empty() {
-            let span = block.result.span;
-            let name = self.hygienic("pathres");
-            let call = std::mem::replace(&mut *block.result, Expr { kind: ExprKind::Var(name.clone()), span });
-            let tmp = self.hygienic("path");
-            block.stmts.extend(crate::imperative::expand_path_call(tmp, Some((name, None, None)), call, span)?);
+        // A result that lends places `&mut`, or holds a call that does, is
+        // bound first, and the places rebound, before the block ends (§24).
+        let mut lifted = Vec::new();
+        if self.hoist_path_calls(&mut block.result, &mut lifted)? {
+            block.stmts.extend(lifted);
         } else if self.mut_receiver(&block.result) {
             let span = block.result.span;
             let name = self.hygienic("tail");
@@ -4666,7 +4837,10 @@ impl Parser {
             }
             if self.at_kw("return") && !matches!(self.nth(1), TokKind::Semi | TokKind::RBrace) {
                 let start = self.bump().span;
-                let value = self.expr()?;
+                let mut value = self.expr()?;
+                // `return f(&mut a);`: the call runs and its places are
+                // rebound before the function leaves (§24).
+                self.hoist_path_calls(&mut value, stmts)?;
                 let end = if matches!(self.peek(), TokKind::RBrace) { value.span } else { self.expect(&TokKind::Semi, "`;` to end the `return`")? };
                 let span = start.join(end);
                 let name = self.hygienic("exit");
@@ -4712,7 +4886,9 @@ impl Parser {
                     });
                 }
                 self.bump();
-                let value = self.expr()?;
+                let mut value = self.expr()?;
+                // `x := f(&mut a)`: the call runs first (§24).
+                self.hoist_path_calls(&mut value, stmts)?;
                 // `x.f := e` assigns `x` the record with that field replaced
                 // (§20): `x := x with { f = e }`.
                 let (name, value) = crate::imperative::place_update(&expr, value).expect("a place");
@@ -4761,9 +4937,15 @@ impl Parser {
             // `f(&mut a);` runs the call and rebinds the places it lends
             // (§24); its answer is dropped, as a `mut self` method's is.
             if !crate::imperative::path_places(&expr).is_empty() {
-                stmts.extend(crate::imperative::expand_path_call(name, None, expr, span)?);
+                let mut expr = expr;
+                self.hoist_inside(&mut expr, stmts)?;
+                let receiver = self.mut_receiver(&expr);
+                stmts.extend(crate::imperative::expand_path_call(name, None, expr, receiver, span)?);
                 continue;
             }
+            // A call that lends places inside the statement runs first.
+            let mut expr = expr;
+            self.hoist_path_calls(&mut expr, stmts)?;
             let expr = if self.mut_receiver(&expr) {
                 crate::imperative::marked(crate::imperative::MUTCALL, expr, marked)
             } else {
@@ -7537,7 +7719,15 @@ impl Parser {
             // (docs/language/matching/nested-match-patterns-design.md §2).
             let default = ctor == "_";
             self.expect(&TokKind::FatArrow, "`=>`")?;
-            let body = self.expr()?;
+            let mut body = self.expr()?;
+            // An arm that is a call lending places, or holds one, `True =>
+            // f(&mut a),`: a block that runs it and rebinds its places,
+            // which a tail branch's arm may (§19.1, §24).
+            let mut lifted = Vec::new();
+            if !matches!(body.kind, ExprKind::Block(_)) && self.hoist_path_calls(&mut body, &mut lifted)? {
+                let span = body.span;
+                body = Expr { kind: ExprKind::Block(Box::new(Block { stmts: lifted, result: Box::new(body), ons: Vec::new(), span })), span };
+            }
             let span = cspan.join(body.span);
             arms.push(Arm { ctor, default, binders, body, span });
             if !matches!(self.peek(), TokKind::Comma) {

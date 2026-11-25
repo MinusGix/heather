@@ -1301,9 +1301,10 @@ refusal, at the place.
 
 `x.f.m(a);` and `let p = x.f.m(a);` are candidates of the local `x`
 (§8.2), claimed by the block that declared it exactly as `x.m(a)` is. The
-elaborator decides, as it does there, by the method's type:
+elaborator decides, as it does there, by the method's receiver (its
+written mode since §24.4; by the method's `Mutated` type before):
 
-- `m` returns `Mutated`: `p` is the call's `value`, and `x` is rebound to
+- `m`'s receiver comes back: `p` is the call's `value`, and `x` is rebound to
   `x with { f = call.after }`, built from the record update as written
   (`elaborate_mut_call`). Both read the one call.
 - otherwise it is the ordinary call it was, and `x` is not touched. This is
@@ -1710,9 +1711,10 @@ as the body's result (§19.3) stays the one-receiver case.
 
 ### 24.3 A call lends places: `f(&mut a, &mut b.g)`
 
-`&mut place` is an argument written at the top of a call that is a
-statement, a `let`'s value or a block's end. The parser expands it where
-the statement is read (`imperative::expand_path_call`):
+`&mut place` is an argument of a call the statement around it surely runs
+(§24.5 says where; first built only where the call was a statement, a
+`let`'s value or a block's end). The parser expands it where the statement
+is read (`imperative::expand_path_call`):
 
 ```heather
 let r = swap_sum(&mut p, &mut u.left);
@@ -1749,29 +1751,124 @@ asked yet.
 Refusals, each probed: a lent expression that is no place, a named `&mut`
 argument, an immutable or λ-captured place, overlapping places (parse time,
 Rust tests); a `&mut` argument to a parameter that is not `&mut`, a `&mut`
-parameter given a value, a `&mut` inside another expression, and a method
-call whose receiver is a `&mut` parameter (elaboration, `expect-error`
-probes). At a declaration: `&mut` or `&` on an implicit parameter, `mut`
-beside `&mut` or `&`, a default on `&mut`, `&mut` on a theorem, and a `mut
-self` method with another `&mut` parameter.
+parameter given a value, a `&mut` where no statement surely runs the call
+(§24.5), and a method call whose receiver is a `&mut` parameter but no
+place (elaboration, `expect-error` probes). At a declaration: `&mut` or `&`
+on an implicit parameter, `mut` beside `&mut` or `&`, a default on `&mut`,
+`&mut` on a theorem, and a `mut self` receiver written after another
+`&mut` parameter (§24.4).
 
 This is notation and bookkeeping. Nothing here checks who else reaches a
 place: that is the judgment over reflected code (vision principle 7), which
 reads the modes this records.
 
-### 24.4 Not built
+### 24.4 A method call lends places; `mut self` beside `&mut`
 
-`issues/parameter-modes-residue.md` owns these.
+`issues/parameter-modes-residue.md`, 2026-11-25. A method's receiver and
+its `&mut` parameters come back together:
 
-- A `mut self` method with other `&mut` parameters, and lending places
-  through a method call whose receiver is a path (`a.g(&mut b)` where
-  `g`'s receiver is `&mut`): the method call threads one receiver.
-- `&mut` where the call is not a statement, a `let`'s value or a block's
-  end: a binding `let x <- f(&mut a);`, `return f(&mut a);`, an arm that is
-  a bare call, an operand.
+```heather
+fn Counter::give(mut self c: Counter, into: &mut Nat, k: Nat) → Nat { … }
+// kernel type: Counter → Nat → Nat → Mutated<Counter, Mutated<Nat, Nat>>
+
+let r = d.give(&mut t, 2);
+// let #path = \0mutcall(d.give(\0mutarg(t), 2));   (claimed: \0mutated)
+//   d := the call's after,  #path := the call's value   (when `give`'s receiver comes back)
+// t := #path.after;
+// let r = #path.value;
+```
+
+- **Whether a dot call rebinds its receiver is the callee's receiver mode**
+  (`Members::threads_receiver`, `crates/elab/src/dispatch/member.rs`): a
+  `mut self` or `self: &mut` receiver, or a `&mut` parameter in the
+  receiver's place (`p.swap_sum(&mut q)` for `fn swap_sum(a, b: &mut Nat)`),
+  comes back; any other does not. It used to be read off a `Mutated` result
+  head, which a function answering a record on purpose has too
+  (`Store::alloc`): such a function, written with a plain `self`, now
+  answers its record at a dot call as at its qualified one, also on a `let
+  mut` local, and a statement of it is refused as discarding its value
+  (`issues/mutated-result-dot-call-diagnostic.md`). The enclosing
+  declaration's own recursion reads its receiver's mode from `SelfRef`,
+  since its table is not registered while its body elaborates; a callee
+  with no table at all (a local function) is read by its result, as before.
+  The loop lifter's generated methods (§23) mark their receiver the live
+  path it is.
+- **A call on a mutable place that lends places is a candidate of that
+  place** (§8.2's `\0mutcall`), so every rule that threads a `mut self`
+  call's receiver threads this one: the declaring block claims it, loops
+  and statement forms carry the receiver. The elaborator binds the
+  receiver to the call's outer `after` and the private `#path` to the rest
+  when the receiver comes back, and `#path` to the whole call when it does
+  not, so the places' rebinding that follows reads `#path` either way. The
+  receiver is a place of the call for apartness: `u.a.g(&mut u.a)` and
+  `u.g(&mut u.a)` are refused, `u.a.g(&mut u.b)` is not. A receiver that
+  comes back but is no place (`p.swap_sum(&mut q)` on an immutable `p`) is
+  refused, naming the plain call.
+- **A `mut self` receiver is written first among the `&mut` parameters**,
+  so its value is the outermost `Mutated`, the one a method call rebinds
+  it from. The result keeps the one rule of §24.2 (parameter order);
+  writing `self` after another `&mut` parameter is refused at the
+  declaration. Decided over reordering the nest receiver-first, which would
+  have given a declaration whose nest is not its parameter order.
+- **`decreases`**: the self-call rewrite (`measure::MethodCalls`) keeps a
+  claimed self-call that lends places lending them, its receiver among them
+  when it comes back, and reads whether it comes back from the receiver's
+  mode (`Counter::drain`, `Nat::count_into` in the probes).
+
+### 24.5 A call that lends places runs first, wherever it surely runs
+
+`Parser::hoist_path_calls`. A call with `&mut` arguments inside a
+statement's expression is lifted out, inner calls first and left to right,
+into the statements that run it and rebind its places (§24.3), and the
+expression reads its answer by a private name. "Inside" is every position
+the expression surely evaluates: an argument, an operand, a receiver, a
+literal's field, an index, a scrutinee. The statements it serves:
+
+| Written | Is |
+|---|---|
+| `let r = f(&mut a) + 1;` | `let #pathres = f(&mut a); let r = #pathres + 1;` |
+| `let x <- f(&mut a);` | the call, then `let x <- #path.value;` (the answer is bound) |
+| `return f(&mut a);` | the call, then `return #pathres;` (§22; a path returns as it is after) |
+| `x := f(&mut a);` | the call, then the assignment |
+| `True => f(&mut a),` | the arm as a block that runs the call, which a tail branch's arm may (§19.1) |
+| `g(&mut b, f(&mut a));` | `f`'s call, then `g`'s |
+
+- **A place lent this way is read nowhere else in the expression** (refused
+  at parse time): the call now runs before the whole of it, so which value
+  `a` in `a + f(&mut a)` meant would be the order of evaluation's. The
+  call's own arguments are read before it runs whatever the order
+  (`f(&mut a, a)` stands), and two calls lending one place run left to
+  right (`f(&mut a) + f(&mut a)`).
+- **Not lifted**: under a `λ`, in a branch's arm or a block in value
+  position, on the right of `&&`/`||`, or in a type (an `if`'s condition is
+  a proposition). The `&mut` stays, and the elaborator refuses it naming
+  where it may stand; an arm in value position is refused at parse time,
+  since rebinding its place is an assignment there (§19.1).
+- A call that lends places at the top of a statement keeps the expansion
+  of §24.3 exactly, so every term built before is unchanged.
+
+### 24.6 Not built
+
+`issues/parameter-modes-later.md` owns these.
+
 - Two elements of one owner lent at once, which waits for the judgment's
   `Apart` request.
-- A spelling for lending a frozen view at a call (`f(&a)`): a view means
-  the value, so the call passes the value today.
-- A generator publishing a declaration with modes (`tactic::Param` has no
-  mode), and a callee's own recursion checked against its modes.
+- A frozen view at a call, `f(&a)`. It would be notation (a view means the
+  value), but a spelling that says `&` should be held to a `&` parameter,
+  and an argument meets its parameter on several routes of the application
+  elaborator (inference and checking, implicit insertion, named
+  arguments); a `&` read as the bare value on some of them and checked on
+  others is worse than no spelling. Built once a view's region is named
+  (ownership note §10.5), when the argument carries something.
+- A generator publishing a declaration with modes: more than a field on
+  `tactic::Param`. It changes the tactic protocol (the host's
+  `decl_param_*` reads), every generator that builds a `Param` (the
+  `runtime` generator's among them), and a published live path needs its
+  result to be the `Mutated` nest the parser writes for a written one,
+  which the publisher would have to check or build.
+- The method's own call that lends places as a `mut self` body's result
+  (§19.3's tail call): bound and taken apart, which a `runtime fn`'s loop
+  rule does not follow.
+- A statement `f(&mut a);` in a block of another carrier drops the call's
+  answer, as a `mut self` call's statement does (§8.2), rather than binding
+  it as `e;` binds; `let _ <- f(&mut a);` binds it.
