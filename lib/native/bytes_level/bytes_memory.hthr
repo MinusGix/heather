@@ -358,7 +358,7 @@ theorem related_eq_map<A>(g: A → A, {o, o2: Option<A>}, rel: Related<A>(λ (a:
         None => λ b => match b as λ bb => Related<A>(λ (x: A) (y: A) => y = g(x), None, bb) → bb = None { None => λ _ => refl, Some(_) => λ never => false_elim(never) },
         Some(x) => λ b => match b as λ bb => Related<A>(λ (x2: A) (y: A) => y = g(x2), Some(x), bb) → bb = Some(g(x)) {
             None => λ never => false_elim(never),
-            Some(y) => λ h => cong_fn<A, Option<A>>(λ v => Some(v), h),
+            Some(_) => λ h => cong_fn<A, Option<A>>(λ v => Some(v), h),
         },
     })(o2, rel)
 }
@@ -588,4 +588,157 @@ theorem Memory::copy_renames(self m: Memory, r: Renaming, renamed: Memory, rel: 
             None => trivial,
             Some(piece) => m.put_renames(r, renamed, rel, target, piece),
         }))
+}
+
+// ---------------------------------------------------------------------------
+// Canonical: a reference's eight bytes are zero
+
+// Eight zero bytes lie in `bytes` from `at`.
+fn ZeroAt(bytes: List<BitVec(8)>, at: Nat) → Type { (at + 8 <= bytes.len()) ∧ (bytes.window(at, at + 8) = word_bytes(BitVec::zero())) }
+
+fn EveryPointer(pointers: List<Pointer>, P: Pointer → Type) → Type {
+    match pointers { Nil => True, Cons(p, rest) => P(p) ∧ EveryPointer(rest, P) }
+}
+
+// Each reference of a piece sits on eight zero bytes of it.
+fn Piece::Canonical(self piece: Piece) → Type { EveryPointer(piece.pointers, λ (p: Pointer) => ZeroAt(piece.bytes, p.at)) }
+
+// Each entry of the shadow sits on eight zero bytes of its block, so what
+// a heap reads is its bytes and its entries: two heaps that read alike are
+// `Memory::Same`.
+fn Memory::Canonical(self m: Memory) → Type { Every(m.heap.shadow, λ (e: Entry) => ZeroAt(m.heap.bytes(e.block), e.at)) }
+
+theorem Piece::plain_canonical(bytes: List<BitVec(8)>): Piece::plain(bytes).Canonical() { trivial }
+
+theorem Piece::reference_canonical(target: Loc): Piece::reference(target).Canonical() { ⟨⟨omega, refl⟩, trivial⟩ }
+
+theorem every_append(P: Entry → Type, xs, ys: List<Entry>): Every(xs, P) → Every(ys, P) → Every(xs ++ ys, P) {
+    match xs { Nil => λ _ all => all, Cons(_, rest) => λ here all => ⟨here.left, every_append(P, rest, ys, here.right, all)⟩ }
+}
+
+// An entry inside a range sits on zero bytes of the window it is taken
+// with.
+theorem zero_in_window(bytes: List<BitVec(8)>, k, n, at: Nat, fits: k + n <= bytes.len(), low: k <= at, high: at + 8 <= k + n,
+    zero: ZeroAt(bytes, at)): ZeroAt(bytes.window(k, k + n), at - k) {
+    let shifted: ((at - k) + k = at) = omega;
+    let ended: (((at - k) + 8) + k = at + 8) = omega;
+    ⟨omega(bytes.len_window(k, k + n, omega, fits)),
+     rewrite(bytes.window_window(k, k + n, at - k, (at - k) + 8, omega), shifted, ended, zero.right)⟩
+}
+
+theorem pointers_canonical(bytes: Nat → List<BitVec(8)>, b, k, n: Nat, fits: k + n <= bytes(b).len(), shadow: List<Entry>):
+    Every(shadow, λ (e: Entry) => ZeroAt(bytes(e.block), e.at)) →
+    EveryPointer(range_pointers(shadow, b, k, n), λ (p: Pointer) => ZeroAt(bytes(b).window(k, k + n), p.at)) {
+    match shadow {
+        Nil => λ _ => trivial,
+        Cons(e, rest) => λ all => (match e.within_range(b, k, n) as λ v => e.within_range(b, k, n) = v →
+                EveryPointer(match v { True => Cons(Pointer(e.at - k, e.target), range_pointers(rest, b, k, n)), False => range_pointers(rest, b, k, n) },
+                    λ (p: Pointer) => ZeroAt(bytes(b).window(k, k + n), p.at)) {
+            True => λ within => {
+                let parts = Bool::and_true_parts(e.block.same(b), k.leb(e.at) && (e.at + 8).leb(k + n), within);
+                let block: (e.block = b) = e.block.same_sound(b, parts.left);
+                let zero: ZeroAt(bytes(b), e.at) = j(block, λ x _ => ZeroAt(bytes(x), e.at), all.left);
+                ⟨zero_in_window(bytes(b), k, n, e.at, fits, omega(parts.right), omega(parts.right), zero),
+                 pointers_canonical(bytes, b, k, n, fits, rest, all.right)⟩
+            },
+            False => λ _ => pointers_canonical(bytes, b, k, n, fits, rest, all.right),
+        })(refl),
+    }
+}
+
+// A take of a canonical memory is a canonical piece.
+theorem Memory::take_canonical(self m: Memory, loc: Loc, n: Nat, piece: Piece, taken: m.take(loc, n) = Some(piece), canonical: m.Canonical()):
+    piece.Canonical() {
+    let facts = m.take_some(loc, n, piece, taken);
+    let fits: (loc.offset + n <= m.heap.bytes(loc.block).len()) = omega(facts.left);
+    j(facts.right.right, λ p _ => p.Canonical(),
+        pointers_canonical(m.heap.bytes, loc.block, loc.offset, n, fits, m.heap.shadow, canonical))
+}
+
+// A piece's references, put at `k`, sit on its zero bytes there.
+theorem placed_canonical(bytes: Nat → List<BitVec(8)>, b, k: Nat, piece: Piece, fits: piece.bytes.len() + k <= bytes(b).len(),
+    pointers: List<Pointer>): EveryPointer(pointers, λ (p: Pointer) => ZeroAt(piece.bytes, p.at)) →
+    Every(placed(pointers, b, k), λ (e: Entry) => ZeroAt(set_block(bytes, b, bytes(b).put_window(k, piece.bytes), e.block), e.at)) {
+    match pointers {
+        Nil => λ _ => trivial,
+        Cons(p, rest) => λ all => {
+            let now = bytes(b).put_window(k, piece.bytes);
+            let start: ((k + p.at) = p.at + k) = omega;
+            let ended: ((p.at + k) + 8 = (p.at + 8) + k) = omega;
+            let window: (now.window(p.at + k, (p.at + 8) + k) = piece.bytes.window(p.at, p.at + 8)) =
+                trans(sym(now.window_window(k, piece.bytes.len() + k, p.at, p.at + 8, omega(all.left.left))),
+                    cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ w => w.window(p.at, p.at + 8), bytes(b).window_put_window(k, piece.bytes, omega(fits))));
+            let zero: ZeroAt(now, k + p.at) = ⟨omega(all.left.left, bytes(b).len_put_window(k, piece.bytes, fits), fits),
+                rewrite(start, ended, trans(window, all.left.right))⟩;
+            ⟨j(sym(set_block_here(bytes, b, now)), λ l _ => ZeroAt(l, k + p.at), zero), placed_canonical(bytes, b, k, piece, fits, rest, all.right)⟩
+        },
+    }
+}
+
+// An entry a put leaves met none of its bytes, so it sits on what it sat
+// on.
+theorem kept_zero(bytes: Nat → List<BitVec(8)>, b, k: Nat, ys: List<BitVec(8)>, fits: ys.len() + k <= bytes(b).len(), e: Entry,
+    apart: e.meets_range(b, k, ys.len()) = False, zero: ZeroAt(bytes(e.block), e.at)):
+    ZeroAt(set_block(bytes, b, bytes(b).put_window(k, ys), e.block), e.at) {
+    match e.block.eq_dec(b) {
+        Inl(same) => {
+            let block: (set_block(bytes, b, bytes(b).put_window(k, ys), e.block) = bytes(b).put_window(k, ys)) =
+                j(sym(same), λ x _ => set_block(bytes, b, bytes(b).put_window(k, ys), x) = bytes(b).put_window(k, ys), set_block_here(bytes, b, bytes(b).put_window(k, ys)));
+            let old: ZeroAt(bytes(b), e.at) = j(same, λ x _ => ZeroAt(bytes(x), e.at), zero);
+            let outside: (((e.at + 1).leb(k + ys.len()) && (k + 1).leb(e.at + 8)) = False) =
+                trans(sym(cong_fn<Bool, Bool>(λ v => v && ((e.at + 1).leb(k + ys.len()) && (k + 1).leb(e.at + 8)), e.block.same_of_eq(b, same))), apart);
+            let window: (bytes(b).put_window(k, ys).window(e.at, e.at + 8) = bytes(b).window(e.at, e.at + 8)) =
+                match (e.at + 8).leb(k) as λ v => (e.at + 8).leb(k) = v → bytes(b).put_window(k, ys).window(e.at, e.at + 8) = bytes(b).window(e.at, e.at + 8) {
+                    True => λ before => bytes(b).window_put_window_before(k, ys, e.at, e.at + 8, omega(before), omega(fits)),
+                    False => λ after => bytes(b).window_put_window_after(k, ys, e.at, e.at + 8, omega(after, outside), omega(fits)),
+                }(refl);
+            rewrite(block, ⟨omega(old.left, bytes(b).len_put_window(k, ys, fits)), trans(window, old.right)⟩)
+        },
+        Inr(differs) => rewrite(set_block_other(bytes, b, bytes(b).put_window(k, ys), e.block, differs), zero),
+    }
+}
+
+theorem cleared_canonical(bytes: Nat → List<BitVec(8)>, b, k: Nat, ys: List<BitVec(8)>, fits: ys.len() + k <= bytes(b).len(), shadow: List<Entry>):
+    Every(shadow, λ (e: Entry) => ZeroAt(bytes(e.block), e.at)) →
+    Every(range_cleared(shadow, b, k, ys.len()), λ (e: Entry) => ZeroAt(set_block(bytes, b, bytes(b).put_window(k, ys), e.block), e.at)) {
+    match shadow {
+        Nil => λ _ => trivial,
+        Cons(e, rest) => λ all => (match e.meets_range(b, k, ys.len()) as λ v => e.meets_range(b, k, ys.len()) = v →
+                Every(match v { True => range_cleared(rest, b, k, ys.len()), False => Cons(e, range_cleared(rest, b, k, ys.len())) },
+                    λ (d: Entry) => ZeroAt(set_block(bytes, b, bytes(b).put_window(k, ys), d.block), d.at)) {
+            True => λ _ => cleared_canonical(bytes, b, k, ys, fits, rest, all.right),
+            False => λ apart => ⟨kept_zero(bytes, b, k, ys, fits, e, apart, all.left), cleared_canonical(bytes, b, k, ys, fits, rest, all.right)⟩,
+        })(refl),
+    }
+}
+
+// A put of a canonical piece into a canonical memory leaves it canonical.
+theorem Memory::put_canonical(self m: Memory, loc: Loc, piece: Piece, after: Memory, put: m.put(loc, piece) = Some(after),
+    canonical: m.Canonical(), piece_canonical: piece.Canonical()): after.Canonical() {
+    let facts = m.put_some(loc, piece, after, put);
+    let fits: (piece.bytes.len() + loc.offset <= m.heap.bytes(loc.block).len()) = omega(facts.right.left);
+    j(facts.right.right.right, λ a _ => a.Canonical(),
+        every_append(λ (e: Entry) => ZeroAt(set_block(m.heap.bytes, loc.block, m.heap.bytes(loc.block).put_window(loc.offset, piece.bytes), e.block), e.at),
+            placed(piece.pointers, loc.block, loc.offset), range_cleared(m.heap.shadow, loc.block, loc.offset, piece.bytes.len()),
+            placed_canonical(m.heap.bytes, loc.block, loc.offset, piece, fits, piece.pointers, piece_canonical),
+            cleared_canonical(m.heap.bytes, loc.block, loc.offset, piece.bytes, fits, m.heap.shadow, canonical)))
+}
+
+// So every store keeps a heap canonical, a copy among them: what it puts
+// is a take's piece.
+theorem Memory::copy_canonical(self m: Memory, target, source: Loc, n: Nat, after: Memory, copied: m.copy(target, source, n) = Some(after),
+    canonical: m.Canonical()): after.Canonical() {
+    let facts = m.copy_some(target, source, n, after, copied);
+    m.put_canonical(target, m.piece_at(source, n), after, facts.right, canonical,
+        m.take_canonical(source, n, m.piece_at(source, n), facts.left, canonical))
+}
+
+theorem Memory::store_canonical(self m: Memory, loc: Loc, bytes: List<BitVec(8)>, after: Memory, stored: m.store(loc, bytes) = Some(after),
+    canonical: m.Canonical()): after.Canonical() {
+    m.put_canonical(loc, Piece::plain(bytes), after, stored, canonical, Piece::plain_canonical(bytes))
+}
+
+theorem Memory::store_ref_canonical(self m: Memory, loc, target: Loc, after: Memory, stored: m.store_ref(loc, target) = Some(after),
+    canonical: m.Canonical()): after.Canonical() {
+    m.put_canonical(loc, Piece::reference(target), after, stored, canonical, Piece::reference_canonical(target))
 }
