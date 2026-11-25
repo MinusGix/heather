@@ -1,0 +1,450 @@
+// P3109's projection: rounding, then saturation (docs/library/float-p3109-design.md
+// D6, §6; P3109 interim report §4.7.3–§4.7.5).
+//
+// P3109 projects an exact value into a format in two steps: round to the
+// format's precision with an unbounded exponent, then saturate what lands
+// past the finite range according to a saturation mode chosen with the
+// operation. `RoundsTo` already is the first step inside the range, and at
+// its edges it is one saturation: `SatNone` at a format with infinities
+// (IEEE overflow), `SatFinite` at one without (it clamps). So the projection
+// is stated beside it, not inside it:
+//
+// - `OverUp(mode, x)` / `OverDown(mode, x)` say that rounding to precision
+//   carries `x` past the largest finite float, or below the least. They are
+//   exactly the conditions under which `RoundsTo` returns an infinity at a
+//   format with infinities (`inf_over_up`, `inf_over_down`): past the
+//   threshold `ovf` for a nearest mode (with D5's tie), past every float
+//   for a directed mode that rounds away, and never for `TowardZero` or the
+//   directed mode that rounds back.
+// - `sat_up(sat)` / `sat_down(sat)` are what the saturation mode makes of
+//   such a value (report §4.7.5): the extreme finite float for `SatFinite`
+//   and `SatPropagate`, and for `SatNone` the infinity where the format has
+//   one, else NaN.
+// - `project(mode, sat, x)` decides the two conditions and otherwise rounds;
+//   `Projects` is its specification and `project_correct` the bridge.
+//
+// `SatPropagate` differs from `SatFinite` only on infinite inputs, which an
+// exact rational never is; `project_ext` takes the closed extended reals.
+//
+// Unsigned formats (design D2) are the nonnegative half of a signed
+// envelope: `project_unsigned` projects in the envelope and sends a negative
+// result to what the report gives a value below `Mlo = 0`.
+
+import logic;
+import bool;
+import nat;
+import int;
+import omega;
+import ring;
+import linarith;
+import option;
+import relation_props;
+import algebra;
+import algebra_rel;
+import order;
+import ordered_field;
+import semiring;
+import rat;
+import dyadic;
+import float;
+import round;
+
+// The saturation modes (report §4.2).
+inductive Sat { SatFinite, SatPropagate, SatNone }
+
+// ---------------------------------------------------------------------------
+// Past the finite range.
+
+// Rounding to precision carries `x` above the largest float under `mode`,
+// or below the least.
+fn Format::OverUp(self F: Format, mode: Mode, x: Rat) → Type {
+    match mode { NearestEven => F.Over(True, x), NearestAway => F.Over(False, x), TowardPos => F.Exceeds(x), TowardNeg => False, TowardZero => False }
+}
+
+fn Format::OverDown(self F: Format, mode: Mode, x: Rat) → Type {
+    match mode { NearestEven => F.Under(True, x), NearestAway => F.Under(False, x), TowardPos => False, TowardNeg => F.Undercuts(x), TowardZero => False }
+}
+
+// At a format with infinities, `RoundsTo` overflows exactly there.
+theorem Format::inf_over_up(self F: Format, mode: Mode, x: Rat, has: F.specials.has_inf().IsTrue(), h: RoundsTo(F, mode, x, Inf(False, has))): F.OverUp(mode, x) {
+    match mode as λ md => RoundsTo(F, md, x, Inf(False, has)) → F.OverUp(md, x) {
+        NearestEven => λ o => o, NearestAway => λ o => o, TowardPos => λ e => e, TowardNeg => λ no => no, TowardZero => λ no => no,
+    }(h)
+}
+
+theorem Format::inf_over_down(self F: Format, mode: Mode, x: Rat, has: F.specials.has_inf().IsTrue(), h: RoundsTo(F, mode, x, Inf(True, has))): F.OverDown(mode, x) {
+    match mode as λ md => RoundsTo(F, md, x, Inf(True, has)) → F.OverDown(md, x) {
+        NearestEven => λ u => u, NearestAway => λ u => u, TowardPos => λ no => no, TowardNeg => λ u => u, TowardZero => λ no => no,
+    }(h)
+}
+
+// The largest float is below the threshold, whatever the specials.
+theorem Format::max_lt_ovf(self F: Format): (Finite::max_finite(F)).val() < F.ovf() {
+    let ps = Nat::pow(2, F.span);
+    let mx = Finite::max_H(F);
+    let o2: (F.ovf_h() = (F.max_mag() + F.max_mag() + 1) * ps) = refl;
+    let pp: (0 < ps) = Nat::pow_pos(a := 2, n := F.span);
+    let lt: ((Finite::max_finite(F)).H() < F.ovf_h().int()) = linarith(o2);
+    Rat::lt_respects(Rat::same_sym((Finite::max_finite(F)).val_grid()), F.ovf().same_refl(), F.grid_lt((Finite::max_finite(F)).H(), F.ovf_h().int(), lt))
+}
+
+// Every float lies between `-max` and `max`.
+theorem Finite::le_max({F: Format}, g: Finite(F)): g.val() <= (Finite::max_finite(F)).val() {
+    Finite::le_of_H_le(g, Finite::max_finite(F), Finite::H_le_max(g))
+}
+
+theorem Finite::neg_max_le({F: Format}, g: Finite(F)): -(Finite::max_finite(F)).val() <= g.val() {
+    Finite::unflip_le((Finite::max_finite(F)).val(), g, Finite::le_max(-g))
+}
+
+// Inside `[-max, max]` nothing overflows.
+theorem Format::in_range(self F: Format, mode: Mode, x: Rat, lo: -(Finite::max_finite(F)).val() <= x, hi: x <= (Finite::max_finite(F)).val()):
+    ¬F.OverUp(mode, x) ∧ ¬F.OverDown(mode, x)
+{
+    let M = (Finite::max_finite(F)).val();
+    let mo = F.max_lt_ovf();
+    let up = λ (even: Bool) (o: F.Over(even, x)) => Rat::lt_irrefl(M, Rat::lt_of_lt_of_le(mo, Rat::le_trans(o.left, hi)));
+    let down = λ (even: Bool) (u: F.Under(even, x)) => {
+        let nm: (-F.ovf() < -M) = Rat::neg_lt(x := M, y := F.ovf(), h := mo);
+        Rat::lt_irrefl(x, Rat::lt_of_le_of_lt(u.left, Rat::lt_of_lt_of_le(nm, lo)))
+    };
+    let ex = λ (e: F.Exceeds(x)) => Rat::lt_irrefl(x, Rat::lt_of_le_of_lt(hi, e(Finite::max_finite(F))));
+    let un = λ (u: F.Undercuts(x)) => Rat::lt_irrefl(x, Rat::lt_of_lt_of_le(u(-Finite::max_finite(F)), Rat::le_respects(Rat::same_sym(Finite::val_neg(Finite::max_finite(F))), x.same_refl(), lo)));
+    match mode as λ md => ¬F.OverUp(md, x) ∧ ¬F.OverDown(md, x) {
+        NearestEven => And(up(True), down(True)),
+        NearestAway => And(up(False), down(False)),
+        TowardPos => And(ex, λ no => no),
+        TowardNeg => And(λ no => no, un),
+        TowardZero => And(λ no => no, λ no => no),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Deciding them.
+
+theorem Format::exceeds_of_max_lt(self F: Format, x: Rat, lt: (Finite::max_finite(F)).val() < x): F.Exceeds(x) {
+    λ g => Rat::lt_of_le_of_lt(Finite::le_max(g), lt)
+}
+
+theorem Format::undercuts_of_lt_neg_max(self F: Format, x: Rat, lt: x < -(Finite::max_finite(F)).val()): F.Undercuts(x) {
+    λ g => Rat::lt_of_lt_of_le(lt, Finite::neg_max_le(g))
+}
+
+fn Format::exceeds_dec(self F: Format, x: Rat) → F.Exceeds(x) ∨ ¬F.Exceeds(x) {
+    match x.le_dec((Finite::max_finite(F)).val()) {
+        Inl(le) => Inr(λ e => Rat::not_le_of_lt(x := (Finite::max_finite(F)).val(), y := x, h := e(Finite::max_finite(F)))(le)),
+        Inr(nle) => Inl(F.exceeds_of_max_lt(x, Rat::lt_of_not_le(x := (Finite::max_finite(F)).val(), y := x, h := nle))),
+    }
+}
+
+fn Format::undercuts_dec(self F: Format, x: Rat) → F.Undercuts(x) ∨ ¬F.Undercuts(x) {
+    let M = (Finite::max_finite(F)).val();
+    match (-M).le_dec(x) {
+        Inl(le) => Inr(λ u => Rat::not_le_of_lt(x := x, y := -M,
+            h := Rat::lt_respects(x.same_refl(), Finite::val_neg(Finite::max_finite(F)), u(-Finite::max_finite(F))))(le)),
+        Inr(nle) => Inl(F.undercuts_of_lt_neg_max(x, Rat::lt_of_not_le(x := x, y := -M, h := nle))),
+    }
+}
+
+fn Format::over_dec(self F: Format, even: Bool, x: Rat) → F.Over(even, x) ∨ ¬F.Over(even, x) {
+    match F.ovf().le_dec(x) {
+        Inr(nle) => Inr(λ o => nle(o.left)),
+        Inl(le) => match F.tie_stays_dec(even) {
+            Inr(nt) => Inl(And(le, λ t => false_elim(nt(t)))),
+            Inl(t) => match x.le_dec(F.ovf()) {
+                Inl(xle) => Inr(λ o => Rat::not_le_of_lt(x := F.ovf(), y := x, h := o.right(t))(xle)),
+                Inr(nxle) => Inl(And(le, λ _ => Rat::lt_of_not_le(x := F.ovf(), y := x, h := nxle))),
+            },
+        },
+    }
+}
+
+fn Format::under_dec(self F: Format, even: Bool, x: Rat) → F.Under(even, x) ∨ ¬F.Under(even, x) {
+    match x.le_dec(-F.ovf()) {
+        Inr(nle) => Inr(λ u => nle(u.left)),
+        Inl(le) => match F.tie_stays_dec(even) {
+            Inr(nt) => Inl(And(le, λ t => false_elim(nt(t)))),
+            Inl(t) => match (-F.ovf()).le_dec(x) {
+                Inl(ge) => Inr(λ u => Rat::not_le_of_lt(x := x, y := -F.ovf(), h := u.right(t))(ge)),
+                Inr(nge) => Inl(And(le, λ _ => Rat::lt_of_not_le(x := x, y := -F.ovf(), h := nge))),
+            },
+        },
+    }
+}
+
+fn Format::over_up_dec(self F: Format, mode: Mode, x: Rat) → F.OverUp(mode, x) ∨ ¬F.OverUp(mode, x) {
+    match mode as λ md => F.OverUp(md, x) ∨ ¬F.OverUp(md, x) {
+        NearestEven => F.over_dec(True, x), NearestAway => F.over_dec(False, x), TowardPos => F.exceeds_dec(x),
+        TowardNeg => Inr(λ no => no), TowardZero => Inr(λ no => no),
+    }
+}
+
+fn Format::over_down_dec(self F: Format, mode: Mode, x: Rat) → F.OverDown(mode, x) ∨ ¬F.OverDown(mode, x) {
+    match mode as λ md => F.OverDown(md, x) ∨ ¬F.OverDown(md, x) {
+        NearestEven => F.under_dec(True, x), NearestAway => F.under_dec(False, x), TowardPos => Inr(λ no => no),
+        TowardNeg => F.undercuts_dec(x), TowardZero => Inr(λ no => no),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Saturation and the projection.
+
+// What a saturation mode makes of a value past the largest float: the
+// largest float, or for `SatNone` the infinity, else NaN. A format with
+// neither (OCP FP6 and FP4, which P3109 does not define) saturates.
+fn Format::sat_up(self F: Format, sat: Sat) → Float(F) {
+    match sat {
+        SatNone => match F.specials.has_inf().is_true_dec() {
+            Inl(h) => Inf(False, h),
+            Inr(_) => match F.specials.has_nan().is_true_dec() { Inl(h) => NaN(h), Inr(_) => Fin(Finite::max_finite(F)) },
+        },
+        SatFinite => Fin(Finite::max_finite(F)),
+        SatPropagate => Fin(Finite::max_finite(F)),
+    }
+}
+
+fn Format::sat_down(self F: Format, sat: Sat) → Float(F) {
+    match sat {
+        SatNone => match F.specials.has_inf().is_true_dec() {
+            Inl(h) => Inf(True, h),
+            Inr(_) => match F.specials.has_nan().is_true_dec() { Inl(h) => NaN(h), Inr(_) => Fin(-Finite::max_finite(F)) },
+        },
+        SatFinite => Fin(-Finite::max_finite(F)),
+        SatPropagate => Fin(-Finite::max_finite(F)),
+    }
+}
+
+// Round, then saturate (report §4.7.3).
+fn Format::project(self F: Format, mode: Mode, sat: Sat, x: Rat) → Float(F) {
+    match F.over_up_dec(mode, x) {
+        Inl(_) => F.sat_up(sat),
+        Inr(_) => match F.over_down_dec(mode, x) { Inl(_) => F.sat_down(sat), Inr(_) => F.round_rat(mode, x) },
+    }
+}
+
+// `r` is the projection of `x`: saturated past the range, a correct rounding
+// inside it.
+fn Format::Projects(self F: Format, mode: Mode, sat: Sat, x: Rat, r: Float(F)) → Type {
+    (F.OverUp(mode, x) ∧ r = F.sat_up(sat))
+        ∨ (F.OverDown(mode, x) ∧ r = F.sat_down(sat))
+        ∨ (¬F.OverUp(mode, x) ∧ ¬F.OverDown(mode, x) ∧ RoundsTo(F, mode, x, r))
+}
+
+theorem Format::project_correct(self F: Format, mode: Mode, sat: Sat, x: Rat): F.Projects(mode, sat, x, F.project(mode, sat, x)) {
+    match F.over_up_dec(mode, x) as λ du => F.Projects(mode, sat, x,
+        match du { Inl(_) => F.sat_up(sat), Inr(_) => match F.over_down_dec(mode, x) { Inl(_) => F.sat_down(sat), Inr(_) => F.round_rat(mode, x) } })
+    {
+        Inl(u) => Inl(And(u, refl)),
+        Inr(nu) => match F.over_down_dec(mode, x) as λ dd => F.Projects(mode, sat, x, match dd { Inl(_) => F.sat_down(sat), Inr(_) => F.round_rat(mode, x) }) {
+            Inl(d) => Inr(Inl(And(d, refl))),
+            Inr(nd) => Inr(Inr(And(nu, And(nd, F.round_rat_correct(mode, x))))),
+        },
+    }
+}
+
+// Inside the range the projection is the rounding, whatever the saturation
+// (FLoPS Lemma 4).
+theorem Format::project_in_range(self F: Format, mode: Mode, sat: Sat, x: Rat, lo: -(Finite::max_finite(F)).val() <= x, hi: x <= (Finite::max_finite(F)).val()):
+    F.project(mode, sat, x) = F.round_rat(mode, x)
+{
+    let r = F.in_range(mode, x, lo, hi);
+    match F.over_up_dec(mode, x) {
+        Inl(u) => false_elim(r.left(u)),
+        Inr(_) => match F.over_down_dec(mode, x) { Inl(d) => false_elim(r.right(d)), Inr(_) => refl },
+    }
+}
+
+// The converse of `inf_over_up`: past the range a format with infinities
+// rounds to one.
+theorem Format::over_up_rounds(self F: Format, mode: Mode, x: Rat, has: F.specials.has_inf().IsTrue(), u: F.OverUp(mode, x)): RoundsTo(F, mode, x, Inf(False, has)) {
+    match mode as λ md => F.OverUp(md, x) → RoundsTo(F, md, x, Inf(False, has)) {
+        NearestEven => λ o => o, NearestAway => λ o => o, TowardPos => λ e => e, TowardNeg => λ no => false_elim(no), TowardZero => λ no => false_elim(no),
+    }(u)
+}
+
+theorem Format::over_down_rounds(self F: Format, mode: Mode, x: Rat, has: F.specials.has_inf().IsTrue(), d: F.OverDown(mode, x)): RoundsTo(F, mode, x, Inf(True, has)) {
+    match mode as λ md => F.OverDown(md, x) → RoundsTo(F, md, x, Inf(True, has)) {
+        NearestEven => λ o => o, NearestAway => λ o => o, TowardPos => λ no => false_elim(no), TowardNeg => λ e => e, TowardZero => λ no => false_elim(no),
+    }(d)
+}
+
+// At a format with infinities, `SatNone` is IEEE: the projection is a
+// correct rounding everywhere.
+theorem Format::project_none(self F: Format, mode: Mode, x: Rat, has: F.specials.has_inf().IsTrue()): RoundsTo(F, mode, x, F.project(mode, SatNone, x)) {
+    let at_up: (F.sat_up(SatNone) = Inf(False, has)) =
+        match F.specials.has_inf().is_true_dec() as λ d => (match d { Inl(h) => Inf(False, h), Inr(_) => match F.specials.has_nan().is_true_dec() { Inl(h) => NaN(h), Inr(_) => Fin(Finite::max_finite(F)) } }) = Inf(False, has) {
+            Inl(h) => j(F.specials.has_inf().is_true_unique(h, has), λ v _ => Float::Inf(False, h) = Float::Inf(False, v), refl),
+            Inr(no) => false_elim(no(has)),
+        };
+    let at_down: (F.sat_down(SatNone) = Inf(True, has)) =
+        match F.specials.has_inf().is_true_dec() as λ d => (match d { Inl(h) => Inf(True, h), Inr(_) => match F.specials.has_nan().is_true_dec() { Inl(h) => NaN(h), Inr(_) => Fin(-Finite::max_finite(F)) } }) = Inf(True, has) {
+            Inl(h) => j(F.specials.has_inf().is_true_unique(h, has), λ v _ => Float::Inf(True, h) = Float::Inf(True, v), refl),
+            Inr(no) => false_elim(no(has)),
+        };
+    match F.project_correct(mode, SatNone, x) {
+        Inl(u) => j(sym(trans(u.right, at_up)), λ v _ => RoundsTo(F, mode, x, v), F.over_up_rounds(mode, x, has, u.left)),
+        Inr(rest) => match rest {
+            Inl(d) => j(sym(trans(d.right, at_down)), λ v _ => RoundsTo(F, mode, x, v), F.over_down_rounds(mode, x, has, d.left)),
+            Inr(c) => c.right.right,
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Faithfulness (FLoPS Lemma 5): a finite projection is `x`'s greatest float
+// below or least float above, saturated ends included.
+
+fn Float::fin_or({F: Format}, self r: Float(F), d: Finite(F)) → Finite(F) { match r { Fin(f) => f, Inf(_, _) => d, NaN(_) => d } }
+
+theorem Float::fin_or_at({F: Format}, r: Float(F), f, d: Finite(F), h: r = Fin(f)): r.fin_or(d) = f { j(sym(h), λ v _ => v.fin_or(d) = f, refl) }
+
+theorem Float::fin_or_cong({F: Format}, r, s: Float(F), e: r = s, d: Finite(F)): r.fin_or(d) = s.fin_or(d) { j(e, λ v _ => r.fin_or(d) = v.fin_or(d), refl) }
+
+theorem Format::sat_up_fin(self F: Format, sat: Sat): (F.sat_up(sat)).fin_or(Finite::max_finite(F)) = Finite::max_finite(F) {
+    match sat {
+        SatNone => match F.specials.has_inf().is_true_dec() {
+            Inl(_) => refl,
+            Inr(_) => match F.specials.has_nan().is_true_dec() { Inl(_) => refl, Inr(_) => refl },
+        },
+        SatFinite => refl,
+        SatPropagate => refl,
+    }
+}
+
+theorem Format::sat_down_fin(self F: Format, sat: Sat): (F.sat_down(sat)).fin_or(-Finite::max_finite(F)) = -Finite::max_finite(F) {
+    match sat {
+        SatNone => match F.specials.has_inf().is_true_dec() {
+            Inl(_) => refl,
+            Inr(_) => match F.specials.has_nan().is_true_dec() { Inl(_) => refl, Inr(_) => refl },
+        },
+        SatFinite => refl,
+        SatPropagate => refl,
+    }
+}
+
+// Past the top every float is below `x`, so the largest is `x`'s greatest
+// float below; and the mirror.
+theorem Format::max_below_of_over(self F: Format, mode: Mode, x: Rat, u: F.OverUp(mode, x)): Finite::Below(x, Finite::max_finite(F)) {
+    let M = Finite::max_finite(F);
+    let le: (M.val() <= x) = match mode as λ md => F.OverUp(md, x) → M.val() <= x {
+        NearestEven => λ o => Rat::le_of_lt(Rat::lt_of_lt_of_le(F.max_lt_ovf(), o.left)),
+        NearestAway => λ o => Rat::le_of_lt(Rat::lt_of_lt_of_le(F.max_lt_ovf(), o.left)),
+        TowardPos => λ e => Rat::le_of_lt(e(M)),
+        TowardNeg => λ no => false_elim(no),
+        TowardZero => λ no => false_elim(no),
+    }(u);
+    And(le, λ g _ => Finite::le_max(g))
+}
+
+theorem Format::min_above_of_over(self F: Format, mode: Mode, x: Rat, d: F.OverDown(mode, x)): Finite::Above(x, -Finite::max_finite(F)) {
+    let M = Finite::max_finite(F);
+    let nv: ((-M).val() ≈ -M.val()) = Finite::val_neg(M);
+    let le: (x <= -M.val()) = match mode as λ md => F.OverDown(md, x) → x <= -M.val() {
+        NearestEven => λ o => Rat::le_trans(o.left, Rat::le_of_lt(Rat::neg_lt(x := M.val(), y := F.ovf(), h := F.max_lt_ovf()))),
+        NearestAway => λ o => Rat::le_trans(o.left, Rat::le_of_lt(Rat::neg_lt(x := M.val(), y := F.ovf(), h := F.max_lt_ovf()))),
+        TowardPos => λ no => false_elim(no),
+        TowardNeg => λ e => Rat::le_of_lt(Rat::lt_respects(x.same_refl(), nv, e(-M))),
+        TowardZero => λ no => false_elim(no),
+    }(d);
+    And(Rat::le_respects(x.same_refl(), Rat::same_sym(nv), le), λ g _ => Rat::le_respects(Rat::same_sym(nv), g.val().same_refl(), Finite::neg_max_le(g)))
+}
+
+theorem Format::project_faithful(self F: Format, mode: Mode, sat: Sat, x: Rat, f: Finite(F), h: F.project(mode, sat, x) = Fin(f)):
+    Finite::Below(x, f) ∨ Finite::Above(x, f)
+{
+    match F.project_correct(mode, sat, x) {
+        Inl(u) => {
+            let fe: (f = Finite::max_finite(F)) = trans(sym(Float::fin_or_at(F.project(mode, sat, x), f, Finite::max_finite(F), h)),
+                trans(Float::fin_or_cong(F.project(mode, sat, x), F.sat_up(sat), u.right, Finite::max_finite(F)), F.sat_up_fin(sat)));
+            Inl(j(sym(fe), λ g _ => Finite::Below(x, g), F.max_below_of_over(mode, x, u.left)))
+        },
+        Inr(rest) => match rest {
+            Inl(d) => {
+                let fe: (f = -Finite::max_finite(F)) = trans(sym(Float::fin_or_at(F.project(mode, sat, x), f, -Finite::max_finite(F), h)),
+                    trans(Float::fin_or_cong(F.project(mode, sat, x), F.sat_down(sat), d.right, -Finite::max_finite(F)), F.sat_down_fin(sat)));
+                Inr(j(sym(fe), λ g _ => Finite::Above(x, g), F.min_above_of_over(mode, x, d.left)))
+            },
+            Inr(c) => F.rounds_faithful(mode, x, f, j(h, λ v _ => RoundsTo(F, mode, x, v), c.right.right)),
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Unsigned formats (design D2): the nonnegative half of a signed envelope.
+
+// NaN where the format has one. Every P3109 format does; a format without
+// one (OCP FP6 and FP4) saturates to zero instead.
+fn Format::nan_or_zero(self F: Format) → Float(F) {
+    match F.specials.has_nan().is_true_dec() { Inl(h) => NaN(h), Inr(_) => Fin(Finite::zero(F, False)) }
+}
+
+// What P3109 gives a value below an unsigned format's `Mlo = 0` (report
+// §4.7.5): zero under the saturating modes, and under `SatNone` zero when
+// the rounding direction asks for a finite result (toward zero or upward)
+// and NaN otherwise.
+fn Format::unsigned_low(self F: Format, mode: Mode, sat: Sat) → Float(F) {
+    match sat {
+        SatNone => match mode {
+            TowardZero => Fin(Finite::zero(F, False)),
+            TowardPos => Fin(Finite::zero(F, False)),
+            NearestEven => F.nan_or_zero(),
+            NearestAway => F.nan_or_zero(),
+            TowardNeg => F.nan_or_zero(),
+        },
+        SatFinite => Fin(Finite::zero(F, False)),
+        SatPropagate => Fin(Finite::zero(F, False)),
+    }
+}
+
+// A signed projection read at the unsigned format: negative results go below
+// `Mlo`.
+fn Format::unsigned_of(self F: Format, mode: Mode, sat: Sat, r: Float(F)) → Float(F) {
+    match r {
+        Fin(f) => match Rat::le_dec(0, f.val()) { Inl(_) => Fin(f), Inr(_) => F.unsigned_low(mode, sat) },
+        Inf(n, h) => match n { False => Inf(False, h), True => F.unsigned_low(mode, sat) },
+        NaN(h) => NaN(h),
+    }
+}
+
+fn Format::project_unsigned(self F: Format, mode: Mode, sat: Sat, x: Rat) → Float(F) { F.unsigned_of(mode, sat, F.project(mode, sat, x)) }
+
+// A datum of an unsigned format: no negative value and no `-∞`.
+fn Float::NonNeg({F: Format}, self r: Float(F)) → Type { match r { Fin(f) => 0 <= f.val(), Inf(n, _) => n = False, NaN(_) => True } }
+
+theorem Finite::zero_nonneg(F: Format): 0 <= (Finite::zero(F, False)).val() { Rat::le_of_same(Rat::same_sym(Finite::zero_val(F))) }
+
+theorem Format::nan_or_zero_nonneg(self F: Format): (F.nan_or_zero()).NonNeg() {
+    match F.specials.has_nan().is_true_dec() { Inl(_) => trivial, Inr(_) => Finite::zero_nonneg(F) }
+}
+
+theorem Format::unsigned_low_nonneg(self F: Format, mode: Mode, sat: Sat): (F.unsigned_low(mode, sat)).NonNeg() {
+    match sat {
+        SatNone => match mode {
+            TowardZero => Finite::zero_nonneg(F),
+            TowardPos => Finite::zero_nonneg(F),
+            NearestEven => F.nan_or_zero_nonneg(),
+            NearestAway => F.nan_or_zero_nonneg(),
+            TowardNeg => F.nan_or_zero_nonneg(),
+        },
+        SatFinite => Finite::zero_nonneg(F),
+        SatPropagate => Finite::zero_nonneg(F),
+    }
+}
+
+theorem Format::unsigned_of_nonneg(self F: Format, mode: Mode, sat: Sat, r: Float(F)): (F.unsigned_of(mode, sat, r)).NonNeg() {
+    match r {
+        Fin(f) => match Rat::le_dec(0, f.val()) { Inl(le) => le, Inr(_) => F.unsigned_low_nonneg(mode, sat) },
+        Inf(n, h) => match n { False => refl, True => F.unsigned_low_nonneg(mode, sat) },
+        NaN(_) => trivial,
+    }
+}
+
+// An unsigned projection is a datum of the unsigned format.
+theorem Format::project_unsigned_nonneg(self F: Format, mode: Mode, sat: Sat, x: Rat): (F.project_unsigned(mode, sat, x)).NonNeg() {
+    F.unsigned_of_nonneg(mode, sat, F.project(mode, sat, x))
+}
+
+// A nonnegative projection is kept as it is.
+theorem Format::unsigned_of_keep(self F: Format, mode: Mode, sat: Sat, f: Finite(F), nn: 0 <= f.val()): F.unsigned_of(mode, sat, Fin(f)) = Fin(f) {
+    match Rat::le_dec(0, f.val()) { Inl(_) => refl, Inr(no) => false_elim(no(nn)) }
+}

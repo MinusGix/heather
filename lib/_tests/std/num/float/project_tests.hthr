@@ -1,0 +1,66 @@
+// Probes of `lib/std/num/float/project.hthr`: P3109's projection at the
+// edges of the finite range, per saturation mode (interim report §4.7.5).
+// Tests, not library: nothing outside lib/_tests imports this module
+// (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import option; import int; import omega; import rat;
+import dyadic; import float; import round; import p3109; import project;
+fn val_or({F: Format}, r: Float(F), d: Rat) → Rat { match r { Fin(f) => f.val(), Inf(_, _) => d, NaN(_) => d } }
+fn inf_bit({F: Format}, r: Float(F)) → Bool { match r { Fin(_) => False, Inf(n, _) => !n, NaN(_) => False } }
+
+// ---------------------------------------------------------------------------
+// Binary8p3se (extended): largest float 49152.
+
+// Inside the range every saturation mode rounds.
+theorem se_in(): Rat::Same(val_or(binary8p3se().project(NearestEven, SatNone, Rat(11, 8)), 99), Rat(3, 2)) { refl }
+theorem se_in_fin(): Rat::Same(val_or(binary8p3se().project(NearestEven, SatFinite, Rat(11, 8)), 99), Rat(3, 2)) { refl }
+// Past it: SatNone overflows to infinity, the others clamp.
+theorem se_none(): inf_bit(binary8p3se().project(NearestEven, SatNone, 100000)) = True { refl }
+theorem se_finite(): Rat::Same(val_or(binary8p3se().project(NearestEven, SatFinite, 100000), 99), 49152) { refl }
+theorem se_prop(): Rat::Same(val_or(binary8p3se().project(NearestEven, SatPropagate, 100000), 99), 49152) { refl }
+theorem se_finite_neg(): Rat::Same(val_or(binary8p3se().project(TowardNeg, SatFinite, -100000), 99), -49152) { refl }
+// The overflow tie stays at the even largest float under every mode of saturation.
+theorem se_tie(): Rat::Same(val_or(binary8p3se().project(NearestEven, SatNone, 53248), 99), 49152) { refl }
+// Directed rounding back toward the range never overflows.
+theorem se_tz(): Rat::Same(val_or(binary8p3se().project(TowardZero, SatNone, 100000), 99), 49152) { refl }
+theorem se_up(): inf_bit(binary8p3se().project(TowardPos, SatNone, 49153)) = True { refl }
+
+// ---------------------------------------------------------------------------
+// Binary8p3sf (finite): largest float 57344, code 0x7f, odd.
+
+// SatNone at a finite domain gives NaN where rounding leaves the range.
+theorem sf_none(): (binary8p3sf().project(NearestEven, SatNone, 100000)).is_nan() = True { refl }
+theorem sf_finite(): Rat::Same(val_or(binary8p3sf().project(NearestEven, SatFinite, 100000), 99), 57344) { refl }
+// The largest float is odd, so the tie at 57344 + 4096 rounds up and past.
+theorem sf_tie_none(): (binary8p3sf().project(NearestEven, SatNone, 61440)).is_nan() = True { refl }
+theorem sf_tie_finite(): Rat::Same(val_or(binary8p3sf().project(NearestEven, SatFinite, 61440), 99), 57344) { refl }
+theorem sf_below_tie(): Rat::Same(val_or(binary8p3sf().project(NearestEven, SatNone, 61439), 99), 57344) { refl }
+// Rounding toward zero or downward from above the range asks for a finite result.
+theorem sf_tz(): Rat::Same(val_or(binary8p3sf().project(TowardZero, SatNone, 100000), 99), 57344) { refl }
+theorem sf_tn(): Rat::Same(val_or(binary8p3sf().project(TowardNeg, SatNone, 100000), 99), 57344) { refl }
+theorem sf_tp(): (binary8p3sf().project(TowardPos, SatNone, 57345)).is_nan() = True { refl }
+// What `RoundsTo` itself does at a format without infinities is SatFinite.
+theorem sf_rounds_is_finite(): Rat::Same(val_or(binary8p3sf().round_rat(NearestEven, 100000), 99), 57344) { refl }
+
+// OCP E4M3 is NaN-only too: SatNone is its non-saturating conversion.
+theorem e4m3_none(): (e4m3().project(NearestEven, SatNone, 500)).is_nan() = True { refl }
+theorem e4m3_finite(): Rat::Same(val_or(e4m3().project(NearestEven, SatFinite, 500), 99), 448) { refl }
+
+// ---------------------------------------------------------------------------
+// Unsigned (Binary8p3ue): negative values go below `Mlo = 0`.
+
+theorem ue_neg_none(): (binary8p3ue().project_unsigned(NearestEven, SatNone, -1)).is_nan() = True { refl }
+theorem ue_neg_finite(): Rat::Same(val_or(binary8p3ue().project_unsigned(NearestEven, SatFinite, -1), 99), 0) { refl }
+theorem ue_neg_tz(): Rat::Same(val_or(binary8p3ue().project_unsigned(TowardZero, SatNone, -1), 99), 0) { refl }
+theorem ue_neg_tp(): Rat::Same(val_or(binary8p3ue().project_unsigned(TowardPos, SatNone, -1), 99), 0) { refl }
+theorem ue_neg_tn(): (binary8p3ue().project_unsigned(TowardNeg, SatNone, -1)).is_nan() = True { refl }
+// A negative value that rounds to zero is zero.
+theorem ue_tiny(): Rat::Same(val_or(binary8p3ue().project_unsigned(NearestEven, SatNone, Dyadic(-1, -40).rat()), 99), 0) { refl }
+// The positive side is the envelope's projection.
+theorem ue_pos(): Rat::Same(val_or(binary8p3ue().project_unsigned(NearestEven, SatNone, Rat(11, 8)), 99), Rat(3, 2)) { refl }
+theorem ue_over(): inf_bit(binary8p3ue().project_unsigned(NearestEven, SatNone, Dyadic(1, 40).rat())) = True { refl }
+
+// The theorems at work on an open value.
+theorem ue_nonneg(x: Rat): (binary8p3ue().project_unsigned(NearestEven, SatNone, x)).NonNeg() { binary8p3ue().project_unsigned_nonneg(NearestEven, SatNone, x) }
+theorem se_faithful(x: Rat, f: Finite(binary8p3se()), h: binary8p3se().project(TowardPos, SatFinite, x) = Float::Fin(f)): Finite::Below(x, f) ∨ Finite::Above(x, f) {
+    binary8p3se().project_faithful(TowardPos, SatFinite, x, f, h)
+}
