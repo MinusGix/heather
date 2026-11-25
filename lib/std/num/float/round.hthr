@@ -298,7 +298,30 @@ fn Format::ovf_h(self F: Format) → Nat { (F.max_mag() + F.max_mag() + 1) * Nat
 
 fn Format::ovf(self F: Format) → Rat { F.grid(F.ovf_h().int()) }
 
-fn Format::Fits(self F: Format, x: Rat) → Type { F.specials.has_inf().IsTrue() → x.abs() < F.ovf() }
+// A tie at the threshold, halfway between the largest float and the next
+// value of its grid, goes to the even code: it stays at the largest float
+// under ties to even when that float's code is even (P3109's signed
+// extended formats, whose `+∞` takes the odd code), and overflows
+// otherwise (every IEEE format; docs/library/float-p3109-design.md D5).
+fn Format::TieStays(self F: Format, even: Bool) → Type { even.IsTrue() ∧ F.MaxEven() }
+
+fn Format::tie_stays_dec(self F: Format, even: Bool) → F.TieStays(even) ∨ ¬F.TieStays(even) {
+    match even.is_true_dec() {
+        Inl(e) => match Nat::even_dec(F.lsb(F.max_mag(), F.span)) { Inl(m) => Inl(And(e, m)), Inr(nm) => Inr(λ t => nm(t.right)) },
+        Inr(ne) => Inr(λ t => ne(t.left)),
+    }
+}
+
+// A nearest rounding of `x` is finite: below the threshold, or on it when
+// the tie stays.
+fn Format::Fits(self F: Format, even: Bool, x: Rat) → Type {
+    F.specials.has_inf().IsTrue() → x.abs() < F.ovf() ∨ (F.TieStays(even) ∧ x.abs() ≈ F.ovf())
+}
+
+// A nearest rounding of `x` overflows upward, or downward.
+fn Format::Over(self F: Format, even: Bool, x: Rat) → Type { F.ovf() <= x ∧ (F.TieStays(even) → F.ovf() < x) }
+
+fn Format::Under(self F: Format, even: Bool, x: Rat) → Type { x <= -F.ovf() ∧ (F.TieStays(even) → x < -F.ovf()) }
 
 // `r` is a correct rounding of `x` in `F` under `mode`. A format without
 // infinities saturates: a directed rounding past the largest float is the
@@ -306,15 +329,15 @@ fn Format::Fits(self F: Format, x: Rat) → Type { F.specials.has_inf().IsTrue()
 fn RoundsTo(F: Format, mode: Mode, x: Rat, r: Float(F)) → Type {
     match r {
         Fin(f) => match mode {
-            NearestEven => Finite::NearestEven(x, f) ∧ F.Fits(x),
-            NearestAway => Finite::NearestAway(x, f) ∧ F.Fits(x),
+            NearestEven => Finite::NearestEven(x, f) ∧ F.Fits(True, x),
+            NearestAway => Finite::NearestAway(x, f) ∧ F.Fits(False, x),
             TowardPos => Finite::Above(x, f) ∨ (¬F.specials.has_inf().IsTrue() ∧ Finite::Below(x, f) ∧ F.Exceeds(x)),
             TowardNeg => Finite::Below(x, f) ∨ (¬F.specials.has_inf().IsTrue() ∧ Finite::Above(x, f) ∧ F.Undercuts(x)),
             TowardZero => (0 <= x → Finite::Below(x, f)) ∧ (x <= 0 → Finite::Above(x, f)),
         },
         Inf(neg, _) => match mode {
-            NearestEven => match neg { False => F.ovf() <= x, True => x <= -F.ovf() },
-            NearestAway => match neg { False => F.ovf() <= x, True => x <= -F.ovf() },
+            NearestEven => match neg { False => F.Over(True, x), True => F.Under(True, x) },
+            NearestAway => match neg { False => F.Over(False, x), True => F.Under(False, x) },
             TowardPos => match neg { False => F.Exceeds(x), True => False },
             TowardNeg => match neg { False => False, True => F.Undercuts(x) },
             TowardZero => False,
@@ -887,14 +910,20 @@ fn Format::mid_h(self F: Format, h: Nat, st: Bool, u: Finite(F), even: Bool) →
     }
 }
 
-// With no float above the cell: the largest float, or overflow from the
-// IEEE threshold on.
-fn Format::none_h(self F: Format, h: Nat) → Float(F) {
-    match F.ovf_h().le_dec(h) { Inl(_) => F.overflow_up(F.down(h)), Inr(_) => Fin(F.down(h)) }
+// With no float above the cell: the largest float, or overflow past the
+// threshold, and on it unless the tie stays.
+fn Format::none_h(self F: Format, h: Nat, st: Bool, even: Bool) → Float(F) {
+    match F.ovf_h().le_dec(h) {
+        Inl(_) => match Succ(F.ovf_h()).le_dec(h + Nat::of_bit(st)) {
+            Inl(_) => F.overflow_up(F.down(h)),
+            Inr(_) => match F.tie_stays_dec(even) { Inl(_) => Fin(F.down(h)), Inr(_) => F.overflow_up(F.down(h)) },
+        },
+        Inr(_) => Fin(F.down(h)),
+    }
 }
 
 fn Format::near_at(self F: Format, h: Nat, st: Bool, even: Bool, o: Option<Finite(F)>) → Float(F) {
-    match o { None => F.none_h(h), Some(u) => F.mid_h(h, st, u, even) }
+    match o { None => F.none_h(h, st, even), Some(u) => F.mid_h(h, st, u, even) }
 }
 
 fn Format::nearest_h(self F: Format, h: Nat, st: Bool, even: Bool) → Float(F) { F.near_at(h, st, even, F.up(h)) }
@@ -1001,11 +1030,11 @@ theorem Format::max_H_lt_ovf(self F: Format, has: F.specials.has_inf().IsTrue())
 
 // Below the overflow threshold `x` fits.
 theorem Format::fits_below(self F: Format, x: Rat, h: Nat, st: Bool, a: F.Approx(x, h, st),
-    lt: F.specials.has_inf().IsTrue() → h < F.ovf_h()): F.Fits(x)
+    lt: F.specials.has_inf().IsTrue() → h < F.ovf_h()): (even: Bool) → F.Fits(even, x)
 {
-    λ has => {
+    λ even has => {
         let l = lt(has);
-        Rat::lt_respects(Rat::same_sym(x.abs_of_nonneg(F.approx_nonneg(x, h, st, a))), F.ovf().same_refl(), F.cut_gt(x, h, st, a, F.ovf_h().int(), omega))
+        Inl(Rat::lt_respects(Rat::same_sym(x.abs_of_nonneg(F.approx_nonneg(x, h, st, a))), F.ovf().same_refl(), F.cut_gt(x, h, st, a, F.ovf_h().int(), omega)))
     }
 }
 
@@ -1028,37 +1057,37 @@ theorem Format::all_top(self F: Format, x: Rat, h: Nat, st: Bool, a: F.Approx(x,
 
 // A unique nearest float is the rounding in either nearest mode.
 theorem Format::near_fin_ok(self F: Format, x: Rat, even: Bool, f: Finite(F), near: Finite::Nearest(x, f),
-    uniq: (g: Finite(F)) → Finite::Nearest(x, g) → g.val() ≈ f.val(), fits: F.Fits(x)): RoundsTo(F, Mode::nearest(even), x, Fin(f))
+    uniq: (g: Finite(F)) → Finite::Nearest(x, g) → g.val() ≈ f.val(), fits: F.Fits(even, x)): RoundsTo(F, Mode::nearest(even), x, Fin(f))
 {
-    match even {
-        True => And(And(near, λ g n => Inl(uniq(g, n))), fits),
-        False => And(And(near, λ g n => Rat::le_of_same(Rat::abs_respects(x := g.val(), x2 := f.val(), hx := uniq(g, n)))), fits),
-    }
+    match even as λ e => F.Fits(e, x) → RoundsTo(F, Mode::nearest(e), x, Fin(f)) {
+        True => λ fi => And(And(near, λ g n => Inl(uniq(g, n))), fi),
+        False => λ fi => And(And(near, λ g n => Rat::le_of_same(Rat::abs_respects(x := g.val(), x2 := f.val(), hx := uniq(g, n)))), fi),
+    }(fits)
 }
 
-theorem Format::near_inf_ok(self F: Format, x: Rat, even: Bool, has: F.specials.has_inf().IsTrue(), le: F.ovf() <= x):
+theorem Format::near_inf_ok(self F: Format, x: Rat, even: Bool, has: F.specials.has_inf().IsTrue(), ov: F.Over(even, x)):
     RoundsTo(F, Mode::nearest(even), x, Inf(False, has))
 {
-    match even { True => le, False => le }
+    match even as λ e => F.Over(e, x) → RoundsTo(F, Mode::nearest(e), x, Inf(False, has)) { True => λ o => o, False => λ o => o }(ov)
 }
 
 // Strictly closer to one neighbour, or exactly on a float.
 theorem Format::near_low_ok(self F: Format, x: Rat, even: Bool, d, u: Finite(F), below: Finite::Below(x, d), above: Finite::Above(x, u),
-    closer: x - d.val() < u.val() - x, fits: F.Fits(x)): RoundsTo(F, Mode::nearest(even), x, Fin(d))
+    closer: x - d.val() < u.val() - x, fits: F.Fits(even, x)): RoundsTo(F, Mode::nearest(even), x, Fin(d))
 {
     F.near_fin_ok(x, even, d, Finite::nearest_of_bracket(x, d, u, d, below, above, Inl(And(d.val().same_refl(), Rat::le_of_lt(closer)))),
         λ g n => Finite::nearest_low(x, d, u, g, below, above, n, closer), fits)
 }
 
 theorem Format::near_high_ok(self F: Format, x: Rat, even: Bool, d, u: Finite(F), below: Finite::Below(x, d), above: Finite::Above(x, u),
-    closer: u.val() - x < x - d.val(), fits: F.Fits(x)): RoundsTo(F, Mode::nearest(even), x, Fin(u))
+    closer: u.val() - x < x - d.val(), fits: F.Fits(even, x)): RoundsTo(F, Mode::nearest(even), x, Fin(u))
 {
     F.near_fin_ok(x, even, u, Finite::nearest_of_bracket(x, d, u, u, below, above, Inr(And(u.val().same_refl(), Rat::le_of_lt(closer)))),
         λ g n => Finite::nearest_high(x, d, u, g, below, above, n, closer), fits)
 }
 
 theorem Format::near_exact_ok(self F: Format, x: Rat, even: Bool, d: Finite(F), below: Finite::Below(x, d), above: Finite::Above(x, d),
-    fits: F.Fits(x)): RoundsTo(F, Mode::nearest(even), x, Fin(d))
+    fits: F.Fits(even, x)): RoundsTo(F, Mode::nearest(even), x, Fin(d))
 {
     let le = Rat::sub_le_sub_of_le_mid(x := x, m := d.val(), a := d.val(), b := d.val(), h := above.left, e := (d.val() + d.val()).same_refl());
     F.near_fin_ok(x, even, d, Finite::nearest_of_bracket(x, d, d, d, below, above, Inl(And(d.val().same_refl(), le))),
@@ -1068,7 +1097,7 @@ theorem Format::near_exact_ok(self F: Format, x: Rat, even: Bool, d: Finite(F), 
 // On the midpoint: both neighbours are nearest, and the tie rule picks.
 theorem Format::near_tie_ok(self F: Format, h: Nat, x: Rat, even: Bool, u: Finite(F), below: Finite::Below(x, F.down(h)), above: Finite::Above(x, u),
     lo: x - (F.down(h)).val() <= u.val() - x, hi: u.val() - x <= x - (F.down(h)).val(), dle: (F.down(h)).val() <= u.val(), dnn: 0 <= (F.down(h)).val(),
-    odd_up: ¬Nat::Even(F.lsb((F.down(h)).mag, (F.down(h)).bexp)) → Nat::Even(F.lsb(u.mag, u.bexp)), fits: F.Fits(x)): RoundsTo(F, Mode::nearest(even), x, F.tie_h(h, u, even))
+    odd_up: ¬Nat::Even(F.lsb((F.down(h)).mag, (F.down(h)).bexp)) → Nat::Even(F.lsb(u.mag, u.bexp)), fits: F.Fits(even, x)): RoundsTo(F, Mode::nearest(even), x, F.tie_h(h, u, even))
 {
     let d = F.down(h);
     let near_d = Finite::nearest_of_bracket(x, d, u, d, below, above, Inl(And(d.val().same_refl(), lo)));
@@ -1117,7 +1146,7 @@ theorem Format::mid_arith(self F: Format, h: Nat, below: h < F.limit_h(), o: Opt
 
 // Below the midpoint: the cell's float, exactly or strictly closer.
 theorem Format::mid_low(self F: Format, x: Rat, h: Nat, st: Bool, a: F.Approx(x, h, st), even: Bool, below: h < F.limit_h(),
-    o: Option<Finite(F)>, up: UpIs(F, h, o), M: Int, mm: M + M = (F.down(h)).H() + up.u.H(), lt: h.int() < M, fits: F.Fits(x)):
+    o: Option<Finite(F)>, up: UpIs(F, h, o), M: Int, mm: M + M = (F.down(h)).H() + up.u.H(), lt: h.int() < M, fits: F.Fits(even, x)):
     RoundsTo(F, Mode::nearest(even), x, Fin(F.down(h)))
 {
     let d = F.down(h);
@@ -1136,7 +1165,7 @@ theorem Format::mid_low(self F: Format, x: Rat, h: Nat, st: Bool, a: F.Approx(x,
 // Past the midpoint: the step up.
 theorem Format::mid_high(self F: Format, x: Rat, h: Nat, st: Bool, a: F.Approx(x, h, st), even: Bool, below: h < F.limit_h(),
     o: Option<Finite(F)>, up: UpIs(F, h, o), M: Int, mm: M + M = (F.down(h)).H() + up.u.H(), dm: (F.down(h)).H() < M,
-    lt: M < h.int() + Nat::of_bit(st).int(), fits: F.Fits(x)): RoundsTo(F, Mode::nearest(even), x, Fin(up.u))
+    lt: M < h.int() + Nat::of_bit(st).int(), fits: F.Fits(even, x)): RoundsTo(F, Mode::nearest(even), x, Fin(up.u))
 {
     let d = F.down(h);
     F.near_high_ok(x, even, d, up.u, F.down_is_below(x, h, st, a), F.up_is_above(x, h, st, a, below, o, up, omega),
@@ -1145,7 +1174,7 @@ theorem Format::mid_high(self F: Format, x: Rat, h: Nat, st: Bool, a: F.Approx(x
 
 // Exactly on the midpoint: the tie rule.
 theorem Format::mid_tie(self F: Format, x: Rat, h: Nat, even: Bool, below: h < F.limit_h(), o: Option<Finite(F)>, up: UpIs(F, h, o),
-    M: Int, mm: M + M = (F.down(h)).H() + up.u.H(), hm: h.int() = M, dm: (F.down(h)).H() < M, a0: F.Approx(x, h, False), fits: F.Fits(x)):
+    M: Int, mm: M + M = (F.down(h)).H() + up.u.H(), hm: h.int() = M, dm: (F.down(h)).H() < M, a0: F.Approx(x, h, False), fits: F.Fits(even, x)):
     RoundsTo(F, Mode::nearest(even), x, F.tie_h(h, up.u, even))
 {
     let d = F.down(h);
@@ -1176,7 +1205,7 @@ theorem Format::mid_ok(self F: Format, x: Rat, h: Nat, st: Bool, a: F.Approx(x, 
     let a_r = ar.right.right.right.right.left;
     let a_q = ar.right.right.right.right.right;
     let b = bit_le_one(st);
-    let fits = F.fits_below(x, h, st, a, λ has => { let lt = F.max_H_lt_ovf(has); let gm = Finite::H_le_max(u); omega });
+    let fits = F.fits_below(x, h, st, a, λ has => { let lt = F.max_H_lt_ovf(has); let gm = Finite::H_le_max(u); omega })(even);
     match Succ(h - (F.down(h)).units() * 2).le_dec(Q) {
         Inl(lo) => F.mid_low(x, h, st, a, even, below, o, up, M, a_mm, omega(lo), fits),
         Inr(nlo) => match Succ(Q).le_dec(h - (F.down(h)).units() * 2) {
@@ -1191,17 +1220,35 @@ theorem Format::mid_ok(self F: Format, x: Rat, h: Nat, st: Bool, a: F.Approx(x, 
 
 // With none above: the largest float, or overflow from the threshold on.
 theorem Format::none_ok(self F: Format, x: Rat, h: Nat, st: Bool, a: F.Approx(x, h, st), even: Bool,
-    all: (g: Finite(F)) → g.val() <= x): RoundsTo(F, Mode::nearest(even), x, F.none_h(h))
+    all: (g: Finite(F)) → g.val() <= x): RoundsTo(F, Mode::nearest(even), x, F.none_h(h, st, even))
 {
     let d = F.down(h);
     let below = F.down_is_below(x, h, st, a);
     let near = Finite::nearest_of_top(x, d, d, below, all, d.val().same_refl());
+    let uniq = λ (g: Finite(F)) (n: Finite::Nearest(x, g)) => Finite::nearest_top_unique(x, d, g, below, all, n);
+    let fin = λ (fits: F.Fits(even, x)) => F.near_fin_ok(x, even, d, near, uniq, fits);
+    let inf_or: (F.Over(even, x) → RoundsTo(F, Mode::nearest(even), x, F.overflow_up(F.down(h)))) = λ ov => match F.specials.has_inf().is_true_dec() {
+        Inl(has) => F.near_inf_ok(x, even, has, ov),
+        Inr(no) => fin(λ has => false_elim(no(has))),
+    };
+    let le_ovf = λ (ov: F.ovf_h() <= h) => F.cut_le(x, h, st, a, F.ovf_h().int(), omega(ov));
     match F.ovf_h().le_dec(h) {
-        Inl(ov) => match F.specials.has_inf().is_true_dec() {
-            Inl(has) => F.near_inf_ok(x, even, has, F.cut_le(x, h, st, a, F.ovf_h().int(), omega(ov))),
-            Inr(no) => F.near_fin_ok(x, even, d, near, λ g n => Finite::nearest_top_unique(x, d, g, below, all, n), λ has => false_elim(no(has))),
+        Inl(ov) => match Succ(F.ovf_h()).le_dec(h + Nat::of_bit(st)) {
+            Inl(past) => inf_or(And(le_ovf(ov), λ _ => F.cut_lt(x, h, st, a, F.ovf_h().int(), omega(past)))),
+            Inr(on) => {
+                let a0: F.Approx(x, h, False) = match st as λ s => F.Approx(x, h, s) → ¬(Succ(F.ovf_h()) <= h + Nat::of_bit(s)) → F.Approx(x, h, False) {
+                    False => λ a1 _ => a1,
+                    True => λ _ no => false_elim(no(omega(ov))),
+                }(a, on);
+                let hq: (h = F.ovf_h()) = omega(ov, on);
+                let xo: (x ≈ F.ovf()) = j(hq, λ v _ => x ≈ F.grid(v.int()), a0);
+                match F.tie_stays_dec(even) {
+                    Inl(t) => fin(λ _ => Inr(And(t, Rat::same_trans(x.abs_of_nonneg(F.approx_nonneg(x, h, st, a)), xo)))),
+                    Inr(nt) => inf_or(And(le_ovf(ov), λ t => false_elim(nt(t)))),
+                }
+            },
         },
-        Inr(lt) => F.near_fin_ok(x, even, d, near, λ g n => Finite::nearest_top_unique(x, d, g, below, all, n), F.fits_below(x, h, st, a, λ _ => omega(lt))),
+        Inr(lt) => fin(F.fits_below(x, h, st, a, λ _ => omega(lt))(even)),
     }
 }
 
@@ -1285,8 +1332,34 @@ theorem Format::undercuts_neg(self F: Format, x: Rat, u: F.Undercuts(-x)): F.Exc
     λ g => Rat::lt_respects(g.val().same_refl(), x.neg_neg(), Finite::unflip_gt(-x, g, u(-g)))
 }
 
-theorem Format::fits_neg(self F: Format, x: Rat, fi: F.Fits(-x)): F.Fits(x) {
-    λ has => Rat::lt_respects(x.abs_neg(), F.ovf().same_refl(), fi(has))
+theorem Format::fits_neg(self F: Format, even: Bool, x: Rat, fi: F.Fits(even, -x)): F.Fits(even, x) {
+    λ has => match fi(has) {
+        Inl(lt) => Inl(Rat::lt_respects(x.abs_neg(), F.ovf().same_refl(), lt)),
+        Inr(t) => Inr(And(t.left, Rat::same_trans(Rat::same_sym(x.abs_neg()), t.right))),
+    }
+}
+
+theorem Format::fits_flip(self F: Format, even: Bool, x: Rat, fi: F.Fits(even, x)): F.Fits(even, -x) {
+    λ has => match fi(has) {
+        Inl(lt) => Inl(Rat::lt_respects(Rat::same_sym(x.abs_neg()), F.ovf().same_refl(), lt)),
+        Inr(t) => Inr(And(t.left, Rat::same_trans(x.abs_neg(), t.right))),
+    }
+}
+
+// Overflow upward at `-x` is overflow downward at `x`, and back.
+theorem Format::under_of_neg_over(self F: Format, even: Bool, x: Rat, k: F.Over(even, -x)): F.Under(even, x) {
+    And(Rat::le_respects(x.neg_neg(), (-F.ovf()).same_refl(), Rat::neg_le(x := F.ovf(), y := -x, h := k.left)),
+        λ t => Rat::lt_respects(x.neg_neg(), (-F.ovf()).same_refl(), Rat::neg_lt(x := F.ovf(), y := -x, h := k.right(t))))
+}
+
+theorem Format::over_of_neg_under(self F: Format, even: Bool, x: Rat, k: F.Under(even, -x)): F.Over(even, x) {
+    And(Rat::le_respects(F.ovf().neg_neg(), x.neg_neg(), Rat::neg_le(x := -x, y := -F.ovf(), h := k.left)),
+        λ t => Rat::lt_respects(F.ovf().neg_neg(), x.neg_neg(), Rat::neg_lt(x := -x, y := -F.ovf(), h := k.right(t))))
+}
+
+theorem Format::neg_over_of_under(self F: Format, even: Bool, x: Rat, k: F.Under(even, x)): F.Over(even, -x) {
+    And(Rat::le_respects(F.ovf().neg_neg(), (-x).same_refl(), Rat::neg_le(x := x, y := -F.ovf(), h := k.left)),
+        λ t => Rat::lt_respects(F.ovf().neg_neg(), (-x).same_refl(), Rat::neg_lt(x := x, y := -F.ovf(), h := k.right(t))))
 }
 
 theorem Finite::dist_flip({F: Format}, g: Finite(F), x: Rat): (-g).dist(-x) ≈ g.dist(x) {
@@ -1316,15 +1389,15 @@ theorem Finite::abs_val_neg({F: Format}, g: Finite(F)): (-g).val().abs() ≈ g.v
 theorem Format::rounds_neg_fin(self F: Format, mode: Mode, x: Rat, f: Finite(F), r: RoundsTo(F, mode.conj(), -x, Fin(f))): RoundsTo(F, mode, x, Fin(-f)) {
     let nz: Rat::Same(Rat::neg(0), 0) = omega;
     match mode as λ md => RoundsTo(F, md.conj(), -x, Fin(f)) → RoundsTo(F, md, x, Fin(-f)) {
-        NearestEven => λ (k: Finite::NearestEven(-x, f) ∧ F.Fits(-x)) => And(And(Finite::nearest_neg(x, f, k.left.left), λ g n =>
+        NearestEven => λ (k: Finite::NearestEven(-x, f) ∧ F.Fits(True, -x)) => And(And(Finite::nearest_neg(x, f, k.left.left), λ g n =>
             match k.left.right(-g, Finite::nearest_flip(x, g, n)) {
                 Inl(e) => Inl(Rat::same_trans(Rat::same_sym(Finite::neg_neg_val(g)),
                     Rat::same_trans(Rat::neg_respects(x := (-g).val(), x2 := f.val(), hx := e), Rat::same_sym(Finite::val_neg(f))))),
                 Inr(ev) => Inr(ev),
-            }), F.fits_neg(x, k.right)),
-        NearestAway => λ (k: Finite::NearestAway(-x, f) ∧ F.Fits(-x)) => And(And(Finite::nearest_neg(x, f, k.left.left), λ g n =>
+            }), F.fits_neg(True, x, k.right)),
+        NearestAway => λ (k: Finite::NearestAway(-x, f) ∧ F.Fits(False, -x)) => And(And(Finite::nearest_neg(x, f, k.left.left), λ g n =>
             Rat::le_respects(Finite::abs_val_neg(g), Rat::same_sym(Finite::abs_val_neg(f)), k.left.right(-g, Finite::nearest_flip(x, g, n)))),
-            F.fits_neg(x, k.right)),
+            F.fits_neg(False, x, k.right)),
         TowardPos => λ (k: Finite::Below(-x, f) ∨ (¬F.specials.has_inf().IsTrue() ∧ Finite::Above(-x, f) ∧ F.Undercuts(-x))) =>
             match k {
                 Inl(b) => Inl(Finite::below_neg(x, f, b)),
@@ -1346,15 +1419,15 @@ theorem Format::rounds_neg_inf(self F: Format, mode: Mode, x: Rat, n: Bool, has:
 {
     match n as λ s => RoundsTo(F, mode.conj(), -x, Inf(s, has)) → RoundsTo(F, mode, x, Inf(!s, has)) {
         False => match mode {
-            NearestEven => λ (k: F.ovf() <= -x) => Rat::le_respects(x.neg_neg(), (-F.ovf()).same_refl(), Rat::neg_le(x := F.ovf(), y := -x, h := k)),
-            NearestAway => λ (k: F.ovf() <= -x) => Rat::le_respects(x.neg_neg(), (-F.ovf()).same_refl(), Rat::neg_le(x := F.ovf(), y := -x, h := k)),
+            NearestEven => λ (k: F.Over(True, -x)) => F.under_of_neg_over(True, x, k),
+            NearestAway => λ (k: F.Over(False, -x)) => F.under_of_neg_over(False, x, k),
             TowardPos => λ (k: False) => false_elim(k),
             TowardNeg => λ (k: F.Exceeds(-x)) => F.exceeds_neg(x, k),
             TowardZero => λ (k: False) => false_elim(k),
         },
         True => match mode {
-            NearestEven => λ (k: -x <= -F.ovf()) => Rat::le_respects(F.ovf().neg_neg(), x.neg_neg(), Rat::neg_le(x := -x, y := -F.ovf(), h := k)),
-            NearestAway => λ (k: -x <= -F.ovf()) => Rat::le_respects(F.ovf().neg_neg(), x.neg_neg(), Rat::neg_le(x := -x, y := -F.ovf(), h := k)),
+            NearestEven => λ (k: F.Under(True, -x)) => F.over_of_neg_under(True, x, k),
+            NearestAway => λ (k: F.Under(False, -x)) => F.over_of_neg_under(False, x, k),
             TowardPos => λ (k: F.Undercuts(-x)) => F.undercuts_neg(x, k),
             TowardNeg => λ (k: False) => false_elim(k),
             TowardZero => λ (k: False) => false_elim(k),
@@ -1467,16 +1540,22 @@ theorem Format::mid_h_sign(self F: Format, h: Nat, st: Bool, u: Finite(F), even:
     }
 }
 
-theorem Format::none_h_sign(self F: Format, h: Nat): (F.none_h(h)).SignIs(False) {
+theorem Format::none_h_sign(self F: Format, h: Nat, st, even: Bool): (F.none_h(h, st, even)).SignIs(False) {
     match F.ovf_h().le_dec(h) {
-        Inl(_) => F.overflow_up_sign(F.down(h), F.down_pos(h)),
+        Inl(_) => match Succ(F.ovf_h()).le_dec(h + Nat::of_bit(st)) {
+            Inl(_) => F.overflow_up_sign(F.down(h), F.down_pos(h)),
+            Inr(_) => match F.tie_stays_dec(even) {
+                Inl(_) => F.down_pos(h),
+                Inr(_) => F.overflow_up_sign(F.down(h), F.down_pos(h)),
+            },
+        },
         Inr(_) => F.down_pos(h),
     }
 }
 
 theorem Format::near_at_sign(self F: Format, h: Nat, st, even: Bool, o: Option<Finite(F)>, po: F.PosOpt(o)): (F.near_at(h, st, even, o)).SignIs(False) {
     match o as λ oo => F.PosOpt(oo) → (F.near_at(h, st, even, oo)).SignIs(False) {
-        None => λ _ => F.none_h_sign(h),
+        None => λ _ => F.none_h_sign(h, st, even),
         Some(u) => λ p => F.mid_h_sign(h, st, u, even, p),
     }(po)
 }
@@ -1942,16 +2021,19 @@ theorem Format::ovf_pos(self F: Format): 0 < F.ovf() {
     Rat::lt_respects(F.grid_zero(), F.ovf().same_refl(), F.grid_lt(0, F.ovf_h().int(), omega))
 }
 
-// A value that fits is not at or past the overflow threshold.
-theorem Format::fits_not_over(self F: Format, x: Rat, fi: F.Fits(x), has: F.specials.has_inf().IsTrue(), le: F.ovf() <= x): False {
+// A value whose nearest rounding fits does not overflow.
+theorem Format::fits_not_over(self F: Format, even: Bool, x: Rat, fi: F.Fits(even, x), has: F.specials.has_inf().IsTrue(), ov: F.Over(even, x)): False {
+    let le = ov.left;
     let nn = Rat::le_of_lt(x := 0, y := x, h := Rat::lt_of_lt_of_le(F.ovf_pos(), le));
-    Rat::not_le_of_lt(x := x.abs(), y := F.ovf(), h := fi(has))(Rat::le_respects(F.ovf().same_refl(), Rat::same_sym(x.abs_of_nonneg(nn)), le))
+    let ax: (x.abs() ≈ x) = x.abs_of_nonneg(nn);
+    match fi(has) {
+        Inl(lt) => Rat::not_le_of_lt(x := x.abs(), y := F.ovf(), h := lt)(Rat::le_respects(F.ovf().same_refl(), Rat::same_sym(ax), le)),
+        Inr(t) => Rat::lt_irrefl(F.ovf(), Rat::lt_respects(F.ovf().same_refl(), Rat::same_trans(Rat::same_sym(ax), t.right), ov.right(t.left))),
+    }
 }
 
-theorem Format::fits_not_under(self F: Format, x: Rat, fi: F.Fits(x), has: F.specials.has_inf().IsTrue(), le: x <= -F.ovf()): False {
-    let flip: (F.ovf() <= -x) = Rat::le_respects(F.ovf().neg_neg(), (-x).same_refl(), Rat::neg_le(x := x, y := -F.ovf(), h := le));
-    let fn: F.Fits(-x) = λ h2 => Rat::lt_respects(Rat::same_sym(x.abs_neg()), F.ovf().same_refl(), fi(h2));
-    F.fits_not_over(-x, fn, has, flip)
+theorem Format::fits_not_under(self F: Format, even: Bool, x: Rat, fi: F.Fits(even, x), has: F.specials.has_inf().IsTrue(), un: F.Under(even, x)): False {
+    F.fits_not_over(even, -x, F.fits_flip(even, x, fi), has, F.neg_over_of_under(even, x, un))
 }
 
 theorem Format::ovf_not_both(self F: Format, x: Rat, lo: F.ovf() <= x, hi: x <= -F.ovf()): False {
@@ -1963,8 +2045,8 @@ theorem Format::ovf_not_both(self F: Format, x: Rat, lo: F.ovf() <= x, hi: x <= 
 
 theorem Format::unique_fin(self F: Format, mode: Mode, x: Rat, f, g: Finite(F), hf: RoundsTo(F, mode, x, Fin(f)), hg: RoundsTo(F, mode, x, Fin(g))): f.val() ≈ g.val() {
     match mode as λ md => RoundsTo(F, md, x, Fin(f)) → RoundsTo(F, md, x, Fin(g)) → f.val() ≈ g.val() {
-        NearestEven => λ (a: Finite::NearestEven(x, f) ∧ F.Fits(x)) (b: Finite::NearestEven(x, g) ∧ F.Fits(x)) => F.nearest_even_same(x, f, g, a.left, b.left),
-        NearestAway => λ (a: Finite::NearestAway(x, f) ∧ F.Fits(x)) (b: Finite::NearestAway(x, g) ∧ F.Fits(x)) => F.nearest_away_same(x, f, g, a.left, b.left),
+        NearestEven => λ (a: Finite::NearestEven(x, f) ∧ F.Fits(True, x)) (b: Finite::NearestEven(x, g) ∧ F.Fits(True, x)) => F.nearest_even_same(x, f, g, a.left, b.left),
+        NearestAway => λ (a: Finite::NearestAway(x, f) ∧ F.Fits(False, x)) (b: Finite::NearestAway(x, g) ∧ F.Fits(False, x)) => F.nearest_away_same(x, f, g, a.left, b.left),
         TowardPos => λ (a: Finite::Above(x, f) ∨ (¬F.specials.has_inf().IsTrue() ∧ Finite::Below(x, f) ∧ F.Exceeds(x)))
             (b: Finite::Above(x, g) ∨ (¬F.specials.has_inf().IsTrue() ∧ Finite::Below(x, g) ∧ F.Exceeds(x))) => match a {
                 Inl(af) => match b {
@@ -2002,13 +2084,13 @@ theorem Format::unique_fin_inf(self F: Format, mode: Mode, x: Rat, f: Finite(F),
     hf: RoundsTo(F, mode, x, Fin(f)), hi: RoundsTo(F, mode, x, Inf(n, has))): False
 {
     match mode as λ md => RoundsTo(F, md, x, Fin(f)) → RoundsTo(F, md, x, Inf(n, has)) → False {
-        NearestEven => λ (a: Finite::NearestEven(x, f) ∧ F.Fits(x)) => match n {
-            False => λ (le: F.ovf() <= x) => F.fits_not_over(x, a.right, has, le),
-            True => λ (le: x <= -F.ovf()) => F.fits_not_under(x, a.right, has, le),
+        NearestEven => λ (a: Finite::NearestEven(x, f) ∧ F.Fits(True, x)) => match n {
+            False => λ (ov: F.Over(True, x)) => F.fits_not_over(True, x, a.right, has, ov),
+            True => λ (un: F.Under(True, x)) => F.fits_not_under(True, x, a.right, has, un),
         },
-        NearestAway => λ (a: Finite::NearestAway(x, f) ∧ F.Fits(x)) => match n {
-            False => λ (le: F.ovf() <= x) => F.fits_not_over(x, a.right, has, le),
-            True => λ (le: x <= -F.ovf()) => F.fits_not_under(x, a.right, has, le),
+        NearestAway => λ (a: Finite::NearestAway(x, f) ∧ F.Fits(False, x)) => match n {
+            False => λ (ov: F.Over(False, x)) => F.fits_not_over(False, x, a.right, has, ov),
+            True => λ (un: F.Under(False, x)) => F.fits_not_under(False, x, a.right, has, un),
         },
         TowardPos => λ (a: Finite::Above(x, f) ∨ (¬F.specials.has_inf().IsTrue() ∧ Finite::Below(x, f) ∧ F.Exceeds(x))) =>
             match n {
@@ -2027,20 +2109,20 @@ theorem Format::unique_fin_inf(self F: Format, mode: Mode, x: Rat, f: Finite(F),
 theorem Format::unique_inf(self F: Format, mode: Mode, x: Rat, n, m: Bool, hn, hm: F.specials.has_inf().IsTrue(),
     a: RoundsTo(F, mode, x, Inf(n, hn)), b: RoundsTo(F, mode, x, Inf(m, hm))): n = m
 {
-    let near = λ (p: match n { False => F.ovf() <= x, True => x <= -F.ovf() }) (q: match m { False => F.ovf() <= x, True => x <= -F.ovf() }) =>
-        match n as λ s => (match s { False => F.ovf() <= x, True => x <= -F.ovf() }) → s = m {
-            False => λ p1 => match m as λ t => (match t { False => F.ovf() <= x, True => x <= -F.ovf() }) → bool::False = t {
+    let near = λ (ev: Bool) (p: match n { False => F.Over(ev, x), True => F.Under(ev, x) }) (q: match m { False => F.Over(ev, x), True => F.Under(ev, x) }) =>
+        match n as λ s => (match s { False => F.Over(ev, x), True => F.Under(ev, x) }) → s = m {
+            False => λ p1 => match m as λ t => (match t { False => F.Over(ev, x), True => F.Under(ev, x) }) → bool::False = t {
                 False => λ _ => refl,
-                True => λ q1 => false_elim(F.ovf_not_both(x, p1, q1)),
+                True => λ q1 => false_elim(F.ovf_not_both(x, p1.left, q1.left)),
             }(q),
-            True => λ p1 => match m as λ t => (match t { False => F.ovf() <= x, True => x <= -F.ovf() }) → bool::True = t {
-                False => λ q1 => false_elim(F.ovf_not_both(x, q1, p1)),
+            True => λ p1 => match m as λ t => (match t { False => F.Over(ev, x), True => F.Under(ev, x) }) → bool::True = t {
+                False => λ q1 => false_elim(F.ovf_not_both(x, q1.left, p1.left)),
                 True => λ _ => refl,
             }(q),
         }(p);
     match mode as λ md => RoundsTo(F, md, x, Inf(n, hn)) → RoundsTo(F, md, x, Inf(m, hm)) → n = m {
-        NearestEven => near,
-        NearestAway => near,
+        NearestEven => near(True),
+        NearestAway => near(False),
         TowardPos => match n {
             False => match m { False => λ _ _ => refl, True => λ _ (k: False) => false_elim(k) },
             True => λ (k: False) => false_elim(k),
@@ -2084,10 +2166,10 @@ theorem Finite::lt_ovf({F: Format}, g: Finite(F), has: F.specials.has_inf().IsTr
     Rat::lt_respects(Rat::same_sym(g.val_grid()), F.ovf().same_refl(), F.grid_lt(g.H(), F.ovf_h().int(), omega))
 }
 
-theorem Finite::fits_val({F: Format}, f: Finite(F)): F.Fits(f.val()) {
+theorem Finite::fits_val({F: Format}, f: Finite(F), even: Bool): F.Fits(even, f.val()) {
     λ has => match f.val().abs_cases() {
-        Inl(c) => Rat::lt_respects(Rat::same_sym(c.right), F.ovf().same_refl(), Finite::lt_ovf(f, has)),
-        Inr(c) => Rat::lt_respects(Rat::same_trans(Finite::val_neg(f), Rat::same_sym(c.right)), F.ovf().same_refl(), Finite::lt_ovf(-f, has)),
+        Inl(c) => Inl(Rat::lt_respects(Rat::same_sym(c.right), F.ovf().same_refl(), Finite::lt_ovf(f, has))),
+        Inr(c) => Inl(Rat::lt_respects(Rat::same_trans(Finite::val_neg(f), Rat::same_sym(c.right)), F.ovf().same_refl(), Finite::lt_ovf(-f, has))),
     }
 }
 
@@ -2103,8 +2185,8 @@ theorem Format::rounds_exact(self F: Format, mode: Mode, f: Finite(F)): RoundsTo
     let same = λ (g: Finite(F)) (n: Finite::Nearest(f.val(), g)) =>
         match Finite::nearest_cases(f.val(), f, f, g, b, a, n) as λ _ => g.val() ≈ f.val() { Inl(e) => e, Inr(e) => e };
     match mode {
-        NearestEven => And(And(near, λ g n => Inl(same(g, n))), Finite::fits_val(f)),
-        NearestAway => And(And(near, λ g n => Rat::le_of_same(Rat::abs_respects(x := g.val(), x2 := f.val(), hx := same(g, n)))), Finite::fits_val(f)),
+        NearestEven => And(And(near, λ g n => Inl(same(g, n))), Finite::fits_val(f, True)),
+        NearestAway => And(And(near, λ g n => Rat::le_of_same(Rat::abs_respects(x := g.val(), x2 := f.val(), hx := same(g, n)))), Finite::fits_val(f, False)),
         TowardPos => Inl(a),
         TowardNeg => Inl(b),
         TowardZero => And(λ _ => b, λ _ => a),
@@ -2298,8 +2380,22 @@ theorem Format::undercuts_respects(self F: Format, x, y: Rat, e: x ≈ y, u: F.U
     λ g => Rat::lt_respects(Rat::same_sym(e), g.val().same_refl(), u(g))
 }
 
-theorem Format::fits_respects(self F: Format, x, y: Rat, e: x ≈ y, fi: F.Fits(y)): F.Fits(x) {
-    λ has => Rat::lt_respects(Rat::abs_respects(x := y, x2 := x, hx := Rat::same_sym(e)), F.ovf().same_refl(), fi(has))
+theorem Format::fits_respects(self F: Format, even: Bool, x, y: Rat, e: x ≈ y, fi: F.Fits(even, y)): F.Fits(even, x) {
+    let ay: (y.abs() ≈ x.abs()) = Rat::abs_respects(x := y, x2 := x, hx := Rat::same_sym(e));
+    λ has => match fi(has) {
+        Inl(lt) => Inl(Rat::lt_respects(ay, F.ovf().same_refl(), lt)),
+        Inr(t) => Inr(And(t.left, Rat::same_trans(Rat::same_sym(ay), t.right))),
+    }
+}
+
+theorem Format::over_respects(self F: Format, even: Bool, x, y: Rat, e: x ≈ y, ov: F.Over(even, y)): F.Over(even, x) {
+    let ey = Rat::same_sym(e);
+    And(Rat::le_respects(F.ovf().same_refl(), ey, ov.left), λ t => Rat::lt_respects(F.ovf().same_refl(), ey, ov.right(t)))
+}
+
+theorem Format::under_respects(self F: Format, even: Bool, x, y: Rat, e: x ≈ y, un: F.Under(even, y)): F.Under(even, x) {
+    let ey = Rat::same_sym(e);
+    And(Rat::le_respects(ey, (-F.ovf()).same_refl(), un.left), λ t => Rat::lt_respects(ey, (-F.ovf()).same_refl(), un.right(t)))
 }
 
 theorem Finite::dist_respects_x({F: Format}, f: Finite(F), x, y: Rat, e: x ≈ y): f.dist(y) ≈ f.dist(x) {
@@ -2316,9 +2412,9 @@ theorem Format::rounds_respects(self F: Format, mode: Mode, x, y: Rat, e: x ≈ 
     match r as λ r0 => RoundsTo(F, mode, y, r0) → RoundsTo(F, mode, x, r0) {
         Fin(f) => match mode {
             NearestEven => λ hy => And(And(Finite::nearest_respects(x, y, e, f, hy.left.left), λ g n => hy.left.right(g, Finite::nearest_respects(y, x, ey, g, n))),
-                F.fits_respects(x, y, e, hy.right)),
+                F.fits_respects(True, x, y, e, hy.right)),
             NearestAway => λ hy => And(And(Finite::nearest_respects(x, y, e, f, hy.left.left), λ g n => hy.left.right(g, Finite::nearest_respects(y, x, ey, g, n))),
-                F.fits_respects(x, y, e, hy.right)),
+                F.fits_respects(False, x, y, e, hy.right)),
             TowardPos => λ hy => match hy {
                 Inl(a) => Inl(Finite::above_respects(x, y, e, f, a)),
                 Inr(s) => Inr(And(s.left, And(Finite::below_respects(x, y, e, f, s.right.left), F.exceeds_respects(x, y, e, s.right.right)))),
@@ -2332,12 +2428,12 @@ theorem Format::rounds_respects(self F: Format, mode: Mode, x, y: Rat, e: x ≈ 
         },
         Inf(n, hn) => match mode {
             NearestEven => match n {
-                False => λ le => Rat::le_respects(F.ovf().same_refl(), ey, le),
-                True => λ le => Rat::le_respects(ey, (-F.ovf()).same_refl(), le),
+                False => λ ov => F.over_respects(True, x, y, e, ov),
+                True => λ un => F.under_respects(True, x, y, e, un),
             },
             NearestAway => match n {
-                False => λ le => Rat::le_respects(F.ovf().same_refl(), ey, le),
-                True => λ le => Rat::le_respects(ey, (-F.ovf()).same_refl(), le),
+                False => λ ov => F.over_respects(False, x, y, e, ov),
+                True => λ un => F.under_respects(False, x, y, e, un),
             },
             TowardPos => match n {
                 False => λ ex => F.exceeds_respects(x, y, e, ex),
@@ -2386,8 +2482,8 @@ theorem Format::inf_pos_high(self F: Format, mode: Mode, x: Rat, hn: F.specials.
     F.ovf() <= x ∨ F.Exceeds(x)
 {
     match mode as λ md => RoundsTo(F, md, x, Float::Inf(bool::False, hn)) → F.ovf() <= x ∨ F.Exceeds(x) {
-        NearestEven => λ le => Inl(le),
-        NearestAway => λ le => Inl(le),
+        NearestEven => λ ov => Inl(ov.left),
+        NearestAway => λ ov => Inl(ov.left),
         TowardPos => λ ex => Inr(ex),
         TowardNeg => λ no => false_elim(no),
         TowardZero => λ no => false_elim(no),
@@ -2398,8 +2494,8 @@ theorem Format::inf_neg_low(self F: Format, mode: Mode, x: Rat, hn: F.specials.h
     x <= -F.ovf() ∨ F.Undercuts(x)
 {
     match mode as λ md => RoundsTo(F, md, x, Float::Inf(bool::True, hn)) → x <= -F.ovf() ∨ F.Undercuts(x) {
-        NearestEven => λ le => Inl(le),
-        NearestAway => λ le => Inl(le),
+        NearestEven => λ un => Inl(un.left),
+        NearestAway => λ un => Inl(un.left),
         TowardPos => λ no => false_elim(no),
         TowardNeg => λ u => Inr(u),
         TowardZero => λ no => false_elim(no),
@@ -2597,14 +2693,23 @@ theorem Format::mono_fin(self F: Format, mode: Mode, x, y: Rat, xy: x <= y, f, g
     }(hf, hg)
 }
 
+// Overflow upward persists going up, and downward going down.
+theorem Format::over_mono(self F: Format, even: Bool, x, y: Rat, xy: x <= y, ov: F.Over(even, x)): F.Over(even, y) {
+    And(Rat::le_trans(ov.left, xy), λ t => Rat::lt_of_lt_of_le(ov.right(t), xy))
+}
+
+theorem Format::under_mono(self F: Format, even: Bool, x, y: Rat, xy: x <= y, un: F.Under(even, y)): F.Under(even, x) {
+    And(Rat::le_trans(xy, un.left), λ t => Rat::lt_of_le_of_lt(xy, un.right(t)))
+}
+
 // A finite rounding of `x` rules out `-∞` at any `y ≥ x`, and `+∞` at `x`
 // rules out a finite rounding at `y`.
 theorem Format::mono_fin_ninf(self F: Format, mode: Mode, x, y: Rat, xy: x <= y, f: Finite(F), hm: F.specials.has_inf().IsTrue(),
     hf: RoundsTo(F, mode, x, Float::Fin(f)), hs: RoundsTo(F, mode, y, Float::Inf(bool::True, hm))): False
 {
     match mode as λ md => RoundsTo(F, md, x, Float::Fin(f)) → RoundsTo(F, md, y, Float::Inf(bool::True, hm)) → False {
-        NearestEven => λ rf le => F.fits_not_under(x, rf.right, hm, Rat::le_trans(xy, le)),
-        NearestAway => λ rf le => F.fits_not_under(x, rf.right, hm, Rat::le_trans(xy, le)),
+        NearestEven => λ rf un => F.fits_not_under(True, x, rf.right, hm, F.under_mono(True, x, y, xy, un)),
+        NearestAway => λ rf un => F.fits_not_under(False, x, rf.right, hm, F.under_mono(False, x, y, xy, un)),
         TowardPos => λ _ no => no,
         TowardNeg => λ rf u => match rf {
             Inl(bf) => Finite::below_not_undercuts(x, f, bf, F.undercuts_mono(x, y, xy, u)),
@@ -2618,8 +2723,8 @@ theorem Format::mono_pinf_fin(self F: Format, mode: Mode, x, y: Rat, xy: x <= y,
     hr: RoundsTo(F, mode, x, Float::Inf(bool::False, hn)), hg: RoundsTo(F, mode, y, Float::Fin(g))): False
 {
     match mode as λ md => RoundsTo(F, md, x, Float::Inf(bool::False, hn)) → RoundsTo(F, md, y, Float::Fin(g)) → False {
-        NearestEven => λ le rg => F.fits_not_over(y, rg.right, hn, Rat::le_trans(le, xy)),
-        NearestAway => λ le rg => F.fits_not_over(y, rg.right, hn, Rat::le_trans(le, xy)),
+        NearestEven => λ ov rg => F.fits_not_over(True, y, rg.right, hn, F.over_mono(True, x, y, xy, ov)),
+        NearestAway => λ ov rg => F.fits_not_over(False, y, rg.right, hn, F.over_mono(False, x, y, xy, ov)),
         TowardPos => λ ex rg => match rg {
             Inl(ag) => Finite::above_not_exceeds(y, g, ag, F.exceeds_mono(x, y, xy, ex)),
             Inr(s) => s.left(hn),
@@ -2633,8 +2738,8 @@ theorem Format::mono_pinf_ninf(self F: Format, mode: Mode, x, y: Rat, xy: x <= y
     hr: RoundsTo(F, mode, x, Float::Inf(bool::False, hn)), hs: RoundsTo(F, mode, y, Float::Inf(bool::True, hm))): False
 {
     match mode as λ md => RoundsTo(F, md, x, Float::Inf(bool::False, hn)) → RoundsTo(F, md, y, Float::Inf(bool::True, hm)) → False {
-        NearestEven => λ lo hi => F.ovf_not_both(x, lo, Rat::le_trans(xy, hi)),
-        NearestAway => λ lo hi => F.ovf_not_both(x, lo, Rat::le_trans(xy, hi)),
+        NearestEven => λ lo hi => F.ovf_not_both(x, lo.left, Rat::le_trans(xy, hi.left)),
+        NearestAway => λ lo hi => F.ovf_not_both(x, lo.left, Rat::le_trans(xy, hi.left)),
         TowardPos => λ _ no => no,
         TowardNeg => λ no _ => no,
         TowardZero => λ no _ => no,

@@ -177,3 +177,26 @@ theorem vk_needs_nearest(): ¬(-Nat::pow(2, vx().bexp + 5).int() <= vxl_rz().H()
         omega(h, e, p)
     }
 }
+
+// ---------------------------------------------------------------------------
+// Fast2Sum at a format without infinities (issues/float-fast2sum-saturated.md):
+// a nearest rounding past the largest float saturates to it, and that is
+// still a nearest float, so Fast2Sum gives the overflow error exactly.
+
+// E4M3: 416 + 64 = 480 is past 448, the largest float (its NaN takes the
+// next code), and saturates to it; `z = 448 - 416 = 32` and `t = 64 - 32`
+// is the overflow error 32, exactly.
+fn e4(m, b: Nat, ok: e4m3().canonical(m, b).IsTrue()) → Finite(e4m3()) { Finite(False, m, b, ok) }
+theorem e4m3_f2s_s(): (e4(13, 14, trivial)).add(e4(8, 12, trivial)) = Float::Fin(e4(14, 14, trivial)) { refl }
+theorem e4m3_f2s_exact(): (e4(14, 14, trivial)).val() + (e4(8, 11, trivial)).val() ≈ (e4(13, 14, trivial)).val() + (e4(8, 12, trivial)).val() {
+    Finite::fast_two_sum_exact(e4(13, 14, trivial), e4(8, 12, trivial), e4(14, 14, trivial), e4(8, 11, trivial), e4(8, 11, trivial),
+        True, NearestEven, trivial, refl, refl, refl)
+}
+
+// E2M1: 4 + 4 = 8 saturates to 6; `z = 2` and `t = 2` is the error.
+fn e2(m, b: Nat, ok: e2m1().canonical(m, b).IsTrue()) → Finite(e2m1()) { Finite(False, m, b, ok) }
+theorem e2m1_f2s_s(): (e2(2, 2, trivial)).add(e2(2, 2, trivial)) = Float::Fin(e2(3, 2, trivial)) { refl }
+theorem e2m1_f2s_exact(): (e2(3, 2, trivial)).val() + (e2(2, 1, trivial)).val() ≈ (e2(2, 2, trivial)).val() + (e2(2, 2, trivial)).val() {
+    Finite::fast_two_sum_exact(e2(2, 2, trivial), e2(2, 2, trivial), e2(3, 2, trivial), e2(2, 1, trivial), e2(2, 1, trivial),
+        True, NearestEven, trivial, refl, refl, refl)
+}

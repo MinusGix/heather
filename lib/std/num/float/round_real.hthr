@@ -94,13 +94,13 @@ theorem Finite::nearest_of_same({F: Format}, x: Rat, f, g: Finite(F), e: f.val()
 theorem Format::rounds_of_same_fin(self F: Format, mode: Mode, x: Rat, f, g: Finite(F), e: f.val() ≈ g.val(), hg: RoundsTo(F, mode, x, Fin(g))): RoundsTo(F, mode, x, Fin(f)) {
     let ge: (g.val() ≈ f.val()) = Rat::same_sym(e);
     match mode as λ md => RoundsTo(F, md, x, Fin(g)) → RoundsTo(F, md, x, Fin(f)) {
-        NearestEven => λ (a: Finite::NearestEven(x, g) ∧ F.Fits(x)) => {
+        NearestEven => λ (a: Finite::NearestEven(x, g) ∧ F.Fits(True, x)) => {
             And(And(Finite::nearest_of_same(x, f, g, e, a.left.left), λ h nh => match a.left.right(h, nh) {
                 Inl(s) => Inl(Rat::same_trans(s, ge)),
                 Inr(ev) => Inr(Finite::even_of_same_val(f, g, e, ev)),
             }), a.right)
         },
-        NearestAway => λ (a: Finite::NearestAway(x, g) ∧ F.Fits(x)) =>
+        NearestAway => λ (a: Finite::NearestAway(x, g) ∧ F.Fits(False, x)) =>
             And(And(Finite::nearest_of_same(x, f, g, e, a.left.left),
                 λ h nh => Rat::le_respects(h.val().abs().same_refl(), Rat::abs_respects(x := g.val(), x2 := f.val(), hx := ge), a.left.right(h, nh))), a.right),
         TowardPos => λ (a: Finite::Above(x, g) ∨ (¬F.specials.has_inf().IsTrue() ∧ Finite::Below(x, g) ∧ F.Exceeds(x))) =>

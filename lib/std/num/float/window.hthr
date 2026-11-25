@@ -475,19 +475,57 @@ theorem Format::win_undercuts(self F: Format, j, c: Nat, x: Rat, iw: F.InWindow(
     }
 }
 
-theorem Format::win_fits(self F: Format, j, c: Nat, x: Rat, iw: F.InWindow(j, c, x), fi: (F.window(j, c)).Fits(x)): F.Fits(x) {
-    λ has => Rat::lt_of_lt_of_le(fi(has), F.win_ovf_le(j, c, iw.left))
+// The top window's largest float is `F`'s, and its code has `F`'s parity
+// when the window keeps parity.
+theorem Format::win_max_even(self F: Format, j, c: Nat, top: j + c = F.span, par: 1 <= F.frac ∨ Nat::Even(j)):
+    ((F.window(j, c)).MaxEven() → F.MaxEven()) ∧ (F.MaxEven() → (F.window(j, c)).MaxEven())
+{
+    let sh = F.lsb_shift(F.max_mag(), c, j, par);
+    let sp: (c + j = F.span) = omega(top);
+    let tr = F.lsb_congr(F.max_mag(), c + j, F.max_mag(), F.span, refl, sp);
+    And(λ ew => j(tr, λ v _ => Nat::Even(v), sh.left(ew)),
+        λ ef => match Nat::even_dec(F.lsb(F.max_mag(), c)) {
+            Inl(e) => e,
+            Inr(ne) => false_elim(sh.right(ne)(j(sym(tr), λ v _ => Nat::Even(v), ef))),
+        })
+}
+
+// The top window's overflow threshold is `F`'s.
+theorem Format::win_ovf_same(self F: Format, j, c: Nat, top: j + c = F.span): (F.window(j, c)).ovf() ≈ F.ovf() {
+    Rat::le_antisymm(F.win_ovf_le(j, c, omega(top)), F.win_ovf_top(j, c, top))
+}
+
+theorem Format::win_fits(self F: Format, j, c: Nat, x: Rat, iw: F.InWindow(j, c, x), par: 1 <= F.frac ∨ Nat::Even(j), even: Bool,
+    fi: (F.window(j, c)).Fits(even, x)): F.Fits(even, x)
+{
+    λ has => match fi(has) {
+        Inl(lt) => Inl(Rat::lt_of_lt_of_le(lt, F.win_ovf_le(j, c, iw.left))),
+        Inr(t) => match iw.right.right.right {
+            Inl(top) => Inr(And(And(t.left.left, (F.win_max_even(j, c, top, par)).left(t.left.right)), Rat::same_trans(t.right, F.win_ovf_same(j, c, top)))),
+            Inr(lt) => {
+                let W = F.window(j, c);
+                let xw: (x < W.ovf()) = Rat::lt_of_lt_of_le(lt, F.win_hi_le_ovf(j, c));
+                let ax: (x.abs() ≈ x) = x.abs_of_nonneg(iw.right.left);
+                false_elim(Rat::lt_irrefl(W.ovf(), Rat::lt_respects(Rat::same_trans(Rat::same_sym(ax), t.right), W.ovf().same_refl(), xw)))
+            },
+        },
+    }
 }
 
 // A nearest rounding overflows in the window only where it does in `F`.
-theorem Format::win_ovf_reach(self F: Format, j, c: Nat, x: Rat, iw: F.InWindow(j, c, x), le: (F.window(j, c)).ovf() <= x): F.ovf() <= x {
+theorem Format::win_ovf_reach(self F: Format, j, c: Nat, x: Rat, iw: F.InWindow(j, c, x), par: 1 <= F.frac ∨ Nat::Even(j), even: Bool,
+    ov: (F.window(j, c)).Over(even, x)): F.Over(even, x)
+{
+    let le = ov.left;
     match iw.right.right.right {
-        Inl(top) => Rat::le_trans(F.win_ovf_top(j, c, top), le),
+        Inl(top) => And(Rat::le_trans(F.win_ovf_top(j, c, top), le),
+            λ t => Rat::lt_of_le_of_lt(F.win_ovf_top(j, c, top), ov.right(And(t.left, (F.win_max_even(j, c, top, par)).right(t.right))))),
         Inr(lt) => false_elim(Rat::not_le_of_lt(x := x, y := (F.window(j, c)).ovf(), h := Rat::lt_of_lt_of_le(lt, F.win_hi_le_ovf(j, c)))(le)),
     }
 }
 
-theorem Format::win_no_neg_ovf(self F: Format, j, c: Nat, x: Rat, iw: F.InWindow(j, c, x), le: x <= -(F.window(j, c)).ovf()): False {
+theorem Format::win_no_neg_ovf(self F: Format, j, c: Nat, x: Rat, iw: F.InWindow(j, c, x), even: Bool, un: (F.window(j, c)).Under(even, x)): False {
+    let le = un.left;
     let W = F.window(j, c);
     let nz: Rat::Same(Rat::neg(0), 0) = omega;
     let lt: (-W.ovf() < 0) = Rat::lt_respects((-W.ovf()).same_refl(), nz, Rat::neg_lt(x := 0, y := W.ovf(), h := F.win_ovf_pos(j, c)));
@@ -515,8 +553,8 @@ theorem Format::window_rounds_fin(self F: Format, j, c: Nat, mode: Mode, x: Rat,
                 all(v, nv.left)),
         };
     match mode as λ md => RoundsTo(F.window(j, c), md, x, Fin(w)) → RoundsTo(F, md, x, Fin(f)) {
-        NearestEven => λ h => And(And(F.win_nearest(j, c, x, iw, f, w, e, h.left.left), ties(h.left.right)), F.win_fits(j, c, x, iw, h.right)),
-        NearestAway => λ h => And(And(F.win_nearest(j, c, x, iw, f, w, e, h.left.left), away(h.left.right)), F.win_fits(j, c, x, iw, h.right)),
+        NearestEven => λ h => And(And(F.win_nearest(j, c, x, iw, f, w, e, h.left.left), ties(h.left.right)), F.win_fits(j, c, x, iw, par, True, h.right)),
+        NearestAway => λ h => And(And(F.win_nearest(j, c, x, iw, f, w, e, h.left.left), away(h.left.right)), F.win_fits(j, c, x, iw, par, False, h.right)),
         TowardPos => λ h => match h {
             Inl(a) => Inl(F.win_above(j, c, x, iw, f, w, e, a)),
             Inr(s) => Inr(And(s.left, And(F.win_below(j, c, x, iw, f, w, e, s.right.left), F.win_exceeds(j, c, x, iw, s.right.right)))),
@@ -529,17 +567,17 @@ theorem Format::window_rounds_fin(self F: Format, j, c: Nat, mode: Mode, x: Rat,
     }(hr)
 }
 
-theorem Format::window_rounds_inf(self F: Format, j, c: Nat, mode: Mode, x: Rat, iw: F.InWindow(j, c, x),
+theorem Format::window_rounds_inf(self F: Format, j, c: Nat, mode: Mode, x: Rat, iw: F.InWindow(j, c, x), par: 1 <= F.frac ∨ Nat::Even(j),
     n: Bool, has: F.specials.has_inf().IsTrue(), hr: RoundsTo(F.window(j, c), mode, x, Inf(n, has))): RoundsTo(F, mode, x, Inf(n, has))
 {
     match mode as λ md => RoundsTo(F.window(j, c), md, x, Inf(n, has)) → RoundsTo(F, md, x, Inf(n, has)) {
         NearestEven => match n {
-            False => λ h => F.win_ovf_reach(j, c, x, iw, h),
-            True => λ h => false_elim(F.win_no_neg_ovf(j, c, x, iw, h)),
+            False => λ h => F.win_ovf_reach(j, c, x, iw, par, True, h),
+            True => λ h => false_elim(F.win_no_neg_ovf(j, c, x, iw, True, h)),
         },
         NearestAway => match n {
-            False => λ h => F.win_ovf_reach(j, c, x, iw, h),
-            True => λ h => false_elim(F.win_no_neg_ovf(j, c, x, iw, h)),
+            False => λ h => F.win_ovf_reach(j, c, x, iw, par, False, h),
+            True => λ h => false_elim(F.win_no_neg_ovf(j, c, x, iw, False, h)),
         },
         TowardPos => match n {
             False => λ h => F.win_exceeds(j, c, x, iw, h),
@@ -580,7 +618,7 @@ theorem Format::window_rounds_at(self F: Format, j, c: Nat, mode: Mode, x: Rat, 
             Inl(ok) => F.window_rounds_fin(j, c, mode, x, iw, par, w, ok, h),
             Inr(_) => hf,
         },
-        Inf(n, has) => λ h => F.window_rounds_inf(j, c, mode, x, iw, n, has, h),
+        Inf(n, has) => λ h => F.window_rounds_inf(j, c, mode, x, iw, par, n, has, h),
         NaN(_) => λ no => false_elim(no),
     }(hr)
 }

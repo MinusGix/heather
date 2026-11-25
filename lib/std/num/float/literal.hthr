@@ -65,18 +65,19 @@ theorem Format::not_exceeds_undercuts(self F: Format, x: Rat, ex: F.Exceeds(x), 
 }
 
 theorem Format::rounds_beyond(self F: Format, mode: Mode, y, x: Rat, yx: y <= x, ex: F.Exceeds(y),
-    ov: F.specials.has_inf().IsTrue() → F.ovf() <= y, r: Float(F), hr: RoundsTo(F, mode, y, r)): RoundsTo(F, mode, x, r)
+    ov: F.specials.has_inf().IsTrue() → F.ovf() < y, r: Float(F), hr: RoundsTo(F, mode, y, r)): RoundsTo(F, mode, x, r)
 {
     let exx: F.Exceeds(x) = F.exceeds_mono(y, x, yx, ex);
-    let fits = λ (fy: F.Fits(y)) => λ (has: F.specials.has_inf().IsTrue()) => false_elim<x.abs() < F.ovf()>(F.fits_not_over(y, fy, has, ov(has)));
+    let over = λ (even: Bool) (has: F.specials.has_inf().IsTrue()) => And(Rat::le_of_lt(ov(has)), λ (_: F.TieStays(even)) => ov(has));
+    let fits = λ (even: Bool) (fy: F.Fits(even, y)) => λ (has: F.specials.has_inf().IsTrue()) => false_elim<F.Fits(even, x)>(F.fits_not_over(even, y, fy, has, over(even, has)))(has);
     let pos: (0 < y) = Rat::lt_of_le_of_lt(Rat::le_of_same(Rat::same_sym(Finite::zero_val(F))), ex(Finite::zero(F, False)));
     match r as λ r0 => RoundsTo(F, mode, y, r0) → RoundsTo(F, mode, x, r0) {
         Fin(f) => match mode {
             NearestEven => λ h => And(And(Finite::nearest_beyond(y, x, yx, ex, f, h.left.left),
-                λ g ng => Inl(Finite::nearest_same_beyond(y, x, yx, ex, f, g, h.left.left, ng))), fits(h.right)),
+                λ g ng => Inl(Finite::nearest_same_beyond(y, x, yx, ex, f, g, h.left.left, ng))), fits(True, h.right)),
             NearestAway => λ h => And(And(Finite::nearest_beyond(y, x, yx, ex, f, h.left.left),
                 λ g ng => Rat::le_of_same(Rat::abs_respects(x := g.val(), x2 := f.val(), hx := Finite::nearest_same_beyond(y, x, yx, ex, f, g, h.left.left, ng)))),
-                fits(h.right)),
+                fits(False, h.right)),
             TowardPos => λ h => match h {
                 Inl(a) => false_elim(Finite::above_not_exceeds(y, f, a, ex)),
                 Inr(s) => Inr(And(s.left, And(Finite::below_beyond(y, x, yx, ex, f, s.right.left), exx))),
@@ -90,12 +91,12 @@ theorem Format::rounds_beyond(self F: Format, mode: Mode, y, x: Rat, yx: y <= x,
         },
         Inf(n, has) => match mode {
             NearestEven => match n {
-                False => λ (h: F.ovf() <= y) => Rat::le_trans(h, yx),
-                True => λ (h: y <= -F.ovf()) => false_elim(F.ovf_not_both(y, ov(has), h)),
+                False => λ (h: F.Over(True, y)) => F.over_mono(True, y, x, yx, h),
+                True => λ (h: F.Under(True, y)) => false_elim(F.ovf_not_both(y, Rat::le_of_lt(ov(has)), h.left)),
             },
             NearestAway => match n {
-                False => λ (h: F.ovf() <= y) => Rat::le_trans(h, yx),
-                True => λ (h: y <= -F.ovf()) => false_elim(F.ovf_not_both(y, ov(has), h)),
+                False => λ (h: F.Over(False, y)) => F.over_mono(False, y, x, yx, h),
+                True => λ (h: F.Under(False, y)) => false_elim(F.ovf_not_both(y, Rat::le_of_lt(ov(has)), h.left)),
             },
             TowardPos => match n {
                 False => λ _ => exx,
@@ -367,11 +368,13 @@ theorem Format::sc_over_ok(self F: Format, mode: Mode, base: Nat, bp: 1 <= base,
             let l0: (W.limit_h() = (W.max_mag() + 1) * (P * 2)) = refl;
             let lim: (W.limit_h() <= L) = linarith(lp, tw, m1, l0);
             let o0: (W.ovf_h() = (W.max_mag() + W.max_mag() + 1) * P) = refl;
-            let o1: ((W.max_mag() + W.max_mag() + 1) * P <= (W.top() + W.top()) * P) = Nat::mul_le_mono_r(P, W.max_mag() + W.max_mag() + 1, W.top() + W.top(), { let mt = mb.right.left; omega });
-            let ovl: (W.ovf_h() <= L) = linarith(o0, o1, tw, lp);
+            let o1: ((W.max_mag() + W.max_mag() + 2) * P <= (W.top() + W.top()) * P) = Nat::mul_le_mono_r(P, W.max_mag() + W.max_mag() + 2, W.top() + W.top(), { let mt = mb.right.left; omega });
+            let o2: ((W.max_mag() + W.max_mag() + 1 + 1) * P = P + (W.max_mag() + W.max_mag() + 1) * P) = (W.max_mag() + W.max_mag() + 1).mul_succ_left(P);
+            let p0: (0 < P) = Nat::pow_pos(a := 2, n := c);
+            let ovl: (W.ovf_h() < L) = linarith(o0, o1, o2, p0, tw, lp);
             let hr0 = W.round_h_correct(mode, y, L, False, ay);
             let ex = W.exceeds_over(y, L, False, ay, lim);
-            let ovy = λ (_: W.specials.has_inf().IsTrue()) => W.cut_le(y, L, False, ay, W.ovf_h().int(), omega(ovl));
+            let ovy = λ (_: W.specials.has_inf().IsTrue()) => W.cut_lt(y, L, False, ay, W.ovf_h().int(), omega(ovl));
             let hr = W.rounds_beyond(mode, y, x, yx, ex, ovy, W.round_h(mode, L, False), hr0);
             let pp: (0 < P) = Nat::pow_pos(a := 2, n := c);
             let tm: (F.top() * 1 <= F.top() * P) = Nat::mul_le_mono_l(F.top(), 1, P, omega(pp));

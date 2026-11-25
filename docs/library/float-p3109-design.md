@@ -160,15 +160,16 @@ code), even: `Binary8p3se`'s tie at `ovf` rounds to `Mhi`.
 ```heather
 fn Format::ovf_h(self F: Format) → Nat { (F.max_mag() + F.max_mag() + 1) * Nat::pow(2, F.span) }
 // A tie at `ovf` stays at the largest float: ties to even, and an even largest float.
-fn Format::tie_stays(self F: Format, even: Bool) → Bool { even && F.max_even() }
+fn Format::TieStays(self F: Format, even: Bool) → Type { even.IsTrue() ∧ F.MaxEven() }
 fn Format::Fits(self F: Format, even: Bool, x: Rat) → Type {
-    F.specials.has_inf().IsTrue() → x.abs() <= F.ovf() ∧ (x.abs() ≈ F.ovf() → F.tie_stays(even).IsTrue())
+    F.specials.has_inf().IsTrue() → x.abs() < F.ovf() ∨ (F.TieStays(even) ∧ x.abs() ≈ F.ovf())
 }
-fn Format::Over(self F: Format, even: Bool, x: Rat) → Type { F.ovf() <= x ∧ (F.tie_stays(even).IsTrue() → F.ovf() < x) }
+fn Format::Over(self F: Format, even: Bool, x: Rat) → Type { F.ovf() <= x ∧ (F.TieStays(even) → F.ovf() < x) }
+fn Format::Under(self F: Format, even: Bool, x: Rat) → Type { x <= -F.ovf() ∧ (F.TieStays(even) → x < -F.ovf()) }
 ```
 
 `RoundsTo`'s nearest clauses use `Fits(even, x)` for a finite result and
-`Over(even, x)` (or `Over(even, -x)`) for an infinite one. `ovf_h` is
+`Over(even, x)` or `Under(even, x)` for an infinite one. `ovf_h` is
 written through `max_mag`, which is `top - 1` for an IEEE format, so the
 threshold is unchanged there. The rounding routine (`none_h`) gets the
 tie: it already knows `h` and the sticky bit, so `h = ovf_h` with no sticky
@@ -238,6 +239,63 @@ Checked against the tables (by hand, here; by evaluation in the tests):
 3. **`p3109-encoding`**: `decode`/`encode` over `BitVec(K)` for every
    P3109 format, the bijection, and the value tables as evaluation tests.
 
-## 5. Round 1 as landed
+## 5. Round 1 as landed (`p3109-values`, 2026-11-25)
 
-(Filled in when it lands.)
+Modules: `float.hthr` (D3, D4's `lsb`), `round.hthr` (D4's ties, D5),
+`window.hthr`, `literal.hthr`, `error.hthr`, `round_real.hthr` (fallout),
+the new `p3109.hthr` (§3), and `Nat::even_add_even` in `nat.hthr`. Tests:
+`lib/_tests/std/num/float/p3109_tests.hthr` (the table rows, both tie
+parities at precision one, the zero tie, the overflow tie both ways, a
+negative control) and two saturated Fast2Sum cases in `eft_tests.hthr`.
+
+**As designed.** D3: `Format { frac, emin, span, cut, cut_ok, specials }`;
+`Format::cut_room` is `cut_ok`, `one_le_half`/`two_le_top` replace the
+bounds `frac_ok` gave, and `two_le_half` now takes `1 <= frac`.
+`max_mag = top - 1 - cut` and `max_mag_bounds` is three facts, not four.
+D4: `Format::lsb_at(frac, mag, bexp)` (a helper over plain naturals, so
+`lsb_cases` can split on `frac` with a motive), `Finite::Even`, and two
+parity lemmas the step-up record uses: `lsb_step` (a step inside a binade
+moves the code by one) and `lsb_carry` (the carry into the next binade flips
+it). `UpIs` states its parity facts about codes; `NearSplit` and
+`nearest_even_same` read `Finite::Even`. D5: `Format::TieStays(even)`,
+`Fits(even, x)` (strictly below the threshold, or on it when the tie stays),
+`Over(even, x)` / `Under(even, x)` (the old `ovf <= x` as `.left`, strict
+when the tie stays), and `none_h(h, st, even)` with the tie branch.
+`ovf_h` is `(2·max_mag + 1)·2^span`, the old value at `cut = 0`.
+
+**Found while landing.**
+
+- *A window breaks precision-one ties.* A window lowers exponents by `j`,
+  and at precision one the code's parity is the exponent's, so an odd `j`
+  flips which neighbour is even. `Format::widen` now uses the window's
+  answer only when `Format::win_par(j)` (`1 <= frac ∨ Even(j)`) holds,
+  and returns the full rounding otherwise; `window_rounds_fin` and
+  `window_rounds_inf` take that fact, and `win_max_even` carries the
+  largest float's parity between the top window and `F` (for D5). Precision
+  one formats are at most 16 bits wide, so the fallback costs nothing that
+  matters; the window exists for binary64.
+- *`γ` needs `u < 1`.* For a directed mode at precision one `u = 1`, so
+  `u <= γ(1) = u/(1 - u)` is meaningless; `Format::u_le_gamma` takes
+  `1 < u_den(mode)`, which every caller already had (`n < u_den`).
+- *`rounds_beyond` needs a strict threshold.* At `ovf` itself a staying tie
+  rounds finite while a larger value overflows, so the hypothesis is now
+  `ovf < y`; its one caller's `y` was strictly past anyway.
+- *Value-same floats have one code parity* (`Finite::even_of_same_val`,
+  from `parts_of_same_val`, which now gives the exponent as well as the
+  significand).
+
+**Deviation.** `Format::p3109` takes no validity proof: it is total, and
+`cut_ok` holds for any parameters. It is P3109's format exactly when
+`(K, P, s)` is valid (§3); the named formats are checked against the
+tables by evaluation. A `Domain`'s constructors are `FiniteDomain` and
+`ExtendedDomain`, since `Finite` is the finite-float type.
+
+**Proof-pattern observations.**
+
+- A `match` on a `Bool` refines the goal but not the types of hypotheses
+  that mention it; a lemma generic in `even` that passes `fits: F.Fits(even,
+  x)` into one branch needs `match even as λ e => F.Fits(e, x) → … { … }(fits)`.
+- A constant `as` motive stops the goal's own `match` on the same scrutinee
+  from reducing (`none_h_sign`); leave the motive to inference there.
+- A `let` bound to a lambda whose branches return different matches needs
+  its type written (`inf_or` in `none_ok`).
