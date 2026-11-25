@@ -6625,7 +6625,10 @@ fn runtime_reads(name: String, f: GlobalRef, levels: Nat := 0, stack: Nat := 0) 
 // (`runtime_held_bridge`), since at the callee itself the kernel runs its
 // body before the world's table arrives at its name. `T::n::bytes` is
 // published as `HWorld::of_record(T::n, …)`, where the linker reads whose
-// tables and instance a callee's are (`rt_record_of`).
+// tables and instance a callee's are (`rt_record_of`). A callee that takes
+// an erased parameter is marked with its function written out over the
+// record, `T::n::words`, and owes `T::n::runs_words`, neither of which
+// takes the proof (`runtime_held_words`, issues/runtime-record-calls-erased.md).
 //
 // A function may also take spans it only reads, after its record and
 // before its words, each a `List<u8>` and its length word
