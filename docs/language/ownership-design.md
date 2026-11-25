@@ -926,24 +926,24 @@ which is being worked out before anything more of it is built.
     level; its layout to the second. In a strict function sharing is
     determined by the source: share everywhere, copy only at a written
     `clone`, refuse where sharing has no licence.
-14. **`&mut T` is exclusive: it means the value, moved out of its place and
-    moved back when the borrow ends, with an erased slot that says where it
-    goes back and travels with the borrow.** This revises §10.3 and §10.4:
+14. **`&mut T` is exclusive: it means the value, taken from its place and
+    written back to it (eagerly, §15.2), with an erased slot that says where
+    it goes back and travels with the borrow.** This revises §10.3 and §10.4:
     an exclusive borrow is not a path read through its owner, and two
     overlapping `&mut`s are not accepted. `swap(&mut v[i], &mut v[j])` asks
     `i ≠ j` (Minus: expected; you do have to know that). Mutation that
     tolerates aliasing is keys into a store, with access an operation on the
     store; §10.3's "live path" row describes those.
-15. **The obligation is that a name still reads its value at each use;
-    shares are how that is proved.** The separation algebra is the fast
-    prover and the language of a callee's contract, not the definition. The
-    holders form a tree: a part is split from a holder and joined back at
-    its death; a new object is a split from a supply, and its death a join.
-    A read-only view holds nothing and is licensed by its region being
-    frozen (lean: yes; precision being worked out).
-16. **An unannotated parameter takes the least access its uses need**,
+15. **The obligation is that a name still reads its value at each use.**
+    It is proved by a checker over place states (§15.3), not by share
+    accounting: the separation algebra is not in the judgment, and its home
+    is the theorem that live objects get disjoint memory (§15.4). A
+    read-only view holds nothing and is licensed by its region being frozen
+    (§15.3 has the rule and its precision).
+16. **An unannotated parameter's access is determined by its uses**,
     recorded in the module's interface; a written mode is a demand checked
-    against it.
+    against it. "Least" is not the rule: the accesses that check are not
+    closed downward (§15.3 has the rule that is unique).
 17. **Old code is not a constraint.** The levels and the decisions above
     stay; FunctionIR's upper part, the library's `Held`, `Path` and `Keeps`,
     and the stores may be reshaped or replaced where the design wants it
@@ -993,8 +993,8 @@ that may not be dropped or duplicated) and a layout for level 3.
 
 An annotation (untrusted, inferred): each object binder is `own` or a view
 of a place, to read or to write; each site lists the bindings that die
-there; each signature has modes, regions, and whether a result is fresh or
-is one of its parameters.
+there; each signature has modes, regions, and whether a result is fresh, is
+one of its parameters, or is a view of places of its parameters (§15.8).
 
 The checker is one forward pass over the body with a state per place:
 `whole`, `frozen(viewers)`, `out(viewer)` or `gone`.
@@ -1003,6 +1003,7 @@ The checker is one forward pass over the body with a state per place:
 - A write or a take needs every overlapping place `whole`; a take leaves
   `gone`.
 - A view to read adds a viewer; a view to write turns `whole` to `out`.
+  The viewer of an `out` place may read and write it.
 - A death removes the viewer, or restores `whole`.
 - A join is the meet, with regions coarsened. A type that may not be
   dropped may not be `gone` by weakening.
@@ -1014,6 +1015,17 @@ A place is frozen while a live binding's type mentions it in a read region.
 A write under a frozen place is licensed where it is apart from it, so a
 view of `xs[0..8]` permits `xs[9] := s`. A collection states one region for
 all its elements; a finer one is a dependent record, never required.
+
+**What is inferred is determined, by a rule and not by "least".** An
+unannotated object binder `let x = π` is a take if `x` is consumed (moved,
+updated in place, stored into an owned field, returned as owned) or if `π`
+or a place containing it is replaced while `x` is live, and a read view
+otherwise. The counterexample to "least": `let x = r.a; r.a := Buf::new(8);
+sum(x) + len(r.a)` checks with `x` a take and is refused with `x` a read
+view. The rule is one backward pass, since whether `let y = x` consumes `x`
+depends only on later code. That its answer checks whenever any does is
+argued, not proved. A write view is always written, never inferred; a death
+is the last use; a join is the union of the place sets.
 
 ### 15.4 The theorems
 
@@ -1052,16 +1064,61 @@ chosen by a test, and a view returned into a caller's record are all a
 
 This level stands above FunctionIR, which is bytes with static buffer
 numbers. One new pass joins them: steps become byte spans (`Part`,
-`Stored`), each live block becomes a window of a supply buffer, and a `Ref`
-becomes offset words. Open: a `Ref` cell that may point into two supplies.
+`Stored`) and each live block gets its memory.
+
+**What a `Ref` becomes below** (lean: the third; Minus to decide). Three
+candidates were worked through. One buffer with every supply a window of it
+and a reference an offset: cheapest in proved code, but a span lent by a
+Rust caller stays a second buffer, so a stored reference into either is
+refused by a level-3 notion. Several buffers with a tag word in a stored
+reference: a global supply table read on every access. **Typed cells down
+to the machine**, a reference cell holding a reference until it becomes an
+address, crossing by an injection of blocks: nothing is restricted, the
+code is a pointer, and placelessness becomes a property of the language
+(no operation observes a block's address) in place of a check per function.
+Its cost is a new memory model in the middle of FunctionIR (buffers as
+lists of bytes become blocks of cells, touching every module stated over
+buffers by number; the word-only lowering is untouched), typed loads, and
+`Loan` extended across an allocation. The first is an instance of the third
+with one supply, so level 2 and `placement_sound` are written against the
+general interface.
 
 `new` names no supply in the source or the meaning for an owned object:
-identity first appears at level 2. Whether a block is a static slot, part
-of a region or an allocator's is placement, from `new`, `dead`, size bounds
-and escape; a supply the source states is a demand. (Lean; the
-alternatives are a named supply everywhere, or a per-object free with a
-verified allocator. Minus has not settled this.) A statically sized block
-with no live reference may be moved by placement; that is never a copy.
+identity first appears at level 2. (Lean; Minus has not settled it.)
+
+**The allocation policy is not a design commitment.** For memory obtained
+at run time the checked thing is an allocator, and `placement_sound` is one
+theorem over any allocator satisfying laws: a block it answers is disjoint
+from every live one and large enough; a freed block leaves the live set;
+with enough room it never fails. These are the arena's `alloc_fresh` and
+`alloc_below` with a `free`, stated in `Held`. A frame plan decided at
+compile time is the case discharged by a plan checker. So the first build
+may be the simplest allocator.
+
+**What is a commitment** (Minus to decide):
+
+- *When memory runs out.* The meaning is total, so an owned `new` cannot
+  fail in it. Lean: the machine theorem says the code computes the meaning
+  or stops at a defined out-of-memory exit, and computes the meaning
+  whenever the room is at least a bound the level-2 run defines (as stack
+  room is a premise today); a program that must handle exhaustion uses the
+  library's fallible store, whose state is named and threaded.
+- *What the default promises.* Level 2 defines the live size at every step,
+  so the peak of live sizes is a function of the run that a theorem can
+  bound. Only "a block's storage is reusable from its `dead`" has that peak
+  as its cost; a stack or inferred regions can hold dead memory without
+  bound (a state replaced per pass of a loop; a queue). Under that promise
+  the death of a container has code, a traversal freeing its elements,
+  though in the meaning a drop is still nothing.
+
+**What the source may state**, each a demand: `new … in a` for an arena
+value `a` (the block is part of `a`); `region r { … }` (every `new` inside
+is in `r`, freed in bulk with no traversal, refused if anything typed in
+`r` escapes); a frame slot (refused if the size is unbounded or the life is
+not nested); `no_alloc` on a function.
+
+A statically sized block with no live reference may be moved by placement;
+that is never a copy.
 
 ### 15.6 The first experiment
 
@@ -1077,16 +1134,49 @@ It refutes the design if the invariant needs more than the place states,
 if residuals cannot be closed data with a cheap meaning, if following a
 name through its in-place updates makes frozen tracking awkward, or if the
 kernel cannot evaluate the checker at tolerable cost. It does not test
-write views, calls, stored references or placement; the next experiment is
-one call with a `&mut` window and a returned view.
+write views, calls, stored references or placement.
+
+**The second experiment** adds functions and two operations: a call that
+lends a window to write (in the meaning: window, call, `put_window`, the
+eager write-back; at level 2 the callee runs on a reference with no copy),
+and a call answering a read view of its argument, which the caller rebases.
+Each function has a safety statement (its answer and its window agree with
+the meaning, the file is unchanged outside the window, a returned view lies
+inside the reference), and the caller's proof cites only its callees'
+statements and signatures. Three programs: a written window beside a held
+view, by one residual; a returned view, frozen while it lives; a callee
+that breaks its signature, whose own check fails. It refutes the design if
+a caller's proof needs more of a callee than its signature and safety
+statement, if the simulation through `put_window` after `window` is costly
+enough that eager write-back is the wrong meaning, or if the checker's cost
+grows with the call depth.
 
 ### 15.7 Not settled
 
-1. Where memory comes from (§15.5), and reclamation under an inferred
-   region.
-2. A reference that may point into two supplies.
-3. That the least access for an unannotated binding is unique (a goal for
-   the judgment, not yet a property).
+1. What happens when memory runs out, and whether the default promises
+   reuse from `dead` (§15.5): Minus's.
+2. Typed cells and references down to the machine (§15.5): Minus's.
+3. That the inference rule's answer checks whenever any annotation does
+   (§15.3): argued, to be proved with the judgment.
 4. Whether an owner may read a part it has lent to write, which eager
-   write-back would make sound.
-5. What a signature records, as data in a module's interface.
+   write-back would make sound. Kept refused at first.
+
+### 15.8 What a signature records
+
+Per function, in the module's interface: its region parameters (and for
+each whether an erased owner goes in and out); per parameter its class,
+its mode (take, read, write), the parts it may write, and what places its
+type's regions stand for; for the result its class and whether it is fresh,
+is a parameter, or is a view of places of parameters; and whether it
+allocates. Residual preconditions are not extra data: they are the proof
+parameters in the kernel type. A caller's checker reads the modes to step
+its place states across the call, the result's origin to know what is
+frozen or out while the result lives, the parts to emit `Apart` against
+views it holds, and the name of the callee's safety theorem to cite. It
+reads no summary of what the callee keeps.
+
+The inferred fields (take or read, fresh or a parameter, allocates) are in
+the interface, so a body that flips one changes the interface and its
+importers are checked again: a caller that used `v` after `f(v)` is refused
+when `f` starts consuming it. A callee's plan, deaths and internal
+residuals are not in it.
