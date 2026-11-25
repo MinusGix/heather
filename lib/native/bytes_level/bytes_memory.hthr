@@ -2,14 +2,16 @@
 // issues/bytes-level-language.md): blocks of bytes with a shadow of the
 // references held among them, and which blocks a run may write.
 //
-// - A memory is the experiment's heap (reference_cells: `Heap`, its bytes
-//   per block and its shadow of `Entry`s) and `written`, the blocks a run
-//   may store into. Blocks are few and fixed for a run: nothing here makes
-//   one, and no operation changes a block's length or whether it may be
-//   written.
+// - A memory is what a run changes: the experiment's heap (reference_cells:
+//   `Heap`, its bytes per block and its shadow of `Entry`s) and which bytes
+//   are undefined (a fresh block's, a window a failed read left). What is
+//   fixed for a run is apart from it (`Blocks`: which blocks the run may
+//   store into); nothing here makes a block, and no operation changes a
+//   block's length. A byte is plain, part of a reference, or undefined.
 // - Every operation is one of two: `take` reads a piece of memory, its
-//   bytes and the references wholly among them (`Piece`, the references
-//   at offsets of their own), and `put` writes one. A load of a word is a
+//   bytes, the references wholly among them (`Piece`, the references at
+//   offsets of their own) and which of its bytes are undefined, and `put`
+//   writes one. A load of a word is a
 //   take with no reference in it; a load of a reference, a take of eight
 //   bytes holding one at its start; a store of a word, a put of its bytes;
 //   a store of a reference, a put of eight zero bytes holding it; a typed
@@ -24,9 +26,10 @@
 //   both ways, and the operations' own facts follow from them, so a
 //   lowering takes them as hypotheses and a comparison on the path is one
 //   prover.
-// - Canonical: a reference's eight bytes are zero (a put of a reference
-//   writes zeros under it, and a take carries a reference's zeros with
-//   it), so what a heap reads is its bytes and its entries.
+// - Canonical: a reference's eight bytes are zero, and so is an undefined
+//   byte (a put of a reference or of an undefined window writes zeros, and
+//   a take carries them), so what a heap reads is its bytes, its entries
+//   and its undefined bytes.
 // - Renaming blocks (`MemoryRenamed`): a take of a renamed memory is the
 //   renamed take, a put the renamed put (`Memory::take_renames`,
 //   `put_renames`). Nothing here reads which block a reference names
@@ -50,15 +53,24 @@ import omega;
 // A reference held at byte `at` of a piece: its eight bytes from there.
 record Pointer { at: Nat, target: Loc }
 
-// What a range of memory holds, wherever it lies: its bytes, and the
-// references wholly inside it, each at its offset in the range.
-record Piece { bytes: List<BitVec(8)>, pointers: List<Pointer> }
+// What a range of memory holds, wherever it lies: its bytes, the
+// references wholly inside it, each at its offset in the range, and which
+// of its bytes are undefined (`flag`: a byte past the flags is defined).
+record Piece { bytes: List<BitVec(8)>, pointers: List<Pointer>, undefined: List<Bool> }
 
-// Bytes holding no reference.
-fn Piece::plain(bytes: List<BitVec(8)>) → Piece { Piece(bytes, []) }
+fn flag(flags: List<Bool>, i: Nat) → Bool { flags.nth(i).unwrap_or(False) }
+
+// No flag set.
+fn none_set(flags: List<Bool>) → Bool { match flags { Nil => True, Cons(f, rest) => !f && none_set(rest) } }
+
+// Bytes holding no reference, all defined.
+fn Piece::plain(bytes: List<BitVec(8)>) → Piece { Piece(bytes, [], []) }
 
 // Eight zero bytes holding `target` (zero under a reference: canonical).
-fn Piece::reference(target: Loc) → Piece { Piece(word_bytes(BitVec::zero()), [Pointer(0, target)]) }
+fn Piece::reference(target: Loc) → Piece { Piece(word_bytes(BitVec::zero()), [Pointer(0, target)], []) }
+
+// `n` undefined bytes, zero (canonical): what a failed read leaves.
+fn Piece::undefined(n: Nat) → Piece { Piece(List::replicate(BitVec::zero(), n), [], List::replicate(True, n)) }
 
 // The `n` bytes from the first as a number, the first the least
 // significant: what a load of `n` bytes reads (FunctionIR's `buffer_word`).
@@ -126,8 +138,17 @@ fn placed(pointers: List<Pointer>, b, k: Nat) → List<Entry> {
 // ---------------------------------------------------------------------------
 // Memory
 
-// The heap, and which blocks the run may store into.
-record Memory { heap: Heap, written: Nat → Bool }
+// What a run changes: the heap, and which bytes are undefined.
+record Memory { heap: Heap, undefined: Nat → Nat → Bool }
+
+// What is fixed for a run about its blocks: which it may store into. (A
+// block's length is its bytes', which no operation changes.)
+record Blocks { written: Nat → Bool }
+
+// The flags of the `n` bytes of block `b` from `k`.
+fn flags(undefined: Nat → Nat → Bool, b, k, n: Nat) → List<Bool> {
+    match n { Zero => Nil, Succ(j) => Cons(undefined(b, k), flags(undefined, b, k + 1, j)) }
+}
 
 // The `n` bytes at `loc` lie in its block.
 fn Memory::fits(self m: Memory, loc: Loc, n: Nat) → Bool { (loc.offset + n).leb(m.heap.bytes(loc.block).len()) }
@@ -137,15 +158,22 @@ fn Memory::whole(self m: Memory, loc: Loc, n: Nat) → Bool { !range_cut(m.heap.
 
 // What they hold.
 fn Memory::piece_at(self m: Memory, loc: Loc, n: Nat) → Piece {
-    Piece(m.heap.bytes(loc.block).window(loc.offset, loc.offset + n), range_pointers(m.heap.shadow, loc.block, loc.offset, n))
+    Piece(m.heap.bytes(loc.block).window(loc.offset, loc.offset + n), range_pointers(m.heap.shadow, loc.block, loc.offset, n),
+        flags(m.undefined, loc.block, loc.offset, n))
 }
 
+// Byte `j` of block `c` is among the `n` from byte `k` of block `b`.
+fn in_window(b, k, n, c, j: Nat) → Bool { c.same(b) && (k.leb(j) && (j + 1).leb(k + n)) }
+
 // Memory with `piece` written at `loc`: its bytes over the block's, its
-// references for every entry the range met.
+// references for every entry the range met, its flags over the window's.
 fn Memory::placed_at(self m: Memory, loc: Loc, piece: Piece) → Memory {
     Memory(Heap(set_block(m.heap.bytes, loc.block, m.heap.bytes(loc.block).put_window(loc.offset, piece.bytes)),
             placed(piece.pointers, loc.block, loc.offset) ++ range_cleared(m.heap.shadow, loc.block, loc.offset, piece.bytes.len())),
-        m.written)
+        λ (c: Nat) (j: Nat) => match in_window(loc.block, loc.offset, piece.bytes.len(), c, j) {
+            True => flag(piece.undefined, j - loc.offset),
+            False => m.undefined(c, j),
+        })
 }
 
 // The two operations. A take answers where the range lies in its block and
@@ -154,8 +182,8 @@ fn Memory::take(self m: Memory, loc: Loc, n: Nat) → Option<Piece> {
     match m.fits(loc, n) && m.whole(loc, n) { False => None, True => Some(m.piece_at(loc, n)) }
 }
 
-fn Memory::put(self m: Memory, loc: Loc, piece: Piece) → Option<Memory> {
-    match m.written(loc.block) && (m.fits(loc, piece.bytes.len()) && m.whole(loc, piece.bytes.len())) {
+fn Memory::put(self m: Memory, blocks: Blocks, loc: Loc, piece: Piece) → Option<Memory> {
+    match blocks.written(loc.block) && (m.fits(loc, piece.bytes.len()) && m.whole(loc, piece.bytes.len())) {
         False => None,
         True => Some(m.placed_at(loc, piece)),
     }
@@ -163,12 +191,18 @@ fn Memory::put(self m: Memory, loc: Loc, piece: Piece) → Option<Memory> {
 
 // What the nodes do, each a take or a put.
 
-// `n` bytes holding no reference, as a number.
+// `n` bytes holding no reference and none undefined.
+fn Piece::plain_bytes(self piece: Piece) → Option<List<BitVec(8)>> {
+    match piece.pointers { Nil => match none_set(piece.undefined) { True => Some(piece.bytes), False => None }, Cons(_, _) => None }
+}
+
+fn Memory::read_bytes(self m: Memory, loc: Loc, n: Nat) → Option<List<BitVec(8)>> {
+    match m.take(loc, n) { None => None, Some(piece) => piece.plain_bytes() }
+}
+
+// As a number.
 fn Memory::load(self m: Memory, loc: Loc, n: Nat) → Option<Nat> {
-    match m.take(loc, n) {
-        None => None,
-        Some(piece) => match piece.pointers { Nil => Some(little_endian(piece.bytes, n)), Cons(_, _) => None },
-    }
+    match m.read_bytes(loc, n) { None => None, Some(bytes) => Some(little_endian(bytes, n)) }
 }
 
 // The reference held at `loc`.
@@ -176,14 +210,14 @@ fn Memory::load_ref(self m: Memory, loc: Loc) → Option<Loc> {
     match m.take(loc, 8) { None => None, Some(piece) => piece.referent() }
 }
 
-fn Memory::store(self m: Memory, loc: Loc, bytes: List<BitVec(8)>) → Option<Memory> { m.put(loc, Piece::plain(bytes)) }
+fn Memory::store(self m: Memory, blocks: Blocks, loc: Loc, bytes: List<BitVec(8)>) → Option<Memory> { m.put(blocks, loc, Piece::plain(bytes)) }
 
-fn Memory::store_ref(self m: Memory, loc, target: Loc) → Option<Memory> { m.put(loc, Piece::reference(target)) }
+fn Memory::store_ref(self m: Memory, blocks: Blocks, loc, target: Loc) → Option<Memory> { m.put(blocks, loc, Piece::reference(target)) }
 
 // The `n` bytes at `source`, references and all, written at `target`. The
 // piece is taken before anything is written, so the two may overlap.
-fn Memory::copy(self m: Memory, target, source: Loc, n: Nat) → Option<Memory> {
-    match m.take(source, n) { None => None, Some(piece) => m.put(target, piece) }
+fn Memory::copy(self m: Memory, blocks: Blocks, target, source: Loc, n: Nat) → Option<Memory> {
+    match m.take(source, n) { None => None, Some(piece) => m.put(blocks, target, piece) }
 }
 
 // ---------------------------------------------------------------------------
@@ -207,84 +241,93 @@ theorem Memory::take_of(self m: Memory, loc: Loc, n: Nat, fits: m.fits(loc, n) =
     j(sym(Bool::and_cong(fits, whole)), λ v _ => (match v { False => None, True => Some(m.piece_at(loc, n)) }) = Some(m.piece_at(loc, n)), refl)
 }
 
-theorem Memory::put_some(self m: Memory, loc: Loc, piece: Piece, after: Memory, put: m.put(loc, piece) = Some(after)):
-    (m.written(loc.block) = True) ∧ ((m.fits(loc, piece.bytes.len()) = True) ∧ ((m.whole(loc, piece.bytes.len()) = True) ∧
+theorem Memory::put_some(self m: Memory, blocks: Blocks, loc: Loc, piece: Piece, after: Memory, put: m.put(blocks, loc, piece) = Some(after)):
+    (blocks.written(loc.block) = True) ∧ ((m.fits(loc, piece.bytes.len()) = True) ∧ ((m.whole(loc, piece.bytes.len()) = True) ∧
         (m.placed_at(loc, piece) = after))) {
     let n = piece.bytes.len();
-    (match m.written(loc.block) && (m.fits(loc, n) && m.whole(loc, n)) as λ v =>
-            (m.written(loc.block) && (m.fits(loc, n) && m.whole(loc, n))) = v →
+    (match blocks.written(loc.block) && (m.fits(loc, n) && m.whole(loc, n)) as λ v =>
+            (blocks.written(loc.block) && (m.fits(loc, n) && m.whole(loc, n))) = v →
             (match v { False => None, True => Some(m.placed_at(loc, piece)) }) = Some(after) →
-            (m.written(loc.block) = True) ∧ ((m.fits(loc, n) = True) ∧ ((m.whole(loc, n) = True) ∧ (m.placed_at(loc, piece) = after))) {
+            (blocks.written(loc.block) = True) ∧ ((m.fits(loc, n) = True) ∧ ((m.whole(loc, n) = True) ∧ (m.placed_at(loc, piece) = after))) {
         False => λ _ none => absurd(none),
         True => λ all some => {
-            let outer = Bool::and_true_parts(m.written(loc.block), m.fits(loc, n) && m.whole(loc, n), all);
+            let outer = Bool::and_true_parts(blocks.written(loc.block), m.fits(loc, n) && m.whole(loc, n), all);
             let inner = Bool::and_true_parts(m.fits(loc, n), m.whole(loc, n), outer.right);
             ⟨outer.left, ⟨inner.left, ⟨inner.right, Option::some_inj(m.placed_at(loc, piece), after, some)⟩⟩⟩
         },
     })(refl, put)
 }
 
-theorem Memory::put_of(self m: Memory, loc: Loc, piece: Piece, written: m.written(loc.block) = True,
+theorem Memory::put_of(self m: Memory, blocks: Blocks, loc: Loc, piece: Piece, written: blocks.written(loc.block) = True,
     fits: m.fits(loc, piece.bytes.len()) = True, whole: m.whole(loc, piece.bytes.len()) = True):
-    m.put(loc, piece) = Some(m.placed_at(loc, piece)) {
+    m.put(blocks, loc, piece) = Some(m.placed_at(loc, piece)) {
     j(sym(Bool::and_cong(written, Bool::and_cong(fits, whole))), λ v _ =>
         (match v { False => None, True => Some(m.placed_at(loc, piece)) }) = Some(m.placed_at(loc, piece)), refl)
 }
 
-// A load answers where its bytes lie in their block, cut no reference and
-// hold none, and it answers their number.
-theorem Memory::load_some(self m: Memory, loc: Loc, n, x: Nat, loaded: m.load(loc, n) = Some(x)):
-    (m.fits(loc, n) = True) ∧ ((m.whole(loc, n) = True) ∧ ((range_pointers(m.heap.shadow, loc.block, loc.offset, n) = Nil) ∧
-        (little_endian(m.heap.bytes(loc.block).window(loc.offset, loc.offset + n), n) = x))) {
-    (match m.take(loc, n) as λ o => m.take(loc, n) = o →
-            (match o { None => None, Some(piece) => match piece.pointers { Nil => Some(little_endian(piece.bytes, n)), Cons(_, _) => None } }) = Some(x) →
-            (m.fits(loc, n) = True) ∧ ((m.whole(loc, n) = True) ∧ ((range_pointers(m.heap.shadow, loc.block, loc.offset, n) = Nil) ∧
-                (little_endian(m.heap.bytes(loc.block).window(loc.offset, loc.offset + n), n) = x))) {
-        None => λ _ none => absurd(none),
-        Some(piece) => λ taken => {
-            let facts = m.take_some(loc, n, piece, taken);
-            j(facts.right.right, λ p _ => (match p.pointers { Nil => Some(little_endian(p.bytes, n)), Cons(_, _) => None }) = Some(x) →
-                    (m.fits(loc, n) = True) ∧ ((m.whole(loc, n) = True) ∧ ((range_pointers(m.heap.shadow, loc.block, loc.offset, n) = Nil) ∧
-                        (little_endian(m.heap.bytes(loc.block).window(loc.offset, loc.offset + n), n) = x))),
-                (match range_pointers(m.heap.shadow, loc.block, loc.offset, n) as λ ps =>
-                        (match ps { Nil => Some(little_endian(m.heap.bytes(loc.block).window(loc.offset, loc.offset + n), n)), Cons(_, _) => None }) = Some(x) →
-                        (m.fits(loc, n) = True) ∧ ((m.whole(loc, n) = True) ∧ ((ps = Nil) ∧
-                            (little_endian(m.heap.bytes(loc.block).window(loc.offset, loc.offset + n), n) = x))) {
-                    Nil => λ some => ⟨facts.left, ⟨facts.right.left, ⟨refl, Option::some_inj(little_endian(m.heap.bytes(loc.block).window(loc.offset, loc.offset + n), n), x, some)⟩⟩⟩,
-                    Cons(_, _) => λ none => absurd(none),
-                }))
-        },
-    })(refl, loaded)
+// Plain bytes are a piece's bytes where it holds no reference and none of
+// them is undefined.
+theorem Piece::plain_bytes_some(self piece: Piece, bytes: List<BitVec(8)>, plain: piece.plain_bytes() = Some(bytes)):
+    (piece.pointers = Nil) ∧ ((none_set(piece.undefined) = True) ∧ (piece.bytes = bytes)) {
+    (match piece.pointers as λ ps => piece.pointers = ps →
+            (match ps { Nil => match none_set(piece.undefined) { True => Some(piece.bytes), False => None }, Cons(_, _) => None }) = Some(bytes) →
+            (piece.pointers = Nil) ∧ ((none_set(piece.undefined) = True) ∧ (piece.bytes = bytes)) {
+        Nil => λ none => (match none_set(piece.undefined) as λ v => none_set(piece.undefined) = v →
+                (match v { True => Some(piece.bytes), False => None }) = Some(bytes) →
+                (piece.pointers = Nil) ∧ ((none_set(piece.undefined) = True) ∧ (piece.bytes = bytes)) {
+            True => λ set some => ⟨none, ⟨set, Option::some_inj(piece.bytes, bytes, some)⟩⟩,
+            False => λ _ never => absurd(never),
+        })(refl),
+        Cons(_, _) => λ _ never => absurd(never),
+    })(refl, plain)
 }
 
-theorem Memory::load_of(self m: Memory, loc: Loc, n: Nat, fits: m.fits(loc, n) = True, whole: m.whole(loc, n) = True,
-    none: range_pointers(m.heap.shadow, loc.block, loc.offset, n) = Nil):
-    m.load(loc, n) = Some(little_endian(m.heap.bytes(loc.block).window(loc.offset, loc.offset + n), n)) {
-    let window = m.heap.bytes(loc.block).window(loc.offset, loc.offset + n);
-    j(sym(m.take_of(loc, n, fits, whole)), λ o _ =>
-            (match o { None => None, Some(piece) => match piece.pointers { Nil => Some(little_endian(piece.bytes, n)), Cons(_, _) => None } }) =
-                Some(little_endian(window, n)),
-        j(sym(none), λ ps _ => (match ps { Nil => Some(little_endian(window, n)), Cons(_, _) => None }) = Some(little_endian(window, n)), refl))
+// A read of plain bytes answers where its bytes lie in their block, cut
+// no reference, hold none, and none is undefined; it answers them.
+theorem Memory::read_bytes_some(self m: Memory, loc: Loc, n: Nat, bytes: List<BitVec(8)>, read: m.read_bytes(loc, n) = Some(bytes)):
+    (m.take(loc, n) = Some(m.piece_at(loc, n))) ∧ ((range_pointers(m.heap.shadow, loc.block, loc.offset, n) = Nil) ∧
+        ((none_set(flags(m.undefined, loc.block, loc.offset, n)) = True) ∧ (m.heap.bytes(loc.block).window(loc.offset, loc.offset + n) = bytes))) {
+    (match m.take(loc, n) as λ o => m.take(loc, n) = o → (match o { None => None, Some(piece) => piece.plain_bytes() }) = Some(bytes) →
+            (m.take(loc, n) = Some(m.piece_at(loc, n))) ∧ ((range_pointers(m.heap.shadow, loc.block, loc.offset, n) = Nil) ∧
+                ((none_set(flags(m.undefined, loc.block, loc.offset, n)) = True) ∧ (m.heap.bytes(loc.block).window(loc.offset, loc.offset + n) = bytes))) {
+        None => λ _ none => absurd(none),
+        Some(piece) => λ taken plain => {
+            let facts = m.take_some(loc, n, piece, taken);
+            let at: (m.piece_at(loc, n).plain_bytes() = Some(bytes)) = j(sym(facts.right.right), λ p _ => p.plain_bytes() = Some(bytes), plain);
+            ⟨m.take_of(loc, n, facts.left, facts.right.left), m.piece_at(loc, n).plain_bytes_some(bytes, at)⟩
+        },
+    })(refl, read)
+}
+
+theorem Memory::load_some(self m: Memory, loc: Loc, n, x: Nat, loaded: m.load(loc, n) = Some(x)):
+    Exists<List<BitVec(8)>>(λ bytes => (m.read_bytes(loc, n) = Some(bytes)) ∧ (little_endian(bytes, n) = x)) {
+    (match m.read_bytes(loc, n) as λ o => m.read_bytes(loc, n) = o → (match o { None => None, Some(bytes) => Some(little_endian(bytes, n)) }) = Some(x) →
+            Exists<List<BitVec(8)>>(λ bytes => (m.read_bytes(loc, n) = Some(bytes)) ∧ (little_endian(bytes, n) = x)) {
+        None => λ _ none => absurd(none),
+        Some(bytes) => λ read some => Exists(bytes, ⟨read, Option::some_inj(little_endian(bytes, n), x, some)⟩),
+    })(refl, loaded)
 }
 
 // A store answers where its block may be written and its bytes lie in it
 // and cut no reference.
-theorem Memory::store_some(self m: Memory, loc: Loc, bytes: List<BitVec(8)>, after: Memory, stored: m.store(loc, bytes) = Some(after)):
-    (m.written(loc.block) = True) ∧ ((m.fits(loc, bytes.len()) = True) ∧ ((m.whole(loc, bytes.len()) = True) ∧
+theorem Memory::store_some(self m: Memory, blocks: Blocks, loc: Loc, bytes: List<BitVec(8)>, after: Memory,
+    stored: m.store(blocks, loc, bytes) = Some(after)):
+    (blocks.written(loc.block) = True) ∧ ((m.fits(loc, bytes.len()) = True) ∧ ((m.whole(loc, bytes.len()) = True) ∧
         (m.placed_at(loc, Piece::plain(bytes)) = after))) {
-    m.put_some(loc, Piece::plain(bytes), after, stored)
+    m.put_some(blocks, loc, Piece::plain(bytes), after, stored)
 }
 
-theorem Memory::store_ref_some(self m: Memory, loc, target: Loc, after: Memory, stored: m.store_ref(loc, target) = Some(after)):
-    (m.written(loc.block) = True) ∧ ((m.fits(loc, 8) = True) ∧ ((m.whole(loc, 8) = True) ∧ (m.placed_at(loc, Piece::reference(target)) = after))) {
-    m.put_some(loc, Piece::reference(target), after, stored)
+theorem Memory::store_ref_some(self m: Memory, blocks: Blocks, loc, target: Loc, after: Memory, stored: m.store_ref(blocks, loc, target) = Some(after)):
+    (blocks.written(loc.block) = True) ∧ ((m.fits(loc, 8) = True) ∧ ((m.whole(loc, 8) = True) ∧ (m.placed_at(loc, Piece::reference(target)) = after))) {
+    m.put_some(blocks, loc, Piece::reference(target), after, stored)
 }
 
 // A copy answers where its source may be taken and its target put.
-theorem Memory::copy_some(self m: Memory, target, source: Loc, n: Nat, after: Memory, copied: m.copy(target, source, n) = Some(after)):
-    (m.take(source, n) = Some(m.piece_at(source, n))) ∧ (m.put(target, m.piece_at(source, n)) = Some(after)) {
-    (match m.take(source, n) as λ o => m.take(source, n) = o → (match o { None => None, Some(piece) => m.put(target, piece) }) = Some(after) →
-            (m.take(source, n) = Some(m.piece_at(source, n))) ∧ (m.put(target, m.piece_at(source, n)) = Some(after)) {
+theorem Memory::copy_some(self m: Memory, blocks: Blocks, target, source: Loc, n: Nat, after: Memory,
+    copied: m.copy(blocks, target, source, n) = Some(after)):
+    (m.take(source, n) = Some(m.piece_at(source, n))) ∧ (m.put(blocks, target, m.piece_at(source, n)) = Some(after)) {
+    (match m.take(source, n) as λ o => m.take(source, n) = o → (match o { None => None, Some(piece) => m.put(blocks, target, piece) }) = Some(after) →
+            (m.take(source, n) = Some(m.piece_at(source, n))) ∧ (m.put(blocks, target, m.piece_at(source, n)) = Some(after)) {
         None => λ _ none => absurd(none),
         Some(piece) => λ taken put => {
             let facts = m.take_some(source, n, piece, taken);
@@ -302,13 +345,18 @@ fn rename_pointers(r: Renaming, pointers: List<Pointer>) → List<Pointer> {
     match pointers { Nil => Nil, Cons(p, rest) => Cons(p.rename(r), rename_pointers(r, rest)) }
 }
 
-fn Piece::rename(self piece: Piece, r: Renaming) → Piece { Piece(piece.bytes, rename_pointers(r, piece.pointers)) }
+fn Piece::rename(self piece: Piece, r: Renaming) → Piece { Piece(piece.bytes, rename_pointers(r, piece.pointers), piece.undefined) }
 
 // `renamed` is `m` with every block `b` called `r.there(b)`.
 record MemoryRenamed(r: Renaming, m, renamed: Memory) {
     bytes: (c: Nat) → renamed.heap.bytes(c) = m.heap.bytes(r.back(c)),
     shadow: renamed.heap.shadow = rename_shadow(r, m.heap.shadow),
-    written: (c: Nat) → renamed.written(c) = m.written(r.back(c)),
+    undefined: (c, i: Nat) → renamed.undefined(c, i) = m.undefined(r.back(c), i),
+}
+
+// `renamed` is `blocks` with every block `b` called `r.there(b)`.
+record BlocksRenamed(r: Renaming, blocks, renamed: Blocks) {
+    written: (c: Nat) → renamed.written(c) = blocks.written(r.back(c)),
 }
 
 // Two answers related by `R`: both none, or both some and related.
@@ -380,9 +428,27 @@ theorem MemoryRenamed::block({r: Renaming}, {m, renamed: Memory}, self rel: Memo
     trans(rel.bytes(r.there(b)), cong_fn<Nat, List<BitVec(8)>>(λ x => m.heap.bytes(x), r.back_there(b)))
 }
 
-theorem MemoryRenamed::writes({r: Renaming}, {m, renamed: Memory}, self rel: MemoryRenamed(r, m, renamed), b: Nat):
-    renamed.written(r.there(b)) = m.written(b) {
-    trans(rel.written(r.there(b)), cong_fn<Nat, Bool>(λ x => m.written(x), r.back_there(b)))
+theorem BlocksRenamed::writes({r: Renaming}, {blocks, renamed: Blocks}, self rel: BlocksRenamed(r, blocks, renamed), b: Nat):
+    renamed.written(r.there(b)) = blocks.written(b) {
+    trans(rel.written(r.there(b)), cong_fn<Nat, Bool>(λ x => blocks.written(x), r.back_there(b)))
+}
+
+theorem MemoryRenamed::undefined_at({r: Renaming}, {m, renamed: Memory}, self rel: MemoryRenamed(r, m, renamed), b, i: Nat):
+    renamed.undefined(r.there(b), i) = m.undefined(b, i) {
+    trans(rel.undefined(r.there(b), i), cong_fn<Nat, Bool>(λ x => m.undefined(x, i), r.back_there(b)))
+}
+
+theorem MemoryRenamed::flags_at({r: Renaming}, {m, renamed: Memory}, self rel: MemoryRenamed(r, m, renamed), b: Nat, n: Nat):
+    (k: Nat) → flags(renamed.undefined, r.there(b), k, n) = flags(m.undefined, b, k, n) {
+    match n {
+        Zero => λ k => refl,
+        Succ(rest) => λ k => {
+            let unfolded: (Cons(renamed.undefined(r.there(b), k), flags(renamed.undefined, r.there(b), k + 1, rest)) =
+                    Cons(m.undefined(b, k), flags(m.undefined, b, k + 1, rest))) =
+                rewrite(rel.undefined_at(b, k), rel.flags_at(b, rest, k + 1), refl);
+            unfolded
+        },
+    }
 }
 
 theorem Entry::rename_meets_range(self e: Entry, r: Renaming, b, k, n: Nat): e.rename(r).meets_range(r.there(b), k, n) = e.meets_range(b, k, n) {
@@ -465,9 +531,12 @@ theorem MemoryRenamed::whole({r: Renaming}, {m, renamed: Memory}, self rel: Memo
 theorem Memory::take_renames(self m: Memory, r: Renaming, renamed: Memory, rel: MemoryRenamed(r, m, renamed), loc: Loc, n: Nat):
     renamed.take(loc.rename(r), n) = m.take(loc, n).map(λ (p: Piece) => p.rename(r)) {
     let window = λ (l: List<BitVec(8)>) => l.window(loc.offset, loc.offset + n);
-    let piece: (Piece(window(renamed.heap.bytes(r.there(loc.block))), range_pointers(renamed.heap.shadow, r.there(loc.block), loc.offset, n)) =
-            Piece(window(m.heap.bytes(loc.block)), rename_pointers(r, range_pointers(m.heap.shadow, loc.block, loc.offset, n)))) =
-        rewrite(rel.block(loc.block), rel.shadow, rename_range_pointers(r, loc.block, loc.offset, n, m.heap.shadow), refl);
+    let piece: (Piece(window(renamed.heap.bytes(r.there(loc.block))), range_pointers(renamed.heap.shadow, r.there(loc.block), loc.offset, n),
+                flags(renamed.undefined, r.there(loc.block), loc.offset, n)) =
+            Piece(window(m.heap.bytes(loc.block)), rename_pointers(r, range_pointers(m.heap.shadow, loc.block, loc.offset, n)),
+                flags(m.undefined, loc.block, loc.offset, n))) =
+        rewrite(rel.block(loc.block), rel.shadow, rename_range_pointers(r, loc.block, loc.offset, n, m.heap.shadow), rel.flags_at(loc.block, n, loc.offset),
+            refl);
     j(sym(Bool::and_cong(rel.fits(loc, n), rel.whole(loc, n))), λ v _ =>
             (match v { False => None, True => Some(renamed.piece_at(loc.rename(r), n)) }) = m.take(loc, n).map(λ (p: Piece) => p.rename(r)),
         (match m.fits(loc, n) && m.whole(loc, n) as λ v =>
@@ -494,17 +563,30 @@ theorem MemoryRenamed::put_at({r: Renaming}, {m, renamed: Memory}, self rel: Mem
                 rel.block(b)),
             rename_set_block(r, m.heap.bytes, renamed.heap.bytes, rel.bytes, b, now, c)),
         shadow := shadow,
-        written := rel.written,
+        undefined := λ c i => {
+            let rest = k.leb(i) && (i + 1).leb(k + n);
+            let same: (in_window(r.there(b), k, n, c, i) = in_window(b, k, n, r.back(c), i)) = cong_fn<Bool, Bool>(λ v => v && rest,
+                trans(cong_fn<Nat, Bool>(λ x => x.same(r.there(b)), sym(r.there_back(c))), r.there_same(r.back(c), b)));
+            j(sym(same), λ v _ => (match v { True => flag(piece.undefined, i - k), False => renamed.undefined(c, i) }) =
+                    (match in_window(b, k, n, r.back(c), i) { True => flag(piece.undefined, i - k), False => m.undefined(r.back(c), i) }),
+                match in_window(b, k, n, r.back(c), i) as λ v =>
+                    (match v { True => flag(piece.undefined, i - k), False => renamed.undefined(c, i) }) =
+                        (match v { True => flag(piece.undefined, i - k), False => m.undefined(r.back(c), i) }) {
+                    True => refl,
+                    False => rel.undefined(c, i),
+                })
+        },
     )
 }
 
 // A put into the renamed memory is the renamed put.
-theorem Memory::put_renames(self m: Memory, r: Renaming, renamed: Memory, rel: MemoryRenamed(r, m, renamed), loc: Loc, piece: Piece):
-    MemoryAlike(r, m.put(loc, piece), renamed.put(loc.rename(r), piece.rename(r))) {
+theorem Memory::put_renames(self m: Memory, blocks: Blocks, r: Renaming, renamed: Memory, renamed_blocks: Blocks, rel: MemoryRenamed(r, m, renamed),
+    blocks_renamed: BlocksRenamed(r, blocks, renamed_blocks), loc: Loc, piece: Piece):
+    MemoryAlike(r, m.put(blocks, loc, piece), renamed.put(renamed_blocks, loc.rename(r), piece.rename(r))) {
     let n = piece.bytes.len();
-    j(sym(Bool::and_cong(rel.writes(loc.block), Bool::and_cong(rel.fits(loc, n), rel.whole(loc, n)))), λ v _ =>
-            MemoryAlike(r, m.put(loc, piece), match v { False => None, True => Some(renamed.placed_at(loc.rename(r), piece.rename(r))) }),
-        (match m.written(loc.block) && (m.fits(loc, n) && m.whole(loc, n)) as λ v =>
+    j(sym(Bool::and_cong(blocks_renamed.writes(loc.block), Bool::and_cong(rel.fits(loc, n), rel.whole(loc, n)))), λ v _ =>
+            MemoryAlike(r, m.put(blocks, loc, piece), match v { False => None, True => Some(renamed.placed_at(loc.rename(r), piece.rename(r))) }),
+        (match blocks.written(loc.block) && (m.fits(loc, n) && m.whole(loc, n)) as λ v =>
             MemoryAlike(r, match v { False => None, True => Some(m.placed_at(loc, piece)) },
                 match v { False => None, True => Some(renamed.placed_at(loc.rename(r), piece.rename(r))) }) {
             False => trivial,
@@ -512,22 +594,27 @@ theorem Memory::put_renames(self m: Memory, r: Renaming, renamed: Memory, rel: M
         }))
 }
 
-// So each operation, renamed. A load reads the same number.
+// So each operation, renamed. A read of plain bytes reads the same bytes.
+theorem Piece::rename_plain_bytes(self piece: Piece, r: Renaming): piece.rename(r).plain_bytes() = piece.plain_bytes() {
+    match piece.pointers { Nil => refl, Cons(_, _) => refl }
+}
+
+theorem Memory::read_bytes_renames(self m: Memory, r: Renaming, renamed: Memory, rel: MemoryRenamed(r, m, renamed), loc: Loc, n: Nat):
+    renamed.read_bytes(loc.rename(r), n) = m.read_bytes(loc, n) {
+    j(sym(m.take_renames(r, renamed, rel, loc, n)), λ o _ => (match o { None => None, Some(piece) => piece.plain_bytes() }) = m.read_bytes(loc, n),
+        match m.take(loc, n) as λ o =>
+            (match o.map(λ (p: Piece) => p.rename(r)) as λ _ => Option<List<BitVec(8)>> { None => None, Some(piece) => piece.plain_bytes() }) =
+                (match o { None => None, Some(piece) => piece.plain_bytes() }) {
+            None => refl,
+            Some(piece) => piece.rename_plain_bytes(r),
+        })
+}
+
+// A load reads the same number.
 theorem Memory::load_renames(self m: Memory, r: Renaming, renamed: Memory, rel: MemoryRenamed(r, m, renamed), loc: Loc, n: Nat):
     renamed.load(loc.rename(r), n) = m.load(loc, n) {
-    j(sym(m.take_renames(r, renamed, rel, loc, n)), λ o _ =>
-            (match o { None => None, Some(piece) => match piece.pointers { Nil => Some(little_endian(piece.bytes, n)), Cons(_, _) => None } }) =
-                m.load(loc, n),
-        (match m.take(loc, n) as λ o =>
-            (match o.map(λ (p: Piece) => p.rename(r)) as λ _ => Option<Nat> { None => None,
-                Some(piece) => match piece.pointers { Nil => Some(little_endian(piece.bytes, n)), Cons(_, _) => None } }) =
-            (match o { None => None, Some(piece) => match piece.pointers { Nil => Some(little_endian(piece.bytes, n)), Cons(_, _) => None } }) {
-            None => refl,
-            Some(piece) => match piece.pointers {
-                Nil => refl,
-                Cons(_, _) => refl,
-            },
-        }))
+    j(sym(m.read_bytes_renames(r, renamed, rel, loc, n)), λ o _ => (match o { None => None, Some(bytes) => Some(little_endian(bytes, n)) }) = m.load(loc, n),
+        refl)
 }
 
 theorem Piece::rename_referent(self piece: Piece, r: Renaming): piece.rename(r).referent() = piece.referent().map(λ (t: Loc) => t.rename(r)) {
@@ -556,30 +643,33 @@ theorem Memory::load_ref_renames(self m: Memory, r: Renaming, renamed: Memory, r
         }))
 }
 
-theorem Memory::store_renames(self m: Memory, r: Renaming, renamed: Memory, rel: MemoryRenamed(r, m, renamed), loc: Loc, bytes: List<BitVec(8)>):
-    MemoryAlike(r, m.store(loc, bytes), renamed.store(loc.rename(r), bytes)) {
-    m.put_renames(r, renamed, rel, loc, Piece::plain(bytes))
+theorem Memory::store_renames(self m: Memory, blocks: Blocks, r: Renaming, renamed: Memory, renamed_blocks: Blocks, rel: MemoryRenamed(r, m, renamed),
+    blocks_renamed: BlocksRenamed(r, blocks, renamed_blocks), loc: Loc, bytes: List<BitVec(8)>):
+    MemoryAlike(r, m.store(blocks, loc, bytes), renamed.store(renamed_blocks, loc.rename(r), bytes)) {
+    m.put_renames(blocks, r, renamed, renamed_blocks, rel, blocks_renamed, loc, Piece::plain(bytes))
 }
 
-theorem Memory::store_ref_renames(self m: Memory, r: Renaming, renamed: Memory, rel: MemoryRenamed(r, m, renamed), loc, target: Loc):
-    MemoryAlike(r, m.store_ref(loc, target), renamed.store_ref(loc.rename(r), target.rename(r))) {
-    m.put_renames(r, renamed, rel, loc, Piece::reference(target))
+theorem Memory::store_ref_renames(self m: Memory, blocks: Blocks, r: Renaming, renamed: Memory, renamed_blocks: Blocks, rel: MemoryRenamed(r, m, renamed),
+    blocks_renamed: BlocksRenamed(r, blocks, renamed_blocks), loc, target: Loc):
+    MemoryAlike(r, m.store_ref(blocks, loc, target), renamed.store_ref(renamed_blocks, loc.rename(r), target.rename(r))) {
+    m.put_renames(blocks, r, renamed, renamed_blocks, rel, blocks_renamed, loc, Piece::reference(target))
 }
 
-theorem Memory::copy_renames(self m: Memory, r: Renaming, renamed: Memory, rel: MemoryRenamed(r, m, renamed), target, source: Loc, n: Nat):
-    MemoryAlike(r, m.copy(target, source, n), renamed.copy(target.rename(r), source.rename(r), n)) {
+theorem Memory::copy_renames(self m: Memory, blocks: Blocks, r: Renaming, renamed: Memory, renamed_blocks: Blocks, rel: MemoryRenamed(r, m, renamed),
+    blocks_renamed: BlocksRenamed(r, blocks, renamed_blocks), target, source: Loc, n: Nat):
+    MemoryAlike(r, m.copy(blocks, target, source, n), renamed.copy(renamed_blocks, target.rename(r), source.rename(r), n)) {
     j(sym(m.take_renames(r, renamed, rel, source, n)), λ o _ =>
-            MemoryAlike(r, m.copy(target, source, n), match o { None => None, Some(piece) => renamed.put(target.rename(r), piece) }),
+            MemoryAlike(r, m.copy(blocks, target, source, n), match o { None => None, Some(piece) => renamed.put(renamed_blocks, target.rename(r), piece) }),
         (match m.take(source, n) as λ o =>
-            MemoryAlike(r, match o { None => None, Some(piece) => m.put(target, piece) },
-                match o.map(λ (p: Piece) => p.rename(r)) { None => None, Some(piece) => renamed.put(target.rename(r), piece) }) {
+            MemoryAlike(r, match o { None => None, Some(piece) => m.put(blocks, target, piece) },
+                match o.map(λ (p: Piece) => p.rename(r)) { None => None, Some(piece) => renamed.put(renamed_blocks, target.rename(r), piece) }) {
             None => trivial,
-            Some(piece) => m.put_renames(r, renamed, rel, target, piece),
+            Some(piece) => m.put_renames(blocks, r, renamed, renamed_blocks, rel, blocks_renamed, target, piece),
         }))
 }
 
 // ---------------------------------------------------------------------------
-// Canonical: a reference's eight bytes are zero
+// Canonical: a reference's eight bytes are zero, and an undefined byte is
 
 // Eight zero bytes lie in `bytes` from `at`.
 fn ZeroAt(bytes: List<BitVec(8)>, at: Nat) → Type { (at + 8 <= bytes.len()) ∧ (bytes.window(at, at + 8) = word_bytes(BitVec::zero())) }
@@ -589,16 +679,62 @@ fn EveryPointer(pointers: List<Pointer>, P: Pointer → Type) → Type {
 }
 
 // Each reference of a piece sits on eight zero bytes of it.
-fn Piece::Canonical(self piece: Piece) → Type { EveryPointer(piece.pointers, λ (p: Pointer) => ZeroAt(piece.bytes, p.at)) }
+// and each undefined byte of it is zero.
+fn Piece::Canonical(self piece: Piece) → Type {
+    EveryPointer(piece.pointers, λ (p: Pointer) => ZeroAt(piece.bytes, p.at)) ∧
+        ((i: Nat) → flag(piece.undefined, i) = True → byte_at(piece.bytes, i) = BitVec::zero())
+}
 
 // Each entry of the shadow sits on eight zero bytes of its block, so what
 // a heap reads is its bytes and its entries: two heaps that read alike are
 // `Memory::Same`.
-fn Memory::Canonical(self m: Memory) → Type { Every(m.heap.shadow, λ (e: Entry) => ZeroAt(m.heap.bytes(e.block), e.at)) }
+// So is each undefined byte.
+fn Memory::Canonical(self m: Memory) → Type {
+    Every(m.heap.shadow, λ (e: Entry) => ZeroAt(m.heap.bytes(e.block), e.at)) ∧
+        ((c, i: Nat) → m.undefined(c, i) = True → byte_at(m.heap.bytes(c), i) = BitVec::zero())
+}
 
-theorem Piece::plain_canonical(bytes: List<BitVec(8)>): Piece::plain(bytes).Canonical() { trivial }
+theorem Piece::plain_canonical(bytes: List<BitVec(8)>): Piece::plain(bytes).Canonical() { ⟨trivial, λ i never => absurd(never)⟩ }
 
-theorem Piece::reference_canonical(target: Loc): Piece::reference(target).Canonical() { ⟨⟨omega, refl⟩, trivial⟩ }
+theorem Piece::reference_canonical(target: Loc): Piece::reference(target).Canonical() { ⟨⟨⟨omega, refl⟩, trivial⟩, λ i never => absurd(never)⟩ }
+
+theorem byte_at_zeros(n: Nat): (i: Nat) → byte_at(List::replicate(BitVec::zero(), n), i) = BitVec::zero() {
+    match n { Zero => λ i => refl, Succ(more) => λ i => match i { Zero => refl, Succ(after) => byte_at_zeros(more, after) } }
+}
+
+theorem Piece::undefined_canonical(n: Nat): Piece::undefined(n).Canonical() { ⟨trivial, λ i _ => byte_at_zeros(n, i)⟩ }
+
+// A flag of a window set: a byte inside it, undefined.
+theorem flags_set(undefined: Nat → Nat → Bool, b, n: Nat): (k, i: Nat) → flag(flags(undefined, b, k, n), i) = True →
+    (i < n) ∧ (undefined(b, k + i) = True) {
+    match n {
+        Zero => λ k i never => absurd(never),
+        Succ(rest) => λ k i => match i {
+            Zero => λ here => {
+                let at: (k + 0 = k) = omega;
+                ⟨omega, rewrite(at, here)⟩
+            },
+            Succ(after) => λ later => {
+                let deeper = flags_set(undefined, b, rest, k + 1, after, later);
+                let at: ((k + 1) + after = k + (after + 1)) = omega;
+                ⟨omega(deeper.left), rewrite(sym(at), deeper.right)⟩
+            },
+        },
+    }
+}
+
+// An undefined byte of a canonical memory, read through a window.
+theorem flags_zero(bytes: List<BitVec(8)>, undefined: Nat → Nat → Bool, b, k, n: Nat, fits: k + n <= bytes.len(),
+    zero: (i: Nat) → undefined(b, i) = True → byte_at(bytes, i) = BitVec::zero()):
+    (i: Nat) → flag(flags(undefined, b, k, n), i) = True → byte_at(bytes.window(k, k + n), i) = BitVec::zero() {
+    λ i set => {
+        let inside = flags_set(undefined, b, n, k, i, set);
+        let at: (k + i = i + k) = omega;
+        let read: (bytes.window(k, k + n).nth(i) = bytes.nth(i + k)) = bytes.nth_window(k, k + n, i, omega(inside.left));
+        j(sym(read), λ o _ => (match o { None => BitVec::zero(), Some(byte) => byte }) = BitVec::zero(),
+            zero(i + k, rewrite(sym(at), inside.right)))
+    }
+}
 
 theorem every_append(P: Entry → Type, xs, ys: List<Entry>): Every(xs, P) → Every(ys, P) → Every(xs ++ ys, P) {
     match xs { Nil => λ _ all => all, Cons(_, rest) => λ here all => ⟨here.left, every_append(P, rest, ys, here.right, all)⟩ }
@@ -640,7 +776,8 @@ theorem Memory::take_canonical(self m: Memory, loc: Loc, n: Nat, piece: Piece, t
     let facts = m.take_some(loc, n, piece, taken);
     let fits: (loc.offset + n <= m.heap.bytes(loc.block).len()) = omega(facts.left);
     j(facts.right.right, λ p _ => p.Canonical(),
-        pointers_canonical(m.heap.bytes, loc.block, loc.offset, n, fits, m.heap.shadow, canonical))
+        ⟨pointers_canonical(m.heap.bytes, loc.block, loc.offset, n, fits, m.heap.shadow, canonical.left),
+         flags_zero(m.heap.bytes(loc.block), m.undefined, loc.block, loc.offset, n, fits, λ i h => canonical.right(loc.block, i, h))⟩)
 }
 
 // A piece's references, put at `k`, sit on its zero bytes there.
@@ -700,33 +837,80 @@ theorem cleared_canonical(bytes: Nat → List<BitVec(8)>, b, k: Nat, ys: List<Bi
     }
 }
 
+// An undefined byte after a put: one of the piece's, or one that was.
+theorem placed_undefined_zero(m: Memory, loc: Loc, piece: Piece, fits: piece.bytes.len() + loc.offset <= m.heap.bytes(loc.block).len(),
+    zero: (c, i: Nat) → m.undefined(c, i) = True → byte_at(m.heap.bytes(c), i) = BitVec::zero(),
+    piece_zero: (i: Nat) → flag(piece.undefined, i) = True → byte_at(piece.bytes, i) = BitVec::zero(), c, i: Nat):
+    m.placed_at(loc, piece).undefined(c, i) = True → byte_at(m.placed_at(loc, piece).heap.bytes(c), i) = BitVec::zero() {
+    let b = loc.block;
+    let k = loc.offset;
+    let n = piece.bytes.len();
+    let now = m.heap.bytes(b).put_window(k, piece.bytes);
+    (match in_window(b, k, n, c, i) as λ v => in_window(b, k, n, c, i) = v →
+            (match v { True => flag(piece.undefined, i - k), False => m.undefined(c, i) }) = True →
+            byte_at(set_block(m.heap.bytes, b, now, c), i) = BitVec::zero() {
+        True => λ inside set => {
+            let parts = Bool::and_true_parts(c.same(b), k.leb(i) && (i + 1).leb(k + n), inside);
+            let block: (c = b) = c.same_sound(b, parts.left);
+            let here: (set_block(m.heap.bytes, b, now, c) = now) =
+                j(sym(block), λ x _ => set_block(m.heap.bytes, b, now, x) = now, set_block_here(m.heap.bytes, b, now));
+            let at: ((i - k) + k = i) = omega(parts.right);
+            let read: (now.nth(i) = piece.bytes.nth(i - k)) = trans(cong_fn<Nat, Option<BitVec(8)>>(λ x => now.nth(x), sym(at)),
+                m.heap.bytes(b).nth_put_window_inside(k, piece.bytes, i - k, omega(parts.right), omega(fits)));
+            rewrite(here, j(sym(read), λ o _ => (match o { None => BitVec::zero(), Some(byte) => byte }) = BitVec::zero(), piece_zero(i - k, set)))
+        },
+        False => λ outside was => match c.eq_dec(b) {
+            Inl(same) => {
+                let here: (set_block(m.heap.bytes, b, now, c) = now) =
+                    j(sym(same), λ x _ => set_block(m.heap.bytes, b, now, x) = now, set_block_here(m.heap.bytes, b, now));
+                let range: ((k.leb(i) && (i + 1).leb(k + n)) = False) =
+                    trans(sym(cong_fn<Bool, Bool>(λ v => v && (k.leb(i) && (i + 1).leb(k + n)), c.same_of_eq(b, same))), outside);
+                let old: (byte_at(m.heap.bytes(c), i) = BitVec::zero()) = zero(c, i, was);
+                let old_b: (byte_at(m.heap.bytes(b), i) = BitVec::zero()) = j(same, λ x _ => byte_at(m.heap.bytes(x), i) = BitVec::zero(), old);
+                let read: (now.nth(i) = m.heap.bytes(b).nth(i)) = match (i + 1).leb(k) as λ v => (i + 1).leb(k) = v → now.nth(i) = m.heap.bytes(b).nth(i) {
+                    True => λ before => m.heap.bytes(b).nth_put_window_before(k, piece.bytes, i, omega(before), omega(fits)),
+                    False => λ after => {
+                        let at: ((i - (n + k)) + (n + k) = i) = omega(after, range);
+                        trans(cong_fn<Nat, Option<BitVec(8)>>(λ x => now.nth(x), sym(at)),
+                            trans(m.heap.bytes(b).nth_put_window_after(k, piece.bytes, i - (n + k), omega(fits)),
+                                cong_fn<Nat, Option<BitVec(8)>>(λ x => m.heap.bytes(b).nth(x), at)))
+                    },
+                }(refl);
+                rewrite(here, j(sym(read), λ o _ => (match o { None => BitVec::zero(), Some(byte) => byte }) = BitVec::zero(), old_b))
+            },
+            Inr(differs) => rewrite(set_block_other(m.heap.bytes, b, now, c, differs), zero(c, i, was)),
+        },
+    })(refl)
+}
+
 // A put of a canonical piece into a canonical memory leaves it canonical.
-theorem Memory::put_canonical(self m: Memory, loc: Loc, piece: Piece, after: Memory, put: m.put(loc, piece) = Some(after),
+theorem Memory::put_canonical(self m: Memory, blocks: Blocks, loc: Loc, piece: Piece, after: Memory, put: m.put(blocks, loc, piece) = Some(after),
     canonical: m.Canonical(), piece_canonical: piece.Canonical()): after.Canonical() {
-    let facts = m.put_some(loc, piece, after, put);
+    let facts = m.put_some(blocks, loc, piece, after, put);
     let fits: (piece.bytes.len() + loc.offset <= m.heap.bytes(loc.block).len()) = omega(facts.right.left);
     j(facts.right.right.right, λ a _ => a.Canonical(),
-        every_append(λ (e: Entry) => ZeroAt(set_block(m.heap.bytes, loc.block, m.heap.bytes(loc.block).put_window(loc.offset, piece.bytes), e.block), e.at),
+        ⟨every_append(λ (e: Entry) => ZeroAt(set_block(m.heap.bytes, loc.block, m.heap.bytes(loc.block).put_window(loc.offset, piece.bytes), e.block), e.at),
             placed(piece.pointers, loc.block, loc.offset), range_cleared(m.heap.shadow, loc.block, loc.offset, piece.bytes.len()),
-            placed_canonical(m.heap.bytes, loc.block, loc.offset, piece, fits, piece.pointers, piece_canonical),
-            cleared_canonical(m.heap.bytes, loc.block, loc.offset, piece.bytes, fits, m.heap.shadow, canonical)))
+            placed_canonical(m.heap.bytes, loc.block, loc.offset, piece, fits, piece.pointers, piece_canonical.left),
+            cleared_canonical(m.heap.bytes, loc.block, loc.offset, piece.bytes, fits, m.heap.shadow, canonical.left)),
+         λ c i => placed_undefined_zero(m, loc, piece, fits, canonical.right, piece_canonical.right, c, i)⟩)
 }
 
 // So every store keeps a heap canonical, a copy among them: what it puts
 // is a take's piece.
-theorem Memory::copy_canonical(self m: Memory, target, source: Loc, n: Nat, after: Memory, copied: m.copy(target, source, n) = Some(after),
-    canonical: m.Canonical()): after.Canonical() {
-    let facts = m.copy_some(target, source, n, after, copied);
-    m.put_canonical(target, m.piece_at(source, n), after, facts.right, canonical,
+theorem Memory::copy_canonical(self m: Memory, blocks: Blocks, target, source: Loc, n: Nat, after: Memory,
+    copied: m.copy(blocks, target, source, n) = Some(after), canonical: m.Canonical()): after.Canonical() {
+    let facts = m.copy_some(blocks, target, source, n, after, copied);
+    m.put_canonical(blocks, target, m.piece_at(source, n), after, facts.right, canonical,
         m.take_canonical(source, n, m.piece_at(source, n), facts.left, canonical))
 }
 
-theorem Memory::store_canonical(self m: Memory, loc: Loc, bytes: List<BitVec(8)>, after: Memory, stored: m.store(loc, bytes) = Some(after),
-    canonical: m.Canonical()): after.Canonical() {
-    m.put_canonical(loc, Piece::plain(bytes), after, stored, canonical, Piece::plain_canonical(bytes))
+theorem Memory::store_canonical(self m: Memory, blocks: Blocks, loc: Loc, bytes: List<BitVec(8)>, after: Memory,
+    stored: m.store(blocks, loc, bytes) = Some(after), canonical: m.Canonical()): after.Canonical() {
+    m.put_canonical(blocks, loc, Piece::plain(bytes), after, stored, canonical, Piece::plain_canonical(bytes))
 }
 
-theorem Memory::store_ref_canonical(self m: Memory, loc, target: Loc, after: Memory, stored: m.store_ref(loc, target) = Some(after),
-    canonical: m.Canonical()): after.Canonical() {
-    m.put_canonical(loc, Piece::reference(target), after, stored, canonical, Piece::reference_canonical(target))
+theorem Memory::store_ref_canonical(self m: Memory, blocks: Blocks, loc, target: Loc, after: Memory,
+    stored: m.store_ref(blocks, loc, target) = Some(after), canonical: m.Canonical()): after.Canonical() {
+    m.put_canonical(blocks, loc, Piece::reference(target), after, stored, canonical, Piece::reference_canonical(target))
 }
