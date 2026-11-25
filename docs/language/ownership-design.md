@@ -1013,7 +1013,9 @@ The checker is one forward pass over the body with a state per place:
   `gone`.
 - A view to read adds a viewer; a view to write turns `whole` to `out`.
   The viewer of an `out` place may read and write it.
-- A death removes the viewer, or restores `whole`.
+- A death removes the viewer, or restores `whole`. The death of an owner
+  is a take, so it needs the place `whole`: a view cannot outlive what it
+  views.
 - A join is the meet, with regions coarsened. A type that may not be
   dropped may not be `gone` by weakening.
 - Overlap is decided on the places' steps where they are closed; otherwise
@@ -1058,8 +1060,8 @@ is the last use; a join is the union of the place sets.
 - **`sharing_sound`** (once): `Safe` gives that the level-2 run of the plan
   agrees with the meaning and stores only inside what it took or was lent
   to write.
-- **`placement_sound`** (once): layout and placement take level 2 to
-  FunctionIR with live blocks in disjoint windows. The separation algebra
+- **`placement_sound`** (once): layout and placement take level 2 to the
+  bytes level with typed cells (§15.5), live blocks in disjoint windows. The separation algebra
   of the first two waves (`Held`, exclusive footprints, the arena's
   `alloc_fresh`) is this theorem's mathematics, and the parallel licence's.
 - Then the lowering as built, accepting a load or a store under a fact.
@@ -1076,8 +1078,9 @@ ops   ::= new(shape) | load | store | narrow | dead
 ```
 
 A block's cells are typed (words, bytes, references), with no layout and no
-address; the meaning is unchanged by renaming blocks. `dead` is a fact with
-no code, emitted at a death and read by placement. A stored view, a view
+address; the meaning is unchanged by renaming blocks. `dead` is emitted at
+a death, one for the whole value; it has no code at level 2, and placement
+gives it code or none (§15.10). A stored view, a view
 chosen by a test, and a view returned into a caller's record are all a
 `Ref` held as a value.
 
@@ -1085,7 +1088,7 @@ This level stands above FunctionIR, which is bytes with static buffer
 numbers. One new pass joins them: steps become byte spans (`Part`,
 `Stored`) and each live block gets its memory.
 
-**What a `Ref` becomes below** (lean: the third; Minus to decide). Three
+**What a `Ref` becomes below** (the third; settled, §15.7). Three
 candidates were worked through. One buffer with every supply a window of it
 and a reference an offset: cheapest in proved code, but a span lent by a
 Rust caller stays a second buffer, so a stored reference into either is
@@ -1103,7 +1106,7 @@ with one supply, so level 2 and `placement_sound` are written against the
 general interface.
 
 `new` names no supply in the source or the meaning for an owned object:
-identity first appears at level 2. (Lean; Minus has not settled it.)
+identity first appears at level 2.
 
 **The allocation policy is not a design commitment.** For memory obtained
 at run time the checked thing is an allocator, and `placement_sound` is one
@@ -1114,7 +1117,7 @@ with enough room it never fails. These are the arena's `alloc_fresh` and
 compile time is the case discharged by a plan checker. So the first build
 may be the simplest allocator.
 
-**What is a commitment** (Minus to decide):
+**What is a commitment** (settled as leaned, §15.7):
 
 - *When memory runs out.* The meaning is total, so an owned `new` cannot
   fail in it. Lean: the machine theorem says the code computes the meaning
@@ -1238,11 +1241,14 @@ across statements, a join, stored references) is
   injection of blocks at the last step, placelessness a property of the
   language.
 
+- **The first reclaiming allocator frees at the death**, so the bound is
+  the peak a reader can see; a lazy one stays possible as a policy under
+  the same laws.
+- **`defer` is for a release that cannot fail**; a close that can fail is
+  written as the bracket, so its error is combined.
+
 Still open:
 
-1. How memory bounds are stated, found and discharged at an export.
-2. The design of deaths: what code a type's death is, where it may be
-   elided, and the bulk forms.
 3. That the inference rule's answer checks whenever any annotation does
    (§15.3): argued, to be proved with the judgment.
 4. Whether an owner may read a part it has lent to write, which eager
@@ -1255,16 +1261,154 @@ Per function, in the module's interface: its region parameters (and for
 each whether an erased owner goes in and out); per parameter its class,
 its mode (take, read, write), the parts it may write, and what places its
 type's regions stand for; for the result its class and whether it is fresh,
-is a parameter, or is a view of places of parameters; and whether it
-allocates. Residual preconditions are not extra data: they are the proof
+is a parameter, or is a view of places of parameters; and its cost (none, a
+bound with its theorem, or unstated: §15.9). Residual preconditions are not extra data: they are the proof
 parameters in the kernel type. A caller's checker reads the modes to step
 its place states across the call, the result's origin to know what is
 frozen or out while the result lives, the parts to emit `Apart` against
 views it holds, and the name of the callee's safety theorem to cite. It
 reads no summary of what the callee keeps.
 
-The inferred fields (take or read, fresh or a parameter, allocates) are in
+The inferred fields (take or read, fresh or a parameter, a cost of none) are in
 the interface, so a body that flips one changes the interface and its
 importers are checked again: a caller that used `v` after `f(v)` is refused
 when `f` starts consuming it. A callee's plan, deaths and internal
 residuals are not in it.
+
+### 15.9 Memory bounds
+
+A cost is a pair: the high-water mark of live size above the entry, and the
+change in live size at the exit (an integer: a function that consumes an
+argument has a negative one). Costs compose in sequence as `(max(a.peak,
+a.net + b.peak), a.net + b.net)`, a monoid. A `new` of size `n` is `(n, n)`;
+a death is `(0, -size)`; a call is the callee's cost at its arguments, which
+is the callee's peak on top of the caller's live size; a loop is the fold
+over its passes. `Cost2(f, args)` is this read off the level-2 run, with
+sizes from the layout. The total allocated, which a bump allocator consumes,
+is the same recursion in the naturals under addition, and a step bound
+later is that monoid over steps: one judgment, parameterised by a monoid.
+
+- **Published**: nothing for `Cost2`, which every function has. A bound is
+  a theorem beside the function, `f::room: Cost2(f, args) <= bound(args)`
+  with `bound` a level-1 term, and the interface's cost field names it.
+  Importers depend on the stated bound, so a body that keeps it provable
+  does not change the interface. `no_alloc` is the demand for a cost of
+  none.
+- **Found** by a second judgment of the checker's shape: `cost(f, plan)`
+  answers a bound term and residuals, and `cost_sound` gives the bound from
+  them. Automatic where there is no `new`, where sizes are literals or
+  terms in the arguments with no loop of positive net, and for a loop whose
+  pass has net at most zero. A loop whose live size grows asks the user for
+  a potential, and the residuals are each pass's net against its
+  difference. A growable container's size is level-2 state, so its type
+  publishes a law bounding it by its level-1 length.
+- **Used** at an export: with a bound, the wrapper evaluates it and compares
+  it with the room given, a failure being an answer in the export's written
+  result type; or it sizes a region by it. With none, the machine theorem
+  is "computes the meaning or stops at the defined exit". An internal call
+  composes its callee's bound.
+
+A tokenizer over a doubling vector has both buffers live at a growth, so its
+bound is about three tokens' sizes per input byte, from the vector's law and
+the invariant "tokens so far at most bytes consumed"; with the vector made
+at the input's length it is one `new`, automatic, and the same invariant
+proves each push has room. A loop that replaces its state each pass has a
+pass of net zero, so its bound is two states and does not grow with the
+count; under a bump allocator the same pass computes the total, which does.
+
+This is the metered model `memory-bound-certificates` asks for and
+`hih-alloc-metering`'s done-when, and the capacity `datarepr-design.md` §2.3
+says an out-of-memory outcome is erased relative to.
+
+### 15.10 Deaths
+
+A death at level 2 is one `dead(x)` for the whole value: every block
+reached through owning cells. A view and a key own nothing.
+
+| Value | Code at placement |
+|---|---|
+| Plain data; an object in a frame slot, a stated region or a bump supply | none |
+| A vector of plain data, in a reclaiming allocator | one free |
+| A vector of owned buffers | a loop freeing each, then one free |
+| A tree | a traversal, linear in its blocks, in constant stack |
+| A store | a walk of its live slots if their values own blocks; a key's death is nothing |
+| A record holding a view | nothing for the view |
+| A value that may not be dropped | none exists: it is consumed |
+
+A type's death is nothing exactly when it owns no block in a reclaiming
+allocator, decided on the type's description beside the copy decider. The
+traversal is one function over shape descriptions, proved once and
+specialised per type: it terminates because ownership is a tree, which
+exclusivity gives, and it runs in constant stack by threading its worklist
+through the dead blocks.
+
+Partial deaths need no flags, since place states are static at every point:
+a record with a field moved out frees the rest; a conditional move puts the
+death on the edge of the arm that did not move; an element moved out at an
+index is skipped. A pop while a view of another element lives owes that
+they are apart.
+
+A value that may not be dropped and is live at an early exit is refused.
+What is written is a bracket, an ordinary higher-order function whose
+finaliser takes the resource and the block's result, so a close's error is
+combined and not lost; `defer` is its sugar over the rest of a scope.
+
+Against Rust: no drop flags, no user code at a death (so no drop order and
+nothing that can fail there), no unwinding paths since the language is
+total, a death at the last use and not the scope's end, a traversal that
+cannot overflow the stack, bulk death by a stated region, and the cost of a
+death as a term in §15.9's bounds. Merely different: a container of owned
+things still costs a walk; a guard or a counted pointer is a type that may
+not be dropped, with a written release; an early exit holding a resource
+costs a bracket.
+
+## 16. The order of building
+
+From the design partner's reading of the back half (sizes measured; how
+local the typed-cells change is in the two largest lowering modules is not
+yet known).
+
+**Three interfaces first**, definitions and law records with no proofs, so
+that work on either side is against a record: level 1 (the reflected form,
+the annotation, residuals, the signature record of §15.8 with its cost
+field); level 2 (its syntax, heap and run, the `new` and `dead` events,
+steps); and the bytes level's contract (memory with references, the
+allocator's laws, the statement of the injection).
+
+| # | Package | Needs | Done when |
+|---|---|---|---|
+| 1 | The three interfaces | the experiments | the modules check; a probe states each theorem's type |
+| 2 | Paths as data: steps, their denotation, the apartness decider | nothing | sound against `Apart`, complete on steps; `split_at_mut` and two fields by evaluation |
+| 3 | The checker with calls, write views, regions, joins and loops, and `check_sound` | 1, 2 | the experiments' programs through it; the inference rule's completeness proved or refuted |
+| 4 | Level 2 and `sharing_sound` | 1 | a planned program's level-2 run equals its meaning |
+| 5 | Typed cells and the injection to x86 | 1 | a reference stored, loaded and read through, compiled; existing certificates unchanged |
+| 6 | Layout, the allocator's laws, a bump allocator, `placement_sound` | 1 | live blocks disjoint; the arena's laws an instance |
+| 7 | `cost` and `cost_sound` | 1 | §15.9's two examples with their bounds |
+| 8 | Deaths: the traversal, a reclaiming allocator | 6 | a tree freed in constant stack; a replace loop's cost independent of its count |
+| 9 | The surface: region parameters, stored borrows, eager write-back, the inference rule, interface fields | 1 | probes; the image carries the signature record |
+| 10 | One reflector to level 1 with site facts | 1, 9 | a function with a found proof compiles with no bounds comparison |
+| 11 | Port the arena, the word map, the linked lexer and hashes; delete the four languages | all | `scripts/linked --check`; the suite |
+
+After package 1: 2 then 3; 4; 5; 6; 7; 9 run beside each other. 4, 6 and 7
+meet only through level 2's interface, 5 and 6 only through the bytes
+level's.
+
+**The typed-cells change is made additively.** `Buffers()` stays bytes; a
+shadow beside it says which slots of which block hold a reference and to
+what; a reference value kind and its nodes are added; the injection says
+the machine's bytes are the buffer's off the shadow and the target's address
+on it. Every buffer that exists has an empty shadow, so every existing
+theorem is the special case and keeps its statement. About half of
+`lib/native/function_ir` by size is heavy on buffers; the operations, loops,
+certificates and word rules are untouched, and little of
+`lib/std/arch/x86_64` is.
+
+**The riskiest package is 5**, the only one that changes proved code: the
+lowering's central invariant, "a register holds the valuation's word",
+becomes for a reference "holds the address of the valuation's reference",
+and whether that splits cleanly by kind is unknown. Its earliest test is a
+third experiment: a toy bytes-level language with word and reference values
+and one shadowed block; a store of a reference, a load of it, a byte load
+through it; lowered to x86 and proved by the injection. The second risk is
+the kernel's cost of evaluating the checker on real functions; if it is
+bad, the checker runs on the untrusted evaluator, as reads do.
