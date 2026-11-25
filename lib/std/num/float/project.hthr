@@ -616,3 +616,159 @@ theorem Nat::count_away_all(k, M: Nat, km: k <= M): Nat::count_away(k, M, M) = k
     let e = Nat::count_away_eq(k, M, km, M);
     omega
 }
+
+// ---------------------------------------------------------------------------
+// Round to odd's exactness: inside the range an even result is the value.
+
+// Past its greatest float `d` and inside the range, a nonnegative `y` has a
+// least float above it one step up from `d`'s cell, and that step flips the
+// code's parity (`UpIs`), so `d` and `u` are never both even.
+theorem Format::step_parity(self F: Format, y: Rat, d, u: Finite(F), yn: 0 <= y, bd: Finite::Below(y, d), au: Finite::Above(y, u),
+    dy: d.val() < y, hi: y <= (Finite::max_finite(F)).val()): Finite::Even(d) → ¬Finite::Even(u)
+{
+    let M = Finite::max_finite(F);
+    let h = F.rat_h(y);
+    let st = F.rat_st(y);
+    let a: F.Approx(y, h, st) = F.approx_respects(y.abs(), y, h, st, y.abs_of_nonneg(yn), F.rat_approx(y));
+    let D = F.down(h);
+    let dD: (d.val() ≈ D.val()) = Finite::below_unique(y, d, D, bd, F.down_is_below(y, h, st, a));
+    let Dy: (D.val() < y) = Rat::lt_respects(dD, y.same_refl(), dy);
+    let not_max = λ (e: D.val() ≈ M.val()) => Rat::lt_irrefl(y, Rat::lt_of_le_of_lt(hi, Rat::lt_respects(e, y.same_refl(), Dy)));
+    match (h + 1).le_dec(F.limit_h()) {
+        Inr(over) => {
+            let dm: (D = M) = F.down_over(h, Nat::le_of_not_lt(h, F.limit_h(), over));
+            false_elim(not_max(j(dm, λ v _ => D.val() ≈ v.val(), D.val().same_refl())))
+        },
+        Inl(below) => {
+            let le = F.down_H_le(h);
+            let inexact: (D.H() < h.int() + Nat::of_bit(st).int()) = match Int::le_dec(h.int() + Nat::of_bit(st).int(), D.H()) {
+                Inr(nge) => omega(nge),
+                Inl(ge) => false_elim(match st as λ s => F.Approx(y, h, s) → h.int() + Nat::of_bit(s).int() <= D.H() → False {
+                    True => λ _ g => { let b1: (Nat::of_bit(True) = 1) = refl; omega(g, le, b1) },
+                    False => λ (a0: F.Approx(y, h, False)) g => {
+                        let b0: (Nat::of_bit(False) = 0) = refl;
+                        let eqh: (D.H() = h.int()) = omega(g, le, b0);
+                        let Dg: (D.val() ≈ F.grid(h.int())) = j(eqh, λ v _ => D.val() ≈ F.grid(v), D.val_grid());
+                        Rat::lt_irrefl(y, Rat::lt_respects(Rat::same_trans(Dg, Rat::same_sym(a0)), y.same_refl(), Dy))
+                    },
+                }(a, ge)),
+            };
+            let db = F.down_below(h, below);
+            let pd = Finite::parts_of_same(d, D, dD, F.down_pos(h));
+            let Ld = F.lsb_congr(d.mag, d.bexp, F.m_of(h), F.e_of(h), trans(pd.left, db.right.left), trans(pd.right, db.right.right));
+            match F.up_cases(h, below) {
+                Inl(up) => {
+                    let uU: (u.val() ≈ up.u.val()) = Finite::above_unique(y, u, up.u, au, F.up_is_above(y, h, st, a, below, F.up(h), up, inexact));
+                    let pu = Finite::parts_of_same(u, up.u, uU, up.pos);
+                    let Lu = F.lsb_congr(u.mag, u.bexp, up.u.mag, up.u.bexp, pu.left, pu.right);
+                    λ ev eu => up.odd(j(Ld, λ v _ => Nat::Even(v), ev))(j(Lu, λ v _ => Nat::Even(v), eu))
+                },
+                Inr(none) => {
+                    let dh = F.down_H(h, below);
+                    let p1: (Nat::pow(2, F.span + 1) = Nat::pow(2, F.span) * 2) = refl;
+                    let e1: (F.m_of(h) * Nat::pow(2, F.e_of(h) + 1) = F.max_mag() * Nat::pow(2, F.span + 1)) =
+                        trans(Nat::cong(λ (w: Nat) => w * Nat::pow(2, F.e_of(h) + 1), none.right.right),
+                            Nat::cong(λ (w: Nat) => F.max_mag() * Nat::pow(2, w + 1), none.right.left));
+                    let e2: (F.max_mag() * Nat::pow(2, F.span + 1) = (F.max_mag() * Nat::pow(2, F.span)) * 2) = ring(p1);
+                    let mh = Finite::max_H(F);
+                    false_elim(not_max(Finite::same_of_H_eq(D, M, omega(dh, e1, e2, mh))))
+                },
+            }
+        },
+    }
+}
+
+// Why round to odd kept the truncation (odd, or exact) or stepped (even and
+// inexact).
+theorem Format::round_odd_fin_spec(self F: Format, x: Rat, f: Finite(F)):
+    (F.round_odd_fin(x, f) = Float::Fin(f) ∧ (¬Finite::Even(f) ∨ f.val() ≈ x))
+        ∨ (F.round_odd_fin(x, f) = F.round_rat(Format::away_mode(x), x) ∧ Finite::Even(f) ∧ (f.val() < x ∨ x < f.val()))
+{
+    let A = F.round_rat(Format::away_mode(x), x);
+    match Nat::even_dec(F.lsb(f.mag, f.bexp)) as λ d =>
+        ((match d { Inr(_) => Float::Fin(f), Inl(_) => match f.val().le_dec(x) { Inl(_) => match x.le_dec(f.val()) { Inl(_) => Float::Fin(f), Inr(_) => A }, Inr(_) => A } }) = Float::Fin(f)
+            ∧ (¬Finite::Even(f) ∨ f.val() ≈ x))
+        ∨ ((match d { Inr(_) => Float::Fin(f), Inl(_) => match f.val().le_dec(x) { Inl(_) => match x.le_dec(f.val()) { Inl(_) => Float::Fin(f), Inr(_) => A }, Inr(_) => A } }) = A
+            ∧ Finite::Even(f) ∧ (f.val() < x ∨ x < f.val()))
+    {
+        Inr(nev) => Inl(And(refl, Inl(nev))),
+        Inl(ev) => match f.val().le_dec(x) as λ d2 =>
+            ((match d2 { Inl(_) => match x.le_dec(f.val()) { Inl(_) => Float::Fin(f), Inr(_) => A }, Inr(_) => A }) = Float::Fin(f) ∧ (¬Finite::Even(f) ∨ f.val() ≈ x))
+            ∨ ((match d2 { Inl(_) => match x.le_dec(f.val()) { Inl(_) => Float::Fin(f), Inr(_) => A }, Inr(_) => A }) = A ∧ Finite::Even(f) ∧ (f.val() < x ∨ x < f.val()))
+        {
+            Inl(le) => match x.le_dec(f.val()) as λ d3 =>
+                ((match d3 { Inl(_) => Float::Fin(f), Inr(_) => A }) = Float::Fin(f) ∧ (¬Finite::Even(f) ∨ f.val() ≈ x))
+                ∨ ((match d3 { Inl(_) => Float::Fin(f), Inr(_) => A }) = A ∧ Finite::Even(f) ∧ (f.val() < x ∨ x < f.val()))
+            {
+                Inl(ge) => Inl(And(refl, Inr(Rat::le_antisymm(le, ge)))),
+                Inr(nge) => Inr(And(refl, And(ev, Inl(Rat::lt_of_not_le(x := f.val(), y := x, h := nge))))),
+            },
+            Inr(nle) => Inr(And(refl, And(ev, Inr(Rat::lt_of_not_le(x := x, y := f.val(), h := nle))))),
+        },
+    }
+}
+
+// Round to odd's diagnostic (FLoPS §3.3, issues/float-round-to-odd.md):
+// inside the finite range an even result is exact. Past the range it fails
+// where saturation clamps to an even largest float (E4M3; the test file's
+// negative control).
+theorem Format::round_odd_even_exact(self F: Format, x: Rat, g: Finite(F), h: F.round_odd(x) = Fin(g), ev: Finite::Even(g),
+    lo: -(Finite::max_finite(F)).val() <= x, hi: x <= (Finite::max_finite(F)).val()): g.val() ≈ x
+{
+    let M = Finite::max_finite(F);
+    let tz = F.round_rat_correct(TowardZero, x);
+    match F.round_rat(TowardZero, x) as λ r => RoundsTo(F, TowardZero, x, r)
+        → (match r { Fin(f) => F.round_odd_fin(x, f), Inf(n, hh) => Float::Inf(n, hh), NaN(hh) => Float::NaN(hh) }) = Float::Fin(g) → g.val() ≈ x
+    {
+        Fin(f) => λ hf e => match F.round_odd_fin_spec(x, f) {
+            Inl(kept) => {
+                let gf: (g = f) = trans(sym(Float::fin_or_at(Float::Fin(f), g, f, trans(sym(kept.left), e))), refl);
+                match kept.right {
+                    Inl(odd) => false_elim(odd(j(gf, λ v _ => Finite::Even(v), ev))),
+                    Inr(fx) => j(sym(gf), λ v _ => v.val() ≈ x, fx),
+                }
+            },
+            Inr(step) => {
+                let ra: RoundsTo(F, Format::away_mode(x), x, Float::Fin(g)) =
+                    j(trans(sym(step.left), e), λ v _ => RoundsTo(F, Format::away_mode(x), x, v), F.round_rat_correct(Format::away_mode(x), x));
+                let evf: Finite::Even(f) = step.right.left;
+                false_elim(match Rat::le_dec(0, x) as λ dd => RoundsTo(F, match dd { Inl(_) => TowardPos, Inr(_) => TowardNeg }, x, Float::Fin(g)) → False {
+                    Inl(xn) => λ (rp: Finite::Above(x, g) ∨ (¬F.specials.has_inf().IsTrue() ∧ Finite::Below(x, g) ∧ F.Exceeds(x))) => {
+                        let bd: Finite::Below(x, f) = hf.left(xn);
+                        let au: Finite::Above(x, g) = match rp {
+                            Inl(a) => a,
+                            Inr(s) => false_elim(Rat::lt_irrefl(x, Rat::lt_of_le_of_lt(hi, s.right.right(M)))),
+                        };
+                        let dy: (f.val() < x) = match step.right.right {
+                            Inl(lt) => lt,
+                            Inr(gt) => false_elim(Rat::lt_irrefl(x, Rat::lt_of_lt_of_le(gt, bd.left))),
+                        };
+                        F.step_parity(x, f, g, xn, bd, au, dy, hi)(evf)(ev)
+                    },
+                    Inr(nxn) => λ (rn: Finite::Below(x, g) ∨ (¬F.specials.has_inf().IsTrue() ∧ Finite::Above(x, g) ∧ F.Undercuts(x))) => {
+                        let xneg: (x < 0) = Rat::lt_of_not_le(x := x, y := 0, h := nxn);
+                        let af: Finite::Above(x, f) = hf.right(Rat::le_of_lt(xneg));
+                        let bg: Finite::Below(x, g) = match rn {
+                            Inl(b) => b,
+                            Inr(s) => false_elim(Rat::lt_irrefl(x, Rat::lt_of_lt_of_le(s.right.right(-M),
+                                Rat::le_respects(Rat::same_sym(Finite::val_neg(M)), x.same_refl(), lo)))),
+                        };
+                        let fx: (x < f.val()) = match step.right.right {
+                            Inr(gt) => gt,
+                            Inl(lt) => false_elim(Rat::lt_irrefl(x, Rat::lt_of_le_of_lt(af.left, lt))),
+                        };
+                        let nn: Rat::Same(Rat::neg(0), 0) = omega;
+                        let yn: (0 <= -x) = Rat::le_respects(nn, (-x).same_refl(), Rat::le_of_lt(Rat::neg_lt(x := x, y := 0, h := xneg)));
+                        let bd: Finite::Below(-x, -f) = Finite::above_neg(-x, f, Finite::above_respects(-(-x), x, x.neg_neg(), f, af));
+                        let au: Finite::Above(-x, -g) = Finite::below_neg(-x, g, Finite::below_respects(-(-x), x, x.neg_neg(), g, bg));
+                        let dy: ((-f).val() < -x) = Rat::lt_respects(Rat::same_sym(Finite::val_neg(f)), (-x).same_refl(), Rat::neg_lt(x := x, y := f.val(), h := fx));
+                        let hi2: (-x <= M.val()) = Rat::le_respects((-x).same_refl(), M.val().neg_neg(), Rat::neg_le(x := -M.val(), y := x, h := lo));
+                        F.step_parity(-x, -f, -g, yn, bd, au, dy, hi2)(evf)(ev)
+                    },
+                }(ra))
+            },
+        },
+        Inf(n, hh) => λ no _ => false_elim(no),
+        NaN(hh) => λ no _ => false_elim(no),
+    }(tz, h)
+}
