@@ -1,0 +1,83 @@
+// Whether a window `(base, len)` fits under a limit, tested on words
+// without the sum that may wrap (issues/bv-omega-fits-through-wrapping-sum.md).
+//
+// A store into a window wants `base.toNat() + len.toNat() <= limit` of
+// natural numbers (`Arena::store`'s `fits`). The test a reader writes
+// first, `base + len <= limit` on words, does not give it: the sum wraps
+// past `2^64`, and at `base = 2^64 - 1`, `len = 2` it is `1`
+// (`lib/_tests/native/runtime/word_fits_tests.hthr` has the table of
+// spellings, true and false). `window_fits` tests the same window in two
+// comparisons that cannot wrap, `len <= limit` and then `base <= limit -
+// len`, whose subtraction the first rules a borrow out of. Its `True`
+// answer is the natural-number fact (`window_fits_sound`) and its `False`
+// answer the window past the limit (`window_fits_false`), so the check is
+// exact.
+//
+// This is vision principle 13 (docs/compilation-vision.md §1) for one
+// check: `store` states the obligation, and this is the runtime helper
+// that discharges it. A caller writes
+//
+//     if ok: window_fits(base, len, 16) { a.store(base, len, i, x) } else { … }
+//
+// and `store`'s found proof `fits := bv_omega` reads `ok` through
+// `window_fits_sound` (`bv_omega` knows the check by name,
+// docs/tactics/bv-omega-design.md §3), so the proof comes from the test the
+// code runs. It is a `runtime fn`: a compiled caller calls it and branches
+// on its bit.
+import logic;
+import bool;
+import nat;
+import omega;
+import bitvec_nat;
+import bitvec_omega;
+import runtime;
+
+// The window `(base, len)` ends at or below `limit`, tested without a sum.
+runtime fn window_fits(base, len, limit: u64) → Bool {
+    if ok: len <= limit ∧ base <= limit - len { True } else { False }
+}
+
+// What it tests is decided at the words' values.
+theorem window_fits_dec(base, len, limit: u64): Or<And<len <= limit, base <= limit - len>, ¬And<len <= limit, base <= limit - len>> {
+    match Nat::le_dec(len.toNat(), limit.toNat()) {
+        Inl(room) => match Nat::le_dec(base.toNat(), (limit - len).toNat()) {
+            Inl(under) => Inl(And(room, under)),
+            Inr(over) => Inr(λ both => over(both.right)),
+        },
+        Inr(past) => Inr(λ both => past(both.left)),
+    }
+}
+
+// `True`: the window fits, as natural numbers.
+theorem window_fits_sound(base, len, limit: u64, yes: window_fits(base, len, limit) = True):
+    base.toNat() + len.toNat() <= limit.toNat() {
+    match window_fits_dec(base, len, limit) {
+        Inl(both) => {
+            let room: (len <= limit) = both.left;
+            let under: (base <= limit - len) = both.right;
+            bv_omega
+        },
+        Inr(neither) => absurd(trans(sym(yes), window_fits::False(base, len, limit, neither))),
+    }
+}
+
+// `False`: the window passes the limit.
+theorem window_fits_false(base, len, limit: u64, no: window_fits(base, len, limit) = False):
+    limit.toNat() < base.toNat() + len.toNat() {
+    match window_fits_dec(base, len, limit) {
+        Inl(both) => absurd(trans(sym(no), window_fits::True(base, len, limit, both))),
+        Inr(neither) => match Nat::le_dec(len.toNat(), limit.toNat()) {
+            Inl(room) => match Nat::le_dec(base.toNat(), (limit - len).toNat()) {
+                Inl(under) => false_elim(neither(And(room, under))),
+                // As numbers: `bv_omega` does not read a negated comparison
+                // of words.
+                Inr(over) => {
+                    let r: (len <= limit) = room;
+                    let o: ((limit - len).toNat() < base.toNat()) = omega(over);
+                    bv_omega
+                },
+            },
+            Inr(past) => omega(past),
+        },
+    }
+}

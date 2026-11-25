@@ -1393,14 +1393,15 @@ impl Checking<'_> {
                     return self.elab_check(cx, &assumed, expected, lvl);
                 }
                 let _certificate_scope = omega_cert::CertificateScope::enter(&self.scope.omega_depth);
-                let generate = |careful, opaque: &std::collections::HashSet<String>| {
-                    bv_omega::generate(self, cx, expected, careful, opaque).map_err(|detail| ElabError::Elab {
+                let generate = |careful, opaque: &std::collections::HashSet<String>, wrapped: &std::collections::HashSet<String>| {
+                    bv_omega::generate(self, cx, expected, careful, opaque, wrapped).map_err(|detail| ElabError::Elab {
                         msg: format!("`bv_omega` got stuck: {detail}"),
                         span: e.span,
                     })
                 };
                 let mut opaque = std::collections::HashSet::new();
-                let mut generated = generate(false, &opaque)?;
+                let mut wrapped = std::collections::HashSet::new();
+                let mut generated = generate(false, &opaque, &wrapped)?;
                 let parse = |source: &str| {
                     omega_cert::parse_generated_expr(source).map_err(|detail| ElabError::Elab {
                         msg: format!("`bv_omega` wrote a proof that does not parse: {detail}\n  generated: {source}"),
@@ -1416,7 +1417,7 @@ impl Checking<'_> {
                 if checked.is_err() && generated.retry {
                     self.pass.warnings.borrow_mut().truncate(mark.0);
                     self.attempt.goal_arena.rollback(mark.1);
-                    generated = generate(true, &opaque)?;
+                    generated = generate(true, &opaque, &wrapped)?;
                     checked = self.generated_scope(|me| me.elab_check(cx, &parse(&generated.source)?, expected, lvl));
                 }
                 // Each side condition alone, in the context its bundle had.
@@ -1441,8 +1442,22 @@ impl Checking<'_> {
                 let mut diagnosis: Option<(usize, ElabError)> = None;
                 let mut kept = generated.clone();
                 let mut rounds = 0;
+                // Sums met where a fact was left out because they may wrap
+                // (§5.2): the refusal says so.
+                let mut sums: Vec<(String, String)> = Vec::new();
                 while checked.is_err() && rounds < bv_omega::ATOM_ROUNDS {
                     let mut more = Vec::new();
+                    // A sum or difference a fact mentions, left out because
+                    // it may wrap, is kept whole and read through its wrap.
+                    let mut wrap = false;
+                    for (word, sum) in &kept.wrapping {
+                        if let Some(width) = sum
+                            && !sums.iter().any(|(w, _)| w == word)
+                        {
+                            sums.push((word.clone(), width.clone()));
+                        }
+                        wrap |= wrapped.insert(word.clone());
+                    }
                     for (i, obligation) in kept.obligations.iter().enumerate() {
                         let first = rounds == 0 && diagnosis.is_none();
                         if !first && obligation.atoms.iter().all(|w| opaque.contains(w)) {
@@ -1460,13 +1475,13 @@ impl Checking<'_> {
                         }
                     }
                     rounds += 1;
-                    if more.is_empty() {
+                    if more.is_empty() && !wrap {
                         break;
                     }
                     opaque.extend(more);
                     self.pass.warnings.borrow_mut().truncate(mark.0);
                     self.attempt.goal_arena.rollback(mark.1);
-                    kept = generate(true, &opaque)?;
+                    kept = generate(true, &opaque, &wrapped)?;
                     checked = self.generated_scope(|me| me.elab_check(cx, &parse(&kept.source)?, expected, lvl));
                 }
                 match checked {
@@ -1491,8 +1506,14 @@ impl Checking<'_> {
                                 e.span,
                             );
                         }
+                        // A fact about a sum that may wrap was left out, or
+                        // read through its wrap: that is why, most often.
+                        let wraps = match sums.first() {
+                            Some((sum, width)) => format!("\n  `bv_omega`: `{sum}` may overflow {width} bits, and the facts about it say nothing where it does: {}", bv_omega::sum_wraps(width)),
+                            None => String::new(),
+                        };
                         Err(ElabError::Elab {
-                            msg: format!("{error}\n  generated `bv_omega` proof: {}", generated.source),
+                            msg: format!("{error}{wraps}\n  generated `bv_omega` proof: {}", generated.source),
                             span: e.span,
                         })
                     }

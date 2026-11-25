@@ -16,8 +16,11 @@ condition discharged by `omega`. It elaborates that source at the goal and
 lifts the result into a lemma of its own (§6). The result is an ordinary
 proof the kernel checks. Nothing is added to the trusted base.
 
-Wrap-around is not modelled. A word whose value would need `mod` shows up as
-a side condition `omega` cannot prove, and the refusal names it (§5).
+Wrap-around is not modelled in a word's fact. A word whose value would need
+`mod` shows up as a side condition `omega` cannot prove, and the refusal
+names it (§5). Two places read the wrap as a remainder instead: a word under
+a low mask (§3.2), and a sum or difference a fact mentions, after a round in
+which it may have wrapped (§5.2).
 
 ## 2. Facts, forms, bounds
 
@@ -174,6 +177,15 @@ and `a <= b` at a word (issues/decreases-word-measures-by-hand.md). A plain
 equation of words in scope, `same: fill = 63` either way round, gives
 `fill.toNat() = 63.toNat()` (`toNat_of_eq`), which with the literal's value
 bridge refutes a branch the context rules out.
+The check that a window fits without a sum that may wrap,
+`word_fits::window_fits(base, len, limit)` (`lib/native/runtime/word_fits.hthr`),
+equal to `True` either way round, gives `toNat(base) + toNat(len) <=
+toNat(limit)` through `window_fits_sound`, and equal to `False` gives
+`toNat(limit) < toNat(base) + toNat(len)` through `window_fits_false`
+(issues/bv-omega-fits-through-wrapping-sum.md): a store's `fits` is then
+found from `if ok: window_fits(…)`, the test the code runs. The tactic
+knows the check by name, as it knows the tests above; only where its law is
+in scope.
 These bridge facts are available before side conditions and are restated
 under the same names when the arithmetic goal generalises composite words.
 Words appearing only in a comparison remain optional in the careful attempt.
@@ -319,6 +331,38 @@ past the first failing condition, which the diagnosis needs anyway, only a
 condition that would keep a new word is re-checked. If no round succeeds, the refusal is the careful proof's,
 naming its first failing condition: keeping words whole explains nothing a
 user can act on.
+
+### 5.2 Sums that may wrap
+
+A fact in scope about a sum of words, `base + len <= 16`, needs that
+sum's no-overflow before it can be restated over `toNat(base) +
+toNat(len)`; where `omega` cannot prove it, the careful attempt leaves the
+fact out (§3). That is right when the sum may wrap, but it also loses a
+fact that rules the wrap out: `base <= base + len` is false exactly where
+the sum wrapped (a wrapped sum is below each operand), and it too is a fact
+about the sum.
+
+So a sum or a difference at a literal width whose side condition failed
+where a fact mentions it is recorded (`Generated::wrapping`), and the next
+round (§5.1's loop) keeps it whole and reads it through its wrap:
+`toNat(a + b) = (toNat(a) + toNat(b)) % 2^w` (`toNat_add_mod`), `toNat(a -
+b) = (toNat(a) + 2^w - toNat(b)) % 2^w` (`toNat_sub_mod`), operands words of
+their own, as §3.2 reads a masked sum. The facts about it are then taken
+with no side condition, the carry is a case of the remainder's quotient,
+and `base <= base + len` beside `base + len <= 16` proves `toNat(base) +
+toNat(len) <= 16`. Only words recorded this way are read through their
+wrap; a word §5.1 keeps whole for another reason stays a plain leaf, since
+walking its operands would add side conditions a proof that succeeded did
+not have.
+
+When the proof is still refused, the refusal says the sum may wrap: a
+diagnosed `a + b` may overflow, and a goal-step failure after a fact about
+a sum was left out, both add that a test of `a + b` does not bound `a` and
+`b` (at `a = 2^64 - 1`, `b = 2` the sum is 1) and name spellings that do
+not wrap: `b <= limit ∧ a <= limit - b`, `window_fits(a, b, limit)`, or a
+carry test beside the sum. The reader's first guess is that the tactic is
+weak; at a wrapping model the claim is false (the `¬` theorems in
+`lib/_tests/native/runtime/word_fits_tests.hthr`).
 
 ## 6. Lifting
 

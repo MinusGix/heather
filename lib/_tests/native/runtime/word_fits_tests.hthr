@@ -1,0 +1,63 @@
+// Spellings of "the window `(base, len)` fits under the limit", each read by
+// `bv_omega` toward the natural-number fact a window's `store` wants,
+// `base.toNat() + len.toNat() <= limit` (issues/bv-omega-fits-through-wrapping-sum.md).
+// A true spelling is a theorem `bv_omega` proves; a false one is a `¬`
+// theorem at a model where the sum of words wraps, beside `bv_omega`'s
+// refusal of it, which says that the sum may wrap. The check that gives the
+// fact from a test the code runs is `window_fits`
+// (`lib/native/runtime/word_fits.hthr`). Tests, not library: nothing
+// outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import omega; import bitvec; import bitvec_nat; import bitvec_omega; import word_fits;
+
+// ---- True, and proved ----
+
+// Two comparisons that cannot wrap: the length under the limit, then the
+// base under what is left. `window_fits` tests this.
+theorem fits_by_difference(base, len: u64, room: len <= 16, under: base <= 16 - len): base.toNat() + len.toNat() <= 16 { bv_omega }
+theorem fits_by_difference_open(base, len, limit: u64, room: len <= limit, under: base <= limit - len): base.toNat() + len.toNat() <= limit.toNat() { bv_omega }
+// The base first, the length under what is left.
+theorem fits_by_difference_base(base, len, limit: u64, room: base <= limit, under: len <= limit - base): base.toNat() + len.toNat() <= limit.toNat() { bv_omega }
+
+// The sum, with each operand already bounded so that it cannot wrap: the
+// arena's `alloc` tests this way (the limit within the heap first).
+theorem fits_each_bounded(base, len: u64, b: base <= 16, l: len <= 16, sum: base + len <= 16): base.toNat() + len.toNat() <= 16 { bv_omega }
+// Two words each below `2^63`, whose sum is below `2^64`.
+theorem fits_halves(base, len: u64, b: base < 0x8000000000000000, l: len < 0x8000000000000000, sum: base + len <= 16): base.toNat() + len.toNat() <= 16 { bv_omega }
+
+// The sum with a carry test: a sum of words that wrapped is below each
+// operand, so `base <= base + len` says it did not.
+theorem fits_carry_test(base, len: u64, nowrap: base <= base + len, sum: base + len <= 16): base.toNat() + len.toNat() <= 16 { bv_omega }
+theorem fits_carry_test_len(base, len, limit: u64, nowrap: len <= base + len, sum: base + len <= limit): base.toNat() + len.toNat() <= limit.toNat() { bv_omega }
+// The machine's own carry test, the bit a branch on `<=` leaves.
+theorem fits_carry_bit(base, len: u64, nowrap: base.unsigned_le_bit(base + len) = True, sum: base + len < 16): base.toNat() + len.toNat() < 16 { bv_omega }
+
+// The check, as `if ok: window_fits(…)` leaves it.
+theorem fits_checked(base, len: u64, ok: window_fits(base, len, 16) = True): base.toNat() + len.toNat() <= 16 { bv_omega }
+theorem fits_checked_open(base, len, limit: u64, ok: window_fits(base, len, limit) = True): base.toNat() + len.toNat() <= limit.toNat() { bv_omega }
+// Its other answer: the window passes the limit.
+theorem fits_checked_false(base, len: u64, no: window_fits(base, len, 16) = False): 16 < base.toNat() + len.toNat() { bv_omega }
+// And as the store's index wants it, with the window's room beside.
+theorem fits_checked_index(base, len, i: u64, ok: window_fits(base, len, 16) = True, inside: i < len): (base + i).toNat() < 16 { bv_omega }
+
+// ---- False: the sum may wrap ----
+
+// The sum alone. At `base = 2^64 - 1`, `len = 2` the sum of words is 1.
+theorem sum_lt_wraps(): ¬((base, len: u64) → base + len < 16 → base.toNat() + len.toNat() <= 16) {
+    λ fits => omega(fits(0xffffffffffffffff, 2, trivial))
+}
+// expect-error: a sum of words wraps past 2^64
+theorem sum_lt_refused(base, len: u64, sum: base + len < 16): base.toNat() + len.toNat() <= 16 { bv_omega }
+
+theorem sum_le_wraps(): ¬((base, len, limit: u64) → base + len <= limit → base.toNat() + len.toNat() <= limit.toNat()) {
+    λ fits => omega(fits(0xffffffffffffffff, 2, 16, trivial))
+}
+// expect-error: a sum of words wraps past 2^64
+theorem sum_le_refused(base, len, limit: u64, sum: base + len <= limit): base.toNat() + len.toNat() <= limit.toNat() { bv_omega }
+
+// One operand bounded is not enough: at `base = 1`, `len = 2^64 - 1` the
+// sum is 0.
+theorem one_bounded_wraps(): ¬((base, len: u64) → base <= 16 → base + len <= 16 → base.toNat() + len.toNat() <= 16) {
+    λ fits => omega(fits(1, 0xffffffffffffffff, trivial, trivial))
+}
+// expect-error: a sum of words wraps past 2^64
+theorem one_bounded_refused(base, len: u64, b: base <= 16, sum: base + len <= 16): base.toNat() + len.toNat() <= 16 { bv_omega }
