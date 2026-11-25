@@ -366,8 +366,8 @@ theorem Format::sc_over_ok(self F: Format, mode: Mode, base: Nat, bp: 1 <= base,
             let m1: ((W.max_mag() + 1) * P <= W.top() * P) = Nat::mul_le_mono_r(P, W.max_mag() + 1, W.top(), mb.right.left);
             let l0: (W.limit_h() = (W.max_mag() + 1) * (P * 2)) = refl;
             let lim: (W.limit_h() <= L) = linarith(lp, tw, m1, l0);
-            let o0: (W.ovf_h() = (W.top() + W.top() - 1) * P) = refl;
-            let o1: ((W.top() + W.top() - 1) * P <= (W.top() + W.top()) * P) = Nat::mul_le_mono_r(P, W.top() + W.top() - 1, W.top() + W.top(), (W.top() + W.top()).sub_le(1));
+            let o0: (W.ovf_h() = (W.max_mag() + W.max_mag() + 1) * P) = refl;
+            let o1: ((W.max_mag() + W.max_mag() + 1) * P <= (W.top() + W.top()) * P) = Nat::mul_le_mono_r(P, W.max_mag() + W.max_mag() + 1, W.top() + W.top(), { let mt = mb.right.left; omega });
             let ovl: (W.ovf_h() <= L) = linarith(o0, o1, tw, lp);
             let hr0 = W.round_h_correct(mode, y, L, False, ay);
             let ex = W.exceeds_over(y, L, False, ay, lim);

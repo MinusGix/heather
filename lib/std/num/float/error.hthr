@@ -418,7 +418,7 @@ theorem Finite::min_normal_pos(F: Format): 0 < (Finite::min_normal(F)).val() {
     let z = Finite::zero(F, False);
     let zh: (z.H() = 0) = refl;
     let mn: ((Finite::min_normal(F)).H() = ((F.half() * Nat::pow(2, 0)) * 2).int()) = refl;
-    let two = F.two_le_half();
+    let one = F.one_le_half();
     Rat::lt_respects(Finite::zero_val(F), (Finite::min_normal(F)).val().same_refl(), Finite::lt_of_H_lt(z, Finite::min_normal(F), omega))
 }
 
@@ -464,7 +464,7 @@ theorem Finite::bexp_zero_of_small({F: Format}, d: Finite(F), pos: d.neg = False
             let mn: ((Finite::min_normal(F)).H() = ((F.half() * Nat::pow(2, 0)) * 2).int()) = refl;
             let dh = Finite::H_pos(d, pos);
             let du: (d.units() = d.mag * P) = refl;
-            let two = F.two_le_half();
+            let one = F.one_le_half();
             false_elim(omega)
         },
     }(refl)
@@ -572,13 +572,10 @@ theorem Format::gamma_mono(self F: Format, mode: Mode, m, n: Nat, mn: m <= n, ok
     Rat::le_respects(Rat::same_sym(gm), Rat::same_sym(gn), Rat::le_respects(Rat::same_refl(Rat(M, K + 1 + t)), nt, core))
 }
 
-// One rounding is within `γ(1)`: `u <= u / (1 - u)`.
-theorem Format::u_le_gamma(self F: Format, mode: Mode): F.u(mode) <= F.gamma(mode, 1) {
-    let two: (2 <= F.u_den(mode)) = match mode {
-        NearestEven => Nat::le_trans(2, 4, F.top(), trivial, F.four_le_top()),
-        NearestAway => Nat::le_trans(2, 4, F.top(), trivial, F.four_le_top()),
-        TowardPos => F.two_le_half(), TowardNeg => F.two_le_half(), TowardZero => F.two_le_half(),
-    };
+// One rounding is within `γ(1)`: `u <= u / (1 - u)`, while `u < 1`. That
+// fails only for a directed mode at precision one, where `u = 1`.
+theorem Format::u_le_gamma(self F: Format, mode: Mode, ok: 1 < F.u_den(mode)): F.u(mode) <= F.gamma(mode, 1) {
+    let two: (2 <= F.u_den(mode)) = ok;
     let K = F.u_den(mode) - 2;
     let g = F.gamma_at(mode, 1, K + 1, omega);
     let d1: ((Rat(1, F.u_den(mode))).den.int() = F.u_den(mode).int()) = refl;
@@ -626,7 +623,7 @@ theorem Format::gamma_prod_of(self F: Format, mode: Mode, ds: List<Rat>):
         Cons(d, t) => λ al okc => {
             let ih = F.gamma_prod_of(mode, t)(al.right, omega(okc));
             let P = t.prod_one_add();
-            let hd = Rat::le_trans(al.left, F.u_le_gamma(mode));
+            let hd = Rat::le_trans(al.left, F.u_le_gamma(mode, omega(okc)));
             let step = F.theta_mul(mode, t.len(), 1, omega(okc), ih, hd);
             let back: (1 + (P - 1) ≈ P) = Rat::same_trans(Rat::add_comm(1, P - 1), P.sub_add_cancel(1));
             Rat::le_respects(Rat::abs_respects(Rat::sub_respects(Rat::mul_respects(back, (1 + d).same_refl()), Rat::same_refl(1))), Rat::same_refl(F.gamma(mode, t.len() + 1)), step)

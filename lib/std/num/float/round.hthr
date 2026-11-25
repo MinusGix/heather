@@ -243,10 +243,9 @@ theorem Finite::units_le_max({F: Format}, g: Finite(F)): g.units() <= F.max_mag(
         },
         Inr(rest) => {
             let top_exp: (g.bexp = F.span) = match rest { Inl(e) => e, Inr(over) => false_elim(omega(g.ok, over)) };
-            let le: (g.mag <= F.max_mag()) = match F.specials.reserves_top().is_true_dec() {
-                Inl(rt) => { let eq = mb.right.right.left(rt); omega(g.ok) },
-                Inr(nr) => { let eq = mb.right.right.right(nr); omega(g.ok) },
-            };
+            let ce = F.canonical_elim(g.mag, g.bexp, g.ok);
+            let sp: (F.span <= g.bexp) = omega(top_exp);
+            let le: (g.mag <= F.max_mag()) = { let eq = mb.right.right; let f = ce.right.right.right(sp); omega };
             let scaled = Nat::mul_le_mono_r(Nat::pow(2, F.span), g.mag, F.max_mag(), le);
             j(sym(top_exp), λ b _ => g.mag * Nat::pow(2, b) <= F.max_mag() * Nat::pow(2, F.span), scaled)
         },
@@ -281,7 +280,7 @@ fn Finite::dist({F: Format}, self f: Finite(F), x: Rat) → Rat { (f.val() - x).
 fn Finite::Nearest({F: Format}, x: Rat, f: Finite(F)) → Type { (g: Finite(F)) → f.dist(x) <= g.dist(x) }
 
 fn Finite::NearestEven({F: Format}, x: Rat, f: Finite(F)) → Type {
-    Finite::Nearest(x, f) ∧ ((g: Finite(F)) → Finite::Nearest(x, g) → g.val() ≈ f.val() ∨ Nat::Even(f.mag))
+    Finite::Nearest(x, f) ∧ ((g: Finite(F)) → Finite::Nearest(x, g) → g.val() ≈ f.val() ∨ Finite::Even(f))
 }
 
 fn Finite::NearestAway({F: Format}, x: Rat, f: Finite(F)) → Type {
@@ -295,7 +294,7 @@ fn Format::Undercuts(self F: Format, x: Rat) → Type { (g: Finite(F)) → x < g
 
 // IEEE 754 §7.4: a nearest rounding overflows from the midpoint between the
 // largest float and the next power of two, `(2^(prec+1) - 1) · 2^(qmax - 1)`.
-fn Format::ovf_h(self F: Format) → Nat { (F.top() + F.top() - 1) * Nat::pow(2, F.span) }
+fn Format::ovf_h(self F: Format) → Nat { (F.max_mag() + F.max_mag() + 1) * Nat::pow(2, F.span) }
 
 fn Format::ovf(self F: Format) → Rat { F.grid(F.ovf_h().int()) }
 
@@ -518,7 +517,7 @@ theorem Format::cell_ok(self F: Format, h: Nat, below: h < F.limit_h()): F.canon
     let c = F.cell(h, below);
     let mb = F.max_mag_bounds();
     F.canonical_intro(F.m_of(h), F.e_of(h), c.left, c.right.left, c.right.right.left,
-        λ rt sp => { let er: (F.e_of(h) <= F.span) = c.right.left; let le = c.right.right.right(omega); let eq = mb.right.right.left(rt); omega })
+        λ sp => { let er: (F.e_of(h) <= F.span) = c.right.left; let le = c.right.right.right(omega); let eq = mb.right.right; omega })
 }
 
 // The greatest float at or below: the cell's float, or the largest float
@@ -558,8 +557,13 @@ theorem Format::down_H(self F: Format, h: Nat, below: h < F.limit_h()): (F.down(
 // The least float above the cell's: one significand step up, carried into
 // the next binade at the top of one, and none past the largest float.
 
-theorem Format::half_even(self F: Format): Nat::Even(F.half()) {
-    match F.frac as λ f => 1 <= f → Nat::Even(Nat::pow(2, f)) { Zero => λ bad => false_elim(bad), Succ(k) => λ _ => k.even_pow_two() }(F.frac_ok)
+// `lsb` reads its arguments.
+theorem Format::lsb_congr(self F: Format, m1, b1, m2, b2: Nat, hm: m1 = m2, hb: b1 = b2): F.lsb(m1, b1) = F.lsb(m2, b2) {
+    j(hm, λ m _ => F.lsb(m1, b1) = F.lsb(m, b2), j(hb, λ b _ => F.lsb(m1, b1) = F.lsb(m1, b), refl))
+}
+
+theorem Format::half_even(self F: Format, fr: 1 <= F.frac): Nat::Even(F.half()) {
+    match F.frac as λ f => 1 <= f → Nat::Even(Nat::pow(2, f)) { Zero => λ bad => false_elim(bad), Succ(k) => λ _ => k.even_pow_two() }(fr)
 }
 
 theorem Format::up_step_ok(self F: Format, h: Nat, below: h < F.limit_h(), room: F.m_of(h) + 2 <= F.top(), inner: F.e_of(h) + 1 <= F.span):
@@ -570,7 +574,7 @@ theorem Format::up_step_ok(self F: Format, h: Nat, below: h < F.limit_h(), room:
         Inl(z) => Inl(z),
         Inr(le) => Inr(omega(le)),
     };
-    F.canonical_intro(F.m_of(h) + 1, F.e_of(h), room, c.right.left, normal, λ rt sp => false_elim(omega))
+    F.canonical_intro(F.m_of(h) + 1, F.e_of(h), room, c.right.left, normal, λ sp => false_elim(omega))
 }
 
 theorem Format::up_last_ok(self F: Format, h: Nat, below: h < F.limit_h(), room: F.m_of(h) + 1 <= F.max_mag()):
@@ -583,13 +587,14 @@ theorem Format::up_last_ok(self F: Format, h: Nat, below: h < F.limit_h(), room:
         Inl(z) => Inl(z),
         Inr(le) => Inr(omega(le)),
     };
-    F.canonical_intro(F.m_of(h) + 1, F.e_of(h), omega, c.right.left, normal, λ rt sp => { let eq = mb.right.right.left(rt); omega })
+    F.canonical_intro(F.m_of(h) + 1, F.e_of(h), omega, c.right.left, normal, λ sp => { let eq = mb.right.right; omega })
 }
 
 theorem Format::up_carry_ok(self F: Format, h: Nat, inner: F.e_of(h) + 1 <= F.span): F.canonical(F.half(), F.e_of(h) + 1).IsTrue() {
-    let two = F.two_le_half();
+    let one = F.one_le_half();
+    let ct = F.cut_room();
     let t: (F.top() = F.half() * 2) = F.top_double();
-    F.canonical_intro(F.half(), F.e_of(h) + 1, omega, inner, Inr(F.half().le_refl()), λ rt sp => omega)
+    F.canonical_intro(F.half(), F.e_of(h) + 1, omega, inner, Inr(F.half().le_refl()), λ sp => omega)
 }
 
 fn Format::up_top(self F: Format, h: Nat, below: h < F.limit_h(), d: F.m_of(h) + 1 <= F.max_mag() ∨ ¬(F.m_of(h) + 1 <= F.max_mag())) → Option<Finite(F)> {
@@ -619,14 +624,14 @@ fn Format::up_at(self F: Format, h: Nat, d: h + 1 <= F.limit_h() ∨ ¬(h + 1 <=
 fn Format::up(self F: Format, h: Nat) → Option<Finite(F)> { F.up_at(h, Succ(h).le_dec(F.limit_h())) }
 
 // What the step up is, when there is one: a positive float one cell above,
-// whose significand has the other parity from the cell's.
+// whose code has the other parity from the cell's.
 record UpIs(F: Format, h: Nat, o: Option<Finite(F)>) {
     u: Finite(F),
     is: o = Some(u),
     pos: u.neg = False,
     at: u.H() = (Succ(F.m_of(h)) * Nat::pow(2, Succ(F.e_of(h)))).int(),
-    even: ¬Nat::Even(F.m_of(h)) → Nat::Even(u.mag),
-    odd: Nat::Even(F.m_of(h)) → ¬Nat::Even(u.mag),
+    even: ¬Nat::Even(F.lsb(F.m_of(h), F.e_of(h))) → Nat::Even(F.lsb(u.mag, u.bexp)),
+    odd: Nat::Even(F.lsb(F.m_of(h), F.e_of(h))) → ¬Nat::Even(F.lsb(u.mag, u.bexp)),
 }
 
 fn Format::UpCases(self F: Format, h: Nat, o: Option<Finite(F)>) → Type {
@@ -641,8 +646,13 @@ theorem Format::up_top_cases(self F: Format, h: Nat, below: h < F.limit_h(), top
     (d: F.m_of(h) + 1 <= F.max_mag() ∨ ¬(F.m_of(h) + 1 <= F.max_mag())) → F.UpCases(h, F.up_top(h, below, d))
 {
     λ d => match d {
-        Inl(room) => Inl(UpIs(Finite(False, F.m_of(h) + 1, F.e_of(h), F.up_last_ok(h, below, room)), refl, refl, F.up_step_H(h),
-            λ odd => F.m_of(h).even_succ_of_not_even(odd), λ ev => F.m_of(h).not_even_succ_of_even(ev))),
+        Inl(room) => {
+            let c = F.cell(h, below);
+            let mb = F.max_mag_bounds();
+            let p = Format::parity_step(F.lsb(F.m_of(h), F.e_of(h)), F.lsb(F.m_of(h) + 1, F.e_of(h)),
+                F.lsb_step(F.m_of(h), F.e_of(h), { let mt = mb.right.left; omega }, c.right.right.left));
+            Inl(UpIs(Finite(False, F.m_of(h) + 1, F.e_of(h), F.up_last_ok(h, below, room)), refl, refl, F.up_step_H(h), p.left, p.right))
+        },
         Inr(full) => {
             let c = F.cell(h, below);
             let es: (F.e_of(h) = F.span) = omega(c.right.left, top_b);
@@ -656,8 +666,12 @@ theorem Format::up_inner_cases(self F: Format, h: Nat, below: h < F.limit_h(), i
     (d: F.m_of(h) + 2 <= F.top() ∨ ¬(F.m_of(h) + 2 <= F.top())) → F.UpCases(h, F.up_inner(h, below, inner, d))
 {
     λ d => match d {
-        Inl(room) => Inl(UpIs(Finite(False, F.m_of(h) + 1, F.e_of(h), F.up_step_ok(h, below, room, inner)), refl, refl, F.up_step_H(h),
-            λ odd => F.m_of(h).even_succ_of_not_even(odd), λ ev => F.m_of(h).not_even_succ_of_even(ev))),
+        Inl(room) => {
+            let c = F.cell(h, below);
+            let p = Format::parity_step(F.lsb(F.m_of(h), F.e_of(h)), F.lsb(F.m_of(h) + 1, F.e_of(h)),
+                F.lsb_step(F.m_of(h), F.e_of(h), room, c.right.right.left));
+            Inl(UpIs(Finite(False, F.m_of(h) + 1, F.e_of(h), F.up_step_ok(h, below, room, inner)), refl, refl, F.up_step_H(h), p.left, p.right))
+        },
         Inr(full) => {
             let c = F.cell(h, below);
             let t: (F.top() = F.half() * 2) = F.top_double();
@@ -665,8 +679,8 @@ theorem Format::up_inner_cases(self F: Format, h: Nat, below: h < F.limit_h(), i
             let pe = Nat::pow(2, F.e_of(h) + 1);
             let pd: (Nat::pow(2, F.e_of(h) + 2) = pe * 2) = refl;
             let at: ((F.half() * Nat::pow(2, F.e_of(h) + 1)) * 2 = (F.m_of(h) + 1) * pe) = ring(mt, t);
-            Inl(UpIs(Finite(False, F.half(), F.e_of(h) + 1, F.up_carry_ok(h, inner)), refl, refl, Int::cong_ofnat(at), λ _ => F.half_even(),
-                λ ev _ => F.m_of(h).not_even_succ_of_even(ev)(j(sym(mt), λ y _ => Nat::Even(y), F.frac.even_pow_two()))))
+            let p = F.lsb_carry(F.m_of(h), F.e_of(h), mt);
+            Inl(UpIs(Finite(False, F.half(), F.e_of(h) + 1, F.up_carry_ok(h, inner)), refl, refl, Int::cong_ofnat(at), p.left, p.right))
         },
     }
 }
@@ -857,7 +871,7 @@ fn Format::up_or_over(self F: Format, h: Nat, o: Option<Finite(F)>) → Float(F)
 
 fn Format::tie_h(self F: Format, h: Nat, u: Finite(F), even: Bool) → Float(F) {
     match even {
-        True => match Nat::even_dec((F.down(h)).mag) { Inl(_) => Fin(F.down(h)), Inr(_) => Fin(u) },
+        True => match Nat::even_dec(F.lsb((F.down(h)).mag, (F.down(h)).bexp)) { Inl(_) => Fin(F.down(h)), Inr(_) => Fin(u) },
         False => Fin(u),
     }
 }
@@ -978,12 +992,9 @@ theorem Finite::val_nonpos_of_neg({F: Format}, f: Finite(F), s: f.neg = True): f
 }
 
 theorem Format::max_H_lt_ovf(self F: Format, has: F.specials.has_inf().IsTrue()): (Finite::max_finite(F)).H() < F.ovf_h().int() {
-    let mb = F.max_mag_bounds();
-    let eq: (F.max_mag() + 1 = F.top()) = mb.right.right.right(F.specials.inf_free(has));
     let ps = Nat::pow(2, F.span);
     let mx = Finite::max_H(F);
-    let s: (F.top() + F.top() - 1 = F.max_mag() + F.max_mag() + 1) = omega;
-    let o2: (F.ovf_h() = (F.max_mag() + F.max_mag() + 1) * ps) = Nat::cong(λ (w: Nat) => w * ps, s);
+    let o2: (F.ovf_h() = (F.max_mag() + F.max_mag() + 1) * ps) = refl;
     let pp: (0 < ps) = Nat::pow_pos(a := 2, n := F.span);
     linarith(o2)
 }
@@ -1057,14 +1068,14 @@ theorem Format::near_exact_ok(self F: Format, x: Rat, even: Bool, d: Finite(F), 
 // On the midpoint: both neighbours are nearest, and the tie rule picks.
 theorem Format::near_tie_ok(self F: Format, h: Nat, x: Rat, even: Bool, u: Finite(F), below: Finite::Below(x, F.down(h)), above: Finite::Above(x, u),
     lo: x - (F.down(h)).val() <= u.val() - x, hi: u.val() - x <= x - (F.down(h)).val(), dle: (F.down(h)).val() <= u.val(), dnn: 0 <= (F.down(h)).val(),
-    odd_up: ¬Nat::Even((F.down(h)).mag) → Nat::Even(u.mag), fits: F.Fits(x)): RoundsTo(F, Mode::nearest(even), x, F.tie_h(h, u, even))
+    odd_up: ¬Nat::Even(F.lsb((F.down(h)).mag, (F.down(h)).bexp)) → Nat::Even(F.lsb(u.mag, u.bexp)), fits: F.Fits(x)): RoundsTo(F, Mode::nearest(even), x, F.tie_h(h, u, even))
 {
     let d = F.down(h);
     let near_d = Finite::nearest_of_bracket(x, d, u, d, below, above, Inl(And(d.val().same_refl(), lo)));
     let near_u = Finite::nearest_of_bracket(x, d, u, u, below, above, Inr(And(u.val().same_refl(), hi)));
     let unn = Rat::le_trans(dnn, dle);
     match even {
-        True => match Nat::even_dec((F.down(h)).mag) {
+        True => match Nat::even_dec(F.lsb((F.down(h)).mag, (F.down(h)).bexp)) {
             Inl(ev) => And(And(near_d, λ g n => Inr(ev)), fits),
             Inr(od) => And(And(near_u, λ g n => Inr(odd_up(od))), fits),
         },
@@ -1140,13 +1151,14 @@ theorem Format::mid_tie(self F: Format, x: Rat, h: Nat, even: Bool, below: h < F
     let d = F.down(h);
     let xm: (x ≈ F.grid(M)) = j(hm, λ v _ => x ≈ F.grid(v), a0);
     let mid_e = F.mid_sum(d, up.u, M, mm);
-    let mag_eq = (F.down_below(h, below)).right.left;
+    let db = F.down_below(h, below);
+    let L = F.lsb_congr(d.mag, d.bexp, F.m_of(h), F.e_of(h), db.right.left, db.right.right);
     let pos = Finite::H_pos(d, F.down_pos(h));
     F.near_tie_ok(h, x, even, up.u, F.down_is_below(x, h, False, a0), F.up_is_above(x, h, False, a0, below, o, up, omega),
         Rat::sub_le_sub_of_le_mid(x := x, m := F.grid(M), a := d.val(), b := up.u.val(), h := Rat::le_of_same(xm), e := mid_e),
         Rat::sub_le_sub_of_mid_le(x := x, m := F.grid(M), a := d.val(), b := up.u.val(), h := Rat::le_of_same(Rat::same_sym(xm)), e := mid_e),
         Finite::le_of_H_le(d, up.u, omega), Finite::val_nonneg(d, omega),
-        λ od => up.even(λ em2 => od(j(sym(mag_eq), λ v _ => Nat::Even(v), em2))), fits)
+        λ od => up.even(λ em2 => od(j(sym(L), λ v _ => Nat::Even(v), em2))), fits)
 }
 
 // With a float above the cell: below, above or on the midpoint `m·2^(e+1) + 2^e`.
@@ -1434,7 +1446,7 @@ theorem Format::up_or_over_sign(self F: Format, h: Nat, o: Option<Finite(F)>, po
 
 theorem Format::tie_h_sign(self F: Format, h: Nat, u: Finite(F), even: Bool, up: u.neg = False): (F.tie_h(h, u, even)).SignIs(False) {
     match even {
-        True => match Nat::even_dec((F.down(h)).mag) {
+        True => match Nat::even_dec(F.lsb((F.down(h)).mag, (F.down(h)).bexp)) {
             Inl(_) => F.down_pos(h),
             Inr(_) => up,
         },
@@ -1761,8 +1773,8 @@ theorem Finite::mag_of_same({F: Format}, f, d: Finite(F), e: f.val() ≈ d.val()
 // parity.
 fn Format::NearSplit(self F: Format, f, g: Finite(F)) → Type {
     f.val() ≈ g.val()
-        ∨ (f.val() < g.val() ∧ (Nat::Even(f.mag) → ¬Nat::Even(g.mag)) ∧ 0 <= f.val())
-        ∨ (g.val() < f.val() ∧ (Nat::Even(g.mag) → ¬Nat::Even(f.mag)) ∧ 0 <= g.val())
+        ∨ (f.val() < g.val() ∧ (Finite::Even(f) → ¬Finite::Even(g)) ∧ 0 <= f.val())
+        ∨ (g.val() < f.val() ∧ (Finite::Even(g) → ¬Finite::Even(f)) ∧ 0 <= g.val())
 }
 
 theorem Format::near_split_same(self F: Format, f, g, d: Finite(F), fd: f.val() ≈ d.val(), gd: g.val() ≈ d.val()): F.NearSplit(f, g) {
@@ -1780,11 +1792,13 @@ theorem Format::near_split_pair(self F: Format, h: Nat, below: h < F.limit_h(), 
     let pp: (0 < P) = Nat::pow_pos(a := 2, n := F.e_of(h) + 1);
     let at = up.at;
     let du: (d.val() < up.u.val()) = Finite::lt_of_H_lt(d, up.u, omega);
-    let fm = Finite::mag_of_same(f, d, fd, F.down_pos(h));
-    let gm = Finite::mag_of_same(g, up.u, gu, up.pos);
-    let dm = (F.down_below(h, below)).right.left;
-    let par: (Nat::Even(f.mag) → ¬Nat::Even(g.mag)) = λ ef eg =>
-        up.odd(j(trans(fm, dm), λ y _ => Nat::Even(y), ef))(j(gm, λ y _ => Nat::Even(y), eg));
+    let fp = Finite::parts_of_same(f, d, fd, F.down_pos(h));
+    let gp = Finite::parts_of_same(g, up.u, gu, up.pos);
+    let db = F.down_below(h, below);
+    let Lf = F.lsb_congr(f.mag, f.bexp, F.m_of(h), F.e_of(h), trans(fp.left, db.right.left), trans(fp.right, db.right.right));
+    let Lg = F.lsb_congr(g.mag, g.bexp, up.u.mag, up.u.bexp, gp.left, gp.right);
+    let par: (Finite::Even(f) → ¬Finite::Even(g)) = λ ef eg =>
+        up.odd(j(Lf, λ y _ => Nat::Even(y), ef))(j(Lg, λ y _ => Nat::Even(y), eg));
     Inr(Inl(And(Rat::lt_respects(Rat::same_sym(fd), Rat::same_sym(gu), du), And(par,
         Rat::le_respects(F.grid_zero(), Rat::same_sym(fd), Rat::le_respects(F.grid(0).same_refl(), Rat::same_sym(d.val_grid()), F.grid_le(0, d.H(), omega)))))))
 }
@@ -1855,8 +1869,8 @@ theorem Finite::same_of_neg_same({F: Format}, f, g: Finite(F), e: (-f).val() ≈
 // Ties to even: the two neighbours never both have an even significand.
 theorem Format::nearest_even_same(self F: Format, x: Rat, f, g: Finite(F), hf: Finite::NearestEven(x, f), hg: Finite::NearestEven(x, g)): f.val() ≈ g.val() {
     let even_case = λ (a: Finite(F)) (b: Finite(F)) (conv: a.val() ≈ b.val() → f.val() ≈ g.val()) (s: F.NearSplit(a, b))
-        (pa: (Nat::Even(a.mag) → ¬Nat::Even(b.mag)) → Nat::Even(f.mag) → ¬Nat::Even(g.mag))
-        (pb: (Nat::Even(b.mag) → ¬Nat::Even(a.mag)) → Nat::Even(f.mag) → ¬Nat::Even(g.mag)) =>
+        (pa: (Finite::Even(a) → ¬Finite::Even(b)) → Finite::Even(f) → ¬Finite::Even(g))
+        (pb: (Finite::Even(b) → ¬Finite::Even(a)) → Finite::Even(f) → ¬Finite::Even(g)) =>
         match hf.right(g, hg.left) as λ _ => f.val() ≈ g.val() {
             Inl(gf) => Rat::same_sym(gf),
             Inr(ef) => match hg.right(f, hf.left) {
@@ -1924,7 +1938,7 @@ theorem Finite::below_not_undercuts({F: Format}, x: Rat, f: Finite(F), b: Finite
 theorem Format::ovf_pos(self F: Format): 0 < F.ovf() {
     let tp: (0 < F.top()) = Nat::pow_pos(a := 2, n := F.prec());
     let sp: (0 < Nat::pow(2, F.span)) = Nat::pow_pos(a := 2, n := F.span);
-    let mp: (0 < F.ovf_h()) = Nat::mul_pos(a := F.top() + F.top() - 1, b := Nat::pow(2, F.span), pa := omega, pb := sp);
+    let mp: (0 < F.ovf_h()) = Nat::mul_pos(a := F.max_mag() + F.max_mag() + 1, b := Nat::pow(2, F.span), pa := omega, pb := sp);
     Rat::lt_respects(F.grid_zero(), F.ovf().same_refl(), F.grid_lt(0, F.ovf_h().int(), omega))
 }
 

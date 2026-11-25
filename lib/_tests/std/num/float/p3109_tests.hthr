@@ -1,0 +1,81 @@
+// Probes of `lib/std/num/float/p3109.hthr` and of what P3109 asks of the
+// rounding (docs/library/float-p3109-design.md). The expected values are the
+// P3109 working group's value tables (`Value Tables/Hexadecimal/K8/…` in
+// github.com/P3109/Public): each format's least positive and largest finite
+// value, and the code points they sit at. Tests, not library: nothing
+// outside lib/_tests imports this module (docs/test-value-audit.md §4.5).
+import logic; import bool; import nat; import option; import int; import omega; import rat;
+import dyadic; import float; import round; import p3109;
+fn val_or({F: Format}, r: Float(F), d: Rat) → Rat { match r { Fin(f) => f.val(), Inf(_, _) => d, NaN(_) => d } }
+fn mag_or({F: Format}, r: Float(F)) → Nat { match r { Fin(f) => f.mag, Inf(_, _) => 99, NaN(_) => 99 } }
+
+// ---------------------------------------------------------------------------
+// The formats' parameters, and their extreme values against the tables.
+
+// Binary8p3se: bias 16, largest finite code 0x7e (`0x1.8p+15`), so 30
+// binades above the least normal and the top binade's last significand
+// (`+∞`'s) cut.
+theorem b8p3se_parts(): binary8p3se().frac = 2 ∧ binary8p3se().emin = -15 ∧ binary8p3se().span = 30 ∧ binary8p3se().cut = 1 {
+    And(refl, And(refl, And(refl, refl)))
+}
+theorem b8p3se_min(): Rat::Same((Finite::min_subnormal(binary8p3se())).val(), Dyadic(1, -17).rat()) { refl }
+theorem b8p3se_max(): Rat::Same((Finite::max_finite(binary8p3se())).val(), 49152) { refl }
+// The finite domain keeps the last significand: `0x7f` is `0x1.cp+15`.
+theorem b8p3sf_max(): Rat::Same((Finite::max_finite(binary8p3sf())).val(), 57344) { refl }
+theorem b8p4se_min(): Rat::Same((Finite::min_subnormal(binary8p4se())).val(), Dyadic(1, -10).rat()) { refl }
+theorem b8p4se_max(): Rat::Same((Finite::max_finite(binary8p4se())).val(), 224) { refl }
+theorem b8p4sf_max(): Rat::Same((Finite::max_finite(binary8p4sf())).val(), 240) { refl }
+theorem b8p5se_min(): Rat::Same((Finite::min_subnormal(binary8p5se())).val(), Dyadic(1, -7).rat()) { refl }
+theorem b8p5se_max(): Rat::Same((Finite::max_finite(binary8p5se())).val(), 15) { refl }
+// Precision two: the subnormal binade has one significand, `0x01`.
+theorem b8p2se_min(): Rat::Same((Finite::min_subnormal(binary8p2se())).val(), Dyadic(1, -32).rat()) { refl }
+theorem b8p2se_max(): Rat::Same((Finite::max_finite(binary8p2se())).val(), Dyadic(1, 31).rat()) { refl }
+// Precision one: every value a power of two, the least one normal, and the
+// top code `+∞`'s, so the largest finite value is a binade lower than the
+// code space allows.
+theorem b8p1se_parts(): binary8p1se().frac = 0 ∧ binary8p1se().span = 125 ∧ binary8p1se().cut = 0 { And(refl, And(refl, refl)) }
+theorem b8p1se_min(): Rat::Same((Finite::min_subnormal(binary8p1se())).val(), Dyadic(1, -63).rat()) { refl }
+theorem b8p1se_max(): Rat::Same((Finite::max_finite(binary8p1se())).val(), Dyadic(1, 62).rat()) { refl }
+// Unsigned: the bias doubles and the whole code space is nonnegative; at
+// precision one the NaN takes the last binade (the error FLoPS found in the
+// interim report's `emax`, design D3).
+theorem b8p1uf_min(): Rat::Same((Finite::min_subnormal(binary8p1uf())).val(), Dyadic(1, -127).rat()) { refl }
+theorem b8p1uf_max(): Rat::Same((Finite::max_finite(binary8p1uf())).val(), Dyadic(1, 126).rat()) { refl }
+// Unsigned extended: `+∞` and NaN take the top two codes.
+theorem b8p3ue_min(): Rat::Same((Finite::min_subnormal(binary8p3ue())).val(), Dyadic(1, -33).rat()) { refl }
+theorem b8p3ue_max(): Rat::Same((Finite::max_finite(binary8p3ue())).val(), Dyadic(5, 29).rat()) { refl }
+// The three-bit formats of the design doc's table.
+theorem b3p2se_max(): Rat::Same((Finite::max_finite(Format::p3109(3, 2, Signed, ExtendedDomain))).val(), 1) { refl }
+theorem b3p2uf_max(): Rat::Same((Finite::max_finite(Format::p3109(3, 2, Unsigned, FiniteDomain))).val(), 2) { refl }
+theorem b3p1ue_max(): Rat::Same((Finite::max_finite(Format::p3109(3, 1, Unsigned, ExtendedDomain))).val(), 2) { refl }
+
+// The largest float's code is even in the signed extended formats (`+∞`
+// takes the odd one) and odd in Binary8p3ue (code 0xfd).
+theorem b8p3se_max_even(): binary8p3se().MaxEven() { trivial }
+theorem b8p1se_max_even(): binary8p1se().MaxEven() { trivial }
+theorem b8p3ue_max_odd(): ¬binary8p3ue().MaxEven() { λ h => h }
+
+// ---------------------------------------------------------------------------
+// Ties at precision one go to the even code: the exponent's parity.
+
+// 3 is the midpoint of 2 (code 0x41) and 4 (0x42): up.
+theorem b8p1se_tie_up(): Rat::Same(val_or(binary8p1se().round_dyadic(NearestEven, Dyadic(3, 0)), 99), 4) { refl }
+// 6 is the midpoint of 4 (0x42) and 8 (0x43): down.
+theorem b8p1se_tie_down(): Rat::Same(val_or(binary8p1se().round_dyadic(NearestEven, Dyadic(3, 1)), 99), 4) { refl }
+// 3/2, between 1 (0x40) and 2: down.
+theorem b8p1se_tie_one(): Rat::Same(val_or(binary8p1se().round_dyadic(NearestEven, Dyadic(3, -1)), 99), 1) { refl }
+// Off the midpoint the nearest wins either way.
+theorem b8p1se_near(): Rat::Same(val_or(binary8p1se().round_dyadic(NearestEven, Dyadic(13, -2)), 99), 4) { refl }
+// Half the least value is a tie with zero, whose code is even.
+theorem b8p1se_tie_zero(): Rat::Same(val_or(binary8p1se().round_dyadic(NearestEven, Dyadic(1, -64)), 99), 0) { refl }
+theorem b8p1se_tie_away(): Rat::Same(val_or(binary8p1se().round_dyadic(NearestAway, Dyadic(3, 1)), 99), 8) { refl }
+// Negative control: both neighbours of the tie at 6 have significand 1, so a
+// tie rule read off the significand (IEEE's) has nothing to choose.
+theorem b8p1se_mags_odd(): ¬Nat::Even(mag_or(binary8p1se().round_dyadic(TowardNeg, Dyadic(3, 1))))
+    ∧ ¬Nat::Even(mag_or(binary8p1se().round_dyadic(TowardPos, Dyadic(3, 1))))
+{
+    And(λ h => h, λ h => h)
+}
+// With fraction bits the code's last bit is the significand's, as before:
+// Binary8p3se's 1.25 (0x41) and 1.5 (0x42) tie at 1.375 to 1.5.
+theorem b8p3se_tie(): Rat::Same(val_or(binary8p3se().round_dyadic(NearestEven, Dyadic(11, -3)), 99), Rat(3, 2)) { refl }

@@ -1185,8 +1185,8 @@ theorem Format::prod_err_pos(self F: Format, x: Rat, h, k, c: Nat, ex: x ≈ F.g
             let r1: ((F.top() * F.top()) * P = (F.top() * P) * F.top()) = ring;
             let r2: (F.top() * Q = Q * F.top()) = F.top().mul_comm(Q);
             let ql: (Q < F.top() * P) = Q.lt_of_mul_lt_mul_r(F.top() * P, F.top(), omega(big, hk, st, sk, r1, r2));
-            let four = F.four_le_top();
-            let qt: (1 * Q <= F.top() * Q) = Nat::mul_le_mono_r(Q, 1, F.top(), omega(four));
+            let two = F.two_le_top();
+            let qt: (1 * Q <= F.top() * Q) = Nat::mul_le_mono_r(Q, 1, F.top(), omega(two));
             let q1e: (1 * Q = Q) = Q.mul_left_one();
             F.rep_fit(c, h.int() - p.H(), mD, omega(u2, ql), omega(u1, ql), omega(u2, big, below, qt, q1e), omega(u1, big, below, qt, q1e))
         },

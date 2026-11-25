@@ -57,17 +57,26 @@ import creal_interval;
 // ---------------------------------------------------------------------------
 // A correct rounding moves along floats of the same value.
 
-// Canonical floats of one value have one significand, whatever their signs.
-theorem Finite::mag_of_same_val({F: Format}, f, g: Finite(F), e: f.val() ≈ g.val()): f.mag = g.mag {
+// Canonical floats of one value have one significand and exponent, whatever
+// their signs.
+theorem Finite::parts_of_same_val({F: Format}, f, g: Finite(F), e: f.val() ≈ g.val()): f.mag = g.mag ∧ f.bexp = g.bexp {
     match g.neg.eq_dec(bool::False) {
-        Inl(p) => Finite::mag_of_same(f, g, e, p),
+        Inl(p) => Finite::parts_of_same(f, g, e, p),
         Inr(n) => {
             let t: (g.neg = bool::True) = match g.neg as λ b => b ≠ bool::False → b = bool::True { False => λ no => false_elim(no(refl)), True => λ _ => refl }(n);
             let np: ((-g).neg = bool::False) = j(sym(t), λ b _ => !b = bool::False, refl);
             let ne: ((-f).val() ≈ (-g).val()) = Rat::same_trans(Finite::val_neg(f), Rat::same_trans(Rat::neg_respects(e), Rat::same_sym(Finite::val_neg(g))));
-            Finite::mag_of_same(-f, -g, ne, np)
+            Finite::parts_of_same(-f, -g, ne, np)
         },
     }
+}
+
+theorem Finite::mag_of_same_val({F: Format}, f, g: Finite(F), e: f.val() ≈ g.val()): f.mag = g.mag { (Finite::parts_of_same_val(f, g, e)).left }
+
+// Value-same floats have codes of one parity.
+theorem Finite::even_of_same_val({F: Format}, f, g: Finite(F), e: f.val() ≈ g.val(), ev: Finite::Even(g)): Finite::Even(f) {
+    let p = Finite::parts_of_same_val(f, g, e);
+    j(sym(F.lsb_congr(f.mag, f.bexp, g.mag, g.bexp, p.left, p.right)), λ v _ => Nat::Even(v), ev)
 }
 
 theorem Finite::below_of_same({F: Format}, x: Rat, f, g: Finite(F), e: f.val() ≈ g.val(), b: Finite::Below(x, g)): Finite::Below(x, f) {
@@ -86,10 +95,9 @@ theorem Format::rounds_of_same_fin(self F: Format, mode: Mode, x: Rat, f, g: Fin
     let ge: (g.val() ≈ f.val()) = Rat::same_sym(e);
     match mode as λ md => RoundsTo(F, md, x, Fin(g)) → RoundsTo(F, md, x, Fin(f)) {
         NearestEven => λ (a: Finite::NearestEven(x, g) ∧ F.Fits(x)) => {
-            let m: (f.mag = g.mag) = Finite::mag_of_same_val(f, g, e);
             And(And(Finite::nearest_of_same(x, f, g, e, a.left.left), λ h nh => match a.left.right(h, nh) {
                 Inl(s) => Inl(Rat::same_trans(s, ge)),
-                Inr(ev) => Inr(j(sym(m), λ v _ => Nat::Even(v), ev)),
+                Inr(ev) => Inr(Finite::even_of_same_val(f, g, e, ev)),
             }), a.right)
         },
         NearestAway => λ (a: Finite::NearestAway(x, g) ∧ F.Fits(x)) =>

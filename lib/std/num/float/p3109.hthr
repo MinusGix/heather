@@ -1,0 +1,85 @@
+// The IEEE P3109 formats as `Format`s (docs/library/float-p3109-design.md §3).
+//
+// A P3109 format is `Binary{K, P, Σ, Δ}`: `K` bits, precision `P` (one is
+// allowed), signed or unsigned, and a finite or an extended domain (P3109
+// interim report §3.1). Its finite values are IEEE-shaped below the top: bias
+// `2^(K-P-1)` (signed) or `2^(K-P)` (unsigned), subnormals at the least
+// exponent, and normal binades above, cut short at the top by the codes the
+// special values take (report §4.7.2: the NaN, and `±∞` in an extended
+// domain). So a format is the library's `frac`, `emin`, `span` and `cut`,
+// computed from the number `R` of codes reserved at the top of the
+// nonnegative half by one division, and the maximum exponent is a
+// consequence rather than a table (design D3).
+//
+// What P3109 does differently from the IEEE formats, and where it lives:
+// - one zero and one NaN: a P3109 datum is a `Float(F)` read up to `≈`
+//   (design D1), and the encoding sends both zeros to code 0;
+// - unsigned formats: `p3109(K, P, Unsigned, Δ)` is the signed envelope
+//   whose nonnegative half is the format's data (design D2);
+// - ties at precision one go to the even code, which is the exponent's
+//   parity (`Format::lsb`, design D4);
+// - a nearest-even tie at the overflow threshold stays finite when the
+//   largest float's code is even (design D5).
+
+import logic;
+import bool;
+import nat;
+import int;
+import omega;
+import float;
+
+inductive Signedness { Signed, Unsigned }
+
+// `FiniteDomain`: no infinities. `ExtendedDomain`: `+∞`, and `-∞` when signed.
+inductive Domain { FiniteDomain, ExtendedDomain }
+
+// The codes the special values take at the top of the nonnegative half:
+// a signed format's NaN is the `-0` pattern, below it; an unsigned one's NaN
+// is its last code, with `+∞` before it in an extended domain.
+fn Domain::reserved(self d: Domain, s: Signedness) → Nat {
+    match s {
+        Signed => match d { FiniteDomain => 0, ExtendedDomain => 1 },
+        Unsigned => match d { FiniteDomain => 1, ExtendedDomain => 2 },
+    }
+}
+
+fn Domain::specials(self d: Domain) → Specials { match d { FiniteDomain => NanOnly, ExtendedDomain => Ieee } }
+
+// The exponent bias.
+fn Format::p3109_bias(K, P: Nat, s: Signedness) → Nat {
+    match s { Signed => Nat::pow(2, K - P - 1), Unsigned => Nat::pow(2, K - P) }
+}
+
+// The nonnegative codes: half the code space when signed.
+fn Format::p3109_codes(K: Nat, s: Signedness) → Nat { match s { Signed => Nat::pow(2, K - 1), Unsigned => Nat::pow(2, K) } }
+
+// The largest finite code.
+fn Format::p3109_top_code(K: Nat, s: Signedness, d: Domain) → Nat { Format::p3109_codes(K, s) - 1 - d.reserved(s) }
+
+// `cut` never takes the top binade's least normal significand.
+theorem Format::p3109_cut_ok(P, n: Nat): (Nat::pow(2, P - 1) - 1 - n.mod(Nat::pow(2, P - 1))) + 1 <= Nat::pow(2, P - 1) {
+    let h: (1 <= Nat::pow(2, P - 1)) = Nat::pow_pos(a := 2, n := P - 1);
+    omega
+}
+
+// `Binary{K, P, s, d}`. A code `n` of the nonnegative half has trailing
+// significand `n mod 2^(P-1)` and biased exponent `n ÷ 2^(P-1)`; the
+// library's `bexp` is the biased exponent less one (IEEE's least normal
+// binade is `bexp = 0`), so the largest finite code fixes `span` and the
+// top binade's last significand.
+fn Format::p3109(K, P: Nat, s: Signedness, d: Domain) → Format {
+    let half = Nat::pow(2, P - 1);
+    let n = Format::p3109_top_code(K, s, d);
+    Format(P - 1, 1 - Format::p3109_bias(K, P, s).int(), n.div(half) - 1, half - 1 - n.mod(half), Format::p3109_cut_ok(P, n), d.specials())
+}
+
+// The 8-bit formats the report's examples and the ML literature use most.
+fn binary8p1se() → Format { Format::p3109(8, 1, Signed, ExtendedDomain) }
+fn binary8p2se() → Format { Format::p3109(8, 2, Signed, ExtendedDomain) }
+fn binary8p3se() → Format { Format::p3109(8, 3, Signed, ExtendedDomain) }
+fn binary8p4se() → Format { Format::p3109(8, 4, Signed, ExtendedDomain) }
+fn binary8p5se() → Format { Format::p3109(8, 5, Signed, ExtendedDomain) }
+fn binary8p3sf() → Format { Format::p3109(8, 3, Signed, FiniteDomain) }
+fn binary8p4sf() → Format { Format::p3109(8, 4, Signed, FiniteDomain) }
+fn binary8p1uf() → Format { Format::p3109(8, 1, Unsigned, FiniteDomain) }
+fn binary8p3ue() → Format { Format::p3109(8, 3, Unsigned, ExtendedDomain) }
