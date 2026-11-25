@@ -40,3 +40,33 @@ Items 1 to 6 have landed with `scripts/test --pr` green, or the package stopped 
   - `Steps::at`, `Steps::over` compose the steps; `Steps::apart_sound` gives `Steps::Apart(m, ws, xs, ys)`, re-proved by `ApartAt::under` down the common prefix (a case split on the step's fit: where it fits, `over_at`/`over_over`/`over_read` with `keeps`; where not, `still`) and `ApartAt::then_both` after the difference. No `Path`, `PathLawsOn` or `KeepsFit` is used.
   - The path-based model `value_steps.hthr` and `coded.hthr` were built on moved into `value_steps.hthr` as `PathModel` (renamed, verbatim), until both retire in item 6.
   - `scripts/test --pr`: `== suite: 3518 passed, 0 failed, 2 ignored ==`.
+- 2026-11-25: **Item 2 landed: values** (`shape.hthr`, `sequences.hthr`; probes `shape_tests.hthr`, `sequences_tests.hthr`), with the coordinator's decisions A (the pad) and B (the index) applied.
+  - **The index (B, a change to item 1)**: `Sel`'s indices are `Ix`, a number or a word at a width (the variable's own value, `Dyn::ix`). `Sel::apart` and the obligations read them through `toNat` (`Atom::ix_nat`, `Atom::spans_ix`), and an instance reads them at its own accessor's type. The legacy path model reads numbers through `Ix::of_nats`.
+  - **Codes**: `Shape { SWord(Width), SNamed(k) }`, `Width { WNat, WBits(n) }` (`u64` is `SWord(WBits(64))`), `El`, `Dyn`, `Dyn::back`, `Dyn::get` (an `Option`, for callees), and `Dyn::ix`/`Dyn::index` for indices.
+  - **Structures**: `Struct { sharing, pad, kind }`, with `Sharing { Plain, Object, Linear }` and `Kind { Opaque, Record(fields), Sequence(Seq) }`.
+    - `Seq` holds: the element's shape, its length, a total read and update at an `Ix`, `inside`, the accessor's proposition, `make` (n copies, for the body's `fresh`), and windows (`Win`: their shape, length, read, guarded update, `inside`, proposition).
+    - Laws: `RecordLaws`, `SeqLaws`, `WinLaws` (relative to the length read) and `WinLen` (a window's length as the environment reads it).
+  - **The model**: each step at a code is a `Part` or none.
+    - A step with no part reads the word 0, not the owner. An owner-back read makes the decider unsound beside a write: `[SField(2)]` and `[SField(0)]` on a record of two fields.
+    - `Dyn::like` is code equality, plus length equality through a window.
+    - `Dyn::model_laws` derives the model's laws from `StrsLaws` alone.
+  - **Instances (A)**, each reading through its type's own total accessor with that accessor's pad:
+    - `List<A>` takes its pad as a parameter. Its windows are lists (`Seq::list_win`, the window's type given by `to`/`of`). It has 9 window laws, proved through `List::ext_nth`.
+    - `[A; n]` takes its pad as a parameter (`Vec::at`, `Vec::put`).
+    - `Bytes(n)` reads at a `u64` index (`Bytes::at`, `Bytes::put`). Its laws need unique identity proofs at `Nat` for the length proof: `Nat::uip`, Hedberg's argument from `Nat::dec`, in the module ([[uip-from-decidable-equality]] would move it to the library).
+    - No real type was excluded for want of a pad in this package.
+  - **Probes**, all by `refl`:
+    - `ps[i].x` over a list of records.
+    - `v[i]` over `[u64; 16]`, which is `Vec::at`.
+    - `s[i]` over `Bytes(n)`, which is `Bytes::at` at the word. A number index reads 0.
+    - Writes against the source's update and `Bytes::put`.
+    - A window of a list.
+    - The decider's customers at `Dyn`, with refused controls and `¬` theorems at values:
+      - split_at_mut, with the left half kept after the right is written.
+      - An element held while another is stored.
+      - A window held while an element past it is stored.
+      - Two fields of an element, and one field of two elements.
+      - Two bytes at `u64` indices.
+  - Keys and variants (`value_steps.hthr`'s last two customers) are outside the first fragment (§21.1) and are not restated.
+  - **Retired**: `value_steps.hthr` and its tests. The legacy path model moved to `coded.hthr` until item 3 retires it.
+  - `scripts/test --pr`: `== suite: 3518 passed, 0 failed, 2 ignored ==`.
