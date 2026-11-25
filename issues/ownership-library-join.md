@@ -1,6 +1,6 @@
 ---
 title: Join the first wave's libraries: a key as a path step, footprints for fields, the separation algebra at paths
-status: open
+status: closed
 labels: [ownership,library]
 area: heather-in-heather
 milestone: [nh-ownership]
@@ -48,3 +48,4 @@ A vector element reached through a handle is one composed path with one validity
   - Deciders and where each is complete: `Key::apart` complete (where it says no the keys are one key, not apart from itself); `Held::valid` complete; spans (`PathIn::apart_sound`, `Part::paths_apart`, `Heap::elems_apart`) complete on spans, not on paths: two guarded paths whose checks never pass at one heap (a stale window's element and the fresh window's over the same word: one claim slot, two generations) do not meet, yet their spans do, and the probe records the decider refusing them.
 
   `arena-handles-push-and-new-vec` did not fall out of the join; it stays open, narrowed to what it needs. Residue filed: [[held-endpoint-decider]].
+- 2026-11-25: Verified: `scripts/test --pr` on the final tree (33d43f3 plus the issue logs) — `== suite: 3514 passed, 0 failed, 2 ignored ==`; every new module and probe checked with `heather check --cache --expectations`, `heather fmt --check` clean, `scripts/lib-closures` clean. Done-when met: a vector element through a handle is one composed path with one validity statement and a footprint (`Heap::elem_path`, `elem_valid`, `elem_same`); two such elements and two fields of one record are decided apart (`Heap::elems_apart`, `Part::paths_apart`); the path-level frame theorem is proved and cites the algebra (`Held::path_keeps`); the three residue issues are closed or narrowed (ownership-paths-footprints and separation-algebra-paths-instance closed; arena-handles-push-and-new-vec open, narrowed).
