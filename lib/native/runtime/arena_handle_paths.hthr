@@ -55,6 +55,8 @@ import arena_laws;
 import store;
 import arena_handles;
 import arena_paths;
+import pcm_share;
+import held;
 
 // ---------------------------------------------------------------------------
 // The heap's words
@@ -341,4 +343,23 @@ theorem Heap::vec_elems_apart(v: VecHandle, i, k: Nat, in_i: i < v.data.count.to
     Apart<Heap, u64, u64>(Heap::vec_elem(v, i), Heap::vec_elem(v, k))
 {
     Heap::elems_apart_in(v.data, i, k, in_i, in_k, ne)
+}
+
+// ---------------------------------------------------------------------------
+// What an allocation hands out is owned exclusively
+
+fn Window::span(self w: Window) → Span { Span(w.base.toNat(), w.count.toNat()) }
+
+theorem Heap::valid_owns(self h: Heap, w1, w2: Window, valid1: h.Valid(w1), valid2: h.Valid(w2), other: ¬(w1.key.index = w2.key.index)):
+    Held::own(w1.span()).join(Held::own(w2.span())).Valid()
+{
+    let ap = h.valid_apart(w1, w2, valid1, valid2, other);
+    Held::owns_compose(w1.span(), w2.span(), λ x h1 h2 => match ap { Inl(p) => omega(p, h1, h2), Inr(p) => omega(p, h1, h2) })
+}
+
+theorem Heap::alloc_owns(self h: Heap, size: u64, w: Window, granted: Heap::alloc(h, size).value = Granted(w), w2: Window, valid2: h.Valid(w2)):
+    Held::own(w.span()).join(Held::own(w2.span())).Valid()
+{
+    Heap::alloc(h, size).after.valid_owns(w, w2, Heap::alloc_valid(h, size, w, granted), Heap::alloc_keeps(h, size, w2, valid2),
+        λ e => Heap::alloc_other_key(h, size, w, granted, w2, valid2, sym(e)))
 }

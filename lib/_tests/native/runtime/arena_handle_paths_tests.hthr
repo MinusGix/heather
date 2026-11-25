@@ -25,6 +25,8 @@ import arena_laws;
 import store;
 import arena_handles;
 import arena_paths;
+import pcm_share;
+import held;
 import arena_handle_paths;
 
 // ---------------------------------------------------------------------------
@@ -162,6 +164,16 @@ theorem store_keeps_other(h: Heap, w, w2: Window, i, x: u64, k: Nat, valid: h.Va
     j(sym(h.store_is_elem(w, i, x, valid, li)), λ t _ => Heap::elem_path(w2, k).Keeps(h, t), apart.keeps(h, x))
 }
 
+// What an allocation grants its caller owns exclusively beside every
+// window valid before; at closed values the holding is decided.
+theorem granted_owned(h: Heap, size: u64, w, w2: Window, granted: Heap::alloc(h, size).value = Granted(w), valid2: h.Valid(w2)):
+    Held::own(w.span()).join(Held::own(w2.span())).Valid()
+{
+    h.alloc_owns(size, w, granted, w2, valid2)
+}
+
+theorem x_data_owned(): Held::own(X().span()).join(Held::own(DW().span())).valid() = True { refl }
+
 // ---------------------------------------------------------------------------
 // Negative controls
 
@@ -181,3 +193,6 @@ theorem stale_span_meets(): Span(W1().base.toNat() + 0, 1).apart(Span(W2().base.
 theorem stale_and_fresh_refused(): Apart<Heap, u64, u64>(Heap::elem_path(W1(), 0), Heap::elem_path(W2(), 0)) {
     Heap::elems_apart(W1(), W2(), 0, 0, trivial, trivial, trivial)
 }
+
+// Two windows over one word are not owned apart.
+theorem stale_and_fresh_not_owned(): Held::own(W1().span()).join(Held::own(W2().span())).valid() = False { refl }

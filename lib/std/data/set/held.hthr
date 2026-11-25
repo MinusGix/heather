@@ -259,3 +259,16 @@ theorem Held::views_compose(s, t: Span, q, r: Share, total: q.join(r).Valid()): 
             Access::views_compose(SpanSet::of(s), SpanSet::of(t), q, r, total, x))
     }
 }
+
+// Owners of disjoint spans compose: each owns its footprint exclusively
+// beside the other.
+theorem Held::owns_compose(s, t: Span, d: s.Disjoint(t)): Held::own(s).join(Held::own(t)).Valid() {
+    let ds: (SpanSet::of(s).Disjoint(SpanSet::of(t))) = λ x hs ht =>
+        d(x, j(SpanSet::of_has(s, x), λ b _ => b.IsTrue(), hs), j(SpanSet::of_has(t, x), λ b _ => b.IsTrue(), ht));
+    λ x => {
+        let ps = Access::pick(SpanSet::of(s).has(x), Share::whole());
+        let pt = Access::pick(SpanSet::of(t).has(x), Share::whole());
+        Share::valid_respects(Share::same_sym(Share::join_respects(ps.same_refl(), pt.join_none())),
+            Access::of_disjoint(SpanSet::of(s), SpanSet::of(t), Share::whole(), Share::whole(), ds, omega, omega, x))
+    }
+}
