@@ -1339,53 +1339,238 @@ theorem run_instrs_holds(blocks: Blocks, spans: Spans, values: Valuation(), inst
 }
 
 // ---------------------------------------------------------------------------
-// Sequences and branches
+// Calls: what a callee answers, and what its code promises
+
+// What routine `f` answers on values and a heap: the program's meaning at
+// one fuel, the world aside (`bytes_level_routines`).
+fn RoutineAnswers() → Type<1> { Nat → List<Value> → Heap → Answer → Type }
+
+fn typed_ids(vs: List<Typed>) → List<Nat> { match vs { Nil => Nil, Cons(v, rest) => Cons(v.id, typed_ids(rest)) } }
+
+// A routine's words as its code answers them: the first in RAX, the rest in
+// `answer_registers()`. One that answers none answers zero in RAX, so that
+// every call has a word there (FunctionIR's call and function theorems are
+// stated with one).
+fn answer_head(words: List<BitVec(64)>) → BitVec(64) { match words { Nil => BitVec::zero(), Cons(w, _) => w } }
+
+fn answer_tail(words: List<BitVec(64)>) → List<BitVec(64)> { match words { Nil => Nil, Cons(_, rest) => rest } }
+
+// Where a call's answer lands: its first result's id, or `spare` (an id the
+// scope never binds, zero in its valuation) where it has none; and the rest.
+fn call_result(results: List<Typed>, spare: Nat) → Nat { match results { Nil => spare, Cons(v, _) => v.id } }
+
+fn call_also(results: List<Typed>) → List<Nat> { match results { Nil => Nil, Cons(_, rest) => typed_ids(rest) } }
+
+// A call at the valuation: the arguments `args` are the words at its
+// arguments' ids, lowered, the answer `a`'s words land where the call says,
+// and the heap after it is the answer's.
+fn CallLands(spans: Spans, values: Valuation(), spare: Nat, arguments, results: List<Typed>, args: List<Value>, a: Answer, after: Heap) → Type {
+    (lower_values(spans, args) = words_of(values, typed_ids(arguments))) ∧
+        (((answer_head(lower_values(spans, a.words)) = values(64, call_result(results, spare))) ∧
+            (answer_tail(lower_values(spans, a.words)) = words_of(values, call_also(results)))) ∧ (a.heap = after))
+}
+
+// Routine `f` entered on `args` over `heap` at stack offset `i`: the
+// arguments passed lowered, room below for its frames, the lending's words
+// above, and the heap injected.
+fn RoutinePre<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, rooms: Nat → Nat, top, f: Nat, args: List<Value>,
+    heap: Heap) → Nat → MachineState<M> → Type {
+    λ i s => (stack.Passed(lower_values(spans, args), i, s) ∧ (rooms(f) <= i)) ∧ ((i + 8 <= top) ∧ Injected<M>(site.data, spans, heap, s.memory))
+}
+
+// And returned with `a`: its words in the answer registers, the callee-saved
+// registers kept, its stores inside the lending, and its heap injected.
+fn RoutinePost<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, a: Answer) → Nat → MachineState<M> → MachineState<M> → Type {
+    λ i s t => Answered(answer_head(lower_values(spans, a.words)), answer_tail(lower_values(spans, a.words)), t.gprs) ∧
+        (Kept(callee_kept(), s.gprs, t.gprs) ∧ (stack.WroteIn(i, spans, s.memory, t.memory) ∧ Injected<M>(site.data, spans, a.heap, t.memory)))
+}
+
+// Every routine below `bound`, wherever it answers, returns so at its label.
+fn CalleesReturn<M>(site: Site<M>, stack: Stack<M>(site.fetch, site.data), spans: Spans, rooms: Nat → Nat, top, bound: Nat, answers: RoutineAnswers()) → Type {
+    (f: Nat) → f + 1 <= bound → (args: List<Value>) → (heap: Heap) → (a: Answer) → answers(f, args, heap, a) →
+        site.Returns(stack, asm_labels(site.program)(f + 1), RoutinePre<M>(site, stack, spans, rooms, top, f, args, heap), RoutinePost<M>(site, stack, spans, a))
+}
+
+// Whether a region calls, and that every call of a routine below `bound`
+// has its room and the call's 24 bytes in `avail` (FunctionIR's
+// `StructuredRegion::Fits`).
+fn Body::calls(self body: Body) → Bool {
+    match body {
+        Leaf(_) => False,
+        Seq(first, rest) => first.calls() || rest.calls(),
+        Branch(_, yes, no) => yes.calls() || no.calls(),
+        Call(_, _, _) => True,
+        Loop(_, _, inner, _, _, _) => inner.calls(),
+        Sys(_) => False,
+        Exit(_) => False,
+    }
+}
+
+fn Body::Fits(self body: Body, rooms: Nat → Nat, bound, avail: Nat) → Type {
+    match body {
+        Leaf(_) => True,
+        Seq(first, rest) => first.Fits(rooms, bound, avail) ∧ rest.Fits(rooms, bound, avail),
+        Branch(_, yes, no) => yes.Fits(rooms, bound, avail) ∧ no.Fits(rooms, bound, avail),
+        Call(callee, _, _) => callee + 1 <= bound → rooms(callee) + 24 <= avail,
+        Loop(_, _, inner, _, _, _) => inner.Fits(rooms, bound, avail),
+        Sys(_) => True,
+        Exit(_) => True,
+    }
+}
+
+fn Body::fits(self body: Body, rooms: Nat → Nat, avail: Nat) → Bool {
+    match body {
+        Leaf(_) => True,
+        Seq(first, rest) => first.fits(rooms, avail) && rest.fits(rooms, avail),
+        Branch(_, yes, no) => yes.fits(rooms, avail) && no.fits(rooms, avail),
+        Call(callee, _, _) => (rooms(callee) + 24).leb(avail),
+        Loop(_, _, inner, _, _, _) => inner.fits(rooms, avail),
+        Sys(_) => True,
+        Exit(_) => True,
+    }
+}
+
+theorem Body::fits_sound(self body: Body, rooms: Nat → Nat, bound, avail: Nat): body.fits(rooms, avail).IsTrue() → body.Fits(rooms, bound, avail) {
+    match body {
+        Leaf(_) => λ _ => trivial,
+        Seq(first, rest) => λ ok => {
+            let parts = Bool::is_true_and(first.fits(rooms, avail), rest.fits(rooms, avail), ok);
+            ⟨first.fits_sound(rooms, bound, avail, parts.left), rest.fits_sound(rooms, bound, avail, parts.right)⟩
+        },
+        Branch(_, yes, no) => λ ok => {
+            let parts = Bool::is_true_and(yes.fits(rooms, avail), no.fits(rooms, avail), ok);
+            ⟨yes.fits_sound(rooms, bound, avail, parts.left), no.fits_sound(rooms, bound, avail, parts.right)⟩
+        },
+        Call(callee, _, _) => λ ok _ => (rooms(callee) + 24).leb_sound(avail, ok),
+        Loop(_, _, inner, _, _, _) => λ ok => inner.fits_sound(rooms, bound, avail, ok),
+        Sys(_) => λ _ => trivial,
+        Exit(_) => λ _ => trivial,
+    }
+}
+
+// The room a region's calls ask below a frame.
+fn Body::callee_room(self body: Body, rooms: Nat → Nat) → Nat {
+    match body {
+        Leaf(_) => 0,
+        Seq(first, rest) => first.callee_room(rooms).max(rest.callee_room(rooms)),
+        Branch(_, yes, no) => yes.callee_room(rooms).max(no.callee_room(rooms)),
+        Call(callee, _, _) => rooms(callee) + 24,
+        Loop(_, _, inner, _, _, _) => inner.callee_room(rooms),
+        Sys(_) => 0,
+        Exit(_) => 0,
+    }
+}
+
+// The CALL of a call whose callee answers `a` on `args`: the callee's
+// return (`CalleesReturn`) is its contract for `call_step_by`, cited as
+// stated at the heap's clause. Its precondition is the caller's clause and
+// the words passed; its postcondition gives the answer's words where the
+// call lands them and the answer's heap injected.
+theorem call_heap_step<M>(saved: List<Gpr>, slots: Nat, eight: saved.len() <= 8, slotted: saved.len() <= slots, site: Site<M>,
+    laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), rooms: Nat → Nat, bound, avail: Nat, answers: RoutineAnswers(),
+    callees: CalleesReturn<M>(site, stack, spans, rooms, top, bound, answers), values: Valuation(), spare: Nat, d: Nat, s0: MachineState<M>,
+    room: avail <= d, fits: d + 8 * slots <= stack.size, under: (d + 8 * slots) + 8 <= top, prog: Prog, callee: Nat, deep: 24 <= d,
+    below: callee + 1 <= bound, fit: rooms(callee) + 24 <= avail, count: Nat, few: count <= 2, arguments, results: List<Typed>, before, after: Heap,
+    args: List<Value>, a: Answer, answered: answers(callee, args, before, a), lands: CallLands(spans, values, spare, arguments, results, args, a, after),
+    g0: Gprs, k: Nat, at: asm_back(site.program, k) = At(prog, 0, CallTo(callee + 1))):
+    site.Moves(stack.writes, prog_len(prog), prog_len(prog) + 5,
+        λ (x: MachineState<M>) => stack.ArgsReadyBy(saved, spans, heap_in<M>(site.data, spans), d, slots, s0, before, g0, count,
+            words_of(values, typed_ids(arguments)), x),
+        λ (t: MachineState<M>) => stack.CalledBy(saved, spans, heap_in<M>(site.data, spans), d, slots, s0, after, g0, count,
+            values(64, call_result(results, spare)), words_of(values, call_also(results)), t)) {
+    let i = (d - 8 * count) - 8;
+    let low: (rooms(callee) <= i) = { omega };
+    let high: (i + 8 <= top) = { omega };
+    call_step_by<M, Heap>(saved, slots, eight, slotted, site, laid, stack, top, spans, heap_in<M>(site.data, spans), loan,
+        heap_in_stable<M>(stack, top, spans, loan), d, s0, fits, under, prog, callee, deep, count, few, words_of(values, typed_ids(arguments)),
+        values(64, call_result(results, spare)), words_of(values, call_also(results)), before, after,
+        RoutinePre<M>(site, stack, spans, rooms, top, callee, args, before), RoutinePost<M>(site, stack, spans, a),
+        callees(callee, below, args, before, a, answered),
+        λ u passed inj => ⟨⟨j(sym(lands.left), λ ws _ => stack.Passed(ws, i, u), passed), low⟩, ⟨high, inj⟩⟩,
+        λ u t inj post => ⟨⟨trans(post.left.left, lands.right.left.left),
+            j(lands.right.left.right, λ ws _ => ArgsIn(ws, answer_registers(), t.gprs), post.left.right)⟩,
+            ⟨post.right.left, ⟨post.right.right.left, j(lands.right.right, λ h _ => Injected<M>(site.data, spans, h, t.memory), post.right.right.right)⟩⟩⟩,
+        g0, k, at)
+}
+
+// ---------------------------------------------------------------------------
+// Sequences, branches and calls
 
 // A region's meaning at the valuation, from the heap `before` to `after`:
-// a leaf's nodes, a sequence through a heap between, and the arm the
-// condition's bit picks. Calls, loops, system calls and exits are not
-// lowered yet (issues/bytes-level-lowering.md) and mean nothing here.
-fn Body::Holds(self body: Body, spans: Spans, blocks: Blocks, values: Valuation(), before, after: Heap) → Type {
+// a leaf's nodes, a sequence through a heap between, the arm the
+// condition's bit picks, and a call: the values at its arguments, lowered,
+// are the valuation's words there, the callee answers them (`answers`, what
+// the program's routines answer at the fuel the call is made with), and its
+// answer's words, lowered, are the words at its results (`CallLands`). Loops,
+// system calls and exits are not lowered yet and mean nothing here.
+fn Body::Holds(self body: Body, spans: Spans, blocks: Blocks, values: Valuation(), answers: RoutineAnswers(), spare: Nat, before, after: Heap) → Type {
     match body {
         Leaf(instrs) => InstrsHold(spans, blocks, values, instrs, before, after),
-        Seq(first, rest) => Exists<Heap>(λ mid => first.Holds(spans, blocks, values, before, mid) ∧ rest.Holds(spans, blocks, values, mid, after)),
+        Seq(first, rest) => Exists<Heap>(λ mid => first.Holds(spans, blocks, values, answers, spare, before, mid) ∧
+            rest.Holds(spans, blocks, values, answers, spare, mid, after)),
         Branch(condition, yes, no) => match values(1, condition).head_bit() {
-            True => yes.Holds(spans, blocks, values, before, after),
-            False => no.Holds(spans, blocks, values, before, after),
+            True => yes.Holds(spans, blocks, values, answers, spare, before, after),
+            False => no.Holds(spans, blocks, values, answers, spare, before, after),
         },
-        Call(_, _, _) => False,
+        Call(callee, arguments, results) => Exists<List<Value>>(λ args => Exists<Answer>(λ a =>
+            answers(callee, args, before, a) ∧ CallLands(spans, values, spare, arguments, results, args, a, after))),
         Loop(_, _, _, _, _, _) => False,
         Sys(_) => False,
         Exit(_) => False,
     }
 }
 
+// A call's code: FunctionIR's (`File::emit_call`, lending no buffers),
+// proved by `File::emit_call_steps_by` at the heap's clause with each CALL
+// by `call_heap_step`.
+theorem call_heap_emits<M>(saves, slots: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
+    top: Nat, spans: Spans, loan: Loan<M>(site.fetch, site.data, stack, top, spans), rooms: Nat → Nat, bound, avail: Nat, answers: RoutineAnswers(),
+    callees: CalleesReturn<M>(site, stack, spans, rooms, top, bound, answers), blocks: Blocks, values: Valuation(), spare: Nat, d: Nat,
+    s0: MachineState<M>, rsp0: read_gpr(Rsp, s0.gprs) = stack.at(d), room: avail <= d, deep: 24 <= d, fits: d + 8 * slots <= stack.size,
+    under: (d + 8 * slots) + 8 <= top, prog: Prog, file: File, callee: Nat, arguments, results: List<Typed>,
+    fit: callee + 1 <= bound → rooms(callee) + 24 <= avail, placement: List<Place>, names: Nat, before, after: Heap):
+    MayEmitHeap<M>(saves, site, stack, spans, values, d + 8 * slots, s0, prog, file,
+        Body::Call(callee, arguments, results).Holds(spans, blocks, values, answers, spare, before, after), before, after,
+        file.emit_call(slots, prog, callee, typed_ids(arguments), call_result(results, spare), call_also(results), placement, names, bound, [], [])) {
+    file.emit_call_steps_by<M, Heap>(saves, slots, site, laid, stack, top, bound, spans, heap_in<M>(site.data, spans),
+        heap_in_stable<M>(stack, top, spans, loan), values, d, s0, rsp0, fits, under, deep, prog, callee, typed_ids(arguments),
+        call_result(results, spare), call_also(results), placement, names, [], [],
+        Body::Call(callee, arguments, results).Holds(spans, blocks, values, answers, spare, before, after), before, after,
+        λ eight slotted below _ count few moved facts g0 _ _ k at => call_heap_step<M>(call_saves(placement), slots, eight, slotted, site, laid, stack, top,
+            spans, loan, rooms, bound, avail, answers, callees, values, spare, d, s0, room, fits, under, moved, callee, deep, below, fit(below), count, few,
+            arguments, results, before, after, facts.witness, facts.proof.witness, facts.proof.proof.left, facts.proof.proof.right, g0, k, at))
+}
+
 // A region's code: a leaf's nodes; a sequence's parts one after the other;
 // a branch as FunctionIR's conditional (the test of its bit, or of the
 // comparison the file knows it to be, the first arm, a jump to the join,
 // the second arm, the join, where only what both arms' files agree on
-// survives: `File::branch_test`, `File::meet`). `short` names the labels
-// whose jumps take their short form.
-fn Body::emit(self body: Body, saves: Nat, short: List<Nat>, prog: Prog, file: File, placement: List<Place>, names: Nat) → Option<Emitted> {
+// survives: `File::branch_test`, `File::meet`); a call as FunctionIR's,
+// lending no buffers, of a routine below `bound`, its frame's `slots`
+// call slots. `short` names the labels whose jumps take their short form.
+fn Body::emit(self body: Body, saves, slots: Nat, short: List<Nat>, bound, spare: Nat, prog: Prog, file: File, placement: List<Place>, names: Nat) →
+    Option<Emitted> {
     match body {
         Leaf(instrs) => emit_instrs(saves, prog, file, instrs, placement, names),
-        Seq(first, rest) => match first.emit(saves, short, prog, file, placement, names) {
+        Seq(first, rest) => match first.emit(saves, slots, short, bound, spare, prog, file, placement, names) {
             None => None,
-            Some(done) => rest.emit(saves, short, done.prog, done.file, done.placement, done.names),
+            Some(done) => rest.emit(saves, slots, short, bound, spare, done.prog, done.file, done.placement, done.names),
         },
         Branch(condition, yes, no) => match file.branch_test(condition) {
             None => None,
-            Some(tested) => match yes.emit(saves, short, prog.branched_by(tested.test, names + 1, shorts(short, names + 1)), file.know(Truth(condition)),
-                placement, names + 2) {
+            Some(tested) => match yes.emit(saves, slots, short, bound, spare, prog.branched_by(tested.test, names + 1, shorts(short, names + 1)),
+                file.know(Truth(condition)), placement, names + 2) {
                 None => None,
-                Some(left) => match no.emit(saves, short, left.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2)),
+                Some(left) => match no.emit(saves, slots, short, bound, spare, left.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2)),
                     file.know(Falsity(condition)), left.placement, left.names) {
                     None => None,
                     Some(right) => Some(Emitted(right.prog.join_label(names + 2), left.file.meet(right.file, file.known), right.placement, right.names)),
                 },
             },
         },
-        Call(_, _, _) => None,
+        Call(callee, arguments, results) =>
+            file.emit_call(slots, prog, callee, typed_ids(arguments), call_result(results, spare), call_also(results), placement, names, bound, [], []),
         Loop(_, _, _, _, _, _) => None,
         Sys(_) => None,
         Exit(_) => None,
@@ -1395,57 +1580,72 @@ fn Body::emit(self body: Body, saves: Nat, short: List<Nat>, prog: Prog, file: F
 // The branch: the generic conditional (`branch_emits_by`), the bit picking
 // the arm's facts.
 theorem branch_heap_emits<M>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
-    spans: Spans, blocks: Blocks, values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File, condition: Nat, yes, no: Body,
-    before, after: Heap, tested: Tested(file, condition), names: Nat, short: List<Nat>, left, right: Emitted,
+    spans: Spans, blocks: Blocks, values: Valuation(), answers: RoutineAnswers(), spare: Nat, d: Nat, s0: MachineState<M>, prog: Prog, file: File,
+    condition: Nat, yes, no: Body, before, after: Heap, tested: Tested(file, condition), names: Nat, short: List<Nat>, left, right: Emitted,
     yes_emits: EmitsHeap<M>(saves, site, stack, spans, values, d, s0, prog.branched_by(tested.test, names + 1, shorts(short, names + 1)),
-        file.know(Truth(condition)), yes.Holds(spans, blocks, values, before, after), before, after, left),
+        file.know(Truth(condition)), yes.Holds(spans, blocks, values, answers, spare, before, after), before, after, left),
     no_emits: EmitsHeap<M>(saves, site, stack, spans, values, d, s0, left.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2)),
-        file.know(Falsity(condition)), no.Holds(spans, blocks, values, before, after), before, after, right)):
-    EmitsHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Body::Branch(condition, yes, no).Holds(spans, blocks, values, before, after),
+        file.know(Falsity(condition)), no.Holds(spans, blocks, values, answers, spare, before, after), before, after, right)):
+    EmitsHeap<M>(saves, site, stack, spans, values, d, s0, prog, file,
+        Body::Branch(condition, yes, no).Holds(spans, blocks, values, answers, spare, before, after),
         before, after, Emitted(right.prog.join_label(names + 2), left.file.meet(right.file, file.known), right.placement, right.names)) {
-    let picked = λ (b: Bool) => match b { True => yes.Holds(spans, blocks, values, before, after), False => no.Holds(spans, blocks, values, before, after) };
+    let picked = λ (b: Bool) => match b {
+        True => yes.Holds(spans, blocks, values, answers, spare, before, after),
+        False => no.Holds(spans, blocks, values, answers, spare, before, after),
+    };
     let bit = values(1, condition).head_bit();
     branch_emits_by<M, Heap>(saves, site, laid, stack, spans, heap_in<M>(site.data, spans), values, d, s0, prog, file, condition, picked(bit),
-        yes.Holds(spans, blocks, values, before, after), no.Holds(spans, blocks, values, before, after), before, after, tested, names, short, left, right,
-        yes_emits, no_emits,
+        yes.Holds(spans, blocks, values, answers, spare, before, after), no.Holds(spans, blocks, values, answers, spare, before, after), before, after,
+        tested, names, short, left, right, yes_emits, no_emits,
         λ h clear => j(function_ir_lower_calls::not_false(bit, clear), λ b _ => picked(b), h),
         λ h set => j(function_ir_lower_calls::not_true(bit, set), λ b _ => picked(b), h))
 }
 
-// A region's code meets its meaning, for every heap before and after.
-theorem Body::emit_emits<M>(self body: Body, saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
-    top: Nat, spans: Spans, loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), values: Valuation(),
-    d: Nat, s0: MachineState<M>, short: List<Nat>): (prog: Prog) → (file: File) → (placement: List<Place>) → (names: Nat) → (before, after: Heap) →
-    MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, body.Holds(spans, blocks, values, before, after), before, after,
-        body.emit(saves, short, prog, file, placement, names)) {
+// A region's code meets its meaning, for every heap before and after: its
+// calls against their callees' returns (`callees`), its frame at `d` with
+// `slots` call slots below it where it calls (`Stack::CallFrame`), the
+// body's own offset `w`.
+theorem Body::emit_emits<M>(self body: Body, saves, slots: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(),
+    stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans, loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks,
+    lent: blocks.Lent(spans), rooms: Nat → Nat, bound, avail: Nat, answers: RoutineAnswers(),
+    callees: CalleesReturn<M>(site, stack, spans, rooms, top, bound, answers), values: Valuation(), spare: Nat, d, w: Nat, s0: MachineState<M>,
+    framing: body.calls().IsTrue() → stack.CallFrame(top, avail, d, slots, w, s0), short: List<Nat>):
+    body.Fits(rooms, bound, avail) → (prog: Prog) → (file: File) → (placement: List<Place>) → (names: Nat) → (before, after: Heap) →
+    MayEmitHeap<M>(saves, site, stack, spans, values, w, s0, prog, file, body.Holds(spans, blocks, values, answers, spare, before, after), before, after,
+        body.emit(saves, slots, short, bound, spare, prog, file, placement, names)) {
     let mem = heap_in<M>(site.data, spans);
     match body {
-        Leaf(instrs) => λ prog file placement names before after =>
-            emit_instrs_emits<M>(saves, site, laid, stack, top, spans, loan, blocks, lent, values, d, s0, instrs, prog, file, placement, names, before,
+        Leaf(instrs) => λ shallow prog file placement names before after =>
+            emit_instrs_emits<M>(saves, site, laid, stack, top, spans, loan, blocks, lent, values, w, s0, instrs, prog, file, placement, names, before,
                 after),
-        Seq(first, rest) => λ prog file placement names before after =>
-            (match first.emit(saves, short, prog, file, placement, names) as λ o =>
-                ((mid: Heap) → MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, first.Holds(spans, blocks, values, before, mid), before,
-                    mid, o)) →
-                MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file, Body::Seq(first, rest).Holds(spans, blocks, values, before, after),
-                    before, after, match o { None => None, Some(done) => rest.emit(saves, short, done.prog, done.file, done.placement, done.names) }) {
+        Seq(first, rest) => λ shallow prog file placement names before after =>
+            (match first.emit(saves, slots, short, bound, spare, prog, file, placement, names) as λ o =>
+                ((mid: Heap) → MayEmitHeap<M>(saves, site, stack, spans, values, w, s0, prog, file,
+                    first.Holds(spans, blocks, values, answers, spare, before, mid), before, mid, o)) →
+                MayEmitHeap<M>(saves, site, stack, spans, values, w, s0, prog, file,
+                    Body::Seq(first, rest).Holds(spans, blocks, values, answers, spare, before, after), before, after,
+                    match o { None => None, Some(done) => rest.emit(saves, slots, short, bound, spare, done.prog, done.file, done.placement, done.names) }) {
                 None => λ _ => trivial,
-                Some(done) => λ first_emits => may_emit_by_seq<M, Heap>(saves, site, stack, spans, mem, values, d, s0, prog, file,
-                    λ (mid: Heap) => first.Holds(spans, blocks, values, before, mid), λ (mid: Heap) => rest.Holds(spans, blocks, values, mid, after),
-                    before, after, done, first_emits, rest.emit(saves, short, done.prog, done.file, done.placement, done.names),
-                    λ mid => Body::emit_emits<M>(rest, saves, site, laid, stack, top, spans, loan, blocks, lent, values, d, s0, short, done.prog, done.file,
-                        done.placement, done.names, mid, after)),
-            })(λ mid => Body::emit_emits<M>(first, saves, site, laid, stack, top, spans, loan, blocks, lent, values, d, s0, short, prog, file, placement,
+                Some(done) => λ first_emits => may_emit_by_seq<M, Heap>(saves, site, stack, spans, mem, values, w, s0, prog, file,
+                    λ (mid: Heap) => first.Holds(spans, blocks, values, answers, spare, before, mid),
+                    λ (mid: Heap) => rest.Holds(spans, blocks, values, answers, spare, mid, after),
+                    before, after, done, first_emits, rest.emit(saves, slots, short, bound, spare, done.prog, done.file, done.placement, done.names),
+                    λ mid => Body::emit_emits<M>(rest, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees,
+                        values, spare, d, w, s0, λ c => framing(Bool::is_true_or_r(first.calls(), rest.calls(), c)), short, shallow.right, done.prog,
+                        done.file, done.placement, done.names, mid, after)),
+            })(λ mid => Body::emit_emits<M>(first, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees,
+                values, spare, d, w, s0, λ c => framing(Bool::is_true_or_l(first.calls(), rest.calls(), c)), short, shallow.left, prog, file, placement,
                 names, before, mid)),
-        Branch(condition, yes, no) => λ prog file placement names before after =>
-            (match file.branch_test(condition) as λ o => MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file,
-                    Body::Branch(condition, yes, no).Holds(spans, blocks, values, before, after), before, after, match o {
+        Branch(condition, yes, no) => λ shallow prog file placement names before after =>
+            (match file.branch_test(condition) as λ o => MayEmitHeap<M>(saves, site, stack, spans, values, w, s0, prog, file,
+                    Body::Branch(condition, yes, no).Holds(spans, blocks, values, answers, spare, before, after), before, after, match o {
                         None => None,
-                        Some(tested) => match yes.emit(saves, short, prog.branched_by(tested.test, names + 1, shorts(short, names + 1)),
+                        Some(tested) => match yes.emit(saves, slots, short, bound, spare, prog.branched_by(tested.test, names + 1, shorts(short, names + 1)),
                             file.know(Truth(condition)), placement, names + 2) {
                             None => None,
-                            Some(left) => match no.emit(saves, short, left.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2)),
-                                file.know(Falsity(condition)), left.placement, left.names) {
+                            Some(left) => match no.emit(saves, slots, short, bound, spare,
+                                left.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2)), file.know(Falsity(condition)), left.placement,
+                                left.names) {
                                 None => None,
                                 Some(right) => Some(Emitted(right.prog.join_label(names + 2), left.file.meet(right.file, file.known), right.placement,
                                     right.names)),
@@ -1455,14 +1655,15 @@ theorem Body::emit_emits<M>(self body: Body, saves: Nat, site: Site<M>, laid: si
                 None => trivial,
                 Some(tested) => {
                     let yes_prog = prog.branched_by(tested.test, names + 1, shorts(short, names + 1));
-                    (match yes.emit(saves, short, yes_prog, file.know(Truth(condition)), placement, names + 2) as λ o =>
-                        MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, yes_prog, file.know(Truth(condition)),
-                            yes.Holds(spans, blocks, values, before, after), before, after, o) →
-                        MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file,
-                            Body::Branch(condition, yes, no).Holds(spans, blocks, values, before, after), before, after, match o {
+                    (match yes.emit(saves, slots, short, bound, spare, yes_prog, file.know(Truth(condition)), placement, names + 2) as λ o =>
+                        MayEmitHeap<M>(saves, site, stack, spans, values, w, s0, yes_prog, file.know(Truth(condition)),
+                            yes.Holds(spans, blocks, values, answers, spare, before, after), before, after, o) →
+                        MayEmitHeap<M>(saves, site, stack, spans, values, w, s0, prog, file,
+                            Body::Branch(condition, yes, no).Holds(spans, blocks, values, answers, spare, before, after), before, after, match o {
                                 None => None,
-                                Some(left) => match no.emit(saves, short, left.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2)),
-                                    file.know(Falsity(condition)), left.placement, left.names) {
+                                Some(left) => match no.emit(saves, slots, short, bound, spare,
+                                    left.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2)), file.know(Falsity(condition)), left.placement,
+                                    left.names) {
                                     None => None,
                                     Some(right) => Some(Emitted(right.prog.join_label(names + 2), left.file.meet(right.file, file.known), right.placement,
                                         right.names)),
@@ -1471,28 +1672,38 @@ theorem Body::emit_emits<M>(self body: Body, saves: Nat, site: Site<M>, laid: si
                         None => λ _ => trivial,
                         Some(left) => λ yes_emits => {
                             let no_prog = left.prog.else_label_by(names + 1, names + 2, shorts(short, names + 2));
-                            (match no.emit(saves, short, no_prog, file.know(Falsity(condition)), left.placement, left.names) as λ o =>
-                                MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, no_prog, file.know(Falsity(condition)),
-                                    no.Holds(spans, blocks, values, before, after), before, after, o) →
-                                MayEmitHeap<M>(saves, site, stack, spans, values, d, s0, prog, file,
-                                    Body::Branch(condition, yes, no).Holds(spans, blocks, values, before, after), before, after, match o {
+                            (match no.emit(saves, slots, short, bound, spare, no_prog, file.know(Falsity(condition)), left.placement, left.names) as λ o =>
+                                MayEmitHeap<M>(saves, site, stack, spans, values, w, s0, no_prog, file.know(Falsity(condition)),
+                                    no.Holds(spans, blocks, values, answers, spare, before, after), before, after, o) →
+                                MayEmitHeap<M>(saves, site, stack, spans, values, w, s0, prog, file,
+                                    Body::Branch(condition, yes, no).Holds(spans, blocks, values, answers, spare, before, after), before, after, match o {
                                         None => None,
                                         Some(right) => Some(Emitted(right.prog.join_label(names + 2), left.file.meet(right.file, file.known),
                                             right.placement, right.names)),
                                     }) {
                                 None => λ _ => trivial,
-                                Some(right) => λ no_emits => branch_heap_emits<M>(saves, site, laid, stack, spans, blocks, values, d, s0, prog, file, condition,
-                                    yes, no, before, after, tested, names, short, left, right, yes_emits, no_emits),
-                            })(Body::emit_emits<M>(no, saves, site, laid, stack, top, spans, loan, blocks, lent, values, d, s0, short, no_prog,
+                                Some(right) => λ no_emits => branch_heap_emits<M>(saves, site, laid, stack, spans, blocks, values, answers, spare, w, s0, prog,
+                                    file, condition, yes, no, before, after, tested, names, short, left, right, yes_emits, no_emits),
+                            })(Body::emit_emits<M>(no, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees,
+                                values, spare, d, w, s0, λ c => framing(Bool::is_true_or_r(yes.calls(), no.calls(), c)), short, shallow.right, no_prog,
                                 file.know(Falsity(condition)), left.placement, left.names, before, after))
                         },
-                    })(Body::emit_emits<M>(yes, saves, site, laid, stack, top, spans, loan, blocks, lent, values, d, s0, short, yes_prog,
+                    })(Body::emit_emits<M>(yes, saves, slots, site, laid, stack, top, spans, loan, blocks, lent, rooms, bound, avail, answers, callees,
+                        values, spare, d, w, s0, λ c => framing(Bool::is_true_or_l(yes.calls(), no.calls(), c)), short, shallow.left, yes_prog,
                         file.know(Truth(condition)), placement, names + 2, before, after))
                 },
             }),
-        Call(_, _, _) => λ prog file placement names before after => trivial,
-        Loop(_, _, _, _, _, _) => λ prog file placement names before after => trivial,
-        Sys(_) => λ prog file placement names before after => trivial,
-        Exit(_) => λ prog file placement names before after => trivial,
+        Call(callee, arguments, results) => λ shallow prog file placement names before after => {
+            let frame = framing(trivial);
+            j(frame.right.right.right.left, λ x _ => MayEmitHeap<M>(saves, site, stack, spans, values, x, s0, prog, file,
+                    Body::Call(callee, arguments, results).Holds(spans, blocks, values, answers, spare, before, after), before, after,
+                    file.emit_call(slots, prog, callee, typed_ids(arguments), call_result(results, spare), call_also(results), placement, names, bound, [], [])),
+                call_heap_emits<M>(saves, slots, site, laid, stack, top, spans, loan, rooms, bound, avail, answers, callees, blocks, values, spare, d, s0,
+                    frame.left, frame.right.left, frame.right.right.left, frame.right.right.right.right.left, frame.right.right.right.right.right, prog, file,
+                    callee, arguments, results, shallow, placement, names, before, after))
+        },
+        Loop(_, _, _, _, _, _) => λ shallow prog file placement names before after => trivial,
+        Sys(_) => λ shallow prog file placement names before after => trivial,
+        Exit(_) => λ shallow prog file placement names before after => trivial,
     }
 }
