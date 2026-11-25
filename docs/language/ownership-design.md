@@ -892,4 +892,22 @@ which is being worked out before anything more of it is built.
    the four with site facts native to it, the customers (the arena, the word
    map, the linked lexer and hash) are ported, and the four are deleted. No
    new package extends the old generator, reflector or term languages.
+10. **The back half is kept**: FunctionIR and the x86 lowering, extended so
+    a load or a store is accepted under a fact and not only under a
+    comparison on the path.
+11. **A region is the name of what a path was taken from** (lean: yes);
+    validity is an obligation with the region discipline as its fast
+    prover, not a typing rule.
+12. **No split between values and resources in the reflected language**
+    (Minus: "the same thing with different behaviour"). The reflected form
+    is the function's own body in A-normal form, pure, one kind of
+    variable. What differs is a property of a type's representation: how a
+    value is held (words, bytes at a home, nothing, the system), whether it
+    can be duplicated (freely, by an operation, never), and which of its
+    operations may build their result in an argument's home. Where a home is
+    reused is a plan beside the code, an annotation an untrusted planner
+    writes; its licence is that the planned run agrees with the meaning,
+    proved by the liveness check, by a "keeps" proof, or refused. Homes and
+    stores as a second kind of thing appear only in the back half, which
+    already has them (FunctionIR's values and buffers).
 
