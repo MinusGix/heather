@@ -115,49 +115,46 @@ theorem Shape::dec_self(c: Shape): Shape::dec(c, c) = Inl(refl) {
 // ---------------------------------------------------------------------------
 // The decoding, and the two environments
 
-// The `k`th type of the environment, `True` past its end.
-fn ty_at(tys: List<Type>, k: Nat) → Type { match tys { Nil => True, Cons(t, rest) => match k { Zero => t, Succ(k1) => ty_at(rest, k1) } } }
-
-fn El(tys: List<Type>, c: Shape) → Type {
-    match c { SWord => Nat, SSeq(a) => List<El(tys, a)>, SNamed(k) => ty_at(tys, k) }
+fn El(tys: Nat → Type, c: Shape) → Type {
+    match c { SWord => Nat, SSeq(a) => List<El(tys, a)>, SNamed(k) => tys(k) }
 }
 
 // The cast between two codes found equal: the identity at `refl`.
-fn Shape::cast(tys: List<Type>, {a, b: Shape}, e: a = b, x: El(tys, a)) → El(tys, b) { j(e, λ c _ => El(tys, c), x) }
+fn Shape::cast(tys: Nat → Type, {a, b: Shape}, e: a = b, x: El(tys, a)) → El(tys, b) { j(e, λ c _ => El(tys, c), x) }
 
 // A record's field: its shape, and the path from the record to it.
-record Field(tys: List<Type>, T: Type) { shape: Shape, path: Path<T, El(tys, shape)> }
+record Field(tys: Nat → Type, T: Type) { shape: Shape, path: Path<T, El(tys, shape)> }
 
 // A named type's structure, with an inhabitant: what a derived instance
 // supplies. Opaque (a type parameter), or a record's fields.
-inductive Struct(tys: List<Type>, T: Type) { Opaque(d: T), Fields(d: T, fs: List<Field(tys, T)>) }
+inductive Struct(tys: Nat → Type, T: Type) { Opaque(d: T), Fields(d: T, fs: List<Field(tys, T)>) }
 
-fn Struct::dflt(tys: List<Type>, {T: Type}, self st: Struct(tys, T)) → T { match st { Opaque(d) => d, Fields(d, _) => d } }
+fn Struct::dflt(tys: Nat → Type, {T: Type}, self st: Struct(tys, T)) → T { match st { Opaque(d) => d, Fields(d, _) => d } }
 
 // The structures of an environment's types, stated after it.
-fn Strs(tys: List<Type>) → Type { (k: Nat) → Struct(tys, ty_at(tys, k)) }
+fn Strs(tys: Nat → Type) → Type { (k: Nat) → Struct(tys, tys(k)) }
 
 // A code with a value of its decoding.
-record Dyn(tys: List<Type>) { code: Shape, val: El(tys, code) }
+record Dyn(tys: Nat → Type) { code: Shape, val: El(tys, code) }
 
 // Every code's inhabitant: a word's 0, an empty sequence, a named type's
 // own.
-fn Dyn::dflt(tys: List<Type>, strs: Strs(tys), c: Shape) → El(tys, c) {
+fn Dyn::dflt(tys: Nat → Type, strs: Strs(tys), c: Shape) → El(tys, c) {
     match c { SWord => 0, SSeq(_) => Nil, SNamed(k) => Struct::dflt(tys, strs(k)) }
 }
 
 // What `e` holds, where its code is `a`; `x` otherwise.
-fn Dyn::back(tys: List<Type>, a: Shape, e: Dyn(tys), x: El(tys, a)) → El(tys, a) {
+fn Dyn::back(tys: Nat → Type, a: Shape, e: Dyn(tys), x: El(tys, a)) → El(tys, a) {
     match Shape::dec(e.code, a) { Inl(h) => Shape::cast(tys, h, e.val), Inr(_) => x }
 }
 
 // What `e` holds as a value at code `a`, the inhabitant otherwise: how a
 // native callee takes its argument.
-fn Dyn::as_code(tys: List<Type>, strs: Strs(tys), a: Shape, e: Dyn(tys)) → El(tys, a) { Dyn::back(tys, a, e, Dyn::dflt(tys, strs, a)) }
+fn Dyn::as_code(tys: Nat → Type, strs: Strs(tys), a: Shape, e: Dyn(tys)) → El(tys, a) { Dyn::back(tys, a, e, Dyn::dflt(tys, strs, a)) }
 
-fn Dyn::word(tys: List<Type>, e: Dyn(tys)) → Nat { Dyn::back(tys, SWord, e, 0) }
+fn Dyn::word(tys: Nat → Type, e: Dyn(tys)) → Nat { Dyn::back(tys, SWord, e, 0) }
 
-fn Dyn::size(tys: List<Type>, e: Dyn(tys)) → Nat {
+fn Dyn::size(tys: Nat → Type, e: Dyn(tys)) → Nat {
     (match e.code as λ c => El(tys, c) → Nat { SSeq(_) => λ v => List::len(v), SWord => λ _ => 0, SNamed(_) => λ _ => 0 })(e.val)
 }
 
@@ -195,14 +192,14 @@ fn Step::sel_in(self a: Step, e: Env) → Sel {
 // selection alone: a step that does not fit reads the word 0 and writes
 // nothing.
 
-fn Dyn::field_at(tys: List<Type>, strs: Strs(tys), {T: Type}, st: Struct(tys, T), i: Nat, v: T) → Dyn(tys) {
+fn Dyn::field_at(tys: Nat → Type, strs: Strs(tys), {T: Type}, st: Struct(tys, T), i: Nat, v: T) → Dyn(tys) {
     match st {
         Opaque(_) => Dyn(SWord, 0),
         Fields(_, fs) => match fs.nth(i) { Some(f) => Dyn(f.shape, f.path.get(v).unwrap_or(Dyn::dflt(tys, strs, f.shape))), None => Dyn(SWord, 0) },
     }
 }
 
-fn Dyn::at(tys: List<Type>, strs: Strs(tys), sel: Sel, d: Dyn(tys)) → Dyn(tys) {
+fn Dyn::at(tys: Nat → Type, strs: Strs(tys), sel: Sel, d: Dyn(tys)) → Dyn(tys) {
     (match d.code as λ c => El(tys, c) → Dyn(tys) {
         SWord => λ _ => Dyn(SWord, 0),
         SSeq(a) => λ v => match sel {
@@ -213,7 +210,7 @@ fn Dyn::at(tys: List<Type>, strs: Strs(tys), sel: Sel, d: Dyn(tys)) → Dyn(tys)
     })(d.val)
 }
 
-fn Dyn::field_over(tys: List<Type>, {T: Type}, st: Struct(tys, T), i: Nat, g: Dyn(tys) → Dyn(tys), v: T) → T {
+fn Dyn::field_over(tys: Nat → Type, {T: Type}, st: Struct(tys, T), i: Nat, g: Dyn(tys) → Dyn(tys), v: T) → T {
     match st {
         Opaque(_) => v,
         Fields(_, fs) => match fs.nth(i) {
@@ -223,7 +220,7 @@ fn Dyn::field_over(tys: List<Type>, {T: Type}, st: Struct(tys, T), i: Nat, g: Dy
     }
 }
 
-fn Dyn::over(tys: List<Type>, strs: Strs(tys), sel: Sel, g: Dyn(tys) → Dyn(tys), d: Dyn(tys)) → Dyn(tys) {
+fn Dyn::over(tys: Nat → Type, strs: Strs(tys), sel: Sel, g: Dyn(tys) → Dyn(tys), d: Dyn(tys)) → Dyn(tys) {
     (match d.code as λ c => El(tys, c) → Dyn(tys) {
         SWord => λ v => Dyn(SWord, v),
         SSeq(a) => λ v => Dyn(SSeq(a), match sel {
@@ -238,11 +235,11 @@ fn Dyn::over(tys: List<Type>, strs: Strs(tys), sel: Sel, g: Dyn(tys) → Dyn(tys
 }
 
 // A place's steps from a root, read and modified.
-fn Dyn::read(tys: List<Type>, strs: Strs(tys), e: Env, xs: List<Step>, d: Dyn(tys)) → Dyn(tys) {
+fn Dyn::read(tys: Nat → Type, strs: Strs(tys), e: Env, xs: List<Step>, d: Dyn(tys)) → Dyn(tys) {
     match xs { Nil => d, Cons(a, rest) => Dyn::read(tys, strs, e, rest, Dyn::at(tys, strs, a.sel_in(e), d)) }
 }
 
-fn Dyn::write(tys: List<Type>, strs: Strs(tys), e: Env, xs: List<Step>, g: Dyn(tys) → Dyn(tys), d: Dyn(tys)) → Dyn(tys) {
+fn Dyn::write(tys: Nat → Type, strs: Strs(tys), e: Env, xs: List<Step>, g: Dyn(tys) → Dyn(tys), d: Dyn(tys)) → Dyn(tys) {
     match xs { Nil => g(d), Cons(a, rest) => Dyn::over(tys, strs, a.sel_in(e), λ x => Dyn::write(tys, strs, e, rest, g, x), d) }
 }
 
@@ -275,19 +272,19 @@ inductive Ret { RWord(a: Atom), RPlace(p: Place) }
 record Func { body: Body, ret: Ret }
 
 // The native callees: from the values passed and the words, a word.
-fn World(tys: List<Type>) → Type { Nat → List<Dyn(tys)> → List<Nat> → Nat }
+fn World(tys: Nat → Type) → Type { Nat → List<Dyn(tys)> → List<Nat> → Nat }
 
-record Sem(tys: List<Type>) { objs: List<Dyn(tys)>, words: Env }
+record Sem(tys: Nat → Type) { objs: List<Dyn(tys)>, words: Env }
 
-fn obj_at(tys: List<Type>, objs: List<Dyn(tys)>, r: Nat) → Dyn(tys) { objs.nth(r).unwrap_or(Dyn(SWord, 0)) }
+fn obj_at(tys: Nat → Type, objs: List<Dyn(tys)>, r: Nat) → Dyn(tys) { objs.nth(r).unwrap_or(Dyn(SWord, 0)) }
 
-fn Place::val(self p: Place, tys: List<Type>, strs: Strs(tys), s: Sem(tys)) → Dyn(tys) { Dyn::read(tys, strs, s.words, p.steps, obj_at(tys, s.objs, p.root)) }
+fn Place::val(self p: Place, tys: Nat → Type, strs: Strs(tys), s: Sem(tys)) → Dyn(tys) { Dyn::read(tys, strs, s.words, p.steps, obj_at(tys, s.objs, p.root)) }
 
-fn Src::val(self v: Src, tys: List<Type>, strs: Strs(tys), s: Sem(tys)) → Dyn(tys) { match v { FromWord(a) => Dyn(SWord, a.at(s.words)), FromPlace(p) => p.val(tys, strs, s) } }
+fn Src::val(self v: Src, tys: Nat → Type, strs: Strs(tys), s: Sem(tys)) → Dyn(tys) { match v { FromWord(a) => Dyn(SWord, a.at(s.words)), FromPlace(p) => p.val(tys, strs, s) } }
 
-fn Sem::bind(tys: List<Type>, self s: Sem(tys), a: Nat) → Sem(tys) { Sem(s.objs, s.words.push(a)) }
+fn Sem::bind(tys: Nat → Type, self s: Sem(tys), a: Nat) → Sem(tys) { Sem(s.objs, s.words.push(a)) }
 
-fn Stmt::eval1(self o: Stmt, tys: List<Type>, strs: Strs(tys), w: World(tys), s: Sem(tys)) → Sem(tys) {
+fn Stmt::eval1(self o: Stmt, tys: Nat → Type, strs: Strs(tys), w: World(tys), s: Sem(tys)) → Sem(tys) {
     match o {
         Get(p) => Sem::bind(tys, s, Dyn::word(tys, p.val(tys, strs, s))),
         Put(p, v) => Sem(s.objs.update(p.root, λ d => Dyn::write(tys, strs, s.words, p.steps, λ _ => v.val(tys, strs, s), d)), s.words),
@@ -300,11 +297,11 @@ fn Stmt::eval1(self o: Stmt, tys: List<Type>, strs: Strs(tys), w: World(tys), s:
 // that hands each arm the bit's equation.
 fn convoy<A>(c: Bool, y, n: A) → A { (match c as λ d => c = d → A { True => λ _ => y, False => λ _ => n })(refl) }
 
-fn Cond::test(self cd: Cond, tys: List<Type>, strs: Strs(tys), s: Sem(tys)) → Bool {
+fn Cond::test(self cd: Cond, tys: Nat → Type, strs: Strs(tys), s: Sem(tys)) → Bool {
     match cd { LtLen(a, p) => decide_bit<a.at(s.words) < Dyn::size(tys, p.val(tys, strs, s))>() }
 }
 
-fn mean_then<R>(tys: List<Type>, strs: Strs(tys), w: World(tys), ops: Body, s: Sem(tys), k: Sem(tys) → R) → R {
+fn mean_then<R>(tys: Nat → Type, strs: Strs(tys), w: World(tys), ops: Body, s: Sem(tys), k: Sem(tys) → R) → R {
     match ops {
         End => k(s),
         Do(o, rest) => mean_then(tys, strs, w, rest, o.eval1(tys, strs, w, s), k),
@@ -315,13 +312,13 @@ fn mean_then<R>(tys: List<Type>, strs: Strs(tys), w: World(tys), ops: Body, s: S
 
 // What a function means: its objects afterwards, the word it answers, and
 // the value at the place it answers.
-record MOut(tys: List<Type>) { objs: List<Dyn(tys)>, word: Nat, val: Dyn(tys) }
+record MOut(tys: Nat → Type) { objs: List<Dyn(tys)>, word: Nat, val: Dyn(tys) }
 
-fn Ret::out(self r: Ret, tys: List<Type>, strs: Strs(tys), s: Sem(tys)) → MOut(tys) {
+fn Ret::out(self r: Ret, tys: Nat → Type, strs: Strs(tys), s: Sem(tys)) → MOut(tys) {
     match r { RWord(a) => MOut(s.objs, a.at(s.words), Dyn(SWord, a.at(s.words))), RPlace(p) => MOut(s.objs, 0, p.val(tys, strs, s)) }
 }
 
-fn mean_fn(tys: List<Type>, strs: Strs(tys), w: World(tys), f: Func, objs: List<Dyn(tys)>, ws: List<Nat>) → MOut(tys) {
+fn mean_fn(tys: Nat → Type, strs: Strs(tys), w: World(tys), f: Func, objs: List<Dyn(tys)>, ws: List<Nat>) → MOut(tys) {
     mean_then(tys, strs, w, f.body, Sem(objs, Env::start(ws)), λ s => f.ret.out(tys, strs, s))
 }
 
@@ -332,16 +329,16 @@ fn mean_fn(tys: List<Type>, strs: Strs(tys), w: World(tys), f: Func, objs: List<
 // passed and the words.
 inductive Owed { Inside(p: Place, i: Atom), Pre(g: Nat, ps: List<Place>, args: List<Atom>) }
 
-fn Pres(tys: List<Type>) → Type<1> { Nat → List<Dyn(tys)> → List<Nat> → Type }
+fn Pres(tys: Nat → Type) → Type<1> { Nat → List<Dyn(tys)> → List<Nat> → Type }
 
-fn Owed::Holds(self o: Owed, tys: List<Type>, strs: Strs(tys), pres: Pres(tys), s: Sem(tys)) → Type {
+fn Owed::Holds(self o: Owed, tys: Nat → Type, strs: Strs(tys), pres: Pres(tys), s: Sem(tys)) → Type {
     match o {
         Inside(p, i) => ∥i.at(s.words) < Dyn::size(tys, p.val(tys, strs, s))∥,
         Pre(g, ps, args) => pres(g, ps.map(λ p => p.val(tys, strs, s)), args.map(λ a => a.at(s.words))),
     }
 }
 
-fn Owed::Then(rs: List<Owed>, tys: List<Type>, strs: Strs(tys), pres: Pres(tys), s: Sem(tys), tail: Type) → Type {
+fn Owed::Then(rs: List<Owed>, tys: Nat → Type, strs: Strs(tys), pres: Pres(tys), s: Sem(tys), tail: Type) → Type {
     match rs { Nil => tail, Cons(r, rest) => r.Holds(tys, strs, pres, s) ∧ Owed::Then(rest, tys, strs, pres, s, tail) }
 }
 
@@ -353,7 +350,7 @@ theorem cases(c: Bool, {x, y: Type}, yes: c = True → x, no: c = False → y): 
 
 inductive Owes { OEnd, ODo(here: List<Owed>, rest: Owes), OIf(a: Owes, b: Owes, rest: Owes) }
 
-fn Owes::Holds(self d: Owes, tys: List<Type>, strs: Strs(tys), w: World(tys), pres: Pres(tys), ops: Body, s: Sem(tys), after: Sem(tys) → Type) → Type {
+fn Owes::Holds(self d: Owes, tys: Nat → Type, strs: Strs(tys), w: World(tys), pres: Pres(tys), ops: Body, s: Sem(tys), after: Sem(tys) → Type) → Type {
     match ops {
         End => after(s),
         Do(o, r) => match d { ODo(here, dr) => Owed::Then(here, tys, strs, pres, s, dr.Holds(tys, strs, w, pres, r, o.eval1(tys, strs, w, s), after)), _ => False },
@@ -365,14 +362,14 @@ fn Owes::Holds(self d: Owes, tys: List<Type>, strs: Strs(tys), w: World(tys), pr
     }
 }
 
-fn Owes::Due(self d: Owes, tys: List<Type>, strs: Strs(tys), w: World(tys), pres: Pres(tys), f: Func, objs: List<Dyn(tys)>, ws: List<Nat>) → Type {
+fn Owes::Due(self d: Owes, tys: Nat → Type, strs: Strs(tys), w: World(tys), pres: Pres(tys), f: Func, objs: List<Dyn(tys)>, ws: List<Nat>) → Type {
     d.Holds(tys, strs, w, pres, f.body, Sem(objs, Env::start(ws)), λ _ => True)
 }
 
 // The word a function answers, read inside the continuation: a branch is
 // then a convoy at `Nat`, as the source's `if h:` is, where `.word` of
 // `mean_fn`'s would project out of a convoy over the whole output and stop.
-fn mean_word(tys: List<Type>, strs: Strs(tys), w: World(tys), f: Func, objs: List<Dyn(tys)>, ws: List<Nat>) → Nat {
+fn mean_word(tys: Nat → Type, strs: Strs(tys), w: World(tys), f: Func, objs: List<Dyn(tys)>, ws: List<Nat>) → Nat {
     mean_then(tys, strs, w, f.body, Sem(objs, Env::start(ws)), λ s => f.ret.out(tys, strs, s).word)
 }
 
@@ -389,15 +386,15 @@ fn mean_word(tys: List<Type>, strs: Strs(tys), w: World(tys), f: Func, objs: Lis
 // list of words and an element of a list of lists are both read through
 // `OnSeq(SeqOne(0))`, so both codes fit, and writing the list into the list
 // of words must then read it back (`set_get`), which a native list of
-// words cannot hold. `Dyn::elem_not_lawful` is the refutation, at the empty
-// environment. The universal `Val` passes only because a sequence there
+// words cannot hold. `Dyn::elem_not_lawful` is the refutation, at an environment of no
+// named types. The universal `Val` passes only because a sequence there
 // holds values of any shape.
 
-fn Dyn::field_get(tys: List<Type>, {T: Type}, st: Struct(tys, T), i: Nat, v: T) → Option<Dyn(tys)> {
+fn Dyn::field_get(tys: Nat → Type, {T: Type}, st: Struct(tys, T), i: Nat, v: T) → Option<Dyn(tys)> {
     match st { Opaque(_) => None, Fields(_, fs) => match fs.nth(i) { Some(f) => f.path.get(v).map(λ y => Dyn(f.shape, y)), None => None } }
 }
 
-fn Dyn::get(tys: List<Type>, strs: Strs(tys), sel: Sel, d: Dyn(tys)) → Option<Dyn(tys)> {
+fn Dyn::get(tys: Nat → Type, strs: Strs(tys), sel: Sel, d: Dyn(tys)) → Option<Dyn(tys)> {
     (match d.code as λ c => El(tys, c) → Option<Dyn(tys)> {
         SWord => λ _ => None,
         SSeq(a) => λ v => match sel {
@@ -411,32 +408,34 @@ fn Dyn::get(tys: List<Type>, strs: Strs(tys), sel: Sel, d: Dyn(tys)) → Option<
     })(d.val)
 }
 
-fn Dyn::path(tys: List<Type>, strs: Strs(tys), sel: Sel) → Path<Dyn(tys), Dyn(tys)> {
+fn Dyn::path(tys: Nat → Type, strs: Strs(tys), sel: Sel) → Path<Dyn(tys), Dyn(tys)> {
     Path<Dyn(tys), Dyn(tys)>(get := λ (d: Dyn(tys)) => Dyn::get(tys, strs, sel, d), set := λ (d: Dyn(tys)) => λ (w: Dyn(tys)) => Dyn::over(tys, strs, sel, λ _ => w, d))
 }
 
 // The write fits where the written value's code is the code of the part it
 // replaces, which a fit over the written value alone cannot say; the best
 // such fit is every value.
-fn Dyn::model(tys: List<Type>, strs: Strs(tys)) → StepModel<Dyn(tys)> { StepModel<Dyn(tys)>(λ sel => Dyn::path(tys, strs, sel), λ _ _ => True) }
+fn Dyn::model(tys: Nat → Type, strs: Strs(tys)) → StepModel<Dyn(tys)> { StepModel<Dyn(tys)>(λ sel => Dyn::path(tys, strs, sel), λ _ _ => True) }
 
-fn Dyn::no_strs() → Strs(Nil) { λ k => Opaque(trivial) }
+fn Dyn::no_tys() → Nat → Type { λ _ => True }
+
+fn Dyn::no_strs() → Strs(Dyn::no_tys()) { λ k => Opaque(trivial) }
 
 // No fit makes the element step lawful.
-theorem Dyn::elem_not_lawful(fits: Dyn(Nil) → Bool): ¬PathLawsOn<Dyn(Nil), Dyn(Nil)>(Dyn::path(Nil, Dyn::no_strs(), OnSeq(SeqOne(0))), fits) {
+theorem Dyn::elem_not_lawful(fits: Dyn(Dyn::no_tys()) → Bool): ¬PathLawsOn<Dyn(Dyn::no_tys()), Dyn(Dyn::no_tys())>(Dyn::path(Dyn::no_tys(), Dyn::no_strs(), OnSeq(SeqOne(0))), fits) {
     λ laws => {
-        let lists: Dyn(Nil) = Dyn(SSeq(SSeq(SWord)), [Nil<Nat>]);
-        let a_list: Dyn(Nil) = Dyn(SSeq(SWord), Nil);
+        let lists: Dyn(Dyn::no_tys()) = Dyn(SSeq(SSeq(SWord)), [Nil<Nat>]);
+        let a_list: Dyn(Dyn::no_tys()) = Dyn(SSeq(SWord), Nil);
         let fit: (fits(a_list) = True) = laws.reads_fit(lists, a_list, refl);
-        let back: (Dyn::path(Nil, Dyn::no_strs(), OnSeq(SeqOne(0))).get(Dyn::path(Nil, Dyn::no_strs(), OnSeq(SeqOne(0))).set(Dyn(SSeq(SWord), [0]), a_list)) = Some(a_list)) =
+        let back: (Dyn::path(Dyn::no_tys(), Dyn::no_strs(), OnSeq(SeqOne(0))).get(Dyn::path(Dyn::no_tys(), Dyn::no_strs(), OnSeq(SeqOne(0))).set(Dyn(SSeq(SWord), [0]), a_list)) = Some(a_list)) =
             laws.set_get(Dyn(SSeq(SWord), [0]), Dyn(SWord, 0), a_list, refl, fit);
-        let codes: (SWord = SSeq(SWord)) = cong_fn(λ (o: Option<Dyn(Nil)>) => o.unwrap_or(Dyn(SWord, 0)).code, back);
+        let codes: (SWord = SSeq(SWord)) = cong_fn(λ (o: Option<Dyn(Dyn::no_tys())>) => o.unwrap_or(Dyn(SWord, 0)).code, back);
         absurd(codes)
     }
 }
 
 // So `StepModelLaws` at `Dyn` is false for every model built of these
 // steps, whatever its fits.
-theorem Dyn::model_not_lawful(fits: Sel → Dyn(Nil) → Bool): ¬StepModelLaws<Dyn(Nil)>(StepModel<Dyn(Nil)>(λ sel => Dyn::path(Nil, Dyn::no_strs(), sel), fits)) {
+theorem Dyn::model_not_lawful(fits: Sel → Dyn(Dyn::no_tys()) → Bool): ¬StepModelLaws<Dyn(Dyn::no_tys())>(StepModel<Dyn(Dyn::no_tys())>(λ sel => Dyn::path(Dyn::no_tys(), Dyn::no_strs(), sel), fits)) {
     λ ml => Dyn::elem_not_lawful(fits(OnSeq(SeqOne(0))), ml.laws(OnSeq(SeqOne(0))))
 }

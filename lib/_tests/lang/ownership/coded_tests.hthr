@@ -12,6 +12,7 @@ import path;
 import list_path;
 import atom;
 import steps;
+import value_steps;
 import coded;
 
 // ---------------------------------------------------------------------------
@@ -21,14 +22,14 @@ theorem dec_closed(): Shape::dec(SSeq(SNamed(3)), SSeq(SNamed(3))) = Inl(refl) {
 
 // A value put back at its own closed code is itself: the decision is
 // `Inl(refl)` and the cast the identity, by evaluation.
-theorem back_closed(xs: List<List<Nat>>, ys: List<List<Nat>>): Dyn::back(Nil, SSeq(SSeq(SWord)), Dyn(SSeq(SSeq(SWord)), xs), ys) = xs { refl }
+theorem back_closed(xs: List<List<Nat>>, ys: List<List<Nat>>): Dyn::back(Dyn::no_tys(), SSeq(SSeq(SWord)), Dyn(SSeq(SSeq(SWord)), xs), ys) = xs { refl }
 
 // ---------------------------------------------------------------------------
 // A user record and its instance, written by hand
 
 record Point { x: Nat, y: Nat }
 
-fn pt_tys() → List<Type> { Cons(Point, Nil) }
+fn pt_tys() → Nat → Type { λ k => match k { Zero => Point, Succ(_) => True } }
 
 fn Point::fx() → Field(pt_tys(), Point) { Field(SWord, Path<Point, Nat>(get := λ (p: Point) => Some(p.x), set := λ (p: Point) => λ (v: Nat) => Point(v, p.y))) }
 
@@ -37,7 +38,7 @@ fn Point::fy() → Field(pt_tys(), Point) { Field(SWord, Path<Point, Nat>(get :=
 fn Point::origin() → Point { Point(0, 0) }
 
 fn pt_strs() → Strs(pt_tys()) {
-    λ k => match k as λ k2 => Struct(pt_tys(), ty_at(pt_tys(), k2)) { Zero => Fields(Point::origin(), [Point::fx(), Point::fy()]), Succ(_) => Opaque(trivial) }
+    λ k => match k { Zero => Fields(Point::origin(), [Point::fx(), Point::fy()]), Succ(_) => Opaque(trivial) }
 }
 
 fn pts() → Shape { SSeq(SNamed(0)) }
@@ -119,9 +120,9 @@ theorem set_x_not_y(ps: List<Point>, i, v: Nat): as_points(obj_at(pt_tys(), mean
 //    holds the neutral `T`, opaque, with the inhabitant the function is
 //    given.
 
-fn t_tys(T: Type) → List<Type> { Cons(T, Nil) }
+fn t_tys(T: Type) → Nat → Type { λ k => match k { Zero => T, Succ(_) => True } }
 
-fn t_strs(T: Type, d: T) → Strs(t_tys(T)) { λ k => match k as λ k2 => Struct(t_tys(T), ty_at(t_tys(T), k2)) { Zero => Opaque(d), Succ(_) => Opaque(trivial) } }
+fn t_strs(T: Type, d: T) → Strs(t_tys(T)) { λ k => match k { Zero => Opaque(d), Succ(_) => Opaque(trivial) } }
 
 fn no_world(T: Type) → World(t_tys(T)) { λ _ _ _ => 0 }
 
@@ -191,3 +192,30 @@ theorem call_total_reflects(ps: List<Point>, lo, n: Nat, some: ∥0 < ps.drop(lo
 fn call_total_owes() → Owes { ODo([Pre(1, [Place(0, [SWindow(Var(0), Var(1))])], Nil)], OEnd) }
 
 theorem call_total_site(ps: List<Point>, lo, n: Nat, some: ∥0 < ps.drop(lo).take(n).len()∥): due_pt(call_total_owes(), call_total_r(), ps, [lo, n]) { ⟨some, trivial⟩ }
+
+// ---------------------------------------------------------------------------
+// 6. The control: `ps[i].x` through the universal `Val` and an encoding.
+//    The meaning reads on the encoding, and the source's value is under
+//    `Vals::of(ps.map(enc))`: the read is stuck at `nth` of a list built by
+//    `Vals::list` from `Vals::of`, where the source's is `ps.nth(i)`. It is
+//    a lemma, not a conversion: `Vals::list_of` to strip the carrier,
+//    `nth` of a `map` (`xs.map(f).nth(i) = xs.nth(i).map(f)`), and a case
+//    split on `ps.nth(i)` (the encoding's `unwrap_or` and the source's do
+//    not commute with `map` by evaluation): once per operation, and again
+//    per residual stated over the encoding.
+
+fn enc_pt(p: Point) → Val { VRec(VCons(VWord(p.x), VCons(VWord(p.y), VNil))) }
+
+fn enc_pts(ps: List<Point>) → Val { VSeq(Vals::of(ps.map(enc_pt))) }
+
+fn val_word(o: Option<Val>) → Nat { match o { Some(v) => match v { VWord(n) => n, _ => 0 }, None => 0 } }
+
+// expect-error(kernel)
+theorem get_x_val_pin(ps: List<Point>, i: Nat): val_word(Val::place([i], [SElem(Var(0)), SField(0)]).get(enc_pts(ps))) = get_x(ps, i) { refl }
+
+// What it takes: an induction on the list, for this operation at this
+// encoding (a write, a window, a record of another shape each need their
+// own), where the coded meaning's pin is `refl`.
+theorem get_x_val(ps: List<Point>): (i: Nat) → val_word(Val::place([i], [SElem(Var(0)), SField(0)]).get(enc_pts(ps))) = get_x(ps, i) {
+    match ps { Nil => λ i => refl, Cons(_, r) => λ i => match i { Zero => refl, Succ(k) => get_x_val(r, k) } }
+}
