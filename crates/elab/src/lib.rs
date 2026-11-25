@@ -1075,6 +1075,11 @@ impl statements::StatementElab for Elaborator {
     }
 
     fn infer_mut_call(&self, cx: &Cx, call: &Expr) -> R<(Term, Type, Level)> {
+        // A candidate that lends places too, `x.m(&mut b)` (§24): its lent
+        // arguments are held to the callee's modes and dropped.
+        if path_calls::PathCalls::lends(call) {
+            return path_calls::PathCalls(self).path_call(cx, call, true, call.span);
+        }
         self.scoped_cell(|s| &s.mut_call_site, Some(call.span), || self.elab_infer(cx, call))
     }
 

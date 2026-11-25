@@ -57,10 +57,27 @@ impl PathCalls<'_> {
             ));
         }
         let call = unmark(e, heather_syntax::PATHCALL)?;
-        Some(self.path_call(cx, call, e.span))
+        Some(self.path_call(cx, call, false, e.span))
     }
 
-    fn path_call(&self, cx: &Cx, call: &Expr, span: Span) -> R<(Term, Type, Level)> {
+    /// Does `call` lend a place at its top, `f(…, \0mutarg(a), …)`?
+    pub(crate) fn lends(call: &Expr) -> bool {
+        let args = match &call.kind {
+            ExprKind::App { args, .. } => args,
+            ExprKind::Dot { args: Some(args), .. } => args,
+            _ => return false,
+        };
+        args.iter().any(|a| unmark(a, heather_syntax::MUTARG).is_some())
+    }
+
+    /// A call that lends places, elaborated with the markers dropped once
+    /// each lent argument is held to the callee's modes. `candidate` is a
+    /// method call on a mutable place, which the statement that binds it
+    /// rebinds when the callee's receiver is a live path
+    /// (`statements::elaborate_mut_call`): its receiver may then be `&mut`,
+    /// and the call's type has one more `Mutated`, the receiver's,
+    /// outermost.
+    pub(crate) fn path_call(&self, cx: &Cx, call: &Expr, candidate: bool, span: Span) -> R<(Term, Type, Level)> {
         let (args, named, explicit) = match &call.kind {
             ExprKind::App { args, named, explicit, .. } => (args, named, *explicit),
             ExprKind::Dot { args: Some(args), named, .. } => (args, named, false),
@@ -77,11 +94,13 @@ impl PathCalls<'_> {
         }
         if !explicit {
             let named: Vec<&str> = named.iter().map(|n| n.name.as_str()).collect();
-            self.check_modes(cx, call, &lent, &named, span)?;
+            self.check_modes(cx, call, &lent, &named, candidate, span)?;
         }
         let (term, ty, level) = self.0.infer_mut_call(cx, &stripped)?;
-        // One `Mutated` per lent place, the answer innermost.
-        let count = lent.iter().filter(|l| **l).count();
+        // One `Mutated` per lent place, the answer innermost, and the
+        // receiver's outermost when it comes back.
+        let threaded = candidate && Members(self).threads_receiver(cx, &stripped) == Some(true);
+        let count = lent.iter().filter(|l| **l).count() + usize::from(threaded);
         let mut at = (Rc::new(term.clone()), ty.clone());
         for k in 0..count {
             let record = self
@@ -108,7 +127,7 @@ impl PathCalls<'_> {
     /// The callee's recorded modes against the lent arguments: a `&mut`
     /// parameter where, and only where, an argument is lent. A callee with
     /// no table (a local, its own recursion) is left to the type check.
-    fn check_modes(&self, cx: &Cx, call: &Expr, lent: &[bool], named: &[&str], span: Span) -> R<()> {
+    fn check_modes(&self, cx: &Cx, call: &Expr, lent: &[bool], named: &[&str], candidate: bool, span: Span) -> R<()> {
         let (callee, method) = match &call.kind {
             ExprKind::App { head, .. } => match &head.kind {
                 ExprKind::Var(f) if !cx.names.iter_inner().any(|n| n == f) => (f.clone(), false),
@@ -125,11 +144,13 @@ impl PathCalls<'_> {
         let explicit: Vec<&ParamMeta> = table.iter().filter(|p| !p.implicit && !named.contains(&p.name.as_str())).collect();
         let explicit: Vec<&ParamMeta> = if method {
             let subject = subject_index_in(&table);
-            if explicit.get(subject).is_some_and(|p| p.mode == ParamMode::Path) {
+            if !candidate && explicit.get(subject).is_some_and(|p| p.mode == ParamMode::Path) {
                 return err(
                     format!(
-                        "`{shown}`'s receiver is a `&mut` parameter, and a method call threads its receiver \
-                         alone: lend every place in the plain call, `{callee}(&mut …, …)`"
+                        "`{shown}`'s receiver is a `&mut` parameter, so it comes back to its place, and this \
+                         receiver is not one that can be rebound: call `{shown}` on a `let mut` local, a `mut` \
+                         or `&mut` parameter or a field path of one, or lend every place in the plain call, \
+                         `{callee}(&mut …, …)`"
                     ),
                     span,
                 );

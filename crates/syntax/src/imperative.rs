@@ -1222,16 +1222,37 @@ pub(crate) fn check_apart(places: &[&Expr]) -> R<()> {
 /// that threads it, with field paths and elements (§20, §21), and "is not
 /// mutable" where it is not. `wrap` re-marks the answer's `let` (`let mut
 /// r = …` is `\0mut`).
+///
+/// A method call on a mutable local or a field path of one (`x.m(&mut b)`,
+/// `receiver` set) is a method-call candidate of `x` as well ([`MUTCALL`]):
+/// `let #path = \0mutcall(x.m(\0mutarg(b)))`. The elaborator rebinds `x`
+/// from the call's outer `Mutated` and binds `#path` to the rest when `m`'s
+/// receiver is a live path, and binds `#path` to the whole call when it is
+/// not, so the places' rebinding below reads `#path` either way.
 pub(crate) fn expand_path_call(
     tmp: String,
     answer: Option<(String, Option<Ty>, Option<&str>)>,
     call: Expr,
+    receiver: bool,
     span: Span,
 ) -> R<Vec<Stmt>> {
     let places: Vec<Expr> = path_places(&call).into_iter().cloned().collect();
-    check_apart(&places.iter().collect::<Vec<_>>())?;
+    let mut all: Vec<&Expr> = places.iter().collect();
+    // A receiver that may come back is a place of the call as well, and
+    // apart from the places it lends.
+    if receiver && let ExprKind::Dot { recv, .. } = &call.kind {
+        all.insert(0, recv);
+    }
+    check_apart(&all)?;
     let cspan = call.span;
-    let mut out = vec![Stmt::Let { name: tmp.clone(), ty: None, expr: marked(PATHCALL, call, cspan), span, opaque: false }];
+    let marker = if receiver { MUTCALL } else { PATHCALL };
+    // A statement's `#seqN` names a call whose value is dropped; this one's
+    // value is read below, so a candidate is bound under a `#pathN`.
+    let tmp = match tmp.strip_prefix("#seq") {
+        Some(n) if receiver => format!("#path{n}"),
+        _ => tmp,
+    };
+    let mut out = vec![Stmt::Let { name: tmp.clone(), ty: None, expr: marked(marker, call, cspan), span, opaque: false }];
     let field = |e: Expr, name: &str| {
         let span = e.span;
         Expr { kind: ExprKind::Dot { recv: Box::new(e), name: name.into(), tyargs: vec![], args: None, named: vec![] }, span }

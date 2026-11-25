@@ -252,9 +252,9 @@ fn lend_inside(x: Nat) → Nat {
     r
 }
 
-// expect-error: `swap_sum`'s receiver is a `&mut` parameter, and a method call threads its receiver alone
-fn lend_by_method(x: Nat) → Nat {
-    let mut p = x;
+// expect-error: `swap_sum`'s receiver is a `&mut` parameter, so it comes back to its place, and this receiver is not one that can be rebound
+fn lend_by_fixed_receiver(x: Nat) → Nat {
+    let p = x;
     let mut q = x;
     let r = p.swap_sum(&mut q);
     r
@@ -302,6 +302,99 @@ theorem tally_modes(): True { by modes_are("Counter::tally", [2, 0]) }
 
 // expect-error: the modes are not the ones written
 theorem plain_modes_wrong(): True { by modes_are("plain", [2]) }
+
+// ---------------------------------------------------------------------------
+// A method call lends places (issues/parameter-modes-residue.md): a callee
+// whose receiver is a live path rebinds the receiver from the outermost
+// `Mutated` and the lent places from the ones inside it.
+
+// A function whose first parameter is `&mut`, called as a method of it.
+fn lend_by_method(x, y: Nat) → Nat {
+    let mut p = x;
+    let mut q = y;
+    let r = p.swap_sum(&mut q);
+    r + p * 10 + q
+}
+theorem lend_by_method_lit(): lend_by_method(1, 2) = 3 + 20 + 1 { refl }
+theorem lend_by_method_open(x, y: Nat): lend_by_method(x, y) = (y + x) + y * 10 + x { refl }
+
+// As a statement, and on two fields of one record (receiver and place apart).
+fn lend_by_fields(t: Two) → Nat {
+    let mut u = t;
+    u.left.swap_sum(&mut u.right);
+    u.left * 10 + u.right
+}
+theorem lend_by_fields_open(a, b: Nat): lend_by_fields(Two(a, b)) = b * 10 + a { refl }
+
+// `mut self` beside another live path: the receiver comes back outermost,
+// then the lent places in parameter order, the answer innermost.
+fn Counter::give(mut self c: Counter, into: &mut Nat, k: Nat) → Nat {
+    c := Counter(c.n + k, c.log);
+    into := into + c.n;
+    k
+}
+theorem give_kernel(c: Counter, a, k: Nat):
+    Counter::give(c, a, k) = Mutated(Counter(c.n + k, c.log), Mutated(a + (c.n + k), k)) { refl }
+theorem give_modes(): True { by modes_are("Counter::give", [2, 2, 0]) }
+
+fn use_give(c: Counter, a: Nat) → Nat {
+    let mut d = c;
+    let mut t = a;
+    let r = d.give(&mut t, 2);
+    d.give(&mut t, 3);
+    r + t + d.n
+}
+theorem use_give_open(c: Counter, a: Nat): use_give(c, a) = 2 + (a + (c.n + 2) + (c.n + 2 + 3)) + (c.n + 2 + 3) { refl }
+
+// In a loop, the receiver and the lent place are both its state.
+fn loop_give(c: Counter, xs: List<Nat>) → Nat {
+    let mut d = c;
+    let mut t = 0;
+    for x in xs { d.give(&mut t, x); }
+    t + d.n
+}
+theorem loop_give_lit(): loop_give(Counter(0, []), [1, 2]) = (1 + 3) + 3 { refl }
+
+// A plain receiver beside a lent place: the receiver is not rebound,
+// whether or not it could be.
+fn use_run(k: u64) → u64 {
+    let mut s = Step(k);
+    let mut t: u64 = 1;
+    let r = s.run(&mut t);
+    r + t + s.by
+}
+theorem use_run_lit(): use_run(2) = 16 { refl }
+fn use_run_fixed(k: u64) → u64 {
+    let s = Step(k);
+    let mut t: u64 = 1;
+    s.run(&mut t);
+    t
+}
+theorem use_run_fixed_lit(): use_run_fixed(2) = 7 { refl }
+
+// A recursion through both: a `mut self` method lending its other path on,
+// and a function whose `&mut` first parameter is the receiver.
+fn Counter::drain(mut self c: Counter, into: &mut Nat, n: Nat) → Nat decreases n {
+    match n {
+        Zero => into,
+        Succ(k) => {
+            c.give(&mut into, 1);
+            c.drain(&mut into, k)
+        },
+    }
+}
+theorem drain_lit(): Counter::drain(Counter(0, []), 0, 2) = Mutated(Counter(2, []), Mutated(1 + 2, 1 + 2)) { refl }
+
+fn Nat::count_into(a: &mut Nat, b: &mut Nat, n: Nat) → Nat decreases n {
+    match n {
+        Zero => a,
+        Succ(k) => {
+            a := a + 1;
+            a.count_into(&mut b, k)
+        },
+    }
+}
+theorem count_into_lit(): Nat::count_into(0, 5, 2) = Mutated(2, Mutated(5, 2)) { refl }
 
 // ---------------------------------------------------------------------------
 // A dot call threads its receiver where the receiver was written a live path

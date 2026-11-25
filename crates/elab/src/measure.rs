@@ -1555,7 +1555,10 @@ pub(crate) fn method_calls_as_calls(decl: &Decl, name: &str, tys: &dyn BinderTys
         return Ok(decl.clone());
     };
     let subject_ty = explicit[slot].ty.clone();
-    let mutated = matches!(&decl.result.kind, TyKind::Named { name, .. } if name == heather_syntax::MUTATED_RECORD);
+    // Whether the receiver comes back: its written mode (a `mut self`
+    // method, or a `&mut` parameter in its place), as a dot call reads it
+    // (`Members::threads_receiver`).
+    let mutated = explicit[slot].mode == heather_syntax::ParamMode::Path;
     // The binders a receiver may be typed over: the parameters and every
     // annotated `let`. The body is deshadowed, so one name is one binder.
     let mut scope = scope_of(decl);
@@ -1804,7 +1807,19 @@ impl MethodCalls<'_> {
         let ExprKind::Dot { recv, .. } = &inner.kind else { return None };
         let ExprKind::Var(receiver) = &recv.kind else { return None };
         let receiver = receiver.clone();
-        Some((receiver, self.call(inner)?))
+        let mut call = self.call(inner)?;
+        // A call that lends places as well (§24) stays a call that lends
+        // them, its receiver among them when it comes back.
+        if crate::path_calls::PathCalls::lends(&call) {
+            if self.mutated && let ExprKind::App { args, .. } = &mut call.kind {
+                let at = self.slot.min(args.len() - 1);
+                let span = args[at].span;
+                args[at] = app(var(heather_syntax::MUTARG, span), vec![args[at].clone()], span);
+            }
+            let span = call.span;
+            call = app(var(heather_syntax::PATHCALL, span), vec![call], span);
+        }
+        Some((receiver, call))
     }
 }
 
@@ -3584,7 +3599,11 @@ pub(crate) fn rebind_marked(stmts: &[Stmt], span: Span, strict: bool) -> Result<
                 let after = part(heather_syntax::MUTATED_AFTER);
                 out.push(plain(&receiver, subst(&update, &[(hole, &after)], &mut Vec::new())));
             }
-            // An unclaimed candidate is an ordinary call.
+            // An unclaimed candidate is an ordinary call; one that lends
+            // places (§24) still lends them.
+            Some((false, call)) if crate::path_calls::PathCalls::lends(call) => {
+                out.push(plain(name, app(var(heather_syntax::PATHCALL, span), vec![call.clone()], span)))
+            }
             Some((false, call)) => out.push(plain(name, call.clone())),
             None => out.push(st.clone()),
         }

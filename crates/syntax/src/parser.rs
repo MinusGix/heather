@@ -3507,14 +3507,19 @@ impl Parser {
                 span: result.span,
             });
         }
+        // A `mut self` receiver with other live paths (§24): the values
+        // after nest in parameter order, so the receiver is written first
+        // among them, which puts its value outermost, where a method call
+        // rebinds its receiver from (`x.m(&mut b)`).
         if let Some(receiver) = &mut_self
-            && let Some(other) = paths.iter().find(|n| *n != receiver)
+            && let Some(first) = paths.first()
+            && first != receiver
         {
             return Err(ParseError {
                 msg: format!(
-                    "a `mut self` method takes no other `&mut` parameter yet: `{other}` would come back \
-                     beside `{receiver}`, and a method call threads its receiver alone. Take `{receiver}: \
-                     &mut` without `self` and call the function as `f(&mut {receiver}, &mut {other}, …)`"
+                    "a `mut self` receiver comes first among the `&mut` parameters: `{first}` is written \
+                     before `{receiver}`, and a method call rebinds its receiver from the outermost \
+                     `Mutated`. Move `{receiver}` before `{first}`"
                 ),
                 span: result.span,
             });
@@ -3771,7 +3776,8 @@ impl Parser {
         }
         let wrap = wrap.filter(|m| *m == crate::imperative::MUT);
         let tmp = self.hygienic("path");
-        stmts.extend(crate::imperative::expand_path_call(tmp, Some((name, ty, wrap)), value, span)?);
+        let receiver = self.mut_receiver(&value);
+        stmts.extend(crate::imperative::expand_path_call(tmp, Some((name, ty, wrap)), value, receiver, span)?);
         Ok(())
     }
 
@@ -3812,7 +3818,8 @@ impl Parser {
             let name = self.hygienic("pathres");
             let call = std::mem::replace(&mut *block.result, Expr { kind: ExprKind::Var(name.clone()), span });
             let tmp = self.hygienic("path");
-            block.stmts.extend(crate::imperative::expand_path_call(tmp, Some((name, None, None)), call, span)?);
+            let receiver = self.mut_receiver(&call);
+            block.stmts.extend(crate::imperative::expand_path_call(tmp, Some((name, None, None)), call, receiver, span)?);
         } else if self.mut_receiver(&block.result) {
             let span = block.result.span;
             let name = self.hygienic("tail");
@@ -4761,7 +4768,8 @@ impl Parser {
             // `f(&mut a);` runs the call and rebinds the places it lends
             // (§24); its answer is dropped, as a `mut self` method's is.
             if !crate::imperative::path_places(&expr).is_empty() {
-                stmts.extend(crate::imperative::expand_path_call(name, None, expr, span)?);
+                let receiver = self.mut_receiver(&expr);
+                stmts.extend(crate::imperative::expand_path_call(name, None, expr, receiver, span)?);
                 continue;
             }
             let expr = if self.mut_receiver(&expr) {
