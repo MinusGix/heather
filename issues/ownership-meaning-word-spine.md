@@ -10,7 +10,7 @@ updated: 2026-11-25
 
 Measured in [[ownership-residuals-from-source-proofs]]: the pin `mean_fn(w, f, xs, [i]).word = f(xs, i, …)` by `refl` costs 1.0k, 1.9k, 4.6k, 13.9k, 47.8k, 177k and 683k kernel steps at bodies of 8 to 512 statements (0.37 s at 512): about 2.6·N². `call_check`'s `Sem.words` grows by `s.words ++ [x]` and a word is read by position (`atom::word`, `nth`), so reading the last word peels every append. A residual that reads an early word is lazy and linear; the pin reads the answer, bound last.
 
-`docs/native/runtime-fn-setups-design.md` §4.3's pin is linear in the function; this fragment's meaning is the outlier.
+`docs/native/runtime-fn-setups-design.md` §4.3 states its pin linear in the function; whether its interpreter's environment has the same shape was not checked.
 
 ## Wanted
 
