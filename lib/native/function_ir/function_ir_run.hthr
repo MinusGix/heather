@@ -369,7 +369,7 @@ theorem StructuredRegion::run_keeps(self region: StructuredRegion, call: Writers
                     id.differs_ne(exhausted, parts.left)),
                 Valuation::bind_frame(values, outputs, end.end.state, w, id, parts.right))
         },
-        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ values buffers w id h =>
+        Until(inputs, parameters, body, exit, next, outputs) => λ values buffers w id h =>
             Valuation::bind_frame(values, outputs, until_run(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held), parameters, exit,
                 next, until_passes(), words_of(values, inputs), buffers).end.state, w, id, h),
     }
@@ -586,7 +586,7 @@ theorem StructuredRegion::run_holds(self region: StructuredRegion, effects: Effe
                                 end.end.exhausted, before, end.buffers),
                             runs))))
         },
-        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ ok values after before agree defined => {
+        Until(inputs, parameters, body, exit, next, outputs) => λ ok values after before agree defined => {
             let pass = λ (v: Valuation()) (from: Buffers()) (to: Buffers()) => StructuredRegionRunsOver(effects, v, body, from, to);
             let step = λ (v: Valuation()) (held: Buffers()) => body.run(call, v, held);
             let p1 = Bool::is_true_and(body.evaluable(arity), distinct(parameters) && (disjoint(body.writes(), parameters)
@@ -613,7 +613,7 @@ theorem StructuredRegion::run_holds(self region: StructuredRegion, effects: Effe
             let next_len: (next.len() = parameters.len()) = next.len().matches_eq(parameters.len(), p7.left);
             let start = words_of(values, inputs);
             let end = until_run(step, parameters, exit, next, until_passes(), start, before);
-            let region = Until(inputs, parameters, body, exit, next, outputs, measure_at);
+            let region = Until(inputs, parameters, body, exit, next, outputs);
             let inputs_after: (words_of(after, inputs) = start) = words_agree(inputs, values, after, λ id m =>
                 trans(agree(64, id, List::mem_append_l(inputs, outputs, id, m)),
                     region.run_keeps(call, values, before, 64, id, disjoint_mem(outputs, inputs, p5.left, id, m))));
@@ -866,7 +866,7 @@ theorem StructuredRegion::total_run_defined(self region: StructuredRegion, call:
                 λ (pass: Valuation()) (held: Buffers()) => body.run_defined(call, defines, pass, held),
                 λ pass held => body.total_run_defined(call, defines, all, outs, lens, total, pass, held), parameters, count, exit, next,
                 values(64, bound).toNat(), words_of(values, inputs), buffers),
-        Until(_, _, _, _, _, _, _) => λ never values buffers => false_elim(never),
+        Until(_, _, _, _, _, _) => λ never values buffers => false_elim(never),
     }
 }
 
@@ -1100,7 +1100,7 @@ fn StructuredRegion::calls_among(self region: StructuredRegion, among: Nat → B
         Lend(_, callee, _, _) => among(callee),
         Call(callee, _, _, _) => among(callee),
         Loop(_, _, _, _, body, _, _, _, _) => body.calls_among(among),
-        Until(_, _, body, _, _, _, measure_at) => body.calls_among(among),
+        Until(_, _, body, _, _, _) => body.calls_among(among),
     }
 }
 
@@ -1143,7 +1143,7 @@ theorem StructuredRegion::calls_among_every(self region: StructuredRegion): regi
         Lend(_, _, _, _) => trivial,
         Call(_, _, _, _) => trivial,
         Loop(_, _, _, _, body, _, _, _, _) => body.calls_among_every(),
-        Until(_, _, body, _, _, _, measure_at) => body.calls_among_every(),
+        Until(_, _, body, _, _, _) => body.calls_among_every(),
     }
 }
 
@@ -1203,7 +1203,7 @@ theorem StructuredRegion::run_quiet_among(self region: StructuredRegion, call: W
             cong_fn<LoopState, State>(λ end => State(Valuation::set(Valuation::bind(values, outputs, end.end.state), exhausted,
                 bit_value(end.end.exhausted)), end.buffers), ended)
         },
-        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ quiet fits values => {
+        Until(inputs, parameters, body, exit, next, outputs) => λ quiet fits values => {
             let step = λ (pass: Valuation()) => body.eval_over(buffers, answers, pass);
             let ended = until_run_quiet(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held), step, buffers,
                 λ v => body.run_quiet_among(call, answers, buffers, among, still, quiet, fits, v), parameters, exit, next, until_passes(),

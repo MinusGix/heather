@@ -195,7 +195,7 @@ theorem StructuredRegion::eval_where_over(self region: StructuredRegion, buffers
                     Valuation::bind_same(values, others, same, outputs, end.state), exhausted, bit_value(end.exhausted), bit_value(end.exhausted),
                     λ w => refl))
         },
-        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ values others same ok => {
+        Until(inputs, parameters, body, exit, next, outputs) => λ values others same ok => {
             let step = λ (pass: Valuation()) => body.eval_over(buffers, call, pass);
             let other_step = λ (pass: Valuation()) => body.eval_over(buffers, other, pass);
             let defined = λ (pass: Valuation()) => body.defined_over(buffers, call, defines, pass);
@@ -747,7 +747,7 @@ theorem StructuredRegion::defined_where_over(self region: StructuredRegion, buff
             j(sym(words_agree(inputs, values, others, λ id _ => same(64, id))), λ ws _ =>
                 loop_defined(other_step, other_defined, parameters, count, exit, next, others(64, bound).toNat(), ws).IsTrue(), counted)
         },
-        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ values others same ok => {
+        Until(inputs, parameters, body, exit, next, outputs) => λ values others same ok => {
             let step = λ (pass: Valuation()) => body.eval_over(buffers, call, pass);
             let other_step = λ (pass: Valuation()) => body.eval_over(buffers, other, pass);
             let defined = λ (pass: Valuation()) => body.defined_over(buffers, call, defines, pass);
@@ -775,7 +775,7 @@ fn StructuredRegion::quiet(self region: StructuredRegion) → Bool {
         Loop(_, _, _, _, body, _, _, _, _) => body.quiet(),
         // Defined only where it ends, which is a proof, not a property of
         // its nodes.
-        Until(_, _, _, _, _, _, _) => False,
+        Until(_, _, _, _, _, _) => False,
     }
 }
 
@@ -814,7 +814,7 @@ theorem StructuredRegion::quiet_defined(self region: StructuredRegion, buffers: 
                 λ (pass: Valuation()) => body.defined_over(buffers, call, defines, pass),
                 λ pass => body.quiet_defined(buffers, call, defines, quiet, pass), parameters, count, exit, next,
                 values(64, bound).toNat(), words_of(values, inputs)),
-        Until(_, _, _, _, _, _, _) => λ never _ => false_elim(never),
+        Until(_, _, _, _, _, _) => λ never _ => false_elim(never),
     }
 }
 
@@ -904,7 +904,7 @@ theorem StructuredRegion::relabel_defined_over(self region: StructuredRegion, bu
             j(sym(words_agree(inputs, values, others, λ id _ => same(64, id))), λ ws _ =>
                 loop_defined(other_step, other_defined, parameters, count, exit, next, others(64, bound).toNat(), ws).IsTrue(), counted)
         },
-        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ values others same ok => {
+        Until(inputs, parameters, body, exit, next, outputs) => λ values others same ok => {
             let step = λ (pass: Valuation()) => body.eval_over(buffers, Answers::relabel(call, links), pass);
             let other_step = λ (pass: Valuation()) => body.relabel(links).eval_over(buffers, call, pass);
             let defined = λ (pass: Valuation()) => body.defined_over(buffers, Answers::relabel(call, links), Defines::relabel(defines, links), pass);

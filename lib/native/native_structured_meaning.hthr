@@ -57,7 +57,7 @@ fn StructuredRegion::meaning(self region: StructuredRegion, call: Writers(), env
         Call(callee, arguments, result, also) => env.compute(call, Call(callee, arguments, result, also)),
         Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted) =>
             env.compute(call, Loop(inputs, bound, parameters, count, body, exit, next, outputs, exhausted)),
-        Until(inputs, parameters, body, exit, next, outputs, measure_at) => env.compute(call, Until(inputs, parameters, body, exit, next, outputs, measure_at)),
+        Until(inputs, parameters, body, exit, next, outputs) => env.compute(call, Until(inputs, parameters, body, exit, next, outputs)),
     }
 }
 
@@ -544,7 +544,7 @@ theorem StructuredRegion::run_frame(self region: StructuredRegion, call: Writers
                     x.differs_ne(exhausted, ex.left)),
                 Valuation::bind_frame(values, outputs, end.end.state, w, x, j(word_port_ids(outputs), λ l _ => absent(x, l).IsTrue(), parts.left)))
         },
-        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ values buffers w x h =>
+        Until(inputs, parameters, body, exit, next, outputs) => λ values buffers w x h =>
             Valuation::bind_frame(values, outputs, until_run(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held), parameters, exit,
                 next, until_passes(), words_of(values, inputs), buffers).end.state, w, x, j(word_port_ids(outputs), λ l _ => absent(x, l).IsTrue(), h)),
     }
@@ -982,8 +982,8 @@ record UntilShape(inputs: List<Nat>, parameters: List<Nat>, body: StructuredRegi
     outputs_ordered: moves_ordered(outputs, parameters).IsTrue(),
 }
 
-theorem StructuredRegion::until_shaped(inputs: List<Nat>, parameters: List<Nat>, body: StructuredRegion, exit: Nat, next, outputs: List<Nat>, measure_at: Nat,
-    ok: Until(inputs, parameters, body, exit, next, outputs, measure_at).until_shape().IsTrue()): UntilShape(inputs, parameters, body, exit, next, outputs) {
+theorem StructuredRegion::until_shaped(inputs: List<Nat>, parameters: List<Nat>, body: StructuredRegion, exit: Nat, next, outputs: List<Nat>,
+    ok: Until(inputs, parameters, body, exit, next, outputs).until_shape().IsTrue()): UntilShape(inputs, parameters, body, exit, next, outputs) {
     let l1 = inputs.len().matches(parameters.len());
     let l2 = next.len().matches(parameters.len());
     let l3 = outputs.len().matches(parameters.len());
@@ -1122,12 +1122,12 @@ theorem StructuredRegion::faithful(self region: StructuredRegion, call: Writers(
                     ports, m0, env, s.looped(outputs, exhausted)), settles0)
             }
         },
-        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ s t scoped => {
-            let r = Until(inputs, parameters, body, exit, next, outputs, measure_at);
+        Until(inputs, parameters, body, exit, next, outputs) => λ s t scoped => {
+            let r = Until(inputs, parameters, body, exit, next, outputs);
             cases scoped as ok, got(bs), bits;
             λ values env agrees => {
                 let parts = Bool::is_true_and(s.all_defined(inputs), r.until_shape(), Bool::is_true_of_eq(ok));
-                let shape = StructuredRegion::until_shaped(inputs, parameters, body, exit, next, outputs, measure_at, parts.right);
+                let shape = StructuredRegion::until_shaped(inputs, parameters, body, exit, next, outputs, parts.right);
                 let step = λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held);
                 let ur = λ (st: List<BitVec(64)>) => until_run(step, parameters, exit, next, until_passes(), st, env.buffers);
                 let e0 = ur(words_of(env.valuation(), inputs));

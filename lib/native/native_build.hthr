@@ -597,7 +597,7 @@ fn Calc::pieces(self c: Calc, next: Nat) → List<Piece> {
             let words = Cons(count, Cons(ran_out.id, state.ids()));
             let work = (body(Var(count)).pieces(some + 1) ++ [Nodes(stop.test().placed(True, exit).nodes ++ [Const(64, t, 0), Equal(64, ran_out.id, exit, t)])])
                 .merged().joined();
-            let r = Until(words, words, Compose(work, Dataflow(Stmt::leaf_region(counted_nodes(count, count, exit, t)))), exit, words, words, 0);
+            let r = Until(words, words, Compose(work, Dataflow(Stmt::leaf_region(counted_nodes(count, count, exit, t)))), exit, words, words);
             [Nodes(b.nodes ++ [Move(64, count, b.id), Const(64, ran_out.id, 0), Const(64, zero, 0), UnsignedLessThan(64, some, zero, count)]),
                 Part(Conditional(Ports([]), some, Ports([]), Ports([]), r, Dataflow(Stmt::leaf_region([Const(64, ran_out.id, 1)])))),
                 Nodes([count, exit, t].cleared())]

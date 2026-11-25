@@ -118,8 +118,8 @@ fn StructuredRegion::spelled(self region: StructuredRegion) → List<Nat> → Li
                 spell_numbers(next), spell_numbers(outputs), spell_number(exhausted)]),
         Lend(views, callee, arguments, result) => spell_call("Lend",
             [spell_list(views.map(λ (view: View) => view.spelled())), spell_number(callee), spell_numbers(arguments), spell_number(result)]),
-        Until(inputs, parameters, body, exit, next, outputs, measure_at) => spell_call("Until",
-            [spell_numbers(inputs), spell_numbers(parameters), body.spelled(), spell_number(exit), spell_numbers(next), spell_numbers(outputs), spell_number(measure_at)]),
+        Until(inputs, parameters, body, exit, next, outputs) => spell_call("Until",
+            [spell_numbers(inputs), spell_numbers(parameters), body.spelled(), spell_number(exit), spell_numbers(next), spell_numbers(outputs)]),
     }
 }
 
