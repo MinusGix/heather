@@ -1,6 +1,6 @@
 ---
 title: Paths as data: steps, their denotation, and an apartness decider
-status: open
+status: closed
 labels: [ownership,library]
 area: heather-in-heather
 milestone: [nh-ownership]
@@ -42,3 +42,4 @@ The module and its probes pass the library gate, the decider is proved sound and
   **`PathSame` and `Footprint` once steps exist** (not deleted here): `PathSame` stays only as regrouping of a denotation; `KeyIn`'s shape-recording goes to steps; `Footprint` is replaced by steps and place states at level 2 and `Held` at level 3. [[paths-as-steps-retire-workarounds]]. A byte-level model (`Part::path`, `Path::entry`) for placement: [[steps-byte-model]].
 
   **Elaborator notes.** A `match` on a member of a mutual group with an explicit `as` motive is refused ("cannot set the rest of its mutual group aside"); the inferred motive works, so the model's proofs match on `Val` without `as`. A member theorem `VSlots::of_list` recursing on `VSlots` could not resolve `VSlots::of` in this module ("qualified by `VSlots`, which is neither…"); renamed to `slots_of_list`. A two-type reduction did not reproduce it, so nothing is filed.
+- 2026-11-25: Verified: `scripts/test --pr` — `== suite: 3517 passed, 0 failed, 2 ignored ==`. Done-when met; residue filed as [[steps-decider-completeness]], [[steps-byte-model]], [[paths-as-steps-retire-workarounds]]. Closing.
