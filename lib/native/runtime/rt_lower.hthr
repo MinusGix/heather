@@ -7567,7 +7567,6 @@ theorem Fun::bound_split(values: Valuation(), ids: List<Nat>, later: List<Nat>):
     }
 }
 
-
 // Fields at ports from `port` on, as many as there are, are below where
 // they end.
 

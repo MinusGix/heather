@@ -323,7 +323,6 @@ theorem Tm::node_means(ws: List<Ty>, body: Tm, w: World, h: Ty::Arrows(w.tys, ws
         λ a oa k agree => Ty::for_words_at(ws, Q, pass, a, oa, k, agree), Tm::rounds(), xs, len, within)
 }
 
-
 // The words of variables are as many as the codes they are read at.
 theorem Tm::words_len(w: World, g: List<Ty>, env: Env(w.tys, g), vs: List<Nat>): Tm::words(w, g, env, vs).len() = Tm::state(g, vs).len() {
     match vs {
