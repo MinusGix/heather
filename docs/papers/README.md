@@ -30,6 +30,7 @@ row when you add a paper.
 | `2312.00990.pdf` | *Polynomial functors: a mathematical theory of interaction* | `issues/polynomial-functor-interfaces.md` |
 | `2507.13774v2.pdf` | Adjedj, Lennon-Bertrand, Benjamin, Maillard: *AdapTT: functoriality for dependent type casts* | |
 | `2510.14558.pdf` | Fadaei Ayyam, Sammler: *HITrees: higher-order interaction trees* | `docs/itrees/interaction-trees-fit.md` |
+| `2602.15965v3.pdf` | Chang, Park, Lim, Nagarakatte: *FLoPS: semantics, operations, and properties of P3109 floating-point representations in Lean* (Rutgers DCS-TR-762) | `issues/float-p3109.md` |
 | `2603.29716v2.pdf` | Abel et al.: *A graded modal dependent type theory with erasure, formalized* | |
 | `2604.01303.pdf` | Aberlé: *Compositional program verification with polynomial functors in dependent type theory* | `issues/polynomial-functor-interfaces.md` |
 | `2607.00815.pdf` | Szeider: *Streaming LRAT certificates into Lean theorems* | `issues/lrat-certified-bitvector-decision.md` |

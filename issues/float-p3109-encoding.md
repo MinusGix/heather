@@ -1,0 +1,48 @@
+---
+title: P3109 encodings as a bijection with the bit patterns
+status: open
+labels: [mathematics,floating-point,bits]
+area: mathematics
+milestone: [p3109-encoding,float-bits]
+created: 2026-11-25
+updated: 2026-11-25
+---
+
+The `float-bits` milestone plans one `encode`/`decode` pair over `BitVec`
+with a round-trip theorem (design §7.2). P3109's layouts differ from IEEE's
+([[float-p3109]]): NaN takes the `-0` code, infinities sit in the top
+exponent field beside finite values, and the boundary between finite and
+special codes moves with the precision, signedness and domain.
+
+## The statement
+
+FLoPS (§3.2) proves a three-way isomorphism: `K`-bit codes, the algebraic
+type, and the set of extended reals the format denotes. In the library:
+
+- `decode: BitVec(K) → Float(F)` is a bijection: injective and surjective,
+  or `encode ∘ decode` and `decode ∘ encode` both the identity, for every
+  P3109 format at once (parametric in `K`, `P`, signedness, domain), not
+  per format.
+- `Float::val`-injectivity on non-NaN values (one zero, so no quotient is
+  needed) closes the triangle: the value set and the codes are in
+  bijection.
+
+FLoPS proves injectivity by splitting the code space into disjoint regions
+and using the uniqueness of Euclidean division in the finite one, and
+surjectivity by building a code per constructor. Both are `omega`-shaped
+here.
+
+## The check against the standard
+
+FLoPS extracted their functions and compared them with the interim report's
+value tables. Here it is a theorem: for each 8-bit format in the report,
+decoding all 256 codes equals the table, by evaluation, in
+`lib/_tests/std/num/float/`. That test is what would have caught the two
+errors FLoPS found in the report (the unsigned `emax` at `P <= 2`, the
+unsigned-extended infinity's code), and it is independent of the
+library's own reasoning in the same way as [[float-conformance-vectors]].
+
+## What it assumes from elsewhere
+
+- **[[float-p3109]]** owns how P3109 formats become `Format`s. Assumed
+  here: only that every P3109 format is one.

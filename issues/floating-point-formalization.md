@@ -5,7 +5,7 @@ labels: [mathematics,reals,floating-point,design]
 area: mathematics
 milestone: [math-float]
 created: 2026-10-20
-updated: 2026-11-01
+updated: 2026-11-25
 ---
 
 Owns the roadmap's `math-float` milestone (`docs/roadmap.md`): binary
@@ -94,3 +94,4 @@ of the area.
 - 2026-11-01: TwoProduct (by fma, off the subnormal grid) and TwoSum (no order between the operands, `|a + b|` in range) land in `eft.hthr` ([[float-eft-two-product]], [[float-eft-two-sum]], closed); Veltkamp and Kahan remain. Design §19.
 - 2026-11-01: Veltkamp splitting at normal `x` (`eft.hthr`, [[float-eft-veltkamp]], closed) and, in the new `summation.hthr`, addition's standard model with no underflow term, the recursive sum's `γ(n-1)` bound and Kahan's exact correction step ([[float-kahan-summation]], closed). Round 5 (`float-eft`) is complete; Kahan's whole-loop bound and subnormal Veltkamp are filed ([[float-kahan-bound]], [[float-veltkamp-subnormal]]). Design §19.
 - 2026-11-05: gardener: cites a file it shares with [[cast-carrier-reader]] (`lib/std/num/float/arith.hthr`); [[class-inherited-field-implementations]] (`lib/std/num/creal.hthr`, `lib/std/num/float/dyadic.hthr`); [[match-on-proof-call-cost]] (`lib/std/num/float/eft.hthr`).
+- 2026-11-25: P3109 put in scope after the FLoPS paper (`docs/papers/2602.15965v3.pdf`): roadmap `float-p3109`, tracked in [[float-p3109]]. Also filed against the current library: [[float-fast2sum-saturated]] and [[float-extract-scalar]].
