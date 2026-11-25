@@ -90,3 +90,25 @@ theorem odd_sat_even_inexact(): e4m3().round_odd(460) = Float::Fin(Finite::max_f
     let v: Rat::Same((Finite::max_finite(e4m3())).val(), 448) = refl;
     And(refl, And(trivial, λ h => { let b: Rat::Same(Rat::ofInt(448), 460) = Rat::same_trans(Rat::same_sym(v), h); omega(b) }))
 }
+
+// ---------------------------------------------------------------------------
+// Stochastic rounding, pointwise. E2M1 between 1 and 1.5 (spacing 1/2), two
+// random bits.
+
+// 5/4 is halfway (ν·4 = 2): variant A steps away for R = 2, 3.
+theorem sra_low(): Rat::Same(val_or(e2m1().round_sr_a(Rat(5, 4), 2, 1), 99), 1) { refl }
+theorem sra_high(): Rat::Same(val_or(e2m1().round_sr_a(Rat(5, 4), 2, 2), 99), Rat(3, 2)) { refl }
+theorem srb_low(): Rat::Same(val_or(e2m1().round_sr_b(Rat(5, 4), 2, 1), 99), 1) { refl }
+theorem srb_high(): Rat::Same(val_or(e2m1().round_sr_b(Rat(5, 4), 2, 2), 99), Rat(3, 2)) { refl }
+// 23/16 has ν·4 = 3.5: A sees 3 and keeps 1 at R = 0; C rounds 3.5 to 4 and
+// always steps away.
+theorem sra_frac(): Rat::Same(val_or(e2m1().round_sr_a(Rat(23, 16), 2, 0), 99), 1) { refl }
+theorem src_frac(): Rat::Same(val_or(e2m1().round_sr_c(Rat(23, 16), 2, 0), 99), Rat(3, 2)) { refl }
+// 21/16 has ν·4 = 2.5, a tie for C's inner rounding: to even, 2.
+theorem src_tie(): Rat::Same(val_or(e2m1().round_sr_c(Rat(21, 16), 2, 1), 99), 1) { refl }
+// Negative values step away from zero.
+theorem sra_neg(): Rat::Same(val_or(e2m1().round_sr_a(Rat(-5, 4), 2, 3), 99), Rat(-3, 2)) { refl }
+// Exactly representable values never move.
+theorem sra_exact(): Rat::Same(val_or(e2m1().round_sr_a(Rat(3, 2), 2, 3), 99), Rat(3, 2)) { refl }
+// Of the four draws at ν·4 = 2, two step away.
+theorem sra_count(): Nat::count_away(2, 4, 4) = 2 { refl }

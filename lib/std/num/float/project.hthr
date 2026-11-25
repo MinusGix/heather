@@ -515,3 +515,104 @@ theorem Format::round_odd_faithful(self F: Format, x: Rat, g: Finite(F), h: F.ro
         NaN(hh) => λ no _ => false_elim(no),
     }(tz, h)
 }
+
+// ---------------------------------------------------------------------------
+// Stochastic rounding (report §4.7.4), pointwise: with `N` random bits `R`
+// the variants are functions of `x` and `R`, each choosing between the
+// truncation toward zero and the step away. So every outcome is a faithful
+// rounding (`round_dir_faithful`), and the bounds proved for faithful
+// rounding hold for each draw. Their expectations are sums over the `2^N`
+// draws; `count_away` is the count they rest on
+// (issues/float-stochastic-rounding.md).
+
+// Truncate, or step away from zero.
+fn Format::round_dir(self F: Format, x: Rat, away: Bool) → Float(F) {
+    match away { True => F.round_rat(Format::away_mode(x), x), False => F.round_rat(TowardZero, x) }
+}
+
+theorem Format::round_dir_faithful(self F: Format, x: Rat, away: Bool, g: Finite(F), h: F.round_dir(x, away) = Fin(g)): Finite::Below(x, g) ∨ Finite::Above(x, g) {
+    match away as λ b => F.round_dir(x, b) = Float::Fin(g) → Finite::Below(x, g) ∨ Finite::Above(x, g) {
+        True => λ e => F.rounds_faithful(Format::away_mode(x), x, g, j(e, λ v _ => RoundsTo(F, Format::away_mode(x), x, v), F.round_rat_correct(Format::away_mode(x), x))),
+        False => λ e => F.rounds_faithful(TowardZero, x, g, j(e, λ v _ => RoundsTo(F, TowardZero, x, v), F.round_rat_correct(TowardZero, x))),
+    }(h)
+}
+
+// The truncation toward zero (finite: `TowardZero` never overflows).
+fn Format::trunc(self F: Format, x: Rat) → Finite(F) { (F.round_rat(TowardZero, x)).fin_or(Finite::zero(F, False)) }
+
+// `ν · 2^N`, where `ν` is `x`'s offset past the truncation in units of its
+// spacing (the report's `S̃ - ⌊S̃⌋`): `(|x| - |d|) · 2^(N - q(d))`. Past the
+// largest float it is at least `2^N`, so every variant steps away and
+// overflows, as rounding to precision with an unbounded exponent does.
+fn Format::sr_scaled(self F: Format, x: Rat, N: Nat) → Rat {
+    (x.abs() - (F.trunc(x)).val().abs()) * Dyadic(1, N.int() - (F.trunc(x)).q()).rat()
+}
+
+// The floor, and the nearest with ties to even, of a nonnegative rational.
+fn Rat::floor_nat(self q: Rat) → Nat { q.num.natAbs().div(q.den) }
+
+fn Rat::rnite_nat(self q: Rat) → Nat {
+    let n = q.floor_nat();
+    let r = q.num.natAbs().mod(q.den);
+    match (r + r + 1).le_dec(q.den) {
+        Inl(_) => n,
+        Inr(_) => match (q.den + 1).le_dec(r + r) {
+            Inl(_) => n + 1,
+            Inr(_) => match n.even_dec() { Inl(_) => n, Inr(_) => n + 1 },
+        },
+    }
+}
+
+fn Nat::ge_bit(self a, b: Nat) → Bool { match b.le_dec(a) { Inl(_) => True, Inr(_) => False } }
+
+// The three variants: `R < 2^N` the random bits.
+fn Format::round_sr_a(self F: Format, x: Rat, N, R: Nat) → Float(F) {
+    F.round_dir(x, ((F.sr_scaled(x, N)).floor_nat() + R).ge_bit(Nat::pow(2, N)))
+}
+
+fn Format::round_sr_b(self F: Format, x: Rat, N, R: Nat) → Float(F) {
+    F.round_dir(x, ((F.sr_scaled(x, N + 1)).floor_nat() + (R + R + 1)).ge_bit(Nat::pow(2, N + 1)))
+}
+
+fn Format::round_sr_c(self F: Format, x: Rat, N, R: Nat) → Float(F) {
+    F.round_dir(x, ((F.sr_scaled(x, N)).rnite_nat() + R).ge_bit(Nat::pow(2, N)))
+}
+
+// Every draw is a faithful rounding.
+theorem Format::round_sr_a_faithful(self F: Format, x: Rat, N, R: Nat, g: Finite(F), h: F.round_sr_a(x, N, R) = Fin(g)): Finite::Below(x, g) ∨ Finite::Above(x, g) {
+    F.round_dir_faithful(x, ((F.sr_scaled(x, N)).floor_nat() + R).ge_bit(Nat::pow(2, N)), g, h)
+}
+
+theorem Format::round_sr_b_faithful(self F: Format, x: Rat, N, R: Nat, g: Finite(F), h: F.round_sr_b(x, N, R) = Fin(g)): Finite::Below(x, g) ∨ Finite::Above(x, g) {
+    F.round_dir_faithful(x, ((F.sr_scaled(x, N + 1)).floor_nat() + (R + R + 1)).ge_bit(Nat::pow(2, N + 1)), g, h)
+}
+
+theorem Format::round_sr_c_faithful(self F: Format, x: Rat, N, R: Nat, g: Finite(F), h: F.round_sr_c(x, N, R) = Fin(g)): Finite::Below(x, g) ∨ Finite::Above(x, g) {
+    F.round_dir_faithful(x, ((F.sr_scaled(x, N)).rnite_nat() + R).ge_bit(Nat::pow(2, N)), g, h)
+}
+
+// How many of the draws `R < n` step away when `k + R >= M`: for `k <= M`
+// and `n = M` exactly `k`, so variant A steps away with probability
+// `⌊ν·2^N⌋ / 2^N` and is biased toward zero by the part of `ν` its bits
+// cannot see.
+fn Nat::count_away(k, M, n: Nat) → Nat {
+    match n { Zero => 0, Succ(m) => Nat::count_away(k, M, m) + match M.le_dec(k + m) { Inl(_) => 1, Inr(_) => 0 } }
+}
+
+theorem Nat::count_away_eq(k, M: Nat, km: k <= M, n: Nat): Nat::count_away(k, M, n) = n - (M - k) {
+    match n {
+        Zero => refl,
+        Succ(m) => {
+            let ih = Nat::count_away_eq(k, M, km, m);
+            match M.le_dec(k + m) as λ d => Nat::count_away(k, M, m) + (match d { Inl(_) => 1, Inr(_) => 0 }) = (m + 1) - (M - k) {
+                Inl(le) => { let r: (Nat::count_away(k, M, m) + 1 = (m + 1) - (M - k)) = omega; r },
+                Inr(nle) => { let r: (Nat::count_away(k, M, m) + 0 = (m + 1) - (M - k)) = omega; r },
+            }
+        },
+    }
+}
+
+theorem Nat::count_away_all(k, M: Nat, km: k <= M): Nat::count_away(k, M, M) = k {
+    let e = Nat::count_away_eq(k, M, km, M);
+    omega
+}
