@@ -1,0 +1,320 @@
+// P3109 code points (docs/library/float-p3109-design.md §7; interim report
+// §4.7.2 decoding, §4.7.6 encoding).
+//
+// A code of the nonnegative half, `n = E·2^(P-1) + T` (biased exponent `E`,
+// trailing significand `T`), is the float `(mag, bexp)` with
+// `n = bexp·half + mag`: for `E >= 1` the significand is `half + T` and the
+// library's `bexp` is `E - 1`, and for `E = 0` (zero and the subnormals) it
+// is `T` at `bexp = 0`. So decoding is one division by `half`, encoding is
+// `bexp·half + mag`, and the two are inverse on the codes up to the largest
+// finite one (`code_of_decode`, `decode_of_code`), proved once for every
+// format whose top binade the largest finite code fixes, which is how
+// `Format::p3109` builds them.
+//
+// The whole code space adds the special values (report §4.7.2's table) and,
+// for a signed format, the negative half at `2^(K-1) + n`. A datum is a
+// `Float(F)` up to value sameness (design D1: `-0` encodes as 0), and for an
+// unsigned format a nonnegative one (D2). `decode` and `encode` are inverse
+// between the `2^K` codes and the data: `encode_decode`, `decode_encode`,
+// `decode_datum`.
+
+import logic;
+import bool;
+import nat;
+import int;
+import omega;
+import ring;
+import linarith;
+import option;
+import relation_props;
+import algebra;
+import algebra_rel;
+import order;
+import ordered_field;
+import semiring;
+import rat;
+import dyadic;
+import float;
+import round;
+import p3109;
+
+// ---------------------------------------------------------------------------
+// The nonnegative codes.
+
+// A code's significand and exponent field, through one division by `half`.
+fn Format::code_mag(self F: Format, n: Nat) → Nat { match n.div(F.half()) { Zero => n.mod(F.half()), Succ(_) => F.half() + n.mod(F.half()) } }
+
+fn Format::code_bexp(self F: Format, n: Nat) → Nat { match n.div(F.half()) { Zero => 0, Succ(p) => p } }
+
+// A nonnegative float's code.
+fn Finite::code({F: Format}, self f: Finite(F)) → Nat { f.bexp * F.half() + f.mag }
+
+// The two fields read off a known quotient and remainder.
+theorem Format::code_parts(self F: Format, n, q, r: Nat, eq: n.div(F.half()) = q, er: n.mod(F.half()) = r):
+    F.code_mag(n) = (match q { Zero => r, Succ(_) => F.half() + r }) ∧ F.code_bexp(n) = (match q { Zero => 0, Succ(p) => p })
+{
+    let m1: (F.code_mag(n) = (match q { Zero => n.mod(F.half()), Succ(_) => F.half() + n.mod(F.half()) })) =
+        j(eq, λ v _ => F.code_mag(n) = (match v { Zero => n.mod(F.half()), Succ(_) => F.half() + n.mod(F.half()) }), refl);
+    let m2: (F.code_mag(n) = (match q { Zero => r, Succ(_) => F.half() + r })) =
+        j(er, λ v _ => F.code_mag(n) = (match q { Zero => v, Succ(_) => F.half() + v }), m1);
+    let b1: (F.code_bexp(n) = (match q { Zero => 0, Succ(p) => p })) =
+        j(eq, λ v _ => F.code_bexp(n) = (match v { Zero => 0, Succ(p) => p }), refl);
+    And(m2, b1)
+}
+
+// Encoding a decoded code gives it back, for any code.
+theorem Format::code_of_decode(self F: Format, n: Nat): F.code_bexp(n) * F.half() + F.code_mag(n) = n {
+    let h = F.half();
+    let dm: (n.div(h) * h + n.mod(h) = n) = n.div_mul_add_mod(h);
+    match n.div(h) as λ qq => n.div(h) = qq → (match qq { Zero => 0, Succ(p) => p }) * h + (match qq { Zero => n.mod(h), Succ(_) => h + n.mod(h) }) = n {
+        Zero => λ e => { let e2: (n.div(h) * h = 0 * h) = Nat::cong(λ (w: Nat) => w * h, e); let r: (0 * h + n.mod(h) = n) = omega; r },
+        Succ(p) => λ e => {
+            let e2: (n.div(h) * h = (p + 1) * h) = Nat::cong(λ (w: Nat) => w * h, e);
+            let ms: ((p + 1) * h = h + p * h) = p.mul_succ_left(h);
+            let r: (p * h + (h + n.mod(h)) = n) = omega;
+            r
+        },
+    }(refl)
+}
+
+// Up to the largest finite code `N` a code is a canonical float, when the
+// format's top binade is the one `N` fixes.
+theorem Format::code_ok(self F: Format, N: Nat, hs: F.span = N.div(F.half()) - 1, hc: F.cut = F.half() - 1 - N.mod(F.half()), n: Nat, le: n <= N):
+    F.canonical(F.code_mag(n), F.code_bexp(n)).IsTrue()
+{
+    let h = F.half();
+    let one = F.one_le_half();
+    let t: (F.top() = h * 2) = F.top_double();
+    let dm: (n.div(h) * h + n.mod(h) = n) = n.div_mul_add_mod(h);
+    let rl: (n.mod(h) < h) = n.mod_lt(h);
+    let dM: (N.div(h) * h + N.mod(h) = N) = N.div_mul_add_mod(h);
+    let rL: (N.mod(h) < h) = N.mod_lt(h);
+    match n.div(h) as λ qq => n.div(h) = qq → F.canonical((match qq { Zero => n.mod(h), Succ(_) => h + n.mod(h) }), (match qq { Zero => 0, Succ(p) => p })).IsTrue() {
+        Zero => λ e => F.canonical_intro(n.mod(h), 0, omega, trivial, Inl(refl), λ _ => omega),
+        Succ(p) => λ e => {
+            let e2: (n.div(h) * h = (p + 1) * h) = Nat::cong(λ (w: Nat) => w * h, e);
+            let ms: ((p + 1) * h = h + p * h) = p.mul_succ_left(h);
+            let qQ: (p + 1 <= N.div(h)) = match (N.div(h) + 1).le_dec(p + 1) {
+                Inl(big) => {
+                    let mono: ((N.div(h) + 1) * h <= (p + 1) * h) = Nat::mul_le_mono_r(h, N.div(h) + 1, p + 1, big);
+                    let ms2: ((N.div(h) + 1) * h = h + N.div(h) * h) = N.div(h).mul_succ_left(h);
+                    false_elim(omega)
+                },
+                Inr(nb) => omega(nb),
+            };
+            F.canonical_intro(h + n.mod(h), p, omega, omega, Inr(omega), λ sp => {
+                let qe: (N.div(h) = p + 1) = omega;
+                let e3: (N.div(h) * h = (p + 1) * h) = Nat::cong(λ (w: Nat) => w * h, qe);
+                omega
+            })
+        },
+    }(refl)
+}
+
+// Decoding a float's code gives its parts back.
+theorem Format::decode_of_code(self F: Format, f: Finite(F)): F.code_mag(f.code()) = f.mag ∧ F.code_bexp(f.code()) = f.bexp {
+    let h = F.half();
+    let c = F.canonical_elim(f.mag, f.bexp, f.ok);
+    let t: (F.top() = h * 2) = F.top_double();
+    let cd: (f.code() = f.bexp * h + f.mag) = refl;
+    match h.le_dec(f.mag) {
+        Inr(small) => {
+            let bz: (f.bexp = 0) = match c.right.right.left { Inl(z) => z, Inr(big) => false_elim(small(big)) };
+            let z0: (f.bexp * h = 0 * h) = Nat::cong(λ (w: Nat) => w * h, bz);
+            let u = f.code().div_mod_unique(h, 0, f.mag, omega, omega);
+            let p = F.code_parts(f.code(), 0, f.mag, u.left, u.right);
+            And(p.left, trans(p.right, sym(bz)))
+        },
+        Inl(big) => {
+            let ms: ((f.bexp + 1) * h = h + f.bexp * h) = f.bexp.mul_succ_left(h);
+            let u = f.code().div_mod_unique(h, f.bexp + 1, f.mag - h, omega, omega);
+            let p = F.code_parts(f.code(), f.bexp + 1, f.mag - h, u.left, u.right);
+            let m: (h + (f.mag - h) = f.mag) = omega;
+            And(trans(p.left, m), p.right)
+        },
+    }
+}
+
+// With the largest finite code normal (`half <= N`, true of every valid
+// P3109 format), every float's code is at most `N`.
+theorem Format::code_le(self F: Format, N: Nat, hs: F.span = N.div(F.half()) - 1, hc: F.cut = F.half() - 1 - N.mod(F.half()),
+    valid: F.half() <= N, f: Finite(F)): f.code() <= N
+{
+    let h = F.half();
+    let c = F.canonical_elim(f.mag, f.bexp, f.ok);
+    let t: (F.top() = h * 2) = F.top_double();
+    let dM: (N.div(h) * h + N.mod(h) = N) = N.div_mul_add_mod(h);
+    let rL: (N.mod(h) < h) = N.mod_lt(h);
+    let cd: (f.code() = f.bexp * h + f.mag) = refl;
+    let q1: (1 <= N.div(h)) = match (1).le_dec(N.div(h)) {
+        Inl(o) => o,
+        Inr(no) => { let z: (N.div(h) = 0) = omega(no); let z2: (N.div(h) * h = 0 * h) = Nat::cong(λ (w: Nat) => w * h, z); false_elim(omega) },
+    };
+    match (f.bexp + 1).le_dec(F.span) {
+        Inl(inner) => {
+            let le2: (f.bexp + 2 <= N.div(h)) = omega;
+            let mono: ((f.bexp + 2) * h <= N.div(h) * h) = Nat::mul_le_mono_r(h, f.bexp + 2, N.div(h), le2);
+            let s1: ((f.bexp + 1 + 1) * h = h + (f.bexp + 1) * h) = (f.bexp + 1).mul_succ_left(h);
+            let s2: ((f.bexp + 1) * h = h + f.bexp * h) = f.bexp.mul_succ_left(h);
+            omega
+        },
+        Inr(top) => {
+            let be: (N.div(h) = f.bexp + 1) = omega;
+            let e3: (N.div(h) * h = (f.bexp + 1) * h) = Nat::cong(λ (w: Nat) => w * h, be);
+            let s2: ((f.bexp + 1) * h = h + f.bexp * h) = f.bexp.mul_succ_left(h);
+            let fr = c.right.right.right(omega);
+            omega
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The whole code space.
+
+// What a format's codes are, as facts: `K` bits, signed or not, the largest
+// finite code `N` fixing the top binade, NaN, the largest code normal, and
+// the special values filling the nonnegative half above `N` (`+∞` where the
+// format has it, then an unsigned format's NaN).
+record P3109Layout(F: Format) {
+    K: Nat,
+    s: Signedness,
+    N: Nat,
+    hs: F.span = N.div(F.half()) - 1,
+    hc: F.cut = F.half() - 1 - N.mod(F.half()),
+    hn: F.specials.has_nan().IsTrue(),
+    valid: F.half() <= N,
+    dbl: Nat::pow(2, K) = Nat::pow(2, K - 1) * 2,
+    fill: N + 1 + Nat::of_bit(F.specials.has_inf()) + Nat::of_bit(match s { Signed => False, Unsigned => True })
+        = match s { Signed => Nat::pow(2, K - 1), Unsigned => Nat::pow(2, K) },
+}
+
+// The sign bit's weight: the first negative code.
+fn P3109Layout::B({F: Format}, self L: P3109Layout(F)) → Nat { Nat::pow(2, L.K - 1) }
+
+// A code up to `N` is a nonnegative float.
+fn P3109Layout::pos({F: Format}, self L: P3109Layout(F), n: Nat) → Float(F) {
+    match n.le_dec(L.N) { Inl(le) => Fin(Finite(False, F.code_mag(n), F.code_bexp(n), F.code_ok(L.N, L.hs, L.hc, n, le))), Inr(_) => NaN(L.hn) }
+}
+
+// The nonnegative half: floats up to `N`, then `+∞` where there is one,
+// then NaN (the unsigned NaN, or past the code space).
+fn P3109Layout::half_dec({F: Format}, self L: P3109Layout(F), n: Nat) → Float(F) {
+    match n.le_dec(L.N) {
+        Inl(_) => L.pos(n),
+        Inr(_) => match F.specials.has_inf().is_true_dec() {
+            Inl(hi) => match n.eq_dec(L.N + 1) { Inl(_) => Inf(False, hi), Inr(_) => NaN(L.hn) },
+            Inr(_) => NaN(L.hn),
+        },
+    }
+}
+
+// A signed format's negative half, `B + m`: NaN at `m = 0` (the `-0`
+// pattern), the negated floats, then `-∞`.
+fn P3109Layout::neg_dec({F: Format}, self L: P3109Layout(F), m: Nat) → Float(F) {
+    match m.eq_dec(0) {
+        Inl(_) => NaN(L.hn),
+        Inr(_) => match m.le_dec(L.N) {
+            Inl(_) => -L.pos(m),
+            Inr(_) => match F.specials.has_inf().is_true_dec() {
+                Inl(hi) => match m.eq_dec(L.N + 1) { Inl(_) => Inf(True, hi), Inr(_) => NaN(L.hn) },
+                Inr(_) => NaN(L.hn),
+            },
+        },
+    }
+}
+
+// Report §4.7.2.
+fn P3109Layout::decode({F: Format}, self L: P3109Layout(F), n: Nat) → Float(F) {
+    match L.s {
+        Signed => match L.B().le_dec(n) { Inl(_) => L.neg_dec(n - L.B()), Inr(_) => L.half_dec(n) },
+        Unsigned => L.half_dec(n),
+    }
+}
+
+// Report §4.7.6. Both zeros encode as 0 (design D1); a negative float at
+// an unsigned format is no datum and its code means nothing.
+fn P3109Layout::encode({F: Format}, self L: P3109Layout(F), r: Float(F)) → Nat {
+    match r {
+        Fin(f) => match f.neg { False => f.code(), True => match f.mag { Zero => 0, Succ(_) => L.B() + f.code() } },
+        Inf(n, _) => match n { False => L.N + 1, True => L.B() + (L.N + 1) },
+        NaN(_) => match L.s { Signed => L.B(), Unsigned => L.N + 1 + Nat::of_bit(F.specials.has_inf()) },
+    }
+}
+
+// The data of the format: an unsigned format has no negative value and no
+// `-∞`.
+fn P3109Layout::Datum({F: Format}, self L: P3109Layout(F), r: Float(F)) → Type {
+    match L.s {
+        Signed => True,
+        Unsigned => match r { Fin(f) => f.neg = False ∨ f.mag = 0, Inf(n, _) => n = False, NaN(_) => True },
+    }
+}
+
+// One datum: the same value, the same infinity, or NaN.
+fn Float::SameDatum({F: Format}, a, b: Float(F)) → Type {
+    match a {
+        Fin(f) => match b { Fin(g) => f.val() ≈ g.val(), Inf(_, _) => False, NaN(_) => False },
+        Inf(n, _) => match b { Fin(_) => False, Inf(m, _) => n = m, NaN(_) => False },
+        NaN(_) => match b { Fin(_) => False, Inf(_, _) => False, NaN(_) => True },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The P3109 formats' layouts.
+
+fn Format::p3109_fill_lhs(K, P: Nat, s: Signedness, d: Domain) → Nat {
+    Format::p3109_top_code(K, s, d) + 1 + Nat::of_bit((Format::p3109(K, P, s, d)).specials.has_inf()) + Nat::of_bit(match s { Signed => False, Unsigned => True })
+}
+
+fn Format::p3109_fill_rhs(K: Nat, s: Signedness) → Nat { match s { Signed => Nat::pow(2, K - 1), Unsigned => Nat::pow(2, K) } }
+
+// The specials fill the nonnegative half above the largest finite code.
+theorem Format::p3109_fill(K, P: Nat, s: Signedness, d: Domain, valid: Nat::pow(2, P - 1) <= Format::p3109_top_code(K, s, d)):
+    Format::p3109_fill_lhs(K, P, s, d) = Format::p3109_fill_rhs(K, s)
+{
+    let one: (1 <= Nat::pow(2, P - 1)) = Nat::pow_pos(a := 2, n := P - 1);
+    match s as λ ss => Nat::pow(2, P - 1) <= Format::p3109_top_code(K, ss, d) → Format::p3109_fill_lhs(K, P, ss, d) = Format::p3109_fill_rhs(K, ss) {
+        Signed => match d as λ dd => Nat::pow(2, P - 1) <= Format::p3109_top_code(K, Signed, dd) → Format::p3109_fill_lhs(K, P, Signed, dd) = Format::p3109_fill_rhs(K, Signed) {
+            FiniteDomain => λ v => {
+                let e: (Format::p3109_top_code(K, Signed, FiniteDomain) = Nat::pow(2, K - 1) - 1 - 0) = refl;
+                let r: (Format::p3109_top_code(K, Signed, FiniteDomain) + 1 + 0 + 0 = Nat::pow(2, K - 1)) = omega;
+                r
+            },
+            ExtendedDomain => λ v => {
+                let e: (Format::p3109_top_code(K, Signed, ExtendedDomain) = Nat::pow(2, K - 1) - 1 - 1) = refl;
+                let r: (Format::p3109_top_code(K, Signed, ExtendedDomain) + 1 + 1 + 0 = Nat::pow(2, K - 1)) = omega;
+                r
+            },
+        },
+        Unsigned => match d as λ dd => Nat::pow(2, P - 1) <= Format::p3109_top_code(K, Unsigned, dd) → Format::p3109_fill_lhs(K, P, Unsigned, dd) = Format::p3109_fill_rhs(K, Unsigned) {
+            FiniteDomain => λ v => {
+                let e: (Format::p3109_top_code(K, Unsigned, FiniteDomain) = Nat::pow(2, K) - 1 - 1) = refl;
+                let r: (Format::p3109_top_code(K, Unsigned, FiniteDomain) + 1 + 0 + 1 = Nat::pow(2, K)) = omega;
+                r
+            },
+            ExtendedDomain => λ v => {
+                let e: (Format::p3109_top_code(K, Unsigned, ExtendedDomain) = Nat::pow(2, K) - 1 - 2) = refl;
+                let r: (Format::p3109_top_code(K, Unsigned, ExtendedDomain) + 1 + 1 + 1 = Nat::pow(2, K)) = omega;
+                r
+            },
+        },
+    }(valid)
+}
+
+theorem Format::p3109_has_nan(K, P: Nat, s: Signedness, d: Domain): (Format::p3109(K, P, s, d)).specials.has_nan().IsTrue() {
+    match d as λ dd => (Format::p3109(K, P, s, dd)).specials.has_nan().IsTrue() { FiniteDomain => trivial, ExtendedDomain => trivial }
+}
+
+theorem Format::pow_two_dbl(K: Nat, k1: 1 <= K): Nat::pow(2, K) = Nat::pow(2, K - 1) * 2 {
+    match K as λ k => 1 <= k → Nat::pow(2, k) = Nat::pow(2, k - 1) * 2 { Zero => λ bad => false_elim(bad), Succ(i) => λ _ => { let e: (Succ(i) - 1 = i) = omega; j(sym(e), λ v _ => Nat::pow(2, Succ(i)) = Nat::pow(2, v) * 2, refl) } }(k1)
+}
+
+// A P3109 format's layout, given that its largest finite code is normal
+// and `K >= 1`: both hold for every valid `(K, P, s)` (report §3.1), and a
+// literal format closes them by evaluation.
+fn Format::p3109_layout(K, P: Nat, s: Signedness, d: Domain, valid: Nat::pow(2, P - 1) <= Format::p3109_top_code(K, s, d), k1: 1 <= K)
+    → P3109Layout(Format::p3109(K, P, s, d))
+{
+    P3109Layout(K, s, Format::p3109_top_code(K, s, d), refl, refl, Format::p3109_has_nan(K, P, s, d), valid, Format::pow_two_dbl(K, k1),
+        Format::p3109_fill(K, P, s, d, valid))
+}
