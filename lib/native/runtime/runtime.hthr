@@ -2118,17 +2118,30 @@ fn runtime_params_of(xs: List<LocalRef>) → List<Param> { xs.map(λ x => Param(
 // record), erased ones included. The code takes none of the erased ones,
 // and a theorem holds at every one. Trailing erased parameters are taken
 // too.
-record RtOwnArgs { words: List<LocalRef>, ordered: List<LocalRef>, args: List<Expr> }
+// `es`: the code's words as terms after the length word, each a word
+// parameter's local or, for a record read field by field
+// (issues/runtime-record-erased-fields.md, `unpack`), its word fields
+// read off the record's local, which the theorem takes whole.
+record RtOwnArgs { words: List<LocalRef>, ordered: List<LocalRef>, args: List<Expr>, es: List<Expr> }
 
-fn runtime_own_erased(fuel: Nat, fe: Expr, word, bytes: Handle, lent: Nat, n: Nat, under: Option<LocalRef>, i: Nat, done: List<Expr>, acc: RtOwnArgs) → Tac<RtOwnArgs> {
+// The word fields of a record read field by field, at its local.
+fn runtime_word_fields(fs: List<FieldProj>, under: Option<LocalRef>) → Tac<List<Expr>> {
+    match fs {
+        Nil => pure([]),
+        Cons(f, rest) => infer(Hd(f.term)).or_fail("runtime: a field's type: ").bind(λ t => rt_erased_param(t, under).bind(λ erased =>
+            runtime_word_fields(rest, under).bind(λ more => pure(match erased { True => more, False => Cons(Hd(f.term), more) })))),
+    }
+}
+
+fn runtime_own_erased(fuel: Nat, fe: Expr, word, bytes: Handle, lent: Nat, n: Nat, under: Option<LocalRef>, i: Nat, done: List<Expr>, acc: RtOwnArgs, unpack: Bool) → Tac<RtOwnArgs> {
     match fuel {
-        Zero => pure(RtOwnArgs(acc.words, acc.ordered, done)),
+        Zero => pure(RtOwnArgs(acc.words, acc.ordered, done, acc.es)),
         Succ(more) => {
           let take_word: Tac<RtOwnArgs> = match n {
-            Zero => pure(RtOwnArgs(acc.words, acc.ordered, done)),
+            Zero => pure(RtOwnArgs(acc.words, acc.ordered, done, acc.es)),
             Succ(m) => assume(Hd(match runtime_read_place(lent, i) { True => bytes, False => word }), "x" ++ decimal_name(2, i), under).or_fail("runtime: a parameter: ").bind(λ x =>
                 runtime_own_erased(more, fe, word, bytes, lent, m, Some(x.ref), i + 1, match i { Zero => done, Succ(_) => done.append([Local(x.ref)]) },
-                    RtOwnArgs(acc.words.append([x.ref]), acc.ordered.append([x.ref]), acc.args))),
+                    RtOwnArgs(acc.words.append([x.ref]), acc.ordered.append([x.ref]), acc.args, match i { Zero => acc.es, Succ(_) => acc.es.append([Local(x.ref)]) }), unpack)),
           };
           match i {
             // The length word is the code's, not the function's.
@@ -2139,8 +2152,22 @@ fn runtime_own_erased(fuel: Nat, fe: Expr, word, bytes: Handle, lent: Nat, n: Na
                     HPi(dom) => rt_erased_param(dom, under).bind(λ erased => match erased {
                         True => assume(Hd(dom), "erased" ++ decimal_name(2, done.len()), under).or_fail("runtime: an erased parameter: ").bind(λ p =>
                             runtime_own_erased(more, fe, word, bytes, lent, n, Some(p.ref), i, done.append([Local(p.ref)]),
-                                RtOwnArgs(acc.words, acc.ordered.append([p.ref]), acc.args))),
-                        False => take_word,
+                                RtOwnArgs(acc.words, acc.ordered.append([p.ref]), acc.args, acc.es), unpack)),
+                        False => match unpack {
+                            False => take_word,
+                            True => view(dom).bind(λ dv => match dv {
+                                HGlobal(_, tname, _) => match Known::str_same(rt_base_name(tname), "BitVec") || Known::str_same(rt_base_name(tname), "List") {
+                                    True => take_word,
+                                    // A record of words and erased fields, taken whole:
+                                    // its word fields are the code's.
+                                    False => assume(Hd(dom), "record" ++ decimal_name(2, done.len()), under).or_fail("runtime: a record parameter: ").bind(λ x =>
+                                        fields(Local(x.ref)).or_fail("runtime: a record parameter's fields: ").bind(λ p => runtime_word_fields(p.fields, Some(x.ref)).bind(λ ws =>
+                                            runtime_own_erased(more, fe, word, bytes, lent, n - ws.len(), Some(x.ref), i + ws.len(), done.append([Local(x.ref)]),
+                                                RtOwnArgs(acc.words, acc.ordered.append([x.ref]), acc.args, acc.es ++ ws), unpack)))),
+                                },
+                                _ => take_word,
+                            }),
+                        },
                     }),
                     _ => take_word,
                 })),
@@ -6918,7 +6945,16 @@ fn runtime_held_straight(name: String, f: GlobalRef, r: HeldReflected, parts: Sp
     };
     // The theorem, at a span that holds a record under its length word.
     let own0 <- assume(Hd(bytes_h), "own", r.params.rev().head()).or_fail("runtime: a span: ");
-    let t0 <- assume(record, "held", Some(own0.ref)).or_fail("runtime: a record: ");
+    // A record around a laid one (issues/runtime-record-erased-fields.md)
+    // is taken whole, the span holding its laid field, and the statement
+    // is of that field's after beside the value (`HWorld::through`), at
+    // every value of the erased fields.
+    let t0 <- assume(match r.wrapper { None => record, Some(wr) => Hd(wr.outer) }, "held", Some(own0.ref)).or_fail("runtime: a record: ");
+    let rec_t: Tac<Expr> = match r.wrapper {
+        None => pure(Local(t0.ref)),
+        Some(wr) => rt_held_project(t0.ref, wr.outer, wr.laid, wr.at).bind(λ pr => pure(Hd(pr))),
+    };
+    let rec0 <- rec_t;
     // After the record's span and its length word, each span the function
     // only reads, its bytes, with its length word, and then the words. The
     // file is those spans, and the word in a read span's place is not read.
@@ -6930,15 +6966,15 @@ fn runtime_held_straight(name: String, f: GlobalRef, r: HeldReflected, parts: Sp
     // (issues/runtime-erased-parameters.md). The code takes none of them;
     // the theorem holds at every one.
     let own_args <- runtime_own_erased(64, Global(f), ts.word, bytes_h, lent, r.operands + 1 - carried_vars.len(), Some(t0.ref), 0,
-        runtime_locals(r.params).append([Local(t0.ref)]), RtOwnArgs([], [], []));
+        runtime_locals(r.params).append([Local(t0.ref)]), RtOwnArgs([], [], [], []), r.wrapper.is_some());
     let all0 = own_args.words;
     let args0 = own_args.args;
     let length0 = all0.head_or(t0.ref);
     let xs0 = all0.drop(1);
-    let code_vars: List<Expr> = Cons(Local(length0), carried_vars ++ runtime_locals(xs0));
+    let code_vars: List<Expr> = Cons(Local(length0), carried_vars ++ own_args.es);
     let last0 = own_args.ordered.rev().head_or(t0.ref);
-    let holds0 <- assume(ap(n.holds, [record, whole, Local(own0.ref), Local(length0), Local(t0.ref)]), "holds", Some(last0)).or_fail("runtime: a span that holds a record: ");
-    let file = RtQ::seq(s.files, runtime_read_spans(lent, runtime_locals(all0), 0));
+    let holds0 <- assume(ap(n.holds, [record, whole, Local(own0.ref), Local(length0), rec0]), "holds", Some(last0)).or_fail("runtime: a span that holds a record: ");
+    let file = RtQ::seq(s.files, runtime_read_spans(lent, Cons(Local(length0), own_args.es), 0));
     let hw = ap(s.hw, [file]);
     let sound_e = ap(s.sound, [file]);
     let env = runtime_at_places(lent, code_vars, 0, λ _ => zero).foldl(λ acc x => ap(n.bound, [Blank, Blank, x, acc]), ap(n.bound, [Blank, Blank, zero, end]));
@@ -6946,7 +6982,15 @@ fn runtime_held_straight(name: String, f: GlobalRef, r: HeldReflected, parts: Sp
     // value beside the record as it was.
     let unchanged <- runtime_held_ref("rt_held::HWorld::unchanged");
     let applied = ap(Global(f), args0);
-    let spec = match r.changes { True => applied, False => ap(unchanged, [Blank, Blank, Local(t0.ref), applied]) };
+    let through <- runtime_held_ref("rt_held::HWorld::through");
+    let laid_fn: Tac<Expr> = match r.wrapper {
+        None => pure(Blank),
+        Some(wr) => assume(Hd(wr.outer), "whole", Some(holds0.ref)).or_fail("runtime: a record: ").bind(λ z =>
+            rt_held_project(z.ref, wr.outer, wr.laid, wr.at).bind(λ pr => pure(Lam(z.ref, Hd(pr))))),
+    };
+    let laid_e <- laid_fn;
+    let of_laid: Expr → Expr = λ m => match r.wrapper { None => m, Some(_) => ap(through, [Blank, Blank, Blank, m, laid_e]) };
+    let spec = match r.changes { True => of_laid(applied), False => ap(unchanged, [Blank, Blank, rec0, applied]) };
     let code = ap(parts.compiled, Cons(Local(own0.ref), code_vars));
     let g_e = ap(n.bind_onto, [parts.params, parts.no_tys]);
     // The body's code is its result's by a proof that computes: the pin
@@ -6962,12 +7006,12 @@ fn runtime_held_straight(name: String, f: GlobalRef, r: HeldReflected, parts: Sp
     // statement is proved there by `refl`, and it is read at the callees.
     let written <- body(f).or_fail("runtime: `" ++ name ++ "`'s body: ");
     let unfolded = ap(Hd(written), args0);
-    let spelled = match r.changes { True => unfolded, False => ap(unchanged, [Blank, Blank, Local(t0.ref), unfolded]) };
+    let spelled = match r.changes { True => of_laid(unfolded), False => ap(unchanged, [Blank, Blank, rec0, unfolded]) };
     // Stated beside the hypothesis the theorem ends in, so that the
     // statement lives under the theorem's last binder and a parameter
     // opened from it is bound where the proof stands.
     let beside <- runtime_held_ref("rt_held::HWorld::beside");
-    let pin0 <- as_type(Equation(ap(beside, [Blank, Blank, Local(holds0.ref), ap(n.held, [record, parts.body, hw, g_e, env, Local(own0.ref), Local(t0.ref)])]), spelled))
+    let pin0 <- as_type(Equation(ap(beside, [Blank, Blank, Local(holds0.ref), ap(n.held, [record, parts.body, hw, g_e, env, Local(own0.ref), rec0])]), spelled))
         .or_fail("runtime: `" ++ name ++ "`'s pin: ");
     // A callee written out over its record is not made a parameter: its
     // two names, `T::n::words` in the meaning and `T::n` in the body, meet
@@ -6982,7 +7026,7 @@ fn runtime_held_straight(name: String, f: GlobalRef, r: HeldReflected, parts: Sp
     // times the queries), and a function whose record after a call is built
     // whole from that call's word pins there and not at parameters
     // (`issues/runtime-record-function-limits.md`).
-    let direct <- defeq(ap(n.held, [record, parts.body, hw, g_e, env, Local(own0.ref), Local(t0.ref)]), spec);
+    let direct <- defeq(ap(n.held, [record, parts.body, hw, g_e, env, Local(own0.ref), rec0]), spec);
     let by_pin: Tac<Expr> = match direct {
         True => pure(ap(rfl, [Blank, Blank])),
         False => infer(pin).bind(λ at_parameters => match at_parameters {
@@ -7004,8 +7048,8 @@ fn runtime_held_straight(name: String, f: GlobalRef, r: HeldReflected, parts: Sp
     // the variable after the length word (`refl` at the function's own
     // environment) and that the marks count its elements.
     let proof = match s.carried {
-        None => ap(n.agrees, [record, parts.rt, hw, whole, sound_e, len, end, ap(same, [Blank, Blank]), env, Local(own0.ref), Local(t0.ref), Local(holds0.ref), spec, pin_proof, code, reflects]),
-        Some(c) => ap(c.agrees, [record, parts.rt, hw, whole, sound_e, len, c.w, c.counted, end, ap(same, [Blank, Blank]), env, Local(own0.ref), Local(t0.ref),
+        None => ap(n.agrees, [record, parts.rt, hw, whole, sound_e, len, end, ap(same, [Blank, Blank]), env, Local(own0.ref), rec0, Local(holds0.ref), spec, pin_proof, code, reflects]),
+        Some(c) => ap(c.agrees, [record, parts.rt, hw, whole, sound_e, len, c.w, c.counted, end, ap(same, [Blank, Blank]), env, Local(own0.ref), rec0,
             ap(rfl, [Blank, c.w]), Local(holds0.ref), spec, pin_proof, code, reflects]),
     };
     // A record that takes parameters: the marks and what they owe are
@@ -8263,7 +8307,21 @@ fn runtime_of_laid(f: GlobalRef) → Tac<Bool> {
 fn runtime(name: String, levels: Nat := 0, stack: Nat := 0) → Tac<List<Decl>> {
     let f <- runtime_ref(name);
     let writes <- runtime_writes(f);
-    let laid <- runtime_of_laid(f);
+    let laid_only <- runtime_of_laid(f);
+    // A record around a laid one, read as its laid field
+    // (issues/runtime-record-erased-fields.md); where it nearly is one, the
+    // record's reading says why it is not.
+    let wrapped <- infer(Global(f)).bind(λ c => match c {
+        Refused(_) => pure(False),
+        Accepted(t) => view(t).bind(λ v => match v {
+            HPi(_) => open(t, "record").bind(λ oc => match oc {
+                Refused(_) => pure(False),
+                Accepted(o) => attempt(rt_held_wrapped(o.local)).bind(λ w => match w { Done(found) => pure(found.is_some()), Failed(_, _) => pure(True) }),
+            }),
+            _ => pure(False),
+        }),
+    });
+    let laid = laid_only || wrapped;
     let of_bytes <- runtime_of_bytes(f);
     match of_bytes {
         True => runtime_bytes(name, f),

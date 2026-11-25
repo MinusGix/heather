@@ -189,7 +189,15 @@ record ElementRead { term: Handle, index: Option<Pair<Nat, Handle>> }
 // local `of` named is now what `call` left, `call.after`: a field of that
 // term stands for what the local's did, and a field of the local itself,
 // read for the first time, is the record as it was and stands for nothing.
-inductive FieldTerm { FieldWhole(of: Nat, field: String, term: Handle), FieldEach(of: Nat, field: String, each: ElementTerm), FieldNow(of: Nat, call: Handle) }
+//
+// A record with erased fields (issues/runtime-record-erased-fields.md) is
+// read by its fields one at a time: `FieldWord(of, field, level)` says the
+// field is the code's word at that level (a record parameter's word
+// field), `FieldErased(of, field)` that it is erased and never data, and
+// `FieldLaid(of, field)` that it is the laid record the span holds, which
+// the local `of` then stands for wherever a field of it is read.
+inductive FieldTerm { FieldWhole(of: Nat, field: String, term: Handle), FieldEach(of: Nat, field: String, each: ElementTerm), FieldNow(of: Nat, call: Handle),
+    FieldWord(of: Nat, field: String, level: Nat), FieldErased(of: Nat, field: String), FieldLaid(of: Nat, field: String) }
 
 // A `match` arm's payload: its local, the enum's code `Enum(i)`, the level
 // of the constructor matched, the slot of the arm's constructor's first
@@ -466,27 +474,6 @@ fn rt_is_proof_ty(ty: Handle, under: Option<LocalRef>) → Tac<Bool> {
     })
 }
 
-// Whether a parameter of type `ty`, under the local `under`, is erased.
-fn rt_erased_param(ty: Handle, under: Option<LocalRef>) → Tac<Bool> {
-    rt_is_erased_ty(ty).bind(λ e => match e { True => pure(True), False => rt_is_proof_ty(ty, under) })
-}
-
-// Whether a function of type `t` takes an erased parameter anywhere.
-fn rt_takes_erased(fuel: Nat, t: Handle, under: Option<LocalRef>) → Tac<Bool> {
-    match fuel {
-        Zero => pure(False),
-        Succ(f) => view(t).bind(λ v => match v {
-            HPi(dom) => rt_erased_param(dom, under).bind(λ e => match e {
-                True => pure(True),
-                False => open(t, "x").bind(λ c => match c {
-                    Refused(_) => pure(False),
-                    Accepted(o) => rt_takes_erased(f, o.body, Some(o.local.ref)),
-                }),
-            }),
-            _ => pure(False),
-        }),
-    }
-}
 
 fn rt_erased_used() → String {
     "an erased parameter (`Erased<A>`) used as runtime data: the code does not take it, so a function may pass it on and state with it, but not compute from it"
@@ -971,6 +958,120 @@ fn rt_base_chars(cs: List<Char>, acc: List<Char>) → List<Char> {
 
 fn rt_base_name(name: String) → String { String(rt_base_chars(name.chars, [])) }
 
+// A proposition by its form (issues/runtime-record-erased-fields.md): the
+// kernel has no universe of propositions, and irrelevance alone leaves out
+// an equation and a record of facts (`HeapInv`), which a function takes
+// as proofs all the same. A type is one where it is an equation; a
+// function type into one (`¬P` among them); an inductive whose
+// constructors carry only propositions, with none of several carrying
+// nothing (a record of facts, `And`, `Or`, logic's `True` and `False`,
+// never `Bool`); or a definition that unfolds to one, or a recursion
+// stuck on an open argument whose every arm is one (`Nat::Le`). Untrusted
+// like the rest: a function that computes from such a parameter fails its
+// pin, which is stated at a local of it.
+fn rt_logical_order(g: GlobalRef) → Tac<Bool> {
+    lookup("nat::Nat::Le").bind(λ le => lookup("nat::Nat::Lt").bind(λ lt => pure(
+        (match le { Accepted(x) => x.id.same(g.id), Refused(_) => False }) || (match lt { Accepted(x) => x.id.same(g.id), Refused(_) => False }))))
+}
+
+inductive LogicalJob { LTy(ty: Handle), LArms(arms: List<ArmInfo>), LFields(fs: List<FieldInfo>), LCtors(several: Bool, cs: List<CtorInfo>) }
+
+// `seen`: the definitions being unfolded, so a recursion met again under
+// itself (`Le(k, l)` inside `Le`'s own arm) is taken as what it is being
+// asked to be.
+fn rt_logical(fuel: Nat, seen: List<Nat>, job: LogicalJob) → Tac<Bool> {
+    match fuel {
+        Zero => pure(False),
+        Succ(f) => match job {
+            LArms(arms) => match arms {
+                Nil => pure(True),
+                Cons(a, rest) => open(a.body, "payload").bind(λ c => match c {
+                    Refused(_) => pure(False),
+                    Accepted(o) => rt_logical(f, seen, LTy(o.body)).bind(λ yes => match yes { True => rt_logical(f, seen, LArms(rest)), False => pure(False) }),
+                }),
+            },
+            LFields(fs) => match fs {
+                Nil => pure(True),
+                Cons(fi, rest) => match fi.ty {
+                    None => pure(False),
+                    Some(t) => rt_logical(f, seen, LTy(t)).bind(λ yes => match yes { True => rt_logical(f, seen, LFields(rest)), False => pure(False) }),
+                },
+            },
+            LCtors(several, cs) => match cs {
+                Nil => pure(True),
+                Cons(c, rest) => match several && c.fields.len().same(0) {
+                    True => pure(False),
+                    False => rt_logical(f, seen, LFields(c.fields)).bind(λ yes => match yes { True => rt_logical(f, seen, LCtors(several, rest)), False => pure(False) }),
+                },
+            },
+            LTy(ty) => view(ty).bind(λ v => match v {
+                HEq(_, _) => pure(True),
+                HPi(_) => open(ty, "p").bind(λ c => match c {
+                    Refused(_) => pure(False),
+                    Accepted(o) => rt_logical(f, seen, LTy(o.body)),
+                }),
+                HMatch(_) => arms(ty).bind(λ c => match c {
+                    Refused(_) => pure(False),
+                    Accepted(m) => rt_logical(f, seen, LArms(m.arms)),
+                }),
+                HGlobal(g, name, _) => match Known::str_same(rt_base_name(name), "BitVec") || Known::str_same(rt_base_name(name), "List")
+                    || Known::str_same(rt_base_name(name), "Nat") || Known::str_same(rt_base_name(name), "Bool") {
+                    True => pure(False),
+                    False => match seen.any_bit(λ s => s.same(g.id)) {
+                        True => pure(True),
+                        // The order on `Nat`, a recursion into `True` and
+                        // `False` whose recursion the host shows as no head.
+                        False => rt_logical_order(g).bind(λ order => match order {
+                        True => pure(True),
+                        False => whnf(ty).bind(λ c => {
+                            let inductive: Tac<Bool> = ctors(ty).bind(λ cc => match cc {
+                                Refused(_) => pure(False),
+                                Accepted(cs) => rt_logical(f, Cons(g.id, seen), LCtors(cs.len().leb(1).not(), cs)),
+                            });
+                            match c {
+                                Refused(_) => inductive,
+                                Accepted(w) => view(w).bind(λ wv => match wv {
+                                    HGlobal(g2, _, _) => match g2.id.same(g.id) { True => inductive, False => rt_logical(f, Cons(g.id, seen), LTy(w)) },
+                                    _ => rt_logical(f, Cons(g.id, seen), LTy(w)),
+                                }),
+                            }
+                        }),
+                        }),
+                    },
+                },
+                _ => pure(False),
+            }),
+        },
+    }
+}
+
+fn rt_is_logical_ty(fuel: Nat, ty: Handle) → Tac<Bool> { rt_logical(fuel, [], LTy(ty)) }
+
+// Whether a parameter of type `ty`, under the local `under`, is erased.
+fn rt_erased_param(ty: Handle, under: Option<LocalRef>) → Tac<Bool> {
+    rt_is_erased_ty(ty).bind(λ e => match e {
+        True => pure(True),
+        False => rt_is_proof_ty(ty, under).bind(λ p => match p { True => pure(True), False => rt_is_logical_ty(64, ty) }),
+    })
+}
+
+// Whether a function of type `t` takes an erased parameter anywhere.
+fn rt_takes_erased(fuel: Nat, t: Handle, under: Option<LocalRef>) → Tac<Bool> {
+    match fuel {
+        Zero => pure(False),
+        Succ(f) => view(t).bind(λ v => match v {
+            HPi(dom) => rt_erased_param(dom, under).bind(λ e => match e {
+                True => pure(True),
+                False => open(t, "x").bind(λ c => match c {
+                    Refused(_) => pure(False),
+                    Accepted(o) => rt_takes_erased(f, o.body, Some(o.local.ref)),
+                }),
+            }),
+            _ => pure(False),
+        }),
+    }
+}
+
 // Whether `name` is the member `base` of the vector type (`Vec::at`). The
 // host names a global by its last part alone, so this reads the base; each
 // caller goes on to require the receiver to be an array field of the record,
@@ -1026,14 +1127,39 @@ fn rt_field_at(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, n
     })
 }
 
+// What a field of a local is, where the local's record is read field by
+// field: `Some(Some(level))` a word, `Some(None)` erased.
+fn Known::unpacked_at(named: List<FieldTerm>, x: Nat, field: String) → Option<Option<Nat>> {
+    match named {
+        Nil => None,
+        Cons(n, rest) => match n {
+            FieldWord(of, name, level) => match of.same(x) && Known::str_same(name, field) { True => Some(Some(level)), False => Known::unpacked_at(rest, x, field) },
+            FieldErased(of, name) => match of.same(x) && Known::str_same(name, field) { True => Some(None), False => Known::unpacked_at(rest, x, field) },
+            _ => Known::unpacked_at(rest, x, field),
+        },
+    }
+}
+
+// Whether the field `field` of the local `x` is the laid record the span
+// holds.
+fn Known::laid_at(named: List<FieldTerm>, x: Nat, field: String) → Bool {
+    match named {
+        Nil => False,
+        Cons(n, rest) => match n {
+            FieldLaid(of, name) => match of.same(x) && Known::str_same(name, field) { True => True, False => Known::laid_at(rest, x, field) },
+            _ => Known::laid_at(rest, x, field),
+        },
+    }
+}
+
+
 // The term a field of a local stands for, if the setup named one.
 fn Known::named_at(named: List<FieldTerm>, x: Nat, field: String) → Option<Handle> {
     match named {
         Nil => None,
         Cons(n, rest) => match n {
             FieldWhole(of, name, term) => match of.same(x) && Known::str_same(name, field) { True => Some(term), False => Known::named_at(rest, x, field) },
-            FieldEach(_, _, _) => Known::named_at(rest, x, field),
-            FieldNow(_, _) => Known::named_at(rest, x, field),
+            _ => Known::named_at(rest, x, field),
         },
     }
 }
@@ -1042,9 +1168,8 @@ fn Known::elements_at(named: List<FieldTerm>, x: Nat, field: String) → Option<
     match named {
         Nil => None,
         Cons(n, rest) => match n {
-            FieldWhole(_, _, _) => Known::elements_at(rest, x, field),
-            FieldNow(_, _) => Known::elements_at(rest, x, field),
             FieldEach(of, name, each) => match of.same(x) && Known::str_same(name, field) { True => Some(each), False => Known::elements_at(rest, x, field) },
+            _ => Known::elements_at(rest, x, field),
         },
     }
 }
@@ -1126,14 +1251,31 @@ fn rt_record_before<A>() → Tac<A> {
     rt_refuse("a field of the record as it was before a call of another function of the record, which the walk did not read before the call (a read under a `match` that is a value): the code reads the record as it is")
 }
 
+// The local a term stands for as the laid record: the local itself, or
+// its laid field read off it (`h.arena`).
+fn Known::laid_local(named: List<FieldTerm>, r: Handle) → Tac<Option<Nat>> {
+    view(r).bind(λ v => match v {
+        HLocal(x, args) => match args { Nil => pure(Some(x.id)), Cons(_, _) => pure(None) },
+        _ => rt_field_read(r).bind(λ read => match read {
+            None => pure(None),
+            Some(p) => view(p.fst).bind(λ bv => match bv {
+                HLocal(x, xs) => match xs {
+                    Nil => match Known::laid_at(named, x.id, rt_base_name(p.snd)) { True => pure(Some(x.id)), False => pure(None) },
+                    Cons(_, _) => pure(None),
+                },
+                _ => pure(None),
+            }),
+        }),
+    })
+}
+
 // The local whose named fields a record term's fields stand for: the
 // local itself while no call has changed the record, and what the last
 // call left once one has.
 fn rt_named_record(k: Known, r: Handle) → Tac<Option<Nat>> {
     match k.named {
         Nil => pure(None),
-        Cons(_, _) => view(r).bind(λ v => {
-            let local: Option<Nat> = match v { HLocal(x, args) => match args { Nil => Some(x.id), Cons(_, _) => None }, _ => None };
+        Cons(_, _) => Known::laid_local(k.named, r).bind(λ local => {
             match Known::now_at(k.named) {
                 None => pure(local),
                 Some(now) => match local {
@@ -1263,7 +1405,20 @@ fn rt_settle_named_within(fuel: Nat, k: Known, r: Handle) → Tac<Handle> {
 
 fn rt_settle_named(k: Known, r: Handle) → Tac<Handle> { rt_settle_named_within(64, k, r) }
 
-fn rt_field(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name: String,
+fn rt_erased_field_used() → String {
+    "an erased field (`Erased<A>` or a proof) of a record read as runtime data: the code does not hold it, so a function may pass it on and state with it, but not compute from it"
+}
+
+// What a field of a record read field by field is, if `r` is such a
+// record's local.
+fn rt_field_unpacked(k: Known, r: Handle, name: String) → Tac<Option<Option<Nat>>> {
+    view(r).bind(λ v => match v {
+        HLocal(x, args) => match args { Nil => pure(Known::unpacked_at(k.named, x.id, rt_base_name(name))), Cons(_, _) => pure(None) },
+        _ => pure(None),
+    })
+}
+
+fn rt_field_kept(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name: String,
     step: RSt → Handle → Tac<Pair<RSt, Tm>>) → Tac<Pair<RSt, Tm>>
 {
     rt_field_named(k, r, name).bind(λ named => match named {
@@ -1286,6 +1441,19 @@ fn rt_field(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name
         }),
     })
 }
+
+fn rt_field(f: Nat, k: Known, st: RSt, h: Handle, operand: Bool, r: Handle, name: String,
+    step: RSt → Handle → Tac<Pair<RSt, Tm>>) → Tac<Pair<RSt, Tm>>
+{
+    rt_field_unpacked(k, r, name).bind(λ unpacked => match unpacked {
+        Some(u) => match u {
+            Some(l) => pure(st.finish(h, operand, Var(l))),
+            None => rt_refuse(rt_erased_field_used()),
+        },
+        None => rt_field_kept(f, k, st, h, operand, r, name, step),
+    })
+}
+
 
 fn rt_arm_body(m: MatchInfo, a: ArmInfo) → Tac<Handle> {
     open(a.body, "payload").bind(λ c => rt_accepted("a match arm", c)).bind(λ o =>
@@ -2152,7 +2320,10 @@ fn rt_data_kept(rev: List<Handle>) → Tac<List<Handle>> {
             Refused(_) => pure(Cons(last, kept)),
             Accepted(t) => view(t).bind(λ v => match v {
                 HOther => pure(kept),
-                _ => rt_is_erased_ty(t).bind(λ e => match e { True => pure(kept), False => pure(Cons(last, kept)) }),
+                _ => rt_is_erased_ty(t).bind(λ e => match e {
+                    True => pure(kept),
+                    False => rt_is_logical_ty(64, t).bind(λ l => match l { True => pure(kept), False => pure(Cons(last, kept)) }),
+                }),
             }),
         })),
     }

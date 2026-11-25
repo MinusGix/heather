@@ -1,0 +1,123 @@
+// Probes for records with erased fields (issues/runtime-record-erased-fields.md):
+// a `runtime fn` whose record is a plain record of one laid record and
+// erased fields (`Erased<A>`, or a proof) is compiled as a function of the
+// laid record alone, and a record parameter of words and erased fields is
+// its words to the code. What is published takes the records whole and
+// holds at every value of their erased fields. Nothing here is proved by
+// hand: each theorem restates or reads what the generator published. The
+// arena's customers (`Heap::read`, `store`, `reset`) are probed in
+// `arena_handles_tests.hthr`. Nothing imports this module.
+import runtime_data;
+import function_ir_eval;
+import function_ir_run;
+import rt_file_loop;
+
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+
+laid record Cells { n: u64, heap: [u64; 4] }
+
+runtime fn Cells::get(self c: Cells, i: u64, inside: ∥i.toNat() < 4∥ := bv_omega) → u64 { c.heap.at(i) }
+
+runtime fn Cells::set(mut self c: Cells, i, x: u64, inside: ∥i.toNat() < 4∥ := bv_omega) → u64 {
+    let old = c.heap.at(i);
+    c.heap := c.heap.put(i, x);
+    old
+}
+
+// The laid record, a generation the code never holds, and a proof about
+// it: a proposition needs no wrapper (`Le`, by its form).
+record Gate { cells: Cells, gen: Erased<Nat>, ok: gen.value <= 3 }
+
+// A handle: a word and a tag the code never holds.
+record Slot { at: u64, tag: Erased<Nat> }
+
+// A field of the laid record read directly.
+runtime fn Gate::first(self g: Gate) → u64 { g.cells.n }
+
+// A read through a function of the laid record, at a record parameter's
+// word and a proof about it.
+runtime fn Gate::peek(self g: Gate, s: Slot, inside: ∥s.at.toNat() < 4∥ := bv_omega) → u64 { Cells::get(g.cells, s.at, inside := inside) }
+
+// A store: the record built again around the laid record after, its
+// erased fields passed through.
+runtime fn Gate::poke(self g: Gate, s: Slot, x: u64, inside: ∥s.at.toNat() < 4∥ := bv_omega) → Mutated<Gate, u64> {
+    Mutated(Gate(Cells::set(g.cells, s.at, x, inside := inside).after, g.gen, g.ok), Cells::set(g.cells, s.at, x, inside := inside).value)
+}
+
+// The erased fields changed by the store: a new generation, with its proof.
+runtime fn Gate::bump(self g: Gate, s: Slot, x: u64, inside: ∥s.at.toNat() < 4∥ := bv_omega, room: g.gen.value < 3) → Mutated<Gate, u64> {
+    Mutated(Gate(Cells::set(g.cells, s.at, x, inside := inside).after, Erased(g.gen.value + 1), room), Cells::set(g.cells, s.at, x, inside := inside).value)
+}
+
+// `n` 9, the heap `[1, 2, 3, 4]`, little-endian words.
+fn CELLS() → List<u8> {
+    [b(9), b(0), b(0), b(0), b(0), b(0), b(0), b(0), b(1), b(0), b(0), b(0), b(0), b(0), b(0), b(0),
+     b(2), b(0), b(0), b(0), b(0), b(0), b(0), b(0), b(3), b(0), b(0), b(0), b(0), b(0), b(0), b(0),
+     b(4), b(0), b(0), b(0), b(0), b(0), b(0), b(0)]
+}
+
+// The code takes the span, its length word and the slot's one word.
+fn peek_code() → (List<u8> → u64 → u64 → Mutated<List<u8>, u64>) { Gate::peek::bytes }
+
+fn bump_code() → (List<u8> → u64 → u64 → u64 → Mutated<List<u8>, u64>) { Gate::bump::bytes }
+
+// At literal words it computes.
+theorem gate_runs(): Gate::first::bytes(CELLS(), w(40)).value = w(9) ∧
+    (Gate::peek::bytes(CELLS(), w(40), w(2)).value = w(3) ∧
+    (Gate::poke::bytes(CELLS(), w(40), w(1), w(7)).value = w(2) ∧
+    Gate::peek::bytes(Gate::bump::bytes(CELLS(), w(40), w(1), w(7)).after, w(40), w(1)).value = w(7))) {
+    ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩
+}
+
+// What is published, at an open record, slot and proofs: the records whole.
+theorem gate_peek_held(own: List<u8>, g: Gate, length: u64, s: Slot, inside: ∥s.at.toNat() < 4∥, holds: rt_held::Stored::Holds(Cells::stored(), own, length, g.cells)):
+    Gate::peek(g, s, inside := inside) = Gate::peek::bytes(own, length, s.at).value {
+    Gate::peek::runs_held(own, g, length, s, inside, holds).value
+}
+
+theorem gate_poke_held(own: List<u8>, g: Gate, length: u64, s: Slot, x: u64, inside: ∥s.at.toNat() < 4∥, holds: rt_held::Stored::Holds(Cells::stored(), own, length, g.cells)):
+    Gate::poke(g, s, x, inside := inside).value = Gate::poke::bytes(own, length, s.at, x).value ∧
+    rt_held::Stored::Holds(Cells::stored(), Gate::poke::bytes(own, length, s.at, x).after, length, Gate::poke(g, s, x, inside := inside).after.cells) {
+    let ran = Gate::poke::runs_held(own, g, length, s, x, inside, holds);
+    ⟨ran.value, ran.holds⟩
+}
+
+// The erased fields after are the function's own: what the code leaves is
+// the laid record's, and the new generation is read off the function.
+theorem gate_bump_held(own: List<u8>, g: Gate, length: u64, s: Slot, x: u64, inside: ∥s.at.toNat() < 4∥, room: g.gen.value < 3,
+    holds: rt_held::Stored::Holds(Cells::stored(), own, length, g.cells)):
+    rt_held::Stored::Holds(Cells::stored(), Gate::bump::bytes(own, length, s.at, x).after, length, Gate::bump(g, s, x, inside := inside, room := room).after.cells) ∧
+    Gate::bump(g, s, x, inside := inside, room := room).after.gen.value = g.gen.value + 1 {
+    ⟨Gate::bump::runs_held(own, g, length, s, x, inside, room, holds).holds, refl⟩
+}
+
+// In a checking position: the caller's proof found from its own test.
+theorem gate_peek_tested(own: List<u8>, g: Gate, length: u64, s: Slot, small: s.at < 4, holds: rt_held::Stored::Holds(Cells::stored(), own, length, g.cells)):
+    Gate::peek(g, s) = Gate::peek::bytes(own, length, s.at).value {
+    let found: ∥s.at.toNat() < 4∥ = bv_omega;
+    Gate::peek::runs_held(own, g, length, s, found, holds).value
+}
+
+// ---------------------------------------------------------------------------
+// Controls: an erased field computed with is refused by name, whether the
+// record's own, a record parameter's, or branched on; and a record whose
+// other field is neither laid nor erased is not read as its laid one.
+
+record Gate3 { cells: Cells, gen: Erased<u64> }
+
+record Slot3 { at: u64, tag: Erased<u64> }
+
+// expect-error: (`Erased<A>`) used as runtime data
+runtime fn Gate3::leak(self g: Gate3) → u64 { g.cells.n + g.gen.value }
+
+// expect-error: (`Erased<A>`) used as runtime data
+runtime fn Gate3::tag_of(self g: Gate3, s: Slot3) → u64 { s.at + s.tag.value }
+
+// expect-error: (`Erased<A>`) used as runtime data
+runtime fn Gate3::branch(self g: Gate3) → u64 { if g.gen.value < 3 { 1 } else { 2 } }
+
+record Loose { cells: Cells, count: u64, gen: Erased<u64> }
+
+// expect-error: the field `count` of `Loose` is neither a laid record nor erased
+runtime fn Loose::first(self l: Loose) → u64 { l.cells.n }
