@@ -1,0 +1,191 @@
+// Probes of the bytes level (lib/native/bytes_level;
+// issues/bytes-level-language.md), each beside its control: the reference
+// experiment's program in the real language, a window passed to a callee
+// as a reference and a length, two windows of one block written by one
+// callee, a word node reading a reference refused by validity, and a store
+// that cuts a reference answering nothing.
+import bytes_level::{run};
+import bytes_memory;
+import reference_cells;
+import function_ir;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// Block 0: sixteen zero bytes, writable. Block 1: the bytes 7, 8, 9, 10,
+// only read.
+fn zeros() → List<BitVec(8)> { List::replicate(BitVec::zero(), 16) }
+
+fn small() → List<BitVec(8)> { [BitVec::ofNat(7), BitVec::ofNat(8), BitVec::ofNat(9), BitVec::ofNat(10)] }
+
+fn memory() → Memory { Memory(Heap::of([zeros(), small()]), λ (b: Nat) => b.same(0)) }
+
+// Word `i` of an answer, if there is an answer and it is a word.
+fn answer_word(o: Option<Answer>, i: Nat) → Option<Nat> {
+    match o { None => None, Some(a) => match a.words.nth(i) { None => None, Some(v) => match v { Word(w) => Some(w.toNat()), Ref(_) => None } } }
+}
+
+fn refused(o: Option<Answer>) → Bool { match o { None => True, Some(_) => False } }
+
+fn word(x: Nat) → Value { Word(BitVec::ofNat(x)) }
+
+// ---------------------------------------------------------------------------
+// The experiment's program: a reference stored at `place`, loaded back, and
+// a byte read through it.
+
+fn cells() → Routine {
+    Routine([ref_id(0), ref_id(1)], Leaf([StoreRef(0, 1), LoadRef(2, 0), Load(1, 3, 2)]), [word_id(3)])
+}
+
+fn cells_program() → Program { Program([cells()]) }
+
+theorem cells_valid(): cells_program().valid() = True { refl }
+
+// The reference to byte 2 of block 1 stored at byte 0 of block 0, and the
+// byte read through it is 9.
+theorem cells_read_nine(): answer_word(run(cells_program(), 0, [Ref(Loc(0, 0)), Ref(Loc(1, 2))], memory()), 0) = Some(9) { refl }
+
+// Control: the reference aims into its own eight bytes, so the byte load
+// takes a byte a reference holds, and the run answers nothing.
+theorem cells_byte_of_reference(): refused(run(cells_program(), 0, [Ref(Loc(0, 0)), Ref(Loc(0, 3))], memory())) = True { refl }
+
+// Beside them: a plain zero byte.
+theorem cells_byte_beside(): answer_word(run(cells_program(), 0, [Ref(Loc(0, 0)), Ref(Loc(0, 8))], memory()), 0) = Some(0) { refl }
+
+// Control: block 1 may not be written, so a reference stored there has no
+// meaning.
+theorem cells_read_only(): refused(run(cells_program(), 0, [Ref(Loc(1, 0)), Ref(Loc(0, 8))], memory())) = True { refl }
+
+// Control: arguments of the wrong kind bind nothing.
+theorem cells_word_argument(): refused(run(cells_program(), 0, [word(0), Ref(Loc(1, 2))], memory())) = True { refl }
+
+// ---------------------------------------------------------------------------
+// A window passed as a reference and a length to a callee that writes it
+
+// Routine 0: 42 at the window's first byte and at its last.
+fn fill() → Routine {
+    Routine([ref_id(0), word_id(1)],
+        Leaf([Compute(Const(64, 2, 42)), Store(1, 0, 2), Compute(Const(64, 3, 1)), Compute(Sub(64, 4, 1, 3)), Offset(5, 0, 4), Store(1, 5, 2)]),
+        [])
+}
+
+// Routine 1: the window of `length` bytes from byte 4 of its block lent to
+// `fill`, then bytes 4, 5 and 6 read back.
+fn lend(length: Nat) → Routine {
+    Routine([ref_id(0)],
+        Seq(Leaf([Compute(Const(64, 1, 4)), Offset(2, 0, 1), Compute(Const(64, 3, length))]),
+            Seq(Call(Local(0), [ref_id(2), word_id(3)], []),
+                Leaf([Load(1, 4, 2), Compute(Const(64, 5, 1)), Offset(6, 2, 5), Load(1, 7, 6), Compute(Const(64, 8, 2)), Offset(9, 2, 8),
+                    Load(1, 10, 9)]))),
+        [word_id(4), word_id(7), word_id(10)])
+}
+
+fn lend_program(length: Nat) → Program { Program([lend(length), fill()]) }
+
+theorem lend_valid(): lend_program(3).valid() = True { refl }
+
+theorem lend_first(): answer_word(run(lend_program(3), 1, [Ref(Loc(0, 0))], memory()), 0) = Some(42) { refl }
+
+theorem lend_between(): answer_word(run(lend_program(3), 1, [Ref(Loc(0, 0))], memory()), 1) = Some(0) { refl }
+
+theorem lend_last(): answer_word(run(lend_program(3), 1, [Ref(Loc(0, 0))], memory()), 2) = Some(42) { refl }
+
+// Control: a window of thirteen bytes from byte 4 passes the block's end,
+// and the callee's store at its last byte answers nothing.
+theorem lend_past_end(): refused(run(lend_program(13), 1, [Ref(Loc(0, 0))], memory())) = True { refl }
+
+// Twelve bytes reach the end exactly.
+theorem lend_to_end(): answer_word(run(lend_program(12), 1, [Ref(Loc(0, 0))], memory()), 0) = Some(42) { refl }
+
+// ---------------------------------------------------------------------------
+// Two windows of one block written by one callee
+
+// Routine 0: 1 at its first window, then 2 at its second.
+fn two() → Routine {
+    Routine([ref_id(0), ref_id(1)], Leaf([Compute(Const(64, 2, 1)), Store(1, 0, 2), Compute(Const(64, 3, 2)), Store(1, 1, 3)]), [])
+}
+
+// Routine 1: windows at bytes 0 and `apart` of its block lent to `two`,
+// then bytes 0 and `apart` read back.
+fn both(apart: Nat) → Routine {
+    Routine([ref_id(0)],
+        Seq(Leaf([Compute(Const(64, 1, apart)), Offset(2, 0, 1)]),
+            Seq(Call(Local(0), [ref_id(0), ref_id(2)], []), Leaf([Load(1, 3, 0), Load(1, 4, 2)]))),
+        [word_id(3), word_id(4)])
+}
+
+fn both_program(apart: Nat) → Program { Program([both(apart), two()]) }
+
+theorem both_valid(): both_program(8).valid() = True { refl }
+
+theorem both_first(): answer_word(run(both_program(8), 1, [Ref(Loc(0, 0))], memory()), 0) = Some(1) { refl }
+
+theorem both_second(): answer_word(run(both_program(8), 1, [Ref(Loc(0, 0))], memory()), 1) = Some(2) { refl }
+
+// Control: the two windows are one place, and it holds what was stored
+// last.
+theorem both_aliased(): answer_word(run(both_program(0), 1, [Ref(Loc(0, 0))], memory()), 0) = Some(2) { refl }
+
+// ---------------------------------------------------------------------------
+// Validity: a word node reading a reference
+
+fn adds(first: Typed) → Routine { Routine([first, word_id(1)], Leaf([Compute(Add(64, 2, 0, 1))]), [word_id(2)]) }
+
+theorem add_of_reference_invalid(): Program([adds(ref_id(0))]).valid() = False { refl }
+
+// Control: the same node over two words.
+theorem add_of_words_valid(): Program([adds(word_id(0))]).valid() = True { refl }
+
+// A call whose argument's kind is not its callee's parameter's.
+fn calls_fill_with(kind: ValueKind) → Routine {
+    Routine([Typed(0, kind)], Seq(Leaf([Compute(Const(64, 1, 2))]), Call(Local(0), [Typed(0, kind), word_id(1)], [])), [])
+}
+
+theorem call_kind_invalid(): Program([calls_fill_with(WordKind), fill()]).valid() = False { refl }
+
+theorem call_kind_valid(): Program([calls_fill_with(RefKind), fill()]).valid() = True { refl }
+
+// ---------------------------------------------------------------------------
+// A store that cuts a reference
+
+// A reference stored at byte 4 of block 0, then the word 5's `bytes` bytes
+// stored at byte `at`, then the reference loaded back and its byte read.
+fn cutting(bytes, at: Nat) → Routine {
+    Routine([ref_id(0), ref_id(1)],
+        Leaf([Compute(Const(64, 2, 4)), Offset(3, 0, 2), StoreRef(3, 1), Compute(Const(64, 4, at)), Offset(5, 0, 4), Compute(Const(64, 6, 5)),
+            Store(bytes, 5, 6), LoadRef(7, 3), Load(1, 8, 7)]),
+        [word_id(8)])
+}
+
+fn cut_run(bytes, at: Nat) → Option<Answer> { run(Program([cutting(bytes, at)]), 0, [Ref(Loc(0, 0)), Ref(Loc(1, 2))], memory()) }
+
+// Eight bytes at 8 cut the reference at 4 to 11: no meaning.
+theorem cut_store_refused(): refused(cut_run(8, 8)) = True { refl }
+
+// One byte at 11, its last byte: no meaning either.
+theorem cut_byte_refused(): refused(cut_run(1, 11)) = True { refl }
+
+// Control: a byte at 12, beside it, leaves it to be read through.
+theorem store_beside_kept(): answer_word(cut_run(1, 12), 0) = Some(9) { refl }
+
+// Control: eight bytes at 4, the whole of it, replace it, so it cannot be
+// loaded back.
+theorem whole_store_replaces(): refused(cut_run(8, 4)) = True { refl }
+
+// A typed copy moves a reference with its bytes: the reference stored at 0
+// copied to 8 reads through as the original does.
+fn copying(length: Nat) → Routine {
+    Routine([ref_id(0), ref_id(1)],
+        Leaf([StoreRef(0, 1), Compute(Const(64, 2, 8)), Offset(3, 0, 2), Compute(Const(64, 4, length)), Copy(3, 0, 4), LoadRef(5, 3), Load(1, 6, 5)]),
+        [word_id(6)])
+}
+
+fn copy_run(length: Nat) → Option<Answer> { run(Program([copying(length)]), 0, [Ref(Loc(0, 0)), Ref(Loc(1, 2))], memory()) }
+
+theorem copy_moves_reference(): answer_word(copy_run(8), 0) = Some(9) { refl }
+
+// Control: four bytes of it cut it, and the copy answers nothing.
+theorem copy_cut_refused(): refused(copy_run(4)) = True { refl }
