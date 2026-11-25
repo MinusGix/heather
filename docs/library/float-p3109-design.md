@@ -339,9 +339,15 @@ never `-∞`.
 **Round to odd** (`round_odd`): truncate, and step away from zero when
 that was inexact and landed on an even code; `round_odd_faithful`. It is a
 function beside `Mode`, not a `Mode` constructor, for the same reason as
-saturation. What is not yet proved: "an even result is exact" inside the
-range, and the double-rounding theorem; the tests pin the saturation
-caveat (E4M3 returns its even largest float for 460, inexactly).
+saturation. `round_odd_even_exact`: inside the finite range an even result
+is the value. Its core is `Format::step_parity`: a nonnegative value
+strictly past its greatest float `d` (and inside the range) has its least
+float above one step up from `d`'s half-unit cell, and `UpIs` says that
+step flips the code's parity; negative values go through negation. Past
+the range the theorem fails where saturation clamps to an even largest
+float (E4M3 returns 448 for 460 under `SatFinite`), which the tests pin.
+The double-rounding theorem is
+[float-double-rounding](../../issues/float-double-rounding.md).
 
 **Stochastic rounding** (`round_sr_a`, `_b`, `_c`): P3109's three
 `RoundAway` rules. `ν·2^N` is computed exactly from the truncation `d` as
@@ -366,4 +372,19 @@ modes. The negative side is the mirror and is not stated separately.
   inference.
 - `omega` cannot read the literal a reduced motive leaves in the goal
   (`count_away_eq`); a typed `let` restating the goal fixes it.
+
+**Round to odd and stochastic rounding through saturation** (closing the
+round). Both choose between the truncation and the step away, so one
+projection serves them: `project_dir_at(sat, x, away, r)` saturates where
+rounding to precision with an unbounded exponent leaves the range, which is
+from `next_top` (the grid value after the largest float) on, or past the
+largest float when the rounding steps away, and otherwise returns the
+rounding's own `r`. Round to odd steps away there exactly when the largest
+float's code is even (`project_odd`, with `max_even_bit`); a stochastic
+draw steps away by its bit, which `ν >= 1` sets from `next_top` on
+(`project_sr_a/b/c`). `project_dir_in_range` (the rounding inside the
+range), `project_dir_faithful` (faithfulness survives the saturated ends)
+and `project_odd_even_exact` (exactness under every saturation mode) are
+the theorems. `Rat::floor_nat` uses binary long division: `Nat::div`
+counts its quotient out in units and ran out of fuel at Binary8p3se's top.
 

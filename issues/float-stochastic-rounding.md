@@ -3,7 +3,7 @@ title: Stochastic rounding
 status: open
 labels: [mathematics,floating-point,probability]
 area: mathematics
-milestone: [p3109-projection]
+milestone: [math-float]
 created: 2026-11-25
 updated: 2026-11-25
 ---
@@ -43,3 +43,4 @@ reason.
 ## Log
 
 - 2026-11-25: Pointwise layer landed (design §6): `round_sr_a`/`_b`/`_c` follow the report's `RoundAway` rules, with `ν·2^N` computed exactly from the truncation; every draw is faithful (`round_dir_faithful`). `Nat::count_away_all` gives variant A's count of away-steps (`⌊ν·2^N⌋` of `2^N`). Still open: the expectation statements and the `O(√n)` bound, on [[finite-probability]]; and the variants through `project`'s saturation.
+- 2026-11-25: The three variants now also go through the saturation modes (`project_sr_a/b/c`, faithful by `project_dir_faithful`), which closes `p3109-projection`. What this issue still owns is the expectation layer on [[finite-probability]].

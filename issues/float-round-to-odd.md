@@ -1,6 +1,6 @@
 ---
 title: Round-to-odd, and its exactness check under saturation
-status: open
+status: closed
 labels: [mathematics,floating-point]
 area: mathematics
 milestone: [p3109-projection]
@@ -44,3 +44,4 @@ design §5.4 had in mind.
 ## Log
 
 - 2026-11-25: Partly landed (design §6): `Format::round_odd` (truncate, step away when inexact on an even code; a function beside `Mode`, not a constructor) and `round_odd_faithful`; tests pin both parities, precision one, and the saturation caveat (E4M3 gives its even largest float 448 for 460). Still open: "even implies exact" inside the range (needs the step's parity from `UpIs` at the half-unit level), the double-rounding theorem, and round-to-odd through `project`'s saturation modes.
+- 2026-11-25: LANDED (design §6): `round_odd_even_exact` (inside the range an even result is exact, through `Format::step_parity`), round to odd through every saturation mode (`project_odd`, `project_odd_even_exact`, `project_odd_faithful`), and the saturation caveat pinned by tests (E4M3: NaN under SatNone, the inexact even 448 under SatFinite). Residue: the double-rounding theorem, filed as [[float-double-rounding]].
