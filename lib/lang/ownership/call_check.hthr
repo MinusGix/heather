@@ -51,22 +51,12 @@ import option;
 import list;
 import list_window;
 import span_set;
+import atom;
 
 // ---------------------------------------------------------------------------
 // The fragment
 
-inductive Atom { Lit(n: Nat), Var(w: Nat) }
-
-fn word(ws: List<Nat>, k: Nat) → Nat { ws.nth(k).unwrap_or(0) }
-
 fn list_at(xs: List<List<Nat>>, k: Nat) → List<Nat> { xs.nth(k).unwrap_or(Nil) }
-
-fn Atom::val(self a: Atom, ws: List<Nat>) → Nat { match a { Lit(n) => n, Var(w) => word(ws, w) } }
-
-// The atom reads only words bound before `nw`.
-fn Atom::bound(self a: Atom, nw: Nat) → Bool { match a { Lit(_) => True, Var(w) => (w + 1).leb(nw) } }
-
-fn Atom::closed(self a: Atom) → Bool { match a { Lit(_) => True, Var(_) => False } }
 
 fn Atom::all_bound(args: List<Atom>, nw: Nat) → Bool {
     match args { Nil => True, Cons(a, rest) => a.bound(nw) && Atom::all_bound(rest, nw) }
@@ -252,16 +242,18 @@ inductive Region { Whole, Win(lo: Atom, n: Atom) }
 
 record LView { t: Nat, region: Region }
 
-// What the checker defers: two windows apart, or a callee's precondition at
-// the call's arguments.
-inductive Owed { Apart(lo: Atom, n: Atom, lo2: Atom, n2: Atom), Pre(g: Nat, args: List<Atom>) }
+// What the checker defers: an obligation of `atom.hthr` (here two windows
+// apart, `Spans`), or a callee's precondition at the call's arguments.
+inductive Owed { Due(o: Obligation), Pre(g: Nat, args: List<Atom>) }
 
 fn Owed::Holds(self o: Owed, pres: Nat → List<Nat> → Type, ws: List<Nat>) → Type {
     match o {
-        Apart(lo, n, lo2, n2) => Span(lo.val(ws), n.val(ws)).apart(Span(lo2.val(ws), n2.val(ws))).IsTrue(),
+        Due(ob) => ob.Holds(ws),
         Pre(g, args) => pres(g, vals(args, ws)),
     }
 }
+
+fn dues(r: Option<List<Obligation>>) → Option<List<Owed>> { r.map(λ os => os.map(λ ob => Due(ob))) }
 
 fn Owed::All(rs: List<Owed>, pres: Nat → List<Nat> → Type, ws: List<Nat>) → Type {
     match rs { Nil => True, Cons(r, rest) => r.Holds(pres, ws) ∧ Owed::All(rest, pres, ws) }
@@ -271,10 +263,7 @@ fn Owed::All(rs: List<Owed>, pres: Nat → List<Nat> → Type, ws: List<Nat>) �
 fn Region::license(self rg: Region, lo, n: Atom) → Option<List<Owed>> {
     match rg {
         Whole => None,
-        Win(a, b) => match a.closed() && b.closed() && lo.closed() && n.closed() {
-            True => Span(a.val(Nil), b.val(Nil)).apart(Span(lo.val(Nil), n.val(Nil))).then(Some(Nil)),
-            False => Some([Apart(a, b, lo, n)]),
-        },
+        Win(a, b) => dues(Spans(a, b, lo, n).settle()),
     }
 }
 
@@ -396,10 +385,6 @@ theorem Atom::val_stable(self a: Atom, ws, big: List<Nat>, pre: Prefix(ws, big),
         Lit(_) => λ _ => refl,
         Var(w) => λ lt => cong_fn(λ (o: Option<Nat>) => o.unwrap_or(0), pre.right(w, omega(lt))),
     })(b)
-}
-
-theorem Atom::closed_val(self a: Atom, e: a.closed() = True, ws, vs: List<Nat>): a.val(ws) = a.val(vs) {
-    (match a as λ x => x.closed() = True → x.val(ws) = x.val(vs) { Lit(_) => λ _ => refl, Var(_) => λ no => absurd(no) })(e)
 }
 
 theorem Atom::vals_stable(args: List<Atom>, ws, big: List<Nat>, pre: Prefix(ws, big)): Atom::all_bound(args, ws.len()) = True → vals(args, big) = vals(args, ws) {
@@ -659,21 +644,19 @@ theorem Owed::all_append(rs: List<Owed>, pres: Nat → List<Nat> → Type): (qs:
     }
 }
 
+theorem Owed::all_dues(os: List<Obligation>, pres: Nat → List<Nat> → Type, ws: List<Nat>): Owed::All(os.map(λ ob => Due(ob)), pres, ws) → Obligation::All(os, ws) {
+    match os {
+        Nil => λ _ => trivial,
+        Cons(_, rest) => λ h => ⟨h.left, Owed::all_dues(rest, pres, ws, h.right)⟩,
+    }
+}
+
 theorem win_license_sound(a, b, lo, n: Atom, pres: Nat → List<Nat> → Type, ws: List<Nat>, r1: List<Owed>, ok: Win(a, b).license(lo, n) = Some(r1),
     hold: Owed::All(r1, pres, ws)): Win(a, b).Clear(lo, n, ws)
 {
-    match q: ((a.closed() && b.closed()) && lo.closed()) && n.closed() {
-        True => {
-            let g1 = Bool::and_true_parts((a.closed() && b.closed()) && lo.closed(), n.closed(), q);
-            let g2 = Bool::and_true_parts(a.closed() && b.closed(), lo.closed(), g1.left);
-            let g3 = Bool::and_true_parts(a.closed(), b.closed(), g2.left);
-            let v = Bool::then_some(Span(a.val(Nil), b.val(Nil)).apart(Span(lo.val(Nil), n.val(Nil))), Some(Nil), r1, ok).left;
-            let clear: (Span(a.val(ws), b.val(ws)).apart(Span(lo.val(ws), n.val(ws))).IsTrue()) =
-                omega(v, a.closed_val(g3.left, ws, Nil), b.closed_val(g3.right, ws, Nil), lo.closed_val(g2.right, ws, Nil), n.closed_val(g1.right, ws, Nil));
-            clear
-        },
-        False => j(sym(Option::some_inj([Apart(a, b, lo, n)], r1, ok)), λ q2 _ => Owed::All(q2, pres, ws), hold).left,
-    }
+    let st = option_map_some(Spans(a, b, lo, n).settle(), λ os => os.map(λ ob => Due(ob)), r1, ok);
+    let owed: Owed::All(st.witness.map(λ ob => Due(ob)), pres, ws) = j(sym(st.proof.right), λ q _ => Owed::All(q, pres, ws), hold);
+    Spans(a, b, lo, n).settle_sound(ws, st.witness, st.proof.left, Owed::all_dues(st.witness, pres, ws, owed))
 }
 
 theorem Region::license_sound(self rg: Region, lo, n: Atom, pres: Nat → List<Nat> → Type, ws: List<Nat>, r1: List<Owed>, ok: rg.license(lo, n) = Some(r1),
@@ -1256,9 +1239,9 @@ theorem check_body_sound(k: Frame, inr: InRef(k.file0, k.r), ops: List<Stmt>): (
 
 // What a function answers, from the invariant at the end of its body.
 theorem Ret::answers(self ret: Ret, r: Ref, file: List<List<Nat>>, cur: List<Nat>, h: Holds(list_at(file, r.b), r.base, cur), len: cur.len() = r.len, ws, mws: List<Nat>, e: mws = ws):
-    (ret.vlo(r, mws) + ret.vn(r, mws) <= r.len) ∧ ((i: Nat) → call_check::word(ret.view(cur, ws), i) = rget(file, Ref(r.b, r.base + ret.vlo(r, mws), ret.vn(r, mws)), i))
+    (ret.vlo(r, mws) + ret.vn(r, mws) <= r.len) ∧ ((i: Nat) → atom::word(ret.view(cur, ws), i) = rget(file, Ref(r.b, r.base + ret.vlo(r, mws), ret.vn(r, mws)), i))
 {
-    j(sym(e), λ q _ => (ret.vlo(r, q) + ret.vn(r, q) <= r.len) ∧ ((i: Nat) → call_check::word(ret.view(cur, ws), i) = rget(file, Ref(r.b, r.base + ret.vlo(r, q), ret.vn(r, q)), i)),
+    j(sym(e), λ q _ => (ret.vlo(r, q) + ret.vn(r, q) <= r.len) ∧ ((i: Nat) → atom::word(ret.view(cur, ws), i) = rget(file, Ref(r.b, r.base + ret.vlo(r, q), ret.vn(r, q)), i)),
         match ret {
             RWord(_) => ⟨omega(), λ i => refl⟩,
             RView(lo, n) => {

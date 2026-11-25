@@ -8,6 +8,7 @@ import omega;
 import option;
 import list;
 import span_set;
+import atom;
 import call_check;
 
 fn no_pre() → Nat → List<Nat> → Type { λ _ _ => True }
@@ -28,10 +29,10 @@ theorem fill_checked(): check_fn(sigs_of(p1()), fill()) = Some(Nil) { refl }
 
 // One residual, `Span(0, k)` apart from `Span(k, m)`, and fill's
 // precondition.
-theorem written_checked(): check_fn(sigs_of(p1()), written()) = Some([Apart(Lit(0), Var(0), Var(0), Var(1)), Pre(0, [Lit(7)])]) { refl }
+theorem written_checked(): check_fn(sigs_of(p1()), written()) = Some([Due(Spans(Lit(0), Var(0), Var(0), Var(1))), Pre(0, [Lit(7)])]) { refl }
 
 // The residual holds in any words: `0 + k <= k`.
-theorem written_owed(ws: List<Nat>): Owed::All([Apart(Lit(0), Var(0), Var(0), Var(1)), Pre(0, [Lit(7)])], no_pre(), ws) {
+theorem written_owed(ws: List<Nat>): Owed::All([Due(Spans(Lit(0), Var(0), Var(0), Var(1))), Pre(0, [Lit(7)])], no_pre(), ws) {
     let apart: (Span(0, word(ws, 0)).apart(Span(word(ws, 0), word(ws, 1))).IsTrue()) = omega();
     ⟨apart, ⟨trivial, trivial⟩⟩
 }
@@ -40,7 +41,7 @@ theorem written_owed(ws: List<Nat>): Owed::All([Apart(Lit(0), Var(0), Var(0), Va
 theorem written_safe(w: World, fill_safe: FnSafe(fill().sig(), no_pre()(0), w.mean(0), w.run(0))):
     FnSafe(written().sig(), λ _ => True, λ arg ws => mean_fn(w, written(), arg, ws), λ file r ws => run_fn(w, written(), file, r, ws))
 {
-    check_sound(sigs_of(p1()), no_pre(), written(), [Apart(Lit(0), Var(0), Var(0), Var(1)), Pre(0, [Lit(7)])], written_checked(), λ _ => True, w,
+    check_sound(sigs_of(p1()), no_pre(), written(), [Due(Spans(Lit(0), Var(0), Var(0), Var(1))), Pre(0, [Lit(7)])], written_checked(), λ _ => True, w,
         λ arg ws _ _ => written_owed(mean_body(w, written().body, Sem([arg], Nil, ws)).words),
         λ g => match g { Zero => λ _ => fill_safe, Succ(_) => λ no => absurd(no) })
 }
@@ -49,7 +50,7 @@ theorem p1_ok(): ProgOk(p1(), no_pre()) {
     λ g => match g {
         Zero => λ _ => Checks(Nil, fill_checked(), λ w arg ws _ _ => trivial),
         Succ(g1) => match g1 {
-            Zero => λ _ => Checks([Apart(Lit(0), Var(0), Var(0), Var(1)), Pre(0, [Lit(7)])], written_checked(),
+            Zero => λ _ => Checks([Due(Spans(Lit(0), Var(0), Var(0), Var(1))), Pre(0, [Lit(7)])], written_checked(),
                 λ w arg ws _ _ => written_owed(mean_body(w, written().body, Sem([arg], Nil, ws)).words)),
             Succ(_) => λ no => false_elim(omega(no)),
         },
@@ -74,9 +75,9 @@ fn moved() → Func { Func(Writes, 3, [View(0, 0, Lit(0), Var(0)), CallMut(0, 0,
 
 fn p1c() → List<Func> { [fill(), moved()] }
 
-theorem moved_checked(): check_fn(sigs_of(p1c()), moved()) = Some([Apart(Lit(0), Var(0), Var(2), Var(1)), Pre(0, [Lit(7)])]) { refl }
+theorem moved_checked(): check_fn(sigs_of(p1c()), moved()) = Some([Due(Spans(Lit(0), Var(0), Var(2), Var(1))), Pre(0, [Lit(7)])]) { refl }
 
-theorem moved_fails(): ¬Owed::All([Apart(Lit(0), Var(0), Var(2), Var(1)), Pre(0, [Lit(7)])], no_pre(), mean_body(world(p1c(), 2), moved().body, Sem([[5, 6]], Nil, [1, 1, 0])).words) {
+theorem moved_fails(): ¬Owed::All([Due(Spans(Lit(0), Var(0), Var(2), Var(1))), Pre(0, [Lit(7)])], no_pre(), mean_body(world(p1c(), 2), moved().body, Sem([[5, 6]], Nil, [1, 1, 0])).words) {
     λ h => h.left
 }
 
