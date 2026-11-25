@@ -1087,6 +1087,10 @@ round stays green. (`Repeat` was taken: it is a native statement's.)
     `loop_stop`, and regenerating linked follow 3h, once nothing makes a
     `Loop`.
 
+  **Decided (Minus, 2026-11-25):** this order. Round C is closed as built
+  (9720631). The counted `Loop` stays in use by the runtime producers
+  until 3h.
+
 **Built: a pass that answers several words** (step 3's first half, kept
 as small as the extra pass allows).
 
