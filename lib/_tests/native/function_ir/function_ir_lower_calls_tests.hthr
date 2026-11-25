@@ -1,9 +1,11 @@
-// Probes of a call past six words (`lib/native/function_ir/function_ir_lower_calls.hthr`,
-// issues/function-call-past-six-words.md): a function of eight words is
-// lowered, calls another and is called from a function of two, and each
-// meets the contract the six-word ones do, the words past the sixth passed
-// above the return address (`Stack::Passed`); a function or a call of nine
-// words is refused with its count named. Tests, not library (docs/test-value-audit.md §4.5).
+// Probes of `lib/native/function_ir/function_ir_lower_calls.hthr`. A call
+// past six words (issues/function-call-past-six-words.md): a function of
+// eight words is lowered, calls another and is called from a function of
+// two, and each meets the contract the six-word ones do, the words past the
+// sixth passed above the return address (`Stack::Passed`); a function or a
+// call of nine words is refused with its count named. And the generic
+// frame and call theorems cited at the bytes level's memory clause (the
+// last section). Tests, not library (docs/test-value-audit.md §4.5).
 import function_ir;
 import function_ir_eval;
 import function_ir_lower;
@@ -20,6 +22,7 @@ import x86_64_store;
 import x86_64_stack;
 import x86_64_memory_contract;
 import x86_64_memory_tiers;
+import x86_64_kept;
 import x86_64_asm;
 import x86_64_asm_runs;
 import x86_64_stack_runs;
@@ -108,3 +111,80 @@ theorem nine_why(): sum9().refused(0, sum9().plan(), 10, [], index_rooms()) =
 theorem nine_call_refused(): lower_program([nine_caller(), sum8()], plan_program([nine_caller(), sum8()])) = None { refl }
 theorem nine_call_why(): nine_caller().refused(1, nine_caller().plan(), 3, [], index_rooms()) =
     "the call of function 0 (0, 1, 1, 1, 1, 1, 1, 1, 0): it passes 9 words, and a call passes at most eight: six in registers and two on the stack" { refl }
+
+// ---------------------------------------------------------------------------
+// The memory clause at the bytes level's (issues/lowering-generic-in-memory.md,
+// docs/native/native-one-compiler-design.md §2.8)
+//
+// The frame, call, loop and function theorems of function_ir_lower_calls
+// hold at any clause `Mem: S → M → Type` stable under the frame's own
+// stores. The bytes level's is the contract's: the heap is injected into
+// memory under the one lending. With the trail's `WroteIn` it says "the
+// stores were inside the lending and the heap is injected", which the
+// generic theorems are cited at.
+
+fn HeapIn<M>(data: ByteReadAccess<M>, spans: Spans) → Heap → M → Type {
+    λ (heap: Heap) (memory: M) => Injected<M>(data, spans, heap, memory)
+}
+
+// Its law, from the loan: a word stored below `top` leaves every span.
+theorem heap_in_stable<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, stack: Stack<M>(fetch, data), top: Nat, spans: Spans,
+    loan: Loan<M>(fetch, data, stack, top, spans)): stack.ClauseStable(top, HeapIn<M>(data, spans)) {
+    λ heap => loan.stable_injected(top, top.le_refl(), heap)
+}
+
+// The trail at it is the two facts, and a word stored in the frame keeps it.
+theorem heap_trail_store<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, stack: Stack<M>(fetch, data), top: Nat, spans: Spans,
+    loan: Loan<M>(fetch, data, stack, top, spans), d: Nat, under: d <= top, entry: M, heap: Heap, memory: M,
+    wrote: stack.WroteIn(d, spans, entry, memory), injected: Injected<M>(data, spans, heap, memory), k: Nat, inside: k + 8 <= d, word: BitVec(64)):
+    stack.WroteIn(d, spans, entry, stack.writes.store(memory, stack.at(k), word_bytes(word))) ∧
+        Injected<M>(data, spans, heap, stack.writes.store(memory, stack.at(k), word_bytes(word))) {
+    stack.trail_by_store(top, spans, HeapIn<M>(data, spans), heap_in_stable<M>(stack, top, spans, loan), d, under, entry, heap, memory,
+        ⟨wrote, injected⟩, k, inside, word)
+}
+
+// The CALL at it, against any callee contract that, entered with the words
+// passed and the heap injected, answers with stores inside the lending and
+// the heap after injected.
+theorem heap_call_step<M>(saved: List<Gpr>, slots: Nat, eight: saved.len() <= 8, slotted: saved.len() <= slots, site: Site<M>,
+    laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), d: Nat, s0: MachineState<M>,
+    fits: d + 8 * slots <= stack.size, under: (d + 8 * slots) + 8 <= top, prog: Prog, callee: Nat, deep: 24 <= d, count: Nat, few: count <= 2,
+    words: List<BitVec(64)>, answer: BitVec(64), extra: List<BitVec(64)>, before, after: Heap,
+    Pre: Nat → MachineState<M> → Type, Post: Nat → MachineState<M> → MachineState<M> → Type,
+    returns: site.Returns(stack, asm_labels(site.program)(callee + 1), Pre, Post),
+    enters: (u: MachineState<M>) → stack.Passed(words, (d - 8 * count) - 8, u) → Injected<M>(site.data, spans, before, u.memory) →
+        Pre((d - 8 * count) - 8, u),
+    leaves: (u, t: MachineState<M>) → Injected<M>(site.data, spans, before, u.memory) → Post((d - 8 * count) - 8, u, t) →
+        ((read_gpr(Rax, t.gprs) = answer) ∧ ArgsIn(extra, answer_registers(), t.gprs)) ∧ (Kept(callee_kept(), u.gprs, t.gprs) ∧
+            (stack.WroteIn((d - 8 * count) - 8, spans, u.memory, t.memory) ∧ Injected<M>(site.data, spans, after, t.memory))),
+    g0: Gprs, k: Nat, at: asm_back(site.program, k) = At(prog, 0, CallTo(callee + 1))):
+    site.Moves(stack.writes, prog_len(prog), prog_len(prog) + 5,
+        λ (x: MachineState<M>) => stack.ArgsReadyBy(saved, spans, HeapIn<M>(site.data, spans), d, slots, s0, before, g0, count, words, x),
+        λ (t: MachineState<M>) => stack.CalledBy(saved, spans, HeapIn<M>(site.data, spans), d, slots, s0, after, g0, count, answer, extra, t)) {
+    call_step_by<M, Heap>(saved, slots, eight, slotted, site, laid, stack, top, spans, HeapIn<M>(site.data, spans), loan,
+        heap_in_stable<M>(stack, top, spans, loan), d, s0, fits, under, prog, callee, deep, count, few, words, answer, extra, before, after,
+        Pre, Post, returns, enters, leaves, g0, k, at)
+}
+
+// A plain loop's passes, by induction on the run's fuel: at no fuel there
+// is no run to end, so only the passes need proving.
+theorem plain_loop_on_fuel<M>(site: Site<M>, writes: ByteWrites<M>, head_at, done_at: Nat,
+    Head: List<BitVec(64)> → Heap → MachineState<M> → Type, Done: MachineState<M> → Type, Ends: Nat → List<BitVec(64)> → Heap → Type,
+    none: (state: List<BitVec(64)>) → (now: Heap) → Ends(0, state, now) → False,
+    step: (n: Nat) → (state: List<BitVec(64)>) → (now: Heap) → Ends(n + 1, state, now) →
+        site.Moves(writes, head_at, done_at, Head(state, now), Done) ∨
+        Exists<List<BitVec(64)>>(λ next => Exists<Heap>(λ mid => Ends(n, next, mid) ∧
+            site.Moves(writes, head_at, head_at, Head(state, now), Head(next, mid)))),
+    fuel: Nat): (state: List<BitVec(64)>) → (now: Heap) → Ends(fuel, state, now) → site.Moves(writes, head_at, done_at, Head(state, now), Done) {
+    site.loop_iterates<M, Heap>(writes, head_at, done_at, λ (_: Nat) (state: List<BitVec(64)>) (now: Heap) => Head(state, now), Done, Ends,
+        λ state now ended => false_elim(none(state, now, ended)), step, fuel)
+}
+
+// Control: the law is proved, not assumed. A clause over spans the loan
+// does not lend is not discharged by it.
+// expect-error(kernel): the kernel rejected `heap_in_other_stable`: NotConvertible
+theorem heap_in_other_stable<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, stack: Stack<M>(fetch, data), top: Nat, spans, other: Spans,
+    loan: Loan<M>(fetch, data, stack, top, spans)): stack.ClauseStable(top, HeapIn<M>(data, other)) {
+    λ heap => loan.stable_injected(top, top.le_refl(), heap)
+}
