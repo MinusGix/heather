@@ -1,0 +1,95 @@
+// A clone whose law holds up to the meaning, not as an equation
+// (docs/language/ownership-design.md §10.8, issues/ownership-copy-clone.md).
+//
+// The word map (`word_map.hthr`) stands for the association list of its
+// occupied slots (`WordMap::abs`); what an empty slot's value word holds is
+// representation and not meaning. A clone that copies only the live rows
+// into a fresh table, as a hash table's clone that rehashes or compacts
+// does, writes zeros where the original had garbage. Its answer is not the
+// table it was given (`WordMap::scrub_not_exact`) but is the same map
+// (`WordMap::scrub_abs`), so it is a `CloneRel` at `WordMap::SameRows` and
+// not an `ExactClone`: the extension is not forced on a type whose meaning
+// has slack.
+//
+// The table is a laid record, so its bytes are copyable all the same
+// (`Copy` at `Rep::bytes(WordMap::stored())`), and that copy is exact; this
+// module registers the slack clone as the table's `Clone` to show the other
+// kind. A `laid` generator that publishes every record's exact clone
+// (issues/laid-publishes-copy.md) has to let a record keep its own.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import vector;
+import bitvec;
+import relation;
+import clone;
+import runtime_data;
+import word_map;
+import word_map_laws;
+
+// The value a live row has at slot `s`, and zero at an empty one.
+fn WordMap::live_val(self m: WordMap, s: Nat) → u64 {
+    match BitVec::eq_dec(m.key(s), BitVec::ofNat(0)) { Inl(_) => BitVec::ofNat(0), Inr(_) => m.val(s) }
+}
+
+// The live rows copied into a fresh table: the keys and the count as they
+// are, each empty slot's value zero.
+fn WordMap::scrub(self m: WordMap) → WordMap {
+    m with { vals = vector_update(vector_update(vector_update(vector_update(m.vals,
+        0, m.live_val(0)), 1, m.live_val(1)), 2, m.live_val(2)), 3, m.live_val(3)) }
+}
+
+theorem WordMap::val_scrub(self m: WordMap, s: Nat): m.scrub().val(s) = m.live_val(s) {
+    match s {
+        Zero => refl,
+        Succ(Zero) => refl,
+        Succ(Succ(Zero)) => refl,
+        Succ(Succ(Succ(Zero))) => refl,
+        Succ(Succ(Succ(Succ(_)))) => refl,
+    }
+}
+
+theorem WordMap::val_scrub_live(self m: WordMap, s: Nat, nz: ¬(m.key(s) = BitVec::ofNat(0))): m.scrub().val(s) = m.val(s) {
+    trans(m.val_scrub(s), match BitVec::eq_dec(m.key(s), BitVec::ofNat(0)) as λ d =>
+        (match d { Inl(_) => BitVec::ofNat(0, n := 64), Inr(_) => m.val(s) }) = m.val(s)
+    {
+        Inl(z) => false_elim(nz(z)),
+        Inr(_) => refl,
+    })
+}
+
+// The rows are the original's: an empty slot's value is never read.
+theorem WordMap::rows_scrub(self m: WordMap, cnt: Nat): (s: Nat) → m.scrub().rows(s, cnt) = m.rows(s, cnt) {
+    match cnt {
+        Zero => λ s => refl,
+        Succ(r, ih) => λ s => match BitVec::eq_dec(m.key(s), BitVec::ofNat(0)) as λ d =>
+            (match d { Inl(_) => m.scrub().rows(s + 1, r), Inr(_) => Cons(Pair(m.key(s), m.scrub().val(s)), m.scrub().rows(s + 1, r)) })
+                = (match d { Inl(_) => m.rows(s + 1, r), Inr(_) => Cons(Pair(m.key(s), m.val(s)), m.rows(s + 1, r)) })
+        {
+            Inl(_) => ih(s + 1),
+            Inr(nz) => j(sym(m.val_scrub_live(s, nz)), λ v _ => Cons(Pair(m.key(s), v), m.scrub().rows(s + 1, r)) = Cons(Pair(m.key(s), m.val(s)), m.rows(s + 1, r)),
+                cong_fn(λ (rest: List<Pair<u64, u64>>) => Cons(Pair(m.key(s), m.val(s)), rest), ih(s + 1))),
+        },
+    }
+}
+
+// The table's own equivalence: the same map.
+fn WordMap::SameRows(m, n: WordMap) → Type { m.abs() = n.abs() }
+
+theorem WordMap::scrub_abs(self m: WordMap): m.scrub().abs() = m.abs() { m.rows_scrub(4, 0) }
+
+instance CloneRel<WordMap>(WordMap::SameRows) {
+    clone := λ (m: WordMap) => m.scrub(),
+    clone_same := λ (m: WordMap) => m.scrub_abs(),
+}
+
+// And not exact: a table whose empty slot holds a stale value word clones
+// to one that holds zero there.
+fn WordMap::stale() → WordMap { WordMap(0, [0, 0, 0, 0], [7, 0, 0, 0]) }
+
+theorem WordMap::scrub_not_exact(): ¬((m: WordMap) → m.scrub() = m) {
+    λ h => absurd(cong_fn(λ (m: WordMap) => m.val(0).toNat(), h(WordMap::stale())))
+}
