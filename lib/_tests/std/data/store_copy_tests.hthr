@@ -1,0 +1,38 @@
+// Probes of `store_copy.hthr`: a key is copyable at its code and its clone
+// is exact (closed and neutral, and a copied key reads what the key reads),
+// a store's clone is exact at an open value type, and the negative
+// controls: no codec holds a store, and a key's code would not copy if a
+// field were a buffer.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import stored;
+import clone;
+import rt;
+import copy;
+import store;
+import store_copy;
+
+fn twice<A: Copy(rep)>(rep: Rep<A>, x: A) → Pair<A, A> { Pair(rep.copy(x), x) }
+fn cl<A: ExactClone>(x: A) → A { A.clone(x) }
+
+theorem key_twice(k: Key): twice(Key::rep(), k) = Pair(k, k) { refl }
+theorem key_clone(k: Key): cl(k) = k { ExactClone::clone_eq(k) }
+theorem key_clone_closed(): cl(Key(3, 1)) = Key(3, 1) { refl }
+
+// A copy of a key reads what the key reads, at an open store.
+theorem copied_key_reads<V>(s: Store<V>, k: Key): s.get(Key::rep().copy(k)) = s.get(k) { refl }
+
+// A store's clone is the store, at an open value type and a neutral store.
+theorem store_clone<V: ExactClone>(s: Store<V>): cl(s) = s { ExactClone::clone_eq(s) }
+theorem store_clone_closed(): cl<Store<Nat>>(Store([Live(0, 5), Free(1)])) = Store([Live(0, 5), Free(1)]) { refl }
+
+// Negative controls.
+theorem store_no_codec(s: Stored<Store<Nat>>): False { Store::no_codec(s) }
+theorem store_frees_differ(): ¬(Store::frees<Nat>(1) = Store::frees<Nat>(2)) { λ e => absurd(Store::frees_inj<Nat>(1, 2, e)) }
+// A key whose generation were held in a buffer would not copy.
+fn BUF_KEY() → Table { Table(EnumInfo::nones, RecInfo::cons(EnumInfo::nones, RecInfo::shape(EnumInfo::nones, [Count, ByteList(8)]), RecInfo::empty(EnumInfo::nones))) }
+theorem buffer_key_not_copy(): ¬Named(0).Copy(BUF_KEY()) { Named(0).not_copy_of_copies(BUF_KEY(), refl) }

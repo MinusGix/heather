@@ -1,0 +1,33 @@
+// Probes of `word_map_clone.hthr`: the word map's clone asked as a
+// `CloneRel` at its own equivalence, at a neutral table and a closed one
+// with a stale value word, and the negative control that its law is not
+// the exact one.
+import logic;
+import bool;
+import nat;
+import list;
+import pair;
+import bitvec;
+import relation;
+import clone;
+import runtime_data;
+import word_map;
+import word_map_laws;
+import word_map_clone;
+
+fn cl<A: CloneRel(same)>(same: A → A → Type, x: A) → A { A.clone(x) }
+
+// The same map at a neutral table: the law, read through the class.
+theorem clone_same_map(m: WordMap): cl(WordMap::SameRows, m).abs() = m.abs() { WordMap::CloneRel(WordMap::SameRows).clone_same(m) }
+
+// Closed: the stale value word is zeroed, and the rows are the same (none).
+theorem stale_scrubbed(): WordMap::stale().scrub().val(0) = BitVec::ofNat(0) { refl }
+theorem stale_rows(): WordMap::stale().scrub().abs() = WordMap::stale().abs() { refl }
+
+// A live row keeps its value.
+fn ONE() → WordMap { WordMap(1, [5, 0, 0, 0], [9, 3, 0, 0]) }
+theorem one_kept(): ONE().scrub().abs() = [Pair(BitVec::ofNat(5), BitVec::ofNat(9))] { refl }
+theorem one_changed(): ONE().scrub().val(1) = BitVec::ofNat(0) { refl }
+
+// Not exact.
+theorem not_exact(): ¬((m: WordMap) → m.scrub() = m) { WordMap::scrub_not_exact() }

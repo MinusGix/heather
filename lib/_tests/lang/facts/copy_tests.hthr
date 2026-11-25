@@ -1,0 +1,138 @@
+// Probes of `copy.hthr` and `clone.hthr`: the decider's verdicts at closed
+// codes and at a table's records and enums (copyable and not), the class
+// asked at each representation and answering what the decider answers,
+// the exact-clone law rewriting a clone away at a word, a pair, an open
+// element type and a neutral value, a laid record's instances published by
+// `laid_copy`, and the negative controls: an owned buffer's code does not
+// copy, a record holding one does not, a byte list has no codec, and a
+// `Copy` claimed at a buffer's code is refused.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import bitvec;
+import layout;
+import stored;
+import laid;
+import erased;
+import clone;
+import rt;
+import unique;
+import string;
+import simp_laws;
+import simp;
+import copy;
+
+// ---------------------------------------------------------------------------
+// The decider at closed codes: closed verdicts as `b = True`, by `refl`.
+
+theorem word_copies(): Word(64).copies(Table::none()) = True { refl }
+theorem bit_copies(): Bit.copies(Table::none()) = True { refl }
+theorem count_copies(): Count.copies(Table::none()) = True { refl }
+theorem lines_copy(): Lines.copies(Table::none()) = True { refl }
+theorem buffer_does_not(): ByteList(16).copies(Table::none()) = False { refl }
+
+// At an open code and table, the statement read off the verdict.
+theorem open_copy(t: Ty, tys: Table, h: t.copies(tys) = True): t.Copy(tys) { t.copy_of_copies(tys, h) }
+
+// A table with two records: a key (two counts) and a buffer with its length.
+fn key_rec() → RecInfo(EnumInfo::nones) { RecInfo::shape(EnumInfo::nones, [Count, Count]) }
+fn buf_rec() → RecInfo(EnumInfo::nones) { RecInfo::shape(EnumInfo::nones, [Word(64), ByteList(64)]) }
+fn TYS() → Table { Table(EnumInfo::nones, RecInfo::cons(EnumInfo::nones, key_rec(), RecInfo::cons(EnumInfo::nones, buf_rec(), RecInfo::empty(EnumInfo::nones)))) }
+
+theorem record_of_counts_copies(): Named(0).copies(TYS()) = True { refl }
+theorem record_with_buffer_does_not(): Named(1).copies(TYS()) = False { refl }
+// Past the table's records, an empty record: no fields, nothing to share.
+theorem empty_record_copies(): Named(7).copies(TYS()) = True { refl }
+
+// The negative controls as `¬` theorems.
+theorem buffer_not_copy(): ¬ByteList(64).Copy(TYS()) { Ty::buffer_not_copy(64, TYS()) }
+theorem record_with_buffer_not_copy(): ¬Named(1).Copy(TYS()) { Named(1).not_copy_of_copies(TYS(), refl) }
+
+// Agreement with `holds_bytes`: one answer where both speak.
+theorem agrees_word(tys: Table): Word(8).copies(tys) = !Word(8).holds_bytes() { Word(8).copies_holds_bytes(tys, refl) }
+theorem agrees_buffer(tys: Table): ByteList(4).copies(tys) = !ByteList(4).holds_bytes() { ByteList(4).copies_holds_bytes(tys, refl) }
+theorem record_may_hold(): Named(1).holds_bytes() = True { Named(1).holds_bytes_of_not_copies(TYS(), refl, refl) }
+
+// ---------------------------------------------------------------------------
+// The class, asked at each representation.
+
+fn dup<A>(rep: Rep<A>, c: Copy<A>(rep), x: A) → Pair<A, A> { Pair(rep.copy(x), x) }
+
+// A generic function asking for the instance.
+fn twice<A: Copy(rep)>(rep: Rep<A>, x: A) → Pair<A, A> { Pair(rep.copy(x), x) }
+
+theorem twice_word(x: u64): twice(Rep::word(64), x) = Pair(x, x) { refl }
+theorem twice_bool(b: Bool): twice(Rep::bit(), b) = Pair(b, b) { refl }
+theorem twice_count(n: Nat): twice(Rep::count(), n) = Pair(n, n) { refl }
+// Erased data copies whatever it erases, an open type and one with no
+// codec and no code among them.
+theorem twice_erased<A>(g: Erased<A>): twice(Rep::erased<A>(), g) = Pair(g, g) { refl }
+theorem twice_erased_bytes(g: Erased<List<u8>>): twice(Rep::erased<List<u8>>(), g) = Pair(g, g) { refl }
+
+// The two askers agree: the decider's verdict is an instance, and an
+// instance is the decider's verdict.
+fn key_code() → Coded<Ty::Flats([Count, Count])> { Coded::of_code(TYS(), Named(0)) }
+theorem key_instance_verdict(): key_code().code.copies(key_code().tys) = True {
+    Copy::code_copies(key_code(), Copy::of_code(key_code(), refl))
+}
+
+// A buffer's code has no instance: the decider refuses it, so the
+// instance would be a proof of `False`.
+fn buffer_code() → Coded<List<u8>> { Coded::of_code(Table::none(), ByteList(8)) }
+theorem buffer_no_instance(c: Copy<List<u8>>(Rep::Code(buffer_code()))): False { c.copies }
+
+// expect-error: `copies((buffer_code).code, (buffer_code).tys)` and `True` are not
+theorem buffer_claimed(): Copy<List<u8>>(Rep::Code(buffer_code())) { Copy::of_code(buffer_code(), refl) }
+
+// Every codec copies: a copy of a stored word's bytes reads the word.
+theorem codec_copies(src, dst: List<u8>, from, to: Nat, fits: 4 + from <= src.len(), inside: to <= dst.len()):
+    Stored::u32_be().get(dst.put_window(to, src.window(from, 4 + from)), to) = Stored::u32_be().get(src, from)
+{
+    Stored::u32_be().copies()(src, from, dst, to, fits, inside)
+}
+
+// A byte list has no codec, so no `Copy` at `Bytes` for it either.
+theorem byte_list_no_codec(s: Stored<List<u8>>): False { Stored::no_byte_list(s) }
+
+// ---------------------------------------------------------------------------
+// The exact-clone law rewrites a clone away.
+
+fn cl<A: ExactClone>(x: A) → A { A.clone(x) }
+
+theorem clone_word(x: u64): cl(x) = x { ExactClone::clone_eq(x) }
+theorem clone_bool(b: Bool): cl(b) = b { ExactClone::clone_eq(b) }
+// Under a function: the clone rewritten away inside a statement.
+theorem clone_under<A: ExactClone>(f: A → Nat, x: A, y: Nat): f(A.clone(x)) + y = f(x) + y { rewrite(ExactClone::clone_eq(x), refl) }
+// At a word, through the receiver: `simp_only` reads the law there
+// (`rewrite` does not yet, issues/rewrite-inherited-field-head.md).
+theorem clone_under_word(x: u64, y: Nat): x.clone().toNat() + y = x.toNat() + y { simp_only(ExactClone::clone_eq) }
+// A record of parts, a list of them, at a neutral value.
+theorem clone_pair(p: Pair<u64, Bool>): cl(p) = p { ExactClone::clone_eq(p) }
+theorem clone_list(xs: List<Pair<u64, Bool>>): cl(xs) = xs { ExactClone::clone_eq(xs) }
+// At an open element type.
+theorem clone_open<A: ExactClone>(xs: List<Option<A>>): cl(xs) = xs { ExactClone::clone_eq(xs) }
+// Closed, by evaluation: the clone computes to its argument.
+theorem clone_closed(): cl<List<Pair<u64, Bool>>>([Pair(BitVec::ofNat(3, n := 64), True)]) = [Pair(BitVec::ofNat(3), True)] { refl }
+// Erased data, whatever it erases.
+theorem clone_erased<A>(g: Erased<A>): cl(g) = g { refl }
+
+// A plain `Clone` promises nothing: a clone that answers a constant is a
+// `Clone`, and its law fails.
+fn zero_clone() → Clone<Nat> { Clone(λ (_: Nat) => 0) }
+theorem plain_clone_not_exact(): ¬((x: Nat) → zero_clone().clone(x) = x) { λ h => absurd(h(1)) }
+
+// ---------------------------------------------------------------------------
+// A laid record: `generate laid_copy` publishes its `Copy` and its exact
+// clone.
+
+laid record Header { tag: u8, length: u64 }
+generate laid_copy("Header");
+instance Copy<Header>(Header::rep) { copies := Header::copy.copies }
+instance ExactClone<Header> { clone := Header::clone.clone, clone_same := Header::clone.clone_same }
+
+theorem header_twice(h: Header): twice(Header::rep, h) = Pair(h, h) { cong_fn(λ (x: Header) => Pair(x, h), Header::rep.copy_eq(h)) }
+theorem header_clone(h: Header): cl(h) = h { ExactClone::clone_eq(h) }
+theorem header_clone_closed(): cl(Header(BitVec::ofNat(1), BitVec::ofNat(9))) = Header(BitVec::ofNat(1), BitVec::ofNat(9)) { refl }

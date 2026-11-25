@@ -1,0 +1,152 @@
+// `Clone` and its law, at every carrier (docs/language/ownership-design.md
+// §10.8, issues/ownership-copy-clone.md).
+//
+// Ownership in Heather is a licence to compile cheaply and never protects
+// the meaning (§10.1), so a clone is an operation whose meaning is
+// ordinarily the identity: a `runtime fn` that holds a value twice holds two
+// equal values, and the copy is the compiler's business. The law
+// `clone(x) = x` is what lets a proof rewrite a clone away, the compiler
+// insert one where a function's policy allows (§10.10), and the optimizer
+// delete one whose original is dead. It is an EXTENSION of `Clone`, not
+// part of it (Minus, 2026-11-24): a type whose meaning has representation
+// slack (capacity as a field, a hash table as its concrete slots) may have
+// a clone that changes the representation and keeps the meaning, whose law
+// holds up to the type's own equivalence and not as an equation.
+//
+// So the chain is the relation-indexed one of `algebra_rel`
+// (docs/library/relation-indexed-algebra-design.md):
+//
+// - `Clone<A>`: the operation, no law.
+// - `CloneRel<A>(same)`: a clone that answers a value `same` as the one it
+//   was given. A hash table's clone that copies only the live rows is one
+//   (`lib/native/runtime/word_map_clone.hthr`).
+// - `ExactClone<A>`: `CloneRel` at `RelId`, so its law is `clone(x) = x`
+//   by unfolding. `ExactClone::clone_eq` is the law as a theorem a client
+//   cites, and `simp_only(ExactClone::clone_eq)` or a set naming it
+//   rewrites every clone of a goal away, at an open carrier and a concrete
+//   one alike.
+//
+// The name: the design note called the extension "exact clone" for want of
+// one. It is kept, and spelled as the library spells a chain member that
+// adds a law: an adjective on the parent (`CommMonoid` on `Monoid`), and
+// `Exact` is the library's word for "loses nothing" already
+// (`Stored::Exact`, a codec whose bytes read back are the bytes). `Lawful`
+// (Lean's `LawfulBEq`) was not taken: the relational member has a law too,
+// so "lawful" would not say which.
+//
+// Copying is not here. `Copy` is a fact about a representation, not a type
+// (the same list is copyable held inline as `[u8; n]` and not held in a
+// buffer): `lib/lang/facts/copy.hthr` states it over `rt`'s codes and
+// `Stored` codecs, and derives an exact clone from any copyable one.
+//
+// **Drop gets no class.** Dropping a value means nothing (§10.8): values
+// are affine by default and a leak is never unsound, so there is no
+// operation whose meaning a class would fix and no law to state. A
+// capability that must not be dropped says so in its type, not here.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import relation;
+import erased;
+
+// ---------------------------------------------------------------------------
+// The classes.
+
+// The operation and nothing else. A `Clone` alone promises nothing about
+// what it answers; a client that needs to know asks for the extension.
+class Clone<A> {
+    clone: A → A,
+}
+
+// A clone whose answer is the value it was given, up to `same`. `same` is
+// the type's own equivalence; nothing here asks that it be one (a client
+// that composes clones asks for `Equivalence<A>(same)` beside it).
+class CloneRel<A>(same as ≈: A → A → Type) extends Clone<A> {
+    clone_same: (x: A) → clone(x) ≈ x,
+}
+
+// The exact clone: a clone that is the identity. Its law is `CloneRel`'s at
+// the identity relation, an equation by unfolding.
+class ExactClone<A> extends CloneRel<A>(RelId<A>) {}
+
+// The law, as the equation a proof rewrites with.
+theorem ExactClone::clone_eq<A: ExactClone>(x: A): A.clone(x) = x { A.clone_same(x) }
+
+// Two clones in a row are none.
+theorem ExactClone::clone_clone<A: ExactClone>(x: A): A.clone(A.clone(x)) = x {
+    trans(A.clone_same(A.clone(x)), A.clone_same(x))
+}
+
+// An exact clone from a function proved to be the identity: how an
+// instance whose clone is not literally `λ x => x` is written (a laid
+// record's bytes read back, `copy.hthr`).
+fn ExactClone::of<A>(clone: A → A, exact: (x: A) → clone(x) = x) → ExactClone<A> {
+    ExactClone(clone, exact)
+}
+
+// ---------------------------------------------------------------------------
+// Instances: the carriers below the machine.
+//
+// A value of each of these is a value, and its clone is itself. That is
+// what a clone MEANS at every one of them; whether the compiled clone is a
+// copy of a word or of a whole buffer is the representation's
+// (`copy.hthr`), and the law holds either way: a list's clone is exact
+// though its buffer is not copyable.
+
+instance ExactClone<Bool> { clone := λ (b: Bool) => b, clone_same := λ (b: Bool) => refl }
+
+instance ExactClone<Nat> { clone := λ (n: Nat) => n, clone_same := λ (n: Nat) => refl }
+
+instance ExactClone<True> { clone := λ (t: True) => t, clone_same := λ (t: True) => refl }
+
+// Erased data has no runtime presence, so its clone is free and exact,
+// whatever `A` is: nothing is asked of `A`.
+instance<A> ExactClone<Erased<A>> { clone := λ (g: Erased<A>) => g, clone_same := λ (g: Erased<A>) => refl }
+
+// A record of exactly clonable parts: each part cloned. The law is the
+// parts' laws and the pair's η.
+fn Pair::clone_parts<A: ExactClone, B: ExactClone>(p: Pair<A, B>) → Pair<A, B> { Pair(A.clone(p.fst), B.clone(p.snd)) }
+
+theorem Pair::clone_parts_eq<A: ExactClone, B: ExactClone>(p: Pair<A, B>): Pair::clone_parts(p) = p {
+    Pair::ext(Pair::clone_parts(p), p, A.clone_same(p.fst), B.clone_same(p.snd))
+}
+
+instance<A: ExactClone, B: ExactClone> ExactClone<Pair<A, B>> {
+    clone := λ (p: Pair<A, B>) => Pair::clone_parts(p),
+    clone_same := λ (p: Pair<A, B>) => Pair::clone_parts_eq(p),
+}
+
+// An option of a clonable value: the value cloned.
+fn Option::clone_some<A: ExactClone>(o: Option<A>) → Option<A> { match o { None => None, Some(a) => Some(A.clone(a)) } }
+
+theorem Option::clone_some_eq<A: ExactClone>(o: Option<A>): Option::clone_some(o) = o {
+    match o {
+        None => refl,
+        Some(a) => cong_fn(λ (x: A) => Some(x), A.clone_same(a)),
+    }
+}
+
+instance<A: ExactClone> ExactClone<Option<A>> {
+    clone := λ (o: Option<A>) => Option::clone_some(o),
+    clone_same := λ (o: Option<A>) => Option::clone_some_eq(o),
+}
+
+// A list, element by element: the deep clone. Its meaning is the list,
+// though its compiled form copies a buffer (a list is not `Copy`).
+fn List::clone_each<A: ExactClone>(xs: List<A>) → List<A> { match xs { Nil => Nil, Cons(x, rest) => Cons(A.clone(x), List::clone_each(rest)) } }
+
+theorem List::clone_each_eq<A: ExactClone>(xs: List<A>): List::clone_each(xs) = xs {
+    match xs {
+        Nil => refl,
+        Cons(x, rest) => j(sym(A.clone_same(x)), λ y _ => Cons(y, List::clone_each(rest)) = Cons(x, rest),
+            cong_fn(λ (ys: List<A>) => Cons(x, ys), List::clone_each_eq(rest))),
+    }
+}
+
+instance<A: ExactClone> ExactClone<List<A>> {
+    clone := λ (xs: List<A>) => List::clone_each(xs),
+    clone_same := λ (xs: List<A>) => List::clone_each_eq(xs),
+}
