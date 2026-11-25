@@ -1,0 +1,287 @@
+// Probes of the sequence instances (lib/lang/ownership/sequences.hthr,
+// issues/ownership-interfaces.md): a read under each instance's own bound
+// is the source's term by conversion, and the decider's customers that
+// lib/lang/ownership/value_steps.hthr@7f9bb19a had, restated at `Dyn` (split_at_mut, an element held
+// while another is stored, a window held while an element is stored, two
+// fields of an element).
+import logic;
+import bool;
+import nat;
+import omega;
+import option;
+import list;
+import list_window;
+import vector;
+import bitvec;
+import bitvec_nat;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import rt;
+import rt_file;
+import bytes;
+import stored_words;
+import sequences;
+
+// ---------------------------------------------------------------------------
+// One environment: a record, a list of it (its windows lists too), an
+// array of words, a span of bytes, and a list of numbers
+
+record Point { x: Nat, y: Nat }
+
+fn Point::origin() → Point { Point(0, 0) }
+
+fn tys(n: u64) → Nat → Type {
+    λ k => match k {
+        Zero => Point,
+        Succ(k1) => match k1 {
+            Zero => List<Point>,
+            Succ(k2) => match k2 { Zero => [u64; 16], Succ(k3) => match k3 { Zero => Bytes(n), Succ(k4) => match k4 { Zero => List<Nat>, Succ(_) => True } } },
+        },
+    }
+}
+
+fn pt_s() → Shape { SNamed(0) }
+
+fn pts_s() → Shape { SNamed(1) }
+
+fn arr_s() → Shape { SNamed(2) }
+
+fn bytes_s() → Shape { SNamed(3) }
+
+fn nats_s() → Shape { SNamed(4) }
+
+fn nat_s() → Shape { SWord(WNat) }
+
+fn u64_s() → Shape { SWord(WBits(64)) }
+
+fn u8_s() → Shape { SWord(WBits(8)) }
+
+fn Point::fx(n: u64) → Field(tys(n), Point) { Field(nat_s(), λ (p: Point) => p.x, λ (p: Point) => λ (v: Nat) => Point(v, p.y)) }
+
+fn Point::fy(n: u64) → Field(tys(n), Point) { Field(nat_s(), λ (p: Point) => p.y, λ (p: Point) => λ (v: Nat) => Point(p.x, v)) }
+
+fn pts_win(n: u64) → Win(tys(n), List<Point>) { Seq::list_win(tys(n), pt_s(), pts_s(), λ (l: List<Point>) => l, λ (l: List<Point>) => l) }
+
+fn nats_win(n: u64) → Win(tys(n), List<Nat>) { Seq::list_win(tys(n), nat_s(), nats_s(), λ (l: List<Nat>) => l, λ (l: List<Nat>) => l) }
+
+fn strs(n: u64) → Strs(tys(n)) {
+    λ k => match k {
+        Zero => Struct(Plain, Some(Point::origin()), Record([Point::fx(n), Point::fy(n)])),
+        Succ(k1) => match k1 {
+            Zero => Struct(Object, None, Sequence(Seq::list(tys(n), pt_s(), Point::origin(), Some(pts_win(n))))),
+            Succ(k2) => match k2 {
+                Zero => Struct(Plain, None, Sequence(Seq::vec(tys(n), u64_s(), 16, BitVec::ofNat(0)))),
+                Succ(k3) => match k3 {
+                    Zero => Struct(Object, None, Sequence(Seq::bytes(tys(n), n))),
+                    Succ(k4) => match k4 {
+                        Zero => Struct(Object, None, Sequence(Seq::list(tys(n), nat_s(), 0, Some(nats_win(n))))),
+                        Succ(_) => Struct(Plain, None, Opaque),
+                    },
+                },
+            },
+        },
+    }
+}
+
+fn rd(n: u64, ws: List<Ix>, xs: List<Step>, d: Dyn(tys(n))) → Dyn(tys(n)) { Dyn::read(tys(n), strs(n), ws, xs, d) }
+
+fn wr(n: u64, ws: List<Ix>, xs: List<Step>, g: Dyn(tys(n)) → Dyn(tys(n)), d: Dyn(tys(n))) → Dyn(tys(n)) { Dyn::write(tys(n), strs(n), ws, xs, g, d) }
+
+// ---------------------------------------------------------------------------
+// A read under each instance's own bound is the source's term
+
+// `ps[i].x` over a list of records, at the record's default past the end.
+fn get_x(ps: List<Point>, i: Nat, inside: ∥i < ps.len()∥) → Nat { ps.nth(i).unwrap_or(Point::origin()).x }
+
+theorem get_x_pin(n: u64, ps: List<Point>, i: Nat, inside: ∥i < ps.len()∥): rd(n, [INat(i)], [SElem(Var(0)), SField(0)], Dyn(pts_s(), ps)) = Dyn(nat_s(), get_x(ps, i, inside)) { refl }
+
+// expect-error(kernel)
+theorem get_x_not_y(n: u64, ps: List<Point>, i: Nat): rd(n, [INat(i)], [SElem(Var(0)), SField(0)], Dyn(pts_s(), ps)) = Dyn(nat_s(), ps.nth(i).unwrap_or(Point::origin()).y) { refl }
+
+// `v[i]` over `[u64; 16]` at a `u64` index: `Vec::at`, which reads through
+// `toNat` itself.
+theorem vec_at_pin(n: u64, v: [u64; 16], i: u64, inside: ∥i.toNat() < 16∥): rd(n, [IWord(64, i)], [SElem(Var(0))], Dyn(arr_s(), v)) = Dyn(u64_s(), v.at(i, inside := inside)) { refl }
+
+// `s[i]` over `Bytes(n)` at a `u64` index: `Bytes::at`, at the word itself.
+theorem bytes_at_pin(n: u64, s: Bytes(n), i: u64, inside: ∥i < s.len()∥): rd(n, [IWord(64, i)], [SElem(Var(0))], Dyn(bytes_s(), s)) = Dyn(u8_s(), s.at(i, inside := inside)) { refl }
+
+// An index of the other kind reads the pad: a number does not index
+// `Bytes(n)`.
+theorem bytes_at_number(n: u64, s: Bytes(n), i: Nat): rd(n, [INat(i)], [SElem(Var(0))], Dyn(bytes_s(), s)) = Dyn(u8_s(), BitVec::ofNat(0)) { refl }
+
+// `ps[i].x := v` against the source's update, and `s[i] := b` against
+// `Bytes::put`.
+theorem set_x_pin(n: u64, ps: List<Point>, i, v: Nat): wr(n, [INat(i)], [SElem(Var(0)), SField(0)], λ _ => Dyn(nat_s(), v), Dyn(pts_s(), ps)) = Dyn(pts_s(), ps.update(i, λ p => Point(v, ps.nth(i).unwrap_or(Point::origin()).y))) {
+    refl
+}
+
+theorem bytes_put_pin(n: u64, s: Bytes(n), i: u64, b: u8, inside: ∥i < s.len()∥): wr(n, [IWord(64, i)], [SElem(Var(0))], λ _ => Dyn(u8_s(), b), Dyn(bytes_s(), s)) = Dyn(bytes_s(), s.put(i, b, inside := inside)) { refl }
+
+// A window of a list: `xs[lo..lo + k]`.
+theorem window_pin(n: u64, xs: List<Nat>, lo, k: Nat): rd(n, [INat(lo), INat(k)], [SWindow(Var(0), Var(1))], Dyn(nats_s(), xs)) = Dyn(nats_s(), xs.drop(lo).take(k)) { refl }
+
+// ---------------------------------------------------------------------------
+// The environment's laws, by hand
+
+theorem Point::fields(n: u64): RecordLaws(tys(n), Point, [Point::fx(n), Point::fy(n)]) {
+    RecordLaws(
+        λ i => match i {
+            Zero => λ h e => j(Option::some_inj(Point::fx(n), h, e), λ k _ => FieldLaws(tys(n), Point, k), FieldLaws(λ v x => refl, λ v x y => refl)),
+            Succ(i1) => match i1 {
+                Zero => λ h e => j(Option::some_inj(Point::fy(n), h, e), λ k _ => FieldLaws(tys(n), Point, k), FieldLaws(λ v x => refl, λ v x y => refl)),
+                Succ(_) => λ h no => absurd(no),
+            },
+        },
+        λ i l => match i {
+            Zero => match l {
+                Zero => λ a b _ _ ne => false_elim(ne(refl)),
+                Succ(l1) => match l1 {
+                    Zero => λ a b ea eb _ => j(Option::some_inj(Point::fx(n), a, ea), λ a2 _ => FieldsApart(tys(n), Point, a2, b),
+                        j(Option::some_inj(Point::fy(n), b, eb), λ b2 _ => FieldsApart(tys(n), Point, Point::fx(n), b2), FieldsApart(λ v y => refl, λ v x => refl, λ v x y => refl))),
+                    Succ(_) => λ a b _ no _ => absurd(no),
+                },
+            },
+            Succ(i1) => match i1 {
+                Zero => match l {
+                    Zero => λ a b ea eb _ => j(Option::some_inj(Point::fy(n), a, ea), λ a2 _ => FieldsApart(tys(n), Point, a2, b),
+                        j(Option::some_inj(Point::fx(n), b, eb), λ b2 _ => FieldsApart(tys(n), Point, Point::fy(n), b2), FieldsApart(λ v y => refl, λ v x => refl, λ v x y => refl))),
+                    Succ(l1) => match l1 { Zero => λ a b _ _ ne => false_elim(ne(refl)), Succ(_) => λ a b _ no _ => absurd(no) },
+                },
+                Succ(_) => λ a b no _ _ => absurd(no),
+            },
+        },
+    )
+}
+
+theorem strs_laws(n: u64): StrsLaws(tys(n), strs(n)) {
+    λ k => match k {
+        Zero => Point::fields(n),
+        Succ(k1) => match k1 {
+            Zero => And(Seq::list_laws(tys(n), pt_s(), Point::origin(), Some(pts_win(n))),
+                And(Seq::list_win_laws(tys(n), pt_s(), Point::origin(), pts_s(), λ (l: List<Point>) => l, λ (l: List<Point>) => l, λ l => refl, λ y => refl, Some(pts_win(n))), λ y => refl)),
+            Succ(k2) => match k2 {
+                Zero => And(Seq::vec_laws(tys(n), u64_s(), 16, BitVec::ofNat(0)), And(trivial, trivial)),
+                Succ(k3) => match k3 {
+                    Zero => And(Seq::bytes_laws(tys(n), n), And(trivial, trivial)),
+                    Succ(k4) => match k4 {
+                        Zero => And(Seq::list_laws(tys(n), nat_s(), 0, Some(nats_win(n))),
+                            And(Seq::list_win_laws(tys(n), nat_s(), 0, nats_s(), λ (l: List<Nat>) => l, λ (l: List<Nat>) => l, λ l => refl, λ y => refl, Some(nats_win(n))), λ y => refl)),
+                        Succ(_) => trivial,
+                    },
+                },
+            },
+        },
+    }
+}
+
+fn apart_at(n: u64, ws: List<Ix>, xs, ys: List<Step>) → Type { Steps::Apart(Dyn::model(tys(n), strs(n)), ws, xs, ys) }
+
+// ---------------------------------------------------------------------------
+// The decider's customers at `Dyn`
+
+// split_at_mut: `xs[0..k]` and `xs[k..k + m]`, owing `Span(0, k)` apart
+// from `Span(k, m)`, which holds.
+fn split_left() → List<Step> { [SWindow(Lit(0), Var(0))] }
+
+fn split_right() → List<Step> { [SWindow(Var(0), Var(1))] }
+
+theorem split_verdict(): Steps::apart(split_left(), split_right()) = Some([Spans(Lit(0), Var(0), Var(0), Var(1))]) { refl }
+
+theorem split_apart(n: u64, k, m: Nat): apart_at(n, [INat(k), INat(m)], split_left(), split_right()) {
+    let owed: Span(0, k).apart(Span(k, m)).IsTrue() = omega;
+    Dyn::apart(tys(n), strs(n), strs_laws(n), [INat(k), INat(m)], split_left(), split_right(), [Spans(Lit(0), Var(0), Var(0), Var(1))], split_verdict(), And(owed, trivial))
+}
+
+// Used: writing the right half leaves the left half's read.
+theorem split_left_kept(n: u64, k, m: Nat, g: Dyn(tys(n)) → Dyn(tys(n)), xs: List<Nat>):
+    rd(n, [INat(k), INat(m)], split_left(), wr(n, [INat(k), INat(m)], split_right(), g, Dyn(nats_s(), xs))) = Dyn(nats_s(), xs.drop(0).take(k))
+{
+    split_apart(n, k, m).left_after_right(g, Dyn(nats_s(), xs))
+}
+
+// An element held while another is stored: `xs[i]` and `xs[l]`, owing
+// `i ≠ l`, which the source's hypothesis discharges.
+theorem hold_while_store(n: u64, i, l: Nat, ne: ¬(i = l)): apart_at(n, [INat(i), INat(l)], [SElem(Var(0))], [SElem(Var(1))]) {
+    let owed: Span(i, 1).apart(Span(l, 1)).IsTrue() = omega(ne);
+    Dyn::apart(tys(n), strs(n), strs_laws(n), [INat(i), INat(l)], [SElem(Var(0))], [SElem(Var(1))], [Spans(Var(0), Lit(1), Var(1), Lit(1))], refl, And(owed, trivial))
+}
+
+// A window held while an element past it is stored, owing nothing.
+theorem hold_window_store(n: u64): apart_at(n, Nil, [SWindow(Lit(0), Lit(8))], [SElem(Lit(9))]) {
+    Dyn::apart(tys(n), strs(n), strs_laws(n), Nil, [SWindow(Lit(0), Lit(8))], [SElem(Lit(9))], Nil, refl, trivial)
+}
+
+// Two fields of one element of a list of records, owing nothing.
+theorem element_fields(n: u64, i: Nat): apart_at(n, [INat(i)], [SElem(Var(0)), SField(0)], [SElem(Var(0)), SField(1)]) {
+    Dyn::apart(tys(n), strs(n), strs_laws(n), [INat(i)], [SElem(Var(0)), SField(0)], [SElem(Var(0)), SField(1)], Nil, refl, trivial)
+}
+
+// One field of two elements, owing `i ≠ l`.
+theorem elements_field(n: u64, i, l: Nat, ne: ¬(i = l)): apart_at(n, [INat(i), INat(l)], [SElem(Var(0)), SField(0)], [SElem(Var(1)), SField(0)]) {
+    let owed: Span(i, 1).apart(Span(l, 1)).IsTrue() = omega(ne);
+    Dyn::apart(tys(n), strs(n), strs_laws(n), [INat(i), INat(l)], [SElem(Var(0)), SField(0)], [SElem(Var(1)), SField(0)], [Spans(Var(0), Lit(1), Var(1), Lit(1))], refl, And(owed, trivial))
+}
+
+// Two bytes of a span at `u64` indices, owing their numbers apart.
+theorem bytes_apart(n: u64, i, l: u64, ne: ¬(i.toNat() = l.toNat())): apart_at(n, [IWord(64, i), IWord(64, l)], [SElem(Var(0))], [SElem(Var(1))]) {
+    let owed: Span(i.toNat(), 1).apart(Span(l.toNat(), 1)).IsTrue() = omega(ne);
+    Dyn::apart(tys(n), strs(n), strs_laws(n), [IWord(64, i), IWord(64, l)], [SElem(Var(0))], [SElem(Var(1))], [Spans(Var(0), Lit(1), Var(1), Lit(1))], refl, And(owed, trivial))
+}
+
+// ---------------------------------------------------------------------------
+// The controls: what the decider refuses is not apart at a value
+
+theorem overlap_refused(): Steps::apart([SWindow(Lit(0), Lit(2))], [SWindow(Lit(1), Lit(2))]) = None { refl }
+
+theorem overlap_not_apart(n: u64): ¬apart_at(n, Nil, [SWindow(Lit(0), Lit(2))], [SWindow(Lit(1), Lit(2))]) {
+    λ ap => {
+        let same = ap.left_after_right(λ _ => Dyn(nats_s(), [1, 1]), Dyn(nats_s(), [0, 0, 0]));
+        let second: (1 = 0) = cong_fn(λ (d: Dyn(tys(n))) => Dyn::index(tys(n), rd(n, Nil, [SElem(Lit(1))], d)), same);
+        absurd(second)
+    }
+}
+
+// `[0, k)` beside `j`, owing `j ∉ [0, k)`: at `k = 4, j = 2` it fails, and
+// the two places are not apart there.
+theorem window_store_owes(): Steps::apart([SWindow(Lit(0), Var(0))], [SElem(Var(1))]) = Some([Spans(Lit(0), Var(0), Var(1), Lit(1))]) { refl }
+
+theorem window_store_fails(): Spans(Lit(0), Var(0), Var(1), Lit(1)).verdict([4, 2]) = False { refl }
+
+theorem window_store_not_apart(n: u64): ¬apart_at(n, [INat(4), INat(2)], [SWindow(Lit(0), Var(0))], [SElem(Var(1))]) {
+    λ ap => {
+        let same = ap.left_after_right(λ _ => Dyn(nat_s(), 1), Dyn(nats_s(), [0, 0, 0, 0]));
+        let third: (1 = 0) = cong_fn(λ (d: Dyn(tys(n))) => Dyn::index(tys(n), rd(n, Nil, [SElem(Lit(2))], d)), same);
+        absurd(third)
+    }
+}
+
+theorem same_element_refused(): Steps::apart([SElem(Lit(3))], [SElem(Lit(3))]) = None { refl }
+
+theorem same_element_not_apart(n: u64): ¬apart_at(n, Nil, [SElem(Lit(3))], [SElem(Lit(3))]) {
+    λ ap => {
+        let same = ap.left_after_right(λ _ => Dyn(nat_s(), 1), Dyn(nats_s(), [0, 0, 0, 0]));
+        let one: (1 = 0) = cong_fn(λ (d: Dyn(tys(n))) => Dyn::index(tys(n), d), same);
+        absurd(one)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The sequence twin of `absent_field` (shape_tests): an element past the end
+// against a write of one inside. They are apart at every value, and at a
+// value too short for the first, its read answers the accessor's pad before
+// and after the write, independent of what was written.
+
+theorem past_end_apart(n: u64): apart_at(n, Nil, [SElem(Lit(9))], [SElem(Lit(0))]) {
+    Dyn::apart(tys(n), strs(n), strs_laws(n), Nil, [SElem(Lit(9))], [SElem(Lit(0))], Nil, refl, trivial)
+}
+
+theorem past_end_reads_pad(n: u64, v: Nat): rd(n, Nil, [SElem(Lit(9))], wr(n, Nil, [SElem(Lit(0))], λ _ => Dyn(nat_s(), v), Dyn(nats_s(), [1, 2, 3]))) = Dyn(nat_s(), 0) { refl }
+
+theorem past_end_kept(n: u64, g: Dyn(tys(n)) → Dyn(tys(n)), xs: List<Nat>):
+    rd(n, Nil, [SElem(Lit(9))], wr(n, Nil, [SElem(Lit(0))], g, Dyn(nats_s(), xs))) = rd(n, Nil, [SElem(Lit(9))], Dyn(nats_s(), xs))
+{
+    past_end_apart(n).left_after_right(g, Dyn(nats_s(), xs))
+}

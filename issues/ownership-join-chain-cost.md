@@ -23,3 +23,4 @@ The chain's pin and discharge are linear at doubling lengths, or the cost is sho
 ## Log
 
 - 2026-11-25: Linked from docs/language/ownership-design.md §21.6: the joins of §21.2 read what follows once; this chain is what remains, and is the source's own cost.
+- 2026-11-25: The other join shape that is not linear is the source's, not this chain's: a join with an inner `return` is exponential in the source's own term, because the surface copies what follows into each arm (×2.2 per join at K = 1 to 6). The measurements are on [[bind-in-non-tail-match-arms]], the surface's unbuilt join point.
