@@ -1660,9 +1660,10 @@ open:
   lemmas, and each lowering lemma will be one `Injected` lemma per
   primitive.
 - *Canonical by construction*: a reference's bytes are zero
-  (`Memory::Canonical`, kept by take, put, store and copy). That entries
-  are apart from each other is kept by construction too but not yet
-  stated; the passes' congruence needs it (`issues/bytes-level-passes.md`).
+  (`Memory::Canonical`, kept by take, put, store and copy, and so by every
+  run: `run_canonical`, `bytes_level_canonical`). That entries are apart
+  from each other is kept by construction too but not yet stated; the
+  passes' congruence needs it (`issues/bytes-level-passes.md`).
 - *`Refines` compares heaps as they read* (`Memory::Same`: the same bytes,
   the same entries, the same blocks writable). There is no function
   extensionality, and a heap's blocks are a function.
