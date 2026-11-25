@@ -80,28 +80,6 @@ theorem word_of_four(bytes: List<BitVec(8)>, len: bytes.len() = 4):
 }
 
 // ---------------------------------------------------------------------------
-// A word loaded through any plain base (MOV r64, [base]): the doubleword's
-// lemma (x86_64_stack_runs' `Site::moves_dword_load`) at eight bytes.
-
-theorem Site::moves_word_load<M>(self site: Site<M>, writes: ByteWrites<M>, fits: FillsFit(site.program, no_fills()), k: Nat,
-    before: Prog, name: Nat, load: WordLoad, at: asm_back(site.program, k) = At(before, name, Load(load)),
-    pre, post: MachineState<M> → Type,
-    step: (s: MachineState<M>) → pre(s) → Exists<BitVec(64)>(λ word =>
-        (read_gpr(load.base, s.gprs).toNat() + 8 <= Nat::pow(2, 47)) ∧
-        ((read_word(site.data, s.memory, read_gpr(load.base, s.gprs)) = Some(word)) ∧ post(word_load_after(load, word, s))))):
-    site.Moves(writes, prog_len(before), prog_len(before) + word_load_bytes(load).len(), pre, post) {
-    λ s here resident holds => {
-        let found = step(s, holds);
-        let after = word_load_after(load, found.witness, s);
-        let one: FetchedStep(site.fetch, site.data, s, after) = Exists(EmitWordLoad(load),
-            ⟨site.item_fetched(fits, s, resident, k, before, name, Load(load), at, here),
-             Exists(found.witness, WordLoadStep(canonical := found.proof.left, present := found.proof.right.left, execution := refl))⟩);
-        Exists(after, ⟨machine_steps_of_fetched(site.fetch, site.data, writes, s, after, fetched_steps_one(site.fetch, site.data, s, after, one)),
-            ⟨site.rip_after(s, prog_len(before), word_load_bytes(load).len(), here), ⟨resident, found.proof.right.right⟩⟩⟩)
-    }
-}
-
-// ---------------------------------------------------------------------------
 // The memory clause
 
 // The heap is injected into memory over the lending's spans.
@@ -518,29 +496,6 @@ theorem offset_adds(spans: Spans, values: Valuation(), output, place, amount: Na
 
 // ---------------------------------------------------------------------------
 // A block of word nodes
-
-// Code that runs as one block, keeping the file's description and the
-// registers a body keeps, touches no memory: `EmitsBy` at any clause, from
-// a state to itself. (function_ir_lower_calls' `kept_block_emits` is the
-// same over the old trail.)
-theorem pure_emits<M, S>(saves: Nat, site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data),
-    spans: Spans, Mem: S → M → Type, values: Valuation(), d: Nat, s0: MachineState<M>, prog: Prog, file: File, facts: Type, lowered: Lowered,
-    keeps: Keeps<M>(values, file, facts, lowered), guards: Guards<M>(values, file, facts, lowered),
-    leaves: leaves_all(lowered.code, body_kept(saves)).IsTrue(), placement: List<Place>, names: Nat, now: S):
-    EmitsBy<M, S>(saves, site, stack, spans, Mem, values, d, s0, prog, file, facts, now, now,
-        Emitted(At(prog, 0, Asm::of_code(lowered.code)), lowered.file, placement, names)) {
-    let pre = λ (g: Gprs) (m: M) => (file.Represents(values, g) ∧ facts) ∧
-        (Kept(body_kept(saves), s0.gprs, g) ∧ stack.TrailBy(spans, Mem, d, s0.memory, now, m));
-    let post = λ (g: Gprs) (m: M) => lowered.file.Represents(values, g) ∧
-        (Kept(body_kept(saves), s0.gprs, g) ∧ stack.TrailBy(spans, Mem, d, s0.memory, now, m));
-    ⟨prog.within_then(0, Asm::of_code(lowered.code)),
-     λ within => site.moves_of_pure(stack.writes, prog_len(prog), prog_len(At(prog, 0, Asm::of_code(lowered.code))), pre, post,
-        λ memory => site.runs_code(laid, within.witness, prog, 0, lowered.code, within.proof,
-            λ (g: Gprs) => pre(g, memory), λ (g: Gprs) => post(g, memory),
-            λ x held => ⟨guards(x, held.left.left, held.left.right), ⟨keeps(x, held.left.left, held.left.right),
-                ⟨kept_trans(body_kept(saves), s0.gprs, x.gprs, execute_block_normal(lowered.code, x).gprs, held.right.left,
-                    execute_block_kept<M>(lowered.code, x, body_kept(saves), leaves)), held.right.right⟩⟩⟩))⟩
-}
 
 // Word nodes as FunctionIR lowers them (`lower_nodes`), as one block the
 // body's kept registers survive, or nothing.
