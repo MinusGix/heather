@@ -229,12 +229,12 @@ theorem Nat::same_of_eq(self a: Nat, b: Nat, equal: a = b): a.same(b) = True {
     j(equal, λ x _ => a.same(x) = True, a.same_self())
 }
 
-theorem set_block_here(bytes: Nat → List<BitVec(8)>, b: Nat, now: List<BitVec(8)>): set_block(bytes, b, now)(b) = now {
+theorem set_block_here(bytes: Nat → List<BitVec(8)>, b: Nat, now: List<BitVec(8)>): set_block(bytes, b, now, b) = now {
     j(sym(b.same_self()), λ v _ => (match v { True => now, False => bytes(b) }) = now, refl)
 }
 
 theorem set_block_other(bytes: Nat → List<BitVec(8)>, b: Nat, now: List<BitVec(8)>, c: Nat, differs: c ≠ b):
-    set_block(bytes, b, now)(c) = bytes(c) {
+    set_block(bytes, b, now, c) = bytes(c) {
     j(sym(c.same_false(b, differs)), λ v _ => (match v { True => now, False => bytes(c) }) = bytes(c), refl)
 }
 
@@ -347,7 +347,7 @@ theorem every_map(P, Q: Entry → Type, f: (e: Entry) → P(e) → Q(e), shadow:
 theorem every_both(P, Q: Entry → Type, shadow: List<Entry>): Every(shadow, P) → Every(shadow, Q) → Every(shadow, λ (e: Entry) => P(e) ∧ Q(e)) {
     match shadow {
         Nil => λ _ _ => trivial,
-        Cons(e, rest) => λ p q => ⟨⟨p.left, q.left⟩, every_both(P, Q, rest, p.right, q.right)⟩,
+        Cons(_, rest) => λ p q => ⟨⟨p.left, q.left⟩, every_both(P, Q, rest, p.right, q.right)⟩,
     }
 }
 
@@ -551,12 +551,12 @@ theorem Renames::readable({r: Renaming}, {s, renamed: State}, self rel: Renames(
 
 // Blocks set alike are renamed alike.
 theorem rename_set_block(r: Renaming, bytes, renamed: Nat → List<BitVec(8)>, same: (c: Nat) → renamed(c) = bytes(r.back(c)),
-    b: Nat, now: List<BitVec(8)>, c: Nat): set_block(renamed, r.there(b), now)(c) = set_block(bytes, b, now)(r.back(c)) {
+    b: Nat, now: List<BitVec(8)>, c: Nat): set_block(renamed, r.there(b), now, c) = set_block(bytes, b, now, r.back(c)) {
     match c.eq_dec(r.there(b)) {
         Inl(here) => {
             let back: (r.back(c) = b) = trans(cong_fn<Nat, Nat>(λ x => r.back(x), here), r.back_there(b));
-            trans(j(sym(here), λ x _ => set_block(renamed, r.there(b), now)(x) = now, set_block_here(renamed, r.there(b), now)),
-                sym(j(sym(back), λ x _ => set_block(bytes, b, now)(x) = now, set_block_here(bytes, b, now))))
+            trans(j(sym(here), λ x _ => set_block(renamed, r.there(b), now, x) = now, set_block_here(renamed, r.there(b), now)),
+                sym(j(sym(back), λ x _ => set_block(bytes, b, now, x) = now, set_block_here(bytes, b, now))))
         },
         Inr(differs) => {
             let away: (r.back(c) ≠ b) = λ back => differs(trans(sym(r.there_back(c)), cong_fn<Nat, Nat>(λ x => r.there(x), back)));
@@ -601,7 +601,7 @@ theorem store_word_alike(r: Renaming, s, renamed: State, rel: Renames(r, s, rena
                         values := rel.values,
                         bytes := λ c => {
                             let now = s.heap.bytes(loc.block).put_window(loc.offset, word_bytes(word));
-                            trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ l => set_block(renamed.heap.bytes, r.there(loc.block), l.put_window(loc.offset, word_bytes(word)))(c),
+                            trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ l => set_block(renamed.heap.bytes, r.there(loc.block), l.put_window(loc.offset, word_bytes(word)), c),
                                     rel.block(loc.block)),
                                 rename_set_block(r, s.heap.bytes, renamed.heap.bytes, rel.bytes, loc.block, now, c))
                         },
@@ -742,7 +742,7 @@ theorem words_alike(r: Renaming, x: Nat, word: BitVec(64)): (left, right: Option
         None => λ _ none => absurd(none),
         Some(a) => match right {
             None => λ never _ => false_elim(never),
-            Some(b) => λ rel here => {
+            Some(_) => λ rel here => {
                 let value: (a.values(x) = Word(word)) = Option::some_inj(a.values(x), Word(word), here);
                 cong_fn<Value, Option<Value>>(λ v => Some(v), trans(rel.values(x), cong_fn<Value, Value>(λ v => v.rename(r), value)))
             },
