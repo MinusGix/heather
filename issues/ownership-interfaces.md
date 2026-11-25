@@ -77,3 +77,4 @@ Items 1 to 6 have landed with `scripts/test --pr` green, or the package stopped 
   - `guarded_whole` now pins its whole answer. `early` (an inner return) still pins only through a word continuation.
   - **D's sequence twin**: `past_end_apart`, `past_end_reads_pad`, `past_end_kept` (`sequences_tests`).
   - **Retired (item 6)**: `coded.hthr` and its probes, and `PathLawsOn`/`KeepsFit` from `lib/std/machine/path.hthr`.
+  - `scripts/test --pr` at 8880e3ca: `== suite: 3518 passed, 0 failed, 2 ignored ==`.
