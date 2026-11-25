@@ -47,18 +47,18 @@ theorem written_owed(ws: List<Nat>): Owed::All([Due(Spans(Lit(0), Var(0), Var(0)
 
 // The caller's proof in any world, citing only fill's promise.
 theorem written_safe(w: World, fill_safe: FnSafe(fill().sig(), no_pre()(0), no_post()(0), w.mean(0), w.run(0))):
-    FnSafe(written().sig(), λ _ => True, λ _ _ => True, λ arg ws => mean_fn(w, written(), arg, ws), λ file r ws => run_fn(w, written(), file, r, ws))
+    FnSafe(written().sig(), λ _ => True, λ _ _ => True, λ arg lent ws => mean_lent(w, written(), arg, lent, ws), λ file r refs ws => run_lent(w, written(), file, r, refs, ws))
 {
-    check_sound(sigs_of(p1()), no_pre(), no_post(), written(), [Due(Spans(Lit(0), Var(0), Var(0), Var(1))), Pre(0, [Lit(7)])], written_checked(), λ _ => True, λ _ _ => True, w,
+    check_owned(sigs_of(p1()), no_pre(), no_post(), written(), [Due(Spans(Lit(0), Var(0), Var(0), Var(1))), Pre(0, [Lit(7)])], written_checked(), refl, λ _ => True, λ _ _ => True, w,
         λ arg ws _ _ _ => written_owed(mean_body(w, written().body, Sem(arg, Nil, Nil, ws)).words), λ arg ws _ _ _ => trivial,
         λ g => match g { Zero => λ _ => fill_safe, Succ(_) => λ no => absurd(no) })
 }
 
 theorem p1_ok(): ProgOk(p1(), no_pre(), no_post()) {
     λ g => match g {
-        Zero => λ _ => Checks(Nil, fill_checked(), λ w arg ws _ _ _ => trivial, λ w arg ws _ _ _ => trivial),
+        Zero => λ _ => owned_checks(Nil, fill_checked(), refl, λ w arg ws _ _ _ => trivial, λ w arg ws _ _ _ => trivial),
         Succ(g1) => match g1 {
-            Zero => λ _ => Checks([Due(Spans(Lit(0), Var(0), Var(0), Var(1))), Pre(0, [Lit(7)])], written_checked(),
+            Zero => λ _ => owned_checks([Due(Spans(Lit(0), Var(0), Var(0), Var(1))), Pre(0, [Lit(7)])], written_checked(), refl,
                 λ w arg ws _ _ _ => written_owed(mean_body(w, written().body, Sem(arg, Nil, Nil, ws)).words), λ w arg ws _ _ _ => trivial),
             Succ(_) => λ no => false_elim(omega(no)),
         },
@@ -119,9 +119,9 @@ theorem returned_checked(): check_fn(sigs_of(p2()), returned()) = Some([Pre(0, N
 
 theorem p2_ok(): ProgOk(p2(), no_pre(), no_post()) {
     λ g => match g {
-        Zero => λ _ => Checks(Nil, first_checked(), λ w arg ws _ _ _ => trivial, λ w arg ws _ _ _ => trivial),
+        Zero => λ _ => owned_checks(Nil, first_checked(), refl, λ w arg ws _ _ _ => trivial, λ w arg ws _ _ _ => trivial),
         Succ(g1) => match g1 {
-            Zero => λ _ => Checks([Pre(0, Nil)], returned_checked(), λ w arg ws _ _ _ => ⟨trivial, trivial⟩, λ w arg ws _ _ _ => trivial),
+            Zero => λ _ => owned_checks([Pre(0, Nil)], returned_checked(), refl, λ w arg ws _ _ _ => ⟨trivial, trivial⟩, λ w arg ws _ _ _ => trivial),
             Succ(_) => λ no => false_elim(omega(no)),
         },
     }
@@ -189,7 +189,7 @@ theorem p3_not_ok(): ¬ProgOk(p3(), no_pre(), no_post()) {
 // reference it was lent to read.
 theorem liar_unsafe(): ¬FnSafe(liar().sig(), λ _ => True, λ _ _ => True, world(p3(), 1).mean(0), world(p3(), 1).run(0)) {
     λ safe => {
-        let s = safe([[5, 6]], Ref(0, 0, 2), Nil, InRef(omega(), omega()), refl, trivial);
+        let s = safe([[5, 6]], Ref(0, 0, 2), Nil, Nil, InRef(omega(), omega()), refl, trivial, lendable_nil(Reads, Ref(0, 0, 2), refl));
         let at: (Some(9) = Some(5)) = s.on.holds(0, omega());
         let nine: (9 = 5) = Option::some_inj(9, 5, at);
         absurd(nine)
@@ -252,7 +252,7 @@ theorem loan_owed(ws, big: List<Nat>, len: ws.len() = 2, pre: Prefix(ws, big), h
 
 theorem p4_ok(): ProgOk(p4(), loan_pre(), no_post()) {
     λ g => match g {
-        Zero => λ _ => Checks([Due(Spans(Lit(0), Var(0), Var(0), Var(1))), Due(Spans(Var(0), Var(1), Lit(0), Lit(1)))], loan_checked(),
+        Zero => λ _ => owned_checks([Due(Spans(Lit(0), Var(0), Var(0), Var(1))), Due(Spans(Var(0), Var(1), Lit(0), Lit(1)))], loan_checked(), refl,
             λ w arg ws len h _ => loan_owed(ws, mean_body(w, loan().body, Sem(arg, Nil, Nil, ws)).words, len, mean_body_grows(w, loan().body, Sem(arg, Nil, Nil, ws)), h),
             λ w arg ws _ _ _ => trivial),
         Succ(_) => λ no => false_elim(omega(no)),
@@ -359,7 +359,7 @@ theorem branch_owed(ws: List<Nat>): Owed::All([Under(Le(Var(0), Var(1)), True, D
 
 theorem p5_ok(): ProgOk(p5(), no_pre(), no_post()) {
     λ g => match g {
-        Zero => λ _ => Checks([Under(Le(Var(0), Var(1)), True, Due(Spans(Lit(0), Var(0), Var(1), Lit(1))))], branch_checked(),
+        Zero => λ _ => owned_checks([Under(Le(Var(0), Var(1)), True, Due(Spans(Lit(0), Var(0), Var(1), Lit(1))))], branch_checked(), refl,
             λ w arg ws _ _ _ => branch_owed(mean_body(w, branch().body, Sem(arg, Nil, Nil, ws)).words), λ w arg ws _ _ _ => trivial),
         Succ(_) => λ no => false_elim(omega(no)),
     }
@@ -459,7 +459,7 @@ theorem coarse_checked(): check_fn(sigs_of([coarse()]), coarse()) = Some(Nil) { 
 
 theorem coarse_ok(): ProgOk([coarse()], no_pre(), no_post()) {
     λ g => match g {
-        Zero => λ _ => Checks(Nil, coarse_checked(), λ w arg ws _ _ _ => trivial, λ w arg ws _ _ _ => trivial),
+        Zero => λ _ => owned_checks(Nil, coarse_checked(), refl, λ w arg ws _ _ _ => trivial, λ w arg ws _ _ _ => trivial),
         Succ(_) => λ no => false_elim(omega(no)),
     }
 }
@@ -532,9 +532,9 @@ theorem beside_owed(ws, big: List<Nat>, len: ws.len() = 2, pre: Prefix(ws, big),
 
 theorem p7_ok(): ProgOk(p7(), beside_pre(), no_post()) {
     λ g => match g {
-        Zero => λ _ => Checks(Nil, at_checked(), λ w arg ws _ _ _ => trivial, λ w arg ws _ _ _ => trivial),
+        Zero => λ _ => owned_checks(Nil, at_checked(), refl, λ w arg ws _ _ _ => trivial, λ w arg ws _ _ _ => trivial),
         Succ(g1) => match g1 {
-            Zero => λ _ => Checks([Pre(0, [Var(0)]), Due(Spans(Var(0), Lit(1), Var(1), Lit(1)))], beside_checked(),
+            Zero => λ _ => owned_checks([Pre(0, [Var(0)]), Due(Spans(Var(0), Lit(1), Var(1), Lit(1)))], beside_checked(), refl,
                 λ w arg ws len h _ => beside_owed(ws, mean_body(w, beside().body, Sem(arg, Nil, Nil, ws)).words, len, mean_body_grows(w, beside().body, Sem(arg, Nil, Nil, ws)), h),
                 λ w arg ws _ _ _ => trivial),
             Succ(_) => λ no => false_elim(omega(no)),
@@ -558,12 +558,12 @@ theorem beside_means(): mean_fn(world(p7(), 2), beside(), [5, 6, 8], [0, 1]) = M
 // 1, outside its signature's window, so it is not `FnSafe`; and with it,
 // the accepted caller, its residual holding (`0 < 1`), reads 9 in the run
 // and 5 in the meaning.
-fn stray() → World { World(λ _ arg ws => MOut(arg, 0, window(arg, word(ws, 0), 1)), λ _ file r ws => ROut(file, 0, 1, 1)) }
+fn stray() → World { World(λ _ arg _ ws => MOut(arg, 0, window(arg, word(ws, 0), 1)), λ _ file r _ ws => ROut(file, 0, 1, 1)) }
 
-theorem stray_reads(): word(stray().mean(0, [5, 5, 7], [0]).view, 0) = rget([[5, 5, 7]], Ref(0, 0 + 1, 1), 0) { refl }
+theorem stray_reads(): word(stray().mean(0, [5, 5, 7], Nil, [0]).view, 0) = rget([[5, 5, 7]], Ref(0, 0 + 1, 1), 0) { refl }
 
 theorem stray_not_safe(): ¬FnSafe(at().sig(), λ _ => True, λ _ _ => True, stray().mean(0), stray().run(0)) {
-    λ safe => safe([[5, 5, 7]], Ref(0, 0, 3), [0], InRef(omega(), omega()), refl, trivial).view_in(1, trivial)
+    λ safe => safe([[5, 5, 7]], Ref(0, 0, 3), Nil, [0], InRef(omega(), omega()), refl, trivial, lendable_nil(Reads, Ref(0, 0, 3), refl)).view_in(1, trivial)
 }
 
 theorem stray_breaks(): ¬(run_fn(stray(), beside(), [[5, 5, 7]], Ref(0, 0, 3), [0, 1]).word = mean_fn(stray(), beside(), [5, 5, 7], [0, 1]).word) {
@@ -652,30 +652,31 @@ theorem after_owed(w: World, arg, ws: List<Nat>, len: ws.len() = 2, posted: Post
     let s3 = CallMut(0, 1, [Var(0)], 2).eval1(w, View(1, Writes, Var(0), Var(1)).eval1(w, View(0, Reads, Lit(0), Var(0)).eval1(w, s0)));
     let rest = seq([Die(1), Set(Var(2), Lit(5)), Read(3, 0, Lit(0))]);
     let fin = mean_body(w, after_call().body, s0).words;
-    let ans = w.mean(0, window(arg, word(ws, 0), word(ws, 1)), [word(ws, 0)]).word;
+    let ans = w.mean(0, window(arg, word(ws, 0), word(ws, 1)), Nil, [word(ws, 0)]).word;
     let pre_ws: Prefix(ws, fin) = mean_body_grows(w, after_call().body, s0);
     let pre_3: Prefix(ws ++ [ans], fin) = mean_body_grows(w, rest, s3);
     let k_is: (word(fin, 0) = word(ws, 0)) = Var(0).val_stable(ws, fin, pre_ws, j(sym(len), λ n _ => (1).leb(n) = True, refl));
     let z_is: (word(fin, 2) = ans) = prelude::trans(cong_fn(λ (o: Option<Nat>) => o.unwrap_or(0), pre_3.right(2, omega(len_snoc(ws, ans), len))),
         word_snoc_at(ws, ans, 2, len));
-    let said: (ans = word(ws, 0)) = posted(0, refl, window(arg, word(ws, 0), word(ws, 1)), [word(ws, 0)], refl, trivial);
+    let said: (ans = word(ws, 0)) = posted(0, refl, window(arg, word(ws, 0), word(ws, 1)), Nil, lendable_nil(Writes, Ref(0, 0, window(arg, word(ws, 0), word(ws, 1)).len()), refl),
+        [word(ws, 0)], refl, trivial);
     let a1: (Span(0, word(fin, 0)).apart(Span(word(fin, 0), word(fin, 1))).IsTrue()) = omega();
     let a3: (Span(0, word(fin, 0)).apart(Span(word(fin, 2), 1)).IsTrue()) = omega(k_is, z_is, said);
     ⟨a1, ⟨trivial, ⟨a3, trivial⟩⟩⟩
 }
 
 // `ident`'s own promise, its postcondition included, in any world.
-theorem ident_safe(w: World): FnSafe(ident().sig(), λ _ => True, posts8()(0), λ arg ws => mean_fn(w, ident(), arg, ws), λ file r ws => run_fn(w, ident(), file, r, ws)) {
-    check_sound(sigs_of(p8()), no_pre(), posts8(), ident(), Nil, ident_checked(), λ _ => True, posts8()(0), w, λ arg ws _ _ _ => trivial, λ arg ws _ _ _ => refl,
+theorem ident_safe(w: World): FnSafe(ident().sig(), λ _ => True, posts8()(0), λ arg lent ws => mean_lent(w, ident(), arg, lent, ws), λ file r refs ws => run_lent(w, ident(), file, r, refs, ws)) {
+    check_owned(sigs_of(p8()), no_pre(), posts8(), ident(), Nil, ident_checked(), refl, λ _ => True, posts8()(0), w, λ arg ws _ _ _ => trivial, λ arg ws _ _ _ => refl,
         λ g no => absurd(no))
 }
 
 // The caller's promise in any world, citing only `ident`'s promise.
 theorem after_safe(w: World, callee: FnSafe(ident().sig(), no_pre()(0), posts8()(0), w.mean(0), w.run(0))):
-    FnSafe(after_call().sig(), λ _ => True, posts8()(1), λ arg ws => mean_fn(w, after_call(), arg, ws), λ file r ws => run_fn(w, after_call(), file, r, ws))
+    FnSafe(after_call().sig(), λ _ => True, posts8()(1), λ arg lent ws => mean_lent(w, after_call(), arg, lent, ws), λ file r refs ws => run_lent(w, after_call(), file, r, refs, ws))
 {
-    check_sound(sigs_of(p8()), no_pre(), posts8(), after_call(), [Due(Spans(Lit(0), Var(0), Var(0), Var(1))), Pre(0, [Var(0)]), Due(Spans(Lit(0), Var(0), Var(2), Lit(1)))],
-        after_checked(), λ _ => True, posts8()(1), w, λ arg ws len _ posted => after_owed(w, arg, ws, len, posted), λ arg ws _ _ _ => trivial,
+    check_owned(sigs_of(p8()), no_pre(), posts8(), after_call(), [Due(Spans(Lit(0), Var(0), Var(0), Var(1))), Pre(0, [Var(0)]), Due(Spans(Lit(0), Var(0), Var(2), Lit(1)))],
+        after_checked(), refl, λ _ => True, posts8()(1), w, λ arg ws len _ posted => after_owed(w, arg, ws, len, posted), λ arg ws _ _ _ => trivial,
         λ g => match g { Zero => λ _ => callee, Succ(_) => λ no => absurd(no) })
 }
 
@@ -719,3 +720,131 @@ theorem after_without_post_control(): ¬(run_fn(world([zero(), after_call()], 1)
         absurd(no)
     }
 }
+
+// ---------------------------------------------------------------------------
+// 9. Stored references and the erased owner:
+//    `fill2(ws: [&mut{o} [Nat]; 2], v)`: `ws[0][0] := v; ws[1][0] := v; ws[1][0]`
+//    `let t = &x[0..1]; let a = &mut x[k..k+2]; let b = &mut x[j..j+2];
+//     let z = fill2([a, b], 7); let y = x[j]; t[0]`, the caller stating
+//    `1 <= k` and `k + 2 <= j`.
+//
+// The callee is lent two references stored in a collection; its owner is
+// erased: its meaning takes the owner's value in and out, its run is given
+// no reference to it. Its promise is stated at a reference that stands for
+// the owner's place, and its frame is the lent references' spans.
+
+fn fill2() → Func { Func(Lends(2), 1, seq([Put(0, Lit(0), Var(0)), Put(1, Lit(0), Var(0)), Read(1, 1, Lit(0))]), RWord(Var(1))) }
+
+fn pair() → Func {
+    Func(Writes, 2, seq([View(0, Reads, Lit(0), Lit(1)), View(1, Writes, Var(0), Lit(2)), View(2, Writes, Var(1), Lit(2)), CallAll(0, [1, 2], [Lit(7)], 2), Get(3, Var(1)),
+        Read(4, 0, Lit(0))]), RWord(Var(4)))
+}
+
+fn p9() → List<Func> { [fill2(), pair()] }
+
+// The callee owes nothing: it writes through what it was lent.
+theorem fill2_checked(): check_fn(sigs_of(p9()), fill2()) = Some(Nil) { refl }
+
+// The caller owes the loans apart from `t` and from each other, and the
+// callee's precondition.
+theorem pair_checked(): check_fn(sigs_of(p9()), pair()) =
+    Some([Due(Spans(Lit(0), Lit(1), Var(0), Lit(2))), Due(Spans(Var(0), Lit(2), Var(1), Lit(2))), Due(Spans(Lit(0), Lit(1), Var(1), Lit(2))), Pre(0, [Lit(7)])]) { refl }
+
+fn pair_pre() → Nat → List<Nat> → Type { λ g ws => match g { Zero => True, Succ(_) => (1 <= word(ws, 0)) ∧ (word(ws, 0) + 2 <= word(ws, 1)) } }
+
+theorem pair_owed(ws, big: List<Nat>, len: ws.len() = 2, pre: Prefix(ws, big), h: (1 <= word(ws, 0)) ∧ (word(ws, 0) + 2 <= word(ws, 1))):
+    Owed::All([Due(Spans(Lit(0), Lit(1), Var(0), Lit(2))), Due(Spans(Var(0), Lit(2), Var(1), Lit(2))), Due(Spans(Lit(0), Lit(1), Var(1), Lit(2))), Pre(0, [Lit(7)])],
+        pair_pre(), big)
+{
+    let k_is: (word(big, 0) = word(ws, 0)) = Var(0).val_stable(ws, big, pre, j(sym(len), λ n _ => (1).leb(n) = True, refl));
+    let j_is: (word(big, 1) = word(ws, 1)) = Var(1).val_stable(ws, big, pre, j(sym(len), λ n _ => (2).leb(n) = True, refl));
+    let a1: (Span(0, 1).apart(Span(word(big, 0), 2)).IsTrue()) = omega(k_is, h.left);
+    let a2: (Span(word(big, 0), 2).apart(Span(word(big, 1), 2)).IsTrue()) = omega(k_is, j_is, h.right);
+    let a3: (Span(0, 1).apart(Span(word(big, 1), 2)).IsTrue()) = omega(k_is, j_is, h.left, h.right);
+    ⟨a1, ⟨a2, ⟨a3, ⟨trivial, trivial⟩⟩⟩⟩
+}
+
+theorem p9_ok(): ProgOk(p9(), pair_pre(), no_post()) {
+    λ g => match g {
+        Zero => λ _ => Checks(Nil, fill2_checked(), λ w arg lent _ ws _ _ _ => trivial, λ w arg lent _ ws _ _ _ => trivial),
+        Succ(g1) => match g1 {
+            Zero => λ _ => owned_checks([Due(Spans(Lit(0), Lit(1), Var(0), Lit(2))), Due(Spans(Var(0), Lit(2), Var(1), Lit(2))), Due(Spans(Lit(0), Lit(1), Var(1), Lit(2))),
+                    Pre(0, [Lit(7)])], pair_checked(), refl,
+                λ w arg ws len h _ => pair_owed(ws, mean_body(w, pair().body, Sem(arg, Nil, Nil, ws)).words, len, mean_body_grows(w, pair().body, Sem(arg, Nil, Nil, ws)), h),
+                λ w arg ws _ _ _ => trivial),
+            Succ(_) => λ no => false_elim(omega(no)),
+        },
+    }
+}
+
+// Every function of the program, at every depth: the caller's proof cites
+// only `fill2`'s promise, and that promise is stated at a reference standing
+// for the erased owner and the slots it was lent.
+theorem pair_sound(d: Nat): FnSafe(sig_at(sigs_of(p9()), 1), pair_pre()(1), no_post()(1), world(p9(), d).mean(1), world(p9(), d).run(1)) {
+    prog_sound(p9(), pair_pre(), no_post(), p9_ok(), idle_any(pair_pre()), d, 1)
+}
+
+theorem fill2_sound(d: Nat): FnSafe(sig_at(sigs_of(p9()), 0), pair_pre()(0), no_post()(0), world(p9(), d).mean(0), world(p9(), d).run(0)) {
+    prog_sound(p9(), pair_pre(), no_post(), p9_ok(), idle_any(pair_pre()), d, 0)
+}
+
+// In a buffer at base 1, `k = 1, j = 4`: the callee writes 7 through both
+// references in place, with no reference to their owner, and answers 7;
+// `x[j]` reads it; `t` reads 5 beside them.
+theorem pair_runs(): run_fn(world(p9(), 2), pair(), [[0, 5, 6, 8, 9, 3, 4, 2]], Ref(0, 1, 7), [1, 4]) = ROut([[0, 5, 7, 8, 9, 7, 4, 2]], 5, 0, 0) { refl }
+
+theorem pair_means(): mean_fn(world(p9(), 2), pair(), [5, 6, 8, 9, 3, 4, 2], [1, 4]) = MOut([5, 7, 8, 9, 7, 4, 2], 5, Nil) { refl }
+
+theorem pair_words(): mean_body(world(p9(), 2), pair().body, Sem([5, 6, 8, 9, 3, 4, 2], Nil, Nil, [1, 4])).words = [1, 4, 7, 7, 5] { refl }
+
+// The callee's run is given no owner: the reference it gets is none, and
+// what it writes it writes through the two it was lent.
+theorem fill2_runs(): world(p9(), 1).run(0, [[5, 6, 8, 9]], Ref(0, 0, 0), [Ref(0, 0, 2), Ref(0, 2, 2)], [7]) = ROut([[7, 6, 7, 9]], 7, 0, 0) { refl }
+
+// Its meaning takes the owner in and out, with the slots: the write-back is
+// eager, at each slot.
+theorem fill2_means(): world(p9(), 1).mean(0, [5, 6, 8, 9], [Slot(0, 2), Slot(2, 2)], [7]) = MOut([7, 6, 7, 9], 7, Nil) { refl }
+
+// The control of exclusivity: one write view lent twice is refused, and
+// rightly: the callee's two writes land in one place in the run, while in
+// the meaning the second write-back puts back the stale copy over the
+// first (`x[1]` reads 1 in the run and 6 in the meaning).
+fn mark2() → Func { Func(Lends(2), 0, seq([Put(0, Lit(0), Lit(1)), Put(1, Lit(1), Lit(2))]), RWord(Lit(0))) }
+
+fn twice() → Func { Func(Writes, 0, seq([View(0, Writes, Lit(1), Lit(2)), CallAll(0, [0, 0], Nil, 0), Get(1, Lit(1))]), RWord(Var(1))) }
+
+theorem mark2_checked(): check_fn(sigs_of([mark2(), twice()]), mark2()) = Some(Nil) { refl }
+
+theorem twice_refused(): check_fn(sigs_of([mark2(), twice()]), twice()) = None { refl }
+
+theorem twice_control(): ¬(run_fn(world([mark2(), twice()], 2), twice(), [[5, 6, 8]], Ref(0, 0, 3), Nil).word = mean_fn(world([mark2(), twice()], 2), twice(), [5, 6, 8], Nil).word) {
+    λ e => {
+        let no: (1 = 6) = e;
+        absurd(no)
+    }
+}
+
+// A view given to the collection is consumed: reading it after the call is
+// refused, and rightly: the callee wrote through it, and the caller's copy of
+// its value is stale (7 in the run, 6 in the meaning).
+fn reuse() → Func { Func(Writes, 0, seq([View(0, Writes, Lit(1), Lit(1)), View(1, Writes, Lit(2), Lit(1)), CallAll(0, [0, 1], [Lit(7)], 0), Read(1, 0, Lit(0))]), RWord(Var(1))) }
+
+theorem reuse_refused(): check_fn(sigs_of([fill2(), reuse()]), reuse()) = None { refl }
+
+theorem reuse_control(): ¬(run_fn(world([fill2(), reuse()], 2), reuse(), [[5, 6, 8]], Ref(0, 0, 3), Nil).word = mean_fn(world([fill2(), reuse()], 2), reuse(), [5, 6, 8], Nil).word) {
+    λ e => {
+        let no: (7 = 6) = e;
+        absurd(no)
+    }
+}
+
+// The owner is erased: a lending function that reads its owner directly, or
+// answers a view of it, is refused (its run has no reference to read
+// through).
+fn peek_owner() → Func { Func(Lends(1), 0, seq([Get(0, Lit(0))]), RWord(Var(0))) }
+
+theorem peek_owner_refused(): check_fn(sigs_of([peek_owner()]), peek_owner()) = None { refl }
+
+fn view_owner() → Func { Func(Lends(1), 0, End, RView(Lit(0), Lit(1))) }
+
+theorem view_owner_refused(): check_fn(sigs_of([view_owner()]), view_owner()) = None { refl }

@@ -1335,6 +1335,36 @@ postcondition zero does not meet is composed depth by depth from
 needs the termination the meaning assumes, which this toy's world by depth
 does not state.
 
+*Stored references and the erased owner* (2026-11-25). A mode `Lends(n)`
+is a function lent `n` write references stored in a collection, whose owner
+is erased: in its meaning it takes the owner's value in and out with each
+reference's slot (`Sem::start`), and in its run it is given the references
+and no reference to the owner (`Mode::owner`). It cannot name its owner
+(the owner statements need `Mode::owns`). A caller hands it live write views
+(`CallAll`), which the call consumes. `FnSafe` is stated at a reference
+standing for the owner's place, which the run never sees, over the slots it
+was lent (`Lendable`: as many as the mode says, pairwise apart); its frame
+is `kept_out`, nothing changed outside the lent references' spans, so it
+names no object reachable through them, only the owner's place once per
+owner. The caller's proof cites only that promise, at its own reference;
+the collection's exclusivity comes from its own place states (`Sim.excl`)
+and the consumed views die. Inside the callee the invariant gains `kept`
+(a lending function opens no view and changes nothing outside what it was
+lent), which follows from its having no owner to touch. Controls: one view
+lent twice (`twice_control`: the second write-back puts back a stale copy,
+1 against 6), a consumed view read after the call (`reuse_control`), a
+lending function that reads its owner or answers a view of it (refused).
+Untested: a collection held in data across statements rather than formed
+at the call, references into several owners, and places with steps.
+
+**Cost and shape (2026-11-25).** The closed verdict stays linear with
+loans, joins and union regions: at 2 to 64 units of ten statements (a loan
+held across a write and a read beside a long-lived view, then a branch
+whose arms open views on different windows), the full verdict `check_fn(…)
+= Some(rs)` costs 9.2k to 290k kernel steps, each doubling 1.96 to 2.03
+times the last. One object per function throughout, so the holder table the
+first experiment's quadratic came from does not arise.
+
 ### 15.7 Settled by Minus, 2026-11-25, and what is still open
 
 - **When memory runs out**: room is a premise of the machine theorem, the
