@@ -227,16 +227,6 @@ record RoutineFacts(r: Routine, blocks: Blocks, calls: Calls(), spans: Spans, sp
     tail: answer_tail(lower_values(spans, a.words)) = words_of(values, call_also(r.results)),
 }
 
-theorem empty_scoped(): Scoped(Locals::empty(), [], []) { ⟨trivial, λ id loc never => absurd(never)⟩ }
-
-// An id the scope never binds is zero in the valuation.
-theorem spare_zero(start, end: Locals, spans: Spans, u0, used: List<Nat>, spare: Nat, absent: Mem(spare, used) → False,
-    first: Frames(Locals::empty(), start, [], u0), second: Frames(start, end, u0, used)): end.lower(spans)(64, spare) = BitVec::zero() {
-    let all = frames_trans(Locals::empty(), start, end, [], u0, used, first, second);
-    let same = all.left(spare, λ m => false_elim(absent(m)));
-    j(same.right, λ o _ => (match o { Some(loc) => word_value(loc.address(spans), 64), None => end.words(64, spare) }) = BitVec::zero(), sym(same.left(64)))
-}
-
 theorem answer_holds(results: List<Typed>, spans: Spans, blocks: Blocks, values: Valuation(), spare: Nat, zero: values(64, spare) = BitVec::zero(),
     heap: Heap): InstrsHold(spans, blocks, values, answer_instrs(results, spare), heap, heap) {
     match results { Nil => Exists(heap, ⟨⟨zero, refl⟩, refl⟩), Cons(_, _) => refl }
@@ -260,7 +250,7 @@ theorem Routine::facts(self r: Routine, blocks: Blocks, calls: Calls(), fuel: Na
     let shows = λ (id: Nat) (_: Mem(id, used)) => run.after.locals.lower_shows(spans, id);
     let zero = spare_zero(run.start, run.after.locals, spans, u0, used, spare, absent, entered.left.right, body.right);
     let held = r.body.holds_of(blocks, calls, fuel, sigs, spans, values, spare, zero, checked.start, checked.end, u0, used, c0, run.after, checked.body,
-        fresh.proof.right, run.ran, entered.left.left, shows);
+        fresh.proof.right, run.ran, entered.left.left, shows, absent);
     let start_agrees = run.start.agrees_of(spans, values, u0, shows_back(run.start, run.after.locals, spans, values, u0, used, body.right, shows),
         checked.start, entered.left.left.left);
     let end_agrees = run.after.locals.agrees_of(spans, values, used, shows, checked.end, body.left.left);
@@ -524,6 +514,38 @@ theorem emit_instrs_grows(saves: Nat, instrs: List<Instr>): (prog: Prog) → (fi
     }
 }
 
+theorem plain_close_grows(pass: Emitted, saves: Nat, registers: List<Gpr>, exit: Nat, next, outputs: List<Nat>, names: Nat, short: List<Nat>, start: Prog,
+    grown: start.Within(pass.prog)): Grows(start, pass.plain_close(saves, registers, exit, next, outputs, names, short)) {
+    match pass.file.branch_test(exit) as λ t => Grows(start, match t {
+            None => None,
+            Some(tested) => match pass.file.move_outputs(word_ports(next), registers) {
+                None => None,
+                Some(moves) => match moves.file.outputs_check(word_ports(next), registers) && leaves_all(moves.code, body_kept(saves)) {
+                    False => None,
+                    True => match input_file(word_ports(outputs), registers) {
+                        None => None,
+                        Some(out) => Some(Emitted(plain_done(pass.prog, tested.test, moves.code, names, short), out, pass.placement, pass.names)),
+                    },
+                },
+            },
+        }) {
+        None => trivial,
+        Some(tested) => match pass.file.move_outputs(word_ports(next), registers) {
+            None => trivial,
+            Some(moves) => match moves.file.outputs_check(word_ports(next), registers) && leaves_all(moves.code, body_kept(saves)) {
+                False => trivial,
+                True => match input_file(word_ports(outputs), registers) {
+                    None => trivial,
+                    Some(out) => {
+                        let closed: pass.prog.Within(plain_done(pass.prog, tested.test, moves.code, names, short)) = Exists(8, refl);
+                        Prog::within_trans(grown, closed)
+                    },
+                },
+            },
+        },
+    }
+}
+
 theorem Body::emit_grows(self body: Body, saves, slots: Nat, short: List<Nat>, bound, spare: Nat): (prog: Prog) → (file: File) →
     (placement: List<Place>) → (names: Nat) → Grows(prog, body.emit(saves, slots, short, bound, spare, prog, file, placement, names)) {
     match body {
@@ -588,7 +610,25 @@ theorem Body::emit_grows(self body: Body, saves, slots: Nat, short: List<Nat>, b
             },
         Call(callee, arguments, results) => λ prog file placement names =>
             file.emit_call_grows(slots, prog, callee, typed_ids(arguments), call_result(results, spare), call_also(results), placement, names, bound, [], []),
-        Loop(_, _, _, _, _, _) => λ prog file placement names => trivial,
+        Loop(inputs, parameters, inner, exit, next, outputs) => λ prog file placement names =>
+            match state_registers(placement, typed_ids(parameters).len()) {
+                None => trivial,
+                Some(taken) => match file.plain_entry(saves, typed_ids(inputs), typed_ids(parameters), taken.registers) {
+                    None => trivial,
+                    Some(entry) => (match inner.emit(saves, slots, short, bound, spare, plain_head(prog, entry.code, names), entry.head, taken.rest, names + 4) as
+                        λ e => Grows(plain_head(prog, entry.code, names), e) → Grows(prog, match e {
+                            None => None,
+                            Some(pass) => pass.plain_close(saves, taken.registers, exit, typed_ids(next), typed_ids(outputs), names, short),
+                        }) {
+                        None => λ _ => trivial,
+                        Some(pass) => λ grown => {
+                            let into_head: prog.Within(plain_head(prog, entry.code, names)) = Exists(2, refl);
+                            plain_close_grows(pass, saves, taken.registers, exit, typed_ids(next), typed_ids(outputs), names, short, prog,
+                                Prog::within_trans(into_head, grown))
+                        },
+                    })(inner.emit_grows(saves, slots, short, bound, spare, plain_head(prog, entry.code, names), entry.head, taken.rest, names + 4)),
+                },
+            },
         Sys(_) => λ prog file placement names => trivial,
         Exit(_) => λ prog file placement names => trivial,
     }
@@ -789,6 +829,47 @@ theorem run_instrs_io(blocks: Blocks, instrs: List<Instr>): (c, after: Config) �
 // Calls that leave the world as they found it.
 fn Quiet(calls: Calls()) → Type { (f: Nat) → (args: List<Value>) → (heap: Heap) → (io: Io) → (a: Answer) → calls(f, args, heap, io) = Done(a) → a.io = io }
 
+theorem loop_run_io(blocks: Blocks, calls: Calls(), inner: Body, parameters: List<Typed>, exit: Nat, next: List<Typed>,
+    passes: (rest: Nat) → (state: List<Value>) → (m: Heap) → (io: Io) → (l: Locals) → (after: Config) → pass_locals(parameters, state) = Some(l) →
+        inner.run(blocks, calls, rest, Config(l, m, io)) = Done(after) → after.io = io,
+    fuel: Nat): (state: List<Value>) → (m: Heap) → (io: Io) → (end: Ended) →
+    bytes_level::loop_run(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, state, m, io) = Done(end) → end.io = io {
+    match fuel {
+        Zero => λ state m io end never => absurd(never),
+        Succ(rest) => λ state m io end ran => {
+            let step = λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass);
+            let one = Ran::then_done<Locals, Ended>(Ran::of(pass_locals(parameters, state), io), λ (l: Locals) =>
+                step(rest, Config(l, m, io)).then(λ (after: Config) => Ran::of(read_values(next, after.locals), after.io).then(λ (later: List<Value>) =>
+                    match after.locals.words(1, exit).head_bit() {
+                        False => bytes_level::loop_run(step, parameters, exit, next, rest, later, after.memory, after.io),
+                        True => Done(Ended(later, after.memory, after.io)),
+                    })), end, ran);
+            let l = one.witness;
+            let two = Ran::then_done<Config, Ended>(inner.run(blocks, calls, rest, Config(l, m, io)), λ (after: Config) =>
+                Ran::of(read_values(next, after.locals), after.io).then(λ (later: List<Value>) => match after.locals.words(1, exit).head_bit() {
+                    False => bytes_level::loop_run(step, parameters, exit, next, rest, later, after.memory, after.io),
+                    True => Done(Ended(later, after.memory, after.io)),
+                }), end, one.proof.right);
+            let after = two.witness;
+            let three = Ran::then_done<List<Value>, Ended>(Ran::of(read_values(next, after.locals), after.io), λ (later: List<Value>) =>
+                match after.locals.words(1, exit).head_bit() {
+                    False => bytes_level::loop_run(step, parameters, exit, next, rest, later, after.memory, after.io),
+                    True => Done(Ended(later, after.memory, after.io)),
+                }, end, two.proof.right);
+            let later = three.witness;
+            let pass_io: (after.io = io) = passes(rest, state, m, io, l, after, Ran::of_done<Locals>(pass_locals(parameters, state), io, l, one.proof.left),
+                two.proof.left);
+            trans((match after.locals.words(1, exit).head_bit() as λ b => (match b {
+                    False => bytes_level::loop_run(step, parameters, exit, next, rest, later, after.memory, after.io),
+                    True => Done(Ended(later, after.memory, after.io)),
+                }) = Done(end) → end.io = after.io {
+                True => λ e => cong_fn<Ended, Io>(λ x => x.io, sym(Ran::done_inj<Ended>(Ended(later, after.memory, after.io), end, e))),
+                False => λ e => loop_run_io(blocks, calls, inner, parameters, exit, next, passes, rest, later, after.memory, after.io, end, e),
+            })(three.proof.right), pass_io)
+        },
+    }
+}
+
 theorem Body::run_io(self body: Body, blocks: Blocks, calls: Calls(), quiet: Quiet(calls), fuel: Nat): (used, used2: List<Nat>) → (c, after: Config) →
     body.fresh(used) = Some(used2) → body.run(blocks, calls, fuel, c) = Done(after) → after.io = c.io {
     match body {
@@ -814,7 +895,13 @@ theorem Body::run_io(self body: Body, blocks: Blocks, calls: Calls(), quiet: Qui
             let r = call_ran(blocks, calls, fuel, callee, arguments, results, c, after, ran);
             trans(cong_fn<Config, Io>(λ y => y.io, r.lands), quiet(callee, r.args, c.memory, c.io, r.answer, r.answered))
         },
-        Loop(_, _, _, _, _, _) => λ used used2 c after never => absurd(never),
+        Loop(inputs, parameters, inner, exit, next, outputs) => λ used used2 c after fresh ran => {
+            let r = loop_ran(blocks, calls, fuel, inputs, parameters, inner, exit, next, outputs, c, after, ran);
+            let fr = loop_fresh(used, used2, inputs, parameters, inner, exit, next, outputs, fresh);
+            trans(cong_fn<Config, Io>(λ y => y.io, r.lands), loop_run_io(blocks, calls, inner, parameters, exit, next,
+                λ rest st m io l aft _ rn => inner.run_io(blocks, calls, quiet, rest, fr.start, fr.inside, Config(l, m, io), aft, fr.body, rn),
+                fuel, r.state, c.memory, c.io, r.end, r.looped))
+        },
         Sys(_) => λ used used2 c after never => absurd(never),
         Exit(_) => λ used used2 c after never => absurd(never),
     }

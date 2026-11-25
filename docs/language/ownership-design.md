@@ -2040,6 +2040,18 @@ the routine's frame, the done clause and the world are filed (below).
   only those below it, as FunctionIR's functions without levels do, and
   the room table (`routine_rooms`) is each routine's largest frame over its
   callees' rooms.
+- *The plain loop* (`issues/bytes-level-lowering-loops.md`): its facts are
+  its passes at some fuel (`PassesHold`), each at a valuation of its own,
+  since a pass is a scope of its own from its parameters. Its code is the
+  inputs moved into the state's registers, a head H, the pass, the exit
+  bit's test (to C where clear), the next words moved in and a jump to J,
+  at C the same moves and a jump to H, then J (`plain_done`). The passes
+  are `Site::loop_iterates` on the run's fuel with `Stack::LoopAt` at the
+  head, a pass `loop_body_runs_by` and the turn `loop_turns`, cited as
+  stated; leaving is the loop's own (`plain_leaves`, the bounded loop's
+  `loop_leaves` without its flag). The ids a pass binds are counted bound
+  in the scope around the loop, so the routine's spare id is none of a
+  pass's and nothing after the loop rebinds one.
 
 **What follows.** The rest of the lowering under `Site::Meets`
 (`issues/bytes-level-lowering-routines.md`, `bytes-level-lowering-loops.md`,
