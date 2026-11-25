@@ -394,13 +394,20 @@ fn put_elsewhere(span: List<BitVec(8)>, length: BitVec(64), text: List<BitVec(8)
 // expect-error: `put_window` puts back what a call over windows wrote
 theorem put_elsewhere_refused(): True { by reflects_file_as(["carry", "put_elsewhere"], [], []) }
 
-// A window to read of the span the call writes.
+// A window to read of the span the call writes is read, of the span as it
+// is at the call: the reflector does not decide whether it shares a byte
+// with the written window (these two do); the function compiler asks the
+// path, and refuses the call where nothing there orders the windows' bounds
+// (`shift_over_why`, lib/_tests/native/runtime/runtime_span_split_tests.hthr).
 fn reads_own(span: List<BitVec(8)>, length: BitVec(64), text: List<BitVec(8)>, size, end: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
     let done = carry(span.window(0, end.toNat()), end, span.window(0, length.toNat()), length, BitVec::ofNat(0));
     Mutated(span.put_window(0, done.after), done.value)
 }
-// expect-error: a window to read of the span the call writes
-theorem reads_own_refused(): True { by reflects_file_as(["carry", "reads_own"], [], []) }
+fn reads_own_rt() → FFun {
+    FFun([Word(64), Word(64), Word(64), Word(64), Word(64)], Word(64),
+        Let(Lit(Word(64), 0), Lend(0, [FView(0, 5, None, 1), FView(0, 5, None, 4)], [0], Pure(Var(0)))), 2)
+}
+theorem reads_own_reflected(): True { by reflects_file_as(["carry", "reads_own"], [], [carry_rt(), reads_own_rt()]) }
 
 // A callee's first span, which it writes, as a window of a span this
 // function only reads.

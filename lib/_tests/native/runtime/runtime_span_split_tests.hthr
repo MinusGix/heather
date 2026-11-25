@@ -1,0 +1,274 @@
+// Probes of `runtime fn` on functions that lend two windows of the span
+// they write (`FTm::Lend`, lib/native/runtime/rt_file.hthr;
+// issues/rt-window-of-the-written-span.md): the bytes before `mid` to read
+// and the bytes from `mid` to write, `split_at` said in a `runtime fn`.
+// The reflection carries both windows of span 0; the meaning reads the
+// window to read off the span as it is at the call (`FTm::lent`), and the
+// function compiler decides that the two share no byte from what the path
+// knows (`views_apart`, function_ir_lower_views): one's end the other's
+// start, a comparison an arm took, or two constants in order. Windows that
+// overlap are refused there, by name. Tests, not library: nothing imports
+// this module.
+import logic;
+import bool;
+import nat;
+import list;
+import list_window;
+import option;
+import pair;
+import char;
+import string;
+import tactic;
+import derive;
+import bitvec;
+import bitvec_nat;
+import bitvec_omega;
+import omega;
+import rt;
+import rt_reflect;
+import rt_lower;
+import rt_loop;
+import rt_file;
+import rt_file_lower;
+import rt_file_loop;
+import rt_file_reflect;
+import function_ir;
+import function_ir_eval;
+import function_ir_state;
+import function_ir_run;
+import function_ir_writes;
+import function_ir_rows;
+import function_ir_link;
+import function_ir_placeless;
+import function_ir_lower;
+import function_ir_lower_calls;
+import function_ir_compile;
+import function_ir_refusal;
+import x86_64;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_stack;
+import x86_64_lending;
+import x86_64_asm;
+import x86_64_asm_runs;
+import x86_64_stack_runs;
+import runtime;
+import runtime_file;
+
+fn w(n: Nat) → BitVec(64) { BitVec::ofNat(n) }
+fn b(n: Nat) → BitVec(8) { BitVec::ofNat(n) }
+
+// A program's last function, the one a `runtime fn` is: its callees come
+// before it.
+fn caller(program: List<Function>) → Function { match program { Nil => Function([], nodes_region(Nil), 0), Cons(f, _) => f } }
+
+fn five() → List<BitVec(8)> { [b(1), b(2), b(3), b(4), b(5)] }
+fn tens() → List<BitVec(8)> { [b(10), b(20), b(30), b(40), b(50)] }
+
+// ---------------------------------------------------------------------------
+// The callee
+
+// Byte `i` of `src` at `i` of `dst`, each under its own length word.
+runtime fn copy_byte(dst: List<BitVec(8)>, dn: BitVec(64), src: List<BitVec(8)>, sn: BitVec(64), i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    Mutated(dst.with_byte_within(dn, i, src.byte_within(sn, i)), i)
+}
+
+// ---------------------------------------------------------------------------
+// The split open: one window's end the other's start
+
+// Byte `i` of the bytes before `mid` copied to byte `i` of the bytes from
+// `mid`; 512 and nothing lent where `mid` is past the span. The test is
+// what the function compiler reads both windows' bounds off, and `mid`,
+// one variable, is the read window's end and the written one's start.
+runtime fn shift_at(span: List<BitVec(8)>, n, mid, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    match n.unsigned_lt_bit(mid) {
+        True => Mutated(span, BitVec::ofNat(512)),
+        False => {
+            let done = copy_byte(span.window(mid.toNat(), n.toNat()), n.sub(mid), span.window(0, mid.toNat()), mid, i);
+            Mutated(span.put_window(mid.toNat(), done.after), done.value)
+        },
+    }
+}
+
+theorem shift_at_shaped(): shift_at::rt.lent = 1 { refl }
+
+// The reflection: the written window first, of span 0 from `mid` to `n`,
+// and the window to read after it, of span 0 too, from its first byte to
+// `mid`.
+theorem shift_at_views(): shift_at::rt.body.same(
+    Let(Prim(Ult(64), [2, 1]), If(0, Pure(Lit(Word(64), 512)),
+        Lend(0, [FView(0, 4, Some(2), 3), FView(0, 4, None, 2)], [1], Pure(Var(0)))))) = True { refl }
+
+// On bytes: at `mid` 2, byte 1 of the first half (2) at byte 1 of the
+// second, which is byte 3 of the span; at `mid` 3, byte 0 (1) at byte 3;
+// an index past the half to read stores 0, the read being under its
+// length word; past the span nothing is lent.
+theorem shift_at_runs(a: BitVec(64)): program_run(shift_at::program, [five()], 1, [a, w(5), w(2), w(1)]) =
+    Ending(w(1), [[b(1), b(2), b(3), b(2), b(5)]]) { refl }
+theorem shift_at_elsewhere(a: BitVec(64)): program_run(shift_at::program, [five()], 1, [a, w(5), w(3), w(0)]) =
+    Ending(w(0), [[b(1), b(2), b(3), b(1), b(5)]]) { refl }
+theorem shift_at_past_half(a: BitVec(64)): program_run(shift_at::program, [five()], 1, [a, w(5), w(1), w(1)]) =
+    Ending(w(1), [[b(1), b(2), b(0), b(4), b(5)]]) { refl }
+theorem shift_at_past(a: BitVec(64)): program_run(shift_at::program, [five()], 1, [a, w(5), w(6), w(0)]) = Ending(w(512), [five()]) { refl }
+
+// The control of the run: the lend does not leave the span as it was.
+theorem shift_at_changes(a: BitVec(64), same: program_run(shift_at::program, [five()], 1, [a, w(5), w(2), w(1)]) = Ending(w(1), [five()])): False {
+    let verdict: (True = False) = cong_fn<Ending, Bool>(λ answer => buffer_byte(answer.buffers, 0, 3).eq_bit(b(2)), trans(sym(shift_at_runs(a)), same));
+    absurd(verdict)
+}
+
+// What the generator states, at every file and words, the split open.
+theorem shift_at_stated(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, a, n, mid, i: BitVec(64)):
+    program_run(shift_at::program, Cons(span, rest), 1, [a, n, mid, i]) = FTm::end_of(rest, shift_at(span, n, mid, i)) {
+    shift_at::runs_over(span, rest, a, n, mid, i)
+}
+
+theorem shift_at_placeless(): program_placeless(shift_at::program) = True { refl }
+theorem shift_at_rows(): program_rows(shift_at::program) = [[True], [True]] { refl }
+theorem shift_at_lowers(): lower_program_lent(shift_at::program, plan_program(shift_at::program), program_counts(shift_at::program)).is_some()
+    = True { refl }
+
+theorem shift_at_evaluable(): program_evaluable(shift_at::program).IsTrue() { trivial }
+theorem shift_at_marked(): program_marked(shift_at::program, [[True], [True]]) = True { refl }
+theorem shift_at_present(): lower_program_lent(shift_at::program, plan_program(shift_at::program), program_counts(shift_at::program)).is_some().IsTrue() {
+    trivial
+}
+fn shift_at_machine() → Prog {
+    lower_program_lent(shift_at::program, plan_program(shift_at::program), program_counts(shift_at::program)).get(shift_at_present())
+}
+theorem shift_at_accepted(): lower_program_lent(shift_at::program, plan_program(shift_at::program), program_counts(shift_at::program)) = Some(shift_at_machine()) {
+    Option::some_get(lower_program_lent(shift_at::program, plan_program(shift_at::program), program_counts(shift_at::program)), shift_at_present())
+}
+
+// So the code, at any span and words, the split open, the span lent to
+// be written wherever the laws let it lie: it answers what `shift_at`
+// does, and the span in memory is `shift_at`'s.
+theorem shift_at_carries<M>(fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64),
+    stack: Stack<M>(fetch, data), addresses: List<BitVec(64)>, span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, a, n, mid, i: BitVec(64), top: Nat,
+    loan: Loan<M>(fetch, data, stack, top, Lending::writing(program_counts(shift_at::program), addresses, Cons(span, rest), [True]).spans())):
+    Site<M>(fetch, data, shift_at_machine(), last, origin).Returns(stack, asm_labels(shift_at_machine())(2),
+        λ (k: Nat) (s: MachineState<M>) => (stack.Passed([a, n, mid, i], k, s) ∧ program_room(shift_at::program)(1) <= k) ∧
+            stack.LentOver(Lending::writing(program_counts(shift_at::program), addresses, Cons(span, rest), [True]), top, 1, [a, n, mid, i], Cons(span, rest))(k, s),
+        stack.AnsweredBoth(Lending::writing(program_counts(shift_at::program), addresses, Cons(span, rest), [True]), shift_at(span, n, mid, i).value, [],
+            Cons(shift_at(span, n, mid, i).after, rest))) {
+    compiled_returns_marked<M>(shift_at::program, plan_program(shift_at::program), program_room(shift_at::program), program_counts(shift_at::program),
+        addresses, [[True], [True]], shift_at_machine(), shift_at_accepted(), shift_at_evaluable(), trivial, fetch, data, last, origin, stack, top,
+        Cons(span, rest), 1, trivial, loan, [a, n, mid, i], trivial,
+        program_total_run_defined(shift_at::program, trivial, Cons(span, rest), 1, [a, n, mid, i]),
+        FTm::end_of(rest, shift_at(span, n, mid, i)), shift_at::runs_over(span, rest, a, n, mid, i))
+}
+
+// ---------------------------------------------------------------------------
+// The split at a literal: one variable for 2, the same id both bounds
+
+// `shift_at` at the split 2, the bytes before it to read and the bytes
+// from it to write.
+runtime fn shift_two(span: List<BitVec(8)>, n, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    let two: BitVec(64) = BitVec::ofNat(2);
+    match n.unsigned_lt_bit(two) {
+        True => Mutated(span, BitVec::ofNat(512)),
+        False => {
+            let done = copy_byte(span.window(two.toNat(), n.toNat()), n.sub(two), span.window(0, two.toNat()), two, i);
+            Mutated(span.put_window(two.toNat(), done.after), done.value)
+        },
+    }
+}
+
+theorem shift_two_runs(a: BitVec(64)): program_run(shift_two::program, [five()], 1, [a, w(5), w(1)]) =
+    Ending(w(1), [[b(1), b(2), b(3), b(2), b(5)]]) { refl }
+theorem shift_two_short(a: BitVec(64)): program_run(shift_two::program, [[b(1)]], 1, [a, w(1), w(0)]) = Ending(w(512), [[b(1)]]) { refl }
+theorem shift_two_stated(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, a, n, i: BitVec(64)):
+    program_run(shift_two::program, Cons(span, rest), 1, [a, n, i]) = FTm::end_of(rest, shift_two(span, n, i)) {
+    shift_two::runs_over(span, rest, a, n, i)
+}
+theorem shift_two_lowers(): lower_program_lent(shift_two::program, plan_program(shift_two::program), program_counts(shift_two::program)).is_some()
+    = True { refl }
+
+// ---------------------------------------------------------------------------
+// The bounds compared on the path: a gap between the windows
+
+// Byte `i` of the bytes before `low` copied to byte `i` of the bytes from
+// `high`, where an arm says `low` is at most `high` and `high` at most the
+// span's length; 512 elsewhere. The windows' bounds are two variables, and
+// the arm `high <u low` taken false is what orders them.
+runtime fn shift_gap(span: List<BitVec(8)>, n, low, high, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    match n.unsigned_lt_bit(high) {
+        True => Mutated(span, BitVec::ofNat(512)),
+        False => match n.unsigned_lt_bit(low) {
+            True => Mutated(span, BitVec::ofNat(512)),
+            False => match high.unsigned_lt_bit(low) {
+                True => Mutated(span, BitVec::ofNat(512)),
+                False => {
+                    let done = copy_byte(span.window(high.toNat(), n.toNat()), n.sub(high), span.window(0, low.toNat()), low, i);
+                    Mutated(span.put_window(high.toNat(), done.after), done.value)
+                },
+            },
+        },
+    }
+}
+
+theorem shift_gap_runs(a: BitVec(64)): program_run(shift_gap::program, [five()], 1, [a, w(5), w(1), w(3), w(0)]) =
+    Ending(w(0), [[b(1), b(2), b(3), b(1), b(5)]]) { refl }
+theorem shift_gap_crossed(a: BitVec(64)): program_run(shift_gap::program, [five()], 1, [a, w(5), w(3), w(1), w(0)]) =
+    Ending(w(512), [five()]) { refl }
+theorem shift_gap_stated(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, a, n, low, high, i: BitVec(64)):
+    program_run(shift_gap::program, Cons(span, rest), 1, [a, n, low, high, i]) = FTm::end_of(rest, shift_gap(span, n, low, high, i)) {
+    shift_gap::runs_over(span, rest, a, n, low, high, i)
+}
+theorem shift_gap_lowers(): lower_program_lent(shift_gap::program, plan_program(shift_gap::program), program_counts(shift_gap::program)).is_some()
+    = True { refl }
+
+// ---------------------------------------------------------------------------
+// The controls: windows that overlap
+
+// The window to read runs to the span's end, past where the written one
+// starts. The reflection and its meaning say what it does (the callee
+// reads the span as it was at the call); the function compiler refuses
+// it, naming the two views.
+runtime fn shift_over(span: List<BitVec(8)>, n, mid, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    match n.unsigned_lt_bit(mid) {
+        True => Mutated(span, BitVec::ofNat(512)),
+        False => {
+            let done = copy_byte(span.window(mid.toNat(), n.toNat()), n.sub(mid), span.window(0, n.toNat()), n, i);
+            Mutated(span.put_window(mid.toNat(), done.after), done.value)
+        },
+    }
+}
+
+theorem shift_over_runs(a: BitVec(64)): program_run(shift_over::program, [five()], 1, [a, w(5), w(2), w(1)]) =
+    Ending(w(1), [[b(1), b(2), b(3), b(2), b(5)]]) { refl }
+theorem shift_over_stated(span: List<BitVec(8)>, rest: List<List<BitVec(8)>>, a, n, mid, i: BitVec(64)):
+    program_run(shift_over::program, Cons(span, rest), 1, [a, n, mid, i]) = FTm::end_of(rest, shift_over(span, n, mid, i)) {
+    shift_over::runs_over(span, rest, a, n, mid, i)
+}
+theorem shift_over_why(): caller(shift_over::program).refused(1, caller(shift_over::program).plan(), 2, program_counts(shift_over::program), index_rooms()) =
+    "where 4 is false, the call of function 0 over views (buffer 0 from 2 to 1 written, buffer 0 from 7 to 1): its views buffer 0 from 2 to 1 written and buffer 0 from 7 to 1 share a buffer, and nothing says that one ends at most where the other starts: neither's end is the other's start, no arm taken on the way here compares them, and they are not two constants in order" { refl }
+theorem shift_over_refused(): lower_program_lent(shift_over::program, plan_program(shift_over::program), program_counts(shift_over::program)) = None {
+    refl
+}
+
+
+// The comparison the wrong way round: the arm says `low` is less than
+// `high` or not, and the lend is where it is not, so the bytes before
+// `low` may run past `high`.
+runtime fn shift_backwards(span: List<BitVec(8)>, n, low, high, i: BitVec(64)) → Mutated<List<BitVec(8)>, BitVec(64)> {
+    match n.unsigned_lt_bit(high) {
+        True => Mutated(span, BitVec::ofNat(512)),
+        False => match n.unsigned_lt_bit(low) {
+            True => Mutated(span, BitVec::ofNat(512)),
+            False => match low.unsigned_lt_bit(high) {
+                True => Mutated(span, BitVec::ofNat(512)),
+                False => {
+                    let done = copy_byte(span.window(high.toNat(), n.toNat()), n.sub(high), span.window(0, low.toNat()), low, i);
+                    Mutated(span.put_window(high.toNat(), done.after), done.value)
+                },
+            },
+        },
+    }
+}
+
+theorem shift_backwards_refused():
+    lower_program_lent(shift_backwards::program, plan_program(shift_backwards::program), program_counts(shift_backwards::program)) = None { refl }
+theorem shift_backwards_why():
+    caller(shift_backwards::program).refused(1, caller(shift_backwards::program).plan(), 2, program_counts(shift_backwards::program), index_rooms()) =
+    "where 5 is false, where 7 is false, where 9 is false, the call of function 0 over views (buffer 0 from 3 to 1 written, buffer 0 from 12 to 2): its views buffer 0 from 3 to 1 written and buffer 0 from 12 to 2 share a buffer, and nothing says that one ends at most where the other starts: neither's end is the other's start, no arm taken on the way here compares them, and they are not two constants in order" { refl }
