@@ -1,6 +1,6 @@
 ---
 title: FunctionIR ids typed word or reference: the lowered valuation, and the per-node check that replaces placeless
-status: open
+status: closed
 labels: [ownership,native,design]
 area: heather-in-heather
 milestone: [nh-ownership]
@@ -24,3 +24,7 @@ FunctionIR has reference ids and the three nodes, a region using them lowers wit
 ## What it assumes from elsewhere
 
 - **[[ownership-reference-cells-spike]]** owns `lowered_values` and `held_word_rep`. Assumed here: only that `Held::Rep` at kind `Word` over the lowered valuation is the register invariant a reference needs.
+
+## Log
+
+- 2026-11-25: 2026-11-25: Closed, superseded by [[bytes-level-language]] ([[bytes-level-on-the-contract]] deleted the experiment). The bytes level types every id word or reference (`Typed`, `Locals` with `refs` beside the words), its validity checks kinds node by node (`Instr::check`, `Program::valid`), which is what replaces `placeless`, and placelessness is one theorem of the language (`run_renames`). FunctionIR gets no reference ids: stage 3 replaces its memory half with the bytes level (`docs/language/ownership-design.md` §17.4). The lowered valuation (`Value::lower`, now `x86_64_call_contract`) is [[bytes-level-lowering]]'s register invariant.
