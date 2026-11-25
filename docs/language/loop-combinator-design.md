@@ -1160,6 +1160,19 @@ round stays green. (`Repeat` was taken: it is a native statement's.)
   calling the node `down_node`, is defined at no premise past its levels,
   and agrees there. `down_node`'s code is quiet, and `ends_free` cannot
   stand in for its measure (negative control).
+- *Certificates.* A flat program holding a node is no longer
+  `program_total`: an `Until` is defined only where it ends. The generator
+  states it defined as it does a leveled program, from each function's
+  part (`f::defined_within` at any levels, which a flat program does not
+  read). `Linked.fronts` are made for every program. The certificate
+  writer states `_defined_flat` from it and cites that where it cited
+  `program_total_defined`. `triangle` (examples/x86-native/loop_measure)
+  certifies with its node a 55-byte loop: test, add, decrement, jump back,
+  and no pass counter.
+- *Not yet covered.* A program with a node whose certificate takes
+  another shape (lent spans, a record through memory, other exported
+  entries) still cites `_defined_everywhere`, and would be refused there.
+  The gates hold none.
 
 **Built: a pass that answers several words** (step 3's first half, kept
 as small as the extra pass allows).
