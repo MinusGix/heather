@@ -99,3 +99,7 @@ Get the interim report (the paper's reference 20, the P3109 working
 group's public repository) into `docs/papers/` before the design round;
 the paper is a summary, and its tables are what the encoding gate checks
 against.
+
+## Log
+
+- 2026-11-25: Design round done: `docs/library/float-p3109-design.md` (D1 datum = `Float(F)` up to `≈`, no `-0` change; D2 unsigned = nonnegative half of a signed envelope; D3 `cut` replaces `reserves_top`, `frac_ok` dropped; D4 ties to the even code; D5 the overflow tie follows the largest float's parity; D6 saturation is the projection round's). Round 1 (`p3109-values`) landed: `lib/std/num/float/p3109.hthr` builds `Binary{K,P,s,d}` from the reserved-code count, and the P3109 interim report v4.1 and its value tables (github.com/P3109/Public) are the reference; the tests check extremes against the tables. Remaining: [[float-saturation-modes]], [[float-round-to-odd]], [[float-stochastic-rounding]], [[float-p3109-encoding]].

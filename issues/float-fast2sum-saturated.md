@@ -41,3 +41,7 @@ proof never went through that bound, so only precision one
 
 - **[[float-saturation-modes]]** owns saturation as a parameter. Assumed
   here: only that a saturated result is a faithful rounding.
+
+## Log
+
+- 2026-11-25: The nearest-mode half is confirmed by evaluation: `lib/_tests/std/num/float/eft_tests.hthr` runs `Finite::fast_two_sum_exact` at E4M3 (416 + 64 saturates to 448, error 32) and E2M1 (4 + 4 saturates to 6, error 2). The directed-`s` theorem is still open; it wants [[float-saturation-modes]] for the format-with-infinities case.

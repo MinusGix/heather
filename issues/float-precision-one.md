@@ -1,6 +1,6 @@
 ---
 title: Formats with one bit of precision
-status: open
+status: closed
 labels: [mathematics,floating-point]
 area: mathematics
 milestone: [p3109-values]
@@ -55,3 +55,7 @@ significand parity has no witness at the tie (a `¬ ∃` theorem).
 
 - **[[float-p3109]]** owns how P3109 formats become `Format`s. Assumed
   here: only that some of them have `frac = 0`.
+
+## Log
+
+- 2026-11-25: LANDED (docs/library/float-p3109-design.md §5). `frac_ok` is gone; ties go to the even code (`Format::lsb`: the significand's last bit with fraction bits, the biased exponent's at precision one), proved through `lsb_step`/`lsb_carry`. Uses of the old bound: `two_le_half` now takes `1 <= frac`; `half_even` likewise; `u_le_gamma` takes `1 < u_den` (a directed mode at precision one has `u = 1`). Found: a window an odd number of binades up flips precision-one ties, so `widen` falls back there (`win_par`). Tests in `lib/_tests/std/num/float/p3109_tests.hthr`: ties at `2^e`/`2^(e+1)` of both parities, the zero tie, and the negative control (both neighbours of the tie at 6 in Binary8p1se have significand 1).
