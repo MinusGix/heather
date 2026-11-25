@@ -222,7 +222,7 @@ fn Tm::judge_in(self t: Tm, sigs: List<Sig>, tys: Table, pass: Bool) → Verdict
         // A `while` loop is lowered as the loop node `Tm::nodes` writes it
         // (docs/language/loop-combinator-design.md §6.9); one still an
         // `Iterate` is not.
-        Iterate(_, _, _, _, _) => Refused("a loop that is not a loop node: one written by hand (no `f::loop::runs` pins it), under a `match` or inside another loop, or over a state that is not 64-bit words"),
+        Iterate(_, _, _, _, _) => Refused("a loop that is not a loop node: a `Loop::steps` written by hand (fuel with no measure to prove it ends), a loop under a `match` or inside another loop, or one over a state that is not 64-bit words"),
         // Going round is a loop's pass's last act, never a value.
         Again(_, _) => match pass { True => Ok, False => Refused("going round a loop outside a loop's pass") },
         // A loop that answers: its body is a pass.

@@ -1288,11 +1288,26 @@ as small as the extra pass allows).
   in two hand-written test probes. So `Tm::lower` refuses `Iterate`, and
   `Tm::lower_iterate` and its proofs (`Tm::iterate_holds`,
   `Tm::iterate_sound`, `Tm::iterate_static`) are deleted. The generator's
-  judgment names the reason: a loop that is not a loop node, written by
-  hand, under a `match` or inside another loop, or over a state that is
-  not 64-bit words. `Iterate` stays in `Tm` as what the reflector reads and
+  judgment names the reason: a loop that is not a loop node, a
+  `Loop::steps` written by hand (fuel with no measure: nothing proves it
+  ends), a loop under a `match` or inside another loop, or one over a state
+  that is not 64-bit words. `Iterate` stays in `Tm` as what the reflector reads and
   `Tm::nodes` rewrites. `FTm`'s loop still lowers through
   `Tm::iter_region` and `Tm::carry` until it has a node of its own.
+- *Next: a loop written on the combinator.* `Loop(m, step).run(s)` in a
+  `runtime fn` states its own measure `m` and each pass's decrease (the
+  step's `Lower`). Under "every loop carries its measure" it is the
+  clearest case of all, and its node needs neither `f::loop::runs` nor any
+  elaborator companion. It is not read yet: the reflector refuses
+  `Loop::run` with that reason (`PRun`), apart from the fuel form's.
+  Reading it takes:
+  - the reflector reading the step's body (a `fn` or a `λ` of the state)
+    as the node's pass, `Again(Lower(next, _))` as going round at `next`'s
+    words and `Done(r)` as the answer, its proofs erased;
+  - the pin: the node's rounds are `l.run` by `Loop::rounds_agree_below`
+    at `l.measure`, each pass by one unfolding of `Loop::run` at the step.
+    That is the written tail recursion's pin (§6.8) with the step for the
+    body, carried through the context by `Tm::sem_with`'s oracle.
 
 ## 7. Bootstrapping
 

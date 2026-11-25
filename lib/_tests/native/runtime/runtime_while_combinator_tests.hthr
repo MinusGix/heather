@@ -112,10 +112,11 @@ runtime fn climbs(n: u64) → u64 {
     x
 }
 
-// Written by hand, a loop reads as the elaborator's does (a record state
-// read after the loop by its fields; a test of two bits), but no
-// `f::loop::runs` pins it to a node, so it stays an `Iterate`, which is
-// refused (docs/language/loop-combinator-design.md §6.9).
+// Written by hand over `Loop::steps(Loop::passes(), …)`, a loop reads as
+// the elaborator's does (a record state read after the loop by its fields;
+// a test of two bits), but it is fuel with no measure: nothing proves it
+// ends, no `f::loop::runs` pins it to a node, and it stays an `Iterate`,
+// which is refused (docs/language/loop-combinator-design.md §6.9).
 record Two { a: u64, b: u64 }
 
 // expect-error: a loop that is not a loop node
@@ -128,6 +129,25 @@ runtime fn moved(n: u64) → u64 {
 runtime fn two_bits(n, cap: u64) → u64 {
     let x: u64 = loop::Loop::steps(loop::Loop::passes(), λ (x: u64) => loop::Step::turn(decide_bit<x < cap>() && decide_bit<x ≠ 7>(), λ _ => x + 1, x), n);
     x * 2
+}
+
+// Written on the combinator, a loop states its measure and its step's
+// decrease (`Lower`), which would pin a node with no elaborator companion;
+// the reflector does not read such a step yet, and says so (§6.9).
+fn down_left(x: u64) → Nat { x.toNat() }
+
+fn down_step(x: u64) → loop::Pass<u64, u64>(down_left, x) {
+    if h: 0 < x {
+        let less: ((x - 1).toNat() < x.toNat()) = bv_omega;
+        loop::Again(loop::Lower(next := x - 1, less := squash(less)))
+    } else {
+        loop::Done(x)
+    }
+}
+
+// expect-error: a loop on the combinator (`Loop(m, step).run(s)`) is not read as a loop node yet
+runtime fn down(n: u64) → u64 {
+    loop::Loop(measure := down_left, step := down_step).run(n)
 }
 
 // Which loops are loop nodes (docs/language/loop-combinator-design.md
