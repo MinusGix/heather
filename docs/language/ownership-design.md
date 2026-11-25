@@ -1101,7 +1101,10 @@ code is a pointer, and placelessness becomes a property of the language
 Its cost is a new memory model in the middle of FunctionIR (buffers as
 lists of bytes become blocks of cells, touching every module stated over
 buffers by number; the word-only lowering is untouched), typed loads, and
-`Loan` extended across an allocation. The first is an instance of the third
+`Loan` extended across an allocation. (The third experiment, §16, narrowed
+all three: the memory relation is additive, the loads are typed in the
+meaning only and lower to the same instructions, and `Loan` needs no
+extension, only to be threaded per state.) The first is an instance of the third
 with one supply, so level 2 and `placement_sound` are written against the
 general interface.
 
@@ -1380,3 +1383,48 @@ and one shadowed block; a store of a reference, a load of it, a byte load
 through it; lowered to x86 and proved by the injection. The second risk is
 the kernel's cost of evaluating the checker on real functions; if it is
 bad, the checker runs on the untrusted evaluator, as reads do.
+
+**What the third experiment found** (2026-11-25,
+[[ownership-reference-cells-spike]], `lib/native/reference_cells/`). The
+toy is proved through to x86's instruction steps: a reference stored, loaded
+back and read through, under any `Loan` of its blocks (`Loan::program_runs`),
+the meaning unchanged by renaming blocks (`run_renames`), and both controls
+theorems. It corrects the two claims above.
+
+- *Additive*: true of the memory relation, and proved both ways: the
+  injection at an empty shadow is `Stack::InMemory` (`in_memory_injected`,
+  `injected_in_memory`), and the toy's store theorem there is
+  `in_memory_span`'s (`in_memory_word_stored`). Not true of the call
+  contracts: `Effects()` relates `Buffers()` before and after a call in
+  about ninety places across ten modules, and a reference kept in a block a
+  callee is lent needs that file to carry the shadow. So the change is
+  additive inside a function and a choice at calls: generalize the contract
+  with today's as its empty-shadow instances, or keep references out of
+  lent blocks at first ([[reference-cells-call-contracts]]).
+- *The riskiest package*: the register invariant does not split by kind,
+  and need not. A register holds the valuation's word where the valuation
+  is the one lowered through the injection, a reference lowering to its
+  target's address; that is `Held::Rep` at kind `Word` unchanged
+  (`registers_represent`), and the buffer homes (`Lent::Holds`) already are
+  this case. The risk moves to what replaces `placeless`: FunctionIR's ids
+  typed word or reference, and a per-node check that no word node reads a
+  reference, without which a node's equation does not transfer to the
+  lowered valuation ([[reference-cells-id-kinds]]). The word and reference
+  loads and stores are the same instructions; the types are in the meaning.
+- *`Loan` across an allocation*: no new law. Pieces carved from lent spans
+  are a `Loan` (`Loan::carve`) and their stores are their parents'
+  (`Stack::wrote_in_parents`); what changes is that a body's invariant
+  carries the current pieces instead of one lending fixed for the program
+  ([[reference-cells-lending-per-state]]).
+- *New*: a store that cuts a reference has no meaning (the bytes left under
+  it are part of an address), so a copy of a record holding references is
+  a typed copy where the layout is known, with no fragments; a copy of
+  unknown layout is open ([[reference-cells-range-copy]]).
+- *Cost*: the machine module checks in about a second; stated over x86_64's
+  step records at neutral parameters, in stage theorems, the proof was not
+  where the cost is.
+
+Package 5 is reordered by this: the id kinds and the per-node check first
+(the change that replaces a proved check), the new nodes over the injection
+second, then the per-state lending with package 6, and the call contracts
+last, when a customer passes a structure holding references to a callee.
