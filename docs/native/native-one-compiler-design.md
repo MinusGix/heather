@@ -1110,6 +1110,44 @@ stage 3 deletes both:
   a lowering; `Site::CallsLent` at one lending gives it at an empty shadow
   (`calls_lent_meets`, the contract's tests).
 
+### 2.8 The frame and call theorems over a memory clause (2026-11-25)
+
+The lowering's frame, call, loop and function theorems
+(`function_ir_lower_calls`) said of memory one clause, the trail
+(`Stack::Trail`: the stores were the frame's own or bytes of the written
+spans, and the file `now` is the one in memory), and used of its second
+half only that it is stable under the frame's own stores. So they are
+stated once over a **memory clause**, `Mem: S → M → Type` at a state of
+any type `S` (`issues/lowering-generic-in-memory.md`):
+
+- `Stack::TrailBy(spans, Mem, d, entry, now, memory)` is
+  `WroteIn(d, spans, entry, memory) ∧ Mem(now, memory)`; the stores half
+  stays fixed, since `WroteIn` is the contract's for every layer.
+- **The law** is `Stack::ClauseStable(top, Mem)`: at every state, `Mem` is
+  `Stack::Stable` below `top`. `Stack::trail_by_store` is the only place
+  it is used directly; a call's callee is related to its caller by two
+  hypotheses (`enters`, `leaves` of `call_step_by`), stated against any
+  callee contract `Pre`, `Post`.
+- **FunctionIR's instance** is `S := Buffers()` and
+  `Mem := Stack::FileIn(lending)` (`InMemory`), its law
+  `Stack::file_in_stable`. `Trail`, `Trailed`, `EmitsOver`,
+  `MayEmitOver`, `ArgsReady`, `Called` and `Closed` are the generic ones
+  at it, and the theorems the old region theorem cites keep their
+  statements as one-line instances (`call_step`, `function_runs`,
+  `branch_emits_over`, `File::emit_call_steps`, the `*_over` lemmas).
+  `Stack::Entered` was `Trail` under another name and is gone.
+- **The bytes level's** is `S := Heap` and `Mem := Injected(spans, ·, ·)`,
+  its law `Loan::stable_injected` (the probe
+  `lib/_tests/native/function_ir/function_ir_lower_calls_tests.hthr`).
+- **Loops.** The passes are one induction on any measure
+  (`Site::loop_iterates`), which for a plain loop is the run's fuel and
+  for the bounded loop the passes left (`Site::loop_passes` is that
+  instance, the counter's facts its step). A head is `Stack::LoopAt` (the
+  state's words in their registers); the bounded loop's head is that with
+  the counter as one more register (`loop_body_runs` from
+  `loop_body_runs_by`), and the turn round is `loop_turns`, which
+  `loop_rounds` finishes with the counter's step and the jump.
+
 ## 3. The rounds
 
 Each is a PR and ends with something that runs.
