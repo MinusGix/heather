@@ -1024,8 +1024,13 @@ The checker is one forward pass over the body with a state per place:
 - A death removes the viewer, or restores `whole`. The death of an owner
   is a take, so it needs the place `whole`: a view cannot outlive what it
   views.
-- A join is the meet, with regions coarsened. A type that may not be
-  dropped may not be `gone` by weakening.
+- A join is the meet, with regions coarsened: a view live on both arms in
+  one mode stays, its region the union of the arms' (a region is a window,
+  the whole object, or a union of regions, so the coarsening loses nothing
+  but which arm was taken); any other view is dead after the join. An arm's
+  residuals are owed under its test, as closed data with the test as their
+  hypothesis. A type that may not be dropped may not be `gone` by
+  weakening.
 - Overlap is decided on the places' steps where they are closed; otherwise
   it is a residual obligation. A key access emits `Valid`; an index its
   bound; a call the callee's precondition.
@@ -1039,6 +1044,16 @@ frozen window follows the object through its versions with nothing per
 version. Stated per name, as above, the invariant needs two more clauses
 (live names hold distinct objects; every live name on a view's object lists
 its window), which are this table rederived.
+
+What `out(viewer)` stands for is exclusivity: a live write view is apart
+from every other live view. With eager write-back (§15.2) the holder's value
+inside an out window is the viewer's, so the invariant does not weaken while
+a loan lives: the object holds the holder's value everywhere, and each live
+write view holds its own value at the window its slot names, which are the
+same values there. A read of an `out` place by its owner would therefore be
+sound (the fourth experiment proves it, `Sim::owner_reads`); it is refused
+as policy (§15.7, item 4), and a write by the owner there is refused because
+the next write-back would put back what was lent over it.
 
 A place is frozen while a live binding's type mentions it in a read region.
 A write under a frozen place is licensed where it is apart from it, so a
@@ -1268,6 +1283,104 @@ where the first experiment's was quadratic, from its representation
 across statements, a join, stored references) is
 `ownership-checker-loans-and-joins`.
 
+**The fourth experiment** (`ownership-checker-loans-and-joins`) restructures
+`call_check.hthr` so one checker covers both earlier experiments' calls and
+what they left untested, each item landed and verified before the next.
+
+*A loan held across statements* (2026-11-25). The write parameter is now a
+place (`x[i] := v` means `x := x.set(i, v)`), not a chain of named versions:
+with one object per function the versions only counted writes, and a join
+could not have met two arms that wrote different numbers of times. A view is
+`View(t, md, lo, n)`, to read or to write; `Put(t, i, v)` writes through a
+write view; `CallMut(g, t, args, z)` lends a live write view to a callee, so
+the second experiment's one-statement loan is `View`, `CallMut`, `Die`. In
+the meaning a write view is its value and an erased slot (§15.2), and `Put`
+and `CallMut` write it back at once (`Sem::back`). The invariant did not
+weaken: the file holds the holder's value everywhere, each live write view
+holds its own value at the window its slot names (`Lent`), and a live write
+view is apart from every other live view (`Sim.excl`, what `out` means).
+`written_back` serves both a store through a view and a call lent one, so
+the write-back after a statement costs one write's proof whatever the
+loan's length. The owner's read of a lent part is refused and proved sound
+(`Sim::owner_reads`; `loan_unchecked_agrees` runs a program whose residual
+fails and whose runs agree); the owner's write inside the window is refused
+with `clobber_control` (the run reads 9, the meaning 6).
+
+*A branch with a join* (2026-11-25). A body is a tree, `If(test, a, b,
+rest)`, the arms binding as many words and views as each other (an arm's
+words are the join's values, as a phi's). The checker joins the arms'
+places by the meet above; a residual of an arm is `Under(test, arm, owed)`,
+which holds wherever the test gives the other answer or the owed holds, so
+the residual is closed data whose hypothesis is the test. The proof needed
+nothing per arm that survives the join: the arm taken has the invariant at
+its own places (by the same induction), and `Sim::weaken` gives it at the
+meet's, since the meet only drops views and a union region covers each
+arm's (`Covers`, `Coarser`); no flag records which arm ran. Coarsening to
+the whole object was tried first and refused writes apart from both arms'
+windows; the union is exact and simpler to prove, a region's licence being
+pointwise (`Region::Clear`). Controls: a view read after a join where one
+arm ended it (`after_join_control`, 9 against 5); the same write without the
+branch, whose residual fails (`unguarded_control`); the write in the other
+arm, whose residual is owed under the other answer and fails there
+(`swapped_control`); a write into either arm's window while the joined view
+lives (`coarse_held_control`, 7 against 6).
+
+*A finer returned region* (2026-11-25). A signature's result is `KView(region)`,
+the region stated in the callee's parameter words (`Ret::kind`: the
+answered window where it reads only parameter words, else the whole
+parameter); a caller reads it at its arguments (`Region::subst`) and freezes
+only that, so it may write beside the view. `FnSafe`'s `view_in` became "the
+answered view lies in the signature's region, at the call's words", and it
+is load-bearing: the caller's frame for its later write is the view's
+`ViewOk.within`, which comes from it and nothing else. `stray_not_safe` is a
+callee that answers the right value at the wrong place, keeping every other
+part of the promise; with it, an accepted caller's runs differ
+(`stray_breaks`).
+
+*Postconditions* (2026-11-25, `ownership-fnsafe-postconditions`). `FnSafe`
+gains a postcondition, a proposition of the call's words and its answer,
+which the callee's own proof establishes and its callers assume. The
+checker's data did not change: a residual over a word a call bound is
+ordinary closed data, and its proof is the caller's, under the hypothesis
+`Posted` that the world's callees answer what their postconditions say
+(derived from their `FnSafe` at a file holding only the argument). A
+callee's postcondition is one more proof parameter beside its precondition
+(§15.8). One limit: the depth-zero world of `prog_sound` answers zero, so a
+postcondition zero does not meet is composed depth by depth from
+`check_sound` (`after_sound`); a recursive program with such a postcondition
+needs the termination the meaning assumes, which this toy's world by depth
+does not state.
+
+*Stored references and the erased owner* (2026-11-25). A mode `Lends(n)`
+is a function lent `n` write references stored in a collection, whose owner
+is erased: in its meaning it takes the owner's value in and out with each
+reference's slot (`Sem::start`), and in its run it is given the references
+and no reference to the owner (`Mode::owner`). It cannot name its owner
+(the owner statements need `Mode::owns`). A caller hands it live write views
+(`CallAll`), which the call consumes. `FnSafe` is stated at a reference
+standing for the owner's place, which the run never sees, over the slots it
+was lent (`Lendable`: as many as the mode says, pairwise apart); its frame
+is `kept_out`, nothing changed outside the lent references' spans, so it
+names no object reachable through them, only the owner's place once per
+owner. The caller's proof cites only that promise, at its own reference;
+the collection's exclusivity comes from its own place states (`Sim.excl`)
+and the consumed views die. Inside the callee the invariant gains `kept`
+(a lending function opens no view and changes nothing outside what it was
+lent), which follows from its having no owner to touch. Controls: one view
+lent twice (`twice_control`: the second write-back puts back a stale copy,
+1 against 6), a consumed view read after the call (`reuse_control`), a
+lending function that reads its owner or answers a view of it (refused).
+Untested: a collection held in data across statements rather than formed
+at the call, references into several owners, and places with steps.
+
+**Cost and shape (2026-11-25).** The closed verdict stays linear with
+loans, joins and union regions: at 2 to 64 units of ten statements (a loan
+held across a write and a read beside a long-lived view, then a branch
+whose arms open views on different windows), the full verdict `check_fn(…)
+= Some(rs)` costs 9.2k to 290k kernel steps, each doubling 1.96 to 2.03
+times the last. One object per function throughout, so the holder table the
+first experiment's quadratic came from does not arise.
+
 ### 15.7 Settled by Minus, 2026-11-25, and what is still open
 
 - **When memory runs out**: room is a premise of the machine theorem, the
@@ -1297,7 +1410,9 @@ Still open:
 3. That the inference rule's answer checks whenever any annotation does
    (§15.3): argued, to be proved with the judgment.
 4. Whether an owner may read a part it has lent to write, which eager
-   write-back would make sound. Kept refused at first.
+   write-back would make sound. Kept refused at first. (The fourth
+   experiment proves it sound, `Sim::owner_reads`: with eager write-back
+   the owner's buffer holds the viewer's value inside the out window.)
 5. The order in which the levels are built and the customers ported.
 
 ### 15.8 What a signature records
@@ -1308,7 +1423,9 @@ its mode (take, read, write), the parts it may write, and what places its
 type's regions stand for; for the result its class and whether it is fresh,
 is a parameter, or is a view of places of parameters; and its cost (none, a
 bound with its theorem, or unstated: §15.9). Residual preconditions are not extra data: they are the proof
-parameters in the kernel type. A caller's checker reads the modes to step
+parameters in the kernel type, and so is a postcondition about the answer,
+which the function's proof establishes and its callers assume (the fourth
+experiment's `FnSafe`). A caller's checker reads the modes to step
 its place states across the call, the result's origin to know what is
 frozen or out while the result lives, the parts to emit `Apart` against
 views it holds, and the name of the callee's safety theorem to cite. It
