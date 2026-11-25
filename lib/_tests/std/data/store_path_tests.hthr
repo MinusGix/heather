@@ -1,0 +1,131 @@
+// Probes of `store_path`: a key as a path step at a closed store (read,
+// write, the other key untouched, a stale key invalid as a path), the laws
+// and validity at an open store, keys decided apart at closed and open
+// keys, a key then a field of the record it names, and the negative
+// controls (a key is not apart from itself; the decider refuses one key
+// twice, and a stale key's path is not valid). Tests, not library.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import location;
+import path;
+import store;
+import store_path;
+
+// ---------------------------------------------------------------------------
+// Closed: two values allocated, the first freed and its slot reused
+
+fn ONE() → Mutated<Store<Nat>, Key> { Store::alloc(Store::empty(), 5) }
+
+fn TWO() → Mutated<Store<Nat>, Key> { Store::alloc(ONE().after, 7) }
+
+fn REUSED() → Mutated<Store<Nat>, Key> { Store::alloc(TWO().after.free(ONE().value), 9) }
+
+theorem path_reads(): Store::key_path<Nat>(TWO().value).get(TWO().after) = Some(7) { refl }
+
+theorem path_writes(): Store::key_path<Nat>(TWO().value).get(Store::key_path<Nat>(TWO().value).set(TWO().after, 8)) = Some(8) { refl }
+
+theorem path_other_untouched(): Store::key_path<Nat>(ONE().value).get(Store::key_path<Nat>(TWO().value).set(TWO().after, 8)) = Some(5) { refl }
+
+// The stale key: its path reads nothing after the slot is reused, and its
+// write changes nothing.
+theorem stale_path_reads_nothing(): Store::key_path<Nat>(ONE().value).get(REUSED().after) = None { refl }
+
+theorem stale_path_invalid(): ¬Store::key_path<Nat>(ONE().value).Valid(REUSED().after) {
+    λ valid => TWO().after.stale_after_reuse(ONE().value, 9, trivial, REUSED().after.valid_of_key(ONE().value, valid))
+}
+
+theorem stale_path_writes_nothing(): Store::key_path<Nat>(ONE().value).set(REUSED().after, 1) = REUSED().after { refl }
+
+// The keys handed out are decided apart by evaluation; the new key and the
+// stale one share a slot and differ in generation, and are apart too.
+theorem handed_out_apart(): Apart<Store<Nat>, Nat, Nat>(Store::key_path<Nat>(ONE().value), Store::key_path<Nat>(TWO().value)) {
+    Store::keys_apart_sound(ONE().value, TWO().value, trivial)
+}
+
+theorem reused_slot_apart(): Apart<Store<Nat>, Nat, Nat>(Store::key_path<Nat>(ONE().value), Store::key_path<Nat>(REUSED().value)) {
+    Store::keys_apart_sound(ONE().value, REUSED().value, trivial)
+}
+
+// ---------------------------------------------------------------------------
+// Open: laws, validity, apartness
+
+theorem laws_open<V>(k: Key): PathLaws<Store<V>, V>(Store::key_path<V>(k)) { Store::key_laws(k) }
+
+theorem valid_both_ways<V>(s: Store<V>, k: Key, valid: s.Valid(k)): s.Valid(k) { s.valid_of_key(k, s.key_valid(k, valid)) }
+
+// What an allocation hands out is valid as a path, and every path valid
+// before is kept.
+theorem alloc_path_valid<V>(s: Store<V>, v: V): Store::key_path<V>(Store::alloc(s, v).value).Valid(Store::alloc(s, v).after) {
+    Store::alloc(s, v).after.key_valid(Store::alloc(s, v).value, s.alloc_valid(v))
+}
+
+theorem alloc_keeps_open<V>(s: Store<V>, v: V, k: Key, valid: Store::key_path<V>(k).Valid(s)): Store::key_path<V>(k).Valid(Store::alloc(s, v).after) {
+    Store::key_path<V>(k).keeps_valid(s, Store::alloc(s, v).after, s.alloc_keeps_path(v, k), valid)
+}
+
+// Different slots at open indexes, apart by the decider with the
+// inequality in scope.
+theorem slots_apart_open<V>(i, j, g: Nat, ne: i ≠ j): Apart<Store<V>, V, V>(Store::key_path<V>(Key(i, g)), Store::key_path<V>(Key(j, g))) {
+    Store::keys_apart(Key(i, g), Key(j, g), λ e => ne(cong_fn(λ (k: Key) => k.index, e)))
+}
+
+// A free keeps every other key and ends its own.
+theorem free_open<V>(s: Store<V>, k, k2: Key, ne: k2 ≠ k): And<Store::key_path<V>(k2).Keeps(s, s.free(k)), ¬Store::key_path<V>(k).Valid(s.free(k))> {
+    And(s.free_keeps_path(k, k2, ne), s.free_ends_path(k))
+}
+
+// ---------------------------------------------------------------------------
+// A key, then a field of the record it names: a graph node's weight
+
+record Node { weight: Nat, next: Nat }
+
+fn Node::weight_at() → Location<Node, Nat> { Location<Node, Nat>(read := λ (n: Node) => n.weight, write := λ (n: Node) => λ (w: Nat) => Node(w, n.next)) }
+
+fn Node::next_at() → Location<Node, Nat> { Location<Node, Nat>(read := λ (n: Node) => n.next, write := λ (n: Node) => λ (x: Nat) => Node(n.weight, x)) }
+
+fn weight_of(k: Key) → Path<Store<Node>, Nat> { Store::key_then(k, Path::of_location(Node::weight_at())) }
+
+fn next_of(k: Key) → Path<Store<Node>, Nat> { Store::key_then(k, Path::of_location(Node::next_at())) }
+
+theorem weight_laws(k: Key): PathLaws<Store<Node>, Nat>(weight_of(k)) {
+    Store::key_then_laws(k, Path::of_location(Node::weight_at()),
+        Path::of_location_laws(Node::weight_at(), LocationLaws(λ n => refl, λ n w => refl, λ n v w => refl)))
+}
+
+// One validity statement: the key valid makes the field valid.
+theorem weight_valid(s: Store<Node>, k: Key, valid: s.Valid(k)): weight_of(k).Valid(s) {
+    s.key_then_valid(k, Path::of_location(Node::weight_at()), valid, Path::of_location_valid(Node::weight_at(), s.read(k, valid := valid)))
+}
+
+// Two nodes' weights are apart wherever the keys differ, and two fields of
+// one node are apart by their own disjointness under the key.
+theorem weights_apart(k1, k2: Key, ne: k1 ≠ k2): Apart<Store<Node>, Nat, Nat>(weight_of(k1), weight_of(k2)) {
+    Store::inside_apart(k1, k2, ne, Path::of_location(Node::weight_at()), Path::of_location(Node::weight_at()))
+}
+
+theorem fields_apart(k: Key): Apart<Store<Node>, Nat, Nat>(weight_of(k), next_of(k)) {
+    Apart::under(Store::key_path<Node>(k), Store::key_laws(k),
+        Apart::of_disjoint(Node::weight_at(), Node::next_at(), Disjoint(λ n v => refl, λ n v => refl, λ n a b => refl)))
+}
+
+// As footprints: each field lies in its key, and the keys decide.
+theorem weights_apart_by_keys(i, j: Nat): Apart<Store<Node>, Nat, Nat>(weight_of(Key(0, i)), weight_of(Key(1, j))) {
+    KeyIn::apart_sound(KeyIn::of(Key(0, i), Path::of_location(Node::weight_at())), KeyIn::of(Key(1, j), Path::of_location(Node::weight_at())), trivial)
+}
+
+// ---------------------------------------------------------------------------
+// Negative controls
+
+theorem one_key_not_apart(): ¬Apart<Store<Nat>, Nat, Nat>(Store::key_path<Nat>(Key(3, 1)), Store::key_path<Nat>(Key(3, 1))) {
+    Store::key_not_apart_self(Key(3, 1))
+}
+
+theorem verdict_one_key(): Key(3, 1).apart(Key(3, 1)) = False { refl }
+
+// expect-error: `trivial` proves `True`
+theorem one_key_refused(): Apart<Store<Nat>, Nat, Nat>(Store::key_path<Nat>(Key(3, 1)), Store::key_path<Nat>(Key(3, 1))) {
+    Store::keys_apart_sound(Key(3, 1), Key(3, 1), trivial)
+}

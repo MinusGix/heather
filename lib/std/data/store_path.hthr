@@ -1,0 +1,467 @@
+// A key is a path step (docs/language/ownership-design.md §10.4, §10.7;
+// issues/ownership-library-join.md). The store's key (`store.hthr`) and the
+// path (`lib/std/machine/path.hthr`) are one vocabulary: the key `k` names
+// a part of the store, `Store::key_path(k) : Path<Store<V>, V>`, whose read
+// is the store's partial read and whose write is the store's `put`.
+//
+// - **Lawful** at every store (`key_laws`): the optional-lens laws, read off
+//   the slot (`Slot::written_read`, `written_none`, `written_twice`).
+// - **Its validity is the store's** (`key_valid`, `valid_of_key`): a path is
+//   valid where its read answers, which is `Store::Valid` by
+//   `Store::valid_exists`/`exists_valid`.
+// - **Keys are apart by inequality** (`keys_apart`): two different keys,
+//   of different slots or of one slot at different generations, are
+//   `Apart`. A key is not apart from itself (`key_not_apart_self`, the
+//   negative control). The decider is `Key::apart`, the slot and the
+//   generation compared, sound (`keys_apart_sound`) and complete
+//   (`key_apart_complete`: where it says no, the keys are equal and the
+//   paths meet).
+// - **What a store's operations keep**: an allocation keeps every key's
+//   path (`alloc_keeps_path`), a write keeps every other key's
+//   (`put_keeps_path`), a free every other key's (`free_keeps_path`).
+// - **A key then a path into the value** (`key_then`): lawful
+//   (`key_then_laws`), valid where the key is and the inner path is valid
+//   in what the key reads (`key_then_valid`); two such under different keys
+//   are apart whatever the inner paths are (`inside_apart`), and two under
+//   one key are apart where the inner paths are (`Apart::under`).
+// - **Keys as a footprint** (`KeyIn`): a path that is a key's step and then
+//   anything lies in that key; two paths in different keys are apart
+//   (`KeyIn::apart_sound`), decided by `Key::apart` as `PathIn`'s spans
+//   decide paths into a list (`list_path.hthr`). This is the second kind of
+//   footprint beside spans: what it names is a slot of a store, not a
+//   range of positions.
+import logic;
+import bool;
+import nat;
+import list;
+import list_window;
+import list_pointwise;
+import option;
+import path;
+import store;
+
+// ---------------------------------------------------------------------------
+// One slot, written
+
+theorem Slot::written_read_by<V>(c: Bool, h: Nat, w, a: V): c.then(Some(w)) = Some(a) → Live(h, c.select(a, w)) = Live(h, w) {
+    match c {
+        True => λ e => cong_fn(λ (x: V) => Slot::Live(h, x), sym(Option::some_inj(w, a, e))),
+        False => λ e => refl,
+    }
+}
+
+// Writing what a key read through that key leaves the slot.
+theorem Slot::written_read<V>(self sl: Slot<V>, g: Nat, a: V): sl.answer(g) = Some(a) → sl.written(g, a) = sl {
+    match sl {
+        Live(h, w) => λ e => Slot::written_read_by(h.same(g), h, w, a, e),
+        Free(_) => λ e => absurd(e),
+    }
+}
+
+theorem Slot::written_none_by<V>(c: Bool, h: Nat, w, v: V): c.then(Some(w)) = None → Live(h, c.select(v, w)) = Live(h, w) {
+    match c {
+        True => λ e => absurd(e),
+        False => λ e => refl,
+    }
+}
+
+// A write through a key the slot does not answer changes nothing.
+theorem Slot::written_none<V>(self sl: Slot<V>, g: Nat, v: V): sl.answer(g) = None → sl.written(g, v) = sl {
+    match sl {
+        Live(h, w) => λ e => Slot::written_none_by(h.same(g), h, w, v, e),
+        Free(_) => λ e => refl,
+    }
+}
+
+theorem Slot::written_twice_by<V>(c: Bool, h: Nat, x, v, w: V): Live(h, c.select(w, c.select(v, x))) = Live(h, c.select(w, x)) {
+    match c { True => refl, False => refl }
+}
+
+// The second of two writes through one key is what stays.
+theorem Slot::written_twice<V>(self sl: Slot<V>, g: Nat, v, w: V): sl.written(g, v).written(g, w) = sl.written(g, w) {
+    match sl {
+        Live(h, x) => Slot::written_twice_by(h.same(g), h, x, v, w),
+        Free(_) => refl,
+    }
+}
+
+theorem Slot::other_answer_by<V>(c1, c2: Bool, h, g1, g2: Nat, ne: g1 ≠ g2, e1: h.same(g1) = c1, e2: h.same(g2) = c2, x, v: V):
+    c1.then(Some(c2.select(v, x))) = c1.then(Some(x))
+{
+    match c1 as λ d => (h.same(g1) = d → d.then(Some(c2.select(v, x))) = d.then(Some(x))) {
+        True => λ e1 => match c2 as λ d => (h.same(g2) = d → Some(d.select(v, x)) = Some(x)) {
+            True => λ e2 => false_elim(ne(trans(sym(h.same_sound(g1, e1)), h.same_sound(g2, e2)))),
+            False => λ e2 => refl,
+        }(e2),
+        False => λ e1 => refl,
+    }(e1)
+}
+
+// A write through a key of another generation leaves what this key reads.
+theorem Slot::written_other_answer<V>(self sl: Slot<V>, g1, g2: Nat, ne: g1 ≠ g2, v: V): sl.written(g2, v).answer(g1) = sl.answer(g1) {
+    match sl {
+        Live(h, x) => Slot::other_answer_by(h.same(g1), h.same(g2), h, g1, g2, ne, refl, refl, x, v),
+        Free(_) => refl,
+    }
+}
+
+theorem Slot::commute_by<V>(c1, c2: Bool, h, g1, g2: Nat, ne: g1 ≠ g2, e1: h.same(g1) = c1, e2: h.same(g2) = c2, x, a, b: V):
+    Live(h, c2.select(b, c1.select(a, x))) = Live(h, c1.select(a, c2.select(b, x)))
+{
+    match c1 as λ d => (h.same(g1) = d → Live(h, c2.select(b, d.select(a, x))) = Live(h, d.select(a, c2.select(b, x)))) {
+        True => λ e1 => match c2 as λ d => (h.same(g2) = d → Live(h, d.select(b, a)) = Live(h, a)) {
+            True => λ e2 => false_elim(ne(trans(sym(h.same_sound(g1, e1)), h.same_sound(g2, e2)))),
+            False => λ e2 => refl,
+        }(e2),
+        False => λ e1 => refl,
+    }(e1)
+}
+
+// Writes through keys of two generations commute (at most one of them is
+// the slot's).
+theorem Slot::written_commute<V>(self sl: Slot<V>, g1, g2: Nat, ne: g1 ≠ g2, a, b: V):
+    sl.written(g1, a).written(g2, b) = sl.written(g2, b).written(g1, a)
+{
+    match sl {
+        Live(h, x) => Slot::commute_by(h.same(g1), h.same(g2), h, g1, g2, ne, refl, refl, x, a, b),
+        Free(_) => refl,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The store, written through a key
+
+// An update that leaves the element where it applies leaves the list.
+theorem List::update_fixed<A>(self xs: List<A>): (i: Nat) → (f: A → A) → (x: A) → xs.nth(i) = Some(x) → f(x) = x → xs.update(i, f) = xs {
+    match xs {
+        Nil => λ i f x none => absurd(none),
+        Cons(h, t) => λ i => match i {
+            Zero => λ f x some fixed => cong_fn(λ (c: A) => Cons(c, t), trans(cong_fn(f, Option::some_inj(h, x, some)), trans(fixed, sym(Option::some_inj(h, x, some))))),
+            Succ(k) => λ f x some fixed => List::cong_cons(h, t.update_fixed(k, f, x, some, fixed)),
+        },
+    }
+}
+
+// An update where there is no element leaves the list.
+theorem Store::update_absent<A>(xs: List<A>, i: Nat, f: A → A, none: xs.nth(i) = None): xs.update(i, f) = xs {
+    match xs {
+        Nil => refl,
+        Cons(h, t) => match i {
+            Zero => absurd(none),
+            Succ(k) => List::cong_cons(h, Store::update_absent(t, k, f, none)),
+        },
+    }
+}
+
+// The slot of a key, and what the key reads off it.
+theorem Store::get_slot<V>(self s: Store<V>, k: Key): (o: Option<Slot<V>>) → s.slots.nth(k.index) = o → s.get(k) = o.and_then(λ (sl: Slot<V>) => sl.answer(k.gen)) {
+    λ o e => cong_fn(λ (x: Option<Slot<V>>) => x.and_then(λ (sl: Slot<V>) => sl.answer(k.gen)), e)
+}
+
+theorem Store::put_read_of<V>(self s: Store<V>, k: Key, a: V): (o: Option<Slot<V>>) → s.slots.nth(k.index) = o → s.get(k) = Some(a) → s.put(k, a) = s {
+    λ o => match o {
+        None => λ e h => absurd(trans(sym(s.get_slot(k, None, e)), h)),
+        Some(sl) => λ e h => cong_fn(λ (xs: List<Slot<V>>) => Store<V>(xs),
+            s.slots.update_fixed(k.index, λ (t: Slot<V>) => t.written(k.gen, a), sl, e, sl.written_read(k.gen, a, trans(sym(s.get_slot(k, Some(sl), e)), h)))),
+    }
+}
+
+// Writing back what a key reads changes nothing.
+theorem Store::put_read<V>(self s: Store<V>, k: Key, a: V, h: s.get(k) = Some(a)): s.put(k, a) = s { s.put_read_of(k, a, s.slots.nth(k.index), refl, h) }
+
+theorem Store::put_none_of<V>(self s: Store<V>, k: Key, v: V): (o: Option<Slot<V>>) → s.slots.nth(k.index) = o → s.get(k) = None → s.put(k, v) = s {
+    λ o => match o {
+        None => λ e h => cong_fn(λ (xs: List<Slot<V>>) => Store<V>(xs), Store::update_absent(s.slots, k.index, λ (t: Slot<V>) => t.written(k.gen, v), e)),
+        Some(sl) => λ e h => cong_fn(λ (xs: List<Slot<V>>) => Store<V>(xs),
+            s.slots.update_fixed(k.index, λ (t: Slot<V>) => t.written(k.gen, v), sl, e, sl.written_none(k.gen, v, trans(sym(s.get_slot(k, Some(sl), e)), h)))),
+    }
+}
+
+// A write through a key that reads nothing changes nothing.
+theorem Store::put_none<V>(self s: Store<V>, k: Key, v: V, h: s.get(k) = None): s.put(k, v) = s { s.put_none_of(k, v, s.slots.nth(k.index), refl, h) }
+
+// Two writes through one key: the second stays.
+theorem Store::put_put<V>(self s: Store<V>, k: Key, v, w: V): s.put(k, v).put(k, w) = s.put(k, w) {
+    cong_fn(λ (xs: List<Slot<V>>) => Store<V>(xs),
+        trans(s.slots.update_update_same(k.index, λ (t: Slot<V>) => t.written(k.gen, v), λ (t: Slot<V>) => t.written(k.gen, w)),
+            s.slots.update_ext(λ (t: Slot<V>) => t.written(k.gen, v).written(k.gen, w), λ (t: Slot<V>) => t.written(k.gen, w),
+                λ t => t.written_twice(k.gen, v, w), k.index)))
+}
+
+// A write through a key of the same slot at another generation leaves
+// what this key reads…
+theorem Store::put_other_gen<V>(self s: Store<V>, k, k2: Key, v: V, same: k2.index = k.index, ne: k2.gen ≠ k.gen): s.put(k, v).get(k2) = s.get(k2) {
+    let at: (s.put(k, v).slots.nth(k2.index) = s.slots.nth(k2.index).map(λ (sl: Slot<V>) => sl.written(k.gen, v))) =
+        j(same, λ i _ => s.slots.update(i, λ (sl: Slot<V>) => sl.written(k.gen, v)).nth(k2.index) = s.slots.nth(k2.index).map(λ (sl: Slot<V>) => sl.written(k.gen, v)),
+            Store::nth_update_map(s.slots, k2.index, λ (sl: Slot<V>) => sl.written(k.gen, v)));
+    trans(cong_fn(λ (o: Option<Slot<V>>) => o.and_then(λ (sl: Slot<V>) => sl.answer(k2.gen)), at),
+        match s.slots.nth(k2.index) as λ o => (o.map(λ (sl: Slot<V>) => sl.written(k.gen, v)).and_then(λ (sl: Slot<V>) => sl.answer(k2.gen))
+                = o.and_then(λ (sl: Slot<V>) => sl.answer(k2.gen))) {
+            None => refl,
+            Some(sl) => sl.written_other_answer(k2.gen, k.gen, ne, v),
+        })
+}
+
+// …so a write through any other key does.
+theorem Key::ne_parts(k1, k2: Key, ne: k1 ≠ k2): Or<k1.index ≠ k2.index, And<k1.index = k2.index, k1.gen ≠ k2.gen>> {
+    match Nat::eq_dec(k1.index, k2.index) {
+        Inr(ni) => Inl(ni),
+        Inl(si) => match Nat::eq_dec(k1.gen, k2.gen) {
+            Inr(ng) => Inr(And(si, ng)),
+            Inl(sg) => false_elim(ne(cong_args(λ (i: Nat) => λ (g: Nat) => Key(i, g), si, sg))),
+        },
+    }
+}
+
+theorem Store::put_get_other<V>(self s: Store<V>, k, k2: Key, v: V, ne: k2 ≠ k): s.put(k, v).get(k2) = s.get(k2) {
+    match Key::ne_parts(k2, k, ne) {
+        Inl(ni) => s.put_other(k, v, k2, ni),
+        Inr(both) => s.put_other_gen(k, k2, v, both.left, both.right),
+    }
+}
+
+// Writes through two different keys commute.
+theorem Store::put_commute<V>(self s: Store<V>, k1, k2: Key, ne: k1 ≠ k2, a, b: V): s.put(k2, b).put(k1, a) = s.put(k1, a).put(k2, b) {
+    match Key::ne_parts(k1, k2, ne) {
+        Inl(ni) => cong_fn(λ (xs: List<Slot<V>>) => Store<V>(xs),
+            s.slots.update_update_apart(k2.index, k1.index, λ (t: Slot<V>) => t.written(k2.gen, b), λ (t: Slot<V>) => t.written(k1.gen, a), λ e => ni(sym(e)))),
+        Inr(both) => {
+            let i = k1.index;
+            let first: (s.put(k2, b).put(k1, a).slots = s.slots.update(i, λ (t: Slot<V>) => t.written(k2.gen, b).written(k1.gen, a))) =
+                j(both.left, λ m _ => s.slots.update(m, λ (t: Slot<V>) => t.written(k2.gen, b)).update(i, λ (t: Slot<V>) => t.written(k1.gen, a))
+                        = s.slots.update(i, λ (t: Slot<V>) => t.written(k2.gen, b).written(k1.gen, a)),
+                    s.slots.update_update_same(i, λ (t: Slot<V>) => t.written(k2.gen, b), λ (t: Slot<V>) => t.written(k1.gen, a)));
+            let second: (s.put(k1, a).put(k2, b).slots = s.slots.update(i, λ (t: Slot<V>) => t.written(k1.gen, a).written(k2.gen, b))) =
+                j(both.left, λ m _ => s.slots.update(i, λ (t: Slot<V>) => t.written(k1.gen, a)).update(m, λ (t: Slot<V>) => t.written(k2.gen, b))
+                        = s.slots.update(i, λ (t: Slot<V>) => t.written(k1.gen, a).written(k2.gen, b)),
+                    s.slots.update_update_same(i, λ (t: Slot<V>) => t.written(k1.gen, a), λ (t: Slot<V>) => t.written(k2.gen, b)));
+            let pointwise: (s.slots.update(i, λ (t: Slot<V>) => t.written(k2.gen, b).written(k1.gen, a)) = s.slots.update(i, λ (t: Slot<V>) => t.written(k1.gen, a).written(k2.gen, b))) =
+                s.slots.update_ext(λ (t: Slot<V>) => t.written(k2.gen, b).written(k1.gen, a), λ (t: Slot<V>) => t.written(k1.gen, a).written(k2.gen, b),
+                    λ t => t.written_commute(k2.gen, k1.gen, λ e => both.right(sym(e)), b, a), i);
+            cong_fn(λ (xs: List<Slot<V>>) => Store<V>(xs), trans(first, trans(pointwise, sym(second))))
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The key as a path
+
+fn Store::key_path<V>(k: Key) → Path<Store<V>, V> {
+    Path<Store<V>, V>(get := λ (s: Store<V>) => s.get(k), set := λ (s: Store<V>) => λ (v: V) => s.put(k, v))
+}
+
+theorem Store::key_laws<V>(k: Key): PathLaws<Store<V>, V>(Store::key_path<V>(k)) {
+    PathLaws(
+        λ s a v h => s.put_reads(k, v, Store::exists_valid(s, k, a, h)),
+        λ s a h => s.put_read(k, a, h),
+        λ s v w => s.put_put(k, v, w),
+        λ s v h => s.put_none(k, v, h),
+    )
+}
+
+// Its validity is the store's, both ways.
+theorem Store::key_valid<V>(self s: Store<V>, k: Key, valid: s.Valid(k)): Store::key_path<V>(k).Valid(s) { s.valid_exists(k, valid) }
+
+theorem Store::valid_of_key<V>(self s: Store<V>, k: Key, valid: Store::key_path<V>(k).Valid(s)): s.Valid(k) {
+    Store::exists_valid(s, k, valid.witness, valid.proof)
+}
+
+// What the path reads under validity is the store's `read`.
+theorem Store::key_reads<V>(self s: Store<V>, k: Key, valid: s.Valid(k)): Store::key_path<V>(k).get(s) = Some(s.read(k, valid := valid)) {
+    s.read_get(k, valid)
+}
+
+// Two different keys are apart.
+theorem Store::keys_apart<V>(k1, k2: Key, ne: k1 ≠ k2): Apart<Store<V>, V, V>(Store::key_path<V>(k1), Store::key_path<V>(k2)) {
+    Apart(
+        λ s v => s.put_get_other(k2, k1, v, ne),
+        λ s v => s.put_get_other(k1, k2, v, λ e => ne(sym(e))),
+        λ s a b => s.put_commute(k1, k2, ne, a, b),
+    )
+}
+
+// The decider: the slot and the generation compared.
+fn Key::same(self k1, k2: Key) → Bool { k1.index.same(k2.index) && k1.gen.same(k2.gen) }
+
+fn Key::apart(self k1, k2: Key) → Bool { !k1.same(k2) }
+
+theorem Key::same_self(self k: Key): k.same(k) = True { trans(cong_fn(λ (b: Bool) => b && k.gen.same(k.gen), k.index.same_self()), k.gen.same_self()) }
+
+theorem Key::ne_of_apart(self k1, k2: Key, verdict: k1.apart(k2).IsTrue()): k1 ≠ k2 {
+    λ e => {
+        let self_apart: (k1.apart(k1).IsTrue()) = j(sym(e), λ k _ => k1.apart(k).IsTrue(), verdict);
+        let no: (k1.apart(k1) = False) = cong_fn(λ (b: Bool) => !b, k1.same_self());
+        j(no, λ b _ => b.IsTrue(), self_apart)
+    }
+}
+
+theorem Store::keys_apart_sound<V>(k1, k2: Key, verdict: k1.apart(k2).IsTrue()): Apart<Store<V>, V, V>(Store::key_path<V>(k1), Store::key_path<V>(k2)) {
+    Store::keys_apart(k1, k2, k1.ne_of_apart(k2, verdict))
+}
+
+// A key is not apart from itself: the negative control, at an open key and
+// value. The store holding one value at the key's slot reads it, and a
+// write of another value through the key changes it.
+fn Store::holding<V>(k: Key, v: V) → Store<V> { Store(List::replicate<Slot<V>>(Free<V>(0), k.index) ++ [Live(k.gen, v)]) }
+
+theorem Store::holding_nth<V>(g: Nat, v: V, i: Nat): (List::replicate<Slot<V>>(Free<V>(0), i) ++ [Live(g, v)]).nth(i) = Some(Live(g, v)) {
+    match i {
+        Zero => refl,
+        Succ(m) => Store::holding_nth(g, v, m),
+    }
+}
+
+theorem Store::holding_get<V>(k: Key, v: V): Store::holding(k, v).get(k) = Some(v) {
+    trans(Store::holding(k, v).get_slot(k, Some(Live(k.gen, v)), Store::holding_nth(k.gen, v, k.index)), Slot::live_answer(k.gen, v))
+}
+
+theorem Store::key_not_apart_self(k: Key): ¬Apart<Store<Nat>, Nat, Nat>(Store::key_path<Nat>(k), Store::key_path<Nat>(k)) {
+    λ apart => {
+        let s = Store::holding(k, 0);
+        let valid: s.Valid(k) = Store::exists_valid(s, k, 0, Store::holding_get(k, 0));
+        let after: (s.put(k, 1).get(k) = Some(1)) = s.put_reads(k, 1, valid);
+        let kept: (s.put(k, 1).get(k) = Some(0)) = trans(apart.left_after_right(s, 1), Store::holding_get(k, 0));
+        absurd(Option::some_inj(1, 0, trans(sym(after), kept)))
+    }
+}
+
+// So the decider is complete: where it says the keys are not apart, they
+// are one key, and its path is not apart from itself.
+theorem Key::same_sound(self k1, k2: Key, e: k1.same(k2) = True): k1 = k2 {
+    let parts = k1.index.same(k2.index).and_true_parts(k1.gen.same(k2.gen), e);
+    let i: (k1.index = k2.index) = k1.index.same_sound(k2.index, parts.left);
+    let g: (k1.gen = k2.gen) = k1.gen.same_sound(k2.gen, parts.right);
+    cong_args(λ (x: Nat) => λ (y: Nat) => Key(x, y), i, g)
+}
+
+theorem Store::key_apart_complete(k1, k2: Key, e: k1.same(k2) = True): ¬Apart<Store<Nat>, Nat, Nat>(Store::key_path<Nat>(k1), Store::key_path<Nat>(k2)) {
+    j(k1.same_sound(k2, e), λ k _ => ¬Apart<Store<Nat>, Nat, Nat>(Store::key_path<Nat>(k1), Store::key_path<Nat>(k)), Store::key_not_apart_self(k1))
+}
+
+// ---------------------------------------------------------------------------
+// What the store's operations keep
+
+theorem Store::alloc_keeps_path<V>(self s: Store<V>, v: V, k: Key): Store::key_path<V>(k).Keeps(s, Store::alloc(s, v).after) {
+    λ a h => trans(Store::alloc_keeps(s, v, k, Store::exists_valid(s, k, a, h)), h)
+}
+
+theorem Store::put_keeps_path<V>(self s: Store<V>, k: Key, v: V, k2: Key, ne: k2 ≠ k): Store::key_path<V>(k2).Keeps(s, s.put(k, v)) {
+    Store::keys_apart<V>(k2, k, ne).keeps(s, v)
+}
+
+theorem Slot::freed_other_by<V>(h, g, g2: Nat, ne: g2 ≠ g, w, x: V, e: h.same(g2) = True, sw: Some(w) = Some(x)):
+    (d: Bool) → h.same(g) = d → Slot::freed_by(d, h, w).answer(g2) = Some(x)
+{
+    λ d => match d {
+        True => λ eg => false_elim(ne(trans(sym(h.same_sound(g2, e)), h.same_sound(g, eg)))),
+        False => λ eg => trans(cong_fn(λ (b: Bool) => b.then(Some(w)), e), sw),
+    }
+}
+
+theorem Slot::freed_other_live<V>(h, g, g2: Nat, ne: g2 ≠ g, w, x: V): (c: Bool) → h.same(g2) = c → c.then(Some(w)) = Some(x) →
+    Slot::freed_by(h.same(g), h, w).answer(g2) = Some(x)
+{
+    λ c => match c {
+        True => λ e sw => Slot::freed_other_by(h, g, g2, ne, w, x, e, sw, h.same(g), refl),
+        False => λ e none => absurd(none),
+    }
+}
+
+theorem Slot::freed_other_answer<V>(self sl: Slot<V>, g, g2: Nat, ne: g2 ≠ g, x: V): sl.answer(g2) = Some(x) → sl.freed(g).answer(g2) = Some(x) {
+    match sl {
+        Live(h, w) => λ ans => Slot::freed_other_live(h, g, g2, ne, w, x, h.same(g2), refl, ans),
+        Free(_) => λ ans => absurd(ans),
+    }
+}
+
+theorem Store::free_other_gen<V>(self s: Store<V>, k, k2: Key, same: k2.index = k.index, ne: k2.gen ≠ k.gen, c: V, h: s.get(k2) = Some(c)):
+    s.free(k).get(k2) = Some(c)
+{
+    let at: (s.free(k).slots.nth(k2.index) = s.slots.nth(k2.index).map(λ (sl: Slot<V>) => sl.freed(k.gen))) =
+        j(same, λ i _ => s.slots.update(i, λ (sl: Slot<V>) => sl.freed(k.gen)).nth(k2.index) = s.slots.nth(k2.index).map(λ (sl: Slot<V>) => sl.freed(k.gen)),
+            Store::nth_update_map(s.slots, k2.index, λ (sl: Slot<V>) => sl.freed(k.gen)));
+    trans(cong_fn(λ (o: Option<Slot<V>>) => o.and_then(λ (sl: Slot<V>) => sl.answer(k2.gen)), at),
+        match s.slots.nth(k2.index) as λ o => (o.and_then(λ (sl: Slot<V>) => sl.answer(k2.gen)) = Some(c) →
+                o.map(λ (sl: Slot<V>) => sl.freed(k.gen)).and_then(λ (sl: Slot<V>) => sl.answer(k2.gen)) = Some(c)) {
+            None => λ e => absurd(e),
+            Some(sl) => λ e => Slot::freed_other_answer(sl, k.gen, k2.gen, ne, c, e),
+        }(h))
+}
+
+theorem Store::free_keeps_path<V>(self s: Store<V>, k, k2: Key, ne: k2 ≠ k): Store::key_path<V>(k2).Keeps(s, s.free(k)) {
+    λ c h => match Key::ne_parts(k2, k, ne) {
+        Inl(ni) => trans(s.free_other(k, k2, ni), h),
+        Inr(both) => s.free_other_gen(k, k2, both.left, both.right, c, h),
+    }
+}
+
+// And a free ends its own key's path.
+theorem Store::free_ends_path<V>(self s: Store<V>, k: Key): ¬Store::key_path<V>(k).Valid(s.free(k)) {
+    λ valid => s.free_ends(k, s.free(k).valid_of_key(k, valid))
+}
+
+// ---------------------------------------------------------------------------
+// A key, then a path into its value
+
+fn Store::key_then<V, B>(k: Key, q: Path<V, B>) → Path<Store<V>, B> { Store::key_path<V>(k).then(q) }
+
+theorem Store::key_then_laws<V, B>(k: Key, q: Path<V, B>, ql: PathLaws<V, B>(q)): PathLaws<Store<V>, B>(Store::key_then(k, q)) {
+    Store::key_path<V>(k).then_laws(q, Store::key_laws<V>(k), ql)
+}
+
+// One validity statement: the key valid, and the inner path valid in what
+// the key reads.
+theorem Store::key_then_valid<V, B>(self s: Store<V>, k: Key, q: Path<V, B>, valid: s.Valid(k), inner: q.Valid(s.read(k, valid := valid))):
+    Store::key_then(k, q).Valid(s)
+{
+    Store::key_path<V>(k).then_valid(q, s, s.read(k, valid := valid), s.key_reads(k, valid), inner)
+}
+
+theorem Store::key_then_valid_key<V, B>(self s: Store<V>, k: Key, q: Path<V, B>, valid: Store::key_then(k, q).Valid(s)): s.Valid(k) {
+    s.valid_of_key(k, Store::key_path<V>(k).then_valid_outer(q, s, s.get(k), refl, valid))
+}
+
+// Under two different keys, any two paths are apart.
+theorem Store::inside_apart<V, B, C>(k1, k2: Key, ne: k1 ≠ k2, q1: Path<V, B>, q2: Path<V, C>):
+    Apart<Store<V>, B, C>(Store::key_then(k1, q1), Store::key_then(k2, q2))
+{
+    Store::keys_apart<V>(k1, k2, ne).then_both(q1, q2)
+}
+
+// ---------------------------------------------------------------------------
+// Keys as a footprint
+
+// `p` lies in the key `key`: it is the key's step and then some path into
+// the value, up to spelling.
+record KeyIn<V, B>(p: Path<Store<V>, B>, key: Key) {
+    inner: Path<V, B>,
+    same: PathSame<Store<V>, B>(Store::key_then(key, inner), p),
+}
+
+theorem KeyIn::of<V, B>(k: Key, q: Path<V, B>): KeyIn<V, B>(Store::key_then(k, q), k) { KeyIn(q, PathSame::same(Store::key_then(k, q))) }
+
+// The key itself lies in the key: its value through the identity path.
+fn Path::id<V>() → Path<V, V> { Path<V, V>(get := λ (v: V) => Some(v), set := λ (v: V) => λ (w: V) => w) }
+
+theorem Store::key_in<V>(k: Key): KeyIn<V, V>(Store::key_path<V>(k), k) {
+    KeyIn(Path::id<V>(), PathSame(
+        λ s => match s.get(k) as λ o => (o.and_then(Path::id<V>().get) = o) { None => refl, Some(_) => refl },
+        λ s v => match e: s.get(k) {
+            Some(_) => refl,
+            None => sym(s.put_none(k, v, e)),
+        },
+    ))
+}
+
+// Paths in different keys are apart, decided by the keys alone.
+theorem KeyIn::apart<V, B, C>({p: Path<Store<V>, B>}, {q: Path<Store<V>, C>}, {k1, k2: Key}, pin: KeyIn<V, B>(p, k1), qin: KeyIn<V, C>(q, k2), ne: k1 ≠ k2):
+    Apart<Store<V>, B, C>(p, q)
+{
+    Store::inside_apart(k1, k2, ne, pin.inner, qin.inner).respects(pin.same, qin.same)
+}
+
+theorem KeyIn::apart_sound<V, B, C>({p: Path<Store<V>, B>}, {q: Path<Store<V>, C>}, {k1, k2: Key}, pin: KeyIn<V, B>(p, k1), qin: KeyIn<V, C>(q, k2),
+    verdict: k1.apart(k2).IsTrue()): Apart<Store<V>, B, C>(p, q)
+{
+    KeyIn::apart(pin, qin, k1.ne_of_apart(k2, verdict))
+}
