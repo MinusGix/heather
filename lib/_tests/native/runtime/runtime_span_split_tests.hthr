@@ -247,7 +247,6 @@ theorem shift_over_refused(): lower_program_lent(shift_over::program, plan_progr
     refl
 }
 
-
 // The comparison the wrong way round: the arm says `low` is less than
 // `high` or not, and the lend is where it is not, so the bytes before
 // `low` may run past `high`.

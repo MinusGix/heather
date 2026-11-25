@@ -416,7 +416,7 @@ does not order the windows' bounds (`runtime_span_split_tests.hthr`:
 by a comparison, `shift_over` and `shift_backwards` refused by name).
 Two *written* windows of the written span (`split_at_mut` with both
 halves written) are not said in `rt`: the callee would write two spans,
-and an `FTm` computation writes one (below).
+and an `FTm` computation writes one (below; `rt-several-written-spans`).
 A program statement lends its first buffers whole
 (`statement-lends-named-buffers`).
 
