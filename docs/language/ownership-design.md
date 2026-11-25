@@ -403,6 +403,56 @@ The worked examples are theorems: `split_at_mut` (`split_apart`,
 (`word_map_paths.hthr`), lawful at every table and, under `WordMapInv`,
 the read of `get` and the write of `insert` of a stored key.
 
+**Joined** (second wave, `ownership-library-join`). Paths, keys and the
+separation algebra are one vocabulary:
+
+- *A key is a path step* (`lib/std/data/store_path.hthr`):
+  `Store::key_path(k) : Path<Store<V>, V>`, the store's partial read and its
+  `put`, lawful at every store, valid exactly where `Store::Valid` holds.
+  Two different keys are apart, of different slots or of one slot at two
+  generations (`keys_apart`), decided by `Key::apart`, sound and complete.
+  A key then a path into its value (`key_then`) is valid where the key is
+  and the inner path is valid in what it reads; under two keys any paths
+  are apart (`inside_apart`, from `Apart::then_both`: parts of parts
+  apart). Keys are the second kind of footprint (`KeyIn`), decided by key
+  inequality as spans decide positions.
+- *A vector's entry is the list's element read in a vector*
+  (`lib/std/machine/vector_path.hthr`): a list path that keeps the length
+  is a vector path through its entries (`Path::in_vector`), so the step
+  `[A; n] → A` is `elem(i)` again (`Path::entry`). A path in `s` under the
+  window of `n` from `lo` lies in `Span(lo + s.base, s.len)`
+  (`PathIn::under_window`): an element of a window at its own span, a window
+  of a window where the one window from `lo + lo2` lies.
+- *A field of a laid record is a path with a byte span*
+  (`lib/std/machine/part_path.hthr`): a window of the codec's size, then
+  the codec read off its bytes (`Stored::codec_path`). Lawful where the
+  codec is exact (one with padding writes its padding back as its own, not
+  as it was); its footprint needs no exactness, so two fields are decided
+  apart from the layout (`Part::paths_apart`), at an open base with the
+  verdict still evaluated (`paths_apart_at`), at open codecs from the
+  layout's own facts (`pair_apart`). §13.7 is this.
+- *An element of a vector held by handle is one composed path*
+  (`lib/native/runtime/arena_handle_paths.hthr`): `Heap::window_path(w)`,
+  the window's words behind the check that its key still names it, then
+  `Path::entry`. One validity statement (`elem_valid`, `elem_valid_parts`:
+  the handle valid and the index below its count), a footprint
+  (`Span(base + i, 1)` behind the key, `elem_same`), and two elements of
+  valid windows of different keys apart at every heap
+  (`valid_elems_apart`). The handle's own `read` and `store` are the path's
+  read and write (`read_is_elem`, `store_is_elem`), and a vector's element
+  reads its item and what `Arena::elem_path` reads (`vec_elem_items`,
+  `vec_elem_agrees`): the two name one word, the handle's path carrying
+  the key and `elem_path` the window the header points at.
+
+Two choices taken there. *A path behind a check* (`Path::guard`) is how a
+handle's validity enters a path: the check reads only erased state (the
+claims), which no write of words changes, so the guard keeps the laws and
+`Apart`. *Spellings are a relation, not an equation* (`PathSame`): a
+composition regrouped, or a step written through a guard, is the same
+path read and written alike at every owner, and laws, validity, `Apart`
+and footprints carry across it, since paths are records of functions and
+the kernel has no function extensionality.
+
 ### 10.5 Regions are named by what is borrowed
 
 `&{self} V` says the result borrows from `self`; a set of places is a region
@@ -506,6 +556,20 @@ settled or changed against the text above:
   generation for the arena wants a word per window in the heap (Vale's
   layout), which changes `arena.hthr`'s layout: left to
   `arena-runtime-generation`.
+
+**Joined with the separation algebra** (second wave,
+`ownership-library-join`): a permission token is a holding, finitely many
+footprints at shares (`Held`, `lib/std/data/set/held.hthr`), whose
+validity is decided by evaluation. A path's holder holds its footprint
+whole, a frozen view at a share; an owned path's holding composing with
+any positive holding of another makes the two paths `Apart`
+(`Held::apart_of_valid`), and a key's footprint is its slot
+(`Held::keys_apart_of_valid`). The frame theorems with a holding as the
+frame are `lib/std/machine/access_frame.hthr`: at a path
+(`Held::path_keeps`, a frozen view's predicate kept by every write of a
+holder it composes with, `Held::view_kept`) and against memory
+(`Access::store_keeps`). Composition is sound for `Apart`, not complete:
+footprints over-approximate, and two views compose while overlapping.
 
 A home is a root and a path. A local's home is not observable until it is
 borrowed, and two owned values never share one. Pointer equality is
@@ -612,6 +676,12 @@ modes the surface records.
 | `Copy`, `Clone` and the exact-clone extension, derived from a layout | `ownership-copy-clone` | library |
 | The first wave's libraries joined: a key as a path step, footprints for fields, the algebra at paths | `ownership-library-join` | library, pure |
 
+*`ownership-library-join` is built* (2026-11-25): §10.4 "Joined", §10.7
+"Joined with the separation algebra", `docs/library/separation-algebra-design.md`
+§7. What the soundness round can now state: "this path's holder owns it"
+as `Held::own` of its footprint with `Held::own_excludes`, "this view is
+frozen" as `Held::at` with `Held::view_kept`, each with its frame theorem.
+
 **Third wave**, designed against what the second produces:
 
 - **The judgment**: access kinds, moves and regions over reflected code,
@@ -674,6 +744,10 @@ as a helper; addresses as numbers.
    (`lib/std/machine/part.hthr`) that are `PathIn`'s over bytes, so a
    field's path could be decided apart by its byte span. Not joined yet
    (`ownership-paths-footprints`).
+   **Joined (2026-11-25, `ownership-library-join`):** `Part::path`, a
+   window then the codec, in `Span(offset + at, size)`
+   (`lib/std/machine/part_path.hthr`); elements of windows at their own
+   span (`PathIn::under_window`); keys as a footprint (`KeyIn`).
 8. **Decided (2026-11-24, `runtime-erased-parameters`): erased data is a
    type, `Erased<A>`** (`lib/std/core/erased.hthr`, a record of one field),
    not a mark on the binder. A type needs no parser (which
