@@ -1,6 +1,6 @@
 ---
 title: A plain runtime fn, or one over a span, taking an erased parameter: compile it from a shadow
-status: open
+status: closed
 labels: [ownership,native,runtime-fn]
 area: heather-in-heather
 milestone: [nh-ownership]
@@ -39,3 +39,14 @@ The alternative that avoids both: compile a plain function, too, from its reflec
   - **What is stated of `f`.** `f::reflects : rt.meaning(world)(xs…) = f(xs…, ps…)` at a local for every erased parameter where `f` takes it, by `refl`: the reflection pinned against `f` at every proof and every erased value, as the record shape's `runs_held` is. `f::agrees` (and `agrees_also`, `agrees_at`) state the program against `f(xs…, ps…)` the same way; each is checked by the one conversion `f::words(xs…) ≡ f(xs…, ps…)`, the written-out body against the elaborated one, linear in `f`.
   - **A caller.** A runtime fn calling `g(x, p)` with a found proof reflects the call as `Call(g::words, [x])` (`rt_callee` lists `g::words` where `g` published one), so its code passes no proof; its own pin compares `g(x, p)` with `g::words(x)`, unfolding the callee once per call site (the record shape's proposal for its callers says the same). A citation of `g::reflects` there would need a rewrite under the caller's binders; left as residue if it shows as cost.
   - **Scope this round.** Loop-free, lent nothing, parameters words, `Bool`s or counts (no enum or record parameter, which `f::agrees` case-splits or reads back), no recursion; each other shape refused by name.
+- 2026-11-25: Built and verified (branch `claude/ownership-erased-callers`), on the route logged above:
+
+  - `runtime fn f(…, p: ∥P∥, …)` and `f(g: Erased<A>, …)` of words compile from `f::words := Setup::of_erased(f, λ xs… => …)` (`runtime_erasing`, `RtWriting::value`, `runtime.hthr`); `instance Compile(f::words)` is the ordinary plain instance. `f::reflects` and `f::agrees` (with `agrees_also`, `agrees_at`) take a local for each erased parameter where `f` does (`runtime_params_erasing`) and hold at every proof and every erased value. Neither wall recurred: the pin and the link checked within the default rails, the whole probe file in seconds.
+  - A compiled caller passing a found proof (from a literal, from its own `if h:` test, or its own proof passed on) lists `g::words` (`rt_callee`, `rt_written_of`) and its code passes no word for the proof (`half_of::arities = [1, 2]`). The linker reads `g::words` back to `g` (`runtime_erased_source`, `runtime_entry_id`). A function of a laid record calling one of words that takes a proof compiles too (`Slots::halve`).
+  - A span writer taking one takes the written-out path of a `Bytes(n)` function (needs `import runtime_data;`), its `reflects` and `runs_over` stated against `f` at every erased value.
+  - Functions taking none publish exactly as before (empty mask, `runtime_params_at`'s telescopes, every statement at `f`); `scripts/test --pr` with `HEATHER_PR_NATIVE=all` on the final tree: `== suite: 3514 passed, 0 failed, 2 ignored ==`.
+  - Probes in `runtime_erased_tests.hthr` moved from refusals to rows; controls kept (an erased value computed with, a missing proof, a loop, a record function calling one of the record that takes a proof).
+
+  Decisions: the written-out function is named `f::words`; a theorem's erased locals stand where `f` takes them (as the record shape's `runs_held`); the writer covers `Var`, `Lit`, `Prim`, `Call`, `Let`, `If`, `IfEq`, `Make`, `Field`, `Inject`. Not built, each refused by name and filed: [[runtime-record-calls-erased]] (a record callee's mark owes its agreement at every word, where no proof exists) and [[runtime-erased-written-out-shapes]] (enum and record parameters beside an erased one, a body with a match on an enum or a fold, a function lent a span, an export that takes one through `compile-x86`, the caller's per-call-site unfolding). Loops wait for [[loops-on-one-combinator]] round 4.
+
+  The done-when is met: closed.
