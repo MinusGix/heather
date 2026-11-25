@@ -22,7 +22,7 @@ import arena_handles;
 // (`alloc_other_key`), and validity gives the rest.
 theorem fresh_store_unseen(h: Heap, size, i, x, k: u64, w, w2: Window, granted: Heap::alloc(h, size).value = Granted(w), valid2: h.Valid(w2),
     li: i.toNat() < w.count.toNat(), lk: k.toNat() < w2.count.toNat()):
-    Heap::alloc(h, size).after.store(w, i, x, valid := Heap::alloc_valid(h, size, w, granted)).read(w2, k, valid := Heap::alloc_keeps(h, size, w2, valid2)) =
+    Heap::store(Heap::alloc(h, size).after, w, i, x, valid := Heap::alloc_valid(h, size, w, granted)).after.read(w2, k, valid := Heap::alloc_keeps(h, size, w2, valid2)) =
         h.read(w2, k, valid := valid2)
 {
     let after = Heap::alloc(h, size).after;
@@ -54,9 +54,9 @@ theorem empty_inv(): HeapInv(EMPTY_ARENA(), Store::empty()) {
     HeapInv(omega, omega, λ _ _ e => absurd(e), λ _ _ _ _ e1 _ _ => absurd(e1))
 }
 
-fn EMPTY() → Heap { Heap(EMPTY_ARENA(), Store::empty(), empty_inv()) }
+fn EMPTY() → Heap { Heap(EMPTY_ARENA(), Erased(Store::empty()), empty_inv()) }
 
-fn NO_WINDOW() → Window { Window(0, 0, Key(0, 0)) }
+fn NO_WINDOW() → Window { Window(0, 0, Erased(Key(0, 0))) }
 
 fn FIRST() → Mutated<Heap, Grant> { Heap::alloc(EMPTY(), 4) }
 
@@ -67,7 +67,7 @@ fn SECOND() → Mutated<Heap, Grant> { Heap::alloc(Heap::reset(FIRST().after, 0)
 fn W2() → Window { SECOND().value.window_or(NO_WINDOW()) }
 
 // Both are `(0, 4)`; the keys name one slot at two generations.
-theorem both_granted(): (W1() = Window(0, 4, Key(0, 0))) ∧ (W2() = Window(0, 4, Key(0, 1))) { ⟨refl, refl⟩ }
+theorem both_granted(): (W1() = Window(0, 4, Erased(Key(0, 0)))) ∧ (W2() = Window(0, 4, Erased(Key(0, 1)))) { ⟨refl, refl⟩ }
 
 // They meet, as `arena_laws_tests.hthr`'s `stale_windows_meet` says of the
 // words alone.
@@ -102,7 +102,7 @@ fn stale_read() → u64 { SECOND().after.read(W1(), 1) }
 
 // And a store through it, the same.
 // expect-error: `store`'s `valid` was left to its default
-fn stale_store() → Heap { SECOND().after.store(W1(), 1, 5) }
+fn stale_store() → Mutated<Heap, u64> { Heap::store(SECOND().after, W1(), 1, 5) }
 
 // ---------------------------------------------------------------------------
 // A vector at closed values: a window `X` of one word, then a header of
@@ -121,7 +121,7 @@ fn A3() → Mutated<Heap, Grant> { Heap::alloc(A2().after, 2) }
 
 fn DW() → Window { A3().value.window_or(NO_WINDOW()) }
 
-theorem windows_granted(): (X() = Window(0, 1, Key(0, 0))) ∧ ((HW() = Window(1, 3, Key(1, 0))) ∧ (DW() = Window(4, 2, Key(2, 0)))) { ⟨refl, ⟨refl, refl⟩⟩ }
+theorem windows_granted(): (X() = Window(0, 1, Erased(Key(0, 0)))) ∧ ((HW() = Window(1, 3, Erased(Key(1, 0)))) ∧ (DW() = Window(4, 2, Erased(Key(2, 0))))) { ⟨refl, ⟨refl, refl⟩⟩ }
 
 theorem x0_in(): BitVec::ofNat(0, n := 64).toNat() < X().count.toNat() { let c: (X().count.toNat() = 1) = refl; omega(c) }
 
@@ -130,18 +130,18 @@ theorem h_in(i: u64, small: i.toNat() < 3): i.toNat() < HW().count.toNat() { let
 theorem d0_in(): BitVec::ofNat(0, n := 64).toNat() < DW().count.toNat() { let c: (DW().count.toNat() = 2) = refl; omega(c) }
 
 fn H0() → Heap {
-    A3().after.store(X(), 0, 9, valid := refl, inside := squash(x0_in()))
-        .store(HW(), 0, 4, valid := refl, inside := squash(h_in(0, omega)))
-        .store(HW(), 1, 2, valid := refl, inside := squash(h_in(1, omega)))
-        .store(HW(), 2, 1, valid := refl, inside := squash(h_in(2, omega)))
-        .store(DW(), 0, 7, valid := refl, inside := squash(d0_in()))
+    let h1 = Heap::store(A3().after, X(), 0, 9, valid := refl, inside := squash(x0_in())).after;
+    let h2 = Heap::store(h1, HW(), 0, 4, valid := refl, inside := squash(h_in(0, omega))).after;
+    let h3 = Heap::store(h2, HW(), 1, 2, valid := refl, inside := squash(h_in(1, omega))).after;
+    let h4 = Heap::store(h3, HW(), 2, 1, valid := refl, inside := squash(h_in(2, omega))).after;
+    Heap::store(h4, DW(), 0, 7, valid := refl, inside := squash(d0_in())).after
 }
 
-theorem apart_keys(): ¬(HW().key.index = DW().key.index) { let a: (HW().key.index = 1) = refl; let b: (DW().key.index = 2) = refl; λ e => omega(e, a, b) }
+theorem apart_keys(): ¬(HW().key.value.index = DW().key.value.index) { let a: (HW().key.value.index = 1) = refl; let b: (DW().key.value.index = 2) = refl; λ e => omega(e, a, b) }
 
-theorem x_not_header(): ¬(X().key.index = HW().key.index) { let a: (X().key.index = 0) = refl; let b: (HW().key.index = 1) = refl; λ e => omega(e, a, b) }
+theorem x_not_header(): ¬(X().key.value.index = HW().key.value.index) { let a: (X().key.value.index = 0) = refl; let b: (HW().key.value.index = 1) = refl; λ e => omega(e, a, b) }
 
-theorem x_not_data(): ¬(X().key.index = DW().key.index) { let a: (X().key.index = 0) = refl; let b: (DW().key.index = 2) = refl; λ e => omega(e, a, b) }
+theorem x_not_data(): ¬(X().key.value.index = DW().key.value.index) { let a: (X().key.value.index = 0) = refl; let b: (DW().key.value.index = 2) = refl; λ e => omega(e, a, b) }
 
 fn V0() → VecHandle { VecHandle(HW(), DW()) }
 
@@ -156,7 +156,7 @@ theorem v0_items(): H0().items(V0()) = [7] { refl }
 fn G() → Mutated<Heap, VecHandle> { Heap::grow(H0(), V0(), v0_ok()) }
 
 // The new data window is four words at the old top, under a key of its own.
-theorem grown_handle(): G().value = VecHandle(HW(), Window(6, 4, Key(3, 0))) { refl }
+theorem grown_handle(): G().value = VecHandle(HW(), Window(6, 4, Erased(Key(3, 0)))) { refl }
 
 theorem grown_items(): G().after.items(G().value) = [7] { refl }
 
@@ -171,7 +171,67 @@ theorem x_kept_by_law(): G().after.read(X(), 0, valid := H0().grow_keeps(V0(), v
 
 // The old data window was released: it has no proof of validity, and a
 // read through it is refused.
-theorem old_data_invalid(): ¬G().after.Valid(DW()) { let none: (G().after.claims.get(DW().key) = None) = refl; λ valid => absurd(trans(sym(none), valid)) }
+theorem old_data_invalid(): ¬G().after.Valid(DW()) { let none: (G().after.claims.value.get(DW().key.value) = None) = refl; λ valid => absurd(trans(sym(none), valid)) }
 
 // expect-error: `read`'s `valid` was left to its default, which did not give `arena_handles::Heap::Valid((G).after, DW)` here
 fn old_data_read() → u64 { G().after.read(DW(), 0, inside := squash(d0_in())) }
+
+// ---------------------------------------------------------------------------
+// Compiled (issues/runtime-record-erased-fields.md): `read`, `store` and
+// `reset` are `runtime fn`s of the heap, whose code is over the arena's
+// words alone. A window is its two words to the code; its key, the claims,
+// the invariant and the proofs leave nothing (the read takes the span, its
+// length word, the window's base and count, and the index).
+
+fn heap_read_code() → (List<u8> → u64 → u64 → u64 → u64 → Mutated<List<u8>, u64>) { Heap::read::bytes }
+
+fn heap_store_code() → (List<u8> → u64 → u64 → u64 → u64 → u64 → Mutated<List<u8>, u64>) { Heap::store::bytes }
+
+fn heap_reset_code() → (List<u8> → u64 → u64 → Mutated<List<u8>, u64>) { Heap::reset::bytes }
+
+// An arena of limit 16 with a window of four at 0, its element 2 set to 7.
+fn HEAP_BYTES() → List<u8> {
+    let empty: List<u8> = [0, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0] ++ List::replicate(BitVec::ofNat(0), 128);
+    Arena::store::bytes(Arena::alloc::bytes(empty, 144, 4).after, 144, 0, 4, 2, 7).after
+}
+
+// At literal words the code computes: the read, the store answering the
+// element it replaced and leaving the new one, and the reset to 0.
+theorem heap_code_runs(): Heap::read::bytes(HEAP_BYTES(), 144, 0, 4, 2).value = 7 ∧
+    (Heap::store::bytes(HEAP_BYTES(), 144, 0, 4, 2, 9).value = 7 ∧
+    (Heap::read::bytes(Heap::store::bytes(HEAP_BYTES(), 144, 0, 4, 2, 9).after, 144, 0, 4, 2).value = 9 ∧
+    Heap::reset::bytes(HEAP_BYTES(), 144, 0).value = 1)) {
+    ⟨refl, ⟨refl, ⟨refl, refl⟩⟩⟩
+}
+
+// What is published, at an open heap, window and proofs: the heap whole
+// (its claims and invariant any at all) beside a span that holds its arena.
+theorem heap_read_held(own: List<u8>, h: Heap, length: u64, w: Window, i: u64, valid: h.Valid(w), inside: ∥i.toNat() < w.count.toNat()∥,
+    holds: rt_held::Stored::Holds(Arena::stored(), own, length, h.arena)):
+    h.read(w, i, valid := valid, inside := inside) = Heap::read::bytes(own, length, w.base, w.count, i).value {
+    Heap::read::runs_held(own, h, length, w, i, valid, inside, holds).value
+}
+
+theorem heap_store_held(own: List<u8>, h: Heap, length: u64, w: Window, i, x: u64, valid: h.Valid(w), inside: ∥i.toNat() < w.count.toNat()∥,
+    holds: rt_held::Stored::Holds(Arena::stored(), own, length, h.arena)):
+    Heap::store(h, w, i, x, valid := valid, inside := inside).value = Heap::store::bytes(own, length, w.base, w.count, i, x).value ∧
+    rt_held::Stored::Holds(Arena::stored(), Heap::store::bytes(own, length, w.base, w.count, i, x).after, length, Heap::store(h, w, i, x, valid := valid, inside := inside).after.arena) {
+    let ran = Heap::store::runs_held(own, h, length, w, i, x, valid, inside, holds);
+    ⟨ran.value, ran.holds⟩
+}
+
+theorem heap_reset_held(own: List<u8>, h: Heap, length, mark: u64, holds: rt_held::Stored::Holds(Arena::stored(), own, length, h.arena)):
+    Heap::reset(h, mark).value = Heap::reset::bytes(own, length, mark).value ∧
+    rt_held::Stored::Holds(Arena::stored(), Heap::reset::bytes(own, length, mark).after, length, Heap::reset(h, mark).after.arena) {
+    let ran = Heap::reset::runs_held(own, h, length, mark, holds);
+    ⟨ran.value, ran.holds⟩
+}
+
+// In a checking position: a caller's proofs found where it is written, a
+// window granted and its index tested, and the theorem read at them.
+theorem heap_read_granted(own: List<u8>, h: Heap, size, i: u64, w: Window, granted: Heap::alloc(h, size).value = Granted(w), length: u64, small: i < w.count,
+    holds: rt_held::Stored::Holds(Arena::stored(), own, length, Heap::alloc(h, size).after.arena)):
+    Heap::alloc(h, size).after.read(w, i, valid := Heap::alloc_valid(h, size, w, granted)) = Heap::read::bytes(own, length, w.base, w.count, i).value {
+    let found: ∥i.toNat() < w.count.toNat()∥ = bv_omega;
+    Heap::read::runs_held(own, Heap::alloc(h, size).after, length, w, i, Heap::alloc_valid(h, size, w, granted), found, holds).value
+}

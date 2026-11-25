@@ -65,22 +65,22 @@ record HeapInv(a: Arena, claims: Store<Claim>) {
 }
 
 // The arena and its claims; `claims` and `ok` are erased.
-record Heap { arena: Arena, claims: Store<Claim>, ok: HeapInv(arena, claims) }
+record Heap { arena: Arena, claims: Erased<Store<Claim>>, ok: HeapInv(arena, claims.value) }
 
 // A window: its two words, and the key it was handed out under (erased).
-record Window { base: u64, count: u64, key: Key }
+record Window { base: u64, count: u64, key: Erased<Key> }
 
 fn Window::claim(self w: Window) → Claim { Claim(w.base.toNat(), w.count.toNat()) }
 
 // A window is valid where its key's partial read answers the window.
-fn Heap::Valid(self h: Heap, w: Window) → Type { h.claims.get(w.key) = Some(w.claim()) }
+fn Heap::Valid(self h: Heap, w: Window) → Type { h.claims.value.get(w.key.value) = Some(w.claim()) }
 
-theorem Heap::key_valid(self h: Heap, w: Window, valid: h.Valid(w)): h.claims.Valid(w.key) {
+theorem Heap::key_valid(self h: Heap, w: Window, valid: h.Valid(w)): h.claims.value.Valid(w.key.value) {
     j(sym(valid), λ o _ => o.is_some().IsTrue(), trivial)
 }
 
 theorem Heap::inside(self h: Heap, w: Window, valid: h.Valid(w)): w.base.toNat() + w.count.toNat() <= h.arena.top.toNat() {
-    h.ok.below(w.key, w.claim(), valid)
+    h.ok.below(w.key.value, w.claim(), valid)
 }
 
 theorem Heap::fits(self h: Heap, w: Window, valid: h.Valid(w)): w.base.toNat() + w.count.toNat() <= 16 {
@@ -91,27 +91,32 @@ theorem Heap::fits(self h: Heap, w: Window, valid: h.Valid(w)): w.base.toNat() +
 }
 
 // Two valid windows of different keys share no word.
-theorem Heap::valid_apart(self h: Heap, w1, w2: Window, valid1: h.Valid(w1), valid2: h.Valid(w2), other: ¬(w1.key.index = w2.key.index)):
+theorem Heap::valid_apart(self h: Heap, w1, w2: Window, valid1: h.Valid(w1), valid2: h.Valid(w2), other: ¬(w1.key.value.index = w2.key.value.index)):
     Arena::Apart(w1.base.toNat(), w1.count.toNat(), w2.base.toNat(), w2.count.toNat())
 {
-    h.ok.apart(w1.key, w2.key, w1.claim(), w2.claim(), valid1, valid2, other)
+    h.ok.apart(w1.key.value, w2.key.value, w1.claim(), w2.claim(), valid1, valid2, other)
 }
 
 // ---------------------------------------------------------------------------
 // Reading and storing through a valid window
 
-fn Heap::read(self h: Heap, w: Window, i: u64, valid: h.Valid(w) := known, inside: ∥i.toNat() < w.count.toNat()∥ := bv_omega) → u64 {
+// Both are compiled (issues/runtime-record-erased-fields.md): the code is
+// `Arena::read`'s and `Arena::store`'s over the arena's words and the
+// window's two, and the claims, the key, the validity and the window's fit
+// leave nothing in it.
+runtime fn Heap::read(self h: Heap, w: Window, i: u64, valid: h.Valid(w) := known, inside: ∥i.toNat() < w.count.toNat()∥ := bv_omega) → u64 {
     Arena::read(h.arena, w.base, w.count, i, inside := inside, fits := squash(h.fits(w, valid)))
 }
 
-fn Heap::store(self h: Heap, w: Window, i, x: u64, valid: h.Valid(w) := known, inside: ∥i.toNat() < w.count.toNat()∥ := bv_omega) → Heap {
-    Heap(Arena::store(h.arena, w.base, w.count, i, x, inside := inside, fits := squash(h.fits(w, valid))).after, h.claims,
-        HeapInv(h.ok.limit, h.ok.top, h.ok.below, h.ok.apart))
+// The heap after, the claims as they were, and the element replaced.
+runtime fn Heap::store(self h: Heap, w: Window, i, x: u64, valid: h.Valid(w) := known, inside: ∥i.toNat() < w.count.toNat()∥ := bv_omega) → Mutated<Heap, u64> {
+    Mutated(Heap(Arena::store(h.arena, w.base, w.count, i, x, inside := inside, fits := squash(h.fits(w, valid))).after, h.claims,
+        HeapInv(h.ok.limit, h.ok.top, h.ok.below, h.ok.apart)), Arena::store(h.arena, w.base, w.count, i, x, inside := inside, fits := squash(h.fits(w, valid))).value)
 }
 
 // A store keeps every window's validity: the claims are as they were.
 theorem Heap::store_keeps<V>(self h: Heap, w: Window, i, x: u64, valid: h.Valid(w), li: i.toNat() < w.count.toNat(), w2: Window, valid2: h.Valid(w2)):
-    h.store(w, i, x, valid := valid).Valid(w2)
+    Heap::store(h, w, i, x, valid := valid).after.Valid(w2)
 {
     valid2
 }
@@ -119,8 +124,8 @@ theorem Heap::store_keeps<V>(self h: Heap, w: Window, i, x: u64, valid: h.Valid(
 // `store_apart` over handles: a store through one valid window changes no
 // read through a valid window of another key.
 theorem Heap::store_apart(self h: Heap, w: Window, i, x: u64, w2: Window, k: u64, valid: h.Valid(w), valid2: h.Valid(w2),
-    li: i.toNat() < w.count.toNat(), lk: k.toNat() < w2.count.toNat(), other: ¬(w.key.index = w2.key.index)):
-    h.store(w, i, x, valid := valid).read(w2, k, valid := valid2) = h.read(w2, k, valid := valid2)
+    li: i.toNat() < w.count.toNat(), lk: k.toNat() < w2.count.toNat(), other: ¬(w.key.value.index = w2.key.value.index)):
+    Heap::store(h, w, i, x, valid := valid).after.read(w2, k, valid := valid2) = h.read(w2, k, valid := valid2)
 {
     Arena::store_apart(h.arena, w.base, w.count, i, x, w2.base, w2.count, k, li, h.fits(w, valid), lk, h.fits(w2, valid2),
         h.valid_apart(w, w2, valid, valid2, other))
@@ -128,7 +133,7 @@ theorem Heap::store_apart(self h: Heap, w: Window, i, x: u64, w2: Window, k: u64
 
 // The window stored through reads back what was stored.
 theorem Heap::read_store_same(self h: Heap, w: Window, i, x: u64, valid: h.Valid(w), li: i.toNat() < w.count.toNat()):
-    h.store(w, i, x, valid := valid).read(w, i, valid := valid) = x
+    Heap::store(h, w, i, x, valid := valid).after.read(w, i, valid := valid) = x
 {
     Arena::read_store_same(h.arena, w.base, w.count, i, x, li, h.fits(w, valid))
 }
@@ -141,7 +146,7 @@ inductive Grant { Granted(window: Window), NoRoom }
 
 fn Grant::window_or(self g: Grant, d: Window) → Window { match g { Granted(w) => w, NoRoom => d } }
 
-fn Heap::claimed(self h: Heap, base, size: u64) → Mutated<Store<Claim>, Key> { Store::alloc(h.claims, Claim(base.toNat(), size.toNat())) }
+fn Heap::claimed(self h: Heap, base, size: u64) → Mutated<Store<Claim>, Key> { Store::alloc(h.claims.value, Claim(base.toNat(), size.toNat())) }
 
 // A claim of `size` words granted at the top, the top moved past it:
 // the invariant holds of the arena after and the claims with it added.
@@ -193,20 +198,20 @@ theorem Heap::alloc_inv(self h: Heap, size, base: u64, got: Arena::alloc(h.arena
     let a = h.arena;
     let fresh = Arena::alloc_fresh(a, size, base, got);
     let lim = Arena::alloc_limit(a, size);
-    j(sym(fresh.left), λ x _ => HeapInv(Arena::alloc(a, size).after, Store::alloc(h.claims, Claim(x.toNat(), size.toNat())).after),
-        Heap::granted_inv(a, Arena::alloc(a, size).after, h.claims, size.toNat(), h.ok, lim, fresh.right.right.right, fresh.right.left))
+    j(sym(fresh.left), λ x _ => HeapInv(Arena::alloc(a, size).after, Store::alloc(h.claims.value, Claim(x.toNat(), size.toNat())).after),
+        Heap::granted_inv(a, Arena::alloc(a, size).after, h.claims.value, size.toNat(), h.ok, lim, fresh.right.right.right, fresh.right.left))
 }
 
-theorem Heap::full_inv(self h: Heap, size: u64, full: Arena::alloc(h.arena, size).value = Full): HeapInv(Arena::alloc(h.arena, size).after, h.claims) {
-    j(sym(Arena::alloc_full_same(h.arena, size, full)), λ b _ => HeapInv(b, h.claims), h.ok)
+theorem Heap::full_inv(self h: Heap, size: u64, full: Arena::alloc(h.arena, size).value = Full): HeapInv(Arena::alloc(h.arena, size).after, h.claims.value) {
+    j(sym(Arena::alloc_full_same(h.arena, size, full)), λ b _ => HeapInv(b, h.claims.value), h.ok)
 }
 
 // The allocation with the arena's answer and its equation as parameters, so
 // a proof about it cases on the answer (`When::of_bit`'s reason).
 fn Heap::alloc_by(self h: Heap, size: u64, r: Alloc, e: Arena::alloc(h.arena, size).value = r) → Mutated<Heap, Grant> {
     match r as λ q => (Arena::alloc(h.arena, size).value = q → Mutated<Heap, Grant>) {
-        Got(base) => λ e => Mutated(Heap(Arena::alloc(h.arena, size).after, Heap::claimed(h, base, size).after, h.alloc_inv(size, base, e)),
-            Granted(Window(base, size, Heap::claimed(h, base, size).value))),
+        Got(base) => λ e => Mutated(Heap(Arena::alloc(h.arena, size).after, Erased(Heap::claimed(h, base, size).after), h.alloc_inv(size, base, e)),
+            Granted(Window(base, size, Erased(Heap::claimed(h, base, size).value)))),
         Full => λ e => Mutated(Heap(Arena::alloc(h.arena, size).after, h.claims, h.full_inv(size, e)), NoRoom),
     }(e)
 }
@@ -216,7 +221,7 @@ fn Heap::alloc(self h: Heap, size: u64) → Mutated<Heap, Grant> { Heap::alloc_b
 // A statement of every allocation's two outcomes holds of the allocation.
 theorem Heap::alloc_cases(self h: Heap, size: u64, M: Mutated<Heap, Grant> → Type,
     got: (base: u64) → (e: Arena::alloc(h.arena, size).value = Got(base)) →
-        M(Mutated(Heap(Arena::alloc(h.arena, size).after, Heap::claimed(h, base, size).after, h.alloc_inv(size, base, e)), Granted(Window(base, size, Heap::claimed(h, base, size).value)))),
+        M(Mutated(Heap(Arena::alloc(h.arena, size).after, Erased(Heap::claimed(h, base, size).after), h.alloc_inv(size, base, e)), Granted(Window(base, size, Erased(Heap::claimed(h, base, size).value))))),
     full: (e: Arena::alloc(h.arena, size).value = Full) → M(Mutated(Heap(Arena::alloc(h.arena, size).after, h.claims, h.full_inv(size, e)), NoRoom))):
     M(Heap::alloc(h, size))
 {
@@ -230,8 +235,8 @@ theorem Heap::alloc_cases(self h: Heap, size: u64, M: Mutated<Heap, Grant> → T
 theorem Heap::alloc_valid(self h: Heap, size: u64, w: Window, granted: Heap::alloc(h, size).value = Granted(w)): Heap::alloc(h, size).after.Valid(w) {
     h.alloc_cases(size, λ m => m.value = Granted(w) → m.after.Valid(w),
         λ base e g => {
-            let at: (Window(base, size, Heap::claimed(h, base, size).value) = w) = cong_fn(λ (x: Grant) => x.window_or(w), g);
-            j(at, λ v _ => Heap::claimed(h, base, size).after.get(v.key) = Some(v.claim()), Store::alloc_reads(h.claims, Claim(base.toNat(), size.toNat())))
+            let at: (Window(base, size, Erased(Heap::claimed(h, base, size).value)) = w) = cong_fn(λ (x: Grant) => x.window_or(w), g);
+            j(at, λ v _ => Heap::claimed(h, base, size).after.get(v.key.value) = Some(v.claim()), Store::alloc_reads(h.claims.value, Claim(base.toNat(), size.toNat())))
         },
         λ e g => absurd(g), granted)
 }
@@ -239,19 +244,19 @@ theorem Heap::alloc_valid(self h: Heap, size: u64, w: Window, granted: Heap::all
 // Every window valid before an allocation is valid after it.
 theorem Heap::alloc_keeps(self h: Heap, size: u64, w: Window, valid: h.Valid(w)): Heap::alloc(h, size).after.Valid(w) {
     h.alloc_cases(size, λ m => m.after.Valid(w),
-        λ base e => trans(Store::alloc_keeps(h.claims, Claim(base.toNat(), size.toNat()), w.key, h.key_valid(w, valid)), valid),
+        λ base e => trans(Store::alloc_keeps(h.claims.value, Claim(base.toNat(), size.toNat()), w.key.value, h.key_valid(w, valid)), valid),
         λ e => valid)
 }
 
 // The window granted has a key of its own: no window valid before shares
 // its slot.
 theorem Heap::alloc_other_key(self h: Heap, size: u64, w: Window, granted: Heap::alloc(h, size).value = Granted(w), w2: Window, valid2: h.Valid(w2)):
-    ¬(w2.key.index = w.key.index)
+    ¬(w2.key.value.index = w.key.value.index)
 {
-    Heap::alloc_cases(h, size, λ m => m.value = Granted(w) → ¬(w2.key.index = w.key.index),
+    Heap::alloc_cases(h, size, λ m => m.value = Granted(w) → ¬(w2.key.value.index = w.key.value.index),
         λ base e g => {
-            let at: (Window(base, size, Heap::claimed(h, base, size).value) = w) = cong_fn(λ (x: Grant) => x.window_or(w), g);
-            j(at, λ v _ => ¬(w2.key.index = v.key.index), Store::alloc_index_fresh(h.claims, Claim(base.toNat(), size.toNat()), w2.key, h.key_valid(w2, valid2)))
+            let at: (Window(base, size, Erased(Heap::claimed(h, base, size).value)) = w) = cong_fn(λ (x: Grant) => x.window_or(w), g);
+            j(at, λ v _ => ¬(w2.key.value.index = v.key.value.index), Store::alloc_index_fresh(h.claims.value, Claim(base.toNat(), size.toNat()), w2.key.value, h.key_valid(w2, valid2)))
         },
         λ e g => absurd(g), granted)
 }
@@ -273,7 +278,7 @@ theorem Heap::alloc_reads_kept(self h: Heap, size: u64, w: Window, k: u64, valid
 
 fn Heap::kept(mark: u64) → Claim → Bool { λ (c: Claim) => c.below(mark.toNat()) }
 
-theorem Heap::reset_inv(self h: Heap, mark: u64): HeapInv(Arena::reset(h.arena, mark).after, h.claims.retain(Heap::kept(mark))) {
+theorem Heap::reset_inv(self h: Heap, mark: u64): HeapInv(Arena::reset(h.arena, mark).after, h.claims.value.retain(Heap::kept(mark))) {
     let a = h.arena;
     let lim: (Arena::reset(a, mark).after.limit.toNat() = a.limit.toNat()) = cong_fn(λ (x: u64) => x.toNat(), Arena::reset_limit(a, mark));
     let top: (Arena::reset(a, mark).after.top.toNat() <= a.top.toNat()) = match Arena::reset_top_cases(a, mark) {
@@ -282,7 +287,7 @@ theorem Heap::reset_inv(self h: Heap, mark: u64): HeapInv(Arena::reset(h.arena, 
     };
     HeapInv(omega(lim, h.ok.limit), { let t = h.ok.top; omega(lim, top, t) },
         λ k c e => {
-            let kept = h.claims.retain_some(Heap::kept(mark), k, c, e);
+            let kept = h.claims.value.retain_some(Heap::kept(mark), k, c, e);
             let o = h.ok.below(k, c, kept.left);
             let under: (c.base + c.count <= mark.toNat()) = (c.base + c.count).leb_sound(mark.toNat(), Bool::is_true_of_eq(kept.right));
             match Arena::reset_top_cases(a, mark) {
@@ -290,19 +295,19 @@ theorem Heap::reset_inv(self h: Heap, mark: u64): HeapInv(Arena::reset(h.arena, 
                 Inr(same) => { let m: (Arena::reset(a, mark).after.top.toNat() = a.top.toNat()) = cong_fn(λ (x: u64) => x.toNat(), same); omega(m, o) },
             }
         },
-        λ k1 k2 c1 c2 e1 e2 ne => h.ok.apart(k1, k2, c1, c2, h.claims.retain_some(Heap::kept(mark), k1, c1, e1).left, h.claims.retain_some(Heap::kept(mark), k2, c2, e2).left, ne))
+        λ k1 k2 c1 c2 e1 e2 ne => h.ok.apart(k1, k2, c1, c2, h.claims.value.retain_some(Heap::kept(mark), k1, c1, e1).left, h.claims.value.retain_some(Heap::kept(mark), k2, c2, e2).left, ne))
 }
 
 // Back to a mark: the arena's top moved there (where the mark is at most
 // the top), and every claim that ends past the mark released.
-fn Heap::reset(self h: Heap, mark: u64) → Mutated<Heap, u64> {
-    Mutated(Heap(Arena::reset(h.arena, mark).after, h.claims.retain(Heap::kept(mark)), h.reset_inv(mark)), Arena::reset(h.arena, mark).value)
+runtime fn Heap::reset(self h: Heap, mark: u64) → Mutated<Heap, u64> {
+    Mutated(Heap(Arena::reset(h.arena, mark).after, Erased(h.claims.value.retain(Heap::kept(mark))), h.reset_inv(mark)), Arena::reset(h.arena, mark).value)
 }
 
 // `reset_ends`: a window that ends past the mark is not valid after it.
 theorem Heap::reset_ends(self h: Heap, mark: u64, w: Window, above: mark.toNat() < w.base.toNat() + w.count.toNat()): ¬Heap::reset(h, mark).after.Valid(w) {
     λ valid => {
-        let kept = h.claims.retain_some(Heap::kept(mark), w.key, w.claim(), valid);
+        let kept = h.claims.value.retain_some(Heap::kept(mark), w.key.value, w.claim(), valid);
         let under: (w.base.toNat() + w.count.toNat() <= mark.toNat()) = (w.base.toNat() + w.count.toNat()).leb_sound(mark.toNat(), Bool::is_true_of_eq(kept.right));
         omega(under, above)
     }
@@ -312,7 +317,7 @@ theorem Heap::reset_ends(self h: Heap, mark: u64, w: Window, above: mark.toNat()
 // and reads what it read (a reset changes no word of the heap).
 theorem Heap::reset_keeps(self h: Heap, mark: u64, w: Window, valid: h.Valid(w), under: w.base.toNat() + w.count.toNat() <= mark.toNat()): Heap::reset(h, mark).after.Valid(w) {
     let keep: (w.claim().below(mark.toNat()) = True) = (w.base.toNat() + w.count.toNat()).leb_true(mark.toNat(), under);
-    trans(h.claims.retain_get(Heap::kept(mark), w.key),
+    trans(h.claims.value.retain_get(Heap::kept(mark), w.key.value),
         trans(cong_fn(λ (o: Option<Claim>) => o.and_then(λ (u: Claim) => u.below(mark.toNat()).then(Some(u))), valid),
             cong_fn(λ (b: Bool) => b.then(Some(w.claim())), keep)))
 }
@@ -337,7 +342,7 @@ record VecOk(h: Heap, v: VecHandle) {
     header: h.Valid(v.header),
     data: h.Valid(v.data),
     three: v.header.count.toNat() = 3,
-    distinct: ¬(v.header.key.index = v.data.key.index),
+    distinct: ¬(v.header.key.value.index = v.data.key.value.index),
     base: h.arena.cell(v.header.base) = v.data.base,
     cap: h.arena.cell(v.header.base + 1) = v.data.count,
     len: h.arena.cell(v.header.base + 2).toNat() <= v.data.count.toNat(),
@@ -361,7 +366,7 @@ theorem Heap::vec_inv(self h: Heap, v: VecHandle, ok: VecOk(h, v)): VecInv(h.are
 }
 
 fn Heap::grow_claims(self h: Heap, v: VecHandle) → Mutated<Store<Claim>, Key> {
-    Store::alloc(h.claims, Window(h.arena.top, h.arena.cell(v.header.base + 1) + h.arena.cell(v.header.base + 1), Key(0, 0)).claim())
+    Store::alloc(h.claims.value, Window(h.arena.top, h.arena.cell(v.header.base + 1) + h.arena.cell(v.header.base + 1), Erased(Key(0, 0))).claim())
 }
 
 fn Heap::GrowCases(h: Heap, v: VecHandle) → Type {
@@ -377,28 +382,28 @@ theorem Heap::double(self h: Heap, v: VecHandle, ok: VecOk(h, v)):
 }
 
 theorem Heap::grow_inv(self h: Heap, v: VecHandle, ok: VecOk(h, v), g: Grown(h.arena, v.header.base, Arena::grow(h.arena, v.header.base))):
-    HeapInv(Arena::grow(h.arena, v.header.base).after, Heap::grow_claims(h, v).after.free(v.data.key))
+    HeapInv(Arena::grow(h.arena, v.header.base).after, Heap::grow_claims(h, v).after.free(v.data.key.value))
 {
     let d = h.double(v, ok);
     let gt = g.top;
     let gr = g.room;
-    Heap::released_inv(Arena::grow(h.arena, v.header.base).after, Heap::grow_claims(h, v).after, v.data.key,
-        Heap::granted_inv(h.arena, Arena::grow(h.arena, v.header.base).after, h.claims,
+    Heap::released_inv(Arena::grow(h.arena, v.header.base).after, Heap::grow_claims(h, v).after, v.data.key.value,
+        Heap::granted_inv(h.arena, Arena::grow(h.arena, v.header.base).after, h.claims.value,
             (h.arena.cell(v.header.base + 1) + h.arena.cell(v.header.base + 1)).toNat(), h.ok, g.limit, omega(gt, d), omega(gr, d)))
 }
 
 theorem Heap::unmoved_inv(self h: Heap, v: VecHandle, same: Arena::grow(h.arena, v.header.base) = Mutated(h.arena, BitVec::ofNat(0))):
-    HeapInv(Arena::grow(h.arena, v.header.base).after, h.claims)
+    HeapInv(Arena::grow(h.arena, v.header.base).after, h.claims.value)
 {
-    j(sym(cong_fn(λ (m: Mutated<Arena, u64>) => m.after, same)), λ x _ => HeapInv(x, h.claims), h.ok)
+    j(sym(cong_fn(λ (m: Mutated<Arena, u64>) => m.after, same)), λ x _ => HeapInv(x, h.claims.value), h.ok)
 }
 
 // Grow with the arena's two outcomes as a parameter, so a proof about it
 // cases on that parameter.
 fn Heap::grow_by(self h: Heap, v: VecHandle, ok: VecOk(h, v), o: Heap::GrowCases(h, v)) → Mutated<Heap, VecHandle> {
     match o {
-        Inl(g) => Mutated(Heap(Arena::grow(h.arena, v.header.base).after, Heap::grow_claims(h, v).after.free(v.data.key), h.grow_inv(v, ok, g)),
-            VecHandle(v.header, Window(h.arena.top, h.arena.cell(v.header.base + 1) + h.arena.cell(v.header.base + 1), Heap::grow_claims(h, v).value))),
+        Inl(g) => Mutated(Heap(Arena::grow(h.arena, v.header.base).after, Erased(Heap::grow_claims(h, v).after.free(v.data.key.value)), h.grow_inv(v, ok, g)),
+            VecHandle(v.header, Window(h.arena.top, h.arena.cell(v.header.base + 1) + h.arena.cell(v.header.base + 1), Erased(Heap::grow_claims(h, v).value)))),
         Inr(same) => Mutated(Heap(Arena::grow(h.arena, v.header.base).after, h.claims, h.unmoved_inv(v, same)), v),
     }
 }
@@ -414,17 +419,17 @@ fn Heap::grow(self h: Heap, v: VecHandle, ok: VecOk(h, v)) → Mutated<Heap, Vec
 // `grow_keeps`: every valid window but the vector's old data window stays
 // valid.
 theorem Heap::grow_by_keeps(self h: Heap, v: VecHandle, ok: VecOk(h, v), o: Heap::GrowCases(h, v), w: Window, valid: h.Valid(w),
-    other: ¬(w.key.index = v.data.key.index)): Heap::grow_by(h, v, ok, o).after.Valid(w)
+    other: ¬(w.key.value.index = v.data.key.value.index)): Heap::grow_by(h, v, ok, o).after.Valid(w)
 {
     match o as λ p => (Heap::grow_by(h, v, ok, p).after.Valid(w)) {
-        Inl(_) => trans(Heap::grow_claims(h, v).after.free_other(v.data.key, w.key, other),
-            trans(Store::alloc_keeps(h.claims, Window(h.arena.top, h.arena.cell(v.header.base + 1) + h.arena.cell(v.header.base + 1), Key(0, 0)).claim(),
-                w.key, h.key_valid(w, valid)), valid)),
+        Inl(_) => trans(Heap::grow_claims(h, v).after.free_other(v.data.key.value, w.key.value, other),
+            trans(Store::alloc_keeps(h.claims.value, Window(h.arena.top, h.arena.cell(v.header.base + 1) + h.arena.cell(v.header.base + 1), Erased(Key(0, 0))).claim(),
+                w.key.value, h.key_valid(w, valid)), valid)),
         Inr(_) => valid,
     }
 }
 
-theorem Heap::grow_keeps(self h: Heap, v: VecHandle, ok: VecOk(h, v), w: Window, valid: h.Valid(w), other: ¬(w.key.index = v.data.key.index)):
+theorem Heap::grow_keeps(self h: Heap, v: VecHandle, ok: VecOk(h, v), w: Window, valid: h.Valid(w), other: ¬(w.key.value.index = v.data.key.value.index)):
     Heap::grow(h, v, ok).after.Valid(w)
 {
     h.grow_by_keeps(v, ok, Arena::grow_cases(h.arena, v.header.base, h.vec_inv(v, ok)), w, valid, other)
@@ -433,7 +438,7 @@ theorem Heap::grow_keeps(self h: Heap, v: VecHandle, ok: VecOk(h, v), w: Window,
 // And a window of neither of the vector's keys reads what it read: growing
 // writes only the header's words and words at or past the old top.
 theorem Heap::grow_by_reads(self h: Heap, v: VecHandle, ok: VecOk(h, v), o: Heap::GrowCases(h, v), w: Window, k: u64, valid: h.Valid(w),
-    lk: k.toNat() < w.count.toNat(), oh: ¬(w.key.index = v.header.key.index), od: ¬(w.key.index = v.data.key.index)):
+    lk: k.toNat() < w.count.toNat(), oh: ¬(w.key.value.index = v.header.key.value.index), od: ¬(w.key.value.index = v.data.key.value.index)):
     Arena::read(Heap::grow_by(h, v, ok, o).after.arena, w.base, w.count, k, fits := squash(h.fits(w, valid))) = h.read(w, k, valid := valid)
 {
     match o as λ p => (Arena::read(Heap::grow_by(h, v, ok, p).after.arena, w.base, w.count, k, fits := squash(h.fits(w, valid))) = h.read(w, k, valid := valid)) {
@@ -451,7 +456,7 @@ theorem Heap::grow_by_reads(self h: Heap, v: VecHandle, ok: VecOk(h, v), o: Heap
 }
 
 theorem Heap::grow_reads_kept(self h: Heap, v: VecHandle, ok: VecOk(h, v), w: Window, k: u64, valid: h.Valid(w), lk: k.toNat() < w.count.toNat(),
-    oh: ¬(w.key.index = v.header.key.index), od: ¬(w.key.index = v.data.key.index)):
+    oh: ¬(w.key.value.index = v.header.key.value.index), od: ¬(w.key.value.index = v.data.key.value.index)):
     Heap::grow(h, v, ok).after.read(w, k, valid := h.grow_keeps(v, ok, w, valid, od)) = h.read(w, k, valid := valid)
 {
     h.grow_by_reads(v, ok, Arena::grow_cases(h.arena, v.header.base, h.vec_inv(v, ok)), w, k, valid, lk, oh, od)
@@ -476,15 +481,15 @@ theorem Heap::grow_by_ok(self h: Heap, v: VecHandle, ok: VecOk(h, v), o: Heap::G
     match o as λ p => (VecOk(Heap::grow_by(h, v, ok, p).after, Heap::grow_by(h, v, ok, p).value)) {
         Inl(g) => {
             let cap = h.arena.cell(v.header.base + 1);
-            let fresh_c = Window(h.arena.top, cap + cap, Key(0, 0)).claim();
-            let n = Store::alloc(h.claims, fresh_c).value;
-            let hk: ¬(v.header.key.index = n.index) = Store::alloc_index_fresh(h.claims, fresh_c, v.header.key, h.key_valid(v.header, ok.header));
-            let dk: ¬(v.data.key.index = n.index) = Store::alloc_index_fresh(h.claims, fresh_c, v.data.key, h.key_valid(v.data, ok.data));
-            let header: (Heap::grow_claims(h, v).after.free(v.data.key).get(v.header.key) = Some(v.header.claim())) =
-                trans(Heap::grow_claims(h, v).after.free_other(v.data.key, v.header.key, ok.distinct),
-                    trans(Store::alloc_keeps(h.claims, fresh_c, v.header.key, h.key_valid(v.header, ok.header)), ok.header));
-            let data: (Heap::grow_claims(h, v).after.free(v.data.key).get(n) = Some(fresh_c)) =
-                trans(Heap::grow_claims(h, v).after.free_other(v.data.key, n, λ e => dk(sym(e))), Store::alloc_reads(h.claims, fresh_c));
+            let fresh_c = Window(h.arena.top, cap + cap, Erased(Key(0, 0))).claim();
+            let n = Store::alloc(h.claims.value, fresh_c).value;
+            let hk: ¬(v.header.key.value.index = n.index) = Store::alloc_index_fresh(h.claims.value, fresh_c, v.header.key.value, h.key_valid(v.header, ok.header));
+            let dk: ¬(v.data.key.value.index = n.index) = Store::alloc_index_fresh(h.claims.value, fresh_c, v.data.key.value, h.key_valid(v.data, ok.data));
+            let header: (Heap::grow_claims(h, v).after.free(v.data.key.value).get(v.header.key.value) = Some(v.header.claim())) =
+                trans(Heap::grow_claims(h, v).after.free_other(v.data.key.value, v.header.key.value, ok.distinct),
+                    trans(Store::alloc_keeps(h.claims.value, fresh_c, v.header.key.value, h.key_valid(v.header, ok.header)), ok.header));
+            let data: (Heap::grow_claims(h, v).after.free(v.data.key.value).get(n) = Some(fresh_c)) =
+                trans(Heap::grow_claims(h, v).after.free_other(v.data.key.value, n, λ e => dk(sym(e))), Store::alloc_reads(h.claims.value, fresh_c));
             let d = h.double(v, ok);
             let c: (cap.toNat() = v.data.count.toNat()) = cong_fn(λ (x: u64) => x.toNat(), ok.cap);
             let l: (Arena::grow(h.arena, v.header.base).after.cell(v.header.base + 2).toNat() = h.arena.cell(v.header.base + 2).toNat()) =

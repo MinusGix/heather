@@ -89,9 +89,9 @@ fn Claim::same(self c, d: Claim) → Bool { c.base.same(d.base) && c.count.same(
 
 // The check that the window's key still names it: the claims' read at the
 // key answers this window.
-fn Heap::holds(w: Window) → Heap → Bool { λ (h: Heap) => h.claims.get(w.key).is_some_and(λ (c: Claim) => c.same(w.claim())) }
+fn Heap::holds(w: Window) → Heap → Bool { λ (h: Heap) => h.claims.value.get(w.key.value).is_some_and(λ (c: Claim) => c.same(w.claim())) }
 
-theorem Heap::holds_of(w: Window, h: Heap): (o: Option<Claim>) → h.claims.get(w.key) = o → o.is_some_and(λ (c: Claim) => c.same(w.claim())) = True → h.Valid(w) {
+theorem Heap::holds_of(w: Window, h: Heap): (o: Option<Claim>) → h.claims.value.get(w.key.value) = o → o.is_some_and(λ (c: Claim) => c.same(w.claim())) = True → h.Valid(w) {
     λ o => match o {
         None => λ e no => absurd(no),
         Some(c) => λ e yes => {
@@ -104,7 +104,7 @@ theorem Heap::holds_of(w: Window, h: Heap): (o: Option<Claim>) → h.claims.get(
 }
 
 // The check decides validity, both ways.
-theorem Heap::holds_sound(self h: Heap, w: Window, yes: Heap::holds(w, h) = True): h.Valid(w) { Heap::holds_of(w, h, h.claims.get(w.key), refl, yes) }
+theorem Heap::holds_sound(self h: Heap, w: Window, yes: Heap::holds(w, h) = True): h.Valid(w) { Heap::holds_of(w, h, h.claims.value.get(w.key.value), refl, yes) }
 
 theorem Heap::holds_complete(self h: Heap, w: Window, valid: h.Valid(w)): Heap::holds(w, h) = True {
     trans(cong_fn(λ (o: Option<Claim>) => o.is_some_and(λ (c: Claim) => c.same(w.claim())), valid),
@@ -207,7 +207,7 @@ theorem Heap::elems_apart(w1, w2: Window, i1, i2: Nat, in1: i1 < w1.count.toNat(
 // Two elements of valid windows of different keys: the claims are apart,
 // so the elements are, at every heap.
 theorem Heap::valid_elems_apart(self h: Heap, w1, w2: Window, i1, i2: Nat, valid1: h.Valid(w1), valid2: h.Valid(w2),
-    other: ¬(w1.key.index = w2.key.index), in1: i1 < w1.count.toNat(), in2: i2 < w2.count.toNat()):
+    other: ¬(w1.key.value.index = w2.key.value.index), in1: i1 < w1.count.toNat(), in2: i2 < w2.count.toNat()):
     Apart<Heap, u64, u64>(Heap::elem_path(w1, i1), Heap::elem_path(w2, i2))
 {
     Heap::elems_apart(w1, w2, i1, i2, in1, in2, match h.valid_apart(w1, w2, valid1, valid2, other) {
@@ -275,7 +275,7 @@ theorem Heap::elem_run_set(w: Window, i: Nat, inside: i < w.count.toNat(), xs: L
 }
 
 theorem Heap::store_is_elem(self h: Heap, w: Window, i, x: u64, valid: h.Valid(w), li: i.toNat() < w.count.toNat()):
-    h.store(w, i, x, valid := valid) = Heap::elem_path(w, i.toNat()).set(h, x)
+    Heap::store(h, w, i, x, valid := valid).after = Heap::elem_path(w, i.toNat()).set(h, x)
 {
     let fits = h.fits(w, valid);
     let sum: ((w.base + i).toNat() = i.toNat() + w.base.toNat()) = { let s = Arena::sum_inside(w.base, i, 16, omega(li, fits), omega); omega(s) };
@@ -350,7 +350,7 @@ theorem Heap::vec_elems_apart(v: VecHandle, i, k: Nat, in_i: i < v.data.count.to
 
 fn Window::span(self w: Window) → Span { Span(w.base.toNat(), w.count.toNat()) }
 
-theorem Heap::valid_owns(self h: Heap, w1, w2: Window, valid1: h.Valid(w1), valid2: h.Valid(w2), other: ¬(w1.key.index = w2.key.index)):
+theorem Heap::valid_owns(self h: Heap, w1, w2: Window, valid1: h.Valid(w1), valid2: h.Valid(w2), other: ¬(w1.key.value.index = w2.key.value.index)):
     Held::own(w1.span()).join(Held::own(w2.span())).Valid()
 {
     let ap = h.valid_apart(w1, w2, valid1, valid2, other);
