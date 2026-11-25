@@ -124,3 +124,4 @@ The language, `run`, validity and `run_renames` pass the library gate with the p
   | `function_ir.hthr`'s `loop_runs_unexhausted`, `loop_runs_weaken`, `LoopRuns`, `LoopHolds` | go from the language; the measure argument becomes a separate termination fact | the bounded relational meaning; termination is no longer part of the meaning |
   | `function_ir_loop.hthr` (`loop_run`, `LoopFolds`, `step_fold_*`, `fold_body_*`) | does not carry over | a budgeted read-only loop interface that the lowering does not use |
   | optimizer rules (`function_ir_rule*`, `_optimize`, `_pass`) | unaffected | none states `LoopRuns` or the bound |
+- 2026-11-25: Verified: `scripts/test --pr` on round 2 (the tree unchanged during the run): `== suite: 3517 passed, 0 failed, 2 ignored ==`. The library gate checks the five modules and the probes. No module of `lib/native/function_ir`, `lib/std/arch/x86_64` or `lib/native/reference_cells` changed.
