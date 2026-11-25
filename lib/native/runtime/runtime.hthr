@@ -3138,6 +3138,101 @@ fn runtime_while_loop(name: String, q: RtQ, ts: RtTypes, w_e: Expr, under: Local
     pure(ap(while_loop_g, [w_e, g_e, NatLit(init), test_e, body_e, caps_e, NatLit(loopn), h_e, m_e, bound_e, pass_e, agree_e]))
 }
 
+// One loop over a record's `k` word fields: its `Tm::FieldsLoop`, as
+// `runtime_while_loop` writes a loop over a word, the state the record
+// made of its field words (`Tm::rec_of`) and the start the record the
+// loop's variable holds.
+fn runtime_fields_loop(name: String, q: RtQ, ts: RtTypes, w_e: Expr, under: LocalRef, world: World, g: List<Ty>, init: Nat, test, body: Tm, caps: List<Nat>,
+    loopn: Nat, i: Nat, k: Nat) → Tac<Expr> {
+    let lname = rt_loop_name(name, loopn);
+    let of_g <- runtime_global(lname ++ "::of");
+    let measure_g <- runtime_global(lname ++ "::measure");
+    let count_g <- runtime_global(lname ++ "::count");
+    let same_g <- runtime_global(lname ++ "::same");
+    let runs_g <- runtime_global(lname ++ "::runs");
+    let run_g <- runtime_global(name_of(loop::Loop::run));
+    let on_words <- runtime_global(name_of(Ty::on_words));
+    let within_g <- runtime_global(name_of(Tm::word_within));
+    let pass_g <- runtime_global(name_of(Tm::NodePass));
+    let state_g <- runtime_global(name_of(Tm::fields_state));
+    let body_g <- runtime_global(name_of(Tm::fields_body));
+    let state_pass_g <- runtime_global(name_of(Tm::state_pass));
+    let fields_loop_g <- runtime_global(name_of(Tm::fields_loop));
+    let cap_word_g <- runtime_global(name_of(Tm::cap_word));
+    let apply_g <- runtime_global(name_of(Tm::fields_apply));
+    let rec_of_g <- runtime_global(name_of(Tm::rec_of));
+    let field_words_g <- runtime_global(name_of(Tm::field_words));
+    let var_at_g <- runtime_global(name_of(Tm::var_at));
+    let env_of_g <- runtime_global(name_of(Tm::EnvOf));
+    let rfl <- runtime_global("tactic::rfl");
+    let sym_g <- runtime_global(name_of(Setup::eq_sym));
+    let trans_g <- runtime_global(name_of(Setup::eq_trans));
+    let word_list <- runtime_ctors_at(ts.words);
+    let sg = Tm::fields_state(world, g, init, caps, i, k);
+    let n = caps.len();
+    let g_e = Ty::quotes(g, q);
+    let test_e = Tm::quote(test, q);
+    let body_e = Tm::quote(body, q);
+    let caps_e = q.nat_list(caps);
+    let sg_e = ap(state_g, [w_e, g_e, NatLit(init), caps_e, NatLit(i), NatLit(k)]);
+    let nb_e = ap(body_g, [g_e, NatLit(init), test_e, body_e, caps_e, NatLit(i), NatLit(k)]);
+    // The record of the first `k` words, and the captures after them.
+    let rec = λ (xs: List<LocalRef>) => ap(rec_of_g, [w_e, NatLit(i), RtQ::seq(word_list, runtime_locals(xs.take(k)))]);
+    let rest = λ (xs: List<LocalRef>) => runtime_locals(xs.drop(k));
+    // The function the node computes: the loop's run at its captures.
+    let xs1 <- runtime_params(ts.word, sg, Some(under), 0);
+    let h_e = runtime_lams(xs1, ap(run_g, [Blank, Blank, ap(of_g, rest(xs1)), rec(xs1)]));
+    // Its measure, and that it is a word's `toNat`.
+    let xs2 <- runtime_params(ts.word, sg, Some(under), 0);
+    let m_e = ap(on_words, [sg_e, runtime_lams(xs2, ap(measure_g, rest(xs2).append([rec(xs2)])))]);
+    let xs3 <- runtime_params(ts.word, sg, Some(under), 0);
+    let bound_e = runtime_lams(xs3, ap(within_g, [ap(count_g, rest(xs3).append([rec(xs3)]))]));
+    // The pass, its binders opened off its statement.
+    let s_t <- as_type(ap(pass_g, [sg_e, nb_e, w_e, h_e, m_e])).or_fail("runtime: `" ++ lname ++ "`'s pass: ");
+    let names = List::range(k + n).map(λ p => "x".append(decimal_name(2, p))).append(["k", "hyp"]);
+    let os <- runtime_open_n(64, s_t, names);
+    let vs = os.fst.take(k + n);
+    let k_ref = os.fst.nth(k + n).unwrap_or(under);
+    let hyp = os.fst.nth(k + n + 1).unwrap_or(under);
+    let same_e = ap(same_g, rest(vs).append([rec(vs)]));
+    let same_t <- infer(same_e).or_fail("runtime: `" ++ lname ++ "::same`: ");
+    let turn <- view(same_t).bind(λ v => match v as λ _ => Tac<Pair<Handle, Handle>> {
+        HEq(_, rhs) => view(rhs).bind(λ vr => match vr as λ _ => Tac<Pair<Handle, Handle>> {
+            HGlobal(_, _, targs) => match targs {
+                Cons(go, Cons(next, _)) => pure(Pair(go, next)),
+                _ => runtime_fail("`" ++ lname ++ "::same` is not a `Step::turn`"),
+            },
+            _ => runtime_fail("`" ++ lname ++ "::same` is not a `Step::turn`"),
+        }),
+        _ => runtime_fail("`" ++ lname ++ "::same` is not an equation"),
+    });
+    let bool_t <- infer(Hd(turn.fst)).or_fail("runtime: `" ++ lname ++ "`'s test: ");
+    let bools <- runtime_ctors_at(bool_t);
+    let e <- assume(Equation(Hd(turn.fst), runtime_at(bools, 1)), "e", Some(hyp)).or_fail("runtime: `" ++ lname ++ "`'s test: ");
+    // The next record, held where the words are all bound.
+    let state_here <- infer(ap(Local(k_ref), [RtQ::seq(word_list, runtime_locals(vs))])).or_fail("runtime: `" ++ lname ++ "`'s state: ");
+    let next_hole <- hole(state_here).or_fail("runtime: `" ++ lname ++ "`'s next state: ");
+    let found_next <- defeq(App(Hd(turn.snd), Local(e.ref)), Hd(next_hole));
+    let next_e <- match found_next { True => pure(Hd(next_hole)), False => fail("runtime: `" ++ lname ++ "`'s next state reads its test's proof", [At(App(Hd(turn.snd), Local(e.ref)), Tried("next state", "not a record without the proof"))]) };
+    let xs5 <- runtime_params(ts.word, sg, Some(hyp), 0);
+    let m_in = ap(on_words, [sg_e, runtime_lams(xs5, ap(measure_g, rest(xs5).append([rec(xs5)])))]);
+    let xs6 <- runtime_params(ts.word, sg, Some(hyp), 0);
+    let h_in = runtime_lams(xs6, ap(run_g, [Blank, Blank, ap(of_g, rest(xs6)), rec(xs6)]));
+    let pass_e = runtime_lams(os.fst, ap(state_pass_g, [Blank, ap(of_g, rest(vs)), rec(vs), RtQ::seq(word_list, runtime_locals(vs)), Blank, Blank,
+        same_e, next_e, Lam(e.ref, ap(rfl, [Blank, next_e])), Local(k_ref), Blank,
+        ap(field_words_g, [w_e, NatLit(i), NatLit(k), NatLit(0), next_e, RtQ::seq(word_list, rest(vs))]), m_in,
+        ap(apply_g, [w_e, g_e, NatLit(init), test_e, body_e, caps_e, NatLit(i), NatLit(k), h_in]),
+        Local(hyp), ap(rfl, [Blank, NatLit(k + n)]), ap(rfl, [Blank, Blank]), ap(rfl, [Blank, Blank]), ap(rfl, [Blank, Blank])]));
+    // At the start, the function is the written loop.
+    let env <- assume(ap(env_of_g, [w_e, g_e]), "env", Some(under)).or_fail("runtime: `" ++ lname ++ "`'s environment: ");
+    let cw = λ (c: Nat) => ap(cap_word_g, [w_e, g_e, Local(env.ref), NatLit(c)]);
+    let start = ap(var_at_g, [w_e, g_e, Local(env.ref), NatLit(init)]);
+    let run_e = ap(run_g, [Blank, Blank, ap(of_g, caps.map(cw)), start]);
+    let agree_e = Lam(env.ref, ap(trans_g, [Blank, Blank, Blank, Blank, ap(rfl, [Blank, run_e]),
+        ap(sym_g, [Blank, Blank, Blank, ap(runs_g, caps.map(cw).append([start]))])]));
+    pure(ap(fields_loop_g, [w_e, g_e, NatLit(init), test_e, body_e, caps_e, NatLit(loopn), NatLit(i), NatLit(k), h_e, m_e, bound_e, pass_e, agree_e]))
+}
+
 // A term's loops' evidence at the world `w_e` (`Tm::WhileEv`), along the
 // parts `Tm::nodes` looks into.
 fn runtime_while_ev(name: String, q: RtQ, ts: RtTypes, world: World, w_e: Expr, under: LocalRef, t: Tm, g: List<Ty>) → Tac<Expr> {
@@ -3150,9 +3245,10 @@ fn runtime_while_ev(name: String, q: RtQ, ts: RtTypes, world: World, w_e: Expr, 
             runtime_while_ev(name, q, ts, world, w_e, under, no, g).bind(λ eb => pure(ap(both, [Blank, Blank, ea, eb])))),
         IfEq(_, yes, no) => runtime_while_ev(name, q, ts, world, w_e, under, yes, g).bind(λ ea =>
             runtime_while_ev(name, q, ts, world, w_e, under, no, g).bind(λ eb => pure(ap(both, [Blank, Blank, ea, eb])))),
-        Iterate(init, test, body, caps, loopn) => match Tm::while_fits(world, g, init, test, body, caps, loopn) {
-            True => runtime_while_loop(name, q, ts, w_e, under, g, init, test, body, caps, loopn),
-            False => pure(Hd(trivial_h)),
+        Iterate(init, test, body, caps, loopn) => match Tm::while_shape(world, g, init, test, body, caps, loopn) {
+            WhileWord => runtime_while_loop(name, q, ts, w_e, under, g, init, test, body, caps, loopn),
+            WhileFields(i, k) => runtime_fields_loop(name, q, ts, w_e, under, world, g, init, test, body, caps, loopn, i, k),
+            WhileUnfit => pure(Hd(trivial_h)),
         },
         _ => pure(Hd(trivial_h)),
     }
