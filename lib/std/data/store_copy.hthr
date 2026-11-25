@@ -1,0 +1,95 @@
+// Keys copy, stores do not (docs/language/ownership-design.md §10.7, §10.8;
+// issues/ownership-copy-clone.md).
+//
+// A key is two counts, a slot's index and its generation, so the code
+// that holds it is a record of two `Count`s, which copies (`Key::rep`,
+// decided by `Ty::copies`): two copies of a key are the same key, and
+// shared mutation through a store is what keeps that harmless (§10.7).
+//
+// A store is not: it holds a slot for every value ever allocated, so it
+// has a value for every number and no codec of any fixed size holds it
+// (`Store::no_codec`). Whatever holds a store at run time holds a buffer,
+// and a copy of it is a copy of that buffer. A store that is erased state
+// (an arena's claims, `arena_handles.hthr`) is the other case: held in
+// nothing, it copies as all erased data does (`Rep::erased`).
+//
+// These live here, beside `store.hthr` and not in it, so the store's own
+// module does not import the native type codes.
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import layout;
+import stored;
+import erased;
+import clone;
+import rt;
+import copy;
+import store;
+
+// ---------------------------------------------------------------------------
+// A key.
+
+// A key as the table's record of two counts.
+fn Key::rec() → RecInfo(EnumInfo::nones) {
+    RecInfo(Key, [Count, Count], λ t => Key(t.fst, t.snd.fst), λ k => Pair(k.index, Pair(k.gen, trivial)), λ t => refl, λ k => refl, trivial)
+}
+
+fn Key::table() → Table { Table(EnumInfo::nones, RecInfo::cons(EnumInfo::nones, Key::rec(), RecInfo::empty(EnumInfo::nones))) }
+
+fn Key::coded() → Coded<Key> { Coded(Key::table(), Named(0), λ k => k, λ k => k, λ k => refl) }
+
+fn Key::rep() → Rep<Key> { Rep::Code(Key::coded()) }
+
+// The code copies: the decider's verdict, closed.
+theorem Key::copies(): Key::coded().code.copies(Key::coded().tys) = True { refl }
+
+instance Copy<Key>(Key::rep()) { copies := Copy::of_code(Key::coded(), Key::copies()).copies }
+
+// A key's exact clone, derived from its code: the copy of its two words.
+instance ExactClone<Key> {
+    clone := λ (k: Key) => Key::rep().copy(k),
+    clone_same := λ (k: Key) => Key::rep().copy_eq(k),
+}
+
+// ---------------------------------------------------------------------------
+// A store.
+
+// `n` free slots: a store for every number.
+fn Store::frees<V>(n: Nat) → Store<V> { Store(List::replicate(Free(0), n)) }
+
+theorem Store::frees_inj<V>(x, y: Nat, e: Store::frees<V>(x) = Store::frees<V>(y)): x = y {
+    trans(sym(List::len_replicate(Free<V>(0), x)),
+        trans(cong_fn(λ (s: Store<V>) => s.slots.len(), e), List::len_replicate(Free<V>(0), y)))
+}
+
+// No codec holds a store: the negative control for `Copy` at its bytes.
+theorem Store::no_codec<V>(s: Stored<Store<V>>): False {
+    Stored::unbounded(s, λ (n: Nat) => Store::frees<V>(n), λ x y e => Store::frees_inj<V>(x, y, e))
+}
+
+// So no `Copy` at `Bytes` either, whatever codec is offered.
+theorem Store::not_copy_bytes<V>(s: Stored<Store<V>>, c: Copy<Store<V>>(Rep::Bytes(s))): False { Store::no_codec(s) }
+
+// Its meaning still clones exactly, slot by slot: a store's clone is a
+// copy of its buffer, and the copy is the store.
+fn Slot::clone_value<V: ExactClone>(s: Slot<V>) → Slot<V> { match s { Live(g, v) => Live(g, V.clone(v)), Free(g) => Free(g) } }
+
+theorem Slot::clone_value_eq<V: ExactClone>(s: Slot<V>): Slot::clone_value(s) = s {
+    match s {
+        Live(g, v) => cong_fn(λ (w: V) => Live(g, w), V.clone_same(v)),
+        Free(_) => refl,
+    }
+}
+
+instance<V: ExactClone> ExactClone<Slot<V>> {
+    clone := λ (s: Slot<V>) => Slot::clone_value(s),
+    clone_same := λ (s: Slot<V>) => Slot::clone_value_eq(s),
+}
+
+instance<V: ExactClone> ExactClone<Store<V>> {
+    clone := λ (s: Store<V>) => Store(s.slots.clone()),
+    clone_same := λ (s: Store<V>) => cong_fn(λ (xs: List<Slot<V>>) => Store(xs), ExactClone::clone_eq(s.slots)),
+}
