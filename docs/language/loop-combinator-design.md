@@ -1455,6 +1455,36 @@ paths' checks), and a node is not read inside an old `FTm::Loop`
   code than it answers is refused, and so is one whose pass calls the
   function itself.
 
+**Step b, planned: span tail recursion onto the node.** What it takes,
+read off the code as it stands:
+- *The pin's theorem* (`FTm::node_means`, the span's `Tm::node_means`).
+  The node's rounds, from a state within the measure, are `h`, by
+  `Loop::rounds_agree_below` over states `Mutated<span, words>` at the
+  measure `m(st.value, st.after)`. Each pass agrees because of what the
+  measured path's `FFun::Guarded` already states: the body's `tail_sem`,
+  its going round answered by anything that agrees with `h` below the
+  measure, is `h`. The steps are:
+  - `FTm::sem_in_tail` turns the node's pass into `tail_sem`;
+  - `FTm::tail_sem_ext` and the one-word round trip (`Ty::one_word_back`,
+    `Tm::out_into`) move between `Guarded`'s word-recast continuation and
+    the node's;
+  - `FFun::Bounded` gives the measure within `Tm::passes()`.
+- *The reflector* (`rt_file_reflect_measured`, `rt_file_tail`) writes a
+  measured span function as `Node(params, body)`, its self-calls `Next(res,
+  args)`. It is then a plain `FFun` and lowers by `FFun::lower`. Its
+  `Guarded` is stated of the same body, because `tail_sem` reads `Next` as
+  it reads `Again`, so the generator's proof of it
+  (`runtime_span_measured`) carries over.
+- *The instance* is `FFun::compile` with a pin from `FTm::node_means`, in
+  place of `FFun::compile_measured`.
+- *What goes:* `FFun::lower_measured`, `FFun::measured_sound`,
+  `FFun::meas_tail2`, `FFun::meas_pass_turn`, `FFun::meas_zero_turn` and
+  the measured instance. `FFun::counted_sound` and `Fun::meas_code` stay
+  until step c moves the held and `Bytes(n)` paths, which use them.
+- *Users to keep green:* the lexer's `List::scan_records`,
+  `native_tool_spans`' `raise_span` and `List::raise_letters`, and
+  `runtime_file_tests`' `raise_guarded`.
+
 ## 7. Bootstrapping
 
 Minus's fear: a bug that infects the next version. The loop's meaning is
