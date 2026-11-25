@@ -167,3 +167,16 @@ fn countdown_reusing() → Routine {
 theorem countdown_reusing_valid(): Program([countdown_reusing()]).valid() = True { refl }
 
 theorem countdown_reusing_refused(): lowers(Program([countdown_reusing()]), countdown_places()) = False { refl }
+
+// The exited clause holds of every program the lowering returns: none
+// lowers an exit, so its meaning never exits.
+theorem countdown_meets_exited<M>(program: Prog, lowered: countdown_program().lower(countdown_places()) = Some(program), fetch: FetchAccess<M>,
+    data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans, blocks: Blocks):
+    Site<M>(fetch, data, program, last, origin).MeetsExited(stack, spans, top, routine_rooms(countdown_program().routines), 1,
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(countdown_program(), blocks, n, f, args, heap, io)) {
+    lower_program_meets_exited<M>(countdown_program(), countdown_places(), program, lowered, fetch, data, last, origin, stack, top, spans, blocks)
+}
+
+// Control: a routine that exits is refused, so the clause is not had of it
+// by the lowering.
+theorem exits_refused(): lowers(Program([Routine([], Seq(Leaf([Compute(Const(64, 0, 3))]), Exit(0)), [])]), into([Rax])) = False { refl }

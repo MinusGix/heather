@@ -1172,3 +1172,225 @@ theorem lower_program_meets_done<M>(p: Program, placement: List<Place>, program:
             p.routines.len()), e),
     })(lowered)
 }
+
+// ---------------------------------------------------------------------------
+// A program the lowering returns never exits
+
+theorem Ran::then_exited<T, U>(r: Ran<T>, k: T → Ran<U>, status: BitVec(64), o: Io): r.then(k) = Exited(status, o) →
+    (r = Exited(status, o)) ∨ Exists<T>(λ a => (r = Done(a)) ∧ (k(a) = Exited(status, o))) {
+    match r {
+        Done(a) => λ h => Inr(Exists(a, ⟨refl, h⟩)),
+        Exited(s2, o2) => λ h => {
+            let es = cong_fn<Ran<U>, BitVec(64)>(λ x => match x { Done(_) => s2, Exited(st, _) => st, Going(_) => s2, Stuck(_) => s2 }, h);
+            let eo = cong_fn<Ran<U>, Io>(λ x => match x { Done(_) => o2, Exited(_, w) => w, Going(_) => o2, Stuck(_) => o2 }, h);
+            Inl(j(es, λ x _ => Exited<T>(s2, o2) = Exited<T>(x, o), j(eo, λ w _ => Exited<T>(s2, o2) = Exited<T>(s2, w), refl)))
+        },
+        Going(_) => λ h => absurd(h),
+        Stuck(_) => λ h => absurd(h),
+    }
+}
+
+theorem Ran::of_exited<T>(o: Option<T>, io: Io, status: BitVec(64), w: Io): Ran::of(o, io) = Exited(status, w) → False {
+    match o { None => λ h => absurd(h), Some(_) => λ h => absurd(h) }
+}
+
+// Calls that never exit.
+fn NoExit(calls: Calls()) → Type {
+    (f: Nat) → (args: List<Value>) → (heap: Heap) → (io: Io) → (status: BitVec(64)) → (o: Io) → calls(f, args, heap, io) = Exited(status, o) → False
+}
+
+theorem loop_run_no_exit(blocks: Blocks, calls: Calls(), inner: Body, parameters: List<Typed>, exit: Nat, next: List<Typed>,
+    passes: (rest: Nat) → (state: List<Value>) → (m: Heap) → (io: Io) → (l: Locals) → (status: BitVec(64)) → (o: Io) →
+        pass_locals(parameters, state) = Some(l) → inner.run(blocks, calls, rest, Config(l, m, io)) = Exited(status, o) → False,
+    fuel: Nat): (state: List<Value>) → (m: Heap) → (io: Io) → (status: BitVec(64)) → (o: Io) →
+    bytes_level::loop_run(λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass), parameters, exit, next, fuel, state, m, io) = Exited(status, o) →
+    False {
+    match fuel {
+        Zero => λ state m io status o never => absurd(never),
+        Succ(rest) => λ state m io status o ran => {
+            let step = λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass);
+            let after_pass = λ (after: Config) => Ran::of(read_values(next, after.locals), after.io).then(λ (later: List<Value>) =>
+                match after.locals.words(1, exit).head_bit() {
+                    False => bytes_level::loop_run(step, parameters, exit, next, rest, later, after.memory, after.io),
+                    True => Done(Ended(later, after.memory, after.io)),
+                });
+            match Ran::then_exited<Locals, Ended>(Ran::of(pass_locals(parameters, state), io), λ (l: Locals) =>
+                step(rest, Config(l, m, io)).then(after_pass), status, o, ran) {
+                Inl(bad) => Ran::of_exited<Locals>(pass_locals(parameters, state), io, status, o, bad),
+                Inr(one) => {
+                    let l = one.witness;
+                    let bound = Ran::of_done<Locals>(pass_locals(parameters, state), io, l, one.proof.left);
+                    match Ran::then_exited<Config, Ended>(inner.run(blocks, calls, rest, Config(l, m, io)), after_pass, status, o, one.proof.right) {
+                        Inl(bad) => passes(rest, state, m, io, l, status, o, bound, bad),
+                        Inr(two) => {
+                            let after = two.witness;
+                            match Ran::then_exited<List<Value>, Ended>(Ran::of(read_values(next, after.locals), after.io), λ (later: List<Value>) =>
+                                match after.locals.words(1, exit).head_bit() {
+                                    False => bytes_level::loop_run(step, parameters, exit, next, rest, later, after.memory, after.io),
+                                    True => Done(Ended(later, after.memory, after.io)),
+                                }, status, o, two.proof.right) {
+                                Inl(bad) => Ran::of_exited<List<Value>>(read_values(next, after.locals), after.io, status, o, bad),
+                                Inr(three) => (match after.locals.words(1, exit).head_bit() as λ b => (match b {
+                                        False => bytes_level::loop_run(step, parameters, exit, next, rest, three.witness, after.memory, after.io),
+                                        True => Done(Ended(three.witness, after.memory, after.io)),
+                                    }) = Exited(status, o) → False {
+                                    True => λ never => absurd(never),
+                                    False => λ e => loop_run_no_exit(blocks, calls, inner, parameters, exit, next, passes, rest, three.witness, after.memory,
+                                        after.io, status, o, e),
+                                })(three.proof.right),
+                            }
+                        },
+                    }
+                },
+            }
+        },
+    }
+}
+
+theorem Body::run_no_exit(self body: Body, blocks: Blocks, calls: Calls(), none: NoExit(calls), fuel: Nat): (used, used2: List<Nat>) → (c: Config) →
+    (status: BitVec(64)) → (o: Io) → body.fresh(used) = Some(used2) → body.run(blocks, calls, fuel, c) = Exited(status, o) → False {
+    match body {
+        Leaf(instrs) => λ used used2 c status o fresh ran => Ran::of_exited<Config>(run_instrs(blocks, instrs, c), c.io, status, o, ran),
+        Seq(first, rest) => λ used used2 c status o fresh ran => {
+            let fresh_first = Option::and_then_some(first.fresh(used), λ (u: List<Nat>) => rest.fresh(u), used2, fresh);
+            match Ran::then_exited<Config, Config>(first.run(blocks, calls, fuel, c), λ (mid: Config) => rest.run(blocks, calls, fuel, mid), status, o, ran) {
+                Inl(bad) => first.run_no_exit(blocks, calls, none, fuel, used, fresh_first.witness, c, status, o, fresh_first.proof.left, bad),
+                Inr(one) => rest.run_no_exit(blocks, calls, none, fuel, fresh_first.witness, used2, one.witness, status, o, fresh_first.proof.right,
+                    one.proof.right),
+            }
+        },
+        Branch(condition, yes, no) => λ used used2 c status o fresh ran => {
+            let fresh_yes = Option::and_then_some(yes.fresh(used), λ (uy: List<Nat>) => no.fresh(used).and_then(λ (un: List<Nat>) => Some(uy ++ un)),
+                used2, fresh);
+            let fresh_no = Option::and_then_some(no.fresh(used), λ (un: List<Nat>) => Some(fresh_yes.witness ++ un), used2, fresh_yes.proof.right);
+            (match c.locals.words(1, condition).head_bit() as λ bit =>
+                (match bit { True => yes.run(blocks, calls, fuel, c), False => no.run(blocks, calls, fuel, c) }) = Exited(status, o) → False {
+                True => λ r => yes.run_no_exit(blocks, calls, none, fuel, used, fresh_yes.witness, c, status, o, fresh_yes.proof.left, r),
+                False => λ r => no.run_no_exit(blocks, calls, none, fuel, used, fresh_no.witness, c, status, o, fresh_no.proof.left, r),
+            })(ran)
+        },
+        Call(callee, arguments, results) => λ used used2 c status o fresh ran => {
+            let rest = λ (args: List<Value>) => calls(callee, args, c.memory, c.io).then(λ (answer: Answer) =>
+                Ran::of(bind_values(results, answer.words, c.locals), answer.io).then(λ (l: Locals) => Done(Config(l, answer.heap, answer.io))));
+            match Ran::then_exited<List<Value>, Config>(Ran::of(read_values(arguments, c.locals), c.io), rest, status, o, ran) {
+                Inl(bad) => Ran::of_exited<List<Value>>(read_values(arguments, c.locals), c.io, status, o, bad),
+                Inr(one) => match Ran::then_exited<Answer, Config>(calls(callee, one.witness, c.memory, c.io), λ (answer: Answer) =>
+                    Ran::of(bind_values(results, answer.words, c.locals), answer.io).then(λ (l: Locals) => Done(Config(l, answer.heap, answer.io))), status, o,
+                    one.proof.right) {
+                    Inl(bad) => none(callee, one.witness, c.memory, c.io, status, o, bad),
+                    Inr(two) => match Ran::then_exited<Locals, Config>(Ran::of(bind_values(results, two.witness.words, c.locals), two.witness.io),
+                        λ (l: Locals) => Done(Config(l, two.witness.heap, two.witness.io)), status, o, two.proof.right) {
+                        Inl(bad) => Ran::of_exited<Locals>(bind_values(results, two.witness.words, c.locals), two.witness.io, status, o, bad),
+                        Inr(three) => absurd(three.proof.right),
+                    },
+                },
+            }
+        },
+        Loop(inputs, parameters, inner, exit, next, outputs) => λ used used2 c status o fresh ran => {
+            let fr = loop_fresh(used, used2, inputs, parameters, inner, exit, next, outputs, fresh);
+            let step = λ (n: Nat) (pass: Config) => inner.run(blocks, calls, n, pass);
+            let rest = λ (state: List<Value>) => bytes_level::loop_run(step, parameters, exit, next, fuel, state, c.memory, c.io).then(λ (end: Ended) =>
+                Ran::of(bind_values(outputs, end.state, c.locals), end.io).then(λ (l: Locals) => Done(Config(l, end.memory, end.io))));
+            match Ran::then_exited<List<Value>, Config>(Ran::of(read_values(inputs, c.locals), c.io), rest, status, o, ran) {
+                Inl(bad) => Ran::of_exited<List<Value>>(read_values(inputs, c.locals), c.io, status, o, bad),
+                Inr(one) => match Ran::then_exited<Ended, Config>(bytes_level::loop_run(step, parameters, exit, next, fuel, one.witness, c.memory, c.io),
+                    λ (end: Ended) => Ran::of(bind_values(outputs, end.state, c.locals), end.io).then(λ (l: Locals) => Done(Config(l, end.memory, end.io))),
+                    status, o, one.proof.right) {
+                    Inl(bad) => loop_run_no_exit(blocks, calls, inner, parameters, exit, next,
+                        λ rest st m io l s2 o2 _ rn => inner.run_no_exit(blocks, calls, none, rest, fr.start, fr.inside, Config(l, m, io), s2, o2, fr.body, rn),
+                        fuel, one.witness, c.memory, c.io, status, o, bad),
+                    Inr(two) => match Ran::then_exited<Locals, Config>(Ran::of(bind_values(outputs, two.witness.state, c.locals), two.witness.io),
+                        λ (l: Locals) => Done(Config(l, two.witness.memory, two.witness.io)), status, o, two.proof.right) {
+                        Inl(bad) => Ran::of_exited<Locals>(bind_values(outputs, two.witness.state, c.locals), two.witness.io, status, o, bad),
+                        Inr(three) => absurd(three.proof.right),
+                    },
+                },
+            }
+        },
+        Sys(_) => λ used used2 c status o never => absurd(never),
+        Exit(_) => λ used used2 c status o never => absurd(never),
+    }
+}
+
+theorem Routine::call_no_exit(self r: Routine, used: List<Nat>, scope: r.scope() = Some(used), blocks: Blocks, calls: Calls(), none: NoExit(calls),
+    fuel: Nat, args: List<Value>, heap: Heap, io: Io, status: BitVec(64), o: Io, ran: r.call(blocks, calls, fuel, args, heap, io) = Exited(status, o)): False {
+    let fresh = Option::and_then_some(fresh_ids([], typed_ids(r.parameters)), λ (u: List<Nat>) => r.body.fresh(u), used, scope);
+    let after_body = λ (after: Config) => Ran::of(read_values(r.results, after.locals), after.io).then(λ (words: List<Value>) =>
+        Done(Answer(words, after.memory, after.io)));
+    match Ran::then_exited<Locals, Answer>(Ran::of(bind_values(r.parameters, args, Locals::empty()), io), λ (l: Locals) =>
+        r.body.run(blocks, calls, fuel, Config(l, heap, io)).then(after_body), status, o, ran) {
+        Inl(bad) => Ran::of_exited<Locals>(bind_values(r.parameters, args, Locals::empty()), io, status, o, bad),
+        Inr(one) => match Ran::then_exited<Config, Answer>(r.body.run(blocks, calls, fuel, Config(one.witness, heap, io)), after_body, status, o,
+            one.proof.right) {
+            Inl(bad) => r.body.run_no_exit(blocks, calls, none, fuel, fresh.witness, used, Config(one.witness, heap, io), status, o, fresh.proof.right, bad),
+            Inr(two) => match Ran::then_exited<List<Value>, Answer>(Ran::of(read_values(r.results, two.witness.locals), two.witness.io),
+                λ (words: List<Value>) => Done(Answer(words, two.witness.memory, two.witness.io)), status, o, two.proof.right) {
+                Inl(bad) => Ran::of_exited<List<Value>>(read_values(r.results, two.witness.locals), two.witness.io, status, o, bad),
+                Inr(three) => absurd(three.proof.right),
+            },
+        },
+    }
+}
+
+theorem program_no_exit(routines: List<Routine>, blocks: Blocks, scoped: Scoped::all(routines), fuel: Nat): NoExit(program_calls(routines, blocks, fuel)) {
+    match fuel {
+        Zero => λ f args heap io status o never => absurd(never),
+        Succ(n) => λ f args heap io status o => (match routines.nth(f) as λ x => routines.nth(f) = x →
+            (match x { None => Stuck(io), Some(r) => r.call(blocks, program_calls(routines, blocks, n), n, args, heap, io) }) = Exited(status, o) → False {
+            None => λ _ never => absurd(never),
+            Some(r) => λ nth ran => {
+                let s = scoped_nth(routines, f, r, nth, scoped);
+                r.call_no_exit(s.witness, s.proof, blocks, program_calls(routines, blocks, n), program_no_exit(routines, blocks, scoped, n), n, args, heap, io,
+                    status, o, ran)
+            },
+        })(refl),
+    }
+}
+
+theorem emit_routines_scoped(routines: List<Routine>, rooms: Nat → Nat): (prog: Prog) → (k: Nat) → (placement: List<Place>) → (names: Nat) →
+    emit_routines(prog, routines, k, placement, names, rooms).All(λ (_: Emitted) => Scoped::all(routines)) {
+    match routines {
+        Nil => λ prog k placement names => trivial,
+        Cons(r, rest) => λ prog k placement names =>
+            (match r.emit(prog, k, placement, names, rooms) as λ e => (r.emit(prog, k, placement, names, rooms) = e) →
+                (match e { None => None, Some(out) => emit_routines(out.prog, rest, k + 1, out.placement, out.names, rooms) }).All(λ (_: Emitted) =>
+                    Scoped::all(Cons(r, rest))) {
+                None => λ _ => trivial,
+                Some(out) => λ emitted => (match emit_routines(out.prog, rest, k + 1, out.placement, out.names, rooms) as λ e =>
+                    e.All(λ (_: Emitted) => Scoped::all(rest)) → e.All(λ (_: Emitted) => Scoped::all(Cons(r, rest))) {
+                    None => λ _ => trivial,
+                    Some(_) => λ more => ⟨r.emit_scoped(prog, k, placement, names, rooms, out, emitted), more⟩,
+                })(emit_routines_scoped(rest, rooms, out.prog, k + 1, out.placement, out.names)),
+            })(refl),
+    }
+}
+
+theorem Program::lower_scoped(self p: Program, placement: List<Place>, program: Prog, lowered: p.lower(placement) = Some(program)): Scoped::all(p.routines) {
+    let rooms = routine_rooms(p.routines);
+    (match p.valid() as λ b => (match b { False => None, True => match emit_routines(Start, p.routines, 0, placement, p.routines.len(), rooms) {
+            None => None,
+            Some(out) => match out.prog.laid_out() { False => None, True => Some(out.prog) },
+        } }) = Some(program) → Scoped::all(p.routines) {
+        False => λ never => absurd(never),
+        True => λ e => (match emit_routines(Start, p.routines, 0, placement, p.routines.len(), rooms) as λ o =>
+            o.All(λ (_: Emitted) => Scoped::all(p.routines)) →
+            (match o { None => None, Some(out) => match out.prog.laid_out() { False => None, True => Some(out.prog) } }) = Some(program) →
+            Scoped::all(p.routines) {
+            None => λ _ never => absurd(never),
+            Some(out) => λ scoped _ => scoped,
+        })(emit_routines_scoped(p.routines, rooms, Start, 0, placement, p.routines.len()), e),
+    })(lowered)
+}
+
+// The exited clause, for every program the lowering returns: it lowers no
+// exit and no system call, so its meaning never exits, and the clause holds
+// with nothing to perform.
+theorem lower_program_meets_exited<M>(p: Program, placement: List<Place>, program: Prog, lowered: p.lower(placement) = Some(program),
+    fetch: FetchAccess<M>, data: ByteReadAccess<M>, last: List<BitVec(8)>, origin: BitVec(64), stack: Stack<M>(fetch, data), top: Nat, spans: Spans,
+    blocks: Blocks):
+    Site<M>(fetch, data, program, last, origin).MeetsExited(stack, spans, top, routine_rooms(p.routines), p.routines.len(),
+        λ (n: Nat) (f: Nat) (args: List<Value>) (heap: Heap) (io: Io) => run(p, blocks, n, f, args, heap, io)) {
+    let scoped = p.lower_scoped(placement, program, lowered);
+    λ f below args heap io answerable s here resident i rsp room passed low high inj ret saved n status o ran =>
+        false_elim(program_no_exit(p.routines, blocks, scoped, n, f, args, heap, io, status, o, ran))
+}

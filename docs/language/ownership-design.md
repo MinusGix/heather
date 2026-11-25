@@ -2052,6 +2052,14 @@ the routine's frame, the done clause and the world are filed (below).
   `loop_leaves` without its flag). The ids a pass binds are counted bound
   in the scope around the loop, so the routine's spare id is none of a
   pass's and nothing after the loop rebinds one.
+- *The exited clause* holds of every program the lowering returns, and
+  vacuously: it lowers no exit and no system call, so its meaning never
+  exits (`program_no_exit`, `lower_program_meets_exited`). What remains of
+  the world (`issues/bytes-level-lowering-world.md`): the system call, which
+  needs the frame, call, loop and function theorems in the claim form
+  `Site::Performs` (all are over `Site::Moves`), and the going clause, a
+  statement about every state the code reaches, which none of the
+  existential theorems gives.
 
 **What follows.** The rest of the lowering under `Site::Meets`
 (`issues/bytes-level-lowering-routines.md`, `bytes-level-lowering-loops.md`,
