@@ -78,3 +78,8 @@ Items 1 to 6 have landed with `scripts/test --pr` green, or the package stopped 
   - **D's sequence twin**: `past_end_apart`, `past_end_reads_pad`, `past_end_kept` (`sequences_tests`).
   - **Retired (item 6)**: `coded.hthr` and its probes, and `PathLawsOn`/`KeepsFit` from `lib/std/machine/path.hthr`.
   - `scripts/test --pr` at 8880e3ca: `== suite: 3518 passed, 0 failed, 2 ignored ==`.
+- 2026-11-25: **The coordinator's second round of decisions, applied.**
+  - **Environment**: one indexed environment (variables named by level) was built on the library's `NatMap` `Array` and on a skew-binary list and measured; both missed the agreed margin (at most a third over the split at the largest size), so `Arg`/`Loc` stays. Numbers on [[ownership-long-lived-local]] and in §22.3.
+  - **References and holes hold selections** (`List<Sel>`), so a view at a `u64` index into `Bytes` has a closed form; `Sel::same`, `Sel::read_at`/`write_at`, `Ref::narrow`.
+  - **`SafeAt` spelled in full**: the written-parameter clause (`Value::Written`, under the `Ret` convention: results, then written parameters in signature order) and the returned-view clause (`Value::Views`).
+  - **The pin's form**: every pin is `f.then(R, …, k) = source(…)` by `refl`, the early-return join included; `Body::mean_then` (by induction on the body, `convoy_map` once inside it) and `Func::then_denote` relate it to the answer.

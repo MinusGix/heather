@@ -27,9 +27,17 @@
 // - **An ill-coded body has a junk meaning, never a missing one**: an
 //   operand of a word primitive or a test that is not a word of the first's
 //   width reads the word zero; an ill-coded call answers no results, and a
-//   binder with no result binds the word zero `Dyn`. Nothing is optional,
-//   so a pin is `mean(…) = the source's term`. The check refuses an
-//   ill-coded body from codes alone (`verdict.hthr`, `Func::coded`).
+//   binder with no result binds the word zero `Dyn`. Nothing is optional.
+//   The check refuses an ill-coded body from codes alone (`verdict.hthr`,
+//   `Func::coded`).
+// - **A pin** reads the meaning back through a native continuation at the
+//   source's result type (`Func::then`), so a tail join is the source's
+//   convoy and every pin is `refl`; one lemma, by induction on the body,
+//   relates that form to the answer (`Body::mean_then`,
+//   `Func::then_denote`).
+// - **A `Ret`** lists the results, then the written parameters' values at
+//   the end, in signature order (`Sig::written`): the source's `Mutated`
+//   nesting read as a list.
 import logic;
 import bool;
 import nat;
@@ -113,6 +121,22 @@ record Result { code: Shape, origin: Origin }
 record Sig { params: List<Param>, results: List<Result> }
 
 record Func { sig: Sig, body: Body }
+
+// The parameters a signature writes, by position, in order. A function's
+// `Ret` lists its results, then these parameters' values at its end, in
+// this order (the source's own `Mutated` return); a call binds them all,
+// and the caller writes each back to the place it lent (§15.2).
+fn Param::written_from(ps: List<Param>) → (i: Nat) → List<Nat> {
+    match ps {
+        Nil => λ _ => Nil,
+        Cons(p, rest) => λ i => match p.mode { ByWrite => Cons(i, Param::written_from(rest)(i + 1)), ByRead => Param::written_from(rest)(i + 1), ByTake => Param::written_from(rest)(i + 1) },
+    }
+}
+
+fn Sig::written(self s: Sig) → List<Nat> { Param::written_from(s.params)(0) }
+
+// The codes a `Ret` yields: the results', then the written parameters'.
+fn Sig::ret_codes(self s: Sig) → List<Shape> { s.results.map(λ r => r.code) ++ s.written().map(λ i => s.params.nth(i).map(λ p => p.code).unwrap_or(SWord(WNat))) }
 
 // ---------------------------------------------------------------------------
 // The environment
@@ -211,6 +235,17 @@ fn convoy<A>(c: Bool, y, n: A) → A { (match c as λ d => c = d → A { True =>
 // The same with each arm handed the equation: what a source's arms that
 // read `h` elaborate to.
 fn dconvoy<A>(c: Bool, y: c = True → A, n: c = False → A) → A { (match c as λ d => c = d → A { True => y, False => n })(refl) }
+
+// A function of a convoy is the convoy of the function of its arms: what
+// a join with an inner return takes to pin its whole answer, whose convoy
+// is over the answer where the source's is over the word (one stage lemma
+// per join, each arm `refl`).
+theorem convoy_map<A, B>(c: Bool, y, n: A, f: A → B): f(convoy(c, y, n)) = convoy(c, f(y), f(n)) {
+    (match c as λ d => (e: c = d) → f((match d as λ d2 => c = d2 → A { True => λ _ => y, False => λ _ => n })(e)) = (match d as λ d2 => c = d2 → B { True => λ _ => f(y), False => λ _ => f(n) })(e) {
+        True => λ e => refl,
+        False => λ e => refl,
+    })(refl)
+}
 
 // A function of a convoy is the convoy of the function of its arms: the
 // split a loop's pin takes after its one equation (a stage lemma, the
@@ -318,4 +353,73 @@ fn Body::mean(self b: Body, R: Type, tys: Nat → Type, strs: Strs(tys), w: Call
 // A function's meaning: from its arguments, its results.
 fn Func::denote(self f: Func, tys: Nat → Type, strs: Strs(tys), w: Callees(tys), me: Nat, args: List<Dyn(tys)>) → List<Dyn(tys)> {
     f.body.mean(List<Dyn(tys)>, tys, strs, w, me, Env::start(tys, args), λ rs => rs, λ _ => Nil)
+}
+
+// ---------------------------------------------------------------------------
+// The pin's form, and the one lemma that relates it to the answer
+
+// The meaning read back through a continuation at the source's own result
+// type: what every pin states, so a tail join is the source's
+// `convoy(test, …)` with nothing to commute.
+fn Func::then(self f: Func, R: Type, tys: Nat → Type, strs: Strs(tys), w: Callees(tys), me: Nat, args: List<Dyn(tys)>, k: List<Dyn(tys)> → R) → R {
+    f.body.mean(R, tys, strs, w, me, Env::start(tys, args), k, λ _ => k(Nil))
+}
+
+// A statement hands its continuation the next environment.
+theorem Stmt::eval_is(self s: Stmt, R: Type, tys: Nat → Type, strs: Strs(tys), w: Callees(tys), e: Env(tys), k: Env(tys) → R):
+    s.eval(R, tys, strs, w, e, k) = k(s.eval(Env(tys), tys, strs, w, e, λ x => x))
+{
+    match s as λ x => x.eval(R, tys, strs, w, e, k) = k(x.eval(Env(tys), tys, strs, w, e, λ y => y)) {
+        Op(_, _, _) => refl, Lit(_, _) => refl, Read(_) => refl, Write(_, _) => refl, View(_, _) => refl,
+        Take(_) => refl, Fresh(_, _, _) => refl, Call(_, _, _) => refl, Death(_) => refl,
+    }
+}
+
+// The continuation form is the continuation applied to the answer, for
+// continuations that agree pointwise (there is no funext). By induction on
+// the body; the join-point join commutes its convoy here, once.
+theorem Body::mean_then(self b: Body, tys: Nat → Type, strs: Strs(tys), w: Callees(tys), me: Nat):
+    (A: Type) → (B: Type) → (f: A → B) → (e: Env(tys)) → (ra: List<Dyn(tys)> → A) → (ya: List<Dyn(tys)> → A) → (rb: List<Dyn(tys)> → B) → (yb: List<Dyn(tys)> → B) →
+    ((rs: List<Dyn(tys)>) → rb(rs) = f(ra(rs))) → ((ds: List<Dyn(tys)>) → yb(ds) = f(ya(ds))) →
+    b.mean(B, tys, strs, w, me, e, rb, yb) = f(b.mean(A, tys, strs, w, me, e, ra, ya))
+{
+    match b {
+        Ret(rs) => λ A B f e ra ya rb yb hr hy => hr(rs.map(λ x => Env::get(tys, e, x))),
+        Yield(os) => λ A B f e ra ya rb yb hr hy => hy(os.map(λ x => Env::get(tys, e, x))),
+        Jump(args) => λ A B f e ra ya rb yb hr hy => hr(w(me, args.map(λ x => Env::get(tys, e, x)))),
+        Do(s, rest) => λ A B f e ra ya rb yb hr hy => {
+            let e2 = s.eval(Env(tys), tys, strs, w, e, λ x => x);
+            let left: (s.eval(B, tys, strs, w, e, λ x => rest.mean(B, tys, strs, w, me, x, rb, yb)) = rest.mean(B, tys, strs, w, me, e2, rb, yb)) =
+                s.eval_is(B, tys, strs, w, e, λ x => rest.mean(B, tys, strs, w, me, x, rb, yb));
+            let right: (s.eval(A, tys, strs, w, e, λ x => rest.mean(A, tys, strs, w, me, x, ra, ya)) = rest.mean(A, tys, strs, w, me, e2, ra, ya)) =
+                s.eval_is(A, tys, strs, w, e, λ x => rest.mean(A, tys, strs, w, me, x, ra, ya));
+            trans(left, trans(rest.mean_then(tys, strs, w, me, A, B, f, e2, ra, ya, rb, yb, hr, hy), cong_fn(f, sym(right))))
+        },
+        Join(t, yes, no, rest) => λ A B f e ra ya rb yb hr hy => {
+            let packed = Env::push_all(tys, e, Body::joined(tys, t.bit(tys, e), yes.mean(List<Dyn(tys)>, tys, strs, w, me, e, λ _ => Nil, λ ds => ds), no.mean(List<Dyn(tys)>, tys, strs, w, me, e, λ _ => Nil, λ ds => ds)));
+            let afa = λ (ds: List<Dyn(tys)>) => rest.mean(A, tys, strs, w, me, Env::push_all(tys, e, ds), ra, ya);
+            let afb = λ (ds: List<Dyn(tys)>) => rest.mean(B, tys, strs, w, me, Env::push_all(tys, e, ds), rb, yb);
+            let ha: ((ds: List<Dyn(tys)>) → afb(ds) = f(afa(ds))) = λ ds => rest.mean_then(tys, strs, w, me, A, B, f, Env::push_all(tys, e, ds), ra, ya, rb, yb, hr, hy);
+            let ey: (yes.mean(B, tys, strs, w, me, e, rb, afb) = f(yes.mean(A, tys, strs, w, me, e, ra, afa))) = yes.mean_then(tys, strs, w, me, A, B, f, e, ra, afa, rb, afb, hr, ha);
+            let en: (no.mean(B, tys, strs, w, me, e, rb, afb) = f(no.mean(A, tys, strs, w, me, e, ra, afa))) = no.mean_then(tys, strs, w, me, A, B, f, e, ra, afa, rb, afb, hr, ha);
+            let c = t.bit(tys, e);
+            let joint: (convoy(c, yes.mean(B, tys, strs, w, me, e, rb, afb), no.mean(B, tys, strs, w, me, e, rb, afb)) = f(convoy(c, yes.mean(A, tys, strs, w, me, e, ra, afa), no.mean(A, tys, strs, w, me, e, ra, afa)))) =
+                trans(cong_fn(λ (z: B) => convoy(c, z, no.mean(B, tys, strs, w, me, e, rb, afb)), ey),
+                    trans(cong_fn(λ (z: B) => convoy(c, f(yes.mean(A, tys, strs, w, me, e, ra, afa)), z), en),
+                        sym(convoy_map(c, yes.mean(A, tys, strs, w, me, e, ra, afa), no.mean(A, tys, strs, w, me, e, ra, afa), f))));
+            (match yes.exits() || no.exits() as λ x =>
+                (match x { False => rest.mean(B, tys, strs, w, me, packed, rb, yb), True => convoy(c, yes.mean(B, tys, strs, w, me, e, rb, afb), no.mean(B, tys, strs, w, me, e, rb, afb)) })
+                = f(match x { False => rest.mean(A, tys, strs, w, me, packed, ra, ya), True => convoy(c, yes.mean(A, tys, strs, w, me, e, ra, afa), no.mean(A, tys, strs, w, me, e, ra, afa)) }) {
+                False => rest.mean_then(tys, strs, w, me, A, B, f, packed, ra, ya, rb, yb, hr, hy),
+                True => joint,
+            })
+        },
+    }
+}
+
+// What a pin gives: the continuation applied to the function's answer.
+theorem Func::then_denote(self f: Func, R: Type, tys: Nat → Type, strs: Strs(tys), w: Callees(tys), me: Nat, args: List<Dyn(tys)>, k: List<Dyn(tys)> → R):
+    f.then(R, tys, strs, w, me, args, k) = k(f.denote(tys, strs, w, me, args))
+{
+    f.body.mean_then(tys, strs, w, me, List<Dyn(tys)>, R, k, Env::start(tys, args), λ rs => rs, λ _ => Nil, k, λ _ => k(Nil), λ rs => refl, λ ds => refl)
 }

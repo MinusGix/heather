@@ -17,9 +17,13 @@
 //   sides of the test, what follows a join once.
 // - **A function's safety** (`Safety`), relative to its callees' at less
 //   fuel: at no fuel is the run stuck; a measured function's run is done
-//   from its measure on; where it is done, its results read the meaning's
-//   and the heap outside what was lent is unchanged; where an unmeasured run
-//   is going, its history is a prefix of one the meaning reaches.
+//   from its measure on; where it is done, its results read the meaning's,
+//   each written parameter reads the meaning's value after and that value
+//   fits its value before (`Value::Written`), the heap outside what was
+//   lent is unchanged, and each returned view is its parameter's reference
+//   narrowed by the steps its signature names at the call's words
+//   (`Value::Views`, `Ref::narrow`); where an unmeasured run is going, its history is a
+//   prefix of one the meaning reaches.
 // - **The check's refusals** (`Func::coded`, `CheckRefusesIllCoded`): from
 //   codes alone, a word primitive or test at a non-word, a join whose arms
 //   yield different codes, a call whose arguments' codes are not its
@@ -174,6 +178,39 @@ fn Value::ReadAll(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), fuel: Nat, v
     }
 }
 
+// Each written parameter, after: its argument read in the heap after is
+// the meaning's value after, and that value fits its value before.
+fn Value::Written(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), fuel: Nat, vs: List<Value(tys)>, ds: List<Dyn(tys)>, is: List<Nat>) → List<Dyn(tys)> → Type {
+    match is {
+        Nil => λ _ => True,
+        Cons(i, rest) => λ outs => match outs {
+            Nil => False,
+            Cons(o, orest) =>
+                (Value::read(tys, vs.nth(i).unwrap_or(Plain(Dyn::none(tys))), strs, h, fuel) = Some(o)) ∧
+                Dyn::Fits(tys, strs, ds.nth(i).unwrap_or(Dyn::none(tys)), o) ∧
+                Value::Written(tys, strs, h, fuel, vs, ds, rest, orest),
+        },
+    }
+}
+
+// Each returned view, after: the reference its parameter was passed,
+// narrowed by the steps its signature names at the call's words. A result
+// that is fresh or a parameter's own value owes nothing here.
+fn Value::ViewIs(tys: Nat → Type, vs: List<Value(tys)>, ws: List<Ix>, org: Origin, o: Value(tys)) → Type {
+    match org {
+        OView(i, xs) => match vs.nth(i) { Some(v) => match v { Refer(r) => o = Refer(r.narrow(ws, xs)), Plain(_) => False }, None => False },
+        OFresh => True,
+        OParam(_) => True,
+    }
+}
+
+fn Value::Views(tys: Nat → Type, vs: List<Value(tys)>, ws: List<Ix>, rs: List<Result>) → List<Value(tys)> → Type {
+    match rs {
+        Nil => λ _ => True,
+        Cons(r, rest) => λ outs => match outs { Nil => False, Cons(o, orest) => Value::ViewIs(tys, vs, ws, r.origin, o) ∧ Value::Views(tys, vs, ws, rest, orest) },
+    }
+}
+
 // The heap after is the heap before at every block nothing was lent.
 fn Heap::Frame(tys: Nat → Type, before, after: Heap(tys), lent: Nat → Bool) → Type { (b: Nat) → lent(b) = False → after.nth(b) = before.nth(b) }
 
@@ -189,7 +226,10 @@ fn SafeAt(tys: Nat → Type, p: Prog(tys), g: Nat, fuel: Nat) → Type {
         ¬(p.run(fuel, g, vs, h, io) = Stuck) ∧
         ((match p.need(g) as λ _ => Type { Some(n) => n(g, ds) <= fuel → Exists<Answer(tys)>(λ a => p.run(fuel, g, vs, h, io) = Done(a)), None => True }) ∧
         (((a: Answer(tys)) → p.run(fuel, g, vs, h, io) = Done(a) →
-            Value::ReadAll(tys, p.strs, a.heap, depth, a.results, (p.fns(g)).denote(tys, p.strs, p.w, g, ds)) ∧ Heap::Frame(tys, h, a.heap, λ b => Value::lends(tys, vs, b))) ∧
+            Value::ReadAll(tys, p.strs, a.heap, depth, a.results, (p.fns(g)).denote(tys, p.strs, p.w, g, ds).take((p.fns(g)).sig.results.len())) ∧
+            Value::Written(tys, p.strs, a.heap, depth, vs, ds, (p.fns(g)).sig.written(), (p.fns(g)).denote(tys, p.strs, p.w, g, ds).drop((p.fns(g)).sig.results.len())) ∧
+            Heap::Frame(tys, h, a.heap, λ b => Value::lends(tys, vs, b)) ∧
+            Value::Views(tys, vs, Dyn::ixs(tys, ds), (p.fns(g)).sig.results, a.results)) ∧
         (match p.need(g) as λ _ => Type { Some(_) => True, None => (io2: Io) → p.run(fuel, g, vs, h, io) = Going(io2) → p.reaches(g, ds, io2.past) })))
 }
 
@@ -202,7 +242,8 @@ fn Safety(tys: Nat → Type, p: Prog(tys), g: Nat) → Type { (fuel: Nat) → ((
 // The meaning of an ill-coded body is junk, never missing; what makes that
 // sound is that the check refuses it, statically: a word primitive or a
 // test at a non-word or at two widths, a join whose arms yield different
-// codes, a call whose arguments' codes are not its signature's, a fresh
+// codes, a call whose arguments' codes are not its signature's, a `Ret`
+// whose codes are not the signature's results and written parameters', a fresh
 // object of a non-sequence or of another element, a write of another code.
 // The codes the body does not compute are recorded at a call's results (the
 // callee's signature) and a fresh object's code; every other variable's
@@ -268,7 +309,7 @@ fn Test::code_ok(self t: Test, ce: CEnv) → Bool {
 // enclosing join, each one list per leaf.
 fn Body::code_walk(self b: Body, tys: Nat → Type, strs: Strs(tys), sigs: Nat → Sig, me: Nat, ce: CEnv) → Option<List<List<Shape>>> {
     match b {
-        Ret(_) => Some(Nil),
+        Ret(rs) => match Shape::same_list(rs.map(λ x => ce.get(x)), sigs(me).ret_codes()) { True => Some(Nil), False => None },
         Yield(os) => Some([os.map(λ x => ce.get(x))]),
         Jump(args) => match Shape::same_list(args.map(λ x => ce.get(x)), sigs(me).param_codes()) { True => Some(Nil), False => None },
         Do(s, rest) => match s.code_step(tys, strs, sigs, ce) { Some(ce2) => rest.code_walk(tys, strs, sigs, me, ce2), None => None },

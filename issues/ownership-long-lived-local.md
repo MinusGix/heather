@@ -36,3 +36,14 @@ The condition the decision set holds in the meantime: no theorem may reach the e
 ## Log
 
 - 2026-11-25: filed from the ownership interfaces package with the measurements above.
+- 2026-11-25: Both indexed environments measured, variables named by level, against `Arg`/`Loc` on the same sources (kernel steps, width one). The coordinating session's rule was at most a third dearer than the best split at the largest size on every row; neither form met it, so `Arg`/`Loc` stays.
+
+  | Body | N | `Array`/`NatMap` | skew-binary list | best split |
+  |---|---|---|---|---|
+  | add | 32 … 256 | 20.0k / 43.8k / 98.8k / 230k | 21.6k / 46.3k / 99.8k / 216k | 8.0k … 61.6k |
+  | chain | 32 … 256 | 31.4k / 66.5k / 144k / 320k | 33.0k / 68.9k / 145k / 306k | 18.7k … 146k |
+  | long-lived local | 32 … 256 | 33.5k / 69.7k / 148k / 319k | 32.4k / 67.3k / 141k / 298k | 23.0k … 379k |
+  | item 4, one environment | 32 … 128, 256 | 167k / 349k / 738k, out of fuel | 145k / 295k / 599k, out of fuel | two environments 117k … 485k, 1.02M |
+  | packed joins | K = 4 … 32 | 22.5k / 50.4k / 117k / 281k | 20.9k / 44.0k / 93.6k / 200k | 11.8k … 149k |
+
+  Both indexed forms are linear up to the logarithm and cure this issue's row. The constant is the cost: a lookup level is a comparison, a halving and a subtraction on numerals (each O(1), about 40, 14 and 11 kernel steps), where a list cell is a few steps, so at a few hundred variables the indexed read costs more than the split's short walks to arguments and recent locals. An indexed environment also needs each read's atoms renumbered (a place's atoms name levels, and the decider reads indices from a `List<Ix>`), which added a further share on chain. What would change the answer: an indexed structure whose lookup step costs about one list cell, or bodies an order of magnitude longer.

@@ -31,6 +31,9 @@ fn nat(n: Nat) → Dyn(tys()) { Dyn(SWord(WNat), n) }
 
 fn nats(xs: List<Nat>) → Dyn(tys()) { Dyn(SNamed(0), xs) }
 
+// A pin's continuation: the first result read back as a number.
+fn as_nat(rs: List<Dyn(tys())>) → Nat { Dyn::index(tys(), rs.nth(0).unwrap_or(Dyn::none(tys()))) }
+
 // `fn pick(xs: &[Nat], i: Nat, inside: ∥i < xs.len()∥) → Nat { xs[i] }`,
 // as the list's own total accessor reads.
 fn pick(xs: List<Nat>, i: Nat, inside: ∥i < xs.len()∥) → Nat { xs.nth(i).unwrap_or(0) }
@@ -41,7 +44,7 @@ fn pick_ctx(xs: List<Nat>, i: Nat) → Ctx(tys()) { Ctx(strs(), λ _ _ => Nil, 0
 
 fn pick_env(xs: List<Nat>, i: Nat) → Env(tys()) { Env::start(tys(), [nats(xs), nat(i)]) }
 
-theorem pick_means(xs: List<Nat>, i: Nat, inside: ∥i < xs.len()∥): pick_r().denote(tys(), strs(), λ _ _ => Nil, 0, [nats(xs), nat(i)]) = [nat(pick(xs, i, inside))] { refl }
+theorem pick_means(xs: List<Nat>, i: Nat, inside: ∥i < xs.len()∥): pick_r().then(Nat, tys(), strs(), λ _ _ => Nil, 0, [nats(xs), nat(i)], as_nat) = pick(xs, i, inside) { refl }
 
 // ---------------------------------------------------------------------------
 // The residual kinds, each the source's proposition by conversion
@@ -81,12 +84,12 @@ fn heap1(xs: List<Nat>) → Heap(tys()) { [Live(Obj(nats(xs), Nil))] }
 theorem read_plain(xs: List<Nat>): Obj::read(tys(), strs(), heap1(xs), 1, Obj(nats(xs), Nil)) = Some(nats(xs)) { refl }
 
 // A taken place has no value.
-theorem read_taken(xs: List<Nat>): Obj::read(tys(), strs(), heap1(xs), 1, Obj(nats(xs), [HoleAt([SElem(Lit(0))], Taken)])) = None { refl }
+theorem read_taken(xs: List<Nat>): Obj::read(tys(), strs(), heap1(xs), 1, Obj(nats(xs), [HoleAt([OnSeq(SeqOne(INat(0)))], Taken)])) = None { refl }
 
 // A reference into the block, and what it says to be canonical.
-fn canon_ref(xs: List<Nat>) → Type { Ref::Canonical(tys(), heap1(xs), Ref(0, [SElem(Lit(2))])) }
+fn canon_ref(xs: List<Nat>) → Type { Ref::Canonical(tys(), heap1(xs), Ref(0, [OnSeq(SeqOne(INat(2)))])) }
 
-theorem ref_reads(xs: List<Nat>): Value::read(tys(), Refer(Ref(0, [SElem(Lit(2))])), strs(), heap1(xs), 1) = Some(nat(xs.nth(2).unwrap_or(0))) { refl }
+theorem ref_reads(xs: List<Nat>): Value::read(tys(), Refer(Ref(0, [OnSeq(SeqOne(INat(2)))])), strs(), heap1(xs), 1) = Some(nat(xs.nth(2).unwrap_or(0))) { refl }
 
 // ---------------------------------------------------------------------------
 // A program, a function's safety, `check_sound`: their types at `pick`
@@ -142,4 +145,54 @@ fn ill_word_r() → Func { Func(pick_r().sig, seq([Op(PAdd, Arg(0), Arg(1))], Re
 theorem ill_word_refused(): ill_word_r().coded(tys(), strs(), sigs(), 0) = False { refl }
 
 // Its junk meaning: a list is not a word, so the sum is `0 + i`.
-theorem ill_word_junk(xs: List<Nat>, i: Nat): ill_word_r().denote(tys(), strs(), λ _ _ => Nil, 0, [nats(xs), nat(i)]) = [nat(0 + i)] { refl }
+theorem ill_word_junk(xs: List<Nat>, i: Nat): ill_word_r().then(Nat, tys(), strs(), λ _ _ => Nil, 0, [nats(xs), nat(i)], as_nat) = 0 + i { refl }
+
+// ---------------------------------------------------------------------------
+// A written parameter: `fn bump(x: &mut Nat) { x := x + 1 }`. Its `Ret`
+// lists no results, then `x` at the end; safety's written clause reads the
+// argument's block after against that value, and owes its fit.
+
+fn bump_sig() → Sig { Sig([Param(SWord(WNat), ByWrite)], Nil) }
+
+fn bump_r() → Func { Func(bump_sig(), seq([Lit(WNat, 1), Op(PAdd, Arg(0), Loc(0)), Write(Place(Arg(0), Nil), Loc(0))], Ret([Arg(0)]))) }
+
+fn bump_sigs() → Nat → Sig { λ _ => bump_sig() }
+
+theorem bump_written(): bump_sig().written() = [0] { refl }
+
+theorem bump_coded(): bump_r().coded(tys(), strs(), bump_sigs(), 0) = True { refl }
+
+// The control: a `Ret` that leaves out the written parameter is refused.
+theorem bump_unreturned_refused(): Func(bump_sig(), Ret(Nil)).coded(tys(), strs(), bump_sigs(), 0) = False { refl }
+
+fn bump(x: &mut Nat) → True {
+    x := x + 1;
+    trivial
+}
+
+// The source's `Mutated(x, trivial)` read back: no results, then `x` after.
+theorem bump_means(x: Nat): bump_r().then(Mutated<Nat, True>, tys(), strs(), λ _ _ => Nil, 0, [nat(x)], λ rs => Mutated(as_nat(rs), trivial)) = bump(x) { refl }
+
+// The clause at a run that left `y` in the argument's block: `y` is the
+// meaning's `x + 1`, and it fits `x`.
+theorem bump_written_clause(x, y: Nat):
+    Value::Written(tys(), strs(), [Live(Obj(nat(y), Nil))], 1, [Refer(Ref(0, Nil))], [nat(x)], bump_sig().written(), bump_r().denote(tys(), strs(), λ _ _ => Nil, 0, [nat(x)]).drop(0))
+    = ((Some(nat(y)) = Some(nat(x + 1))) ∧ Dyn::Fits(tys(), strs(), nat(x), nat(x + 1)) ∧ True)
+{ refl }
+
+// ---------------------------------------------------------------------------
+// A returned view: `fn at(xs: &[Nat], i: u64) → &Nat { &xs[i] }`, its
+// result the first parameter's reference narrowed by `[i]` at the call's
+// words. The index is selected at the word itself.
+
+fn at_sig() → Sig { Sig([Param(SNamed(0), ByRead), Param(SWord(WBits(64)), ByTake)], [Result(SWord(WNat), OView(0, [SElem(Var(1))]))]) }
+
+theorem view_clause(xs: List<Nat>, i: u64, b: Nat, out: Value(tys())):
+    Value::Views(tys(), [Refer(Ref(b, Nil)), Plain(Dyn(SWord(WBits(64)), i))], Dyn::ixs(tys(), [nats(xs), Dyn(SWord(WBits(64)), i)]), at_sig().results, [out])
+    = ((out = Refer(Ref(b, [OnSeq(SeqOne(IWord(64, i)))]))) ∧ True)
+{ refl }
+
+// The control: a view of a parameter passed by value owes `False`.
+theorem view_of_plain(xs: List<Nat>, i: u64, out: Value(tys())):
+    Value::Views(tys(), [Plain(nats(xs)), Plain(Dyn(SWord(WBits(64)), i))], Dyn::ixs(tys(), [nats(xs), Dyn(SWord(WBits(64)), i)]), at_sig().results, [out]) = (False ∧ True)
+{ refl }

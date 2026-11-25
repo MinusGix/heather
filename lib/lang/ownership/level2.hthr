@@ -3,14 +3,23 @@
 // proved over them in this package.
 //
 // - **A heap** is a list of blocks, each dead or live with an object.
-// - **An object** is a `Dyn` and its holes: steps, closed in the run, at
-//   which the value is not here but owned (in a block it owns), viewed (a
-//   block and steps it does not own: a stored view, §15.2) or taken. A
-//   nested part whose sharing class is "object" is always an owned hole.
-// - **A variable** holds a plain value or a reference, a block and steps.
-//   **A reference is canonical**: no step before its last lands on a hole
-//   of its block, so two references are compared in one block's steps or
-//   are in different blocks.
+// - **Selections, not steps.** A reference and a hole are run-time
+//   values, so what they hold is what was selected (`Sel`, its indices
+//   `Ix`, each the variable's own value), not the body's syntax with atoms:
+//   a byte at a `u64` index is selected at the word itself, which a closed
+//   step's literal could not say. A read folds the model's `at` over the
+//   selections, a write its `over`.
+// - **An object** is a `Dyn` and its holes: selections at which the value
+//   is not here but owned (in a block it owns), viewed (a block and
+//   selections it does not own: a stored view, §15.2) or taken. A nested
+//   part whose sharing class is "object" is always an owned hole.
+// - **A variable** holds a plain value or a reference, a block and
+//   selections. **A reference is canonical**: no selection before its last
+//   lands on a hole of its block (`Sel::same`), so two references are
+//   compared in one block's selections or are in different blocks.
+// - **A reference narrowed** by a place's steps at some words is the
+//   reference with those steps' selections appended (`Ref::narrow`): what a
+//   returned view is, at the call's words.
 // - **Reading an object as a value** fills its owned and viewed holes. It
 //   is defined except at taken places, and its fuel is the number of owned
 //   holes plus the views' depth, since only ownership is a tree.
@@ -35,9 +44,9 @@ import linux_world;
 // Objects, blocks, references
 
 // What is at a hole's steps instead of the value.
-inductive Hole { Owned(b: Nat), Viewed(b: Nat, steps: List<Step>), Taken }
+inductive Hole { Owned(b: Nat), Viewed(b: Nat, sels: List<Sel>), Taken }
 
-record HoleAt { at: List<Step>, hole: Hole }
+record HoleAt { at: List<Sel>, hole: Hole }
 
 record Obj(tys: Nat → Type) { val: Dyn(tys), holes: List<HoleAt> }
 
@@ -45,7 +54,7 @@ inductive Block(tys: Nat → Type) { Dead, Live(o: Obj(tys)) }
 
 fn Heap(tys: Nat → Type) → Type { List<Block(tys)> }
 
-record Ref { b: Nat, steps: List<Step> }
+record Ref { b: Nat, sels: List<Sel> }
 
 inductive Value(tys: Nat → Type) { Plain(d: Dyn(tys)), Refer(r: Ref) }
 
@@ -53,15 +62,50 @@ fn Heap::obj(tys: Nat → Type, h: Heap(tys), b: Nat) → Option<Obj(tys)> {
     match h.nth(b) { Some(bl) => match bl { Live(o) => Some(o), Dead => None }, None => None }
 }
 
-// Whether `xs` is a proper prefix of `ys`, step by step.
-fn Steps::prefix(xs, ys: List<Step>) → Bool {
-    match xs { Nil => match ys { Nil => False, Cons(_, _) => True }, Cons(a, xr) => match ys { Nil => False, Cons(b, yr) => a.same(b) && Steps::prefix(xr, yr) } }
+// Selections compared as values: an index by its kind and value.
+fn Ix::same(self a, b: Ix) → Bool {
+    match a { INat(n) => match b { INat(m) => n.same(m), IWord(_, _) => False }, IWord(w, v) => match b { IWord(w2, v2) => w.same(w2) && v.toNat().same(v2.toNat()), INat(_) => False } }
 }
 
-// No hole of the block lies on a proper prefix of the reference's steps.
-fn Ref::Canonical(tys: Nat → Type, h: Heap(tys), r: Ref) → Type {
-    (o: Obj(tys)) → Heap::obj(tys, h, r.b) = Some(o) → (k: Nat) → (ha: HoleAt) → o.holes.nth(k) = Some(ha) → Steps::prefix(ha.at, r.steps) = False
+fn SeqSel::same(self a, b: SeqSel) → Bool {
+    match a { SeqOne(i) => match b { SeqOne(j) => i.same(j), SeqRun(_, _) => False }, SeqRun(lo, n) => match b { SeqRun(lo2, n2) => lo.same(lo2) && n.same(n2), SeqOne(_) => False } }
 }
+
+fn Sel::same(self a, b: Sel) → Bool {
+    match a {
+        OnField(i) => match b { OnField(j) => i.same(j), _ => False },
+        OnSeq(x) => match b { OnSeq(y) => x.same(y), _ => False },
+        OnKey(k) => match b { OnKey(l) => k.index.same(l.index) && k.gen.same(l.gen), _ => False },
+        OnVariant(c) => match b { OnVariant(d) => c.same(d), _ => False },
+    }
+}
+
+// Whether `xs` is a proper prefix of `ys`, selection by selection.
+fn Sel::prefix(xs, ys: List<Sel>) → Bool {
+    match xs { Nil => match ys { Nil => False, Cons(_, _) => True }, Cons(a, xr) => match ys { Nil => False, Cons(b, yr) => a.same(b) && Sel::prefix(xr, yr) } }
+}
+
+// No hole of the block lies on a proper prefix of the reference's
+// selections.
+fn Ref::Canonical(tys: Nat → Type, h: Heap(tys), r: Ref) → Type {
+    (o: Obj(tys)) → Heap::obj(tys, h, r.b) = Some(o) → (k: Nat) → (ha: HoleAt) → o.holes.nth(k) = Some(ha) → Sel::prefix(ha.at, r.sels) = False
+}
+
+// A value read and modified at selections: the model's `at` and `over`
+// folded, as `Steps::at` and `Steps::over` fold them at steps.
+fn Sel::read_at(tys: Nat → Type, strs: Strs(tys), ss: List<Sel>, d: Dyn(tys)) → Dyn(tys) {
+    match ss { Nil => d, Cons(a, rest) => Sel::read_at(tys, strs, rest, (Dyn::model(tys, strs)).at(a, d)) }
+}
+
+fn Sel::write_at(tys: Nat → Type, strs: Strs(tys), ss: List<Sel>, g: Dyn(tys) → Dyn(tys), d: Dyn(tys)) → Dyn(tys) {
+    match ss { Nil => g(d), Cons(a, rest) => (Dyn::model(tys, strs)).over(a, λ x => Sel::write_at(tys, strs, rest, g, x), d) }
+}
+
+// The selections a place's steps make at words.
+fn Steps::sels(xs: List<Step>, ws: List<Ix>) → List<Sel> { xs.map(λ (a: Step) => a.sel(ws)) }
+
+// A reference narrowed by steps at words.
+fn Ref::narrow(self r: Ref, ws: List<Ix>, xs: List<Step>) → Ref { Ref(r.b, r.sels ++ Steps::sels(xs, ws)) }
 
 // ---------------------------------------------------------------------------
 // Reading an object as a value
@@ -77,14 +121,14 @@ fn Obj::fill(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), fuel: Nat, d: Dyn
                 Taken => None,
                 Owned(b) => match Heap::obj(tys, h, b) {
                     Some(o) => match Obj::fill(tys, strs, h, f, o.val, o.holes) {
-                        Some(v) => Obj::fill(tys, strs, h, f, Dyn::write(tys, strs, Nil, ha.at, λ _ => v, d), rest),
+                        Some(v) => Obj::fill(tys, strs, h, f, Sel::write_at(tys, strs, ha.at, λ _ => v, d), rest),
                         None => None,
                     },
                     None => None,
                 },
                 Viewed(b, ss) => match Heap::obj(tys, h, b) {
                     Some(o) => match Obj::fill(tys, strs, h, f, o.val, o.holes) {
-                        Some(v) => Obj::fill(tys, strs, h, f, Dyn::write(tys, strs, Nil, ha.at, λ _ => Dyn::read(tys, strs, Nil, ss, v), d), rest),
+                        Some(v) => Obj::fill(tys, strs, h, f, Sel::write_at(tys, strs, ha.at, λ _ => Sel::read_at(tys, strs, ss, v), d), rest),
                         None => None,
                     },
                     None => None,
@@ -101,7 +145,7 @@ fn Obj::read(tys: Nat → Type, strs: Strs(tys), h: Heap(tys), fuel: Nat, o: Obj
 fn Value::read(tys: Nat → Type, self v: Value(tys), strs: Strs(tys), h: Heap(tys), fuel: Nat) → Option<Dyn(tys)> {
     match v {
         Plain(d) => Some(d),
-        Refer(r) => match Heap::obj(tys, h, r.b) { Some(o) => Obj::read(tys, strs, h, fuel, o).map(λ d => Dyn::read(tys, strs, Nil, r.steps, d)), None => None },
+        Refer(r) => match Heap::obj(tys, h, r.b) { Some(o) => Obj::read(tys, strs, h, fuel, o).map(λ d => Sel::read_at(tys, strs, r.sels, d)), None => None },
     }
 }
 
