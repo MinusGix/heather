@@ -80,8 +80,7 @@ theorem LocalsRenamed::read({r: Renaming}, {l, renamed: Locals}, self rel: Local
         (match k { WordKind => Some(Word(renamed.words(64, v.id))), RefKind => renamed.refs(v.id).map(λ (loc: Loc) => Ref(loc)) }) =
             (match k { WordKind => Some(Word(l.words(64, v.id))), RefKind => l.refs(v.id).map(λ (loc: Loc) => Ref(loc)) }).map(λ (x: Value) => x.rename(r)) {
         WordKind => rewrite(rel.words, refl),
-        RefKind => rewrite(rel.refs(v.id), match l.refs(v.id) as λ o =>
-                o.map(λ (t: Loc) => t.rename(r)).map(λ (loc: Loc) => Ref(loc)) = o.map(λ (loc: Loc) => Ref(loc)).map(λ (x: Value) => x.rename(r)) {
+        RefKind => rewrite(rel.refs(v.id), match l.refs(v.id) {
             None => refl,
             Some(_) => refl,
         }),
@@ -114,9 +113,7 @@ theorem LocalsRenamed::set_ref({r: Renaming}, {l, renamed: Locals}, self rel: Lo
     LocalsRenamed(r, l.set_ref(id, loc), renamed.set_ref(id, loc.rename(r))) {
     LocalsRenamed(
         words := rel.words,
-        refs := λ y => match y.same(id) as λ v =>
-            (match v { True => Some(loc.rename(r)), False => renamed.refs(y) }) =
-                (match v { True => Some(loc), False => l.refs(y) }).map(λ (t: Loc) => t.rename(r)) {
+        refs := λ y => match y.same(id) {
             True => refl,
             False => rel.refs(y),
         },
@@ -125,12 +122,7 @@ theorem LocalsRenamed::set_ref({r: Renaming}, {l, renamed: Locals}, self rel: Lo
 
 theorem LocalsRenamed::bind({r: Renaming}, {l, renamed: Locals}, self rel: LocalsRenamed(r, l, renamed), v: Typed, x: Value):
     Related<Locals>(locals_renamed(r), l.bind(v, x), renamed.bind(v, x.rename(r))) {
-    match v.kind as λ k =>
-        Related<Locals>(locals_renamed(r),
-            match k { WordKind => match x { Word(w) => Some(l.set_word(v.id, word_value(w))), Ref(_) => None },
-                RefKind => match x { Word(_) => None, Ref(loc) => Some(l.set_ref(v.id, loc)) } },
-            match k { WordKind => match x.rename(r) { Word(w) => Some(renamed.set_word(v.id, word_value(w))), Ref(_) => None },
-                RefKind => match x.rename(r) { Word(_) => None, Ref(loc) => Some(renamed.set_ref(v.id, loc)) } }) {
+    match v.kind {
         WordKind => match x { Word(w) => rel.set_word(v.id, word_value(w)), Ref(_) => trivial },
         RefKind => match x { Word(_) => trivial, Ref(loc) => rel.set_ref(v.id, loc) },
     }
@@ -240,15 +232,7 @@ theorem loop_run_renames(r: Renaming, step: Config → Option<Config>,
                                     False => loop_run(step, parameters, count, exit, next, rest, rename_values(r, later), after2.memory),
                                     True => Some(Ended(rename_values(r, later), False, after2.memory)),
                                 }),
-                            match after.locals.words(1, exit).head_bit() as λ v => Related<Ended>(ended_renamed(r),
-                                    match v {
-                                        False => loop_run(step, parameters, count, exit, next, rest, later, after.memory),
-                                        True => Some(Ended(later, False, after.memory)),
-                                    },
-                                    match v {
-                                        False => loop_run(step, parameters, count, exit, next, rest, rename_values(r, later), after2.memory),
-                                        True => Some(Ended(rename_values(r, later), False, after2.memory)),
-                                    }) {
+                            match after.locals.words(1, exit).head_bit() {
                                 False => loop_run_renames(r, step, steps, parameters, count, exit, next, rest, later, after.memory, after2.memory, h.memory),
                                 True => EndedRenamed(state := refl, exhausted := refl, memory := h.memory),
                             })))),
@@ -268,19 +252,13 @@ theorem Body::run_renames(self body: Body, calls: Calls(), placeless: Placeless(
             j(sym(rel.locals.words), λ ws _ => Related<Config>(config_renamed(r),
                     match c.locals.words(1, condition).head_bit() { True => yes.run(calls, c), False => no.run(calls, c) },
                     match ws(1, condition).head_bit() { True => yes.run(calls, renamed), False => no.run(calls, renamed) }),
-                match c.locals.words(1, condition).head_bit() as λ v => Related<Config>(config_renamed(r),
-                        match v { True => yes.run(calls, c), False => no.run(calls, c) },
-                        match v { True => yes.run(calls, renamed), False => no.run(calls, renamed) }) {
+                match c.locals.words(1, condition).head_bit() {
                     True => yes.run_renames(calls, placeless, r, c, renamed, rel),
                     False => no.run_renames(calls, placeless, r, c, renamed, rel),
                 }),
         Call(callee, arguments, results) => λ c renamed rel => related_map_then(config_renamed(r), λ (xs: List<Value>) => rename_values(r, xs),
             read_values_renames(r, arguments, c.locals, renamed.locals, rel.locals), λ args =>
-                match callee as λ k => Related<Config>(config_renamed(r),
-                        k.answer(calls, args, c.memory).and_then(λ (answer: Answer) =>
-                            bind_values(results, answer.words, c.locals).and_then(λ (l: Locals) => Some(Config(l, answer.heap)))),
-                        k.answer(calls, rename_values(r, args), renamed.memory).and_then(λ (answer: Answer) =>
-                            bind_values(results, answer.words, renamed.locals).and_then(λ (l: Locals) => Some(Config(l, answer.heap))))) {
+                match callee {
                     Local(f) => related_then(answer_renamed(r), config_renamed(r), placeless(f, r, args, c.memory, renamed.memory, rel.memory),
                         λ a b h => rewrite(h.words, related_then(locals_renamed(r), config_renamed(r),
                             bind_values_renames(r, results, a.words, c.locals, renamed.locals, rel.locals),
@@ -360,7 +338,7 @@ theorem word_parts_rename(r: Renaming, vs: List<Value>): word_parts(rename_value
         Nil => refl,
         Cons(v, rest) => {
             let unfolded: (Cons(v.rename(r).word_part(), word_parts(rename_values(r, rest))) = Cons(v.word_part(), word_parts(rest))) =
-                rewrite(word_parts_rename(r, rest), match v as λ x => Cons(x.rename(r).word_part(), word_parts(rest)) = Cons(x.word_part(), word_parts(rest)) {
+                rewrite(word_parts_rename(r, rest), match v {
                     Word(_) => refl,
                     Ref(_) => refl,
                 });

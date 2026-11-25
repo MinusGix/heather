@@ -329,11 +329,11 @@ fn MemoryAlike(r: Renaming, left, right: Option<Memory>) → Type { Related<Memo
 theorem related_then<A, T>(Ra: A → A → Type, R: T → T → Type, {o, o2: Option<A>}, rel: Related<A>(Ra, o, o2), {k, k2: A → Option<T>},
     each: (x, y: A) → Ra(x, y) → Related<T>(R, k(x), k2(y))): Related<T>(R, o.and_then(k), o2.and_then(k2)) {
     (match o as λ a => (b: Option<A>) → Related<A>(Ra, a, b) → Related<T>(R, a.and_then(k), b.and_then(k2)) {
-        None => λ b => match b as λ bb => Related<A>(Ra, None, bb) → Related<T>(R, None, bb.and_then(k2)) {
+        None => λ b => match b {
             None => λ _ => trivial,
             Some(_) => λ never => false_elim(never),
         },
-        Some(x) => λ b => match b as λ bb => Related<A>(Ra, Some(x), bb) → Related<T>(R, k(x), bb.and_then(k2)) {
+        Some(x) => λ b => match b {
             None => λ never => false_elim(never),
             Some(y) => λ h => each(x, y, h),
         },
@@ -343,20 +343,20 @@ theorem related_then<A, T>(Ra: A → A → Type, R: T → T → Type, {o, o2: Op
 // The second the first renamed by `g`.
 theorem related_map_then<A, T>(R: T → T → Type, g: A → A, {o, o2: Option<A>}, same: o2 = o.map(g), {k, k2: A → Option<T>},
     each: (x: A) → Related<T>(R, k(x), k2(g(x)))): Related<T>(R, o.and_then(k), o2.and_then(k2)) {
-    rewrite(same, match o as λ a => Related<T>(R, a.and_then(k), a.map(g).and_then(k2)) { None => trivial, Some(x) => each(x) })
+    rewrite(same, match o { None => trivial, Some(x) => each(x) })
 }
 
 // The second the first.
 theorem related_same_then<A, T>(R: T → T → Type, {o, o2: Option<A>}, same: o2 = o, {k, k2: A → Option<T>},
     each: (x: A) → Related<T>(R, k(x), k2(x))): Related<T>(R, o.and_then(k), o2.and_then(k2)) {
-    rewrite(same, match o as λ a => Related<T>(R, a.and_then(k), a.and_then(k2)) { None => trivial, Some(x) => each(x) })
+    rewrite(same, match o { None => trivial, Some(x) => each(x) })
 }
 
 // Answers related by "the second is the first under `g`" are an equation.
 theorem related_eq_map<A>(g: A → A, {o, o2: Option<A>}, rel: Related<A>(λ (a: A) (b: A) => b = g(a), o, o2)): o2 = o.map(g) {
     (match o as λ a => (b: Option<A>) → Related<A>(λ (x: A) (y: A) => y = g(x), a, b) → b = a.map(g) {
-        None => λ b => match b as λ bb => Related<A>(λ (x: A) (y: A) => y = g(x), None, bb) → bb = None { None => λ _ => refl, Some(_) => λ never => false_elim(never) },
-        Some(x) => λ b => match b as λ bb => Related<A>(λ (x2: A) (y: A) => y = g(x2), Some(x), bb) → bb = Some(g(x)) {
+        None => λ b => match b { None => λ _ => refl, Some(_) => λ never => false_elim(never) },
+        Some(_) => λ b => match b {
             None => λ never => false_elim(never),
             Some(_) => λ h => cong_fn<A, Option<A>>(λ v => Some(v), h),
         },
@@ -367,8 +367,8 @@ theorem related_eq_map<A>(g: A → A, {o, o2: Option<A>}, rel: Related<A>(λ (a:
 theorem related_map_eq<T, B>(R: T → T → Type, f: T → B, alike: (a, b: T) → R(a, b) → f(b) = f(a), {o, o2: Option<T>}, rel: Related<T>(R, o, o2)):
     o2.map(f) = o.map(f) {
     (match o as λ a => (b: Option<T>) → Related<T>(R, a, b) → b.map(f) = a.map(f) {
-        None => λ b => match b as λ bb => Related<T>(R, None, bb) → bb.map(f) = None { None => λ _ => refl, Some(_) => λ never => false_elim(never) },
-        Some(x) => λ b => match b as λ bb => Related<T>(R, Some(x), bb) → bb.map(f) = Some(f(x)) {
+        None => λ b => match b { None => λ _ => refl, Some(_) => λ never => false_elim(never) },
+        Some(x) => λ b => match b {
             None => λ never => false_elim(never),
             Some(y) => λ h => cong_fn<B, Option<B>>(λ v => Some(v), alike(x, y, h)),
         },
@@ -412,10 +412,7 @@ theorem rename_range_cleared(r: Renaming, b, k, n: Nat, shadow: List<Entry>):
                 (match v { True => range_cleared(rename_shadow(r, rest), r.there(b), k, n),
                     False => Cons(e.rename(r), range_cleared(rename_shadow(r, rest), r.there(b), k, n)) }) =
                     rename_shadow(r, match e.meets_range(b, k, n) { True => range_cleared(rest, b, k, n), False => Cons(e, range_cleared(rest, b, k, n)) }),
-            (match e.meets_range(b, k, n) as λ v =>
-                (match v { True => range_cleared(rename_shadow(r, rest), r.there(b), k, n),
-                    False => Cons(e.rename(r), range_cleared(rename_shadow(r, rest), r.there(b), k, n)) }) =
-                    rename_shadow(r, match v { True => range_cleared(rest, b, k, n), False => Cons(e, range_cleared(rest, b, k, n)) }) {
+            (match e.meets_range(b, k, n) {
                 True => rename_range_cleared(r, b, k, n, rest),
                 False => cong_fn<List<Entry>, List<Entry>>(λ l => Cons(e.rename(r), l), rename_range_cleared(r, b, k, n, rest)),
             })),
@@ -431,11 +428,7 @@ theorem rename_range_pointers(r: Renaming, b, k, n: Nat, shadow: List<Entry>):
                     False => range_pointers(rename_shadow(r, rest), r.there(b), k, n) }) =
                     rename_pointers(r, match e.within_range(b, k, n) { True => Cons(Pointer(e.at - k, e.target), range_pointers(rest, b, k, n)),
                         False => range_pointers(rest, b, k, n) }),
-            (match e.within_range(b, k, n) as λ v =>
-                (match v { True => Cons(Pointer(e.at - k, e.target.rename(r)), range_pointers(rename_shadow(r, rest), r.there(b), k, n)),
-                    False => range_pointers(rename_shadow(r, rest), r.there(b), k, n) }) =
-                    rename_pointers(r, match v { True => Cons(Pointer(e.at - k, e.target), range_pointers(rest, b, k, n)),
-                        False => range_pointers(rest, b, k, n) }) {
+            (match e.within_range(b, k, n) {
                 True => cong_fn<List<Pointer>, List<Pointer>>(λ l => Cons(Pointer(e.at - k, e.target.rename(r)), l), rename_range_pointers(r, b, k, n, rest)),
                 False => rename_range_pointers(r, b, k, n, rest),
             })),
@@ -530,9 +523,7 @@ theorem Memory::load_renames(self m: Memory, r: Renaming, renamed: Memory, rel: 
                 Some(piece) => match piece.pointers { Nil => Some(little_endian(piece.bytes, n)), Cons(_, _) => None } }) =
             (match o { None => None, Some(piece) => match piece.pointers { Nil => Some(little_endian(piece.bytes, n)), Cons(_, _) => None } }) {
             None => refl,
-            Some(piece) => match piece.pointers as λ ps =>
-                (match rename_pointers(r, ps) { Nil => Some(little_endian(piece.bytes, n)), Cons(_, _) => None }) =
-                    (match ps { Nil => Some(little_endian(piece.bytes, n)), Cons(_, _) => None }) {
+            Some(piece) => match piece.pointers {
                 Nil => refl,
                 Cons(_, _) => refl,
             },
@@ -540,13 +531,10 @@ theorem Memory::load_renames(self m: Memory, r: Renaming, renamed: Memory, rel: 
 }
 
 theorem Piece::rename_referent(self piece: Piece, r: Renaming): piece.rename(r).referent() = piece.referent().map(λ (t: Loc) => t.rename(r)) {
-    match piece.pointers as λ ps => Piece(piece.bytes, rename_pointers(r, ps)).referent() = Piece(piece.bytes, ps).referent().map(λ (t: Loc) => t.rename(r)) {
+    match piece.pointers {
         Nil => refl,
-        Cons(p, rest) => match rest as λ rs =>
-            Piece(piece.bytes, Cons(p.rename(r), rename_pointers(r, rs))).referent() =
-                Piece(piece.bytes, Cons(p, rs)).referent().map(λ (t: Loc) => t.rename(r)) {
-            Nil => match p.at as λ a => (match a { Zero => Some(p.target.rename(r)), Succ(_) => None }) =
-                    (match a { Zero => Some(p.target), Succ(_) => None }).map(λ (t: Loc) => t.rename(r)) {
+        Cons(p, rest) => match rest {
+            Nil => match p.at {
                 Zero => refl,
                 Succ(_) => refl,
             },
