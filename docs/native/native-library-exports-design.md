@@ -425,11 +425,14 @@ the program Rust links over borrowed spans. What the composition does not
 give (which buffers, how many, a window with no function between) is
 `issues/statement-lends-named-buffers.md`.
 
-**The machine laws** (`lib/std/arch/x86_64/x86_64_views.hthr`, built). The
+**The machine laws** (built; since 2026-11-25 one case of the memory
+contract's `Sub`, `docs/native/native-one-compiler-design.md` §2.7: the
+names below are instances kept in `x86_64_memory_tiers.hthr`). The
 callee is owed a `Loan` over the views as spans, and the lender's own loan
 gives it: `Loan::view`, from `Viewed(views, spans)` (each view inside its
 span; a view to write of a span the lender may write; a view to write
-sharing no byte with another view). What the callee stored through the
+sharing no byte with another view), which is a `Sub` (`Viewed::sub`) and
+`Loan::view` is `Loan::sub` at it. What the callee stored through the
 views the lender could have stored through its spans
 (`Stack::wrote_in_view`), so the lender's own post is met. A byte no
 written view covers reads as it did (`Loan::view_outside`), so a span
@@ -442,7 +445,8 @@ anywhere in these: apartness is the lender's `apart` law at offset indices.
 **Steps.**
 
 - **V1. A list's window** (`list_window.hthr`). *Built.*
-- **V2. The loan of views** (`x86_64_views.hthr`). *Built.*
+- **V2. The loan of views** (`x86_64_views.hthr`, now `Sub` in
+  `x86_64_memory_contract.hthr`). *Built.*
 - **V3. False-arm facts**: `Known::Falsity(id)` recorded in a
   conditional's false arm, and `File::at_most(a, b)` beside
   `File::bounded`. *Built.*

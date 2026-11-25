@@ -2,15 +2,11 @@
 // injection of blocks (issues/ownership-reference-cells-spike.md;
 // docs/language/ownership-design.md §15.7).
 //
-// Block `b` lies at span `b` of a lending (`Spans`, x86_64_lending), every
-// span written. The injection (`Injected`) says three things of a memory:
-// each block is as long as its span; a byte of a block no shadow entry
-// covers reads its byte; and the eight bytes of each entry read, as a word,
-// the address of the entry's target (`Loc::address`: its block's span plus
-// its offset). The spans are apart because they are a `Loan`'s: its laws
-// (`stored`, `apart`) are all a store needs, and `DataRegion::loan` gives
-// them where the spans lie apart in a data region. Two blocks placed
-// overlapping cannot both be injected (`overlap_not_injected`).
+// Block `b` lies at span `b` of a lending, every span written, and the heap
+// is injected into memory: the x86 memory contract's `Injected`
+// (x86_64_memory_contract), whose lemmas this lowering cites, one per
+// operation. Two blocks placed overlapping cannot both be injected
+// (`overlap_not_injected`).
 //
 // A value is lowered to a word (`Value::lower`): a word to itself, a
 // reference to its target's address. The registers hold the lowered values
@@ -42,7 +38,7 @@ import x86_64_data_read;
 import x86_64_fetched_code;
 import x86_64_store;
 import x86_64_stack;
-import x86_64_lending;
+import x86_64_memory_contract;
 import x86_64_byte_memory;
 import bitvec;
 import bool;
@@ -56,319 +52,15 @@ import omega;
 // ---------------------------------------------------------------------------
 // Values as words
 
-fn Loc::address(self loc: Loc, spans: Spans) → BitVec(64) { spans.byte(loc.block, loc.offset) }
-
 fn Value::lower(self value: Value, spans: Spans) → BitVec(64) {
     match value { Word(word) => word, Ref(loc) => loc.address(spans) }
 }
 
 // ---------------------------------------------------------------------------
-// The injection
-
-// The entry's eight bytes lie in its block and read its target's address.
-fn Entry::Held<M>(self e: Entry, data: ByteReadAccess<M>, spans: Spans, memory: M) → Type {
-    (e.at + 8 <= spans.size(e.block)) ∧ (read_word(data, memory, spans.byte(e.block, e.at)) = Some(e.target.address(spans)))
-}
-
-record Injected<M>(data: ByteReadAccess<M>, spans: Spans, heap: Heap, memory: M) {
-    sizes: (b: Nat) → heap.bytes(b).len() = spans.size(b),
-    bytes: (b, k: Nat) → k < spans.size(b) → covered(heap.shadow, b, k) = False → data.read(memory, spans.byte(b, k)) = heap.bytes(b).nth(k),
-    refs: Every(heap.shadow, λ (e: Entry) => e.Held(data, spans, memory)),
-}
-
-// ---------------------------------------------------------------------------
-// Small facts
-
-theorem leb_true(a, b: Nat, le: a <= b): a.leb(b) = True { eq_true_of_is_true(a.leb(b), a.leb_complete(b, le)) }
-
-theorem leb_le(a, b: Nat, h: a.leb(b) = True): a <= b { a.leb_sound(b, Bool::is_true_of_eq(h)) }
-
-theorem not_true_false({b: Bool}, h: !b = True): b = False {
-    (match b as λ v => !v = True → v = False { True => λ never => absurd(never), False => λ _ => refl })(h)
-}
-
-theorem nth_byte_at(xs: List<BitVec(8)>, i: Nat, inside: i < xs.len()): xs.nth(i) = Some(byte_at(xs, i)) {
-    let present = xs.nth_present(i, inside);
-    j(sym(present.proof), λ o _ => o = Some(match o { None => BitVec::zero(), Some(byte) => byte }), refl)
-}
-
-// An entry a store of eight bytes at `k` does not overlap lies apart from
-// them.
-theorem Entry::apart_of(self e: Entry, b, k: Nat, apart: e.overlaps(b, k) = False): (b ≠ e.block) ∨ ((e.at + 8 <= k) ∨ (k + 8 <= e.at)) {
-    match e.block.eq_dec(b) {
-        Inr(differs) => Inl(λ same => differs(sym(same))),
-        Inl(same) => match (e.at + 7).lt_or_ge(k) {
-            Inl(below) => Inr(Inl(omega(below))),
-            Inr(ge) => match (k + 7).lt_or_ge(e.at) {
-                Inl(below) => Inr(Inr(omega(below))),
-                Inr(ge2) => absurd(trans(sym(Bool::and_true_of(e.block.same(b), (e.at + 1).leb(k + 8) && (k + 1).leb(e.at + 8),
-                        e.block.same_of_eq(b, same),
-                        Bool::and_true_of((e.at + 1).leb(k + 8), (k + 1).leb(e.at + 8), leb_true(e.at + 1, k + 8, omega(ge2)),
-                            leb_true(k + 1, e.at + 8, omega(ge))))), apart)),
-            },
-        },
-    }
-}
-
-// A byte an entry does not cover lies outside its eight.
-theorem Entry::uncovers(self e: Entry, c, j: Nat, none: e.covers(c, j) = False): (e.block ≠ c) ∨ ((j < e.at) ∨ (e.at + 8 <= j)) {
-    match e.block.eq_dec(c) {
-        Inr(differs) => Inl(differs),
-        Inl(same) => match j.lt_or_ge(e.at) {
-            Inl(below) => Inr(Inl(below)),
-            Inr(ge) => match j.lt_or_ge(e.at + 8) {
-                Inl(inside) => absurd(trans(sym(Bool::and_true_of(e.block.same(c), e.at.leb(j) && (j + 1).leb(e.at + 8),
-                        e.block.same_of_eq(c, same),
-                        Bool::and_true_of(e.at.leb(j), (j + 1).leb(e.at + 8), leb_true(e.at, j, ge), leb_true(j + 1, e.at + 8, omega(inside))))), none)),
-                Inr(above) => Inr(Inr(above)),
-            },
-        },
-    }
-}
-
-// An entry covering a byte of eight overlaps the eight.
-theorem Entry::covers_overlaps(self e: Entry, b, k, t: Nat, short: t < 8, here: e.covers(b, k + t) = True): e.overlaps(b, k) = True {
-    let parts = Bool::and_true_parts(e.block.same(b), e.at.leb(k + t) && (k + t + 1).leb(e.at + 8), here);
-    let range = Bool::and_true_parts(e.at.leb(k + t), (k + t + 1).leb(e.at + 8), parts.right);
-    let low = leb_le(e.at, k + t, range.left);
-    let high = leb_le(k + t + 1, e.at + 8, range.right);
-    Bool::and_true_of(e.block.same(b), (e.at + 1).leb(k + 8) && (k + 1).leb(e.at + 8), parts.left,
-        Bool::and_true_of((e.at + 1).leb(k + 8), (k + 1).leb(e.at + 8), leb_true(e.at + 1, k + 8, omega(low, short)), leb_true(k + 1, e.at + 8, omega(high))))
-}
-
-// Eight bytes no entry overlaps: none of them is covered.
-theorem untouched_uncovered(b, k, t: Nat, short: t < 8, shadow: List<Entry>, none: touched(shadow, b, k) = False): covered(shadow, b, k + t) = False {
-    every_covered_of(b, k + t, shadow, every_map(λ (e: Entry) => e.overlaps(b, k) = False, λ (e: Entry) => e.covers(b, k + t) = False,
-        λ e apart => (match e.covers(b, k + t) as λ v => e.covers(b, k + t) = v → v = False {
-            True => λ here => absurd(trans(sym(e.covers_overlaps(b, k, t, short, here)), apart)),
-            False => λ _ => refl,
-        })(refl), shadow, every_untouched(b, k, shadow, none)))
-}
-
-// ---------------------------------------------------------------------------
-// Words in memory, from the loan's laws
-
-// Eight bytes that read a list's read its word.
-theorem read_word_bytes<M>(data: ByteReadAccess<M>, memory: M, at: BitVec(64), xs: List<BitVec(8)>, k: Nat, fits: k + 8 <= xs.len(),
-    reads: (t: Nat) → t < 8 → data.read(memory, next_rip(next_rip(at, k), t)) = xs.nth(k + t)):
-    read_word(data, memory, next_rip(at, k)) = Some(word_at(xs, k)) {
-    let a = next_rip(at, k);
-    let o = λ (t: Nat) => data.read(memory, next_rip(a, t));
-    let e = λ (t: Nat) (short: t < 8) => trans(reads(t, short), nth_byte_at(xs, k + t, omega(short, fits)));
-    word_of_eight(o(0), o(1), o(2), o(3), o(4), o(5), o(6), o(7),
-        byte_at(xs, k), byte_at(xs, k + 1), byte_at(xs, k + 2), byte_at(xs, k + 3),
-        byte_at(xs, k + 4), byte_at(xs, k + 5), byte_at(xs, k + 6), byte_at(xs, k + 7),
-        e(0, trivial), e(1, trivial), e(2, trivial), e(3, trivial), e(4, trivial), e(5, trivial), e(6, trivial), e(7, trivial))
-}
-
-// A word stored into a written span reads back.
-theorem Loan::word_stored<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
-    self loan: Loan<M>(fetch, data, stack, top, spans), memory: M, b, k: Nat, written: spans.written(b) = True, fits: k + 8 <= spans.size(b),
-    word: BitVec(64)): read_word(data, stack.writes.store(memory, spans.byte(b, k), word_bytes(word)), spans.byte(b, k)) = Some(word) {
-    let after = stack.writes.store(memory, spans.byte(b, k), word_bytes(word));
-    let o = λ (t: Nat) => data.read(after, next_rip(spans.byte(b, k), t));
-    let e = λ (t: Nat) (short: t < 8) => trans(cong_fn<BitVec(64), Option<BitVec(8)>>(λ y => data.read(after, y), rip_compose(spans.at(b), k, t)),
-        loan.stored(memory, b, k, written, omega(fits), word_bytes(word), fits, t, short));
-    trans(word_of_eight(o(0), o(1), o(2), o(3), o(4), o(5), o(6), o(7),
-            imm_byte0(word), imm_byte1(word), imm_byte2(word), imm_byte3(word),
-            imm_byte4(word), imm_byte5(word), imm_byte6(word), imm_byte7(word),
-            e(0, trivial), e(1, trivial), e(2, trivial), e(3, trivial), e(4, trivial), e(5, trivial), e(6, trivial), e(7, trivial)),
-        cong_fn<BitVec(64), Option<BitVec(64)>>(λ w => Some(w), immediate_bytes_roundtrip(word)))
-}
-
-// A word stored apart from eight bytes leaves the word they read.
-theorem Loan::word_kept<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
-    self loan: Loan<M>(fetch, data, stack, top, spans), memory: M, b, k: Nat, written: spans.written(b) = True, fits: k + 8 <= spans.size(b),
-    word: BitVec(64), c, i: Nat, inside: i + 8 <= spans.size(c), apart: (b ≠ c) ∨ ((i + 8 <= k) ∨ (k + 8 <= i))):
-    read_word(data, stack.writes.store(memory, spans.byte(b, k), word_bytes(word)), spans.byte(c, i)) = read_word(data, memory, spans.byte(c, i)) {
-    let after = stack.writes.store(memory, spans.byte(b, k), word_bytes(word));
-    read_word_agree(data, after, memory, spans.byte(c, i), λ t short => {
-        let other: ((b ≠ c) ∨ ((i + t < k) ∨ (k + 8 <= i + t))) = match apart {
-            Inl(differs) => Inl(differs),
-            Inr(side) => match side { Inl(below) => Inr(Inl(omega(below, short))), Inr(above) => Inr(Inr(omega(above))) },
-        };
-        j(sym(rip_compose(spans.at(c), i, t)), λ y _ => data.read(after, y) = data.read(memory, y),
-            loan.apart(memory, b, k, written, omega(fits), word_bytes(word), fits, c, i + t, omega(short, inside), other))
-    })
-}
-
-// What an entry held, a store apart from it keeps.
-theorem Loan::held_kept<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
-    self loan: Loan<M>(fetch, data, stack, top, spans), memory: M, b, k: Nat, written: spans.written(b) = True, fits: k + 8 <= spans.size(b),
-    word: BitVec(64), shadow: List<Entry>, refs: Every(shadow, λ (e: Entry) => e.Held(data, spans, memory))):
-    Every(cleared(shadow, b, k), λ (e: Entry) => e.Held(data, spans, stack.writes.store(memory, spans.byte(b, k), word_bytes(word)))) {
-    every_map(λ (e: Entry) => e.Held(data, spans, memory) ∧ (e.overlaps(b, k) = False),
-        λ (e: Entry) => e.Held(data, spans, stack.writes.store(memory, spans.byte(b, k), word_bytes(word))),
-        λ e both => ⟨both.left.left, trans(loan.word_kept(memory, b, k, written, fits, word, e.block, e.at, both.left.left,
-                e.apart_of(b, k, both.right)), both.left.right)⟩,
-        cleared(shadow, b, k),
-        every_both(λ (e: Entry) => e.Held(data, spans, memory), λ (e: Entry) => e.overlaps(b, k) = False, cleared(shadow, b, k),
-            every_cleared(λ (e: Entry) => e.Held(data, spans, memory), b, k, shadow, refs), every_cleared_apart(b, k, shadow)))
-}
-
-// ---------------------------------------------------------------------------
-// Each store keeps the injection
-
-// A byte apart from the stored eight reads what it did.
-theorem Loan::byte_kept<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
-    self loan: Loan<M>(fetch, data, stack, top, spans), memory: M, b, k: Nat, written: spans.written(b) = True, fits: k + 8 <= spans.size(b),
-    word: BitVec(64), c, j: Nat, inside: j < spans.size(c), apart: (b ≠ c) ∨ ((j < k) ∨ (k + 8 <= j))):
-    data.read(stack.writes.store(memory, spans.byte(b, k), word_bytes(word)), spans.byte(c, j)) = data.read(memory, spans.byte(c, j)) {
-    loan.apart(memory, b, k, written, omega(fits), word_bytes(word), fits, c, j, inside, apart)
-}
-
-// After a word stored at `k` of block `b`: a byte of block `b` the cleared
-// shadow does not cover reads the block's new byte.
-theorem Loan::stored_block_byte<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
-    self loan: Loan<M>(fetch, data, stack, top, spans), heap: Heap, memory: M, inj: Injected<M>(data, spans, heap, memory),
-    b, k: Nat, written: spans.written(b) = True, fits: k + 8 <= heap.bytes(b).len(),
-    uncut: Every(heap.shadow, λ (e: Entry) => e.cuts(b, k) = False), word: BitVec(64), j: Nat, inside: j < spans.size(b),
-    none: covered(cleared(heap.shadow, b, k), b, j) = False):
-    data.read(stack.writes.store(memory, spans.byte(b, k), word_bytes(word)), spans.byte(b, j)) =
-        heap.bytes(b).put_window(k, word_bytes(word)).nth(j) {
-    let xs = heap.bytes(b);
-    let size = inj.sizes(b);
-    let span_fits: (k + 8 <= spans.size(b)) = omega(fits, size);
-    let old_none = λ (outside: (j < k) ∨ (k + 8 <= j)) => match uncovered_after_clearing(b, k, b, j, heap.shadow, uncut, none) {
-        Inl(stored) => match outside { Inl(below) => false_elim(omega(below, stored.right)), Inr(above) => false_elim(omega(above, stored.right)) },
-        Inr(old) => old,
-    };
-    let kept = λ (outside: (j < k) ∨ (k + 8 <= j)) =>
-        trans(loan.byte_kept(memory, b, k, written, span_fits, word, b, j, inside, Inr(outside)), inj.bytes(b, j, inside, old_none(outside)));
-    match j.lt_or_ge(k) {
-        Inl(below) => trans(kept(Inl(below)), sym(xs.nth_put_window_before(k, word_bytes(word), j, below, omega(fits)))),
-        Inr(ge) => match j.lt_or_ge(k + 8) {
-            Inl(within) => {
-                let t = j - k;
-                let at: (k + t = j) = omega(ge);
-                let stored: (data.read(stack.writes.store(memory, spans.byte(b, k), word_bytes(word)), spans.byte(b, k + t)) = word_bytes(word).nth(t)) =
-                    loan.stored(memory, b, k, written, omega(span_fits), word_bytes(word), span_fits, t, omega(within, ge));
-                let window: (xs.put_window(k, word_bytes(word)).nth(t + k) = word_bytes(word).nth(t)) =
-                    xs.nth_put_window_inside(k, word_bytes(word), t, omega(within, ge), omega(fits));
-                j(at, λ y _ => data.read(stack.writes.store(memory, spans.byte(b, k), word_bytes(word)), spans.byte(b, y)) =
-                        xs.put_window(k, word_bytes(word)).nth(y),
-                    trans(stored, trans(sym(window), cong_fn<Nat, Option<BitVec(8)>>(λ y => xs.put_window(k, word_bytes(word)).nth(y), omega(ge)))))
-            },
-            Inr(above) => {
-                let m = j - (k + 8);
-                let at: (m + (8 + k) = j) = omega(above);
-                let window: (xs.put_window(k, word_bytes(word)).nth(m + (8 + k)) = xs.nth(m + (8 + k))) =
-                    xs.nth_put_window_after(k, word_bytes(word), m, omega(fits));
-                trans(kept(Inr(above)), sym(j(at, λ y _ => xs.put_window(k, word_bytes(word)).nth(y) = xs.nth(y), window)))
-            },
-        },
-    }
-}
-
-theorem Loan::store_word_injected<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
-    self loan: Loan<M>(fetch, data, stack, top, spans), heap: Heap, memory: M, inj: Injected<M>(data, spans, heap, memory),
-    loc: Loc, written: spans.written(loc.block) = True, ok: heap.cell(loc) = True, word: BitVec(64)):
-    Injected<M>(data, spans, heap.store_word(loc, word), stack.writes.store(memory, loc.address(spans), word_bytes(word))) {
-    let b = loc.block;
-    let k = loc.offset;
-    let parts = Bool::and_true_parts((k + 8).leb(heap.bytes(b).len()), !cut(heap.shadow, b, k), ok);
-    let fits: (k + 8 <= heap.bytes(b).len()) = leb_le(k + 8, heap.bytes(b).len(), parts.left);
-    let uncut = every_uncut(b, k, heap.shadow, not_true_false(parts.right));
-    let span_fits: (k + 8 <= spans.size(b)) = omega(fits, inj.sizes(b));
-    let now = heap.bytes(b).put_window(k, word_bytes(word));
-    let after = stack.writes.store(memory, spans.byte(b, k), word_bytes(word));
-    Injected(
-        sizes := λ c => match c.eq_dec(b) {
-            Inl(same) => j(sym(same), λ x _ => set_block(heap.bytes, b, now, x).len() = spans.size(x),
-                trans(cong_fn<List<BitVec(8)>, Nat>(λ l => l.len(), set_block_here(heap.bytes, b, now)),
-                    trans(heap.bytes(b).len_put_window(k, word_bytes(word), omega(fits)), inj.sizes(b)))),
-            Inr(differs) => trans(cong_fn<List<BitVec(8)>, Nat>(λ l => l.len(), set_block_other(heap.bytes, b, now, c, differs)), inj.sizes(c)),
-        },
-        bytes := λ c i inside none => match c.eq_dec(b) {
-            Inl(same) => (j(sym(same), λ x _ => i < spans.size(x) → covered(cleared(heap.shadow, b, k), x, i) = False →
-                    data.read(after, spans.byte(x, i)) = set_block(heap.bytes, b, now, x).nth(i),
-                λ inside_b none_b => trans(loan.stored_block_byte(heap, memory, inj, b, k, written, fits, uncut, word, i, inside_b, none_b),
-                    cong_fn<List<BitVec(8)>, Option<BitVec(8)>>(λ l => l.nth(i), sym(set_block_here(heap.bytes, b, now))))))(inside, none),
-            Inr(differs) => {
-                let old: (covered(heap.shadow, c, i) = False) = match uncovered_after_clearing(b, k, c, i, heap.shadow, uncut, none) {
-                    Inl(stored) => false_elim(differs(stored.left)),
-                    Inr(old) => old,
-                };
-                trans(loan.byte_kept(memory, b, k, written, span_fits, word, c, i, inside, Inl(λ same => differs(sym(same)))),
-                    trans(inj.bytes(c, i, inside, old), cong_fn<List<BitVec(8)>, Option<BitVec(8)>>(λ l => l.nth(i),
-                        sym(set_block_other(heap.bytes, b, now, c, differs)))))
-            },
-        },
-        refs := loan.held_kept(memory, b, k, written, span_fits, word, heap.shadow, inj.refs),
-    )
-}
-
-theorem Loan::store_ref_injected<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, {spans: Spans},
-    self loan: Loan<M>(fetch, data, stack, top, spans), heap: Heap, memory: M, inj: Injected<M>(data, spans, heap, memory),
-    loc: Loc, written: spans.written(loc.block) = True, ok: heap.cell(loc) = True, target: Loc):
-    Injected<M>(data, spans, heap.store_ref(loc, target), stack.writes.store(memory, loc.address(spans), word_bytes(target.address(spans)))) {
-    let b = loc.block;
-    let k = loc.offset;
-    let word = target.address(spans);
-    let parts = Bool::and_true_parts((k + 8).leb(heap.bytes(b).len()), !cut(heap.shadow, b, k), ok);
-    let fits: (k + 8 <= heap.bytes(b).len()) = leb_le(k + 8, heap.bytes(b).len(), parts.left);
-    let uncut = every_uncut(b, k, heap.shadow, not_true_false(parts.right));
-    let span_fits: (k + 8 <= spans.size(b)) = omega(fits, inj.sizes(b));
-    let entry = Entry(b, k, target);
-    Injected(
-        sizes := inj.sizes,
-        bytes := λ c i inside none => {
-            let halves = Bool::or_false_parts(entry.covers(c, i), covered(cleared(heap.shadow, b, k), c, i), none);
-            let outside: ((b ≠ c) ∨ ((i < k) ∨ (k + 8 <= i))) = entry.uncovers(c, i, halves.left);
-            let old: (covered(heap.shadow, c, i) = False) = match uncovered_after_clearing(b, k, c, i, heap.shadow, uncut, halves.right) {
-                Inl(stored) => match outside {
-                    Inl(differs) => false_elim(differs(sym(stored.left))),
-                    Inr(side) => match side { Inl(below) => false_elim(omega(below, stored.right)), Inr(above) => false_elim(omega(above, stored.right)) },
-                },
-                Inr(old) => old,
-            };
-            trans(loan.byte_kept(memory, b, k, written, span_fits, word, c, i, inside, outside), inj.bytes(c, i, inside, old))
-        },
-        refs := ⟨⟨span_fits, loan.word_stored(memory, b, k, written, span_fits, word)⟩,
-            loan.held_kept(memory, b, k, written, span_fits, word, heap.shadow, inj.refs)⟩,
-    )
-}
-
-// ---------------------------------------------------------------------------
-// What each load reads
-
-theorem Injected::canonical<M>({data: ByteReadAccess<M>}, {spans: Spans}, {heap: Heap}, {memory: M}, self inj: Injected<M>(data, spans, heap, memory),
-    {fetch: FetchAccess<M>}, {stack: Stack<M>(fetch, data)}, {top: Nat}, loan: Loan<M>(fetch, data, stack, top, spans), b, k, n: Nat,
-    fits: k + n <= spans.size(b)): spans.byte(b, k).toNat() + n <= Nat::pow(2, 47) {
-    let room = loan.canonical(b);
-    let top_fits: (Nat::pow(2, 47) < Nat::pow(2, 64)) = Nat::leb_sound(Nat::pow(2, 47) + 1, Nat::pow(2, 64), trivial);
-    let value: (spans.byte(b, k).toNat() = spans.at(b).toNat() + k) = BitVec::offset_toNat(64, spans.at(b), k, omega(room, fits, top_fits));
-    omega(value, room, fits)
-}
-
-theorem Injected::word_read<M>({data: ByteReadAccess<M>}, {spans: Spans}, {heap: Heap}, {memory: M}, self inj: Injected<M>(data, spans, heap, memory),
-    loc: Loc, ok: heap.plain(loc) = True):
-    (loc.offset + 8 <= spans.size(loc.block)) ∧ (read_word(data, memory, loc.address(spans)) = Some(word_at(heap.bytes(loc.block), loc.offset))) {
-    let b = loc.block;
-    let k = loc.offset;
-    let parts = Bool::and_true_parts((k + 8).leb(heap.bytes(b).len()), !touched(heap.shadow, b, k), ok);
-    let fits: (k + 8 <= heap.bytes(b).len()) = leb_le(k + 8, heap.bytes(b).len(), parts.left);
-    let none = not_true_false(parts.right);
-    ⟨omega(fits, inj.sizes(b)), read_word_bytes(data, memory, spans.at(b), heap.bytes(b), k, fits, λ t short =>
-        trans(cong_fn<BitVec(64), Option<BitVec(8)>>(λ y => data.read(memory, y), rip_compose(spans.at(b), k, t)),
-            inj.bytes(b, k + t, omega(short, fits, inj.sizes(b)), untouched_uncovered(b, k, t, short, heap.shadow, none))))⟩
-}
-
-theorem Injected::ref_read<M>({data: ByteReadAccess<M>}, {spans: Spans}, {heap: Heap}, {memory: M}, self inj: Injected<M>(data, spans, heap, memory),
-    loc, target: Loc, here: found(heap.shadow, loc.block, loc.offset) = Some(target)):
-    (loc.offset + 8 <= spans.size(loc.block)) ∧ (read_word(data, memory, loc.address(spans)) = Some(target.address(spans))) {
-    every_found(λ (e: Entry) => e.Held(data, spans, memory), loc.block, loc.offset, target, heap.shadow, inj.refs, here)
-}
-
-theorem Injected::byte_read<M>({data: ByteReadAccess<M>}, {spans: Spans}, {heap: Heap}, {memory: M}, self inj: Injected<M>(data, spans, heap, memory),
-    loc: Loc, ok: heap.readable(loc) = True):
-    (loc.offset + 1 <= spans.size(loc.block)) ∧ (data.read(memory, loc.address(spans)) = Some(byte_at(heap.bytes(loc.block), loc.offset))) {
-    let b = loc.block;
-    let k = loc.offset;
-    let parts = Bool::and_true_parts((k + 1).leb(heap.bytes(b).len()), !covered(heap.shadow, b, k), ok);
-    let fits: (k + 1 <= heap.bytes(b).len()) = leb_le(k + 1, heap.bytes(b).len(), parts.left);
-    ⟨omega(fits, inj.sizes(b)), trans(inj.bytes(b, k, omega(fits, inj.sizes(b)), not_true_false(parts.right)), nth_byte_at(heap.bytes(b), k, omega(fits)))⟩
-}
+// The injection is the contract's (x86_64_memory_contract: `Injected`, and
+// one lemma per operation: `Loan::store_word_injected`,
+// `Loan::store_ref_injected`, `Injected::word_read`, `ref_read`,
+// `byte_read`).
 
 // ---------------------------------------------------------------------------
 // Registers
@@ -400,7 +92,7 @@ theorem apart_from_sound(reg: Nat → Gpr, x, count: Nat): apart_from(reg, x, co
                 Inl(here) => j(sym(here), λ z _ => reg(x).same(reg(z)) = False,
                     match Bool::or_true_parts(n.same(x), !reg(x).same(reg(n)), parts.left) {
                         Inl(same) => false_elim(differs(trans(here, n.same_sound(x, same)))),
-                        Inr(apart) => not_true_false(apart),
+                        Inr(apart) => Bool::false_of_not_true(apart),
                     }),
                 Inr(other) => apart_from_sound(reg, x, n, parts.right, y, omega(below, other), differs),
             }
@@ -522,15 +214,15 @@ theorem Loan::store_word_runs<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<
         Word(_) => λ _ _ => trivial,
         Ref(loc) => match value {
             Ref(_) => λ _ _ => trivial,
-            Word(word) => λ at stored => (match s.heap.cell(loc) as λ v => s.heap.cell(loc) = v →
+            Word(word) => λ at stored => (match s.heap.fits(loc, 8) as λ v => s.heap.fits(loc, 8) = v →
                     Answers(match v { False => None, True => Some(State(s.values, s.heap.store_word(loc, word))) },
                         λ (after: State) => Exists<MachineState<M>>(λ t => Store(WordStore(base, source)).Steps(data, stack.writes, m, t) ∧
                             Holds(data, spans, reg, count, after, t))) {
                 False => λ _ => trivial,
                 True => λ ok => {
-                    let parts = Bool::and_true_parts((loc.offset + 8).leb(s.heap.bytes(loc.block).len()), !cut(s.heap.shadow, loc.block, loc.offset), ok);
+                    let parts = Bool::and_true_parts((loc.offset + 8).leb(s.heap.bytes(loc.block).len()), !cut(s.heap.shadow, loc.block, loc.offset, 8), ok);
                     let fits: (loc.offset + 8 <= spans.size(loc.block)) =
-                        omega(leb_le(loc.offset + 8, s.heap.bytes(loc.block).len(), parts.left), held.right.sizes(loc.block));
+                        omega(Nat::le_of_leb_eq(loc.offset + 8, s.heap.bytes(loc.block).len(), parts.left), held.right.sizes(loc.block));
                     let writable = j(sym(at), λ a _ => stack.writes.writable(m.memory, a, 8),
                         loan.writable(m.memory, loc.block, loc.offset, written(loc.block), omega(fits), word_bytes(word), fits));
                     let t = word_store_after(stack.writes, WordStore(base, source), m);
@@ -556,16 +248,16 @@ theorem Loan::store_ref_runs<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M
         Word(_) => λ _ _ => trivial,
         Ref(loc) => match value {
             Word(_) => λ _ _ => trivial,
-            Ref(target) => λ at stored => (match s.heap.cell(loc) as λ v => s.heap.cell(loc) = v →
+            Ref(target) => λ at stored => (match s.heap.fits(loc, 8) as λ v => s.heap.fits(loc, 8) = v →
                     Answers(match v { False => None, True => Some(State(s.values, s.heap.store_ref(loc, target))) },
                         λ (after: State) => Exists<MachineState<M>>(λ t => Store(WordStore(base, source)).Steps(data, stack.writes, m, t) ∧
                             Holds(data, spans, reg, count, after, t))) {
                 False => λ _ => trivial,
                 True => λ ok => {
                     let word = target.address(spans);
-                    let parts = Bool::and_true_parts((loc.offset + 8).leb(s.heap.bytes(loc.block).len()), !cut(s.heap.shadow, loc.block, loc.offset), ok);
+                    let parts = Bool::and_true_parts((loc.offset + 8).leb(s.heap.bytes(loc.block).len()), !cut(s.heap.shadow, loc.block, loc.offset, 8), ok);
                     let fits: (loc.offset + 8 <= spans.size(loc.block)) =
-                        omega(leb_le(loc.offset + 8, s.heap.bytes(loc.block).len(), parts.left), held.right.sizes(loc.block));
+                        omega(Nat::le_of_leb_eq(loc.offset + 8, s.heap.bytes(loc.block).len(), parts.left), held.right.sizes(loc.block));
                     let writable = j(sym(at), λ a _ => stack.writes.writable(m.memory, a, 8),
                         loan.writable(m.memory, loc.block, loc.offset, written(loc.block), omega(fits), word_bytes(word), fits));
                     let t = word_store_after(stack.writes, WordStore(base, source), m);
@@ -589,19 +281,19 @@ theorem Loan::load_word_runs<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M
     Steps(data, stack.writes, spans, reg, count, Load(WordLoad(reg(output), base)), m, load_word_at(s, output, place)) {
     λ place => match place {
         Word(_) => λ _ => trivial,
-        Ref(loc) => λ at => (match s.heap.plain(loc) as λ v => s.heap.plain(loc) = v →
-                Answers(match v { False => None, True => Some(s.set(output, Word(word_at(s.heap.bytes(loc.block), loc.offset)))) },
+        Ref(loc) => λ at => (match s.heap.plain(loc, 8) as λ v => s.heap.plain(loc, 8) = v →
+                Answers(match v { False => None, True => Some(s.set(output, Word(s.heap.word(loc)))) },
                     λ (after: State) => Exists<MachineState<M>>(λ t => Load(WordLoad(reg(output), base)).Steps(data, stack.writes, m, t) ∧
                         Holds(data, spans, reg, count, after, t))) {
             False => λ _ => trivial,
             True => λ ok => {
-                let word = word_at(s.heap.bytes(loc.block), loc.offset);
+                let word = s.heap.word(loc);
                 let load = WordLoad(reg(output), base);
                 let read = held.right.word_read(loc, ok);
                 let t = word_load_after(load, word, m);
                 Exists(t, ⟨Exists(word, WordLoadStep(
                         canonical := j(sym(at), λ a _ => a.toNat() + 8 <= Nat::pow(2, 47),
-                            held.right.canonical(loan, loc.block, loc.offset, 8, read.left)),
+                            loan.canonical_at(loc.block, loc.offset, 8, read.left)),
                         present := j(sym(at), λ a _ => read_word(data, m.memory, a) = Some(word), read.right),
                         execution := refl)),
                     ⟨registers_set(spans, reg, count, s, m.gprs, held.left, ok_regs, output, below, Word(word)), held.right⟩⟩)
@@ -629,7 +321,7 @@ theorem Loan::load_ref_runs<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>
                 let t = word_load_after(load, word, m);
                 Exists(t, ⟨Exists(word, WordLoadStep(
                         canonical := j(sym(at), λ a _ => a.toNat() + 8 <= Nat::pow(2, 47),
-                            held.right.canonical(loan, loc.block, loc.offset, 8, read.left)),
+                            loan.canonical_at(loc.block, loc.offset, 8, read.left)),
                         present := j(sym(at), λ a _ => read_word(data, m.memory, a) = Some(word), read.right),
                         execution := refl)),
                     ⟨registers_set(spans, reg, count, s, m.gprs, held.left, ok_regs, output, below, Ref(target)), held.right⟩⟩)
@@ -645,17 +337,17 @@ theorem Loan::load_byte_runs<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M
     Steps(data, stack.writes, spans, reg, count, LoadB(ByteLoad(reg(output), base)), m, load_byte_at(s, output, place)) {
     λ place => match place {
         Word(_) => λ _ => trivial,
-        Ref(loc) => λ at => (match s.heap.readable(loc) as λ v => s.heap.readable(loc) = v →
-                Answers(match v { False => None, True => Some(s.set(output, Word(byte_at(s.heap.bytes(loc.block), loc.offset).zero_extend(56)))) },
+        Ref(loc) => λ at => (match s.heap.plain(loc, 1) as λ v => s.heap.plain(loc, 1) = v →
+                Answers(match v { False => None, True => Some(s.set(output, Word(s.heap.byte(loc).zero_extend(56)))) },
                     λ (after: State) => Exists<MachineState<M>>(λ t => LoadB(ByteLoad(reg(output), base)).Steps(data, stack.writes, m, t) ∧
                         Holds(data, spans, reg, count, after, t))) {
             False => λ _ => trivial,
             True => λ ok => {
-                let byte = byte_at(s.heap.bytes(loc.block), loc.offset);
+                let byte = s.heap.byte(loc);
                 let load = ByteLoad(reg(output), base);
                 let read = held.right.byte_read(loc, ok);
                 let low: (read_gpr(base, m.gprs).toNat() < Nat::pow(2, 47)) =
-                    j(sym(at), λ a _ => a.toNat() < Nat::pow(2, 47), omega(held.right.canonical(loan, loc.block, loc.offset, 1, read.left)));
+                    j(sym(at), λ a _ => a.toNat() < Nat::pow(2, 47), omega(loan.canonical_at(loc.block, loc.offset, 1, read.left)));
                 let t = byte_load_after(load, byte, m);
                 Exists(t, ⟨Exists(byte, ByteLoadStep(
                         canonical := BitVec::drop_low_zero_of_lt(47, 17, read_gpr(base, m.gprs), low),
@@ -677,28 +369,28 @@ theorem Loan::op_runs<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}, {st
             let parts = Bool::and_true_parts((place + 1).leb(count) && (value + 1).leb(count), store_base_plain(reg(place)), ok);
             let both = Bool::and_true_parts((place + 1).leb(count), (value + 1).leb(count), parts.left);
             loan.store_word_runs(written, reg, count, s, m, held, reg(place), reg(value), parts.right, s.values(place), s.values(value),
-                held.left(place, leb_le(place + 1, count, both.left)), held.left(value, leb_le(value + 1, count, both.right)))
+                held.left(place, Nat::le_of_leb_eq(place + 1, count, both.left)), held.left(value, Nat::le_of_leb_eq(value + 1, count, both.right)))
         },
         StoreRef(place, value) => {
             let parts = Bool::and_true_parts((place + 1).leb(count) && (value + 1).leb(count), store_base_plain(reg(place)), ok);
             let both = Bool::and_true_parts((place + 1).leb(count), (value + 1).leb(count), parts.left);
             loan.store_ref_runs(written, reg, count, s, m, held, reg(place), reg(value), parts.right, s.values(place), s.values(value),
-                held.left(place, leb_le(place + 1, count, both.left)), held.left(value, leb_le(value + 1, count, both.right)))
+                held.left(place, Nat::le_of_leb_eq(place + 1, count, both.left)), held.left(value, Nat::le_of_leb_eq(value + 1, count, both.right)))
         },
         LoadWord(output, place) => {
             let both = Bool::and_true_parts((output + 1).leb(count), (place + 1).leb(count), ok);
-            loan.load_word_runs(reg, count, ok_regs, s, m, held, output, leb_le(output + 1, count, both.left), reg(place), s.values(place),
-                held.left(place, leb_le(place + 1, count, both.right)))
+            loan.load_word_runs(reg, count, ok_regs, s, m, held, output, Nat::le_of_leb_eq(output + 1, count, both.left), reg(place), s.values(place),
+                held.left(place, Nat::le_of_leb_eq(place + 1, count, both.right)))
         },
         LoadRef(output, place) => {
             let both = Bool::and_true_parts((output + 1).leb(count), (place + 1).leb(count), ok);
-            loan.load_ref_runs(reg, count, ok_regs, s, m, held, output, leb_le(output + 1, count, both.left), reg(place), s.values(place),
-                held.left(place, leb_le(place + 1, count, both.right)))
+            loan.load_ref_runs(reg, count, ok_regs, s, m, held, output, Nat::le_of_leb_eq(output + 1, count, both.left), reg(place), s.values(place),
+                held.left(place, Nat::le_of_leb_eq(place + 1, count, both.right)))
         },
         LoadByte(output, place) => {
             let both = Bool::and_true_parts((output + 1).leb(count), (place + 1).leb(count), ok);
-            loan.load_byte_runs(reg, count, ok_regs, s, m, held, output, leb_le(output + 1, count, both.left), reg(place), s.values(place),
-                held.left(place, leb_le(place + 1, count, both.right)))
+            loan.load_byte_runs(reg, count, ok_regs, s, m, held, output, Nat::le_of_leb_eq(output + 1, count, both.left), reg(place), s.values(place),
+                held.left(place, Nat::le_of_leb_eq(place + 1, count, both.right)))
         },
     }
 }
@@ -786,12 +478,12 @@ theorem Loan::program_runs<M>({fetch: FetchAccess<M>}, {data: ByteReadAccess<M>}
 
 // A byte load of a byte a reference occupies has no step: the meaning
 // refuses it, so the `MOVZX` the lowering emits for it is owed nothing.
-theorem load_byte_refused(s: State, output: Nat, loc: Loc, inside: covered(s.heap.shadow, loc.block, loc.offset) = True):
+theorem load_byte_refused(s: State, output: Nat, loc: Loc, inside: touched(s.heap.shadow, loc.block, loc.offset, 1) = True):
     load_byte_at(s, output, Ref(loc)) = None {
-    let unreadable: (s.heap.readable(loc) = False) =
-        trans(cong_fn<Bool, Bool>(λ v => (loc.offset + 1).leb(s.heap.bytes(loc.block).len()) && !v, inside),
+    let unreadable: (s.heap.plain(loc, 1) = False) =
+        trans(cong_fn<Bool, Bool>(λ v => (loc.offset + 1).leb(s.heap.bytes(loc.block).len()) && (!v && s.heap.defined(loc.block, loc.offset, 1)), inside),
             Bool::and_false_r((loc.offset + 1).leb(s.heap.bytes(loc.block).len())));
-    j(sym(unreadable), λ v _ => (match v { False => None, True => Some(s.set(output, Word(byte_at(s.heap.bytes(loc.block), loc.offset).zero_extend(56)))) }) =
+    j(sym(unreadable), λ v _ => (match v { False => None, True => Some(s.set(output, Word(s.heap.byte(loc).zero_extend(56)))) }) =
         None<State>, refl)
 }
 
@@ -801,7 +493,8 @@ theorem load_byte_refused(s: State, output: Nat, loc: Loc, inside: covered(s.hea
 theorem overlap_not_injected<M>(data: ByteReadAccess<M>, spans: Spans, heap: Heap, memory: M, b, i, c, k: Nat,
     in_b: i < spans.size(b), in_c: k < spans.size(c), shared: spans.byte(b, i) = spans.byte(c, k),
     plain_b: covered(heap.shadow, b, i) = False, plain_c: covered(heap.shadow, c, k) = False,
+    defined_b: heap.undefined(b, i) = False, defined_c: heap.undefined(c, k) = False,
     differ: heap.bytes(b).nth(i) ≠ heap.bytes(c).nth(k)): ¬Injected<M>(data, spans, heap, memory) {
-    λ inj => differ(trans(sym(inj.bytes(b, i, in_b, plain_b)),
-        trans(cong_fn<BitVec(64), Option<BitVec(8)>>(λ a => data.read(memory, a), shared), inj.bytes(c, k, in_c, plain_c))))
+    λ inj => differ(trans(sym(inj.bytes(b, i, in_b, plain_b, defined_b)),
+        trans(cong_fn<BitVec(64), Option<BitVec(8)>>(λ a => data.read(memory, a), shared), inj.bytes(c, k, in_c, plain_c, defined_c))))
 }

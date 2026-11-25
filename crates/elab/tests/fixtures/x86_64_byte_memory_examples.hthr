@@ -3,6 +3,8 @@ import x86_64_data_read;
 import x86_64_store;
 import x86_64_stack;
 import x86_64_byte_memory;
+import x86_64_memory_contract;
+import x86_64_memory_tiers;
 import linux_x86_64_io;
 import linux_x86_64_wp;
 import linux_x86_64_byte_memory;

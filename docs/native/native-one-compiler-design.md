@@ -72,7 +72,9 @@ stores into the callee's own room below its return address
 (`docs/native/native-library-exports-design.md` §4, kernel-checked there). It
 replaces `Unchanged` in the function compiler's post. From it follow the
 caller's stack words, code residency, a lent span, and for a program its
-data region, which lies below the stack.
+data region, which lies below the stack. It is now the case of §2.7's
+`WroteIn` with no span to write (`Spans::none()`), not a statement of its
+own.
 
 ### 2.2 A program's `Call` is a CALL
 
@@ -705,8 +707,8 @@ consequence of the laws and stops being a premise.
 
 **What a call may store** widens with it: `WroteIn(i, spans, before,
 after)` is stores one after another, each a word of the callee's own
-room below `i` (`Own`, as now) or one byte of a written span. `Wrote` is
-the case with nothing written. From `WroteIn` and the laws follow what a
+room below `i` (`Own`, as now) or bytes of a written span. `Wrote` is
+the case with nothing written (§2.7). From `WroteIn` and the laws follow what a
 caller keeps: its words from `i` up to `top`, the code, and every span
 nobody was lent to write.
 
@@ -1058,6 +1060,56 @@ without `Invoke`, the exports among them. So `ETm` gains the call of a
 function, a writer included, as one node lowered to a `Compute` of a
 region `Call`.
 
+### 2.7 The memory contract, stated once (2026-11-25)
+
+The machine half of the contract grew in tiers, each derived from the
+next: `Unchanged`, then `Wrote`, then `WroteIn` over one lending, then
+over any lending (`Site::CallsLent`), then parts of spans (`Views`,
+`Viewed`), and an experiment re-derived the last under a new name
+(`Carved`). It is now one module, `lib/std/arch/x86_64/x86_64_memory_contract.hthr`
+(`issues/x86-memory-contract.md`; `docs/language/ownership-design.md`
+§17.2), and every older name is an instance of it, kept in
+`x86_64_memory_tiers.hthr` for the lowering that cites it until §17.5's
+stage 3 deletes both:
+
+- **`Loan`** over `Spans`, its laws as built, and **`WroteIn`** with its
+  order in one lemma (`Stack::wrote_in_widen`: deeper, and over spans
+  that write less, `Spans::Within`, is less). `Wrote` is `WroteIn` at
+  `Spans::none()`; `wrote_in_own`, `wrote_in_deeper`, `wrote_in_wider`,
+  `wrote_in_none` are the order at their cases.
+- **The frame rule** once: `Stack::StableIn` and `Stack::wrote_in_frame`;
+  `wrote_frame` is it with no span to write. What a caller keeps under a
+  loan (`Loan::stable_word`, `stable_resident`, `stable_reads`,
+  `stable_injected`) are its stable predicates.
+- **`Sub(spans, pieces)`**: each piece a part of a span wherever it has a
+  byte, a written piece part of a written span and apart from every other
+  piece of it. `Loan::sub` and `Stack::wrote_in_up` are the two facts, and
+  every renumbering is one: a view lent to a callee (`Viewed::sub`), the
+  callee's buffers over the views (`Sub::same`, the old `Loan::onto`),
+  fewer spans to write (`Sub::fewer`, the old `Loan::narrow`), a block
+  carved from a supply (the experiment's `Carved::sub`).
+- **`Heap` and `Injected`**: blocks of bytes with a shadow of references
+  (`Pointer`) and a set of undefined bytes (a fresh or dead block, a window
+  a failed `read` left junk in), block `b` at span `b`; the injection says
+  nothing of an undefined byte (`Injected::undefined_change`), and a store
+  defines its bytes. Blocks are lists updated by a store, so evaluating
+  a run is linear in its stores; the heap is used through `Heap::bytes`
+  and `Heap::undefined`, never its fields. One lemma per memory operation:
+  `Loan::store_injected` for a store of any width, `Loan::store_ref_injected`
+  (the same machine store, the shadow saying a reference is there), and
+  `Injected::reads` for a load of any width, with the machine's widths as
+  its cases (`byte_read`, `dword_read`, `word_read`) and `ref_read`; and
+  `Loan::stable_injected` for the call's own stores. The heap is
+  canonical, the bytes under a pointer zero (`Heap::store_ref` zeroes them,
+  `Heap::canonical_store`, `canonical_store_ref`). FunctionIR's file in
+  memory (`Stack::InMemory`) is `Injected` at an empty shadow both ways
+  (`in_memory_injected`, `injected_in_memory`), and its store lemmas are
+  the injection's.
+- **`Site::Meets`**: the call contract over one lending for a whole run,
+  against a callee meaning that answers words and a heap. Not yet cited by
+  a lowering; `Site::CallsLent` at one lending gives it at an empty shadow
+  (`calls_lent_meets`, the contract's tests).
+
 ## 3. The rounds
 
 Each is a PR and ends with something that runs.
@@ -1119,7 +1171,8 @@ Each is a PR and ends with something that runs.
 - **U4. Buffers written** (§2.6), in steps that each leave the library
   whole.
   - *Step 4a-1, built 2026-11-11:* the stack's half
-    (`lib/std/arch/x86_64/x86_64_lending.hthr`): `Spans`, the laws of a
+    (`lib/std/arch/x86_64/x86_64_lending.hthr`, now in
+    `x86_64_memory_contract.hthr`, §2.7): `Spans`, the laws of a
     lending (`Loan`), `Stack::WroteIn`, what a span reads along the way
     (`own_reads`, `put_reads`, `put_keeps`) and what a caller keeps
     (`unchanged`, `resident`, `unwritten_reads`); `Stack::Lends` follows
@@ -1128,7 +1181,7 @@ Each is a PR and ends with something that runs.
     a written one sharing no byte with another. *Runs:* nothing new; the
     probes lend two spans of any region, one to write, and show that no
     lending has a written span starting where another does
-    (`lib/_tests/std/arch/x86_64/x86_64_lending_tests.hthr`).
+    (now `lib/_tests/std/arch/x86_64/x86_64_memory_contract_tests.hthr`).
   - *Step 4a-2, built 2026-11-11:* FunctionIR's half
     (`lib/native/function_ir/function_ir_writes.hthr`): the relation
     that threads the file (`StructuredRegionRunsOver`, `Function::Runs`,

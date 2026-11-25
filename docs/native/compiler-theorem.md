@@ -234,7 +234,7 @@ Beyond the kernel, the theorem rests on these:
   the program's own data segment (`DataRegion::own_stack`,
   `linux_x86_64_image.hthr`). What is assumed is that those models are
   faithful to the processor's memory and to Linux's loader.
-- **The loan's laws** (`Loan` in `x86_64_lending.hthr`) for functions of
+- **The loan's laws** (`Loan` in `x86_64_memory_contract.hthr`) for functions of
   spans: the spans lie below the canonical boundary, a store into the stack
   below `top` misses them, and a store into a span the function may write
   stays inside it and misses the stack and the code. Rust's borrow of a
@@ -365,7 +365,7 @@ is kept as it is (`HEATHER_OPTIMIZE=off` turns the optimizer off).
 | Functions of spans stated by their spans | `lib/native/function_ir/function_ir_borrows.hthr`, `docs/native/span-statements-design.md` |
 | The compiler's theorem as certificates cite it | `lib/native/function_ir/function_ir_compile.hthr` (`compiled_returns`, `compiled_returns_written`, `compiled_returns_marked`, `compiled_returns_unlent`) |
 | The lowering and its proof | `lib/native/function_ir/function_ir_lower*.hthr` |
-| What a caller keeps across a call (the frame rule) | `Stack::wrote_frame` in `lib/std/arch/x86_64/x86_64_stack.hthr`, `Stack::wrote_in_frame` in `x86_64_lending.hthr`; over the contract, `lib/native/function_ir/function_ir_frame.hthr` |
+| What a caller keeps across a call (the frame rule) | `Stack::wrote_in_frame` in `lib/std/arch/x86_64/x86_64_memory_contract.hthr` (`Stack::wrote_frame`, its case with no span to write, in `x86_64_memory_tiers.hthr`); over the contract, `lib/native/function_ir/function_ir_frame.hthr` |
 | The contract's controls | `lib/_tests/native/function_ir/function_ir_compile_tests.hthr` |
 | The certificate's generator | `crates/cli/src/native/verified.rs` |
 | The machine model | `lib/std/arch/x86_64/`, `docs/native/x86-64-execution-boundary.md` |

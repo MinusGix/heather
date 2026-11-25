@@ -1671,6 +1671,48 @@ order and frame rule; `Injected` with one lemma per memory operation; and
 its caller's spans. A reference in a lent block is then a change to
 `Injected` and its operation lemmas and to nothing else.
 
+**As built (stage 1, 2026-11-25; `issues/x86-memory-contract.md`).** The
+module is `lib/std/arch/x86_64/x86_64_memory_contract.hthr`, the older
+names its instances in `x86_64_memory_tiers.hthr`
+(`docs/native/native-one-compiler-design.md` §2.7). Choices made there:
+
+- `WroteIn`'s order is one lemma over the offset and the spans
+  (`Stack::wrote_in_widen`, `Spans::Within`), and `WroteIn::up` is
+  `Stack::wrote_in_up`, `WroteIn` being a method of `Stack`.
+- `Sub`'s place equation holds where a piece has a byte, since the
+  callee's buffers over views place an empty buffer anywhere; so
+  `Loan::sub` takes the pieces' canonical bound, which a piece with a byte
+  has (`Loan::canonical_at`).
+- A store is one lemma at any width (the shadow's overlap and cut are
+  stated for `n` bytes), a load one lemma with the machine's widths as its
+  cases. Eight bytes stored over exactly a pointer replace it, as in the
+  experiment.
+- The heap is canonical by construction: a pointer store zeroes its eight
+  bytes, so it is a word store and a pointer, and its injection lemma is
+  derived from the word store's; `Heap::Canonical` and its preservation are
+  stated beside `Injected`, not inside it, so no operation lemma carries
+  it.
+- A byte is plain, part of a reference, or undefined: `Heap.undefined`
+  is a per-byte set beside the shadow (a store clears its window, so no
+  range is ever split), `Injected` constrains only defined bytes, and is
+  stable under any change of memory at undefined, uncovered bytes
+  (`Injected::undefined_change`), which is what a failed `read` leaving
+  junk needs. Canonical includes zero under undefined bytes.
+- The heap's blocks are lists by block number (each block's bytes and its
+  undefined flags), updated as lists by a store, and read only through
+  `Heap::bytes` and `Heap::undefined`: a closure layered per store made
+  evaluating a run quadratic (measured: a run of k load-then-store steps
+  doubled to 2.2, 2.5, 2.8 times its steps at each doubling of k; as
+  lists, 1.9, 1.9, 2.0).
+- `Site::Meets` is stated against a meaning on words
+  (`Nat → List<BitVec(64)> → Heap → Option<Returned>`): the bytes level's
+  `Calls()` over values meets it through lowering each value to its word.
+  The System V definitions it needs (`argument_registers`, `ArgsIn`,
+  `Stack::Passed`, `callee_kept`, `answer_registers`) moved into the
+  module from FunctionIR's lowering. It is provisional: the clause for a
+  run still going and the world's place join it with the bytes level's
+  `run`.
+
 ### 17.3 The bytes level as the design wants it
 
 - **Values** are words and references (a block and a byte offset); a length

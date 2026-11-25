@@ -26,7 +26,7 @@
 //   lemmas, given `size` bytes from `low` below `2^47` that the profile
 //   relies on having the data permission (read, write, no execute). That
 //   the region never executes is what keeps code where it was.
-// - `DataRegion::loan` is a `Loan` (x86_64_lending) of spans inside the
+// - `DataRegion::loan` is a `Loan` (x86_64_memory_contract) of spans inside the
 //   region, above the offset the borrower's stack words lie below: the laws
 //   a call lent those spans is owed, from the same lemmas.
 import x86_64;
@@ -35,7 +35,7 @@ import x86_64_data_read;
 import x86_64_fetched_code;
 import x86_64_store;
 import x86_64_stack;
-import x86_64_lending;
+import x86_64_memory_contract;
 import memory;
 import bitvec;
 import bitvec_nat;
@@ -138,22 +138,6 @@ theorem X86Profile::read_agree(self x: X86Profile, m: X86Memory(x), cells: BitVe
             trans(none(other, readable), sym(none(m, readable)))
         },
     }
-}
-
-// Eight reads that agree read the same word.
-theorem read_word_agree<M>(access: ByteReadAccess<M>, m, n: M, a: BitVec(64),
-    same: (t: Nat) → t < 8 → access.read(m, next_rip(a, t)) = access.read(n, next_rip(a, t))):
-    read_word(access, m, a) = read_word(access, n, a) {
-    let r = λ (memory: M) (t: Nat) => access.read(memory, next_rip(a, t));
-    j(same(0, trivial), λ x _ => read_word(access, m, a) = word_of_reads(x, r(n, 1), r(n, 2), r(n, 3), r(n, 4), r(n, 5), r(n, 6), r(n, 7)),
-    j(same(1, trivial), λ x _ => read_word(access, m, a) = word_of_reads(r(m, 0), x, r(n, 2), r(n, 3), r(n, 4), r(n, 5), r(n, 6), r(n, 7)),
-    j(same(2, trivial), λ x _ => read_word(access, m, a) = word_of_reads(r(m, 0), r(m, 1), x, r(n, 3), r(n, 4), r(n, 5), r(n, 6), r(n, 7)),
-    j(same(3, trivial), λ x _ => read_word(access, m, a) = word_of_reads(r(m, 0), r(m, 1), r(m, 2), x, r(n, 4), r(n, 5), r(n, 6), r(n, 7)),
-    j(same(4, trivial), λ x _ => read_word(access, m, a) = word_of_reads(r(m, 0), r(m, 1), r(m, 2), r(m, 3), x, r(n, 5), r(n, 6), r(n, 7)),
-    j(same(5, trivial), λ x _ => read_word(access, m, a) = word_of_reads(r(m, 0), r(m, 1), r(m, 2), r(m, 3), r(m, 4), x, r(n, 6), r(n, 7)),
-    j(same(6, trivial), λ x _ => read_word(access, m, a) = word_of_reads(r(m, 0), r(m, 1), r(m, 2), r(m, 3), r(m, 4), r(m, 5), x, r(n, 7)),
-    j(same(7, trivial), λ x _ => read_word(access, m, a) = word_of_reads(r(m, 0), r(m, 1), r(m, 2), r(m, 3), r(m, 4), r(m, 5), r(m, 6), x),
-        refl))))))))
 }
 
 // ---------------------------------------------------------------------------
