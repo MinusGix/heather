@@ -874,4 +874,22 @@ which is being worked out before anything more of it is built.
 5. **Regions are written in signatures and record declarations and inferred
    as annotations in bodies** (lean, not committed; custom syntax is open if
    it reads better).
+6. **The compiler inserts a copy where policy allows, and a check only where
+   it cannot change the meaning.** A check whose failure the meaning does
+   not define is never inserted: an access takes its proof, and a method
+   that can fail (`get` answering an option) has the check in its
+   definition. Checks are expected to be rare and written.
+7. **The world is a resource like any other** (representation: the system),
+   beside an arena (bytes) and a region's token (nothing). One row; the
+   separate effects language goes.
+8. **A local borrow is not a construct of its own**, unless a benefit of
+   making it one turns up. The proposal on the table: a function's frame is
+   a resource, and a local borrow is a path into it, so it is the stored
+   borrow's case with the frame as owner. How a path or a `&mut` parameter
+   is held (an address, or the value passed in and handed back, as
+   `Mutated` does today for a word) is a choice of representation.
+9. **The old pipeline is not touched.** The one language is built beside
+   the four with site facts native to it, the customers (the arena, the word
+   map, the linked lexer and hash) are ported, and the four are deleted. No
+   new package extends the old generator, reflector or term languages.
 
