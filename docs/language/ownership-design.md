@@ -910,4 +910,20 @@ which is being worked out before anything more of it is built.
     proved by the liveness check, by a "keeps" proof, or refused. Homes and
     stores as a second kind of thing appear only in the back half, which
     already has them (FunctionIR's values and buffers).
+13. **Sharing and placement are two levels, and ownership speaks only of the
+    first** (Minus: why would high-level code think of the registers it is
+    put into?). Item 12's "plan" mixed them. *Sharing* is which values are
+    one object: an operation's result is its argument updated, a value is a
+    view of part of another, a call lends, moves or copies. It has no
+    registers, addresses or frame slots in it; it is what modes state, what
+    a copy costs, and what a module's interface records. *Placement* is
+    where an object or a word physically lives and how it crosses a call on
+    this machine; it is the back half's, planned and checked there as
+    register placement already is. Between them stands a program over
+    objects that have identity and no location, which is what FunctionIR's
+    numbered buffers are. A type's sharing class (plain data, an object with
+    a clone, an object that cannot be duplicated) belongs to the first
+    level; its layout to the second. In a strict function sharing is
+    determined by the source: share everywhere, copy only at a written
+    `clone`, refuse where sharing has no licence.
 
