@@ -1,0 +1,76 @@
+// Probes of `held`: holdings decided by evaluation (owners of disjoint
+// spans compose, views compose while their shares total at most one, a
+// whole beside an overlapping view does not, three overlapping halves do
+// not), the class laws read through `Pcm`, and the negative controls: an
+// overlapping holding is refused by the decider and by a `¬` theorem.
+// Tests, not library.
+import logic;
+import bool;
+import nat;
+import omega;
+import list;
+import rat;
+import span_set;
+import pcm;
+import pcm_share;
+import access_map;
+import held;
+
+fn HALF() → Share { Share::whole().half() }
+
+// ---------------------------------------------------------------------------
+// Decided by evaluation
+
+theorem owners_apart(): Held::own(Span(0, 4)).join(Held::own(Span(4, 4))).Valid() {
+    Held::own(Span(0, 4)).join(Held::own(Span(4, 4))).valid_sound(refl)
+}
+
+// Two halves of one span: a copied view.
+theorem halves_compose(): Held::at(Span(0, 4), HALF()).join(Held::at(Span(0, 4), HALF())).Valid() {
+    Held::at(Span(0, 4), HALF()).join(Held::at(Span(0, 4), HALF())).valid_sound(refl)
+}
+
+// A whole beside a view of an address it holds: refused.
+theorem store_under_view(): Held::own(Span(0, 4)).join(Held::at(Span(3, 2), HALF())).valid() = False { refl }
+
+// Three halves meeting at address 1.
+theorem three_halves(): Held::at(Span(0, 2), HALF()).join(Held::at(Span(1, 2), HALF())).join(Held::at(Span(1, 1), HALF())).valid() = False { refl }
+
+// The same three, two of them moved apart, compose.
+theorem three_halves_spread(): Held::at(Span(0, 2), HALF()).join(Held::at(Span(1, 2), HALF())).join(Held::at(Span(3, 1), HALF())).valid() = True { refl }
+
+// ---------------------------------------------------------------------------
+// At open spans: the laws, read through the class
+
+theorem parts_valid(a, b: Held, ok: a.join(b).Valid()): And<a.Valid(), b.Valid()> {
+    And(Held::valid_left(a, b, ok), Pcm::valid_r(Held::Same, Held::join, Held::Valid, a, b, ok))
+}
+
+theorem regroup(a, b, c: Held): a.join(b).join(c) ≈ a.join(b.join(c)) { a.join_assoc(b, c) }
+
+// Views of any spans compose while their shares do.
+theorem views_open(s, t: Span): Held::at(s, HALF()).join(Held::at(t, HALF())).Valid() {
+    Held::views_compose(s, t, HALF(), HALF(), Share::whole().half_valid(omega))
+}
+
+// An owned span leaves any frame nothing on it.
+theorem owner_excludes(s: Span, f: Held, ok: Held::own(s).join(f).Valid(), x: Nat, inside: s.has(x).IsTrue()): ¬(0 < Held::share_at(f.parts, x).amount) {
+    Held::own_excludes(s, f, ok, x, inside)
+}
+
+// ---------------------------------------------------------------------------
+// Negative controls
+
+theorem overlap_refused(): ¬Held::own(Span(0, 4)).join(Held::at(Span(3, 2), HALF())).Valid() {
+    Held::view_refuses_store(Span(0, 4), Span(3, 2), HALF(), 3, trivial, trivial, linarith)
+}
+
+theorem overlap_refused_by_decider(): ¬Held::own(Span(0, 4)).join(Held::at(Span(3, 2), HALF())).Valid() {
+    λ ok => absurd(trans(sym(Held::own(Span(0, 4)).join(Held::at(Span(3, 2), HALF())).valid_complete(ok)), store_under_view()))
+}
+
+// The decider says no, so the soundness certificate has nothing to read.
+// expect-error: `refl` needs both sides to be definitionally equal
+theorem overlap_claimed(): Held::own(Span(0, 4)).join(Held::at(Span(3, 2), HALF())).Valid() {
+    Held::own(Span(0, 4)).join(Held::at(Span(3, 2), HALF())).valid_sound(refl)
+}
