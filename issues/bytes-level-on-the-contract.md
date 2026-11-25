@@ -1,6 +1,6 @@
 ---
 title: The bytes-level language on the contract's heap: one memory, a transitive refinement, Site::Meets in its final form
-status: open
+status: closed
 labels: [native,memory,ownership]
 area: heather-in-heather
 milestone: [nh-ownership]
@@ -43,3 +43,4 @@ One heap type and one set of memory operations serve the language and the contra
     **Checking cost** (own declarations, uncached, kernel steps): `x86_64_memory_contract` 1.87M over 164 items → 2.34M over 213 (pieces, flags, site facts and canonical lemmas moved in); `x86_64_call_contract` new, 81k over 46. The language: `bytes_memory` 353k → 39k, `bytes_level` 119k → 338k (`refines_trans`), `bytes_level_renames` 151k → 190k, `_fuel` 32k → 45k, `_canonical` 48k → 71k; in all 703k → 683k, and the experiment's 110k it imported is gone.
 
     **Filed**: [[contract-put-of-a-piece-injected]] (one injection lemma per primitive for any piece, the per-store lemmas its instances; needs a "pointers apart" invariant), [[call-contract-whole-program]] (`Meets` at the entry routine to `RunsAs`).
+- 2026-11-25: 2026-11-25: Verified on the final tree (6db63d8): `scripts/linked --check`, 17 exports compiled with checked certificates, every assembly file and `exports.rs`/`constants.rs`/`kinds.rs` unchanged; `HEATHER_PR_NATIVE=all scripts/test --pr`: `== suite: 4139 passed, 0 failed, 3 ignored ==` (the run before it failed only the Heather formatter gate on two blank lines in two of this round's files, fixed in 6db63d8).
