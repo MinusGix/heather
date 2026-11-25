@@ -8,6 +8,7 @@ import omega;
 import option;
 import list;
 import span_set;
+import atom;
 import place_check;
 
 // ---------------------------------------------------------------------------

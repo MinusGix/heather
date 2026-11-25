@@ -41,11 +41,10 @@ import list;
 import list_window;
 import span_set;
 import list_path;
+import atom;
 
 // ---------------------------------------------------------------------------
 // The fragment
-
-inductive Atom { Lit(n: Nat), Var(w: Nat) }
 
 inductive Op {
     Set(y: Nat, x: Nat, i: Atom, v: Atom),
@@ -61,17 +60,7 @@ record Prog { objs: Nat, words: Nat, body: List<Op> }
 // What it is run on.
 record Env { objs: List<List<Nat>>, words: List<Nat> }
 
-fn word(ws: List<Nat>, k: Nat) → Nat { ws.nth(k).unwrap_or(0) }
-
 fn list_at(xs: List<List<Nat>>, k: Nat) → List<Nat> { xs.nth(k).unwrap_or(Nil) }
-
-fn Atom::val(self a: Atom, ws: List<Nat>) → Nat { match a { Lit(n) => n, Var(w) => word(ws, w) } }
-
-// The atom reads only words bound before `nw`.
-fn Atom::bound(self a: Atom, nw: Nat) → Bool { match a { Lit(_) => True, Var(w) => (w + 1).leb(nw) } }
-
-// A literal: its value in no environment is its value in every one.
-fn Atom::closed(self a: Atom) → Bool { match a { Lit(_) => True, Var(_) => False } }
 
 // ---------------------------------------------------------------------------
 // The meaning: lists are values
@@ -307,10 +296,6 @@ theorem Atom::val_stable(self a: Atom, ws, big: List<Nat>, pre: Prefix(ws, big),
         Lit(_) => λ _ => refl,
         Var(w) => λ lt => cong_fn(λ (o: Option<Nat>) => o.unwrap_or(0), pre.right(w, omega(lt))),
     })(b)
-}
-
-theorem Atom::closed_val(self a: Atom, e: a.closed() = True, ws, vs: List<Nat>): a.val(ws) = a.val(vs) {
-    (match a as λ x => x.closed() = True → x.val(ws) = x.val(vs) { Lit(_) => λ _ => refl, Var(_) => λ no => absurd(no) })(e)
 }
 
 // Reading the window's value.

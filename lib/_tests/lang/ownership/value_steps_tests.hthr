@@ -1,0 +1,106 @@
+// The controls for the customers of lib/lang/ownership/value_steps.hthr:
+// each place the decider refuses is, at a value, really not apart from the
+// other (a `¬` theorem by evaluation), and a split whose owed fact fails is
+// not apart at those words.
+import logic;
+import bool;
+import nat;
+import omega;
+import option;
+import list;
+import span_set;
+import store;
+import path;
+import atom;
+import steps;
+import value_steps;
+
+fn word_of(v: Val) → Nat { match v { VWord(n) => n, _ => 0 } }
+
+// The word read, or zero.
+fn read_word(o: Option<Val>) → Nat { word_of(o.unwrap_or(VWord(0))) }
+
+// The word at `i` of the sequence read, or zero.
+fn read_at(o: Option<Val>, i: Nat) → Nat { word_of(o.unwrap_or(VWord(0)).entries().nth(i).unwrap_or(VWord(0))) }
+
+fn words(ns: List<Nat>) → Val { VSeq(Vals::of(ns.map(λ (n: Nat) => VWord(n)))) }
+
+// ---------------------------------------------------------------------------
+// The customers' meaning, read at values
+
+// Writing both halves of a split rebuilds the sequence from them.
+theorem split_writes(): Val::place([2, 2], Val::split_right()).set(Val::place([2, 2], Val::split_left()).set(words([0, 0, 0, 0]), words([1, 2])), words([3, 4]))
+    = words([1, 2, 3, 4]) { refl }
+
+// The element held reads what it read before the store.
+theorem held_reads(): Val::place([0, 2], [SElem(Var(0))]).get(Val::place([0, 2], [SElem(Var(1))]).set(words([5, 6, 7]), VWord(9))) = Some(VWord(5)) { refl }
+
+// ---------------------------------------------------------------------------
+// split_at_mut: overlapping windows, and an owed fact that fails
+
+theorem overlap_not_apart(): ¬Apart<Val, Val, Val>(Val::place(Nil, [SWindow(Lit(0), Lit(2))]), Val::place(Nil, [SWindow(Lit(1), Lit(2))])) {
+    λ apart => {
+        let same = apart.left_after_right(words([0, 0, 0]), words([1, 1]));
+        let second: (1 = 0) = cong_fn(λ (o: Option<Val>) => read_at(o, 1), same);
+        absurd(second)
+    }
+}
+
+// `[0, k)` beside `j` owes `j ∉ [0, k)`; at `k = 4, j = 2` it fails, and the
+// two places are not apart there.
+theorem window_store_owes(): Steps::apart([SWindow(Lit(0), Var(0))], [SElem(Var(1))]) = Some([Spans(Lit(0), Var(0), Var(1), Lit(1))]) { refl }
+
+theorem window_store_fails(): Spans(Lit(0), Var(0), Var(1), Lit(1)).verdict([4, 2]) = False { refl }
+
+theorem window_store_not_apart(): ¬Apart<Val, Val, Val>(Val::place([4, 2], [SWindow(Lit(0), Var(0))]), Val::place([4, 2], [SElem(Var(1))])) {
+    λ apart => {
+        let same = apart.left_after_right(words([0, 0, 0, 0]), VWord(1));
+        let third: (1 = 0) = cong_fn(λ (o: Option<Val>) => read_at(o, 2), same);
+        absurd(third)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Holding an element: not while storing the same one
+
+theorem same_element_not_apart(): ¬Apart<Val, Val, Val>(Val::place(Nil, [SElem(Lit(3))]), Val::place(Nil, [SElem(Lit(3))])) {
+    λ apart => {
+        let same = apart.left_after_right(words([0, 0, 0, 0]), VWord(1));
+        let one: (1 = 0) = cong_fn(read_word, same);
+        absurd(one)
+    }
+}
+
+theorem same_element_refused(): Steps::apart([SElem(Lit(3))], [SElem(Lit(3))]) = None { refl }
+
+// ---------------------------------------------------------------------------
+// Two fields: not a field and a part of it
+
+theorem field_prefix_refused(): Steps::apart([SField(0)], [SField(0), SElem(Lit(1))]) = None { refl }
+
+theorem field_prefix_not_apart(): ¬Apart<Val, Val, Val>(Val::place(Nil, [SField(0)]), Val::place(Nil, [SField(0), SElem(Lit(1))])) {
+    λ apart => {
+        let same = apart.left_after_right(VRec(Vals::of([words([0, 0])])), VWord(1));
+        let second: (1 = 0) = cong_fn(λ (o: Option<Val>) => read_at(o, 1), same);
+        absurd(second)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Keys and variants
+
+theorem same_key_not_apart(): ¬Apart<Val, Val, Val>(Val::place(Nil, [SKey(Lit(0), Lit(0))]), Val::place(Nil, [SKey(Lit(0), Lit(0))])) {
+    λ apart => {
+        let same = apart.left_after_right(VMap(SlotLive(0, VWord(0), SlotsEnd)), VWord(1));
+        let one: (1 = 0) = cong_fn(read_word, same);
+        absurd(one)
+    }
+}
+
+theorem same_variant_not_apart(): ¬Apart<Val, Val, Val>(Val::place(Nil, [SVariant(2)]), Val::place(Nil, [SVariant(2), SField(0)])) {
+    λ apart => {
+        let same = apart.left_after_right(VTag(2, VRec(Vals::of([VWord(0)]))), VWord(1));
+        let one: (1 = 0) = cong_fn(λ (o: Option<Val>) => read_at(o.map(λ (v: Val) => VSeq(match v { VRec(fs) => fs, _ => VNil })), 0), same);
+        absurd(one)
+    }
+}
