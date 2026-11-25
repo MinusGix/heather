@@ -85,7 +85,7 @@ theorem Body::run_below(self body: Body, blocks: Blocks, calls, calls2: Calls(),
                     λ n pass => inner.run_below(blocks, calls, calls2, below, n, pass), parameters, exit, next, fuel, state, c.memory, c.io),
                 λ end => Ran::of(bind_values(outputs, end.state, c.locals)).then(λ (l: Locals) => Done(Config(l, end.memory, end.io))).below_refl())),
         Sys(call) => λ fuel c => call.run(blocks, c).below_refl(),
-        Exit(status) => λ fuel c => refl,
+        Exit(_) => λ fuel c => refl,
     }
 }
 

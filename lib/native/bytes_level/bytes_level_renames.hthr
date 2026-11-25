@@ -84,25 +84,25 @@ fn RanRelated<T>(R: T → T → Type, a, b: Ran<T>) → Type {
 theorem ran_then<A, T>(Ra: A → A → Type, R: T → T → Type, {a, b: Ran<A>}, rel: RanRelated<A>(Ra, a, b), {k, k2: A → Ran<T>},
     each: (x, y: A) → Ra(x, y) → RanRelated<T>(R, k(x), k2(y))): RanRelated<T>(R, a.then(k), b.then(k2)) {
     (match a as λ a0 => (b0: Ran<A>) → RanRelated<A>(Ra, a0, b0) → RanRelated<T>(R, a0.then(k), b0.then(k2)) {
-        Done(x) => λ b0 => match b0 as λ bb => RanRelated<A>(Ra, Done(x), bb) → RanRelated<T>(R, k(x), bb.then(k2)) {
+        Done(x) => λ b0 => match b0 {
             Done(y) => λ h => each(x, y, h),
             Exited(_, _) => λ never => false_elim(never),
             Going(_) => λ never => false_elim(never),
             Stuck => λ never => false_elim(never),
         },
-        Exited(status, io) => λ b0 => match b0 as λ bb => RanRelated<A>(Ra, Exited(status, io), bb) → RanRelated<T>(R, Exited(status, io), bb.then(k2)) {
+        Exited(_, _) => λ b0 => match b0 {
             Done(_) => λ never => false_elim(never),
             Exited(_, _) => λ h => h,
             Going(_) => λ never => false_elim(never),
             Stuck => λ never => false_elim(never),
         },
-        Going(io) => λ b0 => match b0 as λ bb => RanRelated<A>(Ra, Going(io), bb) → RanRelated<T>(R, Going(io), bb.then(k2)) {
+        Going(_) => λ b0 => match b0 {
             Done(_) => λ never => false_elim(never),
             Exited(_, _) => λ never => false_elim(never),
             Going(_) => λ h => h,
             Stuck => λ never => false_elim(never),
         },
-        Stuck => λ b0 => match b0 as λ bb => RanRelated<A>(Ra, Stuck, bb) → RanRelated<T>(R, Stuck, bb.then(k2)) {
+        Stuck => λ b0 => match b0 {
             Done(_) => λ never => false_elim(never),
             Exited(_, _) => λ never => false_elim(never),
             Going(_) => λ never => false_elim(never),
@@ -113,11 +113,11 @@ theorem ran_then<A, T>(Ra: A → A → Type, R: T → T → Type, {a, b: Ran<A>}
 
 theorem ran_of_related<A>(Ra: A → A → Type, {o, o2: Option<A>}, rel: Related<A>(Ra, o, o2)): RanRelated<A>(Ra, Ran::of(o), Ran::of(o2)) {
     (match o as λ a => (b: Option<A>) → Related<A>(Ra, a, b) → RanRelated<A>(Ra, Ran::of(a), Ran::of(b)) {
-        None => λ b => match b as λ bb => Related<A>(Ra, None, bb) → RanRelated<A>(Ra, Stuck, Ran::of(bb)) {
+        None => λ b => match b {
             None => λ _ => trivial,
             Some(_) => λ never => false_elim(never),
         },
-        Some(x) => λ b => match b as λ bb => Related<A>(Ra, Some(x), bb) → RanRelated<A>(Ra, Done(x), Ran::of(bb)) {
+        Some(_) => λ b => match b {
             None => λ never => false_elim(never),
             Some(_) => λ h => h,
         },
@@ -132,13 +132,13 @@ theorem ran_of_then<A, T>(Ra: A → A → Type, R: T → T → Type, {o, o2: Opt
 // The second the first renamed by `g`.
 theorem ran_of_map_then<A, T>(R: T → T → Type, g: A → A, {o, o2: Option<A>}, same: o2 = o.map(g), {k, k2: A → Ran<T>},
     each: (x: A) → RanRelated<T>(R, k(x), k2(g(x)))): RanRelated<T>(R, Ran::of(o).then(k), Ran::of(o2).then(k2)) {
-    rewrite(same, match o as λ a => RanRelated<T>(R, Ran::of(a).then(k), Ran::of(a.map(g)).then(k2)) { None => trivial, Some(x) => each(x) })
+    rewrite(same, match o { None => trivial, Some(x) => each(x) })
 }
 
 // The second the first.
 theorem ran_of_same_then<A, T>(R: T → T → Type, {o, o2: Option<A>}, same: o2 = o, {k, k2: A → Ran<T>},
     each: (x: A) → RanRelated<T>(R, k(x), k2(x))): RanRelated<T>(R, Ran::of(o).then(k), Ran::of(o2).then(k2)) {
-    rewrite(same, match o as λ a => RanRelated<T>(R, Ran::of(a).then(k), Ran::of(a).then(k2)) { None => trivial, Some(x) => each(x) })
+    rewrite(same, match o { None => trivial, Some(x) => each(x) })
 }
 
 // ---------------------------------------------------------------------------
@@ -375,15 +375,7 @@ theorem loop_run_renames(r: Renaming, step, step2: Nat → Config → Ran<Config
                                     False => loop_run(step2, parameters, exit, next, rest, rename_values(r, later), after2.memory, after2.io),
                                     True => Done(Ended(rename_values(r, later), after2.memory, after2.io)),
                                 }),
-                            match after.locals.words(1, exit).head_bit() as λ v => RanRelated<Ended>(ended_renamed(r),
-                                    match v {
-                                        False => loop_run(step, parameters, exit, next, rest, later, after.memory, after.io),
-                                        True => Done(Ended(later, after.memory, after.io)),
-                                    },
-                                    match v {
-                                        False => loop_run(step2, parameters, exit, next, rest, rename_values(r, later), after2.memory, after2.io),
-                                        True => Done(Ended(rename_values(r, later), after2.memory, after2.io)),
-                                    }) {
+                            match after.locals.words(1, exit).head_bit() {
                                 False => loop_run_renames(r, step, step2, steps, parameters, exit, next, rest, later, after.memory, after2.memory, after.io,
                                     after2.io, h.memory, h.io),
                                 True => EndedRenamed(state := refl, memory := h.memory, io := h.io),
@@ -413,9 +405,7 @@ theorem Body::run_renames(self body: Body, r: Renaming, blocks, blocks2: Blocks,
             j(sym(rel.locals.words), λ ws _ => RanRelated<Config>(config_renamed(r),
                     match c.locals.words(1, condition).head_bit() { True => yes.run(blocks, calls, fuel, c), False => no.run(blocks, calls, fuel, c) },
                     match ws(1, condition).head_bit() { True => yes.run(blocks2, calls2, fuel, renamed), False => no.run(blocks2, calls2, fuel, renamed) }),
-                match c.locals.words(1, condition).head_bit() as λ v => RanRelated<Config>(config_renamed(r),
-                        match v { True => yes.run(blocks, calls, fuel, c), False => no.run(blocks, calls, fuel, c) },
-                        match v { True => yes.run(blocks2, calls2, fuel, renamed), False => no.run(blocks2, calls2, fuel, renamed) }) {
+                match c.locals.words(1, condition).head_bit() {
                     True => yes.run_renames(r, blocks, blocks2, written, calls, calls2, called, fuel, c, renamed, rel),
                     False => no.run_renames(r, blocks, blocks2, written, calls, calls2, called, fuel, c, renamed, rel),
                 }),
@@ -508,25 +498,25 @@ fn shown(o: Ran<Answer>) → Ran<Shown> { o.then(λ (a: Answer) => Done(Shown(wo
 
 theorem related_shown(r: Renaming): (a, b: Ran<Answer>) → RanRelated<Answer>(answer_renamed(r), a, b) → shown(b) = shown(a) {
     λ a => match a {
-        Done(x) => λ b => match b as λ bb => RanRelated<Answer>(answer_renamed(r), Done(x), bb) → shown(bb) = Done(Shown(word_parts(x.words), x.io)) {
-            Done(y) => λ h => rewrite(h.words, word_parts_rename(r, x.words), h.io, refl),
+        Done(x) => λ b => match b {
+            Done(_) => λ h => rewrite(h.words, word_parts_rename(r, x.words), h.io, refl),
             Exited(_, _) => λ never => false_elim(never),
             Going(_) => λ never => false_elim(never),
             Stuck => λ never => false_elim(never),
         },
-        Exited(status, io) => λ b => match b as λ bb => RanRelated<Answer>(answer_renamed(r), Exited(status, io), bb) → shown(bb) = Exited(status, io) {
+        Exited(_, _) => λ b => match b {
             Done(_) => λ never => false_elim(never),
-            Exited(status2, io2) => λ h => rewrite(h.left, h.right, refl),
+            Exited(_, _) => λ h => rewrite(h.left, h.right, refl),
             Going(_) => λ never => false_elim(never),
             Stuck => λ never => false_elim(never),
         },
-        Going(io) => λ b => match b as λ bb => RanRelated<Answer>(answer_renamed(r), Going(io), bb) → shown(bb) = Going(io) {
+        Going(io) => λ b => match b {
             Done(_) => λ never => false_elim(never),
             Exited(_, _) => λ never => false_elim(never),
             Going(io2) => λ (h: io2 = io) => rewrite(h, refl),
             Stuck => λ never => false_elim(never),
         },
-        Stuck => λ b => match b as λ bb => RanRelated<Answer>(answer_renamed(r), Stuck, bb) → shown(bb) = Stuck {
+        Stuck => λ b => match b {
             Done(_) => λ never => false_elim(never),
             Exited(_, _) => λ never => false_elim(never),
             Going(_) => λ never => false_elim(never),

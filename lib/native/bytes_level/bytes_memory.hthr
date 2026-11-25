@@ -569,9 +569,7 @@ theorem MemoryRenamed::put_at({r: Renaming}, {m, renamed: Memory}, self rel: Mem
                 trans(cong_fn<Nat, Bool>(λ x => x.same(r.there(b)), sym(r.there_back(c))), r.there_same(r.back(c), b)));
             j(sym(same), λ v _ => (match v { True => flag(piece.undefined, i - k), False => renamed.undefined(c, i) }) =
                     (match in_window(b, k, n, r.back(c), i) { True => flag(piece.undefined, i - k), False => m.undefined(r.back(c), i) }),
-                match in_window(b, k, n, r.back(c), i) as λ v =>
-                    (match v { True => flag(piece.undefined, i - k), False => renamed.undefined(c, i) }) =
-                        (match v { True => flag(piece.undefined, i - k), False => m.undefined(r.back(c), i) }) {
+                match in_window(b, k, n, r.back(c), i) {
                     True => refl,
                     False => rel.undefined(c, i),
                 })
