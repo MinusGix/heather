@@ -35,9 +35,11 @@
 import logic;
 import bool;
 import nat;
+import omega;
 import option;
 import list;
 import list_window;
+import vector;
 import span_set;
 import store;
 import path;
@@ -390,31 +392,68 @@ fn mean_word(tys: Nat → Type, strs: Strs(tys), w: World(tys), f: Func, objs: L
 // named types. The universal `Val` passes only because a sequence there
 // holds values of any shape.
 
-fn Dyn::field_get(tys: Nat → Type, {T: Type}, st: Struct(tys, T), i: Nat, v: T) → Option<Dyn(tys)> {
-    match st { Opaque(_) => None, Fields(_, fs) => match fs.nth(i) { Some(f) => f.path.get(v).map(λ y => Dyn(f.shape, y)), None => None } }
+// A step's part at an owner of code `c`: the part's code, and the native
+// path to it. An element is `Path::elem`, a window the library's window
+// read as a list of its length, a field the structure's path.
+record Part(tys: Nat → Type, c: Shape) { t: Shape, p: Path<El(tys, c), El(tys, t)> }
+
+// A vector as the list of its entries: a write of a list of its length.
+fn Dyn::vec_list<A>(n: Nat, pad: A) → Path<[A; n], List<A>> {
+    Path<[A; n], List<A>>(get := λ (v: [A; n]) => Some(vector_entries(v)), set := λ (v: [A; n]) => λ (r: List<A>) => match r.len().same(n) { True => r.vector_of(n, pad), False => v })
 }
 
-fn Dyn::get(tys: Nat → Type, strs: Strs(tys), sel: Sel, d: Dyn(tys)) → Option<Dyn(tys)> {
-    (match d.code as λ c => El(tys, c) → Option<Dyn(tys)> {
-        SWord => λ _ => None,
-        SSeq(a) => λ v => match sel {
-            OnSeq(x) => match x {
-                SeqOne(i) => v.nth(i).map(λ y => Dyn(a, y)),
-                SeqRun(lo, n) => (lo + n).leb(List::len(v)).then(Some(Dyn(SSeq(a), v.drop(lo).take(n)))),
-            },
-            _ => None,
-        },
-        SNamed(k) => λ v => match sel { OnField(i) => Dyn::field_get(tys, strs(k), i, v), _ => None },
-    })(d.val)
+fn Dyn::win(tys: Nat → Type, strs: Strs(tys), x: Shape, lo, n: Nat) → Path<List<El(tys, x)>, List<El(tys, x)>> {
+    Path::window<El(tys, x)>(lo, n).then(Dyn::vec_list<El(tys, x)>(n, Dyn::dflt(tys, strs, x)))
 }
+
+fn Dyn::field_part(tys: Nat → Type, k: Nat, st: Struct(tys, tys(k)), i: Nat) → Option<Part(tys, SNamed(k))> {
+    match st { Opaque(_) => None, Fields(_, fs) => match fs.nth(i) { Some(f) => Some(Part(f.shape, f.path)), None => None } }
+}
+
+fn Dyn::seq_part(tys: Nat → Type, strs: Strs(tys), x: Shape, q: SeqSel) → Part(tys, SSeq(x)) {
+    match q { SeqOne(i) => Part(x, Path::elem<El(tys, x)>(i)), SeqRun(lo, n) => Part(SSeq(x), Dyn::win(tys, strs, x, lo, n)) }
+}
+
+fn Dyn::part(tys: Nat → Type, strs: Strs(tys), sel: Sel, c: Shape) → Option<Part(tys, c)> {
+    match c {
+        SWord => None,
+        SSeq(x) => match sel { OnSeq(q) => Some(Dyn::seq_part(tys, strs, x, q)), _ => None },
+        SNamed(k) => match sel { OnField(i) => Dyn::field_part(tys, k, strs(k), i), _ => None },
+    }
+}
+
+// Through a part: the read, tagged with the part's code; the write, where
+// the written value has the part's code (decided once, outside the part).
+fn Dyn::take_in(tys: Nat → Type, {c: Shape}, pt: Part(tys, c), v: El(tys, c)) → Option<Dyn(tys)> { pt.p.get(v).map(λ y => Dyn(pt.t, y)) }
+
+fn Dyn::put_in(tys: Nat → Type, {c: Shape}, pt: Part(tys, c), v: El(tys, c), w: Dyn(tys)) → El(tys, c) {
+    match Shape::dec(w.code, pt.t) { Inl(h) => pt.p.set(v, Shape::cast(tys, h, w.val)), Inr(_) => v }
+}
+
+fn Dyn::take(tys: Nat → Type, {c: Shape}, o: Option<Part(tys, c)>, v: El(tys, c)) → Option<Dyn(tys)> { match o { Some(pt) => Dyn::take_in(tys, pt, v), None => None } }
+
+fn Dyn::put(tys: Nat → Type, {c: Shape}, o: Option<Part(tys, c)>, v: El(tys, c), w: Dyn(tys)) → El(tys, c) { match o { Some(pt) => Dyn::put_in(tys, pt, v, w), None => v } }
 
 fn Dyn::path(tys: Nat → Type, strs: Strs(tys), sel: Sel) → Path<Dyn(tys), Dyn(tys)> {
-    Path<Dyn(tys), Dyn(tys)>(get := λ (d: Dyn(tys)) => Dyn::get(tys, strs, sel, d), set := λ (d: Dyn(tys)) => λ (w: Dyn(tys)) => Dyn::over(tys, strs, sel, λ _ => w, d))
+    Path<Dyn(tys), Dyn(tys)>(
+        get := λ (d: Dyn(tys)) => Dyn::take(tys, Dyn::part(tys, strs, sel, d.code), d.val),
+        set := λ (d: Dyn(tys)) => λ (w: Dyn(tys)) => Dyn(d.code, Dyn::put(tys, Dyn::part(tys, strs, sel, d.code), d.val, w)),
+    )
 }
 
-// The write fits where the written value's code is the code of the part it
-// replaces, which a fit over the written value alone cannot say; the best
-// such fit is every value.
+// What a step's write must be beyond the part's code: a window's, a list of
+// its length.
+fn Sel::ok(self sel: Sel, tys: Nat → Type, t: Shape, w: El(tys, t)) → Bool {
+    match sel { OnSeq(q) => match q { SeqRun(_, n) => Dyn::size(tys, Dyn(t, w)).same(n), SeqOne(_) => True }, _ => True }
+}
+
+// The fit, relative to what the step read: the read's code, and the
+// selection's own condition.
+fn Dyn::fits(tys: Nat → Type, sel: Sel, a, w: Dyn(tys)) → Bool {
+    match Shape::dec(w.code, a.code) { Inl(h) => sel.ok(tys, a.code, Shape::cast(tys, h, w.val)), Inr(_) => False }
+}
+
+// The absolute model: no fit over the written value alone makes it lawful.
 fn Dyn::model(tys: Nat → Type, strs: Strs(tys)) → StepModel<Dyn(tys)> { StepModel<Dyn(tys)>(λ sel => Dyn::path(tys, strs, sel), λ _ _ => True) }
 
 fn Dyn::no_tys() → Nat → Type { λ _ => True }
@@ -438,4 +477,590 @@ theorem Dyn::elem_not_lawful(fits: Dyn(Dyn::no_tys()) → Bool): ¬PathLawsOn<Dy
 // steps, whatever its fits.
 theorem Dyn::model_not_lawful(fits: Sel → Dyn(Dyn::no_tys()) → Bool): ¬StepModelLaws<Dyn(Dyn::no_tys())>(StepModel<Dyn(Dyn::no_tys())>(λ sel => Dyn::path(Dyn::no_tys(), Dyn::no_strs(), sel), fits)) {
     λ ml => Dyn::elem_not_lawful(fits(OnSeq(SeqOne(0))), ml.laws(OnSeq(SeqOne(0))))
+}
+
+// ---------------------------------------------------------------------------
+// Laws with the fit relative to what the step read: the candidate
+// replacement for `StepModelLaws`
+//
+// A fit compares the written value with the value the step read
+// (`fits(read, written)`): a `Dyn` write fits where it has the read part's
+// code, a `Val` window write where it is a sequence of the window's length.
+// A write through a step keeps the owner fitting against anything it fit
+// against (`KeepsFitRel`). Any model lawful under the absolute laws is
+// lawful under these with its fit ignoring the read (`StepModelLawsRel::of_laws`;
+// `Val`'s is `val_model_laws_rel` in the probes), and the decider's soundness holds
+// over them (`Steps::apart_sound_rel`), by the same proof with the fit read
+// against the outer step's read.
+
+record PathLawsRel<S, V>(p: Path<S, V>, fits: V → V → Bool) {
+    set_get: (s: S) → (a, v: V) → p.get(s) = Some(a) → fits(a, v) = True → p.get(p.set(s, v)) = Some(v),
+    get_set: (s: S) → (a: V) → p.get(s) = Some(a) → p.set(s, a) = s,
+    set_set: (s: S) → (a, v, w: V) → p.get(s) = Some(a) → fits(a, v) = True → fits(a, w) = True → p.set(p.set(s, v), w) = p.set(s, w),
+    set_none: (s: S) → (v: V) → p.get(s) = None → p.set(s, v) = s,
+    reads_fit: (s: S) → (a: V) → p.get(s) = Some(a) → fits(a, a) = True,
+}
+
+// A write through `q` keeps an owner fitting against `x` fitting against it.
+fn Path::KeepsFitRel<S, V>(q: Path<S, V>, fits: S → S → Bool) → Type { (x, s: S) → fits(x, s) = True → (v: V) → fits(x, q.set(s, v)) = True }
+
+// The absolute laws are the relative ones with the read ignored.
+theorem PathLawsRel::of_on<S, V>({p: Path<S, V>}, {fits: V → Bool}, laws: PathLawsOn<S, V>(p, fits)): PathLawsRel<S, V>(p, λ _ w => fits(w)) {
+    PathLawsRel(λ s a v h f => laws.set_get(s, a, v, h, f), laws.get_set, λ s a v w _ fv fw => laws.set_set(s, v, w, fv, fw), laws.set_none, laws.reads_fit)
+}
+
+theorem Path::keeps_fit_rel_of<S, V>(q: Path<S, V>, fits: S → Bool, k: Path::KeepsFit(q, fits)): Path::KeepsFitRel(q, λ _ w => fits(w)) { λ x s f v => k(s, f, v) }
+
+record StepModelRel<S> { path: Sel → Path<S, S>, fits: Sel → S → S → Bool }
+
+record StepModelLawsRel<S>(m: StepModelRel<S>) {
+    laws: (a: Sel) → PathLawsRel<S, S>(m.path(a), m.fits(a)),
+    keeps: (a, b: Sel) → Path::KeepsFitRel(m.path(b), m.fits(a)),
+    apart: (a, b: Sel) → a.apart(b).IsTrue() → Apart<S, S, S>(m.path(a), m.path(b)),
+}
+
+// The denotation is `steps.hthr`'s: it reads only the paths.
+fn StepModelRel::steps<S>(self m: StepModelRel<S>) → StepModel<S> { StepModel<S>(m.path, λ _ _ => True) }
+
+fn StepModelRel::of<S>(m: StepModel<S>) → StepModelRel<S> { StepModelRel<S>(m.path, λ a _ w => m.fits(a)(w)) }
+
+// Nothing is lost: a model lawful as `steps.hthr` states it is lawful here.
+theorem StepModelLawsRel::of_laws<S>(m: StepModel<S>, ml: StepModelLaws<S>(m)): StepModelLawsRel<S>(StepModelRel::of(m)) {
+    StepModelLawsRel(λ a => PathLawsRel::of_on(ml.laws(a)), λ a b => Path::keeps_fit_rel_of(m.path(b), m.fits(a), ml.keeps(a, b)), ml.apart)
+}
+
+// `Apart::under_on`, with the fit against the outer step's read.
+theorem Apart::under_read_rel<S, A, B, C>(p: Path<S, A>, fits: A → A → Bool, pl: PathLawsRel<S, A>(p, fits), {q: Path<A, B>}, {r: Path<A, C>}, inner: Apart<A, B, C>(q, r),
+    kr: Path::KeepsFitRel(r, fits), s: S, v: C):
+    (o: Option<A>) → p.get(s) = o → p.then(q).get(p.then(r).set(s, v)) = p.then(q).get(s)
+{
+    λ o => match o {
+        Some(a) => λ e => {
+            let written: (p.then(r).set(s, v) = p.set(s, r.set(a, v))) = p.then_set_at(r, s, a, e, v);
+            let read: (p.get(p.set(s, r.set(a, v))) = Some(r.set(a, v))) = pl.set_get(s, a, r.set(a, v), e, kr(a, a, pl.reads_fit(s, a, e), v));
+            trans(cong_fn(λ (t: S) => p.then(q).get(t), written),
+                trans(p.then_get_at(q, p.set(s, r.set(a, v)), r.set(a, v), read), trans(inner.left_after_right(a, v), sym(p.then_get_at(q, s, a, e)))))
+        },
+        None => λ e => cong_fn(λ (t: S) => p.then(q).get(t), p.then_set_none(r, s, e, v)),
+    }
+}
+
+theorem Apart::under_commute_rel<S, A, B, C>(p: Path<S, A>, fits: A → A → Bool, pl: PathLawsRel<S, A>(p, fits), {q: Path<A, B>}, {r: Path<A, C>}, inner: Apart<A, B, C>(q, r),
+    kq: Path::KeepsFitRel(q, fits), kr: Path::KeepsFitRel(r, fits), s: S, b: B, c: C):
+    (o: Option<A>) → p.get(s) = o → p.then(q).set(p.then(r).set(s, c), b) = p.then(r).set(p.then(q).set(s, b), c)
+{
+    λ o => match o {
+        Some(a) => λ e => {
+            let fa: (fits(a, a) = True) = pl.reads_fit(s, a, e);
+            let fr: (fits(a, r.set(a, c)) = True) = kr(a, a, fa, c);
+            let fq: (fits(a, q.set(a, b)) = True) = kq(a, a, fa, b);
+            let sr = p.set(s, r.set(a, c));
+            let sq = p.set(s, q.set(a, b));
+            let read_r: (p.get(sr) = Some(r.set(a, c))) = pl.set_get(s, a, r.set(a, c), e, fr);
+            let read_q: (p.get(sq) = Some(q.set(a, b))) = pl.set_get(s, a, q.set(a, b), e, fq);
+            let left: (p.then(q).set(p.then(r).set(s, c), b) = p.set(s, q.set(r.set(a, c), b))) =
+                trans(cong_fn(λ (t: S) => p.then(q).set(t, b), p.then_set_at(r, s, a, e, c)),
+                    trans(p.then_set_at(q, sr, r.set(a, c), read_r, b), pl.set_set(s, a, r.set(a, c), q.set(r.set(a, c), b), e, fr, kq(a, r.set(a, c), fr, b))));
+            let right: (p.then(r).set(p.then(q).set(s, b), c) = p.set(s, r.set(q.set(a, b), c))) =
+                trans(cong_fn(λ (t: S) => p.then(r).set(t, c), p.then_set_at(q, s, a, e, b)),
+                    trans(p.then_set_at(r, sq, q.set(a, b), read_q, c), pl.set_set(s, a, q.set(a, b), r.set(q.set(a, b), c), e, fq, kr(a, q.set(a, b), fq, c))));
+            trans(left, trans(cong_fn(λ (x: A) => p.set(s, x), inner.writes_commute(a, b, c)), sym(right)))
+        },
+        None => λ e => trans(cong_fn(λ (t: S) => p.then(q).set(t, b), p.then_set_none(r, s, e, c)),
+            trans(p.then_set_none(q, s, e, b), trans(sym(p.then_set_none(r, s, e, c)), cong_fn(λ (t: S) => p.then(r).set(t, c), sym(p.then_set_none(q, s, e, b)))))),
+    }
+}
+
+theorem Apart::under_rel<S, A, B, C>(p: Path<S, A>, fits: A → A → Bool, pl: PathLawsRel<S, A>(p, fits), {q: Path<A, B>}, {r: Path<A, C>}, inner: Apart<A, B, C>(q, r),
+    kq: Path::KeepsFitRel(q, fits), kr: Path::KeepsFitRel(r, fits)): Apart<S, B, C>(p.then(q), p.then(r))
+{
+    Apart(
+        λ s v => Apart::under_read_rel(p, fits, pl, inner, kr, s, v, p.get(s), refl),
+        λ s v => Apart::under_read_rel(p, fits, pl, Apart::symm(inner), kq, s, v, p.get(s), refl),
+        λ s b c => Apart::under_commute_rel(p, fits, pl, inner, kq, kr, s, b, c, p.get(s), refl),
+    )
+}
+
+theorem Path::then_keeps_fit_rel<S, A, B>(p: Path<S, A>, q: Path<A, B>, fits: S → S → Bool, kp: Path::KeepsFitRel(p, fits)): Path::KeepsFitRel(p.then(q), fits) {
+    λ x s fs b => (match p.get(s) as λ o => p.get(s) = o → fits(x, p.then(q).set(s, b)) = True {
+        Some(a) => λ e => j(sym(p.then_set_at(q, s, a, e, b)), λ t _ => fits(x, t) = True, kp(x, s, fs, q.set(a, b))),
+        None => λ e => j(sym(p.then_set_none(q, s, e, b)), λ t _ => fits(x, t) = True, fs),
+    })(refl)
+}
+
+theorem Steps::keeps_fit_rel<S>(m: StepModelRel<S>, ml: StepModelLawsRel<S>(m), ws: List<Nat>, f: Sel, a: Step, rest: List<Step>):
+    Path::KeepsFitRel(Steps::denote(m.steps(), ws, Cons(a, rest)), m.fits(f))
+{
+    Path::then_keeps_fit_rel(m.path(a.sel(ws)), Steps::denote(m.steps(), ws, rest), m.fits(f), ml.keeps(f, a.sel(ws)))
+}
+
+theorem Steps::verdict_keeps_rel<S>(m: StepModelRel<S>, ml: StepModelLawsRel<S>(m), ws: List<Nat>, f: Sel, xs: List<Step>):
+    (ys: List<Step>) → (rs: List<Obligation>) → Steps::apart(xs, ys) = Some(rs) →
+        And<Path::KeepsFitRel(Steps::denote(m.steps(), ws, xs), m.fits(f)), Path::KeepsFitRel(Steps::denote(m.steps(), ws, ys), m.fits(f))>
+{
+    match xs {
+        Nil => λ ys rs no => absurd(no),
+        Cons(a, xr) => λ ys => match ys {
+            Nil => λ rs no => absurd(no),
+            Cons(b, yr) => λ rs _ => And(Steps::keeps_fit_rel(m, ml, ws, f, a, xr), Steps::keeps_fit_rel(m, ml, ws, f, b, yr)),
+        },
+    }
+}
+
+// The decider is sound over the relative laws: `Steps::apart_sound`'s
+// proof, with `Apart::under_rel` for `Apart::under_on`.
+theorem Steps::apart_sound_rel<S>(m: StepModelRel<S>, ml: StepModelLawsRel<S>(m), ws: List<Nat>, xs: List<Step>):
+    (ys: List<Step>) → (rs: List<Obligation>) → Steps::apart(xs, ys) = Some(rs) → Obligation::All(rs, ws) →
+        Apart<S, S, S>(Steps::denote(m.steps(), ws, xs), Steps::denote(m.steps(), ws, ys))
+{
+    match xs {
+        Nil => λ ys rs no _ => absurd(no),
+        Cons(a, xr) => λ ys => match ys {
+            Nil => λ rs no _ => absurd(no),
+            Cons(b, yr) => λ rs => (match a.same(b) as λ c => a.same(b) = c → (match c { True => Steps::apart(xr, yr), False => a.apart(b) }) = Some(rs) →
+                    Obligation::All(rs, ws) → Apart<S, S, S>(Steps::denote(m.steps(), ws, Cons(a, xr)), Steps::denote(m.steps(), ws, Cons(b, yr))) {
+                True => λ e ok hold => {
+                    let same: (a = b) = a.same_sound(b, e);
+                    let fit = Steps::verdict_keeps_rel(m, ml, ws, a.sel(ws), xr, yr, rs, ok);
+                    let here: Apart<S, S, S>(m.path(a.sel(ws)).then(Steps::denote(m.steps(), ws, xr)), m.path(a.sel(ws)).then(Steps::denote(m.steps(), ws, yr))) =
+                        Apart::under_rel(m.path(a.sel(ws)), m.fits(a.sel(ws)), ml.laws(a.sel(ws)), Steps::apart_sound_rel(m, ml, ws, xr, yr, rs, ok, hold), fit.left, fit.right);
+                    j(same, λ c _ => Apart<S, S, S>(m.path(a.sel(ws)).then(Steps::denote(m.steps(), ws, xr)), m.path(c.sel(ws)).then(Steps::denote(m.steps(), ws, yr))), here)
+                },
+                False => λ e ok hold =>
+                    Apart::then_both(ml.apart(a.sel(ws), b.sel(ws), a.apart_sound(b, ws, rs, ok, hold)), Steps::denote(m.steps(), ws, xr), Steps::denote(m.steps(), ws, yr)),
+            })(refl)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// `Dyn`'s laws, relative to the read, from the dictionaries' laws
+//
+// One part's laws carry over to the tagged step: a read is the part's read
+// with its code, and a write that fits is a value of the part's code
+// (`Dyn::fit_at`), which the write casts by a decision that is `refl` at one
+// code (`Shape::dec_self`). The cast back (`Dyn::cast_back`) is `J` on the
+// decision's proof with the code free: no unique identity proofs.
+
+theorem Dyn::cast_back(tys: Nat → Type, c: Shape, wv: El(tys, c)): (t: Shape) → (h: c = t) → Dyn(t, Shape::cast(tys, h, wv)) = Dyn(c, wv) {
+    λ t h => j(h, λ t2 h2 => Dyn(t2, Shape::cast(tys, h2, wv)) = Dyn(c, wv), refl)
+}
+
+theorem Dyn::put_in_at(tys: Nat → Type, {c: Shape}, pt: Part(tys, c), v: El(tys, c), w0: El(tys, pt.t)): Dyn::put_in(tys, pt, v, Dyn(pt.t, w0)) = pt.p.set(v, w0) {
+    j(sym(Shape::dec_self(pt.t)), λ r _ => (match r { Inl(h) => pt.p.set(v, Shape::cast(tys, h, w0)), Inr(_) => v }) = pt.p.set(v, w0), refl)
+}
+
+// A write that fits a read of code `t` is a value of code `t`.
+record FitAt(tys: Nat → Type, sel: Sel, t: Shape, w: Dyn(tys)) { w0: El(tys, t), is: w = Dyn(t, w0), ok: sel.ok(tys, t, w0) = True }
+
+theorem Dyn::fit_at(tys: Nat → Type, sel: Sel, t: Shape, y0: El(tys, t), w: Dyn(tys), f: Dyn::fits(tys, sel, Dyn(t, y0), w) = True): FitAt(tys, sel, t, w) {
+    (match Shape::dec(w.code, t) as λ r => (match r { Inl(h) => sel.ok(tys, t, Shape::cast(tys, h, w.val)), Inr(_) => False }) = True → FitAt(tys, sel, t, w) {
+        Inl(h) => λ ok => FitAt(Shape::cast(tys, h, w.val), sym(Dyn::cast_back(tys, w.code, w.val, t, h)), ok),
+        Inr(_) => λ no => absurd(no),
+    })(f)
+}
+
+// What a part read: a value of the part's code.
+record ReadAt(tys: Nat → Type, c: Shape, pt: Part(tys, c), v: El(tys, c), a: Dyn(tys)) { y0: El(tys, pt.t), got: pt.p.get(v) = Some(y0), is: a = Dyn(pt.t, y0) }
+
+theorem Dyn::read_at(tys: Nat → Type, {c: Shape}, pt: Part(tys, c), v: El(tys, c), a: Dyn(tys), h: Dyn::take_in(tys, pt, v) = Some(a)): ReadAt(tys, c, pt, v, a) {
+    (match pt.p.get(v) as λ o => pt.p.get(v) = o → o.map(λ y => Dyn(pt.t, y)) = Some(a) → ReadAt(tys, c, pt, v, a) {
+        Some(y) => λ e m => ReadAt(y, e, sym(Option::some_inj(Dyn(pt.t, y), a, m))),
+        None => λ _ no => absurd(no),
+    })(refl, h)
+}
+
+theorem Dyn::none_at(tys: Nat → Type, {c: Shape}, pt: Part(tys, c), v: El(tys, c), h: Dyn::take_in(tys, pt, v) = None): pt.p.get(v) = None {
+    (match pt.p.get(v) as λ o => pt.p.get(v) = o → o.map(λ y => Dyn(pt.t, y)) = None → pt.p.get(v) = None { Some(_) => λ _ no => absurd(no), None => λ e _ => e })(refl, h)
+}
+
+// The part's laws, where what is written meets the selection's condition.
+fn Dyn::PartLaws(tys: Nat → Type, sel: Sel, {c: Shape}, pt: Part(tys, c)) → Type { PathLawsOn<El(tys, c), El(tys, pt.t)>(pt.p, λ w0 => sel.ok(tys, pt.t, w0)) }
+
+theorem Dyn::in_set_get(tys: Nat → Type, sel: Sel, {c: Shape}, pt: Part(tys, c), pl: Dyn::PartLaws(tys, sel, pt), v: El(tys, c), a, w: Dyn(tys),
+    h: Dyn::take_in(tys, pt, v) = Some(a), f: Dyn::fits(tys, sel, a, w) = True): Dyn::take_in(tys, pt, Dyn::put_in(tys, pt, v, w)) = Some(w)
+{
+    let r = Dyn::read_at(tys, pt, v, a, h);
+    let fa = Dyn::fit_at(tys, sel, pt.t, r.y0, w, j(r.is, λ x _ => Dyn::fits(tys, sel, x, w) = True, f));
+    let back: (Dyn::take_in(tys, pt, Dyn::put_in(tys, pt, v, Dyn(pt.t, fa.w0))) = Some(Dyn(pt.t, fa.w0))) =
+        trans(cong_fn(λ (u: El(tys, c)) => Dyn::take_in(tys, pt, u), Dyn::put_in_at(tys, pt, v, fa.w0)),
+            cong_fn(λ (o: Option<El(tys, pt.t)>) => o.map(λ y => Dyn(pt.t, y)), pl.set_get(v, r.y0, fa.w0, r.got, fa.ok)));
+    j(sym(fa.is), λ x _ => Dyn::take_in(tys, pt, Dyn::put_in(tys, pt, v, x)) = Some(x), back)
+}
+
+theorem Dyn::in_get_set(tys: Nat → Type, sel: Sel, {c: Shape}, pt: Part(tys, c), pl: Dyn::PartLaws(tys, sel, pt), v: El(tys, c), a: Dyn(tys),
+    h: Dyn::take_in(tys, pt, v) = Some(a)): Dyn::put_in(tys, pt, v, a) = v
+{
+    let r = Dyn::read_at(tys, pt, v, a, h);
+    j(sym(r.is), λ x _ => Dyn::put_in(tys, pt, v, x) = v, trans(Dyn::put_in_at(tys, pt, v, r.y0), pl.get_set(v, r.y0, r.got)))
+}
+
+theorem Dyn::in_set_set(tys: Nat → Type, sel: Sel, {c: Shape}, pt: Part(tys, c), pl: Dyn::PartLaws(tys, sel, pt), v: El(tys, c), a, w1, w2: Dyn(tys),
+    h: Dyn::take_in(tys, pt, v) = Some(a), f1: Dyn::fits(tys, sel, a, w1) = True, f2: Dyn::fits(tys, sel, a, w2) = True):
+    Dyn::put_in(tys, pt, Dyn::put_in(tys, pt, v, w1), w2) = Dyn::put_in(tys, pt, v, w2)
+{
+    let r = Dyn::read_at(tys, pt, v, a, h);
+    let fa1 = Dyn::fit_at(tys, sel, pt.t, r.y0, w1, j(r.is, λ x _ => Dyn::fits(tys, sel, x, w1) = True, f1));
+    let fa2 = Dyn::fit_at(tys, sel, pt.t, r.y0, w2, j(r.is, λ x _ => Dyn::fits(tys, sel, x, w2) = True, f2));
+    let at: (Dyn::put_in(tys, pt, Dyn::put_in(tys, pt, v, Dyn(pt.t, fa1.w0)), Dyn(pt.t, fa2.w0)) = Dyn::put_in(tys, pt, v, Dyn(pt.t, fa2.w0))) =
+        trans(Dyn::put_in_at(tys, pt, Dyn::put_in(tys, pt, v, Dyn(pt.t, fa1.w0)), fa2.w0),
+            trans(cong_fn(λ (u: El(tys, c)) => pt.p.set(u, fa2.w0), Dyn::put_in_at(tys, pt, v, fa1.w0)),
+                trans(pl.set_set(v, fa1.w0, fa2.w0, fa1.ok, fa2.ok), sym(Dyn::put_in_at(tys, pt, v, fa2.w0)))));
+    j(sym(fa2.is), λ x2 _ => Dyn::put_in(tys, pt, Dyn::put_in(tys, pt, v, w1), x2) = Dyn::put_in(tys, pt, v, x2),
+        j(sym(fa1.is), λ x1 _ => Dyn::put_in(tys, pt, Dyn::put_in(tys, pt, v, x1), Dyn(pt.t, fa2.w0)) = Dyn::put_in(tys, pt, v, Dyn(pt.t, fa2.w0)), at))
+}
+
+theorem Dyn::in_set_none(tys: Nat → Type, sel: Sel, {c: Shape}, pt: Part(tys, c), pl: Dyn::PartLaws(tys, sel, pt), v: El(tys, c), w: Dyn(tys),
+    h: Dyn::take_in(tys, pt, v) = None): Dyn::put_in(tys, pt, v, w) = v
+{
+    let none: (pt.p.get(v) = None) = Dyn::none_at(tys, pt, v, h);
+    (match Shape::dec(w.code, pt.t) as λ r => (match r { Inl(h2) => pt.p.set(v, Shape::cast(tys, h2, w.val)), Inr(_) => v }) = v {
+        Inl(h2) => pl.set_none(v, Shape::cast(tys, h2, w.val), none),
+        Inr(_) => refl,
+    })
+}
+
+theorem Dyn::in_reads_fit(tys: Nat → Type, sel: Sel, {c: Shape}, pt: Part(tys, c), pl: Dyn::PartLaws(tys, sel, pt), v: El(tys, c), a: Dyn(tys),
+    h: Dyn::take_in(tys, pt, v) = Some(a)): Dyn::fits(tys, sel, a, a) = True
+{
+    let r = Dyn::read_at(tys, pt, v, a, h);
+    let at: (Dyn::fits(tys, sel, Dyn(pt.t, r.y0), Dyn(pt.t, r.y0)) = True) =
+        j(sym(Shape::dec_self(pt.t)), λ o _ => (match o { Inl(h2) => sel.ok(tys, pt.t, Shape::cast(tys, h2, r.y0)), Inr(_) => False }) = True, pl.reads_fit(v, r.y0, r.got));
+    j(sym(r.is), λ x _ => Dyn::fits(tys, sel, x, x) = True, at)
+}
+
+// Where the step has no part at the owner's code, it reads nothing and
+// writes nothing.
+fn Dyn::OptLaws(tys: Nat → Type, sel: Sel, {c: Shape}, o: Option<Part(tys, c)>) → Type { match o { Some(pt) => Dyn::PartLaws(tys, sel, pt), None => True } }
+
+theorem Dyn::opt_set_get(tys: Nat → Type, sel: Sel, {c: Shape}, o: Option<Part(tys, c)>, ol: Dyn::OptLaws(tys, sel, o), v: El(tys, c), a, w: Dyn(tys),
+    h: Dyn::take(tys, o, v) = Some(a), f: Dyn::fits(tys, sel, a, w) = True): Dyn::take(tys, o, Dyn::put(tys, o, v, w)) = Some(w)
+{
+    (match o as λ o2 => Dyn::OptLaws(tys, sel, o2) → Dyn::take(tys, o2, v) = Some(a) → Dyn::take(tys, o2, Dyn::put(tys, o2, v, w)) = Some(w) {
+        Some(pt) => λ pl h2 => Dyn::in_set_get(tys, sel, pt, pl, v, a, w, h2, f),
+        None => λ _ no => absurd(no),
+    })(ol, h)
+}
+
+theorem Dyn::opt_get_set(tys: Nat → Type, sel: Sel, {c: Shape}, o: Option<Part(tys, c)>, ol: Dyn::OptLaws(tys, sel, o), v: El(tys, c), a: Dyn(tys),
+    h: Dyn::take(tys, o, v) = Some(a)): Dyn::put(tys, o, v, a) = v
+{
+    (match o as λ o2 => Dyn::OptLaws(tys, sel, o2) → Dyn::take(tys, o2, v) = Some(a) → Dyn::put(tys, o2, v, a) = v {
+        Some(pt) => λ pl h2 => Dyn::in_get_set(tys, sel, pt, pl, v, a, h2),
+        None => λ _ no => absurd(no),
+    })(ol, h)
+}
+
+theorem Dyn::opt_set_set(tys: Nat → Type, sel: Sel, {c: Shape}, o: Option<Part(tys, c)>, ol: Dyn::OptLaws(tys, sel, o), v: El(tys, c), a, w1, w2: Dyn(tys),
+    h: Dyn::take(tys, o, v) = Some(a), f1: Dyn::fits(tys, sel, a, w1) = True, f2: Dyn::fits(tys, sel, a, w2) = True):
+    Dyn::put(tys, o, Dyn::put(tys, o, v, w1), w2) = Dyn::put(tys, o, v, w2)
+{
+    (match o as λ o2 => Dyn::OptLaws(tys, sel, o2) → Dyn::take(tys, o2, v) = Some(a) → Dyn::put(tys, o2, Dyn::put(tys, o2, v, w1), w2) = Dyn::put(tys, o2, v, w2) {
+        Some(pt) => λ pl h2 => Dyn::in_set_set(tys, sel, pt, pl, v, a, w1, w2, h2, f1, f2),
+        None => λ _ _ => refl,
+    })(ol, h)
+}
+
+theorem Dyn::opt_set_none(tys: Nat → Type, sel: Sel, {c: Shape}, o: Option<Part(tys, c)>, ol: Dyn::OptLaws(tys, sel, o), v: El(tys, c), w: Dyn(tys),
+    h: Dyn::take(tys, o, v) = None): Dyn::put(tys, o, v, w) = v
+{
+    (match o as λ o2 => Dyn::OptLaws(tys, sel, o2) → Dyn::take(tys, o2, v) = None → Dyn::put(tys, o2, v, w) = v {
+        Some(pt) => λ pl h2 => Dyn::in_set_none(tys, sel, pt, pl, v, w, h2),
+        None => λ _ _ => refl,
+    })(ol, h)
+}
+
+theorem Dyn::opt_reads_fit(tys: Nat → Type, sel: Sel, {c: Shape}, o: Option<Part(tys, c)>, ol: Dyn::OptLaws(tys, sel, o), v: El(tys, c), a: Dyn(tys),
+    h: Dyn::take(tys, o, v) = Some(a)): Dyn::fits(tys, sel, a, a) = True
+{
+    (match o as λ o2 => Dyn::OptLaws(tys, sel, o2) → Dyn::take(tys, o2, v) = Some(a) → Dyn::fits(tys, sel, a, a) = True {
+        Some(pt) => λ pl h2 => Dyn::in_reads_fit(tys, sel, pt, pl, v, a, h2),
+        None => λ _ no => absurd(no),
+    })(ol, h)
+}
+
+// A step's laws at every owner, from its part's laws at every code.
+theorem Dyn::path_laws(tys: Nat → Type, strs: Strs(tys), sel: Sel, ol: (c: Shape) → Dyn::OptLaws(tys, sel, Dyn::part(tys, strs, sel, c))):
+    PathLawsRel<Dyn(tys), Dyn(tys)>(Dyn::path(tys, strs, sel), λ a w => Dyn::fits(tys, sel, a, w))
+{
+    PathLawsRel(
+        λ s a w h f => Dyn::opt_set_get(tys, sel, Dyn::part(tys, strs, sel, s.code), ol(s.code), s.val, a, w, h, f),
+        λ s a h => cong_fn(λ (u: El(tys, s.code)) => Dyn(s.code, u), Dyn::opt_get_set(tys, sel, Dyn::part(tys, strs, sel, s.code), ol(s.code), s.val, a, h)),
+        λ s a w1 w2 h f1 f2 => cong_fn(λ (u: El(tys, s.code)) => Dyn(s.code, u), Dyn::opt_set_set(tys, sel, Dyn::part(tys, strs, sel, s.code), ol(s.code), s.val, a, w1, w2, h, f1, f2)),
+        λ s w h => cong_fn(λ (u: El(tys, s.code)) => Dyn(s.code, u), Dyn::opt_set_none(tys, sel, Dyn::part(tys, strs, sel, s.code), ol(s.code), s.val, w, h)),
+        λ s a h => Dyn::opt_reads_fit(tys, sel, Dyn::part(tys, strs, sel, s.code), ol(s.code), s.val, a, h),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// The dictionaries' laws: the window's list step, and the structures'
+
+theorem Dyn::vec_list_fits<A>(n: Nat, pad: A, v: [A; n], r: List<A>, f: r.len().same(n) = True): Dyn::vec_list<A>(n, pad).set(v, r) = r.vector_of(n, pad) {
+    j(sym(f), λ b _ => (match b { True => r.vector_of(n, pad), False => v }) = r.vector_of(n, pad), refl)
+}
+
+theorem Dyn::entries_fit<A>(n: Nat, v: [A; n]): vector_entries(v).len().same(n) = True {
+    trans(cong_fn(λ (k: Nat) => k.same(n), vector_entries_len(n, v)), n.same_self())
+}
+
+theorem Dyn::vec_list_laws<A>(n: Nat, pad: A): PathLawsOn<[A; n], List<A>>(Dyn::vec_list<A>(n, pad), λ r => r.len().same(n)) {
+    PathLawsOn(
+        λ v a r h f => trans(cong_fn(λ (u: [A; n]) => Some(vector_entries(u)), Dyn::vec_list_fits(n, pad, v, r, f)),
+            cong_fn(λ (ys: List<A>) => Some(ys), List::entries_vector_of(n, pad, r, r.len().same_sound(n, f)))),
+        λ v a h => j(Option::some_inj(vector_entries(v), a, h), λ x _ => Dyn::vec_list<A>(n, pad).set(v, x) = v,
+            trans(Dyn::vec_list_fits(n, pad, v, vector_entries(v), Dyn::entries_fit(n, v)), vector_of_entries_exact(n, pad, v))),
+        λ v r1 r2 f1 f2 => trans(Dyn::vec_list_fits(n, pad, Dyn::vec_list<A>(n, pad).set(v, r1), r2, f2), sym(Dyn::vec_list_fits(n, pad, v, r2, f2))),
+        λ v r no => absurd(no),
+        λ v a h => j(Option::some_inj(vector_entries(v), a, h), λ x _ => x.len().same(n) = True, Dyn::entries_fit(n, v)),
+    )
+}
+
+// A record's fields are lawful paths, pairwise apart: what a derived
+// instance proves once per record.
+record FieldsLaws(tys: Nat → Type, T: Type, fs: List<Field(tys, T)>) {
+    lawful: (i: Nat) → (f: Field(tys, T)) → fs.nth(i) = Some(f) → PathLaws<T, El(tys, f.shape)>(f.path),
+    apart: (i, k: Nat) → (f, g: Field(tys, T)) → fs.nth(i) = Some(f) → fs.nth(k) = Some(g) → ¬(i = k) → Apart<T, El(tys, f.shape), El(tys, g.shape)>(f.path, g.path),
+}
+
+fn StructLaws(tys: Nat → Type, {T: Type}, st: Struct(tys, T)) → Type { match st { Opaque(_) => True, Fields(_, fs) => FieldsLaws(tys, T, fs) } }
+
+fn StrsLaws(tys: Nat → Type, strs: Strs(tys)) → Type { (k: Nat) → StructLaws(tys, strs(k)) }
+
+theorem Dyn::seq_part_laws(tys: Nat → Type, strs: Strs(tys), x: Shape, q: SeqSel): Dyn::PartLaws(tys, OnSeq(q), Dyn::seq_part(tys, strs, x, q)) {
+    match q {
+        SeqOne(i) => Path::elem_laws<El(tys, x)>(i).on(),
+        SeqRun(lo, n) => Path::window<El(tys, x)>(lo, n).then_laws_on(Dyn::vec_list<El(tys, x)>(n, Dyn::dflt(tys, strs, x)), λ r => r.len().same(n),
+            Path::window_laws<El(tys, x)>(lo, n), Dyn::vec_list_laws<El(tys, x)>(n, Dyn::dflt(tys, strs, x))),
+    }
+}
+
+theorem Dyn::field_part_laws(tys: Nat → Type, k: Nat, i: Nat): (st: Struct(tys, tys(k))) → StructLaws(tys, st) → Dyn::OptLaws(tys, OnField(i), Dyn::field_part(tys, k, st, i)) {
+    λ st => match st {
+        Opaque(_) => λ _ => trivial,
+        Fields(_, fs) => λ fl => (match fs.nth(i) as λ o => fs.nth(i) = o →
+                Dyn::OptLaws(tys, OnField(i), match o { Some(f) => Some(Part(f.shape, f.path)), None => None<Part(tys, SNamed(k))>() }) {
+            Some(f) => λ e => fl.lawful(i, f, e).on(),
+            None => λ _ => trivial,
+        })(refl),
+    }
+}
+
+theorem Dyn::part_laws(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), sel: Sel): (c: Shape) → Dyn::OptLaws(tys, sel, Dyn::part(tys, strs, sel, c)) {
+    λ c => match c {
+        SWord => trivial,
+        SSeq(x) => match sel { OnSeq(q) => Dyn::seq_part_laws(tys, strs, x, q), OnField(_) => trivial, OnKey(_) => trivial, OnVariant(_) => trivial },
+        SNamed(k) => match sel { OnField(i) => Dyn::field_part_laws(tys, k, i, strs(k), sl(k)), OnSeq(_) => trivial, OnKey(_) => trivial, OnVariant(_) => trivial },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Every write keeps the owner's code (by construction) and a list's
+// length, so it keeps every fit against anything
+
+theorem Dyn::seq_part_in(tys: Nat → Type, strs: Strs(tys), x: Shape, q: SeqSel):
+    PathIn<El(tys, x), El(tys, Dyn::seq_part(tys, strs, x, q).t)>(Dyn::seq_part(tys, strs, x, q).p, q.span())
+{
+    match q { SeqOne(i) => Path::elem_in<El(tys, x)>(i), SeqRun(lo, n) => Path::window_in<El(tys, x)>(lo, n).then(Dyn::vec_list<El(tys, x)>(n, Dyn::dflt(tys, strs, x))) }
+}
+
+theorem Dyn::size_cast(tys: Nat → Type, c: Shape, w: El(tys, c)): (t: Shape) → (h: c = t) → Dyn::size(tys, Dyn(t, Shape::cast(tys, h, w))) = Dyn::size(tys, Dyn(c, w)) {
+    λ t h => j(h, λ t2 h2 => Dyn::size(tys, Dyn(t2, Shape::cast(tys, h2, w))) = Dyn::size(tys, Dyn(c, w)), refl)
+}
+
+theorem Dyn::seq_put_len(tys: Nat → Type, strs: Strs(tys), x: Shape, q: SeqSel, w: List<El(tys, x)>, v: Dyn(tys)):
+    List::len(Dyn::put_in(tys, Dyn::seq_part(tys, strs, x, q), w, v)) = List::len(w)
+{
+    (match Shape::dec(v.code, Dyn::seq_part(tys, strs, x, q).t) as λ r =>
+            List::len(match r { Inl(h) => Dyn::seq_part(tys, strs, x, q).p.set(w, Shape::cast(tys, h, v.val)), Inr(_) => w }) = List::len(w) {
+        Inl(h) => Dyn::seq_part_in(tys, strs, x, q).shape(w, Shape::cast(tys, h, v.val)),
+        Inr(_) => refl,
+    })
+}
+
+theorem Dyn::put_size(tys: Nat → Type, strs: Strs(tys), b: Sel, c: Shape, w: El(tys, c), v: Dyn(tys)):
+    Dyn::size(tys, Dyn(c, Dyn::put(tys, Dyn::part(tys, strs, b, c), w, v))) = Dyn::size(tys, Dyn(c, w))
+{
+    (match c as λ c2 => (w2: El(tys, c2)) → Dyn::size(tys, Dyn(c2, Dyn::put(tys, Dyn::part(tys, strs, b, c2), w2, v))) = Dyn::size(tys, Dyn(c2, w2)) {
+        SWord => λ _ => refl,
+        SSeq(x) => λ w2 => match b { OnSeq(q) => Dyn::seq_put_len(tys, strs, x, q, w2, v), OnField(_) => refl, OnKey(_) => refl, OnVariant(_) => refl },
+        SNamed(_) => λ _ => refl,
+    })(w)
+}
+
+theorem Sel::ok_size(self a: Sel, tys: Nat → Type, t: Shape, w1, w2: El(tys, t), same: Dyn::size(tys, Dyn(t, w1)) = Dyn::size(tys, Dyn(t, w2))): a.ok(tys, t, w1) = a.ok(tys, t, w2) {
+    match a {
+        OnSeq(q) => match q { SeqRun(_, n) => cong_fn(λ (k: Nat) => k.same(n), same), SeqOne(_) => refl },
+        OnField(_) => refl,
+        OnKey(_) => refl,
+        OnVariant(_) => refl,
+    }
+}
+
+theorem Dyn::keeps(tys: Nat → Type, strs: Strs(tys), a, b: Sel): Path::KeepsFitRel(Dyn::path(tys, strs, b), λ x w => Dyn::fits(tys, a, x, w)) {
+    λ x s f v => (match Shape::dec(s.code, x.code) as λ r =>
+            (match r { Inl(h) => a.ok(tys, x.code, Shape::cast(tys, h, s.val)), Inr(_) => False }) = True →
+            (match r { Inl(h) => a.ok(tys, x.code, Shape::cast(tys, h, Dyn::put(tys, Dyn::part(tys, strs, b, s.code), s.val, v))), Inr(_) => False }) = True {
+        Inl(h) => λ ok => trans(a.ok_size(tys, x.code, Shape::cast(tys, h, Dyn::put(tys, Dyn::part(tys, strs, b, s.code), s.val, v)), Shape::cast(tys, h, s.val),
+                trans(Dyn::size_cast(tys, s.code, Dyn::put(tys, Dyn::part(tys, strs, b, s.code), s.val, v), x.code, h),
+                    trans(Dyn::put_size(tys, strs, b, s.code, s.val, v), sym(Dyn::size_cast(tys, s.code, s.val, x.code, h))))), ok),
+        Inr(_) => λ no => absurd(no),
+    })(f)
+}
+
+// ---------------------------------------------------------------------------
+// Two selections apart are apart at `Dyn`: by the parts' spans, or by the
+// fields' apartness the structure states; a part absent at the owner's
+// code reads and writes nothing
+
+fn Dyn::OptApart(tys: Nat → Type, {c: Shape}, o1, o2: Option<Part(tys, c)>) → Type {
+    match o1 { Some(p1) => match o2 { Some(p2) => Apart<El(tys, c), El(tys, p1.t), El(tys, p2.t)>(p1.p, p2.p), None => True }, None => True }
+}
+
+theorem Dyn::opt_apart_symm(tys: Nat → Type, {c: Shape}, o1, o2: Option<Part(tys, c)>, ap: Dyn::OptApart(tys, o1, o2)): Dyn::OptApart(tys, o2, o1) {
+    (match o1 as λ x1 => Dyn::OptApart(tys, x1, o2) → Dyn::OptApart(tys, o2, x1) {
+        None => λ _ => match o2 { Some(_) => trivial, None => trivial },
+        Some(p1) => λ a1 => (match o2 as λ x2 => Dyn::OptApart(tys, Some(p1), x2) → Dyn::OptApart(tys, x2, Some(p1)) {
+            None => λ _ => trivial,
+            Some(_) => λ a2 => Apart::symm(a2),
+        })(a1),
+    })(ap)
+}
+
+theorem Dyn::in_after(tys: Nat → Type, {c: Shape}, p1, p2: Part(tys, c), ap: Apart<El(tys, c), El(tys, p1.t), El(tys, p2.t)>(p1.p, p2.p), v: El(tys, c), w: Dyn(tys)):
+    Dyn::take_in(tys, p1, Dyn::put_in(tys, p2, v, w)) = Dyn::take_in(tys, p1, v)
+{
+    (match Shape::dec(w.code, p2.t) as λ r => Dyn::take_in(tys, p1, match r { Inl(h) => p2.p.set(v, Shape::cast(tys, h, w.val)), Inr(_) => v }) = Dyn::take_in(tys, p1, v) {
+        Inl(h) => cong_fn(λ (o: Option<El(tys, p1.t)>) => o.map(λ y => Dyn(p1.t, y)), ap.left_after_right(v, Shape::cast(tys, h, w.val))),
+        Inr(_) => refl,
+    })
+}
+
+theorem Dyn::opt_after(tys: Nat → Type, {c: Shape}, o1, o2: Option<Part(tys, c)>, ap: Dyn::OptApart(tys, o1, o2), v: El(tys, c), w: Dyn(tys)):
+    Dyn::take(tys, o1, Dyn::put(tys, o2, v, w)) = Dyn::take(tys, o1, v)
+{
+    (match o1 as λ x1 => Dyn::OptApart(tys, x1, o2) → Dyn::take(tys, x1, Dyn::put(tys, o2, v, w)) = Dyn::take(tys, x1, v) {
+        None => λ _ => refl,
+        Some(p1) => λ a1 => (match o2 as λ x2 => Dyn::OptApart(tys, Some(p1), x2) → Dyn::take_in(tys, p1, Dyn::put(tys, x2, v, w)) = Dyn::take_in(tys, p1, v) {
+            None => λ _ => refl,
+            Some(p2) => λ a2 => Dyn::in_after(tys, p1, p2, a2, v, w),
+        })(a1),
+    })(ap)
+}
+
+theorem Dyn::in_commute(tys: Nat → Type, {c: Shape}, p1, p2: Part(tys, c), ap: Apart<El(tys, c), El(tys, p1.t), El(tys, p2.t)>(p1.p, p2.p), v: El(tys, c), w1, w2: Dyn(tys)):
+    Dyn::put_in(tys, p1, Dyn::put_in(tys, p2, v, w2), w1) = Dyn::put_in(tys, p2, Dyn::put_in(tys, p1, v, w1), w2)
+{
+    (match Shape::dec(w1.code, p1.t) as λ r1 =>
+            (match r1 { Inl(h1) => p1.p.set(Dyn::put_in(tys, p2, v, w2), Shape::cast(tys, h1, w1.val)), Inr(_) => Dyn::put_in(tys, p2, v, w2) }) =
+            Dyn::put_in(tys, p2, match r1 { Inl(h1) => p1.p.set(v, Shape::cast(tys, h1, w1.val)), Inr(_) => v }, w2) {
+        Inl(h1) => (match Shape::dec(w2.code, p2.t) as λ r2 =>
+                p1.p.set(match r2 { Inl(h2) => p2.p.set(v, Shape::cast(tys, h2, w2.val)), Inr(_) => v }, Shape::cast(tys, h1, w1.val)) =
+                (match r2 { Inl(h2) => p2.p.set(p1.p.set(v, Shape::cast(tys, h1, w1.val)), Shape::cast(tys, h2, w2.val)), Inr(_) => p1.p.set(v, Shape::cast(tys, h1, w1.val)) }) {
+            Inl(h2) => ap.writes_commute(v, Shape::cast(tys, h1, w1.val), Shape::cast(tys, h2, w2.val)),
+            Inr(_) => refl,
+        }),
+        Inr(_) => refl,
+    })
+}
+
+theorem Dyn::opt_commute(tys: Nat → Type, {c: Shape}, o1, o2: Option<Part(tys, c)>, ap: Dyn::OptApart(tys, o1, o2), v: El(tys, c), w1, w2: Dyn(tys)):
+    Dyn::put(tys, o1, Dyn::put(tys, o2, v, w2), w1) = Dyn::put(tys, o2, Dyn::put(tys, o1, v, w1), w2)
+{
+    (match o1 as λ x1 => Dyn::OptApart(tys, x1, o2) → Dyn::put(tys, x1, Dyn::put(tys, o2, v, w2), w1) = Dyn::put(tys, o2, Dyn::put(tys, x1, v, w1), w2) {
+        None => λ _ => refl,
+        Some(p1) => λ a1 => (match o2 as λ x2 => Dyn::OptApart(tys, Some(p1), x2) →
+                Dyn::put_in(tys, p1, Dyn::put(tys, x2, v, w2), w1) = Dyn::put(tys, x2, Dyn::put_in(tys, p1, v, w1), w2) {
+            None => λ _ => refl,
+            Some(p2) => λ a2 => Dyn::in_commute(tys, p1, p2, a2, v, w1, w2),
+        })(a1),
+    })(ap)
+}
+
+theorem Dyn::path_apart(tys: Nat → Type, strs: Strs(tys), a, b: Sel, oa: (c: Shape) → Dyn::OptApart(tys, Dyn::part(tys, strs, a, c), Dyn::part(tys, strs, b, c))):
+    Apart<Dyn(tys), Dyn(tys), Dyn(tys)>(Dyn::path(tys, strs, a), Dyn::path(tys, strs, b))
+{
+    Apart(
+        λ s w => Dyn::opt_after(tys, Dyn::part(tys, strs, a, s.code), Dyn::part(tys, strs, b, s.code), oa(s.code), s.val, w),
+        λ s w => Dyn::opt_after(tys, Dyn::part(tys, strs, b, s.code), Dyn::part(tys, strs, a, s.code),
+            Dyn::opt_apart_symm(tys, Dyn::part(tys, strs, a, s.code), Dyn::part(tys, strs, b, s.code), oa(s.code)), s.val, w),
+        λ s w1 w2 => cong_fn(λ (u: El(tys, s.code)) => Dyn(s.code, u),
+            Dyn::opt_commute(tys, Dyn::part(tys, strs, a, s.code), Dyn::part(tys, strs, b, s.code), oa(s.code), s.val, w1, w2)),
+    )
+}
+
+theorem Dyn::opt_apart_none(tys: Nat → Type, {c: Shape}, o: Option<Part(tys, c)>): Dyn::OptApart(tys, o, None) { match o { Some(_) => trivial, None => trivial } }
+
+theorem Dyn::span_ne(i, l: Nat, v: Span(i, 1).apart(Span(l, 1)).IsTrue()): ¬(i = l) { λ e => omega(v, e) }
+
+theorem Dyn::fields_apart(tys: Nat → Type, k, i, l: Nat, ne: ¬(i = l)): (st: Struct(tys, tys(k))) → StructLaws(tys, st) →
+    Dyn::OptApart(tys, Dyn::field_part(tys, k, st, i), Dyn::field_part(tys, k, st, l))
+{
+    λ st => match st {
+        Opaque(_) => λ _ => trivial,
+        Fields(_, fs) => λ fl => (match fs.nth(i) as λ o1 => fs.nth(i) = o1 →
+                Dyn::OptApart(tys, match o1 { Some(f) => Some(Part(f.shape, f.path)), None => None<Part(tys, SNamed(k))>() },
+                    match fs.nth(l) { Some(g) => Some(Part(g.shape, g.path)), None => None<Part(tys, SNamed(k))>() }) {
+            None => λ _ => trivial,
+            Some(f) => λ ei => (match fs.nth(l) as λ o2 => fs.nth(l) = o2 →
+                    Dyn::OptApart(tys, Some(Part(f.shape, f.path)), match o2 { Some(g) => Some(Part(g.shape, g.path)), None => None<Part(tys, SNamed(k))>() }) {
+                None => λ _ => trivial,
+                Some(g) => λ el => fl.apart(i, l, f, g, ei, el, ne),
+            })(refl),
+        })(refl),
+    }
+}
+
+theorem Dyn::parts_apart(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), a, b: Sel, v: a.apart(b).IsTrue()):
+    (c: Shape) → Dyn::OptApart(tys, Dyn::part(tys, strs, a, c), Dyn::part(tys, strs, b, c))
+{
+    λ c => match c {
+        SWord => trivial,
+        SSeq(x) => (match a as λ a2 => a2.apart(b).IsTrue() → Dyn::OptApart(tys, Dyn::part(tys, strs, a2, SSeq(x)), Dyn::part(tys, strs, b, SSeq(x))) {
+            OnSeq(qa) => λ va => (match b as λ b2 => OnSeq(qa).apart(b2).IsTrue() → Dyn::OptApart(tys, Some(Dyn::seq_part(tys, strs, x, qa)), Dyn::part(tys, strs, b2, SSeq(x))) {
+                OnSeq(qb) => λ v2 => PathIn::apart_sound(Dyn::seq_part_in(tys, strs, x, qa), Dyn::seq_part_in(tys, strs, x, qb), v2),
+                OnField(_) => λ _ => trivial,
+                OnKey(_) => λ _ => trivial,
+                OnVariant(_) => λ _ => trivial,
+            })(va),
+            OnField(_) => λ _ => trivial,
+            OnKey(_) => λ _ => trivial,
+            OnVariant(_) => λ _ => trivial,
+        })(v),
+        SNamed(k) => (match a as λ a2 => a2.apart(b).IsTrue() → Dyn::OptApart(tys, Dyn::part(tys, strs, a2, SNamed(k)), Dyn::part(tys, strs, b, SNamed(k))) {
+            OnField(i) => λ va => (match b as λ b2 => OnField(i).apart(b2).IsTrue() →
+                    Dyn::OptApart(tys, Dyn::field_part(tys, k, strs(k), i), Dyn::part(tys, strs, b2, SNamed(k))) {
+                OnField(l) => λ v2 => Dyn::fields_apart(tys, k, i, l, Dyn::span_ne(i, l, v2), strs(k), sl(k)),
+                OnSeq(_) => λ _ => Dyn::opt_apart_none(tys, Dyn::field_part(tys, k, strs(k), i)),
+                OnKey(_) => λ _ => Dyn::opt_apart_none(tys, Dyn::field_part(tys, k, strs(k), i)),
+                OnVariant(_) => λ _ => Dyn::opt_apart_none(tys, Dyn::field_part(tys, k, strs(k), i)),
+            })(va),
+            OnSeq(_) => λ _ => trivial,
+            OnKey(_) => λ _ => trivial,
+            OnVariant(_) => λ _ => trivial,
+        })(v),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The model, lawful relative to the read, from the structures' laws alone
+
+fn Dyn::model_rel(tys: Nat → Type, strs: Strs(tys)) → StepModelRel<Dyn(tys)> {
+    StepModelRel<Dyn(tys)>(λ sel => Dyn::path(tys, strs, sel), λ sel a w => Dyn::fits(tys, sel, a, w))
+}
+
+theorem Dyn::model_laws_rel(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs)): StepModelLawsRel<Dyn(tys)>(Dyn::model_rel(tys, strs)) {
+    StepModelLawsRel(
+        λ a => Dyn::path_laws(tys, strs, a, Dyn::part_laws(tys, strs, sl, a)),
+        λ a b => Dyn::keeps(tys, strs, a, b),
+        λ a b v => Dyn::path_apart(tys, strs, a, b, Dyn::parts_apart(tys, strs, sl, a, b, v)),
+    )
+}
+
+// The decider's verdict, its obligations holding, gives two places of a
+// `Dyn` apart.
+theorem Dyn::apart(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, strs), ws: List<Nat>, xs, ys: List<Step>, rs: List<Obligation>,
+    ok: Steps::apart(xs, ys) = Some(rs), hold: Obligation::All(rs, ws)):
+    Apart<Dyn(tys), Dyn(tys), Dyn(tys)>(Steps::denote(Dyn::model_rel(tys, strs).steps(), ws, xs), Steps::denote(Dyn::model_rel(tys, strs).steps(), ws, ys))
+{
+    Steps::apart_sound_rel(Dyn::model_rel(tys, strs), Dyn::model_laws_rel(tys, strs, sl), ws, xs, ys, rs, ok, hold)
 }

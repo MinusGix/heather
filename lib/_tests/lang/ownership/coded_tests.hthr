@@ -13,6 +13,7 @@ import list_path;
 import atom;
 import steps;
 import value_steps;
+import omega;
 import coded;
 
 // ---------------------------------------------------------------------------
@@ -218,4 +219,82 @@ theorem get_x_val_pin(ps: List<Point>, i: Nat): val_word(Val::place([i], [SElem(
 // own), where the coded meaning's pin is `refl`.
 theorem get_x_val(ps: List<Point>): (i: Nat) → val_word(Val::place([i], [SElem(Var(0)), SField(0)]).get(enc_pts(ps))) = get_x(ps, i) {
     match ps { Nil => λ i => refl, Cons(_, r) => λ i => match i { Zero => refl, Succ(k) => get_x_val(r, k) } }
+}
+
+// ---------------------------------------------------------------------------
+// The relative laws lose nothing: `Val`'s model, lawful as `steps.hthr`
+// states it, is lawful relative to the read, and the decider's soundness
+// over the relative laws applies to it.
+
+theorem val_model_laws_rel(): StepModelLawsRel<Val>(StepModelRel::of(Val::model())) { StepModelLawsRel::of_laws(Val::model(), Val::model_laws()) }
+
+theorem val_split_apart_rel(k, m: Nat):
+    Apart<Val, Val, Val>(Steps::denote(StepModelRel::of(Val::model()).steps(), [k, m], Val::split_left()), Steps::denote(StepModelRel::of(Val::model()).steps(), [k, m], Val::split_right()))
+{
+    let owed: Span(0, k).apart(Span(k, m)).IsTrue() = omega;
+    Steps::apart_sound_rel(StepModelRel::of(Val::model()), val_model_laws_rel(), [k, m], Val::split_left(), Val::split_right(), [Spans(Lit(0), Var(0), Var(0), Var(1))], Val::split_verdict(),
+        And(owed, trivial))
+}
+
+// ---------------------------------------------------------------------------
+// `Point`'s structure laws, by hand: what a derived instance proves. Its
+// two fields are lawful paths and apart; with them the `Dyn` model is
+// lawful relative to the read, and the decider's verdicts at a list of
+// points are `Apart` there.
+
+theorem Point::fx_laws(): PathLaws<Point, Nat>(Point::fx().path) {
+    PathLaws(λ s a v h => refl, λ s a h => j(Option::some_inj(s.x, a, h), λ b _ => Point(b, s.y) = s, refl), λ s v w => refl, λ s v no => absurd(no))
+}
+
+theorem Point::fy_laws(): PathLaws<Point, Nat>(Point::fy().path) {
+    PathLaws(λ s a v h => refl, λ s a h => j(Option::some_inj(s.y, a, h), λ b _ => Point(s.x, b) = s, refl), λ s v w => refl, λ s v no => absurd(no))
+}
+
+theorem Point::fx_fy_apart(): Apart<Point, Nat, Nat>(Point::fx().path, Point::fy().path) { Apart(λ s v => refl, λ s v => refl, λ s a b => refl) }
+
+theorem Point::fields_laws(): FieldsLaws(pt_tys(), Point, [Point::fx(), Point::fy()]) {
+    FieldsLaws(
+        λ i => match i {
+            Zero => λ f e => j(Option::some_inj(Point::fx(), f, e), λ g _ => PathLaws<Point, El(pt_tys(), g.shape)>(g.path), Point::fx_laws()),
+            Succ(i1) => match i1 {
+                Zero => λ f e => j(Option::some_inj(Point::fy(), f, e), λ g _ => PathLaws<Point, El(pt_tys(), g.shape)>(g.path), Point::fy_laws()),
+                Succ(_) => λ f no => absurd(no),
+            },
+        },
+        λ i l => match i {
+            Zero => match l {
+                Zero => λ f g _ _ ne => false_elim(ne(refl)),
+                Succ(l1) => match l1 {
+                    Zero => λ f g ei el _ => j(Option::some_inj(Point::fx(), f, ei), λ f2 _ => Apart<Point, El(pt_tys(), f2.shape), El(pt_tys(), g.shape)>(f2.path, g.path),
+                        j(Option::some_inj(Point::fy(), g, el), λ g2 _ => Apart<Point, Nat, El(pt_tys(), g2.shape)>(Point::fx().path, g2.path), Point::fx_fy_apart())),
+                    Succ(_) => λ f g _ no _ => absurd(no),
+                },
+            },
+            Succ(i1) => match i1 {
+                Zero => match l {
+                    Zero => λ f g ei el _ => j(Option::some_inj(Point::fy(), f, ei), λ f2 _ => Apart<Point, El(pt_tys(), f2.shape), El(pt_tys(), g.shape)>(f2.path, g.path),
+                        j(Option::some_inj(Point::fx(), g, el), λ g2 _ => Apart<Point, Nat, El(pt_tys(), g2.shape)>(Point::fy().path, g2.path), Apart::symm(Point::fx_fy_apart()))),
+                    Succ(l1) => match l1 { Zero => λ f g _ _ ne => false_elim(ne(refl)), Succ(_) => λ f g _ no _ => absurd(no) },
+                },
+                Succ(_) => λ f g no _ _ => absurd(no),
+            },
+        },
+    )
+}
+
+theorem pt_strs_laws(): StrsLaws(pt_tys(), pt_strs()) { λ k => match k { Zero => Point::fields_laws(), Succ(_) => trivial } }
+
+fn pt_place(ws: List<Nat>, xs: List<Step>) → Path<Dyn(pt_tys()), Dyn(pt_tys())> { Steps::denote(Dyn::model_rel(pt_tys(), pt_strs()).steps(), ws, xs) }
+
+// `ps[i].x` and `ps[i].y`: the decider walks the common element and finds
+// the fields apart, owing nothing.
+theorem xy_apart(i: Nat): Apart<Dyn(pt_tys()), Dyn(pt_tys()), Dyn(pt_tys())>(pt_place([i], [SElem(Var(0)), SField(0)]), pt_place([i], [SElem(Var(0)), SField(1)])) {
+    Dyn::apart(pt_tys(), pt_strs(), pt_strs_laws(), [i], [SElem(Var(0)), SField(0)], [SElem(Var(0)), SField(1)], Nil, refl, trivial)
+}
+
+// `ps[i].x` and `ps[l].x` for `i ≠ l`: owed, and the source's `i ≠ l`
+// discharges it.
+theorem elems_x_apart(i, l: Nat, ne: ¬(i = l)): Apart<Dyn(pt_tys()), Dyn(pt_tys()), Dyn(pt_tys())>(pt_place([i, l], [SElem(Var(0)), SField(0)]), pt_place([i, l], [SElem(Var(1)), SField(0)])) {
+    let owed: Span(i, 1).apart(Span(l, 1)).IsTrue() = omega(ne);
+    Dyn::apart(pt_tys(), pt_strs(), pt_strs_laws(), [i, l], [SElem(Var(0)), SField(0)], [SElem(Var(1)), SField(0)], [Spans(Var(0), Lit(1), Var(1), Lit(1))], refl, And(owed, trivial))
 }
