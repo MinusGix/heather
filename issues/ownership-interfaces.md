@@ -83,3 +83,4 @@ Items 1 to 6 have landed with `scripts/test --pr` green, or the package stopped 
   - **References and holes hold selections** (`List<Sel>`), so a view at a `u64` index into `Bytes` has a closed form; `Sel::same`, `Sel::read_at`/`write_at`, `Ref::narrow`.
   - **`SafeAt` spelled in full**: the written-parameter clause (`Value::Written`, under the `Ret` convention: results, then written parameters in signature order) and the returned-view clause (`Value::Views`).
   - **The pin's form**: every pin is `f.then(R, …, k) = source(…)` by `refl`, the early-return join included; `Body::mean_then` (by induction on the body, `convoy_map` once inside it) and `Func::then_denote` relate it to the answer.
+  - `scripts/test --pr` at a180fb78: `== suite: 3518 passed, 0 failed, 2 ignored ==` (3f3850bb after it is docs and issues only).
