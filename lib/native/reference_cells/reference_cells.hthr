@@ -1,0 +1,759 @@
+// References held in memory at the bytes level: a toy language whose memory
+// is blocks of bytes with a shadow beside them
+// (issues/ownership-reference-cells-spike.md; docs/language/ownership-design.md
+// §15.5, §15.7, §16). It is the third experiment of the ownership design, the
+// earliest test of package 5: whether a reference can stay a reference down
+// to the machine, the bytes left as they are and the references said beside
+// them.
+//
+// - A value is a word or a reference (`Loc`: a block and a byte offset).
+// - A heap is each block's bytes (`Heap::bytes`, what FunctionIR's
+//   `Buffers()` is, by number) and a shadow: which eight bytes of which
+//   block hold a reference, and to what (`Entry`). A heap of buffers has an
+//   empty shadow (`Heap::of`), and every operation on it is the bytes-only
+//   one (`Heap::of_*`).
+// - Five operations: a word stored into eight bytes and loaded from them, a
+//   reference stored into eight bytes and loaded from them, and a byte loaded
+//   through a reference. Each is partial where a reference would be seen as
+//   bytes or bytes as a reference: a word or byte load of a shadowed byte, a
+//   reference load where no reference is, and a store that cuts a reference
+//   (eight bytes overlapping an entry they do not coincide with) have no
+//   step. The bytes under an entry are whatever they were: the meaning never
+//   reads them while the entry is there.
+// - The meaning is unchanged by renaming blocks (`run_renames`): no
+//   operation observes which block a reference names beyond following it,
+//   so a word computed is the same under any renaming (`run_words_alike`).
+//   Nothing here has an address; where blocks lie is the lowering's
+//   (reference_cells_x86).
+import function_ir;
+import x86_64;
+import x86_64_store;
+import bitvec;
+import bool;
+import list;
+import list_window;
+import logic;
+import nat;
+import option;
+import omega;
+
+// ---------------------------------------------------------------------------
+// Values and the shadow
+
+record Loc { block: Nat, offset: Nat }
+
+inductive Value { Word(word: BitVec(64)), Ref(loc: Loc) }
+
+// The eight bytes of block `block` from byte `at` hold a reference to
+// `target`.
+record Entry { block: Nat, at: Nat, target: Loc }
+
+// Byte `j` of block `b` is one of the entry's.
+fn Entry::covers(self e: Entry, b, j: Nat) → Bool { e.block.same(b) && (e.at.leb(j) && (j + 1).leb(e.at + 8)) }
+
+// The eight bytes of block `b` from `k` share a byte with the entry's.
+fn Entry::overlaps(self e: Entry, b, k: Nat) → Bool { e.block.same(b) && ((e.at + 1).leb(k + 8) && (k + 1).leb(e.at + 8)) }
+
+// They share a byte and are not the entry's eight: a store there would
+// leave part of a reference.
+fn Entry::cuts(self e: Entry, b, k: Nat) → Bool { e.overlaps(b, k) && !e.at.same(k) }
+
+fn Entry::exactly(self e: Entry, b, k: Nat) → Bool { e.block.same(b) && e.at.same(k) }
+
+fn covered(shadow: List<Entry>, b, j: Nat) → Bool {
+    match shadow { Nil => False, Cons(e, rest) => e.covers(b, j) || covered(rest, b, j) }
+}
+
+fn touched(shadow: List<Entry>, b, k: Nat) → Bool {
+    match shadow { Nil => False, Cons(e, rest) => e.overlaps(b, k) || touched(rest, b, k) }
+}
+
+fn cut(shadow: List<Entry>, b, k: Nat) → Bool {
+    match shadow { Nil => False, Cons(e, rest) => e.cuts(b, k) || cut(rest, b, k) }
+}
+
+// The reference held at the eight bytes of block `b` from `k`.
+fn found(shadow: List<Entry>, b, k: Nat) → Option<Loc> {
+    match shadow {
+        Nil => None,
+        Cons(e, rest) => match e.exactly(b, k) { True => Some(e.target), False => found(rest, b, k) },
+    }
+}
+
+// The shadow without the entries a store of eight bytes at `k` overlaps.
+fn cleared(shadow: List<Entry>, b, k: Nat) → List<Entry> {
+    match shadow {
+        Nil => Nil,
+        Cons(e, rest) => match e.overlaps(b, k) { True => cleared(rest, b, k), False => Cons(e, cleared(rest, b, k)) },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The heap
+
+record Heap { bytes: Nat → List<BitVec(8)>, shadow: List<Entry> }
+
+// FunctionIR's buffers as a heap: no block holds a reference.
+fn Heap::of(buffers: Buffers()) → Heap { Heap(λ (b: Nat) => buffer_bytes(buffers, b), []) }
+
+fn set_block(bytes: Nat → List<BitVec(8)>, b: Nat, now: List<BitVec(8)>) → Nat → List<BitVec(8)> {
+    λ (c: Nat) => match c.same(b) { True => now, False => bytes(c) }
+}
+
+fn byte_at(bytes: List<BitVec(8)>, k: Nat) → BitVec(8) { match bytes.nth(k) { None => BitVec::zero(), Some(byte) => byte } }
+
+// The eight bytes from `k`, low first, as `MOV` reads them.
+fn word_at(bytes: List<BitVec(8)>, k: Nat) → BitVec(64) {
+    immediate_from_bytes(byte_at(bytes, k), byte_at(bytes, k + 1), byte_at(bytes, k + 2), byte_at(bytes, k + 3),
+        byte_at(bytes, k + 4), byte_at(bytes, k + 5), byte_at(bytes, k + 6), byte_at(bytes, k + 7))
+}
+
+// Eight bytes at `loc` lie in its block and cut no reference: they may be
+// stored.
+fn Heap::cell(self heap: Heap, loc: Loc) → Bool {
+    (loc.offset + 8).leb(heap.bytes(loc.block).len()) && !cut(heap.shadow, loc.block, loc.offset)
+}
+
+// Eight bytes at `loc` lie in its block and hold no part of a reference:
+// they may be read as a word.
+fn Heap::plain(self heap: Heap, loc: Loc) → Bool {
+    (loc.offset + 8).leb(heap.bytes(loc.block).len()) && !touched(heap.shadow, loc.block, loc.offset)
+}
+
+// The byte at `loc` lies in its block and is no part of a reference.
+fn Heap::readable(self heap: Heap, loc: Loc) → Bool {
+    (loc.offset + 1).leb(heap.bytes(loc.block).len()) && !covered(heap.shadow, loc.block, loc.offset)
+}
+
+fn Heap::store_word(self heap: Heap, loc: Loc, word: BitVec(64)) → Heap {
+    Heap(set_block(heap.bytes, loc.block, heap.bytes(loc.block).put_window(loc.offset, word_bytes(word))),
+        cleared(heap.shadow, loc.block, loc.offset))
+}
+
+// A reference stored: the bytes are left, the shadow says what is there.
+fn Heap::store_ref(self heap: Heap, loc, target: Loc) → Heap {
+    Heap(heap.bytes, Cons(Entry(loc.block, loc.offset, target), cleared(heap.shadow, loc.block, loc.offset)))
+}
+
+// ---------------------------------------------------------------------------
+// Programs
+
+record State { values: Nat → Value, heap: Heap }
+
+fn State::set(self s: State, x: Nat, value: Value) → State {
+    State(λ (y: Nat) => match y.same(x) { True => value, False => s.values(y) }, s.heap)
+}
+
+// `place` and `output` name values; `value` the one stored.
+inductive Op {
+    StoreWord(place: Nat, value: Nat),
+    StoreRef(place: Nat, value: Nat),
+    LoadWord(output: Nat, place: Nat),
+    LoadRef(output: Nat, place: Nat),
+    LoadByte(output: Nat, place: Nat),
+}
+
+fn store_word_at(s: State, place, value: Value) → Option<State> {
+    match place {
+        Word(_) => None,
+        Ref(loc) => match value {
+            Ref(_) => None,
+            Word(word) => match s.heap.cell(loc) { False => None, True => Some(State(s.values, s.heap.store_word(loc, word))) },
+        },
+    }
+}
+
+fn store_ref_at(s: State, place, value: Value) → Option<State> {
+    match place {
+        Word(_) => None,
+        Ref(loc) => match value {
+            Word(_) => None,
+            Ref(target) => match s.heap.cell(loc) { False => None, True => Some(State(s.values, s.heap.store_ref(loc, target))) },
+        },
+    }
+}
+
+fn load_word_at(s: State, output: Nat, place: Value) → Option<State> {
+    match place {
+        Word(_) => None,
+        Ref(loc) => match s.heap.plain(loc) {
+            False => None,
+            True => Some(s.set(output, Word(word_at(s.heap.bytes(loc.block), loc.offset)))),
+        },
+    }
+}
+
+fn load_ref_at(s: State, output: Nat, place: Value) → Option<State> {
+    match place {
+        Word(_) => None,
+        Ref(loc) => match found(s.heap.shadow, loc.block, loc.offset) { None => None, Some(target) => Some(s.set(output, Ref(target))) },
+    }
+}
+
+// The byte zero-extended, as `MOVZX` leaves it.
+fn load_byte_at(s: State, output: Nat, place: Value) → Option<State> {
+    match place {
+        Word(_) => None,
+        Ref(loc) => match s.heap.readable(loc) {
+            False => None,
+            True => Some(s.set(output, Word(byte_at(s.heap.bytes(loc.block), loc.offset).zero_extend(56)))),
+        },
+    }
+}
+
+fn Op::step(self op: Op, s: State) → Option<State> {
+    match op {
+        StoreWord(place, value) => store_word_at(s, s.values(place), s.values(value)),
+        StoreRef(place, value) => store_ref_at(s, s.values(place), s.values(value)),
+        LoadWord(output, place) => load_word_at(s, output, s.values(place)),
+        LoadRef(output, place) => load_ref_at(s, output, s.values(place)),
+        LoadByte(output, place) => load_byte_at(s, output, s.values(place)),
+    }
+}
+
+fn run(ops: List<Op>, s: State) → Option<State> {
+    match ops { Nil => Some(s), Cons(op, rest) => match op.step(s) { None => None, Some(after) => run(rest, after) } }
+}
+
+// ---------------------------------------------------------------------------
+// Small facts
+
+theorem Nat::same_false(self a: Nat, b: Nat, differs: a ≠ b): a.same(b) = False {
+    (match a.same(b) as λ v => a.same(b) = v → v = False {
+        True => λ same => false_elim(differs(a.same_sound(b, same))),
+        False => λ _ => refl,
+    })(refl)
+}
+
+theorem Nat::same_of_eq(self a: Nat, b: Nat, equal: a = b): a.same(b) = True {
+    j(equal, λ x _ => a.same(x) = True, a.same_self())
+}
+
+theorem set_block_here(bytes: Nat → List<BitVec(8)>, b: Nat, now: List<BitVec(8)>): set_block(bytes, b, now)(b) = now {
+    j(sym(b.same_self()), λ v _ => (match v { True => now, False => bytes(b) }) = now, refl)
+}
+
+theorem set_block_other(bytes: Nat → List<BitVec(8)>, b: Nat, now: List<BitVec(8)>, c: Nat, differs: c ≠ b):
+    set_block(bytes, b, now)(c) = bytes(c) {
+    j(sym(c.same_false(b, differs)), λ v _ => (match v { True => now, False => bytes(c) }) = bytes(c), refl)
+}
+
+theorem State::set_here(self s: State, x: Nat, value: Value): s.set(x, value).values(x) = value {
+    j(sym(x.same_self()), λ v _ => (match v { True => value, False => s.values(x) }) = value, refl)
+}
+
+theorem State::set_other(self s: State, x: Nat, value: Value, y: Nat, differs: y ≠ x): s.set(x, value).values(y) = s.values(y) {
+    j(sym(y.same_false(x, differs)), λ v _ => (match v { True => value, False => s.values(y) }) = s.values(y), refl)
+}
+
+// ---------------------------------------------------------------------------
+// The shadow, entry by entry
+
+// Every entry of the shadow has `P`.
+fn Every(shadow: List<Entry>, P: Entry → Type) → Type {
+    match shadow { Nil => True, Cons(e, rest) => P(e) ∧ Every(rest, P) }
+}
+
+// An entry the store at `k` does not overlap is kept.
+theorem every_cleared(P: Entry → Type, b, k: Nat, shadow: List<Entry>): Every(shadow, P) → Every(cleared(shadow, b, k), P) {
+    match shadow {
+        Nil => λ _ => trivial,
+        Cons(e, rest) => λ all => (match e.overlaps(b, k) as λ v =>
+                Every(match v { True => cleared(rest, b, k), False => Cons(e, cleared(rest, b, k)) }, P) {
+            True => every_cleared(P, b, k, rest, all.right),
+            False => ⟨all.left, every_cleared(P, b, k, rest, all.right)⟩,
+        }),
+    }
+}
+
+// Every entry left by the clearing is apart from the stored eight bytes.
+theorem every_cleared_apart(b, k: Nat, shadow: List<Entry>): Every(cleared(shadow, b, k), λ (e: Entry) => e.overlaps(b, k) = False) {
+    match shadow {
+        Nil => trivial,
+        Cons(e, rest) => (match e.overlaps(b, k) as λ v => e.overlaps(b, k) = v →
+                Every(match v { True => cleared(rest, b, k), False => Cons(e, cleared(rest, b, k)) }, λ (d: Entry) => d.overlaps(b, k) = False) {
+            True => λ _ => every_cleared_apart(b, k, rest),
+            False => λ apart => ⟨apart, every_cleared_apart(b, k, rest)⟩,
+        })(refl),
+    }
+}
+
+// The reference `found` names is an entry's.
+theorem every_found(P: Entry → Type, b, k: Nat, target: Loc, shadow: List<Entry>): Every(shadow, P) → found(shadow, b, k) = Some(target) →
+    P(Entry(b, k, target)) {
+    match shadow {
+        Nil => λ _ none => absurd(none),
+        Cons(e, rest) => λ all => (match e.exactly(b, k) as λ v => e.exactly(b, k) = v →
+                (match v { True => Some(e.target), False => found(rest, b, k) }) = Some(target) → P(Entry(b, k, target)) {
+            True => λ exact here => {
+                let parts = Bool::and_true_parts(e.block.same(b), e.at.same(k), exact);
+                let block: (e.block = b) = e.block.same_sound(b, parts.left);
+                let at: (e.at = k) = e.at.same_sound(k, parts.right);
+                let aimed: (e.target = target) = Option::some_inj(e.target, target, here);
+                j(block, λ x _ => P(Entry(x, k, target)), j(at, λ y _ => P(Entry(e.block, y, target)), j(aimed, λ t _ => P(Entry(e.block, e.at, t)), all.left)))
+            },
+            False => λ _ there => every_found(P, b, k, target, rest, all.right, there),
+        })(refl),
+    }
+}
+
+// A byte no entry covers is covered by none of them, one at a time.
+theorem every_uncovered(b, j: Nat, shadow: List<Entry>): covered(shadow, b, j) = False → Every(shadow, λ (e: Entry) => e.covers(b, j) = False) {
+    match shadow {
+        Nil => λ _ => trivial,
+        Cons(e, rest) => λ none => {
+            let parts = Bool::or_false_parts(e.covers(b, j), covered(rest, b, j), none);
+            ⟨parts.left, every_uncovered(b, j, rest, parts.right)⟩
+        },
+    }
+}
+
+theorem every_untouched(b, k: Nat, shadow: List<Entry>): touched(shadow, b, k) = False → Every(shadow, λ (e: Entry) => e.overlaps(b, k) = False) {
+    match shadow {
+        Nil => λ _ => trivial,
+        Cons(e, rest) => λ none => {
+            let parts = Bool::or_false_parts(e.overlaps(b, k), touched(rest, b, k), none);
+            ⟨parts.left, every_untouched(b, k, rest, parts.right)⟩
+        },
+    }
+}
+
+theorem every_uncut(b, k: Nat, shadow: List<Entry>): cut(shadow, b, k) = False → Every(shadow, λ (e: Entry) => e.cuts(b, k) = False) {
+    match shadow {
+        Nil => λ _ => trivial,
+        Cons(e, rest) => λ none => {
+            let parts = Bool::or_false_parts(e.cuts(b, k), cut(rest, b, k), none);
+            ⟨parts.left, every_uncut(b, k, rest, parts.right)⟩
+        },
+    }
+}
+
+// A byte that some entry covers is covered.
+theorem every_covered_of(b, j: Nat, shadow: List<Entry>): Every(shadow, λ (e: Entry) => e.covers(b, j) = False) → covered(shadow, b, j) = False {
+    match shadow {
+        Nil => λ _ => refl,
+        Cons(e, rest) => λ all => Bool::or_false_of(e.covers(b, j), covered(rest, b, j), all.left, every_covered_of(b, j, rest, all.right)),
+    }
+}
+
+// `P` follows entry by entry.
+theorem every_map(P, Q: Entry → Type, f: (e: Entry) → P(e) → Q(e), shadow: List<Entry>): Every(shadow, P) → Every(shadow, Q) {
+    match shadow {
+        Nil => λ _ => trivial,
+        Cons(e, rest) => λ all => ⟨f(e, all.left), every_map(P, Q, f, rest, all.right)⟩,
+    }
+}
+
+theorem every_both(P, Q: Entry → Type, shadow: List<Entry>): Every(shadow, P) → Every(shadow, Q) → Every(shadow, λ (e: Entry) => P(e) ∧ Q(e)) {
+    match shadow {
+        Nil => λ _ _ => trivial,
+        Cons(e, rest) => λ p q => ⟨⟨p.left, q.left⟩, every_both(P, Q, rest, p.right, q.right)⟩,
+    }
+}
+
+// What the cleared shadow covers, the shadow covered, but for the stored
+// bytes: an entry the store overlaps it does not cut lies on them.
+theorem Entry::covers_stored(self e: Entry, b, k, c, j: Nat, uncut: e.cuts(b, k) = False, overlap: e.overlaps(b, k) = True,
+    here: e.covers(c, j) = True): (c = b) ∧ ((k <= j) ∧ (j < k + 8)) {
+    let o = Bool::and_true_parts(e.block.same(b), (e.at + 1).leb(k + 8) && (k + 1).leb(e.at + 8), overlap);
+    let block: (e.block = b) = e.block.same_sound(b, o.left);
+    let h = Bool::and_true_parts(e.block.same(c), e.at.leb(j) && (j + 1).leb(e.at + 8), here);
+    let hc: (e.block = c) = e.block.same_sound(c, h.left);
+    let range = h.right;
+    let at: (e.at = k) = (match e.at.same(k) as λ v => e.at.same(k) = v → e.at = k {
+        True => λ same => e.at.same_sound(k, same),
+        False => λ differs => absurd(trans(sym(uncut), j(sym(overlap), λ o _ => (o && !e.at.same(k)) = True,
+            j(sym(differs), λ v _ => (True && !v) = True, refl)))),
+    })(refl);
+    ⟨trans(sym(hc), block), omega(range, at)⟩
+}
+
+theorem uncovered_after_clearing(b, k, c, j: Nat, shadow: List<Entry>): Every(shadow, λ (e: Entry) => e.cuts(b, k) = False) →
+    covered(cleared(shadow, b, k), c, j) = False → ((c = b) ∧ ((k <= j) ∧ (j < k + 8))) ∨ (covered(shadow, c, j) = False) {
+    match shadow {
+        Nil => λ _ _ => Inr(refl),
+        Cons(e, rest) => λ uncut => (match e.overlaps(b, k) as λ v => e.overlaps(b, k) = v →
+                covered(match v { True => cleared(rest, b, k), False => Cons(e, cleared(rest, b, k)) }, c, j) = False →
+                ((c = b) ∧ ((k <= j) ∧ (j < k + 8))) ∨ (covered(Cons(e, rest), c, j) = False) {
+            True => λ overlap none => match uncovered_after_clearing(b, k, c, j, rest, uncut.right, none) {
+                Inl(stored) => Inl(stored),
+                Inr(rest_none) => (match e.covers(c, j) as λ v => e.covers(c, j) = v →
+                        ((c = b) ∧ ((k <= j) ∧ (j < k + 8))) ∨ ((v || covered(rest, c, j)) = False) {
+                    True => λ here => Inl(e.covers_stored(b, k, c, j, uncut.left, overlap, here)),
+                    False => λ _ => Inr(rest_none),
+                })(refl),
+            },
+            False => λ _ none => {
+                let parts = Bool::or_false_parts(e.covers(c, j), covered(cleared(rest, b, k), c, j), none);
+                match uncovered_after_clearing(b, k, c, j, rest, uncut.right, parts.right) {
+                    Inl(stored) => Inl(stored),
+                    Inr(rest_none) => Inr(Bool::or_false_of(e.covers(c, j), covered(rest, c, j), parts.left, rest_none)),
+                }
+            },
+        })(refl),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// An empty shadow is the bytes-only heap
+
+theorem Heap::of_shadow(buffers: Buffers()): Heap::of(buffers).shadow = [] { refl }
+
+theorem Heap::of_readable(buffers: Buffers(), loc: Loc):
+    Heap::of(buffers).readable(loc) = (loc.offset + 1).leb(buffer_bytes(buffers, loc.block).len()) {
+    Bool::and_true_r((loc.offset + 1).leb(buffer_bytes(buffers, loc.block).len()))
+}
+
+theorem Heap::of_cell(buffers: Buffers(), loc: Loc):
+    Heap::of(buffers).cell(loc) = (loc.offset + 8).leb(buffer_bytes(buffers, loc.block).len()) {
+    Bool::and_true_r((loc.offset + 8).leb(buffer_bytes(buffers, loc.block).len()))
+}
+
+// A word stored into buffers leaves buffers.
+theorem Heap::of_store_word(buffers: Buffers(), loc: Loc, word: BitVec(64)): Heap::of(buffers).store_word(loc, word).shadow = [] { refl }
+
+// ---------------------------------------------------------------------------
+// Renaming blocks
+
+record Renaming { there: Nat → Nat, back: Nat → Nat, back_there: (b: Nat) → back(there(b)) = b, there_back: (c: Nat) → there(back(c)) = c }
+
+fn Loc::rename(self loc: Loc, r: Renaming) → Loc { Loc(r.there(loc.block), loc.offset) }
+
+fn Value::rename(self value: Value, r: Renaming) → Value {
+    match value { Word(word) => Word(word), Ref(loc) => Ref(loc.rename(r)) }
+}
+
+fn Entry::rename(self e: Entry, r: Renaming) → Entry { Entry(r.there(e.block), e.at, e.target.rename(r)) }
+
+fn rename_shadow(r: Renaming, shadow: List<Entry>) → List<Entry> {
+    match shadow { Nil => Nil, Cons(e, rest) => Cons(e.rename(r), rename_shadow(r, rest)) }
+}
+
+// `renamed` is `s` with every block `b` called `r.there(b)`.
+record Renames(r: Renaming, s, renamed: State) {
+    values: (x: Nat) → renamed.values(x) = s.values(x).rename(r),
+    bytes: (c: Nat) → renamed.heap.bytes(c) = s.heap.bytes(r.back(c)),
+    shadow: renamed.heap.shadow = rename_shadow(r, s.heap.shadow),
+}
+
+// Two answers alike: both none, or both a state, the second renamed.
+fn Alike(r: Renaming, left, right: Option<State>) → Type {
+    match left {
+        None => match right { None => True, Some(_) => False },
+        Some(a) => match right { None => False, Some(b) => Renames(r, a, b) },
+    }
+}
+
+theorem Renaming::there_same(self r: Renaming, a, b: Nat): r.there(a).same(r.there(b)) = a.same(b) {
+    match a.eq_dec(b) {
+        Inl(equal) => trans(r.there(a).same_of_eq(r.there(b), cong_fn<Nat, Nat>(λ x => r.there(x), equal)), sym(a.same_of_eq(b, equal))),
+        Inr(differs) => trans(r.there(a).same_false(r.there(b), λ same =>
+                differs(trans(sym(r.back_there(a)), trans(cong_fn<Nat, Nat>(λ x => r.back(x), same), r.back_there(b))))),
+            sym(a.same_false(b, differs))),
+    }
+}
+
+theorem Entry::rename_covers(self e: Entry, r: Renaming, b, j: Nat): e.rename(r).covers(r.there(b), j) = e.covers(b, j) {
+    cong_fn<Bool, Bool>(λ v => v && (e.at.leb(j) && (j + 1).leb(e.at + 8)), r.there_same(e.block, b))
+}
+
+theorem Entry::rename_overlaps(self e: Entry, r: Renaming, b, k: Nat): e.rename(r).overlaps(r.there(b), k) = e.overlaps(b, k) {
+    cong_fn<Bool, Bool>(λ v => v && ((e.at + 1).leb(k + 8) && (k + 1).leb(e.at + 8)), r.there_same(e.block, b))
+}
+
+theorem Entry::rename_cuts(self e: Entry, r: Renaming, b, k: Nat): e.rename(r).cuts(r.there(b), k) = e.cuts(b, k) {
+    cong_fn<Bool, Bool>(λ v => v && !e.at.same(k), e.rename_overlaps(r, b, k))
+}
+
+theorem Entry::rename_exactly(self e: Entry, r: Renaming, b, k: Nat): e.rename(r).exactly(r.there(b), k) = e.exactly(b, k) {
+    cong_fn<Bool, Bool>(λ v => v && e.at.same(k), r.there_same(e.block, b))
+}
+
+theorem rename_covered(r: Renaming, b, j: Nat, shadow: List<Entry>): covered(rename_shadow(r, shadow), r.there(b), j) = covered(shadow, b, j) {
+    match shadow {
+        Nil => refl,
+        Cons(e, rest) => Bool::or_cong(e.rename_covers(r, b, j), rename_covered(r, b, j, rest)),
+    }
+}
+
+theorem rename_touched(r: Renaming, b, k: Nat, shadow: List<Entry>): touched(rename_shadow(r, shadow), r.there(b), k) = touched(shadow, b, k) {
+    match shadow {
+        Nil => refl,
+        Cons(e, rest) => Bool::or_cong(e.rename_overlaps(r, b, k), rename_touched(r, b, k, rest)),
+    }
+}
+
+theorem rename_cut(r: Renaming, b, k: Nat, shadow: List<Entry>): cut(rename_shadow(r, shadow), r.there(b), k) = cut(shadow, b, k) {
+    match shadow {
+        Nil => refl,
+        Cons(e, rest) => Bool::or_cong(e.rename_cuts(r, b, k), rename_cut(r, b, k, rest)),
+    }
+}
+
+theorem rename_found(r: Renaming, b, k: Nat, shadow: List<Entry>):
+    found(rename_shadow(r, shadow), r.there(b), k) = found(shadow, b, k).map(λ (t: Loc) => t.rename(r)) {
+    match shadow {
+        Nil => refl,
+        Cons(e, rest) => j(sym(e.rename_exactly(r, b, k)), λ v _ =>
+                (match v { True => Some(e.target.rename(r)), False => found(rename_shadow(r, rest), r.there(b), k) }) =
+                    (match e.exactly(b, k) { True => Some(e.target), False => found(rest, b, k) }).map(λ (t: Loc) => t.rename(r)),
+            (match e.exactly(b, k) as λ v =>
+                (match v { True => Some(e.target.rename(r)), False => found(rename_shadow(r, rest), r.there(b), k) }) =
+                    (match v { True => Some(e.target), False => found(rest, b, k) }).map(λ (t: Loc) => t.rename(r)) {
+                True => refl,
+                False => rename_found(r, b, k, rest),
+            })),
+    }
+}
+
+theorem rename_cleared(r: Renaming, b, k: Nat, shadow: List<Entry>):
+    cleared(rename_shadow(r, shadow), r.there(b), k) = rename_shadow(r, cleared(shadow, b, k)) {
+    match shadow {
+        Nil => refl,
+        Cons(e, rest) => j(sym(e.rename_overlaps(r, b, k)), λ v _ =>
+                (match v { True => cleared(rename_shadow(r, rest), r.there(b), k), False => Cons(e.rename(r), cleared(rename_shadow(r, rest), r.there(b), k)) }) =
+                    rename_shadow(r, match e.overlaps(b, k) { True => cleared(rest, b, k), False => Cons(e, cleared(rest, b, k)) }),
+            (match e.overlaps(b, k) as λ v =>
+                (match v { True => cleared(rename_shadow(r, rest), r.there(b), k), False => Cons(e.rename(r), cleared(rename_shadow(r, rest), r.there(b), k)) }) =
+                    rename_shadow(r, match v { True => cleared(rest, b, k), False => Cons(e, cleared(rest, b, k)) }) {
+                True => rename_cleared(r, b, k, rest),
+                False => cong_fn<List<Entry>, List<Entry>>(λ l => Cons(e.rename(r), l), rename_cleared(r, b, k, rest)),
+            })),
+    }
+}
+
+// The renamed heap answers alike at the renamed place.
+theorem Renames::block({r: Renaming}, {s, renamed: State}, self rel: Renames(r, s, renamed), b: Nat):
+    renamed.heap.bytes(r.there(b)) = s.heap.bytes(b) {
+    trans(rel.bytes(r.there(b)), cong_fn<Nat, List<BitVec(8)>>(λ x => s.heap.bytes(x), r.back_there(b)))
+}
+
+theorem Renames::cell({r: Renaming}, {s, renamed: State}, self rel: Renames(r, s, renamed), loc: Loc):
+    renamed.heap.cell(loc.rename(r)) = s.heap.cell(loc) {
+    Bool::and_cong(cong_fn<List<BitVec(8)>, Bool>(λ l => (loc.offset + 8).leb(l.len()), rel.block(loc.block)),
+        cong_fn<Bool, Bool>(λ v => !v, trans(cong_fn<List<Entry>, Bool>(λ sh => cut(sh, r.there(loc.block), loc.offset), rel.shadow),
+            rename_cut(r, loc.block, loc.offset, s.heap.shadow))))
+}
+
+theorem Renames::plain({r: Renaming}, {s, renamed: State}, self rel: Renames(r, s, renamed), loc: Loc):
+    renamed.heap.plain(loc.rename(r)) = s.heap.plain(loc) {
+    Bool::and_cong(cong_fn<List<BitVec(8)>, Bool>(λ l => (loc.offset + 8).leb(l.len()), rel.block(loc.block)),
+        cong_fn<Bool, Bool>(λ v => !v, trans(cong_fn<List<Entry>, Bool>(λ sh => touched(sh, r.there(loc.block), loc.offset), rel.shadow),
+            rename_touched(r, loc.block, loc.offset, s.heap.shadow))))
+}
+
+theorem Renames::readable({r: Renaming}, {s, renamed: State}, self rel: Renames(r, s, renamed), loc: Loc):
+    renamed.heap.readable(loc.rename(r)) = s.heap.readable(loc) {
+    Bool::and_cong(cong_fn<List<BitVec(8)>, Bool>(λ l => (loc.offset + 1).leb(l.len()), rel.block(loc.block)),
+        cong_fn<Bool, Bool>(λ v => !v, trans(cong_fn<List<Entry>, Bool>(λ sh => covered(sh, r.there(loc.block), loc.offset), rel.shadow),
+            rename_covered(r, loc.block, loc.offset, s.heap.shadow))))
+}
+
+// Blocks set alike are renamed alike.
+theorem rename_set_block(r: Renaming, bytes, renamed: Nat → List<BitVec(8)>, same: (c: Nat) → renamed(c) = bytes(r.back(c)),
+    b: Nat, now: List<BitVec(8)>, c: Nat): set_block(renamed, r.there(b), now)(c) = set_block(bytes, b, now)(r.back(c)) {
+    match c.eq_dec(r.there(b)) {
+        Inl(here) => {
+            let back: (r.back(c) = b) = trans(cong_fn<Nat, Nat>(λ x => r.back(x), here), r.back_there(b));
+            trans(j(sym(here), λ x _ => set_block(renamed, r.there(b), now)(x) = now, set_block_here(renamed, r.there(b), now)),
+                sym(j(sym(back), λ x _ => set_block(bytes, b, now)(x) = now, set_block_here(bytes, b, now))))
+        },
+        Inr(differs) => {
+            let away: (r.back(c) ≠ b) = λ back => differs(trans(sym(r.there_back(c)), cong_fn<Nat, Nat>(λ x => r.there(x), back)));
+            trans(set_block_other(renamed, r.there(b), now, c, differs),
+                trans(same(c), sym(set_block_other(bytes, b, now, r.back(c), away))))
+        },
+    }
+}
+
+// A value set alike.
+theorem Renames::set({r: Renaming}, {s, renamed: State}, self rel: Renames(r, s, renamed), x: Nat, value: Value):
+    Renames(r, s.set(x, value), renamed.set(x, value.rename(r))) {
+    Renames(
+        values := λ y => match y.eq_dec(x) {
+            Inl(here) => j(sym(here), λ z _ => renamed.set(x, value.rename(r)).values(z) = s.set(x, value).values(z).rename(r),
+                trans(renamed.set_here(x, value.rename(r)), cong_fn<Value, Value>(λ v => v.rename(r), sym(s.set_here(x, value))))),
+            Inr(differs) => trans(renamed.set_other(x, value.rename(r), y, differs),
+                trans(rel.values(y), cong_fn<Value, Value>(λ v => v.rename(r), sym(s.set_other(x, value, y, differs))))),
+        },
+        bytes := rel.bytes,
+        shadow := rel.shadow,
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Each operation, renamed
+
+theorem store_word_alike(r: Renaming, s, renamed: State, rel: Renames(r, s, renamed)): (place, value: Value) →
+    Alike(r, store_word_at(s, place, value), store_word_at(renamed, place.rename(r), value.rename(r))) {
+    λ place value => match place {
+        Word(_) => trivial,
+        Ref(loc) => match value {
+            Ref(_) => trivial,
+            Word(word) => j(sym(rel.cell(loc)), λ v _ =>
+                    Alike(r, match s.heap.cell(loc) { False => None, True => Some(State(s.values, s.heap.store_word(loc, word))) },
+                        match v { False => None, True => Some(State(renamed.values, renamed.heap.store_word(loc.rename(r), word))) }),
+                (match s.heap.cell(loc) as λ v =>
+                    Alike(r, match v { False => None, True => Some(State(s.values, s.heap.store_word(loc, word))) },
+                        match v { False => None, True => Some(State(renamed.values, renamed.heap.store_word(loc.rename(r), word))) }) {
+                    False => trivial,
+                    True => Renames(
+                        values := rel.values,
+                        bytes := λ c => {
+                            let now = s.heap.bytes(loc.block).put_window(loc.offset, word_bytes(word));
+                            trans(cong_fn<List<BitVec(8)>, List<BitVec(8)>>(λ l => set_block(renamed.heap.bytes, r.there(loc.block), l.put_window(loc.offset, word_bytes(word)))(c),
+                                    rel.block(loc.block)),
+                                rename_set_block(r, s.heap.bytes, renamed.heap.bytes, rel.bytes, loc.block, now, c))
+                        },
+                        shadow := trans(cong_fn<List<Entry>, List<Entry>>(λ sh => cleared(sh, r.there(loc.block), loc.offset), rel.shadow),
+                            rename_cleared(r, loc.block, loc.offset, s.heap.shadow)),
+                    ),
+                })),
+        },
+    }
+}
+
+theorem store_ref_alike(r: Renaming, s, renamed: State, rel: Renames(r, s, renamed)): (place, value: Value) →
+    Alike(r, store_ref_at(s, place, value), store_ref_at(renamed, place.rename(r), value.rename(r))) {
+    λ place value => match place {
+        Word(_) => trivial,
+        Ref(loc) => match value {
+            Word(_) => trivial,
+            Ref(target) => j(sym(rel.cell(loc)), λ v _ =>
+                    Alike(r, match s.heap.cell(loc) { False => None, True => Some(State(s.values, s.heap.store_ref(loc, target))) },
+                        match v { False => None, True => Some(State(renamed.values, renamed.heap.store_ref(loc.rename(r), target.rename(r)))) }),
+                (match s.heap.cell(loc) as λ v =>
+                    Alike(r, match v { False => None, True => Some(State(s.values, s.heap.store_ref(loc, target))) },
+                        match v { False => None, True => Some(State(renamed.values, renamed.heap.store_ref(loc.rename(r), target.rename(r)))) }) {
+                    False => trivial,
+                    True => Renames(
+                        values := rel.values,
+                        bytes := rel.bytes,
+                        shadow := cong_fn<List<Entry>, List<Entry>>(λ sh => Cons(Entry(loc.block, loc.offset, target).rename(r), sh),
+                            trans(cong_fn<List<Entry>, List<Entry>>(λ sh => cleared(sh, r.there(loc.block), loc.offset), rel.shadow),
+                                rename_cleared(r, loc.block, loc.offset, s.heap.shadow))),
+                    ),
+                })),
+        },
+    }
+}
+
+theorem load_word_alike(r: Renaming, s, renamed: State, rel: Renames(r, s, renamed), output: Nat): (place: Value) →
+    Alike(r, load_word_at(s, output, place), load_word_at(renamed, output, place.rename(r))) {
+    λ place => match place {
+        Word(_) => trivial,
+        Ref(loc) => j(sym(rel.plain(loc)), λ v _ =>
+                Alike(r, match s.heap.plain(loc) { False => None, True => Some(s.set(output, Word(word_at(s.heap.bytes(loc.block), loc.offset)))) },
+                    match v { False => None, True => Some(renamed.set(output, Word(word_at(renamed.heap.bytes(r.there(loc.block)), loc.offset)))) }),
+            (match s.heap.plain(loc) as λ v =>
+                Alike(r, match v { False => None, True => Some(s.set(output, Word(word_at(s.heap.bytes(loc.block), loc.offset)))) },
+                    match v { False => None, True => Some(renamed.set(output, Word(word_at(renamed.heap.bytes(r.there(loc.block)), loc.offset)))) }) {
+                False => trivial,
+                True => j(sym(rel.block(loc.block)), λ l _ => Renames(r, s.set(output, Word(word_at(s.heap.bytes(loc.block), loc.offset))),
+                        renamed.set(output, Word(word_at(l, loc.offset)))),
+                    rel.set(output, Word(word_at(s.heap.bytes(loc.block), loc.offset)))),
+            })),
+    }
+}
+
+theorem load_ref_alike(r: Renaming, s, renamed: State, rel: Renames(r, s, renamed), output: Nat): (place: Value) →
+    Alike(r, load_ref_at(s, output, place), load_ref_at(renamed, output, place.rename(r))) {
+    λ place => match place {
+        Word(_) => trivial,
+        Ref(loc) => {
+            let there: (found(renamed.heap.shadow, r.there(loc.block), loc.offset) =
+                    found(s.heap.shadow, loc.block, loc.offset).map(λ (t: Loc) => t.rename(r))) =
+                trans(cong_fn<List<Entry>, Option<Loc>>(λ sh => found(sh, r.there(loc.block), loc.offset), rel.shadow),
+                    rename_found(r, loc.block, loc.offset, s.heap.shadow));
+            j(sym(there), λ o _ => Alike(r, match found(s.heap.shadow, loc.block, loc.offset) { None => None, Some(target) => Some(s.set(output, Ref(target))) },
+                    match o { None => None, Some(target) => Some(renamed.set(output, Ref(target))) }),
+                (match found(s.heap.shadow, loc.block, loc.offset) as λ o =>
+                    Alike(r, match o { None => None, Some(target) => Some(s.set(output, Ref(target))) },
+                        match o.map(λ (t: Loc) => t.rename(r)) { None => None, Some(target) => Some(renamed.set(output, Ref(target))) }) {
+                    None => trivial,
+                    Some(target) => rel.set(output, Ref(target)),
+                }))
+        },
+    }
+}
+
+theorem load_byte_alike(r: Renaming, s, renamed: State, rel: Renames(r, s, renamed), output: Nat): (place: Value) →
+    Alike(r, load_byte_at(s, output, place), load_byte_at(renamed, output, place.rename(r))) {
+    λ place => match place {
+        Word(_) => trivial,
+        Ref(loc) => j(sym(rel.readable(loc)), λ v _ =>
+                Alike(r, match s.heap.readable(loc) { False => None, True => Some(s.set(output, Word(byte_at(s.heap.bytes(loc.block), loc.offset).zero_extend(56)))) },
+                    match v { False => None, True => Some(renamed.set(output, Word(byte_at(renamed.heap.bytes(r.there(loc.block)), loc.offset).zero_extend(56)))) }),
+            (match s.heap.readable(loc) as λ v =>
+                Alike(r, match v { False => None, True => Some(s.set(output, Word(byte_at(s.heap.bytes(loc.block), loc.offset).zero_extend(56)))) },
+                    match v { False => None, True => Some(renamed.set(output, Word(byte_at(renamed.heap.bytes(r.there(loc.block)), loc.offset).zero_extend(56)))) }) {
+                False => trivial,
+                True => j(sym(rel.block(loc.block)), λ l _ => Renames(r, s.set(output, Word(byte_at(s.heap.bytes(loc.block), loc.offset).zero_extend(56))),
+                        renamed.set(output, Word(byte_at(l, loc.offset).zero_extend(56)))),
+                    rel.set(output, Word(byte_at(s.heap.bytes(loc.block), loc.offset).zero_extend(56)))),
+            })),
+    }
+}
+
+// The step of a renamed state is the renamed step.
+theorem Op::step_renames(self op: Op, r: Renaming, s, renamed: State, rel: Renames(r, s, renamed)): Alike(r, op.step(s), op.step(renamed)) {
+    match op {
+        StoreWord(place, value) => j(sym(rel.values(place)), λ p _ => Alike(r, store_word_at(s, s.values(place), s.values(value)),
+                store_word_at(renamed, p, renamed.values(value))),
+            j(sym(rel.values(value)), λ v _ => Alike(r, store_word_at(s, s.values(place), s.values(value)),
+                    store_word_at(renamed, s.values(place).rename(r), v)),
+                store_word_alike(r, s, renamed, rel, s.values(place), s.values(value)))),
+        StoreRef(place, value) => j(sym(rel.values(place)), λ p _ => Alike(r, store_ref_at(s, s.values(place), s.values(value)),
+                store_ref_at(renamed, p, renamed.values(value))),
+            j(sym(rel.values(value)), λ v _ => Alike(r, store_ref_at(s, s.values(place), s.values(value)),
+                    store_ref_at(renamed, s.values(place).rename(r), v)),
+                store_ref_alike(r, s, renamed, rel, s.values(place), s.values(value)))),
+        LoadWord(output, place) => j(sym(rel.values(place)), λ p _ => Alike(r, load_word_at(s, output, s.values(place)), load_word_at(renamed, output, p)),
+            load_word_alike(r, s, renamed, rel, output, s.values(place))),
+        LoadRef(output, place) => j(sym(rel.values(place)), λ p _ => Alike(r, load_ref_at(s, output, s.values(place)), load_ref_at(renamed, output, p)),
+            load_ref_alike(r, s, renamed, rel, output, s.values(place))),
+        LoadByte(output, place) => j(sym(rel.values(place)), λ p _ => Alike(r, load_byte_at(s, output, s.values(place)), load_byte_at(renamed, output, p)),
+            load_byte_alike(r, s, renamed, rel, output, s.values(place))),
+    }
+}
+
+theorem then_alike(r: Renaming, rest: List<Op>, ih: (a, b: State) → Renames(r, a, b) → Alike(r, run(rest, a), run(rest, b)),
+    left, right: Option<State>): Alike(r, left, right) →
+    Alike(r, match left { None => None, Some(a) => run(rest, a) }, match right { None => None, Some(b) => run(rest, b) }) {
+    match left {
+        None => match right { None => λ _ => trivial, Some(_) => λ never => false_elim(never) },
+        Some(a) => match right { None => λ never => false_elim(never), Some(b) => λ rel => ih(a, b, rel) },
+    }
+}
+
+// A run of a renamed state is the renamed run: the meaning is unchanged
+// by renaming blocks.
+theorem run_renames(r: Renaming, ops: List<Op>): (s, renamed: State) → Renames(r, s, renamed) → Alike(r, run(ops, s), run(ops, renamed)) {
+    match ops {
+        Nil => λ s renamed rel => rel,
+        Cons(op, rest) => λ s renamed rel => then_alike(r, rest, λ a b rel_after => run_renames(r, rest, a, b, rel_after),
+            op.step(s), op.step(renamed), op.step_renames(r, s, renamed, rel)),
+    }
+}
+
+theorem words_alike(r: Renaming, x: Nat, word: BitVec(64)): (left, right: Option<State>) → Alike(r, left, right) →
+    left.map(λ (t: State) => t.values(x)) = Some(Word(word)) → right.map(λ (t: State) => t.values(x)) = Some(Word(word)) {
+    λ left right => match left {
+        None => λ _ none => absurd(none),
+        Some(a) => match right {
+            None => λ never _ => false_elim(never),
+            Some(b) => λ rel here => {
+                let value: (a.values(x) = Word(word)) = Option::some_inj(a.values(x), Word(word), here);
+                cong_fn<Value, Option<Value>>(λ v => Some(v), trans(rel.values(x), cong_fn<Value, Value>(λ v => v.rename(r), value)))
+            },
+        },
+    }
+}
+
+// So a word a run computes is the same under any renaming of the blocks it
+// starts with.
+theorem run_words_alike(r: Renaming, ops: List<Op>, s, renamed: State, rel: Renames(r, s, renamed), x: Nat, word: BitVec(64)):
+    (ran: run(ops, s).map(λ (t: State) => t.values(x)) = Some(Word(word))) → run(ops, renamed).map(λ (t: State) => t.values(x)) = Some(Word(word)) {
+    words_alike(r, x, word, run(ops, s), run(ops, renamed), run_renames(r, ops, s, renamed, rel))
+}
+
