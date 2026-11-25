@@ -28,3 +28,7 @@ Stage 2 of `docs/language/ownership-design.md` §17.5, second part: the bytes le
 
 - **[[bytes-level-language]]** owns the language and its meaning; assumed here, only `run`, the site facts and validity as built.
 - **[[x86-memory-contract]]** owns `Injected` and `Sub`; [[bytes-level-on-the-contract]] the heap's operations and `Site::Meets` as built.
+
+## Log
+
+- 2026-11-25: Step zero, the base (branch `claude/bytes-level-lowering`): `claude/bytes-level-on-the-contract` merged with `claude/lowering-generic-in-memory` (7132fd5). Conflicts exactly as expected: the language's six files under `lib/native/bytes_level/` and `lib/_tests/native/bytes_level/` modify/delete, this branch's kept; `issues/bytes-level-on-the-contract.md` both logs kept. No repair was needed: the other branch's probe (`heap_in_stable`, `heap_trail_store`, `heap_call_step`, `plain_loop_on_fuel`) checks unchanged against the contract as moved, and so do the language's modules and probes. `scripts/lib-closures` clean; `scripts/linked --check` every export unchanged; `HEATHER_PR_NATIVE=all scripts/test --pr`: `== suite: 4139 passed, 0 failed, 3 ignored ==`. Then fb3005d (that issue's closing log line) merged in, issue text only.
