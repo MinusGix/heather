@@ -7,6 +7,7 @@
 import bytes_level::{run};
 import bytes_memory;
 import bytes_level_renames;
+import bytes_level_canonical;
 import reference_cells;
 import function_ir;
 import bitvec;
@@ -233,3 +234,18 @@ fn answer_block(o: Option<Answer>) → Option<Nat> {
 theorem reference_answered(): answer_block(run(answers_reference(), 0, cells_args(), memory())) = Some(1) { refl }
 
 theorem reference_answered_renamed(): answer_block(run(answers_reference(), 0, rename_values(swapping(), cells_args()), swapped())) = Some(0) { refl }
+
+// ---------------------------------------------------------------------------
+// Canonical heaps
+
+// A heap of buffers has no entries, so it is canonical, and the program's
+// answer, which holds a reference, is canonical too.
+theorem cells_answer_canonical(a: Answer, ran: run(cells_program(), 0, cells_args(), memory()) = Some(a)): a.heap.Canonical() {
+    run_canonical(cells_program(), 0, cells_args(), memory(), trivial, a, ran)
+}
+
+// Control: an entry over bytes that are not there (block 1 has four) is no
+// canonical heap.
+fn overlong() → Memory { Memory(Heap(Heap::of([zeros(), small()]).bytes, [Entry(1, 0, Loc(0, 0))]), λ (b: Nat) => b.same(0)) }
+
+theorem overlong_not_canonical(): ¬overlong().Canonical() { λ canonical => omega(canonical.left.left) }

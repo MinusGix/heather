@@ -1,0 +1,172 @@
+// A run of the bytes level keeps its heap canonical
+// (docs/language/ownership-design.md §17.6; issues/bytes-level-language.md):
+// from a heap in which every reference's eight bytes are zero, every heap a
+// run answers is such a heap (`run_canonical`). Each store and copy keeps
+// it (bytes_memory's `Memory::store_canonical`, `store_ref_canonical`,
+// `copy_canonical`), and a run is those steps, its calls answered by
+// callees that keep it too (`KeepsCanonical`), routine by routine and level
+// by level as `run_renames` is proved.
+import bytes_level::{run};
+import bytes_memory;
+import reference_cells;
+import function_ir;
+import function_ir_eval;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// Every answer has `P`: none, or one that does.
+fn EveryAnswer<T>(P: T → Type, o: Option<T>) → Type { match o { None => True, Some(a) => P(a) } }
+
+theorem every_answer_then<A, T>(P: A → Type, Q: T → Type, {o: Option<A>}, held: EveryAnswer<A>(P, o), {k: A → Option<T>},
+    each: (x: A) → P(x) → EveryAnswer<T>(Q, k(x))): EveryAnswer<T>(Q, o.and_then(k)) {
+    (match o as λ a => EveryAnswer<A>(P, a) → EveryAnswer<T>(Q, a.and_then(k)) {
+        None => λ _ => trivial,
+        Some(x) => λ h => each(x, h),
+    })(held)
+}
+
+theorem every_answer_any<A, T>(Q: T → Type, {o: Option<A>}, {k: A → Option<T>}, each: (x: A) → EveryAnswer<T>(Q, k(x))):
+    EveryAnswer<T>(Q, o.and_then(k)) {
+    match o { None => trivial, Some(x) => each(x) }
+}
+
+// A memory every answer of which is canonical, from where it is.
+theorem every_answer_of<A>(P: A → Type, o: Option<A>, each: (a: A) → o = Some(a) → P(a)): EveryAnswer<A>(P, o) {
+    (match o as λ x => ((a: A) → x = Some(a) → P(a)) → EveryAnswer<A>(P, x) {
+        None => λ _ => trivial,
+        Some(a) => λ h => h(a, refl),
+    })(each)
+}
+
+fn canonical_config(c: Config) → Type { c.memory.Canonical() }
+
+fn canonical_answer(a: Answer) → Type { a.heap.Canonical() }
+
+fn canonical_ended(e: Ended) → Type { e.memory.Canonical() }
+
+// A callee that answers a canonical heap whenever it is given one.
+fn KeepsCanonicalFn(own: List<Value> → Memory → Option<Answer>) → Type {
+    (args: List<Value>) → (m: Memory) → m.Canonical() → EveryAnswer<Answer>(canonical_answer, own(args, m))
+}
+
+fn KeepsCanonical(calls: Calls()) → Type { (f: Nat) → KeepsCanonicalFn(calls(f)) }
+
+// ---------------------------------------------------------------------------
+// Nodes, leaves, loops, regions
+
+theorem Instr::step_canonical(self instr: Instr, c: Config, canonical: c.memory.Canonical()):
+    EveryAnswer<Config>(canonical_config, instr.step(c)) {
+    match instr {
+        Compute(node) => match node.pure() && node.defined(c.locals.words) { False => trivial, True => canonical },
+        Load(_, _, _) => every_answer_any(canonical_config, λ loc => every_answer_any(canonical_config, λ x => canonical)),
+        Store(bytes, _, value) => every_answer_any(canonical_config, λ loc =>
+            every_answer_then(λ (m: Memory) => m.Canonical(), canonical_config,
+                every_answer_of(λ (m: Memory) => m.Canonical(), c.memory.store(loc, word_piece(bytes, c.locals.words(8 * bytes, value))),
+                    λ after stored => c.memory.store_canonical(loc, word_piece(bytes, c.locals.words(8 * bytes, value)), after, stored, canonical)),
+                λ m h => h)),
+        LoadRef(_, _) => every_answer_any(canonical_config, λ loc => every_answer_any(canonical_config, λ target => canonical)),
+        StoreRef(_, _) => every_answer_any(canonical_config, λ loc => every_answer_any(canonical_config, λ target =>
+            every_answer_then(λ (m: Memory) => m.Canonical(), canonical_config,
+                every_answer_of(λ (m: Memory) => m.Canonical(), c.memory.store_ref(loc, target),
+                    λ after stored => c.memory.store_ref_canonical(loc, target, after, stored, canonical)),
+                λ m h => h))),
+        Offset(_, _, _) => every_answer_any(canonical_config, λ loc => canonical),
+        Copy(_, _, length) => every_answer_any(canonical_config, λ to => every_answer_any(canonical_config, λ from =>
+            every_answer_then(λ (m: Memory) => m.Canonical(), canonical_config,
+                every_answer_of(λ (m: Memory) => m.Canonical(), c.memory.copy(to, from, c.locals.word(length).toNat()),
+                    λ after copied => c.memory.copy_canonical(to, from, c.locals.word(length).toNat(), after, copied, canonical)),
+                λ m h => h))),
+    }
+}
+
+theorem run_instrs_canonical(instrs: List<Instr>): (c: Config) → c.memory.Canonical() → EveryAnswer<Config>(canonical_config, run_instrs(instrs, c)) {
+    match instrs {
+        Nil => λ c canonical => canonical,
+        Cons(instr, rest) => λ c canonical => every_answer_then(canonical_config, canonical_config, instr.step_canonical(c, canonical),
+            λ after h => run_instrs_canonical(rest, after, h)),
+    }
+}
+
+theorem loop_run_canonical(step: Config → Option<Config>,
+    steps: (c: Config) → c.memory.Canonical() → EveryAnswer<Config>(canonical_config, step(c)),
+    parameters: List<Typed>, count, exit: Nat, next: List<Typed>, remaining: Nat):
+    (state: List<Value>) → (m: Memory) → m.Canonical() →
+    EveryAnswer<Ended>(canonical_ended, loop_run(step, parameters, count, exit, next, remaining, state, m)) {
+    match remaining {
+        Zero => λ state m canonical => canonical,
+        Succ(rest) => λ state m canonical => every_answer_any(canonical_ended, λ l =>
+            every_answer_then(canonical_config, canonical_ended, steps(Config(l, m), canonical), λ after h =>
+                every_answer_any(canonical_ended, λ later => match after.locals.words(1, exit).head_bit() {
+                    False => loop_run_canonical(step, steps, parameters, count, exit, next, rest, later, after.memory, h),
+                    True => h,
+                }))),
+    }
+}
+
+theorem Body::run_canonical(self body: Body, calls: Calls(), keeps: KeepsCanonical(calls)):
+    (c: Config) → c.memory.Canonical() → EveryAnswer<Config>(canonical_config, body.run(calls, c)) {
+    match body {
+        Leaf(instrs) => λ c canonical => run_instrs_canonical(instrs, c, canonical),
+        Seq(first, rest) => λ c canonical => every_answer_then(canonical_config, canonical_config, first.run_canonical(calls, keeps, c, canonical),
+            λ mid h => rest.run_canonical(calls, keeps, mid, h)),
+        Branch(condition, yes, no) => λ c canonical => match c.locals.words(1, condition).head_bit() {
+            True => yes.run_canonical(calls, keeps, c, canonical),
+            False => no.run_canonical(calls, keeps, c, canonical),
+        },
+        Call(callee, _, _) => λ c canonical => every_answer_any(canonical_config, λ args => match callee {
+            Local(f) => every_answer_then(canonical_answer, canonical_config, keeps(f, args, c.memory, canonical),
+                λ answer h => every_answer_any(canonical_config, λ l => h)),
+            System(call) => match call {},
+        }),
+        Loop(_, bound, parameters, count, inner, exit, next, _, _) => λ c canonical =>
+            every_answer_any(canonical_config, λ state => every_answer_then(canonical_ended, canonical_config,
+                loop_run_canonical(λ (pass: Config) => inner.run(calls, pass), λ pass h => inner.run_canonical(calls, keeps, pass, h),
+                    parameters, count, exit, next, c.locals.word(bound).toNat(), state, c.memory, canonical),
+                λ end h => every_answer_any(canonical_config, λ l => h))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Routines and programs
+
+theorem Routine::call_canonical(self routine: Routine, calls: Calls(), keeps: KeepsCanonical(calls)):
+    KeepsCanonicalFn(λ (args: List<Value>) (heap: Memory) => routine.call(calls, args, heap)) {
+    λ args m canonical => every_answer_any(canonical_answer, λ l =>
+        every_answer_then(canonical_config, canonical_answer, routine.body.run_canonical(calls, keeps, Config(l, m), canonical),
+            λ after h => every_answer_any(canonical_answer, λ words => h)))
+}
+
+theorem tie_canonical(below: Calls(), k: Nat, own: List<Value> → Memory → Option<Answer>, below_keeps: KeepsCanonical(below),
+    own_keeps: KeepsCanonicalFn(own)): KeepsCanonical(tie_calls(below, k, own)) {
+    λ f => match f.same(k) {
+        True => own_keeps,
+        False => below_keeps(f),
+    }
+}
+
+theorem deep_canonical(routine: Routine, below: Calls(), k: Nat, below_keeps: KeepsCanonical(below), depth: Nat):
+    KeepsCanonicalFn(deep_calls(routine, below, k, depth)) {
+    match depth {
+        Zero => λ args m canonical => trivial,
+        Succ(d) => routine.call_canonical(tie_calls(below, k, deep_calls(routine, below, k, d)),
+            tie_canonical(below, k, deep_calls(routine, below, k, d), below_keeps, deep_canonical(routine, below, k, below_keeps, d))),
+    }
+}
+
+theorem program_canonical(routines: List<Routine>): KeepsCanonical(program_calls(routines)) {
+    match routines {
+        Nil => λ f args m canonical => trivial,
+        Cons(routine, rest) => tie_canonical(program_calls(rest), rest.len(), deep_calls(routine, program_calls(rest), rest.len(), routine.levels + 1),
+            program_canonical(rest), deep_canonical(routine, program_calls(rest), rest.len(), program_canonical(rest), routine.levels + 1)),
+    }
+}
+
+// From a canonical heap, a run answers a canonical heap.
+theorem run_canonical(p: Program, f: Nat, args: List<Value>, heap: Memory, canonical: heap.Canonical(), a: Answer, ran: run(p, f, args, heap) = Some(a)):
+    a.heap.Canonical() {
+    j(ran, λ o _ => EveryAnswer<Answer>(canonical_answer, o), program_canonical(p.routines, f, args, heap, canonical))
+}
