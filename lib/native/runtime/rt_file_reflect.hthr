@@ -356,6 +356,45 @@ fn LentView::views(st: RSt, vs: List<LentView>) → List<FView> {
     vs.map(λ v => FView(v.span, st.index(v.span + v.span), v.start.map(λ s => st.index(s)), st.index(v.end)))
 }
 
+// A word a window's bound or length is, as a variable: where it is a
+// literal the walk has just bound and an equal literal is bound already
+// (the walk binds each occurrence of a literal afresh), the one bound
+// before. So the bytes before a constant split and the bytes from it are
+// bounded by one variable, and a test of it on the way bounds both: the
+// function compiler's facts are about variables, not their values.
+fn RSt::reuse_literal(r: Pair<RSt, Tm>) → Pair<RSt, Tm> {
+    let st = r.fst;
+    match r.snd {
+        Var(l) => match (l + 1).same(st.depth) {
+            False => r,
+            True => match st.memo {
+                Cons(made, earlier) => match made.fst {
+                    Lit(_, _) => match made.snd.same(l) {
+                        False => r,
+                        True => match rt_memo(earlier, made.fst) {
+                            None => r,
+                            Some(before) => match st.lets {
+                                Nil => r,
+                                Cons(_, lets) => match st.handles {
+                                    Nil => r,
+                                    Cons(_, handles) => Pair(RSt(l, lets, earlier, handles, st.locals, st.funs), Var(before)),
+                                },
+                            },
+                        },
+                    },
+                    _ => r,
+                },
+                Nil => r,
+            },
+        },
+        _ => r,
+    }
+}
+
+fn rt_file_word(fuel: Nat, k: Known, st: RSt, h: Handle) → Tac<Pair<RSt, Tm>> {
+    rt_go(fuel, k, st, h, True).bind(λ r => pure(RSt::reuse_literal(r)))
+}
+
 fn rt_file_bounds<A>() → Tac<A> {
     rt_refuse("a window's bounds are `x.toNat()` of 64-bit words (the code compares and passes the words), or the literal 0 for its start")
 }
@@ -368,7 +407,7 @@ fn rt_file_bound(fuel: Nat, k: Known, st: RSt, h: Handle) → Tac<Pair<RSt, Nat>
                 PToNat => match args {
                     Cons(x, _) => k.ty_of(x).bind(λ t => match t {
                         Word(n) => match n.same(64) {
-                            True => rt_go(fuel, k, st, x, True).bind(λ r => pure(Pair(r.fst, RSt::level(r.snd)))),
+                            True => rt_file_word(fuel, k, st, x).bind(λ r => pure(Pair(r.fst, RSt::level(r.snd)))),
                             False => rt_file_bounds(),
                         },
                         _ => rt_file_bounds(),
@@ -399,14 +438,14 @@ fn rt_file_size<A>() → Tac<A> {
 // for it: the code passes the length it computes from the bounds.
 fn rt_file_sized(fuel: Nat, k: Known, st: RSt, length: Handle, start: Option<Nat>, end: Nat) → Tac<RSt> {
     match start {
-        None => rt_go(fuel, k, st, length, True).bind(λ r => match RSt::level(r.snd).same(end) { True => pure(r.fst), False => rt_file_size() }),
+        None => rt_file_word(fuel, k, st, length).bind(λ r => match RSt::level(r.snd).same(end) { True => pure(r.fst), False => rt_file_size() }),
         Some(s) => view(length).bind(λ v => match v {
             HGlobal(g, _, args) => match Known::prim(k.prims, g.id) {
                 Some(p) => match p {
                     PWord(op) => match op.same(1) {
                         False => rt_file_size(),
                         True => match args {
-                            Cons(a, Cons(b, Nil)) => rt_go(fuel, k, st, a, True).bind(λ ra => rt_go(fuel, k, ra.fst, b, True).bind(λ rb =>
+                            Cons(a, Cons(b, Nil)) => rt_file_word(fuel, k, st, a).bind(λ ra => rt_file_word(fuel, k, ra.fst, b).bind(λ rb =>
                                 match RSt::level(ra.snd).same(end).and(RSt::level(rb.snd).same(s)) { True => pure(rb.fst), False => rt_file_size() })),
                             _ => rt_file_size(),
                         },
@@ -421,17 +460,20 @@ fn rt_file_sized(fuel: Nat, k: Known, st: RSt, length: Handle, start: Option<Nat
 }
 
 // The span a window is of: the written span as it is now for the callee's
-// first, a span this function only reads for the ones after it.
+// first, any of the function's spans for the ones after it. A window to
+// read of the written span is of it as it is now (`rt_span` refuses the
+// span as it was), and is read there by the meaning (`FTm::lent`); that it
+// shares no byte with the written window is not the reflector's to decide:
+// the function compiler asks the path for it (`views_apart`,
+// function_ir_lower_views) and refuses the call where the path does not
+// know the windows' bounds ordered.
 fn rt_file_viewed(k: Known, fk: FileKnown, st: RSt, j: Nat, xs: Handle) → Tac<Nat> {
     match j {
         Zero => rt_same_span(fk, xs).bind(λ same => match same {
             True => pure(0),
             False => rt_refuse("the first window of a call over windows is of the span this function writes, as it is now: the callee writes its first span"),
         }),
-        Succ(_) => rt_span(k, st, xs).bind(λ n => match n {
-            Zero => rt_refuse("a window to read of the span the call writes: a view to write is the only view of its span (issues/views-of-one-buffer-apart.md)"),
-            Succ(m) => pure(m + 1),
-        }),
+        Succ(_) => rt_span(k, st, xs),
     }
 }
 

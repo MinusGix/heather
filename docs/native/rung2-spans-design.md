@@ -406,8 +406,17 @@ build settled or changed against the text above:
 `rt_file.hthr`'s computations write one span and read others; a call lends
 windows of them (`FTm::Lend`). FunctionIR lowers views of one buffer, any
 of them written, where the path knows them apart, and puts every written
-window back (`views-of-one-buffer-apart`); `rt`'s reflector still refuses
-a window to read of the span the call writes.
+window back (`views-of-one-buffer-apart`). A `runtime fn` lends a window
+to read of the span the call writes beside the written window
+(`rt-window-of-the-written-span`, 2026-11-25): the reflector emits both as
+views of span 0, the meaning reads the window to read off the span as it
+is at the call, and the function compiler refuses the call where the path
+does not order the windows' bounds (`runtime_span_split_tests.hthr`:
+`shift_at` with `mid` open, `shift_two` at a literal, `shift_gap` ordered
+by a comparison, `shift_over` and `shift_backwards` refused by name).
+Two *written* windows of the written span (`split_at_mut` with both
+halves written) are not said in `rt`: the callee would write two spans,
+and an `FTm` computation writes one (below; `rt-several-written-spans`).
 A program statement lends its first buffers whole
 (`statement-lends-named-buffers`).
 

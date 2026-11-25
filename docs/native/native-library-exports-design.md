@@ -537,13 +537,22 @@ anywhere in these: apartness is the lender's `apart` law at offset indices.
     (`rt_file_lend`, `rt_file_reflect.hthr`): a link of the span's chain
     that is a `put_window` is a call over windows, its callee's leading
     byte lists each a `window` of one of this function's spans (the first
-    of the written span as it is now, the others of spans only read), a
+    of the written span as it is now, the others of any span, the
+    written one as it is now included), a
     bound the word whose `toNat` it is, and the word after a window held
     to the window's bounds so that nothing is bound for it. What it
     refuses says why: a bound that is no word's `toNat`, a length that is
     not the bounds' difference, a part put back elsewhere than its
-    window's start, a window to read of the written span, a first window
-    of a span only read, a span handed whole beside windows. The
+    window's start, a first window of a span only read, a span handed
+    whole beside windows. A window to read of the written span was
+    refused until `rt-window-of-the-written-span`; it is now read off the
+    span as it is at the call (`FTm::lent` always did), and whether it
+    shares a byte with the written window is the function compiler's to
+    decide from the path (`views_apart`), which refuses the call by name
+    where nothing there orders the bounds. A literal bound reuses an
+    equal literal the walk bound before (`RSt::reuse_literal`), so a split
+    at a constant is one variable both windows' bounds and a test share.
+    The
     generator needed nothing: a `runtime fn` that lends publishes its
     program and its statement at every file like any other writer
     (`lib/_tests/native/runtime/runtime_span_lend_tests.hthr`, one of
