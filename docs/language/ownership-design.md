@@ -2713,6 +2713,11 @@ generated proof through an encoding and §18.4 item 1's result is restated.
 
 ## 21. The interfaces (2026-11-25)
 
+**§22 is this section as built, and holds where the two differ** (a
+reference holds selections, not closed steps; a pin is stated through the
+continuation that reads the answer back; written parameters are results;
+the environment's form).
+
 §20.6's step 2, written after the sixth experiment
 (`issues/ownership-coded-values.md`, §18.4 item 4) held, and revised
 against an adversarial review of its first draft (thirteen defects, each
@@ -2726,10 +2731,10 @@ comes back to this section, it is not adjusted in the module.
 to.** `docs/language/sequencing-surface-design.md` §5, §14, §19 and §22 are
 built: straight-line code as aliases, a statement `if` as one convoy over
 the packed locals its arms assign, a branch that ends a block, a
-continuation needed in more than one place bound once as a join point, a
 `while` as the library's loop combinator run on a named step
 (`docs/language/loop-combinator-design.md`), a `for` as a fold of a named
-step. The reflector reflects that
+step. (Its join point for a continuation needed in more than one place is
+designed and not built: §21.2.) The reflector reflects that
 lowered form one construct for one, so a pin is a conversion by
 construction and not by the luck of two designs agreeing. Where this
 section and that document differ about a form, that document holds and this
@@ -2783,10 +2788,17 @@ section is corrected.
   A word is a `Dyn`, so the body has one kind of variable (§15.1) and one
   environment. A newest-first list makes any long-lived variable dearer
   with every binding after it (the build measured it on three axes:
-  parameters under locals, an object under words, a local under either),
-  so the environment is indexed, a variable named by its level, with a
-  logarithmic lookup, and reached by theorems only through `push`, `get`
-  and their two laws. A variable's code is
+  parameters under locals, an object under words, a local under either).
+  Two indexed environments were measured against it, the library's trie
+  and a skew-binary list: both linear on every axis and two to three and a
+  half times dearer on the common ones, a level of numeral arithmetic
+  costing about sixty kernel steps where a list cell costs a few. So the
+  environment is arguments by position and locals newest first, a
+  variable `Arg(i)` or `Loc(j)`; its blind spot is a local that outlives
+  hundreds of bindings in straight-line code, since a loop's state is its
+  parameters (`issues/ownership-long-lived-local.md`). Theorems reach it
+  only through `push`, `get` and their two laws, so the representation can
+  change without a statement changing. A variable's code is
   static, a function of the body alone and never of a value, so no later
   dispatch waits on one.
 - **Steps are total, and stated once** (proposed). The step model is a
@@ -2906,7 +2918,9 @@ Func  = signature (§15.8), body
 - **The run** (proposed: level 2 as §18.3 fixed it, over `Dyn`). A heap is
   a list of blocks, each dead or live with an object. A variable holds a
   plain value or a reference, a block and steps. An object is a `Dyn` and
-  its **holes**: steps, closed in the run, at which the value is not here
+  its **holes**: selections (what was selected, an index being the
+  variable's own value; steps with their atoms are the body's syntax) at
+  which the value is not here
   but *owned* (in a block it owns), *viewed* (a block and steps it does not
   own: a stored view, §15.2) or *taken*. A nested part whose sharing class
   is "object" is always an owned hole. **A reference is canonical**: it is
