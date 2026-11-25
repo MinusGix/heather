@@ -7,6 +7,7 @@ import native_source_spelled;
 import native_source;
 import native_compile;
 import function_ir;
+import function_ir_counted;
 import list;
 import bitvec;
 import itree;
@@ -97,24 +98,37 @@ fn shout() → Tool {
 }
 
 // The map as written: the index (word 0) and the bit the loop leaves
-// (word 1) set, the bound placed (word 2), then a loop over the index in
-// place, its count word 3 and its exit bit word 4, the pass's words from 5:
-// the byte loaded and tested, the branch on the test's bit, the index
-// bumped, the exit bit cleared; after the loop its count is cleared
-// (`Calc::pieces`). Every node at width 64.
+// (word 1) set, the bound placed (word 2) and moved to the counter (word
+// 3), `ran_out` cleared and the bound tested (words 6 and 7); then, where
+// it is not zero, a counted loop over the counter, `ran_out` and the index
+// in place, its exit bit word 4 and the counted leaf's temporary word 5,
+// the pass's words from 8: the byte loaded and tested, the branch on the
+// test's bit, the index bumped, the exit bit cleared and `ran_out` its
+// negation, then the counted leaf; where it is zero, `ran_out` set. After
+// it the counter, bit and temporary are cleared (`Calc::pieces`). Every
+// node at width 64.
 fn shout_pass() → StructuredRegion {
-    Sequence(Region::bare([BufferLoad(5, 0, 0), Const(64, 8, 97), Sub(64, 7, 5, 8), Const(64, 9, 26), UnsignedLessThan(64, 6, 7, 9)]),
-        Compose(Conditional(Ports([]), 6, Ports([]), Ports([]),
-                Dataflow(Region::bare([Const(64, 11, 32), Sub(64, 10, 5, 11), BufferStore(12, 0, 0, 10)])), Dataflow(Region::bare([]))),
-            Dataflow(Region::bare([Const(64, 6, 1), Add(64, 0, 0, 6), Const(64, 4, 0)]))))
+    Sequence(Region::bare([BufferLoad(8, 0, 0), Const(64, 11, 97), Sub(64, 10, 8, 11), Const(64, 12, 26), UnsignedLessThan(64, 9, 10, 12)]),
+        Compose(Conditional(Ports([]), 9, Ports([]), Ports([]),
+                Dataflow(Region::bare([Const(64, 14, 32), Sub(64, 13, 8, 14), BufferStore(15, 0, 0, 13)])), Dataflow(Region::bare([]))),
+            Dataflow(Region::bare([Const(64, 9, 1), Add(64, 0, 0, 9), Const(64, 4, 0), Const(64, 5, 0), Equal(64, 1, 4, 5)]))))
+}
+
+fn shout_loop() → StructuredRegion {
+    Until([3, 1, 0], [3, 1, 0], Compose(shout_pass(), Dataflow(Region::bare(counted_nodes(3, 3, 4, 5)))), 4, [3, 1, 0], [3, 1, 0], 0)
+}
+
+fn shout_tail() → StructuredRegion {
+    Compose(Conditional(Ports([]), 7, Ports([]), Ports([]), shout_loop(), Dataflow(Region::bare([Const(64, 1, 1)]))),
+        Dataflow(Region::bare([Const(64, 3, 0), Const(64, 4, 0), Const(64, 5, 0)])))
 }
 
 fn shout_map() → StructuredRegion {
-    Sequence(Region::bare([Const(64, 0, 0), Const(64, 1, 0), Const(64, 2, 2)]),
-        Compose(Loop([0], 2, [0], 3, shout_pass(), 4, [0], [0], 1), Dataflow(Region::bare([Const(64, 3, 0)]))))
+    Sequence(Region::bare([Const(64, 0, 0), Const(64, 1, 0), Const(64, 2, 2), Move(64, 3, 2), Const(64, 1, 0), Const(64, 6, 0), UnsignedLessThan(64, 7, 6, 3)]),
+        shout_tail())
 }
 
-theorem shout_lowered(): shout().source() = Source(functions := [], buffers := [Buffer(2, [BitVec::ofNat(97), BitVec::ofNat(66)])], words := 13,
+theorem shout_lowered(): shout().source() = Source(functions := [], buffers := [Buffer(2, [BitVec::ofNat(97), BitVec::ofNat(66)])], words := 16,
     main := Then(Compute(shout_map()), Then(Stmt::leaf([Const(64, 1, 0)]), Then(Stmt::leaf([BufferLoad(0, 0, 1)]), Exit(0))))) {
     refl
 }
@@ -128,8 +142,8 @@ theorem shout_runs(): shout().source().tree([], 0) = Ret(BitVec::ofNat(65)) { re
 // count, and still scoped.
 fn raised(n: Nat) → StructuredRegion { raise_bytes(Buf(0, 2), num(n)).region(0) }
 
-theorem raised_open(n: Nat): raised(n) = Sequence(Region::bare([Const(64, 0, 0), Const(64, 1, 0), Const(64, 2, n)]),
-    Compose(Loop([0], 2, [0], 3, shout_pass(), 4, [0], [0], 1), Dataflow(Region::bare([Const(64, 3, 0)])))) {
+theorem raised_open(n: Nat): raised(n) = Sequence(Region::bare([Const(64, 0, 0), Const(64, 1, 0), Const(64, 2, n), Move(64, 3, 2), Const(64, 1, 0),
+    Const(64, 6, 0), UnsignedLessThan(64, 7, 6, 3)]), shout_tail()) {
     refl
 }
 

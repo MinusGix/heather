@@ -38,6 +38,7 @@ import function_ir;
 import function_ir_operation;
 import function_ir_eval;
 import function_ir_state;
+import function_ir_counted;
 import bitvec;
 import bool;
 import list;
@@ -76,7 +77,8 @@ inductive Val {
 // one structured region (`Calc::region`) that the compiler takes inside a
 // leaf as it is written (native_structured's `StructuredRegion::scoped`):
 // every node at width 64, a branch on a comparison's bit, a loop in
-// counted form. `Choose` lowers to a `Conditional`, `Passes` to a `Loop`.
+// counted form. `Choose` lowers to a `Conditional`, `Passes` to a counted
+// `Until` (function_ir_counted) behind a test of its bound.
 //
 // `Passes` makes at most `bound` passes over the words `state`: each runs
 // `body` on the passes left (counted down from `bound`), then ends the loop
@@ -542,35 +544,30 @@ fn List::placed_words(self values: List<Val>, next: Nat) → PlacedAll {
     }
 }
 
-// Every loop's count in the region, the loops inside others' too.
-fn StructuredRegion::counts(self region: StructuredRegion) → List<Nat> {
-    match region {
-        Dataflow(_) => [],
-        Sequence(_, continuation) => continuation.counts(),
-        Compose(prefix, continuation) => prefix.counts() ++ continuation.counts(),
-        Conditional(_, _, _, _, when_true, when_false) => when_true.counts() ++ when_false.counts(),
-        Lend(_, _, _, _) => [],
-        Call(_, _, _, _) => [],
-        Loop(_, _, _, count, body, _, _, _, _) => Cons(count, body.counts()),
-        Until(_, _, body, _, _, _, measure_at) => body.counts(),
-    }
-}
-
 // Each id cleared: a word written, so dead before.
 fn List::cleared(self ids: List<Nat>) → List<Node> { ids.map(λ (id: Nat) => Const(64, id, 0)) }
 
+// A leaf's region, its nodes with no ports.
+fn Stmt::leaf_region(nodes: List<Node>) → Region { Region(Ports([]), nodes, Ports([])) }
+
 // The statement's pieces, temporaries from `next`. A branch tests its bit,
-// its arms' temporaries past the bit's; a loop's bound is placed first,
-// then come its count and exit bit, the pass's temporaries past them, and
-// the pass ends with its exit bit computed. Its state words are its
-// inputs, parameters, next state and outputs all at once, so the loop
-// updates them in place and moves nothing. After the loop its counts are
-// cleared: the allocator keys a loop's live set by its count, and a later
-// loop testing a word of the same id (a sibling numbers its words from the
-// same `next`) shares the set (native_alloc's `Source::loop_sets`), which
-// would make the count live after the loop that counts with it, and the
-// compiler refuses a loop that clobbers a word live after it
-// (native_structured's `loop_keeps`). Cleared, a count is dead there.
+// its arms' temporaries past the bit's. A loop's bound is placed first and
+// moved to its counter, then come its exit bit, the counted leaf's
+// temporary and the words that test the bound, the pass's temporaries past
+// them. A bound of zero makes no pass and runs out; any other is a counted
+// `Until` over the counter, `ran_out` and the state: each pass runs the
+// body, sets the exit bit from `stop` and `ran_out` to its negation, and
+// the counted leaf lowers the counter and sets the bit where it reaches
+// zero, so the last pass leaves `ran_out` 1 exactly where `stop` did not
+// end it. Its words are its inputs, parameters, next state and outputs all
+// at once, so the loop updates them in place and moves nothing. After the
+// loop its counter, bit and temporary are cleared: the allocator keys a
+// loop's live set by its exit bit, and a later loop of the same bit (a
+// sibling numbers its words from the same `next`) shares the set
+// (native_alloc's `Source::loop_sets`), which would make those words live
+// after the loop that writes them, and the compiler refuses a loop that
+// clobbers a word live after it (native_structured's `until_keeps`).
+// Cleared, they are dead there.
 fn Calc::pieces(self c: Calc, next: Nat) → List<Piece> {
     match c {
         Nothing => [],
@@ -594,9 +591,16 @@ fn Calc::pieces(self c: Calc, next: Nat) → List<Piece> {
             let b = bound.placed(True, next);
             let count = b.next;
             let exit = count + 1;
-            let pass = body(Var(count)).pieces(exit + 1) ++ [Nodes(stop.test().placed(True, exit).nodes)];
-            let r = Loop(state.ids(), b.id, state.ids(), count, pass.merged().joined(), exit, state.ids(), state.ids(), ran_out.id);
-            [Nodes(b.nodes), Part(r), Nodes(r.counts().cleared())]
+            let t = exit + 1;
+            let zero = t + 1;
+            let some = zero + 1;
+            let words = Cons(count, Cons(ran_out.id, state.ids()));
+            let work = (body(Var(count)).pieces(some + 1) ++ [Nodes(stop.test().placed(True, exit).nodes ++ [Const(64, t, 0), Equal(64, ran_out.id, exit, t)])])
+                .merged().joined();
+            let r = Until(words, words, Compose(work, Dataflow(Stmt::leaf_region(counted_nodes(count, count, exit, t)))), exit, words, words, 0);
+            [Nodes(b.nodes ++ [Move(64, count, b.id), Const(64, ran_out.id, 0), Const(64, zero, 0), UnsignedLessThan(64, some, zero, count)]),
+                Part(Conditional(Ports([]), some, Ports([]), Ports([]), r, Dataflow(Stmt::leaf_region([Const(64, ran_out.id, 1)])))),
+                Nodes([count, exit, t].cleared())]
         },
     }
 }
@@ -611,7 +615,7 @@ inductive Item { Op(node: Node), Do(stmt: Stmt) }
 
 fn List::ops(self nodes: List<Node>) → List<Item> { nodes.map(λ (node: Node) => Op(node)) }
 
-fn Stmt::leaf(nodes: List<Node>) → Stmt { Compute(Dataflow(Region(Ports([]), nodes, Ports([])))) }
+fn Stmt::leaf(nodes: List<Node>) → Stmt { Compute(Dataflow(Stmt::leaf_region(nodes))) }
 
 // Each port read where a port of its id was written, at that width.
 fn Port::agrees(self port: Port, written: List<Port>) → Bool {
