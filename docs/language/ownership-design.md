@@ -1629,57 +1629,74 @@ its meaning is relational. The new language states its own regions with
 the same shapes so that the lowering can reuse the emission and the
 word-and-control theorems.
 
-**The language** (`bytes_level`). Values are words and references
-(`reference_cells`' `Value`, until the heap's move). A routine's ids hold
-words in a FunctionIR valuation, so a wrapped node (`Compute`) runs as
-FunctionIR's evaluator runs it, unedited, and references beside them.
-Nodes: `Compute`, a load and a store of 1, 2, 4 or 8 bytes, a reference's
-load and store, `Offset` and a typed `Copy`. Regions: a leaf, a sequence,
-a branch, a call and a bounded loop, as FunctionIR's. One meaning,
-`run(p, f, args, heap) → Option<Answer>`; `Calls()`; `Refines`. Validity
-checks every id's kind (`Program::valid`), and that check is what replaces
-`placeless`. Placelessness is `run_renames` and `run_words_alike`
-(`bytes_level_renames`), proved once for the language, routine by routine
-and level by level.
+**The language** (`bytes_level`, as revised the same day by the
+coordinator's round on the world and non-terminating loops). Values are
+words and references (`reference_cells`' `Value`, until the heap's move).
+A run is at a configuration: a routine's ids (its words in a FunctionIR
+valuation, so a wrapped node (`Compute`) runs as FunctionIR's evaluator runs
+it, unedited, and references beside them), memory (the heap and its
+undefined bytes), and the world (`linux_world`'s `Io`). Nodes: `Compute`, a
+load and a store of 1, 2, 4 or 8 bytes, a reference's load and store,
+`Offset` and a typed `Copy`. Regions: a leaf, a sequence, a branch, a call,
+a plain loop, a system call (`Sys`: read and write so far) and `Exit`. The
+one meaning is a family over fuel, `run(p, blocks, n, f, args, heap, io) →
+Ran<Answer>`, where `Ran` is one of `Done`, `Exited`, `Going` with the world
+so far, or `Stuck` (no meaning). It is monotone in fuel (`run_monotone`,
+`run_settled`, `bytes_level_fuel`). Calls and loop passes spend fuel, so
+routines are tied by fuel and not by levels. Validity checks every id's
+kind (`Program::valid`, a system call's descriptor and count among them),
+and that check is what replaces `placeless`. Placelessness is `run_renames`
+and `run_words_alike` (`bytes_level_renames`), proved once for the
+language, fuel by fuel; a renaming is the identity on the world, because a
+command carries only words and bytes.
 
 **Choices this made**, each the default taken where §17.2–17.3 left it
 open:
 
-- *Which blocks may be written is part of the heap* (`Memory`: the heap
-  and `written`). With references, which block a store hits is dynamic,
-  so no static check can stand for "the stores were inside the lending";
-  a store into a block the run may not write has no meaning. It is fixed
-  for a run, as the blocks are, and folds into the heap type when that
-  moves beside `Injected`.
-- *Every memory operation is a take or a put of a piece* (bytes and the
-  references wholly among them, at offsets of their own). A word's load
-  is a take holding no reference. A reference's load is a take of eight
-  bytes holding one at its start. A store is a put of bytes, a
-  reference's store a put of eight zero bytes holding it, and a typed
-  copy a take and a put. So there are two site facts and two renaming
-  lemmas, and each lowering lemma will be one `Injected` lemma per
-  primitive.
-- *Canonical by construction*: a reference's bytes are zero
-  (`Memory::Canonical`, kept by take, put, store and copy, and so by every
-  run: `run_canonical`, `bytes_level_canonical`). That entries are apart
-  from each other is kept by construction too but not yet stated; the
-  passes' congruence needs it (`issues/bytes-level-passes.md`).
-- *`Refines` compares heaps as they read* (`Memory::Same`: the same bytes,
-  the same entries, the same blocks writable). There is no function
-  extensionality, and a heap's blocks are a function.
-- *Widths stay FunctionIR's*: validity checks kinds, not the widths of
-  word nodes, which the leaf's lowering tracks as it does today.
+- *What is fixed for a run is beside the program, not in what it answers*:
+  `Blocks` says which blocks may be written, and the heap holds contents.
+  With references, which block a store hits is dynamic, so a store into a
+  block the run may not write is `Stuck`. One writability per block per
+  run is the grain; read-only-ness per call is proved above, by the
+  checker. Lengths stay the heap's (its bytes are lists): a second copy
+  would need an invariant tying the two.
+- *A byte is plain, part of a reference, or undefined.* A load of an
+  undefined byte is `Stuck`; a store defines; a failed read leaves its
+  window undefined; a typed copy carries undefinedness.
+- *Every memory operation is a take or a put of a piece* (bytes, the
+  references wholly among them at offsets of their own, and which bytes
+  are undefined). A word's load is a take holding no reference and nothing
+  undefined. A reference's load is a take of eight bytes holding one at its
+  start. A store is a put of bytes, a reference's store a put of eight zero
+  bytes holding it, and a typed copy a take and a put. So there are two
+  site facts and two renaming lemmas, and each lowering lemma will be one
+  `Injected` lemma per primitive.
+- *Canonical by construction*: a reference's bytes and an undefined byte
+  are zero (`Memory::Canonical`, kept by every put and so by every run:
+  `run_canonical`, `bytes_level_canonical`). That entries are apart from
+  each other is kept by construction too but not yet stated; the passes'
+  congruence needs it (`issues/bytes-level-passes.md`).
+- *`Refines` has three clauses* (the coordinator's): answers and exits of
+  `p` are `q`'s; a history `p` reaches while going is a prefix of one `q`
+  reaches; a history `q` reaches is a prefix of one `p` reaches unless `p`
+  gets stuck. Heaps are compared as they read (`Memory::Same`); there is no
+  function extensionality. `refines_refl` is proved. Transitivity does not
+  hold as stated: a stuck `q` lets the third clause of `(q, s)` say nothing,
+  while `p`, which `q` refines, may diverge silently. The usual repair is
+  CompCert's: `Stuck` carries the history it was stuck after, and the third
+  clause's exception is "`p` stuck after a prefix of that history".
+- *Widths stay FunctionIR's*: validity checks kinds, not the widths of word
+  nodes, which the leaf's lowering tracks as it does today.
 - *`Offset` adds a word as a number*: a reference below its block's start
   is not expressible yet. A window is carved forward from a base.
-- *A call of the system* is a callee kind (`Callee::System`) over an empty
-  `Syscall`. Where the world is designed its cases land there, answered by
-  its model, which `Calls` then carries.
 
 **Cost** (shapes, `--timings` per declaration). Each module's own
-declarations check in well under a second in all, and none is costly; the
-renaming proof is linear in the language's constructors. `run` on the
-probes is a few thousand kernel steps per run, linear in the nodes
-executed.
+declarations check in about a second or less in all; the costliest are
+the canonical lemmas' `omega` steps. The renaming and fuel proofs are
+linear in the language's constructors. `run` on the probes is a few
+thousand kernel steps per run. On the experiment's heap (blocks as a
+closure per store) a read of one block through stores into another is
+quadratic in the stores; blocks as a list by number is the linear form.
 
 **What follows.** The lowering under `Site::Meets`
 (`issues/bytes-level-lowering.md`), the translation of FunctionIR programs
