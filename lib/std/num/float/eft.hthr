@@ -1934,3 +1934,50 @@ theorem Finite::veltkamp({F: Format}, x, cf, g, d, xh, xl: Finite(F), s: Nat, ev
     Finite::veltkamp_tail(x, g, d, xh, xl, s, mode, hh, hl,
         F.veltkamp_H(x, g, d, s, cf.val() * x.val(), ecx, ng, x.val() - g.val(), edx, nd, normal, s1, sp, lo, hi))
 }
+
+// ---------------------------------------------------------------------------
+// Fast2Sum past the finite range.
+
+// Fast2Sum's exact overflow error (FLoPS Theorem 12;
+// issues/float-fast2sum-saturated.md). When the sum of positive `b <= a`
+// is at or past the largest float `M` and was saturated to it, by any
+// rounding mode and saturation (`project.hthr`), `z = M - a` is a Sterbenz
+// difference and `t = b - z = (a + b) - M` lies on `b`'s grid between 0 and
+// `b`, so both subtractions are exact in any modes: `t` is the overflow
+// error.
+theorem Finite::fast_two_sum_sat({F: Format}, a, b, z, t: Finite(F), mz, mt: Mode, ap: a.neg = False, bp: b.neg = False,
+    ba: b.val() <= a.val(), over: (Finite::max_finite(F)).val() <= a.val() + b.val(),
+    hz: (Finite::max_finite(F)).sub(a, mode := mz) = Float::Fin(z), ht: b.sub(z, mode := mt) = Float::Fin(t)):
+    (Finite::max_finite(F)).val() + t.val() ≈ a.val() + b.val()
+{
+    let M = Finite::max_finite(F);
+    let aH = Finite::H_pos(a, ap);
+    let bH = Finite::H_pos(b, bp);
+    let am: (a.H() <= M.H()) = Finite::H_le_max(a);
+    let bah: (b.H() <= a.H()) = Finite::H_le_of_le(b, a, ba);
+    let ex: (a.val() + b.val() ≈ F.grid(a.H() + b.H())) = Rat::same_trans(Rat::add_respects(a.val_grid(), b.val_grid()), F.grid_add(a.H(), b.H()));
+    let ov: (M.H() <= a.H() + b.H()) = F.le_of_grid_le(M.H(), a.H() + b.H(), Rat::le_respects(M.val_grid(), ex, over));
+    let ez = Finite::sterbenz_H(M, a, omega, omega);
+    let zh: (z.H() = M.H() - a.H()) = Finite::sub_exact_H(M, a, z, mz, ez, hz);
+    let cb = F.canonical_elim(b.mag, b.bexp, b.ok);
+    let bm: (b.bexp <= M.bexp) = cb.right.left;
+    let bae: (b.bexp <= a.bexp) = match cb.right.right.left {
+        Inl(z0) => omega(z0),
+        Inr(hm) => {
+            let P = Nat::pow(2, b.bexp);
+            let l: (F.half() * P <= b.mag * P) = Nat::mul_le_mono_r(P, F.half(), b.mag, hm);
+            let p1: (Nat::pow(2, b.bexp + 1) = P * 2) = refl;
+            let bu: (b.units() = b.mag * P) = refl;
+            let r1: (F.half() * Nat::pow(2, b.bexp + 1) = (F.half() * P) * 2) = ring(p1);
+            Finite::bexp_ge(a, b.bexp, omega)
+        },
+    };
+    let gz: OnGrid(b.bexp, z.H()) = j(sym(zh), λ v _ => OnGrid(b.bexp, v),
+        on_grid_sub(b.bexp, M.H(), a.H(), Finite::H_on_grid(M, b.bexp, bm), Finite::H_on_grid(a, b.bexp, bae)));
+    let gb = on_grid_sub(b.bexp, b.H(), z.H(), Finite::H_on_grid(b, b.bexp, b.bexp.le_refl()), gz);
+    let et = F.rep_on_grid(b, b.H() - z.H(), gb, omega, omega);
+    let th: (t.H() = b.H() - z.H()) = Finite::sub_exact_H(b, z, t, mt, et, ht);
+    let sum: (M.H() + t.H() = a.H() + b.H()) = omega;
+    let lhs: (M.val() + t.val() ≈ F.grid(M.H() + t.H())) = Rat::same_trans(Rat::add_respects(M.val_grid(), t.val_grid()), F.grid_add(M.H(), t.H()));
+    Rat::same_trans(lhs, Rat::same_trans(j(sum, λ v _ => F.grid(M.H() + t.H()) ≈ F.grid(v), F.grid(M.H() + t.H()).same_refl()), Rat::same_sym(ex)))
+}
