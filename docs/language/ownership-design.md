@@ -2046,6 +2046,52 @@ per function connects them.
    an interface; a function general in its representation; how a place in
    the specification (an element, a window) becomes a place in a
    representation; and where the transfer sits relative to the checker.
+4. **How a typed function meets the checker's meaning.** Result
+   (2026-11-25, `lib/lang/ownership/coded.hthr`, probes in
+   `lib/_tests/lang/ownership/coded_tests.hthr`, log in
+   `issues/ownership-coded-values.md`).
+
+   **The universal value as a native value tagged with its code keeps both
+   headline results.** A code (`Shape`: word, sequence, named type) and its
+   decoding by large elimination (`El`), a structure per named type (a
+   record's field paths, or opaque), and `Dyn` (a code with a value of its
+   decoding). The decision on codes and the cast are `fn`s that reduce to
+   `refl` and the identity at closed codes, and `dec(c, c) = Inl(refl)` is
+   proved by induction on the code, with no unique identity proofs.
+
+   Over a list of user records and at an open type parameter, every pin
+   tried is by `refl`:
+   - a field of an element;
+   - its functional update;
+   - a generic element copy;
+   - an `if h:` guarding a read;
+   - calls passing a record and a window.
+
+   Every residual (a bound, a callee's precondition at the value passed) is
+   the source's proof by conversion. The cost is linear, 1.5 to 2.3 times
+   the uncoded meaning's steps. The same read over `Val` is an induction per
+   operation.
+
+   Three things carry the result:
+   - **The meaning reads totally and writes by modifying.** An absent part
+     reads as its code's inhabitant, and a part is modified by a function.
+     A read through a path's `Option` stops at a stuck `nth`, since the
+     kernel does not do case-of-case. So each named type's structure holds
+     an inhabitant: a `Default` in the derived instance, and a given `T` for
+     a type parameter.
+   - **A meaning answers through its continuation.** Projecting a word out
+     of a convoy over a record stops.
+   - **`StepModelLaws` does not hold at `Dyn` as stated.** A fit is a
+     property of the written value alone, so a typed step cannot be lawful
+     (`Dyn::elem_not_lawful`).
+
+   **The level-1 interface should therefore be:**
+   - values are `Dyn` over a type environment and its structures, which a
+     derived instance per type supplies, with an inhabitant;
+   - the meaning's reads and writes are total and code-directed;
+   - a step's fit is stated relative to the value the step replaces (the
+     same code, or for `Val` the same length), so that one model covers
+     both.
 
 ## 19. The representation tier (2026-11-25)
 
