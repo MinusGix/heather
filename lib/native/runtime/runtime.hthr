@@ -6701,12 +6701,22 @@ fn runtime_held_names() → Tac<HeldNames> {
 
 // A callee at a record and its operands, as its theorem states it: one
 // that only reads the record is its word beside the record as it was.
-fn runtime_held_spec(c: HeldCall, a: Expr, words: List<Expr>) → Tac<Expr> {
+fn runtime_held_spec_of(c: HeldCall, a: Expr, words: List<Expr>) → Tac<Expr> {
     let writes <- runtime_writes(c.run);
     let applied = ap(Global(c.run), Cons(a, words));
     match writes {
         True => pure(applied),
         False => runtime_held_ref("rt_held::HWorld::unchanged").bind(λ unchanged => pure(ap(unchanged, [Blank, Blank, a, applied]))),
+    }
+}
+
+// One that takes an erased parameter is its function written out over the
+// record, which answers the record beside its word whether or not it
+// changes it (issues/runtime-record-calls-erased.md).
+fn runtime_held_spec(c: HeldCall, a: Expr, words: List<Expr>) → Tac<Expr> {
+    match c.words {
+        Some(wg) => pure(ap(Global(wg), Cons(a, words))),
+        None => runtime_held_spec_of(c, a, words),
     }
 }
 
@@ -6769,7 +6779,9 @@ fn runtime_held_bridge(h: HeldRan, record: Expr, hw_of: List<Expr> → Expr, cal
 // the call as the world makes it (`bridge`). Nothing is proved here
 // about the callee.
 fn runtime_held_ran(h: HeldRan, record, whole, hw, holds_of, bridge: Expr, j: Nat, c: HeldCall, rest: LocalRef, span_of: Nat → Expr) → Tac<Expr> {
-    let agreed <- runtime_global(c.name ++ "::runs_held");
+    // A callee written out over its record owes its agreement with that,
+    // which takes no erased parameter.
+    let agreed <- runtime_global(c.name ++ match c.words { None => "::runs_held", Some(_) => "::runs_words" });
     let call <- runtime_held_called(h, record, hw, j, c.operands, True, Some(rest));
     let a = call.held.unwrap_or(call.own);
     let holds <- assume(ap(holds_of, [record, whole, Local(call.own), call.length, Local(a)]), "holds", Some(call.env)).or_fail("runtime: a span that holds a record: ");
@@ -6954,10 +6966,14 @@ fn runtime_held_straight(name: String, f: GlobalRef, r: HeldReflected, parts: Sp
     let beside <- runtime_held_ref("rt_held::HWorld::beside");
     let pin0 <- as_type(Equation(ap(beside, [Blank, Blank, Local(holds0.ref), ap(n.held, [record, parts.body, hw, g_e, env, Local(own0.ref), Local(t0.ref)])]), spelled))
         .or_fail("runtime: `" ++ name ++ "`'s pin: ");
-    let pin_all <- runtime_held_reverted(name, pin0, r.calls);
+    // A callee written out over its record is not made a parameter: its
+    // two names, `T::n::words` in the meaning and `T::n` in the body, meet
+    // only by unfolding (issues/runtime-record-calls-erased.md).
+    let reverted: List<HeldCall> = r.calls.filter(λ c => c.words.is_none());
+    let pin_all <- runtime_held_reverted(name, pin0, reverted);
     let stated <- runtime_held_ref("rt_held::HWorld::stated");
-    let pin_leaf <- runtime_held_under(stated, rfl, pin_all, r.calls.len());
-    let pin = ap(stated, Cons(Hd(pin_all), Cons(pin_leaf, r.calls.rev().map(λ c => Global(c.run)))));
+    let pin_leaf <- runtime_held_under(stated, rfl, pin_all, reverted.len());
+    let pin = ap(stated, Cons(Hd(pin_all), Cons(pin_leaf, reverted.rev().map(λ c => Global(c.run)))));
     // The pin at the callees themselves is tried first: it is the cheaper
     // of the two where it is found (at parameters the comparison makes many
     // times the queries), and a function whose record after a call is built
