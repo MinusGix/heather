@@ -1309,6 +1309,108 @@ as small as the extra pass allows).
     That is the written tail recursion's pin (§6.8) with the step for the
     body, carried through the context by `Tm::sem_with`'s oracle.
 
+### 6.10 Round D, stage 3 (proposed): the node in `FTm`
+
+*A design note for Minus before it is built (dogfooding plan §5.3b asks for
+one, with the loop as its worked example).*
+
+**What is there.** A loop over a span is compiled three ways today, none of
+them the node:
+
+- *`FTm::Loop(init, test, body, rest)`*, a `while` over a span or a
+  `Bytes(n)` in a plain `FFun`. It is lowered as `Iterate` was:
+  `Tm::iter_region` over `Tm::carry`, sound by `FTm::loop_case_sound`
+  (`rt_file_lower`). Only test probes use it (`runtime_lifted_loops`,
+  `runtime_bytes`, `runtime_ports`, `runtime_span_joins`).
+- *`FTm::Again(args)`, a span function's tail call, by the measured path*
+  (`rt_file_loop`). Tail mode lowers the body twice, as the pass and as the
+  exhausted branch (`FFun::meas_tail2`), inside a counted `Loop`, sound by
+  `FFun::measured_sound`, with `FFun::Guarded` generated per function. Its
+  users are the lexer's `List::scan_records` and `native_tool_spans`'s
+  `raise_span`.
+- *The counted paths*, laid records (`rt_held_loop`: `WordMap::*_at`,
+  `Arena::copy_at`, Sha256's `take_block`, `absorb` and its `for` loops)
+  and `Bytes(n)` (`rt_bytes_loop`). Each proves once that
+  `FFun::rounds(Fun::meas_passes(), pass, stop)` is the function, and
+  lowers it with `rt_file_loop`'s counted code.
+
+**The proposal: `FTm` gets `Tm`'s node, with the span threaded through
+it.**
+
+1. *Constructors and meaning.* `FTm::Loop(inits, body)` and the node's
+   `FTm::Again(args)`, exactly as in `Tm`. The node's state is the span and
+   its words (`Mutated<span, words>`). The meaning is
+   `FTm::sem_in(t, fw, lab)`, the meaning under the innermost loop's
+   continuation: `Again` answers `lab`, and a node is `Loop::rounds` of its
+   body read under its own label. `FTm::sem` is `sem_in` at no label, so
+   every existing statement holds by conversion.
+   - A self-call outside any node stops being `Again`. It becomes a `Call`
+     of computation 0, which is what its meaning already is (`FTm::called(…, 0,
+     …)`). The reflector writes a tail-recursive span function as
+     `Loop(params, body)`, as `Fun::as_node` does for words.
+   - Today's `FTm::Loop`, which binds the loop's answer and has a `rest`,
+     becomes `Let`-like sequencing of the node and the rest. Its spelling
+     is to be settled when it is built: a node is a computation whose value
+     the rest is bound to, so the rest is an `FTm::Call`-shaped binder over
+     a node, not a field of it.
+2. *Lowering.* One `Until` over the state words. The span's place and
+   length stay where they are, as the measured path keeps them (`ks`). The
+   pass is tail mode's lowering, renamed as the node's pass (§6.7's
+   accepted rename, `FTm::lower_pass`/`FTm::pass_sound`). It is lowered
+   once: the exhausted branch goes, because the measure is evidence
+   (§6.9's stage 1), as it went for `Tm`.
+3. *Pin.*
+   - A tail recursion is pinned as on `Tm` (§6.8), by
+     `Loop::rounds_agree_below` at the function's measure. The pass
+     agreement is what `FFun::Guarded` already states, so the generator's
+     `guarded` becomes the node's `NodePass`.
+   - A `while` is pinned as on `Tm` (§6.9). The elaborator already writes
+     `f::loop…::runs` for a loop over a span (`lift_steps_over`), so the
+     oracle route (`sem_with`, `nodes_sem`) carries over, with the span in
+     the state.
+   - The held and `Bytes(n)` counted proofs (`counted_held`,
+     `counted_over`) are stated against `FFun::rounds`. They move onto the
+     node's rounds, which have the same shape (a pass and its leaving).
+4. *What goes, as each piece moves:*
+   - `FTm::Loop`'s lowering and soundness, and with it `Tm::iter_region`
+     and `Tm::carry`, the last of `Iterate`'s code;
+   - `FFun::lower_measured`, `FFun::measured_sound`, `FFun::meas_tail2`,
+     the measured instance (`FFun::compile_measured`) and `FFun::Guarded`
+     as a separate statement. This is 3h's "measured `FFun` path".
+
+**The order.**
+
+| Step | What it does |
+|---|---|
+| a | The node's constructors, meaning and lowering, with soundness (pass from tail mode, the `Until` from `Tm::loop_sound_at`'s shape). |
+| b | Span tail recursion on it: the lexer and `raise_span` move, and the measured path goes. |
+| c | The held and `Bytes(n)` counted paths move. |
+| d | Span `while`s move, and `FTm::Loop`'s old lowering, `iter_region` and `carry` go. |
+
+Each step keeps the library gate green and deletes what it replaces.
+
+**The question for Minus.** Dogfooding §5.3(b) leans to *one* control
+language shared by `FTm` and `ETm` (`let`, `if`, loop, call, with pure
+terms as leaves), so that loops are built once. Building the node in `FTm`
+alone builds it a second time (after `Tm`) and leaves `ETm`'s loop
+(`rt_io_loop`, `Io::iterate`) for a third. Two options:
+
+- **(A) The node in `FTm` now, as above**, and the shared language later,
+  folding `FTm`'s node into it. This is faster to the ledger's tail calls,
+  but the node is written twice more before it is shared.
+- **(B) The shared control language first**, a functor over the leaf
+  language (pure `Tm`, span effects, `Io` effects) with `let`, `if`, call
+  and the node built once, its meaning and lowering parametric in the
+  leaf's. Then `FTm` and `ETm` become instances. This is slower to start,
+  but the node, its pin and its lowering are proved once, and 3h's
+  deletions land on one copy.
+
+The lean is (A) for this round: the ledger's tail calls wait on it, and
+nothing in (A) is lost when (B) comes, because (B) is a refactor of (A)'s
+proofs over an abstract leaf. (B) is worth its own design note, after
+(A)'s step a shows what the leaf interface must offer: the meaning of a
+leaf at a span, its lowering, and its soundness.
+
 ## 7. Bootstrapping
 
 Minus's fear: a bug that infects the next version. The loop's meaning is
