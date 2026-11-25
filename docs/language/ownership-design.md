@@ -1321,6 +1321,20 @@ callee that answers the right value at the wrong place, keeping every other
 part of the promise; with it, an accepted caller's runs differ
 (`stray_breaks`).
 
+*Postconditions* (2026-11-25, `ownership-fnsafe-postconditions`). `FnSafe`
+gains a postcondition, a proposition of the call's words and its answer,
+which the callee's own proof establishes and its callers assume. The
+checker's data did not change: a residual over a word a call bound is
+ordinary closed data, and its proof is the caller's, under the hypothesis
+`Posted` that the world's callees answer what their postconditions say
+(derived from their `FnSafe` at a file holding only the argument). A
+callee's postcondition is one more proof parameter beside its precondition
+(§15.8). One limit: the depth-zero world of `prog_sound` answers zero, so a
+postcondition zero does not meet is composed depth by depth from
+`check_sound` (`after_sound`); a recursive program with such a postcondition
+needs the termination the meaning assumes, which this toy's world by depth
+does not state.
+
 ### 15.7 Settled by Minus, 2026-11-25, and what is still open
 
 - **When memory runs out**: room is a premise of the machine theorem, the
@@ -1361,7 +1375,9 @@ its mode (take, read, write), the parts it may write, and what places its
 type's regions stand for; for the result its class and whether it is fresh,
 is a parameter, or is a view of places of parameters; and its cost (none, a
 bound with its theorem, or unstated: §15.9). Residual preconditions are not extra data: they are the proof
-parameters in the kernel type. A caller's checker reads the modes to step
+parameters in the kernel type, and so is a postcondition about the answer,
+which the function's proof establishes and its callers assume (the fourth
+experiment's `FnSafe`). A caller's checker reads the modes to step
 its place states across the call, the result's origin to know what is
 frozen or out while the result lives, the parts to emit `Apart` against
 views it holds, and the name of the callee's safety theorem to cite. It
