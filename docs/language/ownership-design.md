@@ -2264,6 +2264,65 @@ per function connects them.
    an interface; a function general in its representation; how a place in
    the specification (an element, a window) becomes a place in a
    representation; and where the transfer sits relative to the checker.
+4. **How a typed function meets the checker's meaning.** Result
+   (2026-11-25, `lib/lang/ownership/coded.hthr`, probes in
+   `lib/_tests/lang/ownership/coded_tests.hthr`, log in
+   `issues/ownership-coded-values.md`).
+
+   **The universal value as a native value tagged with its code keeps both
+   headline results.** A code (`Shape`: word, sequence, named type) and its
+   decoding by large elimination (`El`), a structure per named type (a
+   record's field paths, or opaque), and `Dyn` (a code with a value of its
+   decoding). The decision on codes and the cast are `fn`s that reduce to
+   `refl` and the identity at closed codes, and `dec(c, c) = Inl(refl)` is
+   proved by induction on the code, with no unique identity proofs.
+
+   Over a list of user records and at an open type parameter, every pin
+   tried is by `refl`:
+   - a field of an element;
+   - its functional update;
+   - a generic element copy;
+   - an `if h:` guarding a read;
+   - a function that continues after its `if`;
+   - calls passing a record and a window.
+
+   Every residual (a bound, a callee's precondition at the value passed) is
+   the source's proof by conversion. The cost is linear, 1.5 to 2.3 times
+   the uncoded meaning's steps. The same read over `Val` is an induction per
+   operation.
+
+   What carries the result, and what it changes:
+   - **The meaning reads totally and writes by modifying.** An absent part
+     reads as its code's inhabitant, and a part is modified by a function.
+     A read through a path's `Option` stops at a stuck `nth`, since the
+     kernel does not do case-of-case. This is how today's `runtime fn`
+     sources already read: `Vec::at` and `Bytes::at` carry the bound as an
+     erased parameter and their bodies are total, 0 past the end. A read
+     that consumes its proof costs one library lemma per site. For an open
+     `T` the inhabitant can stay in the pin's statement, quantified: a
+     write then pins by `refl`, and a read needs that lemma.
+   - **A branch names its output.** Each output after the join is the
+     convoy of the arms' values, and what follows runs once. A function
+     that continues after its `if` then pins by `refl`, at linear cost.
+   - **A step's fit is relative to the value it replaces.**
+     `StepModelLaws` as stated cannot hold at `Dyn`
+     (`Dyn::elem_not_lawful`), since a fit over the written value alone
+     cannot say "the read part's code". With `fits(read, written)`:
+     - any model lawful as stated stays lawful (`Val`'s included);
+     - the decider's soundness holds by the same proof;
+     - `Dyn`'s model is lawful from the structures' laws alone, with no
+       unique identity proofs;
+     - a single-sorted step lemma (a store through a view keeps every view
+       the decider finds apart) follows from these laws without looking
+       inside a code.
+
+   **The level-1 interface should therefore be:**
+   - values are `Dyn` over a type environment and its structures, which a
+     derived instance per type supplies (field paths, their laws, an
+     inhabitant);
+   - the meaning's reads and writes are total and code-directed;
+   - a branch names its outputs;
+   - `steps.hthr`'s laws take the relative fit, changed once in place.
 
 ## 19. The representation tier (2026-11-25)
 
