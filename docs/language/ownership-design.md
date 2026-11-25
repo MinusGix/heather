@@ -1740,3 +1740,138 @@ per function connects them.
    an interface; a function general in its representation; how a place in
    the specification (an element, a window) becomes a place in a
    representation; and where the transfer sits relative to the checker.
+
+## 19. The representation tier (2026-11-25)
+
+Round seven of the design review, after Minus's answer in §18.4 item 3.
+What `docs/native/datarepr-design.md` becomes in this design. Nothing here
+is built; the library's only `datarepr` declarations are `I8` to `I64` for
+`SInt(n)`, and today's containers (the arena's vector, the word map) are
+hand-written representations: an abstraction function, an invariant record
+and one theorem per operation.
+
+### 19.1 Where the transfer sits
+
+Before the checker. There is one reflected language, read over two tables
+of operations, the specification's and a representation's. The transfer
+rewrites each object binder's type from the specification type to the
+carrier, and each interface call to that representation's implementation.
+The checker, level 2 and everything below see only the result, so level 2
+stays structural, a representation's operations are checked code, and
+whether an operation is in place and what it costs are facts about an
+implementation.
+
+The transfer's theorem is proved once over the reflected language, by
+induction on the term with "the representation environment abstracts to
+the specification environment" as its invariant, from a table saying each
+implementation refines its operation and keeps the invariant. (The
+existing generator emits that induction as text per function, because it
+works on unreflected source.) A level-2 value stands for a specification
+value when it reads a carrier value that satisfies the invariant and
+abstracts to it; the end theorem is a function's safety (§18.3) with that
+in place of reading, about the function the user wrote. The invariant
+enters as a precondition and a postcondition.
+
+How what is stated at the specification crosses: a mode is the same mode
+at the carrier's type; a region `xs[a..b]` is the representation's place
+for that selector, or the whole object where it has none; a found proof
+`i < xs.len()` becomes the residual at the carrier by one rewrite with the
+length's refinement; an apartness is decided on the translated steps; and
+"in place" is the implementation's result origin, so a representation
+whose `set` copies makes a demand for in place a refusal that names it.
+
+### 19.2 Places
+
+A representation declares, for each kind of selector it supports, a
+translation into its own steps and two equations through the abstraction
+function (the place's read and its write agree with the specification's):
+for a vector, an element is the items field then the element. This is the
+refinement of the selector's read and write, stated on `Steps`, and not a
+new kind of fact. The checker works on the translated steps, so fine
+apartness is structural.
+
+A place with no constant-time form (an element of a linked list) is an
+accessor: a checked function answering a view, with the same two
+equations. The checker does not see through it, so its region is the whole
+object and its cost is its body's. A place the representation has neither
+for is refused, naming it and the written copy.
+
+A window of a vector is itself a representation of the list, a slice with
+no `push`; so two representations of one specification type in one
+function is the ordinary case. Beyond refinements and these, a
+representation owes a bound on its size by the specification's length
+(§15.9).
+
+### 19.3 Choosing one, and functions general in it
+
+A representation belongs to an object and is fixed where the object is
+made: by the constructing operation, by `as Vec` on a binder, parameter or
+field, or by a default per specification type. A function with no `as` is
+general and is specialised per representation at each use, the instance
+keyed by the function and each object parameter's representation; no
+dispatch at run time and no inserted conversion.
+
+For that to leave an interface stable, **the specification's interface is
+declared, with modes**: each operation with its meaning and its modes
+(`set` takes its list; `get` reads). A representation implements at those
+modes; one that copies does not use the licence it was given. The sharing
+signature of §15.8 splits into a general part (modes, regions at
+specification places), which is all a caller's checker reads, and a part
+per instance (result origin, cost, the code).
+
+### 19.4 Failure
+
+Three sources, none an outcome type. A failure the input determines within
+a representation is a precondition of its implementation, so a residual at
+the call: a fixed-capacity `push` owes that there is room, discharged by a
+found proof, the user's, or a test the user writes, which is definable at
+the specification level because a fixed capacity is a static parameter.
+Memory is the room premise: a growable `push` is total and its growth is a
+`new`, entering the cost. A program that must handle exhaustion uses a
+specification type that has the outcome. The existing design's inserted
+check that bubbles an error goes, since the specification does not define
+its failure (§14 item 6).
+
+### 19.5 What changes in `datarepr`
+
+Kept: a carrier, a total abstraction function, an invariant; the open
+registry of implementations keyed by representation and operation with
+their refinement and invariant theorems; keying on the declaration; no
+inserted conversion; nothing trusted. Surplus: the outcome path;
+constructor images as required fields (a vector's `Cons` is a prepend
+nobody wants; an image is one more operation, implemented where a program
+constructs that way); the fold anchor as an obligation (kept as a derived
+lemma for transferring a structurally recursive library function); and
+with those, the per-inductive record generation, since the record is the
+same three fields for every specification type; and the per-function
+transfer text, replaced by the once-theorem. Missing: places; the declared
+interface with modes; a representation parameterised by its elements'
+(a vector of buffers); the sharing class and copy fact of a carrier; a
+death (structural by default, or declared where a representation owns
+things that are not owning cells, which is the one place checked code runs
+at a death); a cost and the size law; and clone as an implementation of
+the identity, `abs(clone(r)) = abs(r)`, of which an exact clone is the
+case of an injective abstraction.
+
+### 19.6 The experiments, and the test
+
+The four checker experiments are the slice representation (the
+abstraction function the identity) with the transfer left out; nothing in
+them is invalidated. Not yet exercised: an object that is a record, an
+operation that changes length, growth, an invariant as a precondition and
+postcondition. A clone's meaning at this tier is its implementation's, so
+"a clone is equal" must not harden in the checker.
+
+The test: `fn bump(xs: List<Nat>, x: Nat) → List<Nat> { let ys = xs.push(x);
+ys.set(0, ys.get(0) + ys.len()) }` by hand through the checker's fragment
+at two representations, a fixed-capacity array with a length and a growable
+one over a block. It should show the transfer's theorem stated once and
+instantiated twice; at the fixed one, only capacity and bound residuals,
+each from a specification-level hypothesis by one rewrite; at the growable
+one, no residual and the growth in the cost; and a caller holding `&xs[0]`
+across the `push` accepted at the fixed one (apart from what `push` writes)
+and refused at the growable one. It refutes the tier if the transfer needs
+an induction per function, if a specification-level proof cannot reach a
+representation-level residual mechanically, if the two instances need
+different modes at the specification level, or if the abstraction through
+the universal value costs the kernel too much per step.
