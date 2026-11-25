@@ -321,7 +321,9 @@ and the 3a twin path (`::twin`, `#elim`, `rt_reflect_loop`,
   compare). The region is given `Loop::passes()` passes, the meaning's
   fuel. Its soundness, `Tm::iterate_holds`, is by induction on the passes
   and never mentions a measure: the measure appears only in
-  `Loop::steps_stays`, about Heather terms.
+  `Loop::steps_stays`, about Heather terms. *Retired in round D stage 2
+  (§6.9): an `Iterate` is compiled only as a loop node, and this lowering
+  and its proofs are deleted; `Tm::iter_region` stays for `FTm`'s loop.*
 
 **A conversion trap found on the way.** Reading a record field after a
 symbolic loop ran the kernel out of fuel: the meaning side stalled at
@@ -870,7 +872,8 @@ found while building step 1:
   of (`f::loop::runs`).
 - Once both are done, `Iterate` and its carry (`Tm::carry`,
   `Tm::iterate_holds`) can go, and the span language's `FTm::Loop` follows
-  the same way in round 4.
+  the same way in round 4. *Done for `Tm` (§6.9): its `Iterate` lowering
+  is gone; `Tm::carry` and `Tm::iter_region` stay while `FTm` uses them.*
 
 ### 6.9 The pass budget is a proof, not code; a pass of several words
 
@@ -1280,6 +1283,16 @@ as small as the extra pass allows).
     `Tm::fields_agree` turns it into the node's meaning being the written
     loop's.
   - The generator writes it with `runtime_fields_loop`.
+- *`Iterate`'s lowering is retired.* A survey of every `runtime fn` in the
+  library and its examples found an `Iterate` left after `Tm::nodes` only
+  in two hand-written test probes. So `Tm::lower` refuses `Iterate`, and
+  `Tm::lower_iterate` and its proofs (`Tm::iterate_holds`,
+  `Tm::iterate_sound`, `Tm::iterate_static`) are deleted. The generator's
+  judgment names the reason: a loop that is not a loop node, written by
+  hand, under a `match` or inside another loop, or over a state that is
+  not 64-bit words. `Iterate` stays in `Tm` as what the reflector reads and
+  `Tm::nodes` rewrites. `FTm`'s loop still lowers through
+  `Tm::iter_region` and `Tm::carry` until it has a node of its own.
 
 ## 7. Bootstrapping
 
@@ -1307,8 +1320,8 @@ wrong compiler.
    *Status (2026-11-24):* 3a–3f built; 3g's node, its lowering and
    soundness, its pin lemma, and written tail recursion over 64-bit words
    on it are built (§6.8), and every `while` the elaborator writes over
-   64-bit words or a record of them is a node (§6.9). Left: retiring
-   `Iterate`'s lowering, the node's pin at words that are not 64-bit,
+   64-bit words or a record of them is a node, and `Iterate`'s lowering is
+   retired (§6.9). Left: the node's pin at words that are not 64-bit,
    then 3h. The span and
    laid-record recursions (the ledger's tail calls) need the node in `FTm`,
    which is round 4.

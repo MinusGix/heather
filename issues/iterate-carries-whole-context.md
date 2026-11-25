@@ -5,7 +5,7 @@ thread: Rebuild loops on one combinator
 labels: [native,runtime-fn]
 area: heather-in-heather
 created: 2026-11-20
-updated: 2026-11-21
+updated: 2026-11-25
 ---
 
 A `runtime fn` loop (`Tm::Iterate`, docs/language/loop-combinator-design.md
@@ -46,3 +46,4 @@ loop (constants inlined), but that only moves the limit.
   no register"), the same for a `while` that swaps (`let t = a + b; a := b;
   b := t`) while one that only adds compiles. Left open for that, which is the
   planner's (`StructuredRegion::plan_in`, the branch's meet).
+- 2026-11-25: `Tm::lower_iterate` is deleted (docs/language/loop-combinator-design.md §6.9): a `runtime fn`'s loop is a loop node now, whose state is its own words and the captures it reads, nothing else of the context. Whether `port_fib` reaches x86 through the node is not re-checked yet.
