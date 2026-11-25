@@ -1,6 +1,6 @@
 ---
 title: Ask a function's residuals as one statement restated over the source's terms, so their discharge costs one conversion
-status: open
+status: closed
 labels: [ownership,library,performance]
 area: heather-in-heather
 milestone: [nh-ownership]
@@ -18,3 +18,7 @@ From [[ownership-residuals-from-source-proofs]] (its log of 2026-11-25 has the m
 ## Done when
 
 A generated function with a residual at every statement discharges in time linear in its body at 256 and 512 statements, measured as `docs/proof-patterns.md` §7 says (a fresh store per run).
+
+## Log
+
+- 2026-11-25: Done in [[ownership-site-facts-into-the-checker]]. `check_sound` keeps its premise, now one statement (`Owes::Due`: every residual at the state its site reads, along the meaning) at the parameter words spelled, and a generator's term is one ascription of its restated conjunction to it (`hop_site_restated` in `lib/_tests/lang/ownership/site_facts_tests.hthr`). Measured, fresh store per run, a residual at every statement, at 64, 128, 256, 512 statements: the restated conjunction built as a recursive statement and proof, ascribed once, costs 12.2k, 23.5k, 46.2k, 93.0k kernel steps (76 ms total at 512): linear. Where the elaborator's cost went: written as a literal conjunction and a literal tuple, the kernel stays linear (8.3k to 60.5k at 32 to 256, gate 7 to 56 ms) but elaboration is 13, 58, 274, 1850 ms, in checking the anonymous tuple against the literal conjunction, not in the gate; the recursive form pays none of it, so a generator emits that form (or kernel terms). The tuple converted component by component against the checker's statement is still quadratic (57.7k at 16 to 7.65M at 256). Filed: [[elaborator-literal-tuple-against-conjunction-cost]].

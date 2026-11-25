@@ -1,6 +1,6 @@
 ---
 title: The ownership meaning keeps its words as a snoc list read by position, so a pin reading late words is quadratic in the body
-status: open
+status: closed
 labels: [ownership,library,performance]
 area: heather-in-heather
 milestone: [nh-ownership]
@@ -19,3 +19,7 @@ The meaning's environment in a shape whose read of a recent word is constant and
 ## Done when
 
 The pin at 512 statements is linear in the measured series.
+
+## Log
+
+- 2026-11-25: Done in [[ownership-site-facts-into-the-checker]] (`lib/lang/ownership/call_check.hthr`, `Env`). The words are the parameters read by position and the body's words newest first with their count: `get(w)` reads a parameter where `w` is below the parameter count, else the local at `n - (w + 1)`, so a parameter and a recent word cost the same constant. Chosen over a de Bruijn list alone because a body reads its parameters at every statement (newest first alone is quadratic there, a scratch model measured it) and over a snoc list because the pin reads the newest word. Measured, fresh store per run, pin `mean_fn(…).word = src(…)` by `refl` at bodies of 64, 128, 256, 512 statements: through the parameter 3.9k, 7.2k, 13.9k, 28.7k kernel steps; through a chain of lets (each statement reads the word the last bound) 19.3k, 38.3k, 76.3k, 154k. Linear; the snoc pin was 683k at 512. Reading an old local late is still linear in its distance; no body here does it at every statement. Several objects: the environment holds words only, so a second object adds nothing here.
