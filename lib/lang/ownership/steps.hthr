@@ -1,0 +1,411 @@
+// Paths as data: steps, their denotation, and an apartness decider
+// (docs/language/ownership-design.md §15.3, §15.5; issues/ownership-steps.md).
+//
+// A place is a root and steps. A `Step` is a field, an element at an index,
+// a window, a key, or an enum's variant, over atoms (`atom.hthr`): closed
+// data, compared by evaluation, where a `Path` (`path.hthr`) is a pair of
+// functions and cannot be compared at all.
+//
+// - **Untyped steps, a model that denotes them.** A step does not carry its
+//   source and target types: a field step goes from a record to one of its
+//   fields, and an inductive family indexed by types is a universe above
+//   what the kernel evaluates cheaply. A `StepModel<S>` gives each step with
+//   its atoms read (a `Sel`) a path in one value type `S`, in which a step
+//   that does not fit the value reads nothing; `Steps::denote` composes
+//   them by `Path::then`. Its laws (`StepModelLaws`) are what the decider's
+//   soundness reads of a model: each step lawful where what it writes fits
+//   (`PathLawsOn`), every write keeping every step's fit, and two steps
+//   whose selections are apart `Apart`. `value_steps.hthr` is the model over
+//   a universe of values, built from the library's paths.
+// - **The decider** `Steps::apart(xs, ys)` walks the common prefix and
+//   compares the first steps that differ: no (`None`: one list is a prefix
+//   of the other, or the first difference overlaps or mixes kinds), yes
+//   (`Some(Nil)`), or yes owing obligations over the atoms (`Some(rs)`)
+//   where an index or a key is open. It reads no value and no word.
+// - **Sound** (`Steps::apart_sound`): a verdict and its obligations holding
+//   at the words give `Apart` of the two denotations, by `Apart::under_on`
+//   down the common prefix and `Apart::then_both` after the difference.
+// - **Where it is complete**: on closed steps it never owes anything
+//   (`Steps::apart_closed`), and two step lists that first differ at a pair
+//   of steps whose closed selections are apart are found apart
+//   (`Steps::apart_at_difference`). It is incomplete where an open index is
+//   followed by more steps (`[Elem(x), Field(0)]` and `[Elem(y), Field(1)]`
+//   are apart whatever `x` and `y` are, and the decider owes `x ≠ y`),
+//   between steps of different kinds (refused, though in a model where no
+//   value is both a record and a sequence they are vacuously apart), and
+//   between steps that are never valid together.
+import logic;
+import bool;
+import nat;
+import option;
+import list;
+import span_set;
+import store;
+import path;
+import store_path;
+import atom;
+
+// ---------------------------------------------------------------------------
+// Steps
+
+inductive Step {
+    SField(i: Nat),
+    SElem(i: Atom),
+    SWindow(lo: Atom, n: Atom),
+    SKey(index: Atom, gen: Atom),
+    SVariant(c: Nat),
+}
+
+fn Step::same(self a, b: Step) → Bool {
+    match a {
+        SField(i) => match b { SField(j) => i.same(j), _ => False },
+        SElem(i) => match b { SElem(j) => i.same(j), _ => False },
+        SWindow(lo, n) => match b { SWindow(lo2, n2) => lo.same(lo2) && n.same(n2), _ => False },
+        SKey(i, g) => match b { SKey(i2, g2) => i.same(i2) && g.same(g2), _ => False },
+        SVariant(c) => match b { SVariant(d) => c.same(d), _ => False },
+    }
+}
+
+// A place's steps from its root, the first outermost.
+fn Steps() → Type { List<Step> }
+
+// Every atom of the step is a literal.
+fn Step::closed(self a: Step) → Bool {
+    match a {
+        SField(_) => True,
+        SElem(i) => i.closed(),
+        SWindow(lo, n) => lo.closed() && n.closed(),
+        SKey(i, g) => i.closed() && g.closed(),
+        SVariant(_) => True,
+    }
+}
+
+fn Steps::closed(xs: List<Step>) → Bool { match xs { Nil => True, Cons(a, rest) => a.closed() && Steps::closed(rest) } }
+
+// ---------------------------------------------------------------------------
+// Selections: steps with their atoms read
+
+// One element, or a run of `n` from `lo`.
+inductive SeqSel { SeqOne(i: Nat), SeqRun(lo: Nat, n: Nat) }
+
+fn SeqSel::span(self a: SeqSel) → Span { match a { SeqOne(i) => Span(i, 1), SeqRun(lo, n) => Span(lo, n) } }
+
+inductive Sel { OnField(i: Nat), OnSeq(a: SeqSel), OnKey(k: Key), OnVariant(c: Nat) }
+
+fn Step::sel(self a: Step, ws: List<Nat>) → Sel {
+    match a {
+        SField(i) => OnField(i),
+        SElem(i) => OnSeq(SeqOne(i.val(ws))),
+        SWindow(lo, n) => OnSeq(SeqRun(lo.val(ws), n.val(ws))),
+        SKey(i, g) => OnKey(Key(i.val(ws), g.val(ws))),
+        SVariant(c) => OnVariant(c),
+    }
+}
+
+// Two selections of one kind that cannot meet: fields, elements and runs by
+// their spans, keys by being different, variants by being different. Two
+// of different kinds are not found apart.
+fn Sel::apart(self a, b: Sel) → Bool {
+    match a {
+        OnField(i) => match b { OnField(j) => Span(i, 1).apart(Span(j, 1)), _ => False },
+        OnSeq(x) => match b { OnSeq(y) => x.span().apart(y.span()), _ => False },
+        OnKey(k) => match b { OnKey(l) => k.apart(l), _ => False },
+        OnVariant(c) => match b { OnVariant(d) => !c.same(d), _ => False },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// A model, and the denotation
+
+record StepModel<S> { path: Sel → Path<S, S>, fits: Sel → S → Bool }
+
+record StepModelLaws<S>(m: StepModel<S>) {
+    laws: (a: Sel) → PathLawsOn<S, S>(m.path(a), m.fits(a)),
+    keeps: (a, b: Sel) → Path::KeepsFit(m.path(b), m.fits(a)),
+    apart: (a, b: Sel) → a.apart(b).IsTrue() → Apart<S, S, S>(m.path(a), m.path(b)),
+}
+
+// The steps from the root, the first outermost.
+fn Steps::denote<S>(m: StepModel<S>, ws: List<Nat>, xs: List<Step>) → Path<S, S> {
+    match xs { Nil => Path::id<S>(), Cons(a, rest) => m.path(a.sel(ws)).then(Steps::denote(m, ws, rest)) }
+}
+
+// ---------------------------------------------------------------------------
+// The decider
+
+// The first two steps that differ: are they apart?
+fn Step::apart(self a, b: Step) → Option<List<Obligation>> {
+    match a {
+        SField(i) => match b { SField(j) => Span(i, 1).apart(Span(j, 1)).then(Some(Nil)), _ => None },
+        SElem(i) => match b {
+            SElem(j) => Spans(i, Lit(1), j, Lit(1)).settle(),
+            SWindow(lo, n) => Spans(i, Lit(1), lo, n).settle(),
+            _ => None,
+        },
+        SWindow(lo, n) => match b {
+            SElem(j) => Spans(lo, n, j, Lit(1)).settle(),
+            SWindow(lo2, n2) => Spans(lo, n, lo2, n2).settle(),
+            _ => None,
+        },
+        SKey(i, g) => match b { SKey(i2, g2) => Keys(i, g, i2, g2).settle(), _ => None },
+        SVariant(c) => match b { SVariant(d) => (!c.same(d)).then(Some(Nil)), _ => None },
+    }
+}
+
+fn Steps::apart(xs, ys: List<Step>) → Option<List<Obligation>> {
+    match xs {
+        Nil => None,
+        Cons(a, xr) => match ys {
+            Nil => None,
+            Cons(b, yr) => match a.same(b) { True => Steps::apart(xr, yr), False => a.apart(b) },
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Soundness
+
+theorem Step::same_sound(self a, b: Step, e: a.same(b) = True): a = b {
+    (match a as λ x => x.same(b) = True → x = b {
+        SField(i) => match b as λ y => SField(i).same(y) = True → SField(i) = y {
+            SField(k) => λ h => cong_fn(λ (n: Nat) => SField(n), i.same_sound(k, h)),
+            SElem(_) => λ no => absurd(no), SWindow(_, _) => λ no => absurd(no), SKey(_, _) => λ no => absurd(no), SVariant(_) => λ no => absurd(no),
+        },
+        SElem(i) => match b as λ y => SElem(i).same(y) = True → SElem(i) = y {
+            SElem(k) => λ h => cong_fn(λ (t: Atom) => SElem(t), i.same_sound(k, h)),
+            SField(_) => λ no => absurd(no), SWindow(_, _) => λ no => absurd(no), SKey(_, _) => λ no => absurd(no), SVariant(_) => λ no => absurd(no),
+        },
+        SWindow(lo, n) => match b as λ y => SWindow(lo, n).same(y) = True → SWindow(lo, n) = y {
+            SWindow(lo2, n2) => λ h => {
+                let parts = Bool::and_true_parts(lo.same(lo2), n.same(n2), h);
+                let e1: (lo = lo2) = lo.same_sound(lo2, parts.left);
+                let e2: (n = n2) = n.same_sound(n2, parts.right);
+                rewrite(e1, e2, refl)
+            },
+            SField(_) => λ no => absurd(no), SElem(_) => λ no => absurd(no), SKey(_, _) => λ no => absurd(no), SVariant(_) => λ no => absurd(no),
+        },
+        SKey(i, g) => match b as λ y => SKey(i, g).same(y) = True → SKey(i, g) = y {
+            SKey(i2, g2) => λ h => {
+                let parts = Bool::and_true_parts(i.same(i2), g.same(g2), h);
+                let e1: (i = i2) = i.same_sound(i2, parts.left);
+                let e2: (g = g2) = g.same_sound(g2, parts.right);
+                rewrite(e1, e2, refl)
+            },
+            SField(_) => λ no => absurd(no), SElem(_) => λ no => absurd(no), SWindow(_, _) => λ no => absurd(no), SVariant(_) => λ no => absurd(no),
+        },
+        SVariant(c) => match b as λ y => SVariant(c).same(y) = True → SVariant(c) = y {
+            SVariant(d) => λ h => cong_fn(λ (n: Nat) => SVariant(n), c.same_sound(d, h)),
+            SField(_) => λ no => absurd(no), SElem(_) => λ no => absurd(no), SWindow(_, _) => λ no => absurd(no), SKey(_, _) => λ no => absurd(no),
+        },
+    })(e)
+}
+
+theorem Step::same_self(self a: Step): a.same(a) = True {
+    match a {
+        SField(i) => i.same_self(),
+        SElem(i) => i.same_self(),
+        SWindow(lo, n) => Bool::and_true_of(lo.same(lo), n.same(n), lo.same_self(), n.same_self()),
+        SKey(i, g) => Bool::and_true_of(i.same(i), g.same(g), i.same_self(), g.same_self()),
+        SVariant(c) => c.same_self(),
+    }
+}
+
+// What the first difference answers holds of the two selections.
+theorem Step::apart_sound(self a, b: Step, ws: List<Nat>, rs: List<Obligation>, ok: a.apart(b) = Some(rs), hold: Obligation::All(rs, ws)):
+    a.sel(ws).apart(b.sel(ws)).IsTrue()
+{
+    (match a as λ x => x.apart(b) = Some(rs) → x.sel(ws).apart(b.sel(ws)).IsTrue() {
+        SField(i) => match b as λ y => SField(i).apart(y) = Some(rs) → SField(i).sel(ws).apart(y.sel(ws)).IsTrue() {
+            SField(k) => λ h => Bool::is_true_of_eq(Bool::then_some(Span(i, 1).apart(Span(k, 1)), Some(Nil<Obligation>), rs, h).left),
+            SElem(_) => λ no => absurd(no), SWindow(_, _) => λ no => absurd(no), SKey(_, _) => λ no => absurd(no), SVariant(_) => λ no => absurd(no),
+        },
+        SElem(i) => match b as λ y => SElem(i).apart(y) = Some(rs) → SElem(i).sel(ws).apart(y.sel(ws)).IsTrue() {
+            SElem(k) => λ h => Spans(i, Lit(1), k, Lit(1)).settle_sound(ws, rs, h, hold),
+            SWindow(lo, n) => λ h => Spans(i, Lit(1), lo, n).settle_sound(ws, rs, h, hold),
+            SField(_) => λ no => absurd(no), SKey(_, _) => λ no => absurd(no), SVariant(_) => λ no => absurd(no),
+        },
+        SWindow(lo, n) => match b as λ y => SWindow(lo, n).apart(y) = Some(rs) → SWindow(lo, n).sel(ws).apart(y.sel(ws)).IsTrue() {
+            SElem(k) => λ h => Spans(lo, n, k, Lit(1)).settle_sound(ws, rs, h, hold),
+            SWindow(lo2, n2) => λ h => Spans(lo, n, lo2, n2).settle_sound(ws, rs, h, hold),
+            SField(_) => λ no => absurd(no), SKey(_, _) => λ no => absurd(no), SVariant(_) => λ no => absurd(no),
+        },
+        SKey(i, g) => match b as λ y => SKey(i, g).apart(y) = Some(rs) → SKey(i, g).sel(ws).apart(y.sel(ws)).IsTrue() {
+            SKey(i2, g2) => λ h => Keys(i, g, i2, g2).settle_sound(ws, rs, h, hold),
+            SField(_) => λ no => absurd(no), SElem(_) => λ no => absurd(no), SWindow(_, _) => λ no => absurd(no), SVariant(_) => λ no => absurd(no),
+        },
+        SVariant(c) => match b as λ y => SVariant(c).apart(y) = Some(rs) → SVariant(c).sel(ws).apart(y.sel(ws)).IsTrue() {
+            SVariant(d) => λ h => Bool::is_true_of_eq(Bool::then_some(!c.same(d), Some(Nil<Obligation>), rs, h).left),
+            SField(_) => λ no => absurd(no), SElem(_) => λ no => absurd(no), SWindow(_, _) => λ no => absurd(no), SKey(_, _) => λ no => absurd(no),
+        },
+    })(ok)
+}
+
+// Steps after a first step: their writes keep every fit, as the first
+// step's do.
+theorem Steps::keeps_fit<S>(m: StepModel<S>, ml: StepModelLaws<S>(m), ws: List<Nat>, f: Sel, a: Step, rest: List<Step>):
+    Path::KeepsFit(Steps::denote(m, ws, Cons(a, rest)), m.fits(f))
+{
+    Path::then_keeps_fit(m.path(a.sel(ws)), Steps::denote(m, ws, rest), m.fits(f), ml.keeps(f, a.sel(ws)))
+}
+
+// Where the decider answers yes, neither list is empty: both keep every fit.
+theorem Steps::verdict_keeps<S>(m: StepModel<S>, ml: StepModelLaws<S>(m), ws: List<Nat>, f: Sel, xs: List<Step>):
+    (ys: List<Step>) → (rs: List<Obligation>) → Steps::apart(xs, ys) = Some(rs) →
+        And<Path::KeepsFit(Steps::denote(m, ws, xs), m.fits(f)), Path::KeepsFit(Steps::denote(m, ws, ys), m.fits(f))>
+{
+    match xs {
+        Nil => λ ys rs no => absurd(no),
+        Cons(a, xr) => λ ys => match ys {
+            Nil => λ rs no => absurd(no),
+            Cons(b, yr) => λ rs _ => And(Steps::keeps_fit(m, ml, ws, f, a, xr), Steps::keeps_fit(m, ml, ws, f, b, yr)),
+        },
+    }
+}
+
+// The decider is sound: a verdict, and its obligations holding at the
+// words, give the two denotations apart.
+theorem Steps::apart_sound<S>(m: StepModel<S>, ml: StepModelLaws<S>(m), ws: List<Nat>, xs: List<Step>):
+    (ys: List<Step>) → (rs: List<Obligation>) → Steps::apart(xs, ys) = Some(rs) → Obligation::All(rs, ws) →
+        Apart<S, S, S>(Steps::denote(m, ws, xs), Steps::denote(m, ws, ys))
+{
+    match xs {
+        Nil => λ ys rs no _ => absurd(no),
+        Cons(a, xr) => λ ys => match ys {
+            Nil => λ rs no _ => absurd(no),
+            Cons(b, yr) => λ rs => (match a.same(b) as λ c => a.same(b) = c → (match c { True => Steps::apart(xr, yr), False => a.apart(b) }) = Some(rs) →
+                    Obligation::All(rs, ws) → Apart<S, S, S>(Steps::denote(m, ws, Cons(a, xr)), Steps::denote(m, ws, Cons(b, yr))) {
+                True => λ e ok hold => {
+                    let same: (a = b) = a.same_sound(b, e);
+                    let fit = Steps::verdict_keeps(m, ml, ws, a.sel(ws), xr, yr, rs, ok);
+                    let here: Apart<S, S, S>(m.path(a.sel(ws)).then(Steps::denote(m, ws, xr)), m.path(a.sel(ws)).then(Steps::denote(m, ws, yr))) =
+                        Apart::under_on(m.path(a.sel(ws)), m.fits(a.sel(ws)), ml.laws(a.sel(ws)), Steps::apart_sound(m, ml, ws, xr, yr, rs, ok, hold), fit.left, fit.right);
+                    j(same, λ c _ => Apart<S, S, S>(m.path(a.sel(ws)).then(Steps::denote(m, ws, xr)), m.path(c.sel(ws)).then(Steps::denote(m, ws, yr))), here)
+                },
+                False => λ e ok hold =>
+                    Apart::then_both(ml.apart(a.sel(ws), b.sel(ws), a.apart_sound(b, ws, rs, ok, hold)), Steps::denote(m, ws, xr), Steps::denote(m, ws, yr)),
+            })(refl)
+        },
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Completeness
+
+// On closed steps the first difference owes nothing.
+theorem Step::apart_closed(self a, b: Step, ca: a.closed() = True, cb: b.closed() = True, rs: List<Obligation>, ok: a.apart(b) = Some(rs)): rs = Nil {
+    (match a as λ x => x.closed() = True → x.apart(b) = Some(rs) → rs = Nil {
+        SField(i) => λ _ => (match b as λ y => y.closed() = True → SField(i).apart(y) = Some(rs) → rs = Nil {
+            SField(k) => λ _ h => sym(Option::some_inj(Nil<Obligation>, rs, Bool::then_some(Span(i, 1).apart(Span(k, 1)), Some(Nil<Obligation>), rs, h).right)),
+            SElem(_) => λ _ no => absurd(no), SWindow(_, _) => λ _ no => absurd(no), SKey(_, _) => λ _ no => absurd(no), SVariant(_) => λ _ no => absurd(no),
+        })(cb),
+        SElem(i) => λ ci => (match b as λ y => y.closed() = True → SElem(i).apart(y) = Some(rs) → rs = Nil {
+            SElem(k) => λ ck h => Spans(i, Lit(1), k, Lit(1)).settle_closed(Atom::closed_all4(i, Lit(1), k, Lit(1), ci, refl, ck, refl), rs, h),
+            SWindow(lo, n) => λ cw h => {
+                let parts = Bool::and_true_parts(lo.closed(), n.closed(), cw);
+                Spans(i, Lit(1), lo, n).settle_closed(Atom::closed_all4(i, Lit(1), lo, n, ci, refl, parts.left, parts.right), rs, h)
+            },
+            SField(_) => λ _ no => absurd(no), SKey(_, _) => λ _ no => absurd(no), SVariant(_) => λ _ no => absurd(no),
+        })(cb),
+        SWindow(lo, n) => λ cw => {
+            let pw = Bool::and_true_parts(lo.closed(), n.closed(), cw);
+            (match b as λ y => y.closed() = True → SWindow(lo, n).apart(y) = Some(rs) → rs = Nil {
+                SElem(k) => λ ck h => Spans(lo, n, k, Lit(1)).settle_closed(Atom::closed_all4(lo, n, k, Lit(1), pw.left, pw.right, ck, refl), rs, h),
+                SWindow(lo2, n2) => λ c2 h => {
+                    let p2 = Bool::and_true_parts(lo2.closed(), n2.closed(), c2);
+                    Spans(lo, n, lo2, n2).settle_closed(Atom::closed_all4(lo, n, lo2, n2, pw.left, pw.right, p2.left, p2.right), rs, h)
+                },
+                SField(_) => λ _ no => absurd(no), SKey(_, _) => λ _ no => absurd(no), SVariant(_) => λ _ no => absurd(no),
+            })(cb)
+        },
+        SKey(i, g) => λ ck => {
+            let pk = Bool::and_true_parts(i.closed(), g.closed(), ck);
+            (match b as λ y => y.closed() = True → SKey(i, g).apart(y) = Some(rs) → rs = Nil {
+                SKey(i2, g2) => λ c2 h => {
+                    let p2 = Bool::and_true_parts(i2.closed(), g2.closed(), c2);
+                    Keys(i, g, i2, g2).settle_closed(Atom::closed_all4(i, g, i2, g2, pk.left, pk.right, p2.left, p2.right), rs, h)
+                },
+                SField(_) => λ _ no => absurd(no), SElem(_) => λ _ no => absurd(no), SWindow(_, _) => λ _ no => absurd(no), SVariant(_) => λ _ no => absurd(no),
+            })(cb)
+        },
+        SVariant(c) => λ _ => (match b as λ y => y.closed() = True → SVariant(c).apart(y) = Some(rs) → rs = Nil {
+            SVariant(d) => λ _ h => sym(Option::some_inj(Nil<Obligation>, rs, Bool::then_some(!c.same(d), Some(Nil<Obligation>), rs, h).right)),
+            SField(_) => λ _ no => absurd(no), SElem(_) => λ _ no => absurd(no), SWindow(_, _) => λ _ no => absurd(no), SKey(_, _) => λ _ no => absurd(no),
+        })(cb),
+    })(ca, ok)
+}
+
+// On closed steps the decider never owes: it answers yes or no.
+theorem Steps::apart_closed(xs: List<Step>): (ys: List<Step>) → Steps::closed(xs) = True → Steps::closed(ys) = True →
+    (rs: List<Obligation>) → Steps::apart(xs, ys) = Some(rs) → rs = Nil
+{
+    match xs {
+        Nil => λ ys _ _ rs no => absurd(no),
+        Cons(a, xr) => λ ys => match ys {
+            Nil => λ _ _ rs no => absurd(no),
+            Cons(b, yr) => λ cx cy rs => {
+                let px = Bool::and_true_parts(a.closed(), Steps::closed(xr), cx);
+                let py = Bool::and_true_parts(b.closed(), Steps::closed(yr), cy);
+                (match a.same(b) as λ c => (match c { True => Steps::apart(xr, yr), False => a.apart(b) }) = Some(rs) → rs = Nil {
+                    True => λ ok => Steps::apart_closed(xr, yr, px.right, py.right, rs, ok),
+                    False => λ ok => a.apart_closed(b, px.left, py.left, rs, ok),
+                })
+            },
+        },
+    }
+}
+
+// Two lists that first differ at `a` and `b` get the answer of that pair.
+theorem Steps::apart_at_difference(pre: List<Step>, a, b: Step, xr, yr: List<Step>, differ: a.same(b) = False):
+    Steps::apart(pre ++ Cons(a, xr), pre ++ Cons(b, yr)) = a.apart(b)
+{
+    match pre {
+        Nil => j(sym(differ), λ c _ => (match c { True => Steps::apart(xr, yr), False => a.apart(b) }) = a.apart(b), refl),
+        Cons(c, rest) => j(sym(c.same_self()), λ t _ => (match t { True => Steps::apart(rest ++ Cons(a, xr), rest ++ Cons(b, yr)), False => c.apart(c) }) = a.apart(b),
+            Steps::apart_at_difference(rest, a, b, xr, yr, differ)),
+    }
+}
+
+// Two closed steps whose selections are apart are found apart owing
+// nothing, so (by `Steps::apart_at_difference`) are any two closed lists
+// first differing there.
+theorem Step::apart_complete(self a, b: Step, ca: a.closed() = True, cb: b.closed() = True, verdict: a.sel(Nil).apart(b.sel(Nil)) = True): a.apart(b) = Some(Nil) {
+    (match a as λ x => x.closed() = True → x.sel(Nil).apart(b.sel(Nil)) = True → x.apart(b) = Some(Nil) {
+        SField(i) => λ _ => (match b as λ y => y.closed() = True → SField(i).sel(Nil).apart(y.sel(Nil)) = True → SField(i).apart(y) = Some(Nil) {
+            SField(k) => λ _ v => j(sym(v), λ t _ => t.then(Some(Nil<Obligation>)) = Some(Nil<Obligation>), refl),
+            SElem(_) => λ _ no => absurd(no), SWindow(_, _) => λ _ no => absurd(no), SKey(_, _) => λ _ no => absurd(no), SVariant(_) => λ _ no => absurd(no),
+        })(cb),
+        SElem(i) => λ ci => (match b as λ y => y.closed() = True → SElem(i).sel(Nil).apart(y.sel(Nil)) = True → SElem(i).apart(y) = Some(Nil) {
+            SElem(k) => λ ck v => Spans(i, Lit(1), k, Lit(1)).settle_yes(Atom::closed_all4(i, Lit(1), k, Lit(1), ci, refl, ck, refl), v),
+            SWindow(lo, n) => λ cw v => {
+                let parts = Bool::and_true_parts(lo.closed(), n.closed(), cw);
+                Spans(i, Lit(1), lo, n).settle_yes(Atom::closed_all4(i, Lit(1), lo, n, ci, refl, parts.left, parts.right), v)
+            },
+            SField(_) => λ _ no => absurd(no), SKey(_, _) => λ _ no => absurd(no), SVariant(_) => λ _ no => absurd(no),
+        })(cb),
+        SWindow(lo, n) => λ cw => {
+            let pw = Bool::and_true_parts(lo.closed(), n.closed(), cw);
+            (match b as λ y => y.closed() = True → SWindow(lo, n).sel(Nil).apart(y.sel(Nil)) = True → SWindow(lo, n).apart(y) = Some(Nil) {
+                SElem(k) => λ ck v => Spans(lo, n, k, Lit(1)).settle_yes(Atom::closed_all4(lo, n, k, Lit(1), pw.left, pw.right, ck, refl), v),
+                SWindow(lo2, n2) => λ c2 v => {
+                    let p2 = Bool::and_true_parts(lo2.closed(), n2.closed(), c2);
+                    Spans(lo, n, lo2, n2).settle_yes(Atom::closed_all4(lo, n, lo2, n2, pw.left, pw.right, p2.left, p2.right), v)
+                },
+                SField(_) => λ _ no => absurd(no), SKey(_, _) => λ _ no => absurd(no), SVariant(_) => λ _ no => absurd(no),
+            })(cb)
+        },
+        SKey(i, g) => λ ck => {
+            let pk = Bool::and_true_parts(i.closed(), g.closed(), ck);
+            (match b as λ y => y.closed() = True → SKey(i, g).sel(Nil).apart(y.sel(Nil)) = True → SKey(i, g).apart(y) = Some(Nil) {
+                SKey(i2, g2) => λ c2 v => {
+                    let p2 = Bool::and_true_parts(i2.closed(), g2.closed(), c2);
+                    Keys(i, g, i2, g2).settle_yes(Atom::closed_all4(i, g, i2, g2, pk.left, pk.right, p2.left, p2.right), v)
+                },
+                SField(_) => λ _ no => absurd(no), SElem(_) => λ _ no => absurd(no), SWindow(_, _) => λ _ no => absurd(no), SVariant(_) => λ _ no => absurd(no),
+            })(cb)
+        },
+        SVariant(c) => λ _ => (match b as λ y => y.closed() = True → SVariant(c).sel(Nil).apart(y.sel(Nil)) = True → SVariant(c).apart(y) = Some(Nil) {
+            SVariant(d) => λ _ v => j(sym(v), λ t _ => t.then(Some(Nil<Obligation>)) = Some(Nil<Obligation>), refl),
+            SField(_) => λ _ no => absurd(no), SElem(_) => λ _ no => absurd(no), SWindow(_, _) => λ _ no => absurd(no), SKey(_, _) => λ _ no => absurd(no),
+        })(cb),
+    })(ca, verdict)
+}

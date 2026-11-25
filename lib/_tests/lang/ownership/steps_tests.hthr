@@ -1,0 +1,84 @@
+// Probes of the apartness decider on steps (lib/lang/ownership/steps.hthr):
+// each answer it gives, where it owes, and the checker's residual as one of
+// its obligations.
+import logic;
+import bool;
+import nat;
+import omega;
+import option;
+import list;
+import span_set;
+import atom;
+import steps;
+import place_check;
+
+// ---------------------------------------------------------------------------
+// No: a prefix, the same place, an overlap, two kinds
+
+theorem same_place_refused(): Steps::apart([SField(1), SElem(Lit(3))], [SField(1), SElem(Lit(3))]) = None { refl }
+
+theorem prefix_refused(): Steps::apart([SField(1)], [SField(1), SElem(Lit(3))]) = None { refl }
+
+theorem root_refused(): Steps::apart(Nil, [SField(1)]) = None { refl }
+
+theorem overlap_refused(): Steps::apart([SWindow(Lit(0), Lit(2))], [SWindow(Lit(1), Lit(2))]) = None { refl }
+
+theorem element_in_window_refused(): Steps::apart([SWindow(Lit(0), Lit(8))], [SElem(Lit(7))]) = None { refl }
+
+theorem same_key_refused(): Steps::apart([SKey(Lit(0), Lit(4))], [SKey(Lit(0), Lit(4))]) = None { refl }
+
+theorem same_variant_refused(): Steps::apart([SVariant(2)], [SVariant(2), SField(0)]) = None { refl }
+
+// A field beside an element is refused: the two steps cannot both fit one
+// value, so the decider does not compare them.
+theorem kinds_refused(): Steps::apart([SField(0)], [SElem(Lit(0))]) = None { refl }
+
+// ---------------------------------------------------------------------------
+// Yes, owing nothing, after a common prefix
+
+theorem after_prefix(): Steps::apart([SField(3), SElem(Lit(0)), SField(1)], [SField(3), SElem(Lit(1))]) = Some(Nil) { refl }
+
+theorem adjacent_windows(): Steps::apart([SWindow(Lit(0), Lit(4))], [SWindow(Lit(4), Lit(4))]) = Some(Nil) { refl }
+
+theorem empty_window(): Steps::apart([SWindow(Lit(3), Lit(0))], [SElem(Lit(3))]) = Some(Nil) { refl }
+
+theorem other_generation(): Steps::apart([SKey(Lit(0), Lit(4))], [SKey(Lit(0), Lit(5))]) = Some(Nil) { refl }
+
+theorem other_variant(): Steps::apart([SVariant(1), SField(0)], [SVariant(2), SField(0)]) = Some(Nil) { refl }
+
+// The same at a common prefix of open steps: two equal spellings are one
+// step whatever the words.
+theorem open_prefix(): Steps::apart([SElem(Var(0)), SField(0)], [SElem(Var(0)), SField(1)]) = Some(Nil) { refl }
+
+// ---------------------------------------------------------------------------
+// Yes, owing: where an index or a key is open
+
+theorem open_elements(): Steps::apart([SElem(Var(0))], [SElem(Var(1))]) = Some([Spans(Var(0), Lit(1), Var(1), Lit(1))]) { refl }
+
+theorem open_keys(): Steps::apart([SKey(Var(0), Lit(0))], [SKey(Var(1), Lit(0))]) = Some([Keys(Var(0), Lit(0), Var(1), Lit(0))]) { refl }
+
+// Where it is incomplete: two open elements and then two different fields
+// are apart whatever the words, and the decider still owes `x ≠ y`.
+theorem open_then_more(): Steps::apart([SElem(Var(0)), SField(0)], [SElem(Var(1)), SField(1)]) = Some([Spans(Var(0), Lit(1), Var(1), Lit(1))]) { refl }
+
+// The obligation's verdict is read at the words.
+theorem owed_holds(): Spans(Var(0), Lit(1), Var(1), Lit(1)).verdict([3, 5]) = True { refl }
+
+theorem owed_fails(): Spans(Var(0), Lit(1), Var(1), Lit(1)).verdict([3, 3]) = False { refl }
+
+// ---------------------------------------------------------------------------
+// Completeness, instantiated
+
+theorem closed_owes_nothing(rs: List<Obligation>, ok: Steps::apart([SField(3), SWindow(Lit(0), Lit(2))], [SField(3), SWindow(Lit(1), Lit(5))]) = Some(rs)): rs = Nil {
+    Steps::apart_closed([SField(3), SWindow(Lit(0), Lit(2))], [SField(3), SWindow(Lit(1), Lit(5))], refl, refl, rs, ok)
+}
+
+theorem difference_found(xr, yr: List<Step>): Steps::apart([SField(3)] ++ Cons(SElem(Lit(0)), xr), [SField(3)] ++ Cons(SElem(Lit(2)), yr)) = Some(Nil) {
+    trans(Steps::apart_at_difference([SField(3)], SElem(Lit(0)), SElem(Lit(2)), xr, yr, refl), SElem(Lit(0)).apart_complete(SElem(Lit(2)), refl, refl, refl))
+}
+
+// ---------------------------------------------------------------------------
+// The checker's residual is an obligation: `Span(lo, n)` apart from
+// `Span(i, 1)`.
+
+theorem residual_is_spans(lo, n, i: Atom, ws: List<Nat>): Residual(lo, n, i).verdict(ws) = Spans(lo, n, i, Lit(1)).verdict(ws) { refl }

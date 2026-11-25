@@ -1084,6 +1084,24 @@ gives it code or none (§15.10). A stored view, a view
 chosen by a test, and a view returned into a caller's record are all a
 `Ref` held as a value.
 
+**Steps, as built (package 2, 2026-11-25; `issues/ownership-steps.md`).**
+Steps are untyped data over atoms, `lib/lang/ownership/steps.hthr`:
+`SField(i)` with a literal index, `SElem(a)`, `SWindow(lo, n)`,
+`SKey(index, gen)` with the key as two atoms, `SVariant(c)`. Their meaning is
+a model in one value type in which a step that does not fit the value reads
+nothing (`StepModel`, denoted by `Path::then`); typed steps indexed by their
+source and target were rejected as a universe above what the kernel
+evaluates cheaply. Level 2's value universe is the model built
+(`value_steps.hthr`: word, sequence, record, variant, store). Overlap of two
+places is `Steps::apart`: the first difference after the common prefix,
+answering no, yes, or yes owing obligations over the atoms
+(`atom.hthr`'s `Obligation`, of which the checker's residual is the span
+case). It is sound in any model with the laws and complete on closed steps;
+an open index followed by more steps owes more than it needs
+(`issues/steps-decider-completeness.md`). A window's value is a sequence of
+its length, lawful only where what is written is one, which is the one
+place the untyped universe costs a law (`PathLawsOn`).
+
 This level stands above FunctionIR, which is bytes with static buffer
 numbers. One new pass joins them: steps become byte spans (`Part`,
 `Stored`) and each live block gets its memory.

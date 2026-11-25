@@ -786,3 +786,177 @@ theorem PathSame::after_set<S, A, B>(p: Path<S, A>, {q, r: Path<A, B>}, e: PathS
 theorem PathSame::after<S, A, B>(p: Path<S, A>, {q, r: Path<A, B>}, e: PathSame<A, B>(q, r)): PathSame<S, B>(p.then(q), p.then(r)) {
     PathSame(λ s => PathSame::after_get(p, e, s, p.get(s), refl), λ s b => PathSame::after_set(p, e, s, b, p.get(s), refl))
 }
+
+// ---------------------------------------------------------------------------
+// Laws where what is written fits
+//
+// A step whose value is one shape of a wider type (a window's elements read
+// as one value of a universe in which a sequence of any length is a value)
+// reads back a write only where the written value has that shape. Its laws
+// hold where `fits` does, and what it reads fits. A part of a part is lawful
+// so where the outer step is lawful and the inner one lawful where it fits
+// (`Path::then_laws_on`), and two parts apart under such a step are apart in
+// the owner where the inner writes keep the fit (`Apart::under_on`, which is
+// `Apart::under` with `fits` everywhere true).
+
+record PathLawsOn<S, V>(p: Path<S, V>, fits: V → Bool) {
+    set_get: (s: S) → (a, v: V) → p.get(s) = Some(a) → fits(v) = True → p.get(p.set(s, v)) = Some(v),
+    get_set: (s: S) → (a: V) → p.get(s) = Some(a) → p.set(s, a) = s,
+    set_set: (s: S) → (v, w: V) → fits(v) = True → fits(w) = True → p.set(p.set(s, v), w) = p.set(s, w),
+    set_none: (s: S) → (v: V) → p.get(s) = None → p.set(s, v) = s,
+    reads_fit: (s: S) → (a: V) → p.get(s) = Some(a) → fits(a) = True,
+}
+
+// A write through `q` keeps a fitting owner fitting.
+fn Path::KeepsFit<S, V>(q: Path<S, V>, fits: S → Bool) → Type { (s: S) → fits(s) = True → (v: V) → fits(q.set(s, v)) = True }
+
+// Lawful is lawful where everything fits.
+theorem PathLaws::on<S, V>({p: Path<S, V>}, self laws: PathLaws<S, V>(p)): PathLawsOn<S, V>(p, λ _ => True) {
+    PathLawsOn(λ s a v h _ => laws.set_get(s, a, v, h), laws.get_set, λ s v w _ _ => laws.set_set(s, v, w), laws.set_none, λ s a h => refl)
+}
+
+// Every write keeps an owner that always fits.
+theorem Path::keeps_fit_true<S, V>(q: Path<S, V>): Path::KeepsFit(q, λ (_: S) => True) { λ s h v => refl }
+
+theorem Path::then_set_get_on<S, A, B>(self p: Path<S, A>, q: Path<A, B>, fits: B → Bool, pl: PathLaws<S, A>(p), ql: PathLawsOn<A, B>(q, fits), s: S, c, b: B, fb: fits(b) = True):
+    (o: Option<A>) → p.get(s) = o → p.then(q).get(s) = Some(c) → p.then(q).get(p.then(q).set(s, b)) = Some(b)
+{
+    λ o => match o {
+        Some(a) => λ e h => {
+            let inner: (q.get(a) = Some(c)) = trans(sym(p.then_get_at(q, s, a, e)), h);
+            let after: (p.get(p.set(s, q.set(a, b))) = Some(q.set(a, b))) = pl.set_get(s, a, q.set(a, b), e);
+            let written: (p.then(q).set(s, b) = p.set(s, q.set(a, b))) = p.then_set_at(q, s, a, e, b);
+            j(sym(written), λ t _ => p.then(q).get(t) = Some(b),
+                trans(p.then_get_at(q, p.set(s, q.set(a, b)), q.set(a, b), after), ql.set_get(a, c, b, inner, fb)))
+        },
+        None => λ e h => absurd(trans(sym(p.then_get_none(q, s, e)), h)),
+    }
+}
+
+theorem Path::then_get_set_on<S, A, B>(self p: Path<S, A>, q: Path<A, B>, fits: B → Bool, pl: PathLaws<S, A>(p), ql: PathLawsOn<A, B>(q, fits), s: S, c: B):
+    (o: Option<A>) → p.get(s) = o → p.then(q).get(s) = Some(c) → p.then(q).set(s, c) = s
+{
+    λ o => match o {
+        Some(a) => λ e h => {
+            let inner: (q.get(a) = Some(c)) = trans(sym(p.then_get_at(q, s, a, e)), h);
+            trans(p.then_set_at(q, s, a, e, c), trans(cong_fn(λ (x: A) => p.set(s, x), ql.get_set(a, c, inner)), pl.get_set(s, a, e)))
+        },
+        None => λ e h => absurd(trans(sym(p.then_get_none(q, s, e)), h)),
+    }
+}
+
+theorem Path::then_set_set_on<S, A, B>(self p: Path<S, A>, q: Path<A, B>, fits: B → Bool, pl: PathLaws<S, A>(p), ql: PathLawsOn<A, B>(q, fits), s: S, v, w: B,
+    fv: fits(v) = True, fw: fits(w) = True):
+    (o: Option<A>) → p.get(s) = o → p.then(q).set(p.then(q).set(s, v), w) = p.then(q).set(s, w)
+{
+    λ o => match o {
+        Some(a) => λ e => {
+            let s1 = p.set(s, q.set(a, v));
+            let first: (p.then(q).set(s, v) = s1) = p.then_set_at(q, s, a, e, v);
+            let read1: (p.get(s1) = Some(q.set(a, v))) = pl.set_get(s, a, q.set(a, v), e);
+            let second: (p.then(q).set(s1, w) = p.set(s1, q.set(q.set(a, v), w))) = p.then_set_at(q, s1, q.set(a, v), read1, w);
+            let inner: (p.set(s1, q.set(q.set(a, v), w)) = p.set(s1, q.set(a, w))) = cong_fn(λ (x: A) => p.set(s1, x), ql.set_set(a, v, w, fv, fw));
+            let outer: (p.set(s1, q.set(a, w)) = p.set(s, q.set(a, w))) = pl.set_set(s, q.set(a, v), q.set(a, w));
+            trans(cong_fn(λ (t: S) => p.then(q).set(t, w), first),
+                trans(second, trans(inner, trans(outer, sym(p.then_set_at(q, s, a, e, w))))))
+        },
+        None => λ e => {
+            let first: (p.then(q).set(s, v) = s) = p.then_set_none(q, s, e, v);
+            cong_fn(λ (t: S) => p.then(q).set(t, w), first)
+        },
+    }
+}
+
+theorem Path::then_set_none_on<S, A, B>(self p: Path<S, A>, q: Path<A, B>, fits: B → Bool, pl: PathLaws<S, A>(p), ql: PathLawsOn<A, B>(q, fits), s: S, v: B):
+    (o: Option<A>) → p.get(s) = o → p.then(q).get(s) = None → p.then(q).set(s, v) = s
+{
+    λ o => match o {
+        Some(a) => λ e h => {
+            let inner: (q.get(a) = None) = trans(sym(p.then_get_at(q, s, a, e)), h);
+            trans(p.then_set_at(q, s, a, e, v), trans(cong_fn(λ (x: A) => p.set(s, x), ql.set_none(a, v, inner)), pl.get_set(s, a, e)))
+        },
+        None => λ e h => p.then_set_none(q, s, e, v),
+    }
+}
+
+theorem Path::then_reads_fit_on<S, A, B>(self p: Path<S, A>, q: Path<A, B>, fits: B → Bool, ql: PathLawsOn<A, B>(q, fits), s: S, c: B):
+    (o: Option<A>) → p.get(s) = o → p.then(q).get(s) = Some(c) → fits(c) = True
+{
+    λ o => match o {
+        Some(a) => λ e h => ql.reads_fit(a, c, trans(sym(p.then_get_at(q, s, a, e)), h)),
+        None => λ e h => absurd(trans(sym(p.then_get_none(q, s, e)), h)),
+    }
+}
+
+// A lawful step, then one lawful where it fits, is lawful where it fits.
+theorem Path::then_laws_on<S, A, B>(self p: Path<S, A>, q: Path<A, B>, fits: B → Bool, pl: PathLaws<S, A>(p), ql: PathLawsOn<A, B>(q, fits)): PathLawsOn<S, B>(p.then(q), fits) {
+    PathLawsOn(
+        λ s c b h fb => p.then_set_get_on(q, fits, pl, ql, s, c, b, fb, p.get(s), refl, h),
+        λ s c h => p.then_get_set_on(q, fits, pl, ql, s, c, p.get(s), refl, h),
+        λ s v w fv fw => p.then_set_set_on(q, fits, pl, ql, s, v, w, fv, fw, p.get(s), refl),
+        λ s v h => p.then_set_none_on(q, fits, pl, ql, s, v, p.get(s), refl, h),
+        λ s c h => p.then_reads_fit_on(q, fits, ql, s, c, p.get(s), refl, h),
+    )
+}
+
+theorem Apart::under_read_on<S, A, B, C>(p: Path<S, A>, fits: A → Bool, pl: PathLawsOn<S, A>(p, fits), {q: Path<A, B>}, {r: Path<A, C>}, inner: Apart<A, B, C>(q, r),
+    kr: Path::KeepsFit(r, fits), s: S, v: C):
+    (o: Option<A>) → p.get(s) = o → p.then(q).get(p.then(r).set(s, v)) = p.then(q).get(s)
+{
+    λ o => match o {
+        Some(a) => λ e => {
+            let written: (p.then(r).set(s, v) = p.set(s, r.set(a, v))) = p.then_set_at(r, s, a, e, v);
+            let read: (p.get(p.set(s, r.set(a, v))) = Some(r.set(a, v))) = pl.set_get(s, a, r.set(a, v), e, kr(a, pl.reads_fit(s, a, e), v));
+            trans(cong_fn(λ (t: S) => p.then(q).get(t), written),
+                trans(p.then_get_at(q, p.set(s, r.set(a, v)), r.set(a, v), read), trans(inner.left_after_right(a, v), sym(p.then_get_at(q, s, a, e)))))
+        },
+        None => λ e => cong_fn(λ (t: S) => p.then(q).get(t), p.then_set_none(r, s, e, v)),
+    }
+}
+
+theorem Apart::under_commute_on<S, A, B, C>(p: Path<S, A>, fits: A → Bool, pl: PathLawsOn<S, A>(p, fits), {q: Path<A, B>}, {r: Path<A, C>}, inner: Apart<A, B, C>(q, r),
+    kq: Path::KeepsFit(q, fits), kr: Path::KeepsFit(r, fits), s: S, b: B, c: C):
+    (o: Option<A>) → p.get(s) = o → p.then(q).set(p.then(r).set(s, c), b) = p.then(r).set(p.then(q).set(s, b), c)
+{
+    λ o => match o {
+        Some(a) => λ e => {
+            let fa: (fits(a) = True) = pl.reads_fit(s, a, e);
+            let fr: (fits(r.set(a, c)) = True) = kr(a, fa, c);
+            let fq: (fits(q.set(a, b)) = True) = kq(a, fa, b);
+            let sr = p.set(s, r.set(a, c));
+            let sq = p.set(s, q.set(a, b));
+            let read_r: (p.get(sr) = Some(r.set(a, c))) = pl.set_get(s, a, r.set(a, c), e, fr);
+            let read_q: (p.get(sq) = Some(q.set(a, b))) = pl.set_get(s, a, q.set(a, b), e, fq);
+            let left: (p.then(q).set(p.then(r).set(s, c), b) = p.set(s, q.set(r.set(a, c), b))) =
+                trans(cong_fn(λ (t: S) => p.then(q).set(t, b), p.then_set_at(r, s, a, e, c)),
+                    trans(p.then_set_at(q, sr, r.set(a, c), read_r, b), pl.set_set(s, r.set(a, c), q.set(r.set(a, c), b), fr, kq(r.set(a, c), fr, b))));
+            let right: (p.then(r).set(p.then(q).set(s, b), c) = p.set(s, r.set(q.set(a, b), c))) =
+                trans(cong_fn(λ (t: S) => p.then(r).set(t, c), p.then_set_at(q, s, a, e, b)),
+                    trans(p.then_set_at(r, sq, q.set(a, b), read_q, c), pl.set_set(s, q.set(a, b), r.set(q.set(a, b), c), fq, kr(q.set(a, b), fq, c))));
+            trans(left, trans(cong_fn(λ (x: A) => p.set(s, x), inner.writes_commute(a, b, c)), sym(right)))
+        },
+        None => λ e => trans(cong_fn(λ (t: S) => p.then(q).set(t, b), p.then_set_none(r, s, e, c)),
+            trans(p.then_set_none(q, s, e, b), trans(sym(p.then_set_none(r, s, e, c)), cong_fn(λ (t: S) => p.then(r).set(t, c), sym(p.then_set_none(q, s, e, b)))))),
+    }
+}
+
+// Two parts apart inside one part lawful where it fits, each written only
+// in ways that keep the fit, are apart in the owner.
+theorem Apart::under_on<S, A, B, C>(p: Path<S, A>, fits: A → Bool, pl: PathLawsOn<S, A>(p, fits), {q: Path<A, B>}, {r: Path<A, C>}, inner: Apart<A, B, C>(q, r),
+    kq: Path::KeepsFit(q, fits), kr: Path::KeepsFit(r, fits)): Apart<S, B, C>(p.then(q), p.then(r))
+{
+    Apart(
+        λ s v => Apart::under_read_on(p, fits, pl, inner, kr, s, v, p.get(s), refl),
+        λ s v => Apart::under_read_on(p, fits, pl, Apart::symm(inner), kq, s, v, p.get(s), refl),
+        λ s b c => Apart::under_commute_on(p, fits, pl, inner, kq, kr, s, b, c, p.get(s), refl),
+    )
+}
+
+// A part of a part writes only through its outer step, so it keeps what
+// that step keeps.
+theorem Path::then_keeps_fit<S, A, B>(p: Path<S, A>, q: Path<A, B>, fits: S → Bool, kp: Path::KeepsFit(p, fits)): Path::KeepsFit(p.then(q), fits) {
+    λ s fs b => (match p.get(s) as λ o => p.get(s) = o → fits(p.then(q).set(s, b)) = True {
+        Some(a) => λ e => j(sym(p.then_set_at(q, s, a, e, b)), λ t _ => fits(t) = True, kp(s, fs, q.set(a, b))),
+        None => λ e => j(sym(p.then_set_none(q, s, e, b)), λ t _ => fits(t) = True, fs),
+    })(refl)
+}
