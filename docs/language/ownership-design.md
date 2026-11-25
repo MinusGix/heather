@@ -1732,6 +1732,45 @@ per function connects them.
    generator could write. Test: one function with a found proof, its body
    written by hand in the checker's language, its residual discharged from
    its own hypothesis.
+
+   **Result (2026-11-25, `lib/lang/ownership/site_facts.hthr`, probes in
+   `lib/_tests/lang/ownership/site_facts_tests.hthr`, log in
+   `issues/ownership-residuals-from-source-proofs.md`): it works, and the
+   discharge is the source's proof itself.** A read under a parameter proof,
+   an index read into a `let`, a write apart from a held view under an `if`,
+   and calls passing the caller's proof on (directly, and over a read) each
+   have a pin by `refl`, a discharge, and their safety from the checker's
+   once-theorem with nothing else. Per site the term is the proof the source
+   has there (a parameter, `decide_true(e)` of the enclosing `if`'s convoy
+   equation, a `squash` of either), placed at the residual's statement, and
+   the kernel sees the statement at the reflected words as the hypothesis's
+   at the source's locals by running the meaning. A `let` costs nothing: the
+   elaborated `let` is its value, and the reflected word evaluates to the
+   same term. That needed four things the checker's module does not have,
+   added beside it: residuals stated as the proposition the source writes
+   (a bound as a squashed `<`, a callee's precondition as written) over the
+   meaning's final state, not over its words alone; a precondition that
+   reads the parameter as well as the words (the arena's `read` cannot be
+   stated otherwise); open words spelled from their length, one lemma for
+   every function; and a branch whose meaning is the same convoy the
+   source's `if h:` elaborates to. Two things are not conversions.
+   Apartness is a Boolean verdict over a disjunction, spelled with the
+   view's offset (`0 + k <= j` against the source's `k <= j`), so its term
+   is a typed `let` and `omega` over the hypotheses in scope, which reflection
+   must therefore keep per site, not only the argument at the site. And
+   cost: one residual costs a linear pass over the body, but a tuple of
+   residuals, each converted on its own, runs the meaning once per residual,
+   which is quadratic for a residual per statement (ten million steps at 256
+   statements). The design's own fix measures linear: restate the residuals
+   over the source's terms and move the whole conjunction by one ascription
+   (one conversion, which shares the meaning's evaluation). So a generator
+   emits, per function, the restated conjunction and its proof tuple, and
+   per site only the proof term and, for apartness, the hypotheses in scope.
+   What the experiment could not do in this fragment: a callee whose
+   precondition reads its lent window (`Pre` is over the call's words), a
+   reader answering a word (no such call), and an `if` whose test reads a
+   word the body bound (that is the checker's own branch, which the joins
+   work brings).
 2. **Loops.** A place state stable at the loop's head in one pass;
    residuals that hold at every pass and not "at the words the meaning ends
    with"; soundness by induction on fuel. Test: one loop added to the

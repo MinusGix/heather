@@ -1,0 +1,331 @@
+// Residuals discharged from the proofs the source carries
+// (issues/ownership-residuals-from-source-proofs.md,
+// lib/lang/ownership/site_facts.hthr). Three source functions, each written
+// as ordinary Heather over lists with its proofs, its body by hand in the
+// checker's language, the pin, each residual's discharge at the source's
+// locals, and the function's safety from `site_sound` (or `check_sound`)
+// with nothing beyond the discharge.
+//
+// What a generator states, per function:
+// - `f::pre`: the source's hypotheses with each parameter replaced by its
+//   reflected reading (the list by `arg`, the `k`th word by `word(ws, k)`).
+// - `f::reflects`: the meaning at the spelled words `[x₀, …]` is `f`, `refl`.
+// - `f::site`: at the source's locals, under the source's hypotheses, the
+//   residuals at the reflected meaning's final state: a tuple with one
+//   component per residual, each the proof term the source has at that site
+//   ascribed at the residual's statement with the atoms read as the source's
+//   values (a parameter's local, a `let`'s value), and `trivial` to end it.
+// - `f::safe`: `site_sound(…, refl, pre, w, at_words(…, λ arg ws h => f::site(arg, word(ws, 0), …, h…)), callees)`.
+import logic;
+import bool;
+import nat;
+import omega;
+import option;
+import list;
+import list_window;
+import span_set;
+import atom;
+import call_check;
+import site_facts;
+
+fn no_pre() → Nat → List<Nat> → Type { λ _ _ => True }
+
+theorem no_calls(ops: List<Stmt>, w: World, h: (g: Nat) → calls(ops, g) = False): (g: Nat) → calls(ops, g) = True → FnSafe(sig_at(Nil, g), no_pre()(g), w.mean(g), w.run(g)) {
+    λ g yes => absurd(trans(sym(h(g)), yes))
+}
+
+// ---------------------------------------------------------------------------
+// 1. A read under a parameter proof: the arena's `read` in miniature.
+//    `fn pick(xs: &[Nat], i: Nat, inside: ∥i < xs.len()∥) → Nat { xs[i] }`
+
+fn pick(xs: List<Nat>, i: Nat, inside: ∥i < xs.len()∥) → Nat { word(xs, i) }
+
+fn pick_r() → Func { Func(Reads, 1, [Get(1, 0, Var(0))], RWord(Var(1))) }
+
+fn pick_pre() → List<Nat> → List<Nat> → Type { λ arg ws => ∥word(ws, 0) < arg.len()∥ }
+
+theorem pick_reflects(w: World, xs: List<Nat>, i: Nat, inside: ∥i < xs.len()∥): mean_fn(w, pick_r(), xs, [i]).word = pick(xs, i, inside) { refl }
+
+theorem pick_checked(): check_site(Nil, pick_r()) = Some([Inside(0, Var(0))]) { refl }
+
+// The bound, from `inside` by conversion: `word([i] ++ [xs[i]], 0)` is `i`.
+theorem pick_site(w: World, xs: List<Nat>, i: Nat, inside: ∥i < xs.len()∥): Fact::All([Inside(0, Var(0))], no_pre(), mean_body(w, pick_r().body, Sem([xs], Nil, [i]))) {
+    ⟨inside, trivial⟩
+}
+
+theorem pick_safe(w: World): FnSafeAt(pick_r().sig(), pick_pre(), λ arg ws => mean_fn(w, pick_r(), arg, ws), λ file r ws => run_fn(w, pick_r(), file, r, ws)) {
+    site_sound(Nil, no_pre(), pick_r(), [Inside(0, Var(0))], pick_checked(), pick_pre(), w,
+        at_words(w, pick_r().body, [Inside(0, Var(0))], no_pre(), pick_pre(), 1, λ arg ws h => pick_site(w, arg, word(ws, 0), h)),
+        no_calls(pick_r().body, w, λ g => refl))
+}
+
+// 1b. Through a `let`: an index read by an earlier statement.
+//    `fn hop(xs: &[Nat], i, inside: ∥i < xs.len()∥, next: ∥xs[i] < xs.len()∥) → Nat { let j = xs[i]; xs[j] }`
+// The second read's index is word 2, bound by the first; its bound reads,
+// at the reflected words, as `next`'s statement over the source's `xs[i]`.
+
+fn hop(xs: List<Nat>, i: Nat, inside: ∥i < xs.len()∥, next: ∥word(xs, i) < xs.len()∥) → Nat { let j = word(xs, i); word(xs, j) }
+
+fn hop_r() → Func { Func(Reads, 1, [Get(1, 0, Var(0)), Get(2, 0, Var(1))], RWord(Var(2))) }
+
+fn hop_pre() → List<Nat> → List<Nat> → Type { λ arg ws => ∥word(ws, 0) < arg.len()∥ ∧ ∥word(arg, word(ws, 0)) < arg.len()∥ }
+
+theorem hop_reflects(w: World, xs: List<Nat>, i: Nat, inside: ∥i < xs.len()∥, next: ∥word(xs, i) < xs.len()∥): mean_fn(w, hop_r(), xs, [i]).word = hop(xs, i, inside, next) { refl }
+
+theorem hop_checked(): check_site(Nil, hop_r()) = Some([Inside(0, Var(0)), Inside(0, Var(1))]) { refl }
+
+theorem hop_site(w: World, xs: List<Nat>, i: Nat, inside: ∥i < xs.len()∥, next: ∥word(xs, i) < xs.len()∥):
+    Fact::All([Inside(0, Var(0)), Inside(0, Var(1))], no_pre(), mean_body(w, hop_r().body, Sem([xs], Nil, [i])))
+{
+    ⟨inside, ⟨next, trivial⟩⟩
+}
+
+theorem hop_safe(w: World): FnSafeAt(hop_r().sig(), hop_pre(), λ arg ws => mean_fn(w, hop_r(), arg, ws), λ file r ws => run_fn(w, hop_r(), file, r, ws)) {
+    site_sound(Nil, no_pre(), hop_r(), [Inside(0, Var(0)), Inside(0, Var(1))], hop_checked(), hop_pre(), w,
+        at_words(w, hop_r().body, [Inside(0, Var(0)), Inside(0, Var(1))], no_pre(), hop_pre(), 1, λ arg ws h => hop_site(w, arg, word(ws, 0), h.left, h.right)),
+        no_calls(hop_r().body, w, λ g => refl))
+}
+
+// The same discharge restated over the source's terms: the residuals'
+// conjunction written at the source's locals, proved by the source's
+// proofs, and moved to the reflected statement by one ascription. This is
+// the shape for many residuals: the one conversion of the whole
+// conjunction runs the meaning once, where a tuple at the reflected
+// statement converts each component against it separately and runs the
+// meaning once per residual (the issue's log has the measurements).
+fn hop_restated(xs: List<Nat>, i: Nat) → Type { ∥i < xs.len()∥ ∧ (∥word(xs, i) < xs.len()∥ ∧ True) }
+
+theorem hop_site_restated(w: World, xs: List<Nat>, i: Nat, inside: ∥i < xs.len()∥, next: ∥word(xs, i) < xs.len()∥):
+    Fact::All([Inside(0, Var(0)), Inside(0, Var(1))], no_pre(), mean_body(w, hop_r().body, Sem([xs], Nil, [i])))
+{
+    let at_source: hop_restated(xs, i) = ⟨inside, ⟨next, trivial⟩⟩;
+    at_source
+}
+
+// The second residual is the second read's, not the first's: a discharge
+// that cites the first read's proof there is refused.
+// expect-error(kernel)
+theorem hop_wrong_site(w: World, xs: List<Nat>, i: Nat, inside: ∥i < xs.len()∥, next: ∥word(xs, i) < xs.len()∥):
+    Fact::All([Inside(0, Var(0)), Inside(0, Var(1))], no_pre(), mean_body(w, hop_r().body, Sem([xs], Nil, [i])))
+{
+    ⟨inside, ⟨inside, trivial⟩⟩
+}
+
+// The proof from an `if` over the `let`: `if h: j < xs.len()` after
+// `let j = xs[i]` hands its arm `h: xs[i] < xs.len()`, the elaborated `let`
+// being its value, so the arm calls `hop` with it, and the second bound's
+// discharge is the `if`'s evidence, `decide_true` of the convoy's equation.
+// (`Branch` tests only the words given, so this arm's safety is not
+// assembled: the test reads a word the body bound, whose run and meaning
+// agree by `Sim.words`, which `FnSafe` does not export.)
+fn hop_if(xs: List<Nat>, i: Nat, inside: ∥i < xs.len()∥) → Nat {
+    let j = word(xs, i);
+    if h: j < xs.len() { hop(xs, i, inside, squash(h)) } else { 0 }
+}
+
+theorem hop_if_site(w: World, xs: List<Nat>, i: Nat, inside: ∥i < xs.len()∥, e: decide_bit<word(xs, i) < xs.len()>() = True):
+    Fact::All([Inside(0, Var(0)), Inside(0, Var(1))], no_pre(), mean_body(w, hop_r().body, Sem([xs], Nil, [i])))
+{
+    ⟨inside, ⟨squash(decide_true<word(xs, i) < xs.len()>(e)), trivial⟩⟩
+}
+
+// The control: without `next`, a list whose element points past it. The
+// bound fails at `xs = [5], i = 0`.
+theorem hop_control(): ¬Fact::All([Inside(0, Var(0)), Inside(0, Var(1))], no_pre(), mean_body(world(Nil, 0), hop_r().body, Sem([[5]], Nil, [0]))) {
+    λ h => unsquash_empty(h.right.left)
+}
+
+// ---------------------------------------------------------------------------
+// 2. A write beside a held view, apart only under an `if`:
+//    `fn poke(xs: &mut [Nat], k, j) → Nat { let t = &xs[0..k]; if h: k <= j { xs[j] = 9; t[0] } else { t[0] } }`
+// A writer's source answers its parameter afterwards and its word, the
+// meaning's `MOut`.
+
+fn poke(xs: List<Nat>, k, j: Nat) → MOut {
+    let t = window(xs, 0, k);
+    if h: k <= j { MOut(xs.update(j, λ _ => 9), word(t, 0), Nil) } else { MOut(xs, word(t, 0), Nil) }
+}
+
+// Each arm is the whole straight body, the view repeated.
+fn poke_yes() → Func { Func(Writes, 2, [View(0, 0, Lit(0), Var(0)), Set(1, 0, Var(1), Lit(9)), Read(2, 0, Lit(0))], RWord(Var(2))) }
+
+fn poke_no() → Func { Func(Writes, 2, [View(0, 0, Lit(0), Var(0)), Read(2, 0, Lit(0))], RWord(Var(2))) }
+
+fn poke_r() → Branch { Branch(Var(0), Var(1), poke_yes(), poke_no()) }
+
+theorem poke_reflects(w: World, xs: List<Nat>, k, j: Nat): mean_branch(w, poke_r(), xs, [k, j]) = poke(xs, k, j) { refl }
+
+fn poke_apart() → Fact { Owe(Due(Spans(Lit(0), Var(0), Var(1), Lit(1)))) }
+
+theorem poke_yes_checked(): check_site(Nil, poke_yes()) = Some([poke_apart()]) { refl }
+
+theorem poke_no_checked(): check_site(Nil, poke_no()) = Some(Nil) { refl }
+
+// The residual is `Span(0, k)` apart from `Span(j, 1)`, a Boolean verdict
+// over the disjunction of the two sides, `0 + k <= j` on the one the source
+// proves: not `h`'s statement by conversion, so `omega` reads it from `h`.
+theorem poke_yes_site(w: World, xs: List<Nat>, k, j: Nat, h: k <= j): Fact::All([poke_apart()], no_pre(), mean_body(w, poke_yes().body, Sem([xs], Nil, [k, j]))) {
+    let apart: (Span(0, k).apart(Span(j, 1)).IsTrue()) = omega(h);
+    ⟨apart, trivial⟩
+}
+
+fn poke_pre(br: Branch, side: Bool) → List<Nat> → List<Nat> → Type { λ arg ws => True ∧ (br.bit(ws) = side) }
+
+theorem poke_safe(w: World): FnSafeAt(poke_yes().sig(), λ _ _ => True, λ arg ws => mean_branch(w, poke_r(), arg, ws), λ file r ws => run_branch(w, poke_r(), file, r, ws)) {
+    branch_sound(poke_r(), poke_yes().sig(), λ _ _ => True, w,
+        site_sound(Nil, no_pre(), poke_yes(), [poke_apart()], poke_yes_checked(), poke_pre(poke_r(), True), w,
+            at_words(w, poke_yes().body, [poke_apart()], no_pre(), poke_pre(poke_r(), True), 2,
+                λ arg ws h => poke_yes_site(w, arg, word(ws, 0), word(ws, 1), decide_true<word(ws, 0) <= word(ws, 1)>(h.right))),
+            no_calls(poke_yes().body, w, λ g => refl)),
+        site_sound(Nil, no_pre(), poke_no(), Nil, poke_no_checked(), poke_pre(poke_r(), False), w,
+            at_words(w, poke_no().body, Nil, no_pre(), poke_pre(poke_r(), False), 2, λ arg ws h => trivial),
+            no_calls(poke_no().body, w, λ g => refl)))
+}
+
+// The control: the same arm without the test. Its residual fails at
+// `k = 1, j = 0`, and there the run and the meaning differ (9 against 5).
+theorem poke_yes_control(): ¬Fact::All([poke_apart()], no_pre(), mean_body(world(Nil, 0), poke_yes().body, Sem([[5, 6]], Nil, [1, 0]))) { λ h => h.left }
+
+theorem poke_yes_differs(): ¬(run_fn(world(Nil, 0), poke_yes(), [[5, 6]], Ref(0, 0, 2), [1, 0]).word = mean_fn(world(Nil, 0), poke_yes(), [5, 6], [1, 0]).word) {
+    λ e => {
+        let at: (9 = 5) = e;
+        absurd(at)
+    }
+}
+
+// 2b. The view's length a `let`-bound read:
+//    `let k = xs[0]; let t = &xs[1..1+k]; if h: 1 + k <= j { xs[j] = 9; t[0] } else { … }`
+// The apartness residual reads word 1, bound by the read; `omega` takes the
+// read `xs[0]` as an atom, the hypothesis being the source's, carried and
+// not found.
+fn after_read_yes() → Func {
+    Func(Writes, 1, [Get(1, 0, Lit(0)), View(0, 0, Lit(1), Var(1)), Set(1, 0, Var(0), Lit(9)), Read(2, 0, Lit(0))], RWord(Var(2)))
+}
+
+theorem after_read_checked(): check_site(Nil, after_read_yes()) = Some([Owe(Due(Spans(Lit(1), Var(1), Var(0), Lit(1)))), Inside(0, Lit(0))]) { refl }
+
+theorem after_read_site(w: World, xs: List<Nat>, j: Nat, some: ∥0 < xs.len()∥, h: 1 + word(xs, 0) <= j):
+    Fact::All([Owe(Due(Spans(Lit(1), Var(1), Var(0), Lit(1)))), Inside(0, Lit(0))], no_pre(), mean_body(w, after_read_yes().body, Sem([xs], Nil, [j])))
+{
+    let apart: (Span(1, word(xs, 0)).apart(Span(j, 1)).IsTrue()) = omega(h);
+    ⟨apart, ⟨some, trivial⟩⟩
+}
+
+// ---------------------------------------------------------------------------
+// 3. A call that passes its own proof on: the residual is the callee's
+//    precondition.
+//    `fn shift(w: &mut [Nat], k, j, h: k <= j) → Nat { let t = &w[0..k]; w[j] = 9; t[0] }`
+//    `fn outer(xs: &mut [Nat], m, k, j, h: k <= j) → Nat { shift(&mut xs[0..m], k, j, h) }`
+// `pick` reads and answers a word, which no call of the fragment does
+// (`CallMut` lends a window to write, `CallView` answers a view), and its
+// precondition reads its list, which `Pre` cannot state (`pres` is over the
+// call's words): so the callee here is `poke`'s arm with its test as a
+// parameter proof.
+
+fn shift(w: List<Nat>, k, j: Nat, h: k <= j) → MOut { let t = window(w, 0, k); MOut(w.update(j, λ _ => 9), word(t, 0), Nil) }
+
+// The callee written out without its erased parameter (runtime-fn-setups
+// §16.22's `g::words`): what a caller's pin compares the call with.
+fn shift_words(w: List<Nat>, k, j: Nat) → MOut { let t = window(w, 0, k); MOut(w.update(j, λ _ => 9), word(t, 0), Nil) }
+
+fn shift_r() → Func { poke_yes() }
+
+fn outer(xs: List<Nat>, m, k, j: Nat, h: k <= j) → MOut {
+    let o = shift(window(xs, 0, m), k, j, h);
+    MOut(xs.put_window(0, o.val), o.word, Nil)
+}
+
+fn outer_r() → Func { Func(Writes, 3, [CallMut(0, 0, Lit(0), Var(0), [Var(1), Var(2)], 1, 3)], RWord(Var(3))) }
+
+fn p3() → List<Func> { [shift_r(), outer_r()] }
+
+fn p3_pres() → Nat → List<Nat> → Type { λ g ws => match g { Zero => word(ws, 0) <= word(ws, 1), Succ(_) => word(ws, 1) <= word(ws, 2) } }
+
+// The world a caller's pin is stated in: each callee answered by its
+// written-out source.
+fn p3_source() → World { World(λ _ arg ws => shift_words(arg, word(ws, 0), word(ws, 1)), λ _ file _ _ => ROut(file, 0, 0, 0)) }
+
+theorem shift_reflects(w: World, xs: List<Nat>, k, j: Nat, h: k <= j): mean_fn(w, shift_r(), xs, [k, j]) = shift(xs, k, j, h) { refl }
+
+theorem outer_reflects(xs: List<Nat>, m, k, j: Nat, h: k <= j): mean_fn(p3_source(), outer_r(), xs, [m, k, j]) = outer(xs, m, k, j, h) { refl }
+
+fn outer_pre() → Fact { Owe(Pre(0, [Var(1), Var(2)])) }
+
+theorem outer_checked(): check_site(sigs_of(p3()), outer_r()) = Some([outer_pre()]) { refl }
+
+// The callee's precondition at the call's words is `h`'s statement.
+theorem outer_site(w: World, xs: List<Nat>, m, k, j: Nat, h: k <= j): Fact::All([outer_pre()], p3_pres(), mean_body(w, outer_r().body, Sem([xs], Nil, [m, k, j]))) {
+    ⟨h, trivial⟩
+}
+
+theorem shift_site(w: World, xs: List<Nat>, k, j: Nat, h: k <= j): Fact::All([poke_apart()], p3_pres(), mean_body(w, shift_r().body, Sem([xs], Nil, [k, j]))) {
+    let apart: (Span(0, k).apart(Span(j, 1)).IsTrue()) = omega(h);
+    ⟨apart, trivial⟩
+}
+
+fn at3(g: Nat) → List<Nat> → List<Nat> → Type { λ _ ws => p3_pres()(g, ws) }
+
+// The caller in any world, citing only the callee's promise.
+theorem outer_safe(w: World, shift_safe: FnSafe(shift_r().sig(), p3_pres()(0), w.mean(0), w.run(0))):
+    FnSafe(outer_r().sig(), p3_pres()(1), λ arg ws => mean_fn(w, outer_r(), arg, ws), λ file r ws => run_fn(w, outer_r(), file, r, ws))
+{
+    site_sound(sigs_of(p3()), p3_pres(), outer_r(), [outer_pre()], outer_checked(), at3(1), w,
+        at_words(w, outer_r().body, [outer_pre()], p3_pres(), at3(1), 3, λ arg ws h => outer_site(w, arg, word(ws, 0), word(ws, 1), word(ws, 2), h)),
+        λ g => match g { Zero => λ _ => shift_safe, Succ(_) => λ no => absurd(no) })
+}
+
+// The program at every depth of calls: each function's discharge is its
+// site's, moved to open words.
+theorem p3_ok(): ProgOk(p3(), p3_pres()) {
+    λ g => match g {
+        Zero => λ _ => Checks([Due(Spans(Lit(0), Var(0), Var(1), Lit(1)))], refl,
+            λ w arg ws nw p => Fact::owed_of([Due(Spans(Lit(0), Var(0), Var(1), Lit(1)))], p3_pres(), mean_body(w, shift_r().body, Sem([arg], Nil, ws)), Nil,
+                at_words(w, shift_r().body, [poke_apart()], p3_pres(), at3(0), 2, λ arg2 ws2 h => shift_site(w, arg2, word(ws2, 0), word(ws2, 1), h), arg, ws, nw, p))),
+        Succ(g1) => match g1 {
+            Zero => λ _ => Checks([Pre(0, [Var(1), Var(2)])], refl,
+                λ w arg ws nw p => Fact::owed_of([Pre(0, [Var(1), Var(2)])], p3_pres(), mean_body(w, outer_r().body, Sem([arg], Nil, ws)), Nil,
+                    at_words(w, outer_r().body, [outer_pre()], p3_pres(), at3(1), 3,
+                        λ arg2 ws2 h => outer_site(w, arg2, word(ws2, 0), word(ws2, 1), word(ws2, 2), h), arg, ws, nw, p))),
+            Succ(_) => λ no => false_elim(omega(no)),
+        },
+    }
+}
+
+theorem outer_sound(d: Nat): FnSafe(sig_at(sigs_of(p3()), 1), p3_pres()(1), world(p3(), d).mean(1), world(p3(), d).run(1)) {
+    prog_sound(p3(), p3_pres(), p3_ok(), d, 1)
+}
+
+// 3b. The proof passed on through a `let`: the callee's first word is an
+//    element read into a local, and the caller's proof is over the read.
+//    `fn outer2(xs: &mut [Nat], m, j, some: ∥0 < xs.len()∥, h: xs[0] <= j) → Nat { let a = xs[0]; shift(&mut xs[1..1+m], a, j, h) }`
+
+fn outer2(xs: List<Nat>, m, j: Nat, some: ∥0 < xs.len()∥, h: word(xs, 0) <= j) → MOut {
+    let a = word(xs, 0);
+    let o = shift(window(xs, 1, m), a, j, h);
+    MOut(xs.put_window(1, o.val), o.word, Nil)
+}
+
+fn outer2_r() → Func { Func(Writes, 2, [Get(2, 0, Lit(0)), CallMut(0, 0, Lit(1), Var(0), [Var(2), Var(1)], 1, 3)], RWord(Var(3))) }
+
+fn p3b() → List<Func> { [shift_r(), outer2_r()] }
+
+fn outer2_pre() → List<Nat> → List<Nat> → Type { λ arg ws => ∥0 < arg.len()∥ ∧ (word(arg, 0) <= word(ws, 1)) }
+
+theorem outer2_reflects(xs: List<Nat>, m, j: Nat, some: ∥0 < xs.len()∥, h: word(xs, 0) <= j): mean_fn(p3_source(), outer2_r(), xs, [m, j]) = outer2(xs, m, j, some, h) { refl }
+
+theorem outer2_checked(): check_site(sigs_of(p3b()), outer2_r()) = Some([Owe(Pre(0, [Var(2), Var(1)])), Inside(0, Lit(0))]) { refl }
+
+theorem outer2_site(w: World, xs: List<Nat>, m, j: Nat, some: ∥0 < xs.len()∥, h: word(xs, 0) <= j):
+    Fact::All([Owe(Pre(0, [Var(2), Var(1)])), Inside(0, Lit(0))], p3_pres(), mean_body(w, outer2_r().body, Sem([xs], Nil, [m, j])))
+{
+    ⟨h, ⟨some, trivial⟩⟩
+}
+
+theorem outer2_safe(w: World, shift_safe: FnSafe(shift_r().sig(), p3_pres()(0), w.mean(0), w.run(0))):
+    FnSafeAt(outer2_r().sig(), outer2_pre(), λ arg ws => mean_fn(w, outer2_r(), arg, ws), λ file r ws => run_fn(w, outer2_r(), file, r, ws))
+{
+    site_sound(sigs_of(p3b()), p3_pres(), outer2_r(), [Owe(Pre(0, [Var(2), Var(1)])), Inside(0, Lit(0))], outer2_checked(), outer2_pre(), w,
+        at_words(w, outer2_r().body, [Owe(Pre(0, [Var(2), Var(1)])), Inside(0, Lit(0))], p3_pres(), outer2_pre(), 2,
+            λ arg ws h => outer2_site(w, arg, word(ws, 0), word(ws, 1), h.left, h.right)),
+        λ g => match g { Zero => λ _ => shift_safe, Succ(_) => λ no => absurd(no) })
+}
