@@ -1,10 +1,12 @@
 // The ownership checker over a function and the functions it calls: write
 // views held across statements, read views, branches that join, calls that
-// lend a write view, answer a read view placed by their signature, or
-// consume a collection of stored write references, and the once-theorem
-// over all of them (docs/language/ownership-design.md §15.3, §15.6;
+// lend a write view, read the object and answer a word, answer a read view
+// placed by their signature, or consume a collection of stored write
+// references, and the once-theorem over all of them
+// (docs/language/ownership-design.md §15.3, §15.6, §18.4;
 // issues/ownership-checker-call-and-write-view.md,
-// issues/ownership-checker-loans-and-joins.md).
+// issues/ownership-checker-loans-and-joins.md,
+// issues/ownership-site-facts-into-the-checker.md).
 //
 // A function takes one list parameter, to read or to write, or `n` write
 // references stored in a collection, lent into an erased owner (its `Mode`),
@@ -22,6 +24,8 @@
 // - `Die(t)` is the annotation that `t` dies here (§15.3): no code.
 // - `CallMut(g, t, args, z)` is `let z = g(t, args)`, lending the write view
 //   `t` to `g` for the call.
+// - `CallGet(g, args, z)` is `let z = g(&x, args)`, a reader of `x` that
+//   answers a word.
 // - `CallView(g, args, t)` is `let t = g(&x, args)`, a read view of `x`
 //   that `g` answers.
 // - `CallAll(g, ts, args, z)` is `let z = g([t1, …, tn], args)`: the live
@@ -35,14 +39,20 @@
 // and a write view is its value and an erased slot, the place it goes back
 // to (§15.2). Write-back is eager: after `Put` or `CallMut` the place is
 // updated, `x := x.put_window(slot, t)`, so no point of death enters the
-// meaning. `run_fn` is the run: the function works on a reference (a buffer
-// of the file, a base and a length) with no copy; a view is the reference
-// narrowed, a write through it is a store in place, and a view a callee
-// answers is two words relative to the reference it was given, which the
-// caller rebases. A lending function's run is given the references it is
-// lent and no reference to its owner. Both are stated over a `World`, the
-// meanings and runs of the functions called, so a body's meaning and run
-// never see a callee's body.
+// meaning. The words bound are an `Env`: the parameters read by position and
+// the words the body bound newest first, so a read costs the same whatever
+// the word (a snoc list read by position made the pin quadratic,
+// issues/ownership-meaning-word-spine.md). A branch is the convoy the
+// source's `if h:` elaborates to, carrying what follows it into each arm
+// (`mean_then`), so a function's meaning is the source function by
+// conversion. `run_fn` is the run: the function works on a reference (a
+// buffer of the file, a base and a length) with no copy; a view is the
+// reference narrowed, a write through it is a store in place, and a view a
+// callee answers is two words relative to the reference it was given,
+// which the caller rebases. A lending function's run is given the
+// references it is lent and no reference to its owner. Both are stated over
+// a `World`, the meanings and runs of the functions called, so a body's
+// meaning and run never see a callee's body.
 //
 // `check_fn` reads the signatures only. Its state is the one object's live
 // views, each with its mode and the region it covers (a window, the whole
@@ -51,21 +61,30 @@
 // `Set`, a new write view) needs every live view apart from it; an access to
 // read (a `Get`, a new read view) needs every live write view apart from it:
 // decided at literals, deferred as a residual otherwise. A write view itself
-// is written through freely; a call defers its callee's precondition; a
-// join is the meet of the arms' live views, and an arm's residuals are owed
-// under its test.
+// is written through freely; a join is the meet of the arms' live views.
+//
+// What the checker defers is a residual, the proposition the source writes
+// at that site (§14 item 1): an element read's bound (`Inside`, a squashed
+// `<` on the length of what it reads), a callee's precondition at the value
+// it is lent and the call's words (`Pre`), and two windows apart (`Apart`,
+// the disjunction of the two sides, each spelled as a source spells it).
+// Its verdict is a tree of residuals shaped as the body (`Owes`), and what
+// it owes is one proposition, `Owes::Holds`: each residual at the state
+// its site reads, along the meaning, an arm's under the branch's test. So
+// the source's own proofs are the discharge, by conversion.
 //
 // `FnSafe(sig, pre, post, mean, run)` is what a function promises a caller:
-// from any file, a reference in bounds, references lent as its mode says and
-// words meeting `pre`, the run answers the meaning's word, which meets
-// `post`; its reference's window holds the meaning's value afterwards and
-// the file is unchanged outside it (and, for a lending function, outside
-// the references it was lent); and a view it answers lies in its
-// signature's region and reads the meaning's view value. `check_sound`
-// gives `FnSafe` of a function whose verdict is `Some(rs)`, whose residuals
-// hold under its precondition, in any world whose functions it calls are
-// `FnSafe`. `prog_sound` ties the knot: in the world of a program at any
-// depth of calls, every function is `FnSafe`.
+// from any file, a reference in bounds, references lent as its mode says, and
+// a parameter value (its object and what it is lent) and words meeting
+// `pre`, the run answers the meaning's word, and the meaning's answer meets
+// `post`; its reference's window holds the meaning's value
+// afterwards and the file is unchanged outside it (and, for a lending
+// function, outside the references it was lent); and a view it answers
+// lies in its signature's region and reads the meaning's view value.
+// `check_sound` gives `FnSafe` of a function whose verdict is `Some(d)`,
+// whose residuals hold under its precondition, in any world whose functions
+// it calls are `FnSafe`. `prog_sound` ties the knot: in the world of a
+// program at any depth of calls, every function is `FnSafe`.
 import logic;
 import bool;
 import nat;
@@ -85,8 +104,27 @@ fn Atom::all_bound(args: List<Atom>, nw: Nat) → Bool {
     match args { Nil => True, Cons(a, rest) => a.bound(nw) && Atom::all_bound(rest, nw) }
 }
 
+// The words a body has bound: the function's parameters, read by position,
+// and the words its statements bound, newest first, with their count. A
+// parameter and a recent word are read in constant time, so the meaning of
+// a body is evaluated in time linear in it.
+record Env { args: List<Nat>, m: Nat, locals: List<Nat> }
+
+fn Env::start(ws: List<Nat>) → Env { Env(ws, 0, Nil) }
+
+// How many words are bound.
+fn Env::n(self e: Env) → Nat { e.args.len() + e.m }
+
+fn Env::push(self e: Env, a: Nat) → Env { Env(e.args, e.m + 1, Cons(a, e.locals)) }
+
+fn Env::get(self e: Env, w: Nat) → Nat {
+    match (w + 1).leb(e.args.len()) { True => word(e.args, w), False => word(e.locals, e.n() - (w + 1)) }
+}
+
+fn Atom::at(self a: Atom, e: Env) → Nat { match a { Lit(n) => n, Var(w) => e.get(w) } }
+
 // A call's arguments, read.
-fn vals(args: List<Atom>, ws: List<Nat>) → List<Nat> { args.map(λ a => a.val(ws)) }
+fn vals(args: List<Atom>, e: Env) → List<Nat> { args.map(λ a => a.at(e)) }
 
 // A function's parameter: its object to read, its object to write, or `n`
 // references stored in a collection, lent to write into an erased owner
@@ -111,16 +149,15 @@ inductive Stmt {
     Put(t: Nat, i: Atom, v: Atom),
     Die(t: Nat),
     CallMut(g: Nat, t: Nat, args: List<Atom>, z: Nat),
+    CallGet(g: Nat, args: List<Atom>, z: Nat),
     CallView(g: Nat, args: List<Atom>, t: Nat),
     CallAll(g: Nat, ts: List<Nat>, args: List<Atom>, z: Nat),
 }
 
-// A branch's test, on words bound before it: `a <= b`.
+// A branch's test: `a <= b`.
 inductive Cond { Le(a: Atom, b: Atom) }
 
-fn Cond::test(self cd: Cond, ws: List<Nat>) → Bool { match cd { Le(a, b) => a.val(ws).leb(b.val(ws)) } }
-
-fn Cond::bound(self cd: Cond, nw: Nat) → Bool { match cd { Le(a, b) => a.bound(nw) && b.bound(nw) } }
+fn Cond::test(self cd: Cond, e: Env) → Bool { match cd { Le(a, b) => a.at(e).leb(b.at(e)) } }
 
 // A body: statements in order, and branches. `If(cd, a, b, rest)` runs `a`
 // where the test holds and `b` where it does not, then `rest` from the
@@ -175,11 +212,15 @@ record World {
 
 fn window(xs: List<Nat>, lo, n: Nat) → List<Nat> { xs.drop(lo).take(n) }
 
+// What `if h: c { y } else { n }` elaborates to: a match on the test's bit
+// that hands each arm the bit's equation.
+fn convoy<A>(c: Bool, y, n: A) → A { (match c as λ d => c = d → A { True => λ _ => y, False => λ _ => n })(refl) }
+
 // The place's value, each view's value, each view's slot (where a write
 // view goes back: erased, the meaning's own), and the words bound.
-record Sem { cur: List<Nat>, views: List<List<Nat>>, slots: List<Nat>, words: List<Nat> }
+record Sem { cur: List<Nat>, views: List<List<Nat>>, slots: List<Nat>, words: Env }
 
-fn Sem::bind(self s: Sem, a: Nat) → Sem { Sem(s.cur, s.views, s.slots, s.words ++ [a]) }
+fn Sem::bind(self s: Sem, a: Nat) → Sem { Sem(s.cur, s.views, s.slots, s.words.push(a)) }
 
 fn Sem::open(self s: Sem, val: List<Nat>, slot: Nat) → Sem { Sem(s.cur, s.views ++ [val], s.slots ++ [slot], s.words) }
 
@@ -194,33 +235,39 @@ fn Sem::slots_of(self s: Sem, ts: List<Nat>) → List<Slot> { ts.map(λ t => Slo
 
 // After a call that consumed stored references: the owner back, and the
 // word.
-fn Sem::returned(self s: Sem, o: MOut) → Sem { Sem(o.val, s.views, s.slots, s.words ++ [o.word]) }
+fn Sem::returned(self s: Sem, o: MOut) → Sem { Sem(o.val, s.views, s.slots, s.words.push(o.word)) }
 
 fn Stmt::eval1(self o: Stmt, w: World, s: Sem) → Sem {
     match o {
-        Set(i, v) => Sem(s.cur.update(i.val(s.words), λ _ => v.val(s.words)), s.views, s.slots, s.words),
-        Get(_, i) => s.bind(word(s.cur, i.val(s.words))),
-        View(_, _, lo, n) => s.open(window(s.cur, lo.val(s.words), n.val(s.words)), lo.val(s.words)),
-        Read(_, t, i) => s.bind(word(list_at(s.views, t), i.val(s.words))),
-        Put(t, i, v) => s.back(t, list_at(s.views, t).update(i.val(s.words), λ _ => v.val(s.words))),
+        Set(i, v) => Sem(s.cur.update(i.at(s.words), λ _ => v.at(s.words)), s.views, s.slots, s.words),
+        Get(_, i) => s.bind(word(s.cur, i.at(s.words))),
+        View(_, _, lo, n) => s.open(window(s.cur, lo.at(s.words), n.at(s.words)), lo.at(s.words)),
+        Read(_, t, i) => s.bind(word(list_at(s.views, t), i.at(s.words))),
+        Put(t, i, v) => s.back(t, list_at(s.views, t).update(i.at(s.words), λ _ => v.at(s.words))),
         Die(_) => s,
         CallMut(g, t, args, _) => s.called(t, w.mean(g, list_at(s.views, t), Nil, vals(args, s.words))),
+        CallGet(g, args, _) => s.bind(w.mean(g, s.cur, Nil, vals(args, s.words)).word),
         CallView(g, args, _) => s.open(w.mean(g, s.cur, Nil, vals(args, s.words)).view, 0),
         CallAll(g, ts, args, _) => s.returned(w.mean(g, s.cur, s.slots_of(ts), vals(args, s.words))),
     }
 }
 
-fn mean_body(w: World, ops: Body, s: Sem) → Sem {
+// The meaning of a body, handed to what follows it: a branch is the convoy
+// on its test, each arm carrying what follows the join.
+fn mean_then<R>(w: World, ops: Body, s: Sem, k: Sem → R) → R {
     match ops {
-        End => s,
-        Do(o, rest) => mean_body(w, rest, o.eval1(w, s)),
-        If(cd, a, b, rest) => mean_body(w, rest, match cd.test(s.words) { True => mean_body(w, a, s), False => mean_body(w, b, s) }),
+        End => k(s),
+        Do(o, rest) => mean_then(w, rest, o.eval1(w, s), k),
+        If(cd, a, b, rest) => convoy(cd.test(s.words), mean_then(w, a, s, λ x => mean_then(w, rest, x, k)), mean_then(w, b, s, λ x => mean_then(w, rest, x, k))),
     }
 }
 
-fn Ret::word(self r: Ret, ws: List<Nat>) → Nat { match r { RWord(a) => a.val(ws), RView(_, _) => 0 } }
+// The state a body ends in.
+fn mean_body(w: World, ops: Body, s: Sem) → Sem { mean_then(w, ops, s, λ x => x) }
 
-fn Ret::view(self r: Ret, cur: List<Nat>, ws: List<Nat>) → List<Nat> { match r { RWord(_) => Nil, RView(lo, n) => window(cur, lo.val(ws), n.val(ws)) } }
+fn Ret::word(self r: Ret, ws: Env) → Nat { match r { RWord(a) => a.at(ws), RView(_, _) => 0 } }
+
+fn Ret::view(self r: Ret, cur: List<Nat>, ws: Env) → List<Nat> { match r { RWord(_) => Nil, RView(lo, n) => window(cur, lo.at(ws), n.at(ws)) } }
 
 // A read parameter comes back as it went in: `&x` is `T` in and nothing
 // out (§15.2).
@@ -230,9 +277,9 @@ fn mean_out(f: Func, arg: List<Nat>, s: Sem) → MOut { MOut(f.mode.back(arg, s.
 
 // A function's first state: its object, the values of the references it is
 // lent (its object's windows at their slots), their slots, and its words.
-fn Sem::start(arg: List<Nat>, lent: List<Slot>, ws: List<Nat>) → Sem { Sem(arg, lent.map(λ sl => window(arg, sl.at, sl.n)), lent.map(λ sl => sl.at), ws) }
+fn Sem::start(arg: List<Nat>, lent: List<Slot>, ws: List<Nat>) → Sem { Sem(arg, lent.map(λ sl => window(arg, sl.at, sl.n)), lent.map(λ sl => sl.at), Env::start(ws)) }
 
-fn mean_lent(w: World, f: Func, arg: List<Nat>, lent: List<Slot>, ws: List<Nat>) → MOut { mean_out(f, arg, mean_body(w, f.body, Sem::start(arg, lent, ws))) }
+fn mean_lent(w: World, f: Func, arg: List<Nat>, lent: List<Slot>, ws: List<Nat>) → MOut { mean_then(w, f.body, Sem::start(arg, lent, ws), λ s => mean_out(f, arg, s)) }
 
 fn mean_fn(w: World, f: Func, arg, ws: List<Nat>) → MOut { mean_lent(w, f, arg, Nil, ws) }
 
@@ -256,27 +303,28 @@ fn narrow(r: Ref, lo, n: Nat) → Ref { Ref(r.b, r.base + lo.min(r.len), n.min(r
 
 fn ref_at(vs: List<Ref>, t: Nat) → Ref { vs.nth(t).unwrap_or(Ref(0, 0, 0)) }
 
-record Exec { file: List<List<Nat>>, views: List<Ref>, words: List<Nat> }
+record Exec { file: List<List<Nat>>, views: List<Ref>, words: Env }
 
-fn Exec::bind(self m: Exec, a: Nat) → Exec { Exec(m.file, m.views, m.words ++ [a]) }
+fn Exec::bind(self m: Exec, a: Nat) → Exec { Exec(m.file, m.views, m.words.push(a)) }
 
 // A store in place through the reference `v`.
 fn Exec::put(self m: Exec, v: Ref, i, x: Nat) → Exec { Exec(m.file.update(v.b, λ xs => store(xs, v, i, x)), m.views, m.words) }
 
-fn Exec::lent(m: Exec, o: ROut) → Exec { Exec(o.file, m.views, m.words ++ [o.word]) }
+fn Exec::lent(m: Exec, o: ROut) → Exec { Exec(o.file, m.views, m.words.push(o.word)) }
 
 // A view a callee answered, rebased on the reference the caller gave it.
 fn Exec::viewed(m: Exec, r: Ref, o: ROut) → Exec { Exec(o.file, m.views ++ [Ref(r.b, r.base + o.lo, o.n)], m.words) }
 
 fn Stmt::run2(self o: Stmt, w: World, r: Ref, m: Exec) → Exec {
     match o {
-        Set(i, v) => m.put(r, i.val(m.words), v.val(m.words)),
-        Get(_, i) => m.bind(rget(m.file, r, i.val(m.words))),
-        View(_, _, lo, n) => Exec(m.file, m.views ++ [narrow(r, lo.val(m.words), n.val(m.words))], m.words),
-        Read(_, t, i) => m.bind(rget(m.file, ref_at(m.views, t), i.val(m.words))),
-        Put(t, i, v) => m.put(ref_at(m.views, t), i.val(m.words), v.val(m.words)),
+        Set(i, v) => m.put(r, i.at(m.words), v.at(m.words)),
+        Get(_, i) => m.bind(rget(m.file, r, i.at(m.words))),
+        View(_, _, lo, n) => Exec(m.file, m.views ++ [narrow(r, lo.at(m.words), n.at(m.words))], m.words),
+        Read(_, t, i) => m.bind(rget(m.file, ref_at(m.views, t), i.at(m.words))),
+        Put(t, i, v) => m.put(ref_at(m.views, t), i.at(m.words), v.at(m.words)),
         Die(_) => m,
         CallMut(g, t, args, _) => Exec::lent(m, w.run(g, m.file, ref_at(m.views, t), Nil, vals(args, m.words))),
+        CallGet(g, args, _) => Exec::lent(m, w.run(g, m.file, r, Nil, vals(args, m.words))),
         CallView(g, args, _) => Exec::viewed(m, r, w.run(g, m.file, r, Nil, vals(args, m.words))),
         CallAll(g, ts, args, _) => Exec::lent(m, w.run(g, m.file, Ref(0, 0, 0), ts.map(λ t => ref_at(m.views, t)), vals(args, m.words))),
     }
@@ -292,13 +340,13 @@ fn run_body(w: World, r: Ref, ops: Body, m: Exec) → Exec {
 
 // The view a function answers, relative to its reference: the window cut
 // to it.
-fn Ret::vlo(self ret: Ret, r: Ref, ws: List<Nat>) → Nat { match ret { RWord(_) => 0, RView(lo, _) => lo.val(ws).min(r.len) } }
+fn Ret::vlo(self ret: Ret, r: Ref, ws: Env) → Nat { match ret { RWord(_) => 0, RView(lo, _) => lo.at(ws).min(r.len) } }
 
-fn Ret::vn(self ret: Ret, r: Ref, ws: List<Nat>) → Nat { match ret { RWord(_) => 0, RView(lo, n) => n.val(ws).min(r.len - lo.val(ws)) } }
+fn Ret::vn(self ret: Ret, r: Ref, ws: Env) → Nat { match ret { RWord(_) => 0, RView(lo, n) => n.at(ws).min(r.len - lo.at(ws)) } }
 
 fn run_out(f: Func, r: Ref, m: Exec) → ROut { ROut(m.file, f.ret.word(m.words), f.ret.vlo(r, m.words), f.ret.vn(r, m.words)) }
 
-fn run_lent(w: World, f: Func, file: List<List<Nat>>, r: Ref, refs: List<Ref>, ws: List<Nat>) → ROut { run_out(f, r, run_body(w, r, f.body, Exec(file, refs, ws))) }
+fn run_lent(w: World, f: Func, file: List<List<Nat>>, r: Ref, refs: List<Ref>, ws: List<Nat>) → ROut { run_out(f, r, run_body(w, r, f.body, Exec(file, refs, Env::start(ws)))) }
 
 fn run_fn(w: World, f: Func, file: List<List<Nat>>, r: Ref, ws: List<Nat>) → ROut { run_lent(w, f, file, r, Nil, ws) }
 
@@ -328,8 +376,6 @@ fn world(fns: List<Func>, d: Nat) → World {
 // ---------------------------------------------------------------------------
 // The checker
 
-// What a caller reads of a callee: its mode, how many words it takes, and
-// what it answers (§15.8). Nothing of its body.
 // What a live view covers: a window of the object, the whole of it (a view
 // a callee answered whose signature cannot place it more finely), or
 // the union of two regions (a view the arms of a branch opened on different
@@ -346,10 +392,10 @@ fn Region::subst(self rg: Region, args: List<Atom>) → Region {
 
 // Whether a region covers position `p` of the reference's buffer, in the
 // words.
-fn Region::hits(self rg: Region, r: Ref, ws: List<Nat>, p: Nat) → Bool {
+fn Region::hits(self rg: Region, r: Ref, ws: Env, p: Nat) → Bool {
     match rg {
         Whole => Span(r.base, r.len).has(p),
-        Win(lo, n) => Span(r.base + lo.val(ws), n.val(ws)).has(p),
+        Win(lo, n) => Span(r.base + lo.at(ws), n.at(ws)).has(p),
         Both(a, b) => a.hits(r, ws, p) || b.hits(r, ws, p),
     }
 }
@@ -363,6 +409,8 @@ fn RetKind::is_view(self k: RetKind) → Bool { match k { KWord => False, KView(
 // Where a function's answered view lies (a word answers an empty one).
 fn RetKind::region(self k: RetKind) → Region { match k { KWord => Whole, KView(rg) => rg } }
 
+// What a caller reads of a callee: its mode, how many words it takes, and
+// what it answers (§15.8). Nothing of its body.
 record Sig { mode: Mode, words: Nat, ret: RetKind }
 
 // A view's window is its signature's region where it reads only the
@@ -380,42 +428,108 @@ fn sigs_of(fns: List<Func>) → List<Sig> { fns.map(λ f => f.sig()) }
 
 record LView { t: Nat, md: Mode, region: Region }
 
-// What the checker defers: an obligation of `atom.hthr` (here two windows
-// apart, `Spans`), a callee's precondition at the call's arguments, or
-// either owed in an arm of a branch, under the arm's test.
-inductive Owed { Due(o: Obligation), Pre(g: Nat, args: List<Atom>), Under(cd: Cond, yes: Bool, o: Owed) }
+// ---------------------------------------------------------------------------
+// Residuals: what the source proves at a site
 
-fn Owed::Holds(self o: Owed, pres: Nat → List<Nat> → Type, ws: List<Nat>) → Type {
+// What a site reads or lends: the place, or a live view.
+inductive Subject { OfPlace, OfView(t: Nat), OfLent(ts: List<Nat>) }
+
+fn Subject::val(self sj: Subject, s: Sem) → List<Nat> { match sj { OfPlace => s.cur, OfView(t) => list_at(s.views, t), OfLent(_) => s.cur } }
+
+// The references a site lends in a collection: their slots.
+fn Subject::lent(self sj: Subject, s: Sem) → List<Slot> { match sj { OfPlace => Nil, OfView(_) => Nil, OfLent(ts) => s.slots_of(ts) } }
+
+// Where the window `lo..lo+n` ends, spelled as a source spells it: `n`
+// from zero, `lo + n` elsewhere.
+fn Atom::end(lo, n: Atom, e: Env) → Nat {
+    match lo { Lit(k) => match k { Zero => n.at(e), Succ(_) => k + n.at(e) }, Var(_) => lo.at(e) + n.at(e) }
+}
+
+// What the checker defers, as the proposition a source writes at the site:
+// the windows `lo1..lo1+n1` and `lo2..lo2+n2` apart (the first ends before
+// the second, or the second before the first: the source's proof names its
+// side, `Inl` or `Inr`; an element is a window of length one, so `j < lo` is
+// the second side); an element read's index inside what it reads; a
+// callee's precondition at the value it is lent and the call's words.
+inductive Owed { Apart(lo1: Atom, n1: Atom, lo2: Atom, n2: Atom), Inside(sj: Subject, i: Atom), Pre(g: Nat, sj: Subject, args: List<Atom>) }
+
+// A residual at the state its site reads.
+fn Owed::Holds(self o: Owed, pres: Nat → List<Nat> → List<Slot> → List<Nat> → Type, s: Sem) → Type {
     match o {
-        Due(ob) => ob.Holds(ws),
-        Pre(g, args) => pres(g, vals(args, ws)),
-        Under(cd, yes, o2) => cd.test(ws) = yes → o2.Holds(pres, ws),
+        Apart(lo1, n1, lo2, n2) => (Atom::end(lo1, n1, s.words) <= lo2.at(s.words)) ∨ (Atom::end(lo2, n2, s.words) <= lo1.at(s.words)),
+        Inside(sj, i) => ∥i.at(s.words) < sj.val(s).len()∥,
+        Pre(g, sj, args) => pres(g, sj.val(s), sj.lent(s), vals(args, s.words)),
     }
 }
 
-fn under(cd: Cond, yes: Bool, rs: List<Owed>) → List<Owed> { rs.map(λ o => Under(cd, yes, o)) }
+// A site's residuals, then what follows.
+fn Owed::Then(rs: List<Owed>, pres: Nat → List<Nat> → List<Slot> → List<Nat> → Type, s: Sem, tail: Type) → Type {
+    match rs { Nil => tail, Cons(r, rest) => r.Holds(pres, s) ∧ Owed::Then(rest, pres, s, tail) }
+}
 
-fn dues(r: Option<List<Obligation>>) → Option<List<Owed>> { r.map(λ os => os.map(λ ob => Due(ob))) }
+fn Owed::All(rs: List<Owed>, pres: Nat → List<Nat> → List<Slot> → List<Nat> → Type, s: Sem) → Type { Owed::Then(rs, pres, s, True) }
 
-fn Owed::All(rs: List<Owed>, pres: Nat → List<Nat> → Type, ws: List<Nat>) → Type {
-    match rs { Nil => True, Cons(r, rest) => r.Holds(pres, ws) ∧ Owed::All(rest, pres, ws) }
+// A type chosen by a bit: what a branch owes on each side of its test.
+fn Bool::Cases(c: Bool, x, y: Type) → Type { match c { True => x, False => y } }
+
+// A branch's residuals, proved one side at a time with the test's equation:
+// the shape of a source's `if h:` proof.
+theorem Bool::cases(c: Bool, {x, y: Type}, yes: c = True → x, no: c = False → y): Bool::Cases(c, x, y) {
+    (match c as λ d => c = d → Bool::Cases(d, x, y) { True => λ e => yes(e), False => λ e => no(e) })(refl)
+}
+
+// A verdict: each statement's residuals and each arm's, in the body's
+// shape.
+inductive Owes { OEnd, ODo(here: List<Owed>, rest: Owes), OIf(a: Owes, b: Owes, rest: Owes) }
+
+// What a verdict owes, along the meaning from `s`, then `after` of the state
+// the body ends in: each statement's residuals at the state it reads, each
+// arm's (and what follows the join) under its side of the test. Statements
+// that owe nothing add nothing, so it is the conjunction of the residuals
+// the source proves, in the source's order.
+fn Owes::Holds(self d: Owes, w: World, pres: Nat → List<Nat> → List<Slot> → List<Nat> → Type, ops: Body, s: Sem, after: Sem → Type) → Type {
+    match ops {
+        End => after(s),
+        Do(o, r) => match d { ODo(here, dr) => Owed::Then(here, pres, s, dr.Holds(w, pres, r, o.eval1(w, s), after)), _ => False },
+        If(cd, a, b, r) => match d {
+            OIf(da, db, dr) => Bool::Cases(cd.test(s.words), da.Holds(w, pres, a, s, λ x => dr.Holds(w, pres, r, x, after)), db.Holds(w, pres, b, s, λ x => dr.Holds(w, pres, r, x, after))),
+            _ => False,
+        },
+    }
+}
+
+// A function's residuals: from its first state, and nothing after.
+fn Owes::Due(self d: Owes, w: World, pres: Nat → List<Nat> → List<Slot> → List<Nat> → Type, f: Func, arg: List<Nat>, lent: List<Slot>, ws: List<Nat>) → Type {
+    d.Holds(w, pres, f.body, Sem::start(arg, lent, ws), λ _ => True)
+}
+
+// ---------------------------------------------------------------------------
+// The licence
+
+// Two windows apart: decided where every atom is a literal, owed where one
+// is open (and read in words already bound).
+fn apart_owed(lo1, n1, lo2, n2: Atom, nw: Nat) → Option<List<Owed>> {
+    match Spans(lo1, n1, lo2, n2).closed() {
+        True => Spans(lo1, n1, lo2, n2).verdict(Nil).then(Some(Nil)),
+        False => (((lo1.bound(nw) && n1.bound(nw)) && lo2.bound(nw)) && n2.bound(nw)).then(Some([Apart(lo1, n1, lo2, n2)])),
+    }
 }
 
 // Two regions apart: never with the whole object, decided or owed for two
 // windows, piece by piece for a union.
-fn Region::license_win(lo1, n1: Atom, b: Region) → Option<List<Owed>> {
+fn Region::license_win(lo1, n1: Atom, b: Region, nw: Nat) → Option<List<Owed>> {
     match b {
         Whole => None,
-        Win(lo2, n2) => dues(Spans(lo1, n1, lo2, n2).settle()),
-        Both(b1, b2) => Region::license_win(lo1, n1, b1).and_then(λ r1 => Region::license_win(lo1, n1, b2).map(λ r2 => r1 ++ r2)),
+        Win(lo2, n2) => apart_owed(lo1, n1, lo2, n2, nw),
+        Both(b1, b2) => Region::license_win(lo1, n1, b1, nw).and_then(λ r1 => Region::license_win(lo1, n1, b2, nw).map(λ r2 => r1 ++ r2)),
     }
 }
 
-fn Region::license(self a: Region, b: Region) → Option<List<Owed>> {
+fn Region::license(self a: Region, b: Region, nw: Nat) → Option<List<Owed>> {
     match a {
         Whole => None,
-        Win(lo1, n1) => Region::license_win(lo1, n1, b),
-        Both(a1, a2) => a1.license(b).and_then(λ r1 => a2.license(b).map(λ r2 => r1 ++ r2)),
+        Win(lo1, n1) => Region::license_win(lo1, n1, b, nw),
+        Both(a1, a2) => a1.license(b, nw).and_then(λ r1 => a2.license(b, nw).map(λ r2 => r1 ++ r2)),
     }
 }
 
@@ -423,15 +537,15 @@ fn Region::license(self a: Region, b: Region) → Option<List<Owed>> {
 // share a place, and anything else needs it to itself.
 fn LView::meets(self lv: LView, md: Mode) → Bool { md.writes() || lv.md.writes() }
 
-fn LView::license(self lv: LView, md: Mode, rg: Region) → Option<List<Owed>> {
-    match lv.meets(md) { True => lv.region.license(rg), False => Some(Nil) }
+fn LView::license(self lv: LView, md: Mode, rg: Region, nw: Nat) → Option<List<Owed>> {
+    match lv.meets(md) { True => lv.region.license(rg, nw), False => Some(Nil) }
 }
 
 // An access in mode `md` of the region `rg`, against every live view.
-fn license_live(live: List<LView>, md: Mode, rg: Region) → Option<List<Owed>> {
+fn license_live(live: List<LView>, md: Mode, rg: Region, nw: Nat) → Option<List<Owed>> {
     match live {
         Nil => Some(Nil),
-        Cons(lv, rest) => lv.license(md, rg).and_then(λ r1 => license_live(rest, md, rg).map(λ r2 => r1 ++ r2)),
+        Cons(lv, rest) => lv.license(md, rg, nw).and_then(λ r1 => license_live(rest, md, rg, nw).map(λ r2 => r1 ++ r2)),
     }
 }
 
@@ -461,11 +575,19 @@ record Places { live: List<LView>, nviews: Nat, nw: Nat }
 
 fn Places::said(self c: Places) → Places { Places(c.live, c.nviews, c.nw + 1) }
 
+// A statement's verdict: the places after it, and its residuals.
 record Next { next: Places, rs: List<Owed> }
 
 fn check_mut(sg: Sig, c: Places, g, t: Nat, args: List<Atom>, z: Nat) → Option<Next> {
     ((((sg.mode.owns() && !sg.ret.is_view()) && is_lent(c.live, t)) && z.same(c.nw)) && (Atom::all_bound(args, c.nw) && args.len().same(sg.words))).then(
-        Some(Next(c.said(), [Pre(g, args)])))
+        Some(Next(c.said(), [Pre(g, OfView(t), args)])))
+}
+
+// A reader of the whole object answering a word: the object frozen for the
+// call, as a read of all of it.
+fn check_get(sg: Sig, mode: Mode, c: Places, g: Nat, args: List<Atom>, z: Nat) → Option<Next> {
+    (mode.owns() && (((!sg.mode.writes() && !sg.ret.is_view()) && z.same(c.nw)) && (Atom::all_bound(args, c.nw) && args.len().same(sg.words)))).then(
+        license_live(c.live, Reads, Whole, c.nw).map(λ rs => Next(c.said(), rs ++ [Pre(g, OfPlace, args)])))
 }
 
 // The callee is lent the collection: as many references as its mode says,
@@ -473,25 +595,26 @@ fn check_mut(sg: Sig, c: Places, g, t: Nat, args: List<Atom>, z: Nat) → Option
 fn check_all(sg: Sig, mode: Mode, c: Places, g: Nat, ts: List<Nat>, args: List<Atom>, z: Nat) → Option<Next> {
     (((((mode.writes() && sg.mode.elems().same(ts.len())) && !sg.mode.owns()) && !sg.ret.is_view()) && (all_lent(c.live, ts) && z.same(c.nw)))
         && (Atom::all_bound(args, c.nw) && args.len().same(sg.words))).then(
-        Some(Next(Places(kill_all(c.live, ts), c.nviews, c.nw + 1), [Pre(g, args)])))
+        Some(Next(Places(kill_all(c.live, ts), c.nviews, c.nw + 1), [Pre(g, OfLent(ts), args)])))
 }
 
 fn check_view(sg: Sig, mode: Mode, c: Places, g: Nat, args: List<Atom>, t: Nat) → Option<Next> {
     (mode.owns() && (((!sg.mode.writes() && sg.ret.is_view()) && t.same(c.nviews)) && (Atom::all_bound(args, c.nw) && args.len().same(sg.words)))).then(
-        license_live(c.live, Reads, Whole).map(λ rs => Next(Places(Cons(LView(t, Reads, sg.ret.region().subst(args)), c.live), c.nviews + 1, c.nw), rs ++ [Pre(g, args)])))
+        license_live(c.live, Reads, Whole, c.nw).map(λ rs => Next(Places(Cons(LView(t, Reads, sg.ret.region().subst(args)), c.live), c.nviews + 1, c.nw), rs ++ [Pre(g, OfPlace, args)])))
 }
 
 fn Stmt::check(self o: Stmt, mode: Mode, sigs: List<Sig>, c: Places) → Option<Next> {
     match o {
-        Set(i, v) => (mode.owns() && ((mode.writes() && i.bound(c.nw)) && v.bound(c.nw))).then(license_live(c.live, Writes, Win(i, Lit(1))).map(λ rs => Next(c, rs))),
-        Get(z, i) => (mode.owns() && (z.same(c.nw) && i.bound(c.nw))).then(license_live(c.live, Reads, Win(i, Lit(1))).map(λ rs => Next(c.said(), rs))),
+        Set(i, v) => (mode.owns() && ((mode.writes() && i.bound(c.nw)) && v.bound(c.nw))).then(license_live(c.live, Writes, Win(i, Lit(1)), c.nw).map(λ rs => Next(c, rs))),
+        Get(z, i) => (mode.owns() && (z.same(c.nw) && i.bound(c.nw))).then(license_live(c.live, Reads, Win(i, Lit(1)), c.nw).map(λ rs => Next(c.said(), rs ++ [Inside(OfPlace, i)]))),
         View(t, md, lo, n) =>
             (mode.owns() && ((((!md.writes() || mode.writes()) && t.same(c.nviews)) && lo.bound(c.nw)) && n.bound(c.nw))).then(
-                license_live(c.live, md, Win(lo, n)).map(λ rs => Next(Places(Cons(LView(t, md, Win(lo, n)), c.live), c.nviews + 1, c.nw), rs))),
-        Read(z, t, i) => ((z.same(c.nw) && find_live(c.live, t).is_some()) && i.bound(c.nw)).then(Some(Next(c.said(), Nil))),
+                license_live(c.live, md, Win(lo, n), c.nw).map(λ rs => Next(Places(Cons(LView(t, md, Win(lo, n)), c.live), c.nviews + 1, c.nw), rs))),
+        Read(z, t, i) => ((z.same(c.nw) && find_live(c.live, t).is_some()) && i.bound(c.nw)).then(Some(Next(c.said(), [Inside(OfView(t), i)]))),
         Put(t, i, v) => ((is_lent(c.live, t) && i.bound(c.nw)) && v.bound(c.nw)).then(Some(Next(c, Nil))),
         Die(t) => find_live(c.live, t).is_some().then(Some(Next(Places(kill(c.live, t), c.nviews, c.nw), Nil))),
         CallMut(g, t, args, z) => check_mut(sig_at(sigs, g), c, g, t, args, z),
+        CallGet(g, args, z) => check_get(sig_at(sigs, g), mode, c, g, args, z),
         CallView(g, args, t) => check_view(sig_at(sigs, g), mode, c, g, args, t),
         CallAll(g, ts, args, z) => check_all(sig_at(sigs, g), mode, c, g, ts, args, z),
     }
@@ -531,25 +654,22 @@ fn join(ca, cb: Places) → Option<Places> {
     (ca.nviews.same(cb.nviews) && ca.nw.same(cb.nw)).then(Some(Places(meet(ca.live, cb.live), ca.nviews, ca.nw)))
 }
 
-// The arms joined: each arm's residuals owed under its test.
-fn check_join(cd: Cond, sa, sb: Next) → Option<Next> { join(sa.next, sb.next).map(λ cj => Next(cj, under(cd, True, sa.rs) ++ under(cd, False, sb.rs))) }
+// A body's verdict: the places it ends with, and what it owes.
+record Done { next: Places, owes: Owes }
 
-// A step, then the rest from where it leaves the places.
-fn Next::then(h: Option<Next>, k: Places → Option<Next>) → Option<Next> { h.and_then(λ st => k(st.next).map(λ sr => Next(sr.next, st.rs ++ sr.rs))) }
-
-fn check_body(ops: Body, mode: Mode, sigs: List<Sig>, c: Places) → Option<Next> {
+fn check_body(ops: Body, mode: Mode, sigs: List<Sig>, c: Places) → Option<Done> {
     match ops {
-        End => Some(Next(c, Nil)),
-        Do(o, rest) => Next::then(o.check(mode, sigs, c), λ c2 => check_body(rest, mode, sigs, c2)),
-        If(cd, a, b, rest) => Next::then(cd.bound(c.nw).then(check_body(a, mode, sigs, c).and_then(λ sa => check_body(b, mode, sigs, c).and_then(λ sb => check_join(cd, sa, sb)))),
-            λ c2 => check_body(rest, mode, sigs, c2)),
+        End => Some(Done(c, OEnd)),
+        Do(o, rest) => o.check(mode, sigs, c).and_then(λ st => check_body(rest, mode, sigs, st.next).map(λ dr => Done(dr.next, ODo(st.rs, dr.owes)))),
+        If(_, a, b, rest) => check_body(a, mode, sigs, c).and_then(λ da => check_body(b, mode, sigs, c).and_then(λ db =>
+            join(da.next, db.next).and_then(λ cj => check_body(rest, mode, sigs, cj).map(λ dr => Done(dr.next, OIf(da.owes, db.owes, dr.owes)))))),
     }
 }
 
 // A lending function answers a word (it has no object to answer a view
 // of), and starts with the references it is lent live.
-fn check_fn(sigs: List<Sig>, f: Func) → Option<List<Owed>> {
-    (f.mode.owns() || !f.ret.kind(f.words).is_view()).then(check_body(f.body, f.mode, sigs, Places(lent_views(f.mode.elems()), f.mode.elems(), f.words)).map(λ st => st.rs))
+fn check_fn(sigs: List<Sig>, f: Func) → Option<Owes> {
+    (f.mode.owns() || !f.ret.kind(f.words).is_view()).then(check_body(f.body, f.mode, sigs, Places(lent_views(f.mode.elems()), f.mode.elems(), f.words)).map(λ d => d.owes))
 }
 
 // ---------------------------------------------------------------------------
@@ -592,71 +712,134 @@ record Lendable(m: Mode, r: Ref, lent: List<Slot>) {
 // meaning's word; the window holds the meaning's value and nothing outside
 // it changed; a read parameter's value is what went in; and the view it
 // answers lies in the region its signature names, at these words, and
-// reads the meaning's view value; the word it answers meets its
-// postcondition; and a lending function changed nothing outside the
+// reads the meaning's view value; the meaning's answer (its value, word and
+// view) meets its postcondition; and a lending function changed nothing outside the
 // references it was lent (its frame is what is reachable through them).
-record Safe(mode: Mode, rg: Region, ws: List<Nat>, post: Nat → Type, file: List<List<Nat>>, r: Ref, lent: List<Slot>, arg: List<Nat>, mo: MOut, ro: ROut) {
+record Safe(mode: Mode, rg: Region, ws: List<Nat>, post: MOut → Type, file: List<List<Nat>>, r: Ref, lent: List<Slot>, arg: List<Nat>, mo: MOut, ro: ROut) {
     answer: ro.word = mo.word,
-    posted: post(mo.word),
+    posted: post(mo),
     on: OnRef(file, ro.file, r, mo.val),
     keeps: mode.writes() = False → mo.val = arg,
-    view_in: (p: Nat) → Span(r.base + ro.lo, ro.n).has(p).IsTrue() → rg.hits(r, ws, p).IsTrue(),
+    view_in: (p: Nat) → Span(r.base + ro.lo, ro.n).has(p).IsTrue() → rg.hits(r, Env::start(ws), p).IsTrue(),
     view_reads: (i: Nat) → word(mo.view, i) = rget(ro.file, Ref(r.b, r.base + ro.lo, ro.n), i),
     kept_out: mode.owns() = False → (p: Nat) → ((e: Nat) → e < lent.len() → ¬Span(slot_at(lent, e).narrowed(r).base, slot_at(lent, e).narrowed(r).len).has(p).IsTrue()) →
         list_at(ro.file, r.b).nth(p) = list_at(file, r.b).nth(p),
 }
 
-// A function's safety statement: from any file, a reference in bounds and
-// words meeting its precondition, the run and the meaning keep the promise,
-// and the answer meets the postcondition (a proposition about the words and
-// the answer, which callers may assume: §15.8's proof parameters).
+// A function's safety statement: from any file, a reference in bounds, and
+// a parameter and words meeting its precondition, the run and the meaning
+// keep the promise, and the answer meets the postcondition. Both are
+// propositions of the parameter's value as it went in (its object's value
+// and the slots it is lent, whose values are the object's windows there)
+// and of the words, §15.8's proof parameters: the arena's `read(h, inside:
+// ∥h < heap.len()∥)` reads its list. The postcondition is of the whole
+// answer (a view's length, the object's after), and callers may assume it.
 //
 // The reference `r` is the function's object; for a lending function it is
 // its erased owner's place, which its run is not given (`Mode::owner`): it
 // stands in the promise only to say where the lent references are.
-fn FnSafe(sig: Sig, pre: List<Nat> → Type, post: List<Nat> → Nat → Type, mean: List<Nat> → List<Slot> → List<Nat> → MOut,
+fn FnSafe(sig: Sig, pre: List<Nat> → List<Slot> → List<Nat> → Type, post: List<Nat> → List<Slot> → List<Nat> → MOut → Type, mean: List<Nat> → List<Slot> → List<Nat> → MOut,
     run: List<List<Nat>> → Ref → List<Ref> → List<Nat> → ROut) → Type
 {
-    (file: List<List<Nat>>) → (r: Ref) → (lent: List<Slot>) → (ws: List<Nat>) → InRef(file, r) → ws.len() = sig.words → pre(ws) → Lendable(sig.mode, r, lent) →
-        Safe(sig.mode, sig.ret.region(), ws, post(ws), file, r, lent, window(list_at(file, r.b), r.base, r.len), mean(window(list_at(file, r.b), r.base, r.len), lent, ws),
-            run(file, sig.mode.owner(r), lent.map(λ sl => sl.narrowed(r)), ws))
+    (file: List<List<Nat>>) → (r: Ref) → (lent: List<Slot>) → (ws: List<Nat>) → InRef(file, r) → ws.len() = sig.words →
+        pre(window(list_at(file, r.b), r.base, r.len), lent, ws) → Lendable(sig.mode, r, lent) →
+        Safe(sig.mode, sig.ret.region(), ws, post(window(list_at(file, r.b), r.base, r.len), lent, ws), file, r, lent, window(list_at(file, r.b), r.base, r.len),
+            mean(window(list_at(file, r.b), r.base, r.len), lent, ws), run(file, sig.mode.owner(r), lent.map(λ sl => sl.narrowed(r)), ws))
+}
+
+// ---------------------------------------------------------------------------
+// The words
+
+// The words `e` bound are read alike in `big`.
+fn Prefix(e, big: Env) → Type { (e.n() <= big.n()) ∧ ((w: Nat) → w < e.n() → big.get(w) = e.get(w)) }
+
+theorem Prefix::same(e: Env): Prefix(e, e) { ⟨e.n().le_refl(), λ w _ => refl⟩ }
+
+theorem Prefix::chain(a, b, c: Env, ab: Prefix(a, b), bc: Prefix(b, c)): Prefix(a, c) {
+    ⟨Nat::le_trans(a.n(), b.n(), c.n(), ab.left, bc.left),
+        λ w lt => prelude::trans(bc.right(w, Nat::lt_of_lt_of_le(w, a.n(), b.n(), lt, ab.left)), ab.right(w, lt))⟩
+}
+
+// A word bound before a push reads as it did.
+theorem Env::get_push_below(self e: Env, a, w: Nat, lt: w < e.n()): e.push(a).get(w) = e.get(w) {
+    match q: (w + 1).leb(e.args.len()) {
+        True => refl,
+        False => {
+            let lt2: (w < e.args.len() + e.m) = lt;
+            let d: ((e.args.len() + (e.m + 1)) - (w + 1) = ((e.args.len() + e.m) - (w + 1)) + 1) = omega(lt2);
+            cong_fn(λ (p: Nat) => word(Cons(a, e.locals), p), d)
+        },
+    }
+}
+
+// The word pushed reads at the count.
+theorem Env::get_push_at(self e: Env, a: Nat): e.push(a).get(e.n()) = a {
+    match q: (e.args.len() + e.m + 1).leb(e.args.len()) {
+        True => {
+            let no: False = omega(q);
+            false_elim(no)
+        },
+        False => {
+            let d: ((e.args.len() + (e.m + 1)) - (e.args.len() + e.m + 1) = 0) = omega();
+            cong_fn(λ (p: Nat) => word(Cons(a, e.locals), p), d)
+        },
+    }
+}
+
+theorem Prefix::push(e: Env, a: Nat): Prefix(e, e.push(a)) {
+    let more: (e.args.len() + e.m <= e.args.len() + (e.m + 1)) = omega();
+    ⟨more, λ w lt => e.get_push_below(a, w, lt)⟩
+}
+
+// A parameter word, read from a function's first words.
+theorem Env::start_get(ws: List<Nat>, w: Nat): Env::start(ws).get(w) = word(ws, w) {
+    match q: (w + 1).leb(ws.len()) {
+        True => refl,
+        False => cong_fn(λ (o: Option<Nat>) => o.unwrap_or(0), sym(ws.nth_past_end(w, omega(q)))),
+    }
+}
+
+theorem Atom::at_stable(self a: Atom, e, big: Env, pre: Prefix(e, big), b: a.bound(e.n()) = True): a.at(big) = a.at(e) {
+    (match a as λ x => x.bound(e.n()) = True → x.at(big) = x.at(e) {
+        Lit(_) => λ _ => refl,
+        Var(w) => λ lt => pre.right(w, omega(lt)),
+    })(b)
+}
+
+theorem Atom::vals_stable(args: List<Atom>, e, big: Env, pre: Prefix(e, big)): Atom::all_bound(args, e.n()) = True → vals(args, big) = vals(args, e) {
+    match args {
+        Nil => λ _ => refl,
+        Cons(a, rest) => λ b => {
+            let p = Bool::and_true_parts(a.bound(e.n()), Atom::all_bound(rest, e.n()), b);
+            prelude::trans(cong_fn(λ (x: Nat) => Cons(x, vals(rest, big)), a.at_stable(e, big, pre, p.left)),
+                cong_fn(λ (xs: List<Nat>) => Cons(a.at(e), xs), Atom::vals_stable(rest, e, big, pre, p.right)))
+        },
+    }
+}
+
+// A literal reads alike in every environment.
+theorem Atom::closed_at(self a: Atom, c: a.closed() = True, e: Env): a.at(e) = a.val(Nil) {
+    (match a as λ x => x.closed() = True → x.at(e) = x.val(Nil) { Lit(_) => λ _ => refl, Var(_) => λ no => absurd(no) })(c)
+}
+
+// Where a window ends, however it is spelled.
+theorem Atom::end_is(lo, n: Atom, e: Env): Atom::end(lo, n, e) = lo.at(e) + n.at(e) {
+    match lo {
+        Lit(k) => match k {
+            Zero => {
+                let x: (Atom::end(Lit(0), n, e) = n.at(e)) = refl;
+                omega(x)
+            },
+            Succ(_) => refl,
+        },
+        Var(_) => refl,
+    }
 }
 
 // ---------------------------------------------------------------------------
 // Small facts
 
-fn Prefix(ws, big: List<Nat>) → Type { (ws.len() <= big.len()) ∧ ((w: Nat) → w < ws.len() → big.nth(w) = ws.nth(w)) }
-
-theorem Prefix::same(ws: List<Nat>): Prefix(ws, ws) { ⟨ws.len().le_refl(), λ w _ => refl⟩ }
-
-theorem Prefix::snoc(ws: List<Nat>, a: Nat): Prefix(ws, ws ++ [a]) {
-    ⟨j(sym(ws.len_append([a])), λ n _ => ws.len() <= n, omega()), λ w lt => ws.nth_append_below([a], w, lt)⟩
-}
-
-theorem Prefix::chain(a, b, c: List<Nat>, ab: Prefix(a, b), bc: Prefix(b, c)): Prefix(a, c) {
-    ⟨Nat::le_trans(a.len(), b.len(), c.len(), ab.left, bc.left),
-        λ w lt => prelude::trans(bc.right(w, Nat::lt_of_lt_of_le(w, a.len(), b.len(), lt, ab.left)), ab.right(w, lt))⟩
-}
-
-theorem Atom::val_stable(self a: Atom, ws, big: List<Nat>, pre: Prefix(ws, big), b: a.bound(ws.len()) = True): a.val(big) = a.val(ws) {
-    (match a as λ e => e.bound(ws.len()) = True → e.val(big) = e.val(ws) {
-        Lit(_) => λ _ => refl,
-        Var(w) => λ lt => cong_fn(λ (o: Option<Nat>) => o.unwrap_or(0), pre.right(w, omega(lt))),
-    })(b)
-}
-
-theorem Atom::vals_stable(args: List<Atom>, ws, big: List<Nat>, pre: Prefix(ws, big)): Atom::all_bound(args, ws.len()) = True → vals(args, big) = vals(args, ws) {
-    match args {
-        Nil => λ _ => refl,
-        Cons(a, rest) => λ b => {
-            let p = Bool::and_true_parts(a.bound(ws.len()), Atom::all_bound(rest, ws.len()), b);
-            prelude::trans(cong_fn(λ (x: Nat) => Cons(x, vals(rest, big)), a.val_stable(ws, big, pre, p.left)),
-                cong_fn(λ (xs: List<Nat>) => Cons(a.val(ws), xs), Atom::vals_stable(rest, ws, big, pre, p.right)))
-        },
-    }
-}
-
-theorem vals_len(args: List<Atom>, ws: List<Nat>): vals(args, ws).len() = args.len() { args.len_map(λ a => a.val(ws)) }
+theorem vals_len(args: List<Atom>, e: Env): vals(args, e).len() = args.len() { args.len_map(λ a => a.at(e)) }
 
 theorem len_snoc<A>(xs: List<A>, a: A): (xs ++ [a]).len() = xs.len() + 1 { xs.len_append([a]) }
 
@@ -694,7 +877,6 @@ theorem Next::of(g: Bool, next, st: Next, ok: g.then(Some(next)) = Some(st)): (g
     let p = g.then_some(Some(next), st, ok);
     ⟨p.left, Option::some_inj(next, st, p.right)⟩
 }
-
 // ---------------------------------------------------------------------------
 // Windows
 
@@ -1025,30 +1207,30 @@ theorem keeps_all(file1, file2: List<List<Nat>>, r: Ref, same: (p: Nat) → list
 // The licence
 
 // Two regions apart, in the words: no position covered by both.
-fn Region::Clear(self a: Region, b: Region, r: Ref, ws: List<Nat>) → Type { (p: Nat) → a.hits(r, ws, p).IsTrue() → ¬b.hits(r, ws, p).IsTrue() }
+fn Region::Clear(self a: Region, b: Region, r: Ref, ws: Env) → Type { (p: Nat) → a.hits(r, ws, p).IsTrue() → ¬b.hits(r, ws, p).IsTrue() }
 
 // An access the live view meets is clear of it.
-fn LView::Clear(self lv: LView, md: Mode, rg: Region, r: Ref, ws: List<Nat>) → Type { lv.meets(md) = True → lv.region.Clear(rg, r, ws) }
+fn LView::Clear(self lv: LView, md: Mode, rg: Region, r: Ref, ws: Env) → Type { lv.meets(md) = True → lv.region.Clear(rg, r, ws) }
 
 // A callee's atom read at a call's arguments.
-theorem subst_var(args: List<Atom>, ws: List<Nat>): (i: Nat) → args.nth(i).unwrap_or(Lit(0)).val(ws) = word(vals(args, ws), i) {
+theorem subst_var(args: List<Atom>, e: Env): (i: Nat) → args.nth(i).unwrap_or(Lit(0)).at(e) = word(vals(args, e), i) {
     match args {
         Nil => λ i => refl,
-        Cons(_, rest) => λ i => match i { Zero => refl, Succ(j1) => subst_var(rest, ws, j1) },
+        Cons(_, rest) => λ i => match i { Zero => refl, Succ(j1) => subst_var(rest, e, j1) },
     }
 }
 
-theorem Atom::subst_val(self a: Atom, args: List<Atom>, ws: List<Nat>): a.subst(args).val(ws) = a.val(vals(args, ws)) {
-    match a { Lit(_) => refl, Var(i) => subst_var(args, ws, i) }
+theorem Atom::subst_at(self a: Atom, args: List<Atom>, e: Env): a.subst(args).at(e) = a.at(Env::start(vals(args, e))) {
+    match a { Lit(_) => refl, Var(i) => prelude::trans(subst_var(args, e, i), sym(Env::start_get(vals(args, e), i))) }
 }
 
-theorem Region::subst_hits(self rg: Region, args: List<Atom>, r: Ref, ws: List<Nat>, p: Nat): rg.subst(args).hits(r, ws, p) = rg.hits(r, vals(args, ws), p) {
+theorem Region::subst_hits(self rg: Region, args: List<Atom>, r: Ref, e: Env, p: Nat): rg.subst(args).hits(r, e, p) = rg.hits(r, Env::start(vals(args, e)), p) {
     match rg {
         Whole => refl,
-        Win(lo, n) => prelude::trans(cong_fn(λ (x: Nat) => Span(r.base + x, n.subst(args).val(ws)).has(p), lo.subst_val(args, ws)),
-            cong_fn(λ (y: Nat) => Span(r.base + lo.val(vals(args, ws)), y).has(p), n.subst_val(args, ws))),
-        Both(a, b) => prelude::trans(cong_fn(λ (x: Bool) => x || b.subst(args).hits(r, ws, p), a.subst_hits(args, r, ws, p)),
-            cong_fn(λ (y: Bool) => a.hits(r, vals(args, ws), p) || y, b.subst_hits(args, r, ws, p))),
+        Win(lo, n) => prelude::trans(cong_fn(λ (x: Nat) => Span(r.base + x, n.subst(args).at(e)).has(p), lo.subst_at(args, e)),
+            cong_fn(λ (y: Nat) => Span(r.base + lo.at(Env::start(vals(args, e))), y).has(p), n.subst_at(args, e))),
+        Both(a, b) => prelude::trans(cong_fn(λ (x: Bool) => x || b.subst(args).hits(r, e, p), a.subst_hits(args, r, e, p)),
+            cong_fn(λ (y: Bool) => a.hits(r, Env::start(vals(args, e)), p) || y, b.subst_hits(args, r, e, p))),
     }
 }
 
@@ -1068,119 +1250,172 @@ theorem Bool::or_true_right(a, b: Bool, h: b.IsTrue()): (a || b).IsTrue() {
     match a { True => trivial, False => h }
 }
 
-theorem Owed::all_append(rs: List<Owed>, pres: Nat → List<Nat> → Type): (qs: List<Owed>) → (ws: List<Nat>) → Owed::All(rs ++ qs, pres, ws) → Owed::All(rs, pres, ws) ∧ Owed::All(qs, pres, ws) {
+// A site's residuals, and what follows them.
+theorem Owed::then_parts(rs: List<Owed>, pres: Nat → List<Nat> → List<Slot> → List<Nat> → Type, s: Sem, tail: Type): Owed::Then(rs, pres, s, tail) → Owed::All(rs, pres, s) ∧ tail {
     match rs {
-        Nil => λ qs ws h => ⟨trivial, h⟩,
-        Cons(_, rest) => λ qs ws h => {
-            let p = Owed::all_append(rest, pres, qs, ws, h.right);
+        Nil => λ h => ⟨trivial, h⟩,
+        Cons(_, rest) => λ h => {
+            let p = Owed::then_parts(rest, pres, s, tail, h.right);
             ⟨⟨h.left, p.left⟩, p.right⟩
         },
     }
 }
 
-theorem Owed::all_dues(os: List<Obligation>, pres: Nat → List<Nat> → Type, ws: List<Nat>): Owed::All(os.map(λ ob => Due(ob)), pres, ws) → Obligation::All(os, ws) {
-    match os {
-        Nil => λ _ => trivial,
-        Cons(_, rest) => λ h => ⟨h.left, Owed::all_dues(rest, pres, ws, h.right)⟩,
+theorem Owed::all_append(rs: List<Owed>, pres: Nat → List<Nat> → List<Slot> → List<Nat> → Type): (qs: List<Owed>) → (s: Sem) → Owed::All(rs ++ qs, pres, s) → Owed::All(rs, pres, s) ∧ Owed::All(qs, pres, s) {
+    match rs {
+        Nil => λ qs s h => ⟨trivial, h⟩,
+        Cons(_, rest) => λ qs s h => {
+            let p = Owed::all_append(rest, pres, qs, s, h.right);
+            ⟨⟨h.left, p.left⟩, p.right⟩
+        },
     }
 }
 
-theorem spans_license_sound(lo1, n1, lo2, n2: Atom, pres: Nat → List<Nat> → Type, ws: List<Nat>, r1: List<Owed>, ok: dues(Spans(lo1, n1, lo2, n2).settle()) = Some(r1),
-    hold: Owed::All(r1, pres, ws)): Span(lo1.val(ws), n1.val(ws)).apart(Span(lo2.val(ws), n2.val(ws))).IsTrue()
+// What an apartness verdict gives, in any words that extend those of its
+// site: the windows apart there. Decided at literals; owed, the side the
+// residual's proof names, read in the later words since every atom was
+// bound at the site.
+theorem apart_sound(lo1, n1, lo2, n2: Atom, nw: Nat, pres: Nat → List<Nat> → List<Slot> → List<Nat> → Type, s: Sem, ws: Env, pre: Prefix(s.words, ws), enw: nw = s.words.n(),
+    r1: List<Owed>, ok: apart_owed(lo1, n1, lo2, n2, nw) = Some(r1), hold: Owed::All(r1, pres, s)): Span(lo1.at(ws), n1.at(ws)).apart(Span(lo2.at(ws), n2.at(ws))).IsTrue()
 {
-    let st = option_map_some(Spans(lo1, n1, lo2, n2).settle(), λ os => os.map(λ ob => Due(ob)), r1, ok);
-    let owed: Owed::All(st.witness.map(λ ob => Due(ob)), pres, ws) = j(sym(st.proof.right), λ q _ => Owed::All(q, pres, ws), hold);
-    Spans(lo1, n1, lo2, n2).settle_sound(ws, st.witness, st.proof.left, Owed::all_dues(st.witness, pres, ws, owed))
+    let o = Spans(lo1, n1, lo2, n2);
+    let bnd = (((lo1.bound(nw) && n1.bound(nw)) && lo2.bound(nw)) && n2.bound(nw));
+    (match o.closed() as λ b => o.closed() = b → (match b { True => o.verdict(Nil).then(Some(Nil<Owed>)), False => bnd.then(Some([Apart(lo1, n1, lo2, n2)])) }) = Some(r1) →
+            Span(lo1.at(ws), n1.at(ws)).apart(Span(lo2.at(ws), n2.at(ws))).IsTrue() {
+        True => λ c h => {
+            let yes: (o.verdict(Nil) = True) = Bool::then_some(o.verdict(Nil), Some(Nil<Owed>), r1, h).left;
+            let p3 = Bool::and_true_parts(lo1.closed() && n1.closed() && lo2.closed(), n2.closed(), c);
+            let p2 = Bool::and_true_parts(lo1.closed() && n1.closed(), lo2.closed(), p3.left);
+            let p1 = Bool::and_true_parts(lo1.closed(), n1.closed(), p2.left);
+            let e = Atom::cong4(λ (a: Nat) (b: Nat) (cc: Nat) (d: Nat) => Span(a, b).apart(Span(cc, d)),
+                lo1.closed_at(p1.left, ws), n1.closed_at(p1.right, ws), lo2.closed_at(p2.right, ws), n2.closed_at(p3.right, ws));
+            Bool::is_true_of_eq(prelude::trans(e, yes))
+        },
+        False => λ _ h => {
+            let g = Bool::then_some(bnd, Some([Apart(lo1, n1, lo2, n2)]), r1, h);
+            let b3 = Bool::and_true_parts((lo1.bound(nw) && n1.bound(nw)) && lo2.bound(nw), n2.bound(nw), g.left);
+            let b2 = Bool::and_true_parts(lo1.bound(nw) && n1.bound(nw), lo2.bound(nw), b3.left);
+            let b1 = Bool::and_true_parts(lo1.bound(nw), n1.bound(nw), b2.left);
+            let at_s = λ (a: Atom) (ba: a.bound(nw) = True) => a.at_stable(s.words, ws, pre, j(enw, λ q _ => a.bound(q) = True, ba));
+            let e1: (lo1.at(ws) = lo1.at(s.words)) = at_s(lo1, b1.left);
+            let e2: (n1.at(ws) = n1.at(s.words)) = at_s(n1, b1.right);
+            let e3: (lo2.at(ws) = lo2.at(s.words)) = at_s(lo2, b2.right);
+            let e4: (n2.at(ws) = n2.at(s.words)) = at_s(n2, b3.right);
+            let ea: (Atom::end(lo1, n1, s.words) = lo1.at(s.words) + n1.at(s.words)) = Atom::end_is(lo1, n1, s.words);
+            let eb: (Atom::end(lo2, n2, s.words) = lo2.at(s.words) + n2.at(s.words)) = Atom::end_is(lo2, n2, s.words);
+            let held: Owed::All([Apart(lo1, n1, lo2, n2)], pres, s) = j(sym(Option::some_inj([Apart(lo1, n1, lo2, n2)], r1, g.right)), λ q _ => Owed::All(q, pres, s), hold);
+            match held.left {
+                Inl(x) => {
+                    let y: (Atom::end(lo1, n1, s.words) <= lo2.at(s.words)) = x;
+                    omega(y, ea, e1, e2, e3, e4)
+                },
+                Inr(x) => {
+                    let y: (Atom::end(lo2, n2, s.words) <= lo1.at(s.words)) = x;
+                    omega(y, eb, e1, e2, e3, e4)
+                },
+            }
+        },
+    })(refl, ok)
 }
 
-theorem Region::license_win_sound(lo1, n1: Atom, b: Region, pres: Nat → List<Nat> → Type, ws: List<Nat>, r: Ref): (r1: List<Owed>) →
-    Region::license_win(lo1, n1, b) = Some(r1) → Owed::All(r1, pres, ws) → Win(lo1, n1).Clear(b, r, ws)
+theorem Region::license_win_sound(lo1, n1: Atom, b: Region, nw: Nat, pres: Nat → List<Nat> → List<Slot> → List<Nat> → Type, s: Sem, ws: Env, pre: Prefix(s.words, ws), enw: nw = s.words.n(), r: Ref):
+    (r1: List<Owed>) → Region::license_win(lo1, n1, b, nw) = Some(r1) → Owed::All(r1, pres, s) → Win(lo1, n1).Clear(b, r, ws)
 {
     match b {
         Whole => λ r1 no _ => absurd(no),
         Win(lo2, n2) => λ r1 ok hold => {
-            let ap = spans_license_sound(lo1, n1, lo2, n2, pres, ws, r1, ok, hold);
+            let ap = apart_sound(lo1, n1, lo2, n2, nw, pres, s, ws, pre, enw, r1, ok, hold);
             λ p h1 h2 => {
-                let x1: (Span(r.base + lo1.val(ws), n1.val(ws)).has(p).IsTrue()) = h1;
-                let x2: (Span(r.base + lo2.val(ws), n2.val(ws)).has(p).IsTrue()) = h2;
+                let x1: (Span(r.base + lo1.at(ws), n1.at(ws)).has(p).IsTrue()) = h1;
+                let x2: (Span(r.base + lo2.at(ws), n2.at(ws)).has(p).IsTrue()) = h2;
                 omega(ap, x1, x2)
             }
         },
         Both(b1, b2) => λ r1 ok hold => {
-            let st = Option::and_then_some(Region::license_win(lo1, n1, b1), λ q1 => Region::license_win(lo1, n1, b2).map(λ q2 => q1 ++ q2), r1, ok);
-            let mp = option_map_some(Region::license_win(lo1, n1, b2), λ q2 => st.witness ++ q2, r1, st.proof.right);
-            let parts = Owed::all_append(st.witness, pres, mp.witness, ws, j(sym(mp.proof.right), λ q _ => Owed::All(q, pres, ws), hold));
-            let c1 = Region::license_win_sound(lo1, n1, b1, pres, ws, r, st.witness, st.proof.left, parts.left);
-            let c2 = Region::license_win_sound(lo1, n1, b2, pres, ws, r, mp.witness, mp.proof.left, parts.right);
+            let st = Option::and_then_some(Region::license_win(lo1, n1, b1, nw), λ q1 => Region::license_win(lo1, n1, b2, nw).map(λ q2 => q1 ++ q2), r1, ok);
+            let mp = option_map_some(Region::license_win(lo1, n1, b2, nw), λ q2 => st.witness ++ q2, r1, st.proof.right);
+            let parts = Owed::all_append(st.witness, pres, mp.witness, s, j(sym(mp.proof.right), λ q _ => Owed::All(q, pres, s), hold));
+            let c1 = Region::license_win_sound(lo1, n1, b1, nw, pres, s, ws, pre, enw, r, st.witness, st.proof.left, parts.left);
+            let c2 = Region::license_win_sound(lo1, n1, b2, nw, pres, s, ws, pre, enw, r, mp.witness, mp.proof.left, parts.right);
             λ p h1 => Bool::or_not_true(b1.hits(r, ws, p), b2.hits(r, ws, p), c1(p, h1), c2(p, h1))
         },
     }
 }
 
-theorem Region::license_sound(self a: Region, b: Region, pres: Nat → List<Nat> → Type, ws: List<Nat>, r: Ref): (r1: List<Owed>) → a.license(b) = Some(r1) →
-    Owed::All(r1, pres, ws) → a.Clear(b, r, ws)
+theorem Region::license_sound(self a: Region, b: Region, nw: Nat, pres: Nat → List<Nat> → List<Slot> → List<Nat> → Type, s: Sem, ws: Env, pre: Prefix(s.words, ws), enw: nw = s.words.n(), r: Ref):
+    (r1: List<Owed>) → a.license(b, nw) = Some(r1) → Owed::All(r1, pres, s) → a.Clear(b, r, ws)
 {
     match a {
         Whole => λ r1 no _ => absurd(no),
-        Win(lo1, n1) => λ r1 ok hold => Region::license_win_sound(lo1, n1, b, pres, ws, r, r1, ok, hold),
+        Win(lo1, n1) => λ r1 ok hold => Region::license_win_sound(lo1, n1, b, nw, pres, s, ws, pre, enw, r, r1, ok, hold),
         Both(a1, a2) => λ r1 ok hold => {
-            let st = Option::and_then_some(a1.license(b), λ q1 => a2.license(b).map(λ q2 => q1 ++ q2), r1, ok);
-            let mp = option_map_some(a2.license(b), λ q2 => st.witness ++ q2, r1, st.proof.right);
-            let parts = Owed::all_append(st.witness, pres, mp.witness, ws, j(sym(mp.proof.right), λ q _ => Owed::All(q, pres, ws), hold));
-            let c1 = a1.license_sound(b, pres, ws, r, st.witness, st.proof.left, parts.left);
-            let c2 = a2.license_sound(b, pres, ws, r, mp.witness, mp.proof.left, parts.right);
+            let st = Option::and_then_some(a1.license(b, nw), λ q1 => a2.license(b, nw).map(λ q2 => q1 ++ q2), r1, ok);
+            let mp = option_map_some(a2.license(b, nw), λ q2 => st.witness ++ q2, r1, st.proof.right);
+            let parts = Owed::all_append(st.witness, pres, mp.witness, s, j(sym(mp.proof.right), λ q _ => Owed::All(q, pres, s), hold));
+            let c1 = a1.license_sound(b, nw, pres, s, ws, pre, enw, r, st.witness, st.proof.left, parts.left);
+            let c2 = a2.license_sound(b, nw, pres, s, ws, pre, enw, r, mp.witness, mp.proof.left, parts.right);
             λ p h => match Bool::or_true_cases(a1.hits(r, ws, p), a2.hits(r, ws, p), h) { Inl(x) => c1(p, x), Inr(y) => c2(p, y) }
         },
     }
 }
 
 // Nothing is licensed against the whole object.
-theorem Region::license_whole(self a: Region): a.license(Whole) = None {
+theorem Region::license_whole(self a: Region, nw: Nat): a.license(Whole, nw) = None {
     match a {
         Whole => refl,
         Win(_, _) => refl,
-        Both(a1, a2) => j(sym(a1.license_whole()), λ o _ => o.and_then(λ r1 => a2.license(Whole).map(λ r2 => r1 ++ r2)) = None, refl),
+        Both(a1, a2) => j(sym(a1.license_whole(nw)), λ o _ => o.and_then(λ r1 => a2.license(Whole, nw).map(λ r2 => r1 ++ r2)) = None, refl),
     }
 }
 
-theorem LView::license_sound(self lv: LView, md: Mode, rg: Region, pres: Nat → List<Nat> → Type, ws: List<Nat>, r: Ref, r1: List<Owed>, ok: lv.license(md, rg) = Some(r1),
-    hold: Owed::All(r1, pres, ws)): lv.Clear(md, rg, r, ws)
+theorem LView::license_sound(self lv: LView, md: Mode, rg: Region, nw: Nat, pres: Nat → List<Nat> → List<Slot> → List<Nat> → Type, s: Sem, ws: Env, pre: Prefix(s.words, ws), enw: nw = s.words.n(), r: Ref,
+    r1: List<Owed>, ok: lv.license(md, rg, nw) = Some(r1), hold: Owed::All(r1, pres, s)): lv.Clear(md, rg, r, ws)
 {
-    λ meets => lv.region.license_sound(rg, pres, ws, r, r1, j(meets, λ b _ => (match b { True => lv.region.license(rg), False => Some(Nil<Owed>) }) = Some(r1), ok), hold)
+    λ meets => lv.region.license_sound(rg, nw, pres, s, ws, pre, enw, r, r1, j(meets, λ b _ => (match b { True => lv.region.license(rg, nw), False => Some(Nil<Owed>) }) = Some(r1), ok), hold)
 }
 
-// Every live view the access meets is clear of it.
-theorem license_live_sound(live: List<LView>, md: Mode, rg: Region, pres: Nat → List<Nat> → Type, ws: List<Nat>, r: Ref): (rs: List<Owed>) → license_live(live, md, rg) = Some(rs) →
-    Owed::All(rs, pres, ws) → (lv: LView) → Mem(lv, live) → lv.Clear(md, rg, r, ws)
+// Every live view the access meets is clear of it, in any words that extend
+// the site's.
+theorem license_live_sound(live: List<LView>, md: Mode, rg: Region, nw: Nat, pres: Nat → List<Nat> → List<Slot> → List<Nat> → Type, s: Sem, ws: Env, pre: Prefix(s.words, ws), enw: nw = s.words.n(), r: Ref):
+    (rs: List<Owed>) → license_live(live, md, rg, nw) = Some(rs) → Owed::All(rs, pres, s) → (lv: LView) → Mem(lv, live) → lv.Clear(md, rg, r, ws)
 {
     match live {
         Nil => λ rs ok hold lv m => false_elim(m),
         Cons(h, rest) => λ rs ok hold => {
-            let st = Option::and_then_some(h.license(md, rg), λ r1 => license_live(rest, md, rg).map(λ r2 => r1 ++ r2), rs, ok);
-            let mp = option_map_some(license_live(rest, md, rg), λ r2 => st.witness ++ r2, rs, st.proof.right);
-            let parts = Owed::all_append(st.witness, pres, mp.witness, ws, j(sym(mp.proof.right), λ q _ => Owed::All(q, pres, ws), hold));
+            let st = Option::and_then_some(h.license(md, rg, nw), λ r1 => license_live(rest, md, rg, nw).map(λ r2 => r1 ++ r2), rs, ok);
+            let mp = option_map_some(license_live(rest, md, rg, nw), λ r2 => st.witness ++ r2, rs, st.proof.right);
+            let parts = Owed::all_append(st.witness, pres, mp.witness, s, j(sym(mp.proof.right), λ q _ => Owed::All(q, pres, s), hold));
             λ lv m => match m {
-                Inl(e) => j(sym(e), λ x _ => x.Clear(md, rg, r, ws), h.license_sound(md, rg, pres, ws, r, st.witness, st.proof.left, parts.left)),
-                Inr(m2) => license_live_sound(rest, md, rg, pres, ws, r, mp.witness, mp.proof.left, parts.right, lv, m2),
+                Inl(e) => j(sym(e), λ x _ => x.Clear(md, rg, r, ws), h.license_sound(md, rg, nw, pres, s, ws, pre, enw, r, st.witness, st.proof.left, parts.left)),
+                Inr(m2) => license_live_sound(rest, md, rg, nw, pres, s, ws, pre, enw, r, mp.witness, mp.proof.left, parts.right, lv, m2),
             }
         },
     }
 }
 
 // Each live view the licence passed answered it.
-theorem license_live_each(live: List<LView>, md: Mode, rg: Region): (rs: List<Owed>) → license_live(live, md, rg) = Some(rs) →
-    (lv: LView) → Mem(lv, live) → Exists<List<Owed>>(λ r1 => lv.license(md, rg) = Some(r1))
+theorem license_live_each(live: List<LView>, md: Mode, rg: Region, nw: Nat): (rs: List<Owed>) → license_live(live, md, rg, nw) = Some(rs) →
+    (lv: LView) → Mem(lv, live) → Exists<List<Owed>>(λ r1 => lv.license(md, rg, nw) = Some(r1))
 {
     match live {
         Nil => λ rs ok lv m => false_elim(m),
         Cons(h, rest) => λ rs ok => {
-            let st = Option::and_then_some(h.license(md, rg), λ r1 => license_live(rest, md, rg).map(λ r2 => r1 ++ r2), rs, ok);
-            let mp = option_map_some(license_live(rest, md, rg), λ r2 => st.witness ++ r2, rs, st.proof.right);
+            let st = Option::and_then_some(h.license(md, rg, nw), λ r1 => license_live(rest, md, rg, nw).map(λ r2 => r1 ++ r2), rs, ok);
+            let mp = option_map_some(license_live(rest, md, rg, nw), λ r2 => st.witness ++ r2, rs, st.proof.right);
             λ lv m => match m {
-                Inl(e) => j(sym(e), λ x _ => Exists<List<Owed>>(λ r1 => x.license(md, rg) = Some(r1)), Exists(st.witness, st.proof.left)),
-                Inr(m2) => license_live_each(rest, md, rg, mp.witness, mp.proof.left, lv, m2),
+                Inl(e) => j(sym(e), λ x _ => Exists<List<Owed>>(λ r1 => x.license(md, rg, nw) = Some(r1)), Exists(st.witness, st.proof.left)),
+                Inr(m2) => license_live_each(rest, md, rg, nw, mp.witness, mp.proof.left, lv, m2),
             }
         },
+    }
+}
+
+// A read of the whole object meets no live write view.
+theorem license_whole_none(live: List<LView>, nw: Nat, rs: List<Owed>, ok: license_live(live, Reads, Whole, nw) = Some(rs)): (lv: LView) → Mem(lv, live) → lv.md.writes() = True → False {
+    λ lv mem w => {
+        let e = license_live_each(live, Reads, Whole, nw, rs, ok, lv, mem);
+        let lic_none: (lv.license(Reads, Whole, nw) = None) = j(sym(w), λ b _ => (match b { True => lv.region.license(Whole, nw), False => Some(Nil<Owed>) }) = None, lv.region.license_whole(nw));
+        absurd(prelude::trans(sym(e.proof), lic_none))
     }
 }
 
@@ -1215,14 +1450,14 @@ theorem is_lent_sound(live: List<LView>, t: Nat, h: is_lent(live, t) = True): Ex
 // A live view of the checker, of the run and of the meaning agree: the
 // run's view is in the reference's buffer, inside the span the checker
 // says it covers, and reads what the meaning's view holds.
-record ViewOk(rg: Region, v: Ref, val: List<Nat>, r: Ref, file: List<List<Nat>>, ws: List<Nat>) {
+record ViewOk(rg: Region, v: Ref, val: List<Nat>, r: Ref, file: List<List<Nat>>, ws: Env) {
     at_b: v.b = r.b,
     within: (p: Nat) → Span(v.base, v.len).has(p).IsTrue() → rg.hits(r, ws, p).IsTrue(),
     reads: (i: Nat) → word(val, i) = rget(file, v, i),
 }
 
 // A view reads only its window: a file that agrees there keeps it.
-theorem ViewOk::reframe({rg: Region}, {v: Ref}, {val: List<Nat>}, {r: Ref}, {file: List<List<Nat>>}, {ws: List<Nat>}, self o: ViewOk(rg, v, val, r, file, ws),
+theorem ViewOk::reframe({rg: Region}, {v: Ref}, {val: List<Nat>}, {r: Ref}, {file: List<List<Nat>>}, {ws: Env}, self o: ViewOk(rg, v, val, r, file, ws),
     file2: List<List<Nat>>, same: Keeps(file, file2, v)): ViewOk(rg, v, val, r, file2, ws)
 {
     ViewOk(o.at_b, o.within, λ i => prelude::trans(o.reads(i), match q: (i + 1).leb(v.len) {
@@ -1232,13 +1467,13 @@ theorem ViewOk::reframe({rg: Region}, {v: Ref}, {val: List<Nat>}, {r: Ref}, {fil
 }
 
 // A view whose reference now holds another value reads that one.
-theorem ViewOk::rewritten({rg: Region}, {v: Ref}, {val: List<Nat>}, {r: Ref}, {file: List<List<Nat>>}, {ws: List<Nat>}, self o: ViewOk(rg, v, val, r, file, ws),
+theorem ViewOk::rewritten({rg: Region}, {v: Ref}, {val: List<Nat>}, {r: Ref}, {file: List<List<Nat>>}, {ws: Env}, self o: ViewOk(rg, v, val, r, file, ws),
     file2: List<List<Nat>>, nv: List<Nat>, h: Holds(list_at(file2, v.b), v.base, nv), len: nv.len() = v.len): ViewOk(rg, v, nv, r, file2, ws)
 {
     ViewOk(o.at_b, o.within, λ i => sym(rget_holds(file2, v, nv, h, len, i)))
 }
 
-theorem ViewOk::moved(rg: Region, v, v2: Ref, val, val2: List<Nat>, r: Ref, file: List<List<Nat>>, ws: List<Nat>, e1: v = v2, e2: val = val2,
+theorem ViewOk::moved(rg: Region, v, v2: Ref, val, val2: List<Nat>, r: Ref, file: List<List<Nat>>, ws: Env, e1: v = v2, e2: val = val2,
     o: ViewOk(rg, v, val, r, file, ws)): ViewOk(rg, v2, val2, r, file, ws)
 {
     j(e2, λ q _ => ViewOk(rg, v2, q, r, file, ws), j(e1, λ q _ => ViewOk(rg, q, val, r, file, ws), o))
@@ -1280,8 +1515,8 @@ theorem Lent::inside({v: Ref}, {val: List<Nat>}, {slot: Nat}, {r: Ref}, {file: L
 record Frame {
     mode: Mode,
     sigs: List<Sig>,
-    pres: Nat → List<Nat> → Type,
-    posts: Nat → List<Nat> → Nat → Type,
+    pres: Nat → List<Nat> → List<Slot> → List<Nat> → Type,
+    posts: Nat → List<Nat> → List<Slot> → List<Nat> → MOut → Type,
     w: World,
     r: Ref,
     file0: List<List<Nat>>,
@@ -1299,9 +1534,9 @@ record Frame {
 // write-back is eager. A lending function, which holds no object, has
 // opened no view but those it was lent, and has changed nothing outside
 // them (`kept`).
-record Sim(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>) {
+record Sim(k: Frame, c: Places, s: Sem, m: Exec, ws: Env) {
     words: m.words = s.words,
-    nw: c.nw = s.words.len(),
+    nw: c.nw = s.words.n(),
     nviews: s.views.len() = c.nviews,
     nslots: s.slots.len() = c.nviews,
     mviews: m.views.len() = c.nviews,
@@ -1331,16 +1566,16 @@ theorem narrow_holds(buf: List<Nat>, r: Ref, cur: List<Nat>, h: Holds(buf, r.bas
     }⟩
 }
 
-theorem Atom::bound_at(self a: Atom, c: Places, s: Sem, e: a.bound(c.nw) = True, nw: c.nw = s.words.len()): a.bound(s.words.len()) = True {
+theorem Atom::bound_at(self a: Atom, c: Places, s: Sem, e: a.bound(c.nw) = True, nw: c.nw = s.words.n()): a.bound(s.words.n()) = True {
     j(nw, λ n _ => a.bound(n) = True, e)
 }
 
 // A statement that binds a word and changes nothing else.
-theorem Sim::said({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>}, self sim: Sim(k, c, s, m, ws), a, b: Nat, e: a = b):
+theorem Sim::said({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: Env}, self sim: Sim(k, c, s, m, ws), a, b: Nat, e: a = b):
     Sim(k, c.said(), s.bind(b), m.bind(a), ws)
 {
-    Sim(prelude::trans(cong_fn(λ (w: List<Nat>) => w ++ [a], sim.words), cong_fn(λ (x: Nat) => s.words ++ [x], e)),
-        prelude::trans(cong_fn(λ (n: Nat) => n + 1, sim.nw), sym(len_snoc(s.words, b))),
+    Sim(prelude::trans(cong_fn(λ (w: Env) => w.push(a), sim.words), cong_fn(λ (x: Nat) => s.words.push(x), e)),
+        cong_fn(λ (n: Nat) => n + 1, sim.nw),
         sim.nviews, sim.nslots, sim.mviews, sim.on, sim.fixed, sim.views, sim.lent, sim.excl, sim.kept)
 }
 
@@ -1348,12 +1583,12 @@ theorem Sim::said({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>},
 // with eager write-back the buffer holds the holder's value inside its out
 // windows as well. So refusing an owner's read of a lent part is policy,
 // not soundness (§15.7, open item 4).
-theorem Sim::owner_reads({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>}, self sim: Sim(k, c, s, m, ws), i: Nat): rget(m.file, k.r, i) = word(s.cur, i) {
+theorem Sim::owner_reads({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: Env}, self sim: Sim(k, c, s, m, ws), i: Nat): rget(m.file, k.r, i) = word(s.cur, i) {
     rget_holds(m.file, k.r, s.cur, sim.on.holds, sim.on.len, i)
 }
 
 // A store by the owner, apart from every live view.
-theorem Sim::set_at({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>}, self sim: Sim(k, c, s, m, ws), inr: InRef(k.file0, k.r), owns: k.mode.owns() = True, writes: k.mode.writes() = True,
+theorem Sim::set_at({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: Env}, self sim: Sim(k, c, s, m, ws), inr: InRef(k.file0, k.r), owns: k.mode.owns() = True, writes: k.mode.writes() = True,
     iv, vv: Nat, misses: (lv: LView) → Mem(lv, c.live) → (p: Nat) → Span(ref_at(m.views, lv.t).base, ref_at(m.views, lv.t).len).has(p).IsTrue() → iv < k.r.len → p ≠ k.r.base + iv):
     Sim(k, c, Sem(s.cur.update(iv, λ _ => vv), s.views, s.slots, s.words), m.put(k.r, iv, vv), ws)
 {
@@ -1372,7 +1607,7 @@ theorem Sim::set_at({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>
 
 // The live views after a new one: the old ones keep their references and
 // values.
-theorem opened_views(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), nlv: LView, et: nlv.t = c.nviews, nr: Ref, val: List<Nat>,
+theorem opened_views(k: Frame, c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws), nlv: LView, et: nlv.t = c.nviews, nr: Ref, val: List<Nat>,
     fresh: ViewOk(nlv.region, nr, val, k.r, m.file, ws)):
     (lv: LView) → Mem(lv, Cons(nlv, c.live)) → (lv.t < c.nviews + 1) ∧ ViewOk(lv.region, ref_at(m.views ++ [nr], lv.t), list_at(s.views ++ [val], lv.t), k.r, m.file, ws)
 {
@@ -1390,7 +1625,7 @@ theorem opened_views(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: S
     }
 }
 
-theorem opened_lent(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), nlv: LView, et: nlv.t = c.nviews, nr: Ref, val: List<Nat>, slot: Nat,
+theorem opened_lent(k: Frame, c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws), nlv: LView, et: nlv.t = c.nviews, nr: Ref, val: List<Nat>, slot: Nat,
     fresh: nlv.md.writes() = True → (k.mode.writes() = True) ∧ Lent(nr, val, slot, k.r, m.file)):
     (lv: LView) → Mem(lv, Cons(nlv, c.live)) → lv.md.writes() = True →
         (k.mode.writes() = True) ∧ Lent(ref_at(m.views ++ [nr], lv.t), list_at(s.views ++ [val], lv.t), word(s.slots ++ [slot], lv.t), k.r, m.file)
@@ -1418,7 +1653,7 @@ theorem opened_lent(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Si
 }
 
 // The new view is apart from each old one it meets, both ways.
-theorem opened_excl(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), nlv: LView, et: nlv.t = c.nviews, nr: Ref,
+theorem opened_excl(k: Frame, c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws), nlv: LView, et: nlv.t = c.nviews, nr: Ref,
     clear: (lv: LView) → Mem(lv, c.live) → (nlv.md.writes() || lv.md.writes()) = True → nr.Apart(ref_at(m.views, lv.t)) ∧ ref_at(m.views, lv.t).Apart(nr)):
     (a, b: LView) → Mem(a, Cons(nlv, c.live)) → Mem(b, Cons(nlv, c.live)) → a.md.writes() = True → a.t ≠ b.t → ref_at(m.views ++ [nr], a.t).Apart(ref_at(m.views ++ [nr], b.t))
 {
@@ -1451,7 +1686,7 @@ theorem opened_excl(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Si
 
 // A new view: it reads its value, a write view holds it at its slot, and
 // it is apart from each live view it meets.
-theorem Sim::opened({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>}, self sim: Sim(k, c, s, m, ws), owns: k.mode.owns() = True, nlv: LView, et: nlv.t = c.nviews, nr: Ref, val: List<Nat>, slot: Nat,
+theorem Sim::opened({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: Env}, self sim: Sim(k, c, s, m, ws), owns: k.mode.owns() = True, nlv: LView, et: nlv.t = c.nviews, nr: Ref, val: List<Nat>, slot: Nat,
     fresh: ViewOk(nlv.region, nr, val, k.r, m.file, ws),
     flent: nlv.md.writes() = True → (k.mode.writes() = True) ∧ Lent(nr, val, slot, k.r, m.file),
     clear: (lv: LView) → Mem(lv, c.live) → (nlv.md.writes() || lv.md.writes()) = True → nr.Apart(ref_at(m.views, lv.t)) ∧ ref_at(m.views, lv.t).Apart(nr)):
@@ -1468,7 +1703,7 @@ theorem Sim::opened({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>
 }
 
 // A file whose buffer changed nothing keeps the invariant.
-theorem Sim::refile({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>}, self sim: Sim(k, c, s, m, ws), owns: k.mode.owns() = True, file2: List<List<Nat>>, after: OnRef(m.file, file2, k.r, s.cur)):
+theorem Sim::refile({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: Env}, self sim: Sim(k, c, s, m, ws), owns: k.mode.owns() = True, file2: List<List<Nat>>, after: OnRef(m.file, file2, k.r, s.cur)):
     Sim(k, c, s, Exec(file2, m.views, m.words), ws)
 {
     let unchanged = OnRef::unchanged(m.file, file2, k.r, s.cur, sim.on.holds, after);
@@ -1479,7 +1714,7 @@ theorem Sim::refile({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>
 }
 
 // After a write through the write view `t`: each live view reads its value.
-theorem backed_view(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), t: Nat, tlt: t < s.views.len(), nv: List<Nat>, file2: List<List<Nat>>,
+theorem backed_view(k: Frame, c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws), t: Nat, tlt: t < s.views.len(), nv: List<Nat>, file2: List<List<Nat>>,
     call: OnRef(m.file, file2, ref_at(m.views, t), nv), kept: (lv2: LView) → Mem(lv2, c.live) → t ≠ lv2.t → Keeps(m.file, file2, ref_at(m.views, lv2.t)),
     lv2: LView, mem2: Mem(lv2, c.live)): ViewOk(lv2.region, ref_at(m.views, lv2.t), list_at(s.views.update(t, λ _ => nv), lv2.t), k.r, file2, ws)
 {
@@ -1504,7 +1739,7 @@ theorem backed_view(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Si
 
 // After a write through the write view `t`: each live write view holds its
 // value.
-theorem backed_lent(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), t: Nat, tlt: t < s.views.len(), nv: List<Nat>, file2: List<List<Nat>>,
+theorem backed_lent(k: Frame, c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws), t: Nat, tlt: t < s.views.len(), nv: List<Nat>, file2: List<List<Nat>>,
     call: OnRef(m.file, file2, ref_at(m.views, t), nv), kept: (lv2: LView) → Mem(lv2, c.live) → t ≠ lv2.t → Keeps(m.file, file2, ref_at(m.views, lv2.t)),
     lv2: LView, mem2: Mem(lv2, c.live), w2: lv2.md.writes() = True):
     Lent(ref_at(m.views, lv2.t), list_at(s.views.update(t, λ _ => nv), lv2.t), word(s.slots, lv2.t), k.r, file2)
@@ -1530,7 +1765,7 @@ theorem backed_lent(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Si
 
 // A write through a live write view of a lending function is through one of
 // the references it was lent, so outside them nothing changed.
-theorem backed_kept(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), lv: LView, mem: Mem(lv, c.live), nv: List<Nat>, file2: List<List<Nat>>,
+theorem backed_kept(k: Frame, c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws), lv: LView, mem: Mem(lv, c.live), nv: List<Nat>, file2: List<List<Nat>>,
     call: OnRef(m.file, file2, ref_at(m.views, lv.t), nv), vb: ref_at(m.views, lv.t).b = k.r.b):
     k.mode.owns() = False → ((m.views = k.refs0) ∧ (c.nviews = k.mode.elems())) ∧
         ((p: Nat) → ((t: Nat) → t < k.mode.elems() → ¬Span(ref_at(k.refs0, t).base, ref_at(k.refs0, t).len).has(p).IsTrue()) →
@@ -1551,7 +1786,7 @@ theorem backed_kept(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Si
 // A write through the live write view `lv` that leaves `nv` in its window
 // and nothing changed outside it: the eager write-back puts `nv` at the
 // view's slot, and every other view, apart from it, is kept.
-theorem Sim::backed({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>}, self sim: Sim(k, c, s, m, ws), lv: LView, mem: Mem(lv, c.live), w: lv.md.writes() = True,
+theorem Sim::backed({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: Env}, self sim: Sim(k, c, s, m, ws), lv: LView, mem: Mem(lv, c.live), w: lv.md.writes() = True,
     nv: List<Nat>, file2: List<List<Nat>>, call: OnRef(m.file, file2, ref_at(m.views, lv.t), nv)):
     Sim(k, c, s.back(lv.t, nv), Exec(file2, m.views, m.words), ws)
 {
@@ -1590,20 +1825,21 @@ theorem lendable_nil(m: Mode, r: Ref, h: m.owns() = True): Lendable(m, r, Nil) {
 }
 
 // The promise of a function that holds its object, called with its object.
-theorem fn_safe_owned(sig: Sig, pre: List<Nat> → Type, post: List<Nat> → Nat → Type, mean: List<Nat> → List<Slot> → List<Nat> → MOut,
+theorem fn_safe_owned(sig: Sig, pre: List<Nat> → List<Slot> → List<Nat> → Type, post: List<Nat> → List<Slot> → List<Nat> → MOut → Type, mean: List<Nat> → List<Slot> → List<Nat> → MOut,
     run: List<List<Nat>> → Ref → List<Ref> → List<Nat> → ROut, safe: FnSafe(sig, pre, post, mean, run), owns: sig.mode.owns() = True,
-    file: List<List<Nat>>, r: Ref, ws: List<Nat>, inr: InRef(file, r), len: ws.len() = sig.words, p: pre(ws)):
-    Safe(sig.mode, sig.ret.region(), ws, post(ws), file, r, Nil, window(list_at(file, r.b), r.base, r.len), mean(window(list_at(file, r.b), r.base, r.len), Nil, ws), run(file, r, Nil, ws))
+    file: List<List<Nat>>, r: Ref, ws: List<Nat>, inr: InRef(file, r), len: ws.len() = sig.words, arg: List<Nat>, arg_is: window(list_at(file, r.b), r.base, r.len) = arg, p: pre(arg, Nil, ws)):
+    Safe(sig.mode, sig.ret.region(), ws, post(arg, Nil, ws), file, r, Nil, arg, mean(arg, Nil, ws), run(file, r, Nil, ws))
 {
-    j(sig.mode.owner_of_owns(owns, r), λ q _ => Safe(sig.mode, sig.ret.region(), ws, post(ws), file, r, Nil, window(list_at(file, r.b), r.base, r.len),
-            mean(window(list_at(file, r.b), r.base, r.len), Nil, ws), run(file, q, Nil, ws)),
-        safe(file, r, Nil, ws, inr, len, p, lendable_nil(sig.mode, r, owns)))
+    let at = safe(file, r, Nil, ws, inr, len, j(sym(arg_is), λ q _ => pre(q, Nil, ws), p), lendable_nil(sig.mode, r, owns));
+    let at_arg = j(arg_is, λ q _ => Safe(sig.mode, sig.ret.region(), ws, post(q, Nil, ws), file, r, Nil, q, mean(q, Nil, ws), run(file, sig.mode.owner(r), Nil, ws)), at);
+    j(sig.mode.owner_of_owns(owns, r), λ q _ => Safe(sig.mode, sig.ret.region(), ws, post(arg, Nil, ws), file, r, Nil, arg, mean(arg, Nil, ws), run(file, q, Nil, ws)), at_arg)
 }
 
-// A call that was lent the write view `lv`: its promise, and nothing else
-// of it, gives the eager write-back and the word it answers.
-theorem Sim::called_core({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>}, self sim: Sim(k, c, s, m, ws), inr: InRef(k.file0, k.r),
-    lv: LView, mem: Mem(lv, c.live), w: lv.md.writes() = True, g: Nat, vs: List<Nat>, callee_pre: k.pres(g, vs), nargs: vs.len() = sig_at(k.sigs, g).words,
+// A call that was lent the write view `lv`: its promise at the view's value,
+// and nothing else of it, gives the eager write-back and the word it
+// answers.
+theorem Sim::called_core({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: Env}, self sim: Sim(k, c, s, m, ws), inr: InRef(k.file0, k.r),
+    lv: LView, mem: Mem(lv, c.live), w: lv.md.writes() = True, g: Nat, vs: List<Nat>, callee_pre: k.pres(g, list_at(s.views, lv.t), Nil, vs), nargs: vs.len() = sig_at(k.sigs, g).words,
     safe_g: FnSafe(sig_at(k.sigs, g), k.pres(g), k.posts(g), k.w.mean(g), k.w.run(g)), owns: sig_at(k.sigs, g).mode.owns() = True):
     Sim(k, c.said(), s.called(lv.t, k.w.mean(g, list_at(s.views, lv.t), Nil, vs)), Exec::lent(m, k.w.run(g, m.file, ref_at(m.views, lv.t), Nil, vs)), ws)
 {
@@ -1617,72 +1853,93 @@ theorem Sim::called_core({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List
     let arg_is: (window(list_at(m.file, vr.b), vr.base, vr.len) = val) =
         j(l.len, λ q _ => window(list_at(m.file, vr.b), vr.base, q) = val, whole_window(list_at(m.file, vr.b), vr.base, val, l.holds, omega(fits, l.len)));
     let ro = k.w.run(g, m.file, vr, Nil, vs);
-    let safe: Safe(sig_at(k.sigs, g).mode, sig_at(k.sigs, g).ret.region(), vs, k.posts(g, vs), m.file, vr, Nil, val, k.w.mean(g, val, Nil, vs), ro) =
-        j(arg_is, λ q _ => Safe(sig_at(k.sigs, g).mode, sig_at(k.sigs, g).ret.region(), vs, k.posts(g, vs), m.file, vr, Nil, q, k.w.mean(g, q, Nil, vs), ro),
-            fn_safe_owned(sig_at(k.sigs, g), k.pres(g), k.posts(g), k.w.mean(g), k.w.run(g), safe_g, owns, m.file, vr, vs, InRef(buf, fits), nargs, callee_pre));
+    let safe: Safe(sig_at(k.sigs, g).mode, sig_at(k.sigs, g).ret.region(), vs, k.posts(g, val, Nil, vs), m.file, vr, Nil, val, k.w.mean(g, val, Nil, vs), ro) =
+        fn_safe_owned(sig_at(k.sigs, g), k.pres(g), k.posts(g), k.w.mean(g), k.w.run(g), safe_g, owns, m.file, vr, vs, InRef(buf, fits), nargs, val, arg_is, callee_pre);
     sim.backed(lv, mem, w, k.w.mean(g, val, Nil, vs).val, ro.file, safe.on).said(ro.word, k.w.mean(g, val, Nil, vs).word, safe.answer)
 }
 
-// A call that answered a read view of the object: the file is as it was,
-// and the view, rebased on the caller's reference, lies where the callee's
-// signature places it, read at the call's arguments (`rgc`).
-theorem Sim::viewed_core({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>}, self sim: Sim(k, c, s, m, ws), inr: InRef(k.file0, k.r),
-    g: Nat, vs: List<Nat>, callee_pre: k.pres(g, vs), nargs: vs.len() = sig_at(k.sigs, g).words, safe_g: FnSafe(sig_at(k.sigs, g), k.pres(g), k.posts(g), k.w.mean(g), k.w.run(g)),
-    reads_only: sig_at(k.sigs, g).mode.writes() = False, t: Nat, et: t = c.nviews, none_lent: (lv: LView) → Mem(lv, c.live) → lv.md.writes() = True → False,
-    rgc: Region, place: (p: Nat) → sig_at(k.sigs, g).ret.region().hits(k.r, vs, p).IsTrue() → rgc.hits(k.r, ws, p).IsTrue(), owns: k.mode.owns() = True):
-    Sim(k, Places(Cons(LView(t, Reads, rgc), c.live), c.nviews + 1, c.nw), s.open(k.w.mean(g, s.cur, Nil, vs).view, 0), Exec::viewed(m, k.r, k.w.run(g, m.file, k.r, Nil, vs)), ws)
+// A reader of the whole object, called at the object's value: its promise,
+// and the file as it was.
+theorem Sim::asked({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: Env}, self sim: Sim(k, c, s, m, ws), inr: InRef(k.file0, k.r),
+    g: Nat, vs: List<Nat>, callee_pre: k.pres(g, s.cur, Nil, vs), nargs: vs.len() = sig_at(k.sigs, g).words, safe_g: FnSafe(sig_at(k.sigs, g), k.pres(g), k.posts(g), k.w.mean(g), k.w.run(g)),
+    reads_only: sig_at(k.sigs, g).mode.writes() = False):
+    Safe(sig_at(k.sigs, g).mode, sig_at(k.sigs, g).ret.region(), vs, k.posts(g, s.cur, Nil, vs), m.file, k.r, Nil, s.cur, k.w.mean(g, s.cur, Nil, vs), k.w.run(g, m.file, k.r, Nil, vs)) ∧
+        OnRef(m.file, k.w.run(g, m.file, k.r, Nil, vs).file, k.r, s.cur)
 {
     let r = k.r;
     let fits: (r.base + s.cur.len() <= list_at(m.file, r.b).len()) = omega(inr.fits, sim.on.blen, sim.on.len);
     let inref: InRef(m.file, r) = InRef(omega(inr.buf, sim.on.shape), omega(inr.fits, sim.on.blen));
     let arg_is: (window(list_at(m.file, r.b), r.base, r.len) = s.cur) =
         j(sim.on.len, λ l _ => window(list_at(m.file, r.b), r.base, l) = s.cur, whole_window(list_at(m.file, r.b), r.base, s.cur, sim.on.holds, fits));
+    let safe = fn_safe_owned(sig_at(k.sigs, g), k.pres(g), k.posts(g), k.w.mean(g), k.w.run(g), safe_g, sig_at(k.sigs, g).mode.owns_of_reads(reads_only), m.file, r, vs, inref, nargs,
+        s.cur, arg_is, callee_pre);
+    ⟨safe, j(safe.keeps(reads_only), λ l _ => OnRef(m.file, k.w.run(g, m.file, r, Nil, vs).file, r, l), safe.on)⟩
+}
+
+// A reader that answered a word: the file is as it was, and the word bound.
+theorem Sim::got_core({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: Env}, self sim: Sim(k, c, s, m, ws), inr: InRef(k.file0, k.r),
+    g: Nat, vs: List<Nat>, callee_pre: k.pres(g, s.cur, Nil, vs), nargs: vs.len() = sig_at(k.sigs, g).words, safe_g: FnSafe(sig_at(k.sigs, g), k.pres(g), k.posts(g), k.w.mean(g), k.w.run(g)),
+    reads_only: sig_at(k.sigs, g).mode.writes() = False, owns: k.mode.owns() = True):
+    Sim(k, c.said(), s.bind(k.w.mean(g, s.cur, Nil, vs).word), Exec::lent(m, k.w.run(g, m.file, k.r, Nil, vs)), ws)
+{
+    let a = sim.asked(inr, g, vs, callee_pre, nargs, safe_g, reads_only);
+    let ro = k.w.run(g, m.file, k.r, Nil, vs);
+    sim.refile(owns, ro.file, a.right).said(ro.word, k.w.mean(g, s.cur, Nil, vs).word, a.left.answer)
+}
+
+// A call that answered a read view of the object: the file is as it was,
+// and the view, rebased on the caller's reference, lies where the callee's
+// signature places it, read at the call's arguments (`rgc`).
+theorem Sim::viewed_core({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: Env}, self sim: Sim(k, c, s, m, ws), inr: InRef(k.file0, k.r),
+    g: Nat, vs: List<Nat>, callee_pre: k.pres(g, s.cur, Nil, vs), nargs: vs.len() = sig_at(k.sigs, g).words, safe_g: FnSafe(sig_at(k.sigs, g), k.pres(g), k.posts(g), k.w.mean(g), k.w.run(g)),
+    reads_only: sig_at(k.sigs, g).mode.writes() = False, t: Nat, et: t = c.nviews, none_lent: (lv: LView) → Mem(lv, c.live) → lv.md.writes() = True → False,
+    rgc: Region, place: (p: Nat) → sig_at(k.sigs, g).ret.region().hits(k.r, Env::start(vs), p).IsTrue() → rgc.hits(k.r, ws, p).IsTrue(), owns: k.mode.owns() = True):
+    Sim(k, Places(Cons(LView(t, Reads, rgc), c.live), c.nviews + 1, c.nw), s.open(k.w.mean(g, s.cur, Nil, vs).view, 0), Exec::viewed(m, k.r, k.w.run(g, m.file, k.r, Nil, vs)), ws)
+{
+    let r = k.r;
+    let a = sim.asked(inr, g, vs, callee_pre, nargs, safe_g, reads_only);
     let ro = k.w.run(g, m.file, r, Nil, vs);
     let mo = k.w.mean(g, s.cur, Nil, vs);
-    let safe: Safe(sig_at(k.sigs, g).mode, sig_at(k.sigs, g).ret.region(), vs, k.posts(g, vs), m.file, r, Nil, s.cur, mo, ro) =
-        j(arg_is, λ q _ => Safe(sig_at(k.sigs, g).mode, sig_at(k.sigs, g).ret.region(), vs, k.posts(g, vs), m.file, r, Nil, q, k.w.mean(g, q, Nil, vs), ro),
-            fn_safe_owned(sig_at(k.sigs, g), k.pres(g), k.posts(g), k.w.mean(g), k.w.run(g), safe_g, sig_at(k.sigs, g).mode.owns_of_reads(reads_only), m.file, r, vs, inref, nargs, callee_pre));
-    let after: OnRef(m.file, ro.file, r, s.cur) = j(safe.keeps(reads_only), λ l _ => OnRef(m.file, ro.file, r, l), safe.on);
     let nr = Ref(r.b, r.base + ro.lo, ro.n);
-    let fresh: ViewOk(rgc, nr, mo.view, r, ro.file, ws) = ViewOk(refl, λ p h => place(p, safe.view_in(p, h)), safe.view_reads);
-    sim.refile(owns, ro.file, after).opened(owns, LView(t, Reads, rgc), et, nr, mo.view, 0, fresh, λ no => absurd(no),
+    let fresh: ViewOk(rgc, nr, mo.view, r, ro.file, ws) = ViewOk(refl, λ p h => place(p, a.left.view_in(p, h)), a.left.view_reads);
+    sim.refile(owns, ro.file, a.right).opened(owns, LView(t, Reads, rgc), et, nr, mo.view, 0, fresh, λ no => absurd(no),
         λ lv mem meets => false_elim(none_lent(lv, mem, meets)))
 }
 
 // ---------------------------------------------------------------------------
 // Each statement keeps the invariant
 
-theorem step_get(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), z: Nat, i: Atom, st: Next,
+theorem step_get(k: Frame, c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws), z: Nat, i: Atom, st: Next,
     ok: Get(z, i).check(k.mode, k.sigs, c) = Some(st)): Sim(k, st.next, Get(z, i).eval1(k.w, s), Get(z, i).run2(k.w, k.mode.owner(k.r), m), ws)
 {
-    let mk = λ (rs: List<Owed>) => Next(c.said(), rs);
-    let p = (k.mode.owns() && (z.same(c.nw) && i.bound(c.nw))).then_some(license_live(c.live, Reads, Win(i, Lit(1))).map(mk), st, ok);
-    let lic = option_map_some(license_live(c.live, Reads, Win(i, Lit(1))), mk, st, p.right);
+    let mk = λ (rs: List<Owed>) => Next(c.said(), rs ++ [Inside(OfPlace, i)]);
+    let p = (k.mode.owns() && (z.same(c.nw) && i.bound(c.nw))).then_some(license_live(c.live, Reads, Win(i, Lit(1)), c.nw).map(mk), st, ok);
+    let lic = option_map_some(license_live(c.live, Reads, Win(i, Lit(1)), c.nw), mk, st, p.right);
     let owns = Bool::and_true_parts(k.mode.owns(), z.same(c.nw) && i.bound(c.nw), p.left).left;
-    let reads: (rget(m.file, k.r, i.val(m.words)) = word(s.cur, i.val(s.words))) =
-        prelude::trans(sim.owner_reads(i.val(m.words)), cong_fn(λ (w: List<Nat>) => word(s.cur, i.val(w)), sim.words));
+    let reads: (rget(m.file, k.r, i.at(m.words)) = word(s.cur, i.at(s.words))) =
+        prelude::trans(sim.owner_reads(i.at(m.words)), cong_fn(λ (w: Env) => word(s.cur, i.at(w)), sim.words));
     let done = j(lic.proof.right, λ q _ => Sim(k, q.next, Get(z, i).eval1(k.w, s), Get(z, i).run2(k.w, k.r, m), ws),
-        sim.said(rget(m.file, k.r, i.val(m.words)), word(s.cur, i.val(s.words)), reads));
+        sim.said(rget(m.file, k.r, i.at(m.words)), word(s.cur, i.at(s.words)), reads));
     j(sym(k.mode.owner_of_owns(owns, k.r)), λ q _ => Sim(k, st.next, Get(z, i).eval1(k.w, s), Get(z, i).run2(k.w, q, m), ws), done)
 }
 
-theorem step_read(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), z, t: Nat, i: Atom, st: Next,
+theorem step_read(k: Frame, c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws), z, t: Nat, i: Atom, st: Next,
     ok: Read(z, t, i).check(k.mode, k.sigs, c) = Some(st)): Sim(k, st.next, Read(z, t, i).eval1(k.w, s), Read(z, t, i).run2(k.w, k.r, m), ws)
 {
-    let g = Next::of((z.same(c.nw) && find_live(c.live, t).is_some()) && i.bound(c.nw), Next(c.said(), Nil), st, ok);
+    let g = Next::of((z.same(c.nw) && find_live(c.live, t).is_some()) && i.bound(c.nw), Next(c.said(), [Inside(OfView(t), i)]), st, ok);
     let g1 = Bool::and_true_parts(z.same(c.nw) && find_live(c.live, t).is_some(), i.bound(c.nw), g.left);
     let g2 = Bool::and_true_parts(z.same(c.nw), find_live(c.live, t).is_some(), g1.left);
     let found = some_of_is_some(find_live(c.live, t), g2.right);
     let fm = find_live_sound(c.live, t, found.witness, found.proof);
     let o: ViewOk(found.witness.region, ref_at(m.views, t), list_at(s.views, t), k.r, m.file, ws) =
         j(fm.right, λ u _ => ViewOk(found.witness.region, ref_at(m.views, u), list_at(s.views, u), k.r, m.file, ws), sim.views(found.witness, fm.left).right);
-    let reads: (rget(m.file, ref_at(m.views, t), i.val(m.words)) = word(list_at(s.views, t), i.val(s.words))) =
-        j(sym(sim.words), λ q _ => rget(m.file, ref_at(m.views, t), i.val(q)) = word(list_at(s.views, t), i.val(s.words)), sym(o.reads(i.val(s.words))));
+    let reads: (rget(m.file, ref_at(m.views, t), i.at(m.words)) = word(list_at(s.views, t), i.at(s.words))) =
+        j(sym(sim.words), λ q _ => rget(m.file, ref_at(m.views, t), i.at(q)) = word(list_at(s.views, t), i.at(s.words)), sym(o.reads(i.at(s.words))));
     j(g.right, λ q _ => Sim(k, q.next, Read(z, t, i).eval1(k.w, s), Read(z, t, i).run2(k.w, k.r, m), ws),
-        sim.said(rget(m.file, ref_at(m.views, t), i.val(m.words)), word(list_at(s.views, t), i.val(s.words)), reads))
+        sim.said(rget(m.file, ref_at(m.views, t), i.at(m.words)), word(list_at(s.views, t), i.at(s.words)), reads))
 }
 
-theorem step_die(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), t: Nat, st: Next,
+theorem step_die(k: Frame, c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws), t: Nat, st: Next,
     ok: Die(t).check(k.mode, k.sigs, c) = Some(st)): Sim(k, st.next, Die(t).eval1(k.w, s), Die(t).run2(k.w, k.r, m), ws)
 {
     let next = Next(Places(kill(c.live, t), c.nviews, c.nw), Nil);
@@ -1694,44 +1951,44 @@ theorem step_die(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k
             λ a b ma mb => sim.excl(a, b, c.live.mem_filter(a, λ (l: LView) => !l.t.same(t), ma), c.live.mem_filter(b, λ (l: LView) => !l.t.same(t), mb)), sim.kept))
 }
 
-theorem step_set(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), pre: Prefix(s.words, ws), inr: InRef(k.file0, k.r),
-    i, v: Atom, st: Next, ok: Set(i, v).check(k.mode, k.sigs, c) = Some(st), hold: Owed::All(st.rs, k.pres, ws)):
+theorem step_set(k: Frame, c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws), pre: Prefix(s.words, ws), inr: InRef(k.file0, k.r),
+    i, v: Atom, st: Next, ok: Set(i, v).check(k.mode, k.sigs, c) = Some(st), hold: Owed::All(st.rs, k.pres, s)):
     Sim(k, st.next, Set(i, v).eval1(k.w, s), Set(i, v).run2(k.w, k.mode.owner(k.r), m), ws)
 {
     let mk = λ (rs: List<Owed>) => Next(c, rs);
-    let p = (k.mode.owns() && ((k.mode.writes() && i.bound(c.nw)) && v.bound(c.nw))).then_some(license_live(c.live, Writes, Win(i, Lit(1))).map(mk), st, ok);
-    let lic = option_map_some(license_live(c.live, Writes, Win(i, Lit(1))), mk, st, p.right);
-    let hold_rs: Owed::All(lic.witness, k.pres, ws) = j(sym(lic.proof.right), λ q _ => Owed::All(q.rs, k.pres, ws), hold);
+    let p = (k.mode.owns() && ((k.mode.writes() && i.bound(c.nw)) && v.bound(c.nw))).then_some(license_live(c.live, Writes, Win(i, Lit(1)), c.nw).map(mk), st, ok);
+    let lic = option_map_some(license_live(c.live, Writes, Win(i, Lit(1)), c.nw), mk, st, p.right);
+    let hold_rs: Owed::All(lic.witness, k.pres, s) = j(sym(lic.proof.right), λ q _ => Owed::All(q.rs, k.pres, s), hold);
     let g0 = Bool::and_true_parts(k.mode.owns(), (k.mode.writes() && i.bound(c.nw)) && v.bound(c.nw), p.left);
     let g1 = Bool::and_true_parts(k.mode.writes() && i.bound(c.nw), v.bound(c.nw), g0.right);
     let g2 = Bool::and_true_parts(k.mode.writes(), i.bound(c.nw), g1.left);
-    let i_ws: (i.val(ws) = i.val(s.words)) = i.val_stable(s.words, ws, pre, i.bound_at(c, s, g2.right, sim.nw));
-    let misses = λ (lv: LView) (mem: Mem(lv, c.live)) (q: Nat) (hq: Span(ref_at(m.views, lv.t).base, ref_at(m.views, lv.t).len).has(q).IsTrue()) (_: i.val(s.words) < k.r.len) => {
-        let cl = license_live_sound(c.live, Writes, Win(i, Lit(1)), k.pres, ws, k.r, lic.witness, lic.proof.left, hold_rs, lv, mem, refl);
-        let no: (¬Span(k.r.base + i.val(ws), 1).has(q).IsTrue()) = cl(q, sim.views(lv, mem).right.within(q, hq));
-        let ne: (q ≠ k.r.base + i.val(s.words)) = λ e => no(omega(e, i_ws));
+    let i_ws: (i.at(ws) = i.at(s.words)) = i.at_stable(s.words, ws, pre, i.bound_at(c, s, g2.right, sim.nw));
+    let misses = λ (lv: LView) (mem: Mem(lv, c.live)) (q: Nat) (hq: Span(ref_at(m.views, lv.t).base, ref_at(m.views, lv.t).len).has(q).IsTrue()) (_: i.at(s.words) < k.r.len) => {
+        let cl = license_live_sound(c.live, Writes, Win(i, Lit(1)), c.nw, k.pres, s, ws, pre, sim.nw, k.r, lic.witness, lic.proof.left, hold_rs, lv, mem, refl);
+        let no: (¬Span(k.r.base + i.at(ws), 1).has(q).IsTrue()) = cl(q, sim.views(lv, mem).right.within(q, hq));
+        let ne: (q ≠ k.r.base + i.at(s.words)) = λ e => no(omega(e, i_ws));
         ne
     };
-    let after = sim.set_at(inr, g0.left, g2.left, i.val(s.words), v.val(s.words), misses);
-    let at_m: Sim(k, c, Sem(s.cur.update(i.val(s.words), λ _ => v.val(s.words)), s.views, s.slots, s.words), m.put(k.r, i.val(m.words), v.val(m.words)), ws) =
-        j(sym(sim.words), λ q _ => Sim(k, c, Sem(s.cur.update(i.val(s.words), λ _ => v.val(s.words)), s.views, s.slots, s.words), m.put(k.r, i.val(q), v.val(q)), ws), after);
+    let after = sim.set_at(inr, g0.left, g2.left, i.at(s.words), v.at(s.words), misses);
+    let at_m: Sim(k, c, Sem(s.cur.update(i.at(s.words), λ _ => v.at(s.words)), s.views, s.slots, s.words), m.put(k.r, i.at(m.words), v.at(m.words)), ws) =
+        j(sym(sim.words), λ q _ => Sim(k, c, Sem(s.cur.update(i.at(s.words), λ _ => v.at(s.words)), s.views, s.slots, s.words), m.put(k.r, i.at(q), v.at(q)), ws), after);
     let done = j(lic.proof.right, λ q _ => Sim(k, q.next, Set(i, v).eval1(k.w, s), Set(i, v).run2(k.w, k.r, m), ws), at_m);
     j(sym(k.mode.owner_of_owns(g0.left, k.r)), λ q _ => Sim(k, st.next, Set(i, v).eval1(k.w, s), Set(i, v).run2(k.w, q, m), ws), done)
 }
 
 // A narrowed reference lies in its window, read in the final words.
-theorem narrow_within(r: Ref, lo, n: Atom, ws: List<Nat>, lov, nv: Nat, lo_ws: lo.val(ws) = lov, n_ws: n.val(ws) = nv):
+theorem narrow_within(r: Ref, lo, n: Atom, ws: Env, lov, nv: Nat, lo_ws: lo.at(ws) = lov, n_ws: n.at(ws) = nv):
     (q: Nat) → Span(narrow(r, lov, nv).base, narrow(r, lov, nv).len).has(q).IsTrue() → Win(lo, n).hits(r, ws, q).IsTrue()
 {
     λ q h => {
-        let inside: (Span(r.base + lo.val(ws), n.val(ws)).has(q).IsTrue()) = omega(h, lo_ws, n_ws);
+        let inside: (Span(r.base + lo.at(ws), n.at(ws)).has(q).IsTrue()) = omega(h, lo_ws, n_ws);
         inside
     }
 }
 
 // A live view clear of a new view's window is apart from its reference,
 // both ways.
-theorem clear_apart(r: Ref, lo, n: Atom, ws: List<Nat>, lov, nv: Nat, lo_ws: lo.val(ws) = lov, n_ws: n.val(ws) = nv, rg: Region, v: Ref,
+theorem clear_apart(r: Ref, lo, n: Atom, ws: Env, lov, nv: Nat, lo_ws: lo.at(ws) = lov, n_ws: n.at(ws) = nv, rg: Region, v: Ref,
     cl: rg.Clear(Win(lo, n), r, ws), within: (p: Nat) → Span(v.base, v.len).has(p).IsTrue() → rg.hits(r, ws, p).IsTrue()): narrow(r, lov, nv).Apart(v) ∧ v.Apart(narrow(r, lov, nv))
 {
     let inwin = narrow_within(r, lo, n, ws, lov, nv, lo_ws, n_ws);
@@ -1741,8 +1998,8 @@ theorem clear_apart(r: Ref, lo, n: Atom, ws: List<Nat>, lov, nv: Nat, lo_ws: lo.
 
 // A new view of the window `lo..lo+n`: it reads the place's window, a write
 // view holds it at its slot, and it is apart from each live view it meets.
-theorem Sim::view_core({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>}, self sim: Sim(k, c, s, m, ws), owns: k.mode.owns() = True, t: Nat, md: Mode, lo, n: Atom, et: t = c.nviews,
-    lov, nv: Nat, lo_ws: lo.val(ws) = lov, n_ws: n.val(ws) = nv, mdok: md.writes() = True → k.mode.writes() = True,
+theorem Sim::view_core({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: Env}, self sim: Sim(k, c, s, m, ws), owns: k.mode.owns() = True, t: Nat, md: Mode, lo, n: Atom, et: t = c.nviews,
+    lov, nv: Nat, lo_ws: lo.at(ws) = lov, n_ws: n.at(ws) = nv, mdok: md.writes() = True → k.mode.writes() = True,
     clears: (lv: LView) → Mem(lv, c.live) → (md.writes() || lv.md.writes()) = True → lv.region.Clear(Win(lo, n), k.r, ws)):
     Sim(k, Places(Cons(LView(t, md, Win(lo, n)), c.live), c.nviews + 1, c.nw), s.open(window(s.cur, lov, nv), lov), Exec(m.file, m.views ++ [narrow(k.r, lov, nv)], m.words), ws)
 {
@@ -1753,33 +2010,33 @@ theorem Sim::view_core({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<N
         λ lv mem meets => clear_apart(k.r, lo, n, ws, lov, nv, lo_ws, n_ws, lv.region, ref_at(m.views, lv.t), clears(lv, mem, meets), sim.views(lv, mem).right.within))
 }
 
-theorem step_view(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), pre: Prefix(s.words, ws),
-    t: Nat, md: Mode, lo, n: Atom, st: Next, ok: View(t, md, lo, n).check(k.mode, k.sigs, c) = Some(st), hold: Owed::All(st.rs, k.pres, ws)):
+theorem step_view(k: Frame, c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws), pre: Prefix(s.words, ws),
+    t: Nat, md: Mode, lo, n: Atom, st: Next, ok: View(t, md, lo, n).check(k.mode, k.sigs, c) = Some(st), hold: Owed::All(st.rs, k.pres, s)):
     Sim(k, st.next, View(t, md, lo, n).eval1(k.w, s), View(t, md, lo, n).run2(k.w, k.mode.owner(k.r), m), ws)
 {
     let mk = λ (rs: List<Owed>) => Next(Places(Cons(LView(t, md, Win(lo, n)), c.live), c.nviews + 1, c.nw), rs);
-    let p = (k.mode.owns() && ((((!md.writes() || k.mode.writes()) && t.same(c.nviews)) && lo.bound(c.nw)) && n.bound(c.nw))).then_some(license_live(c.live, md, Win(lo, n)).map(mk), st, ok);
-    let lic = option_map_some(license_live(c.live, md, Win(lo, n)), mk, st, p.right);
-    let hold_rs: Owed::All(lic.witness, k.pres, ws) = j(sym(lic.proof.right), λ q _ => Owed::All(q.rs, k.pres, ws), hold);
+    let p = (k.mode.owns() && ((((!md.writes() || k.mode.writes()) && t.same(c.nviews)) && lo.bound(c.nw)) && n.bound(c.nw))).then_some(license_live(c.live, md, Win(lo, n), c.nw).map(mk), st, ok);
+    let lic = option_map_some(license_live(c.live, md, Win(lo, n), c.nw), mk, st, p.right);
+    let hold_rs: Owed::All(lic.witness, k.pres, s) = j(sym(lic.proof.right), λ q _ => Owed::All(q.rs, k.pres, s), hold);
     let g0 = Bool::and_true_parts(k.mode.owns(), (((!md.writes() || k.mode.writes()) && t.same(c.nviews)) && lo.bound(c.nw)) && n.bound(c.nw), p.left);
     let g1 = Bool::and_true_parts(((!md.writes() || k.mode.writes()) && t.same(c.nviews)) && lo.bound(c.nw), n.bound(c.nw), g0.right);
     let g2 = Bool::and_true_parts((!md.writes() || k.mode.writes()) && t.same(c.nviews), lo.bound(c.nw), g1.left);
     let g3 = Bool::and_true_parts(!md.writes() || k.mode.writes(), t.same(c.nviews), g2.left);
-    let core = sim.view_core(g0.left, t, md, lo, n, t.same_sound(c.nviews, g3.right), lo.val(s.words), n.val(s.words),
-        lo.val_stable(s.words, ws, pre, lo.bound_at(c, s, g2.right, sim.nw)), n.val_stable(s.words, ws, pre, n.bound_at(c, s, g1.right, sim.nw)),
+    let core = sim.view_core(g0.left, t, md, lo, n, t.same_sound(c.nviews, g3.right), lo.at(s.words), n.at(s.words),
+        lo.at_stable(s.words, ws, pre, lo.bound_at(c, s, g2.right, sim.nw)), n.at_stable(s.words, ws, pre, n.bound_at(c, s, g1.right, sim.nw)),
         λ w => Bool::implies_of(md.writes(), k.mode.writes(), g3.left, w),
-        λ lv mem meets => license_live_sound(c.live, md, Win(lo, n), k.pres, ws, k.r, lic.witness, lic.proof.left, hold_rs, lv, mem, meets));
-    let at_m: Sim(k, mk(lic.witness).next, s.open(window(s.cur, lo.val(s.words), n.val(s.words)), lo.val(s.words)),
-        Exec(m.file, m.views ++ [narrow(k.r, lo.val(m.words), n.val(m.words))], m.words), ws) =
-        j(sym(sim.words), λ q _ => Sim(k, mk(lic.witness).next, s.open(window(s.cur, lo.val(s.words), n.val(s.words)), lo.val(s.words)),
-            Exec(m.file, m.views ++ [narrow(k.r, lo.val(q), n.val(q))], m.words), ws), core);
+        λ lv mem meets => license_live_sound(c.live, md, Win(lo, n), c.nw, k.pres, s, ws, pre, sim.nw, k.r, lic.witness, lic.proof.left, hold_rs, lv, mem, meets));
+    let at_m: Sim(k, mk(lic.witness).next, s.open(window(s.cur, lo.at(s.words), n.at(s.words)), lo.at(s.words)),
+        Exec(m.file, m.views ++ [narrow(k.r, lo.at(m.words), n.at(m.words))], m.words), ws) =
+        j(sym(sim.words), λ q _ => Sim(k, mk(lic.witness).next, s.open(window(s.cur, lo.at(s.words), n.at(s.words)), lo.at(s.words)),
+            Exec(m.file, m.views ++ [narrow(k.r, lo.at(q), n.at(q))], m.words), ws), core);
     let done = j(lic.proof.right, λ q _ => Sim(k, q.next, View(t, md, lo, n).eval1(k.w, s), View(t, md, lo, n).run2(k.w, k.r, m), ws), at_m);
     j(sym(k.mode.owner_of_owns(g0.left, k.r)), λ q _ => Sim(k, st.next, View(t, md, lo, n).eval1(k.w, s), View(t, md, lo, n).run2(k.w, q, m), ws), done)
 }
 
 // A store through a live write view: the store in place, and the eager
 // write-back of the view's new value in the meaning.
-theorem put_core(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), inr: InRef(k.file0, k.r),
+theorem put_core(k: Frame, c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws), inr: InRef(k.file0, k.r),
     lv: LView, mem: Mem(lv, c.live), w: lv.md.writes() = True, iv, vv: Nat):
     Sim(k, c, s.back(lv.t, list_at(s.views, lv.t).update(iv, λ _ => vv)), m.put(ref_at(m.views, lv.t), iv, vv), ws)
 {
@@ -1794,7 +2051,7 @@ theorem put_core(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k
     sim.backed(lv, mem, w, val.update(iv, λ _ => vv), m.file.update(vr.b, λ xs => store(xs, vr, iv, vv)), call)
 }
 
-theorem step_put(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), inr: InRef(k.file0, k.r),
+theorem step_put(k: Frame, c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws), inr: InRef(k.file0, k.r),
     t: Nat, i, v: Atom, st: Next, ok: Put(t, i, v).check(k.mode, k.sigs, c) = Some(st)):
     Sim(k, st.next, Put(t, i, v).eval1(k.w, s), Put(t, i, v).run2(k.w, k.r, m), ws)
 {
@@ -1802,38 +2059,31 @@ theorem step_put(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k
     let g1 = Bool::and_true_parts(is_lent(c.live, t) && i.bound(c.nw), v.bound(c.nw), g.left);
     let g2 = Bool::and_true_parts(is_lent(c.live, t), i.bound(c.nw), g1.left);
     let found = is_lent_sound(c.live, t, g2.left);
-    let core = put_core(k, c, s, m, ws, sim, inr, found.witness, found.proof.left.left, found.proof.right, i.val(s.words), v.val(s.words));
-    let at_t = j(found.proof.left.right, λ u _ => Sim(k, c, s.back(u, list_at(s.views, u).update(i.val(s.words), λ _ => v.val(s.words))),
-        m.put(ref_at(m.views, u), i.val(s.words), v.val(s.words)), ws), core);
-    let at_m: Sim(k, c, s.back(t, list_at(s.views, t).update(i.val(s.words), λ _ => v.val(s.words))), m.put(ref_at(m.views, t), i.val(m.words), v.val(m.words)), ws) =
-        j(sym(sim.words), λ q _ => Sim(k, c, s.back(t, list_at(s.views, t).update(i.val(s.words), λ _ => v.val(s.words))), m.put(ref_at(m.views, t), i.val(q), v.val(q)), ws), at_t);
+    let core = put_core(k, c, s, m, ws, sim, inr, found.witness, found.proof.left.left, found.proof.right, i.at(s.words), v.at(s.words));
+    let at_t = j(found.proof.left.right, λ u _ => Sim(k, c, s.back(u, list_at(s.views, u).update(i.at(s.words), λ _ => v.at(s.words))),
+        m.put(ref_at(m.views, u), i.at(s.words), v.at(s.words)), ws), core);
+    let at_m: Sim(k, c, s.back(t, list_at(s.views, t).update(i.at(s.words), λ _ => v.at(s.words))), m.put(ref_at(m.views, t), i.at(m.words), v.at(m.words)), ws) =
+        j(sym(sim.words), λ q _ => Sim(k, c, s.back(t, list_at(s.views, t).update(i.at(s.words), λ _ => v.at(s.words))), m.put(ref_at(m.views, t), i.at(q), v.at(q)), ws), at_t);
     j(g.right, λ q _ => Sim(k, q.next, Put(t, i, v).eval1(k.w, s), Put(t, i, v).run2(k.w, k.r, m), ws), at_m)
 }
 
-// The callee's precondition at the call's arguments, from its residual.
-theorem pre_at(pres: Nat → List<Nat> → Type, g: Nat, args: List<Atom>, ws, big: List<Nat>, pre: Prefix(ws, big), b: Atom::all_bound(args, ws.len()) = True,
-    h: Pre(g, args).Holds(pres, big)): pres(g, vals(args, ws))
-{
-    j(Atom::vals_stable(args, ws, big, pre, b), λ q _ => pres(g, q), h)
-}
-
-theorem step_mut(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), pre: Prefix(s.words, ws), inr: InRef(k.file0, k.r),
+theorem step_mut(k: Frame, c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws), inr: InRef(k.file0, k.r),
     g, t: Nat, args: List<Atom>, z: Nat, safe_g: FnSafe(sig_at(k.sigs, g), k.pres(g), k.posts(g), k.w.mean(g), k.w.run(g)),
-    st: Next, ok: CallMut(g, t, args, z).check(k.mode, k.sigs, c) = Some(st), hold: Owed::All(st.rs, k.pres, ws)):
+    st: Next, ok: CallMut(g, t, args, z).check(k.mode, k.sigs, c) = Some(st), hold: Owed::All(st.rs, k.pres, s)):
     Sim(k, st.next, CallMut(g, t, args, z).eval1(k.w, s), CallMut(g, t, args, z).run2(k.w, k.mode.owner(k.r), m), ws)
 {
     let sg = sig_at(k.sigs, g);
     let gd = Next::of((((sg.mode.owns() && !sg.ret.is_view()) && is_lent(c.live, t)) && z.same(c.nw)) && (Atom::all_bound(args, c.nw) && args.len().same(sg.words)),
-        Next(c.said(), [Pre(g, args)]), st, ok);
+        Next(c.said(), [Pre(g, OfView(t), args)]), st, ok);
     let g1 = Bool::and_true_parts(((sg.mode.owns() && !sg.ret.is_view()) && is_lent(c.live, t)) && z.same(c.nw), Atom::all_bound(args, c.nw) && args.len().same(sg.words), gd.left);
     let g2 = Bool::and_true_parts((sg.mode.owns() && !sg.ret.is_view()) && is_lent(c.live, t), z.same(c.nw), g1.left);
     let g3 = Bool::and_true_parts(sg.mode.owns() && !sg.ret.is_view(), is_lent(c.live, t), g2.left);
     let g4 = Bool::and_true_parts(sg.mode.owns(), !sg.ret.is_view(), g3.left);
     let g9 = Bool::and_true_parts(Atom::all_bound(args, c.nw), args.len().same(sg.words), g1.right);
     let found = is_lent_sound(c.live, t, g3.right);
-    let hold2: Owed::All([Pre(g, args)], k.pres, ws) = j(sym(gd.right), λ q _ => Owed::All(q.rs, k.pres, ws), hold);
+    let hold2: Owed::All([Pre(g, OfView(t), args)], k.pres, s) = j(sym(gd.right), λ q _ => Owed::All(q.rs, k.pres, s), hold);
     let vs = vals(args, s.words);
-    let callee_pre: k.pres(g, vs) = pre_at(k.pres, g, args, s.words, ws, pre, j(sim.nw, λ q _ => Atom::all_bound(args, q) = True, g9.left), hold2.left);
+    let callee_pre: k.pres(g, list_at(s.views, found.witness.t), Nil, vs) = j(sym(found.proof.left.right), λ u _ => k.pres(g, list_at(s.views, u), Nil, vs), hold2.left);
     let nargs: (vs.len() = sg.words) = prelude::trans(vals_len(args, s.words), args.len().same_sound(sg.words, g9.right));
     let core = sim.called_core(inr, found.witness, found.proof.left.left, found.proof.right, g, vs, callee_pre, nargs, safe_g, g4.left);
     let at_t = j(found.proof.left.right, λ u _ => Sim(k, c.said(), s.called(u, k.w.mean(g, list_at(s.views, u), Nil, vs)), Exec::lent(m, k.w.run(g, m.file, ref_at(m.views, u), Nil, vs)), ws), core);
@@ -1842,35 +2092,54 @@ theorem step_mut(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k
     j(gd.right, λ q _ => Sim(k, q.next, CallMut(g, t, args, z).eval1(k.w, s), CallMut(g, t, args, z).run2(k.w, k.mode.owner(k.r), m), ws), at_m)
 }
 
-theorem step_view_call(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), pre: Prefix(s.words, ws), inr: InRef(k.file0, k.r),
+theorem step_get_call(k: Frame, c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws), inr: InRef(k.file0, k.r),
+    g: Nat, args: List<Atom>, z: Nat, safe_g: FnSafe(sig_at(k.sigs, g), k.pres(g), k.posts(g), k.w.mean(g), k.w.run(g)),
+    st: Next, ok: CallGet(g, args, z).check(k.mode, k.sigs, c) = Some(st), hold: Owed::All(st.rs, k.pres, s)):
+    Sim(k, st.next, CallGet(g, args, z).eval1(k.w, s), CallGet(g, args, z).run2(k.w, k.mode.owner(k.r), m), ws)
+{
+    let sg = sig_at(k.sigs, g);
+    let mk = λ (rs: List<Owed>) => Next(c.said(), rs ++ [Pre(g, OfPlace, args)]);
+    let p = (k.mode.owns() && (((!sg.mode.writes() && !sg.ret.is_view()) && z.same(c.nw)) && (Atom::all_bound(args, c.nw) && args.len().same(sg.words)))).then_some(
+        license_live(c.live, Reads, Whole, c.nw).map(mk), st, ok);
+    let lic = option_map_some(license_live(c.live, Reads, Whole, c.nw), mk, st, p.right);
+    let parts = Owed::all_append(lic.witness, k.pres, [Pre(g, OfPlace, args)], s, j(sym(lic.proof.right), λ q _ => Owed::All(q.rs, k.pres, s), hold));
+    let g0 = Bool::and_true_parts(k.mode.owns(), ((!sg.mode.writes() && !sg.ret.is_view()) && z.same(c.nw)) && (Atom::all_bound(args, c.nw) && args.len().same(sg.words)), p.left);
+    let g1 = Bool::and_true_parts((!sg.mode.writes() && !sg.ret.is_view()) && z.same(c.nw), Atom::all_bound(args, c.nw) && args.len().same(sg.words), g0.right);
+    let g2 = Bool::and_true_parts(!sg.mode.writes() && !sg.ret.is_view(), z.same(c.nw), g1.left);
+    let g4 = Bool::and_true_parts(!sg.mode.writes(), !sg.ret.is_view(), g2.left);
+    let g9 = Bool::and_true_parts(Atom::all_bound(args, c.nw), args.len().same(sg.words), g1.right);
+    let vs = vals(args, s.words);
+    let nargs: (vs.len() = sg.words) = prelude::trans(vals_len(args, s.words), args.len().same_sound(sg.words, g9.right));
+    let core = sim.got_core(inr, g, vs, parts.right.left, nargs, safe_g, false_of_not(sg.mode.writes(), g4.left), g0.left);
+    let at_m: Sim(k, c.said(), s.bind(k.w.mean(g, s.cur, Nil, vs).word), Exec::lent(m, k.w.run(g, m.file, k.r, Nil, vals(args, m.words))), ws) =
+        j(sym(sim.words), λ q _ => Sim(k, c.said(), s.bind(k.w.mean(g, s.cur, Nil, vs).word), Exec::lent(m, k.w.run(g, m.file, k.r, Nil, vals(args, q))), ws), core);
+    let done = j(lic.proof.right, λ q _ => Sim(k, q.next, CallGet(g, args, z).eval1(k.w, s), CallGet(g, args, z).run2(k.w, k.r, m), ws), at_m);
+    j(sym(k.mode.owner_of_owns(g0.left, k.r)), λ q _ => Sim(k, st.next, CallGet(g, args, z).eval1(k.w, s), CallGet(g, args, z).run2(k.w, q, m), ws), done)
+}
+
+theorem step_view_call(k: Frame, c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws), pre: Prefix(s.words, ws), inr: InRef(k.file0, k.r),
     g: Nat, args: List<Atom>, t: Nat, safe_g: FnSafe(sig_at(k.sigs, g), k.pres(g), k.posts(g), k.w.mean(g), k.w.run(g)),
-    st: Next, ok: CallView(g, args, t).check(k.mode, k.sigs, c) = Some(st), hold: Owed::All(st.rs, k.pres, ws)):
+    st: Next, ok: CallView(g, args, t).check(k.mode, k.sigs, c) = Some(st), hold: Owed::All(st.rs, k.pres, s)):
     Sim(k, st.next, CallView(g, args, t).eval1(k.w, s), CallView(g, args, t).run2(k.w, k.mode.owner(k.r), m), ws)
 {
     let sg = sig_at(k.sigs, g);
-    let mk = λ (rs: List<Owed>) => Next(Places(Cons(LView(t, Reads, sg.ret.region().subst(args)), c.live), c.nviews + 1, c.nw), rs ++ [Pre(g, args)]);
+    let mk = λ (rs: List<Owed>) => Next(Places(Cons(LView(t, Reads, sg.ret.region().subst(args)), c.live), c.nviews + 1, c.nw), rs ++ [Pre(g, OfPlace, args)]);
     let p = (k.mode.owns() && (((!sg.mode.writes() && sg.ret.is_view()) && t.same(c.nviews)) && (Atom::all_bound(args, c.nw) && args.len().same(sg.words)))).then_some(
-        license_live(c.live, Reads, Whole).map(mk), st, ok);
-    let lic = option_map_some(license_live(c.live, Reads, Whole), mk, st, p.right);
-    let parts = Owed::all_append(lic.witness, k.pres, [Pre(g, args)], ws, j(sym(lic.proof.right), λ q _ => Owed::All(q.rs, k.pres, ws), hold));
+        license_live(c.live, Reads, Whole, c.nw).map(mk), st, ok);
+    let lic = option_map_some(license_live(c.live, Reads, Whole, c.nw), mk, st, p.right);
+    let parts = Owed::all_append(lic.witness, k.pres, [Pre(g, OfPlace, args)], s, j(sym(lic.proof.right), λ q _ => Owed::All(q.rs, k.pres, s), hold));
     let g0 = Bool::and_true_parts(k.mode.owns(), ((!sg.mode.writes() && sg.ret.is_view()) && t.same(c.nviews)) && (Atom::all_bound(args, c.nw) && args.len().same(sg.words)), p.left);
     let g1 = Bool::and_true_parts((!sg.mode.writes() && sg.ret.is_view()) && t.same(c.nviews), Atom::all_bound(args, c.nw) && args.len().same(sg.words), g0.right);
     let g2 = Bool::and_true_parts(!sg.mode.writes() && sg.ret.is_view(), t.same(c.nviews), g1.left);
     let g4 = Bool::and_true_parts(!sg.mode.writes(), sg.ret.is_view(), g2.left);
     let g9 = Bool::and_true_parts(Atom::all_bound(args, c.nw), args.len().same(sg.words), g1.right);
     let vs = vals(args, s.words);
-    let callee_pre: k.pres(g, vs) = pre_at(k.pres, g, args, s.words, ws, pre, j(sim.nw, λ q _ => Atom::all_bound(args, q) = True, g9.left), parts.right.left);
     let nargs: (vs.len() = sg.words) = prelude::trans(vals_len(args, s.words), args.len().same_sound(sg.words, g9.right));
-    let none_lent: ((lv: LView) → Mem(lv, c.live) → lv.md.writes() = True → False) = λ lv mem w => {
-        let e = license_live_each(c.live, Reads, Whole, lic.witness, lic.proof.left, lv, mem);
-        let lic_none: (lv.license(Reads, Whole) = None) = j(sym(w), λ b _ => (match b { True => lv.region.license(Whole), False => Some(Nil<Owed>) }) = None, lv.region.license_whole());
-        absurd(prelude::trans(sym(e.proof), lic_none))
-    };
     let vs_ws: (vals(args, ws) = vs) = Atom::vals_stable(args, s.words, ws, pre, j(sim.nw, λ q _ => Atom::all_bound(args, q) = True, g9.left));
-    let place: ((p: Nat) → sg.ret.region().hits(k.r, vs, p).IsTrue() → sg.ret.region().subst(args).hits(k.r, ws, p).IsTrue()) =
-        λ p h => j(sym(prelude::trans(sg.ret.region().subst_hits(args, k.r, ws, p), cong_fn(λ (q: List<Nat>) => sg.ret.region().hits(k.r, q, p), vs_ws))), λ b _ => b.IsTrue(), h);
-    let core = sim.viewed_core(inr, g, vs, callee_pre, nargs, safe_g, false_of_not(sg.mode.writes(), g4.left), t, t.same_sound(c.nviews, g2.right), none_lent,
-        sg.ret.region().subst(args), place, g0.left);
+    let place: ((p: Nat) → sg.ret.region().hits(k.r, Env::start(vs), p).IsTrue() → sg.ret.region().subst(args).hits(k.r, ws, p).IsTrue()) =
+        λ p h => j(sym(prelude::trans(sg.ret.region().subst_hits(args, k.r, ws, p), cong_fn(λ (q: List<Nat>) => sg.ret.region().hits(k.r, Env::start(q), p), vs_ws))), λ b _ => b.IsTrue(), h);
+    let core = sim.viewed_core(inr, g, vs, parts.right.left, nargs, safe_g, false_of_not(sg.mode.writes(), g4.left), t, t.same_sound(c.nviews, g2.right),
+        license_whole_none(c.live, c.nw, lic.witness, lic.proof.left), sg.ret.region().subst(args), place, g0.left);
     let at_m: Sim(k, mk(lic.witness).next, s.open(k.w.mean(g, s.cur, Nil, vs).view, 0), Exec::viewed(m, k.r, k.w.run(g, m.file, k.r, Nil, vals(args, m.words))), ws) =
         j(sym(sim.words), λ q _ => Sim(k, mk(lic.witness).next, s.open(k.w.mean(g, s.cur, Nil, vs).view, 0), Exec::viewed(m, k.r, k.w.run(g, m.file, k.r, Nil, vals(args, q))), ws), core);
     let done = j(lic.proof.right, λ q _ => Sim(k, q.next, CallView(g, args, t).eval1(k.w, s), CallView(g, args, t).run2(k.w, k.r, m), ws), at_m);
@@ -1966,7 +2235,7 @@ theorem Lent::renarrowed({v: Ref}, {val: List<Nat>}, {slot: Nat}, {r: Ref}, {fil
 
 // A lent name: the slot the meaning stores names its reference, and it is a
 // live write view.
-theorem lent_slot(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), t: Nat, h: is_lent(c.live, t) = True):
+theorem lent_slot(k: Frame, c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws), t: Nat, h: is_lent(c.live, t) = True):
     (Slot(word(s.slots, t), list_at(s.views, t).len()).narrowed(k.r) = ref_at(m.views, t)) ∧ Exists<LView>(λ lv => (Mem(lv, c.live) ∧ (lv.t = t)) ∧ (lv.md.writes() = True))
 {
     let found = is_lent_sound(c.live, t, h);
@@ -1979,7 +2248,7 @@ theorem lent_slot(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(
 // The collection's references are what the callee is lent: as many as its
 // mode says, and pairwise apart, since each is a live write view and no two
 // are the same.
-theorem all_lendable(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), md: Mode, ts: List<Nat>, h: all_lent(c.live, ts) = True,
+theorem all_lendable(k: Frame, c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws), md: Mode, ts: List<Nat>, h: all_lent(c.live, ts) = True,
     count: ts.len() = md.elems()): Lendable(md, k.r, s.slots_of(ts))
 {
     let f = λ (t: Nat) => Slot(word(s.slots, t), list_at(s.views, t).len());
@@ -2004,7 +2273,7 @@ theorem all_lendable(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: S
 }
 
 // The references the run lends are the ones the meaning's slots name.
-theorem all_refs(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), ts: List<Nat>): all_lent(c.live, ts) = True →
+theorem all_refs(k: Frame, c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws), ts: List<Nat>): all_lent(c.live, ts) = True →
     s.slots_of(ts).map(λ sl => sl.narrowed(k.r)) = ts.map(λ t => ref_at(m.views, t))
 {
     match ts {
@@ -2020,7 +2289,7 @@ theorem all_refs(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k
 }
 
 // A position of the `e`-th lent reference is in a live write view's span.
-theorem all_hit(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), ts: List<Nat>, h: all_lent(c.live, ts) = True, e: Nat,
+theorem all_hit(k: Frame, c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws), ts: List<Nat>, h: all_lent(c.live, ts) = True, e: Nat,
     lt: e < s.slots_of(ts).len(), p: Nat, hit: Span(slot_at(s.slots_of(ts), e).narrowed(k.r).base, slot_at(s.slots_of(ts), e).narrowed(k.r).len).has(p).IsTrue()):
     Exists<LView>(λ lv => ((Mem(lv, c.live) ∧ (lv.t = word(ts, e))) ∧ (lv.md.writes() = True)) ∧ Span(ref_at(m.views, lv.t).base, ref_at(m.views, lv.t).len).has(p).IsTrue())
 {
@@ -2036,7 +2305,7 @@ theorem all_hit(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k,
 
 // A view the collection does not hold is apart from every reference in it,
 // so a callee that changed nothing outside them kept it.
-theorem all_keeps(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), ts: List<Nat>, h: all_lent(c.live, ts) = True, file2: List<List<Nat>>,
+theorem all_keeps(k: Frame, c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws), ts: List<Nat>, h: all_lent(c.live, ts) = True, file2: List<List<Nat>>,
     kept_out: (p: Nat) → ((e: Nat) → e < s.slots_of(ts).len() → ¬Span(slot_at(s.slots_of(ts), e).narrowed(k.r).base, slot_at(s.slots_of(ts), e).narrowed(k.r).len).has(p).IsTrue()) →
         list_at(file2, k.r.b).nth(p) = list_at(m.file, k.r.b).nth(p),
     lv: LView, mem: Mem(lv, c.live), out: member(lv.t, ts) = False): Keeps(m.file, file2, ref_at(m.views, lv.t))
@@ -2051,7 +2320,7 @@ theorem all_keeps(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(
 }
 
 // Outside a lending caller's own references, nothing in the collection.
-theorem all_kept_frame(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), ts: List<Nat>, h: all_lent(c.live, ts) = True,
+theorem all_kept_frame(k: Frame, c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws), ts: List<Nat>, h: all_lent(c.live, ts) = True,
     no: k.mode.owns() = False, p: Nat,
     outside: (t: Nat) → t < k.mode.elems() → ¬Span(ref_at(k.refs0, t).base, ref_at(k.refs0, t).len).has(p).IsTrue()):
     (e: Nat) → e < s.slots_of(ts).len() → ¬Span(slot_at(s.slots_of(ts), e).narrowed(k.r).base, slot_at(s.slots_of(ts), e).narrowed(k.r).len).has(p).IsTrue()
@@ -2071,8 +2340,8 @@ theorem kill_all_mem(live: List<LView>, ts: List<Nat>, lv: LView, mem: Mem(lv, k
 // A call that consumed the collection `ts`: the callee's promise at the
 // caller's own reference, standing for the erased owner, gives the owner's
 // value back, and its frame keeps every view the collection did not hold.
-theorem Sim::all_core({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>}, self sim: Sim(k, c, s, m, ws), inr: InRef(k.file0, k.r), writes: k.mode.writes() = True,
-    g: Nat, ts: List<Nat>, h: all_lent(c.live, ts) = True, vs: List<Nat>, callee_pre: k.pres(g, vs), nargs: vs.len() = sig_at(k.sigs, g).words,
+theorem Sim::all_core({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: Env}, self sim: Sim(k, c, s, m, ws), inr: InRef(k.file0, k.r), writes: k.mode.writes() = True,
+    g: Nat, ts: List<Nat>, h: all_lent(c.live, ts) = True, vs: List<Nat>, callee_pre: k.pres(g, s.cur, s.slots_of(ts), vs), nargs: vs.len() = sig_at(k.sigs, g).words,
     safe_g: FnSafe(sig_at(k.sigs, g), k.pres(g), k.posts(g), k.w.mean(g), k.w.run(g)), lends: sig_at(k.sigs, g).mode.owns() = False, count: ts.len() = sig_at(k.sigs, g).mode.elems()):
     Sim(k, Places(kill_all(c.live, ts), c.nviews, c.nw + 1), s.returned(k.w.mean(g, s.cur, s.slots_of(ts), vs)),
         Exec::lent(m, k.w.run(g, m.file, Ref(0, 0, 0), ts.map(λ t => ref_at(m.views, t)), vs)), ws)
@@ -2088,16 +2357,16 @@ theorem Sim::all_core({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Na
     let e_refs = all_refs(k, c, s, m, ws, sim, ts, h);
     let ro = k.w.run(g, m.file, Ref(0, 0, 0), ts.map(λ t => ref_at(m.views, t)), vs);
     let mo = k.w.mean(g, s.cur, lent, vs);
-    let safe0 = safe_g(m.file, r, lent, vs, inref, nargs, callee_pre, all_lendable(k, c, s, m, ws, sim, sg.mode, ts, h, count));
-    let safe1 = j(e_owner, λ q _ => Safe(sg.mode, sg.ret.region(), vs, k.posts(g, vs), m.file, r, lent, window(list_at(m.file, r.b), r.base, r.len),
+    let safe0 = safe_g(m.file, r, lent, vs, inref, nargs, j(sym(arg_is), λ q _ => k.pres(g, q, lent, vs), callee_pre), all_lendable(k, c, s, m, ws, sim, sg.mode, ts, h, count));
+    let safe1 = j(e_owner, λ q _ => Safe(sg.mode, sg.ret.region(), vs, k.posts(g, window(list_at(m.file, r.b), r.base, r.len), lent, vs), m.file, r, lent, window(list_at(m.file, r.b), r.base, r.len),
         k.w.mean(g, window(list_at(m.file, r.b), r.base, r.len), lent, vs), k.w.run(g, m.file, q, lent.map(λ sl => sl.narrowed(r)), vs)), safe0);
-    let safe2 = j(e_refs, λ q _ => Safe(sg.mode, sg.ret.region(), vs, k.posts(g, vs), m.file, r, lent, window(list_at(m.file, r.b), r.base, r.len),
+    let safe2 = j(e_refs, λ q _ => Safe(sg.mode, sg.ret.region(), vs, k.posts(g, window(list_at(m.file, r.b), r.base, r.len), lent, vs), m.file, r, lent, window(list_at(m.file, r.b), r.base, r.len),
         k.w.mean(g, window(list_at(m.file, r.b), r.base, r.len), lent, vs), k.w.run(g, m.file, Ref(0, 0, 0), q, vs)), safe1);
-    let safe: Safe(sg.mode, sg.ret.region(), vs, k.posts(g, vs), m.file, r, lent, s.cur, mo, ro) =
-        j(arg_is, λ q _ => Safe(sg.mode, sg.ret.region(), vs, k.posts(g, vs), m.file, r, lent, q, k.w.mean(g, q, lent, vs), ro), safe2);
+    let safe: Safe(sg.mode, sg.ret.region(), vs, k.posts(g, s.cur, lent, vs), m.file, r, lent, s.cur, mo, ro) =
+        j(arg_is, λ q _ => Safe(sg.mode, sg.ret.region(), vs, k.posts(g, q, lent, vs), m.file, r, lent, q, k.w.mean(g, q, lent, vs), ro), safe2);
     let keep = λ (lv: LView) (mem: Mem(lv, c.live)) (out: member(lv.t, ts) = False) => all_keeps(k, c, s, m, ws, sim, ts, h, ro.file, safe.kept_out(lends), lv, mem, out);
-    Sim(prelude::trans(cong_fn(λ (w: List<Nat>) => w ++ [ro.word], sim.words), cong_fn(λ (x: Nat) => s.words ++ [x], safe.answer)),
-        prelude::trans(cong_fn(λ (n: Nat) => n + 1, sim.nw), sym(len_snoc(s.words, mo.word))),
+    Sim(prelude::trans(cong_fn(λ (w: Env) => w.push(ro.word), sim.words), cong_fn(λ (x: Nat) => s.words.push(x), safe.answer)),
+        cong_fn(λ (n: Nat) => n + 1, sim.nw),
         sim.nviews, sim.nslots, sim.mviews, OnRef::chain(k.file0, m.file, ro.file, r, s.cur, mo.val, sim.on, safe.on),
         λ no => absurd(prelude::trans(sym(writes), no)),
         λ lv mem => {
@@ -2112,14 +2381,14 @@ theorem Sim::all_core({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Na
         λ no => ⟨sim.kept(no).left, λ p outside => prelude::trans(safe.kept_out(lends, p, all_kept_frame(k, c, s, m, ws, sim, ts, h, no, p, outside)), sim.kept(no).right(p, outside))⟩)
 }
 
-theorem step_all(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), pre: Prefix(s.words, ws), inr: InRef(k.file0, k.r),
+theorem step_all(k: Frame, c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws), inr: InRef(k.file0, k.r),
     g: Nat, ts: List<Nat>, args: List<Atom>, z: Nat, safe_g: FnSafe(sig_at(k.sigs, g), k.pres(g), k.posts(g), k.w.mean(g), k.w.run(g)),
-    st: Next, ok: CallAll(g, ts, args, z).check(k.mode, k.sigs, c) = Some(st), hold: Owed::All(st.rs, k.pres, ws)):
+    st: Next, ok: CallAll(g, ts, args, z).check(k.mode, k.sigs, c) = Some(st), hold: Owed::All(st.rs, k.pres, s)):
     Sim(k, st.next, CallAll(g, ts, args, z).eval1(k.w, s), CallAll(g, ts, args, z).run2(k.w, k.mode.owner(k.r), m), ws)
 {
     let sg = sig_at(k.sigs, g);
     let gd = Next::of((((((k.mode.writes() && sg.mode.elems().same(ts.len())) && !sg.mode.owns()) && !sg.ret.is_view()) && (all_lent(c.live, ts) && z.same(c.nw)))
-        && (Atom::all_bound(args, c.nw) && args.len().same(sg.words))), Next(Places(kill_all(c.live, ts), c.nviews, c.nw + 1), [Pre(g, args)]), st, ok);
+        && (Atom::all_bound(args, c.nw) && args.len().same(sg.words))), Next(Places(kill_all(c.live, ts), c.nviews, c.nw + 1), [Pre(g, OfLent(ts), args)]), st, ok);
     let g1 = Bool::and_true_parts((((k.mode.writes() && sg.mode.elems().same(ts.len())) && !sg.mode.owns()) && !sg.ret.is_view()) && (all_lent(c.live, ts) && z.same(c.nw)),
         Atom::all_bound(args, c.nw) && args.len().same(sg.words), gd.left);
     let g2 = Bool::and_true_parts(((k.mode.writes() && sg.mode.elems().same(ts.len())) && !sg.mode.owns()) && !sg.ret.is_view(), all_lent(c.live, ts) && z.same(c.nw), g1.left);
@@ -2128,9 +2397,9 @@ theorem step_all(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k
     let g5 = Bool::and_true_parts(k.mode.writes(), sg.mode.elems().same(ts.len()), g4.left);
     let g6 = Bool::and_true_parts(all_lent(c.live, ts), z.same(c.nw), g2.right);
     let g9 = Bool::and_true_parts(Atom::all_bound(args, c.nw), args.len().same(sg.words), g1.right);
-    let hold2: Owed::All([Pre(g, args)], k.pres, ws) = j(sym(gd.right), λ q _ => Owed::All(q.rs, k.pres, ws), hold);
+    let hold2: Owed::All([Pre(g, OfLent(ts), args)], k.pres, s) = j(sym(gd.right), λ q _ => Owed::All(q.rs, k.pres, s), hold);
     let vs = vals(args, s.words);
-    let callee_pre: k.pres(g, vs) = pre_at(k.pres, g, args, s.words, ws, pre, j(sim.nw, λ q _ => Atom::all_bound(args, q) = True, g9.left), hold2.left);
+    let callee_pre: k.pres(g, s.cur, s.slots_of(ts), vs) = hold2.left;
     let nargs: (vs.len() = sg.words) = prelude::trans(vals_len(args, s.words), args.len().same_sound(sg.words, g9.right));
     let core = sim.all_core(inr, g5.left, g, ts, g6.left, vs, callee_pre, nargs, safe_g, false_of_not(sg.mode.owns(), g4.right), sym(sg.mode.elems().same_sound(ts.len(), g5.right)));
     let at_m: Sim(k, Places(kill_all(c.live, ts), c.nviews, c.nw + 1), s.returned(k.w.mean(g, s.cur, s.slots_of(ts), vs)),
@@ -2142,26 +2411,6 @@ theorem step_all(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k
 
 // ---------------------------------------------------------------------------
 // The join
-
-theorem Owed::all_under(rs: List<Owed>, cd: Cond, yes: Bool, pres: Nat → List<Nat> → Type, ws: List<Nat>, h: cd.test(ws) = yes):
-    Owed::All(under(cd, yes, rs), pres, ws) → Owed::All(rs, pres, ws)
-{
-    match rs {
-        Nil => λ _ => trivial,
-        Cons(_, rest) => λ a => ⟨a.left(h), Owed::all_under(rest, cd, yes, pres, ws, h, a.right)⟩,
-    }
-}
-
-// A test on words bound before it reads alike in the final words.
-theorem Cond::test_stable(self cd: Cond, ws, big: List<Nat>, pre: Prefix(ws, big), b: cd.bound(ws.len()) = True): cd.test(big) = cd.test(ws) {
-    (match cd as λ x => x.bound(ws.len()) = True → x.test(big) = x.test(ws) {
-        Le(a1, b1) => λ h => {
-            let p = Bool::and_true_parts(a1.bound(ws.len()), b1.bound(ws.len()), h);
-            prelude::trans(cong_fn(λ (x: Nat) => x.leb(b1.val(big)), a1.val_stable(ws, big, pre, p.left)),
-                cong_fn(λ (y: Nat) => a1.val(ws).leb(y), b1.val_stable(ws, big, pre, p.right)))
-        },
-    })(b)
-}
 
 theorem Mode::alike_sound(self a: Mode, b: Mode, h: a.alike(b) = True): a = b {
     (match a as λ x => x.alike(b) = True → x = b {
@@ -2191,7 +2440,7 @@ theorem Region::alike_sound(self a: Region, b: Region, h: a.alike(b) = True): a 
 }
 
 // A region that covers another: every position of the second.
-fn Coarser(a, b: Region) → Type { (r: Ref) → (ws: List<Nat>) → (p: Nat) → b.hits(r, ws, p).IsTrue() → a.hits(r, ws, p).IsTrue() }
+fn Coarser(a, b: Region) → Type { (r: Ref) → (ws: Env) → (p: Nat) → b.hits(r, ws, p).IsTrue() → a.hits(r, ws, p).IsTrue() }
 
 theorem Region::coarsen_left(self a: Region, b: Region): Coarser(a.coarsen(b), a) {
     (match a.alike(b) as λ bb => a.alike(b) = bb → Coarser(match bb { True => a, False => Both(a, b) }, a) {
@@ -2261,28 +2510,24 @@ record Joins(c, c2: Places) {
     cov: (lv: LView) → Mem(lv, c2.live) → Covers(c.live, lv),
 }
 
-theorem check_join_sound(cd: Cond, sa, sb, sj: Next, ok: check_join(cd, sa, sb) = Some(sj)):
-    Joins(sa.next, sj.next) ∧ (Joins(sb.next, sj.next) ∧ (sj.rs = under(cd, True, sa.rs) ++ under(cd, False, sb.rs)))
-{
-    let p = option_map_some(join(sa.next, sb.next), λ cj => Next(cj, under(cd, True, sa.rs) ++ under(cd, False, sb.rs)), sj, ok);
-    let g = Bool::then_some(sa.next.nviews.same(sb.next.nviews) && sa.next.nw.same(sb.next.nw), Some(Places(meet(sa.next.live, sb.next.live), sa.next.nviews, sa.next.nw)), p.witness, p.proof.left);
-    let gg = Bool::and_true_parts(sa.next.nviews.same(sb.next.nviews), sa.next.nw.same(sb.next.nw), g.left);
-    let ecj: (Places(meet(sa.next.live, sb.next.live), sa.next.nviews, sa.next.nw) = p.witness) = Option::some_inj(Places(meet(sa.next.live, sb.next.live), sa.next.nviews, sa.next.nw), p.witness, g.right);
-    let ja: Joins(sa.next, Places(meet(sa.next.live, sb.next.live), sa.next.nviews, sa.next.nw)) = Joins(refl, refl, λ lv mem => meet_covers(sa.next.live, sb.next.live, lv, mem).left);
-    let jb: Joins(sb.next, Places(meet(sa.next.live, sb.next.live), sa.next.nviews, sa.next.nw)) =
-        Joins(sa.next.nviews.same_sound(sb.next.nviews, gg.left), sa.next.nw.same_sound(sb.next.nw, gg.right), λ lv mem => meet_covers(sa.next.live, sb.next.live, lv, mem).right);
-    let both: Joins(sa.next, p.witness) ∧ Joins(sb.next, p.witness) = j(ecj, λ q _ => Joins(sa.next, q) ∧ Joins(sb.next, q), ⟨ja, jb⟩);
-    j(p.proof.right, λ q _ => Joins(sa.next, q.next) ∧ (Joins(sb.next, q.next) ∧ (q.rs = under(cd, True, sa.rs) ++ under(cd, False, sb.rs))), ⟨both.left, ⟨both.right, refl⟩⟩)
+theorem join_sound(ca, cb, cj: Places, ok: join(ca, cb) = Some(cj)): Joins(ca, cj) ∧ Joins(cb, cj) {
+    let g = Bool::then_some(ca.nviews.same(cb.nviews) && ca.nw.same(cb.nw), Some(Places(meet(ca.live, cb.live), ca.nviews, ca.nw)), cj, ok);
+    let gg = Bool::and_true_parts(ca.nviews.same(cb.nviews), ca.nw.same(cb.nw), g.left);
+    let ecj: (Places(meet(ca.live, cb.live), ca.nviews, ca.nw) = cj) = Option::some_inj(Places(meet(ca.live, cb.live), ca.nviews, ca.nw), cj, g.right);
+    let ja: Joins(ca, Places(meet(ca.live, cb.live), ca.nviews, ca.nw)) = Joins(refl, refl, λ lv mem => meet_covers(ca.live, cb.live, lv, mem).left);
+    let jb: Joins(cb, Places(meet(ca.live, cb.live), ca.nviews, ca.nw)) =
+        Joins(ca.nviews.same_sound(cb.nviews, gg.left), ca.nw.same_sound(cb.nw, gg.right), λ lv mem => meet_covers(ca.live, cb.live, lv, mem).right);
+    j(ecj, λ q _ => Joins(ca, q) ∧ Joins(cb, q), ⟨ja, jb⟩)
 }
 
 // A view whose region covers the one it had reads the same.
-theorem ViewOk::coarsened({rg: Region}, {v: Ref}, {val: List<Nat>}, {r: Ref}, {file: List<List<Nat>>}, {ws: List<Nat>}, self o: ViewOk(rg, v, val, r, file, ws),
+theorem ViewOk::coarsened({rg: Region}, {v: Ref}, {val: List<Nat>}, {r: Ref}, {file: List<List<Nat>>}, {ws: Env}, self o: ViewOk(rg, v, val, r, file, ws),
     rg2: Region, c: Coarser(rg2, rg)): ViewOk(rg2, v, val, r, file, ws)
 {
     ViewOk(o.at_b, λ p h => c(r, ws, p, o.within(p, h)), o.reads)
 }
 
-theorem weaken_view(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), c2: Places, jn: Joins(c, c2), lv: LView, mem: Mem(lv, c2.live)):
+theorem weaken_view(k: Frame, c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws), c2: Places, jn: Joins(c, c2), lv: LView, mem: Mem(lv, c2.live)):
     (lv.t < c2.nviews) ∧ ViewOk(lv.region, ref_at(m.views, lv.t), list_at(s.views, lv.t), k.r, m.file, ws)
 {
     let cv = jn.cov(lv, mem);
@@ -2292,7 +2537,7 @@ theorem weaken_view(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Si
     ⟨omega(o.left, cv.t, jn.nviews), at.coarsened(lv.region, cv.coarser)⟩
 }
 
-theorem weaken_lent(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), c2: Places, jn: Joins(c, c2), lv: LView, mem: Mem(lv, c2.live),
+theorem weaken_lent(k: Frame, c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws), c2: Places, jn: Joins(c, c2), lv: LView, mem: Mem(lv, c2.live),
     w: lv.md.writes() = True): (k.mode.writes() = True) ∧ Lent(ref_at(m.views, lv.t), list_at(s.views, lv.t), word(s.slots, lv.t), k.r, m.file)
 {
     let cv = jn.cov(lv, mem);
@@ -2300,7 +2545,7 @@ theorem weaken_lent(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Si
     j(cv.t, λ u _ => (k.mode.writes() = True) ∧ Lent(ref_at(m.views, u), list_at(s.views, u), word(s.slots, u), k.r, m.file), sim.lent(cv.from, cv.mem, w2))
 }
 
-theorem weaken_excl(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), c2: Places, jn: Joins(c, c2), a, b: LView,
+theorem weaken_excl(k: Frame, c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws), c2: Places, jn: Joins(c, c2), a, b: LView,
     ma: Mem(a, c2.live), mb: Mem(b, c2.live), w: a.md.writes() = True, ne: a.t ≠ b.t): ref_at(m.views, a.t).Apart(ref_at(m.views, b.t))
 {
     let ca = jn.cov(a, ma);
@@ -2313,7 +2558,7 @@ theorem weaken_excl(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Si
 
 // The invariant at an arm's places gives it at the join's: the meet only
 // drops views, and a coarsened region still holds its view.
-theorem Sim::weaken({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>}, self sim: Sim(k, c, s, m, ws), c2: Places, jn: Joins(c, c2)): Sim(k, c2, s, m, ws) {
+theorem Sim::weaken({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: Env}, self sim: Sim(k, c, s, m, ws), c2: Places, jn: Joins(c, c2)): Sim(k, c2, s, m, ws) {
     Sim(sim.words, prelude::trans(jn.nw, sim.nw), prelude::trans(sim.nviews, sym(jn.nviews)), prelude::trans(sim.nslots, sym(jn.nviews)), prelude::trans(sim.mviews, sym(jn.nviews)),
         sim.on, sim.fixed,
         λ lv mem => weaken_view(k, c, s, m, ws, sim, c2, jn, lv, mem),
@@ -2327,7 +2572,7 @@ theorem Sim::weaken({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>
 
 // The functions a body calls.
 fn Stmt::calls(self o: Stmt, g: Nat) → Bool {
-    match o { CallMut(h, _, _, _) => h.same(g), CallView(h, _, _) => h.same(g), CallAll(h, _, _, _) => h.same(g), _ => False }
+    match o { CallMut(h, _, _, _) => h.same(g), CallGet(h, _, _) => h.same(g), CallView(h, _, _) => h.same(g), CallAll(h, _, _, _) => h.same(g), _ => False }
 }
 
 fn calls(ops: Body, g: Nat) → Bool {
@@ -2344,8 +2589,10 @@ fn Callees(k: Frame, o: Stmt) → Type { (g: Nat) → o.calls(g) = True → FnSa
 // What a callee promises, for every function the body calls.
 fn BodyCallees(k: Frame, ops: Body) → Type { (g: Nat) → calls(ops, g) = True → FnSafe(sig_at(k.sigs, g), k.pres(g), k.posts(g), k.w.mean(g), k.w.run(g)) }
 
-theorem Stmt::step(self o: Stmt, k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), pre: Prefix(s.words, ws), inr: InRef(k.file0, k.r),
-    callees: Callees(k, o), st: Next, ok: o.check(k.mode, k.sigs, c) = Some(st), hold: Owed::All(st.rs, k.pres, ws)):
+// A statement keeps the invariant, its residuals held at the state it
+// reads.
+theorem Stmt::step(self o: Stmt, k: Frame, c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws), pre: Prefix(s.words, ws), inr: InRef(k.file0, k.r),
+    callees: Callees(k, o), st: Next, ok: o.check(k.mode, k.sigs, c) = Some(st), hold: Owed::All(st.rs, k.pres, s)):
     Sim(k, st.next, o.eval1(k.w, s), o.run2(k.w, k.mode.owner(k.r), m), ws)
 {
     (match o as λ e => Callees(k, e) → e.check(k.mode, k.sigs, c) = Some(st) → Sim(k, st.next, e.eval1(k.w, s), e.run2(k.w, k.mode.owner(k.r), m), ws) {
@@ -2355,32 +2602,66 @@ theorem Stmt::step(self o: Stmt, k: Frame, c: Places, s: Sem, m: Exec, ws: List<
         Read(z, t, i) => λ _ ok2 => step_read(k, c, s, m, ws, sim, z, t, i, st, ok2),
         Put(t, i, v) => λ _ ok2 => step_put(k, c, s, m, ws, sim, inr, t, i, v, st, ok2),
         Die(t) => λ _ ok2 => step_die(k, c, s, m, ws, sim, t, st, ok2),
-        CallMut(g, t, args, z) => λ cl ok2 => step_mut(k, c, s, m, ws, sim, pre, inr, g, t, args, z, cl(g, g.same_self()), st, ok2, hold),
+        CallMut(g, t, args, z) => λ cl ok2 => step_mut(k, c, s, m, ws, sim, inr, g, t, args, z, cl(g, g.same_self()), st, ok2, hold),
+        CallGet(g, args, z) => λ cl ok2 => step_get_call(k, c, s, m, ws, sim, inr, g, args, z, cl(g, g.same_self()), st, ok2, hold),
         CallView(g, args, t) => λ cl ok2 => step_view_call(k, c, s, m, ws, sim, pre, inr, g, args, t, cl(g, g.same_self()), st, ok2, hold),
-        CallAll(g, ts, args, z) => λ cl ok2 => step_all(k, c, s, m, ws, sim, pre, inr, g, ts, args, z, cl(g, g.same_self()), st, ok2, hold),
+        CallAll(g, ts, args, z) => λ cl ok2 => step_all(k, c, s, m, ws, sim, inr, g, ts, args, z, cl(g, g.same_self()), st, ok2, hold),
     })(callees, ok)
 }
 
 theorem Stmt::eval1_grows(self o: Stmt, w: World, s: Sem): Prefix(s.words, o.eval1(w, s).words) {
     match o {
         Set(_, _) => Prefix::same(s.words),
-        Get(_, i) => Prefix::snoc(s.words, word(s.cur, i.val(s.words))),
+        Get(_, i) => Prefix::push(s.words, word(s.cur, i.at(s.words))),
         View(_, _, _, _) => Prefix::same(s.words),
-        Read(_, t, i) => Prefix::snoc(s.words, word(list_at(s.views, t), i.val(s.words))),
+        Read(_, t, i) => Prefix::push(s.words, word(list_at(s.views, t), i.at(s.words))),
         Put(_, _, _) => Prefix::same(s.words),
         Die(_) => Prefix::same(s.words),
-        CallMut(g, t, args, _) => Prefix::snoc(s.words, w.mean(g, list_at(s.views, t), Nil, vals(args, s.words)).word),
+        CallMut(g, t, args, _) => Prefix::push(s.words, w.mean(g, list_at(s.views, t), Nil, vals(args, s.words)).word),
+        CallGet(g, args, _) => Prefix::push(s.words, w.mean(g, s.cur, Nil, vals(args, s.words)).word),
         CallView(_, _, _) => Prefix::same(s.words),
-        CallAll(g, ts, args, _) => Prefix::snoc(s.words, w.mean(g, s.cur, s.slots_of(ts), vals(args, s.words)).word),
+        CallAll(g, ts, args, _) => Prefix::push(s.words, w.mean(g, s.cur, s.slots_of(ts), vals(args, s.words)).word),
+    }
+}
+
+theorem convoy_true<A>(c: Bool, y, n: A, h: c = True): convoy(c, y, n) = y { j(sym(h), λ b _ => convoy(b, y, n) = y, refl) }
+
+theorem convoy_false<A>(c: Bool, y, n: A, h: c = False): convoy(c, y, n) = n { j(sym(h), λ b _ => convoy(b, y, n) = n, refl) }
+
+// What follows a body is handed the state the body ends in.
+theorem mean_then_is(w: World, ops: Body): (R: Type) → (s: Sem) → (k: Sem → R) → mean_then(w, ops, s, k) = k(mean_body(w, ops, s)) {
+    match ops {
+        End => λ R s k => refl,
+        Do(o, rest) => λ R s k => mean_then_is(w, rest, R, o.eval1(w, s), k),
+        If(cd, a, b, rest) => λ R s k => match q: cd.test(s.words) as λ _ => mean_then(w, If(cd, a, b, rest), s, k) = k(mean_body(w, If(cd, a, b, rest), s)) {
+            True => {
+                let l1 = convoy_true(cd.test(s.words), mean_then(w, a, s, λ x => mean_then(w, rest, x, k)), mean_then(w, b, s, λ x => mean_then(w, rest, x, k)), q);
+                let l2 = mean_then_is(w, a, R, s, λ x => mean_then(w, rest, x, k));
+                let l3 = mean_then_is(w, rest, R, mean_body(w, a, s), k);
+                let r1 = convoy_true(cd.test(s.words), mean_then(w, a, s, λ x => mean_body(w, rest, x)), mean_then(w, b, s, λ x => mean_body(w, rest, x)), q);
+                let r2 = mean_then_is(w, a, Sem, s, λ x => mean_body(w, rest, x));
+                prelude::trans(l1, prelude::trans(l2, prelude::trans(l3, sym(cong_fn(k, prelude::trans(r1, r2))))))
+            },
+            False => {
+                let l1 = convoy_false(cd.test(s.words), mean_then(w, a, s, λ x => mean_then(w, rest, x, k)), mean_then(w, b, s, λ x => mean_then(w, rest, x, k)), q);
+                let l2 = mean_then_is(w, b, R, s, λ x => mean_then(w, rest, x, k));
+                let l3 = mean_then_is(w, rest, R, mean_body(w, b, s), k);
+                let r1 = convoy_false(cd.test(s.words), mean_then(w, a, s, λ x => mean_body(w, rest, x)), mean_then(w, b, s, λ x => mean_body(w, rest, x)), q);
+                let r2 = mean_then_is(w, b, Sem, s, λ x => mean_body(w, rest, x));
+                prelude::trans(l1, prelude::trans(l2, prelude::trans(l3, sym(cong_fn(k, prelude::trans(r1, r2))))))
+            },
+        },
     }
 }
 
 theorem mean_if_true(w: World, cd: Cond, a, b, rest: Body, s: Sem, h: cd.test(s.words) = True): mean_body(w, If(cd, a, b, rest), s) = mean_body(w, rest, mean_body(w, a, s)) {
-    j(sym(h), λ x _ => mean_body(w, rest, match x { True => mean_body(w, a, s), False => mean_body(w, b, s) }) = mean_body(w, rest, mean_body(w, a, s)), refl)
+    prelude::trans(convoy_true(cd.test(s.words), mean_then(w, a, s, λ x => mean_body(w, rest, x)), mean_then(w, b, s, λ x => mean_body(w, rest, x)), h),
+        mean_then_is(w, a, Sem, s, λ x => mean_body(w, rest, x)))
 }
 
 theorem mean_if_false(w: World, cd: Cond, a, b, rest: Body, s: Sem, h: cd.test(s.words) = False): mean_body(w, If(cd, a, b, rest), s) = mean_body(w, rest, mean_body(w, b, s)) {
-    j(sym(h), λ x _ => mean_body(w, rest, match x { True => mean_body(w, a, s), False => mean_body(w, b, s) }) = mean_body(w, rest, mean_body(w, b, s)), refl)
+    prelude::trans(convoy_false(cd.test(s.words), mean_then(w, a, s, λ x => mean_body(w, rest, x)), mean_then(w, b, s, λ x => mean_body(w, rest, x)), h),
+        mean_then_is(w, b, Sem, s, λ x => mean_body(w, rest, x)))
 }
 
 theorem run_if_true(w: World, r: Ref, cd: Cond, a, b, rest: Body, m: Exec, h: cd.test(m.words) = True): run_body(w, r, If(cd, a, b, rest), m) = run_body(w, r, rest, run_body(w, r, a, m)) {
@@ -2421,100 +2702,107 @@ theorem calls_if_rest(cd: Cond, a, b, rest: Body, g: Nat, h: calls(rest, g) = Tr
 }
 
 // What a body promises: from the invariant, in any words the meaning's
-// words reach, a verdict and its residuals give the invariant at the
-// checker's final places.
-fn BodyOk(k: Frame, ops: Body) → Type {
-    (c: Places) → (s: Sem) → (m: Exec) → (ws: List<Nat>) → Prefix(mean_body(k.w, ops, s).words, ws) → Sim(k, c, s, m, ws) →
-    (st: Next) → check_body(ops, k.mode, k.sigs, c) = Some(st) → Owed::All(st.rs, k.pres, ws) → BodyCallees(k, ops) →
-    Sim(k, st.next, mean_body(k.w, ops, s), run_body(k.w, k.mode.owner(k.r), ops, m), ws)
-}
-
-// A step, then the rest: each answered.
-theorem Next::then_some(h: Option<Next>, kf: Places → Option<Next>, st: Next, ok: Next::then(h, kf) = Some(st)):
-    Exists<Next>(λ a => (h = Some(a)) ∧ Exists<Next>(λ b => (kf(a.next) = Some(b)) ∧ (st = Next(b.next, a.rs ++ b.rs))))
-{
-    let p = Option::and_then_some(h, λ a => kf(a.next).map(λ sr => Next(sr.next, a.rs ++ sr.rs)), st, ok);
-    let q = option_map_some(kf(p.witness.next), λ sr => Next(sr.next, p.witness.rs ++ sr.rs), st, p.proof.right);
-    Exists(p.witness, ⟨p.proof.left, Exists(q.witness, ⟨q.proof.left, sym(q.proof.right)⟩)⟩)
+// words reach, a verdict and what it owes along the meaning give the
+// invariant at the checker's final places, and what follows the body.
+fn BodyOk(k: Frame, ops: Body) → Type<1> {
+    (c: Places) → (s: Sem) → (m: Exec) → (ws: Env) → Prefix(mean_body(k.w, ops, s).words, ws) → Sim(k, c, s, m, ws) →
+    (d: Done) → check_body(ops, k.mode, k.sigs, c) = Some(d) → (after: Sem → Type) → d.owes.Holds(k.w, k.pres, ops, s, after) → BodyCallees(k, ops) →
+    Sim(k, d.next, mean_body(k.w, ops, s), run_body(k.w, k.mode.owner(k.r), ops, m), ws) ∧ after(mean_body(k.w, ops, s))
 }
 
 theorem end_ok(k: Frame): BodyOk(k, End) {
-    λ c s m ws pre sim st ok hold callees => j(Option::some_inj(Next(c, Nil), st, ok), λ q _ => Sim(k, q.next, s, m, ws), sim)
+    λ c s m ws pre sim d ok after hold callees => ⟨j(Option::some_inj(Done(c, OEnd), d, ok), λ q _ => Sim(k, q.next, s, m, ws), sim), hold⟩
 }
 
 theorem do_ok(k: Frame, inr: InRef(k.file0, k.r), o: Stmt, rest: Body, ih: BodyOk(k, rest)): BodyOk(k, Do(o, rest)) {
-    λ c s m ws pre sim st ok hold callees => {
-        let sp = Next::then_some(o.check(k.mode, k.sigs, c), λ c2 => check_body(rest, k.mode, k.sigs, c2), st, ok);
-        let bx = sp.proof.right;
-        let parts = Owed::all_append(sp.witness.rs, k.pres, bx.witness.rs, ws, j(bx.proof.right, λ q _ => Owed::All(q.rs, k.pres, ws), hold));
+    λ c s m ws pre sim d ok after hold callees => {
+        let sp = Option::and_then_some(o.check(k.mode, k.sigs, c), λ st => check_body(rest, k.mode, k.sigs, st.next).map(λ dr => Done(dr.next, ODo(st.rs, dr.owes))), d, ok);
+        let bx = option_map_some(check_body(rest, k.mode, k.sigs, sp.witness.next), λ dr => Done(dr.next, ODo(sp.witness.rs, dr.owes)), d, sp.proof.right);
+        let held: Owed::Then(sp.witness.rs, k.pres, s, bx.witness.owes.Holds(k.w, k.pres, rest, o.eval1(k.w, s), after)) =
+            j(sym(bx.proof.right), λ q _ => q.owes.Holds(k.w, k.pres, Do(o, rest), s, after), hold);
+        let parts = Owed::then_parts(sp.witness.rs, k.pres, s, bx.witness.owes.Holds(k.w, k.pres, rest, o.eval1(k.w, s), after), held);
         let pre1: Prefix(s.words, ws) = Prefix::chain(s.words, mean_body(k.w, Do(o, rest), s).words, ws, mean_body_grows(k.w, Do(o, rest), s), pre);
         let sim2 = o.step(k, c, s, m, ws, sim, pre1, inr, λ g h => callees(g, calls_head(o, rest, g, h)), sp.witness, sp.proof.left, parts.left);
-        let fin = ih(sp.witness.next, o.eval1(k.w, s), o.run2(k.w, k.mode.owner(k.r), m), ws, pre, sim2, bx.witness, bx.proof.left, parts.right, λ g h => callees(g, calls_rest(o, rest, g, h)));
-        j(sym(bx.proof.right), λ q _ => Sim(k, q.next, mean_body(k.w, rest, o.eval1(k.w, s)), run_body(k.w, k.mode.owner(k.r), rest, o.run2(k.w, k.mode.owner(k.r), m)), ws), fin)
+        let fin = ih(sp.witness.next, o.eval1(k.w, s), o.run2(k.w, k.mode.owner(k.r), m), ws, pre, sim2, bx.witness, bx.proof.left, after, parts.right,
+            λ g h => callees(g, calls_rest(o, rest, g, h)));
+        j(bx.proof.right, λ q _ => Sim(k, q.next, mean_body(k.w, rest, o.eval1(k.w, s)), run_body(k.w, k.mode.owner(k.r), rest, o.run2(k.w, k.mode.owner(k.r), m)), ws) ∧
+            after(mean_body(k.w, rest, o.eval1(k.w, s))), fin)
     }
 }
 
-// What a branch's verdict says: its test is bound, both arms check, and
-// they join.
-theorem if_head(cd: Cond, a, b: Body, mode: Mode, sigs: List<Sig>, c: Places, sj: Next,
-    ok: cd.bound(c.nw).then(check_body(a, mode, sigs, c).and_then(λ sa => check_body(b, mode, sigs, c).and_then(λ sb => check_join(cd, sa, sb)))) = Some(sj)):
-    (cd.bound(c.nw) = True) ∧ Exists<Next>(λ sa => (check_body(a, mode, sigs, c) = Some(sa)) ∧ Exists<Next>(λ sb => (check_body(b, mode, sigs, c) = Some(sb)) ∧ (check_join(cd, sa, sb) = Some(sj))))
+// What a branch's verdict says: both arms check, they join, the rest
+// checks from the join, and the verdict is the three trees.
+record IfVerdict(a, b, rest: Body, mode: Mode, sigs: List<Sig>, c: Places, d: Done) {
+    da: Done,
+    oka: check_body(a, mode, sigs, c) = Some(da),
+    db: Done,
+    okb: check_body(b, mode, sigs, c) = Some(db),
+    cj: Places,
+    okj: join(da.next, db.next) = Some(cj),
+    dr: Done,
+    okr: check_body(rest, mode, sigs, cj) = Some(dr),
+    is: Done(dr.next, OIf(da.owes, db.owes, dr.owes)) = d,
+}
+
+theorem if_verdict(cd: Cond, a, b, rest: Body, mode: Mode, sigs: List<Sig>, c: Places, d: Done, ok: check_body(If(cd, a, b, rest), mode, sigs, c) = Some(d)):
+    IfVerdict(a, b, rest, mode, sigs, c, d)
 {
-    let p = cd.bound(c.nw).then_some(check_body(a, mode, sigs, c).and_then(λ sa => check_body(b, mode, sigs, c).and_then(λ sb => check_join(cd, sa, sb))), sj, ok);
-    let qa = Option::and_then_some(check_body(a, mode, sigs, c), λ sa => check_body(b, mode, sigs, c).and_then(λ sb => check_join(cd, sa, sb)), sj, p.right);
-    let qb = Option::and_then_some(check_body(b, mode, sigs, c), λ sb => check_join(cd, qa.witness, sb), sj, qa.proof.right);
-    ⟨p.left, Exists(qa.witness, ⟨qa.proof.left, Exists(qb.witness, ⟨qb.proof.left, qb.proof.right⟩)⟩)⟩
+    let qa = Option::and_then_some(check_body(a, mode, sigs, c), λ da => check_body(b, mode, sigs, c).and_then(λ db =>
+        join(da.next, db.next).and_then(λ cj => check_body(rest, mode, sigs, cj).map(λ dr => Done(dr.next, OIf(da.owes, db.owes, dr.owes))))), d, ok);
+    let qb = Option::and_then_some(check_body(b, mode, sigs, c), λ db =>
+        join(qa.witness.next, db.next).and_then(λ cj => check_body(rest, mode, sigs, cj).map(λ dr => Done(dr.next, OIf(qa.witness.owes, db.owes, dr.owes)))), d, qa.proof.right);
+    let qj = Option::and_then_some(join(qa.witness.next, qb.witness.next), λ cj => check_body(rest, mode, sigs, cj).map(λ dr => Done(dr.next, OIf(qa.witness.owes, qb.witness.owes, dr.owes))),
+        d, qb.proof.right);
+    let qr = option_map_some(check_body(rest, mode, sigs, qj.witness), λ dr => Done(dr.next, OIf(qa.witness.owes, qb.witness.owes, dr.owes)), d, qj.proof.right);
+    IfVerdict(qa.witness, qa.proof.left, qb.witness, qb.proof.left, qj.witness, qj.proof.left, qr.witness, qr.proof.left, qr.proof.right)
 }
 
 // The arm the test chose, then the rest: the arm's invariant at its own
-// places, weakened to the join's.
-theorem if_taken(k: Frame, x, rest: Body, ihx: BodyOk(k, x), ihr: BodyOk(k, rest), c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws),
-    sx: Next, okx: check_body(x, k.mode, k.sigs, c) = Some(sx), cj: Places, jn: Joins(sx.next, cj), sr: Next, okr: check_body(rest, k.mode, k.sigs, cj) = Some(sr),
-    pre: Prefix(mean_body(k.w, rest, mean_body(k.w, x, s)).words, ws), hold_x: Owed::All(sx.rs, k.pres, ws), hold_r: Owed::All(sr.rs, k.pres, ws),
-    callees_x: BodyCallees(k, x), callees_r: BodyCallees(k, rest)):
-    Sim(k, sr.next, mean_body(k.w, rest, mean_body(k.w, x, s)), run_body(k.w, k.mode.owner(k.r), rest, run_body(k.w, k.mode.owner(k.r), x, m)), ws)
+// places, weakened to the join's, and what the arm owes ends in what the
+// rest owes. Stated at the branch's meaning and run, which are the arm's
+// then the rest's (`e1`, `e2`).
+theorem if_taken(k: Frame, cd: Cond, a, b, x, rest: Body, ihx: BodyOk(k, x), ihr: BodyOk(k, rest), c: Places, s: Sem, m: Exec, ws: Env, sim: Sim(k, c, s, m, ws),
+    dx: Done, okx: check_body(x, k.mode, k.sigs, c) = Some(dx), cj: Places, jn: Joins(dx.next, cj), dr: Done, okr: check_body(rest, k.mode, k.sigs, cj) = Some(dr),
+    e1: mean_body(k.w, If(cd, a, b, rest), s) = mean_body(k.w, rest, mean_body(k.w, x, s)),
+    e2: run_body(k.w, k.mode.owner(k.r), If(cd, a, b, rest), m) = run_body(k.w, k.mode.owner(k.r), rest, run_body(k.w, k.mode.owner(k.r), x, m)),
+    pre: Prefix(mean_body(k.w, If(cd, a, b, rest), s).words, ws), after: Sem → Type,
+    hold: dx.owes.Holds(k.w, k.pres, x, s, λ y => dr.owes.Holds(k.w, k.pres, rest, y, after)), callees_x: BodyCallees(k, x), callees_r: BodyCallees(k, rest)):
+    Sim(k, dr.next, mean_body(k.w, If(cd, a, b, rest), s), run_body(k.w, k.mode.owner(k.r), If(cd, a, b, rest), m), ws) ∧ after(mean_body(k.w, If(cd, a, b, rest), s))
 {
-    let pre_x = Prefix::chain(mean_body(k.w, x, s).words, mean_body(k.w, rest, mean_body(k.w, x, s)).words, ws, mean_body_grows(k.w, rest, mean_body(k.w, x, s)), pre);
-    let at_x: Sim(k, sx.next, mean_body(k.w, x, s), run_body(k.w, k.mode.owner(k.r), x, m), ws) = ihx(c, s, m, ws, pre_x, sim, sx, okx, hold_x, callees_x);
-    let arm = at_x.weaken(cj, jn);
-    ihr(cj, mean_body(k.w, x, s), run_body(k.w, k.mode.owner(k.r), x, m), ws, pre, arm, sr, okr, hold_r, callees_r)
+    let pre_r: Prefix(mean_body(k.w, rest, mean_body(k.w, x, s)).words, ws) = j(e1, λ q _ => Prefix(q.words, ws), pre);
+    let pre_x = Prefix::chain(mean_body(k.w, x, s).words, mean_body(k.w, rest, mean_body(k.w, x, s)).words, ws, mean_body_grows(k.w, rest, mean_body(k.w, x, s)), pre_r);
+    let at_x = ihx(c, s, m, ws, pre_x, sim, dx, okx, λ y => dr.owes.Holds(k.w, k.pres, rest, y, after), hold, callees_x);
+    let sim_x: Sim(k, dx.next, mean_body(k.w, x, s), run_body(k.w, k.mode.owner(k.r), x, m), ws) = at_x.left;
+    let fin: Sim(k, dr.next, mean_body(k.w, rest, mean_body(k.w, x, s)), run_body(k.w, k.mode.owner(k.r), rest, run_body(k.w, k.mode.owner(k.r), x, m)), ws) ∧
+            after(mean_body(k.w, rest, mean_body(k.w, x, s))) =
+        ihr(cj, mean_body(k.w, x, s), run_body(k.w, k.mode.owner(k.r), x, m), ws, pre_r, sim_x.weaken(cj, jn), dr, okr, after, at_x.right, callees_r);
+    j(sym(e2), λ q _ => Sim(k, dr.next, mean_body(k.w, If(cd, a, b, rest), s), q, ws) ∧ after(mean_body(k.w, If(cd, a, b, rest), s)),
+        j(sym(e1), λ q _ => Sim(k, dr.next, q, run_body(k.w, k.mode.owner(k.r), rest, run_body(k.w, k.mode.owner(k.r), x, m)), ws) ∧ after(q), fin))
 }
 
 theorem if_ok(k: Frame, cd: Cond, a, b, rest: Body, iha: BodyOk(k, a), ihb: BodyOk(k, b), ihr: BodyOk(k, rest)): BodyOk(k, If(cd, a, b, rest)) {
-    λ c s m ws pre sim st ok hold callees => {
-        let sp = Next::then_some(cd.bound(c.nw).then(check_body(a, k.mode, k.sigs, c).and_then(λ sa => check_body(b, k.mode, k.sigs, c).and_then(λ sb => check_join(cd, sa, sb)))),
-            λ c2 => check_body(rest, k.mode, k.sigs, c2), st, ok);
-        let bx = sp.proof.right;
-        let parts = Owed::all_append(sp.witness.rs, k.pres, bx.witness.rs, ws, j(bx.proof.right, λ q _ => Owed::All(q.rs, k.pres, ws), hold));
-        let hd = if_head(cd, a, b, k.mode, k.sigs, c, sp.witness, sp.proof.left);
-        let ax = hd.right;
-        let bxx = ax.proof.right;
-        let jn = check_join_sound(cd, ax.witness, bxx.witness, sp.witness, bxx.proof.right);
-        let owed = Owed::all_append(under(cd, True, ax.witness.rs), k.pres, under(cd, False, bxx.witness.rs), ws, j(jn.right.right, λ q _ => Owed::All(q, k.pres, ws), parts.left));
-        let pre_s = Prefix::chain(s.words, mean_body(k.w, If(cd, a, b, rest), s).words, ws, mean_body_grows(k.w, If(cd, a, b, rest), s), pre);
-        let tst: (cd.test(ws) = cd.test(s.words)) = cd.test_stable(s.words, ws, pre_s, j(sim.nw, λ n _ => cd.bound(n) = True, hd.left));
-        let em: (cd.test(m.words) = cd.test(s.words)) = cong_fn(λ (w: List<Nat>) => cd.test(w), sim.words);
-        let fin = match q: cd.test(s.words) as λ _ => Sim(k, bx.witness.next, mean_body(k.w, If(cd, a, b, rest), s), run_body(k.w, k.mode.owner(k.r), If(cd, a, b, rest), m), ws) {
-            True => {
-                let e1 = mean_if_true(k.w, cd, a, b, rest, s, q);
-                let e2 = run_if_true(k.w, k.mode.owner(k.r), cd, a, b, rest, m, prelude::trans(em, q));
-                let taken = if_taken(k, a, rest, iha, ihr, c, s, m, ws, sim, ax.witness, ax.proof.left, sp.witness.next, jn.left, bx.witness, bx.proof.left,
-                    j(e1, λ x _ => Prefix(x.words, ws), pre), Owed::all_under(ax.witness.rs, cd, True, k.pres, ws, prelude::trans(tst, q), owed.left), parts.right,
-                    λ g h => callees(g, calls_if_a(cd, a, b, rest, g, h)), λ g h => callees(g, calls_if_rest(cd, a, b, rest, g, h)));
-                j(sym(e2), λ x _ => Sim(k, bx.witness.next, mean_body(k.w, If(cd, a, b, rest), s), x, ws),
-                    j(sym(e1), λ x _ => Sim(k, bx.witness.next, x, run_body(k.w, k.mode.owner(k.r), rest, run_body(k.w, k.mode.owner(k.r), a, m)), ws), taken))
-            },
-            False => {
-                let e1 = mean_if_false(k.w, cd, a, b, rest, s, q);
-                let e2 = run_if_false(k.w, k.mode.owner(k.r), cd, a, b, rest, m, prelude::trans(em, q));
-                let taken = if_taken(k, b, rest, ihb, ihr, c, s, m, ws, sim, bxx.witness, bxx.proof.left, sp.witness.next, jn.right.left, bx.witness, bx.proof.left,
-                    j(e1, λ x _ => Prefix(x.words, ws), pre), Owed::all_under(bxx.witness.rs, cd, False, k.pres, ws, prelude::trans(tst, q), owed.right), parts.right,
-                    λ g h => callees(g, calls_if_b(cd, a, b, rest, g, h)), λ g h => callees(g, calls_if_rest(cd, a, b, rest, g, h)));
-                j(sym(e2), λ x _ => Sim(k, bx.witness.next, mean_body(k.w, If(cd, a, b, rest), s), x, ws),
-                    j(sym(e1), λ x _ => Sim(k, bx.witness.next, x, run_body(k.w, k.mode.owner(k.r), rest, run_body(k.w, k.mode.owner(k.r), b, m)), ws), taken))
-            },
-        };
-        j(sym(bx.proof.right), λ q _ => Sim(k, q.next, mean_body(k.w, If(cd, a, b, rest), s), run_body(k.w, k.mode.owner(k.r), If(cd, a, b, rest), m), ws), fin)
+    λ c s m ws pre sim d ok after hold callees => {
+        let v = if_verdict(cd, a, b, rest, k.mode, k.sigs, c, d, ok);
+        let jn = join_sound(v.da.next, v.db.next, v.cj, v.okj);
+        let held: Bool::Cases(cd.test(s.words), v.da.owes.Holds(k.w, k.pres, a, s, λ y => v.dr.owes.Holds(k.w, k.pres, rest, y, after)),
+                v.db.owes.Holds(k.w, k.pres, b, s, λ y => v.dr.owes.Holds(k.w, k.pres, rest, y, after))) =
+            j(sym(v.is), λ q _ => q.owes.Holds(k.w, k.pres, If(cd, a, b, rest), s, after), hold);
+        let em: (cd.test(m.words) = cd.test(s.words)) = cong_fn(λ (w: Env) => cd.test(w), sim.words);
+        let fin: Sim(k, v.dr.next, mean_body(k.w, If(cd, a, b, rest), s), run_body(k.w, k.mode.owner(k.r), If(cd, a, b, rest), m), ws) ∧ after(mean_body(k.w, If(cd, a, b, rest), s)) =
+            match q: cd.test(s.words) as λ _ => Sim(k, v.dr.next, mean_body(k.w, If(cd, a, b, rest), s), run_body(k.w, k.mode.owner(k.r), If(cd, a, b, rest), m), ws) ∧
+                    after(mean_body(k.w, If(cd, a, b, rest), s)) {
+                True => if_taken(k, cd, a, b, a, rest, iha, ihr, c, s, m, ws, sim, v.da, v.oka, v.cj, jn.left, v.dr, v.okr,
+                    mean_if_true(k.w, cd, a, b, rest, s, q), run_if_true(k.w, k.mode.owner(k.r), cd, a, b, rest, m, prelude::trans(em, q)), pre, after,
+                    j(q, λ bb _ => Bool::Cases(bb, v.da.owes.Holds(k.w, k.pres, a, s, λ y => v.dr.owes.Holds(k.w, k.pres, rest, y, after)),
+                        v.db.owes.Holds(k.w, k.pres, b, s, λ y => v.dr.owes.Holds(k.w, k.pres, rest, y, after))), held),
+                    λ g h => callees(g, calls_if_a(cd, a, b, rest, g, h)), λ g h => callees(g, calls_if_rest(cd, a, b, rest, g, h))),
+                False => if_taken(k, cd, a, b, b, rest, ihb, ihr, c, s, m, ws, sim, v.db, v.okb, v.cj, jn.right, v.dr, v.okr,
+                    mean_if_false(k.w, cd, a, b, rest, s, q), run_if_false(k.w, k.mode.owner(k.r), cd, a, b, rest, m, prelude::trans(em, q)), pre, after,
+                    j(q, λ bb _ => Bool::Cases(bb, v.da.owes.Holds(k.w, k.pres, a, s, λ y => v.dr.owes.Holds(k.w, k.pres, rest, y, after)),
+                        v.db.owes.Holds(k.w, k.pres, b, s, λ y => v.dr.owes.Holds(k.w, k.pres, rest, y, after))), held),
+                    λ g h => callees(g, calls_if_b(cd, a, b, rest, g, h)), λ g h => callees(g, calls_if_rest(cd, a, b, rest, g, h))),
+            };
+        j(v.is, λ q _ => Sim(k, q.next, mean_body(k.w, If(cd, a, b, rest), s), run_body(k.w, k.mode.owner(k.r), If(cd, a, b, rest), m), ws) ∧ after(mean_body(k.w, If(cd, a, b, rest), s)), fin)
     }
 }
 
@@ -2527,22 +2815,21 @@ theorem check_body_sound(k: Frame, inr: InRef(k.file0, k.r), ops: Body): BodyOk(
     }
 }
 
-// What a function answers, from the invariant at the end of its body.
-theorem Ret::answers(self ret: Ret, r: Ref, file: List<List<Nat>>, cur: List<Nat>, h: Holds(list_at(file, r.b), r.base, cur), len: cur.len() = r.len, ws, mws: List<Nat>, e: mws = ws):
+theorem Ret::answers(self ret: Ret, r: Ref, file: List<List<Nat>>, cur: List<Nat>, h: Holds(list_at(file, r.b), r.base, cur), len: cur.len() = r.len, ws, mws: Env, e: mws = ws):
     (i: Nat) → atom::word(ret.view(cur, ws), i) = rget(file, Ref(r.b, r.base + ret.vlo(r, mws), ret.vn(r, mws)), i)
 {
     j(sym(e), λ q _ => (i: Nat) → atom::word(ret.view(cur, ws), i) = rget(file, Ref(r.b, r.base + ret.vlo(r, q), ret.vn(r, q)), i),
         match ret {
             RWord(_) => λ i => refl,
-            RView(lo, n) => narrow_reads(file, r, cur, h, len, lo.val(ws), n.val(ws)),
+            RView(lo, n) => narrow_reads(file, r, cur, h, len, lo.at(ws), n.at(ws)),
         })
 }
 
 // Where a function's answered view lies: in its signature's region, read in
 // the words it was called with. A window that reads only the parameter
 // words is where it was in the words the body ends with.
-theorem Ret::placed(self ret: Ret, words: Nat, r: Ref, ws, init: List<Nat>, pre: Prefix(init, ws), nw: init.len() = words):
-    (p: Nat) → Span(r.base + ret.vlo(r, ws), ret.vn(r, ws)).has(p).IsTrue() → ret.kind(words).region().hits(r, init, p).IsTrue()
+theorem Ret::placed(self ret: Ret, words: Nat, r: Ref, ws: Env, init: List<Nat>, pre: Prefix(Env::start(init), ws), nw: init.len() = words):
+    (p: Nat) → Span(r.base + ret.vlo(r, ws), ret.vn(r, ws)).has(p).IsTrue() → ret.kind(words).region().hits(r, Env::start(init), p).IsTrue()
 {
     match ret {
         RWord(_) => λ p h => {
@@ -2550,13 +2837,13 @@ theorem Ret::placed(self ret: Ret, words: Nat, r: Ref, ws, init: List<Nat>, pre:
             false_elim(no)
         },
         RView(lo, n) => (match lo.bound(words) && n.bound(words) as λ bb => (lo.bound(words) && n.bound(words)) = bb →
-                (p: Nat) → Span(r.base + lo.val(ws).min(r.len), n.val(ws).min(r.len - lo.val(ws))).has(p).IsTrue() →
-                (match bb { True => Win(lo, n), False => Whole }).hits(r, init, p).IsTrue() {
+                (p: Nat) → Span(r.base + lo.at(ws).min(r.len), n.at(ws).min(r.len - lo.at(ws))).has(p).IsTrue() →
+                (match bb { True => Win(lo, n), False => Whole }).hits(r, Env::start(init), p).IsTrue() {
             True => λ q p h => {
                 let parts = Bool::and_true_parts(lo.bound(words), n.bound(words), q);
-                let el: (lo.val(ws) = lo.val(init)) = lo.val_stable(init, ws, pre, j(sym(nw), λ k _ => lo.bound(k) = True, parts.left));
-                let en: (n.val(ws) = n.val(init)) = n.val_stable(init, ws, pre, j(sym(nw), λ k _ => n.bound(k) = True, parts.right));
-                let x: (Span(r.base + lo.val(init), n.val(init)).has(p).IsTrue()) = omega(h, el, en);
+                let el: (lo.at(ws) = lo.at(Env::start(init))) = lo.at_stable(Env::start(init), ws, pre, j(sym(nw), λ k _ => lo.bound(k) = True, parts.left));
+                let en: (n.at(ws) = n.at(Env::start(init))) = n.at_stable(Env::start(init), ws, pre, j(sym(nw), λ k _ => n.bound(k) = True, parts.right));
+                let x: (Span(r.base + lo.at(Env::start(init)), n.at(Env::start(init))).has(p).IsTrue()) = omega(h, el, en);
                 x
             },
             False => λ _ p h => {
@@ -2579,13 +2866,13 @@ theorem Mode::gives_back(self md: Mode, file0, file: List<List<Nat>>, r: Ref, ar
 
 // The view a function answers, at the reference its run was given: its own,
 // for a function that holds its object.
-fn ViewAt(ret: Ret, words: Nat, rr, r: Ref, file: List<List<Nat>>, cur, ws, mws, init: List<Nat>) → Type {
-    ((p: Nat) → Span(r.base + ret.vlo(rr, mws), ret.vn(rr, mws)).has(p).IsTrue() → ret.kind(words).region().hits(r, init, p).IsTrue()) ∧
+fn ViewAt(ret: Ret, words: Nat, rr, r: Ref, file: List<List<Nat>>, cur: List<Nat>, ws, mws: Env, init: List<Nat>) → Type {
+    ((p: Nat) → Span(r.base + ret.vlo(rr, mws), ret.vn(rr, mws)).has(p).IsTrue() → ret.kind(words).region().hits(r, Env::start(init), p).IsTrue()) ∧
         ((i: Nat) → atom::word(ret.view(cur, ws), i) = rget(file, Ref(r.b, r.base + ret.vlo(rr, mws), ret.vn(rr, mws)), i))
 }
 
 // A function that answers a word answers an empty view, wherever its run is.
-theorem Ret::word_view(self ret: Ret, words: Nat, h: ret.kind(words).is_view() = False, rr, r: Ref, file: List<List<Nat>>, cur, ws, mws, init: List<Nat>):
+theorem Ret::word_view(self ret: Ret, words: Nat, h: ret.kind(words).is_view() = False, rr, r: Ref, file: List<List<Nat>>, cur: List<Nat>, ws, mws: Env, init: List<Nat>):
     ViewAt(ret, words, rr, r, file, cur, ws, mws, init)
 {
     (match ret as λ x => x.kind(words).is_view() = False → ViewAt(x, words, rr, r, file, cur, ws, mws, init) {
@@ -2627,8 +2914,8 @@ theorem word_map(lent: List<Slot>, f: Slot → Nat): (e: Nat) → e < lent.len()
     }
 }
 
-theorem Sim::ends({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>}, self sim: Sim(k, c, s, m, ws), f: Func, em: k.mode = f.mode,
-    init: List<Nat>, pre: Prefix(init, s.words), nw: init.len() = f.words, post: Nat → Type, posted: post(mean_out(f, k.arg, s).word),
+theorem Sim::ends({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: Env}, self sim: Sim(k, c, s, m, ws), f: Func, em: k.mode = f.mode,
+    init: List<Nat>, pre: Prefix(Env::start(init), s.words), nw: init.len() = f.words, post: MOut → Type, posted: post(mean_out(f, k.arg, s)),
     lent: List<Slot>, count: lent.len() = f.mode.elems(), refs: k.refs0 = lent.map(λ sl => sl.narrowed(k.r)), ret_ok: f.mode.owns() = False → f.ret.kind(f.words).is_view() = False):
     Safe(f.mode, f.sig().ret.region(), init, post, k.file0, k.r, lent, k.arg, mean_out(f, k.arg, s), run_out(f, k.mode.owner(k.r), m))
 {
@@ -2636,8 +2923,8 @@ theorem Sim::ends({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>},
     let at: ViewAt(f.ret, f.words, k.mode.owner(k.r), k.r, m.file, s.cur, s.words, m.words, init) =
         (match q: k.mode.owns() as λ _ => ViewAt(f.ret, f.words, k.mode.owner(k.r), k.r, m.file, s.cur, s.words, m.words, init) {
             True => {
-                let placed: ((p: Nat) → Span(k.r.base + f.ret.vlo(k.r, m.words), f.ret.vn(k.r, m.words)).has(p).IsTrue() → f.ret.kind(f.words).region().hits(k.r, init, p).IsTrue()) =
-                    j(sym(sim.words), λ q2 _ => (p: Nat) → Span(k.r.base + f.ret.vlo(k.r, q2), f.ret.vn(k.r, q2)).has(p).IsTrue() → f.ret.kind(f.words).region().hits(k.r, init, p).IsTrue(),
+                let placed: ((p: Nat) → Span(k.r.base + f.ret.vlo(k.r, m.words), f.ret.vn(k.r, m.words)).has(p).IsTrue() → f.ret.kind(f.words).region().hits(k.r, Env::start(init), p).IsTrue()) =
+                    j(sym(sim.words), λ q2 _ => (p: Nat) → Span(k.r.base + f.ret.vlo(k.r, q2), f.ret.vn(k.r, q2)).has(p).IsTrue() → f.ret.kind(f.words).region().hits(k.r, Env::start(init), p).IsTrue(),
                         f.ret.placed(f.words, k.r, s.words, init, pre, nw));
                 let own: ViewAt(f.ret, f.words, k.r, k.r, m.file, s.cur, s.words, m.words, init) =
                     ⟨placed, f.ret.answers(k.r, m.file, s.cur, sim.on.holds, sim.on.len, s.words, m.words, sim.words)⟩;
@@ -2655,28 +2942,30 @@ theorem Sim::ends({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>},
                     λ v _ => Span(v.base, v.len).has(p).IsTrue(), hit))
             })
         };
-    Safe(cong_fn(λ (w: List<Nat>) => f.ret.word(w), sim.words), posted, md.left, md.right, at.left, at.right, kept_out)
+    Safe(cong_fn(λ (w: Env) => f.ret.word(w), sim.words), posted, md.left, md.right, at.left, at.right, kept_out)
 }
 
 // The world's callees answer what their postconditions say, wherever their
 // preconditions hold: what a caller may assume of a call's answer.
-fn Posted(w: World, sigs: List<Sig>, pres: Nat → List<Nat> → Type, posts: Nat → List<Nat> → Nat → Type, ops: Body) → Type {
+// The world's callees answer what their postconditions say, wherever their
+// preconditions hold: what a caller may assume of a call's answer.
+fn Posted(w: World, sigs: List<Sig>, pres: Nat → List<Nat> → List<Slot> → List<Nat> → Type, posts: Nat → List<Nat> → List<Slot> → List<Nat> → MOut → Type, ops: Body) → Type {
     (g: Nat) → calls(ops, g) = True → (arg: List<Nat>) → (lent: List<Slot>) → Lendable(sig_at(sigs, g).mode, Ref(0, 0, arg.len()), lent) →
-        (ws: List<Nat>) → ws.len() = sig_at(sigs, g).words → pres(g, ws) → posts(g, ws, w.mean(g, arg, lent, ws).word)
+        (ws: List<Nat>) → ws.len() = sig_at(sigs, g).words → pres(g, arg, lent, ws) → posts(g, arg, lent, ws, w.mean(g, arg, lent, ws))
 }
 
 // A function's promise gives its postcondition of its meaning, at any
 // argument: lend it a file holding only that argument.
 theorem drop_zero(xs: List<Nat>): xs.drop(0) = xs { match xs { Nil => refl, Cons(_, _) => refl } }
 
-theorem fn_safe_answers(sig: Sig, pre: List<Nat> → Type, post: List<Nat> → Nat → Type, mean: List<Nat> → List<Slot> → List<Nat> → MOut,
+theorem fn_safe_answers(sig: Sig, pre: List<Nat> → List<Slot> → List<Nat> → Type, post: List<Nat> → List<Slot> → List<Nat> → MOut → Type, mean: List<Nat> → List<Slot> → List<Nat> → MOut,
     run: List<List<Nat>> → Ref → List<Ref> → List<Nat> → ROut, safe: FnSafe(sig, pre, post, mean, run)):
-    (arg: List<Nat>) → (lent: List<Slot>) → Lendable(sig.mode, Ref(0, 0, arg.len()), lent) → (ws: List<Nat>) → ws.len() = sig.words → pre(ws) → post(ws, mean(arg, lent, ws).word)
+    (arg: List<Nat>) → (lent: List<Slot>) → Lendable(sig.mode, Ref(0, 0, arg.len()), lent) → (ws: List<Nat>) → ws.len() = sig.words → pre(arg, lent, ws) → post(arg, lent, ws, mean(arg, lent, ws))
 {
     λ arg lent lend ws len p => {
         let fits: (0 + arg.len() <= arg.len()) = omega();
         let whole: (arg.drop(0).take(arg.len()) = arg) = prelude::trans(cong_fn(λ (l: List<Nat>) => l.take(arg.len()), drop_zero(arg)), arg.take_all(arg.len(), omega()));
-        j(whole, λ q _ => post(ws, mean(q, lent, ws).word), safe([arg], Ref(0, 0, arg.len()), lent, ws, InRef(omega(), fits), len, p, lend).posted)
+        j(whole, λ q _ => post(q, lent, ws, mean(q, lent, ws)), safe([arg], Ref(0, 0, arg.len()), lent, ws, InRef(omega(), fits), len, j(sym(whole), λ q _ => pre(q, lent, ws), p), lend).posted)
     }
 }
 
@@ -2707,7 +2996,7 @@ theorem Mode::writes_of_elems(self m: Mode, h: 0 < m.elems()): m.writes() = True
 // A function's first state: its object at its reference, and the
 // references it is lent live, each a write view holding its window of the
 // object, pairwise apart as `Lendable` says.
-theorem start_view(k: Frame, lent: List<Slot>, holds: Holds(list_at(k.file0, k.r.b), k.r.base, k.arg), len: k.arg.len() = k.r.len, fws: List<Nat>, e: Nat, lt: e < lent.len()):
+theorem start_view(k: Frame, lent: List<Slot>, holds: Holds(list_at(k.file0, k.r.b), k.r.base, k.arg), len: k.arg.len() = k.r.len, fws: Env, e: Nat, lt: e < lent.len()):
     ViewOk(Whole, ref_at(lent.map(λ sl => sl.narrowed(k.r)), e), list_at(lent.map(λ sl => window(k.arg, sl.at, sl.n)), e), k.r, k.file0, fws)
 {
     let sl = slot_at(lent, e);
@@ -2734,8 +3023,8 @@ theorem start_lent(k: Frame, lent: List<Slot>, holds: Holds(list_at(k.file0, k.r
 }
 
 theorem start_sim(k: Frame, inr: InRef(k.file0, k.r), arg_is: window(list_at(k.file0, k.r.b), k.r.base, k.r.len) = k.arg, lent: List<Slot>, lend: Lendable(k.mode, k.r, lent),
-    refs: k.refs0 = lent.map(λ sl => sl.narrowed(k.r)), ws: List<Nat>, words: Nat, nw: ws.len() = words, fws: List<Nat>):
-    Sim(k, Places(lent_views(k.mode.elems()), k.mode.elems(), words), Sem::start(k.arg, lent, ws), Exec(k.file0, k.refs0, ws), fws)
+    refs: k.refs0 = lent.map(λ sl => sl.narrowed(k.r)), ws: List<Nat>, words: Nat, nw: ws.len() = words, fws: Env):
+    Sim(k, Places(lent_views(k.mode.elems()), k.mode.elems(), words), Sem::start(k.arg, lent, ws), Exec(k.file0, k.refs0, Env::start(ws)), fws)
 {
     let on: OnRef(k.file0, k.file0, k.r, k.arg) = j(arg_is, λ q _ => OnRef(k.file0, k.file0, k.r, q), OnRef::start(k.file0, k.r, inr));
     let cnt: (lent.len() = k.mode.elems()) = lend.count;
@@ -2770,57 +3059,98 @@ theorem start_sim(k: Frame, inr: InRef(k.file0, k.r), arg_is: window(list_at(k.f
         λ _ => ⟨⟨refl, refl⟩, λ p _ => refl⟩)
 }
 
-theorem check_sound(sigs: List<Sig>, pres: Nat → List<Nat> → Type, posts: Nat → List<Nat> → Nat → Type, f: Func, rs: List<Owed>, ok: check_fn(sigs, f) = Some(rs),
-    pre: List<Nat> → Type, post: List<Nat> → Nat → Type, w: World,
-    discharge: (arg: List<Nat>) → (lent: List<Slot>) → lent.len() = f.mode.elems() → (ws: List<Nat>) → ws.len() = f.words → pre(ws) → Posted(w, sigs, pres, posts, f.body) →
-        Owed::All(rs, pres, mean_body(w, f.body, Sem::start(arg, lent, ws)).words),
-    post_ok: (arg: List<Nat>) → (lent: List<Slot>) → lent.len() = f.mode.elems() → (ws: List<Nat>) → ws.len() = f.words → pre(ws) → Posted(w, sigs, pres, posts, f.body) →
-        post(ws, mean_lent(w, f, arg, lent, ws).word),
+// ---------------------------------------------------------------------------
+// A function's words, spelled
+
+// `[word(ws, k), …, word(ws, k + n - 1)]`: `n` parameter words, each read
+// by position. A function's residuals are owed at its parameters spelled so,
+// where the meaning's words read off as the source's locals.
+fn spell(ws: List<Nat>, k, n: Nat) → List<Nat> { match n { Zero => Nil, Succ(m) => Cons(word(ws, k), spell(ws, k + 1, m)) } }
+
+theorem spell_shift(x: Nat, t: List<Nat>, n: Nat): (k: Nat) → spell(Cons(x, t), k + 1, n) = spell(t, k, n) {
+    match n {
+        Zero => λ k => refl,
+        Succ(m) => λ k => cong_fn(λ (q: List<Nat>) => Cons(word(t, k), q), spell_shift(x, t, m, k + 1)),
+    }
+}
+
+theorem spell_all(ws: List<Nat>): ws = spell(ws, 0, ws.len()) {
+    match ws {
+        Nil => refl,
+        Cons(x, t) => prelude::trans(cong_fn(λ (q: List<Nat>) => Cons(x, q), spell_all(t)), cong_fn(λ (q: List<Nat>) => Cons(x, q), sym(spell_shift(x, t, t.len(), 0)))),
+    }
+}
+
+// Words of a function's count are their own spelling.
+theorem words_eta(ws: List<Nat>, n: Nat, e: ws.len() = n): ws = spell(ws, 0, n) {
+    j(e, λ m _ => ws = spell(ws, 0, m), spell_all(ws))
+}
+
+// ---------------------------------------------------------------------------
+// The once-theorem
+
+// A function whose verdict is `Some(d)`, whose residuals hold along its
+// meaning from its precondition, and whose answer meets its postcondition,
+// keeps its promise in every world whose functions it calls keep theirs.
+// The residuals and the postcondition are asked at the parameter words
+// spelled (`spell`), where the meaning reads them as the source's locals.
+theorem check_sound(sigs: List<Sig>, pres: Nat → List<Nat> → List<Slot> → List<Nat> → Type, posts: Nat → List<Nat> → List<Slot> → List<Nat> → MOut → Type, f: Func, d: Owes, ok: check_fn(sigs, f) = Some(d),
+    pre: List<Nat> → List<Slot> → List<Nat> → Type, post: List<Nat> → List<Slot> → List<Nat> → MOut → Type, w: World,
+    discharge: (arg: List<Nat>) → (lent: List<Slot>) → lent.len() = f.mode.elems() → (ws: List<Nat>) → pre(arg, lent, spell(ws, 0, f.words)) → Posted(w, sigs, pres, posts, f.body) →
+        d.Due(w, pres, f, arg, lent, spell(ws, 0, f.words)),
+    post_ok: (arg: List<Nat>) → (lent: List<Slot>) → lent.len() = f.mode.elems() → (ws: List<Nat>) → pre(arg, lent, spell(ws, 0, f.words)) → Posted(w, sigs, pres, posts, f.body) →
+        post(arg, lent, spell(ws, 0, f.words), mean_lent(w, f, arg, lent, spell(ws, 0, f.words))),
     callees: (g: Nat) → calls(f.body, g) = True → FnSafe(sig_at(sigs, g), pres(g), posts(g), w.mean(g), w.run(g))):
     FnSafe(f.sig(), pre, post, λ arg lent ws => mean_lent(w, f, arg, lent, ws), λ file r refs ws => run_lent(w, f, file, r, refs, ws))
 {
     let posted: Posted(w, sigs, pres, posts, f.body) = λ g h => fn_safe_answers(sig_at(sigs, g), pres(g), posts(g), w.mean(g), w.run(g), callees(g, h));
-    let okp = Bool::then_some(f.mode.owns() || !f.ret.kind(f.words).is_view(), check_body(f.body, f.mode, sigs, Places(lent_views(f.mode.elems()), f.mode.elems(), f.words)).map(λ q => q.rs), rs, ok);
+    let okp = Bool::then_some(f.mode.owns() || !f.ret.kind(f.words).is_view(), check_body(f.body, f.mode, sigs, Places(lent_views(f.mode.elems()), f.mode.elems(), f.words)).map(λ q => q.owes), d, ok);
     let ret_ok: (f.mode.owns() = False → f.ret.kind(f.words).is_view() = False) = λ no =>
         false_of_not(f.ret.kind(f.words).is_view(), j(no, λ b _ => (b || !f.ret.kind(f.words).is_view()) = True, okp.left));
     λ file r lent ws inr nw p lend => {
         let arg = window(list_at(file, r.b), r.base, r.len);
+        let sp = words_eta(ws, f.words, nw);
+        let p_sp: pre(arg, lent, spell(ws, 0, f.words)) = j(sp, λ q _ => pre(arg, lent, q), p);
+        let due: d.Due(w, pres, f, arg, lent, ws) = j(sym(sp), λ q _ => d.Due(w, pres, f, arg, lent, q), discharge(arg, lent, lend.count, ws, p_sp, posted));
+        let answered: post(arg, lent, ws, mean_lent(w, f, arg, lent, ws)) =
+            j(sym(sp), λ q _ => post(arg, lent, q, mean_lent(w, f, arg, lent, q)), post_ok(arg, lent, lend.count, ws, p_sp, posted));
         let k = Frame(f.mode, sigs, pres, posts, w, r, file, arg, lent.map(λ sl => sl.narrowed(r)));
         let s0 = Sem::start(arg, lent, ws);
-        let m0 = Exec(file, k.refs0, ws);
+        let m0 = Exec(file, k.refs0, Env::start(ws));
         let c0 = Places(lent_views(f.mode.elems()), f.mode.elems(), f.words);
         let fin_ws = mean_body(w, f.body, s0).words;
+        let means: (mean_lent(w, f, arg, lent, ws) = mean_out(f, arg, mean_body(w, f.body, s0))) = mean_then_is(w, f.body, MOut, s0, λ s => mean_out(f, arg, s));
         let sim0: Sim(k, c0, s0, m0, fin_ws) = start_sim(k, inr, refl, lent, lend, refl, ws, f.words, nw, fin_ws);
-        let st = option_map_some(check_body(f.body, f.mode, sigs, c0), λ q => q.rs, rs, okp.right);
-        let fin: Sim(k, st.witness.next, mean_body(w, f.body, s0), run_body(w, f.mode.owner(r), f.body, m0), fin_ws) =
-            check_body_sound(k, inr, f.body, c0, s0, m0, fin_ws, Prefix::same(fin_ws), sim0, st.witness, st.proof.left,
-            j(sym(st.proof.right), λ q _ => Owed::All(q, pres, fin_ws), discharge(arg, lent, lend.count, ws, nw, p, posted)), callees);
-        fin.ends(f, refl, ws, mean_body_grows(w, f.body, s0), nw, post(ws), post_ok(arg, lent, lend.count, ws, nw, p, posted), lent, lend.count, refl, ret_ok)
+        let st = option_map_some(check_body(f.body, f.mode, sigs, c0), λ q => q.owes, d, okp.right);
+        let hold: st.witness.owes.Holds(w, pres, f.body, s0, λ _ => True) = j(sym(st.proof.right), λ q _ => q.Holds(w, pres, f.body, s0, λ _ => True), due);
+        let fin = check_body_sound(k, inr, f.body, c0, s0, m0, fin_ws, Prefix::same(fin_ws), sim0, st.witness, st.proof.left, λ _ => True, hold, callees);
+        let safe = fin.left.ends(f, refl, ws, mean_body_grows(w, f.body, s0), nw, post(arg, lent, ws), j(means, λ q _ => post(arg, lent, ws, q), answered), lent, lend.count, refl, ret_ok);
+        j(sym(means), λ q _ => Safe(f.mode, f.sig().ret.region(), ws, post(arg, lent, ws), file, r, lent, arg, q, run_lent(w, f, file, f.mode.owner(r), lent.map(λ sl => sl.narrowed(r)), ws)), safe)
     }
 }
 
 // The same, for a function that holds its object (it is lent nothing), its
 // obligations stated at its first state with nothing lent.
-theorem check_owned(sigs: List<Sig>, pres: Nat → List<Nat> → Type, posts: Nat → List<Nat> → Nat → Type, f: Func, rs: List<Owed>, ok: check_fn(sigs, f) = Some(rs),
-    owns: f.mode.elems() = 0, pre: List<Nat> → Type, post: List<Nat> → Nat → Type, w: World,
-    discharge: (arg, ws: List<Nat>) → ws.len() = f.words → pre(ws) → Posted(w, sigs, pres, posts, f.body) → Owed::All(rs, pres, mean_body(w, f.body, Sem(arg, Nil, Nil, ws)).words),
-    post_ok: (arg, ws: List<Nat>) → ws.len() = f.words → pre(ws) → Posted(w, sigs, pres, posts, f.body) → post(ws, mean_fn(w, f, arg, ws).word),
+theorem check_owned(sigs: List<Sig>, pres: Nat → List<Nat> → List<Slot> → List<Nat> → Type, posts: Nat → List<Nat> → List<Slot> → List<Nat> → MOut → Type, f: Func, d: Owes, ok: check_fn(sigs, f) = Some(d),
+    owns: f.mode.elems() = 0, pre: List<Nat> → List<Slot> → List<Nat> → Type, post: List<Nat> → List<Slot> → List<Nat> → MOut → Type, w: World,
+    discharge: (arg, ws: List<Nat>) → pre(arg, Nil, spell(ws, 0, f.words)) → Posted(w, sigs, pres, posts, f.body) → d.Due(w, pres, f, arg, Nil, spell(ws, 0, f.words)),
+    post_ok: (arg, ws: List<Nat>) → pre(arg, Nil, spell(ws, 0, f.words)) → Posted(w, sigs, pres, posts, f.body) → post(arg, Nil, spell(ws, 0, f.words), mean_fn(w, f, arg, spell(ws, 0, f.words))),
     callees: (g: Nat) → calls(f.body, g) = True → FnSafe(sig_at(sigs, g), pres(g), posts(g), w.mean(g), w.run(g))):
     FnSafe(f.sig(), pre, post, λ arg lent ws => mean_lent(w, f, arg, lent, ws), λ file r refs ws => run_lent(w, f, file, r, refs, ws))
 {
-    check_sound(sigs, pres, posts, f, rs, ok, pre, post, w,
-        λ arg lent cnt ws len p ps => j(sym(lent.nil_of_len_zero(prelude::trans(cnt, owns))), λ l _ => Owed::All(rs, pres, mean_body(w, f.body, Sem::start(arg, l, ws)).words),
-            discharge(arg, ws, len, p, ps)),
-        λ arg lent cnt ws len p ps => j(sym(lent.nil_of_len_zero(prelude::trans(cnt, owns))), λ l _ => post(ws, mean_lent(w, f, arg, l, ws).word), post_ok(arg, ws, len, p, ps)),
+    check_sound(sigs, pres, posts, f, d, ok, pre, post, w,
+        λ arg lent cnt ws p ps => j(sym(lent.nil_of_len_zero(prelude::trans(cnt, owns))), λ l _ => pre(arg, l, spell(ws, 0, f.words)) → d.Due(w, pres, f, arg, l, spell(ws, 0, f.words)), λ p2 => discharge(arg, ws, p2, ps))(p),
+        λ arg lent cnt ws p ps => j(sym(lent.nil_of_len_zero(prelude::trans(cnt, owns))), λ l _ => pre(arg, l, spell(ws, 0, f.words)) → post(arg, l, spell(ws, 0, f.words), mean_lent(w, f, arg, l, spell(ws, 0, f.words))),
+            λ p2 => post_ok(arg, ws, p2, ps))(p),
         callees)
 }
 
 // A call at depth zero: it does nothing and answers zero, and keeps the
 // promise of every signature whose postcondition zero meets.
-theorem idle_safe(sig: Sig, pre: List<Nat> → Type, post: List<Nat> → Nat → Type, idle: (ws: List<Nat>) → pre(ws) → post(ws, 0)):
+theorem idle_safe(sig: Sig, pre: List<Nat> → List<Slot> → List<Nat> → Type, post: List<Nat> → List<Slot> → List<Nat> → MOut → Type, idle: (arg: List<Nat>) → (lent: List<Slot>) → (ws: List<Nat>) → pre(arg, lent, ws) → post(arg, lent, ws, MOut(arg, 0, Nil))):
     FnSafe(sig, pre, post, λ arg _ _ => MOut(arg, 0, Nil), λ file _ _ _ => ROut(file, 0, 0, 0))
 {
-    λ file r lent ws inr _ p _ => Safe(refl, idle(ws, p), OnRef::start(file, r, inr), λ _ => refl, λ p h => {
+    λ file r lent ws inr _ p _ => Safe(refl, idle(window(list_at(file, r.b), r.base, r.len), lent, ws, p), OnRef::start(file, r, inr), λ _ => refl, λ p h => {
         let no: False = omega(h);
         false_elim(no)
     }, λ i => refl, λ _ p _ => refl)
@@ -2843,47 +3173,52 @@ theorem fn_at_past(fns: List<Func>, g: Nat, past: fns.len() <= g): fn_at(fns, g)
 // Function `g` checks, its residuals hold under its precondition in every
 // world whose callees meet their postconditions, and so does its own
 // postcondition of its answer.
-record Checks(fns: List<Func>, pres: Nat → List<Nat> → Type, posts: Nat → List<Nat> → Nat → Type, g: Nat) {
-    rs: List<Owed>,
-    ok: check_fn(sigs_of(fns), fn_at(fns, g)) = Some(rs),
-    discharge: (w: World) → (arg: List<Nat>) → (lent: List<Slot>) → lent.len() = fn_at(fns, g).mode.elems() → (ws: List<Nat>) → ws.len() = fn_at(fns, g).words → pres(g, ws) →
-        Posted(w, sigs_of(fns), pres, posts, fn_at(fns, g).body) → Owed::All(rs, pres, mean_body(w, fn_at(fns, g).body, Sem::start(arg, lent, ws)).words),
-    post_ok: (w: World) → (arg: List<Nat>) → (lent: List<Slot>) → lent.len() = fn_at(fns, g).mode.elems() → (ws: List<Nat>) → ws.len() = fn_at(fns, g).words → pres(g, ws) →
-        Posted(w, sigs_of(fns), pres, posts, fn_at(fns, g).body) → posts(g, ws, mean_lent(w, fn_at(fns, g), arg, lent, ws).word),
+record Checks(fns: List<Func>, pres: Nat → List<Nat> → List<Slot> → List<Nat> → Type, posts: Nat → List<Nat> → List<Slot> → List<Nat> → MOut → Type, g: Nat) {
+    owes: Owes,
+    ok: check_fn(sigs_of(fns), fn_at(fns, g)) = Some(owes),
+    discharge: (w: World) → (arg: List<Nat>) → (lent: List<Slot>) → lent.len() = fn_at(fns, g).mode.elems() → (ws: List<Nat>) → pres(g, arg, lent, spell(ws, 0, fn_at(fns, g).words)) →
+        Posted(w, sigs_of(fns), pres, posts, fn_at(fns, g).body) → owes.Due(w, pres, fn_at(fns, g), arg, lent, spell(ws, 0, fn_at(fns, g).words)),
+    post_ok: (w: World) → (arg: List<Nat>) → (lent: List<Slot>) → lent.len() = fn_at(fns, g).mode.elems() → (ws: List<Nat>) → pres(g, arg, lent, spell(ws, 0, fn_at(fns, g).words)) →
+        Posted(w, sigs_of(fns), pres, posts, fn_at(fns, g).body) → posts(g, arg, lent, spell(ws, 0, fn_at(fns, g).words), mean_lent(w, fn_at(fns, g), arg, lent, spell(ws, 0, fn_at(fns, g).words))),
 }
 
 // `Checks` of a function that holds its object, its obligations stated at
 // its first state with nothing lent.
-theorem owned_checks({fns: List<Func>}, {pres: Nat → List<Nat> → Type}, {posts: Nat → List<Nat> → Nat → Type}, {g: Nat}, rs: List<Owed>,
-    ok: check_fn(sigs_of(fns), fn_at(fns, g)) = Some(rs), owns: fn_at(fns, g).mode.elems() = 0,
-    discharge: (w: World) → (arg, ws: List<Nat>) → ws.len() = fn_at(fns, g).words → pres(g, ws) → Posted(w, sigs_of(fns), pres, posts, fn_at(fns, g).body) →
-        Owed::All(rs, pres, mean_body(w, fn_at(fns, g).body, Sem(arg, Nil, Nil, ws)).words),
-    post_ok: (w: World) → (arg, ws: List<Nat>) → ws.len() = fn_at(fns, g).words → pres(g, ws) → Posted(w, sigs_of(fns), pres, posts, fn_at(fns, g).body) →
-        posts(g, ws, mean_fn(w, fn_at(fns, g), arg, ws).word)): Checks(fns, pres, posts, g)
+theorem owned_checks({fns: List<Func>}, {pres: Nat → List<Nat> → List<Slot> → List<Nat> → Type}, {posts: Nat → List<Nat> → List<Slot> → List<Nat> → MOut → Type}, {g: Nat}, d: Owes,
+    ok: check_fn(sigs_of(fns), fn_at(fns, g)) = Some(d), owns: fn_at(fns, g).mode.elems() = 0,
+    discharge: (w: World) → (arg, ws: List<Nat>) → pres(g, arg, Nil, spell(ws, 0, fn_at(fns, g).words)) → Posted(w, sigs_of(fns), pres, posts, fn_at(fns, g).body) →
+        d.Due(w, pres, fn_at(fns, g), arg, Nil, spell(ws, 0, fn_at(fns, g).words)),
+    post_ok: (w: World) → (arg, ws: List<Nat>) → pres(g, arg, Nil, spell(ws, 0, fn_at(fns, g).words)) → Posted(w, sigs_of(fns), pres, posts, fn_at(fns, g).body) →
+        posts(g, arg, Nil, spell(ws, 0, fn_at(fns, g).words), mean_fn(w, fn_at(fns, g), arg, spell(ws, 0, fn_at(fns, g).words)))): Checks(fns, pres, posts, g)
 {
-    Checks(rs, ok,
-        λ w arg lent cnt ws len p ps => j(sym(lent.nil_of_len_zero(prelude::trans(cnt, owns))),
-            λ l _ => Owed::All(rs, pres, mean_body(w, fn_at(fns, g).body, Sem::start(arg, l, ws)).words), discharge(w, arg, ws, len, p, ps)),
-        λ w arg lent cnt ws len p ps => j(sym(lent.nil_of_len_zero(prelude::trans(cnt, owns))),
-            λ l _ => posts(g, ws, mean_lent(w, fn_at(fns, g), arg, l, ws).word), post_ok(w, arg, ws, len, p, ps)))
+    Checks(d, ok,
+        λ w arg lent cnt ws p ps => j(sym(lent.nil_of_len_zero(prelude::trans(cnt, owns))),
+            λ l _ => pres(g, arg, l, spell(ws, 0, fn_at(fns, g).words)) → d.Due(w, pres, fn_at(fns, g), arg, l, spell(ws, 0, fn_at(fns, g).words)), λ p2 => discharge(w, arg, ws, p2, ps))(p),
+        λ w arg lent cnt ws p ps => j(sym(lent.nil_of_len_zero(prelude::trans(cnt, owns))),
+            λ l _ => pres(g, arg, l, spell(ws, 0, fn_at(fns, g).words)) → posts(g, arg, l, spell(ws, 0, fn_at(fns, g).words), mean_lent(w, fn_at(fns, g), arg, l, spell(ws, 0, fn_at(fns, g).words))),
+                λ p2 => post_ok(w, arg, ws, p2, ps))(p))
 }
 
-fn ProgOk(fns: List<Func>, pres: Nat → List<Nat> → Type, posts: Nat → List<Nat> → Nat → Type) → Type { (g: Nat) → g < fns.len() → Checks(fns, pres, posts, g) }
+fn ProgOk(fns: List<Func>, pres: Nat → List<Nat> → List<Slot> → List<Nat> → Type, posts: Nat → List<Nat> → List<Slot> → List<Nat> → MOut → Type) → Type { (g: Nat) → g < fns.len() → Checks(fns, pres, posts, g) }
 
 // The answer of a call at depth zero, zero, meets every postcondition.
-fn IdleOk(pres: Nat → List<Nat> → Type, posts: Nat → List<Nat> → Nat → Type) → Type { (g: Nat) → (ws: List<Nat>) → pres(g, ws) → posts(g, ws, 0) }
+fn IdleOk(pres: Nat → List<Nat> → List<Slot> → List<Nat> → Type, posts: Nat → List<Nat> → List<Slot> → List<Nat> → MOut → Type) → Type {
+    (g: Nat) → (arg: List<Nat>) → (lent: List<Slot>) → (ws: List<Nat>) → pres(g, arg, lent, ws) → posts(g, arg, lent, ws, MOut(arg, 0, Nil))
+}
 
 // Past the table, the function a table has nowhere checks with nothing owed,
 // and answers zero.
-theorem prog_checks(fns: List<Func>, pres: Nat → List<Nat> → Type, posts: Nat → List<Nat> → Nat → Type, ok: ProgOk(fns, pres, posts), idle: IdleOk(pres, posts), g: Nat):
+theorem prog_checks(fns: List<Func>, pres: Nat → List<Nat> → List<Slot> → List<Nat> → Type, posts: Nat → List<Nat> → List<Slot> → List<Nat> → MOut → Type, ok: ProgOk(fns, pres, posts), idle: IdleOk(pres, posts), g: Nat):
     Checks(fns, pres, posts, g)
 {
     match q: (g + 1).leb(fns.len()) {
         True => ok(g, omega(q)),
         False => {
             let e = fn_at_past(fns, g, omega(q));
-            Checks(Nil, j(sym(e), λ f _ => check_fn(sigs_of(fns), f) = Some(Nil), refl), λ w arg lent _ ws _ _ _ => trivial,
-                λ w arg lent _ ws _ p _ => j(sym(e), λ f _ => posts(g, ws, mean_lent(w, f, arg, lent, ws).word), idle(g, ws, p)))
+            Checks(OEnd, j(sym(e), λ f _ => check_fn(sigs_of(fns), f) = Some(OEnd), refl),
+                λ w arg lent _ ws _ _ => j(sym(e), λ f _ => OEnd.Due(w, pres, f, arg, lent, spell(ws, 0, f.words)), trivial),
+                λ w arg lent _ ws p _ => j(sym(e), λ f _ => pres(g, arg, lent, spell(ws, 0, f.words)) → posts(g, arg, lent, spell(ws, 0, f.words), mean_lent(w, f, arg, lent, spell(ws, 0, f.words))),
+                    λ p2 => idle(g, arg, lent, Nil, p2))(p))
         },
     }
 }
@@ -2892,14 +3227,14 @@ theorem prog_checks(fns: List<Func>, pres: Nat → List<Nat> → Type, posts: Na
 // promise: the caller's proof cites only the callees' promises. Depth zero
 // answers zero, so the postconditions must allow it; a program whose
 // postconditions do not is composed from `check_sound` depth by depth.
-theorem prog_sound(fns: List<Func>, pres: Nat → List<Nat> → Type, posts: Nat → List<Nat> → Nat → Type, ok: ProgOk(fns, pres, posts), idle: IdleOk(pres, posts), d: Nat): (g: Nat) →
+theorem prog_sound(fns: List<Func>, pres: Nat → List<Nat> → List<Slot> → List<Nat> → Type, posts: Nat → List<Nat> → List<Slot> → List<Nat> → MOut → Type, ok: ProgOk(fns, pres, posts), idle: IdleOk(pres, posts), d: Nat): (g: Nat) →
     FnSafe(sig_at(sigs_of(fns), g), pres(g), posts(g), world(fns, d).mean(g), world(fns, d).run(g))
 {
     match d {
         Zero => λ g => idle_safe(sig_at(sigs_of(fns), g), pres(g), posts(g), idle(g)),
         Succ(e) => λ g => {
             let ch = prog_checks(fns, pres, posts, ok, idle, g);
-            let safe = check_sound(sigs_of(fns), pres, posts, fn_at(fns, g), ch.rs, ch.ok, pres(g), posts(g), world(fns, e), ch.discharge(world(fns, e)), ch.post_ok(world(fns, e)),
+            let safe = check_sound(sigs_of(fns), pres, posts, fn_at(fns, g), ch.owes, ch.ok, pres(g), posts(g), world(fns, e), ch.discharge(world(fns, e)), ch.post_ok(world(fns, e)),
                 λ h _ => prog_sound(fns, pres, posts, ok, idle, e, h));
             j(sym(sig_at_of(fns, g)), λ sg _ => FnSafe(sg, pres(g), posts(g), world(fns, Succ(e)).mean(g), world(fns, Succ(e)).run(g)), safe)
         },

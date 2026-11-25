@@ -1028,12 +1028,29 @@ The checker is one forward pass over the body with a state per place:
   one mode stays, its region the union of the arms' (a region is a window,
   the whole object, or a union of regions, so the coarsening loses nothing
   but which arm was taken); any other view is dead after the join. An arm's
-  residuals are owed under its test, as closed data with the test as their
-  hypothesis. A type that may not be dropped may not be `gone` by
-  weakening.
+  residuals are owed on its side of the test, and what follows the join
+  is owed in each arm (the verdict is a tree in the body's shape, below).
+  A type that may not be dropped may not be `gone` by weakening.
 - Overlap is decided on the places' steps where they are closed; otherwise
-  it is a residual obligation. A key access emits `Valid`; an index its
-  bound; a call the callee's precondition.
+  it is a residual obligation. A key access emits `Valid`; an element read
+  its bound; a call the callee's precondition.
+- A residual is the proposition the source writes at that site, read in
+  the state the site reads (§14 item 1): a bound is a squashed `<` on the
+  length of what the read reads (one per element read, through a view
+  too); a callee's precondition is stated at the value the call lends (the
+  object, a loan's window, or the owner with the slots of a collection of
+  references) and the call's words; two windows apart is the disjunction of
+  its two sides, the first ending before the second or the second before
+  the first, each spelled as a source spells it (`k <= j` for the window
+  `0..k` before `j`, `j < lo` for the element after), so the source's
+  hypothesis is the discharge by conversion and its proof names the side.
+  Where the checker cannot know the side, it owes the disjunction; a
+  source's proof is on one side. The verdict is a tree of residuals in the
+  body's shape, and what a function owes is one proposition along its
+  meaning: each statement's residuals at the state it reads, a branch's
+  under its test (the shape of the source's `if h:` proof). Writes owe no
+  bound in this fragment: the source's `update` is total; the bytes level's
+  store does need one, which is still to be stated.
 
 The first experiment (§15.6) keeps the state per object, not per name: a
 table of which name holds each object now, and the views, each naming its
@@ -1380,6 +1397,53 @@ whose arms open views on different windows), the full verdict `check_fn(…)
 = Some(rs)` costs 9.2k to 290k kernel steps, each doubling 1.96 to 2.03
 times the last. One object per function throughout, so the holder table the
 first experiment's quadratic came from does not arise.
+
+*Site facts in the checker* (2026-11-25,
+`issues/ownership-site-facts-into-the-checker.md`). The fifth experiment's
+additions (§18.4 item 1) are statements of the one checker, re-expressed
+rather than added beside it, and its probes run against it
+(`site_facts_tests.hthr`). What changed, each once:
+
+- *The words.* The meaning's and the run's words are an `Env`: the
+  parameters read by position and the words the body bound newest first,
+  with their count, so a parameter and a recent word are read in constant
+  time. The pin, which read through a snoc list by position, was quadratic
+  in the body; it is linear now.
+- *Residuals.* A residual is the proposition the source writes at its site
+  (§15.3): a bound per element read (`Inside`, through a view too), a
+  callee's precondition at the value the call lends (`Pre`), two windows
+  apart as the disjunction of its two sides spelled as a source spells
+  them (`Apart`). It is read in the state its site reads, along the
+  meaning, not in the final state: with the parameter a place there are no
+  versions for a final state to hold, and arms bind different numbers of
+  sites. The verdict is a tree in the body's shape (`Owes`), and a function
+  owes one proposition (`Owes::Due`): residuals at their sites, an arm's on
+  its side of the test, what follows a join in each arm. `Under` went with
+  the final-state reading.
+- *Branches.* The meaning carries what follows a branch into each arm, the
+  convoy a source's `if h:` elaborates to, so a function whose `if` ends it
+  pins by conversion, and its arms' residuals are discharged by
+  `Bool::cases` of the `if`'s evidence. One `If`, no `Branch`.
+- *Contracts.* A pre- and a postcondition are of the parameter's value (its
+  object and the slots it is lent) and the words; a postcondition is of the
+  whole answer. Owing every read's bound made both necessary: a read
+  through a view a callee answered is bounded by the callee's promise about
+  its view, a read through a lent reference by a precondition over what was
+  lent, and a read after a call by the callee's promise about the object it
+  hands back. `CallGet` calls a reader answering a word.
+- *Proofs.* The theorems whose statements changed are re-proved, as stage
+  lemmas; nothing is stated twice. The module's fresh elaboration and its
+  dearest declarations (the window lemmas) are as before.
+
+Costs, as shapes, at doubling bodies with a residual at every statement:
+the verdict, the pin (through parameters or a chain of lets) and the
+discharge as one ascription of the restated conjunction are linear in the
+body; the discharge as a tuple converted component by component is still
+quadratic, so a generator emits the restated form, as a statement and proof
+built by recursion (a literal conjunction is linear in the kernel but
+superlinear to elaborate). Owing every bound has a price for programs: each
+read needs its bound from the caller, and a program whose callee answers a
+view composes its depths from two (depth zero answers an empty view).
 
 ### 15.7 Settled by Minus, 2026-11-25, and what is still open
 
@@ -1972,7 +2036,11 @@ per function connects them.
   parameter reads the meaning's value after (the eager write-back); the
   heap is unchanged outside what was lent, which for a window is one lens
   equation; a returned view's selectors extend its parameter's; its events
-  are well formed. A postcondition is one more field.
+  are well formed. A pre- and a postcondition are propositions of the
+  parameter's value as it went in (its object and the slots it is lent,
+  whose values are the object's windows there) and of the words; the
+  postcondition is also of the whole answer (its value, word and view).
+  The callee's precondition is owed at the value the call lends (§15.3).
 
 ### 18.4 Three things not yet tested, and their tests
 
@@ -1984,9 +2052,11 @@ per function connects them.
    written by hand in the checker's language, its residual discharged from
    its own hypothesis.
 
-   **Result (2026-11-25, `lib/lang/ownership/site_facts.hthr`, probes in
-   `lib/_tests/lang/ownership/site_facts_tests.hthr`, log in
-   `issues/ownership-residuals-from-source-proofs.md`): it works, and the
+   **Result (2026-11-25, built as `lib/lang/ownership/site_facts.hthr`
+   beside the checker, now folded into it: probes in
+   `lib/_tests/lang/ownership/site_facts_tests.hthr`, logs in
+   `issues/ownership-residuals-from-source-proofs.md` and
+   `issues/ownership-site-facts-into-the-checker.md`): it works, and the
    discharge is the source's proof itself.** A read under a parameter proof,
    an index read into a `let`, a write apart from a held view under an `if`,
    and calls passing the caller's proof on (directly, and over a read) each
@@ -2022,6 +2092,26 @@ per function connects them.
    reader answering a word (no such call), and an `if` whose test reads a
    word the body bound (that is the checker's own branch, which the joins
    work brings).
+
+   **Folded into the one checker (2026-11-25,
+   `issues/ownership-site-facts-into-the-checker.md`).** The four additions
+   are statements of the checker now, not a module beside it, and the three
+   gaps are closed: a reader whose precondition reads its list is called on
+   the caller's list (`CallGet`) and on a loan's window (`CallMut`), its
+   precondition owed at the value lent; and a test over a word the body
+   bound is the checker's `If` (`hop_le`). Two things changed from the
+   experiment's form. A residual is read in the state its *site* reads,
+   along the meaning, not in the final state: with the parameter a place,
+   the final state no longer holds the value an earlier read read, and arms
+   bind different numbers of sites, so no static index into a log would
+   do. And apartness names its side: the residual is the disjunction of the
+   two sides, each spelled as a source spells it, so `poke`'s `k <= j` and
+   `after_read`'s `1 + xs[0] <= j` are their discharges by conversion
+   (`Inl(h)`), with no `omega` and no hypotheses kept beyond the site's
+   proof. The restated conjunction stays the shape a generator emits for
+   many residuals (the tuple, converted component by component, is still
+   quadratic); built by a recursive statement and proof it is linear and
+   pays no elaborator cost.
 2. **Loops.** A place state stable at the loop's head in one pass;
    residuals that hold at every pass and not "at the words the meaning ends
    with"; soundness by induction on fuel. Test: one loop added to the
