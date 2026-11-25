@@ -1,0 +1,722 @@
+// Sequence instances by hand (docs/language/ownership-design.md §21.1,
+// issues/ownership-interfaces.md): `List<A>`, `[A; n]` and `Bytes(n)` as
+// `shape.hthr`'s sequences, each reading through its type's own total
+// accessor with that accessor's pad, and spelling its accessor's bound as
+// the accessor does.
+//
+// | Instance | Index | Read | Update | Bound |
+// |---|---|---|---|---|
+// | `List<A>` | a number | `xs.nth(i).unwrap_or(pad)` | `xs.update(i, λ _ => x)` | `i < xs.len()` |
+// | `[A; n]` | any word, through `toNat` | `vector_get(v, i.toNat(), pad)` (`Vec::at`) | `vector_update` (`Vec::put`) | `i.toNat() < n` |
+// | `Bytes(n)` | a `u64` | `byte_within(n, i)` (`Bytes::at`) | `stored_under` (`Bytes::put`) | `i < s.len()`, an order on `u64` |
+//
+// `List<A>` and `[A; n]` take their pad as a parameter of the instance: the
+// instance is of the sequence type at an element that has one (a word's 0,
+// a record's derived default, a type parameter's opaque default). An index
+// of another kind reads the pad and writes nothing. `List<A>` has windows,
+// themselves lists (`Seq::list`'s `me`): `xs.drop(lo).take(n)`, written back
+// by `put_window` where the window is inside and what is written has its
+// length.
+import logic;
+import bool;
+import nat;
+import omega;
+import option;
+import list;
+import list_window;
+import vector;
+import bitvec;
+import bitvec_nat;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import rt;
+import rt_file;
+import bytes;
+
+// ---------------------------------------------------------------------------
+// Unique identity proofs at `Nat` (Hedberg's argument from `Nat::dec`), for
+// a `Bytes`'s length proof; issues/uip-from-decidable-equality.md would
+// put this in the library.
+
+fn Nat::eq_sym({a, b: Nat}, p: a = b) → b = a { j(p, λ c _ => c = a, refl) }
+
+fn Nat::eq_trans({a, b, c: Nat}, p: a = b, q: b = c) → a = c { j(q, λ d _ => a = d, p) }
+
+fn Nat::canon({a, b: Nat}, p: a = b) → a = b { match Nat::dec(a, b) { Inl(e) => e, Inr(ne) => false_elim(ne(p)) } }
+
+fn Nat::canon_at(a: Nat) → a = a { Nat::canon(refl) }
+
+theorem Nat::canon_const({a, b: Nat}, p, q: a = b): Nat::canon(p) = Nat::canon(q) {
+    (match Nat::dec(a, b) as λ o => (match o { Inl(e) => e, Inr(ne) => false_elim<a = b>(ne(p)) }) = (match o { Inl(e) => e, Inr(ne) => false_elim<a = b>(ne(q)) }) {
+        Inl(_) => refl,
+        Inr(ne) => false_elim(ne(p)),
+    })
+}
+
+theorem Nat::sym_trans_refl({a, b: Nat}, c: a = b): Nat::eq_trans(Nat::eq_sym(c), c) = refl { j(c, λ y c2 => Nat::eq_trans(Nat::eq_sym(c2), c2) = refl, refl) }
+
+theorem Nat::canon_inv({a, b: Nat}, p: a = b): p = Nat::eq_trans(Nat::eq_sym(Nat::canon_at(a)), Nat::canon(p)) {
+    j(p, λ y p2 => p2 = Nat::eq_trans(Nat::eq_sym(Nat::canon_at(a)), Nat::canon(p2)), sym(Nat::sym_trans_refl(Nat::canon_at(a))))
+}
+
+theorem Nat::uip({a, b: Nat}, p, q: a = b): p = q {
+    trans(Nat::canon_inv(p), trans(cong_fn(λ (r: a = b) => Nat::eq_trans(Nat::eq_sym(Nat::canon_at(a)), r), Nat::canon_const(p, q)), sym(Nat::canon_inv(q))))
+}
+
+// Two spans of bytes with the same bytes are one.
+theorem Bytes::ext({n: u64}, s, t: Bytes(n), e: s.bytes = t.bytes): s = t {
+    (match s as λ s2 => s2.bytes = t.bytes → s2 = t {
+        Bytes(b1, p1) => match t as λ t2 => b1 = t2.bytes → Bytes(b1, p1) = t2 {
+            Bytes(b2, p2) => λ e2 => j(e2, λ b _ => (p: b.len() = n.toNat()) → Bytes(b1, p1) = Bytes(b, p), λ p => j(Nat::uip(p1, p), λ q _ => Bytes(b1, p1) = Bytes(b1, q), refl))(p2),
+        },
+    })(e)
+}
+
+// ---------------------------------------------------------------------------
+// `List<A>`: a number indexes; the pad past the end
+
+fn List::ix_get<A>(self xs: List<A>, i: Ix, pad: A) → A { match i { INat(k) => xs.nth(k).unwrap_or(pad), IWord(_, _) => pad } }
+
+fn List::ix_set<A>(self xs: List<A>, i: Ix, x: A) → List<A> { match i { INat(k) => xs.update(k, λ _ => x), IWord(_, _) => xs } }
+
+fn List::ix_inside<A>(self xs: List<A>, i: Ix) → Bool { match i { INat(k) => (k + 1).leb(xs.len()), IWord(_, _) => False } }
+
+fn List::ix_win<A>(self xs: List<A>, lo, n: Ix) → List<A> { match lo { INat(l) => match n { INat(m) => xs.drop(l).take(m), IWord(_, _) => Nil }, IWord(_, _) => Nil } }
+
+fn List::ix_win_inside<A>(self xs: List<A>, lo, n: Ix) → Bool { match lo { INat(l) => match n { INat(m) => (l + m).leb(xs.len()), IWord(_, _) => False }, IWord(_, _) => False } }
+
+// Written back where the window is inside and what is written has its
+// length; nothing otherwise.
+fn List::ix_put_win<A>(self xs: List<A>, lo, n: Ix, ys: List<A>) → List<A> {
+    match lo {
+        INat(l) => match n { INat(m) => match (l + m).leb(xs.len()) && ys.len().same(m) { True => xs.put_window(l, ys), False => xs }, IWord(_, _) => xs },
+        IWord(_, _) => xs,
+    }
+}
+
+// A list window's own type is the list's: `me` names it, and `to`, `of`
+// carry it to and from the list (each the identity where the environment
+// decodes `me` to the list type, so both convert away).
+fn Seq::list_win(tys: Nat → Type, a: Shape, me: Shape, to: El(tys, me) → List<El(tys, a)>, of: List<El(tys, a)> → El(tys, me)) → Win(tys, List<El(tys, a)>) {
+    Win(me, λ ys => List::len(to(ys)), λ xs lo n => of(xs.ix_win(lo, n)), λ xs lo n ys => xs.ix_put_win(lo, n, to(ys)),
+        λ xs lo n => xs.ix_win_inside(lo, n), λ xs lo n => ∥lo.toNat() + n.toNat() <= xs.len()∥)
+}
+
+// The instance at element shape `a` with its pad.
+fn Seq::list(tys: Nat → Type, a: Shape, pad: El(tys, a), win: Option<Win(tys, List<El(tys, a)>)>) → Seq(tys, List<El(tys, a)>) {
+    Seq(a, λ xs => xs.len(), λ xs i => xs.ix_get(i, pad), λ xs i x => xs.ix_set(i, x), λ xs i => xs.ix_inside(i), λ xs i => ∥i.toNat() < xs.len()∥, win)
+}
+
+theorem List::ix_get_set<A>(self xs: List<A>, i: Ix, pad: A, inside: xs.ix_inside(i) = True, x: A): xs.ix_set(i, x).ix_get(i, pad) = x {
+    (match i as λ i2 => xs.ix_inside(i2) = True → xs.ix_set(i2, x).ix_get(i2, pad) = x {
+        INat(k) => λ h => cong_fn(λ (o: Option<A>) => o.unwrap_or(pad), xs.nth_update_set(k, x, omega(h))),
+        IWord(_, _) => λ no => absurd(no),
+    })(inside)
+}
+
+theorem List::ix_set_set<A>(self xs: List<A>, i: Ix, x, y: A): xs.ix_set(i, x).ix_set(i, y) = xs.ix_set(i, y) {
+    match i { INat(k) => xs.update_update_same(k, λ _ => x, λ _ => y), IWord(_, _) => refl }
+}
+
+theorem List::ix_still<A>(self xs: List<A>, i: Ix, outside: xs.ix_inside(i) = False, x: A): xs.ix_set(i, x) = xs {
+    (match i as λ i2 => xs.ix_inside(i2) = False → xs.ix_set(i2, x) = xs {
+        INat(k) => λ h => xs.update_past(k, λ _ => x, omega(h)),
+        IWord(_, _) => λ _ => refl,
+    })(outside)
+}
+
+theorem List::ix_len_set<A>(self xs: List<A>, i: Ix, x: A): xs.ix_set(i, x).len() = xs.len() { match i { INat(k) => xs.len_update(k, λ _ => x), IWord(_, _) => refl } }
+
+theorem List::ix_get_other<A>(self xs: List<A>, i, j: Ix, apart: Ix::Apart(i, INat(1), j, INat(1)), x, pad: A): xs.ix_set(j, x).ix_get(i, pad) = xs.ix_get(i, pad) {
+    (match i as λ i2 => Ix::Apart(i2, INat(1), j, INat(1)) → xs.ix_set(j, x).ix_get(i2, pad) = xs.ix_get(i2, pad) {
+        INat(k) => match j as λ j2 => Ix::Apart(INat(k), INat(1), j2, INat(1)) → xs.ix_set(j2, x).ix_get(INat(k), pad) = xs.ix_get(INat(k), pad) {
+            INat(l) => λ h => {
+                let h0: Span(k, 1).apart(Span(l, 1)).IsTrue() = h;
+                cong_fn(λ (o: Option<A>) => o.unwrap_or(pad), xs.nth_update_other(l, λ _ => x, k, λ e => omega(h0, e)))
+            },
+            IWord(_, _) => λ _ => refl,
+        },
+        IWord(_, _) => λ _ => refl,
+    })(apart)
+}
+
+theorem List::ix_commute<A>(self xs: List<A>, i, j: Ix, apart: Ix::Apart(i, INat(1), j, INat(1)), x, y: A): xs.ix_set(j, y).ix_set(i, x) = xs.ix_set(i, x).ix_set(j, y) {
+    (match i as λ i2 => Ix::Apart(i2, INat(1), j, INat(1)) → xs.ix_set(j, y).ix_set(i2, x) = xs.ix_set(i2, x).ix_set(j, y) {
+        INat(k) => match j as λ j2 => Ix::Apart(INat(k), INat(1), j2, INat(1)) → xs.ix_set(j2, y).ix_set(INat(k), x) = xs.ix_set(INat(k), x).ix_set(j2, y) {
+            INat(l) => λ h => {
+                let h0: Span(k, 1).apart(Span(l, 1)).IsTrue() = h;
+                xs.update_update_apart(l, k, λ _ => y, λ _ => x, λ e => omega(h0, e))
+            },
+            IWord(_, _) => λ _ => refl,
+        },
+        IWord(_, _) => λ _ => refl,
+    })(apart)
+}
+
+theorem Seq::list_laws(tys: Nat → Type, a: Shape, pad: El(tys, a), win: Option<Win(tys, List<El(tys, a)>)>): SeqLaws(tys, List<El(tys, a)>, Seq::list(tys, a, pad, win)) {
+    SeqLaws(
+        λ v i h x => v.ix_get_set(i, pad, h, x),
+        λ v i x y => v.ix_set_set(i, x, y),
+        λ v i h x => v.ix_still(i, h, x),
+        λ v i x => v.ix_len_set(i, x),
+        λ v i j h x => v.ix_get_other(i, j, h, x, pad),
+        λ v i j h x y => v.ix_commute(i, j, h, x, y),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// `[A; n]`: any word indexes, through `toNat`, as `Vec::at` reads
+
+fn Seq::vec(tys: Nat → Type, a: Shape, n: Nat, pad: El(tys, a)) → Seq(tys, [El(tys, a); n]) {
+    Seq(a, λ _ => n, λ v i => vector_get(v, i.toNat(), pad), λ v i x => vector_update(v, i.toNat(), x), λ _ i => (i.toNat() + 1).leb(n), λ _ i => ∥i.toNat() < n∥, None)
+}
+
+theorem Seq::vec_laws(tys: Nat → Type, a: Shape, n: Nat, pad: El(tys, a)): SeqLaws(tys, [El(tys, a); n], Seq::vec(tys, a, n, pad)) {
+    SeqLaws(
+        λ v i h x => vector_get_update_same(n, v, i.toNat(), x, pad, omega(h)),
+        λ v i x y => vector_update_update_same(n, v, i.toNat(), x, y),
+        λ v i h x => vector_update_past(n, v, i.toNat(), x, omega(h)),
+        λ v i x => refl,
+        λ v i j h x => {
+            let h0: Span(i.toNat(), 1).apart(Span(j.toNat(), 1)).IsTrue() = h;
+            vector_get_update_other(n, v, j.toNat(), i.toNat(), x, pad, λ e => omega(h0, e))
+        },
+        λ v i j h x y => {
+            let h0: Span(i.toNat(), 1).apart(Span(j.toNat(), 1)).IsTrue() = h;
+            vector_update_update_apart(n, v, j.toNat(), i.toNat(), y, x, λ e => omega(h0, e))
+        },
+    )
+}
+
+// ---------------------------------------------------------------------------
+// `Bytes(n)`: a `u64` indexes, as `Bytes::at` reads; another index reads 0
+
+fn Ix::as_u64(self i: Ix) → Option<u64> {
+    match i { IWord(w, x) => match Nat::dec(w, 64) { Inl(h) => Some(j(h, λ c _ => BitVec(c), x)), Inr(_) => None }, INat(_) => None }
+}
+
+fn Bytes::ix_get({n: u64}, self s: Bytes(n), i: Ix) → u8 { match i.as_u64() { Some(x) => s.bytes.byte_within(n, x), None => BitVec::ofNat(0) } }
+
+fn Bytes::ix_set({n: u64}, self s: Bytes(n), i: Ix, v: u8) → Bytes(n) { match i.as_u64() { Some(x) => s.stored_under(n, x, v), None => s } }
+
+fn Bytes::ix_inside({n: u64}, self s: Bytes(n), i: Ix) → Bool { match i.as_u64() { Some(x) => x.unsigned_lt_bit(n), None => False } }
+
+fn Bytes::ix_pre({n: u64}, self s: Bytes(n), i: Ix) → Type { match i.as_u64() { Some(x) => ∥x < s.len()∥, None => False } }
+
+fn Seq::bytes(tys: Nat → Type, n: u64) → Seq(tys, Bytes(n)) {
+    Seq(SWord(WBits(8)), λ s => s.bytes.len(), λ s i => s.ix_get(i), λ s i x => s.ix_set(i, x), λ s i => s.ix_inside(i), λ s i => s.ix_pre(i), None)
+}
+
+theorem Bytes::below({n: u64}, x: u64, h: x.unsigned_lt_bit(n) = True): x.toNat() < n.toNat() { BitVec::borrow_sub_of_bit_true(64, x, n, h) }
+
+theorem Bytes::u64_get_set({n: u64}, s: Bytes(n), x: u64, h: x.unsigned_lt_bit(n) = True, v: u8): s.stored_under(n, x, v).bytes.byte_within(n, x) = v {
+    let below: (x.toNat() < n.toNat()) = Bytes::below(x, h);
+    s.bytes.byte_within_with_byte_within_same(n, x, v, below, omega(below, s.sized))
+}
+
+theorem Bytes::u64_set_set({n: u64}, s: Bytes(n), x: u64, v, w: u8): s.stored_under(n, x, v).stored_under(n, x, w) = s.stored_under(n, x, w) {
+    Bytes::ext(s.stored_under(n, x, v).stored_under(n, x, w), s.stored_under(n, x, w), s.bytes.with_byte_within_twice(n, x, v, w))
+}
+
+theorem Bytes::u64_still({n: u64}, s: Bytes(n), x: u64, h: x.unsigned_lt_bit(n) = False, v: u8): s.stored_under(n, x, v) = s {
+    Bytes::ext(s.stored_under(n, x, v), s, j(sym(h), λ b _ => (match b { False => s.bytes, True => s.bytes.with_byte(x, v) }) = s.bytes, refl))
+}
+
+theorem Bytes::u64_get_other({n: u64}, s: Bytes(n), x, y: u64, ne: x.toNat() ≠ y.toNat(), v: u8): s.stored_under(n, y, v).bytes.byte_within(n, x) = s.bytes.byte_within(n, x) {
+    s.bytes.byte_within_with_byte_within_other(n, y, x, v, λ e => ne(sym(e)))
+}
+
+theorem Bytes::u64_commute({n: u64}, s: Bytes(n), x, y: u64, ne: x.toNat() ≠ y.toNat(), v, w: u8):
+    s.stored_under(n, y, w).stored_under(n, x, v) = s.stored_under(n, x, v).stored_under(n, y, w)
+{
+    let bytes_eq: (s.bytes.with_byte_within(n, y, w).with_byte_within(n, x, v) = s.bytes.with_byte_within(n, x, v).with_byte_within(n, y, w)) =
+        match x.toNat().lt_or_ge(y.toNat()) {
+            Inl(lt) => s.bytes.with_byte_within_apart(n, y, x, w, v, lt),
+            Inr(ge) => sym(s.bytes.with_byte_within_apart(n, x, y, v, w, omega(ge, ne))),
+        };
+    Bytes::ext(s.stored_under(n, y, w).stored_under(n, x, v), s.stored_under(n, x, v).stored_under(n, y, w), bytes_eq)
+}
+
+// The word an index reads as is the index's number.
+theorem Ix::as_u64_nat(self i: Ix): (x: u64) → i.as_u64() = Some(x) → x.toNat() = i.toNat() {
+    match i {
+        INat(_) => λ x no => absurd(no),
+        IWord(w, x0) => λ x => (match Nat::dec(w, 64) as λ o => (match o { Inl(h) => Some(j(h, λ c _ => BitVec(c), x0)), Inr(_) => None<u64>() }) = Some(x) → x.toNat() = x0.toNat() {
+            Inl(h) => λ e => trans(cong_fn(λ (y: u64) => y.toNat(), sym(Option::some_inj(j(h, λ c _ => BitVec(c), x0), x, e))),
+                j(h, λ c h2 => (j(h2, λ c2 _ => BitVec(c2), x0)).toNat() = x0.toNat(), refl)),
+            Inr(_) => λ no => absurd(no),
+        }),
+    }
+}
+
+theorem Bytes::ix_get_set({n: u64}, self s: Bytes(n), i: Ix, h: s.ix_inside(i) = True, v: u8): s.ix_set(i, v).ix_get(i) = v {
+    (match i.as_u64() as λ o => (match o { Some(x) => x.unsigned_lt_bit(n), None => False }) = True →
+            (match o { Some(x) => (match o { Some(x2) => s.stored_under(n, x2, v), None => s }).bytes.byte_within(n, x), None => BitVec::ofNat(0) }) = v {
+        Some(x) => λ h2 => Bytes::u64_get_set(s, x, h2, v),
+        None => λ no => absurd(no),
+    })(h)
+}
+
+theorem Bytes::ix_set_set({n: u64}, self s: Bytes(n), i: Ix, v, w: u8): s.ix_set(i, v).ix_set(i, w) = s.ix_set(i, w) {
+    match i.as_u64() as λ o =>
+        (match o { Some(x) => (match o { Some(x2) => s.stored_under(n, x2, v), None => s }).stored_under(n, x, w), None => (match o { Some(x2) => s.stored_under(n, x2, v), None => s }) })
+            = (match o { Some(x) => s.stored_under(n, x, w), None => s }) {
+        Some(x) => Bytes::u64_set_set(s, x, v, w),
+        None => refl,
+    }
+}
+
+theorem Bytes::ix_still({n: u64}, self s: Bytes(n), i: Ix, h: s.ix_inside(i) = False, v: u8): s.ix_set(i, v) = s {
+    (match i.as_u64() as λ o => (match o { Some(x) => x.unsigned_lt_bit(n), None => False }) = False → (match o { Some(x) => s.stored_under(n, x, v), None => s }) = s {
+        Some(x) => λ h2 => Bytes::u64_still(s, x, h2, v),
+        None => λ _ => refl,
+    })(h)
+}
+
+theorem Bytes::ix_len_set({n: u64}, self s: Bytes(n), i: Ix, v: u8): s.ix_set(i, v).bytes.len() = s.bytes.len() {
+    match i.as_u64() as λ o => (match o { Some(x) => s.stored_under(n, x, v), None => s }).bytes.len() = s.bytes.len() {
+        Some(x) => s.bytes.len_with_byte_within(n, x, v),
+        None => refl,
+    }
+}
+
+theorem Bytes::ix_get_other({n: u64}, self s: Bytes(n), i, k: Ix, apart: Ix::Apart(i, INat(1), k, INat(1)), v: u8): s.ix_set(k, v).ix_get(i) = s.ix_get(i) {
+    let h0: Span(i.toNat(), 1).apart(Span(k.toNat(), 1)).IsTrue() = apart;
+    (match k.as_u64() as λ ok => k.as_u64() = ok →
+            (match i.as_u64() { Some(x) => (match ok { Some(y) => s.stored_under(n, y, v), None => s }).bytes.byte_within(n, x), None => BitVec::ofNat(0) }) = s.ix_get(i) {
+        None => λ _ => refl,
+        Some(y) => λ ek => (match i.as_u64() as λ oi => i.as_u64() = oi →
+                (match oi { Some(x) => s.stored_under(n, y, v).bytes.byte_within(n, x), None => BitVec::ofNat(0) }) = (match oi { Some(x) => s.bytes.byte_within(n, x), None => BitVec::ofNat(0) }) {
+            None => λ _ => refl,
+            Some(x) => λ ei => {
+                let nx: (x.toNat() = i.toNat()) = i.as_u64_nat(x, ei);
+                let ny: (y.toNat() = k.toNat()) = k.as_u64_nat(y, ek);
+                Bytes::u64_get_other(s, x, y, λ e => omega(h0, nx, ny, e), v)
+            },
+        })(refl),
+    })(refl)
+}
+
+theorem Bytes::ix_commute({n: u64}, self s: Bytes(n), i, k: Ix, apart: Ix::Apart(i, INat(1), k, INat(1)), v, w: u8): s.ix_set(k, w).ix_set(i, v) = s.ix_set(i, v).ix_set(k, w) {
+    let h0: Span(i.toNat(), 1).apart(Span(k.toNat(), 1)).IsTrue() = apart;
+    (match k.as_u64() as λ ok => k.as_u64() = ok →
+            (match i.as_u64() { Some(x) => (match ok { Some(y) => s.stored_under(n, y, w), None => s }).stored_under(n, x, v), None => (match ok { Some(y) => s.stored_under(n, y, w), None => s }) })
+                = (match ok { Some(y) => s.ix_set(i, v).stored_under(n, y, w), None => s.ix_set(i, v) }) {
+        None => λ _ => refl,
+        Some(y) => λ ek => (match i.as_u64() as λ oi => i.as_u64() = oi →
+                (match oi { Some(x) => s.stored_under(n, y, w).stored_under(n, x, v), None => s.stored_under(n, y, w) })
+                    = (match oi { Some(x) => s.stored_under(n, x, v), None => s }).stored_under(n, y, w) {
+            None => λ _ => refl,
+            Some(x) => λ ei => {
+                let nx: (x.toNat() = i.toNat()) = i.as_u64_nat(x, ei);
+                let ny: (y.toNat() = k.toNat()) = k.as_u64_nat(y, ek);
+                Bytes::u64_commute(s, x, y, λ e => omega(h0, nx, ny, e), v, w)
+            },
+        })(refl),
+    })(refl)
+}
+
+theorem Seq::bytes_laws(tys: Nat → Type, n: u64): SeqLaws(tys, Bytes(n), Seq::bytes(tys, n)) {
+    SeqLaws(
+        λ s i h v => s.ix_get_set(i, h, v),
+        λ s i v w => s.ix_set_set(i, v, w),
+        λ s i h v => s.ix_still(i, h, v),
+        λ s i v => s.ix_len_set(i, v),
+        λ s i k h v => s.ix_get_other(i, k, h, v),
+        λ s i k h v w => s.ix_commute(i, k, h, v, w),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// `List<A>`'s windows: each law by the elements, through `List::ext_nth`
+
+theorem List::nth_pw_in<A>(xs: List<A>, l: Nat, ys: List<A>, k: Nat, lo: l <= k, hi: k < l + ys.len(), fits: l <= xs.len()): xs.put_window(l, ys).nth(k) = ys.nth(k - l) {
+    let e: ((k - l) + l = k) = omega(lo);
+    j(e, λ t _ => xs.put_window(l, ys).nth(t) = ys.nth(k - l), xs.nth_put_window_inside(l, ys, k - l, omega(lo, hi), fits))
+}
+
+theorem List::nth_pw_after<A>(xs: List<A>, l: Nat, ys: List<A>, k: Nat, after: l + ys.len() <= k, fits: l <= xs.len()): xs.put_window(l, ys).nth(k) = xs.nth(k) {
+    let e: ((k - (ys.len() + l)) + (ys.len() + l) = k) = omega(after);
+    j(e, λ t _ => xs.put_window(l, ys).nth(t) = xs.nth(t), xs.nth_put_window_after(l, ys, k - (ys.len() + l), fits))
+}
+
+// Outside the window written, what was there.
+theorem List::nth_pw_outside<A>(xs: List<A>, l: Nat, ys: List<A>, k: Nat, out: Span(k, 1).apart(Span(l, ys.len())).IsTrue(), fits: l <= xs.len()): xs.put_window(l, ys).nth(k) = xs.nth(k) {
+    match k.lt_or_ge(l) {
+        Inl(before) => xs.nth_put_window_before(l, ys, k, before, fits),
+        Inr(ge) => List::nth_pw_after(xs, l, ys, k, omega(out, ge), fits),
+    }
+}
+
+theorem List::len_take_same<A>(xs: List<A>): (ys: List<A>) → xs.len() = ys.len() → (n: Nat) → xs.take(n).len() = ys.take(n).len() {
+    match xs {
+        Nil => λ ys => match ys { Nil => λ _ n => refl, Cons(_, _) => λ no n => absurd(no) },
+        Cons(a, t) => λ ys => match ys {
+            Nil => λ no n => absurd(no),
+            Cons(b, u) => λ e n => match n {
+                Zero => refl,
+                Succ(n1) => Nat::cong_succ(List::len_take_same(t, u, Nat::pred_eq(e), n1)),
+            },
+        },
+    }
+}
+
+theorem List::len_take_at_most<A>(xs: List<A>): (n: Nat) → xs.take(n).len() <= n {
+    match xs {
+        Nil => λ n => omega(),
+        Cons(h, t) => λ n => match n {
+            Zero => omega(),
+            Succ(n1) => {
+                let r: (Cons(h, t).take(Succ(n1)).len() = Succ(t.take(n1).len())) = refl;
+                omega(r, List::len_take_at_most(t, n1))
+            },
+        },
+    }
+}
+
+// Two lists of one length agreeing on a window have one window there.
+theorem List::win_agree<A>(xs, ys: List<A>, l, m: Nat, same: xs.len() = ys.len(), agree: (k: Nat) → l <= k → k < l + m → xs.nth(k) = ys.nth(k)):
+    xs.drop(l).take(m) = ys.drop(l).take(m)
+{
+    let dl: (xs.drop(l).len() = ys.drop(l).len()) = omega(xs.len_drop(l), ys.len_drop(l), same);
+    let tl: (xs.drop(l).take(m).len() = ys.drop(l).take(m).len()) = List::len_take_same(xs.drop(l), ys.drop(l), dl, m);
+    xs.drop(l).take(m).ext_nth(ys.drop(l).take(m), tl, λ i h => {
+        let below: (i < m) = omega(h, List::len_take_at_most(xs.drop(l), m));
+        trans(xs.drop(l).nth_take(m, i, below), trans(xs.nth_drop_add(l, i), trans(agree(i + l, omega(), omega(below)), sym(trans(ys.drop(l).nth_take(m, i, below), ys.nth_drop_add(l, i))))))
+    })
+}
+
+// The guarded write-back at numbers: the window inside, and what is
+// written of its length.
+fn List::pg<A>(xs: List<A>, l, m: Nat, ys: List<A>) → List<A> { match (l + m).leb(xs.len()) && ys.len().same(m) { True => xs.put_window(l, ys), False => xs } }
+
+theorem List::pg_on<A>(xs: List<A>, l, m: Nat, ys: List<A>, g: ((l + m).leb(xs.len()) && ys.len().same(m)) = True): List::pg(xs, l, m, ys) = xs.put_window(l, ys) {
+    j(sym(g), λ b _ => (match b { True => xs.put_window(l, ys), False => xs }) = xs.put_window(l, ys), refl)
+}
+
+theorem List::pg_off<A>(xs: List<A>, l, m: Nat, ys: List<A>, g: ((l + m).leb(xs.len()) && ys.len().same(m)) = False): List::pg(xs, l, m, ys) = xs {
+    j(sym(g), λ b _ => (match b { True => xs.put_window(l, ys), False => xs }) = xs, refl)
+}
+
+// The guard's two facts.
+record Guard(xs_len, l, m, ys_len: Nat) { inside: l + m <= xs_len, sized: ys_len = m }
+
+theorem List::guard_parts<A>(xs: List<A>, l, m: Nat, ys: List<A>, g: ((l + m).leb(xs.len()) && ys.len().same(m)) = True): Guard(xs.len(), l, m, ys.len()) {
+    let parts = Bool::and_true_parts((l + m).leb(xs.len()), ys.len().same(m), g);
+    Guard(omega(parts.left), ys.len().same_sound(m, parts.right))
+}
+
+theorem List::guard_of<A>(xs: List<A>, l, m: Nat, ys: List<A>, inside: l + m <= xs.len(), sized: ys.len() = m): ((l + m).leb(xs.len()) && ys.len().same(m)) = True {
+    Bool::and_true_of((l + m).leb(xs.len()), ys.len().same(m), (l + m).leb_true(xs.len(), inside), j(sym(sized), λ k _ => k.same(m) = True, m.same_self()))
+}
+
+// A guard depends only on the length.
+theorem List::guard_len<A>(xs, xs2: List<A>, l, m: Nat, ys: List<A>, e: xs2.len() = xs.len()):
+    ((l + m).leb(xs2.len()) && ys.len().same(m)) = ((l + m).leb(xs.len()) && ys.len().same(m))
+{
+    cong_fn(λ (k: Nat) => (l + m).leb(k) && ys.len().same(m), e)
+}
+
+theorem List::len_pg<A>(xs: List<A>, l, m: Nat, ys: List<A>): List::pg(xs, l, m, ys).len() = xs.len() {
+    (match (l + m).leb(xs.len()) && ys.len().same(m) as λ b => ((l + m).leb(xs.len()) && ys.len().same(m)) = b → (match b { True => xs.put_window(l, ys), False => xs }).len() = xs.len() {
+        True => λ g => {
+            let gp = List::guard_parts(xs, l, m, ys, g);
+            xs.len_put_window(l, ys, omega(gp.inside, gp.sized))
+        },
+        False => λ _ => refl,
+    })(refl)
+}
+
+// The elements of a guarded write-back.
+theorem List::nth_pg_in<A>(xs: List<A>, l, m: Nat, ys: List<A>, g: ((l + m).leb(xs.len()) && ys.len().same(m)) = True, k: Nat, lo: l <= k, hi: k < l + m):
+    List::pg(xs, l, m, ys).nth(k) = ys.nth(k - l)
+{
+    let gp = List::guard_parts(xs, l, m, ys, g);
+    trans(cong_fn(λ (zs: List<A>) => zs.nth(k), List::pg_on(xs, l, m, ys, g)), List::nth_pw_in(xs, l, ys, k, lo, omega(hi, gp.sized), omega(gp.inside)))
+}
+
+theorem List::nth_pg_out<A>(xs: List<A>, l, m: Nat, ys: List<A>, k: Nat, out: Span(k, 1).apart(Span(l, m)).IsTrue()): List::pg(xs, l, m, ys).nth(k) = xs.nth(k) {
+    (match (l + m).leb(xs.len()) && ys.len().same(m) as λ b => ((l + m).leb(xs.len()) && ys.len().same(m)) = b → (match b { True => xs.put_window(l, ys), False => xs }).nth(k) = xs.nth(k) {
+        True => λ g => {
+            let gp = List::guard_parts(xs, l, m, ys, g);
+            List::nth_pw_outside(xs, l, ys, k, omega(out, gp.sized), omega(gp.inside))
+        },
+        False => λ _ => refl,
+    })(refl)
+}
+
+// A window's length, inside.
+theorem List::win_len<A>(xs: List<A>, l, m: Nat, inside: l + m <= xs.len()): xs.drop(l).take(m).len() = m {
+    xs.drop(l).len_take(m, omega(inside, xs.len_drop(l)))
+}
+
+theorem List::w_get_set<A>(xs: List<A>, l, m: Nat, inside: l + m <= xs.len(), ys: List<A>, sized: ys.len() = xs.drop(l).take(m).len()):
+    List::pg(xs, l, m, ys).drop(l).take(m) = ys
+{
+    let ym: (ys.len() = m) = trans(sized, List::win_len(xs, l, m, inside));
+    let g = List::guard_of(xs, l, m, ys, inside, ym);
+    let pl: (List::pg(xs, l, m, ys).len() = xs.len()) = List::len_pg(xs, l, m, ys);
+    List::pg(xs, l, m, ys).drop(l).take(m).ext_nth(ys, trans(List::win_len(List::pg(xs, l, m, ys), l, m, omega(inside, pl)), sym(ym)), λ i h => {
+        let below: (i < m) = omega(h, List::len_take_at_most(List::pg(xs, l, m, ys).drop(l), m));
+        let back: (i + l - l = i) = omega();
+        trans(List::pg(xs, l, m, ys).drop(l).nth_take(m, i, below), trans(List::pg(xs, l, m, ys).nth_drop_add(l, i),
+            trans(List::nth_pg_in(xs, l, m, ys, g, i + l, omega(), omega(below)), cong_fn(λ (t: Nat) => ys.nth(t), back))))
+    })
+}
+
+theorem List::nth_update_map<A>(self xs: List<A>): (i: Nat) → (f: A → A) → xs.update(i, f).nth(i) = xs.nth(i).map(f) {
+    match xs { Nil => λ i f => refl, Cons(_, t) => λ i => match i { Zero => λ f => refl, Succ(k) => λ f => t.nth_update_map(k, f) } }
+}
+
+// Two windows of one place written: the second.
+theorem List::pw_pw_same<A>(xs: List<A>, l: Nat, ys, zs: List<A>, same: ys.len() = zs.len(), fits: l + zs.len() <= xs.len()):
+    xs.put_window(l, ys).put_window(l, zs) = xs.put_window(l, zs)
+{
+    let l1: (xs.put_window(l, ys).len() = xs.len()) = xs.len_put_window(l, ys, omega(same, fits));
+    let l2: (xs.put_window(l, ys).put_window(l, zs).len() = xs.put_window(l, ys).len()) = xs.put_window(l, ys).len_put_window(l, zs, omega(l1, fits));
+    let l3: (xs.put_window(l, zs).len() = xs.len()) = xs.len_put_window(l, zs, omega(fits));
+    xs.put_window(l, ys).put_window(l, zs).ext_nth(xs.put_window(l, zs), omega(l1, l2, l3), λ k _ => match k.lt_or_ge(l) {
+        Inl(before) => trans(xs.put_window(l, ys).nth_put_window_before(l, zs, k, before, omega(l1, fits)),
+            trans(xs.nth_put_window_before(l, ys, k, before, omega(fits)), sym(xs.nth_put_window_before(l, zs, k, before, omega(fits))))),
+        Inr(ge) => match k.lt_or_ge(l + zs.len()) {
+            Inl(inside) => trans(List::nth_pw_in(xs.put_window(l, ys), l, zs, k, ge, inside, omega(l1, fits)), sym(List::nth_pw_in(xs, l, zs, k, ge, inside, omega(fits)))),
+            Inr(after) => trans(List::nth_pw_after(xs.put_window(l, ys), l, zs, k, after, omega(l1, fits)),
+                trans(List::nth_pw_after(xs, l, ys, k, omega(after, same), omega(fits)), sym(List::nth_pw_after(xs, l, zs, k, after, omega(fits))))),
+        },
+    })
+}
+
+theorem List::w_set_set<A>(xs: List<A>, l, m: Nat, ys, zs: List<A>, sized: zs.len() = xs.drop(l).take(m).len()): List::pg(List::pg(xs, l, m, ys), l, m, zs) = List::pg(xs, l, m, zs) {
+    let e2: (((l + m).leb(List::pg(xs, l, m, ys).len()) && zs.len().same(m)) = ((l + m).leb(xs.len()) && zs.len().same(m))) = List::guard_len(xs, List::pg(xs, l, m, ys), l, m, zs, List::len_pg(xs, l, m, ys));
+    (match (l + m).leb(xs.len()) && zs.len().same(m) as λ b => ((l + m).leb(xs.len()) && zs.len().same(m)) = b →
+            List::pg(List::pg(xs, l, m, ys), l, m, zs) = List::pg(xs, l, m, zs) {
+        True => λ g => {
+            let gz = List::guard_parts(xs, l, m, zs, g);
+            let outer: (List::pg(List::pg(xs, l, m, ys), l, m, zs) = List::pg(xs, l, m, ys).put_window(l, zs)) = List::pg_on(List::pg(xs, l, m, ys), l, m, zs, trans(e2, g));
+            trans(outer, trans((match (l + m).leb(xs.len()) && ys.len().same(m) as λ c => ((l + m).leb(xs.len()) && ys.len().same(m)) = c →
+                    (match c { True => xs.put_window(l, ys), False => xs }).put_window(l, zs) = xs.put_window(l, zs) {
+                True => λ gy => {
+                    let gyp = List::guard_parts(xs, l, m, ys, gy);
+                    List::pw_pw_same(xs, l, ys, zs, omega(gyp.sized, gz.sized), omega(gz.inside, gz.sized))
+                },
+                False => λ _ => refl,
+            })(refl), sym(List::pg_on(xs, l, m, zs, g))))
+        },
+        False => λ g => {
+            let off: ((l + m).leb(xs.len()) = False) = (match (l + m).leb(xs.len()) as λ c => (l + m).leb(xs.len()) = c → c = False {
+                False => λ _ => refl,
+                True => λ t => {
+                    let inside: (l + m <= xs.len()) = omega(t);
+                    let zm: (zs.len() = m) = trans(sized, List::win_len(xs, l, m, inside));
+                    absurd(trans(sym(List::guard_of(xs, l, m, zs, inside, zm)), g))
+                },
+            })(refl);
+            let gy: (((l + m).leb(xs.len()) && ys.len().same(m)) = False) = j(sym(off), λ c _ => (c && ys.len().same(m)) = False, refl);
+            trans(List::pg_off(List::pg(xs, l, m, ys), l, m, zs, trans(e2, g)), trans(List::pg_off(xs, l, m, ys, gy), sym(List::pg_off(xs, l, m, zs, g))))
+        },
+    })(refl)
+}
+
+// A window, after an element outside it is written: what it was.
+theorem List::w_get_elem<A>(xs: List<A>, l, m, k: Nat, out: Span(l, m).apart(Span(k, 1)).IsTrue(), x: A): xs.update(k, λ _ => x).drop(l).take(m) = xs.drop(l).take(m) {
+    List::win_agree(xs.update(k, λ _ => x), xs, l, m, xs.len_update(k, λ _ => x), λ k2 lo hi => xs.nth_update_other(k, λ _ => x, k2, λ e => omega(out, lo, hi, e)))
+}
+
+// A window, after a window apart from it is written: what it was.
+theorem List::w_get_win<A>(xs: List<A>, l, m, l2, m2: Nat, apart: Span(l, m).apart(Span(l2, m2)).IsTrue(), ys: List<A>): List::pg(xs, l2, m2, ys).drop(l).take(m) = xs.drop(l).take(m) {
+    List::win_agree(List::pg(xs, l2, m2, ys), xs, l, m, List::len_pg(xs, l2, m2, ys), λ k2 lo hi => List::nth_pg_out(xs, l2, m2, ys, k2, omega(apart, lo, hi)))
+}
+
+// A window and an element apart: their writes commute.
+theorem List::w_commute_elem<A>(xs: List<A>, l, m, k: Nat, out: Span(l, m).apart(Span(k, 1)).IsTrue(), ys: List<A>, x: A):
+    List::pg(xs.update(k, λ _ => x), l, m, ys) = List::pg(xs, l, m, ys).update(k, λ _ => x)
+{
+    let f = λ (_: A) => x;
+    let eg: (((l + m).leb(xs.update(k, f).len()) && ys.len().same(m)) = ((l + m).leb(xs.len()) && ys.len().same(m))) = List::guard_len(xs, xs.update(k, f), l, m, ys, xs.len_update(k, f));
+    (match (l + m).leb(xs.len()) && ys.len().same(m) as λ b => ((l + m).leb(xs.len()) && ys.len().same(m)) = b →
+            List::pg(xs.update(k, f), l, m, ys) = List::pg(xs, l, m, ys).update(k, f) {
+        False => λ g => trans(List::pg_off(xs.update(k, f), l, m, ys, trans(eg, g)), cong_fn(λ (zs: List<A>) => zs.update(k, f), sym(List::pg_off(xs, l, m, ys, g)))),
+        True => λ g => {
+            let gp = List::guard_parts(xs, l, m, ys, g);
+            let left: (List::pg(xs.update(k, f), l, m, ys) = xs.update(k, f).put_window(l, ys)) = List::pg_on(xs.update(k, f), l, m, ys, trans(eg, g));
+            let right: (List::pg(xs, l, m, ys).update(k, f) = xs.put_window(l, ys).update(k, f)) = cong_fn(λ (zs: List<A>) => zs.update(k, f), List::pg_on(xs, l, m, ys, g));
+            let lu: (xs.update(k, f).len() = xs.len()) = xs.len_update(k, f);
+            let lp: (xs.put_window(l, ys).len() = xs.len()) = xs.len_put_window(l, ys, omega(gp.inside, gp.sized));
+            let lpu: (xs.update(k, f).put_window(l, ys).len() = xs.update(k, f).len()) = xs.update(k, f).len_put_window(l, ys, omega(gp.inside, gp.sized, lu));
+            let lup: (xs.put_window(l, ys).update(k, f).len() = xs.put_window(l, ys).len()) = xs.put_window(l, ys).len_update(k, f);
+            let mid: (xs.update(k, f).put_window(l, ys) = xs.put_window(l, ys).update(k, f)) =
+                xs.update(k, f).put_window(l, ys).ext_nth(xs.put_window(l, ys).update(k, f), omega(lu, lp, lpu, lup), λ j2 _ => match Nat::eq_dec(j2, k) {
+                    Inl(at) => {
+                        let o1: (Span(j2, 1).apart(Span(l, ys.len())).IsTrue()) = omega(out, at, gp.sized);
+                        trans(List::nth_pw_outside(xs.update(k, f), l, ys, j2, o1, omega(gp.inside, lu)),
+                            j(sym(at), λ t _ => xs.update(k, f).nth(t) = xs.put_window(l, ys).update(k, f).nth(t),
+                                trans(xs.nth_update_map(k, f), trans(cong_fn(λ (o: Option<A>) => o.map(f), sym(List::nth_pw_outside(xs, l, ys, k, omega(out, gp.sized), omega(gp.inside)))),
+                                    sym(xs.put_window(l, ys).nth_update_map(k, f))))))
+                    },
+                    Inr(ne) => match j2.lt_or_ge(l) {
+                        Inl(before) => trans(xs.update(k, f).nth_put_window_before(l, ys, j2, before, omega(gp.inside, lu)),
+                            trans(xs.nth_update_other(k, f, j2, ne), trans(sym(xs.nth_put_window_before(l, ys, j2, before, omega(gp.inside))), sym(xs.put_window(l, ys).nth_update_other(k, f, j2, ne))))),
+                        Inr(ge) => match j2.lt_or_ge(l + ys.len()) {
+                            Inl(inside) => trans(List::nth_pw_in(xs.update(k, f), l, ys, j2, ge, inside, omega(gp.inside, lu)),
+                                trans(sym(List::nth_pw_in(xs, l, ys, j2, ge, inside, omega(gp.inside))), sym(xs.put_window(l, ys).nth_update_other(k, f, j2, ne)))),
+                            Inr(after) => trans(List::nth_pw_after(xs.update(k, f), l, ys, j2, after, omega(gp.inside, lu)),
+                                trans(xs.nth_update_other(k, f, j2, ne), trans(sym(List::nth_pw_after(xs, l, ys, j2, after, omega(gp.inside))), sym(xs.put_window(l, ys).nth_update_other(k, f, j2, ne))))),
+                        },
+                    },
+                });
+            trans(left, trans(mid, sym(right)))
+        },
+    })(refl)
+}
+
+// Where a number falls against a span: inside, or apart.
+inductive Falls(k, l, m: Nat) { In(lo: l <= k, hi: k < l + m), Out(out: Span(k, 1).apart(Span(l, m)).IsTrue()) }
+
+theorem Falls::of(k, l, m: Nat): Falls(k, l, m) {
+    match k.lt_or_ge(l) {
+        Inl(before) => Out(omega(before)),
+        Inr(ge) => match k.lt_or_ge(l + m) { Inl(inside) => In(ge, inside), Inr(after) => Out(omega(after)) },
+    }
+}
+
+// Two windows apart: their writes commute.
+theorem List::w_commute_win<A>(xs: List<A>, l, m, l2, m2: Nat, apart: Span(l, m).apart(Span(l2, m2)).IsTrue(), ys, zs: List<A>):
+    List::pg(List::pg(xs, l2, m2, zs), l, m, ys) = List::pg(List::pg(xs, l, m, ys), l2, m2, zs)
+{
+    let e1: (((l + m).leb(List::pg(xs, l2, m2, zs).len()) && ys.len().same(m)) = ((l + m).leb(xs.len()) && ys.len().same(m))) = List::guard_len(xs, List::pg(xs, l2, m2, zs), l, m, ys, List::len_pg(xs, l2, m2, zs));
+    let e2: (((l2 + m2).leb(List::pg(xs, l, m, ys).len()) && zs.len().same(m2)) = ((l2 + m2).leb(xs.len()) && zs.len().same(m2))) = List::guard_len(xs, List::pg(xs, l, m, ys), l2, m2, zs, List::len_pg(xs, l, m, ys));
+    (match (l + m).leb(xs.len()) && ys.len().same(m) as λ b1 => ((l + m).leb(xs.len()) && ys.len().same(m)) = b1 →
+            List::pg(List::pg(xs, l2, m2, zs), l, m, ys) = List::pg(List::pg(xs, l, m, ys), l2, m2, zs) {
+        False => λ g1 => trans(List::pg_off(List::pg(xs, l2, m2, zs), l, m, ys, trans(e1, g1)), cong_fn(λ (t: List<A>) => List::pg(t, l2, m2, zs), sym(List::pg_off(xs, l, m, ys, g1)))),
+        True => λ g1 => (match (l2 + m2).leb(xs.len()) && zs.len().same(m2) as λ b2 => ((l2 + m2).leb(xs.len()) && zs.len().same(m2)) = b2 →
+                List::pg(List::pg(xs, l2, m2, zs), l, m, ys) = List::pg(List::pg(xs, l, m, ys), l2, m2, zs) {
+            False => λ g2 => trans(cong_fn(λ (t: List<A>) => List::pg(t, l, m, ys), List::pg_off(xs, l2, m2, zs, g2)), sym(List::pg_off(List::pg(xs, l, m, ys), l2, m2, zs, trans(e2, g2)))),
+            True => λ g2 => {
+                let p1 = List::guard_parts(xs, l, m, ys, g1);
+                let p2 = List::guard_parts(xs, l2, m2, zs, g2);
+                let left: (List::pg(List::pg(xs, l2, m2, zs), l, m, ys) = xs.put_window(l2, zs).put_window(l, ys)) =
+                    trans(List::pg_on(List::pg(xs, l2, m2, zs), l, m, ys, trans(e1, g1)), cong_fn(λ (t: List<A>) => t.put_window(l, ys), List::pg_on(xs, l2, m2, zs, g2)));
+                let right: (List::pg(List::pg(xs, l, m, ys), l2, m2, zs) = xs.put_window(l, ys).put_window(l2, zs)) =
+                    trans(List::pg_on(List::pg(xs, l, m, ys), l2, m2, zs, trans(e2, g2)), cong_fn(λ (t: List<A>) => t.put_window(l2, zs), List::pg_on(xs, l, m, ys, g1)));
+                let a1: (xs.put_window(l, ys).len() = xs.len()) = xs.len_put_window(l, ys, omega(p1.inside, p1.sized));
+                let a2: (xs.put_window(l2, zs).len() = xs.len()) = xs.len_put_window(l2, zs, omega(p2.inside, p2.sized));
+                let a12: (xs.put_window(l2, zs).put_window(l, ys).len() = xs.put_window(l2, zs).len()) = xs.put_window(l2, zs).len_put_window(l, ys, omega(p1.inside, p1.sized, a2));
+                let a21: (xs.put_window(l, ys).put_window(l2, zs).len() = xs.put_window(l, ys).len()) = xs.put_window(l, ys).len_put_window(l2, zs, omega(p2.inside, p2.sized, a1));
+                let mid: (xs.put_window(l2, zs).put_window(l, ys) = xs.put_window(l, ys).put_window(l2, zs)) =
+                    xs.put_window(l2, zs).put_window(l, ys).ext_nth(xs.put_window(l, ys).put_window(l2, zs), omega(a1, a2, a12, a21), λ k _ => match Falls::of(k, l, m) {
+                        In(lo, hi) => trans(List::nth_pw_in(xs.put_window(l2, zs), l, ys, k, lo, omega(hi, p1.sized), omega(p1.inside, a2)),
+                            sym(trans(List::nth_pw_outside(xs.put_window(l, ys), l2, zs, k, omega(apart, lo, hi, p2.sized), omega(p2.inside, a1)),
+                                List::nth_pw_in(xs, l, ys, k, lo, omega(hi, p1.sized), omega(p1.inside))))),
+                        Out(o1) => match Falls::of(k, l2, m2) {
+                            In(lo, hi) => trans(List::nth_pw_outside(xs.put_window(l2, zs), l, ys, k, omega(o1, p1.sized), omega(p1.inside, a2)),
+                                trans(List::nth_pw_in(xs, l2, zs, k, lo, omega(hi, p2.sized), omega(p2.inside)),
+                                    sym(List::nth_pw_in(xs.put_window(l, ys), l2, zs, k, lo, omega(hi, p2.sized), omega(p2.inside, a1))))),
+                            Out(o2) => trans(List::nth_pw_outside(xs.put_window(l2, zs), l, ys, k, omega(o1, p1.sized), omega(p1.inside, a2)),
+                                trans(List::nth_pw_outside(xs, l2, zs, k, omega(o2, p2.sized), omega(p2.inside)),
+                                    sym(trans(List::nth_pw_outside(xs.put_window(l, ys), l2, zs, k, omega(o2, p2.sized), omega(p2.inside, a1)),
+                                        List::nth_pw_outside(xs, l, ys, k, omega(o1, p1.sized), omega(p1.inside)))))),
+                        },
+                    });
+                trans(left, trans(mid, sym(right)))
+            },
+        })(refl),
+    })(refl)
+}
+
+// ---------------------------------------------------------------------------
+// The list's windows, at indices
+
+theorem Seq::list_win_laws(tys: Nat → Type, a: Shape, pad: El(tys, a), me: Shape, to: El(tys, me) → List<El(tys, a)>, of: List<El(tys, a)> → El(tys, me),
+    to_of: (l: List<El(tys, a)>) → to(of(l)) = l, of_to: (y: El(tys, me)) → of(to(y)) = y, win: Option<Win(tys, List<El(tys, a)>)>):
+    WinLaws(tys, List<El(tys, a)>, Seq::list(tys, a, pad, win), Seq::list_win(tys, a, me, to, of))
+{
+    WinLaws(
+        λ v lo n => match lo {
+            INat(l) => match n {
+                INat(m) => λ h ys sz => {
+                    let sized: (to(ys).len() = v.drop(l).take(m).len()) = trans(sz, cong_fn(λ (t: List<El(tys, a)>) => t.len(), to_of(v.drop(l).take(m))));
+                    trans(cong_fn(of, List::w_get_set(v, l, m, omega(h), to(ys), sized)), of_to(ys))
+                },
+                IWord(_, _) => λ no ys sz => absurd(no),
+            },
+            IWord(_, _) => λ no ys sz => absurd(no),
+        },
+        λ v lo n => match lo {
+            INat(l) => match n {
+                INat(m) => λ ys zs sz => List::w_set_set(v, l, m, to(ys), to(zs), trans(sz, cong_fn(λ (t: List<El(tys, a)>) => t.len(), to_of(v.drop(l).take(m))))),
+                IWord(_, _) => λ ys zs sz => refl,
+            },
+            IWord(_, _) => λ ys zs sz => refl,
+        },
+        λ v lo n => match lo {
+            INat(l) => match n {
+                INat(m) => λ off ys => List::pg_off(v, l, m, to(ys), j(sym(off), λ c _ => (c && to(ys).len().same(m)) = False, refl)),
+                IWord(_, _) => λ off ys => refl,
+            },
+            IWord(_, _) => λ off ys => refl,
+        },
+        λ v lo n => match lo {
+            INat(l) => match n { INat(m) => λ ys => List::len_pg(v, l, m, to(ys)), IWord(_, _) => λ ys => refl },
+            IWord(_, _) => λ ys => refl,
+        },
+        λ v lo n j2 => match lo {
+            INat(l) => match n {
+                INat(m) => match j2 {
+                    INat(k) => λ ap x => cong_fn(of, List::w_get_elem(v, l, m, k, ap, x)),
+                    IWord(_, _) => λ ap x => refl,
+                },
+                IWord(_, _) => λ ap x => refl,
+            },
+            IWord(_, _) => λ ap x => refl,
+        },
+        λ v lo n i => match lo {
+            INat(l) => match n {
+                INat(m) => match i {
+                    INat(k) => λ ap ys => cong_fn(λ (o: Option<El(tys, a)>) => o.unwrap_or(pad), List::nth_pg_out(v, l, m, to(ys), k, ap)),
+                    IWord(_, _) => λ ap ys => refl,
+                },
+                IWord(_, _) => λ ap ys => refl,
+            },
+            IWord(_, _) => λ ap ys => refl,
+        },
+        λ v lo n lo2 n2 => match lo {
+            INat(l) => match n {
+                INat(m) => match lo2 {
+                    INat(l2) => match n2 {
+                        INat(m2) => λ ap ys => cong_fn(of, List::w_get_win(v, l, m, l2, m2, ap, to(ys))),
+                        IWord(_, _) => λ ap ys => refl,
+                    },
+                    IWord(_, _) => λ ap ys => refl,
+                },
+                IWord(_, _) => λ ap ys => refl,
+            },
+            IWord(_, _) => λ ap ys => refl,
+        },
+        λ v lo n j2 => match lo {
+            INat(l) => match n {
+                INat(m) => match j2 {
+                    INat(k) => λ ap ys x => List::w_commute_elem(v, l, m, k, ap, to(ys), x),
+                    IWord(_, _) => λ ap ys x => refl,
+                },
+                IWord(_, _) => λ ap ys x => refl,
+            },
+            IWord(_, _) => λ ap ys x => refl,
+        },
+        λ v lo n lo2 n2 => match lo {
+            INat(l) => match n {
+                INat(m) => match lo2 {
+                    INat(l2) => match n2 {
+                        INat(m2) => λ ap ys zs => List::w_commute_win(v, l, m, l2, m2, ap, to(ys), to(zs)),
+                        IWord(_, _) => λ ap ys zs => refl,
+                    },
+                    IWord(_, _) => λ ap ys zs => refl,
+                },
+                IWord(_, _) => λ ap ys zs => refl,
+            },
+            IWord(_, _) => λ ap ys zs => refl,
+        },
+    )
+}

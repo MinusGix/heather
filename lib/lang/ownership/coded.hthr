@@ -60,7 +60,80 @@ import list_path;
 import store_path;
 import atom;
 import steps;
-import value_steps;
+
+// ---------------------------------------------------------------------------
+// The path model this module was built for
+//
+// `steps.hthr`'s first model, each selection a `Path` lawful where what it
+// writes fits (`PathLawsOn`), with its soundness. `steps.hthr` now holds the
+// total model of docs/language/ownership-design.md §21.1; this one stays
+// only as long as this experiment module does.
+
+record PathModel<S> { path: Sel → Path<S, S>, fits: Sel → S → Bool }
+
+record PathModelLaws<S>(m: PathModel<S>) {
+    laws: (a: Sel) → PathLawsOn<S, S>(m.path(a), m.fits(a)),
+    keeps: (a, b: Sel) → Path::KeepsFit(m.path(b), m.fits(a)),
+    apart: (a, b: Sel) → a.apart(b).IsTrue() → Apart<S, S, S>(m.path(a), m.path(b)),
+}
+
+// The legacy model reads its atoms as numbers.
+theorem Ix::hold_of(rs: List<Obligation>, ns: List<Nat>, h: Obligation::All(rs, ns)): Obligation::All(rs, Ix::nats(Ix::of_nats(ns))) {
+    j(sym(Ix::nats_of(ns)), λ x _ => Obligation::All(rs, x), h)
+}
+
+// The steps from the root, the first outermost.
+fn PathModel::denote<S>(m: PathModel<S>, ws: List<Nat>, xs: List<Step>) → Path<S, S> {
+    match xs { Nil => Path::id<S>(), Cons(a, rest) => m.path(a.sel(Ix::of_nats(ws))).then(PathModel::denote(m, ws, rest)) }
+}
+
+// Steps after a first step: their writes keep every fit, as the first
+// step's do.
+theorem PathModel::keeps_fit<S>(m: PathModel<S>, ml: PathModelLaws<S>(m), ws: List<Nat>, f: Sel, a: Step, rest: List<Step>):
+    Path::KeepsFit(PathModel::denote(m, ws, Cons(a, rest)), m.fits(f))
+{
+    Path::then_keeps_fit(m.path(a.sel(Ix::of_nats(ws))), PathModel::denote(m, ws, rest), m.fits(f), ml.keeps(f, a.sel(Ix::of_nats(ws))))
+}
+
+// Where the decider answers yes, neither list is empty: both keep every fit.
+theorem PathModel::verdict_keeps<S>(m: PathModel<S>, ml: PathModelLaws<S>(m), ws: List<Nat>, f: Sel, xs: List<Step>):
+    (ys: List<Step>) → (rs: List<Obligation>) → Steps::apart(xs, ys) = Some(rs) →
+        And<Path::KeepsFit(PathModel::denote(m, ws, xs), m.fits(f)), Path::KeepsFit(PathModel::denote(m, ws, ys), m.fits(f))>
+{
+    match xs {
+        Nil => λ ys rs no => absurd(no),
+        Cons(a, xr) => λ ys => match ys {
+            Nil => λ rs no => absurd(no),
+            Cons(b, yr) => λ rs _ => And(PathModel::keeps_fit(m, ml, ws, f, a, xr), PathModel::keeps_fit(m, ml, ws, f, b, yr)),
+        },
+    }
+}
+
+// The decider is sound: a verdict, and its obligations holding at the
+// words, give the two denotations apart.
+theorem PathModel::apart_sound<S>(m: PathModel<S>, ml: PathModelLaws<S>(m), ws: List<Nat>, xs: List<Step>):
+    (ys: List<Step>) → (rs: List<Obligation>) → Steps::apart(xs, ys) = Some(rs) → Obligation::All(rs, ws) →
+        Apart<S, S, S>(PathModel::denote(m, ws, xs), PathModel::denote(m, ws, ys))
+{
+    match xs {
+        Nil => λ ys rs no _ => absurd(no),
+        Cons(a, xr) => λ ys => match ys {
+            Nil => λ rs no _ => absurd(no),
+            Cons(b, yr) => λ rs => (match a.same(b) as λ c => a.same(b) = c → (match c { True => Steps::apart(xr, yr), False => a.apart(b) }) = Some(rs) →
+                    Obligation::All(rs, ws) → Apart<S, S, S>(PathModel::denote(m, ws, Cons(a, xr)), PathModel::denote(m, ws, Cons(b, yr))) {
+                True => λ e ok hold => {
+                    let same: (a = b) = a.same_sound(b, e);
+                    let fit = PathModel::verdict_keeps(m, ml, ws, a.sel(Ix::of_nats(ws)), xr, yr, rs, ok);
+                    let here: Apart<S, S, S>(m.path(a.sel(Ix::of_nats(ws))).then(PathModel::denote(m, ws, xr)), m.path(a.sel(Ix::of_nats(ws))).then(PathModel::denote(m, ws, yr))) =
+                        Apart::under_on(m.path(a.sel(Ix::of_nats(ws))), m.fits(a.sel(Ix::of_nats(ws))), ml.laws(a.sel(Ix::of_nats(ws))), PathModel::apart_sound(m, ml, ws, xr, yr, rs, ok, hold), fit.left, fit.right);
+                    j(same, λ c _ => Apart<S, S, S>(m.path(a.sel(Ix::of_nats(ws))).then(PathModel::denote(m, ws, xr)), m.path(c.sel(Ix::of_nats(ws))).then(PathModel::denote(m, ws, yr))), here)
+                },
+                False => λ e ok hold =>
+                    Apart::then_both(ml.apart(a.sel(Ix::of_nats(ws)), b.sel(Ix::of_nats(ws)), a.apart_sound(b, Ix::of_nats(ws), rs, ok, Ix::hold_of(rs, ws, hold))), PathModel::denote(m, ws, xr), PathModel::denote(m, ws, yr)),
+            })(refl)
+        },
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Codes, and their decision
@@ -194,8 +267,8 @@ fn Atom::at(self a: Atom, e: Env) → Nat { match a { Lit(n) => n, Var(w) => e.g
 fn Step::sel_in(self a: Step, e: Env) → Sel {
     match a {
         SField(i) => OnField(i),
-        SElem(i) => OnSeq(SeqOne(i.at(e))),
-        SWindow(lo, n) => OnSeq(SeqRun(lo.at(e), n.at(e))),
+        SElem(i) => OnSeq(SeqOne(INat(i.at(e)))),
+        SWindow(lo, n) => OnSeq(SeqRun(INat(lo.at(e)), INat(n.at(e)))),
         SKey(i, g) => OnKey(Key(i.at(e), g.at(e))),
         SVariant(c) => OnVariant(c),
     }
@@ -219,7 +292,7 @@ fn Dyn::at(tys: Nat → Type, strs: Strs(tys), sel: Sel, d: Dyn(tys)) → Dyn(ty
     (match d.code as λ c => El(tys, c) → Dyn(tys) {
         SWord => λ _ => Dyn(SWord, 0),
         SSeq(a) => λ v => match sel {
-            OnSeq(x) => match x { SeqOne(i) => Dyn(a, v.nth(i).unwrap_or(Dyn::dflt(tys, strs, a))), SeqRun(lo, n) => Dyn(SSeq(a), v.drop(lo).take(n)) },
+            OnSeq(x) => match x { SeqOne(i) => Dyn(a, v.nth(i.toNat()).unwrap_or(Dyn::dflt(tys, strs, a))), SeqRun(lo, n) => Dyn(SSeq(a), v.drop(lo.toNat()).take(n.toNat())) },
             _ => Dyn(SWord, 0),
         },
         SNamed(k) => λ v => match sel { OnField(i) => Dyn::field_at(tys, strs, strs(k), i, v), _ => Dyn(SWord, 0) },
@@ -241,8 +314,8 @@ fn Dyn::over(tys: Nat → Type, strs: Strs(tys), sel: Sel, g: Dyn(tys) → Dyn(t
         SWord => λ v => Dyn(SWord, v),
         SSeq(a) => λ v => Dyn(SSeq(a), match sel {
             OnSeq(x) => match x {
-                SeqOne(i) => v.update(i, λ y => Dyn::back(tys, a, g(Dyn(a, y)), y)),
-                SeqRun(lo, n) => v.put_window(lo, Dyn::back(tys, SSeq(a), g(Dyn(SSeq(a), v.drop(lo).take(n))), v.drop(lo).take(n))),
+                SeqOne(i) => v.update(i.toNat(), λ y => Dyn::back(tys, a, g(Dyn(a, y)), y)),
+                SeqRun(lo, n) => v.put_window(lo.toNat(), Dyn::back(tys, SSeq(a), g(Dyn(SSeq(a), v.drop(lo.toNat()).take(n.toNat()))), v.drop(lo.toNat()).take(n.toNat()))),
             },
             _ => v,
         }),
@@ -419,7 +492,7 @@ fn mean_word(tys: Nat → Type, strs: Strs(tys), w: World(tys), f: Func, objs: L
 // with `fits(a): Dyn → Bool` a property of the written value alone, and
 // `reads_fit` makes every value read through the step fit. An element of a
 // list of words and an element of a list of lists are both read through
-// `OnSeq(SeqOne(0))`, so both codes fit, and writing the list into the list
+// `OnSeq(SeqOne(INat(0)))`, so both codes fit, and writing the list into the list
 // of words must then read it back (`set_get`), which a native list of
 // words cannot hold. `Dyn::elem_not_lawful` is the refutation, at an environment of no
 // named types. The universal `Val` passes only because a sequence there
@@ -444,7 +517,7 @@ fn Dyn::field_part(tys: Nat → Type, k: Nat, st: Struct(tys, tys(k)), i: Nat) �
 }
 
 fn Dyn::seq_part(tys: Nat → Type, strs: Strs(tys), x: Shape, q: SeqSel) → Part(tys, SSeq(x)) {
-    match q { SeqOne(i) => Part(x, Path::elem<El(tys, x)>(i)), SeqRun(lo, n) => Part(SSeq(x), Dyn::win(tys, strs, x, lo, n)) }
+    match q { SeqOne(i) => Part(x, Path::elem<El(tys, x)>(i.toNat())), SeqRun(lo, n) => Part(SSeq(x), Dyn::win(tys, strs, x, lo.toNat(), n.toNat())) }
 }
 
 fn Dyn::part(tys: Nat → Type, strs: Strs(tys), sel: Sel, c: Shape) → Option<Part(tys, c)> {
@@ -477,7 +550,7 @@ fn Dyn::path(tys: Nat → Type, strs: Strs(tys), sel: Sel) → Path<Dyn(tys), Dy
 // What a step's write must be beyond the part's code: a window's, a list of
 // its length.
 fn Sel::ok(self sel: Sel, tys: Nat → Type, t: Shape, w: El(tys, t)) → Bool {
-    match sel { OnSeq(q) => match q { SeqRun(_, n) => Dyn::size(tys, Dyn(t, w)).same(n), SeqOne(_) => True }, _ => True }
+    match sel { OnSeq(q) => match q { SeqRun(_, n) => Dyn::size(tys, Dyn(t, w)).same(n.toNat()), SeqOne(_) => True }, _ => True }
 }
 
 // The fit, relative to what the step read: the read's code, and the
@@ -494,12 +567,12 @@ fn Dyn::no_tys() → Nat → Type { λ _ => True }
 fn Dyn::no_strs() → Strs(Dyn::no_tys()) { λ k => Opaque(trivial) }
 
 // No fit makes the element step lawful.
-theorem Dyn::elem_not_lawful(fits: Dyn(Dyn::no_tys()) → Bool): ¬PathLawsOn<Dyn(Dyn::no_tys()), Dyn(Dyn::no_tys())>(Dyn::path(Dyn::no_tys(), Dyn::no_strs(), OnSeq(SeqOne(0))), fits) {
+theorem Dyn::elem_not_lawful(fits: Dyn(Dyn::no_tys()) → Bool): ¬PathLawsOn<Dyn(Dyn::no_tys()), Dyn(Dyn::no_tys())>(Dyn::path(Dyn::no_tys(), Dyn::no_strs(), OnSeq(SeqOne(INat(0)))), fits) {
     λ laws => {
         let lists: Dyn(Dyn::no_tys()) = Dyn(SSeq(SSeq(SWord)), [Nil<Nat>]);
         let a_list: Dyn(Dyn::no_tys()) = Dyn(SSeq(SWord), Nil);
         let fit: (fits(a_list) = True) = laws.reads_fit(lists, a_list, refl);
-        let back: (Dyn::path(Dyn::no_tys(), Dyn::no_strs(), OnSeq(SeqOne(0))).get(Dyn::path(Dyn::no_tys(), Dyn::no_strs(), OnSeq(SeqOne(0))).set(Dyn(SSeq(SWord), [0]), a_list)) = Some(a_list)) =
+        let back: (Dyn::path(Dyn::no_tys(), Dyn::no_strs(), OnSeq(SeqOne(INat(0)))).get(Dyn::path(Dyn::no_tys(), Dyn::no_strs(), OnSeq(SeqOne(INat(0)))).set(Dyn(SSeq(SWord), [0]), a_list)) = Some(a_list)) =
             laws.set_get(Dyn(SSeq(SWord), [0]), Dyn(SWord, 0), a_list, refl, fit);
         let codes: (SWord = SSeq(SWord)) = cong_fn(λ (o: Option<Dyn(Dyn::no_tys())>) => o.unwrap_or(Dyn(SWord, 0)).code, back);
         absurd(codes)
@@ -509,7 +582,7 @@ theorem Dyn::elem_not_lawful(fits: Dyn(Dyn::no_tys()) → Bool): ¬PathLawsOn<Dy
 // So `StepModelLaws` at `Dyn` is false for every model built of these
 // steps, whatever its fits.
 theorem Dyn::model_not_lawful(fits: Sel → Dyn(Dyn::no_tys()) → Bool): ¬PathModelLaws<Dyn(Dyn::no_tys())>(PathModel<Dyn(Dyn::no_tys())>(λ sel => Dyn::path(Dyn::no_tys(), Dyn::no_strs(), sel), fits)) {
-    λ ml => Dyn::elem_not_lawful(fits(OnSeq(SeqOne(0))), ml.laws(OnSeq(SeqOne(0))))
+    λ ml => Dyn::elem_not_lawful(fits(OnSeq(SeqOne(INat(0)))), ml.laws(OnSeq(SeqOne(INat(0)))))
 }
 
 // ---------------------------------------------------------------------------
@@ -522,7 +595,7 @@ theorem Dyn::model_not_lawful(fits: Sel → Dyn(Dyn::no_tys()) → Bool): ¬Path
 // A write through a step keeps the owner fitting against anything it fit
 // against (`KeepsFitRel`). Any model lawful under the absolute laws is
 // lawful under these with its fit ignoring the read (`StepModelLawsRel::of_laws`;
-// `Val`'s is `val_model_laws_rel` in the probes), and the decider's soundness holds
+// `Val`'s was, before value_steps.hthr was retired), and the decider's soundness holds
 // over them (`Steps::apart_sound_rel`), by the same proof with the fit read
 // against the outer step's read.
 
@@ -624,7 +697,7 @@ theorem Path::then_keeps_fit_rel<S, A, B>(p: Path<S, A>, q: Path<A, B>, fits: S 
 theorem Steps::keeps_fit_rel<S>(m: StepModelRel<S>, ml: StepModelLawsRel<S>(m), ws: List<Nat>, f: Sel, a: Step, rest: List<Step>):
     Path::KeepsFitRel(PathModel::denote(m.steps(), ws, Cons(a, rest)), m.fits(f))
 {
-    Path::then_keeps_fit_rel(m.path(a.sel(ws)), PathModel::denote(m.steps(), ws, rest), m.fits(f), ml.keeps(f, a.sel(ws)))
+    Path::then_keeps_fit_rel(m.path(a.sel(Ix::of_nats(ws))), PathModel::denote(m.steps(), ws, rest), m.fits(f), ml.keeps(f, a.sel(Ix::of_nats(ws))))
 }
 
 theorem Steps::verdict_keeps_rel<S>(m: StepModelRel<S>, ml: StepModelLawsRel<S>(m), ws: List<Nat>, f: Sel, xs: List<Step>):
@@ -654,13 +727,13 @@ theorem Steps::apart_sound_rel<S>(m: StepModelRel<S>, ml: StepModelLawsRel<S>(m)
                     Obligation::All(rs, ws) → Apart<S, S, S>(PathModel::denote(m.steps(), ws, Cons(a, xr)), PathModel::denote(m.steps(), ws, Cons(b, yr))) {
                 True => λ e ok hold => {
                     let same: (a = b) = a.same_sound(b, e);
-                    let fit = Steps::verdict_keeps_rel(m, ml, ws, a.sel(ws), xr, yr, rs, ok);
-                    let here: Apart<S, S, S>(m.path(a.sel(ws)).then(PathModel::denote(m.steps(), ws, xr)), m.path(a.sel(ws)).then(PathModel::denote(m.steps(), ws, yr))) =
-                        Apart::under_rel(m.path(a.sel(ws)), m.fits(a.sel(ws)), ml.laws(a.sel(ws)), Steps::apart_sound_rel(m, ml, ws, xr, yr, rs, ok, hold), fit.left, fit.right);
-                    j(same, λ c _ => Apart<S, S, S>(m.path(a.sel(ws)).then(PathModel::denote(m.steps(), ws, xr)), m.path(c.sel(ws)).then(PathModel::denote(m.steps(), ws, yr))), here)
+                    let fit = Steps::verdict_keeps_rel(m, ml, ws, a.sel(Ix::of_nats(ws)), xr, yr, rs, ok);
+                    let here: Apart<S, S, S>(m.path(a.sel(Ix::of_nats(ws))).then(PathModel::denote(m.steps(), ws, xr)), m.path(a.sel(Ix::of_nats(ws))).then(PathModel::denote(m.steps(), ws, yr))) =
+                        Apart::under_rel(m.path(a.sel(Ix::of_nats(ws))), m.fits(a.sel(Ix::of_nats(ws))), ml.laws(a.sel(Ix::of_nats(ws))), Steps::apart_sound_rel(m, ml, ws, xr, yr, rs, ok, hold), fit.left, fit.right);
+                    j(same, λ c _ => Apart<S, S, S>(m.path(a.sel(Ix::of_nats(ws))).then(PathModel::denote(m.steps(), ws, xr)), m.path(c.sel(Ix::of_nats(ws))).then(PathModel::denote(m.steps(), ws, yr))), here)
                 },
                 False => λ e ok hold =>
-                    Apart::then_both(ml.apart(a.sel(ws), b.sel(ws), a.apart_sound(b, ws, rs, ok, hold)), PathModel::denote(m.steps(), ws, xr), PathModel::denote(m.steps(), ws, yr)),
+                    Apart::then_both(ml.apart(a.sel(Ix::of_nats(ws)), b.sel(Ix::of_nats(ws)), a.apart_sound(b, Ix::of_nats(ws), rs, ok, Ix::hold_of(rs, ws, hold))), PathModel::denote(m.steps(), ws, xr), PathModel::denote(m.steps(), ws, yr)),
             })(refl)
         },
     }
@@ -861,9 +934,9 @@ fn StrsLaws(tys: Nat → Type, strs: Strs(tys)) → Type { (k: Nat) → StructLa
 
 theorem Dyn::seq_part_laws(tys: Nat → Type, strs: Strs(tys), x: Shape, q: SeqSel): Dyn::PartLaws(tys, OnSeq(q), Dyn::seq_part(tys, strs, x, q)) {
     match q {
-        SeqOne(i) => Path::elem_laws<El(tys, x)>(i).on(),
-        SeqRun(lo, n) => Path::window<El(tys, x)>(lo, n).then_laws_on(Dyn::vec_list<El(tys, x)>(n, Dyn::dflt(tys, strs, x)), λ r => r.len().same(n),
-            Path::window_laws<El(tys, x)>(lo, n), Dyn::vec_list_laws<El(tys, x)>(n, Dyn::dflt(tys, strs, x))),
+        SeqOne(i) => Path::elem_laws<El(tys, x)>(i.toNat()).on(),
+        SeqRun(lo, n) => Path::window<El(tys, x)>(lo.toNat(), n.toNat()).then_laws_on(Dyn::vec_list<El(tys, x)>(n.toNat(), Dyn::dflt(tys, strs, x)), λ r => r.len().same(n.toNat()),
+            Path::window_laws<El(tys, x)>(lo.toNat(), n.toNat()), Dyn::vec_list_laws<El(tys, x)>(n.toNat(), Dyn::dflt(tys, strs, x))),
     }
 }
 
@@ -893,7 +966,7 @@ theorem Dyn::part_laws(tys: Nat → Type, strs: Strs(tys), sl: StrsLaws(tys, str
 theorem Dyn::seq_part_in(tys: Nat → Type, strs: Strs(tys), x: Shape, q: SeqSel):
     PathIn<El(tys, x), El(tys, Dyn::seq_part(tys, strs, x, q).t)>(Dyn::seq_part(tys, strs, x, q).p, q.span())
 {
-    match q { SeqOne(i) => Path::elem_in<El(tys, x)>(i), SeqRun(lo, n) => Path::window_in<El(tys, x)>(lo, n).then(Dyn::vec_list<El(tys, x)>(n, Dyn::dflt(tys, strs, x))) }
+    match q { SeqOne(i) => Path::elem_in<El(tys, x)>(i.toNat()), SeqRun(lo, n) => Path::window_in<El(tys, x)>(lo.toNat(), n.toNat()).then(Dyn::vec_list<El(tys, x)>(n.toNat(), Dyn::dflt(tys, strs, x))) }
 }
 
 theorem Dyn::size_cast(tys: Nat → Type, c: Shape, w: El(tys, c)): (t: Shape) → (h: c = t) → Dyn::size(tys, Dyn(t, Shape::cast(tys, h, w))) = Dyn::size(tys, Dyn(c, w)) {
@@ -921,7 +994,7 @@ theorem Dyn::put_size(tys: Nat → Type, strs: Strs(tys), b: Sel, c: Shape, w: E
 
 theorem Sel::ok_size(self a: Sel, tys: Nat → Type, t: Shape, w1, w2: El(tys, t), same: Dyn::size(tys, Dyn(t, w1)) = Dyn::size(tys, Dyn(t, w2))): a.ok(tys, t, w1) = a.ok(tys, t, w2) {
     match a {
-        OnSeq(q) => match q { SeqRun(_, n) => cong_fn(λ (k: Nat) => k.same(n), same), SeqOne(_) => refl },
+        OnSeq(q) => match q { SeqRun(_, n) => cong_fn(λ (k: Nat) => k.same(n.toNat()), same), SeqOne(_) => refl },
         OnField(_) => refl,
         OnKey(_) => refl,
         OnVariant(_) => refl,

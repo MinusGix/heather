@@ -37,8 +37,8 @@ fn Tagged::fat() → Field(tys(), Tagged) { Field(SNamed(0), λ (t: Tagged) => t
 
 fn strs() → Strs(tys()) {
     λ k => match k {
-        Zero => Struct(Plain, Record([Point::fx(), Point::fy()])),
-        Succ(k1) => match k1 { Zero => Struct(Plain, Record([Tagged::ftag(), Tagged::fat()])), Succ(_) => Struct(Plain, Opaque) },
+        Zero => Struct(Plain, None, Record([Point::fx(), Point::fy()])),
+        Succ(k1) => match k1 { Zero => Struct(Plain, None, Record([Tagged::ftag(), Tagged::fat()])), Succ(_) => Struct(Plain, None, Opaque) },
     }
 }
 
@@ -136,7 +136,7 @@ theorem strs_laws(): StrsLaws(tys(), strs()) {
 // ---------------------------------------------------------------------------
 // The decider's verdicts at `Dyn`
 
-fn apart_at(ws: List<Nat>, xs, ys: List<Step>) → Type { Steps::Apart(Dyn::model(tys(), strs()), ws, xs, ys) }
+fn apart_at(ws: List<Ix>, xs, ys: List<Step>) → Type { Steps::Apart(Dyn::model(tys(), strs()), ws, xs, ys) }
 
 // Two fields of one record, owing nothing.
 theorem two_fields(): apart_at(Nil, [SField(0)], [SField(1)]) { Dyn::apart(tys(), strs(), strs_laws(), Nil, [SField(0)], [SField(1)], Nil, refl, trivial) }

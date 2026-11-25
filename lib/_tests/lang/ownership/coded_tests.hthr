@@ -12,7 +12,6 @@ import path;
 import list_path;
 import atom;
 import steps;
-import value_steps;
 import omega;
 import coded;
 
@@ -193,48 +192,6 @@ theorem call_total_reflects(ps: List<Point>, lo, n: Nat, some: ∥0 < ps.drop(lo
 fn call_total_owes() → Owes { ODo([Pre(1, [Place(0, [SWindow(Var(0), Var(1))])], Nil)], OEnd) }
 
 theorem call_total_site(ps: List<Point>, lo, n: Nat, some: ∥0 < ps.drop(lo).take(n).len()∥): due_pt(call_total_owes(), call_total_r(), ps, [lo, n]) { ⟨some, trivial⟩ }
-
-// ---------------------------------------------------------------------------
-// 6. The control: `ps[i].x` through the universal `Val` and an encoding.
-//    The meaning reads on the encoding, and the source's value is under
-//    `Vals::of(ps.map(enc))`: the read is stuck at `nth` of a list built by
-//    `Vals::list` from `Vals::of`, where the source's is `ps.nth(i)`. It is
-//    a lemma, not a conversion: `Vals::list_of` to strip the carrier,
-//    `nth` of a `map` (`xs.map(f).nth(i) = xs.nth(i).map(f)`), and a case
-//    split on `ps.nth(i)` (the encoding's `unwrap_or` and the source's do
-//    not commute with `map` by evaluation): once per operation, and again
-//    per residual stated over the encoding.
-
-fn enc_pt(p: Point) → Val { VRec(VCons(VWord(p.x), VCons(VWord(p.y), VNil))) }
-
-fn enc_pts(ps: List<Point>) → Val { VSeq(Vals::of(ps.map(enc_pt))) }
-
-fn val_word(o: Option<Val>) → Nat { match o { Some(v) => match v { VWord(n) => n, _ => 0 }, None => 0 } }
-
-// expect-error(kernel)
-theorem get_x_val_pin(ps: List<Point>, i: Nat): val_word(Val::place([i], [SElem(Var(0)), SField(0)]).get(enc_pts(ps))) = get_x(ps, i) { refl }
-
-// What it takes: an induction on the list, for this operation at this
-// encoding (a write, a window, a record of another shape each need their
-// own), where the coded meaning's pin is `refl`.
-theorem get_x_val(ps: List<Point>): (i: Nat) → val_word(Val::place([i], [SElem(Var(0)), SField(0)]).get(enc_pts(ps))) = get_x(ps, i) {
-    match ps { Nil => λ i => refl, Cons(_, r) => λ i => match i { Zero => refl, Succ(k) => get_x_val(r, k) } }
-}
-
-// ---------------------------------------------------------------------------
-// The relative laws lose nothing: `Val`'s model, lawful as `steps.hthr`
-// states it, is lawful relative to the read, and the decider's soundness
-// over the relative laws applies to it.
-
-theorem val_model_laws_rel(): StepModelLawsRel<Val>(StepModelRel::of(Val::model())) { StepModelLawsRel::of_laws(Val::model(), Val::model_laws()) }
-
-theorem val_split_apart_rel(k, m: Nat):
-    Apart<Val, Val, Val>(PathModel::denote(StepModelRel::of(Val::model()).steps(), [k, m], Val::split_left()), PathModel::denote(StepModelRel::of(Val::model()).steps(), [k, m], Val::split_right()))
-{
-    let owed: Span(0, k).apart(Span(k, m)).IsTrue() = omega;
-    Steps::apart_sound_rel(StepModelRel::of(Val::model()), val_model_laws_rel(), [k, m], Val::split_left(), Val::split_right(), [Spans(Lit(0), Var(0), Var(0), Var(1))], Val::split_verdict(),
-        And(owed, trivial))
-}
 
 // ---------------------------------------------------------------------------
 // `Point`'s structure laws, by hand: what a derived instance proves. Its
