@@ -107,7 +107,7 @@ fn Seq::list_win(tys: Nat → Type, a: Shape, me: Shape, to: El(tys, me) → Lis
 
 // The instance at element shape `a` with its pad.
 fn Seq::list(tys: Nat → Type, a: Shape, pad: El(tys, a), win: Option<Win(tys, List<El(tys, a)>)>) → Seq(tys, List<El(tys, a)>) {
-    Seq(a, λ xs => xs.len(), λ xs i => xs.ix_get(i, pad), λ xs i x => xs.ix_set(i, x), λ xs i => xs.ix_inside(i), λ xs i => ∥i.toNat() < xs.len()∥, win)
+    Seq(a, λ xs => xs.len(), λ xs i => xs.ix_get(i, pad), λ xs i x => xs.ix_set(i, x), λ xs i => xs.ix_inside(i), λ xs i => ∥i.toNat() < xs.len()∥, λ n x => List::replicate(x, n.toNat()), win)
 }
 
 theorem List::ix_get_set<A>(self xs: List<A>, i: Ix, pad: A, inside: xs.ix_inside(i) = True, x: A): xs.ix_set(i, x).ix_get(i, pad) = x {
@@ -171,7 +171,7 @@ theorem Seq::list_laws(tys: Nat → Type, a: Shape, pad: El(tys, a), win: Option
 // `[A; n]`: any word indexes, through `toNat`, as `Vec::at` reads
 
 fn Seq::vec(tys: Nat → Type, a: Shape, n: Nat, pad: El(tys, a)) → Seq(tys, [El(tys, a); n]) {
-    Seq(a, λ _ => n, λ v i => vector_get(v, i.toNat(), pad), λ v i x => vector_update(v, i.toNat(), x), λ _ i => (i.toNat() + 1).leb(n), λ _ i => ∥i.toNat() < n∥, None)
+    Seq(a, λ _ => n, λ v i => vector_get(v, i.toNat(), pad), λ v i x => vector_update(v, i.toNat(), x), λ _ i => (i.toNat() + 1).leb(n), λ _ i => ∥i.toNat() < n∥, λ _ x => List::replicate(x, n).vector_of(n, x), None)
 }
 
 theorem Seq::vec_laws(tys: Nat → Type, a: Shape, n: Nat, pad: El(tys, a)): SeqLaws(tys, [El(tys, a); n], Seq::vec(tys, a, n, pad)) {
@@ -207,7 +207,7 @@ fn Bytes::ix_inside({n: u64}, self s: Bytes(n), i: Ix) → Bool { match i.as_u64
 fn Bytes::ix_pre({n: u64}, self s: Bytes(n), i: Ix) → Type { match i.as_u64() { Some(x) => ∥x < s.len()∥, None => False } }
 
 fn Seq::bytes(tys: Nat → Type, n: u64) → Seq(tys, Bytes(n)) {
-    Seq(SWord(WBits(8)), λ s => s.bytes.len(), λ s i => s.ix_get(i), λ s i x => s.ix_set(i, x), λ s i => s.ix_inside(i), λ s i => s.ix_pre(i), None)
+    Seq(SWord(WBits(8)), λ s => s.bytes.len(), λ s i => s.ix_get(i), λ s i x => s.ix_set(i, x), λ s i => s.ix_inside(i), λ s i => s.ix_pre(i), λ _ x => Bytes(List::replicate(x, n.toNat()), List::len_replicate(x, n.toNat())), None)
 }
 
 theorem Bytes::below({n: u64}, x: u64, h: x.unsigned_lt_bit(n) = True): x.toNat() < n.toNat() { BitVec::borrow_sub_of_bit_true(64, x, n, h) }

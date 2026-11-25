@@ -1,0 +1,429 @@
+// Pins of the body's meaning (lib/lang/ownership/body.hthr,
+// issues/ownership-interfaces.md): each a real source function against the
+// meaning of its reflected body, by `refl` unless it says otherwise, with a
+// refused control.
+//
+// The environment holds the arguments newest first: a function of
+// `(ps, i)` sees `i` as variable 0 and `ps` as variable 1.
+import logic;
+import bool;
+import nat;
+import omega;
+import option;
+import list;
+import list_window;
+import bitvec;
+import span_set;
+import store;
+import atom;
+import steps;
+import shape;
+import sequences;
+import body;
+import int;
+import loop;
+
+// ---------------------------------------------------------------------------
+// The environment: a record, a list of it, a list of numbers
+
+record Point { x: Nat, y: Nat }
+
+fn Point::origin() → Point { Point(0, 0) }
+
+fn tys() → Nat → Type { λ k => match k { Zero => Point, Succ(k1) => match k1 { Zero => List<Point>, Succ(k2) => match k2 { Zero => List<Nat>, Succ(_) => True } } } }
+
+fn pt_s() → Shape { SNamed(0) }
+
+fn pts_s() → Shape { SNamed(1) }
+
+fn nats_s() → Shape { SNamed(2) }
+
+fn nat_s() → Shape { SWord(WNat) }
+
+fn Point::fx() → Field(tys(), Point) { Field(nat_s(), λ (p: Point) => p.x, λ (p: Point) => λ (v: Nat) => Point(v, p.y)) }
+
+fn Point::fy() → Field(tys(), Point) { Field(nat_s(), λ (p: Point) => p.y, λ (p: Point) => λ (v: Nat) => Point(p.x, v)) }
+
+fn strs() → Strs(tys()) {
+    λ k => match k {
+        Zero => Struct(Plain, Some(Point::origin()), Record([Point::fx(), Point::fy()])),
+        Succ(k1) => match k1 {
+            Zero => Struct(Object, None, Sequence(Seq::list(tys(), pt_s(), Point::origin(), Some(Seq::list_win(tys(), pt_s(), pts_s(), λ (l: List<Point>) => l, λ (l: List<Point>) => l))))),
+            Succ(k2) => match k2 {
+                Zero => Struct(Object, None, Sequence(Seq::list(tys(), nat_s(), 0, Some(Seq::list_win(tys(), nat_s(), nats_s(), λ (l: List<Nat>) => l, λ (l: List<Nat>) => l))))),
+                Succ(_) => Struct(Plain, None, Opaque),
+            },
+        },
+    }
+}
+
+fn pts(ps: List<Point>) → Dyn(tys()) { Dyn(pts_s(), ps) }
+
+fn nat(n: Nat) → Dyn(tys()) { Dyn(nat_s(), n) }
+
+// The callees: 0 is `gap`, 1 is `List::len` of points, 2 is `total`.
+fn gap(p: Point, ok: p.y <= p.x) → Nat { p.x - p.y }
+
+fn total(qs: List<Point>) → Nat { match qs { Nil => 0, Cons(q, r) => q.x + total(r) } }
+
+fn as_pts(d: Dyn(tys())) → Option<List<Point>> { Dyn::get(tys(), pts_s(), d) }
+
+fn world() → World(tys()) {
+    λ g ds => match g {
+        Zero => match ds { Cons(d, _) => Dyn::get(tys(), pt_s(), d).map(λ (p: Point) => [nat(p.x - p.y)]), Nil => None },
+        Succ(g1) => match g1 {
+            Zero => match ds { Cons(d, _) => as_pts(d).map(λ (qs: List<Point>) => [nat(qs.len())]), Nil => None },
+            Succ(_) => match ds { Cons(d, _) => as_pts(d).map(λ (qs: List<Point>) => [nat(total(qs))]), Nil => None },
+        },
+    }
+}
+
+fn run(f: Func, args: List<Dyn(tys())>) → Option<List<Dyn(tys())>> { f.denote(tys(), strs(), world(), 99, args) }
+
+// The word a function answers, read inside the continuation: what a
+// function ending in a branch pins through, the convoy then at `Nat` as the
+// source's is.
+fn word(f: Func, args: List<Dyn(tys())>) → Nat {
+    f.body.mean(Nat, tys(), strs(), world(), 99, Dyn::push_all(tys(), Nil, args), λ rs => match rs { Cons(d, _) => Dyn::index(tys(), d), Nil => 0 }, λ _ => 0, 0)
+}
+
+fn sig0() → Sig { Sig(Nil, Nil) }
+
+fn x_of(r: Nat, i: Atom) → Place { Place(r, [SElem(i), SField(0)]) }
+
+fn y_of(r: Nat, i: Atom) → Place { Place(r, [SElem(i), SField(1)]) }
+
+// ---------------------------------------------------------------------------
+// 1. `ps[i].x`
+
+fn get_x(ps: List<Point>, i: Nat) → Nat { ps.nth(i).unwrap_or(Point::origin()).x }
+
+fn get_x_r() → Func { Func(sig0(), seq([Read(x_of(1, Var(0)))], Ret([0]))) }
+
+theorem get_x_pin(ps: List<Point>, i: Nat): run(get_x_r(), [pts(ps), nat(i)]) = Some([nat(get_x(ps, i))]) { refl }
+
+// expect-error(kernel)
+theorem get_x_not_y(ps: List<Point>, i: Nat): run(get_x_r(), [pts(ps), nat(i)]) = Some([nat(ps.nth(i).unwrap_or(Point::origin()).y)]) { refl }
+
+// ---------------------------------------------------------------------------
+// 2. `ps[i].x := v`, the update spelled through the list's own accessor
+
+fn set_x(ps: List<Point>, i, v: Nat) → List<Point> { ps.update(i, λ _ => Point(v, ps.nth(i).unwrap_or(Point::origin()).y)) }
+
+// `(ps, i, v)`: `v` is 0, `i` 1, `ps` 2.
+fn set_x_r() → Func { Func(sig0(), seq([Write(x_of(2, Var(1)), 0)], Ret([2]))) }
+
+theorem set_x_pin(ps: List<Point>, i, v: Nat): run(set_x_r(), [pts(ps), nat(i), nat(v)]) = Some([pts(set_x(ps, i, v))]) { refl }
+
+// expect-error(kernel)
+theorem set_x_not_y(ps: List<Point>, i, v: Nat): run(set_x_r(), [pts(ps), nat(i), nat(v)]) = Some([pts(ps.update(i, λ _ => Point(ps.nth(i).unwrap_or(Point::origin()).x, v)))]) { refl }
+
+// ---------------------------------------------------------------------------
+// 3. A generic function at an open `T`: the element's pad is a field of
+//    the parameter's opaque structure, quantified in the pin's statement;
+//    the function takes no `T`.
+
+fn t_tys(T: Type) → Nat → Type { λ k => match k { Zero => T, Succ(k1) => match k1 { Zero => List<T>, Succ(_) => True } } }
+
+fn t_strs(T: Type, d: T) → Strs(t_tys(T)) {
+    λ k => match k {
+        Zero => Struct(Plain, Some(d), Opaque),
+        Succ(k1) => match k1 { Zero => Struct(Object, None, Sequence(Seq::list(t_tys(T), SNamed(0), d, None))), Succ(_) => Struct(Plain, None, Opaque) },
+    }
+}
+
+fn t_run(T: Type, d: T, f: Func, args: List<Dyn(t_tys(T))>) → Option<List<Dyn(t_tys(T))>> { f.denote(t_tys(T), t_strs(T, d), λ _ _ => None, 99, args) }
+
+// `xs[i] := xs[j]`, then `xs[i]`: `(xs, i, j)`, `j` 0, `i` 1, `xs` 2.
+fn copy_elem<T>(xs: List<T>, i, j: Nat, d: T) → List<T> { xs.update(i, λ _ => xs.nth(j).unwrap_or(d)) }
+
+fn copy_elem_r() → Func { Func(sig0(), seq([Read(Place(2, [SElem(Var(0))])), Write(Place(3, [SElem(Var(2))]), 0), Read(Place(3, [SElem(Var(2))]))], Ret([4, 0]))) }
+
+theorem copy_elem_pin<T>(xs: List<T>, i, j: Nat): (d: T) →
+    t_run(T, d, copy_elem_r(), [Dyn(SNamed(1), xs), Dyn(SWord(WNat), i), Dyn(SWord(WNat), j)])
+        = Some([Dyn(SNamed(1), copy_elem(xs, i, j, d)), Dyn(SNamed(0), copy_elem(xs, i, j, d).nth(i).unwrap_or(d))])
+{ λ d => refl }
+
+// A write of a second object that reads nothing at `T` pins at every pad.
+fn put_elem<T>(xs: List<T>, i: Nat, x: T) → List<T> { xs.update(i, λ _ => x) }
+
+fn put_elem_r() → Func { Func(sig0(), seq([Write(Place(2, [SElem(Var(1))]), 0)], Ret([2]))) }
+
+theorem put_elem_pin<T>(xs: List<T>, i: Nat, x: T): (d: T) →
+    t_run(T, d, put_elem_r(), [Dyn(SNamed(1), xs), Dyn(SWord(WNat), i), Dyn(SNamed(0), x)]) = Some([Dyn(SNamed(1), put_elem(xs, i, x))])
+{ λ d => refl }
+
+// A read through the proof-consuming accessor, as generic library code
+// writes it once: one library lemma per site (the coordinator's option 3).
+theorem List::nil_not_below<A>(i: Nat, inside: i < List::len(Nil<A>)): False { omega(inside) }
+
+theorem List::below_tail<A>(h: A, t: List<A>, k: Nat, inside: Succ(k) < List::len(Cons(h, t))): k < t.len() { omega(inside) }
+
+fn List::at_below<A>(self xs: List<A>) → (i: Nat) → i < xs.len() → A {
+    match xs {
+        Nil => λ i inside => false_elim(List::nil_not_below<A>(i, inside)),
+        Cons(h, t) => λ i => match i { Zero => λ _ => h, Succ(k) => λ inside => t.at_below(k, List::below_tail(h, t, k, inside)) },
+    }
+}
+
+theorem List::at_below_total<A>(self xs: List<A>): (i: Nat) → (inside: i < xs.len()) → (d: A) → xs.at_below(i, inside) = xs.nth(i).unwrap_or(d) {
+    match xs {
+        Nil => λ i inside d => false_elim(List::nil_not_below<A>(i, inside)),
+        Cons(h, t) => λ i => match i { Zero => λ _ _ => refl, Succ(k) => λ inside d => t.at_below_total(k, List::below_tail(h, t, k, inside), d) },
+    }
+}
+
+fn copy_below<T>(xs: List<T>, i, j: Nat, inside: j < xs.len()) → List<T> { xs.update(i, λ _ => xs.at_below(j, inside)) }
+
+// expect-error(kernel)
+theorem copy_below_refl<T>(xs: List<T>, i, j: Nat, inside: j < xs.len(), d: T):
+    t_run(T, d, copy_elem_r(), [Dyn(SNamed(1), xs), Dyn(SWord(WNat), i), Dyn(SWord(WNat), j)]).map(λ (rs: List<Dyn(t_tys(T))>) => rs.nth(0).unwrap_or(Dyn::none(t_tys(T))))
+        = Some(Dyn(SNamed(1), copy_below(xs, i, j, inside)))
+{ refl }
+
+theorem copy_below_pin<T>(xs: List<T>, i, j: Nat, inside: j < xs.len()): (d: T) →
+    t_run(T, d, copy_elem_r(), [Dyn(SNamed(1), xs), Dyn(SWord(WNat), i), Dyn(SWord(WNat), j)]).map(λ (rs: List<Dyn(t_tys(T))>) => rs.nth(0).unwrap_or(Dyn::none(t_tys(T))))
+        = Some(Dyn(SNamed(1), copy_below(xs, i, j, inside)))
+{
+    λ d => cong_fn(λ (y: T) => Some(Dyn(SNamed(1), xs.update(i, λ _ => y))), sym(xs.at_below_total(j, inside, d)))
+}
+
+// ---------------------------------------------------------------------------
+// 4. `if h: i < ps.len()` guarding a read: a branch that ends the body, so
+//    the join's arms return, and the pin reads the word inside the
+//    continuation.
+
+fn guarded(ps: List<Point>, i: Nat) → Nat { if h: i < ps.len() { get_x(ps, i) } else { 0 } }
+
+// `(ps, i)`: the length (2), then the test `i < len`.
+fn guarded_r() → Func {
+    Func(sig0(), seq([Call(1, [1])], Join(TLt(1, 0), seq([Read(x_of(2, Var(1)))], Ret([0])), seq([Lit(WNat, 0)], Ret([0])), Nil, Ret(Nil))))
+}
+
+theorem guarded_pin(ps: List<Point>, i: Nat): word(guarded_r(), [pts(ps), nat(i)]) = guarded(ps, i) { refl }
+
+// `Some` of the whole answer does not pin: the meaning's convoy is over
+// the answer, the source's over the word.
+// expect-error(kernel)
+theorem guarded_whole(ps: List<Point>, i: Nat): run(guarded_r(), [pts(ps), nat(i)]) = Some([nat(guarded(ps, i))]) { refl }
+
+// ---------------------------------------------------------------------------
+// 5. Calls: one passing a record, one passing a window of a list
+
+fn call_gap(ps: List<Point>, i: Nat, ok: ps.nth(i).unwrap_or(Point::origin()).y <= ps.nth(i).unwrap_or(Point::origin()).x) → Nat {
+    gap(ps.nth(i).unwrap_or(Point::origin()), ok)
+}
+
+fn call_gap_r() → Func { Func(sig0(), seq([Read(Place(1, [SElem(Var(0))])), Call(0, [0])], Ret([0]))) }
+
+theorem call_gap_pin(ps: List<Point>, i: Nat, ok: ps.nth(i).unwrap_or(Point::origin()).y <= ps.nth(i).unwrap_or(Point::origin()).x):
+    run(call_gap_r(), [pts(ps), nat(i)]) = Some([nat(call_gap(ps, i, ok))])
+{ refl }
+
+fn call_total(ps: List<Point>, lo, n: Nat) → Nat { total(ps.drop(lo).take(n)) }
+
+// `(ps, lo, n)`: `n` 0, `lo` 1, `ps` 2.
+fn call_total_r() → Func { Func(sig0(), seq([View(Place(2, [SWindow(Var(1), Var(0))]), Reading), Call(2, [0])], Ret([0]))) }
+
+theorem call_total_pin(ps: List<Point>, lo, n: Nat): run(call_total_r(), [pts(ps), nat(lo), nat(n)]) = Some([nat(call_total(ps, lo, n))]) { refl }
+
+// ---------------------------------------------------------------------------
+// 6. A function that continues after its `if`: the join binds its output
+//    once, and what follows reads it.
+
+fn after_join(ps: List<Point>, i: Nat) → Nat {
+    let a = if h: i < ps.len() { get_x(ps, i) } else { 0 };
+    ps.nth(a).unwrap_or(Point::origin()).y
+}
+
+// `(ps, i)`, the length at 0; the join's output at 0 after it.
+fn after_join_r() → Func {
+    Func(sig0(), seq([Call(1, [1])], Join(TLt(1, 0), seq([Read(x_of(2, Var(1)))], Yield([0])), seq([Lit(WNat, 0)], Yield([0])), [nat_s()],
+        seq([Read(y_of(3, Var(0)))], Ret([0])))))
+}
+
+theorem after_join_pin(ps: List<Point>, i: Nat): run(after_join_r(), [pts(ps), nat(i)]) = Some([nat(after_join(ps, i))]) { refl }
+
+fn after_join_x(ps: List<Point>, i: Nat) → Nat {
+    let a = if h: i < ps.len() { get_x(ps, i) } else { 0 };
+    ps.nth(a).unwrap_or(Point::origin()).x
+}
+
+// expect-error(kernel)
+theorem after_join_not_x(ps: List<Point>, i: Nat): run(after_join_r(), [pts(ps), nat(i)]) = Some([nat(after_join_x(ps, i))]) { refl }
+
+// ---------------------------------------------------------------------------
+// 7. A join assigning two variables, one an object an arm writes, then a
+//    use of both (§21.5 probe 3). The surface packs the arms' values as
+//    `Mutated(qs, k)` in one convoy and reads both out of it once.
+
+fn join_two(ps: List<Point>, i, n: Nat) → Nat {
+    let mut qs = ps;
+    let mut k = n;
+    if h: i < n {
+        qs := qs.update(i, λ _ => Point(k, qs.nth(i).unwrap_or(Point::origin()).y));
+        k := k + 1;
+    } else {
+        k := 0;
+    }
+    qs.nth(k).unwrap_or(Point::origin()).x + k
+}
+
+// `(ps, i, n)`: `n` 0, `i` 1, `ps` 2; after the join, `k` 0 and `qs` 1.
+fn join_two_r() → Func {
+    Func(sig0(), Join(TLt(1, 0),
+        seq([Write(x_of(2, Var(1)), 0), Lit(WNat, 1), Op(PAdd, 1, 0)], Yield([4, 0])),
+        seq([Lit(WNat, 0)], Yield([3, 0])),
+        [pts_s(), nat_s()],
+        seq([Read(x_of(1, Var(0))), Op(PAdd, 0, 1)], Ret([0]))))
+}
+
+theorem join_two_pin(ps: List<Point>, i, n: Nat): run(join_two_r(), [pts(ps), nat(i), nat(n)]) = Some([nat(join_two(ps, i, n))]) { refl }
+
+fn join_two_y(ps: List<Point>, i, n: Nat) → Nat {
+    let mut qs = ps;
+    let mut k = n;
+    if h: i < n {
+        qs := qs.update(i, λ _ => Point(k, qs.nth(i).unwrap_or(Point::origin()).y));
+        k := k + 1;
+    } else {
+        k := 0;
+    }
+    qs.nth(k).unwrap_or(Point::origin()).y + k
+}
+
+// expect-error(kernel)
+theorem join_two_not_y(ps: List<Point>, i, n: Nat): run(join_two_r(), [pts(ps), nat(i), nat(n)]) = Some([nat(join_two_y(ps, i, n))]) { refl }
+
+// An arm that yields another code than the join records has no meaning.
+fn join_ill_coded_r() → Func {
+    Func(sig0(), Join(TLt(1, 0), Yield([2, 0]), Yield([1, 0]), [pts_s(), nat_s()], seq([Read(x_of(1, Var(0))), Op(PAdd, 0, 1)], Ret([0]))))
+}
+
+theorem join_ill_coded(ps: List<Point>, i, n: Nat): run(join_ill_coded_r(), [pts(ps), nat(i), nat(n)]) = None { refl }
+
+// ---------------------------------------------------------------------------
+// 8. A join one of whose arms returns on an inner path: what follows is
+//    bound once and each `Yield` calls it; the surface copies it into the
+//    arms that fall through, the same term after β.
+
+fn early(i, n, m: Nat) → Nat {
+    let mut x = i;
+    if h: i < n {
+        if h2: n < m { return 0; }
+        x := x + 1;
+    } else {
+        x := 2;
+    }
+    x + n
+}
+
+// `(i, n, m)`: `m` 0, `n` 1, `i` 2.
+fn early_r() → Func {
+    Func(sig0(), Join(TLt(2, 1),
+        Join(TLt(1, 0), seq([Lit(WNat, 0)], Ret([0])), Yield(Nil), Nil, seq([Lit(WNat, 1), Op(PAdd, 3, 0)], Yield([0]))),
+        seq([Lit(WNat, 2)], Yield([0])),
+        [nat_s()],
+        seq([Op(PAdd, 0, 2)], Ret([0]))))
+}
+
+theorem early_pin(i, n, m: Nat): word(early_r(), [nat(i), nat(n), nat(m)]) = early(i, n, m) { refl }
+
+fn early_off(i, n, m: Nat) → Nat {
+    let mut x = i;
+    if h: i < n {
+        if h2: n < m { return 1; }
+        x := x + 1;
+    } else {
+        x := 2;
+    }
+    x + n
+}
+
+// expect-error(kernel)
+theorem early_not_off(i, n, m: Nat): word(early_r(), [nat(i), nat(n), nat(m)]) = early_off(i, n, m) { refl }
+
+// ---------------------------------------------------------------------------
+// 9. A `while` with `decreases`: the surface's `Loop(measure, step)` over
+//    the state, run from the locals. Its body is a function whose own call
+//    ends the round (`Jump`); the world holds the loop itself, and the pin
+//    is the loop's one equation (`Loop::run_unfold`), then the step's two
+//    ways, each `refl`.
+
+fn drain(n: Nat) → Nat {
+    let mut i = n;
+    while 1 <= i decreases i { i := i - 1 }
+    i
+}
+
+fn drain_loop() → Loop<drain::State, drain::State> { Loop<drain::State, drain::State>(measure := λ (s: drain::State) => s.i, step := drain::step) }
+
+theorem drain_is_loop(n: Nat): drain(n) = drain_loop().run(drain::State(n)).i { refl }
+
+// The loop's meaning at `(i)`: the test `1 <= i`, then round again at
+// `i - 1` or answer `i`.
+fn drain_r() → Func {
+    Func(sig0(), seq([Lit(WNat, 1)], Join(TLe(0, 1), seq([Op(PSub, 1, 0)], Jump([0])), Ret([1]), Nil, Ret(Nil))))
+}
+
+// The world: callee 5 is the loop.
+fn loop_world() → World(tys()) {
+    λ g ds => match g { Zero => match ds { Cons(d, _) => Dyn::get(tys(), nat_s(), d).map(λ (i: Nat) => [nat(drain_loop().run(drain::State(i)).i)]), Nil => None }, Succ(_) => None }
+}
+
+// The meaning, evaluated: a convoy over the test.
+fn drain_r_val(i: Nat) → Option<List<Dyn(tys())>> { convoy(decide_bit<(1 <= i)>(), Some([nat(drain_loop().run(drain::State(i - 1)).i)]), Some([nat(i)])) }
+
+theorem drain_r_eval(i: Nat): drain_r().denote(tys(), strs(), loop_world(), 0, [nat(i)]) = drain_r_val(i) { refl }
+
+// The step, as the surface builds it: the test's convoy, round again at
+// `i - 1` below the measure, or leave.
+fn drain_lower(i: Nat, h: decide_bit<(1 <= i)>() = True) → Lower<drain::State>(λ (s: drain::State) => s.i, drain::State(i)) {
+    let le: (1 <= i) = decide_true<(1 <= i)>(h);
+    let lt: (i - 1 < i) = omega(le);
+    Lower(next := drain::State(i - 1), less := squash(lt))
+}
+
+theorem drain_step_is(i: Nat): drain::step(drain::State(i)) = dconvoy(decide_bit<(1 <= i)>(), λ h => Again(drain_lower(i, h)), λ _ => Done(drain::State(i))) { refl }
+
+// The step's two ways: round again, or answer.
+theorem drain_step_split(i: Nat):
+    Some<List<Dyn(tys())>>([nat((match drain::step(drain::State(i)) { Again(b) => drain_loop().run(b.next), Done(r) => r }).i)]) = drain_r_val(i)
+{
+    dconvoy_map<Pass<drain::State, drain::State>(λ (s: drain::State) => s.i, drain::State(i)), Option<List<Dyn(tys())>>>(decide_bit<(1 <= i)>(), λ h => Again(drain_lower(i, h)), λ _ => Done(drain::State(i)), λ _ => Some([nat(drain_loop().run(drain::State(i - 1)).i)]), λ _ => Some([nat(i)]),
+        λ (p: Pass<drain::State, drain::State>(λ (s: drain::State) => s.i, drain::State(i))) => Some<List<Dyn(tys())>>([nat((match p { Again(b) => drain_loop().run(b.next), Done(r) => r }).i)]),
+        λ e => refl, λ e => refl)
+}
+
+theorem drain_loop_pin(i: Nat): loop_world()(0, [nat(i)]) = drain_r().denote(tys(), strs(), loop_world(), 0, [nat(i)]) {
+    let unfolded: (Some<List<Dyn(tys())>>([nat(drain_loop().run(drain::State(i)).i)]) = Some<List<Dyn(tys())>>([nat((match drain::step(drain::State(i)) { Again(b) => drain_loop().run(b.next), Done(r) => r }).i)])) =
+        cong_fn(λ (s: drain::State) => Some<List<Dyn(tys())>>([nat(s.i)]), drain_loop().run_unfold(drain::State(i)));
+    trans(unfolded, trans(drain_step_split(i), sym(drain_r_eval(i))))
+}
+
+// The function that runs it, by `refl` given the world.
+fn drain_outer_r() → Func { Func(sig0(), seq([Call(0, [0])], Ret([0]))) }
+
+theorem drain_outer_pin(n: Nat): drain_outer_r().denote(tys(), strs(), loop_world(), 9, [nat(n)]) = Some([nat(drain(n))]) { refl }
+
+// ---------------------------------------------------------------------------
+// 10. A `for`: the fold of its named step. The step is a function pinned by
+//     `refl`; the loop is the library's fold of the step's meaning, and the
+//     source's fold of its own step is that by `List::foldl_same`.
+
+fn sum(xs: List<Nat>) → Nat {
+    let mut s = 0;
+    for x in xs { s := s + x }
+    s
+}
+
+theorem sum_is_fold(xs: List<Nat>): sum(xs) = xs.foldl(sum::step, 0) { refl }
+
+// The step at `(s, x)`: `x` 0, `s` 1.
+fn sum_step_r() → Func { Func(sig0(), seq([Op(PAdd, 1, 0)], Ret([0]))) }
+
+fn sum_step_m(s, x: Nat) → Nat { match sum_step_r().denote(tys(), strs(), world(), 9, [nat(s), nat(x)]) { Some(rs) => match rs { Cons(d, _) => Dyn::index(tys(), d), Nil => 0 }, None => 0 } }
+
+theorem sum_step_pin(s, x: Nat): sum::step(s, x) = sum_step_m(s, x) { refl }
+
+theorem sum_pin(xs: List<Nat>): sum(xs) = xs.foldl(sum_step_m, 0) { xs.foldl_same(sum::step, sum_step_m, sum_step_pin, 0) }

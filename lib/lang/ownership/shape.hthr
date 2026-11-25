@@ -228,7 +228,8 @@ record Win(tys: Nat → Type, T: Type) {
 
 // A sequence: its element's shape, its length, a total read and update at
 // an index, whether an index is of the accessor's kind and inside, the
-// proposition its accessor asks, and its windows where it has them. The
+// proposition its accessor asks, a fresh one of `n` copies of a value, and
+// its windows where it has them. The
 // read is the type's own total accessor, its pad the accessor's.
 record Seq(tys: Nat → Type, T: Type) {
     elem: Shape,
@@ -237,6 +238,7 @@ record Seq(tys: Nat → Type, T: Type) {
     set: T → Ix → El(tys, elem) → T,
     inside: T → Ix → Bool,
     Pre: T → Ix → Type,
+    make: Ix → El(tys, elem) → T,
     win: Option<Win(tys, T)>,
 }
 
