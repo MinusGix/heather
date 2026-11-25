@@ -491,3 +491,121 @@ theorem coarse_held_control(): ¬(run_fn(world([coarse_held()], 1), coarse_held(
 fn uneven() → Func { Func(Writes, 1, If(Le(Var(0), Lit(0)), seq([Get(1, Lit(0))]), End, End), RWord(Lit(0))) }
 
 theorem uneven_refused(): check_fn(sigs_of([uneven()]), uneven()) = None { refl }
+
+// ---------------------------------------------------------------------------
+// 7. A finer returned region: `at(w: &[Nat], k) → &{w[k..k+1]} [Nat]`.
+//    `let t = at(&x, k); x[j] := 9; t[0]`, the caller stating `k < j`.
+//
+// The signature places the answered view in a window of the parameter,
+// in the parameter's words; the caller reads it at its arguments and may
+// write apart from it. The callee's `view_in` is what frames that write.
+
+fn at() → Func { Func(Reads, 1, End, RView(Var(0), Lit(1))) }
+
+fn beside() → Func { Func(Writes, 2, seq([CallView(0, [Var(0)], 0), Set(Var(1), Lit(9)), Read(2, 0, Lit(0))]), RWord(Var(2))) }
+
+fn p7() → List<Func> { [at(), beside()] }
+
+theorem at_sig(): at().sig() = Sig(Reads, 1, KView(Win(Var(0), Lit(1)))) { refl }
+
+theorem at_checked(): check_fn(sigs_of(p7()), at()) = Some(Nil) { refl }
+
+// The view lies at `Span(k, 1)` in the caller's words, so the write at `j`
+// owes only that it is apart from it.
+theorem beside_checked(): check_fn(sigs_of(p7()), beside()) = Some([Pre(0, [Var(0)]), Due(Spans(Var(0), Lit(1), Var(1), Lit(1)))]) { refl }
+
+fn beside_pre() → Nat → List<Nat> → Type { λ g ws => match g { Zero => True, Succ(_) => word(ws, 0) < word(ws, 1) } }
+
+theorem beside_owed(ws, big: List<Nat>, len: ws.len() = 2, pre: Prefix(ws, big), h: word(ws, 0) < word(ws, 1)):
+    Owed::All([Pre(0, [Var(0)]), Due(Spans(Var(0), Lit(1), Var(1), Lit(1)))], beside_pre(), big)
+{
+    let k_is: (word(big, 0) = word(ws, 0)) = Var(0).val_stable(ws, big, pre, j(sym(len), λ n _ => (1).leb(n) = True, refl));
+    let j_is: (word(big, 1) = word(ws, 1)) = Var(1).val_stable(ws, big, pre, j(sym(len), λ n _ => (2).leb(n) = True, refl));
+    let apart: (Span(word(big, 0), 1).apart(Span(word(big, 1), 1)).IsTrue()) = omega(k_is, j_is, h);
+    ⟨trivial, ⟨apart, trivial⟩⟩
+}
+
+theorem p7_ok(): ProgOk(p7(), beside_pre()) {
+    λ g => match g {
+        Zero => λ _ => Checks(Nil, at_checked(), λ w arg ws _ _ => trivial),
+        Succ(g1) => match g1 {
+            Zero => λ _ => Checks([Pre(0, [Var(0)]), Due(Spans(Var(0), Lit(1), Var(1), Lit(1)))], beside_checked(),
+                λ w arg ws len h => beside_owed(ws, mean_body(w, beside().body, Sem(arg, Nil, Nil, ws)).words, len, mean_body_grows(w, beside().body, Sem(arg, Nil, Nil, ws)), h)),
+            Succ(_) => λ no => false_elim(omega(no)),
+        },
+    }
+}
+
+theorem beside_sound(d: Nat): FnSafe(sig_at(sigs_of(p7()), 1), beside_pre()(1), world(p7(), d).mean(1), world(p7(), d).run(1)) {
+    prog_sound(p7(), beside_pre(), p7_ok(), d, 1)
+}
+
+// In a buffer at base 1: the callee answers `(0, 1)` relative to its
+// reference, the caller writes beside it, and the view still reads 5.
+theorem beside_runs(): run_fn(world(p7(), 2), beside(), [[4, 5, 6, 8]], Ref(0, 1, 3), [0, 1]) = ROut([[4, 5, 9, 8]], 5, 0, 0) { refl }
+
+theorem beside_means(): mean_fn(world(p7(), 2), beside(), [5, 6, 8], [0, 1]) = MOut([5, 9, 8], 5, Nil) { refl }
+
+// `view_in` is load-bearing: a world whose function answers the right value
+// at the wrong place keeps every other part of the promise at `k = 0` over
+// `[5, 5, 7]` (its view reads 5, the meaning's value) but answers position
+// 1, outside its signature's window, so it is not `FnSafe`; and with it,
+// the accepted caller, its residual holding (`0 < 1`), reads 9 in the run
+// and 5 in the meaning.
+fn stray() → World { World(λ _ arg ws => MOut(arg, 0, window(arg, word(ws, 0), 1)), λ _ file r ws => ROut(file, 0, 1, 1)) }
+
+theorem stray_reads(): word(stray().mean(0, [5, 5, 7], [0]).view, 0) = rget([[5, 5, 7]], Ref(0, 0 + 1, 1), 0) { refl }
+
+theorem stray_not_safe(): ¬FnSafe(at().sig(), λ _ => True, stray().mean(0), stray().run(0)) {
+    λ safe => safe([[5, 5, 7]], Ref(0, 0, 3), [0], InRef(omega(), omega()), refl, trivial).view_in(1, trivial)
+}
+
+theorem stray_breaks(): ¬(run_fn(stray(), beside(), [[5, 5, 7]], Ref(0, 0, 3), [0, 1]).word = mean_fn(stray(), beside(), [5, 5, 7], [0, 1]).word) {
+    λ e => {
+        let at9: (9 = 5) = e;
+        absurd(at9)
+    }
+}
+
+// The control of the region: a write into the answered window owes a
+// residual that never holds (`Span(k, 1)` against itself), and the runs
+// differ (the view reads 9 in the run and 5 in the meaning).
+fn onto() → Func { Func(Writes, 2, seq([CallView(0, [Var(0)], 0), Set(Var(0), Lit(9)), Read(2, 0, Lit(0))]), RWord(Var(2))) }
+
+theorem onto_checked(): check_fn(sigs_of([at(), onto()]), onto()) = Some([Pre(0, [Var(0)]), Due(Spans(Var(0), Lit(1), Var(0), Lit(1)))]) { refl }
+
+theorem onto_fails(ws: List<Nat>): ¬Owed::All([Pre(0, [Var(0)]), Due(Spans(Var(0), Lit(1), Var(0), Lit(1)))], no_pre(), ws) {
+    λ h => {
+        let ap: (Span(word(ws, 0), 1).apart(Span(word(ws, 0), 1)).IsTrue()) = h.right.left;
+        let no: False = omega(ap);
+        no
+    }
+}
+
+theorem onto_control(): ¬(run_fn(world([at(), onto()], 2), onto(), [[5, 6]], Ref(0, 0, 2), [0, 1]).word = mean_fn(world([at(), onto()], 2), onto(), [5, 6], [0, 1]).word) {
+    λ e => {
+        let at9: (9 = 5) = e;
+        absurd(at9)
+    }
+}
+
+// A callee whose view lies at a word it read has no finer region to name:
+// its signature places the view in the whole parameter, and the caller's
+// write beside it is refused. Not spuriously: where the word it read is
+// `j`, the runs differ (9 against 6).
+fn found() → Func { Func(Reads, 1, seq([Get(1, Lit(0))]), RView(Var(1), Lit(1))) }
+
+theorem found_sig(): found().sig() = Sig(Reads, 1, KView(Whole)) { refl }
+
+fn beside_found() → Func { Func(Writes, 2, seq([CallView(0, [Var(0)], 0), Set(Var(1), Lit(9)), Read(2, 0, Lit(0))]), RWord(Var(2))) }
+
+theorem beside_found_refused(): check_fn(sigs_of([found(), beside_found()]), beside_found()) = None { refl }
+
+theorem beside_found_control(): ¬(run_fn(world([found(), beside_found()], 2), beside_found(), [[1, 6]], Ref(0, 0, 2), [0, 1]).word =
+    mean_fn(world([found(), beside_found()], 2), beside_found(), [1, 6], [0, 1]).word)
+{
+    λ e => {
+        let at9: (9 = 6) = e;
+        absurd(at9)
+    }
+}

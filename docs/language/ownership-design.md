@@ -1309,6 +1309,18 @@ arm, whose residual is owed under the other answer and fails there
 (`swapped_control`); a write into either arm's window while the joined view
 lives (`coarse_held_control`, 7 against 6).
 
+*A finer returned region* (2026-11-25). A signature's result is `KView(region)`,
+the region stated in the callee's parameter words (`Ret::kind`: the
+answered window where it reads only parameter words, else the whole
+parameter); a caller reads it at its arguments (`Region::subst`) and freezes
+only that, so it may write beside the view. `FnSafe`'s `view_in` became "the
+answered view lies in the signature's region, at the call's words", and it
+is load-bearing: the caller's frame for its later write is the view's
+`ViewOk.within`, which comes from it and nothing else. `stray_not_safe` is a
+callee that answers the right value at the wrong place, keeping every other
+part of the promise; with it, an accepted caller's runs differ
+(`stray_breaks`).
+
 ### 15.7 Settled by Minus, 2026-11-25, and what is still open
 
 - **When memory runs out**: room is a premise of the machine theorem, the
