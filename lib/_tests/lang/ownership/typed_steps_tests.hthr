@@ -33,8 +33,8 @@ import span_set;
 // Indexed by types
 
 // expect-error: an index is a `Nat` or a previously declared inductive
-inductive TStepBare : (s: Type) → Type {
-    TBElem(t: Type, i: Nat) : TStepBare(List<t>),
+inductive TStepBare: (s: Type) → Type {
+    TBElem(t: Type, i: Nat): TStepBare(List<t>),
 }
 
 // A source and a target, as an index.
@@ -43,16 +43,16 @@ inductive TyIx { Ix(s: Type, t: Type), NoIx }
 fn TyIx::src(st: TyIx) → Type { match st { Ix(s, _) => s, NoIx => True } }
 fn TyIx::tgt(st: TyIx) → Type { match st { Ix(_, t) => t, NoIx => True } }
 
-inductive TStep : (st: TyIx) → Type {
-    TElem(t: Type, i: Nat) : TStep(Ix(List<t>, t)),
-    TFst(a: Type, b: Type) : TStep(Ix(Pair<a, b>, a)),
-    TSnd(a: Type, b: Type) : TStep(Ix(Pair<a, b>, b)),
+inductive TStep: (st: TyIx) → Type {
+    TElem(t: Type, i: Nat): TStep(Ix(List<t>, t)),
+    TFst(a: Type, b: Type): TStep(Ix(Pair<a, b>, a)),
+    TSnd(a: Type, b: Type): TStep(Ix(Pair<a, b>, b)),
 }
 
 // The existential over each intermediate type is the field `m`.
-inductive TSteps : (st: TyIx) → Type {
-    TNil(s: Type) : TSteps(Ix(s, s)),
-    TCons(s: Type, m: Type, t: Type, a: TStep(Ix(s, m)), rest: TSteps(Ix(m, t))) : TSteps(Ix(s, t)),
+inductive TSteps: (st: TyIx) → Type {
+    TNil(s: Type): TSteps(Ix(s, s)),
+    TCons(s: Type, m: Type, t: Type, a: TStep(Ix(s, m)), rest: TSteps(Ix(m, t))): TSteps(Ix(s, t)),
 }
 
 fn pfst<A, B>() → Path<Pair<A, B>, A> { Path<Pair<A, B>, A>(get := λ (p: Pair<A, B>) => Some(p.fst), set := λ (p: Pair<A, B>) => λ (v: A) => Pair(v, p.snd)) }
@@ -136,9 +136,9 @@ inductive Shapes { SNil, SCons(h: Shape, t: Shapes) }
 
 // A member of a group is not an index type.
 // expect-error: `Shapes` cannot be used here
-inductive Mem(t: Shape) : (fs: Shapes) → Type {
-    MHere(r: Shapes) : Mem(t)(SCons(t, r)),
-    MThere(h: Shape, r: Shapes, m: Mem(t)(r)) : Mem(t)(SCons(h, r)),
+inductive Mem(t: Shape): (fs: Shapes) → Type {
+    MHere(r: Shapes): Mem(t)(SCons(t, r)),
+    MThere(h: Shape, r: Shapes, m: Mem(t)(r)): Mem(t)(SCons(h, r)),
 }
 
 inductive Never {}
@@ -169,17 +169,17 @@ inductive CIx { Cx(s: Shape, t: Shape), NoCx }
 fn CIx::src(st: CIx) → Shape { match st { Cx(s, _) => s, NoCx => SWord } }
 fn CIx::tgt(st: CIx) → Shape { match st { Cx(_, t) => t, NoCx => SWord } }
 
-inductive CStep : (st: CIx) → Type {
-    CField(fs: Shapes, i: Nat) : CStep(Cx(SRec(fs), Shapes::at(fs, i))),
-    CElem(a: Shape, i: Nat) : CStep(Cx(SSeq(a), a)),
-    CWindow(a: Shape, lo: Nat, n: Nat) : CStep(Cx(SSeq(a), SVec(n, a))),
-    CKey(a: Shape, k: Key) : CStep(Cx(SMap(a), a)),
-    CVariant(cs: Shapes, c: Nat) : CStep(Cx(STag(cs), Shapes::at(cs, c))),
+inductive CStep: (st: CIx) → Type {
+    CField(fs: Shapes, i: Nat): CStep(Cx(SRec(fs), Shapes::at(fs, i))),
+    CElem(a: Shape, i: Nat): CStep(Cx(SSeq(a), a)),
+    CWindow(a: Shape, lo: Nat, n: Nat): CStep(Cx(SSeq(a), SVec(n, a))),
+    CKey(a: Shape, k: Key): CStep(Cx(SMap(a), a)),
+    CVariant(cs: Shapes, c: Nat): CStep(Cx(STag(cs), Shapes::at(cs, c))),
 }
 
-inductive CSteps : (st: CIx) → Type {
-    CNil(s: Shape) : CSteps(Cx(s, s)),
-    CCons(s: Shape, m: Shape, t: Shape, a: CStep(Cx(s, m)), rest: CSteps(Cx(m, t))) : CSteps(Cx(s, t)),
+inductive CSteps: (st: CIx) → Type {
+    CNil(s: Shape): CSteps(Cx(s, s)),
+    CCons(s: Shape, m: Shape, t: Shape, a: CStep(Cx(s, m)), rest: CSteps(Cx(m, t))): CSteps(Cx(s, t)),
 }
 
 fn pinl<A, B>() → Path<Or<A, B>, A> {

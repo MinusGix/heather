@@ -1,6 +1,6 @@
 ---
 title: Could the ownership design's reflected languages be typed by construction? Measure a type-indexed and a code-indexed family
-status: open
+status: closed
 labels: [kernel,elaborator,design,ownership]
 area: heather-in-heather
 milestone: [nh-ownership]
@@ -58,3 +58,4 @@ The probes are in `lib/_tests` (or a scratch module named in the log if they sho
   - *Level 2's values and operations.* Values typed by codes are `Shape::el` (no `Val` at all), but a heap of blocks of different shapes needs a heap typing, and a `Ref`'s type depends on it: every store must keep the heap typing, which is `KeepsFit` again in another place. By types it is impossible for the reason in 1 (a heap of `Σ T: Type. T` cannot be compared). The obligation moves, it does not go. Stay untyped: `Val` is already the code universe's untyped twin.
 
   **4. Recommendation: stay untyped, for all three, and do not hold up §16's three interfaces.** Indexing by types is out (the theory). Indexing by codes is possible and could follow later without rework: a code-typed universe is one more `StepModel` (its value type `Σ c: Shape. c.el()`), so the interfaces as built (untyped steps denoted through a model) do not preclude it. What it would take, if a later customer wants typed values: [[uip-from-decidable-equality]] (small), the soundness convoys and position apartness (a module the size of the fit machinery it replaces), optionally [[mutual-member-as-index-type]] for typed field positions; and a constant factor in checking places that no kernel work on conversion alone removes, since each code node is data.
+- 2026-11-25: Verified: `scripts/test --pr` — `== suite: 4138 passed, 1 failed, 3 ignored ==`, the one failure `repository_sources_are_formatted` on the new probe file; formatted with `heather fmt` (whitespace only) and that target re-run green (`== suite: 25 passed, 0 failed, 0 ignored ==`). Done-when met: probes in `lib/_tests`, measurements as shapes with what dominates, a recommendation (stay untyped). Residue filed: [[list-literal-evaluation-quadratic]], [[nested-type-application-elaboration-cost]], [[uip-from-decidable-equality]], [[mutual-member-as-index-type]], [[value-params-in-result-index]]. Closing.
