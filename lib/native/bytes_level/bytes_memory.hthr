@@ -311,12 +311,68 @@ record MemoryRenamed(r: Renaming, m, renamed: Memory) {
     written: (c: Nat) → renamed.written(c) = m.written(r.back(c)),
 }
 
-// Two answers alike: both none, or both a memory, the second renamed.
-fn MemoryAlike(r: Renaming, left, right: Option<Memory>) → Type {
+// Two answers related by `R`: both none, or both some and related.
+fn Related<T>(R: T → T → Type, left, right: Option<T>) → Type {
     match left {
         None => match right { None => True, Some(_) => False },
-        Some(a) => match right { None => False, Some(b) => MemoryRenamed(r, a, b) },
+        Some(a) => match right { None => False, Some(b) => R(a, b) },
     }
+}
+
+fn memory_renamed(r: Renaming) → Memory → Memory → Type { λ (a: Memory) (b: Memory) => MemoryRenamed(r, a, b) }
+
+// Two memories alike: none both, or the second the first renamed.
+fn MemoryAlike(r: Renaming, left, right: Option<Memory>) → Type { Related<Memory>(memory_renamed(r), left, right) }
+
+// What follows from related answers is related, where it follows from
+// related values: the three ways a run's steps are chained.
+theorem related_then<A, T>(Ra: A → A → Type, R: T → T → Type, {o, o2: Option<A>}, rel: Related<A>(Ra, o, o2), {k, k2: A → Option<T>},
+    each: (x, y: A) → Ra(x, y) → Related<T>(R, k(x), k2(y))): Related<T>(R, o.and_then(k), o2.and_then(k2)) {
+    (match o as λ a => (b: Option<A>) → Related<A>(Ra, a, b) → Related<T>(R, a.and_then(k), b.and_then(k2)) {
+        None => λ b => match b as λ bb => Related<A>(Ra, None, bb) → Related<T>(R, None, bb.and_then(k2)) {
+            None => λ _ => trivial,
+            Some(_) => λ never => false_elim(never),
+        },
+        Some(x) => λ b => match b as λ bb => Related<A>(Ra, Some(x), bb) → Related<T>(R, k(x), bb.and_then(k2)) {
+            None => λ never => false_elim(never),
+            Some(y) => λ h => each(x, y, h),
+        },
+    })(o2, rel)
+}
+
+// The second the first renamed by `g`.
+theorem related_map_then<A, T>(R: T → T → Type, g: A → A, {o, o2: Option<A>}, same: o2 = o.map(g), {k, k2: A → Option<T>},
+    each: (x: A) → Related<T>(R, k(x), k2(g(x)))): Related<T>(R, o.and_then(k), o2.and_then(k2)) {
+    rewrite(same, match o as λ a => Related<T>(R, a.and_then(k), a.map(g).and_then(k2)) { None => trivial, Some(x) => each(x) })
+}
+
+// The second the first.
+theorem related_same_then<A, T>(R: T → T → Type, {o, o2: Option<A>}, same: o2 = o, {k, k2: A → Option<T>},
+    each: (x: A) → Related<T>(R, k(x), k2(x))): Related<T>(R, o.and_then(k), o2.and_then(k2)) {
+    rewrite(same, match o as λ a => Related<T>(R, a.and_then(k), a.and_then(k2)) { None => trivial, Some(x) => each(x) })
+}
+
+// Answers related by "the second is the first under `g`" are an equation.
+theorem related_eq_map<A>(g: A → A, {o, o2: Option<A>}, rel: Related<A>(λ (a: A) (b: A) => b = g(a), o, o2)): o2 = o.map(g) {
+    (match o as λ a => (b: Option<A>) → Related<A>(λ (x: A) (y: A) => y = g(x), a, b) → b = a.map(g) {
+        None => λ b => match b as λ bb => Related<A>(λ (x: A) (y: A) => y = g(x), None, bb) → bb = None { None => λ _ => refl, Some(_) => λ never => false_elim(never) },
+        Some(x) => λ b => match b as λ bb => Related<A>(λ (x2: A) (y: A) => y = g(x2), Some(x), bb) → bb = Some(g(x)) {
+            None => λ never => false_elim(never),
+            Some(y) => λ h => cong_fn<A, Option<A>>(λ v => Some(v), h),
+        },
+    })(o2, rel)
+}
+
+// What related answers say alike.
+theorem related_map_eq<T, B>(R: T → T → Type, f: T → B, alike: (a, b: T) → R(a, b) → f(b) = f(a), {o, o2: Option<T>}, rel: Related<T>(R, o, o2)):
+    o2.map(f) = o.map(f) {
+    (match o as λ a => (b: Option<T>) → Related<T>(R, a, b) → b.map(f) = a.map(f) {
+        None => λ b => match b as λ bb => Related<T>(R, None, bb) → bb.map(f) = None { None => λ _ => refl, Some(_) => λ never => false_elim(never) },
+        Some(x) => λ b => match b as λ bb => Related<T>(R, Some(x), bb) → bb.map(f) = Some(f(x)) {
+            None => λ never => false_elim(never),
+            Some(y) => λ h => cong_fn<B, Option<B>>(λ v => Some(v), alike(x, y, h)),
+        },
+    })(o2, rel)
 }
 
 theorem MemoryRenamed::block({r: Renaming}, {m, renamed: Memory}, self rel: MemoryRenamed(r, m, renamed), b: Nat):

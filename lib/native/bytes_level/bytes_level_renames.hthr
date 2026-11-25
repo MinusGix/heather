@@ -1,0 +1,378 @@
+// Placelessness of the bytes level, proved once for the language
+// (docs/language/ownership-design.md §17.3; issues/bytes-level-language.md):
+// a run of a program on a heap whose blocks are renamed, its arguments'
+// references renamed alike, is the run renamed (`run_renames`), so the
+// words it answers are the same under any renaming (`run_words_alike`).
+//
+// No operation observes which block a reference names beyond following
+// it: a word node reads words only, a memory node reads the block it is
+// given (bytes_memory's `take_renames`, `put_renames`), and an offset
+// moves within its block. The proof follows the meaning's own structure:
+// each step is an `and_then`, and three lemmas carry a relation across one
+// (`related_then`, `related_map_then`, `related_same_then`, bytes_memory).
+// What a call answers is placeless where its callees are (`Placeless`),
+// and a program's table is, routine by routine and level by level, so no
+// routine's body is reached from another's proof.
+import bytes_level::{run};
+import bytes_memory;
+import reference_cells;
+import function_ir;
+import function_ir_eval;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// ---------------------------------------------------------------------------
+// Renamed values, locals, configurations, answers
+
+fn rename_values(r: Renaming, vs: List<Value>) → List<Value> {
+    match vs { Nil => Nil, Cons(v, rest) => Cons(v.rename(r), rename_values(r, rest)) }
+}
+
+// `renamed` holds the same words, and each reference renamed.
+record LocalsRenamed(r: Renaming, l, renamed: Locals) {
+    words: renamed.words = l.words,
+    refs: (x: Nat) → renamed.refs(x) = l.refs(x).map(λ (t: Loc) => t.rename(r)),
+}
+
+record ConfigRenamed(r: Renaming, c, renamed: Config) {
+    locals: LocalsRenamed(r, c.locals, renamed.locals),
+    memory: MemoryRenamed(r, c.memory, renamed.memory),
+}
+
+record AnswerRenamed(r: Renaming, a, renamed: Answer) {
+    words: renamed.words = rename_values(r, a.words),
+    heap: MemoryRenamed(r, a.heap, renamed.heap),
+}
+
+record EndedRenamed(r: Renaming, e, renamed: Ended) {
+    state: renamed.state = rename_values(r, e.state),
+    exhausted: renamed.exhausted = e.exhausted,
+    memory: MemoryRenamed(r, e.memory, renamed.memory),
+}
+
+fn locals_renamed(r: Renaming) → Locals → Locals → Type { λ (a: Locals) (b: Locals) => LocalsRenamed(r, a, b) }
+
+fn config_renamed(r: Renaming) → Config → Config → Type { λ (a: Config) (b: Config) => ConfigRenamed(r, a, b) }
+
+fn answer_renamed(r: Renaming) → Answer → Answer → Type { λ (a: Answer) (b: Answer) => AnswerRenamed(r, a, b) }
+
+fn ended_renamed(r: Renaming) → Ended → Ended → Type { λ (a: Ended) (b: Ended) => EndedRenamed(r, a, b) }
+
+// A callee that answers alike under every renaming: its answer on renamed
+// values and a renamed heap is its answer renamed.
+fn PlacelessFn(own: List<Value> → Memory → Option<Answer>) → Type {
+    (r: Renaming) → (args: List<Value>) → (m, renamed: Memory) → MemoryRenamed(r, m, renamed) →
+        Related<Answer>(answer_renamed(r), own(args, m), own(rename_values(r, args), renamed))
+}
+
+fn Placeless(calls: Calls()) → Type { (f: Nat) → PlacelessFn(calls(f)) }
+
+// ---------------------------------------------------------------------------
+// Locals
+
+theorem LocalsRenamed::read({r: Renaming}, {l, renamed: Locals}, self rel: LocalsRenamed(r, l, renamed), v: Typed):
+    renamed.read(v) = l.read(v).map(λ (x: Value) => x.rename(r)) {
+    match v.kind as λ k =>
+        (match k { WordKind => Some(Word(renamed.words(64, v.id))), RefKind => renamed.refs(v.id).map(λ (loc: Loc) => Ref(loc)) }) =
+            (match k { WordKind => Some(Word(l.words(64, v.id))), RefKind => l.refs(v.id).map(λ (loc: Loc) => Ref(loc)) }).map(λ (x: Value) => x.rename(r)) {
+        WordKind => rewrite(rel.words, refl),
+        RefKind => rewrite(rel.refs(v.id), match l.refs(v.id) as λ o =>
+                o.map(λ (t: Loc) => t.rename(r)).map(λ (loc: Loc) => Ref(loc)) = o.map(λ (loc: Loc) => Ref(loc)).map(λ (x: Value) => x.rename(r)) {
+            None => refl,
+            Some(_) => refl,
+        }),
+    }
+}
+
+fn values_renamed(r: Renaming) → List<Value> → List<Value> → Type { λ (a: List<Value>) (b: List<Value>) => b = rename_values(r, a) }
+
+theorem read_values_related(r: Renaming, vs: List<Typed>, l, renamed: Locals, rel: LocalsRenamed(r, l, renamed)):
+    Related<List<Value>>(values_renamed(r), read_values(vs, l), read_values(vs, renamed)) {
+    match vs {
+        Nil => refl,
+        Cons(v, rest) => related_map_then(values_renamed(r), λ (x: Value) => x.rename(r), rel.read(v), λ x =>
+            related_then(values_renamed(r), values_renamed(r), read_values_related(r, rest, l, renamed, rel), λ xs ys h =>
+                j(sym(h), λ zs _ => Related<List<Value>>(values_renamed(r), Some(Cons(x, xs)), Some(Cons(x.rename(r), zs))), refl))),
+    }
+}
+
+theorem read_values_renames(r: Renaming, vs: List<Typed>, l, renamed: Locals, rel: LocalsRenamed(r, l, renamed)):
+    read_values(vs, renamed) = read_values(vs, l).map(λ (xs: List<Value>) => rename_values(r, xs)) {
+    related_eq_map(λ (xs: List<Value>) => rename_values(r, xs), read_values_related(r, vs, l, renamed, rel))
+}
+
+theorem LocalsRenamed::set_word({r: Renaming}, {l, renamed: Locals}, self rel: LocalsRenamed(r, l, renamed), id: Nat, value: (w: Nat) → BitVec(w)):
+    LocalsRenamed(r, l.set_word(id, value), renamed.set_word(id, value)) {
+    LocalsRenamed(words := cong_fn<Valuation(), Valuation()>(λ ws => Valuation::set(ws, id, value), rel.words), refs := rel.refs)
+}
+
+theorem LocalsRenamed::set_ref({r: Renaming}, {l, renamed: Locals}, self rel: LocalsRenamed(r, l, renamed), id: Nat, loc: Loc):
+    LocalsRenamed(r, l.set_ref(id, loc), renamed.set_ref(id, loc.rename(r))) {
+    LocalsRenamed(
+        words := rel.words,
+        refs := λ y => match y.same(id) as λ v =>
+            (match v { True => Some(loc.rename(r)), False => renamed.refs(y) }) =
+                (match v { True => Some(loc), False => l.refs(y) }).map(λ (t: Loc) => t.rename(r)) {
+            True => refl,
+            False => rel.refs(y),
+        },
+    )
+}
+
+theorem LocalsRenamed::bind({r: Renaming}, {l, renamed: Locals}, self rel: LocalsRenamed(r, l, renamed), v: Typed, x: Value):
+    Related<Locals>(locals_renamed(r), l.bind(v, x), renamed.bind(v, x.rename(r))) {
+    match v.kind as λ k =>
+        Related<Locals>(locals_renamed(r),
+            match k { WordKind => match x { Word(w) => Some(l.set_word(v.id, word_value(w))), Ref(_) => None },
+                RefKind => match x { Word(_) => None, Ref(loc) => Some(l.set_ref(v.id, loc)) } },
+            match k { WordKind => match x.rename(r) { Word(w) => Some(renamed.set_word(v.id, word_value(w))), Ref(_) => None },
+                RefKind => match x.rename(r) { Word(_) => None, Ref(loc) => Some(renamed.set_ref(v.id, loc)) } }) {
+        WordKind => match x { Word(w) => rel.set_word(v.id, word_value(w)), Ref(_) => trivial },
+        RefKind => match x { Word(_) => trivial, Ref(loc) => rel.set_ref(v.id, loc) },
+    }
+}
+
+theorem bind_values_renames(r: Renaming, vs: List<Typed>): (values: List<Value>) → (l, renamed: Locals) → LocalsRenamed(r, l, renamed) →
+    Related<Locals>(locals_renamed(r), bind_values(vs, values, l), bind_values(vs, rename_values(r, values), renamed)) {
+    match vs {
+        Nil => λ values l renamed rel => match values { Nil => rel, Cons(_, _) => trivial },
+        Cons(v, rest) => λ values l renamed rel => match values {
+            Nil => trivial,
+            Cons(x, xs) => related_then(locals_renamed(r), locals_renamed(r), rel.bind(v, x),
+                λ a b h => bind_values_renames(r, rest, xs, a, b, h)),
+        },
+    }
+}
+
+// Locals with no reference are their own renaming.
+theorem LocalsRenamed::words_only(r: Renaming, words: Valuation()): LocalsRenamed(r, Locals(words, λ (_: Nat) => None), Locals(words, λ (_: Nat) => None)) {
+    LocalsRenamed(words := refl, refs := λ x => refl)
+}
+
+// ---------------------------------------------------------------------------
+// Nodes
+
+// A configuration with the same words, its references and memory renamed.
+theorem Instr::step_renames_at(self instr: Instr, r: Renaming, c: Config, refs: Nat → Option<Loc>, m: Memory,
+    refs_renamed: (x: Nat) → refs(x) = c.locals.refs(x).map(λ (t: Loc) => t.rename(r)), memory: MemoryRenamed(r, c.memory, m)):
+    Related<Config>(config_renamed(r), instr.step(c), instr.step(Config(Locals(c.locals.words, refs), m))) {
+    let l = Locals(c.locals.words, refs);
+    let locals: LocalsRenamed(r, c.locals, l) = LocalsRenamed(words := refl, refs := refs_renamed);
+    let rename = λ (t: Loc) => t.rename(r);
+    match instr {
+        Compute(node) => match node.pure() && node.defined(c.locals.words) as λ v =>
+            Related<Config>(config_renamed(r), match v { False => None, True => Some(Config(Locals(node.step(c.locals.words), c.locals.refs), c.memory)) },
+                match v { False => None, True => Some(Config(Locals(node.step(c.locals.words), refs), m)) }) {
+            False => trivial,
+            True => ConfigRenamed(locals := LocalsRenamed(words := refl, refs := refs_renamed), memory := memory),
+        },
+        Load(bytes, output, place) => related_map_then(config_renamed(r), rename, refs_renamed(place), λ loc =>
+            related_same_then(config_renamed(r), c.memory.load_renames(r, m, memory, loc, bytes), λ x =>
+                ConfigRenamed(locals := locals.set_word(output, λ (w: Nat) => BitVec::ofNat(x)), memory := memory))),
+        Store(bytes, place, value) => related_map_then(config_renamed(r), rename, refs_renamed(place), λ loc =>
+            related_then(memory_renamed(r), config_renamed(r), c.memory.store_renames(r, m, memory, loc, word_piece(bytes, c.locals.words(8 * bytes, value))),
+                λ a b h => ConfigRenamed(locals := locals, memory := h))),
+        LoadRef(output, place) => related_map_then(config_renamed(r), rename, refs_renamed(place), λ loc =>
+            related_map_then(config_renamed(r), rename, c.memory.load_ref_renames(r, m, memory, loc), λ target =>
+                ConfigRenamed(locals := locals.set_ref(output, target), memory := memory))),
+        StoreRef(place, value) => related_map_then(config_renamed(r), rename, refs_renamed(place), λ loc =>
+            related_map_then(config_renamed(r), rename, refs_renamed(value), λ target =>
+                related_then(memory_renamed(r), config_renamed(r), c.memory.store_ref_renames(r, m, memory, loc, target),
+                    λ a b h => ConfigRenamed(locals := locals, memory := h)))),
+        Offset(output, place, amount) => related_map_then(config_renamed(r), rename, refs_renamed(place), λ loc =>
+            ConfigRenamed(locals := locals.set_ref(output, Loc(loc.block, loc.offset + c.locals.word(amount).toNat())), memory := memory)),
+        Copy(target, source, length) => related_map_then(config_renamed(r), rename, refs_renamed(target), λ to =>
+            related_map_then(config_renamed(r), rename, refs_renamed(source), λ from =>
+                related_then(memory_renamed(r), config_renamed(r), c.memory.copy_renames(r, m, memory, to, from, c.locals.word(length).toNat()),
+                    λ a b h => ConfigRenamed(locals := locals, memory := h)))),
+    }
+}
+
+// The step of a renamed configuration is the renamed step.
+theorem Instr::step_renames(self instr: Instr, r: Renaming, c, renamed: Config, rel: ConfigRenamed(r, c, renamed)):
+    Related<Config>(config_renamed(r), instr.step(c), instr.step(renamed)) {
+    j(sym(rel.locals.words), λ ws _ => Related<Config>(config_renamed(r), instr.step(c), instr.step(Config(Locals(ws, renamed.locals.refs), renamed.memory))),
+        instr.step_renames_at(r, c, renamed.locals.refs, renamed.memory, rel.locals.refs, rel.memory))
+}
+
+theorem run_instrs_renames(r: Renaming, instrs: List<Instr>): (c, renamed: Config) → ConfigRenamed(r, c, renamed) →
+    Related<Config>(config_renamed(r), run_instrs(instrs, c), run_instrs(instrs, renamed)) {
+    match instrs {
+        Nil => λ c renamed rel => rel,
+        Cons(instr, rest) => λ c renamed rel => related_then(config_renamed(r), config_renamed(r), instr.step_renames(r, c, renamed, rel),
+            λ a b h => run_instrs_renames(r, rest, a, b, h)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Loops
+
+// A pass's ids, from a renamed state.
+theorem pass_locals_renames(r: Renaming, parameters: List<Typed>, count, remaining: Nat, state: List<Value>):
+    Related<Locals>(locals_renamed(r), pass_locals(parameters, count, remaining, state), pass_locals(parameters, count, remaining, rename_values(r, state))) {
+    let start = Locals::empty().set_word(count, word_value(BitVec::ofNat(remaining)));
+    bind_values_renames(r, parameters, state, start, start, LocalsRenamed::words_only(r, start.words))
+}
+
+// The loop's passes, each a renamed step, from a renamed state.
+theorem loop_run_renames(r: Renaming, step: Config → Option<Config>,
+    steps: (c, renamed: Config) → ConfigRenamed(r, c, renamed) → Related<Config>(config_renamed(r), step(c), step(renamed)),
+    parameters: List<Typed>, count, exit: Nat, next: List<Typed>, remaining: Nat):
+    (state: List<Value>) → (m, renamed: Memory) → MemoryRenamed(r, m, renamed) →
+    Related<Ended>(ended_renamed(r), loop_run(step, parameters, count, exit, next, remaining, state, m),
+        loop_run(step, parameters, count, exit, next, remaining, rename_values(r, state), renamed)) {
+    match remaining {
+        Zero => λ state m renamed rel => EndedRenamed(state := refl, exhausted := refl, memory := rel),
+        Succ(rest) => λ state m renamed rel => related_then(locals_renamed(r), ended_renamed(r), pass_locals_renames(r, parameters, count, rest + 1, state),
+            λ l l2 hl => related_then(config_renamed(r), ended_renamed(r), steps(Config(l, m), Config(l2, renamed), ConfigRenamed(locals := hl, memory := rel)),
+                λ after after2 h => related_map_then(ended_renamed(r), λ (xs: List<Value>) => rename_values(r, xs),
+                    read_values_renames(r, next, after.locals, after2.locals, h.locals), λ later =>
+                        j(sym(h.locals.words), λ ws _ => Related<Ended>(ended_renamed(r),
+                                match after.locals.words(1, exit).head_bit() {
+                                    False => loop_run(step, parameters, count, exit, next, rest, later, after.memory),
+                                    True => Some(Ended(later, False, after.memory)),
+                                },
+                                match ws(1, exit).head_bit() {
+                                    False => loop_run(step, parameters, count, exit, next, rest, rename_values(r, later), after2.memory),
+                                    True => Some(Ended(rename_values(r, later), False, after2.memory)),
+                                }),
+                            match after.locals.words(1, exit).head_bit() as λ v => Related<Ended>(ended_renamed(r),
+                                    match v {
+                                        False => loop_run(step, parameters, count, exit, next, rest, later, after.memory),
+                                        True => Some(Ended(later, False, after.memory)),
+                                    },
+                                    match v {
+                                        False => loop_run(step, parameters, count, exit, next, rest, rename_values(r, later), after2.memory),
+                                        True => Some(Ended(rename_values(r, later), False, after2.memory)),
+                                    }) {
+                                False => loop_run_renames(r, step, steps, parameters, count, exit, next, rest, later, after.memory, after2.memory, h.memory),
+                                True => EndedRenamed(state := refl, exhausted := refl, memory := h.memory),
+                            })))),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Regions
+
+theorem Body::run_renames(self body: Body, calls: Calls(), placeless: Placeless(calls), r: Renaming):
+    (c, renamed: Config) → ConfigRenamed(r, c, renamed) → Related<Config>(config_renamed(r), body.run(calls, c), body.run(calls, renamed)) {
+    match body {
+        Leaf(instrs) => λ c renamed rel => run_instrs_renames(r, instrs, c, renamed, rel),
+        Seq(first, rest) => λ c renamed rel => related_then(config_renamed(r), config_renamed(r), first.run_renames(calls, placeless, r, c, renamed, rel),
+            λ a b h => rest.run_renames(calls, placeless, r, a, b, h)),
+        Branch(condition, yes, no) => λ c renamed rel =>
+            j(sym(rel.locals.words), λ ws _ => Related<Config>(config_renamed(r),
+                    match c.locals.words(1, condition).head_bit() { True => yes.run(calls, c), False => no.run(calls, c) },
+                    match ws(1, condition).head_bit() { True => yes.run(calls, renamed), False => no.run(calls, renamed) }),
+                match c.locals.words(1, condition).head_bit() as λ v => Related<Config>(config_renamed(r),
+                        match v { True => yes.run(calls, c), False => no.run(calls, c) },
+                        match v { True => yes.run(calls, renamed), False => no.run(calls, renamed) }) {
+                    True => yes.run_renames(calls, placeless, r, c, renamed, rel),
+                    False => no.run_renames(calls, placeless, r, c, renamed, rel),
+                }),
+        Call(callee, arguments, results) => λ c renamed rel => related_map_then(config_renamed(r), λ (xs: List<Value>) => rename_values(r, xs),
+            read_values_renames(r, arguments, c.locals, renamed.locals, rel.locals), λ args =>
+                match callee as λ k => Related<Config>(config_renamed(r),
+                        k.answer(calls, args, c.memory).and_then(λ (answer: Answer) =>
+                            bind_values(results, answer.words, c.locals).and_then(λ (l: Locals) => Some(Config(l, answer.heap)))),
+                        k.answer(calls, rename_values(r, args), renamed.memory).and_then(λ (answer: Answer) =>
+                            bind_values(results, answer.words, renamed.locals).and_then(λ (l: Locals) => Some(Config(l, answer.heap))))) {
+                    Local(f) => related_then(answer_renamed(r), config_renamed(r), placeless(f, r, args, c.memory, renamed.memory, rel.memory),
+                        λ a b h => rewrite(h.words, related_then(locals_renamed(r), config_renamed(r),
+                            bind_values_renames(r, results, a.words, c.locals, renamed.locals, rel.locals),
+                            λ l l2 hl => ConfigRenamed(locals := hl, memory := h.heap)))),
+                    System(call) => match call {},
+                }),
+        Loop(inputs, bound, parameters, count, inner, exit, next, outputs, exhausted) => λ c renamed rel =>
+            related_map_then(config_renamed(r), λ (xs: List<Value>) => rename_values(r, xs), read_values_renames(r, inputs, c.locals, renamed.locals, rel.locals),
+                λ state => {
+                    let passes: (renamed.locals.word(bound).toNat() = c.locals.word(bound).toNat()) =
+                        cong_fn<Valuation(), Nat>(λ ws => ws(64, bound).toNat(), rel.locals.words);
+                    rewrite(passes, related_then(ended_renamed(r), config_renamed(r),
+                        loop_run_renames(r, λ (pass: Config) => inner.run(calls, pass), λ a b h => inner.run_renames(calls, placeless, r, a, b, h),
+                            parameters, count, exit, next, c.locals.word(bound).toNat(), state, c.memory, renamed.memory, rel.memory),
+                        λ end end2 h => rewrite(h.state, h.exhausted, related_then(locals_renamed(r), config_renamed(r),
+                            bind_values_renames(r, outputs, end.state, c.locals, renamed.locals, rel.locals),
+                            λ l l2 hl => ConfigRenamed(locals := hl.set_word(exhausted, bit_value(end.exhausted)), memory := h.memory)))))
+                }),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Routines and programs
+
+theorem Routine::call_renames(self routine: Routine, calls: Calls(), placeless: Placeless(calls)):
+    PlacelessFn(λ (args: List<Value>) (heap: Memory) => routine.call(calls, args, heap)) {
+    λ r args m renamed rel => related_then(locals_renamed(r), answer_renamed(r),
+        bind_values_renames(r, routine.parameters, args, Locals::empty(), Locals::empty(), LocalsRenamed::words_only(r, Valuation::zero())),
+        λ l l2 hl => related_then(config_renamed(r), answer_renamed(r),
+            routine.body.run_renames(calls, placeless, r, Config(l, m), Config(l2, renamed), ConfigRenamed(locals := hl, memory := rel)),
+            λ after after2 h => related_map_then(answer_renamed(r), λ (xs: List<Value>) => rename_values(r, xs),
+                read_values_renames(r, routine.results, after.locals, after2.locals, h.locals),
+                λ words => AnswerRenamed(words := refl, heap := h.memory))))
+}
+
+theorem tie_placeless(below: Calls(), k: Nat, own: List<Value> → Memory → Option<Answer>, below_placeless: Placeless(below),
+    own_placeless: PlacelessFn(own)): Placeless(tie_calls(below, k, own)) {
+    λ f => match f.same(k) as λ v => PlacelessFn(match v { True => own, False => below(f) }) {
+        True => own_placeless,
+        False => below_placeless(f),
+    }
+}
+
+theorem deep_placeless(routine: Routine, below: Calls(), k: Nat, below_placeless: Placeless(below), depth: Nat):
+    PlacelessFn(deep_calls(routine, below, k, depth)) {
+    match depth {
+        Zero => λ r args m renamed rel => trivial,
+        Succ(d) => routine.call_renames(tie_calls(below, k, deep_calls(routine, below, k, d)),
+            tie_placeless(below, k, deep_calls(routine, below, k, d), below_placeless, deep_placeless(routine, below, k, below_placeless, d))),
+    }
+}
+
+theorem program_placeless(routines: List<Routine>): Placeless(program_calls(routines)) {
+    match routines {
+        Nil => λ f r args m renamed rel => trivial,
+        Cons(routine, rest) => tie_placeless(program_calls(rest), rest.len(), deep_calls(routine, program_calls(rest), rest.len(), routine.levels + 1),
+            program_placeless(rest), deep_placeless(routine, program_calls(rest), rest.len(), program_placeless(rest), routine.levels + 1)),
+    }
+}
+
+// A run on a renamed heap, its arguments' references renamed alike, is the
+// run renamed: the meaning is unchanged by renaming blocks.
+theorem run_renames(r: Renaming, p: Program, f: Nat, args: List<Value>, heap, renamed: Memory, rel: MemoryRenamed(r, heap, renamed)):
+    Related<Answer>(answer_renamed(r), run(p, f, args, heap), run(p, f, rename_values(r, args), renamed)) {
+    program_placeless(p.routines, f, r, args, heap, renamed, rel)
+}
+
+// ---------------------------------------------------------------------------
+// The words answered
+
+fn Value::word_part(self v: Value) → Option<BitVec(64)> { match v { Word(w) => Some(w), Ref(_) => None } }
+
+fn word_parts(vs: List<Value>) → List<Option<BitVec(64)>> { match vs { Nil => Nil, Cons(v, rest) => Cons(v.word_part(), word_parts(rest)) } }
+
+theorem word_parts_rename(r: Renaming, vs: List<Value>): word_parts(rename_values(r, vs)) = word_parts(vs) {
+    match vs {
+        Nil => refl,
+        Cons(v, rest) => {
+            let unfolded: (Cons(v.rename(r).word_part(), word_parts(rename_values(r, rest))) = Cons(v.word_part(), word_parts(rest))) =
+                rewrite(word_parts_rename(r, rest), match v as λ x => Cons(x.rename(r).word_part(), word_parts(rest)) = Cons(x.word_part(), word_parts(rest)) {
+                    Word(_) => refl,
+                    Ref(_) => refl,
+                });
+            unfolded
+        },
+    }
+}
+
+// So the words a run answers are the same under any renaming of the blocks
+// it starts with, and whether it answers at all.
+theorem run_words_alike(r: Renaming, p: Program, f: Nat, args: List<Value>, heap, renamed: Memory, rel: MemoryRenamed(r, heap, renamed)):
+    run(p, f, rename_values(r, args), renamed).map(λ (a: Answer) => word_parts(a.words)) = run(p, f, args, heap).map(λ (a: Answer) => word_parts(a.words)) {
+    related_map_eq(answer_renamed(r), λ (a: Answer) => word_parts(a.words),
+        λ a b h => rewrite(h.words, word_parts_rename(r, a.words)), run_renames(r, p, f, args, heap, renamed, rel))
+}

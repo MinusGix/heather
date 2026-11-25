@@ -88,10 +88,7 @@ fn Locals::read(self l: Locals, v: Typed) → Option<Value> {
 fn read_values(vs: List<Typed>, l: Locals) → Option<List<Value>> {
     match vs {
         Nil => Some(Nil),
-        Cons(v, rest) => match l.read(v) {
-            None => None,
-            Some(x) => match read_values(rest, l) { None => None, Some(xs) => Some(Cons(x, xs)) },
-        },
+        Cons(v, rest) => l.read(v).and_then(λ (x: Value) => read_values(rest, l).and_then(λ (xs: List<Value>) => Some(Cons(x, xs)))),
     }
 }
 
@@ -109,7 +106,7 @@ fn bind_values(vs: List<Typed>, values: List<Value>, l: Locals) → Option<Local
         Nil => match values { Nil => Some(l), Cons(_, _) => None },
         Cons(v, rest) => match values {
             Nil => None,
-            Cons(x, xs) => match l.bind(v, x) { None => None, Some(bound) => bind_values(rest, xs, bound) },
+            Cons(x, xs) => l.bind(v, x).and_then(λ (bound: Locals) => bind_values(rest, xs, bound)),
         },
     }
 }
@@ -149,47 +146,23 @@ fn Instr::step(self instr: Instr, c: Config) → Option<Config> {
             False => None,
             True => Some(Config(Locals(node.step(c.locals.words), c.locals.refs), c.memory)),
         },
-        Load(bytes, output, place) => match c.locals.refs(place) {
-            None => None,
-            Some(loc) => match c.memory.load(loc, bytes) {
-                None => None,
-                Some(x) => Some(Config(c.locals.set_word(output, λ (w: Nat) => BitVec::ofNat(x)), c.memory)),
-            },
-        },
-        Store(bytes, place, value) => match c.locals.refs(place) {
-            None => None,
-            Some(loc) => match c.memory.store(loc, word_piece(bytes, c.locals.words(8 * bytes, value))) {
-                None => None,
-                Some(m) => Some(Config(c.locals, m)),
-            },
-        },
-        LoadRef(output, place) => match c.locals.refs(place) {
-            None => None,
-            Some(loc) => match c.memory.load_ref(loc) { None => None, Some(target) => Some(Config(c.locals.set_ref(output, target), c.memory)) },
-        },
-        StoreRef(place, value) => match c.locals.refs(place) {
-            None => None,
-            Some(loc) => match c.locals.refs(value) {
-                None => None,
-                Some(target) => match c.memory.store_ref(loc, target) { None => None, Some(m) => Some(Config(c.locals, m)) },
-            },
-        },
-        Offset(output, place, amount) => match c.locals.refs(place) {
-            None => None,
-            Some(loc) => Some(Config(c.locals.set_ref(output, Loc(loc.block, loc.offset + c.locals.word(amount).toNat())), c.memory)),
-        },
-        Copy(target, source, length) => match c.locals.refs(target) {
-            None => None,
-            Some(to) => match c.locals.refs(source) {
-                None => None,
-                Some(from) => match c.memory.copy(to, from, c.locals.word(length).toNat()) { None => None, Some(m) => Some(Config(c.locals, m)) },
-            },
-        },
+        Load(bytes, output, place) => c.locals.refs(place).and_then(λ (loc: Loc) =>
+            c.memory.load(loc, bytes).and_then(λ (x: Nat) => Some(Config(c.locals.set_word(output, λ (w: Nat) => BitVec::ofNat(x)), c.memory)))),
+        Store(bytes, place, value) => c.locals.refs(place).and_then(λ (loc: Loc) =>
+            c.memory.store(loc, word_piece(bytes, c.locals.words(8 * bytes, value))).and_then(λ (m: Memory) => Some(Config(c.locals, m)))),
+        LoadRef(output, place) => c.locals.refs(place).and_then(λ (loc: Loc) =>
+            c.memory.load_ref(loc).and_then(λ (target: Loc) => Some(Config(c.locals.set_ref(output, target), c.memory)))),
+        StoreRef(place, value) => c.locals.refs(place).and_then(λ (loc: Loc) => c.locals.refs(value).and_then(λ (target: Loc) =>
+            c.memory.store_ref(loc, target).and_then(λ (m: Memory) => Some(Config(c.locals, m))))),
+        Offset(output, place, amount) => c.locals.refs(place).and_then(λ (loc: Loc) =>
+            Some(Config(c.locals.set_ref(output, Loc(loc.block, loc.offset + c.locals.word(amount).toNat())), c.memory))),
+        Copy(target, source, length) => c.locals.refs(target).and_then(λ (to: Loc) => c.locals.refs(source).and_then(λ (from: Loc) =>
+            c.memory.copy(to, from, c.locals.word(length).toNat()).and_then(λ (m: Memory) => Some(Config(c.locals, m))))),
     }
 }
 
 fn run_instrs(instrs: List<Instr>, c: Config) → Option<Config> {
-    match instrs { Nil => Some(c), Cons(instr, rest) => match instr.step(c) { None => None, Some(after) => run_instrs(rest, after) } }
+    match instrs { Nil => Some(c), Cons(instr, rest) => instr.step(c).and_then(λ (after: Config) => run_instrs(rest, after)) }
 }
 
 // ---------------------------------------------------------------------------
@@ -244,45 +217,27 @@ fn loop_run(step: Config → Option<Config>, parameters: List<Typed>, count, exi
     List<Value> → Memory → Option<Ended> {
     match remaining {
         Zero => λ state m => Some(Ended(state, True, m)),
-        Succ(rest) => λ state m => match pass_locals(parameters, count, rest + 1, state) {
-            None => None,
-            Some(l) => match step(Config(l, m)) {
-                None => None,
-                Some(after) => match read_values(next, after.locals) {
-                    None => None,
-                    Some(later) => match after.locals.words(1, exit).head_bit() {
-                        False => loop_run(step, parameters, count, exit, next, rest, later, after.memory),
-                        True => Some(Ended(later, False, after.memory)),
-                    },
-                },
-            },
-        },
+        Succ(rest) => λ state m => pass_locals(parameters, count, rest + 1, state).and_then(λ (l: Locals) =>
+            step(Config(l, m)).and_then(λ (after: Config) => read_values(next, after.locals).and_then(λ (later: List<Value>) =>
+                match after.locals.words(1, exit).head_bit() {
+                    False => loop_run(step, parameters, count, exit, next, rest, later, after.memory),
+                    True => Some(Ended(later, False, after.memory)),
+                }))),
     }
 }
 
 fn Body::run(self body: Body, calls: Calls(), c: Config) → Option<Config> {
     match body {
         Leaf(instrs) => run_instrs(instrs, c),
-        Seq(first, rest) => match first.run(calls, c) { None => None, Some(mid) => rest.run(calls, mid) },
+        Seq(first, rest) => first.run(calls, c).and_then(λ (mid: Config) => rest.run(calls, mid)),
         Branch(condition, yes, no) => match c.locals.words(1, condition).head_bit() { True => yes.run(calls, c), False => no.run(calls, c) },
-        Call(callee, arguments, results) => match read_values(arguments, c.locals) {
-            None => None,
-            Some(args) => match callee.answer(calls, args, c.memory) {
-                None => None,
-                Some(answer) => match bind_values(results, answer.words, c.locals) { None => None, Some(l) => Some(Config(l, answer.heap)) },
-            },
-        },
-        Loop(inputs, bound, parameters, count, inner, exit, next, outputs, exhausted) => match read_values(inputs, c.locals) {
-            None => None,
-            Some(state) => match loop_run(λ (pass: Config) => inner.run(calls, pass), parameters, count, exit, next, c.locals.word(bound).toNat(),
-                    state, c.memory) {
-                None => None,
-                Some(end) => match bind_values(outputs, end.state, c.locals) {
-                    None => None,
-                    Some(l) => Some(Config(l.set_word(exhausted, bit_value(end.exhausted)), end.memory)),
-                },
-            },
-        },
+        Call(callee, arguments, results) => read_values(arguments, c.locals).and_then(λ (args: List<Value>) =>
+            callee.answer(calls, args, c.memory).and_then(λ (answer: Answer) =>
+                bind_values(results, answer.words, c.locals).and_then(λ (l: Locals) => Some(Config(l, answer.heap))))),
+        Loop(inputs, bound, parameters, count, inner, exit, next, outputs, exhausted) => read_values(inputs, c.locals).and_then(λ (state: List<Value>) =>
+            loop_run(λ (pass: Config) => inner.run(calls, pass), parameters, count, exit, next, c.locals.word(bound).toNat(), state, c.memory)
+                .and_then(λ (end: Ended) => bind_values(outputs, end.state, c.locals).and_then(λ (l: Locals) =>
+                    Some(Config(l.set_word(exhausted, bit_value(end.exhausted)), end.memory))))),
     }
 }
 
@@ -295,13 +250,8 @@ record Routine { parameters: List<Typed>, body: Body, results: List<Typed>, leve
 record Program { routines: List<Routine> }
 
 fn Routine::call(self routine: Routine, calls: Calls(), args: List<Value>, heap: Memory) → Option<Answer> {
-    match bind_values(routine.parameters, args, Locals::empty()) {
-        None => None,
-        Some(l) => match routine.body.run(calls, Config(l, heap)) {
-            None => None,
-            Some(after) => match read_values(routine.results, after.locals) { None => None, Some(words) => Some(Answer(words, after.memory)) },
-        },
-    }
+    bind_values(routine.parameters, args, Locals::empty()).and_then(λ (l: Locals) => routine.body.run(calls, Config(l, heap)).and_then(λ (after: Config) =>
+        read_values(routine.results, after.locals).and_then(λ (words: List<Value>) => Some(Answer(words, after.memory)))))
 }
 
 // `below` with routine `k` answered by `own`.
