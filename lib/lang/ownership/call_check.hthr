@@ -978,47 +978,61 @@ theorem step_set(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k
     j(lic.proof.right, λ q _ => Sim(k, q.next, Set(y, x, i, v).eval1(k.w, s), Set(y, x, i, v).run2(k.w, k.r, m), ws), at_m)
 }
 
+// One element of the write-back: inside the lent window, what the call
+// left; outside it, what the file held before.
+theorem written_at(file1, file2: List<List<Nat>>, r: Ref, cur: List<Nat>, lov, nv: Nat, ys: List<Nat>,
+    h1: Holds(list_at(file1, r.b), r.base, cur), len: cur.len() = r.len,
+    h2: Holds(list_at(file2, r.b), r.base + lov.min(r.len), ys),
+    out2: (p: Nat) → ¬Span(r.base + lov.min(r.len), nv.min(r.len - lov)).has(p).IsTrue() → list_at(file2, r.b).nth(p) = list_at(file1, r.b).nth(p),
+    ylen: ys.len() = nv.min(cur.len() - lov), i: Nat, lt: i < cur.len()): list_at(file2, r.b).nth(r.base + i) = cur.put_window(lov, ys).nth(i)
+{
+    match q: Span(lov.min(cur.len()), ys.len()).has(i) {
+        True => {
+            let inside: (i - lov.min(cur.len()) < ys.len()) = omega(q);
+            let at: (r.base + lov.min(r.len) + (i - lov.min(cur.len())) = r.base + i) = omega(q, len);
+            prelude::trans(cong_fn(λ (p: Nat) => list_at(file2, r.b).nth(p), sym(at)),
+                prelude::trans(h2(i - lov.min(cur.len()), inside), sym(put_cut_in(cur, lov, nv, ys, ylen, i, omega(q), omega(q)))))
+        },
+        False => {
+            let outside: (¬Span(r.base + lov.min(r.len), nv.min(r.len - lov)).has(r.base + i).IsTrue()) = λ hit => omega(hit, q, ylen, len);
+            prelude::trans(out2(r.base + i, outside), prelude::trans(h1(i, lt), sym(put_cut_out(cur, lov, nv, ys, ylen, i, omega(q)))))
+        },
+    }
+}
+
+// The write-back, over bare data: a file that holds `cur` at `r`, then a
+// call lent the window `lov..lov+nv` of `r` that leaves `ys` there and
+// nothing changed outside it, give a file that holds `cur` with that window
+// replaced by `ys`. This is the frame of a window of a window: the callee's
+// "outside my window nothing changed" is all the caller needs.
+theorem written_back(file0, file1, file2: List<List<Nat>>, r: Ref, cur: List<Nat>, lov, nv: Nat, ys: List<Nat>,
+    before: OnRef(file0, file1, r, cur), call: OnRef(file1, file2, narrow(r, lov, nv), ys)): OnRef(file0, file2, r, cur.put_window(lov, ys))
+{
+    let ylen: (ys.len() = nv.min(cur.len() - lov)) = omega(call.len, before.len);
+    let nlen: (cur.put_window(lov, ys).len() = r.len) = prelude::trans(put_cut_length(cur, lov, nv, ys, ylen), before.len);
+    OnRef(nlen, λ i lt => written_at(file1, file2, r, cur, lov, nv, ys, before.holds, before.len, call.holds, call.out, ylen, i, omega(lt, nlen, before.len)),
+        λ p out => prelude::trans(call.out(p, λ h => out(omega(h))), before.out(p, out)),
+        λ k2 ne => prelude::trans(call.other(k2, ne), before.other(k2, ne)),
+        prelude::trans(call.shape, before.shape), prelude::trans(call.blen, before.blen))
+}
+
 // A call that was lent the window `lov..lov+nv`: its promise, and nothing
-// else of it, gives the eager write-back. Inside the window the file holds
-// what the call left, which is the value's window replaced; outside it the
-// call changed nothing, which is the value and every live view.
-theorem Sim::lent({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>}, self sim: Sim(k, c, s, m, ws), inr: InRef(k.file0, k.r), writes: k.mode.writes() = True,
+// else of it, gives the eager write-back; outside its window the call
+// changed nothing, which keeps every live view.
+theorem Sim::lent({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>}, self sim: Sim(k, c, s, m, ws), writes: k.mode.writes() = True,
     lov, nv: Nat, md: Mode, mo: MOut, ro: ROut, safe: Safe(md, m.file, narrow(k.r, lov, nv), window(list_at(s.objs, c.top), lov, nv), mo, ro),
     misses: (lv: LView) → Mem(lv, c.live) → (p: Nat) → Span(ref_at(m.views, lv.t).base, ref_at(m.views, lv.t).len).has(p).IsTrue() → ¬Span(k.r.base + lov, nv).has(p).IsTrue()):
     Sim(k, Places(c.top + 1, c.live, c.nviews, c.nw + 1), Sem::lent(s, list_at(s.objs, c.top), lov, mo), Exec::lent(m, ro), ws)
 {
-    let r = k.r;
-    let cur = list_at(s.objs, c.top);
-    let nc = cur.put_window(lov, mo.val);
-    let mlen: (mo.val.len() = nv.min(cur.len() - lov)) = omega(safe.on.len, sim.on.len);
-    let nlen: (nc.len() = r.len) = prelude::trans(put_cut_length(cur, lov, nv, mo.val, mlen), sim.on.len);
+    let nc = list_at(s.objs, c.top).put_window(lov, mo.val);
     let at_top: (list_at(s.objs ++ [nc], c.top + 1) = nc) = list_at_snoc_at(s.objs, nc, c.top + 1, sim.top);
-    let holds: Holds(list_at(ro.file, r.b), r.base, nc) = λ i lt => match q: Span(lov.min(cur.len()), mo.val.len()).has(i) {
-        True => {
-            let inside: (i - lov.min(cur.len()) < mo.val.len()) = omega(q);
-            let at: (r.base + lov.min(r.len) + (i - lov.min(cur.len())) = r.base + i) = omega(q, sim.on.len);
-            prelude::trans(cong_fn(λ (p: Nat) => list_at(ro.file, r.b).nth(p), sym(at)),
-                prelude::trans(safe.on.holds(i - lov.min(cur.len()), inside), sym(put_cut_in(cur, lov, nv, mo.val, mlen, i, omega(q), omega(q)))))
-        },
-        False => {
-            let outside: (¬Span(r.base + lov.min(r.len), nv.min(r.len - lov)).has(r.base + i).IsTrue()) = λ h => omega(h, q, mlen, sim.on.len);
-            prelude::trans(safe.on.out(r.base + i, outside),
-                prelude::trans(sim.on.holds(i, omega(lt, nlen, sim.on.len)), sym(put_cut_out(cur, lov, nv, mo.val, mlen, i, omega(q)))))
-        },
-    };
-    let on: OnRef(k.file0, ro.file, r, list_at(s.objs ++ [nc], c.top + 1)) = j(sym(at_top), λ l _ => OnRef(k.file0, ro.file, r, l),
-        OnRef(nlen, holds,
-            λ p out => prelude::trans(safe.on.out(p, λ h => out(omega(h))), sim.on.out(p, out)),
-            λ k2 ne => prelude::trans(safe.on.other(k2, ne), sim.on.other(k2, ne)),
-            prelude::trans(safe.on.shape, sim.on.shape), prelude::trans(safe.on.blen, sim.on.blen)));
+    let on: OnRef(k.file0, ro.file, k.r, list_at(s.objs ++ [nc], c.top + 1)) = j(sym(at_top), λ l _ => OnRef(k.file0, ro.file, k.r, l),
+        written_back(k.file0, m.file, ro.file, k.r, list_at(s.objs, c.top), lov, nv, mo.val, sim.on, safe.on));
     Sim(prelude::trans(cong_fn(λ (w: List<Nat>) => w ++ [ro.word], sim.words), cong_fn(λ (a: Nat) => s.words ++ [a], safe.answer)),
         prelude::trans(cong_fn(λ (n: Nat) => n + 1, sim.nw), sym(len_snoc(s.words, mo.word))),
         prelude::trans(len_snoc(s.objs, nc), cong_fn(λ (q: Nat) => q + 1, sim.top)), sim.nviews, sim.mviews, on,
         λ no => absurd(prelude::trans(sym(writes), no)),
-        λ lv mem => {
-            let old = sim.views(lv, mem);
-            ⟨old.left, old.right.reframe(ro.file, λ p hp => safe.on.out(p, λ h => misses(lv, mem, p, hp, omega(h))))⟩
-        })
+        λ lv mem => ⟨sim.views(lv, mem).left, sim.views(lv, mem).right.reframe(ro.file, λ p hp => safe.on.out(p, λ h => misses(lv, mem, p, hp, omega(h))))⟩)
 }
 
 // A call that answered a read view of the whole object: the file is as it
@@ -1116,7 +1130,7 @@ theorem step_mut(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k
         let no2: (¬Span(r.base + lov, nv).has(q).IsTrue()) = λ h => no(omega(h, lo_ws, n_ws));
         no2
     };
-    let after = sim.lent(inr, g5.left, lov, nv, sg.mode, k.w.mean(g, window(cur, lov, nv), vs), ro, safe, misses);
+    let after = sim.lent(g5.left, lov, nv, sg.mode, k.w.mean(g, window(cur, lov, nv), vs), ro, safe, misses);
     let at_m: Sim(k, mk(lic.witness).next, Sem::lent(s, list_at(s.objs, x), lov, k.w.mean(g, window(list_at(s.objs, x), lov, nv), vs)),
         Exec::lent(m, k.w.run(g, m.file, narrow(r, lo.val(m.words), n.val(m.words)), vals(args, m.words))), ws) =
         j(sym(ex), λ q _ => Sim(k, mk(lic.witness).next, Sem::lent(s, list_at(s.objs, q), lov, k.w.mean(g, window(list_at(s.objs, q), lov, nv), vs)),
