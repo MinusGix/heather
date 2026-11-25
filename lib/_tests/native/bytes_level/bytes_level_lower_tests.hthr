@@ -1,0 +1,147 @@
+// Probes of the bytes level's lowering (lib/native/bytes_level/bytes_level_lower.hthr,
+// issues/bytes-level-lowering.md): the language's probe programs whose
+// regions are leaves, sequences and branches, each compiled and each with
+// its theorem (`Body::emit_emits` at it), and the controls: a placement
+// that overwrites a reference still needed is refused, and a word node on
+// a reference, a store that cuts a reference and a load of an undefined
+// byte leave the node's facts unprovable, so no run reaches the theorem.
+import bytes_memory;
+import bytes_level;
+import bytes_level_lower;
+import x86_64_memory_contract;
+import x86_64_call_contract;
+import function_ir;
+import function_ir_lower;
+import function_ir_lower_structured;
+import function_ir_lower_calls;
+import x86_64;
+import x86_64_fetch;
+import x86_64_data_read;
+import x86_64_stack;
+import x86_64_asm;
+import x86_64_asm_runs;
+import bitvec;
+import bool;
+import list;
+import logic;
+import nat;
+import option;
+
+// The routine entered with its two references in RDI and RSI.
+fn two_in() → File { File::empty().write(Rdi, Some(Held(0, Word))).write(Rsi, Some(Held(1, Word))) }
+
+fn into(registers: List<Gpr>) → List<Place> { registers.map(λ (r: Gpr) => Into(r)) }
+
+fn lowered(body: Body, placement: List<Place>) → Option<Emitted> { body.emit(0, [], Start, two_in(), placement, 0) }
+
+fn lowers(body: Body, placement: List<Place>) → Bool { lowered(body, placement).is_some() }
+
+// ---------------------------------------------------------------------------
+// The experiment's program: a reference stored, loaded back, a byte read
+// through it (bytes_level_tests' `cells`).
+
+fn cells_body() → Body { Leaf([StoreRef(0, 1), LoadRef(2, 0), Load(1, 3, 2)]) }
+
+// `MOV [RDI], RSI`, `MOV RAX, [RDI]`, `MOVZX RCX, byte [RAX]`.
+theorem cells_lowers(): lowers(cells_body(), into([Rax, Rax, Rcx])) = True { refl }
+
+theorem cells_code<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), values: Valuation(), d: Nat,
+    s0: MachineState<M>, before, after: Heap):
+    MayEmitHeap<M>(0, site, stack, spans, values, d, s0, Start, two_in(), cells_body().Holds(spans, blocks, values, before, after), before, after,
+        lowered(cells_body(), into([Rax, Rax, Rcx]))) {
+    cells_body().emit_emits<M>(0, site, laid, stack, top, spans, loan, blocks, lent, values, d, s0, [], Start, two_in(), into([Rax, Rax, Rcx]), 0,
+        before, after)
+}
+
+// Control: the reference's load put where the reference it reads through
+// lies, and the byte's load then finds no register holding it.
+fn overwrites_body() → Body { Leaf([LoadRef(2, 0), Load(1, 3, 0)]) }
+
+theorem overwrites_refused(): lowers(overwrites_body(), into([Rdi, Rax])) = False { refl }
+
+theorem overwrites_beside(): lowers(overwrites_body(), into([Rax, Rcx])) = True { refl }
+
+// ---------------------------------------------------------------------------
+// The callee that writes a window (bytes_level_tests' `fill`): 42 at its
+// first byte and its last, through an offset.
+
+fn fill_body() → Body {
+    Leaf([Compute(Const(64, 2, 42)), Store(1, 0, 2), Compute(Const(64, 3, 1)), Compute(Sub(64, 4, 1, 3)), Offset(5, 0, 4), Store(1, 5, 2)])
+}
+
+theorem fill_lowers(): lowers(fill_body(), into([Rax, Rax, Rcx, Rdx, R8, R8])) = True { refl }
+
+theorem fill_code<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), values: Valuation(), d: Nat,
+    s0: MachineState<M>, before, after: Heap):
+    MayEmitHeap<M>(0, site, stack, spans, values, d, s0, Start, two_in(), fill_body().Holds(spans, blocks, values, before, after), before, after,
+        lowered(fill_body(), into([Rax, Rax, Rcx, Rdx, R8, R8]))) {
+    fill_body().emit_emits<M>(0, site, laid, stack, top, spans, loan, blocks, lent, values, d, s0, [], Start, two_in(),
+        into([Rax, Rax, Rcx, Rdx, R8, R8]), 0, before, after)
+}
+
+// ---------------------------------------------------------------------------
+// Widths: a word stored over a reference's eight bytes and loaded back
+// (bytes_level_tests' `replacing`), and a doubleword.
+
+fn widths_body() → Body {
+    Seq(Leaf([StoreRef(0, 1), Compute(Const(64, 2, 5)), Store(8, 0, 2), Load(8, 3, 0)]),
+        Leaf([Compute(Const(64, 4, 7)), Store(4, 0, 4), Load(4, 5, 0)]))
+}
+
+theorem widths_lowers(): lowers(widths_body(), into([Rax, Rax, Rax, Rcx, Rdx, Rdx, Rdx])) = True { refl }
+
+// Control: a two-byte load has no instruction yet, and is refused.
+theorem two_bytes_refused(): lowers(Leaf([Load(2, 2, 0)]), into([Rax])) = False { refl }
+
+// ---------------------------------------------------------------------------
+// A branch on a comparison: the larger of two bytes stored back.
+
+fn larger_body() → Body {
+    Seq(Leaf([Load(1, 2, 0), Load(1, 3, 1), Compute(UnsignedLessThan(64, 4, 2, 3))]),
+        Branch(4, Leaf([Store(1, 0, 3)]), Leaf([Store(1, 1, 2)])))
+}
+
+theorem larger_lowers(): lowers(larger_body(), into([Rax, Rcx, Rdx, Rax, Rax])) = True { refl }
+
+theorem larger_code<M>(site: Site<M>, laid: site.program.laid_out().IsTrue(), stack: Stack<M>(site.fetch, site.data), top: Nat, spans: Spans,
+    loan: Loan<M>(site.fetch, site.data, stack, top, spans), blocks: Blocks, lent: blocks.Lent(spans), values: Valuation(), d: Nat,
+    s0: MachineState<M>, before, after: Heap):
+    MayEmitHeap<M>(0, site, stack, spans, values, d, s0, Start, two_in(), larger_body().Holds(spans, blocks, values, before, after), before, after,
+        lowered(larger_body(), into([Rax, Rcx, Rdx, Rax, Rax]))) {
+    larger_body().emit_emits<M>(0, site, laid, stack, top, spans, loan, blocks, lent, values, d, s0, [], Start, two_in(),
+        into([Rax, Rcx, Rdx, Rax, Rax]), 0, before, after)
+}
+
+// ---------------------------------------------------------------------------
+// Controls: where the language has no meaning, no node's facts hold, so no
+// run reaches the lowering's theorem.
+
+// A word node reading a reference: validity refuses it, so the bridge from
+// a run to its facts (`Instr::holds_of`) has no premise.
+theorem add_of_reference_unbridged(): Compute(Add(64, 2, 0, 1)).check([ref_id(0), word_id(1)]) = None { refl }
+
+// A store that cuts a reference: the put has no answer, so `Stores` cannot
+// hold at it.
+fn holding() → Heap { Heap([List::replicate(BitVec::zero(), 16)], [Pointer(0, 4, Loc(0, 0))], [[]]) }
+
+fn writable() → Blocks { Blocks(λ (b: Nat) => b.same(0)) }
+
+theorem cut_put_none(): holding().put(writable().written, Loc(0, 8), Piece::plain(low_bytes(8, BitVec::ofNat(5)))) = None { refl }
+
+theorem cut_store_unprovable(spans: Spans, values: Valuation(), after: Heap, address: values(64, 0) = Loc(0, 8).address(spans),
+    word: values(64, 1) = BitVec::ofNat(5), injective: (loc: Loc) → loc.address(spans) = Loc(0, 8).address(spans) → loc = Loc(0, 8)):
+    ¬Stores(spans, values, writable(), holding(), after, 8, 0, 1) {
+    λ stores => {
+        let same: (stores.witness = Loc(0, 8)) = injective(stores.witness, trans(sym(stores.proof.left), address));
+        let put = j(same, λ l _ => holding().put(writable().written, l, Piece::plain(low_bytes(8, values(64, 1)))) = Some(after), stores.proof.right);
+        let five = j(word, λ w _ => holding().put(writable().written, Loc(0, 8), Piece::plain(low_bytes(8, w))) = Some(after), put);
+        absurd(trans(sym(cut_put_none()), five))
+    }
+}
+
+// A load of an undefined byte: the read has no answer.
+fn fresh() → Heap { Heap([List::replicate(BitVec::zero(), 16)], [], [List::replicate(True, 16)]) }
+
+theorem undefined_read_none(): fresh().read_bytes(Loc(0, 3), 1) = None { refl }
