@@ -1102,6 +1102,22 @@ an open index followed by more steps owes more than it needs
 its length, lawful only where what is written is one, which is the one
 place the untyped universe costs a law (`PathLawsOn`).
 
+**Why untyped, measured** (2026-11-25,
+`issues/reflected-languages-typed-by-construction.md`; pins in
+`lib/_tests/lang/ownership/typed_steps_tests.hthr`). The kernel's speed is
+neither the cost nor the blocker. Steps indexed by types elaborate (through a
+declared index type holding two types), denote, and decide by evaluation, but
+no proof comparing two steps out of one source can be written: inverting the
+second needs type formers injective and disjoint, which the theory does not
+give. Steps indexed by codes (a mutual universe of shapes decoded by large
+elimination) work, need only UIP at the codes beyond what the library has,
+and remove the fit machinery; they cost a constant factor per code node,
+because a code is data checked node by node, and a chain of either kind
+carries its intermediate types, so checking a place is quadratic in its
+depth where untyped steps are linear, a constant factor at the depths places
+have. Proof work comes out about even, so all three languages stay untyped;
+a code-typed universe is one more `StepModel` and can follow without rework.
+
 This level stands above FunctionIR, which is bytes with static buffer
 numbers. One new pass joins them: steps become byte spans (`Part`,
 `Stored`) and each live block gets its memory.
