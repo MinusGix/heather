@@ -1,0 +1,434 @@
+// `Copy`: a fact about a representation, not a type
+// (docs/language/ownership-design.md §10.8, issues/ownership-copy-clone.md).
+//
+// A value is copyable where it is held as words whose bits may be
+// duplicated: the copy holds the same value and shares nothing with the
+// original. That is a fact about how the value is held, so the same
+// mathematical list is copyable held inline (`[u8; n]` by a `Stored`
+// codec) and not held in a buffer (`rt`'s `ByteList`). The class is
+// therefore indexed by a representation, `Copy<A>(rep)`, and the
+// representations are the ones compiled code has:
+//
+// - `Rep::Code`: an `rt` type code at a type table, which is what a
+//   `runtime fn`'s values are. Whether it copies is `Ty::Copy`, decided by
+//   `Ty::copies` (`Ty::copies_reflects`). Words, bits, counts, a file's
+//   lines (the name of a cell written once: a frozen view) and records and
+//   enums of those copy; a byte buffer does not, nor anything holding one.
+// - `Rep::Bytes`: a `Stored` codec, a value as a fixed number of bytes.
+//   Every codec copies (`Stored::copies`): a value read from bytes is a
+//   function of those bytes alone, so a copy of the bytes reads the same
+//   value. The other half is the negative control: a type with unboundedly
+//   many values (a byte list, a store) has no codec at all
+//   (`Stored::unbounded`), so it is held in a buffer wherever it is held.
+// - `Rep::Absent`: held in nothing, an erased value (`Erased<A>`, a
+//   binding used only in proofs): its copy is no work at all (§10.8).
+//
+// **One question, two askers.** The judgment over reflected code asks the
+// decided fact about a code (`t.copies(tys) = True`); a Heather function
+// asks a class instance. They are one answer: an instance at a code is
+// built from the decider's verdict (`Copy::of_code`) and gives it back
+// (`Copy::code_copies`). And where `unique.hthr`'s `Ty::holds_bytes` also
+// speaks, the decider agrees with it (`Ty::copies_holds_bytes`, and
+// `Ty::holds_bytes_of_not_copies` for a record).
+//
+// **Copy gives an exact clone.** Reading a copied representation back is
+// the identity (`Rep::copy_eq`, from the codec's `round` or the code's
+// `back`), so a copyable representation derives `ExactClone`
+// (`Copy::exact_clone`), whose compiled form is the copy of the words.
+// The instances below are derived so: words, `Bool`, counts, `Erased<A>`
+// whatever `A` is, and a laid record through `generate laid_copy("T")`
+// and two lines registering what it publishes (the end of this module).
+import logic;
+import bool;
+import nat;
+import list;
+import option;
+import pair;
+import string;
+import tactic;
+import derive;
+import list_window;
+import bitvec;
+import bitvec_nat;
+import fintype;
+import fintype_card;
+import bitvec_fintype;
+import layout;
+import stored;
+import erased;
+import clone;
+import rt;
+import unique;
+
+// ---------------------------------------------------------------------------
+// The statement over `rt`'s codes.
+
+// A code held in one word with nothing behind it: a word, a bit, a count,
+// or a file's lines (the name of a cell in the arena that is written once
+// and never in place, so two names of it are two frozen views). A byte
+// buffer is the one that is not: its word names storage the value owns. A
+// record or an enum is not one word (and never a slot or a field's own
+// code, which every judgment refuses).
+fn Ty::WordCopy(self t: Ty) → Type {
+    match t { Word(_) => True, Bit => True, ByteList(_) => False, Lines => True, Named(_) => False, Count => True, Enum(_) => False }
+}
+
+fn Ty::WordsCopy(ts: List<Ty>) → Type {
+    match ts { Nil => True, Cons(t, rest) => t.WordCopy() ∧ Ty::WordsCopy(rest) }
+}
+
+// A record's field: one word, or an enum of the table held as its tag word
+// and its payload's slots, each one word.
+fn Ty::FieldCopy(self t: Ty, ens: Nat → EnumInfo) → Type {
+    match t {
+        Word(_) => True, Bit => True, ByteList(_) => False, Lines => True, Named(_) => False, Count => True,
+        Enum(j) => Ty::WordsCopy(ens(j).slots),
+    }
+}
+
+fn Ty::FieldsCopy(ts: List<Ty>, ens: Nat → EnumInfo) → Type {
+    match ts { Nil => True, Cons(t, rest) => t.FieldCopy(ens) ∧ Ty::FieldsCopy(rest, ens) }
+}
+
+// A value of code `t` is held as words whose bits may be duplicated: one
+// word that copies, a record whose fields copy, an enum whose slots copy.
+fn Ty::Copy(self t: Ty, tys: Table) → Type {
+    match t {
+        Word(_) => True, Bit => True, ByteList(_) => False, Lines => True,
+        Named(i) => Ty::FieldsCopy(tys.recs(i).fields, tys.ens),
+        Count => True,
+        Enum(i) => Ty::WordsCopy(tys.ens(i).slots),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The decider, and that it decides.
+
+fn Ty::word_copies(self t: Ty) → Bool {
+    match t { Word(_) => True, Bit => True, ByteList(_) => False, Lines => True, Named(_) => False, Count => True, Enum(_) => False }
+}
+
+fn Ty::words_copy(ts: List<Ty>) → Bool {
+    match ts { Nil => True, Cons(t, rest) => t.word_copies() && Ty::words_copy(rest) }
+}
+
+fn Ty::field_copies(self t: Ty, ens: Nat → EnumInfo) → Bool {
+    match t {
+        Word(_) => True, Bit => True, ByteList(_) => False, Lines => True, Named(_) => False, Count => True,
+        Enum(j) => Ty::words_copy(ens(j).slots),
+    }
+}
+
+fn Ty::fields_copy(ts: List<Ty>, ens: Nat → EnumInfo) → Bool {
+    match ts { Nil => True, Cons(t, rest) => t.field_copies(ens) && Ty::fields_copy(rest, ens) }
+}
+
+// Whether a value of code `t` copies: what the judgment asks of a binding
+// it would duplicate.
+fn Ty::copies(self t: Ty, tys: Table) → Bool {
+    match t {
+        Word(_) => True, Bit => True, ByteList(_) => False, Lines => True,
+        Named(i) => Ty::fields_copy(tys.recs(i).fields, tys.ens),
+        Count => True,
+        Enum(i) => Ty::words_copy(tys.ens(i).slots),
+    }
+}
+
+theorem Ty::reflects_yes(): Reflects(True, True) { And(λ _ => trivial, λ (no: True = False) => absurd(no)) }
+
+theorem Ty::reflects_no(): Reflects(False, False) { And(λ (no: False = True) => absurd(no), λ _ f => f) }
+
+theorem Ty::word_copies_reflects(self t: Ty): Reflects(t.WordCopy(), t.word_copies()) {
+    match t {
+        Word(_) => Ty::reflects_yes(), Bit => Ty::reflects_yes(), ByteList(_) => Ty::reflects_no(), Lines => Ty::reflects_yes(),
+        Named(_) => Ty::reflects_no(), Count => Ty::reflects_yes(), Enum(_) => Ty::reflects_no(),
+    }
+}
+
+theorem Ty::words_copy_reflects(ts: List<Ty>): Reflects(Ty::WordsCopy(ts), Ty::words_copy(ts)) {
+    match ts {
+        Nil => Ty::reflects_yes(),
+        Cons(t, rest) => reflects_and(t.word_copies_reflects(), Ty::words_copy_reflects(rest)),
+    }
+}
+
+theorem Ty::field_copies_reflects(self t: Ty, ens: Nat → EnumInfo): Reflects(t.FieldCopy(ens), t.field_copies(ens)) {
+    match t {
+        Word(_) => Ty::reflects_yes(), Bit => Ty::reflects_yes(), ByteList(_) => Ty::reflects_no(), Lines => Ty::reflects_yes(),
+        Named(_) => Ty::reflects_no(), Count => Ty::reflects_yes(), Enum(j) => Ty::words_copy_reflects(ens(j).slots),
+    }
+}
+
+theorem Ty::fields_copy_reflects(ts: List<Ty>, ens: Nat → EnumInfo): Reflects(Ty::FieldsCopy(ts, ens), Ty::fields_copy(ts, ens)) {
+    match ts {
+        Nil => Ty::reflects_yes(),
+        Cons(t, rest) => reflects_and(t.field_copies_reflects(ens), Ty::fields_copy_reflects(rest, ens)),
+    }
+}
+
+// The decider decides the statement, at every code and table.
+theorem Ty::copies_reflects(self t: Ty, tys: Table): Reflects(t.Copy(tys), t.copies(tys)) {
+    match t {
+        Word(_) => Ty::reflects_yes(), Bit => Ty::reflects_yes(), ByteList(_) => Ty::reflects_no(), Lines => Ty::reflects_yes(),
+        Named(i) => Ty::fields_copy_reflects(tys.recs(i).fields, tys.ens),
+        Count => Ty::reflects_yes(),
+        Enum(i) => Ty::words_copy_reflects(tys.ens(i).slots),
+    }
+}
+
+// Read either way.
+theorem Ty::copy_of_copies(self t: Ty, tys: Table, h: t.copies(tys) = True): t.Copy(tys) { t.copies_reflects(tys).left(h) }
+
+theorem Ty::not_copy_of_copies(self t: Ty, tys: Table, h: t.copies(tys) = False): ¬t.Copy(tys) { t.copies_reflects(tys).right(h) }
+
+theorem Ty::copies_of_copy(self t: Ty, tys: Table, c: t.Copy(tys)): t.copies(tys) = True {
+    match d: t.copies(tys) {
+        True => d,
+        False => false_elim(t.copies_reflects(tys).right(d)(c)),
+    }
+}
+
+// An owned byte buffer does not copy, at any capacity and table.
+theorem Ty::buffer_not_copy(cap: Nat, tys: Table): ¬ByteList(cap).Copy(tys) { λ f => f }
+
+// ---------------------------------------------------------------------------
+// Agreement with `Ty::holds_bytes`.
+//
+// `holds_bytes` reads the code alone; the decider reads the table at a
+// record and an enum. Where neither reads one they are one answer:
+
+// The codes that name no entry of the table.
+fn Ty::bare(self t: Ty) → Bool {
+    match t { Word(_) => True, Bit => True, ByteList(_) => True, Lines => True, Named(_) => False, Count => True, Enum(_) => False }
+}
+
+theorem Ty::copies_holds_bytes(self t: Ty, tys: Table, bare: t.bare() = True): t.copies(tys) = !t.holds_bytes() {
+    match t as λ x => x.bare() = True → x.copies(tys) = !x.holds_bytes() {
+        Word(_) => λ _ => refl, Bit => λ _ => refl, ByteList(_) => λ _ => refl, Lines => λ _ => refl,
+        Named(_) => λ no => absurd(no), Count => λ _ => refl, Enum(_) => λ no => absurd(no),
+    }(bare)
+}
+
+fn Ty::is_enum(self t: Ty) → Bool { match t { Enum(_) => True, _ => False } }
+
+// At a record, `holds_bytes` answers "may hold" (`True`) whatever its
+// fields, which a record that does not copy never contradicts: at every
+// code but an enum, a code that does not copy may hold a buffer.
+theorem Ty::holds_bytes_of_not_copies(self t: Ty, tys: Table, not_enum: t.is_enum() = False, h: t.copies(tys) = False): t.holds_bytes() = True {
+    match t as λ x => x.is_enum() = False → x.copies(tys) = False → x.holds_bytes() = True {
+        Word(_) => λ _ no => absurd(no), Bit => λ _ no => absurd(no), ByteList(_) => λ _ _ => refl, Lines => λ _ no => absurd(no),
+        Named(_) => λ _ _ => refl, Count => λ _ no => absurd(no), Enum(_) => λ no _ => absurd(no),
+    }(not_enum, h)
+}
+
+// At an enum `holds_bytes` answers "holds none", which the decider agrees
+// with where the enum's slots copy. An enum whose payload holds a byte
+// buffer would be a disagreement, and the decider's answer is the right
+// one (issues/holds-bytes-enum-payload.md).
+theorem Ty::enum_agrees(i: Nat, tys: Table, slots: Ty::words_copy(tys.ens(i).slots) = True):
+    Enum(i).copies(tys) = !Enum(i).holds_bytes() { slots }
+
+// ---------------------------------------------------------------------------
+// Every codec copies: its value is a function of its bytes.
+
+// A copy of the bytes a value is stored in, put anywhere, reads as that
+// value.
+fn Stored::Copies<A>(self s: Stored<A>) → Type {
+    (src: List<u8>) → (from: Nat) → (dst: List<u8>) → (to: Nat) → s.layout.size + from <= src.len() → to <= dst.len() →
+        s.get(dst.put_window(to, src.window(from, s.layout.size + from)), to) = s.get(src, from)
+}
+
+theorem Stored::copies<A>(self s: Stored<A>): s.Copies() {
+    λ src from dst to fits inside => {
+        let w = src.window(from, s.layout.size + from);
+        let len: (w.len() = s.layout.size) =
+            trans(src.len_window(from, s.layout.size + from, Nat::le_add_r(s.layout.size, from), fits), Nat::add_sub_cancel(s.layout.size, from));
+        cong_fn(λ (b: List<u8>) => s.read(b),
+            j(len, λ n _ => dst.put_window(to, w).window(to, n + to) = w, dst.window_put_window(to, w, inside)))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// The negative control at the bytes: an unbounded type has no codec.
+//
+// A codec writes every value as the same number of bytes and reads each
+// back, so a type with a codec has at most as many values as that many
+// bytes have. A type with a value for every number (a byte list, a store)
+// has none: whatever holds it holds a buffer.
+
+theorem BitVec::all_len_succ(k: Nat): BitVec::all(k + 1).len() = BitVec::all(k).len() + BitVec::all(k).len() {
+    trans(List::len_append(BitVec::all(k).map(λ (x: BitVec(k)) => BitVec::cons_bit(False, x)), BitVec::all(k).map(λ (x: BitVec(k)) => BitVec::cons_bit(True, x))),
+        j(sym(BitVec::all(k).len_map(λ (x: BitVec(k)) => BitVec::cons_bit(False, x))), λ a _ =>
+            a + BitVec::all(k).map(λ (x: BitVec(k)) => BitVec::cons_bit(True, x)).len() = BitVec::all(k).len() + BitVec::all(k).len(),
+            j(sym(BitVec::all(k).len_map(λ (x: BitVec(k)) => BitVec::cons_bit(True, x))), λ b _ =>
+                BitVec::all(k).len() + b = BitVec::all(k).len() + BitVec::all(k).len(), refl)))
+}
+
+theorem BitVec::all_len_pos(k: Nat): 1 <= BitVec::all(k).len() {
+    match k {
+        Zero => Nat::le_refl(1),
+        Succ(m) => j(sym(BitVec::all_len_succ(m)), λ n _ => 1 <= n, omega(BitVec::all_len_pos(m))),
+    }
+}
+
+// One more bit is more words.
+theorem BitVec::card_lt_succ(k: Nat): Fintype::card<BitVec(k)>() < Fintype::card<BitVec(k + 1)>() {
+    j(sym(BitVec::all_len_succ(k)), λ n _ => BitVec::all(k).len() < n, omega(BitVec::all_len_pos(k)))
+}
+
+theorem Stored::unbounded<A>(s: Stored<A>, g: Nat → A, inj: (x, y: Nat) → g(x) = g(y) → x = y): False {
+    let k = s.layout.size;
+    let be = Stored::be_bytes(k);
+    let h = λ (x: BitVec(8 * k + 1)) => be.read(s.write(g(x.toNat())));
+    match Fintype::pigeonhole<BitVec(8 * k + 1), BitVec(8 * k)>(h, BitVec::card_lt_succ(8 * k)) {
+        Exists(q, both) => both.left({
+            let same: (s.write(g(q.fst.toNat())) = s.write(g(q.snd.toNat()))) =
+                trans(sym(Stored::exact_be_bytes(k, s.write(g(q.fst.toNat())), s.sized(g(q.fst.toNat())))),
+                    trans(cong_fn(λ (w: BitVec(8 * k)) => be.write(w), both.right),
+                        Stored::exact_be_bytes(k, s.write(g(q.snd.toNat())), s.sized(g(q.snd.toNat())))));
+            let values: (g(q.fst.toNat()) = g(q.snd.toNat())) =
+                trans(sym(s.round(g(q.fst.toNat()))), trans(cong_fn(λ (b: List<u8>) => s.read(b), same), s.round(g(q.snd.toNat()))));
+            BitVec::toNat_inj(8 * k + 1, inj(q.fst.toNat(), q.snd.toNat(), values))
+        }),
+    }
+}
+
+// A byte list of any length has no codec: an owned buffer is not held
+// inline.
+theorem Stored::no_byte_list(s: Stored<List<u8>>): False {
+    Stored::unbounded(s, λ (n: Nat) => List::replicate(BitVec::ofNat(0), n),
+        λ x y e => trans(sym(List::len_replicate(BitVec::ofNat(0, n := 8), x)),
+            trans(cong_fn(λ (b: List<u8>) => b.len(), e), List::len_replicate(BitVec::ofNat(0, n := 8), y))))
+}
+
+// ---------------------------------------------------------------------------
+// The class.
+
+// A representation of `A` by an `rt` code at a type table: values of `A`
+// as values of the code, read back.
+record Coded<A> {
+    tys: Table,
+    code: Ty,
+    to: A → code.sem(tys),
+    from: code.sem(tys) → A,
+    back: (a: A) → from(to(a)) = a,
+}
+
+// A code as a representation of its own meaning.
+fn Coded::of_code(tys: Table, t: Ty) → Coded<t.sem(tys)> { Coded(tys, t, λ v => v, λ v => v, λ v => refl) }
+
+// How compiled code holds a value of `A`.
+inductive Rep<A> {
+    // As a value of an `rt` code: a `runtime fn`'s parameters and locals.
+    Code(c: Coded<A>),
+    // As the bytes of a codec: a laid record, a word in a buffer.
+    Bytes(s: Stored<A>),
+    // In nothing: erased.
+    Absent,
+}
+
+// The constructors as functions, which a generator names.
+fn Rep::bytes<A>(s: Stored<A>) → Rep<A> { Rep::Bytes(s) }
+
+// What it is for a representation to copy.
+fn Rep::Copies<A>(self r: Rep<A>) → Type {
+    match r { Code(c) => c.code.Copy(c.tys), Bytes(s) => s.Copies(), Absent => True }
+}
+
+// `A` held by `rep` copies: duplicating the words it is held in
+// duplicates the value, and the copy shares nothing with it.
+class Copy<A>(rep: Rep<A>) {
+    copies: rep.Copies(),
+}
+
+// The value a copy of the representation reads as.
+fn Rep::copy<A>(self r: Rep<A>, x: A) → A {
+    match r { Code(c) => c.from(c.to(x)), Bytes(s) => s.read(s.write(x)), Absent => x }
+}
+
+// It is the value.
+theorem Rep::copy_eq<A>(self r: Rep<A>, x: A): r.copy(x) = x {
+    match r { Code(c) => c.back(x), Bytes(s) => s.round(x), Absent => refl }
+}
+
+// The exact clone a copyable representation gives: compiled, a copy of
+// the words; meant, the value.
+fn Copy::exact_clone<A>(rep: Rep<A>, c: Copy<A>(rep)) → ExactClone<A> {
+    ExactClone::of(λ (x: A) => rep.copy(x), λ (x: A) => rep.copy_eq(x))
+}
+
+// The two askers, one answer: an instance at a code is the decider's
+// verdict, and gives it back.
+fn Copy::of_code<A>(c: Coded<A>, h: c.code.copies(c.tys) = True) → Copy<A>(Rep::Code(c)) { Copy(c.code.copy_of_copies(c.tys, h)) }
+
+theorem Copy::code_copies<A>(c: Coded<A>, d: Copy<A>(Rep::Code(c))): c.code.copies(c.tys) = True { c.code.copies_of_copy(c.tys, d.copies) }
+
+// Every codec gives an instance.
+fn Copy::of_bytes<A>(s: Stored<A>) → Copy<A>(Rep::Bytes(s)) { Copy(s.copies()) }
+
+// No codec holds a store or a byte list, so neither has an instance at
+// `Bytes`: the negative controls are `Stored::no_byte_list` and, for a
+// store, `store_copy.hthr`'s `Store::no_codec`.
+
+// ---------------------------------------------------------------------------
+// Instances: words, bits, counts, erased data.
+
+// An instance's index is a global (operation-indexed-classes-design.md
+// §3.1), so each representation is one.
+fn Rep::word(w: Nat) → Rep<BitVec(w)> { Rep::Code(Coded::of_code(Table::none(), Word(w))) }
+fn Rep::bit() → Rep<Bool> { Rep::Code(Coded::of_code(Table::none(), Bit)) }
+fn Rep::count() → Rep<Nat> { Rep::Code(Coded::of_code(Table::none(), Count)) }
+fn Rep::erased<A>() → Rep<Erased<A>> { Rep::Absent }
+
+instance(w: Nat) Copy<BitVec(w)>(Rep::word(w)) { copies := trivial }
+instance Copy<Bool>(Rep::bit()) { copies := trivial }
+instance Copy<Nat>(Rep::count()) { copies := trivial }
+instance<A> Copy<Erased<A>>(Rep::erased<A>()) { copies := trivial }
+
+// A word's exact clone, derived from its code: the copy of the word.
+instance(w: Nat) ExactClone<BitVec(w)> {
+    clone := λ (x: BitVec(w)) => Rep::word(w).copy(x),
+    clone_same := λ (x: BitVec(w)) => Rep::word(w).copy_eq(x),
+}
+
+// ---------------------------------------------------------------------------
+// A laid record: copyable at its codec, and its exact clone the bytes
+// read back.
+//
+// `generate laid_copy("T");` after `laid record T { … }` (a record without
+// parameters) publishes, derived here and nothing proved per record,
+//
+//     T::rep: Rep<T>              // `Rep::bytes(T::stored())`
+//     T::copy: Copy<T>(T::rep)    // `Copy::of_bytes`
+//     T::clone: ExactClone<T>     // `Copy::exact_clone`: its bytes read back
+//
+// and the record's module registers them, a line each:
+//
+//     instance Copy<T>(T::rep) { copies := T::copy.copies }
+//     instance ExactClone<T> { clone := T::clone.clone, clone_same := T::clone.clone_same }
+//
+// The registration is not the generator's because a generated instance's
+// carrier reaches the elaborator as a leaf with no head name, so only an
+// arrow carrier (`runtime::Compile`) can be keyed; a named record cannot
+// (issues/generated-instance-at-named-carrier.md). Publishing from the
+// `laid` generator itself is issues/laid-publishes-copy.md.
+
+fn laid_copy_global(name: String) → Tac<Expr> { lookup(name).or_fail("laid_copy: `" ++ name ++ "`: ").bind(λ g => pure(Global(g))) }
+
+fn laid_copy(name: String) → Tac<List<Decl>> {
+    let t <- laid_copy_global(name);
+    let stored <- laid_copy_global(name ++ "::stored");
+    let bytes <- laid_copy_global("copy::Rep::bytes");
+    let of_bytes <- laid_copy_global("copy::Copy::of_bytes");
+    let exact <- laid_copy_global("copy::Copy::exact_clone");
+    let rep = apps(bytes, [t, stored]);
+    let copy_v = apps(of_bytes, [t, stored]);
+    let clone_v = apps(exact, [t, rep, copy_v]);
+    let rep_t <- infer(rep).or_fail("laid_copy: `" ++ name ++ "`'s representation: ");
+    let copy_t <- infer(copy_v).or_fail("laid_copy: `" ++ name ++ "`'s copy: ");
+    let clone_t <- infer(clone_v).or_fail("laid_copy: `" ++ name ++ "`'s clone: ");
+    pure([
+        Decl(AsValue, name ++ "::rep", [], Hd(rep_t), rep),
+        Decl(AsValue, name ++ "::copy", [], Hd(copy_t), copy_v),
+        Decl(AsValue, name ++ "::clone", [], Hd(clone_t), clone_v)])
+}
