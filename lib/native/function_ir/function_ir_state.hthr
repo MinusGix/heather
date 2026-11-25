@@ -571,6 +571,42 @@ fn until_run_defined(step: Valuation() → Buffers() → State, defined: Valuati
     }
 }
 
+// An unbounded loop over the file each of whose passes is defined, and
+// whose passes that go round lower `measure`, leaves within any fuel above
+// the measure: `until_defined_of_measure` with the file threaded. A counted
+// loop discharges it (`counted_halts`, function_ir_counted).
+theorem until_run_defined_of_measure(step: Valuation() → Buffers() → State, defined: Valuation() → Buffers() → Bool, parameters: List<Nat>,
+    exit: Nat, next: List<Nat>, measure: List<BitVec(64)> → Nat,
+    pass_defined: (state: List<BitVec(64)>) → (buffers: Buffers()) → defined(until_valuation(parameters, state), buffers).IsTrue(),
+    decreases: (state: List<BitVec(64)>) → (buffers: Buffers()) → step(until_valuation(parameters, state), buffers).values(1, exit).head_bit() = False →
+        measure(words_of(step(until_valuation(parameters, state), buffers).values, next)) < measure(state),
+    fuel: Nat): (state: List<BitVec(64)>) → (buffers: Buffers()) → measure(state) < fuel →
+    until_run_defined(step, defined, parameters, exit, next, fuel, state, buffers).IsTrue() {
+    match fuel {
+        Zero => λ state buffers below => false_elim(Nat::not_succ_le_zero(measure(state), below)),
+        Succ(rest) => λ state buffers below => {
+            let before = until_valuation(parameters, state);
+            let after = step(before, buffers);
+            Bool::is_true_and_intro(defined(before, buffers), match after.values(1, exit).head_bit() {
+                    False => until_run_defined(step, defined, parameters, exit, next, rest, words_of(after.values, next), after.buffers),
+                    True => True,
+                }, pass_defined(state, buffers),
+                (match after.values(1, exit).head_bit() as λ b => after.values(1, exit).head_bit() = b → (match b as λ _ => Bool {
+                    False => until_run_defined(step, defined, parameters, exit, next, rest, words_of(after.values, next), after.buffers),
+                    True => True,
+                }).IsTrue() {
+                    False => λ clear => {
+                        let fits: (measure(words_of(after.values, next)) < rest) =
+                            Nat::le_trans(measure(words_of(after.values, next)) + 1, measure(state), rest, decreases(state, buffers, clear), below);
+                        until_run_defined_of_measure(step, defined, parameters, exit, next, measure, pass_defined, decreases, rest,
+                            words_of(after.values, next), after.buffers, fits)
+                    },
+                    True => λ _ => trivial,
+                })(refl))
+        },
+    }
+}
+
 // Whether callee `f` is defined at the words, called over the file.
 fn RunDefines() → Type { Buffers() → Nat → List<BitVec(64)> → Bool }
 

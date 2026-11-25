@@ -340,7 +340,21 @@ theorem Scope::clean_coherent(self s: Scope, node: Node, values: Valuation(), en
         Add(_, _, _, _) => λ never => false_elim(never),
         Sub(_, _, _, _) => λ never => false_elim(never),
         BitAnd(_, _, _, _) => λ never => false_elim(never),
-        BitOr(_, _, _, _) => λ never => false_elim(never),
+        BitOr(width, output, left, right) => λ c => {
+            let parts = Bool::both(c);
+            let pl = Bool::is_true_and(s.defined(left), !s.loose(left), parts.left);
+            let pr = Bool::is_true_and(s.defined(right), !s.loose(right), parts.right);
+            let al = agrees(left, pl.left);
+            let ar = agrees(right, pr.left);
+            let v = BitOr(width, output, left, right).value(values);
+            let narrow: ((values(1, left).head_bit() || values(1, right).head_bit()) = (env.bit(left) || env.bit(right))) =
+                trans(cong_fn(λ (x: Bool) => x || values(1, right).head_bit(), al.right(pl.right)), cong_fn(λ (y: Bool) => env.bit(left) || y, ar.right(pr.right)));
+            let wide: ((values(64, left).head_bit() || values(64, right).head_bit()) = (env.word(left).head_bit() || env.word(right).head_bit())) =
+                trans(cong_fn(λ (x: BitVec(64)) => x.head_bit() || values(64, right).head_bit(), al.left),
+                    cong_fn(λ (y: BitVec(64)) => env.word(left).head_bit() || y.head_bit(), ar.left));
+            trans(cong_fn(λ (x: BitVec(1)) => x.head_bit(), Valuation::set_here(values, output, v, 1)),
+                trans(narrow, sym(trans(cong_fn(λ (x: BitVec(64)) => x.head_bit(), Valuation::set_here(values, output, v, 64)), wide))))
+        },
         BitXor(_, _, _, _) => λ never => false_elim(never),
         ShiftLeft(_, _, _, _) => λ never => false_elim(never),
         LogicalShiftRight(_, _, _, _) => λ never => false_elim(never),

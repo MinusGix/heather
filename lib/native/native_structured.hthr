@@ -31,6 +31,7 @@ import native_alloc;
 import function_ir;
 import function_ir_operation;
 import function_ir_eval;
+import function_ir_counted;
 import bool;
 import list;
 import logic;
@@ -89,6 +90,8 @@ fn Scope::clean(self s: Scope, node: Node) → Bool {
     match node {
         Const(_, _, _) => True,
         Move(_, _, source) => s.bit(source),
+        // Either of two bits: a counted pass's exit (function_ir_counted).
+        BitOr(_, _, left, right) => s.bit(left) && s.bit(right),
         UnsignedLessThan(_, _, _, _) => True,
         SignedLessThan(_, _, _, _) => True,
         Equal(_, _, _, _) => True,
@@ -237,24 +240,27 @@ fn StructuredRegion::scoped(self region: StructuredRegion, s: Scope) → Option<
     }
 }
 
-// Whether no unbounded loop is in the region.
-fn StructuredRegion::until_free(self region: StructuredRegion) → Bool {
+// Whether every unbounded loop in the region counts at the parameter its
+// measure names, so that it ends: its measure's decrease decided by
+// evaluation (function_ir_counted, docs/language/loop-combinator-design.md
+// §6.9).
+fn StructuredRegion::until_counted(self region: StructuredRegion) → Bool {
     match region {
         Dataflow(_) => True,
-        Sequence(_, continuation) => continuation.until_free(),
-        Compose(prefix, continuation) => prefix.until_free() && continuation.until_free(),
-        Conditional(_, _, _, _, when_true, when_false) => when_true.until_free() && when_false.until_free(),
+        Sequence(_, continuation) => continuation.until_counted(),
+        Compose(prefix, continuation) => prefix.until_counted() && continuation.until_counted(),
+        Conditional(_, _, _, _, when_true, when_false) => when_true.until_counted() && when_false.until_counted(),
         Lend(_, _, _, _) => True,
         Call(_, _, _, _) => True,
-        Loop(_, _, _, _, body, _, _, _, _) => body.until_free(),
-        Until(_, _, _, _, _, _, _) => False,
+        Loop(_, _, _, _, body, _, _, _, _) => body.until_counted(),
+        Until(_, parameters, body, exit, next, _, measure_at) => body.counts(parameters, next, exit, measure_at) && body.until_counted(),
     }
 }
 
-// What a statement's region asks: scoped from every word, and no unbounded
-// loop. An unbounded loop's code runs as its meaning where the loop ends
-// (`StructuredRegion::Ok`), and a statement's meaning has no place for one
-// that does not yet (docs/language/loop-combinator-design.md §6.9).
+// What a statement's region asks: scoped from every word, and every
+// unbounded loop counted. An unbounded loop's code runs as its meaning
+// where the loop ends (`StructuredRegion::Ok`), and the count is what says
+// it does.
 fn StructuredRegion::scopes(self region: StructuredRegion) → Bool {
-    match region.scoped(Scope::all()) { None => False, Some(_) => region.until_free() }
+    match region.scoped(Scope::all()) { None => False, Some(_) => region.until_counted() }
 }

@@ -9,6 +9,7 @@ import native_alloc;
 import function_ir;
 import function_ir_eval;
 import function_ir_state;
+import function_ir_counted;
 import linux_x86_64_image;
 import bitvec;
 import list;
@@ -93,11 +94,43 @@ fn cd_step() → Valuation() → Buffers() → State {
 theorem count_down_ends(): until_run_defined(cd_step(), λ _ _ => True, [3], 5, [6], until_passes(), [BitVec::ofNat(3)], []) = True { refl }
 theorem count_down_runs(): until_run(cd_step(), [3], 5, [6], until_passes(), [BitVec::ofNat(3)], []).end.state = [BitVec::ofNat(0)] { refl }
 
-// A statement does not take it yet: its code runs as its meaning where it
-// ends (`StructuredRegion::Ok`), and a statement's meaning has no place for
-// one that does not (reason 0, kind 7).
+// A statement does not take it: its code runs as its meaning where it ends
+// (`StructuredRegion::Ok`), and its pass is not the counted one, which is
+// what says it ends (reason 0, kind 7).
 theorem count_down_statement(): count_down().scopes() = False { refl }
 theorem count_down_refused(): refused(count_down_src(3)) = [2, 0, 0, 7, 0] { refl }
+
+// The same loop counted (function_ir_counted): work that never stops on
+// its own, then the counted leaf at the parameter its measure names (0,
+// word 3), word 10 its temporary. A statement takes it, and the source
+// compiles.
+fn counted_body() → StructuredRegion { Compose(Dataflow(leaf([Const(64, 5, 0)])), Dataflow(leaf(counted_nodes(3, 6, 5, 10)))) }
+fn counted() → StructuredRegion { Until([1], [3], counted_body(), 5, [6], [7], 0) }
+fn counted_src(n: Nat) → Source { Source::of([], Then(ops([Const(64, 1, n)]), Then(Compute(counted()), Exit(7)))) }
+
+theorem counted_counts(): counted_body().counts([3], [6], 5, 0) = True { refl }
+theorem counted_statement(): counted().scopes() = True { refl }
+theorem counted_compiles(): refused(counted_src(3)) = [] { refl }
+
+// From 3 it leaves with 0 after three passes; from 0 the counter wraps,
+// and it still ends within the passes the meaning gives it
+// (`counts_halts`), which no evaluation here could reach.
+fn counted_step() → Valuation() → Buffers() → State {
+    λ (pass: Valuation()) (held: Buffers()) => counted_body().run(Readers::quiet(λ _ _ _ => []), pass, held)
+}
+theorem counted_runs(): until_run(counted_step(), [3], 5, [6], until_passes(), [BitVec::ofNat(3)], []).end.state = [BitVec::ofNat(0)] { refl }
+theorem counted_from_zero_ends(): until_run_defined(counted_step(), λ _ _ => True, [3], 5, [6], until_passes(), [BitVec::ofNat(0)], []).IsTrue() {
+    counted_body().counts_halts(Readers::quiet(λ _ _ _ => []), [3], [6], 5, 0, trivial, [BitVec::ofNat(0)], [])
+}
+
+// Negative controls: a measure naming no parameter, work that writes the
+// counter, and a leaf whose temporary is the counter, do not count.
+fn counter_written() → StructuredRegion { Compose(Dataflow(leaf([Const(64, 3, 9), Const(64, 5, 0)])), Dataflow(leaf(counted_nodes(3, 6, 5, 10)))) }
+fn temporary_counter() → StructuredRegion { Compose(Dataflow(leaf([Const(64, 5, 0)])), Dataflow(leaf(counted_nodes(3, 6, 5, 3)))) }
+
+theorem measure_elsewhere_refused(): Until([1], [3], counted_body(), 5, [6], [7], 1).scopes() = False { refl }
+theorem counter_written_uncounted(): counter_written().counts([3], [6], 5, 0) = False { refl }
+theorem temporary_counter_uncounted(): temporary_counter().counts([3], [6], 5, 0) = False { refl }
 
 // Negative controls: an exit that is one of its parameters, and a body
 // that reads a word outside its pass (word 1), do not scope.

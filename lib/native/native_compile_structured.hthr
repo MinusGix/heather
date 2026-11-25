@@ -45,6 +45,7 @@ import function_ir;
 import function_ir_eval;
 import function_ir_lower;
 import function_ir_state;
+import function_ir_counted;
 import function_ir_placeless;
 import linux_trees;
 import linux_x86_64_io;
@@ -302,15 +303,6 @@ theorem Bool::guard_with<B, R>({b: Bool}, {o: Option<B>}, {c: B}, h: b.guard(o) 
 // ---------------------------------------------------------------------------
 // What the machine claim asks of a region
 
-// Whether an unbounded loop leaves within the passes its meaning gives it
-// (`until_passes`), from every state and every file: the termination its
-// code runs as its meaning under.
-fn StructuredRegion::until_halts(self body: StructuredRegion, call: Writers(), parameters: List<Nat>, exit: Nat, next: List<Nat>) → Type {
-    (state: List<BitVec(64)>) → (buffers: Buffers()) →
-        until_run_defined(λ (pass: Valuation()) (held: Buffers()) => body.run(call, pass, held), λ (pass: Valuation()) (held: Buffers()) => True,
-            parameters, exit, next, until_passes(), state, buffers).IsTrue()
-}
-
 // What the compile's region scope gives the claim: leaves wide, and each
 // loop in counted form with its body scoped from its pass; an unbounded
 // loop in its form, and ending.
@@ -332,9 +324,10 @@ fn StructuredRegion::Ok(self region: StructuredRegion, call: Writers()) → Type
     }
 }
 
-// A scoped region with no unbounded loop is ok: the scope gives all but an
-// unbounded loop's ending.
-theorem StructuredRegion::ok_of_scoped(self region: StructuredRegion, call: Writers()): region.until_free().IsTrue() → (s, t: Scope) →
+// A scoped region whose unbounded loops count is ok: the scope gives all
+// but an unbounded loop's ending, and the count gives that
+// (`counts_halts`).
+theorem StructuredRegion::ok_of_scoped(self region: StructuredRegion, call: Writers()): region.until_counted().IsTrue() → (s, t: Scope) →
     region.scoped(s) = Some(t) → region.Ok(call) {
     match region {
         Dataflow(body) => λ free s t scoped => Scope::wide_of(body.nodes, s, t, scoped),
@@ -360,27 +353,15 @@ theorem StructuredRegion::ok_of_scoped(self region: StructuredRegion, call: Writ
             let shape = StructuredRegion::loop_shaped(inputs, bound, parameters, count, body, exit, next, outputs, exhausted, parts.right);
             ⟨body.ok_of_scoped(call, free, Scope::pass(parameters, count), bs, got), ⟨shape, Exists(bs, ⟨got, Bool::is_true_of_eq(bits)⟩)⟩⟩
         },
-        Until(_, _, _, _, _, _, _) => λ never s t _ => false_elim(never),
-    }
-}
-
-// A scoped unbounded loop whose body has none, and which ends, is ok.
-theorem StructuredRegion::until_ok(inputs: List<Nat>, parameters: List<Nat>, body: StructuredRegion, exit: Nat, next, outputs: List<Nat>, measure_at: Nat,
-    call: Writers(), free: body.until_free().IsTrue(), halts: body.until_halts(call, parameters, exit, next)): (s, t: Scope) →
-    Until(inputs, parameters, body, exit, next, outputs, measure_at).scoped(s) = Some(t) → Until(inputs, parameters, body, exit, next, outputs, measure_at).Ok(call) {
-    let r = Until(inputs, parameters, body, exit, next, outputs, measure_at);
-    λ s t => match ok: s.all_defined(inputs) && r.until_shape() {
-        False => λ none => absurd(none),
-        True => λ scoped => Option::and_then_with(scoped, λ bs got rest => match bits: bs.bit(exit) && bs.all_defined(next) {
-            False => absurd(rest),
-            True => {
-                let parts = Bool::is_true_and(s.all_defined(inputs), r.until_shape(), Bool::is_true_of_eq(ok));
-                let shape = StructuredRegion::until_shaped(inputs, parameters, body, exit, next, outputs, measure_at, parts.right);
-                let result: r.Ok(call) =
-                    ⟨body.ok_of_scoped(call, free, Scope::until_pass(parameters), bs, got), ⟨shape, ⟨Exists(bs, ⟨got, Bool::is_true_of_eq(bits)⟩), halts⟩⟩⟩;
-                result
-            },
-        }),
+        Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ counted s t scoped => {
+            let r = Until(inputs, parameters, body, exit, next, outputs, measure_at);
+            let fr = Bool::both(counted);
+            cases scoped as ok, got(bs), bits;
+            let parts = Bool::is_true_and(s.all_defined(inputs), r.until_shape(), Bool::is_true_of_eq(ok));
+            let shape = StructuredRegion::until_shaped(inputs, parameters, body, exit, next, outputs, measure_at, parts.right);
+            ⟨body.ok_of_scoped(call, fr.right, Scope::until_pass(parameters), bs, got),
+                ⟨shape, ⟨Exists(bs, ⟨got, Bool::is_true_of_eq(bits)⟩), body.counts_halts(call, parameters, next, exit, measure_at, fr.left)⟩⟩⟩
+        },
     }
 }
 
@@ -449,12 +430,13 @@ record UntilCode(p: Prog, layout: Layout, out: List<Nat>, names: Nat, inputs: Li
     next, outputs: List<Nat>, set, done, after: List<Nat>, c: Compiled) {
     fits: (layout.word_fits(exit) && until_keeps(out, outputs, parameters ++ body.touches())).IsTrue(),
     e: Compiled,
-    e_is: p.computes(layout, set, moves(parameters, inputs), Succ(names)) = Some(e),
+    e_is: p.computes(layout, set, moves(parameters, inputs), Succ(Succ(Succ(names)))) = Some(e),
     b: Compiled,
     b_is: body.code(e.prog.label(Succ(names)), layout, after, e.names) = Some(b),
     m: Compiled,
     m_is: b.prog.computes(layout, Cons(exit, done.union(set)), moves(parameters, next), b.names) = Some(m),
-    c_is: m.prog.tests(layout, exit, Succ(names)).computes(layout, out, moves(outputs, parameters), m.names) = Some(c),
+    c_is: then(m.prog.tests(layout, exit, Succ(Succ(names))).else_label(Succ(Succ(names)), Succ(Succ(Succ(names)))), Jmp(Succ(names)))
+        .label(Succ(Succ(Succ(names)))).computes(layout, out, moves(outputs, parameters), m.names) = Some(c),
 }
 
 theorem StructuredRegion::until_code(inputs: List<Nat>, parameters: List<Nat>, body: StructuredRegion, exit: Nat, next, outputs: List<Nat>, measure_at: Nat,
@@ -465,14 +447,17 @@ theorem StructuredRegion::until_code(inputs: List<Nat>, parameters: List<Nat>, b
         nodes_live_in(moves(parameters, next), Cons(exit, nodes_live_in(moves(outputs, parameters), out).union(layout.homes.loop_set(exit)))), c) {
     let homes = layout.homes;
     let head = Succ(names);
+    let again = Succ(head);
+    let leave = Succ(again);
     let set = homes.loop_set(exit);
     let done = nodes_live_in(moves(outputs, parameters), out);
     let after = nodes_live_in(moves(parameters, next), Cons(exit, done.union(set)));
     let chain: ((layout.word_fits(exit) && until_keeps(out, outputs, parameters ++ body.touches())).guard(
-        p.computes(layout, set, moves(parameters, inputs), head).and_then(λ e =>
+        p.computes(layout, set, moves(parameters, inputs), leave).and_then(λ e =>
         body.code(e.prog.label(head), layout, after, e.names).and_then(λ b =>
         b.prog.computes(layout, Cons(exit, done.union(set)), moves(parameters, next), b.names).and_then(λ m =>
-        m.prog.tests(layout, exit, head).computes(layout, out, moves(outputs, parameters), m.names))))) = Some(c)) = emitted;
+        then(m.prog.tests(layout, exit, again).else_label(again, leave), Jmp(head)).label(leave)
+            .computes(layout, out, moves(outputs, parameters), m.names))))) = Some(c)) = emitted;
     Bool::guard_with(chain, λ fits h0 =>
     Option::and_then_with(h0, λ e e_is h1 =>
     Option::and_then_with(h1, λ b b_is h2 =>
@@ -578,17 +563,21 @@ theorem StructuredRegion::within_code(self region: StructuredRegion, layout: Lay
         Until(inputs, parameters, body, exit, next, outputs, measure_at) => λ p out names c emitted => {
             let k = StructuredRegion::until_code(inputs, parameters, body, exit, next, outputs, measure_at, p, layout, out, names, c, emitted);
             let head = Succ(names);
+            let again = Succ(head);
+            let leave = Succ(again);
             let hp = k.e.prog.label(head);
-            let mt = k.m.prog.tests(layout, exit, head);
+            let mt = k.m.prog.tests(layout, exit, again);
+            let xl = mt.else_label(again, leave);
+            let dj = then(xl, Jmp(head)).label(leave);
             let set = layout.homes.loop_set(exit);
             let done = nodes_live_in(moves(outputs, parameters), out);
             let after = nodes_live_in(moves(parameters, next), Cons(exit, done.union(set)));
-            Prog::within_trans(p.within_computes(layout, set, moves(parameters, inputs), head, k.e, k.e_is),
+            Prog::within_trans(p.within_computes(layout, set, moves(parameters, inputs), leave, k.e, k.e_is),
             Prog::within_trans(k.e.prog.within_label(head),
             Prog::within_trans(body.within_code(layout, hp, after, k.e.names, k.b, k.b_is),
             Prog::within_trans(k.b.prog.within_computes(layout, Cons(exit, done.union(set)), moves(parameters, next), k.b.names, k.m, k.m_is),
-            Prog::within_trans(k.m.prog.within_tests(layout, exit, head),
-                mt.within_computes(layout, out, moves(outputs, parameters), k.m.names, c, k.c_is))))))
+            Prog::within_trans(k.m.prog.within_tests(layout, exit, again),
+            calc { mt <= xl := Exists(2, refl), <= dj := Exists(2, refl), <= c.prog := dj.within_computes(layout, out, moves(outputs, parameters), k.m.names, c, k.c_is), })))))
         },
     }
 }
@@ -1362,7 +1351,8 @@ theorem Target::until_head(self t: Target, call: Writers(), inputs: List<Nat>, p
     bs: Scope, body_scoped: body.scoped(Scope::until_pass(parameters)) = Some(bs), bits: (bs.bit(exit) && bs.all_defined(next)).IsTrue(),
     body_runs: t.Computes(body, call, t.homes.region_live(body, after), after, k.e.prog.label(Succ(names)), k.b.prog),
     env: Env, tree: ITree<BitVec(64)>(Events::linux()), final: LoopState,
-    ends: (now: Env) → now.UntilEnds(env, final, parameters, body) → t.At(prog_len(k.m.prog.tests(t.layout(), exit, Succ(names))), done, tree, now),
+    ends: (now: Env) → now.UntilEnds(env, final, parameters, body) →
+        t.At(prog_len(then(k.m.prog.tests(t.layout(), exit, Succ(Succ(names))).else_label(Succ(Succ(names)), Succ(Succ(Succ(names)))), Jmp(Succ(names))).label(Succ(Succ(Succ(names))))), done, tree, now),
     fuel: Nat):
     (now: Env) → (state: List<BitVec(64)>) → words_of(now.valuation(), parameters) = state → now.args = env.args →
     now.Kept(env, parameters ++ body.touches()) →
@@ -1372,11 +1362,21 @@ theorem Target::until_head(self t: Target, call: Writers(), inputs: List<Nat>, p
     t.At(prog_len(k.e.prog), set, tree, now) {
     let layout = t.layout();
     let head = Succ(names);
+    let again = Succ(head);
+    let leave = Succ(again);
     let hp = k.e.prog.label(head);
-    let mt = k.m.prog.tests(layout, exit, head);
+    let mt = k.m.prog.tests(layout, exit, again);
+    let xjump = then(mt, Jmp(leave));
+    let xl = mt.else_label(again, leave);
+    let djump = then(xl, Jmp(head));
+    let dj = djump.label(leave);
     let exit_out = Cons(exit, done.union(set));
-    let w_mt: mt.Within(t.program) = Prog::within_trans(mt.within_computes(layout, out, moves(outputs, parameters), k.m.names, c, k.c_is), within);
-    let w_m: k.m.prog.Within(t.program) = Prog::within_trans(k.m.prog.within_tests(layout, exit, head), w_mt);
+    let w_dj: dj.Within(t.program) = Prog::within_trans(dj.within_computes(layout, out, moves(outputs, parameters), k.m.names, c, k.c_is), within);
+    let w_djump: djump.Within(t.program) = djump.within_before(leave, Block([]), t.program, w_dj);
+    let w_xl: xl.Within(t.program) = xl.within_before(0, Jmp(head), t.program, w_djump);
+    let w_xjump: xjump.Within(t.program) = xjump.within_before(again, Block([]), t.program, w_xl);
+    let w_mt: mt.Within(t.program) = mt.within_before(0, Jmp(leave), t.program, w_xjump);
+    let w_m: k.m.prog.Within(t.program) = Prog::within_trans(k.m.prog.within_tests(layout, exit, again), w_mt);
     let w_b: k.b.prog.Within(t.program) = Prog::within_trans(k.b.prog.within_computes(layout, exit_out, moves(parameters, next), k.b.names, k.m, k.m_is), w_m);
     let w_hp: hp.Within(t.program) = Prog::within_trans(body.within_code(layout, hp, after, k.e.names, k.b, k.b_is), w_b);
     let fits = k.fits;
@@ -1429,7 +1429,8 @@ theorem Target::until_head(self t: Target, call: Writers(), inputs: List<Nat>, p
                     ⟨trans(m_buffers, cong_fn<LoopState, Buffers()>(λ s => s.buffers, run_t)),
                     ⟨m_args,
                     ⟨trans(m_state, cong_fn<LoopState, List<BitVec(64)>>(λ s => s.end.state, run_t)), m_kept⟩⟩⟩;
-                let widened: t.At(prog_len(mt), exit_out, tree, em) = t.at_sub(ends(em, ended), λ i mi => Inr(done.union_left(set, i, mi)));
+                let widened: t.At(prog_len(mt), exit_out, tree, em) =
+                    t.at_sub(t.at_jmp(mt, again, w_xjump, djump, Block([]), w_dj, tree, done, em, ends(em, ended)), λ i mi => Inr(done.union_left(set, i, mi)));
                 widened
             };
             let back_leg = λ (clear_exit: em.bit(exit) = False) => {
@@ -1443,10 +1444,11 @@ theorem Target::until_head(self t: Target, call: Writers(), inputs: List<Nat>, p
                     j(sym(m_buffers), λ bb _ => until_run_defined(step, none, parameters, exit, next, f2, after_next, bb).IsTrue(), def_f0);
                 let rest = t.until_head(call, inputs, parameters, body, exit, next, outputs, p, out, names, c, set, done, after, live,
                     k, h, within, shape, bs, body_scoped, bits, body_runs, env, tree, final, ends, f2, em, after_next, m_state, m_args, m_kept, run_f, def_f);
-                let widened: t.At(prog_len(k.e.prog), exit_out, tree, em) = t.at_sub(rest, λ i mi => Inr(done.union_right(set, i, mi)));
+                let widened: t.At(prog_len(xl), exit_out, tree, em) =
+                    t.at_sub(t.at_jmp(xl, names, w_djump, k.e.prog, Block([]), w_hp, tree, set, em, rest), λ i mi => Inr(done.union_right(set, i, mi)));
                 widened
             };
-            let m_leg = t.goes_tests(exit_out, em, k.m.prog, exit, names, inside_exit, Inl(refl), w_mt, w_hp.witness, k.e.prog, Block([]), w_hp.proof,
+            let m_leg = t.goes_tests(exit_out, em, k.m.prog, exit, head, inside_exit, Inl(refl), w_mt, w_xl.witness, xjump, Block([]), w_xl.proof,
                 tree, x_leg, back_leg);
             let body_leg = body_runs(now, tree, t.leaf_goes(exit_out, moves(parameters, next), k.b.prog, k.b.names, k.m, k.m_is, w_m, after, h.after_ok,
                 moves_wide(parameters, next), mb, tree, m_leg));
@@ -1472,13 +1474,18 @@ theorem Target::until_goes(self t: Target, call: Writers(), inputs: List<Nat>, p
     let h = t.homes.until_checked(inputs, parameters, body, exit, next, outputs, measure_at, out, live, checked);
     let shape = ok.right.left;
     let head = Succ(names);
+    let again = Succ(head);
+    let leave = Succ(again);
     let set = t.homes.loop_set(exit);
     let done = nodes_live_in(moves(outputs, parameters), out);
     let after = nodes_live_in(moves(parameters, next), Cons(exit, done.union(set)));
     let hp = k.e.prog.label(head);
-    let mt = k.m.prog.tests(layout, exit, head);
-    let w_mt: mt.Within(t.program) = Prog::within_trans(mt.within_computes(layout, out, moves(outputs, parameters), k.m.names, c, k.c_is), within);
-    let w_m: k.m.prog.Within(t.program) = Prog::within_trans(k.m.prog.within_tests(layout, exit, head), w_mt);
+    let mt = k.m.prog.tests(layout, exit, again);
+    let xl = mt.else_label(again, leave);
+    let dj = then(xl, Jmp(head)).label(leave);
+    let w_dj: dj.Within(t.program) = Prog::within_trans(dj.within_computes(layout, out, moves(outputs, parameters), k.m.names, c, k.c_is), within);
+    let w_mt: mt.Within(t.program) = Prog::within_trans(calc { mt <= xl := Exists(2, refl), <= dj := Exists(2, refl), }, w_dj);
+    let w_m: k.m.prog.Within(t.program) = Prog::within_trans(k.m.prog.within_tests(layout, exit, again), w_mt);
     let w_b: k.b.prog.Within(t.program) = Prog::within_trans(k.b.prog.within_computes(layout, Cons(exit, done.union(set)), moves(parameters, next), k.b.names, k.m, k.m_is), w_m);
     let w_hp: hp.Within(t.program) = Prog::within_trans(body.within_code(layout, hp, after, k.e.names, k.b, k.b_is), w_b);
     let w_e: k.e.prog.Within(t.program) = k.e.prog.within_before(head, Block([]), t.program, w_hp);
@@ -1524,7 +1531,7 @@ theorem Target::until_goes(self t: Target, call: Writers(), inputs: List<Nat>, p
                     },
                 },
                 ⟨trans(os.right.right.left, trans(le.left, sym(lp.buffers))), trans(os.right.right.right, trans(le.right.left, sym(lp.args)))⟩⟩;
-            t.leaf_goes(out, moves(outputs, parameters), mt, k.m.names, c, k.c_is, within, done, h.done_ok, moves_wide(outputs, parameters), now, tree,
+            t.leaf_goes(out, moves(outputs, parameters), dj, k.m.names, c, k.c_is, within, done, h.done_ok, moves_wide(outputs, parameters), now, tree,
                 t.at_like(prog_len(c.prog), out, tree, Until(inputs, parameters, body, exit, next, outputs, measure_at).meaning(call, env), eo, like, next_out))
         };
         let e1 = env.steps(moves(parameters, inputs));
@@ -1541,7 +1548,7 @@ theorem Target::until_goes(self t: Target, call: Writers(), inputs: List<Nat>, p
         let ends0: until_run_defined(step, none, parameters, exit, next, until_passes(), s0, e1.buffers).IsTrue() =
             j(sym(buffers0), λ bb _ => until_run_defined(step, none, parameters, exit, next, until_passes(), s0, bb).IsTrue(),
                 ok.right.right.right(s0, env.buffers));
-        t.leaf_goes(set, moves(parameters, inputs), p, head, k.e, k.e_is, w_e, live, h.entry_ok, moves_wide(parameters, inputs), env, tree,
+        t.leaf_goes(set, moves(parameters, inputs), p, leave, k.e, k.e_is, w_e, live, h.entry_ok, moves_wide(parameters, inputs), env, tree,
             t.until_head(call, inputs, parameters, body, exit, next, outputs, p, out, names, c, set, done, after, live,
                 k, h, within, shape, bs, pr.left, pr.right, body_go, env, tree, final, ends,
                 until_passes(), e1, s0, held0, entered.right.right.right, kept0, run0, ends0))

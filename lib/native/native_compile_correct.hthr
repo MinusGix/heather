@@ -314,7 +314,7 @@ theorem StructuredRegion::region_runs(self region: StructuredRegion, t: Target, 
         let tree = k(Onward(env.compute(call, region)));
         match scoped: region.scoped(Scope::all()) {
             None => absurd(emitted),
-            Some(st) => match free: region.until_free() {
+            Some(st) => match free: region.until_counted() {
               False => absurd(emitted),
               True => {
                 let same = region.compute_same(call, st, scoped, env);

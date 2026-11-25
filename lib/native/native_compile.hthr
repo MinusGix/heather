@@ -1293,16 +1293,22 @@ fn StructuredRegion::code(self region: StructuredRegion, p: Prog, layout: Layout
                 x.prog.else_label(again, leave).computes(layout, set, loop_down(count, exhausted), x.names).and_then(λ d =>
                 then(d.prog, Jmp(head)).label(leave).computes(layout, out, moves(outputs, parameters), d.names))))))))
         },
+        // A conditional jump goes only ahead (`item_lands`): the exit bit
+        // clear jumps ahead to the jump back, set falls through to the jump
+        // out, as a counted loop's do.
         Until(inputs, parameters, body, exit, next, outputs, measure_at) => {
             let head = Succ(names);
+            let again = Succ(head);
+            let leave = Succ(again);
             let set = homes.loop_set(exit);
             let done = nodes_live_in(moves(outputs, parameters), out);
             let after = nodes_live_in(moves(parameters, next), Cons(exit, done.union(set)));
             (layout.word_fits(exit) && until_keeps(out, outputs, parameters ++ body.touches())).guard(
-                p.computes(layout, set, moves(parameters, inputs), head).and_then(λ e =>
+                p.computes(layout, set, moves(parameters, inputs), leave).and_then(λ e =>
                 body.code(e.prog.label(head), layout, after, e.names).and_then(λ b =>
                 b.prog.computes(layout, Cons(exit, done.union(set)), moves(parameters, next), b.names).and_then(λ m =>
-                m.prog.tests(layout, exit, head).computes(layout, out, moves(outputs, parameters), m.names)))))
+                then(m.prog.tests(layout, exit, again).else_label(again, leave), Jmp(head)).label(leave)
+                    .computes(layout, out, moves(outputs, parameters), m.names)))))
         },
     }
 }
@@ -2168,8 +2174,9 @@ fn region_refusal(layout: Layout, region: StructuredRegion, out: List<Nat>) → 
     match region {
         Dataflow(body) => computes_refusal(layout, body.nodes),
         _ => match region.scopes() {
-            // A statement's unbounded loop is named as itself, wherever it is.
-            False => match region.until_free() { False => [0, 7, 0], True => [0, region.kind(), 0] },
+            // An unbounded loop that does not count is named as itself,
+            // wherever it is.
+            False => match region.until_counted() { False => [0, 7, 0], True => [0, region.kind(), 0] },
             True => match region.code(Start, layout, out, 0) { Some(_) => [], None => parts_refusal(layout, region) },
         },
     }
