@@ -219,9 +219,10 @@ fn Tm::judge_in(self t: Tm, sigs: List<Sig>, tys: Table, pass: Bool) → Verdict
         // A constructor with its fields, and a field of one an arm reads.
         Inject(_, _, _) => Ok,
         Slot(_, _, _) => Ok,
-        // A `while` loop: its state and the context it reads are carried
-        // as words (`Tm::lower_iterate`).
-        Iterate(_, test, body, _, _) => test.judge_in(sigs, tys, False).and(body.judge_in(sigs, tys, False)),
+        // A `while` loop is lowered as the loop node `Tm::nodes` writes it
+        // (docs/language/loop-combinator-design.md §6.9); one still an
+        // `Iterate` is not.
+        Iterate(_, _, _, _, _) => Refused("a loop that is not a loop node: a `Loop::steps` written by hand (fuel with no measure to prove it ends), a loop under a `match` or inside another loop, or one over a state that is not 64-bit words"),
         // Going round is a loop's pass's last act, never a value.
         Again(_, _) => match pass { True => Ok, False => Refused("going round a loop outside a loop's pass") },
         // A loop that answers: its body is a pass.

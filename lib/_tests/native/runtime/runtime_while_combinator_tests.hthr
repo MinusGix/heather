@@ -112,30 +112,48 @@ runtime fn climbs(n: u64) → u64 {
     x
 }
 
-// Written by hand, the loop reads as the elaborator's does: a record state
-// read after the loop by its fields, a test of two bits, and the state's
-// field in the test.
+// Written by hand over `Loop::steps(Loop::passes(), …)`, a loop reads as
+// the elaborator's does (a record state read after the loop by its fields;
+// a test of two bits), but it is fuel with no measure: nothing proves it
+// ends, no `f::loop::runs` pins it to a node, and it stays an `Iterate`,
+// which is refused (docs/language/loop-combinator-design.md §6.9).
 record Two { a: u64, b: u64 }
 
+// expect-error: a loop that is not a loop node
 runtime fn moved(n: u64) → u64 {
     let r: Two = loop::Loop::steps(loop::Loop::passes(), λ (s: Two) => loop::Step::turn(decide_bit<0 < s.b>(), λ _ => Two(s.a + 1, s.b - 1), s), Two(0, n));
     r.a + r.b + n
 }
 
-theorem moved_5(): moved(5) = 10 { refl }
-
+// expect-error: a loop that is not a loop node
 runtime fn two_bits(n, cap: u64) → u64 {
     let x: u64 = loop::Loop::steps(loop::Loop::passes(), λ (x: u64) => loop::Step::turn(decide_bit<x < cap>() && decide_bit<x ≠ 7>(), λ _ => x + 1, x), n);
     x * 2
 }
 
-theorem two_bits_runs(): two_bits(1, 20) = 14 { refl }
+// Written on the combinator, a loop states its measure and its step's
+// decrease (`Lower`), which would pin a node with no elaborator companion;
+// the reflector does not read such a step yet, and says so (§6.9).
+fn down_left(x: u64) → Nat { x.toNat() }
+
+fn down_step(x: u64) → loop::Pass<u64, u64>(down_left, x) {
+    if h: 0 < x {
+        let less: ((x - 1).toNat() < x.toNat()) = bv_omega;
+        loop::Again(loop::Lower(next := x - 1, less := squash(less)))
+    } else {
+        loop::Done(x)
+    }
+}
+
+// expect-error: a loop on the combinator (`Loop(m, step).run(s)`) is not read as a loop node yet
+runtime fn down(n: u64) → u64 {
+    loop::Loop(measure := down_left, step := down_step).run(n)
+}
 
 // Which loops are loop nodes (docs/language/loop-combinator-design.md
 // §6.9): a `while` the elaborator wrote, over a word or over a record of
 // words (its fields read before the node), is one `Tm::Loop`, its code one
-// `Until`; one written by hand (with no `f::loop::runs` to pin it) stays an
-// `Iterate`. `there_and_back`'s first loop is read twice, once for `x` and
+// `Until`. One written by hand is refused above. `there_and_back`'s first loop is read twice, once for `x` and
 // once for `y`'s start.
 fn nodes_in(t: Tm) → Nat {
     match t {
@@ -161,8 +179,6 @@ theorem count_up_node(): Pair(nodes_in(count_up::rt.body), iterates_in(count_up:
 theorem there_and_back_nodes(): Pair(nodes_in(there_and_back::rt.body), iterates_in(there_and_back::rt.body)) = Pair(3, 0) { refl }
 theorem bits_of_node(): Pair(nodes_in(bits_of::rt.body), iterates_in(bits_of::rt.body)) = Pair(1, 0) { refl }
 theorem fib_node(): Pair(nodes_in(fib::rt.body), iterates_in(fib::rt.body)) = Pair(1, 0) { refl }
-
-theorem two_bits_iterate(): Pair(nodes_in(two_bits::rt.body), iterates_in(two_bits::rt.body)) = Pair(0, 1) { refl }
 
 // A node's code is quiet, and what its ending owes is the generator's
 // `f::ends`, from the loop's measure.

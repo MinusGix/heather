@@ -54,7 +54,7 @@ import function_ir_operation;
 // the right it would be stuck on the neutral bit), and `PRotate(kind)` is
 // `x.rotr(k)` (`kind` 0) or `x.rotl(k)` (1) read as the shift pair it is
 // defined as (`bitvec_rotate.hthr`), the other count `w - k` computed here.
-inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PWiden(extra: Nat), PFoldl, PGet, PSet, PToNat, PTrunc, PShift(kind: Nat), PSext, PWithin, PComplement, PRotate(kind: Nat), PAt, PLen, POperation(code: Nat), PSteps }
+inductive Prim { PWord(op: Nat), PConj, PDisj, PNeg, POfNat, PZext, PWiden(extra: Nat), PFoldl, PGet, PSet, PToNat, PTrunc, PShift(kind: Nat), PSext, PWithin, PComplement, PRotate(kind: Nat), PAt, PLen, POperation(code: Nat), PSteps, PRun }
 
 record PrimEntry { g: Nat, p: Prim }
 
@@ -2422,6 +2422,12 @@ fn rt_go(fuel: Nat, k: Known, st: RSt, h: Handle, operand: Bool) → Tac<Pair<RS
                             _ => rt_refuse("`" ++ name ++ "` without its operand and count"),
                         },
                         PSteps => rt_steps(k, st, h, operand, args, λ s a o => rt_go(f, k, s, a, o)),
+                        // A loop written on the combinator states its own
+                        // measure and its step's decrease (`Lower`), which
+                        // would pin a loop node with no elaborator companion;
+                        // the reflector does not read its step yet
+                        // (docs/language/loop-combinator-design.md §6.9).
+                        PRun => rt_refuse("a loop on the combinator (`Loop(m, step).run(s)`) is not read as a loop node yet: its measure and its step's `Lower` would pin one, but the reflector does not read its step"),
                         PGet => rt_bytes_op(k, st, h, operand, name, args, λ c => Get(c), λ s a => rt_go(f, k, s, a, True)),
                         PSet => rt_bytes_op(k, st, h, operand, name, args, λ c => Set(c), λ s a => rt_go(f, k, s, a, True)),
                         PFoldl => match args {
@@ -2703,7 +2709,7 @@ fn rt_derived_names() → List<Pair<String, Prim>> {
     [Pair("bitvec::BitVec::complement", PComplement), Pair("bitvec_rotate::BitVec::rotr", PRotate(0)), Pair("bitvec_rotate::BitVec::rotl", PRotate(1)),
      Pair("bytes::Bytes::at", PAt), Pair("bytes::Bytes::len", PLen),
      Pair("bitvec_div::BitVec::udiv", POperation(UDiv.code())), Pair("bitvec_div::BitVec::urem", POperation(URem.code())),
-     Pair("loop::Loop::steps", PSteps)]
+     Pair("loop::Loop::steps", PSteps), Pair("loop::Loop::run", PRun)]
 }
 
 fn rt_prims_present(ps: List<Pair<String, Prim>>) → Tac<List<PrimEntry>> {

@@ -1097,6 +1097,8 @@ inductive Tm {
     // `k + 1` for `f::loopk_loop`. Its meaning reads neither: they are what
     // the loop is read as a node by (`Tm::nodes`, docs/language/loop-combinator-design.md
     // §6.9).
+    // It is compiled only as that node: an `Iterate` left in a body is
+    // refused.
     Iterate(init: Nat, test: Tm, body: Tm, caps: List<Nat>, loopn: Nat),
     // Going round the innermost loop around it (`Loop`) at the state the
     // variables `args` hold, each read as a word. `res` is that loop's
