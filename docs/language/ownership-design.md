@@ -2020,8 +2020,53 @@ refinement, and `Site::Meets` in its final form.
   load of another: 6,713, 11,633, 21,473, 41,153 and 80,513 (the closure
   heap: 7.4k, 12.8k, 25k, 57k, 149k, quadratic).
 
-**What follows.** The lowering under `Site::Meets`
-(`issues/bytes-level-lowering.md`), the translation of FunctionIR programs
+**The third part: the lowering, its first half** (2026-11-25,
+`issues/bytes-level-lowering.md`, `lib/native/bytes_level/bytes_level_lower.hthr`).
+Nodes, leaves, sequences and branches are lowered and proved; calls, loops,
+the routine's frame, the done clause and the world are filed (below).
+
+- *The clause and the instance.* A node's code is proved as
+  `function_ir_lower_calls`' `EmitsBy` at state type `Heap` and the clause
+  `heap_in` (the heap injected under the one lending), whose law is
+  `Loan::stable_injected`. Sequences are `may_emit_by_seq` and branches
+  `branch_emits_by` at that instance, cited as stated: the generalisation
+  missed nothing these needed.
+- *One valuation per scope.* `EmitsBy` states the register file against one
+  FunctionIR valuation for a whole body, as FunctionIR's single-assignment
+  functions have it. The bytes level's locals change as it runs, so the
+  lowering's theorem is over a valuation that agrees with the locals at every
+  node (`Locals::Agrees` at validity's kinds; `RunAgrees` along a leaf): a
+  word id is its word at every width, a reference id its target's address.
+  The kind never reaches the register file. Such a valuation exists for a run
+  exactly where no id is bound twice in a scope (a routine's body, a loop's
+  pass), which the lowering is to check, as FunctionIR's programs already
+  are; that existence lemma is the first thing the routine theorem needs.
+- *The bridge.* Each node's step, where the valuation agrees before and
+  after, is its facts at the valuation (`Instr::holds_of`): validity's kinds
+  make a word node's operands the valuation's and a reference's word its
+  address. So a word node on a reference, a store cutting a reference and a
+  load of an undefined byte have no facts and no theorem applies, not merely
+  no meaning.
+- *A load and a store are the machine's.* Chosen here: a word load reads
+  its bytes as a word, zero above them (`word_of_bytes`), and a store writes
+  a word's low bytes (`low_bytes`), as `MOVZX`, `MOV r32` and `MOV` read and
+  as the byte, doubleword and word stores write. The language had read a
+  store's value at `8 * bytes` bits of the valuation and a load as a number:
+  a value's narrow widths are not its word's low bits in general (a right
+  shift at 8 bits is not the low byte of one at 64), so the old store could
+  not be lowered from the register holding the word. Probes are unchanged.
+- *Each node one instruction*: `MOVZX`, `MOV r32`, `MOV r64` loads through
+  the register holding the reference (`Injected::byte_read`, `dword_read`,
+  `word_read`), the same `MOV` for a reference (`ref_read`), a byte,
+  doubleword and word store (`Loan::store_injected`) and a reference's
+  store as a word's (`store_ref_injected`). An offset is a word node, the
+  `ADD` of the address and the amount (`offset_adds`), lowered by
+  `lower_nodes`. Two-byte accesses (no `MOVZX r, word` in the model) and the
+  typed copy are refused.
+
+**What follows.** The rest of the lowering under `Site::Meets`
+(`issues/bytes-level-lowering-routines.md`, `bytes-level-lowering-loops.md`,
+`bytes-level-lowering-world.md`), the translation of FunctionIR programs
 and the comparison over `crates/linked`'s exports
 (`issues/bytes-level-translation.md`), and the passes
 (`issues/bytes-level-passes.md`).

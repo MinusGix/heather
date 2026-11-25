@@ -242,10 +242,10 @@ theorem Instr::step_renames_at(self instr: Instr, r: Renaming, blocks, blocks2: 
         },
         Load(bytes, output, place) => related_map_then(config_renamed(r), rename, refs_renamed(place), λ loc =>
             related_same_then(config_renamed(r), c.memory.load_renames(r, m, memory, loc, bytes), λ x =>
-                ConfigRenamed(locals := locals.set_word(output, λ (w: Nat) => BitVec::ofNat(x)), memory := memory, io := refl))),
+                ConfigRenamed(locals := locals.set_word(output, word_value(x)), memory := memory, io := refl))),
         Store(bytes, place, value) => related_map_then(config_renamed(r), rename, refs_renamed(place), λ loc =>
             related_then(heap_renamed(r), config_renamed(r),
-                c.memory.put_renames(blocks, r, m, blocks2, memory, written, loc, Piece::plain(word_piece(bytes, c.locals.words(8 * bytes, value)))),
+                c.memory.put_renames(blocks, r, m, blocks2, memory, written, loc, Piece::plain(low_bytes(bytes, c.locals.word(value)))),
                 λ a b h => ConfigRenamed(locals := locals, memory := h, io := refl))),
         LoadRef(output, place) => related_map_then(config_renamed(r), rename, refs_renamed(place), λ loc =>
             related_map_then(config_renamed(r), rename, c.memory.load_ref_renames(r, m, memory, loc), λ target =>
