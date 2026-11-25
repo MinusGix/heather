@@ -2697,11 +2697,25 @@ section is corrected.
 
   A `Struct` is what a derived instance supplies, found the way §19's
   representations are found. Variants and stores are added the same way,
-  each with its probe; neither is in the first build's fragment. No
-  inhabitant is asked of a type: see the totals below.
+  each with its probe; neither is in the first build's fragment.
+- **The pad** (amended the same day, from the build's first report). A
+  sequence's total read is its type's own total accessor, and what it
+  answers past the end is that accessor's: `[u64; n]` and `Bytes(n)` need
+  nothing. No total read of a `List<A>` exists at every `A`
+  (`read(False, Nil, 0)`), so `List<A>` and `[A; n]` are sequences at an
+  element structure that has a pad: zero for a word, a record's derived
+  default where every field has one, and for a type parameter a field of
+  its opaque structure, quantified in the pin's statement, so the function
+  takes no `T`. A source reading through that accessor pins by `refl`; one
+  reading through a proof-consuming accessor pins by one library lemma per
+  site, which is confined to generic library code. The meaning does not
+  take proofs as input: its type would depend on the states it computes.
 - **Words** (proposed beyond `Nat`). A word shape decodes to the source's
-  word type at that width; an atom that indexes is read through the type's
-  `toNat`, which is how the sources state their bounds
+  word type at that width. A selection's index is the word itself, a
+  number or a word at a width, and an instance reads it at its own
+  accessor's type (`Bytes::at` takes the `u64`; a number round-tripped
+  through `toNat` does not spell it); the decider and the obligations read
+  an index through `toNat`, which is how the sources state their bounds
   (`∥i.toNat() < count.toNat()∥`).
 - **The single sort** is `Dyn(tys)`, a code and a value of its decoding.
   A word is a `Dyn`, so the body has one kind of variable (§15.1) and one
@@ -2714,9 +2728,11 @@ section is corrected.
   `over: Sel → (S → S) → S → S` and a Boolean "this step fits this owner";
   the laws hold where the step fits and are relative to what was read
   there (the sixth experiment's relative fit: the same code, for a window
-  the same length). A step that does not fit reads its owner's own value
-  back and modifies nothing, so no inhabitant is needed and none is read.
-  This replaces `steps.hthr`'s `StepModelLaws`, `PathLawsOn` and `KeepsFit`
+  the same length; a fourth component of the model, "what is written is
+  like what was read"). A step that does not fit modifies nothing; what it
+  reads is whatever the total accessor answers and no law speaks of it
+  (reading the owner back, as the first text here had it, would make the
+  read's code the bound's decision, stuck at an open index). This replaces `steps.hthr`'s `StepModelLaws`, `PathLawsOn` and `KeepsFit`
   in place, and `Steps::apart_sound` is re-proved over it: the experiment
   showed the relative laws at the `Option`-valued paths and pinned through
   the total forms, and the agreement of the two was not built. One
@@ -2750,8 +2766,14 @@ Func  = signature (§15.8), body
   value itself), and output `k` is the `Dyn` of its recorded code and the
   `k`th projection of `j`. Every variable an arm writes is an output.
   Where an arm has a leaf that is not a `Yield` (an early return on an
-  inner path), the meaning is the surface's join point: `rest` is bound
-  once as a function of the outputs and each `Yield` calls it. A branch
+  inner path), `rest` is bound once as a function of the outputs and each
+  `Yield` calls it. The surface's own join point is designed and not built
+  (it copies what follows into each arm that falls through), and the bound
+  form converts to the copied one, so the pin holds and the meaning stays
+  linear in the body; the doubling is the source's own term's. A join
+  whose arms' codes disagree with its recorded ones has no meaning: the
+  meaning is optional at the points where a cast can fail, decided from
+  the codes outside the convoy. A branch
   that ends the body is the join none of whose leaves is a `Yield`; it is
   not a second node. In every case what follows a join is read once.
 - **A view as an output.** A read view chosen by a join is an output like
@@ -2901,8 +2923,9 @@ moved.
 - Sequences were one built-in shape decoding to `List`; the cited sources
   read `[u64; 16]` and `Bytes(n)`. A sequence is now a name with a
   structure, and a bound is its accessor's precondition.
-- Reads through a default needed an inhabitant per type; a step that does
-  not fit now reads its owner back, and a fresh object takes its value.
+- Reads through a default asked an inhabitant of every type; the pad is
+  now the accessor's own, asked only of a sequence's element where its
+  accessor has none, and a fresh object takes its value.
 - The step was spelled twice (total in the meaning, `Option`-valued in the
   laws); it is stated once, total.
 - The meaning was total for every function and safety silent at `Going`,
