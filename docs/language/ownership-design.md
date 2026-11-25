@@ -1024,8 +1024,13 @@ The checker is one forward pass over the body with a state per place:
 - A death removes the viewer, or restores `whole`. The death of an owner
   is a take, so it needs the place `whole`: a view cannot outlive what it
   views.
-- A join is the meet, with regions coarsened. A type that may not be
-  dropped may not be `gone` by weakening.
+- A join is the meet, with regions coarsened: a view live on both arms in
+  one mode stays, its region the union of the arms' (a region is a window,
+  the whole object, or a union of regions, so the coarsening loses nothing
+  but which arm was taken); any other view is dead after the join. An arm's
+  residuals are owed under its test, as closed data with the test as their
+  hypothesis. A type that may not be dropped may not be `gone` by
+  weakening.
 - Overlap is decided on the places' steps where they are closed; otherwise
   it is a residual obligation. A key access emits `Valid`; an index its
   bound; a call the callee's precondition.
@@ -1284,6 +1289,25 @@ loan's length. The owner's read of a lent part is refused and proved sound
 (`Sim::owner_reads`; `loan_unchecked_agrees` runs a program whose residual
 fails and whose runs agree); the owner's write inside the window is refused
 with `clobber_control` (the run reads 9, the meaning 6).
+
+*A branch with a join* (2026-11-25). A body is a tree, `If(test, a, b,
+rest)`, the arms binding as many words and views as each other (an arm's
+words are the join's values, as a phi's). The checker joins the arms'
+places by the meet above; a residual of an arm is `Under(test, arm, owed)`,
+which holds where the test answering otherwise or the owed holding, so the
+residual is closed data whose hypothesis is the test. The proof needed
+nothing per arm that survives the join: the arm taken has the invariant at
+its own places (by the same induction), and `Sim::weaken` gives it at the
+meet's, since the meet only drops views and a union region covers each
+arm's (`Covers`, `Coarser`); no flag records which arm ran. Coarsening to
+the whole object was tried first and refused writes apart from both arms'
+windows; the union is exact and simpler to prove, a region's licence being
+pointwise (`Region::Clear`). Controls: a view read after a join where one
+arm ended it (`after_join_control`, 9 against 5); the same write without the
+branch, whose residual fails (`unguarded_control`); the write in the other
+arm, whose residual is owed under the other answer and fails there
+(`swapped_control`); a write into either arm's window while the joined view
+lives (`coarse_held_control`, 7 against 6).
 
 ### 15.7 Settled by Minus, 2026-11-25, and what is still open
 

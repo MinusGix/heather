@@ -91,14 +91,32 @@ inductive Stmt {
     CallView(g: Nat, args: List<Atom>, t: Nat),
 }
 
+// A branch's test, on words bound before it: `a <= b`.
+inductive Cond { Le(a: Atom, b: Atom) }
+
+fn Cond::test(self cd: Cond, ws: List<Nat>) → Bool { match cd { Le(a, b) => a.val(ws).leb(b.val(ws)) } }
+
+fn Cond::bound(self cd: Cond, nw: Nat) → Bool { match cd { Le(a, b) => a.bound(nw) && b.bound(nw) } }
+
+// A body: statements in order, and branches. `If(cd, a, b, rest)` runs `a`
+// where the test holds and `b` where it does not, then `rest` from the
+// join. The arms bind as many words and views as each other (the words an
+// arm binds are the join's values, as a phi's are).
+inductive Body { End, Do(o: Stmt, rest: Body), If(cd: Cond, a: Body, b: Body, rest: Body) }
+
+// Statements, then a body.
+fn block(ops: List<Stmt>, last: Body) → Body { match ops { Nil => last, Cons(o, rest) => Do(o, block(rest, last)) } }
+
+fn seq(ops: List<Stmt>) → Body { block(ops, End) }
+
 // What a function answers: a word, or the window `lo..lo+n` of its
 // parameter as a read view.
 inductive Ret { RWord(a: Atom), RView(lo: Atom, n: Atom) }
 
-record Func { mode: Mode, words: Nat, body: List<Stmt>, ret: Ret }
+record Func { mode: Mode, words: Nat, body: Body, ret: Ret }
 
 // The function a table has nowhere: it reads its parameter and answers 0.
-fn Func::none() → Func { Func(Reads, 0, Nil, RWord(Lit(0))) }
+fn Func::none() → Func { Func(Reads, 0, End, RWord(Lit(0))) }
 
 // ---------------------------------------------------------------------------
 // The meaning and the run of a call, as a world
@@ -151,8 +169,12 @@ fn Stmt::eval1(self o: Stmt, w: World, s: Sem) → Sem {
     }
 }
 
-fn mean_body(w: World, ops: List<Stmt>, s: Sem) → Sem {
-    match ops { Nil => s, Cons(o, rest) => mean_body(w, rest, o.eval1(w, s)) }
+fn mean_body(w: World, ops: Body, s: Sem) → Sem {
+    match ops {
+        End => s,
+        Do(o, rest) => mean_body(w, rest, o.eval1(w, s)),
+        If(cd, a, b, rest) => mean_body(w, rest, match cd.test(s.words) { True => mean_body(w, a, s), False => mean_body(w, b, s) }),
+    }
 }
 
 fn Ret::word(self r: Ret, ws: List<Nat>) → Nat { match r { RWord(a) => a.val(ws), RView(_, _) => 0 } }
@@ -212,8 +234,12 @@ fn Stmt::run2(self o: Stmt, w: World, r: Ref, m: Exec) → Exec {
     }
 }
 
-fn run_body(w: World, r: Ref, ops: List<Stmt>, m: Exec) → Exec {
-    match ops { Nil => m, Cons(o, rest) => run_body(w, r, rest, o.run2(w, r, m)) }
+fn run_body(w: World, r: Ref, ops: Body, m: Exec) → Exec {
+    match ops {
+        End => m,
+        Do(o, rest) => run_body(w, r, rest, o.run2(w, r, m)),
+        If(cd, a, b, rest) => run_body(w, r, rest, match cd.test(m.words) { True => run_body(w, r, a, m), False => run_body(w, r, b, m) }),
+    }
 }
 
 // The view a function answers, relative to its reference: the window cut
@@ -259,23 +285,28 @@ fn sig_at(sigs: List<Sig>, g: Nat) → Sig { sigs.nth(g).unwrap_or(Func::none().
 
 fn sigs_of(fns: List<Func>) → List<Sig> { fns.map(λ f => f.sig()) }
 
-// What a live view covers: a window of the object, or the whole of it (a
-// view a callee answered, which the signature places only in its
-// parameter).
-inductive Region { Whole, Win(lo: Atom, n: Atom) }
+// What a live view covers: a window of the object, the whole of it (a view
+// a callee answered, which the signature places only in its parameter), or
+// the union of two regions (a view the arms of a branch opened on different
+// windows: the join's union of their place sets).
+inductive Region { Whole, Win(lo: Atom, n: Atom), Both(a: Region, b: Region) }
 
 record LView { t: Nat, md: Mode, region: Region }
 
 // What the checker defers: an obligation of `atom.hthr` (here two windows
-// apart, `Spans`), or a callee's precondition at the call's arguments.
-inductive Owed { Due(o: Obligation), Pre(g: Nat, args: List<Atom>) }
+// apart, `Spans`), a callee's precondition at the call's arguments, or
+// either owed in an arm of a branch, under the arm's test.
+inductive Owed { Due(o: Obligation), Pre(g: Nat, args: List<Atom>), Under(cd: Cond, yes: Bool, o: Owed) }
 
 fn Owed::Holds(self o: Owed, pres: Nat → List<Nat> → Type, ws: List<Nat>) → Type {
     match o {
         Due(ob) => ob.Holds(ws),
         Pre(g, args) => pres(g, vals(args, ws)),
+        Under(cd, yes, o2) => cd.test(ws) = yes → o2.Holds(pres, ws),
     }
 }
+
+fn under(cd: Cond, yes: Bool, rs: List<Owed>) → List<Owed> { rs.map(λ o => Under(cd, yes, o)) }
 
 fn dues(r: Option<List<Obligation>>) → Option<List<Owed>> { r.map(λ os => os.map(λ ob => Due(ob))) }
 
@@ -284,11 +315,20 @@ fn Owed::All(rs: List<Owed>, pres: Nat → List<Nat> → Type, ws: List<Nat>) �
 }
 
 // Two regions apart: never with the whole object, decided or owed for two
-// windows.
+// windows, piece by piece for a union.
+fn Region::license_win(lo1, n1: Atom, b: Region) → Option<List<Owed>> {
+    match b {
+        Whole => None,
+        Win(lo2, n2) => dues(Spans(lo1, n1, lo2, n2).settle()),
+        Both(b1, b2) => Region::license_win(lo1, n1, b1).and_then(λ r1 => Region::license_win(lo1, n1, b2).map(λ r2 => r1 ++ r2)),
+    }
+}
+
 fn Region::license(self a: Region, b: Region) → Option<List<Owed>> {
     match a {
         Whole => None,
-        Win(lo1, n1) => match b { Whole => None, Win(lo2, n2) => dues(Spans(lo1, n1, lo2, n2).settle()) },
+        Win(lo1, n1) => Region::license_win(lo1, n1, b),
+        Both(a1, a2) => a1.license(b).and_then(λ r1 => a2.license(b).map(λ r2 => r1 ++ r2)),
     }
 }
 
@@ -350,14 +390,50 @@ fn Stmt::check(self o: Stmt, mode: Mode, sigs: List<Sig>, c: Places) → Option<
     }
 }
 
-fn check_body(ops: List<Stmt>, mode: Mode, sigs: List<Sig>, c: Places) → Option<List<Owed>> {
-    match ops {
-        Nil => Some(Nil),
-        Cons(o, rest) => o.check(mode, sigs, c).and_then(λ st => check_body(rest, mode, sigs, st.next).map(λ rs => st.rs ++ rs)),
+// The join of two arms: the meet of their live views. A view live on both
+// arms with one mode stays, its region the union of the arms' where they
+// disagree on it; any other view is dead after the join.
+fn Mode::alike(self a, b: Mode) → Bool { match a { Reads => match b { Reads => True, Writes => False }, Writes => match b { Reads => False, Writes => True } } }
+
+fn Region::alike(self a, b: Region) → Bool {
+    match a {
+        Whole => match b { Whole => True, Win(_, _) => False, Both(_, _) => False },
+        Win(lo1, n1) => match b { Whole => False, Win(lo2, n2) => lo1.same(lo2) && n1.same(n2), Both(_, _) => False },
+        Both(_, _) => False,
     }
 }
 
-fn check_fn(sigs: List<Sig>, f: Func) → Option<List<Owed>> { check_body(f.body, f.mode, sigs, Places(Nil, 0, f.words)) }
+fn Region::coarsen(self a, b: Region) → Region { match a.alike(b) { True => a, False => Both(a, b) } }
+
+fn LView::met(self lv: LView, other: List<LView>) → List<LView> {
+    match find_live(other, lv.t) {
+        None => Nil,
+        Some(o) => match lv.md.alike(o.md) { True => [LView(lv.t, lv.md, lv.region.coarsen(o.region))], False => Nil },
+    }
+}
+
+fn meet(la, lb: List<LView>) → List<LView> { match la { Nil => Nil, Cons(lv, rest) => lv.met(lb) ++ meet(rest, lb) } }
+
+fn join(ca, cb: Places) → Option<Places> {
+    (ca.nviews.same(cb.nviews) && ca.nw.same(cb.nw)).then(Some(Places(meet(ca.live, cb.live), ca.nviews, ca.nw)))
+}
+
+// The arms joined: each arm's residuals owed under its test.
+fn check_join(cd: Cond, sa, sb: Next) → Option<Next> { join(sa.next, sb.next).map(λ cj => Next(cj, under(cd, True, sa.rs) ++ under(cd, False, sb.rs))) }
+
+// A step, then the rest from where it leaves the places.
+fn Next::then(h: Option<Next>, k: Places → Option<Next>) → Option<Next> { h.and_then(λ st => k(st.next).map(λ sr => Next(sr.next, st.rs ++ sr.rs))) }
+
+fn check_body(ops: Body, mode: Mode, sigs: List<Sig>, c: Places) → Option<Next> {
+    match ops {
+        End => Some(Next(c, Nil)),
+        Do(o, rest) => Next::then(o.check(mode, sigs, c), λ c2 => check_body(rest, mode, sigs, c2)),
+        If(cd, a, b, rest) => Next::then(cd.bound(c.nw).then(check_body(a, mode, sigs, c).and_then(λ sa => check_body(b, mode, sigs, c).and_then(λ sb => check_join(cd, sa, sb)))),
+            λ c2 => check_body(rest, mode, sigs, c2)),
+    }
+}
+
+fn check_fn(sigs: List<Sig>, f: Func) → Option<List<Owed>> { check_body(f.body, f.mode, sigs, Places(Nil, 0, f.words)).map(λ st => st.rs) }
 
 // ---------------------------------------------------------------------------
 // What a function promises
@@ -809,19 +885,37 @@ theorem keeps_all(file1, file2: List<List<Nat>>, r: Ref, same: (p: Nat) → list
 // ---------------------------------------------------------------------------
 // The licence
 
-// The span a live view covers, in the reference's buffer.
-fn Region::span(self rg: Region, r: Ref, ws: List<Nat>) → Span { match rg { Whole => Span(r.base, r.len), Win(lo, n) => Span(r.base + lo.val(ws), n.val(ws)) } }
-
-// Two regions apart, in the words: never with the whole object.
-fn Region::Clear(self a: Region, b: Region, ws: List<Nat>) → Type {
-    match a {
-        Whole => False,
-        Win(lo1, n1) => match b { Whole => False, Win(lo2, n2) => Span(lo1.val(ws), n1.val(ws)).apart(Span(lo2.val(ws), n2.val(ws))).IsTrue() },
+// Whether a region covers position `p` of the reference's buffer, in the
+// words.
+fn Region::hits(self rg: Region, r: Ref, ws: List<Nat>, p: Nat) → Bool {
+    match rg {
+        Whole => Span(r.base, r.len).has(p),
+        Win(lo, n) => Span(r.base + lo.val(ws), n.val(ws)).has(p),
+        Both(a, b) => a.hits(r, ws, p) || b.hits(r, ws, p),
     }
 }
 
+// Two regions apart, in the words: no position covered by both.
+fn Region::Clear(self a: Region, b: Region, r: Ref, ws: List<Nat>) → Type { (p: Nat) → a.hits(r, ws, p).IsTrue() → ¬b.hits(r, ws, p).IsTrue() }
+
 // An access the live view meets is clear of it.
-fn LView::Clear(self lv: LView, md: Mode, rg: Region, ws: List<Nat>) → Type { lv.meets(md) = True → lv.region.Clear(rg, ws) }
+fn LView::Clear(self lv: LView, md: Mode, rg: Region, r: Ref, ws: List<Nat>) → Type { lv.meets(md) = True → lv.region.Clear(rg, r, ws) }
+
+theorem Bool::or_true_cases(a, b: Bool, h: (a || b).IsTrue()): a.IsTrue() ∨ b.IsTrue() {
+    (match a as λ x => (x || b).IsTrue() → x.IsTrue() ∨ b.IsTrue() { True => λ _ => Inl(trivial), False => λ hb => Inr(hb) })(h)
+}
+
+theorem Bool::or_not_true(a, b: Bool, na: ¬a.IsTrue(), nb: ¬b.IsTrue()): ¬(a || b).IsTrue() {
+    λ h => match Bool::or_true_cases(a, b, h) { Inl(x) => na(x), Inr(y) => nb(y) }
+}
+
+theorem Bool::or_true_left(a, b: Bool, h: a.IsTrue()): (a || b).IsTrue() {
+    (match a as λ x => x.IsTrue() → (x || b).IsTrue() { True => λ _ => trivial, False => λ no => false_elim(no) })(h)
+}
+
+theorem Bool::or_true_right(a, b: Bool, h: b.IsTrue()): (a || b).IsTrue() {
+    (match a as λ x => (x || b).IsTrue() { True => trivial, False => h })
+}
 
 theorem Owed::all_append(rs: List<Owed>, pres: Nat → List<Nat> → Type): (qs: List<Owed>) → (ws: List<Nat>) → Owed::All(rs ++ qs, pres, ws) → Owed::All(rs, pres, ws) ∧ Owed::All(qs, pres, ws) {
     match rs {
@@ -848,27 +942,65 @@ theorem spans_license_sound(lo1, n1, lo2, n2: Atom, pres: Nat → List<Nat> → 
     Spans(lo1, n1, lo2, n2).settle_sound(ws, st.witness, st.proof.left, Owed::all_dues(st.witness, pres, ws, owed))
 }
 
-theorem Region::license_sound(self a: Region, b: Region, pres: Nat → List<Nat> → Type, ws: List<Nat>, r1: List<Owed>, ok: a.license(b) = Some(r1),
-    hold: Owed::All(r1, pres, ws)): a.Clear(b, ws)
+theorem Region::license_win_sound(lo1, n1: Atom, b: Region, pres: Nat → List<Nat> → Type, ws: List<Nat>, r: Ref): (r1: List<Owed>) →
+    Region::license_win(lo1, n1, b) = Some(r1) → Owed::All(r1, pres, ws) → Win(lo1, n1).Clear(b, r, ws)
 {
-    (match a as λ x => x.license(b) = Some(r1) → x.Clear(b, ws) {
-        Whole => λ no => absurd(no),
-        Win(lo1, n1) => (match b as λ y => Win(lo1, n1).license(y) = Some(r1) → Win(lo1, n1).Clear(y, ws) {
-            Whole => λ no => absurd(no),
-            Win(lo2, n2) => λ ok2 => spans_license_sound(lo1, n1, lo2, n2, pres, ws, r1, ok2, hold),
-        }),
-    })(ok)
+    match b {
+        Whole => λ r1 no _ => absurd(no),
+        Win(lo2, n2) => λ r1 ok hold => {
+            let ap = spans_license_sound(lo1, n1, lo2, n2, pres, ws, r1, ok, hold);
+            λ p h1 h2 => {
+                let x1: (Span(r.base + lo1.val(ws), n1.val(ws)).has(p).IsTrue()) = h1;
+                let x2: (Span(r.base + lo2.val(ws), n2.val(ws)).has(p).IsTrue()) = h2;
+                omega(ap, x1, x2)
+            }
+        },
+        Both(b1, b2) => λ r1 ok hold => {
+            let st = Option::and_then_some(Region::license_win(lo1, n1, b1), λ q1 => Region::license_win(lo1, n1, b2).map(λ q2 => q1 ++ q2), r1, ok);
+            let mp = option_map_some(Region::license_win(lo1, n1, b2), λ q2 => st.witness ++ q2, r1, st.proof.right);
+            let parts = Owed::all_append(st.witness, pres, mp.witness, ws, j(sym(mp.proof.right), λ q _ => Owed::All(q, pres, ws), hold));
+            let c1 = Region::license_win_sound(lo1, n1, b1, pres, ws, r, st.witness, st.proof.left, parts.left);
+            let c2 = Region::license_win_sound(lo1, n1, b2, pres, ws, r, mp.witness, mp.proof.left, parts.right);
+            λ p h1 => Bool::or_not_true(b1.hits(r, ws, p), b2.hits(r, ws, p), c1(p, h1), c2(p, h1))
+        },
+    }
 }
 
-theorem LView::license_sound(self lv: LView, md: Mode, rg: Region, pres: Nat → List<Nat> → Type, ws: List<Nat>, r1: List<Owed>, ok: lv.license(md, rg) = Some(r1),
-    hold: Owed::All(r1, pres, ws)): lv.Clear(md, rg, ws)
+theorem Region::license_sound(self a: Region, b: Region, pres: Nat → List<Nat> → Type, ws: List<Nat>, r: Ref): (r1: List<Owed>) → a.license(b) = Some(r1) →
+    Owed::All(r1, pres, ws) → a.Clear(b, r, ws)
 {
-    λ meets => lv.region.license_sound(rg, pres, ws, r1, j(meets, λ b _ => (match b { True => lv.region.license(rg), False => Some(Nil<Owed>) }) = Some(r1), ok), hold)
+    match a {
+        Whole => λ r1 no _ => absurd(no),
+        Win(lo1, n1) => λ r1 ok hold => Region::license_win_sound(lo1, n1, b, pres, ws, r, r1, ok, hold),
+        Both(a1, a2) => λ r1 ok hold => {
+            let st = Option::and_then_some(a1.license(b), λ q1 => a2.license(b).map(λ q2 => q1 ++ q2), r1, ok);
+            let mp = option_map_some(a2.license(b), λ q2 => st.witness ++ q2, r1, st.proof.right);
+            let parts = Owed::all_append(st.witness, pres, mp.witness, ws, j(sym(mp.proof.right), λ q _ => Owed::All(q, pres, ws), hold));
+            let c1 = a1.license_sound(b, pres, ws, r, st.witness, st.proof.left, parts.left);
+            let c2 = a2.license_sound(b, pres, ws, r, mp.witness, mp.proof.left, parts.right);
+            λ p h => match Bool::or_true_cases(a1.hits(r, ws, p), a2.hits(r, ws, p), h) { Inl(x) => c1(p, x), Inr(y) => c2(p, y) }
+        },
+    }
+}
+
+// Nothing is licensed against the whole object.
+theorem Region::license_whole(self a: Region): a.license(Whole) = None {
+    match a {
+        Whole => refl,
+        Win(_, _) => refl,
+        Both(a1, a2) => j(sym(a1.license_whole()), λ o _ => o.and_then(λ r1 => a2.license(Whole).map(λ r2 => r1 ++ r2)) = None, refl),
+    }
+}
+
+theorem LView::license_sound(self lv: LView, md: Mode, rg: Region, pres: Nat → List<Nat> → Type, ws: List<Nat>, r: Ref, r1: List<Owed>, ok: lv.license(md, rg) = Some(r1),
+    hold: Owed::All(r1, pres, ws)): lv.Clear(md, rg, r, ws)
+{
+    λ meets => lv.region.license_sound(rg, pres, ws, r, r1, j(meets, λ b _ => (match b { True => lv.region.license(rg), False => Some(Nil<Owed>) }) = Some(r1), ok), hold)
 }
 
 // Every live view the access meets is clear of it.
-theorem license_live_sound(live: List<LView>, md: Mode, rg: Region, pres: Nat → List<Nat> → Type, ws: List<Nat>): (rs: List<Owed>) → license_live(live, md, rg) = Some(rs) →
-    Owed::All(rs, pres, ws) → (lv: LView) → Mem(lv, live) → lv.Clear(md, rg, ws)
+theorem license_live_sound(live: List<LView>, md: Mode, rg: Region, pres: Nat → List<Nat> → Type, ws: List<Nat>, r: Ref): (rs: List<Owed>) → license_live(live, md, rg) = Some(rs) →
+    Owed::All(rs, pres, ws) → (lv: LView) → Mem(lv, live) → lv.Clear(md, rg, r, ws)
 {
     match live {
         Nil => λ rs ok hold lv m => false_elim(m),
@@ -877,34 +1009,28 @@ theorem license_live_sound(live: List<LView>, md: Mode, rg: Region, pres: Nat �
             let mp = option_map_some(license_live(rest, md, rg), λ r2 => st.witness ++ r2, rs, st.proof.right);
             let parts = Owed::all_append(st.witness, pres, mp.witness, ws, j(sym(mp.proof.right), λ q _ => Owed::All(q, pres, ws), hold));
             λ lv m => match m {
-                Inl(e) => j(sym(e), λ x _ => x.Clear(md, rg, ws), h.license_sound(md, rg, pres, ws, st.witness, st.proof.left, parts.left)),
-                Inr(m2) => license_live_sound(rest, md, rg, pres, ws, mp.witness, mp.proof.left, parts.right, lv, m2),
+                Inl(e) => j(sym(e), λ x _ => x.Clear(md, rg, r, ws), h.license_sound(md, rg, pres, ws, r, st.witness, st.proof.left, parts.left)),
+                Inr(m2) => license_live_sound(rest, md, rg, pres, ws, r, mp.witness, mp.proof.left, parts.right, lv, m2),
             }
         },
     }
 }
 
-// Inside a view that lies in a region clear of `b`: outside `b`.
-theorem Region::clear_misses(self a: Region, b: Region, ws: List<Nat>, r, v: Ref, cl: a.Clear(b, ws), within: Span(v.base, v.len).Within(a.span(r, ws)),
-    p: Nat, hp: Span(v.base, v.len).has(p).IsTrue()): ¬b.span(r, ws).has(p).IsTrue()
+// Each live view the licence passed answered it.
+theorem license_live_each(live: List<LView>, md: Mode, rg: Region): (rs: List<Owed>) → license_live(live, md, rg) = Some(rs) →
+    (lv: LView) → Mem(lv, live) → Exists<List<Owed>>(λ r1 => lv.license(md, rg) = Some(r1))
 {
-    (match a as λ x => x.Clear(b, ws) → Span(v.base, v.len).Within(x.span(r, ws)) → ¬b.span(r, ws).has(p).IsTrue() {
-        Whole => λ no _ => false_elim(no),
-        Win(lo1, n1) => (match b as λ y => Win(lo1, n1).Clear(y, ws) → Span(v.base, v.len).Within(Win(lo1, n1).span(r, ws)) → ¬y.span(r, ws).has(p).IsTrue() {
-            Whole => λ no _ => false_elim(no),
-            Win(lo2, n2) => λ c2 w2 hit => {
-                let ap: (Span(lo1.val(ws), n1.val(ws)).apart(Span(lo2.val(ws), n2.val(ws))).IsTrue()) = c2;
-                let inw: (Span(r.base + lo1.val(ws), n1.val(ws)).has(p).IsTrue()) = w2(p, hp);
-                let hit2: (Span(r.base + lo2.val(ws), n2.val(ws)).has(p).IsTrue()) = hit;
-                omega(ap, inw, hit2)
-            },
-        }),
-    })(cl, within)
-}
-
-// Nothing is clear of the whole object.
-theorem Region::clear_whole(self a: Region, ws: List<Nat>, cl: a.Clear(Whole, ws)): False {
-    (match a as λ x => x.Clear(Whole, ws) → False { Whole => λ no => no, Win(_, _) => λ no => no })(cl)
+    match live {
+        Nil => λ rs ok lv m => false_elim(m),
+        Cons(h, rest) => λ rs ok => {
+            let st = Option::and_then_some(h.license(md, rg), λ r1 => license_live(rest, md, rg).map(λ r2 => r1 ++ r2), rs, ok);
+            let mp = option_map_some(license_live(rest, md, rg), λ r2 => st.witness ++ r2, rs, st.proof.right);
+            λ lv m => match m {
+                Inl(e) => j(sym(e), λ x _ => Exists<List<Owed>>(λ r1 => x.license(md, rg) = Some(r1)), Exists(st.witness, st.proof.left)),
+                Inr(m2) => license_live_each(rest, md, rg, mp.witness, mp.proof.left, lv, m2),
+            }
+        },
+    }
 }
 
 theorem find_live_sound(live: List<LView>, t: Nat): (lv: LView) → find_live(live, t) = Some(lv) → Mem(lv, live) ∧ (lv.t = t) {
@@ -940,7 +1066,7 @@ theorem is_lent_sound(live: List<LView>, t: Nat, h: is_lent(live, t) = True): Ex
 // says it covers, and reads what the meaning's view holds.
 record ViewOk(rg: Region, v: Ref, val: List<Nat>, r: Ref, file: List<List<Nat>>, ws: List<Nat>) {
     at_b: v.b = r.b,
-    within: Span(v.base, v.len).Within(rg.span(r, ws)),
+    within: (p: Nat) → Span(v.base, v.len).has(p).IsTrue() → rg.hits(r, ws, p).IsTrue(),
     reads: (i: Nat) → word(val, i) = rget(file, v, i),
 }
 
@@ -1363,8 +1489,8 @@ theorem step_set(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k
     let g2 = Bool::and_true_parts(k.mode.writes(), i.bound(c.nw), g1.left);
     let i_ws: (i.val(ws) = i.val(s.words)) = i.val_stable(s.words, ws, pre, i.bound_at(c, s, g2.right, sim.nw));
     let misses = λ (lv: LView) (mem: Mem(lv, c.live)) (q: Nat) (hq: Span(ref_at(m.views, lv.t).base, ref_at(m.views, lv.t).len).has(q).IsTrue()) (_: i.val(s.words) < k.r.len) => {
-        let cl = license_live_sound(c.live, Writes, Win(i, Lit(1)), k.pres, ws, lic.witness, lic.proof.left, hold_rs, lv, mem, refl);
-        let no: (¬Span(k.r.base + i.val(ws), 1).has(q).IsTrue()) = lv.region.clear_misses(Win(i, Lit(1)), ws, k.r, ref_at(m.views, lv.t), cl, sim.views(lv, mem).right.within, q, hq);
+        let cl = license_live_sound(c.live, Writes, Win(i, Lit(1)), k.pres, ws, k.r, lic.witness, lic.proof.left, hold_rs, lv, mem, refl);
+        let no: (¬Span(k.r.base + i.val(ws), 1).has(q).IsTrue()) = cl(q, sim.views(lv, mem).right.within(q, hq));
         let ne: (q ≠ k.r.base + i.val(s.words)) = λ e => no(omega(e, i_ws));
         ne
     };
@@ -1376,7 +1502,7 @@ theorem step_set(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k
 
 // A narrowed reference lies in its window, read in the final words.
 theorem narrow_within(r: Ref, lo, n: Atom, ws: List<Nat>, lov, nv: Nat, lo_ws: lo.val(ws) = lov, n_ws: n.val(ws) = nv):
-    Span(narrow(r, lov, nv).base, narrow(r, lov, nv).len).Within(Win(lo, n).span(r, ws))
+    (q: Nat) → Span(narrow(r, lov, nv).base, narrow(r, lov, nv).len).has(q).IsTrue() → Win(lo, n).hits(r, ws, q).IsTrue()
 {
     λ q h => {
         let inside: (Span(r.base + lo.val(ws), n.val(ws)).has(q).IsTrue()) = omega(h, lo_ws, n_ws);
@@ -1387,10 +1513,10 @@ theorem narrow_within(r: Ref, lo, n: Atom, ws: List<Nat>, lov, nv: Nat, lo_ws: l
 // A live view clear of a new view's window is apart from its reference,
 // both ways.
 theorem clear_apart(r: Ref, lo, n: Atom, ws: List<Nat>, lov, nv: Nat, lo_ws: lo.val(ws) = lov, n_ws: n.val(ws) = nv, rg: Region, v: Ref,
-    cl: rg.Clear(Win(lo, n), ws), within: Span(v.base, v.len).Within(rg.span(r, ws))): narrow(r, lov, nv).Apart(v) ∧ v.Apart(narrow(r, lov, nv))
+    cl: rg.Clear(Win(lo, n), r, ws), within: (p: Nat) → Span(v.base, v.len).has(p).IsTrue() → rg.hits(r, ws, p).IsTrue()): narrow(r, lov, nv).Apart(v) ∧ v.Apart(narrow(r, lov, nv))
 {
     let inwin = narrow_within(r, lo, n, ws, lov, nv, lo_ws, n_ws);
-    let gap: v.Apart(narrow(r, lov, nv)) = λ q hv hn => rg.clear_misses(Win(lo, n), ws, r, v, cl, within, q, hv)(inwin(q, hn));
+    let gap: v.Apart(narrow(r, lov, nv)) = λ q hv hn => cl(q, within(q, hv))(inwin(q, hn));
     ⟨λ q hn hv => gap(q, hv, hn), gap⟩
 }
 
@@ -1398,7 +1524,7 @@ theorem clear_apart(r: Ref, lo, n: Atom, ws: List<Nat>, lov, nv: Nat, lo_ws: lo.
 // view holds it at its slot, and it is apart from each live view it meets.
 theorem Sim::view_core({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>}, self sim: Sim(k, c, s, m, ws), t: Nat, md: Mode, lo, n: Atom, et: t = c.nviews,
     lov, nv: Nat, lo_ws: lo.val(ws) = lov, n_ws: n.val(ws) = nv, mdok: md.writes() = True → k.mode.writes() = True,
-    clears: (lv: LView) → Mem(lv, c.live) → (md.writes() || lv.md.writes()) = True → lv.region.Clear(Win(lo, n), ws)):
+    clears: (lv: LView) → Mem(lv, c.live) → (md.writes() || lv.md.writes()) = True → lv.region.Clear(Win(lo, n), k.r, ws)):
     Sim(k, Places(Cons(LView(t, md, Win(lo, n)), c.live), c.nviews + 1, c.nw), s.open(window(s.cur, lov, nv), lov), Exec(m.file, m.views ++ [narrow(k.r, lov, nv)], m.words), ws)
 {
     let nh = narrow_holds(list_at(m.file, k.r.b), k.r, s.cur, sim.on.holds, sim.on.len, lov, nv);
@@ -1422,7 +1548,7 @@ theorem step_view(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(
     let core = sim.view_core(t, md, lo, n, t.same_sound(c.nviews, g3.right), lo.val(s.words), n.val(s.words),
         lo.val_stable(s.words, ws, pre, lo.bound_at(c, s, g2.right, sim.nw)), n.val_stable(s.words, ws, pre, n.bound_at(c, s, g1.right, sim.nw)),
         λ w => Bool::implies_of(md.writes(), k.mode.writes(), g3.left, w),
-        λ lv mem meets => license_live_sound(c.live, md, Win(lo, n), k.pres, ws, lic.witness, lic.proof.left, hold_rs, lv, mem, meets));
+        λ lv mem meets => license_live_sound(c.live, md, Win(lo, n), k.pres, ws, k.r, lic.witness, lic.proof.left, hold_rs, lv, mem, meets));
     let at_m: Sim(k, mk(lic.witness).next, s.open(window(s.cur, lo.val(s.words), n.val(s.words)), lo.val(s.words)),
         Exec(m.file, m.views ++ [narrow(k.r, lo.val(m.words), n.val(m.words))], m.words), ws) =
         j(sym(sim.words), λ q _ => Sim(k, mk(lic.witness).next, s.open(window(s.cur, lo.val(s.words), n.val(s.words)), lo.val(s.words)),
@@ -1512,12 +1638,191 @@ theorem step_view_call(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim:
     let vs = vals(args, s.words);
     let callee_pre: k.pres(g, vs) = pre_at(k.pres, g, args, s.words, ws, pre, j(sim.nw, λ q _ => Atom::all_bound(args, q) = True, g9.left), parts.right.left);
     let nargs: (vs.len() = sg.words) = prelude::trans(vals_len(args, s.words), args.len().same_sound(sg.words, g9.right));
-    let none_lent = λ (lv: LView) (mem: Mem(lv, c.live)) (w: lv.md.writes() = True) =>
-        lv.region.clear_whole(ws, license_live_sound(c.live, Reads, Whole, k.pres, ws, lic.witness, lic.proof.left, parts.left, lv, mem, w));
+    let none_lent: ((lv: LView) → Mem(lv, c.live) → lv.md.writes() = True → False) = λ lv mem w => {
+        let e = license_live_each(c.live, Reads, Whole, lic.witness, lic.proof.left, lv, mem);
+        let lic_none: (lv.license(Reads, Whole) = None) = j(sym(w), λ b _ => (match b { True => lv.region.license(Whole), False => Some(Nil<Owed>) }) = None, lv.region.license_whole());
+        absurd(prelude::trans(sym(e.proof), lic_none))
+    };
     let core = sim.viewed_core(inr, g, vs, callee_pre, nargs, safe_g, false_of_not(sg.mode.writes(), g4.left), t, t.same_sound(c.nviews, g2.right), none_lent);
     let at_m: Sim(k, mk(lic.witness).next, s.open(k.w.mean(g, s.cur, vs).view, 0), Exec::viewed(m, k.r, k.w.run(g, m.file, k.r, vals(args, m.words))), ws) =
         j(sym(sim.words), λ q _ => Sim(k, mk(lic.witness).next, s.open(k.w.mean(g, s.cur, vs).view, 0), Exec::viewed(m, k.r, k.w.run(g, m.file, k.r, vals(args, q))), ws), core);
     j(lic.proof.right, λ q _ => Sim(k, q.next, CallView(g, args, t).eval1(k.w, s), CallView(g, args, t).run2(k.w, k.r, m), ws), at_m)
+}
+
+// ---------------------------------------------------------------------------
+// The join
+
+theorem Owed::all_under(rs: List<Owed>, cd: Cond, yes: Bool, pres: Nat → List<Nat> → Type, ws: List<Nat>, h: cd.test(ws) = yes):
+    Owed::All(under(cd, yes, rs), pres, ws) → Owed::All(rs, pres, ws)
+{
+    match rs {
+        Nil => λ _ => trivial,
+        Cons(_, rest) => λ a => ⟨a.left(h), Owed::all_under(rest, cd, yes, pres, ws, h, a.right)⟩,
+    }
+}
+
+// A test on words bound before it reads alike in the final words.
+theorem Cond::test_stable(self cd: Cond, ws, big: List<Nat>, pre: Prefix(ws, big), b: cd.bound(ws.len()) = True): cd.test(big) = cd.test(ws) {
+    (match cd as λ x => x.bound(ws.len()) = True → x.test(big) = x.test(ws) {
+        Le(a1, b1) => λ h => {
+            let p = Bool::and_true_parts(a1.bound(ws.len()), b1.bound(ws.len()), h);
+            prelude::trans(cong_fn(λ (x: Nat) => x.leb(b1.val(big)), a1.val_stable(ws, big, pre, p.left)),
+                cong_fn(λ (y: Nat) => a1.val(ws).leb(y), b1.val_stable(ws, big, pre, p.right)))
+        },
+    })(b)
+}
+
+theorem Mode::alike_sound(self a: Mode, b: Mode, h: a.alike(b) = True): a = b {
+    (match a as λ x => x.alike(b) = True → x = b {
+        Reads => match b as λ y => Reads.alike(y) = True → Reads = y { Reads => λ _ => refl, Writes => λ no => absurd(no) },
+        Writes => match b as λ y => Writes.alike(y) = True → Writes = y { Reads => λ no => absurd(no), Writes => λ _ => refl },
+    })(h)
+}
+
+theorem Region::alike_sound(self a: Region, b: Region, h: a.alike(b) = True): a = b {
+    (match a as λ x => x.alike(b) = True → x = b {
+        Whole => match b as λ y => Whole.alike(y) = True → Whole = y { Whole => λ _ => refl, Win(_, _) => λ no => absurd(no), Both(_, _) => λ no => absurd(no) },
+        Win(lo1, n1) => match b as λ y => Win(lo1, n1).alike(y) = True → Win(lo1, n1) = y {
+            Whole => λ no => absurd(no),
+            Win(lo2, n2) => λ h2 => {
+                let p = Bool::and_true_parts(lo1.same(lo2), n1.same(n2), h2);
+                prelude::trans(cong_fn(λ (x: Atom) => Win(x, n1), lo1.same_sound(lo2, p.left)), cong_fn(λ (y: Atom) => Win(lo2, y), n1.same_sound(n2, p.right)))
+            },
+            Both(_, _) => λ no => absurd(no),
+        },
+        Both(_, _) => λ no => absurd(no),
+    })(h)
+}
+
+// A region that covers another: every position of the second.
+fn Coarser(a, b: Region) → Type { (r: Ref) → (ws: List<Nat>) → (p: Nat) → b.hits(r, ws, p).IsTrue() → a.hits(r, ws, p).IsTrue() }
+
+theorem Region::coarsen_left(self a: Region, b: Region): Coarser(a.coarsen(b), a) {
+    (match a.alike(b) as λ bb => a.alike(b) = bb → Coarser(match bb { True => a, False => Both(a, b) }, a) {
+        True => λ _ r ws p h => h,
+        False => λ _ r ws p h => Bool::or_true_left(a.hits(r, ws, p), b.hits(r, ws, p), h),
+    })(refl)
+}
+
+theorem Region::coarsen_right(self a: Region, b: Region): Coarser(a.coarsen(b), b) {
+    (match a.alike(b) as λ bb => a.alike(b) = bb → Coarser(match bb { True => a, False => Both(a, b) }, b) {
+        True => λ q r ws p h => j(sym(a.alike_sound(b, q)), λ x _ => x.hits(r, ws, p).IsTrue(), h),
+        False => λ _ r ws p h => Bool::or_true_right(a.hits(r, ws, p), b.hits(r, ws, p), h),
+    })(refl)
+}
+
+// `lv` stands for a live view of `l`: the same name and mode, and a region
+// that covers the other's.
+record Covers(l: List<LView>, lv: LView) {
+    from: LView,
+    mem: Mem(from, l),
+    t: from.t = lv.t,
+    md: from.md = lv.md,
+    coarser: Coarser(lv.region, from.region),
+}
+
+theorem Covers::cons({l: List<LView>}, {x: LView}, self cv: Covers(l, x), h: LView): Covers(Cons(h, l), x) { Covers(cv.from, Inr(cv.mem), cv.t, cv.md, cv.coarser) }
+
+theorem LView::met_covers(self lv: LView, la, lb: List<LView>, mem: Mem(lv, la), x: LView, h: Mem(x, lv.met(lb))): Covers(la, x) ∧ Covers(lb, x) {
+    (match find_live(lb, lv.t) as λ o => find_live(lb, lv.t) = o →
+            Mem(x, match o { None => Nil, Some(o2) => match lv.md.alike(o2.md) { True => [LView(lv.t, lv.md, lv.region.coarsen(o2.region))], False => Nil } }) →
+            Covers(la, x) ∧ Covers(lb, x) {
+        None => λ _ no => false_elim(no),
+        Some(o) => λ e => {
+            let fo = find_live_sound(lb, lv.t, o, e);
+            (match lv.md.alike(o.md) as λ bb => lv.md.alike(o.md) = bb →
+                    Mem(x, match bb { True => [LView(lv.t, lv.md, lv.region.coarsen(o.region))], False => Nil }) → Covers(la, x) ∧ Covers(lb, x) {
+                True => λ q hm => match hm {
+                    Inl(ex) => j(sym(ex), λ y _ => Covers(la, y) ∧ Covers(lb, y),
+                        ⟨Covers(lv, mem, refl, refl, lv.region.coarsen_left(o.region)),
+                            Covers(o, fo.left, fo.right, sym(lv.md.alike_sound(o.md, q)), lv.region.coarsen_right(o.region))⟩),
+                    Inr(no) => false_elim(no),
+                },
+                False => λ _ no => false_elim(no),
+            })(refl)
+        },
+    })(refl, h)
+}
+
+theorem meet_covers(la, lb: List<LView>): (x: LView) → Mem(x, meet(la, lb)) → Covers(la, x) ∧ Covers(lb, x) {
+    match la {
+        Nil => λ x no => false_elim(no),
+        Cons(lv, rest) => λ x h => match lv.met(lb).mem_append(meet(rest, lb), x, h) {
+            Inl(hm) => lv.met_covers(Cons(lv, rest), lb, Inl(refl), x, hm),
+            Inr(hr) => {
+                let p = meet_covers(rest, lb, x, hr);
+                ⟨p.left.cons(lv), p.right⟩
+            },
+        },
+    }
+}
+
+// `c2` is a join of `c` with another arm: the same counts, and each live
+// view stands for one of `c`'s.
+record Joins(c, c2: Places) {
+    nviews: c2.nviews = c.nviews,
+    nw: c2.nw = c.nw,
+    cov: (lv: LView) → Mem(lv, c2.live) → Covers(c.live, lv),
+}
+
+theorem check_join_sound(cd: Cond, sa, sb, sj: Next, ok: check_join(cd, sa, sb) = Some(sj)):
+    Joins(sa.next, sj.next) ∧ (Joins(sb.next, sj.next) ∧ (sj.rs = under(cd, True, sa.rs) ++ under(cd, False, sb.rs)))
+{
+    let p = option_map_some(join(sa.next, sb.next), λ cj => Next(cj, under(cd, True, sa.rs) ++ under(cd, False, sb.rs)), sj, ok);
+    let g = Bool::then_some(sa.next.nviews.same(sb.next.nviews) && sa.next.nw.same(sb.next.nw), Some(Places(meet(sa.next.live, sb.next.live), sa.next.nviews, sa.next.nw)), p.witness, p.proof.left);
+    let gg = Bool::and_true_parts(sa.next.nviews.same(sb.next.nviews), sa.next.nw.same(sb.next.nw), g.left);
+    let ecj: (Places(meet(sa.next.live, sb.next.live), sa.next.nviews, sa.next.nw) = p.witness) = Option::some_inj(Places(meet(sa.next.live, sb.next.live), sa.next.nviews, sa.next.nw), p.witness, g.right);
+    let ja: Joins(sa.next, Places(meet(sa.next.live, sb.next.live), sa.next.nviews, sa.next.nw)) = Joins(refl, refl, λ lv mem => meet_covers(sa.next.live, sb.next.live, lv, mem).left);
+    let jb: Joins(sb.next, Places(meet(sa.next.live, sb.next.live), sa.next.nviews, sa.next.nw)) =
+        Joins(sa.next.nviews.same_sound(sb.next.nviews, gg.left), sa.next.nw.same_sound(sb.next.nw, gg.right), λ lv mem => meet_covers(sa.next.live, sb.next.live, lv, mem).right);
+    let both: Joins(sa.next, p.witness) ∧ Joins(sb.next, p.witness) = j(ecj, λ q _ => Joins(sa.next, q) ∧ Joins(sb.next, q), ⟨ja, jb⟩);
+    j(p.proof.right, λ q _ => Joins(sa.next, q.next) ∧ (Joins(sb.next, q.next) ∧ (q.rs = under(cd, True, sa.rs) ++ under(cd, False, sb.rs))), ⟨both.left, ⟨both.right, refl⟩⟩)
+}
+
+// A view whose region covers the one it had reads the same.
+theorem ViewOk::coarsened({rg: Region}, {v: Ref}, {val: List<Nat>}, {r: Ref}, {file: List<List<Nat>>}, {ws: List<Nat>}, self o: ViewOk(rg, v, val, r, file, ws),
+    rg2: Region, c: Coarser(rg2, rg)): ViewOk(rg2, v, val, r, file, ws)
+{
+    ViewOk(o.at_b, λ p h => c(r, ws, p, o.within(p, h)), o.reads)
+}
+
+theorem weaken_view(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), c2: Places, jn: Joins(c, c2), lv: LView, mem: Mem(lv, c2.live)):
+    (lv.t < c2.nviews) ∧ ViewOk(lv.region, ref_at(m.views, lv.t), list_at(s.views, lv.t), k.r, m.file, ws)
+{
+    let cv = jn.cov(lv, mem);
+    let o = sim.views(cv.from, cv.mem);
+    let at: ViewOk(cv.from.region, ref_at(m.views, lv.t), list_at(s.views, lv.t), k.r, m.file, ws) =
+        j(cv.t, λ u _ => ViewOk(cv.from.region, ref_at(m.views, u), list_at(s.views, u), k.r, m.file, ws), o.right);
+    ⟨omega(o.left, cv.t, jn.nviews), at.coarsened(lv.region, cv.coarser)⟩
+}
+
+theorem weaken_lent(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), c2: Places, jn: Joins(c, c2), lv: LView, mem: Mem(lv, c2.live),
+    w: lv.md.writes() = True): (k.mode.writes() = True) ∧ Lent(ref_at(m.views, lv.t), list_at(s.views, lv.t), word(s.slots, lv.t), k.r, m.file)
+{
+    let cv = jn.cov(lv, mem);
+    let w2: (cv.from.md.writes() = True) = prelude::trans(cong_fn(λ (x: Mode) => x.writes(), cv.md), w);
+    j(cv.t, λ u _ => (k.mode.writes() = True) ∧ Lent(ref_at(m.views, u), list_at(s.views, u), word(s.slots, u), k.r, m.file), sim.lent(cv.from, cv.mem, w2))
+}
+
+theorem weaken_excl(k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), c2: Places, jn: Joins(c, c2), a, b: LView,
+    ma: Mem(a, c2.live), mb: Mem(b, c2.live), w: a.md.writes() = True, ne: a.t ≠ b.t): ref_at(m.views, a.t).Apart(ref_at(m.views, b.t))
+{
+    let ca = jn.cov(a, ma);
+    let cb = jn.cov(b, mb);
+    let w2: (ca.from.md.writes() = True) = prelude::trans(cong_fn(λ (x: Mode) => x.writes(), ca.md), w);
+    let ne2: (ca.from.t ≠ cb.from.t) = λ e => ne(prelude::trans(sym(ca.t), prelude::trans(e, cb.t)));
+    Ref::apart_moved(ref_at(m.views, ca.from.t), ref_at(m.views, a.t), ref_at(m.views, cb.from.t), ref_at(m.views, b.t),
+        cong_fn(λ (u: Nat) => ref_at(m.views, u), ca.t), cong_fn(λ (u: Nat) => ref_at(m.views, u), cb.t), sim.excl(ca.from, cb.from, ca.mem, cb.mem, w2, ne2))
+}
+
+// The invariant at an arm's places gives it at the join's: the meet only
+// drops views, and a coarsened region still holds its view.
+theorem Sim::weaken({k: Frame}, {c: Places}, {s: Sem}, {m: Exec}, {ws: List<Nat>}, self sim: Sim(k, c, s, m, ws), c2: Places, jn: Joins(c, c2)): Sim(k, c2, s, m, ws) {
+    Sim(sim.words, prelude::trans(jn.nw, sim.nw), prelude::trans(sim.nviews, sym(jn.nviews)), prelude::trans(sim.nslots, sym(jn.nviews)), prelude::trans(sim.mviews, sym(jn.nviews)),
+        sim.on, sim.fixed,
+        λ lv mem => weaken_view(k, c, s, m, ws, sim, c2, jn, lv, mem),
+        λ lv mem w => weaken_lent(k, c, s, m, ws, sim, c2, jn, lv, mem, w),
+        λ a b ma mb w ne => weaken_excl(k, c, s, m, ws, sim, c2, jn, a, b, ma, mb, w, ne))
 }
 
 // ---------------------------------------------------------------------------
@@ -1528,10 +1833,19 @@ fn Stmt::calls(self o: Stmt, g: Nat) → Bool {
     match o { CallMut(h, _, _, _) => h.same(g), CallView(h, _, _) => h.same(g), _ => False }
 }
 
-fn calls(ops: List<Stmt>, g: Nat) → Bool { match ops { Nil => False, Cons(o, rest) => o.calls(g) || calls(rest, g) } }
+fn calls(ops: Body, g: Nat) → Bool {
+    match ops {
+        End => False,
+        Do(o, rest) => o.calls(g) || calls(rest, g),
+        If(_, a, b, rest) => (calls(a, g) || calls(b, g)) || calls(rest, g),
+    }
+}
 
 // What a callee promises, for every function the statement calls.
 fn Callees(k: Frame, o: Stmt) → Type { (g: Nat) → o.calls(g) = True → FnSafe(sig_at(k.sigs, g), k.pres(g), k.w.mean(g), k.w.run(g)) }
+
+// What a callee promises, for every function the body calls.
+fn BodyCallees(k: Frame, ops: Body) → Type { (g: Nat) → calls(ops, g) = True → FnSafe(sig_at(k.sigs, g), k.pres(g), k.w.mean(g), k.w.run(g)) }
 
 theorem Stmt::step(self o: Stmt, k: Frame, c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws), pre: Prefix(s.words, ws), inr: InRef(k.file0, k.r),
     callees: Callees(k, o), st: Next, ok: o.check(k.mode, k.sigs, c) = Some(st), hold: Owed::All(st.rs, k.pres, ws)):
@@ -1562,39 +1876,155 @@ theorem Stmt::eval1_grows(self o: Stmt, w: World, s: Sem): Prefix(s.words, o.eva
     }
 }
 
-theorem mean_body_grows(w: World, ops: List<Stmt>): (s: Sem) → Prefix(s.words, mean_body(w, ops, s).words) {
+theorem mean_if_true(w: World, cd: Cond, a, b, rest: Body, s: Sem, h: cd.test(s.words) = True): mean_body(w, If(cd, a, b, rest), s) = mean_body(w, rest, mean_body(w, a, s)) {
+    j(sym(h), λ x _ => mean_body(w, rest, match x { True => mean_body(w, a, s), False => mean_body(w, b, s) }) = mean_body(w, rest, mean_body(w, a, s)), refl)
+}
+
+theorem mean_if_false(w: World, cd: Cond, a, b, rest: Body, s: Sem, h: cd.test(s.words) = False): mean_body(w, If(cd, a, b, rest), s) = mean_body(w, rest, mean_body(w, b, s)) {
+    j(sym(h), λ x _ => mean_body(w, rest, match x { True => mean_body(w, a, s), False => mean_body(w, b, s) }) = mean_body(w, rest, mean_body(w, b, s)), refl)
+}
+
+theorem run_if_true(w: World, r: Ref, cd: Cond, a, b, rest: Body, m: Exec, h: cd.test(m.words) = True): run_body(w, r, If(cd, a, b, rest), m) = run_body(w, r, rest, run_body(w, r, a, m)) {
+    j(sym(h), λ x _ => run_body(w, r, rest, match x { True => run_body(w, r, a, m), False => run_body(w, r, b, m) }) = run_body(w, r, rest, run_body(w, r, a, m)), refl)
+}
+
+theorem run_if_false(w: World, r: Ref, cd: Cond, a, b, rest: Body, m: Exec, h: cd.test(m.words) = False): run_body(w, r, If(cd, a, b, rest), m) = run_body(w, r, rest, run_body(w, r, b, m)) {
+    j(sym(h), λ x _ => run_body(w, r, rest, match x { True => run_body(w, r, a, m), False => run_body(w, r, b, m) }) = run_body(w, r, rest, run_body(w, r, b, m)), refl)
+}
+
+theorem mean_body_grows(w: World, ops: Body): (s: Sem) → Prefix(s.words, mean_body(w, ops, s).words) {
     match ops {
-        Nil => λ s => Prefix::same(s.words),
-        Cons(o, rest) => λ s => Prefix::chain(s.words, o.eval1(w, s).words, mean_body(w, rest, o.eval1(w, s)).words, o.eval1_grows(w, s), mean_body_grows(w, rest, o.eval1(w, s))),
+        End => λ s => Prefix::same(s.words),
+        Do(o, rest) => λ s => Prefix::chain(s.words, o.eval1(w, s).words, mean_body(w, rest, o.eval1(w, s)).words, o.eval1_grows(w, s), mean_body_grows(w, rest, o.eval1(w, s))),
+        If(cd, a, b, rest) => λ s => match q: cd.test(s.words) as λ _ => Prefix(s.words, mean_body(w, If(cd, a, b, rest), s).words) {
+            True => j(sym(mean_if_true(w, cd, a, b, rest, s, q)), λ x _ => Prefix(s.words, x.words),
+                Prefix::chain(s.words, mean_body(w, a, s).words, mean_body(w, rest, mean_body(w, a, s)).words, mean_body_grows(w, a, s), mean_body_grows(w, rest, mean_body(w, a, s)))),
+            False => j(sym(mean_if_false(w, cd, a, b, rest, s, q)), λ x _ => Prefix(s.words, x.words),
+                Prefix::chain(s.words, mean_body(w, b, s).words, mean_body(w, rest, mean_body(w, b, s)).words, mean_body_grows(w, b, s), mean_body_grows(w, rest, mean_body(w, b, s)))),
+        },
     }
 }
 
-theorem calls_head(o: Stmt, rest: List<Stmt>, g: Nat, h: o.calls(g) = True): calls(Cons(o, rest), g) = True {
-    j(sym(h), λ b _ => (b || calls(rest, g)) = True, refl)
+theorem calls_head(o: Stmt, rest: Body, g: Nat, h: o.calls(g) = True): calls(Do(o, rest), g) = True { Bool::or_of_left(o.calls(g), calls(rest, g), h) }
+
+theorem calls_rest(o: Stmt, rest: Body, g: Nat, h: calls(rest, g) = True): calls(Do(o, rest), g) = True { Bool::or_of_right(o.calls(g), calls(rest, g), h) }
+
+theorem calls_if_a(cd: Cond, a, b, rest: Body, g: Nat, h: calls(a, g) = True): calls(If(cd, a, b, rest), g) = True {
+    Bool::or_of_left(calls(a, g) || calls(b, g), calls(rest, g), Bool::or_of_left(calls(a, g), calls(b, g), h))
 }
 
-theorem calls_rest(o: Stmt, rest: List<Stmt>, g: Nat, h: calls(rest, g) = True): calls(Cons(o, rest), g) = True {
-    match q: o.calls(g) { True => refl, False => h }
+theorem calls_if_b(cd: Cond, a, b, rest: Body, g: Nat, h: calls(b, g) = True): calls(If(cd, a, b, rest), g) = True {
+    Bool::or_of_left(calls(a, g) || calls(b, g), calls(rest, g), Bool::or_of_right(calls(a, g), calls(b, g), h))
 }
 
-// The body, statement by statement.
-theorem check_body_sound(k: Frame, inr: InRef(k.file0, k.r), ops: List<Stmt>): (c: Places) → (s: Sem) → (m: Exec) → Sim(k, c, s, m, mean_body(k.w, ops, s).words) →
-    (rs: List<Owed>) → check_body(ops, k.mode, k.sigs, c) = Some(rs) → Owed::All(rs, k.pres, mean_body(k.w, ops, s).words) →
-    ((g: Nat) → calls(ops, g) = True → FnSafe(sig_at(k.sigs, g), k.pres(g), k.w.mean(g), k.w.run(g))) →
-    Exists<Places>(λ c2 => Sim(k, c2, mean_body(k.w, ops, s), run_body(k.w, k.r, ops, m), mean_body(k.w, ops, s).words))
+theorem calls_if_rest(cd: Cond, a, b, rest: Body, g: Nat, h: calls(rest, g) = True): calls(If(cd, a, b, rest), g) = True {
+    Bool::or_of_right(calls(a, g) || calls(b, g), calls(rest, g), h)
+}
+
+// What a body promises: from the invariant, in any words the meaning's
+// words reach, a verdict and its residuals give the invariant at the
+// checker's final places.
+fn BodyOk(k: Frame, ops: Body) → Type {
+    (c: Places) → (s: Sem) → (m: Exec) → (ws: List<Nat>) → Prefix(mean_body(k.w, ops, s).words, ws) → Sim(k, c, s, m, ws) →
+    (st: Next) → check_body(ops, k.mode, k.sigs, c) = Some(st) → Owed::All(st.rs, k.pres, ws) → BodyCallees(k, ops) →
+    Sim(k, st.next, mean_body(k.w, ops, s), run_body(k.w, k.r, ops, m), ws)
+}
+
+// A step, then the rest: each answered.
+theorem Next::then_some(h: Option<Next>, kf: Places → Option<Next>, st: Next, ok: Next::then(h, kf) = Some(st)):
+    Exists<Next>(λ a => (h = Some(a)) ∧ Exists<Next>(λ b => (kf(a.next) = Some(b)) ∧ (st = Next(b.next, a.rs ++ b.rs))))
 {
+    let p = Option::and_then_some(h, λ a => kf(a.next).map(λ sr => Next(sr.next, a.rs ++ sr.rs)), st, ok);
+    let q = option_map_some(kf(p.witness.next), λ sr => Next(sr.next, p.witness.rs ++ sr.rs), st, p.proof.right);
+    Exists(p.witness, ⟨p.proof.left, Exists(q.witness, ⟨q.proof.left, sym(q.proof.right)⟩)⟩)
+}
+
+theorem end_ok(k: Frame): BodyOk(k, End) {
+    λ c s m ws pre sim st ok hold callees => j(Option::some_inj(Next(c, Nil), st, ok), λ q _ => Sim(k, q.next, s, m, ws), sim)
+}
+
+theorem do_ok(k: Frame, inr: InRef(k.file0, k.r), o: Stmt, rest: Body, ih: BodyOk(k, rest)): BodyOk(k, Do(o, rest)) {
+    λ c s m ws pre sim st ok hold callees => {
+        let sp = Next::then_some(o.check(k.mode, k.sigs, c), λ c2 => check_body(rest, k.mode, k.sigs, c2), st, ok);
+        let bx = sp.proof.right;
+        let parts = Owed::all_append(sp.witness.rs, k.pres, bx.witness.rs, ws, j(bx.proof.right, λ q _ => Owed::All(q.rs, k.pres, ws), hold));
+        let pre1: Prefix(s.words, ws) = Prefix::chain(s.words, mean_body(k.w, Do(o, rest), s).words, ws, mean_body_grows(k.w, Do(o, rest), s), pre);
+        let sim2 = o.step(k, c, s, m, ws, sim, pre1, inr, λ g h => callees(g, calls_head(o, rest, g, h)), sp.witness, sp.proof.left, parts.left);
+        let fin = ih(sp.witness.next, o.eval1(k.w, s), o.run2(k.w, k.r, m), ws, pre, sim2, bx.witness, bx.proof.left, parts.right, λ g h => callees(g, calls_rest(o, rest, g, h)));
+        j(sym(bx.proof.right), λ q _ => Sim(k, q.next, mean_body(k.w, rest, o.eval1(k.w, s)), run_body(k.w, k.r, rest, o.run2(k.w, k.r, m)), ws), fin)
+    }
+}
+
+// What a branch's verdict says: its test is bound, both arms check, and
+// they join.
+theorem if_head(cd: Cond, a, b: Body, mode: Mode, sigs: List<Sig>, c: Places, sj: Next,
+    ok: cd.bound(c.nw).then(check_body(a, mode, sigs, c).and_then(λ sa => check_body(b, mode, sigs, c).and_then(λ sb => check_join(cd, sa, sb)))) = Some(sj)):
+    (cd.bound(c.nw) = True) ∧ Exists<Next>(λ sa => (check_body(a, mode, sigs, c) = Some(sa)) ∧ Exists<Next>(λ sb => (check_body(b, mode, sigs, c) = Some(sb)) ∧ (check_join(cd, sa, sb) = Some(sj))))
+{
+    let p = cd.bound(c.nw).then_some(check_body(a, mode, sigs, c).and_then(λ sa => check_body(b, mode, sigs, c).and_then(λ sb => check_join(cd, sa, sb))), sj, ok);
+    let qa = Option::and_then_some(check_body(a, mode, sigs, c), λ sa => check_body(b, mode, sigs, c).and_then(λ sb => check_join(cd, sa, sb)), sj, p.right);
+    let qb = Option::and_then_some(check_body(b, mode, sigs, c), λ sb => check_join(cd, qa.witness, sb), sj, qa.proof.right);
+    ⟨p.left, Exists(qa.witness, ⟨qa.proof.left, Exists(qb.witness, ⟨qb.proof.left, qb.proof.right⟩)⟩)⟩
+}
+
+// The arm the test chose, then the rest: the arm's invariant at its own
+// places, weakened to the join's.
+theorem if_taken(k: Frame, x, rest: Body, ihx: BodyOk(k, x), ihr: BodyOk(k, rest), c: Places, s: Sem, m: Exec, ws: List<Nat>, sim: Sim(k, c, s, m, ws),
+    sx: Next, okx: check_body(x, k.mode, k.sigs, c) = Some(sx), cj: Places, jn: Joins(sx.next, cj), sr: Next, okr: check_body(rest, k.mode, k.sigs, cj) = Some(sr),
+    pre: Prefix(mean_body(k.w, rest, mean_body(k.w, x, s)).words, ws), hold_x: Owed::All(sx.rs, k.pres, ws), hold_r: Owed::All(sr.rs, k.pres, ws),
+    callees_x: BodyCallees(k, x), callees_r: BodyCallees(k, rest)):
+    Sim(k, sr.next, mean_body(k.w, rest, mean_body(k.w, x, s)), run_body(k.w, k.r, rest, run_body(k.w, k.r, x, m)), ws)
+{
+    let pre_x = Prefix::chain(mean_body(k.w, x, s).words, mean_body(k.w, rest, mean_body(k.w, x, s)).words, ws, mean_body_grows(k.w, rest, mean_body(k.w, x, s)), pre);
+    let at_x: Sim(k, sx.next, mean_body(k.w, x, s), run_body(k.w, k.r, x, m), ws) = ihx(c, s, m, ws, pre_x, sim, sx, okx, hold_x, callees_x);
+    let arm = at_x.weaken(cj, jn);
+    ihr(cj, mean_body(k.w, x, s), run_body(k.w, k.r, x, m), ws, pre, arm, sr, okr, hold_r, callees_r)
+}
+
+theorem if_ok(k: Frame, cd: Cond, a, b, rest: Body, iha: BodyOk(k, a), ihb: BodyOk(k, b), ihr: BodyOk(k, rest)): BodyOk(k, If(cd, a, b, rest)) {
+    λ c s m ws pre sim st ok hold callees => {
+        let sp = Next::then_some(cd.bound(c.nw).then(check_body(a, k.mode, k.sigs, c).and_then(λ sa => check_body(b, k.mode, k.sigs, c).and_then(λ sb => check_join(cd, sa, sb)))),
+            λ c2 => check_body(rest, k.mode, k.sigs, c2), st, ok);
+        let bx = sp.proof.right;
+        let parts = Owed::all_append(sp.witness.rs, k.pres, bx.witness.rs, ws, j(bx.proof.right, λ q _ => Owed::All(q.rs, k.pres, ws), hold));
+        let hd = if_head(cd, a, b, k.mode, k.sigs, c, sp.witness, sp.proof.left);
+        let ax = hd.right;
+        let bxx = ax.proof.right;
+        let jn = check_join_sound(cd, ax.witness, bxx.witness, sp.witness, bxx.proof.right);
+        let owed = Owed::all_append(under(cd, True, ax.witness.rs), k.pres, under(cd, False, bxx.witness.rs), ws, j(jn.right.right, λ q _ => Owed::All(q, k.pres, ws), parts.left));
+        let pre_s = Prefix::chain(s.words, mean_body(k.w, If(cd, a, b, rest), s).words, ws, mean_body_grows(k.w, If(cd, a, b, rest), s), pre);
+        let tst: (cd.test(ws) = cd.test(s.words)) = cd.test_stable(s.words, ws, pre_s, j(sim.nw, λ n _ => cd.bound(n) = True, hd.left));
+        let em: (cd.test(m.words) = cd.test(s.words)) = cong_fn(λ (w: List<Nat>) => cd.test(w), sim.words);
+        let fin = match q: cd.test(s.words) as λ _ => Sim(k, bx.witness.next, mean_body(k.w, If(cd, a, b, rest), s), run_body(k.w, k.r, If(cd, a, b, rest), m), ws) {
+            True => {
+                let e1 = mean_if_true(k.w, cd, a, b, rest, s, q);
+                let e2 = run_if_true(k.w, k.r, cd, a, b, rest, m, prelude::trans(em, q));
+                let taken = if_taken(k, a, rest, iha, ihr, c, s, m, ws, sim, ax.witness, ax.proof.left, sp.witness.next, jn.left, bx.witness, bx.proof.left,
+                    j(e1, λ x _ => Prefix(x.words, ws), pre), Owed::all_under(ax.witness.rs, cd, True, k.pres, ws, prelude::trans(tst, q), owed.left), parts.right,
+                    λ g h => callees(g, calls_if_a(cd, a, b, rest, g, h)), λ g h => callees(g, calls_if_rest(cd, a, b, rest, g, h)));
+                j(sym(e2), λ x _ => Sim(k, bx.witness.next, mean_body(k.w, If(cd, a, b, rest), s), x, ws),
+                    j(sym(e1), λ x _ => Sim(k, bx.witness.next, x, run_body(k.w, k.r, rest, run_body(k.w, k.r, a, m)), ws), taken))
+            },
+            False => {
+                let e1 = mean_if_false(k.w, cd, a, b, rest, s, q);
+                let e2 = run_if_false(k.w, k.r, cd, a, b, rest, m, prelude::trans(em, q));
+                let taken = if_taken(k, b, rest, ihb, ihr, c, s, m, ws, sim, bxx.witness, bxx.proof.left, sp.witness.next, jn.right.left, bx.witness, bx.proof.left,
+                    j(e1, λ x _ => Prefix(x.words, ws), pre), Owed::all_under(bxx.witness.rs, cd, False, k.pres, ws, prelude::trans(tst, q), owed.right), parts.right,
+                    λ g h => callees(g, calls_if_b(cd, a, b, rest, g, h)), λ g h => callees(g, calls_if_rest(cd, a, b, rest, g, h)));
+                j(sym(e2), λ x _ => Sim(k, bx.witness.next, mean_body(k.w, If(cd, a, b, rest), s), x, ws),
+                    j(sym(e1), λ x _ => Sim(k, bx.witness.next, x, run_body(k.w, k.r, rest, run_body(k.w, k.r, b, m)), ws), taken))
+            },
+        };
+        j(sym(bx.proof.right), λ q _ => Sim(k, q.next, mean_body(k.w, If(cd, a, b, rest), s), run_body(k.w, k.r, If(cd, a, b, rest), m), ws), fin)
+    }
+}
+
+// The body, by its shape.
+theorem check_body_sound(k: Frame, inr: InRef(k.file0, k.r), ops: Body): BodyOk(k, ops) {
     match ops {
-        Nil => λ c s m sim rs ok hold callees => Exists(c, sim),
-        Cons(o, rest) => λ c s m sim rs ok hold callees => {
-            let ws = mean_body(k.w, rest, o.eval1(k.w, s)).words;
-            let st = Option::and_then_some(o.check(k.mode, k.sigs, c), λ q => check_body(rest, k.mode, k.sigs, q.next).map(λ r2 => q.rs ++ r2), rs, ok);
-            let mp = option_map_some(check_body(rest, k.mode, k.sigs, st.witness.next), λ r2 => st.witness.rs ++ r2, rs, st.proof.right);
-            let parts = Owed::all_append(st.witness.rs, k.pres, mp.witness, ws, j(sym(mp.proof.right), λ q _ => Owed::All(q, k.pres, ws), hold));
-            let pre: Prefix(s.words, ws) = mean_body_grows(k.w, Cons(o, rest), s);
-            let sim2 = o.step(k, c, s, m, ws, sim, pre, inr, λ g h => callees(g, calls_head(o, rest, g, h)), st.witness, st.proof.left, parts.left);
-            check_body_sound(k, inr, rest, st.witness.next, o.eval1(k.w, s), o.run2(k.w, k.r, m), sim2, mp.witness, mp.proof.left, parts.right,
-                λ g h => callees(g, calls_rest(o, rest, g, h)))
-        },
+        End => end_ok(k),
+        Do(o, rest) => do_ok(k, inr, o, rest, check_body_sound(k, inr, rest)),
+        If(cd, a, b, rest) => if_ok(k, cd, a, b, rest, check_body_sound(k, inr, a), check_body_sound(k, inr, b), check_body_sound(k, inr, rest)),
     }
 }
 
@@ -1640,11 +2070,14 @@ theorem check_sound(sigs: List<Sig>, pres: Nat → List<Nat> → Type, f: Func, 
         let s0 = Sem(arg, Nil, Nil, ws);
         let m0 = Exec(file, Nil, ws);
         let c0 = Places(Nil, 0, f.words);
-        let sim0: Sim(k, c0, s0, m0, mean_body(w, f.body, s0).words) = Sim(refl, sym(nw), refl, refl, refl, OnRef::start(file, r, inr), λ _ => refl,
+        let fin_ws = mean_body(w, f.body, s0).words;
+        let sim0: Sim(k, c0, s0, m0, fin_ws) = Sim(refl, sym(nw), refl, refl, refl, OnRef::start(file, r, inr), λ _ => refl,
             λ lv mem => false_elim(mem), λ lv mem => false_elim(mem), λ a b ma => false_elim(ma));
-        let fin = check_body_sound(k, inr, f.body, c0, s0, m0, sim0, rs, ok, discharge(arg, ws, nw, p), callees);
-        let at_end: Sim(k, fin.witness, mean_body(w, f.body, s0), run_body(w, r, f.body, m0), mean_body(w, f.body, s0).words) = fin.proof;
-        at_end.ends(f, refl)
+        let st = option_map_some(check_body(f.body, f.mode, sigs, c0), λ q => q.rs, rs, ok);
+        let fin: Sim(k, st.witness.next, mean_body(w, f.body, s0), run_body(w, r, f.body, m0), fin_ws) =
+            check_body_sound(k, inr, f.body, c0, s0, m0, fin_ws, Prefix::same(fin_ws), sim0, st.witness, st.proof.left,
+            j(sym(st.proof.right), λ q _ => Owed::All(q, pres, fin_ws), discharge(arg, ws, nw, p)), callees);
+        fin.ends(f, refl)
     }
 }
 
