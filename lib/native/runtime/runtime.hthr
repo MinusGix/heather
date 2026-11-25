@@ -597,6 +597,22 @@ fn Setup::compile<F>(s: Setup, rt: Fun, w: World, callees: (b: Buffers()) → Si
     Compile(rt, w, callees, typed, s.code(rt, w), Setup::plain_agrees(f, s, rt, w, callees, typed, pinned, ok, plain), Setup::checked_fits(s, rt, w, ok))
 }
 
+// A plain function that takes an erased parameter (a proof, an
+// `Erased<A>`) is compiled from its reflection written out, a closed
+// function of its words (issues/runtime-erased-pure-shadow.md): `f::words`,
+// published as `Setup::of_erased(f, λ xs… => …)`. Its body is what the
+// reflection's meaning reduces to, spelled with these: a value bound once,
+// a branch on a `Bool`. The instance is `Setup::compile`'s at it, so its pin
+// compares the meaning with a λ, as an ordinary function's compares it
+// with that function's body, and a caller's table lists `f::words` as it
+// lists any callee. `source` is the function it is written out from, which
+// the linker reads (`runtime_erased_source`).
+fn Setup::of_erased<F, G>(source: G, f: F) → F { f }
+
+fn Setup::once<X, S>(x: X, k: X → S) → S { k(x) }
+
+fn Setup::either<S>(c: Bool, yes: S, no: S) → S { match c { False => no, True => yes } }
+
 // The pin of a function that calls itself and is its own callee
 // (`Fun::own_callee`): it and its reflection's meaning alike at every
 // argument, over every file. The meaning answers the call of itself with
@@ -2158,6 +2174,41 @@ fn runtime_reflect(k: Known, g: Nat, name: String) → Tac<Pair<Fun, List<Nat>>>
     })
 }
 
+fn runtime_of_erased_source(n: String, args: List<Handle>) → Tac<Option<String>> {
+    match Known::str_same(rt_base_name(n), "of_erased") {
+        False => pure(None),
+        True => match args {
+            Cons(source, _) => view(source).bind(λ sv => match sv {
+                HGlobal(sg, shown, _) => rt_name_of(sg, shown).bind(λ name => pure(Some(name))),
+                _ => pure(None),
+            }),
+            Nil => pure(None),
+        },
+    }
+}
+
+// The function a written-out `f::words` is written out from, by name: the
+// source its body `Setup::of_erased(f, …)` names.
+fn runtime_erased_source(g: GlobalRef) → Tac<Option<String>> {
+    body(g).bind(λ c => match c {
+        Refused(_) => pure(None),
+        Accepted(b) => view(b).bind(λ v => match v {
+            HGlobal(_, n, args) => runtime_of_erased_source(n, args),
+            _ => pure(None),
+        }),
+    })
+}
+
+// A table entry's global: itself, or where the entry is a function's
+// reflection written out spelled in place (the first entry of its own
+// table, `Setup::of_erased(f, …)`), the `f::words` it is published as.
+fn runtime_entry_id(g: GlobalRef, n: String, args: List<Handle>) → Tac<Nat> {
+    runtime_of_erased_source(n, args).bind(λ source => match source {
+        None => pure(g.id),
+        Some(name) => lookup(name ++ "::words").bind(λ c => match c { Accepted(w) => pure(w.id), Refused(_) => pure(g.id) }),
+    })
+}
+
 // The globals a table of meanings lists: `Pair::of(g₀, Pair::of(g₁, …
 // trivial))`, or the table of a function lent spans,
 // `Setup::lent_callees(g₀, …, Setup::lent_callees(g₁, …))`, whose entry is
@@ -2182,7 +2233,7 @@ fn runtime_entries(fuel: Nat, cons, rest_at, nil: Nat, h: Handle) → Tac<List<N
             };
             match pair {
                 Cons(a, Cons(b, Nil)) => view(a).bind(λ entry => match entry {
-                    HGlobal(g, _, _) => runtime_entries(more, cons, rest_at, nil, b).bind(λ rest => pure(Cons(g.id, rest))),
+                    HGlobal(g, n, args) => runtime_entry_id(g, n, args).bind(λ id => runtime_entries(more, cons, rest_at, nil, b).bind(λ rest => pure(Cons(id, rest)))),
                     _ => runtime_fail("a table entry that is not a function"),
                 }),
                 _ => pure([]),
@@ -2235,7 +2286,12 @@ fn runtime_name_of(g: Nat) → Tac<String> {
     match v {
         HEq(lhs, _) => view(lhs).bind(λ h => match h {
             HGlobal(_, n, _) => match Known::str_same(rt_base_name(n), "bytes") {
-                False => rt_name_of(GlobalRef(g), n),
+                False => match Known::str_same(rt_base_name(n), "words") {
+                    False => rt_name_of(GlobalRef(g), n),
+                    // A function written out (`f::words`) is linked by the
+                    // function it is written out from.
+                    True => runtime_erased_source(GlobalRef(g)).bind(λ source => match source { Some(name) => pure(name), None => rt_name_of(GlobalRef(g), n) }),
+                },
                 True => rt_record_of(GlobalRef(g)).bind(λ source => match source { Some(name) => pure(name), None => rt_name_of(GlobalRef(g), n) }),
             },
             _ => runtime_fail("a callee that is not a global"),
@@ -2869,13 +2925,15 @@ fn runtime_own_instance(name: String, f: GlobalRef, rfun: Fun, setup, world_e, t
 // The `Compile(f)` instance, by the reflection's shape. `table_e` is the
 // function's table at each file: its world's own for a function lent
 // nothing, `Setup::lent_callees` for one lent spans.
-fn runtime_instance(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes, setup, world_e, table_e, rt_e, count: Expr, reprs: List<ReprEntry>) → Tac<Expr> {
+// `fe` is the function the code is compiled from: `f`, or its reflection
+// written out (`runtime_erasing`).
+fn runtime_instance(name: String, f: GlobalRef, fe: Expr, rfun: Fun, q: RtQ, ts: RtTypes, setup, world_e, table_e, rt_e, count: Expr, reprs: List<ReprEntry>) → Tac<Expr> {
     let rfl <- runtime_global("tactic::rfl");
     let typed_refl <- runtime_global(name_of(Setup::typed_refl));
     let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
     let verdict <- runtime_verdict();
     let shapes <- runtime_type_of(name_of(runtime_w_shape)).bind(λ h => runtime_ctors_at(h));
-    let typed = ap(typed_refl, [Blank, Global(f)]);
+    let typed = ap(typed_refl, [Blank, fe]);
     let at_every <- runtime_global(name_of(Setup::at_every));
     let lent_every <- runtime_global(name_of(Setup::lent_every));
     match rfun.shape() {
@@ -2883,10 +2941,10 @@ fn runtime_instance(name: String, f: GlobalRef, rfun: Fun, q: RtQ, ts: RtTypes, 
             // The pin: the function itself at every file, or it at each
             // file's spans.
             let pinned: Expr = match rfun.lent {
-                Zero => ap(at_every, [Blank, Global(f)]),
+                Zero => ap(at_every, [Blank, fe]),
                 Succ(_) => ap(lent_every, [Blank, Global(f), world_e, table_e, NatLit(rfun.lent), Ty::quotes(rfun.params, q), Ty::quote(rfun.result, q), typed]),
             };
-            pure(ap(compile, [Blank, setup, rt_e, world_e, table_e, Global(f), typed, pinned, verdict, ap(rfl, [Blank, runtime_at(shapes, 0)])]))
+            pure(ap(compile, [Blank, setup, rt_e, world_e, table_e, fe, typed, pinned, verdict, ap(rfl, [Blank, runtime_at(shapes, 0)])]))
         }),
         Fuel(w0, wrest, zero, succ) => match rfun.body {
             Case(c, _, _) => runtime_fuel_instance(f, q, ts, shapes, setup, world_e, table_e, typed, count, reprs, w0, wrest, rfun.result, c, zero, succ),
@@ -3437,8 +3495,8 @@ fn runtime_word_tails(words: List<Expr>, enum_words, then, tys_e: Expr, ps: List
 
 // The answer `f::agrees` states, at the arguments `args` (an enum's as
 // itself or as what its word reads back as).
-fn runtime_agree_rhs(low, wide: RtNarrow, count: Expr, reprs: List<ReprEntry>, recs: List<RecShape>, rfun: Fun, f: GlobalRef, args: List<Expr>) → Tac<Expr> {
-    let fx = ap(Global(f), runtime_narrow_args(low, rfun.params, runtime_args(count, reprs, rfun.params, args)));
+fn runtime_agree_rhs(low, wide: RtNarrow, count: Expr, reprs: List<ReprEntry>, recs: List<RecShape>, rfun: Fun, apply_f: List<Expr> → Expr, args: List<Expr>) → Tac<Expr> {
+    let fx = apply_f(runtime_narrow_args(low, rfun.params, runtime_args(count, reprs, rfun.params, args)));
     let gets <- runtime_result_fields(wide, reprs, recs, rfun.result, fx);
     pure(match gets { Cons(g, _) => g, Nil => runtime_narrow_result(wide, rfun.result, runtime_result(reprs, rfun.result, fx)) })
 }
@@ -4144,8 +4202,118 @@ fn runtime_within(name: String, rfun: Fun, q: RtQ, ts: RtTypes, l: Linking, link
 // itself first).
 // `own`: the function is its own callee (`Fun::own_callee`, `funs` listing
 // it twice), its instance `runtime_own_instance`'s.
+// Which of a function's binders are erased (`rt_erased_param`), in order.
+fn runtime_erased_mask(fuel: Nat, t: Handle, under: Option<LocalRef>) → Tac<List<Bool>> {
+    match fuel {
+        Zero => pure([]),
+        Succ(more) => view(t).bind(λ v => match v {
+            HPi(dom) => rt_erased_param(dom, under).bind(λ e => open(t, "x").or_fail("runtime: a parameter: ").bind(λ o =>
+                runtime_erased_mask(more, o.body, Some(o.local.ref)).bind(λ rest => pure(Cons(e, rest))))),
+            _ => pure([]),
+        }),
+    }
+}
+
+// `f`'s arguments: the code's words `args` in order, an erased local `ps`
+// in each erased binder's place.
+fn runtime_erased_insert(mask: List<Bool>, args, ps: List<Expr>) → List<Expr> {
+    match mask {
+        Nil => args,
+        Cons(e, rest) => match e {
+            True => match ps { Cons(p, more) => Cons(p, runtime_erased_insert(rest, args, more)), Nil => runtime_erased_insert(rest, args, ps) },
+            False => match args { Cons(a, more) => Cons(a, runtime_erased_insert(rest, more, ps)), Nil => runtime_erased_insert(rest, args, ps) },
+        },
+    }
+}
+
+// The locals a theorem about `f` takes: one for each of the code's words,
+// at `types`, and one for each erased parameter where `f` takes it, at its
+// binder's type at the arguments before it, each under the one before.
+// `args` reads the words so far as `f`'s arguments for them. With no
+// erased parameter, `runtime_params_at`'s.
+record RtErasedParams { words: List<LocalRef>, ordered: List<LocalRef>, erased: List<LocalRef> }
+
+fn runtime_params_erasing(name: String, f: GlobalRef, mask: List<Bool>, types: List<Handle>, args: List<Expr> → List<Expr>, under: Option<LocalRef>,
+    done: List<Expr>, acc: RtErasedParams) → Tac<RtErasedParams> {
+    match mask {
+        Nil => runtime_params_at(types, under, acc.words.len()).bind(λ ws => pure(RtErasedParams(acc.words ++ ws, acc.ordered ++ ws, acc.erased))),
+        Cons(e, rest) => match e {
+            False => match types {
+                Nil => pure(acc),
+                Cons(t, more) => {
+                    let x <- assume(Hd(t), "x" ++ decimal_name(2, acc.words.len()), under).or_fail("runtime: a parameter: ");
+                    let words = acc.words ++ [x.ref];
+                    let arg = args(runtime_locals(words)).last().unwrap_or(Local(x.ref));
+                    runtime_params_erasing(name, f, rest, more, args, Some(x.ref), done ++ [arg], RtErasedParams(words, acc.ordered ++ [x.ref], acc.erased))
+                },
+            },
+            True => {
+                let t <- infer(ap(Global(f), done)).or_fail("runtime: `" ++ name ++ "` at its arguments: ");
+                let tw <- whnf_or(t);
+                let v <- view(tw);
+                match v {
+                    HPi(dom) => {
+                        let p <- assume(Hd(dom), "erased" ++ decimal_name(2, done.len()), under).or_fail("runtime: `" ++ name ++ "`'s erased parameter: ");
+                        runtime_params_erasing(name, f, rest, types, args, Some(p.ref), done ++ [Local(p.ref)],
+                            RtErasedParams(acc.words, acc.ordered ++ [p.ref], acc.erased ++ [p.ref]))
+                    },
+                    _ => runtime_fail("`" ++ name ++ "` takes fewer parameters than its type said"),
+                }
+            },
+        },
+    }
+}
+
+// A local for each erased parameter of `f` where its other arguments are
+// `args`, each at its binder's type at the arguments before it, each under
+// the one before.
+fn runtime_erased_at(name: String, f: GlobalRef, mask: List<Bool>, args: List<Expr>, done: List<Expr>, under: Option<LocalRef>) → Tac<List<LocalRef>> {
+    match mask {
+        Nil => pure([]),
+        Cons(e, rest) => match e {
+            False => runtime_erased_at(name, f, rest, args.drop(1), done ++ [args.head_or(Blank)], under),
+            True => {
+                let t <- infer(ap(Global(f), done)).or_fail("runtime: `" ++ name ++ "` at its arguments: ");
+                let tw <- whnf_or(t);
+                let v <- view(tw);
+                match v {
+                    HPi(dom) => {
+                        let p <- assume(Hd(dom), "erased" ++ decimal_name(2, done.len()), under).or_fail("runtime: `" ++ name ++ "`'s erased parameter: ");
+                        let more <- runtime_erased_at(name, f, rest, args, done ++ [Local(p.ref)], Some(p.ref));
+                        pure(Cons(p.ref, more))
+                    },
+                    _ => runtime_fail("`" ++ name ++ "` takes fewer parameters than its type said"),
+                }
+            },
+        },
+    }
+}
+
+// `f` at the code's words (`as`), with each erased local in its place.
+fn runtime_erased_apply(f: GlobalRef, mask: List<Bool>, ps: List<LocalRef>) → List<Expr> → Expr {
+    λ args => ap(Global(f), runtime_erased_insert(mask, args, runtime_locals(ps)))
+}
+
+// Locals at the given types, each under the one before.
+fn runtime_params_typed(ts: List<Expr>, under: Option<LocalRef>, i: Nat) → Tac<List<LocalRef>> {
+    match ts {
+        Nil => pure([]),
+        Cons(t, rest) => assume(t, "x" ++ decimal_name(2, i), under).or_fail("runtime: a parameter: ").bind(λ x =>
+            runtime_params_typed(rest, Some(x.ref), i + 1).bind(λ more => pure(Cons(x.ref, more)))),
+    }
+}
+
+// A function that takes an erased parameter is compiled as `compiled`, its
+// reflection written out (`runtime_erasing`), and `mask` says which of
+// `f`'s binders are erased.
+record RtErasing { compiled: Expr, ty: Handle, mask: List<Bool> }
+
 fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs: List<Nat>, lents: List<Nat>, l: Linking, reprs: List<ReprEntry>,
-    recs: List<RecShape> := [], own: Bool := False) → Tac<List<Decl>> {
+    recs: List<RecShape> := [], own: Bool := False, erasing: Option<RtErasing> := None) → Tac<List<Decl>> {
+    // The function the code is compiled from: `f`, or its reflection
+    // written out, which its own table lists first.
+    let self_e: Expr = match erasing { None => Global(f), Some(e) => e.compiled };
+    let mask: List<Bool> = match erasing { None => [], Some(e) => e.mask };
     let ts <- runtime_type_handles();
     let q <- runtime_quoting(ts);
     // `refl` at a closed term, its type given: checked against a statement
@@ -4154,7 +4322,10 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
     let rfl <- runtime_global("tactic::rfl");
     let trivial_h <- resolve("trivial").or_fail("runtime: `trivial`: ");
     let pair <- runtime_global(name_of(Pair::of));
-    let callees = runtime_callees(pair, Hd(trivial_h), funs);
+    let callees = match erasing {
+        None => runtime_callees(pair, Hd(trivial_h), funs),
+        Some(e) => ap(pair, [Blank, Blank, e.compiled, runtime_callees(pair, Hd(trivial_h), funs.drop(1))]),
+    };
     let world_of <- runtime_global(name_of(World::of));
     let tys_both <- runtime_tys(ts.word, q, reprs, recs);
     let tys_e = tys_both.fst;
@@ -4169,7 +4340,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
     let sources <- runtime_global(name_of(link_sources_at));
     let count <- runtime_global(name_of(runtime_count));
     let word_list <- runtime_ctors_at(ts.words);
-    let ft <- infer(Global(f)).or_fail("runtime: `" ++ name ++ "`'s type: ");
+    let ft <- match erasing { None => infer(Global(f)).or_fail("runtime: `" ++ name ++ "`'s type: "), Some(e) => pure(e.ty) };
     let rt_e = Fun::quote(rfun, q);
     let sigs_e = RtQ::seq(q.sigs, sigs.map(λ s => Sig::quote(s, q)));
     // The table at each file. A function lent nothing has its world's own;
@@ -4189,7 +4360,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
     let code_e = ap(code_of, [setup, rt_e, world_e]);
     let built <- match own as λ _ => Tac<Expr> {
         True => runtime_own_instance(name, f, rfun, setup, world_e, table_e, rt_e),
-        False => runtime_instance(name, f, rfun, q, ts, setup, world_e, table_e, rt_e, count, reprs),
+        False => runtime_instance(name, f, self_e, rfun, q, ts, setup, world_e, table_e, rt_e, count, reprs),
     };
     let instance_t <- infer(built).or_fail("runtime: `" ++ name ++ "`'s instance: ");
     // Held as a hole solved by it: a loop's instance abstracts locals opened
@@ -4198,14 +4369,17 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
     let held <- hole(instance_t).or_fail("runtime: `" ++ name ++ "`'s instance: ");
     let solved <- defeq(Hd(held), built);
     let instance_e <- match solved { True => pure(Hd(held)), False => runtime_fail("`" ++ name ++ "`'s instance does not solve its hole") };
-    let head: List<Decl> = [
+    // A function written out is published first, as `f::words`: its
+    // instance is `Compile(f::words)`.
+    let words: List<Decl> = match erasing { None => [], Some(e) => [Decl(AsValue, name ++ "::words", [], Hd(ft), e.compiled)] };
+    let head: List<Decl> = words ++ [
         Decl(AsValue, name ++ "::rt", [], Hd(ts.fun_t), rt_e),
         Decl(AsValue, name ++ "::world", [], Hd(ts.world), world_e),
         Decl(AsTheorem, name ++ "::judged", [], Equation(ap(judge, [rt_e, world_e]), runtime_at(verdicts, 0)),
             ap(rfl, [Blank, runtime_at(verdicts, 0)]))];
     let made: List<Decl> = [
         Decl(AsValue, name ++ "::code", [], Hd(ts.function), code_e),
-        Decl(AsInstance("runtime::Compile", [Hd(ft)], [name]), name ++ "::compile", [], Hd(instance_t), instance_e)];
+        Decl(AsInstance("runtime::Compile", [Hd(ft)], [match erasing { None => name, Some(_) => name ++ "::words" }]), name ++ "::compile", [], Hd(instance_t), instance_e)];
     let own_types <- runtime_own_types(ts.word, reprs, rfun.params, recs);
     let low_word <- runtime_global(name_of(runtime_low));
     let low_bit <- runtime_global(name_of(runtime_bit_low));
@@ -4216,7 +4390,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
     let wide = RtNarrow(wide_word, wide_bit, tag := Some(ap(enum_word, [tys_e])));
     // The program: this function and every runtime fn it reaches, each
     // callee's code from its own instance, linked at every file.
-    let insts <- runtime_instances(l.order, l.names, f.id, Global(f), instance_e);
+    let insts <- runtime_instances(l.order, l.names, f.id, self_e, instance_e);
     let linked <- runtime_linked(q, ts, l, insts);
     let root = NatLit(l.order.len() - 1);
     let srcs_t <- infer(linked.srcs).or_fail("runtime: `" ++ name ++ "`'s sources: ");
@@ -4244,11 +4418,20 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
         Zero => {
             // `f::reflects` and `f::agrees` quantify over the parameters (`f::agrees`
             // reads a count off its word, as a call passes it).
-            let xs <- runtime_params_at(own_types, None, 0);
+            // A function that takes an erased parameter is stated at a local
+            // for each, where it takes it: so at every proof and every
+            // erased value.
+            let px <- runtime_params_erasing(name, f, mask, own_types, λ es => es, None, [], RtErasedParams([], [], []));
+            let xs = px.words;
+            let f_xs = runtime_erased_apply(f, mask, px.erased)(runtime_locals(xs));
             // An enum is quantified as itself, its words passed
             // (`RecInfo::enum_words`): the agreement is at real values only.
-            let ys <- runtime_params_at(runtime_agree_types(ts.word, reprs.len(), rfun.params, own_types), None, 0);
-            let at_ys = runtime_locals(ys);
+            let py <- runtime_params_erasing(name, f, mask, runtime_agree_types(ts.word, reprs.len(), rfun.params, own_types),
+                λ es => runtime_narrow_args(low, rfun.params, runtime_args(count, reprs, rfun.params, es)), None, [], RtErasedParams([], [], []));
+            let at_ys = runtime_locals(py.words);
+            // `ys`: every local a theorem takes, in order.
+            let ys = py.ordered;
+            let apply_f = runtime_erased_apply(f, mask, py.erased);
             let enum_word <- runtime_global(name_of(RecInfo::enum_word));
             let enum_words <- runtime_global(name_of(RecInfo::enum_words));
             let then <- runtime_global(name_of(runtime_words_then));
@@ -4264,15 +4447,15 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
                 // each argument and not by `refl` (`Setup::Pinned`).
                 True => [],
                 False => match rfun.shape() {
-                    Plain => [Decl(AsTheorem, name ++ "::reflects", runtime_params_of(xs),
-                        Equation(ap(ap(meaning, [rt_e, world_e]), runtime_locals(xs)), ap(Global(f), runtime_locals(xs))),
-                        ap(rfl, [Blank, ap(Global(f), runtime_locals(xs))]))],
+                    Plain => [Decl(AsTheorem, name ++ "::reflects", runtime_params_of(px.ordered),
+                        Equation(ap(ap(meaning, [rt_e, world_e]), runtime_locals(xs)), f_xs),
+                        ap(rfl, [Blank, f_xs]))],
                     _ => [],
                 },
             };
             // A function lent nothing: its program at the empty file, which
             // is `program_eval`.
-            let fx = ap(Global(f), runtime_narrow_args(low, rfun.params, runtime_args(count, reprs, rfun.params, at_ys)));
+            let fx = apply_f(runtime_narrow_args(low, rfun.params, runtime_args(count, reprs, rfun.params, at_ys)));
             let gets <- runtime_result_fields(wide, reprs, recs, rfun.result, fx);
             // A record result: its first field is the word returned, and
             // the rest are returned beside it (`f::agrees_also`).
@@ -4305,7 +4488,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
                     let evaluated_where = ap(eval_where, [linked.program, linked.arities, ap(admits_of, [linked.adm]), ap(sources, [linked.srcs]), linked.sourced,
                         Local(more.ref), no_file, root, words_e, Hd(trivial_h), admitted, Local(d.ref)]);
                     let agreed_where <- runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), recs, rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs_where,
-                        λ args => runtime_agree_rhs(low, wide, count, reprs, recs, rfun, f, args).bind(λ e => pure(runtime_enum_result(enum_word, tys_e, rfun.result, e))),
+                        λ args => runtime_agree_rhs(low, wide, count, reprs, recs, rfun, apply_f, args).bind(λ e => pure(runtime_enum_result(enum_word, tys_e, rfun.result, e))),
                         evaluated_where, Some(d.ref));
                     let where_decl = Decl(AsTheorem, name ++ "::agrees_where", runtime_params_of(ys.append([more.ref, d.ref])), Equation(lhs_where, first), agreed_where);
                     // Its definedness from its test (a recursion's measure at
@@ -4320,7 +4503,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
                                 linked.sourced, Local(more.ref), no_file, root, words_e, Hd(trivial_h), admitted, p.proof]);
                             let params = runtime_params_of(ys.append([more.ref, p.within]));
                             runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), recs, rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs_where,
-                                λ args => runtime_agree_rhs(low, wide, count, reprs, recs, rfun, f, args).bind(λ e =>
+                                λ args => runtime_agree_rhs(low, wide, count, reprs, recs, rfun, apply_f, args).bind(λ e =>
                                     pure(runtime_enum_result(enum_word, tys_e, rfun.result, e))),
                                 evaluated_within, Some(p.within)).bind(λ agreed_within => pure(p.decls ++ [
                                     Decl(AsTheorem, name ++ "::defined_within", params, Hd(defined_t), p.proof),
@@ -4336,7 +4519,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
             let evaluated = ap(eval_sources, [linked.program, linked.arities, ap(admits_of, [linked.adm]), ap(sources, [linked.srcs]), linked.sourced, Hd(trivial_h), no_file, root,
                 words_e, Hd(trivial_h), admitted]);
             let agreed <- runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), recs, rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs,
-                λ args => runtime_agree_rhs(low, wide, count, reprs, recs, rfun, f, args).bind(λ e => pure(runtime_enum_result(enum_word, tys_e, rfun.result, e))),
+                λ args => runtime_agree_rhs(low, wide, count, reprs, recs, rfun, apply_f, args).bind(λ e => pure(runtime_enum_result(enum_word, tys_e, rfun.result, e))),
                 evaluated, ys.last());
             let tail: List<Decl> = [
                 Decl(AsTheorem, name ++ "::agrees", runtime_params_of(ys), Equation(lhs, first), agreed),
@@ -4357,7 +4540,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
             // At an enum parameter, the words past the first are stated at
             // its value as the first is (`runtime_at_enums`).
             let rest_at = λ (args: List<Expr>) => {
-                let fa = ap(Global(f), runtime_narrow_args(low, rfun.params, runtime_args(count, reprs, rfun.params, args)));
+                let fa = apply_f(runtime_narrow_args(low, rfun.params, runtime_args(count, reprs, rfun.params, args)));
                 runtime_result_fields(wide, reprs, recs, rfun.result, fa).bind(λ gs => match gs.tail() {
                     Cons(_, _) => pure(RtQ::seq(word_list, gs.tail())),
                     Nil => match rfun.result {
@@ -4385,7 +4568,7 @@ fn runtime_publish(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, funs:
                         let evaluated_at = ap(eval_sources, [linked.program, linked.arities, ap(admits_of, [linked.adm]), ap(sources, [linked.srcs]), linked.sourced,
                             Hd(trivial_h), Local(c.ref), root, words_e, Hd(trivial_h), admitted]);
                         let agreed_at <- runtime_at_enums(Hd(trivial_h), tys_e, reprs.len(), recs, rfun.params, own_types, at_ys, tails, rfun.params, 0, lhs_at,
-                            λ args => runtime_agree_rhs(low, wide, count, reprs, recs, rfun, f, args).bind(λ e => pure(runtime_enum_result(enum_word, tys_e, rfun.result, e))),
+                            λ args => runtime_agree_rhs(low, wide, count, reprs, recs, rfun, apply_f, args).bind(λ e => pure(runtime_enum_result(enum_word, tys_e, rfun.result, e))),
                             evaluated_at, Some(c.ref));
                         let root_also_at <- runtime_global(name_of(Compile::root_also_at));
                         let eval_also_over <- runtime_global(name_of(program_eval_also_over));
@@ -5240,7 +5423,12 @@ record SpanWritten { reads: Expr, world: Expr, writes: Expr, compiled: List<Expr
 // that only read (each with how many spans it is lent) and the ones that
 // write, as its reflection numbers them.
 fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, reads: List<Nat>, read_sigs: List<Pair<Nat, Sig>>, writes: List<Nat>,
-    write_sigs: List<Pair<Nat, Sig>>, l: Linking, meant: Bool, raw: Bool, more: SpanParts → Tac<List<Decl>>, recs: List<RecShape> := []) → Tac<List<Decl>> {
+    write_sigs: List<Pair<Nat, Sig>>, l: Linking, meant: Bool, raw: Bool, more: SpanParts → Tac<List<Decl>>, recs: List<RecShape> := [],
+    erased: List<Bool> := []) → Tac<List<Decl>> {
+    // A function over a span that takes an erased parameter
+    // (issues/runtime-erased-pure-shadow.md) is written out (`meant`), and
+    // its pin and its run are stated against it at a local for each.
+    let erasing = erased.any_bit(λ e => e);
     let ts <- runtime_type_handles();
     let q <- runtime_quoting(ts);
     let ftms <- runtime_file_quoting();
@@ -5513,10 +5701,16 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
     // rest's, in its place's stead.
     let own_at: Expr → Expr → List<LocalRef> → List<Expr> = λ span rest words =>
         runtime_spanned(lent, Cons(span, List::range(lent.pred()).map(λ k => ap(span_at, [rest, NatLit(k)]))), runtime_locals(words));
-    let at0 = ap(fe, own_at(Local(span0.ref), Local(rest0.ref), Cons(place0.ref, xs0)));
-    let pin: List<Decl> = match measured || meant {
+    let ps0 <- runtime_erased_at(name, f, erased, own_at(Local(span0.ref), Local(rest0.ref), Cons(place0.ref, xs0)), [], Some(xs0.rev().head_or(place0.ref)));
+    // The function the pin states: the one compiled, or `f` itself at
+    // every erased value.
+    let at0 = match erasing {
+        False => ap(fe, own_at(Local(span0.ref), Local(rest0.ref), Cons(place0.ref, xs0))),
+        True => runtime_erased_apply(f, erased, ps0)(own_at(Local(span0.ref), Local(rest0.ref), Cons(place0.ref, xs0))),
+    };
+    let pin: List<Decl> = match measured || (meant && !erasing) {
         True => [],
-        False => [Decl(AsTheorem, name ++ "::reflects", runtime_params_of(Cons(rest0.ref, Cons(span0.ref, Cons(place0.ref, xs0)))),
+        False => [Decl(AsTheorem, name ++ "::reflects", runtime_params_of(Cons(rest0.ref, Cons(span0.ref, Cons(place0.ref, xs0 ++ ps0)))),
             Equation(ap(ap(meaning, [rt_e, ap(fworld, [world_e, reads_e, fsigs_e, writes_e, Local(rest0.ref)])]),
                 Cons(Local(span0.ref), Cons(Local(place0.ref), runtime_locals(xs0)))), at0),
             ap(rfl, [Blank, at0]))],
@@ -5533,6 +5727,10 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
     let rest1 <- assume(Hd(buffers_h), "rest", Some(span1.ref)).or_fail("runtime: the rest of a file: ");
     let place1 <- assume(Hd(ts.word), "place", Some(rest1.ref)).or_fail("runtime: a span's place: ");
     let xs1 <- runtime_params(ts.word, own_words, Some(place1.ref), 0);
+    // A local for each erased parameter, after the words: what the run is
+    // stated at, and what everything proved under the words is under.
+    let ps1 <- runtime_erased_at(name, f, erased, own_at(Local(span1.ref), Local(rest1.ref), Cons(place1.ref, xs1)), [], Some(xs1.rev().head_or(place1.ref)));
+    let last1 = ps1.rev().head_or(xs1.rev().head_or(place1.ref));
     let parts <- runtime_span_parts(q, l, insts, sl);
     let words_e = RtQ::seq(word_list, Cons(Local(place1.ref), runtime_locals(xs1)));
     let file_e = ap(runtime_at(buffers, 1), [Local(span1.ref), Local(rest1.ref)]);
@@ -5567,11 +5765,11 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
             // loop node: its run's words spelled two ways would be
             // compared by running it.
             let found: Tac<Expr> = match measured.or(rfun.body.loops()) {
-                False => runtime_at_each(at, o.callees, [], Some(xs1.rev().head_or(place1.ref)),
+                False => runtime_at_each(at, o.callees, [], Some(last1),
                     λ es _ => as_type(Equation(sourced(es), ended(o.compiled(es)))).or_fail("runtime: `" ++ name ++ "`'s answer at its callees: ").bind(λ h => pure(Hd(h))),
                     λ es => ap(rfl, [Blank, ended(o.compiled(es))])),
                 True => {
-                    let g <- assume(Hd(o.ty), "g", Some(xs1.rev().head_or(place1.ref))).or_fail("runtime: a function over a span: ");
+                    let g <- assume(Hd(o.ty), "g", Some(last1)).or_fail("runtime: a function over a span: ");
                     let sourced_g = ap(ended_all, [tys_e, res_e, Local(rest1.ref), ap(uncurry_all, [tys_e, params_e, res_e,
                         ap(source_at, [Hd(o.ty), tys_e, NatLit(lent), params_e, res_e, ap(typed_once, [Hd(o.ty), Local(g.ref)]), Local(g.ref), Local(rest1.ref)]),
                         words_e, Local(span1.ref)])]);
@@ -5584,12 +5782,19 @@ fn runtime_span_publish(name: String, f: GlobalRef, rfun: FFun, measured: Bool, 
         },
     };
     let run_proof <- runs;
+    // Of a function that takes an erased parameter, its run is stated
+    // against it at every erased value: the run against the function
+    // written out, read by conversion.
+    let ended_f = match erasing {
+        False => ended(fe),
+        True => ending(runtime_erased_apply(f, erased, ps1)(own_at(Local(span1.ref), Local(rest1.ref), Cons(place1.ref, xs1)))),
+    };
     let tail: List<Decl> = [
         Decl(AsValue, name ++ "::program", [], Hd(ts.functions), sl.program),
         Decl(AsValue, name ++ "::arities", [], Hd(ts.nats), sl.arities),
         Decl(AsValue, name ++ "::stills", [], Hd(bools_h), sl.stills),
-        Decl(AsTheorem, name ++ "::runs_over", runtime_params_of(Cons(span1.ref, Cons(rest1.ref, Cons(place1.ref, xs1)))),
-            Equation(ran, ended(fe)), run_proof)];
+        Decl(AsTheorem, name ++ "::runs_over", runtime_params_of(Cons(span1.ref, Cons(rest1.ref, Cons(place1.ref, xs1 ++ ps1)))),
+            Equation(ran, ended_f), run_proof)];
     let counted: Tac<Option<SpanCounted>> = match out {
         None => pure(None),
         Some(o) => match measured {
@@ -5701,14 +5906,25 @@ fn runtime_words_out(tys: Table, t: Ty) → Bool {
 // boundary is not generated yet).
 fn runtime_span(name: String, f: GlobalRef) → Tac<List<Decl>> {
     // Its code is compiled from the function itself, typed by its own
-    // signature, so one taking an erased parameter needs a shadow, as a
-    // function of words does (issues/runtime-erased-pure-shadow.md).
+    // signature; one taking an erased parameter is compiled from its
+    // reflection written out, as a function of a `Bytes(n)` is, which
+    // reads and stores its span's bytes (issues/runtime-erased-pure-shadow.md).
     let f_t <- infer(Global(f)).or_fail("runtime: `" ++ name ++ "`'s type: ");
     let erasing <- rt_takes_erased(64, f_t, None);
-    let unerased <- match erasing {
-        True => runtime_fail("`" ++ name ++ "`: a function over a span that takes an erased parameter (a proof, an `Erased<A>`) is not compiled yet; "
-            ++ "a function of a laid record or of a `Bytes(n)` takes one (issues/runtime-erased-pure-shadow.md)"),
+    let mask <- match erasing as λ _ => Tac<List<Bool>> { True => runtime_erased_mask(64, f_t, None), False => pure([]) };
+    let written_in_scope <- match erasing as λ _ => Tac<True> {
         False => pure(trivial),
+        True => lookup("rt_held::HWorld::once").bind(λ c => match c {
+            Accepted(_) => pure(trivial),
+            Refused(_) => runtime_span_refused(name, "a function over a span that takes an erased parameter is written out with `rt_held`'s names: `import runtime_data;`"),
+        }),
+    };
+    let unlooped <- match erasing as λ _ => Tac<True> {
+        False => pure(trivial),
+        True => lookup(name ++ "::body").bind(λ c => match c {
+            Accepted(_) => runtime_span_refused(name, "a loop that takes an erased parameter (a proof, an `Erased<A>`) waits for the loop combinator (issues/loops-on-one-combinator.md)"),
+            Refused(_) => pure(trivial),
+        }),
     };
     let names <- rt_file_names();
     let found <- runtime_span_reflect(name, f, names);
@@ -5729,7 +5945,7 @@ fn runtime_span(name: String, f: GlobalRef) → Tac<List<Decl>> {
           False => match measured.and(rfun.params.len().leb(rfun.lent + rfun.lent)) {
             True => runtime_span_refused(name, "a loop over a span moves at least one word from pass to pass"),
             False => runtime_link(4096, k, [LinkFrame(f.id, name, table, table, Some(r.funs.len()))], Linking([], [], [], [])).bind(λ l =>
-                runtime_span_publish(name, f, rfun, measured, r.funs, read_sigs, r.cfuns, write_sigs, l, False, False, λ _ => pure([]), recs := recs)),
+                runtime_span_publish(name, f, rfun, measured, r.funs, read_sigs, r.cfuns, write_sigs, l, erasing, erasing, λ _ => pure([]), recs := recs, erased := mask)),
           },
         },
     }
@@ -6187,16 +6403,159 @@ fn runtime_judged(name: String, f: GlobalRef, rfun: Fun, sigs: List<Sig>, world:
     }
 }
 
+// ---------------------------------------------------------------------------
+// A plain function of words that takes an erased parameter
+// (issues/runtime-erased-pure-shadow.md): compiled from its reflection
+// written out (`f::words`, `Setup::of_erased`), and stated against `f` at a
+// local for each erased parameter where `f` takes it.
+
+// What writing out reads: the type table, the world the reflection is
+// judged in, each table entry's term (the function itself first, never
+// called), and the names the written function is spelled with.
+record RtWriting { name: String, q: RtQ, tys_e: Expr, world: World, table: List<Expr>, word: Handle, ty_sem: Expr, lit: Expr, op_sem: Expr,
+    once: Expr, either: Expr, convoy: Expr, recs: List<RecShape> }
+
+fn runtime_writing_refused<A>(name: String, why: String) → Tac<A> {
+    fail("`" ++ name ++ "` cannot be a runtime fn that takes an erased parameter yet: " ++ why ++ " (issues/runtime-erased-pure-shadow.md)", [])
+}
+
+fn RtWriting::sem(self cx: RtWriting, t: Ty) → Expr {
+    match t.is_word64() { True => Hd(cx.word), False => ap(cx.ty_sem, [Ty::quote(t, cx.q), cx.tys_e]) }
+}
+
+fn RtWriting::var(self cx: RtWriting, env: List<Expr>, i: Nat) → Tac<Expr> {
+    match env.nth(i) { Some(e) => pure(e), None => runtime_fail("`" ++ cx.name ++ "`'s reflection reads a variable it does not bind") }
+}
+
+fn RtWriting::vars(self cx: RtWriting, env: List<Expr>, is: List<Nat>) → Tac<List<Expr>> {
+    match is {
+        Nil => pure([]),
+        Cons(i, rest) => cx.var(env, i).bind(λ e => cx.vars(env, rest).bind(λ es => pure(Cons(e, es)))),
+    }
+}
+
+// A term of the reflection, as its meaning reduces to: a literal at its
+// code, an operator's own function on its operands, a callee's entry on
+// its, a value bound once, a branch, a convoyed branch, a record built or
+// read, an enum's constructor. `env` has each variable's term, the most
+// recent first, and `g` their codes.
+fn RtWriting::value(self cx: RtWriting, env: List<Expr>, g: List<Ty>, under: Option<LocalRef>, t: Tm) → Tac<Expr> {
+    match t {
+        Var(i) => cx.var(env, i),
+        Lit(c, n) => pure(ap(cx.lit, [Ty::quote(c, cx.q), NatLit(n), cx.tys_e])),
+        Prim(op, args) => cx.vars(env, args).bind(λ es => pure(ap(ap(cx.op_sem, [Op::quote(op, cx.q), cx.tys_e]), es))),
+        Call(f, args) => match cx.table.nth(f) {
+            None => runtime_fail("`" ++ cx.name ++ "`'s reflection calls a function its table does not list"),
+            Some(r) => cx.vars(env, args).bind(λ es => pure(ap(r, es))),
+        },
+        Let(e, body) => {
+            let value <- cx.value(env, g, under, e);
+            let ty = e.ty(cx.world, g);
+            let x <- assume(cx.sem(ty), "x", under).or_fail("runtime: a value bound: ");
+            let rest <- cx.value(Cons(Local(x.ref), env), Cons(ty, g), Some(x.ref), body);
+            pure(ap(cx.once, [Blank, Blank, value, Lam(x.ref, rest)]))
+        },
+        If(c, yes, no) => {
+            let c_e <- cx.var(env, c);
+            let yes_e <- cx.value(env, g, under, yes);
+            let no_e <- cx.value(env, g, under, no);
+            pure(ap(cx.either, [Blank, c_e, yes_e, no_e]))
+        },
+        IfEq(c, yes, no) => {
+            let c_e <- cx.var(env, c);
+            let yes_e <- cx.value(env, g, under, yes);
+            let no_e <- cx.value(env, g, under, no);
+            pure(ap(cx.convoy, [cx.sem(yes.ty(cx.world, g)), c_e, yes_e, no_e]))
+        },
+        Make(i, args) => match cx.recs.nth(i) {
+            None => runtime_fail("`" ++ cx.name ++ "`'s reflection builds a record its table does not hold"),
+            Some(r) => cx.vars(env, args).bind(λ es => pure(ap(Hd(r.ctor), es))),
+        },
+        Field(i, k, of) => match cx.recs.nth(i) {
+            None => runtime_fail("`" ++ cx.name ++ "`'s reflection reads a record its table does not hold"),
+            Some(r) => cx.var(env, of).bind(λ e => runtime_projections(e, "`" ++ r.name ++ "`'s fields").bind(λ ps => match ps.nth(k) {
+                None => runtime_fail("`" ++ cx.name ++ "`'s reflection reads a field `" ++ r.name ++ "` does not have"),
+                Some(p) => pure(p),
+            })),
+        },
+        Inject(i, k, args) => match cx.recs.nth(i) {
+            None => runtime_fail("`" ++ cx.name ++ "`'s reflection builds an enum its table does not hold"),
+            Some(r) => match r.ctors.nth(k) {
+                None => runtime_fail("`" ++ cx.name ++ "`'s reflection builds a constructor `" ++ r.name ++ "` does not have"),
+                Some(c) => cx.vars(env, args).bind(λ es => pure(ap(c, es))),
+            },
+        },
+        _ => runtime_writing_refused(cx.name, "its body has a form that is not written out (a match on an enum, a fold, a byte of a span)"),
+    }
+}
+
+// The reflection written out: `Setup::of_erased(f, λ xs… => …)`, the
+// table's callees by their globals, and its type, a function of the
+// words' types.
+fn runtime_written_out(name: String, f: GlobalRef, rfun: Fun, world: World, tys_e: Expr, funs: List<Nat>, recs: List<RecShape>) → Tac<Pair<Expr, Handle>> {
+    let ts <- runtime_type_handles();
+    let q <- runtime_quoting(ts);
+    let cx = RtWriting(name, q, tys_e, world, Cons(Blank, funs.drop(1).map(λ g => Global(GlobalRef(g)))), ts.word,
+        <- runtime_global(name_of(Ty::sem)), <- runtime_global(name_of(Tm::lit)), <- runtime_global(name_of(Op::sem)),
+        <- runtime_global(name_of(Setup::once)), <- runtime_global(name_of(Setup::either)), <- runtime_global(name_of(Tm::convoy)), recs);
+    let xs <- runtime_params_typed(rfun.params.map(λ p => cx.sem(p)), None, 0);
+    let body <- cx.value(runtime_locals(xs).rev(), Ty::bind_onto(rfun.params, []), xs.last(), rfun.body);
+    let ys <- runtime_params_typed(rfun.params.map(λ p => cx.sem(p)), None, 0);
+    let t <- as_type(runtime_pis(ys, cx.sem(rfun.result))).or_fail("runtime: `" ++ name ++ "` written out's type: ");
+    let of_erased <- runtime_global(name_of(Setup::of_erased));
+    pure(Pair(ap(of_erased, [Hd(t), Blank, Global(f), runtime_lams(xs, body)]), t))
+}
+
+// The function that takes an erased parameter, once reflected: each shape
+// not written out is refused by name, then it is judged, lowered and
+// published as a plain function lent nothing is, at its reflection
+// written out.
+fn runtime_erasing(name: String, f: GlobalRef, f_t: Handle, rfun: Fun, sigs: List<Sig>, world: World, k: Known, reflected: Pair<Fun, List<Nat>>, lents: List<Nat>,
+    reprs: List<ReprEntry>, recs: List<RecShape>, recursive: Bool, stack: Nat) → Tac<List<Decl>> {
+    let shaped <- match rfun.lent as λ _ => Tac<True> {
+        Succ(_) => runtime_writing_refused(name, "it is lent a span"),
+        Zero => match rfun.shape() as λ _ => Tac<True> {
+            Plain => match recursive || !(match stack as λ _ => Bool { Zero => True, Succ(_) => False }) as λ _ => Tac<True> {
+                True => runtime_writing_refused(name, "it calls a recursion"),
+                False => pure(trivial),
+            },
+            _ => runtime_writing_refused(name, "it is a loop or a recursion (issues/loops-on-one-combinator.md)"),
+        },
+    };
+    let worded <- match rfun.params.all_bit(λ (p: Ty) => match p { Word(_) => True, Bit => True, Count => True, _ => False }) as λ _ => Tac<True> {
+        True => pure(trivial),
+        False => runtime_writing_refused(name, "it takes an enum or a record beside it"),
+    };
+    let mask <- runtime_erased_mask(64, f_t, None);
+    let ts <- runtime_type_handles();
+    let q <- runtime_quoting(ts);
+    let tys_both <- runtime_tys(ts.word, q, reprs, recs);
+    match Fun::judge(rfun, world) {
+        Refused(why) => fail("`" ++ name ++ "` cannot be a runtime fn under the default setup: " ++ why, []),
+        Ok => match Setup::lowers(Fun::lower_any(rfun, world)) {
+            False => fail("`" ++ name ++ "`: the default setup's lowering refused it though its judgment accepted it (a gap in `Fun::judge`)", []),
+            True => {
+                let written <- runtime_written_out(name, f, rfun, world, tys_both.fst, reflected.snd, recs);
+                let compiled <- runtime_held(written.fst, "`" ++ name ++ "` written out");
+                let l <- runtime_link(4096, k, [LinkFrame(f.id, name, reflected.snd, reflected.snd.drop(1), None)], Linking([], [], [], []));
+                runtime_publish(name, f, rfun, sigs, reflected.snd, lents, l, reprs, recs := recs, erasing := Some(RtErasing(compiled, written.snd, mask)))
+            },
+        },
+    }
+}
+
 fn runtime_reads(name: String, f: GlobalRef, levels: Nat := 0, stack: Nat := 0) → Tac<List<Decl>> {
-    // A function of words taking an erased parameter would be compiled as
-    // its shadow, its reflection's meaning; that is not built
-    // (issues/runtime-erased-pure-shadow.md).
+    // A function of words taking an erased parameter is compiled from its
+    // reflection written out (`runtime_erasing`).
     let f_t <- infer(Global(f)).or_fail("runtime: `" ++ name ++ "`'s type: ");
     let erasing <- rt_takes_erased(64, f_t, None);
-    let unerased <- match erasing {
-        True => runtime_fail("`" ++ name ++ "`: a function of words that takes an erased parameter (a proof, an `Erased<A>`) is not compiled yet, nor one lent a span; "
-            ++ "a function of a laid record or of a `Bytes(n)` takes one (issues/runtime-erased-pure-shadow.md)"),
+    // A loop would hand its erased parameter to its recursion.
+    let unlooped <- match erasing as λ _ => Tac<True> {
         False => pure(trivial),
+        True => lookup(name ++ "::body").bind(λ c => match c {
+            Accepted(_) => runtime_writing_refused(name, "it is a loop or a recursion (issues/loops-on-one-combinator.md)"),
+            Refused(_) => pure(trivial),
+        }),
     };
     let k0 <- rt_known_in([name], [], True);
     // The reflection and its callees' signatures, the types held by their
@@ -6219,12 +6578,15 @@ fn runtime_reads(name: String, f: GlobalRef, levels: Nat := 0, stack: Nat := 0) 
     let world = World(tys, sigs, Sig::sems_default(tys, sigs));
     // A main over no words calling one recursive function: the program.
     let recursive_callee <- runtime_recursive_callee(name, rfun, reflected.snd.drop(1), callee_sigs);
-    match recursive_callee {
+    match erasing {
+      True => runtime_erasing(name, f, f_t, rfun, sigs, world, k, reflected, lents, reprs, recs, recursive_callee.is_some(), stack),
+      False => match recursive_callee {
         Some(callee) => runtime_recursive_main(name, f, rfun, callee.fst, callee.snd, levels, stack),
         None => match stack {
             Succ(_) => runtime_fail("`" ++ name ++ "`: a stack budget, `stack := b`, is stated of a program that calls a recursion, whose depth is what it bounds"),
             Zero => runtime_judged(name, f, rfun, sigs, world, k, reflected, lents, reprs, recs, callee_sigs),
         },
+      },
     }
 }
 
