@@ -2721,18 +2721,21 @@ section is corrected.
   A word is a `Dyn`, so the body has one kind of variable (§15.1) and one
   environment (proposed: the experiment kept words apart; the build measures
   one environment against two before fixing it). A variable's code is
-  static: the body records it at each binder, so no later dispatch waits on
-  a value.
+  static, a function of the body alone and never of a value, so no later
+  dispatch waits on one.
 - **Steps are total, and stated once** (proposed). The step model is a
   total read `at: Sel → S → S`, a total modification
   `over: Sel → (S → S) → S → S` and a Boolean "this step fits this owner";
   the laws hold where the step fits and are relative to what was read
   there (the sixth experiment's relative fit: the same code, for a window
   the same length; a fourth component of the model, "what is written is
-  like what was read"). A step that does not fit modifies nothing; what it
-  reads is whatever the total accessor answers and no law speaks of it
-  (reading the owner back, as the first text here had it, would make the
-  read's code the bound's decision, stuck at an open index). This replaces `steps.hthr`'s `StepModelLaws`, `PathLawsOn` and `KeepsFit`
+  like what was read"). A step that does not fit modifies nothing, and
+  reads a value that does not depend on its owner: the word zero for an
+  absent field, its accessor's pad for a sequence. That is what lets the
+  decider's verdict hold at every value, fitting or not (reading the owner
+  back, as the first text here had it, is unsound for the decider, an
+  absent field against a write of a present one, and would make the read's
+  code the bound's decision, stuck at an open index). This replaces `steps.hthr`'s `StepModelLaws`, `PathLawsOn` and `KeepsFit`
   in place, and `Steps::apart_sound` is re-proved over it: the experiment
   showed the relative laws at the `Option`-valued paths and pinned through
   the total forms, and the agreement of the two was not built. One
@@ -2753,7 +2756,7 @@ Stmt  = a word primitive | a read of a place | a write of a place
 Body  = Ret(results)                       // the function's result
       | Yield(outputs)                     // to the enclosing join
       | Do(stmt, rest)
-      | Join(test, yes, no, outs, rest)    // outs: the joined variables and their codes
+      | Join(test, yes, no, rest)          // rest sees the arms' yielded outputs as new variables
       | Jump(args)                         // the function's own call, last (a loop's back edge)
 Func  = signature (§15.8), body
 ```
@@ -2763,17 +2766,20 @@ Func  = signature (§15.8), body
   arms is a `Yield`, the join's meaning is the surface's:
   `j = convoy(test, pack(yes), pack(no))`, `pack` the nested `Mutated` of
   the outputs' native values in first-assignment order (one output: the
-  value itself), and output `k` is the `Dyn` of its recorded code and the
-  `k`th projection of `j`. Every variable an arm writes is an output.
+  value itself), and output `k` is the `Dyn` of its code and the `k`th
+  projection of `j`. Every variable an arm writes is an output.
   Where an arm has a leaf that is not a `Yield` (an early return on an
   inner path), `rest` is bound once as a function of the outputs and each
   `Yield` calls it. The surface's own join point is designed and not built
   (it copies what follows into each arm that falls through), and the bound
   form converts to the copied one, so the pin holds and the meaning stays
-  linear in the body; the doubling is the source's own term's. A join
-  whose arms' codes disagree with its recorded ones has no meaning: the
-  meaning is optional at the points where a cast can fail, decided from
-  the codes outside the convoy. A branch
+  linear in the body; the doubling is the source's own term's. A join's
+  codes are its yes arm's yielded ones, the no arm's values cast to them
+  with the yes arm's as the fallback; an ill-coded call binds the word
+  zero. So an ill-coded body has a junk meaning and never a missing one:
+  nothing in the meaning is optional and no pin has a `Some`. The check
+  refuses a join whose arms' codes differ and a call whose arguments'
+  codes are not its signature's, from the codes alone. A branch
   that ends the body is the join none of whose leaves is a `Yield`; it is
   not a second node. In every case what follows a join is read once.
 - **A view as an output.** A read view chosen by a join is an output like
